@@ -12,10 +12,21 @@
  * `${pwd}` inside cwd/command resolves to the agent session's current working
  * directory (the same directory the agent operates in — see set_cwd).
  */
-import { chmodSync, existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	realpathSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 // MUST run before node-pty is required: rewrites the installed node-pty copies
 // so their worker/agent handlers tolerate Node `--watch`'s IPC traffic (see the
@@ -249,6 +260,154 @@ export function buildTerminalBashLine(command: string, tailFile?: { file: string
 		? `; tail -n ${Math.max(1, Math.floor(tailFile.lines))} -- '${tailFile.file.replace(/'/g, `'\\''`)}'`
 		: "";
 	return `${body}; ${rcGuard}${tailPart}; printf '\\n[pi-exit:%s]\\n' "$__pi_rc"`;
+}
+
+// ---------------------------------------------------------------------------
+// Script-file execution for the terminal-backed bash tool
+// ---------------------------------------------------------------------------
+
+/**
+ * Why the command runs from a file instead of being typed into the PTY:
+ *
+ * The tool spawns `bash -i` and writes the command line right away, before the
+ * shell has reached its readline prompt. Until readline takes over, the tty is
+ * in canonical mode and the kernel buffers the line itself — with a hard cap of
+ * MAX_CANON bytes (1024 on macOS, 4095 on Linux). Everything past the cap is
+ * silently dropped, including the closing quote, the exit sentinel and the
+ * newline, so the shell sits waiting for the rest of the line and the tool only
+ * returns at its timeout. Multi-line commands are folded into a single
+ * `eval $'…'` line first, which makes them longer still.
+ *
+ * Writing the body to a private script and typing only a short `. '<file>'`
+ * line (well under one 120-column row, so its echo never wraps) removes the
+ * limit for commands of any size and drops the eval escaping: heredocs, quotes
+ * and multi-line scripts reach the shell verbatim. Sourcing — rather than
+ * `bash <file>` — keeps the command running in the terminal shell itself, so
+ * `cd`, exports and venv activation still persist in the persistent 'ai-bash'
+ * terminal exactly as they did when the line was typed.
+ */
+
+// eslint-disable-next-line no-useless-escape -- \$? must reach the shell literally
+const BASH_RC_GUARD = `__pi_rc=\${PIPESTATUS:-\$?}; [ "$__pi_rc" -eq 141 ] && __pi_rc=0`;
+
+/**
+ * Script body: the command verbatim (CRLF normalised, trailing whitespace
+ * trimmed), the exit-status guard right after it so PIPESTATUS still refers to
+ * the command's last pipeline, the optional tail of a redirected log, then the
+ * sentinel line carrying the exit code.
+ */
+export function buildTerminalBashScript(command: string, tailFile?: { file: string; lines: number }): string {
+	const body = command.replace(/\r\n?/g, "\n").replace(/\s+$/, "");
+	const tailPart = tailFile
+		? `tail -n ${Math.max(1, Math.floor(tailFile.lines))} -- '${tailFile.file.replace(/'/g, `'\\''`)}'\n`
+		: "";
+	return `${body}\n${BASH_RC_GUARD}\n${tailPart}printf '\\n[pi-exit:%s]\\n' "$__pi_rc"\n`;
+}
+
+/**
+ * The short line typed into the PTY. `: pi-bash-N;` is a no-op whose only job
+ * is to be a unique, wrap-proof anchor for stripping the echoed line from the
+ * captured output (see cleanBashOutput). The `||` fallback prints a sentinel
+ * with the exit status of `.` itself when the script cannot be sourced, so the
+ * tool never waits forever on a missing file.
+ */
+export function buildTerminalBashSourceLine(file: string, seq: number): { line: string; anchor: string } {
+	const anchor = `: pi-bash-${seq};`;
+	const shellPath = (isWindows ? file.replace(/\\/g, "/") : file).replace(/'/g, `'\\''`);
+	return { line: `${anchor} . '${shellPath}' || printf '\\n[pi-exit:%s]\\n' "$?"`, anchor };
+}
+
+let bashScriptSeq = 0;
+let bashScriptDirCache: string | null = null;
+
+/** Scripts of commands still running when their tool call returned; removed at exit. */
+const pendingBashScripts = new Set<string>();
+process.once("exit", () => {
+	for (const file of pendingBashScripts) {
+		try {
+			rmSync(file, { force: true });
+		} catch {
+			// best effort
+		}
+	}
+});
+
+/** Remove leftovers older than a day (crashed servers, backgrounded commands). Best effort. */
+function sweepStaleBashScripts(dir: string): void {
+	const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+	try {
+		for (const name of readdirSync(dir)) {
+			if (!/^\d+-\d+\.sh$/.test(name)) continue;
+			const file = join(dir, name);
+			try {
+				if (statSync(file).mtimeMs < cutoff) rmSync(file, { force: true });
+			} catch {
+				// already gone
+			}
+		}
+	} catch {
+		// unreadable dir — nothing to sweep
+	}
+}
+
+/**
+ * Private per-user directory for the scripts. Kept short (`/tmp/pi-web-ui-<uid>`)
+ * so the typed line stays far below one terminal row. It must be a real
+ * directory owned by us with mode 0700; anything else (someone else's directory,
+ * a symlink) falls through to a fresh mkdtemp directory. Windows uses the
+ * per-user temp directory.
+ */
+function bashScriptDir(): string {
+	if (bashScriptDirCache) return bashScriptDirCache;
+	const uid = typeof process.getuid === "function" ? process.getuid() : null;
+	const candidates = isWindows
+		? [join(tmpdir(), "pi-web-ui-bash")]
+		: [`/tmp/pi-web-ui-${uid ?? "user"}`, join(tmpdir(), "pi-web-ui-bash")];
+	for (const dir of candidates) {
+		try {
+			mkdirSync(dir, { recursive: true, mode: 0o700 });
+			if (!isWindows) {
+				const st = lstatSync(dir);
+				if (!st.isDirectory() || (uid !== null && st.uid !== uid)) continue;
+				if ((st.mode & 0o077) !== 0) chmodSync(dir, 0o700);
+			}
+			sweepStaleBashScripts(dir);
+			bashScriptDirCache = dir;
+			return dir;
+		} catch {
+			// try the next candidate
+		}
+	}
+	bashScriptDirCache = mkdtempSync(join(tmpdir(), "pi-web-ui-bash-"));
+	return bashScriptDirCache;
+}
+
+/**
+ * Write the command as a script and return the line to type plus its echo
+ * anchor. removeTerminalBashScript deletes the file once the command has
+ * finished. A command still running when the tool returns keeps its file: bash
+ * reads a sourced file in full before executing it, but in the persistent
+ * terminal the typed line may still be queued behind a busy foreground command.
+ */
+export function writeTerminalBashScript(
+	command: string,
+	tailFile?: { file: string; lines: number },
+): { file: string; line: string; anchor: string } {
+	const seq = ++bashScriptSeq;
+	const file = join(bashScriptDir(), `${process.pid}-${seq}.sh`);
+	writeFileSync(file, buildTerminalBashScript(command, tailFile), { mode: 0o600 });
+	pendingBashScripts.add(file);
+	const { line, anchor } = buildTerminalBashSourceLine(file, seq);
+	return { file, line, anchor };
+}
+
+export function removeTerminalBashScript(file: string): void {
+	pendingBashScripts.delete(file);
+	try {
+		rmSync(file, { force: true });
+	} catch {
+		// best effort
+	}
 }
 
 /** 顶层（引号/反引号/转义外）按 `|` 拆分的管道元素。 */
@@ -517,12 +676,20 @@ function resolveBashShell(): { shell: string; args: string[] } {
  * (e.g. `�<0091><0098>` for 员), garbling Chinese input in the terminal.
  * Default a UTF-8 locale so multibyte text round-trips.
  */
-function shellEnv(): Record<string, string> {
+function shellEnv(agentBash = false): Record<string, string> {
 	const env: Record<string, string> = {
 		...process.env,
 		TERM: "xterm-256color",
 	};
 	if (!env.LANG && !env.LC_ALL) env.LANG = "en_US.UTF-8";
+	// Agent-driven shells never page: `git log/show/diff`, `man`, `systemctl`…
+	// would otherwise open `less` in the PTY and wait for a keypress the model
+	// cannot send, hanging the call until its timeout. User terminals keep
+	// their own pager.
+	if (agentBash) {
+		env.PAGER = "cat";
+		env.GIT_PAGER = "cat";
+	}
 	return env;
 }
 
@@ -955,7 +1122,7 @@ export class TerminalManager {
 				cols: Math.max(2, Math.floor(cols) || 80),
 				rows: Math.max(2, Math.floor(rows) || 24),
 				cwd: abs,
-				env: shellEnv(),
+				env: shellEnv(agentBash),
 			});
 		} catch (err) {
 			const helper = brokenSpawnHelper();
@@ -1056,6 +1223,16 @@ export class TerminalManager {
 	 *  one-shot hints/banners — not per-chunk data). */
 	private writeOut(id: string, data: string): void {
 		this.emit({ type: "terminal_output", terminalId: id, data });
+	}
+
+	/** Append informational text (e.g. the AI bash tool's command banner) to a
+	 *  live terminal: stored in its history like PTY output and shown to the
+	 *  client in order with any output still queued. */
+	note(id: string, data: string): void {
+		const entry = this.terms.get(id);
+		if (!entry || entry.exited) return;
+		this.appendOutput(entry, data);
+		this.queueOut(entry, data);
 	}
 
 	/** Queue output for the coalescing window; flushes via flushPending. */
@@ -1495,13 +1672,15 @@ function lastSentinel(collected: string): RegExpMatchArray | null {
 }
 
 /** 去掉输入回显、哨兵及其后的 shell 提示符垃圾与 ANSI 序列，还原 bash 风格纯文本。 */
-function cleanBashOutput(raw: string): string {
+export function cleanBashOutput(raw: string, echoAnchor = "[pi-exit:%s]"): string {
 	let text = stripAnsi(raw).replace(/\r\n/g, "\n");
-	// 回显的命令行可能被 readline 折行拆成多行，按行剥不可靠——改为锚定
-	// printf 格式串字面量 [pi-exit:%s]（真哨兵是数字版），连同其所在整行丢弃。
+	// 回显的命令行可能被 readline 折行拆成多行，按行剥不可靠——改为锚定一个只在
+	// 回显里出现的字面量，连同其所在整行丢弃：脚本模式用行首的 `: pi-bash-N;`
+	// 标记（buildTerminalBashSourceLine），旧的整行模式用 printf 格式串
+	// [pi-exit:%s]（真哨兵是数字版）。
 	// 注意：同一命令会被回显两次（PTY 输入回显 + readline 提示符回显），需循环。
 	for (;;) {
-		const fmtIdx = text.indexOf("[pi-exit:%s]");
+		const fmtIdx = text.indexOf(echoAnchor);
 		if (fmtIdx < 0) break;
 		const nl = text.indexOf("\n", fmtIdx);
 		text = nl >= 0 ? text.slice(nl + 1) : "";
@@ -1667,7 +1846,6 @@ export function makeTerminalBashTool(
 			}
 			// 阻塞等待期间挂起活力提醒（我们自己在检测静默，避免双重通知）。
 			terminals.suspendIdleWatch(termId);
-			const start = terminals.endCursor(termId)!;
 			const ac = new AbortController();
 			opts.kills.add(ac);
 			// 一键退出一次性终端：命令结束后 shell 用 exit 退场（进程结束），
@@ -1709,13 +1887,29 @@ export function makeTerminalBashTool(
 						{ limiterSegment, limiterTailZh, limiterTailEn },
 					)
 				: "";
+			// The command is no longer typed into the terminal (it runs from a script
+			// file, see writeTerminalBashScript), so show it as a banner first. Written
+			// before the read cursor is taken, it stays out of the captured output.
+			terminals.note(termId, `\x1b[90m$ ${runCommand.replace(/\r?\n/g, "\r\n  ")}\x1b[0m\r\n`);
+			const start = terminals.endCursor(termId)!;
+			let script: { file: string; line: string; anchor: string } | null = null;
+			let keepScript = false;
 			try {
 				let collected = "";
 				let cursor = start;
 				let lastDataAt = Date.now();
 				// 标记「有哨兵命令在跑」：terminal_wait 据此区分等待与空闲。
 				terminals.setSentinelPending(termId, true);
-				const inputErr = terminals.inputChecked(termId, buildTerminalBashLine(runCommand, tailFile) + "\r");
+				// Run from a script file: a typed line longer than the tty's canonical-mode
+				// buffer (1024 bytes on macOS) is silently truncated and hangs the call until
+				// its timeout. Fall back to the typed form only if the file cannot be written.
+				try {
+					script = writeTerminalBashScript(runCommand, tailFile);
+				} catch {
+					script = null;
+				}
+				const typed = script ? script.line : buildTerminalBashLine(runCommand, tailFile);
+				const inputErr = terminals.inputChecked(termId, typed + "\r");
 				if (inputErr) throw new Error(inputErr);
 				for (;;) {
 					if (ac.signal.aborted || signal?.aborted) {
@@ -1736,7 +1930,7 @@ export function makeTerminalBashTool(
 					if (m) {
 						terminals.setSentinelPending(termId, false);
 						closeOneShot();
-						const text = applyHeadTail(cleanBashOutput(collected), p.head, effectiveTail, lang);
+						const text = applyHeadTail(cleanBashOutput(collected, script?.anchor), p.head, effectiveTail, lang);
 						return {
 							content: [
 								{
@@ -1745,6 +1939,29 @@ export function makeTerminalBashTool(
 								},
 							],
 							details: { exitCode: Number(m[1]), output: text },
+						};
+					}
+					// The shell itself exited before printing the sentinel (the command ran
+					// `exit`, or `set -e` took the interactive shell down): return what was
+					// captured with the PTY's exit code instead of spinning until the timeout
+					// (or forever when the call has none).
+					if (read && !read.running && !read.data) {
+						terminals.setSentinelPending(termId, false);
+						const text = applyHeadTail(
+							cleanBashOutput(collected, script?.anchor).replace(/\n?\[pi-term-exit:-?\d+\]\s*$/, ""),
+							p.head,
+							effectiveTail,
+							lang,
+						);
+						const code = read.exitCode ?? 1;
+						return {
+							content: [
+								{
+									type: "text",
+									text: `${text}${text ? "\n" : ""}${limiterNote}[exit:${code}] (the shell exited before the command finished)`,
+								},
+							],
+							details: { exitCode: code, output: text },
 						};
 					}
 					if (deadline !== null && Date.now() > deadline) {
@@ -1764,11 +1981,14 @@ export function makeTerminalBashTool(
 					}
 					// 静默解阻（仅持久终端）：转后台 + 注册完成观察器，立即把控制权还给模型。
 					if (persist && idleMs > 0 && Date.now() - lastDataAt >= idleMs) {
+						// Still running: keep the script until exit — the typed line may not
+						// have been read yet if the persistent shell was busy.
+						keepScript = true;
 						return backgroundResult(
 							terminals,
 							opts,
 							runCommand,
-							applyHeadTail(cleanBashOutput(collected), p.head, effectiveTail, lang),
+							applyHeadTail(cleanBashOutput(collected, script?.anchor), p.head, effectiveTail, lang),
 							Math.round((Date.now() - lastDataAt) / 1000),
 							lang,
 						);
@@ -1776,6 +1996,7 @@ export function makeTerminalBashTool(
 				}
 			} finally {
 				opts.kills.delete(ac);
+				if (script && !keepScript) removeTerminalBashScript(script.file);
 			}
 		},
 	});
