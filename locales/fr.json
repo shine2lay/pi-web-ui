@@ -73,6 +73,8 @@
 		"sessionMessages": "Messages de la session",
 		"messages": "messages",
 		"pluginStatus": "État des plugins",
+		"statusToPanel": "Cliquez pour le déplacer dans le panneau de droite",
+		"statusToBar": "Cliquez pour l'épingler à la barre d'état (reste visible quand le panneau est fermé)",
 		"engineBadge": "Moteur",
 		"working": "En cours",
 		"queued": "en file",

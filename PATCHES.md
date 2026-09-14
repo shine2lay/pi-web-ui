@@ -9,11 +9,12 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
-| 补丁                    | 状态    | 主要文件                                                   |
-| ----------------------- | ------- | ---------------------------------------------------------- |
-| terminal-bash-script    | `local` | `server/terminals.ts`                                      |
-| terminal-view-lifecycle | `local` | `server/terminals.ts`, `server/index.ts`                   |
-| global-history          | `local` | `server/agent-service.ts`, `server/protocol.ts`, `web/src/` |
+| 补丁                    | 状态    | 主要文件                                                         |
+| ----------------------- | ------- | ---------------------------------------------------------------- |
+| terminal-bash-script    | `local` | `server/terminals.ts`                                            |
+| terminal-view-lifecycle | `local` | `server/terminals.ts`, `server/index.ts`                         |
+| global-history          | `local` | `server/agent-service.ts`, `server/protocol.ts`, `web/src/`      |
+| status-placement        | `local` | `web/src/status-placement.ts`, `FooterBar.tsx`, `RightPanel.tsx` |
 
 ---
 
@@ -134,3 +135,43 @@ AI 豁免、显式重开、校验、WS 路由、真 PTY）
 - `tests/unit/global-history.test.ts`（7 项：范围开关、跨文件夹列表、缓存键、
   `scope=project` 回落、推送形状与排序、未请求不推、全局搜索带 cwd）
 - `tests/unit/history-cwd-badge.test.ts`（5 项：真 jsdom + 真 React 渲染徽章规则）
+
+---
+
+## status-placement
+
+**状态**：`local`（可上游：纯前端偏好，不动协议与服务端）
+**基线**：v0.85.0
+
+### 问题
+
+底栏（`.statusbar`）把**所有**扩展状态拼成一行：
+`chat.statuses.map(s => s.text).join(" · ")`。装几个扩展之后这行就爆了
+（`mcp`「1 server enabled」、`pi-control-chrome`「ready」、`multi-pass` 的模型链、
+`subagent-slash`…），连带着上下文条/累计费用/缓存命中/消息数/工作目录，
+窄屏下直接溢出——真正要盯的那条（配额余量）反而被挤到看不见。
+
+### 改法
+
+按 key 给每条状态选位置，**钉住的进底栏，其余进右栏底部**（与 widgets 同一块区域，
+沿用已有的分隔条/权重）：
+
+- `web/src/status-placement.ts`：钉住列表（localStorage `pi-web-ui:statusbar-pinned`）
+  - 纯函数 `splitStatuses()`。与 `title-settings.ts` 同构（纯浏览器偏好，不进
+    server 快照）。默认只钉 `multi-pass-limits`（唯一一条「不看会踩坑」的状态）；
+    存过空列表就尊重用户的「一条都不钉」，不再回落默认值。
+- `FooterBar.tsx`：只渲染钉住的几条（各自一个 chip，单行省略、title 看全文，
+  点一下收进右栏）。
+- `RightPanel.tsx`：未钉住的渲染成 widget 同款卡片（标题 = 状态 key，点一下钉回底栏），
+  底部区域的显示条件扩展为「widgets 或状态非空」。
+
+语义：右栏收起时未钉住的状态就是不显示（用户选定的行为：要看就拉开右栏），
+所以钉住的那几条 = 「无论如何都要看得见」。新增 i18n：`statusToPanel` / `statusToBar`
+（zh/en + 8 个语言包同位置插入，`tests/unit/locales.test.ts` 锁顺序）。
+
+### 回归
+
+- `tests/unit/status-placement.test.ts`（14 项：规整/默认值/空列表语义/坏 JSON/
+  分流顺序/撤销的状态两边都不显/toggle 落盘/隐私模式写不进去仍生效）
+- `tests/unit/status-placement-ui.test.ts`（5 项：真 jsdom + 真 React，同一批状态在
+  两处不重不漏，两个方向的点击换边）

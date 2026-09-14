@@ -9,6 +9,7 @@ import {
 	FiFile,
 	FiFolder,
 	FiLink,
+	FiArrowDown,
 	FiMaximize2,
 	FiPlus,
 	FiX,
@@ -25,6 +26,7 @@ import { applySashDrag, parseWeights } from "../panel-sash";
 import type { UiSlotEntry } from "../ui-slots";
 import { contextMenuItems, openContextMenu } from "../context-menu-state";
 import { SlotTabs, type SlotTab } from "./SlotTabs";
+import { splitStatuses, togglePinnedStatus, usePinnedStatuses } from "../status-placement";
 
 /** 机器根（此电脑/盘符列表）wire 字面量 —— 与 server/files-service.ts 的 MACHINE_ROOT 同值。 */
 const MACHINE_ROOT = "@root";
@@ -93,6 +95,8 @@ interface RightPanelProps {
 	/** Last dir-changed push (path = listed directory) — triggers a refresh. */
 	fileChanged: { path: string } | null;
 	widgets: { key: string; lines: string[] }[];
+	/** 扩展状态条（`ctx.ui.setStatus`）：未被钉到底栏的都落在这里，与 widgets 同一块区域。 */
+	statuses: { key: string; text: string | undefined }[];
 	panelSend: (msg: ClientMessage) => boolean;
 	/** Called when the user clicks an attach button on a file or folder. */
 	onAttach: (path: string, name: string, mode: AttachMode, isDir?: boolean) => void;
@@ -124,6 +128,7 @@ export const RightPanel = memo(function RightPanel({
 	files,
 	fileChanged,
 	widgets,
+	statuses,
 	panelSend,
 	onAttach,
 	onPreview,
@@ -170,7 +175,11 @@ export const RightPanel = memo(function RightPanel({
 			// Storage may be disabled; the current in-memory layout remains usable.
 		}
 	}, [rpWeights]);
-	const hasWidgets = widgets.some((w) => w.lines.length > 0);
+	// 扩展状态：钉在底栏的归底栏，其余归这里（见 web/src/status-placement.ts）。
+	const pinnedStatuses = usePinnedStatuses();
+	const panelStatuses = splitStatuses(statuses, pinnedStatuses).panel;
+	// 底部区域 = widgets + 未钉住的状态；两者都空时连分隔条一起不出现。
+	const hasWidgets = widgets.some((w) => w.lines.length > 0) || panelStatuses.length > 0;
 	const onSashDown = useCallback(
 		(e: React.PointerEvent<HTMLDivElement>) => {
 			e.preventDefault();
@@ -1272,6 +1281,20 @@ export const RightPanel = memo(function RightPanel({
 			)}
 			{hasWidgets && (
 				<div className="panel-widgets" style={{ flexGrow: rpWeights.widgets, minHeight: RP_MIN_WIDGETS_PX }}>
+					{panelStatuses.map((st) => (
+						<div key={st.key} className="widget widget-status">
+							<button
+								type="button"
+								className="widget-title widget-title-btn"
+								title={t("statusToBar")}
+								onClick={() => togglePinnedStatus(st.key)}
+							>
+								<span>{st.key}</span>
+								<FiArrowDown />
+							</button>
+							<pre className="widget-lines">{st.text}</pre>
+						</div>
+					))}
 					{widgets
 						.filter((w) => w.lines.length > 0)
 						.map((w) => (

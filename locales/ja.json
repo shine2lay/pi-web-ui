@@ -73,6 +73,8 @@
 		"sessionMessages": "セッションメッセージ数",
 		"messages": "メッセージ",
 		"pluginStatus": "プラグインの状態",
+		"statusToPanel": "クリックで右パネルに移動",
+		"statusToBar": "クリックでステータスバーに固定（パネルを閉じても表示）",
 		"engineBadge": "エンジン",
 		"working": "作業中です",
 		"queued": "待機中です",

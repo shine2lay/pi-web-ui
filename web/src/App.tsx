@@ -1844,6 +1844,7 @@ export function App() {
 								files={chat.files}
 								fileChanged={chat.fileChanged}
 								widgets={chat.widgets}
+								statuses={chat.statuses}
 								onAttach={(path, name, mode, isDir) => {
 									setDrawer(null);
 									attach(path, name, mode, isDir);
