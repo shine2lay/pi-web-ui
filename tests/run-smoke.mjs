@@ -119,6 +119,7 @@ const ALL = [
 	"remote-answer-test",
 	// elsewhere 生命周期（#291）：断连残骸不入列表、删定时任务回收伪客户端。
 	"elsewhere-lifecycle-test",
+	"terminal-bash-script-test",
 	"terminal-smoke-test",
 	// 全局主机采样经心跳推送，不调用模型。
 	"host-metrics-test",
