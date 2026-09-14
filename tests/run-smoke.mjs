@@ -93,6 +93,7 @@ const ALL = [
 	"idle-takeover-test",
 	// 跨页作答：点 elsewhere 行的 `?` 把问卷拉到本页回答，不搬迁对话。
 	"remote-answer-test",
+	"terminal-bash-script-test",
 	"terminal-smoke-test",
 	// 全局主机采样经心跳推送，不调用模型。
 	"host-metrics-test",
