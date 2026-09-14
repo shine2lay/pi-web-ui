@@ -970,6 +970,9 @@ export interface SessionSummary {
 	modified: number;
 	/** Where the session lives: this UI's per-client dir, or the pi CLI/TUI dir. */
 	source?: "web" | "tui";
+	/** 该对话自己的工作目录（转录头的 cwd）。History 跨文件夹列表时，左栏用
+	 *  它给「不属于当前工作目录」的对话标文件夹徽章（见 historyScope）。 */
+	cwd?: string;
 }
 
 /** 会话转录中一条命中消息的定位锚点：会话载入后按 role + timestamp 在

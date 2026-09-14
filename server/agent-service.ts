@@ -1294,6 +1294,21 @@ export function sameCwd(a: string, b: string): boolean {
 	}
 }
 
+/**
+ * History 面板 / 会话搜索的范围（默认 `"all"`）。
+ *
+ *   `"all"`     — 共享会话根下**所有项目**的转录（各 cwd 的
+ *                 `<agentDir>/sessions/--<cwd>--/`），按时间倒序。切工作目录
+ *                 不再换掉列表；点开别的文件夹的对话会跟着切到**该对话自己的
+ *                 cwd**（`switchSession()` 本来就这么做，工具要在它的目录里跑）。
+ *   `"project"` — 只列当前 cwd 的转录（原来的按文件夹行为）。
+ *
+ * 环境变量 `PI_WEB_UI_HISTORY_SCOPE=project` 切回按文件夹。
+ */
+export function historyScope(): "all" | "project" {
+	return process.env.PI_WEB_UI_HISTORY_SCOPE === "project" ? "project" : "all";
+}
+
 export class ClientSession {
 	readonly clientId: string;
 	/** Set by AgentService.attach: reflects the SERVICE-wide quiesce flag
@@ -6958,12 +6973,18 @@ export class ClientSession {
 
 	private async loadSessionInfos(): Promise<SessionInfo[]> {
 		const now = Date.now();
+		// 全局范围的缓存键固定为 `"*"`：列表与 cwd 无关，切项目不应该把全部
+		// 转录重新解析一遍。
+		const scopeKey = historyScope() === "all" ? "*" : this.cwd;
 		const c = this.sessionInfosCache;
-		if (c && c.cwd === this.cwd && now - c.at < ClientSession.SESSION_INFO_CACHE_TTL) {
+		if (c && c.cwd === scopeKey && now - c.at < ClientSession.SESSION_INFO_CACHE_TTL) {
 			return c.infos;
 		}
-		const infos = await SessionManager.list(this.cwd, piSessionsRoot());
-		this.sessionInfosCache = { cwd: this.cwd, infos, at: now };
+		const infos =
+			scopeKey === "*"
+				? await SessionManager.listAll(piSessionsRoot())
+				: await SessionManager.list(this.cwd, piSessionsRoot());
+		this.sessionInfosCache = { cwd: scopeKey, infos, at: now };
 		return infos;
 	}
 
@@ -6992,8 +7013,10 @@ export class ClientSession {
 		if (!this.sessionsRequested) return;
 		try {
 			// Sessions live in the SDK default per-project dir
-			// (<agentDir>/sessions/--<cwd>--/), the same files the pi CLI/TUI
-			// use — one listing covers every conversation of the current folder.
+			// (<agentDir>/sessions/--<cwd>--/), the same files the pi CLI/TUI use.
+			// loadSessionInfos() 按 historyScope() 要么覆盖**全部**文件夹（"all"），
+			// 要么只管当前文件夹（"project"）；`cwd` 让左栏能给「不属于当前工作
+			// 目录」的对话标上文件夹徽章。
 			const infos = await this.loadSessionInfos();
 
 			// 隐藏「被 fork 掉的父会话」，历史列表只保留每条 fork 链最新的链尾会话
@@ -7022,6 +7045,7 @@ export class ClientSession {
 					messageCount: s.messageCount,
 					modified: s.modified.getTime(),
 					source: "web",
+					cwd: s.cwd,
 				});
 			}
 			const sorted = [...sessions.values()].sort((a, b) => b.modified - a.modified).slice(0, 200); // newest first — the panel shows recent history
@@ -7080,7 +7104,8 @@ export class ClientSession {
 				return;
 			}
 			if (holder) {
-				// Same source the history panel uses (refreshSessions): newest first.
+				// 故意只看**当前文件夹**（即使 History 是全局的）：删当前对话不应该
+				// 把人踢到别的项目去，而是回退到本文件夹的上一个对话。newest first。
 				const infos = await SessionManager.list(this.cwd, piSessionsRoot());
 				const next = infos
 					.filter((s) => resolve(s.path) !== abs)
@@ -8039,7 +8064,8 @@ export class ClientSession {
 		return this.files.searchFiles(query, reqId);
 	}
 
-	/** 全局搜索：在当前工作区的会话转录全文里做大小写不敏感匹配 ——
+	/** 全局搜索：在会话转录全文里做大小写不敏感匹配（范围同 History：
+	 *  historyScope() 为 "all" 时跨文件夹）——
 	 *  不止首条消息，而是每一段 user 与 assistant 文本（AI 输出也在内）。
 	 *  结果经 session_search_results 回推（reqId 匹配）；复用 loadSessionInfos()
 	 *  缓存，避免每个按键都重新解析全部转录文件。 */
@@ -8063,6 +8089,7 @@ export class ClientSession {
 						messageCount: s.messageCount,
 						modified: s.modified.getTime(),
 						source: "web",
+						cwd: s.cwd,
 					};
 					// 命中会话里再定位具体消息（供点击跳转）；仅元数据命中则无锚点
 					return { ...base, anchors: collectSessionAnchors(s.path, q) };

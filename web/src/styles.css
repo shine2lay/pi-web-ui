@@ -1012,6 +1012,18 @@ body.rp-resizing .rp-sash.dragging::after {
 	vertical-align: 1px;
 }
 
+/* History 跨文件夹徽章：文件夹名照原样显示（不大写、不加字距），
+   过长时省略号收尾，不把标题行挤走。 */
+.session-cwd {
+	text-transform: none;
+	letter-spacing: 0;
+	max-width: 96px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	display: inline-block;
+}
+
 .session-time {
 	font-size: 10.5px;
 	color: var(--text-faint);
