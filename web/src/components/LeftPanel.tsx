@@ -814,6 +814,14 @@ export const LeftPanel = memo(function LeftPanel({
 															TUI
 														</span>
 													)}
+													{/* History 跨文件夹（服务端 historyScope="all"）：不属于当前工作
+													    目录的对话标上文件夹名（悬停看全路径）。服务端不发 cwd
+													    时自动不显示。 */}
+													{s.cwd && s.cwd !== currentCwd && (
+														<span className="session-src session-cwd" title={s.cwd}>
+															{projectName(s.cwd)}
+														</span>
+													)}
 												</span>
 											)}
 										</span>
