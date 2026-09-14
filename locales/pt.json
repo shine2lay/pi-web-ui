@@ -65,6 +65,8 @@
     "sessionMessages": "Mensagens na sessão",
     "messages": "Mensagens",
     "pluginStatus": "Estado dos plugins",
+    "statusToPanel": "Clique para mover para o painel direito",
+    "statusToBar": "Clique para fixar na barra de estado (continua visível com o painel fechado)",
     "engineBadge": "Motor",
     "working": "Trabalhando",
     "queued": "Enfileirar",

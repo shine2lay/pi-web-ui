@@ -65,6 +65,8 @@
     "sessionMessages": "Nachrichten in der Sitzung",
     "messages": "Nachrichten",
     "pluginStatus": "Plugin-Status",
+    "statusToPanel": "Klicken, um es in die rechte Leiste zu verschieben",
+    "statusToBar": "Klicken, um es in der Statusleiste anzuheften (bleibt bei geschlossener Leiste sichtbar)",
     "engineBadge": "Engine",
     "working": "Arbeitet",
     "queued": "in Warteschlange",

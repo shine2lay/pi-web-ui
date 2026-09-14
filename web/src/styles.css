@@ -692,6 +692,13 @@ body.rp-resizing .rp-sash.dragging::after {
 	opacity: 0.6;
 }
 
+/* 右栏底部的扩展状态卡：与 widget 同款外观，标题行是「钉到底栏」按钮。
+   状态文本通常是一行长文，允许折行，不要横向撑出滚动条。 */
+.widget-status .widget-lines {
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
 .widget-lines {
 	margin: 0;
 	padding: 6px 10px;
@@ -2993,6 +3000,10 @@ body.panel-resizing .scm-divider::after {
 	flex-shrink: 0;
 	display: flex;
 	align-items: center;
+	/* 装下不了就换行，而不是把最后几项剪掉（配额文本变长后尤其明显）。
+	   每项自身仍不断行，只有被明确允许的项（.ext-status-pinned）会内部折行。 */
+	flex-wrap: wrap;
+	row-gap: 2px;
 	gap: 8px;
 	padding: 5px 16px;
 	border-top: 1px solid var(--border);
@@ -3000,6 +3011,7 @@ body.panel-resizing .scm-divider::after {
 	font-size: 11px;
 	color: var(--text-faint);
 	white-space: nowrap;
+	/* 换行后高度自然长高；hidden 只作兵底（奇长且不可断的路径不该顶出横向滚动条）。 */
 	overflow: hidden;
 }
 
@@ -3022,6 +3034,26 @@ body.panel-resizing .scm-divider::after {
 	align-items: center;
 	gap: 6px;
 	color: var(--text-dim);
+}
+
+/* 钉在底栏的扩展状态：看起来仍是普通状态文本，点一下收进右栏底部
+   （按钮语义只是为了可点 + 可聚焦，不要长得像按钮）。 */
+.ext-status-pinned {
+	font: inherit;
+	padding: 0;
+	border: 0;
+	background: none;
+	cursor: pointer;
+	/* 配额这类状态本来就是来看的 —— 装不下就折行把它看全，而不是用
+	   省略号把末尾（恰好是重置时间）藏掉。对齐到左：折行后第二行不该居中。 */
+	text-align: left;
+	max-width: 100%;
+	white-space: normal;
+	/* 先在空格/分隔符处断；实在放不下的超长单词才硬断（不再溢出被裁）。 */
+	overflow-wrap: anywhere;
+}
+.ext-status-pinned:hover {
+	color: var(--text);
 }
 
 .status-sep {

@@ -65,6 +65,8 @@
     "sessionMessages": "대화 메시지 수",
     "messages": "메시지",
     "pluginStatus": "plugin 상태",
+    "statusToPanel": "클릭하면 오른쪽 패널로 이동",
+    "statusToBar": "클릭하면 상태 표시줄에 고정 (패널을 닫아도 표시)",
     "engineBadge": "엔진",
     "working": "작업 중이에요",
     "queued": "대기 중이에요",

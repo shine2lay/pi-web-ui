@@ -5,6 +5,7 @@ import { useT } from "../i18n";
 import { appSend, useAppField, useAppGlobals } from "../app-globals";
 import { cacheMetrics, estimateStreamTokens, streamRate, trimRateSamples, type RateSample } from "../cache-stats";
 import type { UiSlotEntry } from "../ui-slots";
+import { splitStatuses, togglePinnedStatus, usePinnedStatuses } from "../status-placement";
 
 interface FooterBarProps {
 	/** 底栏条目（bottombar 槽位：内置 + 插件的最终结果，宿主已排好序）。 */
@@ -43,6 +44,10 @@ export function FooterBar({ chat, bottombarItems, onUiAction }: FooterBarProps) 
 	 *  可以直接把**当前浏览的目录**加成根 —— 这是除「右栏文件树右键」之外的第二个人口，
 	 *  底栏本来就是改/看工作目录的地方，用户找得到。 */
 	const workspaceRoots = useAppField("workspaceRoots");
+	// 扩展状态只显示**钉住的**，其余在右栏底部（见 status-placement.ts）——
+	// 装的扩展一多，全拼在底栏会把真正要盯的那条（配额余量）挤没。
+	const pinnedStatuses = usePinnedStatuses();
+	const barStatuses = splitStatuses(chat.statuses, pinnedStatuses).bar;
 	const state = chat.state;
 	const [editing, setEditing] = useState(false);
 	/** Directory currently shown in the picker (absolute, "/"-separated). */
@@ -248,11 +253,23 @@ export function FooterBar({ chat, bottombarItems, onUiAction }: FooterBarProps) 
 				{t("messages")} {s.totalMessages}
 			</span>
 		),
+		// status-placement 补丁：只显示**钉住的**扩展状态，其余在右栏底部（status-placement.ts）。
+		// 各自一个 chip（不再拼成一长串），点一下收进右栏。
 		"host:plugin-status":
-			chat.statuses.length > 0 ? (
-				<span className="status-item ext-status" title={t("pluginStatus")}>
-					{chat.statuses.map((st) => st.text).join(" · ")}
-				</span>
+			barStatuses.length > 0 ? (
+				<>
+					{barStatuses.map((st) => (
+						<button
+							key={st.key}
+							type="button"
+							className="status-item ext-status ext-status-pinned"
+							title={`${st.key} — ${t("statusToPanel")}`}
+							onClick={() => togglePinnedStatus(st.key)}
+						>
+							{st.text}
+						</button>
+					))}
+				</>
 			) : null,
 		"host:working": state.isStreaming ? (
 			<>
