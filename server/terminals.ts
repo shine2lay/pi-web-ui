@@ -913,7 +913,40 @@ export class TerminalManager {
 		private readonly lang?: () => ServerLang,
 	) {}
 
-	/** Start a plain interactive shell in the given directory. */
+	/** Browser terminal_create is also sent whenever a terminal view mounts.
+	 * Attach to live PTYs or retained history without restarting either. Only
+	 * an unknown user-tab id needs a new shell; agent bash is created by its
+	 * tool, never by a stale view (including after history eviction/restart).
+	 * Explicit tool create() and runCommand() retain their restart semantics. */
+	openView(
+		id: string,
+		cwd: string,
+		cols: number,
+		rows: number,
+		fallbackCwd: string,
+		title?: string,
+		opts?: { forceBash?: boolean; agentBash?: boolean; locale?: string },
+	): TerminalInfo | null {
+		const invalid = this.validateId(id);
+		if (invalid) {
+			this.fail(id, invalid.text, invalid.textEn);
+			return null;
+		}
+		const existing = this.find(id);
+		if (existing) {
+			this.resize(id, cols, rows);
+			return this.info(existing);
+		}
+		// These ids belong to makeTerminalBashTool. An evicted/old browser tab
+		// must not recreate one as an unmarked user shell and consume a slot.
+		if (/^ai-bash(?:-\d+)?$/.test(id)) {
+			this.emit({ type: "terminal_exit", terminalId: id, exitCode: null });
+			return null;
+		}
+		return this.create(id, cwd, cols, rows, fallbackCwd, title, opts);
+	}
+
+	/** Explicitly start a shell, restarting an exited id if admission allows. */
 	create(
 		id: string,
 		cwd: string,

@@ -718,6 +718,16 @@ export interface TerminalManagerLike {
 		title?: string,
 		opts?: { forceBash?: boolean; locale?: string },
 	): unknown;
+	/** 浏览器终端视图挂载时的 terminal_create：贴回已有 PTY / 历史，不重启它们。 */
+	openView(
+		id: string,
+		cwd: string,
+		cols: number,
+		rows: number,
+		fallbackCwd: string,
+		title?: string,
+		opts?: { forceBash?: boolean; locale?: string },
+	): unknown;
 	input(id: string, data: string): void;
 	resize(id: string, cols: number, rows: number): void;
 	kill(id: string): void;
@@ -1393,12 +1403,15 @@ wss.on("connection", (ws) => {
 				const tm = cs.getTerminalManager(msg.conversationId);
 				if (tm) {
 					// agentBash 透传：前端重建已退出的 AI 终端时保留其身份（issue #147）；
-					// 字段缺省（旧前端）时 create() 再从 history 继承。
+					// 字段缺省（旧前端）时再从 history 继承。
 					const createOpts =
 						msg.locale !== undefined || msg.agentBash !== undefined
 							? { locale: msg.locale, agentBash: msg.agentBash }
 							: undefined;
-					tm.create(
+					// terminal-view-lifecycle：视图挂载走 openView 而不是 create —— 上游现在会
+					// 继承 agentBash（不再吃用户名额），但仍会把已退出的终端**重新起进程**
+					// 并丢掉历史输出；只是看一眼不该重启它。
+					tm.openView(
 						msg.terminalId,
 						msg.cwd,
 						msg.cols,
