@@ -69,6 +69,10 @@ interface FakeSession {
 	emit(msg: ServerMessage): void;
 	/** pushSessions/searchSessions 调 `this.loadSessionInfos()` —— 挂上真实实现。 */
 	loadSessionInfos: Proto["loadSessionInfos"];
+	/** recent-chats 补丁：pushSessions 把这份列表存给「最近对话」并重推左栏。
+	 *  本用例只关心 sessions 推送，这里只给出最小承载点。 */
+	recentSessions: unknown[];
+	emitConversations(): void;
 }
 
 function fakeSession(cwd: string): FakeSession {
@@ -82,6 +86,10 @@ function fakeSession(cwd: string): FakeSession {
 			emitted.push(msg);
 		},
 		loadSessionInfos: proto.loadSessionInfos,
+		recentSessions: [],
+		emitConversations() {
+			/* 左栏推送不在本用例范围内（见 recent-chats.test.ts） */
+		},
 	};
 }
 

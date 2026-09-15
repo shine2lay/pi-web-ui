@@ -15,6 +15,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | terminal-view-lifecycle | `local` | `server/terminals.ts`, `server/index.ts`                         |
 | global-history          | `local` | `server/agent-service.ts`, `server/protocol.ts`, `web/src/`      |
 | status-placement        | `local` | `web/src/status-placement.ts`, `FooterBar.tsx`, `RightPanel.tsx` |
+| recent-chats            | `local` | `server/agent-service.ts`, `client-state.ts`, `web/src/`          |
 
 ---
 
@@ -175,3 +176,59 @@ AI 豁免、显式重开、校验、WS 路由、真 PTY）
   分流顺序/撤销的状态两边都不显/toggle 落盘/隐私模式写不进去仍生效）
 - `tests/unit/status-placement-ui.test.ts`（5 项：真 jsdom + 真 React，同一批状态在
   两处不重不漏，两个方向的点击换边）
+
+---
+
+## recent-chats
+
+**状态**：`local`（想上游成设置项：左栏第一列 = 只列运行中 / 最近对话）
+**基线**：v0.85.0
+
+### 问题
+
+左栏第一列叫「运行的对话」，只装**活着的运行时**：一条对话空闲后被换到后台
+（`displaceActive()`）就从列表里消失了，想接着聊只能去下面的 History 里翻。
+而且列表只有一种指示灯 —— 绿点闪 = 正在跑；**跑完灯就没了**，于是「哪几条在等我看」
+这个最该一眼看见的信息，恰恰是列表唯一不显示的状态。
+
+### 改法
+
+- **列表常驻**（`server/agent-service.ts`）：`emitConversations()` 在活着的对话之后
+  补上磁盘上最近 `recentChatLimit()`（默认 15，`PI_WEB_UI_RECENT_LIMIT=0` 关掉）条
+  转录，作为 `live: false` 的行。数据直接复用 `pushSessions()` 已经解析好的那份列表
+  （`recentSessions`，3 秒缓存），**不额外扫盘**；同一条对话既活着又在磁盘列表里时
+  只保留活的那份（按转录路径去重）。运行时释放/回收的既有规则一个字没动，
+  纯展示口径 —— 与 `shownInRunningList()` 的处理方式一致。
+- **✕ = 只从这一列移出**：新增 `remove_recent_chat`（wire）→ `removeRecentChat()`，
+  在 `client-state.json` 的**全局键**下记 `recentRemoved` 墓碑（列表每次都从磁盘重建，
+  没有墓碑会立刻原地复活；全局键 = 换标签页/重启仍然有效）。**转录一个字都不动**，
+  History 里照样能找到并重新打开；重新打开/继续聊（`markRecentSeen()`）自动撤销墓碑。
+  原来的 `dismiss_conversation`（含强行关闭）现在顺手打同一个墓碑，否则「移出运行列表」
+  会变成「原地换成一条常驻历史行」，看起来像没删掉。
+- **两种灯**（`web/src/styles.css` + `LeftPanel.tsx`）：
+  - `.conv-dot.conv-running` —— **黄灯闪**：本轮正在跑（原来是绿灯闪）。
+  - `.conv-dot.conv-waiting` —— **绿灯常亮**：本轮跑完了但用户还没看（「轮到你了」）。
+    静态事实不该跟着闪；`prefers-reduced-motion` 下黄灯也不闪，只靠颜色区分。
+
+  两种状态互斥，一行永远只有一盏灯。`waiting` 由服务端给：`agent_end`（且不是自动重试
+  的中间态）时 `markRecentWaiting()` 点亮，**当前正看着的那条不点**（人就在那儿）；
+  `recentWaiting` 同样落在 client-state 的全局键下，所以运行时被释放、变成常驻历史行
+  之后绿灯依然记得。灭灯只在三处：切到该对话、从历史/最近打开它、往它里面发消息。
+- **常驻行的点击**：`live === false` 的行点开走 `switch_session`（带 `sessionPath`），
+  活着的行仍走 `switch_conversation`；重命名两种行都仍可用。
+
+新增 wire 字段：`ConversationSummary.sessionPath / live / waiting`；新增 i18n：
+`recentChats` / `waitingForYou` / `removeFromRecent` / `removeFromRecentConfirm`
+（zh/en + 8 个语言包同位置插入，`tests/unit/locales.test.ts` 锁顺序）。
+DSH 引擎的左栏只有活着的行，`removeRecentChat()` 在那边是空操作（保持同一套 wire）。
+
+### 回归
+
+- `tests/unit/recent-chats.test.ts`（10 项，服务端：活着 + 磁盘常驻行的合并与去重、
+  上限只管常驻行、墓碑生效与撤销、跑完点绿灯、当前对话不点灯、跑着不叠绿灯、
+  运行时释放后绿灯不丢、移出后不再持有绿灯）
+- `tests/unit/recent-chats-ui.test.ts`（8 项，真 jsdom + 真 React：黄/绿/不点灯三态、
+  一行一盏、常驻行点开走 `switch_session`、✕ 两段确认发 `remove_recent_chat`、
+  活着的行仍走 `switch_conversation` / `dismiss_conversation`）
+- `tests/unit/global-history.test.ts` 的假会话补了 `recentSessions` / `emitConversations`
+  承载点（`pushSessions()` 现在会把列表交给「最近对话」并重推左栏）
