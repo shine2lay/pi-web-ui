@@ -12,4 +12,6 @@
 //     load_older/older_messages）。老页面配新服务端会静默只看到 100 条历史。
 // 22: per-chat-dialogs — 对话的扩展弹窗随快照走（UiState.dialog），不再发 `dialog` 消息。
 //     老页面配新服务端看不到这些弹窗，对话就一直等。
-export const PROTOCOL_VERSION = 22;
+// 23: v0.96.1 同步 —— 上游 20（WS hello 防重放）加上我们的 21/22 正好又是 22，跟基于 v0.94.1 的上一版
+//     同号；不再加 1 的话，开着的旧页面连上新服务端不会出「请刷新」横幅。
+export const PROTOCOL_VERSION = 23;

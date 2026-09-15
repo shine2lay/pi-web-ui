@@ -21,13 +21,12 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | client-per-load              | `local`        | `web/src/use-chat.ts`                                                                                                                          |
 | server-owned-chats           | `local`        | `server/agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/`                                                                               |
 | topbar-crowding              | `local`        | `web/src/ui-slots.ts`, `App.tsx`, `TopBar.tsx`                                                                                                 |
-| quiet-duplicate-open         | `local` → 退役 | `server/agent-service.ts`                                                                                                                      |
 | no-cwd-restore               | `local`        | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `use-chat.ts`                                                                           |
 | flat-recent-chats            | `local`        | `web/src/conv-groups.ts`, `LeftPanel.tsx`, `server/agent-service.ts`, `protocol.ts`                                                            |
 | no-mcp-restart-nag           | `local`        | `server/webui-context.ts`, `tests/unit/mute-mcp-restart-nag.test.ts`                                                                           |
 | ask-question-delivery        | `local`        | `server/ask-delivery.ts`, `agent-service.ts`                                                                                                   |
 | reload-adopt                 | `local`        | `server/attach-adopt.ts`, `agent-service.ts`                                                                                                   |
-| switch-loading               | `local`        | `web/src/switch-pending.ts`, `SwitchOverlay.tsx`, `use-chat.ts`, `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `protocol.ts`          |
+| switch-loading               | `local`        | `web/src/switch-pending.ts`, `SwitchOverlay.tsx`, `use-chat.ts`, `server/agent-service.ts`, `index.ts`, `dsh/dsh-agent-service.ts`, `protocol.ts` |
 | qn-rail-window               | `local`        | `web/src/qn-window.ts`, `components/MessageList.tsx`, `styles.css`, `i18n.tsx`                                                                 |
 | terminal-cwd-anywhere        | `local`        | `server/terminals.ts`, `tests/unit/terminal-cwd.test.ts`                                                                                       |
 | chat-window-pagination       | `local`        | `server/question-index.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `web/src/message-window.ts`, `MessageList.tsx`, `use-chat.ts`       |
@@ -35,7 +34,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | load-older-survives-snapshot | `local`        | `web/src/message-window.ts`, `use-chat.ts`, `tests/chat-pagination-test.mjs`                                                                   |
 | exchange-fold                | `local`        | `web/src/exchange-fold.ts`, `components/ExchangeFoldRow.tsx`, `MessageList.tsx`, `exchange-fold.css`, `i18n.tsx`, `locales/*.json`             |
 | exchange-digest              | `local`        | `server/exchange-digest.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `web/src/message-window.ts`, `exchange-fold.ts`, `MessageList.tsx` |
-| done-any-chat                | `local`        | `web/src/done-cues.ts`, `App.tsx`, `server/agent-service.ts`, `i18n.tsx`, `locales/*.json`                                                     |
+| done-any-chat                | `local`        | `web/src/done-watch.ts`, `App.tsx`, `server/agent-service.ts`, `i18n.tsx`, `locales/*.json`                                                    |
 | todo-list-owner              | `local`        | `server/agent-service.ts`                                                                                                                      |
 | markers-skip-code            | `local`        | `server/markers/marker.ts`                                                                                                                     |
 | single-load                  | `local`        | `web/src/use-chat.ts`, `server/index.ts`, `server/protocol.ts`                                                                                 |
@@ -43,7 +42,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | fast-reopen                  | `local`        | `server/compaction-markers.ts`                                                                                                                 |
 | switch-cache                 | `local`        | `web/src/chat-cache.ts`, `server/window-hash.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `use-chat.ts`, `App.tsx`, `SwitchOverlay.tsx` |
 | tldr-collapse                | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/components/TldrPanel.tsx`, `RightPanel.tsx`, `App.tsx`, i18n   |
-| queue-panel                  | `local`        | `server/task-queue.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TaskQueuePanel.tsx`, `RightPanel.tsx`, `done-cues.ts`, i18n     |
+| queue-panel                  | `local`        | `server/task-queue.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TaskQueuePanel.tsx`, `RightPanel.tsx`, `done-settle.ts`, i18n   |
 | per-chat-dialogs             | `local`        | `server/chat-dialogs.ts`, `webui-context.ts`, `agent-service.ts`, `protocol.ts`, `web/src/App.tsx`, `LeftPanel.tsx`, i18n                      |
 | image-aside-label            | `local`        | `server/attachments.ts`, `serialize.ts`                                                                                                        |
 | tldr-sidebar                 | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/LeftPanel.tsx`, `styles.css`                                    |
@@ -54,10 +53,32 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 ---
 
+## 同步到 v0.96.1 时要知道的（2026-09-26）
+
+上游 v0.95.0 – v0.96.1 带进来几样会碰到本机部署的改动：
+
+- **Host 白名单**（防 DNS rebinding，`server/host-guard.ts`）：没设 `PI_WEB_TOKEN` 也没设 `PI_WEB_ALLOW_HOSTS` 时，
+  只放行回环和局域网地址；pi.wai2shine.com（Caddy 反代，Host 原样透传）和 spark.tailbb5055.ts.net（tailscale
+  serve）会直接 403。所以 systemd unit（`~/.config/systemd/user/pi-web-ui.service`）加了
+  `Environment=PI_WEB_ALLOW_HOSTS=pi.wai2shine.com,spark.tailbb5055.ts.net,127.0.0.1,localhost`。名单是严格的
+  （写了就只认名单），所以回环的名字也要写上。WS 的 Origin 检查（Origin 的 host:port 要等于 Host）也用它。
+- **SDK**：`package.json` 里 pi-coding-agent 改成 `>=0.85.1`，锁文件是 0.87.1。`resolve-global-sdk` 只在机器上的
+  pi 更新时才跟过去，所以服务跑的是自带的 0.87.1（命令行 `pi` 仍是 0.85.1）。扩展都照常加载。
+- **工具批准**（新功能，`server/tool-approval.ts` + `server/approval-rules.ts`）：删文件、force push、写工作区外的
+  文件等要先点批准，上游默认**开**。本机的全局设置里关掉（`toolApprovalEnabled: false`），跟同步前一样：
+  排队任务、定时唤醒这些没人看着的对话不会卡在批准框上。想要的话在设置里打开。
+- **WS hello 防重放**（b116e13）：同一个 socket 重复 hello 只回一个 ready；clientId 只认字母数字和 `:_-`、
+  1–128 位（`server/ws-client-id.ts`，不合格就换成随机 UUID）。本 fork 的页面和 /tmp 下的脚本的 id 都合格。
+- **协议号**：上游 19 → 20（b116e13），本 fork 在上面 20 → 21（chat-window-pagination）→ 22（per-chat-dialogs），
+  正好跟基于 v0.94.1 的上一版同号，开着的旧页面就不会出「请刷新」横幅，所以文末的 chore 提交再加 1 到 **23**。
+- 上游新加的消息操作「派生分支」「回滚到此」和本 fork 的「倒回这里」并存，见 `rewind-to-here`。
+
+---
+
 ## qn-rail-window
 
 **状态**：`local`（纯前端，可以直接提上游；窗口大小和对齐策略是口味选择，提之前先对口径）
-**基线**：v0.94.1
+**基线**：v0.96.1
 
 ### 问题
 
@@ -97,7 +118,22 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 ## switch-loading
 
 **状态**：`local`（上游同样有这个问题，但修法改了协议，得先跟上游对过口径才好提 PR）
-**基线**：v0.94.1（依赖 `server-owned-chats`：对话归服务端，切换才是一次有明确回执的请求）
+**基线**：v0.96.1（依赖 `server-owned-chats`：对话归服务端，切换才是一次有明确回执的请求）
+
+**同步 v0.96.1（2026-09-26）**：本补丁原来把协议 19 → 20；上游 v0.96 自己也 19 → 20（b116e13，WS hello
+防重放），同步时这一步被吸收，本补丁不再改协议号（现在的号见 chat-window-pagination、per-chat-dialogs 和
+文末 chore 提交的 23）。代码上只是 import 挨着上游新加的批准类型。
+
+同步后两处上游改动会把打开的那份快照挤掉，`switch_done` 跑到内容前面（chat-pagination-test 在本机报出来）。
+原因都是发送背压：socket 缓冲超过下限（`SNAPSHOT_BACKPRESSURE_MIN_BYTES` = 256 KB）时快照直接丢，250ms 后
+才补一份 delta，客户端还得靠 rev 缺口 `get_state` 自愈；而 `settings_state` 带着 `toolsSchema` 等预览，在
+真实环境有 ~350 KB。
+
+- 上游 v0.96 在新建对话、切对话、切会话、切工作目录、选预设时都推一份 `settings_state`，而且推在快照
+  **前面**。现在这几处都改成先快照（切换时连同 `switch_done`）、后设置。
+- v0.96 起 `ready` 先于 attach 的那批消息发出，连上就切的客户端（测试、WS 脚本）切换时缓冲正满。
+  `server/index.ts` 的 `send` 现在记着最近发出的全量快照属于哪条对话（`lastSnapshotConvId`），
+  **打开另一条对话的全量快照不丢**。切换是用户动作，频率低，慢客户端的内存保护不受影响。
 
 ### 问题
 
@@ -123,6 +159,10 @@ export type SwitchTarget = { kind: "session"; path: string } | { kind: "conversa
   `switch_done` 时内容已经到位，不会出现「遮罩没了但还是旧内容」的中间帧。
 - 两个引擎同一份契约：`server/agent-service.ts` 和 `server/dsh/dsh-agent-service.ts`
   各自 `emitSwitchDone()` / `emitSwitchFailed()`。
+- 同步 v0.94.1 带进来的一个漏洞（2026-09-24 补上）：上游 5ca2e70（confine switchSession to sessions root）
+  对会话目录外的路径只发 `notice`、不回执，客户端的「正在打开…」会一直等。现在它和其它失败一样
+  `flushSnapshot()` + `emitSwitchFailed()`（原因文字不变）。`switch-ack-test` 的「目录打不开」那条正好走这里
+  （测试的工作目录在会话目录外），同步之后一直挂着。
 
 **客户端**：`web/src/switch-pending.ts`（101 行，纯函数、不碰 React）记下 `pendingSwitch`；
 发出 `switch_*` 的**那一刻**聊天区盖一层「正在打开…」（`SwitchOverlay.tsx`，带「已等待 N 秒」
@@ -136,7 +176,11 @@ export type SwitchTarget = { kind: "session"; path: string } | { kind: "conversa
 
 - `tests/switch-ack-test.mjs`（e2e，已登记进 `tests/run-smoke.mjs`）：成功路径「先快照后
   `switch_done`、target 原样回传」；三条失败路径（目录打不开、对话 id 不存在、切到已经
-  是当前的转录）都不再静默；失败时**当前对话纹丝不动**。
+  是当前的转录）都不再静默；失败时**当前对话纹丝不动**。同步 v0.96.1 后还查新建对话、
+  `switch_session`、`switch_conversation` 三处 `settings_state` 都在快照之后（改对前三处都报错）。
+- `tests/switch-open-burst-test.mjs`（e2e，同步 v0.96.1 时加）：项目里放一份 ~400 KB 的 AGENTS.md，让连上时的
+  `settings_state` 超过背压下限，连上就切到一份预先写好的会话：这条会话的全量快照要在 `switch_done`
+  之前到、带着它的消息。去掉 `send` 里那条豁免就挂 3 项（快照被丢）。
 - `tests/unit/switch-pending.test.ts` + `tests/unit/switch-loading-ui.test.ts`（共 354 行）。
 - `node scripts/check-protocol-sync.mjs`：双端 `PROTOCOL_VERSION` 一致 (v20)、
   `protocol.ts` 保持纯类型导出。
@@ -147,7 +191,11 @@ export type SwitchTarget = { kind: "session"; path: string } | { kind: "conversa
 ## reload-adopt
 
 **状态**：`local`（上游不适用：它的对话有归属，这里没有）
-**基线**：v0.94.1（依赖 `server-owned-chats` + `client-per-load`；同步时的改动见「与上游 v0.94 的关系」）
+**基线**：v0.96.1（依赖 `server-owned-chats` + `client-per-load`；v0.94.1 同步时的改动见「与上游 v0.94 的关系」）
+
+**同步 v0.96.1（2026-09-26）**：上游 12a606b 让伪客户端（`scheduler:` / `plugin:` 开头的 clientId）不再认领
+会话。本补丁照这个意思补上：伪客户端不 adopt、也不恢复上次的对话（在 `pickAdoptTarget` 里判断，
+`isPseudoClientId` 改成 static 复用）。`pickAdoptTarget` 继续代替上游的 `findAdoptableOrphan`。
 
 ### 问题
 
@@ -272,7 +320,10 @@ own most recently active conversation`）—— 两处口径不一致。
 ## ask-question-delivery
 
 **状态**：`local`（bug 对上游同样成立，值得提 PR）
-**基线**：v0.94.1（2026-09-23 同步时按上游的新问卷模型重做，见「与上游 v0.94 的关系」）
+**基线**：v0.96.1（2026-09-23 同步 v0.94.1 时按上游的新问卷模型重做，见「与上游 v0.94 的关系」）
+
+**同步 v0.96.1（2026-09-26）**：保留上游新加的工具批准（tool-approval）那段桥接，本补丁的投递（问卷在所有
+在线窗口弹出）不变。
 
 ### 问题
 
@@ -408,7 +459,10 @@ question-attachments 共 63 项全过。
 ## terminal-bash-script
 
 **状态**：`local`（上游未提 issue/PR；bug 对所有 macOS 用户都成立，值得上游）
-**基线**：v0.94.1
+**基线**：v0.96.1
+
+**同步 v0.96.1（2026-09-26）**：上游在同一处加了 `sentinelUnsafeReason`，两边都保留；`BASH_RC_GUARD` 前空一行。
+回归用例 10b / 10c 照过。
 
 ### 问题
 
@@ -458,7 +512,7 @@ question-attachments 共 63 项全过。
 不再被降级成用户终端去占那 16 个名额；但视图挂载仍然走 `create()` —— 已退出的终端会被
 **重新起进程**、历史输出一并丢掉。只是看一眼不该重启它，所以这个补丁继续保留。
 每次同步后先跑 `tests/unit/terminal-view.test.ts`：哪天它对着纯上游代码也全绿，就删掉这个 commit。）
-**基线**：v0.94.1
+**基线**：v0.96.1
 
 ### 问题
 
@@ -490,7 +544,9 @@ AI 豁免、显式重开、校验、WS 路由、真 PTY）
 ## global-history
 
 **状态**：`local`（打算上游成一个设置项：History 范围 = 全部项目 / 当前项目）
-**基线**：v0.94.1
+**基线**：v0.96.1
+
+**同步 v0.96.1（2026-09-26）**：保留上游新加的进程树清理（kill-tree）和 cwd 解析，本补丁的逻辑不变。
 
 ### 问题
 
@@ -530,7 +586,7 @@ AI 豁免、显式重开、校验、WS 路由、真 PTY）
 ## status-placement
 
 **状态**：`local`（可上游：纯前端偏好，不动协议与服务端）
-**基线**：v0.94.1
+**基线**：v0.96.1
 
 ### 问题
 
@@ -571,7 +627,10 @@ AI 豁免、显式重开、校验、WS 路由、真 PTY）
 ## recent-chats
 
 **状态**：`local`（想上游成设置项：左栏第一列 = 只列运行中 / 最近对话）
-**基线**：v0.94.1
+**基线**：v0.96.1
+
+**同步 v0.96.1（2026-09-26）**：`ConversationSummary` 里上游新加的 `forkFrom` 与本补丁的 `sessionPath` / `waiting`
+并存；WS 消息里上游的 `subagent_handoff` 与本补丁的 `remove_recent_chat` 并存。
 
 ### 问题
 
@@ -628,7 +687,7 @@ DSH 引擎的左栏只有活着的行，`removeRecentChat()` 在那边是空操�
 ## chat-cwd-pin
 
 **状态**：`local`（想上游成设置项：切对话时工作区跟随 / 钉住）
-**基线**：v0.94.1
+**基线**：v0.96.1
 
 ### 问题
 
@@ -672,13 +731,21 @@ DSH 引擎的左栏只有活着的行，`removeRecentChat()` 在那边是空操�
 
 - `tests/unit/chat-cwd-pin.test.ts`（6 项：开关解析、默认不搬家且无副作用、对话自身 cwd 不变、
   同目录切换、`=1` 时整套副作用回归；另加一条静态体检确保 `switchSession()` 那条入口同样被守住）
+- 同步 v0.96.1（2026-09-26）：这份单测的桩要跟着上游改。`switchConversationNow()` 现在每次都调
+  `pushSettings()`（上游切对话推一份 settings_state），跨文件夹跟随时调上游新收成一处的
+  `applyCwdSideEffects()`。桩里加了空的 `pushSettings`，`applyCwdSideEffects` 用生产那一份（它调的
+  onCwdChanged / remember / pushProjects / listFiles …… 还是记录用的桩）。没加之前 4 项挂在
+  `this.pushSettings is not a function`，补丁本身的行为没变。
 
 ---
 
 ## client-per-load
 
 **状态**：`local`（可上游：现有 sessionStorage 方案挡不住复制标签页）
-**基线**：v0.94.1
+**基线**：v0.96.1
+
+**同步 v0.96.1（2026-09-26）**：上游开始校验 clientId（`server/ws-client-id.ts`：字母数字和 `:_-`、1–128 位，
+不合格就换成随机 UUID）。本补丁每次加载现生的 UUID 合格，不用改。
 
 ### 问题
 
@@ -707,7 +774,18 @@ clientId 建 ClientSession，同 id = 同一个会话。上游把 clientId 从 l
 ## server-owned-chats
 
 **状态**：`local`（上游 #145 在往「所有权 + 感知」方向走，这里是相反的选择：取消所有权）
-**基线**：v0.94.1
+**基线**：v0.96.1
+
+**同步 v0.96.1（2026-09-26）**：
+
+- 上游的 `listExternalRunning()` 照旧恒为空（共享表上的对话本来就在自己的列表里）。
+- 上游新加的工具批准：本补丁按视图 dispose 时也调 `cancelPendingApprovals()`。
+- 上游在 `applyToolGating` 和切预设时写 `this.sessionStatsCache = null`；本补丁的缓存是按会话的 WeakMap，
+  改成 `.delete(session)` / `.delete(conv.session)`。
+- 上游 12a606b 的 `deleteSession` 会问别的客户端是否持有（`findSessionOwner`）。共享表下别的窗口开着这条就拦下，
+  没人开着才删，跟本补丁的口径一致。
+- `quiet-duplicate-open` 这次退役，它的提交并进了本补丁：它的代码本来就被本补丁整段删掉，最终的树逐字节不变
+  （见文末「已退役的补丁」）。
 
 ### 问题
 
@@ -771,51 +849,13 @@ clientId 建 ClientSession，同 id = 同一个会话。上游把 clientId 从 l
 
 ---
 
-## quiet-duplicate-open
-
-**状态**：`local`，**下次同步退役**（代码上已无效果，见下面「现状」）
-**基线**：v0.94.1
-
-### 问题
-
-在第二个窗口打开一条**空闲**对话时，每次都弹「该对话在另一处也开着……请只留一处
-发送消息」。它说的风险是真的（两个 runtime 各自往同一份 JSONL 追加，轮流发送会让
-历史分叉），但多窗口看同一条对话本来就是日常操作，于是这条提醒在正常使用中反复出现。
-
-### 改法
-
-去掉**空闲持有者**那条 info 提醒。只改了 pi 引擎（`server/agent-service.ts`）；DSH 引擎
-`server/dsh/dsh-agent-service.ts` 的同一条提醒一直都在（这里原先写「两个引擎同口径」，
-不对：这个提交从来没动过 DSH）。真正有害的一刻没有放松：
-
-- 对方**正在跑**时打开 → 仍然硬拦（原样保留）；
-- 发消息前的 `prompt()` 守卫仍会再查一次（开时空闲、发时在跑的竞态照样拦）。
-
-### 现状（2026-09-23 同步 v0.94.1 时查明）
-
-栈里排在后面的 `server-owned-chats` 把对话归给了服务端：两处打开同一条就是订阅同一个
-runtime，只有**一个** writer，从根上分叉不了。它把 pi 引擎的持有者检查整段删掉了（连同
-上面两条硬拦：打开正在跑的对话不再拒绝、发送不再拦截），所以到栈顶这个补丁在代码上
-**已经没有任何效果**：它加的行一行都不剩，它删的那段提醒也不在（逐行核对过）。
-
-**下次同步时退役**：在它那一步 `git rebase --skip`；到 `server-owned-chats` 那一步，
-`server/agent-service.ts` 里这段取 `server-owned-chats` 自己的版本（整段删掉）；PATCHES.md
-删掉本节和索引行，在文末「已退役的补丁」记一笔。这次没删：删它要把后面每个碰索引表的
-提交都重解一遍冲突，换来的只是栈里少一个空转的提交，不如放到下次同步顺手做。
-
-（这里原先指向 co-drive 的 `join_client`，该补丁这次同步已退役，见「已退役的补丁」。）
-
-### 回归
-
-- `tests/cross-client-session-test.mjs` 原有断言全绿（含「幽灵持有者不打扰」这条
-  「不该出现提醒」的负向断言）；正在跑时的硬拦与并行提醒均未受影响
-
----
-
 ## no-cwd-restore
 
 **状态**：`local`（可上游成设置项：启动目录 = 服务端默认 / 上次用过的）
-**基线**：v0.94.1
+**基线**：v0.96.1
+
+**同步 v0.96.1（2026-09-26）**：上游 #295 加了启动时按 stat 恢复上次的目录，#319 加了 `clearLastCwdIfMatches`，
+都是「恢复上次目录」那条路；本补丁就是不恢复，所以两处都拿掉。
 
 ### 问题
 
@@ -850,7 +890,10 @@ runtime，只有**一个** writer，从根上分叉不了。它把 pi 引擎的�
 ## flat-recent-chats
 
 **状态**：`local`（可上游成设置项：左栏排序 = 最近活动 / 创建时间；分组 = 按项目 / 不分）
-**基线**：v0.94.1
+**基线**：v0.96.1
+
+**同步 v0.96.1（2026-09-26）**：上游重写了左栏的按项目分组；本补丁照旧用 `orderConversations` 排成一条扁平
+列表，替掉上游的分组渲染。
 
 ### 问题
 
@@ -897,7 +940,11 @@ runtime，只有**一个** writer，从根上分叉不了。它把 pi 引擎的�
 ## topbar-crowding
 
 **状态**：`local`（上游大概率乐见其成，可提 PR）
-**基线**：v0.94.1（v0.86.2 上的 7 个提交在同步 v0.94.1 时按上游的新顶栏重做成 1 个）
+**基线**：v0.96.1（v0.86.2 上的 7 个提交在同步 v0.94.1 时按上游的新顶栏重做成 1 个）
+
+**同步 v0.96.1（2026-09-26）**：上游把 settings、history、files 设成必需项（`REQUIRED`），又新加了
+`ALWAYS_SHOWN_TOPBAR_ITEM_IDS = {history, files}`（总在顶栏上）；本补丁仍让 settings 能收进溢出菜单。
+`tests/unit/ui-slots.test.ts` 的数目按新清单改成「7 + 11」。
 
 ### 问题
 
@@ -958,7 +1005,7 @@ order 200。v0.86.2 上的旧做法（`capTopbarPrimary()` 限额 → 按角色�
 ## no-mcp-restart-nag
 
 **状态**：`local`（上游修了就删；真正的修法在 pi-mcp-adapter 那边）
-**基线**：v0.94.1
+**基线**：v0.96.1
 
 ### 问题
 
@@ -996,7 +1043,9 @@ list 往返）。想真修就得让令牌不再每次变（固定 `bearerToken`�
 ## terminal-cwd-anywhere
 
 **状态**：`local`
-**基线**：v0.94.1
+**基线**：v0.96.1
+
+**同步 v0.96.1（2026-09-26）**：上游把工具说明改成只有英文，本补丁的说明跟着只留英文。
 
 ### 问题
 
@@ -1033,7 +1082,10 @@ workspace」。两个入口都受影响：`create()`（前端新开标签 / agen
 ## chat-window-pagination
 
 **状态**：`local`
-**基线**：v0.94.1（协议 v20 → **v21**）
+**基线**：v0.96.1（协议 v20 → **v21**）
+
+**同步 v0.96.1（2026-09-26）**：协议号：上游 v0.96 已是 20（旧基线上 20 是 switch-loading 加的），本补丁
+20 → 21 不变。`App.tsx` 在上游改过的 `MessageList` 包装上接回 `onLoadOlder`。
 
 ### 问题
 
@@ -1095,7 +1147,9 @@ workspace」。两个入口都受影响：`create()`（前端新开标签 / agen
 ## bg-tasks-push-dedupe
 
 **状态**：`local`
-**基线**：v0.94.1
+**基线**：v0.96.1
+
+**同步 v0.96.1（2026-09-26）**：上游在同一处加了 `listenBefore`，与本补丁的 `lastPushedJson` 并存。
 
 **症状**（用户 2026-09-22 报）：“pi-web-ui 不再把事件推到 UI，不刷新就看不到
 任何对话的更新。”
@@ -1136,7 +1190,10 @@ index.mjs` 的轮询：对每条盯梢的运行无条件 `update()`，20 条 × 
 ## load-older-survives-snapshot
 
 **状态**：`local`
-**基线**：v0.94.1
+**基线**：v0.96.1
+
+**同步 v0.96.1（2026-09-26）**：上游新加的 `pendingApproval`（工具批准框）在 `keepLoadedHistory` 里一并保留，
+免得载入更早的消息后批准框丢掉。
 
 **症状**（用户 2026-09-22 报）：点了「加载更早消息」，一来新消息就退回点击之前的样子，
 已加载的历史没了。
@@ -1188,7 +1245,9 @@ index.mjs` 的轮询：对每条盯梢的运行无条件 `update()`，20 条 × 
 ## exchange-fold
 
 **状态**：`local`
-**基线**：v0.94.1
+**基线**：v0.96.1
+
+**同步 v0.96.1（2026-09-26）**：上游的消息列表里多了 system 消息；折叠时跳过它们，不算进一问一答。
 
 **诉求**（用户 2026-09-23）：agent 一跑就是几十轮思考 + 工具调用，每轮一个块，读不过来。把一轮对话的
 中间步骤折成一行，显示一共几轮、几次思考、几次工具调用；最终只看「我的问题 + 它的回答」。
@@ -1239,7 +1298,7 @@ index.mjs` 的轮询：对每条盯梢的运行无条件 `update()`，20 条 × 
 ## exchange-digest
 
 **状态**：`local`
-**基线**：v0.94.1（接 chat-window-pagination 与 exchange-fold）
+**基线**：v0.96.1（接 chat-window-pagination 与 exchange-fold）
 
 **诉求**（用户 2026-09-24）：分页之后快照只带最新 `MESSAGE_WINDOW`（100）条消息。agent 一轮动辄几百步，
 这 100 条常常全落在最后一轮里；exchange-fold 把步骤折起来以后，页面上只剩一行，前面几轮问了什么、
@@ -1293,22 +1352,25 @@ index.mjs` 的轮询：对每条盯梢的运行无条件 `update()`，20 条 × 
 ## done-any-chat
 
 **状态**：`local`
-**基线**：v0.94.1（接 server-owned-chats）
+**基线**：v0.96.1（接 server-owned-chats）
 
 **诉求**（用户 2026-09-24）：任何一条对话跑完都要听到提示，不只是正开着的那条。
 
 ### 改法
 
-- `web/src/done-cues.ts`（纯函数）：
-  - `runEdge(prev, next)`：正开着的那条对话的开始/结束，只认**同一条对话自己的**变化。上游的 effect 只看
-    `state.isStreaming`，从一条在跑的对话切到一条闲着的，会误响一次「完成」。
-  - `runningSeen` / `finishedChats(prev, list, activeId)`：其余对话看左栏列表每行的 `isStreaming`，上一份
-    里在跑、这一份里不跑了就是跑完了。正开着的那条归 `runEdge`（不重复响）；子代理不算（父对话还在跑，
-    跑完自己会响；不然并行派几个子代理就响几次）；历史行、上一份里没有的对话不算；刚加载/刚重连
-    （`prev` 为 null）不算。
-- `App.tsx`：原来的开始/结束 effect 改用 `runEdge`（依赖加上 `conversationId`）。新 effect 看
-  `chat.conversations`：有对话跑完就响一次「完成」，每条（最多 3 条）发一条系统通知，正文带对话标题
-  （`notifyDoneBodyChat`）。断线（`chat.ready` 变 false）清空记录：服务端重启会结束所有 run，不能当成跑完了。
+- 前端：上游 v0.95 起自己按对话 id 跟踪跑完（`web/src/streaming-cues.ts` 的 `diffStreamingCues`：每条对话各自
+  比上一份和这一份的 `isStreaming`，切换对话不响，第一份列表只同步）。`App.tsx` 里上游的开始/结束 effect
+  上补三处：
+  - 传给 `diffStreamingCues` 的列表先过 `web/src/done-watch.ts` 的 `cueConversations`：子代理不算（父对话还在跑，
+    跑完自己会响；不然并行派几个子代理就响几次），历史行（`live === false`）不算。正开着的那条另由
+    `activeId` 传进去，打开的子代理照样有自己的开始/完成。
+  - 断线（`chat.ready` 变 false）时 `prevStreamingMapRef` 清空：服务端重启会结束所有 run，重连后的第一份
+    列表只同步，不能当成跑完了。上游没有这一步。
+  - 后台对话的系统通知是带标题的整句（`notifyDoneBodyChat`），不再是「标题：通用句」拼接（英文里会出现
+    全角冒号）。
+- 同步 v0.96.1（2026-09-26）时改成这样：本补丁原来的 `web/src/done-cues.ts`（`runEdge` / `finishedChats`）和上游的
+  `diffStreamingCues` 做的是同一件事，删掉改用上游的，只留上游没有的三处。原来每批最多 3 条系统通知，
+  现在跟上游一样每条都发。
 - `server/agent-service.ts`（`ClientSession.onEvent`）：
   - `agent_start`：`emitConversations()` → `ClientSession.emitConversationsToAll()`。server-owned-chats 之后对话表
     是共享的，每个窗口都列着所有对话，但列表只推给订阅这条对话的那个会话（`emit()` 只把
@@ -1321,8 +1383,8 @@ index.mjs` 的轮询：对每条盯梢的运行无条件 `update()`，20 条 × 
 
 ### 回归
 
-- `tests/unit/done-cues.test.ts`：14 项。`runEdge`：同一条、换一条、没有快照。`finishedChats`：后台跑完、
-  正开着的那条、首份列表、新出现的、仍在跑/刚开跑/一直闲着、离开列表、子代理、历史行、一次跑完几条。
+- `tests/unit/done-watch.test.ts`（4 项）：子代理和历史行被滤掉；后台对话跑完响、子代理跑完不响；打开的
+  子代理照样响；重连后（清成 null）第一份列表不响。其余的边沿判定归上游的 `tests/unit/streaming-cues.test.ts`。
 - `tests/done-any-chat-test.mjs`（真服务端 + 两个浏览器上下文，零 token，AudioContext 换成记录器，按音符认
   提示音）：窗口 A 在慢对话跑着时新开对话——不响；新对话答完响一次；窗口 B 后打开、从没订阅过慢对话；
   慢对话跑完 A、B 各响一次（答完后约 10ms），不多响。共 14 项。修复前（29c8f29）失败 5 项：切走误响，
@@ -1337,7 +1399,7 @@ index.mjs` 的轮询：对每条盯梢的运行无条件 `update()`，20 条 × 
 ## todo-list-owner
 
 **状态**：`local`（上游同样有这个问题，可以提 PR）
-**基线**：v0.94.1
+**基线**：v0.96.1
 
 **问题**（2026-09-24 实际遇到）：`todo_list` 读的是建这个 runtime 的窗口**此刻正开着的**对话（`this.activeId`），
 不是调用它的对话。对话在后台跑时，它拿到的是前台对话的任务列表。写操作（内联 `[[todo:...]]`）不受影响：
@@ -1359,7 +1421,7 @@ runtime 所属的对话（每个调用点都传了 `conversationId`），跟标�
 ## markers-skip-code
 
 **状态**：`local`（上游同样有这个问题，可以提 PR）
-**基线**：v0.94.1
+**基线**：v0.96.1
 
 **问题**（2026-09-24 实际遇到）：内联标记是在整段助手正文里找，代码块、行内代码也照样执行。AI 把系统
 提示词贴进回答（放在代码块里），里面的标记示例就执行了：对话被改名成「…」，还多了一条空任务。
@@ -1379,8 +1441,8 @@ runtime 所属的对话（每个调用点都传了 `conversationId`），跟标�
 
 ## single-load
 
-**状态**：`local`（上游的 bug，来自 1f31bde；到 upstream/main 7f641d7 还在。拟提 issue，上游修了就退役）
-**基线**：v0.94.1
+**状态**：`local`（上游的 bug，来自 1f31bde；到 v0.96.1 还在。上游修了就退役）
+**基线**：v0.96.1
 
 **问题**（2026-09-24 实测）：每个新标签页都把整页加载两遍。上游 1f31bde「self-reload page when server
 rebuilds underneath it」比的是两个永远对不上的 id：页面用 Vite 编进 bundle 的 `__BUILD_ID__`（构建时间戳，
@@ -1409,7 +1471,7 @@ ready 就刷新（sessionStorage 标记挡住第二次），多开一条 WS、�
 ## tldr-panel
 
 **状态**：`local`
-**基线**：v0.94.1
+**基线**：v0.96.1
 
 **诉求**（用户 2026-09-24）：agent 长任务动辄几百步，读不过来；要一份边做边写的大白话 TL;DR，只记大事。
 三步：① exchange-fold（折叠步骤）；② pi-tldr 扩展（`~/projects/pi-tldr`，独立仓库，不进本 fork）给 agent 一个
@@ -1453,7 +1515,7 @@ ready 就刷新（sessionStorage 标记挡住第二次），多开一条 WS、�
 ## fast-reopen
 
 **状态**：`local`（上游同样有这个问题：来自上游 0070c88（#235），到 upstream/main 7f641d7 还在；可以提 PR）
-**基线**：v0.94.1
+**基线**：v0.96.1
 
 **诉求**（用户 2026-09-24）：切走的对话再点回来要快（"cache the chat … so it loads faster"）。这是第一步：先修
 「点回来」慢的真凶。只发差异是下一步（`switch-cache`）。
@@ -1488,7 +1550,10 @@ ready 就刷新（sessionStorage 标记挡住第二次），多开一条 WS、�
 ## switch-cache
 
 **状态**：`local`
-**基线**：v0.94.1
+**基线**：v0.96.1
+
+**同步 v0.96.1（2026-09-26）**：上游在 `MessageList` 外面加了临时对话（ephemeral）横幅。预览缓存时不显示它
+（`!chat.preview && chat.state?.isEphemeral`），因为横幅上的「保存」存的是服务端当前的对话，不是正在预览的那条。
 
 **诉求**（用户 2026-09-24）："cache the chat, so if move away and come back, i shouldn't be fetching everything again,
 only the differences" / "so it loads faster"。第一步是 `fast-reopen`（从历史重开慢的真凶），这是第二步：只取差异。
@@ -1542,7 +1607,7 @@ only the differences" / "so it loads faster"。第一步是 `fast-reopen`（从�
 ## tldr-collapse
 
 **状态**：`local`
-**基线**：v0.94.1
+**基线**：v0.96.1
 
 **诉求**（用户 2026-09-24）：TL;DR 里看过的行要能手动折叠起来。用户的选择：连着的折叠行并成一行「N 行已读」
 （不是原地变淡的一行）；要「全部折叠」；折叠状态存在服务端（所有窗口、所有设备一致），不是只存本浏览器。
@@ -1591,7 +1656,13 @@ data: { v: 1, ids, collapsed } }`。跟行本身一样随会话走：刷新、�
 
 **状态**：`local`（队列本身在 pi-queue 扩展里：~/projects/pi-queue，私有仓库 github.com/shine2lay/pi-queue；
 `~/.pi/agent/settings.json` 的 `packages` 里装上才有队列）
-**基线**：v0.94.1
+**基线**：v0.96.1
+
+**同步 v0.96.1（2026-09-26）**：done-any-chat 改用上游的 `streaming-cues.ts` 后 `done-cues.ts` 没了，`DoneCues` 搬到
+新文件 `web/src/done-settle.ts`（单测 `tests/unit/done-settle.test.ts`，还是原来那 8 项）。`App.tsx`：上游的 cue effect
+喂给 `DoneCues`：`startCue` 时由 `doneCues().started(activeId)` 决定响不响开始；`nextMap` 里每条在跑的对话
+取消它还在等的完成；`finishedConvs` → `finished({ open: isActive })`。完成的提示音、系统通知和 TTS 挪进
+`DoneCues` 的回调（`cueEnv` ref），TTS 只在那条对话还开着时读回复。
 
 **诉求**（用户 2026-09-24）：每条对话一个任务队列，「跟 TL;DR 类似，但是任务队列」，放这个 agent 接下来要做的事；
 每个任务先和用户把计划定透、agent 能一路做完，才进队列。用户的选择：不留没计划的想法清单；在对话框里批准整份
@@ -1639,7 +1710,7 @@ data: { v: 1, ids, collapsed } }`。跟行本身一样随会话走：刷新、�
 - 计划里的两处小改：
   - `web/src/components/Dialog.tsx` + `styles.css`：确认对话框的正文包进 `.dialog-message` 单独滚动，确定 / 取消
     一直看得见。pi-queue 要批准的整份计划很长。
-  - done-settle（`web/src/done-cues.ts` 的 `DoneCues`，`App.tsx` 里打开的对话和后台对话都走它）：「跑完」先等
+  - done-settle（`web/src/done-settle.ts` 的 `DoneCues`，`App.tsx` 里打开的对话和后台对话都走它）：「跑完」先等
     `DONE_SETTLE_MS`（1.5 秒）再响。这期间又开跑了（队列的下一个任务、pi-queue 的提醒），就当没停过，完成和
     开始都不响；等满了还没开跑的一起响一次。断线、卸载时没响的清掉。原因：pi-queue 做完一个任务接着开始下一个时，
     SDK 先在 `agent_settled` 里跑扩展，服务端就先推出一份「没在跑」；不等的话每个任务都响一次完成、一次开始。
@@ -1654,7 +1725,7 @@ data: { v: 1, ids, collapsed } }`。跟行本身一样随会话走：刷新、�
 - `tests/unit/task-queue-panel.test.ts`（9 项）：空状态和「没装 pi-queue」；分成正在做 / 接下来（按顺序）/ 做完
   （最新在上）；卡住的高亮、带问题；↑ ↓ ✕ 和两头禁用；没装 pi-queue 或没有发送方时不出按钮；能跑时给「开始」、
   在跑时给「停下」；展开的计划按 pi-queue 的顺序；做完的只显示最近几个、能展开；顶上那行说对队列在干什么。
-- `tests/unit/done-cues.test.ts`（+8 项）：`DONE_SETTLE_MS` 够接住下一个任务又不太长；跑完等满了只响一次；等的
+- `tests/unit/done-settle.test.ts`（8 项）：`DONE_SETTLE_MS` 够接住下一个任务又不太长；跑完等满了只响一次；等的
   时候又开跑 = 没停过；没东西在等时的开始是真开始；几条对话前后脚跑完一起响一次；其中一条又开跑，别的照样响；
   同一条跑完两次算一次；`clear` 全清。
 - `tests/unit/ui-slots.test.ts`：tab 列表加上 `host:right-queue`。
@@ -1678,7 +1749,14 @@ data: { v: 1, ids, collapsed } }`。跟行本身一样随会话走：刷新、�
 ## per-chat-dialogs
 
 **状态**：`local`
-**基线**：v0.94.1
+**基线**：v0.96.1
+
+**同步 v0.96.1（2026-09-26）**：上游没有按对话的弹窗，照原样重做。`agent-service.ts`：上游新加的
+`transcriptBlocked` / `workspaceSnapshots` / `activePromptAc` / `lastTurnBaseTokens` 与本补丁的弹窗并存；`bindSession`
+里 `uiContext` 用本补丁的 `chatUiContext(...)`，`onError` 用上游的 `makeExtensionErrorReporter`。`protocol.ts` 的
+`ConversationSummary`：上游的 `isEphemeral` / `forkFrom` 加本补丁的 `dialogId`。`App.tsx`：本补丁的 `cuedDialogs` /
+`listAtConnect` 代替上游的 `notifiedDialogIds`（上游那个只看得到本窗口自己的弹窗），两处都保留上游的 TTS
+播报问题。
 
 **诉求**（用户 2026-09-25）：「Make sure tasks are per agent not shared」。核对结果：队列本身早就是每条对话一份（pi-queue 的
 `queue` 条目写在各自的会话里，只有这条对话的 agent 会去做，队列 tab 只显示当前对话的）。不是每条对话一份的
@@ -1753,7 +1831,12 @@ agent 一直等到你回答。
 ## image-aside-label
 
 **状态**：`local`
-**基线**：v0.94.1
+**基线**：v0.96.1
+
+**同步 v0.96.1（2026-09-26）**：`server/attachments.ts`：上游给粘贴的图片块加了 `source: { type: "url", url }`，
+保留；本补丁的 `imageLabel({ name })` 文字块照旧排在前面。`server/serialize.ts` 的 `case "custom"`：上游改成先建
+`const msg: UiMessage` 再截断 details（`TOOL_DETAILS_CAP`）；本补丁「customType 为 file、details.mode 为 image 时
+去掉文字块」放在它前面。
 
 **诉求**（用户 2026-09-25）：贴进对话的截图，模型说没收到图。查明：会话文件里图是在的，只是没发给模型。
 billion-context-pi（ACP）每轮用自己的「核心」重建发给模型的消息列表；自定义消息只有 `extractText(content)`
@@ -1794,7 +1877,7 @@ billion-context-pi（ACP）每轮用自己的「核心」重建发给模型的�
 ## tldr-sidebar
 
 **状态**：`local`
-**基线**：v0.94.1
+**基线**：v0.96.1
 
 **诉求**（用户 2026-09-25）：不点进对话也能跟上所有 agent：左栏每条对话标题下面显示它最新的一行 TL;DR，
 需要你的行要醒目。用户的选择：
@@ -1848,7 +1931,7 @@ billion-context-pi（ACP）每轮用自己的「核心」重建发给模型的�
 ## tldr-answered
 
 **状态**：`local`
-**基线**：v0.94.1
+**基线**：v0.96.1
 
 **问题**（2026-09-25，用户同意的收尾活）：「需要你」的 TL;DR 行一直高亮，直到 agent 写下一行或者用户在 tab 里
 折叠它。用户已经回了话，左栏和 TL;DR tab 还在喊「需要你」。
@@ -1887,7 +1970,7 @@ billion-context-pi（ACP）每轮用自己的「核心」重建发给模型的�
 ## busy-endpoint
 
 **状态**：`local`
-**基线**：v0.94.1
+**基线**：v0.96.1
 
 **问题**（2026-09-25，用户同意修）：`pi-web-deploy`（~/projects/agent-tools）等没有对话在干活才换构建、重启。它像新
 客户端一样读 `conversations` 推送，可推送是按窗口给的（后台对话 + 这个窗口自己正看着的那条），别的窗口前台里
@@ -1916,7 +1999,15 @@ billion-context-pi（ACP）每轮用自己的「核心」重建发给模型的�
 ## rewind-to-here
 
 **状态**：`local`
-**基线**：v0.94.1
+**基线**：v0.96.1
+
+**同步 v0.96.1（2026-09-26）**：上游 v0.95/0.96 新加了两个消息操作：「派生分支」（`host:msg-fork`，order 15）和
+「回滚到此」（`host:msg-rollback`，order 16：正在跑就先停，`sessionManager.branch(entry.id)` 后重载，可选用 git
+影子快照恢复工作区）。上游的回滚**不写摘要**，确认时不说丢几条，也没有 413 太大卡片，这些本补丁的测试
+都在测，所以保留本补丁（「倒回这里」，order 12），两者并存。合并处：`prompt()` 里
+`if (conv.rewindDone) await conv.rewindDone;` 放在上游新加的 `activePromptAc` 之前；`Message.tsx` 上游把操作按钮
+收成数组（放在第一个思考/工具头那一行，没有就放底下一行），本补丁的备用倒回按钮推进这个数组（key
+`fb-rewind`），文字包进 `msg-action-label`；上游只在不跑时显示派生/回滚，本补丁的倒回在跑时显示但禁用。
 
 **问题**（2026-09-26，用户同意修）：temper 对话做 Slack 测试截了几十张图，每次请求 ~42 MB，超过 Anthropic 的
 32 MB 上限，每次都 413 `request_too_large`；billion-context-pi 又取消自动压缩，对话就卡死了。页面上只有一行原始
@@ -1959,7 +2050,10 @@ pi 扩展 pi-image-trim 管：请求接近上限时换掉最旧的图；这个�
 ## crash-guard
 
 **状态**：`local`
-**基线**：v0.94.1
+**基线**：v0.96.1
+
+**同步 v0.96.1（2026-09-26）**：`newChat` 里不用会抛错的 `conv` getter（改成 `this.convs.get(this.activeId)`）；WS 分发处
+上游新加了 `attachDone`（attach 完成前的消息先排队），与本补丁的 `guardCalls` 合在一起：`if (!session || !attachDone)`。
 
 **问题**（2026-09-26，用户同意修）：2026-09-25 17:15 和 2026-09-26 09:11 pi-web-ui 整站崩溃，所有对话正在跑的回合全断。
 两次是同一条栈：`ClientSession.prompt → flushSnapshot → emitSnapshotNow → currentMessages → get conv` 抛
@@ -2019,7 +2113,11 @@ pi 扩展 pi-image-trim 管：请求接近上限时换掉最旧的图；这个�
   `getClaimStore().touch()` 也不跑。
 - **ui-cache-no-thrash**（旧 `0ce96b5` 的服务端一半，同步 v0.94.1 时退役）：被上游 4dfd95d
   （issue #259）的 `pruneMessageCache()` 取代，见 `load-older-survives-snapshot`。
-- **quiet-duplicate-open**：还在栈里，但代码上已无效果，**下次同步退役**，见该节「现状」。
+- **quiet-duplicate-open**（旧 `1401fbf`，同步 v0.96.1 时退役）：在第二个窗口打开空闲对话时不再弹「该对话
+  在另一处也开着」。被 `server-owned-chats` 取代：对话归服务端之后只有一个 writer，它把整段持有者检查
+  删掉了，这个补丁到栈顶已经没有任何效果（2026-09-23 逐行核对过）。做法：rebase 时把它的提交
+  并进 `server-owned-chats`（`fixup -C`），最终的树逐字节不变；它的回归断言还在
+  `tests/cross-client-session-test.mjs` 里。
 
 ---
 
@@ -2030,13 +2128,31 @@ pi 扩展 pi-image-trim 管：请求接近上限时换掉最旧的图；这个�
 - **`scripts/check.sh` 要在 UTC 下跑**（`TZ=UTC scripts/check.sh`）：上游的
   `tests/unit/notes-plugin.test.ts` 有两条用例把 UTC 的 ISO 字符串当本地时间读，非 UTC 时区必挂
   （v0.94.1 上实测）。本 fork 不碰那段代码。`check.sh` 是 `set -e`，挂在单测就不会跑到构建。
-- 下面这些冒烟不在 `check.sh` 里，同步时手动跑、预期失败（v0.94.1 上逐个核对过）：
-  - `tests/takeover-test.mjs`、`tests/idle-takeover-test.mjs`、`tests/remote-answer-test.mjs`：测上游 v0.94 的
-    单 owner 功能（手动过户、空闲持有时新标签页空白落地、跨页作答），都靠左栏的 elsewhere 行。
+- `tests/unit/plugin-updater.test.ts` 的「prune 保留最近 N 份」偶尔挂（`expected 2 to be 3`）：一个紧循环里备份 4 次，
+  备份名按时间戳取，撞上同一个戳就少一份。上游的测试和代码，本 fork 没碰；单独重跑就过（2026-09-26）。
+- **`node tests/run-smoke.mjs`**（不在 `check.sh` 里，同步时手动跑）：v0.96.1 上 68/77 过。9 个失败
+  2026-09-26 逐个核对过，都不是这次同步引入的：
+  - `tests/takeover-test.mjs`、`tests/idle-takeover-test.mjs`、`tests/remote-answer-test.mjs`，以及 v0.95.0 新加的
+    `tests/elsewhere-lifecycle-test.mjs`：测上游的单 owner 功能（手动过户、空闲持有时新标签页空白落地、
+    跨页作答、elsewhere 行的生命周期），都靠左栏的 elsewhere 行。
     `server-owned-chats` 下 `listExternalRunning()` 恒为空（共享表上那条对话本来就在自己的列表里），
     `reload-adopt` 让新标签页直接打开已经开着的那条，`ask-question-delivery` 让问卷在所有在线窗口
-    弹出（用户的选择）。
+    弹出（用户的选择）。elsewhere-lifecycle 在纯 v0.96.1 上过，挂在「等 elsewhere 行」超时。
   - `tests/orphan-adopt-test.mjs`：`reload-adopt` 刻意不调用 `findAdoptableOrphan()`（见该节）。
+  - `tests/conv-cross-project-test.mjs`：断言上游的「切对话跟着切工作区」，`chat-cwd-pin` 故意关掉了它；
+    `PI_WEB_UI_CHAT_FOLLOWS_CWD=1` 下 ALL PASS（v0.96.1 上复验）。
+  - `tests/terminal-smoke-test.mjs` 的 3 项（其余 52 项过）：
+    - 「persisted session appears in the conversation list」：这个测试不隔离 agent 目录，往真的
+      `~/.pi/agent/sessions` 里造一个会话文件（退出时删掉），发 `list_sessions` 后只等 1 秒。`global-history`
+      默认扫**所有**文件夹，真机上 1 秒扫不完。`PI_WEB_UI_HISTORY_SCOPE=project` 下这项过（已验）。
+    - 「exited terminal name can be reused」：`terminal-view-lifecycle` 让 `terminal_create` 走 `openView`，
+      已退出的终端只展示、不重起进程（看一眼不该重启它），所以同名再建不会有新 shell。
+    - 「run_command enforces terminal limit」：上一项的连带，少了那个重起的终端，只有 15 个活的，没到 16 的上限。
+    - 这 3 项在同步前的 mine（9a40cb1，v0.94.1 基线）上失败得一模一样，纯 v0.96.1 上全过。以前这里没记，
+      reload-adopt 那节「49 checks 全过」是更早的状态。
+  - `tests/plugin-http-test.mjs`：插件 HTTP 路由全是 404（5 项），纯 v0.96.1 上一模一样，不是本 fork 引入的。
+  - `tests/token-auth-test.mjs`：`--jobs=4` 并行时挂了两项（换 token 后的 200），单独跑全过：负载下的时序抖动。
+- 不在 run-smoke 里的浏览器测试（v0.94.1 上核对过，v0.96.1 没重跑）：
   - `tests/conv-group-flash-test.mjs`：断言上游按项目分的左栏「全程只有一行」；`flat-recent-chats`
     把所有项目的对话排成一条扁平列表，切到 B 聊一句后就有两行。同步前的构建（0ce96b5）上失败得
     一模一样。
@@ -2049,6 +2165,14 @@ pi 扩展 pi-image-trim 管：请求接近上限时换掉最旧的图；这个�
     真的 `~/.pi/agent`（默认模型、所有扩展）和正在跑的服务的 `~/.pi-web-ui`，会花真 token（2026-09-25 误跑
     一次：claude-opus-4-8 一轮，约 8.9 万 token 写缓存）。那次卡在等 `.dialog-title`（30 秒超时），不是
     queue-panel 引起的（`Dialog.tsx` 只改了确认框的正文）；为了不再花 token，没在改动前的构建上复跑。
-  - 本 fork 自己的冒烟全过：`server-owned-chats-test`、`cross-client-session-test`、`chat-pagination-test`、
-    `exchange-fold-test`、`exchange-digest-test`、`done-any-chat-test`、`todo-list-owner-test`、`single-load-test`、
-    `tldr-panel-test`、`switch-cache-test`、`queue-panel-test`、`per-chat-dialogs-test`、`image-aside-acp-test`（后加）。
+- **冒烟会往真的 `~/.pi/agent/sessions` 里写**：很多上游测试不设 `PI_CODING_AGENT_DIR`，一次全量会留下几十个
+  空的 `--tmp-*` 文件夹（2026-09-26 一次 31 个）。跑完只清当天的空文件夹：
+  `find ~/.pi/agent/sessions -maxdepth 1 -type d -name '--tmp-*' -empty -newermt <今天> -delete`。
+- 本 fork 自己的 E2E 在 v0.96.1 上逐个按名字跑，全过：`server-owned-chats-test`、`cross-client-session-test`、
+  `chat-pagination-test`、`exchange-fold-test`、`exchange-digest-test`、`done-any-chat-test`、`todo-list-owner-test`、
+  `single-load-test`、`tldr-panel-test`、`tldr-sidebar-test`、`switch-cache-test`、`switch-ack-test`、
+  `switch-open-burst-test`（v0.96.1 新加）、`queue-panel-test`、`per-chat-dialogs-test`、`image-aside-acp-test`、
+  `busy-endpoint-test`、`collapse-test`、`subagent-ui-context-test`、`rewind-to-here-test`、
+  `no-active-chat-crash-test`。`tldr-panel-test` 和 `todo-list-owner-test` 在一批里偶尔挂一次，重跑就过（时序）。
+- 「上游修好了就删」的两个补丁在纯 v0.96.1 上用它们自己的单测复查过，都还挂：`terminal-view.test.ts`
+  （11 项挂，`tm.note is not a function` 等）、`mute-mcp-restart-nag.test.ts`（3 项挂，重启提示照弹），两个都留着。
