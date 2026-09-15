@@ -170,8 +170,10 @@ export interface ChatState {
 	sessions: SessionSummary[];
 	/** Open conversations (each runs its own session in parallel). */
 	conversations: ConversationSummary[];
-	/** issue #145：在其他客户端（标签页/设备）上正在跑的对话（只读感知，不可点）。 */
+	/** issue #145：在其他客户端（标签页/设备）上正在跑的对话（可点进去一起开，见 joined）。 */
 	elsewhere: ElsewhereRunning[];
+	/** co-drive：本 socket 正坐在别人的会话上（null = 自己的）。`viewers` 含自己。 */
+	joined: { clientId: string | null; title?: string; viewers: number };
 	/** Id of the conversation the current snapshot belongs to. */
 	activeConversationId: string;
 	/** Recent workspaces this client opened (left panel project picker). */
@@ -402,6 +404,7 @@ type Action =
 			service?: UiServiceInfo;
 	  }
 	| { type: "sessions"; sessions: SessionSummary[] }
+	| { type: "joined"; joined: { clientId: string | null; title?: string; viewers: number } }
 	| {
 			type: "conversations";
 			conversations: ConversationSummary[];
@@ -812,6 +815,8 @@ function reducer(state: ChatState, action: Action): ChatState {
 			};
 		case "sessions":
 			return { ...state, sessions: action.sessions };
+		case "joined":
+			return { ...state, joined: action.joined };
 		case "conversations":
 			return {
 				...state,
@@ -995,32 +1000,30 @@ function reducer(state: ChatState, action: Action): ChatState {
 	}
 }
 
-const CLIENT_ID_KEY = "pi-web-client-id";
 let cachedClientId: string | null = null;
 
 /**
- * 客户端标识 —— **每标签页独立**（sessionStorage 而非 localStorage）。
+ * 客户端标识 —— **每次页面加载独立**（不落任何存储）。
  *
- * 曾用 localStorage：同源所有标签页共享同一 clientId，后端把它们挂到同一个
- * ClientSession 上互为镜像——B 标签页切换对话会同步切走 A 页、甚至把 A 页
- * 正在输出的 agent 强制中断且状态持久化（issue #10）。改为 sessionStorage 后
- * 新开标签页即新客户端；刷新本页仍保留同一 id，client-state（最近项目等）不丢。
+ * 演进：localStorage（同源所有标签页共用一个 id → 后端挂到同一个 ClientSession
+ * 上互为镜像，B 页切对话把 A 页也切走、甚至中断 A 正在输出的 agent，issue #10）
+ * → sessionStorage（每标签页独立，但「复制标签页」/ Ctrl-点链接 / 恢复上次会话
+ * 会把它一起克隆，两个窗口照样共用一个 id，镜像原样复现）
+ * → 现在：每次加载现生一个，撞车在构造上不可能。
  */
 export function getClientId(): string {
-	if (cachedClientId) return cachedClientId;
-	let id: string | null = null;
-	try {
-		id = sessionStorage.getItem(CLIENT_ID_KEY);
-		if (!id) {
-			id = randomUuid();
-			sessionStorage.setItem(CLIENT_ID_KEY, id);
-		}
-	} catch {
-		// storage 不可用（隐私模式等）：退化为页面生命周期内的一次性 id
-		id = id ?? randomUuid();
-	}
-	cachedClientId = id;
-	return id;
+	// 每次页面加载一个**全新**的 id，不落任何存储。
+	//
+	// 为什么不持久化：id 相同 = 后端挂到同一个 ClientSession = 两个窗口互为镜像
+	// （一边切对话另一边跟着变，issue #10 的老毛病）。sessionStorage 看似每标签页
+	// 独立，但「复制标签页」/ Ctrl-点链接 / 恢复上次会话都会把它一起克隆，于是
+	// 两个窗口又拿到同一个 id。改成每次加载现生，撞车在构造上就不可能发生。
+	//
+	// 代价（刻意接受）：刷新后不再自动回到上次那条对话 —— 对话本身在服务端好好
+	// 跑着，左栏「最近对话」里点回去就是。工作目录另有 localStorage 记忆（见下面的
+	// lastCwd），不依赖 clientId。
+	cachedClientId ??= randomUuid();
+	return cachedClientId;
 }
 
 /**
@@ -1069,6 +1072,7 @@ export function useChat() {
 		sessions: [],
 		conversations: [],
 		elsewhere: [],
+		joined: { clientId: null, viewers: 1 },
 		activeConversationId: "",
 		projects: [],
 		files: null,
@@ -1396,6 +1400,13 @@ export function useChat() {
 				}
 				case "sessions":
 					dispatch({ type: "sessions", sessions: msg.sessions });
+					break;
+				case "joined":
+					// co-drive：加入/退出别人的会话（服务端权威；快照随后就到）。
+					dispatch({
+						type: "joined",
+						joined: { clientId: msg.clientId, title: msg.title, viewers: msg.viewers },
+					});
 					break;
 				case "conversations":
 					dispatch({
