@@ -249,103 +249,41 @@ try {
 	console.log("✓ 新标签页不再默认打开正在跑的对话（attach 即纠正，首帧空白）");
 	clientC.ws.close();
 
-	// 0b. setCwd 路径：F 先去别的项目，再首次进入 work —— 首访恢复同样跳过正在跑的那条。
+	// 0b. setCwd 路径：server-owned-chats 之后，进入某个项目会直接**订阅**该项目里
+	// 正在跑的那条共享对话（就是同一条，不存在第二个 writer），所以不再有
+	// 「为你停在了新对话」这层保护。要断言的是：没有任何拒绝/持有者提示。
 	clientF = await openClient("cross-client-F", false);
-	await clientF.waitForType("notice", (m) => noticeText(m).includes("停在了新对话"), 15000);
 	clientF.send({ type: "set_cwd", path: otherdir });
 	await clientF.waitForState((s) => s.cwd === otherdir, 15000);
 	clientF.send({ type: "set_cwd", path: workdir });
 	await clientF.waitForState((s) => s.cwd === workdir, 15000);
-	await clientF.waitForType("notice", (m) => noticeText(m).includes("停在了新对话"), 15000);
-	await sleep(500);
-	if (clientF.state.sessionFile === runningFile) throw new Error("setCwd 首访恢复了正在跑的对话 —— 应停在空白新对话");
-	if (clientF.messages.length !== 0) throw new Error("setCwd 后的默认对话不是空白的");
-	console.log("✓ 切项目首访同样跳过正在跑的会话（停在空白新对话）");
+	await sleep(800);
+	if (clientF.received.some((m) => m.type === "notice" && /另一处|second writer|another window/.test(noticeText(m))))
+		throw new Error("不该再有持有者/拒绝提示");
+	console.log("✓ 进入项目直接订阅共享对话，无拒绝、无第二个 writer");
 	clientF.ws.close();
 
+	// 1. B 打开 A 正在跑的会话：现在是**订阅同一条**（以前拒绝，因为会造出第二个 writer）。
 	clientB = await openClient("cross-client-B");
-	await clientB.waitForType("notice", (m) => noticeText(m).includes("停在了新对话"), 15000);
-	console.log("✓ B 上来同样不恢复正在跑的会话");
-
-	// B 的 elsewhere 应能看到 A（近实时；poke 经 emitConversations 驱动）。
-	const bSeesA = await (async () => {
-		const started = Date.now();
-		while (Date.now() - started < 15000) {
-			if (clientB.elsewhere.some((w) => w.isStreaming)) return true;
-			await sleep(100);
-		}
-		return false;
-	})();
-	if (!bSeesA) throw new Error("B 的左栏 elsewhere 没有出现 A 的运行（跨客户端感知缺失）");
-	console.log("✓ B 在 elsewhere 看到 A 正在运行");
-
-	// 1. B 试图打开 A 正在跑的同一文件 → 必须被拒绝，不建第二个 writer。
-	const convBBefore = clientB.state.conversationId;
 	clientB.send({ type: "switch_session", path: runningFile });
-	const blocked = await clientB.waitForType("notice", (m) => noticeText(m).includes("另一处运行中"), 15000);
-	if (!blocked) throw new Error("B 打开 streaming 会话未被拒绝");
-	await sleep(500);
-	if (clientB.state.conversationId !== convBBefore)
-		throw new Error("B 的活动对话变了 —— 第二个 writer 已建（双写发生）");
-	if (clientB.state.sessionFile === runningFile)
-		throw new Error("B 持有了与 A 相同的文件 —— 第二个 writer 已建（双写发生）");
-	console.log("✓ B 打开正在跑的会话被拒绝，未建第二个 writer");
+	await clientB.waitForState((s) => s.sessionFile === runningFile, 20000);
+	if (clientB.received.some((m) => m.type === "notice" && /另一处|second writer|another window/.test(noticeText(m))))
+		throw new Error("不该再拒绝打开正在跑的对话");
+	console.log("✓ 第二个窗口可直接订阅正在跑的对话（同一个 conversation）");
 
-	// 2. B 在自己会话（同一项目）并行发送 → 允许，但双方都要收到并行提醒。
-	clientB.send({ type: "prompt", text: "hello from B" });
-	await clientB.waitForType("notice", (m) => noticeText(m).includes("同项目并行"), 15000);
-	console.log("✓ B 收到同项目并行提醒");
-	await clientA.waitForType("notice", (m) => noticeText(m).includes("同项目并行"), 15000);
-	console.log("✓ A 收到对端并行通告");
-	await clientB.waitForMessage(
-		(m) => m.role === "assistant" && JSON.stringify(m.content).includes("seed-message"),
-		20000,
-	);
-	console.log("✓ B 的并行 run 正常跑完（未因防护被误杀）");
-	await clientA.waitForMessage(
-		(m) => m.role === "assistant" && JSON.stringify(m.content).includes("background-finished"),
-		20000,
-	);
-	await clientA.waitForState((s) => !s.isStreaming, 15000);
-	console.log("✓ A 的 run 正常跑完（不受 B 影响）");
+	// 2. 共享对话里两边同时发：按到达顺序排队（不拒绝、不分叉）。
+	clientB.send({ type: "prompt", text: "B into shared" });
+	await clientA.waitForMessage((m) => m.role === "user" && JSON.stringify(m.content).includes("B into shared"), 30000);
+	if (clientB.received.some((m) => m.type === "notice" && /拦截|blocked/.test(noticeText(m))))
+		throw new Error("共享对话里的发送不该被拦截——排队即可");
+	console.log("✓ 两个窗口往同一条对话发送 = 排队，A 也立刻看到 B 的消息");
 
-	// 3. owner 空闲后 B 再打开同一文件 → 允许。
-	clientB.send({ type: "switch_session", path: runningFile });
-	await clientB.waitForState((s) => s.sessionFile === runningFile, 15000);
-	console.log("✓ A 结束后 B 可正常打开该会话");
+	// 3. A 的 run 仍然正常跑完（共享没有打断它）。排队的那条随后还会再跑一轮，
+	// 所以判据用「回到空闲」而不是某一句具体输出。
+	await clientA.waitForState((s) => s.isStreaming === false, 60000);
+	console.log("✓ A 的 run 不受另一个订阅者影响，正常跑完");
 
-	// 4. 幽灵持有者：B 建一条新对话后关掉标签页，A 再打开 B 的文件 → 不应再警告“另一处也开着”。
-	clientB.send({ type: "new_chat" });
-	await clientB.waitForState((s) => !s.sessionFile || s.sessionFile !== runningFile, 15000);
-	clientB.send({ type: "prompt", text: "B second file" });
-	await clientB.waitForMessage(
-		(m) => m.role === "assistant" && JSON.stringify(m.content).includes("seed-message"),
-		20000,
-	);
-	const bFile = await clientB.waitForState((s) => Boolean(s.sessionFile), 15000).then((s) => s.sessionFile);
-	clientB.ws.close();
-	await sleep(1000);
-	const nBefore = clientA.received.length;
-	clientA.send({ type: "switch_session", path: bFile });
-	await clientA.waitForState((s) => s.sessionFile === bFile, 15000);
-	await sleep(2000);
-	const ghostWarn = clientA.received
-		.slice(nBefore)
-		.filter((m) => m.type === "notice" && noticeText(m).includes("也开着"));
-	if (ghostWarn.length > 0) throw new Error("对端已断开仍警告“另一处也开着”（幽灵持有者）");
-	console.log("✓ 对端关闭后打开其会话不再误报（幽灵持有者不打扰）");
-} catch (error) {
-	console.error(`✗ ${error.message}`);
-	for (const c of [clientA, clientB, clientC, clientF]) {
-		if (!c) continue;
-		console.error(
-			`[${c.name}] state=isStreaming:${c.state?.isStreaming} conv:${c.state?.conversationId} msgs:${c.messages.length} received:[${c.received.map((m) => m.type).join(",")}]`,
-		);
-		for (const m of c.received.filter((m) => m.type === "notice").slice(-5))
-			console.error(`[${c.name}] leftover notice: ${noticeText(m).slice(0, 200)}`);
-		if (c.messages.length) console.error(`[${c.name}] messages: ${JSON.stringify(c.messages).slice(0, 600)}`);
-	}
-	process.exitCode = 1;
+	console.log("\ncross-client: 全部通过（server-owned-chats 口径）");
 } finally {
 	clientA?.ws.close();
 	clientB?.ws.close();

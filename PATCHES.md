@@ -17,6 +17,9 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | status-placement        | `local` | `web/src/status-placement.ts`, `FooterBar.tsx`, `RightPanel.tsx` |
 | recent-chats            | `local` | `server/agent-service.ts`, `client-state.ts`, `web/src/`          |
 | chat-cwd-pin            | `local` | `server/agent-service.ts`                                        |
+| client-per-load         | `local` | `web/src/use-chat.ts`                                            |
+| server-owned-chats      | `local` | `server/agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/` |
+| quiet-duplicate-open    | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`            |
 
 ---
 
@@ -280,3 +283,126 @@ DSH 引擎的左栏只有活着的行，`removeRecentChat()` 在那边是空操�
 
 - `tests/unit/chat-cwd-pin.test.ts`（6 项：开关解析、默认不搬家且无副作用、对话自身 cwd 不变、
   同目录切换、`=1` 时整套副作用回归；另加一条静态体检确保 `switchSession()` 那条入口同样被守住）
+
+---
+
+## client-per-load
+
+**状态**：`local`（可上游：现有 sessionStorage 方案挡不住复制标签页）
+**基线**：v0.86.2
+
+### 问题
+
+两个窗口会互为镜像：一边切对话，另一边跟着变。根因是 clientId 相同 —— 后端按
+clientId 建 ClientSession，同 id = 同一个会话。上游把 clientId 从 localStorage
+（所有标签页共用，issue #10 的镜像之痛）改成 sessionStorage 已经好很多，但
+**复制标签页 / Ctrl-点链接 / 恢复上次会话**都会把 sessionStorage 一起克隆，
+两个窗口照样拿到同一个 id，镜像原样复现。
+
+### 改法
+
+`getClientId()` 每次页面加载现生一个 uuid，**不落任何存储**（原来的
+`pi-web-client-id` 键整个去掉）。撞车在构造上不可能发生，不需要认领/心跳那套
+跨标签页协调。
+
+代价（用户明确接受）：刷新后不再自动回到上次那条对话。对话本身在服务端好好跑着，
+左栏「最近对话」点回去即可；工作目录另有 localStorage 记忆，不依赖 clientId。
+
+### 回归
+
+- `tests/unit/client-id.test.ts`（4 项：同一次加载内稳定、两次加载必不同、
+  不写任何 client 相关存储键、隐私模式下不抛错）
+
+---
+
+## server-owned-chats
+
+**状态**：`local`（上游 #145 在往「所有权 + 感知」方向走，这里是相反的选择：取消所有权）
+**基线**：v0.86.2
+
+### 问题
+
+对话原本属于**某个客户端**：`ClientSession` 各自持有一张 `convs` 表。于是同一条转录
+在第二个窗口打开就意味着第二个 writer（两个 runtime 往同一份 JSONL 追加，历史分叉），
+只能靠一整套防护兜着——正在跑就拒绝打开、发送前再拦一次、左栏用「另一处」只读行
+表示「那边有一条你碰不到的对话」。用户的实际诉求恰恰相反：两个窗口就是要看同一条
+对话、都能说话，或者各看各的。
+
+### 改法
+
+**对话归服务端，客户端只是订阅者。**
+
+- `ClientSession.convs` 改为进程级共享（`ClientSession.sharedConvs`）；`activeId` 退化为
+  纯视图状态「这个窗口在看哪条」。同一条对话在整个服务端只有**一个** runtime，
+  第二个 writer 在结构上不可能出现。
+- 实时扇出：带 `conversationId` 的增量（`message_delta` / `tool_delta`）投递给**所有
+  正在看这条对话**的客户端。快照**不转发**——它带着每个客户端自己的 rev 链，跨客户端
+  转发会把链弄断；改为 nudge 对方的快照调度器，让它从共享对话自己生成一份来对账。
+- 删掉所有权那套：打开正在跑的对话不再拒绝（直接订阅同一条）、发送不再拦截
+  （两边的输入按到达顺序排队，本来就是 steer/queue 语义）、`listExternalRunning()`
+  恒返回空（共享之后「别处在跑的对话」本来就在每个客户端的列表里，再补一份只会重复）。
+- 共享带来的三个连坐点必须堵死：`dispose()` 不再杀别人的对话（只收自己的定时器/监听，
+  最后一个离开的才做整体清理）；`removeConversation()` / `displaceActive()` 遇到
+  **别的窗口正在看**的对话不回收——否则那边会当场失去正在读的对话。
+- 上游 v0.94 的 `AgentService.findConversationHome()`（桥接工具 ask_user_question / browser_page
+  的投递目标）默认「第一个持有这条对话的客户端」就是归属方。共享之后**每个**客户端
+  都持有每条对话，那就成了按接入顺序随便挑：插件/调度伪客户端（sink 是空函数，
+  browser_page 干等到超时），或早已刷新掉的旧标签页（没有 socket，当场报「没有已连接的
+  页面」）。改为：正开着这条对话的在线浏览器 → 任一在线浏览器（都取最新接入的）→
+  任一浏览器 → 上游口径（新增 `ClientSession.isViewing()`）。问卷本来就是广播 + 进程
+  共享登记表，挑谁都一样。回归：`tests/unit/conversation-home.test.ts`。
+- 上游 v0.94 的手动过户 `takeOverConversation()` 把 runtime 从 owner 摘下来（detach）再塞进
+  目标（insert）。共享表上那会把对话从**所有**窗口摘掉再塞回来（可能还换 id），源窗口还收到
+  「已过户到另一处」的假通知。改为：目标已持有这条对话 → 一律退化为普通切换（单 owner
+  口径下目标不会持有别人的对话，行为不变）。入口本来就不会出现（`listExternalRunning()`
+  恒为空），这是防御。回归：`tests/unit/takeover-shared-table.test.ts`。
+- **看客也要实时**（2026-09-24 修）：SDK 事件只订阅在「开这条对话的那个窗口」（订阅方）上。
+  `onEvent` 原先只在订阅方**自己**正看着这条对话时才发增量、安排快照。订阅方一切走
+  （或那次页面加载早就刷新没了，client-per-load 之后很常见），这条对话的增量就谁都不发了：
+  正看着它的别的窗口（看客）只剩 `noteForeignDelta` 的慢节奏，连自己刚发的问题都要等好几秒，
+  流式过程完全看不到，回答最后整段出现。改为「激活」按**每个窗口**算：
+  - `message_update`：订阅方自己在看 → `emit`（顺带扇出）；自己没在看但别人在看 → 只扇出。
+  - 每个事件末尾 `checkpointViewers()`：替正看着这条对话的窗口按同样的口径安排或立即对账。
+    快照仍由各窗口自己生成（各自的 rev 链）。没 socket 的会话（旧标签页留下的）跳过。
+  - 用户的问题落进转录（`role=user` 的 `message_end`）也算检查点边界，立即对账：问题和
+    `isStreaming=true` 一起到（以前等定时器，最长 2 秒）。exchange-fold 的折叠行靠它从第一帧就在。
+  - `getSessionStats()` 的缓存从单槽改为按会话各存一份（`WeakMap`）：订阅方现在会替别的
+    窗口流式它自己没在看的对话，两条对话同时在跑时单槽会被每一帧互相挤掉。
+
+### 回归
+
+- `tests/server-owned-chats-test.mjs`（已进 smoke）：两窗口打开同一转录 = 同一个
+  conversation（无拒绝、无第二 writer）、轮流发言都进同一条且彼此可见、流式中两个
+  订阅者同时拿到增量、一个窗口切走另一个不受影响、订阅者断线不影响对话本身、
+  **订阅方切走后看客照样实时**（第 7 段：看客自己发的问题 1 秒内出现、流式中收到增量、
+  切走的订阅方收不到别的对话的增量）。**旧构建（add06a7）实测：问题 4226ms 才出现、12 秒内
+  0 条增量、回答最后整段到（失败）；新构建：问题 51ms、增量 9 条、切走的 0 条**。
+- `tests/cross-client-session-test.mjs` 按新口径改写：原来断言「必须拒绝」的两处
+  改为「必须能订阅同一条」，并发发送改为断言「排队而非拦截」
+---
+
+## quiet-duplicate-open
+
+**状态**：`local`（上游大概率不接受：这是把它刻意加的提醒关掉）
+**基线**：v0.86.2
+
+### 问题
+
+在第二个窗口打开一条**空闲**对话时，每次都弹「该对话在另一处也开着……请只留一处
+发送消息」。它说的风险是真的（两个 runtime 各自往同一份 JSONL 追加，轮流发送会让
+历史分叉），但多窗口看同一条对话本来就是日常操作，于是这条提醒在正常使用中反复出现。
+
+### 改法
+
+去掉**空闲持有者**那条 info 提醒（pi 引擎与 DSH 引擎同口径）。真正有害的一刻没有放松：
+
+- 对方**正在跑**时打开 → 仍然硬拦（原样保留）；
+- 发消息前的 `prompt()` 守卫仍会再查一次（开时空闲、发时在跑的竞态照样拦）。
+
+要两处一起开同一条对话，正确做法是 co-drive 的 `join_client`：那条路径只有**一个**
+writer（持有者的 runtime），从根上分叉不了。
+
+### 回归
+
+- `tests/cross-client-session-test.mjs` 原有断言全绿（含「幽灵持有者不打扰」这条
+  「不该出现提醒」的负向断言）；正在跑时的硬拦与并行提醒均未受影响

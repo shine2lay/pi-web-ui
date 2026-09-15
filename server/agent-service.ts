@@ -2232,8 +2232,18 @@ export class ClientSession {
 	private readonly stateStore: ClientStateStore;
 	/** Open conversations — each owns its OWN runtime, so starting a new chat
 	 *  or switching chats never interrupts an in-flight run. `runtime` and
-	 *  `session` accessors below target the ACTIVE conversation. */
-	private convs = new Map<string, Conversation>();
+	 *  `session` accessors below target the ACTIVE conversation.
+	 *
+	 *  **进程级共享**（server-owned-chats 补丁）：对话属于**服务端**，不属于某个
+	 *  客户端。每个浏览器只是一个「视图」——自己选 activeId 看哪条，看同一条也行、
+	 *  看不同条也行。这样就没有「持有者」这回事了：不再有第二个 writer 的风险
+	 *  （一条对话永远只有一个 runtime），也不再需要拒绝/加入/另一处那一整套。 */
+	private get convs(): Map<string, Conversation> {
+		return ClientSession.sharedConvs;
+	}
+	/** 所有客户端共用的一份对话表（见上）。 */
+	private static readonly sharedConvs = new Map<string, Conversation>();
+	/** 本客户端**正在看**哪条对话（纯视图状态，不代表所有权）。 */
 	private activeId = "";
 	private convSeq = 0;
 	/** One ModelRuntime shared by all conversations — the model chosen in the
@@ -3393,12 +3403,13 @@ export class ClientSession {
 	 *  use the slower STREAMING_SNAPSHOT_INTERVAL_MS cadence. */
 	private lastDeltaAt = 0;
 	/** Short-lived `getSessionStats()` memo — see STATS_CACHE_MS. Keyed by the
-	 *  session instance so a conversation switch never serves the previous one. */
-	private sessionStatsCache: {
-		at: number;
-		session: AgentSession;
-		value: ReturnType<AgentSession["getSessionStats"]>;
-	} | null = null;
+	 *  session instance so a conversation switch never serves the previous one.
+	 *  server-owned-chats：按会话各存一份（不是单槽）—— 订阅方会替别的窗口流式它自己
+	 *  没在看的对话，两条对话同时在跑时单槽会被每一帧互相挤掉。 */
+	private readonly sessionStatsCache = new WeakMap<
+		AgentSession,
+		{ at: number; value: ReturnType<AgentSession["getSessionStats"]> }
+	>();
 	private sessionsTimer: ReturnType<typeof setTimeout> | null = null;
 	private version = 0;
 	/** Snapshot revision counter (see emitSnapshotNow / protocol snapshot_delta). */
@@ -3497,6 +3508,8 @@ export class ClientSession {
 		this.cwd = cwd;
 		this.agentDir = agentDir;
 		this.stateStore = stateStore;
+		// server-owned-chats：参与跨客户端扇出（见 fanOutToViewers）。
+		ClientSession.liveSessions.add(this);
 		this.roots = stateStore.getWorkspaceRoots(clientId, cwd);
 		this.subagentTemplates = new SubagentTemplatesStore(join(stateStore.dataDir, "subagent-templates.json"));
 		this.approvalRules = new ApprovalRulesStore(join(stateStore.dataDir, "approval-rules.json"));
@@ -4351,6 +4364,7 @@ export class ClientSession {
 		if (this.disposed) return;
 		// eslint-disable-next-line unicorn/no-useless-spread -- snapshot: handlers may unsubscribe mid-emit
 		for (const sink of [...this.sinks]) sink(msg);
+		this.fanOutToViewers(msg);
 	}
 
 	/** 扩展错误上报器：同一会话内「扩展 + 事件 + 错误文本」只提示一次，且全量落服务端日志。
@@ -4382,6 +4396,60 @@ export class ClientSession {
 			});
 		};
 	}
+
+	/** 本地投递（不再扇出，避免两个客户端互相转发形成回路）。 */
+	private emitLocal(msg: ServerMessage): void {
+		if (this.disposed) return;
+		// eslint-disable-next-line unicorn/no-useless-spread
+		for (const sink of [...this.sinks]) sink(msg);
+	}
+
+	/**
+	 * server-owned-chats：对话属于服务端，谁都能看。**带 conversationId 的实时消息**
+	 * （message_delta / tool_delta）要送给**所有正在看这条对话**的客户端，而不只是
+	 * 当初开它的那个。
+	 *
+	 * 只转发增量、不转发快照：快照带着每个客户端自己的 rev 链（`snapshot_delta` 的
+	 * baseRev 必须接得上收件人的上一份快照），跨客户端转发会把 rev 链弄断。转发增量
+	 * 之后顺手 nudge 一下对方的快照调度器 —— 它用的是**共享注册表里同一个 conv**，
+	 * 所以它自己就能生成一份对得上的快照来对账。
+	 */
+	private fanOutToViewers(msg: ServerMessage): void {
+		if (msg.type !== "message_delta" && msg.type !== "tool_delta") return;
+		const convId = msg.conversationId;
+		if (!convId) return;
+		for (const other of ClientSession.liveSessions) {
+			// 没 socket 的会话跳过：送不出去，noteForeignDelta 还会替它白算快照（见 checkpointViewers）。
+			if (other === this || other.disposed || other.sinkCount() === 0) continue;
+			if (other.activeId !== convId) continue;
+			other.emitLocal(msg);
+			other.noteForeignDelta();
+		}
+	}
+
+	/** 别的客户端推进了我正在看的对话 —— 安排一次自己的快照来对账。 */
+	private noteForeignDelta(): void {
+		this.lastDeltaAt = Date.now();
+		this.scheduleSnapshot();
+	}
+
+	/** server-owned-chats：订阅这条对话的会话替**别的正看着它的窗口**安排对账快照。
+	 *  快照仍由收件人自己生成（各自的 rev 链，见 fanOutToViewers），这里只替它们拍板
+	 *  「现在就发」还是「按节奏发」，口径跟订阅方自己的一致。以前只有订阅方自己对账，
+	 *  看客只能靠 noteForeignDelta 的慢节奏（流式中 2 秒一次），连自己刚发的问题都要等 2 秒
+	 *  才出现。没 socket 的会话（client-per-load 之后每次刷新都留下一个）跳过：没人收，
+	 *  白算；它重连时 get_state 会拿整份快照。 */
+	private checkpointViewers(convId: string, now: boolean): void {
+		for (const other of ClientSession.liveSessions) {
+			if (other === this || other.disposed || other.sinkCount() === 0) continue;
+			if (other.activeId !== convId) continue;
+			if (now) other.flushSnapshot();
+			else other.scheduleSnapshot();
+		}
+	}
+
+	/** 活着的客户端会话（扇出用；attach/dispose 维护）。 */
+	private static readonly liveSessions = new Set<ClientSession>();
 
 	/** (Re)attach event plumbing to the ACTIVE conversation's session. */
 	private async bindSession(): Promise<void> {
@@ -4982,7 +5050,8 @@ export class ClientSession {
 				conv.compactionState = { reason: event.reason, startedAt: Date.now() };
 				conv.lastCompactionTokens = null;
 				this.markCompactionPending(conv);
-				// 进度条只有激活对话看得到（后台对话的快照没有接收方，见 onEvent 末尾）。
+				// 进度条只有正看着这条对话的窗口看得到（见 onEvent 末尾）。
+				this.checkpointViewers(conv.id, true);
 				if (conv.id === this.conv.id) this.flushSnapshot();
 				break;
 			}
@@ -5240,11 +5309,16 @@ export class ClientSession {
 				// stale state. Only the ACTIVE conversation streams to the browser —
 				// background conversations would clobber the streaming view; their
 				// state arrives via snapshot when switched to.
-				if (conv.id !== this.conv.id) break;
+				// server-owned-chats：「激活」要按**每个窗口**算。订阅这条对话的会话（this）是
+				// 当初开它的那次页面加载，它可能早就切到别的对话、甚至页面都刷新没了，而别的
+				// 窗口正看着这条。以前这里只看 this —— 它没在看就谁都收不到增量，看客的界面
+				// 要刷新才动。现在：自己在看 → emit（顺带扇出）；自己没在看但别人在看 → 只扇出。
+				const selfViewing = conv.id === this.conv.id;
+				if (!selfViewing && !this.viewedElsewhere(conv.id)) break;
 				const ame = event.assistantMessageEvent;
 				const m = event.message as { timestamp?: number };
-				this.lastDeltaAt = Date.now();
-				this.emit({
+				if (selfViewing) this.lastDeltaAt = Date.now();
+				const delta: ServerMessage = {
 					type: "message_delta",
 					conversationId: conv.id,
 					seq: ++conv.deltaSeq,
@@ -5253,7 +5327,7 @@ export class ClientSession {
 					messageId: `stream-${m?.timestamp ?? 0}`,
 					usage: (() => {
 						try {
-							const t = this.sessionStats().tokens;
+							const t = this.sessionStats(conv.session).tokens;
 							return t ? { input: t.input, output: t.output, total: t.total } : null;
 						} catch {
 							return null;
@@ -5267,7 +5341,9 @@ export class ClientSession {
 						contentIndex: "contentIndex" in ame ? ame.contentIndex : undefined,
 						delta: "delta" in ame ? ame.delta : undefined,
 					},
-				});
+				};
+				if (selfViewing) this.emit(delta);
+				else this.fanOutToViewers(delta);
 				break;
 			}
 			default:
@@ -5284,14 +5360,25 @@ export class ClientSession {
 		// #259 实测 8 子代理 × 5 次 bash → 8 条全量快照共 39.5MB，而激活对话一个
 		// 字节都没变。后台对话的内容在切过去时取（switch_session / get_state 强制
 		// 全量），它在左栏的运行态由 emitConversations 走另一条通道。
-		if (conv.id !== this.conv.id) return;
-		if (
+		//
+		// server-owned-chats：「激活」按每个窗口算（见 message_update）—— 正看着这条对话的
+		// 别的窗口按同样的口径对账，各自生成自己的快照（checkpointViewers）。只涉及正看着
+		// **这条**对话的窗口，所以 #259 的「子代理替激活对话刷快照」不会回来。
+		//
+		// 用户的问题落进转录（role=user 的 message_end，首条提问或中途 steer）也算边界，
+		// 立即对账，问题和 isStreaming=true 一起到。以前要等定时器（上一轮刚结束时 <1.5s，
+		// 看客是 2 秒）：提问的人要等一会儿才看到自己的问题，这期间流式的思考/工具卡也
+		// 没有所属的提问（exchange-fold 的折叠行靠这个从第一帧就在）。
+		const boundary =
 			event.type === "agent_end" ||
 			event.type === "tool_execution_end" ||
 			event.type === "compaction_end" ||
 			event.type === "auto_retry_start" ||
-			event.type === "auto_retry_end"
-		) {
+			event.type === "auto_retry_end" ||
+			(event.type === "message_end" && (event.message as { role?: string } | undefined)?.role === "user");
+		this.checkpointViewers(conv.id, boundary);
+		if (conv.id !== this.conv.id) return;
+		if (boundary) {
 			this.flushSnapshot();
 		} else {
 			this.scheduleSnapshot();
@@ -6665,12 +6752,12 @@ export class ClientSession {
 	 * Callers that need the authoritative value can still call the session
 	 * directly; every cache hit here is at most STATS_CACHE_MS stale.
 	 */
-	private sessionStats(): ReturnType<AgentSession["getSessionStats"]> {
+	private sessionStats(session: AgentSession = this.session): ReturnType<AgentSession["getSessionStats"]> {
 		const now = Date.now();
-		const hit = this.sessionStatsCache;
-		if (hit && hit.session === this.session && now - hit.at < STATS_CACHE_MS) return hit.value;
-		const value = this.session.getSessionStats();
-		this.sessionStatsCache = { at: now, session: this.session, value };
+		const hit = this.sessionStatsCache.get(session);
+		if (hit && now - hit.at < STATS_CACHE_MS) return hit.value;
+		const value = session.getSessionStats();
+		this.sessionStatsCache.set(session, { at: now, value });
 		return value;
 	}
 
@@ -7294,7 +7381,7 @@ export class ClientSession {
 			preset ?? this.presetOfSession(session) ?? this.settingsSvc.current.defaultAgentPreset ?? "standard";
 		applyAgentToolsGating(session, effectiveDisabledAgentTools(this.settingsSvc.current), targetPreset);
 		this.syncPluginTools(session, targetPreset);
-		this.sessionStatsCache = null;
+		this.sessionStatsCache.delete(session);
 		this.cachedBaseTokens = null;
 		// SDK 的 setActiveToolsByName 只改 agent.state.tools，不派发任何事件——门控后
 		// 主动推一次快照，否则快照里的 tools 要等下一个 SDK 事件才对齐（会话空闲时永远
@@ -7353,7 +7440,7 @@ export class ClientSession {
 		}
 		conv.agentPreset = hit.id;
 		this.applyToolGating(conv.session, hit.id);
-		this.sessionStatsCache = null;
+		this.sessionStatsCache.delete(conv.session);
 		this.cachedBaseTokens = null;
 		// 技能名录段/终端引导是按 run 组装的提示词：重载 resourceLoader 让新预设
 		// 即时生效（只有空白会话能切到这里，无历史可丢）。
@@ -7566,6 +7653,15 @@ export class ClientSession {
 	}
 
 	/** issue #145：本实例连接的 socket 数（0 = 标签页全关了，ClientSession 残留）。 */
+	/** 当前对话标题（会话替换中给 undefined）。 */
+	currentTitle(): string | undefined {
+		try {
+			return this.conv.title;
+		} catch {
+			return undefined;
+		}
+	}
+
 	sinkCount(): number {
 		return this.sinks.size;
 	}
@@ -7883,16 +7979,10 @@ export class ClientSession {
 			const activeFile = this.activeSessionFileResolved();
 			if (activeFile) {
 				const owner = this.findSessionOwner?.(activeFile);
-				if (owner && owner.isStreaming) {
-					this.emit({
-						type: "notice",
-						level: "warning",
-						text: `发送已拦截：该对话正在另一处运行中（「${owner.title}」）。请等它结束后再发，或回到原窗口继续 —— 否则两个 agent 会同时写同一份记录，其中一支事后不可见。`,
-						textEn: `Prompt blocked: this conversation is running in another window ("${owner.title}"). Wait for it to finish or continue there — two writers on one transcript would leave one run permanently invisible.`,
-					});
-					this.flushSnapshot();
-					return;
-				}
+				// server-owned-chats：不再有「另一处的 writer」。一条对话在整个服务端
+				// 只有一个 runtime，两个窗口看到的是同一个；发消息就是往那一个里发，
+				// 分叉在结构上不可能发生，所以这里没有什么可拦的了。
+				void owner;
 			}
 			// issue #145：同项目并行感知 —— 同一 cwd 下别处（或其他对话）正在跑时，
 			// 允许并行（可以同时改不同部分），但用户与 AI 都必须知道。只在新一轮启动时
@@ -9000,8 +9090,27 @@ export class ClientSession {
 		}
 	}
 
+	/** 除了我之外，还有别的活客户端正在看这条对话吗？（server-owned-chats） */
+	private viewedElsewhere(convId: string): boolean {
+		for (const other of ClientSession.liveSessions) {
+			if (other === this || other.disposed) continue;
+			// **必须有活 socket** 才算「有人在看」。ClientSession 会比它的 socket 活得久
+			// （断线重连要接回原状态），而 client-per-load 之后每次刷新都是一个新会话——
+			// 只看 activeId 的话，被遗弃的会话会永远钉住它最后看的那条对话，导致这条
+			// 对话再也关不掉、也不再被回收（用户看到的就是「关不掉的对话」）。
+			if (other.sinkCount() === 0) continue;
+			if (other.activeId === convId) return true;
+		}
+		return false;
+	}
+
 	private displaceActive(): Conversation | null {
 		const conv = this.conv;
+		// 别人还在看 → 留着（保留 = 展示口径，不改运行时归属）。
+		if (this.viewedElsewhere(conv.id)) {
+			conv.listed = true;
+			return null;
+		}
 		// 子代理不受切换关闭影响（见上）。
 		if (conv.isSubagent) {
 			conv.listed = true;
@@ -9055,6 +9164,10 @@ export class ClientSession {
 	private removeConversation(id: string): void {
 		const conv = this.convs.get(id);
 		if (!conv || id === this.activeId) return;
+		// server-owned-chats：对话表是进程共享的 —— 别的窗口正看着这条时不能回收它，
+		// 否则那边的界面会当场失去自己正在读的对话（而它并没有做错任何事）。
+		// 必须在释放认领之前：没回收的对话就没有关闭，认领还得留着。
+		if (this.viewedElsewhere(id)) return;
 		// 对话真关闭（dismiss/释放）→ 放掉它的认领。过户不走这里（对话换个会话
 		// 继续，owner 不变，认领继续有效），所以只在此处释放。
 		try {
@@ -9092,6 +9205,12 @@ export class ClientSession {
 			if (c.session === sdkSession) return c.id;
 		}
 		return undefined;
+	}
+
+	/** 这个窗口是否正看着这条对话（server-owned-chats：activeId 只是视图状态）。
+	 *  AgentService.findConversationHome 挑桥接工具的投递目标时用。 */
+	isViewing(convId: string): boolean {
+		return this.activeId === convId;
 	}
 
 	/** 过户用的对话摘要（AgentService 拼移动集合 + 容量检查用）。 */
@@ -10415,32 +10534,9 @@ export class ClientSession {
 				}
 			}
 
-			// issue #145：同一文件在别处已有持有者 —— 绝不建第二个 writer。
-			// 正在跑：直接拒绝（否则两支 run 并发写同一份 JSONL，事后只有一支可读）；
-			// 空闲：放行打开（只剩一处能发送时不会分叉），但提醒用户别处也开着，
-			// 发消息前的 prompt() 守卫会再查一次（开时空闲、发时在跑的竞态也拦得住）。
-			const owner = this.findSessionOwner?.(targetPath);
-			if (owner && owner.isStreaming) {
-				this.emit({
-					type: "notice",
-					level: "warning",
-					text: `该对话正在另一处运行中（「${owner.title}」），为避免两个 agent 同时写同一份记录，已停止打开。请等它结束后再试，或回到原窗口继续。`,
-					textEn: `This conversation is running in another window ("${owner.title}"). Opening it here would create a second writer for the same transcript, so it was blocked. Wait for it to finish, or continue in the original window.`,
-				});
-				this.flushSnapshot();
-				return;
-			}
-			if (owner) {
-				// 对端已断开（标签页关了）只剩残留会话 —— 不打扰，直接开。
-				if (owner.connected) {
-					this.emit({
-						type: "notice",
-						level: "info",
-						text: `提醒：该对话在另一处也开着（「${owner.title}」，当前空闲）。请只留一处发送消息，否则两边轮流发送会让历史分叉、其中一支事后不可见。`,
-						textEn: `Note: this conversation is also open in another window ("${owner.title}", currently idle). Send new messages from only one place — alternating between two writers forks the history and hides one branch.`,
-					});
-				}
-			}
+			// server-owned-chats：这条转录若已经有 runtime（不管是谁开的），直接切过去
+			// 看**同一个**对话——上面的 for 循环已经处理了这种情况。走到这里说明它还没
+			// 被打开过，正常从磁盘开一个新的。不再有持有者/拒绝/加入这套概念。
 
 			// #235：先修后开——坏转录到 open 后的 getBranch 会死循环，修完再读。
 			// 单文件预扫描，健康文件只多一次小读；修过即弹提示（含压缩被打断）。
@@ -11765,7 +11861,16 @@ export class ClientSession {
 
 	async dispose(): Promise<void> {
 		this.disposed = true;
+		ClientSession.liveSessions.delete(this);
+		// modelAdmin 是本客户端自己的（OAuth 登录流程挂在它上），下面两条路径都要收。
 		this.modelAdmin.dispose();
+		// server-owned-chats：对话是**服务端**的，别的客户端可能正在看/正在跑。
+		// 一个浏览器断开不该杀掉它们的终端与运行时——本会话只是个视图，走人即可。
+		// （进程退出时的整体清理见 AgentService.disposeAll。）
+		if (ClientSession.liveSessions.size > 0) {
+			this.finishLocalTimers();
+			return;
+		}
 		// 关机路径：Windows 下跳过 pty.kill()（issue #215 ConPTY 死锁），只做
 		// TerminateProcess + 状态清理，句柄由 OS 在进程退出时回收。
 		for (const conv of this.convs.values()) conv.terminals.killAll({ shutdown: true });
@@ -11807,6 +11912,26 @@ export class ClientSession {
 			}
 		}
 		disposeAllEvalKernels();
+	}
+
+	/** 只收本客户端自己的东西（定时器 / 文件监听 / 挂起的提问）——共享对话不动。 */
+	private finishLocalTimers(): void {
+		for (const timer of [this.snapshotTimer, this.sessionsTimer]) if (timer) clearTimeout(timer);
+		this.snapshotTimer = null;
+		this.sessionsTimer = null;
+		if (this.widgetsTimer) clearInterval(this.widgetsTimer);
+		this.widgetsTimer = null;
+		if (this.stallTimer) clearInterval(this.stallTimer);
+		this.stallTimer = null;
+		this.files.unwatchDir();
+		this.files.unwatchGit();
+		this.webUi.dispose();
+		this.cancelPendingQuestions();
+		this.cancelPendingPageCalls();
+		// Approvals wait in this view's own map; nobody else can answer them once it
+		// is gone (upstream's full dispose denies them too).
+		this.cancelPendingApprovals();
+		this.bg.stop();
 	}
 }
 
@@ -12141,31 +12266,58 @@ export class AgentService {
 	/** 按 SDK 会话（runtime 身份）找它当前归属的客户端会话与对话 id（过户后归属会变）：
 	 *  桥接工具（问卷 / 页面）在调用瞬间用它投递，见 ClientSession.bridgeTarget。
 	 *  一条对话任一时刻只属于一个会话（过户先摘后插），扫一遍即可 —— 问卷/截图都是
-	 *  低频调用，不值得为此再维护一张全局索引。 */
+	 *  低频调用，不值得为此再维护一张全局索引。
+	 *
+	 *  server-owned-chats：对话表进程共享，**每个**客户端都持有每条对话，上面「第一个
+	 *  持有者 = 归属方」在这里等于按接入顺序随便挑 —— 表里最早的往往是插件/调度伪客户端
+	 *  （sink 是空函数，page_request 石沉大海，干等到超时），或早已刷新掉的旧标签页
+	 *  （client-per-load 每次刷新都是新会话，旧的留在表里、没有 socket，browser_page 当场
+	 *  报「没有已连接的页面」）。所以按这个顺序挑：正开着这条对话的在线浏览器 →
+	 *  任一在线浏览器（都取最新接入的）→ 任一浏览器（pageCall 会当场报没有页面，而不是
+	 *  干等）→ 上游口径。问卷走广播 + 进程共享登记表，挑谁都一样；在乎的是 browser_page
+	 *  （只发给一个客户端）。见 tests/unit/conversation-home.test.ts。 */
 	findConversationHome(sdkSession: AgentSession): { session: ClientSession; convId: string } | undefined {
-		for (const cs of this.clients.values()) {
+		type Home = { session: ClientSession; convId: string };
+		let first: Home | undefined;
+		let browser: Home | undefined;
+		let live: Home | undefined;
+		let viewer: Home | undefined;
+		for (const [clientId, cs] of this.clients) {
+			let convId: string | undefined;
 			try {
-				const convId = cs.conversationIdOfSession(sdkSession);
-				if (convId) return { session: cs, convId };
+				convId = cs.conversationIdOfSession(sdkSession);
 			} catch {
-				// 单客户端坏了不影响解析
+				continue; // 单客户端坏了不影响解析
+			}
+			if (!convId) continue;
+			const hit: Home = { session: cs, convId };
+			first ??= hit;
+			if (AgentService.isPseudoClientId(clientId)) continue;
+			browser ??= hit;
+			let online = false;
+			try {
+				online = cs.sinkCount() > 0;
+			} catch {
+				online = false;
+			}
+			if (!online) continue;
+			// Map 按接入顺序迭代：留到最后的就是最新接入的。
+			live = hit;
+			try {
+				if (cs.isViewing(convId)) viewer = hit;
+			} catch {
+				// 视图状态读不到就不算在看
 			}
 		}
-		return undefined;
+		return viewer ?? live ?? browser ?? first;
 	}
 
-	/** issue #145：别处所有正在跑的对话（左栏 elsewhere 只读感知 + 手动过户用）。
-	 *  owner/convId 标识过户目标（手动过户入口）；DSH 引擎不填（不可过户）。 */
-	listExternalRunning(excludeClientId: string): ElsewhereRunning[] {
-		const out: ElsewhereRunning[] = [];
-		for (const [clientId, cs] of this.clients) {
-			if (clientId === excludeClientId) continue;
-			// issue #291：跳过无浏览器连接的残骸（非伪客户端 sinkCount=0 = 断连留存）。
-			// 伪客户端（scheduler:/plugin:）不走浏览器，sinkCount 永远为 0，保留。
-			if (!AgentService.isPseudoClientId(clientId) && cs.sinkCount() === 0) continue;
-			for (const r of cs.streamingSummariesAll()) out.push({ ...r, owner: clientId });
-		}
-		return out;
+	/** issue #145 的「另一处正在运行」在 server-owned-chats 之后已无意义：对话表是
+	 *  进程共享的，别处在跑的对话**本来就在**每个客户端的 conversations 列表里。
+	 *  再补一份 elsewhere 只会让左栏出现重复行，所以这里恒为空（wire 字段保留，
+	 *  老客户端拿到空数组即可）。 */
+	listExternalRunning(_excludeClientId: string): ElsewhereRunning[] {
+		return [];
 	}
 
 	/** issue #291：删除定时任务后回收对应伪客户端，避免残留在 elsewhere 列表。 */
@@ -12533,7 +12685,10 @@ export class AgentService {
 			fail("过户目标不明确（缺 owner/id），请重试", "Takeover target unclear (missing owner/id), please retry.");
 			return;
 		}
-		if (ownerId === targetId) {
+		// server-owned-chats：对话表进程共享，目标手里本来就有这条对话 → 也只是切过去。
+		// 下面搬 runtime 的路径（detach + insert）在共享表上会把它从所有窗口摘掉再塞回来。
+		// 见 tests/unit/takeover-shared-table.test.ts。
+		if (ownerId === targetId || target.takeoverBriefs().some((b) => b.id === convId)) {
 			// 自己的对话 → 退化为普通切换。
 			try {
 				await target.switchConversation(convId);
