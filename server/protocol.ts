@@ -747,6 +747,9 @@ export type ClientMessage =
 	 *  （运行中的也停）再整体移出；终端/审查/后台唤醒等保留态一并放行。
 	 *  active 对话也可关闭（后端自动切到其他对话或新建后再移）。 */
 	| { type: "dismiss_conversation"; id: string; withFinishedSubagents?: boolean; force?: boolean }
+	/** 从「最近对话」里移出一条（recent-chats 补丁）。只影响左栏这一列：转录文件
+	 *  原样保留，仍能在下面的 History 里找到并重新打开。 */
+	| { type: "remove_recent_chat"; path: string }
 	/** Bulk-dismiss FINISHED subagents from the running list (right-click menu).
 	 *  parentId omitted = all finished subagents; given = the transitive
 	 *  subagent descendants of that conversation (children, grandchildren, …),
@@ -1270,6 +1273,15 @@ export interface ConversationSummary {
 	canceled?: boolean;
 	/** 父对话 id（Running 面板嵌套展示用）。 */
 	parentId?: string;
+	/** 这条对话的转录文件路径（recent-chats 补丁）。左栏「最近对话」用它做
+	 *  **稳定键**：运行时被释放后，同一条对话仍以 live:false 的行留在列表里。
+	 *  会话还没落盘时缺省。 */
+	sessionPath?: string;
+	/** false = 只在磁盘上的历史行（运行时已释放/从未加载）：点它走 switch_session，
+	 *  ✕ 走 remove_recent_chat。缺省按 true 处理（老服务端兼容）。 */
+	live?: boolean;
+	/** 本轮跑完但用户还没看过（左栏绿色常亮 = 轮到你了）。打开该对话即清除。 */
+	waiting?: boolean;
 }
 
 /** A conversation streaming on ANOTHER client (different tab / device) —

@@ -308,6 +308,17 @@ export interface ClientState {
 	projectModels?: Record<string, string>;
 	/** 内置标记工具开关（全局 + 按 marker 禁用）。 */
 	markers?: MarkerSettings;
+	/** Chats the user removed from the left panel's **Recent chats** list
+	 *  (session-file paths). The list is rebuilt from transcripts on disk on
+	 *  every push, so without a tombstone a removed row would reappear at once.
+	 *  The transcript itself is never touched — the chat stays in History.
+	 *  Stored under the GLOBAL settings key (shared by all clients/tabs), so a
+	 *  removal survives reloads and new tabs. */
+	recentRemoved?: string[];
+	/** Chats whose last run FINISHED while the user was not looking at them
+	 *  (session-file paths) — the left panel shows a solid green light for these
+	 *  (「轮到你了」). Cleared when the chat is opened or continued. Also global. */
+	recentWaiting?: string[];
 	/** Browser UI locale code as reported by hello/set_locale (e.g. "zh",
 	 *  "en", "ja"). Server resolves it via resolveServerLang (non-zh →
 	 *  English default, issue #91) for tool return values / AI prompts.
@@ -401,6 +412,56 @@ export class ClientStateStore {
 	 *  merged recent-project list. */
 	getRemovedProjects(clientId: string): string[] {
 		return this.load()[clientId]?.removedProjects ?? [];
+	}
+
+	/* ---------------------------------------------------------------- *
+	 * Recent chats (left panel) — GLOBAL state, see recentRemoved above. *
+	 * ---------------------------------------------------------------- */
+
+	/** Chats the user removed from Recent chats (session-file paths). */
+	getRecentRemoved(): string[] {
+		return this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY]?.recentRemoved ?? [];
+	}
+
+	/** Tombstone one chat so it stops showing up in Recent chats. Capped so a
+	 *  long-lived install cannot grow the state file without bound. */
+	removeRecent(path: string): void {
+		const all = this.load();
+		const state = (all[ClientStateStore.GLOBAL_SETTINGS_KEY] ??= { projects: [] });
+		const removed = [path, ...(state.recentRemoved ?? []).filter((p) => p !== path)].slice(0, 500);
+		state.recentRemoved = removed;
+		// A removed chat cannot be 「waiting for you」 anymore.
+		if (state.recentWaiting?.includes(path)) {
+			state.recentWaiting = state.recentWaiting.filter((p) => p !== path);
+		}
+		this.save();
+	}
+
+	/** Opening / continuing a chat undoes its removal (it is recent again). */
+	restoreRecent(path: string): void {
+		const all = this.load();
+		const state = all[ClientStateStore.GLOBAL_SETTINGS_KEY];
+		if (!state?.recentRemoved?.includes(path)) return;
+		state.recentRemoved = state.recentRemoved.filter((p) => p !== path);
+		this.save();
+	}
+
+	/** Chats whose finished run has not been looked at yet (green light). */
+	getRecentWaiting(): string[] {
+		return this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY]?.recentWaiting ?? [];
+	}
+
+	/** Mark / unmark 「run finished, your turn」 for one chat. Returns true when
+	 *  the state actually changed (callers re-push the list only then). */
+	setRecentWaiting(path: string, waiting: boolean): boolean {
+		const all = this.load();
+		const state = (all[ClientStateStore.GLOBAL_SETTINGS_KEY] ??= { projects: [] });
+		const current = state.recentWaiting ?? [];
+		const has = current.includes(path);
+		if (has === waiting) return false;
+		state.recentWaiting = waiting ? [path, ...current].slice(0, 500) : current.filter((p) => p !== path);
+		this.save();
+		return true;
 	}
 
 	/** Last-used goal/review prefs for a client, or undefined if never set. */

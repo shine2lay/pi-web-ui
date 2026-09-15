@@ -941,15 +941,33 @@ body.rp-resizing .rp-sash.dragging::after {
 	margin: 6px 10px;
 }
 
-/* Streaming indicator on running-conversation entries (left panel). */
-.conv-streaming {
+/* Status light on Recent-chats entries (left panel, recent-chats 补丁).
+ *
+ *   .conv-running — 本轮正在跑：黄灯闪烁（原来是绿灯闪烁，跑完就没了）。
+ *   .conv-waiting — 跑完了但用户还没看过：绿灯常亮 =「轮到你了」，打开即灭。
+ *
+ * 两种状态互斥（见 LeftPanel），所以同一行永远只有一盏灯。 */
+.conv-dot {
 	width: 7px;
 	height: 7px;
 	border-radius: 50%;
 	flex-shrink: 0;
-	background: var(--green);
-	box-shadow: 0 0 4px var(--green);
+}
+.conv-dot.conv-running {
+	background: var(--amber);
+	box-shadow: 0 0 4px var(--amber);
 	animation: conv-pulse 1.2s ease-in-out infinite;
+}
+.conv-dot.conv-waiting {
+	background: var(--green);
+	/* 常亮：没有 animation —— 「你还没看」是个静态事实，不该跟着闪。 */
+	box-shadow: 0 0 5px var(--green);
+}
+/* 减少动态效果偏好：闪烁换成常亮，仍靠颜色区分。 */
+@media (prefers-reduced-motion: reduce) {
+	.conv-dot.conv-running {
+		animation: none;
+	}
 }
 
 @keyframes conv-pulse {

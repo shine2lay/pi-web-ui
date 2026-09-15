@@ -2181,6 +2181,12 @@ export class DshClientSession {
 		this.flushSnapshot();
 	}
 
+	/** DSH 引擎的左栏只有**活着的**对话行（不做 recent-chats 的磁盘常驻行），
+	 *  所以「从最近对话移出」在这里是空操作 —— 只为保持同一套 wire 协议。 */
+	async removeRecentChat(_path: string): Promise<void> {
+		/* no-op: DSH 无持久化最近列表 */
+	}
+
 	/** DSH 引擎无第一方子代理（emitConversations 恒 isSubagent:false）：批量
 	 *  关闭退化为空操作提示，保持与 pi 引擎同一 wire 行为。 */
 	async dismissFinishedSubagents(_parentId?: string): Promise<void> {

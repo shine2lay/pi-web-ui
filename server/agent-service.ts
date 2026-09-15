@@ -1119,6 +1119,17 @@ export function historyScope(): "all" | "project" {
 	return process.env.PI_WEB_UI_HISTORY_SCOPE === "project" ? "project" : "all";
 }
 
+/**
+ * 左栏「最近对话」里最多常驻多少条**已经不在运行的**历史对话（recent-chats
+ * 补丁）。活着的对话不受此限（它们本来就全部入列）。
+ * `PI_WEB_UI_RECENT_LIMIT=0` 关掉常驻行（退回上游的「只列运行中」行为）。
+ */
+export function recentChatLimit(): number {
+	const raw = Number.parseInt(process.env.PI_WEB_UI_RECENT_LIMIT ?? "", 10);
+	if (Number.isFinite(raw) && raw >= 0) return Math.min(raw, 200);
+	return 15;
+}
+
 export class ClientSession {
 	readonly clientId: string;
 	/** Set by AgentService.attach: reflects the SERVICE-wide quiesce flag
@@ -2730,6 +2741,8 @@ export class ClientSession {
 				}
 				this.scheduleSessionsRefresh();
 				this.refreshConversationTitle(conv);
+				// 本轮真的结束了（不是重试中间态）：没在看的对话点绿灯（「轮到你了」）。
+				if (!event.willRetry) this.markRecentWaiting(conv);
 				// 内联标记不在此兜底扫最后一条 assistant：每条气泡结束已走 message_end
 				// 即时解析（含中间文本块）；这里再扫会把最后一条标记重复执行（todo 重复建号）。
 
@@ -4168,6 +4181,8 @@ export class ClientSession {
 		// switch/new_chat while prompt() is in flight must never target a
 		// different conversation.
 		const conv = this.conv;
+		// 用户往这条对话里发了话 = 看过也回了：绿灯灭掉，并把它拉回「最近对话」。
+		this.markRecentSeen(conv);
 		try {
 			const s = this.session;
 			// Native slash commands (see NATIVE_COMMANDS) are executed here and
@@ -4941,6 +4956,8 @@ export class ClientSession {
 		if (!this.convs.has(id) || id === this.activeId) return;
 		const displaced = this.displaceActive();
 		this.activeId = id;
+		// 看一眼就算看过了：绿灯灭掉（行本身永远留在「最近对话」里）。
+		this.markRecentSeen(this.convs.get(id));
 		const newCwd = this.conv.cwd;
 		// A listed conversation may belong to ANOTHER project (cross-project
 		// running list). Switching to it must also switch the active workspace
@@ -5012,6 +5029,9 @@ export class ClientSession {
 	 *  推什么见 shownInRunningList（listed + 当前对话有内容时）。 */
 	private emitConversations(): void {
 		const conversations: ConversationSummary[] = [];
+		const waiting = new Set(this.stateStore.getRecentWaiting().map((p) => resolve(p)));
+		/** 活着的行占用的转录路径 —— 下面拼接历史行时用它去重。 */
+		const livePaths = new Set<string>();
 		// Active parents are normally absent from Running. Keep them visible while
 		// listed subagents hang under them, so both rows remain clickable.
 		const visibleParents = new Set(
@@ -5030,6 +5050,8 @@ export class ClientSession {
 			} catch {
 				// session being replaced — report defaults
 			}
+			const sessionPath = conv.session.sessionFile;
+			if (sessionPath) livePaths.add(resolve(sessionPath));
 			conversations.push({
 				id: conv.id,
 				title: conv.title,
@@ -5040,6 +5062,10 @@ export class ClientSession {
 				// 子代理带 error 标记：左栏红点提示（普通对话不参与）。
 				...(conv.isSubagent ? this.subagentRunOutcome(conv) : {}),
 				parentId: conv.parentId,
+				sessionPath,
+				live: true,
+				// 正在跑的行用黄灯，不叠绿灯；当前对话就在眼前，也不算「等你」。
+				waiting: !isStreaming && conv.id !== this.activeId && !!sessionPath && waiting.has(resolve(sessionPath)),
 			});
 		}
 		// issue #145：流式集合签名变化 → 通知其他客户端重推（左栏「另一处正在运行」近实时）
@@ -5058,6 +5084,8 @@ export class ClientSession {
 			// 会话替换中——跳过本轮签名比较
 		}
 		const elsewhere = this.listExternalRunning?.() ?? [];
+		// recent-chats：活着的行之后拼上磁盘上的常驻历史行。
+		for (const recent of this.recentHistoryRows(livePaths, waiting)) conversations.push(recent);
 		this.emit({
 			type: "conversations",
 			conversations,
@@ -5065,6 +5093,63 @@ export class ClientSession {
 			// 为空时缺省（老快照字节一致）
 			...(elsewhere.length > 0 ? { elsewhere } : {}),
 		});
+	}
+
+	/** 「最近对话」里**运行时已经释放**的那些行（recent-chats 补丁）。
+	 *
+	 *  老行为：一条对话空闲后被换到后台就从左栏消失了 —— 想找回来只能去下面的
+	 *  History 里翻。现在列表由磁盘上的转录补齐：最近 RECENT_CHAT_LIMIT 条对话
+	 *  常驻左栏（`live: false`），点开走 switch_session，✕ 只在这一列里移出
+	 *  （tombstone 记在 client-state，转录一个字都不动，History 照样能找到）。
+	 *
+	 *  数据来自 pushSessions() 已经解析并推给客户端的那份列表（3 秒缓存），所以
+	 *  这里不会额外扫盘；客户端还没请求过会话列表时，这一列暂时只有活着的行。 */
+	private recentHistoryRows(livePaths: Set<string>, waiting: Set<string>): ConversationSummary[] {
+		const removed = new Set(this.stateStore.getRecentRemoved().map((p) => resolve(p)));
+		const rows: ConversationSummary[] = [];
+		const limit = recentChatLimit();
+		for (const s of this.recentSessions) {
+			if (rows.length >= limit) break;
+			const abs = resolve(s.path);
+			if (livePaths.has(abs) || removed.has(abs)) continue;
+			rows.push({
+				// 合成 id：从不回传给服务端（这些行只能 switch_session /
+				// remove_recent_chat），只用作 React key 与「非活动行」判定。
+				id: `recent:${s.path}`,
+				title: s.name || s.firstMessage || DEFAULT_CONV_TITLE,
+				cwd: s.cwd ?? this.cwd,
+				messageCount: s.messageCount,
+				isStreaming: false,
+				isSubagent: false,
+				sessionPath: s.path,
+				live: false,
+				waiting: waiting.has(abs),
+			});
+		}
+		return rows;
+	}
+
+	/** 一轮跑完了：没在看这条对话的话给它点上绿灯（「轮到你了」）。 */
+	private markRecentWaiting(conv: Conversation): void {
+		const path = conv.session.sessionFile;
+		if (!path) return;
+		if (conv.id === this.activeId) return;
+		if (this.stateStore.setRecentWaiting(resolve(path), true)) this.emitConversations();
+	}
+
+	/** 用户打开/继续了这条对话 —— 绿灯灭掉，并撤销它的「移出最近」墓碑。 */
+	private markRecentSeen(conv: Conversation | undefined): void {
+		const path = conv?.session.sessionFile;
+		if (!path) return;
+		const abs = resolve(path);
+		this.stateStore.restoreRecent(abs);
+		this.stateStore.setRecentWaiting(abs, false);
+	}
+
+	/** 左栏「最近对话」✕：只从这一列移出（转录保留，History 里还在）。 */
+	async removeRecentChat(path: string): Promise<void> {
+		this.stateStore.removeRecent(resolve(path));
+		this.emitConversations();
 	}
 
 	/** List persisted sessions for this client, newest first. */
@@ -5085,6 +5170,10 @@ export class ClientSession {
 	 * pushSessions() and searchSessions() share this fridge — opening the
 	 * panel warms it, then every keystroke inside the TTL is free.
 	 */
+	/** 最近一次推给客户端的会话列表（newest first）——「最近对话」常驻行的数据源，
+	 *  由 pushSessions() 刷新。客户端没请求过会话列表时为空。 */
+	private recentSessions: SessionSummary[] = [];
+
 	private sessionInfosCache: { cwd: string; infos: SessionInfo[]; at: number } | null = null;
 	private static readonly SESSION_INFO_CACHE_TTL = 3000;
 
@@ -5144,6 +5233,10 @@ export class ClientSession {
 			}
 			const sorted = [...sessions.values()].sort((a, b) => b.modified - a.modified).slice(0, 200); // newest first — the panel shows recent history
 			this.emit({ type: "sessions", sessions: sorted });
+			// 「最近对话」常驻行的来源（recent-chats 补丁）：复用这份已解析好的
+			// 列表，emitConversations() 同步取用，不再单独扫盘。
+			this.recentSessions = sorted.slice(0, Math.max(recentChatLimit() * 3, 30));
+			this.emitConversations();
 		} catch {
 			this.emit({ type: "sessions", sessions: [] });
 		}
@@ -5505,7 +5598,11 @@ export class ClientSession {
 				return;
 			}
 		}
+		// ✕ = 「从最近对话里移出」：运行时释放之外还要打墓碑，否则下一次推送它
+		// 会以 live:false 的历史行原地重现（recent-chats 补丁）。转录不动，History 里还在。
+		const dismissedPath = conv.session.sessionFile;
 		this.removeConversation(id);
+		if (dismissedPath) this.stateStore.removeRecent(resolve(dismissedPath));
 		this.emitConversations();
 		this.flushSnapshot();
 	}
@@ -5582,7 +5679,10 @@ export class ClientSession {
 			}
 		}
 		if (this.convs.get(conv.id) === conv && conv.id !== this.activeId) {
+			const dismissedPath = conv.session.sessionFile;
 			this.removeConversation(conv.id);
+			// 同 dismissConversation：强行关掉也要从「最近对话」里真的消失。
+			if (dismissedPath) this.stateStore.removeRecent(resolve(dismissedPath));
 		}
 		this.emitConversations();
 		this.flushSnapshot();
@@ -5819,6 +5919,8 @@ export class ClientSession {
 			this.noticeInterruptedCompaction(conv);
 			this.convs.set(conv.id, conv);
 			this.activeId = conv.id;
+			// 从历史/「最近对话」打开 = 看过了：绿灯灭掉，并撤销它的「移出最近」墓碑。
+			this.markRecentSeen(conv);
 			openedRuntime = null;
 			openedTerminals = null;
 			if (displaced) this.removeConversation(displaced.id);

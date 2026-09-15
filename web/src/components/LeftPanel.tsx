@@ -45,7 +45,8 @@ interface LeftPanelProps {
 			| { type: "rename_session"; path: string; name: string }
 			| { type: "rename_conversation"; id: string; name: string }
 			| { type: "dismiss_conversation"; id: string; withFinishedSubagents?: boolean; force?: boolean }
-			| { type: "dismiss_finished_subagents"; parentId?: string },
+			| { type: "dismiss_finished_subagents"; parentId?: string }
+			| { type: "remove_recent_chat"; path: string },
 	) => boolean;
 	/** True while the panel is actually on screen (desktop: always; mobile:
 	 *  only while the drawer is open). Drives lazy loading of the session
@@ -533,7 +534,8 @@ export const LeftPanel = memo(function LeftPanel({
 					style={!collapseConvs ? { flex: `${effFlex("convs")} 1 0px` } : undefined}
 					onContextMenu={(e) => openSessionMenu(e, { id: "", kind: "section", label: t("runningConversations") })}
 				>
-					{sectionHeader(t("runningConversations"), collapseConvs, toggleConvs, runningAll.length)}
+					{/* recent-chats：这一列不再只是「运行中」—— 计数仍用上游的 runningAll（含「另一处」行）。 */}
+					{sectionHeader(t("recentChats"), collapseConvs, toggleConvs, runningAll.length)}
 					{!collapseConvs && (
 						<div className="lp-section-body convs-scroll">
 							{groupConversations(runningAll, cwd, activeConversationId).map((g) => (
@@ -596,7 +598,13 @@ export const LeftPanel = memo(function LeftPanel({
 														className={`session-item ${active ? "active" : ""}`}
 														title={`${c.title}${g.isCurrent ? "" : ` — ${g.cwd}`}`}
 														onClick={() => {
-															if (!active) panelSend({ type: "switch_conversation", id: c.id });
+															if (active) return;
+															// 常驻行（运行时已释放）走历史打开；活着的行才能按 id 切。
+															if (c.live === false) {
+																if (c.sessionPath) panelSend({ type: "switch_session", path: c.sessionPath });
+																return;
+															}
+															panelSend({ type: "switch_conversation", id: c.id });
 														}}
 													>
 														<FiMessageSquare className="session-icon" />
@@ -639,7 +647,12 @@ export const LeftPanel = memo(function LeftPanel({
 																</span>
 															)}
 														</span>
-														{c.isStreaming && <span className="conv-streaming" title={t("streaming")} />}
+														{/* 状态灯（recent-chats 补丁）：跑着 = 黄灯闪烁；跑完没看 = 绿灯常亮。 */}
+														{c.isStreaming ? (
+															<span className="conv-dot conv-running" title={t("streaming")} />
+														) : c.waiting ? (
+															<span className="conv-dot conv-waiting" title={t("waitingForYou")} />
+														) : null}
 													</button>
 													<button
 														type="button"
@@ -657,6 +670,19 @@ export const LeftPanel = memo(function LeftPanel({
 													{(() => {
 														const key = `conv:${c.id}`;
 														const armed = confirmDel === key;
+														// 常驻行（运行时已释放）：✕ = 只从「最近对话」移出，转录原样保留
+														// （下面的 History 里照样能找到并重新打开）。
+														if (c.live === false) {
+															return delButton(
+																key,
+																t("removeFromRecent"),
+																t("removeFromRecentConfirm"),
+																() => {
+																	if (c.sessionPath) panelSend({ type: "remove_recent_chat", path: c.sessionPath });
+																},
+																<FiX />,
+															);
+														}
 														const nFinished = finishedSubagentCount(conversations, c.id);
 														const nRunning = countRunningSubagentDescendants(conversations, c.id);
 														const nAll = countScopeSubagents(conversations, c.id);
