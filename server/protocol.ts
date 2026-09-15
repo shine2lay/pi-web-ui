@@ -1805,6 +1805,9 @@ export interface ConversationSummary {
 	live?: boolean;
 	/** 本轮跑完但用户还没看过（左栏绿色常亮 = 轮到你了）。打开该对话即清除。 */
 	waiting?: boolean;
+	/** 「最近对话」列内的**稳定排序键**（转录最后活动时间 ms，缺省时用对话创建时间）。
+	 *  只有**真的聊了**才变 —— 光是点开看一眼（常驻行变成活行）不会让行换位置。 */
+	sortAt?: number;
 }
 
 /** A conversation open on ANOTHER client (different tab / device) —

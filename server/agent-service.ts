@@ -1314,6 +1314,22 @@ export function historyScope(): "all" | "project" {
  * 补丁）。活着的对话不受此限（它们本来就全部入列）。
  * `PI_WEB_UI_RECENT_LIMIT=0` 关掉常驻行（退回上游的「只列运行中」行为）。
  */
+/**
+ * 打开别的文件夹的对话时，**工作区要不要跟着跳**（chat-cwd-pin 补丁）。
+ *
+ * 默认 `false` = 钉住：左栏「最近对话」是跨文件夹的，来回点几条就把文件树、
+ * 最近项目排序、新建对话的落点来回抽 —— 而用户只是想看/继续那条对话。
+ * 对话自己的 cwd（`conv.cwd`，工具真正跑的地方）不受影响：它绑在运行时上，
+ * 跨文件夹的行在左栏有文件夹分组标题/徐章可认。工作区只由**显式**动作改变
+ * （选项目 / set_cwd）。
+ *
+ * `PI_WEB_UI_CHAT_FOLLOWS_CWD=1` 恢复上游的「切对话就切工作区」。
+ */
+export function chatFollowsWorkspace(): boolean {
+	const raw = (process.env.PI_WEB_UI_CHAT_FOLLOWS_CWD ?? "").trim().toLowerCase();
+	return raw === "1" || raw === "true" || raw === "yes";
+}
+
 export function recentChatLimit(): number {
 	const raw = Number.parseInt(process.env.PI_WEB_UI_RECENT_LIMIT ?? "", 10);
 	if (Number.isFinite(raw) && raw >= 0) return Math.min(raw, 200);
@@ -6808,7 +6824,9 @@ export class ClientSession {
 		// running list). Switching to it must also switch the active workspace
 		// — otherwise the file tree / session history / recent-projects order
 		// would keep showing the OLD project while the chat shows the new one.
-		const cwdChanged = newCwd !== this.cwd;
+		// chat-cwd-pin：默认不跟随（见 chatFollowsWorkspace）—— 对话仍在它自己的
+		// cwd 里跑，只是文件树/最近项目/新建对话的落点不再被来回抽。
+		const cwdChanged = newCwd !== this.cwd && chatFollowsWorkspace();
 		if (displaced) this.removeConversation(displaced.id);
 		this.conv.promptedSinceActive = false;
 		this.conv.lastActiveAt = Date.now();
@@ -6891,6 +6909,8 @@ export class ClientSession {
 		const waiting = new Set(this.stateStore.getRecentWaiting().map((p) => resolve(p)));
 		/** 活着的行占用的转录路径 —— 下面拼接历史行时用它去重。 */
 		const livePaths = new Set<string>();
+		/** 转录最后活动时间（排序用，见 ConversationSummary.sortAt）。 */
+		const modifiedByPath = new Map<string, number>(this.recentSessions.map((s) => [resolve(s.path), s.modified]));
 		// Active parents are normally absent from Running. Keep them visible while
 		// listed subagents hang under them, so both rows remain clickable.
 		const visibleParents = new Set(
@@ -6937,6 +6957,9 @@ export class ClientSession {
 				parentId: conv.parentId,
 				sessionPath,
 				live: true,
+				// 稳定排序键：转录的最后活动时间；还没落盘/还没进列表缓存时用创建时间
+				// （而不是 lastActiveAt：那个一点开就变，行会在鼠标下面跳走）。
+				sortAt: (sessionPath ? modifiedByPath.get(resolve(sessionPath)) : undefined) ?? conv.createdAt,
 				// 正在跑的行用黄灯，不叠绿灯；当前对话就在眼前，也不算「等你」。
 				waiting: !isStreaming && conv.id !== this.activeId && !!sessionPath && waiting.has(resolve(sessionPath)),
 			});
@@ -7000,6 +7023,7 @@ export class ClientSession {
 				sessionPath: s.path,
 				live: false,
 				waiting: waiting.has(abs),
+				sortAt: s.modified,
 			});
 		}
 		return rows;
@@ -7939,9 +7963,13 @@ export class ClientSession {
 			openedTerminals = null;
 			if (displaced) this.removeConversation(displaced.id);
 			await this.bindSession();
-			this.cwd = targetCwd;
-			await this.restoreProjectProviderKeysForCwd(targetCwd);
-			await this.restoreProjectModelForCwd(targetCwd);
+			// chat-cwd-pin：从历史/「最近对话」打开别的文件夹的对话同样不搬工作区；
+			// 对话的运行时已经是用 targetCwd 建的，工具照样在它自己的目录里跑。
+			if (chatFollowsWorkspace()) {
+				this.cwd = targetCwd;
+				await this.restoreProjectProviderKeysForCwd(targetCwd);
+				await this.restoreProjectModelForCwd(targetCwd);
+			}
 			this.conv.lastActiveAt = Date.now();
 			this.webUi.refresh();
 			this.emitConversations();

@@ -19,12 +19,18 @@ export interface ConvGroup {
  * disambiguate same-titled chats across projects and shows where each
  * background run lives.
  *
- * 「当前项目」取哪个信号：`set_cwd` / 跨项目切对话时，服务端先推 `conversations`
- * （activeId 已经是新项目的对话），带新 `cwd` 的快照随后才到 —— 两个信号不同时
- * 到达。所以**只要当前对话在列表里，就认它所在的分组为当前项目**（唯一），
- * `currentCwd` 只作为它不在列表里时（空白新对话）的回落。只按 `cwd` 判定的那一
- * 帧会把当前项目当成「别的项目」，于是它顶上闪一下项目名再消失（实测约 8ms 一帧，
- * 正是用户看到的那一跳）；同一组立即置顶，也免掉了随后的位置跳动。
+ * 「当前项目」只看**工作区**（`currentCwd`），不看当前打开的是哪条对话。
+ *
+ * 旧实现把**含当前对话的那组**提到最前并去掉组标题（#140：当时切对话必定伴随
+ * 切工作区，而 `cwd` 快照比 `conversations` 晚到一帧，不这么做会闪一下项目名）。
+ * chat-cwd-pin 之后前提变了：切到别的文件夹的对话**不再**搬工作区，于是「当前
+ * 对话在别的文件夹」从一帧的中间态变成了**稳定状态** —— 再按 activeId 置顶，
+ * 就成了每点一条跨文件夹的对话就把整列重新排序（行在鼠标下面跳走）。
+ *
+ * 现在：分组顺序只随**显式的工作区切换**而变，切对话一律不动位置；当前对话在
+ * 哪个文件夹，由那组的文件夹标题告诉你。`currentCwd` 在列表里没有对应分组时
+ * （空白新对话 / 刚切完工作区还没有对话）才回落到当前对话所在组，保住 #140
+ * 那一帧不闪项目名的性质。
  */
 export function groupConversations(
 	list: ConversationSummary[],
@@ -35,7 +41,6 @@ export function groupConversations(
 	/** 分组归属：子对话（即使自己 cwd 不同）跟着父对话的项目走。 */
 	const groupCwdOf = (c: ConversationSummary): string => (c.parentId ? (byId.get(c.parentId)?.cwd ?? c.cwd) : c.cwd);
 	const activeConv = list.find((c) => c.id === activeConversationId);
-	const effectiveCwd = activeConv ? groupCwdOf(activeConv) : currentCwd;
 
 	const byCwd = new Map<string, ConversationSummary[]>();
 	for (const c of list) {
@@ -44,6 +49,9 @@ export function groupConversations(
 		arr.push(c);
 		byCwd.set(groupCwd, arr);
 	}
+	// 工作区自己就有一组 → 它是当前项目；否则才回落到当前对话所在组（见上）。
+	const effectiveCwd = byCwd.has(currentCwd) || !activeConv ? currentCwd : groupCwdOf(activeConv);
+
 	const groups: ConvGroup[] = [...byCwd.entries()].map(([cwd, convs]) => ({
 		cwd,
 		isCurrent: cwd === effectiveCwd,

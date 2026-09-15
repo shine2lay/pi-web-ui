@@ -785,7 +785,13 @@ export const LeftPanel = memo(function LeftPanel({
 											rows.push({ c, depth });
 											for (const child of kids.get(c.id) ?? []) append(child, depth + 1);
 										};
-										for (const root of roots) append(root, 0);
+										// 根行按稳定键排（sortAt = 转录最后活动时间）：点开一条常驻行使它
+										// 变成活行，位置不应该因此变；只有真的聊了才重排。子代理仍然
+										// 跟在各自的父行下面（append 递归）。服务端没发 sortAt 时保持原序。
+										const sorted = roots.every((r) => r.sortAt === undefined)
+											? roots
+											: [...roots].sort((a, b) => (b.sortAt ?? 0) - (a.sortAt ?? 0));
+										for (const root of sorted) append(root, 0);
 										for (const orphan of g.convs) append(orphan, 0);
 										return rows.map(({ c, depth }) => {
 											if ((c as RowConv).elsewhere) {
