@@ -22,7 +22,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 ## terminal-bash-script
 
 **状态**：`local`（上游未提 issue/PR；bug 对所有 macOS 用户都成立，值得上游）
-**基线**：v0.85.0
+**基线**：v0.86.2
 
 ### 问题
 
@@ -68,9 +68,11 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 ## terminal-view-lifecycle
 
 **状态**：`local`（上游 [issue #147](https://github.com/xing-shuyin/pi-web-ui/issues/147)
-已确认并在 2026-09-14 标记「已修复、待发布」，但 v0.85.0 / `main` 里都还没有承载点。
-**上游发版后先跑本仓 `tests/unit/terminal-view.test.ts`：过了就删掉这个 commit。**）
-**基线**：v0.85.0
+在 v0.86.x 只修了**一半**：`create()` 现在从 history 继承 `agentBash`，已退出的 AI 终端
+不再被降级成用户终端去占那 16 个名额；但视图挂载仍然走 `create()` —— 已退出的终端会被
+**重新起进程**、历史输出一并丢掉。只是看一眼不该重启它，所以这个补丁继续保留。
+每次同步后先跑 `tests/unit/terminal-view.test.ts`：哪天它对着纯上游代码也全绿，就删掉这个 commit。）
+**基线**：v0.86.2
 
 ### 问题
 
@@ -102,7 +104,7 @@ AI 豁免、显式重开、校验、WS 路由、真 PTY）
 ## global-history
 
 **状态**：`local`（打算上游成一个设置项：History 范围 = 全部项目 / 当前项目）
-**基线**：v0.85.0
+**基线**：v0.86.2
 
 ### 问题
 
@@ -142,7 +144,7 @@ AI 豁免、显式重开、校验、WS 路由、真 PTY）
 ## status-placement
 
 **状态**：`local`（可上游：纯前端偏好，不动协议与服务端）
-**基线**：v0.85.0
+**基线**：v0.86.2
 
 ### 问题
 
@@ -161,7 +163,8 @@ AI 豁免、显式重开、校验、WS 路由、真 PTY）
   - 纯函数 `splitStatuses()`。与 `title-settings.ts` 同构（纯浏览器偏好，不进
     server 快照）。默认只钉 `multi-pass-limits`（唯一一条「不看会踩坑」的状态）；
     存过空列表就尊重用户的「一条都不钉」，不再回落默认值。
-- `FooterBar.tsx`：只渲染钉住的几条（各自一个 chip，单行省略、title 看全文，
+- `FooterBar.tsx`：只渲染钉住的几条（v0.86 起上游把底栏改成 `host:*` slot map，本补丁
+  改写其中的 `host:plugin-status` 条目，而不是再往 JSX 里插一段）（各自一个 chip，单行省略、title 看全文，
   点一下收进右栏）。
 - `RightPanel.tsx`：未钉住的渲染成 widget 同款卡片（标题 = 状态 key，点一下钉回底栏），
   底部区域的显示条件扩展为「widgets 或状态非空」。
@@ -182,7 +185,7 @@ AI 豁免、显式重开、校验、WS 路由、真 PTY）
 ## recent-chats
 
 **状态**：`local`（想上游成设置项：左栏第一列 = 只列运行中 / 最近对话）
-**基线**：v0.85.0
+**基线**：v0.86.2
 
 ### 问题
 
