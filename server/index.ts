@@ -990,6 +990,8 @@ export interface DispatchSession {
 	dismissConversation(id: string, withFinishedSubagents?: boolean, force?: boolean): Promise<void>;
 	dismissFinishedSubagents(parentId?: string): Promise<void>;
 	persistConversation?(id: string): Promise<void>;
+	/** 从左栏「最近对话」移出一条（转录保留，recent-chats 补丁）。 */
+	removeRecentChat(path: string): Promise<void>;
 	switchSession(path: string): Promise<void>;
 	switchConversation(id: string): Promise<void>;
 	listFiles(path?: string): Promise<void>;
@@ -1929,6 +1931,9 @@ wss.on("connection", (ws) => {
 				break;
 			case "dismiss_finished_subagents":
 				void cs.dismissFinishedSubagents(msg.parentId);
+				break;
+			case "remove_recent_chat":
+				void cs.removeRecentChat(msg.path);
 				break;
 			case "switch_session":
 				void cs.switchSession(msg.path);

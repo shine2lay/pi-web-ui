@@ -940,6 +940,9 @@ export type ClientMessage =
 	/** 将一个内存子代理（inMemory）固化为普通持久化对话：写入磁盘 .jsonl 文件，
 	 *  清除 isSubagent 标记，使其进入历史会话列表并长久保留。 */
 	| { type: "persist_conversation"; id: string }
+	/** 从「最近对话」里移出一条（recent-chats 补丁）。只影响左栏这一列：转录文件
+	 *  原样保留，仍能在下面的 History 里找到并重新打开。 */
+	| { type: "remove_recent_chat"; path: string }
 	/** Bulk-dismiss FINISHED subagents from the running list (right-click menu).
 	 *  parentId omitted = all finished subagents; given = the transitive
 	 *  subagent descendants of that conversation (children, grandchildren, …),
@@ -1793,6 +1796,15 @@ export interface ConversationSummary {
 	questionId?: string;
 	/** 等答复问卷的简短标题/题目（首题 header 或 question 文本），供横幅与列表展示。 */
 	questionTitle?: string;
+	/** 这条对话的转录文件路径（recent-chats 补丁）。左栏「最近对话」用它做
+	 *  **稳定键**：运行时被释放后，同一条对话仍以 live:false 的行留在列表里。
+	 *  会话还没落盘时缺省。 */
+	sessionPath?: string;
+	/** false = 只在磁盘上的历史行（运行时已释放/从未加载）：点它走 switch_session，
+	 *  ✕ 走 remove_recent_chat。缺省按 true 处理（老服务端兼容）。 */
+	live?: boolean;
+	/** 本轮跑完但用户还没看过（左栏绿色常亮 = 轮到你了）。打开该对话即清除。 */
+	waiting?: boolean;
 }
 
 /** A conversation open on ANOTHER client (different tab / device) —
