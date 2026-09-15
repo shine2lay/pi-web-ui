@@ -19,6 +19,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | chat-cwd-pin            | `local` | `server/agent-service.ts`                                        |
 | client-per-load         | `local` | `web/src/use-chat.ts`                                            |
 | co-drive                | `local` | `server/index.ts`, `protocol.ts`, `web/src/`                     |
+| quiet-duplicate-open    | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`            |
 
 ---
 
@@ -360,3 +361,31 @@ sink + 一条输入通道。issue #10 的教训也没有回来：那时是**不�
   加入后看到的是对方的对话、发言进同一条对话且对方实时可见、**流式进行中加入两边
   同时收到实时增量且条数一致**、加入瞬间就有 isStreaming 快照、退出回自己的空白会话、
   加入者直接断线不给对方留死 sink、加入不存在的客户端明确拒绝
+
+---
+
+## quiet-duplicate-open
+
+**状态**：`local`（上游大概率不接受：这是把它刻意加的提醒关掉）
+**基线**：v0.86.2
+
+### 问题
+
+在第二个窗口打开一条**空闲**对话时，每次都弹「该对话在另一处也开着……请只留一处
+发送消息」。它说的风险是真的（两个 runtime 各自往同一份 JSONL 追加，轮流发送会让
+历史分叉），但多窗口看同一条对话本来就是日常操作，于是这条提醒在正常使用中反复出现。
+
+### 改法
+
+去掉**空闲持有者**那条 info 提醒（pi 引擎与 DSH 引擎同口径）。真正有害的一刻没有放松：
+
+- 对方**正在跑**时打开 → 仍然硬拦（原样保留）；
+- 发消息前的 `prompt()` 守卫仍会再查一次（开时空闲、发时在跑的竞态照样拦）。
+
+要两处一起开同一条对话，正确做法是 co-drive 的 `join_client`：那条路径只有**一个**
+writer（持有者的 runtime），从根上分叉不了。
+
+### 回归
+
+- `tests/cross-client-session-test.mjs` 原有断言全绿（含「幽灵持有者不打扰」这条
+  「不该出现提醒」的负向断言）；正在跑时的硬拦与并行提醒均未受影响
