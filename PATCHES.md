@@ -18,6 +18,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | recent-chats            | `local` | `server/agent-service.ts`, `client-state.ts`, `web/src/`          |
 | chat-cwd-pin            | `local` | `server/agent-service.ts`                                        |
 | client-per-load         | `local` | `web/src/use-chat.ts`                                            |
+| server-owned-chats      | `local` | `server/agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/` |
 | quiet-duplicate-open    | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`            |
 
 ---
@@ -315,6 +316,57 @@ clientId 建 ClientSession，同 id = 同一个会话。上游把 clientId 从 l
 - `tests/unit/client-id.test.ts`（4 项：同一次加载内稳定、两次加载必不同、
   不写任何 client 相关存储键、隐私模式下不抛错）
 
+---
+
+## server-owned-chats
+
+**状态**：`local`（上游 #145 在往「所有权 + 感知」方向走，这里是相反的选择：取消所有权）
+**基线**：v0.86.2
+
+### 问题
+
+对话原本属于**某个客户端**：`ClientSession` 各自持有一张 `convs` 表。于是同一条转录
+在第二个窗口打开就意味着第二个 writer（两个 runtime 往同一份 JSONL 追加，历史分叉），
+只能靠一整套防护兜着——正在跑就拒绝打开、发送前再拦一次、左栏用「另一处」只读行
+表示「那边有一条你碰不到的对话」。用户的实际诉求恰恰相反：两个窗口就是要看同一条
+对话、都能说话，或者各看各的。
+
+### 改法
+
+**对话归服务端，客户端只是订阅者。**
+
+- `ClientSession.convs` 改为进程级共享（`ClientSession.sharedConvs`）；`activeId` 退化为
+  纯视图状态「这个窗口在看哪条」。同一条对话在整个服务端只有**一个** runtime，
+  第二个 writer 在结构上不可能出现。
+- 实时扇出：带 `conversationId` 的增量（`message_delta` / `tool_delta`）投递给**所有
+  正在看这条对话**的客户端。快照**不转发**——它带着每个客户端自己的 rev 链，跨客户端
+  转发会把链弄断；改为 nudge 对方的快照调度器，让它从共享对话自己生成一份来对账。
+- 删掉所有权那套：打开正在跑的对话不再拒绝（直接订阅同一条）、发送不再拦截
+  （两边的输入按到达顺序排队，本来就是 steer/queue 语义）、`listExternalRunning()`
+  恒返回空（共享之后「别处在跑的对话」本来就在每个客户端的列表里，再补一份只会重复）。
+- 共享带来的三个连坐点必须堵死：`dispose()` 不再杀别人的对话（只收自己的定时器/监听，
+  最后一个离开的才做整体清理）；`removeConversation()` / `displaceActive()` 遇到
+  **别的窗口正在看**的对话不回收——否则那边会当场失去正在读的对话。
+- 上游 v0.94 的 `AgentService.findConversationHome()`（桥接工具 ask_user_question / browser_page
+  的投递目标）默认「第一个持有这条对话的客户端」就是归属方。共享之后**每个**客户端
+  都持有每条对话，那就成了按接入顺序随便挑：插件/调度伪客户端（sink 是空函数，
+  browser_page 干等到超时），或早已刷新掉的旧标签页（没有 socket，当场报「没有已连接的
+  页面」）。改为：正开着这条对话的在线浏览器 → 任一在线浏览器（都取最新接入的）→
+  任一浏览器 → 上游口径（新增 `ClientSession.isViewing()`）。问卷本来就是广播 + 进程
+  共享登记表，挑谁都一样。回归：`tests/unit/conversation-home.test.ts`。
+- 上游 v0.94 的手动过户 `takeOverConversation()` 把 runtime 从 owner 摘下来（detach）再塞进
+  目标（insert）。共享表上那会把对话从**所有**窗口摘掉再塞回来（可能还换 id），源窗口还收到
+  「已过户到另一处」的假通知。改为：目标已持有这条对话 → 一律退化为普通切换（单 owner
+  口径下目标不会持有别人的对话，行为不变）。入口本来就不会出现（`listExternalRunning()`
+  恒为空），这是防御。回归：`tests/unit/takeover-shared-table.test.ts`。
+
+### 回归
+
+- `tests/server-owned-chats-test.mjs`（已进 smoke）：两窗口打开同一转录 = 同一个
+  conversation（无拒绝、无第二 writer）、轮流发言都进同一条且彼此可见、流式中两个
+  订阅者同时拿到增量、一个窗口切走另一个不受影响、订阅者断线不影响对话本身
+- `tests/cross-client-session-test.mjs` 按新口径改写：原来断言「必须拒绝」的两处
+  改为「必须能订阅同一条」，并发发送改为断言「排队而非拦截」
 ---
 
 ## quiet-duplicate-open

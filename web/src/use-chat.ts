@@ -170,10 +170,8 @@ export interface ChatState {
 	sessions: SessionSummary[];
 	/** Open conversations (each runs its own session in parallel). */
 	conversations: ConversationSummary[];
-	/** issue #145：在其他客户端（标签页/设备）上正在跑的对话（可点进去一起开，见 joined）。 */
+	/** issue #145 遗留字段：server-owned-chats 之后服务端恒发空数组（对话本来就共享）。 */
 	elsewhere: ElsewhereRunning[];
-	/** co-drive：本 socket 正坐在别人的会话上（null = 自己的）。`viewers` 含自己。 */
-	joined: { clientId: string | null; title?: string; viewers: number };
 	/** Id of the conversation the current snapshot belongs to. */
 	activeConversationId: string;
 	/** Recent workspaces this client opened (left panel project picker). */
@@ -404,7 +402,6 @@ type Action =
 			service?: UiServiceInfo;
 	  }
 	| { type: "sessions"; sessions: SessionSummary[] }
-	| { type: "joined"; joined: { clientId: string | null; title?: string; viewers: number } }
 	| {
 			type: "conversations";
 			conversations: ConversationSummary[];
@@ -815,8 +812,6 @@ function reducer(state: ChatState, action: Action): ChatState {
 			};
 		case "sessions":
 			return { ...state, sessions: action.sessions };
-		case "joined":
-			return { ...state, joined: action.joined };
 		case "conversations":
 			return {
 				...state,
@@ -1072,7 +1067,6 @@ export function useChat() {
 		sessions: [],
 		conversations: [],
 		elsewhere: [],
-		joined: { clientId: null, viewers: 1 },
 		activeConversationId: "",
 		projects: [],
 		files: null,
@@ -1400,13 +1394,6 @@ export function useChat() {
 				}
 				case "sessions":
 					dispatch({ type: "sessions", sessions: msg.sessions });
-					break;
-				case "joined":
-					// co-drive：加入/退出别人的会话（服务端权威；快照随后就到）。
-					dispatch({
-						type: "joined",
-						joined: { clientId: msg.clientId, title: msg.title, viewers: msg.viewers },
-					});
 					break;
 				case "conversations":
 					dispatch({
