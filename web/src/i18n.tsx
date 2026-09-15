@@ -184,6 +184,11 @@ export const zh = {
 	elsewhereTip: "在其他标签页 / 设备上运行的对话（只读，不可点）",
 	/* recent-chats 补丁：这一列不再只是「运行中」，而是常驻的最近对话 */
 	recentChats: "最近对话",
+	/* co-drive：加入另一个客户端的会话（可看可说话） */
+	joinChatTip: "点击加入这条对话（一起看、也能发言）",
+	joinedBanner: "已加入另一处的会话：{title}",
+	joinedViewers: "{n} 处在看",
+	leaveShared: "回到自己的会话",
 	waitingForYou: "已完成 · 等你查看",
 	removeFromRecent: "从最近对话移出（历史对话里仍在）",
 	removeFromRecentConfirm: "确认移出",
@@ -1355,6 +1360,10 @@ const en: Record<keyof typeof zh, string> = {
 	elsewhereBadge: "Elsewhere",
 	elsewhereTip: "Conversation running in another tab / device (read-only)",
 	recentChats: "Recent chats",
+	joinChatTip: "Click to join this chat (watch it, and talk to it)",
+	joinedBanner: "Joined another client's session: {title}",
+	joinedViewers: "{n} watching",
+	leaveShared: "Back to my own session",
 	waitingForYou: "Finished · waiting for you",
 	removeFromRecent: "Remove from recent chats (stays in History)",
 	removeFromRecentConfirm: "Confirm remove",

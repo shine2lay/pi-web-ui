@@ -871,6 +871,10 @@ export interface EngineService {
 	attach(clientId: string, send: (msg: ServerMessage) => void): Promise<DispatchSession>;
 	detach(clientId: string, send: (msg: ServerMessage) => void): void;
 	get(clientId: string): DispatchSession | undefined;
+	/** co-drive（可选：DSH 引擎不提供，缺就是“不能加入”）。 */
+	hasClient?(clientId: string): boolean;
+	clientTitle?(clientId: string): string | undefined;
+	viewerCount?(clientId: string): number;
 	disposeAll(): Promise<void>;
 	noteSocketOpen(): void;
 	noteSocketClose(): void;
@@ -1164,12 +1168,76 @@ wss.on("connection", (ws) => {
 	// cid getter lets plugins target THIS socket via host.sendTo(clientId).
 	const removePluginSender = pluginMgr.addSender(send, () => clientId);
 
+	/**
+	 * co-drive：本 socket 当前“坐在”哪个客户端会话上。null = 自己的。
+	 *
+	 * 共享按 **socket** 而不是按浏览器：加入是主动行为、可随时退出，且退出后
+	 * 自己原来的会话原封不动。早年 issue #10 把 clientId 放 localStorage 导致所有
+	 * 标签页**被迫**互为镜像（B 切对话把 A 也切走、甚至中断 A 的运行），教训
+	 * 不在「共享」而在「不经同意的共享」。
+	 */
+	let joinedClientId: string | null = null;
+
+	/** 这个 socket 的消息该发给谁 / 从谁那里取状态。 */
+	const activeClientId = (): string | null => joinedClientId ?? clientId;
+
+	/** 加入状态变了 → 告诉本 socket（前端用它画横幅与退出按钮）。 */
+	const sendJoined = (): void => {
+		const id = activeClientId();
+		send({
+			type: "joined",
+			clientId: joinedClientId,
+			...(joinedClientId ? { title: service.clientTitle?.(joinedClientId) } : {}),
+			viewers: id ? (service.viewerCount?.(id) ?? 1) : 1,
+		});
+	};
+
 	const dispatch = (msg: ClientMessage): void => {
 		if (!clientId) {
 			pending.push(msg);
 			return;
 		}
-		const cs = service.get(clientId);
+		// co-drive：加入/退出只改本 socket 的接线，不动任何会话的归属。
+		if (msg.type === "join_client" || msg.type === "leave_client") {
+			const target = msg.type === "join_client" ? String(msg.clientId || "") : "";
+			const current = activeClientId();
+			const next = msg.type === "join_client" ? target : null;
+			if (msg.type === "join_client") {
+				if (!target || target === clientId || !service.hasClient?.(target)) {
+					send({
+						type: "notice",
+						level: "warning",
+						text: "那个会话已经不在了（对方已关闭）",
+						textEn: "That session is gone (the other client closed it)",
+					});
+					sendJoined();
+					return;
+				}
+			}
+			if (next === joinedClientId) return;
+			// 先接新的再断旧的：中间掉线也不会出现“哪边都不在”的 socket。
+			const attachTo = next ?? clientId;
+			void service
+				.attach(attachTo, send)
+				.then((target2) => {
+					if (closed) return;
+					if (current && current !== attachTo) service.detach(current, send);
+					joinedClientId = next;
+					sendJoined();
+					// 立即画出对方（或自己）的完整状态，而不是等下一次广播。
+					target2.flushSnapshot(true);
+				})
+				.catch(() => {
+					send({
+						type: "notice",
+						level: "error",
+						text: "加入对方会话失败",
+						textEn: "Could not join that session",
+					});
+				});
+			return;
+		}
+		const cs = service.get(activeClientId() ?? clientId);
 		if (!cs) {
 			// Session not ready yet (hello processing) — hold the command.
 			pending.push(msg);
@@ -1780,7 +1848,10 @@ wss.on("connection", (ws) => {
 			clearTimeout(snapshotRetryTimer);
 			snapshotRetryTimer = null;
 		}
-		if (clientId) service.detach(clientId, send);
+		// co-drive：加入到别人会话时，sink 挂在对方身上 —— 断的必须是那一侧，
+		// 否则对方会永远抱着一个已死 socket 的 sink。
+		const attached = joinedClientId ?? clientId;
+		if (attached) service.detach(attached, send);
 	});
 });
 

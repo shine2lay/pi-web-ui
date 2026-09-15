@@ -750,6 +750,11 @@ export type ClientMessage =
 	/** 从「最近对话」里移出一条（recent-chats 补丁）。只影响左栏这一列：转录文件
 	 *  原样保留，仍能在下面的 History 里找到并重新打开。 */
 	| { type: "remove_recent_chat"; path: string }
+	/** 加入另一个客户端的会话（co-drive 补丁）：**本 socket** 改接到对方的
+	 *  ClientSession —— 看到的是它的对话流，发出的消息也进它的对话。
+	 *  自己原来的会话原封不动，`leave_client` 即可回去。 */
+	| { type: "join_client"; clientId: string }
+	| { type: "leave_client" }
 	/** Bulk-dismiss FINISHED subagents from the running list (right-click menu).
 	 *  parentId omitted = all finished subagents; given = the transitive
 	 *  subagent descendants of that conversation (children, grandchildren, …),
@@ -1298,6 +1303,9 @@ export interface ElsewhereRunning {
 	/** Workspace it runs in (lets the client group by project). */
 	cwd: string;
 	isStreaming: boolean;
+	/** 拥有这条对话的客户端 id（co-drive 补丁）。点它就是 `join_client` 的目标：
+	 *  本 socket 改看那边的会话并能向它发言。老服务端不发时不提供加入入口。 */
+	clientId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1517,6 +1525,10 @@ export type ServerMessage =
 			 *  "restart service" action and the server refuses restart_service. */
 			service?: UiServiceInfo;
 	  }
+	/** 本 socket 当前在看谁的会话（co-drive 补丁）。`clientId` 为空 = 回到自己的会话。
+	 *  `viewers` = 这个会话目前有几个 socket 在看（自己的也算），前端用它提醒
+	 *  「此刻不只你一个人在这条对话里」。 */
+	| { type: "joined"; clientId: string | null; title?: string; viewers: number }
 	| { type: "snapshot"; state: UiState }
 	| {
 			/** Incremental snapshot: everything EXCEPT `messages` travels in

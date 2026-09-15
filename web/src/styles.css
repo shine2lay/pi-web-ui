@@ -11119,3 +11119,32 @@ button.source-default-toggle {
 }
 
 /* 旧语义 head 类只留 DOM 钩子：布局全部走上面的 .chead 一套。 */
+
+/* co-drive：坐在别人的会话上时的横幅（左栏顶部，点一下回自己的会话）。
+   刻意用强调色而不是灰：这是“你现在打的字会进别人的对话”的提醒，不该低调。 */
+.lp-joined-bar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 6px 10px;
+	margin-bottom: 4px;
+	border: 1px solid color-mix(in srgb, var(--amber) 45%, transparent);
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--amber) 12%, transparent);
+	color: var(--amber-text, var(--amber));
+	font: inherit;
+	font-size: 12px;
+	text-align: left;
+	cursor: pointer;
+	flex-shrink: 0;
+}
+.lp-joined-bar:hover {
+	background: color-mix(in srgb, var(--amber) 20%, transparent);
+}
+.lp-joined-text {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}

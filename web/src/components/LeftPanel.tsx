@@ -29,6 +29,8 @@ interface LeftPanelProps {
 	conversations: ConversationSummary[];
 	/** issue #145：其他客户端正在跑的对话（只读，不可点）。 */
 	elsewhere: ElsewhereRunning[];
+	/** co-drive：本 socket 坐在谁的会话上（null = 自己的）。 */
+	joined?: { clientId: string | null; title?: string; viewers: number };
 	sessions: SessionSummary[];
 	projects: ProjectSummary[];
 	activeConversationId: string;
@@ -46,7 +48,9 @@ interface LeftPanelProps {
 			| { type: "rename_conversation"; id: string; name: string }
 			| { type: "dismiss_conversation"; id: string; withFinishedSubagents?: boolean; force?: boolean }
 			| { type: "dismiss_finished_subagents"; parentId?: string }
-			| { type: "remove_recent_chat"; path: string },
+			| { type: "remove_recent_chat"; path: string }
+			| { type: "join_client"; clientId: string }
+			| { type: "leave_client" },
 	) => boolean;
 	/** True while the panel is actually on screen (desktop: always; mobile:
 	 *  only while the drawer is open). Drives lazy loading of the session
@@ -134,6 +138,7 @@ export const LeftPanel = memo(function LeftPanel({
 	sessionFile,
 	conversations,
 	elsewhere,
+	joined,
 	sessions,
 	projects,
 	activeConversationId,
@@ -339,7 +344,7 @@ export const LeftPanel = memo(function LeftPanel({
 		[sessionMenuAvailable, showSessionMenu],
 	);
 
-	type RowConv = ConversationSummary & { elsewhere?: boolean };
+	type RowConv = ConversationSummary & { elsewhere?: boolean; ownerClientId?: string };
 	const panelRef = useRef<HTMLElement>(null);
 	const [weights, setWeights] = useState<LpWeights>(() => loadLpWeights());
 	useEffect(() => {
@@ -359,6 +364,8 @@ export const LeftPanel = memo(function LeftPanel({
 			isStreaming: w.isStreaming,
 			isSubagent: false as const,
 			elsewhere: true as const,
+			// co-drive：服务端带了持有者 id 的行可以点进去一起开（老服务端不带 → 仍是只读行）。
+			ownerClientId: w.clientId,
 		})),
 	];
 	const createSashHandler = useCallback(
@@ -475,6 +482,22 @@ export const LeftPanel = memo(function LeftPanel({
 					<FiChevronsLeft />
 				</button>
 			)}
+			{/* co-drive：坐在别人会话上时必须看得见 —— 否则你会对着一个不是自己的
+			    工作区打字（早年 issue #10 的镜像之痛就痛在“看不出来”）。点一下就回自己的会话。 */}
+			{joined?.clientId && (
+				<button
+					type="button"
+					className="lp-joined-bar"
+					title={t("leaveShared")}
+					onClick={() => panelSend({ type: "leave_client" })}
+				>
+					<span className="lp-joined-text">
+						{t("joinedBanner", { title: joined.title ?? "" })}
+						{joined.viewers > 1 ? ` · ${t("joinedViewers", { n: joined.viewers })}` : ""}
+					</span>
+					<FiX />
+				</button>
+			)}
 			{/* Recent projects — collapsible, flex share */}
 			{projects.length > 0 && (
 				<div
@@ -576,7 +599,17 @@ export const LeftPanel = memo(function LeftPanel({
 											if ((c as RowConv).elsewhere) {
 												return (
 													<div className="lp-row" key={c.id}>
-														<div className="session-item elsewhere-item" title={`${t("elsewhereTip")}\n${c.cwd}`}>
+														<div
+															className="session-item elsewhere-item"
+															title={`${(c as RowConv).ownerClientId ? t("joinChatTip") : t("elsewhereTip")}\n${c.cwd}`}
+															role={(c as RowConv).ownerClientId ? "button" : undefined}
+															style={(c as RowConv).ownerClientId ? { cursor: "pointer" } : undefined}
+															onClick={() => {
+																// co-drive：点「另一处」的行 = 加入那边的会话（可看可说话）。
+																const owner = (c as RowConv).ownerClientId;
+																if (owner) panelSend({ type: "join_client", clientId: owner });
+															}}
+														>
 															<FiMessageSquare className="session-icon" />
 															<span className="session-info">
 																<span className="session-title">

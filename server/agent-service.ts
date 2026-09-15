@@ -4093,6 +4093,15 @@ export class ClientSession {
 	}
 
 	/** issue #145：本实例连接的 socket 数（0 = 标签页全关了，ClientSession 残留）。 */
+	/** 当前对话标题（co-drive 的加入提示；会话替换中给 undefined）。 */
+	currentTitle(): string | undefined {
+		try {
+			return this.conv.title;
+		} catch {
+			return undefined;
+		}
+	}
+
 	sinkCount(): number {
 		return this.sinks.size;
 	}
@@ -4148,8 +4157,8 @@ export class ClientSession {
 	}
 
 	/** issue #145：本实例所有正在跑的对话摘要（elsewhere 列表的本机一半）。 */
-	streamingSummariesAll(): { title: string; cwd: string; isStreaming: boolean }[] {
-		const out: { title: string; cwd: string; isStreaming: boolean }[] = [];
+	streamingSummariesAll(): { title: string; cwd: string; isStreaming: boolean; clientId?: string }[] {
+		const out: { title: string; cwd: string; isStreaming: boolean; clientId?: string }[] = [];
 		for (const conv of this.convs.values()) {
 			if (conv.isSubagent) continue;
 			if (!this.conversationStreaming(conv)) continue;
@@ -6719,9 +6728,29 @@ export class AgentService {
 		const out: ElsewhereRunning[] = [];
 		for (const [clientId, cs] of this.clients) {
 			if (clientId === excludeClientId) continue;
-			for (const r of cs.streamingSummariesAll()) out.push(r);
+			// co-drive：带上持有者的 clientId，左栏的「另一处」行才能点进去共同驾驶。
+			for (const r of cs.streamingSummariesAll()) out.push({ ...r, clientId });
 		}
 		return out;
+	}
+
+	/** co-drive：某个客户端会话的当前对话标题（加入提示用）。 */
+	clientTitle(clientId: string): string | undefined {
+		try {
+			return this.clients.get(clientId)?.currentTitle();
+		} catch {
+			return undefined;
+		}
+	}
+
+	/** co-drive：这个会话目前有几个 socket 在看（含加入进来的）。 */
+	viewerCount(clientId: string): number {
+		return this.clients.get(clientId)?.sinkCount() ?? 0;
+	}
+
+	/** co-drive：目标会话存在且不是自己时才能加入。 */
+	hasClient(clientId: string): boolean {
+		return this.clients.has(clientId);
 	}
 
 	/** issue #145：某客户端流式集合变化 → 其他客户端重推 conversations。 */
