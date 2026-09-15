@@ -17,6 +17,8 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | status-placement        | `local` | `web/src/status-placement.ts`, `FooterBar.tsx`, `RightPanel.tsx` |
 | recent-chats            | `local` | `server/agent-service.ts`, `client-state.ts`, `web/src/`          |
 | chat-cwd-pin            | `local` | `server/agent-service.ts`                                        |
+| client-per-load         | `local` | `web/src/use-chat.ts`                                            |
+| quiet-duplicate-open    | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`            |
 
 ---
 
@@ -283,3 +285,60 @@ DSH 引擎的左栏只有活着的行，`removeRecentChat()` 在那边是空操�
 
 - `tests/unit/chat-cwd-pin.test.ts`（6 项：开关解析、默认不搬家且无副作用、对话自身 cwd 不变、
   同目录切换、`=1` 时整套副作用回归；另加一条静态体检确保 `switchSession()` 那条入口同样被守住）
+
+---
+
+## client-per-load
+
+**状态**：`local`（可上游：现有 sessionStorage 方案挡不住复制标签页）
+**基线**：v0.86.2
+
+### 问题
+
+两个窗口会互为镜像：一边切对话，另一边跟着变。根因是 clientId 相同 —— 后端按
+clientId 建 ClientSession，同 id = 同一个会话。上游把 clientId 从 localStorage
+（所有标签页共用，issue #10 的镜像之痛）改成 sessionStorage 已经好很多，但
+**复制标签页 / Ctrl-点链接 / 恢复上次会话**都会把 sessionStorage 一起克隆，
+两个窗口照样拿到同一个 id，镜像原样复现。
+
+### 改法
+
+`getClientId()` 每次页面加载现生一个 uuid，**不落任何存储**（原来的
+`pi-web-client-id` 键整个去掉）。撞车在构造上不可能发生，不需要认领/心跳那套
+跨标签页协调。
+
+代价（用户明确接受）：刷新后不再自动回到上次那条对话。对话本身在服务端好好跑着，
+左栏「最近对话」点回去即可；工作目录另有 localStorage 记忆，不依赖 clientId。
+
+### 回归
+
+- `tests/unit/client-id.test.ts`（4 项：同一次加载内稳定、两次加载必不同、
+  不写任何 client 相关存储键、隐私模式下不抛错）
+
+---
+
+## quiet-duplicate-open
+
+**状态**：`local`（上游大概率不接受：这是把它刻意加的提醒关掉）
+**基线**：v0.86.2
+
+### 问题
+
+在第二个窗口打开一条**空闲**对话时，每次都弹「该对话在另一处也开着……请只留一处
+发送消息」。它说的风险是真的（两个 runtime 各自往同一份 JSONL 追加，轮流发送会让
+历史分叉），但多窗口看同一条对话本来就是日常操作，于是这条提醒在正常使用中反复出现。
+
+### 改法
+
+去掉**空闲持有者**那条 info 提醒（pi 引擎与 DSH 引擎同口径）。真正有害的一刻没有放松：
+
+- 对方**正在跑**时打开 → 仍然硬拦（原样保留）；
+- 发消息前的 `prompt()` 守卫仍会再查一次（开时空闲、发时在跑的竞态照样拦）。
+
+要两处一起开同一条对话，正确做法是 co-drive 的 `join_client`：那条路径只有**一个**
+writer（持有者的 runtime），从根上分叉不了。
+
+### 回归
+
+- `tests/cross-client-session-test.mjs` 原有断言全绿（含「幽灵持有者不打扰」这条
+  「不该出现提醒」的负向断言）；正在跑时的硬拦与并行提醒均未受影响

@@ -7883,8 +7883,8 @@ export class ClientSession {
 
 			// issue #145：同一文件在别处已有持有者 —— 绝不建第二个 writer。
 			// 正在跑：直接拒绝（否则两支 run 并发写同一份 JSONL，事后只有一支可读）；
-			// 空闲：放行打开（只剩一处能发送时不会分叉），但提醒用户别处也开着，
-			// 发消息前的 prompt() 守卫会再查一次（开时空闲、发时在跑的竞态也拦得住）。
+			// 空闲：放行打开**且不打扰**（见下面 quiet-duplicate-open）；发消息前的
+			// prompt() 守卫会再查一次（开时空闲、发时在跑的竞态也拦得住）。
 			const owner = this.findSessionOwner?.(targetPath);
 			if (owner && owner.isStreaming) {
 				this.emit({
@@ -7896,17 +7896,17 @@ export class ClientSession {
 				this.flushSnapshot();
 				return;
 			}
-			if (owner) {
-				// 对端已断开（标签页关了）只剩残留会话 —— 不打扰，直接开。
-				if (owner.connected) {
-					this.emit({
-						type: "notice",
-						level: "info",
-						text: `提醒：该对话在另一处也开着（「${owner.title}」，当前空闲）。请只留一处发送消息，否则两边轮流发送会让历史分叉、其中一支事后不可见。`,
-						textEn: `Note: this conversation is also open in another window ("${owner.title}", currently idle). Send new messages from only one place — alternating between two writers forks the history and hides one branch.`,
-					});
-				}
-			}
+			// 空闲持有者不再弹提醒（quiet-duplicate-open）。
+			//
+			// 上游在这里提醒「另一处也开着，只留一处发消息」。它描述的风险是真的（两个
+			// runtime 各自往同一份 JSONL 追加，轮流发送会让历史分叉），但它在**每次**
+			// 另一个窗口打开同一条对话时都弹，而多窗口看同一条对话恰恰是日常操作。
+			// 真正有害的那一刻（对方正在跑）上面已经**硬拦**，发消息前的 prompt()
+			// 守卫还会再查一次；剩下的只是噪音，所以去掉。
+			//
+			// 想真正两处一起开一条对话，用 co-drive 的 join_client：那条路径只有**一个**
+			// writer（持有者的 runtime），从根上就分叉不了。
+			void owner;
 
 			// #235：先修后开——坏转录到 open 后的 getBranch 会死循环，修完再读。
 			// 单文件预扫描，健康文件只多一次小读；修过即弹提示（含压缩被打断）。
