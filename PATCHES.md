@@ -16,6 +16,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | global-history          | `local` | `server/agent-service.ts`, `server/protocol.ts`, `web/src/`      |
 | status-placement        | `local` | `web/src/status-placement.ts`, `FooterBar.tsx`, `RightPanel.tsx` |
 | recent-chats            | `local` | `server/agent-service.ts`, `client-state.ts`, `web/src/`          |
+| chat-cwd-pin            | `local` | `server/agent-service.ts`                                        |
 
 ---
 
@@ -235,3 +236,50 @@ DSH 引擎的左栏只有活着的行，`removeRecentChat()` 在那边是空操�
   活着的行仍走 `switch_conversation` / `dismiss_conversation`）
 - `tests/unit/global-history.test.ts` 的假会话补了 `recentSessions` / `emitConversations`
   承载点（`pushSessions()` 现在会把列表交给「最近对话」并重推左栏）
+
+---
+
+## chat-cwd-pin
+
+**状态**：`local`（想上游成设置项：切对话时工作区跟随 / 钉住）
+**基线**：v0.86.2
+
+### 问题
+
+`switchConversation()` / `switchSession()` 一旦发现目标对话的 cwd 与当前工作区不同，就顺手把
+**整个工作区**搬过去：文件树、最近项目排序、项目模型与密钥、新建对话的落点全跟着换。左栏
+「最近对话」本来就是跨文件夹的一列（见 global-history / recent-chats），来回点几条 = 来回搬家，
+而用户只是想看/继续那条对话。
+
+### 改法
+
+- `chatFollowsWorkspace()`（默认 `false`）：`switchConversation()` 的 `cwdChanged` 与
+  `switchSession()` 里的 `this.cwd = targetCwd` + 项目模型/密钥恢复，一并放进这个守卫里。
+- 工作区此后只由**显式**动作改变：选最近项目、`set_cwd`。
+- `PI_WEB_UI_CHAT_FOLLOWS_CWD=1` 恢复上游的「切对话就切工作区」。
+
+**对话自己的 cwd 不受影响**：`conv.cwd` 绑在运行时上（`switchSession()` 也是用 `targetCwd`
+建的运行时），工具照样在**该对话自己的目录**里跑。左栏跨文件夹的行有文件夹分组标题可认，
+所以「在哪个文件夹」这个信息并没有丢 —— 丢掉的只是被强制搬家这件事。
+
+代价：工作区与当前对话的 cwd 可以不一致（文件树是 A、对话跑在 B）。这正是要的效果，
+但要知道新建对话会落在**工作区**而不是刚看的那条对话的目录。
+
+
+### 配套：列表位置也不许跳
+
+工作区钉住之后，位置还是会动 —— 两个来源都在这个补丁里一并修掉：
+
+- `web/src/conv-groups.ts`：分组置顶原来看的是**含当前对话的那组**（#140 的做法，当时切
+  对话必定伴随切工作区）。现在切对话不再搬家，「当前对话在别的文件夹」成了稳定状态，
+  再按 activeId 置顶就等于每点一条跨文件夹的对话就把整列重排。改成只看**工作区**；
+  工作区在列表里没有对应分组时（空白新对话 / 刚切完工作区那一帧）才回落到 activeId 所在组，
+  #140 的「顶上闪一下项目名」仍然不会回来。
+- 行内顺序：新增 wire 字段 `ConversationSummary.sortAt`（转录最后活动时间，缺省用对话
+  `createdAt`——**不是** `lastActiveAt`，那个一点开就变），左栏按它给根行排序。于是点开一条
+  常驻行（它从「历史行」变成「活行」）位置不动，只有真的聊了才重排。
+
+### 回归
+
+- `tests/unit/chat-cwd-pin.test.ts`（6 项：开关解析、默认不搬家且无副作用、对话自身 cwd 不变、
+  同目录切换、`=1` 时整套副作用回归；另加一条静态体检确保 `switchSession()` 那条入口同样被守住）

@@ -228,3 +228,36 @@ describe("最近对话：状态灯", () => {
 		expect(s.stateStore.getRecentWaiting()).toHaveLength(0);
 	});
 });
+
+describe("最近对话：行的位置稳定", () => {
+	it("每行都带稳定排序键 sortAt（活行取转录活动时间，没有则取创建时间）", () => {
+		const live = conv("a", { messages: 3 });
+		(live as unknown as { createdAt: number }).createdAt = 1000;
+		s.convs.set("a", live);
+		s.recentSessions = [session("/sessions/a.jsonl", 5000), session("/sessions/old.jsonl", 4000)];
+		const rows = pushed();
+		expect(rows.find((r) => r.id === "a")?.sortAt).toBe(5000);
+		expect(rows.find((r) => r.sessionPath === "/sessions/old.jsonl")?.sortAt).toBe(4000);
+	});
+
+	it("转录还没进列表缓存时回落到创建时间（不是 lastActiveAt：那个一点开就变）", () => {
+		const live = conv("fresh");
+		(live as unknown as { createdAt: number }).createdAt = 777;
+		(live as unknown as { lastActiveAt: number }).lastActiveAt = 999999;
+		s.convs.set("fresh", live);
+		expect(pushed().find((r) => r.id === "fresh")?.sortAt).toBe(777);
+	});
+
+	it("打开一条常驻行（变成活行）不改变它的排序键", () => {
+		s.convs.set("a", conv("a"));
+		s.recentSessions = [session("/sessions/a.jsonl", 5000), session("/sessions/b.jsonl", 8000)];
+		const asHistory = pushed().find((r) => r.sessionPath === "/sessions/b.jsonl")?.sortAt;
+		// 用户点开了 b：运行时建起来，它变成活行，但转录活动时间没变。
+		const opened = conv("b");
+		(opened as unknown as { createdAt: number }).createdAt = 1;
+		s.convs.set("b", opened);
+		const asLive = pushed().find((r) => r.id === "b")?.sortAt;
+		expect(asLive).toBe(asHistory);
+		expect(asLive).toBe(8000);
+	});
+});

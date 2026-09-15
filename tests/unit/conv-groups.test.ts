@@ -1,9 +1,12 @@
 /**
- * 左栏「运行的对话」分组（#140 的回归）：当前项目那组不显示组标题（项目名）。
+ * 左栏「最近对话」分组：当前项目（= **工作区**）那组排最前且不显示组标题。
  *
- * 关键回归：`set_cwd` / 跨项目切对话时，`conversations` 推送先到（activeId 已是
- * 新对话），带新 cwd 的快照后到 —— 中间那一帧只按 cwd 判定会把当前项目当成
- * 「别的项目」，顶上闪一下项目名再消失。含当前对话的组必须直接算当前项目。
+ * 两条必须同时成立的性质：
+ * 1. **切对话不动位置**（chat-cwd-pin 的配套）：切到别的文件夹的对话不再搬工作区，
+ *    所以也不该把那组提到最前 —— 否则每点一条跨文件夹的对话，整列就重排一次，
+ *    行在鼠标下面跳走。
+ * 2. **#140 的回归**：显式切工作区时 `conversations` 比带新 cwd 的快照早到一帧，
+ *    新工作区还没有任何分组时回落到当前对话所在组，顶上不该闪一下项目名。
  */
 import { describe, expect, it } from "vitest";
 import { groupConversations } from "../../web/src/conv-groups.js";
@@ -30,17 +33,25 @@ describe("groupConversations", () => {
 		expect(groups[1].isCurrent).toBe(false);
 	});
 
-	it("cwd 还没跟上、但 activeId 已在目标项目时，当前项目以 activeId 为准", () => {
-		// 切到 B 的那一帧：客户端 cwd 还是 A，列表里 active 已经是 B 的对话。
-		// 当前项目只能有一个（B）：A 那组是别的项目的后台运行，标题照旧显示。
+	it("打开别的文件夹的对话：顺序纹丝不动，那组照旧显示文件夹名", () => {
+		// 工作区是 A，用户点开了 B 里的一条对话（chat-cwd-pin：工作区不搬家）。
+		// A 仍是当前项目、仍排最前；B 带着文件夹名待在原位。
 		const groups = groupConversations([conv("c1", A), conv("c2", B)], A, "c2");
-		expect(groups[0].cwd).toBe(B);
+		expect(groups.map((g) => g.cwd)).toEqual([A, B]);
 		expect(groups[0].isCurrent).toBe(true);
-		expect(groups[1].cwd).toBe(A);
 		expect(groups[1].isCurrent).toBe(false);
 	});
 
-	it("只有一个项目时（切过去只有一条对话）也认 activeId", () => {
+	it("在同一列里来回切跨文件夹的对话，分组顺序始终一致", () => {
+		const list = [conv("c1", A), conv("c2", B), conv("c3", "C:/proj/c")];
+		const order = (activeId: string) => groupConversations(list, A, activeId).map((g) => g.cwd);
+		const baseline = order("c1");
+		expect(order("c2")).toEqual(baseline);
+		expect(order("c3")).toEqual(baseline);
+		expect(order("c-blank")).toEqual(baseline);
+	});
+
+	it("新工作区还没有任何分组时（#140 的那一帧）回落到 activeId 所在组", () => {
 		const groups = groupConversations([conv("c9", A)], B, "c9");
 		expect(groups).toHaveLength(1);
 		expect(groups[0].isCurrent).toBe(true);
@@ -54,6 +65,7 @@ describe("groupConversations", () => {
 	});
 
 	it("子代理挂在父对话的项目下（即使自己 cwd 不同）", () => {
+		// 工作区 B 在列表里没有分组（子代理归到父的 A 组）→ 回落到当前对话所在组。
 		const groups = groupConversations([conv("p", A), conv("s", B, { isSubagent: true, parentId: "p" })], B, "s");
 		expect(groups).toHaveLength(1);
 		expect(groups[0].cwd).toBe(A);
