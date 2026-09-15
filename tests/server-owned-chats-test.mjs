@@ -1,4 +1,4 @@
-// co-drive：两个客户端看同一条对话、都能说话。
+// server-owned-chats：对话属于服务端，两个客户端各自「订阅」即可。
 //
 // 老行为（issue #145）：一条会话只有一个持有者，别的客户端最多在左栏看到一行
 // 「另一处正在运行」——看不到内容，更插不上话。老早以前（issue #10）倒是所有
@@ -23,7 +23,7 @@ import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import WebSocket from "ws";
 
-const PORT = Number(process.argv[2] || 8971);
+const PORT = Number(process.argv[2] || 8973);
 const MOCK_PORT = PORT + 1;
 const base = mkdtempSync(join(tmpdir(), "pi-web-co-drive-"));
 const workdir = join(base, "work");
@@ -213,127 +213,119 @@ try {
 		return c;
 	};
 
-	A = await open("co-drive-A");
+	A = await open("owned-A");
 	A.send({ type: "prompt", text: "from A" });
 	await A.waitForMessage((m) => m.role === "assistant" && JSON.stringify(m.content).includes("echo:from_A"));
 	const aFile = (await A.waitForState((s) => Boolean(s.sessionFile))).sessionFile;
 	const aConv = A.state.conversationId;
-	console.log(`✓ A 有一条对话 ${aFile}`);
 
-	// --- 1. B 加入 A 的会话 ---------------------------------------------
-	B = await open("co-drive-B");
-	// 同一个项目下的新客户端会自动接上该项目最近的会话（上游行为）——
-	// 本用例要的是「B 本来在自己的对话里」，所以先开一条新的。
+	// --- 1. 第二个窗口打开同一条转录：既不被拒绝，也不新建 writer ----------
+	B = await open("owned-B");
 	B.send({ type: "new_chat" });
-	await B.waitForState((s) => s.messages?.length === 0 || (B.messages.length === 0 && s.conversationId), 15000);
-	await sleep(300);
-	const ownFile = B.state.sessionFile ?? null;
+	await sleep(400);
 	const ownConv = B.state.conversationId;
-	if (ownConv === aConv) throw new Error("前提不成立：两个客户端本应各有各的对话");
-
-	B.send({ type: "join_client", clientId: "co-drive-A" });
-	const joined = await B.waitForType("joined", (m) => m.clientId === "co-drive-A");
-	if (!(joined.viewers >= 2)) throw new Error(`joined.viewers 应 ≥2（A 与 B 都在看），实际 ${joined.viewers}`);
-	await B.waitForState((s) => s.conversationId === aConv, 15000);
-	if (B.state.sessionFile !== aFile) throw new Error("加入后看到的不是 A 那条对话的转录");
+	B.send({ type: "switch_session", path: aFile });
+	await B.waitForState((s) => s.sessionFile === aFile, 15000);
+	if (B.state.conversationId !== aConv) {
+		throw new Error(`第二个窗口应当订阅到同一条对话（${aConv}），实际 ${B.state.conversationId}`);
+	}
+	const refusals = B.received.filter(
+		(m) => m.type === "notice" && /另一处|another window|second writer/.test(`${m.text ?? ""} ${m.textEn ?? ""}`),
+	);
+	if (refusals.length > 0) throw new Error(`不该再出现持有者相关的提示：${JSON.stringify(refusals[0])}`);
 	await B.waitForMessage((m) => m.role === "assistant" && JSON.stringify(m.content).includes("echo:from_A"));
-	console.log("✓ B 加入后看到的就是 A 的对话（同一转录、同一批消息）");
+	console.log("✓ 两个窗口打开同一条对话 = 同一个 conversation（无拒绝、无第二个 writer）");
 
-	// --- 2. B 说话 → 进 A 的对话，A 也看得见 ------------------------------
+	// --- 2. 两边都能发言，且都实时看到 ------------------------------------
 	B.send({ type: "prompt", text: "from B" });
 	await B.waitForMessage((m) => m.role === "assistant" && JSON.stringify(m.content).includes("echo:from_B"), 25000);
 	await A.waitForMessage((m) => m.role === "assistant" && JSON.stringify(m.content).includes("echo:from_B"), 25000);
-	if (A.state.conversationId !== aConv) throw new Error("B 的发言把 A 的当前对话切走了");
-	console.log("✓ B 发的消息进了同一条对话，A 实时看到（可看可说，不是只读镜像）");
+	A.send({ type: "prompt", text: "from A again" });
+	await A.waitForMessage(
+		(m) => m.role === "assistant" && JSON.stringify(m.content).includes("echo:from_A_again"),
+		25000,
+	);
+	await B.waitForMessage(
+		(m) => m.role === "assistant" && JSON.stringify(m.content).includes("echo:from_A_again"),
+		25000,
+	);
+	console.log("✓ 两边轮流发言都进同一条对话，彼此都看得到（历史不分叉）");
 
-	// --- 2b. 流式进行中加入：两边同时看到实时增量 -------------------------
+	// --- 3. 流式进行中：两个订阅者同时收到实时增量 -------------------------
 	A.deltas = [];
 	B.deltas = [];
-	B.send({ type: "leave_client" });
-	await B.waitForType("joined", (m) => m.clientId === null);
 	A.send({ type: "prompt", text: "SLOW shared run" });
-	await A.waitForState((s) => s.isStreaming, 15000);
-	await sleep(900); // A 已经在收 tick 了，B 才加入 —— 中途加入才是真实场景
-	const aBefore = A.deltas.length;
-	if (aBefore === 0) throw new Error("A 自己都没收到实时增量，用例前提不成立");
-	B.send({ type: "join_client", clientId: "co-drive-A" });
-	await B.waitForType("joined", (m) => m.clientId === "co-drive-A");
-	const joinedAt = Date.now();
-
-	// B 在**流还没结束**时就该拿到增量（而不是等最后一条完整消息补上）。
-	// 判据用「A 还在流式」而不是 B 自己的快照标志：run 一结束 isStreaming 立刻变 false，
-	// 拿它和增量条数做“同一瞬间都成立”的轮询是自找的 flaky。
-	const sawLive = await (async () => {
-		const deadline = Date.now() + 8000;
+	const live = await (async () => {
+		const deadline = Date.now() + 12000;
 		while (Date.now() < deadline) {
-			// 增量只在 run 进行中产生：B 在结束前收到 ≥2 条，就是「同时看到流」的直接证据。
-			if (B.deltas.length >= 2) return true;
+			if (A.deltas.length >= 2 && B.deltas.length >= 2) return true;
 			await sleep(50);
 		}
 		return false;
 	})();
-	if (!sawLive) {
-		console.log("DEBUG B.deltas=", B.deltas.length);
-		throw new Error("B 加入后没有在流式进行中收到实时增量（只能等结果 = 不是同时看到）");
-	}
-	if (!B.deltas.every((d) => d.at >= joinedAt - 200)) throw new Error("时间戳异常：增量早于加入时刻");
-	// 加入瞬间就该拿到一份「正在流式」的完整快照 —— 否则界面会先空着几秒才动起来。
-	const liveSnap = (B.snaps ?? []).find((x) => x.streaming && x.at >= joinedAt - 500);
-	if (!liveSnap) throw new Error("加入时没有立刻拿到 isStreaming 的完整快照（界面会先假装空闲）");
-	// 同一份流：A 与 B 在加入之后收到的增量条数应当一致（同一个 sink 广播）。
-	const aAfter = A.deltas.filter((d) => d.at >= joinedAt).length;
-	const bAfter = B.deltas.filter((d) => d.at >= joinedAt).length;
-	if (Math.abs(aAfter - bAfter) > 1) {
-		throw new Error(`两边收到的实时增量条数差太多：A=${aAfter} B=${bAfter}（应当是同一份广播）`);
-	}
+	if (!live) throw new Error(`订阅者没有同时拿到实时增量：A=${A.deltas.length} B=${B.deltas.length}`);
+	console.log(`✓ 流式进行中两个订阅者同时收到增量（A=${A.deltas.length} B=${B.deltas.length}）`);
 	await A.waitForMessage(
 		(m) => m.role === "assistant" && JSON.stringify(m.content).includes("echo:SLOW_shared_run"),
-		25000,
+		30000,
 	);
 	await B.waitForMessage(
 		(m) => m.role === "assistant" && JSON.stringify(m.content).includes("echo:SLOW_shared_run"),
-		25000,
+		30000,
 	);
-	console.log(`✓ 流式进行中加入：两边同时收到实时增量（加入后 A=${aAfter} 条 / B=${bAfter} 条），结尾一致`);
 
-	// --- 3. B 退出 → 回自己的会话，A 不受影响 ----------------------------
-	B.send({ type: "leave_client" });
-	const left = await B.waitForType("joined", (m) => m.clientId === null);
-	if (left.clientId !== null) throw new Error("退出回执不对");
-	await B.waitForState((s) => s.conversationId === ownConv, 15000);
-	if (B.state.sessionFile !== ownFile) throw new Error("退出后没回到自己原来的会话");
-	if (B.messages.some((m) => JSON.stringify(m.content).includes("echo:from_B"))) {
-		throw new Error("退出后自己的会话里混进了对方对话的消息");
-	}
-	A.send({ type: "prompt", text: "after leave" });
+	// --- 4. 一个窗口离开，另一个照常 --------------------------------------
+	// 用 new_chat 离开：B 原来那条空白对话在切走时就被丢弃了（空对话不留），
+	// 所以不能再切回那个 id —— 这是既有且正确的行为，不是共享带来的问题。
+	void ownConv;
+	B.send({ type: "new_chat" });
+	await B.waitForState((s) => s.conversationId !== aConv, 15000);
+	A.send({ type: "prompt", text: "after B left" });
 	await A.waitForMessage(
-		(m) => m.role === "assistant" && JSON.stringify(m.content).includes("echo:after_leave"),
+		(m) => m.role === "assistant" && JSON.stringify(m.content).includes("echo:after_B_left"),
 		25000,
 	);
-	console.log("✓ B 退出后回到自己的空白会话，A 照常工作");
+	console.log("✓ 一个窗口切走，另一个不受影响（没有归属，也就没有连坐）");
 
-	// --- 4. 加入着直接断线：不给 A 留死 sink ------------------------------
-	const C = await open("co-drive-C");
-	C.send({ type: "join_client", clientId: "co-drive-A" });
-	await C.waitForType("joined", (m) => m.clientId === "co-drive-A");
+	// --- 5. 断线的窗口不拖垮共享对话 --------------------------------------
+	const C = await open("owned-C");
+	C.send({ type: "switch_session", path: aFile });
+	await C.waitForState((s) => s.conversationId === aConv, 15000);
 	C.ws.close();
-	await sleep(500);
-	A.send({ type: "prompt", text: "after drop" });
-	await A.waitForMessage((m) => m.role === "assistant" && JSON.stringify(m.content).includes("echo:after_drop"), 25000);
-	console.log("✓ 加入者直接断线，A 仍正常收推送（sink 断在了正确的一侧）");
-
-	// --- 5. 加入不存在的客户端 → 明确拒绝 --------------------------------
-	B.send({ type: "join_client", clientId: "nobody-here" });
-	const notice = await B.waitForType(
-		"notice",
-		(m) => `${m.text ?? ""} ${m.textEn ?? ""}`.includes("已经不在") || `${m.textEn ?? ""}`.includes("gone"),
-		10000,
+	await sleep(800);
+	A.send({ type: "prompt", text: "after C dropped" });
+	await A.waitForMessage(
+		(m) => m.role === "assistant" && JSON.stringify(m.content).includes("echo:after_C_dropped"),
+		25000,
 	);
-	if (notice.level !== "warning") throw new Error("拒绝应当是 warning 级");
-	await B.waitForState((s) => s.conversationId === ownConv, 5000);
-	console.log("✓ 加入不存在的会话：明确拒绝，本 socket 仍停在自己的会话上");
+	console.log("✓ 订阅者断线不影响对话本身（对话是服务端的，不随浏览器消失）");
 
-	console.log("\nco-drive: 全部通过");
+	// --- 6. 断线的订阅者不得让对话「关不掉」 ------------------------------
+	// ClientSession 活得比 socket 久（断线重连要接回原状态），client-per-load 之后
+	// 每次刷新还会留下一个被遗弃的会话。如果「有人在看」只看 activeId，这些幽灵会
+	// 永远钉住它们最后看的那条对话 —— 用户看到的就是「这条对话关不掉」。
+	const D = await open("owned-D");
+	D.send({ type: "switch_session", path: aFile });
+	await D.waitForState((s) => s.conversationId === aConv, 15000);
+	D.ws.close();
+	await sleep(800);
+	// A 切到别处，再从最近对话里移出那条共享对话：必须真的移出。
+	A.send({ type: "new_chat" });
+	await A.waitForState((s) => s.conversationId !== aConv, 15000);
+	A.send({ type: "dismiss_conversation", id: aConv });
+	const gone = await (async () => {
+		const deadline = Date.now() + 15000;
+		while (Date.now() < deadline) {
+			const list = A.received.filter((m) => m.type === "conversations").at(-1);
+			if (list && !list.conversations.some((c) => c.id === aConv && c.live !== false)) return true;
+			await sleep(200);
+		}
+		return false;
+	})();
+	if (!gone) throw new Error("断线的订阅者把对话钉住了 —— 关不掉");
+	console.log("✓ 断线的订阅者不会让对话关不掉（只有活 socket 才算“在看”）");
+
+	console.log("\nserver-owned-chats: 全部通过");
 } finally {
 	A?.ws?.close();
 	B?.ws?.close();

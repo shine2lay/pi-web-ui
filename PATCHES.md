@@ -18,7 +18,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | recent-chats            | `local` | `server/agent-service.ts`, `client-state.ts`, `web/src/`          |
 | chat-cwd-pin            | `local` | `server/agent-service.ts`                                        |
 | client-per-load         | `local` | `web/src/use-chat.ts`                                            |
-| co-drive                | `local` | `server/index.ts`, `protocol.ts`, `web/src/`                     |
+| server-owned-chats      | `local` | `server/agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/` |
 | quiet-duplicate-open    | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`            |
 
 ---
@@ -318,50 +318,43 @@ clientId 建 ClientSession，同 id = 同一个会话。上游把 clientId 从 l
 
 ---
 
-## co-drive
+## server-owned-chats
 
-**状态**：`local`（上游 #145 正在动这块；若上游做出同等能力就整条删掉）
+**状态**：`local`（上游 #145 在往「所有权 + 感知」方向走，这里是相反的选择：取消所有权）
 **基线**：v0.86.2
 
 ### 问题
 
-一条会话只有一个持有者：别的客户端最多在左栏看到一行「另一处正在运行」，看不到
-内容、更插不上话（`findSessionOwner` 直接拒绝第二个 writer —— 这层保护是对的，
-两个 AgentSession 往同一个 JSONL 里追加必然写坏）。但「手机上看看桌面那条在跑的
-对话、顺手补一句」是完全合理的需求。
+对话原本属于**某个客户端**：`ClientSession` 各自持有一张 `convs` 表。于是同一条转录
+在第二个窗口打开就意味着第二个 writer（两个 runtime 往同一份 JSONL 追加，历史分叉），
+只能靠一整套防护兜着——正在跑就拒绝打开、发送前再拦一次、左栏用「另一处」只读行
+表示「那边有一条你碰不到的对话」。用户的实际诉求恰恰相反：两个窗口就是要看同一条
+对话、都能说话，或者各看各的。
 
 ### 改法
 
-共享按 **socket** 而不是按浏览器：
+**对话归服务端，客户端只是订阅者。**
 
-- 协议新增 `join_client { clientId }` / `leave_client`，服务端回 `joined
-  { clientId, title, viewers }`；`ElsewhereRunning` 带上持有者 `clientId`（加入入口）。
-- `server/index.ts`：每个 socket 一个 `joinedClientId`。加入 = 把**这个 socket 的
-  sink** 改挂到对方的 ClientSession 上，输入也随之路由过去；`leave_client` 挂回来。
-  先接新的再断旧的（中途掉线不会出现「哪边都不在」的 socket）；断线时按
-  `joinedClientId ?? clientId` 断，**否则对方会永远抱着一个死 sink**。
-- 前端：「另一处」行可点即加入；左栏顶部一条醒目的琥珀色横幅显示「正坐在谁的会话上 +
-  几处在看」，点一下退出。刻意不低调 —— 你打的字会进别人的对话。
-
-单写者从未被破坏：真正跑 run 的仍然只有持有者那一个 runtime，加入者只是多一个
-sink + 一条输入通道。issue #10 的教训也没有回来：那时是**不经同意**的全浏览器镜像
-且无法退出，这里是主动加入、随时退出、退出后自己的会话原封不动。
-
-流式：`message_delta` 本来就走 `emit()` 广播给该会话的全部 sink（且刻意绕开会被
-背压丢弃的快照通道），所以两边是**同一份**推送 —— 实测加入后 A/B 各收到 3 条增量，
-分毫不差；加入瞬间还会立刻收到一份 `isStreaming` 的完整快照（否则界面会先空着几秒）。
-
-**已知边界**：加入的是对方**整个会话**而不是单条对话（快照本来就是会话级的），
-所以对方切对话你的视图也跟着走；`elsewhere` 只列**正在流式**的对话，空闲对话暂时
-没有加入入口。两者都要等按对话订阅（`prompt` 需带 `conversationId`）才能解决。
+- `ClientSession.convs` 改为进程级共享（`ClientSession.sharedConvs`）；`activeId` 退化为
+  纯视图状态「这个窗口在看哪条」。同一条对话在整个服务端只有**一个** runtime，
+  第二个 writer 在结构上不可能出现。
+- 实时扇出：带 `conversationId` 的增量（`message_delta` / `tool_delta`）投递给**所有
+  正在看这条对话**的客户端。快照**不转发**——它带着每个客户端自己的 rev 链，跨客户端
+  转发会把链弄断；改为 nudge 对方的快照调度器，让它从共享对话自己生成一份来对账。
+- 删掉所有权那套：打开正在跑的对话不再拒绝（直接订阅同一条）、发送不再拦截
+  （两边的输入按到达顺序排队，本来就是 steer/queue 语义）、`listExternalRunning()`
+  恒返回空（共享之后「别处在跑的对话」本来就在每个客户端的列表里，再补一份只会重复）。
+- 共享带来的三个连坐点必须堵死：`dispose()` 不再杀别人的对话（只收自己的定时器/监听，
+  最后一个离开的才做整体清理）；`removeConversation()` / `displaceActive()` 遇到
+  **别的窗口正在看**的对话不回收——否则那边会当场失去正在读的对话。
 
 ### 回归
 
-- `tests/co-drive-test.mjs`（已进 `npm run test:smoke`，真服务端 + mock SSE 模型）：
-  加入后看到的是对方的对话、发言进同一条对话且对方实时可见、**流式进行中加入两边
-  同时收到实时增量且条数一致**、加入瞬间就有 isStreaming 快照、退出回自己的空白会话、
-  加入者直接断线不给对方留死 sink、加入不存在的客户端明确拒绝
-
+- `tests/server-owned-chats-test.mjs`（已进 smoke）：两窗口打开同一转录 = 同一个
+  conversation（无拒绝、无第二 writer）、轮流发言都进同一条且彼此可见、流式中两个
+  订阅者同时拿到增量、一个窗口切走另一个不受影响、订阅者断线不影响对话本身
+- `tests/cross-client-session-test.mjs` 按新口径改写：原来断言「必须拒绝」的两处
+  改为「必须能订阅同一条」，并发发送改为断言「排队而非拦截」
 ---
 
 ## quiet-duplicate-open

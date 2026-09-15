@@ -896,7 +896,6 @@ export function App() {
 								sessionFile={chat.state?.sessionFile ?? null}
 								conversations={chat.conversations}
 								elsewhere={chat.elsewhere}
-								joined={chat.joined}
 								sessions={chat.sessions}
 								projects={chat.projects}
 								activeConversationId={chat.activeConversationId}

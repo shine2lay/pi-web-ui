@@ -1161,8 +1161,18 @@ export class ClientSession {
 	private readonly stateStore: ClientStateStore;
 	/** Open conversations — each owns its OWN runtime, so starting a new chat
 	 *  or switching chats never interrupts an in-flight run. `runtime` and
-	 *  `session` accessors below target the ACTIVE conversation. */
-	private convs = new Map<string, Conversation>();
+	 *  `session` accessors below target the ACTIVE conversation.
+	 *
+	 *  **进程级共享**（server-owned-chats 补丁）：对话属于**服务端**，不属于某个
+	 *  客户端。每个浏览器只是一个「视图」——自己选 activeId 看哪条，看同一条也行、
+	 *  看不同条也行。这样就没有「持有者」这回事了：不再有第二个 writer 的风险
+	 *  （一条对话永远只有一个 runtime），也不再需要拒绝/加入/另一处那一整套。 */
+	private get convs(): Map<string, Conversation> {
+		return ClientSession.sharedConvs;
+	}
+	/** 所有客户端共用的一份对话表（见上）。 */
+	private static readonly sharedConvs = new Map<string, Conversation>();
+	/** 本客户端**正在看**哪条对话（纯视图状态，不代表所有权）。 */
 	private activeId = "";
 	private convSeq = 0;
 	/** One ModelRuntime shared by all conversations — the model chosen in the
@@ -1853,6 +1863,8 @@ export class ClientSession {
 		this.cwd = cwd;
 		this.agentDir = agentDir;
 		this.stateStore = stateStore;
+		// server-owned-chats：参与跨客户端扇出（见 fanOutToViewers）。
+		ClientSession.liveSessions.add(this);
 		this.roots = stateStore.getWorkspaceRoots(clientId, cwd);
 		this.subagentTemplates = new SubagentTemplatesStore(join(stateStore.dataDir, "subagent-templates.json"));
 		this.markerSvc = new MarkerService({
@@ -2342,7 +2354,46 @@ export class ClientSession {
 		if (this.disposed) return;
 		// eslint-disable-next-line unicorn/no-useless-spread -- snapshot: handlers may unsubscribe mid-emit
 		for (const sink of [...this.sinks]) sink(msg);
+		this.fanOutToViewers(msg);
 	}
+
+	/** 本地投递（不再扇出，避免两个客户端互相转发形成回路）。 */
+	private emitLocal(msg: ServerMessage): void {
+		if (this.disposed) return;
+		// eslint-disable-next-line unicorn/no-useless-spread
+		for (const sink of [...this.sinks]) sink(msg);
+	}
+
+	/**
+	 * server-owned-chats：对话属于服务端，谁都能看。**带 conversationId 的实时消息**
+	 * （message_delta / tool_delta）要送给**所有正在看这条对话**的客户端，而不只是
+	 * 当初开它的那个。
+	 *
+	 * 只转发增量、不转发快照：快照带着每个客户端自己的 rev 链（`snapshot_delta` 的
+	 * baseRev 必须接得上收件人的上一份快照），跨客户端转发会把 rev 链弄断。转发增量
+	 * 之后顺手 nudge 一下对方的快照调度器 —— 它用的是**共享注册表里同一个 conv**，
+	 * 所以它自己就能生成一份对得上的快照来对账。
+	 */
+	private fanOutToViewers(msg: ServerMessage): void {
+		if (msg.type !== "message_delta" && msg.type !== "tool_delta") return;
+		const convId = msg.conversationId;
+		if (!convId) return;
+		for (const other of ClientSession.liveSessions) {
+			if (other === this || other.disposed) continue;
+			if (other.activeId !== convId) continue;
+			other.emitLocal(msg);
+			other.noteForeignDelta();
+		}
+	}
+
+	/** 别的客户端推进了我正在看的对话 —— 安排一次自己的快照来对账。 */
+	private noteForeignDelta(): void {
+		this.lastDeltaAt = Date.now();
+		this.scheduleSnapshot();
+	}
+
+	/** 活着的客户端会话（扇出用；attach/dispose 维护）。 */
+	private static readonly liveSessions = new Set<ClientSession>();
 
 	/** (Re)attach event plumbing to the ACTIVE conversation's session. */
 	private async bindSession(): Promise<void> {
@@ -4093,7 +4144,7 @@ export class ClientSession {
 	}
 
 	/** issue #145：本实例连接的 socket 数（0 = 标签页全关了，ClientSession 残留）。 */
-	/** 当前对话标题（co-drive 的加入提示；会话替换中给 undefined）。 */
+	/** 当前对话标题（会话替换中给 undefined）。 */
 	currentTitle(): string | undefined {
 		try {
 			return this.conv.title;
@@ -4227,16 +4278,10 @@ export class ClientSession {
 			const activeFile = this.activeSessionFileResolved();
 			if (activeFile) {
 				const owner = this.findSessionOwner?.(activeFile);
-				if (owner && owner.isStreaming) {
-					this.emit({
-						type: "notice",
-						level: "warning",
-						text: `发送已拦截：该对话正在另一处运行中（「${owner.title}」）。请等它结束后再发，或回到原窗口继续 —— 否则两个 agent 会同时写同一份记录，其中一支事后不可见。`,
-						textEn: `Prompt blocked: this conversation is running in another window ("${owner.title}"). Wait for it to finish or continue there — two writers on one transcript would leave one run permanently invisible.`,
-					});
-					this.flushSnapshot();
-					return;
-				}
+				// server-owned-chats：不再有「另一处的 writer」。一条对话在整个服务端
+				// 只有一个 runtime，两个窗口看到的是同一个；发消息就是往那一个里发，
+				// 分叉在结构上不可能发生，所以这里没有什么可拦的了。
+				void owner;
 			}
 			// issue #145：同项目并行感知 —— 同一 cwd 下别处（或其他对话）正在跑时，
 			// 允许并行（可以同时改不同部分），但用户与 AI 都必须知道。只在新一轮启动时
@@ -4915,8 +4960,27 @@ export class ClientSession {
 		}
 	}
 
+	/** 除了我之外，还有别的活客户端正在看这条对话吗？（server-owned-chats） */
+	private viewedElsewhere(convId: string): boolean {
+		for (const other of ClientSession.liveSessions) {
+			if (other === this || other.disposed) continue;
+			// **必须有活 socket** 才算「有人在看」。ClientSession 会比它的 socket 活得久
+			// （断线重连要接回原状态），而 client-per-load 之后每次刷新都是一个新会话——
+			// 只看 activeId 的话，被遗弃的会话会永远钉住它最后看的那条对话，导致这条
+			// 对话再也关不掉、也不再被回收（用户看到的就是「关不掉的对话」）。
+			if (other.sinkCount() === 0) continue;
+			if (other.activeId === convId) return true;
+		}
+		return false;
+	}
+
 	private displaceActive(): Conversation | null {
 		const conv = this.conv;
+		// 别人还在看 → 留着（保留 = 展示口径，不改运行时归属）。
+		if (this.viewedElsewhere(conv.id)) {
+			conv.listed = true;
+			return null;
+		}
 		// 子代理不受切换关闭影响（见上）。
 		if (conv.isSubagent) {
 			conv.listed = true;
@@ -4968,6 +5032,9 @@ export class ClientSession {
 	private removeConversation(id: string): void {
 		const conv = this.convs.get(id);
 		if (!conv || id === this.activeId) return;
+		// server-owned-chats：对话表是进程共享的 —— 别的窗口正看着这条时不能回收它，
+		// 否则那边的界面会当场失去自己正在读的对话（而它并没有做错任何事）。
+		if (this.viewedElsewhere(id)) return;
 		this.convs.delete(id);
 		this.clearAllToolWatchdogs(conv);
 		conv.terminals.killAll();
@@ -5879,32 +5946,9 @@ export class ClientSession {
 				}
 			}
 
-			// issue #145：同一文件在别处已有持有者 —— 绝不建第二个 writer。
-			// 正在跑：直接拒绝（否则两支 run 并发写同一份 JSONL，事后只有一支可读）；
-			// 空闲：放行打开**且不打扰**（见下面 quiet-duplicate-open）；发消息前的
-			// prompt() 守卫会再查一次（开时空闲、发时在跑的竞态也拦得住）。
-			const owner = this.findSessionOwner?.(targetPath);
-			if (owner && owner.isStreaming) {
-				this.emit({
-					type: "notice",
-					level: "warning",
-					text: `该对话正在另一处运行中（「${owner.title}」），为避免两个 agent 同时写同一份记录，已停止打开。请等它结束后再试，或回到原窗口继续。`,
-					textEn: `This conversation is running in another window ("${owner.title}"). Opening it here would create a second writer for the same transcript, so it was blocked. Wait for it to finish, or continue in the original window.`,
-				});
-				this.flushSnapshot();
-				return;
-			}
-			// 空闲持有者不再弹提醒（quiet-duplicate-open）。
-			//
-			// 上游在这里提醒「另一处也开着，只留一处发消息」。它描述的风险是真的（两个
-			// runtime 各自往同一份 JSONL 追加，轮流发送会让历史分叉），但它在**每次**
-			// 另一个窗口打开同一条对话时都弹，而多窗口看同一条对话恰恰是日常操作。
-			// 真正有害的那一刻（对方正在跑）上面已经**硬拦**，发消息前的 prompt()
-			// 守卫还会再查一次；剩下的只是噪音，所以去掉。
-			//
-			// 想真正两处一起开一条对话，用 co-drive 的 join_client：那条路径只有**一个**
-			// writer（持有者的 runtime），从根上就分叉不了。
-			void owner;
+			// server-owned-chats：这条转录若已经有 runtime（不管是谁开的），直接切过去
+			// 看**同一个**对话——上面的 for 循环已经处理了这种情况。走到这里说明它还没
+			// 被打开过，正常从磁盘开一个新的。不再有持有者/拒绝/加入这套概念。
 
 			const sessionManager = SessionManager.open(targetPath);
 			const targetCwd = sessionManager.getCwd();
@@ -6580,6 +6624,14 @@ export class ClientSession {
 
 	async dispose(): Promise<void> {
 		this.disposed = true;
+		ClientSession.liveSessions.delete(this);
+		// server-owned-chats：对话是**服务端**的，别的客户端可能正在看/正在跑。
+		// 一个浏览器断开不该杀掉它们的终端与运行时——本会话只是个视图，走人即可。
+		// （进程退出时的整体清理见 AgentService.disposeAll。）
+		if (ClientSession.liveSessions.size > 0) {
+			this.finishLocalTimers();
+			return;
+		}
 		for (const conv of this.convs.values()) conv.terminals.killAll();
 		if (this.snapshotTimer) {
 			clearTimeout(this.snapshotTimer);
@@ -6614,6 +6666,23 @@ export class ClientSession {
 				// best effort
 			}
 		}
+	}
+
+	/** 只收本客户端自己的东西（定时器 / 文件监听 / 挂起的提问）——共享对话不动。 */
+	private finishLocalTimers(): void {
+		for (const timer of [this.snapshotTimer, this.sessionsTimer]) if (timer) clearTimeout(timer);
+		this.snapshotTimer = null;
+		this.sessionsTimer = null;
+		if (this.widgetsTimer) clearInterval(this.widgetsTimer);
+		this.widgetsTimer = null;
+		if (this.stallTimer) clearInterval(this.stallTimer);
+		this.stallTimer = null;
+		this.files.unwatchDir();
+		this.files.unwatchGit();
+		this.webUi.dispose();
+		this.cancelPendingQuestions();
+		this.cancelPendingPageCalls();
+		this.bg.stop();
 	}
 }
 
@@ -6723,34 +6792,12 @@ export class AgentService {
 		return out;
 	}
 
-	/** issue #145：别处所有正在跑的对话（左栏 elsewhere 只读感知用）。 */
-	listExternalRunning(excludeClientId: string): ElsewhereRunning[] {
-		const out: ElsewhereRunning[] = [];
-		for (const [clientId, cs] of this.clients) {
-			if (clientId === excludeClientId) continue;
-			// co-drive：带上持有者的 clientId，左栏的「另一处」行才能点进去共同驾驶。
-			for (const r of cs.streamingSummariesAll()) out.push({ ...r, clientId });
-		}
-		return out;
-	}
-
-	/** co-drive：某个客户端会话的当前对话标题（加入提示用）。 */
-	clientTitle(clientId: string): string | undefined {
-		try {
-			return this.clients.get(clientId)?.currentTitle();
-		} catch {
-			return undefined;
-		}
-	}
-
-	/** co-drive：这个会话目前有几个 socket 在看（含加入进来的）。 */
-	viewerCount(clientId: string): number {
-		return this.clients.get(clientId)?.sinkCount() ?? 0;
-	}
-
-	/** co-drive：目标会话存在且不是自己时才能加入。 */
-	hasClient(clientId: string): boolean {
-		return this.clients.has(clientId);
+	/** issue #145 的「另一处正在运行」在 server-owned-chats 之后已无意义：对话表是
+	 *  进程共享的，别处在跑的对话**本来就在**每个客户端的 conversations 列表里。
+	 *  再补一份 elsewhere 只会让左栏出现重复行，所以这里恒为空（wire 字段保留，
+	 *  老客户端拿到空数组即可）。 */
+	listExternalRunning(_excludeClientId: string): ElsewhereRunning[] {
+		return [];
 	}
 
 	/** issue #145：某客户端流式集合变化 → 其他客户端重推 conversations。 */
