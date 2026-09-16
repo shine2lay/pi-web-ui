@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState, type ReactNode } from "react";
 import {
 	FiDownload,
+	FiDroplet,
 	FiFolder,
 	FiGitBranch,
 	FiGlobe,
@@ -14,6 +15,7 @@ import {
 	FiLayers,
 	FiTerminal,
 	FiVolume2,
+	FiX,
 } from "react-icons/fi";
 import type { ChatState, UpdateAllItem } from "../use-chat";
 import type { CommandDef } from "../types";
@@ -279,6 +281,17 @@ export function TopBar({
 	   drawing them would only offer an action that comes back refused. No list
 	   means every tab, which is the default. */
 	const tabOn = (tab: string) => !chat.tabs || tab === "chat" || chat.tabs.includes(tab);
+
+	/** 「⋯」里点开的面板（右侧抽屉）。null = 没开。 */
+	const [drawer, setDrawer] = useState<null | "sound" | "language" | "theme" | "update">(null);
+	/** 菜单里的入口 → 抽屉内容。顺序即菜单顺序。 */
+	const DRAWER_ENTRIES = [
+		{ id: "sound" as const, icon: <FiVolume2 />, labelKey: "sound" as const },
+		{ id: "language" as const, icon: <FiGlobe />, labelKey: "language" as const },
+		{ id: "theme" as const, icon: <FiDroplet />, labelKey: "theme" as const },
+		{ id: "update" as const, icon: <FiDownload />, labelKey: "update" as const },
+	];
+	const DRAWER_TITLE = { sound: "sound", language: "language", theme: "theme", update: "update" } as const;
 
 	const allUpdates = chat.updatesAll ?? [];
 	// Pure errors don't count as "updates" — they're shown as failed rows.
@@ -771,8 +784,21 @@ export function TopBar({
 									})}
 								</>
 							)}
-							<div className="dd-header">{t("sound")}</div>
+							{/* 菜单只列**入口**，点开在右侧抽屉里展开对应面板（topbar-crowding）：
+							    原来把声音/语言/主题/版本整块塞进下拉里，菜单又长又要在里面二次翻找；
+							    现在每一条打开的东西 = 它在顶栏当按钮时打开的东西。 */}
 							<div className="dd-header">{t("settings")}</div>
+							{DRAWER_ENTRIES.map(({ id, icon, labelKey }) => (
+								<DropdownItem
+									key={id}
+									onClick={() => {
+										setMoreOpen(false);
+										setDrawer(id);
+									}}
+								>
+									{icon} {t(labelKey)}
+								</DropdownItem>
+							))}
 							<DropdownItem
 								onClick={() => {
 									setMoreOpen(false);
@@ -798,39 +824,6 @@ export function TopBar({
 								<FiLayers /> {t("bgTasks")}
 								{chat.bgServers.length > 0 && <em className="bg-task-badge">{chat.bgServers.length}</em>}
 							</DropdownItem>
-							<SoundSettingsPanel settings={sound} onChange={onSoundChange} onPreview={onSoundPreview} />
-							<NotifyToggle />
-							<div className="dd-header">{t("language")}</div>
-							{packs.map((l) => (
-								<DropdownItem key={l.code} active={locale === l.code} onClick={() => setLocale(l.code)}>
-									{l.nativeName}
-								</DropdownItem>
-							))}
-							<div className="dd-header">{t("theme")}</div>
-							<DropdownItem
-								active={theme === null}
-								onClick={() => {
-									onThemeChange(null);
-									setMoreOpen(false);
-								}}
-							>
-								{t("themeDefault")}
-							</DropdownItem>
-							{themes.map((th) => (
-								<DropdownItem
-									key={th.id}
-									active={theme === th.id}
-									onClick={() => {
-										onThemeChange(th.id);
-										setMoreOpen(false);
-									}}
-								>
-									{locale === "zh" ? th.name : (th.nameEn ?? th.name)}
-								</DropdownItem>
-							))}
-							<div className="dd-header">{t("update")}</div>
-							{renderUpdateBody()}
-							{renderAllUpdatesBody()}
 						</Dropdown>
 					</div>
 				</div>
@@ -844,6 +837,53 @@ export function TopBar({
 				</button>
 			)}
 			{localeModalOpen && <LocaleModal onClose={() => setLocaleModalOpen(false)} />}
+			{/* 「⋯」里点开的面板在这里展开：一个从右侧滑出的抽屉，内容与该条目
+			    在顶栏当按钮时打开的完全一致（同一批组件，不是另做一套）。 */}
+			{drawer && (
+				<>
+					<div className="topbar-drawer-backdrop" onClick={() => setDrawer(null)} />
+					<aside className="topbar-drawer" role="dialog" aria-label={t(DRAWER_TITLE[drawer])}>
+						<div className="topbar-drawer-head">
+							<span>{t(DRAWER_TITLE[drawer])}</span>
+							<button type="button" className="topbar-drawer-close" title={t("close")} onClick={() => setDrawer(null)}>
+								<FiX />
+							</button>
+						</div>
+						<div className="topbar-drawer-body">
+							{drawer === "sound" && (
+								<>
+									<SoundSettingsPanel settings={sound} onChange={onSoundChange} onPreview={onSoundPreview} />
+									<NotifyToggle />
+								</>
+							)}
+							{drawer === "language" &&
+								packs.map((l) => (
+									<DropdownItem key={l.code} active={locale === l.code} onClick={() => setLocale(l.code)}>
+										{l.nativeName}
+									</DropdownItem>
+								))}
+							{drawer === "theme" && (
+								<>
+									<DropdownItem active={theme === null} onClick={() => onThemeChange(null)}>
+										{t("themeDefault")}
+									</DropdownItem>
+									{themes.map((th) => (
+										<DropdownItem key={th.id} active={theme === th.id} onClick={() => onThemeChange(th.id)}>
+											{locale === "zh" ? th.name : (th.nameEn ?? th.name)}
+										</DropdownItem>
+									))}
+								</>
+							)}
+							{drawer === "update" && (
+								<>
+									{renderUpdateBody()}
+									{renderAllUpdatesBody()}
+								</>
+							)}
+						</div>
+					</aside>
+				</>
+			)}
 		</header>
 	);
 }

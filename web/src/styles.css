@@ -11165,3 +11165,51 @@ button.source-default-toggle {
 	gap: 8px;
 	margin-left: auto;
 }
+
+/* 「⋯」里点开的面板：右侧抽屉（topbar-crowding）。
+   菜单只列入口，内容在这里展开——与该条目在顶栏当按钮时打开的是同一批组件。 */
+.topbar-drawer-backdrop {
+	position: fixed;
+	inset: 0;
+	background: rgba(0, 0, 0, 0.35);
+	z-index: 60;
+}
+.topbar-drawer {
+	position: fixed;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	width: min(360px, 92vw);
+	z-index: 61;
+	display: flex;
+	flex-direction: column;
+	background: var(--bg-elev, #1b1b1b);
+	border-left: 1px solid var(--border, #2a2a2a);
+	box-shadow: -12px 0 32px rgba(0, 0, 0, 0.35);
+}
+.topbar-drawer-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 12px 14px;
+	border-bottom: 1px solid var(--border, #2a2a2a);
+	font-weight: 600;
+}
+.topbar-drawer-close {
+	border: 0;
+	background: none;
+	color: var(--text-dim, #9aa);
+	cursor: pointer;
+	font: inherit;
+	padding: 2px 4px;
+}
+.topbar-drawer-close:hover {
+	color: var(--text, #ddd);
+}
+.topbar-drawer-body {
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+	padding: 10px 8px;
+}
