@@ -3407,7 +3407,10 @@ body.panel-resizing .scm-divider::after {
 .topbar {
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
+	/* 入口紧跟在品牌/连接状态右边（topbar-crowding）：原来是 space-between，
+	   于是所有 chip 都被推到最右并与模型选择器挤在一起。现在左对齐，
+	   真正该待在右边的（折叠按钮等）自己用 margin-left:auto。 */
+	justify-content: flex-start;
 	gap: 12px;
 	padding: 10px 16px;
 	border-bottom: 1px solid var(--border);
@@ -3467,6 +3470,8 @@ body.panel-resizing .scm-divider::after {
 	align-items: center;
 	gap: 8px;
 	min-width: 0;
+	/* 占据中间的全部空间，让内容从左边开始排（右侧的面板折叠按钮仍固定在最右）。 */
+	flex: 1;
 	/* Chips are white-space:nowrap and don't shrink — without wrapping the
 	 * toolbar's tail buttons (主题/新对话) visually overlap their neighbours
 	 * whenever the model name or locale strings push total width past the
