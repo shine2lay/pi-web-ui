@@ -11155,3 +11155,13 @@ button.source-default-toggle {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+
+/* 顶栏右侧固定区（topbar-crowding）：新建对话 + 「⋯」永远靠右，
+   左边是连接状态、工具组与视图切换。auto 外边距把它推到行尾，
+   窄屏换行时它也跟着走，不会和左边的 chip 叠在一起。 */
+.topbar-right {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-left: auto;
+}

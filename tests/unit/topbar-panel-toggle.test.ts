@@ -134,22 +134,29 @@ describe("TopBar 面板抽屉按钮的视图门禁", () => {
 		expect(opened).toEqual([]);
 	});
 
-	it("隐藏的内置入口出现在溢出菜单里，点它仍能打开对应面板", () => {
+	it("隐藏的内置入口出现在唯一的「⋯」菜单里，点它仍能打开对应面板", () => {
+		// topbar-crowding：以前插件 tab 旁边还有一个「⋯」，与右上角的「⋯ More」装着
+		// 同一批条目 —— 两个溢出菜单，其中一个看着像点了没反应。现在只剩右上角那一个。
 		const { container, opened } = mount(
 			"chat",
 			[hostEntry("host:chat")],
 			[hostEntry("host:files"), hostEntry("host:history")],
 		);
-		const more = container.querySelector<HTMLButtonElement>(".plugin-topbar-more > button");
+		expect(container.querySelector(".plugin-topbar-more")).toBeNull();
+		const more = container.querySelector<HTMLButtonElement>(".topbar-more button");
 		expect(more).toBeTruthy();
 		act(() => more!.click());
-		const items = Array.from(container.querySelectorAll<HTMLButtonElement>(".plugin-topbar-menu [role=menuitem]"));
+		// Dropdown 的内容挂在 body 上（portal），不在 container 里 —— 按 document 查。
+		const menuItems = () =>
+			Array.from(document.querySelectorAll<HTMLElement>(".dd-item")).filter((el) =>
+				/文件|历史|files|history/i.test(el.textContent ?? ""),
+			);
+		const items = menuItems();
 		expect(items.length).toBe(2);
 		act(() => items[0]!.click());
 		expect(opened).toEqual(["right"]);
-		// 菜单点完即关；再开一次点另一条 → 打开左栏
 		act(() => more!.click());
-		const items2 = Array.from(container.querySelectorAll<HTMLButtonElement>(".plugin-topbar-menu [role=menuitem]"));
+		const items2 = menuItems();
 		act(() => items2[1]!.click());
 		expect(opened).toEqual(["right", "left"]);
 	});

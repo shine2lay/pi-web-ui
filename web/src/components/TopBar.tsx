@@ -507,7 +507,7 @@ export function TopBar({
 				onOpenChange={(v) => {
 					setThemeOpen(v);
 					// 挂载那次拉取若撞上服务端重启会扑空：打开时列表还空就补拉一次
-					if (v && themes.length === 0) reloadThemes();
+					if (v && themes.length === 0) reloadThemes?.();
 				}}
 			>
 				<div className="dd-header">{t("theme")}</div>
@@ -699,152 +699,138 @@ export function TopBar({
 							<span>{it.label}</span>
 						</button>
 					))}
-					{overflowTopbarItems.length > 0 && (
-						<div className="plugin-topbar-more">
-							<button
-								type="button"
-								className="plugin-topbar-item"
-								aria-haspopup="menu"
-								aria-expanded={topbarMenuOpen}
-								title={t("pluginTopbarMore")}
-								onClick={() => setTopbarMenuOpen((v) => !v)}
-							>
-								⋯
-							</button>
-							{topbarMenuOpen && (
-								<div className="plugin-topbar-menu" role="menu">
-									{overflowTopbarItems.map((it) => {
-										// 被隐藏的**宿主菜单型**条目（声音/语言/主题/版本/GitHub/浏览器操作）：
-										// 它们不是一次性动作，扁平按钮点了没意义 —— 把整块组件搬进溢出菜单，
-										// 这样「隐藏」只是换了个位置，功能一点不少（与内建条目的实现留在组件内一致）。
-										const asNode =
-											it.source === "host" && OVERFLOW_AS_NODE_IDS.has(it.id) ? hostNodes[it.id] : undefined;
-										if (asNode !== undefined) {
-											return <Fragment key={it.id}>{asNode}</Fragment>;
-										}
-										return (
-											<button
-												key={it.id}
-												type="button"
-												role="menuitem"
-												title={it.hint ?? it.label}
-												onClick={() => {
-													setTopbarMenuOpen(false);
-													// 宿主内置动作在本地分派（见 dispatchHostOverflow），其余交回 onUiAction。
-													if (!dispatchHostOverflow(it)) onUiAction?.(it);
-												}}
-											>
-												{it.icon && !/[a-z]/i.test(it.icon) ? `${it.icon} ` : ""}
-												{it.label}
-											</button>
-										);
-									})}
-								</div>
-							)}
-						</div>
-					)}{" "}
+					{/* 插件 tab 旁边原本还有一个「⋯」——它和右上角的「⋯ More」装的是同一批
+					    条目（overflowTopbarItems），于是出现两个溢出菜单、其中一个看起来点了没反应。
+					    只保留右上角那一个（topbar-crowding）。 */}
 				</div>
 
 				{/* Desktop toolbar — hidden on mobile (model/thinking move into the
 				    input row; sound/lang/update/github fold into "⋯" below). */}
 
-				{/* 新建对话（用户可在布局页隐藏它——隐藏后从顶部「⋯」溢出菜单里仍能点到，
+				<div className="topbar-right">
+					{/* 新建对话（用户可在布局页隐藏它——隐藏后从顶部「⋯」溢出菜单里仍能点到，
 				    见 dispatchHostOverflow）。 */}
-				{hostOn("new-chat") && (
-					<button
-						type="button"
-						className="chip newchat"
-						data-tip={t("newChatTip")}
-						onClick={() => appSend({ type: "new_chat" })}
-					>
-						<FiPlus />
-						<span>{t("newChat")}</span>
-					</button>
-				)}
+					{hostOn("new-chat") && (
+						<button
+							type="button"
+							className="chip newchat"
+							data-tip={t("newChatTip")}
+							onClick={() => appSend({ type: "new_chat" })}
+						>
+							<FiPlus />
+							<span>{t("newChat")}</span>
+						</button>
+					)}
 
-				{/* 「⋯」溢出菜单：桌面与手机都显示（topbar-crowding）。手机上折叠整组工具；
+					{/* 「⋯」溢出菜单：桌面与手机都显示（topbar-crowding）。手机上折叠整组工具；
 				    桌面上装的是超出主栏限额的条目（见 capTopbarPrimary）。 */}
-				<div className="topbar-more">
-					<Dropdown
-						trigger={
-							<>
-								<FiMoreHorizontal />
-								<span className="chip-sub">{t("more")}</span>
-								{!managed && chat.update && !chat.update.upToDate && <span className="update-dot" />}
-							</>
-						}
-						open={moreOpen}
-						onOpenChange={(v) => {
-							setMoreOpen(v);
-							// 溢出菜单里同样有主题区：列表空就补拉一次（同上）
-							if (v && themes.length === 0) reloadThemes();
-							if (v && !managed) {
-								appSend({ type: "check_update" });
-								appSend({ type: "check_updates_all" });
+					<div className="topbar-more">
+						<Dropdown
+							trigger={
+								<>
+									<FiMoreHorizontal />
+									<span className="chip-sub">{t("more")}</span>
+									{!managed && chat.update && !chat.update.upToDate && <span className="update-dot" />}
+								</>
 							}
-						}}
-					>
-						<div className="dd-header">{t("sound")}</div>
-						<div className="dd-header">{t("settings")}</div>
-						<DropdownItem
-							onClick={() => {
-								setMoreOpen(false);
-								onOpenSettings();
+							open={moreOpen}
+							onOpenChange={(v) => {
+								setMoreOpen(v);
+								// 溢出菜单里同样有主题区：列表空就补拉一次（同上）
+								if (v && themes.length === 0) reloadThemes?.();
+								if (v && !managed) {
+									appSend({ type: "check_update" });
+									appSend({ type: "check_updates_all" });
+								}
 							}}
 						>
-							<FiSettings /> {t("settingsTitle")}
-						</DropdownItem>
-						<DropdownItem
-							onClick={() => {
-								setMoreOpen(false);
-								onOpenGlobalSearch();
-							}}
-						>
-							<FiSearch /> {t("searchGlobal")}
-						</DropdownItem>
-						<DropdownItem
-							onClick={() => {
-								setMoreOpen(false);
-								onOpenBgTasks();
-							}}
-						>
-							<FiLayers /> {t("bgTasks")}
-							{chat.bgServers.length > 0 && <em className="bg-task-badge">{chat.bgServers.length}</em>}
-						</DropdownItem>
-						<SoundSettingsPanel settings={sound} onChange={onSoundChange} onPreview={onSoundPreview} />
-						<NotifyToggle />
-						<div className="dd-header">{t("language")}</div>
-						{packs.map((l) => (
-							<DropdownItem key={l.code} active={locale === l.code} onClick={() => setLocale(l.code)}>
-								{l.nativeName}
-							</DropdownItem>
-						))}
-						<div className="dd-header">{t("theme")}</div>
-						<DropdownItem
-							active={theme === null}
-							onClick={() => {
-								onThemeChange(null);
-								setMoreOpen(false);
-							}}
-						>
-							{t("themeDefault")}
-						</DropdownItem>
-						{themes.map((th) => (
+							{/* 被主栏限额挤出来的入口（topbar-crowding）：宿主内置动作在本地分派，
+						    菜单型条目（声音/语言/主题/版本/浏览器）整块搬进来，插件条目交回 onUiAction。
+						    放在最上面 —— 这才是用户点开「⋯」最想找的东西。 */}
+							{overflowTopbarItems.length > 0 && (
+								<>
+									<div className="dd-header">{t("more")}</div>
+									{overflowTopbarItems.map((it) => {
+										const asNode =
+											it.source === "host" && OVERFLOW_AS_NODE_IDS.has(it.id) ? hostNodes[it.id] : undefined;
+										if (asNode !== undefined) return <Fragment key={it.id}>{asNode}</Fragment>;
+										return (
+											<DropdownItem
+												key={it.id}
+												onClick={() => {
+													setMoreOpen(false);
+													if (!dispatchHostOverflow(it)) onUiAction?.(it);
+												}}
+											>
+												{it.icon && !/[a-z]/i.test(it.icon) ? `${it.icon} ` : ""}
+												{it.label}
+											</DropdownItem>
+										);
+									})}
+								</>
+							)}
+							<div className="dd-header">{t("sound")}</div>
+							<div className="dd-header">{t("settings")}</div>
 							<DropdownItem
-								key={th.id}
-								active={theme === th.id}
 								onClick={() => {
-									onThemeChange(th.id);
+									setMoreOpen(false);
+									onOpenSettings();
+								}}
+							>
+								<FiSettings /> {t("settingsTitle")}
+							</DropdownItem>
+							<DropdownItem
+								onClick={() => {
+									setMoreOpen(false);
+									onOpenGlobalSearch();
+								}}
+							>
+								<FiSearch /> {t("searchGlobal")}
+							</DropdownItem>
+							<DropdownItem
+								onClick={() => {
+									setMoreOpen(false);
+									onOpenBgTasks();
+								}}
+							>
+								<FiLayers /> {t("bgTasks")}
+								{chat.bgServers.length > 0 && <em className="bg-task-badge">{chat.bgServers.length}</em>}
+							</DropdownItem>
+							<SoundSettingsPanel settings={sound} onChange={onSoundChange} onPreview={onSoundPreview} />
+							<NotifyToggle />
+							<div className="dd-header">{t("language")}</div>
+							{packs.map((l) => (
+								<DropdownItem key={l.code} active={locale === l.code} onClick={() => setLocale(l.code)}>
+									{l.nativeName}
+								</DropdownItem>
+							))}
+							<div className="dd-header">{t("theme")}</div>
+							<DropdownItem
+								active={theme === null}
+								onClick={() => {
+									onThemeChange(null);
 									setMoreOpen(false);
 								}}
 							>
-								{locale === "zh" ? th.name : (th.nameEn ?? th.name)}
+								{t("themeDefault")}
 							</DropdownItem>
-						))}
-						<div className="dd-header">{t("update")}</div>
-						{renderUpdateBody()}
-						{renderAllUpdatesBody()}
-					</Dropdown>
+							{themes.map((th) => (
+								<DropdownItem
+									key={th.id}
+									active={theme === th.id}
+									onClick={() => {
+										onThemeChange(th.id);
+										setMoreOpen(false);
+									}}
+								>
+									{locale === "zh" ? th.name : (th.nameEn ?? th.name)}
+								</DropdownItem>
+							))}
+							<div className="dd-header">{t("update")}</div>
+							{renderUpdateBody()}
+							{renderAllUpdatesBody()}
+						</Dropdown>
+					</div>
 				</div>
 			</div>
 
