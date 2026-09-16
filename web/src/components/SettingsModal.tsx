@@ -64,14 +64,7 @@ import { usePresentAutoOpen, savePresentAutoOpen } from "../present-settings";
 import { useProjectTitle, saveTitleSettings } from "../title-settings";
 import { sanitizeWallpaperUrl, fileToWallpaperUrl, saveWallpaperSettings, useWallpaperSettings } from "../wallpaper";
 import { useT, useI18n } from "../i18n";
-import {
-	buildUiSlots,
-	REQUIRED_TOPBAR_ITEM_IDS,
-	restoreAllUi,
-	restoreUiItem,
-	withPluginViewItems,
-	type UiSlotEntry,
-} from "../ui-slots";
+import { buildUiSlots, restoreAllUi, restoreUiItem, withPluginViewItems, type UiSlotEntry } from "../ui-slots";
 import type { CatalogSyncState, PluginJobState } from "../use-chat";
 import { appSend, useAppGlobals } from "../app-globals";
 import { countPluginPhases, pluginPhase, type PluginPhase } from "../plugin-phase";
@@ -2418,16 +2411,12 @@ export function SettingsModal({ chat, terminal, initialSection, onSwitchToTermin
 									if (q && total === 0) return null;
 									const renderRow = (it: UiSlotEntry, rowItems: UiSlotEntry[]) => {
 										const idx = rowItems.findIndex((e) => e.id === it.id);
-										const required = REQUIRED_TOPBAR_ITEM_IDS.has(it.id);
+										// topbar-crowding：设置也能勾掉（勾掉 = 收进「⋯」，仍在顶栏里，见 ui-slots.ts 的
+										// REQUIRED_TOPBAR_ITEM_IDS），否则缺省收起的设置永远勾不回栏上。
 										return (
 											<div key={it.id} className="set-row">
-												<label className="set-toggle" title={required ? t("uiLayoutRequired") : it.id}>
-													<input
-														type="checkbox"
-														checked={!it.hidden}
-														disabled={required}
-														onChange={() => toggleUiHidden(it)}
-													/>
+												<label className="set-toggle" title={it.id}>
+													<input type="checkbox" checked={!it.hidden} onChange={() => toggleUiHidden(it)} />
 													<span>
 														{it.icon ? `${it.icon} ` : ""}
 														{it.label}

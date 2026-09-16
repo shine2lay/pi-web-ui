@@ -2409,16 +2409,6 @@ select.plugin-topbar-item.plugin-topbar-select {
    全丢：触发器丢边框挤成 block，面板行失去两端对齐）。真正的菜单项
    （role=menuitem 的 button / select 行的 label）都是 portal 的直接子节点，
    收紧选择器不丢任何东西。 */
-/* GitHub 外链在菜单里也是 chip 行（图标 + GitHub 文字，与其他行同外观）：
-   顶栏本体的圆形（.chip.github：28px 圆、居中、无内边距）在这里压回正常行。 */
-.plugin-topbar-menu.portal > a.chip.github {
-	width: 100%;
-	justify-content: flex-start;
-	height: auto;
-	padding: 5px 10px;
-	border-radius: 9px;
-	color: var(--text);
-}
 .plugin-topbar-menu > button,
 .plugin-topbar-menu > a.plugin-topbar-menu-link {
 	display: block;
@@ -4274,7 +4264,7 @@ body.panel-resizing .scm-divider::after {
 /* 顶栏控件统一高度：按钮高度不能跟着文案的字体 metrics 跑 —— 纯英文标签
    （版本号 `v0.89.0`、`Git`）的行盒比中文标签矮 2~3px，同样是 .chip/.tb-tab 高度
    却不一样（真机实测：更新按钮 24.5px vs 其它 27px，Git tab 24px vs 对话 26px）。
-   定高 28px（与 .chip.github 同高）+ 本来就有的 align-items:center，内容垂直居中。
+   定高 28px + 本来就有的 align-items:center，内容垂直居中。
    溢出菜单里搬进来的 chip 另有 30px 规则（.plugin-topbar-menu.portal .chip，
    portal 挂在 body 下不在 .topbar 内，不受这条影响）。 */
 .topbar .chip,
@@ -5018,23 +5008,54 @@ body.panel-resizing .scm-divider::after {
 .chip.newchat:hover {
 	background: var(--accent-soft);
 }
-/* GitHub repo link (top-right corner) — perfect circle. */
-.chip.github {
-	width: 28px;
-	height: 28px;
-	padding: 0;
-	justify-content: center;
-	border-radius: 50%;
-	text-decoration: none;
-	color: var(--text-dim);
+/* 「⋯」里点开的面板：右侧抽屉（topbar-crowding）。菜单只列入口，内容在这里展开 ——
+   与该条目在顶栏当按钮时打开的是同一批组件。portal 在 body 下：压在手机面板抽屉（55）
+   之上、「⋯」菜单（70，打开抽屉时已关）与弹窗（300）之下。 */
+.topbar-drawer-backdrop {
+	position: fixed;
+	inset: 0;
+	background: rgba(0, 0, 0, 0.35);
+	z-index: 60;
 }
-.chip.github:hover {
+.topbar-drawer {
+	position: fixed;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	width: min(360px, 92vw);
+	z-index: 61;
+	display: flex;
+	flex-direction: column;
+	background: var(--bg-elev);
+	border-left: 1px solid var(--border);
+	box-shadow: -12px 0 32px rgba(0, 0, 0, 0.35);
 	color: var(--text);
-	border-color: var(--accent);
 }
-.chip.github svg {
-	width: 15px;
-	height: 15px;
+.topbar-drawer-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 12px 14px;
+	border-bottom: 1px solid var(--border);
+	font-weight: 600;
+}
+.topbar-drawer-close {
+	border: 0;
+	background: none;
+	color: var(--text-dim);
+	cursor: pointer;
+	font: inherit;
+	padding: 2px 4px;
+}
+.topbar-drawer-close:hover {
+	color: var(--text);
+}
+.topbar-drawer-body {
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+	padding: 10px 8px;
 }
 
 /* ------------------------------------------------------------------ dropdown */

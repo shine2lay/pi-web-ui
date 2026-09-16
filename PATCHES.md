@@ -19,6 +19,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | chat-cwd-pin            | `local` | `server/agent-service.ts`                                        |
 | client-per-load         | `local` | `web/src/use-chat.ts`                                            |
 | server-owned-chats      | `local` | `server/agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/` |
+| topbar-crowding         | `local` | `web/src/ui-slots.ts`, `App.tsx`, `TopBar.tsx`                   |
 | quiet-duplicate-open    | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`            |
 
 ---
@@ -394,3 +395,64 @@ writer（持有者的 runtime），从根上分叉不了。
 
 - `tests/cross-client-session-test.mjs` 原有断言全绿（含「幽灵持有者不打扰」这条
   「不该出现提醒」的负向断言）；正在跑时的硬拦与并行提醒均未受影响
+
+---
+
+## topbar-crowding
+
+**状态**：`local`（上游大概率乐见其成，可提 PR）
+**基线**：v0.94.1（v0.86.2 上的 7 个提交在同步 v0.94.1 时按上游的新顶栏重做成 1 个）
+
+### 问题
+
+装的东西越多顶栏越挤：内置入口十来个，每个界面插件还要再占一个，窄一点的窗口
+直接把右侧的模型选择器挤没。而 GitHub 仓库外链每天都在占一个固定位置 —— 它一年
+也点不了一次。
+
+### 上游 v0.94 的顶栏（我们在它之上改）
+
+完全扁平的 `.topbar-flow`：条目按 `align`（start/center/end）由两个 spacer 分三段；
+放不下的由 `web/src/topbar-fit.ts` 实测宽度、从视觉尾部收进「⋯」；`hidden` 的条目常驻「⋯」。
+上游自己已把浏览器/声音/语言/主题/版本缺省收起，并把它们的**整块面板**搬进「⋯」菜单
+（`OVERFLOW_AS_NODE_IDS`）；设置被 `REQUIRED_TOPBAR_ITEM_IDS` 强制常驻栏上；GitHub 外链缺省收起、
+order 200。v0.86.2 上的旧做法（`capTopbarPrimary()` 限额 → 按角色分位置、`.topbar-right`
+包右侧、删插件 tab 旁重复的「⋯」）被这套整体取代，不再移植；`App.tsx` 不再改动。
+
+### 改法
+
+**按角色分位置，而不是按数量截断**（数量不是用户的心智模型，**用途**才是），全部用上游的
+数据模型表达（`web/src/ui-slots.ts` 的 `BUILTIN_UI_ITEMS` 缺省值）：
+
+- **左边 = 去哪儿**：视图三连（chat/terminal/git）+ 🧩 插件面板改成 `align: "start"`（上游是 end）。
+- **右边 = 最常用的动作**：搜索、新建对话（上游本来就是 end），再往右是「⋯」。
+- **其余缺省进「⋯」**：除上游已收起的 5 条，**后台任务与设置**也 `hidden: true`。
+- **移除 `host:github`**：内置表条目、TopBar 节点工厂、「⋯」里的外链行、`.chip.github` 样式
+  一并删掉——纯外链、零上下文价值，连「⋯」里的一行也不该占。
+- **设置可以收进「⋯」**：`REQUIRED_TOPBAR_ITEM_IDS` 只钉 slot（插件 `arrange` 不能把它挪出
+  `topbar.primary`），不再强制 `hidden=false` —— 被隐藏的条目一定出现在「⋯」里，所以设置
+  仍是找回其它入口的通道。布局页（`SettingsModal.tsx`）随之去掉设置那行的禁用勾选，
+  否则缺省收起的设置永远勾不回栏上。它仍传给 fitTopbar：勾回栏上之后不会被实测溢出收走。
+- **「⋯」= 入口列表 + 右侧抽屉**（`TopBar.tsx`）：上游把声音/语言/主题/版本的整块面板
+  塞进菜单，菜单又长、还得在里面二次翻找。改成菜单里一行入口（图标 + 名称；版本带版本号
+  与更新红点/角标），点开从右侧滑出抽屉（`.topbar-drawer`，portal 到 body）展开该面板。
+  面板内容只有一份（`renderSoundBody` / `renderLanguageBody` / `renderThemeBody` / 上游的
+  `renderUpdateBody` + `renderAllUpdatesBody`），顶栏下拉与抽屉共用。抽屉里选主题/语言后
+  抽屉留着（方便连着试）；打开版本抽屉时与顶栏下拉一样拉一次 `check_update` /
+  `check_updates_all`。浏览器操作仍整块搬进菜单（自带面板）；设置/搜索/后台任务打开
+  各自已有的面板，不套抽屉；受管实例的版本只是展示 chip，照旧原样画。
+- **被实测挤出去的条目排在菜单最上面**，缺省收起的在后（点开「⋯」最想找的就是它们）。
+  **刻意偏离上游**：`sortOverflowMenuItems` 的注释要求两个来源合并后统一按视觉顺序排。
+  按那个口径，窄窗口里被挤出去的新建对话（end 段、order 96）会排在一长串配置项后面。
+  两段各自仍用 `sortOverflowMenuItems` 排序。
+
+窄窗口下谁先进「⋯」仍由上游的实测溢出决定（从视觉尾部收，右先于左）。用户仍可在设置
+「界面布局」里把任何一条拉回顶栏、藏起或调序——这里改的只是**默认位置**。
+
+### 回归
+
+- `tests/unit/ui-slots.test.ts`：缺省收起 7 条 / 常驻 10 条；按角色分位置（align）；GitHub 不在
+  内置表；设置不能被插件挪出顶栏、但可以收起且用户能勾回；order 偏好里残留的
+  `host:github` 被忽略。
+- `tests/unit/topbar-panel-toggle.test.ts`：「⋯」里只列入口行（面板不进菜单）；主题抽屉
+  portal 到 body、选中后留着、点遮罩关；版本抽屉打开时发 `check_update` + `check_updates_all`、
+  ✕ 关。上游的「溢出菜单里的 GitHub 行」测试随 GitHub 一起删掉。

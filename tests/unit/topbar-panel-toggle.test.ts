@@ -95,6 +95,7 @@ function mount(
 					themes: [],
 					theme: null,
 					onThemeChange: () => {},
+					reloadThemes: () => {},
 				} as unknown as Parameters<typeof TopBar>[0]),
 			),
 		);
@@ -391,20 +392,64 @@ describe("TopBar「打开项目」入口（host:open-project）", () => {
 	});
 });
 
-describe("TopBar 溢出菜单里的 GitHub 行", () => {
-	it("图标 + GitHub 文字的 chip 行（与其他行同外观），完整仓库地址在 hover 提示里", () => {
-		setAppSend(() => true);
-		const { container } = mount("chat", [hostEntry("host:chat")], [hostEntry("host:github")]);
+// topbar-crowding：GitHub 外链整条删掉（原「溢出菜单里的 GitHub 行」测试随之去掉）；
+// 声音/语言/主题/版本在「⋯」里是一行入口，点开从右侧抽屉展开面板。
+describe("TopBar「⋯」里的声音/语言/主题/版本：一行入口 + 右侧抽屉", () => {
+	const openMenu = (container: HTMLElement) =>
 		act(() => container.querySelector<HTMLButtonElement>(".plugin-topbar-more > button")!.click());
-		const link = document.querySelector<HTMLAnchorElement>(".plugin-topbar-menu > a.chip.github");
-		expect(link).toBeTruthy();
-		// 图标 + 文字（svg 不贡献文本，行内读出来就是 GitHub）
-		expect(link!.querySelector("svg")).toBeTruthy();
-		expect(link!.textContent?.trim()).toBe("GitHub");
-		expect(link!.title).toContain("xing-shuyin/pi-web-ui");
-		expect(link!.getAttribute("role")).toBe("menuitem");
-		// 与其它菜单项同为菜单的直接子节点（同一套外观规则命中）
-		expect(link!.parentElement?.classList.contains("plugin-topbar-menu")).toBe(true);
+	const menuRows = () =>
+		Array.from(
+			document.querySelectorAll<HTMLButtonElement>(
+				".plugin-topbar-menu .plugin-topbar-menu-keep > button.chip[role='menuitem']",
+			),
+		);
+
+	it("菜单里只列入口行，面板内容不再整块塞进菜单", () => {
+		setAppSend(() => true);
+		const { container } = mount(
+			"chat",
+			[hostEntry("host:chat")],
+			["host:sound", "host:language", "host:theme", "host:update"].map((id) => hostEntry(id, true)),
+		);
+		openMenu(container);
+		expect(menuRows().length).toBe(4);
+		// 下拉的表头/选项只会出现在抽屉里
+		expect(document.querySelector(".plugin-topbar-menu .dd-header")).toBeNull();
+		expect(document.querySelector(".plugin-topbar-menu .dd-item")).toBeNull();
+		expect(document.querySelector(".topbar-drawer")).toBeNull();
+	});
+
+	it("主题：点入口关菜单、抽屉 portal 到 body；选中后抽屉留着，点遮罩关掉", () => {
+		setAppSend(() => true);
+		const { container } = mount("chat", [hostEntry("host:chat")], [hostEntry("host:theme", true)]);
+		openMenu(container);
+		act(() => menuRows()[0]!.click());
+		expect(document.querySelector(".plugin-topbar-menu")).toBeNull();
+		const drawer = document.querySelector(".topbar-drawer");
+		expect(drawer?.parentElement).toBe(document.body);
+		// 与顶栏下拉同一份主题列表（themes 为空时至少有「默认」一项）
+		const items = drawer!.querySelectorAll<HTMLButtonElement>(".topbar-drawer-body .dd-item");
+		expect(items.length).toBeGreaterThan(0);
+		// 选中之后留着，方便连着试几个主题
+		act(() => items[0]!.click());
+		expect(document.querySelector(".topbar-drawer")).toBeTruthy();
+		act(() => document.querySelector<HTMLElement>(".topbar-drawer-backdrop")!.click());
+		expect(document.querySelector(".topbar-drawer")).toBeNull();
+	});
+
+	it("版本：打开抽屉时拉一次更新状态（与顶栏下拉打开时一致），✕ 关掉", () => {
+		const sent: { type: string }[] = [];
+		setAppSend((msg) => {
+			sent.push(msg as { type: string });
+			return true;
+		});
+		const { container } = mount("chat", [hostEntry("host:chat")], [hostEntry("host:update", true)]);
+		openMenu(container);
+		act(() => menuRows()[0]!.click());
+		expect(sent.map((m) => m.type)).toEqual(["check_update", "check_updates_all"]);
+		expect(document.querySelector(".topbar-drawer")).toBeTruthy();
+		act(() => document.querySelector<HTMLButtonElement>(".topbar-drawer-close")!.click());
+		expect(document.querySelector(".topbar-drawer")).toBeNull();
 	});
 });
 

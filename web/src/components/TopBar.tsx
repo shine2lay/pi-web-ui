@@ -6,7 +6,6 @@ import {
 	FiFolder,
 	FiFolderPlus,
 	FiGitBranch,
-	FiGithub,
 	FiGlobe,
 	FiMenu,
 	FiMessageSquare,
@@ -17,6 +16,7 @@ import {
 	FiLayers,
 	FiTerminal,
 	FiVolume2,
+	FiX,
 } from "react-icons/fi";
 import type { ChatState, UpdateAllItem } from "../use-chat";
 import type { CommandDef } from "../types";
@@ -47,6 +47,17 @@ import { focusComposer } from "../composer-bridge";
 import { useFloatingPanel } from "../use-floating-panel";
 import { isDesktopShell } from "../desktop";
 import { desktopReleasesUrl, useDesktopUpdater } from "../desktop-updater";
+
+/** topbar-crowding：「⋯」里点开、在右侧抽屉展开的面板。 */
+type TopbarDrawerId = "sound" | "language" | "theme" | "update";
+/** 菜单里哪些宿主条目是抽屉入口。其余照旧：浏览器操作整块搬进菜单（自带面板），
+ *  设置 / 搜索 / 后台任务直接打开各自已有的面板，不套抽屉。 */
+const TOPBAR_DRAWER_OF: Readonly<Record<string, TopbarDrawerId>> = {
+	"host:sound": "sound",
+	"host:language": "language",
+	"host:theme": "theme",
+	"host:update": "update",
+};
 
 /**
  * 顶栏「⋯」溢出菜单（issue #162）：portal 到 document.body + `position: fixed`。
@@ -285,7 +296,6 @@ export function TopBar({
 		"host:language",
 		"host:theme",
 		"host:update",
-		"host:github",
 		"host:new-chat",
 		"host:files",
 	];
@@ -360,7 +370,7 @@ export function TopBar({
 			default:
 				// 视图条目（chat/terminal/git/插件视图）与插件动作交给 App 的 onUiAction
 				//（视图由它自己 setView，动作转给贡献插件）；菜单型宿主条目不会走到这里
-				//（它们整块搬进菜单，见 OVERFLOW_AS_NODE_IDS）。
+				//（浏览器整块搬进菜单，见 OVERFLOW_AS_NODE_IDS；声音/语言/主题/版本是抽屉入口，见 TOPBAR_DRAWER_OF）。
 				return false;
 		}
 	};
@@ -392,6 +402,8 @@ export function TopBar({
 	const [langOpen, setLangOpen] = useState(false);
 	const [themeOpen, setThemeOpen] = useState(false);
 	const [updateOpen, setUpdateOpen] = useState(false);
+	/** topbar-crowding：「⋯」里点开的面板（右侧抽屉）。null = 没开。 */
+	const [drawer, setDrawer] = useState<TopbarDrawerId | null>(null);
 	// 桌面壳（issue #180）：包内服务不受 npm 全局包影响，更新走主进程的
 	// electron-updater（preload IPC），npm 那套终端命令在这里不画。
 	// hook 必须在组件顶层调用 —— renderUpdateBody 会被调两次（桌面下拉 +
@@ -751,6 +763,146 @@ export function TopBar({
 	/** 手机端断点（见 useIsMobileTopbar）：旁置/实测按断点切（mobileAsideItems/fitInput）。 */
 	const isMobile = useIsMobileTopbar();
 	/**
+	 * topbar-crowding：声音/语言/主题的面板内容只有**一份**，顶栏下拉与「⋯」的右侧抽屉共用
+	 * （抽屉里打开的东西 = 它在顶栏当按钮时打开的东西，不另做一套 UI）。
+	 * `afterPick`：选中之后做什么 —— 下拉里是关下拉；抽屉里留着（方便连着试几个主题）。
+	 */
+	const renderSoundBody = () => (
+		<>
+			<SoundSettingsPanel settings={sound} onChange={onSoundChange} onPreview={onSoundPreview} />
+			<NotifyToggle />
+		</>
+	);
+	const renderLanguageBody = (afterPick: () => void, close: () => void) => (
+		<>
+			<div className="dd-header">{t("language")}</div>
+			{packs.map((l) => (
+				<DropdownItem
+					key={l.code}
+					active={locale === l.code}
+					onClick={() => {
+						setLocale(l.code);
+						afterPick();
+					}}
+				>
+					{l.nativeName}
+				</DropdownItem>
+			))}
+			<DropdownItem
+				onClick={() => {
+					close();
+					setLocaleModalOpen(true);
+				}}
+			>
+				<FiDownload /> {t("localeGetMore")}
+			</DropdownItem>
+		</>
+	);
+	const renderThemeBody = (afterPick: () => void) => {
+		const classics = themes.filter((th) => th.group === "classic");
+		const builtins = themes.filter((th) => th.group !== "classic");
+		const themeLabel = (th: (typeof themes)[number]) => {
+			const base = locale === "zh" ? th.name : (th.nameEn ?? th.name);
+			// 括号后缀必须走 i18n：themeLight/themeDark 已经在 zh/en + 8 个语言包里
+			// 备好（与 themeDefault 的「深色（默认）」/「Dark (default)」同一套约定），
+			// 写死中文全角括号会让其它语言看到中英混排。
+			const scheme = th.scheme === "light" ? t("themeLight") : th.scheme === "dark" ? t("themeDark") : "";
+			if (!scheme) return base;
+			return locale === "zh" ? `${base}（${scheme}）` : `${base} (${scheme})`;
+		};
+		return (
+			<>
+				{classics.length > 0 && (
+					<>
+						<div className="dd-header">{t("themeGroupClassics")}</div>
+						{classics.map((th) => (
+							<DropdownItem
+								key={th.id}
+								active={theme === th.id}
+								onClick={() => {
+									onThemeChange(th.id);
+									afterPick();
+								}}
+							>
+								{themeLabel(th)}
+							</DropdownItem>
+						))}
+					</>
+				)}
+				<div className="dd-header">{classics.length > 0 ? t("themeGroupBuiltin") : t("theme")}</div>
+				<DropdownItem
+					active={theme === null}
+					onClick={() => {
+						onThemeChange(null);
+						afterPick();
+					}}
+				>
+					{t("themeDefault")}
+				</DropdownItem>
+				{builtins.map((th) => (
+					<DropdownItem
+						key={th.id}
+						active={theme === th.id}
+						onClick={() => {
+							onThemeChange(th.id);
+							afterPick();
+						}}
+					>
+						{themeLabel(th)}
+					</DropdownItem>
+				))}
+			</>
+		);
+	};
+	/** 打开抽屉：与对应下拉打开时做的事一致（版本页拉一次更新状态；主题列表还空就补拉）。 */
+	const openDrawer = (id: TopbarDrawerId) => {
+		setDrawer(id);
+		if (id === "update") {
+			appSend({ type: "check_update" });
+			appSend({ type: "check_updates_all" });
+		}
+		if (id === "theme" && themes.length === 0) reloadThemes();
+	};
+	/** 「⋯」里抽屉入口的行内容：图标 + 名称（版本条目带上版本号与更新红点/角标，与顶栏按钮一致）。 */
+	const drawerEntryLabel = (id: TopbarDrawerId): ReactNode => {
+		switch (id) {
+			case "sound":
+				return (
+					<>
+						<FiVolume2 />
+						<span className="chip-sub">{t("sound")}</span>
+					</>
+				);
+			case "language":
+				return (
+					<>
+						<FiGlobe />
+						<span className="chip-sub">
+							{t("language")} · {localeShort(locale)}
+						</span>
+					</>
+				);
+			case "theme":
+				return (
+					<>
+						<FiSun />
+						<span className="chip-sub">{t("theme")}</span>
+					</>
+				);
+			case "update":
+				return (
+					<>
+						<FiDownload />
+						<span className="chip-sub">
+							{t("update")} · v{chat.update?.current ?? "…"}
+						</span>
+						{chat.update && !chat.update.upToDate && <span className="update-dot" />}
+						{updatesCount > 0 && <span className="update-badge">{t("updatesAllBadge", { n: updatesCount })}</span>}
+					</>
+				);
+		}
+	};
+	/**
 	 * 顶栏宿主内置条目的节点工厂（与 FooterBar 的 hostNodes 同模式）：`renderZoneFlow`
 	 * 按 slot 顺序逐条查表，查不到 / 条件不满足（返回 null）即跳过、不占位。
 	 * 可见性（slot 显隐）由调用方的条目流决定，TABS 白名单与视图门禁留在各工厂里。
@@ -918,8 +1070,7 @@ export function TopBar({
 				open={soundOpen}
 				onOpenChange={setSoundOpen}
 			>
-				<SoundSettingsPanel settings={sound} onChange={onSoundChange} onPreview={onSoundPreview} />
-				<NotifyToggle />
+				{renderSoundBody()}
 			</Dropdown>
 		),
 		"host:language": (
@@ -934,27 +1085,10 @@ export function TopBar({
 				open={langOpen}
 				onOpenChange={setLangOpen}
 			>
-				<div className="dd-header">{t("language")}</div>
-				{packs.map((l) => (
-					<DropdownItem
-						key={l.code}
-						active={locale === l.code}
-						onClick={() => {
-							setLocale(l.code);
-							setLangOpen(false);
-						}}
-					>
-						{l.nativeName}
-					</DropdownItem>
-				))}
-				<DropdownItem
-					onClick={() => {
-						setLangOpen(false);
-						setLocaleModalOpen(true);
-					}}
-				>
-					<FiDownload /> {t("localeGetMore")}
-				</DropdownItem>
+				{renderLanguageBody(
+					() => setLangOpen(false),
+					() => setLangOpen(false),
+				)}
 			</Dropdown>
 		),
 		"host:theme": (
@@ -973,62 +1107,7 @@ export function TopBar({
 					if (v && themes.length === 0) reloadThemes();
 				}}
 			>
-				{(() => {
-					const classics = themes.filter((th) => th.group === "classic");
-					const builtins = themes.filter((th) => th.group !== "classic");
-					const themeLabel = (th: (typeof themes)[number]) => {
-						const base = locale === "zh" ? th.name : (th.nameEn ?? th.name);
-						// 括号后缀必须走 i18n：themeLight/themeDark 已经在 zh/en + 8 个语言包里
-						// 备好（与 themeDefault 的「深色（默认）」/「Dark (default)」同一套约定），
-						// 写死中文全角括号会让其它语言看到中英混排。
-						const scheme = th.scheme === "light" ? t("themeLight") : th.scheme === "dark" ? t("themeDark") : "";
-						if (!scheme) return base;
-						return locale === "zh" ? `${base}（${scheme}）` : `${base} (${scheme})`;
-					};
-					return (
-						<>
-							{classics.length > 0 && (
-								<>
-									<div className="dd-header">{t("themeGroupClassics")}</div>
-									{classics.map((th) => (
-										<DropdownItem
-											key={th.id}
-											active={theme === th.id}
-											onClick={() => {
-												onThemeChange(th.id);
-												setThemeOpen(false);
-											}}
-										>
-											{themeLabel(th)}
-										</DropdownItem>
-									))}
-								</>
-							)}
-							<div className="dd-header">{classics.length > 0 ? t("themeGroupBuiltin") : t("theme")}</div>
-							<DropdownItem
-								active={theme === null}
-								onClick={() => {
-									onThemeChange(null);
-									setThemeOpen(false);
-								}}
-							>
-								{t("themeDefault")}
-							</DropdownItem>
-							{builtins.map((th) => (
-								<DropdownItem
-									key={th.id}
-									active={theme === th.id}
-									onClick={() => {
-										onThemeChange(th.id);
-										setThemeOpen(false);
-									}}
-								>
-									{themeLabel(th)}
-								</DropdownItem>
-							))}
-						</>
-					);
-				})()}
+				{renderThemeBody(() => setThemeOpen(false))}
 			</Dropdown>
 		),
 		"host:update": managed ? (
@@ -1069,26 +1148,17 @@ export function TopBar({
 				{renderAllUpdatesBody()}
 			</Dropdown>
 		),
-		"host:github": (
-			<a
-				className="chip github"
-				href="https://github.com/xing-shuyin/pi-web-ui"
-				target="_blank"
-				rel="noreferrer noopener"
-				data-tip={t("githubRepo")}
-			>
-				<FiGithub />
-			</a>
-		),
 	};
 
 	/** 桌面工具 chips 的可见性历史口径（不扩大）：只有 search / tasks / settings 这几个成员
 	 *  的显隐还受 PI_WEB_TABS 白名单管（服务端会拒绝对应的消息，画出来只会给一个点了没反应用的按钮）。 */
 	const TABS_GATED_IDS = new Set(["host:search", "host:tasks", "host:settings", "host:plugins"]);
-	/** 溢出菜单里**整块搬进来**的宿主条目（菜单型：下拉/外链/自带面板）。
-	 *  其余宿主条目（history / files / new-chat / search / tasks / settings）在菜单里是一条扁平
-	 *  菜单项，由 dispatchHostOverflow 分派到本地处理器 —— 扁平的更像菜单，整块的才需要搬组件。 */
-	const OVERFLOW_AS_NODE_IDS = new Set(["host:sound", "host:language", "host:theme", "host:update", "host:browser"]);
+	/** 溢出菜单里**整块搬进来**的宿主条目（自带面板的浏览器操作）。
+	 *  topbar-crowding：声音/语言/主题/版本不再整块塞进菜单（菜单又长、还得在里面二次翻找），
+	 *  改成一条入口 + 右侧抽屉（TOPBAR_DRAWER_OF）；受管实例的版本只是展示 chip，照旧原样画。
+	 *  其余宿主条目（history / files / new-chat / search / tasks / settings）在菜单里原样画 chip，
+	 *  点它就是点顶栏本身（打开各自已有的面板）。 */
+	const OVERFLOW_AS_NODE_IDS = new Set(["host:browser"]);
 	/** TABS 白名单门禁（历史口径，不扩大）：search/tasks/settings 的显隐还受白名单管，
 	 *  其余宿主入口只看 slot（各节点工厂内部自行判断，见 hostNodes）。 */
 	const isTabGatedOff = (id: string) => TABS_GATED_IDS.has(id) && !tabOn(id.slice("host:".length));
@@ -1248,10 +1318,13 @@ export function TopBar({
 	[...(uiPrimary ?? []), ...(uiOverflow ?? [])].forEach((e, i) => {
 		if (!slotRank.has(e.id)) slotRank.set(e.id, i);
 	});
-	const overflowMenuItems = sortOverflowMenuItems(
-		[...pinnedOverflowItems, ...droppedEntries],
-		(id) => slotRank.get(id) ?? 999999,
-	);
+	// topbar-crowding：被实测挤出去的条目排在菜单最上面（点开「⋯」最想找的就是它们），
+	// 缺省收起的条目在后；两段内部仍按顶栏视觉顺序。
+	const overflowRank = (id: string) => slotRank.get(id) ?? 999999;
+	const overflowMenuItems = [
+		...sortOverflowMenuItems(droppedEntries, overflowRank),
+		...sortOverflowMenuItems(pinnedOverflowItems, overflowRank),
+	];
 
 	// 顶栏按钮文字总开关（设置 → 界面布局 → 顶栏，默认开）：关掉后顶栏只剩图标
 	// （数字角标保留；溢出菜单里仍带文字；实现见 styles.css 的 .topbar.no-labels）。
@@ -1289,31 +1362,23 @@ export function TopBar({
 					{/* issue #162：菜单 portal 到 body（fixed），不再挂在会被祖先 overflow 裁剪的容器里。 */}
 					<TopbarOverflowMenu anchorRef={moreBtnRef} open={topbarMenuOpen} onClose={() => setTopbarMenuOpen(false)}>
 						{overflowMenuItems.map((it) => {
-							// 被隐藏的**宿主菜单型**条目（声音/语言/主题/版本/GitHub/浏览器操作）：
-							// 它们不是一次性动作，扁平按钮点了没意义 —— 把整块组件搬进溢出菜单，
-							// 这样「隐藏」只是换了个位置，功能一点不少（与内建条目的实现留在组件内一致）。
+							// topbar-crowding：声音/语言/主题/版本在菜单里只是一条**入口**，点开从右侧滑出抽屉
+							// 展开对应面板（内容与顶栏下拉同一份，见 renderSoundBody 等）。受管实例的版本
+							// 没有下拉（只是展示 chip），走下面的原样渲染。
+							const drawerId = it.source === "host" ? TOPBAR_DRAWER_OF[it.id] : undefined;
+							if (drawerId && !(drawerId === "update" && managed)) {
+								return (
+									<div key={it.id} className="plugin-topbar-menu-keep" onClick={() => setTopbarMenuOpen(false)}>
+										<button type="button" role="menuitem" className="chip" onClick={() => openDrawer(drawerId)}>
+											{drawerEntryLabel(drawerId)}
+										</button>
+									</div>
+								);
+							}
+							// 被隐藏的浏览器操作：自带面板，整块组件搬进溢出菜单（「隐藏」只是换了个位置）。
 							const asNode = it.source === "host" && OVERFLOW_AS_NODE_IDS.has(it.id) ? hostNodes[it.id] : undefined;
 							if (asNode !== undefined) {
 								return <Fragment key={it.id}>{asNode}</Fragment>;
-							}
-							// GitHub 在菜单里同样是 chip 行（图标 + 文字，与其他行同外观）：
-							// 顶栏本体是圆形图标按钮（.chip.github），这里另起一行保证有文字可读。
-							if (it.source === "host" && it.id === "host:github") {
-								return (
-									<a
-										key={it.id}
-										role="menuitem"
-										className="chip github"
-										href="https://github.com/xing-shuyin/pi-web-ui"
-										target="_blank"
-										rel="noreferrer noopener"
-										title={t("githubRepo")}
-										onClick={() => setTopbarMenuOpen(false)}
-									>
-										<FiGithub />
-										<span>GitHub</span>
-									</a>
-								);
 							}
 							// 折叠按钮保持折叠前样式（只统一宽度顶满菜单，不重绘成扁平行）：
 							// 宿主走 hostNodes（与顶栏同一套 chip/tab/panel-toggle），插件走通用渲染。
@@ -1389,6 +1454,44 @@ export function TopBar({
 				<Fragment key={it.id}>{it.node}</Fragment>
 			))}
 
+			{/* topbar-crowding：「⋯」里点开的面板在这里展开 —— 从右侧滑出的抽屉，内容与该条目
+			    在顶栏当按钮时打开的完全一致。portal 到 body（与「⋯」菜单同理，见 issue #162）。 */}
+			{drawer &&
+				createPortal(
+					<>
+						<div className="topbar-drawer-backdrop" onClick={() => setDrawer(null)} />
+						<aside className="topbar-drawer" role="dialog" aria-label={t(drawer)}>
+							<div className="topbar-drawer-head">
+								<span>{t(drawer)}</span>
+								<button
+									type="button"
+									className="topbar-drawer-close"
+									title={t("close")}
+									aria-label={t("close")}
+									onClick={() => setDrawer(null)}
+								>
+									<FiX />
+								</button>
+							</div>
+							<div className="topbar-drawer-body">
+								{drawer === "sound" && renderSoundBody()}
+								{drawer === "language" &&
+									renderLanguageBody(
+										() => {},
+										() => setDrawer(null),
+									)}
+								{drawer === "theme" && renderThemeBody(() => {})}
+								{drawer === "update" && (
+									<>
+										{renderUpdateBody()}
+										{renderAllUpdatesBody()}
+									</>
+								)}
+							</div>
+						</aside>
+					</>,
+					document.body,
+				)}
 			{localeModalOpen && <LocaleModal onClose={() => setLocaleModalOpen(false)} />}
 			{pluginMenuAnchor && (
 				<PluginMenu

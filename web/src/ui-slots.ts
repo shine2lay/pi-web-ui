@@ -99,8 +99,8 @@ const SLOT_IDS: UiSlotId[] = [
  *
  *   topbar.primary   web/src/components/TopBar.tsx：品牌（π 标识＋名称合一） /
  *                    ☰ openHistory / 📁 openFiles / ＋ newChat /
- *                    视图开关三连（chat·terminal·git，缺省 align=end）/ 搜索 / 浏览器操作 /
- *                    后台任务 / 设置 / 声音 / 语言 / 主题 / 版本（更新）/ GitHub。
+ *                    视图开关三连（chat·terminal·git，缺省 align=start，见 topbar-crowding）/ 搜索 / 浏览器操作 /
+ *                    后台任务 / 设置 / 声音 / 语言 / 主题 / 版本（更新）。
  *                    **完全扁平**：所有条目是 `.topbar-flow` 的直接子节点，同级、无任何
  *                    按种类包裹的容器（不再有 .brand / .view-switch / .topbar-desktop 三件套，
  *                    也不再有两端贴边的例外）：宿主条目查节点工厂、插件条目通用渲染，
@@ -217,7 +217,8 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		view: "chat",
 		order: 20,
 		group: "views",
-		align: "end",
+		// topbar-crowding：按角色分位置 —— 左边 = 去哪儿（视图三连 + 🧩），右边 = 搜索 / 新建对话 / ⋯。
+		align: "start",
 	},
 	{
 		id: "host:terminal",
@@ -228,7 +229,7 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		view: "terminal",
 		order: 21,
 		group: "views",
-		align: "end",
+		align: "start",
 	},
 	{
 		id: "host:git",
@@ -239,7 +240,7 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		view: "git",
 		order: 22,
 		group: "views",
-		align: "end",
+		align: "start",
 	},
 	// 插件面板（Chrome 扩展图标那个位置）：一个 🧩 入口列出全部已装插件，每行带「钉到顶栏」
 	// 开关。插件视图 tab 默认不钉（合成条目 hidden，见 withPluginViewItems），钉住的才回到
@@ -253,7 +254,7 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		kind: "action",
 		order: 24,
 		group: "views",
-		align: "end",
+		align: "start",
 	},
 	// 工具组：全局搜索 / 浏览器操作 / 后台任务（后台任务的角标数由运行时给 badge）。
 	{
@@ -287,8 +288,10 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		order: 42,
 		group: "tools",
 		align: "end",
+		// topbar-crowding：缺省收进「⋯」（菜单里仍是带角标的同一个按钮）。
+		hidden: true,
 	},
-	// 系统组：设置 → 声音/通知 → 语言 → 主题 → 版本（更新）→ GitHub。
+	// 系统组：设置 → 声音/通知 → 语言 → 主题 → 版本（更新）。
 	//
 	// 缺省收起口径（hidden: true）：低频 / 有替代入口的条目缺省落进顶栏「⋯」溢出菜单。
 	// 这不是「消失」—— App.tsx 的 uiOverflow 会把 hidden 的 topbar.primary 条目当成常驻溢出项
@@ -307,6 +310,9 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		order: 60,
 		group: "system",
 		align: "end",
+		// topbar-crowding：缺省收进「⋯」。被隐藏的条目一定出现在「⋯」里，所以设置仍是找回
+		// 其它入口与布局的通道（见 REQUIRED_TOPBAR_ITEM_IDS：只钉 slot，不再强制常驻栏上）。
+		hidden: true,
 	},
 	{
 		id: "host:sound",
@@ -356,23 +362,8 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		// 展示型（版本号 + 更新红点）：缺省收进「⋯」，菜单里仍是完整下拉（红点也一起过去）
 		hidden: true,
 	},
-	// GitHub 外链：缺省收起 + 排在**尾部**（order 取最大）。两件事配合起来才对：
-	//   · hidden: true  —— 缺省落在「⋯」里；
-	//   · order: 200    —— 万一用户把它勾回顶栏常驻，它是被实测溢出**最先**收走的那个
-	//                     （web/src/topbar-fit.ts 按视觉顺序从尾部丢），而不是反过来。
-	// 别把它调回 95：那时尾部实际是「新对话(96)」，窄屏会先把核心动作「新对话」收进 ⋯
-	//（顺序即丢弃顺序，这是设计上刻意的单一口径）。理由：纯外链、零上下文价值。
-	{
-		id: "host:github",
-		slot: "topbar.primary",
-		labelKey: "githubRepo",
-		icon: "github",
-		kind: "action",
-		order: 200,
-		group: "system",
-		align: "end",
-		hidden: true,
-	},
+	// topbar-crowding：GitHub 外链（host:github）整条删掉 —— 纯外链、零上下文价值，
+	// 连「⋯」里的一行也不该占。
 
 	// ---- 底栏（基本都是「展示型」条目 kind="badge"；只有工作目录可点） ----
 	{ id: "host:conn", slot: "bottombar", labelKey: "connected", icon: "dot", kind: "badge", order: 5, group: "status" },
@@ -1130,7 +1121,10 @@ export const LP_SECTION_ENTRY_IDS: ReadonlySet<string> = new Set([
 /** 插件视图 tab 的合成条目 id（`<pluginId>:__view`，`__view` 为保留字）。 */
 export const PLUGIN_VIEW_ITEM_ID = "__view";
 
-/** 宿主必须常驻顶栏的入口：不能被插件 arrange 或用户布局偏好隐藏。 */
+/** 宿主必须留在顶栏的入口（栏上或「⋯」里）：插件 arrange 不能把它挪出 topbar.primary。
+ *  topbar-crowding：不再强制常驻**栏上** —— 设置缺省收进「⋯」（被隐藏的条目一定出现在
+ *  「⋯」里，所以它仍是找回其它入口的通道），用户可在布局页把它勾回栏上。
+ *  仍传给 fitTopbar：勾回栏上之后，它不会被实测溢出收走。 */
 export const REQUIRED_TOPBAR_ITEM_IDS: ReadonlySet<string> = new Set(["host:settings"]);
 
 /** 某个插件的视图条目全局 id（`<pluginId>:__view`）—— 顶栏与布局偏好的 key。 */
@@ -1621,12 +1615,10 @@ export function buildUiSlots(
 		mark(id, "label");
 	}
 	// 设置是用户找回其它入口与布局的最后通道，必须留在顶栏。
+	// topbar-crowding：只钉 slot，不再强制 hidden=false —— 隐藏 = 落进「⋯」，仍在顶栏里。
 	for (const id of REQUIRED_TOPBAR_ITEM_IDS) {
 		const entry = byId.get(id);
-		if (entry) {
-			entry.slot = "topbar.primary";
-			entry.hidden = false;
-		}
+		if (entry) entry.slot = "topbar.primary";
 	}
 	const rank: RankMap = new Map();
 	(layout.order ?? []).forEach((id, index) => {

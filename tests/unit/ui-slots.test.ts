@@ -120,8 +120,7 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:update",
 			"host:new-chat",
 			"host:files",
-			// order 200：尾部条目 = 实测溢出的第一顺位被收起者（见 BUILTIN_UI_ITEMS 注释）
-			"host:github",
+			// topbar-crowding：GitHub 外链（host:github）整条删掉
 		]);
 		expect(ids(slots.bottombar)).toEqual([
 			"host:conn",
@@ -140,7 +139,8 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 		expect(settings?.labelKey).toBe("settingsTitle");
 		expect(settings?.source).toBe("host");
 		expect(settings?.kind).toBe("action");
-		expect(settings?.hidden).toBe(false);
+		// topbar-crowding：设置缺省收进「⋯」
+		expect(settings?.hidden).toBe(true);
 		expect(settings?.order).toBe(60);
 		// 没用到的槽位是空数组（渲染层不必判空），且全部槽位都在（21 个 + modal.dialog）
 		expect(Object.keys(slots)).toHaveLength(22);
@@ -160,21 +160,23 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 	});
 
 	/** 缺省收起 = 低频 / 有替代入口的条目落进顶栏「⋯」（App.tsx 把 hidden 的 primary 条目
-	 *  塞进 uiOverflow → 菜单里能点，菜单型条目在菜单里是整块组件，功能不少）。
+	 *  塞进 uiOverflow → 菜单里能点；topbar-crowding：声音/语言/主题/版本在菜单里是一行入口，
+	 *  点开右侧抽屉，功能不少）。
 	 *  这条断言是「顶栏默认长什么样」的唯一入口 —— 想改默认口径就改这里与 BUILTIN_UI_ITEMS。 */
-	it("缺省收进「⋯」的 6 条 + 常驻的 12 条", () => {
+	it("缺省收进「⋯」的 7 条 + 常驻的 10 条", () => {
 		const slots = build([]);
 		const top = slots["topbar.primary"];
+		// topbar-crowding：后台任务与设置也缺省收进「⋯」
 		expect(top.filter((e) => e.hidden).map((e) => e.id)).toEqual([
 			"host:browser",
+			"host:tasks",
+			"host:settings",
 			"host:sound",
 			"host:language",
 			"host:theme",
 			"host:update",
-			"host:github",
 		]);
-		// 常驻 = 「切视图（chat/terminal/git） / 起新活（new-chat） / 看运行态（tasks） /
-		// 进设置（settings）」四类，加品牌、项目、搜索、面板开关
+		// 常驻 = 「切视图（chat/terminal/git + 🧩） / 起新活（new-chat）」，加品牌、项目、搜索、面板开关
 		expect(top.filter((e) => !e.hidden).map((e) => e.id)).toEqual([
 			"host:history",
 			"host:brand",
@@ -184,14 +186,25 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:git",
 			"host:plugins",
 			"host:search",
-			"host:tasks",
-			"host:settings",
 			"host:new-chat",
 			"host:files",
 		]);
 		// 缺省收起是「内置默认」，不写成用户覆盖 —— 否则布局页会把它们标成「已自定义」，
 		// 「恢复」按钮还会把它们恢复成同一个值
 		for (const e of top) expect(e.userOverrides).toEqual([]);
+	});
+
+	// topbar-crowding：按角色分位置，不按数量截断 —— 左边 = 去哪儿（视图三连 + 🧩），
+	// 右边 = 常用动作（搜索 / 新建对话，再往右是「⋯」）。
+	it("按角色分位置：视图三连 + 🧩 靠左，搜索与新建对话靠右", () => {
+		const top = build([])["topbar.primary"];
+		const alignOf = (id: string) => top.find((e) => e.id === id)?.align;
+		for (const id of ["host:chat", "host:terminal", "host:git", "host:plugins"]) expect(alignOf(id)).toBe("start");
+		for (const id of ["host:search", "host:new-chat"]) expect(alignOf(id)).toBe("end");
+	});
+
+	it("GitHub 入口已从内置表里移除（顶栏与「⋯」都不再放它）", () => {
+		expect(BUILTIN_UI_ITEMS.some((i) => i.id === "host:github")).toBe(false);
 	});
 
 	it("槽位 key 顺序 = 实际界面的 DOM/视觉顺序（布局页分区同表）", () => {
@@ -393,14 +406,22 @@ describe("buildUiSlots / 第 3 层：插件 arrange", () => {
 		expect(slots["topbar.primary"].find((e) => e.id === "host:terminal")?.arrangedBy).toEqual([]);
 	});
 
-	it("设置入口不能被插件移走或隐藏", () => {
+	// topbar-crowding：隐藏不再是威胁（隐藏 = 落进「⋯」，仍在顶栏里、点得到），
+	// 要守的只剩「不能被挪出 topbar.primary」。
+	it("设置入口不能被插件挪出顶栏（隐藏 = 落进「⋯」，仍点得到）", () => {
 		const p = plugin("p", {
 			items: [],
 			arrange: [{ id: "host:settings", slot: "topbar.overflow", hide: true }],
 		});
 		const settings = build([p])["topbar.primary"].find((e) => e.id === "host:settings");
-		expect(settings?.hidden).toBe(false);
 		expect(settings?.slot).toBe("topbar.primary");
+		expect(settings?.hidden).toBe(true);
+		// 缺省收起不是锁死：用户在布局页勾回栏上，插件的 hide 也盖不过它
+		const shown = build([p], { layout: { shown: ["host:settings"] } })["topbar.primary"].find(
+			(e) => e.id === "host:settings",
+		);
+		expect(shown?.hidden).toBe(false);
+		expect(shown?.slot).toBe("topbar.primary");
 	});
 
 	it("undefined 的字段 = 不动（hide 缺省不会把条目藏起来）", () => {
@@ -506,16 +527,17 @@ describe("buildUiSlots / 第 4 层：用户偏好（最高）", () => {
 	});
 
 	it("order 列表：列出的按列表顺序排在最前，未列出的保持原顺序", () => {
-		const slots = build([], { layout: { order: ["host:github", "host:chat"] } });
-		expect(ids(slots["topbar.primary"]).slice(0, 2)).toEqual(["host:github", "host:chat"]);
-		// 其余仍按权重排：github/chat 置顶之后是 history(0) → brand(1) → open-project(3) …
+		const slots = build([], { layout: { order: ["host:update", "host:chat"] } });
+		expect(ids(slots["topbar.primary"]).slice(0, 2)).toEqual(["host:update", "host:chat"]);
+		// 其余仍按权重排：update/chat 置顶之后是 history(0) → brand(1) → open-project(3) …
 		expect(ids(slots["topbar.primary"]).slice(2, 5)).toEqual(["host:history", "host:brand", "host:open-project"]);
 		expect(slots["topbar.primary"].find((e) => e.id === "host:chat")?.userOverrides).toEqual(["order"]);
 	});
 
 	it("order 列表里的历史 id（条目已不存在）被忽略", () => {
-		const slots = build([], { layout: { order: ["ghost:gone", "host:github"] } });
-		expect(ids(slots["topbar.primary"])[0]).toBe("host:github");
+		// host:github 也是这种历史 id：topbar-crowding 删掉了它，老偏好里可能还留着
+		const slots = build([], { layout: { order: ["ghost:gone", "host:github", "host:update"] } });
+		expect(ids(slots["topbar.primary"])[0]).toBe("host:update");
 		expect(slots["topbar.primary"]).toHaveLength(BUILTIN_UI_ITEMS.filter((i) => i.slot === "topbar.primary").length);
 	});
 
