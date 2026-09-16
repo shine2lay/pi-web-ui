@@ -23,7 +23,7 @@ const TerminalPanel = lazy(() => import("./components/TerminalPanel").then((m) =
 import { ScmPanel } from "./components/SCMPanel";
 import { PluginView } from "./components/PluginView";
 import { createPluginHostApi, installPluginHostApi, triggerPluginUiAction } from "./plugin-host";
-import { buildUiSlots, type UiSlotEntry } from "./ui-slots";
+import { buildUiSlots, capTopbarPrimary, type UiSlotEntry } from "./ui-slots";
 import { ContextMenu } from "./components/ContextMenu";
 import { ensurePluginViewLoaded } from "./plugin-loader";
 import { registerAttachmentSink } from "./composer-bridge";
@@ -280,10 +280,12 @@ export function App() {
 	);
 	// 顶栏：主栏 = 非 hidden 的 topbar.primary；溢出 = hidden 的 primary + topbar.overflow。
 	// 这样插件把宿主条目 hide 掉之后，它仍在溢出菜单/布局页里找得回来（锁不死用户）。
-	const uiPrimary = useMemo(() => uiSlots["topbar.primary"].filter((e) => !e.hidden), [uiSlots]);
+	/** 顶栏限额（topbar-crowding）：超过上限的条目转入「⋯」菜单，见 capTopbarPrimary。 */
+	const uiTopbarCapped = useMemo(() => capTopbarPrimary(uiSlots["topbar.primary"]), [uiSlots]);
+	const uiPrimary = useMemo(() => uiTopbarCapped.filter((e) => !e.hidden), [uiTopbarCapped]);
 	const uiOverflow = useMemo(
-		() => [...uiSlots["topbar.primary"].filter((e) => e.hidden), ...uiSlots["topbar.overflow"]],
-		[uiSlots],
+		() => [...uiTopbarCapped.filter((e) => e.hidden), ...uiSlots["topbar.overflow"]],
+		[uiTopbarCapped, uiSlots],
 	);
 	/** 点一个插件顶栏条目：缺省 action（或 "view"）由宿主切成插件视图；其余交给插件
 	 *  （按需加载它的客户端 bundle；没人接管就提示一句，不让按钮看起来"点了没用"）。 */

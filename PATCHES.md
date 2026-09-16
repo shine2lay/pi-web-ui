@@ -19,6 +19,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | chat-cwd-pin            | `local` | `server/agent-service.ts`                                        |
 | client-per-load         | `local` | `web/src/use-chat.ts`                                            |
 | server-owned-chats      | `local` | `server/agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/` |
+| topbar-crowding         | `local` | `web/src/ui-slots.ts`, `App.tsx`, `TopBar.tsx`                   |
 | quiet-duplicate-open    | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`            |
 
 ---
@@ -382,3 +383,33 @@ writer（持有者的 runtime），从根上分叉不了。
 
 - `tests/cross-client-session-test.mjs` 原有断言全绿（含「幽灵持有者不打扰」这条
   「不该出现提醒」的负向断言）；正在跑时的硬拦与并行提醒均未受影响
+
+---
+
+## topbar-crowding
+
+**状态**：`local`（上游大概率乐见其成，可提 PR）
+**基线**：v0.86.2
+
+### 问题
+
+装的东西越多顶栏越挤：内置入口十来个，每个界面插件还要再占一个，窄一点的窗口
+直接把右侧的模型选择器挤没。而 GitHub 仓库外链每天都在占一个固定位置 —— 它一年
+也点不了一次。
+
+### 改法
+
+- **移除 `host:github`**（内置表、桌面工具组、溢出菜单外链、chip 工厂一并删干净）。
+- **主栏限额 5 个**：`capTopbarPrimary()` 把超出 `TOPBAR_PRIMARY_MAX` 的可见条目标成
+  `hidden`，`App` 在 `buildUiSlots()` 之后套一层。**不需要新的渲染路径** —— TopBar 本来
+  就把「hidden 的 primary」画进右上角「⋯」菜单，并用 `dispatchHostOverflow()` 在本地
+  分派宿主动作；这里只是换个位置。搜索框（`host:search`）不占额度：它是输入框而不是
+  按钮，且用得最频繁。已被用户/插件隐藏的条目也不占额度（他们的意见优先）。
+- 「⋯」菜单从 `display:none`（原本只在手机上出现）改为桌面也显示。
+
+顺序不变：布局页里排的序、插件 `arrange` 的效果都还在，限额只决定「谁留在栏上」。
+
+### 回归
+
+- `tests/unit/ui-slots.test.ts` 新增 6 项：前 5 个留栏 / 搜索不占额度 / 已隐藏的不占额度 /
+  顺序不变且不改入参 / 少于上限原样返回 / GitHub 入口确实从内置表移除

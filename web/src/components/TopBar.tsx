@@ -3,7 +3,6 @@ import {
 	FiDownload,
 	FiFolder,
 	FiGitBranch,
-	FiGithub,
 	FiGlobe,
 	FiMenu,
 	FiMessageSquare,
@@ -572,17 +571,6 @@ export function TopBar({
 				{renderAllUpdatesBody()}
 			</Dropdown>
 		),
-		"host:github": (
-			<a
-				className="chip github"
-				href="https://github.com/xing-shuyin/pi-web-ui"
-				target="_blank"
-				rel="noreferrer noopener"
-				title={t("githubRepo")}
-			>
-				<FiGithub />
-			</a>
-		),
 	};
 
 	/** 桌面工具组的成员（顺序 = BUILTIN_UI_ITEMS 里的默认次序；自定义顺序由 uiPrimary 决定）。 */
@@ -595,21 +583,13 @@ export function TopBar({
 		"host:language",
 		"host:theme",
 		"host:update",
-		"host:github",
 	];
 	/** 这几个组成员的显隐**还**受 PI_WEB_TABS 白名单管（历史上就是它们，别扩大范围）。 */
 	const TABS_GATED_IDS = new Set(["host:search", "host:tasks", "host:settings"]);
 	/** 溢出菜单里**整块搬进来**的宿主条目（菜单型：下拉/外链/自带面板）。
 	 *  其余宿主条目（history / files / new-chat / search / tasks / settings）在菜单里是一条扁平
 	 *  菜单项，由 dispatchHostOverflow 分派到本地处理器 —— 扁平的更像菜单，整块的才需要搬组件。 */
-	const OVERFLOW_AS_NODE_IDS = new Set([
-		"host:sound",
-		"host:language",
-		"host:theme",
-		"host:update",
-		"host:github",
-		"host:browser",
-	]);
+	const OVERFLOW_AS_NODE_IDS = new Set(["host:sound", "host:language", "host:theme", "host:update", "host:browser"]);
 	const DESKTOP_GROUP_SET = new Set(DESKTOP_GROUP_IDS);
 	/** 当前要画的成员工厂**顺序**：`uiPrimary` 没给 → 内置默认；给了就**按它的顺序**
 	 *  （App 传进来的那份已经滤掉 hidden、并应用了插件 arrange 与用户 ↑↓），这样布局页里
@@ -780,8 +760,8 @@ export function TopBar({
 					</button>
 				)}
 
-				{/* Mobile "⋯" panel — folds sound / language / update / GitHub.
-				    Hidden on desktop (each stays its own chip up there). */}
+				{/* 「⋯」溢出菜单：桌面与手机都显示（topbar-crowding）。手机上折叠整组工具；
+				    桌面上装的是超出主栏限额的条目（见 capTopbarPrimary）。 */}
 				<div className="topbar-more">
 					<Dropdown
 						trigger={
@@ -862,14 +842,6 @@ export function TopBar({
 						<div className="dd-header">{t("update")}</div>
 						{renderUpdateBody()}
 						{renderAllUpdatesBody()}
-						<a
-							className="dd-refresh dd-more-link"
-							href="https://github.com/xing-shuyin/pi-web-ui"
-							target="_blank"
-							rel="noreferrer noopener"
-						>
-							<FiGithub /> {t("githubRepo")}
-						</a>
 					</Dropdown>
 				</div>
 			</div>

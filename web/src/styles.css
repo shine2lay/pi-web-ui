@@ -3895,9 +3895,11 @@ body.panel-resizing .scm-divider::after {
 	gap: 8px;
 	min-width: 0;
 }
-/* Mobile-only "⋯" panel — hidden on desktop where each item has its own chip. */
+/* 「⋯」溢出菜单：桌面也要（topbar-crowding —— 主栏限额外的条目落在这里）。
+   桌面上没有溢出条目时由 TopBar 自己不渲染，所以这里不需要再按屏幕宽度隐藏。 */
 .topbar-more {
-	display: none;
+	display: inline-flex;
+	align-items: center;
 }
 
 .chip {

@@ -233,15 +233,6 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		order: 90,
 		group: "system",
 	},
-	{
-		id: "host:github",
-		slot: "topbar.primary",
-		labelKey: "githubRepo",
-		icon: "github",
-		kind: "action",
-		order: 95,
-		group: "system",
-	},
 
 	// ---- 底栏（基本都是「展示型」条目 kind="badge"；只有工作目录可点） ----
 	{ id: "host:conn", slot: "bottombar", labelKey: "connected", icon: "dot", kind: "badge", order: 5, group: "status" },
@@ -729,6 +720,33 @@ function applyArrange(byId: Map<string, WorkingEntry>, op: UiArrangeOp, pluginId
  * 溢出切分：主栏最多放 max 个，其余按相对顺序进溢出菜单（不重排、不丢、不复制）。
  * 于是 topbar.overflow 天然就是「主栏的尾部」——插件也可以直接声明常驻在溢出槽位的条目。
  */
+/**
+ * 顶栏主栏最多摆几个条目（topbar-crowding 补丁）。
+ *
+ * 装的东西越来越多（插件各自还要一个入口），顶栏很快就挤满并开始挤掉右侧的模型
+ * 选择器。超出的不再硬塞：落进右上角的「⋯」菜单 —— 那里本来就有完整的分派逻辑。
+ * 搜索框不计入这个额度（它是输入框不是按钮，且用起来最频繁）。
+ */
+export const TOPBAR_PRIMARY_MAX = 5;
+
+/** 永远留在主栏的条目（不占额度）。 */
+export const TOPBAR_ALWAYS_INLINE: ReadonlySet<string> = new Set(["host:search"]);
+
+/**
+ * 主栏限额：前 TOPBAR_PRIMARY_MAX 个可见条目留在栏上，其余标记为 hidden ——
+ * TopBar 本来就把「hidden 的 primary」画进「⋯」菜单并在本地分派它们的动作，
+ * 所以这里不需要新的渲染路径，只是换个位置。顺序不动（用户在布局页排的序仍然有效）。
+ */
+export function capTopbarPrimary(entries: UiSlotEntry[], max = TOPBAR_PRIMARY_MAX): UiSlotEntry[] {
+	let used = 0;
+	return entries.map((entry) => {
+		if (entry.hidden) return entry;
+		if (TOPBAR_ALWAYS_INLINE.has(entry.id)) return entry;
+		used++;
+		return used <= max ? entry : { ...entry, hidden: true };
+	});
+}
+
 export function splitOverflow(entries: UiSlotEntry[], max: number): { inline: UiSlotEntry[]; overflow: UiSlotEntry[] } {
 	const limit = Number.isFinite(max) ? Math.max(0, Math.floor(max)) : 0;
 	if (limit >= entries.length) return { inline: [...entries], overflow: [] };

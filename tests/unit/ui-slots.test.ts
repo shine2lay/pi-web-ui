@@ -10,7 +10,15 @@
  * 用一条断言把它挡在提交前（zh 表就是 i18n.tsx 里那份，见 locales.test.ts 同款导入）。
  */
 import { describe, expect, it } from "vitest";
-import { BUILTIN_UI_ITEMS, buildUiSlots, restoreAllUi, restoreUiItem, splitOverflow } from "../../web/src/ui-slots.js";
+import {
+	BUILTIN_UI_ITEMS,
+	buildUiSlots,
+	restoreAllUi,
+	restoreUiItem,
+	splitOverflow,
+	capTopbarPrimary,
+} from "../../web/src/ui-slots.js";
+import type { UiSlotEntry } from "../../web/src/ui-slots";
 import type { UiPluginInfo, UiSlotId } from "../../server/protocol.js";
 import { zh } from "../../web/src/i18n.js";
 
@@ -98,7 +106,6 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:language",
 			"host:theme",
 			"host:update",
-			"host:github",
 		]);
 		const settings = slots["topbar.primary"].find((e) => e.id === "host:settings");
 		expect(settings?.label).toBe("#settingsTitle");
@@ -319,16 +326,16 @@ describe("buildUiSlots / 第 4 层：用户偏好（最高）", () => {
 	});
 
 	it("order 列表：列出的按列表顺序排在最前，未列出的保持原顺序", () => {
-		const slots = build([], { layout: { order: ["host:github", "host:chat"] } });
-		expect(ids(slots["topbar.primary"]).slice(0, 2)).toEqual(["host:github", "host:chat"]);
+		const slots = build([], { layout: { order: ["host:update", "host:chat"] } });
+		expect(ids(slots["topbar.primary"]).slice(0, 2)).toEqual(["host:update", "host:chat"]);
 		// 其余仍按权重排：history(5) 之后是 files(6) → new-chat(10) …
 		expect(ids(slots["topbar.primary"]).slice(2, 5)).toEqual(["host:history", "host:files", "host:new-chat"]);
 		expect(slots["topbar.primary"].find((e) => e.id === "host:chat")?.userOverrides).toEqual(["order"]);
 	});
 
 	it("order 列表里的历史 id（条目已不存在）被忽略", () => {
-		const slots = build([], { layout: { order: ["ghost:gone", "host:github"] } });
-		expect(ids(slots["topbar.primary"])[0]).toBe("host:github");
+		const slots = build([], { layout: { order: ["ghost:gone", "host:update"] } });
+		expect(ids(slots["topbar.primary"])[0]).toBe("host:update");
 		expect(slots["topbar.primary"]).toHaveLength(BUILTIN_UI_ITEMS.filter((i) => i.slot === "topbar.primary").length);
 	});
 
@@ -485,5 +492,54 @@ describe("插件悬浮提示（hint / hintEn / arrange 覆盖）", () => {
 		const entry = build([a, b])["topbar.primary"].find((e) => e.id === "a:x");
 		expect(entry?.hint).toBe("我改的提示");
 		expect(entry?.arrangedBy).toEqual(["b"]);
+	});
+});
+
+/**
+ * 顶栏限额（topbar-crowding）：装的东西越多，顶栏越挤，最后把右侧的模型选择器挤没。
+ * 规则：可见条目只留前 TOPBAR_PRIMARY_MAX 个在栏上，其余标记 hidden —— TopBar 本来
+ * 就把「hidden 的 primary」画进「⋯」菜单并在本地分派它们的动作，所以这不是新渲染
+ * 路径，只是换个位置。搜索框不占额度（它是输入框，且用得最频繁）。
+ */
+describe("capTopbarPrimary", () => {
+	const entry = (id: string, hidden = false): UiSlotEntry =>
+		({ id, slot: "topbar.primary", label: id, kind: "action", source: "host", order: 10, hidden }) as UiSlotEntry;
+
+	it("前 5 个可见条目留在主栏，其余转入溢出", () => {
+		const input = ["a", "b", "c", "d", "e", "f", "g"].map((id) => entry(`host:${id}`));
+		const out = capTopbarPrimary(input);
+		expect(out.filter((e) => !e.hidden).map((e) => e.id)).toEqual(["host:a", "host:b", "host:c", "host:d", "host:e"]);
+		expect(out.filter((e) => e.hidden).map((e) => e.id)).toEqual(["host:f", "host:g"]);
+	});
+
+	it("搜索框不占额度（始终留在主栏）", () => {
+		const input = [entry("host:search"), ...["a", "b", "c", "d", "e"].map((id) => entry(`host:${id}`))];
+		const out = capTopbarPrimary(input);
+		expect(out.find((e) => e.id === "host:search")?.hidden).toBeFalsy();
+		// 搜索之外的 5 个仍然全部留下 —— 它没有挤掉任何一个
+		expect(out.filter((e) => !e.hidden)).toHaveLength(6);
+	});
+
+	it("已经被隐藏的条目不占额度（用户/插件的隐藏优先）", () => {
+		const input = [entry("host:a", true), ...["b", "c", "d", "e", "f"].map((id) => entry(`host:${id}`))];
+		const out = capTopbarPrimary(input);
+		expect(out.filter((e) => !e.hidden).map((e) => e.id)).toEqual(["host:b", "host:c", "host:d", "host:e", "host:f"]);
+	});
+
+	it("顺序不变（布局页排的序仍然有效）且不修改入参", () => {
+		const input = ["a", "b", "c", "d", "e", "f"].map((id) => entry(`host:${id}`));
+		const out = capTopbarPrimary(input);
+		expect(out.map((e) => e.id)).toEqual(input.map((e) => e.id));
+		expect(input.every((e) => !e.hidden)).toBe(true);
+	});
+
+	it("少于上限时原样返回", () => {
+		const input = ["a", "b"].map((id) => entry(`host:${id}`));
+		expect(capTopbarPrimary(input).every((e) => !e.hidden)).toBe(true);
+	});
+
+	it("GitHub 入口已从内置表里移除（顶栏不再放它）", () => {
+		const slots = build([], {});
+		expect(ids(slots["topbar.primary"])).not.toContain("host:github");
 	});
 });
