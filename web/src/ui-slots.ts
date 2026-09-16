@@ -729,8 +729,22 @@ function applyArrange(byId: Map<string, WorkingEntry>, op: UiArrangeOp, pluginId
  */
 export const TOPBAR_PRIMARY_MAX = 5;
 
-/** 永远留在主栏的条目（不占额度）。 */
-export const TOPBAR_ALWAYS_INLINE: ReadonlySet<string> = new Set(["host:search"]);
+/**
+ * 永远留在主栏的条目（不占额度）。
+ *
+ * **导航不和工具抢额度**：视图切换（对话/终端/Git）与抽屉开关是「去哪儿」，
+ * 工具 chip 是「做什么」。第一版把它们一起计数，结果 Git 排第 6 被挤进了「⋯」——
+ * 一个导航入口凭空消失，比顶栏挤一点糟糕得多。搜索同理（输入框，用得最频繁）。
+ */
+export const TOPBAR_ALWAYS_INLINE: ReadonlySet<string> = new Set([
+	"host:history",
+	"host:files",
+	"host:new-chat",
+	"host:chat",
+	"host:terminal",
+	"host:git",
+	"host:search",
+]);
 
 /**
  * 主栏限额：前 TOPBAR_PRIMARY_MAX 个可见条目留在栏上，其余标记为 hidden ——

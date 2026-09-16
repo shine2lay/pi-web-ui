@@ -512,6 +512,19 @@ describe("capTopbarPrimary", () => {
 		expect(out.filter((e) => e.hidden).map((e) => e.id)).toEqual(["host:f", "host:g"]);
 	});
 
+	it("导航入口不占额度：视图切换与抽屉开关永远留在主栏", () => {
+		// 回归：第一版把导航一起计数，Git 排第 6 被挤进「⋯」——导航入口凭空消失。
+		const nav = ["host:history", "host:files", "host:new-chat", "host:chat", "host:terminal", "host:git"].map((id) =>
+			entry(id),
+		);
+		const out = capTopbarPrimary([...nav, ...["a", "b", "c", "d", "e", "f"].map((id) => entry(`host:${id}`))]);
+		for (const id of nav.map((e) => e.id)) {
+			expect(out.find((e) => e.id === id)?.hidden, id).toBeFalsy();
+		}
+		// 工具仍然按额度截断
+		expect(out.filter((e) => e.hidden).map((e) => e.id)).toEqual(["host:f"]);
+	});
+
 	it("搜索框不占额度（始终留在主栏）", () => {
 		const input = [entry("host:search"), ...["a", "b", "c", "d", "e"].map((id) => entry(`host:${id}`))];
 		const out = capTopbarPrimary(input);
