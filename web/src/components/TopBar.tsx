@@ -575,7 +575,6 @@ export function TopBar({
 
 	/** 桌面工具组的成员（顺序 = BUILTIN_UI_ITEMS 里的默认次序；自定义顺序由 uiPrimary 决定）。 */
 	const DESKTOP_GROUP_IDS = [
-		"host:search",
 		"host:browser",
 		"host:tasks",
 		"host:settings",
@@ -708,6 +707,9 @@ export function TopBar({
 				    input row; sound/lang/update/github fold into "⋯" below). */}
 
 				<div className="topbar-right">
+					{/* 搜索放右边（topbar-crowding）：与「新建对话」「⋯」同属最常用动作，
+					    左边留给视图切换。 */}
+					{hostOn("search") && <Fragment>{hostNodes["host:search"]}</Fragment>}
 					{/* 新建对话（用户可在布局页隐藏它——隐藏后从顶部「⋯」溢出菜单里仍能点到，
 				    见 dispatchHostOverflow）。 */}
 					{hostOn("new-chat") && (

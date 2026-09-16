@@ -721,43 +721,43 @@ function applyArrange(byId: Map<string, WorkingEntry>, op: UiArrangeOp, pluginId
  * 于是 topbar.overflow 天然就是「主栏的尾部」——插件也可以直接声明常驻在溢出槽位的条目。
  */
 /**
- * 顶栏主栏最多摆几个条目（topbar-crowding 补丁）。
+ * 顶栏的取舍（topbar-crowding 补丁）：**按角色分配位置，而不是按数量截断**。
  *
- * 装的东西越来越多（插件各自还要一个入口），顶栏很快就挤满并开始挤掉右侧的模型
- * 选择器。超出的不再硬塞：落进右上角的「⋯」菜单 —— 那里本来就有完整的分派逻辑。
- * 搜索框不计入这个额度（它是输入框不是按钮，且用起来最频繁）。
+ * 装的东西越来越多（每个界面插件还要一个入口），顶栏很快挤满并开始挤掉模型选择器。
+ * 第一版按「前 N 个」截断，结果 Git 这种导航入口凭空消失 —— 数量不是用户的心智模型，
+ * **用途**才是：
+ *
+ *   · 左边 = 去哪儿（视图切换：对话/终端/Git + 插件页），随插件增加自然变长；
+ *   · 右边 = 最常用的两个动作（搜索、新建对话）与「⋯」；
+ *   · 其余（浏览器/后台任务/设置/声音/语言/主题/版本）一律进「⋯」—— 它们是偶尔
+ *     才碰一次的配置项，不值得常驻。
+ *
+ * 用户仍可在设置面板「界面布局」里把任何一条拉回来或藏起去：这里只是默认位置。
  */
-export const TOPBAR_PRIMARY_MAX = 5;
 
-/**
- * 永远留在主栏的条目（不占额度）。
- *
- * **导航不和工具抢额度**：视图切换（对话/终端/Git）与抽屉开关是「去哪儿」，
- * 工具 chip 是「做什么」。第一版把它们一起计数，结果 Git 排第 6 被挤进了「⋯」——
- * 一个导航入口凭空消失，比顶栏挤一点糟糕得多。搜索同理（输入框，用得最频繁）。
- */
-export const TOPBAR_ALWAYS_INLINE: ReadonlySet<string> = new Set([
+/** 左侧导航（不进溢出）：视图切换与抽屉开关。 */
+export const TOPBAR_NAV_IDS: ReadonlySet<string> = new Set([
 	"host:history",
 	"host:files",
-	"host:new-chat",
 	"host:chat",
 	"host:terminal",
 	"host:git",
-	"host:search",
 ]);
 
+/** 右侧常用动作（不进溢出）。 */
+export const TOPBAR_RIGHT_IDS: ReadonlySet<string> = new Set(["host:search", "host:new-chat"]);
+
 /**
- * 主栏限额：前 TOPBAR_PRIMARY_MAX 个可见条目留在栏上，其余标记为 hidden ——
- * TopBar 本来就把「hidden 的 primary」画进「⋯」菜单并在本地分派它们的动作，
- * 所以这里不需要新的渲染路径，只是换个位置。顺序不动（用户在布局页排的序仍然有效）。
+ * 默认位置：导航与右侧动作留在栏上，其余宿主条目标记为 hidden → 落进「⋯」。
+ * 插件条目**留在栏上**（它们就是"去哪儿"的一部分：一个插件页 = 一个 tab）。
+ * 顺序一律不动，用户在布局页排的序仍然有效。
  */
-export function capTopbarPrimary(entries: UiSlotEntry[], max = TOPBAR_PRIMARY_MAX): UiSlotEntry[] {
-	let used = 0;
+export function capTopbarPrimary(entries: UiSlotEntry[]): UiSlotEntry[] {
 	return entries.map((entry) => {
 		if (entry.hidden) return entry;
-		if (TOPBAR_ALWAYS_INLINE.has(entry.id)) return entry;
-		used++;
-		return used <= max ? entry : { ...entry, hidden: true };
+		if (entry.source !== "host") return entry;
+		if (TOPBAR_NAV_IDS.has(entry.id) || TOPBAR_RIGHT_IDS.has(entry.id)) return entry;
+		return { ...entry, hidden: true };
 	});
 }
 

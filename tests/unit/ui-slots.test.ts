@@ -501,54 +501,60 @@ describe("插件悬浮提示（hint / hintEn / arrange 覆盖）", () => {
  * 就把「hidden 的 primary」画进「⋯」菜单并在本地分派它们的动作，所以这不是新渲染
  * 路径，只是换个位置。搜索框不占额度（它是输入框，且用得最频繁）。
  */
-describe("capTopbarPrimary", () => {
-	const entry = (id: string, hidden = false): UiSlotEntry =>
-		({ id, slot: "topbar.primary", label: id, kind: "action", source: "host", order: 10, hidden }) as UiSlotEntry;
+describe("capTopbarPrimary（按角色分位置）", () => {
+	const entry = (id: string, hidden = false, source: "host" | string = "host"): UiSlotEntry =>
+		({ id, slot: "topbar.primary", label: id, kind: "action", source, order: 10, hidden }) as UiSlotEntry;
 
-	it("前 5 个可见条目留在主栏，其余转入溢出", () => {
-		const input = ["a", "b", "c", "d", "e", "f", "g"].map((id) => entry(`host:${id}`));
-		const out = capTopbarPrimary(input);
-		expect(out.filter((e) => !e.hidden).map((e) => e.id)).toEqual(["host:a", "host:b", "host:c", "host:d", "host:e"]);
-		expect(out.filter((e) => e.hidden).map((e) => e.id)).toEqual(["host:f", "host:g"]);
+	const inlineIds = (entries: UiSlotEntry[]) =>
+		capTopbarPrimary(entries)
+			.filter((e) => !e.hidden)
+			.map((e) => e.id);
+
+	it("导航留在栏上：对话/终端/Git/历史/文件", () => {
+		// 回归：按数量截断时 Git 排第 6 被挤进「⋯」，导航入口凭空消失。
+		const nav = ["host:history", "host:files", "host:chat", "host:terminal", "host:git"].map((id) => entry(id));
+		expect(inlineIds(nav)).toEqual(nav.map((e) => e.id));
 	});
 
-	it("导航入口不占额度：视图切换与抽屉开关永远留在主栏", () => {
-		// 回归：第一版把导航一起计数，Git 排第 6 被挤进「⋯」——导航入口凭空消失。
-		const nav = ["host:history", "host:files", "host:new-chat", "host:chat", "host:terminal", "host:git"].map((id) =>
-			entry(id),
-		);
-		const out = capTopbarPrimary([...nav, ...["a", "b", "c", "d", "e", "f"].map((id) => entry(`host:${id}`))]);
-		for (const id of nav.map((e) => e.id)) {
-			expect(out.find((e) => e.id === id)?.hidden, id).toBeFalsy();
-		}
-		// 工具仍然按额度截断
-		expect(out.filter((e) => e.hidden).map((e) => e.id)).toEqual(["host:f"]);
+	it("右侧常用动作留在栏上：搜索与新建对话", () => {
+		expect(inlineIds([entry("host:search"), entry("host:new-chat")])).toEqual(["host:search", "host:new-chat"]);
 	});
 
-	it("搜索框不占额度（始终留在主栏）", () => {
-		const input = [entry("host:search"), ...["a", "b", "c", "d", "e"].map((id) => entry(`host:${id}`))];
-		const out = capTopbarPrimary(input);
-		expect(out.find((e) => e.id === "host:search")?.hidden).toBeFalsy();
-		// 搜索之外的 5 个仍然全部留下 —— 它没有挤掉任何一个
-		expect(out.filter((e) => !e.hidden)).toHaveLength(6);
+	it("配置类入口默认进「⋯」：设置/声音/语言/主题/版本/浏览器/后台任务", () => {
+		const tools = [
+			"host:settings",
+			"host:sound",
+			"host:language",
+			"host:theme",
+			"host:update",
+			"host:browser",
+			"host:tasks",
+		].map((id) => entry(id));
+		expect(inlineIds(tools)).toEqual([]);
 	});
 
-	it("已经被隐藏的条目不占额度（用户/插件的隐藏优先）", () => {
-		const input = [entry("host:a", true), ...["b", "c", "d", "e", "f"].map((id) => entry(`host:${id}`))];
-		const out = capTopbarPrimary(input);
-		expect(out.filter((e) => !e.hidden).map((e) => e.id)).toEqual(["host:b", "host:c", "host:d", "host:e", "host:f"]);
+	it("插件条目留在栏上（一个插件页 = 一个 tab，属于「去哪儿」）", () => {
+		const plugins = [entry("scheduler:jobs", false, "plugin:scheduler"), entry("temper:panel", false, "plugin:temper")];
+		expect(inlineIds(plugins)).toEqual(["scheduler:jobs", "temper:panel"]);
 	});
 
-	it("顺序不变（布局页排的序仍然有效）且不修改入参", () => {
-		const input = ["a", "b", "c", "d", "e", "f"].map((id) => entry(`host:${id}`));
+	it("数量不再是判据：再多导航/插件也不会被截断", () => {
+		const many = [
+			...["host:chat", "host:terminal", "host:git"].map((id) => entry(id)),
+			...Array.from({ length: 8 }, (_, i) => entry(`p${i}:view`, false, `plugin:p${i}`)),
+		];
+		expect(inlineIds(many)).toHaveLength(11);
+	});
+
+	it("已被用户/插件隐藏的条目保持隐藏（他们的意见优先）", () => {
+		expect(inlineIds([entry("host:chat", true), entry("host:git")])).toEqual(["host:git"]);
+	});
+
+	it("顺序不变且不修改入参", () => {
+		const input = [entry("host:chat"), entry("host:settings"), entry("host:git")];
 		const out = capTopbarPrimary(input);
 		expect(out.map((e) => e.id)).toEqual(input.map((e) => e.id));
 		expect(input.every((e) => !e.hidden)).toBe(true);
-	});
-
-	it("少于上限时原样返回", () => {
-		const input = ["a", "b"].map((id) => entry(`host:${id}`));
-		expect(capTopbarPrimary(input).every((e) => !e.hidden)).toBe(true);
 	});
 
 	it("GitHub 入口已从内置表里移除（顶栏不再放它）", () => {
