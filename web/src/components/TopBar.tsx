@@ -621,6 +621,16 @@ export function TopBar({
 			</div>
 
 			<div className="topbar-actions">
+				{/* 工具组放在**左边**（紧挨着连接状态）：顶栏右侧留给模型选择器与「⋯」，
+				    常用入口离视图切换更近，视线不用来回横跳。 */}
+				<div className="topbar-desktop">
+					{/* 桌面工具组（issue #146）：成员、顺序、可见性全部来自 slot 列表（见 hostNodes /
+					    DESKTOP_GROUP_IDS）—— 布局页勾掉「声音」它真的消失并落到「⋯」溢出菜单里，
+					    ↑↓ 调序也真的换位置。 */}
+					{desktopGroupIds.map((id) => (
+						<Fragment key={id}>{hostNodes[id] ?? null}</Fragment>
+					))}
+				</div>
 				<div className="view-switch" role="tablist" aria-label={t("viewSwitch")}>
 					<button
 						type="button"
@@ -737,14 +747,6 @@ export function TopBar({
 
 				{/* Desktop toolbar — hidden on mobile (model/thinking move into the
 				    input row; sound/lang/update/github fold into "⋯" below). */}
-				<div className="topbar-desktop">
-					{/* 桌面工具组（issue #146）：成员、顺序、可见性全部来自 slot 列表（见 hostNodes /
-					    DESKTOP_GROUP_IDS）—— 布局页勾掉「声音」它真的消失并落到「⋯」溢出菜单里，
-					    ↑↓ 调序也真的换位置。 */}
-					{desktopGroupIds.map((id) => (
-						<Fragment key={id}>{hostNodes[id] ?? null}</Fragment>
-					))}
-				</div>
 
 				{/* 新建对话（用户可在布局页隐藏它——隐藏后从顶部「⋯」溢出菜单里仍能点到，
 				    见 dispatchHostOverflow）。 */}
