@@ -75,7 +75,6 @@ import { useT, useI18n } from "../i18n";
 import {
 	buildUiSlots,
 	HIDDEN_FROM_LAYOUT_ITEM_IDS,
-	REQUIRED_TOPBAR_ITEM_IDS,
 	restoreAllUi,
 	restoreUiItem,
 	withPluginViewItems,
@@ -2892,16 +2891,12 @@ export function SettingsModal({
 									if (q && total === 0) return null;
 									const renderRow = (it: UiSlotEntry, rowItems: UiSlotEntry[]) => {
 										const idx = rowItems.findIndex((e) => e.id === it.id);
-										const required = REQUIRED_TOPBAR_ITEM_IDS.has(it.id);
+										// topbar-crowding：设置也能勾掉（勾掉 = 收进「⋯」，仍在顶栏里，见 ui-slots.ts 的
+										// REQUIRED_TOPBAR_ITEM_IDS），否则缺省收起的设置永远勾不回栏上。
 										return (
 											<div key={it.id} className="set-row">
-												<label className="set-toggle" title={required ? t("uiLayoutRequired") : it.id}>
-													<input
-														type="checkbox"
-														checked={!it.hidden}
-														disabled={required}
-														onChange={() => toggleUiHidden(it)}
-													/>
+												<label className="set-toggle" title={it.id}>
+													<input type="checkbox" checked={!it.hidden} onChange={() => toggleUiHidden(it)} />
 													<span>
 														{it.icon ? `${it.icon} ` : ""}
 														{it.label}
