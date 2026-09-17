@@ -4022,27 +4022,12 @@ export class DshAgentService {
 					bilingual("New connections rejected; retry after the server resumes", "新连接被拒绝，请等服务器恢复后重试"),
 				);
 			}
-			let cwd = this.cwd;
-			const saved = this.stateStore.get(clientId);
-			if (saved.lastCwd && saved.lastCwd !== this.cwd) {
-				try {
-					if (statSync(saved.lastCwd).isDirectory()) cwd = saved.lastCwd;
-				} catch {
-					/* gone — fall back to default */
-				}
-			}
+			// patch: no-cwd-restore —— 与 pi 引擎同语义：不自动恢复 lastCwd。
+			const cwd = this.cwd;
 			// 同步创建（runtime.start() 异步后台进行）——无并发竞态，无需 pending。
 			cs = DshClientSession.create(clientId, cwd, this.stateStore, this.dataDir, this.agentDir);
 			this.clients.set(clientId, cs);
 			this.stateStore.remember(clientId, cwd);
-			if (cwd !== this.cwd) {
-				send({
-					type: "notice",
-					level: "info",
-					text: `已恢复上次的工作目录：${cwd}`,
-					textEn: `Restored the last working directory: ${cwd}`,
-				});
-			}
 		}
 		cs.attachSink(send);
 		cs.onQuit = this.onQuit;

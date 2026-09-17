@@ -804,32 +804,10 @@ export function getClientId(): string {
 	return cachedClientId;
 }
 
-/**
- * 上次成功工作目录（localStorage，跨浏览器重启记忆）——解决「每次打开浏览器都
- * 回默认目录」：clientId 在 sessionStorage（每标签页独立，issue #10），浏览器
- * 整个关闭后 sessionStorage 清空 → 新 clientId 在服务端 client-state 里查不到
- *  lastCwd → 落回默认目录。这里用 localStorage 单独记住最近一次成功的工作目录
- * （只存一个路径字符串，不涉及客户端身份），首帧快照时若服务端落在其他目录则
- * 补发 set_cwd 切回。
- */
-const LAST_CWD_KEY = "pi-web-last-cwd";
-
-/** Read the last-used working directory remembered across browser restarts. */
-export function readLastCwd(): string | null {
-	try {
-		return localStorage.getItem(LAST_CWD_KEY);
-	} catch {
-		return null;
-	}
-}
-
-function writeLastCwd(cwd: string): void {
-	try {
-		localStorage.setItem(LAST_CWD_KEY, cwd);
-	} catch {
-		/* storage 不可用（隐私模式等）：忽略，仅本次会话生效 */
-	}
-}
+// no-cwd-restore：上游在这里用 localStorage（`pi-web-last-cwd`）记住上次工作目录，首帧快照
+// 时补发 set_cwd 切回去。整套删掉了：工作目录只由用户显式切换，项目列表由服务端
+// stateStore 记，浏览器这边不再有任何「记住目录」的状态（只写不读的 key 只会让下一个
+// 读代码的人以为恢复还在）。
 
 /** Resolve the WebSocket URL: same host when served by the backend, or the Vite proxy in dev. */
 function wsUrl(): string {
@@ -911,11 +889,6 @@ export function useChat() {
 	 *  via snapshot when switched to. */
 	const lastDeltaSeqRef = useRef<Map<string, number>>(new Map());
 	const resyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-	/** 跨重启工作目录记忆：restoreRef 只允许首帧快照发起一次恢复；lastCwdRef
-	 *  避免对同一目录重复写 localStorage。 */
-	const restoreRef = useRef(false);
-	const lastCwdRef = useRef<string | null>(null);
 
 	/** 已作答/取消的问卷 id —— 在途旧快照不得把已答过的问卷重新弹出来。
 	 *  id 全局单调递增（服务端 questionSeq / 时间戳），保留少量历史即可。 */
@@ -1487,29 +1460,6 @@ export function useChat() {
 			wsRef.current = null;
 		};
 	}, [connect]);
-
-	// -- 跨浏览器重启：恢复上次工作目录（localStorage 记忆） ---------------------
-	// 服务端按 clientId 记 lastCwd，而 clientId 在 sessionStorage（关浏览器即失），
-	// 重启后新 clientId 查不到记录 → 落回默认目录。这里在首帧快照上：若服务端
-	// 当前目录 ≠ 记忆目录，补发 set_cwd 切回；此后每次 cwd 变化都写回记忆。
-	useEffect(() => {
-		const cwd = chat.state?.cwd;
-		if (!cwd) return;
-		if (!restoreRef.current) {
-			restoreRef.current = true;
-			const remembered = readLastCwd();
-			if (remembered && remembered !== cwd) {
-				// 记忆目录存在则服务端切换后会推新快照；不存在则服务端报错通知，
-				// 保持默认目录——两种结果都不回写记忆，等用户下次操作再更新。
-				send({ type: "set_cwd", path: remembered });
-				return;
-			}
-		}
-		if (lastCwdRef.current !== cwd) {
-			lastCwdRef.current = cwd;
-			writeLastCwd(cwd);
-		}
-	}, [chat.state?.cwd, send]);
 
 	// -- 全局镜像：连接态 + 当前工作目录 -----------------------------------------
 	// 这三个值整棵树都要（左栏/输入框/右栏/全局搜索/底栏…）且变化频率低，放全局 store
