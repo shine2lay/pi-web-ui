@@ -23,7 +23,6 @@ import { ProjectPicker } from "./ProjectPicker.js";
 import { LP_SECTION_ENTRY_IDS, type UiSlotEntry } from "../ui-slots";
 import { contextMenuItems, openContextMenu, type ContextMenuRequest } from "../context-menu-state";
 import { composeToComposer, focusComposer } from "../composer-bridge";
-import { clearLastCwdIfMatches } from "../use-chat";
 
 /** Props are deliberately NARROW (no whole-ChatState object): every field is
  *  stable while tokens stream in, so the shallow-compared memo() below skips
@@ -735,7 +734,6 @@ export const LeftPanel = memo(function LeftPanel({
 										<span className="project-time">{formatModified(p.lastUsed)}</span>
 									</button>
 									{delButton(`proj:${p.path}`, t("deleteProject"), t("deleteProjectConfirm"), () => {
-										clearLastCwdIfMatches(p.path);
 										panelSend({ type: "remove_project", path: p.path });
 									})}
 								</div>
