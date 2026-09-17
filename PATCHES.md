@@ -9,20 +9,21 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
-| 补丁                    | 状态    | 主要文件                                                         |
-| ----------------------- | ------- | ---------------------------------------------------------------- |
-| terminal-bash-script    | `local` | `server/terminals.ts`                                            |
-| terminal-view-lifecycle | `local` | `server/terminals.ts`, `server/index.ts`                         |
-| global-history          | `local` | `server/agent-service.ts`, `server/protocol.ts`, `web/src/`      |
-| status-placement        | `local` | `web/src/status-placement.ts`, `FooterBar.tsx`, `RightPanel.tsx` |
-| recent-chats            | `local` | `server/agent-service.ts`, `client-state.ts`, `web/src/`          |
-| chat-cwd-pin            | `local` | `server/agent-service.ts`                                        |
-| client-per-load         | `local` | `web/src/use-chat.ts`                                            |
-| server-owned-chats      | `local` | `server/agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/` |
-| topbar-crowding         | `local` | `web/src/ui-slots.ts`, `App.tsx`, `TopBar.tsx`                   |
-| quiet-duplicate-open    | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`            |
-| no-parallel-noise       | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`            |
-| no-cwd-restore          | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `use-chat.ts` |
+| 补丁                    | 状态    | 主要文件                                                                            |
+| ----------------------- | ------- | ----------------------------------------------------------------------------------- |
+| terminal-bash-script    | `local` | `server/terminals.ts`                                                               |
+| terminal-view-lifecycle | `local` | `server/terminals.ts`, `server/index.ts`                                            |
+| global-history          | `local` | `server/agent-service.ts`, `server/protocol.ts`, `web/src/`                         |
+| status-placement        | `local` | `web/src/status-placement.ts`, `FooterBar.tsx`, `RightPanel.tsx`                    |
+| recent-chats            | `local` | `server/agent-service.ts`, `client-state.ts`, `web/src/`                            |
+| chat-cwd-pin            | `local` | `server/agent-service.ts`                                                           |
+| client-per-load         | `local` | `web/src/use-chat.ts`                                                               |
+| server-owned-chats      | `local` | `server/agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/`                    |
+| topbar-crowding         | `local` | `web/src/ui-slots.ts`, `App.tsx`, `TopBar.tsx`                                      |
+| quiet-duplicate-open    | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`                               |
+| no-parallel-noise       | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`                               |
+| no-cwd-restore          | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `use-chat.ts`                |
+| flat-recent-chats       | `local` | `web/src/conv-groups.ts`, `LeftPanel.tsx`, `server/agent-service.ts`, `protocol.ts` |
 
 ---
 
@@ -224,6 +225,7 @@ AI 豁免、显式重开、校验、WS 路由、真 PTY）
   的中间态）时 `markRecentWaiting()` 点亮，**当前正看着的那条不点**（人就在那儿）；
   `recentWaiting` 同样落在 client-state 的全局键下，所以运行时被释放、变成常驻历史行
   之后绿灯依然记得。灭灯只在三处：切到该对话、从历史/最近打开它、往它里面发消息。
+
 - **常驻行的点击**：`live === false` 的行点开走 `switch_session`（带 `sessionPath`），
   活着的行仍走 `switch_conversation`；重命名两种行都仍可用。
 
@@ -271,8 +273,11 @@ DSH 引擎的左栏只有活着的行，`removeRecentChat()` 在那边是空操�
 代价：工作区与当前对话的 cwd 可以不一致（文件树是 A、对话跑在 B）。这正是要的效果，
 但要知道新建对话会落在**工作区**而不是刚看的那条对话的目录。
 
-
 ### 配套：列表位置也不许跳
+
+> **已被 flat-recent-chats 取代**：下面这套「分组 + 按活动时间排」仍然会在收消息时重排。
+> 分组与 `sortAt` 排序已删，左栏改为扁平列表按创建时间倒序；`sortAt` 字段本身保留。
+> 下次 rebase 时这一小节对应的改动已在 flat-recent-chats 那个 commit 里被覆盖，不必单独保留。
 
 工作区钉住之后，位置还是会动 —— 两个来源都在这个补丁里一并修掉：
 
@@ -358,6 +363,7 @@ clientId 建 ClientSession，同 id = 同一个会话。上游把 clientId 从 l
   订阅者同时拿到增量、一个窗口切走另一个不受影响、订阅者断线不影响对话本身
 - `tests/cross-client-session-test.mjs` 按新口径改写：原来断言「必须拒绝」的两处
   改为「必须能订阅同一条」，并发发送改为断言「排队而非拦截」
+
 ---
 
 ## quiet-duplicate-open
@@ -452,6 +458,53 @@ writer（持有者的 runtime），从根上分叉不了。
 
 - `npm run typecheck` 五个工程全过；`scripts/check.sh` 全绿
 - 部署后验证：构建产物里 `Restored the last working directory` 出现 0 次
+
+---
+
+## flat-recent-chats
+
+**状态**：`local`（可上游成设置项：左栏排序 = 最近活动 / 创建时间；分组 = 按项目 / 不分）
+**基线**：v0.86.2
+
+### 问题
+
+左栏「最近对话」的行一直在动。前两轮（#140、chat-cwd-pin）都在修这个症状的不同表现，
+但只要还是「按项目分组 + 按最后活动时间排」，就总有下一种跳法：
+
+- 一条对话收到消息（定时注入的 `continue`、子代理回报）就窜到顶上；
+- 切工作区，分组重排，组标题出现/消失，整列高度变；
+- 同名对话（几个「temper」）分在不同组里，找的时候要先想它在哪个文件夹。
+
+用户的要求很直接：一条列表，不要文件夹，不要动。
+
+### 改法
+
+**顺序改成一个不变量的纯函数**：按对话**创建时间**倒序，无分组。创建时间不会因为收消息、
+点开、切项目、流式、刷页而变，所以行结构上不可能跳 —— 不是「少跳了」，是没有任何输入能让它跳。
+代价是「最近聊过的」不一定在最上面 —— 找它用搜索，列表的价值在于位置可预测。
+
+- 新 wire 字段 `ConversationSummary.createdAt`。**必须是转录的创建时间，不是运行时的**：
+  第一版用了 `conv.createdAt`，而运行时是点开对话那一刻才建的，于是一条上周的对话一选中就
+  变成「最新」窜到顶上（选中和新建分不开）。现在从转录文件名的时间戳前缀解
+  （`2026-09-14T01-39-55-678Z_<id>.jsonl`，`sessionCreatedAt()`），写完就不再变；只有还没落盘的
+  全新对话才退回运行时创建时间。磁盘行同样从文件名解，解不出才退回 mtime（mtime 是「最后
+  活动」，恰好是不能用的那个）。DSH 对话没有带时间戳的文件名，用运行时的。
+- `web/src/conv-groups.ts`：`groupConversations()` 换成 `orderConversations()` —— 扁平行列表，
+  根行按 `createdAt` 倒序，子代理缩进跟在父行下（那是父子关系，不是文件夹），父行不在列表里的
+  孤儿作为根行出现。缺 `createdAt` 的行（老服务端）排最后且保持相对顺序（稳定排序）。
+- `LeftPanel.tsx`：删掉分组容器、组标题、「另一处」行的项目副标题；列表里只显标题，文件夹只在
+  悬停里给（`title="<标题> — <cwd>"`）。`.panel-conv-group-title` 样式删。
+- `sortAt` 字段保留（其他调用方可能要），只是左栏不再看它。
+
+### 回归
+
+- `tests/unit/conv-groups.test.ts` 重写（7 项）：核心一条是**同一组输入换上 `sortAt` / `messageCount` /
+  `isStreaming` / `live` / `waiting` / 输入顺序打乱，输出顺序字面相同**；另有跨文件夹混排、
+  子代理缩进、孤儿不丢、缺字段排最后、同时刻稳定。
+- `tests/unit/recent-chats.test.ts` 新增 5 项：文件名解析（含 Windows 路径、解不出返回 undefined）；
+  磁盘行的 `createdAt` 来自文件名而 mtime 变了它不变；无时间戳文件名退回 mtime；**点开一条上周的
+  磁盘行后 `createdAt` 不变**（就是上面那个「选中就窜顶」的复现）；活行不随转录活动变。
+- `scripts/check.sh` 全绿（111 文件 / 1401 单测 + 63 PTY）
 
 ---
 

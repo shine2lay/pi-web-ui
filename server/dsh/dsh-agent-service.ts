@@ -1371,6 +1371,9 @@ export class DshClientSession {
 				messageCount: conv.messages.length,
 				isStreaming: conv.isStreaming,
 				isSubagent: false,
+				// flat-recent-chats：DSH 对话没有 pi 那种带时间戳的转录文件名，运行时的
+				// 创建时间就是它的创建时间（一个进程内不变）。
+				createdAt: conv.createdAt,
 			});
 		}
 		// issue #145：流式集合签名变化 → 通知其他客户端重推（左栏「另一处正在运行」近实时）

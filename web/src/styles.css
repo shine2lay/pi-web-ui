@@ -621,17 +621,6 @@ body.rp-resizing .rp-sash.dragging::after {
 	display: flex;
 	flex-direction: column;
 }
-.panel-conv-group-title {
-	padding: 6px 8px 2px;
-	font-size: 10px;
-	font-weight: 600;
-	color: var(--text-dim);
-	letter-spacing: 0.02em;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-
 /* Generic panel body (right panel etc.) */
 .panel-body {
 	flex: 1;

@@ -1283,8 +1283,13 @@ export interface ConversationSummary {
 	/** 本轮跑完但用户还没看过（左栏绿色常亮 = 轮到你了）。打开该对话即清除。 */
 	waiting?: boolean;
 	/** 「最近对话」列内的**稳定排序键**（转录最后活动时间 ms，缺省时用对话创建时间）。
-	 *  只有**真的聊了**才变 —— 光是点开看一眼（常驻行变成活行）不会让行换位置。 */
+	 *  只有**真的聊了**才变 —— 光是点开看一眼（常驻行变成活行）不会让行换位置。
+	 *  （flat-recent-chats 之后左栏不再用它排序；保留给其他调用方。） */
 	sortAt?: number;
+	/** 对话创建时间 ms。左栏「最近对话」就按它降序——创建时间是不变量，
+	 *  所以这个列表永远不会因为收到消息、点开或切项目而重排（行不会在鼠标
+	 *  下面跳走），刷页后顺序也一样。磁盘行从转录文件名的时间戳前缀解析。 */
+	createdAt?: number;
 }
 
 /** A conversation streaming on ANOTHER client (different tab / device) —
