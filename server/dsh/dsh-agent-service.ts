@@ -1587,6 +1587,9 @@ export class DshClientSession {
 				// DSH Agent 预设（左栏徽标/详情用；pi 引擎不填）。
 				agentPreset: conv.agentPreset,
 				presetLocked: conv.presetLocked,
+				// flat-recent-chats：DSH 对话没有 pi 那种带时间戳的转录文件名，运行时的
+				// 创建时间就是它的创建时间（一个进程内不变）。
+				createdAt: conv.createdAt,
 			});
 		}
 		// issue #145：流式集合签名变化 → 通知其他客户端重推（左栏「另一处正在运行」近实时）

@@ -1336,6 +1336,25 @@ export function recentChatLimit(): number {
 	return 15;
 }
 
+/**
+ * flat-recent-chats：从转录文件名解出**创建时间**。
+ *
+ * pi 的转录文件名长这样：`2026-09-14T01-39-55-678Z_<id>.jsonl` —— 前缀就是
+ * 创建时刻，而且写完就不再变。用它而不用 mtime：mtime 是「最后活动」，继续
+ * 聊一句就会变，那恰好是我们不想让列表重排的原因。
+ *
+ * 时间部分的分隔符是 `-`（文件名不能用 `:`），毫秒前也是 `-`，所以不能
+ * 直接 Date.parse，得先拼回 ISO 形状。解不出来返回 undefined，由调用方退回 mtime。
+ */
+export function sessionCreatedAt(path: string): number | undefined {
+	const m = /(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z/.exec(
+		path.replace(/\\/g, "/").split("/").pop() ?? "",
+	);
+	if (!m) return undefined;
+	const ms = Date.parse(`${m[1]}T${m[2]}:${m[3]}:${m[4]}.${m[5]}Z`);
+	return Number.isFinite(ms) ? ms : undefined;
+}
+
 export class ClientSession {
 	readonly clientId: string;
 	/** Set by AgentService.attach: reflects the SERVICE-wide quiesce flag
@@ -7043,6 +7062,11 @@ export class ClientSession {
 				// 稳定排序键：转录的最后活动时间；还没落盘/还没进列表缓存时用创建时间
 				// （而不是 lastActiveAt：那个一点开就变，行会在鼠标下面跳走）。
 				sortAt: (sessionPath ? modifiedByPath.get(resolve(sessionPath)) : undefined) ?? conv.createdAt,
+				// flat-recent-chats：左栏按创建时间排（不变量，永不重排）。
+				// 必须是**转录**的创建时间，不是运行时的：conv.createdAt 是点开它那一刻
+				// 才盖的戳，用它的话一条上周的对话一点开就变成「最新」窜到顶上 ——
+				// 恰好就是要消灭的那种移动。只有还没落盘的全新对话才退回运行时创建时间。
+				createdAt: (sessionPath ? sessionCreatedAt(sessionPath) : undefined) ?? conv.createdAt,
 				// 正在跑的行用黄灯，不叠绿灯；当前对话就在眼前，也不算「等你」。
 				waiting: !isStreaming && conv.id !== this.activeId && !!sessionPath && waiting.has(resolve(sessionPath)),
 			});
@@ -7107,6 +7131,9 @@ export class ClientSession {
 				live: false,
 				waiting: waiting.has(abs),
 				sortAt: s.modified,
+				// 磁盘行的创建时间：转录文件名的 ISO 前缀就是它（比 mtime 可靠 —— mtime
+				// 会因为继续聊而变，而文件名不会）；解不出来才退回 mtime。
+				createdAt: sessionCreatedAt(s.path) ?? s.modified,
 			});
 		}
 		return rows;

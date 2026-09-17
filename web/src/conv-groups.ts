@@ -1,62 +1,64 @@
 /**
- * 左栏「运行的对话」的分组（跨项目）：当前项目排最前、不显示组标题（项目名），
- * 其余项目按路径稳定排序并挂上组标题。
+ * 左栏「最近对话」的排列（flat-recent-chats 补丁）。
  *
- * 抽成纯函数是为了那个「切项目时项目名闪一下」的坑（#140 的回归），有单测：
- * `tests/unit/conv-groups.test.ts`。
+ * 一条扁平列表，**没有项目分组**，按对话创建时间倒序（新的在上）。子代理仍然缩进
+ * 挂在父对话下面 —— 那是父子关系，不是文件夹。
+ *
+ * 为什么不按「最后活动时间」排：那样一条对话收到消息就窜到顶上，点开一条跨文件夹
+ * 的对话又会把整列重排，行在鼠标底下跳走（原来的 #140 / chat-cwd-pin 之争都在
+ * 修这个症状的不同表现）。创建时间是**不变量**：收消息不动、点开不动、切项目不动、
+ * 刷新页面还是同一个顺序。代价是「最近聊过的」不一定在最上面 —— 用搜索找它更快，
+ * 而列表的价值在于位置可预测。
+ *
+ * 纯函数 + 单测：`tests/unit/conv-groups.test.ts`。
  */
 import type { ConversationSummary } from "./types";
 
-export interface ConvGroup {
-	cwd: string;
-	isCurrent: boolean;
-	convs: ConversationSummary[];
+export interface ConvRow {
+	conv: ConversationSummary;
+	/** 缩进层级：0 = 根行，1+ = 子代理（跟着父行）。 */
+	depth: number;
 }
 
 /**
- * Group the (now cross-project) running-conversation list by workspace,
- * current project first, others in stable path order. Lets the left panel
- * disambiguate same-titled chats across projects and shows where each
- * background run lives.
+ * 扁平化 + 定序：根行按创建时间倒序，子代理紧跟父行（同样按创建时间倒序）。
  *
- * 「当前项目」只看**工作区**（`currentCwd`），不看当前打开的是哪条对话。
- *
- * 旧实现把**含当前对话的那组**提到最前并去掉组标题（#140：当时切对话必定伴随
- * 切工作区，而 `cwd` 快照比 `conversations` 晚到一帧，不这么做会闪一下项目名）。
- * chat-cwd-pin 之后前提变了：切到别的文件夹的对话**不再**搬工作区，于是「当前
- * 对话在别的文件夹」从一帧的中间态变成了**稳定状态** —— 再按 activeId 置顶，
- * 就成了每点一条跨文件夹的对话就把整列重新排序（行在鼠标下面跳走）。
- *
- * 现在：分组顺序只随**显式的工作区切换**而变，切对话一律不动位置；当前对话在
- * 哪个文件夹，由那组的文件夹标题告诉你。`currentCwd` 在列表里没有对应分组时
- * （空白新对话 / 刚切完工作区还没有对话）才回落到当前对话所在组，保住 #140
- * 那一帧不闪项目名的性质。
+ * 缺 `createdAt` 的行（老服务端）排在最后并保持原有相对顺序 —— 稳定排序保证
+ * 它们不会互相跳位。
  */
-export function groupConversations(
-	list: ConversationSummary[],
-	currentCwd: string,
-	activeConversationId: string,
-): ConvGroup[] {
+export function orderConversations(list: ConversationSummary[]): ConvRow[] {
 	const byId = new Map(list.map((c) => [c.id, c]));
-	/** 分组归属：子对话（即使自己 cwd 不同）跟着父对话的项目走。 */
-	const groupCwdOf = (c: ConversationSummary): string => (c.parentId ? (byId.get(c.parentId)?.cwd ?? c.cwd) : c.cwd);
-	const activeConv = list.find((c) => c.id === activeConversationId);
-
-	const byCwd = new Map<string, ConversationSummary[]>();
+	const kids = new Map<string, ConversationSummary[]>();
+	const roots: ConversationSummary[] = [];
 	for (const c of list) {
-		const groupCwd = groupCwdOf(c);
-		const arr = byCwd.get(groupCwd) ?? [];
-		arr.push(c);
-		byCwd.set(groupCwd, arr);
+		if (c.parentId && byId.has(c.parentId)) {
+			const arr = kids.get(c.parentId) ?? [];
+			arr.push(c);
+			kids.set(c.parentId, arr);
+		} else roots.push(c);
 	}
-	// 工作区自己就有一组 → 它是当前项目；否则才回落到当前对话所在组（见上）。
-	const effectiveCwd = byCwd.has(currentCwd) || !activeConv ? currentCwd : groupCwdOf(activeConv);
 
-	const groups: ConvGroup[] = [...byCwd.entries()].map(([cwd, convs]) => ({
-		cwd,
-		isCurrent: cwd === effectiveCwd,
-		convs,
-	}));
-	groups.sort((a, b) => (a.isCurrent ? -1 : b.isCurrent ? 1 : a.cwd < b.cwd ? -1 : a.cwd > b.cwd ? 1 : 0));
-	return groups;
+	// 创建时间倒序；缺省值排最后。Array.prototype.sort 在现代引擎里是稳定排序，
+	// 所以同一时刻（或都缺省）的行保持输入顺序，不会每次渲染换一个样。
+	const byCreated = (a: ConversationSummary, b: ConversationSummary): number => {
+		const ax = a.createdAt;
+		const bx = b.createdAt;
+		if (ax === undefined && bx === undefined) return 0;
+		if (ax === undefined) return 1;
+		if (bx === undefined) return -1;
+		return bx - ax;
+	};
+
+	const rows: ConvRow[] = [];
+	const seen = new Set<string>();
+	const append = (c: ConversationSummary, depth: number): void => {
+		if (seen.has(c.id)) return;
+		seen.add(c.id);
+		rows.push({ conv: c, depth });
+		for (const child of [...(kids.get(c.id) ?? [])].sort(byCreated)) append(child, depth + 1);
+	};
+	for (const root of [...roots].sort(byCreated)) append(root, 0);
+	// 兜底：父行被过滤掉的孤儿行也要出现（否则对话会从列表里消失）。
+	for (const orphan of list) append(orphan, 0);
+	return rows;
 }
