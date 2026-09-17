@@ -21,6 +21,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | server-owned-chats      | `local` | `server/agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/` |
 | topbar-crowding         | `local` | `web/src/ui-slots.ts`, `App.tsx`, `TopBar.tsx`                   |
 | quiet-duplicate-open    | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`            |
+| no-parallel-noise       | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`            |
 
 ---
 
@@ -383,6 +384,38 @@ writer（持有者的 runtime），从根上分叉不了。
 
 - `tests/cross-client-session-test.mjs` 原有断言全绿（含「幽灵持有者不打扰」这条
   「不该出现提醒」的负向断言）；正在跑时的硬拦与并行提醒均未受影响
+
+---
+
+## no-parallel-noise
+
+**状态**：`local`（上游大概率不接受：这是把 #145 刻意加的提醒关掉）
+**基线**：v0.86.2
+
+### 问题
+
+只要同一个 cwd 下有别的对话在跑，**每发一条消息**就弹一次「Parallel-work notice：
+本窗口「temper」、另一处「temper」……正在同一项目运行」，同时往 AI 的下一轮里塞一段
+看不见的 System reminder（要它评估冲突、拿不准就 ask_user_question），还给其他窗口推一条
+「另一处开始了对话」。在 `~` 或一个常用仓库下同时开几条对话是常态（本机常年 8–11 条），
+所以这条提醒几乎永远为真：既盖不掉真正的冲突（它不知道谁在改哪个文件），又把每一轮
+的上下文都塞进一段样板文字，还让 AI 时不时停下来问「要不要等另一处跑完」。
+
+它当初的前提是「另一个窗口 = 另一个 writer」。server-owned-chats 之后这个前提已经不成立：
+一条对话在服务端只有一个 runtime，两个窗口看到的是同一个。
+
+### 改法
+
+把 `prompt()` 里那整段并行感知删掉（pi 引擎与 DSH 引擎同口径）：用户的 toast、给 AI 的
+`parallel-work-reminder` 自定义消息 / DSH 的 `sysPrefix`、给其他客户端的通告，三个一起。
+`listProjectRunners` / `notifyExternalClients` 这些接线保留（「另一处」列表还在用）。
+真正的并发安全由文件层面的东西保证（单 writer、原子写、git），不是靠弹窗。
+
+### 回归
+
+- `tests/cross-client-session-test.mjs`：第 2 步的断言本来就是负向的（「不该出现另一处 /
+  second writer / another window 提醒」），仍全绿；只改了注释里的预期描述
+- `scripts/check.sh` 全绿（1401 单测 + 63 PTY）
 
 ---
 

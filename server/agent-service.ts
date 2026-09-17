@@ -4283,62 +4283,13 @@ export class ClientSession {
 				// 分叉在结构上不可能发生，所以这里没有什么可拦的了。
 				void owner;
 			}
-			// issue #145：同项目并行感知 —— 同一 cwd 下别处（或其他对话）正在跑时，
-			// 允许并行（可以同时改不同部分），但用户与 AI 都必须知道。只在新一轮启动时
-			// 通告一次（steer/排队等流式中发送不重复打扰）。
-			if (!conv.isSubagent && !s.isStreaming) {
-				const localRunners = [...this.convs.values()]
-					.filter((c) => c.id !== conv.id && !c.isSubagent && c.cwd === conv.cwd && this.conversationStreaming(c))
-					.map((c) => ({ title: c.title }));
-				const externalRunners = (this.listProjectRunners?.(conv.cwd) ?? []).filter(
-					(r) => r.sessionFile === undefined || (activeFile !== undefined && resolve(r.sessionFile) !== activeFile),
-				);
-				const runnerTitles = [
-					...localRunners.map((r) => `本窗口「${r.title}」`),
-					...externalRunners.map((r) => `另一处「${r.title}」`),
-				];
-				if (runnerTitles.length > 0) {
-					const shown = runnerTitles.slice(0, 3).join("、");
-					const more = runnerTitles.length > 3 ? `等 ${runnerTitles.length} 处` : "";
-					this.emit({
-						type: "notice",
-						level: "info",
-						text: `同项目并行提醒：${shown}${more}正在同一项目运行。你可以继续（适合改不同文件），改动同一文件前请先确认；拿不准就等它跑完。`,
-						textEn: `Parallel-work notice: ${shown}${more ? " and more" : ""} running in the same project. You may continue (fine for different files); confirm before touching the same files, or wait for it to finish when unsure.`,
-					});
-					// 给 AI 的上下文：评估冲突概率，拿不准就 ask_user_question 让用户选
-					// （并行 / 等它跑完 / 只读围观）。display:false —— 用户界面只看上面的 notice。
-					const aiReminder =
-						`(System reminder: ${runnerTitles.length} other run(s) [${runnerTitles.join("; ").slice(0, 600)}] ` +
-						`are currently running in the same project directory. You may work in parallel on different files, ` +
-						`but before reading/writing files or running commands, assess the conflict probability with the other run(s) ` +
-						`(same files? same commands? migrations?). If a conflict is likely or you are unsure, ` +
-						`use ask_user_question to let the user choose: continue in parallel / wait / watch read-only.)\n` +
-						`（系统提醒：同一项目另有 ${runnerTitles.length} 处运行（${shown}${more}）。改不同文件可并行；` +
-						`读写文件或跑命令前先评估冲突概率，拿不准就用 ask_user_question 让用户选择：并行 / 等它跑完 / 只读围观。）`;
-					try {
-						await s.sendCustomMessage(
-							{
-								customType: "parallel-work-reminder",
-								content: [{ type: "text", text: aiReminder }],
-								display: false,
-							},
-							{ deliverAs: "nextTurn" },
-						);
-					} catch {
-						// best effort —— 注入失败不影响发送本身
-					}
-					// 让对端也知道：有人在同项目开了并行工作（只通知其他客户端，不打扰自己）。
-					if (externalRunners.length > 0) {
-						this.notifyExternalClients?.({
-							type: "notice",
-							level: "info",
-							text: `同项目并行提醒：另一处在「${conv.cwd}」开始了对话（「${conv.title}」），可能与你正在跑的任务并行改动同一项目。`,
-							textEn: `Parallel-work notice: another window started a conversation ("${conv.title}") in "${conv.cwd}", possibly editing the same project in parallel with your running task.`,
-						});
-					}
-				}
-			}
+			// issue #145 的同项目并行提醒已移除（patch: no-parallel-noise）。
+			// 当初的前提是「另一个窗口 = 另一个 writer」，server-owned-chats 之后这个前提
+			// 就没了：一条对话在服务端只有一个 runtime，两个窗口看到的是同一个。剩下的
+			// 场景（同一 cwd 下的不同对话、外部 pi 进程）并不足以支撑「每发一条消息就
+			// 提醒一次」：同一个 cwd（比如 ~ 或一个常用仓库）下开几个对话是常态，提醒因此
+			// 几乎永远为真，既盖不掉真正的冲突，又把每一轮的上下文都塞进一段样板文字。
+			// 真正的并发安全由文件层面的东西保证（单 writer、原子写、git），不是靠弹窗。
 			// 轨迹用：暂存本轮任务文本，下一轮 agent_start 消费（steer/内部续跑
 			// 不经此处，届时 task 缺省，插件回退为「继续执行」）。
 			conv.pendingTask = text.trim() ? truncRun(text.trim(), RUN_TASK_CAP) : undefined;

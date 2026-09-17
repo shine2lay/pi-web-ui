@@ -1,11 +1,11 @@
 // issue #145 跨客户端同会话双写防护 —— 第二个 writer 造不出来，新标签页不默认落进正在跑的对话，
-// 且同项目并行互相可见。
+// 同项目并行不再弹提醒（patch: no-parallel-noise）—— 同一 cwd 下开几个对话是常态，不是事故。
 //
 // A 客户端开一条 SLOW run（streaming）；B 客户端（另一标签页/设备 = 不同 clientId）：
 //   1. B 直接 switch_session 到 A 正在跑的 session 文件 → 必须被拒绝（warning notice），
 //      B 的 conversationId / sessionFile 不变（改前 RED：B 会打开成功并持有同一文件）；
-//   2. B 在自己的会话（同一项目）发消息 → 允许并行，但 B 收到同项目并行提醒，
-//      A 收到对端并行通告；两边 run 都能正常跑完；
+//   2. B 在自己的会话（同一项目）发消息 → 允许并行，且**不打扰任何一边**（不发并行提醒）；
+//      两边 run 都能正常跑完；
 //   3. A 跑完后 B 再 switch_session 同一文件 → 允许（owner 空闲），B 能打开。
 //
 // 零 token：mock SSE 模型（prompt 含 SLOW 即慢速输出），纯 WS 协议，无需浏览器。
@@ -67,7 +67,7 @@ const mock = createServer(async (req, res) => {
 			})}\n\n`,
 		);
 	writeChunk(first);
-	// SLOW 分支要盖住 B 的三步断言（elsewhere/拒绝/并行提醒），给足窗口。
+	// SLOW 分支要盖住 B 的三步断言（elsewhere/拒绝/并行不打扰），给足窗口。
 	if (slow) await sleep(12000);
 	writeChunk(lastChunk);
 	res.write(

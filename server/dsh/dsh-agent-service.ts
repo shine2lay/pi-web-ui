@@ -1500,41 +1500,8 @@ export class DshClientSession {
 			this.flushSnapshot();
 			return;
 		}
-		// issue #145：同项目并行感知（与 pi 引擎同语义；DSH 无 display:false 的
-		// custom 消息通道，提醒以前置系统文本随本轮发给运行时，用户气泡保持原文）。
-		let sysPrefix = "";
-		if (!conv.isStreaming) {
-			const localTitles = [...this.convs.values()]
-				.filter((c) => c.id !== conv.id && c.cwd === conv.cwd && c.isStreaming)
-				.map((c) => `本窗口「${c.title}」`);
-			const externalRunners = (this.listProjectRunners?.(conv.cwd) ?? []).filter(
-				(r) => r.sessionFile === undefined || basename(dirname(resolve(r.sessionFile))) !== conv.sessionId,
-			);
-			const runnerTitles = [...localTitles, ...externalRunners.map((r) => `另一处「${r.title}」`)];
-			if (runnerTitles.length > 0) {
-				const shown = runnerTitles.slice(0, 3).join("、");
-				const more = runnerTitles.length > 3 ? `等 ${runnerTitles.length} 处` : "";
-				this.emit({
-					type: "notice",
-					level: "info",
-					text: `同项目并行提醒：${shown}${more}正在同一项目运行。你可以继续（适合改不同文件），改动同一文件前请先确认；拿不准就等它跑完。`,
-					textEn: `Parallel-work notice: ${shown}${more ? " and more" : ""} running in the same project. You may continue (fine for different files); confirm before touching the same files, or wait for it to finish when unsure.`,
-				});
-				sysPrefix =
-					`(System reminder: ${runnerTitles.length} other run(s) [${runnerTitles.join("; ").slice(0, 600)}] are currently running in the same project directory. ` +
-					`You may work in parallel on different files, but before reading/writing files or running commands, assess the conflict probability with the other run(s). ` +
-					`If a conflict is likely or you are unsure, use ask_user_question to let the user choose: continue in parallel / wait / watch read-only.)\n` +
-					`（系统提醒：同一项目另有 ${runnerTitles.length} 处运行（${shown}${more}）。改不同文件可并行；读写文件或跑命令前先评估冲突概率，拿不准就用 ask_user_question 让用户选择：并行 / 等它跑完 / 只读围观。）\n\n`;
-				if (externalRunners.length > 0) {
-					this.notifyExternalClients?.({
-						type: "notice",
-						level: "info",
-						text: `同项目并行提醒：另一处在「${conv.cwd}」开始了对话（「${conv.title}」），可能与你正在跑的任务并行改动同一项目。`,
-						textEn: `Parallel-work notice: another window started a conversation ("${conv.title}") in "${conv.cwd}", possibly editing the same project in parallel with your running task.`,
-					});
-				}
-			}
-		}
+		// issue #145 的同项目并行提醒已移除（patch: no-parallel-noise），与 pi 引擎保持同语义。
+		const sysPrefix = "";
 		// 磁盘回放会话（switch_session）没有 live runtime session —— DSH 的
 		// JSON-RPC 面不支持恢复（id collision），自动 fork 新会话继续：把历史
 		// 作为上下文注入首条 prompt，前端提示。
