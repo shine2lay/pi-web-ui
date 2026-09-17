@@ -21,6 +21,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | server-owned-chats      | `local` | `server/agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/` |
 | topbar-crowding         | `local` | `web/src/ui-slots.ts`, `App.tsx`, `TopBar.tsx`                   |
 | quiet-duplicate-open    | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`            |
+| no-cwd-restore          | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `use-chat.ts` |
 
 ---
 
@@ -395,6 +396,41 @@ writer（持有者的 runtime），从根上分叉不了。
 
 - `tests/cross-client-session-test.mjs` 原有断言全绿（含「幽灵持有者不打扰」这条
   「不该出现提醒」的负向断言）；正在跑时的硬拦与并行提醒均未受影响
+
+---
+
+## no-cwd-restore
+
+**状态**：`local`（可上游成设置项：启动目录 = 服务端默认 / 上次用过的）
+**基线**：v0.86.2
+
+### 问题
+
+隔三差五弹「Restored the last working directory: /home/me/rollcall」，然后人就在一个没打算去的
+项目里了。上游有**两套**自动恢复叠在一起：
+
+1. 服务端按 clientId 记 `lastCwd`，新连接时直接在那个目录里建会话；
+2. 浏览器用 localStorage（`pi-web-last-cwd`）再记一份，首帧快照上发现服务端不在那里就补发
+   `set_cwd` 切过去 —— 这一套每次页面加载都跑，于是一个只去过一次的目录从此粘住。
+
+“上次碰过的”和“现在想要的”不是一回事；而 client-per-load 之后每次加载都是新 clientId，第 1 套
+已经不怎么命中，第 2 套才是真正在拽人的那只手。
+
+### 改法
+
+两套一起删（pi 引擎、DSH 引擎、浏览器）：新连接一律用服务端启动目录，切目录只由用户
+显式操作触发（左栏项目 / 底栏路径 / 文件树「以项目打开」/ 全局搜索）或插件显式请求
+（`startChat({cwd})` 等，陆生路径仍要确认）。`stateStore.remember` 保留 —— 那是左栏项目列表的数据源，
+不是恢复。浏览器边的 localStorage key 连同读写函数、ref、effect 整套删掉：只写不读的 key
+只会让下一个读代码的人以为恢复还在。
+
+其他会动工作目录的地方（盘点过一遍）都是用户点出来的，不动；chat-cwd-pin 继续保证切对话
+不搬工作区。
+
+### 回归
+
+- `npm run typecheck` 五个工程全过；`scripts/check.sh` 全绿
+- 部署后验证：构建产物里 `Restored the last working directory` 出现 0 次
 
 ---
 

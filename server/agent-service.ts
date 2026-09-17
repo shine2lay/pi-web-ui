@@ -9958,7 +9958,6 @@ export class AgentService {
 					const inter = this.stateStore.takeInterrupted(orphan.oldId);
 					if (inter?.length) this.stateStore.saveInterrupted(clientId, inter);
 				} else {
-					// Restore this client's last-used workspace when it still exists;
 					// Admission gate: while quiesced, only clients with an EXISTING
 					// session may attach (they can watch their runs drain); brand-new
 					// clients are refused — index.ts closes their socket (4403) and the
@@ -9966,16 +9965,10 @@ export class AgentService {
 					if (this.quiesced) {
 						throw new QuiesceRejectedError("新连接被拒绝，请等服务器恢复后重试");
 					}
-					// otherwise fall back to the server's configured default cwd.
-					let cwd = this.cwd;
-					const saved = this.stateStore.get(clientId);
-					if (saved.lastCwd && saved.lastCwd !== this.cwd) {
-						try {
-							if (statSync(saved.lastCwd).isDirectory()) cwd = saved.lastCwd;
-						} catch {
-							// gone (unmounted drive / deleted) — fall back to the default
-						}
-					}
+					// patch: no-cwd-restore —— 不再自动恢复 lastCwd。新连接一律用服务端启动
+					// 目录；想去别的项目用左栏切。自动恢复的问题是它会把你拽回上一次碰过的
+					// 目录（而不是你现在想要的），且每开一个新标签页都重演一次。
+					const cwd = this.cwd;
 					// Sessions use the SDK default per-project dir — no per-client dir.
 					// issue #145：新标签页默认恢复项目最近的会话 —— 若那条仍被别处持有
 					// （跑着或空闲），建之前就决定空白（第二个 writer 根本不会被打开，
@@ -10004,14 +9997,6 @@ export class AgentService {
 					this.wireClient(cs, clientId);
 					// Make sure the restored/default workspace appears in the project list.
 					this.stateStore.remember(clientId, cwd);
-					if (cwd !== this.cwd) {
-						send({
-							type: "notice",
-							level: "info",
-							text: `已恢复上次的工作目录：${cwd}`,
-							textEn: `Restored the last working directory: ${cwd}`,
-						});
-					}
 				}
 			}
 		}
