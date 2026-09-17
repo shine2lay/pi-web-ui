@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ClientSession, recentChatLimit } from "../../server/agent-service.js";
+import { ClientSession, recentChatLimit, sessionCreatedAt } from "../../server/agent-service.js";
 import { ClientStateStore } from "../../server/client-state.js";
 import type { ConversationSummary, ServerMessage, SessionSummary } from "../../server/protocol.js";
 
@@ -262,5 +262,59 @@ describe("最近对话：行的位置稳定", () => {
 		const asLive = pushed().find((r) => r.id === "b")?.sortAt;
 		expect(asLive).toBe(asHistory);
 		expect(asLive).toBe(8000);
+	});
+});
+
+describe("flat-recent-chats：创建时间是不变量", () => {
+	it("从转录文件名解出创建时间（pi 的 `YYYY-MM-DDTHH-MM-SS-mmmZ_<id>.jsonl` 前缀）", () => {
+		const p = "/x/sessions/--home-me--/2026-09-14T01-39-55-678Z_01a09d92-249d-7511-9cb4-2588f83226b5.jsonl";
+		expect(sessionCreatedAt(p)).toBe(Date.parse("2026-09-14T01:39:55.678Z"));
+		// Windows 路径分隔符也行。
+		expect(sessionCreatedAt("C:\\s\\2026-01-02T03-04-05-006Z_abc.jsonl")).toBe(Date.parse("2026-01-02T03:04:05.006Z"));
+		// 解不出来 → undefined（调用方退回 mtime），而不是 NaN 或乱猜。
+		expect(sessionCreatedAt("/x/notes.jsonl")).toBeUndefined();
+		expect(sessionCreatedAt("")).toBeUndefined();
+	});
+
+	it("磁盘行的 createdAt 来自文件名，**不是** mtime —— 继续聊不会改变它", () => {
+		const p = "/sessions/2026-09-14T01-39-55-678Z_aaa.jsonl";
+		s.recentSessions = [session(p, 5000)];
+		const before = pushed().find((r) => r.sessionPath === p)?.createdAt;
+		expect(before).toBe(Date.parse("2026-09-14T01:39:55.678Z"));
+		// 用户又聊了一句：mtime 变了，sortAt 跟着变，但 createdAt 纹丝不动。
+		s.recentSessions = [session(p, 999999)];
+		const row = pushed().find((r) => r.sessionPath === p);
+		expect(row?.sortAt).toBe(999999);
+		expect(row?.createdAt).toBe(before);
+	});
+
+	it("文件名不带时间戳的磁盘行退回 mtime，不会没有 createdAt", () => {
+		s.recentSessions = [session("/sessions/legacy.jsonl", 4242)];
+		expect(pushed().find((r) => r.sessionPath === "/sessions/legacy.jsonl")?.createdAt).toBe(4242);
+	});
+
+	it("点开一条磁盘行（变成活行）不改变它的 createdAt —— 否则选中就窜到顶上", () => {
+		// 这条对话上周就存在了（文件名里的时间戳）。
+		const p = "/sessions/2026-09-10T08-00-00-000Z_old.jsonl";
+		s.recentSessions = [session(p, 5000), session("/sessions/2026-09-16T20-00-00-000Z_newer.jsonl", 6000)];
+		const asHistory = pushed().find((r) => r.sessionPath === p)?.createdAt;
+		expect(asHistory).toBe(Date.parse("2026-09-10T08:00:00.000Z"));
+		// 用户点开它：运行时现在才建起来，conv.createdAt 是「现在」。
+		const opened = conv("old", { session: { sessionFile: p } as never });
+		(opened as unknown as { createdAt: number }).createdAt = Date.now();
+		s.convs.set("old", opened);
+		const asLive = pushed().find((r) => r.id === "old");
+		// 必须还是转录的创建时间，不是运行时的创建时间 —— 不然「新的在上」就把它推到顶上。
+		expect(asLive?.createdAt).toBe(asHistory);
+	});
+
+	it("活行的 createdAt 就是对话的创建时间，不随转录活动变", () => {
+		const live = conv("a", { messages: 3 });
+		(live as unknown as { createdAt: number }).createdAt = 1000;
+		s.convs.set("a", live);
+		s.recentSessions = [session("/sessions/a.jsonl", 5000)];
+		const row = pushed().find((r) => r.id === "a");
+		expect(row?.sortAt).toBe(5000);
+		expect(row?.createdAt).toBe(1000);
 	});
 });
