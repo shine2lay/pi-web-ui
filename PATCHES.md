@@ -23,6 +23,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | quiet-duplicate-open    | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`                               |
 | no-cwd-restore          | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `use-chat.ts`                |
 | flat-recent-chats       | `local` | `web/src/conv-groups.ts`, `LeftPanel.tsx`, `server/agent-service.ts`, `protocol.ts` |
+| no-mcp-restart-nag      | `local` | `server/webui-context.ts`, `tests/unit/mute-mcp-restart-nag.test.ts`                 |
 
 ---
 
@@ -545,3 +546,41 @@ order 200。v0.86.2 上的旧做法（`capTopbarPrimary()` 限额 → 按角色�
 - `tests/unit/topbar-panel-toggle.test.ts`：「⋯」里只列入口行（面板不进菜单）；主题抽屉
   portal 到 body、选中后留着、点遮罩关；版本抽屉打开时发 `check_update` + `check_updates_all`、
   ✕ 关。上游的「溢出菜单里的 GitHub 行」测试随 GitHub 一起删掉。
+
+---
+
+## no-mcp-restart-nag
+
+**状态**：`local`（上游修了就删；真正的修法在 pi-mcp-adapter 那边）
+**基线**：v0.86.2
+
+### 问题
+
+每次启动都弹「MCP: direct tools for github, github-read will be available after restart」。
+但工具当时就已经注册好了——同一个会话里 `github_*` 直接能调，“重启后才能用”是假的。
+
+根因在 pi-mcp-adapter：那条通知只在服务器的缓存元数据判定为“缺失”时才弹
+（`init.ts` 里的 `getMissingConfiguredDirectToolServers`），而是否有效看 `configHash`；
+`metadata-cache.ts` 的 `computeServerHash` 把 `headers` / `bearerToken` 做完环境变量
+插值后也算进 hash。GitHub 令牌一轮换，hash 就变 → 缓存判定失效 → 重新 bootstrap
+→ 再弹一次。缓存里其实是有的（`~/.pi/agent/mcp-cache.json`：github 90 个工具、
+github-read 56 个）。
+
+上游这行是整个启动流程里**唯一一条没带开关的通知**：相邻的「N servers connected」
+受 `settings.notifyOnStartupConnect` 控制，它不受。看着像漏了，不像有意为之。
+
+### 改法
+
+`server/webui-context.ts` 的 `notify` 入口加一张 `MUTED_INFO_NOTICES` 正则表，
+**只对 `info`** 生效，且整条匹配（`^…$`）。warning / error —— 连不上、工具被跳过、
+需要授权 —— 照常弹；其他 MCP info（如「N servers connected」）也不受影响。
+
+注意这只是撑掉提示：那两个 server 仍然每次启动重做一遍 bootstrap（多几次连接 +
+list 往返）。想真修就得让令牌不再每次变（固定 `bearerToken`，或 `requestHeadersCommand`
+只解一次），让 hash 稳下来、缓存真的被用上。
+
+### 回归
+
+- `tests/unit/mute-mcp-restart-nag.test.ts` 6 项：单 server / 多 server 逗号分隔 / level 省略时
+  按 info 处理 / **warning 与 error 照常弹** / 其他 MCP info 不受影响 / 把这句话当正文的
+  消息不误伤

@@ -182,8 +182,27 @@ export class WebUIContext {
 
 	// -- notifications --------------------------------------------------------
 
+	/**
+	 * 上游 pi-mcp-adapter 每次启动都可能重新 bootstrap direct tools 并弹这条 info。
+	 * 它只在服务器的缓存元数据“缺失”时才弹，而缓存是否有效看 configHash；
+	 * configHash 把 headers / bearerToken 做环境变量插值后也算进去（metadata-cache.ts
+	 * computeServerHash）。令牌一轮换 hash 就变 → 缓存判定失效 → 重新 bootstrap →
+	 * 再弹一次。但此时工具已经注册好了（github_* 在当前会话里直接能调），
+	 * “重启后才能用”对用户是假的。
+	 *
+	 * 上游这行（init.ts 里的 bootstrap 通知）是整个启动流程里唯一没带开关的：
+	 * 旁边的「N servers connected」受 settings.notifyOnStartupConnect 控制，它不受。
+	 * 所以在这里丢掉。只屏蔽 info：warning / error（连不上、工具被跳过、
+	 * 需要授权）照常弹。
+	 */
+	private static readonly MUTED_INFO_NOTICES: RegExp[] = [/^MCP: direct tools for .+ will be available after restart$/];
+
 	notify = (message: string, type?: "info" | "warning" | "error", messageEn?: string): void => {
-		this.emit({ type: "notice", level: type ?? "info", text: message, textEn: messageEn });
+		const level = type ?? "info";
+		if (level === "info" && WebUIContext.MUTED_INFO_NOTICES.some((re: RegExp) => re.test(message.trim()))) {
+			return;
+		}
+		this.emit({ type: "notice", level, text: message, textEn: messageEn });
 	};
 
 	// -- footer status (pi-lens "LSP Inactive", pi-cache-optimizer cache stats) --
