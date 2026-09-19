@@ -23,7 +23,144 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | quiet-duplicate-open    | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`                               |
 | no-cwd-restore          | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `use-chat.ts`                |
 | flat-recent-chats       | `local` | `web/src/conv-groups.ts`, `LeftPanel.tsx`, `server/agent-service.ts`, `protocol.ts` |
-| no-mcp-restart-nag      | `local` | `server/webui-context.ts`, `tests/unit/mute-mcp-restart-nag.test.ts`                 |
+| no-mcp-restart-nag      | `local` | `server/webui-context.ts`, `tests/unit/mute-mcp-restart-nag.test.ts`                |
+| ask-question-delivery   | `local` | `server/ask-delivery.ts`, `agent-service.ts`                                        |
+
+---
+
+## ask-question-delivery
+
+**状态**：`local`（bug 对上游同样成立，值得提 PR）
+**基线**：v0.86.2；2026-09-23 同步到 v0.94.1 时按上游的新问卷模型重做（见「与上游 v0.94 的关系」）
+
+### 问题
+
+`ask_user_question` 的对话框时不时不弹，而且一旦不弹，**那轮对话就永远卡在那里**。
+
+两条独立的根因叠在一起：
+
+1. **永久挂死**。`askUser`（`server/agent-service.ts`）故意不设超时——注释写得很清楚：
+   「不设超时：等的是人类回答，不是挂死的工具」。而 `emit()` 在 `this.sinks` 为空
+   （没有任何页面连着）时是**静默丢弃**的：
+
+   ```ts
+   for (const sink of [...this.sinks]) sink(msg); // sinks 为空 = 什么也没发生
+   ```
+
+   于是：没人在线时提问 → `question_pending` 丢掉 → 对话框不出现 → promise 永远不
+   resolve。同一个文件里的 `pageCall`（`browser_page`）早就有 `sinks.size === 0` 的
+   守卫并立即报错，`askUser` 漏了——同一类「需要活着的浏览器」的工具，一个有一个没有。
+
+   触发场景比想象中多：关标签页 / 笔记本休眠 / WS 重连的空窗 / 后台对话或子代理
+   在问而你在看别的对话。服务是长命的（systemd，往往跑好几天），浏览器却来来去去。
+
+2. **忭照救不回来**。本来有一条恢复通道（`UiState.pendingQuestion`），但它按当前对话过滤：
+
+   ```ts
+   if (p.conversationId !== undefined && p.conversationId !== this.activeId) continue;
+   ```
+
+   于是只有用户**恰好回到发问的那条对话**时问卷才复活；打开别的对话 → 快照里是
+   null → 对话框永远不回来。而对话框是问卷的**唯一入口**（代码注释自己也说了
+   「DshQuestionDialog 无入口」），侧栏没有任何「这条对话在等你回答」的提示，
+   丢了就是真丢了。
+
+日志侧面印证：37 次调用里 35 答、2 取消、0 报错——但这是幸存者偏差，**没弹出来的
+那些压根不会写下结果行**，在会话日志里天然隐形。
+
+### 改法
+
+新增纯函数模块 `server/ask-delivery.ts`（同 `pending-question.ts` 的套路：判定逻辑抽
+出来、单测钉住）：
+
+- `askDeliveryOnAsk(clientCount)` —— 有页面就即时推（原行为不变），没有则不 emit。
+- **不是一看见没页面就报错**：刷新/重连有几秒空窗，那种情况下用户马上就回来了。
+  给 `ASK_USER_NO_CLIENT_GRACE_MS` = 30s 宽限期：期间页面接上 → 快照把对话框补出来；
+  到点依旧没人 → `askDeliveryOnGraceExpiry` 判 `reject`，让模型改用正文提问而不是干等。
+  计时器 `unref()`，不拖住进程退出；答完/取消/dispose 都会 `clearTimeout`。
+- `pickPendingQuestionForSnapshot(entries)` —— 去掉 activeId 过滤，**不分对话一律带进快照**。
+
+协议：首版给 `UiPendingQuestion` 和 `question_pending` 各加了一个可选 `conversationId`。上游 v0.94
+自己加了同样的字段（外加 `conversationTitle`），同步后本补丁**不再改协议字段**，只改
+`UiState.pendingQuestion` 的注释（不分对话一律携带）。`PROTOCOL_VERSION` 一直没动。
+
+### 第二轮：multi-device（一张问卷，所有设备都能看、都能答）
+
+用户在多台设备间走动（笔记本 ↔ 台式机），问卷却只在**发起提问的那一台**弹。
+三个结构性原因：
+
+1. `pendingQuestions` 是 **per-ClientSession** 的私有 Map；另一台设备 = 另一个 ClientSession。
+2. `fanOutToViewers` 只转发 `message_delta` / `tool_delta` 两种消息，`question_pending`
+   根本不跨客户端。
+3. `answerQuestion` 只查 `this.pendingQuestions` —— 只有发问的那台能回答。
+
+改法与 `server-owned-chats` 同构：**问卷属于对话，不属于客户端**。
+
+- `sharedQuestions` 改为 `static`（连同 `questionSeq` —— 否则两个客户端各自生成 `q-1` 撞键）。
+- `broadcastToAllClients()` 把 `question_pending` 广播给**所有在线客户端**，不走
+  `fanOutToViewers` 那套 `activeId` 过滤：问卷阻塞整个 agent 循环，漏给一台就可能永远等下去。
+- 收场用上游的 `question_retracted`（v0.94 为手动过户引入：前端只收「正好是这个 id」的
+  那张并记入 answered，迟到的旧快照不会把它复活），但改为**广播给所有在线客户端**：
+  第一个答的生效，其余设备的对话框自动收场。首版自己加过一个语义相同的
+  `question_closed`，同步时删掉了。
+  为什么不能指望快照：`resolvePendingQuestion` 的收起分支只对
+  `source === "snapshot"` 的面板生效，而另一台设备的面板是广播（live）弹出来的。
+  只关「正好是这个 id」的那张，不能盲清：收场消息与下一次 `question_pending`
+  可能背靠背到达，盲清会把新弹出的那张误关。
+- `cancelPendingQuestions()` 不再跟着客户端 dispose 走：只有「除我之外一台都不剩」
+  时才取消（`shouldCancelOnClientDispose`）。client-per-load 之后每次刷新都会 dispose
+  一个旧会话 —— 不改的话等于每次刷新都把自己的问卷打掉。
+- 在线数一律改用 `connectedClientCount()`（看 `sinkCount() > 0`，不是会话是否存在）——
+  `ClientSession` 比它的 socket 活得久，这是 `viewedElsewhere` 早就踩过的坑。
+- 对话名标注直接用上游 v0.94 的对话框：`question.conversationTitle`（缺省时 App.tsx 按
+  `conversationId` 从对话列表里查）有值就显示（`.question-conv-title`），不管是不是本设备
+  当前在看的对话。首版自己做过一版「只在来源不是当前对话时标出」，同步时改用上游的，
+  `DshQuestionDialog.tsx` / `App.tsx` / `use-chat.ts` 都不再改。
+
+### 与上游 v0.94 的关系（2026-09-23 同步到 v0.94.1）
+
+上游在 v0.94 自己补上了一半：问卷带 `conversationId` / `conversationTitle`、侧栏「?」角标
+（`hasQuestion`）、`question_retracted`、跨页作答（`peek_elsewhere_question` →
+`elsewhere_question`）。分歧在**弹在哪里**：
+
+- 上游用 `shouldPopQuestion` 只推给**正开着该对话**的页面，别处只给「?」角标。我们保留
+  「所有在线设备都弹，并标出对话名」（用户 2026-09-23 的选择）：问卷阻塞整个 agent 循环，
+  角标太容易漏看。所以 `askUser` 不调 `shouldPopQuestion`（函数仍导出，上游的
+  `ask-user-question-tool.test.ts` 继续覆盖它）。
+- 快照：上游的 `pendingQuestionForSnapshot` 只带当前对话的问卷，我们仍然不分对话一律带。
+  前端 `resolvePendingQuestion` 的规则 2（快照为空时收掉别的对话的框）因此不会误伤：
+  快照有值时规则 1 先返回，前端不用改。
+- 角标：问卷是进程共享的，所以登记、解决、宽限期到点都用 `emitConversationsToAll()`
+  刷新**所有**在线客户端的对话列表；只刷本客户端的话，在台式机上答完，笔记本上的
+  「?」还挂着。
+- 快照里的对话名按对话现名取（改过名也跟上）；取不到时用提问时记下的，**不**回落到
+  「本客户端当前对话」（问卷共享，那会给别的设备标错来源）。
+- 在 `server-owned-chats` 下 `listExternalRunning()` 恒为 `[]`，上游跨页作答的入口不会出现；
+  代码原样保留，没改。
+
+### 没做（留给后续）
+
+- `DshQuestionDialog` 的 **全局 Esc**（`document.addEventListener("keydown")`，无任何限制，v0.94.1
+  仍然如此）：
+  在任何地方因任何原因按 Esc 都会直接取消提问，没有二次确认。
+- 同文件的倒计时：`question.deadline` 若为过去时间（时钟偏移 / DSH 传了个旧值），
+  对话框会在挂载后 1 秒内自己取消——看起来也是「根本没弹」。标准引擎不传
+  `deadline`，所以只影响 DSH 路径。
+
+### 回归
+
+`tests/unit/ask-delivery.test.ts` 11 项：有/无页面的投递分支；宽限期到点的三种结局
+（没人→reject / 页面回来→keep / 已答过→keep，最后一条防的是去动已 settle 的 promise）；
+宽限期取值区间；错误文案必须告诉模型改用正文提问（否则它会原地重试）；
+快照提取的四种情形——**非当前对话的问卷也要带上**（就是以前丢问卷的那条路径）、
+旧条目无 conversationId 不加空字段、空表返回 null、多张并存取第一张。
+
+multi-device 追加 3 项：`shouldCancelOnClientDispose` 两分支（还有设备连着 → keep，
+一台不剩 → cancel）、快照带 `conversationTitle`。首版给对话框加的 3 项测试随对话框改动一起
+删了，对话名标注由上游自己的 `tests/unit/dsh-question-dialog.test.ts` 覆盖。
+
+同步 v0.94.1 后：ask-delivery、ask-user-question-tool、pending-question、dsh-question-dialog、
+question-attachments 共 63 项全过。
 
 ---
 
