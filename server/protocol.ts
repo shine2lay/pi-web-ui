@@ -183,11 +183,13 @@ export interface UiState {
 	} | null;
 	/**
 	 * 待用户回答的模型提问（ask_user_question）——对话框的服务端事实源。
-	 *  `question_pending` 只在提问发生的那一刻推给「当前激活且匹配该会话」的连接；刷新页面 /
-	 *  WS 重连 / 切换会话接入后本字段让快照把属于当前会话的对话框恢复出来（见 web/src/use-chat.ts
-	 *  的 syncPendingQuestion）。
-	 *  只携带当前对话的提问（切回原对话会重推快照，对话框随之回来）。
-	 *  null / 缺省 = 当前对话没有待答提问。
+	 *  `question_pending` 只在提问发生的那一刻推给「当时在线」的连接；刷新页面 /
+	 *  WS 重连 / 新标签页接入后客户端拿不到那条历史消息，本字段让快照把对话框
+	 *  恢复出来（见 web/src/use-chat.ts 的 syncPendingQuestion）。
+	 *  **不分对话一律携带**（ask-question-delivery；上游只带当前对话的）：别的对话在问
+	 *  也要弹出来，否则「提问时没人在线」的问卷只剩一个角标（见 server/ask-delivery.ts）。
+	 *  具体属于哪条对话看 `UiPendingQuestion.conversationId` / `conversationTitle`。
+	 *  null / 缺省 = 没有待答提问。
 	 */
 	pendingQuestion?: UiPendingQuestion | null;
 	/**

@@ -40,6 +40,15 @@ import {
 import { Type } from "typebox";
 import { BgServerTracker } from "./bg-servers.js";
 import {
+	ASK_USER_NO_CLIENT_ERROR,
+	ASK_USER_NO_CLIENT_GRACE_MS,
+	askDeliveryOnAsk,
+	askDeliveryOnGraceExpiry,
+	pickPendingQuestionForSnapshot,
+	shouldCancelOnClientDispose,
+} from "./ask-delivery.js";
+import type { PendingQuestionEntry } from "./ask-delivery.js";
+import {
 	checkAll as checkAllUpdates,
 	collectTargets,
 	compareVersions as compareSemver,
@@ -2314,13 +2323,18 @@ export class ClientSession {
 	// 本桥发 question_pending 给浏览器 → 等 question_answer → resolve/reject
 	// 工具结果（agent 循环阻塞）。一次只展示一个提问（agent 阻塞在工具执行）。
 	// -----------------------------------------------------------------------
-	private questionSeq = 0;
+	/** 序号也必须共享：注册表共享之后，两个客户端各自生成 `q-1` 会撞键。 */
+	private static questionSeq = 0;
 	/** 待答提问（id → 载荷 + resolve）。一次正常只有一个（agent 阻塞在工具执行）；
-	 *  conversationId 记录谁问的：看门狗豁免、快照恢复都靠它。 */
-	private pendingQuestions = new Map<
-		string,
-		{ resolve: (value: QuestionAnswer[] | null) => void; questions: UiQuestion[]; conversationId?: string }
-	>();
+	 *  conversationId 记录谁问的：看门狗豁免、快照恢复都靠它。
+	 *
+	 *  **进程共享**（与 sharedConvs 同构）：server-owned-chats 把对话归给了服务端，
+	 *  问卷同理 —— 它属于**对话**而不是某个客户端。所以每台在线设备都能看到、
+	 *  都能回答，第一个答的生效（见 ask-delivery.ts）。 */
+	private static readonly sharedQuestions = new Map<string, PendingQuestionEntry>();
+	private get pendingQuestions(): Map<string, PendingQuestionEntry> {
+		return ClientSession.sharedQuestions;
+	}
 
 	// -----------------------------------------------------------------------
 	// 浏览器页面桥（标准 pi 引擎的 browser_page customTool）：模型调工具 → 发
@@ -3072,6 +3086,39 @@ export class ClientSession {
 
 	/** 活着的客户端会话（扇出用；attach/dispose 维护）。 */
 	private static readonly liveSessions = new Set<ClientSession>();
+
+	/** 全进程在线（有活 socket）的客户端数。`except` 用于 dispose 路径：数的是
+	 *  「除我之外还剩几台」。ClientSession 会比它的 socket 活得久，所以必须看
+	 *  sinkCount 而不是会话是否存在（同 viewedElsewhere 的教训）。 */
+	private static connectedClientCount(except?: ClientSession): number {
+		let n = 0;
+		for (const cs of ClientSession.liveSessions) {
+			if (cs === except || cs.disposed) continue;
+			if (cs.sinkCount() > 0) n++;
+		}
+		return n;
+	}
+
+	/** 问卷登记/解决后刷新**所有**在线客户端的对话列表（上游的「?」角标）。
+	 *  问卷是进程共享的（sharedQuestions），只刷本客户端的话，别的设备上的角标要等它
+	 *  下一次自己推列表才更新 —— 在台式机上答完，笔记本上的「?」还挂着。
+	 *  没有 socket 的会话跳过：重连时 attach 会整份重推。 */
+	private static emitConversationsToAll(): void {
+		for (const cs of ClientSession.liveSessions) {
+			if (cs.disposed || cs.sinkCount() === 0) continue;
+			cs.emitConversations();
+		}
+	}
+
+	/** 广播给**所有**在线客户端（不管它在看哪条对话）。目前只用于问卷：
+	 *  问卷是阻塞整个 agent 循环的，漏给一台就可能永远等下去，所以不走
+	 *  fanOutToViewers 那套 activeId 过滤。用 emitLocal 避免再次扇出成环。 */
+	private static broadcastToAllClients(msg: ServerMessage): void {
+		for (const cs of ClientSession.liveSessions) {
+			if (cs.disposed) continue;
+			cs.emitLocal(msg);
+		}
+	}
 
 	/** (Re)attach event plumbing to the ACTIVE conversation's session. */
 	private async bindSession(): Promise<void> {
@@ -4301,22 +4348,43 @@ export class ClientSession {
 				reject(new Error("问卷功能已关闭，可在设置中重新开启"));
 				return;
 			}
-			const id = `q-${++this.questionSeq}`;
-			this.pendingQuestions.set(id, { resolve, questions, conversationId });
+			const id = `q-${++ClientSession.questionSeq}`;
+			const conversationTitle = conversationId ? this.convs.get(conversationId)?.title : undefined;
+			const entry: PendingQuestionEntry = { resolve, questions, conversationId, conversationTitle };
+			this.pendingQuestions.set(id, entry);
 			// 运行列表的「?」角标靠 conversations 推送（问卷登记/解决不经过快照通道）。
-			this.emitConversations();
-			// 只向目标会话的当前激活端推送弹窗，避免后台问卷污染当前前台会话。
-			if (shouldPopQuestion(conversationId, this.activeId)) {
-				const conv = conversationId ? this.convs.get(conversationId) : this.conv;
-				const conversationTitle = conv?.title;
-				this.emit({
+			ClientSession.emitConversationsToAll();
+			// ask-question-delivery：不走上游的 shouldPopQuestion（只推给正开着该对话的页面）。
+			// 别的对话在问也照样弹，对话框标出是哪条对话在问 —— 问卷阻塞整个 agent 循环，
+			// 比起角标更不能漏看（用户 2026-09-23 的选择）。
+			// 没有任何页面连着时不能直接 emit —— emit 会静默丢弃，而 askUser 不设
+			// 超时，这轮就永远回不来了（问卷「不弹」的根因）。判定见 ask-delivery.ts。
+			if (askDeliveryOnAsk(ClientSession.connectedClientCount()) === "emit") {
+				// multi-device：广播给**所有**在线设备，而不只是发起提问的那一台——
+				// 在笔记本上被问、走到台式机上回答。conversationTitle 让正在看别
+				// 的对话的那台知道这是谁在问。
+				ClientSession.broadcastToAllClients({
 					type: "question_pending",
 					id,
 					questions,
 					...(conversationId !== undefined ? { conversationId } : {}),
 					...(conversationTitle ? { conversationTitle } : {}),
 				});
+				return;
 			}
+			// 刷新/重连的空窗：等一会儿。期间页面回来了 → 快照把对话框补出来
+			// （pendingQuestionForSnapshot 不再按对话过滤），不必补发即时消息。
+			entry.graceTimer = setTimeout(() => {
+				const stillPending = this.pendingQuestions.get(id) === entry;
+				const clientCount = ClientSession.connectedClientCount();
+				if (askDeliveryOnGraceExpiry({ clientCount, stillPending }) !== "reject") return;
+				this.pendingQuestions.delete(id);
+				// 角标也要跟着消失（同 resolveQuestion）。
+				ClientSession.emitConversationsToAll();
+				reject(new Error(ASK_USER_NO_CLIENT_ERROR));
+			}, ASK_USER_NO_CLIENT_GRACE_MS);
+			// 别让这个计时器拖住进程退出（dispose 时也会清，见 cancelPendingQuestions）。
+			entry.graceTimer.unref?.();
 		});
 	}
 
@@ -4324,33 +4392,33 @@ export class ClientSession {
 	 *  pendingQuestions 中键；未匹配（对方刚回答/取消、页面刷新重发）静默忽略。
 	 *  成功 resolve 后同步推 question_retracted + conversations：本页 live 对话框
 	 *  靠前者收起（跨页作答时源页就靠它），别处的「?」角标靠后者即时消失。
+	 *  ask-question-delivery：两者都推给**所有**在线设备（问卷进程共享，每台都可能开着）。
 	 *  返回是否真的恢复了一个挂起提问（跨页作答的送达回执用）。 */
 	resolveQuestion(id: string, answers: QuestionAnswer[], cancelled?: boolean): boolean {
 		const pending = this.pendingQuestions.get(id);
 		if (!pending) return false;
 		this.pendingQuestions.delete(id);
+		if (pending.graceTimer) clearTimeout(pending.graceTimer);
 		pending.resolve(cancelled ? null : answers);
-		this.emit({ type: "question_retracted", id });
+		// multi-device：别的设备上还开着同一张问卷 —— 广播收起，第一个答的生效。
+		// 前端只收「正好是这个 id」的那张，紧接着弹出的下一张不会被误关。
+		ClientSession.broadcastToAllClients({ type: "question_retracted", id });
 		// 同上：角标消失也要即时推送（否则要等到 run 结束别处才知道问完了）。
-		this.emitConversations();
+		ClientSession.emitConversationsToAll();
 		return true;
 	}
 
-	/** 快照侧的待答提问（UiState.pendingQuestion）：只带当前对话的问卷——切回
-	 *  原对话会重推快照，对话框随之回来（重连/刷新/第二标签页的恢复通道）。 */
+	/** 快照侧的待答提问（UiState.pendingQuestion）：**不分对话一律带上**——问卷
+	 *  的唯一入口就是对话框，按 activeId 过滤会让「提问时没人在线」的问卷只在用户
+	 *  恰好回到那条对话时才复活，否则永远丢失而服务端还阻塞着（见 ask-delivery.ts）。
+	 *  conversationId 随快照一起给前端，用于标注这张问卷属于哪条对话。 */
 	private pendingQuestionForSnapshot(): UiState["pendingQuestion"] {
-		for (const [id, p] of this.pendingQuestions) {
-			if (p.conversationId !== undefined && p.conversationId !== this.activeId) continue;
-			const conv = p.conversationId !== undefined ? this.convs.get(p.conversationId) : this.conv;
-			const conversationTitle = conv?.title;
-			return {
-				id,
-				questions: p.questions,
-				...(p.conversationId !== undefined ? { conversationId: p.conversationId } : {}),
-				...(conversationTitle ? { conversationTitle } : {}),
-			};
-		}
-		return null;
+		const picked = pickPendingQuestionForSnapshot(this.pendingQuestions);
+		if (!picked) return null;
+		// 标题按对话现名取（改过名也跟上，同上游）；取不到时用提问时记下的（picked 已带）。
+		// 不回落到「本客户端当前对话」：问卷进程共享，那会给别的设备标错来源。
+		const liveTitle = picked.conversationId !== undefined ? this.convs.get(picked.conversationId)?.title : undefined;
+		return liveTitle ? { ...picked, conversationTitle: liveTitle } : picked;
 	}
 
 	/** 对话是否阻塞在等用户回答上（用于 stall 失联判定豁免）。 */
@@ -4407,9 +4475,16 @@ export class ClientSession {
 		});
 	}
 
-	/** 关闭所有挂起提问（dispose 时清理）：以「取消」解析，避免模型挂死。 */
+	/** 关闭所有挂起提问（dispose 时清理）：以「取消」解析，避免模型挂死。
+	 *
+	 *  multi-device：问卷属于对话不属于客户端，所以只有「除我之外一台都不剩」时
+	 *  才真取消；否则留给还连着的设备去答。不这么做的话，client-per-load 之后
+	 *  每次刷新都会 dispose 一个旧会话，等于每次刷新都把自己的问卷打掉。 */
 	cancelPendingQuestions(): void {
+		const left = ClientSession.connectedClientCount(this);
+		if (shouldCancelOnClientDispose({ connectedClientsLeft: left }) === "keep") return;
 		for (const [, p] of this.pendingQuestions) {
+			if (p.graceTimer) clearTimeout(p.graceTimer);
 			p.resolve(null);
 		}
 		this.pendingQuestions.clear();
@@ -6873,7 +6948,7 @@ export class ClientSession {
 		}
 		if (!mainId) mainId = payload.convs[0]?.id ?? "";
 		for (const q of payload.questions) {
-			const nid = `q-${++this.questionSeq}`;
+			const nid = `q-${++ClientSession.questionSeq}`;
 			const qConvId = fix(q.conversationId);
 			this.pendingQuestions.set(nid, {
 				resolve: q.resolve,
