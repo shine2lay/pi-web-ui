@@ -239,14 +239,16 @@ try {
 	const runningFile = await clientA.waitForState((s) => Boolean(s.sessionFile), 15000).then((s) => s.sessionFile);
 	console.log(`✓ A streaming on ${runningFile}`);
 
-	// 0a. attach 路径：新标签页初始恢复即命中正在跑的那条 —— 首帧快照之前必须已纠正为空白。
+	// 0a. attach 路径（reload-adopt）：对话是进程共享的，新标签页/刷新**直接接管**
+	// 已经开着的那条 —— 不再从磁盘恢复第二份，也不再有「为你停在了新对话」那层保护。
+	// client-per-load 之后每次刷新都是新 clientId，那层保护挡的其实是用户自己。
 	clientC = await openClient("cross-client-C", false);
-	await clientC.waitForType("notice", (m) => noticeText(m).includes("停在了新对话"), 15000);
+	await clientC.waitForState((s) => s.sessionFile === runningFile, 15000);
 	await sleep(500);
-	if (clientC.state.sessionFile === runningFile)
-		throw new Error("新标签页默认打开了正在跑的对话 —— 首帧即应纠正为空白");
-	if (clientC.messages.length !== 0) throw new Error("新标签页默认对话不是空白的");
-	console.log("✓ 新标签页不再默认打开正在跑的对话（attach 即纠正，首帧空白）");
+	if (clientC.messages.length === 0) throw new Error("接管之后应当看到那条对话的历史，而不是空白");
+	if (clientC.received.some((m) => m.type === "notice" && noticeText(m).includes("停在了新对话")))
+		throw new Error("不该再出现「停在了新对话」——那是自己刷新前的窗口");
+	console.log("✓ 新标签页/刷新直接接管正在跑的那条对话（无第二份 runtime、无提示）");
 	clientC.ws.close();
 
 	// 0b. setCwd 路径：server-owned-chats 之后，进入某个项目会直接**订阅**该项目里

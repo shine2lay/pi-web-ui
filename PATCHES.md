@@ -25,6 +25,132 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | flat-recent-chats       | `local` | `web/src/conv-groups.ts`, `LeftPanel.tsx`, `server/agent-service.ts`, `protocol.ts` |
 | no-mcp-restart-nag      | `local` | `server/webui-context.ts`, `tests/unit/mute-mcp-restart-nag.test.ts`                |
 | ask-question-delivery   | `local` | `server/ask-delivery.ts`, `agent-service.ts`                                        |
+| reload-adopt            | `local` | `server/attach-adopt.ts`, `agent-service.ts`                                        |
+
+---
+
+## reload-adopt
+
+**状态**：`local`（上游不适用：它的对话有归属，这里没有）
+**基线**：v0.86.2（依赖 `server-owned-chats` + `client-per-load`）；2026-09-23 同步到 v0.94.1（见「与上游 v0.94 的关系」）
+
+### 问题
+
+刷新一下，自己的对话就被自己挡在外面：落在空白新对话上，并被告知
+「该项目最近的对话…正在另一处运行，直接打开会造出第二个写者」。那个「另一处」
+就是你刷新前的窗口。
+
+三个补丁叠在一起才有这个效果：
+
+1. 上游 issue #145 的保护：`attach()` 发现「最近那条正在别处跑」就停在空白对话；
+2. `client-per-load`：每次页面加载都是**新 clientId**，所以刷新后的你对服务端
+   而言就是「别人」；而旧 `ClientSession` 不随 socket 断开而销毁（PTY 要活下来），
+   于是它以「正在跑的另一处」的身份留在进程里；
+3. `server-owned-chats`：对话已经是进程共享的，**第二个 writer 在结构上已经
+   不可能** —— 也就是说第 1 条那个保护的前提在本 fork 里已经不成立了。
+
+真正的漏洞在 `ClientSession.create()`：它永远 `SessionManager.continueRecent(cwd)`，
+也就是**从磁盘再恢复一份**，从不看一眼共享表里是不是已经开着这条。上游用
+「停在空白」来绕开它；切项目那条路径却早已是对的写法（`Prefer the target project's
+own most recently active conversation`）—— 两处口径不一致。
+
+### 改法
+
+接入时**接管已经开着的那条**，而不是再恢复一份（与切项目路径同口径）：
+
+- `server/attach-adopt.ts`：`pickAdoptTarget(cwd, candidates)` —— 同 cwd 里 `lastActiveAt`
+  最大的一条；没有候选返回 `null`（照旧从磁盘恢复）。纯函数，可单测。
+- `attach()` 删掉 issue #145 那整块（含 `SessionManager.list()` 扫目录），改成纯内存
+  判断；命中候选时以 `blank: true` 建会话（不碰磁盘），再 `adoptConversation()`。
+- `adoptConversation()` 不走 `switchConversation()`：后者会 emit 一堆东西（含客户端从没
+  请求过的 `switch_done`），而此刻 sink 还没挂上 —— 首帧快照自然带着 activeId。
+  刚建的空白对话随即回收（`displaceActive` → `removeConversation`，即切项目那套），
+  否则每次刷新都多一条空对话。
+- 「停在了新对话」那条提示从 `create()` 里删除（切项目首访那条路径的同文案保留，
+  那里按定义没有同 cwd 的候选）。
+
+### 顺手修掉的真 bug：对话 id 撞键
+
+`convSeq` 是 **per-ClientSession** 的，`convs` 却是**进程共享**的 —— 两个窗口各自
+生成 `c1`，后来那个 `convs.set("c1", …)` 会把前一个窗口的对话从共享表里**静静
+换掉**，也就是 `server-owned-chats` 声称不可能出现的那个第二个 writer。之前没被发现，
+是因为两个窗口的 `c1` 恰好恢复自同一份转录，`server-owned-chats-test` 的断言
+「同一个 conversation」就这么阴差阳错地绿了。接管之后候选不再来自磁盘，撞键当场
+暴露（接管目标被自己的空白对话顶掉）。`convSeq` 改为 `static` —— 共享注册表 +
+私有序号就是撞键，跟 `questionSeq`（见 ask-question-delivery）同一个错。
+
+### 与上游 v0.94 的关系（2026-09-23 同步到 v0.94.1）
+
+- 上游 v0.94 在 `attach()` 里加了「浏览器重启认领」（`findAdoptableOrphan` →
+  `pickAdoptableOrphan`）：没有别的在线浏览器时，把最近断开的残留 `ClientSession` 整个
+  过户给新 clientId，并提示「已恢复你关闭浏览器前的工作会话」。**本 fork 不调用它**：
+  - 它按「clientId 存 sessionStorage、刷新不换 id」设计，只在关掉浏览器重开时触发；
+    `client-per-load` 下每次单标签刷新都会触发。
+  - `server-owned-chats` 之后 `convs` 是进程共享的，每个残留会话的「有内容 / 在跑 /
+    最近活跃」算的都是同一张表、完全相同（残留会话又只在停服时才清）—— 于是总挑到
+    **最早**的那个残留，落到它很久以前打开的对话上，还每次刷新都弹那条提示。
+
+  刷新/新标签落到哪条，统一由 `pickAdoptTarget` 决定。上游的函数原样保留（只是不调），
+  下次同步少一处冲突。上游的冒烟 `orphan-adopt-test` 测的正是这条被跳过的路径。
+
+- 上游 issue #235 的坏转录修复（`openManagerAndRuntime` + `transcriptRepairNotices`）保留，
+  只改了 `opts.blank` 的注释。上游新增的 `blankTitle` / `idleHeld` 两种「停在空白」提示
+  随 issue #145 那块一起删掉。
+- 接线用上游的 `wireClient()`，它比原来手写的 6 行多了 `getClaimStore`、
+  `findConversationHome`、`steerConversationElsewhere` 和 `schedulerStore`。
+
+### 回归
+
+- `tests/unit/attach-adopt.test.ts`（7 项）：无候选 → null、开着就接管、同项目多条取
+  最后活跃、跨项目不抢、并列先到先得、cwd 字面比较（尾斜杠/子目录不算同项目）、
+  `lastActiveAt: 0` 不被当假值跳过
+- `tests/cross-client-session-test.mjs` 0a 改口径：原来断言「首帧空白 + 出现停在新对话
+  提示」，现在断言「直接接管那条（sessionFile 一致、能看到历史）且无提示」
+- 全量冒烟 52 中 49 过；3 个失败与本补丁无关，已逐一定位：
+  - `conv-cross-project-test`：断言上游的「切对话跟着切工作区」，而 `chat-cwd-pin`
+    故意关掉了它 —— `PI_WEB_UI_CHAT_FOLLOWS_CWD=1` 下该测试 ALL PASS（已验）；
+  - `settings-test`：`EADDRINUSE :8931`（本机端口被占）；
+  - `terminal-smoke-test`：49 checks 全过，收尾退出码噪声。
+- 单测全量 1451 passed / 116 files
+
+### 子代理必须排除（及其测试缺口）
+
+`sa-*` 子代理对话也在共享表里，**跟父对话同一个 cwd**，且 `makeConversation()` 给它
+`lastActiveAt = Date.now()` —— 刚派出一个子代理，它就是这个 cwd 里最「新」的那条。
+不过滤就会把刷新的用户直接丢进子代理会话。共享表里按 cwd 挑对话的地方全都过滤它
+（`conv.cwd !== cwd || conv.isSubagent` 等 4 处），这里跟着一致。
+
+**测试缺口（已知，别高估）**：`tests/subagent-ui-context-test.mjs` 末尾新增的三条断言
+（接管到主对话、子代理仍在列表里、接管的不是 `sa-*`）**杀不掉变异**：把
+`|| c.isSubagent` 拿掉重新 build，该测试照样 ALL PASS（已实跑变异探针确认）。
+原因：它在子代理**跑完之后**才刷新，此时主对话又成了最新的那条（到底哪条路径
+重新抬了父对话的 `lastActiveAt` 没查到 —— 6 处赋值点里没一个明显对得上）。
+真正危险的窗口是「子代理**正在跑**时刷新」，要确定性复现得让假模型把子代理
+那一回卡住。所以：**这条规则的回归保障是单测，不是那个 e2e**；e2e 那三条只算
+便宜的烟雾（它们确实钉住了「刷新接管到带历史的主对话」这个正向行为）。
+
+### 切项目（`setCwd`）复用同一条规则
+
+`setCwd()` 里原本是一份手写的「同 cwd 取 lastActiveAt 最大」循环，漏了 `isSubagent`。
+这个漏洞比 reload 那个**更好触发**：离开项目 X 时 `displaceActive()` 会把主对话拿掉，
+等再切回 X，`cwd === X` 的候选里就只剩子代理那条 —— 不是「比时间戳输了」，是
+「只剩它」。现在直接调 `pickAdoptTarget()`：规则只剩一处，行为完全一致（同样的
+严格 `>` 并列先到先得、同样的迭代顺序），只多了排除子代理。
+
+这次的测试是**真能杀变异的**（上一轮的教训）：纯函数单测只能证明
+`pickAdoptTarget` 自己对，证不了 `setCwd` 真的去调了它（这正是典型的「存活变异」
+类型：逻辑有测试，**调用点没有**）。所以按 `chat-cwd-pin.test.ts` 的做法加了一条
+调用点测试：拿 `ClientSession.prototype.setCwd` 配桩 this 直接跑（零 token、零端口，
+两条对话都在目标目录下所以不会走到 SessionManager）。变异探针：把老循环原样探回去，
+该测试 `AssertionError: expected 'sa-1234abcd' to be 'main-there'` —— 变异被杀。
+
+### 没做（留给后续）
+
+- `create()` 仍会先建一个马上要回收的空白 runtime（它顺手播下 `sharedModelRuntime`
+  的种）。浪费一次创建，但改掉要拆 `create()` 的结构，收益不抵风险。
+- 切项目首访那条路径里的 `resumeSkipped` 提示现在几乎不可能触发（持有该文件的
+  对话通常就是同 cwd 的 `target`，上一步就被选走了），留着不动。
+- ~~切项目那条路径有同样的子代理漏洞~~ → 已修，见下。
 
 ---
 
