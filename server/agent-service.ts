@@ -48,6 +48,7 @@ import {
 	shouldCancelOnClientDispose,
 } from "./ask-delivery.js";
 import type { PendingQuestionEntry } from "./ask-delivery.js";
+import { type AdoptCandidate, pickAdoptTarget } from "./attach-adopt.js";
 import {
 	checkAll as checkAllUpdates,
 	collectTargets,
@@ -1390,9 +1391,23 @@ export class ClientSession {
 	}
 	/** 所有客户端共用的一份对话表（见上）。 */
 	private static readonly sharedConvs = new Map<string, Conversation>();
+
+	/** reload-adopt：共享表里已经开着的对话（只暴露判断所需的字段）。 */
+	static openConversations(): AdoptCandidate[] {
+		const out: AdoptCandidate[] = [];
+		for (const c of ClientSession.sharedConvs.values()) {
+			out.push({ id: c.id, cwd: c.cwd, lastActiveAt: c.lastActiveAt });
+		}
+		return out;
+	}
 	/** 本客户端**正在看**哪条对话（纯视图状态，不代表所有权）。 */
 	private activeId = "";
-	private convSeq = 0;
+	/** 对话表是**进程共享**的，所以它的键必须进程唯一 —— 计数器跟着改成 static。
+	 *  （原来每个 ClientSession 自己数：两个窗口各自生成 `c1`，后来的那个
+	 *   `convs.set("c1", …)` 会把前一个窗口的对话从共享表里静静换掉 ——
+	 *   正是 server-owned-chats 声称在结构上不可能出现的那个第二个 writer。
+	 *   同 questionSeq：共享注册表 + 私有序号 = 撞键。） */
+	private static convSeq = 0;
 	/** One ModelRuntime shared by all conversations — the model chosen in the
 	 *  top bar applies to every chat, not just the one that set it. Seeded by
 	 *  the first conversation and reused by later ones. */
@@ -2474,7 +2489,7 @@ export class ClientSession {
 		clientId: string,
 		cwd: string,
 		stateStore: ClientStateStore,
-		opts?: { blank?: boolean; blankTitle?: string; idleHeld?: boolean },
+		opts?: { blank?: boolean },
 	): Promise<ClientSession> {
 		const agentDir = process.env.PI_CODING_AGENT_DIR ?? getAgentDir();
 
@@ -2484,7 +2499,7 @@ export class ClientSession {
 		// Resume the most recent session for this project — the SDK default
 		// per-project dir (<agentDir>/sessions/--<cwd>--/, shared with the
 		// pi CLI/TUI) — or start a fresh one on first visit.
-		// issue #145: opts.blank = 跳过恢复（最近那条在别处跑着），直接空白新对话。
+		// reload-adopt: opts.blank = 跳过磁盘恢复（调用方要接管共享表里已开的那条）。
 		// issue #235：坏转录（重复压缩标记成环）修一次再试，否则整项目首屏
 		// "Failed to initialize session"。
 		const opened = await cs.openManagerAndRuntime(
@@ -2516,25 +2531,6 @@ export class ClientSession {
 					textEn: d.message,
 				});
 			}
-		}
-		// issue #145：因别处仍持有而跳过恢复 —— 首帧即被告之（pendingNotices 随 attachSink 下发）。
-		// 跑着/空闲都拦：直接恢复会造出第二个写者（两边轮流发送分叉历史）。
-		if (opts?.blank && opts?.blankTitle) {
-			cs.pendingNotices.push(
-				opts.idleHeld
-					? {
-							type: "notice",
-							level: "info",
-							text: `该项目最近的对话「${opts.blankTitle}」在另一处开着（当前空闲），为你停在了空白新对话 —— 可在左栏「运行的对话」里把它过户过来继续看，或从历史对话里打开（只留一处发送消息，否则历史分叉）。`,
-							textEn: `The most recent conversation ("${opts.blankTitle}") is still open in another window (currently idle), so you landed on a blank chat instead — take it over from Running chats (tagged "Elsewhere") or reopen it from History (send new messages from only one place, or the history will fork).`,
-						}
-					: {
-							type: "notice",
-							level: "info",
-							text: `该项目最近的对话「${opts.blankTitle}」正在另一处运行，为你停在了新对话 —— 直接打开会造出第二个写者。左栏「运行的对话」里能看到它（标着“另一处”），等它跑完再打开。`,
-							textEn: `The most recent conversation ("${opts.blankTitle}") is running in another window, so you landed on a new chat instead — opening it here would create a second writer. It is listed under Running chats (tagged "Elsewhere"); open it after it finishes.`,
-						},
-			);
 		}
 		await cs.bindSession();
 		// 同步全局默认模型至 SDK settingsManager（若 settings.json 尚未写入），防底层 session 创建时 findInitialModel 兜底回退硬编码模型
@@ -2878,7 +2874,7 @@ export class ClientSession {
 
 	/** Allocate a stable conversation id before constructing its runtime/tools. */
 	private nextConversationId(): string {
-		return `c${++this.convSeq}`;
+		return `c${++ClientSession.convSeq}`;
 	}
 
 	/** Wrap a fresh runtime as a new conversation record. */
@@ -6990,6 +6986,26 @@ export class ClientSession {
 	}
 
 	/** Switch the ACTIVE conversation without interrupting any other chat. */
+	/** reload-adopt：接管共享表里已经开着的那条（只在 attachSink **之前**调）。
+	 *
+	 *  不走 switchConversation：那条路径会 emit 一堆东西（含一条客户端从没请求过的
+	 *  `switch_done`），而此刻连 sink 都还没挂上 —— 首帧快照自然带着 activeId，
+	 *  什么都不用发。位置调整仍照 displace → activeId → 回收的旧顺序。 */
+	adoptConversation(id: string): boolean {
+		const target = this.convs.get(id);
+		if (!target || id === this.activeId) return false;
+		// 刚建的空白对话被挤下去后直接回收，否则每次刷新都多一条空对话。
+		// （runtime.dispose() 只拆 session，不动 services.modelRuntime —— sharedModelRuntime
+		//   就是从它那里播的种，活得下来。）
+		const displaced = this.displaceActive();
+		this.activeId = id;
+		this.markRecentSeen(target);
+		if (displaced) this.removeConversation(displaced.id);
+		target.promptedSinceActive = false;
+		target.lastActiveAt = Date.now();
+		return true;
+	}
+
 	async switchConversation(id: string): Promise<void> {
 		if (!this.convs.has(id) || id === this.activeId) return;
 		const displaced = this.displaceActive();
@@ -10040,66 +10056,47 @@ export class AgentService {
 			if (inflight) {
 				cs = await inflight;
 			} else {
-				// 浏览器重启认领（clientId 存 sessionStorage，关浏览器即失；服务端残留
-				// ClientSession 的运行中对话否则永远卡在“另一处”只读，连看都看不了）：
-				// 无其他在线浏览器时，把最近断开的残留会话整体过户给这个新 id
-				// （只换 map 键，不搬 runtime：对话/终端/订阅/cwd 原样保留，
-				// 流式增量经尾部 attachSink 直接推给新 socket）。
-				// 有其他在线标签时不认领（issue #10 隔离优先）；quiesce 排空期也放行
-				// （这是重连既有工作，不是新工作）。本段无 await，并发 attach 原子。
-				const orphan = this.findAdoptableOrphan(clientId);
-				if (orphan) {
-					this.clients.delete(orphan.oldId);
-					this.clients.set(clientId, orphan.cs);
-					cs = orphan.cs;
-					// 先按新 id 重接（首帧 attachSink 的 elsewhere/self-exclusion 依赖它）。
-					this.wireClient(cs, clientId);
-					cs.noteAdopted();
-					// 服务重启前记在旧 id 名下的中断记录搬到新 id 名下，尾部
-					// resumeInterrupted 按新 id 消费（只认领一次，不重复恢复）。
-					const inter = this.stateStore.takeInterrupted(orphan.oldId);
-					if (inter?.length) this.stateStore.saveInterrupted(clientId, inter);
-				} else {
-					// Admission gate: while quiesced, only clients with an EXISTING
-					// session may attach (they can watch their runs drain); brand-new
-					// clients are refused — index.ts closes their socket (4403) and the
-					// browser reconnect loop retries after admission reopens.
-					if (this.quiesced) {
-						throw new QuiesceRejectedError("新连接被拒绝，请等服务器恢复后重试");
-					}
-					// patch: no-cwd-restore —— 不再自动恢复 lastCwd。新连接一律用服务端启动
-					// 目录；想去别的项目用左栏切。自动恢复的问题是它会把你拽回上一次碰过的
-					// 目录（而不是你现在想要的），且每开一个新标签页都重演一次。
-					const cwd = this.cwd;
-					// Sessions use the SDK default per-project dir — no per-client dir.
-					// issue #145：新标签页默认恢复项目最近的会话 —— 若那条仍被别处持有
-					// （跑着或空闲），建之前就决定空白（第二个 writer 根本不会被打开，
-					// 也无需事后拆 runtime）。之前只拦 running：空闲持有照样恢复出双
-					// writer，两边轮流发送分叉历史。其他客户端不存在时不扫目录。
-					let createOpts: { blank?: boolean; blankTitle?: string; idleHeld?: boolean } | undefined;
-					if (this.clients.size > 0) {
-						try {
-							const infos = await SessionManager.list(cwd, piSessionsRoot());
-							const recent = infos[0]?.path ? resolve(infos[0].path) : undefined;
-							const owner = recent ? this.findSessionOwner(recent, clientId) : null;
-							if (owner && (owner.connected || owner.isStreaming)) {
-								createOpts = { blank: true, blankTitle: owner.title, ...(owner.isStreaming ? {} : { idleHeld: true }) };
-							}
-						} catch {
-							// 列表失败不挡正常恢复
-						}
-					}
-					const creating = ClientSession.create(clientId, cwd, this.stateStore, createOpts).finally(() => {
-						this.pending.delete(clientId);
-					});
-					this.pending.set(clientId, creating);
-					cs = await creating;
-					this.clients.set(clientId, cs);
-					// issue #145 接线提前：首帧 elsewhere 依赖它。
-					this.wireClient(cs, clientId);
-					// Make sure the restored/default workspace appears in the project list.
-					this.stateStore.remember(clientId, cwd);
+				// reload-adopt：不走上游 v0.94 的「浏览器重启认领」（findAdoptableOrphan）。
+				// 那套按「clientId 存 sessionStorage、刷新不换 id」设计，只在关掉浏览器重开时触发；
+				// 本 fork 的 client-per-load 让每次刷新都是新 id，它会在每次单标签刷新时触发。
+				// 而 server-owned-chats 之后 convs 是进程共享的：每个残留会话的「有内容 / 在跑 /
+				// 最近活跃」算的是同一张表、完全相同，于是总挑到最早的那个残留 —— 落到它
+				// 很久以前打开的对话上，还每次都弹「已恢复你关闭浏览器前的工作会话」。
+				// 刷新/新标签落到哪条对话，统一由下面的 pickAdoptTarget 决定。
+				// Admission gate: while quiesced, only clients with an EXISTING
+				// session may attach (they can watch their runs drain); brand-new
+				// clients are refused — index.ts closes their socket (4403) and the
+				// browser reconnect loop retries after admission reopens.
+				if (this.quiesced) {
+					throw new QuiesceRejectedError("新连接被拒绝，请等服务器恢复后重试");
 				}
+				// patch: no-cwd-restore —— 不再自动恢复 lastCwd。新连接一律用服务端启动
+				// 目录；想去别的项目用左栏切。自动恢复的问题是它会把你拽回上一次碰过的
+				// 目录（而不是你现在想要的），且每开一个新标签页都重演一次。
+				const cwd = this.cwd;
+				// Sessions use the SDK default per-project dir — no per-client dir.
+				// reload-adopt：对话是进程共享的（server-owned-chats）—— 这个 cwd 下已经
+				// 开着的那条直接接管，而不是从磁盘再恢复一份（那会让同一份 JSONL 被
+				// 两个 runtime 打开）。纯内存判断，不扫目录；没有候选时照旧恢复。
+				const adoptId = pickAdoptTarget(cwd, ClientSession.openConversations());
+				const creating = ClientSession.create(
+					clientId,
+					cwd,
+					this.stateStore,
+					adoptId ? { blank: true } : undefined,
+				).finally(() => {
+					this.pending.delete(clientId);
+				});
+				this.pending.set(clientId, creating);
+				cs = await creating;
+				this.clients.set(clientId, cs);
+				// issue #145 接线提前：首帧 elsewhere 依赖它。
+				this.wireClient(cs, clientId);
+				// reload-adopt：挂 sink 之前就定位到已开的那条，首帧快照直接就是它。
+				// （候选可能在 create() 的 await 期间被别人关掉 —— adoptConversation 自己查。）
+				if (adoptId) cs.adoptConversation(adoptId);
+				// Make sure the restored/default workspace appears in the project list.
+				this.stateStore.remember(clientId, cwd);
 			}
 		}
 		// First attach after a restart: reopen sessions that were streaming
