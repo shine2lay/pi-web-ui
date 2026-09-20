@@ -108,6 +108,10 @@ const ALL = [
 	"subagent-thinking-test",
 	"subagent-ui-context-test",
 	"switch-session-background-test",
+	// switch-loading：切换回执（先快照后 switch_done / 失败带原因）。
+	"switch-ack-test",
+	// switch-loading：连上就切、设置很大时，打开的快照不被背压丢掉。
+	"switch-open-burst-test",
 	"server-owned-chats-test",
 	"cross-client-session-test",
 	// 浏览器关闭重开后残留会话认领（无在线浏览器时新标签整体接管，有在线时不抢）。

@@ -241,6 +241,7 @@ import type {
 	QuestionAnswer,
 	ServerMessage,
 	SessionSummary,
+	SwitchTarget,
 	UiApprovalCategory,
 	UiApprovalPolicyState,
 	UiApprovalRule,
@@ -7545,8 +7546,9 @@ export class ClientSession {
 			text: `已切换为「${hit.name}」预设`,
 			textEn: `Switched to preset "${hit.name}"`,
 		});
-		this.pushSettings();
+		// 先快照后设置（见 switchConversationNow 末尾；带预设的新建对话也走这里）。
 		this.flushSnapshot();
+		this.pushSettings();
 	}
 
 	/** 设置新会话默认预设。 */
@@ -8820,8 +8822,9 @@ export class ClientSession {
 		if (!ephemeral && active && isBlank(active)) {
 			if (_preset) await this.selectAgentPreset(_preset);
 			else {
-				this.pushSettings();
+				// 先快照后设置（见 switchConversationNow 末尾）。
 				this.flushSnapshot();
+				this.pushSettings();
 			}
 			return true;
 		}
@@ -8950,7 +8953,6 @@ export class ClientSession {
 			void this.pushSlashCommands();
 			// 新对话即当前打开 → 插件重拉（轨迹视图跟随）。
 			this.notifyConversationChanged();
-			this.pushSettings();
 			ready = true;
 		} catch (err) {
 			this.emit({
@@ -8961,6 +8963,8 @@ export class ClientSession {
 			});
 		}
 		this.flushSnapshot();
+		// 先快照后设置（见 switchConversationNow 末尾）。
+		if (ready) this.pushSettings();
 		return ready;
 	}
 
@@ -9533,6 +9537,17 @@ export class ClientSession {
 	}
 
 	/** Switch the ACTIVE conversation without interrupting any other chat. */
+	/** switch-loading：切换回执。成功回执必须在 flushSnapshot() **之后**发 —— 客户端收到它
+	 *  就撤掉「正在打开…」，那时新对话的内容必须已经在路上（flushSnapshot 同步 emit，
+	 *  同一条 socket 保序，所以「先快照后回执」在这里就是调用顺序）。 */
+	private emitSwitchDone(target: SwitchTarget): void {
+		this.emit({ type: "switch_done", target });
+	}
+
+	private emitSwitchFailed(target: SwitchTarget, text: string, textEn: string): void {
+		this.emit({ type: "switch_failed", target, error: text, errorEn: textEn });
+	}
+
 	/** reload-adopt：接管共享表里已经开着的那条（只在 attachSink **之前**调）。
 	 *
 	 *  不走 switchConversation：那条路径会 emit 一堆东西（含一条客户端从没请求过的
@@ -9554,7 +9569,17 @@ export class ClientSession {
 	}
 
 	async switchConversation(id: string): Promise<void> {
-		if (!this.convs.has(id) || id === this.activeId) return;
+		if (id === this.activeId) return;
+		if (!this.convs.has(id)) {
+			// 客户端点的那一行在它点下去之前刚好被释放/移除了（列表推送有延迟）。
+			// 以前这里静默返回，前端什么都看不到；现在它在等回执，得告诉它为什么没切成。
+			this.emitSwitchFailed(
+				{ kind: "conversation", id },
+				"这条对话已不在运行列表里（可能刚被关闭），请从历史里重新打开。",
+				"That conversation is no longer open (it may have just been closed). Reopen it from history.",
+			);
+			return;
+		}
 		const displaced = this.displaceActive();
 		this.activeId = id;
 		// 看一眼就算看过了：绿灯灭掉（行本身永远留在「最近对话」里）。
@@ -9600,8 +9625,13 @@ export class ClientSession {
 		}
 		// 当前打开对话变了 → 插件重拉（轨迹视图切会话后即刷新，不等轮询）。
 		this.notifyConversationChanged();
-		this.pushSettings();
 		this.flushSnapshot();
+		this.emitSwitchDone({ kind: "conversation", id });
+		// switch-loading（同步 v0.96.1）：设置放在最后发。上游 v0.96 在打开对话时推一份 settings_state，
+		// 里面 toolsSchema 等只读预览在真实环境有 ~350 KB。它排在快照前面时，socket 缓冲一下子超过
+		// 背压下限（SNAPSHOT_BACKPRESSURE_MIN_BYTES = 256 KB），紧跟着的快照被丢掉，250ms 后才补成一份
+		// delta（客户端还得靠 rev 缺口 get_state 自愈），switch_done 就跑到了内容前面。
+		this.pushSettings();
 	}
 
 	/** 左栏「运行的对话」的展示口径（issue #140）。
@@ -10626,19 +10656,29 @@ export class ClientSession {
 	 * user opened history while it was streaming.
 	 */
 	async switchSession(path: string): Promise<void> {
-		if (this.quiesceBlocked()) return;
+		// switch-loading：target 用客户端发来的原始 path（不是 resolve 后的），客户端才能对上。
+		const target: SwitchTarget = { kind: "session", path };
+		if (this.quiesceBlocked()) {
+			this.emitSwitchFailed(
+				target,
+				"服务器正在排空（quiesce），拒绝打开新会话。",
+				"Server is draining (quiesce) and refused to open the session.",
+			);
+			return;
+		}
 		let openedRuntime: AgentSessionRuntime | null = null;
 		let openedTerminals: TerminalManager | null = null;
 		try {
 			const targetPath = resolve(path);
 			if (!isInsideSessionsDir(this.agentDir, targetPath)) {
-				this.emit({
-					type: "notice",
-					level: "error",
-					text: "只能打开会话目录中的对话记录",
-					textEn: "Only transcripts inside the session directory can be opened",
-				});
+				// switch-loading：上游 5ca2e70 的越界拒绝原本只发 notice、不回执，客户端的「正在打开…」
+				// 会一直等。和其它失败一样走回执（原因照旧；不是客户端在等的那次时它降级成 toast）。
 				this.flushSnapshot();
+				this.emitSwitchFailed(
+					target,
+					"只能打开会话目录中的对话记录",
+					"Only transcripts inside the session directory can be opened",
+				);
 				return;
 			}
 
@@ -10647,7 +10687,13 @@ export class ClientSession {
 			for (const conv of this.convs.values()) {
 				const sessionFile = conv.session.sessionFile;
 				if (sessionFile && resolve(sessionFile) === targetPath) {
+					// 已经是当前对话时 switchConversation 不发快照；客户端照样在等回执，
+					// 补一个快照再回执（先快照后回执的顺序不能反）。先记下「切之前是不是它」：
+					// 切完之后 activeId 永远等于它，事后判断会把大会话白白序列化两遍。
+					const wasActive = conv.id === this.activeId;
 					await this.switchConversation(conv.id);
+					if (wasActive) this.flushSnapshot();
+					this.emitSwitchDone(target);
 					return;
 				}
 			}
@@ -10689,12 +10735,13 @@ export class ClientSession {
 				await openedRuntime.dispose();
 				openedRuntime = null;
 				openedTerminals = null;
-				this.emit({
-					type: "notice",
-					level: "warning",
-					text: `当前项目运行的对话已达上限（${MAX_OPEN_CONVERSATIONS} 个），请先打开某个对话并离开（不继续对话）以移出列表`,
-					textEn: `This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}). Open one and leave it (without continuing) to remove it from the list.`,
-				});
+				// switch-loading：以前是一条 warning toast。现在走回执：客户端若正在等这次切换，
+				// 就在聊天区里显示原因；不是它发起的（内部自动切换）则由客户端降级成 toast。
+				this.emitSwitchFailed(
+					target,
+					`当前项目运行的对话已达上限（${MAX_OPEN_CONVERSATIONS} 个），请先打开某个对话并离开（不继续对话）以移出列表`,
+					`This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}). Open one and leave it (without continuing) to remove it from the list.`,
+				);
 				return;
 			}
 
@@ -10730,18 +10777,23 @@ export class ClientSession {
 			void this.pushSlashCommands();
 			// 切历史会话成功 → 插件重拉（轨迹视图立即显示该会话时间线）。
 			this.notifyConversationChanged();
-			this.pushSettings();
 		} catch (err) {
 			openedTerminals?.killAll();
 			if (openedRuntime) await openedRuntime.dispose().catch(() => {});
-			this.emit({
-				type: "notice",
-				level: "error",
-				text: `切换会话失败：${(err as Error).message}`,
-				textEn: `Failed to switch session: ${(err as Error).message}`,
-			});
+			// 失败后的快照是**旧**对话的（什么都没变），先发它再发失败回执，客户端的
+			// 错误态就是盖在一份一致的界面上。
+			this.flushSnapshot();
+			this.emitSwitchFailed(
+				target,
+				`切换会话失败：${(err as Error).message}`,
+				`Failed to switch session: ${(err as Error).message}`,
+			);
+			return;
 		}
 		this.flushSnapshot();
+		this.emitSwitchDone(target);
+		// 先快照后设置（见 switchConversationNow 末尾）。
+		this.pushSettings();
 	}
 
 	/**
@@ -11693,7 +11745,6 @@ export class ClientSession {
 			});
 			// 切项目即换了当前打开对话 → 插件重拉。
 			this.notifyConversationChanged();
-			this.pushSettings();
 		} catch (err) {
 			this.emit({
 				type: "notice",
@@ -11701,8 +11752,12 @@ export class ClientSession {
 				text: `切换工作目录失败：${(err as Error).message}`,
 				textEn: `Failed to switch directory: ${(err as Error).message}`,
 			});
+			this.flushSnapshot();
+			return;
 		}
 		this.flushSnapshot();
+		// 先快照后设置（见 switchConversationNow 末尾）。
+		this.pushSettings();
 	}
 
 	/** Strip the "(New)" freshness marker some catalogs append to display names

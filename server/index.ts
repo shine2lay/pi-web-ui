@@ -1990,6 +1990,8 @@ wss.on("connection", (ws) => {
 	let closed = false;
 	/** 最近一份全量 snapshot 的估算字节数（UTF-16 ×2），供背压相对阈值用（issue #11）。 */
 	let lastSnapshotBytes = 0;
+	/** switch-loading：最近一份真正发出去的全量 snapshot 属于哪条对话（打开另一条对话的快照不丢，见 send）。 */
+	let lastSnapshotConvId: string | null = null;
 	/** Commands received while the session is still being created — replayed after attach.
 	 *  带上限（256 条）：attach 挂死/失败保活期间队列不再无界增长，超限丢最旧并告警。 */
 	const pending = new PendingCommandQueue();
@@ -2027,6 +2029,11 @@ wss.on("connection", (ws) => {
 		if (
 			(msg.type === "snapshot" || msg.type === "snapshot_delta") &&
 			lastSnapshotBytes > 0 &&
+			// switch-loading（同步 v0.96.1）：打开另一条对话的那份全量快照不丢。switch_done 跟在它后面
+			// （遮罩等内容到了才撤），丢了就只能 250ms 后补一份 delta、客户端再靠 rev 缺口 get_state，
+			// 切换不再一次到位。v0.96 起 ready 先于 attach 的那批消息（settings_state 在真实环境 ~350 KB），
+			// 连上就切的客户端正好撞上缓冲超过下限。切换是用户动作，频率低，不会把内存堆起来。
+			!(msg.type === "snapshot" && msg.state.conversationId !== lastSnapshotConvId) &&
 			ws.bufferedAmount > Math.max(SNAPSHOT_BACKPRESSURE_MIN_BYTES, SNAPSHOT_BACKPRESSURE_FACTOR * lastSnapshotBytes)
 		) {
 			// 真正的慢客户端：丢弃是安全的，但不能「丢完就没了」——安排一次延迟
@@ -2041,7 +2048,10 @@ wss.on("connection", (ws) => {
 			return;
 		}
 		const wire = serializeShared(msg);
-		if (msg.type === "snapshot") lastSnapshotBytes = wire.length * 2;
+		if (msg.type === "snapshot") {
+			lastSnapshotBytes = wire.length * 2;
+			lastSnapshotConvId = msg.state.conversationId;
+		}
 		ws.send(wire);
 	};
 
