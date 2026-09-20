@@ -264,6 +264,7 @@ class Client {
 }
 
 let ws;
+let reloadWs;
 try {
 	await waitForPort(PORT);
 	const socket = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
@@ -313,12 +314,45 @@ try {
 		typeErrors.length === 0,
 		typeErrors.map((m) => m.text).join(" | ") || "无",
 	);
+
+	// --- reload-adopt：刷新不能把用户丢进子代理会话 -------------------------
+	// 子代理对话跟主对话**同一个 cwd**，建立时 lastActiveAt = Date.now()，
+	// 所以它很容易是这个 cwd 里最「新」的那条。client-per-load 下刷新 = 新
+	// clientId = 走 attach 的接管分支，不过滤就会直接落在 `sa-*` 上。
+	const reloadSocket = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
+	await new Promise((resolve, reject) => {
+		reloadSocket.once("open", resolve);
+		reloadSocket.once("error", reject);
+	});
+	reloadWs = reloadSocket;
+	const reloaded = new Client(reloadSocket);
+	reloaded.send({ type: "hello", clientId: `${CLIENT_ID}-reload`, locale: "en" });
+	await reloaded.waitForType("ready");
+	const adopted = await reloaded
+		.waitForState((s) => JSON.stringify(s.messages ?? []).includes("SPAWN_NOW"), 20000)
+		.catch(() => null);
+	check(
+		"刷新后直接接管主对话（看得到原有历史）",
+		!!adopted,
+		adopted ? `conversation=${adopted.conversationId}` : "没接管到（落在空白或别的对话）",
+	);
+	const adoptedId = String(reloaded.state?.conversationId ?? "");
+	// 先钉住**前提**：子代理对话确实还在共享表里（否则下面那条断言是空跑的）。
+	const convListMsg = reloaded.seen("conversations").at(-1);
+	const convIds = (convListMsg?.conversations ?? []).map((c) => c.id);
+	check(
+		"前提：子代理对话仍在列表里（所以它本来就是个接管候选）",
+		convIds.some((id) => String(id).startsWith("sa-")),
+		`conversations=${JSON.stringify(convIds)}`,
+	);
+	check("接管的不是子代理会话（sa-*）", !adoptedId.startsWith("sa-"), `conversation=${adoptedId}`);
 } catch (error) {
 	console.error("✗ 异常:", error instanceof Error ? error.message : error);
 	failures++;
 } finally {
 	try {
 		ws?.close();
+		reloadWs?.close();
 	} catch {
 		/* ignore */
 	}

@@ -1396,7 +1396,7 @@ export class ClientSession {
 	static openConversations(): AdoptCandidate[] {
 		const out: AdoptCandidate[] = [];
 		for (const c of ClientSession.sharedConvs.values()) {
-			out.push({ id: c.id, cwd: c.cwd, lastActiveAt: c.lastActiveAt });
+			out.push({ id: c.id, cwd: c.cwd, lastActiveAt: c.lastActiveAt, isSubagent: c.isSubagent });
 		}
 		return out;
 	}

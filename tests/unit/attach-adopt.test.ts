@@ -8,7 +8,16 @@ import { type AdoptCandidate, pickAdoptTarget } from "../../server/attach-adopt.
  * 落在别的对话上（或者更糟：同一份 JSONL 被第二个 runtime 打开）。
  */
 
-const conv = (id: string, cwd: string, lastActiveAt: number): AdoptCandidate => ({ id, cwd, lastActiveAt });
+const conv = (id: string, cwd: string, lastActiveAt: number): AdoptCandidate => ({
+	id,
+	cwd,
+	lastActiveAt,
+	isSubagent: false,
+});
+const subagent = (id: string, cwd: string, lastActiveAt: number): AdoptCandidate => ({
+	...conv(id, cwd, lastActiveAt),
+	isSubagent: true,
+});
 
 describe("pickAdoptTarget", () => {
 	it("这个 cwd 下没有开着的对话 → null（照常从磁盘恢复）", () => {
@@ -43,5 +52,16 @@ describe("pickAdoptTarget", () => {
 
 	it("lastActiveAt 为 0（刚建还没被切过）也能被选中，不会被当成假值跳过", () => {
 		expect(pickAdoptTarget("/p/a", [conv("fresh", "/p/a", 0)])).toBe("fresh");
+	});
+
+	// 子代理对话跟父对话**同一个 cwd**，而且建立时就是 Date.now() ——
+	// 刚派出一个子代理再刷新，它就是这个 cwd 里最「新」的那条。
+	it("子代理对话永不被接管（即使它是唯一候选）", () => {
+		expect(pickAdoptTarget("/p/a", [subagent("sa-1234abcd", "/p/a", 900)])).toBeNull();
+	});
+
+	it("子代理更新也不能挤掉用户自己的对话", () => {
+		const list = [conv("mine", "/p/a", 100), subagent("sa-1234abcd", "/p/a", 999)];
+		expect(pickAdoptTarget("/p/a", list)).toBe("mine");
 	});
 });

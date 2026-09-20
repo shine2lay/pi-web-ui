@@ -19,6 +19,8 @@ export interface AdoptCandidate {
 	cwd: string;
 	/** 最后一次被某个客户端切到/使用的时间戳。 */
 	lastActiveAt: number;
+	/** 子代理对话（`sa-*`）也在共享表里，而且跟父对话同一个 cwd。 */
+	isSubagent: boolean;
 }
 
 /**
@@ -27,11 +29,15 @@ export interface AdoptCandidate {
  * 口径与「切项目」那条路径一致（`Prefer the target project's own most recently
  * active conversation`）：同 cwd 里 `lastActiveAt` 最大的一条。并列时先到先得，
  * 保证同一份输入永远得到同一个结果。
+ *
+ * **子代理对话永不入选**：它跟父对话同 cwd，建立时 `lastActiveAt = Date.now()`，
+ * 所以刚派出一个子代理就刷新的话，不过滤就会直接把用户丢进子代理会话里。
+ * （共享表里按 cwd 挑对话的地方都过滤它，见 `conv.cwd !== cwd || conv.isSubagent`。）
  */
 export function pickAdoptTarget(cwd: string, candidates: Iterable<AdoptCandidate>): string | null {
 	let best: AdoptCandidate | undefined;
 	for (const c of candidates) {
-		if (c.cwd !== cwd) continue;
+		if (c.cwd !== cwd || c.isSubagent) continue;
 		if (!best || c.lastActiveAt > best.lastActiveAt) best = c;
 	}
 	return best?.id ?? null;

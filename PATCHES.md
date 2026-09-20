@@ -111,7 +111,23 @@ own most recently active conversation`）—— 两处口径不一致。
     故意关掉了它 —— `PI_WEB_UI_CHAT_FOLLOWS_CWD=1` 下该测试 ALL PASS（已验）；
   - `settings-test`：`EADDRINUSE :8931`（本机端口被占）；
   - `terminal-smoke-test`：49 checks 全过，收尾退出码噪声。
-- 单测全量 1449 passed / 116 files
+- 单测全量 1451 passed / 116 files
+
+### 子代理必须排除（及其测试缺口）
+
+`sa-*` 子代理对话也在共享表里，**跟父对话同一个 cwd**，且 `makeConversation()` 给它
+`lastActiveAt = Date.now()` —— 刚派出一个子代理，它就是这个 cwd 里最「新」的那条。
+不过滤就会把刷新的用户直接丢进子代理会话。共享表里按 cwd 挑对话的地方全都过滤它
+（`conv.cwd !== cwd || conv.isSubagent` 等 4 处），这里跟着一致。
+
+**测试缺口（已知，别高估）**：`tests/subagent-ui-context-test.mjs` 末尾新增的三条断言
+（接管到主对话、子代理仍在列表里、接管的不是 `sa-*`）**杀不掉变异**：把
+`|| c.isSubagent` 拿掉重新 build，该测试照样 ALL PASS（已实跑变异探针确认）。
+原因：它在子代理**跑完之后**才刷新，此时主对话又成了最新的那条（到底哪条路径
+重新抬了父对话的 `lastActiveAt` 没查到 —— 6 处赋值点里没一个明显对得上）。
+真正危险的窗口是「子代理**正在跑**时刷新」，要确定性复现得让假模型把子代理
+那一回卡住。所以：**这条规则的回归保障是单测，不是那个 e2e**；e2e 那三条只算
+便宜的烟雾（它们确实钉住了「刷新接管到带历史的主对话」这个正向行为）。
 
 ### 没做（留给后续）
 
@@ -119,6 +135,9 @@ own most recently active conversation`）—— 两处口径不一致。
   的种）。浪费一次创建，但改掉要拆 `create()` 的结构，收益不抵风险。
 - 切项目首访那条路径里的 `resumeSkipped` 提示现在几乎不可能触发（持有该文件的
   对话通常就是同 cwd 的 `target`，上一步就被选走了），留着不动。
+- **切项目那条路径有同样的子代理漏洞**：`setCwd()` 里挑 `target` 的循环只看
+  `c.cwd === abs && c.lastActiveAt > …`，**没有**排除 `isSubagent`。属先存 bug
+  （不是本补丁引入），且该区域正被 `switch-loading` 的在途改动覆盖，故本次不碰。
 
 ---
 
