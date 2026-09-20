@@ -85,6 +85,9 @@ function session(): FakeSession {
 		pushSlashCommands: async () => {},
 		notifyConversationChanged: () => {},
 		flushSnapshot: () => {},
+		// switch-loading：切换回执（这里不关心，只要不炸）。
+		emitSwitchDone: () => {},
+		emitSwitchFailed: () => {},
 		// 下面这些只要被调用，就说明「工作区搬家」发生了。
 		stateStore: {
 			getWorkspaceRoots: () => [],

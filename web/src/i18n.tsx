@@ -1482,6 +1482,13 @@ export const zh = {
 	/* app */
 	loadingSession: "正在加载会话…",
 	connectingServer: "正在连接 pi-web-ui 服务器…",
+	/* switch-loading：切换对话的进行中 / 失败态 */
+	switchOpening: "正在打开「{title}」…",
+	switchOpeningShort: "打开中…",
+	switchSlow: "大对话要多等一会儿 · 已等 {s} 秒",
+	switchHide: "隐藏",
+	switchFailedTitle: "无法打开「{title}」",
+	switchStay: "留在当前对话",
 
 	/* 语言包（下载） */
 	localePacks: "语言包",
@@ -3085,6 +3092,13 @@ const en: Record<keyof typeof zh, string> = {
 	/* app */
 	loadingSession: "Loading session…",
 	connectingServer: "Connecting to pi-web-ui server…",
+	/* switch-loading */
+	switchOpening: "Opening “{title}”…",
+	switchOpeningShort: "Opening…",
+	switchSlow: "Large chats take a moment · {s}s so far",
+	switchHide: "Hide",
+	switchFailedTitle: "Couldn’t open “{title}”",
+	switchStay: "Stay here",
 
 	/* language packs (downloadable) */
 	localePacks: "Language packs",

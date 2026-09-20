@@ -20,6 +20,7 @@ import type {
 	ServerMessage,
 	SessionSearchResult,
 	SessionSummary,
+	SwitchTarget,
 	SlashCommandInfo,
 	ToolStatus,
 	TerminalInfo,
@@ -40,6 +41,13 @@ import type {
 
 import { applyMessageDelta, type MessageDeltaMsg } from "./message-delta";
 import { resolvePendingQuestion, type QuestionSource } from "./pending-question";
+import {
+	sameSwitchTarget,
+	settleOnSnapshot,
+	switchAlreadyShown,
+	type PendingSwitch,
+	type SwitchError,
+} from "./switch-pending";
 import { setAppGlobals, setAppSend } from "./app-globals";
 // 工具定义说明弹窗（工具卡右键 → 「显示工具详细信息」）：应答直接回模块级 store，
 // 不进 ChatState（弹窗挂在 App 上，消息列表里几十张卡片不必为此各拿一份数据）。
@@ -378,10 +386,19 @@ export interface ChatState {
 	/** Server wire-protocol version differs from ours — the page was loaded
 	 *  before/after an app update; show a persistent refresh banner. */
 	protocolMismatch: boolean;
+	/** switch-loading：正在等服务端切过去的那次切换（发出 switch_* 即设，回执/对上的快照即清）。 */
+	pendingSwitch: PendingSwitch | null;
+	/** switch-loading：最近一次切换失败（留在原对话上，聊天区显示原因 + 重试）。 */
+	switchError: SwitchError | null;
 }
 
 type Action =
 	| { type: "status"; status: ConnStatus }
+	| { type: "switch_started"; target: SwitchTarget; startedAt: number }
+	| { type: "switch_done"; target: SwitchTarget }
+	| { type: "switch_failed"; target: SwitchTarget; error: string; errorEn?: string }
+	| { type: "switch_hide" }
+	| { type: "switch_dismiss_error" }
 	| { type: "snapshot"; state: UiState }
 	| { type: "snapshot_delta"; msg: Extract<ServerMessage, { type: "snapshot_delta" }> }
 	| { type: "protocol_mismatch" }
@@ -734,6 +751,9 @@ function reducer(state: ChatState, action: Action): ChatState {
 				managed: action.managed === true,
 				tabs: action.tabs,
 				ready: true,
+				// 新的一条 socket = 新的真相：上一条连接上发出的切换要么已经完成（接下来的快照
+				// 就是它），要么随服务端重启丢了 —— 两种情况都不该继续盖着「正在打开」。
+				pendingSwitch: null,
 				// Old page + new server (or the reverse) after an in-place update:
 				// WS handling on either side may be stale — banner asks for refresh.
 				protocolMismatch: action.protocolVersion !== undefined && action.protocolVersion !== PROTOCOL_VERSION,
@@ -746,7 +766,30 @@ function reducer(state: ChatState, action: Action): ChatState {
 				activeConversationId: action.state.conversationId,
 				liveOutputs: pruneLiveOutputs(state.liveOutputs, action.state),
 				toolStatuses: pruneToolStatuses(state.toolStatuses, action.state),
+				// switch-loading 保险信号：要的那条已经显示出来了就撤遮罩（主信号是 switch_done）。
+				...settleOnSnapshot(state.pendingSwitch, state.switchError, action.state),
 			};
+		case "switch_started":
+			return {
+				...state,
+				pendingSwitch: { target: action.target, startedAt: action.startedAt, hidden: false },
+				// 重试 = 新的一次切换，上一次的错误态不再相关。
+				switchError: null,
+			};
+		case "switch_done":
+			// 只认自己还在等的那次：连点两条时早先那次的回执不能把后一次的遮罩撤掉。
+			return sameSwitchTarget(state.pendingSwitch?.target, action.target) ? { ...state, pendingSwitch: null } : state;
+		case "switch_failed":
+			if (!sameSwitchTarget(state.pendingSwitch?.target, action.target)) return state;
+			return {
+				...state,
+				pendingSwitch: null,
+				switchError: { target: action.target, error: action.error, errorEn: action.errorEn },
+			};
+		case "switch_hide":
+			return state.pendingSwitch ? { ...state, pendingSwitch: { ...state.pendingSwitch, hidden: true } } : state;
+		case "switch_dismiss_error":
+			return { ...state, switchError: null };
 		case "snapshot_delta": {
 			// Incremental checkpoint from the server. Apply ONLY when it chains
 			// cleanly onto our current rev; a mismatch (dropped message under
@@ -1102,6 +1145,8 @@ export function useChat() {
 		dshPresets: null,
 		dshPermission: null,
 		protocolMismatch: false,
+		pendingSwitch: null,
+		switchError: null,
 	});
 	const wsRef = useRef<WebSocket | null>(null);
 	/** Terminal output bridge (writers keyed by terminalId). */
@@ -1171,6 +1216,18 @@ export function useChat() {
 			// state renders instead of the cached list.
 			if (msg.type === "check_updates_all" && msg.force === true) {
 				dispatch({ type: "updates_check_started" });
+			}
+			// switch-loading：在发出的那一刻就进入「正在打开…」。在 send 里拦而不是在各个点击处：
+			// 左栏、全局搜索、插件 startChat……所有入口都经过这里。已经显示着目标则不设：
+			// 那种情况服务端可能不发任何新东西，遮罩会一直盖着。
+			const switchTarget: SwitchTarget | null =
+				msg.type === "switch_session"
+					? { kind: "session", path: msg.path }
+					: msg.type === "switch_conversation"
+						? { kind: "conversation", id: msg.id }
+						: null;
+			if (switchTarget && !switchAlreadyShown(switchTarget, chatApi.current.chat.state)) {
+				dispatch({ type: "switch_started", target: switchTarget, startedAt: Date.now() });
 			}
 			ws.send(JSON.stringify(msg));
 			// 提交/取消模型提问后立即收起对话框：服务端只 resolve 模型侧 Promise，
@@ -1363,6 +1420,20 @@ export function useChat() {
 						type: "notice",
 						notice: { id, level: msg.level, text: msg.text, textEn: msg.textEn },
 					});
+					break;
+				}
+				case "switch_done":
+					dispatch({ type: "switch_done", target: msg.target });
+					break;
+				case "switch_failed": {
+					// 是自己在等的那次 → 聊天区错误态；不是（服务端内部自动切换失败）→ 降级成 toast，
+					// 与以前的行为一致，不丢信息。
+					if (sameSwitchTarget(chatApi.current.chat.pendingSwitch?.target, msg.target)) {
+						dispatch({ type: "switch_failed", target: msg.target, error: msg.error, errorEn: msg.errorEn });
+					} else {
+						const id = ++noticeId.current;
+						dispatch({ type: "notice", notice: { id, level: "error", text: msg.error, textEn: msg.errorEn } });
+					}
 					break;
 				}
 				case "sessions":
@@ -1867,6 +1938,9 @@ export function useChat() {
 	]);
 
 	const dismissNotice = useCallback((id: number) => dispatch({ type: "dismiss_notice", id }), []);
+	/** switch-loading：遮罩上的两个按钮（重试不在这里 —— 它就是再发一次 switch_*，走 send）。 */
+	const switchHide = useCallback(() => dispatch({ type: "switch_hide" }), []);
+	const switchDismissError = useCallback(() => dispatch({ type: "switch_dismiss_error" }), []);
 
 	// -- terminal tab management ----------------------------------------------
 
@@ -1886,6 +1960,8 @@ export function useChat() {
 		send,
 		pushNotice,
 		dismissNotice,
+		switchHide,
+		switchDismissError,
 		terminal: {
 			create: terminalCreate,
 			close: terminalClose,
@@ -1899,6 +1975,8 @@ export function useChat() {
 		send,
 		pushNotice,
 		dismissNotice,
+		switchHide,
+		switchDismissError,
 		terminal: {
 			create: terminalCreate,
 			close: terminalClose,

@@ -9,23 +9,74 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
-| 补丁                    | 状态    | 主要文件                                                                            |
-| ----------------------- | ------- | ----------------------------------------------------------------------------------- |
-| terminal-bash-script    | `local` | `server/terminals.ts`                                                               |
-| terminal-view-lifecycle | `local` | `server/terminals.ts`, `server/index.ts`                                            |
-| global-history          | `local` | `server/agent-service.ts`, `server/protocol.ts`, `web/src/`                         |
-| status-placement        | `local` | `web/src/status-placement.ts`, `FooterBar.tsx`, `RightPanel.tsx`                    |
-| recent-chats            | `local` | `server/agent-service.ts`, `client-state.ts`, `web/src/`                            |
-| chat-cwd-pin            | `local` | `server/agent-service.ts`                                                           |
-| client-per-load         | `local` | `web/src/use-chat.ts`                                                               |
-| server-owned-chats      | `local` | `server/agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/`                    |
-| topbar-crowding         | `local` | `web/src/ui-slots.ts`, `App.tsx`, `TopBar.tsx`                                      |
-| quiet-duplicate-open    | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`                               |
-| no-cwd-restore          | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `use-chat.ts`                |
-| flat-recent-chats       | `local` | `web/src/conv-groups.ts`, `LeftPanel.tsx`, `server/agent-service.ts`, `protocol.ts` |
-| no-mcp-restart-nag      | `local` | `server/webui-context.ts`, `tests/unit/mute-mcp-restart-nag.test.ts`                |
-| ask-question-delivery   | `local` | `server/ask-delivery.ts`, `agent-service.ts`                                        |
-| reload-adopt            | `local` | `server/attach-adopt.ts`, `agent-service.ts`                                        |
+| 补丁                    | 状态    | 主要文件                                                                                                                              |
+| ----------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| terminal-bash-script    | `local` | `server/terminals.ts`                                                                                                                 |
+| terminal-view-lifecycle | `local` | `server/terminals.ts`, `server/index.ts`                                                                                              |
+| global-history          | `local` | `server/agent-service.ts`, `server/protocol.ts`, `web/src/`                                                                           |
+| status-placement        | `local` | `web/src/status-placement.ts`, `FooterBar.tsx`, `RightPanel.tsx`                                                                      |
+| recent-chats            | `local` | `server/agent-service.ts`, `client-state.ts`, `web/src/`                                                                              |
+| chat-cwd-pin            | `local` | `server/agent-service.ts`                                                                                                             |
+| client-per-load         | `local` | `web/src/use-chat.ts`                                                                                                                 |
+| server-owned-chats      | `local` | `server/agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/`                                                                      |
+| topbar-crowding         | `local` | `web/src/ui-slots.ts`, `App.tsx`, `TopBar.tsx`                                                                                        |
+| quiet-duplicate-open    | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`                                                                                 |
+| no-cwd-restore          | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `use-chat.ts`                                                                  |
+| flat-recent-chats       | `local` | `web/src/conv-groups.ts`, `LeftPanel.tsx`, `server/agent-service.ts`, `protocol.ts`                                                   |
+| no-mcp-restart-nag      | `local` | `server/webui-context.ts`, `tests/unit/mute-mcp-restart-nag.test.ts`                                                                  |
+| ask-question-delivery   | `local` | `server/ask-delivery.ts`, `agent-service.ts`                                                                                          |
+| reload-adopt            | `local` | `server/attach-adopt.ts`, `agent-service.ts`                                                                                          |
+| switch-loading          | `local` | `web/src/switch-pending.ts`, `SwitchOverlay.tsx`, `use-chat.ts`, `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `protocol.ts` |
+
+---
+
+## switch-loading
+
+**状态**：`local`（上游同样有这个问题，但修法改了协议，得先跟上游对过口径才好提 PR）
+**基线**：v0.86.2（依赖 `server-owned-chats`：对话归服务端，切换才是一次有明确回执的请求）
+
+### 问题
+
+点左栏一条对话，**界面纹丝不动** —— 直到服务端把整份转录序列化完推来新快照。
+大会话要好几秒，用户看到的就是「点了没反应」，于是再点一次、或者改点别的。
+切失败更难受：目录打不开、对话 id 不存在，以前是**静默**的 —— 界面停在原地，
+既没告诉你失败了，也没告诉你为什么。
+
+### 改法
+
+**协议（v15 → v16）**：切换从「发出去就不管了」变成有回执的请求。
+
+```ts
+export type SwitchTarget = { kind: "session"; path: string } | { kind: "conversation"; id: string };
+| { type: "switch_done"; target: SwitchTarget }
+| { type: "switch_failed"; target: SwitchTarget; error: string; errorEn?: string }
+```
+
+- **`target` 原样回传**。客户端据此判断回执是不是自己还在等的那次切换 ——
+  内部触发的切换、连点两条时早先那次的回执，都对不上，直接忽略。
+  不用 `notice`：那只是一条 toast，**对不到目标上**。
+- **成功回执一定在新快照之后发**（`flushSnapshot()` 是同步的），所以客户端收到
+  `switch_done` 时内容已经到位，不会出现「遮罩没了但还是旧内容」的中间帧。
+- 两个引擎同一份契约：`server/agent-service.ts` 和 `server/dsh/dsh-agent-service.ts`
+  各自 `emitSwitchDone()` / `emitSwitchFailed()`。
+
+**客户端**：`web/src/switch-pending.ts`（101 行，纯函数、不碰 React）记下 `pendingSwitch`；
+发出 `switch_*` 的**那一刻**聊天区盖一层「正在打开…」（`SwitchOverlay.tsx`，带「已等待 N 秒」
+和「隐藏」），左栏高亮立即挪到目标行。失败就留在原地，把原因（中/英）显出来并给一个「重试」。
+
+**为什么同时认两种结束信号**（回执 + 快照对得上）：回执是主信号，引擎无关；
+但 DSH 的快照没有 `sessionFile`，按路径根本对不上，所以再加一道保险：只要要的那条
+对话已经显示出来了，就没理由还盖着「正在打开」。
+
+### 回归
+
+- `tests/switch-ack-test.mjs`（e2e，已登记进 `tests/run-smoke.mjs`）：成功路径「先快照后
+  `switch_done`、target 原样回传」；三条失败路径（目录打不开、对话 id 不存在、切到已经
+  是当前的转录）都不再静默；失败时**当前对话纹丝不动**。
+- `tests/unit/switch-pending.test.ts` + `tests/unit/switch-loading-ui.test.ts`（共 354 行）。
+- `node scripts/check-protocol-sync.mjs`：双端 `PROTOCOL_VERSION` 一致 (v16)、
+  `protocol.ts` 保持纯类型导出。
+- i18n 跑满：8 个 locale + `web/src/i18n.tsx`。
 
 ---
 

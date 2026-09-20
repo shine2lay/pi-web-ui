@@ -13,6 +13,8 @@ import { TopBar } from "./components/TopBar";
 import { LeftPanel } from "./components/LeftPanel";
 import { RightPanel } from "./components/RightPanel";
 import { MessageList } from "./components/MessageList";
+import { SwitchOverlay } from "./components/SwitchOverlay";
+import { switchTargetTitle } from "./switch-pending";
 import { ChatInput } from "./components/ChatInput";
 import { GoalBar } from "./components/GoalBar";
 
@@ -233,7 +235,7 @@ function addPluginPathGrant(path: string): void {
 export function App() {
 	const t = useT();
 	const { locale } = useI18n();
-	const { chat, send, dismissNotice, pushNotice, terminal } = useChat();
+	const { chat, send, dismissNotice, pushNotice, terminal, switchHide, switchDismissError } = useChat();
 	// 快捷短语 seeding：首次看到空列表 → 按界面语言填一批内置常用短语，之后即为用户
 	// 数据（增删改/恢复默认/关闭都在设置里）。「已 seed」标记存服务端全局
 	// （settings.quickPhrasesSeeded，非浏览器 localStorage）——clientId 在
@@ -635,6 +637,8 @@ export function App() {
 		setAnsweredPermRequests((prev) => new Set(prev).add(id));
 	};
 	const pendingPermRequest = chat.permRequests.find((r) => !answeredPermRequests.has(r.id)) ?? null;
+	/** switch-loading：遮罩要显示的目标（进行中优先，其次是上一次失败的）；null = 不显示。 */
+	const switchTarget = chat.pendingSwitch?.target ?? chat.switchError?.target ?? null;
 	// Wide chat column (client-local, default off).
 	const wide = useWideChat();
 	// Background-task panel (AI-started servers — stop individually or all).
@@ -1394,6 +1398,7 @@ export function App() {
 								projects={chat.projects}
 								pathCompletions={chat.pathCompletions}
 								activeConversationId={chat.activeConversationId}
+								pendingSwitch={chat.pendingSwitch?.target ?? null}
 								/* 宿主 UI 扩展点（contextmenu.session）：条目由 buildUiSlots 算好，左栏只管开菜单 +
 								   分派它自己的两条内置项（host:conv-dismiss-subagents / host:conv-force-dismiss）。 */
 								uiContextSession={uiSlots["contextmenu.session"]}
@@ -1409,6 +1414,27 @@ export function App() {
 								<div className="chat-header" role="toolbar">
 									{renderSlotToolbar(uiChatHeader, onUiAction)}
 								</div>
+							)}
+							{/* switch-loading：点了另一条对话到新快照到达之间的那几秒（大会话更久），
+							    以前界面纹丝不动。现在盖一层「正在打开…」，失败则留在原地显示原因。 */}
+							{switchTarget && (
+								<SwitchOverlay
+									pending={chat.pendingSwitch}
+									error={chat.switchError}
+									title={switchTargetTitle(switchTarget, chat.sessions, chat.conversations)}
+									onHide={switchHide}
+									onDismissError={switchDismissError}
+									onRetry={() => {
+										const target = chat.switchError?.target;
+										if (!target) return;
+										// 重试就是再发一次同样的请求；send 里的拦截会重新进入「正在打开」并清掉错误态。
+										send(
+											target.kind === "session"
+												? { type: "switch_session", path: target.path }
+												: { type: "switch_conversation", id: target.id },
+										);
+									}}
+								/>
 							)}
 							{chat.state ? (
 								<MessageList

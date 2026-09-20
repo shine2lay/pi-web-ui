@@ -241,6 +241,9 @@ body {
 	flex-direction: column;
 	min-width: 0;
 	min-height: 0;
+	/* switch-loading：切换遮罩（.switch-overlay）的定位基准。面板内其他 absolute 元素各自有
+	   更近的 relative 祖先（.messages-wrap 等），fixed 元素不受影响 —— 已逐一核对。 */
+	position: relative;
 	/* 整块聊天面板共用一块玻璃底：消息区、goalbar / 问卷面板占的那一段、输入区
 	   原本各涂各的，元素之间的间隙与列外区域会露裸背景 —— 浅色/壁纸主题下就是
 	   一条比聊天区更暗、一直横到面板两侧的带子（goalbar 一出现就特别明显）。
@@ -944,6 +947,10 @@ body.rp-resizing .rp-sash.dragging::after {
 	color: var(--text-faint);
 }
 .session-item.active .session-icon {
+	color: var(--accent);
+}
+/* switch-loading：正在打开的目标行 —— 高亮已经落在它上（.active），图标位置换成转圈。 */
+.session-item.opening .session-sub {
 	color: var(--accent);
 }
 
@@ -8268,6 +8275,109 @@ div.chead[role="button"]:focus-visible,
 	color: var(--text-faint);
 	padding: 60px 20px;
 	font-size: 13px;
+}
+
+/* ---- switch-loading：切换对话的进行中 / 失败遮罩 ---------------------------
+   盖在整个 .main 上（消息 + 输入框）：切换进行中往输入框打字会落进「服务端收到时的当前
+   对话」，盖住它把这个竞态从界面上消掉。z-index 在消息区的搜索条（30）之上、弹窗/抽屉（≥100）之下。 */
+.switch-overlay {
+	position: absolute;
+	inset: 0;
+	z-index: 60;
+	display: flex;
+	align-items: flex-start;
+	justify-content: center;
+	padding-top: min(18vh, 140px);
+	background: color-mix(in srgb, var(--bg-elev) 62%, transparent);
+	backdrop-filter: blur(2px);
+	animation: switch-fade-in 160ms ease-out;
+}
+@keyframes switch-fade-in {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+.switch-card {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	max-width: min(560px, calc(100% - 32px));
+	padding: 14px 18px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--bg-elev2);
+	color: var(--text);
+	box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+.switch-card-error {
+	flex-wrap: wrap;
+	border-color: color-mix(in srgb, var(--red) 45%, var(--border));
+}
+.switch-text {
+	flex: 1;
+	min-width: 0;
+}
+.switch-title {
+	font-size: 14px;
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.switch-sub {
+	margin-top: 3px;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+.switch-reason {
+	margin-top: 6px;
+	font-family: var(--mono);
+	font-size: 12px;
+	line-height: 1.45;
+	color: var(--text-dim);
+	white-space: pre-wrap;
+	word-break: break-word;
+	max-height: 140px;
+	overflow: auto;
+}
+.switch-error-icon {
+	flex-shrink: 0;
+	font-size: 22px;
+	color: var(--red);
+}
+.switch-actions {
+	display: flex;
+	gap: 8px;
+	margin-left: auto;
+}
+.switch-hide {
+	flex-shrink: 0;
+}
+/* 转圈：遮罩卡片里 18px，左栏行里接管 .session-icon 的位置（14px）。 */
+.switch-spinner {
+	flex-shrink: 0;
+	width: 18px;
+	height: 18px;
+	border-radius: 50%;
+	border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+	border-top-color: var(--accent);
+	animation: spin 0.8s linear infinite;
+}
+.session-icon.switch-spinner {
+	width: 14px;
+	height: 14px;
+	border-width: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+	.switch-spinner {
+		animation-duration: 2s;
+	}
+	.switch-overlay {
+		animation: none;
+	}
 }
 
 .scroll-bottom {

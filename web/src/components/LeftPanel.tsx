@@ -12,7 +12,8 @@ import {
 	FiTrash2,
 	FiX,
 } from "react-icons/fi";
-import type { ConversationSummary, ElsewhereRunning, ProjectSummary, SessionSummary } from "../types";
+import type { ConversationSummary, ElsewhereRunning, ProjectSummary, SessionSummary, SwitchTarget } from "../types";
+import { isSwitchTargetRow } from "../switch-pending";
 import { useT } from "../i18n";
 import { useAppField } from "../app-globals";
 import { applySashDrag, parseWeights } from "../panel-sash";
@@ -36,6 +37,9 @@ interface LeftPanelProps {
 	sessions: SessionSummary[];
 	projects: ProjectSummary[];
 	activeConversationId: string;
+	/** switch-loading：正在打开的目标。非空时高亮立刻落到目标行（而不是等快照到了才动），
+	 *  行上的图标换成转圈。缺省 null = 没有进行中的切换。 */
+	pendingSwitch?: SwitchTarget | null;
 	panelSend: (
 		msg:
 			| { type: "new_chat" }
@@ -160,6 +164,7 @@ export const LeftPanel = memo(function LeftPanel({
 	sessions,
 	projects,
 	activeConversationId,
+	pendingSwitch = null,
 	panelSend,
 	active,
 	collapsible,
@@ -808,7 +813,10 @@ export const LeftPanel = memo(function LeftPanel({
 											</div>
 										);
 									}
-									const active = activeConversationId === c.id;
+									// switch-loading：有进行中的切换时，高亮跟着目标走（乐观选中），而不是还留在
+									// 旧对话上等快照。失败后 pendingSwitch 清空，高亮自然回到真正的当前行。
+									const opening = isSwitchTargetRow(pendingSwitch, c);
+									const active = pendingSwitch ? opening : activeConversationId === c.id;
 									return (
 										<div
 											className={`lp-row${depth > 0 ? " lp-sub" : ""}`}
@@ -819,7 +827,8 @@ export const LeftPanel = memo(function LeftPanel({
 										>
 											<button
 												type="button"
-												className={`session-item ${active ? "active" : ""}`}
+												className={`session-item ${active ? "active" : ""}${opening ? " opening" : ""}`}
+												data-opening={opening ? "1" : undefined}
 												// 列表里只显标题；文件夹只在悬停里给 —— 同名对话（几个「temper」）靠这个分。
 												title={`${c.title} — ${c.cwd}`}
 												onClick={() => {
@@ -832,7 +841,11 @@ export const LeftPanel = memo(function LeftPanel({
 													panelSend({ type: "switch_conversation", id: c.id });
 												}}
 											>
-												<FiMessageSquare className="session-icon" />
+												{opening ? (
+													<span className="session-icon switch-spinner" aria-hidden />
+												) : (
+													<FiMessageSquare className="session-icon" />
+												)}
 												<span className="session-info">
 													{renaming === `conv:${c.id}` ? (
 														<input
@@ -875,7 +888,11 @@ export const LeftPanel = memo(function LeftPanel({
 													)}
 													{renaming === `conv:${c.id}` ? null : (
 														<span className="session-sub">
-															{active ? t("current") : t("messageCount", { n: c.messageCount })}
+															{opening
+																? t("switchOpeningShort")
+																: active
+																	? t("current")
+																	: t("messageCount", { n: c.messageCount })}
 														</span>
 													)}
 												</span>
@@ -1038,7 +1055,9 @@ export const LeftPanel = memo(function LeftPanel({
 					<div className="lp-section-body sessions-scroll">
 						{sessions.length === 0 && <div className="panel-empty">{t("noHistory")}</div>}
 						{sessions.map((s) => {
-							const active = currentFile === s.path;
+							// switch-loading：同上 —— 历史行按转录路径认目标。
+							const opening = isSwitchTargetRow(pendingSwitch, s);
+							const active = pendingSwitch ? opening : currentFile === s.path;
 							return (
 								<div
 									className="lp-row"
@@ -1048,14 +1067,19 @@ export const LeftPanel = memo(function LeftPanel({
 								>
 									<button
 										type="button"
-										className={`session-item ${active ? "active" : ""}`}
+										className={`session-item ${active ? "active" : ""}${opening ? " opening" : ""}`}
+										data-opening={opening ? "1" : undefined}
 										title={s.path}
 										onClick={() => {
 											if (renaming) return;
 											if (!active) panelSend({ type: "switch_session", path: s.path });
 										}}
 									>
-										<FiMessageSquare className="session-icon" />
+										{opening ? (
+											<span className="session-icon switch-spinner" aria-hidden />
+										) : (
+											<FiMessageSquare className="session-icon" />
+										)}
 										<span className="session-info">
 											{renaming === s.path ? (
 												<input
@@ -1082,7 +1106,11 @@ export const LeftPanel = memo(function LeftPanel({
 											)}
 											{renaming === s.path ? null : (
 												<span className="session-sub">
-													{active ? t("current") : t("messageCount", { n: s.messageCount })}
+													{opening
+														? t("switchOpeningShort")
+														: active
+															? t("current")
+															: t("messageCount", { n: s.messageCount })}
 													{s.source === "tui" && (
 														<span className="session-src" title={t("tuiTip")}>
 															TUI

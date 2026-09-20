@@ -58,6 +58,7 @@ import type {
 	ServerMessage,
 	SessionSearchResult,
 	SessionSummary,
+	SwitchTarget,
 	UiMessage,
 	UiServiceInfo,
 	UiSettingsState,
@@ -1657,8 +1658,25 @@ export class DshClientSession {
 		return true;
 	}
 
+	/** switch-loading：切换回执（与 pi 引擎同契约：成功回执在 flushSnapshot 之后）。 */
+	private emitSwitchDone(target: SwitchTarget): void {
+		this.emit({ type: "switch_done", target });
+	}
+
+	private emitSwitchFailed(target: SwitchTarget, text: string, textEn: string): void {
+		this.emit({ type: "switch_failed", target, error: text, errorEn: textEn });
+	}
+
 	async switchConversation(id: string): Promise<void> {
-		if (!this.convs.has(id) || id === this.activeId) return;
+		if (id === this.activeId) return;
+		if (!this.convs.has(id)) {
+			this.emitSwitchFailed(
+				{ kind: "conversation", id },
+				"这条对话已不在运行列表里（可能刚被关闭），请从历史里重新打开。",
+				"That conversation is no longer open (it may have just been closed). Reopen it from history.",
+			);
+			return;
+		}
 		const prev = this.conv;
 		// 只看“用过”的存活终端：没动过的空 shell 不钉住 listed（与 pi 的 displaceActive 同口径）。
 		prev.listed = prev.isStreaming || prev.terminals.countBlockingLive() > 0 || prev.promptedSinceActive;
@@ -1689,6 +1707,7 @@ export class DshClientSession {
 		this.flushSnapshot(true);
 		// 切会话带上权限值（cwd 变化走运行时重启，onStarted 会重拉）。
 		void this.refreshActivePermission().catch(() => {});
+		this.emitSwitchDone({ kind: "conversation", id });
 	}
 
 	private removeConversation(id: string): void {
@@ -2450,26 +2469,31 @@ export class DshClientSession {
 
 	/** 切换会话：读 JSONL 回放 → 新建 conversation（同一 sessionId 续聊）。 */
 	async switchSession(path: string): Promise<void> {
+		const target: SwitchTarget = { kind: "session", path };
 		try {
 			const abs = resolve(path);
 			const sessionId = basename(dirname(abs));
 			// 同一 sessionId 已在运行 → 直接切过去。
 			for (const conv of this.convs.values()) {
 				if (conv.sessionId === sessionId) {
+					// 已经是当前对话时 switchConversation 不发快照；客户端照样在等回执，
+					// 补一个快照再回执。先记下「切之前是不是它」：切完之后 activeId 永远等于它。
+					const wasActive = conv.id === this.activeId;
 					await this.switchConversation(conv.id);
+					if (wasActive) this.flushSnapshot(true);
+					this.emitSwitchDone(target);
 					return;
 				}
 			}
 			// issue #145：同 pi 引擎 —— 别处正在跑同一 sessionId 时不建第二个持有者。
 			const owner = this.findSessionOwnerById?.(sessionId);
 			if (owner && owner.isStreaming) {
-				this.emit({
-					type: "notice",
-					level: "warning",
-					text: `该对话正在另一处运行中（「${owner.title}」），为避免两个 agent 同时写同一份记录，已停止打开。请等它结束后再试，或回到原窗口继续。`,
-					textEn: `This conversation is running in another window ("${owner.title}"). Opening it here would create a second writer for the same transcript, so it was blocked. Wait for it to finish, or continue in the original window.`,
-				});
 				this.flushSnapshot(true);
+				this.emitSwitchFailed(
+					target,
+					`该对话正在另一处运行中（「${owner.title}」），为避免两个 agent 同时写同一份记录，已停止打开。请等它结束后再试，或回到原窗口继续。`,
+					`This conversation is running in another window ("${owner.title}"). Opening it here would create a second writer for the same transcript, so it was blocked. Wait for it to finish, or continue in the original window.`,
+				);
 				return;
 			}
 			if (owner) {
@@ -2492,13 +2516,14 @@ export class DshClientSession {
 			this.emitConversations();
 			this.pushTerminals();
 			this.flushSnapshot(true);
+			this.emitSwitchDone(target);
 		} catch (err) {
-			this.emit({
-				type: "notice",
-				level: "error",
-				text: `切换会话失败：${(err as Error).message}`,
-				textEn: `Failed to switch session: ${(err as Error).message}`,
-			});
+			this.flushSnapshot(true);
+			this.emitSwitchFailed(
+				target,
+				`切换会话失败：${(err as Error).message}`,
+				`Failed to switch session: ${(err as Error).message}`,
+			);
 		}
 	}
 

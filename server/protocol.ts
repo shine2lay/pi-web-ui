@@ -1817,6 +1817,10 @@ export interface ConversationSummary {
 	createdAt?: number;
 }
 
+/** switch-loading：一次切换的目标，与客户端的 switch_session（转录路径）/
+ *  switch_conversation（对话 id）一一对应。服务端在 switch_done / switch_failed 里原样回传。 */
+export type SwitchTarget = { kind: "session"; path: string } | { kind: "conversation"; id: string };
+
 /** A conversation open on ANOTHER client (different tab / device) —
  *  read-only awareness for issue #145. The owning client holds the only
  *  writer for that transcript; this entry lets other tabs discover that
@@ -2185,6 +2189,13 @@ export type ServerMessage =
 	 *  and on request (get_commands). */
 	| { type: "slash_commands"; commands: SlashCommandInfo[] }
 	| { type: "notice"; level: "info" | "warning" | "error"; text: string; textEn?: string }
+	/** switch-loading：切换对话的回执。客户端在发出 switch_session / switch_conversation
+	 *  的那一刻就进入「正在打开…」，靠这两条消息结束它：成功一定在新快照**之后**发
+	 *  （flushSnapshot 是同步的），失败则带上原因。target 原样回传客户端发来的目标，
+	 *  客户端据此判断回执对应的是不是自己还在等的那次切换（内部触发的切换、连点两条时
+	 *  早先那次的回执都对不上，直接忽略）。不用 notice：那只是一条 toast，对不到目标上。 */
+	| { type: "switch_done"; target: SwitchTarget }
+	| { type: "switch_failed"; target: SwitchTarget; error: string; errorEn?: string }
 	/** The watched git dir changed outside the panel (terminal commit,
 	 *  CLI, IDE) — the client should re-run its scm_status query. */
 	| { type: "scm_changed" }
