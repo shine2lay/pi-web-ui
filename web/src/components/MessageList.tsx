@@ -22,6 +22,7 @@ import {
 	type HeightEntry,
 	type WinRect,
 } from "../lazy-window";
+import { planQnWindow, QN_WINDOW } from "../qn-window";
 import { SearchBar } from "./SearchBar";
 import { classifyScroll } from "./scroll-classify";
 import { EmptyTemplateCards } from "./PromptTemplates";
@@ -795,12 +796,21 @@ export function MessageList({
 		window.addEventListener("resize", update);
 		return () => window.removeEventListener("resize", update);
 	}, [scheduleSweep]);
-	const n = questions.length;
+	// 滑动窗口：只画当前阅读位置附近的 QN_WINDOW 个刻度（纯函数见 qn-window.ts），
+	// 窗口外的问题在两端折叠成「+N」；编号保持全局序号，与消息上的问题标签一致。
+	const win = useMemo(() => planQnWindow(questions.length, activeIdx), [questions.length, activeIdx]);
+	const visible = useMemo(() => questions.slice(win.start, win.end), [questions, win.start, win.end]);
+	const windowed = questions.length > QN_WINDOW;
+	const hiddenAbove = win.start;
+	const hiddenBelow = questions.length - win.end;
+	/** 两端计数标记始终占位（visibility 隐藏），刻度簇不随标记出现/消失而跳动。 */
+	const MORE_H = 12;
+	const n = visible.length + (windowed ? 2 : 0);
 	const railGap = useMemo(() => {
 		if (n === 0) return 27;
-		const h = railH || 600;
+		const h = (railH || 600) - (windowed ? 2 * MORE_H : 0);
 		return Math.max(4, Math.min(27, Math.floor((h - 16) / n) - 3));
-	}, [n, railH]);
+	}, [n, railH, windowed]);
 	/** Many questions: per-tick chips would overlap (pitch < ~24px), so the
 	 *  hover panel becomes a scrollable list instead. */
 	const many = railGap < 20;
@@ -967,19 +977,44 @@ export function MessageList({
 					aria-label={t("questionNavTitle")}
 					style={{ "--rail-gap": `${railGap}px` } as CSSProperties}
 				>
-					{questions.map((q, i) => (
+					{windowed && (
 						<button
 							type="button"
-							key={q.id}
-							className={`qn-bar ${i === activeIdx ? "active" : ""}`}
-							aria-label={`${i + 1}. ${q.text}`}
-							onClick={() => jumpTo(q.id)}
+							className={`qn-more ${hiddenAbove === 0 ? "empty" : ""}`}
+							aria-label={t("questionNavEarlier", { n: hiddenAbove })}
+							title={t("questionNavEarlier", { n: hiddenAbove })}
+							onClick={() => hiddenAbove > 0 && jumpTo(questions[win.start - 1].id)}
 						>
-							<span className="qn-bar-text">
-								{i + 1}. {q.text}
-							</span>
+							+{hiddenAbove}
 						</button>
-					))}
+					)}
+					{visible.map((q, j) => {
+						const i = win.start + j;
+						return (
+							<button
+								type="button"
+								key={q.id}
+								className={`qn-bar ${i === activeIdx ? "active" : ""}`}
+								aria-label={`${i + 1}. ${q.text}`}
+								onClick={() => jumpTo(q.id)}
+							>
+								<span className="qn-bar-text">
+									{i + 1}. {q.text}
+								</span>
+							</button>
+						);
+					})}
+					{windowed && (
+						<button
+							type="button"
+							className={`qn-more ${hiddenBelow === 0 ? "empty" : ""}`}
+							aria-label={t("questionNavLater", { n: hiddenBelow })}
+							title={t("questionNavLater", { n: hiddenBelow })}
+							onClick={() => hiddenBelow > 0 && jumpTo(questions[win.end].id)}
+						>
+							+{hiddenBelow}
+						</button>
+					)}
 					{many && (
 						<div className="qn-list">
 							{questions.map((q, i) => (

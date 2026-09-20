@@ -489,6 +489,8 @@
 		"compactionKeptHint": "La cronologia precedente è raccolta in questo riepilogo; solo i messaggi recenti restano nel contesto",
 		"backToBottom": "Torna in fondo",
 		"questionNavTitle": "Domande",
+		"questionNavEarlier": "{n} domande precedenti (clic per andare alla più vicina)",
+		"questionNavLater": "{n} domande successive (clic per andare alla più vicina)",
 		"searchPlaceholder": "Cerca nella conversazione…",
 		"searchNoResults": "Nessun risultato",
 		"searchModels": "Filtra modelli…",

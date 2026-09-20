@@ -27,6 +27,47 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | ask-question-delivery   | `local` | `server/ask-delivery.ts`, `agent-service.ts`                                                                                          |
 | reload-adopt            | `local` | `server/attach-adopt.ts`, `agent-service.ts`                                                                                          |
 | switch-loading          | `local` | `web/src/switch-pending.ts`, `SwitchOverlay.tsx`, `use-chat.ts`, `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `protocol.ts` |
+| qn-rail-window          | `local` | `web/src/qn-window.ts`, `components/MessageList.tsx`, `styles.css`, `i18n.tsx`                                                        |
+
+---
+
+## qn-rail-window
+
+**状态**：`local`（纯前端，可以直接提上游；窗口大小和对齐策略是口味选择，提之前先对口径）
+**基线**：v0.86.2
+
+### 问题
+
+提问导航条（消息区右侧那一排刻度）把会话里**每一个**用户问题都画成一个刻度，
+再用 `--rail-gap` 把行距压到全部塞下为止。长会话动辄 40+ 问：600px 的条上行距
+压到 ~11px，80 问就是 4px —— 一团密集的线，逐刻度的文字气泡也因为挤不下被换成
+列表面板（`many` 模式）。用户原话：“40+ messages, a bit too much”。
+
+这**不是拉取问题**：消息全部已经在客户端（`snapshot` 整份 `messages`，之后 `snapshot_delta`
+只追加），导航条只是 `state.messages` 的一个视图。不动协议。
+
+### 改法
+
+**滑动窗口**（用户在三个方案里选的：滑窗 / 无限滚动式累加 / 固定最后 10 个点开展开）：
+
+- `web/src/qn-window.ts`：`planQnWindow(total, active, size = QN_WINDOW /* 10 */) → {start, end}`。
+  纯函数，和 `lazy-window.ts` 一个路数。以当前阅读中的问题（`activeIdx`）为中心，
+  奇数余量偏向更早一侧（上 5 / 当前 / 下 4）；贴边时不缩窗；`active = -1`（尚未定位）
+  按末尾处理 —— 初始加载铉在底部，首帧就是最终形态，不会先画开头再跳到结尾。
+- `MessageList.tsx`：只渲染 `questions.slice(start, end)`；**编号保持全局序号**（第 35 问永远
+  是「35.」，和消息上的 `qnIndex` 标签一致）。两端各一个 `+N` 计数（`.qn-more`），点击
+  `jumpTo` 到最近的一个被折叠问题，窗口随之重新居中。计数始终占位（`visibility` 而非
+  `display`），刻度簇不因一侧变空而跳动。`railGap` 改按实际渲染行数算（≤ 12 行），所以
+  桌面上行距回到 27px、逐刻度气泡回来了；`many` 列表面板仍列全部问题（矮视口才触发）。
+- 滚动消息区（或在导航条上滚轮）→ `activeIdx` 单步变化 → 窗口两端各换一个刻度。
+  没有阶跃，也永远不会回到一团。
+
+### 回归
+
+- `tests/unit/qn-window.test.ts` 7 项：不超窗全显 / 末尾与 -1 / 居中偏早 / 贴边不缩窗 /
+  total>size 时宽度恒等于 size 且 active 必在窗内（扫 -1..60）/ 单步下滑 / size≤0 不限。
+- i18n：`questionNavEarlier` / `questionNavLater`（`{n}`），`i18n.tsx` zh+en + 8 个 locale。
+- 纯前端，`express.static` 直接从 `web/dist` 读 —— 刷新页面即生效，不用重启服务。
 
 ---
 

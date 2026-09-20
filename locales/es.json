@@ -489,6 +489,8 @@
 		"compactionKeptHint": "El historial anterior se ha reunido en este resumen; solo los mensajes recientes permanecen en el contexto",
 		"backToBottom": "Volver al final",
 		"questionNavTitle": "Lista de preguntas",
+		"questionNavEarlier": "{n} preguntas anteriores (clic para ir a la más cercana)",
+		"questionNavLater": "{n} preguntas posteriores (clic para ir a la más cercana)",
 		"searchPlaceholder": "Buscar en la conversación…",
 		"searchNoResults": "Sin resultados",
 		"searchModels": "Buscar modelos…",

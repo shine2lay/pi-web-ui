@@ -489,6 +489,8 @@
 		"compactionKeptHint": "これまでの履歴はこの要約にまとめられ、コンテキストには最新のメッセージのみが残ります",
 		"backToBottom": "一番下に戻ります",
 		"questionNavTitle": "質問一覧です",
+		"questionNavEarlier": "それ以前の質問 {n} 件（クリックで直近のものへ）",
+		"questionNavLater": "それ以降の質問 {n} 件（クリックで直近のものへ）",
 		"searchPlaceholder": "会話内を検索します…",
 		"searchNoResults": "結果はありません",
 		"searchModels": "modelを検索しています…",

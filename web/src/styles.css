@@ -8526,6 +8526,36 @@ div.chead[role="button"]:focus-visible,
 	display: none;
 }
 
+/* Sliding window (qn-window.ts): only QN_WINDOW ticks around the question
+   being read are drawn; the rest collapse into a "+N" count at either end.
+   Both counts always occupy their row (visibility, not display) so the tick
+   cluster never jumps when one side becomes empty. Click = jump to the
+   nearest hidden question, which recentres the window there. */
+.qn-more {
+	flex-shrink: 0;
+	height: 12px;
+	line-height: 12px;
+	padding: 0 4px;
+	border: none;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--text-dim);
+	font-size: 10px;
+	font-variant-numeric: tabular-nums;
+	cursor: pointer;
+	transition:
+		color 0.12s,
+		background 0.12s;
+}
+.qn-more:hover {
+	color: var(--text);
+	background: var(--glow-18);
+}
+.qn-more.empty {
+	visibility: hidden;
+	pointer-events: none;
+}
+
 .qn-list {
 	position: absolute;
 	right: calc(100% + 10px);

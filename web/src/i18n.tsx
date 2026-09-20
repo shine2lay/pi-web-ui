@@ -553,6 +553,8 @@ export const zh = {
 	compactionKeptHint: "此前历史已折叠为该摘要，上下文中仅保留最近消息",
 	backToBottom: "回到底部",
 	questionNavTitle: "问题列表",
+	questionNavEarlier: "更早的 {n} 个问题（点击跳到最近一个）",
+	questionNavLater: "更晚的 {n} 个问题（点击跳到最近一个）",
 	searchPlaceholder: "在对话中搜索…",
 	searchNoResults: "无结果",
 	/* model dropdown filter + global search */
@@ -2126,6 +2128,8 @@ const en: Record<keyof typeof zh, string> = {
 	compactionKeptHint: "Earlier history is folded into this summary; only recent messages stay in context",
 	backToBottom: "Back to bottom",
 	questionNavTitle: "Questions",
+	questionNavEarlier: "{n} earlier questions (click to jump to the nearest)",
+	questionNavLater: "{n} later questions (click to jump to the nearest)",
 	searchPlaceholder: "Search in conversation…",
 	searchNoResults: "No results",
 	/* model dropdown filter + global search */

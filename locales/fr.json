@@ -489,6 +489,8 @@
 		"compactionKeptHint": "L'historique antérieur est replié dans ce résumé ; seuls les messages récents restent dans le contexte",
 		"backToBottom": "Retour en bas",
 		"questionNavTitle": "Liste des questions",
+		"questionNavEarlier": "{n} questions précédentes (cliquer pour aller à la plus proche)",
+		"questionNavLater": "{n} questions suivantes (cliquer pour aller à la plus proche)",
 		"searchPlaceholder": "Rechercher dans la discussion…",
 		"searchNoResults": "Aucun résultat",
 		"searchModels": "Rechercher un modèle…",

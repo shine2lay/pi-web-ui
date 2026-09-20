@@ -489,6 +489,8 @@
 		"compactionKeptHint": "Der frühere Verlauf ist in dieser Zusammenfassung enthalten; nur aktuelle Nachrichten bleiben im Kontext",
 		"backToBottom": "Zum Ende springen",
 		"questionNavTitle": "Fragenliste",
+		"questionNavEarlier": "{n} frühere Fragen (Klick springt zur nächstgelegenen)",
+		"questionNavLater": "{n} spätere Fragen (Klick springt zur nächstgelegenen)",
 		"searchPlaceholder": "Im Chat suchen…",
 		"searchNoResults": "Keine Ergebnisse",
 		"searchModels": "Modelle suchen…",
