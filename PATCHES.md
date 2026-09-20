@@ -129,15 +129,28 @@ own most recently active conversation`）—— 两处口径不一致。
 那一回卡住。所以：**这条规则的回归保障是单测，不是那个 e2e**；e2e 那三条只算
 便宜的烟雾（它们确实钉住了「刷新接管到带历史的主对话」这个正向行为）。
 
+### 切项目（`setCwd`）复用同一条规则
+
+`setCwd()` 里原本是一份手写的「同 cwd 取 lastActiveAt 最大」循环，漏了 `isSubagent`。
+这个漏洞比 reload 那个**更好触发**：离开项目 X 时 `displaceActive()` 会把主对话拿掉，
+等再切回 X，`cwd === X` 的候选里就只剩子代理那条 —— 不是「比时间戳输了」，是
+「只剩它」。现在直接调 `pickAdoptTarget()`：规则只剩一处，行为完全一致（同样的
+严格 `>` 并列先到先得、同样的迭代顺序），只多了排除子代理。
+
+这次的测试是**真能杀变异的**（上一轮的教训）：纯函数单测只能证明
+`pickAdoptTarget` 自己对，证不了 `setCwd` 真的去调了它（这正是典型的「存活变异」
+类型：逻辑有测试，**调用点没有**）。所以按 `chat-cwd-pin.test.ts` 的做法加了一条
+调用点测试：拿 `ClientSession.prototype.setCwd` 配桩 this 直接跑（零 token、零端口，
+两条对话都在目标目录下所以不会走到 SessionManager）。变异探针：把老循环原样探回去，
+该测试 `AssertionError: expected 'sa-1234abcd' to be 'main-there'` —— 变异被杀。
+
 ### 没做（留给后续）
 
 - `create()` 仍会先建一个马上要回收的空白 runtime（它顺手播下 `sharedModelRuntime`
   的种）。浪费一次创建，但改掉要拆 `create()` 的结构，收益不抵风险。
 - 切项目首访那条路径里的 `resumeSkipped` 提示现在几乎不可能触发（持有该文件的
   对话通常就是同 cwd 的 `target`，上一步就被选走了），留着不动。
-- **切项目那条路径有同样的子代理漏洞**：`setCwd()` 里挑 `target` 的循环只看
-  `c.cwd === abs && c.lastActiveAt > …`，**没有**排除 `isSubagent`。属先存 bug
-  （不是本补丁引入），且该区域正被 `switch-loading` 的在途改动覆盖，故本次不碰。
+- ~~切项目那条路径有同样的子代理漏洞~~ → 已修，见下。
 
 ---
 

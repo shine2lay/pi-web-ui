@@ -8690,12 +8690,13 @@ export class ClientSession {
 			// Prefer the target project's own most recently active conversation;
 			// only create a fresh one (resuming its most recent session) when the
 			// project has none open yet.
-			let target: Conversation | undefined;
-			for (const c of this.convs.values()) {
-				if (c.cwd === abs && (!target || c.lastActiveAt > target.lastActiveAt)) {
-					target = c;
-				}
-			}
+			// 与 reload-adopt 同一条规则（`pickAdoptTarget`）：同 cwd 里 lastActiveAt
+			// 最大的一条，并列先到先得，**子代理对话永不入选**。原来这里是一份手写
+			// 循环，漏了 isSubagent —— 在 X 里派个子代理、切到 Y 再切回 X，离开时
+			// 主对话被 displace 掉，cwd===X 就只剩子代理那条，于是直接把用户落在
+			// `sa-*` 会话上。换成共用函数，规则只剩一处，单测也就只需要一处。
+			const targetId = pickAdoptTarget(abs, this.convs.values());
+			const target = targetId ? this.convs.get(targetId) : undefined;
 
 			if (target) {
 				this.activeId = target.id;

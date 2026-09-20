@@ -1,4 +1,6 @@
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
+import { ClientSession } from "../../server/agent-service.js";
 import { type AdoptCandidate, pickAdoptTarget } from "../../server/attach-adopt.js";
 
 /**
@@ -63,5 +65,81 @@ describe("pickAdoptTarget", () => {
 	it("子代理更新也不能挤掉用户自己的对话", () => {
 		const list = [conv("mine", "/p/a", 100), subagent("sa-1234abcd", "/p/a", 999)];
 		expect(pickAdoptTarget("/p/a", list)).toBe("mine");
+	});
+});
+
+/**
+ * 切项目（`setCwd`）必须走**同一条**规则。
+ *
+ * 单独钉这个调用点，是因为上面那些用例只能证明 `pickAdoptTarget` 自己是对的；
+ * 如果哪天有人在 `setCwd` 里重新手写一份「同 cwd 取最新」的循环（这正是它原来
+ * 的样子，而且漏了 isSubagent），光靠纯函数的测试是发现不了的 —— 叫没叫得靠
+ * 这条来管。套用 `chat-cwd-pin.test.ts` 的做法：直接拿生产代码的方法配桩 this 跑，
+ * 零 token、零端口。两条对话都在目标目录下，所以无论修没修都走 `if (target)`
+ * 分支，不会碰到 SessionManager / 磁盘恢复。
+ */
+describe("setCwd 跟着同一条规则（调用点）", () => {
+	// 真实存在的两个目录：`setCwd` 会对目标做 fs.stat，桩不掉，索性用真的。
+	const THERE = tmpdir();
+	const HERE = process.cwd();
+
+	const fakeConv = (id: string, cwd: string, lastActiveAt: number, isSubagent: boolean) => ({
+		id,
+		cwd,
+		lastActiveAt,
+		isSubagent,
+		listed: true,
+	});
+
+	interface FakeSession {
+		activeId: string;
+		[k: string]: unknown;
+	}
+
+	function session(): FakeSession {
+		const convs = new Map<string, ReturnType<typeof fakeConv>>([
+			["main-there", fakeConv("main-there", THERE, 100, false)],
+			// 刚派出去的子代理：同 cwd、时间戳最新。
+			["sa-1234abcd", fakeConv("sa-1234abcd", THERE, 999, true)],
+		]);
+		return {
+			cwd: HERE,
+			roots: [],
+			clientId: "c-test",
+			activeId: "here",
+			convs,
+			files: { unwatchGit: () => {} },
+			displaceActive: () => null,
+			removeConversation: () => {},
+			emit: () => {},
+			stateStore: { remember: () => {}, getWorkspaceRoots: () => [] },
+			pushProjects: async () => {},
+			webUi: { refresh: () => {} },
+			emitConversations: () => {},
+			goalSvc: { emitGoalStatus: () => {} },
+			pushSlashCommands: async () => {},
+			refreshSessions: async () => {},
+			listFiles: async () => {},
+			listCommands: async () => {},
+			notifyConversationChanged: () => {},
+			flushSnapshot: () => {},
+			onCwdChanged: () => {},
+			restoreProjectProviderKeysForCwd: async () => {},
+			restoreProjectModelForCwd: async () => {},
+			markRecentSeen: () => {},
+			emitSwitchDone: () => {},
+			emitSwitchFailed: () => {},
+			pushTerminals: () => {},
+			hasStreamingElsewhere: () => false,
+		} as unknown as FakeSession;
+	}
+
+	it("切回某个项目时，不会落在该项目的子代理会话上", async () => {
+		const s = session();
+		const proto = ClientSession.prototype as unknown as {
+			setCwd(this: FakeSession, p: string): Promise<void>;
+		};
+		await proto.setCwd.call(s, THERE);
+		expect(s.activeId).toBe("main-there");
 	});
 });
