@@ -102,6 +102,7 @@ const ALL = [
 	"shutdown-test",
 	"slash-commands-test",
 	"snapshot-delta-test",
+	"chat-pagination-test",
 	"ssh-plugin-test",
 	"steer-queue-smoke",
 	"subagent-template-test",

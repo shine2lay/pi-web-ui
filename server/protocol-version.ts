@@ -8,4 +8,6 @@
  * its own copy in web/src/protocol-version.ts; scripts/check-protocol-sync.mjs
  * verifies the two never drift.
  */
-export const PROTOCOL_VERSION = 20;
+// 21: chat-window-pagination — 快照只带最新一截消息（messagesStart/questionIndex，
+//     load_older/older_messages）。老页面配新服务端会静默只看到 100 条历史。
+export const PROTOCOL_VERSION = 21;

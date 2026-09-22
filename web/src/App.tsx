@@ -1701,6 +1701,7 @@ export function App() {
 										toolImages={chat.settings?.toolImagesEnabled ?? true}
 										jumpTarget={searchJump}
 										onJumpDone={() => setSearchJump(null)}
+										onLoadOlder={(beforeIndex, count) => send({ type: "load_older", beforeIndex, count })}
 									/>
 								</>
 							) : (
