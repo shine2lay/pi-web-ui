@@ -177,6 +177,7 @@ import type {
 	UiState,
 	UiSubagentTemplate,
 } from "./protocol.js";
+import { buildQuestionIndex } from "./question-index.js";
 import { launchOrigin, toServiceInfo } from "./launch-origin.js";
 import {
 	serializeMessage,
@@ -227,6 +228,15 @@ const STALL_NOTIFY_MS = (() => {
  *  snapshot (issue #259). Eviction is therefore by "no longer in the
  *  transcript", never FIFO; this constant only says when that sweep runs. */
 const UI_MESSAGE_CACHE_CAP = 4096;
+/** 快照里带多少条消息（chat-window-pagination）。一个 8600 条的会话完整快照
+ *  是 35MB（实测），尾部 100 条是 0.5MB——开对话的等待主要花在这些字节的
+ *  传输 + 浏览器解析上（磁盘读+解析才 226ms）。更老的由 load_older 按需取回。
+ *  覆盖：PI_WEB_MESSAGE_WINDOW（条数；<=0 = 不分页，回到老行为）。 */
+const MESSAGE_WINDOW = (() => {
+	const v = Number(process.env.PI_WEB_MESSAGE_WINDOW);
+	if (!Number.isFinite(v)) return 100;
+	return v <= 0 ? Number.POSITIVE_INFINITY : Math.floor(v);
+})();
 /** Preview panel cap: only the first 512KB of a file is ever read/sent. */
 
 /** Thrown when the service is quiesced (draining) and the request is NEW work
@@ -4241,6 +4251,7 @@ export class ClientSession {
 	private emitSnapshotNow(forceFull = false): void {
 		if (this.disposed) return;
 		const cur = this.currentMessages();
+		const windowStart = Math.max(0, cur.length - MESSAGE_WINDOW);
 		const prev = this.emittedMessages;
 		let incremental = !forceFull && prev !== null && this.emittedConvId === this.activeId && prev.length <= cur.length;
 		if (incremental && prev) {
@@ -4257,13 +4268,20 @@ export class ClientSession {
 			this.emittedMessages = cur;
 			this.emittedConvId = this.activeId;
 			this.emittedRev = rev;
+			const appended = cur.slice(prev.length);
 			this.emit({
 				type: "snapshot_delta",
-				conversationId: this.activeId,
 				rev,
 				baseRev,
-				appended: cur.slice(prev.length),
-				state: this.buildLightState(rev, false),
+				conversationId: this.activeId,
+				appended,
+				state: {
+					...this.buildLightState(rev, false),
+					// 提问索引只在真的多了提问时重发：流式期间 delta 每 60ms 一条，
+					// 十几 KB 的索引跟着走就是纯浪费。缺省时客户端沿用上一份。
+					// 窗口起点不跟 delta 发：追加只长末尾，客户端的 start 不变。
+					...(appended.some((m) => m.role === "user") ? { questionIndex: buildQuestionIndex(cur) } : {}),
+				},
 			});
 		} else {
 			this.emittedMessages = cur;
@@ -4273,9 +4291,34 @@ export class ClientSession {
 				type: "snapshot",
 				// 全量快照一律带草稿（切会话/new_chat/改写分支/重连 get_state 全走这里）；
 				// 60ms 热帧是上面的 snapshot_delta，本来就不带。
-				state: { ...this.buildLightState(rev, true), messages: cur },
+				state: {
+					...this.buildLightState(rev, true),
+					// 只发最新的一截：一个 8600 条的会话完整快照是 35MB，尾部 100 条
+					// 是 0.5MB（实测 1.5%）。更老的由 load_older 按需取回。
+					messages: windowStart > 0 ? cur.slice(windowStart) : cur,
+					messagesStart: windowStart,
+					questionIndex: buildQuestionIndex(cur),
+				},
 			});
 		}
+	}
+
+	/** 服务 load_older：把 [start, beforeIndex) 这一段历史消息发回去。
+	 *  越界一律夹到合法区间；空区间直接不发（客户端自己会因为 start=0
+	 *  收起按钮）。 */
+	loadOlder(beforeIndex: number, count?: number): void {
+		if (this.disposed) return;
+		const cur = this.currentMessages();
+		const end = Math.min(Math.max(0, Math.floor(beforeIndex)), cur.length);
+		const take = Math.max(1, Math.floor(count ?? MESSAGE_WINDOW));
+		const start = Math.max(0, end - take);
+		if (end <= start) return;
+		this.emit({
+			type: "older_messages",
+			conversationId: this.activeId,
+			start,
+			messages: cur.slice(start, end),
+		});
 	}
 
 	/** Resolve a browser-bridged dialog (select/confirm/input) for this session. */

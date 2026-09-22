@@ -104,6 +104,14 @@ export interface UiHostMetrics {
 	memoryPercent: number;
 }
 
+/** 提问导轨的一条（见 UiState.questionIndex）。`index` 是该消息在完整消息
+ *  列表里的下标：点一条还没加载的提问时，前端靠它算要向前取多少。 */
+export interface UiQuestionRef {
+	id: string;
+	index: number;
+	text: string;
+}
+
 export interface UiState {
 	clientId: string;
 	cwd: string;
@@ -127,6 +135,17 @@ export interface UiState {
 	 *  a mismatch means the client missed an update and must get_state resync. */
 	rev: number;
 	messages: UiMessage[];
+	/** 分页窗口起点（chat-window-pagination）：`messages[0]` 在**完整**消息列表里的
+	 *  下标。缺省/0 = 已经到顶，没有更老的可加载。
+	 *
+	 *  窗口永远贴着末尾（往前扩展只动 start，snapshot_delta 只往后追加），
+	 *  所以完整长度恒等于 `messagesStart + messages.length`——不另发 total，
+	 *  免得两处不一致。 */
+	messagesStart?: number;
+	/** 全量提问索引：每条 user 消息一项，按顺序。提问导轨据此列出**整段**
+	 *  对话的提问——哪怕消息本体还没加载，编号也是全局的。
+	 *  只在真的多了提问时随 snapshot_delta 重发；缺省 = 沿用上一次。 */
+	questionIndex?: UiQuestionRef[];
 	/**
 	 * Live partial assistant message while a run is streaming. The SDK keeps the
 	 * in-progress message in agent.state.streamingMessage — it only enters
@@ -493,6 +512,16 @@ export type ClientMessage =
 	 *  不进快照（否则每次节流推送都要重传一遍），改为点开时现取一次；
 	 *  应答 `tool_info`。引擎不支持枚举工具定义时回 `unsupported: true`。 */
 	| { type: "get_tool_info"; name: string }
+	| {
+			/** 往前取一截历史消息（chat-window-pagination）。beforeIndex = 客户端当前
+			 *  窗口的起点（UiState.messagesStart）；服务端回 older_messages，装
+			 *  [start, beforeIndex) 这一段。点导轨上很老的提问时 count 会很大（一次
+			 *  拉到那里）——最坏也就是老行为（整段都在），不会更差。 */
+			type: "load_older";
+			beforeIndex: number;
+			/** 最多取多少条，缺省一屏（服务端 MESSAGE_WINDOW）。 */
+			count?: number;
+	  }
 	| { type: "list_sessions" }
 	| { type: "switch_session"; path: string }
 	| { type: "switch_conversation"; id: string }
@@ -2108,6 +2137,15 @@ export type ServerMessage =
 			service?: UiServiceInfo;
 	  }
 	| { type: "snapshot"; state: UiState }
+	| {
+			/** load_older 的回执：[start, start+messages.length) 这一段历史消息，拼在
+			 *  客户端窗口前面，并把 UiState.messagesStart 改成 start。
+			 *  conversationId 用来丢弃「切了对话才迟到」的回执。 */
+			type: "older_messages";
+			conversationId: string;
+			start: number;
+			messages: UiMessage[];
+	  }
 	| {
 			/** Incremental snapshot: everything EXCEPT `messages` travels in
 			 *  `state`, and only messages appended since baseRev ride in

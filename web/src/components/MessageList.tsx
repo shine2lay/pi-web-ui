@@ -189,6 +189,9 @@ interface MessageListProps {
 	 *  消息载入后定位到对应消息并滚动高亮，完成后回调 onJumpDone。 */
 	jumpTarget?: { path: string; role: string; timestamp: number } | null;
 	onJumpDone?: () => void;
+	/** 向前取一截历史消息（chat-window-pagination）。beforeIndex = 当前窗口起点，
+	 *  count 缺省为服务端的一屏。缺省（不传）= 不分页，按钮不出现。 */
+	onLoadOlder?: (beforeIndex: number, count?: number) => void;
 }
 
 export function MessageList({
@@ -205,6 +208,7 @@ export function MessageList({
 	toolImages,
 	jumpTarget,
 	onJumpDone,
+	onLoadOlder,
 	uiMessageActions,
 	uiContextMessage,
 	uiContextToolCall,
@@ -402,7 +406,11 @@ export function MessageList({
 	// All user questions of the current conversation — the source for the
 	// floating question-nav rail (memoized on the stable messages array).
 	const questions = useMemo(() => {
-		const qs: { id: string; text: string }[] = [];
+		// 分页后（chat-window-pagination）导轨用服务端的**全量**索引：哪怕消息本体
+		// 还没加载，整段对话的提问都列得出来，编号也不会随窗口漂。
+		// 缺省（老服务端 / 不分页）回落到从已加载消息里推。
+		if (state.questionIndex) return state.questionIndex.map((q) => ({ id: q.id, text: q.text, index: q.index }));
+		const qs: { id: string; text: string; index?: number }[] = [];
 		for (const m of state.messages) {
 			if (m.role !== "user") continue;
 			const joined = m.content
@@ -417,7 +425,7 @@ export function MessageList({
 			qs.push({ id: m.id, text });
 		}
 		return qs;
-	}, [state.messages]);
+	}, [state.messages, state.questionIndex]);
 
 	/** Question ordinal by message id — each user question renders its own tag. */
 	const qnIndex = useMemo(() => {
@@ -509,10 +517,24 @@ export function MessageList({
 		});
 	}, []);
 
+	/** 待跳转的提问（点导轨时还没加载）——消息到了就把跳转补上。 */
+	const pendingJumpRef = useRef<string | null>(null);
+
 	/** Scroll the conversation to a question; expand it first if it's collapsed. */
 	const jumpTo = useCallback(
 		(id: string) => {
 			const idx = state.messages.findIndex((m) => m.id === id);
+			if (idx < 0) {
+				// 目标还在窗口外（chat-window-pagination）：先把它所在的一段取回来，
+				// 记下待跳转的 id，消息到了再真正跳（见下方 effect）。
+				const q = questionsRef.current.find((x) => x.id === id);
+				const start = state.messagesStart ?? 0;
+				if (q?.index !== undefined && onLoadOlder && start > 0 && q.index < start) {
+					pendingJumpRef.current = id;
+					onLoadOlder(start, start - q.index);
+				}
+				return;
+			}
 			// 占位中的目标先同步恢复真实渲染（折叠行同步展开），再滚动定位——
 			// flushSync 保证本轮 commit 后 DOM 即为最终形态。
 			flushSync(() => {
@@ -537,8 +559,17 @@ export function MessageList({
 				}
 			});
 		},
-		[state.messages, recentStart, expanded, expand],
+		[state.messages, state.messagesStart, recentStart, expanded, expand, onLoadOlder],
 	);
+
+	// 待跳转的历史提问到位：补上那次跳转。
+	useEffect(() => {
+		const id = pendingJumpRef.current;
+		if (!id) return;
+		if (!state.messages.some((m) => m.id === id)) return;
+		pendingJumpRef.current = null;
+		jumpTo(id);
+	}, [state.messages, jumpTo]);
 
 	// ---- 新压缩摘要到达：自动展开 + 滚动定位 ------------------------------
 	// 压缩动辄数十秒，用户很可能已上滚回看；完成 toast 出现时新摘要卡在下方
@@ -824,6 +855,14 @@ export function MessageList({
 				ref={scrollRef}
 				onScroll={onScroll}
 			>
+				{(state.messagesStart ?? 0) > 0 && (
+					// 分页入口（chat-window-pagination）：只在真的有更老的消息时出现。
+					<div className="load-older">
+						<button type="button" onClick={() => onLoadOlder?.(state.messagesStart ?? 0)} disabled={!onLoadOlder}>
+							{t("loadOlder", { n: state.messagesStart ?? 0 })}
+						</button>
+					</div>
+				)}
 				{state.messages.length === 0 && !state.streamingMessage && (
 					<div className="empty-state">
 						<EmptyTemplateCards />

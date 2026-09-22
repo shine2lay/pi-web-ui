@@ -8380,6 +8380,37 @@ div.chead[role="button"]:focus-visible,
 	}
 }
 
+/* 分页入口（chat-window-pagination）：快照只带最新一截消息，这是往前翻的按钮。
+   跟着内容滚动（不是浮层）——它标记的是「已加载消息的顶端」这个位置。 */
+.load-older {
+	display: flex;
+	justify-content: center;
+	padding: 12px 0 4px;
+}
+
+.load-older button {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 6px 14px;
+	border-radius: 999px;
+	border: 1px solid var(--border);
+	background: var(--bg-elev2);
+	color: var(--text-dim);
+	font-size: 12px;
+	cursor: pointer;
+}
+
+.load-older button:hover:not(:disabled) {
+	color: var(--text);
+	border-color: var(--accent);
+}
+
+.load-older button:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
 .scroll-bottom {
 	position: absolute;
 	bottom: 16px;

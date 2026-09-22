@@ -986,6 +986,10 @@ export interface DispatchSession {
 	cycleModel(): Promise<void>;
 	cycleThinking(): void;
 	flushSnapshot(forceFull?: boolean): void;
+	/** 发回 [beforeIndex-count, beforeIndex) 这一段历史消息（chat-window-pagination）。
+	 *  可选：不分页的引擎（DSH）不实现——它们的快照本来就是整段，
+	 *  不发 messagesStart，前端也就不会出「载入更早」按钮。 */
+	loadOlder?(beforeIndex: number, count?: number): void;
 	pushSlashCommands(): Promise<void>;
 	/** 取一条工具的**定义说明** → `tool_info`（工具卡右键 → 「显示工具详细信息」）。
 	 *  pi 与 dsh 都实现了；缺失时 dispatch 回 `unsupported`（不静默 —— 否则点开弹窗
@@ -1899,6 +1903,10 @@ wss.on("connection", (ws) => {
 				// Always a FULL snapshot: the client is (re)connecting or detected
 				// a rev/seq gap — it needs an authoritative state to rebuild from.
 				cs.flushSnapshot(true);
+				break;
+			case "load_older":
+				// 用户往上翻/点了导轨上一条还没加载的提问（chat-window-pagination）。
+				cs.loadOlder?.(msg.beforeIndex, msg.count);
 				break;
 			case "get_commands":
 				void cs.pushSlashCommands();

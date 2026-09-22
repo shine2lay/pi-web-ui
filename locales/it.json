@@ -488,6 +488,7 @@
 		"compactionFrom": "Compresso da {tokens} token",
 		"compactionKeptHint": "La cronologia precedente è raccolta in questo riepilogo; solo i messaggi recenti restano nel contesto",
 		"backToBottom": "Torna in fondo",
+		"loadOlder": "↑ Carica messaggi precedenti ({n} sopra)",
 		"questionNavTitle": "Domande",
 		"questionNavEarlier": "{n} domande precedenti (clic per andare alla più vicina)",
 		"questionNavLater": "{n} domande successive (clic per andare alla più vicina)",

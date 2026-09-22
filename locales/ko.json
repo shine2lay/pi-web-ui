@@ -488,6 +488,7 @@
 		"compactionFrom": "{tokens} 토큰에서 압축됨",
 		"compactionKeptHint": "이전 기록은 이 요약으로 접혀 있으며, 컨텍스트에는 최근 메시지만 남습니다",
 		"backToBottom": "맨 아래로 돌아가기",
+		"loadOlder": "↑ 이전 메시지 불러오기 ({n}개 남음)",
 		"questionNavTitle": "질문 목록",
 		"questionNavEarlier": "이전 질문 {n}개 (클릭하면 가장 가까운 질문으로 이동)",
 		"questionNavLater": "이후 질문 {n}개 (클릭하면 가장 가까운 질문으로 이동)",

@@ -488,6 +488,7 @@
 		"compactionFrom": "Aus {tokens} Tokens komprimiert",
 		"compactionKeptHint": "Der frühere Verlauf ist in dieser Zusammenfassung enthalten; nur aktuelle Nachrichten bleiben im Kontext",
 		"backToBottom": "Zum Ende springen",
+		"loadOlder": "↑ Ältere Nachrichten laden ({n} darüber)",
 		"questionNavTitle": "Fragenliste",
 		"questionNavEarlier": "{n} frühere Fragen (Klick springt zur nächstgelegenen)",
 		"questionNavLater": "{n} spätere Fragen (Klick springt zur nächstgelegenen)",

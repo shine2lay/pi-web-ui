@@ -488,6 +488,7 @@
 		"compactionFrom": "Compressé depuis {tokens} jetons",
 		"compactionKeptHint": "L'historique antérieur est replié dans ce résumé ; seuls les messages récents restent dans le contexte",
 		"backToBottom": "Retour en bas",
+		"loadOlder": "↑ Charger les messages précédents ({n} au-dessus)",
 		"questionNavTitle": "Liste des questions",
 		"questionNavEarlier": "{n} questions précédentes (cliquer pour aller à la plus proche)",
 		"questionNavLater": "{n} questions suivantes (cliquer pour aller à la plus proche)",

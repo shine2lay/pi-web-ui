@@ -9,26 +9,27 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
-| 补丁                    | 状态    | 主要文件                                                                                                                              |
-| ----------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| terminal-bash-script    | `local` | `server/terminals.ts`                                                                                                                 |
-| terminal-view-lifecycle | `local` | `server/terminals.ts`, `server/index.ts`                                                                                              |
-| global-history          | `local` | `server/agent-service.ts`, `server/protocol.ts`, `web/src/`                                                                           |
-| status-placement        | `local` | `web/src/status-placement.ts`, `FooterBar.tsx`, `RightPanel.tsx`                                                                      |
-| recent-chats            | `local` | `server/agent-service.ts`, `client-state.ts`, `web/src/`                                                                              |
-| chat-cwd-pin            | `local` | `server/agent-service.ts`                                                                                                             |
-| client-per-load         | `local` | `web/src/use-chat.ts`                                                                                                                 |
-| server-owned-chats      | `local` | `server/agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/`                                                                      |
-| topbar-crowding         | `local` | `web/src/ui-slots.ts`, `App.tsx`, `TopBar.tsx`                                                                                        |
-| quiet-duplicate-open    | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`                                                                                 |
-| no-cwd-restore          | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `use-chat.ts`                                                                  |
-| flat-recent-chats       | `local` | `web/src/conv-groups.ts`, `LeftPanel.tsx`, `server/agent-service.ts`, `protocol.ts`                                                   |
-| no-mcp-restart-nag      | `local` | `server/webui-context.ts`, `tests/unit/mute-mcp-restart-nag.test.ts`                                                                  |
-| ask-question-delivery   | `local` | `server/ask-delivery.ts`, `agent-service.ts`                                                                                          |
-| reload-adopt            | `local` | `server/attach-adopt.ts`, `agent-service.ts`                                                                                          |
-| switch-loading          | `local` | `web/src/switch-pending.ts`, `SwitchOverlay.tsx`, `use-chat.ts`, `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `protocol.ts` |
-| qn-rail-window          | `local` | `web/src/qn-window.ts`, `components/MessageList.tsx`, `styles.css`, `i18n.tsx`                                                        |
-| terminal-cwd-anywhere   | `local` | `server/terminals.ts`, `tests/unit/terminal-cwd.test.ts`                                                                              |
+| 补丁                    | 状态    | 主要文件                                                                                                                                 |
+| ----------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| terminal-bash-script    | `local` | `server/terminals.ts`                                                                                                                    |
+| terminal-view-lifecycle | `local` | `server/terminals.ts`, `server/index.ts`                                                                                                 |
+| global-history          | `local` | `server/agent-service.ts`, `server/protocol.ts`, `web/src/`                                                                              |
+| status-placement        | `local` | `web/src/status-placement.ts`, `FooterBar.tsx`, `RightPanel.tsx`                                                                         |
+| recent-chats            | `local` | `server/agent-service.ts`, `client-state.ts`, `web/src/`                                                                                 |
+| chat-cwd-pin            | `local` | `server/agent-service.ts`                                                                                                                |
+| client-per-load         | `local` | `web/src/use-chat.ts`                                                                                                                    |
+| server-owned-chats      | `local` | `server/agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/`                                                                         |
+| topbar-crowding         | `local` | `web/src/ui-slots.ts`, `App.tsx`, `TopBar.tsx`                                                                                           |
+| quiet-duplicate-open    | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`                                                                                    |
+| no-cwd-restore          | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `use-chat.ts`                                                                     |
+| flat-recent-chats       | `local` | `web/src/conv-groups.ts`, `LeftPanel.tsx`, `server/agent-service.ts`, `protocol.ts`                                                      |
+| no-mcp-restart-nag      | `local` | `server/webui-context.ts`, `tests/unit/mute-mcp-restart-nag.test.ts`                                                                     |
+| ask-question-delivery   | `local` | `server/ask-delivery.ts`, `agent-service.ts`                                                                                             |
+| reload-adopt            | `local` | `server/attach-adopt.ts`, `agent-service.ts`                                                                                             |
+| switch-loading          | `local` | `web/src/switch-pending.ts`, `SwitchOverlay.tsx`, `use-chat.ts`, `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `protocol.ts`    |
+| qn-rail-window          | `local` | `web/src/qn-window.ts`, `components/MessageList.tsx`, `styles.css`, `i18n.tsx`                                                           |
+| terminal-cwd-anywhere   | `local` | `server/terminals.ts`, `tests/unit/terminal-cwd.test.ts`                                                                                 |
+| chat-window-pagination  | `local` | `server/question-index.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `web/src/message-window.ts`, `MessageList.tsx`, `use-chat.ts` |
 
 ---
 
@@ -977,3 +978,67 @@ workspace」。两个入口都受影响：`create()`（前端新开标签 / agen
   （对着未打补丁的 `server/terminals.ts` 跑：5 项中 4 项失败——确实是回归测试。）
 - `tests/unit/terminal-view.test.ts` 里那条「非法 id/越界 cwd 仍被拒」同步改成：非法 id
   仍拒、工作区外放行、不存在的目录仍拒。
+
+---
+
+## chat-window-pagination
+
+**状态**：`local`
+**基线**：v0.86.2（协议 v16 → **v17**）
+
+### 问题
+
+上游的快照把对话的**全部**消息一次性发给浏览器。实测一个 8615 条消息的
+会话（`~/.pi/agent/sessions/--home-shinelay--/2026-09-14T01-39-55-678Z_*.jsonl`，
+37.2MB）：
+
+|                        |                        |
+| ---------------------- | ---------------------- |
+| 磁盘读 + JSON.parse    | **226 ms**（不是瓶颈） |
+| 快照发给浏览器的字节   | **35.88 MB**           |
+| 尾部 100 条            | **0.54 MB，只占 1.5%** |
+| 全量提问索引（220 条） | **15 KB**              |
+
+所以「老对话打开慢」花的不是磁盘，是 35.88MB 过 socket + 浏览器解析/协调。
+顺带的第二个毛病：滚条无限长，往回找东西只能一直往上拉。
+
+### 改法
+
+服务端分页（不是前端少渲染），因为要省的就是传输和解析：
+
+- `server/agent-service.ts`：全量快照只带最新 `MESSAGE_WINDOW` 条（默认 100，
+  `PI_WEB_MESSAGE_WINDOW` 可调，`<=0` = 不分页），带上 `messagesStart`；新增
+  `loadOlder(beforeIndex, count)` 发 `older_messages`。
+- `server/question-index.ts`（新）：`buildQuestionIndex` / `questionPreview`——每条 user
+  消息一项，带**全局下标**和 160 字预览，技能调用显示 args 而不是 SKILL.md 正文。
+- `server/protocol.ts`：`UiState.messagesStart` / `UiState.questionIndex`（均可选，
+  不分页的 DSH 引擎不发）、`UiQuestionRef`、`load_older` / `older_messages`。
+- `web/src/message-window.ts`（新）：`prependOlderMessages`（切对话/接不上/重复
+  一律作废）、`paginationAfterDelta`（delta 只长末尾，窗口起点不变，提问索引
+  缺省沿用）。抽成纯函数是为了可测，也跟 `message-delta.ts` 的既有做法一致。
+- `components/MessageList.tsx`：导轨改用全量 `questionIndex`（编号不再随窗口
+  漂）；顶部「↑ 载入更早的消息（还有 N 条）」按钮；点一条**还没加载**的提问
+  会先把那段取回来再跳（`pendingJumpRef`）。
+
+设计取舍：**窗口恒贴末尾、永远连续**——所以完整长度恒等于
+`messagesStart + messages.length`，服务端不发 total（两处就不会不一致）。代价：
+点导轨上很老的提问会把中间那段一起拉回来；最坏也就是老行为（整段都在），
+不会更差，且是用户明确点击才发生。
+
+协议号从 16 升到 **17**：老页面配新服务端会静默只看到 100 条历史且没有入口，
+正是版本号要拦的那类不兼容。
+
+### 回归
+
+- `tests/unit/question-index.test.ts` 9 项：全局下标不是提问序号 / 只收 user /
+  技能调用显示 args / 无 args 退回技能名 / **跟前端 `parseSkillBlock` 对同一样本
+  结果一致**（两处正则不许漂）/ 空提问不进导轨 / 预览截断 / 多文本块拼接 /
+  8600 条的索引 < 30KB。
+- `tests/unit/message-window.test.ts` 11 项：拼接与起点前移 / 原状态不被改 /
+  切对话的迟到回执作废 / 接不上的作废（宁可不合并也不留空洞）/ 重复作废 /
+  空回执作废 / 一路拼到顶 / delta 不冲掉分页状态。
+- `tests/chat-pagination-test.mjs` 16 项线上协议冒烟（零 token，已入
+  `tests/run-smoke.mjs`）：预先写好一份 24 条 / 6 提问的会话 jsonl，用
+  `PI_WEB_MESSAGE_WINDOW=8` 跑真服务端，验证快照只带 8 条且 `messagesStart=16`、
+  `questionIndex` 盖全 6 个提问且下标是 0/4/8/12/16/20、`load_older` 回的段正好
+  接在窗口前面、一路取到 start=0、到顶后再要就不发了。

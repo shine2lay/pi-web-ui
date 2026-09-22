@@ -488,6 +488,7 @@
 		"compactionFrom": "Compactado de {tokens} tokens",
 		"compactionKeptHint": "O histórico anterior foi reunido neste resumo; apenas as mensagens recentes permanecem no contexto",
 		"backToBottom": "Voltar ao final",
+		"loadOlder": "↑ Carregar mensagens anteriores ({n} acima)",
 		"questionNavTitle": "Lista de perguntas",
 		"questionNavEarlier": "{n} perguntas anteriores (clique para ir à mais próxima)",
 		"questionNavLater": "{n} perguntas posteriores (clique para ir à mais próxima)",

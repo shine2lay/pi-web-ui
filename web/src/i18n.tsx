@@ -552,6 +552,8 @@ export const zh = {
 	compactionFrom: "从 {tokens} tokens 压缩",
 	compactionKeptHint: "此前历史已折叠为该摘要，上下文中仅保留最近消息",
 	backToBottom: "回到底部",
+	/** 分页（chat-window-pagination）：快照只带最新一截，这是往前翻的入口。 */
+	loadOlder: "↑ 载入更早的消息（还有 {n} 条）",
 	questionNavTitle: "问题列表",
 	questionNavEarlier: "更早的 {n} 个问题（点击跳到最近一个）",
 	questionNavLater: "更晚的 {n} 个问题（点击跳到最近一个）",
@@ -2127,6 +2129,7 @@ const en: Record<keyof typeof zh, string> = {
 	compactionFrom: "Compacted from {tokens} tokens",
 	compactionKeptHint: "Earlier history is folded into this summary; only recent messages stay in context",
 	backToBottom: "Back to bottom",
+	loadOlder: "↑ Load earlier messages ({n} above)",
 	questionNavTitle: "Questions",
 	questionNavEarlier: "{n} earlier questions (click to jump to the nearest)",
 	questionNavLater: "{n} later questions (click to jump to the nearest)",

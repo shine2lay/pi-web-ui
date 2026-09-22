@@ -40,6 +40,7 @@ import type {
 } from "./types";
 
 import { applyMessageDelta, type MessageDeltaMsg } from "./message-delta";
+import { paginationAfterDelta, prependOlderMessages } from "./message-window";
 import { resolvePendingQuestion, type QuestionSource } from "./pending-question";
 import {
 	sameSwitchTarget,
@@ -401,6 +402,7 @@ type Action =
 	| { type: "switch_dismiss_error" }
 	| { type: "snapshot"; state: UiState }
 	| { type: "snapshot_delta"; msg: Extract<ServerMessage, { type: "snapshot_delta" }> }
+	| { type: "older_messages"; msg: Extract<ServerMessage, { type: "older_messages" }> }
 	| { type: "protocol_mismatch" }
 	| { type: "tool_delta"; toolCallId: string; toolName: string; delta: string }
 	| { type: "message_delta"; msg: MessageDeltaMsg }
@@ -769,6 +771,13 @@ function reducer(state: ChatState, action: Action): ChatState {
 				// switch-loading 保险信号：要的那条已经显示出来了就撤遮罩（主信号是 switch_done）。
 				...settleOnSnapshot(state.pendingSwitch, state.switchError, action.state),
 			};
+		case "older_messages": {
+			// 向前拼一截历史消息（chat-window-pagination）；作废的回执原状返回。
+			const ui = state.state;
+			if (!ui) return state;
+			const next = prependOlderMessages(ui, action.msg);
+			return next ? { ...state, state: next } : state;
+		}
 		case "switch_started":
 			return {
 				...state,
@@ -804,6 +813,7 @@ function reducer(state: ChatState, action: Action): ChatState {
 				...ui,
 				...d.state,
 				messages: d.appended.length > 0 ? [...ui.messages, ...d.appended] : ui.messages,
+				...paginationAfterDelta(ui, d.state),
 			};
 			return {
 				...state,
@@ -1397,6 +1407,10 @@ export function useChat() {
 					syncPendingQuestion(msg.state.pendingQuestion, msg.conversationId);
 					break;
 				}
+				case "older_messages":
+					// 历史消息回执（chat-window-pagination）：不涉及 rev 链，不触发 resync。
+					dispatch({ type: "older_messages", msg });
+					break;
 				case "tool_delta":
 					noteDeltaSeq(msg.conversationId, msg.seq);
 					dispatch({
