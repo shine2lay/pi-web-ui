@@ -28,6 +28,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | reload-adopt            | `local` | `server/attach-adopt.ts`, `agent-service.ts`                                                                                          |
 | switch-loading          | `local` | `web/src/switch-pending.ts`, `SwitchOverlay.tsx`, `use-chat.ts`, `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `protocol.ts` |
 | qn-rail-window          | `local` | `web/src/qn-window.ts`, `components/MessageList.tsx`, `styles.css`, `i18n.tsx`                                                        |
+| terminal-cwd-anywhere   | `local` | `server/terminals.ts`, `tests/unit/terminal-cwd.test.ts`                                                                              |
 
 ---
 
@@ -939,3 +940,40 @@ list 往返）。想真修就得让令牌不再每次变（固定 `bearerToken`�
 - `tests/unit/mute-mcp-restart-nag.test.ts` 6 项：单 server / 多 server 逗号分隔 / level 省略时
   按 info 处理 / **warning 与 error 照常弹** / 其他 MCP info 不受影响 / 把这句话当正文的
   消息不误伤
+
+---
+
+## terminal-cwd-anywhere
+
+**状态**：`local`
+**基线**：v0.86.2
+
+### 问题
+
+上游把 PTY 的**启动目录**限在工作区内（`TerminalManager.safeCwd` 用
+`relative()` 做包含检查），越界就报「Terminal cwd must be inside the current
+workspace」。两个入口都受影响：`create()`（前端新开标签 / agent 的
+`terminal_create` 工具）和 `runCommand()`（`.pi/commands.json` 里带 `cwd` 的命令）。
+
+这个限制拦不住任何东西：终端就是个交互式 shell，开出来第一件事就可以
+`cd /anywhere`，跟在哪个目录**启动**没关系。它只挡了日常多仓库用法：在另
+一个 checkout 开个终端、让 agent 去别的仓库跑条命令。真正的边界是访问控制：
+服务端默认只听 `127.0.0.1`，每条连接都要 token。
+
+### 改法（`server/terminals.ts`）
+
+- `safeCwd()` 去掉包含检查：相对路径仍然按工作区根解析（agent 工具的 `cwd`
+  参数就是这么写的），绝对路径原样接受。保留的唯一约束：目录必须存在且是
+  目录（`realpathSync` + `statSync().isDirectory()`）—— 否则 PTY 根本起不来。
+- 两处报错改成实话：`Terminal cwd is not an existing directory: <path>`
+  （i18n key `terminals.cwd.missing`，带上到底是哪个路径），不再谎称是工作区边界。
+- agent 的 `terminal_create` 工具描述/参数说明同步改口（从「工作区相对目录」改为
+  「绝对路径（任意位置）或工作区相对路径」），否则模型不知道可以传绝对路径。
+
+### 回归
+
+- `tests/unit/terminal-cwd.test.ts` 5 项：工作区外目录能开 / 相对路径仍按工作区根解析 /
+  不存在的目录被拒且报错带路径 / 指向文件被拒 / `runCommand` 同样放行。
+  （对着未打补丁的 `server/terminals.ts` 跑：5 项中 4 项失败——确实是回归测试。）
+- `tests/unit/terminal-view.test.ts` 里那条「非法 id/越界 cwd 仍被拒」同步改成：非法 id
+  仍拒、工作区外放行、不存在的目录仍拒。

@@ -27,7 +27,7 @@ import {
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 // MUST run before node-pty is required: rewrites the installed node-pty copies
 // so their worker/agent handlers tolerate Node `--watch`'s IPC traffic (see the
 // module itself for details).
@@ -985,17 +985,19 @@ export class TerminalManager {
 		const priorAgentBash = opts?.agentBash ?? this.history.get(id)?.agentBash ?? false;
 		if (!this.ensureSpawnAllowed(id, priorAgentBash)) return null;
 		this.history.delete(id);
-		const safeCwd = this.safeCwd(cwd || fallbackCwd);
+		const requested = cwd || fallbackCwd;
+		const safeCwd = this.safeCwd(requested);
 		if (!safeCwd) {
 			this.fail(
 				id,
 				pick(
 					this.lang?.() ?? "en",
-					"终端工作目录必须位于当前工作区内",
-					"Terminal cwd must be inside the current workspace",
-					"terminals.cwd.outside.workspace",
+					`终端工作目录不存在：${requested}`,
+					`Terminal cwd is not an existing directory: ${requested}`,
+					"terminals.cwd.missing",
+					{ requested },
 				),
-				"Terminal cwd must be inside the current workspace",
+				`Terminal cwd is not an existing directory: ${requested}`,
 			);
 			return null;
 		}
@@ -1054,11 +1056,12 @@ export class TerminalManager {
 				id,
 				pick(
 					this.lang?.() ?? "en",
-					"终端工作目录必须位于当前工作区内",
-					"Terminal cwd must be inside the current workspace",
-					"terminals.cwd.outside.workspace",
+					`终端工作目录不存在：${rawDir}`,
+					`Terminal cwd is not an existing directory: ${rawDir}`,
+					"terminals.cwd.missing",
+					{ requested: rawDir },
 				),
-				"Terminal cwd must be inside the current workspace",
+				`Terminal cwd is not an existing directory: ${rawDir}`,
 			);
 			return;
 		}
@@ -1364,18 +1367,32 @@ export class TerminalManager {
 		return true;
 	}
 
+	/**
+	 * Resolve a requested terminal cwd to a real directory.
+	 *
+	 * Relative paths resolve against the workspace root (that is what the agent's
+	 * `terminal_create` cwd parameter documents); absolute paths are taken as
+	 * given and may point anywhere this server's user can reach.
+	 *
+	 * There is deliberately NO workspace containment check (terminal-cwd-anywhere
+	 * patch). A terminal is an interactive shell: `cd /anywhere` works the moment
+	 * it opens, so constraining only the STARTING directory contained nothing
+	 * while breaking the ordinary multi-repo workflow (open a shell in another
+	 * checkout, run a command there). Access to the UI is the real boundary —
+	 * the server binds 127.0.0.1 by default and gates every connection on a token.
+	 *
+	 * Returns null when the path does not exist or is not a directory: the PTY
+	 * would fail to spawn, so the caller reports it instead of guessing.
+	 */
 	private safeCwd(raw: string): string | null {
 		try {
-			const root = realpathSync(resolve(this.workspaceRoot));
+			const root = resolve(this.workspaceRoot);
 			const candidate = realpathSync(isAbsolute(raw) ? resolve(raw) : resolve(root, raw));
-			const rel = relative(root, candidate);
-			if (rel === "" || (!rel.startsWith(".." + sep) && rel !== ".." && !isAbsolute(rel))) {
-				return candidate;
-			}
+			return statSync(candidate).isDirectory() ? candidate : null;
 		} catch {
-			// Missing directories and broken symlinks are rejected by the boundary.
+			// Missing directories and broken symlinks have nowhere to spawn.
+			return null;
 		}
-		return null;
 	}
 
 	private info(entry: TermEntry): TerminalInfo {
@@ -2208,8 +2225,8 @@ export function makePersistentTerminalTools(
 			name: "terminal_create",
 			label: "Create terminal",
 			description: bilingual(
-				"Create a named persistent interactive PTY in the current workspace. Use terminal_input or terminal_key to interact with it and terminal_read to inspect incremental output. Prefer this over bash when the program is interactive/TUI-based (REPLs, vim/htop, y/n prompts), when starting a long-running server you want to keep observing or interrupt, or when the user asks to work in the visible terminal. For simple one-shot commands use bash instead.",
-				"在当前工作区创建具名常驻交互式 PTY。用 terminal_input 或 terminal_key 与之交互，用 terminal_read 查看增量输出。程序是交互式/TUI（REPL、vim/htop、y/n 提示）、要启动长驻服务并持续观察或中断、或用户明确要求在可见终端里操作时，优先用它而非 bash。简单的一次性命令请用 bash。",
+				"Create a named persistent interactive PTY. It starts in the current workspace; pass cwd to start it anywhere else (absolute path, e.g. another checkout). Use terminal_input or terminal_key to interact with it and terminal_read to inspect incremental output. Prefer this over bash when the program is interactive/TUI-based (REPLs, vim/htop, y/n prompts), when starting a long-running server you want to keep observing or interrupt, or when the user asks to work in the visible terminal. For simple one-shot commands use bash instead.",
+				"创建具名常驻交互式 PTY，默认在当前工作区；传 cwd 可在任意目录启动（绝对路径，如另一个仓库）。用 terminal_input 或 terminal_key 与之交互，用 terminal_read 查看增量输出。程序是交互式/TUI（REPL、vim/htop、y/n 提示）、要启动长驻服务并持续观察或中断、或用户明确要求在可见终端里操作时，优先用它而非 bash。简单的一次性命令请用 bash。",
 			),
 			promptSnippet: bilingual(
 				"run interactive programs or long-running servers in a persistent visible PTY (multi-step: create → input/key → read)",
@@ -2217,7 +2234,14 @@ export function makePersistentTerminalTools(
 			),
 			parameters: Type.Object({
 				terminalId: Type.String({ description: bilingual("Stable terminal name", "稳定的终端名称") }),
-				cwd: Type.Optional(Type.String({ description: bilingual("Workspace-relative directory", "工作区相对目录") })),
+				cwd: Type.Optional(
+					Type.String({
+						description: bilingual(
+							"Start directory: absolute path (anywhere), or relative to the workspace. Must already exist.",
+							"启动目录：绝对路径（任意位置）或工作区相对路径。目录必须已存在。",
+						),
+					}),
+				),
 				cols: Type.Optional(Type.Integer({ minimum: 2, maximum: 500 })),
 				rows: Type.Optional(Type.Integer({ minimum: 2, maximum: 200 })),
 			}),

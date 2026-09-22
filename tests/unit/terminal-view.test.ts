@@ -169,14 +169,18 @@ describe("终端视图挂载（openView，issue #147）", () => {
 		expect(tm.countLive()).toBe(1);
 	});
 
-	it("新用户标签照常开 shell，保留 locale，非法 id/越界 cwd 仍被拒", () => {
+	it("新用户标签照常开 shell，保留 locale；非法 id 仍被拒，工作区外的 cwd 放行", () => {
 		const { tm, spawns, events } = fixture();
 		expect(openView(tm, "user-new", { locale: "en" })!.agentBash).toBe(false);
 		expect(spawns[0].locale).toBe("en");
 		expect(openView(tm, "../invalid")).toBeNull();
 		const method = (tm as unknown as { openView?: TerminalManager["create"] }).openView ?? tm.create;
-		expect(method.call(tm, "outside", homedir(), 80, 24, root, "outside")).toBeNull();
-		expect(spawns).toHaveLength(1);
+		// terminal-cwd-anywhere：工作区外的启动目录不再被拒（shell 开出来就能 cd，
+		// 该限制拦不住任何东西，只挡多仓库日常用法）。
+		expect(method.call(tm, "outside", homedir(), 80, 24, root, "outside")).not.toBeNull();
+		// 但不存在的目录仍然拒绝：PTY 根本起不来。
+		expect(method.call(tm, "missing", join(root, "pi-no-such-dir-xyz"), 80, 24, root, "missing")).toBeNull();
+		expect(spawns).toHaveLength(2);
 		expect(events.some((e) => e.type === "notice")).toBe(true);
 	});
 
