@@ -6289,9 +6289,11 @@ export class ClientSession {
 		await this.bg.listAndPush();
 	}
 
-	/** 插件任务集合变化时由宿主调用：重推一次 bg_servers（含插件任务）。 */
+	/** 插件任务集合变化时由宿主调用：重推一次 bg_servers（含插件任务）。
+	 *  插件每轮轮询都会对每条任务 update() 一次，内容常常没变；重复推送只会白占
+	 *  socket 缓冲，慢链路上会把快照挤掉。内容没变就别推。 */
 	refreshBgTasks(): void {
-		this.bg.push();
+		this.bg.push({ skipIfUnchanged: true });
 	}
 
 	/** 插件设置保存结果等需要从 index.ts 发 notice 时用（emit 是私有的）。 */

@@ -87,6 +87,9 @@ export class BgServerTracker {
 	private readonly servers = new Map<number, { pid: number; since: number; name?: string; command?: string }>();
 	/** bash 工具开始执行前拍的监听端口快照（tool_execution_start 时设置）。 */
 	private listenBefore: Map<number, number> | null = null;
+
+	/** 上一次真正推给客户端的 bg_servers 负载（JSON）。用于 skipIfUnchanged 去重。 */
+	private lastPushedJson: string | null = null;
 	private refreshTimer: ReturnType<typeof setInterval> | null = null;
 
 	constructor(
@@ -200,9 +203,22 @@ export class BgServerTracker {
 		return out;
 	}
 
-	/** Push the current background-task list to every connected socket. */
-	push(): void {
-		this.opts.emit({ type: "bg_servers", servers: this.list() });
+	/** Push the current background-task list to every connected socket.
+	 *
+	 *  `skipIfUnchanged` 给「插件任务变化」这类高频触发用：插件每个轮询周期都会对每条
+	 *  任务调一次 update()（temper 盯 20 条运行 × 10s ≈ 120 次/分），而内容往往一字未变。
+	 *  这些重复推送每条都带完整任务列表，白占 socket 发送缓冲；慢链路（手机/流量）上
+	 *  足以把 bufferedAmount 顶到背压阈值之上，于是快照被丢掉、消息列表停更——正是
+	 *  「不刷新就看不到更新」的症状。内容没变就不推。
+	 *
+	 *  默认仍然无条件推送：新 socket 接入时必须拿到一份，哪怕内容和上一次相同。 */
+	push(opts?: { skipIfUnchanged?: boolean }): void {
+		const servers = this.list();
+		const json = JSON.stringify(servers);
+		if (opts?.skipIfUnchanged && json === this.lastPushedJson) return;
+		// 无条件推送也要刷新缓存，否则下一次去重会拿陈旧的基线比对。
+		this.lastPushedJson = json;
+		this.opts.emit({ type: "bg_servers", servers });
 	}
 
 	/** Re-snapshot listening ports and drop tracked entries that are no longer

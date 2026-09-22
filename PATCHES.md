@@ -1042,3 +1042,41 @@ workspace」。两个入口都受影响：`create()`（前端新开标签 / agen
   `PI_WEB_MESSAGE_WINDOW=8` 跑真服务端，验证快照只带 8 条且 `messagesStart=16`、
   `questionIndex` 盖全 6 个提问且下标是 0/4/8/12/16/20、`load_older` 回的段正好
   接在窗口前面、一路取到 start=0、到顶后再要就不发了。
+
+## bg-tasks-push-dedupe
+
+**症状**（用户 2026-09-22 报）：“pi-web-ui 不再把事件推到 UI，不刷新就看不到
+任何对话的更新。”
+
+**实测**：服务端推送本身没坏。用真实浏览器（`pi.wai2shine.com`，过 Cloudflare
+隧道）量了一个没刷新过的页面：`messagesStart=1854`、页脚 `messages 2446 → 2463`、
+`Context 165.1K → 177.4K`、287 行已挂载、滚动容器 `fromBottom=0`——快链路上一切正常。
+真正的问题在流量：60 秒内数到 **101 条 `bg_servers`**，每条都带完整任务列表
+（~16KB）≈ **1.6MB/分钟的纯噪音**，而内容一字未变。
+
+**链路**：`插件 task.update()` → `plugins.ts` 的 `fire()` → `onBgTasksChanged` →
+`AgentService.refreshBackgroundServers()` → **每个** ClientSession 的 `refreshBgTasks()`
+→ `BgServerTracker.push()` → 广播给所有 sink。源头是 `~/.pi-web-ui/plugins/temper/
+index.mjs` 的轮询：对每条盯梢的运行无条件 `update()`，20 条 × 10s = 120 次/分。
+
+**为何会表现为“不刷新就停更”**：快照推送有背压保护（`ws.bufferedAmount` 超阈就
+丢弃这次 snapshot / snapshot_delta）。慢链路（手机、移动网）上，1.6MB/分的噪音
+足以把缓冲长期顶在阈值之上，于是消息列表停更，而重新刷新（新 socket + 新快照）
+立刻正常——正是用户描述的现象。快链路的笔记本看不出来（bufferedAmount ≈ 0）。
+
+### 改动
+
+- `server/bg-servers.ts`：`push()` 收 `{ skipIfUnchanged }`，序列化后跟 `lastPushedJson`
+  比对，一样就不推。**默认仍然无条件推**（新 socket 接入必须拿到一份），且无条件
+  推送也刷新基线，避免拿陈旧基线比对。
+- `server/agent-service.ts`：`refreshBgTasks()` 改调 `push({ skipIfUnchanged: true })`——
+  只有“插件任务变化”这条高频路径去重，其余调用方不受影响。
+- （仓外）`~/.pi-web-ui/plugins/temper/index.mjs`：源头也加了去重，状态字符串没变就
+  不调 `update()`（`lastTaskStatus`；`persist()` 只写 id/workflow/lastStatus，不会落盘）。
+
+两层都改是故意的：插件层治这一个插件，宿主层治所有将来的嗦叭插件。
+
+### 回归
+
+- `tests/unit/bg-servers-dedupe.test.ts` 4 项：重复推只发一次 / 状态真变了必须发 /
+  默认路径永远发（新 socket）/ 无条件推送会刷新去重基线。
