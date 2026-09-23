@@ -40,7 +40,7 @@ import type {
 } from "./types";
 
 import { applyMessageDelta, type MessageDeltaMsg } from "./message-delta";
-import { paginationAfterDelta, prependOlderMessages } from "./message-window";
+import { keepLoadedHistory, paginationAfterDelta, prependOlderMessages } from "./message-window";
 import { resolvePendingQuestion, type QuestionSource } from "./pending-question";
 import {
 	sameSwitchTarget,
@@ -760,17 +760,21 @@ function reducer(state: ChatState, action: Action): ChatState {
 				// WS handling on either side may be stale — banner asks for refresh.
 				protocolMismatch: action.protocolVersion !== undefined && action.protocolVersion !== PROTOCOL_VERSION,
 			};
-		case "snapshot":
+		case "snapshot": {
+			// 整份快照只带最新一截：同一会话时把用户已加载的更早历史留住，否则重连/
+			// resync 一来就把「加载更早消息」的结果冲掉（load-older-survives-snapshot）。
+			const next = keepLoadedHistory(state.state, action.state);
 			return {
 				...state,
 				ready: true,
-				state: action.state,
-				activeConversationId: action.state.conversationId,
-				liveOutputs: pruneLiveOutputs(state.liveOutputs, action.state),
-				toolStatuses: pruneToolStatuses(state.toolStatuses, action.state),
+				state: next,
+				activeConversationId: next.conversationId,
+				liveOutputs: pruneLiveOutputs(state.liveOutputs, next),
+				toolStatuses: pruneToolStatuses(state.toolStatuses, next),
 				// switch-loading 保险信号：要的那条已经显示出来了就撤遮罩（主信号是 switch_done）。
 				...settleOnSnapshot(state.pendingSwitch, state.switchError, action.state),
 			};
+		}
 		case "older_messages": {
 			// 向前拼一截历史消息（chat-window-pagination）；作废的回执原状返回。
 			const ui = state.state;
