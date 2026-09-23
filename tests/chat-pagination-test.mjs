@@ -8,7 +8,9 @@
  *     —— 这是导轨在分页后还能列出全部提问的前提；
  *  3. load_older 回的 older_messages 正好接在窗口前面（start + len === 原起点），
  *     内容是完整列表里对应的那一段；
- *  4. 一路往前取能到顶（start === 0），到顶后不再多发。
+ *  4. 一路往前取能到顶（start === 0），到顶后不再多发；
+ *  5. 超过 4096 条的会话（上游 issue #259 的 pruneMessageCache）：检查点照样走 snapshot_delta，
+ *     不退回整份快照——整份快照会把客户端「加载更早消息」拿到的历史冲掉。
  *
  * 这些都是「只看单测看不出来」的部分：窗口切片、全局下标、切片边界。
  * 跑在独立端口 8944 上的编译产物（dist/server/index.js）。
@@ -29,6 +31,8 @@ const WINDOW = 8;
 /** 种子会话：24 条消息，每 4 条一个提问 → 下标 0/4/8/12/16/20 共 6 个。 */
 const TOTAL = 24;
 const QUESTION_EVERY = 4;
+/** 超长会话：超过 UiMessage 缓存的固定下限（4096），旧策略在这里每次都全部未命中。 */
+const LONG_TOTAL = 4300;
 
 let failures = 0;
 function check(name, ok, extra = "") {
@@ -46,13 +50,12 @@ const textAt = (i) => (i % QUESTION_EVERY === 0 ? `question ${i}` : `reply ${i}`
 const roleAt = (i) => (i % QUESTION_EVERY === 0 ? "user" : "assistant");
 
 /** 按 SDK 的 jsonl 布局写一份会话（flat 根目录，见 piSessionsRoot）。 */
-function seedSession() {
-	const sessionId = "01a0c000-0000-7000-8000-00000000beef";
+function seedSession(total = TOTAL, sessionId = "01a0c000-0000-7000-8000-00000000beef") {
 	const lines = [
 		JSON.stringify({ type: "session", version: 3, id: sessionId, timestamp: new Date().toISOString(), cwd: workCwd }),
 	];
 	let parentId = null;
-	for (let i = 0; i < TOTAL; i++) {
+	for (let i = 0; i < total; i++) {
 		const id = `msg${String(i).padStart(4, "0")}`;
 		const role = roleAt(i);
 		const message =
@@ -111,12 +114,14 @@ try {
 
 	const snapshots = [];
 	const older = [];
+	const deltas = [];
 	let sawReady = false;
 	ws.on("message", (data) => {
 		const msg = JSON.parse(data.toString());
 		if (msg.type === "ready") sawReady = true;
 		if (msg.type === "snapshot") snapshots.push(msg);
 		if (msg.type === "older_messages") older.push(msg);
+		if (msg.type === "snapshot_delta") deltas.push(msg);
 	});
 	await new Promise((r, j) => {
 		ws.once("open", r);
@@ -197,6 +202,40 @@ try {
 	ws.send(JSON.stringify({ type: "load_older", beforeIndex: 0 }));
 	await sleep(600);
 	check("asking past the top sends nothing", older.length === 0, `${older.length} batch(es)`);
+
+	// --- 5) 超长会话：检查点发增量，不退回整份快照 --------------------------
+	// 上游 issue #259 修复前（UiMessage 缓存上限固定 4096、按 FIFO 淘汰），超长会话每个检查点都把
+	// 每条消息重新序列化成新对象，引用比对在下标 0 就失败 → 每次都发整份快照，
+	// 客户端已加载的更早历史随之被冲掉。set_thinking 不花 token，但每次都 flush
+	// 一个检查点：消息没变、只有轻量字段变了，引用稳定时应当是 appended=[] 的 delta。
+	const longFile = seedSession(LONG_TOTAL, "01a0c000-0000-7000-8000-00000000cafe");
+	snapshots.length = 0;
+	ws.send(JSON.stringify({ type: "switch_session", path: longFile }));
+	const longOpened = () => snapshots.some((s) => s.state.messagesStart === LONG_TOTAL - WINDOW);
+	for (let i = 0; i < 400 && !longOpened(); i++) await sleep(50);
+	check("the long session opened (windowed)", longOpened());
+	await sleep(500); // 打开会话时的尾随检查点先落定
+	snapshots.length = 0;
+	deltas.length = 0;
+	ws.send(JSON.stringify({ type: "set_thinking", level: "high" }));
+	ws.send(JSON.stringify({ type: "set_thinking", level: "low" }));
+	for (let i = 0; i < 40 && deltas.length + snapshots.length < 2; i++) await sleep(50);
+	await sleep(300);
+	check(
+		`checkpoints on a ${LONG_TOTAL}-message session go out as snapshot_delta`,
+		deltas.length > 0,
+		`${deltas.length} delta(s)`,
+	);
+	check(
+		"…and never fall back to a full snapshot (that would wipe loaded history)",
+		snapshots.length === 0,
+		`${snapshots.length} full snapshot(s)`,
+	);
+	check(
+		"the deltas append nothing (messages unchanged)",
+		deltas.every((d) => d.appended.length === 0),
+		deltas.map((d) => d.appended.length).join(","),
+	);
 
 	ws.close();
 } catch (e) {
