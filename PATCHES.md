@@ -6,38 +6,41 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - `mine` = 上游某个 tag + 下面这些补丁，一个补丁一个 commit，commit 标题 = 这里的小节标题。
 - 每次上游发版：`scripts/sync-upstream.sh <tag>`（rebase `mine`）→ 跑 `scripts/check.sh` → 更新本文件的「状态」。
 - 状态生命周期：`local` →（提了 PR）`PR #N` →（上游合了）`merged vX.Y.Z` → 下次 rebase 时**删掉该 commit**。
+  被上游（或本 fork 后面的补丁）取代的同样在同步时删掉，并在文末「已退役的补丁」记一笔。
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
-| 补丁                         | 状态    | 主要文件                                                                                                                                 |
-| ---------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| terminal-bash-script         | `local` | `server/terminals.ts`                                                                                                                    |
-| terminal-view-lifecycle      | `local` | `server/terminals.ts`, `server/index.ts`                                                                                                 |
-| global-history               | `local` | `server/agent-service.ts`, `server/protocol.ts`, `web/src/`                                                                              |
-| status-placement             | `local` | `web/src/status-placement.ts`, `FooterBar.tsx`, `RightPanel.tsx`                                                                         |
-| recent-chats                 | `local` | `server/agent-service.ts`, `client-state.ts`, `web/src/`                                                                                 |
-| chat-cwd-pin                 | `local` | `server/agent-service.ts`                                                                                                                |
-| client-per-load              | `local` | `web/src/use-chat.ts`                                                                                                                    |
-| server-owned-chats           | `local` | `server/agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/`                                                                         |
-| topbar-crowding              | `local` | `web/src/ui-slots.ts`, `App.tsx`, `TopBar.tsx`                                                                                           |
-| quiet-duplicate-open         | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`                                                                                    |
-| no-cwd-restore               | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `use-chat.ts`                                                                     |
-| flat-recent-chats            | `local` | `web/src/conv-groups.ts`, `LeftPanel.tsx`, `server/agent-service.ts`, `protocol.ts`                                                      |
-| no-mcp-restart-nag           | `local` | `server/webui-context.ts`, `tests/unit/mute-mcp-restart-nag.test.ts`                                                                     |
-| ask-question-delivery        | `local` | `server/ask-delivery.ts`, `agent-service.ts`                                                                                             |
-| reload-adopt                 | `local` | `server/attach-adopt.ts`, `agent-service.ts`                                                                                             |
-| switch-loading               | `local` | `web/src/switch-pending.ts`, `SwitchOverlay.tsx`, `use-chat.ts`, `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `protocol.ts`    |
-| qn-rail-window               | `local` | `web/src/qn-window.ts`, `components/MessageList.tsx`, `styles.css`, `i18n.tsx`                                                           |
-| terminal-cwd-anywhere        | `local` | `server/terminals.ts`, `tests/unit/terminal-cwd.test.ts`                                                                                 |
-| chat-window-pagination       | `local` | `server/question-index.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `web/src/message-window.ts`, `MessageList.tsx`, `use-chat.ts` |
-| load-older-survives-snapshot | `local` | `web/src/message-window.ts`, `use-chat.ts`, `tests/chat-pagination-test.mjs`                                                             |
+| 补丁                         | 状态           | 主要文件                                                                                                                                 |
+| ---------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| terminal-bash-script         | `local`        | `server/terminals.ts`                                                                                                                    |
+| terminal-view-lifecycle      | `local`        | `server/terminals.ts`, `server/index.ts`                                                                                                 |
+| global-history               | `local`        | `server/agent-service.ts`, `server/protocol.ts`, `web/src/`                                                                              |
+| status-placement             | `local`        | `web/src/status-placement.ts`, `FooterBar.tsx`, `RightPanel.tsx`                                                                         |
+| recent-chats                 | `local`        | `server/agent-service.ts`, `client-state.ts`, `web/src/`                                                                                 |
+| chat-cwd-pin                 | `local`        | `server/agent-service.ts`                                                                                                                |
+| client-per-load              | `local`        | `web/src/use-chat.ts`                                                                                                                    |
+| server-owned-chats           | `local`        | `server/agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/`                                                                         |
+| topbar-crowding              | `local`        | `web/src/ui-slots.ts`, `App.tsx`, `TopBar.tsx`                                                                                           |
+| quiet-duplicate-open         | `local` → 退役 | `server/agent-service.ts`                                                                                                                |
+| no-cwd-restore               | `local`        | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `use-chat.ts`                                                                     |
+| flat-recent-chats            | `local`        | `web/src/conv-groups.ts`, `LeftPanel.tsx`, `server/agent-service.ts`, `protocol.ts`                                                      |
+| no-mcp-restart-nag           | `local`        | `server/webui-context.ts`, `tests/unit/mute-mcp-restart-nag.test.ts`                                                                     |
+| ask-question-delivery        | `local`        | `server/ask-delivery.ts`, `agent-service.ts`                                                                                             |
+| reload-adopt                 | `local`        | `server/attach-adopt.ts`, `agent-service.ts`                                                                                             |
+| switch-loading               | `local`        | `web/src/switch-pending.ts`, `SwitchOverlay.tsx`, `use-chat.ts`, `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `protocol.ts`    |
+| qn-rail-window               | `local`        | `web/src/qn-window.ts`, `components/MessageList.tsx`, `styles.css`, `i18n.tsx`                                                           |
+| terminal-cwd-anywhere        | `local`        | `server/terminals.ts`, `tests/unit/terminal-cwd.test.ts`                                                                                 |
+| chat-window-pagination       | `local`        | `server/question-index.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `web/src/message-window.ts`, `MessageList.tsx`, `use-chat.ts` |
+| bg-tasks-push-dedupe         | `local`        | `server/bg-servers.ts`, `agent-service.ts`, `tests/unit/bg-servers-dedupe.test.ts`                                                       |
+| load-older-survives-snapshot | `local`        | `web/src/message-window.ts`, `use-chat.ts`, `tests/chat-pagination-test.mjs`                                                             |
+| exchange-fold                | `local`        | `web/src/exchange-fold.ts`, `components/ExchangeFoldRow.tsx`, `MessageList.tsx`, `exchange-fold.css`, `i18n.tsx`, `locales/*.json`       |
 
 ---
 
 ## qn-rail-window
 
 **状态**：`local`（纯前端，可以直接提上游；窗口大小和对齐策略是口味选择，提之前先对口径）
-**基线**：v0.86.2
+**基线**：v0.94.1
 
 ### 问题
 
@@ -77,7 +80,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 ## switch-loading
 
 **状态**：`local`（上游同样有这个问题，但修法改了协议，得先跟上游对过口径才好提 PR）
-**基线**：v0.86.2（依赖 `server-owned-chats`：对话归服务端，切换才是一次有明确回执的请求）
+**基线**：v0.94.1（依赖 `server-owned-chats`：对话归服务端，切换才是一次有明确回执的请求）
 
 ### 问题
 
@@ -88,7 +91,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 ### 改法
 
-**协议（v15 → v16）**：切换从「发出去就不管了」变成有回执的请求。
+**协议（v19 → v20）**：切换从「发出去就不管了」变成有回执的请求。
 
 ```ts
 export type SwitchTarget = { kind: "session"; path: string } | { kind: "conversation"; id: string };
@@ -103,10 +106,6 @@ export type SwitchTarget = { kind: "session"; path: string } | { kind: "conversa
   `switch_done` 时内容已经到位，不会出现「遮罩没了但还是旧内容」的中间帧。
 - 两个引擎同一份契约：`server/agent-service.ts` 和 `server/dsh/dsh-agent-service.ts`
   各自 `emitSwitchDone()` / `emitSwitchFailed()`。
-- 同步 v0.94.1 带进来的一个漏洞（2026-09-24 补上）：上游 5ca2e70（confine switchSession to sessions root）
-  对会话目录外的路径只发 `notice`、不回执，客户端的「正在打开…」会一直等。现在它和其它失败一样
-  `flushSnapshot()` + `emitSwitchFailed()`（原因文字不变）。`switch-ack-test` 的「目录打不开」那条正好走这里
-  （测试的工作目录在会话目录外），同步之后一直挂着。
 
 **客户端**：`web/src/switch-pending.ts`（101 行，纯函数、不碰 React）记下 `pendingSwitch`；
 发出 `switch_*` 的**那一刻**聊天区盖一层「正在打开…」（`SwitchOverlay.tsx`，带「已等待 N 秒」
@@ -122,7 +121,7 @@ export type SwitchTarget = { kind: "session"; path: string } | { kind: "conversa
   `switch_done`、target 原样回传」；三条失败路径（目录打不开、对话 id 不存在、切到已经
   是当前的转录）都不再静默；失败时**当前对话纹丝不动**。
 - `tests/unit/switch-pending.test.ts` + `tests/unit/switch-loading-ui.test.ts`（共 354 行）。
-- `node scripts/check-protocol-sync.mjs`：双端 `PROTOCOL_VERSION` 一致 (v16)、
+- `node scripts/check-protocol-sync.mjs`：双端 `PROTOCOL_VERSION` 一致 (v20)、
   `protocol.ts` 保持纯类型导出。
 - i18n 跑满：8 个 locale + `web/src/i18n.tsx`。
 
@@ -131,7 +130,7 @@ export type SwitchTarget = { kind: "session"; path: string } | { kind: "conversa
 ## reload-adopt
 
 **状态**：`local`（上游不适用：它的对话有归属，这里没有）
-**基线**：v0.86.2（依赖 `server-owned-chats` + `client-per-load`）；2026-09-23 同步到 v0.94.1（见「与上游 v0.94 的关系」）
+**基线**：v0.94.1（依赖 `server-owned-chats` + `client-per-load`；同步时的改动见「与上游 v0.94 的关系」）
 
 ### 问题
 
@@ -256,7 +255,7 @@ own most recently active conversation`）—— 两处口径不一致。
 ## ask-question-delivery
 
 **状态**：`local`（bug 对上游同样成立，值得提 PR）
-**基线**：v0.86.2；2026-09-23 同步到 v0.94.1 时按上游的新问卷模型重做（见「与上游 v0.94 的关系」）
+**基线**：v0.94.1（2026-09-23 同步时按上游的新问卷模型重做，见「与上游 v0.94 的关系」）
 
 ### 问题
 
@@ -392,7 +391,7 @@ question-attachments 共 63 项全过。
 ## terminal-bash-script
 
 **状态**：`local`（上游未提 issue/PR；bug 对所有 macOS 用户都成立，值得上游）
-**基线**：v0.85.0
+**基线**：v0.94.1
 
 ### 问题
 
@@ -438,9 +437,11 @@ question-attachments 共 63 项全过。
 ## terminal-view-lifecycle
 
 **状态**：`local`（上游 [issue #147](https://github.com/xing-shuyin/pi-web-ui/issues/147)
-已确认并在 2026-09-14 标记「已修复、待发布」，但 v0.85.0 / `main` 里都还没有承载点。
-**上游发版后先跑本仓 `tests/unit/terminal-view.test.ts`：过了就删掉这个 commit。**）
-**基线**：v0.85.0
+在 v0.86.x 只修了**一半**：`create()` 现在从 history 继承 `agentBash`，已退出的 AI 终端
+不再被降级成用户终端去占那 16 个名额；但视图挂载仍然走 `create()` —— 已退出的终端会被
+**重新起进程**、历史输出一并丢掉。只是看一眼不该重启它，所以这个补丁继续保留。
+每次同步后先跑 `tests/unit/terminal-view.test.ts`：哪天它对着纯上游代码也全绿，就删掉这个 commit。）
+**基线**：v0.94.1
 
 ### 问题
 
@@ -472,7 +473,7 @@ AI 豁免、显式重开、校验、WS 路由、真 PTY）
 ## global-history
 
 **状态**：`local`（打算上游成一个设置项：History 范围 = 全部项目 / 当前项目）
-**基线**：v0.85.0
+**基线**：v0.94.1
 
 ### 问题
 
@@ -512,7 +513,7 @@ AI 豁免、显式重开、校验、WS 路由、真 PTY）
 ## status-placement
 
 **状态**：`local`（可上游：纯前端偏好，不动协议与服务端）
-**基线**：v0.85.0
+**基线**：v0.94.1
 
 ### 问题
 
@@ -531,7 +532,8 @@ AI 豁免、显式重开、校验、WS 路由、真 PTY）
   - 纯函数 `splitStatuses()`。与 `title-settings.ts` 同构（纯浏览器偏好，不进
     server 快照）。默认只钉 `multi-pass-limits`（唯一一条「不看会踩坑」的状态）；
     存过空列表就尊重用户的「一条都不钉」，不再回落默认值。
-- `FooterBar.tsx`：只渲染钉住的几条（各自一个 chip，单行省略、title 看全文，
+- `FooterBar.tsx`：只渲染钉住的几条（v0.86 起上游把底栏改成 `host:*` slot map，本补丁
+  改写其中的 `host:plugin-status` 条目，而不是再往 JSX 里插一段）（各自一个 chip，单行省略、title 看全文，
   点一下收进右栏）。
 - `RightPanel.tsx`：未钉住的渲染成 widget 同款卡片（标题 = 状态 key，点一下钉回底栏），
   底部区域的显示条件扩展为「widgets 或状态非空」。
@@ -552,7 +554,7 @@ AI 豁免、显式重开、校验、WS 路由、真 PTY）
 ## recent-chats
 
 **状态**：`local`（想上游成设置项：左栏第一列 = 只列运行中 / 最近对话）
-**基线**：v0.85.0
+**基线**：v0.94.1
 
 ### 问题
 
@@ -609,7 +611,7 @@ DSH 引擎的左栏只有活着的行，`removeRecentChat()` 在那边是空操�
 ## chat-cwd-pin
 
 **状态**：`local`（想上游成设置项：切对话时工作区跟随 / 钉住）
-**基线**：v0.86.2
+**基线**：v0.94.1
 
 ### 问题
 
@@ -659,7 +661,7 @@ DSH 引擎的左栏只有活着的行，`removeRecentChat()` 在那边是空操�
 ## client-per-load
 
 **状态**：`local`（可上游：现有 sessionStorage 方案挡不住复制标签页）
-**基线**：v0.86.2
+**基线**：v0.94.1
 
 ### 问题
 
@@ -688,7 +690,7 @@ clientId 建 ClientSession，同 id = 同一个会话。上游把 clientId 从 l
 ## server-owned-chats
 
 **状态**：`local`（上游 #145 在往「所有权 + 感知」方向走，这里是相反的选择：取消所有权）
-**基线**：v0.86.2
+**基线**：v0.94.1
 
 ### 问题
 
@@ -754,8 +756,8 @@ clientId 建 ClientSession，同 id = 同一个会话。上游把 clientId 从 l
 
 ## quiet-duplicate-open
 
-**状态**：`local`（上游大概率不接受：这是把它刻意加的提醒关掉）
-**基线**：v0.86.2
+**状态**：`local`，**下次同步退役**（代码上已无效果，见下面「现状」）
+**基线**：v0.94.1
 
 ### 问题
 
@@ -765,13 +767,26 @@ clientId 建 ClientSession，同 id = 同一个会话。上游把 clientId 从 l
 
 ### 改法
 
-去掉**空闲持有者**那条 info 提醒（pi 引擎与 DSH 引擎同口径）。真正有害的一刻没有放松：
+去掉**空闲持有者**那条 info 提醒。只改了 pi 引擎（`server/agent-service.ts`）；DSH 引擎
+`server/dsh/dsh-agent-service.ts` 的同一条提醒一直都在（这里原先写「两个引擎同口径」，
+不对：这个提交从来没动过 DSH）。真正有害的一刻没有放松：
 
 - 对方**正在跑**时打开 → 仍然硬拦（原样保留）；
 - 发消息前的 `prompt()` 守卫仍会再查一次（开时空闲、发时在跑的竞态照样拦）。
 
-要两处一起开同一条对话，正确做法是 co-drive 的 `join_client`：那条路径只有**一个**
-writer（持有者的 runtime），从根上分叉不了。
+### 现状（2026-09-23 同步 v0.94.1 时查明）
+
+栈里排在后面的 `server-owned-chats` 把对话归给了服务端：两处打开同一条就是订阅同一个
+runtime，只有**一个** writer，从根上分叉不了。它把 pi 引擎的持有者检查整段删掉了（连同
+上面两条硬拦：打开正在跑的对话不再拒绝、发送不再拦截），所以到栈顶这个补丁在代码上
+**已经没有任何效果**：它加的行一行都不剩，它删的那段提醒也不在（逐行核对过）。
+
+**下次同步时退役**：在它那一步 `git rebase --skip`；到 `server-owned-chats` 那一步，
+`server/agent-service.ts` 里这段取 `server-owned-chats` 自己的版本（整段删掉）；PATCHES.md
+删掉本节和索引行，在文末「已退役的补丁」记一笔。这次没删：删它要把后面每个碰索引表的
+提交都重解一遍冲突，换来的只是栈里少一个空转的提交，不如放到下次同步顺手做。
+
+（这里原先指向 co-drive 的 `join_client`，该补丁这次同步已退役，见「已退役的补丁」。）
 
 ### 回归
 
@@ -783,7 +798,7 @@ writer（持有者的 runtime），从根上分叉不了。
 ## no-cwd-restore
 
 **状态**：`local`（可上游成设置项：启动目录 = 服务端默认 / 上次用过的）
-**基线**：v0.86.2
+**基线**：v0.94.1
 
 ### 问题
 
@@ -818,7 +833,7 @@ writer（持有者的 runtime），从根上分叉不了。
 ## flat-recent-chats
 
 **状态**：`local`（可上游成设置项：左栏排序 = 最近活动 / 创建时间；分组 = 按项目 / 不分）
-**基线**：v0.86.2
+**基线**：v0.94.1
 
 ### 问题
 
@@ -926,7 +941,7 @@ order 200。v0.86.2 上的旧做法（`capTopbarPrimary()` 限额 → 按角色�
 ## no-mcp-restart-nag
 
 **状态**：`local`（上游修了就删；真正的修法在 pi-mcp-adapter 那边）
-**基线**：v0.86.2
+**基线**：v0.94.1
 
 ### 问题
 
@@ -964,7 +979,7 @@ list 往返）。想真修就得让令牌不再每次变（固定 `bearerToken`�
 ## terminal-cwd-anywhere
 
 **状态**：`local`
-**基线**：v0.86.2
+**基线**：v0.94.1
 
 ### 问题
 
@@ -1001,7 +1016,7 @@ workspace」。两个入口都受影响：`create()`（前端新开标签 / agen
 ## chat-window-pagination
 
 **状态**：`local`
-**基线**：v0.86.2（协议 v16 → **v17**）
+**基线**：v0.94.1（协议 v20 → **v21**）
 
 ### 问题
 
@@ -1062,6 +1077,9 @@ workspace」。两个入口都受影响：`create()`（前端新开标签 / agen
 
 ## bg-tasks-push-dedupe
 
+**状态**：`local`
+**基线**：v0.94.1
+
 **症状**（用户 2026-09-22 报）：“pi-web-ui 不再把事件推到 UI，不刷新就看不到
 任何对话的更新。”
 
@@ -1099,6 +1117,9 @@ index.mjs` 的轮询：对每条盯梢的运行无条件 `update()`，20 条 × 
   默认路径永远发（新 socket）/ 无条件推送会刷新去重基线。
 
 ## load-older-survives-snapshot
+
+**状态**：`local`
+**基线**：v0.94.1
 
 **症状**（用户 2026-09-22 报）：点了「加载更早消息」，一来新消息就退回点击之前的样子，
 已加载的历史没了。
@@ -1144,3 +1165,99 @@ index.mjs` 的轮询：对每条盯梢的运行无条件 `update()`，20 条 × 
   `set_thinking`（每次都 flush 一个检查点），要求全是 `appended=[]` 的 snapshot_delta、零整份快照。
   **旧构建上实测 0 delta / 2 整份快照（失败），新构建 2 delta / 0 整份快照**。同步到
   v0.94.1 后，去掉我们的服务端改动、只靠上游的 `pruneMessageCache()`，同样 2 delta / 0 整份快照。
+
+---
+
+## exchange-fold
+
+**状态**：`local`
+**基线**：v0.94.1
+
+**诉求**（用户 2026-09-23）：agent 一跑就是几十轮思考 + 工具调用，每轮一个块，读不过来。把一轮对话的
+中间步骤折成一行，显示一共几轮、几次思考、几次工具调用；最终只看「我的问题 + 它的回答」。
+用户选定：折叠时只留下回答；agent 还在跑时是一行折叠的直播行。
+
+### 改法
+
+- `web/src/exchange-fold.ts`（纯逻辑，不碰 React）：`planExchangeFolds(messages, opts)` 把消息切成一轮一轮。
+  一轮 = 一条用户提问（或用户自己跑的 `!` 命令）到下一条之间的所有消息；运行中 steer 切成两轮。
+  每轮算出：隐藏的成员（思考、工具调用及结果、步骤之间顺手写的话、运行中插进来的提醒/压缩摘要）、
+  回答（最后一条有文字的助手消息，只显示文字；以错误收尾时最后一条也在，错误信息和重试按钮挂在它上面）、
+  计数、时长、状态（done / working / error / aborted），以及折叠行画在哪条消息之前。分页窗口从一轮
+  中间开始时从第一条已载入的消息算起。
+- `web/src/components/ExchangeFoldRow.tsx` + `exchange-fold.css`：折叠行
+  `▸ 23 turns · 11 thinking · 31 tool calls · 4m 10s`。agent 还在跑时是直播行：转圈、计数实时增长，
+  下面一行显示当前步骤（`liveStep()`：思考中… / 写回答… / `bash: <命令>`）；回答照常在行下方流式出现。
+  点这一行展开 = 和以前一样的完整视图，再点收起。
+- `MessageList.tsx`：按 plan 决定每条消息画不画、怎么画（隐藏成员不画，回答走 `textOnly()`）。
+- 提问和回答不吃上游的摘要行：上游把最近 `KEEP_RECENT` 条以外的旧消息画成一行摘要，点了才展开；
+  而折叠起来的步骤也算在这 N 条里，所以除了最后一轮，每一轮的回答都会被收成摘要行。
+  `oldRow()` 把用户消息和回答（不是折起来的步骤的助手消息）排除在外。其它消息（展开那一轮里的步骤、
+  附件、收尾后的提醒/压缩摘要、`!` 命令）照旧。用户 2026-09-24：“don't fold the final output, it will
+  be annoying to un-collapse jus to see the output”。
+- 文案：`web/src/i18n.tsx`（en/zh）+ `locales/*.json`（de es fr it ja ko pt ru）各 12 条。
+- 依赖 server-owned-chats 的「用户问题落盘即对账」（c094fe9）：问题和 `isStreaming=true` 一起到，
+  折叠行从第一帧就在。没有它，第一轮的思考会先在行外裸露渲染一两秒。
+
+### 回归
+
+- `tests/unit/exchange-fold.test.ts`：22 项。已结束的一轮（切分与计数、取哪条当回答、单条回答不折、
+  错误与中止、附件和回答之后的消息照常显示、压缩摘要/提醒随步骤隐藏、`!` 命令是边界、分页窗口切开的一轮、
+  steer 切成两轮），直播中的一轮（整段隐藏、正文还空时行画在末尾、工具结果后等模型时不露回答、
+  回答写完不再闪「working」、新问题在路上时上一轮保持已完成、扩展触发的一轮），以及 `textOnly` /
+  `liveStep` / `formatSpan`。
+- `tests/exchange-fold-test.mjs`（真服务端 + 真浏览器，mock 模型，零 token）：思考 → 两次工具调用 → 回答
+  的三轮运行：直播行与当前步骤、计数递增、折叠期间从不出现工具卡/思考块、回答照常流式、
+  结束后一行 `3 turns · 1 thinking · 2 tool calls · 5s`、点开/收起、刷新后不变。再加一段长对话
+  （6 轮、36 条，超出 `KEEP_RECENT`）：6 行折叠、没有提问或回答被截成摘要行、每条回答（最早的也算）完整
+  显示；展开最早一轮时它的步骤照旧是摘要行，回答仍完整。共 31 项。`XFOLD_DEBUG=1` 打印时间线和 WS 帧。
+  **c094fe9 之前实测两项失败（第一轮的思考出现时还没有折叠行）；`oldRow()` 排除回答之前实测两项失败
+  （7 个摘要行，最早三轮的回答被截）；之后全过。**
+- `tests/collapse-test.mjs`（上游的冒烟）：种对话的脚本跟上协议 v2（先完整 `snapshot`，之后只有
+  `snapshot_delta`），页面固定为中文（检查读「展开/收起」）。按 exchange-fold 改：提问从不是摘要行、
+  滚到它时完整显示；最早的摘要行是第一个附件。共 12 项。
+
+---
+
+## 已退役的补丁
+
+同步时删掉的补丁在这里留一笔，下次同步不用再查它们为什么没了。
+
+- **co-drive**（旧 `530d593`，同步 v0.94.1 时退役）：`join_client` / `leave_client` 让一个 socket
+  加入另一个客户端的会话、一起驾驶。被 `server-owned-chats` 取代：对话归服务端之后，所有
+  窗口本来就在同一条对话上，`server-owned-chats` 也早就删了这两条消息。做法：先在旧基线上
+  把 `quiet-duplicate-open`、`server-owned-chats` 不带 co-drive 重排一遍（树与原来逐字节相同），
+  再整体 rebase。
+- **no-parallel-noise**（旧 `27caeb9`，同步 v0.94.1 时退役）：删掉「同项目并行提醒」（同一 cwd
+  下有别的对话在跑时，每轮都弹）。上游 v0.94 加了开关 `parallelReminderEnabled`（设置里的
+  「同项目并行提醒」，默认**开**），关掉时两个引擎整段跳过，效果与本补丁相同。**保持
+  关闭**：它存在 `~/.pi-web-ui/client-state.json` 的全局 `__settings__` 里，所有客户端/标签页
+  共用，关一次就行。副作用（上游自己的设计）：关掉后那段里的认领心跳
+  `getClaimStore().touch()` 也不跑。
+- **ui-cache-no-thrash**（旧 `0ce96b5` 的服务端一半，同步 v0.94.1 时退役）：被上游 4dfd95d
+  （issue #259）的 `pruneMessageCache()` 取代，见 `load-older-survives-snapshot`。
+- **quiet-duplicate-open**：还在栈里，但代码上已无效果，**下次同步退役**，见该节「现状」。
+
+---
+
+## 同步时的已知失败（不是回归）
+
+下次同步先对照这里：失败原因还是这里写的那个，就不是同步引入的。
+
+- **`scripts/check.sh` 要在 UTC 下跑**（`TZ=UTC scripts/check.sh`）：上游的
+  `tests/unit/notes-plugin.test.ts` 有两条用例把 UTC 的 ISO 字符串当本地时间读，非 UTC 时区必挂
+  （v0.94.1 上实测）。本 fork 不碰那段代码。`check.sh` 是 `set -e`，挂在单测就不会跑到构建。
+- 下面这些冒烟不在 `check.sh` 里，同步时手动跑、预期失败（v0.94.1 上逐个核对过）：
+  - `tests/takeover-test.mjs`、`tests/idle-takeover-test.mjs`、`tests/remote-answer-test.mjs`：测上游 v0.94 的
+    单 owner 功能（手动过户、空闲持有时新标签页空白落地、跨页作答），都靠左栏的 elsewhere 行。
+    `server-owned-chats` 下 `listExternalRunning()` 恒为空（共享表上那条对话本来就在自己的列表里），
+    `reload-adopt` 让新标签页直接打开已经开着的那条，`ask-question-delivery` 让问卷在所有在线窗口
+    弹出（用户的选择）。
+  - `tests/orphan-adopt-test.mjs`：`reload-adopt` 刻意不调用 `findAdoptableOrphan()`（见该节）。
+  - `tests/conv-group-flash-test.mjs`：断言上游按项目分的左栏「全程只有一行」；`flat-recent-chats`
+    把所有项目的对话排成一条扁平列表，切到 B 聊一句后就有两行。同步前的构建（0ce96b5）上失败得
+    一模一样。
+  - `tests/scroll-attr-collapse-test.mjs`：种对话就超时（`seed timeout`），纯上游 v0.94.1（9fa8905）上一样
+    （2026-09-24 实测），不是本 fork 引入的。
+  - 本 fork 自己的冒烟全过：`server-owned-chats-test`、`cross-client-session-test`、`chat-pagination-test`、
+    `exchange-fold-test`（后加）。
