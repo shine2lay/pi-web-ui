@@ -2291,12 +2291,13 @@ export class ClientSession {
 	 *  use the slower STREAMING_SNAPSHOT_INTERVAL_MS cadence. */
 	private lastDeltaAt = 0;
 	/** Short-lived `getSessionStats()` memo — see STATS_CACHE_MS. Keyed by the
-	 *  session instance so a conversation switch never serves the previous one. */
-	private sessionStatsCache: {
-		at: number;
-		session: AgentSession;
-		value: ReturnType<AgentSession["getSessionStats"]>;
-	} | null = null;
+	 *  session instance so a conversation switch never serves the previous one.
+	 *  server-owned-chats：按会话各存一份（不是单槽）—— 订阅方会替别的窗口流式它自己
+	 *  没在看的对话，两条对话同时在跑时单槽会被每一帧互相挤掉。 */
+	private readonly sessionStatsCache = new WeakMap<
+		AgentSession,
+		{ at: number; value: ReturnType<AgentSession["getSessionStats"]> }
+	>();
 	private sessionsTimer: ReturnType<typeof setTimeout> | null = null;
 	private version = 0;
 	/** Snapshot revision counter (see emitSnapshotNow / protocol snapshot_delta). */
@@ -3078,7 +3079,8 @@ export class ClientSession {
 		const convId = msg.conversationId;
 		if (!convId) return;
 		for (const other of ClientSession.liveSessions) {
-			if (other === this || other.disposed) continue;
+			// 没 socket 的会话跳过：送不出去，noteForeignDelta 还会替它白算快照（见 checkpointViewers）。
+			if (other === this || other.disposed || other.sinkCount() === 0) continue;
 			if (other.activeId !== convId) continue;
 			other.emitLocal(msg);
 			other.noteForeignDelta();
@@ -3089,6 +3091,21 @@ export class ClientSession {
 	private noteForeignDelta(): void {
 		this.lastDeltaAt = Date.now();
 		this.scheduleSnapshot();
+	}
+
+	/** server-owned-chats：订阅这条对话的会话替**别的正看着它的窗口**安排对账快照。
+	 *  快照仍由收件人自己生成（各自的 rev 链，见 fanOutToViewers），这里只替它们拍板
+	 *  「现在就发」还是「按节奏发」，口径跟订阅方自己的一致。以前只有订阅方自己对账，
+	 *  看客只能靠 noteForeignDelta 的慢节奏（流式中 2 秒一次），连自己刚发的问题都要等 2 秒
+	 *  才出现。没 socket 的会话（client-per-load 之后每次刷新都留下一个）跳过：没人收，
+	 *  白算；它重连时 get_state 会拿整份快照。 */
+	private checkpointViewers(convId: string, now: boolean): void {
+		for (const other of ClientSession.liveSessions) {
+			if (other === this || other.disposed || other.sinkCount() === 0) continue;
+			if (other.activeId !== convId) continue;
+			if (now) other.flushSnapshot();
+			else other.scheduleSnapshot();
+		}
 	}
 
 	/** 活着的客户端会话（扇出用；attach/dispose 维护）。 */
@@ -3726,7 +3743,8 @@ export class ClientSession {
 				conv.compactionState = { reason: event.reason, startedAt: Date.now() };
 				conv.lastCompactionTokens = null;
 				this.markCompactionPending(conv);
-				// 进度条只有激活对话看得到（后台对话的快照没有接收方，见 onEvent 末尾）。
+				// 进度条只有正看着这条对话的窗口看得到（见 onEvent 末尾）。
+				this.checkpointViewers(conv.id, true);
 				if (conv.id === this.conv.id) this.flushSnapshot();
 				break;
 			}
@@ -3957,11 +3975,16 @@ export class ClientSession {
 				// stale state. Only the ACTIVE conversation streams to the browser —
 				// background conversations would clobber the streaming view; their
 				// state arrives via snapshot when switched to.
-				if (conv.id !== this.conv.id) break;
+				// server-owned-chats：「激活」要按**每个窗口**算。订阅这条对话的会话（this）是
+				// 当初开它的那次页面加载，它可能早就切到别的对话、甚至页面都刷新没了，而别的
+				// 窗口正看着这条。以前这里只看 this —— 它没在看就谁都收不到增量，看客的界面
+				// 要刷新才动。现在：自己在看 → emit（顺带扇出）；自己没在看但别人在看 → 只扇出。
+				const selfViewing = conv.id === this.conv.id;
+				if (!selfViewing && !this.viewedElsewhere(conv.id)) break;
 				const ame = event.assistantMessageEvent;
 				const m = event.message as { timestamp?: number };
-				this.lastDeltaAt = Date.now();
-				this.emit({
+				if (selfViewing) this.lastDeltaAt = Date.now();
+				const delta: ServerMessage = {
 					type: "message_delta",
 					conversationId: conv.id,
 					seq: ++conv.deltaSeq,
@@ -3970,7 +3993,7 @@ export class ClientSession {
 					messageId: `stream-${m?.timestamp ?? 0}`,
 					usage: (() => {
 						try {
-							const t = this.sessionStats().tokens;
+							const t = this.sessionStats(conv.session).tokens;
 							return t ? { input: t.input, output: t.output, total: t.total } : null;
 						} catch {
 							return null;
@@ -3984,7 +4007,9 @@ export class ClientSession {
 						contentIndex: "contentIndex" in ame ? ame.contentIndex : undefined,
 						delta: "delta" in ame ? ame.delta : undefined,
 					},
-				});
+				};
+				if (selfViewing) this.emit(delta);
+				else this.fanOutToViewers(delta);
 				break;
 			}
 			default:
@@ -4001,14 +4026,25 @@ export class ClientSession {
 		// #259 实测 8 子代理 × 5 次 bash → 8 条全量快照共 39.5MB，而激活对话一个
 		// 字节都没变。后台对话的内容在切过去时取（switch_session / get_state 强制
 		// 全量），它在左栏的运行态由 emitConversations 走另一条通道。
-		if (conv.id !== this.conv.id) return;
-		if (
+		//
+		// server-owned-chats：「激活」按每个窗口算（见 message_update）—— 正看着这条对话的
+		// 别的窗口按同样的口径对账，各自生成自己的快照（checkpointViewers）。只涉及正看着
+		// **这条**对话的窗口，所以 #259 的「子代理替激活对话刷快照」不会回来。
+		//
+		// 用户的问题落进转录（role=user 的 message_end，首条提问或中途 steer）也算边界，
+		// 立即对账，问题和 isStreaming=true 一起到。以前要等定时器（上一轮刚结束时 <1.5s，
+		// 看客是 2 秒）：提问的人要等一会儿才看到自己的问题，这期间流式的思考/工具卡也
+		// 没有所属的提问（exchange-fold 的折叠行靠这个从第一帧就在）。
+		const boundary =
 			event.type === "agent_end" ||
 			event.type === "tool_execution_end" ||
 			event.type === "compaction_end" ||
 			event.type === "auto_retry_start" ||
-			event.type === "auto_retry_end"
-		) {
+			event.type === "auto_retry_end" ||
+			(event.type === "message_end" && (event.message as { role?: string } | undefined)?.role === "user");
+		this.checkpointViewers(conv.id, boundary);
+		if (conv.id !== this.conv.id) return;
+		if (boundary) {
 			this.flushSnapshot();
 		} else {
 			this.scheduleSnapshot();
@@ -4979,12 +5015,12 @@ export class ClientSession {
 	 * Callers that need the authoritative value can still call the session
 	 * directly; every cache hit here is at most STATS_CACHE_MS stale.
 	 */
-	private sessionStats(): ReturnType<AgentSession["getSessionStats"]> {
+	private sessionStats(session: AgentSession = this.session): ReturnType<AgentSession["getSessionStats"]> {
 		const now = Date.now();
-		const hit = this.sessionStatsCache;
-		if (hit && hit.session === this.session && now - hit.at < STATS_CACHE_MS) return hit.value;
-		const value = this.session.getSessionStats();
-		this.sessionStatsCache = { at: now, session: this.session, value };
+		const hit = this.sessionStatsCache.get(session);
+		if (hit && now - hit.at < STATS_CACHE_MS) return hit.value;
+		const value = session.getSessionStats();
+		this.sessionStatsCache.set(session, { at: now, value });
 		return value;
 	}
 

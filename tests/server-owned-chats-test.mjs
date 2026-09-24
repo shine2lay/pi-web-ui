@@ -12,7 +12,9 @@
 //   3. 流式进行中两个订阅者同时收到增量；
 //   4. 一个窗口切走，另一个不受影响（没有归属，也就没有连坐）；
 //   5. 订阅者断线不影响对话本身（对话是服务端的，不随浏览器消失）；
-//   6. 断线的订阅者不会让对话关不掉（只有活 socket 才算「在看」）。
+//   6. 断线的订阅者不会让对话关不掉（只有活 socket 才算「在看」）；
+//   7. 开这条对话的窗口（SDK 事件的订阅方）切走之后，正看着它的窗口照样收到
+//      实时增量和最终结果（不用刷新），切走的那个收不到别人对话的增量。
 //
 // 零 token：mock SSE 模型，纯 WS 协议，无需浏览器。
 // Usage: node tests/server-owned-chats-test.mjs [port]   （先 npm run build）
@@ -300,6 +302,47 @@ try {
 		25000,
 	);
 	console.log("✓ 订阅者断线不影响对话本身（对话是服务端的，不随浏览器消失）");
+
+	// --- 7. 订阅方切走了，看客照样实时 ---------------------------------------
+	// SDK 事件只订阅在「开这条对话的那个窗口」上（A：首帧就建了它）。在运行列表里点过来
+	// （switch_conversation）不搬订阅 —— B 只是看客。以前 A 一切走，这条对话的增量和对账
+	// 快照就谁都不发了：B 在自己发的这一轮里什么都看不到，要刷新才有。
+	B.send({ type: "switch_conversation", id: aConv });
+	await B.waitForState((s) => s.conversationId === aConv, 15000);
+	A.send({ type: "new_chat" });
+	await A.waitForState((s) => s.conversationId !== aConv, 15000);
+	A.deltas = [];
+	B.deltas = [];
+	const sentAt = Date.now();
+	B.send({ type: "prompt", text: "SLOW viewer run" });
+	const seenQuestion = await B.waitForMessage(
+		(m) => m.role === "user" && JSON.stringify(m.content).includes("SLOW viewer run"),
+		5000,
+	).catch(() => null);
+	const questionMs = Date.now() - sentAt;
+	if (!seenQuestion) throw new Error("看客自己发的问题 5 秒内没有出现在对话里");
+	if (questionMs > 1000) throw new Error(`看客的问题要 ${questionMs}ms 才出现（应当随问题落盘立即对账）`);
+	const viewerLive = await (async () => {
+		const deadline = Date.now() + 12000;
+		while (Date.now() < deadline) {
+			if (B.deltas.length >= 2) return true;
+			await sleep(50);
+		}
+		return false;
+	})();
+	if (!viewerLive) throw new Error(`订阅方切走后看客收不到实时增量：B=${B.deltas.length}`);
+	await B.waitForMessage(
+		(m) => m.role === "assistant" && JSON.stringify(m.content).includes("echo:SLOW_viewer_run"),
+		30000,
+	);
+	await B.waitForState((s) => s.isStreaming === false, 5000);
+	if (A.deltas.length > 0) throw new Error(`切走的订阅方收到了别的对话的增量：A=${A.deltas.length}`);
+	console.log(
+		`✓ 订阅方切走后，看客照样实时（问题 ${questionMs}ms 出现，增量 B=${B.deltas.length}，切走的 A=${A.deltas.length}）`,
+	);
+	// 步骤 6 要关掉这条共享对话：有活 socket 的 B 还看着就关不掉（正确行为），先让 B 走开。
+	B.send({ type: "new_chat" });
+	await B.waitForState((s) => s.conversationId !== aConv, 15000);
 
 	// --- 6. 断线的订阅者不得让对话「关不掉」 ------------------------------
 	// ClientSession 活得比 socket 久（断线重连要接回原状态），client-per-load 之后
