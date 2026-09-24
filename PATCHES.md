@@ -33,6 +33,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | chat-window-pagination       | `local`        | `server/question-index.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `web/src/message-window.ts`, `MessageList.tsx`, `use-chat.ts` |
 | bg-tasks-push-dedupe         | `local`        | `server/bg-servers.ts`, `agent-service.ts`, `tests/unit/bg-servers-dedupe.test.ts`                                                       |
 | load-older-survives-snapshot | `local`        | `web/src/message-window.ts`, `use-chat.ts`, `tests/chat-pagination-test.mjs`                                                             |
+| exchange-fold                | `local`        | `web/src/exchange-fold.ts`, `components/ExchangeFoldRow.tsx`, `MessageList.tsx`, `exchange-fold.css`, `i18n.tsx`, `locales/*.json`       |
 
 ---
 
@@ -1167,6 +1168,46 @@ index.mjs` 的轮询：对每条盯梢的运行无条件 `update()`，20 条 × 
 
 ---
 
+## exchange-fold
+
+**状态**：`local`
+**基线**：v0.94.1
+
+**诉求**（用户 2026-09-23）：agent 一跑就是几十轮思考 + 工具调用，每轮一个块，读不过来。把一轮对话的
+中间步骤折成一行，显示一共几轮、几次思考、几次工具调用；最终只看「我的问题 + 它的回答」。
+用户选定：折叠时只留下回答；agent 还在跑时是一行折叠的直播行。
+
+### 改法
+
+- `web/src/exchange-fold.ts`（纯逻辑，不碰 React）：`planExchangeFolds(messages, opts)` 把消息切成一轮一轮。
+  一轮 = 一条用户提问（或用户自己跑的 `!` 命令）到下一条之间的所有消息；运行中 steer 切成两轮。
+  每轮算出：隐藏的成员（思考、工具调用及结果、步骤之间顺手写的话、运行中插进来的提醒/压缩摘要）、
+  回答（最后一条有文字的助手消息，只显示文字；以错误收尾时最后一条也在，错误信息和重试按钮挂在它上面）、
+  计数、时长、状态（done / working / error / aborted），以及折叠行画在哪条消息之前。分页窗口从一轮
+  中间开始时从第一条已载入的消息算起。
+- `web/src/components/ExchangeFoldRow.tsx` + `exchange-fold.css`：折叠行
+  `▸ 23 turns · 11 thinking · 31 tool calls · 4m 10s`。agent 还在跑时是直播行：转圈、计数实时增长，
+  下面一行显示当前步骤（`liveStep()`：思考中… / 写回答… / `bash: <命令>`）；回答照常在行下方流式出现。
+  点这一行展开 = 和以前一样的完整视图，再点收起。
+- `MessageList.tsx`：按 plan 决定每条消息画不画、怎么画（隐藏成员不画，回答走 `textOnly()`）。
+- 文案：`web/src/i18n.tsx`（en/zh）+ `locales/*.json`（de es fr it ja ko pt ru）各 12 条。
+- 依赖 server-owned-chats 的「用户问题落盘即对账」（c094fe9）：问题和 `isStreaming=true` 一起到，
+  折叠行从第一帧就在。没有它，第一轮的思考会先在行外裸露渲染一两秒。
+
+### 回归
+
+- `tests/unit/exchange-fold.test.ts`：22 项。已结束的一轮（切分与计数、取哪条当回答、单条回答不折、
+  错误与中止、附件和回答之后的消息照常显示、压缩摘要/提醒随步骤隐藏、`!` 命令是边界、分页窗口切开的一轮、
+  steer 切成两轮），直播中的一轮（整段隐藏、正文还空时行画在末尾、工具结果后等模型时不露回答、
+  回答写完不再闪「working」、新问题在路上时上一轮保持已完成、扩展触发的一轮），以及 `textOnly` /
+  `liveStep` / `formatSpan`。
+- `tests/exchange-fold-test.mjs`（真服务端 + 真浏览器，mock 模型，零 token）：思考 → 两次工具调用 → 回答
+  的三轮运行，25 项检查：直播行与当前步骤、计数递增、折叠期间从不出现工具卡/思考块、回答照常流式、
+  结束后一行 `3 turns · 1 thinking · 2 tool calls · 5s`、点开/收起、刷新后不变。`XFOLD_DEBUG=1` 打印
+  时间线和 WS 帧。**c094fe9 之前实测两项失败（第一轮的思考出现时还没有折叠行），之后全过。**
+
+---
+
 ## 已退役的补丁
 
 同步时删掉的补丁在这里留一笔，下次同步不用再查它们为什么没了。
@@ -1205,4 +1246,5 @@ index.mjs` 的轮询：对每条盯梢的运行无条件 `update()`，20 条 × 
   - `tests/conv-group-flash-test.mjs`：断言上游按项目分的左栏「全程只有一行」；`flat-recent-chats`
     把所有项目的对话排成一条扁平列表，切到 B 聊一句后就有两行。同步前的构建（0ce96b5）上失败得
     一模一样。
-  - 本 fork 自己的冒烟全过：`server-owned-chats-test`、`cross-client-session-test`、`chat-pagination-test`。
+  - 本 fork 自己的冒烟全过：`server-owned-chats-test`、`cross-client-session-test`、`chat-pagination-test`、
+    `exchange-fold-test`（后加）。

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { FiArrowDown } from "react-icons/fi";
 import type { PromptAttachment, ToolStatus, UiMessage, UiState } from "../types";
 import { Message, asText } from "./Message";
@@ -11,6 +11,8 @@ import { collectQuestionAttachments } from "../question-attachments";
 
 import { parseSkillBlock } from "../skill-block";
 import { CollapsedMessage } from "./CollapsedMessage";
+import { ExchangeFoldRow } from "./ExchangeFoldRow";
+import { hasVisibleText, planExchangeFolds, textOnly, type ExchangeFold } from "../exchange-fold";
 import { LazyMount } from "./LazyMount";
 import {
 	applyPlan,
@@ -154,6 +156,11 @@ function hasToolCall(m: UiMessage): boolean {
 	return m.content.some((b) => b.type === "toolCall");
 }
 
+/** exchange-fold：折叠行插在它锚定的那条消息前面（flatMap 摊平成一层，消息仍按 id 协调，不重挂）。 */
+function withRow(row: ReactNode, el: ReactNode): ReactNode[] {
+	return row ? [row, el] : [el];
+}
+
 interface MessageListProps {
 	/** 消息工具条条目（message.actions 槽位：内置 + 插件的最终结果）。 */
 	uiMessageActions?: import("../ui-slots").UiSlotEntry[];
@@ -230,6 +237,10 @@ export function MessageList({
 	const progUntilRef = useRef(0);
 	/** Messages the user expanded from the collapsed view — stay expanded. */
 	const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+	/** exchange-fold 补丁：用户展开了的轮次（键 = 这一轮第一条消息的 id）。 */
+	const [foldOpen, setFoldOpen] = useState<Set<string>>(() => new Set());
+	const foldOpenRef = useRef(foldOpen);
+	foldOpenRef.current = foldOpen;
 	/** 会话内搜索栏（Ctrl+F / Cmd+F）。 */
 	const [searchOpen, setSearchOpen] = useState(false);
 	/** Persisted messages + the live in-progress assistant message (if any). */
@@ -258,6 +269,59 @@ export function MessageList({
 	// ones collapse to summary rows (unless the user expanded them).
 	const recentStart = state.messages.length > COLLAPSE_MIN ? Math.max(0, state.messages.length - KEEP_RECENT) : 0;
 
+	// ---- exchange-fold（纯逻辑见 exchange-fold.ts）-------------------------
+	// 每一轮的思考/工具调用/中间的话折成一行，只留提问和回答；点那一行展开整轮。
+	// 消息数组引用稳定，流式增量不会重算。
+	const hasStreamingMsg = !!state.streamingMessage;
+	const foldPlan = useMemo(
+		() => planExchangeFolds(state.messages, { live: !!state.isStreaming, streaming: hasStreamingMsg }),
+		[state.messages, state.isStreaming, hasStreamingMsg],
+	);
+	/** 这条消息此刻被折起来了（所在那一轮没展开）。 */
+	const foldHides = useCallback(
+		(id: string) => {
+			const f = foldPlan.byMsg.get(id);
+			return !!f && foldPlan.role.get(id) === "hidden" && !foldOpen.has(f.key);
+		},
+		[foldPlan, foldOpen],
+	);
+	/** 展开这条消息所在的那一轮（跳转 / 搜索 / 导出要看它时）。 */
+	const openFoldOf = useCallback(
+		(id: string) => {
+			const f = foldPlan.byMsg.get(id);
+			if (!f || foldPlan.role.get(id) !== "hidden") return;
+			setFoldOpen((prev) => (prev.has(f.key) ? prev : new Set(prev).add(f.key)));
+		},
+		[foldPlan],
+	);
+	/** 点折叠行：展开/收起这一轮。贴底看着直播轮时展开 = 继续贴底跟着最新步骤走；
+	 *  其它情况把这一行钉在原位（内容在它下面长出/收回，贴底再钉不该把它拽走）。 */
+	const toggleFold = useCallback((fold: ExchangeFold, el: HTMLElement | null) => {
+		const opening = !foldOpenRef.current.has(fold.key);
+		const follow = opening && fold.live && stickRef.current;
+		if (!follow) {
+			escapedRef.current = true;
+			stickRef.current = false;
+			setStickBottom(false);
+		}
+		const before = el?.getBoundingClientRect().top;
+		flushSync(() => {
+			setFoldOpen((prev) => {
+				const next = new Set(prev);
+				if (next.has(fold.key)) next.delete(fold.key);
+				else next.add(fold.key);
+				return next;
+			});
+		});
+		const root = scrollRef.current;
+		if (follow || !root || !el?.isConnected || before === undefined) return;
+		const delta = el.getBoundingClientRect().top - before;
+		if (delta) {
+			progUntilRef.current = Date.now() + PROGRAMMATIC_SCROLL_GRACE_MS;
+			root.scrollTop += delta;
+		}
+	}, []);
+
 	/** 当前渲染为折叠摘要行的消息 id（SearchBar 的折叠层搜索索引用它；
 	 *  toolResult 无独立折叠行——其结果文本已并入宿主 toolCall 卡）。
 	 *  引用稳定：SearchBar 命中收集把它当依赖，只有消息集/展开态变化时才重算。 */
@@ -270,6 +334,16 @@ export function MessageList({
 		}
 		return s;
 	}, [state.messages, recentStart, expanded]);
+	/** 搜索的折叠层还要索引折起来的步骤（exchange-fold）：它们不在 DOM 里。 */
+	const searchCollapsedIds = useMemo(() => {
+		let s: Set<string> | null = null;
+		for (const m of state.messages) {
+			if (m.role === "toolResult" || !foldHides(m.id)) continue;
+			if (!s) s = new Set(collapsedIds);
+			s.add(m.id);
+		}
+		return s ?? collapsedIds;
+	}, [state.messages, collapsedIds, foldHides]);
 
 	// ---- 惰性窗口化（lazy windowing，纯函数见 lazy-window.ts）----------------
 	// 视口缓冲带之外的重型消息替换为等高占位 div；滚动临近时换回真实内容并
@@ -304,7 +378,9 @@ export function MessageList({
 	virtualOnRef.current = virtualOn;
 	// 底部常驻区（永不占位）：随每次渲染按预算重算（读取最新实测高度），
 	// 首次全量测量后巨型消息会被预算挤出常驻区、参与正常窗口化。
-	const alwaysSet = pickAlways(state.messages, heightsRef.current, ALWAYS_BUDGET);
+	// exchange-fold：折起来的消息不渲染，不该占常驻区的预算
+	const foldVisible = useMemo(() => state.messages.filter((m) => !foldHides(m.id)), [state.messages, foldHides]);
+	const alwaysSet = pickAlways(foldVisible, heightsRef.current, ALWAYS_BUDGET);
 	const alwaysRef = useRef(alwaysSet);
 	alwaysRef.current = alwaysSet;
 
@@ -323,6 +399,11 @@ export function MessageList({
 		};
 		const items: WinRect[] = [];
 		for (const [id, el] of elsRef.current) {
+			// exchange-fold：折起来的消息已卸载，旧元素不再参与测量（重新挂载时会再注册）
+			if (!el.isConnected) {
+				elsRef.current.delete(id);
+				continue;
+			}
 			const b = el.getBoundingClientRect();
 			items.push({ id, top: b.top, bottom: b.bottom });
 			// 显示中的元素顺手记录实测高度——pickAlways 的预算与占位高度都靠它；
@@ -482,7 +563,10 @@ export function MessageList({
 
 	useEffect(() => {
 		if (!exportImage.open) return;
-		for (const id of exportImage.selectedIds) expand(id);
+		for (const id of exportImage.selectedIds) {
+			expand(id);
+			openFoldOf(id);
+		}
 		setPinned((prev) => {
 			let changed = false;
 			const next = new Set(prev);
@@ -494,7 +578,7 @@ export function MessageList({
 			}
 			return changed ? next : prev;
 		});
-	}, [exportImage.open, exportImage.selectedIds, expand]);
+	}, [exportImage.open, exportImage.selectedIds, expand, openFoldOf]);
 
 	// Ctrl+F / Cmd+F 打开搜索（可编辑元素内不抢占）
 	useEffect(() => {
@@ -539,6 +623,7 @@ export function MessageList({
 			// flushSync 保证本轮 commit 后 DOM 即为最终形态。
 			flushSync(() => {
 				if (idx >= 0 && idx < recentStart && !expanded.has(id)) expand(id);
+				openFoldOf(id);
 				setPinned((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
 			});
 			const qIdx = questionsRef.current.findIndex((q) => q.id === id);
@@ -559,7 +644,7 @@ export function MessageList({
 				}
 			});
 		},
-		[state.messages, state.messagesStart, recentStart, expanded, expand, onLoadOlder],
+		[state.messages, state.messagesStart, recentStart, expanded, expand, onLoadOlder, openFoldOf],
 	);
 
 	// 待跳转的历史提问到位：补上那次跳转。
@@ -601,8 +686,10 @@ export function MessageList({
 		// jumpTo 身份随 messages 变化，守卫保证每个新摘要只跳一次
 		if (!freshCompactionId || jumpedCompactionRef.current === freshCompactionId) return;
 		jumpedCompactionRef.current = freshCompactionId;
+		// exchange-fold：运行中的自动压缩折在这一轮里，不为它把整轮摊开
+		if (foldHides(freshCompactionId)) return;
 		jumpTo(freshCompactionId);
-	}, [freshCompactionId, jumpTo]);
+	}, [freshCompactionId, jumpTo, foldHides]);
 
 	// ---- 全局搜索「会话」结果跳转 ----------------------------------------
 	// 锚点 = role + timestamp；会话载入后从 UiMessage[] 解析出 message id。
@@ -846,6 +933,32 @@ export function MessageList({
 	 *  hover panel becomes a scrollable list instead. */
 	const many = railGap < 20;
 
+	// ---- exchange-fold 渲染 ----------------------------------------------
+	/** 搜索导航到折起来的命中：展开那一轮，连同那一条（旧消息的摘要行也要展开）。 */
+	const expandForSearch = useCallback(
+		(id: string) => {
+			openFoldOf(id);
+			expand(id);
+		},
+		[openFoldOf, expand],
+	);
+	const renderFoldRow = (f: ExchangeFold) => (
+		<ExchangeFoldRow
+			key={`fold:${f.key}`}
+			fold={f}
+			open={foldOpen.has(f.key)}
+			onToggle={toggleFold}
+			streamingMessage={f.live ? state.streamingMessage : undefined}
+			toolResults={f.live ? toolResults : undefined}
+			toolStatuses={f.live ? toolStatuses : undefined}
+		/>
+	);
+	/** 流式消息：它那一轮折着时，只有在写字（还没开始调工具）才画，而且只画文字。 */
+	const lastFold = foldPlan.folds[foldPlan.folds.length - 1];
+	const liveFolded = !!lastFold?.live && !foldOpen.has(lastFold.key);
+	const sm = state.streamingMessage;
+	const streamShown = !sm ? null : !liveFolded ? sm : hasVisibleText(sm) && !hasToolCall(sm) ? textOnly(sm) : null;
+
 	return (
 		<div className={`messages-wrap${exportImage.open ? " messages-exporting" : ""}`}>
 			<div
@@ -871,18 +984,25 @@ export function MessageList({
 						)}
 					</div>
 				)}
-				{state.messages.map((m, i) => {
+				{state.messages.flatMap((m, i) => {
+					// exchange-fold：这一轮的折叠行画在正文第一条之前；折着时步骤不画，回答只画文字
+					const rowFold = foldPlan.rowBefore.get(m.id);
+					const row = rowFold ? renderFoldRow(rowFold) : null;
+					if (foldHides(m.id)) return withRow(row, null);
+					const fold = foldPlan.byMsg.get(m.id);
+					const shown = fold && !foldOpen.has(fold.key) ? textOnly(m) : m;
 					const isOld = i < recentStart;
 					const isExpandedOld = isOld && expanded.has(m.id);
 					if (isOld && !isExpandedOld) {
 						// toolResult content lives inside its toolCall card — nothing to
 						// show in the collapsed row either.
-						if (m.role === "toolResult") return null;
-						return <CollapsedMessage key={m.id} message={m} onExpand={expand} />;
+						if (m.role === "toolResult") return withRow(row, null);
+						return withRow(row, <CollapsedMessage key={m.id} message={shown} onExpand={expand} />);
 					}
 					const qIdx = m.role === "user" ? qnIndex.get(m.id) : undefined;
 					const show = !virtualOn || alwaysSet.has(m.id) || pinned.has(m.id) || !hidden.has(m.id);
-					return (
+					return withRow(
+						row,
 						<LazyMount
 							key={m.id}
 							id={m.id}
@@ -903,7 +1023,7 @@ export function MessageList({
 								uiContextToolCall={uiContextToolCall}
 								onUiAction={onUiAction}
 								key={m.id}
-								message={m}
+								message={shown}
 								qnIndex={qIdx}
 								qnActive={qIdx !== undefined ? qIdx === activeIdx : undefined}
 								onJump={jumpTo}
@@ -923,19 +1043,20 @@ export function MessageList({
 								searchActive={searchOpen}
 								autoExpand={m.id === freshCompactionId}
 							/>
-						</LazyMount>
+						</LazyMount>,
 					);
 				})}
-				{state.streamingMessage && (
+				{foldPlan.tailRow && renderFoldRow(foldPlan.tailRow)}
+				{streamShown && (
 					<Message
 						uiMessageActions={uiMessageActions}
 						uiContextMessage={uiContextMessage}
 						uiContextToolCall={uiContextToolCall}
 						onUiAction={onUiAction}
-						key={state.streamingMessage.id}
-						message={state.streamingMessage}
+						key={streamShown.id}
+						message={streamShown}
 						toolResults={toolResults}
-						liveOutputs={hasToolCall(state.streamingMessage) ? liveOutputs : EMPTY_LIVE}
+						liveOutputs={hasToolCall(streamShown) ? liveOutputs : EMPTY_LIVE}
 						toolStatuses={toolStatuses}
 						streaming
 						isLast
@@ -997,9 +1118,9 @@ export function MessageList({
 			<SearchBar
 				containerRef={scrollRef}
 				messages={messages}
-				collapsedIds={collapsedIds}
+				collapsedIds={searchCollapsedIds}
 				toolResults={toolResults}
-				onExpand={expand}
+				onExpand={expandForSearch}
 				onProgrammaticScroll={() => {
 					// 搜索跳转让位贴底机制：之后再吸底部会覆盖搜索定位
 					escapedRef.current = true;
