@@ -39,6 +39,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | todo-list-owner              | `local`        | `server/agent-service.ts`                                                                                                                      |
 | markers-skip-code            | `local`        | `server/markers/marker.ts`                                                                                                                     |
 | single-load                  | `local`        | `web/src/use-chat.ts`, `server/index.ts`, `server/protocol.ts`                                                                                 |
+| tldr-panel                   | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TldrPanel.tsx`, `RightPanel.tsx`, `ui-slots.ts`, i18n           |
 
 ---
 
@@ -1391,6 +1392,50 @@ ready 就刷新（sessionStorage 标记挡住第二次），多开一条 WS、�
 1 条 WS、没有刷新标记；② 把页面入口 `<script>` 改成别的 hash 再重启服务端：恰好刷新一次、落在服务端
 那份构建（自刷新没被修坏）；③ `SINGLELOAD_MUTATE_DIST=1` 才跑：服务端在跑时 index.html 变了，之后的
 连接拿到新 id（它改 `web/dist/index.html`，只在临时副本里开）。共 10 项，修复前失败 6 项。
+
+---
+
+## tldr-panel
+
+**状态**：`local`
+**基线**：v0.94.1
+
+**诉求**（用户 2026-09-24）：agent 长任务动辄几百步，读不过来；要一份边做边写的大白话 TL;DR，只记大事。
+三步：① exchange-fold（折叠步骤）；② pi-tldr 扩展（`~/projects/pi-tldr`，独立仓库，不进本 fork）给 agent 一个
+`tldr` 工具和轻提醒，每一行存成会话自定义条目；③ 本补丁：右栏的 TL;DR tab。用户的选择：只放右栏，最新的在上，
+可展开到全部，「需要你」的行高亮；不进折叠行、不进左栏。
+
+### 改法
+
+- 条目格式（和 pi-tldr 的约定）：`{ type: "custom", customType: "tldr", data: { v: 1, text, needsYou, ts } }`。
+- `server/tldr-lines.ts`（纯函数）：`tldrLinesFromEntries(entries)` 把**当前分支**的条目变成行，按时间升序；
+  坏数据跳过不抛；只留最新 500 行，一行最多 400 字。读分支（`getBranch()`）而不是消息：压缩只加一条
+  compaction 条目，老行还在；改写分叉后被丢下的分支上的行不再显示（和消息列表一致）。
+- `server/protocol.ts`：`UiTldrLine { id, text, needsYou, ts }`，`UiState.tldr?`。
+- `server/agent-service.ts`：
+  - `tldrOf(conv)`：缓存挂在 `Conversation.tldrCache`（同一条对话的所有窗口共用），key = 会话 id + 叶子 id：
+    流式期间 60ms 一条的快照不重扫分支，树动了才扫；行 id 串没变就沿用同一个数组。出错（DSH 之类没有
+    sessionManager）返回缓存或 `[]`。
+  - `emitSnapshotNow`：整份快照总带 `tldr`（切对话要把上一条的行换掉）；delta 只在数组引用变了时带
+    （`ClientSession.emittedTldr`，每个窗口各记各的）。客户端 delta 合并是 `{...ui, ...d.state}`，缺省就沿用。
+- `web/src/components/TldrPanel.tsx`：倒序列出；默认只显示最新 5 行，「显示全部（N 行）」展开；「需要你」的行
+  琥珀色底 + 徽标；行尾时间（今天只写时分）。空态说明要装 pi-tldr。
+- `web/src/components/RightPanel.tsx`：内置 tab `tldr`（槽位条目 `host:right-tldr`，`ui-slots.ts`，order 20，
+  排在文件后面）；排序/隐藏和文件 tab 一样走槽位（`HOST_TAB_SLOT_ID`），设置里「界面布局」能藏。
+  `App.tsx` 传 `tldr={chat.state?.tldr}`。
+- 文案：`tldrTab` / `tldrEmpty` / `tldrShowAll` / `tldrShowFewer` / `tldrNeedsYou`（`i18n.tsx` + `locales/*.json`
+  8 种）；样式 `.tldr-*`（`styles.css`）。
+
+### 回归
+
+- `tests/unit/tldr-lines.test.ts`（4 项）：只认 tldr 条目、坏数据、时间戳回退、上限和截断。
+- `tests/unit/tldr-panel.test.ts`（4 项，renderToStaticMarkup）：空态、倒序 + 收起/展开、放得下就没按钮、高亮。
+- `tests/unit/ui-slots.test.ts`：右栏槽位多了 `host:right-tldr`。
+- `tests/tldr-panel-test.mjs`（真服务端 + 两个浏览器窗口 + **真的 pi-tldr**，零 token）：mock 模型分三次调 `tldr`
+  再回答。`tldr` 工具出现在模型请求里（扩展在 pi-web-ui 里加载、hasUI）；窗口 A 逐行实时看到、最新的在上；
+  窗口 B 中途打开同一条对话，第 3 行也实时到；「需要你」高亮加徽标；刷新后行还在；新对话是空态、切回来行
+  又回来。共 21 项。pi-tldr 位置默认 `~/projects/pi-tldr`，`PI_TLDR_PKG` 可改；`TLDR_SHOT=/tmp/x.png` 存截图。
+  - 反向验证：delta 不带 `tldr` 时失败 5 项（跑的过程中一行都不出来，跑完靠整份快照一次出三行）。
 
 ---
 
