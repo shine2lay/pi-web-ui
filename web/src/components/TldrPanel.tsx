@@ -38,8 +38,8 @@ export function tldrRows(newestFirst: readonly UiTldrLine[], isFolded: (l: UiTld
 	return rows;
 }
 
-/** 行尾时间：今天只写时分，更早的带上日期。 */
-function lineTime(ts: number, now = Date.now()): string {
+/** 行尾时间：今天只写时分，更早的带上日期（队列 tab 也用）。 */
+export function lineTime(ts: number, now = Date.now()): string {
 	if (!ts) return "";
 	const d = new Date(ts);
 	const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });

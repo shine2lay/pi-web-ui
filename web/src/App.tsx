@@ -90,6 +90,7 @@ import { registerFilePreviewHost } from "./file-preview-bridge";
 import { projectNameFromCwd, useProjectTitle } from "./title-settings";
 import { notify } from "./notify";
 import { diffStreamingCues } from "./streaming-cues";
+import { DoneCues } from "./done-settle";
 import { useTheme } from "./theme";
 import { useWallpaperEffect } from "./wallpaper";
 
@@ -902,6 +903,36 @@ export function App() {
 	const notifiedDialogIds = useRef<Set<number>>(new Set());
 	const notifiedQuestionIds = useRef<Set<string>>(new Set());
 	const notifiedApprovalIds = useRef<Set<string>>(new Set());
+	// done-settle: "done" waits a moment in case the chat starts again (the next queued task),
+	// so a running queue sounds like one run. One sound per batch; see done-settle.ts.
+	const cueEnv = useRef({ sound, tts, t });
+	cueEnv.current = { sound, tts, t };
+	const doneCuesRef = useRef<DoneCues | null>(null);
+	const doneCues = (): DoneCues =>
+		(doneCuesRef.current ??= new DoneCues((cues) => {
+			const { sound, tts, t } = cueEnv.current;
+			playSound("done", sound);
+			const quiet = shouldSuppressNotify(currentPresence());
+			const openDone = cues.find((c) => c.open);
+			if (openDone) {
+				// 前台活动对话完成；还开着它才朗读回答（等的这一会儿可能切走了）。
+				void notify(t("notifyDoneTitle"), t("notifyDoneBody"));
+				if (tts.enabled && !quiet) {
+					const stillOpen = openDone.id === prevActiveIdRef.current;
+					const body = tts.readReplies && stillOpen ? assistantPlainText(latestMessagesRef.current) : "";
+					if (body) speak(body, tts);
+					else if (tts.announce) speak(t("ttsAnnounceDone"), tts);
+				}
+			}
+			// 后台对话完成（可能与其他会话同批）：逐条弹通知带标题；TTS 只播报一次。
+			for (const bg of cues.filter((c) => !c.open)) {
+				// done-any-chat：带标题的整句（上游是「标题：通用句」拼接，英文里会出现全角冒号）。
+				const body = bg.title ? t("notifyDoneBodyChat", { title: bg.title }) : t("notifyDoneBody");
+				void notify(t("notifyDoneTitle"), body);
+			}
+			if (!openDone && tts.enabled && tts.announce && !quiet) speak(t("ttsAnnounceDone"), tts);
+		}));
+	useEffect(() => () => doneCuesRef.current?.clear(), []);
 	const lastErrorNotice = useRef(0);
 	// Remembers a terminal-view click made before the WebSocket is ready.
 	const terminalOpenRequested = useRef(false);
@@ -963,39 +994,19 @@ export function App() {
 		prevStreamingMapRef.current = cues.nextMap;
 		prevActiveIdRef.current = activeId;
 
-		if (cues.startCue) {
-			playSound("start", sound);
-		}
+		// done-settle: a chat that stopped a moment ago and runs again (the next queued task) is as
+		// if it never stopped: no "done" and no "start". Sound, notices and TTS for "done" happen when
+		// the wait is over (the DoneCues callback above).
+		const quietStart = cues.startCue && activeId !== null && doneCues().started(activeId);
+		if (cues.startCue && !quietStart) playSound("start", sound);
+		for (const [id, streaming] of cues.nextMap) if (streaming) doneCues().started(id);
+		for (const c of cues.finishedConvs) doneCues().finished({ id: c.id, title: c.title, open: c.isActive });
+	}, [chat.state?.conversationId, chat.state?.isStreaming, chat.conversations, sound]);
 
-		if (cues.finishedConvs.length > 0) {
-			playSound("done", sound);
-
-			const activeFinished = cues.finishedConvs.find((c) => c.isActive);
-			if (activeFinished) {
-				// 前台活动对话完成
-				void notify(t("notifyDoneTitle"), t("notifyDoneBody"));
-				if (tts.enabled && !shouldSuppressNotify(currentPresence())) {
-					if (tts.readReplies) {
-						const body = assistantPlainText(latestMessagesRef.current);
-						if (body) speak(body, tts);
-						else if (tts.announce) speak(t("ttsAnnounceDone"), tts);
-					} else if (tts.announce) {
-						speak(t("ttsAnnounceDone"), tts);
-					}
-				}
-			}
-			// 后台对话完成（可能与其他会话同批）：逐条弹通知带标题；TTS 只播报一次，
-			// 且前台完成时让位给正文朗读，不叠加固定句。
-			for (const bg of cues.finishedConvs.filter((c) => !c.isActive)) {
-				// done-any-chat：带标题的整句（上游是「标题：通用句」拼接，英文里会出现全角冒号）。
-				const body = bg.title ? t("notifyDoneBodyChat", { title: bg.title }) : t("notifyDoneBody");
-				void notify(t("notifyDoneTitle"), body);
-			}
-			if (!activeFinished && tts.enabled && tts.announce && !shouldSuppressNotify(currentPresence())) {
-				speak(t("ttsAnnounceDone"), tts);
-			}
-		}
-	}, [chat.state?.conversationId, chat.state?.isStreaming, chat.conversations, sound, tts, t]);
+	// done-settle: after a disconnect we don't know what ran meanwhile, so nothing waiting cues.
+	useEffect(() => {
+		if (!chat.ready) doneCuesRef.current?.clear();
+	}, [chat.ready]);
 
 	// Questionnaire cue — each new dialog id + each new DSH question id.
 	// dialog = 扩展 select/confirm/input；question = ask_user_question 问卷。
@@ -1998,6 +2009,7 @@ export function App() {
 								statuses={chat.statuses}
 								tldr={chat.state?.tldr}
 								tldrConversationId={chat.state?.conversationId}
+								taskQueue={chat.state?.taskQueue}
 								onAttach={(path, name, mode, isDir) => {
 									setDrawer(null);
 									attach(path, name, mode, isDir);
