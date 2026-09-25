@@ -37,6 +37,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | exchange-digest              | `local`        | `server/exchange-digest.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `web/src/message-window.ts`, `exchange-fold.ts`, `MessageList.tsx` |
 | done-any-chat                | `local`        | `web/src/done-cues.ts`, `App.tsx`, `server/agent-service.ts`, `i18n.tsx`, `locales/*.json`                                                     |
 | todo-list-owner              | `local`        | `server/agent-service.ts`                                                                                                                      |
+| markers-skip-code            | `local`        | `server/markers/marker.ts`                                                                                                                     |
 
 ---
 
@@ -1339,6 +1340,27 @@ runtime 所属的对话（每个调用点都传了 `conversationId`），跟标�
 
 - 坑：页面自带的第一条对话不能当 A。上游页面会加载两次，第一条对话的 runtime 可能是被丢掉的那个连接建的，
   它的「正开着的对话」永远停在 A 上，修复前也碰巧读对（第一版测试就是这样在修复前通过的）。
+
+---
+
+## markers-skip-code
+
+**状态**：`local`（上游同样有这个问题，可以提 PR）
+**基线**：v0.94.1
+
+**问题**（2026-09-24 实际遇到）：内联标记是在整段助手正文里找，代码块、行内代码也照样执行。AI 把系统
+提示词贴进回答（放在代码块里），里面的标记示例就执行了：对话被改名成「…」，还多了一条空任务。
+
+**改法**（`server/markers/marker.ts`）：
+
+- 新 `codeRanges(text)`：围栏代码块（``` / ~~~，最多 3 格缩进；同种字符、不短于开头、独占一行才算闭合；
+  没闭合就到结尾）和行内代码（N 个反引号到下一段恰好 N 个；不跨空行；配不上的反引号是普通字符）。
+- `parseMarkers`：开头落在代码区间里的标记跳过。正文里没有 `` ` `` 也没有 `~~~` 就不算区间。
+- `stripMarkers`：同样留下代码里的标记（目前没有调用方，保持一致）。
+- 页面不处理标记：`web/src` 里没有标记解析，标记原样显示。
+
+**回归**：`tests/unit/markers-skip-code.test.ts` 15 项：正文照样执行、``` / ~~~ 块、没闭合的块、缩进、
+闭合规则、行内代码、反引号个数、落单的反引号、不跨空行、标记自己的文字里带行内代码、当天贴系统提示词的原样。
 
 ---
 
