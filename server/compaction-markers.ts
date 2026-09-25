@@ -221,27 +221,39 @@ export function repairSessionTranscript(raw: string): TranscriptRepairResult {
 
 	// 第 3 步：残余环截断（纵深防御——前两步之后正常已无环）。
 	// byId 语义与 SDK 一致：同名取其一（此时已无重复）。
+	// fast-reopen：线性时间。以前每一行都从头走到根（每次新建 seen），会话基本是一条长链，
+	// 所以是 O(n²)：1.8 万行的会话光这一步就 17 秒，而每次从历史打开对话都要跑它
+	// （repairTranscriptFileBeforeOpen）。现在记住每行的状态：1 = 在本轮走过的路上，2 = 已结清
+	// （它的链最终到根、悬空或已被截断，不会再有环）。走到已结清的行就停；走回本轮的路上 =
+	// 有环，截掉「指回去」的那条边——和以前截的是同一条（按 live 顺序、同一个 prev）。
 	if (live.length > 0) {
 		const byId = new Map<string, Slot>();
 		for (const s of live) if (s.finalId !== null) byId.set(s.finalId, s);
+		const state = new Map<Slot, 1 | 2>();
+		const path: Slot[] = [];
 		for (const s of live) {
-			if (!s.entry) continue;
-			const seen = new Set<string>([s.finalId as string]);
+			if (!s.entry || state.has(s)) continue;
 			let prev = s;
+			state.set(prev, 1);
+			path.push(prev);
 			let cur = parentIdOf(s.entry);
 			while (cur !== null) {
-				if (seen.has(cur)) {
+				const next = byId.get(cur);
+				const st = next ? state.get(next) : undefined;
+				if (st === 1) {
 					prev.entry!.parentId = null;
 					prev.dirty = true;
 					result.cyclesBroken += 1;
 					break;
 				}
-				seen.add(cur);
-				const next = byId.get(cur);
-				if (!next?.entry) break;
+				if (st === 2 || !next?.entry) break;
+				state.set(next, 1);
+				path.push(next);
 				prev = next;
 				cur = parentIdOf(next.entry);
 			}
+			for (const n of path) state.set(n, 2);
+			path.length = 0;
 		}
 	}
 

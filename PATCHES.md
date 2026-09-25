@@ -40,6 +40,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | markers-skip-code            | `local`        | `server/markers/marker.ts`                                                                                                                     |
 | single-load                  | `local`        | `web/src/use-chat.ts`, `server/index.ts`, `server/protocol.ts`                                                                                 |
 | tldr-panel                   | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TldrPanel.tsx`, `RightPanel.tsx`, `ui-slots.ts`, i18n           |
+| fast-reopen                  | `local`        | `server/compaction-markers.ts`                                                                                                                 |
 
 ---
 
@@ -1436,6 +1437,41 @@ ready 就刷新（sessionStorage 标记挡住第二次），多开一条 WS、�
   窗口 B 中途打开同一条对话，第 3 行也实时到；「需要你」高亮加徽标；刷新后行还在；新对话是空态、切回来行
   又回来。共 21 项。pi-tldr 位置默认 `~/projects/pi-tldr`，`PI_TLDR_PKG` 可改；`TLDR_SHOT=/tmp/x.png` 存截图。
   - 反向验证：delta 不带 `tldr` 时失败 5 项（跑的过程中一行都不出来，跑完靠整份快照一次出三行）。
+
+---
+
+## fast-reopen
+
+**状态**：`local`（上游同样有这个问题：来自上游 0070c88（#235），到 upstream/main 7f641d7 还在；可以提 PR）
+**基线**：v0.94.1
+
+**诉求**（用户 2026-09-24）：切走的对话再点回来要快（"cache the chat … so it loads faster"）。这是第一步：先修
+「点回来」慢的真凶。只发差异是下一步。
+
+### 病因
+
+- 切走的对话要是没在跑，服务端就把它关掉（`displaceActive`）。再点回来就是从历史重新打开：
+  `switchSession` → `repairSessionFile` → `repairSessionTranscript`。
+- `repairSessionTranscript` 第 3 步（截断残余的环）对每一行都从它自己走到根，每次新建一个 `seen` 集合。会话基本是
+  一条长链，所以是 O(n²)：一个 1.8 万行的会话光这一步就是 17.7 秒（`--cpu-prof` self time），整个打开 19.5 秒。
+  健康的文件也要付这个钱。
+
+### 改法
+
+- `server/compaction-markers.ts` 第 3 步改成线性：每一行记一个状态，1 = 在这一轮走过的路上，2 = 已结清（链最终到根、
+  悬空或已截断）。走到已结清的行就停；走回这一轮的路上就是有环，截掉「指回去」的那条边。截的边和原来完全一样
+  （按行序、同一个 `prev`）。
+
+### 回归
+
+- `tests/unit/repair-linear.test.ts`（3 项）：
+  - 3000 张随机父子图（环、自环、悬空 parent、脏行都很多，一半以上有环）上和原算法（测试里留了一份）逐字节对比
+    `text` / `cyclesBroken` / `changed`；
+  - 6 万行长链 3 秒内修完，健康文件原样返回；
+  - 长链头上接成环：只截一刀（截在 `m1` 上）。
+  - 反向验证：换回原算法，这个文件 300 秒都跑不完（被 timeout 杀掉）。
+- 实测（真服务端、零 token 的基准脚本）：从历史打开 1.8 万行的会话 19.5 s → 1.5 s；切回已被关掉的对话 0.85 s；
+  两条都在跑的对话互切约 56 ms，不受影响。
 
 ---
 
