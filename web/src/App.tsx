@@ -77,6 +77,7 @@ import { useWideChat } from "./chat-width-settings";
 import { registerFilePreviewHost } from "./file-preview-bridge";
 import { projectNameFromCwd, useProjectTitle } from "./title-settings";
 import { notify } from "./notify";
+import { finishedChats, runEdge, runningSeen, type RunningSeen, type RunState } from "./done-cues";
 import { useTheme } from "./theme";
 import { useWallpaperEffect } from "./wallpaper";
 
@@ -792,7 +793,8 @@ export function App() {
 		}, 8000);
 		return () => clearTimeout(timer);
 	}, [pluginNotify]);
-	const prevStreaming = useRef<boolean | null>(null);
+	const prevStreaming = useRef<RunState | null>(null);
+	const prevRunningSeen = useRef<RunningSeen | null>(null);
 	const prevDialogId = useRef<number | null>(null);
 	const prevQuestionId = useRef<string | null>(null);
 	const prevRemoteQuestionId = useRef<string | null>(null);
@@ -832,19 +834,36 @@ export function App() {
 		}
 	}, [chat.terminals, send]);
 
-	// Run start / end cues (streaming edge transitions).
+	// Run start / end cues for the open chat (streaming edge transitions). Only this chat's
+	// own edges count: switching from a running chat to an idle one is not a finished run
+	// (done-any-chat, see done-cues.ts).
 	useEffect(() => {
-		const streaming = chat.state?.isStreaming ?? false;
-		const prev = prevStreaming.current;
-		prevStreaming.current = streaming;
-		if (prev === null) return; // first observation — don't cue
-		if (!prev && streaming) playSound("start", sound);
-		else if (prev && !streaming) {
+		const next: RunState = { id: chat.state?.conversationId ?? "", streaming: chat.state?.isStreaming ?? false };
+		const edge = runEdge(prevStreaming.current, next);
+		prevStreaming.current = next;
+		if (edge === "start") playSound("start", sound);
+		else if (edge === "done") {
 			playSound("done", sound);
 			// OS/PWA notification for when the user stepped away (not focused).
 			void notify(t("notifyDoneTitle"), t("notifyDoneBody"));
 		}
-	}, [chat.state?.isStreaming, sound]);
+	}, [chat.state?.conversationId, chat.state?.isStreaming, sound]);
+
+	// done-any-chat: every other chat's run end, from the list's isStreaming (the server pushes
+	// the list to every window when a run starts and when it settles). After a disconnect we
+	// don't know what ran meanwhile (a server restart ends every run), so start over.
+	useEffect(() => {
+		if (!chat.ready) prevRunningSeen.current = null;
+	}, [chat.ready]);
+	useEffect(() => {
+		const activeId = chat.activeConversationId || chat.state?.conversationId || "";
+		const finished = finishedChats(prevRunningSeen.current, chat.conversations, activeId);
+		prevRunningSeen.current = runningSeen(chat.conversations);
+		if (finished.length === 0) return;
+		playSound("done", sound);
+		for (const c of finished.slice(0, 3))
+			void notify(t("notifyDoneTitle"), t("notifyDoneBodyChat", { title: c.title }));
+	}, [chat.conversations, sound]);
 
 	// Questionnaire cue — each new dialog id + each new DSH question id.
 	// dialog = 扩展 select/confirm/input；question = ask_user_question 问卷。
