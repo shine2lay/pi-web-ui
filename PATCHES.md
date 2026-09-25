@@ -1383,7 +1383,7 @@ ready 就刷新（sessionStorage 标记挡住第二次），多开一条 WS、�
   （`script[src*="/assets/index-"]`，正则和服务端同一个）。Vite 开发服务器服务的是 `/src/main.tsx`，没有
   hash，照旧不刷新。
 - `server/index.ts` `buildId()`：每次 ready 现读 index.html（~1KB），不再缓存。
-- `server/protocol.ts`：`buildId` 的注释改对（原来写的是「Vite __BUILD_ID__」）。
+- `server/protocol.ts`：`buildId` 的注释改对（原来写的是「Vite `__BUILD_ID__`」）。
 - `__BUILD_ID__` 的 `define`（`web/vite.config.ts`）和 `web/src/build-id.d.ts` 没人用了，为补丁小留着没删。
   副作用是好事：bundle 里不再有时间戳，源码没变就重建出同一个 hash（实测），重启后开着的标签页不白刷。
 
