@@ -8,6 +8,10 @@
  * 遮罩盖住整个 .main（消息 + 输入框）而不只是消息列表：切换进行中往输入框打字，
  * 那条消息会落到「服务端收到它那一刻的当前对话」—— 切换若恰好先完成，就发进了新对话。
  * 盖住输入框把这个竞态从界面上消掉。
+ *
+ * switch-cache：切回看过的对话时底下已经显示着它的缓存（preview）。这时遮罩透明、照样挡住
+ * 点击和输入（服务端还在原对话上），只在顶上留一张小卡片；快的切换连卡片都不出来（CSS 延迟淡入）。
+ * 「隐藏」要等到慢了才给：看着的是目标对话，隐藏却是回到原对话。
  */
 import { useEffect, useState } from "react";
 import { FiAlertCircle } from "react-icons/fi";
@@ -24,8 +28,11 @@ export function SwitchOverlay({
 	onHide,
 	onRetry,
 	onDismissError,
+	preview = false,
 }: {
 	pending: PendingSwitch | null;
+	/** switch-cache：底下显示的是目标对话的缓存。 */
+	preview?: boolean;
 	error: SwitchError | null;
 	/** 目标对话的显示名（由 App 从会话/对话列表里解出；解不出给路径尾巴）。 */
 	title: string;
@@ -46,19 +53,26 @@ export function SwitchOverlay({
 
 	if (pending && !pending.hidden) {
 		const waited = Math.max(0, now - pending.startedAt);
+		const slow = waited >= SLOW_AFTER_MS;
 		return (
-			<div className="switch-overlay" role="status" aria-live="polite" data-switch-state="loading">
+			<div
+				className={preview ? "switch-overlay switch-overlay-preview" : "switch-overlay"}
+				role="status"
+				aria-live="polite"
+				data-switch-state="loading"
+				{...(preview ? { "data-switch-preview": "1" } : {})}
+			>
 				<div className="switch-card">
 					<span className="switch-spinner" aria-hidden />
 					<div className="switch-text">
 						<div className="switch-title">{t("switchOpening", { title })}</div>
-						{waited >= SLOW_AFTER_MS && (
-							<div className="switch-sub">{t("switchSlow", { s: Math.floor(waited / 1000) })}</div>
-						)}
+						{slow && <div className="switch-sub">{t("switchSlow", { s: Math.floor(waited / 1000) })}</div>}
 					</div>
-					<button type="button" className="btn switch-hide" onClick={onHide}>
-						{t("switchHide")}
-					</button>
+					{(!preview || slow) && (
+						<button type="button" className="btn switch-hide" onClick={onHide}>
+							{t("switchHide")}
+						</button>
+					)}
 				</div>
 			</div>
 		);

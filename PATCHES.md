@@ -41,6 +41,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | single-load                  | `local`        | `web/src/use-chat.ts`, `server/index.ts`, `server/protocol.ts`                                                                                 |
 | tldr-panel                   | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TldrPanel.tsx`, `RightPanel.tsx`, `ui-slots.ts`, i18n           |
 | fast-reopen                  | `local`        | `server/compaction-markers.ts`                                                                                                                 |
+| switch-cache                 | `local`        | `web/src/chat-cache.ts`, `server/window-hash.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `use-chat.ts`, `App.tsx`, `SwitchOverlay.tsx` |
 
 ---
 
@@ -1446,7 +1447,7 @@ ready 就刷新（sessionStorage 标记挡住第二次），多开一条 WS、�
 **基线**：v0.94.1
 
 **诉求**（用户 2026-09-24）：切走的对话再点回来要快（"cache the chat … so it loads faster"）。这是第一步：先修
-「点回来」慢的真凶。只发差异是下一步。
+「点回来」慢的真凶。只发差异是下一步（`switch-cache`）。
 
 ### 病因
 
@@ -1472,6 +1473,60 @@ ready 就刷新（sessionStorage 标记挡住第二次），多开一条 WS、�
   - 反向验证：换回原算法，这个文件 300 秒都跑不完（被 timeout 杀掉）。
 - 实测（真服务端、零 token 的基准脚本）：从历史打开 1.8 万行的会话 19.5 s → 1.5 s；切回已被关掉的对话 0.85 s；
   两条都在跑的对话互切约 56 ms，不受影响。
+
+---
+
+## switch-cache
+
+**状态**：`local`
+**基线**：v0.94.1
+
+**诉求**（用户 2026-09-24）："cache the chat, so if move away and come back, i shouldn't be fetching everything again,
+only the differences" / "so it loads faster"。第一步是 `fast-reopen`（从历史重开慢的真凶），这是第二步：只取差异。
+
+### 以前
+
+- 切回一条对话，服务端每次整份重发最新一截（`MESSAGE_WINDOW` = 100 条，实测 300–410 KB），页面整份重新渲染。
+- 切回一条已被关掉的对话，要等服务端从历史重开（约 1 秒）才看得到任何内容。
+
+### 做法
+
+- 浏览器：`web/src/chat-cache.ts` 的 `ChatCache` 按**转录路径**记住每条对话最后显示的那份 `UiState`（最多 8 条，
+  LRU，只存引用）。不用对话 id：它是服务端进程内的序号，重启或从历史重开都会换。
+- 切回去时 `switch_session` / `switch_conversation` 带上 `have`（`CachedWindow`：会话 id、窗口起点、条数、
+  这一截消息 id 的指纹。指纹是 `server/window-hash.ts` 的 `messagesHash`，cyrb53，前后端共用一份）。
+- 点下去的那一刻，消息列表先显示缓存的这份（预览，`chat.preview`；其余界面仍是服务端当前对话）。
+  switch-loading 的遮罩这时是透明的，照样挡住点击和输入（服务端还在原对话上），顶上只留一张小卡片，快的
+  切换连卡片都不出来；「隐藏」要等慢了才给（看着的是目标对话，隐藏却是回到原对话）。预览期间不做搜索跳转。
+- 服务端 `ClientSession.resumeWindow`：切换期间记下 `switchHave`（`switchSession` / `switchConversation` 的
+  finally 清掉），目标对话的第一份整份快照用它核对（用过即清）：会话 id 一样、区间在范围内、新增的不超过
+  一个窗口、指纹一样 → 快照只带 `[start+count, 末尾)`，并在 `snapshot.reuse` 里回同一个窗口；`messagesStart`、
+  exchange 摘要按客户端的起点算。任何一项不对 → 照常整份。
+- 浏览器收到 `reuse`：`applyReuse` 把当时报上去的那份缓存（按 `windowKey` 记着，连点几条不串）接在前面。
+  缓存那截的消息对象原样沿用，已经渲染的行不重画：`nextListKey` 让对话 id 或会话 id 有一个没变就不重建
+  `MessageList`（预览换成从历史重开后的真快照时，对话 id 变了、会话 id 没变）。对不上 → 发 `get_state` 要整份。
+- 为什么只比 id：消息 id 带时间戳（`u-<ts>-<seq>` / `a-<ts>-<n>` / `t-<toolCallId>`），服务端的序列化缓存键里
+  还带内容指纹，内容一变就换新的 `n`、换 id → 指纹不一致 → 整份。和服务端自己的 delta 是同一个前提
+  （持久化的消息不再变）。从历史重开后助手消息的 `n` 可能换号（压缩过就会），那样也只是退回整份。
+- DSH 引擎不认 `have`，照常整份。
+
+### 回归
+
+- `tests/unit/chat-cache.test.ts`（18 项）：LRU、按路径 / 按左栏行找缓存、`cachedWindow` / `applyReuse` 的各种
+  对不上、`nextListKey`。`tests/unit/switch-loading-ui.test.ts` 加了两条预览遮罩的用例。
+- `tests/switch-cache-test.mjs`（零 token，35 项）：
+  - 协议：对得上且没新消息 → `reuse`、0 条；旧窗口 → 只发新增的 2 条；指纹 / 会话 / 条数 / 垃圾字段不对 →
+    整份、不崩；切回还在跑的对话（`switch_conversation`）同样只补差异。
+  - 页面：点回看过的对话，发出去的 switch 带 `have`、收到的快照带 `reuse`；在页面里模拟 400ms 网络延迟，
+    缓存那份在快照交到应用之前就显示了；两轮回答都在；接着聊照常。（不加延迟时小对话的快照几十毫秒就到，
+    和预览只差 5–11ms，会抢跑。）
+  - 反向验证：`switch_started` 不带 `preview` 时预览那一项必挂（文字 +462ms 才出现，快照最早 +438ms 交到
+    应用），其余全过。
+- 实测（真服务端、零 token 的基准脚本，三条真会话）：
+  - 两条都在跑的对话互切：快照 300–393 KB → 18–38 KB（剩下的是问题索引、摘要、TL;DR 这些整份快照总带的
+    东西），服务端耗时不变（约 100 ms）。
+  - 切回已被关掉的对话：快照 409 KB → 16 KB，1.46 s → 1.06 s（剩下的是服务端从历史重开）；页面在点下去的
+    那一刻就先显示缓存的那份。
 
 ---
 
@@ -1519,4 +1574,5 @@ ready 就刷新（sessionStorage 标记挡住第二次），多开一条 WS、�
     助手消息（fastfail 模型连不上），现在每条 prompt 只追加用户消息，数到 37 就停了（要 38）。
     exchange-digest 之前的 28fab8f 上失败得一模一样（2026-09-24 实测）。
   - 本 fork 自己的冒烟全过：`server-owned-chats-test`、`cross-client-session-test`、`chat-pagination-test`、
-    `exchange-fold-test`、`exchange-digest-test`、`done-any-chat-test`、`todo-list-owner-test`（后加）。
+    `exchange-fold-test`、`exchange-digest-test`、`done-any-chat-test`、`todo-list-owner-test`、`single-load-test`、
+    `tldr-panel-test`、`switch-cache-test`（后加）。
