@@ -489,6 +489,7 @@
 		"compactionKeptHint": "이전 기록은 이 요약으로 접혀 있으며, 컨텍스트에는 최근 메시지만 남습니다",
 		"backToBottom": "맨 아래로 돌아가기",
 		"loadOlder": "↑ 이전 메시지 불러오기 ({n}개 남음)",
+		"loadOlderExchanges": "↑ 이전 대화 보기 (질문 {n}개 남음)",
 		"foldTurns": "{n}턴",
 		"foldTurnOne": "1턴",
 		"foldThinking": "생각 {n}회",

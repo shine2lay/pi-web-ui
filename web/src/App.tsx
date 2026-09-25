@@ -1466,6 +1466,9 @@ export function App() {
 									jumpTarget={searchJump}
 									onJumpDone={() => setSearchJump(null)}
 									onLoadOlder={(beforeIndex, count) => send({ type: "load_older", beforeIndex, count })}
+									onLoadExchanges={(beforeIndex, count, fromIndex) =>
+										send({ type: "load_exchanges", beforeIndex, count, fromIndex })
+									}
 								/>
 							) : (
 								<div className="boot-wait">{chat.ready ? t("loadingSession") : t("connectingServer")}</div>

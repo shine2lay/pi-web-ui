@@ -489,6 +489,7 @@
 		"compactionKeptHint": "El historial anterior se ha reunido en este resumen; solo los mensajes recientes permanecen en el contexto",
 		"backToBottom": "Volver al final",
 		"loadOlder": "↑ Cargar mensajes anteriores ({n} más arriba)",
+		"loadOlderExchanges": "↑ Mostrar la conversación anterior ({n} preguntas más)",
 		"foldTurns": "{n} turnos",
 		"foldTurnOne": "1 turno",
 		"foldThinking": "{n} razonamientos",

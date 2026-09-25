@@ -10,30 +10,31 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
-| 补丁                         | 状态           | 主要文件                                                                                                                                 |
-| ---------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| terminal-bash-script         | `local`        | `server/terminals.ts`                                                                                                                    |
-| terminal-view-lifecycle      | `local`        | `server/terminals.ts`, `server/index.ts`                                                                                                 |
-| global-history               | `local`        | `server/agent-service.ts`, `server/protocol.ts`, `web/src/`                                                                              |
-| status-placement             | `local`        | `web/src/status-placement.ts`, `FooterBar.tsx`, `RightPanel.tsx`                                                                         |
-| recent-chats                 | `local`        | `server/agent-service.ts`, `client-state.ts`, `web/src/`                                                                                 |
-| chat-cwd-pin                 | `local`        | `server/agent-service.ts`                                                                                                                |
-| client-per-load              | `local`        | `web/src/use-chat.ts`                                                                                                                    |
-| server-owned-chats           | `local`        | `server/agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/`                                                                         |
-| topbar-crowding              | `local`        | `web/src/ui-slots.ts`, `App.tsx`, `TopBar.tsx`                                                                                           |
-| quiet-duplicate-open         | `local` → 退役 | `server/agent-service.ts`                                                                                                                |
-| no-cwd-restore               | `local`        | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `use-chat.ts`                                                                     |
-| flat-recent-chats            | `local`        | `web/src/conv-groups.ts`, `LeftPanel.tsx`, `server/agent-service.ts`, `protocol.ts`                                                      |
-| no-mcp-restart-nag           | `local`        | `server/webui-context.ts`, `tests/unit/mute-mcp-restart-nag.test.ts`                                                                     |
-| ask-question-delivery        | `local`        | `server/ask-delivery.ts`, `agent-service.ts`                                                                                             |
-| reload-adopt                 | `local`        | `server/attach-adopt.ts`, `agent-service.ts`                                                                                             |
-| switch-loading               | `local`        | `web/src/switch-pending.ts`, `SwitchOverlay.tsx`, `use-chat.ts`, `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `protocol.ts`    |
-| qn-rail-window               | `local`        | `web/src/qn-window.ts`, `components/MessageList.tsx`, `styles.css`, `i18n.tsx`                                                           |
-| terminal-cwd-anywhere        | `local`        | `server/terminals.ts`, `tests/unit/terminal-cwd.test.ts`                                                                                 |
-| chat-window-pagination       | `local`        | `server/question-index.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `web/src/message-window.ts`, `MessageList.tsx`, `use-chat.ts` |
-| bg-tasks-push-dedupe         | `local`        | `server/bg-servers.ts`, `agent-service.ts`, `tests/unit/bg-servers-dedupe.test.ts`                                                       |
-| load-older-survives-snapshot | `local`        | `web/src/message-window.ts`, `use-chat.ts`, `tests/chat-pagination-test.mjs`                                                             |
-| exchange-fold                | `local`        | `web/src/exchange-fold.ts`, `components/ExchangeFoldRow.tsx`, `MessageList.tsx`, `exchange-fold.css`, `i18n.tsx`, `locales/*.json`       |
+| 补丁                         | 状态           | 主要文件                                                                                                                                       |
+| ---------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| terminal-bash-script         | `local`        | `server/terminals.ts`                                                                                                                          |
+| terminal-view-lifecycle      | `local`        | `server/terminals.ts`, `server/index.ts`                                                                                                       |
+| global-history               | `local`        | `server/agent-service.ts`, `server/protocol.ts`, `web/src/`                                                                                    |
+| status-placement             | `local`        | `web/src/status-placement.ts`, `FooterBar.tsx`, `RightPanel.tsx`                                                                               |
+| recent-chats                 | `local`        | `server/agent-service.ts`, `client-state.ts`, `web/src/`                                                                                       |
+| chat-cwd-pin                 | `local`        | `server/agent-service.ts`                                                                                                                      |
+| client-per-load              | `local`        | `web/src/use-chat.ts`                                                                                                                          |
+| server-owned-chats           | `local`        | `server/agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/`                                                                               |
+| topbar-crowding              | `local`        | `web/src/ui-slots.ts`, `App.tsx`, `TopBar.tsx`                                                                                                 |
+| quiet-duplicate-open         | `local` → 退役 | `server/agent-service.ts`                                                                                                                      |
+| no-cwd-restore               | `local`        | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `use-chat.ts`                                                                           |
+| flat-recent-chats            | `local`        | `web/src/conv-groups.ts`, `LeftPanel.tsx`, `server/agent-service.ts`, `protocol.ts`                                                            |
+| no-mcp-restart-nag           | `local`        | `server/webui-context.ts`, `tests/unit/mute-mcp-restart-nag.test.ts`                                                                           |
+| ask-question-delivery        | `local`        | `server/ask-delivery.ts`, `agent-service.ts`                                                                                                   |
+| reload-adopt                 | `local`        | `server/attach-adopt.ts`, `agent-service.ts`                                                                                                   |
+| switch-loading               | `local`        | `web/src/switch-pending.ts`, `SwitchOverlay.tsx`, `use-chat.ts`, `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `protocol.ts`          |
+| qn-rail-window               | `local`        | `web/src/qn-window.ts`, `components/MessageList.tsx`, `styles.css`, `i18n.tsx`                                                                 |
+| terminal-cwd-anywhere        | `local`        | `server/terminals.ts`, `tests/unit/terminal-cwd.test.ts`                                                                                       |
+| chat-window-pagination       | `local`        | `server/question-index.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `web/src/message-window.ts`, `MessageList.tsx`, `use-chat.ts`       |
+| bg-tasks-push-dedupe         | `local`        | `server/bg-servers.ts`, `agent-service.ts`, `tests/unit/bg-servers-dedupe.test.ts`                                                             |
+| load-older-survives-snapshot | `local`        | `web/src/message-window.ts`, `use-chat.ts`, `tests/chat-pagination-test.mjs`                                                                   |
+| exchange-fold                | `local`        | `web/src/exchange-fold.ts`, `components/ExchangeFoldRow.tsx`, `MessageList.tsx`, `exchange-fold.css`, `i18n.tsx`, `locales/*.json`             |
+| exchange-digest              | `local`        | `server/exchange-digest.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `web/src/message-window.ts`, `exchange-fold.ts`, `MessageList.tsx` |
 
 ---
 
@@ -1219,6 +1220,60 @@ index.mjs` 的轮询：对每条盯梢的运行无条件 `update()`，20 条 × 
 
 ---
 
+## exchange-digest
+
+**状态**：`local`
+**基线**：v0.94.1（接 chat-window-pagination 与 exchange-fold）
+
+**诉求**（用户 2026-09-24）：分页之后快照只带最新 `MESSAGE_WINDOW`（100）条消息。agent 一轮动辄几百步，
+这 100 条常常全落在最后一轮里；exchange-fold 把步骤折起来以后，页面上只剩一行，前面几轮问了什么、
+答了什么都看不到，得一截一截地「载入更早」。要求：打开对话至少看得到最近 5 轮的提问和回答。
+原样发最近 5 轮太重（实测长会话 11–12MB，现在的快照 0.2–1.8MB），所以只发摘要。
+
+### 改法
+
+- `server/exchange-digest.ts`（纯函数）：窗口之前的每一轮只发前端折叠时会显示的东西——提问（连同附件）、
+  回答（只留文字）、回答之后照常显示的消息、折叠行的计数/时长/状态（`UiExchangeDigest`），一轮几 KB。
+  `digestExchange` / `digestsBefore`（按轮数或按区间取，最多 `MAX_DIGESTS` = 1000）/
+  `snapshotDigests`（窗口里开头的轮数不够 k 就补；窗口从一轮中间开始时总带上这一轮开头那一截，
+  `partial`）/ `straddleDigest`。规则与 `web/src/exchange-fold.ts` 一致（一个在服务端、一个在前端，没法共用），
+  单测拿同一批样本钉住两边算出来的一样。
+- 协议（`server/protocol.ts`）：`UiState.exchanges`（整份快照带，delta 不带）；
+  `load_exchanges { beforeIndex, count?, fromIndex? }` → `older_exchanges { conversationId, beforeIndex, exchanges }`
+  （空结果也回，客户端靠它知道到顶了）；`older_messages` 多一个 `straddle`（新起点落在一轮中间时，
+  这一轮开头那一截的摘要）。
+- `server/agent-service.ts`：快照带 `snapshotDigests(cur, windowStart, EXCHANGE_DIGESTS)`；`loadExchanges()`；
+  `loadOlder()` 附 `straddle`。`PI_WEB_EXCHANGE_DIGESTS`（默认 5；<=0 = 不发摘要，前端退回按条载入）。
+  `server/index.ts` 路由 `load_exchanges`（`loadExchanges?` 可选：DSH 引擎不实现，快照里没有 exchanges，
+  前端也就不请求）。
+- `web/src/message-window.ts`：`chainDigests`（只留窗口之前、首尾相接、最新一份正好接到窗口起点的一串；
+  接不上的地方往前丢掉——宁可让用户再点一次，也不拼出有洞的历史）、`prependOlderExchanges`、
+  `prependOlderMessages`（载入的消息替掉它覆盖的摘要，`straddle` 替换跨窗口那一轮的 partial），
+  整份快照到达时保留用户多取的摘要（接缝处那条的 id 对得上才接，同 `keepLoadedHistory`）。
+- `web/src/exchange-fold.ts`：`PlanOptions.lead`（`FoldLead`）——窗口从一轮中间开始时，开头那段接上 partial
+  摘要：键（提问 id）和起始时间用它的，计数加上它的。载入以后真正的折叠也是这个键，展开状态接得上。
+- `MessageList.tsx`：摘要画在窗口消息之前（提问、回答、折叠行，和真消息一个样）。
+  「显示更早的对话（还有 N 个提问）」往前取几轮摘要；点导轨上还没显示的提问 → `load_exchanges`
+  带 `fromIndex` 一路取到它再跳；点开摘要里的一轮或跨窗口的那一轮 → `load_older` 取回从这一轮开头起的
+  消息（窗口要连续，中间几轮也一起载入，照样折着）。
+- `use-chat.ts` 处理 `older_exchanges`；`App.tsx` 接 `onLoadExchanges`；文案 `loadOlderExchanges`
+  （`i18n.tsx` en/zh + `locales/*.json` 8 种）。
+
+### 回归
+
+- `tests/unit/exchange-digest.test.ts`：16 项。一轮的摘要（提问 + 附件、回答只留文字、回答之后的消息、
+  计数、状态、折不折）、`!` 命令、以错误收尾、partial；按轮数/区间取、上限；快照带几份、跨窗口那一轮；
+  与 `planExchangeFolds` 对拍。`tests/unit/message-window.test.ts` +15 项（`chainDigests` /
+  `prependOlderExchanges` / 载入替掉摘要 / 快照保留），`tests/unit/exchange-fold.test.ts` +4 项（`lead`）。
+- `tests/exchange-digest-test.mjs`（真服务端 + 真浏览器，零 token，预先写好的会话：7 轮，最后一轮
+  30 步；窗口 20、摘要 2）：打开时看得到最近两轮的提问和回答，最后一行的计数是整轮的
+  （`31 turns · 1 thinking · 30 tool calls`），没有步骤被画出来；「显示更早的对话」；导轨跳到第 1 个提问；
+  点开跨窗口那一轮取回 30 步；点开摘要里的一轮取回它的步骤、其它轮照旧折着。共 21 项。
+  `DIGEST_DEBUG=1` 打印每一步的页面状态和发给服务端的 `load_*` 请求。数的是消息节点（`[data-msg-id]`），
+  不是 `.toolcall`：较老的消息画成一行摘要行（`oldRow`），不是工具卡。
+
+---
+
 ## 已退役的补丁
 
 同步时删掉的补丁在这里留一笔，下次同步不用再查它们为什么没了。
@@ -1259,5 +1314,8 @@ index.mjs` 的轮询：对每条盯梢的运行无条件 `update()`，20 条 × 
     一模一样。
   - `tests/scroll-attr-collapse-test.mjs`：种对话就超时（`seed timeout`），纯上游 v0.94.1（9fa8905）上一样
     （2026-09-24 实测），不是本 fork 引入的。
+  - `tests/lazy-window-test.mjs`：同样是种对话就超时。种对话的脚本每发一条 prompt 就等模型出错的那条
+    助手消息（fastfail 模型连不上），现在每条 prompt 只追加用户消息，数到 37 就停了（要 38）。
+    exchange-digest 之前的 28fab8f 上失败得一模一样（2026-09-24 实测）。
   - 本 fork 自己的冒烟全过：`server-owned-chats-test`、`cross-client-session-test`、`chat-pagination-test`、
-    `exchange-fold-test`（后加）。
+    `exchange-fold-test`、`exchange-digest-test`（后加）。

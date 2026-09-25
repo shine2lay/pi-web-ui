@@ -112,6 +112,38 @@ export interface UiQuestionRef {
 	text: string;
 }
 
+/** 分页窗口之前的一轮对话的摘要（exchange-digest，见 server/exchange-digest.ts）。
+ *  窗口只带最新一截消息，agent 一轮动辄上千步，这一截常常全落在最后一轮里——
+ *  折叠之后前面几轮问了什么、答了什么都看不到。摘要只带页面折着时显示的东西：
+ *  提问、回答（只留文字）和折叠行的计数；步骤要等点开这一轮才取（load_older）。 */
+export interface UiExchangeDigest {
+	/** 这一轮第一条消息（提问 / `!` 命令）在完整消息列表里的下标。 */
+	index: number;
+	/** 摘要覆盖到哪（不含）：一整轮 = 下一轮的开头；partial = 窗口起点。 */
+	end: number;
+	/** 只是这一轮的开头：后半截在消息窗口里（窗口从这一轮中间开始）。前端只拿它的
+	 *  提问和计数接到窗口里那一段前面；answers / after 为空。 */
+	partial?: boolean;
+	/** 提问本身，连同紧跟的附件。 */
+	head: UiMessage[];
+	/** 折着时照常显示的回答（只留文字）：最后一条有文字的助手消息；以错误收尾时
+	 *  再加上最后一条助手消息（错误信息挂在它上面）。 */
+	answers: UiMessage[];
+	/** 回答之后照常显示的消息（手动压缩摘要、目标评审……；这一轮没有助手消息时就是整段正文）。 */
+	after: UiMessage[];
+	/** 有没有可折的步骤（没有 = 不画折叠行，比如只有一条纯文字回答）。 */
+	folded: boolean;
+	/** 折叠行的计数（见 web/src/exchange-fold.ts 的 ExchangeFold）。 */
+	turns: number;
+	thinking: number;
+	toolCalls: number;
+	/** 提问的时间戳。 */
+	startTs?: number;
+	/** 摘要覆盖的消息里最晚的时间戳。 */
+	endTs?: number;
+	status: "done" | "error" | "aborted";
+}
+
 export interface UiState {
 	clientId: string;
 	cwd: string;
@@ -146,6 +178,10 @@ export interface UiState {
 	 *  对话的提问——哪怕消息本体还没加载，编号也是全局的。
 	 *  只在真的多了提问时随 snapshot_delta 重发；缺省 = 沿用上一次。 */
 	questionIndex?: UiQuestionRef[];
+	/** 窗口之前最近几轮的摘要（exchange-digest）：按下标升序、首尾相接，最后一份接到
+	 *  messagesStart。只随整份快照发（delta 只往后追加，窗口前面的历史不会变）。
+	 *  缺省 = 服务端不发摘要（老服务端 / DSH / PI_WEB_EXCHANGE_DIGESTS=0），前端退回「载入更早的消息」。 */
+	exchanges?: UiExchangeDigest[];
 	/**
 	 * Live partial assistant message while a run is streaming. The SDK keeps the
 	 * in-progress message in agent.state.streamingMessage — it only enters
@@ -521,6 +557,15 @@ export type ClientMessage =
 			beforeIndex: number;
 			/** 最多取多少条，缺省一屏（服务端 MESSAGE_WINDOW）。 */
 			count?: number;
+	  }
+	| {
+			/** 往前再取几轮的摘要（exchange-digest）。beforeIndex = 客户端最老一份摘要的下标
+			 *  （没有摘要时 = 窗口起点）。默认取它之前最近的 count 轮；给了 fromIndex 就取开头落在
+			 *  [fromIndex, beforeIndex) 里的每一轮（点导轨上很老的提问）。应答 older_exchanges。 */
+			type: "load_exchanges";
+			beforeIndex: number;
+			count?: number;
+			fromIndex?: number;
 	  }
 	| { type: "list_sessions" }
 	| { type: "switch_session"; path: string }
@@ -2145,6 +2190,17 @@ export type ServerMessage =
 			conversationId: string;
 			start: number;
 			messages: UiMessage[];
+			/** 新的窗口起点落在一轮中间时，这一轮开头那一截的摘要（exchange-digest，partial）：
+			 *  替换客户端手里同一轮的摘要（它的计数覆盖到旧的起点，现在会和载入的消息重复）。 */
+			straddle?: UiExchangeDigest;
+	  }
+	| {
+			/** load_exchanges 的回执：beforeIndex 之前的几轮摘要（升序，最后一份接到 beforeIndex）。
+			 *  conversationId 用来丢弃「切了对话才迟到」的回执。 */
+			type: "older_exchanges";
+			conversationId: string;
+			beforeIndex: number;
+			exchanges: UiExchangeDigest[];
 	  }
 	| {
 			/** Incremental snapshot: everything EXCEPT `messages` travels in

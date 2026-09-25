@@ -3,7 +3,7 @@ import { flushSync } from "react-dom";
 
 import type { CSSProperties, ReactNode } from "react";
 import { FiArrowDown } from "react-icons/fi";
-import type { PromptAttachment, ToolStatus, UiMessage, UiState } from "../types";
+import type { PromptAttachment, ToolStatus, UiExchangeDigest, UiMessage, UiState } from "../types";
 import { Message, asText } from "./Message";
 import { Markdown } from "./Markdown";
 
@@ -12,7 +12,7 @@ import { collectQuestionAttachments } from "../question-attachments";
 import { parseSkillBlock } from "../skill-block";
 import { CollapsedMessage } from "./CollapsedMessage";
 import { ExchangeFoldRow } from "./ExchangeFoldRow";
-import { hasVisibleText, planExchangeFolds, textOnly, type ExchangeFold } from "../exchange-fold";
+import { hasVisibleText, planExchangeFolds, textOnly, type ExchangeFold, type FoldLead } from "../exchange-fold";
 import { LazyMount } from "./LazyMount";
 import {
 	applyPlan,
@@ -199,6 +199,9 @@ interface MessageListProps {
 	/** 向前取一截历史消息（chat-window-pagination）。beforeIndex = 当前窗口起点，
 	 *  count 缺省为服务端的一屏。缺省（不传）= 不分页，按钮不出现。 */
 	onLoadOlder?: (beforeIndex: number, count?: number) => void;
+	/** 往前再取几轮摘要（exchange-digest）。beforeIndex = 最老一份摘要的下标（没有时 = 窗口起点）；
+	 *  fromIndex = 一直取到这一轮（点导轨上很老的提问）。缺省 = 不取，按钮不出现。 */
+	onLoadExchanges?: (beforeIndex: number, count?: number, fromIndex?: number) => void;
 }
 
 export function MessageList({
@@ -216,6 +219,7 @@ export function MessageList({
 	jumpTarget,
 	onJumpDone,
 	onLoadOlder,
+	onLoadExchanges,
 	uiMessageActions,
 	uiContextMessage,
 	uiContextToolCall,
@@ -273,9 +277,26 @@ export function MessageList({
 	// 每一轮的思考/工具调用/中间的话折成一行，只留提问和回答；点那一行展开整轮。
 	// 消息数组引用稳定，流式增量不会重算。
 	const hasStreamingMsg = !!state.streamingMessage;
+	// exchange-digest：窗口从一轮中间开始时，服务端带来这一轮开头那一截的摘要（partial）。
+	// 窗口里第一段接上它：同一个键（这一轮提问的 id），计数算上窗口之前的步骤。
+	const leadDigest = useMemo(() => {
+		const last = state.exchanges?.at(-1);
+		return last?.partial && last.end === (state.messagesStart ?? 0) && last.head[0] ? last : undefined;
+	}, [state.exchanges, state.messagesStart]);
+	const foldLead = useMemo<FoldLead | undefined>(
+		() =>
+			leadDigest && {
+				key: leadDigest.head[0].id,
+				turns: leadDigest.turns,
+				thinking: leadDigest.thinking,
+				toolCalls: leadDigest.toolCalls,
+				startTs: leadDigest.startTs,
+			},
+		[leadDigest],
+	);
 	const foldPlan = useMemo(
-		() => planExchangeFolds(state.messages, { live: !!state.isStreaming, streaming: hasStreamingMsg }),
-		[state.messages, state.isStreaming, hasStreamingMsg],
+		() => planExchangeFolds(state.messages, { live: !!state.isStreaming, streaming: hasStreamingMsg, lead: foldLead }),
+		[state.messages, state.isStreaming, hasStreamingMsg, foldLead],
 	);
 	/** 这条消息此刻被折起来了（所在那一轮没展开）。 */
 	const foldHides = useCallback(
@@ -331,6 +352,22 @@ export function MessageList({
 			root.scrollTop += delta;
 		}
 	}, []);
+
+	/** exchange-digest：这一轮的开头在窗口之前（摘要里的一轮，或窗口从它中间开始），步骤不在手里——
+	 *  展开时先把从这一轮开头起的消息取回来（load_older）。键不变，取回来以后真正的折叠行接着是展开的。 */
+	const digestLoadRef = useRef({ exchanges: state.exchanges, start: state.messagesStart ?? 0, onLoadOlder });
+	digestLoadRef.current = { exchanges: state.exchanges, start: state.messagesStart ?? 0, onLoadOlder };
+	const onFoldToggle = useCallback(
+		(fold: ExchangeFold, el: HTMLElement | null) => {
+			const { exchanges, start, onLoadOlder: load } = digestLoadRef.current;
+			if (load && !foldOpenRef.current.has(fold.key)) {
+				const d = exchanges?.find((x) => x.head[0]?.id === fold.key);
+				if (d && d.index < start) load(start, start - d.index);
+			}
+			toggleFold(fold, el);
+		},
+		[toggleFold],
+	);
 
 	/** 当前渲染为折叠摘要行的消息 id（SearchBar 的折叠层搜索索引用它；
 	 *  toolResult 无独立折叠行——其结果文本已并入宿主 toolCall 卡）。
@@ -618,14 +655,22 @@ export function MessageList({
 	const jumpTo = useCallback(
 		(id: string) => {
 			const idx = state.messages.findIndex((m) => m.id === id);
-			if (idx < 0) {
+			// exchange-digest：摘要里的提问已经画在页面上，直接滚过去。
+			const inDigest = idx < 0 && !!state.exchanges?.some((d) => d.head[0]?.id === id);
+			if (idx < 0 && !inDigest) {
 				// 目标还在窗口外（chat-window-pagination）：先把它所在的一段取回来，
 				// 记下待跳转的 id，消息到了再真正跳（见下方 effect）。
+				// 服务端发摘要时只取摘要：从最老一份往前，一直取到这个提问那一轮。
 				const q = questionsRef.current.find((x) => x.id === id);
 				const start = state.messagesStart ?? 0;
-				if (q?.index !== undefined && onLoadOlder && start > 0 && q.index < start) {
-					pendingJumpRef.current = id;
-					onLoadOlder(start, start - q.index);
+				if (q?.index !== undefined && start > 0 && q.index < start) {
+					if (state.exchanges && onLoadExchanges) {
+						pendingJumpRef.current = id;
+						onLoadExchanges(state.exchanges[0]?.index ?? start, undefined, q.index);
+					} else if (onLoadOlder) {
+						pendingJumpRef.current = id;
+						onLoadOlder(start, start - q.index);
+					}
 				}
 				return;
 			}
@@ -654,17 +699,27 @@ export function MessageList({
 				}
 			});
 		},
-		[state.messages, state.messagesStart, oldRow, expanded, expand, onLoadOlder, openFoldOf],
+		[
+			state.messages,
+			state.messagesStart,
+			state.exchanges,
+			oldRow,
+			expanded,
+			expand,
+			onLoadOlder,
+			onLoadExchanges,
+			openFoldOf,
+		],
 	);
 
 	// 待跳转的历史提问到位：补上那次跳转。
 	useEffect(() => {
 		const id = pendingJumpRef.current;
 		if (!id) return;
-		if (!state.messages.some((m) => m.id === id)) return;
+		if (!state.messages.some((m) => m.id === id) && !state.exchanges?.some((d) => d.head[0]?.id === id)) return;
 		pendingJumpRef.current = null;
 		jumpTo(id);
-	}, [state.messages, jumpTo]);
+	}, [state.messages, state.exchanges, jumpTo]);
 
 	// ---- 新压缩摘要到达：自动展开 + 滚动定位 ------------------------------
 	// 压缩动辄数十秒，用户很可能已上滚回看；完成 toast 出现时新摘要卡在下方
@@ -957,12 +1012,94 @@ export function MessageList({
 			key={`fold:${f.key}`}
 			fold={f}
 			open={foldOpen.has(f.key)}
-			onToggle={toggleFold}
+			onToggle={onFoldToggle}
 			streamingMessage={f.live ? state.streamingMessage : undefined}
 			toolResults={f.live ? toolResults : undefined}
 			toolStatuses={f.live ? toolStatuses : undefined}
 		/>
 	);
+	// ---- exchange-digest 渲染 --------------------------------------------
+	// 窗口之前最近几轮：服务端只发提问、回答（只留文字）和折叠行计数，画法和折着的一轮一样。
+	/** 摘要里各轮的折叠行（点开时 onFoldToggle 去取这一轮的步骤）。partial 那份没有：它的行是窗口里那一行。 */
+	const digestFolds = useMemo(() => {
+		const out = new Map<string, ExchangeFold>();
+		for (const d of state.exchanges ?? []) {
+			const head = d.head[0];
+			if (d.partial || !d.folded || !head) continue;
+			out.set(head.id, {
+				key: head.id,
+				hidden: [],
+				answers: d.answers.map((m) => m.id),
+				turns: d.turns,
+				thinking: d.thinking,
+				toolCalls: d.toolCalls,
+				startTs: d.startTs,
+				endTs: d.endTs,
+				live: false,
+				status: d.status,
+			});
+		}
+		return out;
+	}, [state.exchanges]);
+	/** 摘要里提问的附件（编辑时恢复，同 questionAttachments）。 */
+	const digestAttachments = useMemo(
+		() => collectQuestionAttachments((state.exchanges ?? []).flatMap((d) => d.head)),
+		[state.exchanges],
+	);
+	/** 最老一份摘要的开头（没有摘要 = 窗口起点）：「显示更早的对话」从这里往前取。 */
+	const firstDigestIndex = state.exchanges?.[0]?.index ?? state.messagesStart ?? 0;
+	/** 它之前还有几个提问（导轨的全量索引里数；只剩 `!` 命令时不出按钮）。 */
+	const olderQuestions = useMemo(
+		() => questions.filter((q) => q.index !== undefined && q.index < firstDigestIndex).length,
+		[questions, firstDigestIndex],
+	);
+	const renderDigestMessage = (m: UiMessage) => {
+		const qIdx = m.role === "user" ? qnIndex.get(m.id) : undefined;
+		return (
+			<Message
+				uiMessageActions={uiMessageActions}
+				uiContextMessage={uiContextMessage}
+				uiContextToolCall={uiContextToolCall}
+				onUiAction={onUiAction}
+				key={m.id}
+				message={m}
+				qnIndex={qIdx}
+				qnActive={qIdx !== undefined ? qIdx === activeIdx : undefined}
+				onJump={jumpTo}
+				toolResults={toolResults}
+				liveOutputs={EMPTY_LIVE}
+				toolStatuses={toolStatuses}
+				streaming={false}
+				onKillBash={onKillBash}
+				toolsWrap={toolsWrap}
+				toolImages={toolImages}
+				thinkingWrap={thinkingWrap}
+				isLast={false}
+				onEdit={onEdit}
+				questionAttachments={digestAttachments.get(m.id)}
+				searchActive={searchOpen}
+			/>
+		);
+	};
+	const renderDigest = (d: UiExchangeDigest) => {
+		const fold = d.head[0] ? digestFolds.get(d.head[0].id) : undefined;
+		return [
+			...d.head.map(renderDigestMessage),
+			...(fold
+				? [
+						<ExchangeFoldRow
+							key={`fold:${fold.key}`}
+							fold={fold}
+							open={foldOpen.has(fold.key)}
+							onToggle={onFoldToggle}
+						/>,
+					]
+				: []),
+			...d.answers.map(renderDigestMessage),
+			...d.after.map(renderDigestMessage),
+		];
+	};
+
 	/** 流式消息：它那一轮折着时，只有在写字（还没开始调工具）才画，而且只画文字。 */
 	const lastFold = foldPlan.folds[foldPlan.folds.length - 1];
 	const liveFolded = !!lastFold?.live && !foldOpen.has(lastFold.key);
@@ -978,14 +1115,24 @@ export function MessageList({
 				ref={scrollRef}
 				onScroll={onScroll}
 			>
-				{(state.messagesStart ?? 0) > 0 && (
-					// 分页入口（chat-window-pagination）：只在真的有更老的消息时出现。
-					<div className="load-older">
-						<button type="button" onClick={() => onLoadOlder?.(state.messagesStart ?? 0)} disabled={!onLoadOlder}>
-							{t("loadOlder", { n: state.messagesStart ?? 0 })}
-						</button>
-					</div>
-				)}
+				{state.exchanges
+					? olderQuestions > 0 && (
+							// exchange-digest：往前再取几轮摘要（提问 + 回答），不是一截原始消息。
+							<div className="load-older">
+								<button type="button" onClick={() => onLoadExchanges?.(firstDigestIndex)} disabled={!onLoadExchanges}>
+									{t("loadOlderExchanges", { n: olderQuestions })}
+								</button>
+							</div>
+						)
+					: (state.messagesStart ?? 0) > 0 && (
+							// 分页入口（chat-window-pagination）：只在真的有更老的消息时出现。
+							<div className="load-older">
+								<button type="button" onClick={() => onLoadOlder?.(state.messagesStart ?? 0)} disabled={!onLoadOlder}>
+									{t("loadOlder", { n: state.messagesStart ?? 0 })}
+								</button>
+							</div>
+						)}
+				{state.exchanges?.flatMap(renderDigest)}
 				{state.messages.length === 0 && !state.streamingMessage && (
 					<div className="empty-state">
 						<EmptyTemplateCards />

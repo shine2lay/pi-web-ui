@@ -66,6 +66,20 @@ export interface PlanOptions {
 	live: boolean;
 	/** 此刻有正在流式生成的助手消息（UiState.streamingMessage 非空）。 */
 	streaming: boolean;
+	/** 窗口之前那一截（exchange-digest 的 partial 摘要）。分页窗口从一轮中间开始时，
+	 *  这一轮的提问和前面的步骤不在消息列表里。给了它，开头那段（没有提问的那段）
+	 *  就接上它：键和起始时间用它的，计数加上它的。 */
+	lead?: FoldLead;
+}
+
+/** 见 PlanOptions.lead。 */
+export interface FoldLead {
+	/** 这一轮提问的 id——载入以后真正的折叠也是这个键，展开状态接得上。 */
+	key: string;
+	turns: number;
+	thinking: number;
+	toolCalls: number;
+	startTs?: number;
 }
 
 /** 一轮的边界：用户提问，或用户自己跑的 `!` 命令。 */
@@ -147,7 +161,7 @@ export function planExchangeFolds(messages: readonly UiMessage[], opts: PlanOpti
 	}
 	for (let s = 0; s < segs.length; s++) {
 		const [a, b] = segs[s];
-		const fold = planSegment(messages, a, b, s === segs.length - 1, opts);
+		const fold = planSegment(messages, a, b, s === segs.length - 1, opts, s === 0 ? opts.lead : undefined);
 		if (!fold) continue;
 		plan.folds.push(fold);
 		for (const id of fold.hidden) {
@@ -170,17 +184,21 @@ function planSegment(
 	b: number,
 	lastSegment: boolean,
 	opts: PlanOptions,
+	lead?: FoldLead,
 ): ExchangeFold | null {
 	const head = isBoundary(messages[a]) ? messages[a] : undefined;
+	// 窗口之前那一截只接在没有提问的开头那段上。
+	const leadIn = head ? undefined : lead;
 	let bodyStart = head ? a + 1 : a;
 	if (head?.role === "user") {
 		while (bodyStart < b && isAttachment(messages[bodyStart])) bodyStart++;
 	}
 
 	let lastAsst = -1;
-	let turns = 0;
-	let thinking = 0;
-	let toolCalls = 0;
+	let turns = leadIn?.turns ?? 0;
+	let thinking = leadIn?.thinking ?? 0;
+	let toolCalls = leadIn?.toolCalls ?? 0;
+	const leadSteps = !!leadIn && leadIn.turns > 0;
 	let endTs: number | undefined;
 	for (let i = bodyStart; i < b; i++) {
 		const m = messages[i];
@@ -210,26 +228,29 @@ function planSegment(
 			if (!answerIdx.includes(i)) hidden.push(messages[i].id);
 		}
 	} else {
-		if (lastAsst < 0) return null;
-		const last = messages[lastAsst];
-		status = last.stopReason === "error" ? "error" : last.stopReason === "aborted" ? "aborted" : "done";
-		for (let i = lastAsst; i >= bodyStart; i--) {
-			if (messages[i].role === "assistant" && hasVisibleText(messages[i])) {
-				answerIdx.push(i);
-				break;
+		// 接在窗口之前那一截后面时，哪怕窗口里这段没什么可折，也要有这一行：前面的步骤靠它取。
+		if (lastAsst < 0 && !leadSteps) return null;
+		const last = lastAsst >= 0 ? messages[lastAsst] : undefined;
+		status = last?.stopReason === "error" ? "error" : last?.stopReason === "aborted" ? "aborted" : "done";
+		if (last) {
+			for (let i = lastAsst; i >= bodyStart; i--) {
+				if (messages[i].role === "assistant" && hasVisibleText(messages[i])) {
+					answerIdx.push(i);
+					break;
+				}
 			}
+			if (answerIdx[0] !== lastAsst && (status === "error" || !!last.errorMessage)) answerIdx.push(lastAsst);
 		}
-		if (answerIdx[0] !== lastAsst && (status === "error" || !!last.errorMessage)) answerIdx.push(lastAsst);
 		for (let i = bodyStart; i < b; i++) {
 			if (answerIdx.includes(i)) continue;
 			if (i <= lastAsst || messages[i].role === "toolResult") hidden.push(messages[i].id);
 		}
 		const answerHasSteps = answerIdx.some((i) => messages[i].content.some(isStepBlock));
-		if (hidden.length === 0 && !answerHasSteps) return null;
+		if (hidden.length === 0 && !answerHasSteps && !leadSteps) return null;
 	}
 
 	return {
-		key: messages[a].id,
+		key: leadIn ? leadIn.key : messages[a].id,
 		rowBefore: bodyStart < b ? messages[bodyStart].id : undefined,
 		hidden,
 		answers: answerIdx.map((i) => messages[i].id),
@@ -237,7 +258,7 @@ function planSegment(
 		turns,
 		thinking,
 		toolCalls,
-		startTs: messages[a].timestamp,
+		startTs: leadIn ? leadIn.startTs : messages[a].timestamp,
 		endTs,
 		live,
 		status,

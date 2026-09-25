@@ -554,6 +554,7 @@ export const zh = {
 	backToBottom: "回到底部",
 	/** 分页（chat-window-pagination）：快照只带最新一截，这是往前翻的入口。 */
 	loadOlder: "↑ 载入更早的消息（还有 {n} 条）",
+	loadOlderExchanges: "↑ 显示更早的对话（还有 {n} 个提问）",
 	/** exchange-fold 补丁：一轮对话的步骤折叠行（exchange-fold.ts）。 */
 	foldTurns: "{n} 轮",
 	foldTurnOne: "1 轮",
@@ -2143,6 +2144,7 @@ const en: Record<keyof typeof zh, string> = {
 	compactionKeptHint: "Earlier history is folded into this summary; only recent messages stay in context",
 	backToBottom: "Back to bottom",
 	loadOlder: "↑ Load earlier messages ({n} above)",
+	loadOlderExchanges: "↑ Show earlier conversation ({n} more questions)",
 	foldTurns: "{n} turns",
 	foldTurnOne: "1 turn",
 	foldThinking: "{n} thinking",

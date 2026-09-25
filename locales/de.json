@@ -489,6 +489,7 @@
 		"compactionKeptHint": "Der frühere Verlauf ist in dieser Zusammenfassung enthalten; nur aktuelle Nachrichten bleiben im Kontext",
 		"backToBottom": "Zum Ende springen",
 		"loadOlder": "↑ Ältere Nachrichten laden ({n} darüber)",
+		"loadOlderExchanges": "↑ Früheren Verlauf anzeigen (noch {n} Fragen)",
 		"foldTurns": "{n} Runden",
 		"foldTurnOne": "1 Runde",
 		"foldThinking": "{n}× Denken",

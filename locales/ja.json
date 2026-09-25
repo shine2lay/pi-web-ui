@@ -489,6 +489,7 @@
 		"compactionKeptHint": "これまでの履歴はこの要約にまとめられ、コンテキストには最新のメッセージのみが残ります",
 		"backToBottom": "一番下に戻ります",
 		"loadOlder": "↑ 以前のメッセージを読み込みます（残り {n} 件）",
+		"loadOlderExchanges": "↑ 以前の会話を表示（残り {n} 件の質問）",
 		"foldTurns": "{n} ターン",
 		"foldTurnOne": "1 ターン",
 		"foldThinking": "思考 {n} 回",

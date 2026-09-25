@@ -13,6 +13,7 @@ import {
 	planExchangeFolds,
 	textOnly,
 	type ExchangeFold,
+	type FoldLead,
 	type FoldPlan,
 } from "../../web/src/exchange-fold.js";
 import type { UiMessage } from "../../web/src/types.js";
@@ -168,6 +169,66 @@ describe("planExchangeFolds: finished exchanges", () => {
 		expect(f.rowBefore).toBe(a0.id);
 		expect(f.hidden).toEqual([a0.id, t0.id]);
 		expect(f.answers).toEqual([a1.id]);
+	});
+
+	it("continues an exchange whose start is before the window (lead from the digest)", () => {
+		const a0 = asst(["think", "tool"], T0 + 5_000);
+		const t0 = result(a0);
+		const a1 = asst(["Old answer."], T0 + 9_000);
+		const lead: FoldLead = { key: "u-before", turns: 7, thinking: 3, toolCalls: 6, startTs: T0 };
+		const f = only(planExchangeFolds([a0, t0, a1], { ...DONE, lead }));
+		expect(f.key).toBe("u-before");
+		expect(f.turns).toBe(9);
+		expect(f.thinking).toBe(4);
+		expect(f.toolCalls).toBe(7);
+		expect(f.startTs).toBe(T0);
+		expect(f.hidden).toEqual([a0.id, t0.id]);
+		expect(f.answers).toEqual([a1.id]);
+	});
+
+	it("keeps a row for the lead even when the window's part has nothing to fold", () => {
+		// 窗口正好从最后一条工具结果开始：这段没有助手消息，但前面的步骤要靠这一行取
+		const t0: UiMessage = {
+			id: "t-x",
+			role: "toolResult",
+			toolCallId: "x",
+			content: [{ type: "text", text: "ok" }],
+			timestamp: T0,
+		};
+		const q2 = user("next");
+		const b = asst(["New answer."]);
+		const lead: FoldLead = { key: "u-before", turns: 3, thinking: 0, toolCalls: 3, startTs: T0 };
+		const f = only(planExchangeFolds([t0, q2, b], { ...DONE, lead }));
+		expect(f.key).toBe("u-before");
+		expect(f.hidden).toEqual([t0.id]);
+		expect(f.turns).toBe(3);
+		expect(f.status).toBe("done");
+	});
+
+	it("ignores the lead when the window starts on a question", () => {
+		const q = user("q");
+		const a = asst(["tool"]);
+		const t = result(a);
+		const b = asst(["done"]);
+		const lead: FoldLead = { key: "u-before", turns: 5, thinking: 5, toolCalls: 5 };
+		const f = only(planExchangeFolds([q, a, t, b], { ...DONE, lead }));
+		expect(f.key).toBe(q.id);
+		expect(f.turns).toBe(2);
+		expect(f.toolCalls).toBe(1);
+	});
+
+	it("carries the lead into the live exchange (the window sits inside a long run)", () => {
+		const a0 = asst(["tool"], T0 + 1_000);
+		const t0 = result(a0);
+		const lead: FoldLead = { key: "u-live", turns: 40, thinking: 10, toolCalls: 39, startTs: T0 };
+		const f = only(planExchangeFolds([a0, t0], { live: true, streaming: true, lead }));
+		expect(f.key).toBe("u-live");
+		expect(f.live).toBe(true);
+		expect(f.status).toBe("working");
+		expect(f.turns).toBe(41);
+		expect(f.toolCalls).toBe(40);
+		expect(f.startTs).toBe(T0);
+		expect(f.hidden).toEqual([a0.id, t0.id]);
 	});
 
 	it("splits a steered run into two exchanges", () => {

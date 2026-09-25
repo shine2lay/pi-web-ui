@@ -178,6 +178,7 @@ import type {
 	UiSubagentTemplate,
 } from "./protocol.js";
 import { buildQuestionIndex } from "./question-index.js";
+import { digestsBefore, snapshotDigests, straddleDigest } from "./exchange-digest.js";
 import { launchOrigin, toServiceInfo } from "./launch-origin.js";
 import {
 	serializeMessage,
@@ -236,6 +237,15 @@ const MESSAGE_WINDOW = (() => {
 	const v = Number(process.env.PI_WEB_MESSAGE_WINDOW);
 	if (!Number.isFinite(v)) return 100;
 	return v <= 0 ? Number.POSITIVE_INFINITY : Math.floor(v);
+})();
+/** 快照至少让页面看得到最近几轮对话（exchange-digest，见 server/exchange-digest.ts）：
+ *  窗口里开头的不够这个数，就把窗口之前的几轮按摘要补上（提问 + 回答 + 折叠行计数）。
+ *  也是「显示更早的对话」一次多取几轮。覆盖：PI_WEB_EXCHANGE_DIGESTS（<=0 = 不发摘要，
+ *  前端退回按条载入更早的消息）。 */
+const EXCHANGE_DIGESTS = (() => {
+	const v = Number(process.env.PI_WEB_EXCHANGE_DIGESTS);
+	if (!Number.isFinite(v)) return 5;
+	return v <= 0 ? 0 : Math.floor(v);
 })();
 /** Preview panel cap: only the first 512KB of a file is ever read/sent. */
 
@@ -4334,6 +4344,9 @@ export class ClientSession {
 					messages: windowStart > 0 ? cur.slice(windowStart) : cur,
 					messagesStart: windowStart,
 					questionIndex: buildQuestionIndex(cur),
+					// 窗口之前最近几轮的摘要（exchange-digest）：窗口常常全落在最后一轮里，
+					// 没有它页面上就只剩一行。delta 不带：窗口前面的历史只随整份快照变。
+					...(EXCHANGE_DIGESTS > 0 ? { exchanges: snapshotDigests(cur, windowStart, EXCHANGE_DIGESTS) } : {}),
 				},
 			});
 		}
@@ -4349,11 +4362,35 @@ export class ClientSession {
 		const take = Math.max(1, Math.floor(count ?? MESSAGE_WINDOW));
 		const start = Math.max(0, end - take);
 		if (end <= start) return;
+		// 新起点落在一轮中间：附上这一轮开头那一截的摘要（exchange-digest），客户端手里的那份
+		// 计数覆盖到旧起点，和这次载入的消息重复了。
+		const straddle = EXCHANGE_DIGESTS > 0 ? straddleDigest(cur, start) : undefined;
 		this.emit({
 			type: "older_messages",
 			conversationId: this.activeId,
 			start,
 			messages: cur.slice(start, end),
+			...(straddle ? { straddle } : {}),
+		});
+	}
+
+	/** 服务 load_exchanges（exchange-digest）：beforeIndex 之前的几轮摘要。默认取最近的
+	 *  count 轮（缺省 EXCHANGE_DIGESTS），给了 fromIndex 就取开头在 [fromIndex, beforeIndex) 里的每一轮。
+	 *  空结果也回（客户端靠它知道到顶了）。 */
+	loadExchanges(beforeIndex: number, count?: number, fromIndex?: number): void {
+		if (this.disposed) return;
+		const cur = this.currentMessages();
+		const before = Math.min(Math.max(0, Math.floor(beforeIndex)), cur.length);
+		const n = typeof count === "number" && Number.isFinite(count) ? count : EXCHANGE_DIGESTS || 5;
+		const pick =
+			typeof fromIndex === "number" && Number.isFinite(fromIndex)
+				? { from: fromIndex }
+				: { count: Math.max(1, Math.floor(n)) };
+		this.emit({
+			type: "older_exchanges",
+			conversationId: this.activeId,
+			beforeIndex: before,
+			exchanges: digestsBefore(cur, before, pick),
 		});
 	}
 

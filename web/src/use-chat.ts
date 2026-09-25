@@ -40,7 +40,7 @@ import type {
 } from "./types";
 
 import { applyMessageDelta, type MessageDeltaMsg } from "./message-delta";
-import { keepLoadedHistory, paginationAfterDelta, prependOlderMessages } from "./message-window";
+import { keepLoadedHistory, paginationAfterDelta, prependOlderExchanges, prependOlderMessages } from "./message-window";
 import { resolvePendingQuestion, type QuestionSource } from "./pending-question";
 import {
 	sameSwitchTarget,
@@ -403,6 +403,7 @@ type Action =
 	| { type: "snapshot"; state: UiState }
 	| { type: "snapshot_delta"; msg: Extract<ServerMessage, { type: "snapshot_delta" }> }
 	| { type: "older_messages"; msg: Extract<ServerMessage, { type: "older_messages" }> }
+	| { type: "older_exchanges"; msg: Extract<ServerMessage, { type: "older_exchanges" }> }
 	| { type: "protocol_mismatch" }
 	| { type: "tool_delta"; toolCallId: string; toolName: string; delta: string }
 	| { type: "message_delta"; msg: MessageDeltaMsg }
@@ -780,6 +781,13 @@ function reducer(state: ChatState, action: Action): ChatState {
 			const ui = state.state;
 			if (!ui) return state;
 			const next = prependOlderMessages(ui, action.msg);
+			return next ? { ...state, state: next } : state;
+		}
+		case "older_exchanges": {
+			// 往前拼几轮摘要（exchange-digest）；作废的回执原状返回。
+			const ui = state.state;
+			if (!ui) return state;
+			const next = prependOlderExchanges(ui, action.msg);
 			return next ? { ...state, state: next } : state;
 		}
 		case "switch_started":
@@ -1414,6 +1422,10 @@ export function useChat() {
 				case "older_messages":
 					// 历史消息回执（chat-window-pagination）：不涉及 rev 链，不触发 resync。
 					dispatch({ type: "older_messages", msg });
+					break;
+				case "older_exchanges":
+					// 更早几轮的摘要（exchange-digest）：同样不涉及 rev 链。
+					dispatch({ type: "older_exchanges", msg });
 					break;
 				case "tool_delta":
 					noteDeltaSeq(msg.conversationId, msg.seq);

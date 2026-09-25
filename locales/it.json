@@ -489,6 +489,7 @@
 		"compactionKeptHint": "La cronologia precedente è raccolta in questo riepilogo; solo i messaggi recenti restano nel contesto",
 		"backToBottom": "Torna in fondo",
 		"loadOlder": "↑ Carica messaggi precedenti ({n} sopra)",
+		"loadOlderExchanges": "↑ Mostra la conversazione precedente (altre {n} domande)",
 		"foldTurns": "{n} turni",
 		"foldTurnOne": "1 turno",
 		"foldThinking": "{n} ragionamenti",
