@@ -5,7 +5,9 @@
  *  - 回答在直播行下面流式出现；
  *  - 跑完：「3 turns · 1 thinking · 2 tool calls」，只剩提问和回答；
  *  - 点这一行展开全部步骤，再点收起；
- *  - 刷新后照样折着、计数不变。
+ *  - 刷新后照样折着、计数不变；
+ *  - 长对话（超过 30 条，上游把最近 15 条以外的消息画成一行预览）里，提问和回答仍然完整显示，
+ *    最早那一轮的回答也不用点开；只有展开的那一轮里的老步骤才是预览行。
  * 用法: npm run build && node tests/exchange-fold-test.mjs
  * 截图: /tmp/exchange-fold-{live,done,open}.png */
 import { CHROME_PATH } from "./lib/chrome.mjs";
@@ -35,6 +37,8 @@ const ANSWER_PARTS = ["XFOLD-ANSWER ", "all ", "good, ", "both ", "checks ", "pa
 const ANSWER = ANSWER_PARTS.join("");
 const CMD1 = "sleep 1.5; echo one";
 const CMD2 = "sleep 1.5; echo two";
+const longAnswer = (n) =>
+	`XFOLD-LONG-${n} this answer is deliberately longer than the ninety characters that a preview row keeps, XFOLD-TAIL-${n}`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failures = 0;
@@ -85,7 +89,32 @@ const mock = createServer(async (req, res) => {
 		return;
 	}
 	agentRequests++;
-	const results = (payload.messages ?? []).filter((x) => x.role === "tool").length;
+	// 只数最后一条提问之后的工具结果：长对话阶段每轮都从头演三回合。
+	const history = payload.messages ?? [];
+	let lastUser = -1;
+	history.forEach((x, i) => {
+		if (x.role === "user") lastUser = i;
+	});
+	const results = history.slice(lastUser + 1).filter((x) => x.role === "tool").length;
+	const more = JSON.stringify(history[lastUser]?.content ?? "").match(/XFOLD-MORE (\d+)/)?.[1];
+	if (more) {
+		// 长对话阶段：同样三回合，不等待；回答超过预览行留下的 90 字，尾巴上的标记只有完整显示才看得到。
+		if (results === 0)
+			await sse(
+				res,
+				[
+					chunk(m, { reasoning_content: "more" }),
+					chunk(m, { content: "XFOLD-MORE-MIDDLE" }),
+					chunk(m, bashCall(`call_more_${more}_1`, "echo one")),
+					chunk(m, {}, "tool_calls"),
+				],
+				0,
+			);
+		else if (results === 1)
+			await sse(res, [chunk(m, bashCall(`call_more_${more}_2`, "echo two")), chunk(m, {}, "tool_calls")], 0);
+		else await sse(res, [chunk(m, { content: longAnswer(more) }), chunk(m, {}, "stop")], 0);
+		return;
+	}
 	if (results === 0) {
 		await sse(
 			res,
@@ -358,6 +387,57 @@ try {
 		"…and only the question and the answer showing",
 		reloaded.question && reloaded.fullAnswer && !reloaded.middle && reloaded.toolcards === 0,
 	);
+
+	// ---- long chat -------------------------------------------------------------
+	// Past COLLAPSE_MIN (30) messages, upstream draws all but the newest KEEP_RECENT (15) as one-line
+	// preview rows. Questions and answers must never be preview rows (the owner reads the answer
+	// without clicking); only the steps inside an opened exchange may be.
+	const longView = () =>
+		page.evaluate((QUESTION) => {
+			const root = document.querySelector(".messages");
+			const txt = root?.innerText ?? "";
+			const rows = [...(root?.querySelectorAll(".xfold") ?? [])];
+			return {
+				rows: rows.length,
+				lastDone: /xfold-done/.test(rows.at(-1)?.className ?? ""),
+				previews: root?.querySelectorAll(".msg-collapsed").length ?? 0,
+				tails: [1, 2, 3, 4, 5].filter((n) => txt.includes(`XFOLD-TAIL-${n}`)),
+				questions:
+					[1, 2, 3, 4, 5].filter((n) => txt.includes(`XFOLD-MORE ${n}`)).length + (txt.includes(QUESTION) ? 1 : 0),
+				firstAnswer: txt.includes("both checks passed."),
+			};
+		}, QUESTION);
+	for (let n = 1; n <= 5; n++) {
+		await ta.fill(`XFOLD-MORE ${n}`);
+		await ta.press("Enter");
+		const t1 = Date.now();
+		while (Date.now() - t1 < 30000) {
+			const v = await longView();
+			if (v.rows === n + 1 && v.lastDone && v.tails.includes(n)) break;
+			await sleep(100);
+		}
+	}
+	await sleep(500);
+	const long = await longView();
+	check("a long chat (6 exchanges, 36 messages) shows 6 folded rows", long.rows === 6, `${long.rows}`);
+	check("…no question or answer is cut to a preview row", long.previews === 0, `${long.previews} preview row(s)`);
+	check(
+		"…every answer shows in full, the oldest included",
+		long.tails.length === 5 && long.firstAnswer,
+		`tails ${long.tails.join(",")}, first answer ${long.firstAnswer}`,
+	);
+	check("…and all 6 questions show", long.questions === 6, `${long.questions}`);
+	await page.locator(".xfold-head").first().click();
+	await page.waitForSelector('.xfold-head[aria-expanded="true"]', { timeout: 5000 });
+	await sleep(300);
+	const oldOpen = await longView();
+	check(
+		"opening the oldest exchange shows its old steps as preview rows (the window still applies to steps)",
+		oldOpen.previews >= 1,
+		`${oldOpen.previews} preview row(s)`,
+	);
+	check("…while its answer still shows in full", oldOpen.firstAnswer);
+	await page.screenshot({ path: "/tmp/exchange-fold-long.png" });
 
 	check("no uncaught page errors", pageErrors.length === 0, pageErrors.join(" | ").slice(0, 400));
 	if (consoleErrors.length)

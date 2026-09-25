@@ -285,6 +285,16 @@ export function MessageList({
 		},
 		[foldPlan, foldOpen],
 	);
+	/** 这条消息画成摘要行（超出最近 KEEP_RECENT 条的旧消息，上游省渲染的手段，点了才展开）。
+	 *  exchange-fold：提问和回答一律完整显示——回答收成摘要行就得点开才看得到（用户明确不要），
+	 *  而 KEEP_RECENT 把折起来的步骤也算在内，不排除的话除了最后一轮，每一轮的回答都会被收起。
+	 *  助手消息只要不是折起来的步骤就是回答（没有折叠的一轮里那条纯文字回答也是）。
+	 *  其它消息（展开那一轮里的步骤、附件、收尾后的提醒/压缩摘要、`!` 命令）照旧。 */
+	const oldRow = useCallback(
+		(i: number, m: UiMessage) =>
+			i < recentStart && m.role !== "user" && !(m.role === "assistant" && foldPlan.role.get(m.id) !== "hidden"),
+		[recentStart, foldPlan],
+	);
 	/** 展开这条消息所在的那一轮（跳转 / 搜索 / 导出要看它时）。 */
 	const openFoldOf = useCallback(
 		(id: string) => {
@@ -329,11 +339,11 @@ export function MessageList({
 		const s = new Set<string>();
 		for (let i = 0; i < recentStart; i++) {
 			const m = state.messages[i];
-			if (m.role === "toolResult") continue;
+			if (m.role === "toolResult" || !oldRow(i, m)) continue;
 			if (!expanded.has(m.id)) s.add(m.id);
 		}
 		return s;
-	}, [state.messages, recentStart, expanded]);
+	}, [state.messages, recentStart, expanded, oldRow]);
 	/** 搜索的折叠层还要索引折起来的步骤（exchange-fold）：它们不在 DOM 里。 */
 	const searchCollapsedIds = useMemo(() => {
 		let s: Set<string> | null = null;
@@ -622,7 +632,7 @@ export function MessageList({
 			// 占位中的目标先同步恢复真实渲染（折叠行同步展开），再滚动定位——
 			// flushSync 保证本轮 commit 后 DOM 即为最终形态。
 			flushSync(() => {
-				if (idx >= 0 && idx < recentStart && !expanded.has(id)) expand(id);
+				if (idx >= 0 && oldRow(idx, state.messages[idx]) && !expanded.has(id)) expand(id);
 				openFoldOf(id);
 				setPinned((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
 			});
@@ -644,7 +654,7 @@ export function MessageList({
 				}
 			});
 		},
-		[state.messages, state.messagesStart, recentStart, expanded, expand, onLoadOlder, openFoldOf],
+		[state.messages, state.messagesStart, oldRow, expanded, expand, onLoadOlder, openFoldOf],
 	);
 
 	// 待跳转的历史提问到位：补上那次跳转。
@@ -991,7 +1001,7 @@ export function MessageList({
 					if (foldHides(m.id)) return withRow(row, null);
 					const fold = foldPlan.byMsg.get(m.id);
 					const shown = fold && !foldOpen.has(fold.key) ? textOnly(m) : m;
-					const isOld = i < recentStart;
+					const isOld = oldRow(i, m);
 					const isExpandedOld = isOld && expanded.has(m.id);
 					if (isOld && !isExpandedOld) {
 						// toolResult content lives inside its toolCall card — nothing to

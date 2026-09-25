@@ -1,6 +1,7 @@
 /* Collapse/lazy-render E2E: seeds a >30-message chat via WS (same clientId the
  * browser will use), then verifies old messages render as collapsed summary
- * rows and expand on click.
+ * rows and expand on click. exchange-fold (fork): questions and answers never
+ * collapse, so the old rows here are the attachments; the question stays whole.
  * Run: npm run build && node collapse-test.mjs */
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { spawn } from "node:child_process";
@@ -88,6 +89,8 @@ async function seedChat() {
 	return new Promise((resolve, reject) => {
 		const ws = new WebSocket(`ws://localhost:${PORT}/ws`);
 		const timer = setTimeout(() => reject(new Error("seed timeout")), 20000);
+		// Full snapshot, then snapshot_delta carrying only the appended tail (protocol v2).
+		let total = 0;
 		ws.on("open", () => {
 			ws.send(JSON.stringify({ type: "hello", clientId: CLIENT_ID }));
 		});
@@ -111,8 +114,8 @@ async function seedChat() {
 					}),
 				);
 			}
-			if (msg.type === "snapshot") {
-				const total = msg.state.messages.length;
+			if (msg.type === "snapshot" || msg.type === "snapshot_delta") {
+				total = msg.type === "snapshot" ? msg.state.messages.length : total + msg.appended.length;
 				if (total >= 36) {
 					clearTimeout(timer);
 					ws.close();
@@ -142,7 +145,11 @@ async function main() {
 	});
 	page.on("pageerror", (e) => consoleErrors.push(String(e)));
 	// Same clientId as the seeder → same session dir.
-	await page.addInitScript((id) => localStorage.setItem("pi-web-client-id", id), CLIENT_ID);
+	await page.addInitScript((id) => {
+		localStorage.setItem("pi-web-client-id", id);
+		// The checks read the zh labels (展开 / 收起); the UI otherwise follows the browser language.
+		localStorage.setItem("pi-web-ui:lang", "zh");
+	}, CLIENT_ID);
 
 	await page.goto(`http://localhost:${PORT}/`);
 	await page.waitForSelector(".topbar", { timeout: 60000 });
@@ -155,7 +162,23 @@ async function main() {
 	check("old messages render collapsed", (await collapsed.count()) > 0);
 	check("recent messages stay fully rendered", (await full.count()) >= 15);
 	const firstCollapsedPreview = (await collapsed.first().textContent()) ?? "";
-	check("collapsed row shows a text preview", firstCollapsedPreview.includes("请总结这些文件"));
+	check(
+		"the question is never a preview row (exchange-fold: questions and answers stay whole)",
+		(await page.locator(".msg-collapsed", { hasText: "请总结这些文件" }).count()) === 0,
+	);
+	// Far above the viewport it may be a lazy-window placeholder; scrolled to, it renders in full.
+	await page.evaluate(() => {
+		const s = document.querySelector(".messages");
+		if (s) s.scrollTop = 0;
+	});
+	const questionShown = await page
+		.locator(".msg", { hasText: "请总结这些文件" })
+		.first()
+		.waitFor({ timeout: 5000 })
+		.then(() => true)
+		.catch(() => false);
+	check("…scrolled to, the question renders in full", questionShown);
+	check("the oldest preview row is the first attachment", firstCollapsedPreview.includes("seed-01"));
 	const attachmentRow = page.locator(".msg-collapsed", {
 		hasText: "seed-01",
 	});
@@ -168,9 +191,12 @@ async function main() {
 	await page.waitForSelector(".msg .msg-collapse-btn", { timeout: 5000 });
 	const afterCount = await page.locator(".msg-collapsed").count();
 	check("clicked row expanded (one less collapsed row)", afterCount === beforeCount - 1);
-	await page.waitForSelector(".msg .msg-text", { timeout: 5000 });
-	const expandedText = (await page.locator(".msg .msg-text").first().textContent()) ?? "";
-	check("expanded content rendered (question text visible)", expandedText.includes("请总结这些文件"));
+	const expandedText =
+		(await page
+			.locator(".msg", { has: page.locator(".msg-collapse-btn") })
+			.first()
+			.textContent()) ?? "";
+	check("expanded content rendered (the attachment, full)", expandedText.includes("seed-01"));
 	const collapseBtn = await page
 		.locator(".msg .msg-collapse-btn")
 		.first()

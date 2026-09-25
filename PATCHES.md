@@ -1190,6 +1190,11 @@ index.mjs` 的轮询：对每条盯梢的运行无条件 `update()`，20 条 × 
   下面一行显示当前步骤（`liveStep()`：思考中… / 写回答… / `bash: <命令>`）；回答照常在行下方流式出现。
   点这一行展开 = 和以前一样的完整视图，再点收起。
 - `MessageList.tsx`：按 plan 决定每条消息画不画、怎么画（隐藏成员不画，回答走 `textOnly()`）。
+- 提问和回答不吃上游的摘要行：上游把最近 `KEEP_RECENT` 条以外的旧消息画成一行摘要，点了才展开；
+  而折叠起来的步骤也算在这 N 条里，所以除了最后一轮，每一轮的回答都会被收成摘要行。
+  `oldRow()` 把用户消息和回答（不是折起来的步骤的助手消息）排除在外。其它消息（展开那一轮里的步骤、
+  附件、收尾后的提醒/压缩摘要、`!` 命令）照旧。用户 2026-09-24：“don't fold the final output, it will
+  be annoying to un-collapse jus to see the output”。
 - 文案：`web/src/i18n.tsx`（en/zh）+ `locales/*.json`（de es fr it ja ko pt ru）各 12 条。
 - 依赖 server-owned-chats 的「用户问题落盘即对账」（c094fe9）：问题和 `isStreaming=true` 一起到，
   折叠行从第一帧就在。没有它，第一轮的思考会先在行外裸露渲染一两秒。
@@ -1202,9 +1207,15 @@ index.mjs` 的轮询：对每条盯梢的运行无条件 `update()`，20 条 × 
   回答写完不再闪「working」、新问题在路上时上一轮保持已完成、扩展触发的一轮），以及 `textOnly` /
   `liveStep` / `formatSpan`。
 - `tests/exchange-fold-test.mjs`（真服务端 + 真浏览器，mock 模型，零 token）：思考 → 两次工具调用 → 回答
-  的三轮运行，25 项检查：直播行与当前步骤、计数递增、折叠期间从不出现工具卡/思考块、回答照常流式、
-  结束后一行 `3 turns · 1 thinking · 2 tool calls · 5s`、点开/收起、刷新后不变。`XFOLD_DEBUG=1` 打印
-  时间线和 WS 帧。**c094fe9 之前实测两项失败（第一轮的思考出现时还没有折叠行），之后全过。**
+  的三轮运行：直播行与当前步骤、计数递增、折叠期间从不出现工具卡/思考块、回答照常流式、
+  结束后一行 `3 turns · 1 thinking · 2 tool calls · 5s`、点开/收起、刷新后不变。再加一段长对话
+  （6 轮、36 条，超出 `KEEP_RECENT`）：6 行折叠、没有提问或回答被截成摘要行、每条回答（最早的也算）完整
+  显示；展开最早一轮时它的步骤照旧是摘要行，回答仍完整。共 31 项。`XFOLD_DEBUG=1` 打印时间线和 WS 帧。
+  **c094fe9 之前实测两项失败（第一轮的思考出现时还没有折叠行）；`oldRow()` 排除回答之前实测两项失败
+  （7 个摘要行，最早三轮的回答被截）；之后全过。**
+- `tests/collapse-test.mjs`（上游的冒烟）：种对话的脚本跟上协议 v2（先完整 `snapshot`，之后只有
+  `snapshot_delta`），页面固定为中文（检查读「展开/收起」）。按 exchange-fold 改：提问从不是摘要行、
+  滚到它时完整显示；最早的摘要行是第一个附件。共 12 项。
 
 ---
 
@@ -1246,5 +1257,7 @@ index.mjs` 的轮询：对每条盯梢的运行无条件 `update()`，20 条 × 
   - `tests/conv-group-flash-test.mjs`：断言上游按项目分的左栏「全程只有一行」；`flat-recent-chats`
     把所有项目的对话排成一条扁平列表，切到 B 聊一句后就有两行。同步前的构建（0ce96b5）上失败得
     一模一样。
+  - `tests/scroll-attr-collapse-test.mjs`：种对话就超时（`seed timeout`），纯上游 v0.94.1（9fa8905）上一样
+    （2026-09-24 实测），不是本 fork 引入的。
   - 本 fork 自己的冒烟全过：`server-owned-chats-test`、`cross-client-session-test`、`chat-pagination-test`、
     `exchange-fold-test`（后加）。
