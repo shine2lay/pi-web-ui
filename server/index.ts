@@ -993,6 +993,8 @@ export interface DispatchSession {
 	/** 发回 beforeIndex 之前几轮的摘要（exchange-digest）。可选：不发摘要的引擎不实现——
 	 *  快照里没有 exchanges，前端也就不会请求。 */
 	loadExchanges?(beforeIndex: number, count?: number, fromIndex?: number): void;
+	/** TL;DR tab 里折叠 / 重新展开几行，记进会话（tldr-collapse）。可选：没有 TL;DR 的引擎（DSH）不实现。 */
+	setTldrCollapsed?(ids: unknown, collapsed: unknown, conversationId?: unknown): void;
 	pushSlashCommands(): Promise<void>;
 	/** 取一条工具的**定义说明** → `tool_info`（工具卡右键 → 「显示工具详细信息」）。
 	 *  pi 与 dsh 都实现了；缺失时 dispatch 回 `unsupported`（不静默 —— 否则点开弹窗
@@ -1911,6 +1913,10 @@ wss.on("connection", (ws) => {
 			case "load_older":
 				// 用户往上翻/点了导轨上一条还没加载的提问（chat-window-pagination）。
 				cs.loadOlder?.(msg.beforeIndex, msg.count);
+				break;
+			case "tldr_collapse":
+				// TL;DR tab 里点了折叠 / 「全部折叠」/ 「N 行已读」（tldr-collapse）。
+				cs.setTldrCollapsed?.(msg.ids, msg.collapsed, msg.conversationId);
 				break;
 			case "load_exchanges":
 				// 「显示更早的对话」/ 点了导轨上还没显示的提问（exchange-digest）。

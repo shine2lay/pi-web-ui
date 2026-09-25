@@ -42,6 +42,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | tldr-panel                   | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TldrPanel.tsx`, `RightPanel.tsx`, `ui-slots.ts`, i18n           |
 | fast-reopen                  | `local`        | `server/compaction-markers.ts`                                                                                                                 |
 | switch-cache                 | `local`        | `web/src/chat-cache.ts`, `server/window-hash.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `use-chat.ts`, `App.tsx`, `SwitchOverlay.tsx` |
+| tldr-collapse                | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/components/TldrPanel.tsx`, `RightPanel.tsx`, `App.tsx`, i18n   |
 
 ---
 
@@ -1531,6 +1532,54 @@ only the differences" / "so it loads faster"。第一步是 `fast-reopen`（从�
     东西），服务端耗时不变（约 100 ms）。
   - 切回已被关掉的对话：快照 409 KB → 16 KB，1.46 s → 1.06 s（剩下的是服务端从历史重开）；页面在点下去的
     那一刻就先显示缓存的那份。
+
+---
+
+## tldr-collapse
+
+**状态**：`local`
+**基线**：v0.94.1
+
+**诉求**（用户 2026-09-24）：TL;DR 里看过的行要能手动折叠起来。用户的选择：连着的折叠行并成一行「N 行已读」
+（不是原地变淡的一行）；要「全部折叠」；折叠状态存在服务端（所有窗口、所有设备一致），不是只存本浏览器。
+
+### 改法
+
+- 折叠状态是 pi-web-ui 自己写进会话的自定义条目：`{ type: "custom", customType: "pi-web-ui/tldr-collapse",
+data: { v: 1, ids, collapsed } }`。跟行本身一样随会话走：刷新、重启、别的窗口和设备看到的都一样；
+  改写分叉后被丢下的分支上的折叠也跟着不算。pi-tldr 不用改。
+- `server/tldr-lines.ts`：`tldrLinesFromEntries` 沿分支按顺序重放折叠条目，最后折叠着的行带 `collapsed: true`
+  （没折叠的不带这个字段）。`tldrCollapseData(ids, collapsed)` 规整 data：去重，去掉非字符串和超过 64 字符的
+  id，最多 500 个；一个都不剩或 `collapsed` 不是布尔就返回 null。写之前和读的时候都过一遍。
+- `server/protocol.ts`：`UiTldrLine.collapsed?`；客户端消息 `tldr_collapse { ids, collapsed, conversationId? }`。
+- `server/index.ts`：分派 `tldr_collapse` → `DispatchSession.setTldrCollapsed?`（可选，DSH 不实现）。
+- `server/agent-service.ts`：
+  - `setTldrCollapsed`：`conversationId` 对不上当前对话就不记；只记状态真的变了的行（重复点击不写文件）；
+    `appendCustomEntry` 之后自己 `flushSnapshot()` + `checkpointViewers(conv.id, true)`：写条目不发会话事件，
+    正看着这条对话的别的窗口也马上对上。
+  - `tldrOf` 的签名把折叠状态也算进去：只折叠了一行时行 id 串没变，数组也得换，delta 才会带上 `tldr`。
+- `web/src/components/TldrPanel.tsx`：
+  - 每行行尾一个 ▾（`.tldr-fold`）；顶上「全部折叠」（`.tldr-collapse-all`），还有没折叠的行时才出。
+  - `tldrRows()`：连着的折叠行并成一行「N 行已读」（`.tldr-unfold`），点它重新展开那一串。收起时显示的
+    5 行里，这样一行只算一行。
+  - 点下去先在本地生效（`pending`），等服务端的行对上；5 秒还对不上（服务端没收）就回到服务端的状态。
+  - 不给 `onCollapse` 就是只读：不出 ▾ 和「全部折叠」，「N 行已读」点不了。
+- `web/src/components/RightPanel.tsx`：`onTldrCollapse` 用 `panelSend` 发 `tldr_collapse`，带上当前对话 id；
+  `TldrPanel` 的 `key` 是对话 id（换对话时本地的待定状态和「显示全部」都清掉）。`App.tsx` 传
+  `tldrConversationId={chat.state?.conversationId}`。
+- 文案：`tldrCollapseAll` / `tldrFoldLine` / `tldrFolded` / `tldrFoldedOne` / `tldrUnfold`（`i18n.tsx` +
+  `locales/*.json` 8 种）；样式 `.tldr-toolbar` / `.tldr-fold` / `.tldr-folded` / `.tldr-unfold`（`styles.css`）。
+
+### 回归
+
+- `tests/unit/tldr-lines.test.ts`（+4 项，共 8）：按分支顺序重放；坏数据和不认识的 id 跳过；被丢下的分支上的
+  折叠不算；`tldrCollapseData` 的规整。
+- `tests/unit/tldr-panel.test.ts`（+4 项，共 8）：`tldrRows` 并串；「N 行已读」在 5 行里只算一行；中间有没折叠的
+  行就分成两串；只在能发的时候出按钮（▾ 加在行尾，徽章和文字位置不变）。
+- `tests/tldr-panel-test.mjs`（+10 项，共 31）：窗口 A 折叠最上面一行 → A、B 都变成「1 行已读」；B 点
+  「全部折叠」→ 两边都是「3 行已读」，按钮消失；A 刷新后还是折叠的；会话文件里正好两条折叠条目（第二条
+  只有另外两行）；A 点「3 行已读」→ 两边三行都回来，第三条条目展开三行。`TLDR_SHOT` 另存一张折叠后的
+  截图（`-folded.png`）。
 
 ---
 

@@ -181,7 +181,7 @@ import type {
 } from "./protocol.js";
 import { buildQuestionIndex } from "./question-index.js";
 import { messagesHash } from "./window-hash.js";
-import { tldrLinesFromEntries } from "./tldr-lines.js";
+import { TLDR_COLLAPSE_TYPE, tldrCollapseData, tldrLinesFromEntries } from "./tldr-lines.js";
 import { digestsBefore, snapshotDigests, straddleDigest } from "./exchange-digest.js";
 import { launchOrigin, toServiceInfo } from "./launch-origin.js";
 import {
@@ -4181,7 +4181,8 @@ export class ClientSession {
 			const c = conv.tldrCache;
 			if (c && c.key === key) return c.lines;
 			const lines = tldrLinesFromEntries(sm.getBranch());
-			const sig = lines.map((l) => l.id).join("\u0001");
+			// 折叠状态也算进签名（tldr-collapse）：只折叠了一行时行 id 没变，数组也得换，delta 才会带上。
+			const sig = lines.map((l) => (l.collapsed ? `${l.id}+` : l.id)).join("\u0001");
 			conv.tldrCache = { key, sig, lines: c && c.sig === sig ? c.lines : lines };
 			return conv.tldrCache.lines;
 		} catch {
@@ -4467,6 +4468,30 @@ export class ClientSession {
 			beforeIndex: before,
 			exchanges: digestsBefore(cur, before, pick),
 		});
+	}
+
+	/** 服务 tldr_collapse：用户在 TL;DR tab 里折叠（collapsed=true）或重新展开了这些行。
+	 *  记成会话里的一条自定义条目（TLDR_COLLAPSE_TYPE），跟行本身一样随会话走：刷新、重启、
+	 *  别的窗口和设备看到的都一样。只记状态真的变了的行（重复点击不写文件）；
+	 *  对话已经换了（conversationId 对不上）就不记。 */
+	setTldrCollapsed(ids: unknown, collapsed: unknown, conversationId?: unknown): void {
+		if (this.disposed) return;
+		if (typeof conversationId === "string" && conversationId && conversationId !== this.activeId) return;
+		const want = tldrCollapseData(ids, collapsed);
+		if (!want) return;
+		const conv = this.conv;
+		const now = new Map(this.tldrOf(conv).map((l) => [l.id, l.collapsed === true]));
+		const changed = want.ids.filter((id) => now.has(id) && now.get(id) !== want.collapsed);
+		if (changed.length === 0) return;
+		try {
+			conv.session.sessionManager.appendCustomEntry(TLDR_COLLAPSE_TYPE, { ...want, ids: changed });
+		} catch (err) {
+			console.warn(`[tldr-collapse] not saved: ${err instanceof Error ? err.message : String(err)}`);
+			return;
+		}
+		// 写条目不发会话事件：自己马上发快照（叶子变了，tldrOf 重算），正看着这条对话的别的窗口也马上对账。
+		this.flushSnapshot();
+		this.checkpointViewers(conv.id, true);
 	}
 
 	/** Resolve a browser-bridged dialog (select/confirm/input) for this session. */

@@ -114,6 +114,8 @@ interface RightPanelProps {
 	onNotice: (level: "info" | "warning" | "error", text: string) => void;
 	/** 当前对话的 TL;DR 行（UiState.tldr，tldr-panel）。delta 不带时引用不变，memo 照样命中。 */
 	tldr?: UiTldrLine[];
+	/** 当前对话的 id：TL;DR tab 折叠行时带上（tldr-collapse，服务端核对），也用来在换对话时重置 tab。 */
+	tldrConversationId?: string;
 	/** Desktop: show the collapse button (mobile drawers close via the topbar). */
 	collapsible?: boolean;
 	/** Fired when the user clicks the collapse button. */
@@ -144,6 +146,7 @@ export const RightPanel = memo(function RightPanel({
 	onPreview,
 	onNotice,
 	tldr,
+	tldrConversationId,
 	collapsible,
 	onToggleCollapse,
 	uiRightPanelTabs,
@@ -909,6 +912,18 @@ export const RightPanel = memo(function RightPanel({
 	 *  全藏光时右栏就是空的：那是用户/插件的明确意愿，布局页的「恢复」一键可退回。 */
 	const filesTabHidden = (uiRightPanelTabs ?? []).some((e) => e.id === "host:right-files" && e.hidden);
 	const tldrTabHidden = (uiRightPanelTabs ?? []).some((e) => e.id === "host:right-tldr" && e.hidden);
+	/** TL;DR tab 里折叠 / 重新展开几行（tldr-collapse）：服务端记进会话，所有窗口一致。 */
+	const onTldrCollapse = useCallback(
+		(ids: string[], collapsed: boolean) => {
+			panelSend({
+				type: "tldr_collapse",
+				ids,
+				collapsed,
+				...(tldrConversationId ? { conversationId: tldrConversationId } : {}),
+			});
+		},
+		[panelSend, tldrConversationId],
+	);
 	/** tab 顺序统一走 slot（含文件 tab 的位置，不再固定第一；未接线时保持旧顺序）。 */
 	const orderTabs = (tabs: SlotTab[]): SlotTab[] => {
 		const visible = (uiRightPanelTabs ?? []).filter((e) => !e.hidden);
@@ -1279,7 +1294,15 @@ export const RightPanel = memo(function RightPanel({
 										),
 									},
 								]),
-						...(tldrTabHidden ? [] : [{ id: TLDR_TAB_ID, label: t("tldrTab"), element: <TldrPanel lines={tldr} /> }]),
+						...(tldrTabHidden
+							? []
+							: [
+									{
+										id: TLDR_TAB_ID,
+										label: t("tldrTab"),
+										element: <TldrPanel key={tldrConversationId ?? ""} lines={tldr} onCollapse={onTldrCollapse} />,
+									},
+								]),
 						...pluginTabs,
 					])}
 				/>

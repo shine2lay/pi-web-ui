@@ -11,6 +11,13 @@
  * - 改写分叉后，被丢下的那条分支上的行不再显示（和消息列表一致）。
  *
  * 条目格式是和 pi-tldr 的约定，这里对坏数据一律跳过，不抛。
+ *
+ * 用户在 tab 里折叠 / 重新展开的行（tldr-collapse）也存在会话里，是 pi-web-ui 自己的条目：
+ *
+ *   { type: "custom", customType: "pi-web-ui/tldr-collapse", data: { v: 1, ids, collapsed } }
+ *
+ * 沿分支按顺序重放，最后折叠着的行带 `collapsed: true`。跟行本身一样随会话走：刷新、
+ * 重启服务、别的窗口和设备看到的都一样。
  */
 
 import type { UiTldrLine } from "./protocol.js";
@@ -24,6 +31,30 @@ export const TLDR_MAX_LINES = 500;
 /** 一行的字数上限：工具说明要的是一句话，防一个失控的调用把快照撑大。 */
 const TEXT_MAX = 400;
 
+/** 折叠状态条目的 customType（tldr-collapse，pi-web-ui 自己写的）。 */
+export const TLDR_COLLAPSE_TYPE = "pi-web-ui/tldr-collapse";
+
+/** 行 id 的长度上限：pi 的条目 id 是 8 位十六进制，这里只防坏数据。 */
+const ID_MAX = 64;
+
+/** 一条折叠条目的 data。 */
+export interface TldrCollapseData {
+	v: 1;
+	ids: string[];
+	collapsed: boolean;
+}
+
+/** 规整折叠条目的 data：写之前（客户端发来的）和读的时候（会话里的）都过一遍。
+ *  id 去重、去掉非字符串和超长的，最多 TLDR_MAX_LINES 个（「全部折叠」一次也就这么多）；
+ *  一个都不剩或 collapsed 不是布尔就返回 null。 */
+export function tldrCollapseData(ids: unknown, collapsed: unknown): TldrCollapseData | null {
+	if (!Array.isArray(ids) || typeof collapsed !== "boolean") return null;
+	const clean = [
+		...new Set(ids.filter((x): x is string => typeof x === "string" && x.length > 0 && x.length <= ID_MAX)),
+	].slice(0, TLDR_MAX_LINES);
+	return clean.length > 0 ? { v: 1, ids: clean, collapsed } : null;
+}
+
 /** 只用到的会话条目字段（SessionEntry 的子集，测试好造）。 */
 export interface TldrEntryLike {
 	type: string;
@@ -36,8 +67,20 @@ export interface TldrEntryLike {
 /** 分支条目（按根 → 叶的顺序）→ TL;DR 行，按时间升序；只留最新 `max` 行。 */
 export function tldrLinesFromEntries(entries: readonly TldrEntryLike[], max = TLDR_MAX_LINES): UiTldrLine[] {
 	const out: UiTldrLine[] = [];
+	/** 重放到当前为止折叠着的行 id。 */
+	const folded = new Set<string>();
 	for (const e of entries) {
-		if (e.type !== "custom" || e.customType !== TLDR_ENTRY_TYPE) continue;
+		if (e.type !== "custom") continue;
+		if (e.customType === TLDR_COLLAPSE_TYPE) {
+			const d = (e.data ?? {}) as { ids?: unknown; collapsed?: unknown };
+			const c = tldrCollapseData(d.ids, d.collapsed);
+			for (const id of c?.ids ?? []) {
+				if (c?.collapsed) folded.add(id);
+				else folded.delete(id);
+			}
+			continue;
+		}
+		if (e.customType !== TLDR_ENTRY_TYPE) continue;
 		const d = (e.data ?? {}) as { text?: unknown; needsYou?: unknown; ts?: unknown };
 		const text = typeof d.text === "string" ? d.text.trim() : "";
 		if (!text || !e.id) continue;
@@ -49,5 +92,7 @@ export function tldrLinesFromEntries(entries: readonly TldrEntryLike[], max = TL
 			ts,
 		});
 	}
-	return out.length > max ? out.slice(out.length - max) : out;
+	const kept = out.length > max ? out.slice(out.length - max) : out;
+	// 没折叠的行不带 collapsed 字段（快照里每行省几个字节，老客户端也不受影响）。
+	return folded.size === 0 ? kept : kept.map((l) => (folded.has(l.id) ? { ...l, collapsed: true } : l));
 }

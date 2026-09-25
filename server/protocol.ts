@@ -154,6 +154,8 @@ export interface UiTldrLine {
 	needsYou: boolean;
 	/** 写下这一行的时间（ms）。 */
 	ts: number;
+	/** 用户在 tab 里把这一行折叠了（看过了；tldr-collapse）。存在会话里，所有窗口一致；没折叠时不带。 */
+	collapsed?: boolean;
 }
 
 /** switch-cache：客户端手里已经有的一截消息（上次看这条对话时的窗口）。
@@ -600,6 +602,9 @@ export type ClientMessage =
 	// switch-cache：have = 客户端缓存里这条对话的窗口（没有就不带，服务端照常发整份）。
 	| { type: "switch_session"; path: string; have?: CachedWindow }
 	| { type: "switch_conversation"; id: string; have?: CachedWindow }
+	/** TL;DR tab 里折叠（collapsed=true）或重新展开这些行（tldr-collapse）。服务端记进会话，
+	 *  然后给所有正看着这条对话的窗口发快照。conversationId 对不上当前对话就不记。 */
+	| { type: "tldr_collapse"; ids: string[]; collapsed: boolean; conversationId?: string }
 	/** 手动过户：把另一处（elsewhere 行，owner/convId 标识）的对话整体搬到本页
 	 *  （含等答复的问卷/页调用），搬完自动切过去. */
 	| { type: "take_over_conversation"; owner: string; id: string }
