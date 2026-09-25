@@ -7,8 +7,14 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { keepLoadedHistory, paginationAfterDelta, prependOlderMessages } from "../../web/src/message-window.js";
-import type { UiMessage, UiState } from "../../web/src/types.js";
+import {
+	chainDigests,
+	keepLoadedHistory,
+	paginationAfterDelta,
+	prependOlderExchanges,
+	prependOlderMessages,
+} from "../../web/src/message-window.js";
+import type { UiExchangeDigest, UiMessage, UiState } from "../../web/src/types.js";
 
 function msg(id: string): UiMessage {
 	return { id, role: "user", content: [{ type: "text", text: id }] } as UiMessage;
@@ -25,7 +31,108 @@ function uiState(over: Partial<UiState> = {}): UiState {
 	} as UiState;
 }
 
+/** 一份摘要：这一轮从 index 开始（提问 id = m<index>），覆盖到 end。 */
+function dg(index: number, end: number, over: Partial<UiExchangeDigest> = {}): UiExchangeDigest {
+	return {
+		index,
+		end,
+		head: [msg(`m${index}`)],
+		answers: [],
+		after: [],
+		folded: true,
+		turns: 1,
+		thinking: 0,
+		toolCalls: 1,
+		status: "done",
+		...over,
+	};
+}
+const spans = (list: readonly UiExchangeDigest[] | undefined) => (list ?? []).map((d) => `${d.index}-${d.end}`);
+
+describe("chainDigests", () => {
+	it("留下首尾相接、最后一份接到窗口起点的一串（乱序也行）", () => {
+		expect(spans(chainDigests([dg(90, 100), dg(80, 90)], 100))).toEqual(["80-90", "90-100"]);
+	});
+
+	it("覆盖到窗口里的不要（那一段已经是真消息，计数会重）", () => {
+		expect(spans(chainDigests([dg(80, 90), dg(90, 105)], 100))).toEqual([]);
+		expect(spans(chainDigests([dg(90, 100), dg(100, 110)], 100))).toEqual(["90-100"]);
+	});
+
+	it("接不上的地方往前一律丢掉——不拼出有洞的历史", () => {
+		expect(spans(chainDigests([dg(60, 70), dg(70, 80), dg(85, 100)], 100))).toEqual(["85-100"]);
+		expect(spans(chainDigests([dg(80, 90)], 100))).toEqual([]);
+	});
+
+	it("同一轮有两份时取排在后面的（新鲜的）", () => {
+		const out = chainDigests([dg(90, 100, { turns: 1 }), dg(90, 100, { turns: 9 })], 100);
+		expect(out).toHaveLength(1);
+		expect(out[0].turns).toBe(9);
+	});
+});
+
+describe("prependOlderExchanges", () => {
+	it("更早几轮的摘要拼在前面，原状态不动", () => {
+		const ui = uiState({ exchanges: [dg(90, 100)] });
+		const before = ui.exchanges;
+		const next = prependOlderExchanges(ui, {
+			conversationId: "c1",
+			beforeIndex: 90,
+			exchanges: [dg(70, 80), dg(80, 90)],
+		});
+		expect(spans(next?.exchanges)).toEqual(["70-80", "80-90", "90-100"]);
+		expect(ui.exchanges).toBe(before);
+	});
+
+	it("还没有摘要时从窗口起点往前拼", () => {
+		const next = prependOlderExchanges(uiState({ exchanges: [] }), {
+			conversationId: "c1",
+			beforeIndex: 100,
+			exchanges: [dg(95, 100)],
+		});
+		expect(spans(next?.exchanges)).toEqual(["95-100"]);
+	});
+
+	it("切了对话 / 接不上最老的一份 / 空回执 / 服务端不发摘要：作废", () => {
+		const ui = uiState({ exchanges: [dg(90, 100)] });
+		expect(prependOlderExchanges(ui, { conversationId: "c2", beforeIndex: 90, exchanges: [dg(80, 90)] })).toBeNull();
+		expect(prependOlderExchanges(ui, { conversationId: "c1", beforeIndex: 100, exchanges: [dg(80, 100)] })).toBeNull();
+		expect(prependOlderExchanges(ui, { conversationId: "c1", beforeIndex: 90, exchanges: [] })).toBeNull();
+		expect(
+			prependOlderExchanges(uiState(), { conversationId: "c1", beforeIndex: 100, exchanges: [dg(90, 100)] }),
+		).toBeNull();
+	});
+
+	it("重复的回执（没带来新的）作废", () => {
+		const ui = uiState({ exchanges: [dg(80, 90), dg(90, 100)] });
+		expect(prependOlderExchanges(ui, { conversationId: "c1", beforeIndex: 80, exchanges: [dg(85, 90)] })).toBeNull();
+	});
+});
+
 describe("prependOlderMessages", () => {
+	it("载入的消息替掉它覆盖的摘要；straddle 替换跨窗口那一轮的 partial（exchange-digest）", () => {
+		const ui = uiState({ exchanges: [dg(80, 95), dg(95, 100, { partial: true, turns: 4 })] });
+		const next = prependOlderMessages(ui, {
+			conversationId: "c1",
+			start: 97,
+			messages: [msg("m97"), msg("m98"), msg("m99")],
+			straddle: dg(95, 97, { partial: true, turns: 2 }),
+		});
+		expect(next?.messagesStart).toBe(97);
+		expect(spans(next?.exchanges)).toEqual(["80-95", "95-97"]);
+		expect(next?.exchanges?.[1].turns).toBe(2);
+	});
+
+	it("从一轮的开头载入：这一轮的摘要不要了", () => {
+		const ui = uiState({ exchanges: [dg(80, 95), dg(95, 100, { partial: true })] });
+		const next = prependOlderMessages(ui, {
+			conversationId: "c1",
+			start: 95,
+			messages: ["m95", "m96", "m97", "m98", "m99"].map(msg),
+		});
+		expect(spans(next?.exchanges)).toEqual(["80-95"]);
+	});
+
 	it("紧挨着窗口的一截拼在前面，起点前移", () => {
 		const ui = uiState();
 		const next = prependOlderMessages(ui, { conversationId: "c1", start: 98, messages: [msg("m98"), msg("m99")] });
@@ -73,6 +180,60 @@ describe("prependOlderMessages", () => {
 	it("没分页的老状态（messagesStart 缺省=0）收到历史回执也作废", () => {
 		const ui = uiState({ messagesStart: undefined });
 		expect(prependOlderMessages(ui, { conversationId: "c1", start: 0, messages: [msg("m0")] })).toBeNull();
+	});
+});
+
+describe("paginationAfterDelta: exchange-digest", () => {
+	it("delta 不动摘要（窗口前面的历史不会变）", () => {
+		const ui = uiState({ exchanges: [dg(90, 100)] });
+		expect(paginationAfterDelta(ui, {}).exchanges).toBe(ui.exchanges);
+	});
+});
+
+describe("keepLoadedHistory: exchange-digest", () => {
+	const prev = () =>
+		uiState({
+			sessionId: "s1",
+			exchanges: [dg(60, 70), dg(70, 80), dg(80, 90), dg(90, 100)],
+		});
+
+	it("用户多取的更早几轮留下（快照只带最近几轮）", () => {
+		const next = uiState({
+			sessionId: "s1",
+			messages: [msg("m100"), msg("m101"), msg("m102")],
+			exchanges: [dg(80, 90), dg(90, 100)],
+		});
+		expect(spans(keepLoadedHistory(prev(), next).exchanges)).toEqual(["60-70", "70-80", "80-90", "90-100"]);
+	});
+
+	it("接缝处对不上（历史被改写）：只用快照的", () => {
+		const next = uiState({
+			sessionId: "s1",
+			exchanges: [dg(80, 90, { head: [msg("x80")] }), dg(90, 100)],
+		});
+		expect(spans(keepLoadedHistory(prev(), next).exchanges)).toEqual(["80-90", "90-100"]);
+	});
+
+	it("服务端把窗口往后挥了（客户端留着更早的消息）：客户端那串摘要还成立", () => {
+		const p = uiState({
+			sessionId: "s1",
+			messages: ["m100", "m101", "m102", "m103"].map(msg),
+			exchanges: [dg(80, 95), dg(95, 100, { partial: true })],
+		});
+		const next = uiState({
+			sessionId: "s1",
+			messages: ["m102", "m103", "m104"].map(msg),
+			messagesStart: 102,
+			exchanges: [dg(95, 102, { partial: true })],
+		});
+		const merged = keepLoadedHistory(p, next);
+		expect(merged.messagesStart).toBe(100);
+		expect(spans(merged.exchanges)).toEqual(["80-95", "95-100"]);
+	});
+
+	it("换了对话：原样采用快照的摘要", () => {
+		const next = uiState({ conversationId: "c2", sessionId: "s1", exchanges: [dg(90, 100)] });
+		expect(spans(keepLoadedHistory(prev(), next).exchanges)).toEqual(["90-100"]);
 	});
 });
 
