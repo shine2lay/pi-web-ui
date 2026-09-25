@@ -1337,14 +1337,22 @@ export function useChat() {
 			}
 			switch (msg.type) {
 				case "ready": {
-					// Stale-build self-reload: the server reports the on-disk bundle
-					// hash. Ours is baked in at build time. Mismatch = rebuilt since
-					// this page loaded → reload once for the fresh bundle.
+					// Stale-build self-reload: the server reports the entry-chunk hash
+					// of the index.html it serves now; ours is the hash in the entry
+					// <script> of the index.html this page was served. Mismatch =
+					// rebuilt since this page loaded → reload once for the fresh bundle.
+					// single-load：上游拿 Vite 编进 bundle 的 __BUILD_ID__（构建时间戳）跟这个 hash 比，
+					// 永远对不上，每个新标签页都白刷一次；改成读页面自己的入口 <script>，和服务端
+					// buildId() 读的是同一个东西。
 					// Loop guard: stamp sessionStorage BEFORE reloading — the fresh
 					// page sees the same server hash, finds the stamp, and stops.
 					// The stamp is per-build-id, so the NEXT rebuild reloads again.
-					// Dev-server (Vite :5173) has no baked id — never reload there.
-					const mine = typeof __BUILD_ID__ !== "undefined" ? __BUILD_ID__ : "";
+					// Dev-server (Vite :5173) serves /src/main.tsx, no hash — never reload there.
+					const mine =
+						document
+							.querySelector('script[src*="/assets/index-"]')
+							?.getAttribute("src")
+							?.match(/\/assets\/index-([A-Za-z0-9_-]+)\.js/)?.[1] ?? "";
 					// Auto-reload setting (display tab, default on from source / off
 					// for installs): settings may not have arrived yet on first
 					// connect — fall back to ON so a fresh build never strands a stale

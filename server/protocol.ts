@@ -2163,9 +2163,10 @@ export type ServerMessage =
 			 *  client used to learn it from the update check, which a managed
 			 *  instance never runs. */
 			appVersion?: string;
-			/** Web-build id (Vite __BUILD_ID__). The client compares it against
-			 *  its own baked-in id — a mismatch means the server rebuilt since
-			 *  this page loaded and the page should reload itself. */
+			/** Web-build id: the entry-chunk hash (`/assets/index-<hash>.js`) of
+			 *  the index.html the server serves now. The client compares it with
+			 *  the hash in its own entry <script> — a mismatch means the web was
+			 *  rebuilt since this page loaded and the page should reload itself. */
 			buildId?: string;
 			/** PI_WEB_MANAGED=1 — updates come from outside, so the client hides
 			 *  the update badge, the UPDATE panel and the plugin market. The

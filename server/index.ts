@@ -183,19 +183,18 @@ function appVersion(): string {
 }
 /** On-disk web-build id: the main JS bundle hash from the built index.html.
  *  Changes on every rebuild — stale pages compare and reload themselves.
+ *  single-load：每次现读，不再缓存到进程退出。重建了前端、还没重启服务端时，新标签页拿到的
+ *  已经是新 index.html，这里若还报启动时那份的 hash，每个新标签页都要白刷一次。文件 ~1KB，
+ *  每条 WS 连接只在 ready 时读一次。
  *  Declared near use (below webDist), not here: webDist is a const further
  *  down and calling this at module-init time would hit its dead zone. */
-let buildIdCache: string | null = null;
 function buildId(): string {
-	if (buildIdCache === null) {
-		try {
-			const html = readFileSync(join(webDistPath(), "index.html"), "utf8");
-			buildIdCache = html.match(/\/assets\/index-([A-Za-z0-9_-]+)\.js/)?.[1] ?? "";
-		} catch {
-			buildIdCache = "";
-		}
+	try {
+		const html = readFileSync(join(webDistPath(), "index.html"), "utf8");
+		return html.match(/\/assets\/index-([A-Za-z0-9_-]+)\.js/)?.[1] ?? "";
+	} catch {
+		return "";
 	}
-	return buildIdCache;
 }
 // Root of the SDK default per-project session dirs — chat transcripts live in
 // <SESSION_DIR_ROOT>/--<cwd>--/, shared with the pi CLI/TUI (getAgentDir

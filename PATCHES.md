@@ -38,6 +38,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | done-any-chat                | `local`        | `web/src/done-cues.ts`, `App.tsx`, `server/agent-service.ts`, `i18n.tsx`, `locales/*.json`                                                     |
 | todo-list-owner              | `local`        | `server/agent-service.ts`                                                                                                                      |
 | markers-skip-code            | `local`        | `server/markers/marker.ts`                                                                                                                     |
+| single-load                  | `local`        | `web/src/use-chat.ts`, `server/index.ts`, `server/protocol.ts`                                                                                 |
 
 ---
 
@@ -1361,6 +1362,35 @@ runtime 所属的对话（每个调用点都传了 `conversationId`），跟标�
 
 **回归**：`tests/unit/markers-skip-code.test.ts` 15 项：正文照样执行、``` / ~~~ 块、没闭合的块、缩进、
 闭合规则、行内代码、反引号个数、落单的反引号、不跨空行、标记自己的文字里带行内代码、当天贴系统提示词的原样。
+
+---
+
+## single-load
+
+**状态**：`local`（上游的 bug，来自 1f31bde；到 upstream/main 7f641d7 还在。拟提 issue，上游修了就退役）
+**基线**：v0.94.1
+
+**问题**（2026-09-24 实测）：每个新标签页都把整页加载两遍。上游 1f31bde「self-reload page when server
+rebuilds underneath it」比的是两个永远对不上的 id：页面用 Vite 编进 bundle 的 `__BUILD_ID__`（构建时间戳，
+如 `20260925T02154`），服务端 ready 帧发的是 index.html 里入口 chunk 的 hash（如 `hBSAltKa`）。于是页面一收到
+ready 就刷新（sessionStorage 标记挡住第二次），多开一条 WS、多留一个被丢掉的会话。线上实测新标签页要
+~2.0 秒才可用，只加载一次是 ~1.1 秒。服务端还把 id 缓存到进程退出：重建了前端、还没重启服务端时
+（本 fork 常有的状态：前端刷新即生效，服务端等空闲再重启），它报的是启动时那份的 hash。
+
+**改法**：两边都认 index.html 里入口 chunk 的 hash。
+
+- `web/src/use-chat.ts`（`ready`）：页面自己的 id 取它被服务时那份 index.html 的入口 `<script>`
+  （`script[src*="/assets/index-"]`，正则和服务端同一个）。Vite 开发服务器服务的是 `/src/main.tsx`，没有
+  hash，照旧不刷新。
+- `server/index.ts` `buildId()`：每次 ready 现读 index.html（~1KB），不再缓存。
+- `server/protocol.ts`：`buildId` 的注释改对（原来写的是「Vite __BUILD_ID__」）。
+- `__BUILD_ID__` 的 `define`（`web/vite.config.ts`）和 `web/src/build-id.d.ts` 没人用了，为补丁小留着没删。
+  副作用是好事：bundle 里不再有时间戳，源码没变就重建出同一个 hash（实测），重启后开着的标签页不白刷。
+
+**回归**：`tests/single-load-test.mjs`（真服务端 + 浏览器，零 token）。① 新上下文打开：只导航 1 次、
+1 条 WS、没有刷新标记；② 把页面入口 `<script>` 改成别的 hash 再重启服务端：恰好刷新一次、落在服务端
+那份构建（自刷新没被修坏）；③ `SINGLELOAD_MUTATE_DIST=1` 才跑：服务端在跑时 index.html 变了，之后的
+连接拿到新 id（它改 `web/dist/index.html`，只在临时副本里开）。共 10 项，修复前失败 6 项。
 
 ---
 
