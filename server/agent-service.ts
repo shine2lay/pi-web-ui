@@ -2826,7 +2826,9 @@ export class ClientSession {
 						? [makeDelegateTaskTool(withSubagentOwner(this.subagentHost, ownerId))]
 						: [makeDelegateTaskTool(this.subagentHost)]),
 					// 内置标记只读查询工具（todo/svc 状态查询，写操作走内联标记）。
-					makeMarkersListTool(() => this.activeId, this.markerSvc),
+					// todo-list-owner：读本 runtime 所属对话（ownerId，标记就写在 conv.id 下），不是建它的
+					// 那个窗口此刻正开着的对话——对话在后台跑时两者不同，以前会拿到前台对话的任务。
+					makeMarkersListTool(() => ownerId ?? this.activeId, this.markerSvc),
 					// 标准引擎的 ask_user_question：模型调用 → 浏览器富渲染问卷（复用 DSH
 					// 的 question_pending/question_answer 协议，前端 DshQuestionDialog）。
 					// DSH 引擎不经此（它走 goal-rpc 的 userQuestions provider）。

@@ -35,7 +35,8 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | load-older-survives-snapshot | `local`        | `web/src/message-window.ts`, `use-chat.ts`, `tests/chat-pagination-test.mjs`                                                                   |
 | exchange-fold                | `local`        | `web/src/exchange-fold.ts`, `components/ExchangeFoldRow.tsx`, `MessageList.tsx`, `exchange-fold.css`, `i18n.tsx`, `locales/*.json`             |
 | exchange-digest              | `local`        | `server/exchange-digest.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `web/src/message-window.ts`, `exchange-fold.ts`, `MessageList.tsx` |
-| done-any-chat                | `local`        | `web/src/done-cues.ts`, `App.tsx`, `server/agent-service.ts`, `i18n.tsx`, `locales/*.json`                                                 |
+| done-any-chat                | `local`        | `web/src/done-cues.ts`, `App.tsx`, `server/agent-service.ts`, `i18n.tsx`, `locales/*.json`                                                     |
+| todo-list-owner              | `local`        | `server/agent-service.ts`                                                                                                                      |
 
 ---
 
@@ -1319,6 +1320,28 @@ index.mjs` 的轮询：对每条盯梢的运行无条件 `update()`，20 条 × 
 
 ---
 
+## todo-list-owner
+
+**状态**：`local`（上游同样有这个问题，可以提 PR）
+**基线**：v0.94.1
+
+**问题**（2026-09-24 实际遇到）：`todo_list` 读的是建这个 runtime 的窗口**此刻正开着的**对话（`this.activeId`），
+不是调用它的对话。对话在后台跑时，它拿到的是前台对话的任务列表。写操作（内联 `[[todo:...]]`）不受影响：
+标记按产出它的对话（`conv.id`）写。
+
+**改法**：`makeRuntimeFactory` 里 `makeMarkersListTool(() => ownerId ?? this.activeId, …)`。`ownerId` 就是这个
+runtime 所属的对话（每个调用点都传了 `conversationId`），跟标记写入用的是同一个 id；边上的
+`ask_user_question`、`browser_page`、`claim_files`、子代理工具早就这么用。
+
+**回归**：`tests/todo-list-owner-test.mjs`（真服务端 + 浏览器，零 token）。先在页面自带的第一条对话里说一句、
+再新开对话 A：A 记一条任务，下一次模型调用被 mock 扣住；窗口新开对话 B，B 记自己的任务；放开 A，A 在后台
+调 `todo_list`。共 11 项，修复前失败 2 项（拿到的是 `bravo task`）。
+
+- 坑：页面自带的第一条对话不能当 A。上游页面会加载两次，第一条对话的 runtime 可能是被丢掉的那个连接建的，
+  它的「正开着的对话」永远停在 A 上，修复前也碰巧读对（第一版测试就是这样在修复前通过的）。
+
+---
+
 ## 已退役的补丁
 
 同步时删掉的补丁在这里留一笔，下次同步不用再查它们为什么没了。
@@ -1363,4 +1386,4 @@ index.mjs` 的轮询：对每条盯梢的运行无条件 `update()`，20 条 × 
     助手消息（fastfail 模型连不上），现在每条 prompt 只追加用户消息，数到 37 就停了（要 38）。
     exchange-digest 之前的 28fab8f 上失败得一模一样（2026-09-24 实测）。
   - 本 fork 自己的冒烟全过：`server-owned-chats-test`、`cross-client-session-test`、`chat-pagination-test`、
-    `exchange-fold-test`、`exchange-digest-test`、`done-any-chat-test`（后加）。
+    `exchange-fold-test`、`exchange-digest-test`、`done-any-chat-test`、`todo-list-owner-test`（后加）。
