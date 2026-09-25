@@ -43,6 +43,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | fast-reopen                  | `local`        | `server/compaction-markers.ts`                                                                                                                 |
 | switch-cache                 | `local`        | `web/src/chat-cache.ts`, `server/window-hash.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `use-chat.ts`, `App.tsx`, `SwitchOverlay.tsx` |
 | tldr-collapse                | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/components/TldrPanel.tsx`, `RightPanel.tsx`, `App.tsx`, i18n   |
+| queue-panel                  | `local`        | `server/task-queue.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TaskQueuePanel.tsx`, `RightPanel.tsx`, `done-cues.ts`, i18n     |
 
 ---
 
@@ -1583,6 +1584,92 @@ data: { v: 1, ids, collapsed } }`。跟行本身一样随会话走：刷新、�
 
 ---
 
+## queue-panel
+
+**状态**：`local`（队列本身在 pi-queue 扩展里：~/projects/pi-queue，私有仓库 github.com/shine2lay/pi-queue；
+`~/.pi/agent/settings.json` 的 `packages` 里装上才有队列）
+**基线**：v0.94.1
+
+**诉求**（用户 2026-09-24）：每条对话一个任务队列，「跟 TL;DR 类似，但是任务队列」，放这个 agent 接下来要做的事；
+每个任务先和用户把计划定透、agent 能一路做完，才进队列。用户的选择：不留没计划的想法清单；在对话框里批准整份
+计划；做完一个自己接着做下一个；卡住的任务停下整条队列等用户。
+
+### 改法
+
+- pi-queue 给 agent 四个工具（`queue_add` / `queue_update` / `queue_done` / `queue_stuck`）和 `/queue` 命令，
+  把队列的每次变化写成会话里的一条自定义条目 `{ type: "custom", customType: "queue", data: { v: 1, op, … } }`。
+  pi-web-ui 只读这些条目，按钮一律转成 `/queue …` 命令，自己从不写队列条目。
+- `server/task-queue.ts`：
+  - `taskQueueFromEntries(entries, available)` 沿当前分支按顺序重放，规则和 pi-queue `queue.ts` 的 `applyOp`
+    一致：面板显示的必须就是 pi-queue 接下来会做的。
+  - 删掉的不发；做完的只留最近 `TASK_QUEUE_MAX_DONE`（20）个，排着的和正在做的一个不少。计划每部分截在 4000 字，
+    问题和总结截在 2000 字。坏数据跳过，不抛。
+  - `taskQueueCommandLine(action, id)`：`/queue start|stop`、`/queue up|down|remove <id>`；参数不对返回 null，不发。
+- `server/protocol.ts`：`UiTaskQueuePlan`（标题 + 六部分）、`UiTaskQueueTask`（`ready | working | stuck | done`）、
+  `UiTaskQueue`（`running`、`pausedReason`、`available`、`tasks`）；`UiState.taskQueue?`；客户端消息
+  `task_queue_command { action, id?, conversationId? }`。跟 `UiState.queue`（输入框里排队的提问）不是一回事，
+  所以这边一律叫 task queue。
+- `server/index.ts`：分派 `task_queue_command` → `DispatchSession.taskQueueCommand?`（可选，DSH 不实现）。
+- `server/agent-service.ts`：
+  - `taskQueueOf(conv)`：缓存同 `tldrOf`，key 是会话 id + 叶 id + 装没装 pi-queue；队列没变就返回同一个对象。
+    `available` = 这条对话有 `/queue` 命令。
+  - 整份快照总带 `taskQueue`；delta 只在对象换了时带。
+  - pi-queue 写 `queue` 条目的 `entry_appended` 算边界，立即对账：按钮和 agent 跑完后 pi-queue 的推进只写条目、
+    不产生消息，不这样要等 2 秒的定时器。
+  - `taskQueueCommand`：`conversationId` 对不上当前对话、参数不对、这条对话没装 pi-queue，就不做（没有 `/queue`
+    命令时 `prompt` 会把这行字当普通提问发给模型）。否则 `session.prompt("/queue …")`：扩展命令即时执行，
+    agent 在跑也行，不进消息列表。
+- `web/src/components/TaskQueuePanel.tsx`：右栏的「队列」tab。
+  - 顶上一行状态（`taskQueueStatusKey`：在跑 / 正在做 #n / 等你回答 #n / 停下的原因 / 都做完了）和「开始」/
+    「停下」；没东西可做时「开始」禁用。
+  - 正在做的任务在最上面；卡住时琥珀色，带 agent 的问题和「在对话里回答」的提示。
+  - 排着的按要做的顺序，带 ↑ ↓ ✕（✕ 先在行内确认；两头的箭头禁用）。
+  - 做完的变灰，带 agent 的总结，最近做完的在上，默认显示 `TASK_QUEUE_DONE_SHOWN`（5）个。
+  - 点标题展开整份计划，六部分的顺序和叫法跟 pi-queue 批准对话框里的一样（`TASK_QUEUE_PLAN_PARTS`）。
+  - 点了按钮先禁用，等服务端发来新的队列（最多 5 秒）再放开，防连点；面板自己不改队列。
+  - 没装 pi-queue（`available: false`）时不给按钮，只说怎么装（`.task-queue-note`）。
+- `web/src/components/RightPanel.tsx` + `web/src/ui-slots.ts`：新 tab `host:right-queue`（order 30，排在 TL;DR
+  后面），能在设置里隐藏。`TaskQueuePanel` 的 `key` 是对话 id；按钮用 `panelSend` 发 `task_queue_command`，带上
+  当前对话 id。`App.tsx` 传 `taskQueue={chat.state?.taskQueue}`；`TldrPanel.tsx` 导出 `lineTime` 给队列 tab 用。
+- 计划里的两处小改：
+  - `web/src/components/Dialog.tsx` + `styles.css`：确认对话框的正文包进 `.dialog-message` 单独滚动，确定 / 取消
+    一直看得见。pi-queue 要批准的整份计划很长。
+  - done-settle（`web/src/done-cues.ts` 的 `DoneCues`，`App.tsx` 里打开的对话和后台对话都走它）：「跑完」先等
+    `DONE_SETTLE_MS`（1.5 秒）再响。这期间又开跑了（队列的下一个任务、pi-queue 的提醒），就当没停过，完成和
+    开始都不响；等满了还没开跑的一起响一次。断线、卸载时没响的清掉。原因：pi-queue 做完一个任务接着开始下一个时，
+    SDK 先在 `agent_settled` 里跑扩展，服务端就先推出一份「没在跑」；不等的话每个任务都响一次完成、一次开始。
+- 文案：`taskQueue*`（`i18n.tsx` + `locales/*.json` 8 种）；样式 `.task-queue-*`（`styles.css`）。
+
+### 回归
+
+- `tests/unit/task-queue.test.ts`（13 项）：重放（add 保序、start 定当前任务、第二个 start 不理、stuck → 恢复 →
+  done 且 done 是终态、move 只在排着的任务里数、remove 和计划更新、run / pause 和原因）；只留最近做完的；坏 id
+  跳过、坏的计划部分给空串、超长截断；别的条目类型、不认识的 op 和版本跳过；`available`；按钮 → `/queue` 命令，
+  别的一律拒。
+- `tests/unit/task-queue-panel.test.ts`（9 项）：空状态和「没装 pi-queue」；分成正在做 / 接下来（按顺序）/ 做完
+  （最新在上）；卡住的高亮、带问题；↑ ↓ ✕ 和两头禁用；没装 pi-queue 或没有发送方时不出按钮；能跑时给「开始」、
+  在跑时给「停下」；展开的计划按 pi-queue 的顺序；做完的只显示最近几个、能展开；顶上那行说对队列在干什么。
+- `tests/unit/done-cues.test.ts`（+8 项）：`DONE_SETTLE_MS` 够接住下一个任务又不太长；跑完等满了只响一次；等的
+  时候又开跑 = 没停过；没东西在等时的开始是真开始；几条对话前后脚跑完一起响一次；其中一条又开跑，别的照样响；
+  同一条跑完两次算一次；`clear` 全清。
+- `tests/unit/ui-slots.test.ts`：tab 列表加上 `host:right-queue`。
+- `tests/queue-panel-test.mjs`（37 项，不花 token）：真 pi-queue（`PI_QUEUE_PKG`，默认 ~/projects/pi-queue，
+  从 settings.json 的 `packages` 装）+ 模拟模型，两个窗口：
+  - 规划那一轮调三次 `queue_add`，用户在对话框里逐个批准；长计划在对话框里滚动，确定 / 取消看得见；每批准一个，
+    A 的队列 tab 立刻多一个。
+  - B 打开同一条对话能看到；A 里 ↓、B 里 ✕（行内确认）两边都立刻跟上；点标题展开计划。
+  - 「开始」：#2 在做 → 做完、带总结；#1 卡住，两个窗口都高亮、带问题；整条队列在每个窗口听起来是一次运行
+    （一次开始、一次完成）。
+  - 在对话里回答 → #1 做完，「都做完了」，「开始」禁用；刷新后队列还在；新对话是空状态，切回来队列回来。
+  - 模拟模型没收到脚本外的消息（没有提醒、没有「继续」）；页面没报错。
+  - `QUEUE_DEBUG=1` 打印模拟模型收到的请求；`QUEUE_SHOT=/tmp/x.png` 另存四张截图（`-dialog` / `-plan` /
+    `-stuck` / `-done`）。
+- 反证（2026-09-25）：去掉 `.dialog-message` 的滚动样式、`DONE_SETTLE_MS` 设成 0，E2E 正好挂两项：长计划那项
+  （正文 2250/2250px 不滚，按钮不在视野里）和窗口 A 的「一次运行」（开始 +2、完成 +2）。窗口 B 那项照样过，
+  看来 B 没收到任务之间那一下「没在跑」。
+
+---
+
 ## 已退役的补丁
 
 同步时删掉的补丁在这里留一笔，下次同步不用再查它们为什么没了。
@@ -1626,6 +1713,10 @@ data: { v: 1, ids, collapsed } }`。跟行本身一样随会话走：刷新、�
   - `tests/lazy-window-test.mjs`：同样是种对话就超时。种对话的脚本每发一条 prompt 就等模型出错的那条
     助手消息（fastfail 模型连不上），现在每条 prompt 只追加用户消息，数到 37 就停了（要 38）。
     exchange-digest 之前的 28fab8f 上失败得一模一样（2026-09-24 实测）。
+  - `tests/questionnaire-test.mjs`：**别当冒烟跑**。它不设 `PI_CODING_AGENT_DIR` 和 `PI_WEB_DATA_DIR`，用的是
+    真的 `~/.pi/agent`（默认模型、所有扩展）和正在跑的服务的 `~/.pi-web-ui`，会花真 token（2026-09-25 误跑
+    一次：claude-opus-4-8 一轮，约 8.9 万 token 写缓存）。那次卡在等 `.dialog-title`（30 秒超时），不是
+    queue-panel 引起的（`Dialog.tsx` 只改了确认框的正文）；为了不再花 token，没在改动前的构建上复跑。
   - 本 fork 自己的冒烟全过：`server-owned-chats-test`、`cross-client-session-test`、`chat-pagination-test`、
     `exchange-fold-test`、`exchange-digest-test`、`done-any-chat-test`、`todo-list-owner-test`、`single-load-test`、
-    `tldr-panel-test`、`switch-cache-test`（后加）。
+    `tldr-panel-test`、`switch-cache-test`、`queue-panel-test`（后加）。

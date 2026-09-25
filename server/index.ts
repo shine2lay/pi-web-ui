@@ -995,6 +995,8 @@ export interface DispatchSession {
 	loadExchanges?(beforeIndex: number, count?: number, fromIndex?: number): void;
 	/** TL;DR tab 里折叠 / 重新展开几行，记进会话（tldr-collapse）。可选：没有 TL;DR 的引擎（DSH）不实现。 */
 	setTldrCollapsed?(ids: unknown, collapsed: unknown, conversationId?: unknown): void;
+	/** 队列 tab 的按钮 → pi-queue 的 /queue 命令（queue-panel）。可选：没有队列的引擎（DSH）不实现。 */
+	taskQueueCommand?(action: unknown, id: unknown, conversationId?: unknown): Promise<void>;
 	pushSlashCommands(): Promise<void>;
 	/** 取一条工具的**定义说明** → `tool_info`（工具卡右键 → 「显示工具详细信息」）。
 	 *  pi 与 dsh 都实现了；缺失时 dispatch 回 `unsupported`（不静默 —— 否则点开弹窗
@@ -1917,6 +1919,10 @@ wss.on("connection", (ws) => {
 			case "tldr_collapse":
 				// TL;DR tab 里点了折叠 / 「全部折叠」/ 「N 行已读」（tldr-collapse）。
 				cs.setTldrCollapsed?.(msg.ids, msg.collapsed, msg.conversationId);
+				break;
+			case "task_queue_command":
+				// 队列 tab 里点了开始 / 停下 / ↑ ↓ / 删除（queue-panel）。
+				void cs.taskQueueCommand?.(msg.action, msg.id, msg.conversationId);
 				break;
 			case "load_exchanges":
 				// 「显示更早的对话」/ 点了导轨上还没显示的提问（exchange-digest）。

@@ -14,8 +14,9 @@ import {
 	FiPlus,
 	FiX,
 } from "react-icons/fi";
-import type { ClientMessage, FileListing, UiPluginInfo, UiTldrLine } from "../types";
+import type { ClientMessage, FileListing, UiPluginInfo, UiTaskQueue, UiTldrLine } from "../types";
 import { TldrPanel } from "./TldrPanel";
+import { TaskQueuePanel, type TaskQueueAction } from "./TaskQueuePanel";
 import { useT } from "../i18n";
 import { useAppField } from "../app-globals";
 import { downloadFile, DOWNLOAD_FILE_NOT_FOUND } from "../download";
@@ -66,10 +67,13 @@ interface FileMenuCtx {
 const FILES_TAB_ID = "files";
 /** 内置「TL;DR」tab（tldr-panel）的 tab id，同样不带冒号。 */
 const TLDR_TAB_ID = "tldr";
+/** 内置「队列」tab（queue-panel，pi-queue 的任务队列）的 tab id，同样不带冒号。 */
+const TASK_QUEUE_TAB_ID = "queue";
 /** 内置 tab id → 它在 `rightpanel.tabs` 槽位里的条目 id（排序 / 隐藏走槽位）。 */
 const HOST_TAB_SLOT_ID: Record<string, string> = {
 	[FILES_TAB_ID]: "host:right-files",
 	[TLDR_TAB_ID]: "host:right-tldr",
+	[TASK_QUEUE_TAB_ID]: "host:right-queue",
 };
 
 /** 未接线时的稳定回退（空插件清单 / 空发送器）：避免每次渲染新建引用喂给下游比较。 */
@@ -114,8 +118,10 @@ interface RightPanelProps {
 	onNotice: (level: "info" | "warning" | "error", text: string) => void;
 	/** 当前对话的 TL;DR 行（UiState.tldr，tldr-panel）。delta 不带时引用不变，memo 照样命中。 */
 	tldr?: UiTldrLine[];
-	/** 当前对话的 id：TL;DR tab 折叠行时带上（tldr-collapse，服务端核对），也用来在换对话时重置 tab。 */
+	/** 当前对话的 id：TL;DR tab 折叠行、队列 tab 发命令时带上（服务端核对），也用来在换对话时重置这两个 tab。 */
 	tldrConversationId?: string;
+	/** 当前对话的任务队列（UiState.taskQueue，queue-panel）。delta 不带时引用不变。 */
+	taskQueue?: UiTaskQueue;
 	/** Desktop: show the collapse button (mobile drawers close via the topbar). */
 	collapsible?: boolean;
 	/** Fired when the user clicks the collapse button. */
@@ -147,6 +153,7 @@ export const RightPanel = memo(function RightPanel({
 	onNotice,
 	tldr,
 	tldrConversationId,
+	taskQueue,
 	collapsible,
 	onToggleCollapse,
 	uiRightPanelTabs,
@@ -924,6 +931,19 @@ export const RightPanel = memo(function RightPanel({
 		},
 		[panelSend, tldrConversationId],
 	);
+	const taskQueueTabHidden = (uiRightPanelTabs ?? []).some((e) => e.id === "host:right-queue" && e.hidden);
+	/** 队列 tab 的按钮（queue-panel）：服务端转成 `/queue …` 交给这条对话的 pi-queue。 */
+	const onTaskQueueCommand = useCallback(
+		(action: TaskQueueAction, id?: number) => {
+			panelSend({
+				type: "task_queue_command",
+				action,
+				...(id !== undefined ? { id } : {}),
+				...(tldrConversationId ? { conversationId: tldrConversationId } : {}),
+			});
+		},
+		[panelSend, tldrConversationId],
+	);
 	/** tab 顺序统一走 slot（含文件 tab 的位置，不再固定第一；未接线时保持旧顺序）。 */
 	const orderTabs = (tabs: SlotTab[]): SlotTab[] => {
 		const visible = (uiRightPanelTabs ?? []).filter((e) => !e.hidden);
@@ -1301,6 +1321,17 @@ export const RightPanel = memo(function RightPanel({
 										id: TLDR_TAB_ID,
 										label: t("tldrTab"),
 										element: <TldrPanel key={tldrConversationId ?? ""} lines={tldr} onCollapse={onTldrCollapse} />,
+									},
+								]),
+						...(taskQueueTabHidden
+							? []
+							: [
+									{
+										id: TASK_QUEUE_TAB_ID,
+										label: t("taskQueueTab"),
+										element: (
+											<TaskQueuePanel key={tldrConversationId ?? ""} queue={taskQueue} onCommand={onTaskQueueCommand} />
+										),
 									},
 								]),
 						...pluginTabs,

@@ -69,7 +69,10 @@ export function Dialog({ dialog }: DialogProps) {
 
 			{dialog.kind === "confirm" && (
 				<div className="dialog-body">
-					<Markdown text={message} rawHtml />
+					{/* 正文单独滚动，确定 / 取消一直看得见（pi-queue 要批准的整份计划很长；queue-panel）。 */}
+					<div className="dialog-message">
+						<Markdown text={message} rawHtml />
+					</div>
 					<div className="dialog-actions">
 						<button type="button" className="btn" onClick={() => respond(false)}>
 							{t("cancel")}

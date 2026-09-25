@@ -178,8 +178,10 @@ import type {
 	UiState,
 	UiSubagentTemplate,
 	UiTldrLine,
+	UiTaskQueue,
 } from "./protocol.js";
 import { buildQuestionIndex } from "./question-index.js";
+import { TASK_QUEUE_ENTRY_TYPE, taskQueueCommandLine, taskQueueFromEntries } from "./task-queue.js";
 import { messagesHash } from "./window-hash.js";
 import { TLDR_COLLAPSE_TYPE, tldrCollapseData, tldrLinesFromEntries } from "./tldr-lines.js";
 import { digestsBefore, snapshotDigests, straddleDigest } from "./exchange-digest.js";
@@ -1012,6 +1014,9 @@ export interface Conversation {
 	/** TL;DR 行的缓存（tldr-panel，见 ClientSession.tldrOf）：key = 会话 + 叶子，树没动就不重扫分支；
 	 *  sig = 行 id 串，行没变就沿用同一个数组引用（emitSnapshotNow 靠引用判断要不要随 delta 重发）。 */
 	tldrCache?: { key: string; sig: string; lines: UiTldrLine[] };
+	/** 任务队列的缓存（queue-panel，见 ClientSession.taskQueueOf）：同 tldrCache。key 还带「装没装 pi-queue」，
+	 *  sig = 整份 JSON，队列没变就沿用同一个对象。 */
+	taskQueueCache?: { key: string; sig: string; queue: UiTaskQueue };
 	/** Actual queued prompt TEXTS (steer = 插队, followUp = 排队) — the UI
 	 *  renders them as pending bubbles in the real message list. */
 	queueSteering: string[];
@@ -2331,6 +2336,8 @@ export class ClientSession {
 	private emittedRev = 0;
 	/** 上一次发出去的 TL;DR 列表（引用）：delta 只在它变了时带 `tldr`。 */
 	private emittedTldr: UiTldrLine[] | null = null;
+	/** 上一次发出去的任务队列（引用）：delta 只在它变了时带 `taskQueue`。 */
+	private emittedTaskQueue: UiTaskQueue | null = null;
 	/** switch-cache：这次切换客户端报上来的缓存窗口。只在 switchSession / switchConversation
 	 *  进行中有值（它们的 finally 清掉），由目标对话的第一份整份快照用掉（resumeWindow）。 */
 	private switchHave: CachedWindow | null = null;
@@ -4075,7 +4082,11 @@ export class ClientSession {
 			event.type === "compaction_end" ||
 			event.type === "auto_retry_start" ||
 			event.type === "auto_retry_end" ||
-			(event.type === "message_end" && (event.message as { role?: string } | undefined)?.role === "user");
+			(event.type === "message_end" && (event.message as { role?: string } | undefined)?.role === "user") ||
+			// 任务队列变了（queue-panel）：队列 tab 的按钮、agent 跑完后 pi-queue 的推进都只写条目、
+			// 不产生消息，跑着的时候定时器要 2 秒才到。队列一个任务才变几次，立即对账。
+			(event.type === "entry_appended" &&
+				(event.entry as { customType?: string } | undefined)?.customType === TASK_QUEUE_ENTRY_TYPE);
 		this.checkpointViewers(conv.id, boundary);
 		if (conv.id !== this.conv.id) return;
 		if (boundary) {
@@ -4187,6 +4198,26 @@ export class ClientSession {
 			return conv.tldrCache.lines;
 		} catch {
 			return conv.tldrCache?.lines ?? [];
+		}
+	}
+
+	/** 这条对话的任务队列（queue-panel）：当前分支上 pi-queue 存的 `queue` 条目重放出来的。
+	 *  缓存同 tldrOf（树没动就不重扫，队列没变就返回同一个对象）。没装 pi-queue 的对话也返回一份
+	 *  （available=false），tab 拿它说怎么装。 */
+	private taskQueueOf(conv: Conversation): UiTaskQueue {
+		const empty: UiTaskQueue = { running: false, available: false, tasks: [] };
+		try {
+			const sm = conv.session.sessionManager;
+			const available = !!conv.session.extensionRunner?.getCommand?.("queue");
+			const key = `${sm.getSessionId()}\u0001${sm.getLeafId() ?? ""}\u0001${available}`;
+			const c = conv.taskQueueCache;
+			if (c && c.key === key) return c.queue;
+			const queue = taskQueueFromEntries(sm.getBranch(), available);
+			const sig = JSON.stringify(queue);
+			conv.taskQueueCache = { key, sig, queue: c && c.sig === sig ? c.queue : queue };
+			return conv.taskQueueCache.queue;
+		} catch {
+			return conv.taskQueueCache?.queue ?? empty;
 		}
 	}
 
@@ -4355,6 +4386,9 @@ export class ClientSession {
 		const tldr = this.tldrOf(this.conv);
 		const tldrChanged = tldr !== this.emittedTldr;
 		this.emittedTldr = tldr;
+		const taskQueue = this.taskQueueOf(this.conv);
+		const taskQueueChanged = taskQueue !== this.emittedTaskQueue;
+		this.emittedTaskQueue = taskQueue;
 		if (incremental && prev) {
 			const baseRev = this.emittedRev;
 			this.emittedMessages = cur;
@@ -4375,6 +4409,8 @@ export class ClientSession {
 					...(appended.some((m) => m.role === "user") ? { questionIndex: buildQuestionIndex(cur) } : {}),
 					// TL;DR 行同理：只在列表变了时带（tldrOf 在行没变时返回同一个数组）。
 					...(tldrChanged ? { tldr } : {}),
+					// 任务队列同理（taskQueueOf 在队列没变时返回同一个对象）。
+					...(taskQueueChanged ? { taskQueue } : {}),
 				},
 			});
 		} else {
@@ -4402,6 +4438,8 @@ export class ClientSession {
 					...(EXCHANGE_DIGESTS > 0 ? { exchanges: snapshotDigests(cur, start, EXCHANGE_DIGESTS) } : {}),
 					// 整份快照总带 TL;DR（没有就是 []）：切对话时要把上一条的行换掉。
 					tldr,
+					// 任务队列同理：切对话时换成这一条的。
+					taskQueue,
 				},
 			});
 		}
@@ -4492,6 +4530,25 @@ export class ClientSession {
 		// 写条目不发会话事件：自己马上发快照（叶子变了，tldrOf 重算），正看着这条对话的别的窗口也马上对账。
 		this.flushSnapshot();
 		this.checkpointViewers(conv.id, true);
+	}
+
+	/** 服务 queue_command（queue-panel）：队列 tab 的按钮。转成 `/queue …` 交给 pi-queue 的命令执行：
+	 *  扩展命令即时执行（agent 在跑也行）、不进消息列表；pi-queue 写的条目走 entry_appended，
+	 *  立即对账（见 onEvent 的 boundary）。pi-web-ui 自己不写队列条目。
+	 *  对话已经换了（conversationId 对不上）、参数不对、这条对话没装 pi-queue 就不做：没有 /queue
+	 *  命令时 prompt 会把这行字当成普通提问发给模型。 */
+	async taskQueueCommand(action: unknown, id: unknown, conversationId?: unknown): Promise<void> {
+		if (this.disposed) return;
+		if (typeof conversationId === "string" && conversationId && conversationId !== this.activeId) return;
+		const line = taskQueueCommandLine(action, id);
+		if (!line) return;
+		const session = this.conv.session;
+		try {
+			if (!session.extensionRunner?.getCommand?.("queue")) return;
+			await session.prompt(line);
+		} catch (err) {
+			console.warn(`[queue-panel] ${line}: ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 
 	/** Resolve a browser-bridged dialog (select/confirm/input) for this session. */

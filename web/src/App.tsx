@@ -78,7 +78,7 @@ import { useWideChat } from "./chat-width-settings";
 import { registerFilePreviewHost } from "./file-preview-bridge";
 import { projectNameFromCwd, useProjectTitle } from "./title-settings";
 import { notify } from "./notify";
-import { finishedChats, runEdge, runningSeen, type RunningSeen, type RunState } from "./done-cues";
+import { DoneCues, finishedChats, runEdge, runningSeen, type RunningSeen, type RunState } from "./done-cues";
 import { useTheme } from "./theme";
 import { useWallpaperEffect } from "./wallpaper";
 
@@ -801,6 +801,21 @@ export function App() {
 	}, [pluginNotify]);
 	const prevStreaming = useRef<RunState | null>(null);
 	const prevRunningSeen = useRef<RunningSeen | null>(null);
+	// done-settle: "done" waits a moment in case the chat starts again (the next queued task),
+	// so a running queue sounds like one run. One sound per batch; see done-cues.ts.
+	const cueEnv = useRef({ sound, t });
+	cueEnv.current = { sound, t };
+	const doneCuesRef = useRef<DoneCues | null>(null);
+	const doneCues = (): DoneCues =>
+		(doneCuesRef.current ??= new DoneCues((cues) => {
+			const env = cueEnv.current;
+			playSound("done", env.sound);
+			// OS/PWA notification for when the user stepped away (not focused).
+			if (cues.some((c) => c.open)) void notify(env.t("notifyDoneTitle"), env.t("notifyDoneBody"));
+			for (const c of cues.filter((c) => !c.open).slice(0, 3))
+				void notify(env.t("notifyDoneTitle"), env.t("notifyDoneBodyChat", { title: c.title ?? "" }));
+		}));
+	useEffect(() => () => doneCuesRef.current?.clear(), []);
 	const prevDialogId = useRef<number | null>(null);
 	const prevQuestionId = useRef<string | null>(null);
 	const prevRemoteQuestionId = useRef<string | null>(null);
@@ -847,29 +862,29 @@ export function App() {
 		const next: RunState = { id: chat.state?.conversationId ?? "", streaming: chat.state?.isStreaming ?? false };
 		const edge = runEdge(prevStreaming.current, next);
 		prevStreaming.current = next;
-		if (edge === "start") playSound("start", sound);
-		else if (edge === "done") {
-			playSound("done", sound);
-			// OS/PWA notification for when the user stepped away (not focused).
-			void notify(t("notifyDoneTitle"), t("notifyDoneBody"));
-		}
+		if (edge === "start") {
+			// It stopped a moment ago and is running again: as if it never stopped.
+			if (!doneCues().started(next.id)) playSound("start", sound);
+		} else if (edge === "done") doneCues().finished({ id: next.id, open: true });
 	}, [chat.state?.conversationId, chat.state?.isStreaming, sound]);
 
 	// done-any-chat: every other chat's run end, from the list's isStreaming (the server pushes
 	// the list to every window when a run starts and when it settles). After a disconnect we
 	// don't know what ran meanwhile (a server restart ends every run), so start over.
 	useEffect(() => {
-		if (!chat.ready) prevRunningSeen.current = null;
+		if (!chat.ready) {
+			prevRunningSeen.current = null;
+			doneCues().clear();
+		}
 	}, [chat.ready]);
 	useEffect(() => {
 		const activeId = chat.activeConversationId || chat.state?.conversationId || "";
 		const finished = finishedChats(prevRunningSeen.current, chat.conversations, activeId);
 		prevRunningSeen.current = runningSeen(chat.conversations);
-		if (finished.length === 0) return;
-		playSound("done", sound);
-		for (const c of finished.slice(0, 3))
-			void notify(t("notifyDoneTitle"), t("notifyDoneBodyChat", { title: c.title }));
-	}, [chat.conversations, sound]);
+		// The open chat's start is handled above (it also decides the start sound).
+		for (const c of chat.conversations) if (c.isStreaming && c.id !== activeId) doneCues().started(c.id);
+		for (const c of finished) doneCues().finished({ id: c.id, title: c.title, open: false });
+	}, [chat.conversations]);
 
 	// Questionnaire cue — each new dialog id + each new DSH question id.
 	// dialog = 扩展 select/confirm/input；question = ask_user_question 问卷。
@@ -1904,6 +1919,7 @@ export function App() {
 								statuses={chat.statuses}
 								tldr={chat.state?.tldr}
 								tldrConversationId={chat.state?.conversationId}
+								taskQueue={chat.state?.taskQueue}
 								onAttach={(path, name, mode, isDir) => {
 									setDrawer(null);
 									attach(path, name, mode, isDir);

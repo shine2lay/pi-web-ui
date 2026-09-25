@@ -241,6 +241,7 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 		expect(slots["rightpanel.tabs"].map((e) => [e.id, e.view])).toEqual([
 			["host:right-files", "files"],
 			["host:right-tldr", "tldr"],
+			["host:right-queue", "queue"],
 		]);
 	});
 

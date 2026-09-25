@@ -715,7 +715,7 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		order: 30,
 	},
 
-	// ---- 右栏 tab（文件树 + TL;DR） ----
+	// ---- 右栏 tab（文件树 + TL;DR + 队列） ----
 	{
 		id: "host:right-files",
 		slot: "rightpanel.tabs",
@@ -734,6 +734,16 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		kind: "view",
 		view: "tldr",
 		order: 20,
+	},
+	// 队列（queue-panel）：pi-queue 的任务队列。计划透了、用户批准了才进来，按「开始」后一个接一个做。
+	{
+		id: "host:right-queue",
+		slot: "rightpanel.tabs",
+		labelKey: "taskQueueTab",
+		icon: "layers",
+		kind: "view",
+		view: "queue",
+		order: 30,
 	},
 
 	// ---- 左栏会话右键菜单 ----

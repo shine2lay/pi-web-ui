@@ -158,6 +158,49 @@ export interface UiTldrLine {
 	collapsed?: boolean;
 }
 
+/** 任务队列里一个任务的计划（queue-panel）：用户和 agent 一起定下、用户在对话框里批准过的六部分。 */
+export interface UiTaskQueuePlan {
+	title: string;
+	goal: string;
+	/** 怎样算做完。 */
+	doneWhen: string;
+	/** 和用户一起定下的。 */
+	decided: string;
+	steps: string;
+	/** 怎么验收。 */
+	verify: string;
+	/** 不做什么。 */
+	mustNot: string;
+}
+
+/** 队列里的一个任务（queue-panel）。ready：排着；working：正在做；stuck：等用户拍板；done：做完了。 */
+export interface UiTaskQueueTask {
+	/** pi-queue 的任务编号（#n），一条对话里从 1 往上数。 */
+	id: number;
+	status: "ready" | "working" | "stuck" | "done";
+	plan: UiTaskQueuePlan;
+	/** stuck：agent 要用户回答的问题。 */
+	question?: string;
+	/** done：做了什么（agent 的总结）。 */
+	summary?: string;
+	addedAt: number;
+	startedAt?: number;
+	doneAt?: number;
+}
+
+/** 这条对话的任务队列（queue-panel）：pi-queue 存在会话里的 `queue` 条目沿当前分支重放出来的。
+ *  不是 UiState.queue（那是输入框里排队 / 插队的提问）。 */
+export interface UiTaskQueue {
+	/** 队列在自己往下走（按过开始，还没停）。 */
+	running: boolean;
+	/** 没在走的原因：user 按了停下；stopped 这一轮被停了；error 这一轮出错；restart pi 重启过；finished 都做完了。 */
+	pausedReason?: "user" | "stopped" | "error" | "restart" | "finished";
+	/** 这条对话装了 pi-queue（有 /queue 命令）。没有时 tab 不给按钮，只说怎么装。 */
+	available: boolean;
+	/** 按队列顺序：ready 的就按这个顺序做。删掉的不带；做完的只带最近的一批。 */
+	tasks: UiTaskQueueTask[];
+}
+
 /** switch-cache：客户端手里已经有的一截消息（上次看这条对话时的窗口）。
  *
  *  切回一条看过的对话时随 `switch_session` / `switch_conversation` 报上来：消息
@@ -213,6 +256,9 @@ export interface UiState {
 	 *  整份快照总带（没有就是空数组）；snapshot_delta 只在列表变了时带，缺省 = 沿用上一份。
 	 *  压缩不影响（条目还在分支上）；改写分叉后只剩新分支上的行。DSH 引擎不填。 */
 	tldr?: UiTldrLine[];
+	/** 任务队列（queue-panel）：整份快照总带；snapshot_delta 只在队列变了时带，缺省 = 沿用上一份。
+	 *  改写分叉后只剩新分支上的队列（和 TL;DR 一样沿分支重放）。DSH 引擎不填。 */
+	taskQueue?: UiTaskQueue;
 	/**
 	 * Live partial assistant message while a run is streaming. The SDK keeps the
 	 * in-progress message in agent.state.streamingMessage — it only enters
@@ -605,6 +651,14 @@ export type ClientMessage =
 	/** TL;DR tab 里折叠（collapsed=true）或重新展开这些行（tldr-collapse）。服务端记进会话，
 	 *  然后给所有正看着这条对话的窗口发快照。conversationId 对不上当前对话就不记。 */
 	| { type: "tldr_collapse"; ids: string[]; collapsed: boolean; conversationId?: string }
+	/** 队列 tab 的按钮（queue-panel）：转成 `/queue start|stop|up <id>|down <id>|remove <id>` 交给 pi-queue
+	 *  （扩展命令即时执行，agent 在跑也行，不进消息列表）。conversationId 对不上当前对话就不做。 */
+	| {
+			type: "task_queue_command";
+			action: "start" | "stop" | "up" | "down" | "remove";
+			id?: number;
+			conversationId?: string;
+	  }
 	/** 手动过户：把另一处（elsewhere 行，owner/convId 标识）的对话整体搬到本页
 	 *  （含等答复的问卷/页调用），搬完自动切过去. */
 	| { type: "take_over_conversation"; owner: string; id: string }
