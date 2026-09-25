@@ -114,6 +114,10 @@ export type SwitchTarget = { kind: "session"; path: string } | { kind: "conversa
   `switch_done` 时内容已经到位，不会出现「遮罩没了但还是旧内容」的中间帧。
 - 两个引擎同一份契约：`server/agent-service.ts` 和 `server/dsh/dsh-agent-service.ts`
   各自 `emitSwitchDone()` / `emitSwitchFailed()`。
+- 同步 v0.94.1 带进来的一个漏洞（2026-09-24 补上）：上游 5ca2e70（confine switchSession to sessions root）
+  对会话目录外的路径只发 `notice`、不回执，客户端的「正在打开…」会一直等。现在它和其它失败一样
+  `flushSnapshot()` + `emitSwitchFailed()`（原因文字不变）。`switch-ack-test` 的「目录打不开」那条正好走这里
+  （测试的工作目录在会话目录外），同步之后一直挂着。
 
 **客户端**：`web/src/switch-pending.ts`（101 行，纯函数、不碰 React）记下 `pendingSwitch`；
 发出 `switch_*` 的**那一刻**聊天区盖一层「正在打开…」（`SwitchOverlay.tsx`，带「已等待 N 秒」

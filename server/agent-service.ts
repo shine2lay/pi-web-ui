@@ -8307,13 +8307,14 @@ export class ClientSession {
 		try {
 			const targetPath = resolve(path);
 			if (!isInsideSessionsDir(this.agentDir, targetPath)) {
-				this.emit({
-					type: "notice",
-					level: "error",
-					text: "只能打开会话目录中的对话记录",
-					textEn: "Only transcripts inside the session directory can be opened",
-				});
+				// switch-loading：上游 5ca2e70 的越界拒绝原本只发 notice、不回执，客户端的「正在打开…」
+				// 会一直等。和其它失败一样走回执（原因照旧；不是客户端在等的那次时它降级成 toast）。
 				this.flushSnapshot();
+				this.emitSwitchFailed(
+					target,
+					"只能打开会话目录中的对话记录",
+					"Only transcripts inside the session directory can be opened",
+				);
 				return;
 			}
 
