@@ -3,7 +3,13 @@
  * 条目格式是和 pi-tldr 扩展的约定：{ type: "custom", customType: "tldr", data: { v, text, needsYou, ts } }。
  */
 import { describe, expect, it } from "vitest";
-import { TLDR_MAX_LINES, tldrLinesFromEntries, type TldrEntryLike } from "../../server/tldr-lines.js";
+import {
+	TLDR_COLLAPSE_TYPE,
+	TLDR_MAX_LINES,
+	tldrCollapseData,
+	tldrLinesFromEntries,
+	type TldrEntryLike,
+} from "../../server/tldr-lines.js";
 
 const line = (id: string, text: string, extra: Record<string, unknown> = {}): TldrEntryLike => ({
 	type: "custom",
@@ -57,5 +63,61 @@ describe("tldrLinesFromEntries", () => {
 		const [long] = tldrLinesFromEntries([line("t1", "x".repeat(1000))]);
 		expect(long.text.length).toBe(401);
 		expect(long.text.endsWith("…")).toBe(true);
+	});
+});
+
+/** tldr-collapse：pi-web-ui 自己写的折叠条目。 */
+const fold = (id: string, ids: unknown, collapsed: unknown): TldrEntryLike => ({
+	type: "custom",
+	id,
+	customType: TLDR_COLLAPSE_TYPE,
+	data: { v: 1, ids, collapsed },
+});
+
+describe("tldr-collapse", () => {
+	it("marks the lines folded by collapse entries, replayed in branch order", () => {
+		const out = tldrLinesFromEntries([
+			line("t1", "one"),
+			line("t2", "two"),
+			fold("f1", ["t1", "t2"], true),
+			line("t3", "three"),
+			fold("f2", ["t2"], false),
+		]);
+		expect(out.map((l) => [l.id, l.collapsed])).toEqual([
+			["t1", true],
+			["t2", undefined],
+			["t3", undefined],
+		]);
+		// 没折叠的行不带这个字段
+		expect("collapsed" in out[1]).toBe(false);
+	});
+
+	it("ignores unknown ids and bad collapse data", () => {
+		const out = tldrLinesFromEntries([
+			line("t1", "one"),
+			fold("f1", ["nope"], true),
+			fold("f2", "t1", true),
+			fold("f3", ["t1"], "yes"),
+			{ type: "custom", id: "f4", customType: TLDR_COLLAPSE_TYPE },
+		]);
+		expect(out).toEqual([{ id: "t1", text: "one", needsYou: false, ts: 1001 }]);
+	});
+
+	it("a line folded on an abandoned branch is open on the current one", () => {
+		// 分支上只有当前路径的条目：别的分支上的折叠条目根本不在 entries 里。
+		expect(tldrLinesFromEntries([line("t1", "one")])[0].collapsed).toBeUndefined();
+	});
+
+	it("tldrCollapseData cleans what the client sent", () => {
+		expect(tldrCollapseData(["a", "a", 3, "", "x".repeat(65), "b"], true)).toEqual({
+			v: 1,
+			ids: ["a", "b"],
+			collapsed: true,
+		});
+		expect(tldrCollapseData([], true)).toBeNull();
+		expect(tldrCollapseData(["a"], 1)).toBeNull();
+		expect(tldrCollapseData("a", false)).toBeNull();
+		const many = Array.from({ length: TLDR_MAX_LINES + 5 }, (_, i) => `i${i}`);
+		expect(tldrCollapseData(many, false)?.ids).toHaveLength(TLDR_MAX_LINES);
 	});
 });

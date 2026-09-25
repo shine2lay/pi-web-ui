@@ -5,12 +5,18 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
-import { TLDR_COLLAPSED_LINES, TldrPanel } from "../../web/src/components/TldrPanel.js";
+import { TLDR_COLLAPSED_LINES, TldrPanel, tldrRows } from "../../web/src/components/TldrPanel.js";
 import { LanguageProvider } from "../../web/src/i18n.js";
 import type { UiTldrLine } from "../../server/protocol.js";
 
-const render = (lines: UiTldrLine[] | undefined, defaultShowAll = false) =>
-	renderToStaticMarkup(createElement(LanguageProvider, null, createElement(TldrPanel, { lines, defaultShowAll })));
+const render = (
+	lines: UiTldrLine[] | undefined,
+	defaultShowAll = false,
+	onCollapse?: (ids: string[], collapsed: boolean) => void,
+) =>
+	renderToStaticMarkup(
+		createElement(LanguageProvider, null, createElement(TldrPanel, { lines, defaultShowAll, onCollapse })),
+	);
 
 const mk = (n: number, needsYouAt: number[] = []): UiTldrLine[] =>
 	Array.from({ length: n }, (_, i) => ({
@@ -52,5 +58,68 @@ describe("TldrPanel", () => {
 			/class="tldr-line needs-you"><span class="tldr-badge">[^<]+<\/span><span class="tldr-text">step 2</,
 		);
 		expect(html).toContain('dateTime="2026-09-24T12:01:00.000Z"');
+	});
+});
+
+/** tldr-collapse：看过的行折叠起来，连着的并成一行「N 行已读」。 */
+describe("TldrPanel folding", () => {
+	const noop = () => {};
+	const unfoldRows = (html: string) =>
+		[...html.matchAll(/class="tldr-unfold"[^>]*>([^<]*)<\/button>/g)].map((m) => m[1]);
+
+	it("tldrRows merges each run of folded lines into one row", () => {
+		const folded = new Set(["t5", "t4", "t2", "t1"]);
+		const rows = tldrRows([...mk(6)].reverse(), (l) => folded.has(l.id));
+		expect(rows.map((r) => (r.kind === "line" ? r.line.id : r.lines.map((l) => l.id).join("+")))).toEqual([
+			"t6",
+			"t5+t4",
+			"t3",
+			"t2+t1",
+		]);
+	});
+
+	it("shows folded lines as one count row, and the row limit counts that row once", () => {
+		const lines = mk(9).map((l, i) => (i < 6 ? { ...l, collapsed: true } : l));
+		const html = render(lines);
+		expect(items(html)).toEqual(["step 9", "step 8", "step 7"]);
+		const rows = unfoldRows(html);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatch(/^6 /);
+		// 4 行（3 条 + 1 行已读）放得下，不出「显示全部」
+		expect(html).not.toContain("tldr-more");
+	});
+
+	it("a folded line between open ones splits the runs", () => {
+		const lines = mk(4).map((l) => (l.id === "t2" || l.id === "t4" ? { ...l, collapsed: true } : l));
+		const html = render(lines);
+		expect(items(html)).toEqual(["step 3", "step 1"]);
+		expect(unfoldRows(html)).toHaveLength(2);
+	});
+
+	it("offers the fold buttons and Collapse all only when it can send", () => {
+		const lines = mk(3);
+		const readOnly = render(lines);
+		expect(readOnly).not.toContain("tldr-fold");
+		expect(readOnly).not.toContain("tldr-collapse-all");
+
+		const html = render(lines, false, noop);
+		expect(html.match(/class="tldr-fold"/g)).toHaveLength(3);
+		expect(html).toContain('class="tldr-collapse-all"');
+		// 折叠按钮加在行尾：徽章和文字的位置不变
+		expect(render(mk(1, [1]), false, noop)).toMatch(
+			/class="tldr-line needs-you"><span class="tldr-badge">[^<]+<\/span><span class="tldr-text">step 1</,
+		);
+
+		const allFolded = render(
+			lines.map((l) => ({ ...l, collapsed: true })),
+			false,
+			noop,
+		);
+		expect(allFolded).not.toContain("tldr-collapse-all");
+		expect(allFolded).not.toContain('class="tldr-fold"');
+		expect(unfoldRows(allFolded)).toEqual([expect.stringMatching(/^3 /)]);
+		expect(allFolded).not.toContain("disabled");
+		// 发不出去时「N 行已读」还在，只是点不了
+		expect(render(lines.map((l) => ({ ...l, collapsed: true })))).toContain("disabled");
 	});
 });

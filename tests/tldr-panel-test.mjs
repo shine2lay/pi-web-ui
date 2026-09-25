@@ -8,14 +8,18 @@
  *  - window B opens mid-run on the same chat and gets the last line live too (viewer path);
  *  - the needs-you line is highlighted with a badge;
  *  - after a reload the lines are still there (read back from the session);
- *  - a new chat shows the empty state; switching back brings the lines back.
+ *  - a new chat shows the empty state; switching back brings the lines back;
+ *  - tldr-collapse: folding a line in A turns it into a "1 read line" row in A and, live, in B;
+ *    Collapse all in B folds the rest into one "3 read lines" row everywhere; it survives a reload;
+ *    the chat's session file holds one entry per change, with only the lines that changed;
+ *    clicking the row opens the 3 lines again in both windows.
  * Usage: npm run build && node tests/tldr-panel-test.mjs    (TLDR_DEBUG=1 prints the mock's requests;
  *        TLDR_SHOT=/tmp/x.png saves a screenshot of window A with all 3 lines, plus x-panel.png)
  */
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -207,6 +211,29 @@ async function send(page, text) {
 	await ta.press("Enter");
 }
 const chatRow = (page) => page.locator(".lp-row", { hasText: /TLDR-RUN|TL;DR chat/ }).first();
+/** The "N read lines" rows as shown, top to bottom (tldr-collapse). */
+const foldedRows = (page) =>
+	page.evaluate(() => [...document.querySelectorAll(".tldr-panel .tldr-unfold")].map((e) => e.textContent));
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+/** The tldr-collapse entries in the session files on disk, oldest first. */
+function collapseEntries() {
+	const dir = join(agentDir, "sessions");
+	if (!existsSync(dir)) return [];
+	const out = [];
+	for (const f of readdirSync(dir, { recursive: true })) {
+		if (!String(f).endsWith(".jsonl")) continue;
+		for (const row of readFileSync(join(dir, String(f)), "utf8").split("\n")) {
+			if (!row.includes("pi-web-ui/tldr-collapse")) continue;
+			try {
+				const e = JSON.parse(row);
+				if (e.customType === "pi-web-ui/tldr-collapse") out.push(e.data);
+			} catch {
+				/* half-written line */
+			}
+		}
+	}
+	return out;
+}
 
 try {
 	await waitServer();
@@ -290,6 +317,70 @@ try {
 	await chatRow(A).click();
 	check("switching back brings the lines back", await waitFor(async () => (await tldrTexts(A)).length === 3, 10000));
 	check("window B still shows 3 lines", (await tldrTexts(B)).length === 3);
+
+	console.log("fold lines (tldr-collapse)");
+	await A.locator(".tldr-panel .tldr-line").first().locator(".tldr-fold").click();
+	check(
+		"A: the top line folds into a '1 read line' row",
+		await waitFor(async () => same(await foldedRows(A), ["1 read line"]) && (await tldrTexts(A)).length === 2, 5000),
+		JSON.stringify([await foldedRows(A), await tldrTexts(A)]),
+	);
+	check(
+		"B: the fold shows up live",
+		await waitFor(async () => same(await foldedRows(B), ["1 read line"]) && (await tldrTexts(B)).length === 2, 5000),
+		JSON.stringify([await foldedRows(B), await tldrTexts(B)]),
+	);
+	if (process.env.TLDR_SHOT) {
+		await A.locator(".panel-right").screenshot({ path: process.env.TLDR_SHOT.replace(/\.png$/, "-folded.png") });
+	}
+	await B.locator(".tldr-panel .tldr-collapse-all").click();
+	check(
+		"B: Collapse all leaves one '3 read lines' row",
+		await waitFor(async () => same(await foldedRows(B), ["3 read lines"]) && (await tldrTexts(B)).length === 0, 5000),
+		JSON.stringify([await foldedRows(B), await tldrTexts(B)]),
+	);
+	check("B: the Collapse all button is gone", (await B.locator(".tldr-collapse-all").count()) === 0);
+	check(
+		"A: follows live",
+		await waitFor(async () => same(await foldedRows(A), ["3 read lines"]) && (await tldrTexts(A)).length === 0, 5000),
+		JSON.stringify([await foldedRows(A), await tldrTexts(A)]),
+	);
+	await A.reload();
+	await A.waitForSelector(".topbar", { timeout: 60000 });
+	await A.locator(".tldr-panel").waitFor({ timeout: 10000 });
+	check(
+		"A: still folded after a reload",
+		await waitFor(async () => same(await foldedRows(A), ["3 read lines"]), 10000),
+		JSON.stringify([await foldedRows(A), await tldrTexts(A)]),
+	);
+	const saved = collapseEntries();
+	check(
+		"the session file holds 2 entries: the line folded in A, then the other 2 from Collapse all",
+		saved.length === 2 &&
+			saved[0].collapsed === true &&
+			saved[0].ids.length === 1 &&
+			saved[1].collapsed === true &&
+			saved[1].ids.length === 2 &&
+			!saved[1].ids.includes(saved[0].ids[0]),
+		JSON.stringify(saved),
+	);
+	await A.locator(".tldr-panel .tldr-unfold").click();
+	check(
+		"A: clicking the row opens the 3 lines again",
+		await waitFor(async () => (await tldrTexts(A)).length === 3 && (await foldedRows(A)).length === 0, 5000),
+		JSON.stringify([await foldedRows(A), await tldrTexts(A)]),
+	);
+	check(
+		"B: follows live",
+		await waitFor(async () => (await tldrTexts(B)).length === 3 && (await foldedRows(B)).length === 0, 5000),
+		JSON.stringify([await foldedRows(B), await tldrTexts(B)]),
+	);
+	const after = collapseEntries();
+	check(
+		"a third entry opens all 3",
+		after.length === 3 && after[2].collapsed === false && after[2].ids.length === 3,
+		JSON.stringify(after.at(-1)),
+	);
 	check("no page errors", pageErrors.length === 0, pageErrors.join(" | "));
 } catch (e) {
 	failures++;

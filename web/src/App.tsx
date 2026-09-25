@@ -1997,6 +1997,7 @@ export function App() {
 								widgets={chat.widgets}
 								statuses={chat.statuses}
 								tldr={chat.state?.tldr}
+								tldrConversationId={chat.state?.conversationId}
 								onAttach={(path, name, mode, isDir) => {
 									setDrawer(null);
 									attach(path, name, mode, isDir);
