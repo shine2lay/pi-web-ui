@@ -5335,6 +5335,11 @@ export class ClientSession {
 					conv.pendingCompaction = null;
 					void this.executePendingCompaction(conv, pending);
 				}
+				// done-any-chat：这一刻 session.isStreaming 才变回 false（agent_end 时还在收尾：
+				// 排队的追问、自动压缩都算这一轮）。以前没人在这时推列表，「在跑」要等 agent_end
+				// 之后 800ms 那次刷新碰运气（收尾慢就还显示在跑），而且只推给订阅方。
+				// 同步 v0.96.1：上游自己加了这个 case，这行并进来；两个同名 case 时后一个永远不跑。
+				ClientSession.emitConversationsToAll();
 				break;
 			}
 			case "entry_appended": {
@@ -5374,7 +5379,10 @@ export class ClientSession {
 				// #140：本轮真的开跑了（session.isStreaming 此刻已为 true）—— 左栏
 				// 那行的「流式中」标识要立刻亮起来：首条提示词的入列 emit 早于本轮
 				// 启动，那时它还是 false；后台对话被唤醒重跑也靠这里刷新。
-				this.emitConversations();
+				// done-any-chat：推给**所有**窗口，不只订阅这条对话的这一个。对话是服务端的，
+				// 每个窗口的左栏都列着它；没看到它开跑的窗口，也就看不出它什么时候跑完
+				// （前端靠列表里 isStreaming 从 true 变 false 响「完成」，见 web/src/streaming-cues.ts）。
+				ClientSession.emitConversationsToAll();
 				break;
 			}
 			case "turn_start": {

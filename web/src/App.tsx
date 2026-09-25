@@ -83,6 +83,7 @@ import { recordModelUsage } from "./model-usage";
 import { loadSoundSettings, playSound, saveSoundSettings, type SoundKind, type SoundSettings } from "./sounds";
 import { assistantPlainText, loadTtsSettings, saveTtsSettings, speak, type TtsSettings } from "./tts";
 import { shouldSuppressNotify, currentPresence } from "./notify";
+import { cueConversations } from "./done-watch";
 import { useWideChat } from "./chat-width-settings";
 import { registerFilePreviewHost } from "./file-preview-bridge";
 import { projectNameFromCwd, useProjectTitle } from "./title-settings";
@@ -934,6 +935,12 @@ export function App() {
 		}
 	}, [chat.terminals, send]);
 
+	// done-any-chat: after a disconnect we don't know what ran meanwhile (a server restart ends every
+	// run), so the first list after reconnecting only syncs: no "done" for runs the restart killed.
+	useEffect(() => {
+		if (!chat.ready) prevStreamingMapRef.current = null;
+	}, [chat.ready]);
+
 	// Run start / end cues (streaming edge transitions).
 	// 按会话 id 独立跟踪状态跳变，彻底杜绝切换对话时将其他会话的状态误判为本会话的 start/done，
 	// 并在后台对话完成时及时提示（issue：切换对话误报完成、后台对话延迟到切换才提醒）。
@@ -943,7 +950,8 @@ export function App() {
 			prevStreamingMapRef.current,
 			activeId,
 			chat.state?.isStreaming ?? false,
-			chat.conversations,
+			// done-any-chat: subagents and history rows don't sound (web/src/done-watch.ts).
+			cueConversations(chat.conversations),
 			prevActiveIdRef.current,
 		);
 		prevStreamingMapRef.current = cues.nextMap;
@@ -973,7 +981,8 @@ export function App() {
 			// 后台对话完成（可能与其他会话同批）：逐条弹通知带标题；TTS 只播报一次，
 			// 且前台完成时让位给正文朗读，不叠加固定句。
 			for (const bg of cues.finishedConvs.filter((c) => !c.isActive)) {
-				const body = bg.title ? `${bg.title}：${t("notifyDoneBody")}` : t("notifyDoneBody");
+				// done-any-chat：带标题的整句（上游是「标题：通用句」拼接，英文里会出现全角冒号）。
+				const body = bg.title ? t("notifyDoneBodyChat", { title: bg.title }) : t("notifyDoneBody");
 				void notify(t("notifyDoneTitle"), body);
 			}
 			if (!activeFinished && tts.enabled && tts.announce && !shouldSuppressNotify(currentPresence())) {

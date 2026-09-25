@@ -35,6 +35,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | load-older-survives-snapshot | `local`        | `web/src/message-window.ts`, `use-chat.ts`, `tests/chat-pagination-test.mjs`                                                                   |
 | exchange-fold                | `local`        | `web/src/exchange-fold.ts`, `components/ExchangeFoldRow.tsx`, `MessageList.tsx`, `exchange-fold.css`, `i18n.tsx`, `locales/*.json`             |
 | exchange-digest              | `local`        | `server/exchange-digest.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `web/src/message-window.ts`, `exchange-fold.ts`, `MessageList.tsx` |
+| done-any-chat                | `local`        | `web/src/done-cues.ts`, `App.tsx`, `server/agent-service.ts`, `i18n.tsx`, `locales/*.json`                                                 |
 
 ---
 
@@ -1274,6 +1275,50 @@ index.mjs` 的轮询：对每条盯梢的运行无条件 `update()`，20 条 × 
 
 ---
 
+## done-any-chat
+
+**状态**：`local`
+**基线**：v0.94.1（接 server-owned-chats）
+
+**诉求**（用户 2026-09-24）：任何一条对话跑完都要听到提示，不只是正开着的那条。
+
+### 改法
+
+- `web/src/done-cues.ts`（纯函数）：
+  - `runEdge(prev, next)`：正开着的那条对话的开始/结束，只认**同一条对话自己的**变化。上游的 effect 只看
+    `state.isStreaming`，从一条在跑的对话切到一条闲着的，会误响一次「完成」。
+  - `runningSeen` / `finishedChats(prev, list, activeId)`：其余对话看左栏列表每行的 `isStreaming`，上一份
+    里在跑、这一份里不跑了就是跑完了。正开着的那条归 `runEdge`（不重复响）；子代理不算（父对话还在跑，
+    跑完自己会响；不然并行派几个子代理就响几次）；历史行、上一份里没有的对话不算；刚加载/刚重连
+    （`prev` 为 null）不算。
+- `App.tsx`：原来的开始/结束 effect 改用 `runEdge`（依赖加上 `conversationId`）。新 effect 看
+  `chat.conversations`：有对话跑完就响一次「完成」，每条（最多 3 条）发一条系统通知，正文带对话标题
+  （`notifyDoneBodyChat`）。断线（`chat.ready` 变 false）清空记录：服务端重启会结束所有 run，不能当成跑完了。
+- `server/agent-service.ts`（`ClientSession.onEvent`）：
+  - `agent_start`：`emitConversations()` → `ClientSession.emitConversationsToAll()`。server-owned-chats 之后对话表
+    是共享的，每个窗口都列着所有对话，但列表只推给订阅这条对话的那个会话（`emit()` 只把
+    `message_delta`/`tool_delta` 扩出去）。别的窗口（另开的窗口、另一台设备、上游刷新两次后留下的那一个）
+    看不到它开跑，也就看不出它跑完。
+  - 新增 `agent_settled`：同样推给所有窗口。`session.isStreaming`（SDK 的 `_isAgentRunActive`）要到这时才变回
+    false，agent_end 之后还有排队的追问、自动压缩。以前没人在这时推列表，「在跑」要等 agent_end 之后
+    800ms 那次刷新碰运气（收尾慢就还显示在跑）。
+- 文案：`notifyDoneBodyChat`（`i18n.tsx` en/zh + `locales/*.json` 8 种）；`sound.done.desc` 改成「任何一条对话里…」。
+
+### 回归
+
+- `tests/unit/done-cues.test.ts`：14 项。`runEdge`：同一条、换一条、没有快照。`finishedChats`：后台跑完、
+  正开着的那条、首份列表、新出现的、仍在跑/刚开跑/一直闲着、离开列表、子代理、历史行、一次跑完几条。
+- `tests/done-any-chat-test.mjs`（真服务端 + 两个浏览器上下文，零 token，AudioContext 换成记录器，按音符认
+  提示音）：窗口 A 在慢对话跑着时新开对话——不响；新对话答完响一次；窗口 B 后打开、从没订阅过慢对话；
+  慢对话跑完 A、B 各响一次（答完后约 10ms），不多响。共 14 项。修复前（29c8f29）失败 5 项：切走误响，
+  A 和 B 都没为后台对话响。`DONEANY_DEBUG=1` 打印列表推送、mock 请求和提示音时间线。
+  - 测试的数据目录是新的，上游的「同项目并行提醒」（`parallelReminderEnabled`，默认开）会在快对话的首条提问
+    后附一条「(System reminder …」，列出在跑的慢对话连同它的提问。mock 按对话自己的提问认对话时要跳过它。
+  - 快对话的回答分几段流式发（约 1.5 秒）。几毫秒就跑完的 run，页面快照来不及显示它在跑，正开着的那条
+    就不响（上游原来就这样，真实的 run 至少几秒）。
+
+---
+
 ## 已退役的补丁
 
 同步时删掉的补丁在这里留一笔，下次同步不用再查它们为什么没了。
@@ -1318,4 +1363,4 @@ index.mjs` 的轮询：对每条盯梢的运行无条件 `update()`，20 条 × 
     助手消息（fastfail 模型连不上），现在每条 prompt 只追加用户消息，数到 37 就停了（要 38）。
     exchange-digest 之前的 28fab8f 上失败得一模一样（2026-09-24 实测）。
   - 本 fork 自己的冒烟全过：`server-owned-chats-test`、`cross-client-session-test`、`chat-pagination-test`、
-    `exchange-fold-test`、`exchange-digest-test`（后加）。
+    `exchange-fold-test`、`exchange-digest-test`、`done-any-chat-test`（后加）。
