@@ -900,7 +900,6 @@ export function App() {
 	const prevActiveIdRef = useRef<string | null>(null);
 	const latestMessagesRef = useRef(chat.state?.messages);
 	latestMessagesRef.current = chat.state?.messages;
-	const notifiedDialogIds = useRef<Set<number>>(new Set());
 	const notifiedQuestionIds = useRef<Set<string>>(new Set());
 	const notifiedApprovalIds = useRef<Set<string>>(new Set());
 	// done-settle: "done" waits a moment in case the chat starts again (the next queued task),
@@ -933,6 +932,14 @@ export function App() {
 			if (!openDone && tts.enabled && tts.announce && !quiet) speak(t("ttsAnnounceDone"), tts);
 		}));
 	useEffect(() => () => doneCuesRef.current?.clear(), []);
+	/** per-chat-dialogs: pop-up ids already sounded, or already waiting when the page connected.
+	 *  null until the first chat list after (re)connecting arrives. */
+	const cuedDialogs = useRef<Set<number> | null>(null);
+	/** The chat list as it stood when the connection (re)started. It's stale, so it isn't that first list. */
+	const listAtConnect = useRef<unknown>(null);
+	/** The dialog on screen: the window's own (the goal wizard), else the open chat's oldest waiting
+	 *  pop-up. Another chat's pop-ups stay with that chat (per-chat-dialogs). */
+	const dialog = chat.dialog ?? chat.state?.dialog ?? null;
 	const lastErrorNotice = useRef(0);
 	// Remembers a terminal-view click made before the WebSocket is ready.
 	const terminalOpenRequested = useRef(false);
@@ -1003,27 +1010,47 @@ export function App() {
 		for (const c of cues.finishedConvs) doneCues().finished({ id: c.id, title: c.title, open: c.isActive });
 	}, [chat.state?.conversationId, chat.state?.isStreaming, chat.conversations, sound]);
 
-	// done-settle: after a disconnect we don't know what ran meanwhile, so nothing waiting cues.
+	// After a disconnect we don't know what happened meanwhile: nothing waiting cues (done-settle),
+	// and pop-ups already waiting when we reconnect don't sound (per-chat-dialogs).
 	useEffect(() => {
-		if (!chat.ready) doneCuesRef.current?.clear();
+		if (!chat.ready) {
+			doneCuesRef.current?.clear();
+			cuedDialogs.current = null;
+			listAtConnect.current = chat.conversations;
+		}
 	}, [chat.ready]);
 
 	// Questionnaire cue — each new dialog id + each new DSH question id.
 	// dialog = 扩展 select/confirm/input；question = ask_user_question 问卷。
-	// 按 ID 集合去重，彻底避免在不同对话间切换时重复响铃和弹通知。
+	// per-chat-dialogs: a pop-up sounds once, wherever it shows up first: in the left list (a
+	// chat in the background asked) or in the open chat's snapshot. The window's own dialogs (the
+	// goal wizard) still come as `dialog` messages. Pop-ups already waiting when the page connected
+	// don't sound. (Replaces upstream's notifiedDialogIds, which only saw the window's own dialog.)
 	useEffect(() => {
-		const id = chat.dialog?.id ?? null;
-		if (id !== null && !notifiedDialogIds.current.has(id)) {
-			notifiedDialogIds.current.add(id);
-			if (notifiedDialogIds.current.size > 64) {
-				const oldest = notifiedDialogIds.current.values().next().value;
-				if (oldest !== undefined) notifiedDialogIds.current.delete(oldest);
-			}
+		const id = dialog?.id;
+		const cued = cuedDialogs.current;
+		if (id === undefined || !cued || cued.has(id)) return;
+		cued.add(id);
+		playSound("question", sound);
+		void notify(t("notifyQuestionTitle"), t("notifyQuestionBody"));
+		if (tts.enabled && tts.announce && !shouldSuppressNotify(currentPresence())) speak(t("ttsAnnounceQuestion"), tts);
+	}, [dialog?.id, sound, tts, t]);
+	useEffect(() => {
+		if (chat.conversations === listAtConnect.current) return;
+		const ids = chat.conversations.flatMap((c) => (c.dialogId !== undefined ? [c.dialogId] : []));
+		const cued = cuedDialogs.current;
+		if (!cued) {
+			cuedDialogs.current = new Set(ids);
+			return;
+		}
+		const fresh = ids.filter((id) => !cued.has(id));
+		for (const id of fresh) cued.add(id);
+		if (fresh.length > 0) {
 			playSound("question", sound);
 			void notify(t("notifyQuestionTitle"), t("notifyQuestionBody"));
 			if (tts.enabled && tts.announce && !shouldSuppressNotify(currentPresence())) speak(t("ttsAnnounceQuestion"), tts);
 		}
-	}, [chat.dialog, sound, tts, t]);
+	}, [chat.conversations, sound, tts, t]);
 
 	useEffect(() => {
 		const qid = chat.question?.id ?? null;
@@ -1753,7 +1780,7 @@ export function App() {
 							{/* 扩展问卷：非模态内联面板，插在输入框上方，对话内容保持可见 */}
 							{/* 通用右键菜单（contextmenu.* 槽位）：各处的 onContextMenu 打开它。 */}
 							<ContextMenu onAction={(entry, target, value) => onUiAction(entry, value, target)} />
-							{chat.dialog && <Dialog dialog={chat.dialog} />}
+							{dialog && <Dialog dialog={dialog} />}
 							{/* 本地插件对话框（host.dialogs.*）：复用 .dialog-inline 样式，按钮 resolve 后清态 */}
 							{pluginDialog && (
 								<div className="dialog-inline" data-dialog-kind={pluginDialog.kind}>

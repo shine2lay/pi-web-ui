@@ -165,6 +165,7 @@ import {
 	presetShowsSkillCatalog,
 } from "./tool-manager.js";
 import { WebUIContext } from "./webui-context.js";
+import { ChatDialogs, chatUiContext } from "./chat-dialogs.js";
 import { DEFAULT_COMPACTION_RESERVE_TOKENS, effectiveSoftCap, softCapToReserve } from "./soft-cap.js";
 import { pruneContextHierarchically } from "./context-budget.js";
 import { decodeText } from "./text-sniff.js";
@@ -254,6 +255,7 @@ import type {
 	UiSubagentTemplate,
 	UiTldrLine,
 	UiTaskQueue,
+	UiDialog,
 } from "./protocol.js";
 import { buildQuestionIndex } from "./question-index.js";
 import { TASK_QUEUE_ENTRY_TYPE, taskQueueCommandLine, taskQueueFromEntries } from "./task-queue.js";
@@ -1839,6 +1841,9 @@ export interface Conversation {
 	/** 最近一次 LLM 响应定稿时的 Base Tokens（生效提示词 + 工具 Schema 占用）。
 	 *  用于在对话中途切换预设或开关工具时计算上下文增量补偿。 */
 	lastTurnBaseTokens?: number;
+	/** per-chat-dialogs：这条对话的扩展弹窗（select/confirm/input）在等回答的，最早的在前。
+	 *  只在看着这条对话的窗口里显示（快照的 UiState.dialog），左栏挂「?」。 */
+	dialogs: ChatDialogs;
 }
 
 /** 轨迹事件 payload 封顶（可直接广播/持久化，不撑爆 storage.json）。 */
@@ -3504,6 +3509,8 @@ export class ClientSession {
 	private emittedTldr: UiTldrLine[] | null = null;
 	/** 上一次发出去的任务队列（引用）：delta 只在它变了时带 `taskQueue`。 */
 	private emittedTaskQueue: UiTaskQueue | null = null;
+	/** 上一次发出去的弹窗（引用）：delta 只在它变了时带 `dialog`。 */
+	private emittedDialog: UiDialog | null = null;
 	/** switch-cache：这次切换客户端报上来的缓存窗口。只在 switchSession / switchConversation
 	 *  进行中有值（它们的 finally 清掉），由目标对话的第一份整份快照用掉（resumeWindow）。 */
 	private switchHave: CachedWindow | null = null;
@@ -4220,7 +4227,7 @@ export class ClientSession {
 
 	/** Wrap a fresh runtime as a new conversation record. */
 	private makeConversation(runtime: AgentSessionRuntime, id: string, terminals: TerminalManager): Conversation {
-		return {
+		const conv: Conversation = {
 			id,
 			title: conversationTitle(runtime.session),
 			isSubagent: false,
@@ -4262,7 +4269,10 @@ export class ClientSession {
 			toolStartTimes: new Map(),
 			toolWatchdogs: new Map(),
 			workspaceSnapshots: [],
+			// 弹窗多了或少了 → 看着它的窗口补快照，所有窗口的左栏重推。
+			dialogs: new ChatDialogs(() => ClientSession.chatDialogsChanged(conv)),
 		};
+		return conv;
 	}
 
 	/** Summaries of conversations currently streaming — captured at shutdown
@@ -4545,6 +4555,16 @@ export class ClientSession {
 		}
 	}
 
+	/** per-chat-dialogs：某条对话的扩展弹窗多了或少了。正看着它的窗口马上补一份快照（弹窗随
+	 *  UiState.dialog 走），所有窗口的左栏重推（「?」角标）。没 socket 的会话跳过：重连时整份重推。 */
+	private static chatDialogsChanged(conv: Conversation): void {
+		for (const cs of ClientSession.liveSessions) {
+			if (cs.disposed || cs.sinkCount() === 0) continue;
+			if (cs.activeId === conv.id) cs.flushSnapshot();
+			cs.emitConversations();
+		}
+	}
+
 	/** 广播给**所有**在线客户端（不管它在看哪条对话）。目前只用于问卷：
 	 *  问卷是阻塞整个 agent 循环的，漏给一台就可能永远等下去，所以不走
 	 *  fanOutToViewers 那套 activeId 过滤。用 emitLocal 避免再次扇出成环。 */
@@ -4560,9 +4580,12 @@ export class ClientSession {
 		const conv = this.conv;
 		conv.unsubscribe?.();
 		conv.session = conv.runtime.session;
+		// per-chat-dialogs：换了会话（/new、/resume、强制重建）→ 旧会话问的弹窗作废。
+		conv.dialogs.cancelExcept(conv.session);
 		await conv.session.bindExtensions({
 			mode: "rpc",
-			uiContext: this.webUi,
+			// 弹窗（select/confirm/input）归这条对话，其余 ctx.ui 照旧给本窗口（见 chat-dialogs.ts）。
+			uiContext: chatUiContext(this.webUi, conv.dialogs, conv.session),
 			onError: this.makeExtensionErrorReporter(
 				conv.isEphemeral ? { text: `临时对话 ${conv.id}：`, textEn: `Ephemeral chat ${conv.id}: ` } : undefined,
 			),
@@ -5841,6 +5864,9 @@ export class ClientSession {
 		const taskQueue = this.taskQueueOf(this.conv);
 		const taskQueueChanged = taskQueue !== this.emittedTaskQueue;
 		this.emittedTaskQueue = taskQueue;
+		const dialog = this.conv.dialogs.current;
+		const dialogChanged = dialog !== this.emittedDialog;
+		this.emittedDialog = dialog;
 		if (incremental && prev) {
 			const baseRev = this.emittedRev;
 			this.emittedMessages = cur;
@@ -5863,6 +5889,8 @@ export class ClientSession {
 					...(tldrChanged ? { tldr } : {}),
 					// 任务队列同理（taskQueueOf 在队列没变时返回同一个对象）。
 					...(taskQueueChanged ? { taskQueue } : {}),
+					// 弹窗同理（没变时 current 是同一个对象）。
+					...(dialogChanged ? { dialog } : {}),
 				},
 			});
 		} else {
@@ -5892,6 +5920,8 @@ export class ClientSession {
 					tldr,
 					// 任务队列同理：切对话时换成这一条的。
 					taskQueue,
+					// 弹窗也是（没有就是 null）：切回来、刷新都靠这里把它带回来。
+					dialog,
 				},
 			});
 		}
@@ -6005,6 +6035,8 @@ export class ClientSession {
 
 	/** Resolve a browser-bridged dialog (select/confirm/input) for this session. */
 	resolveDialog(id: number, value: string | boolean | null): void {
+		// per-chat-dialogs：先找对话的弹窗（哪个窗口看着那条对话都能答），不是的话才是本窗口自己的（目标向导）。
+		for (const conv of this.convs.values()) if (conv.dialogs.answer(id, value)) return;
 		this.webUi.resolveDialog(id, value);
 	}
 
@@ -8957,6 +8989,7 @@ export class ClientSession {
 		try {
 			conv.unsubscribe?.();
 			conv.unsubscribe = undefined;
+			conv.dialogs.cancelAll();
 			this.clearAllToolWatchdogs(conv);
 			conv.toolStartTimes.clear();
 			disposeEvalSession(conv.id);
@@ -9507,6 +9540,7 @@ export class ClientSession {
 			// ignore
 		}
 		this.convs.delete(id);
+		conv.dialogs.cancelAll();
 		this.clearAllToolWatchdogs(conv);
 		// 关对话 → 连它的 eval 内核（Python/Node 子进程 + 临时沙箱目录）一起回收：
 		// 这些进程是 detached 进程组，父进程退出不会自动带走它们。
@@ -9963,6 +9997,8 @@ export class ClientSession {
 					const pq = this.getPendingQuestionForConv(conv.id);
 					return pq ? { hasQuestion: true as const, questionId: pq.id, questionTitle: pq.title } : {};
 				})(),
+				// per-chat-dialogs：扩展弹窗在等你 → 左栏同样挂「?」。
+				...(conv.dialogs.current ? { dialogId: conv.dialogs.current.id } : {}),
 				parentId: conv.parentId,
 				...(conv.forkFrom ? { forkFrom: conv.forkFrom } : {}),
 				sessionPath,
@@ -12343,6 +12379,7 @@ export class ClientSession {
 			// 逐个对话回收 eval 内核；下面的兜底再清一次表（含已 delete 的残留）。
 			disposeEvalSession(conv.id);
 			conv.unsubscribe?.();
+			conv.dialogs.cancelAll();
 			try {
 				await conv.runtime.dispose();
 			} catch {

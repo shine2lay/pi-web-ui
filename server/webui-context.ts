@@ -12,6 +12,13 @@ import type { ServerMessage } from "./protocol.js";
 
 const WIDGET_WIDTH = 80;
 
+/** Every browser dialog's id, window-level (below) and per-chat (chat-dialogs.ts) alike, comes from
+ *  this one counter: the page answers by id alone, so no two waiting dialogs may share one. */
+let lastDialogId = 0;
+export function nextDialogId(): number {
+	return ++lastDialogId;
+}
+
 /** ANSI 转义序列（CSI + OSC 两类）：扩展 widget/status 文本里常混有 TUI 颜色码
  *  （如 pi-powerline-footer），浏览器会把它渲染成字面 `[38;5;244m` 乱码（issue #16）。 */
 const ANSI_RE = /\[[0-9:;<=>?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g;
@@ -237,8 +244,8 @@ export class WebUIContext {
 	}
 
 	// -- dialogs (select/confirm/input bridged to the browser) ---------------
+	// 对话自己的扩展弹窗不走这里（per-chat-dialogs，见 chat-dialogs.ts）；这里只剩窗口自己的（目标向导）。
 
-	private dialogSeq = 0;
 	private pendingDialogs = new Map<number, (value: string | boolean | null) => void>();
 
 	select = (title: string, options: string[]): Promise<string | undefined> =>
@@ -256,7 +263,7 @@ export class WebUIContext {
 		// headless：没人能应答，立刻按「取消」结束（与 cancelPendingDialogs 同值）。
 		if (this.headless) return Promise.resolve(null);
 		return new Promise((resolve) => {
-			const id = ++this.dialogSeq;
+			const id = nextDialogId();
 			this.pendingDialogs.set(id, resolve);
 			this.emit({ type: "dialog", id, kind, title, args });
 		});
