@@ -4096,7 +4096,9 @@ export class ClientSession {
 						? [makeDelegateTaskTool(withSubagentOwner(this.subagentHost, ownerId))]
 						: [makeDelegateTaskTool(this.subagentHost)]),
 					// 内置标记只读查询工具（todo/svc 状态查询，写操作走内联标记）。
-					makeMarkersListTool(() => this.activeId, this.markerSvc),
+					// todo-list-owner：读本 runtime 所属对话（ownerId，标记就写在 conv.id 下），不是建它的
+					// 那个窗口此刻正开着的对话——对话在后台跑时两者不同，以前会拿到前台对话的任务。
+					makeMarkersListTool(() => ownerId ?? this.activeId, this.markerSvc),
 					// 结构化任务计划更新（Plan Mode / Step State Machine）。
 					makePlanUpdateTool(
 						this.planManager,
