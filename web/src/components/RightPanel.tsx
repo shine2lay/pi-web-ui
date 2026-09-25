@@ -14,7 +14,8 @@ import {
 	FiPlus,
 	FiX,
 } from "react-icons/fi";
-import type { ClientMessage, FileListing, UiPluginInfo } from "../types";
+import type { ClientMessage, FileListing, UiPluginInfo, UiTldrLine } from "../types";
+import { TldrPanel } from "./TldrPanel";
 import { useT } from "../i18n";
 import { useAppField } from "../app-globals";
 import { downloadFile, DOWNLOAD_FILE_NOT_FOUND } from "../download";
@@ -63,6 +64,13 @@ interface FileMenuCtx {
 /** 内置「文件」tab 的 tab id（SlotTabs 拿它做 localStorage 选中态 key）。
  *  刻意不带冒号：插件 tab 的 id 是 `<pluginId>:<itemId>`、一定含冒号，两者永不撞车。 */
 const FILES_TAB_ID = "files";
+/** 内置「TL;DR」tab（tldr-panel）的 tab id，同样不带冒号。 */
+const TLDR_TAB_ID = "tldr";
+/** 内置 tab id → 它在 `rightpanel.tabs` 槽位里的条目 id（排序 / 隐藏走槽位）。 */
+const HOST_TAB_SLOT_ID: Record<string, string> = {
+	[FILES_TAB_ID]: "host:right-files",
+	[TLDR_TAB_ID]: "host:right-tldr",
+};
 
 /** 未接线时的稳定回退（空插件清单 / 空发送器）：避免每次渲染新建引用喂给下游比较。 */
 const EMPTY_PLUGINS: UiPluginInfo[] = [];
@@ -104,6 +112,8 @@ interface RightPanelProps {
 	onPreview: (path: string, name: string) => void;
 	/** Show a transient toast (download errors etc.). */
 	onNotice: (level: "info" | "warning" | "error", text: string) => void;
+	/** 当前对话的 TL;DR 行（UiState.tldr，tldr-panel）。delta 不带时引用不变，memo 照样命中。 */
+	tldr?: UiTldrLine[];
 	/** Desktop: show the collapse button (mobile drawers close via the topbar). */
 	collapsible?: boolean;
 	/** Fired when the user clicks the collapse button. */
@@ -133,6 +143,7 @@ export const RightPanel = memo(function RightPanel({
 	onAttach,
 	onPreview,
 	onNotice,
+	tldr,
 	collapsible,
 	onToggleCollapse,
 	uiRightPanelTabs,
@@ -897,12 +908,13 @@ export const RightPanel = memo(function RightPanel({
 	 *  「设置里看到的 == 界面上看到的」这条 #146 的核心不变量当场破产。
 	 *  全藏光时右栏就是空的：那是用户/插件的明确意愿，布局页的「恢复」一键可退回。 */
 	const filesTabHidden = (uiRightPanelTabs ?? []).some((e) => e.id === "host:right-files" && e.hidden);
+	const tldrTabHidden = (uiRightPanelTabs ?? []).some((e) => e.id === "host:right-tldr" && e.hidden);
 	/** tab 顺序统一走 slot（含文件 tab 的位置，不再固定第一；未接线时保持旧顺序）。 */
 	const orderTabs = (tabs: SlotTab[]): SlotTab[] => {
 		const visible = (uiRightPanelTabs ?? []).filter((e) => !e.hidden);
 		if (visible.length === 0) return tabs;
 		const rank = new Map(visible.map((e, i) => [e.id, i] as const));
-		const key = (id: string) => rank.get(id === FILES_TAB_ID ? "host:right-files" : id) ?? 1e9;
+		const key = (id: string) => rank.get(HOST_TAB_SLOT_ID[id] ?? id) ?? 1e9;
 		return [...tabs].sort((a, b) => key(a.id) - key(b.id));
 	};
 
@@ -1267,6 +1279,7 @@ export const RightPanel = memo(function RightPanel({
 										),
 									},
 								]),
+						...(tldrTabHidden ? [] : [{ id: TLDR_TAB_ID, label: t("tldrTab"), element: <TldrPanel lines={tldr} /> }]),
 						...pluginTabs,
 					])}
 				/>

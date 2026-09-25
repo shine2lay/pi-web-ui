@@ -176,8 +176,10 @@ import type {
 	UiServiceInfo,
 	UiState,
 	UiSubagentTemplate,
+	UiTldrLine,
 } from "./protocol.js";
 import { buildQuestionIndex } from "./question-index.js";
+import { tldrLinesFromEntries } from "./tldr-lines.js";
 import { digestsBefore, snapshotDigests, straddleDigest } from "./exchange-digest.js";
 import { launchOrigin, toServiceInfo } from "./launch-origin.js";
 import {
@@ -1005,6 +1007,9 @@ export interface Conversation {
 	uiMessageCache: Map<string, UiMessage>;
 	lastMessagesSig: string;
 	lastMessagesArray: UiMessage[];
+	/** TL;DR 行的缓存（tldr-panel，见 ClientSession.tldrOf）：key = 会话 + 叶子，树没动就不重扫分支；
+	 *  sig = 行 id 串，行没变就沿用同一个数组引用（emitSnapshotNow 靠引用判断要不要随 delta 重发）。 */
+	tldrCache?: { key: string; sig: string; lines: UiTldrLine[] };
 	/** Actual queued prompt TEXTS (steer = 插队, followUp = 排队) — the UI
 	 *  renders them as pending bubbles in the real message list. */
 	queueSteering: string[];
@@ -2322,6 +2327,8 @@ export class ClientSession {
 	private emittedConvId: string | null = null;
 	/** snapRev value at which emittedMessages was captured. */
 	private emittedRev = 0;
+	/** 上一次发出去的 TL;DR 列表（引用）：delta 只在它变了时带 `tldr`。 */
+	private emittedTldr: UiTldrLine[] | null = null;
 	/**
 	 * Per-conversation serialization caches (stable message ids, UiMessage
 	 * object cache, message-array signature, queue counts) live inside each
@@ -4159,6 +4166,24 @@ export class ClientSession {
 		return this.messagesOf(this.conv);
 	}
 
+	/** 这条对话的 TL;DR 行（tldr-panel）：当前分支上 pi-tldr 存的 `tldr` 条目。
+	 *  快照流式期间 60ms 一条，所以只在会话树动了（叶子变了）时才重扫分支；行没变就返回
+	 *  同一个数组。缓存挂在 Conversation 上：同一条对话的所有窗口共用。 */
+	private tldrOf(conv: Conversation): UiTldrLine[] {
+		try {
+			const sm = conv.session.sessionManager;
+			const key = `${sm.getSessionId()}\u0001${sm.getLeafId() ?? ""}`;
+			const c = conv.tldrCache;
+			if (c && c.key === key) return c.lines;
+			const lines = tldrLinesFromEntries(sm.getBranch());
+			const sig = lines.map((l) => l.id).join("\u0001");
+			conv.tldrCache = { key, sig, lines: c && c.sig === sig ? c.lines : lines };
+			return conv.tldrCache.lines;
+		} catch {
+			return conv.tldrCache?.lines ?? [];
+		}
+	}
+
 	/** currentMessages 的按对话版本（插件快照读非活跃对话用）。 */
 	private messagesOf(conv: Conversation): UiMessage[] {
 		// 一次扫描同时收齐「当前转写里的全部缓存键」（live 集合，供
@@ -4321,6 +4346,9 @@ export class ClientSession {
 			}
 		}
 		const rev = ++this.snapRev;
+		const tldr = this.tldrOf(this.conv);
+		const tldrChanged = tldr !== this.emittedTldr;
+		this.emittedTldr = tldr;
 		if (incremental && prev) {
 			const baseRev = this.emittedRev;
 			this.emittedMessages = cur;
@@ -4339,6 +4367,8 @@ export class ClientSession {
 					// 十几 KB 的索引跟着走就是纯浪费。缺省时客户端沿用上一份。
 					// 窗口起点不跟 delta 发：追加只长末尾，客户端的 start 不变。
 					...(appended.some((m) => m.role === "user") ? { questionIndex: buildQuestionIndex(cur) } : {}),
+					// TL;DR 行同理：只在列表变了时带（tldrOf 在行没变时返回同一个数组）。
+					...(tldrChanged ? { tldr } : {}),
 				},
 			});
 		} else {
@@ -4359,6 +4389,8 @@ export class ClientSession {
 					// 窗口之前最近几轮的摘要（exchange-digest）：窗口常常全落在最后一轮里，
 					// 没有它页面上就只剩一行。delta 不带：窗口前面的历史只随整份快照变。
 					...(EXCHANGE_DIGESTS > 0 ? { exchanges: snapshotDigests(cur, windowStart, EXCHANGE_DIGESTS) } : {}),
+					// 整份快照总带 TL;DR（没有就是 []）：切对话时要把上一条的行换掉。
+					tldr,
 				},
 			});
 		}

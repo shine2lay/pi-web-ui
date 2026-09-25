@@ -144,6 +144,18 @@ export interface UiExchangeDigest {
 	status: "done" | "error" | "aborted";
 }
 
+/** TL;DR 的一行（tldr-panel）：pi-tldr 扩展存在会话里的 `tldr` 自定义条目。
+ *  agent 在长任务里边做边写的一句大白话进展（「在查登录的问题」「找到原因了」）。 */
+export interface UiTldrLine {
+	/** 会话条目 id（稳定，作 React key）。 */
+	id: string;
+	text: string;
+	/** 需要用户出手或拍板：面板里高亮。 */
+	needsYou: boolean;
+	/** 写下这一行的时间（ms）。 */
+	ts: number;
+}
+
 export interface UiState {
 	clientId: string;
 	cwd: string;
@@ -182,6 +194,10 @@ export interface UiState {
 	 *  messagesStart。只随整份快照发（delta 只往后追加，窗口前面的历史不会变）。
 	 *  缺省 = 服务端不发摘要（老服务端 / DSH / PI_WEB_EXCHANGE_DIGESTS=0），前端退回「载入更早的消息」。 */
 	exchanges?: UiExchangeDigest[];
+	/** TL;DR 行（tldr-panel）：当前分支上全部 `tldr` 条目，按时间升序（右栏倒过来显示）。
+	 *  整份快照总带（没有就是空数组）；snapshot_delta 只在列表变了时带，缺省 = 沿用上一份。
+	 *  压缩不影响（条目还在分支上）；改写分叉后只剩新分支上的行。DSH 引擎不填。 */
+	tldr?: UiTldrLine[];
 	/**
 	 * Live partial assistant message while a run is streaming. The SDK keeps the
 	 * in-progress message in agent.state.streamingMessage — it only enters

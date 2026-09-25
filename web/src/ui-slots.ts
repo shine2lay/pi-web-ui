@@ -715,7 +715,7 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		order: 30,
 	},
 
-	// ---- 右栏 tab（今天只有文件树） ----
+	// ---- 右栏 tab（文件树 + TL;DR） ----
 	{
 		id: "host:right-files",
 		slot: "rightpanel.tabs",
@@ -724,6 +724,16 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		kind: "view",
 		view: "files",
 		order: 10,
+	},
+	// TL;DR（tldr-panel）：agent 长任务里边做边写的大白话进展，最新的在上。
+	{
+		id: "host:right-tldr",
+		slot: "rightpanel.tabs",
+		labelKey: "tldrTab",
+		icon: "activity",
+		kind: "view",
+		view: "tldr",
+		order: 20,
 	},
 
 	// ---- 左栏会话右键菜单 ----
