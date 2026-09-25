@@ -44,6 +44,8 @@ interface FakeConv {
 	isSubagent?: boolean;
 	parentId?: string;
 	session: { sessionFile?: string; isStreaming: boolean; getSessionStats(): { totalMessages: number } };
+	// per-chat-dialogs：emitConversations 给有弹窗在等的行标 dialogId。本用例没有弹窗。
+	dialogs: { current: { id: number } | null };
 }
 
 interface FakeSession {
@@ -76,6 +78,7 @@ function conv(id: string, opts: Partial<FakeConv> & { messages?: number; streami
 			isStreaming: opts.streaming ?? false,
 			getSessionStats: () => ({ totalMessages: messages }),
 		},
+		dialogs: { current: null },
 	};
 }
 

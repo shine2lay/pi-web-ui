@@ -44,6 +44,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | switch-cache                 | `local`        | `web/src/chat-cache.ts`, `server/window-hash.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `use-chat.ts`, `App.tsx`, `SwitchOverlay.tsx` |
 | tldr-collapse                | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/components/TldrPanel.tsx`, `RightPanel.tsx`, `App.tsx`, i18n   |
 | queue-panel                  | `local`        | `server/task-queue.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TaskQueuePanel.tsx`, `RightPanel.tsx`, `done-cues.ts`, i18n     |
+| per-chat-dialogs             | `local`        | `server/chat-dialogs.ts`, `webui-context.ts`, `agent-service.ts`, `protocol.ts`, `web/src/App.tsx`, `LeftPanel.tsx`, i18n                      |
 
 ---
 
@@ -1670,6 +1671,81 @@ data: { v: 1, ids, collapsed } }`。跟行本身一样随会话走：刷新、�
 
 ---
 
+## per-chat-dialogs
+
+**状态**：`local`
+**基线**：v0.94.1
+
+**诉求**（用户 2026-09-25）：「Make sure tasks are per agent not shared」。核对结果：队列本身早就是每条对话一份（pi-queue 的
+`queue` 条目写在各自的会话里，只有这条对话的 agent 会去做，队列 tab 只显示当前对话的）。不是每条对话一份的
+是扩展弹窗（`ctx.ui.select / confirm / input`，pi-queue 批准计划就用它）：弹窗挂在浏览器窗口上，不挂在对话上——
+
+- 对话 A 在后台问，弹窗出现在正看着的对话 B 里，也不说是 A 的；
+- 两条对话同时问，后一个顶掉前一个，前一个的 agent 永远等下去；
+- 刷新页面，等着的弹窗就没了。
+
+用户的选择：「只在自己的对话里」——弹窗只在看着那条对话时出现，切回来、刷新都还在；这期间左栏那一行挂「?」；
+agent 一直等到你回答。
+
+### 改法
+
+- `server/chat-dialogs.ts`：
+  - `ChatDialogs`：一条对话在等回答的弹窗，最早的在前；`current` 是最早那个（没变时是同一个对象，delta 按引用比）。
+    `open(kind, title, args, owner, opts)` 返回 Promise；`answer(id, value)` 按 id 回答（不是这条对话的 id 返回
+    false）；pi 的 `timeout` / `signal` 到了以「取消」（null）结束；`cancelExcept(owner)`（换了会话：旧会话问的作废）、
+    `cancelAll()`（关对话、强制重建、释放）。多了少了调 `onChange`（抛错不影响扩展）。
+  - `chatUiContext(base, dialogs, owner)`：给扩展的 `ctx.ui`。select / confirm / input 走这条对话的 `ChatDialogs`，
+    返回值照 pi 声明的收窄（select 只返回选项之一，confirm 只有 `true` 算是，取消 = `undefined` / `false`）；
+    其余（notify、widget、status……）照旧交给窗口的 `WebUIContext`（绑定 this）。
+- `server/webui-context.ts`：`nextDialogId()`。窗口自己的弹窗（目标向导）和各对话的弹窗共用一个计数器：页面只按
+  id 回答，等着的弹窗 id 不能撞。
+- `server/agent-service.ts`：
+  - `Conversation.dialogs`：`makeConversation` 里建，`onChange` → `ClientSession.chatDialogsChanged(conv)`：看着这条
+    对话的窗口立即补快照，所有窗口重推左栏。
+  - `bindExtensions` 的 `uiContext` 换成 `chatUiContext(this.webUi, conv.dialogs, conv.session)`；绑之前先
+    `conv.dialogs.cancelExcept(conv.session)`。
+  - 快照 `UiState.dialog`：整份快照总带（没有就是 null，切回来、刷新都靠它），delta 只在对象换了时带。
+  - `resolveDialog(id, value)`：先在所有对话的弹窗里找（哪个窗口看着那条对话都能答），找不到才给窗口自己的。
+  - 左栏：`ConversationSummary.dialogId`（有弹窗在等，是最早那个的 id）。
+  - 关对话、`forceResetConversation`、释放时 `cancelAll()`。
+  - 目标向导（`goal-service.ts`）不变：它用窗口自己的 `webUi`，弹窗还是 `dialog` 消息。
+- `server/protocol.ts`：`UiDialog`（`id`、`kind`、`title`、`args`）；`UiState.dialog?`；`ConversationSummary.dialogId?`。
+  协议版本 21 → 22（`server/protocol-version.ts` 和 `web/src/protocol-version.ts`）：老页面配新服务端看不到这些
+  弹窗，对话就一直等，所以要横幅提醒刷新。
+- `web/src/App.tsx`：
+  - 显示的弹窗 = `chat.dialog`（窗口自己的：目标向导）?? `chat.state?.dialog`（打开的对话最早的那个）。
+  - 提示音：一个弹窗只响一次，在它先出现的地方（左栏的 `dialogId`：后台对话问的；或打开的对话的快照）。
+    连上时已经在等的不响：`cuedDialogs` 在连上后的第一份新列表里先记下它们；连上那一刻手里的旧列表
+    （`listAtConnect`）不算。
+- `web/src/components/LeftPanel.tsx`：`dialogId` 也挂「?」（提示 `waitingDialogBadge`：打开这条对话就能看到）。
+  「?」从标题后面挪到前面：`.session-title` 是单行省略号，标题一长（还没起标题时就是第一句话）「?」
+  就被吃掉。上游问卷的「?」一直就是这样，一起挪了（`.question-badge` 的 `margin-right` 本来就是给前置用的）。
+- 文案：`waitingDialogBadge`（`i18n.tsx` + `locales/*.json` 8 种）。
+
+### 回归
+
+- `tests/unit/chat-dialogs.test.ts`（10 项）：最早的在前、显示最早的、没变时是同一个对象；按 id 答（后问的可以先答，
+  别的 id 不动）；id 跨对话不重；超时、abort（已经 abort 的不开）；换会话作废旧的、关对话全清，没东西可清时
+  不推；`onChange` 抛错不影响扩展；`chatUiContext` 分流（select / confirm / input 给对话，其余给窗口）、按 pi
+  声明收窄返回值、透传 timeout / signal。
+- `tests/unit/recent-chats.test.ts`：假对话加上 `dialogs`。
+- `tests/per-chat-dialogs-test.mjs`（35 项，不花 token）：真 pi-queue（`PI_QUEUE_PKG`）+ 模拟模型，两个窗口：
+  - 窗口 1 在对话 B（新对话）时，A 调 `queue_add`：B 里不出弹窗，A 那行挂「?」且在标题框里看得见（没被
+    省略号吃掉），提示音响一次。
+  - B 也调：B 里是 B 的弹窗（不是 A 的），再响一次，B 那行也挂「?」。
+  - 窗口 2 打开 A，看到 A 的弹窗（只有一个）；窗口 1 切到 A：A 的弹窗，不再响；刷新后还在，也不响。
+  - 窗口 2 批准 A：两个窗口里都关掉，A 接着跑完；A 的「?」没了、B 的还在；A 的队列只有 A 的任务。
+  - 回到 B：B 的弹窗还在、B 的队列还空；批准后 B 跑完，B 的队列只有 B 的任务，A 的队列不变；左栏没有
+    「?」了；窗口 2 一次没响（两个弹窗都是它连上之前就在等的）。
+  - 模拟模型认提问时跳过服务端的「同项目并行提醒」：A 在跑时，B 的提问后面跟着一条
+    `(System reminder: 1 other run(s) […DIALOG-A…]`。
+  - `DIALOGS_DEBUG=1` 打印模拟模型收到的请求；`DIALOGS_SHOT=/tmp/x.png` 另存 `-waiting` / `-own` 两张截图。
+- 反证（2026-09-25）：同一个 E2E 在改动前的构建（3869592）上挂 10 项：A 的弹窗出现在 B 里、左栏没有「?」；
+  B 的弹窗顶掉 A 的；窗口 2 看不到 A 的弹窗；刷新后 A 的弹窗没了；批准 A 时找不到按钮（A 永远在等）。
+  「?」还在标题后面的构建上，只挂「长标题不挡住它」那一项。
+
+---
+
 ## 已退役的补丁
 
 同步时删掉的补丁在这里留一笔，下次同步不用再查它们为什么没了。
@@ -1719,4 +1795,4 @@ data: { v: 1, ids, collapsed } }`。跟行本身一样随会话走：刷新、�
     queue-panel 引起的（`Dialog.tsx` 只改了确认框的正文）；为了不再花 token，没在改动前的构建上复跑。
   - 本 fork 自己的冒烟全过：`server-owned-chats-test`、`cross-client-session-test`、`chat-pagination-test`、
     `exchange-fold-test`、`exchange-digest-test`、`done-any-chat-test`、`todo-list-owner-test`、`single-load-test`、
-    `tldr-panel-test`、`switch-cache-test`、`queue-panel-test`（后加）。
+    `tldr-panel-test`、`switch-cache-test`、`queue-panel-test`、`per-chat-dialogs-test`（后加）。

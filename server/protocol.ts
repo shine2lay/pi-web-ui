@@ -201,6 +201,15 @@ export interface UiTaskQueue {
 	tasks: UiTaskQueueTask[];
 }
 
+/** 扩展弹窗（ctx.ui.select / confirm / input）。页面用 dialog_response 按 id 回答，null = 取消。 */
+export interface UiDialog {
+	id: number;
+	kind: "select" | "confirm" | "input";
+	title: string;
+	/** select：[选项数组]；confirm：[正文]；input：[占位文字]。 */
+	args: unknown[];
+}
+
 /** switch-cache：客户端手里已经有的一截消息（上次看这条对话时的窗口）。
  *
  *  切回一条看过的对话时随 `switch_session` / `switch_conversation` 报上来：消息
@@ -259,6 +268,10 @@ export interface UiState {
 	/** 任务队列（queue-panel）：整份快照总带；snapshot_delta 只在队列变了时带，缺省 = 沿用上一份。
 	 *  改写分叉后只剩新分支上的队列（和 TL;DR 一样沿分支重放）。DSH 引擎不填。 */
 	taskQueue?: UiTaskQueue;
+	/** per-chat-dialogs：这条对话最早在等回答的扩展弹窗。弹窗属于对话不属于窗口：只在看着这条对话时
+	 *  显示，切回来、刷新都还在，哪个窗口都能答。整份快照总带（没有就是 null）；snapshot_delta 只在
+	 *  变了时带，缺省 = 沿用上一份。窗口自己的弹窗（目标向导）仍走 `dialog` 消息。DSH 引擎不填。 */
+	dialog?: UiDialog | null;
 	/**
 	 * Live partial assistant message while a run is streaming. The SDK keeps the
 	 * in-progress message in agent.state.streamingMessage — it only enters
@@ -1961,6 +1974,9 @@ export interface ConversationSummary {
 	questionId?: string;
 	/** 等答复问卷的简短标题/题目（首题 header 或 question 文本），供横幅与列表展示。 */
 	questionTitle?: string;
+	/** per-chat-dialogs：这条对话有扩展弹窗在等你（左栏挂「?」），是最早那个的 id。
+	 *  页面用它给每个弹窗只响一次提示音（后台对话问的时候响，切过去看到它时不再响）。 */
+	dialogId?: number;
 	/** 这条对话的转录文件路径（recent-chats 补丁）。左栏「最近对话」用它做
 	 *  **稳定键**：运行时被释放后，同一条对话仍以 live:false 的行留在列表里。
 	 *  会话还没落盘时缺省。 */

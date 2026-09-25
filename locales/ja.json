@@ -186,6 +186,7 @@
 		"takeoverConversation": "このページに引き継ぐ",
 		"takeoverHasQuestion": "回答待ちの質問あり — クリックでここで回答",
 		"waitingQuestionBadge": "回答待ちの質問 — クリックで表示",
+		"waitingDialogBadge": "ポップアップが回答待ち — このチャットを開くと表示されます",
 		"recentChats": "最近のチャット",
 		"waitingForYou": "完了 · 確認待ち",
 		"removeFromRecent": "最近のチャットから削除（履歴には残ります）",

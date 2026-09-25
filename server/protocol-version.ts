@@ -10,4 +10,6 @@
  */
 // 21: chat-window-pagination — 快照只带最新一截消息（messagesStart/questionIndex，
 //     load_older/older_messages）。老页面配新服务端会静默只看到 100 条历史。
-export const PROTOCOL_VERSION = 21;
+// 22: per-chat-dialogs — 对话的扩展弹窗随快照走（UiState.dialog），不再发 `dialog` 消息。
+//     老页面配新服务端看不到这些弹窗，对话就一直等。
+export const PROTOCOL_VERSION = 22;

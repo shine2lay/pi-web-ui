@@ -186,6 +186,7 @@
 		"takeoverConversation": "이 페이지로 가져오기",
 		"takeoverHasQuestion": "대기 중인 질문 있음 — 클릭하여 여기서 답변",
 		"waitingQuestionBadge": "대기 중인 질문 — 클릭하여 보기",
+		"waitingDialogBadge": "답변을 기다리는 팝업 — 이 채팅을 열면 볼 수 있습니다",
 		"recentChats": "최근 대화",
 		"waitingForYou": "완료 · 확인 대기 중",
 		"removeFromRecent": "최근 대화에서 제거(기록에는 남음)",

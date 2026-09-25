@@ -869,6 +869,15 @@ export const LeftPanel = memo(function LeftPanel({
 														/>
 													) : (
 														<span className="session-title">
+															{/* per-chat-dialogs：问卷或扩展弹窗在等你 →「?」。放在标题前面：放后面会被长标题的省略号吃掉。 */}
+															{(c.hasQuestion || c.dialogId !== undefined) && (
+																<span
+																	className="question-badge"
+																	title={t(c.hasQuestion ? "waitingQuestionBadge" : "waitingDialogBadge")}
+																>
+																	?
+																</span>
+															)}
 															{c.isSubagent && <span className="subagent-badge">{t("subagentBadge")}</span>}
 															{c.agentPreset && (
 																<span className="preset-badge" title={c.agentPreset}>
@@ -878,11 +887,6 @@ export const LeftPanel = memo(function LeftPanel({
 															{c.title}
 															{c.error && (
 																<span className="conv-error-badge" title={t("convErrorBadge", { error: c.error })} />
-															)}
-															{c.hasQuestion && (
-																<span className="question-badge" title={t("waitingQuestionBadge")}>
-																	?
-																</span>
 															)}
 														</span>
 													)}

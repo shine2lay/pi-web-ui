@@ -207,6 +207,7 @@ export const zh = {
 	takeoverConversation: "过户到当前页面",
 	takeoverHasQuestion: "有问卷等答复，点击直接作答",
 	waitingQuestionBadge: "有问卷等答复，点击查看",
+	waitingDialogBadge: "有弹窗在等你回答，打开这条对话就能看到",
 	/* recent-chats 补丁：这一列不再只是「运行中」，而是常驻的最近对话 */
 	recentChats: "最近对话",
 	waitingForYou: "已完成 · 等你查看",
@@ -1840,6 +1841,7 @@ const en: Record<keyof typeof zh, string> = {
 	takeoverConversation: "Take over to this page",
 	takeoverHasQuestion: "Has a pending question — click to answer it here",
 	waitingQuestionBadge: "Waiting on your answer — click to view",
+	waitingDialogBadge: "A pop-up is waiting for your answer — open this chat to see it",
 	recentChats: "Recent chats",
 	waitingForYou: "Finished · waiting for you",
 	removeFromRecent: "Remove from recent chats (stays in History)",
