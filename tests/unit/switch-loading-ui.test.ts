@@ -229,6 +229,40 @@ describe("遮罩：打开中 / 失败", () => {
 		expect(dismissed).toBe(1);
 	});
 
+	it("switch-cache 预览：透明遮罩照样在（挡输入），小卡片，没慢之前不给「隐藏」", () => {
+		const c = mountOverlay({
+			pending: { target: { kind: "session", path: P("h") }, startedAt: Date.now(), hidden: false },
+			error: null,
+			title: "temper",
+			preview: true,
+			onHide: () => {},
+			onRetry: () => {},
+			onDismissError: () => {},
+		});
+		const overlay = c.querySelector<HTMLElement>(".switch-overlay");
+		expect(overlay?.classList.contains("switch-overlay-preview")).toBe(true);
+		expect(overlay?.dataset.switchState).toBe("loading");
+		expect(overlay?.dataset.switchPreview).toBe("1");
+		expect(overlay?.textContent).toContain("temper");
+		expect(c.querySelector(".switch-hide")).toBeNull();
+	});
+
+	it("switch-cache 预览但慢了：出「已等 N 秒」和「隐藏」", () => {
+		let hidden = 0;
+		const c = mountOverlay({
+			pending: { target: { kind: "session", path: P("h") }, startedAt: Date.now() - 5000, hidden: false },
+			error: null,
+			title: "temper",
+			preview: true,
+			onHide: () => hidden++,
+			onRetry: () => {},
+			onDismissError: () => {},
+		});
+		expect(c.querySelector(".switch-sub")).toBeTruthy();
+		click(c.querySelector(".switch-hide")!);
+		expect(hidden).toBe(1);
+	});
+
 	it("既没在打开也没失败：什么都不渲染", () => {
 		const c = mountOverlay({
 			pending: null,

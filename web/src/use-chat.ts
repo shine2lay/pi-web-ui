@@ -41,6 +41,7 @@ import type {
 
 import { applyMessageDelta, type MessageDeltaMsg } from "./message-delta";
 import { keepLoadedHistory, paginationAfterDelta, prependOlderExchanges, prependOlderMessages } from "./message-window";
+import { applyReuse, cachedWindow, ChatCache, windowKey } from "./chat-cache";
 import { resolvePendingQuestion, type QuestionSource } from "./pending-question";
 import {
 	sameSwitchTarget,
@@ -391,11 +392,15 @@ export interface ChatState {
 	pendingSwitch: PendingSwitch | null;
 	/** switch-loading：最近一次切换失败（留在原对话上，聊天区显示原因 + 重试）。 */
 	switchError: SwitchError | null;
+	/** switch-cache：切换进行中先显示的目标对话缓存（点下去那一刻就有；要的那条显示出来、
+	 *  切换结束或被隐藏就清）。只给消息列表用，其余界面仍是服务端当前对话的状态；
+	 *  输入区被透明遮罩挡着，发不出东西。 */
+	preview: UiState | null;
 }
 
 type Action =
 	| { type: "status"; status: ConnStatus }
-	| { type: "switch_started"; target: SwitchTarget; startedAt: number }
+	| { type: "switch_started"; target: SwitchTarget; startedAt: number; preview?: UiState }
 	| { type: "switch_done"; target: SwitchTarget }
 	| { type: "switch_failed"; target: SwitchTarget; error: string; errorEn?: string }
 	| { type: "switch_hide" }
@@ -757,6 +762,7 @@ function reducer(state: ChatState, action: Action): ChatState {
 				// 新的一条 socket = 新的真相：上一条连接上发出的切换要么已经完成（接下来的快照
 				// 就是它），要么随服务端重启丢了 —— 两种情况都不该继续盖着「正在打开」。
 				pendingSwitch: null,
+				preview: null,
 				// Old page + new server (or the reverse) after an in-place update:
 				// WS handling on either side may be stale — banner asks for refresh.
 				protocolMismatch: action.protocolVersion !== undefined && action.protocolVersion !== PROTOCOL_VERSION,
@@ -765,6 +771,7 @@ function reducer(state: ChatState, action: Action): ChatState {
 			// 整份快照只带最新一截：同一会话时把用户已加载的更早历史留住，否则重连/
 			// resync 一来就把「加载更早消息」的结果冲掉（load-older-survives-snapshot）。
 			const next = keepLoadedHistory(state.state, action.state);
+			const settled = settleOnSnapshot(state.pendingSwitch, state.switchError, action.state);
 			return {
 				...state,
 				ready: true,
@@ -773,7 +780,9 @@ function reducer(state: ChatState, action: Action): ChatState {
 				liveOutputs: pruneLiveOutputs(state.liveOutputs, next),
 				toolStatuses: pruneToolStatuses(state.toolStatuses, next),
 				// switch-loading 保险信号：要的那条已经显示出来了就撤遮罩（主信号是 switch_done）。
-				...settleOnSnapshot(state.pendingSwitch, state.switchError, action.state),
+				...settled,
+				// switch-cache：真快照到了，预览功成身退。
+				...(settled && settled.pendingSwitch === null ? { preview: null } : {}),
 			};
 		}
 		case "older_messages": {
@@ -796,19 +805,27 @@ function reducer(state: ChatState, action: Action): ChatState {
 				pendingSwitch: { target: action.target, startedAt: action.startedAt, hidden: false },
 				// 重试 = 新的一次切换，上一次的错误态不再相关。
 				switchError: null,
+				// switch-cache：缓存里有目标就先显示它（连点两条时换成后一条的，没有就清掉）。
+				preview: action.preview ?? null,
 			};
 		case "switch_done":
 			// 只认自己还在等的那次：连点两条时早先那次的回执不能把后一次的遮罩撤掉。
-			return sameSwitchTarget(state.pendingSwitch?.target, action.target) ? { ...state, pendingSwitch: null } : state;
+			return sameSwitchTarget(state.pendingSwitch?.target, action.target)
+				? { ...state, pendingSwitch: null, preview: null }
+				: state;
 		case "switch_failed":
 			if (!sameSwitchTarget(state.pendingSwitch?.target, action.target)) return state;
 			return {
 				...state,
 				pendingSwitch: null,
 				switchError: { target: action.target, error: action.error, errorEn: action.errorEn },
+				preview: null,
 			};
 		case "switch_hide":
-			return state.pendingSwitch ? { ...state, pendingSwitch: { ...state.pendingSwitch, hidden: true } } : state;
+			// 隐藏遮罩 = 继续用原来的对话（服务端还在它上面），预览也得撤：否则看到的是 B、输入却进了 A。
+			return state.pendingSwitch
+				? { ...state, pendingSwitch: { ...state.pendingSwitch, hidden: true }, preview: null }
+				: state;
 		case "switch_dismiss_error":
 			return { ...state, switchError: null };
 		case "snapshot_delta": {
@@ -1169,6 +1186,7 @@ export function useChat() {
 		protocolMismatch: false,
 		pendingSwitch: null,
 		switchError: null,
+		preview: null,
 	});
 	const wsRef = useRef<WebSocket | null>(null);
 	/** Terminal output bridge (writers keyed by terminalId). */
@@ -1192,6 +1210,16 @@ export function useChat() {
 	/** 已作答/取消的问卷 id —— 在途旧快照不得把已答过的问卷重新弹出来。
 	 *  id 全局单调递增（服务端 questionSeq / 时间戳），保留少量历史即可。 */
 	const answeredQuestionsRef = useRef<Set<string>>(new Set());
+	/** switch-cache：看过的对话按转录路径留一份（切回来先显示它，服务端只补差异）。 */
+	const chatCacheRef = useRef<ChatCache | null>(null);
+	chatCacheRef.current ??= new ChatCache();
+	/** 发出去的 have 各是按哪份缓存算的（按 windowKey）：reuse 回来时就拿那一份来接。
+	 *  连点几条时可能同时有好几个在途；这条会话的整份快照一到就清掉它的，换连接时全清。 */
+	const resumeBasesRef = useRef<Map<string, UiState>>(new Map());
+	// 当前显示的对话状态随时记进缓存（只存引用，流式期间 60ms 一次也便宜）。
+	useEffect(() => {
+		chatCacheRef.current?.put(chat.state);
+	}, [chat.state]);
 	/** 当前问卷面板的来源：live = question_pending 即时通道弹出；snapshot = 由快照
 	 *  恢复（重连/刷新）。在同一会话内，只有 snapshot 来源的才接受快照收起（切换会话
 	 *  时无论来源一律收起，见 resolvePendingQuestion 规则 2）。 */
@@ -1248,10 +1276,23 @@ export function useChat() {
 					: msg.type === "switch_conversation"
 						? { kind: "conversation", id: msg.id }
 						: null;
+			let out: ClientMessage = msg;
 			if (switchTarget && !switchAlreadyShown(switchTarget, chatApi.current.chat.state)) {
-				dispatch({ type: "switch_started", target: switchTarget, startedAt: Date.now() });
+				// switch-cache：看过这条就先显示缓存的那份，并告诉服务端手里有哪一截（它只补差异）。
+				const preview = chatCacheRef.current?.forTarget(switchTarget, chatApi.current.chat.conversations);
+				const have = preview ? cachedWindow(preview) : null;
+				if (preview && have && (msg.type === "switch_session" || msg.type === "switch_conversation")) {
+					resumeBasesRef.current.set(windowKey(have), preview);
+					out = { ...msg, have };
+				}
+				dispatch({
+					type: "switch_started",
+					target: switchTarget,
+					startedAt: Date.now(),
+					...(preview && have ? { preview } : {}),
+				});
 			}
-			ws.send(JSON.stringify(msg));
+			ws.send(JSON.stringify(out));
 			// 提交/取消模型提问后立即收起对话框：服务端只 resolve 模型侧 Promise，
 			// 不会发任何回执清除前端面板（否则会出现“回答后不消失、取消无效”）。
 			// 模型再次 ask_user_question 时会重新 question_pending，面板自动回来。
@@ -1390,6 +1431,8 @@ export function useChat() {
 					// Reconnect/attach: clear answered questions cache and stale dialog so
 					// freshly started server runs don't collide on restarted question counters (e.g. q-1).
 					answeredQuestionsRef.current.clear();
+					// switch-cache：新连接上服务端不记得之前报过的 have。
+					resumeBasesRef.current.clear();
 					dispatch({ type: "question", question: null });
 					// Ensure a fresh snapshot on (re)connect.
 					ws.send(JSON.stringify({ type: "get_state" } satisfies ClientMessage));
@@ -1410,13 +1453,30 @@ export function useChat() {
 					}
 					break;
 				}
-				case "snapshot":
+				case "snapshot": {
+					// switch-cache：带 reuse 的快照只有新增的尾巴，把当时报上去的那份缓存接在前面。
+					// 对不上（缓存已经不在了）就不用它，要一份完整的。
+					let state = msg.state;
+					if (msg.reuse) {
+						const merged = applyReuse(resumeBasesRef.current.get(windowKey(msg.reuse)), msg.state, msg.reuse);
+						if (!merged) {
+							ws.send(JSON.stringify({ type: "get_state" } satisfies ClientMessage));
+							break;
+						}
+						state = merged;
+					}
+					if (resumeBasesRef.current.size > 0) {
+						for (const [k, base] of resumeBasesRef.current) {
+							if (base.sessionId === state.sessionId) resumeBasesRef.current.delete(k);
+						}
+					}
 					// Snapshot is authoritative — delta sequence tracking restarts.
 					lastDeltaSeqRef.current = new Map();
-					dispatch({ type: "snapshot", state: msg.state });
+					dispatch({ type: "snapshot", state });
 					// 重连/刷新后从这里把待答问卷恢复出来（见 syncPendingQuestion）。
-					syncPendingQuestion(msg.state.pendingQuestion, msg.state.conversationId);
+					syncPendingQuestion(state.pendingQuestion, state.conversationId);
 					break;
+				}
 				case "snapshot_delta": {
 					// Gap detection BEFORE dispatch: if this incremental checkpoint
 					// doesn't chain onto our current rev (a message was dropped under

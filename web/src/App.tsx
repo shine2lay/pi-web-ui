@@ -15,6 +15,7 @@ import { RightPanel } from "./components/RightPanel";
 import { MessageList } from "./components/MessageList";
 import { SwitchOverlay } from "./components/SwitchOverlay";
 import { switchTargetTitle } from "./switch-pending";
+import { nextListKey, type ListKey } from "./chat-cache";
 import { ChatInput } from "./components/ChatInput";
 import { GoalBar } from "./components/GoalBar";
 
@@ -640,6 +641,11 @@ export function App() {
 	const pendingPermRequest = chat.permRequests.find((r) => !answeredPermRequests.has(r.id)) ?? null;
 	/** switch-loading：遮罩要显示的目标（进行中优先，其次是上一次失败的）；null = 不显示。 */
 	const switchTarget = chat.pendingSwitch?.target ?? chat.switchError?.target ?? null;
+	/** switch-cache：切换进行中先显示目标对话的缓存（只给消息列表；其余界面仍是服务端当前对话）。
+	 *  列表的 key 随它往前推：预览换成同一会话的真快照时不重建（见 nextListKey）。 */
+	const listState = chat.preview ?? chat.state;
+	const listKeyRef = useRef<ListKey | null>(null);
+	listKeyRef.current = nextListKey(listKeyRef.current, listState);
 	// Wide chat column (client-local, default off).
 	const wide = useWideChat();
 	// Background-task panel (AI-started servers — stop individually or all).
@@ -1440,6 +1446,7 @@ export function App() {
 								<SwitchOverlay
 									pending={chat.pendingSwitch}
 									error={chat.switchError}
+									preview={chat.preview !== null}
 									title={switchTargetTitle(switchTarget, chat.sessions, chat.conversations)}
 									onHide={switchHide}
 									onDismissError={switchDismissError}
@@ -1455,7 +1462,7 @@ export function App() {
 									}}
 								/>
 							)}
-							{chat.state ? (
+							{listState ? (
 								<MessageList
 									uiMessageActions={uiSlots["message.actions"]}
 									uiContextMessage={uiSlots["contextmenu.message"]}
@@ -1464,8 +1471,8 @@ export function App() {
 									uiContextToolCall={uiSlots["contextmenu.toolcall"]}
 									uiChatEmpty={uiChatEmpty}
 									onUiAction={onUiAction}
-									key={chat.state.conversationId ?? "boot"}
-									state={chat.state}
+									key={listKeyRef.current?.key ?? "boot"}
+									state={listState}
 									liveOutputs={chat.liveOutputs}
 									toolStatuses={chat.toolStatuses}
 									onEdit={onEditMessage}
@@ -1482,7 +1489,8 @@ export function App() {
 									thinkingWrap={chat.settings?.thinkingWrap ?? true}
 									toolsWrap={chat.settings?.toolsWrap ?? true}
 									toolImages={chat.settings?.toolImagesEnabled ?? true}
-									jumpTarget={searchJump}
+									/* switch-cache：预览期间不跳（缓存里可能还没有那条消息，会被当成「找不到」放弃）。 */
+									jumpTarget={chat.preview ? null : searchJump}
 									onJumpDone={() => setSearchJump(null)}
 									onLoadOlder={(beforeIndex, count) => send({ type: "load_older", beforeIndex, count })}
 									onLoadExchanges={(beforeIndex, count, fromIndex) =>

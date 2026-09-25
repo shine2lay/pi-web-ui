@@ -161,6 +161,7 @@ import {
 } from "./prompt-composer.js";
 import type {
 	BgServer,
+	CachedWindow,
 	CommandDef,
 	ConversationSummary,
 	ElsewhereRunning,
@@ -179,6 +180,7 @@ import type {
 	UiTldrLine,
 } from "./protocol.js";
 import { buildQuestionIndex } from "./question-index.js";
+import { messagesHash } from "./window-hash.js";
 import { tldrLinesFromEntries } from "./tldr-lines.js";
 import { digestsBefore, snapshotDigests, straddleDigest } from "./exchange-digest.js";
 import { launchOrigin, toServiceInfo } from "./launch-origin.js";
@@ -2329,6 +2331,9 @@ export class ClientSession {
 	private emittedRev = 0;
 	/** 上一次发出去的 TL;DR 列表（引用）：delta 只在它变了时带 `tldr`。 */
 	private emittedTldr: UiTldrLine[] | null = null;
+	/** switch-cache：这次切换客户端报上来的缓存窗口。只在 switchSession / switchConversation
+	 *  进行中有值（它们的 finally 清掉），由目标对话的第一份整份快照用掉（resumeWindow）。 */
+	private switchHave: CachedWindow | null = null;
 	/**
 	 * Per-conversation serialization caches (stable message ids, UiMessage
 	 * object cache, message-array signature, queue counts) live inside each
@@ -4375,25 +4380,51 @@ export class ClientSession {
 			this.emittedMessages = cur;
 			this.emittedConvId = this.activeId;
 			this.emittedRev = rev;
+			// switch-cache：切回来的这条对话，客户端缓存里那一截对得上就只发后面新增的。
+			// 客户端的窗口起点照旧（和 delta 一样只往后长），摘要按这个起点算。
+			const resume = this.resumeWindow(cur);
+			const start = resume ? resume.start : windowStart;
 			this.emit({
 				type: "snapshot",
+				...(resume ? { reuse: resume } : {}),
 				// 全量快照一律带草稿（切会话/new_chat/改写分支/重连 get_state 全走这里）；
 				// 60ms 热帧是上面的 snapshot_delta，本来就不带。
 				state: {
 					...this.buildLightState(rev, true),
 					// 只发最新的一截：一个 8600 条的会话完整快照是 35MB，尾部 100 条
 					// 是 0.5MB（实测 1.5%）。更老的由 load_older 按需取回。
-					messages: windowStart > 0 ? cur.slice(windowStart) : cur,
-					messagesStart: windowStart,
+					messages: resume ? cur.slice(resume.start + resume.count) : windowStart > 0 ? cur.slice(windowStart) : cur,
+					messagesStart: start,
 					questionIndex: buildQuestionIndex(cur),
 					// 窗口之前最近几轮的摘要（exchange-digest）：窗口常常全落在最后一轮里，
 					// 没有它页面上就只剩一行。delta 不带：窗口前面的历史只随整份快照变。
-					...(EXCHANGE_DIGESTS > 0 ? { exchanges: snapshotDigests(cur, windowStart, EXCHANGE_DIGESTS) } : {}),
+					...(EXCHANGE_DIGESTS > 0 ? { exchanges: snapshotDigests(cur, start, EXCHANGE_DIGESTS) } : {}),
 					// 整份快照总带 TL;DR（没有就是 []）：切对话时要把上一条的行换掉。
 					tldr,
 				},
 			});
 		}
+	}
+
+	/** switch-cache：客户端这次切换报上来的缓存窗口（switchHave）还和现在的消息对得上吗？
+	 *  对得上就返回它（整份快照只带 [start+count, 末尾)），否则 null（照常发最新一截）。
+	 *
+	 *  只认目标对话已经是当前对话的那一份整份快照（会话 id 对得上），用过即清：从历史打开
+	 *  要先 await 建 runtime，这期间旧对话的整份快照（get_state 之类）不能把它吃掉。
+	 *  新增的超过一个窗口就不续了：发整份最新一截更小，客户端的窗口也不至于越长越大。
+	 *  从历史重开后助手消息的 id 可能换号（序号是每条对话自己的计数器，压缩过就对不上），
+	 *  那样指纹不一致，就是一份正常的整份快照。 */
+	private resumeWindow(cur: readonly UiMessage[]): CachedWindow | null {
+		const have = this.switchHave;
+		if (!have || typeof have !== "object" || have.sessionId !== this.session.sessionId) return null;
+		this.switchHave = null;
+		const { start, count, hash } = have;
+		if (!Number.isSafeInteger(start) || !Number.isSafeInteger(count) || start < 0 || count < 1) return null;
+		if (typeof hash !== "string") return null;
+		const end = start + count;
+		if (end > cur.length || cur.length - end > MESSAGE_WINDOW) return null;
+		if (messagesHash(cur, start, end) !== hash) return null;
+		return { sessionId: have.sessionId, start, count, hash };
 	}
 
 	/** 服务 load_older：把 [start, beforeIndex) 这一段历史消息发回去。
@@ -7180,7 +7211,17 @@ export class ClientSession {
 		return true;
 	}
 
-	async switchConversation(id: string): Promise<void> {
+	/** have：switch-cache，客户端缓存里目标对话的窗口。切过去之后的那份整份快照对得上就只带新增的部分。 */
+	async switchConversation(id: string, have?: CachedWindow): Promise<void> {
+		this.switchHave = have ?? null;
+		try {
+			await this.switchConversationNow(id);
+		} finally {
+			this.switchHave = null;
+		}
+	}
+
+	private async switchConversationNow(id: string): Promise<void> {
 		if (id === this.activeId) return;
 		if (!this.convs.has(id)) {
 			// 客户端点的那一行在它点下去之前刚好被释放/移除了（列表推送有延迟）。
@@ -8240,7 +8281,17 @@ export class ClientSession {
 	 * current runtime, which would otherwise stop a response merely because the
 	 * user opened history while it was streaming.
 	 */
-	async switchSession(path: string): Promise<void> {
+	/** have：switch-cache，见 switchConversation。 */
+	async switchSession(path: string, have?: CachedWindow): Promise<void> {
+		this.switchHave = have ?? null;
+		try {
+			await this.switchSessionNow(path);
+		} finally {
+			this.switchHave = null;
+		}
+	}
+
+	private async switchSessionNow(path: string): Promise<void> {
 		// switch-loading：target 用客户端发来的原始 path（不是 resolve 后的），客户端才能对上。
 		const target: SwitchTarget = { kind: "session", path };
 		if (this.quiesceBlocked()) {
@@ -8275,7 +8326,8 @@ export class ClientSession {
 					// 补一个快照再回执（先快照后回执的顺序不能反）。先记下「切之前是不是它」：
 					// 切完之后 activeId 永远等于它，事后判断会把大会话白白序列化两遍。
 					const wasActive = conv.id === this.activeId;
-					await this.switchConversation(conv.id);
+					// switch-cache：客户端报的缓存窗口跟着传下去（switchConversation 会重设 switchHave）。
+					await this.switchConversation(conv.id, this.switchHave ?? undefined);
 					if (wasActive) this.flushSnapshot();
 					this.emitSwitchDone(target);
 					return;

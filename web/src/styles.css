@@ -8380,6 +8380,29 @@ div.chead[role="button"]:focus-visible,
 	color: var(--text);
 	box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
 }
+/* switch-cache：切回看过的对话时底下已经是它的缓存。遮罩透明（照样挡住点击和输入），
+   顶上只留一张小卡片，而且延迟淡入：切换快的话它根本不出现。 */
+.switch-overlay-preview {
+	padding-top: 10px;
+	background: transparent;
+	backdrop-filter: none;
+	animation: none;
+}
+.switch-overlay-preview .switch-card {
+	gap: 10px;
+	padding: 6px 12px;
+	border-radius: 10px;
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+	animation: switch-fade-in 160ms ease-out 300ms both;
+}
+.switch-overlay-preview .switch-spinner {
+	width: 14px;
+	height: 14px;
+}
+.switch-overlay-preview .switch-title {
+	font-size: 12px;
+	font-weight: 500;
+}
 .switch-card-error {
 	flex-wrap: wrap;
 	border-color: color-mix(in srgb, var(--red) 45%, var(--border));
@@ -8443,7 +8466,8 @@ div.chead[role="button"]:focus-visible,
 	.switch-spinner {
 		animation-duration: 2s;
 	}
-	.switch-overlay {
+	.switch-overlay,
+	.switch-overlay-preview .switch-card {
 		animation: none;
 	}
 }

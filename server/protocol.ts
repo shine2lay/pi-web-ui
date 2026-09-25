@@ -156,6 +156,19 @@ export interface UiTldrLine {
 	ts: number;
 }
 
+/** switch-cache：客户端手里已经有的一截消息（上次看这条对话时的窗口）。
+ *
+ *  切回一条看过的对话时随 `switch_session` / `switch_conversation` 报上来：消息
+ *  [start, start+count)，指纹 hash（server/window-hash.ts 的 messagesHash，算的是这一截的 id）。
+ *  服务端对得上就在整份快照里只带后面新增的消息，并把同一个窗口放在 `snapshot.reuse`
+ *  里回给客户端。 */
+export interface CachedWindow {
+	sessionId: string;
+	start: number;
+	count: number;
+	hash: string;
+}
+
 export interface UiState {
 	clientId: string;
 	cwd: string;
@@ -584,8 +597,9 @@ export type ClientMessage =
 			fromIndex?: number;
 	  }
 	| { type: "list_sessions" }
-	| { type: "switch_session"; path: string }
-	| { type: "switch_conversation"; id: string }
+	// switch-cache：have = 客户端缓存里这条对话的窗口（没有就不带，服务端照常发整份）。
+	| { type: "switch_session"; path: string; have?: CachedWindow }
+	| { type: "switch_conversation"; id: string; have?: CachedWindow }
 	/** 手动过户：把另一处（elsewhere 行，owner/convId 标识）的对话整体搬到本页
 	 *  （含等答复的问卷/页调用），搬完自动切过去. */
 	| { type: "take_over_conversation"; owner: string; id: string }
@@ -2198,7 +2212,14 @@ export type ServerMessage =
 			 *  "restart service" action and the server refuses restart_service. */
 			service?: UiServiceInfo;
 	  }
-	| { type: "snapshot"; state: UiState }
+	| {
+			type: "snapshot";
+			state: UiState;
+			/** switch-cache：有这个字段时 `state.messages` 只是新增的尾巴 —— 客户端把自己缓存里
+			 *  [start, start+count) 那一截接在前面（`state.messagesStart` = start）。只在客户端
+			 *  切换时报了 have、且服务端核对过指纹时才出现；客户端对不上就发 get_state 要整份。 */
+			reuse?: CachedWindow;
+	  }
 	| {
 			/** load_older 的回执：[start, start+messages.length) 这一段历史消息，拼在
 			 *  客户端窗口前面，并把 UiState.messagesStart 改成 start。

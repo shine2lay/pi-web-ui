@@ -22,7 +22,11 @@ import { ClientSession, chatFollowsWorkspace } from "../../server/agent-service.
 const HERE = "/work/current";
 const THERE = "/work/other-project";
 
-type Proto = { switchConversation(this: FakeSession, id: string): Promise<void> };
+// switch-cache：switchConversation 是包一层的壳（记下客户端报的缓存窗口），正文在 switchConversationNow。
+type Proto = {
+	switchConversation(this: FakeSession, id: string): Promise<void>;
+	switchConversationNow(this: FakeSession, id: string): Promise<void>;
+};
 const proto = ClientSession.prototype as unknown as Proto;
 
 interface FakeConv {
@@ -85,6 +89,8 @@ function session(): FakeSession {
 		pushSlashCommands: async () => {},
 		notifyConversationChanged: () => {},
 		flushSnapshot: () => {},
+		// switch-cache：壳调的正文用生产代码那一份。
+		switchConversationNow: proto.switchConversationNow,
 		// switch-loading：切换回执（这里不关心，只要不炸）。
 		emitSwitchDone: () => {},
 		emitSwitchFailed: () => {},

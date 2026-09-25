@@ -69,6 +69,7 @@ import { initHttpProxy } from "./http-proxy.js";
 import { buildPiWebTokenCookie, decodeCookieToken, isTlsRequest } from "./auth-cookie.js";
 import type {
 	BgServer,
+	CachedWindow,
 	ClientMessage,
 	UiLayoutPrefs,
 	CommandDef,
@@ -1008,8 +1009,9 @@ export interface DispatchSession {
 	persistConversation?(id: string): Promise<void>;
 	/** 从左栏「最近对话」移出一条（转录保留，recent-chats 补丁）。 */
 	removeRecentChat(path: string): Promise<void>;
-	switchSession(path: string): Promise<void>;
-	switchConversation(id: string): Promise<void>;
+	/** have：switch-cache，客户端缓存里这条对话的窗口；没实现的引擎（DSH）忽略，照常发整份快照。 */
+	switchSession(path: string, have?: CachedWindow): Promise<void>;
+	switchConversation(id: string, have?: CachedWindow): Promise<void>;
 	listFiles(path?: string): Promise<void>;
 	searchFiles(query: string, reqId: number): Promise<void>;
 	searchSessions(query: string, reqId: number): Promise<void>;
@@ -1960,10 +1962,10 @@ wss.on("connection", (ws) => {
 				void cs.removeRecentChat(msg.path);
 				break;
 			case "switch_session":
-				void cs.switchSession(msg.path);
+				void cs.switchSession(msg.path, msg.have);
 				break;
 			case "switch_conversation":
-				void cs.switchConversation(msg.id);
+				void cs.switchConversation(msg.id, msg.have);
 				break;
 			case "take_over_conversation":
 				if (typeof service.takeOverConversation === "function") {
