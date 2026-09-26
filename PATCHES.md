@@ -45,6 +45,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | tldr-collapse                | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/components/TldrPanel.tsx`, `RightPanel.tsx`, `App.tsx`, i18n   |
 | queue-panel                  | `local`        | `server/task-queue.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TaskQueuePanel.tsx`, `RightPanel.tsx`, `done-cues.ts`, i18n     |
 | per-chat-dialogs             | `local`        | `server/chat-dialogs.ts`, `webui-context.ts`, `agent-service.ts`, `protocol.ts`, `web/src/App.tsx`, `LeftPanel.tsx`, i18n                      |
+| image-aside-label            | `local`        | `server/attachments.ts`, `serialize.ts`                                                                                                        |
 
 ---
 
@@ -1746,6 +1747,47 @@ agent 一直等到你回答。
 
 ---
 
+## image-aside-label
+
+**状态**：`local`
+**基线**：v0.94.1
+
+**诉求**（用户 2026-09-25）：贴进对话的截图，模型说没收到图。查明：会话文件里图是在的，只是没发给模型。
+billion-context-pi（ACP）每轮用自己的「核心」重建发给模型的消息列表；自定义消息只有 `extractText(content)`
+非空才建核心，没有核心就不进上下文。附件的图片卡片（`customType: "file"`、`details.mode: "image"`）只有一个
+图片块、没有文字，于是整条被丢，图跟着没了。装了 billion-context-pi 以后（约 9 月 18 日起）一直这样。
+根上该在 billion-context-pi 修（没有文字的消息也该留）；用户选了先在本 fork 修（方案 1），上游先不提。
+
+### 改法
+
+- `server/attachments.ts`：
+  - `imageLabel(where)`：图片卡片带的那一行文字。贴的图是 `<image name="…" />`，按路径附的是
+    `<image path="…" />`（属性照 `attr()` 转义）。有了文字 billion-context-pi 就给它建核心，图片块原样跟着
+    （`patchRefTag` 只给文字块加 ref 标签，别的块不动）；模型也多知道一个文件名。
+  - `buildAttachmentMessages` 里三处只放图的卡片（贴的图；按路径附图的 `pathImg` 新路和 `fs.readFile` 旧路）都在
+    图片块前面加这一行。视觉桥转写的卡片（`mode: "bridged"`）本来就有文字，不动。
+- `server/serialize.ts`：`serializeMessage` 发给页面时，图片卡片（`customType: "file"` 且
+  `details.mode === "image"`）去掉文字块：页面上还是只有那张图，不多出复制按钮；重新编辑提问时附件照旧从
+  图片块恢复。页面拿到的都是序列化过的消息（左栏摘要、折叠、分页也是），所以前端不用改。
+- 不装 billion-context-pi 时模型照样收到图，只是多一行文件名。
+
+### 回归
+
+- `tests/unit/image-aside-label.test.ts`（7 项）：贴的图是「一行名字 + 图」，没名字时用 image.png；名字里的引号、
+  尖括号转义；按路径附的图那行是路径；文字模型关了视觉桥时照样带这一行；页面上的图片卡片只剩图，内联文件和
+  视觉桥卡片的文字不动。
+- `tests/image-aside-acp-test.mjs`（8 项，不花 token）：真 billion-context-pi（`BCP_PKG`，默认
+  ~/.pi/agent/npm/node_modules/billion-context-pi）+ 收图的模拟模型，走 WebSocket 协议，不开浏览器：
+  - 请求里有 `<acp …>` ref 标签（扩展确实在跑）；
+  - 第 1 轮贴一张图：请求里有这张图和 `<image name="shot.png" />`；页面上的卡片只有图；
+  - 第 2 轮按路径附工作区里的图：请求里两张图都在（第 1 轮的还留着），还有 `<image path="pics/red.png" />`。
+  - 服务端的 HOME 指到临时目录：billion-context-pi 往 `~/.pi/acp.log` 写日志，不碰真的那份。
+  - `IMAGE_ACP_DEBUG=1` 打印模拟模型收到的请求。
+- 反证（2026-09-25）：同一个 E2E 在改动前的构建（92fe842）上挂 4 项：两轮的请求里一张图都没有，也没有那行
+  文字；ref 标签和页面卡片两项照样过。
+
+---
+
 ## 已退役的补丁
 
 同步时删掉的补丁在这里留一笔，下次同步不用再查它们为什么没了。
@@ -1795,4 +1837,4 @@ agent 一直等到你回答。
     queue-panel 引起的（`Dialog.tsx` 只改了确认框的正文）；为了不再花 token，没在改动前的构建上复跑。
   - 本 fork 自己的冒烟全过：`server-owned-chats-test`、`cross-client-session-test`、`chat-pagination-test`、
     `exchange-fold-test`、`exchange-digest-test`、`done-any-chat-test`、`todo-list-owner-test`、`single-load-test`、
-    `tldr-panel-test`、`switch-cache-test`、`queue-panel-test`、`per-chat-dialogs-test`（后加）。
+    `tldr-panel-test`、`switch-cache-test`、`queue-panel-test`、`per-chat-dialogs-test`、`image-aside-acp-test`（后加）。

@@ -52,6 +52,19 @@ function attr(value: string): string {
 	return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/**
+ * image-aside-label: the one line of text an image aside carries next to its image.
+ * Context extensions that rebuild the model's message list from text drop a custom
+ * message that has no text part (billion-context-pi keeps one only if its text is
+ * non-empty), and the image goes with it: the model never saw the picture. Any text
+ * keeps the aside, image included. The page doesn't show it: `serializeMessage`
+ * (serialize.ts) hides the text of an image card.
+ */
+export function imageLabel(where: { name: string } | { path: string }): { type: "text"; text: string } {
+	const text = "path" in where ? `<image path="${attr(where.path)}" />` : `<image name="${attr(where.name)}" />`;
+	return { type: "text", text };
+}
+
 export async function buildAttachmentMessages(
 	ctx: AttachmentContext,
 	attachments:
@@ -436,7 +449,7 @@ export async function buildAttachmentMessages(
 			out.push({
 				message: {
 					customType: "file",
-					content: [{ type: "image", data: raw, mimeType }],
+					content: [imageLabel({ name: att.name ?? "image.png" }), { type: "image", data: raw, mimeType }],
 					display: true,
 					details: {
 						name: att.name ?? "image.png",
@@ -636,6 +649,7 @@ ${transcript}
 					message: {
 						customType: "file",
 						content: [
+							imageLabel({ path: rel }),
 							{
 								type: "image",
 								data: pathImg.raw,
@@ -663,7 +677,7 @@ ${transcript}
 			out.push({
 				message: {
 					customType: "file",
-					content: [{ type: "image", data, mimeType: MIME[ext] ?? "image/png" }],
+					content: [imageLabel({ path: rel }), { type: "image", data, mimeType: MIME[ext] ?? "image/png" }],
 					display: true,
 					details: { name, path: rel, mode: "image", size: stat.size },
 				},

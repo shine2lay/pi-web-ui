@@ -221,7 +221,12 @@ export function serializeMessage(m: AgentMessage, seq: number): UiMessage | null
 			if ((m as { display?: boolean }).display === false) {
 				return null;
 			}
-			const content = serializeUserContent(m.content);
+			let content = serializeUserContent(m.content);
+			// image-aside-label: an image card's text is only the label that keeps it in the
+			// model's context (attachments.ts `imageLabel`); the page shows the picture, as before.
+			if (m.customType === "file" && (m as { details?: { mode?: unknown } }).details?.mode === "image") {
+				content = content.filter((b) => b.type !== "text");
+			}
 			return {
 				id: `c-${m.timestamp}-${seq}`,
 				role: "custom",
