@@ -4,6 +4,8 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+	isTldrReply,
+	latestAwaitingReply,
 	latestUnseenTldr,
 	TLDR_COLLAPSE_TYPE,
 	TLDR_MAX_LINES,
@@ -170,5 +172,90 @@ describe("tldr-sidebar: latestUnseenTldr", () => {
 				{ type: "compaction", id: "k1" },
 			]),
 		).toBeUndefined();
+	});
+});
+
+/** tldr-answered：needs-you 行之后用户回过话，就不再高亮。 */
+describe("tldr-answered", () => {
+	const msg = (id: string, message: unknown): TldrEntryLike => ({ type: "message", id, message });
+	const user = (id: string, text: string) => msg(id, { role: "user", content: [{ type: "text", text }] });
+	const ask = (id: string, isError = false, toolName = "ask_user_question") =>
+		msg(id, { role: "toolResult", toolName, isError, content: [{ type: "text", text: "answer" }] });
+	const assistant = (id: string) => msg(id, { role: "assistant", content: [{ type: "text", text: "ok" }] });
+	const need = (id: string) => line(id, "Need your OK to delete the branch", { needsYou: true });
+
+	it("isTldrReply: the user's own messages and answered dialogs count; automated ones don't", () => {
+		expect(isTldrReply({ role: "user", content: [{ type: "text", text: "yes, go ahead" }] })).toBe(true);
+		expect(isTldrReply({ role: "user", content: "ok" })).toBe(true);
+		expect(isTldrReply({ role: "user", content: [{ type: "image", data: "…", mimeType: "image/png" }] })).toBe(true);
+		// 定时任务唤醒、无头执行、pi-queue 交任务 / 催办、pi-web-ui 的系统提醒
+		for (const text of [
+			"[定时任务 check bets] look at the runs",
+			"[定时任务] look at the runs",
+			"[Queue] Task #3: tidy up",
+			"[Queue] Continue task #3: tidy up",
+			"（系统：你之前在终端 t1 后台运行的命令已结束）",
+			"（系统自动提醒：你启动的终端已连续 15 秒没有任何新输出。）",
+		]) {
+			expect(isTldrReply({ role: "user", content: [{ type: "text", text }] }), text).toBe(false);
+		}
+		expect(isTldrReply({ role: "toolResult", toolName: "ask_user_question", isError: false })).toBe(true);
+		expect(isTldrReply({ role: "toolResult", toolName: "queue_add", isError: false })).toBe(true);
+		expect(isTldrReply({ role: "toolResult", toolName: "ask_user_question", isError: true }), "cancelled").toBe(false);
+		expect(isTldrReply({ role: "toolResult", toolName: "bash", isError: false })).toBe(false);
+		expect(isTldrReply({ role: "assistant", content: [] })).toBe(false);
+		expect(isTldrReply({ role: "custom", customType: "parallel-work-reminder" })).toBe(false);
+		expect(isTldrReply(undefined)).toBe(false);
+	});
+
+	it("a reply after a needs-you line marks it answered; the sidebar and the awaiting check drop it", () => {
+		const before = [line("t1", "Looking into it"), need("t2"), assistant("a1")];
+		const open = tldrLinesFromEntries(before);
+		expect(open[1]).toEqual({ id: "t2", text: "Need your OK to delete the branch", needsYou: true, ts: 1002 });
+		expect(latestAwaitingReply(open)).toBe(true);
+
+		const after = tldrLinesFromEntries([...before, user("u1", "yes, delete it")]);
+		expect(after[1]).toEqual({
+			id: "t2",
+			text: "Need your OK to delete the branch",
+			needsYou: true,
+			ts: 1002,
+			answered: true,
+		});
+		expect(after[0]).not.toHaveProperty("answered");
+		expect(latestUnseenTldr(after)).toEqual({ text: "Need your OK to delete the branch", needsYou: false });
+		expect(latestAwaitingReply(after)).toBe(false);
+	});
+
+	it("answering a question dialog counts; a cancelled one does not", () => {
+		expect(tldrLinesFromEntries([need("t1"), ask("r1")])[0].answered).toBe(true);
+		expect(tldrLinesFromEntries([need("t1"), ask("r1", false, "queue_add")])[0].answered).toBe(true);
+		expect(tldrLinesFromEntries([need("t1"), ask("r1", true)])[0].answered).toBeUndefined();
+	});
+
+	it("automated prompts and messages before the line don't answer it", () => {
+		const lines = tldrLinesFromEntries([
+			user("u0", "please do it"),
+			need("t1"),
+			user("u1", "[定时任务 hourly] check the runs"),
+			user("u2", "[Queue] Task #2: next thing"),
+			{ type: "custom_message", id: "cm1", customType: "parallel-work-reminder" },
+		]);
+		expect(lines[0].answered).toBeUndefined();
+		expect(latestAwaitingReply(lines)).toBe(true);
+	});
+
+	it("a reply answers every needs-you line before it, not the ones after", () => {
+		const lines = tldrLinesFromEntries([need("t1"), need("t2"), user("u1", "yes to both"), need("t3")]);
+		expect(lines.map((l) => l.answered === true)).toEqual([true, true, false]);
+		expect(latestAwaitingReply(lines)).toBe(true);
+	});
+
+	it("a folded newest line is not awaiting, answered or not", () => {
+		const lines = tldrLinesFromEntries([
+			need("t1"),
+			{ type: "custom", id: "f1", customType: TLDR_COLLAPSE_TYPE, data: { v: 1, ids: ["t1"], collapsed: true } },
+		]);
+		expect(latestAwaitingReply(lines)).toBe(false);
 	});
 });

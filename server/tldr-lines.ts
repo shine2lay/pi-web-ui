@@ -21,6 +21,9 @@
  *
  * 左栏（tldr-sidebar）在每条加载着的对话标题下面显示最新的一行，代替「N 条消息」：
  * 见 latestUnseenTldr。
+ *
+ * needs-you 行之后用户回过话（tldr-answered：发了消息，或在问卷 / 计划批准框里作了答，见
+ * isTldrReply），这一行带 `answered: true`：tab 和左栏都不再高亮它。同样是沿分支按顺序算的。
  */
 
 import type { UiTldrLine } from "./protocol.js";
@@ -65,6 +68,41 @@ export interface TldrEntryLike {
 	customType?: string;
 	data?: unknown;
 	timestamp?: string;
+	/** type "message" 的条目才有（AgentMessage）。 */
+	message?: unknown;
+}
+
+/** 用户在这两个工具的弹窗里作答也算回话：问卷，和 pi-queue 的任务计划批准框。 */
+const REPLY_TOOLS = new Set(["ask_user_question", "queue_add"]);
+
+/** 自动发的「用户消息」开头：定时任务唤醒（server/index.ts、agent-service 无头执行）、pi-queue 交任务和
+ *  催办（pi-queue queue.ts）、pi-web-ui 自己的系统提醒（终端没输出、后台命令结束、用户停了 bash）。 */
+const AUTOMATED_PREFIXES = ["[定时任务", "[Queue]", "（系统"];
+
+/** 这条会话消息算不算「用户回话了」（tldr-answered）：
+ *  - 用户发的消息（文字、只有图都算），自动发的不算（AUTOMATED_PREFIXES）；
+ *  - 问卷 / 计划批准框的工具结果，只要不是错误（用户取消问卷回的是错误，不算）。
+ *  同项目并行提醒这类是 custom 消息，本来就不是 role "user"。 */
+export function isTldrReply(message: unknown): boolean {
+	if (!message || typeof message !== "object") return false;
+	const m = message as { role?: unknown; content?: unknown; toolName?: unknown; isError?: unknown };
+	if (m.role === "toolResult") {
+		return typeof m.toolName === "string" && REPLY_TOOLS.has(m.toolName) && m.isError !== true;
+	}
+	if (m.role !== "user") return false;
+	const text =
+		typeof m.content === "string"
+			? m.content
+			: Array.isArray(m.content)
+				? m.content
+						.map((p) => {
+							const part = p as { type?: unknown; text?: unknown } | null;
+							return part?.type === "text" && typeof part.text === "string" ? part.text : "";
+						})
+						.join("")
+				: "";
+	const head = text.trimStart();
+	return !AUTOMATED_PREFIXES.some((p) => head.startsWith(p));
 }
 
 /** 分支条目（按根 → 叶的顺序）→ TL;DR 行，按时间升序；只留最新 `max` 行。 */
@@ -72,7 +110,16 @@ export function tldrLinesFromEntries(entries: readonly TldrEntryLike[], max = TL
 	const out: UiTldrLine[] = [];
 	/** 重放到当前为止折叠着的行 id。 */
 	const folded = new Set<string>();
+	/** 还没等到用户回话的 needs-you 行（tldr-answered）。 */
+	const waiting: UiTldrLine[] = [];
 	for (const e of entries) {
+		if (e.type === "message") {
+			if (waiting.length > 0 && isTldrReply(e.message)) {
+				for (const l of waiting) l.answered = true;
+				waiting.length = 0;
+			}
+			continue;
+		}
 		if (e.type !== "custom") continue;
 		if (e.customType === TLDR_COLLAPSE_TYPE) {
 			const d = (e.data ?? {}) as { ids?: unknown; collapsed?: unknown };
@@ -88,12 +135,14 @@ export function tldrLinesFromEntries(entries: readonly TldrEntryLike[], max = TL
 		const text = typeof d.text === "string" ? d.text.trim() : "";
 		if (!text || !e.id) continue;
 		const ts = typeof d.ts === "number" && Number.isFinite(d.ts) ? d.ts : Date.parse(e.timestamp ?? "") || 0;
-		out.push({
+		const line: UiTldrLine = {
 			id: e.id,
 			text: text.length > TEXT_MAX ? `${text.slice(0, TEXT_MAX)}…` : text,
 			needsYou: d.needsYou === true,
 			ts,
-		});
+		};
+		out.push(line);
+		if (line.needsYou) waiting.push(line);
 	}
 	const kept = out.length > max ? out.slice(out.length - max) : out;
 	// 没折叠的行不带 collapsed 字段（快照里每行省几个字节，老客户端也不受影响）。
@@ -101,8 +150,14 @@ export function tldrLinesFromEntries(entries: readonly TldrEntryLike[], max = TL
 }
 
 /** 左栏显示的那一行（tldr-sidebar）：只看最新的一行（`lines` 按时间升序，同 tldrLinesFromEntries）。
- *  用户在 TL;DR tab 里把它折叠了（看过了）就没有，左栏回到「N 条消息」；更早的行永远不上左栏。 */
+ *  用户在 TL;DR tab 里把它折叠了（看过了）就没有，左栏回到「N 条消息」；更早的行永远不上左栏。
+ *  needs-you 行用户回过话了（answered）：行还在，只是不再高亮。 */
 export function latestUnseenTldr(lines: readonly UiTldrLine[]): Pick<UiTldrLine, "text" | "needsYou"> | undefined {
 	const last = lines[lines.length - 1];
-	return last && !last.collapsed ? { text: last.text, needsYou: last.needsYou } : undefined;
+	return last && !last.collapsed ? { text: last.text, needsYou: last.needsYou && !last.answered } : undefined;
+}
+
+/** 这条对话最新的一行正在等用户回话（左栏高亮着）：用户一回话就要马上推左栏。 */
+export function latestAwaitingReply(lines: readonly UiTldrLine[]): boolean {
+	return latestUnseenTldr(lines)?.needsYou === true;
 }

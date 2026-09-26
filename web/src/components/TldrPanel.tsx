@@ -3,7 +3,7 @@
  *
  * 长任务里 agent 用 pi-tldr 的 `tldr` 工具边做边写一句大白话进展；这里把当前对话的
  * 这些行倒过来列（最新的在最上面），默认只显示最新几行，「显示全部」展开整份。
- * 「需要你」的行（要用户出手或拍板）高亮。
+ * 「需要你」的行（要用户出手或拍板）高亮；用户之后回过话了（answered，tldr-answered）就不再高亮。
  *
  * tldr-collapse：看过的行可以折叠（每行右上角的 ▾，或顶上的「全部折叠」）。连着的折叠行
  * 并成一行「N 行已读」，点它重新展开。折叠状态存在服务端的会话里（UiTldrLine.collapsed），
@@ -22,6 +22,11 @@ const PENDING_MS = 5000;
 
 /** 列表里的一行：一条 TL;DR，或者一串连着的已折叠行并成的「N 行已读」。 */
 export type TldrRow = { kind: "line"; line: UiTldrLine } | { kind: "folded"; lines: UiTldrLine[] };
+
+/** 这一行还在等用户：needs-you，且用户之后没回过话。 */
+export function awaitingYou(line: UiTldrLine): boolean {
+	return line.needsYou && !line.answered;
+}
 
 /** 最新在上的行 → 显示用的行：连着的已折叠行并成一行。 */
 export function tldrRows(newestFirst: readonly UiTldrLine[], isFolded: (l: UiTldrLine) => boolean): TldrRow[] {
@@ -127,8 +132,8 @@ export const TldrPanel = memo(function TldrPanel({
 							</button>
 						</li>
 					) : (
-						<li key={row.line.id} className={row.line.needsYou ? "tldr-line needs-you" : "tldr-line"}>
-							{row.line.needsYou && <span className="tldr-badge">{t("tldrNeedsYou")}</span>}
+						<li key={row.line.id} className={awaitingYou(row.line) ? "tldr-line needs-you" : "tldr-line"}>
+							{awaitingYou(row.line) && <span className="tldr-badge">{t("tldrNeedsYou")}</span>}
 							<span className="tldr-text">{row.line.text}</span>
 							{row.line.ts > 0 && (
 								<time

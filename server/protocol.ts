@@ -156,6 +156,9 @@ export interface UiTldrLine {
 	ts: number;
 	/** 用户在 tab 里把这一行折叠了（看过了；tldr-collapse）。存在会话里，所有窗口一致；没折叠时不带。 */
 	collapsed?: boolean;
+	/** needs-you 行之后用户回过话了（tldr-answered：发了消息，或在问卷 / 计划批准框里作了答）：
+	 *  tab 和左栏都不再高亮。只出现在 needs-you 行上；没回时不带。 */
+	answered?: boolean;
 }
 
 /** 任务队列里一个任务的计划（queue-panel）：用户和 agent 一起定下、用户在对话框里批准过的六部分。 */
