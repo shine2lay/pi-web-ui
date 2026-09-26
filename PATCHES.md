@@ -50,6 +50,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | tldr-answered                | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TldrPanel.tsx`                                                  |
 | busy-endpoint                | `local`        | `server/agent-service.ts`, `index.ts`, `tests/busy-endpoint-test.mjs`                                                                          |
 | rewind-to-here               | `local`        | `server/rewind.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/Message.tsx`, `MessageList.tsx`, `tests/rewind-to-here-test.mjs`   |
+| crash-guard                  | `local`        | `server/crash-guard.ts`, `agent-service.ts`, `goal-service.ts`, `index.ts`, `tests/no-active-chat-crash-test.mjs`, `tests/unit/`              |
 
 ---
 
@@ -1956,6 +1957,52 @@ pi 扩展 pi-image-trim 管：请求接近上限时换掉最旧的图；这个�
   - B（WebSocket + 浏览器）：回复进行中 `rewind_to` 被拒；堆 3.5 MB 的图直到请求 > 32 MB 被 413；卡片数据有大小、
     7 张图、32 MB 上限、原始报错和 ≤ 24 MB 的回退点；页面卡片白话写出这些、原始报错在详情里；按钮回退后下一条消息
     成功，发出的请求只带 4 张图、不带跳过的部分；文件里的条目和图片一个没少；页面无报错。
+
+---
+
+## crash-guard
+
+**状态**：`local`
+**基线**：v0.94.1
+
+**问题**（2026-09-26，用户同意修）：2026-09-25 17:15 和 2026-09-26 09:11 pi-web-ui 整站崩溃，所有对话正在跑的回合全断。
+两次是同一条栈：`ClientSession.prompt → flushSnapshot → emitSnapshotNow → currentMessages → get conv` 抛
+`no active conversation`。对话表是进程共享的（server-owned-chats），而没有 socket 的窗口（页面刷新了）不算「有人
+在看」（`viewedElsewhere`），所以另一个窗口点「新对话」能把它的当前对话关掉；它之前发出的那句话一结束，`prompt()`
+收尾刷新快照就抛错。分发器用 `void cs.prompt(...)` 发起它，成了未处理的 promise 拒绝，Node 退出，systemd 重启服务。
+上游 v0.96.1 是同样的代码。
+
+### 改法（三层）
+
+1. 根因（`server/agent-service.ts`、`goal-service.ts`）：
+   - `removeConversation` 关掉一条对话时，还指着它的别的窗口（只可能是没 socket 的）马上换到一条开着的对话：
+     `recoverLostActive` → `planForLostActive`（`server/crash-guard.ts`，纯函数）：优先这次发送所在的对话，其次本项目
+     最近活跃的（同 reload-adopt 的 `pickAdoptTarget`，不挑子代理对话）；都没有时有人在看就开新对话，没人看就等它
+     重连（`attach` 先 `ensureActiveConversation`）。每次写一行 `[crash-guard]` 日志。
+   - `emitSnapshotNow` 没有当前对话时先恢复，恢复不了就跳过这次快照；`prompt()` 收尾先回到这次发送所在的对话
+     再刷新；`newChat`、`displaceActive` 不再经过会抛错的 `get conv`。
+   - SDK 事件（`onEvent`）里比较 id（`this.activeId`）；`onEvent` 整体包一层：处理器抛错时带栈记日志（同一
+     错误每分钟最多一次）并继续，不再把错误扔进 pi 的运行循环。目标栏 `emitGoalStatus` 没有当前对话时跳过。
+2. 分发器（`server/index.ts`）：处理一条窗口消息时，`cs` 是 `guardCalls(session, msg.type, report)` 包出来的代理：
+   每个方法返回的 promise 挂上 `.catch`（同一个 promise 原样返回，await 的人照样看得到错误），同步抛错被接住并
+   返回 `undefined`；整个 switch 外面再包 try/catch。出错时带栈记日志，并给这个窗口发一条错误通知（「这一步出错了
+   （prompt → prompt）：…。服务器照常运行。」）。约 89 处 `void cs.x(...)` 一处不用改。
+3. 兜底（`server/index.ts` 调 `installProcessGuards()`）：进程级 `unhandledRejection` 带栈记日志，服务继续跑。
+   **不**接 `uncaughtException`：同步异常没人接住时进程可能真的坏了，保留 Node 默认（退出）。
+
+### 回归
+
+- `tests/unit/crash-guard.test.ts`：`describeError` / `errorMessage`；`guardCalls`（拒绝被报告且 await 的人仍看得到、
+  `void` 调用不留未处理的拒绝、同步抛错被接住、私有字段 / getter / 返回值不受影响）；`planForLostActive` 的顺序；
+  `unhandledRejection` 带栈、只装一次、不装 `uncaughtException`；快照守卫（无处可去就跳过不抛、有开着的就换过去、
+  发送结束回到它的对话、有人看才开新对话）；`onEvent` 抛错只记日志不抛、每分钟一次；目标栏跳过。
+- `tests/no-active-chat-crash-test.mjs`（不花 token：假的 Anthropic 接口，带 `SLOW-<n>` 的消息 n 秒后才答完）：窗口 C
+  在对话 W 开一个 14 秒的慢回复；窗口 A 新开对话 X 发一条 6 秒的慢消息，再点新对话（Y）；A 的页面关掉（没有
+  socket 了，发送还在等 X）；新页面 B 落在 Y 上再点新对话，Y 被关掉；X 答完。核对：服务进程还在、`/api/health`
+  正常、W 的回复照常到达、B 还能聊天、A 用同一个 clientId 回来拿到的是开着的对话并能聊天、日志里没有
+  `no active conversation`、有 `[crash-guard]` 那一行。
+- 反证（2026-09-26）：同一个 E2E 在改动前（766f613）上服务进程以 exit code 1 退出，日志里正是线上那条栈
+  （`get conv ← currentMessages ← emitSnapshotNow ← flushSnapshot ← prompt`）。
 
 ---
 

@@ -31,6 +31,7 @@ import { VERSION, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { sdkCopies, sdkOriginNote } from "./sdk-origin.js";
 import { PROTOCOL_VERSION } from "./protocol-version.js";
 import { AgentService, workspacePath, QuiesceRejectedError } from "./agent-service.js";
+import { describeError, errorMessage, guardCalls, installProcessGuards } from "./crash-guard.js";
 import type { BusyConversation } from "./agent-service.js";
 import { WS_MAX_PAYLOAD_BYTES, isAbsoluteWirePath, wireToAbs } from "./files-service.js";
 import { registerFileTransferRoutes } from "./file-transfer-routes.js";
@@ -111,6 +112,9 @@ function cliFlag(name: string): string | undefined {
 }
 
 const PORT = Number(cliFlag("--port") ?? process.env.PI_WEB_PORT ?? 8787);
+// crash-guard (level 3): a promise rejection nobody handled is logged with its stack and the server
+// keeps running; Node's default would exit and end every chat's running turn. See crash-guard.ts.
+installProcessGuards();
 const CWD = resolve(cliFlag("--cwd") ?? process.env.PI_WEB_CWD ?? process.cwd());
 const DATA_DIR = resolve(cliFlag("--data-dir") ?? process.env.PI_WEB_DATA_DIR ?? join(homedir(), ".pi-web"));
 // The data dir is where the control socket, client state, plugins, themes and
@@ -1864,17 +1868,42 @@ wss.on("connection", (ws) => {
 	// cid getter lets plugins target THIS socket via host.sendTo(clientId).
 	const removePluginSender = pluginMgr.addSender(send, () => clientId);
 
+	// crash-guard (level 2): a failure while handling one window message is logged with its stack and
+	// shown to that window as an error notice. It used to escape: `void cs.prompt(...)` turned it into
+	// an unhandled rejection and Node exited, taking every chat's running turn with it.
+	const reportHandlerError = (where: string, err: unknown): void => {
+		console.error(`[crash-guard] window ${clientId ?? "?"}: ${where} failed:\n${describeError(err)}`);
+		const message = errorMessage(err);
+		send({
+			type: "notice",
+			level: "error",
+			text: `这一步出错了（${where}）：${message}。服务器照常运行。`,
+			textEn: `That didn't work (${where}): ${message}. The server is still running.`,
+		});
+	};
+
 	const dispatch = (msg: ClientMessage): void => {
+		try {
+			dispatchNow(msg);
+		} catch (err) {
+			reportHandlerError(String((msg as { type?: unknown }).type), err);
+		}
+	};
+
+	const dispatchNow = (msg: ClientMessage): void => {
 		if (!clientId) {
 			pending.push(msg);
 			return;
 		}
-		const cs = service.get(clientId);
-		if (!cs) {
+		const session = service.get(clientId);
+		if (!session) {
 			// Session not ready yet (hello processing) — hold the command.
 			pending.push(msg);
 			return;
 		}
+		// Every call below goes through the guard: its promise can't go unhandled, a sync throw is
+		// reported (crash-guard.ts guardCalls).
+		const cs = guardCalls(session, msg.type, reportHandlerError);
 		// Managed instances do not install software on themselves, and tabs this
 		// instance does not offer stay closed. Both refusals live here, on the
 		// server, because hiding them in the client would still leave the message
