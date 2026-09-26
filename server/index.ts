@@ -31,6 +31,7 @@ import { VERSION, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { sdkCopies, sdkOriginNote } from "./sdk-origin.js";
 import { PROTOCOL_VERSION } from "./protocol-version.js";
 import { AgentService, workspacePath, QuiesceRejectedError } from "./agent-service.js";
+import type { BusyConversation } from "./agent-service.js";
 import { WS_MAX_PAYLOAD_BYTES, isAbsoluteWirePath, wireToAbs } from "./files-service.js";
 import { registerFileTransferRoutes } from "./file-transfer-routes.js";
 import { isAudioFile, previewKind } from "./text-sniff.js";
@@ -344,6 +345,17 @@ app.get("/api/health", (_req, res) => {
 		pid: process.pid,
 		engine: ENGINE,
 	});
+});
+
+/** busy-endpoint：此刻在干活的对话（整个进程，不分窗口）。pi-web-deploy 用它判断现在能不能重启：
+ *  `conversations` 推送按窗口给，新连上的客户端看不到别的窗口前台里跑着的对话。
+ *  这里有对话标题，所以和其它接口一样受 PI_WEB_TOKEN 保护（不像 /api/health）。 */
+app.get("/api/busy", (_req, res) => {
+	if (!service.busyConversations) {
+		res.status(501).json({ error: `the ${ENGINE} engine does not report busy chats` });
+		return;
+	}
+	res.json({ busy: service.busyConversations() });
 });
 
 /**
@@ -1176,6 +1188,8 @@ export interface EngineService {
 	};
 	activeConversations(): number;
 	pendingMessages(): number;
+	/** busy-endpoint：此刻在干活的对话（整个进程）。pi 引擎有；dsh 引擎没有。 */
+	busyConversations?(): BusyConversation[];
 	applyPluginAgentTools(): void;
 	applyPluginCommandCatalog(): void;
 	refreshBackgroundServers(): void;

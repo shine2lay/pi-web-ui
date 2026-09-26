@@ -48,6 +48,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | image-aside-label            | `local`        | `server/attachments.ts`, `serialize.ts`                                                                                                        |
 | tldr-sidebar                 | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/LeftPanel.tsx`, `styles.css`                                    |
 | tldr-answered                | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TldrPanel.tsx`                                                  |
+| busy-endpoint                | `local`        | `server/agent-service.ts`, `index.ts`, `tests/busy-endpoint-test.mjs`                                                                          |
 
 ---
 
@@ -1880,6 +1881,35 @@ billion-context-pi（ACP）每轮用自己的「核心」重建发给模型的�
   回话一落盘，窗口 2 的左栏就不高亮了（实测 ~30ms，A 还在跑），窗口 1 的 tab 去掉高亮和徽标、行还在；跑完之后
   左栏还是这一行、不高亮。
 - 反证（2026-09-25）：同一个 E2E 在改动前的构建（845d403）上挂 4 项，正好是新加的这几项，其余 37 项照样过。
+
+---
+
+## busy-endpoint
+
+**状态**：`local`
+**基线**：v0.94.1
+
+**问题**（2026-09-25，用户同意修）：`pi-web-deploy`（~/projects/agent-tools）等没有对话在干活才换构建、重启。它像新
+客户端一样读 `conversations` 推送，可推送是按窗口给的（后台对话 + 这个窗口自己正看着的那条），别的窗口前台里
+跑着的对话它看不到，可能在对话干到一半时重启。
+
+### 改法
+
+- `server/agent-service.ts`：`BusyConversation { id, title, cwd, doing: "run" | "compaction" | "bash", subagent? }`；
+  `ClientSession.busyConversations()`（static）走一遍进程共享的对话表：`isStreaming` → run、`isCompacting` →
+  compaction、`isBashRunning` → bash；会话替换中按没在干活算。每条只出现一次（不像 `activeConversations()` 按
+  客户端累加）。`AgentService.busyConversations()` 转调它。
+- `server/index.ts`：`GET /api/busy` → `{ busy: BusyConversation[] }`；引擎没有这张表（dsh）回 501。带对话标题，
+  所以和其它接口一样受 `PI_WEB_TOKEN` 保护（`/api/health` 不受）。
+- `pi-web-deploy` 先问 `/api/busy`；老服务端（这个接口回的是 index.html）退回推送，再加控制 socket 的
+  `activeConversations` 计数兜底。
+
+### 回归
+
+- `tests/busy-endpoint-test.mjs`（6 项，不花 token，模拟模型）：窗口 1 换到第二个项目、在那里开一轮慢的、不离开
+  这条对话；新连上的客户端的 `conversations` 推送里没有在忙的对话（盲区本身）；`/api/busy` 在两个客户端连着时
+  只列这条一次，带标题、项目和 doing "run"，而且那时这一轮还在跑；跑完之后为空。
+- 反证（2026-09-25）：在改动前的构建（845d403）上第一项就挂：`/api/busy` 回的是 index.html，不是 JSON。
 
 ---
 

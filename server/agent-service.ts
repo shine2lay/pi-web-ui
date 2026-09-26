@@ -1411,6 +1411,16 @@ export function sessionCreatedAt(path: string): number | undefined {
 	return Number.isFinite(ms) ? ms : undefined;
 }
 
+/** busy-endpoint：此刻在干活的一条对话（GET /api/busy 的一项）。
+ *  doing：run = 正在跑一轮；compaction = 正在压缩；bash = 正在跑用户的 `!` 命令。 */
+export interface BusyConversation {
+	id: string;
+	title: string;
+	cwd: string;
+	doing: "run" | "compaction" | "bash";
+	subagent?: true;
+}
+
 export class ClientSession {
 	readonly clientId: string;
 	/** Set by AgentService.attach: reflects the SERVICE-wide quiesce flag
@@ -1443,6 +1453,26 @@ export class ClientSession {
 		const out: AdoptCandidate[] = [];
 		for (const c of ClientSession.sharedConvs.values()) {
 			out.push({ id: c.id, cwd: c.cwd, lastActiveAt: c.lastActiveAt, isSubagent: c.isSubagent });
+		}
+		return out;
+	}
+
+	/** busy-endpoint：整个进程里此刻在干活的对话，不管哪个窗口开着它、有没有被换到后台。
+	 *  `conversations` 推送是按窗口给的（shownInRunningList：后台对话 + 自己正在看的那条），
+	 *  新连上的客户端看不到别的窗口前台里跑着的对话；pi-web-deploy 靠这份表判断现在能不能重启。
+	 *  对话表是进程共享的（server-owned-chats），所以每条只出现一次。 */
+	static busyConversations(): BusyConversation[] {
+		const out: BusyConversation[] = [];
+		for (const c of ClientSession.sharedConvs.values()) {
+			let doing: BusyConversation["doing"] | undefined;
+			try {
+				const s = c.session;
+				doing = s.isStreaming ? "run" : s.isCompacting ? "compaction" : s.isBashRunning ? "bash" : undefined;
+			} catch {
+				// 会话替换中——按没在干活算（同 conversationStreaming）
+			}
+			if (!doing) continue;
+			out.push({ id: c.id, title: c.title, cwd: c.cwd, doing, ...(c.isSubagent ? { subagent: true as const } : {}) });
 		}
 		return out;
 	}
@@ -9989,6 +10019,11 @@ export class AgentService {
 				// 单客户端坏了不影响其他
 			}
 		}
+	}
+
+	/** busy-endpoint：见 ClientSession.busyConversations（对话表进程共享，不按客户端累加）。 */
+	busyConversations(): BusyConversation[] {
+		return ClientSession.busyConversations();
 	}
 
 	/** Aggregate across every client session: conversations with in-flight runs. */
