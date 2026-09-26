@@ -83,6 +83,10 @@ function apply(s: State, raw: unknown): void {
 		s.pausedReason = PAUSE_REASONS.has(reason) ? reason : undefined;
 		return;
 	}
+	if (op.op === "clear") {
+		for (const t of s.tasks) if (t.status === "done") t.status = "removed";
+		return;
+	}
 	if (!isId(op.id)) return;
 	if (op.op === "add") {
 		if (s.tasks.some((t) => t.id === op.id)) return;
@@ -164,7 +168,7 @@ export function taskQueueFromEntries(
 
 /** 面板按钮 → pi-queue 的命令行；参数不对返回 null（不发）。 */
 export function taskQueueCommandLine(action: unknown, id: unknown): string | null {
-	if (action === "start" || action === "stop") return `/queue ${action}`;
+	if (action === "start" || action === "stop" || action === "clear") return `/queue ${action}`;
 	if (action === "up" || action === "down" || action === "remove") return isId(id) ? `/queue ${action} ${id}` : null;
 	return null;
 }

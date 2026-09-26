@@ -671,7 +671,7 @@ export type ClientMessage =
 	 *  （扩展命令即时执行，agent 在跑也行，不进消息列表）。conversationId 对不上当前对话就不做。 */
 	| {
 			type: "task_queue_command";
-			action: "start" | "stop" | "up" | "down" | "remove";
+			action: "start" | "stop" | "up" | "down" | "remove" | "clear";
 			id?: number;
 			conversationId?: string;
 	  }

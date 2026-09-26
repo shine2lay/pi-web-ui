@@ -124,6 +124,21 @@ describe("taskQueueFromEntries (mirrors pi-queue's replay)", () => {
 		expect(q.tasks[0].plan.title).toBe("One, renamed");
 	});
 
+	it("clear drops the done tasks and keeps the open ones", () => {
+		const q = replay(
+			entries([
+				{ op: "add", id: 1, plan: plan("One") },
+				{ op: "add", id: 2, plan: plan("Two") },
+				{ op: "add", id: 3, plan: plan("Three") },
+				{ op: "start", id: 1 },
+				{ op: "done", id: 1, summary: "x" },
+				{ op: "start", id: 2 },
+				{ op: "clear" },
+			]),
+		);
+		expect(ids(q.tasks)).toEqual([2, 3]);
+	});
+
 	it("run and pause, with the reason", () => {
 		let q = replay(entries([{ op: "run" }, { op: "pause", reason: "error" }]));
 		expect(q.running).toBe(false);
@@ -183,6 +198,7 @@ describe("taskQueueCommandLine", () => {
 		expect(taskQueueCommandLine("up", 2)).toBe("/queue up 2");
 		expect(taskQueueCommandLine("down", 2)).toBe("/queue down 2");
 		expect(taskQueueCommandLine("remove", 7)).toBe("/queue remove 7");
+		expect(taskQueueCommandLine("clear", undefined)).toBe("/queue clear");
 	});
 
 	it("refuses anything else", () => {

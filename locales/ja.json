@@ -244,6 +244,8 @@
 		"taskQueueFinishedAt": "{time} 完了",
 		"taskQueueShowAllDone": "完了したものをすべて表示（{n} 件）",
 		"taskQueueShowFewer": "少なく表示",
+		"taskQueueClearDone": "クリア",
+		"taskQueueClearDoneHint": "完了したタスクを一覧から消す",
 		"openProject": "プロジェクトを開く",
 		"streaming": "進行中…",
 		"noHistory": "履歴チャットはまだありません",

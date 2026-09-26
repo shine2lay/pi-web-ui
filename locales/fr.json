@@ -244,6 +244,8 @@
 		"taskQueueFinishedAt": "terminée {time}",
 		"taskQueueShowAllDone": "Afficher toutes les terminées ({n})",
 		"taskQueueShowFewer": "Afficher moins",
+		"taskQueueClearDone": "Effacer",
+		"taskQueueClearDoneHint": "Retirer les tâches terminées de la liste",
 		"openProject": "Ouvrir un projet",
 		"streaming": "En cours…",
 		"noHistory": "Aucune discussion précédente",

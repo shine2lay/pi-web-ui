@@ -244,6 +244,8 @@
 		"taskQueueFinishedAt": "erledigt {time}",
 		"taskQueueShowAllDone": "Alle erledigten anzeigen ({n})",
 		"taskQueueShowFewer": "Weniger anzeigen",
+		"taskQueueClearDone": "Leeren",
+		"taskQueueClearDoneHint": "Erledigte Aufgaben aus der Liste entfernen",
 		"openProject": "Projekt öffnen",
 		"streaming": "Läuft…",
 		"noHistory": "Noch keine früheren Chats",

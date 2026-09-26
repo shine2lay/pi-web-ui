@@ -244,6 +244,8 @@
 		"taskQueueFinishedAt": "feita {time}",
 		"taskQueueShowAllDone": "Mostrar todas as feitas ({n})",
 		"taskQueueShowFewer": "Mostrar menos",
+		"taskQueueClearDone": "Limpar",
+		"taskQueueClearDoneHint": "Tirar da lista as tarefas concluídas",
 		"openProject": "Abrir projeto",
 		"streaming": "Em andamento…",
 		"noHistory": "Ainda não há histórico de conversas",

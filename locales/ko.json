@@ -244,6 +244,8 @@
 		"taskQueueFinishedAt": "{time} 완료",
 		"taskQueueShowAllDone": "완료된 작업 모두 보기({n}개)",
 		"taskQueueShowFewer": "적게 보기",
+		"taskQueueClearDone": "지우기",
+		"taskQueueClearDoneHint": "끝난 작업을 목록에서 지우기",
 		"openProject": "프로젝트 열기",
 		"streaming": "진행 중…",
 		"noHistory": "아직 이전 대화가 없어요",

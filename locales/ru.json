@@ -244,6 +244,8 @@
 		"taskQueueFinishedAt": "сделана {time}",
 		"taskQueueShowAllDone": "Показать все сделанные ({n})",
 		"taskQueueShowFewer": "Показать меньше",
+		"taskQueueClearDone": "Очистить",
+		"taskQueueClearDoneHint": "Убрать готовые задачи из списка",
 		"openProject": "Открыть проект",
 		"streaming": "Выполняется…",
 		"noHistory": "Истории диалогов пока нет",

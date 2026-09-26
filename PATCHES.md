@@ -1609,7 +1609,8 @@ data: { v: 1, ids, collapsed } }`。跟行本身一样随会话走：刷新、�
     一致：面板显示的必须就是 pi-queue 接下来会做的。
   - 删掉的不发；做完的只留最近 `TASK_QUEUE_MAX_DONE`（20）个，排着的和正在做的一个不少。计划每部分截在 4000 字，
     问题和总结截在 2000 字。坏数据跳过，不抛。
-  - `taskQueueCommandLine(action, id)`：`/queue start|stop`、`/queue up|down|remove <id>`；参数不对返回 null，不发。
+  - 镜像 pi-queue 的 `clear` op：做完的全部变成删掉，排着的和正在做的不动。
+  - `taskQueueCommandLine(action, id)`：`/queue start|stop|clear`、`/queue up|down|remove <id>`；参数不对返回 null，不发。
 - `server/protocol.ts`：`UiTaskQueuePlan`（标题 + 六部分）、`UiTaskQueueTask`（`ready | working | stuck | done`）、
   `UiTaskQueue`（`running`、`pausedReason`、`available`、`tasks`）；`UiState.taskQueue?`；客户端消息
   `task_queue_command { action, id?, conversationId? }`。跟 `UiState.queue`（输入框里排队的提问）不是一回事，
@@ -1629,7 +1630,8 @@ data: { v: 1, ids, collapsed } }`。跟行本身一样随会话走：刷新、�
     「停下」；没东西可做时「开始」禁用。
   - 正在做的任务在最上面；卡住时琥珀色，带 agent 的问题和「在对话里回答」的提示。
   - 排着的按要做的顺序，带 ↑ ↓ ✕（✕ 先在行内确认；两头的箭头禁用）。
-  - 做完的变灰，带 agent 的总结，最近做完的在上，默认显示 `TASK_QUEUE_DONE_SHOWN`（5）个。
+  - 做完的变灰，带 agent 的总结，最近做完的在上，默认显示 `TASK_QUEUE_DONE_SHOWN`（5）个。标题右边「清除」
+    （`.task-queue-clear`）发 `/queue clear`，一次清掉所有做完的（只是历史，不再确认）。
   - 点标题展开整份计划，六部分的顺序和叫法跟 pi-queue 批准对话框里的一样（`TASK_QUEUE_PLAN_PARTS`）。
   - 点了按钮先禁用，等服务端发来新的队列（最多 5 秒）再放开，防连点；面板自己不改队列。
   - 没装 pi-queue（`available: false`）时不给按钮，只说怎么装（`.task-queue-note`）。

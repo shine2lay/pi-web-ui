@@ -2632,6 +2632,24 @@ body.rp-resizing .rp-sash.dragging::after {
 .task-queue-more:hover {
 	text-decoration: underline;
 }
+.task-queue-heading-row {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 8px;
+}
+.task-queue-clear {
+	padding: 0;
+	border: none;
+	background: none;
+	color: var(--text-faint);
+	font-size: 11px;
+	cursor: pointer;
+}
+.task-queue-clear:hover:not(:disabled) {
+	color: var(--accent);
+	text-decoration: underline;
+}
 
 /* 插件在底栏 / 输入框动作区贡献的条目（issue #146）。 */
 .status-action {

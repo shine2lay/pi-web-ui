@@ -24,7 +24,7 @@ import { lineTime } from "./TldrPanel";
 type TKey = Parameters<Translate>[0];
 
 /** 面板按钮能发的命令（服务端 taskQueueCommandLine 转成 `/queue …`）。 */
-export type TaskQueueAction = "start" | "stop" | "up" | "down" | "remove";
+export type TaskQueueAction = "start" | "stop" | "up" | "down" | "remove" | "clear";
 
 /** 点了按钮后最多等服务端这么久；命令没改队列时（比如没东西可开始）按钮也会放开。 */
 const BUSY_MS = 5000;
@@ -282,7 +282,20 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 			)}
 			{s.done.length > 0 && (
 				<section className="task-queue-section">
-					<h4 className="task-queue-heading">{t("taskQueueDone")}</h4>
+					<div className="task-queue-heading-row">
+						<h4 className="task-queue-heading">{t("taskQueueDone")}</h4>
+						{controls && (
+							<button
+								type="button"
+								className="task-queue-clear"
+								title={t("taskQueueClearDoneHint")}
+								disabled={busy}
+								onClick={() => run("clear")}
+							>
+								{t("taskQueueClearDone")}
+							</button>
+						)}
+					</div>
 					<ul className="task-queue-list">{doneShown.map((task) => row(task, "done"))}</ul>
 					{s.done.length > TASK_QUEUE_DONE_SHOWN && (
 						<button type="button" className="task-queue-more" onClick={() => setAllDone((v) => !v)}>

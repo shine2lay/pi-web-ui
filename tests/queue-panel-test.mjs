@@ -570,6 +570,22 @@ try {
 	check("switching back brings the queue back", await waitFor(async () => same((await view(A))?.done, [1, 2]), 10000));
 	check("B still shows it", same((await view(B)).done, [1, 2]));
 
+	console.log("window B: clear the done tasks");
+	await B.locator(".task-queue-panel .task-queue-clear").click();
+	check(
+		"Clear empties the list in both windows",
+		await waitFor(async () => (await view(A))?.empty === true && (await view(B))?.empty === true, 10000),
+		`${await show(A)} | ${await show(B)}`,
+	);
+	await A.reload();
+	await A.waitForSelector(".topbar", { timeout: 60000 });
+	await A.locator(".task-queue-panel").waitFor({ timeout: 10000 });
+	check(
+		"the clear sticks after a reload",
+		await waitFor(async () => (await view(A))?.empty === true, 10000),
+		await show(A),
+	);
+
 	check(
 		"the mock got no unscripted messages (no reminders, no continues)",
 		unexpected.length === 0,
