@@ -396,9 +396,12 @@ export interface ChatState {
 	 *  切换结束或被隐藏就清）。只给消息列表用，其余界面仍是服务端当前对话的状态；
 	 *  输入区被透明遮罩挡着，发不出东西。 */
 	preview: UiState | null;
+	/** rewind-to-here：回到一条用户消息后要放回输入框的文字（seq 递增，App 并进撤回草稿的同一条路）。 */
+	rewindDraft: { text: string; seq: number } | null;
 }
 
 type Action =
+	| { type: "rewind_draft"; text: string }
 	| { type: "status"; status: ConnStatus }
 	| { type: "switch_started"; target: SwitchTarget; startedAt: number; preview?: UiState }
 	| { type: "switch_done"; target: SwitchTarget }
@@ -887,6 +890,8 @@ function reducer(state: ChatState, action: Action): ChatState {
 			};
 		case "notice":
 			return { ...state, notices: [...state.notices, action.notice].slice(-6) };
+		case "rewind_draft":
+			return { ...state, rewindDraft: { text: action.text, seq: (state.rewindDraft?.seq ?? 0) + 1 } };
 		case "dismiss_notice":
 			return {
 				...state,
@@ -1187,6 +1192,7 @@ export function useChat() {
 		pendingSwitch: null,
 		switchError: null,
 		preview: null,
+		rewindDraft: null,
 	});
 	const wsRef = useRef<WebSocket | null>(null);
 	/** Terminal output bridge (writers keyed by terminalId). */
@@ -1522,6 +1528,10 @@ export function useChat() {
 				}
 				case "switch_done":
 					dispatch({ type: "switch_done", target: msg.target });
+					break;
+				case "rewind_done":
+					// 回到的是用户消息：那条的文字回到输入框（别的结果靠服务端的 notice 和新快照）。
+					if (msg.ok && msg.editorText) dispatch({ type: "rewind_draft", text: msg.editorText });
 					break;
 				case "switch_failed": {
 					// 是自己在等的那次 → 聊天区错误态；不是（服务端内部自动切换失败）→ 降级成 toast，

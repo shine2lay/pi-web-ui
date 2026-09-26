@@ -49,6 +49,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | tldr-sidebar                 | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/LeftPanel.tsx`, `styles.css`                                    |
 | tldr-answered                | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TldrPanel.tsx`                                                  |
 | busy-endpoint                | `local`        | `server/agent-service.ts`, `index.ts`, `tests/busy-endpoint-test.mjs`                                                                          |
+| rewind-to-here               | `local`        | `server/rewind.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/Message.tsx`, `MessageList.tsx`, `tests/rewind-to-here-test.mjs`   |
 
 ---
 
@@ -1912,6 +1913,49 @@ billion-context-pi（ACP）每轮用自己的「核心」重建发给模型的�
   这条对话；新连上的客户端的 `conversations` 推送里没有在忙的对话（盲区本身）；`/api/busy` 在两个客户端连着时
   只列这条一次，带标题、项目和 doing "run"，而且那时这一轮还在跑；跑完之后为空。
 - 反证（2026-09-25）：在改动前的构建（845d403）上第一项就挂：`/api/busy` 回的是 index.html，不是 JSON。
+
+---
+
+## rewind-to-here
+
+**状态**：`local`
+**基线**：v0.94.1
+
+**问题**（2026-09-26，用户同意修）：temper 对话做 Slack 测试截了几十张图，每次请求 ~42 MB，超过 Anthropic 的
+32 MB 上限，每次都 413 `request_too_large`；billion-context-pi 又取消自动压缩，对话就卡死了。页面上只有一行原始
+报错，用户自己没法救，只能找 agent 用 pi 的 `SessionManager.branchWithSummary` 回退。（图片不再越堆越多由单独的
+pi 扩展 pi-image-trim 管：请求接近上限时换掉最旧的图；这个补丁管「已经卡住了怎么自救」。）
+
+### 改法
+
+- 「回到这里」：每条用户 / 助手消息的操作栏多一个按钮，对话在跑（或在压缩、在回退）时禁用。点了先在气泡下面
+  确认：说明后面几条不再发给模型、仍然存在对话文件里、会加一段简短的自动摘要；回到用户消息时这条的文字回到输入框。
+- 协议：`rewind_to { messageId, fit? }` → `rewind_done { ok, conversationId, editorText?, error? }`；`UiState.rewinding`
+  （回退中，页面显示「正在写摘要」）、`UiState.tooBig`（卡片数据）。
+- 服务端 `ClientSession.rewindTo`：气泡 id → 当前分支上的条目（`server/rewind.ts` `findItemIndex`）→
+  `planRewind`（用户消息 → 它自己的条目，pi 把叶子挪到父条目、文字进输入框；带工具调用的助手消息连同它的工具结果
+  一起保留）→ `session.navigateTree(entryId, { summarize: true })`，即 pi 的 /tree。跳过的分支原样留在文件里，只
+  多一条 `branch_summary`。对话在跑时拒绝；回退进行中发来的话等回退做完再发。pi 生成摘要时把消息转成纯文字
+  （不带图片），所以摘要请求本身不会超限（E2E 里核对：摘要请求 0 张图）。
+- 「对话太大」卡片：一轮以 413 / `request_too_large`（bytes）或上下文窗口超限（tokens，`tooBigKind`）的报错结束
+  时，服务端量一次当前分支（`measureTooBig`：总 MB、图片数、32 MB 上限），并挑一个回退点
+  （`suggestRewindIndex`：保留部分 ≤ 24 MB 的最新一条，优先完整回复的结尾）。页面用这张卡片代替那条原始报错：
+  白话说大小、图片数和上限，「回到那里」按钮（`rewind_to` + `fit`），「或自己挑一条消息用它的『回到这里』」的提示，
+  原始报错收在「详情」里。服务重启后重开的对话若最后一条就是这种报错，会补量一次。
+- 文案：`web/src/i18n.tsx`（en / zh）+ `locales/*.json`（de es fr it ja ko pt ru）。
+
+### 回归
+
+- `tests/unit/rewind.test.ts`：回退落点与保留条数、跳过条数、图片计数（含工具结果里的图）、建议回退点（24 MB、
+  优先级、没有可回退的点）、报错识别（不把「413 requests left」这类当成太大）、气泡 id 解析、卡片数据。
+- `tests/rewind-to-here-test.mjs`（不花 token：假的 Anthropic 接口记录每个请求体，超过 32 MB 回 413；一个小扩展
+  像 billion-context-pi 那样取消压缩）：
+  - A（浏览器）：每条问答都有「回到这里」；从第一条回答回退，确认条写着「后面 4 条」「仍保存」「摘要」；回退后后面
+    的问题从对话里消失、摘要出现、文件里一条都没少、多了 `branch_summary`；下一个请求带着保留部分和摘要，不带跳过
+    的问题；从问题回退时文字回到输入框；回复进行中按钮禁用，结束后恢复。
+  - B（WebSocket + 浏览器）：回复进行中 `rewind_to` 被拒；堆 3.5 MB 的图直到请求 > 32 MB 被 413；卡片数据有大小、
+    7 张图、32 MB 上限、原始报错和 ≤ 24 MB 的回退点；页面卡片白话写出这些、原始报错在详情里；按钮回退后下一条消息
+    成功，发出的请求只带 4 张图、不带跳过的部分；文件里的条目和图片一个没少；页面无报错。
 
 ---
 

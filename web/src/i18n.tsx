@@ -305,6 +305,26 @@ export const zh = {
 	/* message edit */
 	editReask: "编辑重问",
 	editReaskTip: "修改此问题，并从这里重新提问（会新建一个分支对话，原对话保留）",
+	/* rewind-to-here */
+	rewindToHere: "回到这里",
+	rewindTip: "从这条消息接着聊：后面的内容不再发给模型（仍保存在对话文件里），并加一段简短的自动摘要",
+	rewindBusyTip: "对话还在进行中，停下来后才能回退",
+	rewindAsk: "回到这里？之后的 {count} 条消息不再发给模型，但仍保存在对话文件里；会加一段它们的简短自动摘要。",
+	rewindAskUser:
+		"回到这条提问之前？它和之后的消息（共 {count} 条）不再发给模型，但仍保存在对话文件里；会加一段简短的自动摘要，这条提问的文字回到输入框。",
+	rewindConfirm: "回退",
+	rewindingNow: "正在回退：在写跳过部分的摘要…",
+	tooBigTitle: "对话太大，发不出去",
+	tooBigBytes: "要发送的内容有 {size}，其中 {images} 张图片；服务商每次请求最多收 {limit}。",
+	tooBigTokens: "要发送的内容有 {size}，其中 {images} 张图片，已经超出模型的上下文窗口（{window} tokens）。",
+	tooBigSuggest:
+		"可以回到「{snippet}」接着聊：跳过它之后的 {count} 条消息（仍保存在对话文件里），加一段简短摘要；要发送的内容降到 {size}、{images} 张图片。",
+	tooBigGoBack: "回到那里",
+	tooBigPickHint: "也可以自己挑一条消息，用它的「回到这里」。",
+	tooBigNoSuggest: "找不到足够小的位置：请自己挑一条更早的消息，用它的「回到这里」。",
+	tooBigShort: "这次请求太大（对话里的图片和内容太多），被服务商拒绝了。",
+	tooBigShortTokens: "这次请求超出了模型的上下文窗口，被服务商拒绝了。",
+	tooBigDetails: "详情（原始报错）",
 	reaskFromHere: "从此处重新提问",
 	editPlaceholder: "修改问题内容…",
 	editHint: "⌘/Ctrl+Enter 提交 · Esc 取消",
@@ -1941,6 +1961,30 @@ const en: Record<keyof typeof zh, string> = {
 	/* message edit */
 	editReask: "Edit & re-ask",
 	editReaskTip: "Edit this question and re-ask from here (forks a new conversation; the original is kept)",
+	rewindToHere: "Rewind to here",
+	rewindTip:
+		"Carry the chat on from this message: what comes after stops being sent to the model (it stays saved in the chat file), and a short automatic summary of it is added",
+	rewindBusyTip: "The chat is still running; you can go back once it stops",
+	rewindAsk:
+		"Rewind to here? The {count} messages after this stop being sent to the model. They stay saved in the chat file, and a short automatic summary of them is added.",
+	rewindAskUser:
+		"Go back to before this question? It and the messages after it ({count} in all) stop being sent to the model. They stay saved in the chat file, a short automatic summary is added, and the question's text goes back into the message box.",
+	rewindConfirm: "Rewind",
+	rewindingNow: "Going back: writing a summary of the skipped part…",
+	tooBigTitle: "This chat is too big to send",
+	tooBigBytes:
+		"What it would send is {size}, with {images} pictures; the provider accepts at most {limit} per request.",
+	tooBigTokens:
+		"What it would send is {size}, with {images} pictures, which no longer fits the model's context window ({window} tokens).",
+	tooBigSuggest:
+		"You can go back to “{snippet}” and carry on from there: the {count} messages after it are skipped (they stay saved in the chat file) and a short summary is added. What's sent drops to {size} with {images} pictures.",
+	tooBigGoBack: "Go back there",
+	tooBigPickHint: "Or pick a message yourself and use its “Rewind to here”.",
+	tooBigNoSuggest: "No earlier point is small enough: pick an earlier message yourself and use its “Rewind to here”.",
+	tooBigShort:
+		"This request was too big (too many pictures and too much content in the chat), and the provider refused it.",
+	tooBigShortTokens: "This request no longer fit the model's context window, and the provider refused it.",
+	tooBigDetails: "Details (raw error)",
 	reaskFromHere: "Re-ask from here",
 	editPlaceholder: "Edit the question…",
 	editHint: "⌘/Ctrl+Enter to submit · Esc to cancel",

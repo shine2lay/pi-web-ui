@@ -454,6 +454,15 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		kind: "action",
 		order: 10,
 	},
+	// rewind-to-here：用户和助手消息都有，对话在跑时灰掉（Message.tsx 内置处理）。
+	{
+		id: "host:msg-rewind",
+		slot: "message.actions",
+		labelKey: "rewindToHere",
+		icon: "rewind",
+		kind: "action",
+		order: 12,
+	},
 	{ id: "host:msg-copy", slot: "message.actions", labelKey: "copyMessage", icon: "copy", kind: "action", order: 20 },
 	// 整条消息一键复制三件套（issue #228）：纯文本 / Markdown 原文 / 长图 PNG。
 	// 落点在消息 hover 工具条（Message.tsx 内置处理），与按块复制的 host:msg-copy 并存。
@@ -1810,7 +1819,7 @@ function omitKey<T>(rec: Record<string, T> | undefined, key: string): Record<str
  *   chat / terminal / git / search / browser / layers / settings / sound / globe / sun /
  *   download / github / plus / menu / folder / dot / cpu / gauge / coins / database /
  *   download / github / plus / menu / folder / dot / cpu / gauge / coins / database /
- *   message / activity / edit / copy / text / markdown / image / x / upload / mic
+ *   message / activity / edit / copy / text / markdown / image / x / upload / mic / rewind
  * 插件条目里的 icon 可以是 emoji/单字符（manifest 已裁剪长度）：渲染层按「是否落在词表内」
  * 二选一即可 —— 不认识的字符串原样当文本画，不报错。
  */

@@ -987,6 +987,9 @@ export interface DispatchSession {
 	abortBash(): Promise<void>;
 	/** 手动重试上次失败的模型调用（自动重试次数用完、已停止标红后）。 */
 	retryLast(): Promise<void>;
+	/** rewind-to-here：把对话回到某条消息之后继续（pi 的 /tree + 自动摘要）。fit = 「对话太大」卡片的按钮。
+	 *  只有 pi 引擎实现（DSH 没有会话树），dispatch 用 `?.`。 */
+	rewindTo?(messageId: string | undefined, fit: boolean): Promise<void>;
 	killBackgroundServer(port?: number, taskId?: string): Promise<boolean>;
 	killAllBackgroundServers(): Promise<string[]>;
 	listBgServers(): Promise<void>;
@@ -1899,6 +1902,9 @@ wss.on("connection", (ws) => {
 				break;
 			case "retry_last":
 				void cs.retryLast();
+				break;
+			case "rewind_to":
+				void cs.rewindTo?.(typeof msg.messageId === "string" ? msg.messageId : undefined, msg.fit === true);
 				break;
 			case "kill_background_server":
 				void cs.killBackgroundServer(msg.port, msg.taskId);
