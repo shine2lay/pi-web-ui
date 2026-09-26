@@ -166,6 +166,18 @@ import {
 } from "./tool-manager.js";
 import { WebUIContext } from "./webui-context.js";
 import { ChatDialogs, chatUiContext } from "./chat-dialogs.js";
+import {
+	contextItems,
+	droppedMessageCount,
+	type EntryLike,
+	findItemIndex,
+	formatMb,
+	measureTooBig,
+	planRewind,
+	REQUEST_LIMIT_BYTES,
+	suggestRewindIndex,
+	tooBigKind,
+} from "./rewind.js";
 import { DEFAULT_COMPACTION_RESERVE_TOKENS, effectiveSoftCap, softCapToReserve } from "./soft-cap.js";
 import { pruneContextHierarchically } from "./context-budget.js";
 import { decodeText } from "./text-sniff.js";
@@ -256,6 +268,7 @@ import type {
 	UiTldrLine,
 	UiTaskQueue,
 	UiDialog,
+	UiTooBig,
 } from "./protocol.js";
 import { buildQuestionIndex } from "./question-index.js";
 import { TASK_QUEUE_ENTRY_TYPE, taskQueueCommandLine, taskQueueFromEntries } from "./task-queue.js";
@@ -1649,6 +1662,11 @@ function pluginToolToDefinition(tool: PluginAgentTool): ToolDefinition {
  * payloads by data length (identical lengths within the same ms are far too
  * unlikely to matter).
  */
+/** 消息在对话序号表（Conversation.msgIds）里的键：工具结果按 toolCallId，其余按角色 + 时间戳 + 内容指纹。 */
+function uiKeyOf(m: AgentMessage): string {
+	return m.role === "toolResult" ? `t:${m.toolCallId}` : `${m.role}:${m.timestamp}:${contentFingerprint(m)}`;
+}
+
 function contentFingerprint(m: AgentMessage): string {
 	const content = (m as unknown as { content?: unknown }).content;
 	if (!Array.isArray(content) || content.length === 0) return "empty";
@@ -1852,6 +1870,12 @@ export interface Conversation {
 	/** per-chat-dialogs：这条对话的扩展弹窗（select/confirm/input）在等回答的，最早的在前。
 	 *  只在看着这条对话的窗口里显示（快照的 UiState.dialog），左栏挂「?」。 */
 	dialogs: ChatDialogs;
+	/** rewind-to-here：「回到这里」进行中（navigateTree + 摘要 LLM 调用）。见 UiState.rewinding。 */
+	rewinding?: { startedAt: number } | null;
+	/** rewind-to-here：上一次请求因为对话太大被拒。见 UiState.tooBig。 */
+	tooBig?: UiTooBig | null;
+	/** rewind-to-here：回退进行中时是一个回退结束就 resolve 的 promise（这期间发来的话等它）。 */
+	rewindDone?: Promise<void>;
 }
 
 /** 轨迹事件 payload 封顶（可直接广播/持久化，不撑爆 storage.json）。 */
@@ -5464,6 +5488,16 @@ export class ClientSession {
 				// 非 error 的 assistant 定稿 = 重试周期结束（与 SDK 重置
 				// _retryAttempt 的条件一致）：即使 auto_retry_end 丢失，横幅也不会卡住。
 				if (mm.stopReason !== "error") conv.retryState = null;
+				// rewind-to-here：请求因为对话太大被拒 → 记下卡片数据（大小、图片数、回退建议）；
+				// 好好回复了一条就清掉。pi 会把这条 413 当成上下文溢出、从当前消息里摘掉并去压缩，
+				// 压缩被上下文插件取消时页面上就只剩这张卡片。
+				if (mm.stopReason === "error") {
+					const errorText = String((event.message as { errorMessage?: unknown }).errorMessage ?? "");
+					const kind = tooBigKind(errorText);
+					if (kind) this.noteTooBig(conv, kind, errorText, (event.message as { timestamp?: number }).timestamp);
+				} else if (conv.tooBig) {
+					conv.tooBig = null;
+				}
 				const text = extractAssistantTextFromContent(mm.content);
 				if (text && text.includes("[[")) void this.markerSvc.handleAssistantText(conv.id, text);
 				break;
@@ -5473,6 +5507,8 @@ export class ClientSession {
 				// 无暂存时省略，插件回退为「继续执行」）。
 				const task = conv.pendingTask;
 				conv.pendingTask = undefined;
+				// rewind-to-here：新一轮开跑，上一次「对话太大」的卡片作废（这轮再被拒会重新记上）。
+				conv.tooBig = null;
 				this.emitRun(conv, task ? { type: "run_start", task } : { type: "run_start" });
 				// #140：本轮真的开跑了（session.isStreaming 此刻已为 true）—— 左栏
 				// 那行的「流式中」标识要立刻亮起来：首条提示词的入列 emit 早于本轮
@@ -5620,7 +5656,7 @@ export class ClientSession {
 		// timestamp alone collides in the cache and only the first one renders
 		// — append a cheap content fingerprint to keep them distinct while
 		// staying stable across snapshots (content never changes once persisted).
-		const key = m.role === "toolResult" ? `t:${m.toolCallId}` : `${m.role}:${m.timestamp}:${contentFingerprint(m)}`;
+		const key = uiKeyOf(m);
 		let n = conv.msgIds.get(key);
 		if (n === undefined) {
 			n = conv.nextMsgId++;
@@ -5822,6 +5858,15 @@ export class ClientSession {
 		// 流式 error 同样是中间态（定稿走 message_end/agent_end）：先藏起
 		// errorMessage，避免红色在 streaming 气泡里闪一下。最终失败会经由
 		// messages 永久标红，不影响告警。
+		// rewind-to-here：重开的对话（比如服务重启后）最后一条就是「太大发不出去」的报错 → 补量一次卡片数据。
+		// undefined = 这条对话还没查过；查过就是对象或 null，不再重复。
+		if (conv.tooBig === undefined) {
+			conv.tooBig = null;
+			const last = state.messages[state.messages.length - 1] as
+				{ role?: string; stopReason?: string; errorMessage?: string; timestamp?: number } | undefined;
+			const kind = last?.role === "assistant" && last.stopReason === "error" ? tooBigKind(last.errorMessage) : null;
+			if (kind && !state.isStreaming) this.noteTooBig(conv, kind, last?.errorMessage ?? "", last?.timestamp);
+		}
 		let streamingMessage = state.streamingMessage ? serializeStreamingMessage(state.streamingMessage) : null;
 		if (streamingMessage?.stopReason === "error") {
 			streamingMessage = { ...streamingMessage, errorMessage: undefined };
@@ -5862,6 +5907,8 @@ export class ClientSession {
 			errorMessage: state.errorMessage,
 			retry: conv.retryState ?? null,
 			compaction: conv.compactionState ?? null,
+			rewinding: conv.rewinding ?? null,
+			tooBig: conv.tooBig ?? null,
 			pendingQuestion: this.pendingQuestionForSnapshot(),
 			pendingApproval: this.pendingApprovalForSnapshot(),
 			plan: this.planManager.getPlan(this.activeId),
@@ -8282,6 +8329,9 @@ export class ClientSession {
 		// switch/new_chat while prompt() is in flight must never target a
 		// different conversation.
 		const conv = this.conv;
+		// rewind-to-here：正在回退（换分支 + 写摘要）时发来的话等回退做完再发——输入框已经清了，
+		// 拒掉就丢了；等完话落在回退后的分支上，正是用户要的顺序。
+		if (conv.rewindDone) await conv.rewindDone;
 		const promptAc = new AbortController();
 		conv.activePromptAc = promptAc;
 		// 输入框内容被消费（发送/斜杠执行）→ 清掉该会话存过的草稿（best-effort）。
@@ -11175,6 +11225,147 @@ export class ClientSession {
 			if (count === seq) return entry.id;
 		}
 		return null;
+	}
+
+	/** rewind-to-here：记下「对话太大」卡片的数据。同一条报错（同一时间戳）只量一次：
+	 *  量的是整条分支的 JSON（42 MB 的对话约百毫秒）。 */
+	private noteTooBig(conv: Conversation, kind: "bytes" | "tokens", errorText: string, at?: number): void {
+		const when = at ?? Date.now();
+		if (conv.tooBig && conv.tooBig.at === when) return;
+		try {
+			const items = contextItems(conv.session.sessionManager.buildContextEntries() as unknown as EntryLike[]);
+			conv.tooBig = measureTooBig(items, kind, errorText, {
+				contextWindow: conv.session.model?.contextWindow,
+				now: when,
+			});
+		} catch {
+			conv.tooBig = {
+				kind,
+				bytes: 0,
+				images: 0,
+				limitBytes: REQUEST_LIMIT_BYTES,
+				errorText,
+				suggest: null,
+				at: when,
+			};
+		}
+		const tb = conv.tooBig;
+		console.log(
+			`[rewind] ${conv.id} too big to send (${kind}): ${formatMb(tb.bytes)}, ${tb.images} pictures; ` +
+				(tb.suggest
+					? `suggest going back ${tb.suggest.dropCount} messages to ${formatMb(tb.suggest.keepBytes)}`
+					: "no point small enough"),
+		);
+	}
+
+	/**
+	 * rewind-to-here：把当前对话回到某条消息之后继续——pi 的 /tree：`navigateTree(entry, { summarize })`。
+	 * 还是同一个会话文件，跳过的那段原样留在文件里（另一条分支），新位置加一条自动摘要；
+	 * 回到用户消息时那条的文字回到输入框（rewind_done.editorText）。
+	 * messageId = 气泡 id；fit = 「对话太大」卡片的按钮（挑保留部分 ≤ 24 MB 的最新一条）。
+	 * 运行中 / 压缩中 / 已在回退中一律拒绝。
+	 */
+	async rewindTo(messageId: string | undefined, fit: boolean): Promise<void> {
+		const conv = this.conv;
+		const done = (ok: boolean, editorText?: string) =>
+			this.emit({ type: "rewind_done", ok, conversationId: conv.id, ...(editorText ? { editorText } : {}) });
+		const refuse = (level: "info" | "warning" | "error", text: string, textEn: string) => {
+			this.emit({ type: "notice", level, text, textEn });
+			done(false);
+			this.flushSnapshot();
+		};
+		if (this.quiesceBlocked()) {
+			done(false);
+			return;
+		}
+		const s = conv.session;
+		if (s.isStreaming || conv.compactionState || conv.rewinding) {
+			refuse(
+				"warning",
+				"对话还在进行中，等它停下来再回退",
+				"The chat is still running; wait until it stops, then go back",
+			);
+			return;
+		}
+		let items;
+		try {
+			items = contextItems(s.sessionManager.buildContextEntries() as unknown as EntryLike[]);
+		} catch (err) {
+			refuse("error", `回退失败：${(err as Error).message}`, `Going back failed: ${(err as Error).message}`);
+			return;
+		}
+		const index = fit
+			? suggestRewindIndex(items)
+			: messageId
+				? findItemIndex(items, messageId, (m) => conv.msgIds.get(uiKeyOf(m)))
+				: null;
+		if (index === null) {
+			if (fit) {
+				refuse(
+					"error",
+					"找不到足够小的位置可以回去：请在更早的某条消息上点「回到这里」",
+					"No earlier point is small enough: pick a message and use its “Rewind to here”",
+				);
+			} else {
+				refuse(
+					"error",
+					"找不到这条消息（可能已被压缩，或不在当前分支上）",
+					"Can't find that message on this branch (it may have been compacted)",
+				);
+			}
+			return;
+		}
+		const plan = planRewind(items, index);
+		if (!plan || (!plan.toComposer && plan.keepCount >= items.length)) {
+			refuse("info", "这条之后没有可以跳过的内容", "There is nothing after this message to skip");
+			return;
+		}
+		const dropped = droppedMessageCount(items, plan.keepCount);
+		let finish: () => void = () => {};
+		conv.rewindDone = new Promise<void>((resolve) => {
+			finish = resolve;
+		});
+		conv.rewinding = { startedAt: Date.now() };
+		this.flushSnapshot();
+		this.checkpointViewers(conv.id, true);
+		let ok = false;
+		let editorText: string | undefined;
+		try {
+			const result = await s.navigateTree(plan.navigateEntryId, { summarize: true });
+			if (result.cancelled) {
+				this.emit({ type: "notice", level: "info", text: "已取消回退", textEn: "Going back was cancelled" });
+			} else {
+				ok = true;
+				editorText = result.editorText || (plan.toComposer ? plan.editorText : undefined);
+				conv.tooBig = null;
+				console.log(
+					`[rewind] ${conv.id} went back to ${plan.navigateEntryId}: ${dropped} messages skipped, ` +
+						`summary ${result.summaryEntry ? result.summaryEntry.id : "none"}`,
+				);
+				this.emit({
+					type: "notice",
+					level: "info",
+					text: `已回到那条消息：跳过了 ${dropped} 条（仍保存在对话文件里），并加了一段简短摘要`,
+					textEn: `Went back: ${dropped} message${dropped === 1 ? "" : "s"} skipped (still saved in the chat file), and a short summary of them was added`,
+				});
+			}
+		} catch (err) {
+			this.emit({
+				type: "notice",
+				level: "error",
+				text: `回退失败：${(err as Error).message}`,
+				textEn: `Going back failed: ${(err as Error).message}`,
+			});
+		} finally {
+			conv.rewinding = null;
+			conv.rewindDone = undefined;
+		}
+		done(ok, editorText);
+		if (this.activeId === conv.id) this.flushSnapshot(true);
+		this.checkpointViewers(conv.id, true);
+		ClientSession.emitConversationsToAll();
+		// 回退期间发来的话在等它（见 prompt()）：快照发完再放行，页面先看到回退后的样子。
+		finish();
 	}
 
 	/**

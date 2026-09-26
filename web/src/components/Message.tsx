@@ -135,6 +135,7 @@ const SLOT_ICONS: Record<string, ReactNode> = {
 	volume: <FiVolume2 />,
 	refresh: <FiRefreshCw />,
 	x: <FiX />,
+	rewind: <FiRotateCcw />,
 };
 
 /** 条目图标：词表命中 → react-icons；emoji/符号短串 → 原样文本；其余（含空）→ 通用图标。 */
@@ -179,6 +180,12 @@ interface MessageProps {
 	/** Manually retry the last failed model call (red error on the LAST message
 	 *  while idle). Wired to the server `retry_last` message. */
 	onRetry?: () => void;
+	/** rewind-to-here：「回到这里」（用户/助手消息）。稳定引用——Message 是 memo 的。 */
+	onRewind?: (messageId: string) => void;
+	/** 对话在跑 / 在压缩 / 在回退：「回到这里」灰掉。 */
+	rewindBusy?: boolean;
+	/** 回到这条会跳过多少条消息（确认条里说）。稳定引用。 */
+	rewindDropCount?: (messageId: string) => number;
 	/** When set, shows a collapse button (message was expanded from the collapsed view). */
 	onCollapse?: (messageId: string) => void;
 
@@ -228,6 +235,9 @@ export const Message = memo(function Message({
 	onEdit,
 	onKillBash,
 	onRetry,
+	onRewind,
+	rewindBusy,
+	rewindDropCount,
 	onCollapse,
 	questionAttachments,
 
@@ -255,6 +265,8 @@ export const Message = memo(function Message({
 	// (newly added files) and path+mode (workspace attachments).
 	const [editAttachments, setEditAttachments] = useState<PromptAttachment[]>([]);
 	const [editDragOver, setEditDragOver] = useState(false);
+	// rewind-to-here：「回到这里」的确认条开着。
+	const [rewindAsk, setRewindAsk] = useState(false);
 	// Transient inline notice for the editor (oversized/unreadable dropped
 	// files) — Message has no toast access, so it renders under the chips.
 	const [editNotice, setEditNotice] = useState<string | null>(null);
@@ -305,6 +317,26 @@ export const Message = memo(function Message({
 	const isEmptyStreaming = streaming && isLast && message.content.length === 0;
 
 	const canEdit = message.role === "user" && !streaming && !isEmptyStreaming && !!onEdit;
+	// rewind-to-here：用户和助手消息都能「回到这里」（正在流式的那条除外）；对话在跑时按钮灰掉不藏。
+	const canRewind =
+		(message.role === "user" || message.role === "assistant") &&
+		!!onRewind &&
+		!(streaming && isLast) &&
+		!message.id.startsWith("stream");
+	const rewindBlocked = !!rewindBusy || streaming;
+	const rewindButton = (key: string, icon: ReactNode, label: string) => (
+		<button
+			key={key}
+			type="button"
+			className="msg-action msg-action-rewind"
+			title={rewindBlocked ? t("rewindBusyTip") : t("rewindTip")}
+			aria-label={label}
+			disabled={rewindBlocked}
+			onClick={() => setRewindAsk(true)}
+		>
+			{icon} <span className="msg-action-label">{label}</span>
+		</button>
+	);
 	/** Paste/drop handler inside the edit composer — same downscale pipeline
 	 *  as the main input bar so payloads stay under the server's cap. */
 	const addEditImageFiles = async (files: File[]) => {
@@ -678,7 +710,7 @@ export const Message = memo(function Message({
 		if (!uiMessageActions) {
 			const fallbackCopy = renderCopyDropdown("fb-copy");
 			const speakFallback = speakNode("fb-speak");
-			if (!canEdit && !fallbackCopy && !speakFallback) return null;
+			if (!canEdit && !canRewind && !fallbackCopy && !speakFallback) return null;
 			const children: ReactNode[] = [];
 			if (canEdit) {
 				children.push(
@@ -704,6 +736,8 @@ export const Message = memo(function Message({
 					</Fragment>,
 				);
 			}
+			// rewind-to-here
+			if (canRewind) children.push(rewindButton("fb-rewind", <FiRotateCcw />, t("rewindToHere")));
 			if (fallbackCopy) children.push(fallbackCopy);
 			if (speakFallback) children.push(speakFallback);
 			return children;
@@ -790,6 +824,12 @@ export const Message = memo(function Message({
 						{slotIcon(entry.icon)} <span className="msg-action-label">{label}</span>
 					</button>,
 				);
+				return;
+			}
+			// 内置「回到这里」（rewind-to-here）：点了先开确认条，确认后才发 rewind_to。
+			if (entry.id === "host:msg-rewind") {
+				if (!canRewind) return;
+				nodes.push(rewindButton(key, slotIcon(entry.icon), label));
 				return;
 			}
 			if (entry.kind === "divider") {
@@ -1046,7 +1086,20 @@ export const Message = memo(function Message({
 					</div>
 				) : (
 					<>
-						{message.errorMessage && (
+						{message.errorMessage && message.tooBig ? (
+							// rewind-to-here：「对话太大发不出去」——面上一句大白话，原始报错收进详情；不给重试
+							// （原样重发一定还是太大），出路在消息列表底下的「对话太大」卡片和每条消息的「回到这里」。
+							<div className="msg-error msg-error-toobig">
+								<span className="msg-error-text">
+									{t(message.tooBig === "tokens" ? "tooBigShortTokens" : "tooBigShort")}
+								</span>
+								<details className="msg-error-details">
+									<summary>{t("tooBigDetails")}</summary>
+									<pre>{message.errorMessage}</pre>
+								</details>
+							</div>
+						) : null}
+						{message.errorMessage && !message.tooBig && (
 							<div className="msg-error">
 								<span className="msg-error-text">{message.errorMessage}</span>
 								{/* 最后一轮报错且已停止：给一个手动重试入口
@@ -1154,6 +1207,32 @@ export const Message = memo(function Message({
 				)}
 			</div>
 			{!editing && !headActionsNode && renderMessageActions()}
+			{rewindAsk && canRewind && !editing && (
+				<div className="msg-rewind-confirm" role="group" aria-label={t("rewindToHere")}>
+					<span className="msg-rewind-confirm-text">
+						{t(message.role === "user" ? "rewindAskUser" : "rewindAsk", {
+							count: rewindDropCount?.(message.id) ?? 0,
+						})}
+					</span>
+					<span className="msg-rewind-confirm-actions">
+						<button type="button" className="chip" onClick={() => setRewindAsk(false)}>
+							{t("cancel")}
+						</button>
+						<button
+							type="button"
+							className="chip primary msg-rewind-yes"
+							disabled={rewindBlocked}
+							title={rewindBlocked ? t("rewindBusyTip") : undefined}
+							onClick={() => {
+								setRewindAsk(false);
+								onRewind?.(message.id);
+							}}
+						>
+							<FiRotateCcw /> {t("rewindConfirm")}
+						</button>
+					</span>
+				</div>
+			)}
 		</div>
 	);
 });

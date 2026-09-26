@@ -1407,6 +1407,25 @@ export function App() {
 		[send],
 	);
 
+	// rewind-to-here：「回到这里」（messageId）与「对话太大」卡片的按钮（fit）。回到用户消息时
+	// 服务端回执带着那条的文字 → 走撤回草稿的同一条路放回输入框（空则填入、非空追加）。
+	const onRewind = useCallback(
+		(messageId: string) => {
+			send({ type: "rewind_to", messageId });
+		},
+		[send],
+	);
+	const onRewindFit = useCallback(() => {
+		send({ type: "rewind_to", fit: true });
+	}, [send]);
+	const rewindDraft = chat.rewindDraft;
+	useEffect(() => {
+		if (!rewindDraft) return;
+		recallSeqRef.current += 1;
+		const item = { text: rewindDraft.text, seq: recallSeqRef.current };
+		setRecallDrafts((prev) => [...prev.slice(-9), item]);
+	}, [rewindDraft]);
+
 	// Stable callbacks for memoized panels (LeftPanel/RightPanel/ChatInput/
 	// GoalBar skip re-render while tokens stream in — inline closures here
 	// would break their shallow prop comparison every render).
@@ -1751,6 +1770,8 @@ export function App() {
 										}}
 										onRemoveQueued={onRemoveQueued}
 										onRecallQueued={onRecallQueued}
+										onRewind={onRewind}
+										onRewindFit={onRewindFit}
 										thinkingWrap={chat.settings?.thinkingWrap ?? true}
 										toolsWrap={chat.settings?.toolsWrap ?? true}
 										toolImages={chat.settings?.toolImagesEnabled ?? true}

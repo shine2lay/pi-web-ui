@@ -8482,6 +8482,87 @@ div.chead[role="button"]:focus-visible,
 	background: rgba(248, 113, 113, 0.14);
 }
 
+/* rewind-to-here：「对话太大」的原始报错收在详情里（面上只有一句大白话） */
+.msg-error-details {
+	margin-top: 6px;
+	font-size: 12px;
+}
+.msg-error-details summary {
+	cursor: pointer;
+	color: var(--text-dim);
+}
+.msg-error-details pre {
+	margin: 6px 0 0;
+	padding: 6px 8px;
+	max-height: 200px;
+	overflow: auto;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	background: var(--bg-elev2);
+	color: var(--text-dim);
+	border-radius: 6px;
+}
+
+/* rewind-to-here：「对话太大，发不出去」卡片（消息列表底下，琥珀色：有出路的告警） */
+.too-big-card {
+	color: var(--text);
+	background: var(--card-bg, rgba(251, 191, 36, 0.08));
+	border: 1px solid rgba(251, 191, 36, 0.45);
+	border-radius: 8px;
+	padding: 10px 12px;
+	margin: 4px 0 8px;
+	font-size: 13px;
+	overflow-wrap: anywhere;
+}
+.too-big-card .too-big-title {
+	font-weight: 600;
+	color: var(--amber-text);
+	margin-bottom: 4px;
+}
+.too-big-card p {
+	margin: 4px 0;
+}
+.too-big-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px;
+	margin-top: 8px;
+}
+.too-big-hint {
+	color: var(--text-dim);
+	font-size: 12px;
+}
+
+/* rewind-to-here：消息下的「回到这里」确认条 */
+.msg-rewind-confirm {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 6px;
+	padding: 8px 10px;
+	font-size: 12.5px;
+	background: var(--bg-elev2);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+}
+.msg-rewind-confirm-text {
+	flex: 1 1 260px;
+	min-width: 0;
+}
+.msg-rewind-confirm-actions {
+	display: inline-flex;
+	gap: 6px;
+}
+.msg-action:disabled {
+	cursor: not-allowed;
+}
+.msg:hover .msg-action:disabled {
+	opacity: 0.45;
+}
+
 /* 大模型 API 瞬时报错自动重试中的温和提示（琥珀色，非红）：替代一闪而过的红色报错 */
 .retry-notice {
 	display: flex;

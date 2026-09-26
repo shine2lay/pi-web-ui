@@ -69,6 +69,9 @@ export interface UiMessage {
 	 *  toolResult messages (the tool's own `details`, ≤64KB or dropped — serialize.ts):
 	 *  present_files' preview cards read kind/size/excerpt from it. */
 	details?: unknown;
+	/** rewind-to-here：这条助手报错是「对话太大发不出去」（413 request_too_large / 超过上下文）。
+	 *  前端把原始报错收进「详情」，面上只给一句大白话。 */
+	tooBig?: "bytes" | "tokens";
 	/** Present on compactionSummary messages: context size (tokens) before
 	 *  compaction — the card header renders "compacted from N tokens" like
 	 *  the pi CLI. Absent on older snapshots. */
@@ -333,6 +336,13 @@ export interface UiState {
 		/** Server-side start timestamp (ms) — drives the elapsed timer. */
 		startedAt: number;
 	} | null;
+	/** rewind-to-here：「回到这里」进行中（换分支 + 给跳过部分写摘要的 LLM 调用，可能几十秒）。
+	 *  置位期间回退按钮灰掉、发消息被拒。null/缺省 = 没在回退。 */
+	rewinding?: { startedAt: number } | null;
+	/** rewind-to-here：上一次请求因为对话太大被拒（Anthropic 413 request_too_large，或超过
+	 *  模型的上下文）。前端用它画「对话太大」卡片（大小、图片数、上限、回退按钮）。
+	 *  成功回复一条、回退成功或新一轮开始时清除。null/缺省 = 没有。 */
+	tooBig?: UiTooBig | null;
 	/**
 	 * 待用户回答的模型提问（ask_user_question）——对话框的服务端事实源。
 	 *  `question_pending` 只在提问发生的那一刻推给「当时在线」的连接；刷新页面 /
@@ -609,6 +619,11 @@ export type ClientMessage =
 	 *  and is idle. Server re-triggers one LLM turn without adding a new user
 	 *  message; refused while streaming. */
 	| { type: "retry_last" }
+	/** rewind-to-here：把对话回到某条消息之后继续（pi 的 /tree：同一个会话文件里换到那条消息，
+	 *  跳过的部分原样留在文件里，并加一条自动摘要）。messageId = 气泡的 UiMessage.id；
+	 *  fit = 「对话太大」卡片的按钮：服务端自己挑保留部分 ≤ 24 MB 的最新一条。
+	 *  运行中拒绝。结果回一条 rewind_done。 */
+	| { type: "rewind_to"; messageId?: string; fit?: boolean }
 	// -- background tasks (AI-started servers) ------------------------------
 	/** Kill ONE background server the agent started (by listening port). */
 	| { type: "kill_background_server"; port?: number; taskId?: string }
@@ -1332,6 +1347,38 @@ export interface QuestionAnswer {
 	id: string;
 	selected: string[];
 	custom?: string;
+}
+
+/** rewind-to-here：「对话太大」卡片的数据（UiState.tooBig）。大小按当前分支发给模型的消息的
+ *  JSON 字节算（图片是 base64，这个数几乎就是请求体大小）。 */
+export interface UiTooBig {
+	/** bytes = 请求体超过上限（413）；tokens = 超过模型的上下文窗口。 */
+	kind: "bytes" | "tokens";
+	/** 当前分支要发的内容有多大（字节）。 */
+	bytes: number;
+	/** 其中的图片数。 */
+	images: number;
+	/** 请求体上限（字节，Anthropic 32 MB）。 */
+	limitBytes: number;
+	/** 模型的上下文窗口（tokens），kind=tokens 时卡片说它。 */
+	contextWindow?: number;
+	/** provider 的原始报错（卡片「详情」里原样给出）。 */
+	errorText: string;
+	/** 卡片按钮回到哪条：保留部分 ≤ 24 MB 的最新一条。null = 找不到（第一条就超了）。 */
+	suggest: {
+		/** user / assistant（卡片说「你的消息」还是「回复」）。 */
+		role: string;
+		/** 那条消息的开头几十个字。 */
+		text: string;
+		timestamp?: number;
+		/** 跳过多少条（用户 + 助手）。 */
+		dropCount: number;
+		/** 回退后还发多少字节、多少张图。 */
+		keepBytes: number;
+		keepImages: number;
+	} | null;
+	/** 哪次失败（ms）。 */
+	at: number;
 }
 
 /** 待用户回答的模型提问（ask_user_question）——服务端侧的事实源。
@@ -2728,6 +2775,9 @@ export type ServerMessage =
 	 *  and on request (get_commands). */
 	| { type: "slash_commands"; commands: SlashCommandInfo[] }
 	| { type: "notice"; level: "info" | "warning" | "error"; text: string; textEn?: string }
+	/** rewind-to-here：rewind_to 的回执（只发给点按钮的窗口）。回到的是用户消息时 editorText 是
+	 *  那条消息的文字，前端放回输入框（同撤回排队消息的路子）。 */
+	| { type: "rewind_done"; ok: boolean; conversationId: string; editorText?: string }
 	/** switch-loading：切换对话的回执。客户端在发出 switch_session / switch_conversation
 	 *  的那一刻就进入「正在打开…」，靠这两条消息结束它：成功一定在新快照**之后**发
 	 *  （flushSnapshot 是同步的），失败则带上原因。target 原样回传客户端发来的目标，

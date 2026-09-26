@@ -152,6 +152,82 @@ function CompactionBanner({ compaction }: { compaction: NonNullable<UiState["com
 	);
 }
 
+/** rewind-to-here：回退进行中（换分支 + 给跳过部分写摘要，可能几十秒）。同压缩条的样子。 */
+function RewindBanner({ startedAt }: { startedAt: number }) {
+	const t = useT();
+	const [, setTick] = useState(0);
+	useEffect(() => {
+		const timer = setInterval(() => setTick((n) => n + 1), 1000);
+		return () => clearInterval(timer);
+	}, []);
+	const elapsed = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+	return (
+		<div className="compact-notice rewind-notice" role="status">
+			<span className="compact-pulse" />
+			<span className="compact-text">
+				{t("rewindingNow")} · {elapsed}s
+			</span>
+		</div>
+	);
+}
+
+/** 字节 → 「42 MB」（与服务端 rewind.ts 的 formatMb 同口径）。 */
+function formatMb(bytes: number): string {
+	const mb = bytes / (1024 * 1024);
+	return `${mb >= 10 ? mb.toFixed(0) : mb.toFixed(1)} MB`;
+}
+
+/**
+ * rewind-to-here：「对话太大，发不出去」卡片（UiState.tooBig）。大白话说清多大、几张图、上限多少，
+ * 按钮回到保留部分 ≤ 24 MB 的最新一条（服务端挑），原始报错收在「详情」里。
+ */
+function TooBigCard({ tooBig, onFit }: { tooBig: NonNullable<UiState["tooBig"]>; onFit?: () => void }) {
+	const t = useT();
+	const s = tooBig.suggest;
+	return (
+		<div className="too-big-card" role="alert">
+			<div className="too-big-title">{t("tooBigTitle")}</div>
+			<p className="too-big-size">
+				{tooBig.kind === "tokens"
+					? t("tooBigTokens", {
+							size: formatMb(tooBig.bytes),
+							images: tooBig.images,
+							window: tooBig.contextWindow ? tooBig.contextWindow.toLocaleString() : "?",
+						})
+					: t("tooBigBytes", {
+							size: formatMb(tooBig.bytes),
+							images: tooBig.images,
+							limit: formatMb(tooBig.limitBytes),
+						})}
+			</p>
+			{s ? (
+				<>
+					<p className="too-big-suggest">
+						{t("tooBigSuggest", {
+							snippet: s.text || "…",
+							count: s.dropCount,
+							size: formatMb(s.keepBytes),
+							images: s.keepImages,
+						})}
+					</p>
+					<div className="too-big-actions">
+						<button type="button" className="chip primary too-big-go" disabled={!onFit} onClick={() => onFit?.()}>
+							{t("tooBigGoBack")}
+						</button>
+						<span className="too-big-hint">{t("tooBigPickHint")}</span>
+					</div>
+				</>
+			) : (
+				<p className="too-big-suggest">{t("tooBigNoSuggest")}</p>
+			)}
+			<details className="msg-error-details">
+				<summary>{t("tooBigDetails")}</summary>
+				<pre>{tooBig.errorText}</pre>
+			</details>
+		</div>
+	);
+}
+
 function hasToolCall(m: UiMessage): boolean {
 	return m.content.some((b) => b.type === "toolCall");
 }
@@ -186,6 +262,10 @@ interface MessageListProps {
 	onRemoveQueued?: (kind: "steer" | "followUp", text: string, index: number) => void;
 	/** 撤回一条排队/插队消息（取回队列 + 文字回到输入框）。 */
 	onRecallQueued?: (kind: "steer" | "followUp", text: string, index: number) => void;
+	/** rewind-to-here：消息的「回到这里」（确认后发 rewind_to { messageId }）。 */
+	onRewind?: (messageId: string) => void;
+	/** rewind-to-here：「对话太大」卡片的按钮（rewind_to { fit }）。 */
+	onRewindFit?: () => void;
 	/** 思考文本是否换行（设置面板开关；false = 不换行横向滚动）。 */
 	thinkingWrap?: boolean;
 	/** 工具调用是否默认展开（设置面板开关；false = 默认折叠）。 */
@@ -213,6 +293,8 @@ export function MessageList({
 	onRetry,
 	onRemoveQueued,
 	onRecallQueued,
+	onRewind,
+	onRewindFit,
 	thinkingWrap,
 	toolsWrap,
 	toolImages,
@@ -271,6 +353,20 @@ export function MessageList({
 	// system 消息不进渲染(见 serialize.ts)：去掉后再取末尾，否则空 SYSTEM 占住 isLast。
 	const lastVisible = [...messages].reverse().find((m) => m.role !== "system");
 	const lastId = lastVisible ? lastVisible.id : null;
+	// rewind-to-here：确认条里的「跳过多少条」——与服务端 droppedMessageCount 同口径：这条之后的
+	// 用户 + 助手消息（工具结果算在助手气泡里），回到用户消息时连它自己。窗口保留的是尾部，
+	// 所以之后的消息都在 state.messages 里。走 ref：回调要稳定，不然每条 memo 的消息都白重渲。
+	const rewindMsgsRef = useRef(state.messages);
+	rewindMsgsRef.current = state.messages;
+	const rewindDropCount = useCallback((messageId: string) => {
+		const list = rewindMsgsRef.current;
+		const i = list.findIndex((m) => m.id === messageId);
+		if (i < 0) return 0;
+		let n = list[i].role === "user" ? 1 : 0;
+		for (let j = i + 1; j < list.length; j++) if (list[j].role === "user" || list[j].role === "assistant") n++;
+		return n;
+	}, []);
+	const rewindBusy = state.isStreaming || !!state.compaction || !!state.rewinding;
 	// Only the last KEEP_RECENT persisted messages are fully rendered; older
 	// ones collapse to summary rows (unless the user expanded them).
 	const recentStart = state.messages.length > COLLAPSE_MIN ? Math.max(0, state.messages.length - KEEP_RECENT) : 0;
@@ -1198,6 +1294,9 @@ export function MessageList({
 								thinkingWrap={thinkingWrap}
 								isLast={m.id === lastId}
 								onEdit={onEdit}
+								onRewind={onRewind}
+								rewindBusy={rewindBusy}
+								rewindDropCount={rewindDropCount}
 								questionAttachments={questionAttachments.get(m.id)}
 								onCollapse={isExpandedOld ? collapse : undefined}
 								searchActive={searchOpen}
@@ -1248,6 +1347,10 @@ export function MessageList({
 				{/* 压缩中常驻进度：不依赖 isStreaming（压缩本身也算 streaming，
 					但即使结束信号丢失也要凭 compaction 字段显示，直到 compaction_end） */}
 				{state.compaction && <CompactionBanner compaction={state.compaction} />}
+				{state.rewinding && <RewindBanner startedAt={state.rewinding.startedAt} />}
+				{state.tooBig && !state.isStreaming && !state.rewinding && !state.compaction && (
+					<TooBigCard tooBig={state.tooBig} onFit={onRewindFit} />
+				)}
 				{state.isStreaming && messages.length === 0 && <div className="streaming-wait">{t("waitingResponse")}</div>}
 				{state.queue.steering.map((text, i) => (
 					<QueuedMessage

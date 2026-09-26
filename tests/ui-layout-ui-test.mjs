@@ -473,10 +473,10 @@ async function main() {
 	check("再打开布局页", await openLayoutPage(page));
 	const msgSlot = page.locator(".set-ui-slot", { hasText: /消息工具条|Message actions/ }).first();
 	check("布局页列出了消息工具条分区", await until(async () => (await msgSlot.count()) > 0, 30, 250));
-	// 分区条目 = 编辑重问 + 整条复制四件套（复制 / 纯文本 / Markdown / 图片）= 5 条，逐个取消勾选
+	// 分区条目 = 编辑重问 + 回到这里（rewind-to-here）+ 整条复制四件套（复制 / 纯文本 / Markdown / 图片）= 6 条，逐个取消勾选
 	const msgBoxes = msgSlot.locator('.set-row input[type="checkbox"]');
 	const msgBoxCount = await msgBoxes.count();
-	check("消息工具条有 5 个可隐藏条目（编辑重问 + 复制四件套）", msgBoxCount === 5, `${msgBoxCount} 个`);
+	check("消息工具条有 6 个可隐藏条目（编辑重问 + 回到这里 + 复制四件套）", msgBoxCount === 6, `${msgBoxCount} 个`);
 	for (let k = 0; k < msgBoxCount; k++) {
 		const box = msgBoxes.nth(k);
 		if (await box.isChecked()) await tap(page, box);

@@ -5,6 +5,7 @@
  */
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { UiContentBlock, UiImageBlock, UiMessage } from "./protocol.js";
+import { tooBigKind } from "./rewind.js";
 
 /** AgentMessage is not re-exported from the package root; derive it from AgentSession. */
 export type AgentMessage = AgentSession["messages"][number];
@@ -246,6 +247,10 @@ export function serializeMessage(m: AgentMessage, seq: number): UiMessage | null
 				usageCost: typeof m.usage?.cost?.total === "number" ? m.usage.cost.total : undefined,
 				stopReason: m.stopReason,
 				errorMessage: m.errorMessage,
+				// rewind-to-here：「对话太大发不出去」的报错→前端面上说大白话，原文收进详情。
+				...(m.stopReason === "error" && tooBigKind(m.errorMessage)
+					? { tooBig: tooBigKind(m.errorMessage) ?? undefined }
+					: {}),
 			};
 
 		case "toolResult": {
