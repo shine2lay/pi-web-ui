@@ -47,6 +47,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | per-chat-dialogs             | `local`        | `server/chat-dialogs.ts`, `webui-context.ts`, `agent-service.ts`, `protocol.ts`, `web/src/App.tsx`, `LeftPanel.tsx`, i18n                      |
 | image-aside-label            | `local`        | `server/attachments.ts`, `serialize.ts`                                                                                                        |
 | tldr-sidebar                 | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/LeftPanel.tsx`, `styles.css`                                    |
+| tldr-answered                | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TldrPanel.tsx`                                                  |
 
 ---
 
@@ -1840,6 +1841,45 @@ billion-context-pi（ACP）每轮用自己的「核心」重建发给模型的�
     和左栏各行。
 - 反证（2026-09-25）：同一个 E2E 在改动前的构建（7bfc94b）上挂 17 项：所有等这一行的检查都挂；条数、
   「Current」、行高、没刷新这些照样过。
+
+---
+
+## tldr-answered
+
+**状态**：`local`
+**基线**：v0.94.1
+
+**问题**（2026-09-25，用户同意的收尾活）：「需要你」的 TL;DR 行一直高亮，直到 agent 写下一行或者用户在 tab 里
+折叠它。用户已经回了话，左栏和 TL;DR tab 还在喊「需要你」。
+
+### 改法
+
+- `server/tldr-lines.ts`：
+  - `isTldrReply(message)`：算不算用户回话。用户发的消息算（文字、只有图都算），自动发的不算：定时任务唤醒
+    `[定时任务`、pi-queue 交任务 / 催办 `[Queue]`、pi-web-ui 自己的系统提醒 `（系统`。问卷（`ask_user_question`）
+    和任务计划批准框（`queue_add`）的工具结果也算，错误结果不算（用户取消问卷回的是错误）。
+  - `tldrLinesFromEntries`：沿分支按顺序重放，回话之前所有还在等的 needs-you 行带 `answered: true`；之后的行不算。
+  - `latestUnseenTldr`：`needsYou` 取 `needsYou && !answered`，左栏不再高亮，行还在。
+    `latestAwaitingReply(lines)`：最新一行正等着用户（左栏高亮着）。
+- `server/protocol.ts`：`UiTldrLine.answered?: boolean`。可选字段，协议版本不升。
+- `server/agent-service.ts`：
+  - `message_end` 是回话、最新一行又在等用户时：`emitConversationsToAll()`（所有窗口的左栏），并给正看着这条对话的
+    窗口马上发快照（`flushSnapshot` + `checkpointViewers(id, true)`）。不发的话 TL;DR tab 要等模型下一步的检查点
+    才去掉高亮（E2E 里等了 4 秒还亮着）。SDK 先通知监听方、后把消息写进会话，所以放在微任务里。
+  - `tldrOf` 的缓存签名算上 `answered`（同折叠）：行 id 没变也要换数组，delta 才会带上。
+- `web/src/components/TldrPanel.tsx`：`awaitingYou(line)` = `needsYou && !answered`，决定高亮和「需要你」徽标。
+- 没有新文案。
+
+### 回归
+
+- `tests/unit/tldr-lines.test.ts`（+6 项，共 21）：什么算回话；回话后左栏和「在等」都不再高亮；答了问卷算、取消
+  不算；自动发的消息和这行之前的消息不算；一次回话答掉它之前所有 needs-you 行、不管之后的；折叠了的最新行
+  不算在等。
+- `tests/unit/tldr-panel.test.ts`（+1）：答过的 needs-you 行没有高亮、没有徽标。
+- `tests/tldr-sidebar-test.mjs`（+7 项，共 41）：窗口 1 在 A 里回话，模拟模型慢慢答（6 秒）。回话前 tab 和左栏都高亮；
+  回话一落盘，窗口 2 的左栏就不高亮了（实测 ~30ms，A 还在跑），窗口 1 的 tab 去掉高亮和徽标、行还在；跑完之后
+  左栏还是这一行、不高亮。
+- 反证（2026-09-25）：同一个 E2E 在改动前的构建（845d403）上挂 4 项，正好是新加的这几项，其余 37 项照样过。
 
 ---
 

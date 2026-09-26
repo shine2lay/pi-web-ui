@@ -59,6 +59,17 @@ describe("TldrPanel", () => {
 		);
 		expect(html).toContain('dateTime="2026-09-24T12:01:00.000Z"');
 	});
+
+	it("an answered needs-you line is a plain line: no highlight, no badge (tldr-answered)", () => {
+		const lines = mk(3, [1, 3]).map((l) => (l.id === "t1" ? { ...l, answered: true } : l));
+		const html = render(lines);
+		expect(html.match(/class="tldr-line needs-you"/g)).toHaveLength(1);
+		expect(html.match(/class="tldr-badge"/g)).toHaveLength(1);
+		expect(html).toMatch(
+			/class="tldr-line needs-you"><span class="tldr-badge">[^<]+<\/span><span class="tldr-text">step 3</,
+		);
+		expect(html).toMatch(/class="tldr-line"><span class="tldr-text">step 1</);
+	});
 });
 
 /** tldr-collapse：看过的行折叠起来，连着的并成一行「N 行已读」。 */

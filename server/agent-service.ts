@@ -186,6 +186,8 @@ import { buildQuestionIndex } from "./question-index.js";
 import { TASK_QUEUE_ENTRY_TYPE, taskQueueCommandLine, taskQueueFromEntries } from "./task-queue.js";
 import { messagesHash } from "./window-hash.js";
 import {
+	isTldrReply,
+	latestAwaitingReply,
 	latestUnseenTldr,
 	TLDR_COLLAPSE_TYPE,
 	TLDR_ENTRY_TYPE,
@@ -4001,7 +4003,18 @@ export class ClientSession {
 				} catch {
 					/* 轨迹尽力而为 */
 				}
-				// 每条 assistant 气泡流式结束 → 立即解析其中的内联标记：每个气泡各自
+				// tldr-answered：最新一行 TL;DR 在等用户（左栏高亮着），用户回话了 → 所有窗口的左栏马上去掉高亮，
+				// 正看着这条对话的窗口也马上发快照（TL;DR tab 的高亮跟着快照走；不发的话要等模型下一步的检查点）。
+				// SDK 先通知监听方、后把消息写进会话，两步在同一个同步段里：这时分支上还没有这条回话，
+				// 所以放到微任务里推（落盘之后）。
+				if (isTldrReply(event.message) && latestAwaitingReply(this.tldrOf(conv))) {
+					queueMicrotask(() => {
+						if (this.disposed) return;
+						ClientSession.emitConversationsToAll();
+						if (this.activeId === conv.id) this.flushSnapshot();
+						this.checkpointViewers(conv.id, true);
+					});
+				}
 				// 每条 assistant 气泡流式结束 → 立即解析其中的内联标记：每个气泡各自
 				// 生效（不再等整轮 agent_end），同一轮里先前消息的标记也不再丢。
 				const mm = event.message as { role?: string; stopReason?: unknown; content?: unknown };
@@ -4227,7 +4240,8 @@ export class ClientSession {
 			if (c && c.key === key) return c.lines;
 			const lines = tldrLinesFromEntries(sm.getBranch());
 			// 折叠状态也算进签名（tldr-collapse）：只折叠了一行时行 id 没变，数组也得换，delta 才会带上。
-			const sig = lines.map((l) => (l.collapsed ? `${l.id}+` : l.id)).join("\u0001");
+			// 「用户回过话」同理（tldr-answered）。
+			const sig = lines.map((l) => `${l.id}${l.collapsed ? "+" : ""}${l.answered ? "=" : ""}`).join("\u0001");
 			conv.tldrCache = { key, sig, lines: c && c.sig === sig ? c.lines : lines };
 			return conv.tldrCache.lines;
 		} catch {

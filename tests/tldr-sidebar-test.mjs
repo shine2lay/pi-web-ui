@@ -13,7 +13,10 @@
  *  - a needs-you line is highlighted (same highlight as the TL;DR tab); a normal line is not;
  *  - a chat with no lines (B) keeps "N messages"; the open chat keeps "Current", even with a line;
  *  - window 1 folds A's newest line in the TL;DR tab: window 2's row goes back to "N messages" live
- *    (the older line 2 never shows); opening it again brings the line back.
+ *    (the older line 2 never shows); opening it again brings the line back;
+ *  - tldr-answered: window 1 replies in A. The needs-you highlight goes away as soon as the reply
+ *    lands, while A is still working on it: in window 2's row and in window 1's TL;DR tab (the line
+ *    itself stays).
  * Usage: npm run build && node tests/tldr-sidebar-test.mjs    (SIDEBAR_DEBUG=1 prints the mock's requests;
  *        SIDEBAR_SHOT=/tmp/x.png saves window 1 with the lines, plus x-left.png of the left list)
  */
@@ -65,6 +68,9 @@ const CHATS = {
 };
 const prompt = (k) => `SIDEBAR-${k} fix the login`;
 const answer = (k) => `SIDEBAR-${k}-ANSWER done.`;
+/** The user's answer to A's needs-you line; the mock takes its time over it, so the checks see A still running. */
+const REPLY = "Yes, delete the old login branch";
+const REPLY_GAP = 6000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failures = 0;
@@ -150,7 +156,12 @@ const mock = createServer(async (req, res) => {
 		await sse(res, [chunk(m, { tool_calls: [call] }), chunk(m, {}, "tool_calls")]);
 		return;
 	}
-	await sleep(CHATS[k].answerGap);
+	const lastUser = [...history].reverse().find((x) => x.role === "user");
+	const lastText =
+		typeof lastUser?.content === "string"
+			? lastUser.content
+			: (lastUser?.content ?? []).map((p) => p.text ?? "").join("");
+	await sleep(lastText.includes(REPLY) ? REPLY_GAP : CHATS[k].answerGap);
 	await sse(res, [chunk(m, { content: answer(k) }), chunk(m, {}, "stop")]);
 });
 await new Promise((r) => mock.listen(MOCK_PORT, "127.0.0.1", r));
@@ -410,6 +421,48 @@ try {
 		"window 2: opening it again brings line 3 back, live",
 		await waitFor(async () => (await subText(W2, "A")) === A3, 5000),
 		String(await subText(W2, "A")),
+	);
+
+	console.log("window 1: reply in A (tldr-answered)");
+	const tabNeedsYou = () => W1.locator(".tldr-panel .tldr-line.needs-you").count();
+	const tabBadges = () => W1.locator(".tldr-panel .tldr-badge").count();
+	check(
+		"window 1: before the reply, the TL;DR tab highlights line 3",
+		(await tabNeedsYou()) === 1 && (await tabBadges()) === 1,
+	);
+	check("window 2: before the reply, A's row is highlighted", /\bneeds-you\b/.test((await sub(W2, "A"))?.cls ?? ""));
+	await send(W1, REPLY);
+	const sentReply = Date.now();
+	const dropped = await waitFor(async () => {
+		const s = await sub(W2, "A");
+		return s?.text === A3 && s.cls === "session-sub tldr-sub" && transparent(s.bg);
+	}, 4000);
+	const droppedAfter = Date.now() - sentReply;
+	check(
+		"window 2: A's row stops highlighting line 3 once the reply lands, live",
+		dropped,
+		JSON.stringify(await sub(W2, "A")),
+	);
+	check(
+		"...while A was still working on the reply (not only at the end of the run)",
+		dropped && droppedAfter < REPLY_GAP - 1000 && (await row(W2, "A").locator(".conv-dot.conv-running").count()) > 0,
+		dropped ? `${droppedAfter} ms` : "never dropped",
+	);
+	check(
+		"window 1: the TL;DR tab drops the highlight and badge, and keeps the line",
+		(await waitFor(async () => (await tabNeedsYou()) === 0 && (await tabBadges()) === 0, 4000)) &&
+			(await W1.locator(".tldr-panel .tldr-text", { hasText: A3 }).count()) === 1,
+		`${await tabNeedsYou()} highlighted`,
+	);
+	check(
+		"A answered the reply",
+		await waitFor(async () => (await row(W2, "A").locator(".conv-dot.conv-running").count()) === 0, REPLY_GAP + 8000),
+	);
+	const sEnd = await sub(W2, "A");
+	check(
+		"window 2: after the run, A's row still shows line 3, not highlighted",
+		sEnd?.text === A3 && sEnd.cls === "session-sub tldr-sub",
+		JSON.stringify(sEnd),
 	);
 	for (const [name, page] of [
 		["window 1", W1],
