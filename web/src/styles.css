@@ -1000,6 +1000,21 @@ body.rp-resizing .rp-sash.dragging::after {
 	color: var(--text-faint);
 }
 
+/* tldr-sidebar：最新一行 TL;DR 代替「N 条消息」。一行加省略号（行高不变），悬停看全文；
+   需要你的行用 TL;DR tab 的同一种高亮（.tldr-line.needs-you）。 */
+.session-sub.tldr-sub {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.session-sub.tldr-sub.needs-you {
+	padding-left: 5px;
+	border-left: 2px solid var(--amber);
+	border-radius: 0 3px 3px 0;
+	background: color-mix(in srgb, var(--amber) 12%, transparent);
+	color: var(--text);
+}
+
 .session-src {
 	margin-left: 6px;
 	font-size: 9.5px;

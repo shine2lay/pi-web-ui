@@ -890,7 +890,16 @@ export const LeftPanel = memo(function LeftPanel({
 															)}
 														</span>
 													)}
-													{renaming === `conv:${c.id}` ? null : (
+													{renaming === `conv:${c.id}` ? null : c.tldr && !opening && !active ? (
+														// tldr-sidebar：最新一行没看过的 TL;DR 代替「N 条消息」（一行，悬停看全文）；
+														// 正在打开 / 当前对话照旧。需要你的行用 TL;DR tab 的同一种高亮。
+														<span
+															className={`session-sub tldr-sub${c.tldr.needsYou ? " needs-you" : ""}`}
+															title={c.tldr.text}
+														>
+															{c.tldr.text}
+														</span>
+													) : (
 														<span className="session-sub">
 															{opening
 																? t("switchOpeningShort")

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ClientSession, recentChatLimit, sessionCreatedAt } from "../../server/agent-service.js";
 import { ClientStateStore } from "../../server/client-state.js";
-import type { ConversationSummary, ServerMessage, SessionSummary } from "../../server/protocol.js";
+import type { ConversationSummary, ServerMessage, SessionSummary, UiTldrLine } from "../../server/protocol.js";
 
 /**
  * 左栏「最近对话」（recent-chats 补丁）的**服务端口径**。
@@ -62,6 +62,8 @@ interface FakeSession {
 	subagentRunOutcome(conv: FakeConv): Record<string, unknown>;
 	// 上游 v0.94：emitConversations 给每行标等答复问卷（hasQuestion）。本用例没有问卷。
 	getPendingQuestionForConv(convId: string): { id: string; title?: string } | undefined;
+	// tldr-sidebar：emitConversations 给加载着的行带最新一行 TL;DR。本用例没有 TL;DR 行。
+	tldrOf(conv: FakeConv): UiTldrLine[];
 }
 
 function conv(id: string, opts: Partial<FakeConv> & { messages?: number; streaming?: boolean } = {}): FakeConv {
@@ -113,6 +115,8 @@ beforeEach(() => {
 		},
 		subagentRunOutcome: () => ({}),
 		getPendingQuestionForConv: () => undefined,
+		// tldr-sidebar：本用例的对话没有 TL;DR 行。
+		tldrOf: () => [],
 	};
 });
 

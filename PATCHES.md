@@ -46,6 +46,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | queue-panel                  | `local`        | `server/task-queue.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TaskQueuePanel.tsx`, `RightPanel.tsx`, `done-cues.ts`, i18n     |
 | per-chat-dialogs             | `local`        | `server/chat-dialogs.ts`, `webui-context.ts`, `agent-service.ts`, `protocol.ts`, `web/src/App.tsx`, `LeftPanel.tsx`, i18n                      |
 | image-aside-label            | `local`        | `server/attachments.ts`, `serialize.ts`                                                                                                        |
+| tldr-sidebar                 | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/LeftPanel.tsx`, `styles.css`                                    |
 
 ---
 
@@ -1785,6 +1786,60 @@ billion-context-pi（ACP）每轮用自己的「核心」重建发给模型的�
   - `IMAGE_ACP_DEBUG=1` 打印模拟模型收到的请求。
 - 反证（2026-09-25）：同一个 E2E 在改动前的构建（92fe842）上挂 4 项：两轮的请求里一张图都没有，也没有那行
   文字；ref 标签和页面卡片两项照样过。
+
+---
+
+## tldr-sidebar
+
+**状态**：`local`
+**基线**：v0.94.1
+
+**诉求**（用户 2026-09-25）：不点进对话也能跟上所有 agent：左栏每条对话标题下面显示它最新的一行 TL;DR，
+需要你的行要醒目。用户的选择：
+- 代替标题下面的「N 条消息」（行高不变）；正在打开 / 当前对话照旧（当前对话还是「当前」）。
+- 只显示最新的一行：在 TL;DR tab 里把它折叠了（看过了）就回到条数；更早的行永远不上左栏。
+- 只有服务端加载着的对话有；历史行（运行时已释放的）照旧显示条数，也不去读它们的会话文件。
+- 需要你的行用 TL;DR tab 的同一种高亮；一行放不下加省略号，悬停看全文。
+
+### 改法
+
+- `server/tldr-lines.ts`：`latestUnseenTldr(lines)`：只看最新一行，折叠了就返回 undefined，否则
+  `{ text, needsYou }`。
+- `server/protocol.ts`：`ConversationSummary.tldr?: Pick<UiTldrLine, "text" | "needsYou">`。可选字段：老页面
+  忽略它，老服务端不发，协议版本不用升（`check:protocol` 也不要求）。
+- `server/agent-service.ts`：
+  - `emitConversations`：每条加载着的对话都带 `tldr`，用 TL;DR tab 的同一份缓存（`tldrOf` /
+    `conv.tldrCache`：会话树没动就不重扫）。历史行（`recentHistoryRows`）不带。
+  - `entry_appended` 是 pi-tldr 的 `tldr` 条目时 `ClientSession.emitConversationsToAll()`：所有窗口的左栏马上
+    换上新的一行，后台对话也是。原来的 `scheduleSessionsRefresh` 要等 800ms，而且只推订阅这条对话的那一个
+    窗口。
+  - `setTldrCollapsed` 写完折叠条目也 `emitConversationsToAll()`：折叠 / 展开最新一行，所有窗口的左栏跟着在
+    这一行和条数之间切换。
+- `web/src/components/LeftPanel.tsx`：活行的第二行有 `c.tldr`、又不是正在打开或当前对话时，显示这一行
+  （`.session-sub.tldr-sub`，`title` 是全文）；需要你的行加 `needs-you`。
+- `web/src/styles.css`：`.tldr-sub` 一行加省略号；`.tldr-sub.needs-you` 用 `.tldr-line.needs-you` 的同一种高亮
+  （琥珀色左边线 + 12% 琥珀底），文字用正常色。
+- 没有新文案：行的内容是 agent 写的，悬停就是全文。
+
+### 回归
+
+- `tests/unit/tldr-lines.test.ts`（+7 项，共 15）：只看最新一行；最新一行折叠了就没有（更早没折叠的行也不上）；
+  折叠更早的行不影响；重新展开就回来；折叠后又来一行就显示新的；needsYou 带过去；没有行就没有。
+- `tests/unit/recent-chats.test.ts`：假会话补上 `tldrOf`（这些用例的对话没有 TL;DR 行）。
+- `tests/tldr-sidebar-test.mjs`（34 项，不花 token）：真 pi-tldr + 模拟模型，四条对话按提问区分：A 写三行（第二行
+  很长，第三行需要你），B 不写，C 写一行，D 马上答。窗口 1 依次开 A、C、B，停在 D；窗口 2 开一个新对话。
+  - A 的行在两个窗口里都实时换上每一行，不刷新；窗口 2 在第 3 行发出之前就拿到了第 2 行（写一行推一次给
+    所有窗口，不是跑完才推）。
+  - 长行一行加省略号，悬停是全文；行高不变（有 TL;DR 的、显示条数的、当前的行一样高）。
+  - 需要你的行高亮，普通行不高亮；B 没写 TL;DR，还是条数；打开着的对话显示「Current」，有没看过的行也一样。
+  - 窗口 1 打开 A，在 TL;DR tab 里折叠最新一行 → 窗口 2 的 A 行实时回到条数（不会换成更早的第 2 行）；
+    重新展开 → 第 3 行实时回来。两个窗口都没刷新过，没有页面错误。
+  - pi-web-ui 自己也往请求里加用户消息（「同一项目另有 N 处运行」的提醒，里面有别的对话的标题），所以模拟
+    模型只认以提问开头的那条用户消息。
+  - `SIDEBAR_SHOT` 存一张窗口 1 的截图，外加左栏一张（`-left.png`）；`SIDEBAR_DEBUG=1` 打印模拟模型收到的请求
+    和左栏各行。
+- 反证（2026-09-25）：同一个 E2E 在改动前的构建（7bfc94b）上挂 17 项：所有等这一行的检查都挂；条数、
+  「Current」、行高、没刷新这些照样过。
 
 ---
 

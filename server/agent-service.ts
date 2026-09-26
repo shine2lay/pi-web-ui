@@ -185,7 +185,13 @@ import type {
 import { buildQuestionIndex } from "./question-index.js";
 import { TASK_QUEUE_ENTRY_TYPE, taskQueueCommandLine, taskQueueFromEntries } from "./task-queue.js";
 import { messagesHash } from "./window-hash.js";
-import { TLDR_COLLAPSE_TYPE, tldrCollapseData, tldrLinesFromEntries } from "./tldr-lines.js";
+import {
+	latestUnseenTldr,
+	TLDR_COLLAPSE_TYPE,
+	TLDR_ENTRY_TYPE,
+	tldrCollapseData,
+	tldrLinesFromEntries,
+} from "./tldr-lines.js";
 import { digestsBefore, snapshotDigests, straddleDigest } from "./exchange-digest.js";
 import { launchOrigin, toServiceInfo } from "./launch-origin.js";
 import {
@@ -3979,6 +3985,11 @@ export class ClientSession {
 				// assistant 消息不会走这里——气泡级解析见 case "message_end"。
 				this.scheduleSessionsRefresh();
 				this.refreshConversationTitle(conv);
+				// tldr-sidebar：agent 写了一行 TL;DR → 所有窗口的左栏马上换上这一行（后台对话也是）。
+				// 上面的刷新要等 800ms，而且只推订阅这条对话的这一个窗口。
+				if ((event.entry as { customType?: string } | undefined)?.customType === TLDR_ENTRY_TYPE) {
+					ClientSession.emitConversationsToAll();
+				}
 				break;
 			}
 			case "message_end": {
@@ -4560,6 +4571,8 @@ export class ClientSession {
 		// 写条目不发会话事件：自己马上发快照（叶子变了，tldrOf 重算），正看着这条对话的别的窗口也马上对账。
 		this.flushSnapshot();
 		this.checkpointViewers(conv.id, true);
+		// tldr-sidebar：折叠 / 展开了最新一行 → 所有窗口的左栏在这一行和「N 条消息」之间切换。
+		ClientSession.emitConversationsToAll();
 	}
 
 	/** 服务 queue_command（queue-panel）：队列 tab 的按钮。转成 `/queue …` 交给 pi-queue 的命令执行：
@@ -7491,6 +7504,12 @@ export class ClientSession {
 				})(),
 				// per-chat-dialogs：扩展弹窗在等你 → 左栏同样挂「?」。
 				...(conv.dialogs.current ? { dialogId: conv.dialogs.current.id } : {}),
+				// tldr-sidebar：最新一行还没折叠的 TL;DR，左栏显示在标题下面代替「N 条消息」。
+				// 用 TL;DR tab 的同一份缓存（会话树没动就不重扫）；只有加载着的对话才有，历史行不读文件。
+				...(() => {
+					const tldr = latestUnseenTldr(this.tldrOf(conv));
+					return tldr ? { tldr } : {};
+				})(),
 				parentId: conv.parentId,
 				sessionPath,
 				live: true,

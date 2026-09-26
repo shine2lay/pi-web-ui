@@ -18,6 +18,9 @@
  *
  * 沿分支按顺序重放，最后折叠着的行带 `collapsed: true`。跟行本身一样随会话走：刷新、
  * 重启服务、别的窗口和设备看到的都一样。
+ *
+ * 左栏（tldr-sidebar）在每条加载着的对话标题下面显示最新的一行，代替「N 条消息」：
+ * 见 latestUnseenTldr。
  */
 
 import type { UiTldrLine } from "./protocol.js";
@@ -95,4 +98,11 @@ export function tldrLinesFromEntries(entries: readonly TldrEntryLike[], max = TL
 	const kept = out.length > max ? out.slice(out.length - max) : out;
 	// 没折叠的行不带 collapsed 字段（快照里每行省几个字节，老客户端也不受影响）。
 	return folded.size === 0 ? kept : kept.map((l) => (folded.has(l.id) ? { ...l, collapsed: true } : l));
+}
+
+/** 左栏显示的那一行（tldr-sidebar）：只看最新的一行（`lines` 按时间升序，同 tldrLinesFromEntries）。
+ *  用户在 TL;DR tab 里把它折叠了（看过了）就没有，左栏回到「N 条消息」；更早的行永远不上左栏。 */
+export function latestUnseenTldr(lines: readonly UiTldrLine[]): Pick<UiTldrLine, "text" | "needsYou"> | undefined {
+	const last = lines[lines.length - 1];
+	return last && !last.collapsed ? { text: last.text, needsYou: last.needsYou } : undefined;
 }

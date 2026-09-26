@@ -1977,6 +1977,10 @@ export interface ConversationSummary {
 	/** per-chat-dialogs：这条对话有扩展弹窗在等你（左栏挂「?」），是最早那个的 id。
 	 *  页面用它给每个弹窗只响一次提示音（后台对话问的时候响，切过去看到它时不再响）。 */
 	dialogId?: number;
+	/** tldr-sidebar：这条对话最新的一行 TL;DR，用户还没在 TL;DR tab 里把它折叠（看过）。
+	 *  左栏显示在标题下面，代替「N 条消息」；needsYou 的行高亮。只有服务端加载着的对话才带
+	 *  （历史行不读会话文件）；没有 TL;DR、或者最新一行已经折叠了就缺省。 */
+	tldr?: Pick<UiTldrLine, "text" | "needsYou">;
 	/** 这条对话的转录文件路径（recent-chats 补丁）。左栏「最近对话」用它做
 	 *  **稳定键**：运行时被释放后，同一条对话仍以 live:false 的行留在列表里。
 	 *  会话还没落盘时缺省。 */
