@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+	latestUnseenTldr,
 	TLDR_COLLAPSE_TYPE,
 	TLDR_MAX_LINES,
 	tldrCollapseData,
@@ -119,5 +120,55 @@ describe("tldr-collapse", () => {
 		expect(tldrCollapseData("a", false)).toBeNull();
 		const many = Array.from({ length: TLDR_MAX_LINES + 5 }, (_, i) => `i${i}`);
 		expect(tldrCollapseData(many, false)?.ids).toHaveLength(TLDR_MAX_LINES);
+	});
+});
+
+describe("tldr-sidebar: latestUnseenTldr", () => {
+	const collapse = (id: string, ids: string[], collapsed: boolean): TldrEntryLike => ({
+		type: "custom",
+		id,
+		customType: TLDR_COLLAPSE_TYPE,
+		data: { v: 1, ids, collapsed },
+	});
+	const pick = (entries: TldrEntryLike[]) => latestUnseenTldr(tldrLinesFromEntries(entries));
+
+	it("only the newest line counts", () => {
+		expect(pick([line("t1", "Need your OK", { needsYou: true }), line("t2", "Fixed it, running the tests")])).toEqual({
+			text: "Fixed it, running the tests",
+			needsYou: false,
+		});
+	});
+
+	it("a folded newest line gives none, even when older lines are still open", () => {
+		expect(pick([line("t1", "one"), line("t2", "two"), collapse("f1", ["t2"], true)])).toBeUndefined();
+	});
+
+	it("folding an older line does not matter", () => {
+		expect(pick([line("t1", "one"), line("t2", "two"), collapse("f1", ["t1"], true)])?.text).toBe("two");
+	});
+
+	it("opening the newest line again brings it back", () => {
+		expect(pick([line("t1", "one"), collapse("f1", ["t1"], true), collapse("f2", ["t1"], false)])?.text).toBe("one");
+	});
+
+	it("a new line after a folded one shows", () => {
+		expect(pick([line("t1", "one"), collapse("f1", ["t1"], true), line("t2", "two")])?.text).toBe("two");
+	});
+
+	it("needs-you carries through", () => {
+		expect(pick([line("t1", "one"), line("t2", "Need your OK to delete the branch", { needsYou: true })])).toEqual({
+			text: "Need your OK to delete the branch",
+			needsYou: true,
+		});
+	});
+
+	it("no lines gives none", () => {
+		expect(latestUnseenTldr([])).toBeUndefined();
+		expect(
+			pick([
+				{ type: "message", id: "m1" },
+				{ type: "compaction", id: "k1" },
+			]),
+		).toBeUndefined();
 	});
 });
