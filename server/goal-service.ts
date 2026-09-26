@@ -274,6 +274,9 @@ export class GoalService {
 	/** Push the active conversation's goal status to the client (the goal bar
 	 * restores remembered prefs when nothing is active). */
 	emitGoalStatus(): void {
+		// crash-guard: this window's chat may have been closed by another window (it can still hear the
+		// end of a run in another chat). Its goal bar is refreshed when it gets an open chat again.
+		if (!this.host.getConv(this.host.activeConvId())) return;
 		const goal = this.host.activeConv().goal;
 		if (!goal.goal && !goal.reviewing && !goal.wizard.active) {
 			goal.reviewModel = this.prefs.reviewModel;

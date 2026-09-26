@@ -62,6 +62,7 @@ import {
 } from "./ask-delivery.js";
 import type { PendingQuestionEntry } from "./ask-delivery.js";
 import { type AdoptCandidate, pickAdoptTarget } from "./attach-adopt.js";
+import { describeError, errorMessage, planForLostActive } from "./crash-guard.js";
 import {
 	checkAll as checkAllUpdates,
 	collectTargets,
@@ -5093,7 +5094,30 @@ export class ClientSession {
 		}
 	}
 
+	/** crash-guard: SDK event errors already logged (key → when), so a handler that throws on every
+	 *  streaming delta logs once a minute, not hundreds of times a second. */
+	private eventErrorLoggedAt = new Map<string, number>();
+
+	/**
+	 * crash-guard: pi calls this listener inside its run loop and doesn't catch listener errors, so a
+	 * throw here broke the run of a chat or escaped as an unhandled error. Log it with its stack (the
+	 * same error at most once a minute) and go on; the next snapshot brings the windows up to date.
+	 */
 	private onEvent(conv: Conversation, event: AgentSessionEvent): void {
+		try {
+			this.onEventNow(conv, event);
+		} catch (err) {
+			const key = `${conv.id}\u0000${event.type}\u0000${errorMessage(err)}`;
+			const now = Date.now();
+			if (now - (this.eventErrorLoggedAt.get(key) ?? 0) < 60_000) return;
+			this.eventErrorLoggedAt.set(key, now);
+			console.error(
+				`[crash-guard] window ${this.clientId}: handling ${event.type} in chat ${conv.id} failed (the same error is logged at most once a minute):\n${describeError(err)}`,
+			);
+		}
+	}
+
+	private onEventNow(conv: Conversation, event: AgentSessionEvent): void {
 		// Any SDK event proves the run is alive — feeds the stall watchdog below.
 		conv.lastSdkEventAt = Date.now();
 		conv.stallNoticed = false;
@@ -5241,7 +5265,9 @@ export class ClientSession {
 				this.markCompactionPending(conv);
 				// 进度条只有正看着这条对话的窗口看得到（见 onEvent 末尾）。
 				this.checkpointViewers(conv.id, true);
-				if (conv.id === this.conv.id) this.flushSnapshot();
+				// crash-guard: compare ids, not `this.conv` — that getter throws when this window's chat was
+				// closed elsewhere, and a throw here lands inside the SDK's event loop.
+				if (conv.id === this.activeId) this.flushSnapshot();
 				break;
 			}
 			case "compaction_end": {
@@ -5538,7 +5564,8 @@ export class ClientSession {
 				// 当初开它的那次页面加载，它可能早就切到别的对话、甚至页面都刷新没了，而别的
 				// 窗口正看着这条。以前这里只看 this —— 它没在看就谁都收不到增量，看客的界面
 				// 要刷新才动。现在：自己在看 → emit（顺带扇出）；自己没在看但别人在看 → 只扇出。
-				const selfViewing = conv.id === this.conv.id;
+				// crash-guard: ids, not `this.conv` (see compaction_start above).
+				const selfViewing = conv.id === this.activeId;
 				if (!selfViewing && !this.viewedElsewhere(conv.id)) break;
 				const ame = event.assistantMessageEvent;
 				const m = event.message as { timestamp?: number };
@@ -5606,7 +5633,8 @@ export class ClientSession {
 			(event.type === "entry_appended" &&
 				(event.entry as { customType?: string } | undefined)?.customType === TASK_QUEUE_ENTRY_TYPE);
 		this.checkpointViewers(conv.id, boundary);
-		if (conv.id !== this.conv.id) return;
+		// crash-guard: ids, not `this.conv` (see compaction_start above).
+		if (conv.id !== this.activeId) return;
 		if (boundary) {
 			this.flushSnapshot();
 		} else {
@@ -5947,6 +5975,10 @@ export class ClientSession {
 	 *  "nothing but stats/version changed" checkpoint. */
 	private emitSnapshotNow(forceFull = false): void {
 		if (this.disposed) return;
+		// crash-guard: this window's chat may have been closed by another window (see
+		// recoverLostActive). Move to an open chat, or skip this snapshot instead of throwing
+		// "no active conversation" (that throw once took the whole server down).
+		if (!this.convs.has(this.activeId) && !this.recoverLostActive("snapshot")) return;
 		const cur = this.currentMessages();
 		const windowStart = Math.max(0, cur.length - MESSAGE_WINDOW);
 		const prev = this.emittedMessages;
@@ -8736,6 +8768,10 @@ export class ClientSession {
 		// Fresh run — restart the stall watchdog window.
 		conv.lastSdkEventAt = Date.now();
 		conv.stallNoticed = false;
+		// crash-guard: while this send ran, the window may have moved to another chat, and that chat
+		// may have been closed by another window (a window without a socket doesn't count as looking).
+		// Then bring the window back to the chat this send went to before refreshing it.
+		if (!this.convs.has(this.activeId)) this.recoverLostActive("its send finished", conv);
 		this.flushSnapshot();
 	}
 
@@ -9195,7 +9231,9 @@ export class ClientSession {
 				return false;
 			}
 		};
-		const active = this.conv;
+		// crash-guard: no getter here — newChat is also how a window whose chat was closed elsewhere
+		// gets a new one (ensureActiveConversation), and then there is no active chat.
+		const active = this.convs.get(this.activeId);
 		if (!ephemeral && active && isBlank(active)) {
 			if (_preset) await this.selectAgentPreset(_preset);
 			else {
@@ -9239,8 +9277,8 @@ export class ClientSession {
 		const displaced = this.displaceActive();
 		// Carry the model chosen in the active chat over to the new chat so it
 		// doesn't silently revert to the ModelRuntime default model.
-		const prevModel = this.conv.session.agent.state.model ?? null;
-		const prevThinking = this.conv.session.thinkingLevel ?? null;
+		const prevModel = active?.session.agent.state.model ?? null;
+		const prevThinking = active?.session.thinkingLevel ?? null;
 		let ready = false;
 		try {
 			const conversationId = this.nextConversationId();
@@ -9576,7 +9614,9 @@ export class ClientSession {
 	}
 
 	private displaceActive(): Conversation | null {
-		const conv = this.conv;
+		// crash-guard: the active chat may already be gone (closed by another window); nothing to displace.
+		const conv = this.convs.get(this.activeId);
+		if (!conv) return null;
 		// 别人还在看 → 留着（保留 = 展示口径，不改运行时归属）。
 		if (this.viewedElsewhere(conv.id)) {
 			conv.listed = true;
@@ -9668,6 +9708,14 @@ export class ClientSession {
 			} catch {}
 		}
 		void conv.runtime.dispose().catch(() => {});
+		// crash-guard: other windows still pointing at this chat (only socketless ones can be: a window
+		// with a socket makes viewedElsewhere refuse the removal) move to an open chat now. Left
+		// dangling, their next snapshot or the end of a send still in flight hit a chat that no longer
+		// exists — that crashed the server on 2026-09-25 17:15 and 2026-09-26 09:11.
+		for (const other of ClientSession.liveSessions) {
+			if (other === this || other.disposed || other.activeId !== id) continue;
+			other.recoverLostActive(`closed by window ${this.clientId}`, undefined, false);
+		}
 	}
 
 	/** 本会话是否持有这个 SDK 会话对应的对话；命中则给出它的**当前** id
@@ -9924,6 +9972,101 @@ export class ClientSession {
 
 	private emitSwitchFailed(target: SwitchTarget, text: string, textEn: string): void {
 		this.emit({ type: "switch_failed", target, error: text, errorEn: textEn });
+	}
+
+	/** crash-guard: does this window's active chat still exist in the shared table? */
+	hasActiveConversation(): boolean {
+		return this.convs.has(this.activeId);
+	}
+
+	/** crash-guard: the new chat being opened for a window whose chat was closed (one at a time). */
+	private recoveryChat: Promise<boolean> | null = null;
+
+	/**
+	 * crash-guard (level 1): this window's active chat is no longer in the shared table. The table is
+	 * process-wide (server-owned-chats), so another window can close the chat this one shows: a window
+	 * without a socket (its page was reloaded) doesn't count as looking at it (viewedElsewhere). Move
+	 * the window to an open chat (planForLostActive: `prefer`, else the project's most recently active
+	 * chat). With nothing to move to: a window with a socket gets a new chat (in the background, when
+	 * `allowNewChat`), one without waits until it reconnects (attach calls ensureActiveConversation).
+	 * Logs one line either way. Returns true when the window has an open active chat afterwards.
+	 */
+	private recoverLostActive(reason: string, prefer?: Conversation, allowNewChat = true): boolean {
+		if (this.convs.has(this.activeId)) return true;
+		const lost = this.activeId;
+		const plan = planForLostActive({
+			activeOpen: false,
+			preferId: prefer?.id,
+			cwd: this.cwd,
+			// = ClientSession.openConversations() (convs IS the shared table), read through `this` so a
+			// unit test can hand in its own table.
+			open: [...this.convs.values()].map((c) => ({
+				id: c.id,
+				cwd: c.cwd,
+				lastActiveAt: c.lastActiveAt,
+				isSubagent: c.isSubagent,
+			})),
+			hasSocket: this.sinkCount() > 0,
+		});
+		if (plan.kind === "move") {
+			const target = this.convs.get(plan.to);
+			if (target) {
+				console.warn(
+					`[crash-guard] window ${this.clientId}: its chat ${lost} was closed (${reason}); moved it to ${target.id}`,
+				);
+				this.activeId = target.id;
+				this.markRecentSeen(target);
+				// What a switch refreshes: the running list, the terminals, the goal bar, the command list.
+				this.webUi.refresh();
+				this.emitConversations();
+				this.goalSvc.emitGoalStatus();
+				this.pushTerminals();
+				void this.pushSlashCommands().catch((err: unknown) => {
+					console.error(`[crash-guard] window ${this.clientId}: command list refresh failed:\n${describeError(err)}`);
+				});
+				return true;
+			}
+		}
+		if (plan.kind === "new_chat" && allowNewChat) {
+			if (!this.recoveryChat) {
+				console.warn(
+					`[crash-guard] window ${this.clientId}: its chat ${lost} was closed (${reason}); no open chat to move it to, opening a new one`,
+				);
+			}
+			void this.openRecoveryChat();
+			return false;
+		}
+		if (this.lostActiveLogged !== lost) {
+			this.lostActiveLogged = lost;
+			console.warn(
+				`[crash-guard] window ${this.clientId}: its chat ${lost} was closed (${reason}); no open chat to move it to yet, it gets one when it reconnects`,
+			);
+		}
+		return false;
+	}
+
+	/** crash-guard: the lost chat already logged as "waiting" (one line per lost chat, not per snapshot). */
+	private lostActiveLogged: string | null = null;
+
+	/** crash-guard: open a new blank chat for this window (its chat was closed and none is open). */
+	private openRecoveryChat(): Promise<boolean> {
+		if (this.recoveryChat) return this.recoveryChat;
+		this.recoveryChat = this.newChat()
+			.catch((err: unknown) => {
+				console.error(`[crash-guard] window ${this.clientId}: opening a new chat failed:\n${describeError(err)}`);
+				return false;
+			})
+			.finally(() => {
+				this.recoveryChat = null;
+			});
+		return this.recoveryChat;
+	}
+
+	/** crash-guard: make sure this window has an open active chat before a socket attaches to it
+	 *  (a reconnecting window whose chat was closed while it was away). */
+	async ensureActiveConversation(reason: string): Promise<boolean> {
+		if (this.recoverLostActive(reason, undefined, false)) return true;
+		return await this.openRecoveryChat();
 	}
 
 	/** reload-adopt：接管共享表里已经开着的那条（只在 attachSink **之前**调）。
@@ -13630,6 +13773,9 @@ export class AgentService {
 		// once, then cleared). Fire-and-forget AFTER attachSink + hooks:
 		// resume emits directly to sinks and needs the owner guards.
 		// Progress arrives over the socket as usual.
+		// crash-guard: a window coming back after its chat was closed elsewhere first gets an open chat
+		// (attachSink pushes the terminals and more of the active chat).
+		if (!cs.hasActiveConversation()) await cs.ensureActiveConversation("reconnect");
 		cs.attachSink(send);
 		// Forward hooks (set once by index.ts) to every session.
 		cs.onQuit = this.onQuit;
