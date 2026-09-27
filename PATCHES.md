@@ -50,6 +50,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | busy-endpoint                | `local`        | `server/agent-service.ts`, `index.ts`, `tests/busy-endpoint-test.mjs`                                                                          |
 | rewind-to-here               | `local`        | `server/rewind.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/Message.tsx`, `MessageList.tsx`, `tests/rewind-to-here-test.mjs`   |
 | crash-guard                  | `local`        | `server/crash-guard.ts`, `agent-service.ts`, `goal-service.ts`, `index.ts`, `tests/no-active-chat-crash-test.mjs`, `tests/unit/`              |
+| dangling-tail-only           | `local`        | `server/dangling-tools.ts`, `agent-service.ts`, `tests/unit/dangling-tools.test.ts`, `tests/dangling-tail-test.mjs`                           |
 
 ---
 
@@ -2093,6 +2094,50 @@ pi 扩展 pi-image-trim 管：请求接近上限时换掉最旧的图；这个�
   `no active conversation`、有 `[crash-guard]` 那一行。
 - 反证（2026-09-26）：同一个 E2E 在改动前（766f613）上服务进程以 exit code 1 退出，日志里正是线上那条栈
   （`get conv ← currentMessages ← emitSnapshotNow ← flushSnapshot ← prompt`）。
+
+---
+
+## dangling-tail-only
+
+**状态**：`local`
+**基线**：v0.96.1
+
+**问题**（2026-09-26，同步到 v0.96.1 后第一次重启，17:26）：重启后几秒内有三个对话被发送，之后每次发送都被
+Anthropic 拒绝：`400 messages.N.content.1: unexpected tool_use_id found in tool_result blocks: toolu_… Each
+tool_result block must have a corresponding tool_use block in the previous message.`，重试也一样。
+原因是上游 v0.95.0 加的发送前守卫（#280，`prompt()` 里 `findDanglingToolCalls(agent.state.messages)`）扫的是**整段**
+对话：凡是出现过、后面没有结果的 toolCall 都算「悬空」，然后把合成 toolResult 追加到对话**尾部**。老的无结果调用
+很常见（重启把一个回合在工具中间打断、用户接着聊；问卷没答就换了话题），而且本来就合法：pi-ai 发请求时会在下一条
+user 之前自己补「No result provided」。合成结果一追加到尾部，就成了前一条 assistant 里没有对应 tool_use 的孤儿
+tool_result；这条坏记录已经落盘，所以对话从此发不出去。上游在 #332 里只收紧了落盘版 `healDanglingToolCallFile`
+（只修当前分支尾部那条 assistant），发送前守卫和强制重置后的复查仍然扫全文；上游 main（v0.96.1）还是这样。
+
+### 改法
+
+- `server/dangling-tools.ts` 新增纯函数 `findTailDanglingToolCalls`：从尾往前，只返回尾部那条 assistant 还没拿到结果的
+  调用；先遇到进上下文就成为 user 回合的消息（`user`、`custom`、`bashExecution`、`branchSummary`、`compactionSummary`，
+  以及落盘的 `custom_message` / `branch_summary` 条目）就返回空；尾部 assistant 是 `error` / `aborted` 也返回空（pi 发送
+  前会丢掉它，不能越过它去修更早的回合）；`custom` 状态条目这类不进上下文的跳过。
+- 落盘版用的 `tailAssistantToolCallIds` 同样在这些消息和条目处停下（原来只认 `user`，会越过扩展消息、分支摘要）。
+- `server/agent-service.ts`：发送前守卫和强制重置后的复查（`transcriptBlocked`）都改用 `findTailDanglingToolCalls`。
+  复查也要改，不然一个老的无结果调用会让对话一直处于 `transcriptBlocked`，发送全被拒。
+
+**已经坏掉的对话怎么救**：会话文件尾部有一串合成结果条目（文案「上一次运行被强制终止…」）。先备份，再把紧跟在这串
+条目后面的那一条（通常是用户的下一句话）的 `parentId` 改成这串条目前面那一条的 id，然后重新打开该对话（或重启）。
+坏条目留在文件里，但不在当前分支上了，什么都不删。
+
+### 回归
+
+- `tests/unit/dangling-tools.test.ts`：`findTailDanglingToolCalls`（尾部未答的调用照报；老调用后面有 user 回合就不报，
+  同一段对话 `findDanglingToolCalls` 仍会报出来，即旧守卫会去补的那些；五种 user 回合角色都会挡住；`error` / `aborted`
+  尾部不越过；跳过 `custom` 状态条目、认 `{ message }` 包装；重复 id 只报一次）；`tailAssistantToolCallIds` 在
+  `custom_message` / `branch_summary` 条目和 `bashExecution` 消息处停下；`healDanglingToolCallFile` 遇到尾部是
+  `custom_message` 时不动文件。
+- `tests/dangling-tail-test.mjs`（不花 token）：假的 Anthropic 接口按 Anthropic 的规则核对每个请求里 tool_use /
+  tool_result 的配对，不合规就用同样的措辞回 400。打开两个存好的对话各发一句：「老调用 + 用户接着聊」的对话必须
+  照常得到回答、文件里不多出任何合成结果、没有「已自动填入」提示；「尾部是没有结果的调用」的对话，那个调用正好补上
+  一条合成结果（接在它后面），也照常得到回答；假接口一次 400 都没回。
+- 反证（2026-09-26）：同一个 E2E 在改动前（bbb5e4d）上，第一个对话被补了 2 条合成结果、假接口回 400，没有回答。
 
 ---
 

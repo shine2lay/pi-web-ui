@@ -21,7 +21,14 @@
  * - findDanglingToolCalls：纯函数，消息/条目数组里找「有调用、无后继结果」的 toolCall；
  * - tailAssistantToolCallIds：沿当前分支回溯，定位尾部会上线的 assistant 的 toolCallId 集合；
  * - healDanglingToolCallFile：落盘版，仅针对当前分支尾部生效的悬空调用追加合成 toolResult；
+ * - findTailDanglingToolCalls：内存版，发送前守卫用，同样只看尾部 assistant（本 fork 补丁 dangling-tail-only）；
  * - 合成结果文案：DANGLING_TOOL_RESULT_TEXT（中英各一，toolResult content 只带一条文本）。
+ *
+ * dangling-tail-only（本 fork，2026-09-26）：合成结果只能补给「尾部 assistant」的调用，而且中间不能隔着
+ * 任何会变成 user 回合的东西。更早的无结果调用（重启打断后用户接着发了新消息、问卷没答就换了话题……）
+ * pi-ai 发请求时自己会在下一条 user 前补「No result provided」，本来就合法；把它们的合成结果追加到会话尾，
+ * 就是一条前面没有对应 tool_use 的孤儿 tool_result，Anthropic 每次都 400（`unexpected tool_use_id found in
+ * tool_result blocks`），对话从此再也发不出去。
  */
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -75,6 +82,20 @@ function toolResultIdsOfMessage(msg: unknown): Set<string> {
 		}
 	}
 	return ids;
+}
+
+/** convertToLlm 之后会成为一条 user 回合的消息角色：合成结果补在它们后面就是孤儿，找尾部时遇到即停。 */
+const USER_TURN_ROLES = new Set(["user", "custom", "bashExecution", "branchSummary", "compactionSummary"]);
+/** 落盘条目里没有 message 包装、但同样会以 user 回合进上下文的条目类型。 */
+const USER_TURN_ENTRY_TYPES = new Set(["custom_message", "branch_summary"]);
+
+function isUserTurn(msgOrEntry: unknown): boolean {
+	if (typeof msgOrEntry !== "object" || msgOrEntry === null) return false;
+	const { role, type } = msgOrEntry as { role?: unknown; type?: unknown };
+	return (
+		(typeof role === "string" && USER_TURN_ROLES.has(role)) ||
+		(typeof type === "string" && USER_TURN_ENTRY_TYPES.has(type))
+	);
 }
 
 function messagesOfEntries(entries: unknown[]): unknown[] {
@@ -146,14 +167,17 @@ export function tailAssistantToolCallIds(entries: unknown[], lastId: string | nu
 		seen.add(cursor);
 		const entry = byId.get(cursor);
 		if (!entry || typeof entry !== "object") break;
+		// dangling-tail-only：custom_message / branch_summary 条目进上下文就是一条 user 回合，同样不能越过。
+		if (isUserTurn(entry)) break;
 		const msg =
 			"message" in entry && typeof (entry as { message?: unknown }).message === "object"
 				? (entry as { message: unknown }).message
 				: null;
 		if (msg && typeof msg === "object" && "role" in msg) {
 			const m = msg as { role?: unknown; stopReason?: unknown };
-			if (m.role === "user") {
-				// 跨入更早的用户回合，尾部无正在等待结果的 assistant
+			if (isUserTurn(m)) {
+				// 跨入更早的用户回合（含 custom / bashExecution / 摘要这类进上下文即 user 的消息），
+				// 尾部无正在等待结果的 assistant
 				break;
 			}
 			if (m.role === "assistant") {
@@ -168,6 +192,34 @@ export function tailAssistantToolCallIds(entries: unknown[], lastId: string | nu
 			typeof (entry as { parentId?: unknown }).parentId === "string" ? (entry as { parentId: string }).parentId : null;
 	}
 	return new Set();
+}
+
+/**
+ * 内存版尾部守卫（本 fork 补丁 dangling-tail-only）：发送前只修「转录尾部那条 assistant」还没拿到结果的调用。
+ *
+ * 输入同 findDanglingToolCalls（agent.state.messages，或带 { message } 包装的落盘条目）。从尾往前：
+ * toolResult 记下已答的 id；遇到 assistant 就返回它还没答的调用（error / aborted 的返回空，同
+ * tailAssistantToolCallIds：pi 发送前会丢掉它，也不能越过它去修更早的回合）；先遇到会变成 user 回合的消息
+ * 就返回空（那之前的无结果调用 pi-ai 自己会补）；其它（system 快照、扩展的 custom 条目等）跳过。
+ */
+export function findTailDanglingToolCalls(messagesOrEntries: unknown[]): DanglingToolCall[] {
+	const messages = messagesOfEntries(messagesOrEntries);
+	const answered = new Set<string>();
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (typeof msg !== "object" || msg === null) continue;
+		if ((msg as { role?: unknown }).role === "assistant") {
+			const out: DanglingToolCall[] = [];
+			for (const c of toolCallsOfMessage(msg)) {
+				if (answered.has(c.toolCallId) || out.some((o) => o.toolCallId === c.toolCallId)) continue;
+				out.push(c);
+			}
+			return out;
+		}
+		if (isUserTurn(msg)) return [];
+		for (const id of toolResultIdsOfMessage(msg)) answered.add(id);
+	}
+	return [];
 }
 
 /**

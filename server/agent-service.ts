@@ -85,7 +85,7 @@ import {
 import {
 	DANGLING_TOOL_RESULT_TEXT,
 	DANGLING_TOOL_RESULT_TEXT_EN,
-	findDanglingToolCalls,
+	findTailDanglingToolCalls,
 	healDanglingToolCallFile,
 } from "./dangling-tools.js";
 import { removeQueuedByIndexOrText } from "./queue-utils.js";
@@ -8410,7 +8410,10 @@ export class ClientSession {
 			if (!s.isStreaming) {
 				try {
 					const live = s.agent.state.messages as unknown[];
-					const dangling = Array.isArray(live) ? findDanglingToolCalls(live) : [];
+					// dangling-tail-only (fork patch): only the tail assistant's unanswered calls.
+					// Older ones are legal as they are (pi-ai adds "No result provided" before the
+					// next user turn); healing them here appends an orphan tool_result (Anthropic 400).
+					const dangling = Array.isArray(live) ? findTailDanglingToolCalls(live) : [];
 					if (dangling.length > 0) {
 						let healed = 0;
 						try {
@@ -9187,7 +9190,9 @@ export class ClientSession {
 			// （文件被删/只读等），此时响亮拒绝后续 prompt 而不是静默黑洞。
 			try {
 				const msgs = conv.session.agent.state.messages as unknown[];
-				const still = Array.isArray(msgs) ? findDanglingToolCalls(msgs) : [];
+				// dangling-tail-only: the file healer only fixes the tail, so only the tail counts
+				// here too; an old unanswered call must not block the chat for good.
+				const still = Array.isArray(msgs) ? findTailDanglingToolCalls(msgs) : [];
 				if (still.length > 0) conv.transcriptBlocked = true;
 				else conv.transcriptBlocked = false;
 			} catch {

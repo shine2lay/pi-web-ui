@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	findDanglingToolCalls,
+	findTailDanglingToolCalls,
 	healDanglingToolCallFile,
 	tailAssistantToolCallIds,
 } from "../../server/dangling-tools.js";
@@ -121,6 +122,94 @@ describe("tailAssistantToolCallIds (issue #332)", () => {
 		];
 		// If lastId is a_active, old branch a_old is never visited
 		expect(tailAssistantToolCallIds(entries, "a_active")).toEqual(new Set(["call_active"]));
+	});
+
+	it("stops at entries that become a user turn in context (dangling-tail-only)", () => {
+		const base = [
+			{ id: "u1", parentId: null, message: { role: "user", content: [] } },
+			{ id: "a1", parentId: "u1", message: assistantWithCalls(["call_1"]) },
+		];
+		// extension message (e.g. an image aside) written as a custom_message entry
+		const custom = [...base, { type: "custom_message", id: "c1", parentId: "a1", customType: "x", content: "hi" }];
+		expect(tailAssistantToolCallIds(custom, "c1")).toEqual(new Set());
+		// branch summary left by a rewind
+		const summary = [...base, { type: "branch_summary", id: "b1", parentId: "a1", fromId: "a1", summary: "s" }];
+		expect(tailAssistantToolCallIds(summary, "b1")).toEqual(new Set());
+		// user-typed bash (!cmd) stored as a message
+		const bash = [...base, { id: "x1", parentId: "a1", message: { role: "bashExecution", command: "ls" } }];
+		expect(tailAssistantToolCallIds(bash, "x1")).toEqual(new Set());
+	});
+});
+
+describe("findTailDanglingToolCalls (dangling-tail-only)", () => {
+	it("reports the tail assistant's unanswered calls", () => {
+		const msgs = [{ role: "user", content: [] }, assistantWithCalls(["a", "b"]), toolResult("a")];
+		expect(findTailDanglingToolCalls(msgs)).toEqual([{ toolCallId: "b", toolName: "bash" }]);
+	});
+
+	it("healthy tail has none", () => {
+		const msgs = [{ role: "user", content: [] }, assistantWithCalls(["a"]), toolResult("a")];
+		expect(findTailDanglingToolCalls(msgs)).toEqual([]);
+		expect(findTailDanglingToolCalls([])).toEqual([]);
+	});
+
+	// The 2026-09-26 outage: a restart cut a turn off mid-tool, the user kept chatting, and the
+	// old guard (findDanglingToolCalls over every message) appended results for those old calls
+	// at the END of the chat. Anthropic then answered every request with 400 "unexpected
+	// tool_use_id found in tool_result blocks".
+	it("ignores old unanswered calls once a user turn follows them (the 400 regression)", () => {
+		const msgs = [
+			{ role: "user", content: [{ type: "text", text: "go" }] },
+			assistantWithCalls(["old_1", "old_2"]),
+			{ role: "user", content: [{ type: "text", text: "hello?" }] },
+			assistantWithCalls(["c"]),
+			toolResult("c"),
+			{ role: "assistant", content: [{ type: "text", text: "done" }], stopReason: "stop" },
+		];
+		expect(findDanglingToolCalls(msgs).map((d) => d.toolCallId)).toEqual(["old_1", "old_2"]);
+		expect(findTailDanglingToolCalls(msgs)).toEqual([]);
+	});
+
+	it("a new unanswered call at the tail is healed, old ones stay alone", () => {
+		const msgs = [assistantWithCalls(["old"]), { role: "user", content: [] }, assistantWithCalls(["new"])];
+		expect(findTailDanglingToolCalls(msgs)).toEqual([{ toolCallId: "new", toolName: "bash" }]);
+	});
+
+	it("stops at any message that becomes a user turn", () => {
+		for (const role of ["user", "custom", "bashExecution", "branchSummary", "compactionSummary"]) {
+			const msgs = [assistantWithCalls(["a"]), { role, content: [] }];
+			expect(findTailDanglingToolCalls(msgs)).toEqual([]);
+		}
+	});
+
+	it("aborted or error tail assistant: nothing to heal, and older turns are not reached", () => {
+		for (const stop of ["aborted", "error"]) {
+			const msgs = [assistantWithCalls(["older"]), assistantWithCalls(["ghost"], stop)];
+			expect(findTailDanglingToolCalls(msgs)).toEqual([]);
+		}
+	});
+
+	it("skips non-context entries and accepts { message } wrappers", () => {
+		const entries = [
+			{ type: "message", id: "1", parentId: null, message: { role: "user", content: [] } },
+			{ type: "message", id: "2", parentId: "1", message: assistantWithCalls(["x", "y"]) },
+			{ type: "message", id: "3", parentId: "2", message: toolResult("x") },
+			{ type: "custom", id: "4", parentId: "3", customType: "state", data: {} },
+		];
+		expect(findTailDanglingToolCalls(entries)).toEqual([{ toolCallId: "y", toolName: "bash" }]);
+	});
+
+	it("reports a repeated call id once", () => {
+		const msgs = [
+			{
+				role: "assistant",
+				content: [
+					{ type: "toolCall", id: "dup", name: "bash", arguments: {} },
+					{ type: "toolCall", id: "dup", name: "bash", arguments: {} },
+				],
+			},
+		];
+		expect(findTailDanglingToolCalls(msgs)).toEqual([{ toolCallId: "dup", toolName: "bash" }]);
 	});
 });
 
@@ -244,5 +333,19 @@ describe("healDanglingToolCallFile", () => {
 
 		// Second pass is clean
 		expect(healDanglingToolCallFile(file)).toBe(0);
+	});
+
+	it("leaves old unanswered calls alone once the user moved on (dangling-tail-only)", () => {
+		const dir = mkdtempSync(join(tmpdir(), "dangling-"));
+		const file = join(dir, "s.jsonl");
+		const raw = [
+			JSON.stringify({ type: "session", id: "s1" }),
+			JSON.stringify({ type: "message", id: "u1", parentId: null, message: { role: "user", content: [] } }),
+			JSON.stringify({ type: "message", id: "a1", parentId: "u1", message: assistantWithCalls(["old"]) }),
+			JSON.stringify({ type: "custom_message", id: "c1", parentId: "a1", customType: "x", content: "note" }),
+		].join("\n");
+		writeFileSync(file, `${raw}\n`, "utf8");
+		expect(healDanglingToolCallFile(file)).toBe(0);
+		expect(readFileSync(file, "utf8")).toBe(`${raw}\n`);
 	});
 });
