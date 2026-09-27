@@ -188,14 +188,34 @@ export interface UiTaskQueuePlan {
 	mustNot: string;
 }
 
-/** 队列里的一个任务（queue-panel）。ready：排着；working：正在做；stuck：等用户拍板；done：做完了。 */
+/** 搁着的任务在等什么（queue-panel，pi-queue 的 queue_wait）。pi-queue 每隔 everyMs 跑一次 check，
+ *  过了就在手上那个任务做完后接着做它；到 until 还没过、或 check 一直出错，就变成「需要你」。 */
+export interface UiTaskQueueWait {
+	/** 用大白话说等什么，比如 "temper restart"。 */
+	what: string;
+	/** 只读的 shell 命令：退出码 0 = 等到了。 */
+	check: string;
+	everyMs: number;
+	since: number;
+	/** 到这时还没等到就放弃。 */
+	until: number;
+	/** 等待结束的时间（check 过了，或放弃了）。 */
+	overAt?: number;
+	/** 没等到就结束的原因（放弃了，或 check 一直出错）；有它时任务接下来会问用户。 */
+	failed?: string;
+}
+
+/** 队列里的一个任务（queue-panel）。ready：排着；working：正在做；stuck：等用户拍板；
+ *  waiting：搁着等外面的事（别的任务照做）；done：做完了。 */
 export interface UiTaskQueueTask {
 	/** pi-queue 的任务编号（#n），一条对话里从 1 往上数。 */
 	id: number;
-	status: "ready" | "working" | "stuck" | "done";
+	status: "ready" | "working" | "stuck" | "waiting" | "done";
 	plan: UiTaskQueuePlan;
 	/** stuck：agent 要用户回答的问题。 */
 	question?: string;
+	/** waiting：在等什么。 */
+	wait?: UiTaskQueueWait;
 	/** done：做了什么（agent 的总结）。 */
 	summary?: string;
 	addedAt: number;

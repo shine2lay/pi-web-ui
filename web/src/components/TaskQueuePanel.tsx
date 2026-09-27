@@ -7,6 +7,8 @@
  *
  * - 顶上一行状态，和「开始」/「停下」；
  * - 正在做的任务；卡住等用户时琥珀色，带 agent 的问题；
+ * - 搁着等外面的事的任务（pi-queue 的 queue_wait）：等什么、检查命令、几点放弃；等到了说一声，
+ *   没等到（放弃或检查一直出错）变琥珀色，带原因；
  * - 排着的任务，按要做的顺序，带 ↑ ↓ ✕（✕ 先在行内确认）；
  * - 做完的任务变灰，带 agent 的总结，最近做完的在上。
  *
@@ -45,6 +47,8 @@ export const TASK_QUEUE_PLAN_PARTS: readonly (readonly [Exclude<keyof UiTaskQueu
 export interface TaskQueueSections {
 	/** 正在做或卡住等用户的那个（最多一个）。 */
 	current?: UiTaskQueueTask;
+	/** 搁着等外面的事的，按队列顺序（等到了、没等到的也在这，直到它们接着做）。 */
+	waiting: UiTaskQueueTask[];
 	/** 排着的，按要做的顺序。 */
 	ready: UiTaskQueueTask[];
 	/** 做完的，最近做完的在前。 */
@@ -55,6 +59,7 @@ export function taskQueueSections(q: UiTaskQueue | undefined): TaskQueueSections
 	const tasks = q?.tasks ?? [];
 	return {
 		current: tasks.find((t) => t.status === "working" || t.status === "stuck"),
+		waiting: tasks.filter((t) => t.status === "waiting"),
 		ready: tasks.filter((t) => t.status === "ready"),
 		done: tasks.filter((t) => t.status === "done").sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0)),
 	};
@@ -63,8 +68,11 @@ export function taskQueueSections(q: UiTaskQueue | undefined): TaskQueueSections
 /** 顶上那行状态说哪句话。 */
 export function taskQueueStatusKey(q: UiTaskQueue, s: TaskQueueSections): TKey {
 	if (s.current?.status === "stuck") return "taskQueueStatusStuck";
-	if (q.running) return s.current ? "taskQueueStatusWorking" : "taskQueueStatusRunning";
-	if (!s.current && s.ready.length === 0) return "taskQueueStatusFinished";
+	if (q.running) {
+		if (s.current) return "taskQueueStatusWorking";
+		return s.waiting.length > 0 ? "taskQueueStatusOnHold" : "taskQueueStatusRunning";
+	}
+	if (!s.current && s.ready.length === 0 && s.waiting.length === 0) return "taskQueueStatusFinished";
 	switch (q.pausedReason) {
 		case "user":
 			return "taskQueueStatusStopped";
@@ -131,15 +139,18 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 			return next;
 		});
 	const statusKey = taskQueueStatusKey(queue, s);
-	const canStart = !!s.current || s.ready.length > 0;
+	const canStart = !!s.current || s.ready.length > 0 || s.waiting.length > 0;
 
-	const row = (task: UiTaskQueueTask, kind: "current" | "ready" | "done", index = 0) => {
+	const row = (task: UiTaskQueueTask, kind: "current" | "waiting" | "ready" | "done", index = 0) => {
 		const expanded = open.has(task.id);
-		const cls = ["task-queue-task", kind, task.status === "stuck" ? "needs-you" : ""].filter(Boolean).join(" ");
+		const wait = kind === "waiting" ? task.wait : undefined;
+		const cls = ["task-queue-task", kind, task.status === "stuck" ? "needs-you" : "", wait?.failed ? "wait-failed" : ""]
+			.filter(Boolean)
+			.join(" ");
 		const when =
 			kind === "done" && task.doneAt
 				? t("taskQueueFinishedAt", { time: lineTime(task.doneAt) })
-				: kind === "current" && task.startedAt
+				: (kind === "current" || kind === "waiting") && task.startedAt
 					? t("taskQueueStarted", { time: lineTime(task.startedAt) })
 					: "";
 		return (
@@ -214,6 +225,30 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 						<span className="task-queue-hint">{t("taskQueueAnswerHint")}</span>
 					</div>
 				)}
+				{wait &&
+					(wait.failed ? (
+						<div className="task-queue-wait failed">
+							<span className="task-queue-wait-text">{t("taskQueueWaitFailed")}</span>
+							<span className="task-queue-wait-reason">{wait.failed}</span>
+						</div>
+					) : wait.overAt ? (
+						<div className="task-queue-wait over">
+							<span className="task-queue-wait-text">{t("taskQueueWaitOver", { time: lineTime(wait.overAt) })}</span>
+						</div>
+					) : (
+						<div className="task-queue-wait">
+							<span className="task-queue-wait-text">
+								{t("taskQueueWaitingOn", { what: wait.what, time: lineTime(wait.since) })}
+								{" \u00b7 "}
+								{t("taskQueueWaitGivesUp", { time: lineTime(wait.until) })}
+							</span>
+							{wait.check && (
+								<span className="task-queue-wait-check">
+									{t("taskQueueWaitCheck")}: <code className="task-queue-check">{wait.check}</code>
+								</span>
+							)}
+						</div>
+					))}
 				{kind === "done" && task.summary && <div className="task-queue-summary">{task.summary}</div>}
 				{when && <div className="task-queue-time">{when}</div>}
 				{expanded && (
@@ -242,7 +277,7 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 					className={s.current?.status === "stuck" ? "task-queue-status needs-you" : "task-queue-status"}
 					data-running={queue.running ? "true" : "false"}
 				>
-					{t(statusKey, { id: s.current?.id ?? "" })}
+					{t(statusKey, { id: s.current?.id ?? s.waiting[0]?.id ?? "" })}
 				</span>
 				{controls &&
 					(queue.running ? (
@@ -272,6 +307,12 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 				<section className="task-queue-section">
 					<h4 className="task-queue-heading">{t("taskQueueNow")}</h4>
 					<ul className="task-queue-list">{row(s.current, "current")}</ul>
+				</section>
+			)}
+			{s.waiting.length > 0 && (
+				<section className="task-queue-section">
+					<h4 className="task-queue-heading">{t("taskQueueOnHold")}</h4>
+					<ul className="task-queue-list">{s.waiting.map((task) => row(task, "waiting"))}</ul>
 				</section>
 			)}
 			{s.ready.length > 0 && (

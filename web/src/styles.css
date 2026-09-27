@@ -2552,6 +2552,14 @@ button.session-item.elsewhere-item.confirm {
 .task-queue-task.done {
 	color: var(--text-faint);
 }
+/* On hold (pi-queue queue_wait): dashed edge; amber once the wait gave up. */
+.task-queue-task.waiting {
+	border-left-style: dashed;
+	border-left-color: var(--text-faint);
+}
+.task-queue-task.waiting.wait-failed {
+	border-left-color: var(--amber);
+}
 .task-queue-task-head {
 	display: flex;
 	align-items: flex-start;
@@ -2655,6 +2663,25 @@ button.session-item.elsewhere-item.confirm {
 }
 .task-queue-time {
 	margin-top: 1px;
+}
+.task-queue-wait {
+	margin-top: 3px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	color: var(--text-dim);
+	font-size: 12.5px;
+}
+.task-queue-wait.failed .task-queue-wait-text {
+	color: var(--amber);
+}
+.task-queue-check {
+	padding: 0 3px;
+	border-radius: 3px;
+	background: color-mix(in srgb, var(--text) 7%, transparent);
+	font-family: var(--mono);
+	font-size: 11px;
+	overflow-wrap: anywhere;
 }
 .task-queue-plan {
 	margin: 6px 0 2px;

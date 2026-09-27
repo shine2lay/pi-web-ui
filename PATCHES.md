@@ -1719,8 +1719,34 @@ data: { v: 1, ids, collapsed } }`。跟行本身一样随会话走：刷新、�
     SDK 先在 `agent_settled` 里跑扩展，服务端就先推出一份「没在跑」；不等的话每个任务都响一次完成、一次开始。
 - 文案：`taskQueue*`（`i18n.tsx` + `locales/*.json` 8 种）；样式 `.task-queue-*`（`styles.css`）。
 
+### 第二轮：搁着等（queue-wait，2026-09-27）
+
+**诉求**：Notion 那个任务等 temper 重启等了两个多小时，队列一直提醒、一直标「需要你」，其实用户什么都不用做。
+用户选：任务在等外面的事时，队列先做下一个；等到了，手上那个做完就接着做它，排在新任务前面。
+
+- pi-queue（~/projects/pi-queue，分支 main）加了工具 `queue_wait`：等什么（大白话）、一个只读的检查命令
+  （退出码 0 = 等到了）、多久查一次（默认 2 分钟）、几点放弃（默认 24 小时）。扩展在后台跑检查；超时放弃或检查
+  一直出错，任务就变成「需要你」并带上原因。新条目 `wait`（`what`/`check`/`everyMs`/`until`）和 `wait_over`
+  （`failed?`）。
+- `server/task-queue.ts` 跟着镜像：新状态 `waiting`，带 `wait`。「当前任务」只算 working / stuck，搁着的不算，
+  所以下一个能开始；`start` / `resume` 一个搁着的任务只在没有当前任务时生效；`wait` 只对正在做或已经搁着的任务
+  生效（新的等待替换旧的）；`wait_over` 只记一次，`failed` 截在 2000 字；缺的数字用 pi-queue 的默认值；`done` /
+  `stuck` / `resume` 清掉 `wait`。
+- `server/protocol.ts`：`UiTaskQueueWait`（`what`、`check`、`everyMs`、`since`、`until`、`overAt?`、`failed?`），
+  `UiTaskQueueTask.status` 加 `waiting`、加 `wait?`。
+- `TaskQueuePanel.tsx`：「正在做」和「接下来」之间多一段「在等」：等什么、从几点起、几点放弃、检查命令（代码样式）；
+  等到了说一声「手上这个做完就接着做」；没等到（放弃或检查一直出错）琥珀色边、带原因。虚线左边框。搁着的任务不给
+  ↑ ↓ ✕（聊天里 `/queue remove` 照样能删）。只剩搁着的任务时「开始」照样能按，队列在跑时顶上说「在跑 · #n 在等」
+  （`taskQueueStatusOnHold`），不算「都做完了」。
+- 文案 7 个新 key（`taskQueueOnHold`、`taskQueueStatusOnHold`、`taskQueueWaitingOn`、`taskQueueWaitCheck`、
+  `taskQueueWaitGivesUp`、`taskQueueWaitOver`、`taskQueueWaitFailed`），中英 + 8 种语言包。
+
 ### 回归
 
+- 第二轮：`tests/unit/task-queue.test.ts` 加 5 项（照搬 pi-queue 的等待重放用例：搁着后下一个能开始、只有在做的
+  能搁着、等到了也要等手上的做完、`wait_over` 只记一次和没等到的原因、删掉搁着的和默认值），
+  `tests/unit/task-queue-panel.test.ts` 加 3 项（「在等」一段带检查命令且转义、不给 ↑ ↓ ✕；等到了 / 没等到；
+  只剩搁着的时「开始」可按），状态那项加了「在跑 · #n 在等」。
 - `tests/unit/task-queue.test.ts`（13 项）：重放（add 保序、start 定当前任务、第二个 start 不理、stuck → 恢复 →
   done 且 done 是终态、move 只在排着的任务里数、remove 和计划更新、run / pause 和原因）；只留最近做完的；坏 id
   跳过、坏的计划部分给空串、超长截断；别的条目类型、不认识的 op 和版本跳过；`available`；按钮 → `/queue` 命令，

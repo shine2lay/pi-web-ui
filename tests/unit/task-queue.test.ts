@@ -152,6 +152,99 @@ describe("taskQueueFromEntries (mirrors pi-queue's replay)", () => {
 	});
 });
 
+// The "waiting" state (pi-queue queue_wait); these copy pi-queue tests/queue.test.ts's wait replays.
+describe("taskQueueFromEntries (tasks on hold)", () => {
+	const HOUR = 3_600_000;
+	const waitOp = (id: number, extra: Record<string, unknown> = {}) => ({
+		op: "wait",
+		id,
+		what: "temper restart",
+		check: "test -f /tmp/flag",
+		everyMs: 120_000,
+		until: clock + 24 * HOUR,
+		...extra,
+	});
+	const three = () => [1, 2, 3].map((id) => ({ op: "add", id, plan: plan(`T${id}`) }));
+	const held = (q: ReturnType<typeof replay>) => q.tasks.filter((t) => t.status === "waiting");
+
+	it("a wait puts the current task on hold and frees the queue for the next one", () => {
+		let q = replay(entries([...three(), { op: "run" }, { op: "start", id: 1 }, waitOp(1)]));
+		expect(q.tasks[0].status).toBe("waiting");
+		expect(q.tasks[0].wait).toMatchObject({ what: "temper restart", check: "test -f /tmp/flag", everyMs: 120_000 });
+		expect(q.tasks[0].wait?.overAt).toBeUndefined();
+		expect(current(q)).toBeUndefined();
+		expect(ids(held(q))).toEqual([1]);
+		expect(ids(ready(q))).toEqual([2, 3]);
+		q = replay(entries([...three(), { op: "run" }, { op: "start", id: 1 }, waitOp(1), { op: "start", id: 2 }]));
+		expect(current(q)?.id).toBe(2);
+		expect(q.tasks[0].status).toBe("waiting");
+	});
+
+	it("only a task being worked on (or already on hold) can go on hold", () => {
+		expect(replay(entries([...three(), waitOp(2)])).tasks[1].status).toBe("ready");
+		const stuck = replay(
+			entries([...three(), { op: "start", id: 1 }, { op: "stuck", id: 1, question: "?" }, waitOp(1)]),
+		);
+		expect(stuck.tasks[0].status).toBe("stuck");
+		const done = replay(entries([...three(), { op: "start", id: 1 }, { op: "done", id: 1, summary: "ok" }, waitOp(1)]));
+		expect(done.tasks[0].status).toBe("done");
+		const again = replay(entries([...three(), { op: "start", id: 1 }, waitOp(1), waitOp(1, { what: "CI" })]));
+		expect(again.tasks[0].wait?.what).toBe("CI");
+	});
+
+	it("a wait that ends while another task runs goes back to work only after that task", () => {
+		const base = [
+			...three(),
+			{ op: "run" },
+			{ op: "start", id: 1 },
+			waitOp(1),
+			{ op: "start", id: 2 },
+			{ op: "wait_over", id: 1 },
+		];
+		let q = replay(entries(base));
+		expect(q.tasks[0].wait?.overAt).toBeGreaterThan(0);
+		expect(q.tasks[0].status).toBe("waiting");
+		q = replay(entries([...base, { op: "resume", id: 1 }]));
+		expect(current(q)?.id).toBe(2);
+		expect(q.tasks[0].status).toBe("waiting");
+		q = replay(entries([...base, { op: "done", id: 2, summary: "ok" }, { op: "resume", id: 1 }]));
+		expect(current(q)?.id).toBe(1);
+		expect(current(q)?.wait).toBeUndefined();
+		expect(ids(ready(q))).toEqual([3]);
+	});
+
+	it("wait_over counts once and keeps why a wait failed; a failed wait asks only when nothing else is current", () => {
+		const base = [...three(), { op: "start", id: 1 }, waitOp(1)];
+		const q = replay(entries([...base, { op: "wait_over", id: 1, failed: "Gave up" }, { op: "wait_over", id: 1 }]));
+		expect(q.tasks[0].wait?.failed).toBe("Gave up");
+		expect(replay(entries([...three(), { op: "wait_over", id: 2 }])).tasks[1].wait).toBeUndefined();
+		const stuck = replay(
+			entries([...base, { op: "wait_over", id: 1, failed: "Gave up" }, { op: "stuck", id: 1, question: "How?" }]),
+		);
+		expect(current(stuck)?.status).toBe("stuck");
+		expect(current(stuck)?.wait).toBeUndefined();
+		const busy = replay(
+			entries([
+				...base,
+				{ op: "start", id: 2 },
+				{ op: "wait_over", id: 1, failed: "x" },
+				{ op: "stuck", id: 1, question: "How?" },
+			]),
+		);
+		expect(current(busy)?.id).toBe(2);
+		expect(busy.tasks[0].status).toBe("waiting");
+	});
+
+	it("a task on hold can be removed, and a wait with missing numbers gets pi-queue's defaults", () => {
+		const removed = replay(entries([...three(), { op: "start", id: 1 }, waitOp(1), { op: "remove", id: 1 }]));
+		expect(ids(removed.tasks)).toEqual([2, 3]);
+		const q = replay(entries([...three(), { op: "start", id: 1 }, { op: "wait", id: 1, what: "x", check: "true" }]));
+		const w = q.tasks[0].wait;
+		expect(w?.everyMs).toBe(2 * 60_000);
+		expect(w && w.until - w.since).toBe(24 * HOUR);
+	});
+});
+
 describe("taskQueueFromEntries (defensive parts)", () => {
 	it("keeps only the newest done tasks, and every open one", () => {
 		const ops: Array<Record<string, unknown>> = [];

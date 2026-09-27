@@ -131,6 +131,49 @@ describe("TaskQueuePanel", () => {
 		]);
 	});
 
+	it("shows tasks on hold in their own section, with what they wait on and the check", () => {
+		const wait = {
+			what: "temper restart",
+			check: "test -f /tmp/flag && echo <ok>",
+			everyMs: 120_000,
+			since: Date.parse("2026-09-26T10:00:00Z"),
+			until: Date.parse("2026-09-27T10:00:00Z"),
+		};
+		const html = render(
+			q([task(1, "waiting", { startedAt: 50, wait }), task(2, "working", { startedAt: 60 }), task(3, "ready")], {
+				running: true,
+			}),
+			{ onCommand: noop },
+		);
+		expect(taskIds(html, "current")).toEqual([2]);
+		expect(taskIds(html, "waiting")).toEqual([1]);
+		expect(taskIds(html, "ready")).toEqual([3]);
+		expect(html).toContain('class="task-queue-wait"');
+		expect(html).toContain("temper restart");
+		// The check command is shown as code, escaped.
+		expect(html).toContain('<code class="task-queue-check">test -f /tmp/flag &amp;&amp; echo &lt;ok&gt;</code>');
+		// No reorder or remove buttons on a task on hold (/queue remove still works from the chat).
+		const waitingRow = html.slice(html.indexOf('data-task-id="1"'), html.indexOf('data-task-id="3"'));
+		expect(waitingRow).not.toContain("task-queue-controls");
+	});
+
+	it("says when a wait ended, and marks a wait that gave up", () => {
+		const wait = { what: "CI", check: "true", everyMs: 1, since: 1, until: 2 };
+		const over = render(q([task(1, "waiting", { wait: { ...wait, overAt: Date.parse("2026-09-26T11:00:00Z") } })]));
+		expect(over).toContain('class="task-queue-wait over"');
+		expect(over).not.toContain("wait-failed");
+		const failed = render(q([task(1, "waiting", { wait: { ...wait, overAt: 3, failed: "Gave up after 1 day" } })]));
+		expect(failed).toContain('class="task-queue-task waiting wait-failed"');
+		expect(failed).toContain('class="task-queue-wait failed"');
+		expect(failed).toContain("Gave up after 1 day");
+	});
+
+	it("offers Start when only a task on hold is left", () => {
+		const wait = { what: "CI", check: "true", everyMs: 1, since: 1, until: 2 };
+		const html = render(q([task(1, "waiting", { wait })], { pausedReason: "user" }), { onCommand: noop });
+		expect(html).toMatch(/class="task-queue-toggle start"(?![^>]*disabled)/);
+	});
+
 	it("shows the latest few done tasks until expanded", () => {
 		const done = Array.from({ length: TASK_QUEUE_DONE_SHOWN + 2 }, (_, i) => task(i + 1, "done", { doneAt: i + 1 }));
 		const html = render(q(done));
@@ -153,6 +196,11 @@ describe("taskQueueStatusKey", () => {
 		expect(key(q([task(1, "working")], { pausedReason: "error" }))).toBe("taskQueueStatusError");
 		expect(key(q([task(1, "ready")], { pausedReason: "restart" }))).toBe("taskQueueStatusRestart");
 		expect(key(q([task(1, "done", { doneAt: 1 })], { pausedReason: "finished" }))).toBe("taskQueueStatusFinished");
+		// Only tasks on hold: running, but on hold (not "all done", not "running" with nothing to show).
+		const hold = task(1, "waiting", { wait: { what: "CI", check: "true", everyMs: 1, since: 1, until: 2 } });
+		expect(key(q([hold], { running: true }))).toBe("taskQueueStatusOnHold");
+		expect(key(q([hold, task(2, "working")], { running: true }))).toBe("taskQueueStatusWorking");
+		expect(key(q([hold], { pausedReason: "finished" }))).not.toBe("taskQueueStatusFinished");
 		// New tasks after it finished: not "all done".
 		expect(key(q([task(1, "done", { doneAt: 1 }), task(2, "ready")], { pausedReason: "finished" }))).toBe(
 			"taskQueueStatusIdle",

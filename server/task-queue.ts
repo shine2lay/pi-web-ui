@@ -17,7 +17,7 @@
  * 条目格式是和 pi-queue 的约定，这里对坏数据一律跳过或兜底，不抛。
  */
 
-import type { UiTaskQueue, UiTaskQueuePlan, UiTaskQueueTask } from "./protocol.js";
+import type { UiTaskQueue, UiTaskQueuePlan, UiTaskQueueTask, UiTaskQueueWait } from "./protocol.js";
 
 /** pi-queue 的 customType（与 pi-queue queue.ts 的 ENTRY_TYPE 一致）。 */
 export const TASK_QUEUE_ENTRY_TYPE = "queue";
@@ -64,8 +64,14 @@ function planOf(raw: unknown): UiTaskQueuePlan {
 	};
 }
 
-const OPEN: ReadonlySet<Status> = new Set(["ready", "working", "stuck"]);
+const OPEN: ReadonlySet<Status> = new Set(["ready", "working", "stuck", "waiting"]);
+/** 当前任务：正在做或卡住的那个（最多一个）。搁着等的任务不算当前任务，别的任务可以接着做。 */
 const current = (s: State) => s.tasks.find((t) => t.status === "working" || t.status === "stuck");
+
+/** wait 条目缺数字时用 pi-queue 的默认值（queue.ts 的 DEFAULT_EVERY_MS / DEFAULT_GIVE_UP_MS）。 */
+const DEFAULT_EVERY_MS = 2 * 60_000;
+const DEFAULT_GIVE_UP_MS = 24 * 3_600_000;
+const numOr = (x: unknown, fallback: number) => (typeof x === "number" && Number.isFinite(x) ? x : fallback);
 
 /** 应用一条变化（pi-queue applyOp 的镜像）：和队列现状对不上的变化忽略。 */
 function apply(s: State, raw: unknown): void {
@@ -101,21 +107,49 @@ function apply(s: State, raw: unknown): void {
 			return;
 		case "start":
 		case "resume": {
+			// 同一时间只有一个当前任务：新任务或搁着的任务只在没有当前任务时开始（和 pi-queue 一样）。
 			const cur = current(s);
-			if (op.op === "start" && cur && cur !== task) return;
+			if ((op.op === "start" || task.status === "waiting") && cur && cur !== task) return;
 			task.status = "working";
 			task.question = undefined;
+			task.wait = undefined;
 			task.startedAt ??= num(op.ts);
 			return;
 		}
-		case "stuck":
+		case "stuck": {
+			const cur = current(s);
+			if (cur && cur !== task) return;
 			task.status = "stuck";
 			task.question = str(op.question, NOTE_MAX);
+			task.wait = undefined;
 			task.startedAt ??= num(op.ts);
+			return;
+		}
+		case "wait": {
+			if (task.status !== "working" && task.status !== "waiting") return;
+			const since = num(op.ts);
+			const wait: UiTaskQueueWait = {
+				what: str(op.what, 200),
+				check: str(op.check, 1000),
+				everyMs: numOr(op.everyMs, DEFAULT_EVERY_MS),
+				since,
+				until: numOr(op.until, since + DEFAULT_GIVE_UP_MS),
+			};
+			task.status = "waiting";
+			task.question = undefined;
+			task.wait = wait;
+			task.startedAt ??= since;
+			return;
+		}
+		case "wait_over":
+			if (task.status !== "waiting" || !task.wait || task.wait.overAt) return;
+			task.wait.overAt = num(op.ts);
+			if (op.failed) task.wait.failed = cap(String(op.failed), NOTE_MAX);
 			return;
 		case "done":
 			task.status = "done";
 			task.question = undefined;
+			task.wait = undefined;
 			task.summary = str(op.summary, NOTE_MAX);
 			task.doneAt = num(op.ts);
 			return;
