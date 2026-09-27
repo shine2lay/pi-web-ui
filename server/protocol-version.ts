@@ -14,4 +14,6 @@
 //     老页面配新服务端看不到这些弹窗，对话就一直等。
 // 23: v0.96.1 同步 —— 上游 20（WS hello 防重放）加上我们的 21/22 正好又是 22，跟基于 v0.94.1 的上一版
 //     同号；不再加 1 的话，开着的旧页面连上新服务端不会出「请刷新」横幅。
-export const PROTOCOL_VERSION = 23;
+// 24: lazy-images — 消息里的图片只发占位（url/width/height/bytes），页面滚到才去取。
+//     老页面只认 dataUrl，配新服务端图片全都不显示。
+export const PROTOCOL_VERSION = 24;

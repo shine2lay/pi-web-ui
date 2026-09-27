@@ -73,6 +73,7 @@ import { FilePreview, type PreviewFile } from "./components/FilePreview";
 import { PluginFilePreview } from "./components/PluginFilePreview";
 import { useChat } from "./use-chat";
 import { appUrl } from "./base-url";
+import { resolveImageUrls } from "./chat-image";
 import type { ClientMessage, CommandDef, PromptAttachment, UiMessage } from "./types";
 import { useT, useI18n } from "./i18n";
 import { QUICK_PHRASE_DEFAULTS } from "./quick-phrases";
@@ -1380,9 +1381,21 @@ export function App() {
 	// any newly pasted/dropped ones — same pipeline as a normal prompt.
 	const onEditMessage = useCallback(
 		(messageId: string, text: string, attachments?: PromptAttachment[]) => {
-			send({ type: "edit_message", messageId, text, attachments });
+			// lazy-images: restored pictures carry only their address; fetch the bytes first, and never
+			// re-ask without them.
+			if (!attachments?.some((a) => a.imageUrl && !a.imageData)) {
+				send({ type: "edit_message", messageId, text, attachments });
+				return;
+			}
+			void resolveImageUrls(attachments).then(
+				(resolved) => send({ type: "edit_message", messageId, text, attachments: resolved }),
+				(err: unknown) => {
+					console.error("[edit] could not fetch a picture to re-send:", err);
+					pushNotice("error", t("imageLoadFailed", { name: err instanceof Error ? err.message : String(err) }));
+				},
+			);
 		},
-		[send],
+		[send, pushNotice, t],
 	);
 
 	// Remove one queued prompt (the ✕ on a pending bubble). `index` = bubble position.

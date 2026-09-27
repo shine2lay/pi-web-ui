@@ -11,6 +11,13 @@ import type { UiContentBlock, UiMessage, UiQuestionRef } from "./protocol.js";
 /** 预览文本上限：导轨一行显示不下更多，多发就是浪费带宽。 */
 const PREVIEW_CHARS = 160;
 
+/** What the index reads from a message: UiMessages fit, and so do the SDK's raw messages
+ *  (lazy-images: the server no longer builds the display form of every message). */
+export interface QuestionMsg {
+	role: string;
+	content?: unknown;
+}
+
 /** 技能调用块的开头（SDK 把 `/skill:name args` 展开成 `<skill …>` + 整份
  *  SKILL.md）。导轨显示用户自己写的 args，不是 SKILL.md 正文。
  *
@@ -21,8 +28,14 @@ const PREVIEW_CHARS = 160;
 const SKILL_BLOCK_RE = /^<skill name="([^"]+)" location="[^"]+">\n[\s\S]*?\n<\/skill>(?:\n\n([\s\S]+))?$/;
 
 /** 一条 user 消息 → 导轨显示的文本（技能调用取 args / 技能名）。 */
-export function questionPreview(m: UiMessage): string {
-	const blocks: UiContentBlock[] = Array.isArray(m.content) ? m.content : [];
+export function questionPreview(m: QuestionMsg): string {
+	// lazy-images: raw SDK messages come here too; their user content may be a plain string.
+	const blocks: UiContentBlock[] =
+		typeof m.content === "string"
+			? [{ type: "text", text: m.content }]
+			: Array.isArray(m.content)
+				? (m.content as UiContentBlock[])
+				: [];
 	const joined = blocks
 		.map((b) => (b.type === "text" ? b.text : ""))
 		.filter(Boolean)
@@ -34,7 +47,10 @@ export function questionPreview(m: UiMessage): string {
 
 /** 整段对话的提问索引。index 是该消息在**完整**消息列表里的下标——前端点一条
  *  还没加载的提问时，靠它算出要向前取多少条。 */
-export function buildQuestionIndex(messages: UiMessage[]): UiQuestionRef[] {
+export function buildQuestionIndex(
+	messages: readonly QuestionMsg[],
+	idOf: (i: number) => string = (i) => (messages[i] as Partial<UiMessage>).id ?? "",
+): UiQuestionRef[] {
 	const out: UiQuestionRef[] = [];
 	for (let i = 0; i < messages.length; i++) {
 		const m = messages[i];
@@ -42,7 +58,7 @@ export function buildQuestionIndex(messages: UiMessage[]): UiQuestionRef[] {
 		const text = questionPreview(m);
 		// 空提问（纯附件/纯技能展开且没 args）不进导轨——和前端原有行为一致。
 		if (!text) continue;
-		out.push({ id: m.id, index: i, text });
+		out.push({ id: idOf(i), index: i, text });
 	}
 	return out;
 }

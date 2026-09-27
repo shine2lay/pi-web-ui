@@ -8,10 +8,19 @@
  * cyrb53（53 位，碰撞概率可以不计），纯函数、不碰 Node：服务端和前端共用这一份。
  */
 export function messagesHash(messages: readonly { id: string }[], from = 0, to = messages.length): string {
+	return hashIds((i) => messages[i].id, from, to);
+}
+
+/** lazy-images: the same fingerprint over a plain id list (the server keeps ids, not built messages). */
+export function idsHash(ids: readonly string[], from = 0, to = ids.length): string {
+	return hashIds((i) => ids[i], from, to);
+}
+
+function hashIds(idAt: (i: number) => string, from: number, to: number): string {
 	let h1 = 0xdeadbeef;
 	let h2 = 0x41c6ce57;
 	for (let i = from; i < to; i++) {
-		const id = messages[i].id;
+		const id = idAt(i);
 		for (let j = 0; j <= id.length; j++) {
 			// 每个 id 后面补一个分隔符（\n），["ab","c"] 和 ["a","bc"] 就不会撞。
 			const ch = j < id.length ? id.charCodeAt(j) : 10;

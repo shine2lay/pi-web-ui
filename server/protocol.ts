@@ -29,8 +29,17 @@ export interface UiToolCallBlock {
 
 export interface UiImageBlock {
 	type: "image";
+	/** The picture inline (data: URL) or a remote URL. Absent when `url` is set. */
 	dataUrl?: string;
 	mimeType?: string;
+	/** lazy-images: where to fetch the picture (app-relative path, needs the auth token like any
+	 *  /api URL). The page fetches it when the picture is about to scroll into view. */
+	url?: string;
+	/** lazy-images: size from the file header, so the page can reserve a same-size box. */
+	width?: number;
+	height?: number;
+	/** lazy-images: decoded size in bytes. */
+	bytes?: number;
 }
 
 /** Live bash execution (the `!` command / bashExecution transcript message). */
@@ -495,6 +504,12 @@ export interface PromptAttachment {
 	 * path/mode.
 	 */
 	imageData?: string;
+	/**
+	 * lazy-images, page only: a picture of the chat to re-send when a question is edited and
+	 * re-asked (its /api/chat-image path). The page fetches it into imageData before sending; the
+	 * server never reads this field.
+	 */
+	imageUrl?: string;
 	/**
 	 * Raw uploaded file bytes (base64, no data: prefix) for files dropped/
 	 * uploaded directly in the browser — no workspace path involved. The

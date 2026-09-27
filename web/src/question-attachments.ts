@@ -24,6 +24,8 @@ export interface EditPromptAttachment {
 	sessionPath?: string;
 	lines?: { start: number; end: number };
 	imageData?: string;
+	/** lazy-images: a chat picture (its /api/chat-image path), fetched into imageData before sending. */
+	imageUrl?: string;
 	fileData?: string;
 	uploadPath?: string;
 	mimeType?: string;
@@ -35,6 +37,9 @@ export interface EditPromptAttachment {
 interface ImageBlock {
 	type: "image";
 	dataUrl?: string;
+	/** lazy-images: a placeholder's picture address (no data in the message). */
+	url?: string;
+	mimeType?: string;
 }
 
 /** 从 image 块还原 imageData 附件（dataUrl → 纯 base64）；有图片块返回 true。 */
@@ -46,7 +51,21 @@ function pushImageAttachments(
 	let hasImage = false;
 	for (const b of content) {
 		const img = b as ImageBlock;
-		if (img.type !== "image" || typeof img.dataUrl !== "string") continue;
+		if (img.type !== "image") continue;
+		// lazy-images: a placeholder carries only the address; the page fetches the bytes before sending
+		// (resolveImageUrls in chat-image.ts).
+		if (typeof img.url === "string" && img.url && typeof img.dataUrl !== "string") {
+			hasImage = true;
+			const mime = img.mimeType || "image/png";
+			atts.push({
+				path: "",
+				imageUrl: img.url,
+				mimeType: mime,
+				name: fallbackName ?? `image.${mime.split("/")[1] ?? "png"}`,
+			});
+			continue;
+		}
+		if (typeof img.dataUrl !== "string") continue;
 		if (!img.dataUrl.startsWith("data:")) continue;
 		const mm = img.dataUrl.match(/^data:([^;]*);base64,(.+)$/);
 		if (!mm) continue;

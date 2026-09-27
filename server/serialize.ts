@@ -4,6 +4,7 @@
  * are truncated with a marker) so snapshots stay cheap to stream.
  */
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { imageMetaOf } from "./image-meta.js";
 import type { UiContentBlock, UiImageBlock, UiMessage } from "./protocol.js";
 import { tooBigKind } from "./rewind.js";
 
@@ -53,28 +54,61 @@ type ImageBlockLike = {
  * cap: dataUrl 超过该字符数回 undefined（调用方按占位文本处理）；默认不限
  * （用户粘贴图走 image-paste 的缩放管线，尺寸本来就有界）。
  */
-function imageBlockToUi(b: unknown, cap = Number.POSITIVE_INFINITY): UiImageBlock | undefined {
+function imageBlockToUi(
+	b: unknown,
+	cap = Number.POSITIVE_INFINITY,
+	lazy?: (v: string) => string,
+): UiImageBlock | undefined {
 	const img = b as unknown as ImageBlockLike;
 	const src = img.source;
 	if (typeof src?.url === "string" && src.url) return { type: "image", dataUrl: src.url };
-	if (typeof img.data === "string" && img.data.length > 0) {
-		const dataUrl = `data:${img.mimeType ?? "image/png"};base64,${img.data}`;
-		if (dataUrl.length > cap) return undefined;
-		return { type: "image", dataUrl, mimeType: img.mimeType };
+	const raw = imageDataOf(b);
+	if (!raw) return undefined;
+	// lazy-images: a placeholder (size, type, URL); the page fetches the picture when it scrolls into view.
+	if (lazy && typeof b === "object" && b !== null) {
+		const meta = imageMetaOf(b, raw.data);
+		return {
+			type: "image",
+			url: lazy(meta.v),
+			mimeType: raw.mimeType,
+			bytes: meta.bytes,
+			...(meta.width && meta.height ? { width: meta.width, height: meta.height } : {}),
+		};
 	}
-	if (src?.type === "base64" && src.data) {
-		const dataUrl = `data:${src.mediaType ?? "image/png"};base64,${src.data}`;
-		if (dataUrl.length > cap) return undefined;
-		return { type: "image", dataUrl, mimeType: src.mediaType };
-	}
-	return undefined;
+	const dataUrl = `data:${raw.mimeType ?? "image/png"};base64,${raw.data}`;
+	if (dataUrl.length > cap) return undefined;
+	return { type: "image", dataUrl, mimeType: raw.mimeType };
 }
 
-function serializeUserContent(content: Extract<AgentMessage, { content: unknown }>["content"]): UiContentBlock[] {
+/** lazy-images: an SDK image block's base64 data and declared type (either shape), or null. */
+export function imageDataOf(b: unknown): { data: string; mimeType?: string } | null {
+	const img = b as ImageBlockLike | null;
+	if (!img || typeof img !== "object") return null;
+	if (typeof img.data === "string" && img.data.length > 0) return { data: img.data, mimeType: img.mimeType };
+	const src = img.source;
+	if (src?.type === "base64" && typeof src.data === "string" && src.data)
+		return { data: src.data, mimeType: src.mediaType };
+	return null;
+}
+
+/** lazy-images: a message's image blocks in order; index n here is the n in a picture's URL. */
+export function imageBlocksOf(m: AgentMessage): unknown[] {
+	const content = (m as { content?: unknown }).content;
+	if (!Array.isArray(content)) return [];
+	return content.filter((b) => (b as { type?: unknown } | null)?.type === "image");
+}
+
+function serializeUserContent(
+	content: Extract<AgentMessage, { content: unknown }>["content"],
+	lazy?: (n: number, v: string) => string,
+): UiContentBlock[] {
 	if (typeof content === "string") return [{ type: "text", text: content }];
+	let n = 0;
 	return content.map((b) => {
 		if (b.type === "image") {
-			return imageBlockToUi(b) ?? { type: "image", dataUrl: undefined };
+			const at = n++;
+			const url = lazy ? (v: string) => lazy(at, v) : undefined;
+			return imageBlockToUi(b, undefined, url) ?? { type: "image", dataUrl: undefined };
 		}
 		return { type: "text", text: String((b as { text?: unknown }).text ?? "") };
 	});
@@ -213,7 +247,21 @@ export function findEntryByUiId<T extends UiIdEntryLike>(
 	return null;
 }
 
-export function serializeMessage(m: AgentMessage, seq: number): UiMessage | null {
+/** lazy-images: builds the URL of picture n (see imageBlocksOf) of message msgId; v = content fingerprint. */
+export type ImageUrlFor = (msgId: string, n: number, v: string) => string;
+
+/** lazy-images: false for the messages serializeMessage drops (role system, custom with display:false).
+ *  The server's per-chat index uses it, so its positions are exactly the page's positions. */
+export function isShownMessage(m: AgentMessage): boolean {
+	const role = (m as { role?: string }).role;
+	if (role === "system") return false;
+	if (role === "custom" && (m as { display?: boolean }).display === false) return false;
+	return true;
+}
+
+/** imageUrl given: pictures become placeholders pointing at that URL (what the page and plugins get).
+ *  Not given: pictures are sent inline as data URLs, as before (trajectory run events). */
+export function serializeMessage(m: AgentMessage, seq: number, imageUrl?: ImageUrlFor): UiMessage | null {
 	// SDK 的 system 消息是 prompt sections 的内部差量
 	// (content 空串 + sections 结构化内存)、compaction 的
 	// systemMessage 等——从来不面向用户。不过滤的话
@@ -226,13 +274,14 @@ export function serializeMessage(m: AgentMessage, seq: number): UiMessage | null
 	}
 
 	const id = uiMessageId(m, seq);
+	const lazy = imageUrl ? (n: number, v: string) => imageUrl(id, n, v) : undefined;
 
 	switch (m.role) {
 		case "user":
 			return {
 				id,
 				role: "user",
-				content: serializeUserContent(m.content),
+				content: serializeUserContent(m.content, lazy),
 				timestamp: m.timestamp,
 			};
 
@@ -259,13 +308,15 @@ export function serializeMessage(m: AgentMessage, seq: number): UiMessage | null
 			// "[image result]"，用户只能看到占位文本。超限/超数的图仍回落占位文本。
 			const textParts: string[] = [];
 			const images: UiImageBlock[] = [];
+			let n = 0;
 			for (const c of m.content) {
 				if (c.type === "text") {
 					textParts.push(c.text);
 					continue;
 				}
+				const at = c.type === "image" ? n++ : -1;
 				if (c.type === "image" && images.length < TOOL_RESULT_IMAGE_MAX) {
-					const ui = imageBlockToUi(c, TOOL_RESULT_IMAGE_CAP);
+					const ui = lazy ? imageBlockToUi(c, undefined, (v) => lazy(at, v)) : imageBlockToUi(c, TOOL_RESULT_IMAGE_CAP);
 					if (ui) {
 						images.push(ui);
 						continue;
@@ -324,7 +375,7 @@ export function serializeMessage(m: AgentMessage, seq: number): UiMessage | null
 			if ((m as { display?: boolean }).display === false) {
 				return null;
 			}
-			let content = serializeUserContent(m.content);
+			let content = serializeUserContent(m.content, lazy);
 			// image-aside-label: an image card's text is only the label that keeps it in the
 			// model's context (attachments.ts `imageLabel`); the page shows the picture, as before.
 			if (m.customType === "file" && (m as { details?: { mode?: unknown } }).details?.mode === "image") {

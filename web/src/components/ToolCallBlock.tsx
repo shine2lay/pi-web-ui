@@ -24,6 +24,8 @@ import { parseDelegateArgs, shortenPath, toolArgHints, type DelegateField } from
 import { PRESENT_FILES_TOOL_NAME } from "../../../server/tool-manager.js";
 import { parsePresentArgs } from "../present-items";
 import { PresentedFiles } from "./PresentedFiles";
+import { ChatImage } from "./ChatImage";
+import { imageSrc } from "../chat-image";
 
 export interface ToolView {
 	/** Tool result message if the tool already finished. */
@@ -123,11 +125,13 @@ export const ToolCallBlock = memo(function ToolCallBlock({
 	const resultImages = useMemo(() => {
 		if (!showImages) return [];
 		const content = view.result?.content ?? [];
+		// lazy-images: placeholders (url + size) too; ChatImage loads them when they come near the screen.
 		return content.filter(
 			(b): b is UiImageBlock =>
 				b.type === "image" &&
-				typeof (b as UiImageBlock).dataUrl === "string" &&
-				((b as UiImageBlock).dataUrl as string).startsWith("data:"),
+				(typeof (b as UiImageBlock).url === "string" ||
+					(typeof (b as UiImageBlock).dataUrl === "string" &&
+						((b as UiImageBlock).dataUrl as string).startsWith("data:"))),
 		);
 	}, [showImages, view.result]);
 	const [zoomed, setZoomed] = useState<string | null>(null);
@@ -374,10 +378,10 @@ export const ToolCallBlock = memo(function ToolCallBlock({
 							aria-label={t("toolImageZoom")}
 							onClick={(e) => {
 								e.stopPropagation();
-								setZoomed(img.dataUrl as string);
+								setZoomed(imageSrc(img) ?? null);
 							}}
 						>
-							<img src={img.dataUrl} alt={`tool result image ${i + 1}`} />
+							<ChatImage block={img} alt={`tool result image ${i + 1}`} />
 						</button>
 					))}
 				</div>

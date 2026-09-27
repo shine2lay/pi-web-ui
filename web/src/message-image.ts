@@ -10,6 +10,8 @@
  *
  * 导出前把计算色拍扁成不透明 rgb，画布底用主题实底，再交给 html-to-image。
  */
+import { resolveLazyImages } from "./chat-image";
+
 export interface Rgba {
 	r: number;
 	g: number;
@@ -279,6 +281,8 @@ export function snapshotMessageForExport(
 ): HTMLElement {
 	const clone = sourceEl.cloneNode(true) as HTMLElement;
 	flattenPaintTree(sourceEl, clone, backdrop);
+	// lazy-images: pictures not loaded yet still show their gray box; the copy loads the real ones.
+	resolveLazyImages(clone);
 	applyExportContentFilter(clone, opts);
 	stripExportChrome(clone);
 	clone.classList.remove("msg-export-selected");

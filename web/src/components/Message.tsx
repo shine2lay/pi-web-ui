@@ -34,6 +34,8 @@ import { Markdown, PluginWidgetBlock } from "./Markdown";
 import { StreamMarkdown } from "./StreamMarkdown";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolCallBlock, type ToolView } from "./ToolCallBlock";
+import { ChatImage } from "./ChatImage";
+import { imageSrc, isShownImage } from "../chat-image";
 import { useT, type Translate } from "../i18n";
 import { parseSkillBlock, type SkillBlock } from "../skill-block";
 import { isRasterImage, fileToProcessedImage } from "../image-paste";
@@ -83,7 +85,8 @@ export function asToolCall(block: UiContentBlock): UiToolCallBlock | null {
 }
 
 export function asImage(block: UiContentBlock): UiImageBlock | null {
-	return block.type === "image" && typeof (block as UiImageBlock).dataUrl === "string" ? (block as UiImageBlock) : null;
+	// lazy-images: inline pictures and placeholders (url + size) both count.
+	return isShownImage(block) ? (block as UiImageBlock) : null;
 }
 
 export function asBash(block: UiContentBlock): UiBashBlock | null {
@@ -94,7 +97,7 @@ export function asBash(block: UiContentBlock): UiBashBlock | null {
  *  newly-added raw file (fileData) or workspace-path attachment. */
 type EditAttKind = "image" | "upload" | "file" | "path";
 function editAttKind(att: PromptAttachment): EditAttKind {
-	if (att.imageData) return "image";
+	if (att.imageData || att.imageUrl) return "image";
 	if (att.uploadPath) return "upload";
 	if (att.fileData) return "file";
 	return "path";
@@ -102,7 +105,7 @@ function editAttKind(att: PromptAttachment): EditAttKind {
 
 /** Tooltip label for an editor chip (reuses the chat-input attachment i18n). */
 function editAttLabel(att: PromptAttachment, t: Translate): string {
-	if (att.imageData) return t("attachImage", { name: att.name ?? "image" });
+	if (att.imageData || att.imageUrl) return t("attachImage", { name: att.name ?? "image" });
 	if (att.uploadPath) return t("attachFile", { name: att.name ?? att.uploadPath });
 	if (att.fileData) return t("attachFile", { name: att.name ?? "file" });
 	const base = att.path.split("/").pop() ?? att.path;
@@ -1009,7 +1012,14 @@ export const Message = memo(function Message({
 											title={editAttLabel(att, t)}
 										>
 											{kind === "image" ? (
-												<img src={`data:${att.mimeType ?? "image/png"};base64,${att.imageData}`} alt={att.name} />
+												<img
+													src={
+														att.imageData
+															? `data:${att.mimeType ?? "image/png"};base64,${att.imageData}`
+															: imageSrc({ type: "image", url: att.imageUrl })
+													}
+													alt={att.name}
+												/>
 											) : (
 												<span className="msg-editor-file">
 													<span className="msg-editor-file-icon">
@@ -1269,7 +1279,7 @@ function AttachmentCard({ message, forceOpen = false }: { message: UiMessage; fo
 		.map((b) => b.text)
 		.join("\n");
 	const clean = stripFileWrapper(text);
-	const image = message.content.find((b) => b.type === "image") as { type: "image"; dataUrl?: string } | undefined;
+	const image = message.content.find((b) => isShownImage(b)) as UiImageBlock | undefined;
 	const lines = clean.split("\n").length;
 	const canCopy = !isReference && !isPage && !isConversation && clean.length > 0;
 
@@ -1351,16 +1361,16 @@ function AttachmentCard({ message, forceOpen = false }: { message: UiMessage; fo
 				(isBridged ? (
 					<>
 						<div className="attachcard-bridgenote">{t("bridgedVisionDetail")}</div>
-						{image?.dataUrl && (
+						{image && (
 							<div className="attachcard-image">
-								<img src={image.dataUrl} alt={name} />
+								<ChatImage block={image} alt={name} />
 							</div>
 						)}
 						{clean && <pre className="attachcard-content">{clean}</pre>}
 					</>
-				) : image?.dataUrl ? (
+				) : image ? (
 					<div className="attachcard-image">
-						<img src={image.dataUrl} alt={name} />
+						<ChatImage block={image} alt={name} />
 					</div>
 				) : (
 					<pre className="attachcard-content">{clean}</pre>
@@ -1674,10 +1684,10 @@ function Block({
 	}
 
 	const image = asImage(block);
-	if (image && image.dataUrl) {
+	if (image) {
 		return (
 			<div className="msg-image">
-				<img src={image.dataUrl} alt="attachment" />
+				<ChatImage block={image} alt="attachment" />
 			</div>
 		);
 	}

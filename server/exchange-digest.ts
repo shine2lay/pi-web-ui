@@ -17,20 +17,40 @@
 
 import type { UiContentBlock, UiExchangeDigest, UiMessage } from "./protocol.js";
 
+/** What the rules read from a message. UiMessages fit, and so do the SDK's raw messages: the server
+ *  classifies raw messages and builds the display form only of what it sends (lazy-images). */
+export interface DigestMsg {
+	role: string;
+	customType?: string;
+	timestamp?: number;
+	stopReason?: string;
+	errorMessage?: string;
+	content?: unknown;
+}
+
+/** Display form of message i (what goes into head / answers / after). Default: the message itself. */
+export type FullAt = (i: number) => UiMessage;
+
+function fullRange(full: FullAt, from: number, to: number): UiMessage[] {
+	const out: UiMessage[] = [];
+	for (let i = from; i < to; i++) out.push(full(i));
+	return out;
+}
+
 /** 一次最多发多少份摘要（点导轨上很老的提问时按区间取，防一次取爆）。 */
 export const MAX_DIGESTS = 1000;
 
-function blocksOf(m: UiMessage): UiContentBlock[] {
-	return Array.isArray(m.content) ? m.content : [];
+function blocksOf(m: DigestMsg): UiContentBlock[] {
+	return Array.isArray(m.content) ? (m.content as UiContentBlock[]) : [];
 }
 
 /** 一轮的边界：用户提问，或用户自己跑的 `!` 命令。 */
-function isBoundary(m: UiMessage): boolean {
+function isBoundary(m: DigestMsg): boolean {
 	return m.role === "user" || m.role === "bashExecution";
 }
 
 /** 提问后紧跟的附件（custom "file"）属于提问本身。 */
-function isAttachment(m: UiMessage): boolean {
+function isAttachment(m: DigestMsg): boolean {
 	return m.role === "custom" && m.customType === "file";
 }
 
@@ -38,7 +58,7 @@ function isStepBlock(b: UiContentBlock): boolean {
 	return b.type === "thinking" || b.type === "toolCall";
 }
 
-function hasVisibleText(m: UiMessage): boolean {
+function hasVisibleText(m: DigestMsg): boolean {
 	return blocksOf(m).some((b) => {
 		if (b.type !== "text") return false;
 		const text = (b as { text?: unknown }).text;
@@ -53,7 +73,7 @@ function textOnly(m: UiMessage): UiMessage {
 }
 
 /** 每一轮开头的下标（升序）。 */
-export function exchangeHeads(messages: readonly UiMessage[]): number[] {
+export function exchangeHeads(messages: readonly DigestMsg[]): number[] {
 	const out: number[] = [];
 	for (let i = 0; i < messages.length; i++) if (isBoundary(messages[i])) out.push(i);
 	return out;
@@ -76,15 +96,16 @@ function lowerBound(heads: readonly number[], x: number): number {
  * （后半截在消息窗口里，前端只拿提问和计数接到那一段前面，所以不带回答）。
  */
 export function digestExchange(
-	messages: readonly UiMessage[],
+	messages: readonly DigestMsg[],
 	a: number,
 	b: number,
 	partial: boolean,
+	full: FullAt = (i) => messages[i] as UiMessage,
 ): UiExchangeDigest {
-	const head: UiMessage[] = [messages[a]];
+	const head: UiMessage[] = [full(a)];
 	let bodyStart = a + 1;
 	if (messages[a].role === "user") {
-		while (bodyStart < b && isAttachment(messages[bodyStart])) head.push(messages[bodyStart++]);
+		while (bodyStart < b && isAttachment(messages[bodyStart])) head.push(full(bodyStart++));
 	}
 
 	let lastAsst = -1;
@@ -109,7 +130,7 @@ export function digestExchange(
 
 	if (lastAsst < 0) {
 		// 没有助手消息（`!` 命令、没等到回答就中止的提问）：前端不出折叠行，正文照常显示。
-		return { ...base, answers: [], after: messages.slice(bodyStart, b), folded: false, status: "done" };
+		return { ...base, answers: [], after: fullRange(full, bodyStart, b), folded: false, status: "done" };
 	}
 
 	const last = messages[lastAsst];
@@ -132,12 +153,12 @@ export function digestExchange(
 		// 最后一条助手消息之前的都是过程；工具结果本来就画在工具卡里。之后的（目标评审、
 		// 手动压缩摘要……）不是这一轮的过程，照常显示。
 		if (i <= lastAsst || messages[i].role === "toolResult") hidden++;
-		else after.push(messages[i]);
+		else after.push(full(i));
 	}
 	const answerHasSteps = answerIdx.some((i) => blocksOf(messages[i]).some(isStepBlock));
 	return {
 		...base,
-		answers: answerIdx.map((i) => textOnly(messages[i])),
+		answers: answerIdx.map((i) => textOnly(full(i))),
 		after,
 		folded: hidden > 0 || answerHasSteps,
 		status,
@@ -150,10 +171,11 @@ export function digestExchange(
  * 最多到 before——越过 before 的那一轮是 partial。
  */
 export function digestsBefore(
-	messages: readonly UiMessage[],
+	messages: readonly DigestMsg[],
 	before: number,
 	pick: { count?: number; from?: number },
 	heads: readonly number[] = exchangeHeads(messages),
+	full?: FullAt,
 ): UiExchangeDigest[] {
 	const limit = Math.min(Math.max(0, Math.floor(before)), messages.length);
 	const hi = lowerBound(heads, limit);
@@ -165,7 +187,7 @@ export function digestsBefore(
 	const out: UiExchangeDigest[] = [];
 	for (let k = lo; k < hi; k++) {
 		const next = k + 1 < heads.length ? heads[k + 1] : messages.length;
-		out.push(digestExchange(messages, heads[k], Math.min(next, limit), next > limit));
+		out.push(digestExchange(messages, heads[k], Math.min(next, limit), next > limit, full));
 	}
 	return out;
 }
@@ -174,20 +196,29 @@ export function digestsBefore(
  * 整份快照带的摘要：让页面至少看得到最近 k 轮（窗口里开头的也算）。窗口从一轮中间
  * 开始时，那一轮的开头总要带上——不然窗口里第一段连提问都没有。
  */
-export function snapshotDigests(messages: readonly UiMessage[], windowStart: number, k: number): UiExchangeDigest[] {
+export function snapshotDigests(
+	messages: readonly DigestMsg[],
+	windowStart: number,
+	k: number,
+	full?: FullAt,
+): UiExchangeDigest[] {
 	if (windowStart <= 0 || windowStart >= messages.length || k <= 0) return [];
 	const heads = exchangeHeads(messages);
 	const hi = lowerBound(heads, windowStart);
 	const inWindow = heads.length - hi;
 	const straddles = hi > 0 && !isBoundary(messages[windowStart]);
 	const need = Math.max(k - inWindow, straddles ? 1 : 0);
-	return need > 0 ? digestsBefore(messages, windowStart, { count: need }, heads) : [];
+	return need > 0 ? digestsBefore(messages, windowStart, { count: need }, heads, full) : [];
 }
 
 /** 窗口起点落在一轮中间时，这一轮开头那一截的摘要（partial，随 older_messages 发）；否则 undefined。 */
-export function straddleDigest(messages: readonly UiMessage[], start: number): UiExchangeDigest | undefined {
+export function straddleDigest(
+	messages: readonly DigestMsg[],
+	start: number,
+	full?: FullAt,
+): UiExchangeDigest | undefined {
 	if (start <= 0 || start >= messages.length || isBoundary(messages[start])) return undefined;
 	const heads = exchangeHeads(messages);
 	if (lowerBound(heads, start) === 0) return undefined;
-	return digestsBefore(messages, start, { count: 1 }, heads)[0];
+	return digestsBefore(messages, start, { count: 1 }, heads, full)[0];
 }

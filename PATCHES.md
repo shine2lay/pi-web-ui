@@ -51,6 +51,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | rewind-to-here               | `local`        | `server/rewind.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/Message.tsx`, `MessageList.tsx`, `tests/rewind-to-here-test.mjs`   |
 | crash-guard                  | `local`        | `server/crash-guard.ts`, `agent-service.ts`, `goal-service.ts`, `index.ts`, `tests/no-active-chat-crash-test.mjs`, `tests/unit/`              |
 | dangling-tail-only           | `local`        | `server/dangling-tools.ts`, `agent-service.ts`, `tests/unit/dangling-tools.test.ts`, `tests/dangling-tail-test.mjs`                           |
+| lazy-images                  | `local`        | `server/image-meta.ts`, `chat-image.ts`, `serialize.ts`, `agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/components/ChatImage.tsx`, `chat-image.ts` |
 
 ---
 
@@ -2138,6 +2139,89 @@ tool_result；这条坏记录已经落盘，所以对话从此发不出去。上
   照常得到回答、文件里不多出任何合成结果、没有「已自动填入」提示；「尾部是没有结果的调用」的对话，那个调用正好补上
   一条合成结果（接在它后面），也照常得到回答；假接口一次 400 都没回。
 - 反证（2026-09-26）：同一个 E2E 在改动前（bbb5e4d）上，第一个对话被补了 2 条合成结果、假接口回 400，没有回答。
+
+---
+
+## lazy-images
+
+**状态**：`local`
+**基线**：v0.96.1
+
+**问题**（2026-09-26，用户：「只加载相关的部分，懒加载」）：大对话打开慢。页面本来就只拿最新 100 条消息（`chat-window-pagination`），
+但还有两处重：
+
+1. 这些消息里的图片随快照整张发出（data URL）。09-26 早上量：temper 对话最新 100 条共 9.9 MB，其中 9.6 MB 是 9 张截图。
+2. 服务端每次快照都把整段对话转成显示格式（`messagesOf` 序列化 `agent.state.messages` 全部，按消息缓存），虽然只发 100 条。
+   temper 对话 14,620 条消息、181 张图（图片数据共约 91 MB）。
+
+### 改法
+
+- **图片占位**（`server/serialize.ts`、`server/image-meta.ts`、`protocol.ts`）：发给页面的消息里，图片块只带
+  `url`、`mimeType`、`bytes`、`width`、`height`（`imageMetaOf` 从 PNG / JPEG / GIF / WebP 文件头读尺寸），不带数据。
+  用户贴的图、custom 消息里的图、工具结果里的截图都一样。占位不占快照，所以工具结果图片的 2e6 字符上限（超了换成
+  `[image result]` 文字）只在内联时生效：以前被换掉的大截图现在也看得到。每条工具结果最多 8 张照旧。
+  `serializeMessage(m, seq, imageUrl?)` 不给 `imageUrl` 时照旧内联（DSH、插件读取对话走这条）。
+- **图片端点**（`server/index.ts`，纯函数在 `server/chat-image.ts`）：`GET /api/chat-image/<会话>/<消息>/<n>?v=<指纹>`。
+  `v` = 图片 base64 文本的 sha1 取前 16 个 base64url 字符（`imageVersion`）。跟其它 `/api` 一样过鉴权（`<img>` 带不了
+  请求头，地址经 `withToken`）。只在内存里、进程共享的对话表中找（`ClientSession.chatImage`）：先按消息 id 和序号，
+  对不上（倒回、派生后 id 变了）再按指纹在整段对话里找。从不拿地址拼文件路径，奇怪的 id 只会找不到。
+  地址格式不对 400，找不到 404；回 `Cache-Control: private, max-age=31536000, immutable`（同一地址内容永远不变）、
+  `Content-Security-Policy: sandbox`、`X-Content-Type-Options: nosniff`。
+- **只构建要发的消息**（`server/agent-service.ts`）：`chatIndexOf(conv)` 保存整段对话的原始消息、缓存键和 UI id
+  （便宜：不转格式、不碰图片），消息表变了才重建。显示格式只为发出去的那段构建（`fullAt` / `fullRangeOf`：窗口、
+  「加载更早」页、跳转要的那段），按消息缓存，`pruneMessageCache` 清掉已不在对话里的。快照增量比的是键
+  （`emittedKeys`），不再是构建好的消息。提问索引（`question-index.ts`）和折叠摘要（`exchange-digest.ts`）直接读原始
+  消息，摘要用到的那几条才构建。切换缓存的指纹用 id 列表算（`window-hash.ts` 的 `idsHash`，结果和 `messagesHash`
+  一样）。整段构建（`messagesOf`）只剩插件读取对话在用。编辑 / 派生按 id 找条目（`findEntryByUiId`）用的还是同一个
+  计数器（`uiMessageKeyOf`），id 不变。
+- **页面**（`web/src/components/ChatImage.tsx`、`web/src/chat-image.ts`）：占位先画一个同尺寸的灰框（SVG，宽高取自
+  占位；页面的 max-width / max-height 规则像缩放图片一样缩放它，图片到了不跳动）。快滚到时（IntersectionObserver）
+  用 `new Image()` 预取，加载完再换上；失败重试（地址加 `retry=n`）。本页加载过的地址记着（最多 2000 个），往回滚、
+  切回来直接显示（字节在浏览器缓存里）。放大查看取原图。
+  - 编辑重问（`question-attachments.ts`、`App.tsx`）：占位还原成 `imageUrl` 附件（编辑框的缩略图照样显示），发送前
+    取回字节（`resolveImageUrls`）；取不到就报错、不发，不会丢了图重问。
+  - 「复制为图片」（`message-image.ts`）：导出前把还没加载的图换成真地址（`resolveLazyImages`）。
+  - 切换缓存（switch-cache）存的就是带占位的消息，不存图片。
+- 协议号 23 → 24（两份）。
+- 没改：会话文件、pi、billion-context-pi；打开对话时 pi 仍读整个文件（模型要用）。长文本输出不做懒加载（每个窗口
+  0.02–0.5 MB，不值得，用户同意）。
+
+### 量出来的（2026-09-26，测试服务器，4 个最大对话的副本在同一进程里按顺序打开，`/tmp/lazy-measure.mjs`）
+
+| 对话               | 打开时 WS      | 首次绘制     | 往上 10 页（1000 条）           | 服务端 heap（GC 后，累计） |
+| ------------------ | -------------- | ------------ | ------------------------------- | -------------------------- |
+| temper（01a09d92） | 2.95 → 0.31 MB | 4.8 → 4.3 s  | 5.74 → 3.84 MB，867 → 513 ms    | 321 → 308 MB               |
+| EPD（01a0b25d）    | 0.44 → 0.44 MB | 3.4 → 3.3 s  | 3.13 → 3.13 MB，881 → 607 ms    | 554 → 517 MB               |
+| rollcall（01a0ca43）| 0.32 → 0.32 MB | 2.5 → 2.4 s  | 5.09 → 4.60 MB，1119 → 954 ms   | 726 → 677 MB               |
+| tooling（01a0a269）| 0.66 → 0.66 MB | 2.3 → 2.4 s  | 2.92 → 2.63 MB，849 → 601 ms    | 872 → 813 MB               |
+
+- 四个都开完后 RSS 1313 → 1274 MB。内存大头是 pi 自己那份整段对话（模型要用），这个补丁不碰。
+- temper 改前打开时是 2.95 MB 而不是早上的 9.9 MB：对话又长了，最新 100 条里只剩 2 张图；而且 2e6 上限已经把最大的
+  截图换成了 `[image result]` 文字。改后这些截图也回来了（以占位的形式）。
+- 首次绘制的大头是 pi 读整个会话文件、建对话，不在这个补丁的范围里。
+
+### 回归
+
+- `tests/unit/lazy-images.test.ts`（32 项）：文件头尺寸（PNG、GIF、WebP 的 VP8 / VP8L / VP8X、JPEG 的基线 / 渐进
+  （SOF2）/ DHT 和填充字节之后 / 超过前 4 KB 的 EXIF 之后，认不出、太短、零尺寸给 null）；`base64Bytes`、`imageVersion`、
+  `servedImageType`（嗅字节，只信声明的图片类型）；带图片 URL 的 `serializeMessage`（用户图按顺序编号、文字不动；不给 URL
+  照旧内联；3 MB 截图变成小占位而不是 `[image result]`；工具结果最多 8 个占位、n 是在这条消息所有图里的序号；远程 URL
+  原样；custom 图片卡只剩占位）；`isShownMessage` / `imageDataOf` / `imageBlocksOf`；端点的纯函数
+  （`parseChatImageAddress` 的各种非法地址、`imageIfVersion` 原字节且指纹不对不给、响应头）；读原始消息的
+  `buildQuestionIndex` 和只构建显示那几条的 `snapshotDigests`；页面的 `isShownImage`、`imageSrc`、`placeholderSrc`、
+  `retrySrc`、加载过的地址、`splitDataUrl`、`fetchImageBase64`（大图也行）、`resolveImageUrls`（只取占位、取不到就失败）、
+  `resolveLazyImages`；编辑重问时提问自己的占位图和紧跟的图片卡都变成 `imageUrl` 附件。
+- `tests/lazy-images-test.mjs`（不花 token：假的 Anthropic 接口）：种一个 15 轮的对话（每轮用户贴一张图 + 工具返回一张
+  截图，共 30 张真 PNG，约 29 MB，其中一张 2.5 MB），窗口设成 40 条。核对：打开时快照很小（14.4 KB，窗口里 20 张图共
+  20.2 MB）、里面没有图片数据、20 张都是带类型 / 字节 / 宽高的占位、2.5 MB 截图也是占位；提问列表有全部 15 个提问；
+  打开时只取屏幕附近的图（3/20），屏幕上的图显示且是原图原尺寸；还在路上的图是同尺寸灰框，到了不跳；往上滚取回窗口
+  全部 20 张、每张只取一次；折叠行展开后里面的截图也加载；放大是 1200×700 原图；「加载更早」拿到的也是占位（5 张图
+  3.4 KB），滚到就显示；端点给原字节、类型、长度、缓存头、sandbox，没密码 401，指纹不对 / 未知对话 404，n 不是数字、
+  指纹格式不对或缺、id 超长 400，路径把戏 404，消息 id 变了（倒回、派生）按指纹仍找得到；提问栏到得了第一个提问，
+  跳过去（窗口外）它的图显示；新对话里回答途中到的截图在回答结束前就显示、回答正常结束；种的会话文件没变（只有 pi
+  自己加的 `thinking_level_change`）；服务端没有图片错误，页面没有错误。
+- `tests/unit/crash-guard.test.ts` 的快照守卫用例跟着改：快照现在从读 `this.conv` 开始（原来是 `currentMessages()`），
+  假窗口用一个 getter 记下「快照开始了」。
 
 ---
 

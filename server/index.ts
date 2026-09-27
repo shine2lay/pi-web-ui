@@ -33,6 +33,7 @@ import { PROTOCOL_VERSION } from "./protocol-version.js";
 import { AgentService, workspacePath, QuiesceRejectedError } from "./agent-service.js";
 import { describeError, errorMessage, guardCalls, installProcessGuards } from "./crash-guard.js";
 import type { BusyConversation } from "./agent-service.js";
+import { chatImageHeaders, parseChatImageAddress, type ChatImage } from "./chat-image.js";
 import { WS_MAX_PAYLOAD_BYTES, isAbsoluteWirePath, wireToAbs } from "./files-service.js";
 import { httpHostAllowed } from "./host-guard.js";
 import { registerFileTransferRoutes } from "./file-transfer-routes.js";
@@ -433,6 +434,33 @@ app.get("/api/attachment/:hash", async (req, res) => {
 		res.end(hit.buffer);
 	} catch (err) {
 		res.status(500).end((err as Error).message);
+	}
+});
+
+/**
+ * lazy-images: one picture of an open chat. Messages sent to the page carry a placeholder (size, type,
+ * this URL) instead of the picture; the page fetches it when it is about to scroll into view.
+ * `v` is the picture's content fingerprint, so a URL always means the same bytes: cache it forever.
+ * Served from the chat's messages in memory (no file path is involved); auth, origin and Host checks
+ * are the global middleware's, as for every /api route.
+ */
+app.get("/api/chat-image/:session/:message/:n", (req, res) => {
+	try {
+		const addr = parseChatImageAddress(req.params.session, req.params.message, req.params.n, req.query.v);
+		if (!addr) {
+			res.status(400).end("bad picture address");
+			return;
+		}
+		const hit = service.chatImage?.(addr.sessionId, addr.msgId, addr.n, addr.v) ?? null;
+		if (!hit) {
+			res.status(404).end("picture not found");
+			return;
+		}
+		for (const [k, val] of Object.entries(chatImageHeaders(hit))) res.setHeader(k, val);
+		res.end(hit.bytes);
+	} catch (err) {
+		console.error("[chat-image] failed:", err);
+		res.status(500).end("picture failed");
 	}
 });
 
@@ -1322,6 +1350,8 @@ export interface EngineService {
 	pendingMessages(): number;
 	/** busy-endpoint：此刻在干活的对话（整个进程）。pi 引擎有；dsh 引擎没有。 */
 	busyConversations?(): BusyConversation[];
+	/** lazy-images: GET /api/chat-image (null = not found). */
+	chatImage?(sessionId: string, msgId: string, n: number, v: string): ChatImage | null;
 	applyPluginAgentTools(): void;
 	applyPluginCommandCatalog(): void;
 	refreshBackgroundServers(): void;

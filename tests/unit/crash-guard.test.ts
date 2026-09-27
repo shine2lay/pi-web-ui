@@ -221,8 +221,10 @@ describe("the snapshot guard (level 1, ClientSession)", () => {
 			convs: new Map(convs.map((c) => [c.id, c])),
 			lostActiveLogged: null as string | null,
 			sinkCount: () => sockets,
-			currentMessages: (): never => {
-				calls.push("currentMessages");
+			// lazy-images: building a snapshot starts by reading the window's chat (`this.conv`), right after
+			// the guard. Reaching it means the snapshot goes on; recoverLostActive never reads it.
+			get conv(): never {
+				calls.push("snapshot");
 				throw new Error("snapshot built");
 			},
 			markRecentSeen: () => calls.push("markRecentSeen"),
@@ -245,7 +247,7 @@ describe("the snapshot guard (level 1, ClientSession)", () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		const win = fakeWindow([], 0);
 		expect(() => proto.emitSnapshotNow.call(win)).not.toThrow();
-		expect(win.calls).not.toContain("currentMessages");
+		expect(win.calls).not.toContain("snapshot");
 		expect(win.activeId).toBe("c4");
 		// One log line per lost chat, not one per snapshot.
 		proto.emitSnapshotNow.call(win);
@@ -271,7 +273,7 @@ describe("the snapshot guard (level 1, ClientSession)", () => {
 			"goal",
 			"terminals",
 			"slash",
-			"currentMessages",
+			"snapshot",
 		]);
 		expect(String(warn.mock.calls[0]?.[0])).toContain("its chat c4 was closed (snapshot); moved it to c3");
 	});

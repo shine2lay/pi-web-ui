@@ -273,7 +273,7 @@ import type {
 } from "./protocol.js";
 import { buildQuestionIndex } from "./question-index.js";
 import { TASK_QUEUE_ENTRY_TYPE, taskQueueCommandLine, taskQueueFromEntries } from "./task-queue.js";
-import { messagesHash } from "./window-hash.js";
+import { idsHash } from "./window-hash.js";
 import {
 	isTldrReply,
 	latestAwaitingReply,
@@ -285,12 +285,16 @@ import {
 } from "./tldr-lines.js";
 import { digestsBefore, snapshotDigests, straddleDigest } from "./exchange-digest.js";
 import { launchOrigin, toServiceInfo } from "./launch-origin.js";
+import { imageIfVersion, type ChatImage } from "./chat-image.js";
 import {
 	findEntryByUiId,
+	imageBlocksOf,
+	isShownMessage,
 	serializeMessage,
 	serializeStreamingMessage,
-	stripTransientRetryErrors,
+	uiMessageId,
 	type AgentMessage,
+	type ImageUrlFor,
 	type UiIdEntryLike,
 } from "./serialize.js";
 import { loadCommands, saveCommandsFile, TerminalManager } from "./terminals.js";
@@ -1684,6 +1688,121 @@ function contentFingerprint(m: AgentMessage): string {
 	return `txt:${h.toString(36)}:${text.length}`;
 }
 
+/** lazy-images: a chat's shown messages, in the page's positions, as raw SDK messages plus their UI ids,
+ *  cache keys and id suffixes. Building this is cheap (no display form, no picture data), so the server
+ *  keeps it for the whole chat and builds the display form only of what it sends (fullAt).
+ *  Valid while the message list is the same array with the same length and last message: pi appends in
+ *  place, and a retry removes the failed reply before appending the new one. */
+interface ChatIndex {
+	src: readonly AgentMessage[];
+	len: number;
+	last: AgentMessage | undefined;
+	retry: boolean;
+	raw: AgentMessage[];
+	keys: string[];
+	ids: string[];
+	seqs: number[];
+}
+
+/** uiMessageKey without a ClientSession (the picture endpoint looks chats up statically). */
+function uiMessageKeyOf(conv: Conversation, m: AgentMessage): { cacheKey: string; n: number } {
+	// toolResult messages are keyed by toolCallId; everything else by role+timestamp plus a content
+	// fingerprint (several same-role messages can share a millisecond, e.g. attachment asides).
+	const key = uiKeyOf(m);
+	let n = conv.msgIds.get(key);
+	if (n === undefined) {
+		n = conv.nextMsgId++;
+		conv.msgIds.set(key, n);
+	}
+	return { cacheKey: `${key}#${n}`, n };
+}
+
+/** The chat's index (see ChatIndex), rebuilt only when its message list changed. */
+function chatIndexOf(conv: Conversation): ChatIndex {
+	const src = conv.session.agent.state.messages;
+	const retry = !!conv.retryState;
+	const last = src[src.length - 1];
+	const c = conv.chatIndex;
+	if (c && c.src === src && c.len === src.length && c.last === last && c.retry === retry) return c;
+	const raw: AgentMessage[] = [];
+	const keys: string[] = [];
+	const ids: string[] = [];
+	const seqs: number[] = [];
+	const userSeq = new Map<number, number>();
+	for (const m of src) {
+		// Hidden messages get a number too: n comes from a per-chat counter in first-seen order,
+		// and the ids the page already holds were made that way.
+		const k = uiMessageKeyOf(conv, m);
+		if (!isShownMessage(m)) continue;
+		// A user message's id suffix counts the user messages sharing its timestamp, in order
+		// (what findEntryByUiId expects); every other role uses n.
+		let seq = k.n;
+		if (m.role === "user") {
+			const ts = m.timestamp ?? 0;
+			seq = (userSeq.get(ts) ?? 0) + 1;
+			userSeq.set(ts, seq);
+		}
+		raw.push(m);
+		keys.push(k.cacheKey);
+		ids.push(uiMessageId(m, seq));
+		seqs.push(seq);
+	}
+	// While an automatic retry waits, failed replies at the end are an intermediate state
+	// (same rule as stripTransientRetryErrors).
+	if (retry) {
+		let end = raw.length;
+		while (end > 0) {
+			const m = raw[end - 1] as { role?: string; stopReason?: string };
+			if (m.role === "assistant" && m.stopReason === "error") end--;
+			else break;
+		}
+		raw.length = end;
+		keys.length = end;
+		ids.length = end;
+		seqs.length = end;
+	}
+	const idx: ChatIndex = { src, len: src.length, last, retry, raw, keys, ids, seqs };
+	conv.chatIndex = idx;
+	return idx;
+}
+
+/** Where the page fetches picture n of a message (GET /api/chat-image, see chatImageOf). */
+function chatImageUrl(conv: Conversation): ImageUrlFor {
+	const sid = encodeURIComponent(conv.session.sessionId);
+	return (msgId, n, v) => `/api/chat-image/${sid}/${encodeURIComponent(msgId)}/${n}?v=${v}`;
+}
+
+/** Display form of shown message i, built on first use and cached per chat. */
+function fullAt(conv: Conversation, idx: ChatIndex, i: number): UiMessage {
+	const key = idx.keys[i];
+	const hit = conv.uiMessageCache.get(key);
+	if (hit) return hit;
+	const m = idx.raw[i];
+	const msg: UiMessage = serializeMessage(m, idx.seqs[i], chatImageUrl(conv)) ?? {
+		id: idx.ids[i],
+		role: m.role,
+		content: [],
+		timestamp: m.timestamp,
+	};
+	conv.uiMessageCache.set(key, msg);
+	return msg;
+}
+
+/** Display forms of shown messages [from, to). */
+function fullRangeOf(conv: Conversation, idx: ChatIndex, from: number, to: number): UiMessage[] {
+	const out: UiMessage[] = [];
+	for (let i = Math.max(0, from); i < Math.min(to, idx.raw.length); i++) out.push(fullAt(conv, idx, i));
+	return out;
+}
+
+/** Bytes of picture n of the message with UI id msgId, if its fingerprint is v; null otherwise. */
+function chatImageIn(conv: Conversation, msgId: string, n: number, v: string): ChatImage | null {
+	const idx = chatIndexOf(conv);
+	const i = idx.ids.indexOf(msgId);
+	if (i < 0) return null;
+	return imageIfVersion(imageBlocksOf(idx.raw[i])[n], v);
+}
+
 // ---------------------------------------------------------------------------
 // Web UI context adapter — bridges extension UI calls (setWidget/notify) to the
 // browser. Extensions like rpiv-todo render a TUI widget via
@@ -1818,11 +1937,11 @@ export interface Conversation {
 	// these must never be shared across conversations.
 	msgIds: Map<string, number>;
 	nextMsgId: number;
-	/** Per-timestamp 1-based user-message seq (drives the `u-<ts>-<seq>` id suffix). */
-	userSeqByTs: Map<number, number>;
 	uiMessageCache: Map<string, UiMessage>;
 	lastMessagesSig: string;
 	lastMessagesArray: UiMessage[];
+	/** lazy-images: shown messages with their ids (see ChatIndex); display forms only for what is sent. */
+	chatIndex?: ChatIndex;
 	/** TL;DR 行的缓存（tldr-panel，见 ClientSession.tldrOf）：key = 会话 + 叶子，树没动就不重扫分支；
 	 *  sig = 行 id 串，行没变就沿用同一个数组引用（emitSnapshotNow 靠引用判断要不要随 delta 重发）。 */
 	tldrCache?: { key: string; sig: string; lines: UiTldrLine[] };
@@ -2381,6 +2500,37 @@ export class ClientSession {
 			out.push({ id: c.id, title: c.title, cwd: c.cwd, doing, ...(c.isSubagent ? { subagent: true as const } : {}) });
 		}
 		return out;
+	}
+
+	/** lazy-images: GET /api/chat-image. Picture n of the message with UI id msgId, if its content
+	 *  fingerprint is v. Looks in the chat with this session id first, then in every open chat (a
+	 *  placeholder can outlive its session id, e.g. after a fork), then by fingerprint alone (after a
+	 *  rewind renumbers the messages). Only open chats, only memory: no file path is involved. */
+	static chatImage(sessionId: string, msgId: string, n: number, v: string): ChatImage | null {
+		const convs = [...ClientSession.sharedConvs.values()];
+		const own = convs.filter((c) => c.session?.sessionId === sessionId);
+		for (const c of [...own, ...convs.filter((c) => !own.includes(c))]) {
+			try {
+				const hit = chatImageIn(c, msgId, n, v);
+				if (hit) return hit;
+			} catch (err) {
+				// A chat being replaced right now: try the others.
+				console.warn("[chat-image] skipped a chat while looking up a picture:", err);
+			}
+		}
+		for (const c of convs) {
+			try {
+				for (const m of c.session.agent.state.messages) {
+					for (const b of imageBlocksOf(m)) {
+						const hit = imageIfVersion(b, v);
+						if (hit) return hit;
+					}
+				}
+			} catch (err) {
+				console.warn("[chat-image] skipped a chat while looking up a picture:", err);
+			}
+		}
+		return null;
 	}
 	/** 本客户端**正在看**哪条对话（纯视图状态，不代表所有权）。 */
 	private activeId = "";
@@ -3560,7 +3710,7 @@ export class ClientSession {
 	private snapRev = 0;
 	/** Messages array as of the last emitted snapshot/delta — identity-walked
 	 *  against the current array to detect append-only growth. */
-	private emittedMessages: UiMessage[] | null = null;
+	private emittedKeys: readonly string[] | null = null; // lazy-images: the index's cache keys, not built messages
 	/** Conversation whose messages emittedMessages belongs to. A conversation
 	 *  switch (set_cwd / new_chat / switch_*) must fall back to a FULL snapshot:
 	 *  two empty conversations have identical (empty) arrays, so the identity
@@ -4323,7 +4473,6 @@ export class ClientSession {
 			terminals,
 			msgIds: new Map(),
 			nextMsgId: 1,
-			userSeqByTs: new Map(),
 			uiMessageCache: new Map(),
 			lastMessagesSig: "",
 			lastMessagesArray: [],
@@ -5668,11 +5817,6 @@ export class ClientSession {
 		this.emitConversations();
 	}
 
-	/** Serialize a persisted message with a STABLE id + cached object reference. */
-	private serializeCached(m: AgentMessage): UiMessage | null {
-		return this.serializeCachedFor(this.conv, m);
-	}
-
 	/** 稳定缓存键 + 该消息的序号种子 n（见 serializeCachedFor）。
 	 *
 	 *  messagesOf 一次扫描里同时要 key（建 live 集合）与 n（算 user seq），所以
@@ -5684,48 +5828,8 @@ export class ClientSession {
 		// timestamp alone collides in the cache and only the first one renders
 		// — append a cheap content fingerprint to keep them distinct while
 		// staying stable across snapshots (content never changes once persisted).
-		const key = uiKeyOf(m);
-		let n = conv.msgIds.get(key);
-		if (n === undefined) {
-			n = conv.nextMsgId++;
-			conv.msgIds.set(key, n);
-		}
-		return { cacheKey: `${key}#${n}`, n };
-	}
-
-	/** serializeCached 的按对话版本（插件快照读非活跃对话用；缓存仍按对话隔离）。
-	 *  key 可由 messagesOf 预计算传入（同一次扫描里它已经算过一遍）。 */
-	private serializeCachedFor(
-		conv: Conversation,
-		m: AgentMessage,
-		key?: { cacheKey: string; n: number },
-	): UiMessage | null {
-		const k = key ?? this.uiMessageKey(conv, m);
-		const cached = conv.uiMessageCache.get(k.cacheKey);
-		if (cached) return cached;
-		// User-message id suffix is a 1-based count of user messages sharing
-		// this timestamp (that's what resolveUserMessageEntryId() expects). n is
-		// a global per-conversation counter across ALL roles, so it can't be
-		// reused as the seq — otherwise editing anything but the first question
-		// fails to resolve ("找不到要编辑的消息").
-		let seq = k.n;
-		if (m.role === "user") {
-			const ts = m.timestamp ?? 0;
-			seq = (conv.userSeqByTs.get(ts) ?? 0) + 1;
-			conv.userSeqByTs.set(ts, seq);
-		}
-		const msg = serializeMessage(m, seq);
-		// 上界在 messagesOf 的 pruneMessageCache 里按 live 集合处理：见那里的注释
-		// （FIFO 淘汰仍在转写里的条目会让每次快照都退化成全量，issue #259）。
-		if (msg) conv.uiMessageCache.set(k.cacheKey, msg);
-		return msg;
-	}
-
-	/** Current messages array (with the existing sig-reuse optimization).
-	 *  Element objects are reference-stable (serializeCached cache), which is
-	 *  what lets emitSnapshotNow detect append-only growth via identity walk. */
-	private currentMessages(): UiMessage[] {
-		return this.messagesOf(this.conv);
+		// lazy-images: the logic lives in uiMessageKeyOf (the picture endpoint needs it without a session).
+		return uiMessageKeyOf(conv, m);
 	}
 
 	/** 这条对话的 TL;DR 行（tldr-panel）：当前分支上 pi-tldr 存的 `tldr` 条目。
@@ -5768,30 +5872,17 @@ export class ClientSession {
 		}
 	}
 
-	/** currentMessages 的按对话版本（插件快照读非活跃对话用）。 */
+	/** The whole chat's display forms, for plugins (readConversationForPlugins). The page only ever gets
+	 *  what it shows (lazy-images, see emitSnapshotNow); pictures here are placeholders as well. */
 	private messagesOf(conv: Conversation): UiMessage[] {
-		// 一次扫描同时收齐「当前转写里的全部缓存键」（live 集合，供
-		// pruneMessageCache 精确回收死条目）与各自的序列化结果。
-		const live = new Set<string>();
-		let rawMessages = conv.session.agent.state.messages
-			.map((m) => {
-				const k = this.uiMessageKey(conv, m);
-				live.add(k.cacheKey);
-				return this.serializeCachedFor(conv, m, k);
-			})
-			.filter((m): m is NonNullable<typeof m> => m !== null);
-		// 自动重试等待期：SDK 暂留在 state 末尾的 error 气泡只是中间态（随后被
-		// 摘掉重跑），不进快照——成功则用户永远看不到，耗尽才标红。否则 agent_end
-		// 的立即 flush 会先画红、摘掉后又消失（红色一闪而过）。
-		rawMessages = stripTransientRetryErrors(rawMessages, !!conv.retryState);
-		this.pruneMessageCache(conv, live);
-		// Reuse the previous array when nothing changed: the element objects are
-		// cached (reference-stable) anyway, and a stable array reference lets the
-		// frontend memoize derived maps instead of rebuilding them every 60ms.
-		const sig = rawMessages.map((m) => m.id).join("\u0001");
-		const messages = conv.lastMessagesSig === sig ? conv.lastMessagesArray : rawMessages;
+		const idx = chatIndexOf(conv);
+		const messages = fullRangeOf(conv, idx, 0, idx.raw.length);
+		this.pruneMessageCache(conv, idx);
+		// Same array as last time when nothing changed (a stable reference for callers that memoize).
+		const sig = idx.keys.join("\u0001");
+		if (conv.lastMessagesSig === sig) return conv.lastMessagesArray;
 		conv.lastMessagesSig = sig;
-		conv.lastMessagesArray = rawMessages;
+		conv.lastMessagesArray = messages;
 		return messages;
 	}
 
@@ -5807,10 +5898,13 @@ export class ClientSession {
 	 *  按 live 集合淘汰后：仍在转写里的消息对象恒定（identity walk 命中，增量通路
 	 *  恢复），被回收的只有 fork / 压缩 / 换会话留下的死条目 —— 内存上界仍等于
 	 *  「当前转写」本身（这份数组本来就要常驻），不再随历史累积。 */
-	private pruneMessageCache(conv: Conversation, live: ReadonlySet<string>): void {
+	private pruneMessageCache(conv: Conversation, idx: ChatIndex): void {
 		const cache = conv.uiMessageCache;
-		// 只有「超上限」且「确实有死条目」时才扫一遍；转写单调增长时这里是零成本。
-		if (cache.size <= UI_MESSAGE_CACHE_CAP || cache.size <= live.size) return;
+		// lazy-images: only what was sent (or read by a plugin) is built, so this cache stays small unless a
+		// plugin reads a whole chat. Live entries still stay: the scheduler re-reads a chat every 2 s, and
+		// evicting them would rebuild the whole chat each time.
+		if (cache.size <= UI_MESSAGE_CACHE_CAP || cache.size <= idx.keys.length) return;
+		const live = new Set(idx.keys);
 		for (const key of cache.keys()) if (!live.has(key)) cache.delete(key);
 	}
 
@@ -5979,13 +6073,18 @@ export class ClientSession {
 		// recoverLostActive). Move to an open chat, or skip this snapshot instead of throwing
 		// "no active conversation" (that throw once took the whole server down).
 		if (!this.convs.has(this.activeId) && !this.recoverLostActive("snapshot")) return;
-		const cur = this.currentMessages();
-		const windowStart = Math.max(0, cur.length - MESSAGE_WINDOW);
-		const prev = this.emittedMessages;
-		let incremental = !forceFull && prev !== null && this.emittedConvId === this.activeId && prev.length <= cur.length;
-		if (incremental && prev) {
+		const conv = this.conv;
+		// lazy-images: the index is cheap (raw messages and ids); display forms are built only for what goes out.
+		const idx = chatIndexOf(conv);
+		this.pruneMessageCache(conv, idx);
+		const total = idx.keys.length;
+		const full = (i: number) => fullAt(conv, idx, i);
+		const windowStart = Math.max(0, total - MESSAGE_WINDOW);
+		const prev = this.emittedKeys;
+		let incremental = !forceFull && prev !== null && this.emittedConvId === this.activeId && prev.length <= total;
+		if (incremental && prev && prev !== idx.keys) {
 			for (let i = 0; i < prev.length; i++) {
-				if (prev[i] !== cur[i]) {
+				if (prev[i] !== idx.keys[i]) {
 					incremental = false;
 					break;
 				}
@@ -6003,10 +6102,10 @@ export class ClientSession {
 		this.emittedDialog = dialog;
 		if (incremental && prev) {
 			const baseRev = this.emittedRev;
-			this.emittedMessages = cur;
+			this.emittedKeys = idx.keys;
 			this.emittedConvId = this.activeId;
 			this.emittedRev = rev;
-			const appended = cur.slice(prev.length);
+			const appended = fullRangeOf(conv, idx, prev.length, total);
 			this.emit({
 				type: "snapshot_delta",
 				rev,
@@ -6018,7 +6117,9 @@ export class ClientSession {
 					// 提问索引只在真的多了提问时重发：流式期间 delta 每 60ms 一条，
 					// 十几 KB 的索引跟着走就是纯浪费。缺省时客户端沿用上一份。
 					// 窗口起点不跟 delta 发：追加只长末尾，客户端的 start 不变。
-					...(appended.some((m) => m.role === "user") ? { questionIndex: buildQuestionIndex(cur) } : {}),
+					...(appended.some((m) => m.role === "user")
+						? { questionIndex: buildQuestionIndex(idx.raw, (i) => idx.ids[i]) }
+						: {}),
 					// TL;DR 行同理：只在列表变了时带（tldrOf 在行没变时返回同一个数组）。
 					...(tldrChanged ? { tldr } : {}),
 					// 任务队列同理（taskQueueOf 在队列没变时返回同一个对象）。
@@ -6028,12 +6129,12 @@ export class ClientSession {
 				},
 			});
 		} else {
-			this.emittedMessages = cur;
+			this.emittedKeys = idx.keys;
 			this.emittedConvId = this.activeId;
 			this.emittedRev = rev;
 			// switch-cache：切回来的这条对话，客户端缓存里那一截对得上就只发后面新增的。
 			// 客户端的窗口起点照旧（和 delta 一样只往后长），摘要按这个起点算。
-			const resume = this.resumeWindow(cur);
+			const resume = this.resumeWindow(idx.ids);
 			const start = resume ? resume.start : windowStart;
 			this.emit({
 				type: "snapshot",
@@ -6044,12 +6145,12 @@ export class ClientSession {
 					...this.buildLightState(rev, true),
 					// 只发最新的一截：一个 8600 条的会话完整快照是 35MB，尾部 100 条
 					// 是 0.5MB（实测 1.5%）。更老的由 load_older 按需取回。
-					messages: resume ? cur.slice(resume.start + resume.count) : windowStart > 0 ? cur.slice(windowStart) : cur,
+					messages: fullRangeOf(conv, idx, resume ? resume.start + resume.count : windowStart, total),
 					messagesStart: start,
-					questionIndex: buildQuestionIndex(cur),
+					questionIndex: buildQuestionIndex(idx.raw, (i) => idx.ids[i]),
 					// 窗口之前最近几轮的摘要（exchange-digest）：窗口常常全落在最后一轮里，
 					// 没有它页面上就只剩一行。delta 不带：窗口前面的历史只随整份快照变。
-					...(EXCHANGE_DIGESTS > 0 ? { exchanges: snapshotDigests(cur, start, EXCHANGE_DIGESTS) } : {}),
+					...(EXCHANGE_DIGESTS > 0 ? { exchanges: snapshotDigests(idx.raw, start, EXCHANGE_DIGESTS, full) } : {}),
 					// 整份快照总带 TL;DR（没有就是 []）：切对话时要把上一条的行换掉。
 					tldr,
 					// 任务队列同理：切对话时换成这一条的。
@@ -6069,7 +6170,7 @@ export class ClientSession {
 	 *  新增的超过一个窗口就不续了：发整份最新一截更小，客户端的窗口也不至于越长越大。
 	 *  从历史重开后助手消息的 id 可能换号（序号是每条对话自己的计数器，压缩过就对不上），
 	 *  那样指纹不一致，就是一份正常的整份快照。 */
-	private resumeWindow(cur: readonly UiMessage[]): CachedWindow | null {
+	private resumeWindow(ids: readonly string[]): CachedWindow | null {
 		const have = this.switchHave;
 		if (!have || typeof have !== "object" || have.sessionId !== this.session.sessionId) return null;
 		this.switchHave = null;
@@ -6077,8 +6178,8 @@ export class ClientSession {
 		if (!Number.isSafeInteger(start) || !Number.isSafeInteger(count) || start < 0 || count < 1) return null;
 		if (typeof hash !== "string") return null;
 		const end = start + count;
-		if (end > cur.length || cur.length - end > MESSAGE_WINDOW) return null;
-		if (messagesHash(cur, start, end) !== hash) return null;
+		if (end > ids.length || ids.length - end > MESSAGE_WINDOW) return null;
+		if (idsHash(ids, start, end) !== hash) return null;
 		return { sessionId: have.sessionId, start, count, hash };
 	}
 
@@ -6087,19 +6188,20 @@ export class ClientSession {
 	 *  收起按钮）。 */
 	loadOlder(beforeIndex: number, count?: number): void {
 		if (this.disposed) return;
-		const cur = this.currentMessages();
-		const end = Math.min(Math.max(0, Math.floor(beforeIndex)), cur.length);
+		const conv = this.conv;
+		const idx = chatIndexOf(conv);
+		const end = Math.min(Math.max(0, Math.floor(beforeIndex)), idx.keys.length);
 		const take = Math.max(1, Math.floor(count ?? MESSAGE_WINDOW));
 		const start = Math.max(0, end - take);
 		if (end <= start) return;
 		// 新起点落在一轮中间：附上这一轮开头那一截的摘要（exchange-digest），客户端手里的那份
 		// 计数覆盖到旧起点，和这次载入的消息重复了。
-		const straddle = EXCHANGE_DIGESTS > 0 ? straddleDigest(cur, start) : undefined;
+		const straddle = EXCHANGE_DIGESTS > 0 ? straddleDigest(idx.raw, start, (i) => fullAt(conv, idx, i)) : undefined;
 		this.emit({
 			type: "older_messages",
 			conversationId: this.activeId,
 			start,
-			messages: cur.slice(start, end),
+			messages: fullRangeOf(conv, idx, start, end),
 			...(straddle ? { straddle } : {}),
 		});
 	}
@@ -6109,8 +6211,9 @@ export class ClientSession {
 	 *  空结果也回（客户端靠它知道到顶了）。 */
 	loadExchanges(beforeIndex: number, count?: number, fromIndex?: number): void {
 		if (this.disposed) return;
-		const cur = this.currentMessages();
-		const before = Math.min(Math.max(0, Math.floor(beforeIndex)), cur.length);
+		const conv = this.conv;
+		const idx = chatIndexOf(conv);
+		const before = Math.min(Math.max(0, Math.floor(beforeIndex)), idx.keys.length);
 		const n = typeof count === "number" && Number.isFinite(count) ? count : EXCHANGE_DIGESTS || 5;
 		const pick =
 			typeof fromIndex === "number" && Number.isFinite(fromIndex)
@@ -6120,7 +6223,7 @@ export class ClientSession {
 			type: "older_exchanges",
 			conversationId: this.activeId,
 			beforeIndex: before,
-			exchanges: digestsBefore(cur, before, pick),
+			exchanges: digestsBefore(idx.raw, before, pick, undefined, (i) => fullAt(conv, idx, i)),
 		});
 	}
 
@@ -11525,7 +11628,7 @@ export class ClientSession {
 		messageId: string,
 	): import("@earendil-works/pi-coding-agent").SessionEntry | null {
 		// The matcher re-derives rendered ids with the SAME derivation
-		// serializeCachedFor() used to hand them to the browser (uiMessageId +
+		// chatIndexOf() used to hand them to the browser (uiMessageId +
 		// the counter below). Historically this recomputed ids with its own
 		// numbering (per-timestamp assistant seq, branch-entry global seq),
 		// which never matched what was rendered — fork/rollback on any
@@ -11736,8 +11839,8 @@ export class ClientSession {
 			// 清理该会话的 UI 消息缓存和序列化映射
 			targetConv.uiMessageCache.clear();
 			targetConv.msgIds.clear();
-			targetConv.userSeqByTs.clear();
 			targetConv.nextMsgId = 1;
+			targetConv.chatIndex = undefined;
 			targetConv.lastMessagesSig = "";
 			targetConv.lastMessagesArray = [];
 			targetConv.queueSteering = [];
@@ -11800,7 +11903,7 @@ export class ClientSession {
 					? "Rolled back to selected message; workspace physical files restored to checkpoint state."
 					: "Rolled back to selected message; subsequent content discarded, ready to continue.",
 			});
-			this.emittedMessages = null;
+			this.emittedKeys = null;
 			this.emitConversations();
 			this.flushSnapshot(true);
 		} catch (err) {
@@ -13246,6 +13349,11 @@ export class AgentService {
 	/** busy-endpoint：见 ClientSession.busyConversations（对话表进程共享，不按客户端累加）。 */
 	busyConversations(): BusyConversation[] {
 		return ClientSession.busyConversations();
+	}
+
+	/** lazy-images: GET /api/chat-image (see ClientSession.chatImage). */
+	chatImage(sessionId: string, msgId: string, n: number, v: string): ChatImage | null {
+		return ClientSession.chatImage(sessionId, msgId, n, v);
 	}
 
 	/** Aggregate across every client session: conversations with in-flight runs. */
