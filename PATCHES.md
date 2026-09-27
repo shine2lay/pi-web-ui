@@ -54,6 +54,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | lazy-images                  | `local`        | `server/image-meta.ts`, `chat-image.ts`, `serialize.ts`, `agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/components/ChatImage.tsx`, `chat-image.ts` |
 | carry-on                     | `local`        | `server/running-chats.ts`, `agent-service.ts`, `client-state.ts`, `index.ts`, `scheduler-tasks.ts`, `tests/carry-on-restart-test.mjs`, `tests/unit/` |
 | sealed-tests                 | `local`        | `scripts/sealed.sh`, `sealed-summary.mjs`, `check.sh`, `tests/lib/sealed-fence.cjs`, `tests/run-sealed.mjs`, `tests/lib/`, `vitest.config.ts`, `tests/*-test.mjs`, 6 处测试查出的 bug |
+| wake-reopen                  | `local`        | `server/agent-service.ts`（`wakeClosedChat`、`wakeConversation` 的 id 相位）、`server/index.ts`（调度执行器）、`tests/wake-reopen-test.mjs`、`tests/unit/schedule-agent-tool.test.ts` |
 
 ---
 
@@ -2480,3 +2481,38 @@ tool_result；这条坏记录已经落盘，所以对话从此发不出去。上
   - `plugin-http-test`、`token-auth-test`：密封、端口不撞之后都过。
 - 「上游修好了就删」的两个补丁在纯 v0.96.1 上用它们自己的单测复查过，都还挂：`terminal-view.test.ts`
   （11 项挂，`tm.note is not a function` 等）、`mute-mcp-restart-nag.test.ts`（3 项挂，重启提示照弹），两个都留着。
+
+## wake-reopen
+
+**状态**：`local`
+**基线**：v0.96.1
+
+**问题**（2026-09-27 真实发生）：04:15 装新版重启了 pi-web-ui。重启只重新打开正在干活的对话（carry-on），
+temper 那个对话当时闲着，就没被打开。04:22 它定的一次性唤醒到点了：找不到原对话，就按上游 issue #231 的
+「视口兜底」投给了同项目（`/home/shinelay`）最近活跃的对话，也就是另一个正在干别的活的对话。那个对话收到一件
+不是自己的任务。
+
+E2E 还查出第二条错投的路：任务同时记着对话 id 和转录文件。转录没开着时，`wakeConversation` 接着按 id 找，
+而对话 id 每次重启都从 c1 重新数，旧 id 会对上同项目里另一个对话（同 cwd，护栏拦不住），唤醒就进了它。
+
+### 改法
+
+1. **`AgentService.wakeClosedChat(sessionFile, text)`**（新）：原对话没开着但转录还在，就像 carry-on 一样用一个
+   伪客户端（`carry-on:wake`）重新打开它、把唤醒发进去（`ClientSession.carryOn`：打开 → 发消息 → 等回合开始 →
+   `listed = true` 留在运行列表里），然后让所有窗口刷新对话列表（`pokeExternalRunning`）。一次只开一个（串行链），
+   因为那个伪客户端同一时间只有一个当前对话。打不开（转录没了、项目开满了、quiesce）回 `ok:false`，照旧回落。
+2. **调度执行器**（`server/index.ts`）：顺序变成：已开着的原对话（按转录）→ **重新打开原对话**（新）→ 同项目
+   视口兜底（带「已转到本窗口」提示）→ 无头。重新打开成功时向所有窗口发一条提示，任务跟着换到新的对话 id
+   （非单次任务照旧 `rebind`）。原对话正在压缩（`busy`）时不重开（它开着，不能有第二份）。
+3. **`wakeConversation` 的 id 相位只在不知道转录时用**（老任务、插件的 `chatFromPlugin` 只给 id）。知道转录时，
+   转录就是这个对话是谁；旧 id 可能已指向别的对话，不再按 id 投。转录已被删掉的任务照旧走视口兜底。
+
+### 测试
+
+`tests/wake-reopen-test.mjs`（密封服务器 + 模拟模型，不花 token）：BOUND 定了唤醒，OTHER 之后用过（最近活跃）；
+重启，两个都闲着没被打开；触发唤醒：BOUND 被重新打开、收到并回答，OTHER 什么都没收到；开着的窗口收到提示、
+列表里出现它，之后新开的窗口也有；任务换到新 id；再触发一次直接进已开着的 BOUND，不重开第二份；转录没了的任务
+照旧回落并提示。修之前的构建上跑，7 项挂（唤醒进了 OTHER）。`tests/unit/schedule-agent-tool.test.ts` 加了
+`wakeClosedChat` 的空参 / 转录不存在 / quiesce 三种。
+
+**同步上游时**：上游若也改了「原对话不在」的处理（issue #231 那套），先看它是否已经会重开原对话；会的话本补丁可删。

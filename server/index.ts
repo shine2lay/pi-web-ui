@@ -1609,6 +1609,8 @@ async function confirmPluginInstallHelper(items: Array<{ id: string; source: str
 // 活跃对话（issue #231：视口兜底＋自动重绑定＋明确降级提示），都没有才无头伪
 // 客户端（chatFromScheduler）；单次任务触发后自动删除。DSH 引擎无这俩方法时
 // executor 回 not-supported（历史里记失败，不炸进程）。
+// wake-reopen：原对话没开着（关了，或闲着熬过一次重启）但转录还在时，先重新打开它、
+// 在它那里唤醒，不再回落到同项目别的对话。
 const scheduler = new SchedulerStore(DATA_DIR, {
 	executor: async (task) => {
 		let result: { ok: boolean; conversationId?: string; error?: string };
@@ -1633,6 +1635,10 @@ const scheduler = new SchedulerStore(DATA_DIR, {
 					busy?: boolean;
 					error?: string;
 				}>;
+				wakeClosedChat?: (
+					sessionFile: string,
+					text: string,
+				) => Promise<{ ok: boolean; conversationId?: string; sessionFile?: string; error?: string }>;
 				wakeViewportInCwd?: (
 					cwd: string,
 					text: string,
@@ -1675,6 +1681,25 @@ const scheduler = new SchedulerStore(DATA_DIR, {
 						w = await svc.wakeConversation(target, text, { sessionFile: taskFile, cwd: task.cwd });
 					} catch (err) {
 						w = { ok: false, error: (err as Error).message };
+					}
+					// wake-reopen: the chat isn't open (closed, or idle through a restart). As long as its
+					// transcript is there, reopen it and wake it there, instead of handing its wake-up to
+					// another chat of the project. (busy = it is open but compacting: no second copy.)
+					if (!w.ok && !w.busy && taskFile && typeof svc.wakeClosedChat === "function") {
+						let r: { ok: boolean; conversationId?: string; sessionFile?: string; error?: string };
+						try {
+							r = await svc.wakeClosedChat(taskFile, text);
+						} catch (err) {
+							r = { ok: false, error: (err as Error).message };
+						}
+						if (r.ok) {
+							pushNoticeToAll(
+								"info",
+								`定时任务「${task.name}」的对话没有打开，已重新打开它并在那里继续。`,
+								`Scheduled task "${task.name}": its chat wasn't open, so it was reopened and woken up there.`,
+							);
+							w = { ok: true, conversationId: r.conversationId, sessionFile: r.sessionFile };
+						}
 					}
 					if (w.ok) {
 						// 会话继承（issue #231）：压缩/重启后同文件对话换了新 id → 任务跟过去，

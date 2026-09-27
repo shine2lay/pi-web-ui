@@ -2077,6 +2077,9 @@ const MAX_OPEN_CONVERSATIONS = 8;
 let runningChats: RunningChats | null = null;
 /** carry-on: the pseudo client that reopens cut-off chats after a restart. */
 const CARRY_ON_CLIENT_PREFIX = "carry-on:";
+/** wake-reopen: the pseudo client (a carry-on one) that reopens a closed chat for its scheduled wake-up. */
+const WAKE_REOPEN_CLIENT_ID = `${CARRY_ON_CLIENT_PREFIX}wake`;
+const WAKE_REOPEN_SINK = (): void => {};
 
 /** carry-on: the chat's transcript as the live list keys it (null for chats that don't count). */
 function runningRef(conv: Conversation): { sessionFile: string; title: string; cwd: string } | null {
@@ -13165,10 +13168,13 @@ export class AgentService {
 				// 同文件持有方都在但都投递失败 —— id 相位大概率指向同一批，无需再试
 				return { ok: false, error: "目标对话投递失败（持有方异常）" };
 			}
-			// 无同文件持有方 —— 老任务只有 id，继续相位二
+			// No chat has the transcript open: a miss (wake-reopen: the caller reopens it; no id phase).
 		}
 		// 相位二：内存对话 id（易失键，必须配 cwd 护栏防跨项目串台）。
-		if (id) {
+		// wake-reopen: only when the transcript isn't known (old tasks, plugins). When it is, the
+		// transcript is who the chat is: chat ids start again at c1 after a restart, so an old id
+		// can name a different chat of the same project. The caller reopens the transcript instead.
+		if (id && !wantFile) {
 			const hits: { cs: ClientSession; clientId: string; conv: Conversation }[] = [];
 			for (const [clientId, cs] of this.clients) {
 				try {
@@ -13198,6 +13204,59 @@ export class AgentService {
 			if (busyError) return { ok: false, busy: true, error: busyError };
 		}
 		return { ok: false, error: "目标对话不在运行中（已关闭或服务重启过）" };
+	}
+
+	/**
+	 * wake-reopen: a scheduled wake-up whose chat isn't open (closed, or left idle through a
+	 * restart, which only reopens working chats) reopens that chat and is delivered there, the
+	 * way carry-on reopens the chats a restart cut off. Before, it went to whichever chat of the
+	 * project was active last (wakeViewportInCwd), which is someone else's conversation.
+	 * One at a time: the wake-up client has one active chat.
+	 * ok:false = it couldn't be reopened (transcript gone, project full, …); the caller then
+	 * falls back as before.
+	 */
+	async wakeClosedChat(
+		sessionFile: string,
+		text: string,
+	): Promise<{ ok: boolean; conversationId?: string; sessionFile?: string; error?: string }> {
+		const file = String(sessionFile ?? "").trim();
+		if (!file || !text.trim()) return { ok: false, error: "唤醒目标或文本为空" };
+		if (this.quiesced) return { ok: false, error: "服务器正忙（quiesced），请稍后重试" };
+		if (!existsSync(file)) return { ok: false, error: "the chat's transcript is gone" };
+		const run = this.wakeReopenChain.then(() => this.reopenAndWake(file, text));
+		this.wakeReopenChain = run.catch(() => {});
+		return run;
+	}
+
+	private wakeReopenChain: Promise<unknown> = Promise.resolve();
+
+	private async reopenAndWake(
+		file: string,
+		text: string,
+	): Promise<{ ok: boolean; conversationId?: string; sessionFile?: string; error?: string }> {
+		try {
+			const cs = await this.attach(WAKE_REOPEN_CLIENT_ID, WAKE_REOPEN_SINK);
+			try {
+				// Reopens the chat (or switches to it, if it got opened in the meantime), sends the
+				// wake-up, and keeps it in the running list once its run has started.
+				if (!(await cs.carryOn(file, text))) return { ok: false, error: "couldn't reopen the chat" };
+				const conv = cs.resolveSchedulerTarget({ sessionFile: file });
+				let live = file;
+				try {
+					live = String(conv?.session.sessionFile ?? file);
+				} catch {
+					// session being replaced: keep the file we opened
+				}
+				// Open windows list it now (a window that connects later gets it with its first list).
+				this.pokeExternalRunning(WAKE_REOPEN_CLIENT_ID);
+				return { ok: true, conversationId: conv?.id, sessionFile: live };
+			} finally {
+				// Nobody watches through this client: the chat counts as unwatched (its done ring rings).
+				this.detach(WAKE_REOPEN_CLIENT_ID, WAKE_REOPEN_SINK);
+			}
+		} catch (err) {
+			return { ok: false, error: (err as Error).message };
+		}
 	}
 
 	/** issue #231：同项目视口回退 —— 原绑定对话不在时，把唤醒投给该项目最近活跃

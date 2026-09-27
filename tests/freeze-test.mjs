@@ -43,11 +43,16 @@ writeMockModelConfig(agentDir, mock.port);
 const dataDir = mkdtempSync(join(tmpdir(), "pi-freeze-data-"));
 
 let server = null;
+/** The server's error output (last 4000 characters), shown when a check fails. */
+let serverErr = "";
 async function startServer() {
 	server = spawn("node", ["dist/server/index.js"], {
 		cwd: PROJ,
 		env: { ...process.env, PI_WEB_PORT: String(PORT), PI_CODING_AGENT_DIR: agentDir, PI_WEB_DATA_DIR: dataDir },
-		stdio: "ignore",
+		stdio: ["ignore", "ignore", "pipe"],
+	});
+	server.stderr.on("data", (d) => {
+		serverErr = (serverErr + d).slice(-4000);
 	});
 	// Wait until the port actually listens (or the process died).
 	for (let i = 0; i < 40; i++) {
@@ -207,6 +212,18 @@ check(
 				),
 			),
 );
+if (!reply) {
+	// What the page showed, whether the model was asked at all, and what the server said.
+	const seen = await page
+		.evaluate(() => ({
+			box: document.querySelector("textarea")?.value ?? null,
+			text: document.body.innerText.replace(/\s+/g, " ").slice(0, 800),
+		}))
+		.catch((e) => ({ error: String(e) }));
+	console.log(`  page: ${JSON.stringify(seen)}`);
+	console.log(`  model requests: ${mock.requests.length}`);
+	console.log(`  server stderr: ${serverErr.slice(-1500) || "(none)"}`);
+}
 
 check(
 	"no unexpected page errors",

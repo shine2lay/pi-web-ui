@@ -88,6 +88,18 @@ describe("AgentService.wakeConversation（无持有方路径）", () => {
 		expect(q.error).toContain("quiesced");
 		expect(await svc.wakeViewportInCwd(dir, "hi")).toMatchObject({ ok: false });
 	});
+	it("wake-reopen: a closed chat whose transcript is gone, or no target, is not reopened", async () => {
+		const svc = new AgentService(dir, join(dir, "client-state.json"));
+		const gone = await svc.wakeClosedChat(join(dir, "nope.jsonl"), "hi");
+		expect(gone).toMatchObject({ ok: false });
+		expect(gone.error).toContain("gone");
+		expect(await svc.wakeClosedChat("", "hi")).toMatchObject({ ok: false });
+		expect(await svc.wakeClosedChat(join(dir, "nope.jsonl"), "  ")).toMatchObject({ ok: false });
+		svc.quiesce();
+		const q = await svc.wakeClosedChat(join(dir, "client-state.json"), "hi");
+		expect(q.ok).toBe(false);
+		expect(q.error).toContain("quiesced");
+	});
 });
 
 describe("schedule_* 工具闭环", () => {
