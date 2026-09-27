@@ -4,23 +4,17 @@
  * Starts a wizard, answers the first question, then sends clear_goal (the ✗
  * button). Verifies the browser dialog is closed (dialog_closed), the wizard
  * status clears, and NO goal is auto-set.
+ *
+ * Runs on its own server (tests/lib/own-server.mjs) with the stand-in model (tests/lib/mock-model.mjs):
+ * the wizard session asks through goal_ask like a real model would. No real model is called.
+ * Usage: npm run build && node tests/goal-wizard-cancel-test.mjs
  */
-import { portUp, freePort } from "./lib/port-utils.mjs";
-import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
-import { spawn } from "node:child_process";
-import { execSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
-const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
+import { wizardReply } from "./lib/mock-model.mjs";
+import { ownServer } from "./lib/own-server.mjs";
 
 /* eslint-env node */
-
-const PORT = 8906;
-const PROJ = REPO_ROOT;
 
 let failures = 0;
 function check(name, ok, extra = "") {
@@ -28,35 +22,24 @@ function check(name, ok, extra = "") {
 	if (!ok) failures++;
 }
 
-let server = null;
+let srv = null;
 async function startServer() {
-	server = spawn("node", ["dist/server/index.js"], {
-		cwd: PROJ,
-		env: {
-			...process.env,
-			PI_WEB_PORT: String(PORT),
-			PI_WEB_DATA_DIR: mkdtempSync(join(tmpdir(), "pi-web-wizcan-")),
-			PI_WEB_CWD: PROJ,
-		},
-		stdio: ["ignore", "ignore", "pipe"],
+	srv = await ownServer({
+		name: "goal-wizard-cancel-test",
+		mock: ({ payload, sideRequest }) =>
+			wizardReply(payload, {
+				questions: [
+					{ question: "同步方向是？", options: ["单向同步", "双向同步"] },
+					{ question: "需要忽略哪些文件？" },
+				],
+				goal: "写一个单向文件同步工具，并附带测试。",
+			}) ?? (sideRequest ? "文件同步" : "好的。"),
 	});
-	server.stderr?.on("data", (d) => process.stderr.write("[srv] " + d.toString()));
-	for (let i = 0; i < 60; i++) {
-		await sleep(250);
-		try {
-			if (!(await portUp(PORT))) throw new Error("port not up");
-			return;
-		} catch {
-			/* retry */
-		}
-	}
-	throw new Error("no server");
 }
 
 async function main() {
 	await startServer();
-	await sleep(400);
-	const ws = new WebSocket(`ws://localhost:${PORT}/ws`);
+	const ws = new WebSocket(srv.ws);
 	const inbox = [];
 	const waiters = [];
 	ws.on("message", (d) => {
@@ -126,23 +109,22 @@ async function main() {
 	await sleep(2000);
 	const lateGoal = inbox.some((m) => m.type === "goal_status" && m.status.goal && m.status.goal !== null);
 	check("no goal set even after waiting", !lateGoal);
+	// The wizard really stopped: the model was asked for the first question only.
+	const wizardRequests = srv.mock.requests.filter((r) => wizardReply(r, { questions: [], goal: "" }) !== null);
+	check(
+		"the wizard made no model request after the cancel",
+		wizardRequests.length === 1,
+		`requests=${wizardRequests.length}`,
+	);
 
 	console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
-	try {
-		ws.close();
-		server.kill("SIGTERM");
-	} catch {
-		/* ignore */
-	}
+	ws.close();
+	await srv.stop();
 	process.exit(failures === 0 ? 0 : 1);
 }
 
-main().catch((e) => {
+main().catch(async (e) => {
 	console.error("ERR", e);
-	try {
-		server?.kill("SIGTERM");
-	} catch {
-		/* ignore */
-	}
+	await srv?.stop();
 	process.exit(1);
 });

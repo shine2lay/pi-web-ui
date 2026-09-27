@@ -3,6 +3,7 @@
  * Run:  npm run build && node terminal-browser-test.mjs */
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { freePort } from "./lib/port-utils.mjs";
+import { revealTopbarItem } from "./lib/topbar.mjs";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -94,7 +95,9 @@ async function main() {
 	{
 		const { mkdirSync } = await import("node:fs");
 		mkdirSync(join(workdir, "subdir"), { recursive: true });
-		// RightPanel refreshes automatically on mount and on fs.watch changes;
+		// Wait for the subdir row itself: the panel's ".." (go up) row is a .file-item.dir too
+		// (upstream), so waiting for any .file-item.dir passed before the new folder was listed.
+		await page.waitForSelector('.panel-right .file-item.dir:has-text("subdir")', { timeout: 10000 });
 		// there is no manual refresh button in the current UI.
 		await page.waitForSelector(".panel-right .file-item.dir", { timeout: 5000 });
 		await sleep(300);
@@ -117,7 +120,9 @@ async function main() {
 	// Opening the terminal view creates a default shell. Close it so the
 	// command-list assertions below exercise a single command terminal.
 	const initialShell = page.locator(".term-tab", { hasText: "终端 1" });
-	if (await initialShell.count()) await initialShell.locator(".term-tab-close").click();
+	// Upstream added a rename button that reuses the close button's class
+	// ("term-tab-close term-tab-rename"), so pick the real close button.
+	if (await initialShell.count()) await initialShell.locator(".term-tab-close:not(.term-tab-rename)").click();
 	await sleep(300);
 
 	// Add a command via the form.
@@ -206,13 +211,18 @@ async function main() {
 	check("terminals survive view switch", (await page.locator(".term-tab").count()) === 2);
 
 	// Close one tab — the other stays.
-	await page.locator(".term-tab-close").first().click();
+	// Close the second, untouched shell and keep the command terminal we typed into: upstream
+	// keeps a switched-away chat listed only while it has a USED live terminal
+	// (TerminalManager.countBlockingLive), which the persistence steps below rely on.
+	await page.locator(".term-tab-close:not(.term-tab-rename)").last().click();
 	await sleep(800);
 	check("tab close removes one tab", (await page.locator(".term-tab").count()) === 1);
 
 	// Conversation-level persistence: an idle conversation with a terminal must
 	// remain switchable after creating a new chat, and its PTY/tab must return.
-	await page.click(".newchat");
+	// ".newchat" alone also matches the throwaway-chat button ("chip newchat ephemeral-chat-btn",
+	// upstream); pick the real new-chat button, on the bar or in the "..." menu.
+	await (await revealTopbarItem(page, "button.chip.newchat:not(.ephemeral-chat-btn)")).click();
 	await sleep(1800);
 	await page.click('.topbar-flow [role="tab"]:has-text("对话")');
 	await page.waitForSelector(".panel-convs .session-item", { timeout: 5000 });

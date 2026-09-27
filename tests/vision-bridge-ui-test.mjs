@@ -6,6 +6,7 @@
 // Usage: npm run build && node vision-bridge-ui-test.mjs
 import { chromium } from "playwright-core";
 import { CHROME_PATH } from "./lib/chrome.mjs";
+import { revealTopbarItem, SETTINGS_CHIP } from "./lib/topbar.mjs";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -102,8 +103,9 @@ async function run() {
 	});
 
 	// Open settings via the ⚙ chip in the top bar.
-	const settingsChip = page.locator('[title*="设置"], [title*="Settings"]').first();
-	await settingsChip.click();
+	// The Settings button's tip is data-tip now (not title), and our fork's topbar-crowding puts
+	// it in the "..." menu: tests/lib/topbar.mjs finds it in either place.
+	await (await revealTopbarItem(page, SETTINGS_CHIP)).click();
 	await page.waitForSelector(".settings-modal", { timeout: 10000 });
 
 	// Sidebar navigation: the settings modal is now tabbed (left rail), only
@@ -152,8 +154,13 @@ async function run() {
 	await page.waitForSelector(".settings-modal", { timeout: 5000 });
 	await sleep(800);
 	const pickerInVb = await vbSection.locator("select").count();
-	const hint = await page.locator(".set-hint", { hasText: "已关闭" }).count();
-	check("disabling hides picker + shows off hint", pickerInVb === 0 && hint > 0);
+	// The off hint lives in the toggle row's "?" tip now (HintTip: .set-tip aria-label), not in
+	// a .set-hint paragraph (upstream moved long explanations into tips).
+	const offTip = await vbSection
+		.locator(".set-tip")
+		.evaluateAll((els) => els.some((el) => (el.getAttribute("aria-label") ?? "").includes("已关闭")));
+	const swOff = await sw.evaluate((el) => !el.classList.contains("on"));
+	check("disabling hides picker + the toggle's tip explains the off state", pickerInVb === 0 && offTip && swOff);
 
 	// -- replace-mode prefills the built-in default prompts --------------------
 	// Vision bridge: switch its prompt mode to "replace" → the textarea must be
@@ -174,24 +181,26 @@ async function run() {
 	);
 	check("replace mode prefills the built-in vision-bridge prompt", true);
 
-	// System prompt: switch to the “replace” tab group first (only the active
-	// sidebar group is rendered), then flip to "replace" — the textarea must
-	// show the built-in default system prompt (the SDK's default, since the
-	// test agent dir has no system-prompt file).
+	// System prompt: upstream replaced the append/replace mode select with a prompt template
+	// (token chips) plus a read-only "view full prompt" panel, so the old "replace prefills the
+	// default" check has no control left to drive. What it guarded, that the built-in default
+	// system prompt is shown to the user, is checked through the view panel: it must contain the
+	// SDK's default (the test agent dir has no system-prompt file).
 	await page.locator(".settings-tab", { hasText: "系统提示词" }).click();
 	const sysSection = page.locator(".set-section", { hasText: "系统提示词" });
-	const sysModeSelect = sysSection.locator("select").first();
-	await sysModeSelect.selectOption("replace");
-	await page.waitForFunction(
-		() => {
-			const sections = [...document.querySelectorAll(".set-section")];
-			const sys = sections.find((el) => el.textContent.includes("系统提示词"));
-			const ta = sys?.querySelector(".set-prompt-input");
-			return ta instanceof HTMLTextAreaElement && ta.value.includes("You are an expert coding assistant");
-		},
-		{ timeout: 10000 },
-	);
-	check("replace mode prefills the built-in system prompt", true);
+	await sysSection.locator(".set-view-prompt-btn").first().click();
+	const shownDefault = await page
+		.waitForFunction(
+			() =>
+				[...document.querySelectorAll(".set-prompt-view-text")].some((el) =>
+					el.textContent.includes("You are an expert coding assistant"),
+				),
+			null,
+			{ timeout: 15000 },
+		)
+		.then(() => true)
+		.catch(() => false);
+	check("the full system prompt view shows the built-in default prompt", shownDefault);
 
 	await browser.close();
 }

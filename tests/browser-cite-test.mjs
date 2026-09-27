@@ -12,6 +12,7 @@
  * Run: npm run build && node tests/browser-cite-test.mjs
  */
 import { CHROME_PATH } from "./lib/chrome.mjs";
+import { freeTcpPort } from "./lib/port-utils.mjs";
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,9 +20,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { setTimeout as sleep } from "node:timers/promises";
+import { revealTopbarItem } from "./lib/topbar.mjs";
 
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
-const PORT = 8900 + Math.floor(Math.random() * 90);
+const PORT = await freeTcpPort();
 const base = mkdtempSync(join(tmpdir(), "piweb-bcite-"));
 const workdir = join(base, "work");
 const dataDir = join(base, "data");
@@ -113,9 +115,16 @@ await page.waitForFunction(
 await sleep(300);
 
 const chips = page.locator(".attach-chip.page");
-const normalBtn = page.locator(".browser-control:not(.single):not(.caret)");
-const singleBtn = page.locator(".browser-control.single");
-const caretBtn = page.locator(".browser-control.caret");
+// Upstream hides the browser button in the top bar's "⋯" menu by default (web/src/ui-slots.ts,
+// host:browser hidden: true; the menu draws the whole control). reveal() opens the menu when
+// the button isn't on the bar (tests/lib/topbar.mjs).
+const NORMAL = ".browser-control:not(.single):not(.caret)";
+const SINGLE = ".browser-control.single";
+const CARET = ".browser-control.caret";
+const reveal = (sel) => revealTopbarItem(page, sel, { timeoutMs: 5000 });
+const normalBtn = page.locator(NORMAL);
+const singleBtn = page.locator(SINGLE);
+const caretBtn = page.locator(CARET);
 const panel = page.locator(".browser-control-modal");
 const refreshBtn = page.locator(".browser-control-modal .bc-actions button").nth(1);
 
@@ -129,16 +138,18 @@ const waitChips = (n) =>
 		.catch(() => false);
 
 // 0) 没有任何授权 → 普通按钮（发现入口还在）
+await reveal(NORMAL).catch(() => {});
 check("未授权任何页面 → 普通「浏览器操作」按钮", (await normalBtn.count()) === 1, `${await normalBtn.count()} 个`);
 
 // 1) 授权一个页面 → 顶栏按钮直接变成它
 await setPages([PAGE_A]);
-await normalBtn.click();
+await (await reveal(NORMAL)).click();
 await panel.waitFor({ timeout: 5000 });
 await refreshBtn.click();
 await sleep(300);
 await page.locator(".modal-close").click();
 await panel.waitFor({ state: "detached", timeout: 5000 });
+await reveal(SINGLE).catch(() => {});
 check(
 	"单个已授权页面 → 顶栏出现「页面按钮 + ▾」两段",
 	(await singleBtn.count()) === 1 && (await caretBtn.count()) === 1,
@@ -150,7 +161,7 @@ check(
 );
 
 // 2) 点主体 → 网页引用 chip 进输入框
-await singleBtn.click();
+await (await reveal(SINGLE)).click();
 check("点击后输入框出现网页引用 chip", await waitChips(1), `${await countChips()} 个`);
 const chipClass = await chips.first().getAttribute("class");
 check("chip 用的是 page 模式（不是 reference/inline）", chipClass.includes("page"), chipClass);
@@ -159,7 +170,7 @@ check("引用不自动发送：输入框文本仍为空", (await page.locator(".
 check("有轻提示告诉用户东西去哪儿了", (await page.locator(".bc-flash").count()) === 1);
 
 // 3) 重复引用同一个页面 → 去重
-await singleBtn.click();
+await (await reveal(SINGLE)).click();
 await sleep(250);
 check("重复引用同一页面 → 去重", (await countChips()) === 1, `${await countChips()} 个`);
 
@@ -169,17 +180,20 @@ check("chip 可删除", await waitChips(0), `${await countChips()} 个`);
 
 // 5) 授权两个页面 → 回落到「浏览器操作 · N」，面板里逐个引用
 await setPages([PAGE_A, PAGE_B]);
-await caretBtn.click();
+// The page polls the bridge, so by the time the menu is open it may already show two pages
+// (plain button) instead of the caret: either one opens the same panel.
+await (await reveal(`${CARET}, ${NORMAL}`)).click();
 await panel.waitFor({ timeout: 5000 });
 await refreshBtn.click();
 await sleep(300);
 await page.locator(".modal-close").click();
 await panel.waitFor({ state: "detached", timeout: 5000 });
 await sleep(200);
+await reveal(NORMAL).catch(() => {});
 check("两个授权页面 → 退回普通按钮（含数量）", (await singleBtn.count()) === 0 && (await normalBtn.count()) === 1);
 check("普通按钮显示页面数", (await normalBtn.innerText()).includes("2"), await normalBtn.innerText());
 
-await normalBtn.click();
+await (await reveal(NORMAL)).click();
 await panel.waitFor({ timeout: 5000 });
 const items = page.locator(".browser-control-modal .bc-pages li");
 check("面板列出两个已授权页面", (await items.count()) === 2, `${await items.count()} 项`);

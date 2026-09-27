@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 import { chromium } from "playwright-core";
 import { CHROME_PATH } from "./lib/chrome.mjs";
+import { revealTopbarItem, SETTINGS_CHIP } from "./lib/topbar.mjs";
 
 const REPO = fileURLToPath(new URL("../", import.meta.url));
 const base = mkdtempSync(join(tmpdir(), "pi-topbar-ui-"));
@@ -141,12 +142,8 @@ async function main() {
 
 	// 设置面板：顶栏条目管理段 + 源码构建开关
 	// 顶栏直流内不用原生 title（用 data-tip），title 只作旧构建回落。
-	const settingsBtn = page
-		.locator(
-			'button.chip[data-tip*="设置"], button.chip[data-tip*="Settings"], button[title*="设置"], button[title*="Settings"]',
-		)
-		.first();
-	if (await settingsBtn.count()) await settingsBtn.click();
+	// Our fork's topbar-crowding puts Settings in the "..." menu by default (tests/lib/topbar.mjs).
+	await (await revealTopbarItem(page, SETTINGS_CHIP)).click();
 	await sleep(800);
 	// 按页签选择器点（`getByText` 可能命中页内文案而不是左侧导航的页签，点了不切页）。
 	const pluginsTab = page.locator(".settings-tab", { hasText: /界面插件|UI plugins/ }).first();

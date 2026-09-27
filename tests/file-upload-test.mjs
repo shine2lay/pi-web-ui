@@ -7,16 +7,20 @@
  *   3. 文件落盘在 <dataDir>/uploads/<clientId>/ 下
  *   4. 超限（>20MB）被拒并回 notice
  *
- * 用法（需先有 server 在跑）:
- *   node file-upload-test.mjs   # 连 ws://localhost:${PORT:-8787}
+ * 用法:
+ *   node tests/file-upload-test.mjs
+ *
+ * The test starts its own server (temp folders, a model that can't be reached, so the prompt only
+ * saves the message). It never attaches to a server someone has running: that one holds real chats.
  *
  * 注：上传文件一律只给绝对路径引用（内容不注入 prompt）；快照走 get_state 强制全量。
  */
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
+import { ownServer } from "./lib/own-server.mjs";
 
-const PORT = Number(process.env.PI_WEB_PORT ?? 8787);
-const WS_URL = `ws://localhost:${PORT}/ws`;
+const srv = await ownServer({ name: "file-upload-test" });
+const WS_URL = srv.ws;
 
 const clientId = randomUUID();
 const ws = new WebSocket(WS_URL);

@@ -14,6 +14,7 @@
  * Run: npm run build:extension && npm run build && node tests/page-picker-test.mjs
  */
 import { CHROME_PATH } from "./lib/chrome.mjs";
+import { freeTcpPort } from "./lib/port-utils.mjs";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -28,8 +29,8 @@ const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 const EXT_DIR = join(REPO_ROOT, "plugins", "page-picker", "extension");
 const PICKER_BUNDLE = join(EXT_DIR, "dist", "picker.js");
 const BIND_BUNDLE = join(EXT_DIR, "dist", "bind.js");
-const PORT = 8900 + Math.floor(Math.random() * 90);
-const FIXTURE_PORT = 9400 + Math.floor(Math.random() * 90);
+const PORT = await freeTcpPort();
+const FIXTURE_PORT = await freeTcpPort();
 
 if (!existsSync(PICKER_BUNDLE) || !existsSync(BIND_BUNDLE)) {
 	console.log("✗ 缺 dist/picker.js 或 dist/bind.js —— 先跑 npm run build:extension");

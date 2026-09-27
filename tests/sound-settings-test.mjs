@@ -13,6 +13,7 @@
  * Run:  npm run build && node sound-settings-test.mjs */
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { freePort } from "./lib/port-utils.mjs";
+import { openTopbarPanel } from "./lib/topbar.mjs";
 import { spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -72,7 +73,12 @@ async function waitServer() {
 }
 
 async function openSoundMenu(page) {
-	await page.locator(".topbar-flow .chip", { hasText: "声音" }).click();
+	// Upstream has the sound chip on the bar; our fork's topbar-crowding keeps it in the "..." menu,
+	// whose row opens the same panel in a drawer (tests/lib/topbar.mjs).
+	await openTopbarPanel(page, {
+		bar: page.locator(".topbar-flow .chip", { hasText: /\u58f0\u97f3|Sound/ }),
+		entry: /\u58f0\u97f3|Sound/,
+	});
 	await page.waitForSelector(".sound-menu", {
 		state: "visible",
 		timeout: 5000,
@@ -100,9 +106,10 @@ async function main() {
 
 	// -- dropdown structure ---------------------------------------------------
 	await openSoundMenu(page);
-	// 5 sound rows (master + 4 events) + 1 desktop-notification row below them.
+	// 6 sound rows (master + 5 events: question, done, start, error and approval, which upstream
+	// added in SoundSettings.tsx) + 1 desktop-notification row below them.
 	const rows = await page.locator(".sound-row").count();
-	check("sound panel shows master + 4 event rows + notify row", rows === 6);
+	check("sound panel shows master + 5 event rows + notify row", rows === 7, `${rows} rows`);
 	// The desktop-notification block below the sound rows is itself a
 	// .sound-menu (shared layout), so scope every sound-panel query with
 	// :not(.notify-menu) — a bare .sound-menu matches two elements now.

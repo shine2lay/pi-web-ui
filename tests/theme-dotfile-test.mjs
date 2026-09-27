@@ -38,7 +38,7 @@ const check = (name, ok, extra = "") => {
 };
 
 try {
-	execSync("npm run build", { cwd: PROJ, stdio: "ignore" });
+	if (!process.env.PI_TEST_PREBUILT) execSync("npm run build", { cwd: PROJ, stdio: "ignore" });
 } catch {
 	console.error("build failed");
 	process.exit(1);

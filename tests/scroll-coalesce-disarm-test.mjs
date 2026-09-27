@@ -15,6 +15,7 @@
  * Run: npm run build && node tests/scroll-coalesce-disarm-test.mjs */
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { spawn } from "node:child_process";
+import { noRetries } from "./lib/mock-model.mjs";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -46,6 +47,9 @@ writeFileSync(
 process.env.PI_WEB_PORT = String(PORT);
 process.env.PI_WEB_CWD = workdir;
 process.env.PI_WEB_DATA_DIR = dataDir;
+// pi retries a failed model call by default; the fast-fail model must fail at once, or every
+// seeded prompt queues behind the retries and the seeding times out.
+noRetries(agentDir);
 process.env.PI_CODING_AGENT_DIR = agentDir;
 const CLIENT_ID = "scroll-coalesce-test-client";
 const TALL_TEXT = "很长的需求描述。".repeat(1200);
@@ -91,6 +95,7 @@ function seedChat(want) {
 		const timer = setTimeout(() => reject(new Error("seed timeout")), 180000);
 		let step = 0;
 		let known = 0;
+		let sentAt = 0;
 		const sendNext = () => ws.send(JSON.stringify({ type: "prompt", text: `${TALL_TEXT}\n\n第 ${step++} 条` }));
 		ws.on("open", () => ws.send(JSON.stringify({ type: "hello", clientId: CLIENT_ID })));
 		ws.on("message", (d) => {
@@ -103,7 +108,9 @@ function seedChat(want) {
 			if (msg.type === "ready") return sendNext();
 			let total = -1;
 			if (msg.type === "snapshot") total = msg.state.messages.length;
-			else if (msg.type === "snapshot_delta" && known > 0) {
+			// Since snapshot protocol v2 the full snapshot comes only on hello (0 messages in a new
+			// chat); every later change is a delta, so count the deltas from there.
+			else if (msg.type === "snapshot_delta") {
 				known += msg.appended?.length ?? 0;
 				total = known;
 			}
@@ -113,7 +120,12 @@ function seedChat(want) {
 				clearTimeout(timer);
 				ws.close();
 				resolve(total);
-			} else if (step < want) sendNext();
+			} else if (step < want && !msg.state.isStreaming && total > sentAt) {
+				// The next prompt only once the previous turn is over: a prompt sent while the chat is
+				// still running is not a new turn, so firing on every update seeds too few messages.
+				sentAt = total;
+				sendNext();
+			}
 		});
 		ws.on("error", reject);
 	});

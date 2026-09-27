@@ -113,7 +113,7 @@ writeFileSync(
 );
 
 const repoRoot = realpathSync(new URL("../", import.meta.url));
-execSync("npm run build", { cwd: repoRoot, stdio: "ignore" });
+if (!process.env.PI_TEST_PREBUILT) execSync("npm run build", { cwd: repoRoot, stdio: "ignore" });
 const server = spawn(process.execPath, ["dist/server/index.js"], {
 	cwd: repoRoot,
 	env: {
@@ -122,6 +122,9 @@ const server = spawn(process.execPath, ["dist/server/index.js"], {
 		PI_WEB_DATA_DIR: dataDir,
 		PI_WEB_CWD: projA,
 		PI_CODING_AGENT_DIR: agentDir,
+		// This tests upstream's "switching chats switches the workspace". Our fork's chat-cwd-pin
+		// turns that off by default and keeps it behind this switch (PATCHES.md, chat-cwd-pin).
+		PI_WEB_UI_CHAT_FOLLOWS_CWD: "1",
 	},
 	stdio: "ignore",
 	windowsHide: true,

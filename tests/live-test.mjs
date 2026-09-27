@@ -3,26 +3,39 @@
  *
  * 验证：hello → ready → set_cwd → read_file（文本预览）→ 媒体 /api/file → 结束
  *
- * 用法（需先有 server 在跑，或用环境变量指定）:
- *   node live-test.mjs                              # 连 ws://localhost:${PORT:-8787}
- *   PORT=9000 node live-test.mjs                    # 自定义端口
- *   WS_CWD=/path/node live-test.mjs                 # set_cwd 目标（默认当前目录）
- *   WS_READ=sub/dir/file.txt  node live-test.mjs    # read_file 的路径
- *   WS_MEDIA=sub/dir/pic.jpg  node live-test.mjs    # 可选：媒体文件，用于验证 /api/file 下载
+ * 用法:
+ *   node tests/live-test.mjs
+ *
+ * The test starts its own server (temp folders, no real model) and makes its own work folder with
+ * a text file and a picture. It never attaches to a server someone has running: that one holds
+ * real chats.
  *
  * clientId 随机生成，不依赖特定项目，便于反复跑。
  */
 import { randomUUID } from "node:crypto";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import WebSocket from "ws";
+import { ownServer } from "./lib/own-server.mjs";
 
-const PORT = Number(process.env.PI_WEB_PORT ?? 8787);
-const BASE = `http://localhost:${PORT}`;
-const WS_URL = `ws://localhost:${PORT}/ws`;
+const srv = await ownServer({ name: "live-test" });
+const BASE = srv.http;
+const WS_URL = srv.ws;
+
+// 1x1 PNG
+const TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+writeFileSync(join(srv.workdir, "note.txt"), "first line\nsecond line\n");
+writeFileSync(join(srv.workdir, "pic.png"), Buffer.from(TINY_PNG, "base64"));
 
 const clientId = randomUUID();
-const CWD = process.env.WS_CWD ?? process.cwd();
-const READ_PATH = process.env.WS_READ;
-const MEDIA_PATH = process.env.WS_MEDIA;
+const CWD = srv.workdir;
+const READ_PATH = "note.txt";
+const MEDIA_PATH = "pic.png";
+
+function fail(msg) {
+	console.error("FAIL:", msg);
+	process.exit(1);
+}
 
 const ws = new WebSocket(WS_URL);
 let step = 0;
@@ -45,17 +58,17 @@ ws.on("message", async (d) => {
 		ws.send(JSON.stringify({ type: "read_file", path: READ_PATH ?? "" }));
 	} else if (m.type === "file_content" && step === 1) {
 		log("file_content:", JSON.stringify({ name: m.name, truncated: m.truncated, binary: m.binary, lines: m.lines }));
+		if (!String(m.text ?? "").includes("second line")) fail("read_file did not return the file's text");
 		step = 2;
-		if (MEDIA_PATH) {
-			const url = `/api/file?clientId=${encodeURIComponent(clientId)}&path=${encodeURIComponent(MEDIA_PATH)}`;
-			const r = await fetch(`${BASE}${url}`);
-			log("media url:", url);
-			log("media fetch:", r.status, r.headers.get("content-type"));
-			const buf = Buffer.from(await r.arrayBuffer());
-			log("bytes:", buf.length, "magic:", buf.subarray(0, 4).toString("hex"));
-		} else {
-			log("WS_MEDIA 未设置，跳过媒体下载探测");
-		}
+		const url = `/api/file?clientId=${encodeURIComponent(clientId)}&path=${encodeURIComponent(MEDIA_PATH)}`;
+		const r = await fetch(`${BASE}${url}`);
+		log("media url:", url);
+		log("media fetch:", r.status, r.headers.get("content-type"));
+		const buf = Buffer.from(await r.arrayBuffer());
+		log("bytes:", buf.length, "magic:", buf.subarray(0, 4).toString("hex"));
+		if (r.status !== 200) fail(`media fetch returned ${r.status}`);
+		if (buf.subarray(0, 4).toString("hex") !== "89504e47") fail("media fetch did not return the PNG");
+		log("PASS");
 		ws.close();
 		process.exit(0);
 	} else if (m.type === "snapshot") {

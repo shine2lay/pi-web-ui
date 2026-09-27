@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
+import { CHROME_PATH } from "./lib/chrome.mjs";
 
 const PORT = 30000 + Math.floor(Math.random() * 10000);
 const workdir = mkdtempSync(join(tmpdir(), "piweb-fup-"));
@@ -65,7 +66,7 @@ async function waitServer() {
 async function main() {
 	await waitServer();
 	const browser = await chromium.launch({
-		executablePath: process.env.CHROME_PATH ?? "C:/Program Files/Google/Chrome/Application/chrome.exe",
+		executablePath: process.env.CHROME_PATH ?? CHROME_PATH,
 	});
 	const page = await browser.newPage({
 		viewport: { width: 1400, height: 900 },
@@ -97,7 +98,8 @@ async function main() {
 	// 2) Upload a binary file via the hidden file input.
 	const binFile = join(workdir, "data.bin");
 	writeFileSync(binFile, Buffer.from([0, 1, 2, 250, 251, 252, 253, 254, 255]));
-	await page.locator('input[type="file"]').setInputFiles(binFile);
+	// The composer's file picker (the files panel has its own hidden one for uploads).
+	await page.locator('.inputbox input[type="file"]').setInputFiles(binFile);
 	await page.waitForTimeout(800);
 	check("upload: two 📄 chips", (await page.locator(".attach-chip.file").count()) === 2);
 
@@ -108,7 +110,7 @@ async function main() {
 		svgFile,
 		'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="red"/></svg>',
 	);
-	await page.locator('input[type="file"]').setInputFiles(svgFile);
+	await page.locator('.inputbox input[type="file"]').setInputFiles(svgFile);
 	await page.waitForTimeout(800);
 	check(
 		"svg: attached as file chip (📄), not image (🖼)",
@@ -128,17 +130,16 @@ async function main() {
 	const firstMode = (await first.locator(".attachcard-mode").textContent()).trim();
 	await first.locator(".attachcard-head").click();
 	await page.waitForTimeout(400);
-	const firstContent = (
-		await first
-			.locator(".attachcard-content")
-			.textContent()
-			.catch(() => "")
-	).trim();
+	// A reference card shows a note ("not expanded, 27 B") instead of the file's content, even when opened
+	// (web/src/components/Message.tsx: isReference: .attachcard-refnote, no .attachcard-content).
+	const firstRefNote = await first.locator(".attachcard-refnote").count();
+	const firstContent = (await first.textContent()).trim();
 	check(
 		`text card reference (content not injected): "${firstName}" / ${firstMode}`,
 		firstName === "note.txt" &&
 			/引用|reference/i.test(firstMode) &&
-			firstContent.includes("path=") &&
+			firstRefNote === 1 &&
+			(await first.locator(".attachcard-content").count()) === 0 &&
 			!firstContent.includes("拖拽的文本文件"),
 	);
 

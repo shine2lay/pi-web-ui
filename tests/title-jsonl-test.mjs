@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
+import { startMockModel, writeMockModelConfig } from "./lib/mock-model.mjs";
 // fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
@@ -34,19 +35,28 @@ const check = (name, ok, extra = "") => {
 };
 
 try {
-	execSync("npm run build", { cwd: PROJ, stdio: "ignore" });
+	if (!process.env.PI_TEST_PREBUILT) execSync("npm run build", { cwd: PROJ, stdio: "ignore" });
 } catch {
 	console.error("build failed");
 	process.exit(1);
 }
+// A stand-in model on this machine (tests never call the real model): it answers every turn.
+const mock = await startMockModel(({ sideRequest }) => (sideRequest ? "Title" : "OK"));
+mock.unref();
+const agentDir = mkdtempSync(join(tmpdir(), "pi-tit-agent-"));
+writeMockModelConfig(agentDir, mock.port);
 const server = spawn("node", ["dist/server/index.js"], {
 	cwd: PROJ,
 	env: {
 		...process.env,
 		PI_WEB_PORT: String(PORT),
 		PI_WEB_CWD: A,
-		// 隔离 client-state：不污染真实 ~/.pi-web（agent 目录保留 —— 需要真模型凭据）
+		// Own client state and pi folder (with the stand-in model), never the real ones.
 		PI_WEB_DATA_DIR: mkdtempSync(join(tmpdir(), "piweb-titlejsonl-")),
+		PI_CODING_AGENT_DIR: agentDir,
+		// Upstream's history list is per project; our fork's global-history lists every folder
+		// by default and keeps the per-project list behind this switch (PATCHES.md).
+		PI_WEB_UI_HISTORY_SCOPE: "project",
 	},
 	stdio: "ignore",
 });
@@ -75,6 +85,11 @@ ws.on("open", () => {
 	// sessions 推送是懒加载 opt-in：必须显式请求，否则服务端永不推 `sessions`
 	ws.send(JSON.stringify({ type: "list_sessions" }));
 });
+// Since snapshot protocol v2 only the hello gets a full snapshot; later changes come as deltas.
+// Ask for the full state now and then so `snapshot` stays current.
+const statePoll = setInterval(() => {
+	if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "get_state" }));
+}, 700);
 
 const waitFor = async (pred, what, timeout = 90000) => {
 	const t0 = Date.now();
@@ -139,6 +154,7 @@ check(
 	`${conv1} → ${snapshot?.conversationId}`,
 );
 
+clearInterval(statePoll);
 ws.close();
 server.kill("SIGKILL");
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);

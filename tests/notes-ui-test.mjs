@@ -18,7 +18,7 @@
  *   npm run build && node tests/notes-ui-test.mjs
  */
 import { spawn } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -96,6 +96,10 @@ async function main() {
 	await topbarBtn.waitFor({ timeout: 20000 });
 	check("顶栏出现笔记按钮", await topbarBtn.isVisible());
 	// 关掉顶栏文字后只剩图标 —— 图标必须在、且是内联 SVG（不能是空 span，否则用户只看到一个点）
+	// The icon must be the plugin's own SVG from its manifest (upstream 0.92.0 replaced the old
+	// "hardcover notebook" drawing there; the floating window's header still draws the old one).
+	const manifestIcon = JSON.parse(readFileSync(join(REPO, "plugins", "notes", "manifest.json"), "utf8")).iconSvg;
+	const manifestPath = /\bd="([^"]{12})/.exec(manifestIcon)?.[1] ?? "(none)";
 	const iconInfo = await topbarBtn.evaluate((el) => {
 		const svg = el.querySelector("svg");
 		const r = svg?.getBoundingClientRect();
@@ -104,12 +108,15 @@ async function main() {
 			hasSvg: !!svg,
 			w: r ? Math.round(r.width) : 0,
 			h: r ? Math.round(r.height) : 0,
-			// 精装记事簿：书脊 + 3 条横线（不是图钉，也不是日历打勾）
-			isBook: ds.some((d) => d.startsWith("M4 19.5v-15")),
+			ds,
 		};
 	});
 	check("按钮内联 SVG 图标（14px 级仍然可辨）", iconInfo.hasSvg && iconInfo.w >= 10 && iconInfo.h >= 10);
-	check("图标是「精装记事簿」那版（与浮窗头部同一枚）", iconInfo.isBook);
+	check(
+		"图标是插件 manifest 里的那一枚（iconSvg）",
+		iconInfo.ds.some((d) => d.startsWith(manifestPath)),
+		`${manifestPath} vs ${iconInfo.ds.map((d) => d.slice(0, 12)).join(",")}`,
+	);
 
 	// -- 开浮窗 -------------------------------------------------------------------
 	await topbarBtn.click();

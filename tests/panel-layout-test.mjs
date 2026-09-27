@@ -66,7 +66,7 @@ const check = (name, ok, extra = "") => {
 };
 
 try {
-	execSync("npm run build", { cwd: PROJ, stdio: "ignore" });
+	if (!process.env.PI_TEST_PREBUILT) execSync("npm run build", { cwd: PROJ, stdio: "ignore" });
 } catch {
 	console.error("build failed");
 	process.exit(1);
@@ -168,18 +168,26 @@ const convsAppeared = await page
 	.catch(() => false);
 check("running-conversations section appears for the active chat with content", convsAppeared);
 const titlesNow = await page.locator(".panel-left .panel-section-title").allTextContents();
+// Our fork's flat-recent-chats names this section "recent chats" (\u6700\u8fd1\u5bf9\u8bdd) and marks a
+// running chat with a status light (.conv-dot.conv-running) instead of upstream's .conv-streaming.
 check(
-	"运行的对话 title is rendered now",
-	titlesNow.some((t) => t.includes("运行的对话")),
+	"running-chats section title is rendered now",
+	titlesNow.some((t) => /\u8fd0\u884c\u7684\u5bf9\u8bdd|\u6700\u8fd1\u5bf9\u8bdd/.test(t)),
 	titlesNow.join("|"),
 );
 check(
-	"the row is the row of the chat we are looking at (当前)",
-	(await page.locator(".panel-convs .session-item .session-sub").allTextContents()).some((s) => s.includes("当前")),
+	"the row is the row of the chat we are looking at (current)",
+	(await page.locator(".panel-convs .session-item .session-sub").allTextContents()).some((s) =>
+		s.includes("\u5f53\u524d"),
+	),
 );
+// Wait for the light: the row can be listed a moment before the run's status reaches it (seen
+// under load, in a parallel run).
+const RUN_LIGHT = ".panel-convs .conv-streaming, .panel-convs .conv-dot.conv-running";
+await page.waitForSelector(RUN_LIGHT, { timeout: 10000 }).catch(() => {});
 check(
 	"the row shows the streaming indicator while the run is in flight",
-	(await page.locator(".panel-convs .conv-streaming").count()) === 1,
+	(await page.locator(RUN_LIGHT).count()) === 1,
 );
 check(
 	"only that one row is listed (blank chats stay out)",

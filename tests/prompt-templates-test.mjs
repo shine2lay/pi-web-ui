@@ -193,7 +193,13 @@ async function main() {
 	if (passed === 0 || process.exitCode) process.exitCode = 1;
 }
 
-main().catch((e) => {
-	console.error(e);
-	process.exitCode = 1;
-});
+// Exit explicitly: the spawned server's stdout/stderr pipes keep the event loop alive, so the
+// test used to print its result and then hang until the runner's timeout (600s). The exit
+// handler above kills the server's process group.
+main().then(
+	() => process.exit(process.exitCode ?? 0),
+	(e) => {
+		console.error(e);
+		process.exit(1);
+	},
+);

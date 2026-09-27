@@ -69,8 +69,23 @@ async function waitReady() {
 	throw new Error("server did not start");
 }
 
-/** 从页面里读出当前 clientId（与 use-chat.ts 的 key 保持一致）。 */
-const readClientId = (page) => page.evaluate(() => sessionStorage.getItem("pi-web-client-id"));
+/**
+ * The page's clientId, as sent in its WebSocket hello. Upstream no longer stores it anywhere
+ * (use-chat.ts getClientId: a new id for every page load), so it is read off the wire.
+ */
+const readClientId = (page) => page.evaluate(() => window.__helloClientId ?? null);
+const recordHelloClientId = () => {
+	const send = WebSocket.prototype.send;
+	WebSocket.prototype.send = function (data) {
+		try {
+			const msg = JSON.parse(String(data));
+			if (msg?.type === "hello" && msg.clientId) window.__helloClientId = msg.clientId;
+		} catch {
+			/* not JSON */
+		}
+		return send.call(this, data);
+	};
+};
 /** 等待页面 WebSocket ready。 */
 const waitChatReady = (page) =>
 	page.waitForFunction(() => document.querySelector("textarea") !== null, {
@@ -85,6 +100,7 @@ try {
 		headless: true,
 	});
 	const ctx = await browser.newContext();
+	await ctx.addInitScript(recordHelloClientId);
 	const a = await ctx.newPage();
 	const b = await ctx.newPage();
 
@@ -110,7 +126,7 @@ try {
 	const markerA2 = await a.evaluate(() => document.body.innerHTML.length);
 	check("tab B reload does not disturb tab A", markerA > 0 && markerA === markerA2);
 
-	// clientId 在刷新后保持稳定（sessionStorage 生命周期）
+	// Tab A was not reloaded: its id must not change because tab B reloaded.
 	const idA2 = await readClientId(a);
 	check("tab A keeps its clientId across reload", idA2 === idA);
 

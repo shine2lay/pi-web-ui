@@ -7,6 +7,7 @@
  * Run: npm run build && node tests/scroll-stick-test.mjs */
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { spawn } from "node:child_process";
+import { noRetries } from "./lib/mock-model.mjs";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -41,6 +42,9 @@ writeFileSync(
 process.env.PI_WEB_PORT = String(PORT);
 process.env.PI_WEB_CWD = workdir;
 process.env.PI_WEB_DATA_DIR = dataDir;
+// pi retries a failed model call by default; the fast-fail model must fail at once, or every
+// seeded prompt queues behind the retries and the seeding times out.
+noRetries(agentDir);
 process.env.PI_CODING_AGENT_DIR = agentDir;
 const CLIENT_ID = "scroll-stick-test-client";
 const TALL_TEXT = "很长的需求描述。".repeat(2000);
@@ -298,49 +302,51 @@ async function main() {
 		visDelta < 80 && gap4 > 300 && anchorLive,
 	);
 
-	// ---- (v) GEOMETRY-DRIVEN STICK: composer growth shrinks the scroll
-	// container's border-box WITHOUT any scroll event — the scroll-event-driven
-	// stick machinery is blind to it. The ResizeObserver must re-pin.
-	// Check A: stick active, grow the composer (simulate typing growth),
-	// container must re-pin within ~500ms with zero scroll/wheel input.
+	// ---- (v) COMPOSER GROWTH: typing more lines grows the composer, which shrinks the scroll
+	// container from the bottom with no scroll event. Upstream d5107ab (2026-09-11) moved this
+	// into ChatInput: it saves the list's scrollTop before the textarea's auto reset and sets it
+	// to that plus the composer's net growth, so the row above the composer stays still, both
+	// when pinned (still at the bottom) and when reading history; MessageList's ResizeObserver
+	// now only clamps when the box grows. This test used to grow the textarea with a style
+	// write, which ChatInput never sees, and never shrank it back (the grown composer then put
+	// the Back-to-bottom chip under the wheel point of section vii). It now types, the path the
+	// fix covers, and clears the composer afterwards.
+	const composer = page.locator(".inputbar textarea");
+	const typeLines = (n) => composer.fill(Array.from({ length: n }, (_, i) => `line ${i + 1}`).join("\n"));
+	const composerH = () =>
+		page.evaluate(() => document.querySelector(".inputbar textarea").getBoundingClientRect().height);
+	// Check A: stuck at the bottom, the composer grows -> still at the bottom, chip hidden.
 	await page.locator(".scroll-bottom").click();
-	await sleep(1200); // expire the 600ms backstop + grace — ONLY the RO can pin now
+	await sleep(1200); // expire the 600ms backstop + grace
 	const gapPre = await distFromBottom(page);
 	check(`composer-grow setup: stuck at bottom before mutation (gap ${gapPre}px < 80)`, gapPre < 80);
-	const growComposer = `
-		window.__growComposer = (px) => {
-			const ta = document.querySelector('.inputbar textarea');
-			if (!ta) return false;
-			ta.style.height = (ta.getBoundingClientRect().height + px) + 'px';
-			return true;
-		};
-	`;
-	await page.evaluate(growComposer);
-	const grew = await page.evaluate(() => window.__growComposer(160));
-	check("composer-grow setup: composer element found and grown", grew === true);
-	// RO callbacks run after layout, before paint — 500ms is a generous window,
-	// and nothing else can re-pin here: no scroll events fire (scrollTop is
-	// untouched by the shrink), and all re-assert timers have expired.
+	const h0 = await composerH();
+	await typeLines(6);
 	await sleep(500);
+	const h1 = await composerH();
+	check(`composer-grow setup: typing grew the composer (${Math.round(h0)} -> ${Math.round(h1)}px)`, h1 - h0 > 40);
 	const gapGrow = await distFromBottom(page);
-	check(`composer-grow while stuck: RO re-pins bottom (gap ${gapGrow}px < 80)`, gapGrow < 80);
-	// Chip must be hidden again (RO re-pin keeps its state source consistent).
+	check(`composer-grow while stuck: still pinned to the bottom (gap ${gapGrow}px < 80)`, gapGrow < 80);
 	const chipVisible = await page.locator(".scroll-bottom").isVisible();
 	check("composer-grow while stuck: Back-to-bottom chip hidden", !chipVisible);
 
-	// Check B: user escaped (reading above) + composer grows → must NOT move.
+	// Check B: escaped (reading above) + the composer grows -> the row above the composer stays
+	// still: its distance from the bottom doesn't change, and the view is not pulled down.
+	await typeLines(1);
+	await sleep(400);
 	await page.mouse.move(700, 450);
 	await page.mouse.wheel(0, -600);
 	await sleep(400);
-	const escSt = await page.evaluate(() => document.querySelector(".messages").scrollTop);
-	await page.evaluate(() => window.__growComposer(160));
+	const gapEscPre = await distFromBottom(page);
+	await typeLines(6);
 	await sleep(500);
-	const escStAfter = await page.evaluate(() => document.querySelector(".messages").scrollTop);
 	const gapEscGrow = await distFromBottom(page);
 	check(
-		`composer-grow while escaped: viewport not dragged (Δ${Math.abs(escStAfter - escSt)}px < 80, gap ${gapEscGrow}px > 300)`,
-		Math.abs(escStAfter - escSt) < 80 && gapEscGrow > 300,
+		`composer-grow while escaped: the row above the composer stays still (distance from bottom ${gapEscPre} -> ${gapEscGrow}px, change < 80, still > 300)`,
+		Math.abs(gapEscGrow - gapEscPre) < 80 && gapEscGrow > 300,
 	);
+	await composer.fill("");
+	await sleep(400);
 
 	// ---- (vi) SUSTAINED STREAMING + below-container pulses (checks C/D):
 	// the drift class is COMPOUND — appends grow scrollHeight while the

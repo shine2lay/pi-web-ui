@@ -21,6 +21,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 import { chromium } from "playwright-core";
+import { freeTcpPort } from "./lib/port-utils.mjs";
 
 const REPO_ROOT = fileURLToPath(new URL("../", import.meta.url));
 const EXT_DIR = join(REPO_ROOT, "plugins", "page-picker", "extension");
@@ -37,8 +38,8 @@ const EDGE_CANDIDATES = [
 ].filter(Boolean);
 const EDGE = EDGE_CANDIDATES.find((p) => existsSync(p));
 
-const PORT = 8960 + Math.floor(Math.random() * 30);
-const FIXTURE_PORT = 9440 + Math.floor(Math.random() * 30);
+const PORT = await freeTcpPort();
+const FIXTURE_PORT = await freeTcpPort();
 const BASE = `http://localhost:${PORT}`;
 
 let failures = 0;

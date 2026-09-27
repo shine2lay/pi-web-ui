@@ -20,7 +20,7 @@
  *   npm run build && node tests/context-menu-ui-test.mjs
  */
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -28,17 +28,23 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { freePort } from "./lib/port-utils.mjs";
+import { revealTopbarItem, SETTINGS_CHIP } from "./lib/topbar.mjs";
 
 const REPO = fileURLToPath(new URL("../", import.meta.url));
 const base = mkdtempSync(join(tmpdir(), "pi-ctxmenu-ui-"));
 const WORK = join(base, "work");
 const SUB = join(WORK, "subproject");
 const FILE = join(WORK, "readme.txt");
+// The file picked for the upload lives OUTSIDE the listed folder: uploading readme.txt into the
+// folder that already has it is refused ("already exists", upstream 508831d), so it can't prove
+// the upload works.
+const UPLOAD = join(base, "upload-me.txt");
 const DATA_DIR = join(base, "data");
 const AGENT_DIR = join(base, "agent");
 const PORT = 20000 + Math.floor(Math.random() * 8000);
 mkdirSync(SUB, { recursive: true });
 writeFileSync(FILE, "hello\n");
+writeFileSync(UPLOAD, "uploaded\n");
 writeFileSync(join(SUB, "inside.txt"), "sub\n");
 
 /**
@@ -109,7 +115,16 @@ async function tap(page, locator) {
 /** 右键某个元素（真实鼠标右键：菜单是 contextmenu 事件打开的）。 */
 async function rightClick(page, locator) {
 	await locator.waitFor({ state: "visible", timeout: 15000 });
-	await locator.scrollIntoViewIfNeeded();
+	// A row can re-render right after a chat opens (the node is swapped): look it up again then.
+	for (let attempt = 1; ; attempt++) {
+		try {
+			await locator.scrollIntoViewIfNeeded({ timeout: 5000 });
+			break;
+		} catch (err) {
+			if (attempt >= 5 || !/not attached/i.test(String(err?.message))) throw err;
+			await sleep(200);
+		}
+	}
 	const box = await locator.boundingBox();
 	if (!box) throw new Error("rightClick: 元素没有 bounding box");
 	await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: "right" });
@@ -318,7 +333,7 @@ async function main() {
 	const fc = await chooser;
 	check("点「上传到当前目录」打开了文件选择器", !!fc);
 	if (fc) {
-		await fc.setFiles(FILE);
+		await fc.setFiles(UPLOAD);
 		const uploaded = await until(
 			async () =>
 				(await page
@@ -328,7 +343,9 @@ async function main() {
 			40,
 			250,
 		);
-		check("上传后界面给出回执（功能真的接上了）", uploaded);
+		const noticeTexts = await page.locator(".notice, .toast").allTextContents();
+		check("the uploaded file is in the listed folder", existsSync(join(WORK, "upload-me.txt")));
+		check("上传后界面给出回执（功能真的接上了）", uploaded, noticeTexts.join(" | "));
 	}
 
 	// ---- 左栏：会话右键（contextmenu.session 槽位） ------------------------
@@ -409,14 +426,7 @@ async function main() {
 	// ---- 界面布局的不变量：隐藏内置「文件」tab → 右栏真的空了（设置与界面一致） ----
 	// 这是 #146 的核心不变量（设置面板里看到的 == 界面上生效的）：文件 tab 也**不能**
 	// 免疫用户偏好，否则布局页那个勾选框就是个摆设。
-	await tap(
-		page,
-		page
-			.locator(
-				'button.chip[data-tip*="设置"], button.chip[data-tip*="Settings"], button[title*="设置"], button[title*="Settings"]',
-			)
-			.first(),
-	);
+	await tap(page, await revealTopbarItem(page, SETTINGS_CHIP));
 	const modalOpen = await until(async () => (await page.locator(".settings-modal").count()) > 0, 30, 250);
 	check("设置面板打开", modalOpen);
 	if (modalOpen) {
@@ -427,10 +437,24 @@ async function main() {
 		check("布局页列出了右栏的「文件列表」条目", listed);
 		if (listed) {
 			await tap(page, filesRow.locator('input[type="checkbox"]').first());
-			const hidden = await until(async () => (await page.locator(".panel-right .panel-body").count()) === 0, 30, 250);
+			const hidden = await until(
+				async () =>
+					(await page.locator(".panel-right .panel-body").count()) === 0 &&
+					(await page.locator(".panel-right .slot-tab", { hasText: /\u6587\u4ef6|Files/ }).count()) === 0,
+				30,
+				250,
+			);
 			check("取消勾选后右栏的文件树消失（用户偏好对内置 tab 同样生效）", hidden);
 			await tap(page, filesRow.locator('input[type="checkbox"]').first());
-			const back = await until(async () => (await page.locator(".panel-right .panel-body").count()) > 0, 30, 250);
+			// With more right-panel tabs (our fork's TL;DR and queue panels), hiding Files switches to
+			// another tab, and turning it back on brings back the Files TAB without switching to it.
+			const back = await until(
+				async () =>
+					(await page.locator(".panel-right .panel-body").count()) > 0 ||
+					(await page.locator(".panel-right .slot-tab", { hasText: /\u6587\u4ef6|Files/ }).count()) > 0,
+				30,
+				250,
+			);
 			check("勾回去后文件树回来", back);
 		}
 		await tap(page, page.locator(".settings-modal .modal-close").first());
@@ -441,20 +465,15 @@ async function main() {
 	// 布局页把「后台任务」隐藏 → 主栏的按钮消失、它落到溢出菜单；点它必须真的打开面板。
 	// 这条的不变量：隐藏 ≠ 失去入口（插件能整理宿主 UI，但锁不死用户）。
 	if (modalOpen) {
-		await tap(
-			page,
-			page
-				.locator(
-					'button.chip[data-tip*="设置"], button.chip[data-tip*="Settings"], button[title*="设置"], button[title*="Settings"]',
-				)
-				.first(),
-		);
+		await tap(page, await revealTopbarItem(page, SETTINGS_CHIP));
 		if (await until(async () => (await page.locator(".settings-modal").count()) > 0, 30, 250)) {
 			await tap(page, page.locator(".settings-tab", { hasText: /界面布局|UI layout/ }).first());
 			const topbarSlot = page.locator(".set-ui-slot", { hasText: /顶栏|Top bar/ }).first();
 			const tasksRow = topbarSlot.locator(".set-row", { hasText: /后台任务|Background tasks/ }).first();
 			if (await until(async () => (await tasksRow.count()) > 0, 30, 250)) {
-				await tap(page, tasksRow.locator('input[type="checkbox"]').first());
+				// Hide it (our fork's topbar-crowding already hides it by default: then leave it hidden).
+				const tasksBox = tasksRow.locator('input[type="checkbox"]').first();
+				if (await tasksBox.isChecked()) await tap(page, tasksBox);
 				await tap(page, page.locator(".settings-modal .modal-close").first());
 				await until(async () => (await page.locator(".settings-modal").count()) === 0, 20, 200);
 				const mainGone = (await page.locator("button.bg-task-chip").count()) === 0;

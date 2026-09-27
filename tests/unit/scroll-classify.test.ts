@@ -79,3 +79,34 @@ describe("classifyScroll — layout-shift discriminator decision table", () => {
 		expect(d.flipEscape).toBe(false);
 	});
 });
+
+// Fork (sealed-tests): the user's own hand on the wheel / finger / keys wins over the size and
+// grace rules. scroll-attr-collapse-test: one 600 px flick while a run ended landed as a single
+// scroll event, was read as a layout collapse, and the stream-end snap pulled the user back down.
+describe("classifyScroll — user input wins", () => {
+	it("a large upward jump right after the user's wheel-up → flipEscape (not a collapse)", () => {
+		const d = run({ dSt: -554, dSh: 46, userInput: true });
+		expect(d.flipEscape).toBe(true);
+		expect(d.reassert).toBe(false);
+	});
+
+	it("user input during the programmatic grace window or a shrink → still escapes", () => {
+		expect(run({ dSt: -120, dSh: 0, graceActive: true, userInput: true }).flipEscape).toBe(true);
+		const shrink = run({ dSt: -120, dSh: -300, userInput: true });
+		expect(shrink.flipEscape).toBe(true);
+		expect(shrink.reassert).toBe(false);
+	});
+
+	it("user input but no upward move (dSt >= -4) → no-op", () => {
+		for (const dSt of [0, 30, -4]) {
+			const d = run({ dSt, dSh: 0, userInput: true });
+			expect(d.flipEscape).toBe(false);
+			expect(d.reassert).toBe(false);
+		}
+	});
+
+	it("without user input the old table is unchanged (large jump = collapse, no flip)", () => {
+		expect(run({ dSt: -554, dSh: 46, userInput: false }).flipEscape).toBe(false);
+		expect(run({ dSt: -554, dSh: 46 }).flipEscape).toBe(false);
+	});
+});

@@ -5813,6 +5813,11 @@ export class ClientSession {
 			this.sessionsTimer = null;
 			if (this.disposed) return;
 			this.emitConversations();
+			// A refresh is scheduled because a transcript on disk just changed (turn end, appended
+			// entry). Drop the 3 s listing cache first: a turn that ends within 3 s of opening the
+			// history list would otherwise re-push the old list, and a brand-new chat stayed missing
+			// from history until the next turn (found by title-jsonl-test with a fast mock model).
+			this.invalidateSessionInfos();
 			void this.pushSessions();
 		}, 800);
 		// pushSessions no-ops unless the client opted in via list_sessions.

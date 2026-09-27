@@ -316,6 +316,12 @@ async function main() {
 	check("shell exit emits terminal_exit", exits.has(t2));
 	// Exited PTYs leave the live map: the same name can be created again and
 	// accepts input, proving exited entries do not consume the terminal limit.
+	// Fork (terminal-view-lifecycle, PATCHES.md): terminal_create is the view-mount path and
+	// only SHOWS an exited terminal (output and exit code kept, no new shell), so reusing the
+	// name means closing the exited tab first (terminal_kill drops it from history), as the UI
+	// does. Explicit restarts are covered by tests/unit/terminal-view.test.ts.
+	send({ type: "terminal_kill", terminalId: t2 });
+	await sleep(200);
 	send({
 		type: "terminal_create",
 		terminalId: t2,

@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { freePort } from "./lib/port-utils.mjs";
+import { closeTopbarPanel, revealTopbarItem, SETTINGS_CHIP } from "./lib/topbar.mjs";
 
 const REPO = fileURLToPath(new URL("../", import.meta.url));
 const base = mkdtempSync(join(tmpdir(), "pi-uilayout-"));
@@ -166,14 +167,12 @@ async function settle(page, quietMs = 2500) {
 async function openLayoutPage(page) {
 	// 顶栏直流内**一律不用原生 title**（title 会和 data-tip 的即时气泡叠成双提示，见
 	// TopBar.tsx 的注释），所以按 data-tip 找；title 保留作旧构建的回落。
-	const btn = page
-		.locator(
-			'button.chip[data-tip*="设置"], button.chip[data-tip*="Settings"], button[title*="设置"], button[title*="Settings"]',
-		)
-		.first();
+	// Our fork's topbar-crowding puts Settings in the "..." menu by default (tests/lib/topbar.mjs).
 	for (let attempt = 0; attempt < 6; attempt++) {
 		if ((await page.locator(".settings-modal").count()) === 0) {
-			await tap(page, btn).catch(() => {});
+			await revealTopbarItem(page, SETTINGS_CHIP, { timeoutMs: 5000 })
+				.then((btn) => tap(page, btn))
+				.catch(() => {});
 		}
 		if (await until(async () => (await page.locator(".settings-modal").count()) > 0, 8, 250)) break;
 		await page.waitForSelector(".chat-input, .inputbar, textarea", { timeout: 30000 }).catch(() => {});
@@ -250,14 +249,21 @@ async function main() {
 	const tabs = page.locator(".panel-right .slot-tabs-bar [role=tab]");
 	check("右栏是 slot tab 容器", await until(async () => (await tabs.count()) > 0, 40, 250));
 	const tabLabels = (await tabs.allTextContents()).map((s) => s.trim());
+	// Our fork adds host tabs of its own (TL;DR and the task queue, see PATCHES.md). They sit
+	// between the host Files tab and the plugin tab.
+	const FORK_HOST_TABS = /^(TL;DR|队列|Queue)$/;
 	check(
 		"右栏 tab 顺序 = 布局顺序（宿主「文件」在前、插件 tab 在后）",
-		tabLabels.length === 2 && /文件|Files/.test(tabLabels[0]) && tabLabels[1] === "RP-TAB",
+		tabLabels.length >= 2 &&
+			/文件|Files/.test(tabLabels[0]) &&
+			tabLabels.at(-1) === "RP-TAB" &&
+			tabLabels.slice(1, -1).every((l) => FORK_HOST_TABS.test(l)),
 		tabLabels.join(" | "),
 	);
-	check("插件的 hint 落成右栏 tab 的 title", (await tabs.nth(1).getAttribute("title")) === "右栏 tab 的悬浮提示");
+	const pluginTab = tabs.nth(tabLabels.length - 1);
+	check("插件的 hint 落成右栏 tab 的 title", (await pluginTab.getAttribute("title")) === "右栏 tab 的悬浮提示");
 	// 插件 tab 点得开、内容归插件
-	await tap(page, tabs.nth(1));
+	await tap(page, pluginTab);
 	check(
 		"插件 tab 的内容由插件渲染（PluginPage 挂载）",
 		await until(
@@ -403,8 +409,17 @@ async function main() {
 		await tap(page, page.locator(".plugin-topbar-menu .chip", { hasText: /声音|Sound/ }).first());
 		check(
 			"点它真能展开声音设置面板（搬过去也还能用）",
-			await until(async () => (await page.locator(".plugin-topbar-menu .dd-menu").count()) > 0, 20, 200),
+			// Upstream opens the panel inside the menu; our fork's topbar-crowding opens the same panel
+			// in a drawer from the right (tests/lib/topbar.mjs).
+			await until(
+				async () =>
+					(await page.locator(".plugin-topbar-menu .dd-menu").count()) > 0 ||
+					(await page.locator(".topbar-drawer .sound-menu").count()) > 0,
+				20,
+				200,
+			),
 		);
+		if ((await page.locator(".topbar-drawer").count()) > 0) await closeTopbarPanel(page);
 		await page.keyboard.press("Escape");
 		// issue #162：溢出菜单现在是 portal + 点外面/Esc 关闭 —— Esc 会把内层声音面板与溢出菜单一起收起。
 		check(
@@ -473,10 +488,15 @@ async function main() {
 	check("再打开布局页", await openLayoutPage(page));
 	const msgSlot = page.locator(".set-ui-slot", { hasText: /消息工具条|Message actions/ }).first();
 	check("布局页列出了消息工具条分区", await until(async () => (await msgSlot.count()) > 0, 30, 250));
-	// 分区条目 = 编辑重问 + 回到这里（rewind-to-here）+ 整条复制四件套（复制 / 纯文本 / Markdown / 图片）= 6 条，逐个取消勾选
+	// The section's entries: upstream v0.96 has 9 (re-ask, edit and re-ask, fork, roll back, the four
+	// whole-message copies, speak) and our fork adds "rewind to here" = 10. Untick each of them.
 	const msgBoxes = msgSlot.locator('.set-row input[type="checkbox"]');
 	const msgBoxCount = await msgBoxes.count();
-	check("消息工具条有 6 个可隐藏条目（编辑重问 + 回到这里 + 复制四件套）", msgBoxCount === 6, `${msgBoxCount} 个`);
+	check(
+		"message toolbar lists its 10 hideable entries (upstream's 9 + rewind-to-here)",
+		msgBoxCount === 10,
+		`${msgBoxCount}`,
+	);
 	for (let k = 0; k < msgBoxCount; k++) {
 		const box = msgBoxes.nth(k);
 		if (await box.isChecked()) await tap(page, box);

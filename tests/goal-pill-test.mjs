@@ -107,11 +107,21 @@ async function run() {
 	await page.waitForSelector(".goalbar-active", { timeout: 8000 });
 	check("active goal bar shown", true);
 
-	// 5. Collapse back via the chevron (idle pill returns).
+	// 5. Clear the goal ("x"): the editor stays open with the goal's text, so it isn't lost (upstream
+	// e2f9764, fixes #322). Then the chevron collapses it back to the idle pill.
+	const goalText = await page.locator(".goalbar-text").first().textContent();
 	await page.locator(".goalbar-x").click();
 	await page.waitForSelector(".goalbar-active", { state: "detached", timeout: 8000 });
+	const kept = await page
+		.locator(".goalbar-input")
+		.inputValue()
+		.catch(() => null);
+	check("clearing keeps the goal's text in the editor", kept !== null && kept === goalText?.trim(), `kept=${kept}`);
+	// The editor's buttons: set, wizard, lock, collapse (GoalBar.tsx), so the chevron is the last one.
+	await page.locator(".goalbar-row .goalbar-icon-btn").last().click();
+	await page.waitForSelector(".goalbar-collapsed", { timeout: 8000 }).catch(() => null);
 	const pillBack = await page.locator(".goalbar-collapsed").count();
-	check("idle pill returns after clearing", pillBack > 0);
+	check("idle pill returns after collapsing", pillBack > 0);
 
 	console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
 	await browser.close();

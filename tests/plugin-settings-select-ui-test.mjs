@@ -19,6 +19,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { chromium } from "playwright-core";
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { freePort } from "./lib/port-utils.mjs";
+import { revealTopbarItem, SETTINGS_CHIP } from "./lib/topbar.mjs";
 
 const REPO = fileURLToPath(new URL("../", import.meta.url));
 const base = mkdtempSync(join(tmpdir(), "pi-setselect-ui-"));
@@ -99,10 +100,12 @@ async function tap(page, locator) {
 
 async function openSettings(page) {
 	// 顶栏设置按钮：宿主条目走 data-tip（设置/Settings），旧版可能只有 title，一并兼容。
-	const btn = page.locator('button.chip[data-tip*="设置"], button[title*="设置"], button[title*="Settings"]').first();
+	// Our fork's topbar-crowding puts Settings in the "..." menu by default (tests/lib/topbar.mjs).
 	for (let attempt = 0; attempt < 6; attempt++) {
 		if ((await page.locator(".settings-modal").count()) > 0) return true;
-		await tap(page, btn).catch(() => {});
+		await revealTopbarItem(page, SETTINGS_CHIP, { timeoutMs: 5000 })
+			.then((btn) => tap(page, btn))
+			.catch(() => {});
 		for (let i = 0; i < 15; i++) {
 			if ((await page.locator(".settings-modal").count()) > 0) return true;
 			await sleep(200);

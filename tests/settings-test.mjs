@@ -15,8 +15,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
+import { freeTcpPort } from "./lib/port-utils.mjs";
 
-const PORT = Number(process.argv[2] || 8931);
+const PORT = Number(process.argv[2]) || (await freeTcpPort());
 const DATA_DIR = mkdtempSync(join(tmpdir(), "pi-web-set-test-"));
 console.log("data-dir:", DATA_DIR);
 

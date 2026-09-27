@@ -18,7 +18,7 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
@@ -26,7 +26,10 @@ import WebSocket from "ws";
 const PORT = 30000 + Math.floor(Math.random() * 10000);
 const MOCK_PORT = PORT + 1;
 const REPO = fileURLToPath(new URL("..", import.meta.url));
-const BCP = process.env.BCP_PKG ?? join(homedir(), ".pi", "agent", "npm", "node_modules", "billion-context-pi");
+// The installed add-on in the account's home (userInfo), not HOME: a sealed test run has a temp
+// HOME. Reading installed add-on code is allowed there; the chats and settings are not.
+const BCP =
+	process.env.BCP_PKG ?? join(userInfo().homedir, ".pi", "agent", "npm", "node_modules", "billion-context-pi");
 if (!existsSync(join(BCP, "package.json"))) {
 	console.log(`✗ FAIL: billion-context-pi not found at ${BCP} (set BCP_PKG)`);
 	process.exit(1);

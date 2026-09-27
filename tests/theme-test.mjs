@@ -12,6 +12,7 @@
  */
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { portUp, freePort } from "./lib/port-utils.mjs";
+import { openTopbarPanel } from "./lib/topbar.mjs";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { execSync, spawn } from "node:child_process";
@@ -81,7 +82,12 @@ async function stopServer() {
 
 async function openThemeMenu(page) {
 	// Open the theme dropdown (desktop toolbar, FiSun chip labeled "主题"/"Theme").
-	await page.locator(".topbar-flow .dropdown button.chip").filter({ hasText: "主题" }).click();
+	// Upstream has the theme chip on the bar; our fork's topbar-crowding keeps it in the "..." menu,
+	// whose row opens the same list in a drawer (tests/lib/topbar.mjs).
+	await openTopbarPanel(page, {
+		bar: page.locator(".topbar-flow .dropdown button.chip").filter({ hasText: /\u4e3b\u9898|Theme/ }),
+		entry: /\u4e3b\u9898|Theme/,
+	});
 }
 
 let browser;
@@ -148,7 +154,12 @@ try {
 
 	// 5. Switching back to default removes the injected link.
 	await openThemeMenu(page);
-	await page.locator(".dd-item", { hasText: "深色" }).first().click();
+	// The default is the item marked "(default)": the classic themes listed above it (Catppuccin
+	// and others) also carry a "dark" suffix, so a bare "dark" match picks the wrong one.
+	await page
+		.locator(".dd-item", { hasText: /\u6df1\u8272\uff08\u9ed8\u8ba4\uff09|Dark \(default\)/ })
+		.first()
+		.click();
 	await page.waitForTimeout(800);
 	const linkGone = await page.evaluate(() => document.getElementById("theme-stylesheet") === null);
 	const bg2 = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim());

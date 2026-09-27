@@ -58,6 +58,9 @@ function themeVariables(dark, fontSize) {
 				textColor: cssVar("--text", "#e6e8ef"),
 				primaryTextColor: cssVar("--text", "#e6e8ef"),
 				nodeBorder: cssVar("--accent", "#8b5cf6"),
+				// Mermaid 12's dark theme turns on gradient node borders (useGradient: true), which
+				// ignore nodeBorder, so every dark theme drew the same grey borders. Off = the accent.
+				useGradient: false,
 				labelBackground: cssVar("--bg", "#0d0e12"),
 				fontFamily: cssVar("--mono", "monospace"),
 				fontSize: `${fontSize}px`,

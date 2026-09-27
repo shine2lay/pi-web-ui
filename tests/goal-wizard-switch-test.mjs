@@ -241,24 +241,30 @@ class Client {
 	}
 }
 
-/** 跑一轮完整调研：等 goal_ask 对话框 → 回答 → 等它收敛出目标。 */
 /** 当前活动会话 id（get_state 拉全量快照才带 conversationId，delta 不带）。 */
 async function currentConvId(client, timeout = 15000) {
+	return (await currentChat(client, timeout)).id;
+}
+
+/** 当前活动会话：内存 id + 转录文件（同样来自 get_state 的全量快照）。 */
+async function currentChat(client, timeout = 15000) {
 	client.received.length = 0; // 丢掉历史 snapshot，只认 get_state 的这条响应
 	client.send({ type: "get_state" });
 	const snap = await client.waitForType("snapshot", () => true, timeout);
-	return snap?.state?.conversationId;
+	return { id: snap?.state?.conversationId, file: snap?.state?.sessionFile };
 }
 
-/** 跑一轮完整调研：等 goal_ask 对话框 →（可选）切到 switchToId → 回答。
+/** 跑一轮完整调研：等 goal_ask 对话框 →（可选）切到 switchToFile 那个对话 → 回答。
  *  返回「发起调研的那个对话」的 id（对话框出现时的活动会话）。 */
-async function runWizardRound(client, draft, { switchToId }) {
+async function runWizardRound(client, draft, { switchToFile }) {
 	client.send({ type: "start_goal_wizard", text: draft, maxRounds: 3 });
 	const dialog = await client.waitForType("dialog", (d) => d.kind === "select", 60000);
 	const wizardConvId = await currentConvId(client);
-	if (switchToId) {
+	if (switchToFile) {
 		// 问题挂着的时候切到别的会话（用户去别处看代码），再回来回答。
-		client.send({ type: "switch_conversation", id: switchToId });
+		// By its transcript, as a click on its row in the chat list does: an idle chat that is
+		// not the active one may already be unloaded, and then its old in-memory id (c1) is gone.
+		client.send({ type: "switch_session", path: switchToFile });
 		await sleep(600);
 		const away = await currentConvId(client, 8000);
 		check("切走生效（活动会话已不是发起调研的那个）", away !== wizardConvId, `${wizardConvId} -> ${away}`);
@@ -313,15 +319,25 @@ try {
 	// ---- C：切走再回来的一轮 -------------------------------------------------
 	// 先离开第一轮那个会话：它正卡在目标审查循环里（goal.reviewing=true），
 	// 在它上面再发起调研会被「正在审查中」拒绝——这不是 #292 的场景。
+	// C 阶段的"切走"目标 = 第一轮那个会话（c1）；发起调研的是 new_chat 建的新会话。
+	// Take c1's transcript while it is still the active chat. The test used to look c1 up in the
+	// chat list after new_chat, but an idle chat that is not the active one is only listed while a
+	// run of it is going (shownInRunningList), and once its review turn has ended new_chat unloads
+	// it; so whether the switch happened depended on timing (it failed that way on pure v0.96.1
+	// too): the round then ran without switching away and "the notice names the chat" failed.
+	const firstChat = await currentChat(client);
 	wizStep = 0;
 	client.received.length = 0; // 只看这一轮的 notice
 	client.send({ type: "new_chat" });
 	await sleep(600);
-	// C 阶段的"切走"目标 = 第一轮那个会话（c1）；发起调研的是 new_chat 建的新会话。
-	const firstConv = client.conversations.find((c) => !c.isSubagent && c.messageCount > 0);
-	console.log("  切走目标会话:", firstConv ? `${firstConv.id}` : "(无)");
+	console.log("  切走目标会话:", firstChat.id ?? "(无)", firstChat.file ?? "");
+	check(
+		"拿到了第一轮那个会话的转录文件",
+		typeof firstChat.file === "string" && firstChat.file.length > 0,
+		String(firstChat.file),
+	);
 	const wizardConvId = await runWizardRound(client, "切会话也要保住调研结果：支持递归去重", {
-		switchToId: firstConv?.id,
+		switchToFile: firstChat.file,
 	});
 	// 目标落到「发起调研的那个对话」（new_chat 之后活动对话已经变了），
 	// 所以切回去 goal_status 才看得到。

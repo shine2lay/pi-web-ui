@@ -1,161 +1,112 @@
 /**
- * Review loop — bounded smoke. Sets a LOCKED unlimited goal (maxRounds=0), sends
- * a prompt, and verifies a review fires (reviewing=true observed, then a verdict
- * or a revision-steer user message). Confirms the "unlimited" lock actually
- * reviews (doesn't skip / single-shot). (Real LLM calls, small cost.)
+ * Review loop: bounded smoke. Sets a LOCKED unlimited goal (maxRounds=0), sends a prompt, and
+ * verifies the loop really loops: a review fires, a failed round goes back to the agent as a
+ * revision message, the lock keeps reviewing (it is not single-shot), and a pass ends and clears
+ * the goal.
+ *
+ * With no reviewer model the goal runs in autonomous mode (server/goal-service.ts runGoalReview):
+ * a round passes only when the agent's answer carries the completion marker (GOAL_COMPLETION_RE),
+ * otherwise it fails and the loop continues. The model is a local stand-in
+ * (tests/lib/mock-model.mjs): its first answer has no marker, and its answer to the revision
+ * message has one. No real model is called.
+ *
+ * Run: npm run build && node tests/goal-review-loop-test.mjs
  */
-import { portUp, freePort } from "./lib/port-utils.mjs";
-import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
-import { spawn } from "node:child_process";
-import { execSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
-const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
+import { ownServer } from "./lib/own-server.mjs";
 
 /* eslint-env node */
 
-const PORT = 8912;
-const PROJ = REPO_ROOT;
-
 let failures = 0;
 function check(name, ok, extra = "") {
-	console.log(`${ok ? "✓" : "✗"} ${name}${extra ? " — " + extra : ""}`);
+	console.log(`${ok ? "\u2713" : "\u2717"} ${name}${extra ? " \u2014 " + extra : ""}`);
 	if (!ok) failures++;
 }
 
-let server = null;
-async function startServer() {
-	server = spawn("node", ["dist/server/index.js"], {
-		cwd: PROJ,
-		env: {
-			...process.env,
-			PI_WEB_PORT: String(PORT),
-			PI_WEB_DATA_DIR: mkdtempSync(join(tmpdir(), "pi-web-lock-")),
-			PI_WEB_CWD: PROJ,
-		},
-		stdio: ["ignore", "ignore", "pipe"],
-	});
-	server.stderr?.on("data", (d) => process.stderr.write("[srv] " + d.toString()));
-	for (let i = 0; i < 60; i++) {
-		await sleep(250);
-		try {
-			if (!(await portUp(PORT))) throw new Error("port not up");
-			return;
-		} catch {
-			/* retry */
+// The revision message the loop sends after a failed round (both languages, see goal.review.revise).
+const REVISION_RE = /\u76ee\u6807\u5ba1\u67e5|Goal review: round/;
+// The notice for a passed review (both languages).
+const PASS_NOTICE_RE = /\u5df2\u901a\u8fc7\u5ba1\u67e5|passed review/;
+
+const answers = []; // what the stand-in model was asked (main conversation only)
+const srv = await ownServer({
+	name: "goal-review-loop",
+	mock: ({ lastUser, sideRequest }) => {
+		if (sideRequest) return "Squares";
+		const asked = lastUser ?? "";
+		answers.push(asked);
+		if (REVISION_RE.test(asked)) {
+			// The revised answer: complete, with the completion marker.
+			return "| n | n^2 |\n|---|---|\n| 1 | 1 |\n| 2 | 4 |\n| 3 | 9 |\n\nGOAL: COMPLETED";
 		}
+		if (answers.length === 1) return "| 1 | 1 |\n| 2 | 4 |\n| 3 | 9 |";
+		return "OK";
+	},
+});
+
+const ws = new WebSocket(srv.ws);
+const seen = [];
+ws.on("message", (d) => seen.push(JSON.parse(d.toString())));
+const until = async (pred, what, ms = 60000) => {
+	const t0 = Date.now();
+	while (Date.now() - t0 < ms) {
+		const hit = seen.find(pred);
+		if (hit) return hit;
+		await new Promise((r) => setTimeout(r, 200));
 	}
-	throw new Error("no server");
-}
+	throw new Error(`timeout: ${what}`);
+};
 
-async function main() {
-	await startServer();
-	await sleep(400);
-	const ws = new WebSocket(`ws://localhost:${PORT}/ws`);
-	const inbox = [];
-	const waiters = [];
-	ws.on("message", (d) => {
-		const m = JSON.parse(d.toString());
-		let consumed = false;
-		for (let i = 0; i < waiters.length; i++) {
-			if (waiters[i](m)) {
-				waiters.splice(i, 1);
-				consumed = true;
-				i--;
-			}
-		}
-		if (!consumed) inbox.push(m);
-	});
-	const next = (pred, what, ms = 120000) => {
-		const i = inbox.findIndex(pred);
-		if (i >= 0) return Promise.resolve(inbox.splice(i, 1)[0]);
-		return new Promise((res, rej) => {
-			const t = setTimeout(() => rej(new Error(`timeout: ${what}`)), ms);
-			waiters.push((m) => {
-				if (pred(m)) {
-					clearTimeout(t);
-					res(m);
-					return true;
-				}
-				return false;
-			});
-		});
-	};
-
+try {
 	await new Promise((res) => ws.on("open", res));
 	ws.send(JSON.stringify({ type: "hello", clientId: "lock-test" }));
-	await next((m) => m.type === "snapshot", "initial snapshot", 20000);
+	await until((m) => m.type === "snapshot", "initial snapshot", 20000);
 
 	// Locked, unlimited (maxRounds=0).
 	ws.send(
 		JSON.stringify({
 			type: "set_goal",
-			goal: "用一行 markdown 表格列出三个数 1 2 3 的平方",
+			goal: "List the squares of 1, 2 and 3 as a one-line markdown table",
 			maxRounds: 0,
 			locked: true,
 		}),
 	);
-	await next((m) => m.type === "goal_status" && m.status.goal, "goal set", 10000);
-	ws.send(JSON.stringify({ type: "prompt", text: "请完成：用 markdown 表格列出 1,2,3 的平方。" }));
+	await until((m) => m.type === "goal_status" && m.status.goal, "goal set", 10000);
+	ws.send(JSON.stringify({ type: "prompt", text: "Please do it: a markdown table of the squares of 1, 2, 3." }));
 
-	// Watch for a review (reviewing=true) OR a review result card.
-	let sawReviewing = false;
-	let sawVerdict = false;
-	let sawRevision = false;
-	let lastRound = 0;
-	const deadline = Date.now() + 90000;
-	while (Date.now() < deadline) {
-		let msg;
-		try {
-			msg = await next((m) => ["goal_status", "snapshot"].includes(m.type), "any", 10000);
-		} catch {
-			continue;
-		}
-		if (msg.type === "goal_status") {
-			if (msg.status.reviewing) {
-				sawReviewing = true;
-				lastRound = msg.status.round;
-			}
-			if (msg.status.verdict === "pass" || msg.status.verdict === "fail") sawVerdict = true;
-		}
-		if (msg.type === "snapshot") {
-			const rev = msg.state.messages.find((m) => m.role === "custom" && m.customType === "goal-review");
-			if (rev) {
-				sawVerdict = true;
-				break;
-			}
-			// A revision-steer user message appears → review failed and loop continues.
-			if (msg.state.messages.some((m) => m.role === "user" && (m.content?.[0]?.text ?? "").includes("目标审查"))) {
-				sawRevision = true;
-			}
-		}
-		if (sawReviewing && sawVerdict) break;
-	}
+	const passed = await until(
+		(m) => m.type === "notice" && PASS_NOTICE_RE.test(`${m.text ?? ""} ${m.textEn ?? ""}`),
+		"the goal passes review",
+		90000,
+	).catch(() => null);
+	// Give the last goal_status a moment to arrive after the notice.
+	await new Promise((r) => setTimeout(r, 1000));
 
-	check("review fired (reviewing observed)", sawReviewing);
-	check("got a verdict (pass or fail)", sawVerdict);
-	check("goal stays active (not single-shot cleared)", true);
-
-	console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
-	try {
-		ws.close();
-		server.kill("SIGTERM");
-	} catch {
-		/* ignore */
-	}
-	process.exit(failures === 0 ? 0 : 1);
+	const statuses = seen.filter((m) => m.type === "goal_status").map((m) => m.status);
+	check(
+		"review fired (reviewing observed)",
+		statuses.some((s) => s.reviewing),
+	);
+	check(
+		"a failed round went back to the agent as a revision message",
+		answers.some((a) => REVISION_RE.test(a)),
+		`${answers.length} requests`,
+	);
+	const rounds = Math.max(0, ...statuses.map((s) => s.round ?? 0));
+	check("the unlimited lock kept reviewing (a second round, not single-shot)", rounds >= 2, `round ${rounds}`);
+	check(
+		"got a verdict: pass after the revision",
+		!!passed && statuses.some((s) => s.verdict === "pass"),
+		passed ? "" : "no pass notice",
+	);
+	const last = statuses[statuses.length - 1];
+	check("a passed goal is cleared", !!last && last.goal === null, JSON.stringify(last?.goal));
+} catch (e) {
+	check("goal review loop ran", false, String(e?.message ?? e));
+} finally {
+	ws.close();
+	await srv.stop();
 }
 
-main().catch((e) => {
-	console.error("ERR", e);
-	try {
-		server?.kill("SIGTERM");
-	} catch {
-		/* ignore */
-	}
-	process.exit(1);
-});
+console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
+process.exit(failures === 0 ? 0 : 1);

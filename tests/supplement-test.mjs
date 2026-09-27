@@ -12,6 +12,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { startMockModel, writeMockModelConfig } from "./lib/mock-model.mjs";
 // fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
@@ -30,7 +31,7 @@ const check = (name, ok, extra = "") => {
 };
 
 try {
-	execSync("npm run build", { cwd: PROJ, stdio: "ignore" });
+	if (!process.env.PI_TEST_PREBUILT) execSync("npm run build", { cwd: PROJ, stdio: "ignore" });
 } catch {
 	console.error("build failed");
 	process.exit(1);
@@ -41,9 +42,26 @@ try {
 	/* port free */
 }
 await sleep(500);
+// A stand-in model on this machine (tests never call the real model). The first answer takes
+// 5 seconds, so the test has time to queue a follow-up while it streams.
+const mock = await startMockModel(async ({ sideRequest }) => {
+	if (sideRequest) return "Title";
+	if (mock.requests.filter((r) => r.tools?.length).length <= 1) await sleep(5000);
+	return "OK";
+});
+mock.unref();
+const agentDir = mkdtempSync(join(tmpdir(), "pi-supplement-agent-"));
+writeMockModelConfig(agentDir, mock.port);
 const server = spawn("node", ["dist/server/index.js"], {
 	cwd: PROJ,
-	env: { ...process.env, PI_WEB_PORT: String(PORT), PI_WEB_CWD: WS },
+	// Own pi folder (with the stand-in model) and client state, never the real ones.
+	env: {
+		...process.env,
+		PI_WEB_PORT: String(PORT),
+		PI_WEB_CWD: WS,
+		PI_CODING_AGENT_DIR: agentDir,
+		PI_WEB_DATA_DIR: mkdtempSync(join(tmpdir(), "pi-supplement-data-")),
+	},
 	stdio: "ignore",
 });
 for (let i = 0; i < 40 && !(await portUp(PORT)); i++) await sleep(250);
@@ -66,28 +84,36 @@ await page
 	.then(() => check("first reply streaming", true))
 	.catch(() => check("first reply streaming", false, "no stop button"));
 
-// --- 2. 流式中发送位 = 「排队|插队」对半胶囊；空输入时两半禁用，输入后解锁 ---
+// --- 2. While streaming, the send slot is either the stop button (empty input) or the
+// queue|steer pill (something to send): upstream ChatInput renderActions shows them one at a
+// time, so an empty input shows only the stop button and typing swaps in the pill.
 const pill = page.locator(".split-send");
 const queueBtn = page.locator(".split-send .split-queue");
 const steerBtn = page.locator(".split-send .split-steer");
-check("对半胶囊在流式中出现", (await pill.count()) === 1, `count=${await pill.count()}`);
-check("空输入时两半禁用（胶囊 .disabled）", (await queueBtn.isDisabled()) && (await steerBtn.isDisabled()));
-await page.locator("textarea").fill("补充一句话：请再说一遍");
+check(
+	"empty input while streaming: stop button, no pill",
+	(await pill.count()) === 0 && (await page.locator(".btn.stop").count()) === 1,
+	`pill=${await pill.count()}`,
+);
+await page.locator("textarea").fill("\u8865\u5145\u4e00\u53e5\u8bdd\uff1a\u8bf7\u518d\u8bf4\u4e00\u904d");
 await sleep(400);
-check("输入后两半解锁", (await queueBtn.isEnabled()) && (await steerBtn.isEnabled()));
+check("typed text while streaming: the pill appears", (await pill.count()) === 1, `count=${await pill.count()}`);
+check("both halves enabled", (await queueBtn.isEnabled()) && (await steerBtn.isEnabled()));
 
 // --- 3. 点左半（排队）→ 输入框清空 + 队列提示出现 ---
 await queueBtn.click();
 await sleep(600);
 check("input cleared after 排队", (await page.locator("textarea").inputValue()) === "");
-const hint = await page
-	.locator(".queue-hint")
+// Upstream 7556de8 replaced the old ".queue-hint" line with the real list: each queued message
+// shows as its own bubble (.msg-queued, MessageList.tsx) with recall/remove buttons.
+const queuedTexts = await page
+	.locator(".msg-queued")
 	.allTextContents()
 	.catch(() => []);
 check(
-	"queue hint shows queued follow-up",
-	hint.some((h) => h.includes("跟进消息排队中") || h.includes("queued")),
-	hint.join(" | "),
+	"queued follow-up shows as a queued bubble",
+	queuedTexts.some((h) => h.includes("\u8bf7\u518d\u8bf4\u4e00\u904d")),
+	queuedTexts.join(" | "),
 );
 
 // --- 4. wait for the first reply to finish, then the queued message fires ---

@@ -27,6 +27,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import WebSocket from "ws";
+import { Readable } from "node:stream";
+import { freeTcpPort } from "./lib/port-utils.mjs";
 import { encodeImage, sniffFormat } from "../plugins/image-toolkit/core/codec.mjs";
 import { probeImage } from "../plugins/image-toolkit/core/probe.mjs";
 import { DICT } from "../plugins/image-toolkit/client/i18n.mjs";
@@ -36,7 +38,9 @@ import * as cprobe from "../plugins/image-toolkit/client/probe.mjs";
 import * as shapes from "../plugins/image-toolkit/client/shapes.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
-const PORT = 8912;
+// A free port, not a fixed one: tests run side by side (tests/run-sealed.mjs --jobs), and a
+// fixed 8912 collided with another test's server (EADDRINUSE).
+const PORT = await freeTcpPort();
 const BASE = `http://127.0.0.1:${PORT}`;
 
 let failures = 0;
@@ -187,14 +191,10 @@ function makeRes() {
 
 /** 极简 req 替身：带 raw body 的 async iterable。 */
 function makeReq({ query = {}, body, raw } = {}) {
-	const chunks = raw ? [raw] : [];
-	return {
-		query,
-		body,
-		async *[Symbol.asyncIterator]() {
-			for (const c of chunks) yield c;
-		},
-	};
+	// A real readable stream: the plugin's readBody reads the body with stream events
+	// (on "data"/"end", pause), not only async iteration (upstream changed it, e3ef55a era).
+	const req = Readable.from(raw ? [raw] : []);
+	return Object.assign(req, { query, body, headers: {} });
 }
 
 const callRoute = async (route, { query, body, raw } = {}) => {

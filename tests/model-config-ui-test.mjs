@@ -4,6 +4,7 @@
 // plus the inline success/error messages.
 // Usage: npm run build && node model-config-ui-test.mjs
 import { CHROME_PATH } from "./lib/chrome.mjs";
+import { freeTcpPort } from "./lib/port-utils.mjs";
 import { chromium } from "playwright-core";
 import { createServer } from "node:http";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
@@ -14,7 +15,7 @@ import { realpathSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 
 const CHROME = CHROME_PATH;
-const PORT = 8900 + Math.floor(Math.random() * 500);
+const PORT = await freeTcpPort();
 const MOCK_PORT = PORT + 1;
 const URL = `http://127.0.0.1:${PORT}`;
 const base = mkdtempSync(join(tmpdir(), "pi-web-mcui-"));

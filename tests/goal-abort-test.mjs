@@ -2,25 +2,18 @@
  * Manual-abort stops the goal review loop.
  * Sets a goal, sends a prompt, then hits Stop (abort) mid-run. Verifies the
  * review loop does NOT re-fire and the goal is cleared (no endless review of a
- * half-finished run). If the model is too fast to interrupt, it degrades to a
- * best-effort check (may pass trivially) — the real fix is structural.
+ * half-finished run).
+ *
+ * Runs on its own server (tests/lib/own-server.mjs, temp folders) with the stand-in model
+ * (tests/lib/mock-model.mjs). The stand-in holds every answer for a minute, so the Stop always
+ * lands mid-run. No real model is called.
  * Robust harness: bounded awaits, never hangs.
  */
-import { portUp, freePort } from "./lib/port-utils.mjs";
-import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
-import { spawn } from "node:child_process";
-import { execSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
-const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
+import { ownServer } from "./lib/own-server.mjs";
 
 /* eslint-env node */
-const PORT = 8917;
-const PROJ = REPO_ROOT;
 
 function openSocket(url, ms) {
 	return new Promise((resolve, reject) => {
@@ -72,43 +65,16 @@ function mkWaiters() {
 }
 
 (async () => {
-	// bail if port already in use
-	try {
-		if (!(await portUp(PORT))) throw new Error("port not up");
-		console.error("PORT busy");
-		process.exit(1);
-	} catch {}
-	const server = spawn("node", ["dist/server/index.js"], {
-		cwd: PROJ,
-		env: {
-			...process.env,
-			PI_WEB_PORT: String(PORT),
-			PI_WEB_DATA_DIR: mkdtempSync(join(tmpdir(), "pi-web-abort-")),
-			PI_WEB_CWD: PROJ,
+	// The stand-in model answers only after a minute: the run is still going when Stop is hit.
+	const srv = await ownServer({
+		name: "goal-abort-test",
+		mock: async () => {
+			await sleep(60_000);
+			return "(late answer)";
 		},
-		stdio: ["ignore", "ignore", "pipe"],
 	});
-	server.stderr?.on("data", (d) => process.stderr.write("[srv] " + d.toString()));
-	let up = false;
-	const d0 = Date.now() + 25000;
-	while (Date.now() < d0) {
-		try {
-			if (!(await portUp(PORT))) throw new Error("port not up");
-			up = true;
-			break;
-		} catch {
-			await sleep(250);
-		}
-	}
-	if (!up) {
-		console.error("server did not start");
-		try {
-			server.kill("SIGKILL");
-		} catch {}
-		process.exit(1);
-	}
 
-	const ws = await openSocket(`ws://localhost:${PORT}/ws`, 10000);
+	const ws = await openSocket(srv.ws, 10000);
 	const { onMsg, next } = mkWaiters();
 	ws.on("message", (d) => {
 		let m;
@@ -131,18 +97,24 @@ function mkWaiters() {
 		await next((m) => m.type === "goal_status" && m.status.goal, "goal set", 10000);
 	} catch {}
 
-	// Start generation then abort shortly after (if model streams at all).
+	// Start generation then abort shortly after.
 	ws.send(JSON.stringify({ type: "prompt", text: "请开始。" }));
 	await sleep(4000);
+	const askedBeforeAbort = srv.mock.requests.length;
+	console.log(`[d] model requests before Stop: ${askedBeforeAbort}`);
 	ws.send(JSON.stringify({ type: "abort" }));
 
 	// After abort, the goal should be cleared (abort → stop review), not re-reviewed.
 	await sleep(6000);
 	let goalCleared = false;
-	// Wait for the abort-clear goal_status (goal === null with our marker).
+	// Wait for the abort-clear goal_status (goal === null with the manual-stop status text,
+	// server/goal-service.ts: "已手动停止…" in Chinese, "…stopped manually…" in English).
 	try {
 		await next(
-			(m) => m.type === "goal_status" && m.status.goal === null && m.status.status.includes("手动停止"),
+			(m) =>
+				m.type === "goal_status" &&
+				m.status.goal === null &&
+				(m.status.status.includes("手动停止") || /stopped manually|manual stop/i.test(m.status.status)),
 			"abort-cleared goal_status",
 			15000,
 		);
@@ -152,13 +124,18 @@ function mkWaiters() {
 		goalCleared = false;
 		console.log("[d] goal NOT detected as cleared after abort");
 	}
+	// No review round after the Stop: the model got no new request.
+	const askedAfterAbort = srv.mock.requests.length - askedBeforeAbort;
+	console.log(`[d] model requests after Stop: ${askedAfterAbort}`);
+	const noReview = askedAfterAbort === 0;
 
 	console.log(goalCleared ? "✓ manual abort clears goal (stops review loop)" : "✗ goal not cleared on abort");
+	console.log(noReview ? "✓ no review round after the Stop" : "✗ the model was asked again after the Stop");
 	try {
 		ws.close();
-		if (server.pid) process.kill(server.pid, "SIGKILL");
+		await srv.stop();
 	} catch {}
-	process.exit(goalCleared ? 0 : 1);
+	process.exit(goalCleared && noReview ? 0 : 1);
 })().catch((e) => {
 	console.error("ERR", e);
 	process.exit(1);

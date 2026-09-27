@@ -2,13 +2,45 @@
  * 浏览器 E2E 测试用的 Chrome 可执行文件探测。
  * 路径不再写死本机（旧常量是 macOS 专属的 playwright 缓存路径）：
  * 1. 环境变量 PI_WEB_CHROME 最优先；
- * 2. 常见平台默认位置逐个探测，取第一个存在的。
+ * 2. playwright 缓存里已装的 headless shell（任意版本，新的优先）：PLAYWRIGHT_BROWSERS_PATH，
+ *    再是账户主目录（userInfo，不是 HOME：密封测试把 HOME 换成了临时目录）下的 .cache/ms-playwright；
+ * 3. 常见平台默认位置逐个探测，取第一个存在的。
  */
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, readdirSync } from "node:fs";
+import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 
+function playwrightShells() {
+	let accountHome = "";
+	try {
+		accountHome = userInfo().homedir;
+	} catch {
+		/* no passwd entry */
+	}
+	const roots = [process.env.PLAYWRIGHT_BROWSERS_PATH, accountHome && join(accountHome, ".cache", "ms-playwright")];
+	const found = [];
+	for (const root of roots) {
+		if (!root || !existsSync(root)) continue;
+		const dirs = readdirSync(root)
+			.filter((d) => /^chrom(e|ium)_headless_shell-\d+$/.test(d))
+			.sort((a, b) => Number(b.split("-").pop()) - Number(a.split("-").pop()));
+		for (const d of dirs) {
+			let subs = [];
+			try {
+				subs = readdirSync(join(root, d), { withFileTypes: true }).filter((s) => s.isDirectory());
+			} catch {
+				continue;
+			}
+			for (const sub of subs) {
+				for (const exe of ["chrome-headless-shell", "headless_shell"]) found.push(join(root, d, sub.name, exe));
+			}
+		}
+	}
+	return found;
+}
+
 const CANDIDATES = [
+	...playwrightShells(),
 	// Windows playwright 缓存
 	join(
 		homedir(),
@@ -29,3 +61,11 @@ const CANDIDATES = [
 
 export const CHROME_PATH =
 	process.env.PI_WEB_CHROME ?? CANDIDATES.find((p) => existsSync(p)) ?? "";
+
+// The browser tests were written against a Chinese browser: the UI picks its language from
+// navigator.languages (web/src/pick-locale.ts), and the tests look for Chinese labels
+// ("新对话", "笔记", "运行的对话"…). On an English machine the headless shell reports "en-US"
+// and every such lookup times out. Chromium takes its language from LANGUAGE, and Playwright
+// passes this process's environment to the browser, so pin it here for every test that uses
+// this file. PI_TEST_BROWSER_LANGUAGE overrides it (e.g. "en_US" to look at the English UI).
+process.env.LANGUAGE = process.env.PI_TEST_BROWSER_LANGUAGE || "zh_CN";

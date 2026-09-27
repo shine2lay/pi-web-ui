@@ -9,7 +9,7 @@ import { portUp, freePort } from "./lib/port-utils.mjs";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
 import { execSync, spawn } from "node:child_process";
-import { chmodSync, statSync } from "node:fs";
+import { chmodSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -20,6 +20,13 @@ const PORT = 8898;
 const PROJ = REPO_ROOT;
 const HELPER = join(PROJ, "node_modules/node-pty/build/Release/spawn-helper");
 
+// node-pty ships spawn-helper only on macOS; elsewhere there is nothing to repair (run-smoke lists
+// this test as macOS-only).
+if (!existsSync(HELPER)) {
+	console.log(`SKIP: no node-pty spawn-helper on ${process.platform} (it exists on macOS only)`);
+	process.exit(0);
+}
+
 let failures = 0;
 const check = (name, ok, extra = "") => {
 	console.log(`${ok ? "✓" : "✗"} ${name}${extra ? " — " + extra : ""}`);
@@ -27,7 +34,7 @@ const check = (name, ok, extra = "") => {
 };
 
 try {
-	execSync("npm run build", { cwd: PROJ, stdio: "ignore" });
+	if (!process.env.PI_TEST_PREBUILT) execSync("npm run build", { cwd: PROJ, stdio: "ignore" });
 } catch {
 	console.error("build failed");
 	process.exit(1);

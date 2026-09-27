@@ -1,9 +1,23 @@
 /* Smoke test: commands.json is per-project (follows the current cwd).
- * Server on PORT=8791 with temp work dirs; each dir has its own .pi/commands.json.
+ * Starts its own server (tests/lib/own-server.mjs) with temp folders: project A is the server's
+ * work folder, project B a second folder; each has its own .pi/commands.json.
+ * Run: npm run build && node tests/commands-test.mjs
  */
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { WebSocket } from "ws";
+import { ownServer } from "./lib/own-server.mjs";
 
-const WS = "ws://localhost:8791/ws";
+const srv = await ownServer({ name: "commands-test" });
+const PROJ_B = join(srv.root, "proj-b");
+for (const [dir, name] of [
+	[srv.workdir, "cmd-A"],
+	[PROJ_B, "cmd-B"],
+]) {
+	mkdirSync(join(dir, ".pi"), { recursive: true });
+	writeFileSync(join(dir, ".pi", "commands.json"), JSON.stringify([{ name, command: `echo ${name}` }]));
+}
+const WS = srv.ws;
 const CLIENT_ID = "cmd-test-client";
 
 function connect() {
@@ -67,8 +81,8 @@ async function main() {
 	}
 
 	// Switch to project B — commands must auto-switch to B's file.
-	c.send({ type: "set_cwd", path: "/tmp/cmdtest/proj-b" });
-	await c.wait((m) => m.type === "snapshot" && m.state.cwd === "/tmp/cmdtest/proj-b");
+	c.send({ type: "set_cwd", path: PROJ_B });
+	await c.wait((m) => m.type === "snapshot" && m.state.cwd === PROJ_B);
 	const cb = await c.wait((m) => m.type === "commands");
 	console.log("[2] cwd B commands:", JSON.stringify(cb.commands.map((x) => x.name)), "→", cb.path);
 	if (!cb.commands.some((x) => x.name === "cmd-B")) {
@@ -78,6 +92,7 @@ async function main() {
 		throw new Error("FAIL: project A commands leaked into project B");
 	}
 	c.close();
+	await srv.stop();
 	console.log("\n✅ PER-PROJECT COMMANDS CHECKS PASSED");
 }
 

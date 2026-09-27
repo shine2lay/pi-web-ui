@@ -3,7 +3,7 @@
  * 本地 git 仓库路径用无网络的 git ls-remote 验证真实流程）。
  * 毫秒级（git 调用 < 1s）、零 token。
  */
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,6 +52,18 @@ describe("备份 / 回滚", () => {
 		// 再备 3 次 → 只留最近 3 份
 		for (let i = 0; i < 3; i++) ensureBackup(dataDir, "p1", { source: "x" });
 		expect(listBackups(dataDir, "p1").length).toBe(BACKUP_KEEP ?? 3);
+	});
+
+	it("backups made in the same millisecond each get their own folder", () => {
+		installPlugin("p1", "v1");
+		const now = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 0, 2, 3, 4, 5, 6));
+		try {
+			const stamps = [0, 1, 2].map(() => ensureBackup(dataDir, "p1", { source: "x" }));
+			expect(new Set(stamps).size).toBe(3);
+			expect(listBackups(dataDir, "p1").length).toBe(3);
+		} finally {
+			now.mockRestore();
+		}
 	});
 
 	it("备份不包含 node_modules/.git；目标不存在返回 null", () => {

@@ -1,5 +1,5 @@
 /* Questionnaire E2E test: boots the compiled server, opens the built UI in
- * headless Chromium, and drives a REAL ask_user_question round-trip through
+ * headless Chromium, and drives an ask_user_question round-trip through
  * the browser dialog bridge:
  *
  *   1. prompt the agent to call ask_user_question
@@ -7,40 +7,53 @@
  *   3. clicking an option resolves the tool, panel closes, agent continues
  *   4. a second round is dismissed with Escape -> tool resolves as declined
  *
- * Requires a working model (deepseek) for the agent session.
- * Run:  npm run build && node questionnaire-test.mjs */
+ * The agent is the stand-in model (tests/lib/mock-model.mjs), so no real model is called: it
+ * answers "1+1" and "继续吗" prompts with the ask_user_question call a real model would make, and a
+ * tool result with a short text. The server is the test's own (tests/lib/own-server.mjs), with
+ * temp data, agent and work folders.
+ * Run:  npm run build && node tests/questionnaire-test.mjs */
 import { CHROME_PATH } from "./lib/chrome.mjs";
-import { freePort } from "./lib/port-utils.mjs";
-import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { ownServer } from "./lib/own-server.mjs";
 import { chromium } from "playwright-core";
 
-// fileURLToPath（不是 URL.pathname）：Windows 上 ".pathname" 得到 "/E:/..."，
-// spawn 的 cwd 与脚本参数都不存在 → ENOENT，测试根本起不来。
-const ROOT = fileURLToPath(new URL("..", import.meta.url));
-const PORT = 30000 + Math.floor(Math.random() * 10000);
-const workdir = mkdtempSync(join(tmpdir(), "piweb-q-"));
-process.env.PI_WEB_PORT = String(PORT);
-process.env.PI_WEB_CWD = workdir;
-
-const server = spawn(process.execPath, [join(ROOT, "dist", "server", "index.js")], {
-	cwd: ROOT,
-	stdio: ["ignore", "pipe", "pipe"],
-	detached: process.platform !== "win32",
+const srv = await ownServer({
+	name: "questionnaire-test",
+	mock: ({ lastUser, toolResult, sideRequest }) => {
+		if (sideRequest) return "问卷测试";
+		if (toolResult) return "收到你的回答。";
+		if (lastUser.includes("1+1")) {
+			return {
+				tool: "ask_user_question",
+				args: {
+					questions: [
+						{
+							id: "q1",
+							question: "测试问题：1+1 等于几？",
+							options: [{ label: "等于 2" }, { label: "等于 3" }],
+						},
+					],
+				},
+			};
+		}
+		if (lastUser.includes("继续吗")) {
+			return {
+				tool: "ask_user_question",
+				args: {
+					questions: [
+						{
+							id: "q2",
+							question: "测试问题：继续吗？",
+							options: [{ label: "继续" }, { label: "停下" }],
+						},
+					],
+				},
+			};
+		}
+		return "好的。";
+	},
 });
-server.on("error", (e) => console.error("[srv spawn error]", e));
-server.stderr.on("data", (d) => process.stdout.write(`[srv!] ${d}`));
 process.on("exit", () => {
-	try {
-		// win32 没有负数 PID 的进程组，退回按端口清理。
-		if (process.platform === "win32") freePort(PORT);
-		else process.kill(-server.pid, "SIGKILL");
-	} catch {
-		/* gone */
-	}
+	void srv.stop();
 });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -54,19 +67,6 @@ const check = (name, cond) => {
 		process.exitCode = 1;
 	}
 };
-
-async function waitServer() {
-	for (let i = 0; i < 120; i++) {
-		try {
-			const r = await fetch(`http://localhost:${PORT}/api/health`);
-			if (r.ok) return;
-		} catch {
-			/* not up yet */
-		}
-		await sleep(250);
-	}
-	throw new Error("server did not start");
-}
 
 /** Wait until the agent finishes streaming (send button replaces the stop button). */
 async function waitIdle(page, timeout = 60_000) {
@@ -88,34 +88,40 @@ async function sendPrompt(page, text) {
 	await page.keyboard.press("Enter");
 }
 
-/** Wait for the last ask_user_question toolcall to reach 完成. */
-async function waitToolDone(page, timeout = 180_000) {
+/** Wait for the nth ask_user_question tool call to finish with the status label `want`; e.g. 完成.
+ * Our fork folds a finished exchange into one row (exchange-fold, web/src/components/ExchangeFoldRow.tsx:
+ * "2 轮 · 1 次工具调用"), which hides its tool calls; open the last fold to see them. */
+async function waitToolDone(page, { nth, want }, timeout = 60_000) {
 	const tc = page.locator('.toolcall:has(.toolcall-name:text-is("ask_user_question"))');
-	await tc.last().waitFor({ state: "visible", timeout });
-	await page
-		.locator('.toolcall:has(.toolcall-name:text-is("ask_user_question"))')
-		.last()
-		.locator(".toolcall-status")
-		.waitFor({ state: "visible", timeout });
-	for (let i = 0; i < timeout / 500; i++) {
-		const status = await page
-			.locator('.toolcall:has(.toolcall-name:text-is("ask_user_question"))')
-			.last()
-			.locator(".toolcall-status")
-			.textContent()
-			.catch(() => "");
-		if (status === "完成") return true;
+	for (let i = 0; i < timeout / 500 && (await tc.count()) < nth; i++) {
+		const closedFold = page.locator(".xfold:not(.open) .xfold-head");
+		if ((await closedFold.count()) > 0) await closedFold.last().click();
 		await sleep(500);
 	}
+	const call = tc.nth(nth - 1);
+	await call.waitFor({ state: "visible", timeout });
+	await call.locator(".toolcall-status").waitFor({ state: "visible", timeout });
+	// The status is an icon now; its label (aria-label) says "完成" (done) or "出错" (error) plus the duration.
+	let status = "";
+	for (let i = 0; i < timeout / 500; i++) {
+		status =
+			(await call
+				.locator(".toolcall-status")
+				.getAttribute("aria-label")
+				.catch(() => "")) ?? "";
+		if (status.startsWith(want)) return true;
+		await sleep(500);
+	}
+	console.log(`  [debug] tool call ${nth} status: ${status}`);
 	return false;
 }
 
+let page = null;
 async function main() {
-	await waitServer();
 	const browser = await chromium.launch({
 		executablePath: CHROME_PATH,
 	});
-	const page = await browser.newPage({
+	page = await browser.newPage({
 		viewport: { width: 1400, height: 900 },
 	});
 	const consoleErrors = [];
@@ -124,7 +130,7 @@ async function main() {
 	});
 	page.on("pageerror", (e) => consoleErrors.push(String(e)));
 
-	await page.goto(`http://localhost:${PORT}/`);
+	await page.goto(`${srv.http}/`);
 	await page.waitForSelector(".boot-wait", { state: "hidden", timeout: 60000 });
 	await page.waitForSelector(".topbar", { timeout: 5000 });
 	console.log("app booted");
@@ -139,23 +145,27 @@ async function main() {
 	// The inline panel must appear above the input (styling + options).
 	await page.waitForSelector(".dialog-inline", {
 		state: "visible",
-		timeout: 180_000,
+		timeout: 60_000,
 	});
 	check("inline dialog panel appears", true);
 
-	const title = await page.locator(".dialog-title").textContent();
+	// ask_user_question is built into the server now and has its own panel
+	// (web/src/components/DshQuestionDialog.tsx). The old checks were written for the generic
+	// extension dialog (.dialog-title, .dialog-option rows plus a "Type something." row that an
+	// extension appended); the built-in panel shows the question in .question-head, one
+	// .question-option row per option, and a separate custom-answer input.
+	const title = await page.locator(".dialog-inline .question-head").textContent();
 	check("dialog shows the question", title?.includes("1+1") ?? false);
 
-	// rpc-fallback appends the "Type something." sentinel row, so a 2-option
-	// question renders as 3 selectable rows.
-	const optCount = await page.locator(".dialog-option").count();
-	check("dialog shows options (2 + Type something.)", optCount === 3);
-	const opts = await page.locator(".dialog-option").allTextContents();
+	const optCount = await page.locator(".dialog-inline .question-option").count();
+	check("dialog shows the 2 options", optCount === 2);
+	const opts = await page.locator(".dialog-inline .question-option").allTextContents();
 	check(
-		"custom-answer sentinel present",
-		opts.some((t) => t.includes("Type something.")),
+		"options carry the model's labels",
+		opts.some((t) => t.includes("等于 2")) && opts.some((t) => t.includes("等于 3")),
 	);
-	if (optCount < 2) {
+	check("custom-answer input present", (await page.locator(".dialog-inline .question-custom").count()) === 1);
+	if (optCount !== 2) {
 		console.log(
 			"[debug] dialog content:",
 			await page
@@ -179,14 +189,19 @@ async function main() {
 	check("message list stays visible while asking", !!listBox && listBox.height > 0);
 
 	// Click the first option -> tool resolves, panel closes, agent continues.
-	await page.locator(".dialog-option").first().click();
+	await page.locator(".dialog-inline .question-option").first().click();
 	await page.waitForSelector(".dialog-inline", {
 		state: "detached",
 		timeout: 10_000,
 	});
 	check("panel closes after answering", true);
-	check("tool completed after answer", await waitToolDone(page));
+	check("tool completed after answer", await waitToolDone(page, { nth: 1, want: "\u5b8c\u6210" }));
 	check("agent idle after round 1", await waitIdle(page));
+	// The agent continued: the model got the answer back as the tool result.
+	const answered = srv.mock.requests.some((r) =>
+		(r.messages ?? []).some((m) => m.role === "tool" && JSON.stringify(m.content ?? "").includes("等于 2")),
+	);
+	check("the model got the chosen answer back", answered);
 	console.log("round 1 done\n");
 
 	// -- Round 2: dismiss with Escape ----------------------------------------
@@ -197,7 +212,7 @@ async function main() {
 	);
 	await page.waitForSelector(".dialog-inline", {
 		state: "visible",
-		timeout: 180_000,
+		timeout: 60_000,
 	});
 	check("second dialog appears", true);
 
@@ -207,7 +222,15 @@ async function main() {
 		timeout: 10_000,
 	});
 	check("panel closes on Escape", true);
-	check("tool completed after cancel", await waitToolDone(page));
+	// A cancelled question comes back to the model as a tool error ("User cancelled the question.",
+	// server/agent-service.ts), so the finished call shows the error status, and the model hears why.
+	check("tool completed after cancel", await waitToolDone(page, { nth: 2, want: "\u51fa\u9519" }));
+	const cancelSeen = srv.mock.requests.some((r) =>
+		(r.messages ?? []).some(
+			(m) => m.role === "tool" && JSON.stringify(m.content ?? "").includes("cancelled the question"),
+		),
+	);
+	check("the model heard the question was cancelled", cancelSeen);
 	console.log("round 2 done\n");
 
 	// -- Summary -------------------------------------------------------------
@@ -216,10 +239,23 @@ async function main() {
 	}
 	console.log(`\n${passed} checks passed`);
 	await browser.close();
+	await srv.stop();
 	process.exit(process.exitCode ?? 0);
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
 	console.error("test crashed:", err);
+	if (page) {
+		const toolcalls = await page
+			.locator(".toolcall")
+			.count()
+			.catch(() => -1);
+		const text = await page
+			.locator(".messages")
+			.innerText()
+			.catch(() => "<none>");
+		console.error(`[debug] .toolcall count=${toolcalls}; messages:\n${text.slice(0, 1500)}`);
+	}
+	await srv.stop();
 	process.exit(1);
 });

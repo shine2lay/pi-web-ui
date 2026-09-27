@@ -1,11 +1,16 @@
 /* Smoke test for edit-and-re-ask (edit_message → runtime.fork → re-prompt).
- * Needs a server on PORT=8791 with PI_WEB_DATA_DIR and a temp agent dir that
- * has a dummy auth.json (the user message is appended before the API call, so
- * the fork mechanics are testable even though the real call fails).
+ * Starts its own server (tests/lib/own-server.mjs) with temp folders and a model that can't be
+ * reached (the user message is appended before the API call, so the fork mechanics are testable
+ * even though the call fails).
+ * Run: npm run build && node tests/edit-reask-test.mjs
  */
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 import { WebSocket } from "ws";
+import { ownServer } from "./lib/own-server.mjs";
 
-const WS = "ws://localhost:8791/ws";
+const srv = await ownServer({ name: "edit-reask-test" });
+const WS = srv.ws;
 const CLIENT_ID = "edit-test-client";
 
 function connect() {
@@ -61,6 +66,18 @@ const msgText = (snap, text) =>
 	);
 const userMessages = (snap) => snap.state.messages.filter((m) => m.role === "user");
 
+/** Changes arrive as snapshot deltas; ask for the full state (get_state) until it matches. */
+async function stateUntil(c, pred, timeout = 20_000) {
+	const end = Date.now() + timeout;
+	while (Date.now() < end) {
+		c.send({ type: "get_state" });
+		const snap = await c.wait((m) => m.type === "snapshot", 5000);
+		if (pred(snap)) return snap;
+		await new Promise((r) => setTimeout(r, 200));
+	}
+	throw new Error("timeout waiting for the state");
+}
+
 async function main() {
 	const c = await connect();
 	c.send({ type: "hello", clientId: CLIENT_ID });
@@ -78,11 +95,11 @@ async function main() {
 	c.send({ type: "set_model", modelId: models.models[0].id });
 
 	c.send({ type: "prompt", text: "第一个问题：如何学习 TypeScript？" });
-	await c.wait((m) => m.type === "snapshot" && msgText(m, "第一个问题"));
+	await stateUntil(c, (m) => msgText(m, "第一个问题") && !m.state.isStreaming);
 	console.log("[3] first question persisted");
 
 	c.send({ type: "prompt", text: "第二个问题：如何学习 Rust？" });
-	const preSnap = await c.wait((m) => m.type === "snapshot" && msgText(m, "第二个问题") && !m.state.isStreaming);
+	const preSnap = await stateUntil(c, (m) => msgText(m, "第二个问题") && !m.state.isStreaming);
 	const pre = userMessages(preSnap);
 	const target = pre.find((m) => m.content.some((b) => b.text?.includes("第一个问题")));
 	if (!target) throw new Error("FAIL: could not find first user message");
@@ -93,7 +110,7 @@ async function main() {
 		messageId: target.id,
 		text: "修改后的问题：怎么学 Go？",
 	});
-	const snap2 = await c.wait((m) => m.type === "snapshot" && msgText(m, "修改后的问题"));
+	const snap2 = await stateUntil(c, (m) => msgText(m, "修改后的问题"));
 	console.log("[5] new session:", snap2.state.sessionId.slice(0, 8));
 	if (snap2.state.sessionId === snap0.state.sessionId) {
 		throw new Error("FAIL: session did not change after edit");
@@ -109,14 +126,25 @@ async function main() {
 		throw new Error("FAIL: edited question missing from new session");
 	}
 
+	// The original thread is kept on disk next to the new fork. The history list shows only the
+	// newest session of a fork chain (upstream hides forked parents, see pushSessions()).
+	const files = readdirSync(join(srv.agentDir, "sessions"), { recursive: true }).filter((f) =>
+		String(f).endsWith(".jsonl"),
+	);
+	console.log("[7] session files:", files.length, "(expect >= 2: original thread kept + new fork)");
+	if (files.length < 2) {
+		throw new Error("FAIL: the original session should still be on disk");
+	}
 	c.send({ type: "list_sessions" });
-	const sessions = await c.wait((m) => m.type === "sessions" && m.sessions.length >= 2);
-	console.log("[7] session count:", sessions.sessions.length, "(expect >= 2 — original thread kept + new fork)");
-	if (sessions.sessions.length < 2) {
-		throw new Error("FAIL: original session should still be in the list");
+	const sessions = await c.wait((m) => m.type === "sessions" && m.sessions.length >= 1);
+	const listed = sessions.sessions.map((s) => s.path);
+	console.log("[8] history list:", listed.length, "session(s)");
+	if (!listed.some((p) => p.includes(snap2.state.sessionId))) {
+		throw new Error("FAIL: the new fork should be in the history list");
 	}
 	c.close();
-	console.log("\n✅ EDIT-AND-RE-ASK CHECKS PASSED");
+	await srv.stop();
+	console.log("\n\u2705 EDIT-AND-RE-ASK CHECKS PASSED");
 }
 
 main().catch((e) => {

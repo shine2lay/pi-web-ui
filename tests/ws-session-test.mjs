@@ -4,23 +4,28 @@
  * 验证 ws 协议的关键握手和行为：
  *   hello → ready → list_files(根)→ files → 媒体 /api/file → 结束
  *
- * 用法（需先有 server 在跑，或用环境变量指定）:
- *   node ws-session-test.mjs                        # 连 ws://localhost:${PORT:-8787}
- *   PORT=9000 node ws-session-test.mjs              # 自定义端口
- *   WS_ROOT=/abs/media.d  node ws-session-test.mjs  # 自定义媒体目录（默认 .pi-web/../media）
+ * 用法:
+ *   node tests/ws-session-test.mjs
  *
- * 与仓库其它 test.mjs 一致：clientId 随机生成，端口可配，不依赖特定项目文件。
+ * The test starts its own server (temp folders, no real model) with a picture in its work folder.
+ * It never attaches to a server someone has running: that one holds real chats.
+ *
+ * 与仓库其它 test.mjs 一致：clientId 随机生成，不依赖特定项目文件。
  */
 import { randomUUID } from "node:crypto";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import WebSocket from "ws";
+import { ownServer } from "./lib/own-server.mjs";
 
-const PORT = Number(process.env.PI_WEB_PORT ?? 8787);
-const BASE = `http://localhost:${PORT}`;
-const WS_URL = `ws://localhost:${PORT}/ws`;
+const srv = await ownServer({ name: "ws-session-test" });
+const BASE = srv.http;
+const WS_URL = srv.ws;
 
-// 媒体文件只要落到该客户端可访问的 cwd 下任意图片即可；默认用会话目录下
-// 一张可能的图片，找不到也不致命（仅打印 fetch 状态）。
-const MEDIA_PATH = process.env.WS_MEDIA_PATH;
+// 1x1 PNG in the server's work folder: the root listing must show it and /api/file must serve it.
+const TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+const MEDIA_PATH = "pic.png";
+writeFileSync(join(srv.workdir, MEDIA_PATH), Buffer.from(TINY_PNG, "base64"));
 
 const clientId = randomUUID();
 const ws = new WebSocket(WS_URL);
@@ -28,6 +33,11 @@ let step = 0;
 
 function log(...a) {
 	console.log(`[ws-session ${step}]`, ...a);
+}
+
+function fail(msg) {
+	console.error("FAIL:", msg);
+	process.exit(1);
 }
 
 ws.on("open", () => {
@@ -44,14 +54,13 @@ ws.on("message", async (d) => {
 		ws.send(JSON.stringify({ type: "list_files", path: undefined }));
 	} else if (m.type === "files") {
 		log("files root:", m.path, "entries:", m.entries.length);
-		if (MEDIA_PATH) {
-			const r = await fetch(
-				`${BASE}/api/file?clientId=${encodeURIComponent(clientId)}&path=${encodeURIComponent(MEDIA_PATH)}`,
-			);
-			log("media fetch:", r.status, r.headers.get("content-type"));
-		} else {
-			log("WS_MEDIA_PATH 未设置，跳过媒体下载探测");
-		}
+		if (!m.entries.some((e) => e.name === MEDIA_PATH)) fail(`the root listing does not show ${MEDIA_PATH}`);
+		const r = await fetch(
+			`${BASE}/api/file?clientId=${encodeURIComponent(clientId)}&path=${encodeURIComponent(MEDIA_PATH)}`,
+		);
+		log("media fetch:", r.status, r.headers.get("content-type"));
+		if (r.status !== 200) fail(`media fetch returned ${r.status}`);
+		log("PASS");
 		ws.close();
 		process.exit(0);
 	} else if (m.type === "snapshot") {

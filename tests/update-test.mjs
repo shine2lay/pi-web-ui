@@ -4,6 +4,7 @@
  * it would really run npm i -g.)
  * Run: npm run build && node update-test.mjs */
 import { CHROME_PATH } from "./lib/chrome.mjs";
+import { openTopbarPanel, topbarItemText } from "./lib/topbar.mjs";
 import { freePort } from "./lib/port-utils.mjs";
 import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync } from "node:fs";
@@ -88,18 +89,20 @@ async function main() {
 	await page.waitForSelector(".topbar", { timeout: 60000 });
 
 	// -- corner chip shows the running version -------------------------------
-	await page.waitForFunction(
-		(v) => [...document.querySelectorAll(".topbar-flow .chip")].some((el) => el.textContent.includes(`v${v}`)),
-		pkgVersion,
-		{ timeout: 20000 },
-	);
-	const chip = page.locator(".topbar-flow .dropdown", {
-		hasText: "v" + pkgVersion,
-	});
-	check("corner update chip shows v" + pkgVersion, (await chip.count()) > 0);
+	// The version chip is in the top bar's "..." menu by default (upstream ui-slots host:update
+	// hidden: true); there it is an entry row "<update word> . v<version>" that opens the same
+	// dropdown in a drawer. tests/lib/topbar.mjs reads either place.
+	const versionRe = new RegExp(`v${pkgVersion.replace(/\./g, "\\.")}`);
+	const barChip = page.locator(".topbar-flow .dropdown", { hasText: "v" + pkgVersion });
+	let versionText = "";
+	for (let i = 0; i < 20 && !versionRe.test(versionText); i++) {
+		versionText = (await topbarItemText(page, { bar: barChip, entry: /v(\d|\u2026)/ }).catch(() => "")) ?? "";
+		if (!versionRe.test(versionText)) await sleep(1000);
+	}
+	check("corner update chip shows v" + pkgVersion, versionRe.test(versionText));
 
 	// -- open dropdown → registry check completes ----------------------------
-	await chip.locator("button.chip").click();
+	await openTopbarPanel(page, { bar: barChip.locator("button.chip"), entry: versionRe });
 	await page.waitForSelector(".dd-update", { timeout: 5000 });
 	await page.waitForFunction(
 		() => {

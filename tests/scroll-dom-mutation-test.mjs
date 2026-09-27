@@ -10,6 +10,7 @@
  * Mutation-proven: revert the MO effect in MessageList.tsx → drift >80px → RED.
  * Run: npm run build:web && node tests/scroll-dom-mutation-test.mjs */
 import { spawn } from "node:child_process";
+import { noRetries } from "./lib/mock-model.mjs";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -45,6 +46,9 @@ writeFileSync(
 process.env.PI_WEB_PORT = String(PORT);
 process.env.PI_WEB_CWD = workdir;
 process.env.PI_WEB_DATA_DIR = dataDir;
+// pi retries a failed model call by default; the fast-fail model must fail at once, or every
+// seeded prompt queues behind the retries and the seeding times out.
+noRetries(agentDir);
 process.env.PI_CODING_AGENT_DIR = agentDir;
 const CLIENT_ID = "scroll-dom-mutation-test-client";
 const TALL_TEXT = "很长的需求描述。".repeat(2000);

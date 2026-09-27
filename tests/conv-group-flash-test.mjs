@@ -9,6 +9,9 @@
  * 这里用 MutationObserver 记录整个左栏的每一帧 DOM，逐帧断言「当前项目那组没有
  * 组标题」。零 token（本地 OpenAI 兼容 mock）。
  *
+ * Our fork: flat-recent-chats (PATCHES.md) has no project groups, so the checks below test that
+ * patch's promise instead: a project switch never shows a group title and never changes the rows.
+ *
  * Run: npm run build && node tests/conv-group-flash-test.mjs
  */
 import { CHROME_PATH } from "./lib/chrome.mjs";
@@ -126,89 +129,112 @@ try {
 		await page.keyboard.press("Enter");
 		await sleep(3000);
 	};
-	/** 记录左栏每一帧的组标题（附当时的 cwd），返回取样函数。 */
+	// Our fork's flat-recent-chats patch (PATCHES.md) replaced upstream's per-project groups with
+	// ONE flat list of every chat, newest-created first. So upstream's checks ("only the current
+	// project's chat is listed", "no project name flashes") turn into that patch's stronger promise,
+	// checked frame by frame: a project switch never shows a group title, never drops or adds a row,
+	// and never reorders the rows.
+	/** The left panel right now: group titles, the rows (as their folder, in order), the active row. */
+	const panelState = () =>
+		page.evaluate(() => {
+			const root = document.querySelector(".panel-left");
+			// A row's tooltip is "<title> \u2014 <folder>"; the folder tells A's chat from B's.
+			const folder = (el) => {
+				const tip = el?.getAttribute("title") ?? "";
+				return tip.slice(tip.lastIndexOf(" \u2014 ") + 3);
+			};
+			return {
+				titles: [...root.querySelectorAll(".panel-conv-group-title")].map((el) => el.textContent),
+				order: [...root.querySelectorAll(".panel-convs .session-item")].map(folder).join(" | "),
+				active: folder(root.querySelector(".panel-convs .session-item.active")),
+			};
+		});
+	/** Record the same state for every DOM change of the left panel. */
 	const recordFrames = () =>
 		page.evaluate(() => {
 			window.__frames = [];
 			const root = document.querySelector(".panel-left");
+			const folder = (el) => {
+				const tip = el?.getAttribute("title") ?? "";
+				return tip.slice(tip.lastIndexOf(" \u2014 ") + 3);
+			};
 			const snap = () =>
 				window.__frames.push({
 					titles: [...root.querySelectorAll(".panel-conv-group-title")].map((el) => el.textContent),
-					rows: root.querySelectorAll(".panel-convs .session-item").length,
-					cwd: document.querySelector(".status-cwd")?.textContent ?? "",
+					order: [...root.querySelectorAll(".panel-convs .session-item")].map(folder).join(" | "),
 				});
 			snap();
 			new MutationObserver(snap).observe(root, { childList: true, subtree: true, characterData: true });
 		});
-	const frames = () =>
-		page.evaluate(() =>
-			window.__frames.map((f) => ({
-				...f,
-				wantsTitle: !f.cwd.includes(f.titles.find?.((t) => t) ?? "\u0000"),
-			})),
-		);
+	const shortOrder = (order) => order.replaceAll(base, "");
 
-	// 1. A 里聊一句 → 当前对话进列表（#140）
-	await prompt("A 里第一条消息");
+	// 1. A chat in A -> it is listed, with no group title (#140)
+	await prompt("A: first message");
 	await page.waitForSelector(".panel-convs .session-item", { timeout: 15000 });
-	const aFrames = await page.evaluate(() => {
-		const root = document.querySelector(".panel-left");
-		return {
-			rows: root.querySelectorAll(".panel-convs .session-item").length,
-			titles: [...root.querySelectorAll(".panel-conv-group-title")].map((el) => el.textContent),
-		};
-	});
-	check("A 的当前对话进了「运行的对话」", aFrames.rows === 1, `rows=${aFrames.rows}`);
-	check("当前项目不显示组标题", aFrames.titles.length === 0, JSON.stringify(aFrames.titles));
+	const aState = await panelState();
+	check("A's chat is listed", aState.order.endsWith("proj-a"), shortOrder(aState.order));
+	check("no group title", aState.titles.length === 0, JSON.stringify(aState.titles));
 
-	// 2. 切到 B 并在 B 里聊一句（B 也有一条有内容的对话）
+	// 2. Switch to B and chat there: both chats are in the one list, the newer (B) on top
 	await switchTo(B);
-	await prompt("B 里第一条消息");
-	await page.waitForFunction(() => document.querySelectorAll(".panel-convs .session-item").length === 1, null, {
+	await prompt("B: first message");
+	await page.waitForFunction(() => document.querySelectorAll(".panel-convs .session-item").length === 2, null, {
 		timeout: 15000,
 	});
+	const before = await panelState();
+	check(
+		"one flat list: B's chat (newer) above A's",
+		/proj-b \| .*proj-a$/.test(before.order),
+		shortOrder(before.order),
+	);
 
-	// 3. B → A：逐帧看有没有项目名闪出来
+	// 3. B -> A: frame by frame, no group title and the same rows in the same order
 	await recordFrames();
 	await switchTo(A);
 	const backFrames = await page.evaluate(() => window.__frames);
 	check(
-		"切回 A 期间从未渲染过组标题（不再闪项目名）",
+		"switching back to A never renders a group title",
 		backFrames.every((f) => f.titles.length === 0),
 		JSON.stringify(backFrames.filter((f) => f.titles.length > 0).slice(0, 3)),
 	);
 	check(
-		"全程只有一行（A 的当前对话）",
-		backFrames.every((f) => f.rows <= 1),
-		JSON.stringify(backFrames.slice(0, 3)),
+		"switching back to A never drops, adds or reorders a row",
+		backFrames.every((f) => f.order === before.order),
+		JSON.stringify(
+			backFrames
+				.filter((f) => f.order !== before.order)
+				.map((f) => shortOrder(f.order))
+				.slice(0, 3),
+		),
 	);
+	const atA = await panelState();
+	check("A's chat is the active row", atA.active.endsWith("proj-a"), shortOrder(atA.active));
 
-	// 4. A → B：反方向同样不许闪
+	// 4. A -> B: the same the other way
 	await recordFrames();
 	await switchTo(B);
 	const forthFrames = await page.evaluate(() => window.__frames);
 	check(
-		"切到 B 期间同样没有组标题",
+		"switching to B never renders a group title",
 		forthFrames.every((f) => f.titles.length === 0),
 		JSON.stringify(forthFrames.filter((f) => f.titles.length > 0).slice(0, 3)),
 	);
-
-	// 5. 稳定态：B 的当前对话在列表里且没有组标题
-	const finalState = await page.evaluate(() => {
-		const root = document.querySelector(".panel-left");
-		return {
-			rows: root.querySelectorAll(".panel-convs .session-item").length,
-			titles: [...root.querySelectorAll(".panel-conv-group-title")].map((el) => el.textContent),
-			current: [...root.querySelectorAll(".panel-convs .session-sub")].map((el) => el.textContent),
-		};
-	});
-	check("切完后只有一行", finalState.rows === 1, `rows=${finalState.rows}`);
 	check(
-		"那行标着「当前」",
-		finalState.current.some((s) => s?.includes("当前")),
-		JSON.stringify(finalState.current),
+		"switching to B never drops, adds or reorders a row",
+		forthFrames.every((f) => f.order === before.order),
+		JSON.stringify(
+			forthFrames
+				.filter((f) => f.order !== before.order)
+				.map((f) => shortOrder(f.order))
+				.slice(0, 3),
+		),
 	);
-	check("没有残留组标题", finalState.titles.length === 0, JSON.stringify(finalState.titles));
+
+	// 5. Settled: B's chat is the active row, the list is unchanged, no group title left
+	const finalState = await panelState();
+	check("B's chat is the active row", finalState.active.endsWith("proj-b"), shortOrder(finalState.active));
+	check("the list is unchanged", finalState.order === before.order, shortOrder(finalState.order));
+	check("no group title left", finalState.titles.length === 0, JSON.stringify(finalState.titles));
 } catch (error) {
 	console.error(`✗ ${error.message}`);
 	process.exitCode = 1;

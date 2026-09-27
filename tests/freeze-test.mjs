@@ -16,6 +16,10 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { execSync, spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { startMockModel, writeMockModelConfig } from "./lib/mock-model.mjs";
 // fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
@@ -30,11 +34,19 @@ function check(name, ok, extra = "") {
 	if (!ok) failures++;
 }
 
+// A stand-in model on this machine (tests never call the real model), and the server's own pi
+// folder and client state (kept across the restart below), never the real ones.
+const mock = await startMockModel(({ sideRequest }) => (sideRequest ? "Title" : "recovered"));
+mock.unref();
+const agentDir = mkdtempSync(join(tmpdir(), "pi-freeze-agent-"));
+writeMockModelConfig(agentDir, mock.port);
+const dataDir = mkdtempSync(join(tmpdir(), "pi-freeze-data-"));
+
 let server = null;
 async function startServer() {
 	server = spawn("node", ["dist/server/index.js"], {
 		cwd: PROJ,
-		env: { ...process.env, PI_WEB_PORT: String(PORT) },
+		env: { ...process.env, PI_WEB_PORT: String(PORT), PI_CODING_AGENT_DIR: agentDir, PI_WEB_DATA_DIR: dataDir },
 		stdio: "ignore",
 	});
 	// Wait until the port actually listens (or the process died).
@@ -77,7 +89,7 @@ async function stopServer() {
 
 // Build first so web/dist is fresh.
 try {
-	execSync("npm run build", { cwd: PROJ, stdio: "ignore" });
+	if (!process.env.PI_TEST_PREBUILT) execSync("npm run build", { cwd: PROJ, stdio: "ignore" });
 } catch (err) {
 	console.error("build failed:", err.message);
 	process.exit(1);
@@ -121,7 +133,10 @@ await page.addInitScript(() => {
 
 await page.goto(URL);
 const connected = await page
-	.waitForFunction(() => document.querySelector(".conn-label")?.textContent?.includes("已连接"), { timeout: 15000 })
+	// The connection label moved to the footer as .status-conn-label (upstream FooterBar).
+	.waitForFunction(() => document.querySelector(".status-conn-label")?.textContent?.includes("\u5df2\u8fde\u63a5"), {
+		timeout: 15000,
+	})
 	.then(() => true)
 	.catch(() => false);
 check("initial connect", connected);
@@ -153,37 +168,45 @@ if (!(await startServer())) {
 	check("server restarted", true);
 }
 const recovered = await page
-	.waitForFunction(() => document.querySelector(".conn-label")?.textContent?.includes("已连接"), { timeout: 25000 })
+	.waitForFunction(() => document.querySelector(".status-conn-label")?.textContent?.includes("\u5df2\u8fde\u63a5"), {
+		timeout: 25000,
+	})
 	.then(() => true)
 	.catch(() => false);
 check("auto-reconnect after server restart", recovered);
 
-// ---- prompt round-trip after recovery (text-stability completion detector) ----
-const reply = await page.evaluate(async () => {
-	const ta = document.querySelector("textarea");
-	const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
-	setter.call(ta, "Reply with exactly: recovered");
-	ta.dispatchEvent(new Event("input", { bubbles: true }));
-	await new Promise((r) => setTimeout(r, 100));
-	const sendBtn = [...document.querySelectorAll("button")].find((b) => b.title === "发送（Enter）");
-	sendBtn.click();
-
-	const sample = () => {
-		const msgs = [...document.querySelectorAll(".msg")];
-		const last = msgs[msgs.length - 1];
-		return last?.getAttribute("data-role") === "assistant" ? last.textContent.trim() : null;
-	};
-	let prev = null;
-	const deadline = Date.now() + 120000;
-	while (Date.now() < deadline) {
-		await new Promise((r) => setTimeout(r, 1500));
-		const cur = sample();
-		if (cur && cur === prev && cur.length > 0) return cur.slice(0, 120);
-		prev = cur;
-	}
-	return null;
-});
-check("prompt round-trip after recovery", !!reply, JSON.stringify(reply?.slice(0, 60)));
+// ---- prompt round-trip after recovery ----
+// Type and send like a user (Playwright fills the box and presses Enter), then wait for the
+// stand-in model's answer. The old way set the textarea's value from page script and clicked the
+// send button by its title: React never saw that text, so the click sent nothing.
+const box = page.locator("textarea").first();
+await box.fill("Reply with exactly: recovered");
+await box.press("Enter");
+const reply = await page
+	.waitForFunction(
+		() => {
+			const msgs = [...document.querySelectorAll('.msg[data-role="assistant"]')];
+			const text = msgs[msgs.length - 1]?.textContent ?? "";
+			return text.includes("recovered") ? text.trim().slice(0, 120) : null;
+		},
+		null,
+		{ timeout: 60000 },
+	)
+	.then((h) => h.jsonValue())
+	.catch(() => null);
+check(
+	"prompt round-trip after recovery",
+	!!reply,
+	reply
+		? JSON.stringify(reply.slice(0, 60))
+		: JSON.stringify(
+				await page.evaluate(() =>
+					[...document.querySelectorAll(".msg")]
+						.slice(-3)
+						.map((m) => `${m.getAttribute("data-role")}: ${m.textContent.trim().slice(0, 80)}`),
+				),
+			),
+);
 
 check(
 	"no unexpected page errors",

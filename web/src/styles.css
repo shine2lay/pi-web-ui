@@ -14824,6 +14824,18 @@ button.source-default-toggle {
 			min-height: 30px;
 			justify-content: center;
 		}
+		/* Fork (sealed-tests, composer-overlap-test): icons can't shrink, and the left group now
+		   holds six of them (attach, templates, model, thinking, DSH permission, DSH preset =
+		   246px). On a phone (320-414px) while a run is going (queue|steer pill 82px + stop)
+		   they didn't fit: the chip wrappers were squeezed to 7-31px and the chips overlapped.
+		   Here the left group wraps to a second row instead; nothing overlaps or hides. */
+		.composer-tools-left {
+			flex-wrap: wrap;
+			row-gap: 4px;
+		}
+		.composer-tools-left > .dropdown {
+			flex-shrink: 0;
+		}
 	}
 	.topbar-flow {
 		gap: 6px;

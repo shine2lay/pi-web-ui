@@ -4,7 +4,7 @@
  * PI_TEST_REPO=<dir> 可改测指定工作树（默认本仓库）。
  */
 import { CHROME_PATH } from "./lib/chrome.mjs";
-import { portUp, freePort } from "./lib/port-utils.mjs";
+import { portUp, freePort, freeTcpPort } from "./lib/port-utils.mjs";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { execSync, spawn } from "node:child_process";
@@ -13,10 +13,11 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { revealTopbarItem } from "./lib/topbar.mjs";
 
 const MAIN_REPO = fileURLToPath(new globalThis.URL("../", import.meta.url));
 const REPO_ROOT = process.env.PI_TEST_REPO || MAIN_REPO;
-const PORT = 8931;
+const PORT = await freeTcpPort();
 
 let failures = 0;
 const check = (name, ok, extra = "") => {
@@ -26,7 +27,7 @@ const check = (name, ok, extra = "") => {
 
 // --- 0. build worktree ---
 console.log(`building ${REPO_ROOT}…`);
-execSync("npm run build", { cwd: REPO_ROOT, stdio: "ignore" });
+if (!process.env.PI_TEST_PREBUILT) execSync("npm run build", { cwd: REPO_ROOT, stdio: "ignore" });
 
 // --- 1. hang 假模型：GET 正常回（防启动刷新卡死），POST 永不回（制造 streaming） ---
 const hang = createServer((req, res) => {
@@ -170,6 +171,11 @@ try {
 	await mob.goto(`http://127.0.0.1:${PORT}`);
 	await mob.waitForSelector("textarea", { timeout: 20000 });
 	await sleep(1000);
+	// Our fork's server-owned-chats opens a new window on the latest chat, which here is the desktop
+	// page's running chat; upstream opens a fresh one. This step needs its own chat: start one with
+	// the top bar's "new chat" button (on a phone it may sit in the "..." menu, tests/lib/topbar.mjs).
+	await (await revealTopbarItem(mob, "button.chip.newchat:not(.ephemeral-chat-btn)")).click();
+	await mob.waitForFunction(() => document.querySelectorAll(".msg").length === 0, null, { timeout: 10000 });
 	await mob.locator("textarea").fill("主问题mobile（hang住）");
 	await mob.keyboard.press("Enter");
 	const mobStreaming = await mob
@@ -192,7 +198,12 @@ try {
 			await mob
 				.waitForFunction(() => document.querySelectorAll(".msg-queued").length === 0, null, { timeout: 10000 })
 				.catch(() => {});
-			check("手机端撤回落字", (await mob.locator("textarea").inputValue()) === "手机端一条");
+			const mobText = await mob.locator("textarea").inputValue();
+			check(
+				"\u624b\u673a\u7aef\u64a4\u56de\u843d\u5b57",
+				mobText === "\u624b\u673a\u7aef\u4e00\u6761",
+				JSON.stringify(mobText),
+			);
 		}
 	}
 

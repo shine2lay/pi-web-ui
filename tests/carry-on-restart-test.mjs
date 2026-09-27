@@ -34,14 +34,15 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import WebSocket from "ws";
 
 const PORT = Number(process.argv[2] || 30000 + Math.floor(Math.random() * 10000));
 const MOCK_PORT = PORT + 1;
-const PI_QUEUE = process.env.PI_QUEUE_PKG ?? join(homedir(), "projects", "pi-queue");
+// The account's home (userInfo), not HOME: a sealed test run has a temp HOME.
+const PI_QUEUE = process.env.PI_QUEUE_PKG ?? join(userInfo().homedir, "projects", "pi-queue");
 if (!existsSync(join(PI_QUEUE, "package.json"))) {
 	console.log(`✗ FAIL: pi-queue not found at ${PI_QUEUE} (set PI_QUEUE_PKG)`);
 	process.exit(1);

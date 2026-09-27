@@ -6,6 +6,7 @@
  * Run: npm run build && node lazy-window-test.mjs */
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { spawn } from "node:child_process";
+import { noRetries } from "./lib/mock-model.mjs";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -40,6 +41,9 @@ writeFileSync(
 process.env.PI_WEB_PORT = String(PORT);
 process.env.PI_WEB_CWD = workdir;
 process.env.PI_WEB_DATA_DIR = dataDir;
+// pi retries a failed model call by default; the fast-fail model must fail at once, or every
+// seeded prompt queues behind the retries and the seeding times out.
+noRetries(agentDir);
 process.env.PI_CODING_AGENT_DIR = agentDir;
 const CLIENT_ID = "lazy-window-test-client";
 // 每条约 12000 字 → 渲染高度几千 px，足以撑出缓冲带
@@ -191,6 +195,9 @@ async function main() {
 	check("far-away messages collapsed while reading the top", afterScrollPh > 0);
 
 	// 搜索打开期间强制全渲染（兼容 Range 收集 / DOM 高亮）
+	// Ctrl+F is left to the browser while typing (MessageList skips it in the message box, which
+	// has focus after load), so step out of the box first, as a reader would.
+	await page.evaluate(() => document.activeElement?.blur?.());
 	await page.keyboard.press("Control+f");
 	await page.waitForSelector(".search-bar", { timeout: 5000 });
 	await sleep(400);

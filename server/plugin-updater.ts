@@ -348,8 +348,13 @@ export async function checkPluginUpdates(
 	return out;
 }
 
+/** The last stamp's time: two backups in the same millisecond got the same folder name, so the
+ * second one overwrote the first and pruning kept one fewer (the "expected 2 to be 3" flake). */
+let lastStampMs = 0;
+
 function stamp(): string {
-	const d = new Date();
+	lastStampMs = Math.max(Date.now(), lastStampMs + 1);
+	const d = new Date(lastStampMs);
 	const p = (x: number, n = 2) => String(x).padStart(n, "0");
 	return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}${p(d.getMilliseconds(), 3)}`;
 }

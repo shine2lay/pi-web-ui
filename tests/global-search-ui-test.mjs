@@ -52,6 +52,11 @@ async function run() {
 	page.on("pageerror", (e) => console.log("pageerror:", e.message));
 	await page.goto(BASE);
 	await page.waitForSelector(".topbar", { timeout: 15000 });
+	// Wait for the server's state (the status bar shows the project folder): a search typed before
+	// the connection is up is sent into the void and never repeated.
+	await page.waitForFunction(() => document.querySelector(".status-cwd")?.textContent?.includes("proj"), null, {
+		timeout: 15000,
+	});
 
 	// 1) 顶栏搜索按钮存在且点击打开弹窗
 	const searchBtn = page.locator(".topbar .chip", { hasText: "搜索" }).first();
@@ -68,11 +73,17 @@ async function run() {
 
 	// 3) 点击文件 → 打开文件预览
 	await page.locator(".gs-item", { hasText: "alpha-util.ts" }).first().click();
-	await page.waitForSelector(".fp-modal, .file-preview, [class*=fp-]", { timeout: 5000 }).catch(() => {});
-	const previewVisible = await page.locator("text=alpha-util.ts").count();
+	// The preview is FilePreview's .fp-overlay (web/src/components/FilePreview.tsx), titled with the file.
+	await page.waitForSelector(".fp-overlay", { timeout: 5000 }).catch(() => {});
+	const previewVisible = await page.locator(".fp-overlay", { hasText: "alpha-util.ts" }).count();
 	check("点击后打开文件预览", previewVisible > 0);
+	// Escape closes the search window, which stays open over the preview. Then close the preview
+	// with its close button: it covers the page, including the message box's model chip (step 5).
 	await page.keyboard.press("Escape");
-	await sleep(300);
+	await page.waitForSelector(".gs-modal", { state: "detached", timeout: 5000 }).catch(() => {});
+	await page.locator(".fp-overlay .fp-close").first().click();
+	await page.waitForSelector(".fp-overlay", { state: "detached", timeout: 5000 }).catch(() => {});
+	check("the preview closes", (await page.locator(".fp-overlay").count()) === 0);
 
 	// 4) Ctrl+K 开关
 	await page.keyboard.press("Control+k");
@@ -83,7 +94,9 @@ async function run() {
 	check("再次 Ctrl+K 关闭弹窗", (await page.locator(".gs-modal").count()) === 0);
 
 	// 5) 模型下拉搜索框
-	await page.locator(".topbar .dropdown .chip").first().click();
+	// The model picker moved from the top bar into the message box (upstream ChatInput
+	// "host:composer-model"); its chip holds a .chip-model label.
+	await page.locator(".chip-model").first().click();
 	await page.waitForSelector(".dd-search", { timeout: 3000 }).catch(() => {});
 	check("模型下拉出现搜索框", (await page.locator(".dd-search").count()) > 0);
 

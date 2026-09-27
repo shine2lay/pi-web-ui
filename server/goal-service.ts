@@ -659,7 +659,9 @@ export class GoalService {
 							"goal.wizard.question.title",
 							{ qStep: qStep, "params.question": params.question },
 						);
-						const optionsJoined = params.options!.join(" / ");
+						// An open question has no options: joining them threw, so every open question failed
+						// and the wizard went on with an error instead of the user's answer.
+						const optionsJoined = isChoice ? params.options!.join(" / ") : "";
 						const choiceSuffixZh = isChoice ? `【${optionsJoined}】` : "";
 						const choiceSuffixEn = isChoice ? ` [${optionsJoined}]` : "";
 						await this.pushWizardCard(

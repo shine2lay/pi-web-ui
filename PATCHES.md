@@ -53,6 +53,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | dangling-tail-only           | `local`        | `server/dangling-tools.ts`, `agent-service.ts`, `tests/unit/dangling-tools.test.ts`, `tests/dangling-tail-test.mjs`                           |
 | lazy-images                  | `local`        | `server/image-meta.ts`, `chat-image.ts`, `serialize.ts`, `agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/components/ChatImage.tsx`, `chat-image.ts` |
 | carry-on                     | `local`        | `server/running-chats.ts`, `agent-service.ts`, `client-state.ts`, `index.ts`, `scheduler-tasks.ts`, `tests/carry-on-restart-test.mjs`, `tests/unit/` |
+| sealed-tests                 | `local`        | `scripts/sealed.sh`, `sealed-summary.mjs`, `check.sh`, `tests/lib/sealed-fence.cjs`, `tests/run-sealed.mjs`, `tests/lib/`, `vitest.config.ts`, `tests/*-test.mjs`, 6 处测试查出的 bug |
 
 ---
 
@@ -66,7 +67,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
   `Environment=PI_WEB_ALLOW_HOSTS=pi.wai2shine.com,spark.tailbb5055.ts.net,127.0.0.1,localhost`。名单是严格的
   （写了就只认名单），所以回环的名字也要写上。WS 的 Origin 检查（Origin 的 host:port 要等于 Host）也用它。
 - **SDK**：`package.json` 里 pi-coding-agent 改成 `>=0.85.1`，锁文件是 0.87.1。`resolve-global-sdk` 只在机器上的
-  pi 更新时才跟过去，所以服务跑的是自带的 0.87.1（命令行 `pi` 仍是 0.85.1）。扩展都照常加载。
+  pi 更新时才跟过去，所以服务跑的是自带的 0.87.1（命令行 `pi` 2026-09-27 也升到了 0.87.1）。扩展都照常加载。
 - **工具批准**（新功能，`server/tool-approval.ts` + `server/approval-rules.ts`）：删文件、force push、写工作区外的
   文件等要先点批准，上游默认**开**。本机的全局设置里关掉（`toolApprovalEnabled: false`），跟同步前一样：
   排队任务、定时唤醒这些没人看着的对话不会卡在批准框上。想要的话在设置里打开。
@@ -2332,6 +2333,111 @@ tool_result；这条坏记录已经落盘，所以对话从此发不出去。上
 
 ---
 
+## sealed-tests
+
+测试一律在密封的临时家目录里跑，碰不到真的对话、真的模型和真的数据。主人的规矩（2026-09-26）：测试绝不碰真对话；
+要用真对话就拷一份临时的，用完就删。
+
+### 以前的问题
+
+- ~180 个 E2E 脚本里 104 个不设 `PI_CODING_AGENT_DIR`、35 个不设 `PI_WEB_DATA_DIR`：一次全量往真的
+  `~/.pi/agent/sessions` 里留几十个 `--tmp-*` 文件夹，有的还读写正在跑的服务的 `~/.pi-web-ui`。
+- 几个测试用真的模型（`questionnaire`、`title-jsonl`、`supplement`、`goal-review-loop` 等），跑一次花真 token。
+- `check.sh` 要手动加 `TZ=UTC`；`plugin-updater` 的 prune 偶发失败。
+
+### 做法
+
+这台机器开不了沙箱（bwrap / unshare 建不了 user namespace，要管理员改设置，2026-09-26 查过），所以
+密封 = 环境变量 + node 里的一道栅栏：
+
+- `scripts/sealed.sh [--report] [--keep] <命令>`：在一个临时根目录下建新的 `HOME`、`PI_CODING_AGENT_DIR`、
+  `PI_WEB_DATA_DIR`、`TMPDIR`，用 `env -i` 加白名单起命令（不带任何模型的 key）。跑完停掉命令留下的进程、
+  删掉临时根目录，报告真 sessions 列表里新出现的文件夹（`scripts/sealed-summary.mjs` 写总结、定退出码）。
+  临时 pi 文件夹里放一个连不上的替身模型（`fastfail`，重试关掉），不然页面会弹首次配置窗口、挡住点击；
+  `PI_SEALED_MODEL=none` 就不放。已经在密封里时直接跑命令。
+- 栅栏 `tests/lib/sealed-fence.cjs`（经 `NODE_OPTIONS=--require` 加载，所以每个 node 子进程都带着）：碰真的
+  `~/.pi`、`~/.pi-web-ui`、`~/.pi-scheduler` 的 fs 调用直接抛错并写出路径（`--report` 只记录不拦）；已装的扩展
+  代码（`~/.pi/agent/npm`、`~/.pi/agent/git`）只能读；不许连正在跑的服务的端口；不许在真文件夹里起程序。
+  命中一次，整个命令就算失败（退出码 97）。
+- `scripts/check.sh` 自己设 `TZ=UTC`，并且总是经过 `sealed.sh`。
+- `tests/unit/setup-temp-pi-dirs.ts`（`vitest.config.ts` 的第一个 setupFile）：不经过 sealed.sh、直接
+  `npx vitest` 时，每个测试文件也拿到自己的临时 pi / 数据目录。
+- `tests/run-sealed.mjs`：所有 E2E 脚本，每个一个独立的密封家目录，并行跑（`--jobs`）。用同一个固定端口的脚本
+  （也算 `MOCK_PORT = PORT + 1` 这种推出来的，和 `SITE = 8972` 这种别的固定服务）不同时跑。每个脚本的输出和
+  栅栏摘要写到 `--out` 目录。全量时跳过不适用本 fork 的上游测试并写明原因（`NOT_FOR_THIS_FORK`，见下）。
+- `tests/lib/real-chat-clone.mjs`：`cloneRealChat()` 把一个真对话（连同 `.acp.json`）通过栅栏的只读小门拷进
+  密封家目录，跟着这次运行一起删掉；不在密封里就拒绝。
+- 测试公共件：`tests/lib/mock-model.mjs`（假模型：脚本化回复、工具调用、目标向导问答 `wizardReply`、
+  `noRetries`）；`tests/lib/own-server.mjs`（用自己的临时目录、端口和假模型起 `dist/server`）；
+  `tests/lib/topbar.mjs`（`topbar-crowding` 和上游 ui-slots 把设置、浏览器控制、版本号等收进了「…」菜单，
+  测试经它去点）；`tests/lib/port-utils.mjs` 的 `freeTcpPort()`（系统给的空闲端口）；`tests/lib/chrome.mjs`
+  （从账户主目录找 playwright 的 headless shell；浏览器语言固定 `zh_CN`，因为测试找的是中文标签，
+  `PI_TEST_BROWSER_LANGUAGE` 可改）。
+- pi-queue（8c43863）、pi-tldr（5973b5a）、pi-image-trim（be30e3f）的测试也改成在密封里跑。
+
+### 测试顺带查出来的 bug（代码已修）
+
+- `server/goal-service.ts`（上游 2739ef8）：目标向导的 `goal_ask` 遇到开放题（没有选项）时
+  `params.options!.join` 抛错，向导拿到的是报错而不是用户的回答。
+- `server/plugin-updater.ts` 的 `stamp()`：同一毫秒的两次备份同名，第二份盖掉第一份，prune 就少一份
+  （那个「expected 2 to be 3」）。新单测「backups made in the same millisecond each get their own folder」。
+- `server/agent-service.ts`：会话列表有 3 秒缓存，一轮在打开历史列表后 3 秒内结束，就会重推旧列表，新对话要等
+  下一轮才出现在历史里（`title-jsonl-test` 换成快的假模型后查出来）。
+- `web/src/components/scroll-classify.ts` + `MessageList.tsx`：大对话里一轮结束时页面忙，用户向上一滑会变成一次
+  ≥500px 的滚动事件，被当成布局收缩，流结束时的吸底又把人拉回底部。现在记住用户自己的向上操作（滚轮、手指
+  下拖、PageUp / ↑ / Home），500ms 内的向上移动一律算离开底部。单测在 `tests/unit/scroll-classify.test.ts`。
+  上游的 `scroll-attr-collapse-test` 在上游构建上过，是因为那边新到的消息根本不进这一页；`server-owned-chats`
+  下会进来。
+- `web/src/styles.css`：手机宽度（320–414px）跑着一轮时，输入框左边六个图标挤不下、互相压住；现在换行。
+- `plugins/mermaid/client/entry.mjs`：Mermaid 12 的深色主题默认用渐变边框（`useGradient: true`），不理
+  `nodeBorder`，所有深色主题的节点边框都是同一种灰；关掉后用主题的强调色。
+
+### 测试的改法
+
+只修不删、不放水。几类：
+
+- 改用自己的临时目录 + 假模型（原来用真目录或真模型）：`questionnaire`、`title-jsonl`、`supplement`、`freeze`、
+  `goal-wizard`、`goal-wizard-cancel`、`goal-review-loop`、`goal-abort`、`goal-autostart`、`tool-status`、
+  `commands`、`edit-reask`、`file-upload`、`image-paste`、`live`、`projects`、`ws-session`。
+- 找账户主目录下的东西（扩展代码等）用 `userInfo().homedir`，不用 `HOME`（密封里 HOME 是临时的）。
+- 固定端口改成 `freeTcpPort()`：并行时会互相杀掉对方的服务，8931 在本机被 Docker 占着。
+- 种子对话要等模型出错那条消息的，给替身模型关掉重试（`noRetries`）：`lazy-window`、`scroll-*`。
+- 上游改了界面、测试没跟上的（纯 v0.96.1 上一样挂）：顶栏「…」菜单、第二个隐藏的文件输入框、目标栏、声音设置
+  7 行、模型选择器搬进输入框、连接状态搬到底栏、`composer-overlap` 的药丸宽度、`notes-ui` 的新图标、
+  `vision-bridge-ui` 的系统提示词模板、`scroll-stick` 的输入框长高（现在由 ChatInput 处理，测试改成真的打字）等。
+- 本 fork 的行为：`terminal-smoke`（`terminal-view-lifecycle`：退出的终端先关掉再同名新建）、`terminal-browser`
+  （留下用过的那个终端，对话才留在列表里）、`conv-cross-project`（打开 `PI_WEB_UI_CHAT_FOLLOWS_CWD=1`）、
+  `conv-group-flash`（按 `flat-recent-chats` 重写）、`panel-layout`、`ui-layout-ui`（本 fork 的右栏标签）、
+  `projects`（`no-cwd-restore`）。
+- 时序：固定的等待换成等条件（`panel-layout`、`global-search-ui`）；`goal-wizard-switch` 按转录文件切回第一轮的
+  对话（空闲的对话在新建对话后会被卸下，旧的内存 id 就没了；纯 v0.96.1 上一样时好时坏）；`prompt-templates`
+  跑完显式退出（服务的管道让它挂到超时）。
+- `spawn-helper-test`：node-pty 只在 macOS 上带 spawn-helper，别的平台打印 SKIP、退出 0。
+
+`tests/run-sealed.mjs` 全量时跳过这 7 个（点名跑照样跑；文件保持上游原样，同步时不冲突）：
+
+- `takeover`、`idle-takeover`、`remote-answer`、`elsewhere-lifecycle`、`elsewhere-click-takeover-ui`：测上游的
+  「一条对话属于一个窗口」（过户、elsewhere 行、跨页作答）；`server-owned-chats` 下对话归服务端，没有 elsewhere 行。
+- `orphan-adopt`：`reload-adopt` 让刷新的页面回到自己的对话，不领养孤儿。
+- `model-config-ui`：上游的模型工作室取代了它驱动的那个弹窗，纯 v0.96.1 上也挂。
+
+### 怎么跑
+
+- 类型检查、lint、单测、构建：`scripts/check.sh`（已经密封、已经 UTC）。
+- 全部 E2E：`node tests/run-sealed.mjs`（默认 6 个并行，先构建；2026-09-27 用 `--jobs=4 --no-build` 跑完 173 个约 6 分钟）；只跑几个就把名字写在后面，
+  构建是新的就加 `--no-build`。
+- 任意命令：`scripts/sealed.sh env PI_TEST_PREBUILT=1 node tests/xxx-test.mjs`；`--report` 只记录不拦，
+  `--keep` 留下临时目录。
+
+### 回归
+
+- `tests/unit/sealed-fence.test.ts`（16 项：读写删、ESM 导入、子进程、扩展代码只读、符号链接、活端口、克隆小门、
+  sealed.sh 本身）。
+- 2026-09-27：`TZ=UTC scripts/check.sh` 连过两次，不带 TZ 也过；`run-sealed` 全量 173/173 过、7 个跳过、
+  0 次栅栏命中；真 sessions 列表没有多出文件夹。
+
+---
+
 ## 已退役的补丁
 
 同步时删掉的补丁在这里留一笔，下次同步不用再查它们为什么没了。
@@ -2361,54 +2467,16 @@ tool_result；这条坏记录已经落盘，所以对话从此发不出去。上
 
 下次同步先对照这里：失败原因还是这里写的那个，就不是同步引入的。
 
-- **`scripts/check.sh` 要在 UTC 下跑**（`TZ=UTC scripts/check.sh`）：上游的
-  `tests/unit/notes-plugin.test.ts` 有两条用例把 UTC 的 ISO 字符串当本地时间读，非 UTC 时区必挂
-  （v0.94.1 上实测）。本 fork 不碰那段代码。`check.sh` 是 `set -e`，挂在单测就不会跑到构建。
-- `tests/unit/plugin-updater.test.ts` 的「prune 保留最近 N 份」偶尔挂（`expected 2 to be 3`）：一个紧循环里备份 4 次，
-  备份名按时间戳取，撞上同一个戳就少一份。上游的测试和代码，本 fork 没碰；单独重跑就过（2026-09-26）。
-- **`node tests/run-smoke.mjs`**（不在 `check.sh` 里，同步时手动跑）：v0.96.1 上 68/77 过。9 个失败
-  2026-09-26 逐个核对过，都不是这次同步引入的：
-  - `tests/takeover-test.mjs`、`tests/idle-takeover-test.mjs`、`tests/remote-answer-test.mjs`，以及 v0.95.0 新加的
-    `tests/elsewhere-lifecycle-test.mjs`：测上游的单 owner 功能（手动过户、空闲持有时新标签页空白落地、
-    跨页作答、elsewhere 行的生命周期），都靠左栏的 elsewhere 行。
-    `server-owned-chats` 下 `listExternalRunning()` 恒为空（共享表上那条对话本来就在自己的列表里），
-    `reload-adopt` 让新标签页直接打开已经开着的那条，`ask-question-delivery` 让问卷在所有在线窗口
-    弹出（用户的选择）。elsewhere-lifecycle 在纯 v0.96.1 上过，挂在「等 elsewhere 行」超时。
-  - `tests/orphan-adopt-test.mjs`：`reload-adopt` 刻意不调用 `findAdoptableOrphan()`（见该节）。
-  - `tests/conv-cross-project-test.mjs`：断言上游的「切对话跟着切工作区」，`chat-cwd-pin` 故意关掉了它；
-    `PI_WEB_UI_CHAT_FOLLOWS_CWD=1` 下 ALL PASS（v0.96.1 上复验）。
-  - `tests/terminal-smoke-test.mjs` 的 3 项（其余 52 项过）：
-    - 「persisted session appears in the conversation list」：这个测试不隔离 agent 目录，往真的
-      `~/.pi/agent/sessions` 里造一个会话文件（退出时删掉），发 `list_sessions` 后只等 1 秒。`global-history`
-      默认扫**所有**文件夹，真机上 1 秒扫不完。`PI_WEB_UI_HISTORY_SCOPE=project` 下这项过（已验）。
-    - 「exited terminal name can be reused」：`terminal-view-lifecycle` 让 `terminal_create` 走 `openView`，
-      已退出的终端只展示、不重起进程（看一眼不该重启它），所以同名再建不会有新 shell。
-    - 「run_command enforces terminal limit」：上一项的连带，少了那个重起的终端，只有 15 个活的，没到 16 的上限。
-    - 这 3 项在同步前的 mine（9a40cb1，v0.94.1 基线）上失败得一模一样，纯 v0.96.1 上全过。以前这里没记，
-      reload-adopt 那节「49 checks 全过」是更早的状态。
-  - `tests/plugin-http-test.mjs`：插件 HTTP 路由全是 404（5 项），纯 v0.96.1 上一模一样，不是本 fork 引入的。
-  - `tests/token-auth-test.mjs`：`--jobs=4` 并行时挂了两项（换 token 后的 200），单独跑全过：负载下的时序抖动。
-- 不在 run-smoke 里的浏览器测试（v0.94.1 上核对过，v0.96.1 没重跑）：
-  - `tests/conv-group-flash-test.mjs`：断言上游按项目分的左栏「全程只有一行」；`flat-recent-chats`
-    把所有项目的对话排成一条扁平列表，切到 B 聊一句后就有两行。同步前的构建（0ce96b5）上失败得
-    一模一样。
-  - `tests/scroll-attr-collapse-test.mjs`：种对话就超时（`seed timeout`），纯上游 v0.94.1（9fa8905）上一样
-    （2026-09-24 实测），不是本 fork 引入的。
-  - `tests/lazy-window-test.mjs`：同样是种对话就超时。种对话的脚本每发一条 prompt 就等模型出错的那条
-    助手消息（fastfail 模型连不上），现在每条 prompt 只追加用户消息，数到 37 就停了（要 38）。
-    exchange-digest 之前的 28fab8f 上失败得一模一样（2026-09-24 实测）。
-  - `tests/questionnaire-test.mjs`：**别当冒烟跑**。它不设 `PI_CODING_AGENT_DIR` 和 `PI_WEB_DATA_DIR`，用的是
-    真的 `~/.pi/agent`（默认模型、所有扩展）和正在跑的服务的 `~/.pi-web-ui`，会花真 token（2026-09-25 误跑
-    一次：claude-opus-4-8 一轮，约 8.9 万 token 写缓存）。那次卡在等 `.dialog-title`（30 秒超时），不是
-    queue-panel 引起的（`Dialog.tsx` 只改了确认框的正文）；为了不再花 token，没在改动前的构建上复跑。
-- **冒烟会往真的 `~/.pi/agent/sessions` 里写**：很多上游测试不设 `PI_CODING_AGENT_DIR`，一次全量会留下几十个
-  空的 `--tmp-*` 文件夹（2026-09-26 一次 31 个）。跑完只清当天的空文件夹：
-  `find ~/.pi/agent/sessions -maxdepth 1 -type d -name '--tmp-*' -empty -newermt <今天> -delete`。
-- 本 fork 自己的 E2E 在 v0.96.1 上逐个按名字跑，全过：`server-owned-chats-test`、`cross-client-session-test`、
-  `chat-pagination-test`、`exchange-fold-test`、`exchange-digest-test`、`done-any-chat-test`、`todo-list-owner-test`、
-  `single-load-test`、`tldr-panel-test`、`tldr-sidebar-test`、`switch-cache-test`、`switch-ack-test`、
-  `switch-open-burst-test`（v0.96.1 新加）、`queue-panel-test`、`per-chat-dialogs-test`、`image-aside-acp-test`、
-  `busy-endpoint-test`、`collapse-test`、`subagent-ui-context-test`、`rewind-to-here-test`、
-  `no-active-chat-crash-test`。`tldr-panel-test` 和 `todo-list-owner-test` 在一批里偶尔挂一次，重跑就过（时序）。
+- 测试怎么跑、哪些上游测试不适用本 fork：见 `sealed-tests`。`scripts/check.sh` 自己设 `TZ=UTC`（上游的
+  `tests/unit/notes-plugin.test.ts` 有两条用例把 UTC 的 ISO 字符串当本地时间读，非 UTC 时区必挂），
+  并且总在密封里跑。`plugin-updater` 的 prune 偶发失败（`expected 2 to be 3`）已修：同一毫秒的两份备份同名。
+- 全部 E2E 用 `node tests/run-sealed.mjs` 跑。它取代 `tests/run-smoke.mjs`：那个不密封，会往真的
+  `~/.pi/agent/sessions` 里留 `--tmp-*` 文件夹，`questionnaire-test` 还会花真 token（2026-09-25 误跑过一次）。
+  2026-09-27 在 v0.96.1 + 本 fork 上 173/173 过，7 个跳过，0 次栅栏命中。以前记在这里的失败都修了或进了跳过名单：
+  - 跳过（原因见 `sealed-tests`）：`takeover`、`idle-takeover`、`remote-answer`、`elsewhere-lifecycle`、
+    `elsewhere-click-takeover-ui`、`orphan-adopt`、`model-config-ui`。
+  - 修好了：`conv-cross-project`、`terminal-smoke`（55 项全过）、`conv-group-flash`、`scroll-attr-collapse`、
+    `lazy-window`、`questionnaire`，以及 v0.96.1 上因为上游改界面而过时的一批浏览器测试（纯 v0.96.1 上一样挂）。
+  - `plugin-http-test`、`token-auth-test`：密封、端口不撞之后都过。
 - 「上游修好了就删」的两个补丁在纯 v0.96.1 上用它们自己的单测复查过，都还挂：`terminal-view.test.ts`
   （11 项挂，`tm.note is not a function` 等）、`mute-mcp-restart-nag.test.ts`（3 项挂，重启提示照弹），两个都留着。

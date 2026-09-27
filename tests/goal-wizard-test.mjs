@@ -1,27 +1,25 @@
 /**
- * Goal wizard — live smoke test.
+ * Goal wizard — smoke test.
  *
  * Drives the collaborative target wizard over raw WebSocket: sends a raw
  * requirement, answers each dialog question (goal_ask) it pushes via
  * `dialog_response`, and verifies the refined goal gets auto-set.
- * Requires a working model (real LLM calls, small cost).
+ *
+ * Runs on its own server (tests/lib/own-server.mjs) with the stand-in model (tests/lib/mock-model.mjs):
+ * the wizard session asks two goal_ask questions (one multiple choice, one open) and then answers
+ * "GOAL: …", like a real model would. No real model is called.
+ * Usage: npm run build && node tests/goal-wizard-test.mjs
  */
-import { portUp, freePort } from "./lib/port-utils.mjs";
-import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
-import { spawn } from "node:child_process";
-import { execSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
-const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
+import { textOf, wizardReply } from "./lib/mock-model.mjs";
+import { ownServer } from "./lib/own-server.mjs";
 
 /* eslint-env node */
 
-const PORT = 8905;
-const PROJ = REPO_ROOT;
+// The kick-off message: "[Goal set]" in the server's prompt language (goal-service.ts), "【目标已设定】" in Chinese.
+const isKickoff = (text) => text.startsWith("[Goal set]") || text.startsWith("【目标已设定】");
+const GOAL = "写一个 Python 命令行文件去重小工具：按内容哈希找出重复文件并列出，附带测试。";
 
 let failures = 0;
 function check(name, ok, extra = "") {
@@ -29,35 +27,17 @@ function check(name, ok, extra = "") {
 	if (!ok) failures++;
 }
 
-const server = spawn("node", ["dist/server/index.js"], {
-	cwd: PROJ,
-	env: {
-		...process.env,
-		PI_WEB_PORT: String(PORT),
-		PI_WEB_DATA_DIR: mkdtempSync(join(tmpdir(), "pi-web-wiz-")),
-		PI_WEB_CWD: PROJ,
-	},
-	stdio: ["ignore", "ignore", "pipe"],
+const srv = await ownServer({
+	name: "goal-wizard-test",
+	mock: ({ payload, sideRequest }) =>
+		wizardReply(payload, {
+			questions: [{ question: "用什么语言写？", options: ["Python", "Node.js"] }, { question: "还有别的要求吗？" }],
+			goal: GOAL,
+		}) ?? (sideRequest ? "文件去重" : "好的，开始。"),
 });
-server.stderr?.on("data", (d) => process.stderr.write("[srv] " + d.toString()));
-
-async function waitUp() {
-	for (let i = 0; i < 60; i++) {
-		await sleep(250);
-		try {
-			if (!(await portUp(PORT))) throw new Error("port not up");
-			return;
-		} catch {
-			/* retry */
-		}
-	}
-	throw new Error("no server");
-}
 
 (async () => {
-	await waitUp();
-	await sleep(400);
-	const ws = new WebSocket(`ws://localhost:${PORT}/ws`);
+	const ws = new WebSocket(srv.ws);
 	const inbox = [];
 	const waiters = [];
 	ws.on("message", (d) => {
@@ -131,13 +111,13 @@ async function waitUp() {
 			setGoalSeen = msg.status.goal;
 			console.error(`[d] goal set: ${msg.status.goal.slice(0, 60)}`);
 			// After goal set, the wizard should AUTO-KICK generation (no "开始吧").
-			// Wait a few seconds for the kick-off user message (# it's the marker
-			// text injected by startGoalWizard) to appear in a snapshot.
+			// Wait for the kick-off user message (the marker text injected by
+			// startGoalWizard) to appear in the conversation. Snapshot protocol v2 sends
+			// changes as snapshot_delta, so ask for full snapshots (get_state) meanwhile.
+			const poll = setInterval(() => ws.send(JSON.stringify({ type: "get_state" })), 700);
 			try {
-				const snap = await next(
-					(m) =>
-						m.type === "snapshot" &&
-						m.state.messages.some((mm) => (mm.content?.[0]?.text ?? "").startsWith("【目标已设定】")),
+				await next(
+					(m) => m.type === "snapshot" && m.state.messages.some((mm) => mm.role === "user" && isKickoff(textOf(mm))),
 					"auto-generate kick-off user message",
 					30000,
 				);
@@ -145,14 +125,18 @@ async function waitUp() {
 				console.error("[d] auto-generate kicked off ✓");
 			} catch {
 				kickOffSeen = false;
+			} finally {
+				clearInterval(poll);
 			}
 		}
-		if (msg.type === "snapshot" && kickOffSeen) break;
+		if (kickOffSeen) break;
 	}
 	await sleep(300);
 
 	check("wizard went active (asked questions)", sawWizardActive, `answered=${answered}`);
+	check("wizard asked both questions", answered === 2, `answered=${answered}`);
 	check("refined goal auto-set", Boolean(setGoalSeen), setGoalSeen || "none");
+	check("the goal is the wizard's refined one", setGoalSeen === GOAL, setGoalSeen || "none");
 	check("auto-generated after survey (no manual 开始吧)", kickOffSeen);
 	if (!setGoalSeen) {
 		const g = inbox.find((m) => m.type === "goal_status");
@@ -160,19 +144,11 @@ async function waitUp() {
 	}
 
 	console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
-	try {
-		ws.close();
-		server.kill("SIGTERM");
-	} catch {
-		/* ignore */
-	}
+	ws.close();
+	await srv.stop();
 	process.exit(failures === 0 ? 0 : 1);
-})().catch((e) => {
+})().catch(async (e) => {
 	console.error("ERR", e);
-	try {
-		server?.kill("SIGTERM");
-	} catch {
-		/* ignore */
-	}
+	await srv.stop();
 	process.exit(1);
 });

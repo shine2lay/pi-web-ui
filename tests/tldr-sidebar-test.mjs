@@ -24,7 +24,7 @@ import { CHROME_PATH } from "./lib/chrome.mjs";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -32,7 +32,8 @@ import { chromium } from "playwright-core";
 const PORT = 30000 + Math.floor(Math.random() * 10000);
 const MOCK_PORT = PORT + 1;
 const REPO = fileURLToPath(new URL("..", import.meta.url));
-const PI_TLDR = process.env.PI_TLDR_PKG ?? join(homedir(), "projects", "pi-tldr");
+// The account's home (userInfo), not HOME: a sealed test run has a temp HOME.
+const PI_TLDR = process.env.PI_TLDR_PKG ?? join(userInfo().homedir, "projects", "pi-tldr");
 if (!existsSync(join(PI_TLDR, "package.json"))) {
 	console.log(`✗ FAIL: pi-tldr not found at ${PI_TLDR} (set PI_TLDR_PKG)`);
 	process.exit(1);

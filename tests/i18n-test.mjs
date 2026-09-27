@@ -3,6 +3,7 @@
  * Run:  npm run build && node i18n-test.mjs */
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { freePort } from "./lib/port-utils.mjs";
+import { closeTopbarPanel, openTopbarPanel, topbarItemText } from "./lib/topbar.mjs";
 import { spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -95,15 +96,19 @@ async function main() {
 	await dismissModalIfOpen();
 	const zhNewChat = await page.locator(".lp-new-chat-action").getAttribute("aria-label");
 	check(`default UI is Chinese ("新对话")`, zhNewChat?.includes("新对话"));
+	// The language chip is on the bar upstream; our fork's topbar-crowding keeps it in the "..."
+	// menu, where the row reads "语言 · 中" and opens the same list in a drawer (tests/lib/topbar.mjs).
 	const langDropdownZh = page.locator(".topbar-flow .dropdown").filter({ hasText: "中" });
-	const zhLangChip = await langDropdownZh.locator(".chip-sub").textContent();
+	const LANG_ENTRY = /语言|Language/;
+	const zhLangChip = await topbarItemText(page, { bar: langDropdownZh.locator(".chip-sub"), entry: LANG_ENTRY });
 	check(`language chip shows "中"`, zhLangChip?.includes("中"));
 
 	// -- switch to English ----------------------------------------------------
-	await langDropdownZh.locator("button.chip").click();
+	await openTopbarPanel(page, { bar: langDropdownZh.locator("button.chip"), entry: LANG_ENTRY });
 	await page.waitForSelector(".dd-item:has-text('English')", { timeout: 3000 });
 	await page.locator(".dd-item:has-text('English')").click();
 	await sleep(400);
+	await closeTopbarPanel(page);
 
 	const enNewChat = await page.locator(".lp-new-chat-action").getAttribute("aria-label");
 	check(`UI switched to English ("New chat")`, enNewChat?.includes("New chat"));
@@ -127,10 +132,11 @@ async function main() {
 
 	// -- switch back to Chinese -----------------------------------------------
 	const langDropdownEn = page.locator(".topbar-flow .dropdown").filter({ hasText: "EN" });
-	await langDropdownEn.locator("button.chip").click();
+	await openTopbarPanel(page, { bar: langDropdownEn.locator("button.chip"), entry: LANG_ENTRY });
 	await page.waitForSelector(".dd-item:has-text('中文')", { timeout: 3000 });
 	await page.locator(".dd-item:has-text('中文')").first().click();
 	await sleep(400);
+	await closeTopbarPanel(page);
 	const zhAgain = await page.locator(".lp-new-chat-action").getAttribute("aria-label");
 	check(`switched back to Chinese`, zhAgain?.includes("新对话"));
 

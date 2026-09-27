@@ -6,6 +6,14 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
+# Always the same clock zone (some date tests, e.g. notes-plugin.test.ts, expect UTC), and always
+# sealed: every step runs in a temp home with no model keys, so no test can touch real chats
+# (scripts/sealed.sh; it just runs the command when we are already inside a sealed run).
+export TZ=UTC
+if [ -z "${PI_SEALED:-}" ]; then
+	exec scripts/sealed.sh "$0" "$@"
+fi
+
 fast=false
 [ "${1:-}" = "--fast" ] && fast=true
 

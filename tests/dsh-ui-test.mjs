@@ -10,6 +10,7 @@
  */
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { portUp } from "./lib/port-utils.mjs";
+import { revealTopbarItem, SETTINGS_CHIP } from "./lib/topbar.mjs";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { spawn } from "node:child_process";
@@ -91,11 +92,21 @@ async function run() {
 	check("目标条（GoalBar）渲染", goalbarCount > 0, `count=${goalbarCount}`);
 
 	// 3. 设置面板「界面插件」→ 「DSH 用户补丁」区块。
-	await page
-		.locator('button.chip[data-tip="设置"], button.chip[data-tip="Settings"], button.chip[title="设置"]')
-		.first()
-		.click();
+	// In DSH mode no pi runtime starts, so the server reports piConfigured=false and the "set up
+	// pi" window opens over the page (upstream too). It is not what this test checks: close it.
+	const setupClose = page.locator(".modal-backdrop .modal-close").first();
+	if (await setupClose.isVisible().catch(() => false)) await setupClose.click();
+	// Our fork's topbar-crowding keeps Settings in the "..." menu (tests/lib/topbar.mjs).
+	await (await revealTopbarItem(page, SETTINGS_CHIP)).click();
+	// Upstream 969d24b split the plugins tab into "market" (the default) and "plugin list" sub-tabs;
+	// the DSH patches block is on the plugin list (SettingsModal.tsx, pluginSub === "installed").
+	const openPluginList = () =>
+		page
+			.locator(".set-subtab", { hasText: /\u63d2\u4ef6\u5217\u8868|Plugin list/ })
+			.first()
+			.click();
 	await page.locator(".settings-tab", { hasText: "界面插件" }).first().click();
+	await openPluginList();
 	await page.locator("text=DSH 用户补丁").first().waitFor({ timeout: 10000 });
 	check("设置面板显示「DSH 用户补丁」区块", (await page.locator("text=DSH 用户补丁").count()) > 0);
 	// 补丁文件应在列表里展示（扫到 00-ui.patch.yml）。

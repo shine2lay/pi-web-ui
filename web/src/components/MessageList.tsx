@@ -59,6 +59,11 @@ const COLLAPSE_MIN = 30;
  *  re-assert timer, so the grace runs until ~600+250 = ~850ms. */
 const PROGRAMMATIC_SCROLL_GRACE_MS = 250;
 
+/** Fork (sealed-tests): a scroll event this soon after the user's own upward input (wheel up,
+ *  finger drag down, PageUp/ArrowUp/Home) is the user leaving the bottom (classifyScroll userInput).
+ *  A busy page delivers the wheel's scroll event late, so the window is generous. */
+const USER_SCROLL_INTENT_MS = 500;
+
 /** 惰性窗口化缓冲带：视口上下各多保留 1200px 的真实内容再开始收起。 */
 const LAZY_MARGIN = 1200;
 /** 底部常驻区高度预算（px）：贴底滚动 / 流式输出区域零占位延迟，
@@ -321,6 +326,9 @@ export function MessageList({
 	const escapedRef = useRef(false);
 	/** Timestamp until which scroll events are treated as programmatic. */
 	const progUntilRef = useRef(0);
+	/** Fork (sealed-tests): when the user last moved the list up by hand; touchY = last finger y. */
+	const userUpAtRef = useRef(0);
+	const touchYRef = useRef<number | null>(null);
 	/** Messages the user expanded from the collapsed view — stay expanded. */
 	const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
 	/** exchange-fold 补丁：用户展开了的轮次（键 = 这一轮第一条消息的 id）。 */
@@ -893,6 +901,7 @@ export function MessageList({
 			escaped: escapedRef.current,
 			graceActive: programmatic,
 			stuck: stickRef.current,
+			userInput: Date.now() - userUpAtRef.current < USER_SCROLL_INTENT_MS,
 		});
 		if (decision.reassert) {
 			progUntilRef.current = Date.now() + PROGRAMMATIC_SCROLL_GRACE_MS;
@@ -1212,6 +1221,23 @@ export function MessageList({
 				className={`messages${searchOpen ? "" : stickBottom ? "" : " anchor-live"}`}
 				ref={scrollRef}
 				onScroll={onScroll}
+				// Fork (sealed-tests): remember the user's own upward input, so onScroll can tell a
+				// flick up from a layout collapse even when it arrives as one big jump.
+				onWheel={(e) => {
+					if (e.deltaY < 0) userUpAtRef.current = Date.now();
+				}}
+				onTouchStart={(e) => {
+					touchYRef.current = e.touches[0]?.clientY ?? null;
+				}}
+				onTouchMove={(e) => {
+					const y = e.touches[0]?.clientY;
+					if (y === undefined) return;
+					if (touchYRef.current !== null && y > touchYRef.current + 2) userUpAtRef.current = Date.now();
+					touchYRef.current = y;
+				}}
+				onKeyDown={(e) => {
+					if (e.key === "PageUp" || e.key === "ArrowUp" || e.key === "Home") userUpAtRef.current = Date.now();
+				}}
 			>
 				{state.exchanges
 					? olderQuestions > 0 && (

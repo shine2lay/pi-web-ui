@@ -13,6 +13,7 @@
  * Run: npm run build && node tests/composer-compose-test.mjs
  */
 import { CHROME_PATH } from "./lib/chrome.mjs";
+import { freeTcpPort } from "./lib/port-utils.mjs";
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,7 +23,7 @@ import { chromium } from "playwright-core";
 import { setTimeout as sleep } from "node:timers/promises";
 
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
-const PORT = 8900 + Math.floor(Math.random() * 90);
+const PORT = await freeTcpPort();
 const base = mkdtempSync(join(tmpdir(), "piweb-compose-"));
 const workdir = join(base, "work");
 const dataDir = join(base, "data");

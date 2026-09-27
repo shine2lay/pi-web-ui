@@ -7,34 +7,13 @@
  * Robust harness: server-startup check + WebSocket open/error/close handled,
  * so it can never hang forever — every await has a bounded timeout.
  */
-import { portUp, freePort } from "./lib/port-utils.mjs";
-import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
-import { spawn } from "node:child_process";
-import { execSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
-const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
+import { ownServer } from "./lib/own-server.mjs";
 
 /* eslint-env node */
-const PORT = 8916;
-const PROJ = REPO_ROOT;
 
-async function waitPort(ms) {
-	const end = Date.now() + ms;
-	while (Date.now() < end) {
-		try {
-			if (!(await portUp(PORT))) throw new Error("port not up");
-			return true;
-		} catch {
-			await sleep(250);
-		}
-	}
-	return false;
-}
+// The kick-off message: "[Goal set]" in the server's prompt language (goal-service.ts), "【目标已设定】" in Chinese.
+const isKickoff = (text) => text.startsWith("[Goal set]") || text.startsWith("【目标已设定】");
 
 function openSocket(url, ms) {
 	return new Promise((resolve, reject) => {
@@ -90,29 +69,10 @@ function mkWaiters() {
 }
 
 (async () => {
-	// PORT should be free at start (fresh data dir); if already in use, bail clearly.
-	if (await waitPort(0)) {
-		console.error("PORT already in use at start; aborting");
-		process.exit(1);
-	}
-	const dataDir = mkdtempSync(join(tmpdir(), "pi-web-autostart-"));
-	const server = spawn("node", ["dist/server/index.js"], {
-		cwd: PROJ,
-		env: { ...process.env, PI_WEB_PORT: String(PORT), PI_WEB_DATA_DIR: dataDir, PI_WEB_CWD: PROJ },
-		stdio: ["ignore", "ignore", "pipe"],
-	});
-	server.stderr?.on("data", (d) => process.stderr.write("[srv] " + d.toString()));
-
-	const up = await waitPort(25000);
-	if (!up) {
-		console.error("server did not start");
-		try {
-			server.kill("SIGKILL");
-		} catch {}
-		process.exit(1);
-	}
-
-	const ws = await openSocket(`ws://localhost:${PORT}/ws`, 10000);
+	// Its own server (temp folders) with the stand-in model: it answers every request with a short
+	// text, so the auto-started run finishes without any real model.
+	const srv = await ownServer({ name: "goal-autostart-test", mock: () => "我是测试助手。" });
+	const ws = await openSocket(srv.ws, 10000);
 	const { onMsg, next } = mkWaiters();
 	ws.on("message", (d) => {
 		let m;
@@ -131,14 +91,14 @@ function mkWaiters() {
 
 	// Direct goal set (maxRounds 0 = unlimited, locked).
 	ws.send(JSON.stringify({ type: "set_goal", goal: "帮我写一句自我介绍。", maxRounds: 0, locked: true }));
+	// Snapshot protocol v2: regular updates are snapshot_delta; ask for full snapshots.
+	const poll = setInterval(() => ws.send(JSON.stringify({ type: "get_state" })), 700);
 
 	// Expect the auto-start kick-off user message in a snapshot.
 	let kickoff = false;
 	try {
 		await next(
-			(m) =>
-				m.type === "snapshot" &&
-				m.state.messages.some((mm) => (mm.content?.[0]?.text ?? "").startsWith("【目标已设定】")),
+			(m) => m.type === "snapshot" && m.state.messages.some((mm) => isKickoff(mm.content?.[0]?.text ?? "")),
 			"auto-start kick-off",
 			20000,
 		);
@@ -150,9 +110,10 @@ function mkWaiters() {
 	}
 
 	console.log(kickoff ? "✓ direct set_goal auto-starts generation" : "✗ direct set_goal did NOT auto-start");
+	clearInterval(poll);
 	try {
 		ws.close();
-		if (server.pid) process.kill(server.pid, "SIGKILL");
+		await srv.stop();
 	} catch {}
 	process.exit(kickoff ? 0 : 1);
 })().catch((e) => {
