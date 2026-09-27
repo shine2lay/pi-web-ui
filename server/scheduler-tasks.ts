@@ -100,6 +100,8 @@ export const SCHEDULER_MIN_INTERVAL_MS = 60_000;
 export const SCHEDULER_MAX_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000;
 export const SCHEDULER_HISTORY_MAX = 20;
 const TICK_MS = 10_000;
+/** carry-on: a fire missed by at most this much is from a restart, not a long outage. */
+export const RESTART_CATCHUP_MS = 15 * 60_000;
 
 export const SCHEDULER_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -276,7 +278,11 @@ export class SchedulerStore {
 			const lastAt = task.history?.[0]?.at ?? task.updatedAt;
 			const next = computeNextFire(task, Math.max(lastAt, task.updatedAt));
 			if (next === null) continue;
-			if (next <= now && task.catchUp === "once" && lastAt < now) {
+			// carry-on: a fire missed only because pi-web-ui was restarting isn't stale; it runs now
+			// even with catchUp "skip" (that is for long outages; a one-shot wake-up would otherwise
+			// move a whole interval later, or a day for a cron one).
+			const missedByRestart = next <= now && now - next <= RESTART_CATCHUP_MS;
+			if (next <= now && (task.catchUp === "once" || missedByRestart) && lastAt < now) {
 				// 重启发现漏跑：补一次，补完按这次重排。
 				this.nextFire.set(task.id, now + 5000);
 				void this.fire(task.id, false);

@@ -52,6 +52,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | crash-guard                  | `local`        | `server/crash-guard.ts`, `agent-service.ts`, `goal-service.ts`, `index.ts`, `tests/no-active-chat-crash-test.mjs`, `tests/unit/`              |
 | dangling-tail-only           | `local`        | `server/dangling-tools.ts`, `agent-service.ts`, `tests/unit/dangling-tools.test.ts`, `tests/dangling-tail-test.mjs`                           |
 | lazy-images                  | `local`        | `server/image-meta.ts`, `chat-image.ts`, `serialize.ts`, `agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/components/ChatImage.tsx`, `chat-image.ts` |
+| carry-on                     | `local`        | `server/running-chats.ts`, `agent-service.ts`, `client-state.ts`, `index.ts`, `scheduler-tasks.ts`, `tests/carry-on-restart-test.mjs`, `tests/unit/` |
 
 ---
 
@@ -2222,6 +2223,86 @@ tool_result；这条坏记录已经落盘，所以对话从此发不出去。上
   自己加的 `thinking_level_change`）；服务端没有图片错误，页面没有错误。
 - `tests/unit/crash-guard.test.ts` 的快照守卫用例跟着改：快照现在从读 `this.conv` 开始（原来是 `currentMessages()`），
   假窗口用一个 getter 记下「快照开始了」。
+
+---
+
+## carry-on
+
+**状态**：`local`
+**基线**：v0.96.1
+
+**问题**（2026-09-26，用户同意修，队列任务 #11）：装新版要等所有对话都停下来（`pi-web-deploy` 的等待），常常一等
+几个小时；崩溃时正在跑的对话全断，要人一个个去点「继续」。用户要的是：装新版马上重启，被打断的对话自己接着干，
+计划内重启和崩溃都一样。
+
+上游其实有一套「重启后继续」（`recordInterruptedRuns` 在关机时把每个客户端正在跑的对话记进 `client-state.json`
+的 `interrupted`，下次**同一个 clientId** attach 时 `resumeInterrupted` 重开并发「继续」）。在本 fork 里它几乎不生效：
+`client-per-load` 让每次页面加载都是新的 clientId，页面一刷新（装新版后页面会自己刷新）旧 id 就不会再回来。线上 `client-state.json` 里攒了 220 条没人
+取的记录（09-15 到 09-26）。而且它只在关机时记，`kill -9` / 崩溃什么都留不下。
+
+### 改法
+
+1. **正在干活的对话表**（新文件 `server/running-chats.ts`，`<dataDir>/running-chats.json`）：
+   `{v, pid, shutdown?, chats:[{sessionFile, title, cwd, startedAt, cutoffs, tools:[{id,name,detail}], step?, awaiting?}]}`。
+   `agent-service.ts` 在 `onEventNow` 顶上调 `trackRunning`：`agent_start` 加进来，`tool_execution_start/end` 更新
+   正在跑的工具（bash 记命令，其他工具记路径 / 模式 / URL 等一行），`agent_end`（不是 `willRetry`）移出去，
+   关掉对话也移出去。子代理、临时对话不记。每次变化同步原子写（tmp + rename），所以 `kill -9` 之后文件也是对的。
+   用户自己点停止 = 回合结束 = 不在表里；空闲的对话也不在表里。
+2. **关机先冻结**：`recordInterruptedRuns()` 改成 `runningChats.freeze("shutdown")`（写上 `shutdown` 标记，之后的
+   事件不再改表），`index.ts` 的 `shutdown()` 一开头就调（在拆 scheduler / MCP 之前），`restart_service` 也调。
+   否则关机时被中止的回合会以 `agent_end` 把自己从表里删掉。
+3. **启动时接着干**：`prepareCarryOn()`（`httpServer.listen` 之前）读上一个进程留下的表，`planCarryOn` 算出：
+   - 原因：有 `shutdown` 标记且 `restart-reason.json`（`pi-web-deploy` 重启前写的 `{reason, at, by}`，读完就删）
+     不超过 15 分钟 → 用它的原因（如 `install of 1a2b3c4`）；有标记没原因 → `a restart`；没有标记 →
+     `it crashed or was killed`。
+   - 每个对话一条提示（普通的用户消息）：`pi-web-ui restarted at HH:MM (reason). You were in the middle of <step>;
+     it was cut off. Check where it stopped and carry on.` step 是 `writing a reply`、`running the bash command \`…\``、
+     `running the read tool (…)`、多个工具时 `running 2 tools at once: …`；在等用户回答（`ask_user_question`）时是
+     `asking the user a question (ask_user_question) (they hadn't answered yet, so ask it again)`，它就会重新问。
+   - 防循环：`cutoffs` 是「连续被重启打断、中间没做完一个回合」的次数。第 3 次不再发提示，改成给窗口一条警告
+     （「连续 3 次被重启打断都没做完…请打开它，告诉它接下来做什么」）。回合正常结束就清零。
+   新表先放进这些对话（`awaiting`，保留 `cutoffs`），它们的回合开始后照常记。
+   `carryOnAfterRestart()`（listen 后 1.5 秒）用伪客户端 `carry-on:startup`（`isPseudoClientId` 认它，空白开局）
+   逐个 `switchSession` + 发提示（`ClientSession.carryOn`：等到回合开始或消息进去，最多 20 秒，再 `listed = true`，
+   这样切走时它继续跑，所有窗口的运行列表里看得到），完了把伪客户端的 sink 摘掉（不算「有人在看」）。重开不了的
+   从表里拿掉并提示用户。
+   这期间真窗口的 `attach` 先等（最多 30 秒）：否则窗口打开最近的对话（`continueRecent`）会给同一个会话文件第二个
+   writer。之后 10 分钟内每个连上来的窗口收到一次通知（接着干了哪些、哪些被防循环拦下、哪些没重开成）。
+4. **过渡**：还没有 `running-chats.json` 时（第一次装这个补丁），从 `client-state.json` 的旧 `interrupted` 记录里
+   取**最近一次**关机的（最新一条 15 分钟内、与它相差 1 分钟内的），按会话文件去重，step 从会话文件尾部读
+   （`stepFromTranscriptTail`：最后一条 assistant 消息里没结果的工具调用）。然后清掉所有客户端的旧记录
+   （`client-state.ts`：`saveInterrupted/takeInterrupted` 换成 `takeAllInterrupted`）。上游那条 per-clientId 的
+   `resumeInterrupted` 删掉（和新路径重复发「继续」）。
+5. **定时唤醒**（`server/scheduler-tasks.ts`）：`start()` 时错过不到 15 分钟（`RESTART_CATCHUP_MS`，重启的空档）
+   的一次也补发，即使 `catchUp` 是 `skip`。
+6. **队列**（pi-queue，另一个仓库）：pi 重开会话时 pi-queue 把在跑的队列暂停（`pause restart`）；收到以
+   `pi-web-ui restarted at` 开头的提示时，`resumesAfterRestart` 让它接着跑（这条提示不算用户对卡住任务的回答）。
+
+`pi-web-deploy`（`~/projects/agent-tools`）同时改成默认马上重启（`--when-idle` 保留原来的等待），重启前写
+`restart-reason.json`。
+
+### 回归
+
+- `tests/unit/running-chats.test.ts`（18 项）：提示原文、`describeStep`（回复 / 一条命令 / 等回答 / 多个工具 / 超过 4 个）、
+  `toolDetail`；`planCarryOn`（三种原因、过期的原因文件、防循环、去重、坏记录）；`RunningChats` 的开始 / 工具 / 结束 /
+  冻结后不再变 / `seed` 保留 `cutoffs` 和 `awaiting`；`takeRestartReason`（读完删、ISO 或毫秒）；`newestInterrupted`；
+  `stepFromTranscriptTail`。
+- `tests/unit/scheduler-tasks.test.ts`：重启错过 68 秒的一次会补发，错过超过 15 分钟的不补。
+- `tests/carry-on-restart-test.mjs`（不花 token：假的 OpenAI 接口；独立的测试服务、临时数据目录；用真的 pi-queue）：
+  六个对话：IDLE（答完了）、STOP（用户停了）、REPLY（在写长回复）、CMD（在跑 `sleep 60`）、ASK（在等用户回答）、
+  QUEUE（队列任务 #1/2 进行中）。
+  1. 计划内重启（SIGTERM + `restart-reason.json`）：表里正好是 4 个忙的，步骤是命令 / 提问；冻结后标为计划内；
+     4 个各收到一条提示，写着时间、原因和各自的步骤（ASK 被要求重新问）；连上来的窗口听到「4 个对话在接着干」；
+     队列接着跑（任务 #1 完成、#2 开始）；它们都又在干活，`cutoffs` 是 1（队列的新任务从 0 起）。
+  2. `kill -9`：没有关机标记；提示写「it crashed or was killed」；CMD 重跑的命令又被打断；QUEUE 在任务 #2 里被打断；
+     `cutoffs` 变成 2（队列 1）。
+  3. 没原因的计划内重启：REPLY、CMD、ASK 第 3 次 → 没有第三条提示，各一条警告；QUEUE 收到写着「a restart」的提示；
+     表里只剩 QUEUE。
+  三轮里 IDLE 和 STOP 都什么也没收到。
+- `pi-queue` 的 `tests/queue.test.ts`：`resumesAfterRestart`；`pi-web-deploy` 的测试：默认马上重启并写原因、
+  `--when-idle` 等待、`--reason`、`--now` 仍然接受。
+- 反证（2026-09-27）：同一个 E2E 在改动前（`mine` 28ab26b）上 20 项失败：没有一个忙的对话收到任何东西
+  （上游的 per-clientId 恢复对不上新的 clientId），表文件不存在，队列停着。
 
 ---
 

@@ -1329,6 +1329,10 @@ export interface EngineService {
 	 *  engine records them; dsh engine no-ops). Called from graceful
 	 *  shutdown and the restart_service handler. */
 	recordInterruptedRuns(): void;
+	/** carry-on (pi engine): plan reopening the chats the last process left working (before listen). */
+	prepareCarryOn?(): void;
+	/** carry-on (pi engine): reopen them and send each the carry-on note (after listen). */
+	carryOnAfterRestart?(): Promise<void>;
 	noteSocketOpen(): void;
 	noteSocketClose(): void;
 	isQuiesced(): boolean;
@@ -3355,7 +3359,16 @@ if (process.env[RESTART_CHILD_ENV] === "1") {
 	}
 }
 
+// carry-on: read what the last process left working before any window can attach.
+try {
+	service.prepareCarryOn?.();
+} catch (err) {
+	console.error(`[carry-on] couldn't plan the carry-on: ${(err as Error).message}`);
+}
+
 httpServer.listen(PORT, HOST, () => {
+	// carry-on: give plugins and MCP servers a moment to come up, then reopen the cut-off chats.
+	setTimeout(() => void service.carryOnAfterRestart?.().catch(() => {}), 1500);
 	console.log("");
 	console.log("  ⚡ pi-web-ui — web chat for the pi coding agent");
 	console.log(`    http://localhost:${PORT}`);
@@ -3444,6 +3457,12 @@ async function shutdown(signal: "SIGINT" | "SIGTERM" = "SIGINT"): Promise<void> 
 		process.exit(signal === "SIGTERM" ? 143 : 130);
 	}
 	shuttingDown = true;
+	// carry-on: freeze the list of working chats first; the teardown below aborts their runs.
+	try {
+		service.recordInterruptedRuns();
+	} catch {
+		/* best effort */
+	}
 	console.log("\nshutting down…");
 	// Windows ConPTY 兜底看门狗（issue #215）：主线程若死锁在 native
 	// ClosePseudoConsole 里，事件循环冻结，进程内的 forceExitTimer 永远触发不了 ——

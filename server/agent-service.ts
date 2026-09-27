@@ -76,6 +76,20 @@ import { checkPluginUpdates } from "./plugin-updater.js";
 import { isBundledInUse, sdkCopies } from "./sdk-origin.js";
 import { hasActiveSubagentRun, hasPendingWaitSubscription, shouldRetainActive } from "./wait-subscription-scan.js";
 import {
+	type CarryOnPlan,
+	newestInterrupted,
+	planCarryOn,
+	readRunningChatsFile,
+	readTail,
+	RESTART_REASON_FILE,
+	RUNNING_CHATS_FILE,
+	type RunningChat,
+	RunningChats,
+	stepFromTranscriptTail,
+	takeRestartReason,
+	toolDetail,
+} from "./running-chats.js";
+import {
 	COMPACTION_PENDING_TYPE,
 	looksLikeChainCorruption,
 	makeCompactionMarkerId,
@@ -2058,6 +2072,52 @@ function atomicWriteFileSync(file: string, data: string): void {
  *  runtime alive; conversations of other projects keep their own lists).
  *  子代理不计入：子代理是 inMemory 后台任务，不参与此上限，既不占位也不被此上限拦截。 */
 const MAX_OPEN_CONVERSATIONS = 8;
+
+/** carry-on: the process-wide live list of working chats (set by AgentService.prepareCarryOn). */
+let runningChats: RunningChats | null = null;
+/** carry-on: the pseudo client that reopens cut-off chats after a restart. */
+const CARRY_ON_CLIENT_PREFIX = "carry-on:";
+
+/** carry-on: the chat's transcript as the live list keys it (null for chats that don't count). */
+function runningRef(conv: Conversation): { sessionFile: string; title: string; cwd: string } | null {
+	if (conv.isSubagent || conv.isEphemeral) return null;
+	try {
+		const file = conv.session.sessionFile;
+		return file ? { sessionFile: resolve(file), title: conv.title, cwd: conv.cwd } : null;
+	} catch {
+		return null; // runtime being replaced
+	}
+}
+
+/** carry-on: keep the live list of working chats up to date from the SDK events. */
+function trackRunning(conv: Conversation, event: AgentSessionEvent): void {
+	const list = runningChats;
+	if (!list) return;
+	if (
+		event.type !== "agent_start" &&
+		event.type !== "agent_end" &&
+		event.type !== "tool_execution_start" &&
+		event.type !== "tool_execution_end"
+	)
+		return;
+	const ref = runningRef(conv);
+	if (!ref) return;
+	try {
+		if (event.type === "agent_start") list.start(ref);
+		else if (event.type === "agent_end") {
+			// A failed call the SDK retries is the same turn going on.
+			if (!event.willRetry) list.finish(ref.sessionFile);
+		} else if (event.type === "tool_execution_start")
+			list.toolStart(ref, {
+				id: event.toolCallId,
+				name: event.toolName,
+				detail: toolDetail(event.toolName, event.args),
+			});
+		else list.toolEnd(ref, event.toolCallId);
+	} catch {
+		// bookkeeping never breaks a run
+	}
+}
 /** 同时存活的子代理上限（按客户端计，含嵌套派生的孙子辈）。每个子代理都是一个完整
  *  runtime + TerminalManager，无上限时 AI 一次并行派发几十个会把服务进程拖垮。
  *  主对话的 8 个上限是按项目计的，子代理按客户端全局计（wait_all 本来就是全局口径）。 */
@@ -4487,76 +4547,30 @@ export class ClientSession {
 		return conv;
 	}
 
-	/** Summaries of conversations currently streaming — captured at shutdown
-	 *  so the next attach can reopen them and continue their runs. */
-	streamingSummaries(): { title: string; cwd: string; sessionFile?: string }[] {
-		const out: { title: string; cwd: string; sessionFile?: string }[] = [];
-		for (const conv of this.convs.values()) {
-			if (!conv.session.isStreaming) continue;
-			let sessionFile: string | undefined;
-			try {
-				sessionFile = conv.session.sessionFile ?? undefined;
-			} catch {
-				sessionFile = undefined;
-			}
-			out.push({ title: conv.title, cwd: conv.cwd, sessionFile });
+	/**
+	 * carry-on: reopen a chat that a restart cut off and send it the carry-on note, so it
+	 * checks where it stopped and carries on by itself. Returns once its run has started
+	 * (or the note got in), so the caller can move on to the next chat without the switch
+	 * disposing this one: a running chat is kept (and listed) when it is switched away from.
+	 * false = it couldn't be opened or the note didn't get in.
+	 */
+	async carryOn(sessionFile: string, note: string): Promise<boolean> {
+		await this.switchSession(sessionFile);
+		const id = this.conversationIdBySessionFile(sessionFile);
+		if (!id) return false;
+		const conv = this.convs.get(id);
+		if (!conv) return false;
+		const before = conv.session.messages.length;
+		void this.promptResumedConversation(sessionFile, note).catch(() => {});
+		const deadline = Date.now() + 20_000;
+		while (Date.now() < deadline) {
+			if (conv.session.isStreaming || conv.session.messages.length > before) break;
+			await new Promise((r) => setTimeout(r, 100));
 		}
-		return out;
-	}
-
-	/** Reopen sessions interrupted by the last restart and continue them.
-	 *
-	 *  For each record WITH a session file: reopen it (listed, keeps running
-	 *  when displaced) and send a short Continue prompt so the run resumes
-	 *  from the persisted context. Records WITHOUT a file fall back to the
-	 *  warning notice. The conversation active before the resume is restored
-	 *  at the end, so the user lands where they were and clicks whichever
-	 *  resumed run they want — nothing steals the view.
-	 *
-	 *  Called once on the first attach after a restart (fire-and-forget from
-	 *  the attach path — each step is internally guarded and never throws). */
-	async resumeInterrupted(
-		list: { title: string; cwd: string; at: number; sessionFile?: string }[] | undefined,
-	): Promise<void> {
-		if (!list || list.length === 0) return;
-		const resumable = list.filter((r) => r.sessionFile);
-		const orphaned = list.filter((r) => !r.sessionFile);
-		if (orphaned.length > 0) {
-			const names = orphaned.map((r) => `「${r.title}」（${r.cwd}）`).join("、");
-			this.emit({
-				type: "notice",
-				level: "warning",
-				text: `上次服务重启时有 ${orphaned.length} 个进行中的对话被中断且无法自动恢复：${names}。可在历史对话中手动恢复继续。`,
-				textEn: `${orphaned.length} running conversation(s) were interrupted by the last restart and could not be resumed automatically: ${names}. Resume them manually from History.`,
-			});
-		}
-		if (resumable.length === 0) return;
-		const continueText = this.getLang() === "zh" ? "继续" : "Continue";
-		const restoreId = this.activeId;
-		for (const r of resumable) {
-			try {
-				this.emit({
-					type: "notice",
-					level: "info",
-					text: `上次服务重启中断了「${r.title}」，正在自动恢复并继续。`,
-					textEn: `Restart interrupted "${r.title}" — reopening it and continuing automatically.`,
-				});
-				await this.switchSession(r.sessionFile!);
-				await this.promptResumedConversation(r.sessionFile!, continueText);
-			} catch {
-				// switchSession/prompt already surface failures as notices;
-				// one bad session must not block the rest.
-			}
-		}
-		// Hand the view back: the user lands where they were, resumed runs
-		// keep going in the background list.
-		try {
-			if (restoreId && this.convs.has(restoreId) && restoreId !== this.activeId) {
-				await this.switchConversation(restoreId);
-			}
-		} catch {
-			/* staying on the last resumed session is a fine fallback */
-		}
+		const started = conv.session.isStreaming || conv.session.messages.length > before;
+		// In the running list of every window, and kept open when switched away from.
+		if (started) conv.listed = true;
+		return started;
 	}
 
 	/** 找持有指定转录文件的本地对话 id（找不到 = 已被关闭/搬走/还没建好）。 */
@@ -5270,6 +5284,7 @@ export class ClientSession {
 		// Any SDK event proves the run is alive — feeds the stall watchdog below.
 		conv.lastSdkEventAt = Date.now();
 		conv.stallNoticed = false;
+		trackRunning(conv, event);
 		switch (event.type) {
 			case "bash_execution_update": {
 				if (event.id) {
@@ -9795,6 +9810,9 @@ export class ClientSession {
 			// ignore
 		}
 		this.convs.delete(id);
+		// carry-on: a closed chat isn't working any more (frozen at shutdown, so this is a real close).
+		const closedRef = runningRef(conv);
+		if (closedRef) runningChats?.finish(closedRef.sessionFile);
 		conv.dialogs.cancelAll();
 		this.clearAllToolWatchdogs(conv);
 		// 关对话 → 连它的 eval 内核（Python/Node 子进程 + 临时沙箱目录）一起回收：
@@ -13593,7 +13611,7 @@ export class AgentService {
 	/** 插件/调度伪客户端：sink 常驻（fire-and-forget 的空函数），不能按浏览器存活判断。
 	 *  reload-adopt：ClientSession.setCwd 也用它（伪客户端不接管别人的对话），所以不是 private。 */
 	static isPseudoClientId(id: string): boolean {
-		return id.startsWith("plugin:") || id.startsWith("scheduler:");
+		return id.startsWith("plugin:") || id.startsWith("scheduler:") || id.startsWith(CARRY_ON_CLIENT_PREFIX);
 	}
 
 	/**
@@ -13827,6 +13845,10 @@ export class AgentService {
 
 	/** Get or create the session for a client, racing attach calls safely. */
 	async attach(clientId: string, send: (msg: ServerMessage) => void): Promise<ClientSession> {
+		// carry-on: while the startup reopens the chats a restart cut off, everyone else waits
+		// (bounded): a window opening its most recent chat at the same moment would give that
+		// transcript a second writer.
+		if (this.carryOnGate && !clientId.startsWith(CARRY_ON_CLIENT_PREFIX)) await this.carryOnGate;
 		let cs = this.clients.get(clientId);
 		if (!cs) {
 			const inflight = this.pending.get(clientId);
@@ -13861,11 +13883,12 @@ export class AgentService {
 				// 它们也不能从磁盘恢复那条的转录（同一文件两个写者），所以有开着的就落空白。
 				const openHere = pickAdoptTarget(cwd, ClientSession.openConversations());
 				const adoptId = AgentService.isPseudoClientId(clientId) ? null : openHere;
+				// carry-on: its client starts blank too; it opens exactly the chats it carries on.
 				const creating = ClientSession.create(
 					clientId,
 					cwd,
 					this.stateStore,
-					openHere ? { blank: true } : undefined,
+					openHere || clientId.startsWith(CARRY_ON_CLIENT_PREFIX) ? { blank: true } : undefined,
 				).finally(() => {
 					this.pending.delete(clientId);
 				});
@@ -13907,8 +13930,159 @@ export class AgentService {
 		// notifyCwd 幂等去重；此后 set_cwd 成功时由 cs.onCwdChanged 继续驱动。
 		cs.onCwdChanged = (abs, roots) => this.onClientCwdChanged?.(abs, roots);
 		this.onClientCwdChanged?.(cs.cwd, cs.workspaceRoots);
-		void cs.resumeInterrupted(this.stateStore.takeInterrupted(clientId));
+		// carry-on: what the restart did (replaces upstream's per-window resume, which rarely
+		// matched here: every page load has a new client id, and pages reload after an install).
+		this.sendStartupNotices(clientId, send);
 		return cs;
+	}
+
+	// -----------------------------------------------------------------------
+	// carry-on: chats that a restart cut off carry on by themselves
+	// -----------------------------------------------------------------------
+
+	private carryOnPlan: CarryOnPlan | null = null;
+	private carryOnGate: Promise<void> | null = null;
+	private openCarryOnGate: (() => void) | null = null;
+	private startupNotices: { level: "info" | "warning"; text: string; textEn: string }[] = [];
+	private startupNoticesUntil = 0;
+	private noticedClients = new Set<string>();
+
+	/**
+	 * Startup, before the server takes connections: read the list of chats the last process left
+	 * working, plan the carry-on, and start the new live list with the chats being carried on.
+	 * Windows wait (attach gate, at most 30 s) until carryOnAfterRestart() has reopened them.
+	 */
+	prepareCarryOn(): void {
+		const dataDir = this.stateStore.dataDir;
+		const file = join(dataDir, RUNNING_CHATS_FILE);
+		const now = Date.now();
+		let prev = readRunningChatsFile(file);
+		// The old per-window records (upstream's resume): used once, when there is no list yet.
+		const oldRecords = this.stateStore.takeAllInterrupted();
+		if (!prev && !existsSync(file)) {
+			const newest = newestInterrupted(oldRecords, now);
+			if (newest.length > 0) {
+				prev = {
+					v: 1,
+					pid: 0,
+					shutdown: { at: Math.max(...newest.map((r) => r.at)), signal: "old-record" },
+					chats: newest.map((r) => ({
+						sessionFile: resolve(r.sessionFile),
+						title: r.title,
+						cwd: r.cwd,
+						startedAt: r.at,
+						cutoffs: 0,
+						tools: [],
+						step: stepFromTranscriptTail(readTail(r.sessionFile)),
+					})),
+				};
+			}
+		}
+		const plan = planCarryOn(prev, takeRestartReason(join(dataDir, RESTART_REASON_FILE)), now);
+		const list = new RunningChats(file);
+		runningChats = list;
+		list.seed(
+			plan.carry.map((item): RunningChat => ({ ...item.chat, cutoffs: item.cutoffs, awaiting: true, startedAt: now })),
+		);
+		if (plan.carry.length === 0 && plan.guarded.length === 0) return;
+		const names = (chats: RunningChat[]) => chats.map((c) => `"${c.title}"`).join(", ");
+		console.log(
+			`[carry-on] restarted (${plan.reason}): carrying on ${plan.carry.length} chat(s)` +
+				(plan.carry.length ? `: ${names(plan.carry.map((i) => i.chat))}` : "") +
+				(plan.guarded.length ? `; cut off ${plan.guarded.length}x in a row, left alone: ${names(plan.guarded)}` : ""),
+		);
+		for (const chat of plan.guarded) {
+			this.startupNotices.push({
+				level: "warning",
+				text: `「${chat.title}」连续 3 次被重启打断都没做完，这次没有让它自动继续。请打开它，告诉它接下来做什么。`,
+				textEn: `"${chat.title}" was cut off by 3 restarts in a row without finishing, so it wasn't told to carry on this time. Open it and tell it what to do.`,
+			});
+		}
+		this.startupNoticesUntil = now + 10 * 60_000;
+		if (plan.carry.length === 0) return;
+		this.carryOnPlan = plan;
+		let open!: () => void;
+		const gate = new Promise<void>((r) => {
+			open = r;
+		});
+		const timer = setTimeout(() => open(), 30_000);
+		timer.unref?.();
+		this.openCarryOnGate = () => {
+			clearTimeout(timer);
+			open();
+		};
+		this.carryOnGate = gate.then(() => {
+			this.carryOnGate = null;
+		});
+	}
+
+	/** Startup, once the server listens: reopen each cut-off chat and send it the carry-on note. */
+	async carryOnAfterRestart(): Promise<void> {
+		const plan = this.carryOnPlan;
+		this.carryOnPlan = null;
+		if (!plan) return;
+		const clientId = `${CARRY_ON_CLIENT_PREFIX}startup`;
+		const noop = () => {};
+		const carried: string[] = [];
+		const failed: string[] = [];
+		try {
+			const cs = await this.attach(clientId, noop);
+			for (const item of plan.carry) {
+				const file = item.chat.sessionFile;
+				let ok = false;
+				try {
+					ok = existsSync(file) && (await cs.carryOn(file, item.note));
+				} catch (err) {
+					console.error(`[carry-on] "${item.chat.title}": ${(err as Error).message}`);
+				}
+				if (ok) carried.push(item.chat.title);
+				else {
+					failed.push(item.chat.title);
+					runningChats?.finish(file);
+				}
+			}
+			// Nobody watches through this client: the chats count as unwatched (done rings etc.).
+			this.detach(clientId, noop);
+		} catch (err) {
+			console.error(`[carry-on] couldn't reopen the chats: ${(err as Error).message}`);
+		} finally {
+			this.openCarryOnGate?.();
+			this.openCarryOnGate = null;
+		}
+		const quote = (list: string[]) => list.map((t) => `"${t}"`).join(", ");
+		console.log(
+			`[carry-on] carried on: ${carried.length ? quote(carried) : "none"}` +
+				(failed.length ? `; couldn't reopen: ${quote(failed)}` : ""),
+		);
+		if (carried.length > 0) {
+			this.startupNotices.push({
+				level: "info",
+				text: `pi-web-ui 已重启（${plan.reason}）。${carried.length} 个被打断的对话已自动继续：${carried.map((t) => `「${t}」`).join("、")}`,
+				textEn: `pi-web-ui restarted (${plan.reason}). ${carried.length} chat(s) it cut off are carrying on: ${quote(carried)}`,
+			});
+		}
+		if (failed.length > 0) {
+			this.startupNotices.push({
+				level: "warning",
+				text: `重启后没能重新打开这些被打断的对话：${failed.map((t) => `「${t}」`).join("、")}。请手动打开并让它们继续。`,
+				textEn: `After the restart these cut-off chats couldn't be reopened: ${quote(failed)}. Open them and tell them to carry on.`,
+			});
+		}
+		this.startupNoticesUntil = Date.now() + 10 * 60_000;
+	}
+
+	/** Each window that connects in the first minutes after a restart hears once what it did. */
+	private sendStartupNotices(clientId: string, send: (msg: ServerMessage) => void): void {
+		if (this.startupNotices.length === 0 || Date.now() > this.startupNoticesUntil) return;
+		if (AgentService.isPseudoClientId(clientId) || this.noticedClients.has(clientId)) return;
+		this.noticedClients.add(clientId);
+		for (const n of this.startupNotices) {
+			try {
+				send({ type: "notice", level: n.level, text: n.text, textEn: n.textEn });
+			} catch {
+				/* socket gone */
+			}
+		}
 	}
 
 	/** 插件 AI 工具集合变化（注册/注销）时由 index.ts 触发：推送到所有客户端的全部会话。 */
@@ -13983,21 +14157,13 @@ export class AgentService {
 	 *  (which exits without shutdown under systemd — without this, the
 	 *  interrupted-run record would silently never be written there). */
 	recordInterruptedRuns(): void {
-		// Record still-streaming conversations BEFORE tearing anything down, so
-		// the next attach can tell the user what was lost (SIGTERM / update).
-		// eslint-disable-next-line unicorn/no-useless-spread -- snapshot: handlers may unsubscribe mid-emit
-		for (const [clientId, cs] of [...this.clients]) {
-			try {
-				const running = cs.streamingSummaries();
-				if (running.length > 0) {
-					this.stateStore.saveInterrupted(
-						clientId,
-						running.map((r) => ({ ...r, at: Date.now() })),
-					);
-				}
-			} catch {
-				// best effort — never block shutdown on bookkeeping
-			}
+		// carry-on: freeze the live list of working chats BEFORE tearing anything down. The runs
+		// the shutdown aborts stay in it, and the next process tells each of them to carry on.
+		// Idempotent (shutdown and restart_service both call it).
+		try {
+			runningChats?.freeze("shutdown");
+		} catch {
+			// best effort — never block shutdown on bookkeeping
 		}
 	}
 

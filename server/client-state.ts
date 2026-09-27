@@ -749,27 +749,22 @@ export class ClientStateStore {
 		this.save();
 	}
 
-	/** Remember conversations that were still streaming at shutdown (best-
-	 *  effort; called during the graceful-shutdown path). */
-	saveInterrupted(clientId: string, list: { title: string; cwd: string; at: number; sessionFile?: string }[]): void {
-		if (list.length === 0) return;
+	/** carry-on: take (return and clear) every client's old `interrupted` record. They were
+	 *  written per window by upstream's resume and piled up (each page load has a new client id,
+	 *  so they were never read). running-chats.json replaces them; the startup uses the newest
+	 *  ones once, when it finds no list yet. */
+	takeAllInterrupted(): { title: string; cwd: string; at: number; sessionFile?: string }[] {
 		const all = this.load();
-		const state = (all[clientId] ??= { projects: [] });
-		state.interrupted = list.slice(0, 8);
-		this.save();
-	}
-
-	/** Consume the interrupted-conversation record (returns and clears it) —
-	 *  called once on the client's first attach after a restart. */
-	takeInterrupted(clientId: string): ClientState["interrupted"] {
-		const all = this.load();
-		const state = all[clientId];
-		const list = state?.interrupted;
-		if (list?.length && state) {
+		const out: { title: string; cwd: string; at: number; sessionFile?: string }[] = [];
+		let changed = false;
+		for (const state of Object.values(all)) {
+			if (!state?.interrupted) continue;
+			if (Array.isArray(state.interrupted)) out.push(...state.interrupted);
 			delete state.interrupted;
-			this.save();
+			changed = true;
 		}
-		return list;
+		if (changed) this.save();
+		return out;
 	}
 
 	/** 设置面板状态（系统提示词模式/文字 + 禁用技能/扩展）——全局共享同一套配置。 */

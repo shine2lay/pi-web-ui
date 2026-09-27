@@ -3,7 +3,7 @@
  * Store 的 CRUD + 开关 + 持久化往返。执行器（Agent 无头调用）与 ticker
  * 时序不进单测，覆盖靠 tests/run-smoke 聚合里的协议冒烟。
  */
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +13,7 @@ import {
 	describeIntervalMs,
 	normalizeSchedulerInput,
 	sameSessionFile,
+	RESTART_CATCHUP_MS,
 } from "../../server/scheduler-tasks.js";
 
 const BASE = {
@@ -249,5 +250,47 @@ describe("SchedulerStore", () => {
 		expect(second.ok).toBe(false);
 		release();
 		await first;
+	});
+});
+
+// carry-on: pi-web-ui restarts right away now, so a wake-up can fall due while it restarts.
+describe("SchedulerStore.start after a restart", () => {
+	let dir = "";
+	let store: SchedulerStore | null = null;
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "scheduler-restart-test-"));
+	});
+	afterEach(() => {
+		store?.stop();
+		store = null;
+		vi.useRealTimers();
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	/** A one-shot 60 s wake-up (catchUp skip, the schedule_task default) created `ago` ms back. */
+	async function startAfter(ago: number): Promise<string[]> {
+		const t0 = Date.now();
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(t0 - ago);
+		new SchedulerStore(dir, {}).upsert({ ...BASE, id: "wake", kind: "interval", spec: "60000", oneShot: true });
+		vi.setSystemTime(t0);
+		const fired: string[] = [];
+		store = new SchedulerStore(dir, {
+			executor: async (task) => {
+				fired.push(task.id);
+				return { ok: true };
+			},
+		});
+		store.start();
+		for (let i = 0; i < 20 && fired.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
+		return fired;
+	}
+
+	it("a fire missed by a restart's few seconds runs right away, even with catchUp skip", async () => {
+		expect(await startAfter(60_000 + 8_000)).toEqual(["wake"]);
+	});
+
+	it("a fire missed by a long outage is still skipped", async () => {
+		expect(await startAfter(60_000 + RESTART_CATCHUP_MS + 60_000)).toEqual([]);
 	});
 });
