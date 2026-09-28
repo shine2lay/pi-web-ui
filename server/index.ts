@@ -1333,6 +1333,8 @@ export interface EngineService {
 	prepareCarryOn?(): void;
 	/** carry-on (pi engine): reopen them and send each the carry-on note (after listen). */
 	carryOnAfterRestart?(): Promise<void>;
+	/** queue-lanes (pi engine): let pi-queue run queued tasks in chats of their own. */
+	installQueueHost?(): void;
 	noteSocketOpen(): void;
 	noteSocketClose(): void;
 	isQuiesced(): boolean;
@@ -3390,6 +3392,9 @@ try {
 } catch (err) {
 	console.error(`[carry-on] couldn't plan the carry-on: ${(err as Error).message}`);
 }
+
+// queue-lanes: before any chat loads pi-queue, so it finds the host from the start.
+service.installQueueHost?.();
 
 httpServer.listen(PORT, HOST, () => {
 	// carry-on: give plugins and MCP servers a moment to come up, then reopen the cut-off chats.

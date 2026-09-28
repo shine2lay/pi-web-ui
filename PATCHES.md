@@ -55,6 +55,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | carry-on                     | `local`        | `server/running-chats.ts`, `agent-service.ts`, `client-state.ts`, `index.ts`, `scheduler-tasks.ts`, `tests/carry-on-restart-test.mjs`, `tests/unit/` |
 | sealed-tests                 | `local`        | `scripts/sealed.sh`, `sealed-summary.mjs`, `check.sh`, `tests/lib/sealed-fence.cjs`, `tests/run-sealed.mjs`, `tests/lib/`, `vitest.config.ts`, `tests/*-test.mjs`, 6 处测试查出的 bug |
 | wake-reopen                  | `local`        | `server/agent-service.ts`（`wakeClosedChat`、`wakeConversation` 的 id 相位）、`server/index.ts`（调度执行器）、`tests/wake-reopen-test.mjs`、`tests/unit/schedule-agent-tool.test.ts` |
+| queue-lanes                  | `local`        | `server/queue-host.ts` (new), `agent-service.ts` (task chats), `index.ts`, `task-queue.ts`, `protocol.ts`, `tldr-lines.ts`, `web/src/components/TaskQueuePanel.tsx`, `TldrPanel.tsx`, `RightPanel.tsx`, i18n, styles, `tests/queue-lanes-test.mjs`, `tests/queue-panel-test.mjs`, `scripts/sealed.sh` (`PI_QUEUE_PKG`), `tests/unit/` |
 
 ---
 
@@ -1760,14 +1761,20 @@ data: { v: 1, ids, collapsed } }`。跟行本身一样随会话走：刷新、�
   时候又开跑 = 没停过；没东西在等时的开始是真开始；几条对话前后脚跑完一起响一次；其中一条又开跑，别的照样响；
   同一条跑完两次算一次；`clear` 全清。
 - `tests/unit/ui-slots.test.ts`：tab 列表加上 `host:right-queue`。
-- `tests/queue-panel-test.mjs`（37 项，不花 token）：真 pi-queue（`PI_QUEUE_PKG`，默认 ~/projects/pi-queue，
-  从 settings.json 的 `packages` 装）+ 模拟模型，两个窗口：
+- `tests/queue-panel-test.mjs` (43 checks, no tokens): the real pi-queue (`PI_QUEUE_PKG`, default
+  ~/projects/pi-queue, installed from settings.json `packages`) + a mock model, two windows:
   - 规划那一轮调三次 `queue_add`，用户在对话框里逐个批准；长计划在对话框里滚动，确定 / 取消看得见；每批准一个，
     A 的队列 tab 立刻多一个。
   - B 打开同一条对话能看到；A 里 ↓、B 里 ✕（行内确认）两边都立刻跟上；点标题展开计划。
-  - 「开始」：#2 在做 → 做完、带总结；#1 卡住，两个窗口都高亮、带问题；整条队列在每个窗口听起来是一次运行
-    （一次开始、一次完成）。
-  - 在对话里回答 → #1 做完，「都做完了」，「开始」禁用；刷新后队列还在；新对话是空状态，切回来队列回来。
+  - Start (since queue-lanes, 2026-09-28): the plans list nothing they touch (the first dialog says such a
+    plan runs alone), so each task runs alone in a chat of its own, one at a time. #2 works in its chat, with a
+    link to it, and finishes with its summary. Then #1 needs you, with its question, in both windows. The
+    queue's chat gets a note for each. Every task chat that stops rings one done cue in each window; there is
+    no start tick (the queue's chat doesn't run itself).
+  - #1's link opens its chat: it starts from its plan, without the queue chat's history, and its Queue tab
+    points back to the queue, with no Start/Stop. Answering there finishes #1. Back in the queue's chat: all
+    done, Start disabled. After a reload the queue is still there; a new chat shows the empty state, and
+    switching back brings the queue back. Clear empties both windows and sticks after a reload.
   - 模拟模型没收到脚本外的消息（没有提醒、没有「继续」）；页面没报错。
   - `QUEUE_DEBUG=1` 打印模拟模型收到的请求；`QUEUE_SHOT=/tmp/x.png` 另存四张截图（`-dialog` / `-plan` /
     `-stuck` / `-done`）。
@@ -2516,3 +2523,83 @@ E2E 还查出第二条错投的路：任务同时记着对话 id 和转录文件
 `wakeClosedChat` 的空参 / 转录不存在 / quiesce 三种。
 
 **同步上游时**：上游若也改了「原对话不在」的处理（issue #231 那套），先看它是否已经会重开原对话；会的话本补丁可删。
+
+---
+
+## queue-lanes
+
+**Status**: `local`
+**Baseline**: v0.96.1
+
+**Why** (owner, 2026-09-26): queued tasks ran one at a time in the queue's own chat, so every task dragged
+that chat's huge history along, and unrelated tasks waited for each other. Now each task can run in a fresh
+chat of its own, and tasks that touch different things run side by side. The queue logic (touches, lanes,
+reporting) lives in pi-queue (`~/projects/pi-queue`, README "Lanes"); this patch is what pi-web-ui adds for it.
+
+### Changes
+
+1. **The queue host** (`server/queue-host.ts`, new). pi-queue finds it on `globalThis` under
+   `Symbol.for("pi-web-ui.queue-host")` (version 1). The command-line pi has none, so there tasks run the
+   old way. It checks what the extension hands in and offers three calls:
+   - `startChat({cwd, name, prompt, entries, model?, thinking?})` opens a new chat and resolves once its run
+     has started;
+   - `runCommand(sessionFile, line)` runs a one-line `/queue ...` command in that chat, opening it if needed
+     (nothing else gets through);
+   - `closeChat(sessionFile)` takes a finished task's chat out of the running list once it is idle.
+2. **Opening task chats** (`agent-service.ts`). The work goes through two pseudo clients, like the carry-on
+   and wake-reopen ones: `carry-on:queue` opens task chats one at a time (`ClientSession.openTaskChat`), and
+   `carry-on:queue-home` opens a closed chat to run a command in it (`openChatForQueue`), each on its own
+   chain.
+   - A task chat is named `Queue #n: <title>` before its first message, gets the task's entries, and gets
+     the queue chat's model and thinking level. It sets the model on the session directly, so the
+     project's remembered model isn't changed.
+   - It is listed in every window's running list. It stays open while its task is open, even when the
+     pseudo client moves on.
+   - The pseudo clients only ever let go of chats the queue opened, or blank ones (`queueLetGo`). They
+     never let go of a user's chat they were moved onto (`recoverLostActive` can do that).
+   - `releaseQueueChat` unlists a done task's chat and frees it. Then every window re-reads its saved
+     chats (`sessionsChangedForAll`), so the chat moves to Recent chats right away.
+   - `server/index.ts` installs the host for the pi engine, and `disposeAll` takes it down.
+3. **The Queue tab mirror** (`server/task-queue.ts`, `protocol.ts`).
+   - The new ops are mirrored: `touches`, `start` with `lane`, `chat`, `requeue`, `lanes`, `assigned`.
+   - Lane tasks don't count as the chat's one current task.
+   - `UiTaskQueue` gets `lanes` (the open tasks grouped by shared touches, only once some task runs in a
+     chat of its own), `lanesAtOnce` (when not 2) and `from` (in a task's own chat: the queue it came
+     from).
+   - Tasks get `touches`, `lane` and `chat`.
+   - The `lanes` action becomes `/queue lanes <n>`.
+4. **The Queue tab and TL;DR.**
+   - Tasks running in their own chats are listed under "Working in their own chats", with their lane,
+     touches and an "Open its chat" link (`switch_session`).
+   - A "Lanes at once" stepper (1 to 8) sits next to the tasks.
+   - The status line names the task working in its own chat ("#2 is working in its own chat"), counts
+     them when there are several, and says "needs you" when any of them is stuck.
+   - In a task's own chat, the tab shows where the queue is, with a link back, and no Start/Stop.
+   - pi-queue's TL;DR lines about a task chat carry a `chat`; the line shows an "Open its chat" link
+     (`tldr-lines.ts`, `TldrPanel.tsx`).
+
+### Tests
+
+- Unit tests:
+  - `tests/unit/queue-host.test.ts` (new): the option checks, only `/queue` lines, order, the global.
+  - `task-queue.test.ts`: lanes, the mirror ops, one current task, old entries.
+  - `task-queue-panel.test.ts`: lane rows, links, stepper, a task chat's view, the status line for one
+    task or several.
+  - `tldr-lines.test.ts`: `chat` passes through.
+- `tests/queue-lanes-test.mjs` (sealed server, mock model, real pi-queue from `PI_QUEUE_PKG`, no tokens):
+  - Three tasks are planned and approved: #1 and #2 share a touch, #3 touches something else. The tab
+    shows 2 lanes.
+  - Start: #1 and #3 start together, each in a new chat named `Queue #n: ...`. #2 waits for #1.
+  - Stop lets #1 finish but doesn't start #2. #3 asks a question, which shows in the Queue tab and as a
+    needs-you TL;DR line with a link.
+  - Start again: #2 runs and finishes. Answering #3 in its chat (opened from the link) finishes it.
+  - Finished chats leave the running list and show under Recent chats; transcripts stay.
+  - No page errors, and the mock model saw no unexpected messages.
+- `tests/queue-panel-test.mjs` now follows this flow (see queue-panel, Tests): each task runs alone in a
+  chat of its own, and #1 is answered there. Its mock has #1's chat stop well after #2's, because
+  done-settle merges stops that come within 1.5 s into one sound.
+- `scripts/sealed.sh` passes `PI_QUEUE_PKG` through, so a full run can point both queue tests at a
+  pi-queue checkout: `PI_QUEUE_PKG=<checkout> node tests/run-sealed.mjs`.
+
+**When syncing**: all local. If upstream ever adds its own way for an extension to open chats, move the host
+onto it.

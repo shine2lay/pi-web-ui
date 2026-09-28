@@ -59,12 +59,15 @@ export const TldrPanel = memo(function TldrPanel({
 	lines,
 	defaultShowAll = false,
 	onCollapse,
+	onOpenChat,
 }: {
 	lines: UiTldrLine[] | undefined;
 	/** 初始是否展开（测试用；界面上由按钮切换）。 */
 	defaultShowAll?: boolean;
 	/** 折叠（collapsed=true）或重新展开这些行：发给服务端记进会话。不给就不出折叠按钮。 */
 	onCollapse?: (ids: string[], collapsed: boolean) => void;
+	/** queue-lanes: open the chat a line is about (a queued task's own chat). */
+	onOpenChat?: (file: string) => void;
 }) {
 	const t = useT();
 	const [showAll, setShowAll] = useState(defaultShowAll);
@@ -135,6 +138,16 @@ export const TldrPanel = memo(function TldrPanel({
 						<li key={row.line.id} className={awaitingYou(row.line) ? "tldr-line needs-you" : "tldr-line"}>
 							{awaitingYou(row.line) && <span className="tldr-badge">{t("tldrNeedsYou")}</span>}
 							<span className="tldr-text">{row.line.text}</span>
+							{row.line.chat && onOpenChat && (
+								<button
+									type="button"
+									className="tldr-open-chat"
+									title={row.line.chat.title ?? t("taskQueueOpenChat")}
+									onClick={() => row.line.chat && onOpenChat(row.line.chat.file)}
+								>
+									{t("taskQueueOpenChat")}
+								</button>
+							)}
 							{row.line.ts > 0 && (
 								<time
 									className="tldr-time"

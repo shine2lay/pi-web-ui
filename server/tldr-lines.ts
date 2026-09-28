@@ -131,7 +131,7 @@ export function tldrLinesFromEntries(entries: readonly TldrEntryLike[], max = TL
 			continue;
 		}
 		if (e.customType !== TLDR_ENTRY_TYPE) continue;
-		const d = (e.data ?? {}) as { text?: unknown; needsYou?: unknown; ts?: unknown };
+		const d = (e.data ?? {}) as { text?: unknown; needsYou?: unknown; ts?: unknown; chat?: unknown };
 		const text = typeof d.text === "string" ? d.text.trim() : "";
 		if (!text || !e.id) continue;
 		const ts = typeof d.ts === "number" && Number.isFinite(d.ts) ? d.ts : Date.parse(e.timestamp ?? "") || 0;
@@ -141,6 +141,14 @@ export function tldrLinesFromEntries(entries: readonly TldrEntryLike[], max = TL
 			needsYou: d.needsYou === true,
 			ts,
 		};
+		// queue-lanes: pi-queue's report about a task that runs in a chat of its own links to that chat.
+		const chat = (d.chat ?? {}) as { file?: unknown; title?: unknown };
+		if (typeof chat.file === "string" && chat.file) {
+			line.chat = {
+				file: chat.file,
+				...(typeof chat.title === "string" && chat.title ? { title: chat.title.slice(0, 200) } : {}),
+			};
+		}
 		out.push(line);
 		if (line.needsYou) waiting.push(line);
 	}

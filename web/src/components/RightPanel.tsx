@@ -928,6 +928,8 @@ export const RightPanel = memo(function RightPanel({
 		[panelSend, tldrConversationId],
 	);
 	const taskQueueTabHidden = (uiRightPanelTabs ?? []).some((e) => e.id === "host:right-queue" && e.hidden);
+	/** queue-lanes: open a queued task's own chat (or the queue's chat) from the Queue and TL;DR tabs. */
+	const onOpenChat = useCallback((file: string) => void panelSend({ type: "switch_session", path: file }), [panelSend]);
 	/** 队列 tab 的按钮（queue-panel）：服务端转成 `/queue …` 交给这条对话的 pi-queue。 */
 	const onTaskQueueCommand = useCallback(
 		(action: TaskQueueAction, id?: number) => {
@@ -1308,7 +1310,14 @@ export const RightPanel = memo(function RightPanel({
 									{
 										id: TLDR_TAB_ID,
 										label: t("tldrTab"),
-										element: <TldrPanel key={tldrConversationId ?? ""} lines={tldr} onCollapse={onTldrCollapse} />,
+										element: (
+											<TldrPanel
+												key={tldrConversationId ?? ""}
+												lines={tldr}
+												onCollapse={onTldrCollapse}
+												onOpenChat={onOpenChat}
+											/>
+										),
 									},
 								]),
 						...(taskQueueTabHidden
@@ -1318,7 +1327,12 @@ export const RightPanel = memo(function RightPanel({
 										id: TASK_QUEUE_TAB_ID,
 										label: t("taskQueueTab"),
 										element: (
-											<TaskQueuePanel key={tldrConversationId ?? ""} queue={taskQueue} onCommand={onTaskQueueCommand} />
+											<TaskQueuePanel
+												key={tldrConversationId ?? ""}
+												queue={taskQueue}
+												onCommand={onTaskQueueCommand}
+												onOpenChat={onOpenChat}
+											/>
 										),
 									},
 								]),

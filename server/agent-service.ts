@@ -287,6 +287,7 @@ import type {
 } from "./protocol.js";
 import { buildQuestionIndex } from "./question-index.js";
 import { TASK_QUEUE_ENTRY_TYPE, taskQueueCommandLine, taskQueueFromEntries } from "./task-queue.js";
+import { installQueueHost, makeChain, type QueueChatStart, waitUntil } from "./queue-host.js";
 import { idsHash } from "./window-hash.js";
 import {
 	isTldrReply,
@@ -1917,6 +1918,9 @@ export interface Conversation {
 	presetLocked?: boolean;
 	/** 权限预设值（read-only/workspace-write-never/danger-full-access）。 */
 	permissionPreset?: string;
+	/** queue-lanes: the queue's pseudo client opened it (a task chat, or a chat opened for a queue
+	 *  command). When that client moves on, only such chats are let go, never a user's chat. */
+	openedByQueue?: boolean;
 	/** 临时会话（inMemory，不落盘、不进历史、不占持久会话名额）。 */
 	isEphemeral?: boolean;
 	/** 本对话的审批放行策略（仅内存，不落盘）：allowAll = 「本对话全部允许」，
@@ -2080,6 +2084,12 @@ const CARRY_ON_CLIENT_PREFIX = "carry-on:";
 /** wake-reopen: the pseudo client (a carry-on one) that reopens a closed chat for its scheduled wake-up. */
 const WAKE_REOPEN_CLIENT_ID = `${CARRY_ON_CLIENT_PREFIX}wake`;
 const WAKE_REOPEN_SINK = (): void => {};
+/** queue-lanes: the pseudo clients through which the queue host (queue-host.ts) opens chats: one
+ *  starts the task chats, the other opens a chat to run a queue command in it. Carry-on ones: they
+ *  get past the carry-on gate and start on a blank chat. */
+const QUEUE_TASKS_CLIENT_ID = `${CARRY_ON_CLIENT_PREFIX}queue`;
+const QUEUE_HOME_CLIENT_ID = `${CARRY_ON_CLIENT_PREFIX}queue-home`;
+const QUEUE_HOST_SINK = (): void => {};
 
 /** carry-on: the chat's transcript as the live list keys it (null for chats that don't count). */
 function runningRef(conv: Conversation): { sessionFile: string; title: string; cwd: string } | null {
@@ -4576,6 +4586,157 @@ export class ClientSession {
 		return started;
 	}
 
+	/**
+	 * queue-lanes: open a fresh chat for a queued task (this client is the queue's pseudo client, see
+	 * AgentService.installQueueHost). It is named, gets the task's entries, the model and thinking
+	 * level, and its first message. Returns once its run has started; throws otherwise. It is listed
+	 * in every window's running list and stays open when this client moves on, until the queue
+	 * closes it (releaseQueueChat) once its task is done.
+	 */
+	async openTaskChat(o: QueueChatStart): Promise<{ sessionFile: string; conversationId: string }> {
+		if (this.quiesceBlocked()) throw new Error("the server is shutting down");
+		const conversationId = this.nextConversationId();
+		const terminals = this.makeTerminalManager(conversationId, o.cwd);
+		let runtime: AgentSessionRuntime;
+		try {
+			runtime = await createAgentSessionRuntime(this.makeRuntimeFactory(terminals, undefined, conversationId), {
+				cwd: o.cwd,
+				agentDir: this.agentDir,
+				sessionManager: SessionManager.create(o.cwd),
+			});
+		} catch (err) {
+			terminals.killAll();
+			throw err;
+		}
+		const displaced = this.queueLetGo();
+		const conv = this.makeConversation(runtime, conversationId, terminals);
+		conv.openedByQueue = true;
+		this.applyToolGating(conv.session, conv.agentPreset);
+		this.convs.set(conv.id, conv);
+		this.activeId = conv.id;
+		if (displaced) this.removeConversation(displaced.id);
+		await this.bindSession();
+		this.invalidateSessionInfos();
+		const session = conv.session;
+		// Named before its first message, so it shows up as "Queue #n: ..." right away.
+		session.setSessionName(o.name);
+		conv.title = o.name;
+		for (const e of o.entries) session.sessionManager.appendCustomEntry(e.customType, e.data);
+		let modelSet = false;
+		if (o.model) {
+			const slash = o.model.indexOf("/");
+			const model = conv.runtime.services.modelRuntime.getModel(o.model.slice(0, slash), o.model.slice(slash + 1));
+			if (model) {
+				try {
+					// Key first, then the model (checkAuth). Not setModel(): that remembers the model for the
+					// project, which is the user's choice to make.
+					await this.restoreKeyForModel(o.model, o.cwd);
+					await session.setModel(model);
+					modelSet = true;
+				} catch {
+					// the model can't be used: fall back to the project's
+				}
+			}
+		}
+		if (!modelSet) {
+			try {
+				await this.restoreProjectModelForCwd(o.cwd);
+			} catch {
+				// keep the default
+			}
+		}
+		if (o.thinking) {
+			try {
+				session.setThinkingLevel(o.thinking as Parameters<AgentSession["setThinkingLevel"]>[0]);
+			} catch {
+				// the model has no such level
+			}
+		}
+		const before = session.messages.length;
+		void this.prompt(o.prompt).catch(() => {});
+		const started = await waitUntil(() => session.isStreaming || session.messages.length > before, 20_000);
+		if (!started) {
+			try {
+				await session.abort();
+			} catch {
+				// nothing running
+			}
+			// Let go at this client's next open (it never got going; nothing is written until it answers).
+			conv.listed = false;
+			conv.promptedSinceActive = false;
+			throw new Error("the chat didn't start");
+		}
+		conv.listed = true;
+		conv.promptedSinceActive = true;
+		ClientSession.emitConversationsToAll();
+		return { sessionFile: String(session.sessionFile ?? ""), conversationId: conv.id };
+	}
+
+	/**
+	 * queue-lanes: open the chat with this transcript to run a queue command in it (this client is the
+	 * queue's pseudo client for commands). A task chat whose task is still open stays listed and
+	 * loaded (its waits run there); any other chat is let go again at this client's next open.
+	 * null = it couldn't be opened.
+	 */
+	async openChatForQueue(file: string): Promise<AgentSession | null> {
+		await this.switchSession(file);
+		const id = this.conversationIdBySessionFile(file);
+		const conv = id ? this.convs.get(id) : undefined;
+		if (!conv || id !== this.activeId) return null;
+		conv.openedByQueue = true;
+		let keep = false;
+		try {
+			const q = taskQueueFromEntries(conv.session.sessionManager.getBranch(), true);
+			keep = !!q.from && q.tasks.some((t) => t.status !== "done");
+		} catch {
+			// unreadable: treat it as a plain chat
+		}
+		conv.listed = keep || conv.listed;
+		conv.promptedSinceActive = keep;
+		return conv.session;
+	}
+
+	/** queue-lanes: the session of the chat with this transcript, when this client has it open. */
+	queueSessionFor(file: string): AgentSession | null {
+		const id = this.conversationIdBySessionFile(file);
+		return (id && this.convs.get(id)?.session) || null;
+	}
+
+	/**
+	 * queue-lanes: a task chat whose task is done leaves the running list. It is freed right away,
+	 * or, when it is this client's active chat or a window is looking at it, as soon as that moves on.
+	 * It stays in the history. false = this client doesn't have it open.
+	 */
+	releaseQueueChat(file: string): boolean {
+		const id = this.conversationIdBySessionFile(file);
+		const conv = id ? this.convs.get(id) : undefined;
+		if (!conv) return false;
+		conv.listed = false;
+		conv.promptedSinceActive = false;
+		if (conv.id !== this.activeId && !this.viewedElsewhere(conv.id)) this.removeConversation(conv.id);
+		ClientSession.sessionsChangedForAll();
+		return true;
+	}
+
+	/**
+	 * queue-lanes: the queue's pseudo client moves on to another chat. Returns the chat it leaves when
+	 * that one should be closed: only a chat the queue opened (or a blank one), never a user's chat
+	 * this client was moved onto (recoverLostActive can do that). The running-list rules still keep a
+	 * chat that is working or holds an open task (displaceActive).
+	 */
+	private queueLetGo(): Conversation | null {
+		const conv = this.convs.get(this.activeId);
+		if (!conv) return null;
+		let blank = false;
+		try {
+			blank = conv.session.getSessionStats().totalMessages === 0;
+		} catch {
+			// session being replaced: leave it alone
+		}
+		if (!conv.openedByQueue && !blank) return null;
+		return this.displaceActive();
+	}
+
 	/** 找持有指定转录文件的本地对话 id（找不到 = 已被关闭/搬走/还没建好）。 */
 	private conversationIdBySessionFile(file: string): string | null {
 		let abs: string;
@@ -4781,6 +4942,18 @@ export class ClientSession {
 		for (const cs of ClientSession.liveSessions) {
 			if (cs.disposed || cs.sinkCount() === 0) continue;
 			cs.emitConversations();
+		}
+	}
+
+	/** queue-lanes: a chat was let go to its transcript (a queued task finished). Every window reads its
+	 *  list of saved chats again, so the chat shows up under Recent chats right away instead of vanishing
+	 *  until the next refresh. Windows that never asked for the list just get the new running list. */
+	private static sessionsChangedForAll(): void {
+		for (const cs of ClientSession.liveSessions) {
+			if (cs.disposed || cs.sinkCount() === 0) continue;
+			cs.invalidateSessionInfos();
+			if (cs.sessionsRequested) void cs.refreshSessions().catch(() => {});
+			else cs.emitConversations();
 		}
 	}
 
@@ -13259,6 +13432,87 @@ export class AgentService {
 		}
 	}
 
+	/** queue-lanes: taken back down in disposeAll. */
+	private uninstallQueueHost: (() => void) | null = null;
+	/** queue-lanes: one task chat opened at a time, one chat opened for a command at a time. */
+	private queueTasksChain = makeChain();
+	private queueHomeChain = makeChain();
+
+	/**
+	 * queue-lanes: offer pi-queue a way to run queued tasks in chats of their own (queue-host.ts).
+	 * The command-line pi has none; there tasks run in the queue's chat as before.
+	 */
+	installQueueHost(): void {
+		if (this.uninstallQueueHost) return;
+		this.uninstallQueueHost = installQueueHost({
+			startChat: (o) =>
+				this.queueTasksChain(() => this.withQueueClient(QUEUE_TASKS_CLIENT_ID, (cs) => cs.openTaskChat(o))),
+			runCommand: (file, line) => this.queueRunCommand(file, line),
+			closeChat: (file) => this.queueCloseChat(file),
+		});
+	}
+
+	/** queue-lanes: do something through one of the queue's pseudo clients; open windows list the result. */
+	private async withQueueClient<T>(clientId: string, fn: (cs: ClientSession) => Promise<T>): Promise<T> {
+		if (this.quiesced) throw new Error("the server is busy (quiesced)");
+		const cs = await this.attach(clientId, QUEUE_HOST_SINK);
+		try {
+			return await fn(cs);
+		} finally {
+			this.pokeExternalRunning(clientId);
+			// Nobody watches through this client: its chats count as unwatched (their done ring rings).
+			this.detach(clientId, QUEUE_HOST_SINK);
+		}
+	}
+
+	/** queue-lanes: the open chat with this transcript, in any client. */
+	private queueSessionFor(file: string): AgentSession | null {
+		for (const cs of this.clients.values()) {
+			try {
+				const s = cs.queueSessionFor(file);
+				if (s) return s;
+			} catch {
+				// one broken client doesn't stop the search
+			}
+		}
+		return null;
+	}
+
+	/** queue-lanes: run a "/queue ..." line in the chat with this transcript, opening it if it isn't open. */
+	private async queueRunCommand(file: string, line: string): Promise<boolean> {
+		const run = async (session: AgentSession | null): Promise<boolean> => {
+			// No /queue command (pi-queue isn't loaded there): prompt() would send the line to the model.
+			if (!session?.extensionRunner?.getCommand?.("queue")) return false;
+			await session.prompt(line);
+			return true;
+		};
+		const open = this.queueSessionFor(file);
+		if (open) return run(open);
+		if (!existsSync(file)) return false;
+		return this.queueHomeChain(() =>
+			this.withQueueClient(QUEUE_HOME_CLIENT_ID, async (cs) =>
+				run(this.queueSessionFor(file) ?? (await cs.openChatForQueue(file))),
+			),
+		);
+	}
+
+	/** queue-lanes: a done task's chat leaves the running list once it is idle (at most 2 minutes). */
+	private async queueCloseChat(file: string): Promise<boolean> {
+		const session = this.queueSessionFor(file);
+		if (!session) return false;
+		await waitUntil(() => !session.isStreaming && !session.isCompacting, 120_000, 500);
+		return this.queueTasksChain(async () => {
+			for (const cs of this.clients.values()) {
+				try {
+					if (cs.releaseQueueChat(file)) return true;
+				} catch {
+					// try the next client
+				}
+			}
+			return false;
+		});
+	}
+
 	/** issue #231：同项目视口回退 —— 原绑定对话不在时，把唤醒投给该项目最近活跃
 	 *  的对话（用户当前正看着的面），而不是静默转无头。excludeIds 跳过已知忙对话；
 	 *  候选全部忙回 busy:true；无候选回 ok:false。成功带回实际投递方（调用方重绑定）。 */
@@ -14232,6 +14486,8 @@ export class AgentService {
 	}
 
 	async disposeAll(): Promise<void> {
+		this.uninstallQueueHost?.();
+		this.uninstallQueueHost = null;
 		this.recordInterruptedRuns();
 		const all = [...this.clients.values()];
 		this.clients.clear();

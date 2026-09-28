@@ -171,6 +171,9 @@ export interface UiTldrLine {
 	/** needs-you 行之后用户回过话了（tldr-answered：发了消息，或在问卷 / 计划批准框里作了答）：
 	 *  tab 和左栏都不再高亮。只出现在 needs-you 行上；没回时不带。 */
 	answered?: boolean;
+	/** queue-lanes: the chat this line is about (pi-queue's report of a task that runs in a chat of its
+	 *  own): the tab links to it. */
+	chat?: UiTaskQueueChat;
 }
 
 /** 任务队列里一个任务的计划（queue-panel）：用户和 agent 一起定下、用户在对话框里批准过的六部分。 */
@@ -221,6 +224,32 @@ export interface UiTaskQueueTask {
 	addedAt: number;
 	startedAt?: number;
 	doneAt?: number;
+	/** queue-lanes: what it touches (projects, repos, services). Tasks sharing a touch run one after another
+	 *  in a lane; [] = nothing declared (runs alone). Not there = added before lanes: runs in the queue's chat. */
+	touches?: string[];
+	/** queue-lanes: it was started in a fresh chat of its own. */
+	lane?: boolean;
+	/** queue-lanes: that chat, once known. */
+	chat?: UiTaskQueueChat;
+}
+
+/** queue-lanes: a chat a task runs in, or the queue a task chat came from. */
+export interface UiTaskQueueChat {
+	/** Its transcript (open it with switch_session). */
+	file: string;
+	title?: string;
+}
+
+/** queue-lanes: open tasks that share a touch (directly or through each other) run one after another. */
+export interface UiTaskQueueLane {
+	/** 1, 2, 3 and so on, in queue order of each lane's first open task. */
+	n: number;
+	/** Everything its tasks touch. */
+	touches: string[];
+	/** One task that runs alone (nothing declared): nothing else runs while it does. */
+	alone: boolean;
+	/** Its open tasks, in queue order. */
+	taskIds: number[];
 }
 
 /** 这条对话的任务队列（queue-panel）：pi-queue 存在会话里的 `queue` 条目沿当前分支重放出来的。
@@ -234,6 +263,12 @@ export interface UiTaskQueue {
 	available: boolean;
 	/** 按队列顺序：ready 的就按这个顺序做。删掉的不带；做完的只带最近的一批。 */
 	tasks: UiTaskQueueTask[];
+	/** queue-lanes: the open tasks by lane; only when some task runs in a chat of its own. */
+	lanes?: UiTaskQueueLane[];
+	/** queue-lanes: how many lanes may run at once; not there = 2. */
+	lanesAtOnce?: number;
+	/** queue-lanes: set in a task's own chat: the queue chat it came from. */
+	from?: UiTaskQueueChat;
 }
 
 /** 扩展弹窗（ctx.ui.select / confirm / input）。页面用 dialog_response 按 id 回答，null = 取消。 */
@@ -758,7 +793,8 @@ export type ClientMessage =
 	 *  （扩展命令即时执行，agent 在跑也行，不进消息列表）。conversationId 对不上当前对话就不做。 */
 	| {
 			type: "task_queue_command";
-			action: "start" | "stop" | "up" | "down" | "remove" | "clear";
+			/** lanes: how many lanes may run at once, the number in `id` (queue-lanes). */
+			action: "start" | "stop" | "up" | "down" | "remove" | "clear" | "lanes";
 			id?: number;
 			conversationId?: string;
 	  }

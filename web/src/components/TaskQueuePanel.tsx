@@ -26,7 +26,11 @@ import { lineTime } from "./TldrPanel";
 type TKey = Parameters<Translate>[0];
 
 /** 面板按钮能发的命令（服务端 taskQueueCommandLine 转成 `/queue …`）。 */
-export type TaskQueueAction = "start" | "stop" | "up" | "down" | "remove" | "clear";
+export type TaskQueueAction = "start" | "stop" | "up" | "down" | "remove" | "clear" | "lanes";
+
+/** queue-lanes: the most lanes that may run at once (pi-queue MAX_LANES); 2 when not set. */
+const MAX_LANES = 8;
+const DEFAULT_LANES = 2;
 
 /** 点了按钮后最多等服务端这么久；命令没改队列时（比如没东西可开始）按钮也会放开。 */
 const BUSY_MS = 5000;
@@ -45,6 +49,8 @@ export const TASK_QUEUE_PLAN_PARTS: readonly (readonly [Exclude<keyof UiTaskQueu
 ];
 
 export interface TaskQueueSections {
+	/** queue-lanes: tasks working in chats of their own (working, stuck or on hold there), in queue order. */
+	inChats: UiTaskQueueTask[];
 	/** 正在做或卡住等用户的那个（最多一个）。 */
 	current?: UiTaskQueueTask;
 	/** 搁着等外面的事的，按队列顺序（等到了、没等到的也在这，直到它们接着做）。 */
@@ -57,9 +63,11 @@ export interface TaskQueueSections {
 
 export function taskQueueSections(q: UiTaskQueue | undefined): TaskQueueSections {
 	const tasks = q?.tasks ?? [];
+	const open = (t: UiTaskQueueTask) => t.status === "working" || t.status === "stuck" || t.status === "waiting";
 	return {
-		current: tasks.find((t) => t.status === "working" || t.status === "stuck"),
-		waiting: tasks.filter((t) => t.status === "waiting"),
+		inChats: tasks.filter((t) => t.lane && open(t)),
+		current: tasks.find((t) => !t.lane && (t.status === "working" || t.status === "stuck")),
+		waiting: tasks.filter((t) => !t.lane && t.status === "waiting"),
 		ready: tasks.filter((t) => t.status === "ready"),
 		done: tasks.filter((t) => t.status === "done").sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0)),
 	};
@@ -67,12 +75,16 @@ export function taskQueueSections(q: UiTaskQueue | undefined): TaskQueueSections
 
 /** 顶上那行状态说哪句话。 */
 export function taskQueueStatusKey(q: UiTaskQueue, s: TaskQueueSections): TKey {
-	if (s.current?.status === "stuck") return "taskQueueStatusStuck";
+	if (s.current?.status === "stuck" || s.inChats.some((t) => t.status === "stuck")) return "taskQueueStatusStuck";
 	if (q.running) {
 		if (s.current) return "taskQueueStatusWorking";
+		if (s.inChats.length === 1) return "taskQueueStatusLane";
+		if (s.inChats.length > 1) return "taskQueueStatusLanes";
 		return s.waiting.length > 0 ? "taskQueueStatusOnHold" : "taskQueueStatusRunning";
 	}
-	if (!s.current && s.ready.length === 0 && s.waiting.length === 0) return "taskQueueStatusFinished";
+	if (!s.current && s.ready.length === 0 && s.waiting.length === 0 && s.inChats.length === 0) {
+		return "taskQueueStatusFinished";
+	}
 	switch (q.pausedReason) {
 		case "user":
 			return "taskQueueStatusStopped";
@@ -90,11 +102,14 @@ export function taskQueueStatusKey(q: UiTaskQueue, s: TaskQueueSections): TKey {
 export const TaskQueuePanel = memo(function TaskQueuePanel({
 	queue,
 	onCommand,
+	onOpenChat,
 	defaultOpen = [],
 }: {
 	queue: UiTaskQueue | undefined;
 	/** 发一条 `/queue …` 命令给这条对话的 pi-queue。不给就不出按钮（只读）。 */
 	onCommand?: (action: TaskQueueAction, id?: number) => void;
+	/** queue-lanes: open a task's own chat (or the queue's chat). Not given = no links. */
+	onOpenChat?: (file: string) => void;
 	/** 初始展开计划的任务（测试用；界面上点标题切换）。 */
 	defaultOpen?: readonly number[];
 }) {
@@ -124,7 +139,8 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 	}
 
 	const s = taskQueueSections(queue);
-	const controls = queue.available && onCommand ? onCommand : undefined;
+	// queue-lanes: a task's own chat only shows its task; the queue is steered from the queue's chat.
+	const controls = queue.available && onCommand && !queue.from ? onCommand : undefined;
 	const run = (action: TaskQueueAction, id?: number) => {
 		if (!controls || busy) return;
 		setBusy(true);
@@ -139,9 +155,19 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 			return next;
 		});
 	const statusKey = taskQueueStatusKey(queue, s);
-	const canStart = !!s.current || s.ready.length > 0 || s.waiting.length > 0;
+	const canStart = !!s.current || s.ready.length > 0 || s.waiting.length > 0 || s.inChats.length > 0;
+	// queue-lanes: which lane each open task is in, and whether the lanes setting is worth showing.
+	const laneNo = new Map<number, number>();
+	for (const lane of queue.lanes ?? []) for (const id of lane.taskIds) laneNo.set(id, lane.n);
+	const lanesAtOnce = queue.lanesAtOnce ?? DEFAULT_LANES;
+	const showLanes =
+		!queue.from &&
+		(!!queue.lanes ||
+			queue.lanesAtOnce !== undefined ||
+			queue.tasks.some((x) => x.touches !== undefined && x.status !== "done"));
+	const stuckInChat = s.inChats.find((x) => x.status === "stuck");
 
-	const row = (task: UiTaskQueueTask, kind: "current" | "waiting" | "ready" | "done", index = 0) => {
+	const row = (task: UiTaskQueueTask, kind: "current" | "lane" | "waiting" | "ready" | "done", index = 0) => {
 		const expanded = open.has(task.id);
 		const wait = kind === "waiting" ? task.wait : undefined;
 		const cls = ["task-queue-task", kind, task.status === "stuck" ? "needs-you" : "", wait?.failed ? "wait-failed" : ""]
@@ -150,7 +176,7 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 		const when =
 			kind === "done" && task.doneAt
 				? t("taskQueueFinishedAt", { time: lineTime(task.doneAt) })
-				: (kind === "current" || kind === "waiting") && task.startedAt
+				: (kind === "current" || kind === "lane" || kind === "waiting") && task.startedAt
 					? t("taskQueueStarted", { time: lineTime(task.startedAt) })
 					: "";
 		return (
@@ -166,6 +192,21 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 						<span className="task-queue-id">#{task.id}</span>
 						<span className="task-queue-title-text">{task.plan.title}</span>
 					</button>
+					{kind !== "done" && laneNo.has(task.id) && (
+						<span className="task-queue-lane" data-lane={laneNo.get(task.id)}>
+							{t("taskQueueLane", { n: laneNo.get(task.id) ?? "" })}
+						</span>
+					)}
+					{task.chat && onOpenChat && (
+						<button
+							type="button"
+							className="task-queue-open-chat"
+							title={task.chat.title ?? t("taskQueueOpenChat")}
+							onClick={() => task.chat && onOpenChat(task.chat.file)}
+						>
+							{t("taskQueueOpenChat")}
+						</button>
+					)}
 					{kind === "ready" &&
 						controls &&
 						(removing === task.id ? (
@@ -222,7 +263,12 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 					<div className="task-queue-question">
 						<span className="task-queue-badge">{t("taskQueueNeedsYou")}</span>
 						{task.question && <span className="task-queue-question-text">{task.question}</span>}
-						<span className="task-queue-hint">{t("taskQueueAnswerHint")}</span>
+						<span className="task-queue-hint">{t(task.lane ? "taskQueueAnswerInChat" : "taskQueueAnswerHint")}</span>
+					</div>
+				)}
+				{kind !== "done" && task.touches !== undefined && (
+					<div className="task-queue-touches">
+						{task.touches.length > 0 ? `${t("taskQueueTouches")}: ${task.touches.join(", ")}` : t("taskQueueRunsAlone")}
 					</div>
 				)}
 				{wait &&
@@ -274,10 +320,13 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 		<div className="task-queue-panel">
 			<div className="task-queue-head">
 				<span
-					className={s.current?.status === "stuck" ? "task-queue-status needs-you" : "task-queue-status"}
+					className={s.current?.status === "stuck" || stuckInChat ? "task-queue-status needs-you" : "task-queue-status"}
 					data-running={queue.running ? "true" : "false"}
 				>
-					{t(statusKey, { id: s.current?.id ?? s.waiting[0]?.id ?? "" })}
+					{t(statusKey, {
+						id: s.current?.id ?? stuckInChat?.id ?? s.inChats[0]?.id ?? s.waiting[0]?.id ?? "",
+						n: s.inChats.length,
+					})}
 				</span>
 				{controls &&
 					(queue.running ? (
@@ -303,6 +352,56 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 					))}
 			</div>
 			{!queue.available && <p className="task-queue-note">{t("taskQueueNotLoaded")}</p>}
+			{queue.from && (
+				<p className="task-queue-from">
+					{queue.from.title ? t("taskQueueFrom", { title: queue.from.title }) : t("taskQueueFromUntitled")}
+					{onOpenChat && (
+						<button
+							type="button"
+							className="task-queue-open-chat"
+							onClick={() => queue.from && onOpenChat(queue.from.file)}
+						>
+							{t("taskQueueOpenQueue")}
+						</button>
+					)}
+				</p>
+			)}
+			{showLanes && (
+				<div className="task-queue-lanes-at-once">
+					<span className="task-queue-lanes-label">{t("taskQueueLanesAtOnce")}</span>
+					{controls && (
+						<button
+							type="button"
+							className="task-queue-lanes-fewer"
+							title={t("taskQueueLanesFewer")}
+							aria-label={t("taskQueueLanesFewer")}
+							disabled={busy || lanesAtOnce <= 1}
+							onClick={() => run("lanes", lanesAtOnce - 1)}
+						>
+							-
+						</button>
+					)}
+					<span className="task-queue-lanes-n">{lanesAtOnce}</span>
+					{controls && (
+						<button
+							type="button"
+							className="task-queue-lanes-more"
+							title={t("taskQueueLanesMore")}
+							aria-label={t("taskQueueLanesMore")}
+							disabled={busy || lanesAtOnce >= MAX_LANES}
+							onClick={() => run("lanes", lanesAtOnce + 1)}
+						>
+							+
+						</button>
+					)}
+				</div>
+			)}
+			{s.inChats.length > 0 && (
+				<section className="task-queue-section">
+					<h4 className="task-queue-heading">{t("taskQueueInChats")}</h4>
+					<ul className="task-queue-list">{s.inChats.map((task) => row(task, "lane"))}</ul>
+				</section>
+			)}
 			{s.current && (
 				<section className="task-queue-section">
 					<h4 className="task-queue-heading">{t("taskQueueNow")}</h4>

@@ -16,8 +16,10 @@ import { LanguageProvider } from "../../web/src/i18n.js";
 import type { UiTaskQueue, UiTaskQueueTask } from "../../server/protocol.js";
 
 const noop = () => {};
-const render = (queue: UiTaskQueue | undefined, opts: { onCommand?: () => void; defaultOpen?: number[] } = {}) =>
-	renderToStaticMarkup(createElement(LanguageProvider, null, createElement(TaskQueuePanel, { queue, ...opts })));
+const render = (
+	queue: UiTaskQueue | undefined,
+	opts: { onCommand?: () => void; onOpenChat?: (file: string) => void; defaultOpen?: number[] } = {},
+) => renderToStaticMarkup(createElement(LanguageProvider, null, createElement(TaskQueuePanel, { queue, ...opts })));
 
 const task = (
 	id: number,
@@ -183,8 +185,101 @@ describe("TaskQueuePanel", () => {
 	});
 });
 
+describe("TaskQueuePanel (lanes)", () => {
+	const laneQueue = () =>
+		q(
+			[
+				task(1, "working", {
+					lane: true,
+					touches: ["pi-web-ui repo"],
+					startedAt: 10,
+					chat: { file: "/s/one.jsonl", title: "Queue #1: Task 1" },
+				}),
+				task(2, "stuck", { lane: true, touches: ["temper"], question: "Which port?", startedAt: 20 }),
+				task(3, "ready", { touches: ["pi-web-ui repo"] }),
+				task(4, "ready", { touches: [] }),
+			],
+			{
+				running: true,
+				lanes: [
+					{ n: 1, touches: ["pi-web-ui repo"], alone: false, taskIds: [1, 3] },
+					{ n: 2, touches: ["temper"], alone: false, taskIds: [2] },
+					{ n: 3, touches: [], alone: true, taskIds: [4] },
+				],
+			},
+		);
+
+	it("lists tasks running in chats of their own, with their lane, touches and a link to the chat", () => {
+		const html = render(laneQueue(), { onCommand: noop, onOpenChat: noop });
+		expect(taskIds(html, "lane")).toEqual([1, 2]);
+		expect(taskIds(html, "current")).toEqual([]);
+		expect(taskIds(html, "ready")).toEqual([3, 4]);
+		expect(html).toContain('class="task-queue-lane" data-lane="1"');
+		expect(html).toContain('class="task-queue-lane" data-lane="2"');
+		expect(html).toContain("pi-web-ui repo");
+		// Task 1's chat is known: a link; task 2's isn't yet: none.
+		expect(html.match(/class="task-queue-open-chat"/g)).toHaveLength(1);
+		expect(html).toContain('title="Queue #1: Task 1"');
+		// The stuck lane task shows its question, and it's answered in its own chat.
+		expect(html).toContain('class="task-queue-task lane needs-you"');
+		expect(html).toContain("Which port?");
+	});
+
+	it("shows no chat links without a way to open them", () => {
+		expect(render(laneQueue(), { onCommand: noop })).not.toContain("task-queue-open-chat");
+	});
+
+	it("shows the lanes-at-once setting, with buttons only for the queue's own controls", () => {
+		const html = render(laneQueue(), { onCommand: noop });
+		expect(html).toContain('class="task-queue-lanes-at-once"');
+		expect(html).toMatch(/class="task-queue-lanes-n">2</);
+		expect(html).toContain('class="task-queue-lanes-fewer"');
+		expect(html).toContain('class="task-queue-lanes-more"');
+		const one = render({ ...laneQueue(), lanesAtOnce: 1 }, { onCommand: noop });
+		expect(one).toMatch(/class="task-queue-lanes-fewer"[^>]*disabled/);
+		expect(one).not.toMatch(/class="task-queue-lanes-more"[^>]*disabled/);
+		const eight = render({ ...laneQueue(), lanesAtOnce: 8 }, { onCommand: noop });
+		expect(eight).toMatch(/class="task-queue-lanes-more"[^>]*disabled/);
+		// No controls: the number only.
+		const ro = render(laneQueue());
+		expect(ro).toContain('class="task-queue-lanes-at-once"');
+		expect(ro).not.toContain("task-queue-lanes-more");
+		// An old queue (nothing declared) doesn't show it.
+		expect(render(q([task(1, "ready")]), { onCommand: noop })).not.toContain("task-queue-lanes-at-once");
+	});
+
+	it("in a task's own chat, says which queue it came from and links back to it", () => {
+		const html = render(
+			q([task(5, "working", { touches: ["a"], startedAt: 1 })], {
+				running: true,
+				from: { file: "/s/queue.jsonl", title: "tooling" },
+			}),
+			{ onCommand: noop, onOpenChat: noop },
+		);
+		expect(html).toContain('class="task-queue-from"');
+		expect(html).toContain("tooling");
+		expect(taskIds(html, "current")).toEqual([5]);
+		expect(html).not.toContain("task-queue-lanes-at-once");
+	});
+});
+
 describe("taskQueueStatusKey", () => {
 	const key = (queue: UiTaskQueue) => taskQueueStatusKey(queue, taskQueueSections(queue));
+	it("queue-lanes: counts tasks running in chats of their own", () => {
+		const lane = (id: number, status: UiTaskQueueTask["status"]) => task(id, status, { lane: true, touches: ["a"] });
+		// One task in a chat of its own is named ("#1 is working in its own chat"); more are counted.
+		expect(key(q([lane(1, "working"), task(2, "ready")], { running: true }))).toBe("taskQueueStatusLane");
+		expect(key(q([lane(1, "working"), lane(2, "working")], { running: true }))).toBe("taskQueueStatusLanes");
+		expect(key(q([lane(1, "working"), lane(2, "stuck")], { running: true }))).toBe("taskQueueStatusStuck");
+		// This chat's own task comes first.
+		expect(key(q([lane(1, "working"), task(2, "working")], { running: true }))).toBe("taskQueueStatusWorking");
+		// Stopped: the lane tasks keep going, but no new ones start.
+		expect(key(q([lane(1, "working"), task(2, "ready")], { pausedReason: "user" }))).toBe("taskQueueStatusStopped");
+		// Not "all done" while a lane task is still going.
+		expect(key(q([lane(1, "working")], { pausedReason: "finished" }))).not.toBe("taskQueueStatusFinished");
+		expect(taskQueueSections(q([lane(1, "working"), task(2, "working")])).current?.id).toBe(2);
+	});
+
 	it("says what the queue is doing", () => {
 		expect(key(q([task(1, "stuck")], { running: true }))).toBe("taskQueueStatusStuck");
 		expect(key(q([task(1, "stuck")]))).toBe("taskQueueStatusStuck");

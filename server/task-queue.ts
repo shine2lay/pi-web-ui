@@ -15,9 +15,23 @@
  * 和 UiState.queue（输入框里排队 / 插队的提问）不是一回事，所以这边一律叫 task queue。
  *
  * 条目格式是和 pi-queue 的约定，这里对坏数据一律跳过或兜底，不抛。
+ *
+ * queue-lanes: a task can list what it touches (projects, repos, services). Tasks that share a touch
+ * form a lane and run one after another; unrelated lanes run side by side, each task in a fresh chat
+ * of its own (pi-queue starts it through pi-web-ui's queue host, see queue-host.ts). The mirror keeps
+ * pi-queue's lane rules: lane tasks may be open at the same time, the in-chat "one current task" rule
+ * applies to the other tasks only. In a task's own chat the first entry (`assigned`) says which queue
+ * it came from.
  */
 
-import type { UiTaskQueue, UiTaskQueuePlan, UiTaskQueueTask, UiTaskQueueWait } from "./protocol.js";
+import type {
+	UiTaskQueue,
+	UiTaskQueueChat,
+	UiTaskQueueLane,
+	UiTaskQueuePlan,
+	UiTaskQueueTask,
+	UiTaskQueueWait,
+} from "./protocol.js";
 
 /** pi-queue 的 customType（与 pi-queue queue.ts 的 ENTRY_TYPE 一致）。 */
 export const TASK_QUEUE_ENTRY_TYPE = "queue";
@@ -44,7 +58,14 @@ interface State {
 	tasks: Task[];
 	running: boolean;
 	pausedReason?: PauseReason;
+	/** queue-lanes: how many lanes may run at once (pi-queue's DEFAULT_LANES / MAX_LANES). */
+	lanes: number;
+	/** queue-lanes: set in a task's own chat — the queue it came from. */
+	from?: UiTaskQueueChat;
 }
+
+export const TASK_QUEUE_DEFAULT_LANES = 2;
+export const TASK_QUEUE_MAX_LANES = 8;
 
 const cap = (s: string, max: number) => (s.length > max ? `${s.slice(0, max)}…` : s);
 const str = (x: unknown, max: number) => (typeof x === "string" ? cap(x, max) : "");
@@ -65,8 +86,29 @@ function planOf(raw: unknown): UiTaskQueuePlan {
 }
 
 const OPEN: ReadonlySet<Status> = new Set(["ready", "working", "stuck", "waiting"]);
-/** 当前任务：正在做或卡住的那个（最多一个）。搁着等的任务不算当前任务，别的任务可以接着做。 */
-const current = (s: State) => s.tasks.find((t) => t.status === "working" || t.status === "stuck");
+/** 当前任务：正在做或卡住的那个（最多一个）。搁着等的任务不算当前任务，别的任务可以接着做。
+ *  queue-lanes: tasks running in chats of their own don't count (they run side by side). */
+const current = (s: State) => s.tasks.find((t) => !t.lane && (t.status === "working" || t.status === "stuck"));
+
+/** pi-queue's normTouches: trimmed, lower case, inner spaces collapsed, no duplicates; undefined = not a list. */
+export function normTouches(raw: unknown): string[] | undefined {
+	if (!Array.isArray(raw)) return undefined;
+	const out: string[] = [];
+	for (const x of raw) {
+		if (typeof x !== "string") continue;
+		const t = x.trim().replace(/\s+/g, " ").toLowerCase();
+		if (t && t.length <= 80 && !out.includes(t)) out.push(t);
+	}
+	return out.slice(0, 20);
+}
+
+/** A chat reference from an entry ({file, title?}); null when it isn't one. */
+function chatOf(raw: unknown): UiTaskQueueChat | null {
+	const c = (raw ?? {}) as Record<string, unknown>;
+	if (typeof c.file !== "string" || !c.file) return null;
+	const title = typeof c.title === "string" && c.title ? cap(c.title, 200) : undefined;
+	return { file: c.file, ...(title ? { title } : {}) };
+}
 
 /** wait 条目缺数字时用 pi-queue 的默认值（queue.ts 的 DEFAULT_EVERY_MS / DEFAULT_GIVE_UP_MS）。 */
 const DEFAULT_EVERY_MS = 2 * 60_000;
@@ -93,23 +135,65 @@ function apply(s: State, raw: unknown): void {
 		for (const t of s.tasks) if (t.status === "done") t.status = "removed";
 		return;
 	}
+	if (op.op === "lanes") {
+		const n = typeof op.n === "number" && Number.isFinite(op.n) ? op.n : TASK_QUEUE_DEFAULT_LANES;
+		s.lanes = Math.round(Math.min(TASK_QUEUE_MAX_LANES, Math.max(1, n)));
+		return;
+	}
 	if (!isId(op.id)) return;
-	if (op.op === "add") {
+	if (op.op === "add" || op.op === "assigned") {
 		if (s.tasks.some((t) => t.id === op.id)) return;
-		s.tasks.push({ id: op.id, plan: planOf(op.plan), status: "ready", addedAt: num(op.ts) });
+		const task: Task = { id: op.id, plan: planOf(op.plan), status: "ready", addedAt: num(op.ts) };
+		const touches = normTouches(op.touches);
+		if (touches) task.touches = touches;
+		if (op.op === "assigned") {
+			// A task's own chat: it works on this one task from the start.
+			const from = chatOf(op.from);
+			if (s.from || !from) return;
+			s.from = from;
+			task.status = "working";
+			task.startedAt = num(op.ts);
+			s.running = true;
+			s.pausedReason = undefined;
+		}
+		s.tasks.push(task);
 		return;
 	}
 	const task = s.tasks.find((t) => t.id === op.id);
 	if (!task || !OPEN.has(task.status)) return;
 	switch (op.op) {
-		case "update":
+		case "update": {
 			task.plan = planOf(op.plan);
+			const touches = normTouches(op.touches);
+			if (touches) task.touches = touches;
+			return;
+		}
+		case "chat": {
+			const chat = chatOf(op);
+			if (!task.lane || task.chat || !chat) return;
+			task.chat = chat;
+			return;
+		}
+		case "requeue":
+			// A lane task whose chat never got going goes back to its place in the queue.
+			if (!task.lane || task.chat) return;
+			task.status = "ready";
+			task.lane = undefined;
+			task.question = undefined;
+			task.wait = undefined;
+			task.startedAt = undefined;
 			return;
 		case "start":
 		case "resume": {
-			// 同一时间只有一个当前任务：新任务或搁着的任务只在没有当前任务时开始（和 pi-queue 一样）。
-			const cur = current(s);
-			if ((op.op === "start" || task.status === "waiting") && cur && cur !== task) return;
+			if (op.op === "start" && task.status !== "ready") return;
+			// Lane tasks run in chats of their own, side by side. In this chat: 同一时间只有一个当前任务，
+			// 新任务或搁着的任务只在没有当前任务时开始（和 pi-queue 一样）。
+			const lane = op.op === "start" ? op.lane === true : task.lane === true;
+			if (!lane) {
+				const cur = current(s);
+				if ((op.op === "start" || task.status === "waiting") && cur && cur !== task) return;
+			}
+			if (lane) task.lane = true;
 			task.status = "working";
 			task.question = undefined;
 			task.wait = undefined;
@@ -118,7 +202,7 @@ function apply(s: State, raw: unknown): void {
 		}
 		case "stuck": {
 			const cur = current(s);
-			if (cur && cur !== task) return;
+			if (!task.lane && cur && cur !== task) return;
 			task.status = "stuck";
 			task.question = str(op.question, NOTE_MAX);
 			task.wait = undefined;
@@ -185,24 +269,72 @@ export function taskQueueFromEntries(
 	available: boolean,
 	maxDone = TASK_QUEUE_MAX_DONE,
 ): UiTaskQueue {
-	const s: State = { tasks: [], running: false };
+	const s: State = { tasks: [], running: false, lanes: TASK_QUEUE_DEFAULT_LANES };
 	for (const e of entries) {
 		if (e.type === "custom" && e.customType === TASK_QUEUE_ENTRY_TYPE) apply(s, e.data);
 	}
 	const done = s.tasks.filter((t) => t.status === "done").sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0));
 	const dropped = new Set(done.slice(maxDone));
 	const tasks = s.tasks.filter((t): t is UiTaskQueueTask => t.status !== "removed" && !dropped.has(t));
+	// queue-lanes: only a queue with tasks that run in chats of their own shows lanes (a task's own chat never).
+	const lanes = s.from ? [] : lanesOf(s.tasks);
 	return {
 		running: s.running,
 		...(s.pausedReason ? { pausedReason: s.pausedReason } : {}),
 		available,
 		tasks,
+		...(lanes.some((l) => !l.inChat)
+			? { lanes: lanes.map((l) => ({ n: l.n, touches: l.touches, alone: l.alone, taskIds: l.taskIds })) }
+			: {}),
+		...(s.lanes !== TASK_QUEUE_DEFAULT_LANES ? { lanesAtOnce: s.lanes } : {}),
+		...(s.from ? { from: s.from } : {}),
 	};
+}
+
+/**
+ * queue-lanes: the open tasks grouped into lanes (pi-queue's lanesOf, with pi-web-ui as the host):
+ * tasks that share a touch, directly or through other open tasks, are one lane. A task that runs
+ * alone (nothing declared, or added before lanes existed: it runs in the queue's own chat) is a lane
+ * of its own. Lanes are numbered in queue order of their first open task.
+ */
+function lanesOf(all: Task[]): (UiTaskQueueLane & { inChat: boolean })[] {
+	const open = all.filter((t) => OPEN.has(t.status));
+	const inChat = (t: Task) => !t.lane && t.touches === undefined;
+	const alone = (t: Task) => inChat(t) || !t.touches || t.touches.length === 0;
+	const parent = open.map((_, i) => i);
+	const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+	const owner = new Map<string, number>();
+	open.forEach((t, i) => {
+		if (alone(t)) return;
+		for (const touch of t.touches ?? []) {
+			const j = owner.get(touch);
+			if (j === undefined) owner.set(touch, i);
+			else parent[find(i)] = find(j);
+		}
+	});
+	const byRoot = new Map<number, UiTaskQueueLane & { inChat: boolean }>();
+	const lanes: (UiTaskQueueLane & { inChat: boolean })[] = [];
+	open.forEach((t, i) => {
+		const root = find(i);
+		let lane = byRoot.get(root);
+		if (!lane) {
+			lane = { n: lanes.length + 1, touches: [], alone: alone(t), taskIds: [], inChat: inChat(t) };
+			byRoot.set(root, lane);
+			lanes.push(lane);
+		}
+		lane.taskIds.push(t.id);
+		for (const touch of t.touches ?? []) if (!lane.touches.includes(touch)) lane.touches.push(touch);
+	});
+	return lanes;
 }
 
 /** 面板按钮 → pi-queue 的命令行；参数不对返回 null（不发）。 */
 export function taskQueueCommandLine(action: unknown, id: unknown): string | null {
 	if (action === "start" || action === "stop" || action === "clear") return `/queue ${action}`;
+	// queue-lanes: how many lanes may run at once (id carries the number).
+	if (action === "lanes") {
+		return isId(id) && id <= TASK_QUEUE_MAX_LANES ? `/queue lanes ${id}` : null;
+	}
 	if (action === "up" || action === "down" || action === "remove") return isId(id) ? `/queue ${action} ${id}` : null;
 	return null;
 }

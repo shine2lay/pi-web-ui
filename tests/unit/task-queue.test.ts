@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+	normTouches,
 	TASK_QUEUE_ENTRY_TYPE,
 	TASK_QUEUE_MAX_DONE,
 	taskQueueCommandLine,
@@ -284,7 +285,161 @@ describe("taskQueueFromEntries (defensive parts)", () => {
 	});
 });
 
+/** queue-lanes: the same rules as pi-queue's lanes (tests/lanes.test.ts there), seen from the Queue tab. */
+describe("taskQueueFromEntries (lanes)", () => {
+	const byId = (q: ReturnType<typeof replay>, id: number) => q.tasks.find((t) => t.id === id);
+
+	it("groups open tasks that share a touch into one lane; unrelated ones get lanes of their own", () => {
+		const q = replay(
+			entries([
+				{ op: "add", id: 1, plan: plan("One"), touches: ["pi-web-ui repo", "pi-web-deploy"] },
+				{ op: "add", id: 2, plan: plan("Two"), touches: ["temper"] },
+				{ op: "add", id: 3, plan: plan("Three"), touches: ["  PI-WEB-DEPLOY "] },
+				{ op: "add", id: 4, plan: plan("Four"), touches: [] },
+			]),
+		);
+		expect(byId(q, 3)?.touches).toEqual(["pi-web-deploy"]);
+		expect(q.lanes).toEqual([
+			{ n: 1, touches: ["pi-web-ui repo", "pi-web-deploy"], alone: false, taskIds: [1, 3] },
+			{ n: 2, touches: ["temper"], alone: false, taskIds: [2] },
+			{ n: 3, touches: [], alone: true, taskIds: [4] },
+		]);
+	});
+
+	it("joins lanes through a task that touches both, and drops finished tasks from them", () => {
+		const q = replay(
+			entries([
+				{ op: "add", id: 1, plan: plan("A"), touches: ["a"] },
+				{ op: "add", id: 2, plan: plan("B"), touches: ["b"] },
+				{ op: "add", id: 3, plan: plan("AB"), touches: ["a", "b"] },
+			]),
+		);
+		expect(q.lanes?.map((l) => l.taskIds)).toEqual([[1, 2, 3]]);
+		const after = replay(
+			entries([
+				{ op: "add", id: 1, plan: plan("A"), touches: ["a"] },
+				{ op: "add", id: 2, plan: plan("B"), touches: ["b"] },
+				{ op: "add", id: 3, plan: plan("AB"), touches: ["a", "b"] },
+				{ op: "remove", id: 3 },
+			]),
+		);
+		expect(after.lanes?.map((l) => l.taskIds)).toEqual([[1], [2]]);
+	});
+
+	it("lets lane tasks work side by side, next to this chat's one current task", () => {
+		const q = replay(
+			entries([
+				{ op: "add", id: 1, plan: plan("Old") },
+				{ op: "add", id: 2, plan: plan("Lane A"), touches: ["a"] },
+				{ op: "add", id: 3, plan: plan("Lane B"), touches: ["b"] },
+				{ op: "run" },
+				{ op: "start", id: 1 },
+				{ op: "start", id: 2, lane: true },
+				{ op: "start", id: 3, lane: true },
+				{ op: "stuck", id: 3, question: "Which port?" },
+				{ op: "chat", id: 2, file: "/s/a.jsonl", title: "Queue #2: Lane A" },
+				{ op: "chat", id: 2, file: "/s/other.jsonl" },
+				{ op: "chat", id: 1, file: "/s/not-a-lane.jsonl" },
+			]),
+		);
+		expect(byId(q, 1)).toMatchObject({ status: "working" });
+		expect(byId(q, 1)?.lane).toBeUndefined();
+		expect(byId(q, 1)?.chat).toBeUndefined();
+		expect(byId(q, 2)).toMatchObject({
+			status: "working",
+			lane: true,
+			chat: { file: "/s/a.jsonl", title: "Queue #2: Lane A" },
+		});
+		expect(byId(q, 3)).toMatchObject({ status: "stuck", lane: true, question: "Which port?" });
+		// The old task runs in this chat, alone; the lane tasks each have their own lane.
+		expect(q.lanes).toEqual([
+			{ n: 1, touches: [], alone: true, taskIds: [1] },
+			{ n: 2, touches: ["a"], alone: false, taskIds: [2] },
+			{ n: 3, touches: ["b"], alone: false, taskIds: [3] },
+		]);
+		// A second start doesn't restart a task that's already going.
+		const again = replay(
+			entries([
+				{ op: "add", id: 1, plan: plan("A"), touches: ["a"] },
+				{ op: "start", id: 1, lane: true },
+				{ op: "stuck", id: 1, question: "?" },
+				{ op: "start", id: 1, lane: true },
+			]),
+		);
+		expect(byId(again, 1)?.status).toBe("stuck");
+	});
+
+	it("puts a lane task whose chat never got going back in its place", () => {
+		const q = replay(
+			entries([
+				{ op: "add", id: 1, plan: plan("A"), touches: ["a"] },
+				{ op: "add", id: 2, plan: plan("B"), touches: ["b"] },
+				{ op: "start", id: 1, lane: true },
+				{ op: "start", id: 2, lane: true },
+				{ op: "chat", id: 2, file: "/s/b.jsonl" },
+				{ op: "requeue", id: 1 },
+				{ op: "requeue", id: 2 },
+			]),
+		);
+		expect(byId(q, 1)).toMatchObject({ status: "ready" });
+		expect(byId(q, 1)?.lane).toBeUndefined();
+		expect(byId(q, 1)?.startedAt).toBeUndefined();
+		// Its chat is known: it did get going, so it stays.
+		expect(byId(q, 2)).toMatchObject({ status: "working", lane: true });
+	});
+
+	it("keeps the lanes-at-once setting (1 to 8) and only reports it when it isn't the default 2", () => {
+		const at = (n: unknown) => replay(entries([{ op: "lanes", n }])).lanesAtOnce;
+		expect(at(2)).toBeUndefined();
+		expect(at(3)).toBe(3);
+		expect(at(0)).toBe(1);
+		expect(at(40)).toBe(8);
+		expect(at("3")).toBeUndefined();
+	});
+
+	it("reads a task's own chat: the one task it works on and the queue it came from", () => {
+		const from = { file: "/s/queue.jsonl", title: "tooling" };
+		const q = replay(
+			entries([
+				{ op: "assigned", id: 7, plan: plan("Seven"), touches: ["a"], from },
+				{ op: "assigned", id: 8, plan: plan("Eight"), from: { file: "/s/other.jsonl" } },
+				{ op: "stuck", id: 7, question: "Which one?" },
+			]),
+		);
+		expect(q.from).toEqual(from);
+		expect(q.running).toBe(true);
+		expect(ids(q.tasks)).toEqual([7]);
+		expect(q.tasks[0]).toMatchObject({ status: "stuck", question: "Which one?", touches: ["a"] });
+		// No lanes in a task's own chat.
+		expect(q.lanes).toBeUndefined();
+		// An assignment without a queue to report to is ignored.
+		expect(replay(entries([{ op: "assigned", id: 1, plan: plan("X") }])).tasks).toEqual([]);
+	});
+
+	it("keeps old queues exactly as they were: no lanes, no new fields", () => {
+		const q = replay(entries([{ op: "add", id: 1, plan: plan("One") }, { op: "run" }, { op: "start", id: 1 }]));
+		expect(Object.keys(q).sort()).toEqual(["available", "running", "tasks"]);
+		expect(q.tasks[0].touches).toBeUndefined();
+	});
+
+	it("normTouches cleans the list like pi-queue does", () => {
+		expect(normTouches([" Pi-Web-UI  repo ", "pi-web-ui repo", 3, "", "temper"])).toEqual(["pi-web-ui repo", "temper"]);
+		expect(normTouches("temper")).toBeUndefined();
+		expect(normTouches([])).toEqual([]);
+		expect(normTouches(["x".repeat(81)])).toEqual([]);
+	});
+});
+
 describe("taskQueueCommandLine", () => {
+	it("queue-lanes: sets how many lanes run at once", () => {
+		expect(taskQueueCommandLine("lanes", 3)).toBe("/queue lanes 3");
+		expect(taskQueueCommandLine("lanes", 8)).toBe("/queue lanes 8");
+		expect(taskQueueCommandLine("lanes", 9)).toBeNull();
+		expect(taskQueueCommandLine("lanes", 0)).toBeNull();
+		expect(taskQueueCommandLine("lanes", undefined)).toBeNull();
+		expect(taskQueueCommandLine("lanes", "2")).toBeNull();
+	});
+
 	it("turns panel actions into /queue commands", () => {
 		expect(taskQueueCommandLine("start", undefined)).toBe("/queue start");
 		expect(taskQueueCommandLine("stop", 3)).toBe("/queue stop");

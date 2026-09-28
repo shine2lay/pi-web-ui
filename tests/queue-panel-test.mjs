@@ -3,18 +3,23 @@
  * The real pi-queue extension is loaded through settings.json `packages` (PI_QUEUE_PKG, default
  * ~/projects/pi-queue). A mock OpenAI-compatible model plays the agent:
  *  - the planning run calls queue_add three times (the user approves each plan in the dialog), then answers;
- *  - "[Queue] Task #N" kickoffs: "Add a timing check" → queue_done; "Rename the settings button" → queue_stuck;
- *  - the user's answer → queue_done for the stuck task.
+ *  - each task runs in a chat of its own, which starts with "[Queue] Task #N: <title>": "Add a timing
+ *    check" -> queue_done; "Rename the settings button" -> queue_stuck; the user's answer there -> queue_done.
+ *    The plans list nothing they touch, so each runs alone: one task chat at a time.
  * Checks:
  *  - queue_add is offered to the model inside pi-web-ui (pi-queue loaded, hasUI);
  *  - a long plan's approval dialog scrolls its text and keeps OK / Cancel in view (Dialog.tsx);
  *  - window A's Queue tab shows each approved task live, in order, not running;
  *  - window B opens the same chat and sees them; ↓ in A and ✕ (inline confirm) in B show up live in both;
  *  - clicking a title opens the task's plan;
- *  - Start runs the queue: #2 works, then is done with its summary; #1 then needs the user, with the
- *    question, highlighted in both windows; the whole queue run sounds like one run in each window
- *    (1 start tick, 1 done cue; done-settle in web/src/done-settle.ts);
- *  - answering in the chat finishes #1: "All done.", Start disabled, done tasks newest first;
+ *  - the dialog says a plan that lists nothing it touches runs alone;
+ *  - Start runs the queue: #2 works in a chat of its own (its row links to it), then is done with its
+ *    summary; only then #1 starts in its own chat and needs the user, with the question, highlighted in
+ *    both windows; the queue's chat gets a note for each; each task chat that stopped rings one done cue
+ *    in each window, and the windows on the queue's chat hear no start tick (it doesn't run itself);
+ *  - #1's row opens its chat: it has only its plan, asked the question there, and its Queue tab says
+ *    where the queue is; answering there finishes #1: the queue's chat shows "All done.", Start
+ *    disabled, done tasks newest first;
  *  - after a reload the queue is still there; a new chat shows the empty state; switching back brings it back.
  * Usage: npm run build && node tests/queue-panel-test.mjs    (QUEUE_DEBUG=1 prints the mock's requests;
  *        QUEUE_SHOT=/tmp/x.png saves screenshots: x-dialog.png, x-plan.png, x-stuck.png, x-done.png)
@@ -121,6 +126,11 @@ const textOf = (msg) =>
 let queueAddOffered = false;
 /** User messages the mock had no script for (a reminder, a "continue", …): should stay empty. */
 const unexpected = [];
+/** Task chats' kickoffs and finishes, in the order the mock saw them. */
+const taskEvents = [];
+const taskEvent = (e) => {
+	if (!taskEvents.includes(e)) taskEvents.push(e);
+};
 const mock = createServer(async (req, res) => {
 	const url = new URL(req.url ?? "/", `http://127.0.0.1:${MOCK_PORT}`);
 	if (url.pathname.endsWith("/models")) {
@@ -152,13 +162,19 @@ const mock = createServer(async (req, res) => {
 	}
 	const names = payload.tools.map((t) => t.function?.name ?? t.name);
 	if (names.includes("queue_add")) queueAddOffered = true;
-	let lastUser = -1;
+	// pi-web-ui adds reminders of its own as user messages (e.g. other runs going on); they aren't the user's.
+	const users = [];
 	history.forEach((x, i) => {
-		if (x.role === "user") lastUser = i;
+		if (x.role === "user" && !/^\(System reminder/.test(textOf(x))) users.push(i);
 	});
-	const userText = lastUser >= 0 ? textOf(history[lastUser]) : "";
-	const results = history.slice(lastUser + 1).filter((x) => x.role === "tool").length;
-	if (process.env.QUEUE_DEBUG) console.log(`    [mock] ${JSON.stringify(userText.slice(0, 70))} results=${results}`);
+	const first = users[0] ?? -1;
+	const last = users.at(-1) ?? -1;
+	const userText = last >= 0 ? textOf(history[last]) : "";
+	const results = history.slice(last + 1).filter((x) => x.role === "tool").length;
+	// A task's chat starts with its kickoff, "[Queue] Task #N: <title>" on the first line.
+	const kick = (first >= 0 ? textOf(history[first]) : "").match(/^\[Queue\] Task #(\d+): ([^\n]+)/);
+	const kickoffTurn = !!kick && last === first;
+	if (process.env.QUEUE_DEBUG) console.log(`    [mock] ${kick ? `task #${kick[1]}` : "queue chat"} step ${results}`);
 
 	if (userText.startsWith(PLAN_RUN)) {
 		if (results < PLANS.length) {
@@ -170,10 +186,11 @@ const mock = createServer(async (req, res) => {
 		await say(PLANNED);
 		return;
 	}
-	const kick = userText.match(/^\[Queue\] Task #(\d+): (.+?) \(/);
-	if (kick?.[2] === PLANS[1].title) {
+	if (kickoffTurn && kick[2] === PLANS[1].title) {
 		if (results === 0) {
-			await sleep(2500); // long enough to see "working on #2" in both windows
+			taskEvent("start #2");
+			await sleep(2500); // long enough to see #2 at work in both windows
+			taskEvent("done #2");
 			await call("queue_done", { summary: TIMING_SUMMARY }, "call_done_timing");
 			return;
 		}
@@ -181,9 +198,11 @@ const mock = createServer(async (req, res) => {
 		await say("QUEUE-DONE-TIMING the timing check is in.");
 		return;
 	}
-	if (kick?.[2] === PLANS[0].title) {
+	if (kickoffTurn && kick[2] === PLANS[0].title) {
 		if (results === 0) {
-			await sleep(600);
+			taskEvent("start #1");
+			// Stop well after #2's chat did: stops within done-settle's wait share one sound.
+			await sleep(SETTLE_WAIT);
 			await call("queue_stuck", { question: STUCK_QUESTION }, "call_stuck");
 			return;
 		}
@@ -191,7 +210,7 @@ const mock = createServer(async (req, res) => {
 		await say(`QUEUE-ASK ${STUCK_QUESTION}`);
 		return;
 	}
-	if (userText.startsWith(ANSWER)) {
+	if (kick?.[2] === PLANS[0].title && userText.startsWith(ANSWER)) {
 		if (results === 0) {
 			await sleep(600);
 			await call("queue_done", { summary: RENAME_SUMMARY }, "call_done_rename");
@@ -201,7 +220,7 @@ const mock = createServer(async (req, res) => {
 		await say("QUEUE-DONE-RENAME renamed.");
 		return;
 	}
-	unexpected.push(userText.slice(0, 90));
+	unexpected.push(kick ? `task #${kick[1]}: a user message` : "queue chat: a user message");
 	await sleep(200);
 	await say("QUEUE-OTHER ok.");
 });
@@ -315,6 +334,7 @@ const cueCounts = (page) =>
 let browser;
 const pageErrors = [];
 const messagesText = (page) => page.evaluate(() => document.querySelector(".messages")?.innerText ?? "");
+const pageText = (page) => page.evaluate(() => document.body.innerText);
 async function openWindow(clientId) {
 	const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
 	await ctx.addInitScript(AUDIO_RECORDER);
@@ -352,6 +372,7 @@ const view = (page) =>
 		const ids = (cls) => [...p.querySelectorAll(`li.task-queue-task.${cls}`)].map((li) => Number(li.dataset.taskId));
 		const toggle = p.querySelector(".task-queue-toggle");
 		return {
+			inChats: ids("lane"),
 			now: ids("current"),
 			next: ids("ready"),
 			done: ids("done"),
@@ -363,6 +384,11 @@ const view = (page) =>
 			empty: !!p.querySelector(".task-queue-empty"),
 			note: !!p.querySelector(".task-queue-note"),
 			question: p.querySelector(".task-queue-question-text")?.textContent?.trim() ?? "",
+			hints: [...p.querySelectorAll(".task-queue-hint")].map((e) => e.textContent.trim()),
+			links: [...p.querySelectorAll("li.task-queue-task")]
+				.filter((li) => li.querySelector(".task-queue-open-chat"))
+				.map((li) => Number(li.dataset.taskId)),
+			from: p.querySelector(".task-queue-from")?.textContent?.trim() ?? "",
 			summaries: [...p.querySelectorAll("li.task-queue-task.done .task-queue-summary")].map((e) =>
 				e.textContent.trim(),
 			),
@@ -409,6 +435,10 @@ try {
 		if (!up) throw new Error("no approval dialog");
 		if (i === 0) {
 			check("queue_add was offered to the model (pi-queue loaded in pi-web-ui)", queueAddOffered);
+			check(
+				"the dialog says a plan that lists nothing it touches runs alone",
+				/runs alone/.test(await dialog.innerText()),
+			);
 			const fit = await dialogFit(A);
 			check("the long plan scrolls inside the dialog; OK and Cancel stay in view", fit.ok, fit.why);
 			if (process.env.QUEUE_SHOT) await A.screenshot({ path: process.env.QUEUE_SHOT.replace(/\.png$/, "-dialog.png") });
@@ -425,7 +455,11 @@ try {
 		await waitFor(async () => (await messagesText(A)).includes("QUEUE-PLANNED"), 20000),
 	);
 	let a = await view(A);
-	check("3 tasks wait in order, nothing running", same(a.next, [1, 2, 3]) && a.now.length === 0, JSON.stringify(a));
+	check(
+		"3 tasks wait in order, nothing running",
+		same(a.next, [1, 2, 3]) && a.now.length === 0 && a.inChats.length === 0,
+		JSON.stringify(a),
+	);
 	check(
 		"status says it's not running, and Start is offered",
 		a.status.startsWith("Not running") && a.toggle === "start",
@@ -472,7 +506,7 @@ try {
 	);
 	await shot(A, "plan");
 
-	console.log("window A: Start");
+	console.log("window A: Start: each task runs in a chat of its own, one at a time (they list nothing they touch)");
 	// The planning run's own done cue lands SETTLE after it ends; count from after it.
 	await waitFor(async () => (await cueCounts(A)).done >= 1, SETTLE_WAIT);
 	await sleep(500);
@@ -480,26 +514,34 @@ try {
 	const b0 = await cueCounts(B);
 	await A.locator(".task-queue-panel .task-queue-toggle.start").click();
 	check(
-		"A: #2 is being worked on",
+		"A: #2 works in a chat of its own, with a link to it; #1 waits; Stop is offered",
 		await waitFor(async () => {
 			const v = await view(A);
-			return same(v.now, [2]) && v.status.includes("#2") && v.status.startsWith("Running") && v.toggle === "stop";
+			return (
+				same(v.inChats, [2]) &&
+				same(v.links, [2]) &&
+				same(v.next, [1]) &&
+				v.now.length === 0 &&
+				v.status.startsWith("Running") &&
+				v.status.endsWith(" #2 is working in its own chat") &&
+				v.toggle === "stop"
+			);
 		}, 10000),
 		await show(A),
 	);
-	check("B: follows live", await waitFor(async () => same((await view(B)).now, [2]), 5000), await show(B));
+	check("B: follows live", await waitFor(async () => same((await view(B)).inChats, [2]), 5000), await show(B));
 	check(
-		"A: #2 is done with its summary; #1 needs you, with the question",
+		"A: #2 is done with its summary; then #1 works in its own chat and needs you, with the question",
 		await waitFor(async () => {
 			const v = await view(A);
 			return (
 				same(v.done, [2]) &&
-				same(v.now, [1]) &&
+				same(v.inChats, [1]) &&
 				same(v.needsYou, [1]) &&
 				v.question === STUCK_QUESTION &&
+				v.hints.includes("Answer in its own chat and it carries on.") &&
 				v.summaries[0] === TIMING_SUMMARY &&
-				v.status.includes("#1") &&
-				v.status.startsWith("Waiting for your answer")
+				v.status === "Waiting for your answer on #1"
 			);
 		}, 20000),
 		await show(A),
@@ -512,8 +554,30 @@ try {
 		}, 5000),
 		await show(B),
 	);
-	check("the run asked the question", await waitFor(async () => (await messagesText(A)).includes("QUEUE-ASK"), 10000));
-	await waitFor(async () => (await cueCounts(A)).done > a0.done, SETTLE_WAIT);
+	check(
+		"one at a time: #1's chat started only after #2 was done",
+		same(taskEvents, ["start #2", "done #2", "start #1"]),
+		JSON.stringify(taskEvents),
+	);
+	// pi-queue saves the new state first (the tab shows it) and posts the note right after, so wait for it.
+	const wanted = [
+		`Task #2 (${PLANS[1].title}) is done in its chat`,
+		`Task #1 (${PLANS[0].title}) needs the user in its chat`,
+	];
+	let missing = wanted;
+	check(
+		"the queue's chat got a note for each: #2 is done, #1 needs you, each in its own chat",
+		await waitFor(async () => {
+			const text = await pageText(A);
+			missing = wanted.filter((n) => !text.includes(n));
+			return missing.length === 0;
+		}, 10000),
+		missing.length ? `missing: ${missing.join(" | ")}` : "",
+	);
+	// Each task chat that stopped rings one done cue in every window (done-any-chat). done-settle merges
+	// stops within DONE_SETTLE_MS into one sound, so #1's chat stops well after #2's (the mock above).
+	// The queue's chat doesn't run itself, so the windows on it hear no start tick.
+	await waitFor(async () => (await cueCounts(A)).done >= a0.done + 2, SETTLE_WAIT + 10000);
 	await sleep(SETTLE_WAIT);
 	for (const [name, page, c0] of [
 		["A", A, a0],
@@ -521,21 +585,44 @@ try {
 	]) {
 		const c = await cueCounts(page);
 		check(
-			`${name}: the queue run sounded like one run (1 start tick, 1 done cue)`,
-			c.start - c0.start === 1 && c.done - c0.done === 1,
+			`${name}: one done cue per task chat that stopped (2), no start tick`,
+			c.start - c0.start === 0 && c.done - c0.done === 2,
 			`start +${c.start - c0.start}, done +${c.done - c0.done}`,
 		);
 	}
 	await shot(A, "stuck");
 
-	console.log("window A: answer the question in the chat");
+	console.log("window A: open #1's chat from its row and answer there");
+	await A.locator('.task-queue-panel li[data-task-id="1"] .task-queue-open-chat').click();
+	check(
+		"#1's row opens its chat: it started with its plan and asked the question there",
+		await waitFor(async () => {
+			const text = await messagesText(A);
+			return text.includes(`[Queue] Task #1: ${PLANS[0].title}`) && text.includes("QUEUE-ASK");
+		}, 15000),
+	);
+	check("#1's chat has none of the queue chat's history", !(await messagesText(A)).includes("QUEUE-PLAN"));
+	check(
+		"its Queue tab says where the queue is, with no Start/Stop",
+		await waitFor(async () => {
+			const v = await view(A);
+			return !!v?.from.startsWith("This chat works on a queued task") && v.toggle === "";
+		}, 10000),
+		await show(A),
+	);
 	await send(A, ANSWER);
 	check(
-		"A: #1 is done too; all done; Start is disabled",
+		"#1 finishes after the answer",
+		await waitFor(async () => (await messagesText(A)).includes("QUEUE-DONE-RENAME"), 20000),
+	);
+	await A.locator(".task-queue-from .task-queue-open-chat").click();
+	check(
+		"back in the queue's chat: #1 is done too; all done; Start is disabled",
 		await waitFor(async () => {
 			const v = await view(A);
 			return (
 				same(v.done, [1, 2]) &&
+				v.inChats.length === 0 &&
 				v.now.length === 0 &&
 				v.next.length === 0 &&
 				v.summaries[0] === RENAME_SUMMARY &&

@@ -49,6 +49,20 @@ describe("tldrLinesFromEntries", () => {
 		expect(tldrLinesFromEntries(entries)).toEqual([{ id: "t9", text: "ok", needsYou: false, ts: 1009 }]);
 	});
 
+	it("queue-lanes: keeps the chat a line is about (a queued task's own chat), and only a real one", () => {
+		const chat = { file: "/s/--tmp--/task.jsonl", title: "Queue #3: Fix the page" };
+		const out = tldrLinesFromEntries([
+			line("t1", "Queue #3 needs you: which port?", { needsYou: true, chat }),
+			line("t2", "no file", { chat: { title: "x" } }),
+			line("t3", "not an object", { chat: "file.jsonl" }),
+			line("t4", "no title", { chat: { file: "/s/b.jsonl", title: 7 } }),
+		]);
+		expect(out[0]).toEqual({ id: "t1", text: "Queue #3 needs you: which port?", needsYou: true, ts: 1001, chat });
+		expect(out[1].chat).toBeUndefined();
+		expect(out[2].chat).toBeUndefined();
+		expect(out[3].chat).toEqual({ file: "/s/b.jsonl" });
+	});
+
 	it("falls back to the entry timestamp when data.ts is missing", () => {
 		const [l] = tldrLinesFromEntries([
 			{ type: "custom", id: "x", customType: "tldr", data: { text: "hi" }, timestamp: "2026-09-24T12:00:00.000Z" },
