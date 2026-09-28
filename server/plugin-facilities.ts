@@ -232,7 +232,6 @@ function loadOrCreateKey(dataDir: string): Buffer {
 
 /** 每插件的加密 KV。所有方法同步；任何读写失败都静默回退（机密丢失优于崩进程）。 */
 export class PluginSecrets {
-	private store: SecretFile | undefined;
 	private readonly file: string;
 
 	constructor(dataDir: string, pluginDir: string) {
@@ -260,21 +259,22 @@ export class PluginSecrets {
 	private static shared = new Map<string, SecretFile>();
 
 	private load(): SecretFile {
-		if (this.store) return this.store;
+		// Every instance goes through the shared copy, never a copy of its own: the plugin's
+		// instance reads its first (empty) store before the settings panel saves the first
+		// secret through another instance, and it must see that save (telegram-answers).
+		// A missing file with secrets still cached means the plugin was uninstalled: start empty.
 		const hit = PluginSecrets.shared.get(this.file);
-		if (hit && existsSync(this.file)) {
-			this.store = hit;
-			return hit;
-		}
+		if (hit && (Object.keys(hit.items).length === 0 || existsSync(this.file))) return hit;
+		let store: SecretFile;
 		try {
 			const parsed = JSON.parse(readFileSync(this.file, "utf8")) as SecretFile;
-			this.store =
+			store =
 				parsed && parsed.v === 1 && parsed.items && typeof parsed.items === "object" ? parsed : { v: 1, items: {} };
 		} catch {
-			this.store = { v: 1, items: {} };
+			store = { v: 1, items: {} };
 		}
-		PluginSecrets.shared.set(this.file, this.store);
-		return this.store;
+		PluginSecrets.shared.set(this.file, store);
+		return store;
 	}
 
 	set(name: string, value: string): void {

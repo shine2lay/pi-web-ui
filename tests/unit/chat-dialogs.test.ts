@@ -182,3 +182,65 @@ describe("chatUiContext", () => {
 		expect(d.size).toBe(0);
 	});
 });
+
+// telegram-answers: a watcher (the list of asks) hears each pop-up open and close, with who
+// answered or why it went away.
+describe("ChatDialogs watcher", () => {
+	const watched = () => {
+		const log: string[] = [];
+		const d = new ChatDialogs(() => {}, {
+			opened: (ui) => log.push(`open ${ui.kind} ${ui.title}`),
+			closed: (ui, value, how) =>
+				log.push(`close ${ui.title} ${JSON.stringify(value)} ${how.from ?? "-"} ${how.reason ?? "-"}`),
+		});
+		return { d, log };
+	};
+
+	it("an answer names who gave it (a page by default)", async () => {
+		const { d, log } = watched();
+		const a = d.open("select", "A", [["x"]], "s1");
+		const b = d.open("confirm", "B", ["sure?"], "s1");
+		expect(d.answer(d.current!.id, "x")).toBe(true);
+		expect(d.answer(d.current!.id, true, "telegram")).toBe(true);
+		await expect(a).resolves.toBe("x");
+		await expect(b).resolves.toBe(true);
+		expect(log).toEqual(["open select A", "open confirm B", 'close A "x" browser -', "close B true telegram -"]);
+	});
+
+	it("a cancel, a timeout, an abort, a moved chat and a closed chat each say why", async () => {
+		vi.useFakeTimers();
+		const { d, log } = watched();
+		void d.open("input", "C", [""], "s1");
+		d.answer(d.current!.id, null);
+		void d.open("input", "T", [""], "s1", { timeout: 1000 });
+		vi.advanceTimersByTime(1000);
+		const ac = new AbortController();
+		void d.open("input", "S", [""], "s1", { signal: ac.signal });
+		ac.abort();
+		void d.open("input", "M", [""], "old");
+		d.cancelExcept("s1");
+		void d.open("input", "X", [""], "s1");
+		d.cancelAll();
+		expect(log.filter((l) => l.startsWith("close"))).toEqual([
+			"close C null browser cancelled in the browser",
+			"close T null - timed out",
+			"close S null - stopped",
+			"close M null - the chat moved on",
+			"close X null - the chat was closed",
+		]);
+	});
+
+	it("a watcher that throws doesn't break the pop-up", async () => {
+		const d = new ChatDialogs(() => {}, {
+			opened: () => {
+				throw new Error("boom");
+			},
+			closed: () => {
+				throw new Error("boom");
+			},
+		});
+		const p = d.open("select", "A", [["x"]], "s1");
+		expect(d.answer(d.current!.id, "x")).toBe(true);
+		await expect(p).resolves.toBe("x");
+	});
+});

@@ -582,6 +582,11 @@ type Action =
 			approval: UiToolApproval | null;
 	  }
 	| {
+			/** telegram-answers: one permission prompt was answered (here, in another window or on Telegram). */
+			type: "tool_approval_resolved";
+			id: string;
+	  }
+	| {
 			type: "remote_question";
 			question: {
 				owner: string;
@@ -913,6 +918,10 @@ function reducer(state: ChatState, action: Action): ChatState {
 		}
 		case "tool_approval":
 			return { ...state, approval: action.approval };
+		case "tool_approval_resolved":
+			// telegram-answers: prompts are process-wide and a window may show another chat's, so close
+			// only the one that was answered. The server's next snapshot brings the next one, if any.
+			return state.approval?.id === action.id ? { ...state, approval: null } : state;
 		case "tool_delta": {
 			const prev = state.liveOutputs.get(action.toolCallId);
 			// Keep the TAIL when over the cap (not the head): for a long-running
@@ -1876,7 +1885,7 @@ export function useChat() {
 					});
 					break;
 				case "tool_approval_resolved":
-					dispatch({ type: "tool_approval", approval: null });
+					dispatch({ type: "tool_approval_resolved", id: msg.id });
 					break;
 				case "question_retracted": {
 					// 问卷被搬走/取消（手动过户到另一会话）：源页面正在展示该 id 即立即收起。

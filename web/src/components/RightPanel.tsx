@@ -942,6 +942,14 @@ export const RightPanel = memo(function RightPanel({
 		},
 		[panelSend, tldrConversationId],
 	);
+	/** telegram-answers: the Queue tab answers a stuck task; the server sends it into the task's chat. */
+	const onTaskQueueAnswer = useCallback(
+		(taskId: number, text: string) => {
+			if (!tldrConversationId) return;
+			panelSend({ type: "task_queue_answer", conversationId: tldrConversationId, taskId, text });
+		},
+		[panelSend, tldrConversationId],
+	);
 	/** tab 顺序统一走 slot（含文件 tab 的位置，不再固定第一；未接线时保持旧顺序）。 */
 	const orderTabs = (tabs: SlotTab[]): SlotTab[] => {
 		const visible = (uiRightPanelTabs ?? []).filter((e) => !e.hidden);
@@ -1331,6 +1339,7 @@ export const RightPanel = memo(function RightPanel({
 												key={tldrConversationId ?? ""}
 												queue={taskQueue}
 												onCommand={onTaskQueueCommand}
+												onAnswer={tldrConversationId ? onTaskQueueAnswer : undefined}
 												onOpenChat={onOpenChat}
 											/>
 										),

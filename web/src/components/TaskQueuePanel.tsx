@@ -99,13 +99,74 @@ export function taskQueueStatusKey(q: UiTaskQueue, s: TaskQueueSections): TKey {
 	}
 }
 
+/** telegram-answers: answer a stuck task here: one of its choices, or typed words. The answer goes
+ *  into the chat the task runs in, as your reply, and it carries on (Telegram gets told too). */
+function StuckAnswer({ task, onAnswer }: { task: UiTaskQueueTask; onAnswer: (taskId: number, text: string) => void }) {
+	const t = useT();
+	const [text, setText] = useState("");
+	const [sent, setSent] = useState(false);
+	const choicesKey = (task.choices ?? []).join("\u0001");
+	// A new question (or new choices) can be answered again.
+	useEffect(() => setSent(false), [task.question, choicesKey]);
+	useEffect(() => {
+		if (!sent) return;
+		const timer = setTimeout(() => setSent(false), BUSY_MS);
+		return () => clearTimeout(timer);
+	}, [sent]);
+	const send = (value: string) => {
+		const words = value.trim();
+		if (!words || sent) return;
+		setSent(true);
+		setText("");
+		onAnswer(task.id, words);
+	};
+	return (
+		<div className="task-queue-answer">
+			{task.choices && task.choices.length > 0 && (
+				<div className="task-queue-choices">
+					{task.choices.map((c) => (
+						<button key={c} type="button" className="task-queue-choice" disabled={sent} onClick={() => send(c)}>
+							{c}
+						</button>
+					))}
+				</div>
+			)}
+			<form
+				className="task-queue-answer-form"
+				onSubmit={(e) => {
+					e.preventDefault();
+					send(text);
+				}}
+			>
+				<input
+					className="task-queue-answer-input"
+					value={text}
+					disabled={sent}
+					placeholder={t("taskQueueAnswerPlaceholder")}
+					aria-label={t("taskQueueAnswerPlaceholder")}
+					onChange={(e) => setText(e.target.value)}
+				/>
+				<button type="submit" className="task-queue-answer-send" disabled={sent || !text.trim()}>
+					{t("taskQueueAnswerSend")}
+				</button>
+			</form>
+			<span className="task-queue-hint">
+				{t(task.lane ? "taskQueueAnswerGoesToTaskChat" : "taskQueueAnswerGoesHere")}
+			</span>
+		</div>
+	);
+}
+
 export const TaskQueuePanel = memo(function TaskQueuePanel({
 	queue,
 	onCommand,
+	onAnswer,
 	onOpenChat,
 	defaultOpen = [],
 }: {
 	queue: UiTaskQueue | undefined;
+	/** telegram-answers: answer a stuck task (a choice or typed words). Not given = answer in the chat. */
+	onAnswer?: (taskId: number, text: string) => void;
 	/** 发一条 `/queue …` 命令给这条对话的 pi-queue。不给就不出按钮（只读）。 */
 	onCommand?: (action: TaskQueueAction, id?: number) => void;
 	/** queue-lanes: open a task's own chat (or the queue's chat). Not given = no links. */
@@ -263,7 +324,11 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 					<div className="task-queue-question">
 						<span className="task-queue-badge">{t("taskQueueNeedsYou")}</span>
 						{task.question && <span className="task-queue-question-text">{task.question}</span>}
-						<span className="task-queue-hint">{t(task.lane ? "taskQueueAnswerInChat" : "taskQueueAnswerHint")}</span>
+						{onAnswer && queue.available ? (
+							<StuckAnswer task={task} onAnswer={onAnswer} />
+						) : (
+							<span className="task-queue-hint">{t(task.lane ? "taskQueueAnswerInChat" : "taskQueueAnswerHint")}</span>
+						)}
 					</div>
 				)}
 				{kind !== "done" && task.touches !== undefined && (

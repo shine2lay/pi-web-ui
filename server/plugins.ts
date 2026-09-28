@@ -55,7 +55,11 @@ import { normalizeIconSvg } from "./icon-svg.js";
 import { PluginDomConsent, declarationWantsDom } from "./plugin-dom.js";
 import { validatePluginManifest, formatManifestIssue, isKnownPermission } from "./plugin-manifest-validate.js";
 import { buildPluginApiCatalog } from "./plugin-api-catalog.js";
+import { askHub, type Ask, type AskEvent, type AskFieldAnswer, type AskResult } from "./asks.js";
 import { AGENT_TOOL_CATALOG } from "./tool-manager.js";
+
+/** telegram-answers: a plugin gets its own copy of an ask, so it can't change the shared one. */
+const copyAsk = (ask: Ask): Ask => structuredClone(ask);
 import {
 	applyPostEdit,
 	denialText,
@@ -568,6 +572,21 @@ export interface PluginHost {
 			url: string,
 			init?: { method?: string; body?: string; headers?: Record<string, string> },
 		): Promise<{ ok: boolean; status?: number; text?: string; error?: string }>;
+	};
+	/** telegram-answers: everything a chat is waiting on you for: questions (ask_user_question),
+	 *  pop-ups (an extension's select / confirm / input), permission prompts before a risky tool
+	 *  call, and queued tasks that need you. Needs permission "asks" (without it: list() = [],
+	 *  on() does nothing, answer() = {ok:false}).
+	 *  - list(): everything waiting now, oldest first (copies).
+	 *  - on(handler): hear "appeared" / "answered" (summary + from: "browser" or a plugin id) /
+	 *    "gone" (reason). Returns the way to stop; unloading the plugin stops it too. While any
+	 *    plugin listens, a question in a chat with no browser open waits instead of failing.
+	 *  - answer(id, answers): answer as this plugin, exactly as the browser would. The first
+	 *    answer wins: a late one gets {ok:false, error:"no longer waiting"}. Never throws. */
+	asks: {
+		list(): Ask[];
+		on(handler: (ev: AskEvent) => void): () => void;
+		answer(id: string, answers: AskFieldAnswer[]): Promise<AskResult>;
 	};
 	/** 插件间事件总线：emit 回填 from=本插件 id，payload 经 JSON 往返（超 4KB
 	 *  截断字符串化）；on 返回取消函数；反激活时清理本插件全部订阅。 */
@@ -4279,6 +4298,24 @@ export class PluginManager {
 							self.permGrants.has(info.id, "net", { host: hostname }),
 						fetchImpl: (input, reqInit) => globalThis.fetch(input, reqInit),
 					});
+				},
+			},
+			asks: {
+				list: () => (can("asks") ? askHub.list().map(copyAsk) : []),
+				on: (handler) => {
+					if (!can("asks") || typeof handler !== "function") return () => {};
+					const off = askHub.on((ev) => {
+						try {
+							handler({ ...ev, ask: copyAsk(ev.ask) });
+						} catch (err) {
+							console.error(`[plugin:${info.id}] asks handler failed:`, err);
+						}
+					});
+					return effects.add("asks.on", off);
+				},
+				answer: async (id, answers) => {
+					if (!can("asks")) return { ok: false, error: 'the plugin did not declare permission "asks"' };
+					return askHub.answer(String(id ?? ""), Array.isArray(answers) ? answers : [], info.id);
 				},
 			},
 			events: {

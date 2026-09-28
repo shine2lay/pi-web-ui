@@ -217,6 +217,8 @@ export interface UiTaskQueueTask {
 	plan: UiTaskQueuePlan;
 	/** stuck：agent 要用户回答的问题。 */
 	question?: string;
+	/** telegram-answers: stuck: answers the user can pick with one tap (they can always type their own). */
+	choices?: string[];
 	/** waiting：在等什么。 */
 	wait?: UiTaskQueueWait;
 	/** done：做了什么（agent 的总结）。 */
@@ -798,6 +800,9 @@ export type ClientMessage =
 			id?: number;
 			conversationId?: string;
 	  }
+	/** telegram-answers: the user's answer to a stuck queued task, from the Queue tab (a choice or typed
+	 *  words). It goes into the chat the task runs in (a lane task's own chat), as their reply. */
+	| { type: "task_queue_answer"; conversationId: string; taskId: number; text: string }
 	/** 手动过户：把另一处（elsewhere 行，owner/convId 标识）的对话整体搬到本页
 	 *  （含等答复的问卷/页调用），搬完自动切过去. */
 	| { type: "take_over_conversation"; owner: string; id: string }

@@ -268,6 +268,24 @@ export const HOST_METHODS: ReadonlyArray<CatalogHostMethod> = [
 		example: `await host.scm.status()`,
 	},
 	{
+		name: "asks.list",
+		needs: "asks",
+		summary: "Everything chats wait on you for now: questions, pop-ups, permission prompts, stuck queued tasks",
+		example: `host.asks.list()`,
+	},
+	{
+		name: "asks.on",
+		needs: "asks",
+		summary: "Hear asks appear, get answered (summary + from) or go away; returns the way to stop",
+		example: `host.asks.on((ev) => { if (ev.type === "appeared") send(ev.ask); })`,
+	},
+	{
+		name: "asks.answer",
+		needs: "asks",
+		summary: "Answer an ask as this plugin, like the browser would; first answer wins, never throws",
+		example: `await host.asks.answer(ask.id, [{ id: "q0", selected: ["Yes"] }])`,
+	},
+	{
 		name: "net.fetch",
 		needs: "net",
 		summary: "出站网络（白名单命中才放行，失败回 {ok:false} 不抛）",

@@ -5,7 +5,7 @@
  * waits on a gate the test opens, so the test decides when each task finishes.
  *  - the queue's chat plans three tasks: #1 touches repo-a, #2 touches repo-a and service-x (so it
  *    shares #1's lane), #3 touches repo-b (a lane of its own);
- *  - task chats: #1 and #2 call queue_done, #3 calls queue_stuck; the user's answer in #3's chat
+ *  - task chats: #1 and #2 call queue_done, #3 calls queue_stuck (with 2 choices); the user's answer in #3's chat
  *    makes it call queue_done.
  * Checks:
  *  - the approval dialog says which queued task a plan shares a lane with;
@@ -42,6 +42,8 @@ if (!existsSync(join(PI_QUEUE, "package.json"))) {
 const PLAN_RUN = "LANES-PLAN queue up the three tasks we planned";
 const PLANNED = "LANES-PLANNED three tasks are queued.";
 const STUCK_QUESTION = "Which colour should lane B use: blue or green?";
+/** queue_stuck asks with 2-4 answers to pick from (telegram-answers). */
+const STUCK_CHOICES = ["Blue", "Green"];
 const ANSWER = "LANES-ANSWER use blue";
 // Full plans: pi-queue refuses thin ones (checkPlan's minimum lengths) before any dialog opens.
 const PLANS = [
@@ -161,7 +163,7 @@ const mock = await startMockModel(async ({ payload, sideRequest }) => {
 			}
 			await gate.get(id).promise;
 			return id === 3
-				? { tool: "queue_stuck", args: { question: STUCK_QUESTION } }
+				? { tool: "queue_stuck", args: { question: STUCK_QUESTION, choices: STUCK_CHOICES } }
 				: { tool: "queue_done", args: { summary: SUMMARY[id] } };
 		}
 		return id === 3 ? `LANES-ASK ${STUCK_QUESTION}` : `LANES-DONE-${id}`;
@@ -411,8 +413,8 @@ try {
 	);
 	a = await view(A);
 	check(
-		"it says to answer in its own chat",
-		a.hints.some((h) => h.startsWith("Answer in its own chat")),
+		"it says the answer goes into the task's own chat",
+		a.hints.includes("Your answer goes into the task's own chat and it carries on."),
 		JSON.stringify(a.hints),
 	);
 	check("the status says it waits for your answer on #3", a.status.includes("#3"), a.status);

@@ -4,7 +4,8 @@
  * ~/projects/pi-queue). A mock OpenAI-compatible model plays the agent:
  *  - the planning run calls queue_add three times (the user approves each plan in the dialog), then answers;
  *  - each task runs in a chat of its own, which starts with "[Queue] Task #N: <title>": "Add a timing
- *    check" -> queue_done; "Rename the settings button" -> queue_stuck; the user's answer there -> queue_done.
+ *    check" -> queue_done; "Rename the settings button" -> queue_stuck (with 2 choices); the user's answer,
+ *    typed in the Queue tab, goes into that task's chat -> queue_done.
  *    The plans list nothing they touch, so each runs alone: one task chat at a time.
  * Checks:
  *  - queue_add is offered to the model inside pi-web-ui (pi-queue loaded, hasUI);
@@ -14,12 +15,12 @@
  *  - clicking a title opens the task's plan;
  *  - the dialog says a plan that lists nothing it touches runs alone;
  *  - Start runs the queue: #2 works in a chat of its own (its row links to it), then is done with its
- *    summary; only then #1 starts in its own chat and needs the user, with the question, highlighted in
- *    both windows; the queue's chat gets a note for each; each task chat that stopped rings one done cue
+ *    summary; only then #1 starts in its own chat and needs the user, with the question, its choices as
+ *    buttons and a box to type an answer, highlighted in both windows; the queue's chat gets a note for each; each task chat that stopped rings one done cue
  *    in each window, and the windows on the queue's chat hear no start tick (it doesn't run itself);
- *  - #1's row opens its chat: it has only its plan, asked the question there, and its Queue tab says
- *    where the queue is; answering there finishes #1: the queue's chat shows "All done.", Start
- *    disabled, done tasks newest first;
+ *  - an answer typed in the Queue tab goes into #1's chat and finishes #1; #1's row opens its chat: it
+ *    has only its plan, the question, the answer and the finish, and its Queue tab says where the queue
+ *    is; the queue's chat shows "All done.", Start disabled, done tasks newest first;
  *  - after a reload the queue is still there; a new chat shows the empty state; switching back brings it back.
  * Usage: npm run build && node tests/queue-panel-test.mjs    (QUEUE_DEBUG=1 prints the mock's requests;
  *        QUEUE_SHOT=/tmp/x.png saves screenshots: x-dialog.png, x-plan.png, x-stuck.png, x-done.png)
@@ -52,6 +53,8 @@ const MODEL_ID = "queue-mock";
 const PLAN_RUN = "QUEUE-PLAN queue up the three tasks we planned";
 const PLANNED = "QUEUE-PLANNED three tasks are queued.";
 const STUCK_QUESTION = "Which label should the button use: Settings or Preferences?";
+/** queue_stuck asks with 2-4 answers to pick from (telegram-answers); the Queue tab shows them as buttons. */
+const STUCK_CHOICES = ["Settings", "Preferences"];
 const ANSWER = "QUEUE-ANSWER use Settings as the label";
 /** done-settle's wait (web/src/done-settle.ts DONE_SETTLE_MS) plus room for a late cue. */
 const SETTLE_WAIT = 1500 + 2000;
@@ -203,7 +206,7 @@ const mock = createServer(async (req, res) => {
 			taskEvent("start #1");
 			// Stop well after #2's chat did: stops within done-settle's wait share one sound.
 			await sleep(SETTLE_WAIT);
-			await call("queue_stuck", { question: STUCK_QUESTION }, "call_stuck");
+			await call("queue_stuck", { question: STUCK_QUESTION, choices: STUCK_CHOICES }, "call_stuck");
 			return;
 		}
 		await sleep(300);
@@ -384,6 +387,8 @@ const view = (page) =>
 			empty: !!p.querySelector(".task-queue-empty"),
 			note: !!p.querySelector(".task-queue-note"),
 			question: p.querySelector(".task-queue-question-text")?.textContent?.trim() ?? "",
+			choices: [...p.querySelectorAll(".task-queue-choice")].map((b) => b.textContent.trim()),
+			answerBox: !!p.querySelector(".task-queue-answer-input"),
 			hints: [...p.querySelectorAll(".task-queue-hint")].map((e) => e.textContent.trim()),
 			links: [...p.querySelectorAll("li.task-queue-task")]
 				.filter((li) => li.querySelector(".task-queue-open-chat"))
@@ -531,7 +536,7 @@ try {
 	);
 	check("B: follows live", await waitFor(async () => same((await view(B)).inChats, [2]), 5000), await show(B));
 	check(
-		"A: #2 is done with its summary; then #1 works in its own chat and needs you, with the question",
+		"A: #2 is done with its summary; then #1 works in its own chat and needs you, with the question, its choices and a box to type in",
 		await waitFor(async () => {
 			const v = await view(A);
 			return (
@@ -539,7 +544,9 @@ try {
 				same(v.inChats, [1]) &&
 				same(v.needsYou, [1]) &&
 				v.question === STUCK_QUESTION &&
-				v.hints.includes("Answer in its own chat and it carries on.") &&
+				same(v.choices, STUCK_CHOICES) &&
+				v.answerBox &&
+				v.hints.includes("Your answer goes into the task's own chat and it carries on.") &&
 				v.summaries[0] === TIMING_SUMMARY &&
 				v.status === "Waiting for your answer on #1"
 			);
@@ -550,7 +557,9 @@ try {
 		"B: the same, live",
 		await waitFor(async () => {
 			const v = await view(B);
-			return same(v.done, [2]) && same(v.needsYou, [1]) && v.question === STUCK_QUESTION;
+			return (
+				same(v.done, [2]) && same(v.needsYou, [1]) && v.question === STUCK_QUESTION && same(v.choices, STUCK_CHOICES)
+			);
 		}, 5000),
 		await show(B),
 	);
@@ -592,13 +601,25 @@ try {
 	}
 	await shot(A, "stuck");
 
-	console.log("window A: open #1's chat from its row and answer there");
+	console.log("window A: answer #1 in the Queue tab, then open its chat from its row");
+	await A.locator('.task-queue-panel li[data-task-id="1"] .task-queue-answer-input').fill(ANSWER);
+	await A.locator('.task-queue-panel li[data-task-id="1"] .task-queue-answer-send').click();
+	check(
+		"the answer typed in the Queue tab goes into #1's chat, and #1 finishes",
+		await waitFor(async () => same((await view(A))?.done, [1, 2]), 30000),
+		await show(A),
+	);
 	await A.locator('.task-queue-panel li[data-task-id="1"] .task-queue-open-chat').click();
 	check(
-		"#1's row opens its chat: it started with its plan and asked the question there",
+		"#1's row opens its chat: it started with its plan, asked, got the answer there and finished",
 		await waitFor(async () => {
 			const text = await messagesText(A);
-			return text.includes(`[Queue] Task #1: ${PLANS[0].title}`) && text.includes("QUEUE-ASK");
+			return (
+				text.includes(`[Queue] Task #1: ${PLANS[0].title}`) &&
+				text.includes("QUEUE-ASK") &&
+				text.includes(ANSWER) &&
+				text.includes("QUEUE-DONE-RENAME")
+			);
 		}, 15000),
 	);
 	check("#1's chat has none of the queue chat's history", !(await messagesText(A)).includes("QUEUE-PLAN"));
@@ -609,11 +630,6 @@ try {
 			return !!v?.from.startsWith("This chat works on a queued task") && v.toggle === "";
 		}, 10000),
 		await show(A),
-	);
-	await send(A, ANSWER);
-	check(
-		"#1 finishes after the answer",
-		await waitFor(async () => (await messagesText(A)).includes("QUEUE-DONE-RENAME"), 20000),
 	);
 	await A.locator(".task-queue-from .task-queue-open-chat").click();
 	check(

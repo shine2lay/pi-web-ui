@@ -2656,6 +2656,50 @@ button.session-item.elsewhere-item.confirm {
 	color: var(--text-faint);
 	font-size: 11px;
 }
+/* telegram-answers: answer a stuck task from the Queue tab: its choices, or typed words. */
+.task-queue-answer {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.task-queue-choices {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+.task-queue-choice,
+.task-queue-answer-send {
+	padding: 2px 8px;
+	border: 1px solid var(--amber);
+	border-radius: 4px;
+	background: transparent;
+	color: var(--text);
+	font-size: 12px;
+	cursor: pointer;
+}
+.task-queue-choice:hover:not(:disabled),
+.task-queue-answer-send:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--amber) 15%, transparent);
+}
+.task-queue-choice:disabled,
+.task-queue-answer-send:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+.task-queue-answer-form {
+	display: flex;
+	gap: 4px;
+}
+.task-queue-answer-input {
+	flex: 1;
+	min-width: 0;
+	padding: 2px 6px;
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	background: var(--bg);
+	color: var(--text);
+	font-size: 12px;
+}
 .task-queue-summary {
 	margin-top: 2px;
 	color: var(--text-dim);

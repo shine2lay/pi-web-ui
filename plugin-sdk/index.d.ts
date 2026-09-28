@@ -5,7 +5,60 @@
  */
 
 export type PluginPermissionFamily =
-	"fs" | "fs:read" | "fs:write" | "ui" | "tools" | "http" | "chat" | "net" | "dom" | "dom:anchor";
+	"fs" | "fs:read" | "fs:write" | "ui" | "tools" | "http" | "chat" | "net" | "dom" | "dom:anchor" | "asks";
+
+/** host.asks: something a chat waits on you for. */
+export type PluginAskKind = "question" | "dialog" | "approval" | "stuck";
+
+export interface PluginAskOption {
+	/** What an answer carries. */
+	value: string;
+	/** What a person sees. */
+	label: string;
+	description?: string;
+}
+
+export interface PluginAskField {
+	id: string;
+	header?: string;
+	text: string;
+	detail?: string;
+	options: PluginAskOption[];
+	/** Several choices may be ticked. */
+	multi: boolean;
+	/** A typed answer is accepted too. */
+	allowText: boolean;
+	/** Shown only when an earlier field was answered (with one of these values, when given). */
+	dependsOn?: { questionId: string; value?: string | string[] };
+	/** The choices depend on an earlier field's answer (keyed by its value). */
+	optionsMap?: Record<string, PluginAskOption[]>;
+}
+
+export interface PluginAsk {
+	id: string;
+	kind: PluginAskKind;
+	createdAt: number;
+	conversationId?: string;
+	conversationTitle?: string;
+	cwd?: string;
+	/** The chat's saved transcript (use it to link to the chat). */
+	sessionFile?: string;
+	title: string;
+	/** Longer text (the command, a plan...). May be long. */
+	body?: string;
+	fields: PluginAskField[];
+}
+
+export interface PluginAskFieldAnswer {
+	id: string;
+	selected: string[];
+	text?: string;
+}
+
+export type PluginAskEvent =
+	| { type: "appeared"; ask: PluginAsk }
+	| { type: "answered"; ask: PluginAsk; summary: string; from: string }
+	| { type: "gone"; ask: PluginAsk; reason: string };
 
 export interface WsEntry {
 	name: string;
@@ -280,6 +333,14 @@ export interface PluginHost {
 	events: {
 		emit(topic: string, payload?: unknown): void;
 		on(topic: string, handler: (ev: unknown) => void): () => void;
+	};
+	/** What chats wait on you for: questions, pop-ups, permission prompts, stuck queued tasks
+	 *  (needs "asks"). list() = waiting now; on() hears appeared / answered / gone; answer()
+	 *  answers as this plugin, like the browser would (first answer wins; never throws). */
+	asks: {
+		list(): PluginAsk[];
+		on(handler: (ev: PluginAskEvent) => void): () => void;
+		answer(id: string, answers: PluginAskFieldAnswer[]): Promise<{ ok: boolean; error?: string }>;
 	};
 	/** 只读 git 查询（失败回 {ok:false,error} 对象而非抛错）。 */
 	scm: {

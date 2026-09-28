@@ -1,0 +1,39 @@
+{
+	"id": "telegram",
+	"name": "Telegram answers",
+	"version": "0.1.0",
+	"icon": "📨",
+	"description": "Sends you on Telegram every question, pop-up and permission prompt a chat waits on, with its choices as buttons; tap or reply there to answer. Uses its own bot, long polling only (no public address needed).",
+	"descriptionEn": "Sends you on Telegram every question, pop-up and permission prompt a chat waits on, with its choices as buttons; tap or reply there to answer. Uses its own bot, long polling only (no public address needed).",
+	"iconSvg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M22 2 11 13\"/><path d=\"M22 2 15 22 11 13 2 9z\"/></svg>",
+	"permissions": ["asks"],
+	"settings": [
+		{
+			"key": "enabled",
+			"type": "boolean",
+			"label": "Send questions to Telegram",
+			"default": true
+		},
+		{
+			"key": "botToken",
+			"type": "secret",
+			"label": "Bot token",
+			"default": "",
+			"hint": "From @BotFather. Use a bot only pi uses: only one program can read a bot's messages. Stored encrypted."
+		},
+		{
+			"key": "ownerId",
+			"type": "text",
+			"label": "Your Telegram id",
+			"default": "",
+			"hint": "Only this person can answer, and only in a private chat with the bot. Everyone else is ignored."
+		},
+		{
+			"key": "webAppAddress",
+			"type": "text",
+			"label": "Web app address",
+			"default": "",
+			"hint": "Used for the \"Open the chat\" link under each question, e.g. https://my-machine.my-tailnet.ts.net:8787/"
+		}
+	]
+}

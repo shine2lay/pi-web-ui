@@ -16,4 +16,7 @@
 //     同号；不再加 1 的话，开着的旧页面连上新服务端不会出「请刷新」横幅。
 // 24: lazy-images — 消息里的图片只发占位（url/width/height/bytes），页面滚到才去取。
 //     老页面只认 dataUrl，配新服务端图片全都不显示。
-export const PROTOCOL_VERSION = 24;
+// 25: telegram-answers - permission prompts go to every open window, and a window closes only the one
+//     whose id was resolved (old pages closed any on any tool_approval_resolved); the Queue tab answers
+//     a stuck task with task_queue_answer.
+export const PROTOCOL_VERSION = 25;

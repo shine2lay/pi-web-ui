@@ -31,6 +31,14 @@ export interface DialogOptions {
 	timeout?: number;
 }
 
+/** telegram-answers: someone who shows a chat's pop-ups elsewhere (the list of asks). */
+export interface DialogWatcher {
+	/** A pop-up is waiting. */
+	opened(ui: UiDialog): void;
+	/** It ended: answered (value, and who answered), or cancelled (value null, and why). */
+	closed(ui: UiDialog, value: DialogValue, how: { from?: string; reason?: string }): void;
+}
+
 interface Waiting {
 	ui: UiDialog;
 	/** The session that asked. A chat can move to a new session (/new, /resume, a force reset);
@@ -45,7 +53,10 @@ export class ChatDialogs {
 
 	/** onChange runs whenever a pop-up is added or goes away: push the chat's viewers a snapshot
 	 *  and every window a new chat list. */
-	constructor(private readonly onChange: () => void = () => {}) {}
+	constructor(
+		private readonly onChange: () => void = () => {},
+		private readonly watcher?: DialogWatcher,
+	) {}
 
 	/** What the page shows: the oldest waiting pop-up (the same object until it goes away, so a
 	 *  snapshot delta can compare by reference), or null. */
@@ -69,7 +80,7 @@ export class ChatDialogs {
 		return new Promise((resolve) => {
 			const ui: UiDialog = { id: nextDialogId(), kind, title, args };
 			let timer: ReturnType<typeof setTimeout> | undefined;
-			const onAbort = () => this.answer(ui.id, null);
+			const onAbort = () => this.close(ui.id, null, { reason: "stopped" });
 			this.waiting.push({
 				ui,
 				owner,
@@ -81,38 +92,55 @@ export class ChatDialogs {
 			});
 			opts?.signal?.addEventListener("abort", onAbort, { once: true });
 			if (typeof opts?.timeout === "number" && opts.timeout > 0) {
-				timer = setTimeout(() => this.answer(ui.id, null), opts.timeout);
+				timer = setTimeout(() => this.close(ui.id, null, { reason: "timed out" }), opts.timeout);
 			}
+			this.watch((w) => w.opened(ui));
 			this.changed();
 		});
 	}
 
-	/** Answer one of this chat's pop-ups. False when the id isn't one of them (anymore). */
-	answer(id: number, value: DialogValue): boolean {
+	/** Answer one of this chat's pop-ups. False when the id isn't one of them (anymore).
+	 *  `from` says who answered (a page by default; a plugin such as Telegram names itself). */
+	answer(id: number, value: DialogValue, from = "browser"): boolean {
+		return this.close(id, value, value === null ? { from, reason: `cancelled in the ${from}` } : { from });
+	}
+
+	private close(id: number, value: DialogValue, how: { from?: string; reason?: string }): boolean {
 		const at = this.waiting.findIndex((w) => w.ui.id === id);
 		if (at < 0) return false;
 		const [w] = this.waiting.splice(at, 1);
 		w.settle(value);
+		this.watch((x) => x.closed(w.ui, value, how));
 		this.changed();
 		return true;
 	}
 
 	/** The chat moved to a new session: cancel what any other session asked. */
 	cancelExcept(owner: unknown): void {
-		this.cancelWhere((w) => w.owner !== owner);
+		this.cancelWhere((w) => w.owner !== owner, "the chat moved on");
 	}
 
 	/** The chat is closing: cancel everything. */
-	cancelAll(): void {
-		this.cancelWhere(() => true);
+	cancelAll(reason = "the chat was closed"): void {
+		this.cancelWhere(() => true, reason);
 	}
 
-	private cancelWhere(pred: (w: Waiting) => boolean): void {
+	private cancelWhere(pred: (w: Waiting) => boolean, reason: string): void {
 		const gone = this.waiting.filter(pred);
 		if (gone.length === 0) return;
 		for (const w of gone) this.waiting.splice(this.waiting.indexOf(w), 1);
 		for (const w of gone) w.settle(null);
+		for (const w of gone) this.watch((x) => x.closed(w.ui, null, { reason }));
 		this.changed();
+	}
+
+	private watch(fn: (w: DialogWatcher) => void): void {
+		if (!this.watcher) return;
+		try {
+			fn(this.watcher);
+		} catch {
+			// whoever watches must not break the extension's dialog
+		}
 	}
 
 	private changed(): void {

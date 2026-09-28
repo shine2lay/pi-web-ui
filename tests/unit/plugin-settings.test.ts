@@ -206,4 +206,15 @@ describe("secret 类型（P0-4 加密存、浏览器只见有无）", () => {
 		mgr.savePluginSettings("sec", { apiKey: "sk-abc" });
 		expect(received).toEqual([{ apiKey: "sk-abc", name: "demo" }]);
 	});
+	it("the first secret ever saved reaches a plugin that read its settings before (telegram-answers)", async () => {
+		// The plugin reads its settings when it starts, before any secret exists; the panel then
+		// saves the first one. Before the fix the plugin kept its own empty copy until a restart.
+		const h = await makePlugin("sec", SECRET_PLUGIN);
+		expect(h.getSettings().apiKey).toBeFalsy();
+		const seen: unknown[] = [];
+		h.onSettingsChanged(() => seen.push(h.getSettings().apiKey));
+		expect(mgr.savePluginSettings("sec", { apiKey: "sk-first" }).error).toBeUndefined();
+		expect(seen).toEqual(["sk-first"]);
+		expect(h.getSettings().apiKey).toBe("sk-first");
+	});
 });

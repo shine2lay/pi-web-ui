@@ -13,7 +13,9 @@
  * so a prompt only saves the user message; "none": no model at all; or a function(agentDir) that
  * writes its own), mock (a reply function for tests/lib/mock-model.mjs: the server gets that
  * stand-in model as its only model, reachable as srv.mock; it replaces `model`), env (extra server
- * environment), verbose (server output to this process).
+ * environment), verbose (server output to this process), prepare (an async function({ root, dataDir,
+ * agentDir, workdir }) run once before the first start, after the model is set up: put plugins or
+ * settings in place).
  */
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync } from "node:fs";
@@ -44,6 +46,7 @@ export async function ownServer(opts = {}) {
 		if (model === "fastfail") writeFastFailModelConfig(agentDir);
 		else if (typeof model === "function") await model(agentDir);
 	}
+	if (opts.prepare) await opts.prepare({ root, dataDir, agentDir, workdir });
 	const port = opts.port ?? (await freeTcpPort());
 	let proc = null;
 	let stderr = "";

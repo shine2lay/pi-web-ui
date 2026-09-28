@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+	normChoices,
 	normTouches,
 	TASK_QUEUE_ENTRY_TYPE,
 	TASK_QUEUE_MAX_DONE,
@@ -62,6 +63,35 @@ describe("taskQueueFromEntries (mirrors pi-queue's replay)", () => {
 		]);
 		expect(ids(q.tasks)).toEqual([1]);
 		expect(q.tasks[0].status).toBe("ready");
+	});
+
+	// telegram-answers: pi-queue's stuck op carries answers to pick from (its tests/queue.test.ts "stuck: the choices").
+	it("stuck keeps the choices (as pi-queue saves them); they go when the task moves on", () => {
+		const base = [
+			{ op: "add", id: 1, plan: plan("One") },
+			{ op: "start", id: 1 },
+		];
+		const stuckWith = { op: "stuck", id: 1, question: "Which port?", choices: [" 8080 ", "9090", "8080", "", 7] };
+		expect(current(replay(entries([...base, stuckWith])))?.choices).toEqual(["8080", "9090"]);
+		expect(
+			current(replay(entries([...base, { op: "stuck", id: 1, question: "Which port?" }])))?.choices,
+		).toBeUndefined();
+		expect(
+			current(replay(entries([...base, stuckWith, { op: "stuck", id: 1, question: "Sure?" }])))?.choices,
+		).toBeUndefined();
+		expect(current(replay(entries([...base, stuckWith, { op: "resume", id: 1 }])))?.choices).toBeUndefined();
+		expect(
+			replay(entries([...base, stuckWith, { op: "done", id: 1, summary: "ok" }])).tasks[0].choices,
+		).toBeUndefined();
+	});
+
+	it("normChoices mirrors pi-queue's", () => {
+		expect(normChoices("8080")).toEqual([]);
+		expect(normChoices(["  Yes  please ", "yes PLEASE", "No", "", null])).toEqual(["Yes please", "No"]);
+		expect(normChoices(["a", "b", "c", "d", "e"])).toEqual(["a", "b", "c", "d"]);
+		const long = normChoices(["x".repeat(150)])[0];
+		expect(long).toHaveLength(100);
+		expect(long?.endsWith("\u2026")).toBe(true);
 	});
 
 	it("keeps one current task: a second start is ignored", () => {

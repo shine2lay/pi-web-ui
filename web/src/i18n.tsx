@@ -266,6 +266,12 @@ export const zh = {
 	taskQueueNeedsYou: "需要你",
 	taskQueueAnswerHint: "在对话里回答，它就接着做。",
 	taskQueueAnswerInChat: "在它自己的对话里回答，它就接着做。",
+	taskQueueAnswerPlaceholder: "\u6216\u8005\u8f93\u5165\u4f60\u7684\u56de\u7b54",
+	taskQueueAnswerSend: "\u53d1\u9001",
+	taskQueueAnswerGoesHere:
+		"\u4f60\u7684\u56de\u7b54\u4f1a\u53d1\u8fdb\u8fd9\u4e2a\u5bf9\u8bdd\uff0c\u4efb\u52a1\u63a5\u7740\u505a\u3002",
+	taskQueueAnswerGoesToTaskChat:
+		"\u4f60\u7684\u56de\u7b54\u4f1a\u53d1\u8fdb\u4efb\u52a1\u81ea\u5df1\u7684\u5bf9\u8bdd\uff0c\u5b83\u63a5\u7740\u505a\u3002",
 	taskQueueStatusLane: "在跑 · #{id} 在它自己的对话里做",
 	taskQueueStatusLanes: "在跑 · {n} 个任务在各自的对话里做",
 	taskQueueInChats: "在各自的对话里做",
@@ -2109,6 +2115,10 @@ const en: Record<keyof typeof zh, string> = {
 	taskQueueNeedsYou: "Needs you",
 	taskQueueAnswerHint: "Answer in the chat and it carries on.",
 	taskQueueAnswerInChat: "Answer in its own chat and it carries on.",
+	taskQueueAnswerPlaceholder: "Or type your answer",
+	taskQueueAnswerSend: "Send",
+	taskQueueAnswerGoesHere: "Your answer goes into this chat and the task carries on.",
+	taskQueueAnswerGoesToTaskChat: "Your answer goes into the task's own chat and it carries on.",
 	taskQueueStatusLane: "Running · #{id} is working in its own chat",
 	taskQueueStatusLanes: "Running · {n} tasks working in their own chats",
 	taskQueueInChats: "Working in their own chats",

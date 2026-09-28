@@ -35,6 +35,9 @@ export interface PendingQuestionEntry {
 	conversationTitle?: string;
 	/** 「没页面连着」时的宽限计时器；答完/取消/dispose 都要清掉。 */
 	graceTimer?: ReturnType<typeof setTimeout>;
+	/** telegram-answers: its id in the list of asks (server/asks.ts). It stays the same when a
+	 *  takeover gives the question a new id, so whoever shows it elsewhere keeps one message. */
+	askId?: string;
 }
 
 /** 没有页面连着时，等待页面回来的宽限期（毫秒）。刷新/重连通常 1-3 秒。 */

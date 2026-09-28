@@ -18,7 +18,12 @@ import type { UiTaskQueue, UiTaskQueueTask } from "../../server/protocol.js";
 const noop = () => {};
 const render = (
 	queue: UiTaskQueue | undefined,
-	opts: { onCommand?: () => void; onOpenChat?: (file: string) => void; defaultOpen?: number[] } = {},
+	opts: {
+		onCommand?: () => void;
+		onAnswer?: (taskId: number, text: string) => void;
+		onOpenChat?: (file: string) => void;
+		defaultOpen?: number[];
+	} = {},
 ) => renderToStaticMarkup(createElement(LanguageProvider, null, createElement(TaskQueuePanel, { queue, ...opts })));
 
 const task = (
@@ -82,6 +87,25 @@ describe("TaskQueuePanel", () => {
 		expect(html).toContain('class="task-queue-badge"');
 		expect(html).toContain("Which port should it use?");
 		expect(html).toContain('class="task-queue-status needs-you"');
+	});
+
+	// telegram-answers: a stuck task can be answered from the tab: its choices, or typed words.
+	it("offers a stuck task's choices and a typed answer when it can be answered here", () => {
+		const stuck = q([task(1, "stuck", { question: "Which port?", choices: ["8080", "9090"] })]);
+		const html = render(stuck, { onAnswer: noop });
+		expect(html).toContain('class="task-queue-answer"');
+		expect([...html.matchAll(/class="task-queue-choice"[^>]*>([^<]+)</g)].map((m) => m[1])).toEqual(["8080", "9090"]);
+		expect(html).toContain('class="task-queue-answer-input"');
+		expect(html).toContain("into this chat");
+		// A lane task's answer goes into its own chat.
+		const lane = render(q([task(2, "stuck", { lane: true, question: "Q?", chat: { file: "/t.jsonl" } })]), {
+			onAnswer: noop,
+		});
+		expect(lane).toContain("task&#x27;s own chat");
+		expect(lane).not.toContain("task-queue-choice");
+		// No way to answer (or no pi-queue): the old hint only.
+		expect(render(stuck)).not.toContain("task-queue-answer");
+		expect(render(q(stuck.tasks, { available: false }), { onAnswer: noop })).not.toContain("task-queue-answer");
 	});
 
 	it("gives waiting tasks up, down and remove, with the ends disabled", () => {

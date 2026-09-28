@@ -61,6 +61,25 @@ import {
 	shouldCancelOnClientDispose,
 } from "./ask-delivery.js";
 import type { PendingQuestionEntry } from "./ask-delivery.js";
+import {
+	approvalAsk,
+	approvalFrom,
+	askHub,
+	type AskMeta,
+	dialogAsk,
+	dialogValueFrom,
+	FROM_BROWSER,
+	NOT_WAITING,
+	questionAnswersFrom,
+	questionAsk,
+	type AskResult,
+	stuckAsk,
+	stuckTextFrom,
+	summarizeApproval,
+	summarizeDialogValue,
+	summarizeQuestionAnswers,
+} from "./asks.js";
+import { stuckGoneReason, stuckKey, stuckSig, stuckTarget, type StuckSource, wantedStuckAsks } from "./stuck-asks.js";
 import { type AdoptCandidate, pickAdoptTarget } from "./attach-adopt.js";
 import { describeError, errorMessage, planForLostActive } from "./crash-guard.js";
 import {
@@ -180,7 +199,7 @@ import {
 	presetShowsSkillCatalog,
 } from "./tool-manager.js";
 import { WebUIContext } from "./webui-context.js";
-import { ChatDialogs, chatUiContext } from "./chat-dialogs.js";
+import { ChatDialogs, chatUiContext, type DialogWatcher } from "./chat-dialogs.js";
 import {
 	contextItems,
 	droppedMessageCount,
@@ -1966,6 +1985,9 @@ export interface Conversation {
 	/** 任务队列的缓存（queue-panel，见 ClientSession.taskQueueOf）：同 tldrCache。key 还带「装没装 pi-queue」，
 	 *  sig = 整份 JSON，队列没变就沿用同一个对象。 */
 	taskQueueCache?: { key: string; sig: string; queue: UiTaskQueue };
+	/** telegram-answers: what was last sent into this chat and when (ClientSession.prompt), so a stuck
+	 *  queued task answered by typing in the chat can say what the answer was. */
+	lastPrompt?: { text: string; at: number };
 	/** Actual queued prompt TEXTS (steer = 插队, followUp = 排队) — the UI
 	 *  renders them as pending bubbles in the real message list. */
 	queueSteering: string[];
@@ -2362,6 +2384,8 @@ export interface TakeoverQuestion {
 	resolve: (value: QuestionAnswer[] | null) => void;
 	questions: UiQuestion[];
 	conversationId: string;
+	/** telegram-answers: its id in the list of asks, kept across the move. */
+	askId?: string;
 }
 
 /** 手动过户时跟着对话一起搬走的页调用（id/计时器在目标会话重建）. */
@@ -3855,9 +3879,18 @@ export class ClientSession {
 
 	/** 任务计划管理器（Plan Mode / Step State Machine）。 */
 	private planManager = new PlanManager();
-	private approvalSeq = 0;
-	/** 待审批高危工具调用（Human-in-the-Loop: Edit & Run）。 */
-	private pendingApprovals = new Map<string, PendingApprovalEntry>();
+	/** 待审批高危工具调用（Human-in-the-Loop: Edit & Run）。
+	 *
+	 *  telegram-answers: process-wide, like questions. A permission prompt belongs to its chat, not
+	 *  to the window that happened to open it: every window shows it (named after its chat), any of
+	 *  them or a plugin (Telegram) can answer, and the first answer wins. Before, it waited only in
+	 *  the opening window's own list, so a chat whose window had been refreshed or closed, or one
+	 *  run by the queue or the scheduler, waited for an answer nobody could see or give. */
+	private static approvalSeq = 0;
+	private static readonly sharedApprovals = new Map<string, PendingApprovalEntry>();
+	private get pendingApprovals(): Map<string, PendingApprovalEntry> {
+		return ClientSession.sharedApprovals;
+	}
 
 	// -----------------------------------------------------------------------
 	// 浏览器页面桥（标准 pi 引擎的 browser_page customTool）：模型调工具 → 发
@@ -4555,7 +4588,10 @@ export class ClientSession {
 			toolWatchdogs: new Map(),
 			workspaceSnapshots: [],
 			// 弹窗多了或少了 → 看着它的窗口补快照，所有窗口的左栏重推。
-			dialogs: new ChatDialogs(() => ClientSession.chatDialogsChanged(conv)),
+			dialogs: new ChatDialogs(
+				() => ClientSession.chatDialogsChanged(conv),
+				ClientSession.dialogWatcher(() => conv),
+			),
 		};
 		return conv;
 	}
@@ -4939,6 +4975,8 @@ export class ClientSession {
 	 *  下一次自己推列表才更新 —— 在台式机上答完，笔记本上的「?」还挂着。
 	 *  没有 socket 的会话跳过：重连时 attach 会整份重推。 */
 	private static emitConversationsToAll(): void {
+		// telegram-answers: chats opened, closed or changed: their queues may wait on the user.
+		ClientSession.scheduleStuckReconcile();
 		for (const cs of ClientSession.liveSessions) {
 			if (cs.disposed || cs.sinkCount() === 0) continue;
 			cs.emitConversations();
@@ -4975,6 +5013,192 @@ export class ClientSession {
 			if (cs.disposed) continue;
 			cs.emitLocal(msg);
 		}
+	}
+
+	/** telegram-answers: a permission prompt came or went. Every window's snapshot carries the one it
+	 *  shows (see pendingApprovalForSnapshot), so each gets a fresh one; sockets-less ones skip it. */
+	private static approvalsChanged(): void {
+		for (const cs of ClientSession.liveSessions) {
+			if (cs.disposed || cs.sinkCount() === 0) continue;
+			cs.flushSnapshot();
+		}
+	}
+
+	/** telegram-answers: the question's id now (a takeover gives it a new one; its ask id stays). */
+	private static questionIdOfAsk(askId: string): string | undefined {
+		for (const [qid, p] of ClientSession.sharedQuestions) if ((p.askId ?? qid) === askId) return qid;
+		return undefined;
+	}
+
+	/** telegram-answers: which chat an ask comes from, for whoever shows it elsewhere. */
+	private static askMetaOf(conv: Conversation | undefined): AskMeta {
+		if (!conv) return {};
+		let sessionFile: string | undefined;
+		try {
+			const f = conv.session?.sessionFile;
+			sessionFile = f ? resolve(f) : undefined;
+		} catch {
+			sessionFile = undefined; // runtime being replaced
+		}
+		return {
+			conversationId: conv.id,
+			...(conv.title ? { conversationTitle: conv.title } : {}),
+			...(conv.cwd ? { cwd: conv.cwd } : {}),
+			...(sessionFile ? { sessionFile } : {}),
+		};
+	}
+
+	/** telegram-answers: the queued tasks that wait on the user, as asks (stuck-asks.ts), by key. */
+	private static readonly stuckAsks = new Map<string, { askId: string; sig: string; target: string }>();
+	private static stuckSeq = 0;
+	/** telegram-answers: answers given from elsewhere (Telegram, the Queue tab) on their way into the
+	 *  chat, by ask id: what was answered and who answered, for when the task moves on. */
+	private static readonly stuckAnswers = new Map<string, { summary: string; from: string }>();
+	private static stuckReconcileTimer: ReturnType<typeof setTimeout> | null = null;
+	/** telegram-answers: sends a stuck task's answer into the chat with this transcript, as the user's
+	 *  reply (AgentService sets it: the wake-up client opens the chat, or switches to it, and sends). */
+	static stuckAnswerSender: ((file: string, text: string) => Promise<AskResult>) | null = null;
+
+	/** telegram-answers: look at the open chats' queues again soon (several changes come at once). */
+	private static scheduleStuckReconcile(): void {
+		if (ClientSession.stuckReconcileTimer) return;
+		ClientSession.stuckReconcileTimer = setTimeout(() => {
+			ClientSession.stuckReconcileTimer = null;
+			try {
+				ClientSession.reconcileStuckAsks();
+			} catch (err) {
+				console.error("[asks] stuck tasks:", err);
+			}
+		}, 100);
+		ClientSession.stuckReconcileTimer.unref?.();
+	}
+
+	/** telegram-answers: every open chat's queue, read again: a task that needs the user becomes an
+	 *  ask; one that moved on (answered, done, its chat closed) settles its ask, saying why. */
+	static reconcileStuckAsks(): void {
+		const sources: StuckSource[] = [];
+		for (const conv of ClientSession.sharedConvs.values()) {
+			if (conv.isSubagent) continue;
+			const queue = ClientSession.taskQueueOfConv(conv);
+			if (queue.tasks.length === 0) continue;
+			const meta = ClientSession.askMetaOf(conv);
+			if (meta.sessionFile) sources.push({ file: meta.sessionFile, queue, meta });
+		}
+		const { wanted, seen } = wantedStuckAsks(sources);
+		for (const [key, have] of [...ClientSession.stuckAsks]) {
+			const w = wanted.get(key);
+			if (w && stuckSig(w) === have.sig) continue;
+			ClientSession.stuckAsks.delete(key);
+			const given = ClientSession.stuckAnswers.get(have.askId);
+			ClientSession.stuckAnswers.delete(have.askId);
+			if (given) {
+				askHub.settle(have.askId, { how: "answered", summary: given.summary, from: given.from });
+				continue;
+			}
+			const why = stuckGoneReason(w ? "stuck" : seen.get(key));
+			if (why.answered) {
+				askHub.settle(have.askId, {
+					how: "answered",
+					summary: ClientSession.lastPromptOf(have.target) ?? why.reason,
+					from: FROM_BROWSER,
+				});
+			} else {
+				askHub.settle(have.askId, { how: "gone", reason: why.reason });
+			}
+		}
+		for (const [key, w] of wanted) {
+			if (ClientSession.stuckAsks.has(key)) continue;
+			const askId = `stuck-${++ClientSession.stuckSeq}`;
+			ClientSession.stuckAsks.set(key, { askId, sig: stuckSig(w), target: w.target });
+			askHub.add(
+				stuckAsk(askId, { taskId: w.taskId, taskTitle: w.taskTitle, question: w.question, choices: w.choices }, w.meta),
+				(answers, from) => ClientSession.answerStuck(askId, w.target, stuckTextFrom(answers), from),
+			);
+		}
+	}
+
+	/** telegram-answers: what was just sent into the chat with this transcript (the last 5 minutes). */
+	private static lastPromptOf(file: string): string | undefined {
+		for (const conv of ClientSession.sharedConvs.values()) {
+			if (ClientSession.askMetaOf(conv).sessionFile !== file) continue;
+			const p = conv.lastPrompt;
+			if (!p || Date.now() - p.at > 5 * 60_000) return undefined;
+			const text = p.text.replace(/\s+/g, " ").trim();
+			return text ? (text.length > 200 ? `${text.slice(0, 199)}\u2026` : text) : undefined;
+		}
+		return undefined;
+	}
+
+	/** telegram-answers: answer a stuck task from elsewhere: the text goes into its chat as the user's
+	 *  reply, and pi-queue carries the task on. It is noted first, so the task moving on settles the ask
+	 *  as answered by `from`; a failed send takes the note back and the ask keeps waiting. */
+	private static async answerStuck(askId: string, target: string, text: string, from: string): Promise<AskResult> {
+		if (!text) return { ok: false, error: "no answer" };
+		if (ClientSession.stuckAnswers.has(askId)) return { ok: false, error: "an answer is already on its way" };
+		const send = ClientSession.stuckAnswerSender;
+		if (!send) return { ok: false, error: "answers can't be sent into chats here" };
+		ClientSession.stuckAnswers.set(askId, { summary: text, from });
+		let r: AskResult;
+		try {
+			r = await send(target, text);
+		} catch (err) {
+			r = { ok: false, error: (err as Error)?.message ?? String(err) };
+		}
+		if (!r.ok) {
+			ClientSession.stuckAnswers.delete(askId);
+			return r;
+		}
+		ClientSession.scheduleStuckReconcile();
+		return { ok: true };
+	}
+
+	/** telegram-answers: the Queue tab answers a stuck task (a choice, or typed words). */
+	async taskQueueAnswer(conversationId: string, taskId: number, text: string): Promise<void> {
+		const conv = this.convs.get(conversationId);
+		const file = ClientSession.askMetaOf(conv).sessionFile;
+		const task = conv && file ? ClientSession.taskQueueOfConv(conv).tasks.find((t) => t.id === taskId) : undefined;
+		const target = file && task ? stuckTarget(file, task) : undefined;
+		const words = String(text ?? "").trim();
+		let r: AskResult = { ok: false, error: NOT_WAITING };
+		if (target && task?.status === "stuck" && words) {
+			const key = stuckKey(target, taskId);
+			if (!ClientSession.stuckAsks.has(key)) ClientSession.reconcileStuckAsks();
+			const have = ClientSession.stuckAsks.get(key);
+			if (have) r = await askHub.answer(have.askId, [{ id: "answer", selected: [], text: words }], FROM_BROWSER);
+		}
+		if (!r.ok) {
+			this.emit({
+				type: "notice",
+				level: "warning",
+				text: `\u6ca1\u80fd\u56de\u7b54\u4efb\u52a1 #${taskId}\uff1a${r.error ?? ""}`,
+				textEn: `Couldn't answer task #${taskId}: ${r.error ?? "unknown error"}`,
+			});
+		}
+	}
+
+	/** telegram-answers: the pop-ups of a chat, seen from the list of asks. `chat` is a getter: the
+	 *  watcher is made while the chat object itself is still being built. */
+	private static dialogWatcher(chat: () => Conversation): DialogWatcher {
+		const askId = (ui: UiDialog): string => `dlg-${ui.id}`;
+		return {
+			opened: (ui) => {
+				const conv = chat();
+				askHub.add(dialogAsk(askId(ui), ui, ClientSession.askMetaOf(conv)), (answers, from) => {
+					const value = dialogValueFrom(ui, answers);
+					if (value === undefined) return { ok: false, error: "not one of the choices" };
+					return conv.dialogs.answer(ui.id, value, from) ? { ok: true } : { ok: false, error: NOT_WAITING };
+				});
+			},
+			closed: (ui, value, how) => {
+				if (value === null) askHub.settle(askId(ui), { how: "gone", reason: how.reason ?? "cancelled" });
+				else
+					askHub.settle(askId(ui), {
+						how: "answered",
+						summary: summarizeDialogValue(ui, value),
+						from: how.from ?? FROM_BROWSER,
+					});
+			},
+		};
 	}
 
 	/** (Re)attach event plumbing to the ACTIVE conversation's session. */
@@ -5824,6 +6048,10 @@ export class ClientSession {
 				if ((event.entry as { customType?: string } | undefined)?.customType === TLDR_ENTRY_TYPE) {
 					ClientSession.emitConversationsToAll();
 				}
+				// telegram-answers: a queued task may need the user now, or no longer.
+				if ((event.entry as { customType?: string } | undefined)?.customType === TASK_QUEUE_ENTRY_TYPE) {
+					ClientSession.scheduleStuckReconcile();
+				}
 				break;
 			}
 			case "message_end": {
@@ -6052,6 +6280,11 @@ export class ClientSession {
 	 *  缓存同 tldrOf（树没动就不重扫，队列没变就返回同一个对象）。没装 pi-queue 的对话也返回一份
 	 *  （available=false），tab 拿它说怎么装。 */
 	private taskQueueOf(conv: Conversation): UiTaskQueue {
+		return ClientSession.taskQueueOfConv(conv);
+	}
+
+	/** telegram-answers: taskQueueOf for any open chat (it needs no window), for the stuck asks. */
+	private static taskQueueOfConv(conv: Conversation): UiTaskQueue {
 		const empty: UiTaskQueue = { running: false, available: false, tasks: [] };
 		try {
 			const sm = conv.session.sessionManager;
@@ -6539,8 +6772,23 @@ export class ClientSession {
 			}
 			const id = `q-${++ClientSession.questionSeq}`;
 			const conversationTitle = conversationId ? this.convs.get(conversationId)?.title : undefined;
-			const entry: PendingQuestionEntry = { resolve, questions, conversationId, conversationTitle };
+			const entry: PendingQuestionEntry = { resolve, questions, conversationId, conversationTitle, askId: id };
 			this.pendingQuestions.set(id, entry);
+			// telegram-answers: also in the list of asks, so a plugin (Telegram) can show and answer it.
+			askHub.add(
+				questionAsk(
+					id,
+					questions,
+					ClientSession.askMetaOf(conversationId ? this.convs.get(conversationId) : undefined),
+				),
+				(answers, from) => {
+					const qid = ClientSession.questionIdOfAsk(id);
+					const current = qid ? this.pendingQuestions.get(qid) : undefined;
+					if (!qid || !current) return { ok: false, error: NOT_WAITING };
+					const ok = this.resolveQuestion(qid, questionAnswersFrom(current.questions, answers), false, from);
+					return ok ? { ok: true } : { ok: false, error: NOT_WAITING };
+				},
+			);
 			// 运行列表的「?」角标靠 conversations 推送（问卷登记/解决不经过快照通道）。
 			ClientSession.emitConversationsToAll();
 			// ask-question-delivery：不走上游的 shouldPopQuestion（只推给正开着该对话的页面）。
@@ -6563,12 +6811,17 @@ export class ClientSession {
 			}
 			// 刷新/重连的空窗：等一会儿。期间页面回来了 → 快照把对话框补出来
 			// （pendingQuestionForSnapshot 不再按对话过滤），不必补发即时消息。
+			// telegram-answers: while a plugin (Telegram) shows asks, it waits for an answer from there
+			// or from a page that comes back, instead of being refused because no page is open.
+			if (askHub.listening) return;
 			entry.graceTimer = setTimeout(() => {
+				if (askHub.listening) return;
 				const stillPending = this.pendingQuestions.get(id) === entry;
 				const clientCount = ClientSession.connectedClientCount();
 				if (askDeliveryOnGraceExpiry({ clientCount, stillPending }) !== "reject") return;
 				this.pendingQuestions.delete(id);
-				// 角标也要跟着消失（同 resolveQuestion）。
+				askHub.settle(id, { how: "gone", reason: "no browser was open" });
+				// The "?" on the chat list goes away too (as in resolveQuestion).
 				ClientSession.emitConversationsToAll();
 				reject(new Error(ASK_USER_NO_CLIENT_ERROR));
 			}, ASK_USER_NO_CLIENT_GRACE_MS);
@@ -6583,12 +6836,22 @@ export class ClientSession {
 	 *  靠前者收起（跨页作答时源页就靠它），别处的「?」角标靠后者即时消失。
 	 *  ask-question-delivery：两者都推给**所有**在线设备（问卷进程共享，每台都可能开着）。
 	 *  返回是否真的恢复了一个挂起提问（跨页作答的送达回执用）。 */
-	resolveQuestion(id: string, answers: QuestionAnswer[], cancelled?: boolean): boolean {
+	resolveQuestion(id: string, answers: QuestionAnswer[], cancelled?: boolean, from: string = FROM_BROWSER): boolean {
 		const pending = this.pendingQuestions.get(id);
 		if (!pending) return false;
 		this.pendingQuestions.delete(id);
 		if (pending.graceTimer) clearTimeout(pending.graceTimer);
 		pending.resolve(cancelled ? null : answers);
+		// telegram-answers: whoever shows it elsewhere learns the answer and where it came from.
+		if (pending.askId) {
+			if (cancelled) askHub.settle(pending.askId, { how: "gone", reason: `cancelled in the ${from}` });
+			else
+				askHub.settle(pending.askId, {
+					how: "answered",
+					summary: summarizeQuestionAnswers(pending.questions, answers),
+					from,
+				});
+		}
 		// multi-device：别的设备上还开着同一张问卷 —— 广播收起，第一个答的生效。
 		// 前端只收「正好是这个 id」的那张，紧接着弹出的下一张不会被误关。
 		ClientSession.broadcastToAllClients({ type: "question_retracted", id });
@@ -6689,11 +6952,14 @@ export class ClientSession {
 		category?: UiApprovalCategory,
 	): Promise<ToolApprovalResolution> {
 		return new Promise((resolve) => {
-			if (this.disposed) {
+			// telegram-answers: the window that opened the chat may be gone (refreshed, closed, a queue or
+			// scheduler run); the prompt still waits, since every window and a plugin (Telegram) can
+			// answer it. It is refused only when nothing is left that could (the server shutting down).
+			if (this.disposed && ClientSession.liveSessions.size === 0 && !askHub.listening) {
 				resolve({ decision: "deny", reason: "会话已关闭" });
 				return;
 			}
-			const id = `appr-${++this.approvalSeq}`;
+			const id = `appr-${++ClientSession.approvalSeq}`;
 			const conv = conversationId ? this.convs.get(conversationId) : this.conv;
 			const suppression = approvalSuppressionReason(
 				conv?.approvalPolicy,
@@ -6720,7 +6986,18 @@ export class ClientSession {
 				createdAt: Date.now(),
 			};
 			this.pendingApprovals.set(id, entry);
-			this.emit({
+			askHub.add(
+				approvalAsk(id, { toolName, params, reason, reasonEn, category }, ClientSession.askMetaOf(conv)),
+				(answers, from) => {
+					const a = approvalFrom(answers);
+					if (!a) return { ok: false, error: "not one of the choices" };
+					return this.resolveToolApproval(id, a.decision, undefined, undefined, a.scope, from)
+						? { ok: true }
+						: { ok: false, error: NOT_WAITING };
+				},
+			);
+			// Every window shows it, named after its chat (like questions).
+			ClientSession.broadcastToAllClients({
 				type: "tool_approval_pending",
 				id,
 				toolCallId,
@@ -6732,7 +7009,7 @@ export class ClientSession {
 				...(conversationId !== undefined ? { conversationId } : {}),
 				...(conversationTitle ? { conversationTitle } : {}),
 			});
-			this.flushSnapshot();
+			ClientSession.approvalsChanged();
 		});
 	}
 
@@ -6749,6 +7026,7 @@ export class ClientSession {
 		editedParams?: unknown,
 		reason?: string,
 		scope?: "once" | "category" | "all",
+		from: string = FROM_BROWSER,
 	): boolean {
 		const pending = this.pendingApprovals.get(id);
 		if (!pending) return false;
@@ -6756,15 +7034,17 @@ export class ClientSession {
 		const conv = this.convs.get(convId);
 		this.pendingApprovals.delete(id);
 		pending.resolve({ decision, editedParams, reason });
-		this.emit({ type: "tool_approval_resolved", id });
+		// telegram-answers: every window may show it, and a plugin (Telegram) may too.
+		askHub.settle(id, { how: "answered", summary: summarizeApproval(decision, scope), from });
+		ClientSession.broadcastToAllClients({ type: "tool_approval_resolved", id });
 		if (decision === "approve" && scope && scope !== "once" && conv) {
 			const policy = this.ensureApprovalPolicy(conv);
 			if (scope === "all") policy.allowAll = true;
 			else if (pending.category) policy.categories.set(pending.category.id, pending.category);
-			this.emitApprovalPolicyNotice(scope, pending.category, this.approveCoveredPending(convId, policy));
+			this.emitApprovalPolicyNotice(scope, pending.category, this.approveCoveredPending(convId, policy, from));
 			this.settingsSvc.push();
 		}
-		this.flushSnapshot();
+		ClientSession.approvalsChanged();
 		return true;
 	}
 
@@ -6775,7 +7055,7 @@ export class ClientSession {
 	}
 
 	/** 把某对话里已被策略覆盖的其它待审批项一并放行，返回放行条数。 */
-	private approveCoveredPending(convId: string, policy: ApprovalPolicy): number {
+	private approveCoveredPending(convId: string, policy: ApprovalPolicy, from: string = FROM_BROWSER): number {
 		let n = 0;
 		// eslint-disable-next-line unicorn/no-useless-spread -- 快照：循环里会从 map 删项（迭代中改集合）
 		for (const [oid, o] of [...this.pendingApprovals]) {
@@ -6783,7 +7063,8 @@ export class ClientSession {
 			if (!approvalSuppressionReason(policy, true, o.category?.id)) continue;
 			this.pendingApprovals.delete(oid);
 			o.resolve({ decision: "approve" });
-			this.emit({ type: "tool_approval_resolved", id: oid });
+			askHub.settle(oid, { how: "answered", summary: "Approved (covered by an earlier choice)", from });
+			ClientSession.broadcastToAllClients({ type: "tool_approval_resolved", id: oid });
 			n++;
 		}
 		return n;
@@ -6820,7 +7101,8 @@ export class ClientSession {
 		for (const [oid, o] of [...this.pendingApprovals]) {
 			this.pendingApprovals.delete(oid);
 			o.resolve({ decision: "approve" });
-			this.emit({ type: "tool_approval_resolved", id: oid });
+			askHub.settle(oid, { how: "answered", summary: "Approved (approvals were turned off)", from: FROM_BROWSER });
+			ClientSession.broadcastToAllClients({ type: "tool_approval_resolved", id: oid });
 			n++;
 		}
 		this.emit({
@@ -6829,7 +7111,7 @@ export class ClientSession {
 			text: `${reasonZh}，已自动放行 ${n} 项待审批。`,
 			textEn: `${reasonEn} — auto-approved ${n} pending request(s).`,
 		});
-		this.flushSnapshot();
+		ClientSession.approvalsChanged();
 	}
 
 	/**
@@ -6870,22 +7152,32 @@ export class ClientSession {
 		this.flushSnapshot();
 	}
 
+	/** telegram-answers: the permission prompt this window shows. They are process-wide now: the
+	 *  window's own chat's comes first, else the oldest of any chat (named after its chat, like
+	 *  questions), so a prompt from a chat nobody has open still reaches every window. */
 	private pendingApprovalForSnapshot(): UiState["pendingApproval"] {
-		for (const [id, p] of this.pendingApprovals) {
-			if (p.conversationId !== undefined && p.conversationId !== this.activeId) continue;
-			return {
-				id,
-				toolCallId: p.toolCallId,
-				toolName: p.toolName,
-				params: p.params,
-				reason: p.reason,
-				reasonEn: p.reasonEn,
-				...(p.category ? { category: p.category } : {}),
-				conversationId: p.conversationId,
-				conversationTitle: p.conversationTitle,
-			};
+		let picked: [string, PendingApprovalEntry] | undefined;
+		for (const e of this.pendingApprovals) {
+			if (e[1].conversationId === undefined || e[1].conversationId === this.activeId) {
+				picked = e;
+				break;
+			}
+			picked ??= e;
 		}
-		return null;
+		if (!picked) return null;
+		const [id, p] = picked;
+		const liveTitle = p.conversationId !== undefined ? this.convs.get(p.conversationId)?.title : undefined;
+		return {
+			id,
+			toolCallId: p.toolCallId,
+			toolName: p.toolName,
+			params: p.params,
+			reason: p.reason,
+			reasonEn: p.reasonEn,
+			...(p.category ? { category: p.category } : {}),
+			conversationId: p.conversationId,
+			conversationTitle: liveTitle ?? p.conversationTitle,
+		};
 	}
 
 	updatePlan(steps: import("./protocol.js").PlanStep[], activeStepId?: string | null, conversationId?: string): void {
@@ -6905,26 +7197,47 @@ export class ClientSession {
 	 *  才真取消；否则留给还连着的设备去答。不这么做的话，client-per-load 之后
 	 *  每次刷新都会 dispose 一个旧会话，等于每次刷新都把自己的问卷打掉。 */
 	cancelPendingQuestions(): void {
-		const left = ClientSession.connectedClientCount(this);
+		// telegram-answers: a plugin (Telegram) that shows asks counts as a device that can still answer.
+		const left = ClientSession.connectedClientCount(this) + (askHub.listening ? 1 : 0);
 		if (shouldCancelOnClientDispose({ connectedClientsLeft: left }) === "keep") return;
-		for (const [, p] of this.pendingQuestions) {
+		for (const [qid, p] of this.pendingQuestions) {
 			if (p.graceTimer) clearTimeout(p.graceTimer);
 			p.resolve(null);
+			askHub.settle(p.askId ?? qid, { how: "gone", reason: "no browser is open any more" });
 		}
 		this.pendingQuestions.clear();
 	}
 
+	/** telegram-answers: a chat is closing: its waiting questions end as cancelled. Questions are
+	 *  process-wide, so nothing else would end them; every window closes its dialog, and whoever
+	 *  shows them elsewhere hears they are gone. */
+	private cancelChatQuestions(convId: string, why: string): void {
+		let n = 0;
+		for (const [qid, p] of this.pendingQuestions) {
+			if (p.conversationId !== convId) continue;
+			this.pendingQuestions.delete(qid);
+			if (p.graceTimer) clearTimeout(p.graceTimer);
+			p.resolve(null);
+			askHub.settle(p.askId ?? qid, { how: "gone", reason: why });
+			ClientSession.broadcastToAllClients({ type: "question_retracted", id: qid });
+			n++;
+		}
+		if (n > 0) ClientSession.emitConversationsToAll();
+	}
+
 	/** 关闭所有挂起审批（dispose 时清理）：以「拒绝」解析，避免等答复的
 	 *  Promise 与对应 runtime 泄漏（会话没了，审批弹窗永远不会有人点）。 */
-	cancelPendingApprovals(): void {
+	cancelPendingApprovals(onlyConversationId?: string, why = "pi is shutting down"): void {
 		for (const [id, a] of this.pendingApprovals) {
+			if (onlyConversationId !== undefined && a.conversationId !== onlyConversationId) continue;
 			this.pendingApprovals.delete(id);
+			askHub.settle(id, { how: "gone", reason: why });
 			try {
 				a.resolve({ decision: "deny", reason: "会话已关闭" });
 			} catch {
 				// 单个 resolve 异常不影响其余清理
 			}
-			this.emit({ type: "tool_approval_resolved", id });
+			ClientSession.broadcastToAllClients({ type: "tool_approval_resolved", id });
 		}
 	}
 
@@ -8660,6 +8973,8 @@ export class ClientSession {
 		// switch/new_chat while prompt() is in flight must never target a
 		// different conversation.
 		const conv = this.conv;
+		// telegram-answers: what the user said here last (a stuck task answered in the chat shows it).
+		conv.lastPrompt = { text, at: Date.now() };
 		// rewind-to-here：正在回退（换分支 + 写摘要）时发来的话等回退做完再发——输入框已经清了，
 		// 拒掉就丢了；等完话落在回退后的分支上，正是用户要的顺序。
 		if (conv.rewindDone) await conv.rewindDone;
@@ -9995,6 +10310,11 @@ export class ClientSession {
 		const closedRef = runningRef(conv);
 		if (closedRef) runningChats?.finish(closedRef.sessionFile);
 		conv.dialogs.cancelAll();
+		// telegram-answers: its permission prompts and questions go with it (they are process-wide now,
+		// so nothing else would end them), and whoever shows them elsewhere hears they are gone.
+		this.cancelPendingApprovals(id, "the chat was closed");
+		this.cancelChatQuestions(id, "the chat was closed");
+		ClientSession.scheduleStuckReconcile();
 		this.clearAllToolWatchdogs(conv);
 		// 关对话 → 连它的 eval 内核（Python/Node 子进程 + 临时沙箱目录）一起回收：
 		// 这些进程是 detached 进程组，父进程退出不会自动带走它们。
@@ -10092,7 +10412,12 @@ export class ClientSession {
 		for (const [qid, p] of this.pendingQuestions) {
 			if (p.conversationId !== undefined && set.has(p.conversationId)) {
 				this.pendingQuestions.delete(qid);
-				questions.push({ resolve: p.resolve, questions: p.questions, conversationId: p.conversationId });
+				questions.push({
+					resolve: p.resolve,
+					questions: p.questions,
+					conversationId: p.conversationId,
+					askId: p.askId ?? qid,
+				});
 				// 源页面的对话框可能是即时通道弹出的（live），快照为 null 收不掉它 ——
 				// 明确撤回，让源页面立即收起（目标页主对话由转入方重推 question_pending 或快照呈现）。
 				this.emit({ type: "question_retracted", id: qid });
@@ -10109,24 +10434,9 @@ export class ClientSession {
 		// 待审批跟对话走：留在源会话就是幽灵弹窗（id 失效点不动，runtime 已搬走，
 		// 永远等不到答复）。只搬归属明确的（conversationId 对得上，与问卷/页调用
 		// 同一规则）；目标侧按新 id 重发弹窗，等待中的 Promise 原样过户不 resolve。
+		// telegram-answers: permission prompts are process-wide now (sharedApprovals). They stay where
+		// they are, with the same id; every window shows them, so nothing needs moving.
 		const approvals: TakeoverApproval[] = [];
-		for (const [aid, a] of this.pendingApprovals) {
-			if (a.conversationId !== undefined && set.has(a.conversationId)) {
-				this.pendingApprovals.delete(aid);
-				approvals.push({
-					resolve: a.resolve,
-					toolCallId: a.toolCallId,
-					toolName: a.toolName,
-					params: a.params,
-					reason: a.reason,
-					reasonEn: a.reasonEn,
-					...(a.category ? { category: a.category } : {}),
-					conversationId: a.conversationId,
-					...(a.conversationTitle ? { conversationTitle: a.conversationTitle } : {}),
-					createdAt: a.createdAt,
-				});
-			}
-		}
 		this.emitConversations();
 		this.flushSnapshot();
 		return { ok: true, payload: { convs, questions, pageCalls, approvals } };
@@ -10177,6 +10487,7 @@ export class ClientSession {
 				resolve: q.resolve,
 				questions: q.questions,
 				conversationId: qConvId,
+				...(q.askId ? { askId: q.askId } : {}),
 			});
 			// 迁入的主对话立即触发弹窗（子代理问卷留在后台，由角标与切换会话呈现）。
 			if (qConvId === mainId) {
@@ -10212,7 +10523,7 @@ export class ClientSession {
 		// 迁入的待审批按新 id 重新挂上（等待中的 Promise 未动，模型还在等）。
 		// 主对话的立即弹窗（子代理的靠角标与快照呈现，与问卷同一口径）。
 		for (const a of payload.approvals) {
-			const nid = `appr-${++this.approvalSeq}`;
+			const nid = `appr-${++ClientSession.approvalSeq}`;
 			const aConvId = fix(a.conversationId);
 			this.pendingApprovals.set(nid, {
 				id: nid,
@@ -13107,9 +13418,8 @@ export class ClientSession {
 		this.webUi.dispose();
 		this.cancelPendingQuestions();
 		this.cancelPendingPageCalls();
-		// Approvals wait in this view's own map; nobody else can answer them once it
-		// is gone (upstream's full dispose denies them too).
-		this.cancelPendingApprovals();
+		// telegram-answers: permission prompts are process-wide now; other windows and plugins can
+		// still answer them, so a window going away leaves them be (the full dispose denies them).
 		this.bg.stop();
 	}
 }
@@ -13444,6 +13754,12 @@ export class AgentService {
 	 */
 	installQueueHost(): void {
 		if (this.uninstallQueueHost) return;
+		// telegram-answers: a stuck task's answer from elsewhere (Telegram, the Queue tab) goes into its
+		// chat the way a scheduled wake-up does: the chat is opened (or switched to) and gets the text.
+		ClientSession.stuckAnswerSender = async (file, text) => {
+			const r = await this.wakeClosedChat(file, text);
+			return r.ok ? { ok: true } : { ok: false, error: r.error ?? "couldn't send the answer" };
+		};
 		this.uninstallQueueHost = installQueueHost({
 			startChat: (o) =>
 				this.queueTasksChain(() => this.withQueueClient(QUEUE_TASKS_CLIENT_ID, (cs) => cs.openTaskChat(o))),
@@ -14488,6 +14804,7 @@ export class AgentService {
 	async disposeAll(): Promise<void> {
 		this.uninstallQueueHost?.();
 		this.uninstallQueueHost = null;
+		ClientSession.stuckAnswerSender = null;
 		this.recordInterruptedRuns();
 		const all = [...this.clients.values()];
 		this.clients.clear();

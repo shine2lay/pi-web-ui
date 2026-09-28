@@ -72,6 +72,7 @@ import { TemplateProvider } from "./components/PromptTemplates";
 import { FilePreview, type PreviewFile } from "./components/FilePreview";
 import { PluginFilePreview } from "./components/PluginFilePreview";
 import { useChat } from "./use-chat";
+import { takeChatLink } from "./open-chat-link";
 import { appUrl } from "./base-url";
 import { resolveImageUrls } from "./chat-image";
 import type { ClientMessage, CommandDef, PromptAttachment, UiMessage } from "./types";
@@ -296,6 +297,13 @@ export function App() {
 	// （settings.quickPhrasesSeeded，非浏览器 localStorage）——clientId 在
 	// sessionStorage、每次新会话都是新 id，若按浏览器记 seed，重启后删掉的默认
 	// 短语又会被填回默认；存服务端则跨会话/跨浏览器一致。
+	// telegram-answers: a link with ?chat=<saved chat file> (Telegram puts one under every question)
+	// opens that chat as soon as the page is connected, once.
+	useEffect(() => {
+		if (!chat.ready) return;
+		const path = takeChatLink();
+		if (path) void send({ type: "switch_session", path });
+	}, [chat.ready, send]);
 	const quickSeedRef = useRef(false);
 	useEffect(() => {
 		if (!chat.ready || !chat.settings) return;

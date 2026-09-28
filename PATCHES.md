@@ -56,6 +56,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | sealed-tests                 | `local`        | `scripts/sealed.sh`, `sealed-summary.mjs`, `check.sh`, `tests/lib/sealed-fence.cjs`, `tests/run-sealed.mjs`, `tests/lib/`, `vitest.config.ts`, `tests/*-test.mjs`, 6 处测试查出的 bug |
 | wake-reopen                  | `local`        | `server/agent-service.ts`（`wakeClosedChat`、`wakeConversation` 的 id 相位）、`server/index.ts`（调度执行器）、`tests/wake-reopen-test.mjs`、`tests/unit/schedule-agent-tool.test.ts` |
 | queue-lanes                  | `local`        | `server/queue-host.ts` (new), `agent-service.ts` (task chats), `index.ts`, `task-queue.ts`, `protocol.ts`, `tldr-lines.ts`, `web/src/components/TaskQueuePanel.tsx`, `TldrPanel.tsx`, `RightPanel.tsx`, i18n, styles, `tests/queue-lanes-test.mjs`, `tests/queue-panel-test.mjs`, `scripts/sealed.sh` (`PI_QUEUE_PKG`), `tests/unit/` |
+| telegram-answers             | `local`        | `server/asks.ts` (new), `server/stuck-asks.ts` (new), `agent-service.ts` (questions, approvals, stuck asks), `chat-dialogs.ts`, `plugins.ts`, `plugin-facilities.ts`, `task-queue.ts`, `protocol.ts`, `protocol-version.ts`, `plugins/telegram/` (new), `plugin-sdk/`, `web/src/open-chat-link.ts` (new), `TaskQueuePanel.tsx`, `use-chat.ts`, `tests/telegram-answers-test.mjs`, `tests/queue-panel-test.mjs`, `tests/unit/` |
 
 ---
 
@@ -2603,3 +2604,101 @@ reporting) lives in pi-queue (`~/projects/pi-queue`, README "Lanes"); this patch
 
 **When syncing**: all local. If upstream ever adds its own way for an extension to open chats, move the host
 onto it.
+
+## telegram-answers
+
+**Status**: `local`
+**Baseline**: v0.96.1
+
+**Why** (owner, 2026-09-27): when a chat asks something or needs an OK, the owner gets it on Telegram at once
+and can answer there, so work doesn't stall while he's away from the browser. Before this, a question in a
+chat with no browser open was refused after 30 s, and a permission prompt from a chat whose window was gone
+(or from a task chat, the scheduler or a plugin) was refused at once or shown to nobody. The owner also
+wanted needs-you notes to become questions with choices: pi-queue's `queue_stuck` now takes 2-4 choices.
+
+### Changes
+
+1. **One list of everything chats wait on** (`server/asks.ts`, new): a process-wide `askHub`.
+   - Each ask has an id, a kind, the chat (id, title, folder, transcript) and its fields and choices in one
+     shape. Kinds: `question` (ask_user_question), `dialog` (an extension's select / confirm / input
+     pop-up, such as approving a plan for the queue), `approval` (a permission prompt), `stuck` (a queued
+     task that needs the user).
+   - Listeners hear when an ask appears, is answered (a short summary, and `from`: `browser` or a plugin
+     id) or goes away (with why). `answer(id, answers, from)` answers one; the first answer wins.
+   - Helpers turn the answers back into each kind's own (question answers, pop-up values, approval
+     decision and scope).
+2. **Questions** (`agent-service.ts` `askUser`, `resolveQuestion`): each one is added to the hub and settled
+   when it is answered, retracted or cancelled. While something listens to the hub (the Telegram plugin), a
+   question in a chat with no browser keeps waiting instead of being refused after 30 s, and closing the
+   last window doesn't cancel it.
+3. **Pop-ups** (`chat-dialogs.ts`): `ChatDialogs` takes a watcher that hears each pop-up open and close
+   (answered, cancelled, timed out, stopped, the chat moved on, the chat was closed). `answer(id, value,
+   from)` says who answered.
+4. **Permission prompts** (`agent-service.ts` `askApproval`, `resolveToolApproval`):
+   - Waiting approvals are shared by the whole process (like questions), with one id counter, so any
+     window or a plugin can answer them.
+   - `tool_approval_pending` / `tool_approval_resolved` go to every open window. The snapshot shows the
+     window's own chat's approval first, else the oldest. The page closes an approval only when its id was
+     resolved (`use-chat.ts`).
+   - A prompt whose window is gone is no longer refused. It is denied only when no window is left at all
+     and nothing listens to the hub. A window closing no longer cancels approvals; closing the chat does.
+   - Approvals covered by an earlier choice, and turning approvals off, settle them in the hub too.
+5. **Stuck queued tasks** (`server/stuck-asks.ts` new, `task-queue.ts`, `agent-service.ts`):
+   - The Queue tab mirror keeps a stuck task's `choices` (pi-queue's rules: 2-4, trimmed, no repeats, cut
+     to 100 characters).
+   - The server turns the stuck tasks in every open chat's queue into `stuck` asks, and settles them when
+     the task moves on. A lane task's copy in the queue's chat is skipped while the task's own chat is open.
+   - Answering one sends the answer as the user's message into the task's chat (`wakeClosedChat`, which
+     opens it if needed), so pi-queue carries on with the task.
+   - The Queue tab shows a stuck task's choices as buttons plus a box to type an answer
+     (`TaskQueuePanel.tsx`, client message `task_queue_answer`).
+6. **Plugins can see and answer asks** (`plugins.ts`, `plugin-manifest-validate.ts`, `plugin-sdk/`): the new
+   permission family `asks` gives `host.asks.list()`, `on(handler)` and `answer(id, answers)` (answered
+   `from` the plugin's id). `createMockHost` has it too.
+7. **A link that opens a chat** (`web/src/open-chat-link.ts` new, `main.tsx`, `App.tsx`): `/?chat=<transcript
+   path>` opens that chat once the page is ready, then drops the parameter. The server only opens
+   transcripts inside the sessions folder.
+8. **The first secret reaches the plugin** (`plugin-facilities.ts`): `PluginSecrets` kept a copy per instance,
+   so the first secret ever saved (through the settings page's own instance) reached the running plugin
+   only after a restart. All instances now share one copy per file.
+9. **The Telegram plugin** (`plugins/telegram/`, see its README): its own bot, long polling only; only the
+   owner's id in a private chat; each ask as a message (chat, folder, text, "Open the chat" link) with its
+   choices as buttons (tick + Done for several; "Type an answer" or a reply for words). An answer in
+   either place updates the other; old buttons answer "No longer waiting.". The token is a `secret`
+   setting (encrypted; the browser only sees whether one is set).
+10. **Protocol 25** (see `server/protocol-version.ts`).
+
+With pi-queue (`queue_stuck` takes 2-4 choices; the stucks pi-queue makes itself offer "Carry on") and
+pi-tldr (agents are told to ask with choices when they need the user).
+
+### Tests
+
+- Unit tests:
+  - new: `asks.test.ts`, `stuck-asks.test.ts`, `plugin-asks.test.ts`, `plugin-telegram.test.ts` (the
+    plugin against a fake Telegram; with the owner check taken out, the stranger test fails);
+  - `chat-dialogs.test.ts` (the watcher), `task-queue.test.ts` (choices), `task-queue-panel.test.ts`
+    (choice buttons, typed answer), `plugin-settings.test.ts` (the first secret reaches the plugin: fails
+    without point 8).
+- `tests/telegram-answers-test.mjs` (sealed server, fake Telegram via `PI_WEB_TELEGRAM_API_BASE`, mock model,
+  real pi-queue from `PI_QUEUE_PKG`, no tokens):
+  1. A question reaches Telegram with its choices, chat, folder and link. A stranger's tap and text, and
+     the owner writing in a group, are ignored. The owner's tap answers the chat and closes the browser's
+     dialog; the message says "Answered on Telegram".
+  2. A question answered in the browser: the message says so, and its old buttons only say "No longer
+     waiting.".
+  3. Permission prompts: Approve on Telegram runs the command, Deny doesn't; one answered in the browser
+     updates its message.
+  4. The queue: the plan's approval pop-up is answered on Telegram. The task's own chat (no browser on it)
+     asks permission, then gets stuck with choices; both are answered on Telegram; the answer goes into
+     the task's chat and the task finishes.
+  5. No browser open at all: a question outlives the 30 s no-browser wait and, like the permission prompt
+     after it, is answered on Telegram. With point 2's wait taken out, this case fails.
+  6. The bot token is in no file the server wrote, nor in its output.
+- `tests/queue-panel-test.mjs`: `queue_stuck` passes choices, the Queue tab shows them, and #1 is answered
+  by typing in the Queue tab; the answer lands in #1's chat.
+- `tests/queue-lanes-test.mjs`: `queue_stuck` passes choices (pi-queue refuses fewer than 2), and the hint
+  says the answer goes into the task's own chat.
+
+**When syncing**: all local. The hub calls sit in `askUser` / `resolveQuestion`, `askApproval` /
+`resolveToolApproval` and `ChatDialogs`; if upstream reworks those, move the calls with them. If upstream
+ever shares approvals between windows itself, keep its version and drop point 4's.

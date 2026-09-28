@@ -102,6 +102,24 @@ export function normTouches(raw: unknown): string[] | undefined {
 	return out.slice(0, 20);
 }
 
+/** telegram-answers: pi-queue's MAX_CHOICES / CHOICE_MAX. */
+const MAX_CHOICES = 4;
+const CHOICE_MAX = 100;
+
+/** telegram-answers: pi-queue's normChoices: a stuck task's answers to pick from, trimmed, inner spaces
+ *  collapsed, no empties or duplicates (any case), each cut to CHOICE_MAX, at most MAX_CHOICES. */
+export function normChoices(raw: unknown): string[] {
+	if (!Array.isArray(raw)) return [];
+	const out: string[] = [];
+	for (const x of raw) {
+		if (typeof x !== "string") continue;
+		const c = x.replace(/\s+/g, " ").trim();
+		if (!c || out.some((o) => o.toLowerCase() === c.toLowerCase())) continue;
+		out.push(c.length > CHOICE_MAX ? `${c.slice(0, CHOICE_MAX - 1)}\u2026` : c);
+	}
+	return out.slice(0, MAX_CHOICES);
+}
+
 /** A chat reference from an entry ({file, title?}); null when it isn't one. */
 function chatOf(raw: unknown): UiTaskQueueChat | null {
 	const c = (raw ?? {}) as Record<string, unknown>;
@@ -180,6 +198,7 @@ function apply(s: State, raw: unknown): void {
 			task.status = "ready";
 			task.lane = undefined;
 			task.question = undefined;
+			task.choices = undefined;
 			task.wait = undefined;
 			task.startedAt = undefined;
 			return;
@@ -196,6 +215,7 @@ function apply(s: State, raw: unknown): void {
 			if (lane) task.lane = true;
 			task.status = "working";
 			task.question = undefined;
+			task.choices = undefined;
 			task.wait = undefined;
 			task.startedAt ??= num(op.ts);
 			return;
@@ -205,6 +225,9 @@ function apply(s: State, raw: unknown): void {
 			if (!task.lane && cur && cur !== task) return;
 			task.status = "stuck";
 			task.question = str(op.question, NOTE_MAX);
+			const choices = normChoices(op.choices);
+			if (choices.length) task.choices = choices;
+			else delete task.choices;
 			task.wait = undefined;
 			task.startedAt ??= num(op.ts);
 			return;
@@ -221,6 +244,7 @@ function apply(s: State, raw: unknown): void {
 			};
 			task.status = "waiting";
 			task.question = undefined;
+			task.choices = undefined;
 			task.wait = wait;
 			task.startedAt ??= since;
 			return;
@@ -233,6 +257,7 @@ function apply(s: State, raw: unknown): void {
 		case "done":
 			task.status = "done";
 			task.question = undefined;
+			task.choices = undefined;
 			task.wait = undefined;
 			task.summary = str(op.summary, NOTE_MAX);
 			task.doneAt = num(op.ts);
