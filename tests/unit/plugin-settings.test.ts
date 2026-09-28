@@ -217,4 +217,14 @@ describe("secret 类型（P0-4 加密存、浏览器只见有无）", () => {
 		expect(seen).toEqual(["sk-first"]);
 		expect(h.getSettings().apiKey).toBe("sk-first");
 	});
+	it("a window that opens after a save sees the saved values (telegram-answers)", async () => {
+		// A window gets the plugin list when it connects (ensureLoaded). It used to get the values
+		// the running plugin started with, and saving that form then put the old values back.
+		await makePlugin("sec", SECRET_PLUGIN);
+		expect(mgr.savePluginSettings("sec", { apiKey: "sk-1", name: "saved" }).error).toBeUndefined();
+		const p = (await mgr.ensureLoaded()).find((x) => x.id === "sec")!;
+		expect(p.active).toBe(true);
+		expect(p.settingsValues).toEqual({ apiKey: true, name: "saved" });
+		expect(p.settingsSources?.name).toBe("stored");
+	});
 });

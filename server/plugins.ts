@@ -2692,7 +2692,15 @@ export class PluginManager {
 		// P2-8 级联：提供方刚坏（被删/失败/被拒）→ 仍在跑的消费方一并反激活 + 教学占位。
 		this.cascadeRequiresRefusals(found, lang);
 		return found.map((f) => {
-			const base = this.loaded.get(f.id)?.info ?? f;
+			// telegram-answers: a running plugin's info keeps the settings it had when it started; a window
+			// that opens later must see what is saved now, or saving its form puts the old values back.
+			const started = this.loaded.get(f.id)?.info;
+			const base = started
+				? {
+						...started,
+						...(f.settingsSchema ? { settingsValues: f.settingsValues, settingsSources: f.settingsSources } : {}),
+					}
+				: f;
 			// 运行相位（设置面板清单用）：宿主持有实例即 active（含激活失败的占位行；
 			// 纯前端插件无 index.mjs、从未进 loaded 表，保持非 active）。
 			const withPhase = { ...base, active: this.loaded.has(f.id) };

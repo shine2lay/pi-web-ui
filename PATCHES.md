@@ -2661,6 +2661,9 @@ wanted needs-you notes to become questions with choices: pi-queue's `queue_stuck
 8. **The first secret reaches the plugin** (`plugin-facilities.ts`): `PluginSecrets` kept a copy per instance,
    so the first secret ever saved (through the settings page's own instance) reached the running plugin
    only after a restart. All instances now share one copy per file.
+   A window that opens later also sees the saved settings (`plugins.ts` `ensureLoaded`): it used to get the
+   values the running plugin started with, so saving its form put the old values back (upstream has this
+   too, at cfbfbd1).
 9. **The Telegram plugin** (`plugins/telegram/`, see its README): its own bot, long polling only; only the
    owner's id in a private chat; each ask as a message (chat, folder, text, "Open the chat" link) with its
    choices as buttons (tick + Done for several; "Type an answer" or a reply for words). An answer in
@@ -2677,8 +2680,8 @@ pi-tldr (agents are told to ask with choices when they need the user).
   - new: `asks.test.ts`, `stuck-asks.test.ts`, `plugin-asks.test.ts`, `plugin-telegram.test.ts` (the
     plugin against a fake Telegram; with the owner check taken out, the stranger test fails);
   - `chat-dialogs.test.ts` (the watcher), `task-queue.test.ts` (choices), `task-queue-panel.test.ts`
-    (choice buttons, typed answer), `plugin-settings.test.ts` (the first secret reaches the plugin: fails
-    without point 8).
+    (choice buttons, typed answer), `plugin-settings.test.ts` (the first secret reaches the plugin, and a
+    window opened after a save sees the saved values: each fails without its half of point 8).
 - `tests/telegram-answers-test.mjs` (sealed server, fake Telegram via `PI_WEB_TELEGRAM_API_BASE`, mock model,
   real pi-queue from `PI_QUEUE_PKG`, no tokens):
   1. A question reaches Telegram with its choices, chat, folder and link. A stranger's tap and text, and
