@@ -1,5 +1,5 @@
 import { Fragment, memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { FiList, FiSquare, FiPaperclip, FiArrowUp, FiBookOpen, FiMic, FiCamera } from "react-icons/fi";
+import { FiList, FiSquare, FiPaperclip, FiArrowUp, FiMic, FiCamera } from "react-icons/fi";
 import type { FileSearchResult, ModelInfo, ProviderKeyInfo, SlashCommandInfo, UiMessage, UiState } from "../types";
 import { useT } from "../i18n";
 import { appSend, useAppField, useIsDsh } from "../app-globals";
@@ -33,7 +33,6 @@ import { ModelThinking } from "./ModelThinking";
 import { DshPresetBar, type DshPresetInfo } from "./DshPresetBar";
 import { DshPermissionBar } from "./DshPermissionBar";
 import type { DshPermissionOption, UiAgentPreset } from "../types";
-import { useTemplates } from "./PromptTemplates";
 import { newPromptId } from "../pending-sends";
 
 /** True on touch-first devices (phones / tablets driven by a soft keyboard) —
@@ -194,8 +193,6 @@ export const ChatInput = memo(function ChatInput({
 	/** DSH 无 mid-run steering（isStreaming 时 prompt 全部走 followUp，
 	 *  见 server/dsh/dsh-agent-service.ts）—— 只渲染「排队」半段，不摆一个说了不算的「插队」。 */
 	const isDsh = useIsDsh();
-	/** 打开模板库（对话中途也可随时取用提示词模板）。 */
-	const { openPicker } = useTemplates();
 	const slashDesc = (c: SlashCommandInfo) => (c.descriptionEn ? c.descriptionEn : (c.description ?? ""));
 	const slashHint = (c: SlashCommandInfo) => (c.argumentHintEn ? c.argumentHintEn : (c.argumentHint ?? ""));
 	const [text, setText] = useState("");
@@ -1282,7 +1279,7 @@ export const ChatInput = memo(function ChatInput({
 	);
 	// 输入框槽位是否已接线（App 传全量 slot 数组，含 hidden；单测/未传时回落旧硬编码顺序）。
 	const composerWired = composerActions !== undefined;
-	// 接线后的统一分组：宿主内置（上传/模板/模型/思考/DSH/发送）+ 插件贡献按合并顺序来，
+	// 接线后的统一分组：宿主内置（上传/模型/思考/DSH/发送）+ 插件贡献按合并顺序来，
 	// hidden 已滤掉；align=start 落左列，center 居中，end 落右列（发送簇 align=end）。
 	const composerGroups = useMemo(
 		() => groupByAlign((composerActions ?? []).filter((it) => !it.hidden)),
@@ -1383,11 +1380,6 @@ export const ChatInput = memo(function ChatInput({
 				onClick={() => fileInputRef.current?.click()}
 			>
 				<FiPaperclip />
-			</button>
-		),
-		"host:composer-templates": (
-			<button type="button" className="btn tpl-open" title={t("tpl.openPicker")} onClick={openPicker}>
-				<FiBookOpen />
 			</button>
 		),
 		"host:composer-model": (
@@ -1717,9 +1709,6 @@ export const ChatInput = memo(function ChatInput({
 								</button>
 								{/* 插件输入框动作（start 组）：紧跟文件上传右侧，与上传同一组线条图标风格。 */}
 								{pluginActions.start.map(renderPluginAction)}
-								<button type="button" className="btn tpl-open" title={t("tpl.openPicker")} onClick={openPicker}>
-									<FiBookOpen />
-								</button>
 								<ModelThinking
 									state={modelState}
 									models={models}

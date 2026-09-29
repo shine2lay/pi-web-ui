@@ -4,7 +4,6 @@ import { createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react-dom/test-utils";
 import { ChatInput } from "../../web/src/components/ChatInput.js";
-import { TemplateProvider } from "../../web/src/components/PromptTemplates.js";
 import { resetAppGlobals, setAppGlobals, setAppSend } from "../../web/src/app-globals.js";
 import { LanguageProvider, en } from "../../web/src/i18n.js";
 
@@ -38,26 +37,23 @@ function mount(opts: {
 			createElement(
 				LanguageProvider,
 				null,
-				createElement(TemplateProvider, {
-					currentModelId: null,
-					children: createElement(ChatInput, {
-						streaming: false,
-						messages: [],
-						slashCommands: [],
-						modelState: null,
-						models: [],
-						modelsLoading: false,
-						attachments: [],
-						onRemoveAttachment: () => {},
-						onAddImageFiles: () => {},
-						onAddLocalFiles: () => {},
-						onNotice: opts.onNotice,
-						onSent: opts.onSent,
-						onManageModels: () => {},
-						providerKeys: {},
-						quickPhrases: [],
-						quickPhrasesEnabled: false,
-					}),
+				createElement(ChatInput, {
+					streaming: false,
+					messages: [],
+					slashCommands: [],
+					modelState: null,
+					models: [],
+					modelsLoading: false,
+					attachments: [],
+					onRemoveAttachment: () => {},
+					onAddImageFiles: () => {},
+					onAddLocalFiles: () => {},
+					onNotice: opts.onNotice,
+					onSent: opts.onSent,
+					onManageModels: () => {},
+					providerKeys: {},
+					quickPhrases: [],
+					quickPhrasesEnabled: false,
 				}),
 			),
 		);

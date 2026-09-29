@@ -27,7 +27,6 @@ import {
 import { planQnWindow, QN_WINDOW } from "../qn-window";
 import { SearchBar } from "./SearchBar";
 import { classifyScroll } from "./scroll-classify";
-import { EmptyTemplateCards } from "./PromptTemplates";
 import { renderSlotToolbar } from "../slot-toolbar";
 import { useT } from "../i18n";
 import { isExportableMessage, setExportMessageCatalog, useExportImage } from "../export-image-state";
@@ -1426,7 +1425,6 @@ export function MessageList({
 				{state.exchanges?.flatMap(renderDigest)}
 				{state.messages.length === 0 && !state.streamingMessage && pendingSends.length === 0 && (
 					<div className="empty-state">
-						<EmptyTemplateCards />
 						{uiChatEmpty && uiChatEmpty.length > 0 && (
 							<div className="chat-empty-slots">{renderSlotToolbar(uiChatEmpty, onUiAction)}</div>
 						)}

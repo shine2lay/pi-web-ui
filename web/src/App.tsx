@@ -68,7 +68,6 @@ import { PlanBoard } from "./components/PlanBoard";
 import { ToolInfoDialog } from "./components/ToolInfoDialog";
 import { GlobalSearchModal } from "./components/GlobalSearchModal";
 import { PluginModal } from "./components/PluginModal";
-import { TemplateProvider } from "./components/PromptTemplates";
 import { FilePreview, type PreviewFile } from "./components/FilePreview";
 import { PluginFilePreview } from "./components/PluginFilePreview";
 import { useChat } from "./use-chat";
@@ -1736,458 +1735,451 @@ export function App() {
 					</div>
 				)}
 			</div>
-			<TemplateProvider currentModelId={model ? `${model.provider}/${model.id}` : null}>
-				<div
-					className="layout"
-					style={{ "--left-w": `${leftWidth}px`, "--right-w": `${rightWidth}px` } as CSSProperties}
-				>
-					{drawer && <div className="drawer-backdrop" onClick={() => setDrawer(null)} />}
-					<div className={`view-pane ${view === "chat" ? "" : "hidden"}`}>
-						{!isMobile && leftCollapsed && <PanelRail side="left" onClick={toggleLeft} />}
-						<div
-							className={`panel-drawer drawer-left ${drawer === "left" ? "open" : ""}${
-								isMobile ? "" : leftCollapsed ? " hidden" : ""
-							}`}
-						>
-							<LeftPanel
-								collapsible={!isMobile}
-								onToggleCollapse={toggleLeft}
-								panelSend={panelSend}
-								active={!isMobile || drawer === "left"}
-								sessionFile={chat.state?.sessionFile ?? null}
-								conversations={chat.conversations}
-								elsewhere={chat.elsewhere}
-								sessions={chat.sessions}
-								projects={chat.projects}
-								pathCompletions={chat.pathCompletions}
-								activeConversationId={chat.activeConversationId}
-								pendingSwitch={chat.pendingSwitch?.target ?? null}
-								/* 宿主 UI 扩展点（contextmenu.session）：条目由 buildUiSlots 算好，左栏只管开菜单 +
+			<div className="layout" style={{ "--left-w": `${leftWidth}px`, "--right-w": `${rightWidth}px` } as CSSProperties}>
+				{drawer && <div className="drawer-backdrop" onClick={() => setDrawer(null)} />}
+				<div className={`view-pane ${view === "chat" ? "" : "hidden"}`}>
+					{!isMobile && leftCollapsed && <PanelRail side="left" onClick={toggleLeft} />}
+					<div
+						className={`panel-drawer drawer-left ${drawer === "left" ? "open" : ""}${
+							isMobile ? "" : leftCollapsed ? " hidden" : ""
+						}`}
+					>
+						<LeftPanel
+							collapsible={!isMobile}
+							onToggleCollapse={toggleLeft}
+							panelSend={panelSend}
+							active={!isMobile || drawer === "left"}
+							sessionFile={chat.state?.sessionFile ?? null}
+							conversations={chat.conversations}
+							elsewhere={chat.elsewhere}
+							sessions={chat.sessions}
+							activeConversationId={chat.activeConversationId}
+							pendingSwitch={chat.pendingSwitch?.target ?? null}
+							/* 宿主 UI 扩展点（contextmenu.session）：条目由 buildUiSlots 算好，左栏只管开菜单 +
 								   分派它自己的两条内置项（host:conv-dismiss-subagents / host:conv-force-dismiss）。 */
-								uiContextSession={uiSlots["contextmenu.session"]}
-								uiLeftSessions={uiLeftSessions}
-								onUiAction={onUiAction}
-								presetNames={presetNames}
-							/>
-						</div>
-						{!isMobile && <ResizeHandle side="left" width={leftWidth} onResize={resizeLeft} />}
-						<main className={wide ? "main wide-chat" : "main"}>
-							{/* 对话头部条（chat.header 槽位）：纯插件新增位，无条目时不渲染。 */}
-							{uiChatHeader.length > 0 && (
-								<div className="chat-header" role="toolbar">
-									{renderSlotToolbar(uiChatHeader, onUiAction)}
-								</div>
-							)}
-							{/* switch-loading：点了另一条对话到新快照到达之间的那几秒（大会话更久），
+							uiContextSession={uiSlots["contextmenu.session"]}
+							uiLeftSessions={uiLeftSessions}
+							onUiAction={onUiAction}
+							presetNames={presetNames}
+						/>
+					</div>
+					{!isMobile && <ResizeHandle side="left" width={leftWidth} onResize={resizeLeft} />}
+					<main className={wide ? "main wide-chat" : "main"}>
+						{/* 对话头部条（chat.header 槽位）：纯插件新增位，无条目时不渲染。 */}
+						{uiChatHeader.length > 0 && (
+							<div className="chat-header" role="toolbar">
+								{renderSlotToolbar(uiChatHeader, onUiAction)}
+							</div>
+						)}
+						{/* switch-loading：点了另一条对话到新快照到达之间的那几秒（大会话更久），
 							    以前界面纹丝不动。现在盖一层「正在打开…」，失败则留在原地显示原因。 */}
-							{switchTarget && (
-								<SwitchOverlay
-									pending={chat.pendingSwitch}
-									error={chat.switchError}
-									preview={chat.preview !== null}
-									title={switchTargetTitle(switchTarget, chat.sessions, chat.conversations)}
-									onHide={switchHide}
-									onDismissError={switchDismissError}
-									onRetry={() => {
-										const target = chat.switchError?.target;
-										if (!target) return;
-										// 重试就是再发一次同样的请求；send 里的拦截会重新进入「正在打开」并清掉错误态。
-										send(
-											target.kind === "session"
-												? { type: "switch_session", path: target.path }
-												: { type: "switch_conversation", id: target.id },
-										);
-									}}
-								/>
-							)}
-							{listState ? (
-								<>
-									{/* switch-cache：预览期间不显示——「保存」存的是服务端当前对话，不是正在预览的那条。 */}
-									{!chat.preview && chat.state?.isEphemeral && (
-										<div className="ephemeral-banner">
-											<span>🎭 {t("ephemeralBannerText")}</span>
-											<button
-												type="button"
-												className="ephemeral-save"
-												onClick={() => send({ type: "persist_conversation", id: activeConvId })}
-											>
-												💾 {t("saveEphemeral")}
-											</button>
-										</div>
-									)}
-									<MessageList
-										uiMessageActions={uiSlots["message.actions"]}
-										uiContextMessage={uiSlots["contextmenu.message"]}
-										/* 工具调用卡片的工具名右键菜单（contextmenu.toolcall）：条目已合并好，
-										   工具卡只管开菜单 + 分派它自己的 host:tool-info。 */
-										uiContextToolCall={uiSlots["contextmenu.toolcall"]}
-										uiChatEmpty={uiChatEmpty}
-										onUiAction={onUiAction}
-										key={listKeyRef.current?.key ?? "boot"}
-										state={listState}
-										liveOutputs={chat.liveOutputs}
-										toolStatuses={chat.toolStatuses}
-										onEdit={onEditMessage}
-										onKillBash={() => send({ type: "abort_bash" })}
-										onRetry={() => {
-											// 重试沿用当前模型续跑上一轮请求，同样算一次模型使用（下拉按次数排序）。
-											if (send({ type: "retry_last" })) {
-												const m = chat.state?.model;
-												if (m) recordModelUsage(`${m.provider}/${m.id}`);
-											}
-										}}
-										onRemoveQueued={onRemoveQueued}
-										onRecallQueued={onRecallQueued}
-										pendingSends={listPending}
-										onRetrySend={retrySend}
-										onRemoveSend={onRemoveSend}
-										onRewind={onRewind}
-										onRewindFit={onRewindFit}
-										thinkingWrap={chat.settings?.thinkingWrap ?? true}
-										toolsWrap={chat.settings?.toolsWrap ?? true}
-										toolImages={chat.settings?.toolImagesEnabled ?? true}
-										/* switch-cache：预览期间不跳（缓存里可能还没有那条消息，会被当成「找不到」放弃）。 */
-										jumpTarget={chat.preview ? null : searchJump}
-										onJumpDone={() => setSearchJump(null)}
-										onLoadOlder={(beforeIndex, count) => send({ type: "load_older", beforeIndex, count })}
-										onLoadExchanges={(beforeIndex, count, fromIndex) =>
-											send({ type: "load_exchanges", beforeIndex, count, fromIndex })
-										}
-									/>
-								</>
-							) : (
-								<div className="boot-wait">{chat.ready ? t("loadingSession") : t("connectingServer")}</div>
-							)}
-
-							{chat.settings?.goalModeEnabled !== false && (
-								<GoalBar
-									goal={chat.goal}
-									models={chat.models}
-									modelsLoading={chat.modelsLoading}
-									activeConversationId={chat.activeConversationId}
-									uiGoalbarActions={uiGoalbarActions}
-									onUiAction={onUiAction}
-								/>
-							)}
-							{/* 扩展问卷：非模态内联面板，插在输入框上方，对话内容保持可见 */}
-							{/* 通用右键菜单（contextmenu.* 槽位）：各处的 onContextMenu 打开它。 */}
-							<ContextMenu onAction={(entry, target, value) => onUiAction(entry, value, target)} />
-							{dialog && <Dialog dialog={dialog} />}
-							{/* 本地插件对话框（host.dialogs.*）：复用 .dialog-inline 样式，按钮 resolve 后清态 */}
-							{pluginDialog && (
-								<div className="dialog-inline" data-dialog-kind={pluginDialog.kind}>
-									<div className="dialog-head">
-										<span className="dialog-badge">{t("pluginRequest")}</span>
-										{pluginDialog.title && <span className="dialog-title">{pluginDialog.title}</span>}
+						{switchTarget && (
+							<SwitchOverlay
+								pending={chat.pendingSwitch}
+								error={chat.switchError}
+								preview={chat.preview !== null}
+								title={switchTargetTitle(switchTarget, chat.sessions, chat.conversations)}
+								onHide={switchHide}
+								onDismissError={switchDismissError}
+								onRetry={() => {
+									const target = chat.switchError?.target;
+									if (!target) return;
+									// 重试就是再发一次同样的请求；send 里的拦截会重新进入「正在打开」并清掉错误态。
+									send(
+										target.kind === "session"
+											? { type: "switch_session", path: target.path }
+											: { type: "switch_conversation", id: target.id },
+									);
+								}}
+							/>
+						)}
+						{listState ? (
+							<>
+								{/* switch-cache：预览期间不显示——「保存」存的是服务端当前对话，不是正在预览的那条。 */}
+								{!chat.preview && chat.state?.isEphemeral && (
+									<div className="ephemeral-banner">
+										<span>🎭 {t("ephemeralBannerText")}</span>
 										<button
 											type="button"
-											className="dialog-dismiss"
-											title={t("cancel")}
-											onClick={() => {
-												const cur = pluginDialogRef.current;
-												pluginDialogRef.current = null;
-												setPluginDialog(null);
-												try {
-													if (cur?.kind === "confirm") cur.resolve(false);
-													else cur?.resolve({ ok: false });
-												} catch {
-													/* 忽略 */
-												}
-											}}
+											className="ephemeral-save"
+											onClick={() => send({ type: "persist_conversation", id: activeConvId })}
 										>
-											✕
+											💾 {t("saveEphemeral")}
 										</button>
 									</div>
-									{pluginDialog.kind === "select" && (
-										<div className="dialog-options">
-											{(pluginDialog.options ?? []).map((opt, i) => {
-												const sel = pluginDialog.multi ? pluginDialogSel.includes(i) : false;
-												return (
-													<button
-														type="button"
-														key={i}
-														className={`dialog-option ${sel ? "sel" : ""}`}
-														title={opt.description}
-														onClick={() => {
-															if (pluginDialog.multi) {
-																setPluginDialogSel((prev) =>
-																	prev.includes(i) ? prev.filter((x) => x !== i) : [...prev, i],
-																);
-																return;
-															}
-															const cur = pluginDialogRef.current;
-															pluginDialogRef.current = null;
-															setPluginDialog(null);
-															try {
-																cur?.resolve({ ok: true, selected: [opt.label] });
-															} catch {
-																/* 忽略 */
-															}
-														}}
-													>
-														{opt.label}
-														{opt.description && <span className="dialog-hint">{opt.description}</span>}
-													</button>
-												);
-											})}
-											{(pluginDialog.options ?? []).length === 0 && <div className="dialog-hint">{t("noOptions")}</div>}
-											{pluginDialog.multi && (
-												<div className="dialog-actions">
-													<button
-														type="button"
-														className="btn primary"
-														onClick={() => {
-															const cur = pluginDialogRef.current;
-															const labels = (cur?.options ?? [])
-																.filter((_, idx) => pluginDialogSel.includes(idx))
-																.map((o) => o.label);
-															pluginDialogRef.current = null;
-															setPluginDialog(null);
-															try {
-																cur?.resolve({ ok: true, selected: labels });
-															} catch {
-																/* 忽略 */
-															}
-														}}
-													>
-														{t("ok")}
-													</button>
-												</div>
-											)}
-										</div>
-									)}
-									{pluginDialog.kind === "confirm" && (
-										<div className="dialog-body">
-											<div className="dialog-actions">
-												<button
-													type="button"
-													className="btn"
-													onClick={() => {
-														const cur = pluginDialogRef.current;
-														pluginDialogRef.current = null;
-														setPluginDialog(null);
-														try {
-															cur?.resolve(false);
-														} catch {
-															/* 忽略 */
-														}
-													}}
-												>
-													{t("cancel")}
-												</button>
-												<button
-													type="button"
-													className="btn primary"
-													onClick={() => {
-														const cur = pluginDialogRef.current;
-														pluginDialogRef.current = null;
-														setPluginDialog(null);
-														try {
-															cur?.resolve(true);
-														} catch {
-															/* 忽略 */
-														}
-													}}
-												>
-													{t("ok")}
-												</button>
-											</div>
-										</div>
-									)}
-									{pluginDialog.kind === "input" && (
-										<div className="dialog-body">
-											<input
-												className="dialog-input"
-												value={pluginDialogInput}
-												placeholder={pluginDialog.placeholder || t("inputPlaceholder")}
-												autoFocus
-												onChange={(e) => setPluginDialogInput(e.target.value)}
-												onKeyDown={(e) => {
-													if (e.key === "Enter" && !e.nativeEvent.isComposing) {
-														const cur = pluginDialogRef.current;
-														pluginDialogRef.current = null;
-														setPluginDialog(null);
-														try {
-															cur?.resolve({ ok: true, value: pluginDialogInput });
-														} catch {
-															/* 忽略 */
-														}
-													}
-												}}
-											/>
-											<div className="dialog-actions">
-												<button
-													type="button"
-													className="btn"
-													onClick={() => {
-														const cur = pluginDialogRef.current;
-														pluginDialogRef.current = null;
-														setPluginDialog(null);
-														try {
-															cur?.resolve({ ok: false });
-														} catch {
-															/* 忽略 */
-														}
-													}}
-												>
-													{t("cancel")}
-												</button>
-												<button
-													type="button"
-													className="btn primary"
-													onClick={() => {
-														const cur = pluginDialogRef.current;
-														pluginDialogRef.current = null;
-														setPluginDialog(null);
-														try {
-															cur?.resolve({ ok: true, value: pluginDialogInput });
-														} catch {
-															/* 忽略 */
-														}
-													}}
-												>
-													{t("ok")}
-												</button>
-											</div>
-										</div>
-									)}
-								</div>
-							)}
-							{chat.question && (
-								<DshQuestionDialog
-									question={chat.question}
-									conversationTitle={
-										chat.question.conversationTitle ||
-										chat.conversations.find((c) => c.id === (chat.question?.conversationId || activeConvId))?.title
+								)}
+								<MessageList
+									uiMessageActions={uiSlots["message.actions"]}
+									uiContextMessage={uiSlots["contextmenu.message"]}
+									/* 工具调用卡片的工具名右键菜单（contextmenu.toolcall）：条目已合并好，
+										   工具卡只管开菜单 + 分派它自己的 host:tool-info。 */
+									uiContextToolCall={uiSlots["contextmenu.toolcall"]}
+									uiChatEmpty={uiChatEmpty}
+									onUiAction={onUiAction}
+									key={listKeyRef.current?.key ?? "boot"}
+									state={listState}
+									liveOutputs={chat.liveOutputs}
+									toolStatuses={chat.toolStatuses}
+									onEdit={onEditMessage}
+									onKillBash={() => send({ type: "abort_bash" })}
+									onRetry={() => {
+										// 重试沿用当前模型续跑上一轮请求，同样算一次模型使用（下拉按次数排序）。
+										if (send({ type: "retry_last" })) {
+											const m = chat.state?.model;
+											if (m) recordModelUsage(`${m.provider}/${m.id}`);
+										}
+									}}
+									onRemoveQueued={onRemoveQueued}
+									onRecallQueued={onRecallQueued}
+									pendingSends={listPending}
+									onRetrySend={retrySend}
+									onRemoveSend={onRemoveSend}
+									onRewind={onRewind}
+									onRewindFit={onRewindFit}
+									thinkingWrap={chat.settings?.thinkingWrap ?? true}
+									toolsWrap={chat.settings?.toolsWrap ?? true}
+									toolImages={chat.settings?.toolImagesEnabled ?? true}
+									/* switch-cache：预览期间不跳（缓存里可能还没有那条消息，会被当成「找不到」放弃）。 */
+									jumpTarget={chat.preview ? null : searchJump}
+									onJumpDone={() => setSearchJump(null)}
+									onLoadOlder={(beforeIndex, count) => send({ type: "load_older", beforeIndex, count })}
+									onLoadExchanges={(beforeIndex, count, fromIndex) =>
+										send({ type: "load_exchanges", beforeIndex, count, fromIndex })
 									}
 								/>
-							)}
-							{/* 跨页作答：别处会话的问卷在本页弹框（id 对方会话作用域，提交带 owner）。 */}
-							{chat.remoteQuestion && (
-								<DshQuestionDialog
-									question={chat.remoteQuestion}
-									owner={chat.remoteQuestion.owner}
-									conversationTitle={
-										chat.remoteQuestion.conversationTitle ||
-										chat.conversations.find((c) => c.id === chat.remoteQuestion?.convId)?.title
-									}
-								/>
-							)}
-							{/* 任务执行看板 (Plan Mode) */}
-							<PlanBoard plan={chat.state?.plan} />
-							<ChatInput
-								composerLeading={uiSlots["composer.leading"]}
-								composerActions={uiSlots["composer.actions"]}
-								onUiAction={onUiAction}
-								streaming={chat.state?.isStreaming ?? false}
-								messages={chat.state?.messages ?? EMPTY_MESSAGES}
-								slashCommands={chat.slashCommands}
-								modelState={modelState}
+							</>
+						) : (
+							<div className="boot-wait">{chat.ready ? t("loadingSession") : t("connectingServer")}</div>
+						)}
+
+						{chat.settings?.goalModeEnabled !== false && (
+							<GoalBar
+								goal={chat.goal}
 								models={chat.models}
 								modelsLoading={chat.modelsLoading}
-								providerKeys={chat.providerKeys}
-								defaultModel={chat.engine === "pi" ? chat.defaultModel : undefined}
-								attachments={attachments}
-								onRemoveAttachment={removeAttachmentCb}
-								onAddImageFiles={addImageFilesCb}
-								onAddLocalFiles={addLocalFilesCb}
-								onAddPathAttachment={addPathAttachmentCb}
-								fileSearch={chat.fileSearch}
-								onSearchFiles={searchFilesCb}
-								onNotice={pushNotice}
-								onManageModels={openManageModels}
-								onSent={clearAttachments}
-								quickPhrases={chat.settings?.quickPhrases ?? []}
-								quickPhrasesEnabled={chat.settings?.quickPhrasesEnabled ?? true}
-								recallDrafts={recallDrafts}
-								dshPermCurrent={chat.state?.permission ?? null}
-								dshPermOptions={chat.dshPermission?.options ?? undefined}
-								dshPermDefault={chat.dshPermission?.defaultPreset}
-								dshPreset={chat.state?.agentPreset ?? null}
-								dshPresets={chat.dshPresets?.presets ?? undefined}
-								dshPresetDefault={chat.dshPresets?.defaultPreset}
-								dshBlank={(chat.state?.messages?.length ?? 0) === 0}
-								conversationId={chat.activeConversationId || chat.state?.conversationId || ""}
-								sessionDraft={chat.engine === "pi" ? (chat.state?.draft ?? null) : null}
-								sessionId={chat.state?.sessionId ?? ""}
-							/>
-						</main>
-						{!isMobile && <ResizeHandle side="right" width={rightWidth} onResize={resizeRight} />}
-						<div
-							className={`panel-drawer drawer-right ${drawer === "right" ? "open" : ""}${
-								isMobile ? "" : rightCollapsed ? " hidden" : ""
-							}`}
-						>
-							<RightPanel
-								collapsible={!isMobile}
-								onToggleCollapse={toggleRight}
-								panelSend={panelSend}
-								files={chat.files}
-								fileChanged={chat.fileChanged}
-								widgets={chat.widgets}
-								statuses={chat.statuses}
-								tldr={chat.state?.tldr}
-								tldrConversationId={chat.state?.conversationId}
-								taskQueue={chat.state?.taskQueue}
-								onAttach={(path, name, mode, isDir) => {
-									setDrawer(null);
-									attach(path, name, mode, isDir);
-								}}
-								onPreview={(path, name) => {
-									setDrawer(null);
-									openFile(path, name);
-								}}
-								onNotice={(level, text) => pushNotice(level, text)}
-								/* 宿主 UI 扩展点（issue #146）：右栏 tab 条（插件 tab）、文件右键菜单条目
-								   （contextmenu.file：host 内置条目由右栏自己分派）与插件配置。 */
-								uiRightPanelTabs={uiSlots["rightpanel.tabs"]}
-								uiContextFile={uiSlots["contextmenu.file"]}
-								plugins={enabledPlugins}
-								pluginsEpoch={chat.pluginsEpoch}
-								send={send}
-							/>
-						</div>
-						{!isMobile && rightCollapsed && <PanelRail side="right" onClick={toggleRight} />}
-					</div>
-					<div className={`view-pane ${view === "terminal" ? "" : "hidden"}`}>
-						<Suspense fallback={null}>
-							<TerminalPanel
-								chat={chat}
-								terminal={terminal}
-								uiTerminalToolbar={uiTerminalToolbar}
+								activeConversationId={chat.activeConversationId}
+								uiGoalbarActions={uiGoalbarActions}
 								onUiAction={onUiAction}
 							/>
-						</Suspense>
+						)}
+						{/* 扩展问卷：非模态内联面板，插在输入框上方，对话内容保持可见 */}
+						{/* 通用右键菜单（contextmenu.* 槽位）：各处的 onContextMenu 打开它。 */}
+						<ContextMenu onAction={(entry, target, value) => onUiAction(entry, value, target)} />
+						{dialog && <Dialog dialog={dialog} />}
+						{/* 本地插件对话框（host.dialogs.*）：复用 .dialog-inline 样式，按钮 resolve 后清态 */}
+						{pluginDialog && (
+							<div className="dialog-inline" data-dialog-kind={pluginDialog.kind}>
+								<div className="dialog-head">
+									<span className="dialog-badge">{t("pluginRequest")}</span>
+									{pluginDialog.title && <span className="dialog-title">{pluginDialog.title}</span>}
+									<button
+										type="button"
+										className="dialog-dismiss"
+										title={t("cancel")}
+										onClick={() => {
+											const cur = pluginDialogRef.current;
+											pluginDialogRef.current = null;
+											setPluginDialog(null);
+											try {
+												if (cur?.kind === "confirm") cur.resolve(false);
+												else cur?.resolve({ ok: false });
+											} catch {
+												/* 忽略 */
+											}
+										}}
+									>
+										✕
+									</button>
+								</div>
+								{pluginDialog.kind === "select" && (
+									<div className="dialog-options">
+										{(pluginDialog.options ?? []).map((opt, i) => {
+											const sel = pluginDialog.multi ? pluginDialogSel.includes(i) : false;
+											return (
+												<button
+													type="button"
+													key={i}
+													className={`dialog-option ${sel ? "sel" : ""}`}
+													title={opt.description}
+													onClick={() => {
+														if (pluginDialog.multi) {
+															setPluginDialogSel((prev) =>
+																prev.includes(i) ? prev.filter((x) => x !== i) : [...prev, i],
+															);
+															return;
+														}
+														const cur = pluginDialogRef.current;
+														pluginDialogRef.current = null;
+														setPluginDialog(null);
+														try {
+															cur?.resolve({ ok: true, selected: [opt.label] });
+														} catch {
+															/* 忽略 */
+														}
+													}}
+												>
+													{opt.label}
+													{opt.description && <span className="dialog-hint">{opt.description}</span>}
+												</button>
+											);
+										})}
+										{(pluginDialog.options ?? []).length === 0 && <div className="dialog-hint">{t("noOptions")}</div>}
+										{pluginDialog.multi && (
+											<div className="dialog-actions">
+												<button
+													type="button"
+													className="btn primary"
+													onClick={() => {
+														const cur = pluginDialogRef.current;
+														const labels = (cur?.options ?? [])
+															.filter((_, idx) => pluginDialogSel.includes(idx))
+															.map((o) => o.label);
+														pluginDialogRef.current = null;
+														setPluginDialog(null);
+														try {
+															cur?.resolve({ ok: true, selected: labels });
+														} catch {
+															/* 忽略 */
+														}
+													}}
+												>
+													{t("ok")}
+												</button>
+											</div>
+										)}
+									</div>
+								)}
+								{pluginDialog.kind === "confirm" && (
+									<div className="dialog-body">
+										<div className="dialog-actions">
+											<button
+												type="button"
+												className="btn"
+												onClick={() => {
+													const cur = pluginDialogRef.current;
+													pluginDialogRef.current = null;
+													setPluginDialog(null);
+													try {
+														cur?.resolve(false);
+													} catch {
+														/* 忽略 */
+													}
+												}}
+											>
+												{t("cancel")}
+											</button>
+											<button
+												type="button"
+												className="btn primary"
+												onClick={() => {
+													const cur = pluginDialogRef.current;
+													pluginDialogRef.current = null;
+													setPluginDialog(null);
+													try {
+														cur?.resolve(true);
+													} catch {
+														/* 忽略 */
+													}
+												}}
+											>
+												{t("ok")}
+											</button>
+										</div>
+									</div>
+								)}
+								{pluginDialog.kind === "input" && (
+									<div className="dialog-body">
+										<input
+											className="dialog-input"
+											value={pluginDialogInput}
+											placeholder={pluginDialog.placeholder || t("inputPlaceholder")}
+											autoFocus
+											onChange={(e) => setPluginDialogInput(e.target.value)}
+											onKeyDown={(e) => {
+												if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+													const cur = pluginDialogRef.current;
+													pluginDialogRef.current = null;
+													setPluginDialog(null);
+													try {
+														cur?.resolve({ ok: true, value: pluginDialogInput });
+													} catch {
+														/* 忽略 */
+													}
+												}
+											}}
+										/>
+										<div className="dialog-actions">
+											<button
+												type="button"
+												className="btn"
+												onClick={() => {
+													const cur = pluginDialogRef.current;
+													pluginDialogRef.current = null;
+													setPluginDialog(null);
+													try {
+														cur?.resolve({ ok: false });
+													} catch {
+														/* 忽略 */
+													}
+												}}
+											>
+												{t("cancel")}
+											</button>
+											<button
+												type="button"
+												className="btn primary"
+												onClick={() => {
+													const cur = pluginDialogRef.current;
+													pluginDialogRef.current = null;
+													setPluginDialog(null);
+													try {
+														cur?.resolve({ ok: true, value: pluginDialogInput });
+													} catch {
+														/* 忽略 */
+													}
+												}}
+											>
+												{t("ok")}
+											</button>
+										</div>
+									</div>
+								)}
+							</div>
+						)}
+						{chat.question && (
+							<DshQuestionDialog
+								question={chat.question}
+								conversationTitle={
+									chat.question.conversationTitle ||
+									chat.conversations.find((c) => c.id === (chat.question?.conversationId || activeConvId))?.title
+								}
+							/>
+						)}
+						{/* 跨页作答：别处会话的问卷在本页弹框（id 对方会话作用域，提交带 owner）。 */}
+						{chat.remoteQuestion && (
+							<DshQuestionDialog
+								question={chat.remoteQuestion}
+								owner={chat.remoteQuestion.owner}
+								conversationTitle={
+									chat.remoteQuestion.conversationTitle ||
+									chat.conversations.find((c) => c.id === chat.remoteQuestion?.convId)?.title
+								}
+							/>
+						)}
+						{/* 任务执行看板 (Plan Mode) */}
+						<PlanBoard plan={chat.state?.plan} />
+						<ChatInput
+							composerLeading={uiSlots["composer.leading"]}
+							composerActions={uiSlots["composer.actions"]}
+							onUiAction={onUiAction}
+							streaming={chat.state?.isStreaming ?? false}
+							messages={chat.state?.messages ?? EMPTY_MESSAGES}
+							slashCommands={chat.slashCommands}
+							modelState={modelState}
+							models={chat.models}
+							modelsLoading={chat.modelsLoading}
+							providerKeys={chat.providerKeys}
+							defaultModel={chat.engine === "pi" ? chat.defaultModel : undefined}
+							attachments={attachments}
+							onRemoveAttachment={removeAttachmentCb}
+							onAddImageFiles={addImageFilesCb}
+							onAddLocalFiles={addLocalFilesCb}
+							onAddPathAttachment={addPathAttachmentCb}
+							fileSearch={chat.fileSearch}
+							onSearchFiles={searchFilesCb}
+							onNotice={pushNotice}
+							onManageModels={openManageModels}
+							onSent={clearAttachments}
+							quickPhrases={chat.settings?.quickPhrases ?? []}
+							quickPhrasesEnabled={chat.settings?.quickPhrasesEnabled ?? true}
+							recallDrafts={recallDrafts}
+							dshPermCurrent={chat.state?.permission ?? null}
+							dshPermOptions={chat.dshPermission?.options ?? undefined}
+							dshPermDefault={chat.dshPermission?.defaultPreset}
+							dshPreset={chat.state?.agentPreset ?? null}
+							dshPresets={chat.dshPresets?.presets ?? undefined}
+							dshPresetDefault={chat.dshPresets?.defaultPreset}
+							dshBlank={(chat.state?.messages?.length ?? 0) === 0}
+							conversationId={chat.activeConversationId || chat.state?.conversationId || ""}
+							sessionDraft={chat.engine === "pi" ? (chat.state?.draft ?? null) : null}
+							sessionId={chat.state?.sessionId ?? ""}
+						/>
+					</main>
+					{!isMobile && <ResizeHandle side="right" width={rightWidth} onResize={resizeRight} />}
+					<div
+						className={`panel-drawer drawer-right ${drawer === "right" ? "open" : ""}${
+							isMobile ? "" : rightCollapsed ? " hidden" : ""
+						}`}
+					>
+						<RightPanel
+							collapsible={!isMobile}
+							onToggleCollapse={toggleRight}
+							panelSend={panelSend}
+							files={chat.files}
+							fileChanged={chat.fileChanged}
+							widgets={chat.widgets}
+							statuses={chat.statuses}
+							tldr={chat.state?.tldr}
+							tldrConversationId={chat.state?.conversationId}
+							taskQueue={chat.state?.taskQueue}
+							onAttach={(path, name, mode, isDir) => {
+								setDrawer(null);
+								attach(path, name, mode, isDir);
+							}}
+							onPreview={(path, name) => {
+								setDrawer(null);
+								openFile(path, name);
+							}}
+							onNotice={(level, text) => pushNotice(level, text)}
+							/* 宿主 UI 扩展点（issue #146）：右栏 tab 条（插件 tab）、文件右键菜单条目
+								   （contextmenu.file：host 内置条目由右栏自己分派）与插件配置。 */
+							uiRightPanelTabs={uiSlots["rightpanel.tabs"]}
+							uiContextFile={uiSlots["contextmenu.file"]}
+							plugins={enabledPlugins}
+							pluginsEpoch={chat.pluginsEpoch}
+							send={send}
+						/>
 					</div>
-					<div className={`view-pane ${view === "git" ? "" : "hidden"}`}>
-						<ScmPanel
+					{!isMobile && rightCollapsed && <PanelRail side="right" onClick={toggleRight} />}
+				</div>
+				<div className={`view-pane ${view === "terminal" ? "" : "hidden"}`}>
+					<Suspense fallback={null}>
+						<TerminalPanel
 							chat={chat}
 							terminal={terminal}
-							active={view === "git"}
-							onSwitchToTerminal={() => setView("terminal")}
-							uiScmToolbar={uiScmToolbar}
+							uiTerminalToolbar={uiTerminalToolbar}
 							onUiAction={onUiAction}
 						/>
-					</div>
-					{pluginViews.map((entry) => {
-						const name = `plugin:${entry.info.id}` as ViewName;
-						return (
-							<div key={entry.info.id} className={`view-pane ${view === name ? "" : "hidden"}`}>
-								<PluginView entry={entry} />
-							</div>
-						);
-					})}
-					{/* issue #225：当前视图是没加载出来的插件 → 明确占位（加载中/失败+重试），不再整片空白。 */}
-					{view.startsWith("plugin:") && !pluginViews.some((v) => `plugin:${v.info.id}` === view) && (
-						<PluginViewFallback
-							pluginId={view.slice("plugin:".length)}
-							info={chat.plugins.find((p) => `plugin:${p.id}` === view)}
-							epoch={chat.pluginsEpoch}
-							failed={failedPluginViews.includes(view.slice("plugin:".length))}
-						/>
-					)}
+					</Suspense>
 				</div>
-			</TemplateProvider>
+				<div className={`view-pane ${view === "git" ? "" : "hidden"}`}>
+					<ScmPanel
+						chat={chat}
+						terminal={terminal}
+						active={view === "git"}
+						onSwitchToTerminal={() => setView("terminal")}
+						uiScmToolbar={uiScmToolbar}
+						onUiAction={onUiAction}
+					/>
+				</div>
+				{pluginViews.map((entry) => {
+					const name = `plugin:${entry.info.id}` as ViewName;
+					return (
+						<div key={entry.info.id} className={`view-pane ${view === name ? "" : "hidden"}`}>
+							<PluginView entry={entry} />
+						</div>
+					);
+				})}
+				{/* issue #225：当前视图是没加载出来的插件 → 明确占位（加载中/失败+重试），不再整片空白。 */}
+				{view.startsWith("plugin:") && !pluginViews.some((v) => `plugin:${v.info.id}` === view) && (
+					<PluginViewFallback
+						pluginId={view.slice("plugin:".length)}
+						info={chat.plugins.find((p) => `plugin:${p.id}` === view)}
+						epoch={chat.pluginsEpoch}
+						failed={failedPluginViews.includes(view.slice("plugin:".length))}
+					/>
+				)}
+			</div>
 			<FooterBar chat={chat} bottombarItems={uiSlots["bottombar"]} onUiAction={onUiAction} />
 			{previewFile && (
 				<FilePreview
