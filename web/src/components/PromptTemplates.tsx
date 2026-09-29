@@ -3,6 +3,7 @@ import { FiEdit2, FiPlus, FiRotateCcw, FiSend, FiTrash2, FiX } from "react-icons
 import { useT, type Translate } from "../i18n";
 import { randomUuid } from "../uuid";
 import { appSend } from "../app-globals";
+import { newPromptId } from "../pending-sends";
 import { recordModelUsage } from "../model-usage";
 
 /* ------------------------------------------------------------------ */
@@ -522,7 +523,7 @@ export function TemplateProvider({
 					onSend={() => {
 						const text = editing.prompt.trim();
 						// 模板直发同样算一次当前模型的使用（下拉按次数排序）。
-						if (text && appSend({ type: "prompt", text, queue: false })) {
+						if (text && appSend({ type: "prompt", text, queue: false, id: newPromptId() })) {
 							if (currentModelId) recordModelUsage(currentModelId);
 							closeAll();
 						}

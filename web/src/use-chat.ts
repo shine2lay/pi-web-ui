@@ -61,6 +61,23 @@ import { ingestPluginLogsData } from "./plugin-logs";
 import { resolveCatalogSyncResult } from "./plugin-host";
 import { PROTOCOL_VERSION } from "./protocol-version";
 import {
+	applyPromptAck,
+	failPending,
+	idsToCheck,
+	isSlashText,
+	newPendingSend,
+	onReconnect,
+	parsePending,
+	PENDING_STORAGE_KEY,
+	type PendingSend,
+	type PromptAckInfo,
+	reconcilePending,
+	removePending,
+	retryPending,
+	sameChat,
+	serializePending,
+} from "./pending-sends";
+import {
 	initialProviderOAuthState,
 	reduceProviderOAuthState,
 	type ProviderOAuthResultState,
@@ -425,10 +442,18 @@ export interface ChatState {
 	preview: UiState | null;
 	/** rewind-to-here：回到一条用户消息后要放回输入框的文字（seq 递增，App 并进撤回草稿的同一条路）。 */
 	rewindDraft: { text: string; seq: number } | null;
+	/** optimistic-send: messages this window sent that the server hasn't confirmed yet (every chat;
+	 *  drawn faded at the end of their chat, see web/src/pending-sends.ts). */
+	pendingSends: readonly PendingSend[];
 }
 
 type Action =
 	| { type: "rewind_draft"; text: string }
+	| { type: "pending_add"; pending: PendingSend }
+	| { type: "pending_retry"; id: string }
+	| { type: "pending_fail"; id: string; reason: string }
+	| { type: "pending_remove"; id: string }
+	| { type: "prompt_ack"; ack: PromptAckInfo }
 	| { type: "status"; status: ConnStatus }
 	| { type: "switch_started"; target: SwitchTarget; startedAt: number; preview?: UiState }
 	| { type: "switch_done"; target: SwitchTarget }
@@ -814,6 +839,8 @@ function reducer(state: ChatState, action: Action): ChatState {
 				// 就是它），要么随服务端重启丢了 —— 两种情况都不该继续盖着「正在打开」。
 				pendingSwitch: null,
 				preview: null,
+				// optimistic-send: sends still waiting for an answer are asked about again on this socket.
+				pendingSends: onReconnect(state.pendingSends),
 				// Old page + new server (or the reverse) after an in-place update:
 				// WS handling on either side may be stale — banner asks for refresh.
 				protocolMismatch: action.protocolVersion !== undefined && action.protocolVersion !== PROTOCOL_VERSION,
@@ -831,6 +858,9 @@ function reducer(state: ChatState, action: Action): ChatState {
 				activeConversationId: next.conversationId,
 				liveOutputs: pruneLiveOutputs(state.liveOutputs, next),
 				toolStatuses: pruneToolStatuses(state.toolStatuses, next),
+				// optimistic-send: the faded copies this snapshot shows the real message of go now, in the
+				// same render that draws it (no gap, no duplicate).
+				pendingSends: reconcilePending(state.pendingSends, next),
 				// switch-loading 保险信号：要的那条已经显示出来了就撤遮罩（主信号是 switch_done）。
 				...settled,
 				// switch-cache：真快照到了，预览功成身退。
@@ -904,6 +934,7 @@ function reducer(state: ChatState, action: Action): ChatState {
 				activeConversationId: merged.conversationId,
 				liveOutputs: pruneLiveOutputs(state.liveOutputs, merged),
 				toolStatuses: pruneToolStatuses(state.toolStatuses, merged),
+				pendingSends: reconcilePending(state.pendingSends, merged),
 			};
 		}
 		case "tool_approval":
@@ -948,6 +979,18 @@ function reducer(state: ChatState, action: Action): ChatState {
 			return { ...state, notices: [...state.notices, action.notice].slice(-6) };
 		case "rewind_draft":
 			return { ...state, rewindDraft: { text: action.text, seq: (state.rewindDraft?.seq ?? 0) + 1 } };
+		case "pending_add":
+			return { ...state, pendingSends: [...state.pendingSends, action.pending] };
+		case "pending_retry":
+			return { ...state, pendingSends: retryPending(state.pendingSends, action.id, state.state) };
+		case "pending_fail":
+			return { ...state, pendingSends: failPending(state.pendingSends, action.id, action.reason) };
+		case "pending_remove":
+			return { ...state, pendingSends: removePending(state.pendingSends, action.id) };
+		case "prompt_ack": {
+			const next = applyPromptAck(state.pendingSends, action.ack, state.state);
+			return next === state.pendingSends ? state : { ...state, pendingSends: next };
+		}
 		case "dismiss_notice":
 			return {
 				...state,
@@ -1167,6 +1210,24 @@ function reducer(state: ChatState, action: Action): ChatState {
 	}
 }
 
+/** optimistic-send: the sends kept from before a reload (read once per page load). */
+let restoredPendingSends: readonly PendingSend[] | null = null;
+function loadPendingSends(): readonly PendingSend[] {
+	if (restoredPendingSends === null) {
+		let raw: string | null = null;
+		try {
+			raw = sessionStorage.getItem(PENDING_STORAGE_KEY);
+		} catch {
+			// storage off: nothing to restore
+		}
+		restoredPendingSends = parsePending(raw);
+	}
+	return restoredPendingSends;
+}
+
+/** optimistic-send: why Retry did nothing (the window has no connection to send it on). */
+const NOT_CONNECTED_REASON = "Not connected to the server.";
+
 let cachedClientId: string | null = null;
 
 /**
@@ -1285,6 +1346,8 @@ export function useChat() {
 		switchError: null,
 		preview: null,
 		rewindDraft: null,
+		// optimistic-send: sends from before a reload come back and are asked about again.
+		pendingSends: loadPendingSends(),
 	});
 	const wsRef = useRef<WebSocket | null>(null);
 	/** Terminal output bridge (writers keyed by terminalId). */
@@ -1392,6 +1455,25 @@ export function useChat() {
 					startedAt: Date.now(),
 					...(preview && have ? { preview } : {}),
 				});
+			}
+			// optimistic-send: a message sent with an id is drawn at once, faded, until the server
+			// answers (web/src/pending-sends.ts). Slash commands run a command instead: no copy.
+			if (out.type === "prompt" && out.id && !isSlashText(out.text)) {
+				const ui = chatApi.current.chat.state;
+				const id = out.id;
+				if (ui && !chatApi.current.chat.pendingSends.some((p) => p.id === id)) {
+					dispatch({
+						type: "pending_add",
+						pending: newPendingSend({
+							id,
+							text: out.text,
+							attachments: out.attachments,
+							queue: out.queue,
+							state: ui,
+							now: Date.now(),
+						}),
+					});
+				}
 			}
 			ws.send(JSON.stringify(out));
 			// 提交/取消模型提问后立即收起对话框：服务端只 resolve 模型侧 Promise，
@@ -1537,6 +1619,11 @@ export function useChat() {
 					dispatch({ type: "question", question: null });
 					// Ensure a fresh snapshot on (re)connect.
 					ws.send(JSON.stringify({ type: "get_state" } satisfies ClientMessage));
+					// optimistic-send: ask what became of the sends still shown as "Sending" (after the
+					// snapshot, which may show them already). Same list the "ready" reducer case keeps.
+					const unanswered = idsToCheck(onReconnect(chatApi.current.chat.pendingSends));
+					if (unanswered.length > 0)
+						ws.send(JSON.stringify({ type: "prompt_status", ids: unanswered } satisfies ClientMessage));
 					// Sessions + recent projects are LAZY: LeftPanel requests them
 					// when it is actually shown — listing scans every session file
 					// on disk (listAll scans ALL projects), too heavy for the
@@ -1627,6 +1714,11 @@ export function useChat() {
 				}
 				case "switch_done":
 					dispatch({ type: "switch_done", target: msg.target });
+					break;
+				case "prompt_ack":
+					// optimistic-send: the answer to a send (its snapshot came first, so the faded copy is
+					// usually gone already; a refusal marks it "Not sent").
+					dispatch({ type: "prompt_ack", ack: msg });
 					break;
 				case "rewind_done":
 					// 回到的是用户消息：那条的文字回到输入框（别的结果靠服务端的 notice 和新快照）。
@@ -2199,6 +2291,49 @@ export function useChat() {
 	]);
 
 	const dismissNotice = useCallback((id: number) => dispatch({ type: "dismiss_notice", id }), []);
+
+	// -- optimistic-send ------------------------------------------------------
+
+	// Keep the unanswered sends across a reload (this tab only).
+	useEffect(() => {
+		try {
+			if (chat.pendingSends.length === 0) sessionStorage.removeItem(PENDING_STORAGE_KEY);
+			else sessionStorage.setItem(PENDING_STORAGE_KEY, serializePending(chat.pendingSends));
+		} catch {
+			// quota or storage off: a reload just forgets them
+		}
+	}, [chat.pendingSends]);
+
+	/** Retry a "Not sent" message: the same id goes out again (the server never adds it twice). Only
+	 *  while its chat is the one the server has open for this window. */
+	const retrySend = useCallback((id: string) => {
+		const cur = chatApi.current.chat;
+		const p = cur.pendingSends.find((x) => x.id === id);
+		if (!p || p.status !== "failed" || cur.pendingSwitch || !cur.state || !sameChat(p, cur.state)) return;
+		const ws = wsRef.current;
+		if (!ws || ws.readyState !== WebSocket.OPEN) {
+			dispatch({ type: "pending_fail", id, reason: NOT_CONNECTED_REASON });
+			return;
+		}
+		dispatch({ type: "pending_retry", id });
+		ws.send(
+			JSON.stringify({
+				type: "prompt",
+				text: p.text,
+				queue: p.queue,
+				...(p.attachments ? { attachments: p.attachments } : {}),
+				id,
+			} satisfies ClientMessage),
+		);
+	}, []);
+
+	/** × on a "Not sent" message: it leaves the chat and comes back (for the input box). */
+	const removeSend = useCallback((id: string): PendingSend | undefined => {
+		const p = chatApi.current.chat.pendingSends.find((x) => x.id === id);
+		if (p) dispatch({ type: "pending_remove", id });
+		return p;
+	}, []);
+
 	/** switch-loading：遮罩上的两个按钮（重试不在这里 —— 它就是再发一次 switch_*，走 send）。 */
 	const switchHide = useCallback(() => dispatch({ type: "switch_hide" }), []);
 	const switchDismissError = useCallback(() => dispatch({ type: "switch_dismiss_error" }), []);
@@ -2219,6 +2354,8 @@ export function useChat() {
 	const chatApi = useRef({
 		chat,
 		send,
+		retrySend,
+		removeSend,
 		pushNotice,
 		dismissNotice,
 		switchHide,
@@ -2234,6 +2371,8 @@ export function useChat() {
 	chatApi.current = {
 		chat,
 		send,
+		retrySend,
+		removeSend,
 		pushNotice,
 		dismissNotice,
 		switchHide,

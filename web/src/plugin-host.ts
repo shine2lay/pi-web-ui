@@ -49,6 +49,7 @@ import { composeToComposer, isComposerReady, type ComposerPayload } from "./comp
 import { isDesktopShell } from "./desktop";
 import type { UiPluginCatalogEntry } from "./types";
 import { randomUuid } from "./uuid";
+import { newPromptId } from "./pending-sends";
 
 export const PLUGIN_HOST_GLOBAL = "__piWebUiHost";
 /** 宿主 API 版本：插件可用它判断宿主能力（> 本值表示宿主更新）。
@@ -521,7 +522,8 @@ export function createPluginHostApi(deps: PluginHostDeps): PluginHostApi {
 		}
 		const model = String(opts.model ?? "").trim();
 		if (model) await applyModel(model);
-		deps.send({ type: "prompt", text: prompt });
+		// optimistic-send: shown at once, faded, until the server confirms it
+		deps.send({ type: "prompt", text: prompt, id: newPromptId() });
 	};
 
 	return {
@@ -644,7 +646,7 @@ export function createPluginHostApi(deps: PluginHostDeps): PluginHostApi {
 				sessionId = deps.getConversationId() ?? sessionId;
 			}
 			const prompt = String(opts?.prompt ?? "").trim();
-			if (prompt) deps.send({ type: "prompt", text: prompt });
+			if (prompt) deps.send({ type: "prompt", text: prompt, id: newPromptId() });
 			return { ok: true, ...(sessionId ? { sessionId } : {}) };
 		},
 		sessions: {

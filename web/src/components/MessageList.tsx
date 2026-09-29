@@ -32,6 +32,7 @@ import { renderSlotToolbar } from "../slot-toolbar";
 import { useT } from "../i18n";
 import { isExportableMessage, setExportMessageCatalog, useExportImage } from "../export-image-state";
 import { SaveImageDialog } from "./SaveImageDialog";
+import { attachmentsLandedIds, type PendingSend, runStartingFor } from "../pending-sends";
 
 /** Stable shared empty map — passing this (instead of a fresh Map) lets
  *  React.memo skip messages that have no live tool output to show. */
@@ -131,6 +132,135 @@ function QueuedMessage({
 		</div>
 	);
 }
+
+/** optimistic-send: a message this window sent that the server hasn't confirmed yet (see
+ *  web/src/pending-sends.ts). The same bubble as the user's own message, so the server's copy takes
+ *  its place without a jump, but faded and with "Sending…" where the time goes. While the AI works
+ *  it looks like a queued message (that is where the server puts it). "Not sent": the reason, Retry,
+ *  and ×, which takes it out and puts the text back in the input box. */
+function PendingMessage({
+	pending,
+	queued,
+	starting,
+	attachmentsShown,
+	onRetry,
+	onRemove,
+}: {
+	pending: PendingSend;
+	queued: boolean;
+	/** The last copy on its way to an idle chat, "working" after it: it carries the caret the server's
+	 *  copy shows at the start of the run (Message: streaming && isLast), so both are the same height. */
+	starting: boolean;
+	/** The chat already shows this send's pictures and files as cards: don't show them twice. */
+	attachmentsShown: boolean;
+	onRetry?: (id: string) => void;
+	onRemove?: (id: string) => void;
+}) {
+	const t = useT();
+	const failed = pending.status === "failed";
+	const text = pending.text;
+	// One line: same layout as the real bubble, whose copy key sits inline (an invisible slot keeps
+	// the height equal, so the swap doesn't move anything).
+	const oneLiner = !text.includes("\n");
+	const atts = attachmentsShown ? [] : (pending.attachments ?? []);
+	return (
+		<div
+			className={`msg msg-user msg-pending${queued ? " msg-queued" : ""}${failed ? " msg-pending-failed" : ""}`}
+			data-role="user"
+			data-pending-id={pending.id}
+			data-pending-status={pending.status}
+		>
+			<div className="msg-meta">
+				<span className="msg-role">{t("role.user")}</span>
+				{failed ? (
+					<span className="pending-tag failed" title={pending.reason}>
+						{t("notSentTag")}
+					</span>
+				) : (
+					<span className="pending-tag sending">{t("sendingTag")}</span>
+				)}
+				{failed && (
+					<div className="msg-queued-actions">
+						{onRetry && (
+							<button
+								type="button"
+								className="msg-pending-retry"
+								title={t("retrySendTip")}
+								onClick={() => onRetry(pending.id)}
+							>
+								{t("retrySend")}
+							</button>
+						)}
+						{onRemove && (
+							<button
+								type="button"
+								className="msg-queued-remove msg-pending-remove"
+								title={t("removeUnsentTip")}
+								aria-label={t("removeUnsentTip")}
+								onClick={() => onRemove(pending.id)}
+							>
+								✕
+							</button>
+						)}
+					</div>
+				)}
+			</div>
+			<div className="msg-body">
+				{atts.length > 0 && (
+					<div className="msg-pending-atts">
+						{atts.map((a, i) =>
+							a.imageData ? (
+								<img
+									key={i}
+									className="msg-pending-img"
+									src={`data:${a.mimeType ?? "image/png"};base64,${a.imageData}`}
+									alt={a.name ?? ""}
+								/>
+							) : (
+								<span key={i} className="msg-pending-file">
+									{a.name || a.path.split("/").pop() || a.path}
+								</span>
+							),
+						)}
+					</div>
+				)}
+				{text && (
+					<div className={`msg-text${oneLiner ? " single" : ""}`}>
+						{oneLiner ? (
+							<>
+								<div className="msg-text-main">
+									<Markdown text={text} hardBreaks />
+								</div>
+								<span className="msg-text-copy msg-pending-copy-slot" aria-hidden="true" />
+							</>
+						) : (
+							<Markdown text={text} hardBreaks />
+						)}
+					</div>
+				)}
+				{starting && <span className="stream-cursor" />}
+			</div>
+			{failed && pending.reason && <div className="msg-pending-reason">{pending.reason}</div>}
+		</div>
+	);
+}
+
+/** optimistic-send: "working" after a message that is still on its way (the server runs the add-ons'
+ *  "before the AI starts" steps first). No start time: the real row counts from the real message. */
+function pendingWorkingFold(id: string): ExchangeFold {
+	return {
+		key: `pending:${id}`,
+		hidden: [],
+		answers: [],
+		turns: 0,
+		thinking: 0,
+		toolCalls: 0,
+		live: true,
+		status: "working",
+	};
+}
+const noFoldToggle = () => {};
+const EMPTY_PENDING: readonly PendingSend[] = [];
 
 function CompactionBanner({ compaction }: { compaction: NonNullable<UiState["compaction"]> }) {
 	const t = useT();
@@ -287,10 +417,19 @@ interface MessageListProps {
 	/** 往前再取几轮摘要（exchange-digest）。beforeIndex = 最老一份摘要的下标（没有时 = 窗口起点）；
 	 *  fromIndex = 一直取到这一轮（点导轨上很老的提问）。缺省 = 不取，按钮不出现。 */
 	onLoadExchanges?: (beforeIndex: number, count?: number, fromIndex?: number) => void;
+	/** optimistic-send: this chat's messages the server hasn't confirmed yet, oldest first (drawn at the end). */
+	pendingSends?: readonly PendingSend[];
+	/** optimistic-send: Retry on a "Not sent" message. */
+	onRetrySend?: (id: string) => void;
+	/** optimistic-send: × on a "Not sent" message (takes it out; the text goes back to the input box). */
+	onRemoveSend?: (id: string) => void;
 }
 
 export function MessageList({
 	state,
+	pendingSends = EMPTY_PENDING,
+	onRetrySend,
+	onRemoveSend,
 	liveOutputs,
 	toolStatuses,
 	onEdit,
@@ -375,6 +514,20 @@ export function MessageList({
 		return n;
 	}, []);
 	const rewindBusy = state.isStreaming || !!state.compaction || !!state.rewinding;
+	// optimistic-send: pi reports the run a moment before the message that starts it is in. Until then
+	// the list is drawn as it was (not running), the faded copy with "working" after it at the end, so
+	// nothing moves when the server's copy comes (see runStartingFor).
+	const runStarting = useMemo(
+		() => pendingSends.length > 0 && runStartingFor(pendingSends, state),
+		[pendingSends, state],
+	);
+	const listStreaming = !!state.isStreaming && !runStarting;
+	// "working" follows the newest message on its way while the AI isn't running yet.
+	const lastSendingId = listStreaming ? undefined : pendingSends.findLast((p) => p.status === "sending")?.id;
+	// Meanwhile the messages are drawn the way they will be once the server's copy is in and the run
+	// has started (none of them last, buttons as during a run): the swap then changes nothing above.
+	const sendingLook = lastSendingId !== undefined;
+	const msgStreaming = listStreaming || sendingLook;
 	// Only the last KEEP_RECENT persisted messages are fully rendered; older
 	// ones collapse to summary rows (unless the user expanded them).
 	const recentStart = state.messages.length > COLLAPSE_MIN ? Math.max(0, state.messages.length - KEEP_RECENT) : 0;
@@ -401,8 +554,8 @@ export function MessageList({
 		[leadDigest],
 	);
 	const foldPlan = useMemo(
-		() => planExchangeFolds(state.messages, { live: !!state.isStreaming, streaming: hasStreamingMsg, lead: foldLead }),
-		[state.messages, state.isStreaming, hasStreamingMsg, foldLead],
+		() => planExchangeFolds(state.messages, { live: listStreaming, streaming: hasStreamingMsg, lead: foldLead }),
+		[state.messages, listStreaming, hasStreamingMsg, foldLead],
 	);
 	/** 这条消息此刻被折起来了（所在那一轮没展开）。 */
 	const foldHides = useCallback(
@@ -974,6 +1127,20 @@ export function MessageList({
 			el.scrollTop = el.scrollHeight;
 		}
 	}, [queueSig]);
+	// optimistic-send: the same for a message that was just sent (drawn at once, before the server has it).
+	const pendingSig = pendingSends.map((p) => `${p.id}:${p.status}`).join("\u0000");
+	useEffect(() => {
+		const el = scrollRef.current;
+		if (el && stickRef.current) {
+			el.scrollTop = el.scrollHeight;
+		}
+	}, [pendingSig]);
+	const pendingFold = useMemo(() => (lastSendingId ? pendingWorkingFold(lastSendingId) : null), [lastSendingId]);
+	// Sends whose pictures and files the chat already shows as cards (they land before the text).
+	const attachmentsLanded = useMemo(
+		() => (pendingSends.length > 0 ? attachmentsLandedIds(pendingSends, state) : null),
+		[pendingSends, state],
+	);
 
 	// The composer sits BELOW this scroll container in a flex column. Its
 	// growth shrinks this box from the bottom; ChatInput sets scrollTop =
@@ -1257,7 +1424,7 @@ export function MessageList({
 							</div>
 						)}
 				{state.exchanges?.flatMap(renderDigest)}
-				{state.messages.length === 0 && !state.streamingMessage && (
+				{state.messages.length === 0 && !state.streamingMessage && pendingSends.length === 0 && (
 					<div className="empty-state">
 						<EmptyTemplateCards />
 						{uiChatEmpty && uiChatEmpty.length > 0 && (
@@ -1312,13 +1479,13 @@ export function MessageList({
 								toolResults={toolResults}
 								liveOutputs={hasToolCall(m) ? liveOutputs : EMPTY_LIVE}
 								toolStatuses={toolStatuses}
-								streaming={state.isStreaming}
+								streaming={msgStreaming}
 								onKillBash={onKillBash}
-								onRetry={m.id === lastId ? onRetry : undefined}
+								onRetry={!sendingLook && m.id === lastId ? onRetry : undefined}
 								toolsWrap={toolsWrap}
 								toolImages={toolImages}
 								thinkingWrap={thinkingWrap}
-								isLast={m.id === lastId}
+								isLast={!sendingLook && m.id === lastId}
 								onEdit={onEdit}
 								onRewind={onRewind}
 								rewindBusy={rewindBusy}
@@ -1377,7 +1544,7 @@ export function MessageList({
 				{state.tooBig && !state.isStreaming && !state.rewinding && !state.compaction && (
 					<TooBigCard tooBig={state.tooBig} onFit={onRewindFit} />
 				)}
-				{state.isStreaming && messages.length === 0 && <div className="streaming-wait">{t("waitingResponse")}</div>}
+				{listStreaming && messages.length === 0 && <div className="streaming-wait">{t("waitingResponse")}</div>}
 				{state.queue.steering.map((text, i) => (
 					<QueuedMessage
 						key={`q-steer-${i}`}
@@ -1398,6 +1565,22 @@ export function MessageList({
 						onRecallQueued={onRecallQueued}
 					/>
 				))}
+				{/* optimistic-send: sent from this window, not confirmed yet. While the AI works the server
+					puts them in the queue above, so they look queued; otherwise "working" follows them. */}
+				{pendingSends.map((p) => (
+					<PendingMessage
+						key={`pending:${p.id}`}
+						pending={p}
+						queued={listStreaming}
+						starting={p.id === lastSendingId}
+						attachmentsShown={attachmentsLanded?.has(p.id) ?? false}
+						onRetry={onRetrySend}
+						onRemove={onRemoveSend}
+					/>
+				))}
+				{pendingFold && (
+					<ExchangeFoldRow key={`fold:${pendingFold.key}`} fold={pendingFold} open={false} onToggle={noFoldToggle} />
+				)}
 			</div>
 			{!stickBottom && (
 				<button type="button" className="scroll-bottom" onClick={scrollToBottom}>

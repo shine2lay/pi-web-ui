@@ -72,6 +72,7 @@ import { TemplateProvider } from "./components/PromptTemplates";
 import { FilePreview, type PreviewFile } from "./components/FilePreview";
 import { PluginFilePreview } from "./components/PluginFilePreview";
 import { useChat } from "./use-chat";
+import { pendingFor } from "./pending-sends";
 import { takeChatLink } from "./open-chat-link";
 import { appUrl } from "./base-url";
 import { resolveImageUrls } from "./chat-image";
@@ -95,6 +96,22 @@ import { diffStreamingCues } from "./streaming-cues";
 import { DoneCues } from "./done-settle";
 import { useTheme } from "./theme";
 import { useWallpaperEffect } from "./wallpaper";
+
+/** optimistic-send: an attachment as it was sent, back in the composer's form (× on "Not sent"). */
+function composerAttachment(a: PromptAttachment, i: number): PendingAttachment {
+	const name = a.name || a.path.split("/").pop() || a.path || (a.imageData ? "image" : "file");
+	return {
+		path: a.path,
+		name,
+		...(a.mode ? { mode: a.mode } : {}),
+		...(a.lines ? { lines: a.lines } : {}),
+		...(a.conversationId ? { conversationId: a.conversationId } : {}),
+		...(a.sessionPath ? { sessionPath: a.sessionPath } : {}),
+		...(a.imageData ? { imageData: a.imageData, key: `unsent-${Date.now()}-${i}` } : {}),
+		...(a.fileData ? { fileData: a.fileData, size: a.size } : {}),
+		...(a.mimeType ? { mimeType: a.mimeType } : {}),
+	};
+}
 
 export interface PendingAttachment {
 	path: string;
@@ -290,7 +307,8 @@ function addPluginPathGrant(path: string, pluginId?: string): void {
 export function App() {
 	const t = useT();
 	const { locale } = useI18n();
-	const { chat, send, dismissNotice, pushNotice, terminal, switchHide, switchDismissError } = useChat();
+	const { chat, send, retrySend, removeSend, dismissNotice, pushNotice, terminal, switchHide, switchDismissError } =
+		useChat();
 	// 快捷短语 seeding：首次看到空列表 → 按界面语言填一批内置常用短语，之后即为用户
 	// 数据（增删改/恢复默认/关闭都在设置里）。「已 seed」标记存服务端全局
 	// （settings.quickPhrasesSeeded，非浏览器 localStorage）——clientId 在
@@ -747,6 +765,13 @@ export function App() {
 	/** switch-cache：切换进行中先显示目标对话的缓存（只给消息列表；其余界面仍是服务端当前对话）。
 	 *  列表的 key 随它往前推：预览换成同一会话的真快照时不重建（见 nextListKey）。 */
 	const listState = chat.preview ?? chat.state;
+	// optimistic-send: the shown chat's messages that are still on their way (drawn faded at its end).
+	const listConvId = listState?.conversationId;
+	const listSessionId = listState?.sessionId;
+	const listPending = useMemo(
+		() => pendingFor(chat.pendingSends, listConvId ? { conversationId: listConvId, sessionId: listSessionId } : null),
+		[chat.pendingSends, listConvId, listSessionId],
+	);
 	const listKeyRef = useRef<ListKey | null>(null);
 	listKeyRef.current = nextListKey(listKeyRef.current, listState);
 	// Wide chat column (client-local, default off).
@@ -1446,6 +1471,23 @@ export function App() {
 		setRecallDrafts((prev) => [...prev.slice(-9), item]);
 	}, [rewindDraft]);
 
+	// optimistic-send: × on a "Not sent" message takes it out of the chat and puts it back in the
+	// input box (text the same way as a recalled queued message, pictures and files back as attachments).
+	const onRemoveSend = useCallback(
+		(id: string) => {
+			const p = removeSend(id);
+			if (!p) return;
+			if (p.text) {
+				recallSeqRef.current += 1;
+				const item = { text: p.text, seq: recallSeqRef.current };
+				setRecallDrafts((prev) => [...prev.slice(-9), item]);
+			}
+			const back = (p.attachments ?? []).map(composerAttachment);
+			if (back.length > 0) setAttachments((prev) => [...prev, ...back]);
+		},
+		[removeSend],
+	);
+
 	// Stable callbacks for memoized panels (LeftPanel/RightPanel/ChatInput/
 	// GoalBar skip re-render while tokens stream in — inline closures here
 	// would break their shallow prop comparison every render).
@@ -1790,6 +1832,9 @@ export function App() {
 										}}
 										onRemoveQueued={onRemoveQueued}
 										onRecallQueued={onRecallQueued}
+										pendingSends={listPending}
+										onRetrySend={retrySend}
+										onRemoveSend={onRemoveSend}
 										onRewind={onRewind}
 										onRewindFit={onRewindFit}
 										thinkingWrap={chat.settings?.thinkingWrap ?? true}

@@ -34,6 +34,7 @@ import { DshPresetBar, type DshPresetInfo } from "./DshPresetBar";
 import { DshPermissionBar } from "./DshPermissionBar";
 import type { DshPermissionOption, UiAgentPreset } from "../types";
 import { useTemplates } from "./PromptTemplates";
+import { newPromptId } from "../pending-sends";
 
 /** True on touch-first devices (phones / tablets driven by a soft keyboard) —
  *  see `touch-device.ts` for the detection rules (Windows 触屏笔记本不算触屏，
@@ -1015,6 +1016,8 @@ export const ChatInput = memo(function ChatInput({
 				text: trimmed,
 				queue,
 				attachments: buildPromptAttachments(),
+				// optimistic-send: shown at once, faded, until the server confirms it
+				id: newPromptId(),
 			})
 		) {
 			// 入全局历史（连续重复不重复入队，已在 pushPromptHistory 内去重）——仅提交成功才记。
@@ -1064,7 +1067,7 @@ export const ChatInput = memo(function ChatInput({
 			onNotice("error", t("netDisconnected"));
 			return;
 		}
-		if (appSend({ type: "prompt", text: trimmed, queue, attachments: buildPromptAttachments() })) {
+		if (appSend({ type: "prompt", text: trimmed, queue, attachments: buildPromptAttachments(), id: newPromptId() })) {
 			if (trimmed) pushPromptHistory(trimmed);
 			historyIndexRef.current = -1;
 			draftRef.current = "";

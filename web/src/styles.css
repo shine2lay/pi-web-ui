@@ -8574,6 +8574,97 @@ div.chead[role="button"]:focus-visible,
 	}
 }
 
+/* optimistic-send: a message on its way (MessageList.tsx PendingMessage). The user's own bubble,
+ * faded, with "Sending…" where the time goes; while the AI works it also has the queued look.
+ * "Not sent" stays with its reason, Retry and ×. */
+.msg-pending .msg-body {
+	opacity: 0.55;
+}
+.msg-pending .msg-meta {
+	align-items: center;
+}
+.pending-tag {
+	display: inline-block;
+	font-size: 10px;
+	line-height: 1.4;
+	padding: 1px 7px;
+	border-radius: 999px;
+	font-weight: 600;
+}
+.pending-tag.sending {
+	color: var(--text-dim);
+	background: var(--bg-elev2);
+}
+.pending-tag.failed {
+	color: var(--red);
+	background: var(--red-soft);
+	cursor: help;
+}
+.msg-pending-failed .msg-body {
+	opacity: 0.85;
+	border-color: rgba(248, 113, 113, 0.45);
+}
+.msg-pending-retry {
+	background: transparent;
+	border: 1px solid var(--border-soft);
+	color: var(--text);
+	font-family: inherit;
+	font-size: 11px;
+	line-height: 1;
+	padding: 4px 9px;
+	border-radius: 6px;
+	cursor: pointer;
+	transition:
+		color 0.12s ease,
+		background 0.12s ease,
+		border-color 0.12s ease;
+}
+.msg-pending-retry:hover,
+.msg-pending-retry:focus-visible {
+	color: var(--accent);
+	background: var(--accent-soft);
+	border-color: var(--accent);
+}
+.msg-pending-remove {
+	opacity: 0.7;
+}
+.msg-pending-reason {
+	margin-top: 4px;
+	font-size: 11px;
+	color: var(--red);
+	opacity: 0.85;
+	overflow-wrap: anywhere;
+}
+/* Keeps a one-line bubble as tall as the real one (whose copy key sits inline). */
+.msg-pending-copy-slot {
+	visibility: hidden;
+	pointer-events: none;
+}
+.msg-pending-atts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-bottom: 6px;
+}
+.msg-pending-img {
+	max-width: 120px;
+	max-height: 64px;
+	border-radius: 6px;
+	object-fit: cover;
+}
+.msg-pending-file {
+	font-size: 12px;
+	padding: 2px 8px;
+	border-radius: 999px;
+	background: var(--bg-elev2);
+	color: var(--text-dim);
+}
+@media (pointer: coarse) {
+	.msg-pending-retry {
+		padding: 8px 12px;
+	}
+}
+
 .msg-user .msg-body {
 	background: var(--accent-soft);
 	border: 1px solid rgba(139, 92, 246, 0.25);
