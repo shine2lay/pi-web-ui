@@ -29,23 +29,28 @@ const okResponse = (result: unknown) =>
 const errResponse = (code: number, description: string, extra: Record<string, unknown> = {}) =>
 	new Response(JSON.stringify({ ok: false, error_code: code, description, ...extra }), { status: code });
 
+/** How a call can go wrong: Telegram's error answer, a failed connection, or "lost" (Telegram did
+ *  it, but its answer never arrived). */
+type Failure = Response | Error | "lost";
+
 /** A fake Telegram: records every Bot API call and answers it. */
 function fakeTelegram() {
 	const calls: Call[] = [];
 	let nextId = 500;
-	const failures: Record<string, Response[]> = {};
+	const failures: Record<string, Failure[]> = {};
 	const fetchImpl = async (url: string, init: Any) => {
 		const method = String(url).split("/").pop() as string;
 		const params = JSON.parse(init?.body ?? "{}");
 		const call: Call = { method, params };
 		calls.push(call);
 		const fail = failures[method]?.shift();
-		if (fail) return fail;
+		if (fail instanceof Response) return fail;
+		if (fail instanceof Error) throw fail;
 		if (method === "sendMessage") {
 			call.result = { message_id: nextId++, chat: { id: Number(OWNER), type: "private" } };
-			return okResponse(call.result);
 		}
-		return okResponse(true);
+		if (fail === "lost") throw new Error("socket hang up");
+		return okResponse(call.result ?? true);
 	};
 	return {
 		calls,
@@ -53,8 +58,9 @@ function fakeTelegram() {
 		api: createTelegramApi({ base: "http://fake-telegram", token: TOKEN, fetchImpl: fetchImpl as Any }),
 		of: (method: string) => calls.filter((c) => c.method === method),
 		last: (method: string) => calls.filter((c) => c.method === method).at(-1),
-		failNext: (method: string, res: Response) => {
-			(failures[method] ??= []).push(res);
+		failNext: (method: string, res: Failure, times = 1) => {
+			// A Response's body can be read once: each failure gets its own copy.
+			for (let i = 0; i < times; i++) (failures[method] ??= []).push(res instanceof Response ? res.clone() : res);
 		},
 	};
 }
@@ -292,6 +298,153 @@ describe("telegram plugin: sending", () => {
 		await settle();
 		expect(tg.of("sendMessage")).toHaveLength(2);
 		expect(bridge.entries.size).toBe(1);
+	});
+
+	it("retries at once when Telegram has a hiccup or the connection fails", async () => {
+		const { tg, asks, bridge, settle } = setup();
+		tg.failNext("sendMessage", errResponse(502, "Bad Gateway"));
+		tg.failNext("sendMessage", new Error("fetch failed"));
+		const ask = asks.add(question());
+		await settle();
+		const sent = tg.of("sendMessage");
+		expect(sent).toHaveLength(3);
+		expect(bridge.entries.get(`${ask.id}@${ask.createdAt}`)?.messageId).toBe(sent[2].result.message_id);
+	});
+
+	it("doesn't retry what Telegram refused", async () => {
+		const { tg, asks, settle } = setup();
+		tg.failNext("sendMessage", errResponse(403, "Forbidden: bot was blocked by the user"));
+		asks.add(question());
+		await settle();
+		expect(tg.of("sendMessage")).toHaveLength(1);
+	});
+
+	it("a send that keeps failing keeps its buttons: the next try sends the same ones", async () => {
+		const { tg, asks, bridge, settle } = setup();
+		tg.failNext("sendMessage", errResponse(502, "Bad Gateway"), 4);
+		const ask = asks.add(question());
+		await settle();
+		const failed = tg.of("sendMessage");
+		expect(failed).toHaveLength(4);
+		const key = `${ask.id}@${ask.createdAt}`;
+		expect(bridge.entries.get(key)?.messageId).toBe(0);
+		void bridge.resync();
+		await settle();
+		const sent = tg.last("sendMessage") as Call;
+		expect(tg.of("sendMessage")).toHaveLength(5);
+		expect(dataOf(sent, "Blue")).toBe(dataOf(failed[0], "Blue"));
+		expect(bridge.entries.get(key)?.messageId).toBe(sent.result.message_id);
+	});
+
+	it("button ids start from the clock, so a fresh start never reuses an old message's", async () => {
+		const before = Math.floor(Date.now() / 1000);
+		const { tg, asks, settle } = setup();
+		asks.add(question());
+		await settle();
+		const ref = Number(dataOf(tg.last("sendMessage"), "Red").split(":")[0]);
+		expect(ref).toBeGreaterThanOrEqual(before);
+		expect(ref).toBeLessThanOrEqual(Math.floor(Date.now() / 1000));
+	});
+});
+
+describe("telegram plugin: copies from a send whose answer was lost", () => {
+	it("a tap on either copy answers the chat, and both get the final words", async () => {
+		const { tg, asks, bridge, send, settle } = setup();
+		tg.failNext("sendMessage", "lost");
+		const ask = asks.add(question());
+		await settle();
+		const [lost, kept] = tg.of("sendMessage");
+		expect(tg.of("sendMessage")).toHaveLength(2);
+		expect(dataOf(lost, "Blue")).toBe(dataOf(kept, "Blue"));
+		await send(tap(dataOf(lost, "Blue"), lost.result.message_id));
+		expect(asks.answered).toEqual([{ id: ask.id, answers: [{ id: "colour", selected: ["Blue"] }] }]);
+		const finals = tg
+			.of("editMessageText")
+			.filter((c) => String(c.params.text).includes("Answered on Telegram</b>: Blue"))
+			.map((c) => c.params.message_id);
+		expect(finals.sort()).toEqual([lost.result.message_id, kept.result.message_id].sort());
+		expect(bridge.entries.size).toBe(0);
+	});
+
+	it("ticks show on both copies", async () => {
+		const { tg, asks, send, settle } = setup();
+		tg.failNext("sendMessage", "lost");
+		asks.add(
+			question({
+				fields: [
+					{
+						id: "langs",
+						text: "Which languages?",
+						options: ["Go", "Rust"].map((v) => ({ value: v, label: v })),
+						multi: true,
+						allowText: false,
+					},
+				],
+			}),
+		);
+		await settle();
+		const [lost, kept] = tg.of("sendMessage");
+		await send(tap(dataOf(kept, "Go"), kept.result.message_id));
+		await send(tap(dataOf(lost, "Rust"), lost.result.message_id));
+		const last = tg.of("editMessageReplyMarkup").slice(-2);
+		expect(last.map((c) => c.params.message_id).sort()).toEqual(
+			[lost.result.message_id, kept.result.message_id].sort(),
+		);
+		for (const c of last) {
+			expect(buttons(c).map((b: Any) => b.text)).toEqual(["\u2611 Go", "\u2611 Rust", "\u2705 Done"]);
+		}
+	});
+
+	it("a typed reply to a copy we never met answers the question its buttons belong to", async () => {
+		const { tg, asks, send, settle } = setup();
+		tg.failNext("sendMessage", "lost");
+		const ask = asks.add(question());
+		await settle();
+		const [lost] = tg.of("sendMessage");
+		await send({
+			update_id: ++updateId,
+			message: {
+				message_id: 990,
+				from: { id: Number(OWNER) },
+				chat: { id: Number(OWNER), type: "private" },
+				text: "Green",
+				reply_to_message: {
+					message_id: lost.result.message_id,
+					from: { id: 123456, is_bot: true },
+					text: "Pick a colour",
+					reply_markup: lost.params.reply_markup,
+				},
+			},
+		});
+		expect(asks.answered).toEqual([{ id: ask.id, answers: [{ id: "colour", selected: [], text: "Green" }] }]);
+	});
+
+	it("a reply to a copy of the 'type your answer' prompt counts when just one question waits for it", async () => {
+		const { tg, asks, send, settle } = setup();
+		const ask = asks.add(question());
+		await settle();
+		const msg = tg.last("sendMessage") as Call;
+		tg.failNext("sendMessage", "lost");
+		await send(tap(dataOf(msg, "Type"), msg.result.message_id));
+		const [lostPrompt] = tg.of("sendMessage").slice(1);
+		expect(tg.of("sendMessage")).toHaveLength(3);
+		await send({
+			update_id: ++updateId,
+			message: {
+				message_id: 991,
+				from: { id: Number(OWNER) },
+				chat: { id: Number(OWNER), type: "private" },
+				text: "Teal",
+				reply_to_message: {
+					message_id: lostPrompt.result.message_id,
+					from: { id: 123456, is_bot: true },
+					text: "Type your answer to: Which colour?",
+				},
+			},
+		});
+		expect(asks.answered).toEqual([{ id: ask.id, answers: [{ id: "colour", selected: [], text: "Teal" }] }]);
+		const deleted = tg.of("deleteMessage").map((c) => c.params.message_id);
+		expect(deleted).toContain(lostPrompt.result.message_id);
 	});
 });
 
@@ -593,13 +746,20 @@ describe("telegram plugin: activate", () => {
 		}) as Any;
 	}
 
-	it("does nothing until it has a token and your id", () => {
-		const statuses: string[] = [];
-		const host = hostWith({ botToken: "", ownerId: OWNER }, statuses);
-		const off = telegramPlugin.activate(host);
-		expect(statuses.at(-1)).toContain("not set up");
-		expect(host.mock.handlers["asks.on"] ?? []).toHaveLength(0);
-		off?.();
+	it("does nothing until it has a token and your id, and says which is missing", () => {
+		const cases: [Record<string, unknown>, string][] = [
+			[{ botToken: "", ownerId: OWNER }, "not set up: add the bot token in the settings"],
+			[{ botToken: TOKEN, ownerId: "" }, "not set up: add your Telegram id in the settings"],
+			[{ botToken: "", ownerId: "" }, "not set up: add the bot token and your Telegram id in the settings"],
+		];
+		for (const [settings, want] of cases) {
+			const statuses: string[] = [];
+			const host = hostWith(settings, statuses);
+			const off = telegramPlugin.activate(host);
+			expect(statuses.at(-1)).toBe(want);
+			expect(host.mock.handlers["asks.on"] ?? []).toHaveLength(0);
+			off?.();
+		}
 	});
 
 	it("once set up it listens and polls its own bot; a new bot starts over; unloading stops both", async () => {

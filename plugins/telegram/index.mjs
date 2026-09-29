@@ -18,16 +18,19 @@ export const API_BASE_DEFAULT = "https://api.telegram.org";
 /** Tests (and only tests) point the plugin at a fake Telegram with this. */
 export const API_BASE_ENV = "PI_WEB_TELEGRAM_API_BASE";
 
-const POLL_TIMEOUT_S = 50;
-const POLL_FETCH_TIMEOUT_MS = 65_000;
-const CALL_TIMEOUT_MS = 20_000;
+// Short enough that a connection that died quietly is noticed within half a minute.
+const POLL_TIMEOUT_S = 25;
+const POLL_FETCH_TIMEOUT_MS = 35_000;
+const CALL_TIMEOUT_MS = 10_000;
 /** Telegram allows 4096 characters; stay a little under. */
 export const TEXT_BUDGET = 3900;
 const LABEL_MAX = 60;
 const MAX_OPTIONS = 90;
 const RESYNC_MS = 60_000;
-const BACKOFF_MIN_MS = 5_000;
-const BACKOFF_MAX_MS = 60_000;
+/** A call Telegram fumbled (a 5xx, a dropped connection, no answer in time) is tried again after these. */
+const RETRY_DELAYS_MS = [1_000, 2_000, 4_000];
+const BACKOFF_MIN_MS = 1_000;
+const BACKOFF_MAX_MS = 30_000;
 
 const KIND_ICON = {
 	question: "\u2753",
@@ -377,10 +380,29 @@ const keyOf = (ask) => `${ask.id}@${ask.createdAt}`;
 /** A no-op for optional callbacks (takes any arguments, so callers' signatures check). */
 const ignore = (..._args) => {};
 const notModified = (err) => /not modified/i.test(String(err?.description ?? err?.message ?? ""));
+/** Worth another try: Telegram asked us to slow down (429), had a hiccup (5xx), or the connection
+ *  failed or got no answer in time (code 0). */
+const retryable = (err) => err?.code === 429 || err?.code === 0 || (err?.code >= 500 && err?.code <= 599);
+
+/** The ref our buttons carry ("<ref>:<part>:<action>"), read off a message Telegram shows us. */
+function refOfButtons(message) {
+	for (const row of message?.reply_markup?.inline_keyboard ?? []) {
+		for (const b of row ?? []) {
+			const m = /^(\d+):/.exec(String(b?.callback_data ?? ""));
+			if (m) return m[1];
+		}
+	}
+	return null;
+}
 
 /**
  * Keeps one Telegram message per waiting ask. Everything that talks to Telegram runs one at a
  * time, in order, so an edit never overtakes the message it edits.
+ *
+ * A message is sent with its ref in every button, and the ref is kept when a send fails: when
+ * Telegram got a send whose answer was lost, and the next try sends it again, both copies carry
+ * the same ref and a tap on either one counts. Refs start from the clock (seconds), so they never
+ * repeat even if the storage is lost; a tap on an old message can't hit a newer question.
  *
  * storage keys: "sent" (key -> message state), "nextRef" (button ids).
  */
@@ -397,7 +419,7 @@ export function createBridge({
 	const owner = String(ownerId);
 	const wait = sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
 	const entries = new Map(Object.entries(storage.get("sent", {}) ?? {}));
-	let nextRef = Number(storage.get("nextRef", 1)) || 1;
+	let nextRef = Number(storage.get("nextRef", 0)) || Math.floor(Date.now() / 1000);
 	const pendingSends = new Set();
 	let chain = Promise.resolve();
 	let closed = false;
@@ -424,11 +446,12 @@ export function createBridge({
 			try {
 				return await api.call(method, params);
 			} catch (err) {
-				if (err?.code === 429 && attempt < 3 && !closed) {
-					await wait(Math.min(60, Math.max(1, err.retryAfter || 1)) * 1000);
-					continue;
-				}
-				throw err;
+				if (!retryable(err) || attempt >= RETRY_DELAYS_MS.length || closed) throw err;
+				await wait(
+					err.code === 429
+						? Math.min(60, Math.max(1, err.retryAfter || 1)) * 1000
+						: RETRY_DELAYS_MS[attempt],
+				);
 			}
 		}
 	}
@@ -442,21 +465,38 @@ export function createBridge({
 			...extra,
 		});
 
-	async function edit(e, text, reply_markup = { inline_keyboard: [] }) {
-		if (!e.messageId) return;
-		try {
-			await call("editMessageText", {
-				chat_id: owner,
-				message_id: e.messageId,
-				text,
-				parse_mode: "HTML",
-				link_preview_options: { is_disabled: true },
-				reply_markup,
-			});
-		} catch (err) {
-			if (!notModified(err)) throw err;
-		}
+	/** Every message that shows e: the one we sent, and copies found since (see noteCopy). */
+	const messagesOf = (e) => [e.messageId, ...(e.copies ?? [])].filter((id) => Number(id) > 0);
+
+	/** A tap or reply came from message msgId, which carries e's ref: it shows e too. */
+	function noteCopy(e, msgId) {
+		if (!msgId || messagesOf(e).includes(msgId)) return;
+		// A send whose answer was lost did arrive: when no later try got through, that's the message.
+		if (!e.messageId) e.messageId = msgId;
+		else e.copies = [...(e.copies ?? []), msgId];
+		save();
 	}
+
+	/** One edit on every message that shows e. A copy that can't be edited (deleted) doesn't matter. */
+	async function editAll(e, method, params) {
+		let failed = null;
+		for (const id of messagesOf(e)) {
+			try {
+				await call(method, { chat_id: owner, message_id: id, ...params });
+			} catch (err) {
+				if (!notModified(err) && id === e.messageId) failed ??= err;
+			}
+		}
+		if (failed) throw failed;
+	}
+
+	const edit = (e, text, reply_markup = { inline_keyboard: [] }) =>
+		editAll(e, "editMessageText", {
+			text,
+			parse_mode: "HTML",
+			link_preview_options: { is_disabled: true },
+			reply_markup,
+		});
 
 	async function removePrompts(e, onlyField) {
 		for (const [pid, fi] of Object.entries(e.prompts ?? {})) {
@@ -481,36 +521,43 @@ export function createBridge({
 		await edit(e, text, reply_markup);
 	}
 
+	/** Send ask's message, unless it has one. The entry is kept before sending, so a failed send
+	 *  keeps its ref: the next try (the next resync) sends the same buttons. */
 	function sendAsk(ask) {
 		const key = keyOf(ask);
-		if (entries.has(key) || pendingSends.has(key)) return;
+		if (entries.get(key)?.messageId || pendingSends.has(key)) return;
 		pendingSends.add(key);
 		enqueue(async () => {
 			try {
-				if (entries.has(key)) return;
 				const live = asks.list().find((a) => keyOf(a) === key);
 				if (!live) return;
-				const e = {
-					key,
-					ref: nextRef++,
-					askId: live.id,
-					createdAt: live.createdAt,
-					messageId: 0,
-					step: 0,
-					answers: {},
-					ticks: [],
-					prompts: {},
-					sending: false,
-					link: chatLink(webAppAddress, live.sessionFile),
-					head: renderHead(live),
-				};
-				storage.set("nextRef", nextRef);
-				e.step = Math.max(0, nextStep(live, e.answers));
+				let e = entries.get(key);
+				if (e?.messageId) return;
+				if (!e) {
+					e = {
+						key,
+						ref: nextRef++,
+						askId: live.id,
+						createdAt: live.createdAt,
+						messageId: 0,
+						step: 0,
+						answers: {},
+						ticks: [],
+						prompts: {},
+						sending: false,
+						link: chatLink(webAppAddress, live.sessionFile),
+						head: renderHead(live),
+					};
+					storage.set("nextRef", nextRef);
+					e.step = Math.max(0, nextStep(live, e.answers));
+					entries.set(key, e);
+					save();
+				}
 				const { text, reply_markup } = renderAsk(live, e);
 				const msg = await send(text, { reply_markup });
 				e.messageId = Number(msg?.message_id) || 0;
-				entries.set(key, e);
 				save();
+				log("info", `telegram: sent ${live.kind === "approval" ? "permission prompt" : "question"} ${live.id} as message ${e.messageId}`);
 			} finally {
 				pendingSends.delete(key);
 			}
@@ -548,6 +595,7 @@ export function createBridge({
 			res = { ok: false, error: String(err?.message ?? err) };
 		}
 		if (res?.ok) {
+			log("info", `telegram: answered ${ask.id} from Telegram`);
 			// The "answered" event writes the final words (it may already be queued).
 			return;
 		}
@@ -580,7 +628,7 @@ export function createBridge({
 		const m = /^(\d+):(\d+):(o\d+|d|t)$/.exec(String(cq.data ?? ""));
 		const msgId = Number(cq.message?.message_id) || 0;
 		const e = m ? byRef(m[1]) : null;
-		if (!e || (msgId && e.messageId !== msgId)) {
+		if (!e) {
 			await reply("No longer waiting.");
 			if (msgId) {
 				await call("editMessageReplyMarkup", {
@@ -591,6 +639,8 @@ export function createBridge({
 			}
 			return;
 		}
+		// Another message with this ref (a copy Telegram got twice) counts like the one we know.
+		noteCopy(e, msgId);
 		const ask = liveAsk(e);
 		if (!ask) {
 			await reply("No longer waiting.");
@@ -650,13 +700,7 @@ export function createBridge({
 			e.ticks = e.ticks.includes(opt.value) ? e.ticks.filter((v) => v !== opt.value) : [...e.ticks, opt.value];
 			save();
 			await reply();
-			await call("editMessageReplyMarkup", {
-				chat_id: owner,
-				message_id: e.messageId,
-				reply_markup: renderButtons(ask, e),
-			}).catch((err) => {
-				if (!notModified(err)) throw err;
-			});
+			await editAll(e, "editMessageReplyMarkup", { reply_markup: renderButtons(ask, e) });
 			return;
 		}
 		e.answers[field.id] = { selected: [opt.value] };
@@ -696,6 +740,15 @@ export function createBridge({
 		await advance(e, ask);
 	}
 
+	/** Questions waiting for a typed answer to their current part (each once). */
+	function openPrompts() {
+		const open = new Set();
+		for (const e of entries.values()) {
+			for (const fi of Object.values(e.prompts ?? {})) if (Number(fi) === e.step && !e.sending) open.add(e);
+		}
+		return [...open];
+	}
+
 	async function onMessage(msg) {
 		const text = typeof msg.text === "string" ? msg.text.trim() : "";
 		const say = (t) =>
@@ -707,7 +760,25 @@ export function createBridge({
 			for (const e of entries.values()) {
 				const fi = e.prompts?.[replyTo];
 				if (fi !== undefined) return typedAnswer(e, Number(fi), text, say);
-				if (e.messageId === replyTo) return typedAnswer(e, e.step, text, say);
+				if (messagesOf(e).includes(replyTo)) return typedAnswer(e, e.step, text, say);
+			}
+			// A copy we haven't met yet: its buttons carry the question's ref.
+			const copyOf = byRef(refOfButtons(msg.reply_to_message));
+			if (copyOf) {
+				noteCopy(copyOf, replyTo);
+				return typedAnswer(copyOf, copyOf.step, text, say);
+			}
+			// A "Type your answer" prompt we don't know (one sent twice when an answer got lost):
+			// when just one question waits for a typed answer, it's that one.
+			const to = msg.reply_to_message;
+			if (to?.from?.is_bot && String(to.text ?? "").startsWith("Type your answer to:")) {
+				const open = openPrompts();
+				if (open.length === 1) {
+					// Remember it, so it's cleared away with the prompt we know.
+					open[0].prompts = { ...open[0].prompts, [replyTo]: open[0].step };
+					save();
+					return typedAnswer(open[0], open[0].step, text, say);
+				}
 			}
 			await say("That question is no longer waiting.");
 			return;
@@ -721,10 +792,7 @@ export function createBridge({
 			resync("it went away");
 			return;
 		}
-		const open = [];
-		for (const e of entries.values()) {
-			for (const fi of Object.values(e.prompts ?? {})) if (Number(fi) === e.step && !e.sending) open.push(e);
-		}
+		const open = openPrompts();
 		if (open.length === 1 && text) return typedAnswer(open[0], open[0].step, text, say);
 		await say("To answer a question, tap one of its buttons, or reply to its message to type an answer.");
 	}
@@ -734,11 +802,15 @@ export function createBridge({
 		const cq = update?.callback_query;
 		if (cq) {
 			if (!isOwnerCallback(cq, owner)) return Promise.resolve();
+			log("info", `telegram: the owner tapped ${cut(cq.data, 40)} on message ${cq.message?.message_id ?? "?"}`);
 			return enqueue(() => onCallback(cq));
 		}
 		const msg = update?.message;
 		if (msg) {
 			if (!isOwnerMessage(msg, owner)) return Promise.resolve();
+			const to = Number(msg.reply_to_message?.message_id) || 0;
+			// Never the text itself: it can be anything.
+			log("info", `telegram: a message from the owner${to ? ` replying to message ${to}` : ""}`);
 			return enqueue(() => onMessage(msg));
 		}
 		return Promise.resolve();
@@ -758,7 +830,7 @@ export function createBridge({
 						: renderGone(e.head, reason, e.link),
 				);
 			}
-			for (const a of live) if (!entries.has(keyOf(a))) sendAsk(a);
+			for (const a of live) if (!entries.get(keyOf(a))?.messageId) sendAsk(a);
 		});
 	}
 
@@ -930,7 +1002,8 @@ export default {
 			const token = String(s.botToken ?? "").trim();
 			const ownerId = String(s.ownerId ?? "").trim();
 			if (!token || !/^\d+$/.test(ownerId)) {
-				setStatus("not set up: add the bot token and your Telegram id in the settings");
+				const missing = [!token && "the bot token", !/^\d+$/.test(ownerId) && "your Telegram id"].filter(Boolean);
+				setStatus(`not set up: add ${missing.join(" and ")} in the settings`);
 				return;
 			}
 			// A new bot starts over: its update numbers and messages have nothing to do with the old one's.

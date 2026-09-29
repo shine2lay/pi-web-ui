@@ -2669,7 +2669,20 @@ wanted needs-you notes to become questions with choices: pi-queue's `queue_stuck
    choices as buttons (tick + Done for several; "Type an answer" or a reply for words). An answer in
    either place updates the other; old buttons answer "No longer waiting.". The token is a `secret`
    setting (encrypted; the browser only sees whether one is set).
-10. **Protocol 25** (see `server/protocol-version.ts`).
+   Found in the first real use (2026-09-28, this machine's IPv6 route to Telegram sometimes hangs):
+   - a request Telegram fumbles (5xx, a dropped connection, no answer in 10 s) is tried again after 1, 2
+     and 4 s; before, only a 429 was, and a failed send waited for the next resync (a minute);
+   - a send that fails keeps its buttons' ref, so when Telegram got a send whose answer was lost and
+     the retry sent it again, a tap or a reply on either copy counts and both get the final words
+     (before, the copy's buttons said "No longer waiting." while the question still waited); refs start
+     from the clock, so a fresh start never reuses an old message's;
+   - waiting for new messages restarts every 25 s (was 50), so a dead connection is noticed sooner;
+   - the status says which setting is missing ("add the bot token", "add your Telegram id").
+10. **A new window's background list has the plugins' lines at once** (`agent-service.ts` attach): the
+    plugin providers are wired before `attachSink`, whose first push builds the list. Before, the
+    plugins' lines (such as Telegram's status) were missing until one of them changed (upstream has this
+    too, at cfbfbd1).
+11. **Protocol 25** (see `server/protocol-version.ts`).
 
 With pi-queue (`queue_stuck` takes 2-4 choices; the stucks pi-queue makes itself offer "Carry on") and
 pi-tldr (agents are told to ask with choices when they need the user).
@@ -2678,7 +2691,8 @@ pi-tldr (agents are told to ask with choices when they need the user).
 
 - Unit tests:
   - new: `asks.test.ts`, `stuck-asks.test.ts`, `plugin-asks.test.ts`, `plugin-telegram.test.ts` (the
-    plugin against a fake Telegram; with the owner check taken out, the stranger test fails);
+    plugin against a fake Telegram; with the owner check taken out, the stranger test fails; retries,
+    no retry on a refusal, copies from a lost answer, clock refs, which setting is missing);
   - `chat-dialogs.test.ts` (the watcher), `task-queue.test.ts` (choices), `task-queue-panel.test.ts`
     (choice buttons, typed answer), `plugin-settings.test.ts` (the first secret reaches the plugin, and a
     window opened after a save sees the saved values: each fails without its half of point 8).
@@ -2697,6 +2711,8 @@ pi-tldr (agents are told to ask with choices when they need the user).
   5. No browser open at all: a question outlives the 30 s no-browser wait and, like the permission prompt
      after it, is answered on Telegram. With point 2's wait taken out, this case fails.
   6. The bot token is in no file the server wrote, nor in its output.
+  7. (During set-up) a window opened while the plugin runs gets the Telegram line in its first
+     background list (fails without point 10).
 - `tests/queue-panel-test.mjs`: `queue_stuck` passes choices, the Queue tab shows them, and #1 is answered
   by typing in the Queue tab; the answer lands in #1's chat.
 - `tests/queue-lanes-test.mjs`: `queue_stuck` passes choices (pi-queue refuses fewer than 2), and the hint

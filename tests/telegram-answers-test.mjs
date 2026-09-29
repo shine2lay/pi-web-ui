@@ -438,6 +438,18 @@ try {
 	});
 	await A.waitForType("notice", (m) => /Plugin settings saved|插件设置已保存/.test(m.text ?? ""));
 	check("the plugin polls its own bot", await waitFor(() => tg.calls.some((c) => c.method === "getUpdates"), 15_000));
+	// A window that opens while the plugin runs gets its line in the very first list (it used to
+	// come only when the line next changed).
+	const hasTelegramLine = (m) => m.type === "bg_servers" && m.servers?.some((s) => s.plugin === "telegram");
+	await waitFor(() => A.received.some(hasTelegramLine), 15_000);
+	const late = await openClient("tg-window-late");
+	const firstBg = await late.waitForType("bg_servers", () => true, 10_000).catch(() => null);
+	late.close();
+	check(
+		"a window opened later gets the Telegram line in its first background list",
+		!!firstBg && hasTelegramLine(firstBg),
+		JSON.stringify(firstBg?.servers?.map((s) => s.plugin ?? s.name ?? s.taskId) ?? null),
+	);
 	if (process.env.TG_DEBUG) {
 		const plugins = A.received.filter((m) => m.type === "plugins").at(-1);
 		console.log(

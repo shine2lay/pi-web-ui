@@ -17,6 +17,13 @@ came from ("Answered on Telegram" / "Answered in the browser").
 The plugin only makes outgoing requests: it asks Telegram for new messages (long polling) and
 sends or edits its own messages. Nothing has to reach this machine from the internet.
 
+## Install and update
+
+Copy `manifest.json`, `index.mjs` and `README.md` into `~/.pi-web-ui/plugins/telegram/`, then
+restart pi-web-ui. Update the same way: copy the three files over, then restart.
+Don't reinstall with `pi-web-ui install --force`: it keeps only `config.json`, so the stored token
+and the plugin's memory of its messages are lost.
+
 ## Set up
 
 1. In Telegram, talk to **@BotFather**, send `/newbot`, and pick a name. Use a new bot only pi uses:
@@ -43,6 +50,16 @@ Long texts (plans, big commands) are cut to fit Telegram's limit; the link opens
 
 When something stops waiting (answered elsewhere, the chat was closed, pi restarted), its message
 is edited to say so, and its old buttons only answer "No longer waiting."
+
+## When Telegram has a hiccup
+
+- A request that fails (Telegram answers with an error in the 500s, the connection drops, or no
+  answer comes within 10 seconds) is tried again after 1, 2 and 4 seconds. A message that still
+  couldn't be sent is tried again every minute.
+- Sometimes Telegram gets a message but its answer is lost, so the retry sends it twice. Both
+  copies work: a tap or a reply on either one counts, and both show the final answer.
+- Waiting for new messages restarts every 25 seconds, so a connection that died quietly is
+  noticed within half a minute.
 
 ## Who can answer
 

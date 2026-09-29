@@ -14546,8 +14546,9 @@ export class AgentService {
 		// crash-guard: a window coming back after its chat was closed elsewhere first gets an open chat
 		// (attachSink pushes the terminals and more of the active chat).
 		if (!cs.hasActiveConversation()) await cs.ensureActiveConversation("reconnect");
-		cs.attachSink(send);
-		// Forward hooks (set once by index.ts) to every session.
+		// Forward hooks (set once by index.ts) to every session. Before attachSink: its first pushes
+		// (the background-task list, the slash commands) read the plugin providers, and a new
+		// window's list would otherwise lack the plugins' lines until one of them changed.
 		cs.onQuit = this.onQuit;
 		cs.onToolEvent = this.onToolEvent;
 		cs.toolGuard = this.toolGuard;
@@ -14558,6 +14559,7 @@ export class AgentService {
 		cs.pluginBgTasksProvider = this.pluginBgTasksProvider;
 		cs.pluginStopBgTask = this.pluginStopBgTask;
 		cs.isQuiesced = () => this.quiesced;
+		cs.attachSink(send);
 		// issue #145 跨客户端感知接线（同会话查重 / 同项目并行 / elsewhere 列表）。
 		this.wireClient(cs, clientId);
 		// 插件宿主工作区跟随：初次接入也同步一次（恢复的 lastCwd 可能≠服务启动目录），
