@@ -228,6 +228,22 @@ body,
 	margin: 0;
 }
 
+/* The whole window never scrolls sideways (no-sideways-scroll). Only a guard: the causes are fixed
+   where they start, wide content scrolls or wraps inside its own box, and
+   tests/no-sideways-scroll-test.mjs looks for new culprits with this guard lifted.
+   body clips everything in the page at the window's width, so the page is never wider than the
+   window and there is nothing to scroll to (not even for find-in-page, focus or scrollIntoView).
+   `position: relative` makes body the containing block of boxes placed absolutely on the page, so
+   its clip holds those in too; it sits where the window's own box is, so they don't move. On html,
+   `clip` goes to the window (as hidden): no sideways scroll bar even if something got past body. */
+html,
+body {
+	overflow-x: clip;
+}
+body {
+	position: relative;
+}
+
 body {
 	background: var(--bg);
 	color: var(--text);
@@ -274,7 +290,10 @@ body {
 	flex: 1;
 	display: flex;
 	flex-direction: column;
-	min-width: 0;
+	/* The chat keeps at least this much room when side panels dragged wide don't fit the window next
+	   to it: the panels give way instead (.panel below; no-sideways-scroll). Below the narrowest
+	   chat column of the default layout, so it only matters with panels dragged wide. */
+	min-width: min(240px, 100%);
 	min-height: 0;
 	/* switch-loading：切换遮罩（.switch-overlay）的定位基准。面板内其他 absolute 元素各自有
 	   更近的 relative 祖先（.messages-wrap 等），fixed 元素不受影响 —— 已逐一核对。 */
@@ -334,7 +353,12 @@ body {
 	display: flex;
 	flex-direction: column;
 	width: 240px;
-	flex-shrink: 0;
+	/* At their dragged widths when they fit; when the window can't hold both next to the chat's
+	   minimum width (.main), they shrink, never below the narrowest width they can be dragged to
+	   (PANEL_MIN in App.tsx), instead of pushing the right one past the window's edge
+	   (no-sideways-scroll). */
+	flex-shrink: 1;
+	min-width: 180px;
 	min-height: 0;
 	background: var(--panel-bg, var(--bg-elev));
 	border-right: 1px solid var(--border);
@@ -1527,6 +1551,11 @@ button.session-item.elsewhere-item.confirm {
 .file-name.no-preview:hover {
 	color: inherit;
 }
+/* A folder's name is bare text in .file-name: a long one wraps anywhere, so none of it is cut off
+   at the panel's edge. */
+.file-dir-main > .file-name {
+	overflow-wrap: anywhere;
+}
 .file-name-text {
 	flex: 1;
 	min-width: 0;
@@ -1603,6 +1632,10 @@ button.session-item.elsewhere-item.confirm {
 .topbar .panel-toggle[data-tip]::after,
 .topbar .plugin-topbar-item[data-tip]::after {
 	content: attr(data-tip);
+	/* No box until hovered: an invisible bubble (opacity 0) still takes room, and one that reached
+	   past the window's right edge made the whole window scroll sideways (no-sideways-scroll).
+	   `display` fades out with the opacity (allow-discrete), @starting-style below fades it in. */
+	display: none;
 	position: absolute;
 	top: calc(100% + 8px);
 	right: 0;
@@ -1616,7 +1649,9 @@ button.session-item.elsewhere-item.confirm {
 	white-space: nowrap;
 	pointer-events: none;
 	opacity: 0;
-	transition: opacity 0.09s ease;
+	transition:
+		opacity 0.09s ease,
+		display 0.09s allow-discrete;
 	z-index: 40;
 	box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
 }
@@ -1624,7 +1659,16 @@ button.session-item.elsewhere-item.confirm {
 .topbar .tb-tab[data-tip]:hover::after,
 .topbar .panel-toggle[data-tip]:hover::after,
 .topbar .plugin-topbar-item[data-tip]:hover::after {
+	display: block;
 	opacity: 1;
+}
+@starting-style {
+	.chip[data-tip]:hover::after,
+	.topbar .tb-tab[data-tip]:hover::after,
+	.topbar .panel-toggle[data-tip]:hover::after,
+	.topbar .plugin-topbar-item[data-tip]:hover::after {
+		opacity: 0;
+	}
 }
 /* 顶栏气泡分段锚定：base 的 `right: 0`（气泡右缘对齐按钮右缘、向左展开）只适合贴右边的按钮 ——
    左段按钮（☰、π、新对话等）贴着窗口左缘，向左展开会探出视口、左边几个字被裁掉（隐藏文字
@@ -1653,6 +1697,16 @@ button.session-item.elsewhere-item.confirm {
 .topbar .topbar-flow > .tb-spacer ~ .tb-spacer ~ [data-tip]::after,
 .topbar .topbar-flow > .tb-spacer ~ .tb-spacer ~ .dropdown > [data-tip]::after,
 .topbar .topbar-flow > .tb-spacer ~ .tb-spacer ~ .bc-anchor [data-tip]::after {
+	left: auto;
+	right: 0;
+	transform: none;
+}
+/* The right segment with an empty middle: TopBar renders only one spacer then (data-next="end"),
+   so the "after one spacer" rule above centred these bubbles, and the last button's bubble
+   reached past the window's right edge. They open leftwards like the rest of the right segment. */
+.topbar .topbar-flow > .tb-spacer[data-next="end"] ~ [data-tip]::after,
+.topbar .topbar-flow > .tb-spacer[data-next="end"] ~ .dropdown > [data-tip]::after,
+.topbar .topbar-flow > .tb-spacer[data-next="end"] ~ .bc-anchor [data-tip]::after {
 	left: auto;
 	right: 0;
 	transform: none;
@@ -6194,6 +6248,8 @@ body.panel-resizing .scm-divider::after {
 .notice-text {
 	flex: 1;
 	min-width: 0;
+	/* A long unbroken word or link wraps inside the notice instead of running past the window's edge. */
+	overflow-wrap: anywhere;
 }
 .notice-close {
 	flex: none;
@@ -7265,6 +7321,14 @@ span.msg-editor-hint svg {
 .msg-text table {
 	border-collapse: collapse;
 	margin: 8px 0;
+	/* A table with more columns than the chat column can fit (a narrow window, side panels dragged
+	   wide) scrolls sideways in its own box instead of making the whole chat scroll sideways: as a
+	   block the table box can scroll (a table box can't), its rows stay a table inside it. Like
+	   .fp-markdown table; max-content keeps a narrow table as narrow as before. */
+	display: block;
+	width: max-content;
+	max-width: 100%;
+	overflow-x: auto;
 }
 .msg-text th,
 .msg-text td {
@@ -7469,6 +7533,8 @@ span.msg-editor-hint svg {
 	font-style: italic;
 	font-size: 13px;
 	white-space: pre-wrap;
+	/* A long unbroken word or link wraps inside the card instead of making the chat scroll sideways. */
+	overflow-wrap: anywhere;
 	border-top: 1px solid var(--border-soft);
 }
 
@@ -8212,6 +8278,8 @@ div.chead[role="button"]:focus-visible,
 	gap: 8px;
 	flex-wrap: wrap;
 	padding: 8px 14px 4px;
+	/* For the thumbnail's cap below (it is as wide as the card anyway). */
+	container-type: inline-size;
 }
 .toolcall-image {
 	border: 1px solid var(--border);
@@ -8223,6 +8291,9 @@ div.chead[role="button"]:focus-visible,
 }
 .toolcall-image img {
 	max-width: 280px;
+	/* In a narrow chat column (side panels dragged wide) the thumbnail shrinks to fit the card
+	   instead of being cut off at its edge (2px: the button's border). */
+	max-width: min(280px, calc(100cqi - 2px));
 	max-height: 160px;
 	border-radius: 7px;
 }
@@ -10685,6 +10756,12 @@ div.chead[role="button"]:focus-visible,
 .dialog-inline .md .codeblock {
 	max-width: 100%;
 	overflow-x: auto;
+}
+/* A table box can't scroll: as a block it can, its rows stay a table inside (like .msg-text table). */
+.dialog-inline .md table,
+.question-desc-tip .md table {
+	display: block;
+	width: max-content;
 }
 .dialog-inline .md p,
 .dialog-inline .md ul,

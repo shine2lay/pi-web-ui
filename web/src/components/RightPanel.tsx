@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
 	FiCheck,
 	FiChevronRight,
@@ -513,6 +513,23 @@ export const RightPanel = memo(function RightPanel({
 			window.removeEventListener("keydown", onKey);
 		};
 	}, [rootsOpen]);
+	/** no-sideways-scroll: the menu opens rightwards from its button, which sits near the window's right
+	 *  edge, so it reached past that edge. The page is clipped there, so its right end (the remove
+	 *  buttons) would be out of reach: move it left just enough to fit, never past the left edge. */
+	const rootsMenuRef = useRef<HTMLDivElement>(null);
+	useLayoutEffect(() => {
+		const menu = rootsMenuRef.current;
+		if (!rootsOpen || !menu) return;
+		const fit = () => {
+			menu.style.left = "";
+			const r = menu.getBoundingClientRect();
+			const over = r.right - (document.documentElement.clientWidth - 8);
+			if (over > 0) menu.style.left = `${-Math.min(over, Math.max(0, r.left - 8))}px`;
+		};
+		fit();
+		window.addEventListener("resize", fit);
+		return () => window.removeEventListener("resize", fit);
+	}, [rootsOpen, workspaceRoots]);
 
 	/** 写入整份根列表（服务端归一化 + 按项目持久化 + 推快照回显）。
 	 *  传空数组 = 回到单根。增删都走这一条：服务端的值是唯一事实源。 */
@@ -1050,7 +1067,7 @@ export const RightPanel = memo(function RightPanel({
 																<span className="set-count">{workspaceRoots.length + 1}</span>▾
 															</button>
 															{rootsOpen && (
-																<div className="root-picker-menu" role="menu">
+																<div className="root-picker-menu" role="menu" ref={rootsMenuRef}>
 																	{/* 主根 = 当前工作区（cwd）：不能“移除”，它由项目决定。 */}
 																	<div className="root-picker-row">
 																		<button

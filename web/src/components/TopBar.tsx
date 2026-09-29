@@ -1347,16 +1347,20 @@ export function TopBar({
 	return (
 		<header className={`topbar${hideTopbarText ? " no-labels" : ""}`} data-pi-anchor="topbar">
 			{/* 单一扁直流：所有条目同级（没有按种类包裹的容器，也没有两端贴边的例外）。
-			    两个 spacer 把条目分成 start / center / end 三段 —— 就是布局页里的「对齐方向」。 */}
+			    两个 spacer 把条目分成 start / center / end 三段 —— 就是布局页里的「对齐方向」。
+			    data-next says which segment follows a spacer: with an empty middle there is only one
+			    spacer, and the hover bubbles of the end segment must still open leftwards (styles.css). */}
 			<div className="topbar-flow" ref={flowRef} role="toolbar" aria-label={t("viewSwitch")}>
 				{segStart.map((it) => (
 					<Fragment key={it.id}>{it.node}</Fragment>
 				))}
-				{(segCenter.length > 0 || segEnd.length > 0) && <span className="tb-spacer" aria-hidden="true" />}
+				{(segCenter.length > 0 || segEnd.length > 0) && (
+					<span className="tb-spacer" data-next={segCenter.length > 0 ? "center" : "end"} aria-hidden="true" />
+				)}
 				{segCenter.map((it) => (
 					<Fragment key={it.id}>{it.node}</Fragment>
 				))}
-				{segCenter.length > 0 && <span className="tb-spacer" aria-hidden="true" />}
+				{segCenter.length > 0 && <span className="tb-spacer" data-next="end" aria-hidden="true" />}
 				{segEnd.map((it) => (
 					<Fragment key={it.id}>{it.node}</Fragment>
 				))}

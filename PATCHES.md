@@ -3084,3 +3084,83 @@ skipped), and screenshots at desktop and phone width.
 Recent projects section or the picker, drop those changes; if it adds new callers of `ProjectPicker` or
 new `host:open-project` / `host:lp-projects` entries, leave them out. Upstream changes to the server's
 project list or `set_cwd` still come in as usual.
+
+## no-sideways-scroll
+
+**Status**: `local`
+**Baseline**: v0.96.1
+
+**Why** (owner, 2026-09-28): now and then the whole window got a sideways scroll bar, because something
+was wider than the window. The page must never scroll sideways. Wide content (long lines and links,
+code, tables, pictures, long paths and titles) scrolls or wraps inside its own box; nothing is hidden
+out of reach.
+
+### What pushed past the edge
+
+Found with `tests/lib/overflow-finder.mjs` (it lists every element past the window's right edge by tag,
+class and size, never any text) at widths 1920 to 390, panels open, closed and dragged wide, in the
+chat, terminal, git and files views, with a chat full of wide content:
+
+1. **Top-bar hover bubbles** (the page, every view, e.g. 75 px at 1280): a bubble is a `::after` box
+   that is always there, just invisible (opacity 0, one line). The English bubble of the temporary-chat
+   button is 386 px wide; centred under the button it reached past the window's right edge.
+2. **Why that bubble was centred**: with an empty middle segment `TopBar` renders only one spacer, so
+   the "after one spacer = middle segment" rule matched the right segment's buttons.
+3. **Side panels dragged wide** (the page, 1024 px with both at 520 px): the panels never shrank, so the
+   right one went past the edge and the chat was squeezed to nothing.
+4. **Long notice**: a long unbroken word or link ran out of the notice.
+5. **Long folder name** in the files panel: cut off at the panel's edge.
+6. **Tool-result picture** (max 280 px) in a narrow chat column: wider than its card, cut off.
+7. **Thinking card** with a long unbroken word: the whole chat list scrolled sideways.
+8. **Wide chat table** in a narrow chat column: the whole chat list scrolled sideways (a table box
+   can't scroll). The same latent bug in tables of a dialog or question description.
+9. **Extra-folders menu** in the files panel's path bar (the page, e.g. 189 px at 1280): it opens
+   rightwards from its button near the window's right edge. With only the guard, its remove buttons
+   would have been cut off out of reach.
+
+### Changes
+
+- `web/src/styles.css`:
+  - The guard: `html, body { overflow-x: clip }` and `body { position: relative }` (so boxes placed
+    absolutely on the page are held in too). Only a guard: the causes are fixed where they start.
+  - Top-bar bubbles (`.chip`, `.tb-tab`, `.panel-toggle`, `.plugin-topbar-item` `[data-tip]::after`)
+    are `display: none` until hovered; the fade stays (`transition: display allow-discrete` and
+    `@starting-style`). After a `.tb-spacer[data-next="end"]` they open leftwards like the rest of the
+    right segment.
+  - `.panel` `flex-shrink: 1; min-width: 180px` (PANEL_MIN) and `.main` `min-width: min(240px, 100%)`:
+    panels that don't fit next to the chat give way, never below their narrowest drag width.
+  - `overflow-wrap: anywhere` on `.notice-text`, `.thinking-body` and a folder's `.file-dir-main >
+    .file-name`.
+  - `.toolcall-images` is a size container; `.toolcall-image img` `max-width: min(280px, 100cqi - 2px)`.
+  - `.msg-text table` and `.dialog-inline .md table`, `.question-desc-tip .md table`: `display: block;
+    width: max-content; max-width: 100%; overflow-x: auto` (like `.fp-markdown table`), so a wide table
+    scrolls in its own box and a narrow one stays as it was.
+- `web/src/components/TopBar.tsx`: each `.tb-spacer` says which segment follows it (`data-next="center"`
+  or `"end"`).
+- `web/src/components/RightPanel.tsx`: when the extra-folders menu would reach past the window's right
+  edge, it moves left just enough to fit (never past the left edge), again on window resize.
+- `tests/lib/overflow-finder.mjs` (new): the finder. It lifts the page's own guard while it measures, so
+  a new culprit shows up even though the window stays still.
+- `tests/no-sideways-scroll-test.mjs` (new, sealed E2E): a chat with a very long unbroken line, a long
+  link, a wide code block, a wide table, wide maths, a wide picture, long paths in tool results and
+  thinking; long chat titles in the list; a long folder and file name; a long notice. It looks at 1920,
+  1440, 1280, 1024, 768 and 390 px, panels open, closed and dragged to 520 px, in the chat, terminal,
+  git and files views and the file preview: nothing past the edge, the chat list and panels never
+  scroll sideways, wide boxes scroll inside themselves, and the guard holds a wide box, an absolute box
+  on the page and a fixed one. Menus that open near the right edge (extra folders, a file's context
+  menu, the top bar's "more" menu, the slash menu) stay whole inside the window, and a real click on
+  the extra-folders menu's remove button works.
+
+### How it was checked
+
+The new test, `TZ=UTC scripts/check.sh`, `npm run build` and the sealed E2E run (178/178). Copies of
+the three biggest real chats opened on the live app at all six widths (scrolled through, folded rows
+opened), one copy at a time and removed afterwards: before the fix only culprit 1 showed up there;
+after the install nothing reaches past the window's edge and no list scrolls sideways. Before/after
+screenshots of each culprit.
+
+**When syncing**: keep the guard and the fixes. If upstream adds top-bar bubbles, give them the same
+`display: none` until hover; if it changes the spacers in `TopBar.tsx`, keep `data-next`; if it changes
+the extra-folders menu in `RightPanel.tsx`, keep it inside the window. If upstream
+fixes one of these itself, keep whichever is stricter. Run `tests/no-sideways-scroll-test.mjs` after a
+sync: it lists any new culprit.
