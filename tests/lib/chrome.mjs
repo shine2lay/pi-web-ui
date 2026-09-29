@@ -62,10 +62,9 @@ const CANDIDATES = [
 export const CHROME_PATH =
 	process.env.PI_WEB_CHROME ?? CANDIDATES.find((p) => existsSync(p)) ?? "";
 
-// The browser tests were written against a Chinese browser: the UI picks its language from
-// navigator.languages (web/src/pick-locale.ts), and the tests look for Chinese labels
-// ("新对话", "笔记", "运行的对话"…). On an English machine the headless shell reports "en-US"
-// and every such lookup times out. Chromium takes its language from LANGUAGE, and Playwright
-// passes this process's environment to the browser, so pin it here for every test that uses
-// this file. PI_TEST_BROWSER_LANGUAGE overrides it (e.g. "en_US" to look at the English UI).
+// The browser tests run a Chinese browser. The UI is English only (PATCHES.md, english-only), so
+// this proves a Chinese browser language still gets the English UI; it used to switch the UI to
+// Chinese. Chromium takes its language from LANGUAGE, and Playwright passes this process's
+// environment to the browser, so pin it here for every test that uses this file.
+// PI_TEST_BROWSER_LANGUAGE overrides it (e.g. "en_US").
 process.env.LANGUAGE = process.env.PI_TEST_BROWSER_LANGUAGE || "zh_CN";

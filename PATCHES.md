@@ -57,6 +57,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | wake-reopen                  | `local`        | `server/agent-service.ts`（`wakeClosedChat`、`wakeConversation` 的 id 相位）、`server/index.ts`（调度执行器）、`tests/wake-reopen-test.mjs`、`tests/unit/schedule-agent-tool.test.ts` |
 | queue-lanes                  | `local`        | `server/queue-host.ts` (new), `agent-service.ts` (task chats), `index.ts`, `task-queue.ts`, `protocol.ts`, `tldr-lines.ts`, `web/src/components/TaskQueuePanel.tsx`, `TldrPanel.tsx`, `RightPanel.tsx`, i18n, styles, `tests/queue-lanes-test.mjs`, `tests/queue-panel-test.mjs`, `scripts/sealed.sh` (`PI_QUEUE_PKG`), `tests/unit/` |
 | telegram-answers             | `local`        | `server/asks.ts` (new), `server/stuck-asks.ts` (new), `agent-service.ts` (questions, approvals, stuck asks), `chat-dialogs.ts`, `plugins.ts`, `plugin-facilities.ts`, `task-queue.ts`, `protocol.ts`, `protocol-version.ts`, `plugins/telegram/` (new), `plugin-sdk/`, `web/src/open-chat-link.ts` (new), `TaskQueuePanel.tsx`, `use-chat.ts`, `tests/telegram-answers-test.mjs`, `tests/queue-panel-test.mjs`, `tests/unit/` |
+| english-only                 | `local`        | `server/i18n.ts`, `agent-service.ts`, `dsh/dsh-agent-service.ts` and ~130 other server files (text only), `web/src/i18n.tsx`, `TopBar.tsx`, `ui-slots.ts`, `LocaleModal.tsx` + `pick-locale.ts` (removed), `SettingsModal.tsx`, `plugins/catalog.json`, `tests/` |
 
 ---
 
@@ -2721,3 +2722,110 @@ pi-tldr (agents are told to ask with choices when they need the user).
 **When syncing**: all local. The hub calls sit in `askUser` / `resolveQuestion`, `askApproval` /
 `resolveToolApproval` and `ChatDialogs`; if upstream reworks those, move the calls with them. If upstream
 ever shares approvals between windows itself, keep its version and drop point 4's.
+
+---
+
+## english-only
+
+**Status**: `local`
+**Baseline**: v0.96.1
+
+**Why** (owner, 2026-09-27; confirmed 2026-09-28: "i want them translated to english mainly"): everything
+the owner sees in pi-web-ui, and everything its AI reads, is in English. About 2,000 lines of Chinese reached
+the screen or the model with no English version: the server ~1,600 (new chats were titled "新对话", notices,
+errors, status lines, tool descriptions, logs), the page 294 (model setup, settings, ...), and the temper and
+scheduler add-ons. pi-web-ui is English only now: the Chinese language and the language menu are gone.
+
+### Changes
+
+1. **The server speaks English** (`server/`):
+   - `server/i18n.ts`: `pick()`, `bilingual()` and `getServerBlock()` give the English, `isZh()` is always
+     false, and `resolveServerLang()` turns `zh` into `en`, so a window left open from before gets English
+     too. The call sites are plain English now (`pick(lang, zh, en)` became the English text). Messages that
+     carry `{ text, textEn }` (or `description` / `descriptionEn`) have the English in both fields; no key
+     was renamed.
+   - Chat titles: new chats are "New chat" (`DEFAULT_CONV_TITLE`). Old saved chats titled "新对话" still
+     count as untitled (`LEGACY_CONV_TITLE` and `isUntitledTitle()` in `agent-service.ts`: the first prompt
+     names the chat, the title refresh, the running list, the recent rows). The DSH engine's untitled check
+     accepts both too.
+   - Notices, errors, status lines, slash-command help, log lines, and what the model reads: tool
+     descriptions and prompts (the tool manager, subagent templates, DSH, goal review, the schedule,
+     conversation_read and claim_files tools, the todo marker, the vision bridge, ...). The subagent
+     templates' `description` / `systemPrompt` are their English versions.
+   - `server/tldr-lines.ts`: the automated-message prefixes the server writes now are English ("[Scheduled
+     task", "(System"), so the TL;DR skips those too; the old Chinese ones stay for old chats.
+   - A new provider key is named "Key N".
+2. **The page is English** (`web/src/`):
+   - `i18n.tsx` has one word list, `en`. The `zh` list, the language-pack loader, `setLocale` and the
+     browser-language detection (`pick-locale.ts`) are gone; the page's language is always `en`
+     (`<html lang="en">`, English page title).
+   - The language menu is gone: `LocaleModal.tsx`, the top bar's language button, its entry in the "..."
+     menu and the `host:language` slot item. The saved choice (`pi-web-ui:lang` in the browser) is ignored.
+   - Hard-coded Chinese is translated: model setup, settings, the plugin host's errors, notices, relative
+     times ("5m ago"), console logs.
+   - Plugin top-bar items and themes show their English names (`labelEn`, `nameEn`) when they have one;
+     quick phrases start in English.
+   - Settings > UI plugins shows each add-on's English description, and the built-in list's names
+     (`plugins/catalog.json`) are English.
+3. **The installed add-ons**, in their own repos (installed by copying into `~/.pi-web-ui/plugins/<id>`):
+   - temper (`~/projects/pi-web-ui-temper`): notices, `/temper` replies, logs, the manifest and the panel;
+     the panel's Chinese word table and its browser-language switch are gone. The installed copy's fix that
+     only updates a run's status when its text changed was folded into the repo first.
+   - scheduler (`~/projects/pi-web-ui-scheduler`): the plugin's `cron.mjs` is the same as `lib/cron.mjs`
+     again (English errors and schedule descriptions, as the installed copy already had); `install.sh`.
+4. **Kept on purpose**: the server's language-pack routes (`/api/locales`, `server/locales.ts`) and
+   `locales/*.json` stay; the page no longer asks for them. Taking them out would touch the plugins'
+   language-pack API and add upstream-sync conflicts, for nothing anyone sees.
+
+### Chinese that stays (each matches user input, model output or old saved data)
+
+| where | what | why |
+| --- | --- | --- |
+| `agent-service.ts` `LEGACY_CONV_TITLE`, `dsh/dsh-agent-service.ts` `DEFAULT_CONV_TITLE` | 新对话 | Old chats with this title still count as untitled. |
+| `goal-service.ts` goal-done regex | 【目标达成】 ... | A model's goal-done marker, old Chinese form included. |
+| `goal-service.ts`, `dsh/dsh-agent-service.ts` `GOAL\s*[:：]`; `goal-service.ts` `[。.!?？]` | full-width colon, full stop, question mark | Punctuation in model or user text. |
+| `model-enrich.ts` `[,，]` | full-width comma | Thousands separators in numbers the user types. |
+| `scm-commitmsg.ts` | 提交信息 / 提交消息 / 提交说明 | Strips a "commit message:" label a model may put first, in either language. |
+| `slash-commands.ts` `/thinking` aliases | 关闭 极简 低 中 高 极高 最大 | User input: the Chinese level names still work. |
+| `terminals.ts`, `web/src/components/TermXterm.tsx` exit-line filters | 进程已退出... | Terminal scrollback saved before this change has Chinese exit lines. |
+| `tldr-lines.ts` `AUTOMATED_PREFIXES` | [定时任务, （系统 | Old chats have the Chinese automated-message prefixes. |
+| `locales.ts`, `web/src/i18n.tsx` `langJa` | 日本語 | The Japanese pack's own name (dormant packs). |
+| `web/src/App.tsx` | 🔗 已自动在浏览器打开 | Matches the line the built-in live-preview add-on writes (not installed, left alone, still Chinese). |
+| `web/src/at-mention.ts` | 网页, 页面 | User input: Chinese words for "page" still work as @-mention triggers. |
+| `web/src/components/ChatInput.tsx`, `Markdown.tsx` @-mention regexes | full-width brackets and punctuation | Punctuation around @mentions in text the user types. |
+| `FooterBar.tsx`, `ProjectPicker.tsx`, `context-menu-state.ts` | ＋, 〜 | Full-width plus and wave used as icons, not words. |
+
+Code comments, test names and docs (the older sections of this file too) are still Chinese: out of scope.
+The add-ons' only Chinese left is in their tests' labels.
+
+### How it was checked
+
+- A scan of every line with Chinese in `server/`, `web/src/` and the two add-ons: only comments and the
+  table above are left.
+- A checker compared each commit's TypeScript syntax trees with strings, template and JSX text and comments
+  masked out, so a commit that should only change words is shown to change only words. The server commit
+  is words only, apart from: `i18n.ts`; `prompt-composer.ts` (the branch that picked the Chinese built-in
+  prompt is gone; the English one was the built-in one already); `tldr-lines.ts`; the untitled check; two
+  Chinese-only local strings in `goal-service.ts` and the Chinese half of a two-language DSH prompt,
+  dropped. The page commit, apart from the language menu and word list (`i18n.tsx`, `TopBar.tsx`,
+  `ui-slots.ts`, `use-chat.ts`, `quick-phrases.ts`, `PluginPage.tsx`) and their tests. The catalog commit,
+  apart from `descriptionEn || description`. The add-ons: temper's panel word table, and scheduler's
+  `cron.mjs` taking `lib/cron.mjs`'s minute padding.
+- Tests expect the English text. `tests/i18n-test.mjs` is an English-only check now: with a Chinese browser
+  the page is `lang="en"`, a new chat is "New chat", there is no language entry on the bar or in the "..."
+  menu, and a saved `zh` choice is ignored. The browser tests still run a Chinese browser
+  (`tests/lib/chrome.mjs`), so each of them also shows that a Chinese browser gets English.
+- Screenshots of 39 screens with a Chinese browser (top bar and its menus, a chat, a notice, the slash
+  menu, model setup, every settings tab, the Files, TL;DR, Schedules and Queue tabs, the temper and
+  scheduler pages, the first-run setup): no Chinese besides the ＋ icon.
+
+### Not done (later, if wanted)
+
+- Code comments, test names, docs.
+- `bin/pi-web-ui.mjs` (the command line), `extensions/webui.ts` (pi's terminal extension), `plugin-sdk/`,
+  `desktop/`, and the 18 built-in add-ons that aren't installed.
+
+**When syncing**: upstream writes Chinese first. Calls through `pick()` / `bilingual()` /
+`getServerBlock()` give English anyway, so on a conflict in one of those, upstream's line is fine. New
+hard-coded Chinese, and new `zh` keys in `web/src/i18n.tsx` (keep only the `en` ones), need translating: after
+a sync, search `server/` and `web/src/` for Chinese outside comments and compare with the table above.
