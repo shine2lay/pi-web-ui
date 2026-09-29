@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { FiAlertTriangle, FiCheck, FiCheckCircle, FiEdit3, FiLayers, FiX } from "react-icons/fi";
 import { appSend } from "../app-globals";
-import { useI18n, useT } from "../i18n";
+import { useT } from "../i18n";
 import type { UiToolApproval } from "../types";
 
 interface ToolApprovalDialogProps {
@@ -24,7 +24,6 @@ interface ToolApprovalDialogProps {
  */
 export function ToolApprovalDialog({ approval }: ToolApprovalDialogProps) {
 	const t = useT();
-	const { locale } = useI18n();
 
 	// 本地编辑的参数文本（JSON 字符串）
 	const [paramsText, setParamsText] = useState("");
@@ -90,7 +89,7 @@ export function ToolApprovalDialog({ approval }: ToolApprovalDialogProps) {
 				editedParams: edited,
 			});
 		} catch (err) {
-			setParseError(`JSON 格式错误：${(err as Error).message}`);
+			setParseError(`Invalid JSON: ${(err as Error).message}`);
 		}
 	};
 
@@ -138,7 +137,7 @@ export function ToolApprovalDialog({ approval }: ToolApprovalDialogProps) {
 							<div>{approval.reason || approval.reasonEn}</div>
 							{approval.category && (
 								<div style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}>
-									{t("toolApprovalCategory")}：{locale === "zh" ? approval.category.label : approval.category.labelEn}
+									{t("toolApprovalCategory")}: {approval.category.labelEn}
 								</div>
 							)}
 						</div>

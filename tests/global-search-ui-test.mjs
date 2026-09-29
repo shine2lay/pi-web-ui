@@ -59,7 +59,7 @@ async function run() {
 	});
 
 	// 1) 顶栏搜索按钮存在且点击打开弹窗
-	const searchBtn = page.locator(".topbar .chip", { hasText: "搜索" }).first();
+	const searchBtn = page.locator(".topbar .chip", { hasText: "Search" }).first();
 	check("顶栏有搜索按钮", (await searchBtn.count()) > 0);
 	await searchBtn.click();
 	await page.waitForSelector(".gs-modal", { timeout: 5000 });

@@ -1,9 +1,9 @@
-/* i18n smoke test: boots the compiled server, opens the built UI, verifies the
- * language switcher defaults to Chinese and switches to English.
+/* i18n smoke test: boots the compiled server, opens the built UI and verifies the UI is English
+ * only: English even with a Chinese browser language (tests/lib/chrome.mjs pins zh_CN), no language
+ * menu, and a stale saved "zh" choice is ignored.
  * Run:  npm run build && node i18n-test.mjs */
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { freePort } from "./lib/port-utils.mjs";
-import { closeTopbarPanel, openTopbarPanel, topbarItemText } from "./lib/topbar.mjs";
 import { spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -91,54 +91,53 @@ async function main() {
 		}
 	};
 
-	// -- default language is Chinese -----------------------------------------
+	// -- English with a Chinese browser language ---------------------------------
 	await page.waitForSelector(".brand-logo", { timeout: 5000 });
 	await dismissModalIfOpen();
-	const zhNewChat = await page.locator(".lp-new-chat-action").getAttribute("aria-label");
-	check(`default UI is Chinese ("新对话")`, zhNewChat?.includes("新对话"));
-	// The language chip is on the bar upstream; our fork's topbar-crowding keeps it in the "..."
-	// menu, where the row reads "语言 · 中" and opens the same list in a drawer (tests/lib/topbar.mjs).
-	const langDropdownZh = page.locator(".topbar-flow .dropdown").filter({ hasText: "中" });
-	const LANG_ENTRY = /语言|Language/;
-	const zhLangChip = await topbarItemText(page, { bar: langDropdownZh.locator(".chip-sub"), entry: LANG_ENTRY });
-	check(`language chip shows "中"`, zhLangChip?.includes("中"));
-
-	// -- switch to English ----------------------------------------------------
-	await openTopbarPanel(page, { bar: langDropdownZh.locator("button.chip"), entry: LANG_ENTRY });
-	await page.waitForSelector(".dd-item:has-text('English')", { timeout: 3000 });
-	await page.locator(".dd-item:has-text('English')").click();
-	await sleep(400);
-	await closeTopbarPanel(page);
-
-	const enNewChat = await page.locator(".lp-new-chat-action").getAttribute("aria-label");
-	check(`UI switched to English ("New chat")`, enNewChat?.includes("New chat"));
+	const htmlLang = await page.evaluate(() => document.documentElement.lang);
+	check(`page language is "en" (${htmlLang})`, htmlLang === "en");
+	const newChat = await page.locator(".lp-new-chat-action").getAttribute("aria-label");
+	check(`UI is English ("New chat")`, newChat?.includes("New chat"));
 	const enTab = await page.locator('.topbar-flow [role="tab"] span').first().textContent();
 	check(`view tab shows "Chat"`, enTab?.includes("Chat"));
 
-	// model dropdown header translated
+	// model dropdown header in English
 	await page.locator(".composer-tools .dropdown").first().locator("button.chip").click();
 	await page.waitForSelector(".dd-header", { timeout: 3000 });
 	const ddHeader = await page.locator(".dd-header").first().textContent();
 	check(`model dropdown header is "Available models"`, ddHeader?.includes("Available models"));
 	await page.keyboard.press("Escape");
 
-	// -- persistence: reload keeps English ------------------------------------
+	// -- no language menu: not on the bar, not in the "..." menu ----------------
+	const tipped = await page.locator('.topbar [data-tip*="Language"], .topbar [aria-label*="Language"]').count();
+	check(`no language button on the bar (${tipped})`, tipped === 0);
+	const more = page.locator(".plugin-topbar-more > button").first();
+	let menuRows = [];
+	if (await more.isVisible().catch(() => false)) {
+		if ((await more.getAttribute("aria-expanded")) !== "true") await more.click();
+		await page.locator(".plugin-topbar-menu [role=menuitem]").first().waitFor({ timeout: 5000 });
+		menuRows = await page.locator(".plugin-topbar-menu [role=menuitem]").allTextContents();
+		await page.keyboard.press("Escape");
+		if ((await more.getAttribute("aria-expanded")) === "true") await more.click();
+	}
+	check(`no language row in the "..." menu (${menuRows.join(" | ")})`, !menuRows.some((t) => /Language/i.test(t)));
+
+	// -- reload keeps English ---------------------------------------------------
 	await page.reload();
 	await page.waitForSelector(".topbar", { timeout: 15000 });
 	await sleep(500);
 	await dismissModalIfOpen();
-	const enAfterReload = await page.locator(".lp-new-chat-action").getAttribute("aria-label");
-	check(`English persists across reload`, enAfterReload?.includes("New chat"));
+	const afterReload = await page.locator(".lp-new-chat-action").getAttribute("aria-label");
+	check(`English after reload`, afterReload?.includes("New chat"));
 
-	// -- switch back to Chinese -----------------------------------------------
-	const langDropdownEn = page.locator(".topbar-flow .dropdown").filter({ hasText: "EN" });
-	await openTopbarPanel(page, { bar: langDropdownEn.locator("button.chip"), entry: LANG_ENTRY });
-	await page.waitForSelector(".dd-item:has-text('中文')", { timeout: 3000 });
-	await page.locator(".dd-item:has-text('中文')").first().click();
-	await sleep(400);
-	await closeTopbarPanel(page);
-	const zhAgain = await page.locator(".lp-new-chat-action").getAttribute("aria-label");
-	check(`switched back to Chinese`, zhAgain?.includes("新对话"));
+	// -- a stale saved Chinese choice is ignored --------------------------------
+	await page.evaluate(() => localStorage.setItem("pi-web-ui:lang", "zh"));
+	await page.reload();
+	await page.waitForSelector(".topbar", { timeout: 15000 });
+	await sleep(500);
+	await dismissModalIfOpen();
+	const staleZh = await page.locator(".lp-new-chat-action").getAttribute("aria-label");
+	check(`a saved "zh" choice still shows English`, staleZh?.includes("New chat"));
 
 	const errs = consoleErrors.filter((e) => !e.includes("favicon") && !e.includes("ResizeObserver"));
 	check(`no console errors (${errs.length})`, errs.length === 0);

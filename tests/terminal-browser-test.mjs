@@ -114,12 +114,12 @@ async function main() {
 	}
 
 	// Switch to the terminal view.
-	await page.click('.topbar-flow [role="tab"]:has-text("终端")');
+	await page.click('.topbar-flow [role="tab"]:has-text("Terminal")');
 	await page.waitForSelector(".terminal-view", { timeout: 5000 });
 	check("terminal view renders", true);
 	// Opening the terminal view creates a default shell. Close it so the
 	// command-list assertions below exercise a single command terminal.
-	const initialShell = page.locator(".term-tab", { hasText: "终端 1" });
+	const initialShell = page.locator(".term-tab", { hasText: "Terminal 1" });
 	// Upstream added a rename button that reuses the close button's class
 	// ("term-tab-close term-tab-rename"), so pick the real close button.
 	if (await initialShell.count()) await initialShell.locator(".term-tab-close:not(.term-tab-rename)").click();
@@ -206,7 +206,7 @@ async function main() {
 	// Switch back to chat view — terminals must SURVIVE (no unmount kill).
 	await page.click('.topbar-flow [role="tab"]:has-text("对话")');
 	await sleep(800);
-	await page.click('.topbar-flow [role="tab"]:has-text("终端")');
+	await page.click('.topbar-flow [role="tab"]:has-text("Terminal")');
 	await sleep(800);
 	check("terminals survive view switch", (await page.locator(".term-tab").count()) === 2);
 
@@ -229,7 +229,7 @@ async function main() {
 	check("conversation with terminal remains listed", (await page.locator(".panel-convs .session-item").count()) >= 1);
 	await page.locator(".panel-convs .session-item").first().click();
 	await sleep(900);
-	await page.click('.topbar-flow [role="tab"]:has-text("终端")');
+	await page.click('.topbar-flow [role="tab"]:has-text("Terminal")');
 	await sleep(900);
 	check("switching back restores conversation terminal", (await page.locator(".term-tab").count()) === 1);
 

@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { zh } from "../../web/src/i18n.js";
+import { en } from "../../web/src/i18n.js";
 
 interface Pack {
 	code: string;
@@ -43,21 +43,21 @@ describe("language packs", () => {
 	});
 
 	it("key 与 zh 一一对应（顺序一致）", () => {
-		const zhKeys = Object.keys(zh);
-		expect(zhKeys.length).toBeGreaterThan(800);
+		const enKeys = Object.keys(en).sort();
+		expect(enKeys.length).toBeGreaterThan(800);
 		for (const [code, p] of packs) {
-			expect(Object.keys(p.strings), code).toEqual(zhKeys);
+			expect(Object.keys(p.strings).sort(), code).toEqual(enKeys);
 		}
 	});
 
 	it("无空 value，占位符与中文一致", () => {
-		const zhRec = zh as Record<string, string>;
+		const enRec = en as Record<string, string>;
 		for (const [code, p] of packs) {
-			for (const k of Object.keys(zhRec)) {
+			for (const k of Object.keys(enRec)) {
 				const v = p.strings[k];
 				expect(typeof v, `${code}.${k}`).toBe("string");
 				expect(v.length, `${code}.${k}`).toBeGreaterThan(0);
-				expect(placeholders(v), `${code}.${k}`).toEqual(placeholders(zhRec[k]));
+				expect(placeholders(v), `${code}.${k}`).toEqual(placeholders(enRec[k]));
 			}
 		}
 	});

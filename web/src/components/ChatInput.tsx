@@ -1,7 +1,7 @@
 import { Fragment, memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { FiList, FiSquare, FiPaperclip, FiArrowUp, FiBookOpen, FiMic, FiCamera } from "react-icons/fi";
 import type { FileSearchResult, ModelInfo, ProviderKeyInfo, SlashCommandInfo, UiMessage, UiState } from "../types";
-import { useT, useI18n } from "../i18n";
+import { useT } from "../i18n";
 import { appSend, useAppField, useIsDsh } from "../app-globals";
 import { mergeRecalledDraft, selectDraftToRestore } from "../composer-draft";
 import {
@@ -193,13 +193,10 @@ export const ChatInput = memo(function ChatInput({
 	/** DSH 无 mid-run steering（isStreaming 时 prompt 全部走 followUp，
 	 *  见 server/dsh/dsh-agent-service.ts）—— 只渲染「排队」半段，不摆一个说了不算的「插队」。 */
 	const isDsh = useIsDsh();
-	const { locale } = useI18n();
 	/** 打开模板库（对话中途也可随时取用提示词模板）。 */
 	const { openPicker } = useTemplates();
-	const slashDesc = (c: SlashCommandInfo) =>
-		locale !== "zh" && c.descriptionEn ? c.descriptionEn : (c.description ?? "");
-	const slashHint = (c: SlashCommandInfo) =>
-		locale !== "zh" && c.argumentHintEn ? c.argumentHintEn : (c.argumentHint ?? "");
+	const slashDesc = (c: SlashCommandInfo) => (c.descriptionEn ? c.descriptionEn : (c.description ?? ""));
+	const slashHint = (c: SlashCommandInfo) => (c.argumentHintEn ? c.argumentHintEn : (c.argumentHint ?? ""));
 	const [text, setText] = useState("");
 	/** 手动拉出的保底高度：null = 没拖过（纯自适应，上限 220）；数字 = 保底（持久化）。
 	 * 注意：这是下限不是固定值——内容少时撑到它，内容多时继续往上长。 */
@@ -1584,7 +1581,7 @@ export const ChatInput = memo(function ChatInput({
 							key={p}
 							type="button"
 							className="quick-chip"
-							title={`${t("quickPhrasesTip", { text: p })}（${t("quickPhrasesSendTip")}）`}
+							title={`${t("quickPhrasesTip", { text: p })} (${t("quickPhrasesSendTip")})`}
 							disabled={!connected}
 							onClick={() => sendPhrase(p)}
 							onContextMenu={(e) => {

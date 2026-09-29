@@ -115,9 +115,9 @@ async function main() {
 	// :not(.notify-menu) — a bare .sound-menu matches two elements now.
 	check(
 		"event rows labelled",
-		(await page.locator(".sound-menu:not(.notify-menu)").textContent())?.includes("问卷弹出") &&
-			(await page.locator(".sound-menu:not(.notify-menu)").textContent())?.includes("回复结束") &&
-			(await page.locator(".sound-menu:not(.notify-menu)").textContent())?.includes("出错"),
+		(await page.locator(".sound-menu:not(.notify-menu)").textContent())?.includes("Question popup") &&
+			(await page.locator(".sound-menu:not(.notify-menu)").textContent())?.includes("Reply finished") &&
+			(await page.locator(".sound-menu:not(.notify-menu)").textContent())?.includes("Error"),
 	);
 	check("volume slider present", (await page.locator(".sound-volume input[type=range]").count()) === 1);
 	check("default volume is 100", (await page.locator(".sound-vol-num").textContent())?.includes("100"));
@@ -126,7 +126,7 @@ async function main() {
 	// Scoped to the sound panel: the desktop-notification block below it also
 	// has a .sound-master row, so a bare ".sound-master" selector is ambiguous.
 	const soundMaster = page.locator(".sound-menu:not(.notify-menu)").locator(".sound-master input[type=checkbox]");
-	const startRow = page.locator(".sound-row", { hasText: "回复开始" });
+	const startRow = page.locator(".sound-row", { hasText: "Reply started" });
 	const startCheckbox = startRow.locator('input[type="checkbox"]');
 	check("start cue default off", (await startCheckbox.isChecked()) === false);
 	await soundMaster.uncheck();
@@ -190,7 +190,7 @@ async function main() {
 	await openSoundMenu(page);
 	check(
 		"start cue persisted after reload",
-		await page.locator(".sound-row", { hasText: "回复开始" }).locator('input[type="checkbox"]').isChecked(),
+		await page.locator(".sound-row", { hasText: "Reply started" }).locator('input[type="checkbox"]').isChecked(),
 	);
 	check("volume persisted after reload", (await page.locator(".sound-vol-num").textContent())?.includes("30"));
 	check("notify switch persisted after reload", (await notifyBox.isChecked()) === notifyOn);

@@ -444,10 +444,10 @@ describe("TopBar「⋯」里的声音/语言/主题/版本：一行入口 + 右�
 		const { container } = mount(
 			"chat",
 			[hostEntry("host:chat")],
-			["host:sound", "host:language", "host:theme", "host:update"].map((id) => hostEntry(id, true)),
+			["host:sound", "host:theme", "host:update"].map((id) => hostEntry(id, true)),
 		);
 		openMenu(container);
-		expect(menuRows().length).toBe(4);
+		expect(menuRows().length).toBe(3);
 		// 下拉的表头/选项只会出现在抽屉里
 		expect(document.querySelector(".plugin-topbar-menu .dd-header")).toBeNull();
 		expect(document.querySelector(".plugin-topbar-menu .dd-item")).toBeNull();

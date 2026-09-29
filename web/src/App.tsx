@@ -131,8 +131,7 @@ export interface PendingAttachment {
  *  only the × button dismisses (and the auto timer). */
 function NoticeToast({ notice, onDismiss }: { notice: Notice; onDismiss: (id: number) => void }) {
 	const t = useT();
-	const { locale } = useI18n();
-	const text = locale !== "zh" && notice.textEn ? notice.textEn : notice.text;
+	const text = notice.textEn ? notice.textEn : notice.text;
 	const [paused, setPaused] = useState(false);
 	useEffect(() => {
 		if (paused) return;

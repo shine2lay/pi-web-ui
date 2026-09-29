@@ -15,7 +15,7 @@
  */
 import { useEffect, useState } from "react";
 import { FiAlertCircle } from "react-icons/fi";
-import { useI18n, useT } from "../i18n";
+import { useT } from "../i18n";
 import type { PendingSwitch, SwitchError } from "../switch-pending";
 
 /** 超过这个时长开始显示「已等 N 秒」（大会话序列化通常 2–10 秒）。 */
@@ -41,7 +41,6 @@ export function SwitchOverlay({
 	onDismissError: () => void;
 }) {
 	const t = useT();
-	const { locale } = useI18n();
 	// 只在打开中才计时；每秒一跳，只为「已等 N 秒」那行。
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
@@ -79,7 +78,7 @@ export function SwitchOverlay({
 	}
 
 	if (error) {
-		const reason = locale !== "zh" && error.errorEn ? error.errorEn : error.error;
+		const reason = error.errorEn ? error.errorEn : error.error;
 		return (
 			<div className="switch-overlay" role="alert" data-switch-state="error">
 				<div className="switch-card switch-card-error">

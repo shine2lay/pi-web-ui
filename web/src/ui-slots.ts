@@ -419,18 +419,6 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		align: "end",
 	},
 	{
-		id: "host:language",
-		slot: "topbar.primary",
-		labelKey: "language",
-		icon: "globe",
-		kind: "action",
-		order: 80,
-		group: "system",
-		// 设一次语言就不再动的条目；菜单里是完整的下拉（含「获取更多语言」）
-		hidden: true,
-		align: "end",
-	},
-	{
 		id: "host:theme",
 		slot: "topbar.primary",
 		labelKey: "theme",
@@ -1574,32 +1562,26 @@ function isSlotId(v: unknown): v is UiSlotId {
 }
 
 /** 插件文案随语言取：中文界面优先 label，其它语言 labelEn ?? label（与 plugin-topbar 同口径）。 */
-function pluginLabel(item: UiContribution, zh: boolean): string {
-	return zh ? item.label : (item.labelEn ?? item.label);
+function pluginLabel(item: UiContribution): string {
+	return item.labelEn ?? item.label;
 }
 
 /** 插件悬浮提示随语言取：没给对应语言就用另一种（对齐 pluginLabel 的回落口径）。 */
-function pluginHint(item: UiContribution, zh: boolean): string | undefined {
-	return zh ? (item.hint ?? item.hintEn) : (item.hintEn ?? item.hint);
+function pluginHint(item: UiContribution): string | undefined {
+	return item.hintEn ?? item.hint;
 }
 
 /** 插件子项 → 最终条目（继承父条目的 slot 与来源；id 用 `<父全局 id>#<子 id>` 便于排障）。 */
-function toChildEntry(
-	parentId: string,
-	slot: UiSlotId,
-	source: `plugin:${string}`,
-	item: UiContribution,
-	zh: boolean,
-): UiSlotEntry {
+function toChildEntry(parentId: string, slot: UiSlotId, source: `plugin:${string}`, item: UiContribution): UiSlotEntry {
 	const id = `${parentId}#${item.id}`;
-	const children = childEntries(id, slot, source, item.children, zh);
-	const hint = pluginHint(item, zh);
-	const options = toSlotOptions(item.options, zh);
+	const children = childEntries(id, slot, source, item.children);
+	const hint = pluginHint(item);
+	const options = toSlotOptions(item.options);
 	return {
 		id,
 		slot,
 		source,
-		label: pluginLabel(item, zh),
+		label: pluginLabel(item),
 		...(item.icon ? { icon: item.icon } : {}),
 		...(item.iconSvg ? { iconSvg: item.iconSvg } : {}),
 		...(hint ? { hint } : {}),
@@ -1628,24 +1610,20 @@ function childEntries(
 	slot: UiSlotId,
 	source: `plugin:${string}`,
 	children: UiContribution[] | undefined,
-	zh: boolean,
 ): UiSlotEntry[] {
 	if (!children?.length) return [];
 	return children
-		.map((child, index) => ({ entry: toChildEntry(parentId, slot, source, child, zh), index }))
+		.map((child, index) => ({ entry: toChildEntry(parentId, slot, source, child), index }))
 		.sort((a, b) => (a.entry.order === b.entry.order ? a.index - b.index : a.entry.order - b.entry.order))
 		.map((x) => x.entry);
 }
 
 /** select 候选项文案随语言落定（中文用 label，其它语言 labelEn ?? label ?? value）。 */
-function toSlotOptions(
-	options: UiSelectOption[] | undefined,
-	zh: boolean,
-): { value: string; label: string }[] | undefined {
+function toSlotOptions(options: UiSelectOption[] | undefined): { value: string; label: string }[] | undefined {
 	if (!options?.length) return undefined;
 	return options.slice(0, 32).map((o) => ({
 		value: o.value,
-		label: zh ? (o.label ?? o.labelEn ?? o.value) : (o.labelEn ?? o.label ?? o.value),
+		label: o.labelEn ?? o.label ?? o.value,
 	}));
 } /** progress 越界钳制到 0-100（非数字直接回 0，不把 NaN 漏给渲染层）。 */
 function clampProgress(v: unknown): number | undefined {
@@ -1661,20 +1639,19 @@ function toWorkingEntry(
 	slot: UiSlotId,
 	source: `plugin:${string}`,
 	item: UiContribution,
-	zh: boolean,
 	seq: number,
 ): WorkingEntry {
-	const children = childEntries(id, slot, source, item.children, zh);
-	const hint = pluginHint(item, zh);
+	const children = childEntries(id, slot, source, item.children);
+	const hint = pluginHint(item);
 	// 新 kind（toggle/input/progress/select）直接透传不丢；kind 缺省逻辑不变
 	// （settings.pages 缺省 page，其余缺省 action）。
 	const progress = clampProgress(item.progress);
-	const options = toSlotOptions(item.options, zh);
+	const options = toSlotOptions(item.options);
 	return {
 		id,
 		slot,
 		source,
-		label: pluginLabel(item, zh),
+		label: pluginLabel(item),
 		...(item.icon ? { icon: item.icon } : {}),
 		...(item.iconSvg ? { iconSvg: item.iconSvg } : {}),
 		...(hint ? { hint } : {}),
@@ -1753,7 +1730,6 @@ export function buildUiSlots(
 		diagnostics?: UiDiagnostic[];
 	},
 ): Record<UiSlotId, UiSlotEntry[]> {
-	const zh = opts.locale === "zh";
 	const disabled = new Set(opts.disabledPlugins ?? []);
 	const layout = migrateBrandLayout(opts.layout ?? {});
 	// 诊断收集（可选）：每条带 pluginId / slot / entryId 归因，布局页据此告诉用户
@@ -1857,7 +1833,7 @@ export function buildUiSlots(
 					message: `item id "${item.id}" is declared more than once — the later declaration wins (order/visibility are inherited from the first)`,
 				});
 			}
-			byId.set(id, toWorkingEntry(id, item.slot, source, item, zh, prev?.seq ?? seq++));
+			byId.set(id, toWorkingEntry(id, item.slot, source, item, prev?.seq ?? seq++));
 		}
 	}
 

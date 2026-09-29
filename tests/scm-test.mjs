@@ -205,7 +205,7 @@ async function main() {
 	// -- commit through the terminal bridge (Commit All → git add -A && git commit) -----
 	await page.locator(".scm-commit-input").fill("my first commit");
 	await page.click('.scm-header button:has-text("全部提交"), .scm-header button:has-text("Commit All")');
-	await page.waitForSelector('.topbar-flow [role="tab"][aria-selected="true"]:has-text("终端")', {
+	await page.waitForSelector('.topbar-flow [role="tab"][aria-selected="true"]:has-text("Terminal")', {
 		timeout: 5000,
 	});
 	check("view auto-switched to terminal", true);
@@ -293,7 +293,7 @@ async function main() {
 		"branch appears in select",
 	);
 	await page.selectOption(".scm-select", "feature-x");
-	await page.click('.scm-row button:has-text("切换")');
+	await page.click('.scm-row button:has-text("Switch")');
 	await waitFor(
 		async () => execSync("git rev-parse --abbrev-ref HEAD", { cwd: repo }).toString().trim() === "feature-x",
 		20000,

@@ -183,7 +183,7 @@ async function main() {
 		hasText: "seed-01",
 	});
 	check("attachment messages collapse with file-name preview", (await attachmentRow.count()) > 0);
-	check("collapsed row offers 展开", firstCollapsedPreview.includes("展开"));
+	check("collapsed row offers 展开", firstCollapsedPreview.includes("Expand"));
 
 	// -- expand on click ------------------------------------------------------
 	const beforeCount = await page.locator(".msg-collapsed").count();
@@ -202,7 +202,7 @@ async function main() {
 		.first()
 		.textContent()
 		.catch(() => null);
-	check("expanded message shows 收起 button", collapseBtn?.includes("收起") ?? false);
+	check("expanded message shows 收起 button", collapseBtn?.includes("Collapse") ?? false);
 
 	// -- collapse again -------------------------------------------------------
 	await page.locator(".msg .msg-collapse-btn").first().click();

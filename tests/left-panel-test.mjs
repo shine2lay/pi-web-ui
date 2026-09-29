@@ -68,12 +68,12 @@ await sleep(800);
 let titles = await page.locator(".panel-left .panel-section-title").allTextContents();
 check(
 	"history title present in fresh state",
-	titles.some((t) => t.includes("历史对话")),
+	titles.some((t) => t.includes("History")),
 	titles.join("|"),
 );
 check(
 	"no 运行的对话 section yet (blank chats are not listed)",
-	!titles.some((t) => t.includes("运行的对话")),
+	!titles.some((t) => t.includes("Running chats")),
 	titles.join("|"),
 );
 
@@ -87,7 +87,7 @@ await sleep(1200);
 titles = await page.locator(".panel-left .panel-section-title").allTextContents();
 check(
 	"running list still empty after new_chat (blank chat, by design)",
-	!titles.some((t) => t.includes("运行的对话")),
+	!titles.some((t) => t.includes("Running chats")),
 	titles.join("|"),
 );
 check("no divider without running list", (await page.locator(".panel-left .panel-section-divider").count()) === 0);

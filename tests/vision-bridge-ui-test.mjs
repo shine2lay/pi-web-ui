@@ -110,11 +110,11 @@ async function run() {
 
 	// Sidebar navigation: the settings modal is now tabbed (left rail), only
 	// the active group is rendered — open the vision-bridge tab first.
-	await page.locator(".settings-tab", { hasText: "视觉桥" }).click();
+	await page.locator(".settings-tab", { hasText: "Vision bridge" }).click();
 	await page.waitForSelector(".set-section-title", { timeout: 5000 });
 
 	// Vision bridge section heading.
-	const heading = page.locator(".set-section-title", { hasText: "视觉桥" });
+	const heading = page.locator(".set-section-title", { hasText: "Vision bridge" });
 	check("vision bridge section rendered", (await heading.count()) > 0);
 	await heading.first().scrollIntoViewIfNeeded();
 
@@ -126,7 +126,7 @@ async function run() {
 	// Model picker lists both vision models + auto option. (The vision-bridge
 	// section now has TWO selects — model + prompt mode — so scope to the
 	// first one inside the section.)
-	const vbSection = page.locator(".set-section", { hasText: "视觉桥" });
+	const vbSection = page.locator(".set-section", { hasText: "Vision bridge" });
 	const modelSelect = vbSection.locator("select").first();
 	await modelSelect.waitFor({ timeout: 5000 });
 	const opts = await modelSelect.locator("option").allTextContents();
@@ -141,7 +141,7 @@ async function run() {
 	await page.waitForFunction(
 		() => {
 			const sections = [...document.querySelectorAll(".set-section")];
-			const vb = sections.find((el) => el.textContent.includes("视觉桥"));
+			const vb = sections.find((el) => el.textContent.includes("Vision bridge"));
 			const sel = vb?.querySelector("select");
 			return sel instanceof HTMLSelectElement && sel.value === "vision/glm-vl";
 		},
@@ -158,7 +158,7 @@ async function run() {
 	// a .set-hint paragraph (upstream moved long explanations into tips).
 	const offTip = await vbSection
 		.locator(".set-tip")
-		.evaluateAll((els) => els.some((el) => (el.getAttribute("aria-label") ?? "").includes("已关闭")));
+		.evaluateAll((els) => els.some((el) => (el.getAttribute("aria-label") ?? "").includes("Disabled")));
 	const swOff = await sw.evaluate((el) => !el.classList.contains("on"));
 	check("disabling hides picker + the toggle's tip explains the off state", pickerInVb === 0 && offTip && swOff);
 
@@ -173,7 +173,7 @@ async function run() {
 	await page.waitForFunction(
 		() => {
 			const sections = [...document.querySelectorAll(".set-section")];
-			const vb = sections.find((el) => el.textContent.includes("视觉桥"));
+			const vb = sections.find((el) => el.textContent.includes("Vision bridge"));
 			const ta = vb?.querySelector(".set-prompt-input");
 			return ta instanceof HTMLTextAreaElement && ta.value.includes("You are a vision bridge");
 		},
@@ -186,8 +186,8 @@ async function run() {
 	// default" check has no control left to drive. What it guarded, that the built-in default
 	// system prompt is shown to the user, is checked through the view panel: it must contain the
 	// SDK's default (the test agent dir has no system-prompt file).
-	await page.locator(".settings-tab", { hasText: "系统提示词" }).click();
-	const sysSection = page.locator(".set-section", { hasText: "系统提示词" });
+	await page.locator(".settings-tab", { hasText: "System prompt" }).click();
+	const sysSection = page.locator(".set-section", { hasText: "System prompt" });
 	await sysSection.locator(".set-view-prompt-btn").first().click();
 	const shownDefault = await page
 		.waitForFunction(

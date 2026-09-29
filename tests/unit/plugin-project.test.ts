@@ -267,20 +267,20 @@ describe.skipIf(!hasGit)("失败即停（ok:false + 可读原因 + 保留日志�
 	it("dir 校验：相对路径 / 不存在 / 不是目录 全部拒绝", async () => {
 		const relative = await createProject({ dir: join("relative", "ws"), gitInit: true });
 		expect(relative.ok).toBe(false);
-		expect(relative.error).toContain("绝对路径");
+		expect(relative.error).toContain("absolute path");
 		expect(relative.log.length).toBeGreaterThan(0);
 
 		const missing = join(base, "not-there");
 		const absent = await createProject({ dir: missing, gitInit: true });
 		expect(absent.ok).toBe(false);
-		expect(absent.error).toContain("不存在");
+		expect(absent.error).toContain("does not exist");
 		expect(existsSync(missing)).toBe(false); // 不擅自创建用户没指定的新根
 
 		const asFile = join(base, "file.txt");
 		writeFileSync(asFile, "x", "utf8");
 		const notDir = await createProject({ dir: asFile, gitInit: true });
 		expect(notDir.ok).toBe(false);
-		expect(notDir.error).toContain("文件夹");
+		expect(notDir.error).toContain("not a folder");
 	});
 
 	it("url / ref 以 '-' 开头（git 选项注入）→ 拒绝", async () => {

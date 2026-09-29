@@ -139,7 +139,7 @@ await page.addInitScript(() => {
 await page.goto(URL);
 const connected = await page
 	// The connection label moved to the footer as .status-conn-label (upstream FooterBar).
-	.waitForFunction(() => document.querySelector(".status-conn-label")?.textContent?.includes("\u5df2\u8fde\u63a5"), {
+	.waitForFunction(() => document.querySelector(".status-conn-label")?.textContent?.includes("Connected"), {
 		timeout: 15000,
 	})
 	.then(() => true)
@@ -173,7 +173,7 @@ if (!(await startServer())) {
 	check("server restarted", true);
 }
 const recovered = await page
-	.waitForFunction(() => document.querySelector(".status-conn-label")?.textContent?.includes("\u5df2\u8fde\u63a5"), {
+	.waitForFunction(() => document.querySelector(".status-conn-label")?.textContent?.includes("Connected"), {
 		timeout: 25000,
 	})
 	.then(() => true)

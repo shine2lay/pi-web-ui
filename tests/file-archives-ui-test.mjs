@@ -87,37 +87,37 @@ try {
 		await page.locator("dialog.file-transfer-dialog").waitFor({ state: "detached", timeout: 15000 });
 	}
 	await row("sample.txt").click({ button: "right" });
-	assert.equal(await page.getByRole("menuitem", { name: "解压", exact: true }).count(), 0);
+	assert.equal(await page.getByRole("menuitem", { name: "Extract", exact: true }).count(), 0);
 	await page.keyboard.press("Escape");
-	await menu("sample.txt", "压缩");
-	await submit("压缩");
+	await menu("sample.txt", "Compress");
+	await submit("Compress");
 	assert((await readdir(workspace)).includes("sample.txt.tar.gz"));
-	await menu("sample.txt.tar.gz", "解压");
+	await menu("sample.txt.tar.gz", "Extract");
 	await page.locator("dialog input").fill(join(workspace, "output"));
-	await submit("解压");
+	await submit("Extract");
 	assert.equal(await readFile(join(workspace, "output/sample.txt"), "utf8"), "source contents");
 	await writeFile(join(workspace, "output/sample.txt"), "keep me");
-	await menu("sample.txt.tar.gz", "解压");
+	await menu("sample.txt.tar.gz", "Extract");
 	await page.locator("dialog input").fill(join(workspace, "output"));
-	await submit("解压");
+	await submit("Extract");
 	assert.equal(await readFile(join(workspace, "output/sample.txt"), "utf8"), "keep me");
-	await menu("sample.txt.tar.gz", "解压");
+	await menu("sample.txt.tar.gz", "Extract");
 	await page.locator("dialog input").fill(join(workspace, "output"));
 	await page.locator("dialog select").selectOption("overwrite");
-	await submit("解压");
+	await submit("Extract");
 	assert.equal(await readFile(join(workspace, "output/sample.txt"), "utf8"), "source contents");
-	await menu("sample.txt", "压缩并下载");
+	await menu("sample.txt", "Compress and download");
 	const downloadEvent = page.waitForEvent("download");
-	await submit("压缩并下载");
+	await submit("Compress and download");
 	const download = await downloadEvent;
 	assert.equal(download.suggestedFilename(), "sample.txt.tar.gz");
 	assert.equal(await download.failure(), null);
-	await menu("sample.txt", "上传文件夹");
+	await menu("sample.txt", "Upload folder");
 	await page.locator("dialog input[type=file]").setInputFiles(join(root, "local-folder"));
-	await submit("上传文件夹");
+	await submit("Upload folder");
 	assert.equal(await readFile(join(workspace, "local-folder/sub/upload.txt"), "utf8"), "uploaded contents");
-	await menu("folder", "压缩");
-	await submit("压缩");
+	await menu("folder", "Compress");
+	await submit("Compress");
 	assert((await readdir(workspace)).some((name) => /^folder-.*\.tar\.gz$/.test(name)));
 	// Exercise File System Access separately: unlike webkitdirectory, it represents empty directories.
 	await page.evaluate(() => {
@@ -133,9 +133,9 @@ try {
 			}),
 		});
 	});
-	await menu("sample.txt", "上传文件夹");
-	await page.locator("dialog").getByRole("button", { name: "选择文件夹", exact: true }).click();
-	await submit("上传文件夹");
+	await menu("sample.txt", "Upload folder");
+	await page.locator("dialog").getByRole("button", { name: "Choose folder", exact: true }).click();
+	await submit("Upload folder");
 	assert.deepEqual(await readdir(join(workspace, "picked-folder/empty")), []);
 	assert.equal(await readFile(join(workspace, "picked-folder/blank.txt"), "utf8"), "");
 	console.log(

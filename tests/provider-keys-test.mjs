@@ -160,13 +160,13 @@ try {
 		"legacy auth.json key seeded",
 		legacy.length === 1 &&
 			legacy[0].active === true &&
-			legacy[0].name === "密钥 1" &&
+			legacy[0].name === "Key 1" &&
 			readKeys().anthropic?.keys?.[0]?.apiKey === "sk-legacy-a",
 	);
 	c.send({ type: "add_provider_key", provider: "anthropic", apiKey: "sk-new-b", name: "备用" });
 	await c.waitForNotice("click a model to switch to it", 30000);
 	legacy = await c.waitProviderKeys("anthropic", 2);
-	check("adding a key keeps legacy active", legacy.find((k) => k.active)?.name === "密钥 1");
+	check("adding a key keeps legacy active", legacy.find((k) => k.active)?.name === "Key 1");
 	check("no value/masked/id on the wire", !legacy.some((k) => ["id", "masked", "apiKey"].some((key) => key in k)));
 	check("auth.json still legacy", readAuth().anthropic?.key === "sk-legacy-a");
 

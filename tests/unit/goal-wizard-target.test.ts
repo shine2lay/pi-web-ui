@@ -113,7 +113,7 @@ describe("setGoal 落点（issue #292）", () => {
 		const { svc, convs } = makeService();
 		await svc.setGoal("提炼后的目标", { targetConvId: "conv-gone", autoStart: false });
 		const warn = notices().find((n) => n.level === "warning");
-		expect(warn?.text).toContain("已关闭");
+		expect(warn?.text).toContain("is gone");
 		expect(convs.get("conv-a")!.goal.goal).toBeNull();
 		expect(convs.get("conv-b")!.goal.goal).toBeNull();
 	});

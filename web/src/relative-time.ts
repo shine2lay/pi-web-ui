@@ -14,15 +14,19 @@ export type RelativeTimeLang = "zh" | "en";
  * 自带 zh/en 双语，不依赖 i18n 上下文，可在任何纯函数单测中直接覆盖；
  * 需要其他语言时由调用方按返回值自行映射（或扩展本文件的 STRINGS 表）。
  */
-export function formatRelativeTime(sinceMs: number, nowMs: number = Date.now(), lang: RelativeTimeLang = "zh"): string {
+export function formatRelativeTime(
+	sinceMs: number,
+	nowMs: number = Date.now(),
+	_lang: RelativeTimeLang = "zh",
+): string {
 	const ms = Math.max(0, nowMs - sinceMs);
 	const min = Math.floor(ms / 60_000);
-	if (min < 1) return lang === "zh" ? "刚刚" : "just now";
-	if (min < 60) return lang === "zh" ? `${min} 分钟前` : `${min}m ago`;
+	if (min < 1) return "just now";
+	if (min < 60) return `${min}m ago`;
 	const hr = Math.floor(min / 60);
-	if (hr < 24) return lang === "zh" ? `${hr} 小时前` : `${hr}h ago`;
+	if (hr < 24) return `${hr}h ago`;
 	const days = Math.floor(hr / 24);
-	return lang === "zh" ? `${days} 天前` : `${days}d ago`;
+	return `${days}d ago`;
 }
 
 /**

@@ -274,7 +274,7 @@ async function main() {
 		const notice = await c.waitFor("notice", 8000, (m) => m.level === "error");
 		c.send({ type: "get_settings" });
 		const s = await c.waitFor("settings_state");
-		check("非法名：错误 notice", notice.level === "error" && /模板/.test(notice.text), notice.text);
+		check("非法名：错误 notice", notice.level === "error" && /template/i.test(notice.text), notice.text);
 		check(
 			"非法名：列表未被污染（默认仍在、无 reviewer）",
 			s.settings.subagentTemplates.some((t) => t.name === "review") &&

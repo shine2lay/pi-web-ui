@@ -105,18 +105,18 @@ async function run() {
 			.locator(".set-subtab", { hasText: /\u63d2\u4ef6\u5217\u8868|Plugin list/ })
 			.first()
 			.click();
-	await page.locator(".settings-tab", { hasText: "界面插件" }).first().click();
+	await page.locator(".settings-tab", { hasText: "UI plugins" }).first().click();
 	await openPluginList();
-	await page.locator("text=DSH 用户补丁").first().waitFor({ timeout: 10000 });
-	check("设置面板显示「DSH 用户补丁」区块", (await page.locator("text=DSH 用户补丁").count()) > 0);
+	await page.locator("text=DSH user patches").first().waitFor({ timeout: 10000 });
+	check("设置面板显示「DSH 用户补丁」区块", (await page.locator("text=DSH user patches").count()) > 0);
 	// 补丁文件应在列表里展示（扫到 00-ui.patch.yml）。
 	await page.locator("text=00-ui.patch.yml").first().waitFor({ timeout: 10000 });
 	check("补丁文件 00-ui.patch.yml 展示", (await page.locator("text=00-ui.patch.yml").count()) > 0);
 
 	// 4. 设置面板「技能」页签 → DSH 说明文案。
-	await page.locator(".settings-tab", { hasText: "技能" }).first().click();
+	await page.locator(".settings-tab", { hasText: "Skills" }).first().click();
 	const skillsNote = await page
-		.locator("text=DSH 引擎使用运行时内置技能")
+		.locator("text=DSH uses runtime-built-in skills")
 		.first()
 		.waitFor({ timeout: 10000 })
 		.then(() => true)

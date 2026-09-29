@@ -240,20 +240,20 @@ async function main() {
 	const dirTexts = await menuTexts(page);
 	check(
 		"菜单含「上传到文件夹」",
-		dirTexts.some((t) => t.includes("上传文件到此文件夹")),
+		dirTexts.some((t) => t.includes("Upload files to this folder")),
 		dirTexts.join(" | "),
 	);
 	check(
 		"菜单含「以项目打开」",
-		dirTexts.some((t) => t.includes("以项目打开")),
+		dirTexts.some((t) => t.includes("Open as project")),
 	);
 	check(
 		"菜单含「添加为工作区根」",
-		dirTexts.some((t) => t.includes("添加为工作区根")),
+		dirTexts.some((t) => t.includes("Add as workspace root")),
 	);
 
 	// ---- 「添加为工作区根」→ 右栏出现根选择器 --------------------------------
-	await clickMenuItem(page, "添加为工作区根");
+	await clickMenuItem(page, "Add as workspace root");
 	check("菜单点后关闭", await until(async () => (await page.locator(".ctx-menu").count()) === 0, 20, 150));
 	const rootPicker = page.locator(".root-picker-trigger").first();
 	check("加根后右栏出现根选择器", await until(async () => (await rootPicker.count()) > 0, 40, 250));
@@ -304,11 +304,11 @@ async function main() {
 	const fileTexts = await menuTexts(page);
 	check(
 		"文件行菜单是「上传到当前目录」",
-		fileTexts.some((t) => t.includes("上传文件到当前目录")),
+		fileTexts.some((t) => t.includes("Upload files to current directory")),
 		fileTexts.join(" | "),
 	);
-	check("文件行没有「以项目打开」", !fileTexts.some((t) => t.includes("以项目打开")));
-	check("文件行没有「添加为工作区根」", !fileTexts.some((t) => t.includes("添加为工作区根")));
+	check("文件行没有「以项目打开」", !fileTexts.some((t) => t.includes("Open as project")));
+	check("文件行没有「添加为工作区根」", !fileTexts.some((t) => t.includes("Add as workspace root")));
 	await page.keyboard.press("Escape");
 
 	// ---- 列表空白处右键：只有「上传到当前目录」，且上传真的落到当前目录 ------
@@ -319,17 +319,17 @@ async function main() {
 	const blankTexts = await menuTexts(page);
 	check(
 		"空白处菜单含「上传到当前目录」",
-		blankTexts.some((t) => t.includes("上传文件到当前目录")),
+		blankTexts.some((t) => t.includes("Upload files to current directory")),
 		blankTexts.join(" | "),
 	);
 	check(
 		"空白处菜单没有「以项目打开」/「添加为工作区根」",
-		!blankTexts.some((t) => t.includes("以项目打开") || t.includes("添加为工作区根")),
+		!blankTexts.some((t) => t.includes("Open as project") || t.includes("Add as workspace root")),
 	);
 
 	// 「上传到当前目录」= 打开隐藏的文件选择器：选一个真文件，服务端应回「已上传」类 notice
 	const chooser = page.waitForEvent("filechooser", { timeout: 8000 }).catch(() => null);
-	await clickMenuItem(page, "上传文件到当前目录");
+	await clickMenuItem(page, "Upload files to current directory");
 	const fc = await chooser;
 	check("点「上传到当前目录」打开了文件选择器", !!fc);
 	if (fc) {
@@ -361,10 +361,10 @@ async function main() {
 	let leftTexts = await menuTexts(page);
 	check(
 		"历史行菜单含「关闭已结束子代理」",
-		leftTexts.some((t) => t.includes("已结束子代理")),
+		leftTexts.some((t) => t.includes("finished subagents")),
 		leftTexts.join(" | "),
 	);
-	check("历史行菜单没有「强行关闭对话」", !leftTexts.some((t) => t.includes("强行关闭")), leftTexts.join(" | "));
+	check("历史行菜单没有「强行关闭对话」", !leftTexts.some((t) => t.includes("Force-dismiss")), leftTexts.join(" | "));
 	await page.keyboard.press("Escape");
 
 	// 打开这条历史会话（零 token：switch_session 不调模型），它就进了「运行的对话」
@@ -382,11 +382,11 @@ async function main() {
 			leftTexts = await menuTexts(page);
 			check(
 				"对话行菜单含「强行关闭对话」",
-				leftTexts.some((t) => t.includes("强行关闭对话")),
+				leftTexts.some((t) => t.includes("Force-dismiss conversation")),
 				leftTexts.join(" | "),
 			);
-			await clickMenuItem(page, "强行关闭对话");
-			const armed = await until(async () => await hasMenuItem(page, "确认强行关闭"), 20, 150);
+			await clickMenuItem(page, "Force-dismiss conversation");
+			const armed = await until(async () => await hasMenuItem(page, "Confirm force-dismiss"), 20, 150);
 			check("第一次点只进入确认态（菜单不关、文案换成确认）", armed && (await page.locator(".ctx-menu").count()) > 0);
 			await page.keyboard.press("Escape");
 		}
@@ -400,16 +400,16 @@ async function main() {
 		leftTexts = await menuTexts(page);
 		check(
 			"区域菜单含「关闭已结束子代理」",
-			leftTexts.some((t) => t.includes("已结束子代理")),
+			leftTexts.some((t) => t.includes("finished subagents")),
 			leftTexts.join(" | "),
 		);
-		check("区域菜单没有「强行关闭对话」", !leftTexts.some((t) => t.includes("强行关闭")));
+		check("区域菜单没有「强行关闭对话」", !leftTexts.some((t) => t.includes("Force-dismiss")));
 		await page.keyboard.press("Escape");
 	}
 
 	// ---- 「以项目打开」真的切工作目录 --------------------------------------
 	await rightClick(page, dirRow);
-	await clickMenuItem(page, "以项目打开");
+	await clickMenuItem(page, "Open as project");
 	const cwdChanged = await until(
 		async () => ((await page.locator(".statusbar .status-cwd").first().textContent()) ?? "").includes("subproject"),
 		50,

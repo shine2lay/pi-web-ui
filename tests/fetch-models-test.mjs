@@ -258,7 +258,7 @@ try {
 
 	c.send({ type: "fetch_models", reqId: 5, baseUrl: "ht!tp://nope" });
 	const r5 = await c.waitFor("fetch_models_result", 10000, (m) => m.reqId === 5);
-	check("invalid baseUrl → error", !r5.ok && r5.error.includes("无效"));
+	check("invalid baseUrl → error", !r5.ok && r5.error.includes("Invalid"));
 
 	c.send({ type: "fetch_models", reqId: 6, baseUrl: `ftp://127.0.0.1:${MOCK_PORT}` });
 	const r6 = await c.waitFor("fetch_models_result", 10000, (m) => m.reqId === 6);

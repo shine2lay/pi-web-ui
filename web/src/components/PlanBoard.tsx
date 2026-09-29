@@ -40,7 +40,7 @@ export function PlanBoard({ plan }: PlanBoardProps) {
 	const activeStep = steps.find((s) => s.id === plan.activeStepId) ?? steps.find((s) => s.status === "in_progress");
 
 	const handleClearPlan = () => {
-		if (window.confirm("确定要清空当前任务计划看板吗？")) {
+		if (window.confirm("Clear the current task plan board?")) {
 			appSend({
 				type: "plan_update",
 				steps: [],

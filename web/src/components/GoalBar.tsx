@@ -1,7 +1,7 @@
 import { Fragment, memo, useEffect, useState, type ReactNode } from "react";
 import { FiTarget, FiLock, FiUnlock, FiX, FiChevronUp } from "react-icons/fi";
 import type { GoalStatus, ModelInfo } from "../types";
-import { useT, useI18n } from "../i18n";
+import { useT } from "../i18n";
 import { appSend, useIsDsh } from "../app-globals";
 import { Dropdown, DropdownItem } from "./Dropdown";
 import type { UiSlotEntry } from "../ui-slots";
@@ -44,9 +44,8 @@ export const GoalBar = memo(function GoalBar({
 	onUiAction,
 }: Props) {
 	const t = useT();
-	const { locale } = useI18n();
-	const goalDetail = locale !== "zh" && goal.statusEn ? goal.statusEn : goal.status || "";
-	const wizardDetail = locale !== "zh" && goal.wizard?.statusEn ? goal.wizard.statusEn : goal.wizard?.status || "";
+	const goalDetail = goal.statusEn ? goal.statusEn : goal.status || "";
+	const wizardDetail = goal.wizard?.statusEn ? goal.wizard.statusEn : goal.wizard?.status || "";
 	// DSH：无独立审查模型 —— 隐藏 reviewModel 下拉（轮次上限仍然有效）。
 	// engine 走全局（web/src/app-globals.ts），不再从 App 一路传下来。
 	const isDsh = useIsDsh();

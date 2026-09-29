@@ -98,7 +98,7 @@ await sleep(800);
 const histTitles = await page.locator(".panel-sessions .panel-section-title").allTextContents();
 check(
 	"history title present",
-	histTitles.some((t) => t.includes("历史对话")),
+	histTitles.some((t) => t.includes("History")),
 );
 check("no convs section yet", (await page.locator(".panel-left .panel-convs").count()) === 0);
 
@@ -119,7 +119,7 @@ check("convs section still absent (no background run)", (await page.locator(".pa
 const convTitles = await page.locator(".panel-left .panel-section-title").allTextContents();
 check(
 	"no 运行的对话 title without listed conversations",
-	!convTitles.some((t) => t.includes("运行的对话")),
+	!convTitles.some((t) => t.includes("Running chats")),
 	convTitles.join("|"),
 );
 
@@ -177,9 +177,7 @@ check(
 );
 check(
 	"the row is the row of the chat we are looking at (current)",
-	(await page.locator(".panel-convs .session-item .session-sub").allTextContents()).some((s) =>
-		s.includes("\u5f53\u524d"),
-	),
+	(await page.locator(".panel-convs .session-item .session-sub").allTextContents()).some((s) => s.includes("Current")),
 );
 // Wait for the light: the row can be listed a moment before the run's status reaches it (seen
 // under load, in a parallel run).

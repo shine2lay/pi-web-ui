@@ -195,7 +195,7 @@ async function main() {
 		timeout: 10_000,
 	});
 	check("panel closes after answering", true);
-	check("tool completed after answer", await waitToolDone(page, { nth: 1, want: "\u5b8c\u6210" }));
+	check("tool completed after answer", await waitToolDone(page, { nth: 1, want: "Done" }));
 	check("agent idle after round 1", await waitIdle(page));
 	// The agent continued: the model got the answer back as the tool result.
 	const answered = srv.mock.requests.some((r) =>
@@ -224,7 +224,7 @@ async function main() {
 	check("panel closes on Escape", true);
 	// A cancelled question comes back to the model as a tool error ("User cancelled the question.",
 	// server/agent-service.ts), so the finished call shows the error status, and the model hears why.
-	check("tool completed after cancel", await waitToolDone(page, { nth: 2, want: "\u51fa\u9519" }));
+	check("tool completed after cancel", await waitToolDone(page, { nth: 2, want: "Error" }));
 	const cancelSeen = srv.mock.requests.some((r) =>
 		(r.messages ?? []).some(
 			(m) => m.role === "tool" && JSON.stringify(m.content ?? "").includes("cancelled the question"),

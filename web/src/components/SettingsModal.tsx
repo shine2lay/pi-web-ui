@@ -2028,7 +2028,7 @@ export function SettingsModal({
 										)}
 										{(approvalPolicy?.categories ?? []).map((c) => (
 											<div className="set-row" key={c.id}>
-												<span className="set-hint">{locale === "zh" ? c.label : c.labelEn}</span>
+												<span className="set-hint">{c.labelEn}</span>
 												<button
 													type="button"
 													className="btn"
@@ -2736,7 +2736,7 @@ export function SettingsModal({
 								<div className="set-section-title">
 									<FiCpu className="set-section-icon" />
 									{t("settingsSkills")}
-									<HintTip text={`${t("skillFullTextLabel")}：${t("skillFullTextDesc")}`} />
+									<HintTip text={`${t("skillFullTextLabel")}: ${t("skillFullTextDesc")}`} />
 									<span className="set-count">{settings.skills.length}</span>
 								</div>
 								{!isDsh && piPresetFiltering && !presetShowsSkillCatalog(piPresetId ?? undefined) && (
@@ -3260,7 +3260,7 @@ export function SettingsModal({
 														<pre className="set-catalog-job-out">
 															{syncReceipt.installed
 																.filter((i) => !i.ok)
-																.map((i) => `${i.id}：${i.error ?? "?"}`)
+																.map((i) => `${i.id}: ${i.error ?? "?"}`)
 																.join("\n")}
 														</pre>
 													)}
@@ -4129,9 +4129,7 @@ export function SettingsModal({
 												<textarea
 													className="set-prompt-input"
 													rows={4}
-													placeholder={`${t("tplSystemPromptLabel")}${locale === "zh" ? "：" : ": "}${t(
-														"tplSystemPromptPlaceholder",
-													)}`}
+													placeholder={`${t("tplSystemPromptLabel")}: ${t("tplSystemPromptPlaceholder")}`}
 													value={tplDraft.systemPrompt}
 													onChange={(e) => setTplDraft({ ...tplDraft, systemPrompt: e.target.value })}
 												/>
@@ -4250,7 +4248,7 @@ export function SettingsModal({
 														{!tp.enabled && <span className="tpl-badge">{t("subagentTemplateClosed")}</span>}
 													</div>
 													<div className="set-row-desc">
-														{(locale !== "zh" && tp.descriptionEn ? tp.descriptionEn : tp.description) ||
+														{(tp.descriptionEn ? tp.descriptionEn : tp.description) ||
 															`${tp.promptMode === "replace" ? t("promptModeReplace") : t("promptModeAppend")}`}
 														{tp.model ? ` · ${t("tplModelLabel")} ${tp.model}` : ` · ${t("subagentFollowMain")}`}
 														{tp.thinkingLevel
@@ -4366,7 +4364,7 @@ export function SettingsModal({
 											<input
 												className="set-input"
 												value={ruleDraft.label}
-												placeholder="例如：拦截 Docker 危险操作"
+												placeholder="e.g. Block risky Docker operations"
 												onChange={(e) => setRuleDraft({ ...ruleDraft, label: e.target.value })}
 											/>
 										</FieldRow>
@@ -4382,7 +4380,7 @@ export function SettingsModal({
 											<input
 												className="set-input"
 												value={ruleToolsText}
-												placeholder="bash, write, edit (或 * 通配)"
+												placeholder="bash, write, edit (or * for all)"
 												onChange={(e) => {
 													setRuleToolsText(e.target.value);
 													const arr = e.target.value
@@ -4433,7 +4431,7 @@ export function SettingsModal({
 												</FieldRow>
 											</div>
 											<div style={{ flex: 1, minWidth: 160 }}>
-												<FieldRow label="命中动作">
+												<FieldRow label="Action on match">
 													<select
 														className="set-select"
 														value={ruleDraft.action}
@@ -4456,7 +4454,7 @@ export function SettingsModal({
 												<input
 													className="set-input"
 													value={ruleDraft.value}
-													placeholder="匹配表达式或关键字…"
+													placeholder="Match expression or keyword…"
 													onChange={(e) => setRuleDraft({ ...ruleDraft, value: e.target.value })}
 												/>
 											</FieldRow>
@@ -4465,7 +4463,7 @@ export function SettingsModal({
 											<input
 												className="set-input"
 												value={ruleDraft.reason ?? ""}
-												placeholder="例如：检测到删除镜像或容器操作"
+												placeholder="e.g. Deletes an image or container"
 												onChange={(e) => setRuleDraft({ ...ruleDraft, reason: e.target.value })}
 											/>
 										</FieldRow>
@@ -4507,14 +4505,14 @@ export function SettingsModal({
 												className="btn btn-primary"
 												onClick={() => {
 													if (!ruleDraft.label.trim()) {
-														setRuleError("请填写规则名称");
+														setRuleError("Enter a rule name");
 														return;
 													}
 													if (ruleDraft.match === "regex") {
 														try {
 															new RegExp(ruleDraft.value);
 														} catch (err) {
-															setRuleError(`正则表达式非法：${(err as Error).message}`);
+															setRuleError(`Invalid regular expression: ${(err as Error).message}`);
 															return;
 														}
 													}
@@ -4554,9 +4552,7 @@ export function SettingsModal({
 																		? t("approvalRuleActionAllow")
 																		: t("approvalRuleActionAsk")}
 															</span>
-															<strong style={{ fontSize: 13 }}>
-																{locale === "zh" ? rule.label : rule.labelEn || rule.label}
-															</strong>
+															<strong style={{ fontSize: 13 }}>{rule.labelEn || rule.label}</strong>
 															{isBuiltin && <span className="tpl-badge">{t("approvalRuleBuiltin")}</span>}
 															<span className="rule-meta-code">{rule.tools.join(", ")}</span>
 														</div>
@@ -4573,9 +4569,7 @@ export function SettingsModal({
 																)}
 															</div>
 															{(rule.reason || rule.reasonEn) && (
-																<div style={{ opacity: 0.75, fontSize: 11 }}>
-																	{locale === "zh" ? rule.reason : rule.reasonEn || rule.reason}
-																</div>
+																<div style={{ opacity: 0.75, fontSize: 11 }}>{rule.reasonEn || rule.reason}</div>
 															)}
 														</div>
 													</div>

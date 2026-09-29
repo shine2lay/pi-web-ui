@@ -6,7 +6,6 @@ import {
 	FiFolder,
 	FiFolderPlus,
 	FiGitBranch,
-	FiGlobe,
 	FiMenu,
 	FiMessageSquare,
 	FiSearch,
@@ -30,7 +29,7 @@ import { BROWSER_PAGE_TOOL_NAME } from "../../../server/tool-manager.js";
 import { NotifyToggle } from "./NotifyToggle";
 import type { SoundKind, SoundSettings } from "../sounds";
 import { PluginIcon } from "../plugin-icon";
-import { useI18n, localeShort } from "../i18n";
+import { useI18n } from "../i18n";
 import {
 	isPluginViewItem,
 	REQUIRED_TOPBAR_ITEM_IDS,
@@ -43,7 +42,6 @@ import { openContextMenu } from "../context-menu-state";
 import { appSend, useAppField, useAppGlobals, useIsDsh, useIsManaged, useServiceInfo } from "../app-globals";
 import { ProjectPicker } from "./ProjectPicker";
 import { PluginMenu } from "./PluginMenu";
-import { LocaleModal } from "./LocaleModal";
 import { focusComposer } from "../composer-bridge";
 import { useFloatingPanel } from "../use-floating-panel";
 import { isDesktopShell } from "../desktop";
@@ -60,12 +58,11 @@ const PI_CORE_ITEM: UpdateAllItem = {
 };
 
 /** topbar-crowding：「⋯」里点开、在右侧抽屉展开的面板。 */
-type TopbarDrawerId = "sound" | "language" | "theme" | "update";
+type TopbarDrawerId = "sound" | "theme" | "update";
 /** 菜单里哪些宿主条目是抽屉入口。其余照旧：浏览器操作整块搬进菜单（自带面板），
  *  设置 / 搜索 / 后台任务直接打开各自已有的面板，不套抽屉。 */
 const TOPBAR_DRAWER_OF: Readonly<Record<string, TopbarDrawerId>> = {
 	"host:sound": "sound",
-	"host:language": "language",
 	"host:theme": "theme",
 	"host:update": "update",
 };
@@ -234,7 +231,7 @@ export function TopBar({
 	onThemeChange,
 	reloadThemes,
 }: TopBarProps) {
-	const { locale, setLocale, t, packs } = useI18n();
+	const { t } = useI18n();
 	// 「⋯」溢出菜单的开关（宿主自己的菜单，插件不碰 DOM；顺序与设置面板里看到的一致）。
 	const [topbarMenuOpen, setTopbarMenuOpen] = useState(false);
 	/* 「打开项目」按钮（host:open-project）的项目选择器：与左栏 📁+ 同一个组件、同一套行为
@@ -307,7 +304,6 @@ export function TopBar({
 		"host:tasks",
 		"host:settings",
 		"host:sound",
-		"host:language",
 		"host:theme",
 		"host:update",
 		"host:new-chat",
@@ -419,7 +415,6 @@ export function TopBar({
 		if (restarting && chat.status === "open") setRestarting(false);
 	}, [restarting, chat.status]);
 	const [soundOpen, setSoundOpen] = useState(false);
-	const [langOpen, setLangOpen] = useState(false);
 	const [themeOpen, setThemeOpen] = useState(false);
 	const [updateOpen, setUpdateOpen] = useState(false);
 	/** topbar-crowding：「⋯」里点开的面板（右侧抽屉）。null = 没开。 */
@@ -430,7 +425,6 @@ export function TopBar({
 	// 移动端 ⋯ 面板），hook 放闭包里一次渲染就跑两遍了。
 	const inDesktopShell = isDesktopShell();
 	const desktopUpdater = useDesktopUpdater();
-	const [localeModalOpen, setLocaleModalOpen] = useState(false);
 
 	/** Run `npm i -g pi-web-ui@latest` in a visible terminal tab (SCM-style):
 	 *  reuse the tab with the same title, otherwise create one; switch to the
@@ -844,42 +838,17 @@ export function TopBar({
 			<NotifyToggle />
 		</>
 	);
-	const renderLanguageBody = (afterPick: () => void, close: () => void) => (
-		<>
-			<div className="dd-header">{t("language")}</div>
-			{packs.map((l) => (
-				<DropdownItem
-					key={l.code}
-					active={locale === l.code}
-					onClick={() => {
-						setLocale(l.code);
-						afterPick();
-					}}
-				>
-					{l.nativeName}
-				</DropdownItem>
-			))}
-			<DropdownItem
-				onClick={() => {
-					close();
-					setLocaleModalOpen(true);
-				}}
-			>
-				<FiDownload /> {t("localeGetMore")}
-			</DropdownItem>
-		</>
-	);
 	const renderThemeBody = (afterPick: () => void) => {
 		const classics = themes.filter((th) => th.group === "classic");
 		const builtins = themes.filter((th) => th.group !== "classic");
 		const themeLabel = (th: (typeof themes)[number]) => {
-			const base = locale === "zh" ? th.name : (th.nameEn ?? th.name);
+			const base = th.nameEn ?? th.name;
 			// 括号后缀必须走 i18n：themeLight/themeDark 已经在 zh/en + 8 个语言包里
 			// 备好（与 themeDefault 的「深色（默认）」/「Dark (default)」同一套约定），
 			// 写死中文全角括号会让其它语言看到中英混排。
 			const scheme = th.scheme === "light" ? t("themeLight") : th.scheme === "dark" ? t("themeDark") : "";
 			if (!scheme) return base;
-			return locale === "zh" ? `${base}（${scheme}）` : `${base} (${scheme})`;
+			return `${base} (${scheme})`;
 		};
 		return (
 			<>
@@ -942,15 +911,6 @@ export function TopBar({
 					<>
 						<FiVolume2 />
 						<span className="chip-sub">{t("sound")}</span>
-					</>
-				);
-			case "language":
-				return (
-					<>
-						<FiGlobe />
-						<span className="chip-sub">
-							{t("language")} · {localeShort(locale)}
-						</span>
 					</>
 				);
 			case "theme":
@@ -1157,24 +1117,6 @@ export function TopBar({
 				onOpenChange={setSoundOpen}
 			>
 				{renderSoundBody()}
-			</Dropdown>
-		),
-		"host:language": (
-			<Dropdown
-				trigger={
-					<>
-						<FiGlobe />
-						<span className="chip-sub">{localeShort(locale)}</span>
-					</>
-				}
-				tip={t("language")}
-				open={langOpen}
-				onOpenChange={setLangOpen}
-			>
-				{renderLanguageBody(
-					() => setLangOpen(false),
-					() => setLangOpen(false),
-				)}
 			</Dropdown>
 		),
 		"host:theme": (
@@ -1572,11 +1514,6 @@ export function TopBar({
 							</div>
 							<div className="topbar-drawer-body">
 								{drawer === "sound" && renderSoundBody()}
-								{drawer === "language" &&
-									renderLanguageBody(
-										() => {},
-										() => setDrawer(null),
-									)}
 								{drawer === "theme" && renderThemeBody(() => {})}
 								{drawer === "update" && (
 									<>
@@ -1589,7 +1526,6 @@ export function TopBar({
 					</>,
 					document.body,
 				)}
-			{localeModalOpen && <LocaleModal onClose={() => setLocaleModalOpen(false)} />}
 			{pluginMenuAnchor && (
 				<PluginMenu
 					anchorRect={pluginMenuAnchor.rect}

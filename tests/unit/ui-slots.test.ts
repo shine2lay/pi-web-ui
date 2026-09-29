@@ -28,9 +28,9 @@ import {
 	type UiDiagnostic,
 } from "../../web/src/ui-slots.js";
 import type { UiPluginInfo, UiSlotId } from "../../server/protocol.js";
-import { zh } from "../../web/src/i18n.js";
+import { en } from "../../web/src/i18n.js";
 
-const zhTable = zh as Record<string, string>;
+const enTable = en as Record<string, string>;
 
 /** 一个只带 ui 贡献的插件假数据。 */
 function plugin(id: string, ui: UiPluginInfo["ui"], extra?: Partial<UiPluginInfo>): UiPluginInfo {
@@ -106,8 +106,8 @@ describe("BUILTIN_UI_ITEMS（宿主默认）", () => {
 
 	it("每个内置条目的 labelKey 都在 zh 文案表里（写错 key 立刻失败）", () => {
 		for (const item of BUILTIN_UI_ITEMS) {
-			expect(zhTable[item.labelKey], `${item.id} → ${item.labelKey}`).toBeTypeOf("string");
-			expect(zhTable[item.labelKey]?.trim().length, item.labelKey).toBeGreaterThan(0);
+			expect(enTable[item.labelKey], `${item.id} → ${item.labelKey}`).toBeTypeOf("string");
+			expect(enTable[item.labelKey]?.trim().length, item.labelKey).toBeGreaterThan(0);
 		}
 	});
 
@@ -124,7 +124,6 @@ describe("BUILTIN_UI_ITEMS（宿主默认）", () => {
 				"host:tasks",
 				"host:settings",
 				"host:sound",
-				"host:language",
 				"host:update",
 			]),
 		);
@@ -163,7 +162,6 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:tasks",
 			"host:settings",
 			"host:sound",
-			"host:language",
 			"host:theme",
 			"host:update",
 			"host:new-chat",
@@ -221,7 +219,6 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:tasks",
 			"host:settings",
 			"host:sound",
-			"host:language",
 			"host:theme",
 			"host:update",
 		]);
@@ -377,7 +374,7 @@ describe("buildUiSlots / 第 2 层：插件贡献", () => {
 		// 只看插件自己的条目（内置条目增减不该震到插件断言）
 		expect(ids(zhSlots["topbar.primary"]).filter((id) => id.startsWith("alpha:"))).toEqual(["alpha:one", "alpha:menu"]);
 		const one = zhSlots["topbar.primary"].find((e) => e.id === "alpha:one");
-		expect(one?.label).toBe("一号");
+		expect(one?.label).toBe("One");
 		expect(one?.source).toBe("plugin:alpha");
 		expect(one?.kind).toBe("action"); // 缺省 action
 		const enSlots = build([alpha, beta], { locale: "en" });
@@ -757,7 +754,7 @@ describe("插件悬浮提示（hint / hintEn / arrange 覆盖）", () => {
 		const enSlots = build([p], { locale: "en" });
 		const find = (slots: ReturnType<typeof build>, id: string) =>
 			slots["topbar.primary"].find((e) => e.id === `a:${id}`);
-		expect(find(zhSlots, "t")?.hint).toBe("看信");
+		expect(find(zhSlots, "t")?.hint).toBe("Read mail");
 		expect(find(enSlots, "t")?.hint).toBe("Read mail");
 		// 只给一种语言 → 另一种回落它（否则非中文界面就静默没有提示）
 		expect(find(zhSlots, "only-en")?.hint).toBe("EN hint");

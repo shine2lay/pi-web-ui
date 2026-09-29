@@ -81,7 +81,7 @@ describe("queryBrowserControl", () => {
 		expect(status.available).toBe(false);
 		expect(status.desktop).toBe(true);
 		expect(status.pages).toEqual([]);
-		expect(status.error).toContain("桌面版");
+		expect(status.error).toContain("desktop app");
 	});
 
 	it("返回体脏（pages 不是数组）→ 当成没有页面，不炸", async () => {

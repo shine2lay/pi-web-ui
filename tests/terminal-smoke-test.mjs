@@ -191,7 +191,7 @@ async function main() {
 		);
 		check(
 			"no attachment error for the folder",
-			!notices.some((t) => t.includes("附件") && t.includes("subdir") && t.includes("失败")),
+			!notices.some((t) => t.includes("attachment") && t.includes("subdir") && t.includes("failed")),
 		);
 	}
 

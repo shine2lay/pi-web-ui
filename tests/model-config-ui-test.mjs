@@ -117,7 +117,7 @@ async function run() {
 		// Open the model dropdown (top-bar chip) → 管理模型.
 		const modelChip = page.locator(".chip-model").first();
 		await modelChip.click();
-		const manageBtn = page.locator(".dd-refresh", { hasText: "管理模型" }).first();
+		const manageBtn = page.locator(".dd-refresh", { hasText: "Manage models" }).first();
 		await manageBtn.waitFor({ timeout: 8000 });
 		await manageBtn.click();
 		await page.waitForSelector(".model-modal", { timeout: 10000 });
@@ -135,12 +135,12 @@ async function run() {
 		await inputs.nth(3).fill("sk-test");
 
 		// Click 自动获取模型列表 and wait for the rows + success message.
-		await page.locator(".model-section-actions button", { hasText: "自动获取模型列表" }).click();
+		await page.locator(".model-section-actions button", { hasText: "Fetch model list" }).click();
 		await page.waitForFunction(
 			() => {
 				const rows = [...document.querySelectorAll(".model-row")];
 				const ids = rows.map((r) => r.querySelector("input")?.value ?? "");
-				const okMsg = [...document.querySelectorAll(".fetch-msg.ok")].some((el) => el.textContent.includes("已获取"));
+				const okMsg = [...document.querySelectorAll(".fetch-msg.ok")].some((el) => el.textContent.includes("Fetched"));
 				return ids.includes("mock-a") && ids.includes("mock-b") && ids.includes("mock-c") && okMsg;
 			},
 			{ timeout: 15000 },
@@ -178,10 +178,10 @@ async function run() {
 
 		// Error path: invalid baseUrl → inline error message.
 		await inputs.nth(2).fill("ht!tp://nope");
-		await page.locator(".model-section-actions button", { hasText: "自动获取模型列表" }).click();
+		await page.locator(".model-section-actions button", { hasText: "Fetch model list" }).click();
 		await page.waitForSelector(".fetch-msg.err", { timeout: 10000 });
 		const errText = await page.locator(".fetch-msg.err").first().textContent();
-		check("invalid baseUrl shows error message", errText.includes("无效"), errText);
+		check("invalid baseUrl shows error message", errText.includes("Invalid"), errText);
 
 		console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILURES"}`);
 	} finally {

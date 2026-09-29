@@ -308,7 +308,7 @@ async function main() {
 			const bar = document.querySelector(".statusbar");
 			if (!bar) return "";
 			const txt = bar.textContent ?? "";
-			return `${txt.indexOf("上下文")}:${txt.indexOf("消息")}`;
+			return `${txt.indexOf("Context")}:${txt.indexOf("messages")}`;
 		});
 	};
 	const before = await orderOf();
@@ -363,7 +363,7 @@ async function main() {
 	await tap(page, themeRow.locator("button", { hasText: "↑" }).first());
 	await tap(page, themeRow.locator("button", { hasText: "↑" }).first());
 	check("关掉设置面板", await closeLayoutPage(page));
-	const orderAfter = await desktopOrder("主题", "声音");
+	const orderAfter = await desktopOrder("Theme", "Sound");
 	const [themeIdx, soundIdx] = orderAfter.split(":").map(Number);
 	check(
 		"顶栏 ↑ 调序后界面真的换位置（主题排到声音前面）",

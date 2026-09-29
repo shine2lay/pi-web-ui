@@ -497,7 +497,7 @@ await sw.evaluate(async () => {
 
 // 入口本身：用户能不能在 pi-web-ui 上“发现”这个能力（上一版的缺口就在这里）
 const chip = await piPage.evaluate(() => document.querySelector(".browser-control")?.textContent ?? null);
-check("顶栏渲染出「浏览器操作」入口", chip !== null && chip.includes("浏览器操作"), String(chip));
+check("顶栏渲染出「浏览器操作」入口", chip !== null && chip.includes("Browser control"), String(chip));
 const panelText = await piPage.evaluate(async () => {
 	document.querySelector(".browser-control")?.click();
 	await new Promise((r) => setTimeout(r, 400));
@@ -505,7 +505,7 @@ const panelText = await piPage.evaluate(async () => {
 });
 check(
 	"**点开面板能看到状态 + 授权入口 + 可照抄的例子**（不用去翻文档）",
-	panelText !== null && panelText.includes("已授权的页面") && panelText.includes("打开扩展设置页"),
+	panelText !== null && panelText.includes("Granted pages") && panelText.includes("Open extension options"),
 	String(panelText).slice(0, 80),
 );
 await piPage.keyboard.press("Escape");

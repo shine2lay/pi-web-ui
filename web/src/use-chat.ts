@@ -70,22 +70,12 @@ import type { SchedulerTaskView } from "./types";
 
 export type ConnStatus = "connecting" | "open" | "closed";
 
-/** localStorage key for the UI language (mirrors i18n.tsx STORAGE_KEY). */
-const UI_LANG_KEY = "pi-web-ui:lang";
-
-/** Browser UI locale for the hello/set_locale server report (issue #91).
- *  Read straight from localStorage so the socket layer never depends on
- *  React context. Missing → "" (server treats it as English default). */
+/** UI locale for the hello server report (issue #91). pi-web-ui speaks English only now
+ *  (the Chinese UI and the language menu were removed), so this is always "en"; an old
+ *  stored "pi-web-ui:lang" choice is ignored. */
 function readUiLocale(): string {
-	try {
-		return (localStorage.getItem(UI_LANG_KEY) ?? "").trim();
-	} catch {
-		return "";
-	}
+	return "en";
 }
-
-/** Event fired by i18n.tsx setLocale when the user switches UI language. */
-export const UI_LOCALE_EVENT = "pi-web-ui:locale";
 
 /** One component in an all-source update check (update_status_all). */
 export interface UpdateAllItem {
@@ -1936,7 +1926,10 @@ export function useChat() {
 						).__piWebUiHost;
 						let res: { ok: boolean; result?: unknown; error?: string };
 						if (!host?.pageCall) {
-							res = { ok: false, error: "宿主页面桥不可用（页面版本过旧？）—— 刷新本页后再试" };
+							res = {
+								ok: false,
+								error: "The page bridge is unavailable (is the page outdated?) — reload this page and try again",
+							};
 						} else {
 							try {
 								res = await host.pageCall({
@@ -1957,7 +1950,7 @@ export function useChat() {
 								? res.result === undefined
 									? {}
 									: { result: res.result }
-								: { error: res.error ?? "页面操作失败" }),
+								: { error: res.error ?? "Page action failed" }),
 						});
 					})();
 					break;
@@ -2153,18 +2146,6 @@ export function useChat() {
 			// when the connection is still in CONNECTING state.
 		};
 	}, []);
-
-	// UI language changes (i18n.tsx setLocale) → report to the server so tool
-	// return values / AI prompts follow the UI locale (issue #91). Socket may
-	// be mid-reconnect — hello already carries the fresh code on re-open.
-	useEffect(() => {
-		const onLocale = (ev: Event) => {
-			const locale = (ev as CustomEvent<string>).detail ?? readUiLocale();
-			if (locale) send({ type: "set_locale", locale });
-		};
-		window.addEventListener(UI_LOCALE_EVENT, onLocale);
-		return () => window.removeEventListener(UI_LOCALE_EVENT, onLocale);
-	}, [send]);
 
 	// Mount once; all reconnection is self-contained in `connect`.
 	useEffect(() => {

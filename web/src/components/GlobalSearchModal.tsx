@@ -1,7 +1,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { FiFileText, FiFolder, FiMessageSquare, FiPackage, FiSearch, FiX } from "react-icons/fi";
 import type { FileSearchResult, MessageAnchor, ProjectSummary, SessionSearchResult } from "../types";
-import { useT, useI18n } from "../i18n";
+import { useT } from "../i18n";
 import { getPluginSearchProvider, listPluginSearchProviders, triggerPluginUiAction } from "../plugin-host";
 import { appSend, useAppField } from "../app-globals";
 import { composeToComposer } from "../composer-bridge";
@@ -62,9 +62,8 @@ export function GlobalSearchModal({
 	onPreviewFile,
 }: GlobalSearchModalProps) {
 	const t = useT();
-	const { locale } = useI18n();
 	// i18n.tsx 不在本任务可改范围，节标题用双语字面量（不新增 key）。
-	const pluginSectionLabel = locale === "en" ? "Plugins" : "插件";
+	const pluginSectionLabel = "Plugins";
 	// 当前工作目录：走全局（web/src/app-globals.ts），不再从 App 传（项目行的
 	// 「当前」标记与 cwd 变化重探测都靠它）。
 	const cwd = useAppField("cwd");

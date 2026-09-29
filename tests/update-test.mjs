@@ -107,18 +107,18 @@ async function main() {
 	await page.waitForFunction(
 		() => {
 			const rows = [...document.querySelectorAll(".dd-row")];
-			const latest = rows.find((r) => r.textContent.includes("最新版本"))?.textContent;
-			return latest && !latest.includes("检查中");
+			const latest = rows.find((r) => r.textContent.includes("Latest version"))?.textContent;
+			return latest && !latest.includes("Checking");
 		},
 		{ timeout: 20000 },
 	);
 	const rows = await page.locator(".dd-row").allTextContents();
-	const currentRow = rows.find((r) => r.includes("当前版本")) ?? "";
-	const latestRow = rows.find((r) => r.includes("最新版本")) ?? "";
+	const currentRow = rows.find((r) => r.includes("Current version")) ?? "";
+	const latestRow = rows.find((r) => r.includes("Latest version")) ?? "";
 	check(`current version row shows v${pkgVersion}`, currentRow.includes(`v${pkgVersion}`));
 	check(
 		"latest version row resolved (version or error)",
-		/v\d+\.\d+\.\d+/.test(latestRow) || latestRow.includes("失败"),
+		/v\d+\.\d+\.\d+/.test(latestRow) || latestRow.includes("failed"),
 	);
 	const note = await page
 		.locator(".dd-note")
@@ -127,7 +127,7 @@ async function main() {
 		.catch(() => "");
 	check(
 		"status note shown (up-to-date / new version / error)",
-		note.includes("最新") || note.includes("失败") || note.includes("版本"),
+		note.includes("up to date") || note.includes("failed") || note.includes("version"),
 	);
 	check("no page errors", consoleErrors.length === 0);
 

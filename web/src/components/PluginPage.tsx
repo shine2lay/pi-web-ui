@@ -21,7 +21,7 @@ import { useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
 import { ensurePluginViewLoaded, makePluginContext, pluginEntryUrl, type PluginViewModule } from "../plugin-loader";
 import { withPluginScopeAsync } from "../plugin-host";
-import { useI18n, useT, type Translate } from "../i18n";
+import { useT, type Translate } from "../i18n";
 import type { UiPluginInfo } from "../types";
 
 export interface PluginPageProps {
@@ -57,26 +57,20 @@ function failureDetail(err: unknown): string {
  * **没有对应 key**（也不打算为一个宿主内部兜底提示去动 i18n 表）——中文界面写中文、
  * 其它语言回落英文，与「缺表回落英文」的 i18n 语义保持一致。
  */
-function failureText(failure: PageFailure, name: string, locale: string, t: Translate): string {
-	const zh = locale === "zh";
+function failureText(failure: PageFailure, name: string, t: Translate): string {
 	switch (failure.kind) {
 		case "no-client":
-			return zh
-				? `插件 ${name} 没有客户端脚本（client/entry.mjs），无法显示这一页。`
-				: `Plugin ${name} ships no client bundle (client/entry.mjs), so this page cannot be shown.`;
+			return `Plugin ${name} ships no client bundle (client/entry.mjs), so this page cannot be shown.`;
 		case "load":
-			return zh
-				? `插件 ${name} 的页面脚本加载失败：${failure.detail}`
-				: `Failed to load plugin ${name}'s page bundle: ${failure.detail}`;
+			return `Failed to load plugin ${name}'s page bundle: ${failure.detail}`;
 		case "mount":
 			// zh: 插件 {name} 挂载失败 / en: Plugin {name} failed to mount —— 后面补上底层错误。
-			return `${t("pluginMountFailed", { name })}：${failure.detail}`;
+			return `${t("pluginMountFailed", { name })}: ${failure.detail}`;
 	}
 }
 
 export function PluginPage({ plugin, epoch, send, className }: PluginPageProps): JSX.Element {
 	const ref = useRef<HTMLDivElement>(null);
-	const { locale } = useI18n();
 	const t = useT();
 	const [failure, setFailure] = useState<PageFailure | null>(null);
 
@@ -122,7 +116,7 @@ export function PluginPage({ plugin, epoch, send, className }: PluginPageProps):
 				if (disposed) return;
 				const m = mod.default;
 				if (!m || typeof m.mount !== "function") {
-					throw new Error("client/entry.mjs 没有导出 default.mount()");
+					throw new Error("client/entry.mjs does not export default.mount()");
 				}
 				mounting = true;
 				cleanup = m.mount(
@@ -131,7 +125,7 @@ export function PluginPage({ plugin, epoch, send, className }: PluginPageProps):
 				);
 			} catch (err) {
 				if (disposed) return;
-				console.error(`[plugin:${plugin.id}] 页面${mounting ? "挂载" : "加载"}失败:`, err);
+				console.error(`[plugin:${plugin.id}] page ${mounting ? "mount" : "load"} failed:`, err);
 				setFailure({ kind: mounting ? "mount" : "load", detail: failureDetail(err) });
 			}
 		})();
@@ -143,7 +137,7 @@ export function PluginPage({ plugin, epoch, send, className }: PluginPageProps):
 					cleanup();
 				} catch (err) {
 					// 插件 cleanup 抛错不该拖垮宿主：只记日志（与 PluginView 同口径）。
-					console.error(`[plugin:${plugin.id}] cleanup 失败:`, err);
+					console.error(`[plugin:${plugin.id}] cleanup failed:`, err);
 				}
 			}
 			// 容器归宿主管：下次 mount 前清干净，避免残留节点闪一下旧界面。
@@ -160,7 +154,7 @@ export function PluginPage({ plugin, epoch, send, className }: PluginPageProps):
 			<div className="plugin-page-host" ref={ref} />
 			{failure && (
 				<div className="plugin-page-error" role="alert">
-					{failureText(failure, plugin.name, locale, t)}
+					{failureText(failure, plugin.name, t)}
 				</div>
 			)}
 		</div>

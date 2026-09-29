@@ -18,7 +18,7 @@ import {
 	SUBAGENT_TOOL_NAMES,
 	TERMINAL_TOOL_NAMES,
 } from "../../server/tool-manager.js";
-import { zh } from "../../web/src/i18n.js";
+import { en } from "../../web/src/i18n.js";
 
 const SETTINGS_SRC = readFileSync(join(__dirname, "..", "..", "web", "src", "components", "SettingsModal.tsx"), "utf8");
 
@@ -30,12 +30,12 @@ const OTHER_LOOP_SKIP = new Set([MARKERS_LIST_TOOL_NAME]);
 
 describe("设置「工具」页覆盖率", () => {
 	it("「其他」组每个目录项都自带文案 key（且 key 真存在），循环才画得出说明", () => {
-		const zhKeys = new Set(Object.keys(zh));
+		const enKeys = new Set(Object.keys(en));
 		const bad: string[] = [];
 		for (const tool of AGENT_TOOL_CATALOG) {
 			if (tool.group !== "other" || OTHER_LOOP_SKIP.has(tool.name)) continue;
-			if (!tool.descKey || !zhKeys.has(tool.descKey)) bad.push(`${tool.name}.descKey=${tool.descKey}`);
-			if (!tool.offHintKey || !zhKeys.has(tool.offHintKey)) bad.push(`${tool.name}.offHintKey=${tool.offHintKey}`);
+			if (!tool.descKey || !enKeys.has(tool.descKey)) bad.push(`${tool.name}.descKey=${tool.descKey}`);
+			if (!tool.offHintKey || !enKeys.has(tool.offHintKey)) bad.push(`${tool.name}.offHintKey=${tool.offHintKey}`);
 		}
 		expect(bad, `以下「其他」组目录项缺文案 key（设置页循环渲染时说明是空的）：${bad.join("、")}`).toEqual([]);
 	});

@@ -107,11 +107,11 @@ async function main() {
 	check(`all 25 aihero skills + "new template" card shown (got ${cardTexts.length})`, cardTexts.length === 26);
 	check(
 		`card titles are engineering workflows (has 需求拷问)`,
-		cardTexts.some((t) => t.includes("需求拷问")),
+		cardTexts.some((t) => t.includes("Grill me")),
 	);
 	check(
 		`has 新建模板 card`,
-		cardTexts.some((t) => t.includes("新建模板")),
+		cardTexts.some((t) => t.includes("New template")),
 	);
 
 	// -- 2. clicking a card FILLS the input; ✏️ opens edit ------------------

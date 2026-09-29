@@ -215,7 +215,7 @@ try {
 	check("第一次点击进入确认态（.confirm）", confirmed);
 	check(
 		"确认态文案变成「确认过户到当前页面？」",
-		await until(async () => (await elsewhereRow.innerText()).includes("确认过户"), 20, 150),
+		await until(async () => (await elsewhereRow.innerText()).includes("Confirm take over"), 20, 150),
 	);
 	// 可选：给人工看效果留一张图（PI_WEB_SHOT=1 时）。
 	if (process.env.PI_WEB_SHOT) {

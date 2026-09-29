@@ -149,9 +149,9 @@ async function main() {
 	const pluginsTab = page.locator(".settings-tab", { hasText: /界面插件|UI plugins/ }).first();
 	if (await pluginsTab.count()) await pluginsTab.click();
 	await sleep(600);
-	check("设置面板出现「界面布局」管理段", (await page.getByText("界面布局", { exact: false }).count()) > 0);
+	check("设置面板出现「界面布局」管理段", (await page.getByText("Interface layout", { exact: false }).count()) > 0);
 	// 「源码构建」勾选项属于**市场**栏（默认子页签），所以要在切到「插件列表」之前断言。
-	check("插件市场出现「源码构建」勾选项", (await page.getByText("源码构建", { exact: false }).count()) > 0);
+	check("插件市场出现「源码构建」勾选项", (await page.getByText("Build from source", { exact: false }).count()) > 0);
 	// 「界面插件」页有子页签：**插件市场**（默认）/ **插件列表**；插件行的更新/卸载按钮在「插件列表」那一栏。
 	const installedSub = page.locator(".set-subtab", { hasText: /插件列表|Plugin list/ }).first();
 	if (await installedSub.count()) await installedSub.click();
@@ -174,7 +174,7 @@ async function main() {
 		}
 		const sentInstall = jobFrames.some((f) => f.dir === "out" && f.s.includes('"action":"uninstall"'));
 		check("卸载走后台作业（客户端发 plugin_job，服务端回 done:ok）", sentInstall && done);
-		check("设置面板全程没有关闭", (await page.getByText("界面插件", { exact: true }).count()) > 0);
+		check("设置面板全程没有关闭", (await page.getByText("UI plugins", { exact: true }).count()) > 0);
 		let gone = false;
 		for (let i = 0; i < 40; i++) {
 			// 卸载成功后列表里不再有这台插件（= 结果可见）
