@@ -22,7 +22,7 @@ import type {
 	UiEnrichResult,
 } from "./protocol.js";
 import { enrichBatch, type EnrichLang } from "./model-enrich.js";
-import { pick, type ServerLang } from "./i18n.js";
+import { type ServerLang } from "./i18n.js";
 import { ProviderOAuthFlowManager } from "./provider-oauth-flow.js";
 
 /** ClientSession 提供给本服务的宿主能力（窄接口）。 */
@@ -343,7 +343,7 @@ export class ModelAdminService {
 		try {
 			const runtime = this.host.modelRuntime();
 			if (!providerId || !runtime.getProvider(providerId)?.auth.oauth) {
-				throw new Error("该服务商不支持 OAuth 登录");
+				throw new Error("This provider does not support OAuth login");
 			}
 			await runtime.logout(providerId);
 			this.host.invalidatePiConfig();
@@ -438,15 +438,17 @@ export class ModelAdminService {
 	private quarantineCorruptFile(path: string, err: unknown): void {
 		try {
 			renameSync(path, `${path}.corrupt-${Date.now()}`);
-			console.warn(`[model-admin] 配置文件解析失败，已改名留存：${path}（${(err as Error).message}）`);
+			console.warn(`[model-admin] Failed to parse config file; renamed and kept: ${path} (${(err as Error).message})`);
 		} catch {
-			console.warn(`[model-admin] 配置文件解析失败且无法留存：${path}（${(err as Error).message}）`);
+			console.warn(
+				`[model-admin] Failed to parse config file and could not keep it: ${path} (${(err as Error).message})`,
+			);
 		}
 	}
 
 	/** Default name "密钥 N" for a provider's Nth key. */
 	private defaultKeyName(keys: { name: string; apiKey: string }[]): string {
-		return `密钥 ${keys.length + 1}`;
+		return `Key ${keys.length + 1}`;
 	}
 
 	/** Resolve a user-supplied (or default) name into a UNIQUE one (append
@@ -504,8 +506,8 @@ export class ModelAdminService {
 			const cred = auth[pid];
 			if (cred && typeof cred.key === "string" && cred.key.trim()) {
 				data[pid] = {
-					activeKeyName: "密钥 1",
-					keys: [{ name: "密钥 1", apiKey: cred.key.trim() }],
+					activeKeyName: "Key 1",
+					keys: [{ name: "Key 1", apiKey: cred.key.trim() }],
 				};
 			}
 		} catch {
@@ -568,11 +570,11 @@ export class ModelAdminService {
 		const pid = provider.trim();
 		const key = apiKey.trim();
 		if (!pid) {
-			this.host.emit({ type: "notice", level: "error", text: "请填写服务商 ID", textEn: "Enter a provider ID" });
+			this.host.emit({ type: "notice", level: "error", text: "Enter a provider ID", textEn: "Enter a provider ID" });
 			return;
 		}
 		if (!key) {
-			this.host.emit({ type: "notice", level: "error", text: "请填写 API 密钥", textEn: "Enter an API key" });
+			this.host.emit({ type: "notice", level: "error", text: "Enter an API key", textEn: "Enter an API key" });
 			return;
 		}
 		try {
@@ -598,7 +600,7 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: `✅ 已保存 ${pid} 的密钥「${name}」并刷新模型列表`,
+				text: `✅ Saved key "${name}" for ${pid} and refreshed the model list`,
 				textEn: `✅ Saved key "${name}" for ${pid} and refreshed the model list`,
 			});
 			await this.host.pushModels();
@@ -608,7 +610,7 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `保存 API 密钥失败：${(err as Error).message}`,
+				text: `Failed to save API key: ${(err as Error).message}`,
 				textEn: `Failed to save API key: ${(err as Error).message}`,
 			});
 		}
@@ -623,11 +625,11 @@ export class ModelAdminService {
 		const pid = provider.trim();
 		const key = apiKey.trim();
 		if (!pid) {
-			this.host.emit({ type: "notice", level: "error", text: "请填写服务商 ID", textEn: "Enter a provider ID" });
+			this.host.emit({ type: "notice", level: "error", text: "Enter a provider ID", textEn: "Enter a provider ID" });
 			return;
 		}
 		if (!key) {
-			this.host.emit({ type: "notice", level: "error", text: "请填写 API 密钥", textEn: "Enter an API key" });
+			this.host.emit({ type: "notice", level: "error", text: "Enter an API key", textEn: "Enter an API key" });
 			return;
 		}
 		try {
@@ -642,7 +644,7 @@ export class ModelAdminService {
 				this.host.emit({
 					type: "notice",
 					level: "info",
-					text: `${pid} 已存在该密钥`,
+					text: `${pid} already has this key`,
 					textEn: `${pid} already has this key`,
 				});
 				return;
@@ -658,14 +660,14 @@ export class ModelAdminService {
 				this.host.emit({
 					type: "notice",
 					level: "info",
-					text: `🔑 已添加 ${pid} 的密钥「${keyName}」并设为当前`,
+					text: `🔑 Added key "${keyName}" for ${pid} and set it active`,
 					textEn: `🔑 Added key "${keyName}" for ${pid} and set it active`,
 				});
 			} else {
 				this.host.emit({
 					type: "notice",
 					level: "info",
-					text: `🔑 已添加 ${pid} 的密钥「${keyName}」，点击模型时可切换使用`,
+					text: `🔑 Added key "${keyName}" for ${pid}; click a model to switch to it`,
 					textEn: `🔑 Added key "${keyName}" for ${pid}; click a model to switch to it`,
 				});
 			}
@@ -676,7 +678,7 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `添加密钥失败：${(err as Error).message}`,
+				text: `Failed to add key: ${(err as Error).message}`,
 				textEn: `Failed to add key: ${(err as Error).message}`,
 			});
 		}
@@ -703,7 +705,7 @@ export class ModelAdminService {
 				notice({
 					type: "notice",
 					level: "error",
-					text: `${pid} 的密钥「${targetName}」不存在`,
+					text: `Key "${targetName}" for ${pid} does not exist`,
 					textEn: `Key "${targetName}" for ${pid} does not exist`,
 				});
 				return false;
@@ -712,7 +714,7 @@ export class ModelAdminService {
 				notice({
 					type: "notice",
 					level: "info",
-					text: `「${targetName}」已是当前密钥`,
+					text: `"${targetName}" is already the active key`,
 					textEn: `"${targetName}" is already the active key`,
 				});
 				return true;
@@ -723,7 +725,7 @@ export class ModelAdminService {
 			notice({
 				type: "notice",
 				level: "info",
-				text: `⚡ 已切换到 ${pid} 的「${targetName}」`,
+				text: `⚡ Switched to "${targetName}" for ${pid}`,
 				textEn: `⚡ Switched to "${targetName}" for ${pid}`,
 			});
 			await this.host.pushModels();
@@ -734,7 +736,7 @@ export class ModelAdminService {
 			notice({
 				type: "notice",
 				level: "error",
-				text: `切换密钥失败：${(err as Error).message}`,
+				text: `Failed to switch key: ${(err as Error).message}`,
 				textEn: `Failed to switch key: ${(err as Error).message}`,
 			});
 			return false;
@@ -755,7 +757,7 @@ export class ModelAdminService {
 				this.host.emit({
 					type: "notice",
 					level: "error",
-					text: `${pid} 的密钥「${targetName}」不存在`,
+					text: `Key "${targetName}" for ${pid} does not exist`,
 					textEn: `Key "${targetName}" for ${pid} does not exist`,
 				});
 				return;
@@ -783,7 +785,7 @@ export class ModelAdminService {
 				this.host.emit({
 					type: "notice",
 					level: "info",
-					text: `🗑  已移除 ${pid} 的密钥「${targetName}」，该服务商回到未配置状态`,
+					text: `🗑  Removed key "${targetName}" for ${pid}; provider is now unconfigured`,
 					textEn: `🗑  Removed key "${targetName}" for ${pid}; provider is now unconfigured`,
 				});
 			} else {
@@ -798,8 +800,8 @@ export class ModelAdminService {
 					type: "notice",
 					level: "info",
 					text: wasActive
-						? `🗑  已移除「${targetName}」，已切换到 ${entry.keys[0].name}`
-						: `🗑  已移除 ${pid} 的密钥「${targetName}」`,
+						? `🗑  Removed "${targetName}", switched to ${entry.keys[0].name}`
+						: `🗑  Removed key "${targetName}" for ${pid}`,
 					textEn: wasActive
 						? `🗑  Removed "${targetName}", switched to ${entry.keys[0].name}`
 						: `🗑  Removed key "${targetName}" for ${pid}`,
@@ -812,7 +814,7 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `移除密钥失败：${(err as Error).message}`,
+				text: `Failed to remove key: ${(err as Error).message}`,
 				textEn: `Failed to remove key: ${(err as Error).message}`,
 			});
 		}
@@ -829,14 +831,14 @@ export class ModelAdminService {
 	async clearProviderApiKey(provider: string): Promise<void> {
 		const pid = provider.trim();
 		if (!pid) {
-			this.host.emit({ type: "notice", level: "error", text: "请填写服务商 ID", textEn: "Enter a provider ID" });
+			this.host.emit({ type: "notice", level: "error", text: "Enter a provider ID", textEn: "Enter a provider ID" });
 			return;
 		}
 		if (this.host.modelRuntime().isUsingOAuth(pid)) {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: "请使用 OAuth 登出操作清除当前登录",
+				text: "Use the OAuth sign-out action to clear the current login",
 				textEn: "Use the OAuth sign-out action to clear the current login",
 			});
 			this.host.flushSnapshot();
@@ -857,7 +859,7 @@ export class ModelAdminService {
 				this.host.emit({
 					type: "notice",
 					level: "info",
-					text: `${pid} 没有已保存的密钥`,
+					text: `${pid} has no saved key`,
 					textEn: `${pid} has no saved key`,
 				});
 				return;
@@ -876,7 +878,7 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: `🗑  已清除 ${pid} 的密钥，该服务商回到未配置状态`,
+				text: `🗑  Cleared keys for ${pid}; provider is now unconfigured`,
 				textEn: `🗑  Cleared keys for ${pid}; provider is now unconfigured`,
 			});
 			await this.host.pushModels();
@@ -886,7 +888,7 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `清除密钥失败：${(err as Error).message}`,
+				text: `Failed to clear key: ${(err as Error).message}`,
 				textEn: `Failed to clear key: ${(err as Error).message}`,
 			});
 		}
@@ -909,13 +911,13 @@ export class ModelAdminService {
 		};
 		try {
 			if (!pid) {
-				fail("请填写服务商 ID", "Enter a provider ID");
+				fail("Enter a provider ID", "Enter a provider ID");
 				return;
 			}
 			const mr = this.host.modelRuntime();
 			const p = mr.getProvider(pid);
 			if (!p) {
-				fail(`供应商 ${pid} 不存在`, `Provider ${pid} does not exist`);
+				fail(`Provider ${pid} does not exist`, `Provider ${pid} does not exist`);
 				return;
 			}
 			const noBaseUrl = !p.baseUrl;
@@ -945,7 +947,7 @@ export class ModelAdminService {
 			}
 			if (models.length === 0) {
 				fail(
-					`${pid} 的模型列表为空，无法复制（请稍后重试）`,
+					`Model list for ${pid} is empty, cannot clone (retry later)`,
 					`Model list for ${pid} is empty, cannot clone (retry later)`,
 				);
 				return;
@@ -975,15 +977,18 @@ export class ModelAdminService {
 				type: "notice",
 				level: noBaseUrl ? "warning" : "info",
 				text: noBaseUrl
-					? `📋 已复制 ${pid} → ${newId}（${kept.length} 个模型），该供应商无远程 baseUrl，已生成模板请手动填写 baseUrl 和新的 API 密钥后保存`
-					: `📋 已复制 ${pid} → ${newId}（${kept.length} 个模型），请填入新的 API 密钥后保存`,
+					? `📋 Cloned ${pid} → ${newId} (${kept.length} models); this provider has no remote baseUrl — template generated, fill in baseUrl and a new API key, then save`
+					: `📋 Cloned ${pid} → ${newId} (${kept.length} models); fill in the new API key, then save`,
 				textEn: noBaseUrl
 					? `📋 Cloned ${pid} → ${newId} (${kept.length} models); this provider has no remote baseUrl — template generated, fill in baseUrl and a new API key, then save`
 					: `📋 Cloned ${pid} → ${newId} (${kept.length} models); fill in the new API key, then save`,
 			});
 			this.host.emit({ type: "clone_provider_result", reqId, ok: true, config, configs: [config] });
 		} catch (err) {
-			fail(`复制服务商失败：${(err as Error).message}`, `Failed to clone provider: ${(err as Error).message}`);
+			fail(
+				`Failed to clone provider: ${(err as Error).message}`,
+				`Failed to clone provider: ${(err as Error).message}`,
+			);
 		}
 		this.host.flushSnapshot();
 	}
@@ -997,22 +1002,21 @@ export class ModelAdminService {
 		reqId: number,
 		ids: string[],
 		hints: Record<string, string> | undefined,
-		lang?: () => ServerLang,
+		_lang?: () => ServerLang,
 	): Promise<void> {
-		const l = lang?.() ?? "en";
 		const ac = new AbortController();
 		this.activeEnrichAbort.set(reqId, ac);
 		try {
 			const cleanIds = [...new Set((ids ?? []).map((s) => (s ?? "").trim()).filter(Boolean))].slice(0, 100);
 			if (cleanIds.length === 0) {
-				throw new Error(pick(l, "没有可补的模型 id", "No model ids to enrich", "models.enrich.empty"));
+				throw new Error("No model ids to enrich");
 			}
 			const cleanHints: Record<string, string> = {};
 			for (const [k, v] of Object.entries(hints ?? {})) {
 				if (k.trim() && (v ?? "").trim()) cleanHints[k.trim()] = (v ?? "").trim();
 			}
 			const results = await enrichBatch(cleanIds, cleanHints, {
-				lang: (l === "zh" ? "zh" : "en") as EnrichLang,
+				lang: "en" as EnrichLang,
 				signal: ac.signal,
 				onProgress: (p) => {
 					this.host.emit({
@@ -1031,7 +1035,7 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: `🔍 已补 ${matched} 个${suggested ? `，另有 ${suggested} 个只找到相近家族（见建议）` : ""}，共 ${results.length} 个`,
+				text: `🔍 Enriched ${matched}${suggested ? `, ${suggested} with family suggestions` : ""} of ${results.length}`,
 				textEn: `🔍 Enriched ${matched}${suggested ? `, ${suggested} with family suggestions` : ""} of ${results.length}`,
 			});
 		} catch (err) {
@@ -1045,7 +1049,7 @@ export class ModelAdminService {
 					this.host.emit({
 						type: "notice",
 						level: "warning",
-						text: `⏹ 已中断补参数（已保留中断前匹配的 ${matched} 个模型）`,
+						text: `⏹ Model enrichment aborted (kept ${matched} models matched before abort)`,
 						textEn: `⏹ Model enrichment aborted (kept ${matched} models matched before abort)`,
 					});
 				} else {
@@ -1053,12 +1057,12 @@ export class ModelAdminService {
 						type: "enrich_models_result",
 						reqId,
 						ok: false,
-						error: pick(l, "已取消补参数", "Model enrichment cancelled", "models.enrich.cancelled"),
+						error: "Model enrichment cancelled",
 					});
 					this.host.emit({
 						type: "notice",
 						level: "warning",
-						text: pick(l, "已取消补参数", "Model enrichment cancelled", "models.enrich.cancelled"),
+						text: "Model enrichment cancelled",
 					});
 				}
 			} else {
@@ -1067,7 +1071,7 @@ export class ModelAdminService {
 				this.host.emit({
 					type: "notice",
 					level: "error",
-					text: `补参数失败：${error}`,
+					text: `Enrich failed: ${error}`,
 					textEn: `Enrich failed: ${error}`,
 				});
 			}
@@ -1115,7 +1119,7 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `获取服务商列表失败：${(err as Error).message}`,
+				text: `Failed to fetch provider list: ${(err as Error).message}`,
 				textEn: `Failed to fetch provider list: ${(err as Error).message}`,
 			});
 			return;
@@ -1124,7 +1128,7 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "warning",
-				text: "服务商列表为空——pi 运行时未注册任何提供商",
+				text: "Provider list is empty — the pi runtime registered no providers",
 				textEn: "Provider list is empty — the pi runtime registered no providers",
 			});
 		}
@@ -1237,14 +1241,14 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: "🔄 已从磁盘重新加载模型配置",
+				text: "🔄 Reloaded model config from disk",
 				textEn: "🔄 Reloaded model config from disk",
 			});
 		} catch (err) {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `重新加载模型配置失败：${(err as Error).message}`,
+				text: `Failed to reload model config: ${(err as Error).message}`,
 				textEn: `Failed to reload model config: ${(err as Error).message}`,
 			});
 		}
@@ -1399,23 +1403,18 @@ export class ModelAdminService {
 		api?: string,
 		extraHeaders?: Record<string, string>,
 		/** 抛错文案语言（默认英文）；调用方可传 () => getLang() 实现跟随。 */
-		lang?: () => ServerLang,
+		_lang?: () => ServerLang,
 	): Promise<UiModelConfigEntry[]> {
-		const l = lang?.() ?? "en";
 		const base = (baseUrl ?? "").trim().replace(/\/+$/, "");
-		if (!base) throw new Error(pick(l, "请先填写 baseUrl", "Enter the baseUrl first", "models.fetch.baseurl.missing"));
+		if (!base) throw new Error("Enter the baseUrl first");
 		let url: URL;
 		try {
 			url = new URL(base);
 		} catch {
-			throw new Error(
-				pick(l, `baseUrl 无效：${base}`, `Invalid baseUrl: ${base}`, "models.fetch.baseurl.invalid", { base }),
-			);
+			throw new Error(`Invalid baseUrl: ${base}`);
 		}
 		if (url.protocol !== "http:" && url.protocol !== "https:") {
-			throw new Error(
-				pick(l, "baseUrl 仅支持 http/https", "baseUrl supports http/https only", "models.fetch.baseurl.protocol"),
-			);
+			throw new Error("baseUrl supports http/https only");
 		}
 
 		const headers: Record<string, string> = {
@@ -1445,14 +1444,10 @@ export class ModelAdminService {
 				return await fetch(u, { headers, signal: ac.signal });
 			} catch (err) {
 				if ((err as Error).name === "AbortError") {
-					throw new Error(pick(l, "请求超时（15 秒）", "Request timed out (15s)", "models.fetch.timeout"));
+					throw new Error("Request timed out (15s)");
 				}
 				const errMessage = (err as Error).message;
-				throw new Error(
-					pick(l, `请求失败：${errMessage}`, `Request failed: ${errMessage}`, "models.fetch.request.error", {
-						errMessage,
-					}),
-				);
+				throw new Error(`Request failed: ${errMessage}`);
 			} finally {
 				clearTimeout(timer);
 			}
@@ -1464,7 +1459,7 @@ export class ModelAdminService {
 		if (res && res.status === 404 && !/\/v\d+[a-z-]*$/.test(base)) {
 			res = await tryFetch(`${base}/v1/models`);
 		}
-		if (!res) throw new Error(pick(l, "请求失败", "Request failed", "models.fetch.request.failed"));
+		if (!res) throw new Error("Request failed");
 		if (!res.ok) {
 			let detail = "";
 			try {
@@ -1472,17 +1467,8 @@ export class ModelAdminService {
 			} catch {
 				// response body already consumed / not text — ignore
 			}
-			const detailSuffixZh = detail ? `：${detail}` : "";
 			const detailSuffixEn = detail ? `: ${detail}` : "";
-			throw new Error(
-				pick(
-					l,
-					`接口返回 HTTP ${res.status}${detailSuffixZh}`,
-					`Upstream returned HTTP ${res.status}${detailSuffixEn}`,
-					"models.fetch.upstream.http",
-					{ "res.status": res.status, detailSuffixZh, detailSuffixEn },
-				),
-			);
+			throw new Error(`Upstream returned HTTP ${res.status}${detailSuffixEn}`);
 		}
 		let models: UiModelConfigEntry[] = [];
 		try {
@@ -1496,15 +1482,14 @@ export class ModelAdminService {
 				models = (json.models as unknown[]).map((m) => parseGoogleModel(m)).filter((m) => m.id);
 			}
 		} catch {
-			throw new Error(pick(l, "响应不是有效的 JSON", "Response is not valid JSON", "models.fetch.invalid.json"));
+			throw new Error("Response is not valid JSON");
 		}
 		// Dedupe by id (keep the first, most complete entry) and sort by id.
 		const seen = new Set<string>();
 		models = models
 			.filter((m) => (seen.has(m.id) ? false : (seen.add(m.id), true)))
 			.sort((a, b) => a.id.localeCompare(b.id));
-		if (models.length === 0)
-			throw new Error(pick(l, "接口未返回任何模型", "The endpoint returned no models", "models.fetch.no.models"));
+		if (models.length === 0) throw new Error("The endpoint returned no models");
 		return models;
 	}
 
@@ -1542,7 +1527,7 @@ export class ModelAdminService {
 				this.host.emit({
 					type: "notice",
 					level: "warning",
-					text: `服务商 ${pid} 不存在或未配置 baseUrl，无法刷新`,
+					text: `Provider ${pid} does not exist or has no baseUrl; cannot refresh`,
 					textEn: `Provider ${pid} does not exist or has no baseUrl; cannot refresh`,
 				});
 				return done(false, { error: "provider missing or no baseUrl" });
@@ -1587,8 +1572,8 @@ export class ModelAdminService {
 				level: "info",
 				text:
 					added > 0
-						? `🔄 已刷新 ${pid}：新增 ${added} 个模型，共 ${merged.length} 个`
-						: `🔄 已刷新 ${pid}：无新增模型（共 ${merged.length} 个）`,
+						? `🔄 Refreshed ${pid}: ${added} new models, ${merged.length} total`
+						: `🔄 Refreshed ${pid}: no new models (${merged.length} total)`,
 				textEn:
 					added > 0
 						? `🔄 Refreshed ${pid}: ${added} new models, ${merged.length} total`
@@ -1599,7 +1584,7 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `刷新模型列表失败：${(err as Error).message}`,
+				text: `Failed to refresh model list: ${(err as Error).message}`,
 				textEn: `Failed to refresh model list: ${(err as Error).message}`,
 			});
 			return done(false, { error: (err as Error).message });
@@ -1641,7 +1626,7 @@ export class ModelAdminService {
 				this.host.emit({
 					type: "notice",
 					level: "warning",
-					text: `⚠️ 官方模型目录已强制刷新，但 ${failures.length} 个供应商拉取失败（沿用缓存）：${detail}`,
+					text: `⚠️ Official model catalogs force-refreshed, but ${failures.length} provider(s) failed (cached catalog kept): ${detail}`,
 					textEn: `⚠️ Official model catalogs force-refreshed, but ${failures.length} provider(s) failed (cached catalog kept): ${detail}`,
 				});
 				return done(true, detail);
@@ -1649,15 +1634,15 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: "🔄 已强制刷新官方模型目录（绕过 4 小时缓存），模型下拉已更新",
+				text: "🔄 Official model catalogs force-refreshed (4h cache bypassed); the model picker is up to date",
 				textEn: "🔄 Official model catalogs force-refreshed (4h cache bypassed); the model picker is up to date",
 			});
 			if (graduated.length > 0) {
-				const names = graduated.map((g) => `${g.providerId}/${g.modelId}`).join("、");
+				const names = graduated.map((g) => `${g.providerId}/${g.modelId}`).join(", ");
 				this.host.emit({
 					type: "notice",
 					level: "info",
-					text: `🎓 ${names} 官方已收录，手工条目已移除并转用官方配置`,
+					text: `${names} graduated to the official catalog; provisional rows removed`,
 					textEn: `${names} graduated to the official catalog; provisional rows removed`,
 				});
 			}
@@ -1666,7 +1651,7 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `强制刷新官方模型目录失败：${(err as Error).message}`,
+				text: `Failed to force-refresh official model catalogs: ${(err as Error).message}`,
 				textEn: `Failed to force-refresh official model catalogs: ${(err as Error).message}`,
 			});
 			return done(false, (err as Error).message);
@@ -1791,12 +1776,12 @@ export class ModelAdminService {
 			return done(false, text);
 		};
 		try {
-			if (!pid) return fail("请填写服务商 ID", "Enter a provider ID");
-			if (!mid) return fail("请填写模型 ID", "Enter a model ID");
+			if (!pid) return fail("Enter a provider ID", "Enter a provider ID");
+			if (!mid) return fail("Enter a model ID", "Enter a model ID");
 			const api = model?.api?.trim() ? model.api.trim() : undefined;
 			if (api && !ModelAdminService.MODEL_APIS.has(api)) {
 				return fail(
-					`接口类型无效：${api}（仅支持 ${[...ModelAdminService.MODEL_APIS].join(" / ")}，留空则自动继承）`,
+					`Invalid api type: ${api} (supported: ${[...ModelAdminService.MODEL_APIS].join(" / ")}; leave blank to inherit)`,
 					`Invalid api type: ${api} (supported: ${[...ModelAdminService.MODEL_APIS].join(" / ")}; leave blank to inherit)`,
 				);
 			}
@@ -1810,13 +1795,13 @@ export class ModelAdminService {
 				}
 				if (!url || (url.protocol !== "http:" && url.protocol !== "https:")) {
 					return fail(
-						`接口地址无效：${baseUrl}（仅支持 http/https，留空则自动继承）`,
+						`Invalid baseUrl: ${baseUrl} (http/https only; leave blank to inherit)`,
 						`Invalid baseUrl: ${baseUrl} (http/https only; leave blank to inherit)`,
 					);
 				}
 			}
 			if (!this.host.modelRuntime().getProvider(pid)) {
-				return fail(`供应商 ${pid} 不存在`, `Provider ${pid} does not exist`);
+				return fail(`Provider ${pid} does not exist`, `Provider ${pid} does not exist`);
 			}
 			const { providers } = this.readModelsConfig();
 			const prev = providers[pid];
@@ -1829,7 +1814,7 @@ export class ModelAdminService {
 				this.host.emit({
 					type: "notice",
 					level: "info",
-					text: `${pid} 已有模型 ${mid}，无需重复添加`,
+					text: `${pid} already has model ${mid}; nothing to add`,
 					textEn: `${pid} already has model ${mid}; nothing to add`,
 				});
 				return done(true);
@@ -1842,12 +1827,12 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: `✅ 已给 ${pid} 添加模型 ${mid}，模型下拉已更新（该条目同时列在「自定义服务商」下，可编辑/删除）`,
+				text: `✅ Added model ${mid} to ${pid}; the picker is updated (the entry is also listed under custom providers for edit/remove)`,
 				textEn: `✅ Added model ${mid} to ${pid}; the picker is updated (the entry is also listed under custom providers for edit/remove)`,
 			});
 			return done(true);
 		} catch (err) {
-			return fail(`添加模型失败：${(err as Error).message}`, `Failed to add model: ${(err as Error).message}`);
+			return fail(`Failed to add model: ${(err as Error).message}`, `Failed to add model: ${(err as Error).message}`);
 		} finally {
 			this.host.flushSnapshot();
 		}
@@ -1860,7 +1845,7 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: "服务商 ID 无效（仅字母/数字/._-）",
+				text: "Invalid provider ID (letters/digits/._- only)",
 				textEn: "Invalid provider ID (letters/digits/._- only)",
 			});
 			return;
@@ -1870,7 +1855,7 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: "至少需要一个模型",
+				text: "At least one model is required",
 				textEn: "At least one model is required",
 			});
 			return;
@@ -1884,14 +1869,14 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: `✅ 已保存服务商 ${pid}（${models.length} 个模型）并刷新模型列表`,
+				text: `✅ Saved provider ${pid} (${models.length} models) and refreshed the model list`,
 				textEn: `✅ Saved provider ${pid} (${models.length} models) and refreshed the model list`,
 			});
 		} catch (err) {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `保存模型配置失败：${(err as Error).message}`,
+				text: `Failed to save model config: ${(err as Error).message}`,
 				textEn: `Failed to save model config: ${(err as Error).message}`,
 			});
 		}
@@ -1906,7 +1891,7 @@ export class ModelAdminService {
 				this.host.emit({
 					type: "notice",
 					level: "info",
-					text: `服务商 ${providerId} 不存在`,
+					text: `Provider ${providerId} does not exist`,
 					textEn: `Provider ${providerId} does not exist`,
 				});
 				return;
@@ -1920,14 +1905,14 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: `🗑  已删除服务商 ${providerId}`,
+				text: `🗑  Deleted provider ${providerId}`,
 				textEn: `🗑  Deleted provider ${providerId}`,
 			});
 		} catch (err) {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `删除模型配置失败：${(err as Error).message}`,
+				text: `Failed to delete model config: ${(err as Error).message}`,
 				textEn: `Failed to delete model config: ${(err as Error).message}`,
 			});
 		}

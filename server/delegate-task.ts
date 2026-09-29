@@ -16,7 +16,7 @@
  */
 import { Type } from "typebox";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { pick, type ServerLang } from "./i18n.js";
+import { type ServerLang } from "./i18n.js";
 import { DELEGATE_TASK_TOOL_NAME } from "./tool-manager.js";
 import { subagentTitle, type SubagentToolHost } from "./subagents.js";
 
@@ -70,17 +70,11 @@ export function normalizeDelegation(params: unknown): DelegationInput {
 export function validateDelegation(
 	input: DelegationInput,
 	usableNames: string[],
-	lang: ServerLang = "en",
+	_lang: ServerLang = "en",
 ): string | null {
 	if (!input.agent || !usableNames.includes(input.agent)) {
 		const shown = usableNames.slice(0, 12).join(" · ") + (usableNames.length > 12 ? " · …" : "");
-		return pick(
-			lang,
-			`派单被驳回：模板 "${input.agent || "(空)"}" 不可用（不存在或已停用）。可用模板：${shown || "(无)"}。用 subagent_templates 查简介再选；不要编造模板名。`,
-			`Delegation rejected: template "${input.agent || "(empty)"}" is unavailable (missing or disabled). Available templates: ${shown || "(none)"}. Use subagent_templates for descriptions; do not invent template names.`,
-			"delegate.validate.agent",
-			{ agent: input.agent, available: shown },
-		);
+		return `Delegation rejected: template "${input.agent || "(empty)"}" is unavailable (missing or disabled). Available templates: ${shown || "(none)"}. Use subagent_templates for descriptions; do not invent template names.`;
 	}
 	const checks: { section: (typeof SECTIONS)[number]; text: string; min: number }[] = [
 		{ section: "TASK", text: input.task, min: MIN_TASK },
@@ -92,25 +86,17 @@ export function validateDelegation(
 	];
 	for (const c of checks) {
 		if (c.text.trim().length < c.min) {
-			return pick(
-				lang,
-				`派单被驳回：${c.section} 段太短（至少 ${c.min} 字，当前 ${c.text.trim().length} 字）。六段缺一不可、含糊不得：补全后重试，不要改用 subagent_spawn 绕过校验。`,
-				`Delegation rejected: section ${c.section} is too short (minimum ${c.min} chars, got ${c.text.trim().length}). All six sections are mandatory and vague prompts fail: complete it and retry; do not bypass validation via subagent_spawn.`,
-				"delegate.validate.short",
-				{ section: c.section, min: c.min },
-			);
+			return `Delegation rejected: section ${c.section} is too short (minimum ${c.min} chars, got ${c.text.trim().length}). All six sections are mandatory and vague prompts fail: complete it and retry; do not bypass validation via subagent_spawn.`;
 		}
 	}
 	return null;
 }
 
 /** 拼装发给子代理的标准六段 prompt（段头固定英文；收尾一行为汇报纪律）。 */
-export function buildDelegationPrompt(input: DelegationInput, lang: ServerLang = "en"): string {
+export function buildDelegationPrompt(input: DelegationInput, _lang: ServerLang = "en"): string {
 	const firstLine = input.task.split("\n")[0]?.trim().slice(0, 80) || input.agent;
 	const closer =
-		lang === "zh"
-			? "汇报要简洁：做了什么、证据（路径/行号/输出）、遇到的问题、下一步建议。不扩大范围。"
-			: "Report back concisely: what was done, evidence (paths/line numbers/output), problems, suggested next steps. Do not expand scope.";
+		"Report back concisely: what was done, evidence (paths/line numbers/output), problems, suggested next steps. Do not expand scope.";
 	return [
 		`# ${input.agent}: ${firstLine}`,
 		``,
@@ -224,29 +210,15 @@ export function makeDelegateTaskTool(host: SubagentToolHost, lang?: () => Server
 				);
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
-				return text(
-					pick(getLang(), `派单启动失败：${msg}`, `Failed to start delegation: ${msg}`, "delegate.start.failed", {
-						error: msg,
-					}),
-					{ delegated: false, agent: input.agent },
-				);
+				return text(`Failed to start delegation: ${msg}`, { delegated: false, agent: input.agent });
 			}
 			const title = subagentTitle(prompt);
-			const modelLineZh = input.model ? `\n模型：${input.model}` : "";
 			const modelLineEn = input.model ? `\nModel: ${input.model}` : "";
 			return text(
-				pick(
-					getLang(),
-					`已派单：${convId}\n模板：${input.agent} · 标题：${title}${modelLineZh}` +
-						`\n子代理已在左栏运行列表中。用 subagent_wait_all 一次等全部完成（不用轮询）、subagent_get_result 取单个结果；` +
-						`追问请在同一子代理会话里继续（subagent_steer），不要重复派单。拿到结果后必须验证再汇报。`,
-					`Delegated: ${convId}\nTemplate: ${input.agent} · Title: ${title}${modelLineEn}` +
-						`\nThe subagent is in the left running list. Use subagent_wait_all to wait for all at once (no polling), ` +
-						`subagent_get_result for a single result; continue follow-ups in the SAME subagent session (subagent_steer), ` +
-						`do not delegate again. Verify the result before reporting.`,
-					"delegate.started",
-					{ convId: convId, agent: input.agent, title: title, "input.model": input.model },
-				),
+				`Delegated: ${convId}\nTemplate: ${input.agent} · Title: ${title}${modelLineEn}` +
+					`\nThe subagent is in the left running list. Use subagent_wait_all to wait for all at once (no polling), ` +
+					`subagent_get_result for a single result; continue follow-ups in the SAME subagent session (subagent_steer), ` +
+					`do not delegate again. Verify the result before reporting.`,
 				{ convId, agent: input.agent, template: input.agent, model: input.model },
 			);
 		},

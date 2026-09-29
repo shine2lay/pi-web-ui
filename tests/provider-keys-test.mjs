@@ -164,7 +164,7 @@ try {
 			readKeys().anthropic?.keys?.[0]?.apiKey === "sk-legacy-a",
 	);
 	c.send({ type: "add_provider_key", provider: "anthropic", apiKey: "sk-new-b", name: "备用" });
-	await c.waitForNotice("点击模型时可切换", 30000);
+	await c.waitForNotice("click a model to switch to it", 30000);
 	legacy = await c.waitProviderKeys("anthropic", 2);
 	check("adding a key keeps legacy active", legacy.find((k) => k.active)?.name === "密钥 1");
 	check("no value/masked/id on the wire", !legacy.some((k) => ["id", "masked", "apiKey"].some((key) => key in k)));
@@ -172,7 +172,7 @@ try {
 
 	// 1) first key → stored + active
 	c.send({ type: "set_provider_api_key", provider: "deepseek", apiKey: "sk-A" });
-	await c.waitForNotice("已保存", 30000);
+	await c.waitForNotice("Saved", 30000);
 	check("auth.json has deepseek", readAuth().deepseek?.key === "sk-A");
 	check("provider-keys.json records deepseek", readKeys().deepseek?.keys?.length === 1);
 
@@ -186,7 +186,7 @@ try {
 
 	// 2) add a secondary key → stays inactive, active keeps routing
 	c.send({ type: "add_provider_key", provider: "deepseek", apiKey: "sk-B", name: "备用" });
-	await c.waitForNotice("点击模型时可切换", 30000);
+	await c.waitForNotice("click a model to switch to it", 30000);
 	check("auth.json still sk-A", readAuth().deepseek?.key === "sk-A");
 
 	ks = await c.waitProviderKeys("deepseek", 2);
@@ -196,27 +196,27 @@ try {
 
 	// duplicate add refused (still 2 keys)
 	c.send({ type: "add_provider_key", provider: "deepseek", apiKey: "sk-B" });
-	await c.waitForNotice("已存在该密钥", 30000);
+	await c.waitForNotice("already has this key", 30000);
 	ks = await c.waitProviderKeys("deepseek", 2);
 	check("duplicate add not duplicated", ks.length === 2);
 
 	// 3) switch to key B BY NAME
 	c.send({ type: "activate_provider_key", provider: "deepseek", keyName: keyBName });
-	await c.waitForNotice("已切换", 30000);
+	await c.waitForNotice("Switched to", 30000);
 	check("auth.json now sk-B", readAuth().deepseek?.key === "sk-B");
 	ks = await c.waitProviderKeys("deepseek", 2);
 	check("key B active now", ks.find((k) => k.name === keyBName)?.active === true);
 
 	// 4) remove the ACTIVE key by name → falls back to the remaining (sk-A)
 	c.send({ type: "remove_provider_key", provider: "deepseek", keyName: keyBName });
-	await c.waitForNotice("已切换", 30000);
+	await c.waitForNotice("switched to", 30000);
 	check("auth.json fell back to sk-A", readAuth().deepseek?.key === "sk-A");
 	ks = await c.waitProviderKeys("deepseek", 1);
 	check("only 1 key left", ks.length === 1 && ks[0].active === true);
 
 	// 5) remove the last key by name → provider returns to unconfigured
 	c.send({ type: "remove_provider_key", provider: "deepseek", keyName: keyAName });
-	await c.waitForNotice("回到未配置状态", 30000);
+	await c.waitForNotice("now unconfigured", 30000);
 	check("auth.json deepseek gone", !readAuth().deepseek);
 	check("provider-keys.json deepseek gone", !readKeys().deepseek);
 

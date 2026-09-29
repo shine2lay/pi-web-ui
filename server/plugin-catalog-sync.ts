@@ -18,7 +18,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { pick, type ServerLang } from "./i18n.js";
+import { type ServerLang } from "./i18n.js";
 import { normalizeSyncPayload, writeCustomCatalog } from "./plugin-catalog.js";
 import { workspacePath } from "./files-service.js";
 import type { PluginInstaller } from "./plugin-installer.js";
@@ -71,14 +71,9 @@ export interface CatalogSyncResult {
  * 可读性」探测 oracle）。只读文本；本地来源的读失败与过大统一进 `localDocFailed`
  * 这一条错误（调用方把解析失败也并进来），不区分「读不到 / 解析失败」两种失败。
  */
-function localDocFailed(l: ServerLang): { error: string } {
+function localDocFailed(_l: ServerLang): { error: string } {
 	return {
-		error: pick(
-			l,
-			"目录文档无效或不可读（仅支持 http(s) URL 或工作区内的 JSON 文件）",
-			"Invalid or unreadable catalog document (http(s) URL or an in-workspace JSON file only)",
-			"plugincatalog.sync.doc.invalid",
-		),
+		error: "Invalid or unreadable catalog document (http(s) URL or an in-workspace JSON file only)",
 	};
 }
 
@@ -98,35 +93,17 @@ async function readDocument(
 			});
 		} catch (err) {
 			return {
-				error: pick(
-					l,
-					`拉取目录失败：${(err as Error)?.message ?? err}`,
-					`Failed to fetch the catalog: ${(err as Error)?.message ?? err}`,
-					"plugincatalog.sync.fetch.failed",
-					{ reason: String((err as Error)?.message ?? err) },
-				),
+				error: `Failed to fetch the catalog: ${(err as Error)?.message ?? err}`,
 			};
 		}
 		if (!res.ok)
 			return {
-				error: pick(
-					l,
-					`拉取目录失败：HTTP ${res.status}`,
-					`Failed to fetch the catalog: HTTP ${res.status}`,
-					"plugincatalog.sync.http",
-					{ status: String(res.status) },
-				),
+				error: `Failed to fetch the catalog: HTTP ${res.status}`,
 			};
 		const text = await res.text();
 		if (text.length > maxBytes)
 			return {
-				error: pick(
-					l,
-					`目录文档过大（> ${Math.round(maxBytes / 1024)} KB）`,
-					`Catalog document too large (> ${Math.round(maxBytes / 1024)} KB)`,
-					"plugincatalog.sync.too.large",
-					{ kb: String(Math.round(maxBytes / 1024)) },
-				),
+				error: `Catalog document too large (> ${Math.round(maxBytes / 1024)} KB)`,
 			};
 		return { text };
 	}
@@ -154,12 +131,11 @@ export async function syncPluginCatalog(
 	deps: CatalogSyncDeps,
 ): Promise<CatalogSyncResult> {
 	const lang = deps.lang ?? (() => "en" as ServerLang);
-	const l = lang();
 	const src = String(source ?? "").trim();
 	if (!src)
 		return {
 			ok: false,
-			error: pick(l, "缺少目录来源", "Missing catalog source", "plugincatalog.sync.source.missing"),
+			error: "Missing catalog source",
 		};
 	const doc = await readDocument(src, deps, lang);
 	if ("error" in doc) return { ok: false, error: doc.error };
@@ -173,13 +149,7 @@ export async function syncPluginCatalog(
 		if (isLocalSource) return { ok: false, error: localDocFailed(lang()).error };
 		return {
 			ok: false,
-			error: pick(
-				l,
-				`目录 JSON 解析失败：${(err as Error)?.message ?? err}`,
-				`Catalog JSON is not valid JSON: ${(err as Error)?.message ?? err}`,
-				"plugincatalog.sync.parse.failed",
-				{ reason: String((err as Error)?.message ?? err) },
-			),
+			error: `Catalog JSON is not valid JSON: ${(err as Error)?.message ?? err}`,
 		};
 	}
 	const payload = normalizeSyncPayload(raw, lang);

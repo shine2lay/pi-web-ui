@@ -103,7 +103,7 @@ describe("compact-context-tool", () => {
 			)) as any;
 			expect(res.isError).toBeFalsy();
 			expect(res.details.skipped).toBe(true);
-			expect(res.content[0].text).toContain("无需压缩");
+			expect(res.content[0].text).toContain("no compaction needed");
 			expect(host.scheduleCompaction).not.toHaveBeenCalled();
 		});
 

@@ -70,7 +70,7 @@ describe("AgentService.wakeConversation（无持有方路径）", () => {
 		const svc = new AgentService(dir, join(dir, "client-state.json"));
 		const miss = await svc.wakeConversation("c-nope", "hi");
 		expect(miss.ok).toBe(false);
-		expect(miss.error).toContain("不在运行中");
+		expect(miss.error).toContain("is not running");
 		expect(await svc.wakeConversation("", "hi")).toMatchObject({ ok: false });
 		// issue #231：带稳定键也找不到 → 同样 miss（不 busy），调用方走视口回退
 		const miss2 = await svc.wakeConversation("c-nope", "hi", {
@@ -133,8 +133,8 @@ describe("schedule_* 工具闭环", () => {
 	it("建单次任务：默认绑定发起对话＋oneShot，返回下次触发与取消方式", async () => {
 		const r = await call("schedule_task", { schedule: "in 30m", prompt: "检查训练日志并汇报" });
 		const text = resultText(r);
-		expect(text).toContain("定时任务已创建");
-		expect(text).toContain("单次，触发后自动删除");
+		expect(text).toContain("Scheduled task created");
+		expect(text).toContain("one-shot, auto-deleted after firing");
 		expect(text).toContain("schedule_cancel");
 		const tasks = store.list();
 		expect(tasks).toHaveLength(1);
@@ -160,9 +160,11 @@ describe("schedule_* 工具闭环", () => {
 	});
 
 	it("非法输入给中文报错：坏时间/超短间隔/空 prompt", async () => {
-		expect(resultText(await call("schedule_task", { schedule: "明天", prompt: "x" }))).toContain("非法");
-		expect(resultText(await call("schedule_task", { schedule: "in 30s", prompt: "x" }))).toContain("最短 60s");
-		expect(resultText(await call("schedule_task", { schedule: "in 30m", prompt: "  " }))).toContain("不能为空");
+		expect(resultText(await call("schedule_task", { schedule: "明天", prompt: "x" }))).toContain("Invalid schedule");
+		expect(resultText(await call("schedule_task", { schedule: "in 30s", prompt: "x" }))).toContain("minimum 60s");
+		expect(resultText(await call("schedule_task", { schedule: "in 30m", prompt: "  " }))).toContain(
+			"must not be empty",
+		);
 		expect(store.list()).toHaveLength(0);
 	});
 
@@ -170,11 +172,11 @@ describe("schedule_* 工具闭环", () => {
 		await call("schedule_task", { schedule: "in 30m", prompt: "甲" });
 		await call("schedule_task", { schedule: "in 1h", prompt: "乙", recurring: true });
 		const list = resultText(await call("schedule_list", {}));
-		expect(list).toContain("定时任务（2）");
+		expect(list).toContain("Scheduled tasks (2)");
 		const id = store.list()[0]!.id;
-		expect(resultText(await call("schedule_cancel", { id }))).toContain("已删除");
+		expect(resultText(await call("schedule_cancel", { id }))).toContain("deleted");
 		expect(store.list()).toHaveLength(1);
-		expect(resultText(await call("schedule_cancel", { id: "no-such" }))).toContain("没有");
+		expect(resultText(await call("schedule_cancel", { id: "no-such" }))).toContain("No task");
 		expect(resultText(await call("schedule_cancel", { id: "" }))).toContain("id");
 	});
 
@@ -183,7 +185,7 @@ describe("schedule_* 工具闭环", () => {
 		const t = dead.find((x) => x.name === "schedule_task")!;
 		expect(
 			resultText(await t.execute("c", { schedule: "in 30m", prompt: "x" } as never, undefined, undefined, CTX)),
-		).toContain("不支持");
+		).toContain("not wired");
 	});
 
 	it("issue #231：建任务时快照 owner 会话文件（compression-safe 绑定）", async () => {

@@ -62,7 +62,7 @@ export function validatePluginManifest(raw: unknown, dirName: string): ManifestV
 	if (!isRecord(raw)) {
 		errors.push({
 			path: "manifest",
-			message: "manifest.json 必须是对象",
+			message: "manifest.json must be an object",
 			messageEn: "manifest.json must be an object",
 		});
 		return { errors, warnings, apiVersion: 1, permissions: [], strict: false };
@@ -76,19 +76,19 @@ export function validatePluginManifest(raw: unknown, dirName: string): ManifestV
 	} else if (typeof idRaw !== "string" || !idRaw.trim()) {
 		warnings.push({
 			path: "id",
-			message: "id 非字符串，已回落为目录名",
+			message: 'invalid "id", fell back to directory name',
 			messageEn: 'invalid "id", fell back to directory name',
 		});
 	} else if (!ID_RE.test(idRaw.trim())) {
 		errors.push({
 			path: "id",
-			message: `id「${idRaw.trim().slice(0, 32)}」非法（只允许字母数字/_/-）`,
+			message: `invalid "id" (only [A-Za-z0-9_-] allowed)`,
 			messageEn: `invalid "id" (only [A-Za-z0-9_-] allowed)`,
 		});
 	} else if (idRaw.trim() !== dirName) {
 		errors.push({
 			path: "id",
-			message: `id「${idRaw.trim()}」与目录名「${dirName}」不一致`,
+			message: `"id" does not match directory name "${dirName}"`,
 			messageEn: `"id" does not match directory name "${dirName}"`,
 		});
 	}
@@ -101,7 +101,7 @@ export function validatePluginManifest(raw: unknown, dirName: string): ManifestV
 	} else if (typeof av !== "number" || !Number.isInteger(av) || av < 1) {
 		errors.push({
 			path: "apiVersion",
-			message: "apiVersion 必须是 >=1 的整数",
+			message: '"apiVersion" must be an integer >= 1',
 			messageEn: '"apiVersion" must be an integer >= 1',
 		});
 		apiVersion = 1;
@@ -117,14 +117,14 @@ export function validatePluginManifest(raw: unknown, dirName: string): ManifestV
 	} else if (!Array.isArray(perms)) {
 		errors.push({
 			path: "permissions",
-			message: "permissions 必须是字符串数组",
+			message: '"permissions" must be an array of strings',
 			messageEn: '"permissions" must be an array of strings',
 		});
 	} else {
 		if (perms.length > 16) {
 			warnings.push({
 				path: "permissions",
-				message: `permissions 超出 16 个，多余的将被忽略`,
+				message: '"permissions" capped at 16 entries',
 				messageEn: '"permissions" capped at 16 entries',
 			});
 		}
@@ -132,7 +132,11 @@ export function validatePluginManifest(raw: unknown, dirName: string): ManifestV
 			const p = perms[i];
 			const path = `permissions[${i}]`;
 			if (typeof p !== "string" || !p.trim()) {
-				errors.push({ path, message: "能力声明不能为空", messageEn: "capability must be a non-empty string" });
+				errors.push({
+					path,
+					message: "capability must be a non-empty string",
+					messageEn: "capability must be a non-empty string",
+				});
 				continue;
 			}
 			const v = p.trim();
@@ -140,7 +144,7 @@ export function validatePluginManifest(raw: unknown, dirName: string): ManifestV
 				// 未知族：拼写错了就永远授权失败，与静默丢弃同源 —— 直接拒。
 				errors.push({
 					path,
-					message: `未知能力「${v.slice(0, 32)}」（可选 ${[...KNOWN_PERMISSION_FAMILIES].join("/")})`,
+					message: `unknown capability "${v.slice(0, 32)}"`,
 					messageEn: `unknown capability "${v.slice(0, 32)}"`,
 				});
 				continue;
@@ -155,7 +159,7 @@ export function validatePluginManifest(raw: unknown, dirName: string): ManifestV
 	if (apiVersion === 2 && permissions.length === 0 && perms === undefined) {
 		errors.push({
 			path: "permissions",
-			message: "apiVersion 2 的插件必须声明 permissions",
+			message: 'apiVersion 2 plugins must declare "permissions"',
 			messageEn: 'apiVersion 2 plugins must declare "permissions"',
 		});
 	}
@@ -163,13 +167,17 @@ export function validatePluginManifest(raw: unknown, dirName: string): ManifestV
 	// engines：只收字符串映射；坏形状即错（否则约束被静默吞掉）。
 	if (o.engines !== undefined) {
 		if (!isRecord(o.engines)) {
-			errors.push({ path: "engines", message: "engines 必须是对象", messageEn: '"engines" must be an object' });
+			errors.push({
+				path: "engines",
+				message: '"engines" must be an object',
+				messageEn: '"engines" must be an object',
+			});
 		} else {
 			for (const [k, v] of Object.entries(o.engines).slice(0, 8)) {
 				if (typeof v !== "string") {
 					errors.push({
 						path: `engines.${k}`,
-						message: "engines 约束值必须是字符串",
+						message: '"engines" constraint values must be strings',
 						messageEn: '"engines" constraint values must be strings',
 					});
 				}
@@ -180,7 +188,11 @@ export function validatePluginManifest(raw: unknown, dirName: string): ManifestV
 	// requires（P2-8 硬依赖）：坏形状即错（依赖判定错不得，静默吞掉等于回到 peerPlugins 的老路）。
 	if (o.requires !== undefined) {
 		if (!isRecord(o.requires)) {
-			errors.push({ path: "requires", message: "requires 必须是对象", messageEn: '"requires" must be an object' });
+			errors.push({
+				path: "requires",
+				message: '"requires" must be an object',
+				messageEn: '"requires" must be an object',
+			});
 		} else {
 			const r = o.requires;
 			if (
@@ -189,7 +201,7 @@ export function validatePluginManifest(raw: unknown, dirName: string): ManifestV
 			) {
 				errors.push({
 					path: "requires.hostApi",
-					message: "requires.hostApi 必须是 >=1 的整数",
+					message: '"requires.hostApi" must be an integer >= 1',
 					messageEn: '"requires.hostApi" must be an integer >= 1',
 				});
 			}
@@ -197,14 +209,14 @@ export function validatePluginManifest(raw: unknown, dirName: string): ManifestV
 				if (!Array.isArray(r.families)) {
 					errors.push({
 						path: "requires.families",
-						message: "requires.families 必须是字符串数组",
+						message: '"requires.families" must be an array of strings',
 						messageEn: '"requires.families" must be an array of strings',
 					});
 				} else {
 					if (r.families.length > 8) {
 						warnings.push({
 							path: "requires.families",
-							message: "requires.families 超出 8 个，多余的将被忽略",
+							message: '"requires.families" capped at 8 entries',
 							messageEn: '"requires.families" capped at 8 entries',
 						});
 					}
@@ -212,11 +224,15 @@ export function validatePluginManifest(raw: unknown, dirName: string): ManifestV
 						const f = r.families[i];
 						const path = `requires.families[${i}]`;
 						if (typeof f !== "string" || !f.trim()) {
-							errors.push({ path, message: "能力族不能为空", messageEn: "family must be a non-empty string" });
+							errors.push({
+								path,
+								message: "family must be a non-empty string",
+								messageEn: "family must be a non-empty string",
+							});
 						} else if (!isKnownPermission(f.trim())) {
 							errors.push({
 								path,
-								message: `未知能力族「${f.trim().slice(0, 32)}」（拼写？或需要更新 pi-web-ui）`,
+								message: `unknown family "${f.trim().slice(0, 32)}" (typo? or needs newer pi-web-ui)`,
 								messageEn: `unknown family "${f.trim().slice(0, 32)}" (typo? or needs newer pi-web-ui)`,
 							});
 						}
@@ -227,14 +243,14 @@ export function validatePluginManifest(raw: unknown, dirName: string): ManifestV
 				if (!Array.isArray(r.plugins)) {
 					errors.push({
 						path: "requires.plugins",
-						message: "requires.plugins 必须是插件 id 数组",
+						message: '"requires.plugins" must be an array of plugin ids',
 						messageEn: '"requires.plugins" must be an array of plugin ids',
 					});
 				} else {
 					if (r.plugins.length > 16) {
 						warnings.push({
 							path: "requires.plugins",
-							message: "requires.plugins 超出 16 个，多余的将被忽略",
+							message: '"requires.plugins" capped at 16 entries',
 							messageEn: '"requires.plugins" capped at 16 entries',
 						});
 					}
@@ -243,7 +259,7 @@ export function validatePluginManifest(raw: unknown, dirName: string): ManifestV
 						if (typeof dep !== "string" || !ID_RE.test(dep.trim())) {
 							errors.push({
 								path: `requires.plugins[${i}]`,
-								message: "插件 id 非法（只允许字母数字/_/-）",
+								message: "invalid plugin id (only [A-Za-z0-9_-] allowed)",
 								messageEn: "invalid plugin id (only [A-Za-z0-9_-] allowed)",
 							});
 						}
@@ -258,7 +274,7 @@ export function validatePluginManifest(raw: unknown, dirName: string): ManifestV
 		if (o[key] !== undefined && typeof o[key] !== "boolean") {
 			warnings.push({
 				path: key,
-				message: `${key} 必须是布尔值，已回落缺省`,
+				message: `"${key}" must be a boolean, fell back to default`,
 				messageEn: `"${key}" must be a boolean, fell back to default`,
 			});
 		}
@@ -269,7 +285,7 @@ export function validatePluginManifest(raw: unknown, dirName: string): ManifestV
 		if (o[key] !== undefined && typeof o[key] !== "string") {
 			warnings.push({
 				path: key,
-				message: `${key} 必须是字符串，已忽略`,
+				message: `"${key}" must be a string, ignored`,
 				messageEn: `"${key}" must be a string, ignored`,
 			});
 		}
@@ -287,7 +303,7 @@ export function validatePluginManifest(raw: unknown, dirName: string): ManifestV
 		if (o[key] !== undefined && !Array.isArray(o[key])) {
 			warnings.push({
 				path: key,
-				message: `${key} 必须是数组，已忽略`,
+				message: `"${key}" must be an array, ignored`,
 				messageEn: `"${key}" must be an array, ignored`,
 			});
 		}
@@ -295,14 +311,14 @@ export function validatePluginManifest(raw: unknown, dirName: string): ManifestV
 	if (o.settings !== undefined && !Array.isArray(o.settings) && !isRecord(o.settings)) {
 		warnings.push({
 			path: "settings",
-			message: "settings 必须是数组或对象，已忽略",
+			message: '"settings" must be an array or object, ignored',
 			messageEn: '"settings" must be an array or object, ignored',
 		});
 	}
 	if (o.fileHandlers !== undefined && !Array.isArray(o.fileHandlers)) {
 		warnings.push({
 			path: "fileHandlers",
-			message: "fileHandlers 必须是数组，已忽略",
+			message: '"fileHandlers" must be an array, ignored',
 			messageEn: '"fileHandlers" must be an array, ignored',
 		});
 	}
@@ -312,12 +328,12 @@ export function validatePluginManifest(raw: unknown, dirName: string): ManifestV
 	if (o.ui !== undefined && strict && apiVersion <= 2 && !permissions.some((x) => x.split(":")[0] === "ui")) {
 		errors.push({
 			path: "ui",
-			message: '声明了 ui 却未声明 "ui" 能力，整份 ui 不会生效',
+			message: 'manifest declares "ui" but lacks the "ui" capability — the whole ui section is ignored',
 			messageEn: 'manifest declares "ui" but lacks the "ui" capability — the whole ui section is ignored',
 		});
 	}
 	if (o.ui !== undefined && typeof o.ui !== "object") {
-		errors.push({ path: "ui", message: "ui 必须是对象", messageEn: '"ui" must be an object' });
+		errors.push({ path: "ui", message: '"ui" must be an object', messageEn: '"ui" must be an object' });
 	}
 
 	return { errors, warnings, apiVersion, permissions, strict };

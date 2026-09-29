@@ -207,7 +207,7 @@ async function main() {
 	const pr2 = await c.wait((m) => m.type === "dsh_presets" && m.defaultPreset === "ptc");
 	check("默认改 ptc", pr2.defaultPreset === "ptc");
 	c.send({ type: "dsh_preset_default", preset: "no-such-preset" });
-	const badNotice = await c.wait((m) => m.type === "notice" && m.text.includes("未知预设"));
+	const badNotice = await c.wait((m) => m.type === "notice" && m.text.includes("Unknown preset"));
 	check("非法默认被拒绝", !!badNotice, badNotice?.text ?? "timeout");
 
 	// --- 2.6 权限预设三档（官方 /permission 弹窗；零 key：只切换不 prompt） ---
@@ -249,7 +249,7 @@ async function main() {
 	const perm2 = await c.wait((m) => m.type === "dsh_permission" && m.defaultPreset === "read-only");
 	check("新会话默认改 read-only", perm2.defaultPreset === "read-only");
 	c.send({ type: "dsh_permission_default", preset: "no-such-preset" });
-	const badPermNotice = await c.wait((m) => m.type === "notice" && m.text.includes("未知权限预设"));
+	const badPermNotice = await c.wait((m) => m.type === "notice" && m.text.includes("Unknown permission preset"));
 	check("非法权限默认被拒绝", !!badPermNotice, badPermNotice?.text ?? "timeout");
 	// 默认恢复，避免污染后续用例与本地 client-state。
 	c.send({ type: "dsh_permission_default", preset: "workspace-write-never" });
@@ -307,16 +307,16 @@ async function main() {
 	// --- 6. slash 命令拦截（不发模型） ---
 	c2.send({ type: "prompt", text: "/model 这个模型必然不存在xyz" });
 	const modelBad = await c2.wait((m) => m.type === "notice", 10000);
-	check("slash /model 无匹配 → notice", modelBad.text.includes("没有匹配到模型"), modelBad.text);
+	check("slash /model 无匹配 → notice", modelBad.text.includes("No matching model"), modelBad.text);
 	c2.send({ type: "prompt", text: "/cwd /nonexistent-zzz" });
 	const cwdBad = await c2.wait((m) => m.type === "notice", 10000);
-	check("slash /cwd 无效路径 → notice", cwdBad.text.includes("切换工作目录失败"), cwdBad.text);
+	check("slash /cwd 无效路径 → notice", cwdBad.text.includes("Failed to switch directory"), cwdBad.text);
 
 	// /new <prompt>：首条提示必须落进新对话（NATIVE_COMMANDS 是两个引擎共用的，
 	// 行为必须一致）。探针用「/cwd」无参数形态——只回显、不发模型。
 	c2.send({ type: "prompt", text: "/new /cwd" });
 	const firstNotice = await c2
-		.wait((m) => m.type === "notice" && m.text.includes("当前工作目录"), 10000)
+		.wait((m) => m.type === "notice" && m.text.includes("Current directory"), 10000)
 		.catch(() => null);
 	check("slash /new <首条提示> 投递到新对话", !!firstNotice, firstNotice?.text ?? "timeout");
 

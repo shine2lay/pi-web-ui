@@ -72,7 +72,9 @@ export class ComposerDraftsStore {
 			//（否则一次解析失败 → 空表 → 下次 save 把全部草稿的原始记录抹掉）。
 			try {
 				renameSync(this.filePath, `${this.filePath}.corrupt-${Date.now()}`);
-				console.warn(`[composer-drafts] 草稿文件解析失败，已改名留存：${this.filePath}（丢草稿可重打，不留坏副本）`);
+				console.warn(
+					`[composer-drafts] drafts file failed to parse, kept it under a new name: ${this.filePath} (lost drafts can be retyped; the broken file is not reused)`,
+				);
 			} catch {
 				// 改名失败（占用等）也无妨：空表继续，save 时照常覆盖
 			}

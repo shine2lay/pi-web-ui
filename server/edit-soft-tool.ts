@@ -31,7 +31,7 @@ import {
 	generateUnifiedPatch,
 	withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
-import { pick, type ServerLang } from "./i18n.js";
+import { type ServerLang } from "./i18n.js";
 
 import { EDIT_SOFT_TOOL_NAME } from "./tool-manager.js";
 /** 独立宽松编辑工具名（唯一登记见 tool-manager.ts；此处别名保兼容）。 */
@@ -238,18 +238,10 @@ function locateReplacement(
 	newTextLF: string,
 	path: string,
 	editIndex: number,
-	lang: ServerLang = "en",
+	_lang: ServerLang = "en",
 ): Replacement {
 	if (oldTextLF.length === 0) {
-		throw new SoftEditMatchError(
-			pick(
-				lang,
-				`edits[${editIndex}].oldText 在 ${path} 中不能为空。`,
-				`edits[${editIndex}].oldText must not be empty in ${path}.`,
-				"editsoft.oldtext.empty",
-				{ editIndex, path },
-			),
-		);
+		throw new SoftEditMatchError(`edits[${editIndex}].oldText must not be empty in ${path}.`);
 	}
 
 	// 1) 精确子串匹配（等价普通 edit，支持片段）
@@ -264,13 +256,7 @@ function locateReplacement(
 		const occurrences = normalizedContent.split(oldTextLF).length - 1;
 		if (occurrences > 1) {
 			throw new SoftEditMatchError(
-				pick(
-					lang,
-					`在 ${path} 中找到 ${occurrences} 处 edits[${editIndex}].oldText。每个 oldText 必须唯一，请提供更多上下文。`,
-					`Found ${occurrences} occurrences of edits[${editIndex}].oldText in ${path}. Each oldText must be unique. Please provide more context to make it unique.`,
-					"editsoft.exact.not.unique",
-					{ path, occurrences, editIndex },
-				),
+				`Found ${occurrences} occurrences of edits[${editIndex}].oldText in ${path}. Each oldText must be unique. Please provide more context to make it unique.`,
 			);
 		}
 		return { start: exactIdx, end: exactIdx + oldTextLF.length, insertText: newTextLF };
@@ -279,15 +265,7 @@ function locateReplacement(
 	// 2) 行核心宽松匹配：逐行 trim 后序列一致（忽略缩进差异）
 	const cores = oldTextCores(oldTextLF);
 	if (cores.length === 0) {
-		throw new SoftEditMatchError(
-			pick(
-				lang,
-				`edits[${editIndex}].oldText 在 ${path} 中实际为空。`,
-				`edits[${editIndex}].oldText is effectively empty in ${path}.`,
-				"editsoft.oldtext.blank",
-				{ editIndex, path },
-			),
-		);
+		throw new SoftEditMatchError(`edits[${editIndex}].oldText is effectively empty in ${path}.`);
 	}
 	const units = splitLineUnits(normalizedContent);
 	const k = cores.length;
@@ -310,34 +288,16 @@ function locateReplacement(
 		// 而整行匹配又对不上 —— 这种命中绝对不能走精确路径。
 		if (exactMisaligned || fragmentLineEnds(cores, units).length > 0) {
 			throw new SoftEditMatchError(
-				pick(
-					lang,
-					`在 ${path} 中找不到该文本：edits[${editIndex}].oldText 跨越多行但首/尾没有落在行边界上（首行或末行只是文件中某行的一部分），而本工具按**整行**匹配。请让 oldText 的每一行都是完整行——行首缩进可以省略，但行内容必须完整。`,
-					`Could not find the text in ${path}: edits[${editIndex}].oldText spans multiple lines but its start/end do not fall on line boundaries (its first or last line is only part of a file line), and this tool matches whole lines. Make every line of oldText a complete line — leading indentation may be omitted, but the line content must be complete.`,
-					"editsoft.fragment.not.supported",
-					{ path, editIndex },
-				),
+				`Could not find the text in ${path}: edits[${editIndex}].oldText spans multiple lines but its start/end do not fall on line boundaries (its first or last line is only part of a file line), and this tool matches whole lines. Make every line of oldText a complete line — leading indentation may be omitted, but the line content must be complete.`,
 			);
 		}
 		throw new SoftEditMatchError(
-			pick(
-				lang,
-				`在 ${path} 中找不到该文本（精确或忽略缩进均未命中）。oldText 必须与文件的行内容一致；行首空白差异会被忽略，但实际内容必须完全相同。`,
-				`Could not find the text (exact or indentation-insensitive) in ${path}. The oldText must match the file's line content; leading-whitespace differences are ignored, but the actual content must be identical.`,
-				"editsoft.match.not.found",
-				{ path },
-			),
+			`Could not find the text (exact or indentation-insensitive) in ${path}. The oldText must match the file's line content; leading-whitespace differences are ignored, but the actual content must be identical.`,
 		);
 	}
 	if (starts.length > 1) {
 		throw new SoftEditMatchError(
-			pick(
-				lang,
-				`在 ${path} 中找到 ${starts.length} 处忽略缩进的 edits[${editIndex}].oldText。文本必须唯一，请提供更多上下文。`,
-				`Found ${starts.length} indentation-insensitive occurrences of edits[${editIndex}].oldText in ${path}. The text must be unique. Please provide more context to make it unique.`,
-				"editsoft.match.not.unique",
-				{ path, "starts.length": starts.length, editIndex },
-			),
+			`Found ${starts.length} indentation-insensitive occurrences of edits[${editIndex}].oldText in ${path}. The text must be unique. Please provide more context to make it unique.`,
 		);
 	}
 	const li = starts[0];
@@ -368,15 +328,7 @@ export function applySoftEdits(
 	const sorted = [...replacements].sort((a, b) => a.start - b.start);
 	for (let i = 1; i < sorted.length; i++) {
 		if (sorted[i - 1].end > sorted[i].start) {
-			throw new SoftEditMatchError(
-				pick(
-					lang,
-					`在 ${path} 中的 edits 重叠。请合并为一个 edit 或定位到不相交的区域。`,
-					`edits overlap in ${path}. Merge them into one edit or target disjoint regions.`,
-					"editsoft.edits.overlap",
-					{ path },
-				),
-			);
+			throw new SoftEditMatchError(`edits overlap in ${path}. Merge them into one edit or target disjoint regions.`);
 		}
 	}
 	// 逆序应用，保持左侧偏移稳定。
@@ -390,15 +342,7 @@ export function applySoftEdits(
 		result = result.slice(0, r.start) + r.insertText + result.slice(r.end);
 	}
 	if (result === normalizedContent) {
-		throw new SoftEditMatchError(
-			pick(
-				lang,
-				`${path} 没有变化。替换产生了完全相同的内容。`,
-				`No changes made to ${path}. The replacement produced identical content.`,
-				"editsoft.result.identical",
-				{ path },
-			),
-		);
+		throw new SoftEditMatchError(`No changes made to ${path}. The replacement produced identical content.`);
 	}
 	return { baseContent: normalizedContent, newContent: result };
 }
@@ -428,22 +372,14 @@ export function makeEditSoftTool(fallbackCwd: string, getLang?: () => ServerLang
 			const lang = getLang?.() ?? "en";
 			const { path, edits } = input as unknown as EditSoftInput;
 			if (!Array.isArray(edits) || edits.length === 0) {
-				throw new Error(
-					pick(
-						lang,
-						"edit_soft 输入无效：edits 必须包含至少一个替换。",
-						"edit_soft input is invalid. edits must contain at least one replacement.",
-						"editsoft.input.no.edits",
-					),
-				);
+				throw new Error("edit_soft input is invalid. edits must contain at least one replacement.");
 			}
 			const cwd = typeof ctx?.cwd === "string" ? ctx.cwd : fallbackCwd;
 			const absolutePath = resolveToCwd(path, cwd);
 
 			return withFileMutationQueue(absolutePath, async () => {
 				const throwIfAborted = () => {
-					if (signal?.aborted)
-						throw new Error(pick(lang, "操作已中止", "Operation aborted", "editsoft.operation.aborted"));
+					if (signal?.aborted) throw new Error("Operation aborted");
 				};
 
 				throwIfAborted();
@@ -452,15 +388,7 @@ export function makeEditSoftTool(fallbackCwd: string, getLang?: () => ServerLang
 				} catch (error: unknown) {
 					throwIfAborted();
 					const errorMessage = error instanceof Error && "code" in error ? `Error code: ${error.code}` : String(error);
-					throw new Error(
-						pick(
-							lang,
-							`无法编辑文件：${path}。${errorMessage}。`,
-							`Could not edit file: ${path}. ${errorMessage}.`,
-							"editsoft.file.access.failed",
-							{ path, errorMessage },
-						),
-					);
+					throw new Error(`Could not edit file: ${path}. ${errorMessage}.`);
 				}
 				throwIfAborted();
 
@@ -484,13 +412,7 @@ export function makeEditSoftTool(fallbackCwd: string, getLang?: () => ServerLang
 					content: [
 						{
 							type: "text",
-							text: pick(
-								lang,
-								`已在 ${path} 中替换 ${edits.length} 个块（忽略缩进匹配）。`,
-								`Successfully replaced ${edits.length} block(s) in ${path} (indentation-insensitive).`,
-								"editsoft.replace.done",
-								{ path, "edits.length": edits.length },
-							),
+							text: `Successfully replaced ${edits.length} block(s) in ${path} (indentation-insensitive).`,
 						},
 					],
 					details: { diff: diffResult.diff, patch, firstChangedLine: diffResult.firstChangedLine },

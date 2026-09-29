@@ -40,7 +40,7 @@ import {
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
-import { pick, type ServerLang } from "./i18n.js";
+import { type ServerLang } from "./i18n.js";
 // 覆盖层要接住任意具体定义（内置的、扩展注册的），只能用 any 参数化的工具定义别名。
 import type { AnyToolDefinition } from "./tool-overrides.js";
 
@@ -167,7 +167,7 @@ async function dirAwareExecute(
 				onUpdate as never,
 				ctx,
 			)) as AgentToolResult<unknown>;
-			const header = pick(getLang(), `[目录：${path}]`, `[Directory: ${path}]`, "read.dir.header", { path });
+			const header = `[Directory: ${path}]`;
 			// 只取列出来的正文：截断/条目上限提示已在正文末尾，read 卡片的
 			// details 不需要 ls 的字段。
 			const content = listed.content.map((part, index) =>

@@ -394,40 +394,42 @@ export const PI_AGENT_PRESETS: UiAgentPreset[] = [
 		id: "standard",
 		trust: "system",
 		isDefault: true,
-		name: "全功能",
-		description: "提供全部可用工具与扩展能力（默认）",
+		name: "Full",
+		description: "All available tools and extensions (default)",
 		order: 0,
 	},
 	{
 		id: "minimal",
 		trust: "system",
 		isDefault: false,
-		name: "极简模式",
-		description: "仅保留 bash 与 read；插件工具、技能名录与终端引导同步隐藏",
+		name: "Minimal",
+		description: "Only bash and read; plugin tools, the skills catalog and terminal guidance are hidden too",
 		order: 1,
 	},
 	{
 		id: "code",
 		trust: "system",
 		isDefault: false,
-		name: "代码开发",
-		description: "专注于代码读写与执行（bash, read, edit, write, edit_soft）；插件工具与技能名录同步隐藏",
+		name: "Coding",
+		description:
+			"Focused on reading, writing and running code (bash, read, edit, write, edit_soft); plugin tools and the skills catalog are hidden too",
 		order: 2,
 	},
 	{
 		id: "reader",
 		trust: "system",
 		isDefault: false,
-		name: "只读分析",
-		description: "仅保留只读工具，禁止写操作；插件工具同步隐藏（读写未知，保守处理）",
+		name: "Read-only analysis",
+		description:
+			"Read-only tools only, no writes; plugin tools are hidden too (their read/write behaviour is unknown, so they are left out)",
 		order: 3,
 	},
 	{
 		id: "ask",
 		trust: "system",
 		isDefault: false,
-		name: "纯对话",
-		description: "无工具问答模式，模型不调用任何工具；插件工具与技能名录同步隐藏",
+		name: "Chat only",
+		description: "Q&A without tools: the model calls no tools; plugin tools and the skills catalog are hidden too",
 		order: 4,
 	},
 ];
@@ -436,18 +438,18 @@ export const PI_AGENT_PRESETS: UiAgentPreset[] = [
 export const PI_PERMISSION_OPTIONS: DshPermissionOption[] = [
 	{
 		value: "read-only",
-		name: "只读模式",
-		description: "禁止所有文件修改（write/edit/edit_soft）及任何非只读操作",
+		name: "Read only",
+		description: "Blocks all file changes (write/edit/edit_soft) and any operation that is not read-only",
 	},
 	{
 		value: "workspace-write-never",
-		name: "工作区内修改",
-		description: "仅允许在当前工作区目录下修改文件，工作区外写操作一律拒绝",
+		name: "Workspace write",
+		description: "Only allows changing files inside the current workspace; writes outside it are always refused",
 	},
 	{
 		value: "danger-full-access",
-		name: "完全权限",
-		description: "允许修改任意目录文件及执行全量操作（需要二次确认）",
+		name: "Full access",
+		description: "Allows changing files anywhere and running everything (asks for a second confirmation)",
 	},
 ];
 

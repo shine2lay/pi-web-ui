@@ -134,7 +134,7 @@ const DATA_DIR = resolve(cliFlag("--data-dir") ?? process.env.PI_WEB_DATA_DIR ??
 try {
 	mkdirSync(DATA_DIR, { recursive: true });
 } catch (err) {
-	console.warn(`[data] 无法创建数据目录 ${DATA_DIR}: ${(err as Error).message}`);
+	console.warn(`[data] cannot create the data folder ${DATA_DIR}: ${(err as Error).message}`);
 }
 // issue #295：工作区直接就是家目录时，SDK 初始化期的同步目录扫描会落在 $HOME 上
 // （iCloud 占位符/外部卷坏挂载 → scandir/open 内核挂起 → 事件循环假死，hello 后无
@@ -143,8 +143,8 @@ try {
 try {
 	if (resolve(CWD) === resolve(homedir())) {
 		console.warn(
-			`[ws] 工作区为用户主目录 ${CWD}：目录扫描可能因外部卷/同步盘挂载而长时间阻塞，` +
-				`建议用 \`pi-web-ui server install --cwd <项目目录>\` 重装迁移。`,
+			`[ws] the workspace is the home folder ${CWD}: folder scans may block for a long time on mounted external or sync drives; ` +
+				`reinstall with \`pi-web-ui server install --cwd <project dir>\` to move it.`,
 		);
 	}
 } catch {
@@ -360,7 +360,7 @@ if (AUTH_TOKEN) {
 			.status(401)
 			.send(
 				cookie
-					? "unauthorized: PI_WEB_TOKEN required — 服务端口令已变更？已清除旧 token cookie，请用当前 ?token= 重新进入"
+					? "unauthorized: PI_WEB_TOKEN required — has the server token changed? The old token cookie was cleared; open the page again with the current ?token="
 					: "unauthorized: PI_WEB_TOKEN required (?token=…)",
 			);
 	});
@@ -876,7 +876,7 @@ if (existsSync(webDist)) {
 		// dotfiles: allow — issue #223：nvm 等安装路径本身在隐藏目录下（如 ~/.nvm/…），同上需放行。
 		res.sendFile(join(webDist, "index.html"), { dotfiles: "allow" }, (err) => {
 			if (err && !res.headersSent) {
-				res.status(503).send("正在更新 pi-web-ui，请稍后刷新…");
+				res.status(503).send("Updating pi-web-ui, refresh in a moment…");
 			}
 		});
 	});
@@ -886,7 +886,8 @@ if (existsSync(webDist)) {
 	// without web/dist). Fail loudly with a repair hint instead of serving a
 	// UI-less 404 with no explanation.
 	console.error(
-		"✖ 更新后的安装不完整（缺少 web/dist/index.html）。\n" + "  请手动执行 npm i -g pi-web-ui@latest 修复后重新启动。",
+		"✖ The updated install is incomplete (web/dist/index.html is missing).\n" +
+			"  Run npm i -g pi-web-ui@latest by hand to fix it, then restart.",
 	);
 	process.exit(1);
 }
@@ -1656,7 +1657,7 @@ const scheduler = new SchedulerStore(DATA_DIR, {
 				}>;
 			};
 			if (typeof svc.chatFromScheduler !== "function" && typeof svc.wakeConversation !== "function") {
-				result = { ok: false, error: "当前引擎不支持定时任务（仅标准 pi 引擎）" };
+				result = { ok: false, error: "The current engine does not support scheduled tasks (standard pi engine only)" };
 			} else {
 				const runHeadless = (): Promise<{ ok: boolean; conversationId?: string; error?: string }> =>
 					svc.chatFromScheduler!({
@@ -1668,7 +1669,7 @@ const scheduler = new SchedulerStore(DATA_DIR, {
 					});
 				const target = String(task.conversationId ?? "").trim();
 				const taskFile = String((task as { sessionFile?: unknown }).sessionFile ?? "").trim();
-				const text = `[定时任务 ${task.name}] ${task.prompt}`;
+				const text = `[Scheduled task ${task.name}] ${task.prompt}`;
 				if (!target && !taskFile) {
 					// 面板建的任务：创建时就没绑对话，保持无头语义（不抢占用户视口）。
 					result = await runHeadless();
@@ -1699,7 +1700,7 @@ const scheduler = new SchedulerStore(DATA_DIR, {
 						if (r.ok) {
 							pushNoticeToAll(
 								"info",
-								`定时任务「${task.name}」的对话没有打开，已重新打开它并在那里继续。`,
+								`Scheduled task "${task.name}": its chat wasn't open, so it was reopened and woken up there.`,
 								`Scheduled task "${task.name}": its chat wasn't open, so it was reopened and woken up there.`,
 							);
 							w = { ok: true, conversationId: r.conversationId, sessionFile: r.sessionFile };
@@ -1722,7 +1723,7 @@ const scheduler = new SchedulerStore(DATA_DIR, {
 					} else if (typeof svc.wakeViewportInCwd === "function") {
 						// 活跃视口兜底（issue #231）：原句柄断开（切走释放/过户改名/重启），
 						// 只要同项目还有用户正看着的对话，报告落那里 —— 不静默吞结果。
-						const fallbackText = `[定时任务 ${task.name}｜原对话不在，已转到本窗口继续] ${task.prompt}`;
+						const fallbackText = `[Scheduled task ${task.name} | original chat gone, continued in this window] ${task.prompt}`;
 						let f: {
 							ok: boolean;
 							conversationId?: string;
@@ -1748,7 +1749,7 @@ const scheduler = new SchedulerStore(DATA_DIR, {
 							}
 							pushNoticeToAll(
 								"info",
-								`定时任务「${task.name}」原对话不在，已转到同项目的活跃对话继续（原绑定 ${target || "（未知）"}）。报告直接落在当前对话。`,
+								`Scheduled task "${task.name}" moved to the project's active conversation (was ${target || "unknown"}). The report lands in the current chat.`,
 								`Scheduled task "${task.name}" moved to the project's active conversation (was ${target || "unknown"}). The report lands in the current chat.`,
 							);
 							result = { ok: true, conversationId: f.conversationId };
@@ -1756,7 +1757,7 @@ const scheduler = new SchedulerStore(DATA_DIR, {
 							// 降级可见性（issue #231）：必须无头时明确广播去向，不静默。
 							pushNoticeToAll(
 								"warning",
-								`定时任务「${task.name}」原对话不在、同项目也无存活对话，已转后台执行（无头）。报告在后台任务面板的调度历史中查看。`,
+								`Scheduled task "${task.name}" found no live conversation and runs headless; see its report in the background-tasks panel history.`,
 								`Scheduled task "${task.name}" found no live conversation and runs headless; see its report in the background-tasks panel history.`,
 							);
 							result = await runHeadless();
@@ -1858,7 +1859,8 @@ service.onConversationChanged = () => pluginMgr.emitConversationChanged();
 pluginMgr.conversationProvider = () => service.readConversationForPlugins?.() ?? null;
 // 插件扩展点：无头调用 agent（微信通道等经 host.chat 投递外部消息，无浏览器也能跑）。
 pluginMgr.chatProvider = (pluginId, req) =>
-	service.chatFromPlugin?.(pluginId, req) ?? Promise.reject(new Error("当前引擎不支持无头调用（仅标准 pi 引擎）"));
+	service.chatFromPlugin?.(pluginId, req) ??
+	Promise.reject(new Error("The current engine does not support headless calls (standard pi engine only)"));
 // 插件扩展点：插件注册的 AI 工具（registerAgentTool）+ MCP 桥工具 → 会话创建时
 // 带上 + 变化时动态注入/移除已有会话。
 service.pluginToolsProvider = () => [...pluginMgr.getAgentTools(), ...mcpBridge.getTools()];
@@ -1950,7 +1952,10 @@ if ("schedulerStore" in service) {
 		try {
 			const cs = pickClient() as PluginWriteClient | undefined;
 			if (!cs || typeof cs.writeForPlugins !== "function")
-				return { ok: false, error: "当前引擎不支持对话投递（仅标准 pi 引擎）" };
+				return {
+					ok: false,
+					error: "The current engine does not support delivering to chats (standard pi engine only)",
+				};
 			return await cs.writeForPlugins(id, text);
 		} catch (err) {
 			return { ok: false, error: (err as Error).message };
@@ -1999,7 +2004,7 @@ if ("schedulerStore" in service) {
 				) => Promise<{ ok: boolean; text?: string; model?: string; error?: string }>;
 			};
 			if (typeof svc.completeForPlugins !== "function")
-				return { ok: false, error: "当前引擎不支持 LLM 直调（仅标准 pi 引擎）" };
+				return { ok: false, error: "The current engine does not support direct LLM calls (standard pi engine only)" };
 			return await svc.completeForPlugins(pluginId, (req ?? {}) as { prompt?: string });
 		} catch (err) {
 			return { ok: false, error: (err as Error).message };
@@ -2163,11 +2168,13 @@ wss.on("connection", (ws) => {
 			.setDomConsent(pluginId, granted)
 			.then((r) => {
 				const cs2 = clientId ? service.get(clientId) : undefined;
-				if (r.error) cs2?.emitNotice("warning", `DOM 授权失败：${r.error}`, `DOM consent failed: ${r.error}`);
+				if (r.error) cs2?.emitNotice("warning", `DOM consent failed: ${r.error}`, `DOM consent failed: ${r.error}`);
 				else if (r.changed)
 					cs2?.emitNotice(
 						"info",
-						granted ? `已授权插件「${pluginId}」完全 DOM 访问` : `已撤销插件「${pluginId}」完全 DOM 访问`,
+						granted
+							? `Granted full DOM access to plugin "${pluginId}"`
+							: `Revoked full DOM access from plugin "${pluginId}"`,
 						granted
 							? `Granted full DOM access to plugin "${pluginId}"`
 							: `Revoked full DOM access from plugin "${pluginId}"`,
@@ -2185,7 +2192,7 @@ wss.on("connection", (ws) => {
 		send({
 			type: "notice",
 			level: "error",
-			text: `这一步出错了（${where}）：${message}。服务器照常运行。`,
+			text: `That didn't work (${where}): ${message}. The server is still running.`,
 			textEn: `That didn't work (${where}): ${message}. The server is still running.`,
 		});
 	};
@@ -2358,7 +2365,7 @@ wss.on("connection", (ws) => {
 					send({
 						type: "notice",
 						level: "error",
-						text: "当前引擎不支持过户（take over），请用 pi 引擎",
+						text: "Takeover is not supported by the current engine; use the pi engine.",
 						textEn: "Takeover is not supported by the current engine; use the pi engine.",
 					});
 				}
@@ -2370,7 +2377,7 @@ wss.on("connection", (ws) => {
 					send({
 						type: "notice",
 						level: "error",
-						text: "当前引擎不支持跨页作答，请用 pi 引擎",
+						text: "Cross-page answering is not supported by the current engine; use the pi engine.",
 						textEn: "Cross-page answering is not supported by the current engine; use the pi engine.",
 					});
 				}
@@ -2407,7 +2414,7 @@ wss.on("connection", (ws) => {
 						reqId: msg.reqId,
 						kind: "commitmsg",
 						ok: false,
-						error: "当前引擎不支持 AI 生成提交信息（请用 pi 引擎）/ AI commit messages need the pi engine",
+						error: "AI commit messages need the pi engine",
 					});
 				}
 				break;
@@ -2492,7 +2499,7 @@ wss.on("connection", (ws) => {
 					send({
 						type: "notice",
 						level: "error",
-						text: "当前实例不是由 pi-web-ui 服务启动的（前台运行），无法自动重启；请在终端里重启，或先用 pi-web-ui server install 安装服务。",
+						text: "This instance runs in the foreground, not as a pi-web-ui service — nothing would bring it back. Restart it in its terminal, or install the service with `pi-web-ui server install`.",
 						textEn:
 							"This instance runs in the foreground, not as a pi-web-ui service — nothing would bring it back. Restart it in its terminal, or install the service with `pi-web-ui server install`.",
 					});
@@ -2501,7 +2508,7 @@ wss.on("connection", (ws) => {
 				send({
 					type: "notice",
 					level: "info",
-					text: "正在重启服务…页面会在服务恢复后自动重连，进行中的对话会自动恢复并继续。",
+					text: "Restarting the service… this page reconnects once it is back; running conversations resume automatically.",
 					textEn:
 						"Restarting the service… this page reconnects once it is back; running conversations resume automatically.",
 				});
@@ -2729,9 +2736,13 @@ wss.on("connection", (ws) => {
 			case "plugin_settings": {
 				const r = pluginMgr.savePluginSettings(msg.pluginId, msg.values ?? {}, () => cs?.getLang() ?? "en");
 				if (r.error) {
-					cs?.emitNotice("error", `插件设置保存失败：${r.error}`, `Failed to save plugin settings: ${r.error}`);
+					cs?.emitNotice(
+						"error",
+						`Failed to save plugin settings: ${r.error}`,
+						`Failed to save plugin settings: ${r.error}`,
+					);
 				} else {
-					cs?.emitNotice("info", "插件设置已保存", "Plugin settings saved");
+					cs?.emitNotice("info", "Plugin settings saved", "Plugin settings saved");
 				}
 				break;
 			}
@@ -2741,18 +2752,26 @@ wss.on("connection", (ws) => {
 			case "plugin_catalog_add": {
 				const r = pluginMgr.addCatalogEntry(msg.entry ?? {}, () => cs?.getLang() ?? "en");
 				if (r.error) {
-					cs?.emitNotice("error", `添加到插件列表失败：${r.error}`, `Failed to add to plugin list: ${r.error}`);
+					cs?.emitNotice(
+						"error",
+						`Failed to add to plugin list: ${r.error}`,
+						`Failed to add to plugin list: ${r.error}`,
+					);
 				} else {
-					cs?.emitNotice("info", "已添加到插件列表", "Added to the plugin list");
+					cs?.emitNotice("info", "Added to the plugin list", "Added to the plugin list");
 				}
 				break;
 			}
 			case "plugin_catalog_remove": {
 				const r = pluginMgr.removeCatalogEntry(msg.id, () => cs?.getLang() ?? "en");
 				if (r.error) {
-					cs?.emitNotice("error", `从插件列表移除失败：${r.error}`, `Failed to remove from plugin list: ${r.error}`);
+					cs?.emitNotice(
+						"error",
+						`Failed to remove from plugin list: ${r.error}`,
+						`Failed to remove from plugin list: ${r.error}`,
+					);
 				} else {
-					cs?.emitNotice("info", "已从插件列表移除", "Removed from the plugin list");
+					cs?.emitNotice("info", "Removed from the plugin list", "Removed from the plugin list");
 				}
 				break;
 			}
@@ -2810,23 +2829,18 @@ wss.on("connection", (ws) => {
 							action: jobAction,
 							pluginId,
 							phase: "log",
-							line: jobLang() === "zh" ? "等待确认安装授权…" : "Waiting for install confirmation…",
+							line: "Waiting for install confirmation…",
 						});
 					}
 					void confirmPluginInstallHelper([{ id: pluginId, source: String(msg.source ?? "") }])
 						.then((confirmed) => {
 							if (!confirmed) {
-								jobDone(
-									false,
-									jobLang() === "zh"
-										? "用户未确认安装（拒绝或 120 秒超时）"
-										: "Installation not confirmed (rejected or timed out after 120s)",
-								);
+								jobDone(false, "Installation not confirmed (rejected or timed out after 120s)");
 								return;
 							}
 							startPluginJob();
 						})
-						.catch(() => jobDone(false, jobLang() === "zh" ? "安装确认流程异常" : "Installation confirmation error"));
+						.catch(() => jobDone(false, "Installation confirmation error"));
 					break;
 				}
 				startPluginJob();
@@ -2839,26 +2853,19 @@ wss.on("connection", (ws) => {
 						done: async (ok, info) => {
 							if (ok) {
 								await reloadPluginsAndPush(jobLang);
-								const isZh = jobLang() === "zh";
 								const actionLabel =
-									jobAction === "uninstall"
-										? isZh
-											? "卸载"
-											: "uninstalled"
-										: jobAction === "update"
-											? isZh
-												? "更新"
-												: "updated"
-											: isZh
-												? "安装"
-												: "installed";
+									jobAction === "uninstall" ? "uninstalled" : jobAction === "update" ? "updated" : "installed";
 								cs?.emitNotice(
 									"info",
-									`插件「${pluginId}」${actionLabel}完成`,
+									`Plugin "${pluginId}" ${actionLabel} successfully`,
 									`Plugin "${pluginId}" ${actionLabel} successfully`,
 								);
 							} else if (info.error) {
-								cs?.emitNotice("error", `插件操作失败：${info.error}`, `Plugin operation failed: ${info.error}`);
+								cs?.emitNotice(
+									"error",
+									`Plugin operation failed: ${info.error}`,
+									`Plugin operation failed: ${info.error}`,
+								);
 							}
 						},
 					});
@@ -2983,7 +2990,7 @@ wss.on("connection", (ws) => {
 					typeof msg.pluginId === "string" ? msg.pluginId : undefined,
 					typeof msg.path === "string" ? msg.path : undefined,
 				);
-				cs?.emitNotice("info", `已撤销 ${removed} 条插件目录授权`, `Revoked ${removed} plugin path grant(s)`);
+				cs?.emitNotice("info", `Revoked ${removed} plugin path grant(s)`, `Revoked ${removed} plugin path grant(s)`);
 				pushPluginGrants();
 				break;
 			}
@@ -2999,7 +3006,7 @@ wss.on("connection", (ws) => {
 							}
 						: undefined,
 				);
-				cs?.emitNotice("info", `已撤销 ${removed} 条能力授权`, `Revoked ${removed} permission grant(s)`);
+				cs?.emitNotice("info", `Revoked ${removed} permission grant(s)`, `Revoked ${removed} permission grant(s)`);
 				pushPluginPermissions();
 				break;
 			}
@@ -3026,7 +3033,7 @@ wss.on("connection", (ws) => {
 					if (r.installRefused) {
 						cs?.emitNotice(
 							"warning",
-							"目录已同步，但安装未获用户确认（拒绝或超时），未安装任何插件",
+							"Catalog synced, but installation was not confirmed (denied or timed out) — nothing was installed",
 							"Catalog synced, but installation was not confirmed (denied or timed out) — nothing was installed",
 						);
 					}
@@ -3071,7 +3078,7 @@ wss.on("connection", (ws) => {
 						send({
 							type: "notice",
 							level: "error",
-							text: "当前引擎不支持跨页作答，请用 pi 引擎",
+							text: "Cross-page answering is not supported by the current engine; use the pi engine.",
 							textEn: "Cross-page answering is not supported by the current engine; use the pi engine.",
 						});
 					}
@@ -3131,7 +3138,7 @@ wss.on("connection", (ws) => {
 					send({
 						type: "notice",
 						level: "error",
-						text: `读取定时任务失败：${(err as Error).message}`,
+						text: `Failed to list scheduled tasks: ${(err as Error).message}`,
 						textEn: `Failed to list scheduled tasks: ${(err as Error).message}`,
 					});
 				}
@@ -3143,7 +3150,7 @@ wss.on("connection", (ws) => {
 					send({
 						type: "notice",
 						level: "error",
-						text: `保存定时任务失败：${(err as Error).message}`,
+						text: `Failed to save scheduled task: ${(err as Error).message}`,
 						textEn: `Failed to save scheduled task: ${(err as Error).message}`,
 					});
 				}
@@ -3153,7 +3160,7 @@ wss.on("connection", (ws) => {
 					send({
 						type: "notice",
 						level: "warning",
-						text: `定时任务不存在：${msg.id}`,
+						text: `No such scheduled task: ${msg.id}`,
 						textEn: `No such scheduled task: ${msg.id}`,
 					});
 				}
@@ -3164,7 +3171,7 @@ wss.on("connection", (ws) => {
 						send({
 							type: "notice",
 							level: "warning",
-							text: `定时任务手动触发失败：${r.error ?? "未知错误"}`,
+							text: `Manual scheduled-task run failed: ${r.error ?? "unknown error"}`,
 							textEn: `Manual scheduled-task run failed: ${r.error ?? "unknown error"}`,
 						});
 				});
@@ -3174,7 +3181,7 @@ wss.on("connection", (ws) => {
 					send({
 						type: "notice",
 						level: "warning",
-						text: `定时任务不存在：${msg.id}`,
+						text: `No such scheduled task: ${msg.id}`,
 						textEn: `No such scheduled task: ${msg.id}`,
 					});
 				}
@@ -3242,7 +3249,7 @@ wss.on("connection", (ws) => {
 				send({
 					type: "notice",
 					level: "warning",
-					text: "会话初始化耗时较长（可能在扫描工作区目录），请稍候…",
+					text: "Session init is taking a while (possibly scanning the workspace) — hang on…",
 					textEn: "Session init is taking a while (possibly scanning the workspace) — hang on…",
 				});
 			}, ATTACH_SLOW_NOTICE_MS);
@@ -3347,7 +3354,7 @@ wss.on("connection", (ws) => {
 					send({
 						type: "notice",
 						level: "error",
-						text: `会话初始化失败：${(err as Error).message}`,
+						text: `Failed to initialize session: ${(err as Error).message}`,
 						textEn: `Failed to initialize session: ${(err as Error).message}`,
 					});
 				});
@@ -3454,17 +3461,17 @@ if (!bootCatalogDisabled) {
 		},
 	).then((r) => {
 		if (!r.ok) {
-			console.warn(`[catalog] 插件目录预同步失败（不阻断启动）: ${r.error}`);
+			console.warn(`[catalog] plugin catalog pre-sync failed (startup continues): ${r.error}`);
 			return;
 		}
 		if (autoInstall) {
 			const bad = (r.installed ?? []).filter((i) => !i.ok);
 			console.log(
-				`[catalog] 插件目录预同步完成：安装 ${(r.installed ?? []).length - bad.length} 成功 / ${bad.length} 失败` +
-					(bad.length ? `：${bad.map((i) => `${i.id}(${i.error ?? "?"})`).join("；")}` : ""),
+				`[catalog] plugin catalog pre-sync done: installed ${(r.installed ?? []).length - bad.length} ok / ${bad.length} failed` +
+					(bad.length ? `: ${bad.map((i) => `${i.id}(${i.error ?? "?"})`).join("; ")}` : ""),
 			);
 		} else {
-			console.log(`[catalog] 插件市场列表预同步完成（共 ${(r.entries ?? []).length} 个条目，按需安装）`);
+			console.log(`[catalog] plugin market list pre-synced (${(r.entries ?? []).length} entries, installed on demand)`);
 		}
 	});
 }
@@ -3491,7 +3498,7 @@ let shuttingDown = false;
  */
 async function shutdown(signal: "SIGINT" | "SIGTERM" = "SIGINT"): Promise<void> {
 	if (shuttingDown) {
-		console.log("\n再次收到中断信号，强制退出…");
+		console.log("\nGot a second interrupt, forcing exit…");
 		process.exit(signal === "SIGTERM" ? 143 : 130);
 	}
 	shuttingDown = true;
@@ -3537,7 +3544,7 @@ async function shutdown(signal: "SIGINT" | "SIGTERM" = "SIGINT"): Promise<void> 
 		}
 	}
 	const forceExitTimer = setTimeout(() => {
-		console.error("shutdown 超时仍未完成，强制退出…");
+		console.error("shutdown timed out, forcing exit…");
 		process.exit(1);
 	}, SHUTDOWN_FORCE_EXIT_MS);
 	forceExitTimer.unref();
@@ -3568,7 +3575,7 @@ async function shutdown(signal: "SIGINT" | "SIGTERM" = "SIGINT"): Promise<void> 
 		httpServer.close();
 	} catch (err) {
 		code = 1;
-		console.error("shutdown 释放资源时出错:", err);
+		console.error("shutdown: error while releasing resources:", err);
 	} finally {
 		clearTimeout(forceExitTimer);
 		disarmKiller?.();

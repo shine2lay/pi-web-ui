@@ -690,7 +690,7 @@ export class SettingsService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: "预设名称不能为空",
+				text: "Preset name cannot be empty",
 				textEn: "Preset name cannot be empty",
 			});
 			return;
@@ -731,7 +731,7 @@ export class SettingsService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `预设不存在：${name}`,
+				text: `Preset does not exist: ${name}`,
 				textEn: `Preset does not exist: ${name}`,
 			});
 			return;
@@ -834,7 +834,7 @@ export class SettingsService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `子代理模板保存失败：${err}`,
+				text: `Failed to save subagent template: ${err}`,
 				textEn: `Failed to save subagent template: ${err}`,
 			});
 			return;
@@ -844,7 +844,7 @@ export class SettingsService {
 		this.host.emit({
 			type: "notice",
 			level: "info",
-			text: `子代理模板已保存：${n}`,
+			text: `Subagent template saved: ${n}`,
 			textEn: `Subagent template saved: ${n}`,
 		});
 	}
@@ -856,7 +856,7 @@ export class SettingsService {
 		this.host.emit({
 			type: "notice",
 			level: "info",
-			text: `子代理模板已删除：${name}`,
+			text: `Subagent template deleted: ${name}`,
 			textEn: `Subagent template deleted: ${name}`,
 		});
 	}
@@ -869,7 +869,7 @@ export class SettingsService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `审批规则保存失败：${err}`,
+				text: `Failed to save approval rule: ${err}`,
 				textEn: `Failed to save approval rule: ${err}`,
 			});
 			return;
@@ -878,7 +878,7 @@ export class SettingsService {
 		this.host.emit({
 			type: "notice",
 			level: "info",
-			text: `审批规则已保存：${rule.label}`,
+			text: `Approval rule saved: ${rule.labelEn || rule.label}`,
 			textEn: `Approval rule saved: ${rule.labelEn || rule.label}`,
 		});
 	}
@@ -891,7 +891,7 @@ export class SettingsService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `审批规则列表保存失败：${err}`,
+				text: `Failed to save approval rules: ${err}`,
 				textEn: `Failed to save approval rules: ${err}`,
 			});
 			return;
@@ -900,7 +900,7 @@ export class SettingsService {
 		this.host.emit({
 			type: "notice",
 			level: "info",
-			text: "审批规则列表已更新",
+			text: "Approval rules updated",
 			textEn: "Approval rules updated",
 		});
 	}
@@ -913,7 +913,7 @@ export class SettingsService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: "审批规则删除失败（内置规则不可删除）",
+				text: "Failed to delete approval rule (built-in rules cannot be deleted)",
 				textEn: "Failed to delete approval rule (built-in rules cannot be deleted)",
 			});
 			return;
@@ -922,7 +922,7 @@ export class SettingsService {
 		this.host.emit({
 			type: "notice",
 			level: "info",
-			text: "审批规则已删除",
+			text: "Approval rule deleted",
 			textEn: "Approval rule deleted",
 		});
 	}
@@ -935,7 +935,7 @@ export class SettingsService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: "恢复默认失败：未找到对应内置规则",
+				text: "Failed to reset: built-in rule not found",
 				textEn: "Failed to reset: built-in rule not found",
 			});
 			return;
@@ -944,7 +944,7 @@ export class SettingsService {
 		this.host.emit({
 			type: "notice",
 			level: "info",
-			text: "内置规则已恢复默认",
+			text: "Built-in rule reset to default",
 			textEn: "Built-in rule reset to default",
 		});
 	}
@@ -961,7 +961,7 @@ export class SettingsService {
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: "当前回复进行中，设置将在回复结束后自动应用",
+				text: "A reply is in progress; settings will apply when it finishes",
 				textEn: "A reply is in progress; settings will apply when it finishes",
 			});
 			return;
@@ -975,13 +975,13 @@ export class SettingsService {
 			await this.host.reloadSession();
 			this.push();
 			this.host.flushSnapshot();
-			this.host.emit({ type: "notice", level: "info", text: "设置已应用", textEn: "Settings applied" });
+			this.host.emit({ type: "notice", level: "info", text: "Settings applied", textEn: "Settings applied" });
 		} catch (err) {
 			console.error(`[settings] apply reload failed (client ${this.host.clientId}):`, err);
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `设置应用失败：${(err as Error).message}`,
+				text: `Failed to apply settings: ${(err as Error).message}`,
 				textEn: `Failed to apply settings: ${(err as Error).message}`,
 			});
 		}

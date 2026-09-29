@@ -120,36 +120,37 @@ function randomTaskId(): string {
 export function normalizeSchedulerInput(input: SchedulerTaskInput, now = Date.now()): SchedulerTask {
 	const idRaw = String(input.id ?? "").trim();
 	const id = idRaw || randomTaskId();
-	if (!SCHEDULER_ID_RE.test(id)) throw new Error("任务 id 非法（只收字母/数字/下划线/连字符，≤64 字）");
+	if (!SCHEDULER_ID_RE.test(id)) throw new Error("Invalid task id (letters/digits/underscore/hyphen only, ≤64 chars)");
 	const name = String(input.name ?? "")
 		.trim()
 		.slice(0, 80);
-	if (!name) throw new Error("任务名称不能为空");
+	if (!name) throw new Error("Task name cannot be empty");
 	const description = String(input.description ?? "")
 		.trim()
 		.slice(0, 500);
 	const cwd = String(input.cwd ?? "").trim();
-	if (!cwd) throw new Error("执行目标项目（cwd）不能为空");
+	if (!cwd) throw new Error("Target project (cwd) cannot be empty");
 	const kind: SchedulerKind = input.kind === "interval" ? "interval" : "cron";
 	let spec: string;
 	if (kind === "cron") {
 		spec = String(input.spec ?? "")
 			.trim()
 			.replace(/\s+/g, " ");
-		if (!parseCronSpec(spec)) throw new Error("cron 表达式非法（要 5 字段：分 时 日 月 周，如 0 9 * * *）");
+		if (!parseCronSpec(spec))
+			throw new Error("Invalid cron expression (needs 5 fields: minute hour day month weekday, e.g. 0 9 * * *)");
 	} else {
 		const ms = Math.floor(Number(input.spec));
-		if (!Number.isFinite(ms) || ms <= 0) throw new Error("间隔毫秒数非法");
+		if (!Number.isFinite(ms) || ms <= 0) throw new Error("Invalid interval in ms");
 		if (ms < SCHEDULER_MIN_INTERVAL_MS)
-			throw new Error(`间隔太短（最短 ${SCHEDULER_MIN_INTERVAL_MS / 1000}s，防 token 烧穿）`);
-		if (ms > SCHEDULER_MAX_INTERVAL_MS) throw new Error("间隔太长（最长 30 天）");
+			throw new Error(`Interval too short (minimum ${SCHEDULER_MIN_INTERVAL_MS / 1000}s, to avoid burning tokens)`);
+		if (ms > SCHEDULER_MAX_INTERVAL_MS) throw new Error("Interval too long (maximum 30 days)");
 		spec = String(ms);
 	}
 	const prompt = String(input.prompt ?? "").trim();
-	if (!prompt) throw new Error("触发指令（prompt）不能为空");
-	if (prompt.length > 8000) throw new Error("触发指令超长（>8000 字），请裁剪后重试");
+	if (!prompt) throw new Error("Prompt cannot be empty");
+	if (prompt.length > 8000) throw new Error("Prompt too long (>8000 chars), trim it and retry");
 	const model = String(input.model ?? "").trim();
-	if (model && !model.includes("/")) throw new Error("模型格式非法（应为 provider/id）");
+	if (model && !model.includes("/")) throw new Error("Invalid model format (should be provider/id)");
 	const thinkingLevel = String(input.thinkingLevel ?? "").trim();
 	const catchUp: SchedulerCatchUp = input.catchUp === "once" ? "once" : "skip";
 	const conversationId = String(input.conversationId ?? "")
@@ -199,17 +200,17 @@ export function computeNextFire(task: Pick<SchedulerTask, "kind" | "spec">, from
 /** 间隔任务的人类可读描述（面板显示用）。纯函数。 */
 export function describeIntervalMs(ms: number): string {
 	const s = Math.round(ms / 1000);
-	if (s < 60) return `每 ${s} 秒`;
+	if (s < 60) return `every ${s}s`;
 	if (s < 3600) {
 		const m = Math.floor(s / 60);
-		return s % 60 === 0 ? `每 ${m} 分钟` : `每 ${m} 分 ${s % 60} 秒`;
+		return s % 60 === 0 ? `every ${m} min` : `every ${m} min ${s % 60}s`;
 	}
 	if (s < 86400) {
 		const h = Math.floor(s / 3600);
-		return s % 3600 === 0 ? `每 ${h} 小时` : `每 ${h} 小时 ${Math.floor((s % 3600) / 60)} 分`;
+		return s % 3600 === 0 ? `every ${h} h` : `every ${h} h ${Math.floor((s % 3600) / 60)} min`;
 	}
 	const d = Math.floor(s / 86400);
-	return `每 ${d} 天`;
+	return `every ${d} d`;
 }
 
 interface StoredTask extends SchedulerTask {
@@ -501,17 +502,17 @@ export class SchedulerStore {
 	/** 手动立即执行一次（面板 Run Now；调试用，不扰动下次触发）。 */
 	async runNow(id: string): Promise<SchedulerExecutorResult> {
 		const task = this.tasks.get(id);
-		if (!task) return { ok: false, error: "任务不存在" };
-		if (this.running.has(id)) return { ok: false, error: "任务正在执行中" };
+		if (!task) return { ok: false, error: "Task not found" };
+		if (this.running.has(id)) return { ok: false, error: "Task is already running" };
 		return this.fire(id, true);
 	}
 
 	private async fire(id: string, manual: boolean): Promise<SchedulerExecutorResult> {
 		const task = this.tasks.get(id);
-		if (!task) return { ok: false, error: "任务不存在" };
+		if (!task) return { ok: false, error: "Task not found" };
 		const executor = this.opts.executor;
 		if (!executor) {
-			const err = "调度器执行器未接入（当前引擎不支持定时任务）";
+			const err = "Scheduler runner not wired (the current engine does not support scheduled tasks)";
 			this.recordRun(id, { at: Date.now(), ok: false, durationMs: 0, error: err, ...(manual ? { manual } : {}) });
 			return { ok: false, error: err };
 		}
@@ -544,13 +545,13 @@ export class SchedulerStore {
 		if (result.ok) {
 			this.opts.notify?.(
 				"info",
-				`定时任务「${task.name}」${manual ? "手动" : "定时"}触发完成（${(durationMs / 1000).toFixed(0)}s）——${label}`,
+				`Scheduled task "${task.name}" ${manual ? "manually" : "automatically"} finished (${(durationMs / 1000).toFixed(0)}s) — ${label}`,
 				`Scheduled task "${task.name}" ${manual ? "manually" : "automatically"} finished (${Math.round(durationMs / 1000)}s) — ${label}`,
 			);
 		} else {
 			this.opts.notify?.(
 				"warning",
-				`定时任务「${task.name}」${manual ? "手动" : "定时"}触发失败：${result.error ?? "未知错误"}`,
+				`Scheduled task "${task.name}" ${manual ? "manual" : "automatic"} run failed: ${result.error ?? "unknown error"}`,
 				`Scheduled task "${task.name}" ${manual ? "manual" : "automatic"} run failed: ${result.error ?? "unknown error"}`,
 			);
 		}

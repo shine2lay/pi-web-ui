@@ -38,7 +38,7 @@ import type {
 	PluginModelInfo,
 	PluginStats,
 } from "./protocol.js";
-import { pick, type ServerLang } from "./i18n.js";
+import { type ServerLang } from "./i18n.js";
 import { PluginStorage, PluginSecrets, ensurePluginDeps, WorkspaceFS, withFileRmwLock } from "./plugin-facilities.js";
 import {
 	parseCronSpec,
@@ -783,12 +783,14 @@ export interface PluginBgTask {
 const MESSAGE_TIMEOUT_MS = 30_000;
 
 /** host.fs 被能力门控拒绝时的共享 rejected promise（类型对齐用）。 */
-const NO_FS_PROMISE = Promise.reject(new Error('插件未声明能力 "fs"（manifest.permissions）——请求被拒'));
+const NO_FS_PROMISE = Promise.reject(
+	new Error('Plugin did not declare the "fs" capability (manifest.permissions) — request denied'),
+);
 NO_FS_PROMISE.catch(() => {}); // 避免未处理 rejection 噪音；调用方 await 时拿到错误
 
 /** 只读插件（仅声明 fs:read）撞到写操作时的共享 rejected promise：提示缺 fs/fs:write。 */
 const NO_FS_WRITE_PROMISE = Promise.reject(
-	new Error('缺少写能力：需要 "fs"/"fs:write"（manifest.permissions）——请求被拒'),
+	new Error('Missing write capability: needs "fs"/"fs:write" (manifest.permissions) — request denied'),
 );
 NO_FS_WRITE_PROMISE.catch(() => {}); // 同上：调用方 await 时拿到错误
 
@@ -1476,15 +1478,13 @@ function runtimeSettingsValues(
 function cleanNonSecretSettingsField(
 	f: UiPluginSettingField,
 	v: unknown,
-	lang: ServerLang,
+	_lang: ServerLang,
 ): { error?: string; value?: unknown } {
 	if (f.type === "number") {
 		const n = v === undefined ? Number(f.default ?? 0) : Number(v);
 		if (!Number.isFinite(n) || (f.min !== undefined && n < f.min) || (f.max !== undefined && n > f.max)) {
 			return {
-				error: pick(lang, `${f.label} 超出范围`, `${f.label} out of range`, "plugins.settings.out.of.range", {
-					"f.label": f.label,
-				}),
+				error: `${f.label} out of range`,
 			};
 		}
 		return { value: n };
@@ -1499,18 +1499,14 @@ function cleanNonSecretSettingsField(
 		if (f.optionsFrom) {
 			if (s.length > 200) {
 				return {
-					error: pick(lang, `${f.label} 过长`, `${f.label} too long`, "plugins.settings.too.long", {
-						"f.label": f.label,
-					}),
+					error: `${f.label} too long`,
 				};
 			}
 			return { value: v === undefined ? (f.default ?? "") : s };
 		}
 		if (v !== undefined && !f.options?.includes(s))
 			return {
-				error: pick(lang, `${f.label} 值非法`, `Invalid value for ${f.label}`, "plugins.settings.invalid.value", {
-					"f.label": f.label,
-				}),
+				error: `Invalid value for ${f.label}`,
 			};
 		return { value: v === undefined ? f.default : s };
 	}
@@ -1544,9 +1540,7 @@ function saveSettingsValues(
 				const s = String(v);
 				if (s.length > 4096) {
 					return {
-						error: pick(l, `${f.label} 过长`, `${f.label} too long`, "plugins.settings.too.long", {
-							"f.label": f.label,
-						}),
+						error: `${f.label} too long`,
 						clean,
 					};
 				}
@@ -1750,19 +1744,13 @@ export class PluginManager {
 		/** 错误文案语言（默认英文）；调用方可传 () => getLang() 实现跟随。 */
 		lang?: () => ServerLang,
 	): { error?: string } {
-		const l = lang?.() ?? "en";
-		if (!ID_RE.test(pluginId)) return { error: pick(l, "非法的插件 id", "Invalid plugin id", "plugins.id.invalid") };
+		if (!ID_RE.test(pluginId)) return { error: "Invalid plugin id" };
 		const dir = join(this.pluginsDir, pluginId);
 		const info = this.loaded.get(pluginId)?.info;
 		const schema = info?.settingsSchema ?? [];
 		if (!schema.length)
 			return {
-				error: pick(
-					l,
-					"该插件没有声明式设置（manifest 未声明 settings）",
-					"This plugin has no declarative settings (manifest declares no settings)",
-					"plugins.settings.no.declarative",
-				),
+				error: "This plugin has no declarative settings (manifest declares no settings)",
 			};
 		const { error, clean } = saveSettingsValues(dir, schema, values, lang, new PluginSecrets(this.dataDir, dir));
 		if (error) return { error };
@@ -1823,18 +1811,12 @@ export class PluginManager {
 	}
 
 	/** 移除一条用户自定义条目（builtin 不可经此删除）；返回错误信息或 null。 */
-	removeCatalogEntry(id: string, lang?: () => ServerLang): { error?: string } {
-		const l = lang?.() ?? "en";
+	removeCatalogEntry(id: string, _lang?: () => ServerLang): { error?: string } {
 		try {
 			const ok = removeCustomEntry(this.customCatalogPath, id);
 			if (!ok)
 				return {
-					error: pick(
-						l,
-						"未找到该条目，或它是内置条目（不可移除）",
-						"Entry not found, or it is a built-in entry (cannot be removed)",
-						"plugins.catalog.entry.cannot.remove",
-					),
+					error: "Entry not found, or it is a built-in entry (cannot be removed)",
 				};
 			this.catalogEpoch += 1;
 			void this.pushCatalog();
@@ -1892,7 +1874,9 @@ export class PluginManager {
 					// 超时护栏：响应由 handler 自己 sendTo/broadcast 发出，超时只是记
 					// 日志不再等待——绝不能让单条消息把客户端 pending 管线无限拖死。
 					const timer = setTimeout(() => {
-						console.error(`[plugin:${pluginId}] message handler 超时（>${MESSAGE_TIMEOUT_MS}ms），已不再等待`);
+						console.error(
+							`[plugin:${pluginId}] message handler timed out (>${MESSAGE_TIMEOUT_MS}ms), no longer waiting`,
+						);
 					}, MESSAGE_TIMEOUT_MS);
 					void ret.finally(() => clearTimeout(timer));
 				}
@@ -1914,10 +1898,10 @@ export class PluginManager {
 				/* 无 marker = 首次安装 */
 			}
 			if (prev === key) return; // 同版本能力清单，不再打扰
-			const list = perms.length ? perms.join(", ") : "无";
+			const list = perms.length ? perms.join(", ") : "none";
 			this.notifyAll(
 				perms.length ? "warning" : "info",
-				`插件「${info.name}」已激活（${prev ? "能力清单变更" : "首次安装"}；声明能力：${list}）——请确认来源可信`,
+				`Plugin "${info.name}" activated (${prev ? "capability list changed" : "first install"}; declared: ${list}) — verify the source is trusted`,
 				`Plugin "${info.name}" activated (${prev ? "capability list changed" : "first install"}; declared: ${list}) — verify the source is trusted`,
 			);
 			writeFileSync(markerFile, JSON.stringify({ v: 1, key, perms }), "utf8");
@@ -2032,8 +2016,9 @@ export class PluginManager {
 	 *  或 id 非法 → { changed: false, error }。 */
 	async setDomConsent(pluginId: string, granted: boolean): Promise<{ changed: boolean; error?: string }> {
 		const id = String(pluginId ?? "").trim();
-		if (!ID_RE.test(id)) return { changed: false, error: "非法插件 id" };
-		if (!this.domWants.get(id)) return { changed: false, error: "该插件未声明 dom 能力，无需授权" };
+		if (!ID_RE.test(id)) return { changed: false, error: "Invalid plugin id" };
+		if (!this.domWants.get(id))
+			return { changed: false, error: "This plugin does not declare the dom capability; no grant needed" };
 		const changed = this.domConsentStore.set(id, granted);
 		if (!changed) return { changed: false };
 		// 授权前后 bundle 的 403/200 状态翻转：epoch+1 让浏览器丢掉旧模块缓存重拉。
@@ -2281,7 +2266,9 @@ export class PluginManager {
 		const rec: GateRecord | undefined = this.activatingGates.get(pluginId) ?? this.loaded.get(pluginId);
 		const fam = String(family ?? "");
 		const deny = (what: string): boolean => {
-			console.error(`[plugin:${pluginId}] 缺少能力声明 "${what}"（manifest.permissions）——请求被拒`);
+			console.error(
+				`[plugin:${pluginId}] missing capability declaration "${what}" (manifest.permissions) — request denied`,
+			);
 			this.pushRuntimeDiag(pluginId, `missing capability "${what}" (manifest.permissions) — request denied`);
 			return false;
 		};
@@ -2293,7 +2280,7 @@ export class PluginManager {
 				if (!rec.legacyWarned) {
 					rec.legacyWarned = true;
 					console.warn(
-						`[plugin:${pluginId}] manifest 未声明 permissions（旧格式全权模式）——已放行 "${what}"；apiVersion 2 起将默认拒绝，请尽快声明`,
+						`[plugin:${pluginId}] manifest declares no permissions (legacy full-access mode) — allowed "${what}"; from apiVersion 2 this is denied by default, declare permissions soon`,
 					);
 				}
 				return true;
@@ -2437,13 +2424,15 @@ export class PluginManager {
 	 *  前者的工具，必须在这里挡下。 */
 	private registerAgentTool(pluginId: string, tool: PluginAgentTool): () => void {
 		if (!tool || typeof tool.execute !== "function" || !tool.name || !tool.description) {
-			console.error(`[plugin:${pluginId}] registerAgentTool: 缺少 name/description/execute，忽略`);
+			console.error(`[plugin:${pluginId}] registerAgentTool: missing name/description/execute, ignored`);
 			this.pushRuntimeDiag(pluginId, "registerAgentTool: missing name/description/execute, ignored");
 			return () => {};
 		}
 		for (const [pid, other] of this.agentTools) {
 			if (pid !== pluginId && other.has(tool.name)) {
-				console.error(`[plugin:${pluginId}] AI 工具 "${tool.name}" 已被插件 ${pid} 注册，忽略重复`);
+				console.error(
+					`[plugin:${pluginId}] AI tool "${tool.name}" is already registered by plugin ${pid}, duplicate ignored`,
+				);
 				this.pushRuntimeDiag(pluginId, `agent tool "${tool.name}": already registered by plugin ${pid}, ignored`);
 				return () => {};
 			}
@@ -2451,7 +2440,7 @@ export class PluginManager {
 		let table = this.agentTools.get(pluginId);
 		if (!table) this.agentTools.set(pluginId, (table = new Map()));
 		if (table.has(tool.name)) {
-			console.error(`[plugin:${pluginId}] AI 工具 "${tool.name}" 重复注册，忽略`);
+			console.error(`[plugin:${pluginId}] AI tool "${tool.name}" registered twice, ignored`);
 			this.pushRuntimeDiag(pluginId, `agent tool "${tool.name}": duplicate registration, ignored`);
 			return () => {};
 		}
@@ -2479,7 +2468,7 @@ export class PluginManager {
 		const name = String(cmd?.name ?? "").replace(/^\/+/, ""); // 容忍误带的前导 /
 		if (!/^[a-zA-Z][a-zA-Z0-9:_-]*$/.test(name)) {
 			console.error(
-				`[plugin:${pluginId}] registerCommand: 非法名称「${cmd?.name}」（需字母开头，允许字母数字:_-），忽略`,
+				`[plugin:${pluginId}] registerCommand: invalid name "${cmd?.name}" (must start with a letter; letters, digits and :_- allowed), ignored`,
 			);
 			this.pushRuntimeDiag(
 				pluginId,
@@ -2488,13 +2477,15 @@ export class PluginManager {
 			return () => {};
 		}
 		if (typeof cmd?.run !== "function") {
-			console.error(`[plugin:${pluginId}] registerCommand: ${name} 缺少 run，忽略`);
+			console.error(`[plugin:${pluginId}] registerCommand: ${name} has no run, ignored`);
 			this.pushRuntimeDiag(pluginId, `command "/${name}": missing run, ignored`);
 			return () => {};
 		}
 		for (const [pid, table] of this.pluginCommands) {
 			if (table.has(name) && pid !== pluginId) {
-				console.error(`[plugin:${pluginId}] 命令 /${name} 已被插件 ${pid} 注册，忽略重复`);
+				console.error(
+					`[plugin:${pluginId}] command /${name} is already registered by plugin ${pid}, duplicate ignored`,
+				);
 				this.pushRuntimeDiag(pluginId, `command "/${name}": already registered by plugin ${pid}, ignored`);
 				return () => {};
 			}
@@ -2502,7 +2493,7 @@ export class PluginManager {
 		let table = this.pluginCommands.get(pluginId);
 		if (!table) this.pluginCommands.set(pluginId, (table = new Map()));
 		if (table.has(name)) {
-			console.error(`[plugin:${pluginId}] 命令 /${name} 重复注册，忽略`);
+			console.error(`[plugin:${pluginId}] command /${name} registered twice, ignored`);
 			this.pushRuntimeDiag(pluginId, `command "/${name}": duplicate registration, ignored`);
 			return () => {};
 		}
@@ -2654,7 +2645,6 @@ export class PluginManager {
 	 * 返回给浏览器的目录（含激活失败的条目，前端显示为不可用）。
 	 */
 	async ensureLoaded(lang?: () => ServerLang): Promise<UiPluginInfo[]> {
-		const l = lang?.() ?? "en";
 		const found = await this.scan(lang);
 		const byId = new Map(found.map((f) => [f.id, f]));
 		const scannedIds = new Set(byId.keys());
@@ -2667,13 +2657,7 @@ export class PluginManager {
 		for (const cycId of cyclic) {
 			const info = byId.get(cycId)!;
 			if (this.loaded.has(info.id) || this.attempted.has(info.id)) continue;
-			const msg = pick(
-				l,
-				`插件 requires 存在循环依赖（${cycId}）—— 请先解环再激活`,
-				`Plugin has cyclic requires (${cycId}) — break the cycle first`,
-				"plugins.requires.cycle",
-				{ id: cycId },
-			);
+			const msg = `Plugin has cyclic requires (${cycId}) — break the cycle first`;
 			this.setFrozenRefusal(info, msg, `cyclic requires (${cycId})`);
 		}
 		for (const id of order) {
@@ -2802,8 +2786,7 @@ export class PluginManager {
 	}
 
 	/** 读 manifest 清单；坏目录（无 manifest/id 非法）直接跳过。 */
-	private async scan(lang?: () => ServerLang): Promise<UiPluginInfo[]> {
-		const l = lang?.() ?? "en";
+	private async scan(_lang?: () => ServerLang): Promise<UiPluginInfo[]> {
 		let names: string[];
 		try {
 			names = await readdir(this.pluginsDir);
@@ -2851,13 +2834,7 @@ export class PluginManager {
 				if (mv.errors.length > 0) {
 					for (const e of mv.errors) uiDiags.push(formatManifestIssue(e));
 					const first = mv.errors[0]!;
-					const msg = pick(
-						l,
-						`manifest 校验失败：${first.message}（${name}/）—— 修复后点“重新扫描”`,
-						`manifest validation failed: ${first.messageEn} (${name}/) — fix it, then hit Rescan`,
-						"plugins.manifest.invalid",
-						{ name, path: first.path },
-					);
+					const msg = `manifest validation failed: ${first.messageEn} (${name}/) — fix it, then hit Rescan`;
 					console.error(`[plugin:${name}] ${msg}`);
 					this.manifestDiags.set(name, uiDiags);
 					const refused = [...uiDiags, ...(this.runtimeDiags.get(name) ?? [])].slice(0, 100);
@@ -2934,7 +2911,9 @@ export class PluginManager {
 								...(this.domConsentStore.has(name)
 									? {}
 									: {
-											error: this.loaded.get(name)?.info.error ?? "需授权完全 DOM 访问后加载（设置 → 界面插件 → 授权）",
+											error:
+												this.loaded.get(name)?.info.error ??
+												"Loads after full DOM access is granted (Settings → UI plugins → Grant)",
 										}),
 							}
 						: {}),
@@ -3041,13 +3020,7 @@ export class PluginManager {
 			} catch {
 				// 无 manifest.json / JSON 解析失败 —— 占位行展示（坏插件不跳过，
 				// 设置面板清单标红 + 给原因；ensureLoaded 照例跳过激活）。
-				const msg = pick(
-					l,
-					`manifest.json 缺失或解析失败（${name}/），不是有效插件 —— 修复或移走该目录后点“重新扫描”`,
-					`manifest.json missing or unparsable (${name}/), not a valid plugin — fix or remove the directory, then hit Rescan`,
-					"plugins.manifest.broken",
-					{ name },
-				);
+				const msg = `manifest.json missing or unparsable (${name}/), not a valid plugin — fix or remove the directory, then hit Rescan`;
 				console.error(`[plugin:${name}] ${msg}`);
 				const brokenDiags = this.diagnosticsOf(name);
 				out.push({
@@ -3094,8 +3067,7 @@ export class PluginManager {
 	/** 级联（P2-8）：提供方刚坏掉（被删/失败/被拒）→ 仍在跑的消费方一并反激活 +
 	 *  留教学占位。循环直到一轮无变化（链式依赖一轮收敛），返回受影响的 id。
 	 *  hostApi/families 运行时不变，这里只查 plugins 对端（目录在 + 后端 peer 激活成功）。 */
-	private cascadeRequiresRefusals(found: UiPluginInfo[], lang?: () => ServerLang): string[] {
-		const l = lang?.() ?? "en";
+	private cascadeRequiresRefusals(found: UiPluginInfo[], _lang?: () => ServerLang): string[] {
 		const byId = new Map(found.map((f) => [f.id, f]));
 		const hit: string[] = [];
 		for (;;) {
@@ -3108,20 +3080,20 @@ export class PluginManager {
 					let why = "";
 					let whyEn = "";
 					if (dep === id) {
-						why = `插件 requires 依赖了自己（${dep}）—— 请删掉这条自依赖`;
+						why = `Plugin requires itself (${dep}) — remove the self-dependency`;
 						whyEn = `Plugin requires itself (${dep}) — remove the self-dependency`;
 					} else if (!byId.has(dep)) {
-						why = `插件 requires 对等插件「${dep}」但它已不在（被删/被拒）—— 装回来或去掉这条依赖`;
+						why = `Plugin requires peer "${dep}" which is gone (removed or refused) — reinstall it or drop the dependency`;
 						whyEn = `Plugin requires peer "${dep}" which is gone (removed or refused) — reinstall it or drop the dependency`;
 					} else if (existsSync(join(this.pluginsDir, dep, "index.mjs"))) {
 						const peer = this.loaded.get(dep);
 						if (!peer || peer.info.error) {
-							why = `插件 requires 对等插件「${dep}」但它已失败/停止：${peer?.info.error ?? "未激活"}—— 修好它或去掉这条依赖`;
+							why = `Plugin requires peer "${dep}" which failed/stopped: ${peer?.info.error ?? "inactive"} — fix it or drop the dependency`;
 							whyEn = `Plugin requires peer "${dep}" which failed/stopped: ${peer?.info.error ?? "inactive"} — fix it or drop the dependency`;
 						}
 					}
 					if (!why) continue;
-					const msg = pick(l, why, whyEn, "plugins.requires.cascade", { dep });
+					const msg = whyEn;
 					this.deactivateEntry(id, p);
 					this.setFrozenRefusal(byId.get(id) ?? p.info, msg, whyEn);
 					hit.push(id);
@@ -3134,8 +3106,7 @@ export class PluginManager {
 		return hit;
 	}
 
-	private async activate(info: UiPluginInfo, lang?: () => ServerLang): Promise<void> {
-		const l = lang?.() ?? "en";
+	private async activate(info: UiPluginInfo, _lang?: () => ServerLang): Promise<void> {
 		this.attempted.add(info.id);
 		const dir = join(this.pluginsDir, info.id);
 		// P1-6：manifest 本体失败即拒（scan 缓存可能过期，这里重读重判，半途注册的副作用不留）。
@@ -3145,13 +3116,7 @@ export class PluginManager {
 			const mvActivate = validatePluginManifest(parsedManifest, info.id);
 			if (mvActivate.errors.length > 0) {
 				const first = mvActivate.errors[0]!;
-				const msg = pick(
-					l,
-					`manifest 校验失败：${first.message} —— 修复后点“重新扫描”`,
-					`manifest validation failed: ${first.messageEn} — fix it, then hit Rescan`,
-					"plugins.manifest.invalid",
-					{ name: info.id, path: first.path },
-				);
+				const msg = `manifest validation failed: ${first.messageEn} — fix it, then hit Rescan`;
 				console.error(`[plugin:${info.id}] ${msg}`);
 				for (const e of mvActivate.errors) this.pushRuntimeDiag(info.id, formatManifestIssue(e));
 				for (const w of mvActivate.warnings) this.pushRuntimeDiag(info.id, formatManifestIssue(w));
@@ -3196,13 +3161,7 @@ export class PluginManager {
 			// best-effort：无 manifest/JSON 坏 → 按 apiVersion 1 处理。
 		}
 		if (apiVersion > PLUGIN_API_VERSION) {
-			const msg = pick(
-				l,
-				`插件要求宿主 API v${apiVersion}，当前宿主 v${PLUGIN_API_VERSION} —— 请升级 pi-web-ui`,
-				`Plugin requires host API v${apiVersion} but the host is v${PLUGIN_API_VERSION} — please upgrade pi-web-ui`,
-				"plugins.host.api.mismatch",
-				{ apiVersion, PLUGIN_API_VERSION },
-			);
+			const msg = `Plugin requires host API v${apiVersion} but the host is v${PLUGIN_API_VERSION} — please upgrade pi-web-ui`;
 			console.error(`[plugin:${info.id}] ${msg}`);
 			this.pushRuntimeDiag(
 				info.id,
@@ -3230,8 +3189,8 @@ export class PluginManager {
 		// 这里只做语义判定：hostApi 下限、能力族已知+已声明、对等插件已安装且激活成功。
 		const req = info.requires;
 		if (req) {
-			const refuseRequires = (zh: string, en: string, key: string, vars?: Record<string, unknown>): boolean => {
-				const msg = pick(l, zh, en, key, vars);
+			const refuseRequires = (zh: string, en: string, _key: string, _vars?: Record<string, unknown>): boolean => {
+				const msg = en;
 				console.error(`[plugin:${info.id}] ${msg}`);
 				this.pushRuntimeDiag(info.id, en);
 				this.loaded.set(info.id, {
@@ -3248,7 +3207,7 @@ export class PluginManager {
 			};
 			if (req.hostApi !== undefined && req.hostApi > PLUGIN_API_VERSION) {
 				refuseRequires(
-					`插件要求宿主 API v${req.hostApi}+，当前宿主 v${PLUGIN_API_VERSION} —— 请升级 pi-web-ui`,
+					`Plugin requires host API v${req.hostApi}+ but the host is v${PLUGIN_API_VERSION} — please upgrade pi-web-ui`,
 					`Plugin requires host API v${req.hostApi}+ but the host is v${PLUGIN_API_VERSION} — please upgrade pi-web-ui`,
 					"plugins.requires.hostapi",
 					{ hostApi: req.hostApi, PLUGIN_API_VERSION },
@@ -3259,7 +3218,7 @@ export class PluginManager {
 			for (const f of req.families ?? []) {
 				if (!isKnownPermission(f)) {
 					refuseRequires(
-						`插件 requires 声明了未知能力族「${f}」（拼写？或需要更新 pi-web-ui）—— 请修正 manifest.requires.families`,
+						`Plugin requires unknown family "${f}" (typo? or needs newer pi-web-ui) — fix manifest.requires.families`,
 						`Plugin requires unknown family "${f}" (typo? or needs newer pi-web-ui) — fix manifest.requires.families`,
 						"plugins.requires.family.unknown",
 						{ family: f },
@@ -3270,7 +3229,7 @@ export class PluginManager {
 				const fam = f.split(":")[0]!;
 				if (!permFamilies.has(fam)) {
 					refuseRequires(
-						`插件 requires 需要「${fam}」族，但 permissions 里没声明 —— 加上它，否则运行时必被门控拒绝`,
+						`Plugin requires family "${fam}" but does not declare it in permissions — add it, otherwise every call will be denied`,
 						`Plugin requires family "${fam}" but does not declare it in permissions — add it, otherwise every call will be denied`,
 						"plugins.requires.family.undeclared",
 						{ family: fam },
@@ -3283,7 +3242,7 @@ export class PluginManager {
 			for (const dep of req.plugins ?? []) {
 				if (dep === info.id) {
 					refuseRequires(
-						`插件 requires 依赖了自己（${dep}）—— 请删掉这条自依赖`,
+						`Plugin requires itself (${dep}) — remove the self-dependency`,
 						`Plugin requires itself (${dep}) — remove the self-dependency`,
 						"plugins.requires.self",
 						{ dep },
@@ -3293,7 +3252,7 @@ export class PluginManager {
 				}
 				if (!existsSync(join(this.pluginsDir, dep, "manifest.json"))) {
 					refuseRequires(
-						`插件 requires 对等插件「${dep}」但它没安装（plugins/${dep}/ 缺失）—— 先装上它`,
+						`Plugin requires peer "${dep}" which is not installed (plugins/${dep}/ missing) — install it first`,
 						`Plugin requires peer "${dep}" which is not installed (plugins/${dep}/ missing) — install it first`,
 						"plugins.requires.peer.missing",
 						{ dep },
@@ -3305,7 +3264,7 @@ export class PluginManager {
 					const peer = this.loaded.get(dep);
 					if (!peer) {
 						refuseRequires(
-							`插件 requires 对等插件「${dep}」但它尚未激活 —— 请先解决它的问题`,
+							`Plugin requires peer "${dep}" which is not active yet — fix it first`,
 							`Plugin requires peer "${dep}" which is not active yet — fix it first`,
 							"plugins.requires.peer.inactive",
 							{ dep },
@@ -3315,7 +3274,7 @@ export class PluginManager {
 					}
 					if (peer.info.error) {
 						refuseRequires(
-							`插件 requires 对等插件「${dep}」但它激活失败：${peer.info.error}`,
+							`Plugin requires peer "${dep}" which failed to activate: ${peer.info.error}`,
 							`Plugin requires peer "${dep}" which failed to activate: ${peer.info.error}`,
 							"plugins.requires.peer.failed",
 							{ dep },
@@ -3335,13 +3294,7 @@ export class PluginManager {
 			const hostVer = readHostVersion();
 			const verdict = hostVer ? satisfiesEnginesConstraint(enginesReq, hostVer) : null;
 			if (verdict === false) {
-				const msg = pick(
-					l,
-					`插件要求 pi-web-ui ${enginesReq}，当前宿主版本 ${hostVer} —— 请升级 pi-web-ui`,
-					`Plugin requires pi-web-ui ${enginesReq} but the host is ${hostVer} — please upgrade pi-web-ui`,
-					"plugins.host.engines.mismatch",
-					{ enginesReq, hostVer },
-				);
+				const msg = `Plugin requires pi-web-ui ${enginesReq} but the host is ${hostVer} — please upgrade pi-web-ui`;
 				console.error(`[plugin:${info.id}] ${msg}`);
 				this.pushRuntimeDiag(
 					info.id,
@@ -3360,13 +3313,15 @@ export class PluginManager {
 				return;
 			}
 			if (verdict === null) {
-				console.warn(`[plugin:${info.id}] engines 约束「${enginesReq}」解析失败，已放行（不阻断激活）`);
+				console.warn(
+					`[plugin:${info.id}] engines constraint "${enginesReq}" could not be parsed, allowed (activation not blocked)`,
+				);
 				this.pushRuntimeDiag(info.id, `engines constraint "${enginesReq}" unparseable, allowed without blocking`);
 			}
 		}
 		for (const peer of info.peerPlugins ?? []) {
 			if (!existsSync(join(this.pluginsDir, peer))) {
-				console.warn(`[plugin:${info.id}] 对等插件缺失：${peer}（仅警告，不阻断激活）`);
+				console.warn(`[plugin:${info.id}] peer plugin missing: ${peer} (warning only, activation not blocked)`);
 				this.pushRuntimeDiag(info.id, `peer plugin missing: ${peer} (warn only, activation continues)`);
 			}
 		}
@@ -3383,9 +3338,9 @@ export class PluginManager {
 		 *  两者都不允许插件无告知地碰任意路径 —— 这就是「受支持路径」与裸 node:fs 的差别。 */
 		const allowAbs = (p: string): string => {
 			const abs = normalizeGrantPath(p);
-			if (!abs) throw new Error("路径必须是绝对路径");
+			if (!abs) throw new Error("Path must be absolute");
 			if (self.isInsideWorkspace(abs) || self.grants.has(info.id, abs)) return abs;
-			throw new Error(`目录未授权：先 await host.fs.requestAccess(dir)（${abs}）`);
+			throw new Error(`Directory not granted: await host.fs.requestAccess(dir) first (${abs})`);
 		};
 		/** 写类操作（write/remove）的 realpath 复核：allowAbs 是纯字符串判定，
 		 *  授权目录里的符号链接/junction 能把写入/递归删除引到授权范围之外。
@@ -3394,13 +3349,13 @@ export class PluginManager {
 		 *  且读不存在「把内容写到别处」的风险）。 */
 		const assertRealInsideGrant = async (abs: string): Promise<void> => {
 			const targetReal = realPathOfNearest(abs);
-			if (!targetReal) throw new Error(`无法解析真实路径：${abs}`);
+			if (!targetReal) throw new Error(`Cannot resolve the real path: ${abs}`);
 			const granted = self.grants.list().find((g) => g.pluginId === info.id)?.paths ?? [];
 			for (const r of [self.cwdValue, ...granted]) {
 				const rootReal = realPathOfNearest(resolve(r)) ?? resolve(r);
 				if (isInsideRoot(rootReal, targetReal)) return;
 			}
-			throw new Error(`路径越界（符号链接指向授权范围之外）：${abs}`);
+			throw new Error(`Path out of bounds (symlink points outside the granted area): ${abs}`);
 		};
 		const crossDirFs = {
 			list: async (absDir: string) => {
@@ -3453,7 +3408,7 @@ export class PluginManager {
 				const pat = String(pattern ?? "")
 					.trim()
 					.replace(/\\/g, "/");
-				if (!pat) throw new Error("globPath: pattern 为空");
+				if (!pat) throw new Error("globPath: pattern is empty");
 				const re = globToRegExp(pat);
 				const base = allowAbs(absDir);
 				const out: string[] = [];
@@ -3502,13 +3457,18 @@ export class PluginManager {
 		/** 无头调用落地（host.chat 与 host.chatWait 共用）：能力 "chat" 门控 +
 		 *  文本校验 + chatProvider 投递。宿主未接入时拒绝（不抛到插件侧，由调用方包 {ok:false}）。 */
 		const sendChat = (req: PluginChatRequest): Promise<PluginChatResult> => {
-			if (!can("chat")) return Promise.reject(new Error(`插件未声明能力 "chat"（manifest.permissions）——请求被拒`));
+			if (!can("chat"))
+				return Promise.reject(
+					new Error(`Plugin did not declare the "chat" capability (manifest.permissions) — request denied`),
+				);
 			if (!self.chatProvider) {
-				return Promise.reject(new Error("宿主未提供无头调用（chatProvider 未接入）——请升级 pi-web-ui"));
+				return Promise.reject(
+					new Error("The host provides no headless call (chatProvider not wired) — please upgrade pi-web-ui"),
+				);
 			}
 			const text = String((req as PluginChatRequest | undefined)?.text ?? "").trim();
-			if (!text) return Promise.reject(new Error("chat: text 为空"));
-			if (text.length > 8000) return Promise.reject(new Error("chat: text 超长（>8000 字），请裁剪后重发"));
+			if (!text) return Promise.reject(new Error("chat: text is empty"));
+			if (text.length > 8000) return Promise.reject(new Error("chat: text too long (>8000 chars), trim it and resend"));
 			const accountId = String((req as PluginChatRequest | undefined)?.accountId ?? "default").slice(0, 64);
 			// issue #226：透传定时任务对齐的四件套（各按长度封顶，语义校验归宿主 chatFromPlugin）。
 			const r = ((req as PluginChatRequest | undefined) ?? {}) as PluginChatRequest;
@@ -3559,12 +3519,16 @@ export class PluginManager {
 				try {
 					const sent = await sendChat(req);
 					const cid = sent?.conversationId ?? "";
-					if (!cid) return { ok: false, error: "无头调用未返回 conversationId" };
+					if (!cid) return { ok: false, error: "Headless call returned no conversationId" };
 					// 默认 120s 超时；上下钳制防 100ms 误杀与无限等待。
 					const timeoutMs = Math.max(1000, Math.min(Number(opts?.timeoutMs ?? 120_000) || 120_000, 600_000));
 					const ended = await self.waitRunEnd(cid, timeoutMs);
 					if (!ended)
-						return { ok: false, conversationId: cid, error: `等待运行结束超时（约${Math.round(timeoutMs / 1000)}s）` };
+						return {
+							ok: false,
+							conversationId: cid,
+							error: `Timed out waiting for the run to end (about ${Math.round(timeoutMs / 1000)}s)`,
+						};
 					return { ok: true, conversationId: cid };
 				} catch (err) {
 					return { ok: false, error: (err as Error).message };
@@ -3572,15 +3536,20 @@ export class PluginManager {
 			},
 			llm: {
 				complete: async (req) => {
-					if (!can("llm")) return { ok: false, error: `插件未声明能力 "llm"（manifest.permissions）——请求被拒` };
+					if (!can("llm"))
+						return {
+							ok: false,
+							error: `Plugin did not declare the "llm" capability (manifest.permissions) — request denied`,
+						};
 					// 有模型作用域授权时收紧到批准的模型（无授权=声明即全开，向后兼容）。
 					const model = typeof req?.model === "string" ? req.model.trim() : "";
 					if (model && !self.permGrants.modelAllowed(info.id, model))
 						return {
 							ok: false,
-							error: `llm: 模型 ${model} 不在用户批准的作用域内（可 host.requestPermission 重新申请）`,
+							error: `llm: model ${model} is not in the scope the user approved (re-request it with host.requestPermission)`,
 						};
-					if (!self.llmProvider) return { ok: false, error: "宿主未提供 LLM 直调（llmProvider 未接入）" };
+					if (!self.llmProvider)
+						return { ok: false, error: "The host provides no direct LLM call (llmProvider not wired)" };
 					try {
 						return await self.llmProvider(info.id, req ?? { prompt: "" });
 					} catch (err) {
@@ -3591,7 +3560,9 @@ export class PluginManager {
 			requestPermission: async (req) => {
 				const family = (req as { family?: unknown } | undefined)?.family;
 				if (family !== "net" && family !== "llm")
-					throw new Error(`requestPermission: 不支持的能力族「${String(family)}」（目前只收 net/llm）`);
+					throw new Error(
+						`requestPermission: unsupported capability family "${String(family)}" (only net/llm for now)`,
+					);
 				// 基础族必须已声明（与 requestAccess 要求 fs:read 同口径，fail-closed）。
 				if (!can(family)) return false;
 				const hosts =
@@ -3602,7 +3573,7 @@ export class PluginManager {
 								.slice(0, 32)
 						: undefined;
 				if (family === "net" && (!hosts || hosts.length === 0))
-					throw new Error("requestPermission: family=net 必须给 hosts（要批准的主机列表）");
+					throw new Error("requestPermission: family=net needs hosts (the list of hosts to approve)");
 				const models =
 					family === "llm" && Array.isArray((req as { models?: unknown }).models)
 						? (req as { models: unknown[] }).models
@@ -3698,10 +3669,12 @@ export class PluginManager {
 			},
 			prompt: async (conversationId, req) => {
 				try {
-					if (!self.conversationWriter) return { ok: false, error: "宿主未接入对话写入（仅标准 pi 引擎支持）" };
+					if (!self.conversationWriter)
+						return { ok: false, error: "The host has no chat writer wired (standard pi engine only)" };
 					const text = String(req?.text ?? "");
-					if (!text.trim()) return { ok: false, error: "投递文本为空" };
-					if (text.length > 8000) return { ok: false, error: "投递文本超长（>8000 字），请裁剪后重发" };
+					if (!text.trim()) return { ok: false, error: "Text to deliver is empty" };
+					if (text.length > 8000)
+						return { ok: false, error: "Text to deliver is too long (>8000 chars), trim it and resend" };
 					const atts = Array.isArray(req?.attachments) ? req.attachments.slice(0, 16) : undefined;
 					return await self.conversationWriter(String(conversationId), text, atts);
 				} catch (err) {
@@ -3710,7 +3683,8 @@ export class PluginManager {
 			},
 			steer: async (conversationId, text) => {
 				try {
-					if (!self.runSteerer) return { ok: false, error: "宿主未接入运行插队（仅标准 pi 引擎支持）" };
+					if (!self.runSteerer)
+						return { ok: false, error: "The host has no run steering wired (standard pi engine only)" };
 					return await self.runSteerer(String(conversationId), String(text ?? ""));
 				} catch (err) {
 					return { ok: false, error: (err as Error).message };
@@ -3718,7 +3692,8 @@ export class PluginManager {
 			},
 			abortRun: async (conversationId) => {
 				try {
-					if (!self.runAborter) return { ok: false, error: "宿主未接入运行中止（仅标准 pi 引擎支持）" };
+					if (!self.runAborter)
+						return { ok: false, error: "The host has no run abort wired (standard pi engine only)" };
 					return await self.runAborter(String(conversationId));
 				} catch (err) {
 					return { ok: false, error: (err as Error).message };
@@ -3748,7 +3723,7 @@ export class PluginManager {
 					!path.startsWith("/") ||
 					typeof handler !== "function"
 				) {
-					console.error(`[plugin:${info.id}] route: 非法参数（method=${method} path=${path}），忽略`);
+					console.error(`[plugin:${info.id}] route: invalid arguments (method=${method} path=${path}), ignored`);
 					self.pushRuntimeDiag(
 						info.id,
 						`route: invalid method/path (method=${String(method)} path=${String(path)}), ignored`,
@@ -3763,7 +3738,9 @@ export class PluginManager {
 				if (!can("http")) return () => {};
 				const p = self.registerProxy(info.id, String(prefix ?? ""), target);
 				if (!p) {
-					console.error(`[plugin:${info.id}] registerProxy: 非法前缀/目标或被占用（prefix=${String(prefix)}），忽略`);
+					console.error(
+						`[plugin:${info.id}] registerProxy: invalid prefix/target or already taken (prefix=${String(prefix)}), ignored`,
+					);
 					self.pushRuntimeDiag(
 						info.id,
 						`registerProxy: invalid prefix/target or taken (prefix=${String(prefix)}), ignored`,
@@ -3826,11 +3803,14 @@ export class PluginManager {
 				appendPath: (absPath, data) => (canWrite() ? crossDirFs.append(absPath, data) : NO_FS_WRITE_PROMISE),
 				globPath: (absDir, pat) => (canRead() ? crossDirFs.glob(absDir, pat) : NO_FS_PROMISE),
 				watch: (relPath, handler) => {
-					if (!canRead()) throw new Error('插件未声明读能力 "fs"/"fs:read"（manifest.permissions）——请求被拒');
-					if (typeof handler !== "function") throw new Error("watch: handler 必须是函数");
+					if (!canRead())
+						throw new Error(
+							'Plugin did not declare the read capability "fs"/"fs:read" (manifest.permissions) — request denied',
+						);
+					if (typeof handler !== "function") throw new Error("watch: handler must be a function");
 					// 锚定活 cwd 根：目标必须在工作区内（复用 WorkspaceFS 的越界校验思想）。
 					const target = resolve(self.cwdValue, String(relPath ?? ""));
-					if (!self.isInsideWorkspace(target)) throw new Error(`路径越界：${String(relPath)}`);
+					if (!self.isInsideWorkspace(target)) throw new Error(`Path out of bounds: ${String(relPath)}`);
 					const watcher = fsWatch(target, (eventType, filename) => {
 						try {
 							handler({ type: String(eventType), path: String(filename ?? relPath) });
@@ -3855,14 +3835,19 @@ export class PluginManager {
 					if (!canWrite())
 						return {
 							ok: false,
-							error: '缺少写能力：project.create 需要 "fs"/"fs:write"（manifest.permissions）',
+							error: 'Missing write capability: project.create needs "fs"/"fs:write" (manifest.permissions)',
 							log: [],
 							dir: "",
 						};
 					const dir = normalizeGrantPath(String((spec as { dir?: unknown })?.dir ?? ""));
-					if (!dir) return { ok: false, error: "项目目录必须是绝对路径", log: [], dir: "" };
+					if (!dir) return { ok: false, error: "Project directory must be an absolute path", log: [], dir: "" };
 					if (!self.isInsideWorkspace(dir) && !self.grants.has(info.id, dir)) {
-						return { ok: false, dir, log: [], error: `项目目录未授权：先 await host.fs.requestAccess("${dir}")` };
+						return {
+							ok: false,
+							dir,
+							log: [],
+							error: `Project directory not granted: await host.fs.requestAccess("${dir}") first`,
+						};
 					}
 					return createProject(spec, { onProgress: (line) => self.notifyAll("info", line) });
 				},
@@ -3870,7 +3855,7 @@ export class PluginManager {
 			registerBackgroundTask: (task) => {
 				const id = String(task?.id ?? "").trim();
 				if (!id || bgTaskTable.has(id)) {
-					console.error(`[plugin:${info.id}] registerBackgroundTask: 非法/重复 id「${task?.id}」，忽略`);
+					console.error(`[plugin:${info.id}] registerBackgroundTask: invalid/duplicate id "${task?.id}", ignored`);
 					self.pushRuntimeDiag(
 						info.id,
 						`registerBackgroundTask: invalid/duplicate id "${String(task?.id ?? "").slice(0, 32)}", ignored`,
@@ -4017,7 +4002,10 @@ export class PluginManager {
 			},
 			scm: {
 				status: async () => {
-					if (!canRead()) throw new Error('插件未声明读能力 "fs"/"fs:read"（manifest.permissions）——请求被拒');
+					if (!canRead())
+						throw new Error(
+							'Plugin did not declare the read capability "fs"/"fs:read" (manifest.permissions) — request denied',
+						);
 					try {
 						const mod = await import("./scm.js");
 						return await mod.scmStatus(self.cwdValue);
@@ -4026,7 +4014,10 @@ export class PluginManager {
 					}
 				},
 				log: async (path, limit) => {
-					if (!canRead()) throw new Error('插件未声明读能力 "fs"/"fs:read"（manifest.permissions）——请求被拒');
+					if (!canRead())
+						throw new Error(
+							'Plugin did not declare the read capability "fs"/"fs:read" (manifest.permissions) — request denied',
+						);
 					try {
 						const mod = await import("./scm.js");
 						const all = await mod.scmHistory(self.cwdValue);
@@ -4040,16 +4031,21 @@ export class PluginManager {
 			bash: async (cmd, opts) => {
 				// 门控语义沿用 registerAgentTool：无 "tools" 声明即拒绝（结果对象形态，不断路抛错）。
 				if (!can("tools"))
-					return { ok: false, output: "", error: '插件未声明能力 "tools"（manifest.permissions）——请求被拒' };
+					return {
+						ok: false,
+						output: "",
+						error: 'Plugin did not declare the "tools" capability (manifest.permissions) — request denied',
+					};
 				try {
 					const parts = String(cmd ?? "")
 						.trim()
 						.split(/\s+/)
 						.filter(Boolean);
 					const file = parts[0];
-					if (!file) return { ok: false, output: "", error: "bash: cmd 为空" };
+					if (!file) return { ok: false, output: "", error: "bash: cmd is empty" };
 					const cwd = opts?.cwd ? resolve(self.cwdValue, opts.cwd) : self.cwdValue;
-					if (!self.isInsideWorkspace(cwd)) return { ok: false, output: "", error: `工作目录越界：${opts?.cwd}` };
+					if (!self.isInsideWorkspace(cwd))
+						return { ok: false, output: "", error: `Working directory out of bounds: ${opts?.cwd}` };
 					const timeout = Math.max(1000, Math.min(Number(opts?.timeoutMs ?? 60_000) || 60_000, 600_000));
 					const { stdout, stderr } = await execFileAsync(file, parts.slice(1), {
 						cwd,
@@ -4075,7 +4071,7 @@ export class PluginManager {
 				}
 			},
 			schedule: (cronOrMs, fn, opts) => {
-				if (typeof fn !== "function") throw new Error("schedule: fn 必须是函数");
+				if (typeof fn !== "function") throw new Error("schedule: fn must be a function");
 				const persistent = (opts as { persistent?: unknown } | undefined)?.persistent === true;
 				const catchUp = (opts as { catchUp?: unknown } | undefined)?.catchUp === "once" ? "once" : "skip";
 				const label =
@@ -4091,7 +4087,7 @@ export class PluginManager {
 				let specText: string;
 				if (typeof cronOrMs === "number") {
 					ms = Math.floor(cronOrMs) || 0;
-					if (!(ms > 0)) throw new Error("schedule: 间隔毫秒数必须大于 0");
+					if (!(ms > 0)) throw new Error("schedule: interval in ms must be greater than 0");
 					ms = Math.min(ms, 2_147_483_647); // setInterval 上限（约 24.8 天），防溢出立即触发
 					ms = Math.max(ms, persistent ? 60_000 : 10_000);
 					specText = String(ms);
@@ -4099,10 +4095,12 @@ export class PluginManager {
 					specText = cronOrMs.trim().replace(/\s+/g, " ");
 					const parsed = parseCronSpec(specText);
 					if (!parsed)
-						throw new Error(`schedule: 不支持的 cron 形状「${cronOrMs}」（要 5 字段：分 时 日 月 周，如 "0 9 * * *"）`);
+						throw new Error(
+							`schedule: unsupported cron shape "${cronOrMs}" (needs 5 fields: minute hour day month weekday, e.g. "0 9 * * *")`,
+						);
 					parts = parsed;
 				} else {
-					throw new Error("schedule: 参数必须是间隔毫秒数或 cron 字符串");
+					throw new Error("schedule: argument must be an interval in ms or a cron string");
 				}
 				// 持久化：声明落盘（幂等——activate 重调时保留 lastRun/createdAt，只更新声明）。
 				let sid = "";
@@ -4112,7 +4110,9 @@ export class PluginManager {
 							? String((opts as { id?: string }).id).trim()
 							: "";
 					if (!sid || !ID_RE.test(sid))
-						throw new Error("schedule: persistent 任务必须给合法 id（字母/数字/下划线/连字符），重启后靠它重建");
+						throw new Error(
+							"schedule: persistent jobs need a valid id (letters/digits/underscore/hyphen); it is used to rebuild them after a restart",
+						);
 					const records = loadScheduleRecords(dir);
 					const prev = records[sid];
 					records[sid] = {
@@ -4137,11 +4137,11 @@ export class PluginManager {
 							return specText;
 						}
 					}
-					return `每 ${Math.round(ms / 1000)}s`;
+					return `every ${Math.round(ms / 1000)}s`;
 				};
 				const statusText = (): string => {
 					const next = nextText();
-					return next === null ? "不再触发（表达式在一年内不会命中）" : `下次 ${next}`;
+					return next === null ? "never fires again (the expression matches nothing within a year)" : `next ${next}`;
 				};
 				// 后台面板条目（持久任务独有）：看得见下次时间，停止=删声明（不再复活）。
 				let bgRefresh: (() => void) | undefined;
@@ -4297,7 +4297,11 @@ export class PluginManager {
 			},
 			net: {
 				fetch: async (url, init) => {
-					if (!can("net")) return { ok: false, error: '插件未声明能力 "net"（manifest.permissions）——请求被拒' };
+					if (!can("net"))
+						return {
+							ok: false,
+							error: 'Plugin did not declare the "net" capability (manifest.permissions) — request denied',
+						};
 					return pluginNetFetch(url, init, {
 						// 白名单：主机相等或 .后缀匹配；空表即全拒（fail-closed）。
 						// 用户动态批准的主机（host.requestPermission）同样放行，免改 manifest 重装。
@@ -4605,20 +4609,20 @@ export async function pluginNetFetch(
 		try {
 			u = new URL(current);
 		} catch {
-			return { ok: false, error: `net: 无效 URL ${current}` };
+			return { ok: false, error: `net: invalid URL ${current}` };
 		}
 		if (u.protocol !== "http:" && u.protocol !== "https:") {
-			return { ok: false, error: `net: 不支持的协议 ${u.protocol}` };
+			return { ok: false, error: `net: unsupported protocol ${u.protocol}` };
 		}
 		// 白名单：主机相等或 .后缀匹配；空表即全拒（fail-closed）。每一跳都查。
 		if (!deps.hostAllowed(u.hostname.toLowerCase())) {
 			return {
 				ok: false,
-				error: `net: 主机 ${u.hostname} 未授权（manifest.netAllowlist 或 host.requestPermission 申请）`,
+				error: `net: host ${u.hostname} is not allowed (manifest.netAllowlist, or request it with host.requestPermission)`,
 			};
 		}
 		if (body !== undefined && Buffer.byteLength(String(body), "utf8") > 1024 * 1024) {
-			return { ok: false, error: "net: body 超过 1MB 上限" };
+			return { ok: false, error: "net: body exceeds the 1MB limit" };
 		}
 		let res: FetchResponse;
 		try {
@@ -4637,13 +4641,13 @@ export async function pluginNetFetch(
 			const loc = res.headers.get("location");
 			if (loc) {
 				if (hop >= NET_FETCH_MAX_REDIRECTS) {
-					return { ok: false, error: `net: 重定向超过 ${NET_FETCH_MAX_REDIRECTS} 跳上限` };
+					return { ok: false, error: `net: more than ${NET_FETCH_MAX_REDIRECTS} redirects` };
 				}
 				let next: URL;
 				try {
 					next = new URL(loc, u);
 				} catch {
-					return { ok: false, error: `net: 重定向目标无效 ${loc}` };
+					return { ok: false, error: `net: invalid redirect target ${loc}` };
 				}
 				if (next.hostname.toLowerCase() !== u.hostname.toLowerCase() && headers) {
 					// 跨宿主：凭据类头不外带。

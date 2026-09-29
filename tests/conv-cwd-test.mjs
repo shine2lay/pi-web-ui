@@ -161,7 +161,7 @@ check(
 );
 check(
 	"workspace-switch notices fired",
-	notices.some((n) => n.includes("已切换到工作目录")),
+	notices.some((n) => n.includes("Switched to directory")),
 	notices.join(" | "),
 );
 

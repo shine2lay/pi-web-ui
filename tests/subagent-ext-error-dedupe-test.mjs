@@ -286,12 +286,12 @@ try {
 	check("探针错误只推给浏览器一次（不是每轮一次）", probeNotices.length === 1, `${probeNotices.length} 条`);
 	check(
 		"notice 带「子代理 <conversationId>」归属前缀",
-		probeNotices.length === 1 && /^子代理 \S+：扩展报错：/.test(probeNotices[0]?.text ?? ""),
+		probeNotices.length === 1 && /^Subagent \S+: Extension error: /.test(probeNotices[0]?.text ?? ""),
 		probeNotices[0]?.text ?? "",
 	);
 	check(
 		"主对话（持久会话）不产生该错误——notice 不会以主对话口径出现",
-		probeNotices.every((m) => !/^扩展报错：/.test(m.text ?? "")),
+		probeNotices.every((m) => !/^Extension error: /.test(m.text ?? "")),
 	);
 	check("notice 级别是 error", probeNotices.length === 1 && probeNotices[0].level === "error");
 } catch (error) {

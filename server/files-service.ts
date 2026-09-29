@@ -9,7 +9,7 @@ import { Dirent, existsSync, mkdirSync, readFileSync, statSync, writeFileSync, w
 import { homedir } from "node:os";
 import { resolve, relative, sep, isAbsolute } from "node:path";
 import type { ServerMessage, FileEntry, FileSearchResult } from "./protocol.js";
-import { pick, type ServerLang } from "./i18n.js";
+import { type ServerLang } from "./i18n.js";
 import { previewKind, looksLikeText, decodeText, hexDump, countLines } from "./text-sniff.js";
 import { extractOfficeText, isOfficeFile, OFFICE_MAX_FILE_BYTES } from "./office-parse.js";
 import { gitDirOf, isNotRepoError, scmStatus, scmHistory, scmFileDiff, scmCommitDetail } from "./scm.js";
@@ -326,7 +326,7 @@ export class FilesService {
 			this.host.emit({
 				type: "notice",
 				level: "warning",
-				text: `目录不存在：${path}`,
+				text: `Directory not found: ${path}`,
 				textEn: `Directory not found: ${path}`,
 			});
 			return;
@@ -335,7 +335,7 @@ export class FilesService {
 			this.host.emit({
 				type: "notice",
 				level: "warning",
-				text: `不是目录：${path}`,
+				text: `Not a directory: ${path}`,
 				textEn: `Not a directory: ${path}`,
 			});
 			return;
@@ -343,7 +343,7 @@ export class FilesService {
 		this.host.emit({
 			type: "notice",
 			level: IS_WIN32 ? "warning" : "error",
-			text: `目录不可读：${error}`,
+			text: `Directory is not readable: ${error}`,
 			textEn: `Directory is not readable: ${error}`,
 		});
 	}
@@ -398,7 +398,7 @@ export class FilesService {
 			this.host.emit({
 				type: "notice",
 				level: "warning",
-				text: `路径超出工作区：${relPath ?? ""}`,
+				text: `Path is outside the workspace: ${relPath ?? ""}`,
 				textEn: `Path is outside the workspace: ${relPath ?? ""}`,
 			});
 			return;
@@ -536,10 +536,7 @@ export class FilesService {
 				// from our own listing, and execFile passes args verbatim anyway).
 				const { resolve, relative } = await import("node:path");
 				const rel = relative(resolve(cwd), resolve(cwd, arg.path));
-				if (rel.startsWith("..") || rel === "")
-					throw new Error(
-						pick(this.lang(), "路径超出工作区", "Path is outside the workspace", "files.path.outside.workspace"),
-					);
+				if (rel.startsWith("..") || rel === "") throw new Error("Path is outside the workspace");
 				const { staged, worktree } = await scmFileDiff(cwd, arg.path, () => this.lang());
 				this.host.emit({
 					type: "scm_data",
@@ -556,9 +553,7 @@ export class FilesService {
 				this.host.emit({ type: "scm_data", reqId, kind, ok: true, text });
 				return;
 			}
-			throw new Error(
-				pick(this.lang(), "无效的 scm 查询参数", "Invalid scm query arguments", "files.scm.invalid.args"),
-			);
+			throw new Error("Invalid scm query arguments");
 		} catch (err) {
 			if (isNotRepoError(err)) {
 				// Not a repo — a valid empty answer so the panel shows its hint.
@@ -731,7 +726,7 @@ export class FilesService {
 		this.host.emit({
 			type: "notice",
 			level: "info",
-			text: "此目录不支持实时文件监听（网络盘/受限目录），文件面板已改为每 10 秒自动刷新。",
+			text: "Live file watching is not supported for this directory (network/restricted); the file panel now refreshes every 10s",
 			textEn:
 				"Live file watching is not supported for this directory (network/restricted); the file panel now refreshes every 10s",
 		});
@@ -773,7 +768,7 @@ export class FilesService {
 					this.host.emit({
 						type: "notice",
 						level: "warning",
-						text: `路径超出工作区：${relPath}`,
+						text: `Path is outside the workspace: ${relPath}`,
 						textEn: `Path is outside the workspace: ${relPath}`,
 					});
 					return;
@@ -786,7 +781,7 @@ export class FilesService {
 				this.host.emit({
 					type: "notice",
 					level: "warning",
-					text: `不是文件：${relPath}`,
+					text: `Not a file: ${relPath}`,
 					textEn: `Not a file: ${relPath}`,
 				});
 				return;
@@ -874,7 +869,7 @@ export class FilesService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `读取文件失败：${(err as Error).message}`,
+				text: `Failed to read file: ${(err as Error).message}`,
 				textEn: `Failed to read file: ${(err as Error).message}`,
 			});
 		}
@@ -896,7 +891,7 @@ export class FilesService {
 					this.host.emit({
 						type: "notice",
 						level: "warning",
-						text: `路径超出工作区：${relPath}`,
+						text: `Path is outside the workspace: ${relPath}`,
 						textEn: `Path is outside the workspace: ${relPath}`,
 					});
 					return;
@@ -908,7 +903,7 @@ export class FilesService {
 				this.host.emit({
 					type: "notice",
 					level: "warning",
-					text: "文件内容过大，无法保存（上限 2MB）",
+					text: "File too large to save (2MB max)",
 					textEn: "File too large to save (2MB max)",
 				});
 				return;
@@ -918,7 +913,7 @@ export class FilesService {
 				this.host.emit({
 					type: "notice",
 					level: "warning",
-					text: `不是文件：${relPath}`,
+					text: `Not a file: ${relPath}`,
 					textEn: `Not a file: ${relPath}`,
 				});
 				return;
@@ -927,7 +922,7 @@ export class FilesService {
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: `已保存：${rel}`,
+				text: `Saved: ${rel}`,
 				textEn: `Saved: ${rel}`,
 			});
 			// Re-read through the same path as the preview request so the client
@@ -937,7 +932,7 @@ export class FilesService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `保存文件失败：${(err as Error).message}`,
+				text: `Failed to save file: ${(err as Error).message}`,
 				textEn: `Failed to save file: ${(err as Error).message}`,
 			});
 		}
@@ -959,7 +954,7 @@ export class FilesService {
 			if (relDir && !absDir) {
 				wp = workspacePath(resolve(root), relDir);
 				if (!wp) {
-					emitErr(`路径超出工作区：${relDir}`, `Path outside workspace: ${relDir}`);
+					emitErr(`Path outside workspace: ${relDir}`, `Path outside workspace: ${relDir}`);
 					return;
 				}
 			} else if (relDir) {
@@ -973,7 +968,7 @@ export class FilesService {
 			// 会放过 "con.txt"、"a.." 这类「建了删不掉」的名字。
 			const safe = this.sanitizeName(name);
 			if (!safe) {
-				emitErr(`文件名不合法：${name}`, `Invalid file name: ${name}`);
+				emitErr(`Invalid file name: ${name}`, `Invalid file name: ${name}`);
 				return;
 			}
 			const abs = resolve(wp.abs, safe);
@@ -984,33 +979,33 @@ export class FilesService {
 			} else {
 				const rawRel = relative(root, abs);
 				if (rawRel.startsWith("..") || rawRel.includes(`${sep}..`)) {
-					emitErr(`文件名不合法：${name}`, `Invalid file name: ${name}`);
+					emitErr(`Invalid file name: ${name}`, `Invalid file name: ${name}`);
 					return;
 				}
 				uploadRel = rawRel.split(sep).join("/");
 			}
 			if (isUploadDataTooLong(data.length)) {
 				emitErr(
-					`文件过大：${name}（上限 ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)}MB）`,
+					`File too large: ${name} (max ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)}MB)`,
 					`File too large: ${name} (max ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)}MB)`,
 				);
 				return;
 			}
 			const buf = Buffer.from(data, "base64");
 			if (buf.length === 0) {
-				emitErr(`空文件：${name}`, `Empty file: ${name}`);
+				emitErr(`Empty file: ${name}`, `Empty file: ${name}`);
 				return;
 			}
 			if (buf.length > MAX_UPLOAD_BYTES) {
 				emitErr(
-					`文件过大：${name}（上限 ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)}MB）`,
+					`File too large: ${name} (max ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)}MB)`,
 					`File too large: ${name} (max ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)}MB)`,
 				);
 				return;
 			}
 			mkdirSync(wp.abs, { recursive: true });
 			if (existsSync(abs)) {
-				emitErr(`已存在：${uploadRel}`, `Already exists: ${uploadRel}`);
+				emitErr(`Already exists: ${uploadRel}`, `Already exists: ${uploadRel}`);
 				return;
 			}
 			// wx：与预检之间存在窗口（TOCTOU），并发同名上传走 EEXIST 落到 catch
@@ -1020,7 +1015,7 @@ export class FilesService {
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: `已上传：${uploadRel}`,
+				text: `Uploaded: ${uploadRel}`,
 				textEn: `Uploaded: ${uploadRel}`,
 			});
 			// Emit for the target directory itself so the panel refreshes even
@@ -1031,7 +1026,7 @@ export class FilesService {
 				path: wp.rel,
 			});
 		} catch (err) {
-			emitErr(`上传文件失败：${(err as Error).message}`, `Upload failed: ${(err as Error).message}`);
+			emitErr(`Upload failed: ${(err as Error).message}`, `Upload failed: ${(err as Error).message}`);
 		}
 	}
 
@@ -1048,7 +1043,7 @@ export class FilesService {
 			const { homedir } = await import("node:os");
 			const home = homedir();
 			let expanded = input.trim();
-			if (!expanded) throw new Error(pick(this.lang(), "路径为空", "Empty path", "files.path.empty"));
+			if (!expanded) throw new Error("Empty path");
 			if (expanded === "~" || expanded === "~\\") {
 				expanded = home;
 			} else if (expanded.startsWith("~/") || expanded.startsWith("~\\")) {
@@ -1061,7 +1056,7 @@ export class FilesService {
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: `已创建文件夹：${abs}`,
+				text: `Folder created: ${abs}`,
 				textEn: `Folder created: ${abs}`,
 			});
 			return abs;
@@ -1069,7 +1064,7 @@ export class FilesService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `创建文件夹失败：${(err as Error).message}`,
+				text: `Failed to create folder: ${(err as Error).message}`,
 				textEn: `Failed to create folder: ${(err as Error).message}`,
 			});
 			return null;
@@ -1132,17 +1127,17 @@ export class FilesService {
 			const { join } = await import("node:path");
 			const safe = this.sanitizeName(name);
 			if (!safe) {
-				err(`文件名不合法：${name}`, `Invalid name: ${name}`);
+				err(`Invalid name: ${name}`, `Invalid name: ${name}`);
 				return;
 			}
 			const target = await this.resolveOpDir(dir);
 			if (!target) {
-				err(`目录不存在或超出工作区：${dir || "根目录"}`, `Directory not found: ${dir || "root"}`);
+				err(`Directory not found: ${dir || "root"}`, `Directory not found: ${dir || "root"}`);
 				return;
 			}
 			const abs = join(target.abs, safe);
 			if (await fsp.stat(abs).catch(() => null)) {
-				err(`已存在：${safe}`, `Already exists: ${safe}`);
+				err(`Already exists: ${safe}`, `Already exists: ${safe}`);
 				return;
 			}
 			if (kind === "dir") await fsp.mkdir(abs);
@@ -1150,12 +1145,12 @@ export class FilesService {
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: kind === "dir" ? `已新建文件夹：${safe}` : `已新建文件：${safe}`,
+				text: kind === "dir" ? `Folder created: ${safe}` : `File created: ${safe}`,
 				textEn: kind === "dir" ? `Folder created: ${safe}` : `File created: ${safe}`,
 			});
 			this.host.emit({ type: "file_changed", path: target.wire });
 		} catch (e) {
-			err(`新建失败：${(e as Error).message}`, `Create failed: ${(e as Error).message}`);
+			err(`Create failed: ${(e as Error).message}`, `Create failed: ${(e as Error).message}`);
 		}
 	}
 
@@ -1168,29 +1163,29 @@ export class FilesService {
 			const t = this.resolveOpTarget(path);
 			const parent = this.wireParent(path);
 			if (!t || parent === null) {
-				err(`此处不可重命名：${path}`, `Cannot rename here: ${path}`);
+				err(`Cannot rename here: ${path}`, `Cannot rename here: ${path}`);
 				return;
 			}
 			const safe = this.sanitizeName(newName);
 			if (!safe) {
-				err(`新名称不合法：${newName}`, `Invalid name: ${newName}`);
+				err(`Invalid name: ${newName}`, `Invalid name: ${newName}`);
 				return;
 			}
 			const dest = join(dirname(t.abs), safe);
 			if (await fsp.stat(dest).catch(() => null)) {
-				err(`已存在：${safe}`, `Already exists: ${safe}`);
+				err(`Already exists: ${safe}`, `Already exists: ${safe}`);
 				return;
 			}
 			await fsp.rename(t.abs, dest);
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: `已重命名为：${safe}`,
+				text: `Renamed to: ${safe}`,
 				textEn: `Renamed to: ${safe}`,
 			});
 			this.host.emit({ type: "file_changed", path: parent });
 		} catch (e) {
-			err(`重命名失败：${(e as Error).message}`, `Rename failed: ${(e as Error).message}`);
+			err(`Rename failed: ${(e as Error).message}`, `Rename failed: ${(e as Error).message}`);
 		}
 	}
 
@@ -1202,19 +1197,19 @@ export class FilesService {
 			const t = this.resolveOpTarget(path);
 			const parent = this.wireParent(path);
 			if (!t || parent === null) {
-				err(`此处不可删除：${path}`, `Cannot delete here: ${path}`);
+				err(`Cannot delete here: ${path}`, `Cannot delete here: ${path}`);
 				return;
 			}
 			await fsp.rm(t.abs, { recursive: true, force: true });
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: `已删除：${path.split(/[\\/]/).pop() ?? path}`,
+				text: `Deleted: ${path.split(/[\\/]/).pop() ?? path}`,
 				textEn: `Deleted: ${path.split(/[\\/]/).pop() ?? path}`,
 			});
 			this.host.emit({ type: "file_changed", path: parent });
 		} catch (e) {
-			err(`删除失败：${(e as Error).message}`, `Delete failed: ${(e as Error).message}`);
+			err(`Delete failed: ${(e as Error).message}`, `Delete failed: ${(e as Error).message}`);
 		}
 	}
 
@@ -1228,27 +1223,27 @@ export class FilesService {
 			const s = this.resolveOpTarget(src);
 			const srcParent = this.wireParent(src);
 			if (!s || srcParent === null) {
-				err(`此处不可${move ? "移动" : "复制"}：${src}`, `Cannot ${move ? "move" : "copy"}: ${src}`);
+				err(`Cannot ${move ? "move" : "copy"}: ${src}`, `Cannot ${move ? "move" : "copy"}: ${src}`);
 				return;
 			}
 			const target = await this.resolveOpDir(destDir);
 			if (!target) {
-				err(`目标目录不存在：${destDir || "根目录"}`, `Target directory not found: ${destDir || "root"}`);
+				err(`Target directory not found: ${destDir || "root"}`, `Target directory not found: ${destDir || "root"}`);
 				return;
 			}
 			// 目录搬进自身或子目录 → 无限递归，必须拒绝（文件无此问题，但统一判一次）。
 			if (target.abs === s.abs || target.abs.startsWith(s.abs + sep)) {
-				err("不可复制/移动到自身或子目录", "Cannot copy/move into itself");
+				err("Cannot copy/move into itself", "Cannot copy/move into itself");
 				return;
 			}
 			const base = basename(s.abs);
 			let dest = join(target.abs, base);
 			if (!move) dest = await this.dedupeCopyDest(dest);
 			else if (await fsp.stat(dest).catch(() => null)) {
-				err(`目标已存在：${base}`, `Already exists at target: ${base}`);
+				err(`Already exists at target: ${base}`, `Already exists at target: ${base}`);
 				return;
 			}
-			const verb = move ? ["已移动", "Moved"] : ["已复制", "Copied"];
+			const verb = move ? ["Moved", "Moved"] : ["Copied", "Copied"];
 			if (move) {
 				try {
 					await fsp.rename(s.abs, dest);
@@ -1264,14 +1259,14 @@ export class FilesService {
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: `${verb[0]}：${base}`,
+				text: `${verb[1]}: ${base}`,
 				textEn: `${verb[1]}: ${base}`,
 			});
 			this.host.emit({ type: "file_changed", path: target.wire });
 			if (move && target.wire !== srcParent) this.host.emit({ type: "file_changed", path: srcParent });
 		} catch (e) {
 			err(
-				`${move ? "移动" : "复制"}失败：${(e as Error).message}`,
+				`${move ? "Move" : "Copy"} failed: ${(e as Error).message}`,
 				`${move ? "Move" : "Copy"} failed: ${(e as Error).message}`,
 			);
 		}
@@ -1300,7 +1295,7 @@ export class FilesService {
 			this.host.emit({
 				type: "notice",
 				level: "warning",
-				text: "无法打开系统文件管理：" + detail + "（远端/无桌面主机不支持）",
+				text: "Cannot open system file manager: " + detail + " (unsupported on remote/headless hosts)",
 				textEn: "Cannot open system file manager: " + detail + " (unsupported on remote/headless hosts)",
 			});
 		try {
@@ -1343,13 +1338,13 @@ export class FilesService {
 			const trimmed = path.trim();
 			const t = !trimmed ? { abs: resolve(this.host.getCwd()) } : this.resolveOpTarget(trimmed);
 			if (!t) {
-				err("此处不可定位：" + path, "Cannot reveal here: " + path);
+				err("Cannot reveal here: " + path, "Cannot reveal here: " + path);
 				return;
 			}
 			const abs = t.abs;
 			const st = await fsp.stat(abs).catch(() => null);
 			if (!st) {
-				err("文件不存在：" + path, "Not found: " + path);
+				err("Not found: " + path, "Not found: " + path);
 				return;
 			}
 			const isDir = st.isDirectory();
@@ -1361,14 +1356,14 @@ export class FilesService {
 				await this.spawnDetached(
 					"explorer.exe",
 					isDir ? ["/n,", abs] : ["/select,", abs],
-					"已在资源管理器中显示：" + base,
+					"Revealed in File Explorer: " + base,
 					"Revealed in File Explorer: " + base,
 				);
 			} else if (process.platform === "darwin") {
 				await this.spawnDetached(
 					"open",
 					isDir ? [abs] : ["-R", abs],
-					"已在访达中显示：" + base,
+					"Revealed in Finder: " + base,
 					"Revealed in Finder: " + base,
 				);
 			} else {
@@ -1376,12 +1371,12 @@ export class FilesService {
 				await this.spawnDetached(
 					"xdg-open",
 					[isDir ? abs : dirname(abs)],
-					"已打开所在目录：" + base,
+					"Opened containing folder: " + base,
 					"Opened containing folder: " + base,
 				);
 			}
 		} catch (e) {
-			err("定位失败：" + (e as Error).message, "Reveal failed: " + (e as Error).message);
+			err("Reveal failed: " + (e as Error).message, "Reveal failed: " + (e as Error).message);
 		}
 	}
 
@@ -1392,25 +1387,25 @@ export class FilesService {
 			const fsp = await import("node:fs/promises");
 			const t = this.resolveOpTarget(path);
 			if (!t) {
-				err("此处不可打开：" + path, "Cannot open here: " + path);
+				err("Cannot open here: " + path, "Cannot open here: " + path);
 				return;
 			}
 			const st = await fsp.stat(t.abs).catch(() => null);
 			if (!st) {
-				err("文件不存在：" + path, "Not found: " + path);
+				err("Not found: " + path, "Not found: " + path);
 				return;
 			}
 			if (!st.isFile()) {
-				err("请选择文件（目录请用“在资源管理器中显示”）", 'Please select a file (use "Reveal" for folders)');
+				err('Please select a file (use "Reveal" for folders)', 'Please select a file (use "Reveal" for folders)');
 				return;
 			}
 			const segs = path.split("/");
 			const base = segs[segs.length - 1] ?? path;
 			// explorer 直接跟路径即走默认关联打开（含空格路径单 argv，无拆分问题）。
 			const cmd = process.platform === "win32" ? "explorer.exe" : process.platform === "darwin" ? "open" : "xdg-open";
-			await this.spawnDetached(cmd, [t.abs], "已用默认应用打开：" + base, "Opened with default app: " + base);
+			await this.spawnDetached(cmd, [t.abs], "Opened with default app: " + base, "Opened with default app: " + base);
 		} catch (e) {
-			err("打开失败：" + (e as Error).message, "Open failed: " + (e as Error).message);
+			err("Open failed: " + (e as Error).message, "Open failed: " + (e as Error).message);
 		}
 	}
 

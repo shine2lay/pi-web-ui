@@ -31,8 +31,8 @@ const BIN_NAME = "pi-web-ui-dsh";
 const runtimeBase = await resolveRuntimeBase();
 if (!runtimeBase) {
 	console.error(
-		`[${BIN_NAME}] 找不到 DSH 运行时树（含 @deepseek-ai/dsh-base 的 node_modules）。` +
-			"请先执行 npm i -g @deepseek-ai/dsh（或设置 PI_WEB_DSH_RUNTIME 指向其 node_modules）。",
+		`[${BIN_NAME}] DSH runtime tree not found (the node_modules that contains @deepseek-ai/dsh-base). ` +
+			"Run npm i -g @deepseek-ai/dsh first (or set PI_WEB_DSH_RUNTIME to its node_modules).",
 	);
 	process.exit(1);
 }
@@ -105,7 +105,7 @@ const userPatchLists = userPatchFiles.map((file) => {
 	try {
 		return loadOverlayPatches(BIN_NAME, file);
 	} catch (err) {
-		process.stderr.write(`[${BIN_NAME}] 跳过用户 patch ${file}: ${err?.message ?? String(err)}\n`);
+		process.stderr.write(`[${BIN_NAME}] skipping user patch ${file}: ${err?.message ?? String(err)}\n`);
 		return [];
 	}
 });
@@ -116,7 +116,9 @@ if (presetPlanePatch) {
 	try {
 		presetPlaneLists = loadOverlayPatches(BIN_NAME, presetPlanePatch);
 	} catch (err) {
-		process.stderr.write(`[${BIN_NAME}] 跳过 preset-plane patch ${presetPlanePatch}: ${err?.message ?? String(err)}\n`);
+		process.stderr.write(
+			`[${BIN_NAME}] skipping preset-plane patch ${presetPlanePatch}: ${err?.message ?? String(err)}\n`,
+		);
 		presetPlaneLists = [];
 	}
 }
@@ -152,7 +154,7 @@ try {
 		const kids = e?.aggregateErrors ?? e?.errors ?? (e?.cause ? [e.cause] : []);
 		for (const k of kids) walk(k, depth + 1);
 	};
-	process.stderr.write(`[${BIN_NAME}] boot 失败: ${err?.message ?? String(err)}\n   runtime base: ${runtimeBase}\n`);
+	process.stderr.write(`[${BIN_NAME}] boot failed: ${err?.message ?? String(err)}\n   runtime base: ${runtimeBase}\n`);
 	walk(err, 0);
 	process.exit(1);
 }
@@ -165,7 +167,7 @@ const release = () => {
 		try {
 			await ctx.fiber.dispose();
 		} catch (err) {
-			console.error(`[${BIN_NAME}] teardown 错误: ${err?.message ?? String(err)}`);
+			console.error(`[${BIN_NAME}] teardown error: ${err?.message ?? String(err)}`);
 		}
 		process.exit(0);
 	})();

@@ -17,12 +17,12 @@ import {
 } from "../../server/i18n.js";
 
 describe("resolveServerLang", () => {
-	it("zh variants → zh", () => {
-		expect(resolveServerLang("zh")).toBe("zh");
-		expect(resolveServerLang("zh-CN")).toBe("zh");
-		expect(resolveServerLang("zh_TW")).toBe("zh");
-		expect(resolveServerLang("ZH-hk")).toBe("zh");
-		expect(resolveServerLang("  zh  ")).toBe("zh");
+	it("zh variants → en (the Chinese UI language was removed)", () => {
+		expect(resolveServerLang("zh")).toBe("en");
+		expect(resolveServerLang("zh-CN")).toBe("en");
+		expect(resolveServerLang("zh_TW")).toBe("en");
+		expect(resolveServerLang("ZH-hk")).toBe("en");
+		expect(resolveServerLang("  zh  ")).toBe("en");
 	});
 	it("other codes pass through normalized (v2: no longer collapsed to en)", () => {
 		expect(resolveServerLang("en")).toBe("en");
@@ -41,8 +41,8 @@ describe("resolveServerLang", () => {
 });
 
 describe("pick / isZh / bilingual", () => {
-	it("pick returns the matching variant", () => {
-		expect(pick("zh", "甲", "A")).toBe("甲");
+	it("pick returns English, also for zh (English only)", () => {
+		expect(pick("zh", "甲", "A")).toBe("A");
 		expect(pick("en", "甲", "A")).toBe("A");
 	});
 	it("pick without key falls back to English for third languages", () => {
@@ -52,21 +52,21 @@ describe("pick / isZh / bilingual", () => {
 		registerServerStrings("xx", { "k.i": "残り{n}件（{m}）" });
 		expect(pick("xx", "剩${1}个", "${1} left", "k.i", { n: 3, m: "x" })).toBe("残り3件（x）");
 		// zh/en inline stay pre-evaluated (vars ignored)
-		expect(pick("zh", "剩3个", "3 left", "k.i", { n: 3, m: "x" })).toBe("剩3个");
+		expect(pick("zh", "剩3个", "3 left", "k.i", { n: 3, m: "x" })).toBe("3 left");
 		expect(pick("en", "剩3个", "3 left", "k.i", { n: 3, m: "x" })).toBe("3 left");
 		// unknown slots stay literal; null vars skipped
 		registerServerStrings("xx", { "k.u": "a{b}c{d}" });
 		expect(pick("xx", "甲", "A", "k.u", { b: null as unknown as string })).toBe("ac{d}");
 		unregisterServerStrings("xx");
 	});
-	it("isZh", () => {
-		expect(isZh("zh")).toBe(true);
+	it("isZh is always false", () => {
+		expect(isZh("zh")).toBe(false);
 		expect(isZh("en")).toBe(false);
 		expect(isZh("ja")).toBe(false);
 	});
-	it("bilingual puts English first, dedupes", () => {
-		expect(bilingual("A", "甲")).toBe("A\n甲");
-		expect(bilingual("", "甲")).toBe("甲");
+	it("bilingual returns the English half only", () => {
+		expect(bilingual("A", "甲")).toBe("A");
+		expect(bilingual("", "甲")).toBe("");
 		expect(bilingual("A", "")).toBe("A");
 		expect(bilingual("same", "same")).toBe("same");
 	});
@@ -76,7 +76,7 @@ describe("translator tables", () => {
 	it("hit → translation; miss → English; zh ignores table", () => {
 		registerServerStrings("xx", { "demo.hello": "XX-HELLO" });
 		expect(pick("xx", "甲", "A", "demo.hello")).toBe("XX-HELLO");
-		expect(pick("xx", "甲", "A", "demo.missing")).toBe("A");
+		expect(pick("zh", "甲", "A", "demo.hello")).toBe("A");
 		expect(pick("zh", "甲", "A", "demo.hello")).toBe("甲");
 		expect(pick("en", "甲", "A", "demo.hello")).toBe("A");
 		expect(getServerString("xx", "demo.hello")).toBe("XX-HELLO");
@@ -91,7 +91,7 @@ describe("translator tables", () => {
 		unregisterServerStrings("pt");
 	});
 	it("getServerBlock splits \\n-joined hits, passes through zh/en arrays", () => {
-		registerServerStrings("xxb", { "blk.g": "l1\nl2\nl3" });
+		expect(getServerBlock("zh", "blk.g", ["甲"], ["A"])).toEqual(["A"]);
 		expect(getServerBlock("xxb", "blk.g", ["甲"], ["A"])).toEqual(["l1", "l2", "l3"]);
 		expect(getServerBlock("xxb", "blk.missing", ["甲"], ["A"])).toEqual(["A"]);
 		expect(getServerBlock("zh", "blk.g", ["甲"], ["A"])).toEqual(["甲"]);

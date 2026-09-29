@@ -83,10 +83,10 @@ export function createMcpHotReload(deps: McpHotReloadDeps): McpHotReload {
 		// 先记账再动手：同一个坏文件不反复刷屏，配置没再变也不重试。
 		applied = fp;
 		if (!servers) {
-			log("[mcp] mcp.json 解析失败，保留在跑的 MCP 服务器");
+			log("[mcp] mcp.json failed to parse, keeping the running MCP servers");
 			deps.onNotice?.(
 				"warning",
-				"mcp.json 解析失败，已保留当前 MCP 服务器（改好保存后会自动重载）",
+				"mcp.json failed to parse; kept the current MCP servers (they reload by themselves once it is fixed and saved)",
 				"Failed to parse mcp.json — keeping the running MCP servers (saving a valid file reloads automatically)",
 			);
 			return "invalid";
@@ -94,19 +94,19 @@ export function createMcpHotReload(deps: McpHotReloadDeps): McpHotReload {
 		const summary = await deps.reload();
 		deps.onToolsChanged?.();
 		log(
-			`[mcp] 配置已热加载：${summary.servers} 个服务器 / ${summary.tools} 个工具` +
-				`（沿用 ${summary.kept}、启动 ${summary.started}、关闭 ${summary.stopped}、失败 ${summary.failed}）`,
+			`[mcp] config hot-reloaded: ${summary.servers} servers / ${summary.tools} tools` +
+				` (kept ${summary.kept}, started ${summary.started}, stopped ${summary.stopped}, failed ${summary.failed})`,
 		);
 		deps.onNotice?.(
 			"info",
-			`mcp.json 已热加载：${summary.servers} 个服务器 / ${summary.tools} 个工具`,
+			`mcp.json hot-reloaded: ${summary.servers} servers / ${summary.tools} tools`,
 			`mcp.json reloaded: ${summary.servers} server(s) / ${summary.tools} tool(s)`,
 		);
 		return "reloaded";
 	}
 
 	function run(): void {
-		void apply().catch((err) => log("[mcp] 热加载失败：", err instanceof Error ? err.message : err));
+		void apply().catch((err) => log("[mcp] hot reload failed:", err instanceof Error ? err.message : err));
 	}
 
 	function schedule(): void {
@@ -122,7 +122,7 @@ export function createMcpHotReload(deps: McpHotReloadDeps): McpHotReload {
 		watcher?.close();
 		watcher = null;
 		if (poller) return;
-		log(`[mcp] 目录监视不可用，mcp.json 热加载回落到 ${pollIntervalMs}ms 轮询`);
+		log(`[mcp] folder watching unavailable, mcp.json hot reload falls back to ${pollIntervalMs}ms polling`);
 		poller = setInterval(run, pollIntervalMs);
 		poller.unref();
 	}

@@ -45,8 +45,8 @@ export const ASK_USER_NO_CLIENT_GRACE_MS = 30_000;
 
 /** 宽限期满仍无人在线时给模型的错误（与 pageCall 的无页面错误同一口径）。 */
 export const ASK_USER_NO_CLIENT_ERROR =
-	"没有已连接的 pi-web-ui 页面，无法向用户提问（no browser connected）。" +
-	"请直接在回答里把问题写给用户，不要再调用 ask_user_question。";
+	"No pi-web-ui page is connected, so the user cannot be asked (no browser connected). " +
+	"Write the question to the user directly in your reply; do not call ask_user_question again.";
 
 /** 提问那一刻：有页面就即时推（广播给所有在线客户端），没有就先挂着等。
  *  clientCount = 全进程在线客户端数。 */

@@ -283,7 +283,7 @@ describe("ClientSession 页面调用桥", () => {
 		for (const p of [p1, p2]) {
 			const res = await p;
 			expect(res.ok).toBe(false);
-			expect(res.ok === false && res.error).toContain("页面调用");
+			expect(res.ok === false && res.error).toContain("page call");
 		}
 	});
 });
@@ -380,7 +380,7 @@ describe('截图（op:"shot"）的结果怎么给模型', () => {
 			undefined,
 		)) as { content: Array<{ text?: string }> };
 		expect(out.content).toHaveLength(1);
-		expect(out.content[0].text).toContain("视觉桥");
+		expect(out.content[0].text).toContain("vision bridge");
 	});
 
 	it("非截图结果照旧走 JSON 文本（不因为加了截图把别的结果改坏）", async () => {

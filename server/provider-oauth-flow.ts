@@ -69,7 +69,7 @@ export class ProviderOAuthFlowManager {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: "该服务商不支持 OAuth 登录",
+				text: "This provider does not support OAuth login",
 				textEn: "This provider does not support OAuth login",
 			});
 			return null;

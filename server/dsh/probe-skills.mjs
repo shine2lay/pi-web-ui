@@ -69,11 +69,11 @@ const { filterSkillCatalogMessage } = await import(pathToFileURL(join(HERE, "run
 	}
 	// 全部禁用 → 占位文本。
 	const allDisabled = filterSkillCatalogMessage(cat, new Set(["alpha", "beta", "gamma"]));
-	if (!allDisabled.content[0].text.includes("本会话无可启用技能")) {
+	if (!allDisabled.content[0].text.includes("no skills can be enabled in this session")) {
 		console.error("FAIL all-disabled placeholder:", allDisabled.content[0].text.slice(0, 120));
 		process.exit(1);
 	}
-	console.log("✓ filterSkillCatalogMessage 纯函数单测通过");
+	console.log("✓ filterSkillCatalogMessage pure-function unit test passed");
 }
 
 // ---- 2. 运行时：register → list → set-disabled 往返 ----

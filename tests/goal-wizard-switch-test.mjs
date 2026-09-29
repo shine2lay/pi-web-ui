@@ -297,23 +297,23 @@ try {
 	check("不切会话：调研正常收敛并设目标", !!done1, done1?.text ?? "(无完成通知)");
 	check(
 		"不切会话时 notice 是「调研完成，目标已设为…」（无「已丢弃」字样）",
-		!!done1 && /^🎯 调研完成/.test(done1.text ?? "") && !/已丢弃/.test(done1.text ?? ""),
+		!!done1 && /^🎯 Survey done, goal set/.test(done1.text ?? "") && !/discard|was not applied/i.test(done1.text ?? ""),
 		done1?.text ?? "",
 	);
 	const lastWithGoal = [...client.goalHistory].reverse().find((g) => g?.goal);
 	check("目标落在发起对话上（goal_status 有目标）", !!lastWithGoal?.goal, lastWithGoal?.goal ?? "(无)");
 
 	await client.waitForState(
-		(s) => (s.messages ?? []).some((m) => m.role === "custom" && /原始目标草案/.test(Client.msgText(m))),
+		(s) => (s.messages ?? []).some((m) => m.role === "custom" && /Initial goal draft/.test(Client.msgText(m))),
 		30000,
 	);
 
 	const cards = client.wizardCards().map((c) => ({ ...c, text: Client.msgText(c) }));
 	console.log("  goal-wizard 卡片:\n" + (cards.map((c) => `    ${c.text.slice(0, 60)}`).join("\n") || "    (无)"));
-	const draftCard = cards.find((c) => /原始目标草案/.test(c.text));
+	const draftCard = cards.find((c) => /Initial goal draft/.test(c.text));
 	check("第一张 goal-wizard 卡片是「原始目标草案」", !!draftCard);
 	check("草案卡片含完整 draft 原文", !!draftCard && draftCard.text.includes(DRAFT));
-	const firstIsDraft = cards.length > 0 && /原始目标草案/.test(cards[0].text);
+	const firstIsDraft = cards.length > 0 && /Initial goal draft/.test(cards[0].text);
 	check("草案卡片排在第 1 题之前（流程有起点）", firstIsDraft, cards[0] ? cards[0].text.slice(0, 40) : "");
 
 	// ---- C：切走再回来的一轮 -------------------------------------------------
@@ -342,11 +342,11 @@ try {
 	// 目标落到「发起调研的那个对话」（new_chat 之后活动对话已经变了），
 	// 所以切回去 goal_status 才看得到。
 	const doneNotice = await client.waitForNotice(/目标调研完成|Survey done/, 60000);
-	const discard = client.goalNotices().find((n) => /已丢弃/.test(n.text ?? ""));
+	const discard = client.goalNotices().find((n) => /discard|was not applied/i.test(n.text ?? ""));
 	check("切会话后调研结果不再被丢弃", !!doneNotice && !discard, doneNotice?.text ?? "(无完成通知)");
 	check(
 		"完成通知点名是哪个会话（用户知道自己该切回哪儿）",
-		!!doneNotice && /^🎯 会话「/.test(doneNotice.text ?? ""),
+		!!doneNotice && /^🎯 Survey done in "/.test(doneNotice.text ?? ""),
 		doneNotice?.text ?? "",
 	);
 	// 切回「发起调研的那个对话」：goal bar 应显示已设定的目标（成果没丢）。

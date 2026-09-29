@@ -24,7 +24,7 @@ const JSONRPC_ENTRY = resolve(
 const rtBase = await resolveRuntimeBase();
 console.log("runtime base ->", rtBase);
 if (!rtBase) {
-	console.error("!! 运行时树解析失败 —— launcher 将无法启动");
+	console.error("!! runtime tree failed to resolve — the launcher will not be able to start");
 	process.exit(1);
 }
 const { existsSync } = await import("node:fs");

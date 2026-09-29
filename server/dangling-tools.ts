@@ -34,7 +34,7 @@ import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 
 export const DANGLING_TOOL_RESULT_TEXT =
-	"（系统：上一次运行被强制终止（工具执行超时/模型流卡死），该工具调用没有返回结果。为避免对话记录损坏，已自动填入一条合成结果。请根据需要重新执行该工具或继续对话。）";
+	"(System: the previous run was force-stopped (tool timeout or stuck model stream), so this tool call returned no result. A synthetic result was filled in automatically to keep the conversation record intact. Re-run the tool if needed, or carry on with the conversation.)";
 export const DANGLING_TOOL_RESULT_TEXT_EN =
 	"(System: the previous run was force-terminated (tool timeout / hung model stream) and this tool call never returned. A synthetic result was inserted automatically to keep the transcript valid. Re-run the tool or continue as needed.)";
 

@@ -4,7 +4,7 @@
 
 import type { ServerMessage } from "./protocol.js";
 import type { ClientStateStore, MarkerSettings } from "./client-state.js";
-import { pick, type ServerLang } from "./i18n.js";
+import { type ServerLang } from "./i18n.js";
 import {
 	ensureMarkersRegistered,
 	parseMarkers,
@@ -79,20 +79,12 @@ export class MarkerService {
 		// The dynamic lines ride the `{lines}` slot so translator packs can
 		// place them (a static table value could never inline them).
 		const linesText = lines.join("\n");
-		return pick(
-			this.lang(),
-			"\n\n────────── 内联标记工具（重要）──────────\n" +
-				"状态类操作（任务、标记位、通知）请直接写在回答正文里，采用内联标记语法，而不要调用对应工具。\n" +
-				"插件会替你执行并把标记从展示文本中移除，不会中断你的回答。\n\n" +
-				linesText +
-				"\n──────────\n",
+		return (
 			"\n\n────────── Inline marker tools (important) ──────────\n" +
-				"Write status operations (tasks, marker bits, notifications) directly in your reply text using inline marker syntax — do not call a tool for them.\n" +
-				"The plugin executes them and strips the markers from the displayed text without interrupting your reply.\n\n" +
-				linesText +
-				"\n──────────\n",
-			"markers.service.guidance.frame",
-			{ lines: linesText },
+			"Write status operations (tasks, marker bits, notifications) directly in your reply text using inline marker syntax — do not call a tool for them.\n" +
+			"The plugin executes them and strips the markers from the displayed text without interrupting your reply.\n\n" +
+			linesText +
+			"\n──────────\n"
 		);
 	}
 
@@ -226,13 +218,7 @@ export class MarkerService {
 				const errMsg = (e as Error)?.message ?? String(e);
 				result = {
 					applied: false,
-					error: pick(
-						this.lang(),
-						`执行异常: ${errMsg}`,
-						`Execution failed: ${errMsg}`,
-						"markers.service.execution.failed",
-						{ errMsg: errMsg },
-					),
+					error: `Execution failed: ${errMsg}`,
 				};
 			}
 			if (result.applied) {
@@ -297,8 +283,7 @@ export class MarkerService {
 	describe(conversationId: string, tool: string, includeDeleted = false): string {
 		const st = this.getState<TodoState>(conversationId, TODO_NAMESPACE, initTodoState);
 		const visible = st.tasks.filter((t) => includeDeleted || t.status !== "deleted");
-		if (visible.length === 0)
-			return pick(this.lang(), "[todo] （空）", "[todo] (empty)", "markers.service.describe.empty");
+		if (visible.length === 0) return "[todo] (empty)";
 		return visible.map((t) => `[${t.status}] #${t.id}: ${t.subject}`).join("\n");
 	}
 

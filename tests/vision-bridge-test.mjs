@@ -331,14 +331,14 @@ try {
 	});
 
 	// 1) "transcribing" notice
-	const startNotice = await c.waitFor("notice", 15000, (m) => m.text && m.text.includes("正在用视觉桥"));
+	const startNotice = await c.waitFor("notice", 15000, (m) => m.text && m.text.includes("via the vision bridge"));
 	check("transcribe-start notice", startNotice.level === "info");
 
 	// 2) mock vision API saw the image
 	const doneNotice = await c.waitFor(
 		"notice",
 		25000,
-		(m) => m.text && (m.text.includes("转写完成") || m.text.includes("转写失败")),
+		(m) => m.text && (m.text.includes("Images transcribed") || m.text.includes("Image transcription failed")),
 	);
 	check("transcribe-done notice", doneNotice.text.includes("vision"));
 	check(
@@ -429,7 +429,7 @@ try {
 			},
 		],
 	});
-	await c.waitFor("notice", 25000, (m) => m.text && m.text.includes("转写完成"));
+	await c.waitFor("notice", 25000, (m) => m.text && m.text.includes("Images transcribed"));
 	check(
 		"preferred model from settings is used",
 		visionRequestCount === before2 + 1 && visionRequests.at(-1)?.model === "glm-vl-mock",
@@ -453,7 +453,11 @@ try {
 			},
 		],
 	});
-	const offNotice = await c.waitFor("notice", 15000, (m) => m.text && m.text.includes("视觉桥已在设置中关闭"));
+	const offNotice = await c.waitFor(
+		"notice",
+		15000,
+		(m) => m.text && m.text.includes("vision bridge is off in settings"),
+	);
 	check(
 		"disabled bridge warns and skips transcription",
 		offNotice.level === "warning" && visionRequestCount === before3,
@@ -477,7 +481,7 @@ try {
 			},
 		],
 	});
-	const pathDone = await c.waitFor("notice", 25000, (m) => m.text && m.text.includes("转写完成"));
+	const pathDone = await c.waitFor("notice", 25000, (m) => m.text && m.text.includes("Images transcribed"));
 	check("path-referenced image triggers the vision bridge", visionRequestCount === beforePath + 1);
 	const pathCard = await c.waitForMessage(
 		(m) => m.customType === "file" && m.details?.mode === "bridged" && m.details?.path === "screenshot.png",
@@ -525,7 +529,7 @@ try {
 			},
 		],
 	});
-	await c.waitFor("notice", 25000, (m) => m.text && m.text.includes("转写完成"));
+	await c.waitFor("notice", 25000, (m) => m.text && m.text.includes("Images transcribed"));
 	const appendReq = visionRequests.at(-1);
 	check(
 		"append mode: custom text appended to the built-in default prompt",
@@ -556,7 +560,7 @@ try {
 			},
 		],
 	});
-	await c.waitFor("notice", 25000, (m) => m.text && m.text.includes("转写完成"));
+	await c.waitFor("notice", 25000, (m) => m.text && m.text.includes("Images transcribed"));
 	const replaceReq = visionRequests.at(-1);
 	check(
 		"replace mode: built-in prompt fully replaced by custom text",
@@ -584,7 +588,7 @@ try {
 			},
 		],
 	});
-	await c.waitFor("notice", 25000, (m) => m.text && m.text.includes("转写完成"));
+	await c.waitFor("notice", 25000, (m) => m.text && m.text.includes("Images transcribed"));
 	check("custom prompt change invalidates the transcript cache", visionRequestCount === before6 + 1);
 
 	// Restore defaults so a rerun behaves the same from the start.

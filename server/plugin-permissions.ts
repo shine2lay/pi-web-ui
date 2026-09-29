@@ -123,8 +123,8 @@ export class PluginPermissionStore {
 		family: PermissionFamily,
 		opts?: { hosts?: unknown; models?: unknown; reason?: string; remember?: boolean },
 	): void {
-		if (!PluginPermissionStore.validId(pluginId)) throw new Error(`非法插件 id：${pluginId}`);
-		if (family !== "net" && family !== "llm") throw new Error(`不支持的能力族：${String(family)}`);
+		if (!PluginPermissionStore.validId(pluginId)) throw new Error(`Invalid plugin id: ${pluginId}`);
+		if (family !== "net" && family !== "llm") throw new Error(`Unsupported capability family: ${String(family)}`);
 		const grant: PermissionGrant = {
 			pluginId,
 			family,

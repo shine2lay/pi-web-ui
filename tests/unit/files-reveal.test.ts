@@ -79,7 +79,7 @@ describe("files-service: revealEntry 支持定位根目录与空白处", () => {
 		const warnNotice = seen.find((m) => m.type === "notice" && m.level === "warning");
 		expect(warnNotice).toBeDefined();
 		if (warnNotice?.type === "notice") {
-			expect(warnNotice.text).toContain("此处不可定位");
+			expect(warnNotice.text).toContain("Cannot reveal here");
 		}
 	});
 });

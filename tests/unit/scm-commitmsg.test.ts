@@ -53,7 +53,7 @@ describe("buildCommitMsgInput", () => {
 
 	it("空仓库按 fallbackLang 注入语言指令", () => {
 		const zh = buildCommitMsgInput(ctx({ worktreePatch: "diff" }), "zh");
-		expect(zh).toContain("请用中文");
+		expect(zh).toContain("in English");
 		const en = buildCommitMsgInput(ctx({ worktreePatch: "diff" }), "en");
 		expect(en).toContain("in English");
 	});

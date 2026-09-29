@@ -23,7 +23,9 @@ export function warnPendingDrop(totalDropped: number, log: (line: string) => voi
 	const now = Date.now();
 	if (now - lastWarnAt < PENDING_DROP_WARN_INTERVAL_MS) return;
 	lastWarnAt = now;
-	log(`[ws] attach 未完成，命令队列超限丢最旧（累计 ${totalDropped} 条）`);
+	log(
+		`[ws] attach not finished, the command queue is over its limit and dropped the oldest (${totalDropped} in total)`,
+	);
 }
 
 /** 单测隔离用。 */

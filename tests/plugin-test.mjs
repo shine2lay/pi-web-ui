@@ -350,7 +350,11 @@ try {
 
 	// -- 5. 插件市场列表（plugin_catalog）：添加/移除回环 + 内置条目 -----------
 	// 注：attach 时的 plugin_catalog 在 connect()（ready）后已到达，此处监听新推送。
-	const addNoticeP = waitFor(sock, (m) => m.type === "notice" && m.text?.includes("已添加到插件列表"), "add notice");
+	const addNoticeP = waitFor(
+		sock,
+		(m) => m.type === "notice" && m.text?.includes("Added to the plugin list"),
+		"add notice",
+	);
 	const addCatP = waitFor(sock, (m) => m.type === "plugin_catalog", "catalog after add");
 	sock.send(
 		JSON.stringify({

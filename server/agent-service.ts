@@ -157,7 +157,7 @@ import {
 	type PromptMode,
 	ClientStateStore,
 } from "./client-state.js";
-import { pick, resolveServerLang, type ServerLang } from "./i18n.js";
+import { resolveServerLang, type ServerLang } from "./i18n.js";
 import { SubagentTemplatesStore, pickTemplatePrompt, type SubagentTemplate } from "./subagent-templates.js";
 import { ApprovalRulesStore, extractTargetPath, type ApprovalRule } from "./approval-rules.js";
 import { ComposerDraftsStore } from "./composer-drafts.js";
@@ -402,7 +402,7 @@ const EXCHANGE_DIGESTS = (() => {
 export class QuiesceRejectedError extends Error {
 	readonly code = "QUIESCED";
 	constructor(detail: string) {
-		super(`服务器正在排空存量工作（quiesce）——${detail}`);
+		super(`Server is draining existing work (quiesce) — ${detail}`);
 		this.name = "QuiesceRejectedError";
 	}
 }
@@ -445,7 +445,7 @@ const WINDOWS_PERSONA = `You are a coding agent running on Windows. The bash too
 - NEVER run interactive or foreground long-running commands through the bash tool (vi, less, top, python -, node -, npm run dev, sleep 10000). For servers/daemons use background execution with output redirected to a log file, then poll the log; stop them when done.
 - In the interactive terminal (TTY) — which is Git Bash too, not PowerShell — NEVER use heredocs (<<'EOF' ... EOF) or here-strings, and NEVER start interactive programs (vi, less, python -, node -, npm init): they wait for keyboard input that never arrives and hang the terminal forever. Prefer writing a temp script file (e.g. .pi-tmp.sh) and running it non-interactively. ALWAYS pass a timeout to long-running commands (e.g. \`timeout 120 npm run dev\`).
 
-Many legacy Chinese text files (.html/.txt/.md/.log, exported documents) are GBK/GB2312 encoded: the read tool decodes UTF-8 only and will show mojibake (乱码) for them. If a file's content looks garbled, read it through the terminal instead: in Git Bash use \`cat file | iconv -f GBK -t UTF-8\` (or \`iconv -f GBK -t UTF-8 file\`); in cmd use \`chcp 65001 && type file\`; in PowerShell use \`Get-Content -Encoding Default file\`. Never paste mojibake into your reasoning or answer — describe the decoded content instead.`;
+Many legacy Chinese text files (.html/.txt/.md/.log, exported documents) are GBK/GB2312 encoded: the read tool decodes UTF-8 only and will show mojibake for them. If a file's content looks garbled, read it through the terminal instead: in Git Bash use \`cat file | iconv -f GBK -t UTF-8\` (or \`iconv -f GBK -t UTF-8 file\`); in cmd use \`chcp 65001 && type file\`; in PowerShell use \`Get-Content -Encoding Default file\`. Never paste mojibake into your reasoning or answer — describe the decoded content instead.`;
 
 /**
  * Killable bash tool: wraps the SDK bash tool (native process spawn, NO terminal).
@@ -541,7 +541,7 @@ export function makeAdaptiveBashTool(
 	return {
 		...killable,
 		description:
-			"Run a shell command and return its full output plus exit code. Behavior depends on the「default bash override」setting (terminalBash):\n" +
+			'Run a shell command and return its full output plus exit code. Behavior depends on the "default bash override" setting (terminalBash):\n' +
 			"OFF → runs natively (process spawn, no terminal); persist has no effect.\n" +
 			"ON → runs in a visible terminal. persist=true keeps the 'ai-bash' terminal alive (shell state cd/venv/ssh retained across calls); persist=false (default) is a one-shot terminal whose output stays viewable.\n" +
 			"Run the bare command — never pipe through head/tail/more/less (use the head/tail params; pipes hide live progress). For interactive commands (REPLs, y/n prompts) set persist=true and drive them with terminal_input / terminal_key.",
@@ -641,13 +641,8 @@ export function withToolGuard(
 			if (opts.cwd && opts.askApproval) {
 				danger = checkDangerousToolCall(toolName, params, opts.cwd, opts.getRoots?.() ?? [], opts.getRules?.());
 				if (danger.denied) {
-					const reasonText = danger.reason ? ` 原因：${danger.reason}` : "";
 					const reasonTextEn = danger.reasonEn ? ` Reason: ${danger.reasonEn}` : "";
-					const text = pick(
-						lang,
-						`【工具执行被审批规则直接阻断】${reasonText}`,
-						`[Tool execution blocked by approval rule]${reasonTextEn}`,
-					);
+					const text = `[Tool execution blocked by approval rule]${reasonTextEn}`;
 					return {
 						content: [{ type: "text", text }],
 						details: { guardDenied: true, ruleDenied: true, reason: danger.reason },
@@ -674,7 +669,7 @@ export function withToolGuard(
 				approvalCategory = danger.category;
 			} else if (pre?.verdict.decision === "ask") {
 				needApproval = true;
-				approvalReason = pre.verdict.reason ?? "插件要求确认本次操作";
+				approvalReason = pre.verdict.reason ?? "Plugin requested confirmation for this operation";
 				approvalReasonEn = pre.verdict.reasonEn ?? "Plugin requested confirmation for this operation";
 				// 插件档位按插件 id 分：用户可以「允许同类」= 该插件的确认以后不再问。
 				approvalCategory = pluginApprovalCategory(pre.pluginId ?? "plugin");
@@ -693,13 +688,12 @@ export function withToolGuard(
 					approvalCategory,
 				);
 				if (res.decision === "deny") {
-					const reasonText = res.reason ? ` 原因：${res.reason}` : "";
 					const reasonTextEn = res.reason ? ` Reason: ${res.reason}` : "";
 					return {
 						content: [
 							{
 								type: "text",
-								text: pick(lang, `【操作被用户拒绝】${reasonText}`, `[Operation denied by user]${reasonTextEn}`),
+								text: `[Operation denied by user]${reasonTextEn}`,
 							},
 						],
 						details: { guardDenied: true, userDenied: true, reason: res.reason },
@@ -784,11 +778,7 @@ function wrapWriteToolWithPermission(
 					content: [
 						{
 							type: "text",
-							text: pick(
-								getLang(),
-								"【权限被拒绝】当前会话处于「只读模式」（read-only），禁止写入文件。若需修改请切换权限预设。",
-								"[Permission Denied] The current session is in 'read-only' mode; writing files is forbidden. Switch permission preset if needed.",
-							),
+							text: "[Permission Denied] The current session is in 'read-only' mode; writing files is forbidden. Switch permission preset if needed.",
 						},
 					],
 					isError: true,
@@ -801,11 +791,7 @@ function wrapWriteToolWithPermission(
 						content: [
 							{
 								type: "text",
-								text: pick(
-									getLang(),
-									`【权限被拒绝】当前会话处于「工作区内修改」（workspace-write-never）模式，禁止修改工作区外部文件（"${p}"）。若需修改请切换至「完全权限」。`,
-									`[Permission Denied] The current session is in 'workspace-write-never' mode; writing files outside the workspace ("${p}") is forbidden. Switch to 'danger-full-access' if needed.`,
-								),
+								text: `[Permission Denied] The current session is in 'workspace-write-never' mode; writing files outside the workspace ("${p}") is forbidden. Switch to 'danger-full-access' if needed.`,
 							},
 						],
 						isError: true,
@@ -823,11 +809,7 @@ function wrapWriteToolWithPermission(
 						content: [
 							{
 								type: "text",
-								text: pick(
-									getLang(),
-									`【文件写入被审批规则直接阻断】${danger.reason ? ` 原因：${danger.reason}` : ""}`,
-									`[File write blocked by approval rule]${danger.reason ? ` Reason: ${danger.reason}` : ""}`,
-								),
+								text: `[File write blocked by approval rule]${danger.reason ? ` Reason: ${danger.reason}` : ""}`,
 							},
 						],
 						details: { guardDenied: true, ruleDenied: true, reason: danger.reason },
@@ -849,11 +831,7 @@ function wrapWriteToolWithPermission(
 							content: [
 								{
 									type: "text",
-									text: pick(
-										getLang(),
-										`【文件写入被用户拒绝】${res.reason ? ` 原因：${res.reason}` : ""}`,
-										`[File write denied by user]${res.reason ? ` Reason: ${res.reason}` : ""}`,
-									),
+									text: `[File write denied by user]${res.reason ? ` Reason: ${res.reason}` : ""}`,
 								},
 							],
 							details: { guardDenied: true, userDenied: true, reason: res.reason },
@@ -905,11 +883,7 @@ function wrapEditToolWithPermission(
 					content: [
 						{
 							type: "text",
-							text: pick(
-								getLang(),
-								"【权限被拒绝】当前会话处于「只读模式」（read-only），禁止编辑文件。若需修改请切换权限预设。",
-								"[Permission Denied] The current session is in 'read-only' mode; editing files is forbidden. Switch permission preset if needed.",
-							),
+							text: "[Permission Denied] The current session is in 'read-only' mode; editing files is forbidden. Switch permission preset if needed.",
 						},
 					],
 					isError: true,
@@ -922,11 +896,7 @@ function wrapEditToolWithPermission(
 						content: [
 							{
 								type: "text",
-								text: pick(
-									getLang(),
-									`【权限被拒绝】当前会话处于「工作区内修改」（workspace-write-never）模式，禁止修改工作区外部文件（"${p}"）。若需修改请切换至「完全权限」。`,
-									`[Permission Denied] The current session is in 'workspace-write-never' mode; editing files outside the workspace ("${p}") is forbidden. Switch to 'danger-full-access' if needed.`,
-								),
+								text: `[Permission Denied] The current session is in 'workspace-write-never' mode; editing files outside the workspace ("${p}") is forbidden. Switch to 'danger-full-access' if needed.`,
 							},
 						],
 						isError: true,
@@ -944,11 +914,7 @@ function wrapEditToolWithPermission(
 						content: [
 							{
 								type: "text",
-								text: pick(
-									getLang(),
-									`【文件编辑被审批规则直接阻断】${danger.reason ? ` 原因：${danger.reason}` : ""}`,
-									`[File edit blocked by approval rule]${danger.reason ? ` Reason: ${danger.reason}` : ""}`,
-								),
+								text: `[File edit blocked by approval rule]${danger.reason ? ` Reason: ${danger.reason}` : ""}`,
 							},
 						],
 						details: { guardDenied: true, ruleDenied: true, reason: danger.reason },
@@ -970,11 +936,7 @@ function wrapEditToolWithPermission(
 							content: [
 								{
 									type: "text",
-									text: pick(
-										getLang(),
-										`【文件编辑被用户拒绝】${res.reason ? ` 原因：${res.reason}` : ""}`,
-										`[File edit denied by user]${res.reason ? ` Reason: ${res.reason}` : ""}`,
-									),
+									text: `[File edit denied by user]${res.reason ? ` Reason: ${res.reason}` : ""}`,
 								},
 							],
 							details: { guardDenied: true, userDenied: true, reason: res.reason },
@@ -1024,11 +986,7 @@ function wrapEditSoftToolWithPermission(
 					content: [
 						{
 							type: "text",
-							text: pick(
-								getLang(),
-								"【权限被拒绝】当前会话处于「只读模式」（read-only），禁止编辑文件。若需修改请切换权限预设。",
-								"[Permission Denied] The current session is in 'read-only' mode; editing files is forbidden. Switch permission preset if needed.",
-							),
+							text: "[Permission Denied] The current session is in 'read-only' mode; editing files is forbidden. Switch permission preset if needed.",
 						},
 					],
 					isError: true,
@@ -1041,11 +999,7 @@ function wrapEditSoftToolWithPermission(
 						content: [
 							{
 								type: "text",
-								text: pick(
-									getLang(),
-									`【权限被拒绝】当前会话处于「工作区内修改」（workspace-write-never）模式，禁止修改工作区外部文件（"${p}"）。若需修改请切换至「完全权限」。`,
-									`[Permission Denied] The current session is in 'workspace-write-never' mode; editing files outside the workspace ("${p}") is forbidden. Switch to 'danger-full-access' if needed.`,
-								),
+								text: `[Permission Denied] The current session is in 'workspace-write-never' mode; editing files outside the workspace ("${p}") is forbidden. Switch to 'danger-full-access' if needed.`,
 							},
 						],
 						isError: true,
@@ -1063,11 +1017,7 @@ function wrapEditSoftToolWithPermission(
 						content: [
 							{
 								type: "text",
-								text: pick(
-									getLang(),
-									`【文件编辑被审批规则直接阻断】${danger.reason ? ` 原因：${danger.reason}` : ""}`,
-									`[File edit blocked by approval rule]${danger.reason ? ` Reason: ${danger.reason}` : ""}`,
-								),
+								text: `[File edit blocked by approval rule]${danger.reason ? ` Reason: ${danger.reason}` : ""}`,
 							},
 						],
 						details: { guardDenied: true, ruleDenied: true, reason: danger.reason },
@@ -1089,11 +1039,7 @@ function wrapEditSoftToolWithPermission(
 							content: [
 								{
 									type: "text",
-									text: pick(
-										getLang(),
-										`【文件编辑被用户拒绝】${res.reason ? ` 原因：${res.reason}` : ""}`,
-										`[File edit denied by user]${res.reason ? ` Reason: ${res.reason}` : ""}`,
-									),
+									text: `[File edit denied by user]${res.reason ? ` Reason: ${res.reason}` : ""}`,
 								},
 							],
 							details: { guardDenied: true, userDenied: true, reason: res.reason },
@@ -1187,7 +1133,7 @@ export function makePlanUpdateTool(
 function wrapBashToolWithPermission(
 	tool: ToolDefinition,
 	getPermission: () => string,
-	getLang: () => ServerLang,
+	_getLang: () => ServerLang,
 ): ToolDefinition {
 	return {
 		...tool,
@@ -1198,11 +1144,7 @@ function wrapBashToolWithPermission(
 					content: [
 						{
 							type: "text",
-							text: pick(
-								getLang(),
-								"【权限被拒绝】当前会话处于「只读模式」（read-only），禁止执行终端命令。若需执行请切换权限预设。",
-								"[Permission Denied] The current session is in 'read-only' mode; running shell commands is forbidden. Switch permission preset if needed.",
-							),
+							text: "[Permission Denied] The current session is in 'read-only' mode; running shell commands is forbidden. Switch permission preset if needed.",
 						},
 					],
 					isError: true,
@@ -1346,9 +1288,7 @@ export function makeAskUserQuestionTool(
 				throw new Error("ask_user_question requires at least one question");
 			}
 			if (qs.length > 3) {
-				throw new Error(
-					"ask_user_question allows at most 3 questions per call to prevent question fatigue (单次提问最多不得超过 3 个问题)",
-				);
+				throw new Error("ask_user_question allows at most 3 questions per call to prevent question fatigue");
 			}
 			const answers = await clientSession.askUser(
 				qs,
@@ -1358,7 +1298,7 @@ export function makeAskUserQuestionTool(
 				ownerId,
 			);
 			if (answers === null) {
-				throw new Error("User cancelled the question.\n用户取消了提问。");
+				throw new Error("User cancelled the question.");
 			}
 			// 工具结果：把每道题的回答拼成简洁文本给模型，同时留 details 供 UI 展示。
 			const lines = answers.map((a) => {
@@ -1446,9 +1386,7 @@ export function formatPageCallResult(result: unknown): string {
 export function formatBrowserPageError(op: string, error: string): string {
 	return [
 		`browser_page "${op}" failed: ${error}`,
-		`browser_page "${op}" 失败：${error}`,
 		'Next: make sure a pi-web-ui page is open with the page-picker extension enabled and paired, then try op:"pages" to see which pages are available. If the target page is not allowed yet, ask the user to allow it in the extension.',
-		'下一步：确认 pi-web-ui 页面已打开、page-picker 扩展已启用并与该页面配对，再用 op:"pages" 看有哪些可操作页面；若目标页面尚未授权，请让用户先在扩展里授权。',
 	].join("\n");
 }
 
@@ -1545,9 +1483,7 @@ export function makeBrowserPageTool(
 			const p = (params ?? {}) as Record<string, unknown>;
 			const op = typeof p.op === "string" ? p.op.trim() : "";
 			if (!op) {
-				throw new Error(
-					'browser_page requires a non-empty `op` (e.g. "pages", "read", "click").\nbrowser_page 需要非空的 op（如 pages/read/click）。',
-				);
+				throw new Error('browser_page requires a non-empty `op` (e.g. "pages", "read", "click").');
 			}
 			const resolved = await clientSession.pageCall(
 				{
@@ -1577,10 +1513,7 @@ export function makeBrowserPageTool(
 			// 看不到图（纯文本模型）就交给视觉桥转写成文字证据 —— 与用户粘贴图片走同一套
 			// 选择逻辑与提示词，设置里开着就自动生效，模型侧不需要任何额外配置。
 			const where = `${p.target ?? "the page"}${shot.selector ? ` (element ${shot.selector})` : ""}`;
-			const caption = [
-				`Screenshot of ${where} — ${shot.width ?? "?"}×${shot.height ?? "?"} px.`,
-				`页面截图：${where} — ${shot.width ?? "?"}×${shot.height ?? "?"} px。`,
-			].join("\n");
+			const caption = [`Screenshot of ${where} — ${shot.width ?? "?"}×${shot.height ?? "?"} px.`].join("\n");
 			const details = {
 				op,
 				args: collectBrowserPageArgs(p),
@@ -1606,8 +1539,7 @@ ${bridged.text}
 				: [
 						`
 
-（当前模型看不到图片：${bridged?.reason ?? "视觉桥不可用"} —— 可让用户改用支持识图的模型，或在模型配置里加一个支持图片的模型）`,
-						`(The current model cannot see images: ${bridged?.reason ?? "vision bridge unavailable"})`,
+(The current model cannot see images: ${bridged?.reason ?? "vision bridge unavailable"} — ask the user to switch to an image-capable model, or add one in the model config)`,
 					].join("\n");
 			return {
 				content: [{ type: "text", text: caption + note }],
@@ -2160,7 +2092,10 @@ const MAX_SUBAGENTS = 16;
 /** SubagentSnapshot.prompt 下发上限：存的是全量 prompt，快照里只带前 N 字符，
  *  避免 subagent_list 一次把几个长 prompt 全推给模型烧 token。 */
 const SUBAGENT_PROMPT_SNAPSHOT_CAP = 2000;
-const DEFAULT_CONV_TITLE = "新对话";
+const DEFAULT_CONV_TITLE = "New chat";
+/** Chats saved before pi-web-ui went English-only were titled 新对话: they still count as untitled. */
+const LEGACY_CONV_TITLE = "新对话";
+const isUntitledTitle = (title: string): boolean => title === DEFAULT_CONV_TITLE || title === LEGACY_CONV_TITLE;
 
 /** First user text in a session, truncated for the conversation list. */
 function conversationTitle(session: AgentSession): string {
@@ -2766,10 +2701,10 @@ export class ClientSession {
 		const seconds = Math.max(1, Math.round(idleMs / 1000));
 		void conv.runtime.session
 			.sendUserMessage(
-				`（系统自动提醒：你启动的终端「${title}」（id=${terminalId}）已连续 ${seconds} 秒没有任何新输出。` +
-					`进程可能在等待输入、卡住或已挂起。\n最近输出：\n${lastLines || "（无输出）"}\n` +
-					`请用 terminal_read(terminalId="${terminalId}") 查看/搜索它的当前状态；` +
-					`若在等交互就用 terminal_input / terminal_key 回应；确认不再需要就 terminal_close 关掉它。）`,
+				`(System auto-reminder: the terminal "${title}" you started (id=${terminalId}) has had no new output for ${seconds} seconds. ` +
+					`The process may be waiting for input, stuck or hung.\nRecent output:\n${lastLines || "(no output)"}\n` +
+					`Use terminal_read(terminalId="${terminalId}") to check or search its current state; ` +
+					`if it is waiting for input, answer with terminal_input / terminal_key; if it is no longer needed, close it with terminal_close.)`,
 			)
 			.catch(() => {
 				// best effort —— 注入失败不影响终端本身
@@ -2796,11 +2731,11 @@ export class ClientSession {
 		} catch {
 			// 终端可能已被关闭
 		}
-		const exitText = info.exitCode === null ? "终端已关闭" : `退出码 ${info.exitCode}`;
+		const exitText = info.exitCode === null ? "terminal closed" : `exit code ${info.exitCode}`;
 		const cmdShort = info.command.length > 120 ? `${info.command.slice(0, 120)}…` : info.command;
 		const text =
-			`（系统：你之前在终端 ${info.terminalId} 后台运行的命令已结束（${exitText}）：${cmdShort}\n` +
-			`最后输出：\n${stripAnsi(tail).trim() || "（无输出）"}）`;
+			`(System: the command you ran in the background in terminal ${info.terminalId} has finished (${exitText}): ${cmdShort}\n` +
+			`Last output:\n${stripAnsi(tail).trim() || "(no output)"})`;
 		const session = conv.runtime.session;
 		if (session.isStreaming) {
 			void session.sendUserMessage(text).catch(() => {});
@@ -2841,26 +2776,14 @@ export class ClientSession {
 			).length;
 			if (openInProject >= MAX_OPEN_CONVERSATIONS) {
 				throw new Error(
-					pick(
-						this.getLang(),
-						`目标项目运行的普通对话已达上限（${MAX_OPEN_CONVERSATIONS} 个），无法创建持久化对话。请先关闭不需要的对话，或以轻量子代理（persist=false）方式运行`,
-						`The project already has max open regular conversations (${MAX_OPEN_CONVERSATIONS}). Please close some or run as a lightweight subagent (persist=false)`,
-						"agent.conv.limit.reached",
-						{ limit: MAX_OPEN_CONVERSATIONS },
-					),
+					`The project already has max open regular conversations (${MAX_OPEN_CONVERSATIONS}). Please close some or run as a lightweight subagent (persist=false)`,
 				);
 			}
 		} else {
 			const liveSubagents = [...this.convs.values()].filter((c) => c.isSubagent).length;
 			if (liveSubagents >= MAX_SUBAGENTS) {
 				throw new Error(
-					pick(
-						this.getLang(),
-						`子代理数量已达上限（${MAX_SUBAGENTS} 个），请先用 subagent_wait_all 等一部分完成、或用 subagent_stop 停掉不需要的再派发`,
-						`Subagent limit reached (${MAX_SUBAGENTS} live). Wait for some with subagent_wait_all or stop unneeded ones with subagent_stop before spawning more`,
-						"agent.subagent.limit.reached",
-						{ limit: MAX_SUBAGENTS },
-					),
+					`Subagent limit reached (${MAX_SUBAGENTS} live). Wait for some with subagent_wait_all or stop unneeded ones with subagent_stop before spawning more`,
 				);
 			}
 		}
@@ -2925,7 +2848,7 @@ export class ClientSession {
 				// 因此既不与主对话的 widget/status 串台，也不会让扩展卡在永远无人应答的弹窗上。
 				uiContext: WebUIContext.headless(),
 				onError: this.makeExtensionErrorReporter({
-					text: `子代理 ${conversationId}：`,
+					text: `Subagent ${conversationId}: `,
 					textEn: `Subagent ${conversationId}: `,
 				}),
 			});
@@ -2959,7 +2882,7 @@ export class ClientSession {
 					this.emit({
 						type: "notice",
 						level: "warning",
-						text: `子代理模型切换失败（将按默认模型运行）：${followModel}（${(err as Error).message}）`,
+						text: `Failed to set subagent model, running with default: ${followModel} (${(err as Error).message})`,
 						textEn: `Failed to set subagent model, running with default: ${followModel} (${(err as Error).message})`,
 					});
 				}
@@ -2967,7 +2890,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "warning",
-					text: `子代理模型不存在，将按默认模型运行：${followModel}`,
+					text: `Subagent model not found, running with default: ${followModel}`,
 					textEn: `Subagent model not found, running with default: ${followModel}`,
 				});
 			}
@@ -2986,7 +2909,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "warning",
-					text: `子代理思考强度设置失败（将按当前档位运行）：${thinkingLevel}（${(err as Error).message}）`,
+					text: `Failed to set subagent thinking level, keeping the current one: ${thinkingLevel} (${(err as Error).message})`,
 					textEn: `Failed to set subagent thinking level, keeping the current one: ${thinkingLevel} (${(err as Error).message})`,
 				});
 			}
@@ -2996,7 +2919,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `子代理 ${conversationId} 启动失败: ${err instanceof Error ? err.message : String(err)}`,
+				text: `Subagent ${conversationId} failed to start: ${err instanceof Error ? err.message : String(err)}`,
 				textEn: `Subagent ${conversationId} failed to start: ${err instanceof Error ? err.message : String(err)}`,
 			});
 		});
@@ -3366,7 +3289,7 @@ export class ClientSession {
 		this.emit({
 			type: "notice",
 			level: "info",
-			text: `子代理 ${fromRunId.slice(0, 8)}（${fromType}）已向同行子代理 ${toRunId.slice(0, 8)}（${toType}）直接交接`,
+			text: `Subagent ${fromRunId.slice(0, 8)} (${fromType}) handed off directly to ${toRunId.slice(0, 8)} (${toType})`,
 			textEn: `Subagent ${fromRunId.slice(0, 8)} (${fromType}) handed off directly to ${toRunId.slice(0, 8)} (${toType})`,
 		});
 
@@ -3404,7 +3327,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "info",
-					text: `分层上下文预算裁剪生效：已释放约 ${saved.toLocaleString()} tokens（裁剪远期工具输出/折叠已完成步骤），推迟全量压缩`,
+					text: `Hierarchical context pruning active: freed ~${saved.toLocaleString()} tokens (trimmed tool outputs / folded steps), deferring full compaction`,
 					textEn: `Hierarchical context pruning active: freed ~${saved.toLocaleString()} tokens (trimmed tool outputs / folded steps), deferring full compaction`,
 				});
 				if (conv.id === this.conv.id) {
@@ -3421,15 +3344,7 @@ export class ClientSession {
 			// 模板：存在且启用时应用；传了名字但不可用 → 抛错让工具转给 AI。
 			const tpl = templateName ? this.subagentTemplates.get(templateName) : undefined;
 			if (templateName && (!tpl || !tpl.enabled)) {
-				throw new Error(
-					pick(
-						this.getLang(),
-						`子代理模板不可用：${templateName}（不存在或已停用）`,
-						`Subagent template unavailable: ${templateName} (missing or disabled)`,
-						"agent.subagent.template.unavailable",
-						{ templateName: templateName },
-					),
-				);
+				throw new Error(`Subagent template unavailable: ${templateName} (missing or disabled)`);
 			}
 			// 模型优先级：显式 model 参数 > 模板自带模型 > 设置面板默认模型；都不给 = 跟随主对话。
 			return this.spawnSubagentConversation(prompt, type, cwd, tpl, model, parentId, persist);
@@ -3447,10 +3362,7 @@ export class ClientSession {
 		stopSubagent: async (convId) => {
 			const conv = this.convs.get(convId);
 			if (conv && (conv.session.isStreaming || !conv.session.isIdle)) {
-				await this.interruptRun(
-					conv,
-					pick(this.getLang(), "用户停止子代理", "User stopped the subagent", "agent.subagent.stop.user"),
-				);
+				await this.interruptRun(conv, "User stopped the subagent");
 			}
 		},
 		getWatchdogTimeoutMs: () => this.getBaseToolWatchdogTimeoutMs(),
@@ -3713,7 +3625,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "info",
-				text: `AI 已主动根据当前问题完成上下文压缩（保留 ~${retainTokens.toLocaleString()} tokens 近期上下文，重点保留当前问题相关内容）`,
+				text: `Context compacted proactively based on current issue (retained ~${retainTokens.toLocaleString()} tokens, focused on current task)`,
 				textEn: `Context compacted proactively based on current issue (retained ~${retainTokens.toLocaleString()} tokens, focused on current task)`,
 			});
 		} catch (err) {
@@ -3721,7 +3633,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "warning",
-				text: `主动上下文压缩未完成：${msg}`,
+				text: `Proactive context compaction did not finish: ${msg}`,
 				textEn: `Proactive context compaction did not finish: ${msg}`,
 			});
 		} finally {
@@ -4384,7 +4296,10 @@ export class ClientSession {
 									this.approvalRules.list(),
 								);
 								if (danger.denied || danger.dangerous) {
-									return { blocked: true, reason: danger.reason || "只读模式禁止执行高危/破坏性命令" };
+									return {
+										blocked: true,
+										reason: danger.reason || "Read-only mode forbids dangerous or destructive commands",
+									};
 								}
 							}
 							const danger = checkDangerousToolCall(
@@ -4395,7 +4310,7 @@ export class ClientSession {
 								this.approvalRules.list(),
 							);
 							if (danger.denied) {
-								return { blocked: true, reason: danger.reason || "命中系统阻断规则" };
+								return { blocked: true, reason: danger.reason || "Blocked by a system rule" };
 							}
 							return {};
 						},
@@ -4890,7 +4805,7 @@ export class ClientSession {
 			const message = err?.error ?? String(err);
 			const where = [err?.extensionPath, err?.event].filter(Boolean).join(" · ");
 			console.error(
-				`[extension] ${prefix?.text ?? "当前对话"}${where ? ` (${where})` : ""}: ${message}${err?.stack ? `\n${err.stack}` : ""}`,
+				`[extension] ${prefix?.text ?? "current chat"}${where ? ` (${where})` : ""}: ${message}${err?.stack ? `\n${err.stack}` : ""}`,
 			);
 			const key = `${err?.extensionPath ?? ""}|${err?.event ?? ""}|${message}`;
 			if (seen.has(key)) return;
@@ -4898,8 +4813,8 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: prefix ? `${prefix.text}扩展报错：${message}` : message,
-				textEn: prefix ? `${prefix.textEn} Extension error: ${message}` : message,
+				text: prefix ? `${prefix.textEn}Extension error: ${message}` : message,
+				textEn: prefix ? `${prefix.textEn}Extension error: ${message}` : message,
 			});
 		};
 	}
@@ -5213,7 +5128,7 @@ export class ClientSession {
 			// 弹窗（select/confirm/input）归这条对话，其余 ctx.ui 照旧给本窗口（见 chat-dialogs.ts）。
 			uiContext: chatUiContext(this.webUi, conv.dialogs, conv.session),
 			onError: this.makeExtensionErrorReporter(
-				conv.isEphemeral ? { text: `临时对话 ${conv.id}：`, textEn: `Ephemeral chat ${conv.id}: ` } : undefined,
+				conv.isEphemeral ? { text: `Ephemeral chat ${conv.id}: `, textEn: `Ephemeral chat ${conv.id}: ` } : undefined,
 			),
 		});
 		conv.unsubscribe = conv.session.subscribe((event) => this.onEvent(conv, event));
@@ -5260,7 +5175,7 @@ export class ClientSession {
 					this.emit({
 						type: "notice",
 						level: "warning",
-						text: `对话「${conv.title}」已 ${mins} 分钟无任何响应，可能已失联（网络中断或服务端挂起）。可点击停止后重试。`,
+						text: `Conversation "${conv.title}" has been silent for ${mins} min — possibly disconnected (network or hung server). Stop it and retry.`,
 						textEn: `Conversation "${conv.title}" has been silent for ${mins} min — possibly disconnected (network or hung server). Stop it and retry.`,
 					});
 				}
@@ -5304,12 +5219,11 @@ export class ClientSession {
 				// The tool finished before the deadline — nothing to do.
 				if (!conv.toolStartTimes.has(toolCallId)) return;
 				const durationMin = Math.round(totalMs / 60_000);
-				const durationDescZh = durationMin >= 1 ? `${durationMin} 分钟` : `${Math.round(totalMs / 1000)} 秒`;
 				const durationDescEn = durationMin >= 1 ? `${durationMin} min` : `${Math.round(totalMs / 1000)}s`;
 				this.emit({
 					type: "notice",
 					level: "warning",
-					text: `工具执行超过 ${durationDescZh}，已自动终止（防止挂死）。可调整超时：设置面板「工具」或环境变量 PI_WEB_TOOL_TIMEOUT_MS。`,
+					text: `Tool ran over ${durationDescEn} and was auto-terminated (hang guard). Tune via Settings -> Tools or PI_WEB_TOOL_TIMEOUT_MS env var.`,
 					textEn: `Tool ran over ${durationDescEn} and was auto-terminated (hang guard). Tune via Settings -> Tools or PI_WEB_TOOL_TIMEOUT_MS env var.`,
 				});
 				conv.toolStartTimes.delete(toolCallId);
@@ -5317,7 +5231,7 @@ export class ClientSession {
 				// agent_end will fire with stopReason "aborted" and existing logic
 				// clears any goal / review loop. interruptRun adds a force-reset
 				// fallback in case the model stream ignores the abort signal.
-				void this.interruptRun(conv, "工具执行超时");
+				void this.interruptRun(conv, "Tool timed out");
 			},
 			Math.max(0, delayMs),
 		);
@@ -5475,8 +5389,8 @@ export class ClientSession {
 	async writeForPlugins(id: string, text: string): Promise<{ ok: boolean; error?: string }> {
 		try {
 			const conv = this.convs.get(id);
-			if (!conv) return { ok: false, error: `未知对话：${id}` };
-			if (!text.trim()) return { ok: false, error: "投递文本为空" };
+			if (!conv) return { ok: false, error: `Unknown conversation: ${id}` };
+			if (!text.trim()) return { ok: false, error: "Text to deliver is empty" };
 			if (id !== this.activeId) await this.switchConversation(id);
 			await this.prompt(text);
 			return { ok: true };
@@ -5490,9 +5404,9 @@ export class ClientSession {
 	async abortForPlugins(id: string): Promise<{ ok: boolean; error?: string }> {
 		try {
 			const conv = this.convs.get(id);
-			if (!conv) return { ok: false, error: `未知对话：${id}` };
+			if (!conv) return { ok: false, error: `Unknown conversation: ${id}` };
 			if (this.conversationStreaming(conv)) {
-				await this.interruptRun(conv, "插件已中止运行");
+				await this.interruptRun(conv, "Stopped by a plugin");
 				this.flushSnapshot();
 			}
 			return { ok: true };
@@ -5580,7 +5494,7 @@ export class ClientSession {
 		try {
 			try {
 				if ((conv.session as unknown as { isCompacting?: boolean }).isCompacting === true) {
-					return { ok: false, busy: true, error: "上下文压缩进行中，稍后重试" };
+					return { ok: false, busy: true, error: "Context compaction in progress, retry shortly" };
 				}
 			} catch {
 				/* 读不到压缩态就直接投递，失败按异常走 */
@@ -5600,14 +5514,14 @@ export class ClientSession {
 	 *  空文本回 {ok:false}；异常 catch 透传 message。 */
 	async steerForPlugins(conversationId: string, text: string): Promise<{ ok: boolean; error?: string }> {
 		try {
-			if (!text.trim()) return { ok: false, error: "空消息" };
+			if (!text.trim()) return { ok: false, error: "Empty message" };
 			const own = await this.steerOwnConversation(conversationId, text);
 			if (own) return own;
 			if (typeof this.steerConversationElsewhere === "function") {
 				const r = await this.steerConversationElsewhere(conversationId, text);
 				if (r) return r;
 			}
-			return { ok: false, error: `未知对话：${conversationId}` };
+			return { ok: false, error: `Unknown conversation: ${conversationId}` };
 		} catch (err) {
 			return { ok: false, error: (err as Error).message };
 		}
@@ -5854,14 +5768,14 @@ export class ClientSession {
 					this.emit({
 						type: "notice",
 						level: "error",
-						text: `压缩上下文失败：${event.errorMessage}`,
+						text: `Context compaction failed: ${event.errorMessage}`,
 						textEn: `Context compaction failed: ${event.errorMessage}`,
 					});
 				} else if (event.aborted) {
 					this.emit({
 						type: "notice",
 						level: "warning",
-						text: "压缩上下文已取消",
+						text: "Context compaction cancelled",
 						textEn: "Context compaction cancelled",
 					});
 				} else if (event.result) {
@@ -5872,7 +5786,7 @@ export class ClientSession {
 					this.emit({
 						type: "notice",
 						level: "info",
-						text: `上下文压缩完成：${tokensBefore.toLocaleString()} → ${after.toLocaleString()} tokens（摘要已插入消息区）`,
+						text: `Context compacted: ${tokensBefore.toLocaleString()} → ${after.toLocaleString()} tokens (summary inserted into the message list)`,
 						textEn: `Context compacted: ${tokensBefore.toLocaleString()} → ${after.toLocaleString()} tokens (summary inserted into the message list)`,
 					});
 				}
@@ -5966,7 +5880,7 @@ export class ClientSession {
 						this.emit({
 							type: "notice",
 							level: "error",
-							text: `子代理 ${conv.id.slice(0, 8)}（${conv.subagentType ?? "general"}）运行失败：${error}`,
+							text: `Subagent ${conv.id.slice(0, 8)} (${conv.subagentType ?? "general"}) failed: ${error}`,
 							textEn: `Subagent ${conv.id.slice(0, 8)} (${conv.subagentType ?? "general"}) failed: ${error}`,
 						});
 					} else if (error) {
@@ -6234,9 +6148,9 @@ export class ClientSession {
 	 *  skipped by the prompt-start fast path (e.g. a concurrent switch) is
 	 *  recovered here instead of leaving a permanent “新对话”. */
 	private refreshConversationTitle(conv: Conversation): void {
-		if (conv.title !== DEFAULT_CONV_TITLE) return;
+		if (!isUntitledTitle(conv.title)) return;
 		const title = conversationTitle(conv.session);
-		if (title === DEFAULT_CONV_TITLE) return;
+		if (isUntitledTitle(title)) return;
 		conv.title = title;
 		this.emitConversations();
 	}
@@ -6467,7 +6381,7 @@ export class ClientSession {
 			agentPreset: conv
 				? {
 						id: conv.agentPreset ?? "standard",
-						name: PI_AGENT_PRESETS.find((p) => p.id === conv.agentPreset)?.name ?? "全功能",
+						name: PI_AGENT_PRESETS.find((p) => p.id === conv.agentPreset)?.name ?? "Full",
 						locked: conv.presetLocked || !this.isBlankConversation(conv),
 					}
 				: null,
@@ -6758,7 +6672,7 @@ export class ClientSession {
 	): Promise<QuestionAnswer[] | null> {
 		return new Promise((resolve, reject) => {
 			if (sig?.aborted || this.disposed) {
-				reject(new Error("ask_user_question 已中止"));
+				reject(new Error("ask_user_question aborted"));
 				return;
 			}
 			// 问卷开关（默认开）：关 → 不弹对话框，立即报错让模型得知已禁用。
@@ -6767,7 +6681,7 @@ export class ClientSession {
 				this.settingsSvc.current.questionnaireEnabled === false ||
 				(this.settingsSvc.current.disabledAgentTools ?? []).includes(ASK_USER_QUESTION_TOOL_NAME)
 			) {
-				reject(new Error("问卷功能已关闭，可在设置中重新开启"));
+				reject(new Error("Questionnaires are turned off; turn them back on in Settings"));
 				return;
 			}
 			const id = `q-${++ClientSession.questionSeq}`;
@@ -6956,7 +6870,7 @@ export class ClientSession {
 			// scheduler run); the prompt still waits, since every window and a plugin (Telegram) can
 			// answer it. It is refused only when nothing is left that could (the server shutting down).
 			if (this.disposed && ClientSession.liveSessions.size === 0 && !askHub.listening) {
-				resolve({ decision: "deny", reason: "会话已关闭" });
+				resolve({ decision: "deny", reason: "Session closed" });
 				return;
 			}
 			const id = `appr-${++ClientSession.approvalSeq}`;
@@ -7072,23 +6986,21 @@ export class ClientSession {
 
 	/** 记住策略后给用户一句回执（文本双语，前端按 locale 自选）。 */
 	private emitApprovalPolicyNotice(scope: "category" | "all", category?: UiApprovalCategory, auto = 0): void {
-		const tailZh = auto > 0 ? `，并已自动放行另外 ${auto} 项待审批` : "";
 		const tailEn = auto > 0 ? ` (auto-approved ${auto} other pending request(s))` : "";
 		if (scope === "all") {
 			this.emit({
 				type: "notice",
 				level: "info",
-				text: `本对话已允许全部工具审批，后续高危操作不再询问${tailZh}；可在 设置 →「工具」页撤销。`,
+				text: `All tool approvals are now allowed in this conversation${tailEn}; revoke it under Settings → Tools.`,
 				textEn: `All tool approvals are now allowed in this conversation${tailEn}; revoke it under Settings → Tools.`,
 			});
 			return;
 		}
-		const label = category?.label ?? "同类";
 		const labelEn = category?.labelEn ?? "this category";
 		this.emit({
 			type: "notice",
 			level: "info",
-			text: `本对话已允许「${label}」类操作，后续同类不再询问${tailZh}；可在 设置 →「工具」页撤销。`,
+			text: `Allowed "${labelEn}" in this conversation${tailEn}; revoke it under Settings → Tools.`,
 			textEn: `Allowed "${labelEn}" in this conversation${tailEn}; revoke it under Settings → Tools.`,
 		});
 	}
@@ -7108,7 +7020,7 @@ export class ClientSession {
 		this.emit({
 			type: "notice",
 			level: "info",
-			text: `${reasonZh}，已自动放行 ${n} 项待审批。`,
+			text: `${reasonEn} — auto-approved ${n} pending request(s).`,
 			textEn: `${reasonEn} — auto-approved ${n} pending request(s).`,
 		});
 		ClientSession.approvalsChanged();
@@ -7233,7 +7145,7 @@ export class ClientSession {
 			this.pendingApprovals.delete(id);
 			askHub.settle(id, { how: "gone", reason: why });
 			try {
-				a.resolve({ decision: "deny", reason: "会话已关闭" });
+				a.resolve({ decision: "deny", reason: "Session closed" });
 			} catch {
 				// 单个 resolve 异常不影响其余清理
 			}
@@ -7272,10 +7184,10 @@ export class ClientSession {
 	): Promise<{ text?: string; reason?: string }> {
 		const settings = this.settingsSvc.current;
 		if (settings.visionBridgeEnabled === false) {
-			return { reason: "视觉桥已在设置里关闭（设置 → 视觉桥）" };
+			return { reason: "The vision bridge is turned off in Settings (Settings → Vision bridge)" };
 		}
 		const runtime = this.session?.modelRuntime;
-		if (!runtime) return { reason: "拿不到模型运行时" };
+		if (!runtime) return { reason: "Model runtime unavailable" };
 		const lang = this.getLang?.() ?? "en";
 		let chosen = findVisionModels(runtime)[0] ?? null;
 		const pref = settings.visionBridgeModel;
@@ -7288,9 +7200,9 @@ export class ClientSession {
 				}
 			}
 		}
-		if (!chosen) return { reason: "没有可用的视觉模型（在模型配置里加一个支持图片的模型即可）" };
+		if (!chosen) return { reason: "No vision model available (add an image-capable model in the model config)" };
 		const model = runtime.getModel(chosen.provider, chosen.id);
-		if (!model) return { reason: "视觉模型已不可用" };
+		if (!model) return { reason: "The vision model is no longer available" };
 		try {
 			const text = await transcribeImages(
 				runtime,
@@ -7302,9 +7214,9 @@ export class ClientSession {
 					systemPrompt: buildVisionBridgePrompt(settings.visionBridgePromptMode, settings.visionBridgePrompt, lang),
 				},
 			);
-			return text.trim() ? { text } : { reason: "视觉桥返回了空转写" };
+			return text.trim() ? { text } : { reason: "The vision bridge returned an empty transcription" };
 		} catch (err) {
-			return { reason: `视觉桥转写失败：${err instanceof Error ? err.message : String(err)}` };
+			return { reason: `Vision bridge transcription failed: ${err instanceof Error ? err.message : String(err)}` };
 		}
 	}
 
@@ -7321,7 +7233,7 @@ export class ClientSession {
 			if (this.pendingPageCalls.delete(id)) {
 				resolve({
 					ok: false,
-					error: `${Math.round(timeoutMs / 1000)} 秒内没有收到浏览器响应（timeout ${timeoutMs}ms）。请确认 pi-web-ui 页面已打开且 page-picker 扩展已启用。`,
+					error: `No browser response within ${Math.round(timeoutMs / 1000)}s (timeout ${timeoutMs}ms). Make sure a pi-web-ui page is open and the page-picker extension is enabled.`,
 				});
 			}
 		}, timeoutMs);
@@ -7330,14 +7242,14 @@ export class ClientSession {
 	pageCall(req: PageCallRequest, sig: { aborted?: boolean }, conversationId?: string): Promise<PageCallResult> {
 		return new Promise((resolve) => {
 			if (sig?.aborted || this.disposed) {
-				resolve({ ok: false, error: "页面调用已中止（browser_page aborted）。" });
+				resolve({ ok: false, error: "The page call was aborted (browser_page aborted)." });
 				return;
 			}
 			if (this.sinks.size === 0) {
 				resolve({
 					ok: false,
 					error:
-						"没有已连接的 pi-web-ui 页面（no browser connected）。请打开 pi-web-ui 页面，并确认 page-picker 扩展已启用且已与该页面配对。",
+						"No pi-web-ui page is connected (no browser connected). Open a pi-web-ui page and make sure the page-picker extension is enabled and paired with it.",
 				});
 				return;
 			}
@@ -7362,7 +7274,7 @@ export class ClientSession {
 		pending.resolve(
 			ok
 				? { ok: true, result }
-				: { ok: false, error: error?.trim() || "浏览器操作失败（no error message from the page）" },
+				: { ok: false, error: error?.trim() || "Browser action failed (no error message from the page)" },
 		);
 	}
 
@@ -7370,7 +7282,10 @@ export class ClientSession {
 	cancelPendingPageCalls(): void {
 		for (const [, p] of this.pendingPageCalls) {
 			clearTimeout(p.timer);
-			p.resolve({ ok: false, error: "会话已关闭，挂起中的页面调用被取消（conversation closed）。" });
+			p.resolve({
+				ok: false,
+				error: "Conversation closed; the pending page call was cancelled (conversation closed).",
+			});
 		}
 		this.pendingPageCalls.clear();
 	}
@@ -7598,7 +7513,7 @@ export class ClientSession {
 				latest: null,
 				latestPublishedAt: null,
 				upToDate: false,
-				error: `检查更新失败：${(err as Error).message}`,
+				error: `Update check failed: ${(err as Error).message}`,
 			});
 		}
 	}
@@ -7638,7 +7553,7 @@ export class ClientSession {
 					this.emit({
 						type: "notice",
 						level: "info",
-						text: `发现 ${updatableBuiltins.length} 个内置插件有更新：${names}`,
+						text: `Update available for ${updatableBuiltins.length} built-in plugin(s): ${names}`,
 						textEn: `Update available for ${updatableBuiltins.length} built-in plugin(s): ${names}`,
 					});
 				} else {
@@ -7648,14 +7563,14 @@ export class ClientSession {
 						this.emit({
 							type: "notice",
 							level: "info",
-							text: `发现 ${allUpdatable.length} 个插件有更新：${names}`,
+							text: `Update available for ${allUpdatable.length} plugin(s): ${names}`,
 							textEn: `Update available for ${allUpdatable.length} plugin(s): ${names}`,
 						});
 					} else {
 						this.emit({
 							type: "notice",
 							level: "info",
-							text: "所有插件均为最新版本。",
+							text: "All plugins are up to date.",
 							textEn: "All plugins are up to date.",
 						});
 					}
@@ -7672,7 +7587,7 @@ export class ClientSession {
 					this.emit({
 						type: "notice",
 						level: "info",
-						text: `发现 ${newUpdatables.length} 个内置插件有更新可用：${names}，可前往设置或更新面板中更新。`,
+						text: `Update available for ${newUpdatables.length} built-in plugin(s): ${names}. You can update in Settings or the Updates panel.`,
 						textEn: `Update available for ${newUpdatables.length} built-in plugin(s): ${names}. You can update in Settings or the Updates panel.`,
 					});
 				}
@@ -7682,7 +7597,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "error",
-					text: `检查插件更新失败：${(err as Error).message}`,
+					text: `Failed to check plugin updates: ${(err as Error).message}`,
 					textEn: `Failed to check plugin updates: ${(err as Error).message}`,
 				});
 			}
@@ -7765,12 +7680,12 @@ export class ClientSession {
 					this.emit({
 						type: "notice",
 						level: "info",
-						text: `发现 ${newUpdatables.length} 个内置插件有更新可用：${names}，可前往设置或更新面板中更新。`,
+						text: `Update available for ${newUpdatables.length} built-in plugin(s): ${names}. You can update in Settings or the Updates panel.`,
 						textEn: `Update available for ${newUpdatables.length} built-in plugin(s): ${names}. You can update in Settings or the Updates panel.`,
 					});
 				}
 			} catch (err) {
-				console.warn("[agent-service] 检查插件更新失败:", err);
+				console.warn("[agent-service] plugin update check failed:", err);
 			}
 
 			const allItems = sortUpdateItems([...items, ...pluginItems]);
@@ -7787,7 +7702,7 @@ export class ClientSession {
 					latest: null,
 					latestPublishedAt: null,
 					upToDate: false,
-					error: `检查更新失败：${(err as Error).message}`,
+					error: `Update check failed: ${(err as Error).message}`,
 				},
 			];
 			this.emit({ type: "update_status_all", items });
@@ -7800,7 +7715,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "info",
-				text: "正在安装 pi agent CLI（npm i -g @earendil-works/pi-coding-agent）…",
+				text: "Installing pi agent CLI (npm i -g @earendil-works/pi-coding-agent)…",
 				textEn: "Installing pi agent CLI (npm i -g @earendil-works/pi-coding-agent)…",
 			});
 			const { code, out } = await this.runAsync("npm", ["i", "-g", "@earendil-works/pi-coding-agent"], 180_000);
@@ -7808,7 +7723,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "info",
-					text: "✅ pi agent CLI 安装完成。填入 API 密钥即可开始，或在终端运行 pi 完成登录。",
+					text: "✅ pi agent CLI installed. Enter an API key to start, or run pi in a terminal to log in.",
 					textEn: "✅ pi agent CLI installed. Enter an API key to start, or run pi in a terminal to log in.",
 				});
 				this.emit({ type: "install_result", ok: true, detail: "" });
@@ -7816,7 +7731,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "error",
-					text: `pi agent 安装失败（${code ?? "timeout"}）：${out.slice(0, 400)}`,
+					text: `pi agent install failed (${code ?? "timeout"}): ${out.slice(0, 400)}`,
 					textEn: `pi agent install failed (${code ?? "timeout"}): ${out.slice(0, 400)}`,
 				});
 				this.emit({
@@ -7829,7 +7744,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `pi agent 安装失败：${(err as Error).message}`,
+				text: `pi agent install failed: ${(err as Error).message}`,
 				textEn: `pi agent install failed: ${(err as Error).message}`,
 			});
 		}
@@ -7901,7 +7816,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "info",
-				text: `已重命名当前会话为「${name}」`,
+				text: `Renamed current session to "${name}"`,
 				textEn: `Renamed current session to "${name}"`,
 			});
 			this.flushSnapshot();
@@ -7927,7 +7842,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "error",
-					text: `插件命令 /${name} 执行失败：${(err as Error).message}`,
+					text: `Plugin command /${name} failed: ${(err as Error).message}`,
 					textEn: `Plugin command /${name} failed: ${(err as Error).message}`,
 				});
 			}
@@ -8325,7 +8240,7 @@ export class ClientSession {
 		// 审批总开关被关掉 → 挂着的待审批全部按批准放行（否则弹窗还在等人点，
 		// 而用户已经明确表示「不要再问我了」）。
 		if ((rest as { toolApprovalEnabled?: unknown }).toolApprovalEnabled === false) {
-			this.autoApprovePendingApprovals("审批已全局关闭", "Tool approval was disabled globally");
+			this.autoApprovePendingApprovals("Tool approval was disabled globally", "Tool approval was disabled globally");
 		}
 		if ((rest as { disabledPluginTools?: unknown }).disabledPluginTools !== undefined) {
 			this.refreshPluginTools();
@@ -8349,7 +8264,7 @@ export class ClientSession {
 					this.emit({
 						type: "notice",
 						level: "error",
-						text: `设置应用失败：${(err as Error).message}`,
+						text: `Failed to apply settings: ${(err as Error).message}`,
 						textEn: `Failed to apply settings: ${(err as Error).message}`,
 					});
 				}
@@ -8528,7 +8443,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "warning",
-				text: `会话已开始，预设锁定为「${PI_AGENT_PRESETS.find((p) => p.id === conv.agentPreset)?.name ?? conv.agentPreset}」（空白会话可切换）`,
+				text: `Session already started; preset locked to "${conv.agentPreset}" (only blank sessions can switch)`,
 				textEn: `Session already started; preset locked to "${conv.agentPreset}" (only blank sessions can switch)`,
 			});
 			this.flushSnapshot();
@@ -8539,7 +8454,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "warning",
-				text: `未知预设「${preset}」`,
+				text: `Unknown preset "${preset}"`,
 				textEn: `Unknown preset "${preset}"`,
 			});
 			return;
@@ -8558,7 +8473,7 @@ export class ClientSession {
 		this.emit({
 			type: "notice",
 			level: "info",
-			text: `已切换为「${hit.name}」预设`,
+			text: `Switched to preset "${hit.name}"`,
 			textEn: `Switched to preset "${hit.name}"`,
 		});
 		// 先快照后设置（见 switchConversationNow 末尾；带预设的新建对话也走这里）。
@@ -8573,7 +8488,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "warning",
-				text: `未知预设「${preset}」，默认预设未改`,
+				text: `Unknown preset "${preset}"; default preset unchanged`,
 				textEn: `Unknown preset "${preset}"; default preset unchanged`,
 			});
 			return;
@@ -8601,7 +8516,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "warning",
-				text: `未知权限预设「${preset}」`,
+				text: `Unknown permission preset "${preset}"`,
 				textEn: `Unknown permission preset "${preset}"`,
 			});
 			return;
@@ -8622,7 +8537,7 @@ export class ClientSession {
 		this.emit({
 			type: "notice",
 			level: "info",
-			text: `当前会话权限已切换为「${hit.name}」`,
+			text: `Current session permission switched to "${hit.name}"`,
 			textEn: `Current session permission switched to "${hit.name}"`,
 		});
 		this.flushSnapshot();
@@ -8635,7 +8550,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "warning",
-				text: `未知权限预设「${preset}」，默认未改`,
+				text: `Unknown permission preset "${preset}"; default unchanged`,
 				textEn: `Unknown permission preset "${preset}"; default unchanged`,
 			});
 			return;
@@ -8730,7 +8645,7 @@ export class ClientSession {
 		this.emit({
 			type: "notice",
 			level: "error",
-			text: "服务器正在排空存量工作（quiesce），已拒绝新的对话/消息/编辑。存量运行会继续跑完；用 pi-web-ui server unquiesce 可恢复。",
+			text: "Server is draining (quiesce) and rejected the new chat/message/edit. Existing runs continue; resume with pi-web-ui server unquiesce.",
 			textEn:
 				"Server is draining (quiesce) and rejected the new chat/message/edit. Existing runs continue; resume with pi-web-ui server unquiesce.",
 		});
@@ -8927,7 +8842,7 @@ export class ClientSession {
 		this.pendingNotices.push({
 			type: "notice",
 			level: "info",
-			text: "已恢复你关闭浏览器前的工作会话（含运行中的对话），可直接继续查看与操作。",
+			text: "Restored the workspace session from before the browser was closed, including its running conversations — pick up right where you left off.",
 			textEn:
 				"Restored the workspace session from before the browser was closed, including its running conversations — pick up right where you left off.",
 		});
@@ -9015,7 +8930,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "error",
-					text: `发送已拒绝：该对话的记录尾是一个没有结果的工具调用（上次运行被强制终止），且自动修复失败。请从历史记录重新打开该对话，或新建对话后重试。`,
+					text: `Prompt refused: this transcript ends with a tool call that never got a result (last run was force-terminated) and auto-repair failed. Reopen it from history or start a new conversation.`,
 					textEn: `Prompt refused: this transcript ends with a tool call that never got a result (last run was force-terminated) and auto-repair failed. Reopen it from history or start a new conversation.`,
 				});
 				this.flushSnapshot();
@@ -9068,7 +8983,7 @@ export class ClientSession {
 							this.emit({
 								type: "notice",
 								level: "warning",
-								text: `检测到上次运行残留的 ${dangling.length} 个无结果工具调用，已自动填入合成结果后继续。如任务未完成请重新执行该工具。`,
+								text: `Found ${dangling.length} tool call(s) without results from the last run; synthetic results were inserted automatically before continuing. Re-run the tool if the task is incomplete.`,
 								textEn: `Found ${dangling.length} tool call(s) without results from the last run; synthetic results were inserted automatically before continuing. Re-run the tool if the task is incomplete.`,
 							});
 						} else {
@@ -9076,7 +8991,7 @@ export class ClientSession {
 							this.emit({
 								type: "notice",
 								level: "error",
-								text: `发送已拒绝：该对话的记录尾是一个没有结果的工具调用（上次运行被强制终止），且自动修复失败。请从历史记录重新打开该对话，或新建对话后重试。`,
+								text: `Prompt refused: this transcript ends with a tool call that never got a result (last run was force-terminated) and auto-repair failed. Reopen it from history or start a new conversation.`,
 								textEn: `Prompt refused: this transcript ends with a tool call that never got a result (last run was force-terminated) and auto-repair failed. Reopen it from history or start a new conversation.`,
 							});
 							this.flushSnapshot();
@@ -9125,9 +9040,11 @@ export class ClientSession {
 						let label: string;
 						if (c.isSubagent) {
 							const parent = c.parentId ? this.convs.get(c.parentId) : undefined;
-							label = parent ? `本窗口「${parent.title}」的子代理「${c.title}」` : `本窗口子代理「${c.title}」`;
+							label = parent
+								? `subagent of "${parent.title}" in this window: "${c.title}"`
+								: `subagent "${c.title}" in this window`;
 						} else {
-							label = `本窗口「${c.title}」`;
+							label = `"${c.title}" in this window`;
 						}
 						return { label, touches: extractTouches(this.convTranscript(c)) };
 					});
@@ -9141,19 +9058,19 @@ export class ClientSession {
 				const capItem = (st: string): string => (st.length <= 60 ? st : `${st.slice(0, 59)}…`);
 				const noticeTitles = [
 					...localRunners.map((r) => r.label),
-					...externalRunners.map((r) => `另一处「${r.title}」`),
+					...externalRunners.map((r) => `"${r.title}" elsewhere`),
 				].map(capItem);
 				const aiItems = [
 					...localRunners.map((r) => `${r.label}·${r.touches.length} files`),
-					...externalRunners.map((r) => `另一处「${r.title}」·touches unknown`),
+					...externalRunners.map((r) => `"${r.title}" elsewhere·touches unknown`),
 				].map(capItem);
 				if (noticeTitles.length > 0) {
-					const shown = noticeTitles.slice(0, 3).join("、");
-					const more = noticeTitles.length > 3 ? `等 ${noticeTitles.length} 处` : "";
+					const shown = noticeTitles.slice(0, 3).join(", ");
+					const more = noticeTitles.length > 3 ? `(${noticeTitles.length} in total)` : "";
 					this.emit({
 						type: "notice",
 						level: "info",
-						text: `同项目并行提醒：${shown}${more}正在同一项目运行。你可以继续（适合改不同文件），改动同一文件前请先确认；拿不准就等它跑完。`,
+						text: `Parallel-work notice: ${shown}${more ? " and more" : ""} running in the same project. You may continue (fine for different files); confirm before touching the same files, or wait for it to finish when unsure.`,
 						textEn: `Parallel-work notice: ${shown}${more ? " and more" : ""} running in the same project. You may continue (fine for different files); confirm before touching the same files, or wait for it to finish when unsure.`,
 					});
 					// 给 AI 的上下文：交集由服务端算好写明“⚠ 双方都动过 X”，AI 不用自己
@@ -9179,10 +9096,6 @@ export class ClientSession {
 						.slice(0, 3)
 						.map((h) => `${h.touch.path} (claimed by ${h.claim.ownerTitle})`)
 						.join("; ");
-					const claimHitZh = myClaimed
-						.slice(0, 3)
-						.map((h) => `${h.touch.path}（${h.claim.ownerTitle}已认领）`)
-						.join("、");
 					const claimMore = myClaimed.length > 3 ? ` (+${myClaimed.length - 3})` : "";
 					const claimsSummaryEn =
 						othersClaims.length > 0
@@ -9191,18 +9104,10 @@ export class ClientSession {
 									.map((c) => `${c.path} ("${c.ownerTitle}")`)
 									.join("; ")}${othersClaims.length > 3 ? ` (+${othersClaims.length - 3})` : ""}.`
 							: "";
-					const claimsSummaryZh =
-						othersClaims.length > 0
-							? ` 对方认领（绕行）：${othersClaims
-									.slice(0, 3)
-									.map((c) => `${c.path}（「${c.ownerTitle}」）`)
-									.join("、")}${othersClaims.length > 3 ? `（等 ${othersClaims.length - 3} 处）` : ""}。`
-							: "";
 					const clashes = localRunners
 						.map((r) => ({ label: r.label, hits: intersectTouches(r.touches, mine) }))
 						.filter((r) => r.hits.length > 0);
 					const extNoteEn = externalRunners.length > 0 ? ` Touched files of external run(s) are unknown.` : "";
-					const extNoteZh = externalRunners.length > 0 ? `外部运行的文件触碰未知。` : "";
 					// 预设拿掉问卷工具时（minimal/code/ask），提醒文案不点不存在的工具名，
 					// 改走正文提问（见 tool-manager.ts 语义总表；认领信息本身照常有用）。
 					const canAsk = presetHasQuestionnaire(
@@ -9211,7 +9116,6 @@ export class ClientSession {
 					const askClauseEn = canAsk
 						? "use ask_user_question when unsure "
 						: "ask the user in your reply text when unsure ";
-					const askClauseZh = canAsk ? "拿不准就用 ask_user_question 让用户选择：" : "拿不准就在回复正文里直接问用户：";
 					let aiReminder: string;
 					if (clashes.length === 0 && myClaimed.length === 0) {
 						aiReminder =
@@ -9219,10 +9123,7 @@ export class ClientSession {
 							`are currently running in the same project directory. No file written by both you and them was detected, ` +
 							`so working on different files in parallel is fine; before writing the same files or running project-wide ` +
 							`commands, assess the conflict risk first, and ${askClauseEn}` +
-							`(continue in parallel / wait / watch read-only).${extNoteEn}${claimsSummaryEn})\n` +
-							`（系统提醒：同一项目另有 ${aiItems.length} 处运行（${shown}${more}）。未发现双方都写过的文件，` +
-							`改不同文件可并行；动同一文件或跑全局命令前先评估冲突，${askClauseZh}` +
-							`并行 / 等它跑完 / 只读围观。${extNoteZh}${claimsSummaryZh}）`;
+							`(continue in parallel / wait / watch read-only).${extNoteEn}${claimsSummaryEn})`;
 					} else {
 						// 有交集档：每处 ≤3 条完整路径 + 计数（路径永不截断，见 conversation-touches）。
 						const clashPartsEn = clashes.map((h) => `${h.label} — you both wrote: ${formatTouchesCompact(h.hits)}`);
@@ -9232,19 +9133,11 @@ export class ClientSession {
 							);
 						}
 						const clashEn = clashPartsEn.join("; ");
-						const clashPartsZh = clashes.map((h) => `⚠ ${h.label}双方都动过：${formatTouchesCompact(h.hits)}`);
-						if (myClaimed.length > 0) {
-							clashPartsZh.push(`⚠ 你动过、对方已认领：${claimHitZh}${claimMore} —— 动之前先问用户`);
-						}
-						const clashZh = clashPartsZh.join("；");
 						aiReminder =
 							`(System reminder: ${aiItems.length} other run(s) [${aiItems.join("; ")}] ` +
 							`are currently running in the same project directory. ⚠ ${clashEn} — re-read these files before ` +
 							`touching them again, and ${askClauseEn}` +
-							`(continue in parallel / wait / watch read-only).${extNoteEn})\n` +
-							`（系统提醒：同一项目另有 ${aiItems.length} 处运行（${shown}${more}）。` +
-							`${clashZh} —— 再动这些文件前先读最新内容，${askClauseZh}` +
-							`并行 / 等它跑完 / 只读围观。${extNoteZh}）`;
+							`(continue in parallel / wait / watch read-only).${extNoteEn})`;
 					}
 					try {
 						await s.sendCustomMessage(
@@ -9263,7 +9156,7 @@ export class ClientSession {
 						this.notifyExternalClients?.({
 							type: "notice",
 							level: "info",
-							text: `同项目并行提醒：另一处在「${conv.cwd}」开始了对话（「${conv.title}」），可能与你正在跑的任务并行改动同一项目。`,
+							text: `Parallel-work notice: another window started a conversation ("${conv.title}") in "${conv.cwd}", possibly editing the same project in parallel with your running task.`,
 							textEn: `Parallel-work notice: another window started a conversation ("${conv.title}") in "${conv.cwd}", possibly editing the same project in parallel with your running task.`,
 						});
 					}
@@ -9279,7 +9172,7 @@ export class ClientSession {
 			// rename entirely. A failed send still leaves the name, which matches
 			// what the user typed intent-wise; the entry_appended fallback below
 			// re-derives it from the persisted transcript when needed.
-			if (conv.title === DEFAULT_CONV_TITLE && text.trim() && !conv.session.sessionName?.trim()) {
+			if (isUntitledTitle(conv.title) && text.trim() && !conv.session.sessionName?.trim()) {
 				const trimmed = text.trim().replace(/\s+/g, " ");
 				conv.title = trimmed.length > 30 ? `${trimmed.slice(0, 30)}…` : trimmed;
 				// 同时也是 #140 的入列时刻：这条对话从此有内容了，左栏「运行的对话」
@@ -9372,7 +9265,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `提示发送失败：${(err as Error).message}`,
+				text: `Failed to send prompt: ${(err as Error).message}`,
 				textEn: `Failed to send prompt: ${(err as Error).message}`,
 			});
 		}
@@ -9423,7 +9316,7 @@ export class ClientSession {
 		}
 		// 只停止智能体运行本身；AI 在后台启动的服务由「后台任务」面板单独
 		// 管理（可逐个停止或全部关闭），不会在停止对话时被连带杀掉。
-		await this.interruptRun(this.conv, "已停止");
+		await this.interruptRun(this.conv, "Stopped");
 		this.flushSnapshot();
 	}
 
@@ -9440,7 +9333,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "info",
-					text: "对话正在生成中，无需重试",
+					text: "The conversation is still generating — no need to retry",
 					textEn: "The conversation is still generating — no need to retry",
 				});
 				return;
@@ -9449,7 +9342,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "info",
-					text: "正在自动重试中，稍候即可",
+					text: "Auto-retry is in progress — please wait",
 					textEn: "Auto-retry is in progress — please wait",
 				});
 				return;
@@ -9473,20 +9366,20 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "info",
-					text: "没有可重试的失败：上一轮没有报错结束",
+					text: "Nothing to retry: the last turn did not end with an error",
 					textEn: "Nothing to retry: the last turn did not end with an error",
 				});
 				return;
 			}
 			// 轨迹用：下一轮 agent_start 消费（否则插件回退为「继续执行」）。
-			conv.pendingTask = "手动重试上次失败的模型请求";
+			conv.pendingTask = "Manually retrying the last failed model request";
 			await s.sendCustomMessage(
 				{
 					customType: "manual-retry",
 					content: [
 						{
 							type: "text",
-							text: "（系统：用户点击了「重试」。请基于完整上下文重新发起上一次失败的模型请求，继续完成用户的任务。）",
+							text: '(System: the user clicked "Retry". Re-send the last failed model request based on the full context and continue the user\'s task.)',
 						},
 					],
 					display: false,
@@ -9501,7 +9394,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `手动重试失败：${(err as Error).message}`,
+				text: `Manual retry failed: ${(err as Error).message}`,
 				textEn: `Manual retry failed: ${(err as Error).message}`,
 			});
 		}
@@ -9555,7 +9448,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "error",
-					text: `重新入队插队消息失败：${(err as Error).message}`,
+					text: `Failed to re-queue the steer message: ${(err as Error).message}`,
 					textEn: `Failed to re-queue the steer message: ${(err as Error).message}`,
 				});
 			}
@@ -9567,7 +9460,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "error",
-					text: `重新入队排队消息失败：${(err as Error).message}`,
+					text: `Failed to re-queue the queued message: ${(err as Error).message}`,
 					textEn: `Failed to re-queue the queued message: ${(err as Error).message}`,
 				});
 			}
@@ -9629,7 +9522,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "info",
-					text: `后台任务「${taskId}」不存在或已结束`,
+					text: `Background task "${taskId}" does not exist or has ended`,
 					textEn: `Background task "${taskId}" does not exist or has ended`,
 				});
 			}
@@ -9655,7 +9548,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "info",
-				text: "当前没有正在运行的 bash 命令",
+				text: "No bash command is running",
 				textEn: "No bash command is running",
 			});
 			this.flushSnapshot();
@@ -9666,7 +9559,7 @@ export class ClientSession {
 		this.emit({
 			type: "notice",
 			level: "info",
-			text: "已停止 bash 命令（对话继续）",
+			text: "Bash command stopped (conversation continues)",
 			textEn: "Bash command stopped (conversation continues)",
 		});
 		// 让 AI 明确知道是用户手动停止：sendUserMessage 触发下一轮，agent
@@ -9674,7 +9567,7 @@ export class ClientSession {
 		// 为什么命令失败了）。
 		try {
 			await this.conv.runtime.session.sendUserMessage(
-				"（系统：用户手动停止了刚才的 bash 命令——命令被中止，终止前已输出的内容在对应工具结果里。请据此继续，不要重跑被中止的命令，除非确实必要。）",
+				"(System: the user manually stopped the bash command that was just running — it was aborted, and whatever it printed before stopping is in its tool result. Continue from there; don't re-run the aborted command unless it's really needed.)",
 			);
 		} catch {
 			// best effort — 消息注入失败不影响命令已停止的事实
@@ -9702,7 +9595,10 @@ export class ClientSession {
 		const force = () => {
 			if (forced) return;
 			forced = true;
-			void this.forceResetConversation(conv, `${reason}：运行未终止，已强制重置当前对话`);
+			void this.forceResetConversation(
+				conv,
+				`${reason}: the run did not stop, so the current conversation was force-reset`,
+			);
 		};
 		// 1) abort itself hangs (model stream ignores the signal) → hard kill.
 		const abortTimer = setTimeout(() => {
@@ -9717,7 +9613,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `中止失败：${(err as Error).message}`,
+				text: `Abort failed: ${(err as Error).message}`,
 				textEn: `Abort failed: ${(err as Error).message}`,
 			});
 		}
@@ -9796,7 +9692,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "warning",
-					text: `上次运行被强制终止，${healedCount} 个无结果的工具调用已自动填入合成结果（转录链已修复）。建议检查任务状态，必要时重新执行该工具。`,
+					text: `The last run was force-terminated; ${healedCount} tool call(s) without results were filled with synthetic results (transcript healed). Verify task state and re-run the tool if needed.`,
 					textEn: `The last run was force-terminated; ${healedCount} tool call(s) without results were filled with synthetic results (transcript healed). Verify task state and re-run the tool if needed.`,
 				});
 			}
@@ -9816,7 +9712,7 @@ export class ClientSession {
 				type: "notice",
 				level: "warning",
 				text: reason,
-				textEn: `${reason} (forced reset: run did not terminate)`,
+				textEn: `${reason}`,
 			});
 			await this.bindSession();
 			this.emitConversations();
@@ -9825,7 +9721,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `强制中断失败：${(err as Error).message}`,
+				text: `Force-stop failed: ${(err as Error).message}`,
 				textEn: `Force-stop failed: ${(err as Error).message}`,
 			});
 		}
@@ -9884,7 +9780,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "warning",
-					text: `当前项目运行的对话已达上限（${MAX_OPEN_CONVERSATIONS} 个），请先打开某个对话并离开（不继续对话）以移出列表`,
+					text: `This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}). Open one and leave it (without continuing) to remove it from the list.`,
 					textEn: `This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}). Open one and leave it (without continuing) to remove it from the list.`,
 				});
 				return false;
@@ -9992,7 +9888,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `新建对话失败：${(err as Error).message}`,
+				text: `Failed to create chat: ${(err as Error).message}`,
 				textEn: `Failed to create chat: ${(err as Error).message}`,
 			});
 		}
@@ -10128,7 +10024,7 @@ export class ClientSession {
 		this.emit({
 			type: "notice",
 			level: "warning",
-			text: "上次压缩上下文被服务端重启打断，未完成。可发送 /compact 重试。",
+			text: "The last context compaction was interrupted by a server restart and did not finish. Send /compact to retry.",
 			textEn:
 				"The last context compaction was interrupted by a server restart and did not finish. Send /compact to retry.",
 		});
@@ -10143,7 +10039,7 @@ export class ClientSession {
 			out.push({
 				type: "notice",
 				level: "warning",
-				text: "上次压缩上下文被服务端重启打断，未完成。可发送 /compact 重试。",
+				text: "The last context compaction was interrupted by a server restart and did not finish. Send /compact to retry.",
 				textEn:
 					"The last context compaction was interrupted by a server restart and did not finish. Send /compact to retry.",
 			});
@@ -10152,7 +10048,7 @@ export class ClientSession {
 			out.push({
 				type: "notice",
 				level: "warning",
-				text: `对话记录链损坏已自动修复（重复的压缩标记），原文件备份在 ${repair.backup ?? "同目录 .bak 文件"}。如内容异常可手动恢复。`,
+				text: `The conversation transcript had a corrupted parent chain (duplicate compaction markers) and was auto-repaired. The original file is backed up at ${repair.backup ?? "a .bak file next to it"}; restore it manually if anything looks off.`,
 				textEn: `The conversation transcript had a corrupted parent chain (duplicate compaction markers) and was auto-repaired. The original file is backed up at ${repair.backup ?? "a .bak file next to it"}; restore it manually if anything looks off.`,
 			});
 		}
@@ -10184,7 +10080,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "warning",
-				text: `该对话上次运行残留 ${healed} 个无结果的工具调用，已自动填入合成结果。如任务未完成请重新执行该工具。`,
+				text: `${healed} tool call(s) without results from the last run were filled with synthetic results. Re-run the tool if the task is incomplete.`,
 				textEn: `${healed} tool call(s) without results from the last run were filled with synthetic results. Re-run the tool if the task is incomplete.`,
 			});
 			return null;
@@ -10724,7 +10620,7 @@ export class ClientSession {
 			// 以前这里静默返回，前端什么都看不到；现在它在等回执，得告诉它为什么没切成。
 			this.emitSwitchFailed(
 				{ kind: "conversation", id },
-				"这条对话已不在运行列表里（可能刚被关闭），请从历史里重新打开。",
+				"That conversation is no longer open (it may have just been closed). Reopen it from history.",
 				"That conversation is no longer open (it may have just been closed). Reopen it from history.",
 			);
 			return;
@@ -10800,7 +10696,7 @@ export class ClientSession {
 		if (conv.listed) return true;
 		if (conv.id !== this.activeId) return false;
 		// 首条提示词给对话命名 = 用户真的开始聊了（此刻消息可能还没落进会话统计）。
-		if (conv.title !== DEFAULT_CONV_TITLE) return true;
+		if (!isUntitledTitle(conv.title)) return true;
 		try {
 			return conv.session.getSessionStats().totalMessages > 0;
 		} catch {
@@ -11124,7 +11020,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "error",
-					text: "只能删除会话目录中的对话记录",
+					text: "Only transcripts inside the session directory can be deleted",
 					textEn: "Only transcripts inside the session directory can be deleted",
 				});
 				return;
@@ -11143,7 +11039,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "warning",
-					text: "该对话正在后台运行，请先停止或关闭该对话再删除",
+					text: "This conversation is still running — stop or close it before deleting",
 					textEn: "This conversation is still running — stop or close it before deleting",
 				});
 				return;
@@ -11177,8 +11073,8 @@ export class ClientSession {
 						type: "notice",
 						level: "warning",
 						text: stillRunning
-							? "对话仍在后台运行，已停止删除；请等待其结束后再删除"
-							: "未能切换到其他对话，已取消删除本次操作",
+							? "Conversation is still running in the background; delete aborted — wait for it to finish and retry"
+							: "Could not switch to another conversation; delete cancelled",
 						textEn: stillRunning
 							? "Conversation is still running in the background; delete aborted — wait for it to finish and retry"
 							: "Could not switch to another conversation; delete cancelled",
@@ -11195,8 +11091,8 @@ export class ClientSession {
 					type: "notice",
 					level: "warning",
 					text: otherOwner.isStreaming
-						? `该对话正在另一处运行中（「${otherOwner.title}」），已停止删除；请先回到原窗口停止或关闭它`
-						: `该对话在另一处仍开着（「${otherOwner.title}」），已停止删除；请先在原窗口关闭它再删`,
+						? `This conversation is running in another window ("${otherOwner.title}"); delete aborted — stop or close it there first`
+						: `This conversation is still open in another window ("${otherOwner.title}"); delete aborted — close it there first`,
 					textEn: otherOwner.isStreaming
 						? `This conversation is running in another window ("${otherOwner.title}"); delete aborted — stop or close it there first`
 						: `This conversation is still open in another window ("${otherOwner.title}"); delete aborted — close it there first`,
@@ -11221,7 +11117,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `删除会话失败：${(err as Error).message}`,
+				text: `Failed to delete session: ${(err as Error).message}`,
 				textEn: `Failed to delete session: ${(err as Error).message}`,
 			});
 		}
@@ -11239,7 +11135,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "error",
-					text: "只能重命名会话目录中的对话记录",
+					text: "Only transcripts inside the session directory can be renamed",
 					textEn: "Only transcripts inside the session directory can be renamed",
 				});
 				return;
@@ -11253,7 +11149,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `重命名会话失败：${(err as Error).message}`,
+				text: `Failed to rename session: ${(err as Error).message}`,
 				textEn: `Failed to rename session: ${(err as Error).message}`,
 			});
 		}
@@ -11281,7 +11177,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `重命名对话失败：${(err as Error).message}`,
+				text: `Failed to rename conversation: ${(err as Error).message}`,
 				textEn: `Failed to rename conversation: ${(err as Error).message}`,
 			});
 		}
@@ -11334,7 +11230,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "warning",
-				text: "该对话不存在或已关闭",
+				text: "This conversation does not exist or is already closed",
 				textEn: "This conversation does not exist or is already closed",
 			});
 			return;
@@ -11344,7 +11240,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "info",
-				text: `对话「${conv.title}」已是持久化对话，无需固化`,
+				text: `Conversation "${conv.title}" is already persistent`,
 				textEn: `Conversation "${conv.title}" is already persistent`,
 			});
 			return;
@@ -11402,8 +11298,8 @@ export class ClientSession {
 				type: "notice",
 				level: "info",
 				text: wasEphemeral
-					? `已将临时对话「${conv.title}」保存为正式对话，并存入历史记录`
-					: `已将子代理「${conv.title}」固化为普通对话，并保存至历史记录`,
+					? `Saved ephemeral conversation "${conv.title}" as a regular conversation in history`
+					: `Solidified subagent "${conv.title}" into a regular conversation saved to history`,
 				textEn: wasEphemeral
 					? `Saved ephemeral conversation "${conv.title}" as a regular conversation in history`
 					: `Solidified subagent "${conv.title}" into a regular conversation saved to history`,
@@ -11413,7 +11309,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `固化失败：${msg}`,
+				text: `Failed to persist conversation: ${msg}`,
 				textEn: `Failed to persist conversation: ${msg}`,
 			});
 		}
@@ -11435,7 +11331,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "warning",
-				text: "该对话不存在或已关闭",
+				text: "This conversation does not exist or is already closed",
 				textEn: "This conversation does not exist or is already closed",
 			});
 			return;
@@ -11479,7 +11375,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "warning",
-				text: `对话「${conv.title}」仍在运行中，请先等待结束或点击停止后再移出`,
+				text: `Conversation "${conv.title}" is still running — wait for it to finish or press Stop before removing`,
 				textEn: `Conversation "${conv.title}" is still running — wait for it to finish or press Stop before removing`,
 			});
 			return;
@@ -11491,7 +11387,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "warning",
-				text: `对话「${conv.title}」还有未关闭的终端，请先关闭终端后再移出`,
+				text: `Conversation "${conv.title}" still has open terminals — close them before removing`,
 				textEn: `Conversation "${conv.title}" still has open terminals — close them before removing`,
 			});
 			return;
@@ -11513,7 +11409,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "warning",
-				text: `对话「${conv.title}」暂时无法移出（存在待处理的后台任务/审查）`,
+				text: `Conversation "${conv.title}" cannot be removed right now (pending background task/review)`,
 				textEn: `Conversation "${conv.title}" cannot be removed right now (pending background task/review)`,
 			});
 			return;
@@ -11526,7 +11422,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "warning",
-				text: `对话「${conv.title}」还有 ${runningKids.length} 个运行中的子代理，请先等待结束或停止后再移出`,
+				text: `Conversation "${conv.title}" still has ${runningKids.length} running subagent(s) — wait for them to finish or stop them before removing`,
 				textEn: `Conversation "${conv.title}" still has ${runningKids.length} running subagent(s) — wait for them to finish or stop them before removing`,
 			});
 			return;
@@ -11535,7 +11431,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "warning",
-				text: `对话「${conv.title}」下还有 ${finishedKids.length} 个已结束的子代理：连带关闭请确认，仅关闭父级请先在右键菜单清理子代理`,
+				text: `Conversation "${conv.title}" still has ${finishedKids.length} finished subagent(s): confirm to dismiss them together, or clear the subagents first (right-click menu) to dismiss only the parent`,
 				textEn: `Conversation "${conv.title}" still has ${finishedKids.length} finished subagent(s): confirm to dismiss them together, or clear the subagents first (right-click menu) to dismiss only the parent`,
 			});
 			return;
@@ -11556,7 +11452,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "info",
-					text: `已关闭 ${removedKids} 个已结束的子代理，还有 ${remaining.length} 个子代理未关闭${stillRunning > 0 ? `（${stillRunning} 个运行中）` : ""}，父对话暂留`,
+					text: `Dismissed ${removedKids} finished subagent(s); ${remaining.length} subagent(s) remain${stillRunning > 0 ? ` (${stillRunning} running)` : ""}, keeping the parent`,
 					textEn: `Dismissed ${removedKids} finished subagent(s); ${remaining.length} subagent(s) remain${stillRunning > 0 ? ` (${stillRunning} running)` : ""}, keeping the parent`,
 				});
 				this.emitConversations();
@@ -11572,7 +11468,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "warning",
-					text: `当前对话「${conv.title}」暂时无法移出（无法创建接替对话）`,
+					text: `Cannot dismiss the active conversation "${conv.title}" right now (no replacement chat available)`,
 					textEn: `Cannot dismiss the active conversation "${conv.title}" right now (no replacement chat available)`,
 				});
 				this.emitConversations();
@@ -11626,7 +11522,7 @@ export class ClientSession {
 		let selfAborted = false;
 		if (isStreaming(conv)) {
 			selfAborted = true;
-			await this.interruptRun(conv, "已强行关闭");
+			await this.interruptRun(conv, "Force-closed");
 		}
 		let removedKids = 0;
 		const deferred: Conversation[] = [];
@@ -11646,7 +11542,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "warning",
-					text: `对话「${title}」暂时无法强行关闭（无法创建接替对话）`,
+					text: `Cannot force-dismiss conversation "${title}" right now (no replacement chat available)`,
 					textEn: `Cannot force-dismiss conversation "${title}" right now (no replacement chat available)`,
 				});
 				this.emitConversations();
@@ -11672,7 +11568,7 @@ export class ClientSession {
 		this.emit({
 			type: "notice",
 			level: "info",
-			text: `已强行关闭对话「${title}」${removedKids > 0 ? `（含 ${removedKids} 个子代理）` : ""}${selfAborted ? "，本轮运行已中止" : ""}${stopped > 0 ? `，${stopped} 个运行中的子代理已中止` : ""}${remaining > 0 ? `；还有 ${remaining} 个子代理未关闭（已切为当前对话）` : ""}`,
+			text: `Force-dismissed conversation "${title}"${removedKids > 0 ? ` (incl. ${removedKids} subagent(s))` : ""}${selfAborted ? ", its run was aborted" : ""}${stopped > 0 ? `, ${stopped} running subagent(s) stopped` : ""}${remaining > 0 ? `; ${remaining} subagent(s) remain (now active)` : ""}`,
 			textEn: `Force-dismissed conversation "${title}"${removedKids > 0 ? ` (incl. ${removedKids} subagent(s))` : ""}${selfAborted ? ", its run was aborted" : ""}${stopped > 0 ? `, ${stopped} running subagent(s) stopped` : ""}${remaining > 0 ? `; ${remaining} subagent(s) remain (now active)` : ""}`,
 		});
 	}
@@ -11693,7 +11589,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "warning",
-				text: "该对话不存在或已关闭",
+				text: "This conversation does not exist or is already closed",
 				textEn: "This conversation does not exist or is already closed",
 			});
 			return;
@@ -11761,7 +11657,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "info",
-				text: "没有可关闭的已结束子代理",
+				text: "No finished subagents to dismiss",
 				textEn: "No finished subagents to dismiss",
 			});
 			return;
@@ -11791,14 +11687,14 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "info",
-				text: `已关闭 ${removed} 个已结束的子代理${skippedRunning > 0 ? `（${skippedRunning} 个仍在运行，已跳过）` : ""}`,
+				text: `Dismissed ${removed} finished subagent(s)${skippedRunning > 0 ? ` (${skippedRunning} still running, skipped)` : ""}`,
 				textEn: `Dismissed ${removed} finished subagent(s)${skippedRunning > 0 ? ` (${skippedRunning} still running, skipped)` : ""}`,
 			});
 		} else {
 			this.emit({
 				type: "notice",
 				level: "info",
-				text: "没有可关闭的已结束子代理（剩余的仍在运行）",
+				text: "No finished subagents to dismiss (the rest are still running)",
 				textEn: "No finished subagents to dismiss (the rest are still running)",
 			});
 		}
@@ -11828,7 +11724,7 @@ export class ClientSession {
 		if (this.quiesceBlocked()) {
 			this.emitSwitchFailed(
 				target,
-				"服务器正在排空（quiesce），拒绝打开新会话。",
+				"Server is draining (quiesce) and refused to open the session.",
 				"Server is draining (quiesce) and refused to open the session.",
 			);
 			return;
@@ -11843,7 +11739,7 @@ export class ClientSession {
 				this.flushSnapshot();
 				this.emitSwitchFailed(
 					target,
-					"只能打开会话目录中的对话记录",
+					"Only transcripts inside the session directory can be opened",
 					"Only transcripts inside the session directory can be opened",
 				);
 				return;
@@ -11907,7 +11803,7 @@ export class ClientSession {
 				// 就在聊天区里显示原因；不是它发起的（内部自动切换）则由客户端降级成 toast。
 				this.emitSwitchFailed(
 					target,
-					`当前项目运行的对话已达上限（${MAX_OPEN_CONVERSATIONS} 个），请先打开某个对话并离开（不继续对话）以移出列表`,
+					`This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}). Open one and leave it (without continuing) to remove it from the list.`,
 					`This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}). Open one and leave it (without continuing) to remove it from the list.`,
 				);
 				return;
@@ -11953,7 +11849,7 @@ export class ClientSession {
 			this.flushSnapshot();
 			this.emitSwitchFailed(
 				target,
-				`切换会话失败：${(err as Error).message}`,
+				`Failed to switch session: ${(err as Error).message}`,
 				`Failed to switch session: ${(err as Error).message}`,
 			);
 			return;
@@ -12043,7 +11939,7 @@ export class ClientSession {
 		if (s.isStreaming || conv.compactionState || conv.rewinding) {
 			refuse(
 				"warning",
-				"对话还在进行中，等它停下来再回退",
+				"The chat is still running; wait until it stops, then go back",
 				"The chat is still running; wait until it stops, then go back",
 			);
 			return;
@@ -12052,7 +11948,7 @@ export class ClientSession {
 		try {
 			items = contextItems(s.sessionManager.buildContextEntries() as unknown as EntryLike[]);
 		} catch (err) {
-			refuse("error", `回退失败：${(err as Error).message}`, `Going back failed: ${(err as Error).message}`);
+			refuse("error", `Going back failed: ${(err as Error).message}`, `Going back failed: ${(err as Error).message}`);
 			return;
 		}
 		const index = fit
@@ -12064,13 +11960,13 @@ export class ClientSession {
 			if (fit) {
 				refuse(
 					"error",
-					"找不到足够小的位置可以回去：请在更早的某条消息上点「回到这里」",
+					"No earlier point is small enough: pick a message and use its “Rewind to here”",
 					"No earlier point is small enough: pick a message and use its “Rewind to here”",
 				);
 			} else {
 				refuse(
 					"error",
-					"找不到这条消息（可能已被压缩，或不在当前分支上）",
+					"Can't find that message on this branch (it may have been compacted)",
 					"Can't find that message on this branch (it may have been compacted)",
 				);
 			}
@@ -12078,7 +11974,7 @@ export class ClientSession {
 		}
 		const plan = planRewind(items, index);
 		if (!plan || (!plan.toComposer && plan.keepCount >= items.length)) {
-			refuse("info", "这条之后没有可以跳过的内容", "There is nothing after this message to skip");
+			refuse("info", "There is nothing after this message to skip", "There is nothing after this message to skip");
 			return;
 		}
 		const dropped = droppedMessageCount(items, plan.keepCount);
@@ -12094,7 +11990,12 @@ export class ClientSession {
 		try {
 			const result = await s.navigateTree(plan.navigateEntryId, { summarize: true });
 			if (result.cancelled) {
-				this.emit({ type: "notice", level: "info", text: "已取消回退", textEn: "Going back was cancelled" });
+				this.emit({
+					type: "notice",
+					level: "info",
+					text: "Going back was cancelled",
+					textEn: "Going back was cancelled",
+				});
 			} else {
 				ok = true;
 				editorText = result.editorText || (plan.toComposer ? plan.editorText : undefined);
@@ -12106,7 +12007,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "info",
-					text: `已回到那条消息：跳过了 ${dropped} 条（仍保存在对话文件里），并加了一段简短摘要`,
+					text: `Went back: ${dropped} message${dropped === 1 ? "" : "s"} skipped (still saved in the chat file), and a short summary of them was added`,
 					textEn: `Went back: ${dropped} message${dropped === 1 ? "" : "s"} skipped (still saved in the chat file), and a short summary of them was added`,
 				});
 			}
@@ -12114,7 +12015,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `回退失败：${(err as Error).message}`,
+				text: `Going back failed: ${(err as Error).message}`,
 				textEn: `Going back failed: ${(err as Error).message}`,
 			});
 		} finally {
@@ -12167,7 +12068,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: "找不到指定的消息节点（可能已被压缩或不在当前分支）",
+				text: "Message node to fork from not found (may have been compacted or is on another branch)",
 				textEn: "Message node to fork from not found (may have been compacted or is on another branch)",
 			});
 			this.flushSnapshot();
@@ -12257,7 +12158,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "warning",
-					text: `当前项目运行的对话已达上限（${MAX_OPEN_CONVERSATIONS} 个），请先打开某个对话并离开（不继续对话）以移出列表`,
+					text: `This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}). Open one and leave it (without continuing) to remove it from the list.`,
 					textEn: `This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}). Open one and leave it (without continuing) to remove it from the list.`,
 				});
 				return;
@@ -12288,14 +12189,14 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "info",
-				text: "🌱 已派生新分支会话并自动切换（原对话保持不变）",
+				text: "🌱 Forked new branch session and switched to it (original preserved)",
 				textEn: "🌱 Forked new branch session and switched to it (original preserved)",
 			});
 		} catch (err) {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `派生分支会话失败：${(err as Error).message}`,
+				text: `Failed to fork branch session: ${(err as Error).message}`,
 				textEn: `Failed to fork branch session: ${(err as Error).message}`,
 			});
 		}
@@ -12314,7 +12215,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: "找不到指定的回滚检查点（可能已被压缩或不存在）",
+				text: "Rollback checkpoint not found (may have been compacted or not exist)",
 				textEn: "Rollback checkpoint not found (may have been compacted or not exist)",
 			});
 			this.flushSnapshot();
@@ -12388,7 +12289,7 @@ export class ClientSession {
 						this.emit({
 							type: "notice",
 							level: "warning",
-							text: `会话已回滚，但工作区物理文件还原失败：${res.error}`,
+							text: `Session rolled back, but workspace file restore failed: ${res.error}`,
 							textEn: `Session rolled back, but workspace file restore failed: ${res.error}`,
 						});
 					}
@@ -12396,7 +12297,7 @@ export class ClientSession {
 					this.emit({
 						type: "notice",
 						level: "warning",
-						text: "未找到对应检查点的工作区快照（可能非 Git 仓库或尚未记录），工作区文件未改动。",
+						text: "No workspace snapshot found for this checkpoint (not a Git repo or snapshot unavailable); files left untouched.",
 						textEn:
 							"No workspace snapshot found for this checkpoint (not a Git repo or snapshot unavailable); files left untouched.",
 					});
@@ -12407,8 +12308,8 @@ export class ClientSession {
 				type: "notice",
 				level: "info",
 				text: workspaceRestored
-					? "已回滚至选定消息，工作区物理文件已联动还原至该检查点时刻。"
-					: "已回滚至选定消息，后续内容已丢弃，可直接继续对话。",
+					? "Rolled back to selected message; workspace physical files restored to checkpoint state."
+					: "Rolled back to selected message; subsequent content discarded, ready to continue.",
 				textEn: workspaceRestored
 					? "Rolled back to selected message; workspace physical files restored to checkpoint state."
 					: "Rolled back to selected message; subsequent content discarded, ready to continue.",
@@ -12420,7 +12321,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `回滚失败：${(err as Error).message}`,
+				text: `Rollback failed: ${(err as Error).message}`,
 				textEn: `Rollback failed: ${(err as Error).message}`,
 			});
 		}
@@ -12449,7 +12350,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "warning",
-				text: "编辑内容为空，已取消",
+				text: "Edited content is empty — cancelled",
 				textEn: "Edited content is empty — cancelled",
 			});
 			this.flushSnapshot();
@@ -12460,7 +12361,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: "找不到要编辑的消息（可能已被压缩或不在当前分支）",
+				text: "Message to edit not found (may have been compacted or is on another branch)",
 				textEn: "Message to edit not found (may have been compacted or is on another branch)",
 			});
 			this.flushSnapshot();
@@ -12476,7 +12377,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "info",
-					text: "已取消编辑重问",
+					text: "Edit-and-reask cancelled",
 					textEn: "Edit-and-reask cancelled",
 				});
 				this.flushSnapshot();
@@ -12505,14 +12406,14 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "info",
-				text: "已从该问题重新提问（原对话保留在会话列表中）",
+				text: "Re-asked from that question (the original stays in the session list)",
 				textEn: "Re-asked from that question (the original stays in the session list)",
 			});
 		} catch (err) {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `编辑重问失败：${(err as Error).message}`,
+				text: `Edit-and-reask failed: ${(err as Error).message}`,
 				textEn: `Edit-and-reask failed: ${(err as Error).message}`,
 			});
 		}
@@ -12674,26 +12575,12 @@ export class ClientSession {
 			const runtime = this.runtime.services.modelRuntime;
 			const model = this.session?.model;
 			if (!model) {
-				throw new Error(
-					pick(
-						lang,
-						"当前没有可用模型——先在顶栏选择一个模型再生成",
-						"No model available — pick one in the top bar first",
-						"scm.commitmsg.no.model",
-					),
-				);
+				throw new Error("No model available — pick one in the top bar first");
 			}
 			const ctx = await scmCommitContext(cwd, () => lang);
-			const input = buildCommitMsgInput(ctx, lang === "zh" ? "zh" : "en");
+			const input = buildCommitMsgInput(ctx, "en");
 			if (!input) {
-				throw new Error(
-					pick(
-						lang,
-						"没有可描述的更改（工作区干净）",
-						"Nothing to describe (working tree clean)",
-						"scm.commitmsg.no.changes",
-					),
-				);
+				throw new Error("Nothing to describe (working tree clean)");
 			}
 
 			const ac = new AbortController();
@@ -12724,15 +12611,7 @@ export class ClientSession {
 				clearTimeout(timer);
 			}
 			if (msg.stopReason === "error" || msg.stopReason === "aborted") {
-				throw new Error(
-					msg.errorMessage ||
-						pick(
-							lang,
-							`模型异常终止（${msg.stopReason}）`,
-							`Model terminated abnormally (${msg.stopReason})`,
-							"scm.commitmsg.model.terminated",
-						),
-				);
+				throw new Error(msg.errorMessage || `Model terminated abnormally (${msg.stopReason})`);
 			}
 			const raw = msg.content
 				.filter((b) => b.type === "text")
@@ -12740,31 +12619,16 @@ export class ClientSession {
 				.join("\n");
 			const text = sanitizeCommitMessage(raw);
 			if (!text) {
-				throw new Error(
-					pick(lang, "模型返回了空的提交信息", "The model returned an empty commit message", "scm.commitmsg.empty"),
-				);
+				throw new Error("The model returned an empty commit message");
 			}
 			reply(true, { text });
 		} catch (err) {
 			if (isNotRepoError(err)) {
-				fail(
-					new Error(
-						pick(lang, "当前目录不是 Git 仓库", "Current directory is not a Git repository", "scm.commitmsg.not.repo"),
-					),
-				);
+				fail(new Error("Current directory is not a Git repository"));
 				return;
 			}
 			if (err instanceof Error && /abort/i.test(`${err.name} ${err.message}`)) {
-				fail(
-					new Error(
-						pick(
-							lang,
-							`生成提交信息超时（${Math.round(SCM_COMMITMSG_TIMEOUT_MS / 1000)} 秒）`,
-							`Commit-message generation timed out (${Math.round(SCM_COMMITMSG_TIMEOUT_MS / 1000)}s)`,
-							"scm.commitmsg.timeout",
-						),
-					),
-				);
+				fail(new Error(`Commit-message generation timed out (${Math.round(SCM_COMMITMSG_TIMEOUT_MS / 1000)}s)`));
 				return;
 			}
 			fail(err);
@@ -12835,7 +12699,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `切换模型失败：${(err as Error).message}`,
+				text: `Failed to switch model: ${(err as Error).message}`,
 				textEn: `Failed to switch model: ${(err as Error).message}`,
 			});
 		}
@@ -12894,7 +12758,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "warning",
-					text: "请选择一个具体目录作为工作目录（此电脑本身不是目录）",
+					text: "Pick a concrete directory as the workspace (This PC itself is not a directory)",
 					textEn: "Pick a concrete directory as the workspace (This PC itself is not a directory)",
 				});
 				return;
@@ -12904,13 +12768,13 @@ export class ClientSession {
 			const abs = resolveCwdTarget(trimmed, this.cwd);
 			const st = await fs.stat(abs);
 			if (!st.isDirectory()) {
-				throw new Error("路径不是目录");
+				throw new Error("Path is not a directory");
 			}
 			if (abs === this.cwd) {
 				this.emit({
 					type: "notice",
 					level: "info",
-					text: `已在工作目录：${abs}`,
+					text: `Already in directory: ${abs}`,
 					textEn: `Already in directory: ${abs}`,
 				});
 				this.flushSnapshot();
@@ -12947,7 +12811,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "info",
-					text: `正在切换到工作目录：${abs}`,
+					text: `Switching to directory: ${abs}`,
 					textEn: `Switching to directory: ${abs}`,
 				});
 				this.flushSnapshot();
@@ -13007,13 +12871,13 @@ export class ClientSession {
 							? {
 									type: "notice",
 									level: "info",
-									text: `该项目最近的对话「${resumeSkipped.title}」正在另一处运行，为你停在了新对话 —— 直接打开会造出第二个写者。左栏「运行的对话」里能看到它（标着“另一处”），等它跑完再打开。`,
+									text: `The most recent conversation ("${resumeSkipped.title}") is running in another window, so you landed on a new chat instead — opening it here would create a second writer. It is listed under Running chats (tagged "Elsewhere"); open it after it finishes.`,
 									textEn: `The most recent conversation ("${resumeSkipped.title}") is running in another window, so you landed on a new chat instead — opening it here would create a second writer. It is listed under Running chats (tagged "Elsewhere"); open it after it finishes.`,
 								}
 							: {
 									type: "notice",
 									level: "info",
-									text: `该项目最近的对话「${resumeSkipped.title}」在另一处开着（当前空闲），为你停在了空白新对话 —— 可在左栏「运行的对话」里把它过户过来继续看，或从历史对话里打开（只留一处发送消息，否则历史分叉）。`,
+									text: `The most recent conversation ("${resumeSkipped.title}") is still open in another window (currently idle), so you landed on a blank chat instead — take it over from Running chats (tagged "Elsewhere") or reopen it from History (send new messages from only one place, or the history will fork).`,
 									textEn: `The most recent conversation ("${resumeSkipped.title}") is still open in another window (currently idle), so you landed on a blank chat instead — take it over from Running chats (tagged "Elsewhere") or reopen it from History (send new messages from only one place, or the history will fork).`,
 								},
 					);
@@ -13049,7 +12913,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "info",
-				text: `已切换到工作目录：${abs}`,
+				text: `Switched to directory: ${abs}`,
 				textEn: `Switched to directory: ${abs}`,
 			});
 			// 切项目即换了当前打开对话 → 插件重拉。
@@ -13058,7 +12922,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `切换工作目录失败：${(err as Error).message}`,
+				text: `Failed to switch directory: ${(err as Error).message}`,
 				textEn: `Failed to switch directory: ${(err as Error).message}`,
 			});
 			this.flushSnapshot();
@@ -13102,7 +12966,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `获取模型列表失败：${(err as Error).message}`,
+				text: `Failed to fetch model list: ${(err as Error).message}`,
 				textEn: `Failed to fetch model list: ${(err as Error).message}`,
 			});
 		}
@@ -13178,12 +13042,12 @@ export class ClientSession {
 			const mr = this.runtime.services.modelRuntime;
 			const slash = modelId.indexOf("/");
 			if (slash <= 0 || slash === modelId.length - 1) {
-				throw new Error(`无效的模型 ID：${modelId}`);
+				throw new Error(`Invalid model ID: ${modelId}`);
 			}
 			const provider = modelId.slice(0, slash);
 			const id = modelId.slice(slash + 1);
 			const model = mr.getModel(provider, id);
-			if (!model) throw new Error(`模型不存在：${modelId}`);
+			if (!model) throw new Error(`Model not found: ${modelId}`);
 			// 先恢复 provider key，再 setModel（否则 checkAuth 鉴权失败）
 			await this.restoreKeyForModel(modelId, this.cwd);
 			await this.session.setModel(model);
@@ -13197,7 +13061,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `切换模型失败：${(err as Error).message}`,
+				text: `Failed to switch model: ${(err as Error).message}`,
 				textEn: `Failed to switch model: ${(err as Error).message}`,
 			});
 		}
@@ -13213,11 +13077,11 @@ export class ClientSession {
 			const mr = this.runtime.services.modelRuntime;
 			const slash = modelId.indexOf("/");
 			if (slash <= 0 || slash === modelId.length - 1) {
-				throw new Error(`无效的模型 ID：${modelId}`);
+				throw new Error(`Invalid model ID: ${modelId}`);
 			}
 			const provider = modelId.slice(0, slash);
 			const id = modelId.slice(slash + 1);
-			if (!mr.getModel(provider, id)) throw new Error(`模型不存在：${modelId}`);
+			if (!mr.getModel(provider, id)) throw new Error(`Model not found: ${modelId}`);
 			this.stateStore.saveDefaultModel(modelId);
 			const active = this.modelAdmin.getActiveKeyName(provider);
 			if (active) this.stateStore.saveDefaultProviderKey(provider, active);
@@ -13231,14 +13095,14 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "info",
-				text: `🌍 已设全局默认模型 ${modelId}（新项目自动使用，项目记忆优先）`,
+				text: `🌍 Global default model set to ${modelId} (new projects follow it; project memory wins)`,
 				textEn: `🌍 Global default model set to ${modelId} (new projects follow it; project memory wins)`,
 			});
 		} catch (err) {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `设置全局默认模型失败：${(err as Error).message}`,
+				text: `Failed to set global default model: ${(err as Error).message}`,
 				textEn: `Failed to set global default model: ${(err as Error).message}`,
 			});
 		}
@@ -13260,7 +13124,7 @@ export class ClientSession {
 		this.emit({
 			type: "notice",
 			level: "info",
-			text: "🌍 已清除全局默认模型（新项目回到 SDK 默认）",
+			text: "🌍 Global default model cleared (new projects use the SDK default)",
 			textEn: "🌍 Global default model cleared (new projects use the SDK default)",
 		});
 		this.flushSnapshot();
@@ -13287,7 +13151,7 @@ export class ClientSession {
 			curId = "";
 		}
 		if (curId && curId !== modelId)
-			throw new Error(`切换模型失败（${modelId}），当前仍是 ${curId} —— 请检查模型 ID 与供应商密钥`);
+			throw new Error(`Failed to switch model (${modelId}); still on ${curId} — check the model ID and provider key`);
 	}
 
 	/** Set the thinking level for future turns. */
@@ -13303,7 +13167,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `切换思考强度失败：${(err as Error).message}`,
+				text: `Failed to switch thinking level: ${(err as Error).message}`,
 				textEn: `Failed to switch thinking level: ${(err as Error).message}`,
 			});
 		}
@@ -13321,7 +13185,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `切换思考强度失败：${(err as Error).message}`,
+				text: `Failed to switch thinking level: ${(err as Error).message}`,
 				textEn: `Failed to switch thinking level: ${(err as Error).message}`,
 			});
 		}
@@ -13345,7 +13209,7 @@ export class ClientSession {
 			return;
 		}
 		this.emit({ type: "commands", commands, path });
-		this.emit({ type: "notice", level: "info", text: `命令已保存：${path}`, textEn: `Command saved: ${path}` });
+		this.emit({ type: "notice", level: "info", text: `Command saved: ${path}`, textEn: `Command saved: ${path}` });
 	}
 
 	async dispose(): Promise<void> {
@@ -13430,18 +13294,18 @@ export class ClientSession {
  *  快捷方式启动时宿主 cwd 常飘到 system32，直接跑就是高危误操作。 */
 export function checkPluginCwd(cwd: string): { ok: boolean; abs?: string; error?: string } {
 	const trimmed = String(cwd ?? "").trim();
-	if (!trimmed) return { ok: false, error: "工作目录为空" };
+	if (!trimmed) return { ok: false, error: "Working directory is empty" };
 	let abs: string;
 	try {
 		abs =
 			process.platform === "win32" && /^[A-Za-z]:$/.test(trimmed) ? `${trimmed.toUpperCase()}${sep}` : resolve(trimmed);
 	} catch {
-		return { ok: false, error: `工作目录非法：${trimmed}` };
+		return { ok: false, error: `Invalid working directory: ${trimmed}` };
 	}
 	try {
 		if (!statSync(abs).isDirectory()) throw new Error("not-a-dir");
 	} catch {
-		return { ok: false, error: `目标项目不存在或不是目录：${trimmed}` };
+		return { ok: false, error: `Target project does not exist or is not a directory: ${trimmed}` };
 	}
 	if (process.platform === "win32") {
 		const sysRoot = (process.env.SystemRoot || process.env.windir || "C:\\Windows")
@@ -13451,7 +13315,10 @@ export function checkPluginCwd(cwd: string): { ok: boolean; abs?: string; error?
 		const low = norm.toLowerCase();
 		const rootLow = sysRoot.toLowerCase();
 		if (low === rootLow || low.startsWith(`${rootLow}\\`)) {
-			return { ok: false, error: `拒绝在系统目录执行：${abs}（请在插件设置里指定项目工作目录）` };
+			return {
+				ok: false,
+				error: `Refusing to run in a system directory: ${abs} (set a project working directory in the plugin settings)`,
+			};
 		}
 	}
 	return { ok: true, abs };
@@ -13603,8 +13470,8 @@ export class AgentService {
 	}> {
 		const wantFile = String(opts?.sessionFile ?? "").trim();
 		const wantCwd = String(opts?.cwd ?? "").trim();
-		if ((!id && !wantFile) || !text.trim()) return { ok: false, error: "唤醒目标或文本为空" };
-		if (this.quiesced) return { ok: false, error: "服务器正忙（quiesced），请稍后重试" };
+		if ((!id && !wantFile) || !text.trim()) return { ok: false, error: "Wake target or text is empty" };
+		if (this.quiesced) return { ok: false, error: "Server is busy (quiesced), retry later" };
 		const liveFile = (c: Conversation): string => {
 			try {
 				return String(c.session.sessionFile ?? "");
@@ -13649,7 +13516,7 @@ export class AgentService {
 			if (hits.length > 0) {
 				if (busyError) return { ok: false, busy: true, error: busyError };
 				// 同文件持有方都在但都投递失败 —— id 相位大概率指向同一批，无需再试
-				return { ok: false, error: "目标对话投递失败（持有方异常）" };
+				return { ok: false, error: "Delivery to the target conversation failed (owner error)" };
 			}
 			// No chat has the transcript open: a miss (wake-reopen: the caller reopens it; no id phase).
 		}
@@ -13686,7 +13553,7 @@ export class AgentService {
 			}
 			if (busyError) return { ok: false, busy: true, error: busyError };
 		}
-		return { ok: false, error: "目标对话不在运行中（已关闭或服务重启过）" };
+		return { ok: false, error: "Target conversation is not running (closed, or the server restarted)" };
 	}
 
 	/**
@@ -13703,8 +13570,8 @@ export class AgentService {
 		text: string,
 	): Promise<{ ok: boolean; conversationId?: string; sessionFile?: string; error?: string }> {
 		const file = String(sessionFile ?? "").trim();
-		if (!file || !text.trim()) return { ok: false, error: "唤醒目标或文本为空" };
-		if (this.quiesced) return { ok: false, error: "服务器正忙（quiesced），请稍后重试" };
+		if (!file || !text.trim()) return { ok: false, error: "Wake target or text is empty" };
+		if (this.quiesced) return { ok: false, error: "Server is busy (quiesced), retry later" };
 		if (!existsSync(file)) return { ok: false, error: "the chat's transcript is gone" };
 		const run = this.wakeReopenChain.then(() => this.reopenAndWake(file, text));
 		this.wakeReopenChain = run.catch(() => {});
@@ -13845,8 +13712,8 @@ export class AgentService {
 		error?: string;
 	}> {
 		const want = String(cwd ?? "").trim();
-		if (!want || !text.trim()) return { ok: false, error: "回退目标或文本为空" };
-		if (this.quiesced) return { ok: false, error: "服务器正忙（quiesced），请稍后重试" };
+		if (!want || !text.trim()) return { ok: false, error: "Fallback target or text is empty" };
+		if (this.quiesced) return { ok: false, error: "Server is busy (quiesced), retry later" };
 		const cands: { cs: ClientSession; clientId: string; conv: Conversation }[] = [];
 		for (const [clientId, cs] of this.clients) {
 			try {
@@ -13857,7 +13724,7 @@ export class AgentService {
 			}
 		}
 		cands.sort((a, b) => b.conv.lastActiveAt - a.conv.lastActiveAt);
-		if (cands.length === 0) return { ok: false, error: "同项目无存活对话" };
+		if (cands.length === 0) return { ok: false, error: "No live conversation in the same project" };
 		let busyError: string | undefined;
 		for (const c of cands) {
 			try {
@@ -13882,7 +13749,7 @@ export class AgentService {
 			}
 		}
 		if (busyError) return { ok: false, busy: true, error: busyError };
-		return { ok: false, error: "同项目对话投递失败" };
+		return { ok: false, error: "Delivery to a same-project conversation failed" };
 	}
 
 	/** issue #145：别处在某 cwd 下正在跑的对话（同项目并行感知用，不含请求方）。 */
@@ -14052,8 +13919,8 @@ export class AgentService {
 		const acct = String(req?.accountId ?? "default").replace(/[^A-Za-z0-9_-]/g, "") || "default";
 		const clientId = `plugin:${safe}:${acct}`;
 		const text = String(req?.text ?? "");
-		if (!text.trim()) throw new Error("chatFromPlugin: text 为空");
-		if (this.quiesced) throw new QuiesceRejectedError("插件无头调用被拒绝，请等服务器恢复后重试");
+		if (!text.trim()) throw new Error("chatFromPlugin: text is empty");
+		if (this.quiesced) throw new QuiesceRejectedError("Headless plugin call refused; retry after the server recovers");
 		// 1. 绑定已有会话：steer 语义投递，网页端实时可见（微信当远程遥控器用）。
 		// miss/已回收时不抛错，回落无头伪客户端（浏览器关着时微信照常可用）。
 		const target = String(req?.conversationId ?? "").trim();
@@ -14073,14 +13940,14 @@ export class AgentService {
 		try {
 			if (cwdAbs && cs.cwd !== cwdAbs) await cs.setCwd(cwdAbs);
 		} catch (err) {
-			throw new Error(`chatFromPlugin: 切换工作目录失败（${cwdAbs}）：${(err as Error).message}`);
+			throw new Error(`chatFromPlugin: failed to switch working directory (${cwdAbs}): ${(err as Error).message}`);
 		}
 		const model = String(req?.model ?? "").trim();
 		if (model) {
 			try {
 				await cs.switchModelOrThrow(model);
 			} catch (err) {
-				throw new Error(`chatFromPlugin: 切换模型失败（${model}）：${(err as Error).message}`);
+				throw new Error(`chatFromPlugin: failed to switch model (${model}): ${(err as Error).message}`);
 			}
 		}
 		const thinking = String(req?.thinkingLevel ?? "").trim();
@@ -14088,7 +13955,7 @@ export class AgentService {
 			try {
 				cs.setThinking(thinking);
 			} catch (err) {
-				throw new Error(`chatFromPlugin: 切换思考强度失败（${thinking}）：${(err as Error).message}`);
+				throw new Error(`chatFromPlugin: failed to switch thinking level (${thinking}): ${(err as Error).message}`);
 			}
 		}
 		const conversationId = cs.readConversationForPlugins()?.conversationId ?? "";
@@ -14113,13 +13980,13 @@ export class AgentService {
 		const safe = String(task.id ?? "task").replace(/[^A-Za-z0-9_-]/g, "") || "task";
 		const clientId = `scheduler:${safe}`;
 		const text = String(task.prompt ?? "");
-		if (!text.trim()) return { ok: false, error: "触发指令为空" };
-		if (this.quiesced) return { ok: false, error: "服务器正忙（quiesced），请稍后重试" };
+		if (!text.trim()) return { ok: false, error: "Trigger prompt is empty" };
+		if (this.quiesced) return { ok: false, error: "Server is busy (quiesced), retry later" };
 		const cwd = String(task.cwd ?? "").trim();
 		try {
 			if (!cwd || !statSync(cwd).isDirectory()) throw new Error("not-a-dir");
 		} catch {
-			return { ok: false, error: `目标项目不存在或不是目录：${cwd || "（空）"}` };
+			return { ok: false, error: `Target project does not exist or is not a directory: ${cwd || "(empty)"}` };
 		}
 		try {
 			const cs = await this.attach(clientId, () => {});
@@ -14129,7 +13996,7 @@ export class AgentService {
 				try {
 					await cs.switchModelOrThrow(model);
 				} catch (err) {
-					return { ok: false, error: `切换模型失败（${model}）：${(err as Error).message}` };
+					return { ok: false, error: `Failed to switch model (${model}): ${(err as Error).message}` };
 				}
 			}
 			const thinking = String(task.thinkingLevel ?? "").trim();
@@ -14137,11 +14004,11 @@ export class AgentService {
 				try {
 					cs.setThinking(thinking);
 				} catch (err) {
-					return { ok: false, error: `切换思考强度失败（${thinking}）：${(err as Error).message}` };
+					return { ok: false, error: `Failed to switch thinking level (${thinking}): ${(err as Error).message}` };
 				}
 			}
 			const conversationId = cs.readConversationForPlugins()?.conversationId ?? "";
-			void cs.prompt(`[定时任务] ${text}`);
+			void cs.prompt(`[Scheduled task] ${text}`);
 			// 等待运行结束：每 2s 轮询，最长 10 分钟。超时按失败记录（运行继续）。
 			const deadline = Date.now() + 10 * 60 * 1000;
 			for (;;) {
@@ -14168,7 +14035,11 @@ export class AgentService {
 					return { ok: true, conversationId: conversationId || undefined };
 				}
 				if (Date.now() >= deadline)
-					return { ok: false, conversationId: conversationId || undefined, error: "运行超时（10 分钟），仍在后台继续" };
+					return {
+						ok: false,
+						conversationId: conversationId || undefined,
+						error: "Run timed out (10 min); it continues in the background",
+					};
 			}
 		} catch (err) {
 			return { ok: false, error: (err as Error).message };
@@ -14189,7 +14060,7 @@ export class AgentService {
 		error?: string;
 	}> {
 		try {
-			if (this.quiesced) return { ok: false, error: "插件 LLM 调用被拒绝，请等服务器恢复后重试" };
+			if (this.quiesced) return { ok: false, error: "Plugin LLM call refused; retry after the server recovers" };
 			let env: { cwd: string; agentDir: string; fallbackModel?: { provider: string; id: string } };
 			const agentDir = process.env.PI_CODING_AGENT_DIR ?? getAgentDir();
 			try {
@@ -14201,7 +14072,7 @@ export class AgentService {
 			const mod = await import("./plugin-llm.js");
 			const r = await mod.completeWithIsolatedSession(env, { ...req, prompt: String(req?.prompt ?? "") });
 			if (!r.ok) return r;
-			console.log(`[plugin:${pluginId}] llm.complete ok（模型 ${r.model}，输出 ${r.text.length} 字）`);
+			console.log(`[plugin:${pluginId}] llm.complete ok (model ${r.model}, output ${r.text.length} chars)`);
 			return r;
 		} catch (err) {
 			return { ok: false, error: (err as Error).message };
@@ -14325,7 +14196,10 @@ export class AgentService {
 			target.sendNotice({ type: "notice", level: "warning", text, textEn });
 		};
 		if (!ownerId || !convId) {
-			fail("过户目标不明确（缺 owner/id），请重试", "Takeover target unclear (missing owner/id), please retry.");
+			fail(
+				"Takeover target unclear (missing owner/id), please retry.",
+				"Takeover target unclear (missing owner/id), please retry.",
+			);
 			return;
 		}
 		// server-owned-chats：对话表进程共享，目标手里本来就有这条对话 → 也只是切过去。
@@ -14341,12 +14215,15 @@ export class AgentService {
 			return;
 		}
 		if (AgentService.isPseudoClientId(ownerId)) {
-			fail("定时任务/插件会话不支持过户", "Scheduler/plugin sessions cannot be taken over.");
+			fail("Scheduler/plugin sessions cannot be taken over.", "Scheduler/plugin sessions cannot be taken over.");
 			return;
 		}
 		const source = this.clients.get(ownerId);
 		if (!source) {
-			fail("对方会话已不存在，可从历史对话里直接打开", "The source session is gone; reopen it from History instead.");
+			fail(
+				"The source session is gone; reopen it from History instead.",
+				"The source session is gone; reopen it from History instead.",
+			);
 			target.refreshExternalRunning();
 			return;
 		}
@@ -14354,7 +14231,7 @@ export class AgentService {
 		const main = briefs.find((b) => b.id === convId);
 		if (!main) {
 			fail(
-				"对方已经没有这条对话（刚结束或被关闭），左栏稍后自动刷新",
+				"That conversation is gone on the other side; the list refreshes shortly.",
 				"That conversation is gone on the other side; the list refreshes shortly.",
 			);
 			target.refreshExternalRunning();
@@ -14362,7 +14239,7 @@ export class AgentService {
 		}
 		if (main.isSubagent) {
 			fail(
-				"只能过户主对话（子代理随主对话一起搬）",
+				"Only main conversations can be taken over (subagents move with their parent).",
 				"Only main conversations can be taken over (subagents move with their parent).",
 			);
 			return;
@@ -14375,7 +14252,7 @@ export class AgentService {
 			target.takeoverBriefs().filter((b) => b.cwd === main.cwd && !b.isSubagent && !b.isEphemeral).length + movedMains;
 		if (openInProject > MAX_OPEN_CONVERSATIONS) {
 			fail(
-				`目标项目运行的对话已达上限（${MAX_OPEN_CONVERSATIONS} 个），请先打开某个对话并离开（不继续对话）以移出列表`,
+				`This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}). Open one and leave it (without continuing) to remove it from the list.`,
 				`This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}). Open one and leave it (without continuing) to remove it from the list.`,
 			);
 			return;
@@ -14385,8 +14262,8 @@ export class AgentService {
 			if (!detached.ok) {
 				fail(
 					detached.reason === "empty"
-						? "对方会话只剩这一条对话且服务排空中，稍后再试"
-						: "对方已经没有这条对话（刚结束或被关闭），左栏稍后自动刷新",
+						? "The source session only has this conversation and the server is draining; try later."
+						: "That conversation is gone on the other side; the list refreshes shortly.",
 					detached.reason === "empty"
 						? "The source session only has this conversation and the server is draining; try later."
 						: "That conversation is gone on the other side; the list refreshes shortly.",
@@ -14400,18 +14277,18 @@ export class AgentService {
 			source.sendNotice({
 				type: "notice",
 				level: "info",
-				text: `「${main.title}」已过户到另一处接管，本页不再持有它。`,
+				text: `"${main.title}" was taken over by another page and is no longer held here.`,
 				textEn: `"${main.title}" was taken over by another page and is no longer held here.`,
 			});
 			target.sendNotice({
 				type: "notice",
 				level: "info",
-				text: `已将「${main.title}」过户到当前页面，可直接继续查看与操作。`,
+				text: `"${main.title}" was moved to this page — pick up right where it left off.`,
 				textEn: `"${main.title}" was moved to this page — pick up right where it left off.`,
 			});
 			await target.switchConversation(newMainId);
 		} catch (err) {
-			fail(`过户失败：${(err as Error).message}`, `Takeover failed: ${(err as Error).message}`);
+			fail(`Takeover failed: ${(err as Error).message}`, `Takeover failed: ${(err as Error).message}`);
 		}
 	}
 
@@ -14426,13 +14303,16 @@ export class AgentService {
 			target.sendNotice({ type: "notice", level: "warning", text, textEn });
 		};
 		if (!ownerId || !convId) {
-			fail("问卷目标不明确（缺 owner/id），请重试", "Question target unclear (missing owner/id), please retry.");
+			fail(
+				"Question target unclear (missing owner/id), please retry.",
+				"Question target unclear (missing owner/id), please retry.",
+			);
 			return;
 		}
 		if (ownerId === targetId) return; // 自己的问卷走本地通道，不需要预告
 		if (AgentService.isPseudoClientId(ownerId)) {
 			fail(
-				"定时任务/插件会话的问卷不支持跨页作答",
+				"Scheduler/plugin session questions cannot be answered cross-page.",
 				"Scheduler/plugin session questions cannot be answered cross-page.",
 			);
 			return;
@@ -14441,7 +14321,7 @@ export class AgentService {
 		const q = source?.peekPendingQuestion(convId);
 		if (!q) {
 			fail(
-				"那张问卷已不在（对方刚回答/取消或对话已结束）",
+				"That question is gone (just answered/cancelled there, or the run ended).",
 				"That question is gone (just answered/cancelled there, or the run ended).",
 			);
 			target.refreshExternalRunning();
@@ -14469,7 +14349,7 @@ export class AgentService {
 			target.sendNotice({
 				type: "notice",
 				level: "warning",
-				text: "那张问卷已不在（对方刚回答/取消或对话已结束），你的回答没有送出",
+				text: "That question is gone (just answered/cancelled there, or the run ended) — your answer was not delivered.",
 				textEn:
 					"That question is gone (just answered/cancelled there, or the run ended) — your answer was not delivered.",
 			});
@@ -14501,7 +14381,7 @@ export class AgentService {
 				// clients are refused — index.ts closes their socket (4403) and the
 				// browser reconnect loop retries after admission reopens.
 				if (this.quiesced) {
-					throw new QuiesceRejectedError("新连接被拒绝，请等服务器恢复后重试");
+					throw new QuiesceRejectedError("New connection refused; retry after the server recovers");
 				}
 				// patch: no-cwd-restore —— 不再自动恢复 lastCwd。新连接一律用服务端启动
 				// 目录；想去别的项目用左栏切。自动恢复的问题是它会把你拽回上一次碰过的
@@ -14630,7 +14510,7 @@ export class AgentService {
 		for (const chat of plan.guarded) {
 			this.startupNotices.push({
 				level: "warning",
-				text: `「${chat.title}」连续 3 次被重启打断都没做完，这次没有让它自动继续。请打开它，告诉它接下来做什么。`,
+				text: `"${chat.title}" was cut off by 3 restarts in a row without finishing, so it wasn't told to carry on this time. Open it and tell it what to do.`,
 				textEn: `"${chat.title}" was cut off by 3 restarts in a row without finishing, so it wasn't told to carry on this time. Open it and tell it what to do.`,
 			});
 		}
@@ -14693,14 +14573,14 @@ export class AgentService {
 		if (carried.length > 0) {
 			this.startupNotices.push({
 				level: "info",
-				text: `pi-web-ui 已重启（${plan.reason}）。${carried.length} 个被打断的对话已自动继续：${carried.map((t) => `「${t}」`).join("、")}`,
+				text: `pi-web-ui restarted (${plan.reason}). ${carried.length} chat(s) it cut off are carrying on: ${quote(carried)}`,
 				textEn: `pi-web-ui restarted (${plan.reason}). ${carried.length} chat(s) it cut off are carrying on: ${quote(carried)}`,
 			});
 		}
 		if (failed.length > 0) {
 			this.startupNotices.push({
 				level: "warning",
-				text: `重启后没能重新打开这些被打断的对话：${failed.map((t) => `「${t}」`).join("、")}。请手动打开并让它们继续。`,
+				text: `After the restart these cut-off chats couldn't be reopened: ${quote(failed)}. Open them and tell them to carry on.`,
 				textEn: `After the restart these cut-off chats couldn't be reopened: ${quote(failed)}. Open them and tell them to carry on.`,
 			});
 		}

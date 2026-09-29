@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, cpSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
-import { pick, type ServerLang } from "./i18n.js";
+import { type ServerLang } from "./i18n.js";
 import { parseInstallSpec, manifestCandidateUrls } from "./plugin-install-spec.js";
 
 const PLUGIN_ID_RE = /^[A-Za-z0-9_-]+$/;
@@ -55,7 +55,7 @@ export function ensureBackup(dataDir: string, id: string, opts?: { source?: stri
 		} catch {
 			/* 清理失败忽略 */
 		}
-		console.warn(`[plugin-updater] 备份 ${id} 失败：`, err instanceof Error ? err.message : err);
+		console.warn(`[plugin-updater] Backup of ${id} failed:`, err instanceof Error ? err.message : err);
 		return null;
 	}
 }
@@ -93,7 +93,7 @@ export function restoreBackup(dataDir: string, id: string): string | null {
 		rmSync(src, { recursive: true, force: true });
 		return backups[0];
 	} catch (err) {
-		console.warn(`[plugin-updater] 回滚 ${id} 失败：`, err instanceof Error ? err.message : err);
+		console.warn(`[plugin-updater] Rollback of ${id} failed:`, err instanceof Error ? err.message : err);
 		return null;
 	}
 }
@@ -235,7 +235,6 @@ export async function checkPluginUpdates(
 	lang?: () => ServerLang,
 	opts?: CheckPluginUpdatesOptions,
 ): Promise<PluginUpdateInfo[]> {
-	const l = lang?.() ?? "en";
 	const pluginsDir = join(dataDir, "plugins");
 	let names: string[] = [];
 	try {
@@ -305,13 +304,7 @@ export async function checkPluginUpdates(
 				error = err instanceof Error ? err.message : String(err);
 				remoteSha = null;
 			}
-			if (!remoteSha && !latestVersion && !error)
-				error = pick(
-					l,
-					"无法检查（非 git 源或 git 不可用）",
-					"Cannot check (non-git source or git unavailable)",
-					"pluginupdate.cannot.check",
-				);
+			if (!remoteSha && !latestVersion && !error) error = "Cannot check (non-git source or git unavailable)";
 
 			let updatable = false;
 			if (latestVersion && version) {

@@ -230,7 +230,7 @@ try {
 	// 5) unknown provider refuses.
 	c.send({ type: "clone_provider", provider: "no-such-provider", reqId: 14 });
 	const r4 = await c.waitFor("clone_provider_result", 10000, (m) => m.reqId === 14);
-	check("unknown provider → error", !r4.ok && (r4.error ?? "").includes("不存在"));
+	check("unknown provider → error", !r4.ok && (r4.error ?? "").includes("does not exist"));
 
 	console.log(`\n${passed} checks passed`);
 } catch (err) {

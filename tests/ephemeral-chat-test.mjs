@@ -236,7 +236,7 @@ try {
 	check("转正后会话 id 不变（对话内容原地保留）", promoted?.id === ephId);
 	check(
 		"转正有明确提示",
-		notices.some((n) => n.includes("正式对话") || n.includes("历史")),
+		notices.some((n) => n.includes("regular conversation") || n.includes("history")),
 		notices.join(" | "),
 	);
 

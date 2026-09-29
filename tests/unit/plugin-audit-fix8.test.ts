@@ -76,7 +76,7 @@ describe("pluginNetFetch：重定向每跳复查白名单（item 3）", () => {
 		});
 		expect(r).toEqual({
 			ok: false,
-			error: "net: 主机 evil.example 未授权（manifest.netAllowlist 或 host.requestPermission 申请）",
+			error: "net: host evil.example is not allowed (manifest.netAllowlist, or request it with host.requestPermission)",
 		});
 		expect(f.calls).toHaveLength(1); // 不发起对未授权主机的请求
 	});
@@ -96,7 +96,7 @@ describe("pluginNetFetch：重定向每跳复查白名单（item 3）", () => {
 			hostAllowed: () => true,
 			fetchImpl: fakeFetch([]).impl,
 		});
-		expect(r).toEqual({ ok: false, error: "net: 不支持的协议 file:" });
+		expect(r).toEqual({ ok: false, error: "net: unsupported protocol file:" });
 	});
 
 	it("重定向超过 5 跳：拒绝", async () => {
@@ -109,7 +109,7 @@ describe("pluginNetFetch：重定向每跳复查白名单（item 3）", () => {
 			hostAllowed: allow(["a.example"]),
 			fetchImpl: f.impl,
 		});
-		expect(r).toEqual({ ok: false, error: "net: 重定向超过 5 跳上限" });
+		expect(r).toEqual({ ok: false, error: "net: more than 5 redirects" });
 		// 首跳 + 5 跳重定向 = 6 次请求，第 7 跳不再发
 		expect(f.calls).toHaveLength(6);
 	});
@@ -248,16 +248,16 @@ describe("McpClient.onData 缓冲上限（item 9）", () => {
 		const pending = request("tools/call", {}, 5000);
 		// 总缓冲未超（1MB+1 < 4MB），但首个换行前长度已超单行上限
 		onData(`${"x".repeat(1024 * 1024 + 1)}\n`);
-		await expect(pending).rejects.toThrow(/单行超过/);
-		expect(logs.some((l) => l.includes("单行超过"))).toBe(true);
+		await expect(pending).rejects.toThrow(/single line over/);
+		expect(logs.some((l) => l.includes("single line over"))).toBe(true);
 	});
 
 	it("总缓冲超过 4MB（不换行）：拒绝在途请求并按协议错误关闭", async () => {
 		const { onData, request, logs } = rawClient("cap-buffer");
 		const pending = request("tools/call", {}, 5000);
 		onData("x".repeat(4 * 1024 * 1024 + 1));
-		await expect(pending).rejects.toThrow(/缓冲超过/);
-		expect(logs.some((l) => l.includes("缓冲超过"))).toBe(true);
+		await expect(pending).rejects.toThrow(/buffer over/);
+		expect(logs.some((l) => l.includes("buffer over"))).toBe(true);
 	});
 
 	it("正常大小的行不受影响：合法 JSON-RPC 响应照常匹配", async () => {

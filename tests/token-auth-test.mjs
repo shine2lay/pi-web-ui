@@ -215,7 +215,11 @@ try {
 		scStale.includes("Max-Age=0") && scStale.includes("pi_web_token=;"),
 		scStale,
 	);
-	check("401 body hints at changed server token", (await stale1.text()).includes("口令已变更"), "<body>");
+	check(
+		"401 body hints at changed server token",
+		(await stale1.text()).includes("has the server token changed"),
+		"<body>",
+	);
 	applyJar(stale1); // jar now empty — browser would have dropped the cookie
 
 	// 7b. one correct ?token= entry re-syncs the cookie to the new secret

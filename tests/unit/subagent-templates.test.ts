@@ -124,14 +124,14 @@ describe("SubagentTemplatesStore", () => {
 		expect(store.upsert({ ...base, systemPrompt: "x".repeat(TEMPLATE_LIMITS.systemPrompt + 1) })).toMatch(/超长/);
 		expect(
 			store.upsert({ ...base, name: "long-en", systemPromptEn: "x".repeat(TEMPLATE_LIMITS.systemPrompt + 1) }),
-		).toMatch(/英文系统提示词超长/);
+		).toMatch(/English system prompt is too long/);
 		// description / descriptionEn
 		expect(
 			store.upsert({ ...base, name: "long-desc", description: "x".repeat(TEMPLATE_LIMITS.description + 1) }),
-		).toMatch(/简介超长/);
+		).toMatch(/description is too long/);
 		expect(
 			store.upsert({ ...base, name: "long-desc-en", descriptionEn: "x".repeat(TEMPLATE_LIMITS.description + 1) }),
-		).toMatch(/英文简介超长/);
+		).toMatch(/English description is too long/);
 		// 白名单条数与单条长度
 		expect(
 			store.upsert({
@@ -139,14 +139,14 @@ describe("SubagentTemplatesStore", () => {
 				name: "too-many-skills",
 				enabledSkills: Array.from({ length: TEMPLATE_LIMITS.whitelistEntries + 1 }, (_, i) => `s${i}`),
 			}),
-		).toMatch(/条目过多/);
+		).toMatch(/too many/);
 		expect(
 			store.upsert({
 				...base,
 				name: "long-extension",
 				enabledExtensions: ["npm:" + "x".repeat(TEMPLATE_LIMITS.whitelistEntryLength)],
 			}),
-		).toMatch(/超长条目/);
+		).toMatch(/over-long/);
 		// 拒绝后不落盘
 		for (const name of ["reviewer", "long-en", "long-desc", "long-desc-en", "too-many-skills", "long-extension"]) {
 			expect(store.get(name)).toBeUndefined();

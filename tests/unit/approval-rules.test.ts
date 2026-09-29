@@ -328,7 +328,7 @@ describe("ApprovalRulesStore 持久化库与播种机制", () => {
 		expect(resetOk).toBe(true);
 		item = store.list().find((r) => r.id === "builtin.bash.rm-rf");
 		expect(item?.action).toBe("ask");
-		expect(item?.label).toBe("递归/强制删除 (rm -rf)");
+		expect(item?.label).toBe("Recursive/force delete (rm -rf)");
 	});
 
 	it("saveAll 批量重排", () => {

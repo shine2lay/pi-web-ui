@@ -35,12 +35,12 @@ export function isOfficeFile(name: string): boolean {
 function findEocd(buf: Buffer): number {
 	const sig = 0x06054b50;
 	const minLen = 22;
-	if (buf.length < minLen) throw new Error("不是有效的 zip 文件（太小）");
+	if (buf.length < minLen) throw new Error("Not a valid zip file (too small)");
 	const start = Math.max(0, buf.length - 65536 - minLen);
 	for (let i = buf.length - minLen; i >= start; i--) {
 		if (buf.readUInt32LE(i) === sig) return i;
 	}
-	throw new Error("不是有效的 zip 文件（找不到 EOCD）");
+	throw new Error("Not a valid zip file (no EOCD found)");
 }
 
 /** 返回 Map<文件名, Buffer>（只解要的文件，其余跳过）。 */
@@ -55,7 +55,7 @@ export function unzipFiles(buf: Buffer, wanted: string[]): Map<string, Buffer> {
 	>();
 	let p = cdOffset;
 	for (let i = 0; i < cdCount; i++) {
-		if (buf.readUInt32LE(p) !== 0x02014b50) throw new Error("zip 中央目录损坏");
+		if (buf.readUInt32LE(p) !== 0x02014b50) throw new Error("zip central directory is corrupt");
 		const flag = buf.readUInt16LE(p + 8);
 		const method = buf.readUInt16LE(p + 10);
 		const compSize = buf.readUInt32LE(p + 20);
@@ -72,23 +72,23 @@ export function unzipFiles(buf: Buffer, wanted: string[]): Map<string, Buffer> {
 	const out = new Map<string, Buffer>();
 	for (const [name, meta] of files) {
 		if (meta.uncompSize > OFFICE_MAX_UNCOMPRESSED_BYTES) {
-			throw new Error("解包后内容过大（疑似 zip 炸弹），拒绝预览");
+			throw new Error("Unpacked content too large (possible zip bomb), preview refused");
 		}
 		const lp = meta.localOffset;
-		if (buf.readUInt32LE(lp) !== 0x04034b50) throw new Error(`zip 局部头损坏：${name}`);
+		if (buf.readUInt32LE(lp) !== 0x04034b50) throw new Error(`zip local header is corrupt: ${name}`);
 		const lMethod = buf.readUInt16LE(lp + 8);
 		const lNameLen = buf.readUInt16LE(lp + 26);
 		const lExtraLen = buf.readUInt16LE(lp + 28);
 		const dataStart = lp + 30 + lNameLen + lExtraLen;
 		const raw = buf.subarray(dataStart, dataStart + meta.compSize);
-		if (meta.flag & 0x1) throw new Error(`不支持加密 zip 条目：${name}`);
+		if (meta.flag & 0x1) throw new Error(`Encrypted zip entries are not supported: ${name}`);
 		const method = lMethod || meta.method;
 		let decompressed: Buffer;
 		if (method === 0) {
 			decompressed = Buffer.from(raw);
 		} else if (method === 8) {
 			const remainingQuota = OFFICE_MAX_UNCOMPRESSED_BYTES - totalUncomp;
-			if (remainingQuota <= 0) throw new Error("解包后内容过大（疑似 zip 炸弹），拒绝预览");
+			if (remainingQuota <= 0) throw new Error("Unpacked content too large (possible zip bomb), preview refused");
 			try {
 				decompressed = Buffer.from(inflateRawSync(raw, { maxOutputLength: remainingQuota }));
 			} catch (err) {
@@ -96,16 +96,16 @@ export function unzipFiles(buf: Buffer, wanted: string[]): Map<string, Buffer> {
 					(err as Error).message?.includes("maxOutputLength") ||
 					(err as { code?: string }).code === "ERR_BUFFER_TOO_LARGE"
 				) {
-					throw new Error("解包后内容过大（疑似 zip 炸弹），拒绝预览");
+					throw new Error("Unpacked content too large (possible zip bomb), preview refused");
 				}
 				throw err;
 			}
 		} else {
-			throw new Error(`不支持的压缩方式 ${method}：${name}`);
+			throw new Error(`Unsupported compression method ${method}: ${name}`);
 		}
 		totalUncomp += decompressed.length;
 		if (totalUncomp > OFFICE_MAX_UNCOMPRESSED_BYTES) {
-			throw new Error("解包后内容过大（疑似 zip 炸弹），拒绝预览");
+			throw new Error("Unpacked content too large (possible zip bomb), preview refused");
 		}
 		out.set(name, decompressed);
 	}
@@ -154,12 +154,12 @@ const DOCX_MAX_XML_BYTES = 20 * 1024 * 1024;
 export function parseDocxParagraphs(buf: Buffer): string[] {
 	const files = unzipFiles(buf, ["word/document.xml"]);
 	const xml = files.get("word/document.xml")?.toString("utf8");
-	if (!xml) throw new Error("docx 里找不到 word/document.xml");
+	if (!xml) throw new Error("word/document.xml not found in the docx");
 	// 预检 1：解压后过大的 document.xml 在下面的正则扫描里代价爆炸（一次性物化
 	// 全部段落、非贪婪匹配最坏回溯到文本末尾），直接友好报错而不是挂住进程。
 	if (xml.length > DOCX_MAX_XML_BYTES) {
 		throw new Error(
-			`文档内容过大（document.xml 解压后 ${(xml.length / 1048576).toFixed(1)} MB，上限 20 MB），拒绝预览`,
+			`Document too large (document.xml is ${(xml.length / 1048576).toFixed(1)} MB unpacked, limit 20 MB), preview refused`,
 		);
 	}
 	// 预检 2：正常文档的段落闭合标签与开标签同量级。"只有开标签、没有闭标签"
@@ -168,7 +168,7 @@ export function parseDocxParagraphs(buf: Buffer): string[] {
 	const opens = xml.match(/<w:p[\s>]/g)?.length ?? 0;
 	const closes = xml.match(/<\/w:p>/g)?.length ?? 0;
 	if (opens > 0 && closes === 0) {
-		throw new Error("文档结构异常（段落标签大量未闭合），疑似恶意文档，拒绝预览");
+		throw new Error("Malformed document structure (many unclosed paragraph tags), possibly malicious, preview refused");
 	}
 	const paragraphs: string[] = [];
 	for (const m of xml.matchAll(/<w:p[\s>][\s\S]*?<\/w:p>/g)) {
@@ -343,8 +343,8 @@ function colName(i: number): string {
  * 很多表的第一行是通知/标题文字，染成紫色表头又怪又误导。
  */
 function sheetToMarkdown(sheet: XlsxSheet): string {
-	const head = `## ${sheet.name}（${sheet.nRows} 行 × ${sheet.nCols} 列${sheet.truncated ? "，只看前一部分" : ""}）`;
-	if (sheet.rows.length === 0) return `${head}\n\n（空表）`;
+	const head = `## ${sheet.name} (${sheet.nRows} rows × ${sheet.nCols} columns${sheet.truncated ? ", first part only" : ""})`;
+	if (sheet.rows.length === 0) return `${head}\n\n(empty sheet)`;
 	const width = Math.max(1, ...sheet.rows.map((r) => r.length));
 	const pad = (r: string[]): string[] => {
 		const row = r.slice(0, width);
@@ -369,7 +369,7 @@ export function extractOfficeText(filename: string, buf: Buffer): { text: string
 	const ext = dot > 0 ? String(filename).toLowerCase().slice(dot) : "";
 	if (!OFFICE_EXTS.has(ext)) return null;
 	if (buf.length > OFFICE_MAX_FILE_BYTES) {
-		throw new Error(`文件太大（${(buf.length / 1048576).toFixed(1)} MB），Office 预览上限 15 MB`);
+		throw new Error(`File too large (${(buf.length / 1048576).toFixed(1)} MB); the Office preview limit is 15 MB`);
 	}
 	let text: string;
 	let truncated = false;

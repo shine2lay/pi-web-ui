@@ -270,7 +270,7 @@ try {
 		baseUrl: `http://127.0.0.1:${MOCK_PORT}/empty`,
 	});
 	const r7 = await c.waitFor("fetch_models_result", 10000, (m) => m.reqId === 7);
-	check("empty model list → error", !r7.ok && r7.error.includes("未返回任何模型"));
+	check("empty model list → error", !r7.ok && r7.error.includes("returned no models"));
 
 	c.send({
 		type: "fetch_models",

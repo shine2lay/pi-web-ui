@@ -332,7 +332,7 @@ try {
 
 	// 问卷已不在时再 peek → 明确通知，不静默。
 	clientB.send({ type: "peek_elsewhere_question", owner: row.owner, id: row.convId });
-	const gone = await clientB.waitForType("notice", (m) => (m.text ?? "").includes("问卷已不在"), 15000);
+	const gone = await clientB.waitForType("notice", (m) => (m.text ?? "").includes("That question is gone"), 15000);
 	check("问卷消失后 peek 给出明确通知", !!gone);
 
 	console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);

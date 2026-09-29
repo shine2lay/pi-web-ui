@@ -58,51 +58,59 @@ export const NATIVE_COMMANDS: {
 }[] = [
 	{
 		name: "new",
-		description: "新建对话（可带首条提示：/new <提示>）",
+		description: "New chat (optional first prompt: /new <prompt>)",
 		descriptionEn: "New chat (optional first prompt: /new <prompt>)",
-		argumentHint: "[提示]",
+		argumentHint: "[prompt]",
 		argumentHintEn: "[prompt]",
 	},
 	{
 		name: "name",
-		description: "重命名当前会话",
+		description: "Set session display name",
 		descriptionEn: "Set session display name",
-		argumentHint: "<名称>",
+		argumentHint: "<name>",
 		argumentHintEn: "<name>",
 	},
 	{
 		name: "model",
-		description: "切换模型",
+		description: "Switch model",
 		descriptionEn: "Switch model",
-		argumentHint: "[名称]",
+		argumentHint: "[name]",
 		argumentHintEn: "[name]",
 	},
 	{
 		name: "compact",
-		description: "压缩上下文",
+		description: "Compact context",
 		descriptionEn: "Compact context",
-		argumentHint: "[说明]",
+		argumentHint: "[instructions]",
 		argumentHintEn: "[instructions]",
 	},
 	{
 		name: "cwd",
-		description: "切换工作目录",
+		description: "Switch workspace",
 		descriptionEn: "Switch workspace",
-		argumentHint: "<路径>",
+		argumentHint: "<path>",
 		argumentHintEn: "<path>",
 	},
 	{
 		name: "thinking",
-		description: "设置思考强度",
+		description: "Set thinking level",
 		descriptionEn: "Set thinking level",
 		argumentHint: "<off|low|medium|high|xhigh|max>",
 		argumentHintEn: "<off|low|medium|high|xhigh|max>",
 	},
-	{ name: "resume", description: "刷新会话列表", descriptionEn: "Refresh session list" },
-	{ name: "reload", description: "重新加载扩展、技能与模板", descriptionEn: "Reload extensions, skills & templates" },
-	{ name: "help", description: "显示全部命令", descriptionEn: "Show all commands" },
-	{ name: "copy", description: "复制上一条助手回复", descriptionEn: "Copy last assistant reply" },
-	{ name: "pi-web-ui:quit", description: "退出服务", descriptionEn: "Quit server (supervisor will restart)" },
+	{ name: "resume", description: "Refresh session list", descriptionEn: "Refresh session list" },
+	{
+		name: "reload",
+		description: "Reload extensions, skills & templates",
+		descriptionEn: "Reload extensions, skills & templates",
+	},
+	{ name: "help", description: "Show all commands", descriptionEn: "Show all commands" },
+	{ name: "copy", description: "Copy last assistant reply", descriptionEn: "Copy last assistant reply" },
+	{
+		name: "pi-web-ui:quit",
+		description: "Quit server (supervisor will restart)",
+		descriptionEn: "Quit server (supervisor will restart)",
+	},
 ];
 
 /** Parse a prompt into "/command args" — returns null when it isn't one. */
@@ -207,7 +215,7 @@ export class SlashCommandsService {
 					this.host.emit({
 						type: "notice",
 						level: "info",
-						text: current ? `当前会话名称：${current}。用法：/name <名称>` : `用法：/name <名称>`,
+						text: current ? `Current session name: ${current}. Usage: /name <name>` : `Usage: /name <name>`,
 						textEn: current ? `Current session name: ${current}. Usage: /name <name>` : `Usage: /name <name>`,
 					});
 					return true;
@@ -220,7 +228,7 @@ export class SlashCommandsService {
 					this.host.emit({
 						type: "notice",
 						level: "info",
-						text: `已重命名当前会话为「${trimmed}」`,
+						text: `Renamed current session to "${trimmed}"`,
 						textEn: `Renamed current session to "${trimmed}"`,
 					});
 				}
@@ -233,8 +241,8 @@ export class SlashCommandsService {
 						type: "notice",
 						level: "info",
 						text: current
-							? `当前模型：${current.name}（${current.provider}/${current.id}）。用法：/model <名称>`
-							: `用法：/model <名称>`,
+							? `Current model: ${current.name} (${current.provider}/${current.id}). Usage: /model <name>`
+							: `Usage: /model <name>`,
 						textEn: current
 							? `Current model: ${current.name} (${current.provider}/${current.id}). Usage: /model <name>`
 							: `Usage: /model <name>`,
@@ -257,7 +265,7 @@ export class SlashCommandsService {
 					this.host.emit({
 						type: "notice",
 						level: "error",
-						text: `没有匹配到模型：${args}（可用模型见顶栏模型列表）`,
+						text: `No matching model: ${args} (see the model list in the top bar)`,
 						textEn: `No matching model: ${args} (see the model list in the top bar)`,
 					});
 					return true;
@@ -267,7 +275,7 @@ export class SlashCommandsService {
 					this.host.emit({
 						type: "notice",
 						level: "warning",
-						text: `找到 ${matches.length} 个匹配模型，已选用：${pick.name}（精确匹配请用 provider/id）`,
+						text: `Found ${matches.length} matching models, using: ${pick.name} (use provider/id for an exact match)`,
 						textEn: `Found ${matches.length} matching models, using: ${pick.name} (use provider/id for an exact match)`,
 					});
 				}
@@ -288,7 +296,7 @@ export class SlashCommandsService {
 					this.host.emit({
 						type: "notice",
 						level: "info",
-						text: `当前工作目录：${this.host.cwd()}。用法：/cwd <路径>`,
+						text: `Current directory: ${this.host.cwd()}. Usage: /cwd <path>`,
 						textEn: `Current directory: ${this.host.cwd()}. Usage: /cwd <path>`,
 					});
 				} else {
@@ -317,7 +325,7 @@ export class SlashCommandsService {
 					this.host.emit({
 						type: "notice",
 						level: "error",
-						text: `无效的思考强度：${args || "（空）"}。可用：off / minimal / low / medium / high / xhigh / max`,
+						text: `Invalid thinking level: ${args || "(empty)"}. Available: off / minimal / low / medium / high / xhigh / max`,
 						textEn: `Invalid thinking level: ${args || "(empty)"}. Available: off / minimal / low / medium / high / xhigh / max`,
 					});
 					return true;
@@ -330,7 +338,7 @@ export class SlashCommandsService {
 				this.host.emit({
 					type: "notice",
 					level: "info",
-					text: "会话列表已刷新，请在左侧「历史对话」中选择",
+					text: "Session list refreshed — pick one under History on the left",
 					textEn: "Session list refreshed — pick one under History on the left",
 				});
 				return true;
@@ -345,14 +353,14 @@ export class SlashCommandsService {
 					this.host.emit({
 						type: "notice",
 						level: "info",
-						text: "已重新加载扩展、技能与提示模板",
+						text: "Reloaded extensions, skills and prompt templates",
 						textEn: "Reloaded extensions, skills and prompt templates",
 					});
 				} catch (err) {
 					this.host.emit({
 						type: "notice",
 						level: "error",
-						text: `重新加载失败：${(err as Error).message}`,
+						text: `Reload failed: ${(err as Error).message}`,
 						textEn: `Reload failed: ${(err as Error).message}`,
 					});
 				}
@@ -361,7 +369,7 @@ export class SlashCommandsService {
 				this.host.emit({
 					type: "notice",
 					level: "info",
-					text: "正在退出 pi-web-ui… supervisor 将自动重启服务",
+					text: "Quitting pi-web-ui… the supervisor will restart the service",
 					textEn: "Quitting pi-web-ui… the supervisor will restart the service",
 				});
 				setTimeout(() => {

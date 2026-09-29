@@ -120,7 +120,7 @@ try {
 
 	const setRes = await req("goal/set", {
 		sessionId,
-		objective: "用一句话回答 2+2 等于几，然后调用 update_goal complete 结束这个目标。",
+		objective: "Answer in one sentence what 2+2 is, then call update_goal complete to finish this goal.",
 		maxGoalRounds: 3,
 	});
 	console.log("goal/set ->", JSON.stringify(setRes));

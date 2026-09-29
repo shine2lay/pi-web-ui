@@ -23,7 +23,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { bilingual } from "../i18n.js";
 
 /** 项目依赖解析（tsc 编译后 dist/server/dsh/ 里向上找 node_modules）。 */
 const require = createRequire(import.meta.url);
@@ -200,14 +199,11 @@ export class DshRuntime {
 
 	private async doStart(): Promise<void> {
 		if (!existsSync(this.launcher)) {
-			throw new DshTransportError(bilingual(`launcher missing: ${this.launcher}`, `launcher 不存在: ${this.launcher}`));
+			throw new DshTransportError(`launcher missing: ${this.launcher}`);
 		}
 		if (!existsSync(this.jsonrpcEntry)) {
 			throw new DshTransportError(
-				bilingual(
-					`dsh-sdk-jsonrpc-server is not installed (missing ${this.jsonrpcEntry}). Run npm i @deepseek-ai/dsh-sdk-jsonrpc-server@0.1.1-rc.2 first`,
-					`dsh-sdk-jsonrpc-server 未安装（缺 ${this.jsonrpcEntry}）。请先 npm i @deepseek-ai/dsh-sdk-jsonrpc-server@0.1.1-rc.2`,
-				),
+				`dsh-sdk-jsonrpc-server is not installed (missing ${this.jsonrpcEntry}). Run npm i @deepseek-ai/dsh-sdk-jsonrpc-server@0.1.1-rc.2 first`,
 			);
 		}
 		const key = loadDeepSeekKey(this.agentDir);
@@ -243,9 +239,7 @@ export class DshRuntime {
 			this.stderrTail = (this.stderrTail + chunk).slice(-4000);
 		});
 		spawned.on("error", (err) => {
-			this.failPending(
-				new DshTransportError(bilingual(`runtime failed to start: ${err.message}`, `runtime 启动失败: ${err.message}`)),
-			);
+			this.failPending(new DshTransportError(`runtime failed to start: ${err.message}`));
 		});
 		spawned.on("exit", (code, signal) => {
 			// 只处理当前 proc 的退出：kill/restart 后旧 proc 迟到的 exit 事件
@@ -254,10 +248,7 @@ export class DshRuntime {
 			const intentional = this.closed;
 			this.debug("exit", { code, signal, intentional });
 			const err = new DshTransportError(
-				bilingual(
-					`DSH runtime exited (code=${code} signal=${signal}) stderr: ${this.stderrTail.slice(-400)}`,
-					`DSH runtime 已退出 (code=${code} signal=${signal}) stderr: ${this.stderrTail.slice(-400)}`,
-				),
+				`DSH runtime exited (code=${code} signal=${signal}) stderr: ${this.stderrTail.slice(-400)}`,
 			);
 			this.failPending(err);
 			this.initialized = false;
@@ -273,7 +264,7 @@ export class DshRuntime {
 			});
 		} catch (err) {
 			console.error(
-				`[dsh] initialize 失败 (model=${this.model} cwd=${this.cwd}): ${(err as Error).message}` +
+				`[dsh] initialize failed (model=${this.model} cwd=${this.cwd}): ${(err as Error).message}` +
 					(this.stderrTail ? `\n  launcher stderr: ${this.stderrTail.slice(-600)}` : ""),
 			);
 			// initialize 失败：确认子进程已被清理，避免半死进程占着 stdin。
@@ -332,7 +323,7 @@ export class DshRuntime {
 		return new Promise((resolve2, reject) => {
 			const timer = setTimeout(() => {
 				this.pending.delete(id);
-				reject(new DshTransportError(bilingual(`Request ${method} timed out`, `请求 ${method} 超时`)));
+				reject(new DshTransportError(`Request ${method} timed out`));
 			}, timeoutMs);
 			this.pending.set(id, {
 				resolve: (v) => {
@@ -351,7 +342,7 @@ export class DshRuntime {
 	private _write(msg: unknown): void {
 		const proc = this.proc;
 		if (!proc || !proc.stdin || proc.stdin.destroyed) {
-			throw new DshTransportError(bilingual("runtime not started", "runtime 未启动"));
+			throw new DshTransportError("runtime not started");
 		}
 		proc.stdin.write(JSON.stringify(msg) + "\n");
 	}
@@ -367,9 +358,7 @@ export class DshRuntime {
 			contentBlocks,
 		})) as { messageId?: unknown };
 		if (typeof res.messageId !== "string") {
-			throw new DshTransportError(
-				bilingual("session/prompt did not return a messageId", "session/prompt 未返回 messageId"),
-			);
+			throw new DshTransportError("session/prompt did not return a messageId");
 		}
 		return res.messageId;
 	}
@@ -662,7 +651,7 @@ export class DshRuntime {
 			return;
 		}
 		this.proc = null;
-		this.failPending(new DshTransportError(bilingual("runtime killed (interrupt)", "运行时已被终止（中断）")));
+		this.failPending(new DshTransportError("runtime killed (interrupt)"));
 		try {
 			if (process.platform === "win32") {
 				const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {

@@ -12,7 +12,7 @@
 
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
-import { pick, type ServerLang } from "./i18n.js";
+import { type ServerLang } from "./i18n.js";
 import { COMPACT_CONTEXT_TOOL_NAME } from "./tool-manager.js";
 
 /** 工具名（唯一登记在 tool-manager.ts，在此 re-export 供外部模块引用）。 */
@@ -104,9 +104,7 @@ export const CompactContextParams = Type.Object({
 
 export type CompactContextParamsType = Static<typeof CompactContextParams>;
 
-export function makeCompactContextTool(host: CompactContextHost, lang?: () => ServerLang): ToolDefinition {
-	const getLang: () => ServerLang = lang ?? (() => "en");
-
+export function makeCompactContextTool(host: CompactContextHost, _lang?: () => ServerLang): ToolDefinition {
 	return defineTool<typeof CompactContextParams, Record<string, unknown>>({
 		name: COMPACT_CONTEXT_TOOL_NAME,
 		label: "Compact conversation context based on current issue",
@@ -121,16 +119,12 @@ export function makeCompactContextTool(host: CompactContextHost, lang?: () => Se
 		],
 		parameters: CompactContextParams,
 		execute: async (_id, p) => {
-			const l = getLang();
 			const params = p as CompactContextParamsType;
 			const focus = params.focus?.trim() || "";
 
 			if (!focus) {
-				const errMsg = pick(
-					l,
-					"调用 compact_context 必须提供 focus 参数，说明针对当前问题的压缩要求与保留重点。",
-					"compact_context requires a 'focus' parameter explaining what to keep and what to drop for the current issue.",
-				);
+				const errMsg =
+					"compact_context requires a 'focus' parameter explaining what to keep and what to drop for the current issue.";
 				return {
 					content: [{ type: "text", text: errMsg }],
 					details: { ok: false, error: errMsg },
@@ -141,11 +135,7 @@ export function makeCompactContextTool(host: CompactContextHost, lang?: () => Se
 			const stats = host.getContextStats();
 			// 如果整个会话消息条数太少（< 4 条）且 token 极少（< 1200），无需压缩
 			if (stats.messageCount < 4 && stats.estimatedTokens < 1200) {
-				const msg = pick(
-					l,
-					`当前会话历史较短（约 ${stats.estimatedTokens} tokens，${stats.messageCount} 条消息），无需压缩。建议在历史累积较长或切换任务焦点后再调用此工具。`,
-					`Current conversation is very brief (~${stats.estimatedTokens} tokens, ${stats.messageCount} messages), no compaction needed yet. Call this tool when history grows longer or when switching task focus.`,
-				);
+				const msg = `Current conversation is very brief (~${stats.estimatedTokens} tokens, ${stats.messageCount} messages), no compaction needed yet. Call this tool when history grows longer or when switching task focus.`;
 				return {
 					content: [{ type: "text", text: msg }],
 					details: { ok: false, skipped: true, ...stats },
@@ -163,11 +153,7 @@ export function makeCompactContextTool(host: CompactContextHost, lang?: () => Se
 
 			host.scheduleCompaction(pending);
 
-			const successMsg = pick(
-				l,
-				`已成功登记上下文压缩请求。将在本轮回复结束后立即执行上下文压缩。\n- 压缩聚焦点：${focus}\n- 保留近期范围：~${effectiveKeepTokens.toLocaleString()} tokens${pending.summary ? "\n- 包含自主提炼的摘要正文" : ""}\n请在结束本轮回复后，在精炼后的上下文中继续后续工作。`,
-				`Context compaction request scheduled. It will execute immediately after the current turn ends.\n- Focus: ${focus}\n- Retain scope: ~${effectiveKeepTokens.toLocaleString()} tokens${pending.summary ? "\n- Custom summary provided" : ""}\nPlease wrap up this turn, and continue work in the compacted context.`,
-			);
+			const successMsg = `Context compaction request scheduled. It will execute immediately after the current turn ends.\n- Focus: ${focus}\n- Retain scope: ~${effectiveKeepTokens.toLocaleString()} tokens${pending.summary ? "\n- Custom summary provided" : ""}\nPlease wrap up this turn, and continue work in the compacted context.`;
 
 			return {
 				content: [{ type: "text", text: successMsg }],

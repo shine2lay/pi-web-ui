@@ -79,8 +79,7 @@ export function isBlockingDecision(d: ToolPreDecision): boolean {
 	return d.decision === "deny" || d.decision === "ask";
 }
 
-function pickText(zh: string | undefined, en: string | undefined, fbZh: string, fbEn: string, lang: string): string {
-	if (lang === "zh") return zh?.trim() ? zh.trim() : fbZh;
+function pickText(zh: string | undefined, en: string | undefined, fbZh: string, fbEn: string, _lang: string): string {
 	return en?.trim() ? en.trim() : fbEn;
 }
 
@@ -90,7 +89,7 @@ export function denialText(d: ToolPreDecision, pluginId: string, lang: string): 
 		return pickText(
 			d.reason,
 			d.reasonEn,
-			`插件 ${pluginId} 要求先确认再执行，已按拒绝处理（审批 UI 尚未实现，ask 暂按 deny 执行）`,
+			`Plugin ${pluginId} asked for confirmation before execution; treated as denied (approval UI not implemented yet, ask behaves as deny)`,
 			`Plugin ${pluginId} asked for confirmation before execution; treated as denied (approval UI not implemented yet, ask behaves as deny)`,
 			lang,
 		);
@@ -98,7 +97,7 @@ export function denialText(d: ToolPreDecision, pluginId: string, lang: string): 
 	return pickText(
 		d.decision === "deny" ? d.reason : undefined,
 		d.decision === "deny" ? d.reasonEn : undefined,
-		`插件 ${pluginId} 拒绝了本次工具调用`,
+		`Plugin ${pluginId} denied this tool call`,
 		`Plugin ${pluginId} denied this tool call`,
 		lang,
 	);
@@ -146,12 +145,9 @@ export function normalizePostEdit(raw: unknown): ToolPostEdit | undefined {
 export function applyPostEdit(
 	result: { content?: Array<{ type: string; text?: string }>; [k: string]: unknown },
 	edit: ToolPostEdit,
-	lang: string,
+	_lang: string,
 ): { content?: Array<{ type: string; text?: string }>; [k: string]: unknown } {
-	const ctx =
-		lang === "zh"
-			? edit.additionalContext?.trim()
-			: (edit.additionalContextEn?.trim() ?? edit.additionalContext?.trim());
+	const ctx = edit.additionalContextEn?.trim() ?? edit.additionalContext?.trim();
 	const tail = ctx ? [{ type: "text", text: ctx }] : [];
 	if (edit.content) {
 		return { ...result, content: [...edit.content, ...tail] };

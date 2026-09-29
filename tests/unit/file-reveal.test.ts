@@ -94,7 +94,7 @@ describe("files-service: revealEntry 系统资源管理器定位", () => {
 		expect(spawnCalls.length).toBe(0);
 		const warns = seen.filter((m) => m.type === "notice" && m.level === "warning");
 		expect(warns.length).toBe(1);
-		expect((warns[0] as { text: string }).text).toContain("此处不可定位");
+		expect((warns[0] as { text: string }).text).toContain("Cannot reveal here");
 	});
 
 	it("不存在的文件发出警告 notice", async () => {
@@ -107,6 +107,6 @@ describe("files-service: revealEntry 系统资源管理器定位", () => {
 		expect(spawnCalls.length).toBe(0);
 		const warns = seen.filter((m) => m.type === "notice" && m.level === "warning");
 		expect(warns.length).toBe(1);
-		expect((warns[0] as { text: string }).text).toContain("文件不存在");
+		expect((warns[0] as { text: string }).text).toContain("Not found");
 	});
 });

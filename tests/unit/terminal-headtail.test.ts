@@ -6,8 +6,8 @@ import { applyHeadTail } from "../../server/terminals.js";
  *  缺 key 自动回落英文。工具 definition 走 bilingual 内联双语，与本文件无关。 */
 describe("applyHeadTail 的语言", () => {
 	it("zh 保留中文注记", () => {
-		expect(applyHeadTail("a\nb\nc", undefined, 1, "zh")).toBe("…（前 2 行已省略）\nc");
-		expect(applyHeadTail("a\nb\nc", 1, undefined, "zh")).toBe("a\n…（后 2 行已省略）");
+		expect(applyHeadTail("a\nb\nc", undefined, 1, "zh")).toBe("…[2 lines omitted above]…\nc");
+		expect(applyHeadTail("a\nb\nc", 1, undefined, "zh")).toBe("a\n…[2 lines omitted below]…");
 	});
 
 	it("en 出英文注记；第三语言回落英文", () => {

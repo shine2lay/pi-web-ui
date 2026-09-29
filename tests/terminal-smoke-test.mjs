@@ -187,7 +187,7 @@ async function main() {
 		await sleep(1500);
 		check(
 			"folder not skipped as a non-file attachment",
-			!notices.some((t) => t.includes("跳过非文件附件") && t.includes("subdir")),
+			!notices.some((t) => t.includes("Skipped non-file attachment") && t.includes("subdir")),
 		);
 		check(
 			"no attachment error for the folder",
@@ -351,7 +351,7 @@ async function main() {
 	await sleep(500);
 	check(
 		"run_command enforces terminal limit",
-		notices.some((text) => text.includes("终端数量已达上限")),
+		notices.some((text) => text.includes("Terminal limit reached")),
 	);
 	for (const id of capIds) send({ type: "terminal_kill", terminalId: id });
 
@@ -394,7 +394,7 @@ async function main() {
 		await sleep(400);
 		check(
 			"terminal_create + run_command both reject an invalid id",
-			notices.slice(before).filter((n) => n.includes("终端名称无效")).length >= 2,
+			notices.slice(before).filter((n) => n.includes("Invalid terminal name")).length >= 2,
 		);
 	}
 
@@ -425,7 +425,7 @@ async function main() {
 		await sleep(400);
 		check(
 			"run_command of an exited id at the cap is rejected",
-			notices.slice(before).some((n) => n.includes("终端数量已达上限")),
+			notices.slice(before).some((n) => n.includes("Terminal limit reached")),
 		);
 		for (const id of histIds) send({ type: "terminal_kill", terminalId: id });
 		send({ type: "terminal_kill", terminalId: "hist-fill" });
@@ -459,7 +459,7 @@ async function main() {
 		// 先证明确实打满：再建一个用户终端必须被拒（否则后面的豁免断言无意义）。
 		send({ type: "terminal_create", terminalId: "b147-over", cwd: workdir, cols: 40, rows: 12 });
 		await sleep(600);
-		const capped = notices.slice(fillNotices).some((n) => n.includes("终端数量已达上限"));
+		const capped = notices.slice(fillNotices).some((n) => n.includes("Terminal limit reached"));
 		check("issue #147 setup: user cap is full", capped);
 		if (capped) {
 			const before = notices.length;
@@ -473,7 +473,7 @@ async function main() {
 			}
 			check(
 				"terminal_create with agentBash:true bypasses the full user cap",
-				alive147 && !notices.slice(before).some((n) => n.includes("终端数量已达上限")),
+				alive147 && !notices.slice(before).some((n) => n.includes("Terminal limit reached")),
 			);
 		}
 		for (const id of [...ids147, "b147-ai"]) send({ type: "terminal_kill", terminalId: id });

@@ -180,7 +180,9 @@ class Client {
 	sawErrorNotice() {
 		return this.received.some(
 			(m) =>
-				m.type === "notice" && m.level === "error" && /找不到指定的消息节点|找不到指定的回滚检查点/.test(m.text ?? ""),
+				m.type === "notice" &&
+				m.level === "error" &&
+				/Message node to fork from not found|Rollback checkpoint not found/.test(m.text ?? ""),
 		);
 	}
 }

@@ -219,7 +219,7 @@ export async function buildAttachmentMessages(
 			ctx.emit({
 				type: "notice",
 				level: "warning",
-				text: `当前模型（${mainModel?.name ?? mainModel?.id ?? "未知"}）不支持识图，且视觉桥已在设置中关闭：图片将原样发送、可能被忽略。`,
+				text: `Current model (${mainModel?.name ?? mainModel?.id ?? "unknown"}) cannot see images and the vision bridge is off in settings: images will be sent as-is and may be ignored.`,
 				textEn: `Current model (${mainModel?.name ?? mainModel?.id ?? "unknown"}) cannot see images and the vision bridge is off in settings: images will be sent as-is and may be ignored.`,
 			});
 		} else {
@@ -245,7 +245,7 @@ export async function buildAttachmentMessages(
 				ctx.emit({
 					type: "notice",
 					level: "warning",
-					text: `当前模型（${mainModel?.name ?? mainModel?.id ?? "未知"}）不支持识图，且未找到可用的视觉模型：图片将原样发送、可能被忽略。在模型配置里添加任意支持图片的模型（如 qwen-vl、GLM-4V、Gemini）即可自动启用视觉桥转写。`,
+					text: `Current model (${mainModel?.name ?? mainModel?.id ?? "unknown"}) cannot see images and no vision model is available: images will be sent as-is and may be ignored. Add any vision-capable model (e.g. qwen-vl, GLM-4V, Gemini) in model settings to enable vision-bridge transcription.`,
 					textEn: `Current model (${mainModel?.name ?? mainModel?.id ?? "unknown"}) cannot see images and no vision model is available: images will be sent as-is and may be ignored. Add any vision-capable model (e.g. qwen-vl, GLM-4V, Gemini) in model settings to enable vision-bridge transcription.`,
 				});
 			} else {
@@ -267,7 +267,7 @@ export async function buildAttachmentMessages(
 					ctx.emit({
 						type: "notice",
 						level: "info",
-						text: `当前模型不支持识图，正在用视觉桥（${chosen.label}）转写 ${bridgedImages.length} 张图片…`,
+						text: `Current model cannot see images; transcribing ${bridgedImages.length} image(s) via the vision bridge (${chosen.label})…`,
 						textEn: `Current model cannot see images; transcribing ${bridgedImages.length} image(s) via the vision bridge (${chosen.label})…`,
 					});
 					try {
@@ -293,7 +293,7 @@ export async function buildAttachmentMessages(
 						ctx.emit({
 							type: "notice",
 							level: "info",
-							text: `✅ 图片已由视觉桥转写完成（${chosen.label}）`,
+							text: `✅ Images transcribed by the vision bridge (${chosen.label})`,
 							textEn: `✅ Images transcribed by the vision bridge (${chosen.label})`,
 						});
 					} catch (err) {
@@ -301,7 +301,7 @@ export async function buildAttachmentMessages(
 						ctx.emit({
 							type: "notice",
 							level: "error",
-							text: `图片转写失败（${chosen.label}）：${(err as Error).message}。图片将原样发送、可能被忽略。`,
+							text: `Image transcription failed (${chosen.label}): ${(err as Error).message}. Images will be sent as-is and may be ignored.`,
 							textEn: `Image transcription failed (${chosen.label}): ${(err as Error).message}. Images will be sent as-is and may be ignored.`,
 						});
 					}
@@ -327,7 +327,7 @@ export async function buildAttachmentMessages(
 				ctx.emit({
 					type: "notice",
 					level: "warning",
-					text: `对话引用缺少 id/path，已跳过`,
+					text: `Conversation reference without id/path, skipped`,
 					textEn: `Conversation reference without id/path, skipped`,
 				});
 				continue;
@@ -342,7 +342,7 @@ export async function buildAttachmentMessages(
 					content: [
 						{
 							type: "text",
-							text: `\n<conversation-ref ${ref} title="${attr(title)}">\nThe user quoted another conversation "${attr(title)}". ${how} Do not guess its contents.\n用户引用了另一个对话，别猜它的内容，用 conversation_read 去读。\n</conversation-ref>`,
+							text: `\n<conversation-ref ${ref} title="${attr(title)}">\nThe user quoted another conversation "${attr(title)}". ${how} Do not guess its contents.\n</conversation-ref>`,
 						},
 					],
 					display: true,
@@ -394,7 +394,7 @@ export async function buildAttachmentMessages(
 				ctx.emit({
 					type: "notice",
 					level: "error",
-					text: `图片数据为空，已跳过`,
+					text: `Image data is empty, skipped`,
 					textEn: `Image data is empty, skipped`,
 				});
 				continue;
@@ -403,7 +403,7 @@ export async function buildAttachmentMessages(
 				ctx.emit({
 					type: "notice",
 					level: "warning",
-					text: `图片过大已跳过（>2MB）：${att.name ?? "粘贴图片"}`,
+					text: `Image too large, skipped (>2MB): ${att.name ?? "pasted image"}`,
 					textEn: `Image too large, skipped (>2MB): ${att.name ?? "pasted image"}`,
 				});
 				continue;
@@ -488,7 +488,7 @@ export async function buildAttachmentMessages(
 				ctx.emit({
 					type: "notice",
 					level: "error",
-					text: `文件数据为空，已跳过`,
+					text: `File data is empty, skipped`,
 					textEn: `File data is empty, skipped`,
 				});
 				continue;
@@ -497,7 +497,7 @@ export async function buildAttachmentMessages(
 				ctx.emit({
 					type: "notice",
 					level: "warning",
-					text: `文件过大已跳过（>20MB）：${att.name ?? "上传文件"}`,
+					text: `File too large, skipped (>20MB): ${att.name ?? "uploaded file"}`,
 					textEn: `File too large, skipped (>20MB): ${att.name ?? "uploaded file"}`,
 				});
 				continue;
@@ -514,7 +514,7 @@ export async function buildAttachmentMessages(
 				ctx.emit({
 					type: "notice",
 					level: "error",
-					text: `上传文件保存失败，已跳过：${(err as Error).message}`,
+					text: `Failed to save uploaded file, skipped: ${(err as Error).message}`,
 					textEn: `Failed to save uploaded file, skipped: ${(err as Error).message}`,
 				});
 				continue;
@@ -547,7 +547,7 @@ export async function buildAttachmentMessages(
 				ctx.emit({
 					type: "notice",
 					level: "warning",
-					text: `无法恢复已上传文件（路径不在本客户端上传目录）：${att.name ?? att.uploadPath}`,
+					text: `Cannot restore uploaded file (outside this client upload dir): ${att.name ?? att.uploadPath}`,
 					textEn: `Cannot restore uploaded file (outside this client upload dir): ${att.name ?? att.uploadPath}`,
 				});
 				continue;
@@ -559,7 +559,7 @@ export async function buildAttachmentMessages(
 				ctx.emit({
 					type: "notice",
 					level: "warning",
-					text: `无法恢复已上传文件（已被清理或不可读）：${att.name ?? att.uploadPath}`,
+					text: `Cannot restore uploaded file (cleaned up or unreadable): ${att.name ?? att.uploadPath}`,
 					textEn: `Cannot restore uploaded file (cleaned up or unreadable): ${att.name ?? att.uploadPath}`,
 				});
 				continue;
@@ -576,7 +576,7 @@ export async function buildAttachmentMessages(
 			ctx.emit({
 				type: "notice",
 				level: "warning",
-				text: `附件路径超出工作区：${att.path}`,
+				text: `Attachment path is outside the workspace: ${att.path}`,
 				textEn: `Attachment path is outside the workspace: ${att.path}`,
 			});
 			continue;
@@ -592,7 +592,7 @@ export async function buildAttachmentMessages(
 			ctx.emit({
 				type: "notice",
 				level: "error",
-				text: `附件不存在：${att.path}`,
+				text: `Attachment does not exist: ${att.path}`,
 				textEn: `Attachment does not exist: ${att.path}`,
 			});
 			continue;
@@ -623,7 +623,7 @@ export async function buildAttachmentMessages(
 			ctx.emit({
 				type: "notice",
 				level: "warning",
-				text: `跳过非文件附件：${att.path}`,
+				text: `Skipped non-file attachment: ${att.path}`,
 				textEn: `Skipped non-file attachment: ${att.path}`,
 			});
 			continue;
@@ -694,7 +694,7 @@ ${transcript}
 				ctx.emit({
 					type: "notice",
 					level: "warning",
-					text: `图片附件过大已跳过（>200KB）：${att.path}`,
+					text: `Image attachment too large, skipped (>200KB): ${att.path}`,
 					textEn: `Image attachment too large, skipped (>200KB): ${att.path}`,
 				});
 				continue;
@@ -739,7 +739,7 @@ ${transcript}
 				ctx.emit({
 					type: "notice",
 					level: "warning",
-					text: `行范围无效，已改为仅引用：${att.path}`,
+					text: `Invalid line range, switched to reference-only: ${att.path}`,
 					textEn: `Invalid line range, switched to reference-only: ${att.path}`,
 				});
 				out.push(makeReference());

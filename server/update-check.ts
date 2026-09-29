@@ -12,7 +12,7 @@ import { execFile } from "node:child_process";
 import { readdirSync, readFileSync, realpathSync, existsSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { pick, type ServerLang } from "./i18n.js";
+import { type ServerLang } from "./i18n.js";
 import { sdkCopies, type SdkCopy } from "./sdk-origin.js";
 
 const PI_CORE_PACKAGE = "@earendil-works/pi-coding-agent";
@@ -681,7 +681,6 @@ export async function checkAll(
 	/** git 源远端比较（默认真 git；单测注入 fake，issue #178）。 */
 	gitCheck: GitCheckFn = defaultCheckGitExtension,
 ): Promise<UpdateItem[]> {
-	const l = lang?.() ?? "en";
 	const registry = registryConfig?.registry ?? NPM_DEFAULT_REGISTRY;
 	const authHeader = registryConfig?.authHeader ?? null;
 	const fail = (t: LocalPackage, errMessage: string): UpdateItem => ({
@@ -692,15 +691,7 @@ export async function checkAll(
 		latestPublishedAt: null,
 		upToDate: false,
 		...(t.source ? { source: t.source } : {}),
-		error: pick(
-			l,
-			`检查更新失败：${errMessage}`,
-			`Failed to check for updates: ${errMessage}`,
-			"updatecheck.check.failed",
-			{
-				errMessage,
-			},
-		),
+		error: `Failed to check for updates: ${errMessage}`,
 	});
 	const results: UpdateItem[] = Array.from({ length: targets.length }) as UpdateItem[];
 	let cursor = 0;

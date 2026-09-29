@@ -144,22 +144,22 @@ async function main() {
 	// （light state 同样携带 cwd）——两者都必须接受（见 conv-cwd-test 写法）。
 	await c.wait((m) => (m.type === "snapshot" || m.type === "snapshot_delta") && norm(m.state?.cwd) === norm(TMP_CWD));
 	const cwdSwitching = await c
-		.wait((m) => m.type === "notice" && typeof m.text === "string" && m.text.includes("正在切换到工作目录"), 6000)
+		.wait((m) => m.type === "notice" && typeof m.text === "string" && m.text.includes("Switching to directory"), 6000)
 		.catch(() => null);
 	const cwdOk = await c
-		.wait((m) => m.type === "notice" && typeof m.text === "string" && m.text.includes("已切换到工作目录"), 6000)
+		.wait((m) => m.type === "notice" && typeof m.text === "string" && m.text.includes("Switched to directory"), 6000)
 		.catch(() => null);
-	if (!cwdOk || !cwdOk.text.includes("已切换到工作目录")) {
+	if (!cwdOk || !cwdOk.text.includes("Switched to directory")) {
 		throw new Error("FAIL: /cwd valid path did not switch workspace");
 	}
 	console.log(`[3] /cwd valid → ${cwdSwitching ? cwdSwitching.text + " → " : ""}${cwdOk.text}`);
 
 	c.send({ type: "prompt", text: "/cwd /nonexistent-zzz" });
 	const cwdBad = await c.wait(
-		(m) => m.type === "notice" && typeof m.text === "string" && m.text.includes("切换工作目录失败"),
+		(m) => m.type === "notice" && typeof m.text === "string" && m.text.includes("Failed to switch directory"),
 		6000,
 	);
-	if (!cwdBad.text.includes("切换工作目录失败")) {
+	if (!cwdBad.text.includes("Failed to switch directory")) {
 		throw new Error("FAIL: /cwd invalid path should notice an error");
 	}
 	console.log(`[4] /cwd invalid → ${cwdBad.text}`);
@@ -167,17 +167,19 @@ async function main() {
 	// --- 4. native /model with no match ---
 	c.send({ type: "prompt", text: "/model 这个模型必然不存在xyz" });
 	const modelBad = await c.wait(
-		(m) => m.type === "notice" && typeof m.text === "string" && m.text.includes("没有匹配到模型"),
+		(m) => m.type === "notice" && typeof m.text === "string" && m.text.includes("No matching model"),
 		6000,
 	);
-	if (!modelBad.text.includes("没有匹配到模型")) {
+	if (!modelBad.text.includes("No matching model")) {
 		throw new Error("FAIL: /model no-match should notice an error");
 	}
 	console.log(`[5] /model no-match → ${modelBad.text}`);
 
 	// --- 5. native /help is swallowed (no prompt-send failure) ---
 	c.send({ type: "prompt", text: "/help" });
-	const leak = await c.wait((m) => m.type === "notice" && m.text.includes("提示发送失败"), 3000).catch(() => null);
+	const leak = await c
+		.wait((m) => m.type === "notice" && m.text.includes("Failed to send prompt"), 3000)
+		.catch(() => null);
 	if (leak) {
 		throw new Error("FAIL: /help leaked to the SDK prompt");
 	}
@@ -196,7 +198,7 @@ async function main() {
 	// 任何回执，回执出现即证明首条真的进了新对话的 prompt 通道。
 	c.send({ type: "prompt", text: "/new /cwd" });
 	const firstNotice = await c
-		.wait((m) => m.type === "notice" && m.text.includes("当前工作目录"), 8000)
+		.wait((m) => m.type === "notice" && m.text.includes("Current directory"), 8000)
 		.catch(() => null);
 	if (!firstNotice) {
 		throw new Error("FAIL: /new <prompt> did not deliver the first prompt");
@@ -207,7 +209,7 @@ async function main() {
 	c.send({ type: "prompt", text: "/reload" });
 	const catReloaded = await c.wait((m) => m.type === "slash_commands", 20000);
 	const reloadNotice = await c.wait((m) => m.type === "notice", 8000);
-	if (!reloadNotice.text.includes("已重新加载")) {
+	if (!reloadNotice.text.includes("Reloaded")) {
 		throw new Error(`FAIL: /reload notice unexpected: ${reloadNotice.text}`);
 	}
 	const namesAfterReload = new Set(catReloaded.commands.map((x) => x.name));

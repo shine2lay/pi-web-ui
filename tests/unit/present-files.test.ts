@@ -208,7 +208,7 @@ describe("buildPresentResultText", () => {
 	});
 	it("中文头 + 标题", () => {
 		const text = buildPresentResultText(shown, "zh", "季度图表");
-		expect(text).toContain("已把 2 个文件作为预览卡片展示给用户（季度图表）");
+		expect(text).toContain("Presented 2 file(s) to the user as preview cards (季度图表)");
 	});
 	it("目录条目显示为 directory", () => {
 		const text = buildPresentResultText(

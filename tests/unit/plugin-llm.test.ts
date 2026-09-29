@@ -33,7 +33,7 @@ describe("completeWithIsolatedSession 入参校验（不建会话）", () => {
 	});
 	it("未知模型在本地即拒绝（不发请求、不花 token）", async () => {
 		const r = await completeWithIsolatedSession(env, { prompt: "hi", model: "no-such-provider/no-such-model" });
-		expect(r).toEqual({ ok: false, error: "llm.complete: 找不到模型 no-such-provider/no-such-model" });
+		expect(r).toEqual({ ok: false, error: "llm.complete: model not found: no-such-provider/no-such-model" });
 		expect(llmInflight()).toBe(0);
 	});
 	it("非法 model 形状（无斜杠）走默认模型路径——此处不断言结果，只断言不抛错", async () => {
@@ -85,7 +85,7 @@ describe("host.llm.complete 门控（permissions llm 族 + llmProvider 注入）
 		const h = await hostOf("yes");
 		expect(mgr.llmProvider).toBeUndefined();
 		const r = await h.llm.complete({ prompt: "hi" });
-		expect(r).toEqual({ ok: false, error: "宿主未提供 LLM 直调（llmProvider 未接入）" });
+		expect(r).toEqual({ ok: false, error: "The host provides no direct LLM call (llmProvider not wired)" });
 	});
 	it("注入后直通 provider 回执；provider 抛错转 {ok:false}", async () => {
 		makePlugin("yes", { permissions: ["llm"] });

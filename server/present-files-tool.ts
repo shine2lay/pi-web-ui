@@ -29,7 +29,7 @@ import { open, stat } from "node:fs/promises";
 import { basename, extname, sep } from "node:path";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { pick, type ServerLang } from "./i18n.js";
+import { type ServerLang } from "./i18n.js";
 import { resolvePathForDirCheck } from "./read-tool.js";
 import { decodeText, isAudioFile, looksLikeText, previewKind } from "./text-sniff.js";
 import { PRESENT_FILES_TOOL_NAME } from "./tool-manager.js";
@@ -254,53 +254,28 @@ export function buildPresentResultText(items: PresentItem[], lang: ServerLang, t
 	const shown = items.filter((i) => i.kind !== "missing");
 	const missing = items.filter((i) => i.kind === "missing");
 	const lines: string[] = [];
-	const head = pick(
-		lang,
-		`已把 ${shown.length} 个文件作为预览卡片展示给用户${title ? `（${title}）` : ""}：`,
-		`Presented ${shown.length} file(s) to the user as preview cards${title ? ` (${title})` : ""}:`,
-		"present.files.result.head",
-		{ n: shown.length, title: title ?? "" },
-	);
+	const head = `Presented ${shown.length} file(s) to the user as preview cards${title ? ` (${title})` : ""}:`;
 	lines.push(head);
 	for (const [i, it] of shown.entries()) {
 		const meta =
 			it.kind === "dir"
-				? pick(lang, "目录", "directory", "present.files.result.kindDir")
+				? "directory"
 				: [it.kind, it.size !== undefined ? formatBytes(it.size) : ""].filter(Boolean).join(", ");
 		const caption = it.caption ? ` — ${it.caption}` : "";
 		lines.push(`${i + 1}. ${it.path} (${meta})${caption}`);
 	}
 	if (missing.length > 0) {
-		lines.push(
-			pick(
-				lang,
-				`未展示（路径不存在或不可读）：${missing.map((m) => m.path).join("、")}`,
-				`Not shown (path missing or unreadable): ${missing.map((m) => m.path).join(", ")}`,
-				"present.files.result.missing",
-				{ paths: missing.map((m) => m.path).join(", ") },
-			),
-		);
+		lines.push(`Not shown (path missing or unreadable): ${missing.map((m) => m.path).join(", ")}`);
 	}
 	lines.push(
-		pick(
-			lang,
-			"用户在卡片上可以直接看图/播放、打开预览、在本机打开、在文件管理器中显示、下载或复制路径；不要再把文件内容贴一遍。",
-			"The user can view/play media, open the preview dialog, open the file locally, reveal it in the file manager, download it or copy its path from the card — do not paste the file contents again.",
-			"present.files.result.tail",
-		),
+		"The user can view/play media, open the preview dialog, open the file locally, reveal it in the file manager, download it or copy its path from the card — do not paste the file contents again.",
 	);
 	return lines.join("\n");
 }
 
 /** 空结果/全部缺失时的错误文案（模型看到 error 才会改策略）。 */
 function missingAllError(lang: ServerLang, paths: string[]): string {
-	return pick(
-		lang,
-		`这些路径都不存在或不可读，没有任何卡片展示出去：${paths.join("、")}`,
-		`None of these paths exist or are readable, nothing was shown: ${paths.join(", ")}`,
-		"present.files.result.allMissing",
-		{ paths: paths.join(", ") },
-	);
+	return `None of these paths exist or are readable, nothing was shown: ${paths.join(", ")}`;
 }
 
 /**
@@ -351,26 +326,12 @@ export function makePresentFilesTool(fallbackCwd: string, options: PresentFilesT
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			const lang = getLang();
 			if (!enabled()) {
-				throw new Error(
-					pick(
-						lang,
-						"用户的设置里关闭了 present_files 工具。",
-						"The user disabled the present_files tool in settings.",
-						"present.files.result.disabled",
-					),
-				);
+				throw new Error("The user disabled the present_files tool in settings.");
 			}
 			const p = params as { title?: unknown; note?: unknown; items?: unknown };
 			const items = normalizePresentItems(p.items);
 			if (items.length === 0) {
-				throw new Error(
-					pick(
-						lang,
-						"present_files 至少需要一个带 path 的条目。",
-						"present_files needs at least one item with a path.",
-						"present.files.result.noItems",
-					),
-				);
+				throw new Error("present_files needs at least one item with a path.");
 			}
 			const cwd = typeof ctx?.cwd === "string" && ctx.cwd ? ctx.cwd : fallbackCwd;
 			const budget: ExcerptBudget = { left: MAX_EXCERPT_TOTAL_CHARS };

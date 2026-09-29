@@ -122,7 +122,7 @@ async function main() {
 		text: "旧客户端的编辑重问（无附件字段）",
 	});
 	const n1 = await c.next(
-		(m) => m.type === "notice" && typeof m.text === "string" && /找不到要编辑的消息|失败/.test(m.text),
+		(m) => m.type === "notice" && typeof m.text === "string" && /Message to edit not found|failed/i.test(m.text),
 		"old-shape edit_message → deterministic notice",
 		15000,
 	);
@@ -145,7 +145,7 @@ async function main() {
 		],
 	});
 	const n2 = await c.next(
-		(m) => m.type === "notice" && typeof m.text === "string" && /找不到要编辑的消息|失败/.test(m.text),
+		(m) => m.type === "notice" && typeof m.text === "string" && /Message to edit not found|failed/i.test(m.text),
 		"attachments edit_message → deterministic notice",
 		15000,
 	);
@@ -159,7 +159,7 @@ async function main() {
 		attachments: [{ path: "", imageData: TINY_PNG, mimeType: "image/png", name: "a.png" }],
 	});
 	const n3 = await c.next(
-		(m) => m.type === "notice" && /编辑内容为空/.test(m.text ?? ""),
+		(m) => m.type === "notice" && /Edited content is empty/.test(m.text ?? ""),
 		"empty text + attachments rejected",
 		15000,
 	);
@@ -181,7 +181,7 @@ async function main() {
 		],
 	});
 	const n4 = await c.next(
-		(m) => m.type === "notice" && typeof m.text === "string" && /找不到要编辑的消息|失败/.test(m.text),
+		(m) => m.type === "notice" && typeof m.text === "string" && /Message to edit not found|failed/i.test(m.text),
 		"uploadPath edit_message → deterministic notice",
 		15000,
 	);

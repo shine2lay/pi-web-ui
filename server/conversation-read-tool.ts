@@ -22,7 +22,7 @@
 
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { pick, type ServerLang } from "./i18n.js";
+import { type ServerLang } from "./i18n.js";
 import { CONVERSATION_READ_TOOL_NAME } from "./tool-manager.js";
 import type { AgentMessage } from "./serialize.js";
 import {
@@ -440,26 +440,14 @@ export function readExtraLines(
 	const q = query.trim();
 	if (q && sel.hitIndices.length > 0) {
 		const shown = sel.hitIndices.slice(0, 20).map((i) => i + 1);
-		const idx = sel.hitIndices.length > 20 ? `${shown.join("、")}… (+${sel.hitIndices.length - 20})` : shown.join("、");
+		const idx = sel.hitIndices.length > 20 ? `${shown.join(", ")}… (+${sel.hitIndices.length - 20})` : shown.join(", ");
 		lines.push(
-			pick(
-				L,
-				`在对话内搜「${q}」：命中 ${sel.hitIndices.length} 条（选区第 ${idx} 条），上下文共 ${sel.selected.length} 条。`,
-				`Searched for "${q}": ${sel.hitIndices.length} hit(s) (#${idx} in this selection), ${sel.selected.length} with context.`,
-				"convread.read.query.head",
-				{ q, hits: sel.hitIndices.length, indices: idx, shown: sel.selected.length },
-			),
+			`Searched for "${q}": ${sel.hitIndices.length} hit(s) (#${idx} in this selection), ${sel.selected.length} with context.`,
 		);
 	}
 	if (view === "chat" && rawTotal > sel.totalInView) {
 		lines.push(
-			pick(
-				L,
-				`（chat 视图只含 user/assistant 共 ${sel.totalInView} 条；另有 ${rawTotal - sel.totalInView} 条工具调用/结果，用 view="full" 看。）`,
-				`(chat view: only user/assistant, ${sel.totalInView} messages; ${rawTotal - sel.totalInView} more tool messages with view="full".)`,
-				"convread.read.chat.note",
-				{ chat: sel.totalInView, tools: rawTotal - sel.totalInView },
-			),
+			`(chat view: only user/assistant, ${sel.totalInView} messages; ${rawTotal - sel.totalInView} more tool messages with view="full".)`,
 		);
 	}
 	return lines.length > 0 ? `\n${lines.join("\n")}` : "";
@@ -471,7 +459,7 @@ export function formatClaimLines(claims: ClaimView[], maxItems = 5, style: "bull
 	const list = Array.isArray(claims) ? claims : [];
 	const shown = list.slice(0, Math.max(1, Math.floor(maxItems)));
 	const dash = style === "bullets" ? "- " : "";
-	const lines = shown.map((c) => `${dash}${c.path} · 「${c.ownerTitle}」${c.note ? ` · ${c.note}` : ""}`);
+	const lines = shown.map((c) => `${dash}${c.path} · "${c.ownerTitle}"${c.note ? ` · ${c.note}` : ""}`);
 	if (list.length > shown.length) lines.push(`… (+${list.length - shown.length})`);
 	return lines;
 }
@@ -578,28 +566,12 @@ export function makeConversationReadTool(
 			if (action === "list") {
 				const scopeRaw = (p.scope ?? "all").trim().toLowerCase();
 				if (scopeRaw !== "current" && scopeRaw !== "all") {
-					return text(
-						pick(
-							getLang(),
-							`scope 非法：${p.scope}（只能是 current 或 all）。`,
-							`Invalid scope: ${p.scope} (must be "current" or "all").`,
-							"convread.list.bad.scope",
-							{ "p.scope": p.scope },
-						),
-					);
+					return text(`Invalid scope: ${p.scope} (must be "current" or "all").`);
 				}
 				const scope = scopeRaw as "current" | "all";
 				const kindRaw = (p.kind ?? "all").trim().toLowerCase();
 				if (kindRaw !== "running" && kindRaw !== "history" && kindRaw !== "all") {
-					return text(
-						pick(
-							getLang(),
-							`kind 非法：${p.kind}（只能是 running、history 或 all）。`,
-							`Invalid kind: ${p.kind} (must be "running", "history" or "all").`,
-							"convread.list.bad.kind",
-							{ "p.kind": p.kind },
-						),
-					);
+					return text(`Invalid kind: ${p.kind} (must be "running", "history" or "all").`);
 				}
 				const kind = kindRaw as "running" | "history" | "all";
 				const query = typeof p.query === "string" ? p.query : "";
@@ -612,73 +584,37 @@ export function makeConversationReadTool(
 				const history = kind === "running" ? [] : filterHistory(await host.listHistorySessions(scope, ctx.cwd), query);
 				const shownRunning = running.slice(0, cap ?? RUNNING_LIST_CAP);
 				const shownHistory = history.slice(0, cap ?? HISTORY_LIST_DEFAULT);
-				const L = getLang();
 				const runLines = shownRunning.map(
 					(c) =>
-						`- ${c.id} · ${c.title} · ${c.isSubagent ? (L === "zh" ? "子代理" : "subagent") : L === "zh" ? "对话" : "chat"}${
-							c.isStreaming ? (L === "zh" ? "（进行中）" : " (streaming)") : ""
+						`- ${c.id} · ${c.title} · ${c.isSubagent ? "subagent" : "chat"}${
+							c.isStreaming ? " (streaming)" : ""
 						} · ${c.messageCount} msgs · ${c.cwd}`,
 				);
 				const histLines = shownHistory.map(
 					(s) =>
-						`- ${shortPath(s.path)} · ${s.name || s.firstMessage || (L === "zh" ? "（空对话）" : "(empty)")}${
+						`- ${shortPath(s.path)} · ${s.name || s.firstMessage || "(empty)"}${
 							s.messageCount ? ` · ${s.messageCount} msgs` : ""
 						}`,
 				);
 				// 超出 cap 时给计数 + 收窄指引（静默丢弃是大忌：调用方会以为这就是全量）。
 				if (running.length > shownRunning.length) {
-					runLines.push(
-						pick(
-							L,
-							`… 还有 ${running.length - shownRunning.length} 条运行中（用 query 或 limit 收窄）。`,
-							`… ${running.length - shownRunning.length} more running (narrow with query or limit).`,
-							"convread.list.running.more",
-							{ n: running.length - shownRunning.length },
-						),
-					);
+					runLines.push(`… ${running.length - shownRunning.length} more running (narrow with query or limit).`);
 				}
 				if (history.length > shownHistory.length) {
 					histLines.push(
-						pick(
-							L,
-							`… 还有 ${history.length - shownHistory.length} 条历史（用 query 或 limit 收窄；默认只给 ${HISTORY_LIST_DEFAULT} 条）。`,
-							`… ${history.length - shownHistory.length} more history (narrow with query or limit; default shows ${HISTORY_LIST_DEFAULT}).`,
-							"convread.list.history.more",
-							{ n: history.length - shownHistory.length },
-						),
+						`… ${history.length - shownHistory.length} more history (narrow with query or limit; default shows ${HISTORY_LIST_DEFAULT}).`,
 					);
 				}
 				const head =
 					kind === "running"
-						? pick(
-								L,
-								`运行中对话（${running.length}）：`,
-								`Running conversations (${running.length}):`,
-								"convread.list.head.running",
-								{ n: running.length },
-							)
+						? `Running conversations (${running.length}):`
 						: kind === "history"
-							? pick(
-									L,
-									`历史会话（${history.length}，scope=${scope}）：`,
-									`History sessions (${history.length}, scope=${scope}):`,
-									"convread.list.head.history",
-									{ n: history.length },
-								)
-							: pick(
-									L,
-									`运行中对话（${running.length}）+ 历史会话（${history.length}，scope=${scope}）：`,
-									`Running conversations (${running.length}) + history sessions (${history.length}, scope=${scope}):`,
-									"convread.list.head.all",
-									{ running: running.length, history: history.length },
-								);
-				const runHead = L === "zh" ? "【运行中】" : "[running]";
-				const histHead = L === "zh" ? "【历史】" : "[history]";
-				const empty = L === "zh" ? "（无）" : "(none)";
-				const tail =
-					L === "zh"
-						? `读某一份：conversation_read(action="read", id="c…") 或 conversation_read(action="read", path="…")，长转录用 offset/limit 翻页；只看文件用 action="files"，先看摘要再决定读不读用 action="status"。`
-						: `To read one: conversation_read(action="read", id="c…") or conversation_read(action="read", path="…"); page long transcripts with offset/limit; action="files" lists touched files, action="status" summarizes before you decide to read.`;
+							? `History sessions (${history.length}, scope=${scope}):`
+							: `Running conversations (${running.length}) + history sessions (${history.length}, scope=${scope}):`;
+				const runHead = "[running]";
+				const histHead = "[history]";
+				const empty = "(none)";
+				const tail = `To read one: conversation_read(action="read", id="c…") or conversation_read(action="read", path="…"); page long transcripts with offset/limit; action="files" lists touched files, action="status" summarizes before you decide to read.`;
 				const sections =
 					kind === "history"
 						? `${head}\n${histHead}\n${histLines.join("\n") || empty}`
@@ -706,27 +642,14 @@ export function makeConversationReadTool(
 			if (action === "read") {
 				const viewRaw = (p.view ?? "chat").trim().toLowerCase();
 				if (viewRaw !== "chat" && viewRaw !== "full") {
-					return text(
-						pick(
-							getLang(),
-							`view 非法：${p.view}（只能是 chat 或 full）。`,
-							`Invalid view: ${p.view} (must be "chat" or "full").`,
-							"convread.read.bad.view",
-							{ "p.view": p.view },
-						),
-					);
+					return text(`Invalid view: ${p.view} (must be "chat" or "full").`);
 				}
 				const view = viewRaw as ReadView;
 				const id = typeof p.id === "string" && p.id.trim() ? p.id.trim() : undefined;
 				const path = typeof p.path === "string" && p.path.trim() ? p.path.trim() : undefined;
 				if ((id && path) || (!id && !path)) {
 					return text(
-						pick(
-							getLang(),
-							`action=read 需要且只需要 id 或 path 其中之一（id 读运行中对话，path 读历史转录）。`,
-							`action=read needs exactly one of id or path (id = running conversation, path = history transcript).`,
-							"convread.read.bad.args",
-						),
+						`action=read needs exactly one of id or path (id = running conversation, path = history transcript).`,
 					);
 				}
 				const query = typeof p.query === "string" ? p.query : "";
@@ -735,13 +658,7 @@ export function makeConversationReadTool(
 					const found = host.readRunningConversation(id);
 					if (!found) {
 						return text(
-							pick(
-								getLang(),
-								`未找到运行中对话 ${id}（可能已关闭；用 action=list 看当前列表，落盘的可按 path 读历史）。`,
-								`Running conversation ${id} not found (may be closed; use action=list for the current list, or read persisted ones by path).`,
-								"convread.read.id.not.found",
-								{ id },
-							),
+							`Running conversation ${id} not found (may be closed; use action=list for the current list, or read persisted ones by path).`,
 						);
 					}
 					const rawTotal = found.messages.length;
@@ -749,29 +666,15 @@ export function makeConversationReadTool(
 					const L = getLang();
 					if (query.trim() && sel.hitIndices.length === 0) {
 						return text(
-							pick(
-								L,
-								`在对话内搜「${query.trim()}」：没有命中。换个词，或用 view="full" 把工具输出也纳入搜索。`,
-								`No hits for "${query.trim()}". Try another term, or use view="full" to include tool outputs.`,
-								"convread.read.query.empty",
-								{ q: query.trim() },
-							),
+							`No hits for "${query.trim()}". Try another term, or use view="full" to include tool outputs.`,
 							{ id, title: found.title, view, query: query.trim(), hits: 0 },
 						);
 					}
 					const f = formatTranscript(sel.selected, opts);
-					const head =
-						L === "zh"
-							? `对话「${found.title}」（id=${id}${found.isSubagent ? "，子代理" : ""}，${found.cwd}，共 ${f.total} 条，${f.from + 1}-${f.to}）：`
-							: `Conversation "${found.title}" (id=${id}${found.isSubagent ? ", subagent" : ""}, ${found.cwd}, ${f.total} messages, showing ${f.from + 1}-${f.to}):`;
+					const head = `Conversation "${found.title}" (id=${id}${found.isSubagent ? ", subagent" : ""}, ${found.cwd}, ${f.total} messages, showing ${f.from + 1}-${f.to}):`;
 					const notes = readExtraLines(L, query, sel, rawTotal, view);
-					const more =
-						f.truncated && f.total > 0
-							? L === "zh"
-								? `\n…还有后文（offset=${f.to} 再取）。`
-								: `\n…more below (re-call with offset=${f.to}).`
-							: "";
-					const emptyNote = f.total === 0 ? (L === "zh" ? "（该对话暂无消息）" : "(no messages yet)") : "";
+					const more = f.truncated && f.total > 0 ? `\n…more below (re-call with offset=${f.to}).` : "";
+					const emptyNote = f.total === 0 ? "(no messages yet)" : "";
 					return text(`${head}${notes}\n${f.text || emptyNote}${more}`, {
 						id,
 						title: found.title,
@@ -786,43 +689,26 @@ export function makeConversationReadTool(
 				const found = await host.readHistorySession(path!);
 				if (!found) {
 					return text(
-						pick(
-							getLang(),
-							`读不到历史会话 ${path}（不在会话列表里：只能读 action=list 列出的转录路径）。`,
-							`Cannot read history session ${path} (not in the session list: only transcripts from action=list can be read).`,
-							"convread.read.path.not.found",
-							{ path },
-						),
+						`Cannot read history session ${path} (not in the session list: only transcripts from action=list can be read).`,
 					);
 				}
 				const rawTotal = found.messages.length;
 				const sel = selectReadMessages(found.messages, { view, last: p.last, query });
 				const L = getLang();
 				if (query.trim() && sel.hitIndices.length === 0) {
-					return text(
-						pick(
-							L,
-							`在对话内搜「${query.trim()}」：没有命中。换个词，或用 view="full" 把工具输出也纳入搜索。`,
-							`No hits for "${query.trim()}". Try another term, or use view="full" to include tool outputs.`,
-							"convread.read.query.empty",
-							{ q: query.trim() },
-						),
-						{ path: found.sessionPath, title: found.title, view, query: query.trim(), hits: 0 },
-					);
+					return text(`No hits for "${query.trim()}". Try another term, or use view="full" to include tool outputs.`, {
+						path: found.sessionPath,
+						title: found.title,
+						view,
+						query: query.trim(),
+						hits: 0,
+					});
 				}
 				const f = formatTranscript(sel.selected, opts);
-				const head =
-					L === "zh"
-						? `历史会话「${found.title || found.sessionPath}」（${found.cwd}，共 ${f.total} 条，${f.from + 1}-${f.to}）：`
-						: `History session "${found.title || found.sessionPath}" (${found.cwd}, ${f.total} messages, showing ${f.from + 1}-${f.to}):`;
+				const head = `History session "${found.title || found.sessionPath}" (${found.cwd}, ${f.total} messages, showing ${f.from + 1}-${f.to}):`;
 				const notes = readExtraLines(L, query, sel, rawTotal, view);
-				const more =
-					f.truncated && f.total > 0
-						? L === "zh"
-							? `\n…还有后文（offset=${f.to} 再取）。`
-							: `\n…more below (re-call with offset=${f.to}).`
-						: "";
-				const emptyNote = f.total === 0 ? (L === "zh" ? "（该会话暂无消息）" : "(no messages yet)") : "";
+				const more = f.truncated && f.total > 0 ? `\n…more below (re-call with offset=${f.to}).` : "";
+				const emptyNote = f.total === 0 ? "(no messages yet)" : "";
 				return text(`${head}${notes}\n${f.text || emptyNote}${more}`, {
 					path: found.sessionPath,
 					title: found.title,
@@ -839,12 +725,7 @@ export function makeConversationReadTool(
 				const path = typeof p.path === "string" && p.path.trim() ? p.path.trim() : undefined;
 				if ((id && path) || (!id && !path)) {
 					return text(
-						pick(
-							getLang(),
-							`action=${action} 需要且只需要 id 或 path 其中之一（id 读运行中对话，path 读历史转录）。`,
-							`action=${action} needs exactly one of id or path (id = running conversation, path = history transcript).`,
-							action === "files" ? "convread.files.bad.args" : "convread.status.bad.args",
-						),
+						`action=${action} needs exactly one of id or path (id = running conversation, path = history transcript).`,
 					);
 				}
 				// 取数（错误复用 read 的 not found 文案：同一个“找不到”语义）。
@@ -855,13 +736,7 @@ export function makeConversationReadTool(
 					const found = host.readRunningConversation(id);
 					if (!found) {
 						return text(
-							pick(
-								getLang(),
-								`未找到运行中对话 ${id}（可能已关闭；用 action=list 看当前列表，落盘的可按 path 读历史）。`,
-								`Running conversation ${id} not found (may be closed; use action=list for the current list, or read persisted ones by path).`,
-								"convread.read.id.not.found",
-								{ id },
-							),
+							`Running conversation ${id} not found (may be closed; use action=list for the current list, or read persisted ones by path).`,
 						);
 					}
 					title = found.title;
@@ -871,20 +746,13 @@ export function makeConversationReadTool(
 					const found = await host.readHistorySession(path!);
 					if (!found) {
 						return text(
-							pick(
-								getLang(),
-								`读不到历史会话 ${path}（不在会话列表里：只能读 action=list 列出的转录路径）。`,
-								`Cannot read history session ${path} (not in the session list: only transcripts from action=list can be read).`,
-								"convread.read.path.not.found",
-								{ path },
-							),
+							`Cannot read history session ${path} (not in the session list: only transcripts from action=list can be read).`,
 						);
 					}
 					title = found.title || found.sessionPath;
 					cwd = found.cwd;
 					messages = found.messages;
 				}
-				const L = getLang();
 				const where = id ? { id } : { path };
 				if (action === "files") {
 					const fq = (typeof p.query === "string" ? p.query : "").trim().toLowerCase();
@@ -906,13 +774,7 @@ export function makeConversationReadTool(
 					const shown = filtered.slice(0, cap);
 					if (filtered.length === 0 && listedClaims.length === 0) {
 						return text(
-							pick(
-								L,
-								`对话「${title}」还没有可识别的文件写入（只读围观/刚开场/压缩丢了旧记录都有可能）。`,
-								`Conversation "${title}" has no recognizable file writes yet (read-only so far, just started, or pre-compaction touches lost).`,
-								"convread.files.empty",
-								{ title },
-							),
+							`Conversation "${title}" has no recognizable file writes yet (read-only so far, just started, or pre-compaction touches lost).`,
 							{ ...where, title, total: 0, files: [] },
 						);
 					}
@@ -920,35 +782,15 @@ export function makeConversationReadTool(
 					if (filtered.length > 0) {
 						const lines = shown.map((t) => `- ${formatTouchEntry(t)}`);
 						if (filtered.length > shown.length) {
-							lines.push(
-								pick(
-									L,
-									`… 还有 ${filtered.length - shown.length} 个（用 query 或 limit 收窄）。`,
-									`… ${filtered.length - shown.length} more (narrow with query or limit).`,
-									"convread.files.more",
-									{ n: filtered.length - shown.length },
-								),
-							);
+							lines.push(`… ${filtered.length - shown.length} more (narrow with query or limit).`);
 						}
 						sections.push(
-							`${pick(
-								L,
-								`对话「${title}」创建/修改过的文件（${filtered.length} 个，只算写不算读）：`,
-								`Files created/modified by "${title}" (${filtered.length}, writes only):`,
-								"convread.files.head",
-								{ title, total: filtered.length },
-							)}\n${lines.join("\n")}`,
+							`${`Files created/modified by "${title}" (${filtered.length}, writes only):`}\n${lines.join("\n")}`,
 						);
 					}
 					if (listedClaims.length > 0) {
 						sections.push(
-							`${pick(
-								L,
-								`本项目认领（${listedClaims.length} 条，绕行参考，先到先得）：`,
-								`Claims in this project (${listedClaims.length}, steer clear, first-wins):`,
-								"convread.files.claims",
-								{ total: listedClaims.length },
-							)}\n${formatClaimLines(listedClaims).join("\n")}`,
+							`${`Claims in this project (${listedClaims.length}, steer clear, first-wins):`}\n${formatClaimLines(listedClaims).join("\n")}`,
 						);
 					}
 					return text(sections.join("\n"), {
@@ -968,62 +810,25 @@ export function makeConversationReadTool(
 				} catch {
 					statusClaims = [];
 				}
-				const head = pick(
-					L,
-					`对话「${title}」状态（共 ${messages.length} 条）：`,
-					`Status of "${title}" (${messages.length} messages):`,
-					"convread.status.head",
-					{ title, total: messages.length },
-				);
+				const head = `Status of "${title}" (${messages.length} messages):`;
 				const toolLine = sum.lastTool
-					? pick(
-							L,
-							`最后工具：${sum.lastTool.name}${sum.lastTool.hint ? `（${sum.lastTool.hint}）` : ""}。`,
-							`Last tool: ${sum.lastTool.name}${sum.lastTool.hint ? ` (${sum.lastTool.hint})` : ""}.`,
-							"convread.status.last.tool",
-							{ name: sum.lastTool.name, hint: sum.lastTool.hint },
-						)
-					: pick(L, `还没调用过工具。`, `No tool calls yet.`, "convread.status.no.tool");
+					? `Last tool: ${sum.lastTool.name}${sum.lastTool.hint ? ` (${sum.lastTool.hint})` : ""}.`
+					: `No tool calls yet.`;
 				const sayLine = sum.lastAssistant
-					? pick(
-							L,
-							`最后一句：${truncateCounted(sum.lastAssistant, 200)}`,
-							`Last assistant message: ${truncateCounted(sum.lastAssistant, 200)}`,
-							"convread.status.last.say",
-							{ text: truncateCounted(sum.lastAssistant, 200) },
-						)
-					: pick(L, `assistant 还没说过话。`, `No assistant message yet.`, "convread.status.no.say");
+					? `Last assistant message: ${truncateCounted(sum.lastAssistant, 200)}`
+					: `No assistant message yet.`;
 				const touchLine =
 					touched.length > 0
-						? pick(
-								L,
-								`最近动过：${formatTouchesCompact(touched, { maxItems: 5 })}。`,
-								`Recently touched: ${formatTouchesCompact(touched, { maxItems: 5 })}.`,
-								"convread.status.touched",
-								{ files: formatTouchesCompact(touched, { maxItems: 5 }) },
-							)
-						: pick(L, `最近没动过文件。`, `No files touched recently.`, "convread.status.touched.none");
+						? `Recently touched: ${formatTouchesCompact(touched, { maxItems: 5 })}.`
+						: `No files touched recently.`;
 				// 等问卷只能从转录推断（ask_user_question 调了没回）；DSH 问卷不走
 				// 工具调用，推断不出 —— 文案写“转录显示”，不夸大。
 				const waitLine = sum.waitingQuestion
-					? `\n${pick(
-							L,
-							`⚠ 转录显示它在等用户回答问卷（先回它，再干别的）。`,
-							`⚠ The transcript shows it waiting for a question answer (answer first).`,
-							"convread.status.waiting",
-						)}`
+					? `\n${`⚠ The transcript shows it waiting for a question answer (answer first).`}`
 					: "";
 				// 认领只在有的时候占一行（没有就不提，省 token）。
 				const claimLine =
-					statusClaims.length > 0
-						? `\n- ${pick(
-								L,
-								`认领：${formatClaimLines(statusClaims, 3, "inline").join("、")}。`,
-								`Claims: ${formatClaimLines(statusClaims, 3, "inline").join("; ")}.`,
-								"convread.status.claims",
-								{ total: statusClaims.length },
-							)}`
-						: "";
+					statusClaims.length > 0 ? `\n- ${`Claims: ${formatClaimLines(statusClaims, 3, "inline").join("; ")}.`}` : "";
 				return text(`${head}\n- ${toolLine}\n- ${sayLine}\n- ${touchLine}${claimLine}${waitLine}`, {
 					...where,
 					title,
@@ -1034,15 +839,7 @@ export function makeConversationReadTool(
 					waitingQuestion: sum.waitingQuestion,
 				});
 			}
-			return text(
-				pick(
-					getLang(),
-					`action 非法：${p.action}（只能是 list、read、files 或 status）。`,
-					`Invalid action: ${p.action} (must be "list", "read", "files" or "status").`,
-					"convread.bad.action",
-					{ "p.action": p.action },
-				),
-			);
+			return text(`Invalid action: ${p.action} (must be "list", "read", "files" or "status").`);
 		},
 	});
 }

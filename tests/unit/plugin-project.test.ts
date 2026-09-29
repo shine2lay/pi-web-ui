@@ -315,7 +315,7 @@ describe.skipIf(!hasGit)("失败即停（ok:false + 可读原因 + 保留日志�
 		for (let i = 0; i < 33; i++) tooMany[`f${i}.txt`] = "x";
 		const many = await createProject({ dir: ws, files: tooMany });
 		expect(many.ok).toBe(false);
-		expect(many.error).toContain("超限");
+		expect(many.error).toContain("Too many files entries");
 
 		const big = await createProject({ dir: ws, files: { "big.txt": "x".repeat(1024 * 1024 + 1) } });
 		expect(big.ok).toBe(false);

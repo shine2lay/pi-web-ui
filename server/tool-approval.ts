@@ -69,7 +69,7 @@ export function approvalSuppressionReason(
 export function pluginApprovalCategory(pluginId: string): UiApprovalCategory {
 	return {
 		id: `plugin:${pluginId}`,
-		label: `插件 ${pluginId} 要求确认`,
+		label: `Plugin ${pluginId} requested confirmation`,
 		labelEn: `Plugin ${pluginId} requested confirmation`,
 	};
 }

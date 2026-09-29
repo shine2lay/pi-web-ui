@@ -20,7 +20,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { pick, type ServerLang } from "./i18n.js";
+import { type ServerLang } from "./i18n.js";
 import { isValidSource } from "./plugin-catalog.js";
 import {
 	inspectLocalInstallSpec,
@@ -61,41 +61,24 @@ export interface PluginJobSpec {
 export function buildPluginJobArgs(
 	spec: PluginJobSpec,
 	dataDir: string,
-	lang?: () => ServerLang,
+	_lang?: () => ServerLang,
 ): { args: string[] } | { error: string } {
-	const l = lang?.() ?? "en";
 	const id = String(spec?.id ?? "").trim();
 	if (!ID_RE.test(id))
 		return {
-			error: pick(
-				l,
-				`非法插件 id "${id}"（仅限字母数字-_）`,
-				`Invalid plugin id "${id}" (letters/digits/-/_ only)`,
-				"plugininstaller.id.invalid",
-				{ id },
-			),
+			error: `Invalid plugin id "${id}" (letters/digits/-/_ only)`,
 		};
 	if (spec.action === "uninstall") return { args: ["uninstall", id, "--data-dir", dataDir] };
 	const source = String(spec?.source ?? "").trim();
 	if (!isValidSource(source))
 		return {
-			error: pick(
-				l,
-				"安装源需为 owner/repo 或 owner/repo/子目录（本地路径请用命令行安装）",
-				"Install source must be owner/repo or owner/repo/subdir (local paths are CLI-only)",
-				"plugininstaller.source.invalid",
-			),
+			error: "Install source must be owner/repo or owner/repo/subdir (local paths are CLI-only)",
 		};
 	const args = ["install", source, "--name", id, "--data-dir", dataDir];
 	if (spec.action === "update") args.push("--force");
 	if (spec.build && spec.noBuild)
 		return {
-			error: pick(
-				l,
-				"--build 与 --no-build 不能同时用",
-				"--build and --no-build are mutually exclusive",
-				"plugininstaller.build.conflict",
-			),
+			error: "--build and --no-build are mutually exclusive",
 		};
 	if (spec.build) args.push("--build");
 	else if (spec.noBuild) args.push("--no-build");
@@ -213,40 +196,23 @@ export class PluginInstaller {
 
 	/** 启动一个作业；返回 `{ ok: true }` 或 `{ error }`（拒绝原因，已本地化）。 */
 	start(spec: PluginJobSpec, hooks: PluginJobHooks): { ok: boolean; error?: string } {
-		const l = hooks.lang?.() ?? "en";
 		if (this.deps.managed)
 			return {
 				ok: false,
-				error: pick(
-					l,
-					"本实例由部署方托管（PI_WEB_MANAGED=1）：插件安装/更新由部署流程负责，界面不提供入口。",
-					"This instance is managed (PI_WEB_MANAGED=1): plugin installs are handled by whoever deploys it.",
-					"plugininstaller.managed",
-				),
+				error: "This instance is managed (PI_WEB_MANAGED=1): plugin installs are handled by whoever deploys it.",
 			};
 		const built = buildPluginJobArgs(spec, this.deps.dataDir, hooks.lang);
 		if ("error" in built) return { ok: false, error: built.error };
 		if (this.child)
 			return {
 				ok: false,
-				error: pick(
-					l,
-					"已有一个插件作业在运行，等它结束（或取消）后再试。",
-					"Another plugin job is already running — wait for it (or cancel it) and try again.",
-					"plugininstaller.busy",
-				),
+				error: "Another plugin job is already running — wait for it (or cancel it) and try again.",
 			};
 		const binPath = join(this.deps.pkgRoot, "bin", "pi-web-ui.mjs");
 		if (!existsSync(binPath))
 			return {
 				ok: false,
-				error: pick(
-					l,
-					`找不到 pi-web-ui 命令行入口（${binPath}），无法执行插件操作。`,
-					`pi-web-ui CLI not found at ${binPath} — cannot run the plugin operation.`,
-					"plugininstaller.cli.missing",
-					{ path: binPath },
-				),
+				error: `pi-web-ui CLI not found at ${binPath} — cannot run the plugin operation.`,
 			};
 
 		const { jobId, action, id: pluginId } = spec;
@@ -331,16 +297,11 @@ export class PluginInstaller {
 		child.stderr?.on("data", onChunk);
 		child.on("error", (err) => finish(false, err.message));
 		child.on("close", (code) => {
-			if (cancelled) return finish(false, pick(l, "作业已取消", "Job cancelled", "plugininstaller.cancelled"));
+			if (cancelled) return finish(false, "Job cancelled");
 			if (timedOut)
 				return finish(
 					false,
-					pick(
-						l,
-						`作业超时（${Math.round(Math.max(1000, Number(this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS)) / 60000)} 分钟）已终止`,
-						`Job timed out after ${Math.round(Math.max(1000, Number(this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS)) / 60000)} min and was killed`,
-						"plugininstaller.timeout",
-					),
+					`Job timed out after ${Math.round(Math.max(1000, Number(this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS)) / 60000)} min and was killed`,
 				);
 			finish(code === 0, code === 0 ? undefined : `exit code ${code}`);
 		});
@@ -446,12 +407,12 @@ export async function confirmPluginInstall(
 	const ans = await ask("plugin-installer", {
 		family: "net",
 		hosts: ["github.com"],
-		reason: `安装确认：将安装/更新以下插件（id ← source）：\n${list}\n拒绝或 120 秒未确认则不安装。`,
+		reason: `Install confirmation: these plugins will be installed or updated (id ← source):\n${list}\nIf you refuse or don't confirm within 120 seconds, nothing is installed.`,
 	});
 	if (ans.ok && ans.remember && deps.permGrants) {
 		deps.permGrants.grant("plugin-installer", "net", {
 			hosts: ["github.com"],
-			reason: "插件安装/更新确认",
+			reason: "Confirm plugin install or update",
 			remember: true,
 		});
 		deps.onGrantsChanged?.();

@@ -109,7 +109,7 @@ const notices = await page
 	.catch(() => []);
 check(
 	"workspace-switch notice fired",
-	notices.some((n) => n.includes("已切换到工作目录") || n.includes(B)),
+	notices.some((n) => n.includes("Switched to directory") || n.includes(B)),
 	notices.join(" | "),
 );
 

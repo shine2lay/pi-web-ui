@@ -21,7 +21,7 @@
 import { statSync, readFileSync } from "node:fs";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { pick, type ServerLang } from "./i18n.js";
+import { type ServerLang } from "./i18n.js";
 import { SKILL_TOOL_NAME } from "./tool-manager.js";
 import { decodeText } from "./text-sniff.js";
 
@@ -55,17 +55,11 @@ export function suggestSkills(skills: SkillCatalogEntry[], name: string): SkillC
 }
 
 /** 名录文本（一行一名 + 一句话描述，无技能时给空目录句）。 */
-export function formatSkillCatalog(skills: SkillCatalogEntry[], lang: ServerLang): string {
+export function formatSkillCatalog(skills: SkillCatalogEntry[], _lang: ServerLang): string {
 	if (skills.length === 0) {
-		return pick(lang, "当前没有可用技能。", "No skills are currently available.", "skill.catalog.empty");
+		return "No skills are currently available.";
 	}
-	const head = pick(
-		lang,
-		`可用技能（${skills.length}）：`,
-		`Available skills (${skills.length}):`,
-		"skill.catalog.title",
-		{ count: skills.length },
-	);
+	const head = `Available skills (${skills.length}):`;
 	const lines = skills.map((s) => `- ${s.name}${s.description.trim() ? ` — ${s.description.trim()}` : ""}`);
 	return `${head}\n${lines.join("\n")}`;
 }
@@ -107,67 +101,36 @@ export function makeSkillTool(host: SkillToolHost, lang?: () => ServerLang): Too
 			const name = typeof p.name === "string" ? p.name.trim() : "";
 			// 无名 → 名录 + 用法。
 			if (!name) {
-				const hint = pick(
-					L,
-					"用 skill({name}) 按名取全文。",
-					"Use skill({name}) to load the full text by name.",
-					"skill.catalog.hint",
-				);
+				const hint = "Use skill({name}) to load the full text by name.";
 				return text(`${formatSkillCatalog(skills, L)}\n${hint}`, { count: skills.length });
 			}
 			const found = findSkill(skills, name);
 			// 找错名 → 纠错列表（不抛错，报名录）。
 			if (!found) {
 				const sug = suggestSkills(skills, name).slice(0, 10);
-				const head = pick(L, `没有名为 ${name} 的技能。`, `No skill named ${name}.`, "skill.not.found", { name });
+				const head = `No skill named ${name}.`;
 				const sugText = sug.length > 0 ? `\n${formatSkillCatalog(sug, L)}` : `\n${formatSkillCatalog(skills, L)}`;
 				return text(`${head}${sugText}`, { name, count: skills.length });
 			}
 			// 命中 → 最好努力读正文（每次重读，不缓存；失败/超限给可读错）。
 			if (!found.filePath) {
-				return text(
-					pick(
-						L,
-						`技能 ${name} 没有关联文件路径，取不到全文。`,
-						`Skill ${name} has no file path; full text unavailable.`,
-						"skill.no.filepath",
-						{ name },
-					),
-				);
+				return text(`Skill ${name} has no file path; full text unavailable.`);
 			}
 			try {
 				const st = statSync(found.filePath);
 				if (!st.isFile() || st.size <= 0 || st.size > SKILL_TOOL_FILE_CAP) {
-					return text(
-						pick(
-							L,
-							`技能 ${name} 的文件不可读（不存在/超 ${SKILL_TOOL_FILE_CAP / 1024}KB 上限）。`,
-							`Skill ${name} file unreadable (missing or over the ${SKILL_TOOL_FILE_CAP / 1024}KB cap).`,
-							"skill.file.unreadable",
-							{ name },
-						),
-					);
+					return text(`Skill ${name} file unreadable (missing or over the ${SKILL_TOOL_FILE_CAP / 1024}KB cap).`);
 				}
 				const body = decodeText(readFileSync(found.filePath).subarray(0, st.size)).trim();
 				if (!body) {
-					return text(
-						pick(L, `技能 ${name} 的文件是空的。`, `Skill ${name} file is empty.`, "skill.file.empty", { name }),
-					);
+					return text(`Skill ${name} file is empty.`);
 				}
 				return text(renderSkillContent(found.name, found.filePath, body), {
 					name: found.name,
 					location: found.filePath,
 				});
 			} catch {
-				return text(
-					pick(
-						L,
-						`技能 ${name} 的文件读取失败（可能已被删除或移走）。`,
-						`Failed to read skill ${name} file (may have been deleted or moved).`,
-						"skill.file.failed",
-						{ name },
-					),
-				);
+				return text(`Failed to read skill ${name} file (may have been deleted or moved).`);
 			}
 		},
 	});

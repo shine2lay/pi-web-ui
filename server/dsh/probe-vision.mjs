@@ -101,7 +101,7 @@ try {
 	const b64 = png.toString("base64");
 	const saved = await req("attachment/save", { mediaType: "image/png", data: b64, name: "shot1.png" });
 	console.log("saved ref:", JSON.stringify(saved));
-	if (!saved?.ref?.attachmentId) throw new Error("attachment/save 未返回 ref");
+	if (!saved?.ref?.attachmentId) throw new Error("attachment/save returned no ref");
 	const savedBytes = saved.ref.bytes;
 	console.log("ref bytes match:", savedBytes === png.length, `(src=${png.length} saved=${savedBytes})`);
 
@@ -109,7 +109,7 @@ try {
 	const read = await req("attachment/read", { ref: saved.ref });
 	const readBytes = Buffer.from(read.data, "base64").length;
 	console.log("read bytes:", readBytes, "mediaType:", read.mediaType);
-	if (readBytes === 0) throw new Error("attachment/read 空数据");
+	if (readBytes === 0) throw new Error("attachment/read returned empty data");
 
 	// 3) prompt 带 image 块 → 模型看图回复
 	const sessionId = "vision-probe-session";
@@ -117,7 +117,7 @@ try {
 		sessionId,
 		contentBlocks: [
 			{ type: "image", attachment: saved.ref },
-			{ type: "text", text: "这张截图里显示的是什么应用？用一句话回答，并说出你看到的任何文字。" },
+			{ type: "text", text: "What app does this screenshot show? Answer in one sentence and name any text you see." },
 		],
 	});
 	for (let i = 0; i < 120 && !turnDone; i++) {

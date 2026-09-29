@@ -40,7 +40,7 @@ describe("claim_files", () => {
 				makeClaimFilesTool({ cwd: () => CWD, self: () => ({ convId: "c", title: "t" }), store: () => undefined }).name,
 			).toBe(CLAIM_FILES_TOOL_NAME);
 			const r = await run({});
-			expect(r.text).toContain("暂无认领");
+			expect(r.text).toContain("No claims in this project");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -62,18 +62,18 @@ describe("claim_files", () => {
 			};
 			const runA = mk({ convId: "cA", title: "对话A" });
 			const runB = mk({ convId: "cB", title: "对话B" });
-			expect(await runA({ action: "claim", paths: ["a.ts"], note: "改登录" })).toContain("已认领 1 个");
+			expect(await runA({ action: "claim", paths: ["a.ts"], note: "改登录" })).toContain("Claimed 1 (");
 			const l = await runA({ action: "list" });
 			expect(l).toContain("a.ts");
 			expect(l).toContain("对话A");
 			// B 抢同一文件 → 先到先得，不抢占。
 			const grab = await runB({ action: "claim", paths: ["a.ts"] });
-			expect(grab).toContain("已被别人认领");
+			expect(grab).toContain("already claimed by others");
 			// B 放 A 的文件 → 动不了。
-			expect(await runB({ action: "release", paths: ["a.ts"] })).toContain("没有你名下");
+			expect(await runB({ action: "release", paths: ["a.ts"] })).toContain("None of these are yours");
 			// A 全放 → 空表。
-			expect(await runA({ action: "release" })).toContain("已释放");
-			expect(await runA({ action: "list" })).toContain("暂无认领");
+			expect(await runA({ action: "release" })).toContain("Released");
+			expect(await runA({ action: "list" })).toContain("No claims in this project");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -82,7 +82,7 @@ describe("claim_files", () => {
 		const { dir, run } = setup();
 		try {
 			const bad = await run({ action: "claim", paths: ["../evil.ts"] });
-			expect(bad.text).toContain("不在项目目录内");
+			expect(bad.text).toContain("escape the project directory");
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			const badAction = await run({ action: "nope" } as any);
 			expect(badAction.text).toContain("action 非法");
@@ -94,7 +94,7 @@ describe("claim_files", () => {
 			const r = (await noStore.execute("t1", { action: "list" }, undefined, undefined, {} as any)) as {
 				content: { type: string; text: string }[];
 			};
-			expect(r.content[0].text).toContain("暂不可用");
+			expect(r.content[0].text).toContain("Claim store unavailable");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

@@ -447,7 +447,7 @@ export function tryRecoverEdits(
 			} else {
 				return {
 					success: false,
-					reason: `目标文件在第 ${firstDiff} 行附近发生外部修改，补丁锚点（第 ${start} 行）产生冲突`,
+					reason: `The target file was changed externally near line ${firstDiff}; the patch anchor (line ${start}) conflicts`,
 				};
 			}
 		}
@@ -522,7 +522,7 @@ export function applyHashlinePatch(
 
 	const sections = parseHashlinePatch(patchText);
 	if (sections.length === 0) {
-		return { ok: false, summary: "未能从输入中解析出有效的 [path#TAG] 补丁段", results: [] };
+		return { ok: false, summary: "Could not parse any valid [path#TAG] patch section from the input", results: [] };
 	}
 
 	const clipboard = new Map<string, string[]>(); // 命名剪切板寄存器
@@ -543,7 +543,7 @@ export function applyHashlinePatch(
 		) {
 			return {
 				ok: false,
-				summary: `路径越界：禁止修改工作区外的文件 ${sec.filePath}`,
+				summary: `Path out of bounds: files outside the workspace cannot be changed: ${sec.filePath}`,
 				results: [],
 				error: `Path traversal denied: ${sec.filePath}`,
 			};
@@ -554,7 +554,7 @@ export function applyHashlinePatch(
 		if (currentText === null) {
 			return {
 				ok: false,
-				summary: `文件不存在：${sec.filePath}（hashline 仅支持修改已存在的文件，新建文件请使用 write 工具）`,
+				summary: `File does not exist: ${sec.filePath} (hashline only changes existing files; use the write tool to create new files)`,
 				results: [],
 				error: `File not found: ${sec.filePath}`,
 			};
@@ -579,7 +579,7 @@ export function applyHashlinePatch(
 				} else {
 					return {
 						ok: false,
-						summary: `文件内容已发生变动，且三方合流失败：${sec.filePath}（预期哈希 #${sec.expectedHash}，实际哈希 #${liveHash}；${recovery.reason ?? "冲突"}）\n请重新使用 read 工具查看该文件最新内容后再提交 patch。`,
+						summary: `File content changed and the three-way merge failed: ${sec.filePath} (expected hash #${sec.expectedHash}, actual hash #${liveHash}; ${recovery.reason ?? "conflict"})\nRead the file again with the read tool, then resubmit the patch.`,
 						results: [],
 						error: `Hash mismatch and recovery failed on ${sec.filePath}`,
 					};
@@ -587,7 +587,7 @@ export function applyHashlinePatch(
 			} else {
 				return {
 					ok: false,
-					summary: `文件内容与锚点不一致：${sec.filePath}（预期哈希 #${sec.expectedHash}，实际哈希 #${liveHash}）\n请重新使用 read 工具读取该文件以获取最新行号与 #TAG。`,
+					summary: `File content does not match the anchor: ${sec.filePath} (expected hash #${sec.expectedHash}, actual hash #${liveHash})\nRead the file again with the read tool to get the latest line numbers and #TAG.`,
 					results: [],
 					error: `Hash mismatch on ${sec.filePath} (#${sec.expectedHash} vs #${liveHash})`,
 				};
@@ -621,7 +621,7 @@ export function applyHashlinePatch(
 				) {
 					return {
 						ok: false,
-						summary: `路径越界：禁止移动文件到工作区外 ${h.targetPath}`,
+						summary: `Path out of bounds: files cannot be moved outside the workspace: ${h.targetPath}`,
 						results: [],
 						error: `Path traversal denied on move target: ${h.targetPath}`,
 					};
@@ -669,7 +669,7 @@ export function applyHashlinePatch(
 				if (h.lineStart < 1 || h.lineStart > Math.max(1, lines.length)) {
 					return {
 						ok: false,
-						summary: `行号越界：${sec.filePath} 第 ${h.lineStart} 行（文件总共只有 ${lines.length} 行）。请重新使用 read 工具核验行号。`,
+						summary: `Line out of range: ${sec.filePath} line ${h.lineStart} (the file has only ${lines.length} lines). Check the line numbers again with the read tool.`,
 						results: [],
 						error: `Line out of bounds: line ${h.lineStart} in ${sec.filePath} (${lines.length} lines total)`,
 					};
@@ -677,7 +677,7 @@ export function applyHashlinePatch(
 				if (h.lineEnd !== undefined && h.lineEnd > Math.max(1, lines.length)) {
 					return {
 						ok: false,
-						summary: `行号越界：${sec.filePath} 结束行 ${h.lineEnd} 超过文件总行数（总共 ${lines.length} 行）。`,
+						summary: `Line out of range: ${sec.filePath} end line ${h.lineEnd} is past the end of the file (${lines.length} lines).`,
 						results: [],
 						error: `Line out of bounds: end line ${h.lineEnd} in ${sec.filePath} (${lines.length} lines total)`,
 					};
@@ -713,7 +713,7 @@ export function applyHashlinePatch(
 				if (!(e < prev.start || s > prev.end)) {
 					return {
 						ok: false,
-						summary: `补丁段存在重叠的行范围：${sec.filePath}（行 ${s}-${e} 与行 ${prev.start}-${prev.end} 发生重叠）。请合并为一个连续的修改块。`,
+						summary: `Patch section has overlapping line ranges: ${sec.filePath} (lines ${s}-${e} overlap lines ${prev.start}-${prev.end}). Merge them into one continuous edit.`,
 						results: [],
 						error: `Overlapping hunks in ${sec.filePath} (${s}-${e} overlaps with ${prev.start}-${prev.end})`,
 					};
@@ -811,14 +811,14 @@ export function applyHashlinePatch(
 	}
 
 	const summaryParts = results.map((r) => {
-		if (r.op === "deleted") return `删除 ${r.filePath}`;
-		if (r.op === "moved") return `移动 ${r.filePath} -> ${r.newPath}（新哈希 #${r.newHash}）`;
-		return `修改 ${r.filePath}（${r.linesChanged} 行变动，新哈希 #${r.newHash}${r.recovered ? "，三方自愈" : ""}）`;
+		if (r.op === "deleted") return `Deleted ${r.filePath}`;
+		if (r.op === "moved") return `Moved ${r.filePath} -> ${r.newPath} (new hash #${r.newHash})`;
+		return `Changed ${r.filePath} (${r.linesChanged} lines changed, new hash #${r.newHash}${r.recovered ? ", three-way self-healed" : ""})`;
 	});
 
 	return {
 		ok: true,
-		summary: `成功应用补丁：\n${summaryParts.map((s) => "• " + s).join("\n")}`,
+		summary: `Patch applied:\n${summaryParts.map((s) => "• " + s).join("\n")}`,
 		results,
 	};
 }

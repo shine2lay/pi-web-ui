@@ -246,7 +246,7 @@ try {
 	await clientC.waitForState((s) => s.sessionFile === runningFile, 15000);
 	await sleep(500);
 	if (clientC.messages.length === 0) throw new Error("接管之后应当看到那条对话的历史，而不是空白");
-	if (clientC.received.some((m) => m.type === "notice" && noticeText(m).includes("停在了新对话")))
+	if (clientC.received.some((m) => m.type === "notice" && noticeText(m).includes("landed on a new chat")))
 		throw new Error("不该再出现「停在了新对话」——那是自己刷新前的窗口");
 	console.log("✓ 新标签页/刷新直接接管正在跑的那条对话（无第二份 runtime、无提示）");
 	clientC.ws.close();

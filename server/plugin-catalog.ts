@@ -18,7 +18,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname } from "node:path";
 import type { UiPluginCatalogEntry } from "./protocol.js";
 import { normalizeIconSvg } from "./icon-svg.js";
-import { pick, type ServerLang } from "./i18n.js";
+import { type ServerLang } from "./i18n.js";
 
 /** 合法插件 id（与 server/plugins.ts 的 ID_RE 一致，防路径穿越）。 */
 const ID_RE = /^[A-Za-z0-9_-]+$/;
@@ -148,31 +148,14 @@ export function addCustomEntry(
 	customPath: string,
 	input: CatalogAddInput,
 	/** 面向用户的抛错文案语言（默认英文）；调用方可传 () => getLang() 实现跟随。 */
-	lang?: () => ServerLang,
+	_lang?: () => ServerLang,
 ): UiPluginCatalogEntry {
-	const l = lang?.() ?? "en";
 	const source = String(input?.source ?? "").trim();
 	if (!isValidSource(source)) {
-		throw new Error(
-			pick(
-				l,
-				"来源需为 owner/repo 或 owner/repo/子目录（不支持本地路径）",
-				"Source must be owner/repo or owner/repo/subdir (local paths are not supported)",
-				"plugincatalog.source.invalid",
-			),
-		);
+		throw new Error("Source must be owner/repo or owner/repo/subdir (local paths are not supported)");
 	}
 	const id = deriveCatalogId(typeof input?.id === "string" ? input.id.trim() : undefined, source);
-	if (!ID_RE.test(id))
-		throw new Error(
-			pick(
-				l,
-				`非法 id "${id}"（仅限字母数字-_）`,
-				`Invalid id "${id}" (letters/digits/-/_ only)`,
-				"plugincatalog.id.invalid",
-				{ id },
-			),
-		);
+	if (!ID_RE.test(id)) throw new Error(`Invalid id "${id}" (letters/digits/-/_ only)`);
 	const raw = readJsonSafe<{ entries?: unknown[] }>(customPath, {});
 	const entries = Array.isArray(raw.entries) ? (raw.entries as unknown[]) : [];
 	const next = entries.filter((x) => !(x && typeof x === "object" && (x as Record<string, unknown>).id === id));
@@ -220,8 +203,7 @@ export interface CatalogSyncPayload {
  * 是远程 owner/repo[/subdir][#ref]、字段 trimmed + 长度上限），非法条目丢弃并计数；
  * 整份文档形状不对则直接报错，由调用方原样回给调用者（绝不写盘）。
  */
-export function normalizeSyncPayload(raw: unknown, lang?: () => ServerLang): CatalogSyncPayload | { error: string } {
-	const l = lang?.() ?? "en";
+export function normalizeSyncPayload(raw: unknown, _lang?: () => ServerLang): CatalogSyncPayload | { error: string } {
 	const list = Array.isArray(raw)
 		? raw
 		: raw && typeof raw === "object" && Array.isArray((raw as { entries?: unknown }).entries)
@@ -229,12 +211,7 @@ export function normalizeSyncPayload(raw: unknown, lang?: () => ServerLang): Cat
 			: null;
 	if (!list)
 		return {
-			error: pick(
-				l,
-				'目录 JSON 需为数组，或 {"entries": [...]} 形状',
-				'Catalog JSON must be an array or the {"entries": [...]} shape',
-				"plugincatalog.sync.shape",
-			),
+			error: 'Catalog JSON must be an array or the {"entries": [...]} shape',
 		};
 	const entries: UiPluginCatalogEntry[] = [];
 	let skipped = 0;

@@ -142,7 +142,7 @@ try {
 			values: { pollSec: 120, notify: false, theme: "light", model: "xai/grok-4" },
 		}),
 	);
-	await waitFor(sock, (m) => m.type === "notice" && m.text === "插件设置已保存", "save notice");
+	await waitFor(sock, (m) => m.type === "notice" && m.text === "Plugin settings saved", "save notice");
 	// 落盘断言
 	const raw = JSON.parse(readFileSync(join(plugDir, "storage.json"), "utf8"));
 	if (
@@ -165,8 +165,12 @@ try {
 
 	// -- 3. 非法值被拒 -----------------------------------------------------------------
 	sock.send(JSON.stringify({ type: "plugin_settings", pluginId: "opts", values: { pollSec: 5 } }));
-	const err = await waitFor(sock, (m) => m.type === "notice" && m.text.includes("插件设置保存失败"), "reject notice");
-	if (!err.text.includes("超出范围")) fail(`拒绝文案不对：${err.text}`);
+	const err = await waitFor(
+		sock,
+		(m) => m.type === "notice" && m.text.includes("Failed to save plugin settings"),
+		"reject notice",
+	);
+	if (!err.text.includes("out of range")) fail(`拒绝文案不对：${err.text}`);
 	const raw2 = JSON.parse(readFileSync(join(plugDir, "storage.json"), "utf8"));
 	if (raw2.settings?.pollSec !== 120) fail("非法保存不应改动已存值");
 	else console.log("✓ 越界值被拒（notice 报错）且已存值不变");

@@ -512,7 +512,7 @@ describe("host.ui —— 能力门控", () => {
 		h.ui.register({ slot: "composer.actions", id: "r2", label: "R2" });
 		expect(h.ui.list().items.map((i) => i.id)).toEqual(["m", "r1", "r2"]);
 
-		const warns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("未声明 permissions"));
+		const warns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("declares no permissions"));
 		expect(warns).toHaveLength(1);
 	});
 

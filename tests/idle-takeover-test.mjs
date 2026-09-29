@@ -223,7 +223,7 @@ try {
 	);
 	check(
 		"B 收到空闲持有提示（指路 elsewhere/历史）",
-		clientB.notices().some((m) => (m.text ?? "").includes("在另一处开着")),
+		clientB.notices().some((m) => (m.text ?? "").includes("still open in another window")),
 	);
 
 	// 结束后 elsewhere 仍保留空闲行（可过户），而不是跑完即消失。
@@ -260,7 +260,7 @@ try {
 	}
 	check(
 		"B 收到过户成功通知",
-		clientB.notices().some((m) => (m.text ?? "").includes("过户到当前页面")),
+		clientB.notices().some((m) => (m.text ?? "").includes("was moved to this page")),
 	);
 	{
 		const started = Date.now();

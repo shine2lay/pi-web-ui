@@ -316,10 +316,13 @@ async function runCurrentSessionCases() {
 
 	c.send({ type: "delete_session", path: sessBg });
 	const nC = await c.next(
-		(m) => m.type === "notice" && m.level === "warning" && m.text === "该对话正在后台运行，请先停止或关闭该对话再删除",
+		(m) =>
+			m.type === "notice" &&
+			m.level === "warning" &&
+			m.text === "This conversation is still running — stop or close it before deleting",
 		"后台占用拒绝删除提示",
 	);
-	check("后台对话占用的会话拒绝删除", typeof nC.text === "string" && nC.text.includes("后台运行"), nC.text);
+	check("后台对话占用的会话拒绝删除", typeof nC.text === "string" && nC.text.includes("still running"), nC.text);
 	check("后台会话文件仍在磁盘", existsSync(sessBg), sessBg);
 
 	c.ws.close();

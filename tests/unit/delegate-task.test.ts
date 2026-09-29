@@ -93,7 +93,7 @@ describe("buildDelegationPrompt — 标准六段", () => {
 	});
 
 	it("收尾汇报纪律按语言切换", () => {
-		expect(buildDelegationPrompt(good(), "zh")).toContain("汇报要简洁");
+		expect(buildDelegationPrompt(good(), "zh")).toContain("Report back concisely");
 		expect(buildDelegationPrompt(good(), "en")).toContain("Report back concisely");
 	});
 });

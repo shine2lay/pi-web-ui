@@ -119,26 +119,26 @@ try {
 
 	// 1) 存一个 key（deepseek 是内置静态目录供应商，离线安全）
 	c.send({ type: "set_provider_api_key", provider: "deepseek", apiKey: "sk-test-123" });
-	await c.waitForNotice("已保存", 30000);
+	await c.waitForNotice("Saved", 30000);
 	check("key stored in auth.json", readAuth().deepseek?.key === "sk-test-123");
 
 	// 2) 清空
 	c.send({ type: "clear_provider_api_key", provider: "deepseek" });
-	await c.waitForNotice("已清除", 30000);
+	await c.waitForNotice("Cleared keys", 30000);
 	check("auth.json entry removed", !readAuth().deepseek);
 
 	// 3) 再清一次 → 友好提示不崩
 	c.send({ type: "clear_provider_api_key", provider: "deepseek" });
-	const n = await c.waitForNotice("没有已保存的密钥", 15000);
+	const n = await c.waitForNotice("has no saved key", 15000);
 	check("second clear → friendly notice", !!n);
 
 	// 4) auth.json 里其他条目不受影响
 	c.send({ type: "set_provider_api_key", provider: "openai", apiKey: "sk-oa" });
-	await c.waitForNotice("已保存", 30000);
+	await c.waitForNotice("Saved", 30000);
 	c.send({ type: "set_provider_api_key", provider: "anthropic", apiKey: "sk-an" });
-	await c.waitForNotice("已保存", 30000);
+	await c.waitForNotice("Saved", 30000);
 	c.send({ type: "clear_provider_api_key", provider: "openai" });
-	await c.waitForNotice("已清除", 30000);
+	await c.waitForNotice("Cleared keys", 30000);
 	const auth = readAuth();
 	check("other entries untouched", !auth.openai && auth.anthropic?.key === "sk-an");
 

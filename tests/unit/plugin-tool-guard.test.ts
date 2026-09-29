@@ -161,7 +161,7 @@ describe("host.onToolPre/onToolPost 接线", () => {
 		expect(denied.verdict.decision).toBe("deny");
 		expect(denied.pluginId).toBe("guard");
 		expect(mgr.guardDenialText(denied.verdict as { decision: "deny"; reason?: string }, "guard", "zh")).toContain(
-			"危险命令",
+			"dangerous command",
 		);
 		const ok = await mgr.evaluateToolPre({ toolName: "bash", params: { command: "ls" } }, "zh");
 		expect(ok.verdict).toEqual({ decision: "allow" });

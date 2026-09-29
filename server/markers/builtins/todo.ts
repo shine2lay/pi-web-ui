@@ -3,7 +3,7 @@
  */
 
 import type { ApplyResult, MarkerTool, MarkerOverlay, ParsedToken, MarkerContext } from "../marker.js";
-import { getServerBlock, pick, type ServerLang } from "../../i18n.js";
+import { type ServerLang } from "../../i18n.js";
 
 export const TODO_NAMESPACE = "todo";
 
@@ -50,9 +50,9 @@ function formatStatus(s: TodoStatus): string {
 	}
 }
 
-export function describeTodos(state: TodoState, includeDeleted = false, lang: ServerLang = "en"): string {
+export function describeTodos(state: TodoState, includeDeleted = false, _lang: ServerLang = "en"): string {
 	const visible = state.tasks.filter((t) => includeDeleted || t.status !== "deleted");
-	if (visible.length === 0) return pick(lang, "[todo] （空）", "[todo] (empty)", "markers.todo.list.empty");
+	if (visible.length === 0) return "[todo] (empty)";
 	return visible
 		.map((t) => {
 			const form = t.status === "in_progress" && t.activeForm ? ` (${t.activeForm})` : "";
@@ -61,14 +61,6 @@ export function describeTodos(state: TodoState, includeDeleted = false, lang: Se
 		})
 		.join("\n");
 }
-
-const TODO_GUIDANCE_ZH: string[] = [
-	"# 内联标记工具（状态类操作请写在回答正文，不要调用工具）",
-	"- 标记语法：[[todo:new:<主题>]] 新建；[[todo:set:<id>,completed|in_progress|pending]] 状态；[[todo:remove:<id>]] 删除；[[todo:dep:<id>,blocks=<依赖id,逗号分隔>]] 设依赖。",
-	"- 状态变化全部用上面的 [[todo:...]] 内联标记表达，不会中断回答，无需等待返回。",
-	"- 想查看/list 当前任务列表时，才用 `todo_list` 工具（读操作走工具）。",
-	"- 不要编造不存在的任务 id；id 由 [[todo:new:...]] 分配，首次分配是自增整数。",
-];
 
 const TODO_GUIDANCE_EN: string[] = [
 	"# Inline marker tools (express state changes inline in your reply text — never call a tool for them)",
@@ -79,20 +71,20 @@ const TODO_GUIDANCE_EN: string[] = [
 ];
 
 /** 语言感知的 todo guidance（issue #91）：en 用英译、zh 用中文，默认英文。 */
-export function getTodoGuidance(lang: ServerLang = "en"): string[] {
-	return getServerBlock(lang, "markers.todo.guidance", TODO_GUIDANCE_ZH, TODO_GUIDANCE_EN);
+export function getTodoGuidance(_lang: ServerLang = "en"): string[] {
+	return TODO_GUIDANCE_EN;
 }
 
 export const todoMarker: MarkerTool<TodoState> = {
 	name: "todo",
-	guidance: TODO_GUIDANCE_ZH,
+	guidance: TODO_GUIDANCE_EN,
 	getGuidance: getTodoGuidance,
 
 	async apply(
 		token: ParsedToken,
 		_ctx: MarkerContext,
 		_state: TodoState,
-		lang: ServerLang = "en",
+		_lang: ServerLang = "en",
 	): Promise<ApplyResult> {
 		const state = _state;
 		const op = token.op;
@@ -102,24 +94,13 @@ export const todoMarker: MarkerTool<TodoState> = {
 				if (!subject)
 					return {
 						applied: false,
-						error: pick(
-							lang,
-							"todo:new 需要一个主题参数 [[todo:new:<主题>]]",
-							"todo:new requires a subject argument [[todo:new:<subject>]]",
-							"markers.todo.new.requires.subject",
-						),
+						error: "todo:new requires a subject argument [[todo:new:<subject>]]",
 					};
 				const id = state.nextId++;
 				state.tasks.push({ id, subject, status: "pending", blockedBy: [], createdAt: Date.now() });
 				return {
 					applied: true,
-					feedback: pick(
-						lang,
-						`已创建 #${id}：${subject}（pending）`,
-						`Created #${id}: ${subject} (pending)`,
-						"markers.todo.new.created",
-						{ id: id, subject: subject },
-					),
+					feedback: `Created #${id}: ${subject} (pending)`,
 				};
 			}
 			case "set": {
@@ -128,13 +109,7 @@ export const todoMarker: MarkerTool<TodoState> = {
 					const rawId = token.args[0] ?? "";
 					return {
 						applied: false,
-						error: pick(
-							lang,
-							`todo:set 的 id 无效: "${rawId}"`,
-							`todo:set has an invalid id: "${rawId}"`,
-							"markers.todo.set.invalid.id",
-							{ rawId: rawId },
-						),
+						error: `todo:set has an invalid id: "${rawId}"`,
 					};
 				}
 				const status = token.args[1]?.trim() as TodoStatus | undefined;
@@ -142,51 +117,27 @@ export const todoMarker: MarkerTool<TodoState> = {
 					const statusText = status ?? "";
 					return {
 						applied: false,
-						error: pick(
-							lang,
-							`todo:set 状态无效: "${statusText}"，应为 pending|in_progress|completed`,
-							`todo:set has an invalid status: "${statusText}", expected pending|in_progress|completed`,
-							"markers.todo.set.invalid.status",
-							{ statusText: statusText },
-						),
+						error: `todo:set has an invalid status: "${statusText}", expected pending|in_progress|completed`,
 					};
 				}
 				const task = findTask(state, id);
 				if (!task)
 					return {
 						applied: false,
-						error: pick(
-							lang,
-							`todo:set 任务 #${id} 不存在`,
-							`todo:set task #${id} does not exist`,
-							"markers.todo.set.task.missing",
-							{ id: id },
-						),
+						error: `todo:set task #${id} does not exist`,
 					};
 				const activeForm = token.kwargs["activeForm"];
 				const from = task.status;
 				if (status === "pending" && from === "completed") {
 					return {
 						applied: false,
-						error: pick(
-							lang,
-							`任务 #${id} 已完成，不能置回 pending`,
-							`Task #${id} is completed and cannot be set back to pending`,
-							"markers.todo.set.completed.no.pending",
-							{ id: id },
-						),
+						error: `Task #${id} is completed and cannot be set back to pending`,
 					};
 				}
 				if (status === "in_progress" && from === "completed") {
 					return {
 						applied: false,
-						error: pick(
-							lang,
-							`任务 #${id} 已完成，不能重新进行中`,
-							`Task #${id} is completed and cannot be set back to in_progress`,
-							"markers.todo.set.completed.no.inprogress",
-							{ id: id },
-						),
+						error: `Task #${id} is completed and cannot be set back to in_progress`,
 					};
 				}
 				task.status = status;
@@ -194,10 +145,7 @@ export const todoMarker: MarkerTool<TodoState> = {
 				const change = from !== status ? ` (${from} → ${status})` : "";
 				return {
 					applied: true,
-					feedback: pick(lang, `已更新 #${id}${change}`, `Updated #${id}${change}`, "markers.todo.set.updated", {
-						id: id,
-						change: change,
-					}),
+					feedback: `Updated #${id}${change}`,
 				};
 			}
 			case "remove": {
@@ -206,37 +154,19 @@ export const todoMarker: MarkerTool<TodoState> = {
 					const rawId = token.args[0] ?? "";
 					return {
 						applied: false,
-						error: pick(
-							lang,
-							`todo:remove 的 id 无效: "${rawId}"`,
-							`todo:remove has an invalid id: "${rawId}"`,
-							"markers.todo.remove.invalid.id",
-							{ rawId: rawId },
-						),
+						error: `todo:remove has an invalid id: "${rawId}"`,
 					};
 				}
 				const task = findTask(state, id);
 				if (!task)
 					return {
 						applied: false,
-						error: pick(
-							lang,
-							`todo:remove 任务 #${id} 不存在`,
-							`todo:remove task #${id} does not exist`,
-							"markers.todo.remove.task.missing",
-							{ id: id },
-						),
+						error: `todo:remove task #${id} does not exist`,
 					};
 				task.status = "deleted";
 				return {
 					applied: true,
-					feedback: pick(
-						lang,
-						`已删除 #${id}：${task.subject}`,
-						`Deleted #${id}: ${task.subject}`,
-						"markers.todo.remove.deleted",
-						{ id: id, "task.subject": task.subject },
-					),
+					feedback: `Deleted #${id}: ${task.subject}`,
 				};
 			}
 			case "dep": {
@@ -245,26 +175,14 @@ export const todoMarker: MarkerTool<TodoState> = {
 					const rawId = token.args[0] ?? "";
 					return {
 						applied: false,
-						error: pick(
-							lang,
-							`todo:dep 的 id 无效: "${rawId}"`,
-							`todo:dep has an invalid id: "${rawId}"`,
-							"markers.todo.dep.invalid.id",
-							{ rawId: rawId },
-						),
+						error: `todo:dep has an invalid id: "${rawId}"`,
 					};
 				}
 				const task = findTask(state, id);
 				if (!task)
 					return {
 						applied: false,
-						error: pick(
-							lang,
-							`todo:dep 任务 #${id} 不存在`,
-							`todo:dep task #${id} does not exist`,
-							"markers.todo.dep.task.missing",
-							{ id: id },
-						),
+						error: `todo:dep task #${id} does not exist`,
 					};
 				const depRaw = token.kwargs["blocks"] ?? token.args[1] ?? "";
 				const deps = depRaw
@@ -276,34 +194,20 @@ export const todoMarker: MarkerTool<TodoState> = {
 					const badList = bad.join(",");
 					return {
 						applied: false,
-						error: pick(
-							lang,
-							`todo:dep 检测到非法依赖 ${badList}（不存在或自环）`,
-							`todo:dep detected invalid dependencies ${badList} (missing or self-referencing)`,
-							"markers.todo.dep.invalid.dependencies",
-							{ badList: badList },
-						),
+						error: `todo:dep detected invalid dependencies ${badList} (missing or self-referencing)`,
 					};
 				}
 				task.blockedBy = deps;
-				const depsText = deps.length ? deps.join(",") : lang === "zh" ? "（无）" : "(none)";
+				const depsText = deps.length ? deps.join(",") : "(none)";
 				return {
 					applied: true,
-					feedback: pick(
-						lang,
-						`#${id} 依赖：${depsText}`,
-						`#${id} blocks: ${depsText}`,
-						"markers.todo.dep.blocks.updated",
-						{ id: id, depsText: depsText },
-					),
+					feedback: `#${id} blocks: ${depsText}`,
 				};
 			}
 			default:
 				return {
 					applied: false,
-					error: pick(lang, `todo 未知操作: ${op}`, `todo unknown operation: ${op}`, "markers.todo.unknown.operation", {
-						op: op,
-					}),
+					error: `todo unknown operation: ${op}`,
 				};
 		}
 	},

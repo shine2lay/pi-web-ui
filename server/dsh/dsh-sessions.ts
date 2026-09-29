@@ -12,7 +12,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { zstdDecompressSync } from "node:zlib";
-import { pick, type ServerLang } from "../i18n.js";
+import { type ServerLang } from "../i18n.js";
 
 export interface SessionHeader {
 	id?: string;
@@ -220,7 +220,7 @@ export function findSessionFilesForCwd(sessionRoot: string, cwd: string): string
 }
 
 /** 第一个用户文本（会话标题素材）。无用户文本时回退默认标题（issue #91：lang 缺省英文）。 */
-export function firstUserText(events: SessionLog["events"], lang: ServerLang = "en"): string {
+export function firstUserText(events: SessionLog["events"], _lang: ServerLang = "en"): string {
 	for (const ev of events) {
 		if (ev.type === "user/message") {
 			const blocks = ev.data?.content;
@@ -235,7 +235,7 @@ export function firstUserText(events: SessionLog["events"], lang: ServerLang = "
 			}
 		}
 	}
-	return pick(lang, "新对话", "New chat", "dsh.sessions.untitled");
+	return "New chat";
 }
 
 /** 从事件流重建 UiMessage 列表（回放用）：user/assistant/tool-result 顺序落地。 */

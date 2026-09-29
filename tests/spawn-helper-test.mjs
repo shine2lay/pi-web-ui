@@ -66,7 +66,7 @@ ws.on("message", (d) => {
 		return;
 	}
 	if (m.type === "terminal_output") output += m.data;
-	else if (m.type === "notice" && m.text.includes("启动终端失败")) failed = true;
+	else if (m.type === "notice" && m.text.includes("Failed to start terminal")) failed = true;
 });
 ws.on("open", () => ws.send(JSON.stringify({ type: "hello", clientId })));
 

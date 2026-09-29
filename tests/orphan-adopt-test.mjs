@@ -258,7 +258,7 @@ try {
 
 	// B：全新 clientId（新浏览器），无人在线 → 应整体认领 A 的残留会话。
 	clientB = await openClient("orphan-B", false);
-	await clientB.waitForType("notice", (m) => noticeText(m).includes("关闭浏览器前"), 15000);
+	await clientB.waitForType("notice", (m) => noticeText(m).includes("before the browser was closed"), 15000);
 	console.log("✓ B 收到认领 notice");
 	if (clientB.state.conversationId !== convA)
 		throw new Error(`B 没有认领 A 的会话（${clientB.state.conversationId} ≠ ${convA}）——仍是“另一处”`);
@@ -278,7 +278,7 @@ try {
 
 	// C：全新 clientId，但 B 还在线 → 不认领（issue #10 隔离保留），走空白 + elsewhere 感知。
 	clientC = await openClient("orphan-C", false);
-	await clientC.waitForType("notice", (m) => noticeText(m).includes("停在了新对话"), 15000);
+	await clientC.waitForType("notice", (m) => noticeText(m).includes("landed on a new chat"), 15000);
 	console.log("✓ C（B 在线时上线）走空白新对话，不抢认领");
 	if (clientC.messages.length !== 0) throw new Error("C 的默认对话不是空白的");
 	if (!clientC.elsewhere.some((w) => w.isStreaming)) throw new Error("C 的 elsewhere 看不到 B 正在跑（跨端感知缺失）");

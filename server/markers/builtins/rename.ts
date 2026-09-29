@@ -11,7 +11,7 @@
  */
 
 import type { ApplyResult, MarkerTool, ParsedToken, MarkerContext } from "../marker.js";
-import { getServerBlock, pick, type ServerLang } from "../../i18n.js";
+import { type ServerLang } from "../../i18n.js";
 
 export const RENAME_NAMESPACE = "conv";
 
@@ -23,81 +23,54 @@ function extractTitle(token: ParsedToken): string {
 	return fromArgs || fromKw;
 }
 
-const RENAME_GUIDANCE_ZH: string[] = ["- 重命名当前对话：[[conv:rename:<新标题>]]（在了解了用户需求后尽早重命名对话）"];
-
 const RENAME_GUIDANCE_EN: string[] = [
 	"- Rename the current conversation: [[conv:rename:<new title>]] (do it early, once you understand what the user needs)",
 ];
 
 /** 语言感知的 conv guidance（issue #91）：en 用英译、zh 用中文，默认英文。 */
-export function getRenameGuidance(lang: ServerLang = "en"): string[] {
-	return getServerBlock(lang, "markers.rename.guidance", RENAME_GUIDANCE_ZH, RENAME_GUIDANCE_EN);
+export function getRenameGuidance(_lang: ServerLang = "en"): string[] {
+	return RENAME_GUIDANCE_EN;
 }
 export const renameMarker: MarkerTool<never> = {
 	name: "conv",
-	guidance: RENAME_GUIDANCE_ZH,
+	guidance: RENAME_GUIDANCE_EN,
 	getGuidance: getRenameGuidance,
 
-	async apply(token: ParsedToken, ctx: MarkerContext, _state: never, lang: ServerLang = "en"): Promise<ApplyResult> {
+	async apply(token: ParsedToken, ctx: MarkerContext, _state: never, _lang: ServerLang = "en"): Promise<ApplyResult> {
 		if (token.op !== "rename") {
 			return {
 				applied: false,
-				error: pick(
-					lang,
-					`conv 未知操作: ${token.op}（当前仅支持 conv:rename）`,
-					`conv unknown operation: ${token.op} (only conv:rename is supported)`,
-					"markers.rename.unknown.operation",
-					{ "token.op": token.op },
-				),
+				error: `conv unknown operation: ${token.op} (only conv:rename is supported)`,
 			};
 		}
 		const title = extractTitle(token);
 		if (!title)
 			return {
 				applied: false,
-				error: pick(
-					lang,
-					"conv:rename 需要一个标题参数 [[conv:rename:<新标题>]]",
-					"conv:rename requires a title argument [[conv:rename:<new title>]]",
-					"markers.rename.requires.title",
-				),
+				error: "conv:rename requires a title argument [[conv:rename:<new title>]]",
 			};
 		if (title.length > 80)
 			return {
 				applied: false,
-				error: pick(
-					lang,
-					"标题过长（最多 80 字）",
-					"Title too long (max 80 characters)",
-					"markers.rename.title.too.long",
-				),
+				error: "Title too long (max 80 characters)",
 			};
 		if (!ctx.renameConversation)
 			return {
 				applied: false,
-				error: pick(
-					lang,
-					"当前环境不支持重命名",
-					"Renaming is not supported in this environment",
-					"markers.rename.not.supported",
-				),
+				error: "Renaming is not supported in this environment",
 			};
 		try {
 			ctx.renameConversation(title);
-			ctx.notify(`已重命名为：${title}`, "info", `Renamed to: ${title}`);
+			ctx.notify(`Renamed to: ${title}`, "info", `Renamed to: ${title}`);
 			return {
 				applied: true,
-				feedback: pick(lang, `已重命名为“${title}”`, `renamed to "${title}"`, "markers.rename.renamed.to", {
-					title: title,
-				}),
+				feedback: `renamed to "${title}"`,
 			};
 		} catch (e) {
 			const errMsg = (e as Error).message ?? String(e);
 			return {
 				applied: false,
-				error: pick(lang, `重命名失败: ${errMsg}`, `Rename failed: ${errMsg}`, "markers.rename.rename.failed", {
-					errMsg: errMsg,
-				}),
+				error: `Rename failed: ${errMsg}`,
 			};
 		}
 	},

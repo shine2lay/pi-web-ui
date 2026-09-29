@@ -18,7 +18,7 @@
  * DEFAULT_PROMPT_TEMPLATE 与 token 元数据）。
  */
 
-import { getServerBlock, pick, type ServerLang } from "./i18n.js";
+import { type ServerLang } from "./i18n.js";
 
 /** 全部来源 token。默认模板顺序即此数组顺序。 */
 export const PROMPT_TOKENS = [
@@ -137,27 +137,8 @@ export interface PromptComposerInputs {
 export const BUILTIN_SOUL =
 	"You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.";
 
-/**
- * 内置默认灵魂段落的中文版（issue #91）：lang === "zh" 且调用方未自定义
- * builtinSoul 时 {{soul}} 用它。英文版 BUILTIN_SOUL 保持原样（英文默认）。
- */
-export const BUILTIN_SOUL_ZH =
-	"你是运行在 pi（一个编码智能体框架）中的专业编码助手。你通过读取文件、执行命令、编辑代码和新建文件来帮助用户。";
-
 /** Pi documentation 段模板 —— 与 SDK buildSystemPrompt 默认分支一致（路径由调用方注入）。 */
-export function buildPiDocsText(readme: string, docs: string, examples: string, lang: ServerLang = "en"): string {
-	if (lang === "zh") {
-		return [
-			"Pi 文档（仅当用户问及 pi 本身、其 SDK、扩展、主题、技能或 TUI 时阅读）：",
-			`- 主文档：${readme}`,
-			`- 更多文档：${docs}`,
-			`- 示例：${examples}（扩展、自定义工具、SDK）`,
-			"- 阅读 pi 文档或示例时，在「更多文档」下找 docs/...、在「示例」下找 examples/...，不要按当前工作目录解析",
-			"- 被问及以下主题时：扩展（docs/extensions.md、examples/extensions/）、主题（docs/themes.md）、技能（docs/skills.md）、提示词模板（docs/prompt-templates.md）、TUI 组件（docs/tui.md）、快捷键（docs/keybindings.md）、SDK 集成（docs/sdk.md）、自定义服务商（docs/custom-provider.md）、添加模型（docs/models.md）、pi 包（docs/packages.md）、环境变量（docs/environment-variables.md）",
-			"- 处理 pi 相关主题时，先阅读文档和示例，并跟随其中的 .md 交叉引用，再动手实现",
-			"- pi 的 .md 文件务必通读全文，并跟随其中指向相关文档的链接（例如 TUI API 细节见 tui.md）",
-		].join("\n");
-	}
+export function buildPiDocsText(readme: string, docs: string, examples: string, _lang: ServerLang = "en"): string {
 	return [
 		"Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):",
 		`- Main documentation: ${readme}`,
@@ -173,7 +154,6 @@ export function buildPiDocsText(readme: string, docs: string, examples: string, 
 /** Guidelines 段：文件探索引导 + 工具 promptGuidelines（去重）+ 固定两行。
  *  与 buildSystemPrompt 默认分支的聚合规则一致。 */
 function buildGuidelinesText(inputs: PromptComposerInputs): string {
-	const lang: ServerLang = inputs.lang ?? "en";
 	const selected = new Set(inputs.selectedTools);
 	const lines: string[] = [];
 	const add = (g: string) => {
@@ -184,31 +164,14 @@ function buildGuidelinesText(inputs: PromptComposerInputs): string {
 	if ((has("bash") || has("powershell")) && !has("grep") && !has("find") && !has("ls")) {
 		add(
 			has("bash") && has("powershell")
-				? pick(
-						lang,
-						"涉及列出、搜索、查找文件等文件操作时，使用 bash 或 PowerShell",
-						"Use bash or PowerShell for file operations like listing, searching, and finding files",
-						"prompt.guidelines.bash.powershell",
-					)
-				: pick(
-						lang,
-						"涉及 ls、rg、find 等文件操作时，使用 bash",
-						"Use bash for file operations like ls, rg, find",
-						"prompt.guidelines.bash.basic",
-					),
+				? "Use bash or PowerShell for file operations like listing, searching, and finding files"
+				: "Use bash for file operations like ls, rg, find",
 		);
 	}
 	for (const g of inputs.toolGuidelines) add(g);
-	add(pick(lang, "回答要简洁", "Be concise in your responses", "prompt.guidelines.be.concise"));
-	add(
-		pick(
-			lang,
-			"处理文件时清楚地给出文件路径",
-			"Show file paths clearly when working with files",
-			"prompt.guidelines.show.paths",
-		),
-	);
-	return `${pick(lang, "指导原则：", "Guidelines:", "prompt.guidelines.title")}\n${lines.map((l) => `- ${l}`).join("\n")}`;
+	add("Be concise in your responses");
+	add("Show file paths clearly when working with files");
+	return `${"Guidelines:"}\n${lines.map((l) => `- ${l}`).join("\n")}`;
 }
 
 function escapeXml(s: string): string {
@@ -231,24 +194,9 @@ export function buildSkillsText(
 	const visible = skills.filter((s) => !(s as { disableModelInvocation?: boolean }).disableModelInvocation);
 	if (visible.length === 0) return "";
 	const lines = [
-		pick(
-			lang,
-			"以下技能为特定任务提供专门的指令。",
-			"The following skills provide specialized instructions for specific tasks.",
-			"prompt.skills.intro.specialized",
-		),
-		pick(
-			lang,
-			"当任务与某技能的描述相符时，用 skill 工具按名称加载该技能全文。",
-			"Use the skill tool to load a skill's full text by name when the task matches its description.",
-			"prompt.skills.intro.use.skill",
-		),
-		pick(
-			lang,
-			"当技能文件引用相对路径时，以技能目录（SKILL.md 的父目录 / 该路径的 dirname）为基准解析，并在工具命令中使用解析后的绝对路径。",
-			"When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
-			"prompt.skills.intro.resolve.path",
-		),
+		"The following skills provide specialized instructions for specific tasks.",
+		"Use the skill tool to load a skill's full text by name when the task matches its description.",
+		"When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
 		"",
 		"<available_skills>",
 	];
@@ -272,12 +220,12 @@ export function buildSkillsText(
 }
 
 /** 项目上下文块（不含前导空行）。 */
-function buildContextText(files: PromptComposerInputs["contextFiles"], lang: ServerLang = "en"): string {
+function buildContextText(files: PromptComposerInputs["contextFiles"], _lang: ServerLang = "en"): string {
 	if (files.length === 0) return "";
 	return [
 		"<project_context>",
 		"",
-		pick(lang, "项目专属指令与规范：", "Project-specific instructions and guidelines:", "prompt.context.title"),
+		"Project-specific instructions and guidelines:",
 		"",
 		...files.map((f) => `<project_instructions path="${f.path}">\n${f.content}\n</project_instructions>`),
 		"",
@@ -321,10 +269,7 @@ export function resolveSectionTexts(inputs: PromptComposerInputs): Record<Prompt
 	const cwd = inputs.cwd.replace(/\\/g, "/");
 	const lang: ServerLang = inputs.lang ?? "en";
 	// soul：用户 SYSTEM.md 优先；无则按 lang 选内置默认（调用方自定义的 builtinSoul 原样保留）。
-	let soul = inputs.systemPromptFile?.trim() ? inputs.systemPromptFile : inputs.builtinSoul;
-	if (lang === "zh" && soul === BUILTIN_SOUL) soul = BUILTIN_SOUL_ZH;
-	else if (soul === BUILTIN_SOUL)
-		soul = getServerBlock(lang, "prompt.soul", BUILTIN_SOUL_ZH.split("\n"), BUILTIN_SOUL.split("\n")).join("\n");
+	const soul = inputs.systemPromptFile?.trim() ? inputs.systemPromptFile : inputs.builtinSoul;
 	return {
 		soul,
 		tools: buildToolsText(inputs),

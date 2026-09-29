@@ -59,7 +59,7 @@ async function main() {
 	console.log("✓ MCP 服务器启动并握手（日志：[mcp:csrv] ready, 10 tools）");
 
 	// badsrv 失败不应影响 server 存活
-	if (/definitely-not-a-real-cmd-xyz/.test(out) && !/\[mcp\] 服务器「badsrv」启动失败/.test(out)) {
+	if (/definitely-not-a-real-cmd-xyz/.test(out) && !/\[mcp\] server "badsrv" failed to start/.test(out)) {
 		// 只要求 server 还活着即可（失败路径经 rejectAll 归并日志）
 	}
 	if (server.exitCode !== null) throw new Error("server 崩了！");

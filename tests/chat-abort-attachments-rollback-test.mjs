@@ -263,7 +263,7 @@ try {
 	await new Promise((r) => setTimeout(r, 600));
 	const elapsedIdleAbort = Date.now() - t0;
 	check("Idle abort returned quickly without hanging (<1000ms)", elapsedIdleAbort < 1000, elapsedIdleAbort + "ms");
-	const idleNotice = inbox.find((m) => m.type === "notice" && m.text.includes("强制重置"));
+	const idleNotice = inbox.find((m) => m.type === "notice" && m.text.includes("force-reset"));
 	check("Idle abort did not trigger false forced reset notice", !idleNotice);
 
 	console.log("\n=== 3. 流式生成中中断测试 (Abort mid-stream) ===");
@@ -474,14 +474,14 @@ try {
 			6000,
 		);
 
-		await waitMsg((m) => m.type === "notice" && m.text.includes("已回滚"), "first rollback notice");
+		await waitMsg((m) => m.type === "notice" && m.text.includes("Rolled back"), "first rollback notice");
 		await new Promise((r) => setTimeout(r, 200));
 		const remainingUsers = currentState.messages.filter((m) => m.role === "user");
 		const rootNode = remainingUsers[0];
 		if (rootNode) {
 			console.log("Second rollback to root message:", rootNode.id);
 			send({ type: "rollback_session", messageId: rootNode.id });
-			await waitMsg((m) => m.type === "notice" && m.text.includes("已回滚"), "second rollback notice");
+			await waitMsg((m) => m.type === "notice" && m.text.includes("Rolled back"), "second rollback notice");
 		}
 		const snapDoubleRolled = await waitState(
 			(s) => !s.isStreaming && s.messages.filter((x) => x.role === "user").length <= 1,

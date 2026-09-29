@@ -175,7 +175,7 @@ describe("buildAttachmentMessages — 编辑重问附件恢复", () => {
 				},
 			])) as Aside[];
 			expect(out.length).toBe(0);
-			expect(notices.some((n) => /路径不在本客户端上传目录/.test(n.text))).toBe(true);
+			expect(notices.some((n) => /outside this client upload dir/.test(n.text))).toBe(true);
 		} finally {
 			if (oldDataDir === undefined) delete process.env.PI_WEB_DATA_DIR;
 			else process.env.PI_WEB_DATA_DIR = oldDataDir;
@@ -197,7 +197,7 @@ describe("buildAttachmentMessages — 编辑重问附件恢复", () => {
 				},
 			])) as Aside[];
 			expect(out.length).toBe(0);
-			expect(notices.some((n) => /已被清理或不可读/.test(n.text))).toBe(true);
+			expect(notices.some((n) => /cleaned up or unreadable/.test(n.text))).toBe(true);
 		} finally {
 			if (oldDataDir === undefined) delete process.env.PI_WEB_DATA_DIR;
 			else process.env.PI_WEB_DATA_DIR = oldDataDir;

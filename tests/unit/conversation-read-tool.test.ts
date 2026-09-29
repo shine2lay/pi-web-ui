@@ -291,7 +291,7 @@ describe("files/status 认领与 sidecar 接线（execute 级）", () => {
 		const text = r.content[0].text;
 		expect(text).toContain("/r/old.ts"); // sidecar（压缩前）
 		expect(text).toContain("/r/new.ts"); // 实时
-		expect(text).toContain("认领");
+		expect(text).toContain("Claims");
 		expect(text).toContain("/r/x.ts");
 	});
 	it("status 带认领行；无 extras 时不展示也不报错", async () => {
@@ -299,12 +299,12 @@ describe("files/status 认领与 sidecar 接线（execute 级）", () => {
 		const r = (await tool.execute("t", { action: "status", id: "c1" }, undefined, undefined, ctx)) as {
 			content: { type: string; text: string }[];
 		};
-		expect(r.content[0].text).toContain("认领：");
+		expect(r.content[0].text).toContain("Claims:");
 		const bare = makeConversationReadTool(host, () => "zh");
 		const r2 = (await bare.execute("t", { action: "status", id: "c1" }, undefined, undefined, ctx)) as {
 			content: { type: string; text: string }[];
 		};
-		expect(r2.content[0].text).not.toContain("认领");
+		expect(r2.content[0].text).not.toContain("Claims");
 	});
 });
 
@@ -319,7 +319,7 @@ describe("readExtraLines", () => {
 			{ query: "bug" },
 		);
 		const lines = readExtraLines("zh", "bug", sel, 3, "chat");
-		expect(lines).toContain("选区第");
+		expect(lines).toContain("in this selection");
 		expect(lines).toContain('view="full"');
 		expect(readExtraLines("en", "", { selected: [], totalInView: 0, hitIndices: [] }, 0, "full")).toBe("");
 	});

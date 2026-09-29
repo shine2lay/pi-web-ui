@@ -344,7 +344,7 @@ try {
 	check("B 的 elsewhere 已清空", clientB.elsewhere.length === 0, JSON.stringify(clientB.elsewhere));
 	check(
 		"B 收到过户成功通知",
-		clientB.notices().some((m) => (m.text ?? "").includes("过户到当前页面")),
+		clientB.notices().some((m) => (m.text ?? "").includes("was moved to this page")),
 	);
 	// A 页：对话消失 + 去向通知（源会话 active 自动修好，不断连）。
 	{
@@ -365,7 +365,7 @@ try {
 	check("A 页旧问卷被撤回（对话框收起）", retracted.id === pendingA.id, `id=${retracted.id}`);
 	check(
 		"A 收到去向通知",
-		clientA.notices().some((m) => (m.text ?? "").includes("过户到另一处")),
+		clientA.notices().some((m) => (m.text ?? "").includes("was taken over by another page")),
 	);
 	check("A 的会话没被搬空（active 自动修好）", !!clientA.state?.conversationId, clientA.state?.conversationId);
 

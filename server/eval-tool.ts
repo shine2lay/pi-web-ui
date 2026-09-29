@@ -23,7 +23,7 @@ import { join } from "node:path";
 import readline from "node:readline";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { pick, type ServerLang } from "./i18n.js";
+import { type ServerLang } from "./i18n.js";
 import { EVAL_TOOL_NAME } from "./tool-manager.js";
 
 export { EVAL_TOOL_NAME };
@@ -516,7 +516,6 @@ export function disposeAllEvalKernels(): void {
 }
 
 export function makeEvalTool(opts: { cwd: string; ownerId?: string; lang?: () => ServerLang }): ToolDefinition {
-	const getLang = opts.lang ?? (() => "en");
 	const sessionId = (opts.ownerId ?? "default").trim() || "default";
 
 	return defineTool({
@@ -555,7 +554,6 @@ export function makeEvalTool(opts: { cwd: string; ownerId?: string; lang?: () =>
 			),
 		}),
 		execute: async (_id, params) => {
-			const lang = getLang();
 			const language = params.language ?? "py";
 			const timeoutSec = Math.min(Math.max(1, params.timeout ?? DEFAULT_TIMEOUT_SECONDS), MAX_TIMEOUT_SECONDS);
 			const timeoutMs = timeoutSec * 1000;
@@ -569,11 +567,7 @@ export function makeEvalTool(opts: { cwd: string; ownerId?: string; lang?: () =>
 				let text = "";
 				const titlePart = params.title ? ` - ${params.title}` : "";
 				if (!res.ok) {
-					text = pick(
-						lang,
-						`[eval:${language} 出错 (${durationMs}ms)${titlePart}]\n${res.error || res.stderr || "执行异常"}`,
-						`[eval:${language} error (${durationMs}ms)${titlePart}]\n${res.error || res.stderr || "Execution failed"}`,
-					);
+					text = `[eval:${language} error (${durationMs}ms)${titlePart}]\n${res.error || res.stderr || "Execution failed"}`;
 				} else {
 					const parts: string[] = [];
 					if (res.stdout.trim()) {
@@ -583,7 +577,7 @@ export function makeEvalTool(opts: { cwd: string; ownerId?: string; lang?: () =>
 						parts.push(`=> ${res.result}`);
 					}
 					if (parts.length === 0) {
-						parts.push(pick(lang, "（执行成功，无输出）", "(Completed with no output)"));
+						parts.push("(Completed with no output)");
 					}
 					text = `[eval:${language} (${durationMs}ms)${titlePart}]\n` + parts.join("\n");
 				}

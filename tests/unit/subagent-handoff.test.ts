@@ -58,7 +58,7 @@ describe("subagent_handoff (Peer-to-Peer Hand-off)", () => {
 			{} as any,
 		)) as { content: Array<{ type: string; text: string }> };
 
-		expect(result.content[0].text).toContain("不能交接给自身");
+		expect(result.content[0].text).toContain("cannot hand off to oneself");
 		expect(host.handoffSubagent).not.toHaveBeenCalled();
 	});
 
@@ -78,7 +78,7 @@ describe("subagent_handoff (Peer-to-Peer Hand-off)", () => {
 			{} as any,
 		)) as { content: Array<{ type: string; text: string }> };
 
-		expect(result.content[0].text).toContain("未找到目标子代理");
+		expect(result.content[0].text).toContain("Target subagent");
 		expect(host.handoffSubagent).not.toHaveBeenCalled();
 	});
 
@@ -117,7 +117,7 @@ describe("subagent_handoff (Peer-to-Peer Hand-off)", () => {
 			"sa-dev-2222",
 			"Architecture design completed. Implement module X.",
 		);
-		expect(result.content[0].text).toContain("已成功将产物交接给同行子代理");
+		expect(result.content[0].text).toContain("Successfully handed off payload to peer subagent");
 		expect(result.details.fromRunId).toBe("sa-source-1111");
 		expect(result.details.toRunId).toBe("sa-dev-2222");
 	});

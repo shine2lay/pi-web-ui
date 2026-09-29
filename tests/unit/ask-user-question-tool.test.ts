@@ -61,7 +61,7 @@ describe("makeAskUserQuestionTool", () => {
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const ctx = {} as any;
 		await expect(tool.execute("t2", { questions: QUESTIONS }, undefined, undefined, ctx)).rejects.toThrow(
-			"用户取消了提问",
+			"User cancelled the question",
 		);
 	});
 

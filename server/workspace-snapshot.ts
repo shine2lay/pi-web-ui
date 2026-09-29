@@ -79,7 +79,7 @@ export async function createWorkspaceSnapshot(cwd: string): Promise<string | nul
 		const commitHash = await runGit(cwd, commitArgs, env);
 		return commitHash || null;
 	} catch (err) {
-		console.warn(`[workspace-snapshot] 创建快照失败 (${cwd}):`, (err as Error).message);
+		console.warn(`[workspace-snapshot] failed to create snapshot (${cwd}):`, (err as Error).message);
 		return null;
 	} finally {
 		// 务必清理临时 index 文件
@@ -120,7 +120,7 @@ export async function restoreWorkspaceSnapshot(
 		return { success: true };
 	} catch (err) {
 		const msg = (err as Error).message;
-		console.error(`[workspace-snapshot] 还原快照失败 (${cwd}, ${snapshotRef}):`, msg);
+		console.error(`[workspace-snapshot] failed to restore snapshot (${cwd}, ${snapshotRef}):`, msg);
 		return { success: false, error: msg };
 	}
 }

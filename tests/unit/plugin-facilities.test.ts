@@ -166,7 +166,7 @@ describe("apiVersion 门控", () => {
 		makePlugin("futuristic", "export default {};", { apiVersion: PLUGIN_API_VERSION + 1 });
 		makePlugin("classic", "export default {};", { apiVersion: 1 });
 		const list = await mgr.ensureLoaded(() => "zh");
-		expect(list.find((p) => p.id === "futuristic")?.error).toContain("请升级 pi-web-ui");
+		expect(list.find((p) => p.id === "futuristic")?.error).toContain("please upgrade pi-web-ui");
 		expect(list.find((p) => p.id === "classic")?.error).toBeUndefined();
 	});
 });
@@ -276,16 +276,16 @@ describe("host.fs 新增方法（P0-1 stat/mkdir/append/glob）", () => {
 		await h.fs.appendPath(join(inside, "n.txt"), "!");
 		expect(await h.fs.readTextPath(join(inside, "n.txt"))).toBe("hi!");
 		const outside = join(tmpdir(), "pi-web-ui-nope-dir");
-		await expect(h.fs.statPath(join(outside, "x"))).rejects.toThrow(/未授权/);
-		await expect(h.fs.listPath(outside)).rejects.toThrow(/未授权/);
+		await expect(h.fs.statPath(join(outside, "x"))).rejects.toThrow(/not granted/);
+		await expect(h.fs.listPath(outside)).rejects.toThrow(/not granted/);
 	});
 	it("只读插件（fs:read）：读放行、写/append/mkdir 被拒并提示缺写能力", async () => {
 		const h = await fsHost("fsro", ["fs:read"]);
 		writeFileSync(join(dir, "seed.txt"), "s"); // 直写磁盘（只读插件自己写不进去）
 		expect(await h.fs.readText("seed.txt")).toContain("s");
 		expect((await h.fs.stat("seed.txt")).type).toBe("file");
-		await expect(h.fs.append("seed.txt", "x")).rejects.toThrow(/写能力/);
-		await expect(h.fs.mkdir("newdir")).rejects.toThrow(/写能力/);
-		await expect(h.fs.appendPath(join(dir, "seed.txt"), "x")).rejects.toThrow(/写能力/);
+		await expect(h.fs.append("seed.txt", "x")).rejects.toThrow(/write capability/);
+		await expect(h.fs.mkdir("newdir")).rejects.toThrow(/write capability/);
+		await expect(h.fs.appendPath(join(dir, "seed.txt"), "x")).rejects.toThrow(/write capability/);
 	});
 });

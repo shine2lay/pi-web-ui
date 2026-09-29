@@ -34,8 +34,6 @@ export interface EnrichProgress {
 	message?: string;
 }
 
-const t = (lang: EnrichLang, zh: string, en: string): string => (lang === "zh" ? zh : en);
-
 /** 反代路由档位后缀（只在精确匹配失败后剥离；-pro/-flash/-lite 等真实
  *  家族区分绝不在此列）。 */
 const TIER_SUFFIXES = ["-thinking", "-high", "-low", "-max", "-preview", "-latest", "-exp"];
@@ -345,7 +343,7 @@ function toResult(
 		...(model.vision ? { input: ["text", "image"] } : {}),
 		...(model.reasoning ? { reasoning: true } : {}),
 		...(model.name && model.name.toLowerCase() !== id.toLowerCase() ? { name: model.name } : {}),
-		source: `${source}${matchType === "exact" || matchType === "hint" ? "" : t(lang, "（别名）", " (alias)")}`,
+		source: `${source}${matchType === "exact" || matchType === "hint" ? "" : " (alias)"}`,
 		matchType,
 	};
 }
@@ -395,7 +393,7 @@ export async function enrichBatch(
 	} else {
 		opts.onProgress?.({
 			phase: "catalog",
-			message: t(lang, "正在获取 OpenRouter 模型目录…", "Fetching OpenRouter catalog…"),
+			message: "Fetching OpenRouter catalog…",
 		});
 		try {
 			orModels = await getOpenRouterCatalog(fetchFn, opts.signal);
@@ -411,7 +409,7 @@ export async function enrichBatch(
 			if (!opts.catalogs) {
 				opts.onProgress?.({
 					phase: "catalog",
-					message: t(lang, "正在拉取 models.dev 目录（约 25MB）…", "Fetching models.dev catalog (~25MB)…"),
+					message: "Fetching models.dev catalog (~25MB)…",
 				});
 			}
 			try {
@@ -430,13 +428,7 @@ export async function enrichBatch(
 		// 主源不可达时仍试一次辅源；都空才报错。
 		await ensureMd();
 		if ((mdModels ?? []).length === 0) {
-			throw new Error(
-				t(
-					lang,
-					"参考源不可达（OpenRouter / models.dev），请检查网络后重试",
-					"Reference catalogs unreachable (OpenRouter / models.dev); check your network and retry",
-				),
-			);
+			throw new Error("Reference catalogs unreachable (OpenRouter / models.dev); check your network and retry");
 		}
 	}
 
@@ -448,7 +440,7 @@ export async function enrichBatch(
 			phase: "matching",
 			current: i + 1,
 			total,
-			message: t(lang, `正在匹配参数 (${i + 1}/${total})：${id}`, `Matching params (${i + 1}/${total}): ${id}`),
+			message: `Matching params (${i + 1}/${total}): ${id}`,
 		});
 		const norm = normalizeModelId(id);
 		const hint = (hints[id] ?? hints[norm] ?? "").trim();
@@ -459,11 +451,7 @@ export async function enrichBatch(
 					phase: "page",
 					current: i + 1,
 					total,
-					message: t(
-						lang,
-						`正在抓取依据网页 (${i + 1}/${total})：${hint}`,
-						`Fetching evidence page (${i + 1}/${total}): ${hint}`,
-					),
+					message: `Fetching evidence page (${i + 1}/${total}): ${hint}`,
 				});
 				try {
 					const html = opts.pageFetch ? await opts.pageFetch(hint) : await fetchPageText(fetchFn, hint, opts.signal);
@@ -472,7 +460,7 @@ export async function enrichBatch(
 						results.push({
 							id,
 							status: "unmatched",
-							note: t(lang, "网页未提取到可用参数", "No usable params extracted from the page"),
+							note: "No usable params extracted from the page",
 						});
 						continue;
 					}
@@ -482,7 +470,7 @@ export async function enrichBatch(
 						...(ext.contextWindow ? { contextWindow: ext.contextWindow } : {}),
 						...(ext.maxTokens ? { maxTokens: ext.maxTokens } : {}),
 						...(ext.vision ? { input: ["text", "image"] } : {}),
-						source: t(lang, "网页", "Web page"),
+						source: "Web page",
 						matchType: "hint-url",
 					});
 				} catch (err) {
@@ -490,7 +478,7 @@ export async function enrichBatch(
 					results.push({
 						id,
 						status: "unmatched",
-						note: t(lang, "依据网页抓取失败", "Failed to fetch the evidence page"),
+						note: "Failed to fetch the evidence page",
 					});
 				}
 				continue;
@@ -502,19 +490,19 @@ export async function enrichBatch(
 				(orIndex as CatalogIndex).byId.get(hStripped)?.[0] ??
 				(orIndex as CatalogIndex).byName.get(hNorm)?.[0];
 			if (hit) {
-				results.push(toResult(lang, id, hit, t(lang, "依据", "Evidence"), "hint"));
+				results.push(toResult(lang, id, hit, "Evidence", "hint"));
 				continue;
 			}
 			const md = await ensureMd();
 			const mdHit = md.byId.get(hNorm)?.[0] ?? md.byId.get(hStripped)?.[0] ?? md.byName.get(hNorm)?.[0];
 			if (mdHit) {
-				results.push(toResult(lang, id, mdHit, t(lang, "依据", "Evidence"), "hint"));
+				results.push(toResult(lang, id, mdHit, "Evidence", "hint"));
 				continue;
 			}
 			results.push({
 				id,
 				status: "unmatched",
-				note: t(lang, `依据「${hint}」在目录中未命中`, `Evidence "${hint}" not found in catalogs`),
+				note: `Evidence "${hint}" not found in catalogs`,
 			});
 			continue;
 		}
@@ -543,12 +531,8 @@ export async function enrichBatch(
 			status: suggestions.length ? "suggested" : "unmatched",
 			...(suggestions.length ? { suggestions, matchType: "family" as const } : {}),
 			note: suggestions.length
-				? t(lang, "家族相近，可用其 id 作依据重试", "Close family match — retry with its id as evidence")
-				: t(
-						lang,
-						"目录无此模型，可填官方文档 URL 作依据重试",
-						"Not in catalogs — retry with an official docs URL as evidence",
-					),
+				? "Close family match — retry with its id as evidence"
+				: "Not in catalogs — retry with an official docs URL as evidence",
 		});
 	}
 	return results;

@@ -41,12 +41,15 @@ export function resolveServerLang(locale?: string | null): ServerLang {
 	const code = locale.trim().toLowerCase();
 	if (!code) return "en";
 	const m = code.match(/^([a-z]{2,3})(?:[-_].*)?$/);
-	return m?.[1] ?? "en";
+	const lang = m?.[1] ?? "en";
+	// Chinese is no longer a UI language: a client still asking for it gets English.
+	return lang === "zh" ? "en" : lang;
 }
 
-/** True when the server language is Chinese. */
-export function isZh(lang: ServerLang): boolean {
-	return lang === "zh";
+/** Always false: pi-web-ui speaks English only (the Chinese UI language was
+ *  removed), so no caller takes a Chinese branch any more. */
+export function isZh(_lang: ServerLang): boolean {
+	return false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -100,8 +103,7 @@ export function getServerString(lang: ServerLang, key: string): string | undefin
  *   pick(lang, `剩${n}个`, `${n} left`, "k.items.left", { n })
  *   → table: `"残り{n}件"`. Slots missing from `vars` stay literal.
  */
-export function pick(lang: ServerLang, zh: string, en: string, key?: string, vars?: Record<string, unknown>): string {
-	if (isZh(lang)) return zh;
+export function pick(lang: ServerLang, _zh: string, en: string, key?: string, vars?: Record<string, unknown>): string {
 	if (key) {
 		const hit = getServerString(lang, key);
 		if (hit !== undefined) return formatTable(hit, vars);
@@ -125,8 +127,7 @@ export function formatTable(template: string, vars?: Record<string, unknown>): s
  * `\n`-joined string per key; zh/en stay inline arrays at the call site:
  *   getServerBlock(lang, "markers.todo.guidance", TODO_GUIDANCE_ZH, TODO_GUIDANCE_EN)
  */
-export function getServerBlock(lang: ServerLang, key: string, zhLines: string[], enLines: string[]): string[] {
-	if (isZh(lang)) return zhLines;
+export function getServerBlock(lang: ServerLang, key: string, _zhLines: string[], enLines: string[]): string[] {
 	const hit = getServerString(lang, key);
 	if (hit !== undefined) return hit.split("\n");
 	return enLines;
@@ -138,11 +139,8 @@ export function getServerBlock(lang: ServerLang, key: string, zhLines: string[],
  * the runtime — inline both instead). English leads per the English-default
  * policy; the Chinese half keeps zh-UI behavior identical to before.
  */
-export function bilingual(en: string, zh: string): string {
-	if (!en) return zh;
-	if (!zh) return en;
-	if (en === zh) return en;
-	return `${en}\n${zh}`;
+export function bilingual(en: string, _zh: string): string {
+	return en;
 }
 
 /* ------------------------------------------------------------------ */

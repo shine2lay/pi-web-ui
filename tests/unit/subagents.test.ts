@@ -66,8 +66,8 @@ describe("subagents tools", () => {
 		// 结果文本含 convId（host 返回值）与类型。
 		const text = result.content?.[0] as { text: string };
 		expect(text.text).toContain("sa-explore-abc");
-		expect(text.text).toContain("模板：reviewer");
-		expect(text.text).toContain("模型：anthropic/claude-opus-4-5");
+		expect(text.text).toContain("Template: reviewer");
+		expect(text.text).toContain("Model: anthropic/claude-opus-4-5");
 	});
 
 	it("subagent_spawn 未传 cwd 时用 ctx.cwd；不传 template/model 时按缺省", async () => {
@@ -101,7 +101,7 @@ describe("subagents tools", () => {
 			true,
 		);
 		const text = result.content?.[0] as { text: string };
-		expect(text.text).toContain("普通持久化对话已启动");
+		expect(text.text).toContain("Persistent conversation started");
 	});
 
 	it("subagent_spawn 模板不存在/停用时不启动并提示", async () => {
@@ -112,7 +112,7 @@ describe("subagents tools", () => {
 		} as never);
 		expect(host.spawnSubagent).not.toHaveBeenCalled();
 		const text = result.content?.[0] as { text: string };
-		expect(text.text).toContain("不可用");
+		expect(text.text).toContain("unavailable");
 		expect(text.text).toContain("ghost");
 	});
 
@@ -121,7 +121,7 @@ describe("subagents tools", () => {
 		const [, getResult] = makeSubagentTools(host, () => "zh");
 		const result = await getResult.execute!("t1", { runId: "nope" } as never, undefined, undefined, {} as never);
 		const text = result.content?.[0] as { text: string };
-		expect(text.text).toContain("未找到");
+		expect(text.text).toContain("not found");
 	});
 
 	it("subagent_steer / subagent_stop 透传 runId", async () => {
@@ -157,10 +157,10 @@ describe("subagents tools", () => {
 			undefined,
 			{} as never,
 		);
-		expect((r1.content?.[0] as { text: string }).text).toContain("未找到");
+		expect((r1.content?.[0] as { text: string }).text).toContain("not found");
 		expect(host.steerSubagent).not.toHaveBeenCalled();
 		const r2 = await stop.execute!("t1", { runId: "ghost" } as never, undefined, undefined, {} as never);
-		expect((r2.content?.[0] as { text: string }).text).toContain("未找到");
+		expect((r2.content?.[0] as { text: string }).text).toContain("not found");
 		expect(host.stopSubagent).not.toHaveBeenCalled();
 	});
 
@@ -172,7 +172,7 @@ describe("subagents tools", () => {
 			cwd: "/x",
 		} as never);
 		const text = result.content?.[0] as { text: string };
-		expect(text.text).toContain("启动失败");
+		expect(text.text).toContain("Failed to start subagent");
 		expect(text.text).toContain("16");
 	});
 
@@ -229,10 +229,10 @@ describe("subagents tools", () => {
 				{} as never,
 			)) as { content: { text: string }[] }
 		).content[0].text;
-		expect(zhText).toContain("思考强度：high");
-		expect(zhText).toContain("模型：anthropic/claude-opus-4-5");
+		expect(zhText).toContain("thinking: high");
+		expect(zhText).toContain("model: anthropic/claude-opus-4-5");
 		// 未配置的两个维度都要说清是「跟随主对话」，否则 AI 会以为子代理没有模型/强度
-		expect(zhText).toContain("跟随主对话模型，跟随主对话思考强度");
+		expect(zhText).toContain("follows the main conversation model, follows the main conversation thinking level");
 
 		const en = makeSubagentTools(host, () => "en");
 		const enText = (
@@ -255,7 +255,7 @@ describe("subagents tools", () => {
 		const templatesTool = tools.find((t) => t.name === "subagent_templates")!;
 		const result = await templatesTool.execute!("t1", {} as never, undefined, undefined, {} as never);
 		const text = result.content?.[0] as { text: string };
-		expect(text.text).toContain("当前没有");
+		expect(text.text).toContain("No subagent templates available");
 	});
 
 	it("subagent_get_result 报错子代理明确标出错误文本", async () => {
@@ -274,7 +274,7 @@ describe("subagents tools", () => {
 		const [, getResult] = makeSubagentTools(host, () => "zh");
 		const result = await getResult.execute!("t1", { runId: "sa-err" } as never, undefined, undefined, {} as never);
 		const text = result.content?.[0] as { text: string };
-		expect(text.text).toContain("error（报错）");
+		expect(text.text).toContain("status: error");
 		expect(text.text).toContain("400");
 	});
 
@@ -312,7 +312,7 @@ describe("subagents tools", () => {
 			{} as never,
 		);
 		const text = result.content?.[0] as { text: string };
-		expect(text.text).toContain("全部 2 个子代理已收口");
+		expect(text.text).toContain("All 2 subagent(s) collected");
 		expect(text.text).toContain("结论 A");
 		expect(text.text).toContain("provider 400");
 	});
@@ -374,7 +374,7 @@ describe("subagents tools", () => {
 		const waitTool = tools.find((t) => t.name === "subagent_wait_all")!;
 		const result = await waitTool.execute!("t1", { timeoutSeconds: 1 } as never, undefined, undefined, {} as never);
 		const text = result.content?.[0] as { text: string };
-		expect(text.text).toContain("全部 1 个子代理已收口");
+		expect(text.text).toContain("All 1 subagent(s) collected");
 		expect(text.text).toContain("sa-other");
 		expect(text.text).not.toContain("sa-self");
 	});
@@ -397,7 +397,7 @@ describe("subagents tools", () => {
 		const waitTool = tools.find((t) => t.name === "subagent_wait_all")!;
 		const result = await waitTool.execute!("t1", { timeoutSeconds: 1 } as never, undefined, undefined, {} as never);
 		const text = result.content?.[0] as { text: string };
-		expect(text.text).toContain("没有需要等待的子代理");
+		expect(text.text).toContain("No subagents to wait for");
 	});
 
 	it("subagent_wait_all 显式 runIds 里含自身时同样排除", async () => {
@@ -426,7 +426,7 @@ describe("subagents tools", () => {
 			{} as never,
 		);
 		const text = result.content?.[0] as { text: string };
-		expect(text.text).toContain("全部 1 个子代理已收口");
+		expect(text.text).toContain("All 1 subagent(s) collected");
 		expect(text.text).toContain("sa-other");
 	});
 
@@ -456,7 +456,7 @@ describe("subagents tools", () => {
 		const text = result.content?.[0] as { text: string };
 		expect(text.text).toContain("FINAL-CONCLUSION");
 		expect(text.text).toContain("line-1");
-		expect(text.text).toContain("省略");
+		expect(text.text).toContain("lines omitted");
 		expect(text.text).not.toContain("line-50");
 	});
 
@@ -483,7 +483,7 @@ describe("subagents tools", () => {
 		);
 		const text = result.content?.[0] as { text: string };
 		expect(text.text).toContain("line-1\n  line-2\n  line-3");
-		expect(text.text).not.toContain("省略");
+		expect(text.text).not.toContain("lines omitted");
 	});
 
 	it("subagent_wait_all 空 runIds 时等当前全部运行中的子代理", async () => {
@@ -538,7 +538,7 @@ describe("subagents tools", () => {
 		const result = await waitTool.execute!("t1", { timeoutSeconds: 1 } as never, undefined, undefined, {} as never);
 		const text = result.content?.[0] as { text: string };
 		// sa-b 一直运行 → 超时返回未完成名单
-		expect(text.text).toContain("1 个仍在运行");
+		expect(text.text).toContain("1 still running");
 		expect(text.text).toContain("sa-b");
 	});
 
@@ -611,7 +611,7 @@ describe("subagents tools", () => {
 		const result = await waitTool.execute!("t1", { timeoutSeconds: 1 } as never, undefined, undefined, {} as never);
 		const text = result.content?.[0] as { text: string };
 		// 后代已完成 → 立即收口，不等到超时；结果里只有后代，没有父自己与无关兄弟。
-		expect(text.text).toContain("全部 1 个子代理已收口");
+		expect(text.text).toContain("All 1 subagent(s) collected");
 		expect(text.text).toContain("sa-child");
 		expect(text.text).not.toContain("sa-uncle");
 	});
@@ -672,7 +672,7 @@ describe("subagents tools", () => {
 		const waitTool = tools.find((t) => t.name === "subagent_wait_all")!;
 		const result = await waitTool.execute!("t1", { timeoutSeconds: 1 } as never, undefined, undefined, {} as never);
 		const text = result.content?.[0] as { text: string };
-		expect(text.text).toContain("没有需要等待的子代理");
+		expect(text.text).toContain("No subagents to wait for");
 	});
 
 	it("subagent_wait_all 显式 runIds 含祖先时剔除祖先（不死锁）", async () => {
@@ -737,7 +737,7 @@ describe("subagents tools", () => {
 			{} as never,
 		);
 		const text = result.content?.[0] as { text: string };
-		expect(text.text).toContain("没有需要等待的子代理");
+		expect(text.text).toContain("No subagents to wait for");
 	});
 });
 

@@ -180,7 +180,7 @@ try {
 		const elapsed = Date.now() - t0;
 		const text = result?.content?.[0]?.text ?? "";
 		check("静默解阻：提前返回不阻塞", elapsed < 1400, `${elapsed}ms`);
-		check("返回「仍在运行」说明", text.includes("仍在持久终端 ai-bash 中运行"));
+		check("返回「仍在运行」说明", text.includes("still running in the persistent terminal ai-bash"));
 		check("返回已有部分输出", text.includes("started-bg"));
 		check("details 标记 running", result?.details?.running === true);
 		// 等后台命令真正结束 → notifyBackgroundDone
@@ -259,7 +259,10 @@ try {
 		const elapsed = Date.now() - t0;
 		const text = result?.content?.[0]?.text ?? "";
 		check("总时长解阻：流式输出下提前返回", elapsed < 2200, `${elapsed}ms`);
-		check("返回总时长转后台说明", text.includes("前台执行已达") && text.includes("自动转入后台"));
+		check(
+			"返回总时长转后台说明",
+			text.includes("foreground execution reached") && text.includes("moved to background"),
+		);
 		check("返回已有部分输出", text.includes("tick-1"));
 		check(
 			"details 标记 running 与 reason: elapsed",
@@ -284,7 +287,7 @@ try {
 		const elapsed = Date.now() - t0;
 		const text = result?.content?.[0]?.text ?? "";
 		check("一次性终端总时长超限提前返回", elapsed < 1800, `${elapsed}ms`);
-		check("一次性终端提示自动退出说明", text.includes("该终端将自动退出并发送通知"));
+		check("一次性终端提示自动退出说明", text.includes("this terminal will exit automatically and notify"));
 		check("details 记录 persist: false", result?.details?.persist === false);
 		for (let i = 0; i < 60 && !bgDone; i++) await sleep(100);
 		check("一次性终端后台跑完收到通知", bgDone !== null);
@@ -394,7 +397,11 @@ try {
 			.map((l) => l.trim())
 			.join(",");
 		check("管道化解 只留末尾3行", numLines === "28,29,30", JSON.stringify(text));
-		check("管道化解 带说明注记", text.includes("限输出") && text.includes("tail"), JSON.stringify(text.slice(0, 160)));
+		check(
+			"管道化解 带说明注记",
+			text.includes("output-limiting") && text.includes("tail"),
+			JSON.stringify(text.slice(0, 160)),
+		);
 		check("管道化解 真实退出码", /\[exit:0\]$/.test(text.trim()));
 	}
 

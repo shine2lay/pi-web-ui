@@ -50,7 +50,7 @@ describe("formatSkillCatalog", () => {
 	it("名录行含名与描述", () => {
 		const t = formatSkillCatalog(SKILLS, "zh");
 		expect(t).toContain("code-review — Review code changes");
-		expect(t).toContain("可用技能（2）");
+		expect(t).toContain("Available skills (2)");
 	});
 	it("空目录给空句", () => {
 		expect(formatSkillCatalog([], "en")).toContain("No skills");
@@ -84,7 +84,7 @@ describe("makeSkillTool execute", () => {
 		expect(t).toContain("Do commits well.");
 	});
 	it("错名给纠错", async () => {
-		expect(textOf(await exec("x", { name: "comit" }))).toContain("没有名为 comit 的技能");
+		expect(textOf(await exec("x", { name: "comit" }))).toContain("No skill named comit");
 	});
 	it("host 抛错回空目录不断链", async () => {
 		const bad = makeSkillTool(

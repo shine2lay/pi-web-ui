@@ -40,7 +40,7 @@ describe("switchModelOrThrow", () => {
 			async () => {},
 			() => ({ provider: "my-relay", id: "deepseek-v4-flash" }),
 		);
-		await expect(call(ctx, "workbuddy-ai/deepseek-v4.1-flash")).rejects.toThrow(/切换模型失败/);
+		await expect(call(ctx, "workbuddy-ai/deepseek-v4.1-flash")).rejects.toThrow(/failed to switch model/i);
 		await expect(call(ctx, "workbuddy-ai/deepseek-v4.1-flash")).rejects.toThrow(/deepseek-v4-flash/);
 	});
 

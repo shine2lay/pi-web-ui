@@ -138,16 +138,16 @@ describe("savePluginSettings", () => {
 		await makePlugin("cfg", SCHEMA_PLUGIN);
 		// issue #91：默认英文
 		expect(mgr.savePluginSettings("cfg", { pollSec: 5 }).error).toContain("out of range");
-		expect(mgr.savePluginSettings("cfg", { pollSec: 5 }, () => "zh").error).toContain("超出范围");
-		expect(mgr.savePluginSettings("cfg", { pollSec: 9999 }, () => "zh").error).toContain("超出范围");
-		expect(mgr.savePluginSettings("cfg", { theme: "neon" }, () => "zh").error).toContain("值非法");
+		expect(mgr.savePluginSettings("cfg", { pollSec: 5 }, () => "zh").error).toContain("out of range");
+		expect(mgr.savePluginSettings("cfg", { pollSec: 9999 }, () => "zh").error).toContain("out of range");
+		expect(mgr.savePluginSettings("cfg", { theme: "neon" }, () => "zh").error).toContain("Invalid value for");
 		// 合法保存不受影响
 		expect(mgr.savePluginSettings("cfg", { pollSec: 30 }).error).toBeUndefined();
 	});
 
 	it("未声明 schema 的插件保存被拒", async () => {
 		await makePlugin("noschema", { permissions: ["tools"] });
-		expect(mgr.savePluginSettings("noschema", { a: 1 }, () => "zh").error).toContain("没有声明式设置");
+		expect(mgr.savePluginSettings("noschema", { a: 1 }, () => "zh").error).toContain("has no declarative settings");
 	});
 });
 

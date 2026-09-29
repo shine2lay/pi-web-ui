@@ -19,11 +19,10 @@
 
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { pick, type ServerLang } from "./i18n.js";
+import { type ServerLang } from "./i18n.js";
 import { SCHEDULE_CANCEL_TOOL_NAME, SCHEDULE_LIST_TOOL_NAME, SCHEDULE_TASK_TOOL_NAME } from "./tool-manager.js";
 import {
 	computeNextFire,
-	describeIntervalMs,
 	SCHEDULER_MIN_INTERVAL_MS,
 	type SchedulerStore,
 	type SchedulerTaskView,
@@ -67,7 +66,7 @@ export function parseScheduleSpec(raw: unknown): ParsedSchedule {
 		);
 	if (!m) {
 		throw new Error(
-			`无法解析的时间写法：${s}（要 5 字段 cron 如 "0 * * * *"，或相对时间如 "in 30m" / "in 1h" / "30m"）`,
+			`Cannot parse the schedule: ${s} (want a 5-field cron like "0 * * * *", or a delay like "in 30m" / "in 1h" / "30m")`,
 		);
 	}
 	const n = Number(m[1]);
@@ -82,14 +81,14 @@ export function parseScheduleSpec(raw: unknown): ParsedSchedule {
 					? 86_400_000
 					: 7 * 86_400_000; // w
 	const ms = Math.floor(n * mult);
-	if (!Number.isFinite(ms) || ms <= 0) throw new Error(`时长非法：${s}`);
+	if (!Number.isFinite(ms) || ms <= 0) throw new Error(`Invalid duration: ${s}`);
 	return { kind: "interval", spec: String(ms) };
 }
 
-function fmtTime(ms: number | null, lang: ServerLang): string {
-	if (ms === null || !Number.isFinite(ms)) return lang === "zh" ? "（未知）" : "(unknown)";
+function fmtTime(ms: number | null, _lang: ServerLang): string {
+	if (ms === null || !Number.isFinite(ms)) return "(unknown)";
 	try {
-		return new Date(ms).toLocaleString(lang === "zh" ? "zh-CN" : "en-US", { hour12: false });
+		return new Date(ms).toLocaleString("en-US", { hour12: false });
 	} catch {
 		return new Date(ms).toISOString();
 	}
@@ -97,37 +96,12 @@ function fmtTime(ms: number | null, lang: ServerLang): string {
 
 /** 任务一行摘要（列表用；cron 显示原样，interval 中文用“每 X”，英文用秒数）。 */
 function taskLine(t: SchedulerTaskView, lang: ServerLang): string {
-	const when =
-		t.kind === "cron"
-			? `cron ${t.spec}`
-			: lang === "zh"
-				? describeIntervalMs(Number(t.spec))
-				: `every ${Math.round(Number(t.spec) / 1000)}s`;
-	const state = !t.enabled
-		? lang === "zh"
-			? "已暂停"
-			: "paused"
-		: t.running
-			? lang === "zh"
-				? "执行中"
-				: "running"
-			: lang === "zh"
-				? "启用"
-				: "on";
-	const once = t.oneShot ? (lang === "zh" ? " · 单次" : " · one-shot") : "";
-	const target = t.conversationId
-		? lang === "zh"
-			? ` · 汇报→对话${t.conversationId}`
-			: ` · reports→${t.conversationId}`
-		: lang === "zh"
-			? " · 无头执行"
-			: " · headless";
-	const last = t.lastRun
-		? lang === "zh"
-			? ` · 上次${t.lastRun.ok ? "成功" : `失败（${t.lastRun.error ?? "未知错误"}）`}`
-			: ` · last ${t.lastRun.ok ? "ok" : `failed (${t.lastRun.error ?? "unknown"})`}`
-		: "";
-	return `• ${t.id} · ${t.name} · ${when} · ${state}${once}${target} · ${lang === "zh" ? "下次" : "next"} ${fmtTime(t.nextFire, lang)}${last}`;
+	const when = t.kind === "cron" ? `cron ${t.spec}` : `every ${Math.round(Number(t.spec) / 1000)}s`;
+	const state = !t.enabled ? "paused" : t.running ? "running" : "on";
+	const once = t.oneShot ? " · one-shot" : "";
+	const target = t.conversationId ? ` · reports→${t.conversationId}` : " · headless";
+	const last = t.lastRun ? ` · last ${t.lastRun.ok ? "ok" : `failed (${t.lastRun.error ?? "unknown"})`}` : "";
+	return `• ${t.id} · ${t.name} · ${when} · ${state}${once}${target} · ${"next"} ${fmtTime(t.nextFire, lang)}${last}`;
 }
 
 export function makeScheduleTools(
@@ -140,15 +114,7 @@ export function makeScheduleTools(
 		content: [{ type: "text", text: t }],
 		details,
 	});
-	const noStore = () =>
-		text(
-			pick(
-				getLang(),
-				"当前引擎不支持定时任务（调度存储未接入）。",
-				"Scheduled tasks are not wired for the current engine.",
-				"sched.not.wired",
-			),
-		);
+	const noStore = () => text("Scheduled tasks are not wired for the current engine.");
 
 	const taskTool = defineTool({
 		name: SCHEDULE_TASK_TOOL_NAME,
@@ -184,49 +150,22 @@ export function makeScheduleTools(
 				parsed = parseScheduleSpec(p.schedule);
 			} catch (err) {
 				return text(
-					pick(
-						getLang(),
-						`时间写法非法：${String(p.schedule ?? "")}（要 5 字段 cron 如 "0 * * * *" 或相对时间如 "in 30m"）：${(err as Error).message}`,
-						`Invalid schedule: ${String(p.schedule ?? "")} (want 5-field cron like "0 * * * *" or a delay like "in 30m"): ${(err as Error).message}`,
-						"sched.task.bad.schedule",
-						{ schedule: String(p.schedule ?? "") },
-					),
+					`Invalid schedule: ${String(p.schedule ?? "")} (want 5-field cron like "0 * * * *" or a delay like "in 30m"): ${(err as Error).message}`,
 				);
 			}
 			if (parsed.kind === "interval" && Number(parsed.spec) < SCHEDULER_MIN_INTERVAL_MS) {
-				return text(
-					pick(
-						getLang(),
-						`间隔太短（最短 60s，防 token 烧穿）。`,
-						`Interval too short (minimum 60s, prevents token burn).`,
-						"sched.task.interval.too.short",
-					),
-				);
+				return text(`Interval too short (minimum 60s, prevents token burn).`);
 			}
 			const prompt = String(p.prompt ?? "").trim();
 			if (!prompt) {
-				return text(
-					pick(
-						getLang(),
-						"触发指令（prompt）不能为空：写清楚触发时要检查什么、汇报什么。",
-						"Prompt must not be empty: say what to check and report on fire.",
-						"sched.task.empty.prompt",
-					),
-				);
+				return text("Prompt must not be empty: say what to check and report on fire.");
 			}
 			const cwd = String(host.cwd() ?? "").trim();
 			if (!cwd) {
-				return text(
-					pick(
-						getLang(),
-						"当前没有工作目录，无法创建定时任务。",
-						"No working directory, cannot create the scheduled task.",
-						"sched.task.no.cwd",
-					),
-				);
+				return text("No working directory, cannot create the scheduled task.");
 			}
 			const labelRaw = typeof p.label === "string" ? p.label.trim().slice(0, 80) : "";
-			const name = labelRaw || prompt.split("\n")[0]!.slice(0, 40) || "定时任务";
+			const name = labelRaw || prompt.split("\n")[0]!.slice(0, 40) || "Scheduled task";
 			const convId = (ownerConversationId ?? "").trim() || String(host.activeConversationId() ?? "").trim();
 			// 稳定绑定（issue #231）：owner 对话的落盘会话文件 —— 压缩/重启后靠它重认同一会话，
 			// 内存对话 id（c1/c2…）只做首选唤醒键。宿主没实现 conversationInfo 时按原来只绑 id。
@@ -261,23 +200,12 @@ export function makeScheduleTools(
 			}
 			const L = getLang();
 			const next = computeNextFire(task, Date.now());
-			const head =
-				L === "zh" ? `定时任务已创建：${task.id}（${task.name}）` : `Scheduled task created: ${task.id} (${task.name})`;
-			const whenLine =
-				L === "zh"
-					? `触发：${parsed.kind === "cron" ? `cron ${parsed.spec}` : describeIntervalMs(Number(parsed.spec))}，下次 ${fmtTime(next, L)}${recurring ? "（周期）" : "（单次，触发后自动删除）"}`
-					: `Fires: ${parsed.kind === "cron" ? `cron ${parsed.spec}` : `every ${Math.round(Number(parsed.spec) / 1000)}s`}, next ${fmtTime(next, L)}${recurring ? " (recurring)" : " (one-shot, auto-deleted after firing)"}`;
+			const head = `Scheduled task created: ${task.id} (${task.name})`;
+			const whenLine = `Fires: ${parsed.kind === "cron" ? `cron ${parsed.spec}` : `every ${Math.round(Number(parsed.spec) / 1000)}s`}, next ${fmtTime(next, L)}${recurring ? " (recurring)" : " (one-shot, auto-deleted after firing)"}`;
 			const targetLine = convId
-				? L === "zh"
-					? `汇报：触发时自动唤醒本对话（${convId}）；压缩/重启后按会话文件自动重绑，原对话不在时先回落同项目活跃对话（明确提示），无存活对话才无头执行。`
-					: `Reports: wakes this conversation (${convId}) on fire; re-binds by session file after compaction/restart, falls back to the project's active conversation (with a visible note), headless only with no live conversation.`
-				: L === "zh"
-					? "汇报：无头执行，报告进调度面板历史（创建时没拿到对话 id）。"
-					: "Reports: headless run, report in panel history (no conversation id captured at creation).";
-			const tail =
-				L === "zh"
-					? `取消：schedule_cancel(id="${task.id}")，或后台任务面板手动取消；查看：schedule_list。`
-					: `Cancel: schedule_cancel(id="${task.id}"), or from the background-tasks panel; inspect: schedule_list.`;
+				? `Reports: wakes this conversation (${convId}) on fire; re-binds by session file after compaction/restart, falls back to the project's active conversation (with a visible note), headless only with no live conversation.`
+				: "Reports: headless run, report in panel history (no conversation id captured at creation).";
+			const tail = `Cancel: schedule_cancel(id="${task.id}"), or from the background-tasks panel; inspect: schedule_list.`;
 			return text(`${head}\n${whenLine}\n${targetLine}\n${tail}`, { task });
 		},
 	});
@@ -297,24 +225,13 @@ export function makeScheduleTools(
 			const L = getLang();
 			const tasks = store.list();
 			if (tasks.length === 0) {
-				return text(
-					pick(
-						getLang(),
-						"当前没有定时任务。用 schedule_task 创建（cron 或 in 30m 这类延迟，最短 60s）。",
-						"No scheduled tasks. Create one with schedule_task (cron or a delay like in 30m, minimum 60s).",
-						"sched.list.empty",
-					),
-					{ tasks: [] },
-				);
+				return text("No scheduled tasks. Create one with schedule_task (cron or a delay like in 30m, minimum 60s).", {
+					tasks: [],
+				});
 			}
 			const lines = tasks.slice(0, 50).map((t) => taskLine(t, L));
-			const more =
-				tasks.length > 50
-					? L === "zh"
-						? `\n…还有 ${tasks.length - 50} 条没列（去后台任务面板看全量）。`
-						: `\n…${tasks.length - 50} more not shown (see the background-tasks panel).`
-					: "";
-			const head = L === "zh" ? `定时任务（${tasks.length}）：` : `Scheduled tasks (${tasks.length}):`;
+			const more = tasks.length > 50 ? `\n…${tasks.length - 50} more not shown (see the background-tasks panel).` : "";
+			const head = `Scheduled tasks (${tasks.length}):`;
 			return text(`${head}\n${lines.join("\n")}${more}`, { tasks });
 		},
 	});
@@ -334,36 +251,12 @@ export function makeScheduleTools(
 			if (!store) return noStore();
 			const id = String(p.id ?? "").trim();
 			if (!id) {
-				return text(
-					pick(
-						getLang(),
-						"要删哪个任务？给 id（先 schedule_list 查）。",
-						"Which task? Give its id (see schedule_list first).",
-						"sched.cancel.empty.id",
-					),
-				);
+				return text("Which task? Give its id (see schedule_list first).");
 			}
 			if (!store.remove(id)) {
-				return text(
-					pick(
-						getLang(),
-						`没有 id=${id} 的任务（可能已触发自删或被删过，用 schedule_list 看现有的）。`,
-						`No task id=${id} (may have fired-and-deleted or been removed; see schedule_list).`,
-						"sched.cancel.not.found",
-						{ id },
-					),
-				);
+				return text(`No task id=${id} (may have fired-and-deleted or been removed; see schedule_list).`);
 			}
-			return text(
-				pick(
-					getLang(),
-					`定时任务 ${id} 已删除，不再触发。`,
-					`Scheduled task ${id} deleted, will not fire again.`,
-					"sched.cancel.ok",
-					{ id },
-				),
-				{ id },
-			);
+			return text(`Scheduled task ${id} deleted, will not fire again.`, { id });
 		},
 	});
 

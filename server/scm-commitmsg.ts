@@ -67,18 +67,14 @@ function formatNumStat(stat: Record<string, [number, number]>): string[] {
  * there is nothing to describe (no staged/unstaged diff and no untracked
  * files) — the caller replies "no changes" instead of calling the model.
  */
-export function buildCommitMsgInput(ctx: ScmCommitContext, fallbackLang: "zh" | "en"): string | null {
+export function buildCommitMsgInput(ctx: ScmCommitContext, _fallbackLang: "zh" | "en"): string | null {
 	const parts: string[] = [];
 
 	if (ctx.subjects.length > 0) {
 		parts.push("Recent commit subjects (newest first — style reference):");
 		parts.push(...ctx.subjects.map((s) => `- ${s}`));
 	} else {
-		parts.push(
-			fallbackLang === "zh"
-				? "（仓库还没有任何提交；请用中文写这条提交信息）"
-				: "(The repository has no commits yet; write this commit message in English.)",
-		);
+		parts.push("(The repository has no commits yet; write this commit message in English.)");
 	}
 
 	if (ctx.files.length > 0) {

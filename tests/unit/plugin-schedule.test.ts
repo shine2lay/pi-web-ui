@@ -156,8 +156,8 @@ describe("host.schedule 持久版", () => {
 	it("persistent 必须给合法 id", async () => {
 		makePlugin("s");
 		const h = await hostOf("s");
-		expect(() => h.schedule(60_000, () => {}, { persistent: true })).toThrow(/必须给合法 id/);
-		expect(() => h.schedule(60_000, () => {}, { persistent: true, id: "has space" })).toThrow(/必须给合法 id/);
+		expect(() => h.schedule(60_000, () => {}, { persistent: true })).toThrow(/needs a valid id/);
+		expect(() => h.schedule(60_000, () => {}, { persistent: true, id: "has space" })).toThrow(/needs a valid id/);
 	});
 	it("声明落盘 + 进后台面板；off() 删声明并下线面板", async () => {
 		makePlugin("s");
