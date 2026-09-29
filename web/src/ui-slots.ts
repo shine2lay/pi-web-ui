@@ -210,7 +210,7 @@ export function applyUiSlotCardinality<T extends { id: string; hidden: boolean }
  *   contextmenu.toolcall 工具调用卡片的**工具名**右键菜单（ToolCallBlock.tsx 的卡头：
  *                    右键 → 「显示工具详细信息」，弹窗内容由 get_tool_info 现取，
  *                    渲染与分派都在 ToolCallBlock 内）。
- *   composer.actions 输入框动作区（ChatInput.tsx 的 .composer-tools）：上传 / 模板库 /
+ *   composer.actions 输入框动作区（ChatInput.tsx 的 .composer-tools）：上传 /
  *                    模型 / 思考强度 / DSH 权限 / DSH 预设 / 发送簇，全部是宿主内置条目
  *                    （align=start，发送簇 align=end），与插件贡献的动作按同一顺序统一渲染。
  *                    隐藏只藏按钮（回车仍可发送）；发送簇藏掉后运行中的停止键一起消失，
@@ -222,7 +222,7 @@ export function applyUiSlotCardinality<T extends { id: string; hidden: boolean }
  *                    按同一顺序统一渲染；chat.header / chat.empty / notice.actions 仍是
  *                    纯插件新增位（宁缺勿造），无插件贡献时渲染层返回 null、不渲染，
  *                    DOM 与旧版一字不差。渲染位置：chat.header 在 App 主列顶部、
- *                    chat.empty 在 MessageList 空态区（EmptyTemplateCards 之后）、
+ *                    chat.empty 在 MessageList 空态区、
  *                    file.preview.toolbar 在 FilePreview 的 .fp-head-actions 尾部。
  */
 export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
@@ -237,18 +237,6 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		kind: "badge",
 		order: 1,
 		group: "brand",
-	},
-	// 「打开项目」：品牌之后的第一个动作按钮（缺省落顶栏左区，手机端在 ☰ / π 之后）。
-	// 点开的是与左栏 📁+ 同一个项目选择器（浏览磁盘目录 / 选当前目录 / ＋新建项目后切过去）——
-	// 宿主实现留在拥有它的组件内（TopBar 的 hostNodes，`host:*` 的惯例）。
-	{
-		id: "host:open-project",
-		slot: "topbar.primary",
-		labelKey: "openProject",
-		icon: "folder",
-		kind: "action",
-		order: 3,
-		group: "primary",
 	},
 	// ---- 顶栏主栏 ----
 	// 「面板开关 / 主操作」组在前：它们是随时可点的动作，不参与视图切换的高亮语义。
@@ -598,7 +586,7 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 
 	// ---- 输入框动作区（ChatInput.tsx 的 .composer-tools；顺序与可见性全部数据驱动） ----
 	// 权重给插件默认位（100）让路：无 order 的插件动作按 100 落在上传(10)之后、
-	// 模板(110)之前 —— 与旧硬编码顺序（上传 → 插件start → 模板 → 模型 → 思考）一致，
+	// 模型(120)之前 —— 与旧硬编码顺序（上传 → 插件start → 模型 → 思考）一致，
 	// 老插件按钮位置不动。发送簇 align=end 落右侧，权重 200 保证它在插件 end 动作之后。
 	{
 		id: "host:composer-upload",
@@ -607,15 +595,6 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		icon: "upload",
 		kind: "action",
 		order: 10,
-		align: "start",
-	},
-	{
-		id: "host:composer-templates",
-		slot: "composer.actions",
-		labelKey: "tpl.openPicker",
-		icon: "grid",
-		kind: "action",
-		order: 110,
 		align: "start",
 	},
 	{
@@ -802,15 +781,7 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		order: 30,
 	},
 
-	// ---- 左栏分区（LeftPanel.tsx：三个分区的显隐 + 纵向顺序；会话行内不渲染这三条） ----
-	{
-		id: "host:lp-projects",
-		slot: "leftpanel.sessions",
-		labelKey: "recentProjects",
-		icon: "folder",
-		kind: "action",
-		order: 10,
-	},
+	// ---- 左栏分区（LeftPanel.tsx：两个分区的显隐 + 纵向顺序；会话行内不渲染这两条） ----
 	{
 		id: "host:lp-running",
 		slot: "leftpanel.sessions",
@@ -1313,15 +1284,12 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 ];
 
 /**
- * 左栏分区别名条目（host:lp-projects / lp-running / lp-history）：只管三个分区的
+ * 左栏分区别名条目（host:lp-running / lp-history）：只管两个分区的
  * 显隐＋纵向顺序，会话行内不渲染 —— renderLeftSessions 进门先滤掉它们，否则每条
- * 会话行尾都会多出三个按钮（且 icon 名会按原文画出来）。
+ * 会话行尾都会多出两个按钮（且 icon 名会按原文画出来）。
+ * no-project-controls: the "Recent projects" section and its host:lp-projects entry are gone.
  */
-export const LP_SECTION_ENTRY_IDS: ReadonlySet<string> = new Set([
-	"host:lp-projects",
-	"host:lp-running",
-	"host:lp-history",
-]);
+export const LP_SECTION_ENTRY_IDS: ReadonlySet<string> = new Set(["host:lp-running", "host:lp-history"]);
 
 /** 插件视图 tab 的合成条目 id（`<pluginId>:__view`，`__view` 为保留字）。 */
 export const PLUGIN_VIEW_ITEM_ID = "__view";

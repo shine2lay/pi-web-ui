@@ -4,7 +4,6 @@ import {
 	FiBox,
 	FiDownload,
 	FiFolder,
-	FiFolderPlus,
 	FiGitBranch,
 	FiMenu,
 	FiMessageSquare,
@@ -39,8 +38,7 @@ import {
 } from "../ui-slots";
 import { fitTopbar, MOBILE_ASIDE_TOPBAR_IDS, sortOverflowMenuItems } from "../topbar-fit";
 import { openContextMenu } from "../context-menu-state";
-import { appSend, useAppField, useAppGlobals, useIsDsh, useIsManaged, useServiceInfo } from "../app-globals";
-import { ProjectPicker } from "./ProjectPicker";
+import { appSend, useAppGlobals, useIsDsh, useIsManaged, useServiceInfo } from "../app-globals";
 import { PluginMenu } from "./PluginMenu";
 import { focusComposer } from "../composer-bridge";
 import { useFloatingPanel } from "../use-floating-panel";
@@ -234,17 +232,11 @@ export function TopBar({
 	const { t } = useI18n();
 	// 「⋯」溢出菜单的开关（宿主自己的菜单，插件不碰 DOM；顺序与设置面板里看到的一致）。
 	const [topbarMenuOpen, setTopbarMenuOpen] = useState(false);
-	/* 「打开项目」按钮（host:open-project）的项目选择器：与左栏 📁+ 同一个组件、同一套行为
-	   （浏览磁盘目录 / 选当前目录 / ＋新建项目后切过去）。cwd 与额外工作区根走全局 store
-	   （整棵树都要的值，不再从 App 传参）。 */
-	const [projectPickerOpen, setProjectPickerOpen] = useState(false);
 	/* 插件面板（host:plugins 插件入口）：锚点是**点击那一刻**的矩形快照 —— 触发器常从「⋯」
 	   溢出菜单里被点，那里的 .plugin-topbar-menu-keep 点完即卸载，ref 当场就指不到东西了。
 	   面板本身渲染在 header 根上（不在 keep 包装里），否则会跟着 ⋯ 菜单一起被卸载。
 	   el 只用来认「再点一次同一个触发器 = 关」（且已被卸载的 el 不影响判断）。 */
 	const [pluginMenuAnchor, setPluginMenuAnchor] = useState<{ rect: DOMRect; el: HTMLElement } | null>(null);
-	const cwd = useAppField("cwd");
-	const workspaceRoots = useAppField("workspaceRoots");
 	/* 临时会话是 pi 引擎专有能力（SessionManager.inMemory）：DSH 的 newChat 忽略该标志，
 	   画出来只会得到一个普通持久对话，因此 DSH 下不提供该入口。 */
 	const isDsh = useIsDsh();
@@ -294,7 +286,6 @@ export function TopBar({
 	const FALLBACK_TOPBAR_IDS = [
 		"host:history",
 		"host:brand",
-		"host:open-project",
 		"host:chat",
 		"host:terminal",
 		"host:git",
@@ -363,9 +354,6 @@ export function TopBar({
 				onViewChange("chat");
 				appSend({ type: "new_chat", ephemeral: true });
 				focusComposer();
-				return true;
-			case "host:open-project":
-				setProjectPickerOpen(true);
 				return true;
 			case "host:search":
 				onOpenGlobalSearch();
@@ -944,18 +932,6 @@ export function TopBar({
 				<span className="brand-logo">π</span>
 				<span className="brand-name">pi-web-ui</span>
 			</span>
-		),
-		// 打开项目：切整个工作区（set_cwd），与视图无关 —— 终端 / Git / 插件视图里同样常驻可点。
-		"host:open-project": (
-			<button
-				type="button"
-				className="chip open-project"
-				data-tip={t("openProject")}
-				onClick={() => setProjectPickerOpen(true)}
-			>
-				<FiFolderPlus />
-				<span className="chip-sub">{t("openProject")}</span>
-			</button>
 		),
 		// 面板抽屉开关只在 chat 视图渲染：抽屉节点躺在 chat 视图的面板树里
 		// （App.tsx 的 .panel-drawer 是 `.view-pane` 的子节点，非 chat 视图整棵
@@ -1546,17 +1522,6 @@ export function TopBar({
 					}}
 					onManagePlugins={onManagePlugins}
 					onClose={() => setPluginMenuAnchor(null)}
-				/>
-			)}
-			{projectPickerOpen && (
-				<ProjectPicker
-					open
-					currentCwd={cwd}
-					pathCompletions={chat.pathCompletions ?? []}
-					workspaceRoots={workspaceRoots}
-					onClose={() => setProjectPickerOpen(false)}
-					onSelectDirectory={(path) => appSend({ type: "set_cwd", path })}
-					onCreateProject={(path) => appSend({ type: "make_dir", path, setAsCwd: true })}
 				/>
 			)}
 		</header>

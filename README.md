@@ -75,7 +75,6 @@ QQ群 1126050727
 - **Edit & re-ask** — fork any past question into a new branch and re-prompt; the original conversation stays untouched.
 - Long threads auto-collapse messages older than 30 into lazy summary rows (click to expand).
 - Question navigation — a floating rail plus per-question tags to jump between questions.
-- **Prompt templates** — the empty chat state shows a one-click template gallery (repo init, code review, research, merge conflicts…); click a card to fill the input, or save the current draft as your own template.
 - **Auto-retry on model errors** — configurable retry count per conversation (default 6, `0` = fail immediately); when retries run out the failed turn is marked red with a one-click Retry button.
 - **Queue control** — a queued steer/follow-up bubble can be dropped (✕) or **recalled (↩)**, which pulls its text back into the composer (appended on a new line if you already typed something — it never overwrites your draft).
 - **Message anatomy** — each message header shows the role, the model that produced it and a local `HH:MM` timestamp, and every text block has a copy button. Attachments render as their own collapsible card with a mode chip (`lines` / `ref` / `bridged`), a copy button and a vision-bridge “transcribed” note; a skill invocation becomes a skill card with the full `SKILL.md`, next to the arguments you typed.
@@ -86,12 +85,12 @@ QQ群 1126050727
 - **Switching projects** — the workspace root (what the agent reads/writes and where the terminal starts) changes without a restart:
   - **Bottom-right path in the status bar** — click `📁 <path>` to open the folder picker: type a path (`Tab` completes), `↑` goes up one level, `💻` jumps to the computer root so you can change drives, click a folder to enter it and hit **Select** — or **Select this folder** to take the folder you are browsing. **＋ New folder** creates a directory on the spot; `Esc` or a click outside closes it.
   - **Right panel file tree** — right-click any folder → **Open as project** (the same menu has **Upload files to this folder**).
-  - **Left panel → Recent projects**, or `/cwd <path>` from the input box (`/cwd` alone reports the current directory).
+  - `/cwd <path>` from the input box (`/cwd` alone reports the current directory).
   - The startup default comes from `--cwd <dir>` / `PI_WEB_CWD`.
 - **Conversations run in parallel** — each conversation has its own agent runtime and keeps streaming after you switch away; up to 8 can be open per project (subagents don't count).
 - **Running list** — grouped by project (the current one first), with subagent children indented under their parent, badges for subagent / error (the tooltip carries the reason) / streaming, inline rename (✎) and a scoped ✕ that offers “dismiss finished subagents only” or “force-dismiss everything” (a second confirmation while a run is streaming). Right-clicking a row scopes the menu to that conversation's subtree.
 - **History** — sessions are read from `<agentDir>/sessions/--<cwd>--/`, i.e. the same transcripts the pi CLI/TUI writes, so the browser and a terminal `pi` session share one list per project. Rename (✎ — the same `session_info` entry pi's `/name` writes) and two-step delete.
-- **Recent projects** — stored per browser, merged with every directory that has transcripts, minus the ones you removed (tombstones) and the ones that no longer exist, sorted by last use (20 shown, 30 stored).
+- **Recent projects** (a list global search draws on) — stored per browser, merged with every directory that has transcripts, minus the ones you removed (tombstones) and the ones that no longer exist, sorted by last use (20 shown, 30 stored).
 - **Coming back** — reconnecting restores the last workspace the browser used (with a notice), the tab title can show the project folder, and each project remembers its own model + active provider key for _new_ chats (a chat that already has messages keeps its own model).
 - If the server was shut down mid-answer, the next attach reports it once (“last run was interrupted”) instead of leaving a silent gap in the history.
 

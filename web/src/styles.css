@@ -196,7 +196,7 @@
 	--topbar-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
 	--statusbar-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
 	--panel-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
-	/* 卡片/控件底板：工具调用卡、提示词模板卡、快捷短语、左右折叠按钮、顶栏
+	/* 卡片/控件底板：工具调用卡、快捷短语、左右折叠按钮、顶栏
 	   chips 等组件表面，与三大区域共用 --wallpaper-panel-alpha（默认 62% 容器色
 	   + 38% 透图）。主题想在哪类组件不显示壁纸就覆盖回实色（如 var(--bg-elev)
 	   / var(--bg-elev2)）；卡片级（--card-bg，bg-elev 色）与控件级（--chip-bg，
@@ -587,11 +587,6 @@ body.panel-resizing {
 	overflow: hidden;
 }
 
-/* Special: recent projects has thicker divider (visual only) */
-.lp-section.panel-projects {
-	border-bottom-width: 2px;
-}
-
 /* Sash between two expanded sections — 仅在两端均为展开态时渲染 (JS 控制) */
 .lp-sash,
 .rp-sash {
@@ -747,7 +742,6 @@ body.rp-resizing .rp-sash.dragging::after {
 	scrollbar-color: var(--scroll-thumb) transparent;
 	overscroll-behavior: contain;
 }
-.lp-section-body.projects-scroll,
 .lp-section-body.convs-scroll,
 .lp-section-body.sessions-scroll {
 	padding-bottom: 6px;
@@ -1113,30 +1107,7 @@ button.session-item.elsewhere-item.confirm {
 	flex-shrink: 0;
 }
 
-/* ------------------------------------------------------- recent projects */
-
-/*
- * Recent-project list: pinned ABOVE the scrolling session list (independent
- * scroll — scrolling sessions never hides the projects), with a clear
- * separator line underneath. Scrolls internally only when many projects.
- */
-.panel-projects {
-	/* 旧的 max-height 已废弃，由 .lp-section 权重控制 */
-	display: flex;
-	flex-direction: column;
-	border-bottom: 2px solid var(--border);
-}
-
-/* 最近项目标题占位不悬浮：只有项目列表内部滚动，滚动条不会出现在标题右侧 */
-.panel-projects .panel-section-title {
-	flex-shrink: 0;
-}
-
-.projects-scroll {
-	flex: 1;
-	overflow-y: auto;
-	min-height: 0;
-}
+/* ------------------------------------------------------- left panel rows */
 
 .panel-section-title {
 	padding: 4px 10px 6px;
@@ -1192,73 +1163,8 @@ button.session-item.elsewhere-item.confirm {
 		opacity: 0.25;
 	}
 }
-.project-item {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	width: 100%;
-	padding: 7px 10px;
-	border: none;
-	border-radius: 8px;
-	background: transparent;
-	color: var(--text-dim);
-	font-size: 12.5px;
-	text-align: left;
-	cursor: pointer;
-	margin-bottom: 2px;
-	-webkit-user-select: none;
-	user-select: none;
-	-webkit-touch-callout: none;
-}
-.project-item:hover {
-	background: var(--bg-elev2);
-	color: var(--text);
-}
-.project-item.active {
-	background: var(--accent-soft);
-	color: var(--text);
-	border: 1px solid rgba(139, 92, 246, 0.3);
-	padding: 6px 9px;
-}
 
-.project-icon {
-	flex-shrink: 0;
-	color: var(--text-faint);
-}
-.project-item.active .project-icon {
-	color: var(--accent);
-}
-
-.project-info {
-	flex: 1;
-	min-width: 0;
-	display: flex;
-	flex-direction: column;
-}
-
-.project-name {
-	font-weight: 600;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.project-path {
-	font-size: 11px;
-	color: var(--text-faint);
-	font-family: var(--mono);
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.project-time {
-	font-size: 10.5px;
-	color: var(--text-faint);
-	flex-shrink: 0;
-}
-
-/* 左栏行包装 + 悬停删除按钮（最近项目 / 历史对话的两步确认删除）：
+/* 左栏行包装 + 悬停删除按钮（历史对话的两步确认删除）：
    方形小图标钮，确认态红底白勾 */
 .lp-row {
 	position: relative;
@@ -1270,8 +1176,7 @@ button.session-item.elsewhere-item.confirm {
 }
 /* flex 行里主按钮占满剩余宽：原来 width:100% 在有槽位时会把槽位挤到下一行，
    行一变高，绝对定位的删除/重命名按钮就对不齐会话行了 */
-.lp-row .session-item,
-.lp-row .project-item {
+.lp-row .session-item {
 	flex: 1 1 auto;
 	min-width: 0;
 	width: auto;
@@ -1331,7 +1236,6 @@ button.session-item.elsewhere-item.confirm {
 	}
 }
 /* hover 时隐藏时间标签，给删除按钮腾位置 */
-.lp-row:hover .project-time,
 .lp-row:hover .session-time {
 	visibility: hidden;
 }
@@ -4526,57 +4430,6 @@ body.panel-resizing .scm-divider::after {
 	border: 1px solid var(--border);
 	border-radius: 8px;
 	box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.45);
-}
-
-/* Project picker modal: positioned near left panel on desktop, safe viewport bounds on mobile */
-.project-picker {
-	position: fixed;
-	left: 16px;
-	top: 48px;
-	bottom: auto;
-	right: auto;
-	width: min(440px, calc(100vw - 32px));
-	height: min(380px, calc(100vh - 120px));
-	box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-	animation: picker-enter 0.15s ease-out;
-}
-
-.project-picker-backdrop {
-	background: rgba(0, 0, 0, 0.35);
-	animation: backdrop-fade 0.15s ease-out;
-}
-
-@keyframes picker-enter {
-	from {
-		opacity: 0;
-		transform: translateY(-8px);
-	}
-	to {
-		opacity: 1;
-		transform: translateY(0);
-	}
-}
-
-@keyframes backdrop-fade {
-	from {
-		opacity: 0;
-	}
-	to {
-		opacity: 1;
-	}
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.project-picker {
-		animation: backdrop-fade 0.1s ease-out;
-	}
-}
-
-.project-picker-error {
-	color: var(--red);
-	font-size: 11px;
-	margin-top: 4px;
-	padding: 0 2px;
 }
 
 .cwd-picker-head {
@@ -8932,420 +8785,6 @@ div.chead[role="button"]:focus-visible,
 	justify-content: center;
 }
 
-/* ---- 提示词模板（空态推荐卡片） ---- */
-.empty-templates {
-	margin-top: 0;
-	width: min(720px, 92vw);
-}
-
-.empty-templates-head {
-	display: flex;
-	align-items: baseline;
-	justify-content: center;
-	gap: 10px;
-	flex-wrap: wrap;
-	margin-bottom: 12px;
-}
-
-.empty-templates-title {
-	font-size: 14px;
-	font-weight: 650;
-	color: var(--text);
-}
-
-.empty-templates-hint {
-	font-size: 11.5px;
-	color: var(--text-faint);
-}
-
-.empty-templates-grid {
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-	gap: 10px;
-}
-
-.empty-template {
-	display: flex;
-	align-items: flex-start;
-	gap: 10px;
-	padding: 11px 13px;
-	position: relative; /* 右上角 ✏️ 编辑按钮的定位基准 */
-	border: 1px solid var(--border);
-	border-radius: 12px;
-	background: var(--card-bg, var(--bg-elev));
-	color: var(--text-dim);
-	text-align: left;
-	cursor: pointer;
-	transition:
-		border-color 0.15s,
-		background 0.15s,
-		transform 0.12s,
-		box-shadow 0.15s;
-}
-
-/* 卡片右上角的编辑（✏️）按钮：点卡片 = 填入输入框，点 ✏️ = 编辑/删除。 */
-.template-card-ops {
-	position: absolute;
-	top: 7px;
-	right: 7px;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	width: 20px;
-	height: 20px;
-	border-radius: 6px;
-	color: var(--text-faint);
-	cursor: pointer;
-	background: transparent;
-	transition:
-		background 0.15s,
-		color 0.15s;
-}
-.template-card-ops:hover {
-	background: var(--accent-soft);
-	color: var(--accent);
-}
-.empty-template:hover {
-	border-color: rgba(139, 92, 246, 0.5);
-	background: var(--accent-soft);
-	box-shadow: 0 8px 22px rgba(139, 92, 246, 0.16);
-}
-.empty-template.add {
-	border-style: dashed;
-}
-.empty-template.add:hover {
-	border-color: rgba(139, 92, 246, 0.6);
-}
-
-.empty-template-icon {
-	font-size: 17px;
-	flex-shrink: 0;
-	line-height: 1.5;
-}
-.empty-template.add .empty-template-icon {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	width: 20px;
-	height: 20px;
-	color: var(--text-faint);
-}
-
-.empty-template-main {
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-	min-width: 0;
-}
-
-.empty-template-title {
-	font-size: 13px;
-	font-weight: 600;
-	color: var(--text);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-
-.empty-template-desc {
-	font-size: 11.5px;
-	color: var(--text-faint);
-	line-height: 1.45;
-	display: -webkit-box;
-	-webkit-line-clamp: 2;
-	-webkit-box-orient: vertical;
-	overflow: hidden;
-}
-
-.empty-templates-foot {
-	margin-top: 10px;
-	display: flex;
-	justify-content: center;
-}
-
-.empty-templates-reset {
-	display: inline-flex;
-	align-items: center;
-	gap: 5px;
-	border: none;
-	background: transparent;
-	color: var(--text-faint);
-	font-size: 11.5px;
-	cursor: pointer;
-	padding: 4px 8px;
-	border-radius: 6px;
-	transition:
-		color 0.15s,
-		background 0.15s;
-}
-.empty-templates-reset:hover {
-	color: var(--text-dim);
-	background: var(--card-bg, var(--bg-elev));
-}
-
-/* ---- 提示词模板 modal ---- */
-.template-modal {
-	max-width: 620px;
-}
-
-/* 模板库（选择器）弹窗：列所有模板卡片。用复合选择器保证覆盖更靠后的
- * `.modal { max-width: 460px }` 基类——同优先级的选择器会被后面的规则覆盖，
- * 单类选择器 `.template-picker` 之前一直没生效。 */
-.modal.template-picker {
-	/* 两倍宽度：原设计 720px → 1440px，模板卡片多列铺开。 */
-	max-width: 1440px;
-}
-
-/* 顶栏/底栏固定不滚动：弹窗本身不滚（overflow:hidden），只有中段
- * （卡片列表 / 编辑字段）滚动。同时保证中段滚动条贴到弹窗边缘、
- * 内容左右对齐不变（负外边距抵消 `.modal { padding: 6px }`）。
- * 固定区与滚动区之间加一条细分隔线，滚动时看着不“突几”。 */
-.modal.template-picker,
-.modal.template-modal {
-	overflow: hidden;
-	gap: 8px;
-}
-
-.template-picker-top,
-.template-picker-foot,
-.template-modal-head,
-.template-modal-actions {
-	flex-shrink: 0;
-}
-
-.template-picker-top,
-.template-modal-head {
-	padding-bottom: 8px;
-	border-bottom: 1px solid var(--border);
-}
-
-.template-picker-top {
-	display: flex;
-	flex-direction: column;
-	gap: 6px;
-}
-
-/* 只有中段滚动 */
-.template-picker-scroll,
-.template-modal-body {
-	flex: 1 1 auto;
-	min-height: 0;
-	overflow-y: auto;
-	margin: 0 -6px;
-	padding: 8px 6px;
-}
-
-/* 编辑弹窗字段区：内部沿用弹窗的纵向间距 */
-.template-modal-body {
-	display: flex;
-	flex-direction: column;
-	gap: 14px;
-}
-
-.template-picker-head {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-}
-
-.template-picker-title {
-	flex: 1;
-	font-size: 15px;
-	font-weight: 650;
-	color: var(--text);
-}
-
-.template-picker-hint {
-	font-size: 11.5px;
-	color: var(--text-faint);
-}
-
-.template-picker-grid {
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-	gap: 10px;
-}
-
-.template-picker-foot {
-	display: flex;
-	justify-content: center;
-	padding-top: 8px;
-	border-top: 1px solid var(--border);
-}
-
-.template-modal-head {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-}
-
-.template-modal-icon {
-	font-size: 20px;
-	flex-shrink: 0;
-}
-
-.template-modal-badge {
-	flex-shrink: 0;
-	font-size: 11px;
-	font-weight: 700;
-	color: var(--accent);
-	border: 1px solid var(--accent);
-	border-radius: 999px;
-	padding: 1px 8px;
-	white-space: nowrap;
-}
-
-.template-modal-title {
-	flex: 1;
-	font-size: 15px;
-	font-weight: 650;
-	color: var(--text);
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.template-modal-close {
-	width: 30px;
-	height: 30px;
-	padding: 0;
-	border-radius: 50%;
-	flex-shrink: 0;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	color: var(--text-dim);
-	background: transparent;
-}
-
-.template-field {
-	display: flex;
-	flex-direction: column;
-	gap: 5px;
-}
-
-.template-field-label {
-	font-size: 11.5px;
-	font-weight: 600;
-	color: var(--text-dim);
-}
-
-.template-field-input {
-	border: 1px solid var(--border);
-	border-radius: 8px;
-	background: var(--bg-elev);
-	color: var(--text);
-	font-size: 13px;
-	padding: 7px 10px;
-	outline: none;
-	transition: border-color 0.15s;
-}
-.template-field-input:focus {
-	border-color: var(--accent);
-}
-.template-field-input.icon {
-	width: 72px;
-	text-align: center;
-	font-size: 16px;
-}
-
-.template-field-prompt {
-	border: 1px solid var(--border);
-	border-radius: 8px;
-	background: var(--bg-elev);
-	color: var(--text);
-	font-size: 13px;
-	line-height: 1.6;
-	padding: 9px 10px;
-	resize: none;
-	overflow: hidden;
-	outline: none;
-	min-height: 96px;
-	transition: border-color 0.15s;
-}
-.template-field-prompt:focus {
-	border-color: var(--accent);
-}
-
-.template-error {
-	font-size: 12px;
-	color: var(--red);
-	flex-shrink: 0;
-}
-
-.template-modal-actions {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 8px;
-	flex-wrap: wrap;
-	padding-top: 8px;
-	border-top: 1px solid var(--border);
-}
-
-.template-modal-actions-left,
-.template-modal-actions-right {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	flex-wrap: wrap;
-}
-
-.template-btn {
-	font-size: 12.5px;
-	padding: 6px 12px;
-	border-radius: 8px;
-	/* 显式主题背景，避免浏览器默认按钮灰（紫晕等主题下与文字对比度差） */
-	background: var(--bg-elev);
-	border-color: var(--border);
-	color: var(--text-dim);
-}
-.template-btn:hover {
-	border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-	color: var(--text);
-}
-.template-btn.ghost {
-	background: transparent;
-}
-.template-btn.ghost.danger {
-	color: var(--red);
-	border-color: color-mix(in srgb, var(--red) 45%, var(--border));
-}
-.template-btn.fill,
-.template-btn.send {
-	font-weight: 600;
-}
-.template-btn.fill {
-	background: var(--accent-soft);
-	border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
-	color: var(--accent);
-}
-.template-btn.fill:hover {
-	background: var(--accent-soft);
-	color: var(--accent);
-	filter: brightness(1.12);
-}
-.template-btn.send {
-	background: var(--accent);
-	border-color: var(--accent);
-	color: #fff;
-}
-.template-btn.send:hover {
-	filter: brightness(1.08);
-}
-
-/* 模板弹窗右上角关闭钮：同样显式主题背景 */
-.template-modal-close {
-	background: var(--bg-elev);
-	border-color: var(--border);
-	color: var(--text-dim);
-}
-.template-modal-close:hover {
-	background: var(--accent-soft);
-	color: var(--accent);
-}
-
 .streaming-wait,
 .boot-wait {
 	text-align: center;
@@ -10479,7 +9918,7 @@ div.chead[role="button"]:focus-visible,
 	cursor: default;
 }
 
-/* 输入框内图标按钮（上传/模板/插件/发送/停止）：30px 紧凑圆形，图标 15px。
+/* 输入框内图标按钮（上传/插件/发送/停止）：30px 紧凑圆形，图标 15px。
    移动端触摸目标另见 max-width:768px 里的 40px 覆盖。 */
 .inputbox .btn {
 	display: inline-flex;
@@ -10512,13 +9951,11 @@ div.chead[role="button"]:focus-visible,
 }
 
 /* Paperclip: quiet until hovered. */
-.inputbox .btn.attach-img,
-.inputbox .btn.tpl-open {
+.inputbox .btn.attach-img {
 	border: none;
 	color: var(--text-faint);
 }
-.inputbox .btn.attach-img:hover:not(:disabled),
-.inputbox .btn.tpl-open:hover {
+.inputbox .btn.attach-img:hover:not(:disabled) {
 	background: var(--accent-soft);
 	color: var(--accent);
 }
@@ -15265,14 +14702,6 @@ button.source-default-toggle {
 		max-height: 50vh;
 	}
 
-	.project-picker {
-		left: 8px;
-		right: 8px;
-		top: 44px;
-		width: auto;
-		height: min(420px, calc(100vh - 80px));
-	}
-
 	/* 移动端弹窗通用关闭按钮强化：小屏幕下扩大触控面积，显式背景，防误触，防止被背景覆盖 */
 	.modal-close {
 		width: 36px;
@@ -15298,11 +14727,6 @@ button.source-default-toggle {
 		font-size: 15px;
 	}
 	.file-transfer-close {
-		width: 36px;
-		height: 36px;
-		font-size: 16px;
-	}
-	.template-modal-close {
 		width: 36px;
 		height: 36px;
 		font-size: 16px;

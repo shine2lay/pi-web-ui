@@ -252,7 +252,7 @@ web/src/
 | `PresentedFiles.tsx` | `present_files` 工具卡片正文：图片/视频/音频内联显示/播放，文本开头摘录 + 「预览」按钮；每行「预览/本地打开/在文件夹中显示/下载/复制路径」；`focus` 条目按偏好自动弹预览窗（三道闸） |
 | `ToolInfoDialog.tsx` | 「工具详细信息」弹窗（工具卡右键）：展示工具**定义**（说明/参数 schema 表格+原始 JSON），点开现取不进快照；portal 到 body（消息流祖先有 overflow/transform） |
 | `ToolApprovalDialog.tsx` | 审批弹窗（ask 规则命中时的人机协同拦截 + 改写执行） |
-| `LeftPanel.tsx` | 左栏：最近项目、运行的对话、历史对话（含删除） |
+| `LeftPanel.tsx` | 左栏：运行的对话、历史对话（含删除） |
 | `RightPanel.tsx` | 文件树浏览（list_files），文件名点击→预览，🔗 引用路径（仅路径，无内容注入）/👁 预览/⬇ 下载等按钮；服务端原生递归 watcher |
 | `ChatInput.tsx` | 输入框 + 附件 chips（引用/行范围/图片/上传/网页/对话多彩）；全窗口拖放目标；followUp 排队/steer 插队；斜杠命令选择器 |
 | `Message.tsx` / `MessageList.tsx` | 消息渲染（附件卡片、流式光标、tool 结果关联）；编辑重问保留原附件；技能卡片折叠；惰性窗口化；问题导航双通道；流式 StreamMarkdown |
@@ -271,14 +271,12 @@ web/src/
 | `ProviderOAuthControls.tsx` | 服务商 OAuth 授权控件 |
 | `SettingsModal.tsx` | 设置面板（侧边栏分页：提示词/工具/消息显示/技能/插件/界面插件/目标审查/视觉桥/预设/子代理模板；DSH 另有问卷页、无工具页） |
 | `PluginSettingsForm.tsx` | 插件声明式设置表单（schema 驱动） |
-| `PromptTemplates.tsx` | 提示词模板管理 |
 | `GoalBar.tsx` | 输入框上方目标条：设目标/清除/AI 提炼/轮数下拉 |
 | `PlanBoard.tsx` | 结构化任务计划看板（配 plan-manager.ts） |
 | `BgTasksModal.tsx` | 后台任务弹窗：AI 启动的监听端口进程列表 |
 | `SchedulerPanel.tsx` | 定时任务面板（配 scheduler-tasks.ts） |
 | `ModelThinking.tsx` | 模型 + 思考强度下拉（按服务商筛选 + 顶部搜索） |
 | `GlobalSearchModal.tsx` | 全局搜索弹窗（Ctrl+K）：搜历史对话/最近项目/工作区文件名 |
-| `ProjectPicker.tsx` | 项目选择器 |
 | `LocaleModal.tsx` | 语言切换弹窗 |
 | `PluginView.tsx` | 插件视图宿主：薄 React 壳 + 动态 import client bundle |
 | `PluginViewFallback.tsx` | 插件视图加载失败兜底 |

@@ -5,21 +5,18 @@ import {
 	FiChevronUp,
 	FiChevronsLeft,
 	FiEdit2,
-	FiFolder,
-	FiFolderPlus,
 	FiMessageSquare,
 	FiMoreVertical,
 	FiPlus,
 	FiTrash2,
 	FiX,
 } from "react-icons/fi";
-import type { ConversationSummary, ElsewhereRunning, ProjectSummary, SessionSummary, SwitchTarget } from "../types";
+import type { ConversationSummary, ElsewhereRunning, SessionSummary, SwitchTarget } from "../types";
 import { isSwitchTargetRow } from "../switch-pending";
 import { useT } from "../i18n";
 import { useAppField } from "../app-globals";
 import { applySashDrag, parseWeights } from "../panel-sash";
 import { orderConversations } from "../conv-groups";
-import { ProjectPicker } from "./ProjectPicker.js";
 // 宿主 UI 扩展点（issue #146）：会话行的右键菜单走「slot 条目」这一条通道。
 import { LP_SECTION_ENTRY_IDS, type UiSlotEntry } from "../ui-slots";
 import { contextMenuItems, openContextMenu, type ContextMenuRequest } from "../context-menu-state";
@@ -36,7 +33,6 @@ interface LeftPanelProps {
 	/** issue #145：其他客户端正在跑的对话（只读，不可点）。 */
 	elsewhere: ElsewhereRunning[];
 	sessions: SessionSummary[];
-	projects: ProjectSummary[];
 	activeConversationId: string;
 	/** switch-loading：正在打开的目标。非空时高亮立刻落到目标行（而不是等快照到了才动），
 	 *  行上的图标换成转圈。缺省 null = 没有进行中的切换。 */
@@ -48,8 +44,6 @@ interface LeftPanelProps {
 			| { type: "list_projects" }
 			| { type: "switch_session"; path: string }
 			| { type: "switch_conversation"; id: string }
-			| { type: "set_cwd"; path: string }
-			| { type: "remove_project"; path: string }
 			| { type: "delete_session"; path: string }
 			| { type: "rename_session"; path: string; name: string }
 			| { type: "rename_conversation"; id: string; name: string }
@@ -58,7 +52,6 @@ interface LeftPanelProps {
 			| { type: "persist_conversation"; id: string }
 			| { type: "take_over_conversation"; owner: string; id: string }
 			| { type: "peek_elsewhere_question"; owner: string; id: string }
-			| { type: "make_dir"; path: string; setAsCwd?: boolean }
 			| { type: "remove_recent_chat"; path: string },
 	) => boolean;
 	/** True while the panel is actually on screen (desktop: always; mobile:
@@ -82,8 +75,6 @@ interface LeftPanelProps {
 	onUiAction?: (item: UiSlotEntry, value?: string) => void;
 	/** DSH Agent 预设名录（id → 显示名；左栏会话徽标用，缺省显示 id）。 */
 	presetNames?: Record<string, string>;
-	/** 路径补全（用于项目管理面板的目录浏览与补全）。 */
-	pathCompletions?: { name: string; path: string; type: "dir" | "file" }[];
 }
 
 function formatModified(ts: number): string {
@@ -115,7 +106,6 @@ function isEditableTarget(el: EventTarget | null): boolean {
 	return node.isContentEditable;
 }
 
-const LS_COLLAPSE_PROJECTS = "pi-web-ui:lp-collapse-projects";
 const LS_COLLAPSE_CONVS = "pi-web-ui:lp-collapse-convs";
 const LS_COLLAPSE_SESSIONS = "pi-web-ui:lp-collapse-sessions";
 
@@ -142,8 +132,8 @@ function useCollapsed(key: string, defaultCollapsed = false): [boolean, () => vo
 
 /* VSCode 风格可拖拽分割：展开区的 flex-grow 权重持久化，折叠区不占空间 */
 const LS_LP_SIZES = "pi-web-ui:lp-sizes";
-type LpWeights = { projects: number; convs: number; sessions: number };
-const DEFAULT_LP_WEIGHTS: LpWeights = { projects: 1, convs: 1, sessions: 1 };
+type LpWeights = { convs: number; sessions: number };
+const DEFAULT_LP_WEIGHTS: LpWeights = { convs: 1, sessions: 1 };
 /** 折叠区仅留标题高度（与 styles.css 的 .lp-section.collapsed 对齐）。 */
 const LP_COLLAPSED_HEADER_PX = 32;
 /** 展开区最小高度（≈3 行，与 styles.css 的 .lp-section min-height 对齐）。 */
@@ -163,14 +153,12 @@ export const LeftPanel = memo(function LeftPanel({
 	conversations,
 	elsewhere,
 	sessions,
-	projects,
 	activeConversationId,
 	pendingSwitch = null,
 	panelSend,
 	active,
 	collapsible,
 	onToggleCollapse,
-	pathCompletions,
 	uiContextSession,
 	uiLeftSessions,
 	onUiAction,
@@ -183,14 +171,11 @@ export const LeftPanel = memo(function LeftPanel({
 	const ready = useAppField("ready");
 	const status = useAppField("status");
 	const cwd = useAppField("cwd");
-	const workspaceRoots = useAppField("workspaceRoots");
 	const currentCwd = cwd;
-	const [projectPickerOpen, setProjectPickerOpen] = useState(false);
 	const [confirmDel, setConfirmDel] = useState<string | null>(null);
 	const [confirmTakeover, setConfirmTakeover] = useState<string | null>(null);
 	const [renaming, setRenaming] = useState<string | null>(null);
 	const [renameDraft, setRenameDraft] = useState("");
-	const [collapseProjects, toggleProjects] = useCollapsed(LS_COLLAPSE_PROJECTS, false);
 	const [collapseConvs, toggleConvs] = useCollapsed(LS_COLLAPSE_CONVS, false);
 	const [collapseSessions, toggleSessions] = useCollapsed(LS_COLLAPSE_SESSIONS, false);
 	/** 会话右键菜单（`contextmenu.session` 槽位）：见下面的 showSessionMenu / openSessionMenu /
@@ -579,7 +564,6 @@ export const LeftPanel = memo(function LeftPanel({
 			const panel = panelRef.current;
 			if (!panel) return;
 			const visibleMeta = [
-				{ key: "projects" as const, visible: projects.length > 0, collapsed: collapseProjects },
 				{ key: "convs" as const, visible: runningAll.length > 0, collapsed: collapseConvs },
 				{ key: "sessions" as const, visible: true, collapsed: collapseSessions },
 			].filter((s) => s.visible);
@@ -609,13 +593,15 @@ export const LeftPanel = memo(function LeftPanel({
 			window.addEventListener("pointermove", onMove);
 			window.addEventListener("pointerup", onUp);
 		},
-		[weights, projects.length, runningAll.length, collapseProjects, collapseConvs, collapseSessions],
+		[weights, runningAll.length, collapseConvs, collapseSessions],
 	);
 
 	useEffect(() => {
 		if (!active || !ready || status !== "open") return;
 		if (!cwd) return;
 		panelSend({ type: "list_sessions" });
+		// no-project-controls: the panel no longer shows recent projects, but it still asks for them so
+		// the list stays fresh for the rest of the page (global search, add-ons' known folders).
 		panelSend({ type: "list_projects" });
 	}, [active, ready, status, cwd, panelSend]);
 
@@ -674,7 +660,6 @@ export const LeftPanel = memo(function LeftPanel({
 
 	// 归一化权重：单展开时强制 flex=1 填满；多展开时按权重比例均值归一，避免 0.539 这类小数导致容器留空
 	const visibleMetaForFlex = [
-		{ key: "projects" as const, visible: projects.length > 0, collapsed: collapseProjects },
 		{ key: "convs" as const, visible: runningAll.length > 0, collapsed: collapseConvs },
 		{ key: "sessions" as const, visible: true, collapsed: collapseSessions },
 	].filter((s) => s.visible);
@@ -693,70 +678,6 @@ export const LeftPanel = memo(function LeftPanel({
 					<FiChevronsLeft />
 				</button>
 			)}
-			{/* Recent projects — collapsible, flex share */}
-			<div
-				className={`lp-section panel-projects ${collapseProjects || projects.length === 0 ? "collapsed" : ""}`}
-				style={projects.length > 0 && !collapseProjects ? { flex: `${effFlex("projects")} 1 0px` } : undefined}
-			>
-				{sectionHeader(
-					t("recentProjects"),
-					collapseProjects,
-					toggleProjects,
-					projects.length,
-					<button
-						type="button"
-						className="lp-section-action lp-project-action"
-						title={t("manageProjects")}
-						aria-label={t("manageProjects")}
-						onClick={() => setProjectPickerOpen(true)}
-					>
-						<FiFolderPlus />
-					</button>,
-				)}
-				{projects.length > 0 && !collapseProjects && (
-					<div className="lp-section-body projects-scroll">
-						{projects.map((p) => {
-							const active = currentCwd === p.path;
-							return (
-								<div
-									className="lp-row"
-									key={p.path}
-									onMouseLeave={() => setConfirmDel((k) => (k === `proj:${p.path}` ? null : k))}
-								>
-									<button
-										type="button"
-										className={`project-item ${active ? "active" : ""}`}
-										title={p.path}
-										onClick={() => {
-											if (!active) panelSend({ type: "set_cwd", path: p.path });
-										}}
-									>
-										<FiFolder className="project-icon" />
-										<span className="project-info">
-											<span className="project-name">{projectName(p.path)}</span>
-											<span className="project-path">{p.path}</span>
-										</span>
-										<span className="project-time">{formatModified(p.lastUsed)}</span>
-									</button>
-									{delButton(`proj:${p.path}`, t("deleteProject"), t("deleteProjectConfirm"), () => {
-										panelSend({ type: "remove_project", path: p.path });
-									})}
-								</div>
-							);
-						})}
-					</div>
-				)}
-			</div>
-			{/* sash: projects ↔ next */}
-			{projects.length > 0 && !collapseProjects && (runningAll.length > 0 ? !collapseConvs : !collapseSessions) && (
-				<div
-					className="lp-sash"
-					onPointerDown={createSashHandler("projects", runningAll.length > 0 ? "convs" : "sessions")}
-					onDoubleClick={() => setWeights({ ...DEFAULT_LP_WEIGHTS })}
-					title={t("dragToResize")}
-				/>
-			)}
-
 			{/* Running conversations — collapsible, flex share. Hidden when empty to keep old layout expectations. */}
 			{runningAll.length > 0 && (
 				<div
@@ -1230,15 +1151,6 @@ export const LeftPanel = memo(function LeftPanel({
 					</div>
 				)}
 			</div>
-			<ProjectPicker
-				open={projectPickerOpen}
-				currentCwd={currentCwd}
-				pathCompletions={pathCompletions ?? []}
-				workspaceRoots={workspaceRoots}
-				onClose={() => setProjectPickerOpen(false)}
-				onSelectDirectory={(path) => panelSend({ type: "set_cwd", path })}
-				onCreateProject={(path) => panelSend({ type: "make_dir", path, setAsCwd: true })}
-			/>
 		</aside>
 	);
 });

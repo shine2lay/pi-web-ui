@@ -152,7 +152,6 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 		expect(ids(slots["topbar.primary"])).toEqual([
 			"host:history",
 			"host:brand",
-			"host:open-project",
 			"host:chat",
 			"host:terminal",
 			"host:git",
@@ -192,10 +191,9 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 		// 没用到的槽位是空数组（渲染层不必判空），且全部槽位都在（21 个 + modal.dialog）
 		expect(Object.keys(slots)).toHaveLength(22);
 		expect(slots["composer.leading"]).toEqual([]);
-		// 输入框动作区有 7 个宿主内置（上传/模板/模型/思考/DSH×2/发送），发送簇 align=end
+		// 输入框动作区有 6 个宿主内置（上传/模型/思考/DSH×2/发送），发送簇 align=end
 		expect(ids(slots["composer.actions"])).toEqual([
 			"host:composer-upload",
-			"host:composer-templates",
 			"host:composer-model",
 			"host:composer-thinking",
 			"host:composer-dsh-perm",
@@ -206,11 +204,20 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 		expect(slots["modal.dialog"]).toEqual([]);
 	});
 
+	it("no-prompt-templates / no-project-controls: the removed items are gone, and a saved layout naming them is skipped", () => {
+		const removed = ["host:open-project", "host:composer-templates", "host:lp-projects"];
+		const slots = build([], { layout: { order: removed, shown: removed } });
+		const all = Object.values(slots)
+			.flat()
+			.map((e) => e.id);
+		for (const id of removed) expect(all).not.toContain(id);
+	});
+
 	/** 缺省收起 = 低频 / 有替代入口的条目落进顶栏「⋯」（App.tsx 把 hidden 的 primary 条目
 	 *  塞进 uiOverflow → 菜单里能点；topbar-crowding：声音/语言/主题/版本在菜单里是一行入口，
 	 *  点开右侧抽屉，功能不少）。
 	 *  这条断言是「顶栏默认长什么样」的唯一入口 —— 想改默认口径就改这里与 BUILTIN_UI_ITEMS。 */
-	it("缺省收进「⋯」的 7 条 + 常驻的 11 条", () => {
+	it("缺省收进「⋯」的 6 条 + 常驻的 10 条", () => {
 		const slots = build([]);
 		const top = slots["topbar.primary"];
 		// topbar-crowding：后台任务与设置也缺省收进「⋯」
@@ -223,11 +230,10 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:update",
 		]);
 		// 常驻 = 「切视图（chat/terminal/git + 🧩） / 起新活（new-chat/new-ephemeral-chat）」，
-		// 加品牌、项目、搜索、面板开关
+		// 加品牌、搜索、面板开关
 		expect(top.filter((e) => !e.hidden).map((e) => e.id)).toEqual([
 			"host:history",
 			"host:brand",
-			"host:open-project",
 			"host:chat",
 			"host:terminal",
 			"host:git",
@@ -319,10 +325,9 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			}),
 		]);
 		expect(ids(slots["composer.leading"])).toEqual(["third:a", "third:b"]);
-		// leading 的贡献不串进 actions（actions 只有 7 个宿主内置）
+		// leading 的贡献不串进 actions（actions 只有 6 个宿主内置）
 		expect(ids(slots["composer.actions"])).toEqual([
 			"host:composer-upload",
-			"host:composer-templates",
 			"host:composer-model",
 			"host:composer-thinking",
 			"host:composer-dsh-perm",
@@ -331,7 +336,7 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 		]);
 	});
 
-	it("composer.actions：插件默认位（100）落在上传之后、模板之前，老按钮位置不动", () => {
+	it("composer.actions：插件默认位（100）落在上传之后、模型之前，老按钮位置不动", () => {
 		const slots = build([
 			plugin("p", {
 				items: [{ id: "x", slot: "composer.actions", label: "X" }],
@@ -341,7 +346,6 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 		expect(ids(slots["composer.actions"])).toEqual([
 			"host:composer-upload",
 			"p:x",
-			"host:composer-templates",
 			"host:composer-model",
 			"host:composer-thinking",
 			"host:composer-dsh-perm",
@@ -601,8 +605,8 @@ describe("buildUiSlots / 第 4 层：用户偏好（最高）", () => {
 	it("order 列表：列出的按列表顺序排在最前，未列出的保持原顺序", () => {
 		const slots = build([], { layout: { order: ["host:update", "host:chat"] } });
 		expect(ids(slots["topbar.primary"]).slice(0, 2)).toEqual(["host:update", "host:chat"]);
-		// 其余仍按权重排：update/chat 置顶之后是 history(0) → brand(1) → open-project(3) …
-		expect(ids(slots["topbar.primary"]).slice(2, 5)).toEqual(["host:history", "host:brand", "host:open-project"]);
+		// 其余仍按权重排：update/chat 置顶之后是 history(0) → brand(1) → terminal(21) …
+		expect(ids(slots["topbar.primary"]).slice(2, 5)).toEqual(["host:history", "host:brand", "host:terminal"]);
 		expect(slots["topbar.primary"].find((e) => e.id === "host:chat")?.userOverrides).toEqual(["order"]);
 	});
 
@@ -937,7 +941,7 @@ describe("面板 chrome 宿主条目（file.preview / goalbar / scm / terminal /
 			"host:scm-term",
 		]);
 		expect(ids(slots["terminal.toolbar"])).toEqual(["host:term-cmd-refresh", "host:term-cmd-new", "host:term-tab-new"]);
-		expect(ids(slots["leftpanel.sessions"])).toEqual(["host:lp-projects", "host:lp-running", "host:lp-history"]);
+		expect(ids(slots["leftpanel.sessions"])).toEqual(["host:lp-running", "host:lp-history"]);
 	});
 
 	it("隐藏与调序走同一套偏好（与顶栏同口径）", () => {

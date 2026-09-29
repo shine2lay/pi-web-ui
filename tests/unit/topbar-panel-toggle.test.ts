@@ -9,7 +9,7 @@ import { act } from "react-dom/test-utils";
 import { TopBar } from "../../web/src/components/TopBar.js";
 import { LanguageProvider } from "../../web/src/i18n.js";
 import type { ChatState } from "../../web/src/use-chat.js";
-import { setAppSend, setAppGlobals, resetAppGlobals } from "../../web/src/app-globals.js";
+import { setAppSend } from "../../web/src/app-globals.js";
 
 /**
  * 顶栏结构锁（方案 A：**单一扁直流**）。这套断言是「所有按钮处于一个层级、
@@ -356,74 +356,14 @@ describe("TopBar 面板抽屉按钮的视图门禁", () => {
 	});
 });
 
-describe("TopBar「打开项目」入口（host:open-project）", () => {
-	/** 受控 input 赋值（React 需要原生 setter + input 事件才会收到变更）。 */
-	const setInput = (el: HTMLInputElement, value: string) => {
-		Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, value);
-		el.dispatchEvent(new Event("input", { bubbles: true }));
-	};
-
-	/** 带一条 host:open-project 的顶栏 + 收集 appSend 出去的协议消息。 */
-	const mountWithPicker = () => {
-		setAppGlobals({ cwd: "/test", ready: true, status: "open", workspaceRoots: [] });
-		const sent: { type: string; [k: string]: unknown }[] = [];
-		setAppSend((msg) => {
-			sent.push(msg as { type: string });
-			return true;
-		});
-		const { container } = mount("chat", [hostEntry("host:open-project"), hostEntry("host:chat")]);
-		return { container, sent };
-	};
-
-	afterEach(() => resetAppGlobals());
-
-	it("主栏点它打开项目选择器（与左栏 📁+ 同一个对话框），点遮罩关掉", () => {
-		const { container } = mountWithPicker();
-		const btn = container.querySelector<HTMLButtonElement>("button.open-project");
-		expect(btn).toBeTruthy();
-		expect(document.querySelector(".project-picker")).toBeNull();
-		act(() => btn!.click());
-		// 对话框 fixed 定位、与左栏那份是同一个组件：挂在顶栏里也不会被裁剪
-		expect(document.querySelector(".project-picker")).toBeTruthy();
-		expect(document.querySelector(".project-picker-backdrop")).toBeTruthy();
-		act(() => document.querySelector<HTMLElement>(".project-picker-backdrop")!.click());
-		expect(document.querySelector(".project-picker")).toBeNull();
-	});
-
-	it("选当前目录发 set_cwd，＋新建项目发 make_dir(setAsCwd)", () => {
-		const { sent } = mountWithPicker();
-		const btn = document.querySelector<HTMLButtonElement>("button.open-project")!;
-		act(() => btn.click());
-		act(() => document.querySelector<HTMLButtonElement>(".cwd-choose-btn.primary")!.click());
-		expect(sent.filter((m) => m.type === "set_cwd")).toEqual([{ type: "set_cwd", path: "/test" }]);
-
-		// 再打开一次，走「＋ 新建项目」：合法名称 → make_dir + setAsCwd
-		act(() => btn.click());
-		act(() => document.querySelector<HTMLButtonElement>(".cwd-newbtn")!.click());
-		const nameInput = document.querySelector<HTMLInputElement>(".cwd-newrow input")!;
-		act(() => setInput(nameInput, "my-project"));
-		act(() => document.querySelector<HTMLButtonElement>(".cwd-newrow button.primary")!.click());
-		expect(sent.find((m) => m.type === "make_dir")).toEqual({
-			type: "make_dir",
-			path: "/test/my-project",
-			setAsCwd: true,
-		});
-		expect(document.querySelector(".project-picker")).toBeNull();
-	});
-
-	it("被布局页隐藏后仍能从「⋯」溢出菜单打开（隐藏 ≠ 失去入口）", () => {
-		setAppGlobals({ cwd: "/test", ready: true, status: "open", workspaceRoots: [] });
-		setAppSend(() => true);
-		const { container } = mount("chat", [hostEntry("host:chat")], [hostEntry("host:open-project", true)]);
+// no-project-controls: the "Open project" button and the project picker it opened are gone.
+describe("TopBar: no Open project button (no-project-controls)", () => {
+	it("the unwired fallback bar has no Open project button and no project picker", () => {
+		const { container } = mount("chat");
+		expect(flowItems(container).length).toBeGreaterThan(0);
 		expect(container.querySelector("button.open-project")).toBeNull();
-		act(() => container.querySelector<HTMLButtonElement>(".plugin-topbar-more > button")!.click());
-		// 折叠后仍是原来的 chip（不是扁平菜单行），点它照样打开选择器。
-		const item = document.querySelector<HTMLButtonElement>(
-			".plugin-topbar-menu .plugin-topbar-menu-keep > button.open-project",
-		);
-		expect(item).toBeTruthy();
-		act(() => item!.click());
-		expect(document.querySelector(".project-picker")).toBeTruthy();
+		expect(container.textContent).not.toContain("Open project");
+		expect(document.querySelector(".project-picker")).toBeNull();
 	});
 });
 
@@ -609,7 +549,7 @@ describe("TopBar 实测宽度溢出（放不下的自动进「⋯」）", () => 
 		stubLayout(60, 200); // 每条 60、容器 200 → 只放得下 3 条
 		const rows = [
 			hostEntry("host:brand"),
-			hostEntry("host:open-project"),
+			hostEntry("host:search"),
 			hostEntry("host:chat"),
 			hostEntry("host:terminal"),
 			hostEntry("host:git"),
