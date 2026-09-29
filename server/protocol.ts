@@ -627,7 +627,7 @@ export type ClientMessage =
 			 * be written while a chat is still opening (the preview shows its end); the window
 			 * holds it until the chat is ready and sends it with the chat it was meant for. The
 			 * server refuses it (ack ok:false) if the active chat is a different session by
-			 * then \u2014 e.g. the user opened yet another chat in between. Absent = no check.
+			 * then; e.g. the user opened yet another chat in between. Absent = no check.
 			 */
 			forSession?: string;
 	  }

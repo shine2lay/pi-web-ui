@@ -103,6 +103,7 @@ function seedBigChat(sessionId, pairs, padBytes = 1200) {
 }
 
 const BIG = "01a0c000-0000-7000-8000-0000000000b1";
+const BIG4 = "01a0c000-0000-7000-8000-0000000000b7";
 const BIG2 = "01a0c000-0000-7000-8000-0000000000b2";
 const BIG3 = "01a0c000-0000-7000-8000-0000000000b6";
 const BRANCHED = "01a0c000-0000-7000-8000-0000000000b3";
@@ -114,6 +115,10 @@ const bigFile = seedBigChat(BIG, 900);
 // as a recent chat, not as a history row.
 const big2File = seedBigChat(BIG2, 900);
 const big3File = seedBigChat(BIG3, 900);
+// Big enough (~65 MB) that loading it blocks the server for most of a second after the preview has
+// been built: that is what the "the preview does not wait for the load" check below needs. Without
+// the wait for the frame to really leave, the preview lands together with the snapshot.
+const big4File = seedBigChat(BIG4, 20000, 3000);
 
 // A chat that was branched (two answers to the same question) and then rewound: the last line's
 // own chain is the only one that counts.
@@ -216,6 +221,25 @@ try {
 		`preview ${previewMs} ms, snapshot ${snapMs} ms`,
 	);
 	check("the preview arrives before switch_done", preview.__i < done.__i);
+
+	// A big chat: the preview must LEAVE the server while the file is still being read. Frames over
+	// 16 KB are squeezed before they go out, and squeezing needs the same thread as the reading, so
+	// without waiting for the frame to be gone, the preview lands together with the snapshot and the
+	// whole point is lost. The gap is what proves it left early.
+	const t4 = Date.now();
+	c.send({ type: "switch_session", path: big4File });
+	const pv4 = await c.waitFor("switch_preview", (m) => m.state?.sessionFile === big4File, 60000);
+	const snap4 = await c.waitFor(
+		"snapshot",
+		(m) => m.state?.sessionFile === big4File && m.state?.messages?.length,
+		120000,
+	);
+	check(
+		"a big chat's preview goes out while the file is still being read",
+		// Without the wait the two land ~20 ms apart; with it the gap is the whole read (~350 ms+).
+		snap4.__at - pv4.__at >= 250,
+		`preview ${pv4.__at - t4} ms, snapshot ${snap4.__at - t4} ms`,
+	);
 	check(
 		"the preview shows the newest messages",
 		(preview.state.messages ?? []).length === (snap.state.messages ?? []).length,
@@ -411,7 +435,6 @@ try {
 		}, file);
 	};
 
-	// ---- 6. the preview shows, a message written then waits, nothing is rebuilt ----
 	// Start from an empty chat, so the messages that appear can only be the one being opened.
 	const emptyChat = async () => {
 		await page.locator(".lp-new-chat-action").click();
@@ -419,6 +442,8 @@ try {
 			timeout: 30000,
 		});
 	};
+
+	// ---- 6. the preview shows, a message written then waits, nothing is rebuilt ----
 	await emptyChat();
 	await page.evaluate(() => {
 		window.__holding = true;

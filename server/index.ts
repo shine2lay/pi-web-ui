@@ -2120,8 +2120,13 @@ wss.on("connection", (ws) => {
 		}
 	});
 
-	const send = (msg: ServerMessage): void => {
-		if (closed || ws.readyState !== WebSocket.OPEN) return;
+	// chat-open-speed: onSent (when given) fires once the frame has really left; the sender may be
+	// waiting for it before it starts a long piece of blocking work. Every path must call it.
+	const send = (msg: ServerMessage, onSent?: () => void): void => {
+		if (closed || ws.readyState !== WebSocket.OPEN) {
+			onSent?.();
+			return;
+		}
 		// 发送背压（issue #11）：socket 消费不过来时（前端慢/网络差），堆里会堆积
 		// 每份可达 ~10MB 的全量 snapshot 字符串，低内存主机直接 OOM。snapshot 是全量
 		// 幂等的且稍后必有更新的一份，可以安全丢弃——在序列化之前丢，连
@@ -2152,6 +2157,7 @@ wss.on("connection", (ws) => {
 					service.get(clientId ?? "")?.flushSnapshot();
 				}, SNAPSHOT_RETRY_MS);
 			}
+			onSent?.();
 			return;
 		}
 		const wire = serializeShared(msg);
@@ -2159,7 +2165,8 @@ wss.on("connection", (ws) => {
 			lastSnapshotBytes = wire.length * 2;
 			lastSnapshotConvId = msg.state.conversationId;
 		}
-		ws.send(wire);
+		if (onSent) ws.send(wire, () => onSent());
+		else ws.send(wire);
 	};
 
 	// Plugins broadcast to every open socket; unregister on close below.

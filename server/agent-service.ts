@@ -3747,7 +3747,8 @@ export class ClientSession {
 	private stallTimer: ReturnType<typeof setInterval> | null = null;
 
 	/** Connected sockets for this client (multiple tabs share the session). */
-	private sinks = new Set<(msg: ServerMessage) => void>();
+	// chat-open-speed: a sink may take an onSent callback (see emitAndFlush); most ignore it.
+	private sinks = new Set<(msg: ServerMessage, onSent?: () => void) => void>();
 	private pendingNotices: ServerMessage[] = [];
 	private snapshotTimer: ReturnType<typeof setTimeout> | null = null;
 	/** Timestamp of the most recent message_delta push — while fresh, snapshots
@@ -4779,7 +4780,7 @@ export class ClientSession {
 	}
 
 	/** Add a socket to this client's broadcast set; flushes buffered startup notices. */
-	attachSink(send: (msg: ServerMessage) => void): void {
+	attachSink(send: (msg: ServerMessage, onSent?: () => void) => void): void {
 		this.sinks.add(send);
 		for (const msg of this.pendingNotices) send(msg);
 		this.pendingNotices = [];
@@ -4819,7 +4820,7 @@ export class ClientSession {
 		this.pushTerminals();
 	}
 
-	detachSink(send: (msg: ServerMessage) => void): void {
+	detachSink(send: (msg: ServerMessage, onSent?: () => void) => void): void {
 		this.sinks.delete(send);
 		// PTYs intentionally survive a socket drop: they are owned by the
 		// conversation and can be inspected after reconnecting. Only conversation
@@ -4835,6 +4836,47 @@ export class ClientSession {
 		// eslint-disable-next-line unicorn/no-useless-spread -- snapshot: handlers may unsubscribe mid-emit
 		for (const sink of [...this.sinks]) sink(msg);
 		this.fanOutToViewers(msg);
+	}
+
+	/** chat-open-speed: emit and wait until the windows really have it (at most `capMs`).
+	 *
+	 *  A frame over 16 KB is squeezed before it goes out (`perMessageDeflate`), and the squeezing
+	 *  answers on the event loop — so a big frame sent right before a second of blocking work
+	 *  (reading a 267 MB chat) sits in the queue until that work is done, which is exactly what the
+	 *  preview is there to avoid. Waiting for the socket costs a few ms. */
+	private emitAndFlush(msg: ServerMessage, capMs = 250): Promise<void> {
+		if (this.disposed) return Promise.resolve();
+		// eslint-disable-next-line unicorn/no-useless-spread -- snapshot: handlers may unsubscribe mid-emit
+		const sinks = [...this.sinks];
+		this.fanOutToViewers(msg);
+		if (sinks.length === 0) return Promise.resolve();
+		return new Promise<void>((done) => {
+			let left = sinks.length;
+			let settled = false;
+			const finish = (): void => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				done();
+			};
+			// A window that never answers (or a sink that ignores the callback) must not hold the
+			// open up: the wait is capped.
+			const timer = setTimeout(finish, capMs);
+			timer.unref?.();
+			for (const sink of sinks) {
+				let answered = false;
+				const once = (): void => {
+					if (answered) return;
+					answered = true;
+					if (--left <= 0) finish();
+				};
+				try {
+					sink(msg, once);
+				} catch {
+					once();
+				}
+			}
+		});
 	}
 
 	/** 扩展错误上报器：同一会话内「扩展 + 事件 + 错误文本」只提示一次，且全量落服务端日志。
@@ -10250,7 +10292,7 @@ export class ClientSession {
 	 * Returns the scan (its `problem` tells the caller which path to take), or null when the
 	 * fast path is off (PI_WEB_OPEN_PREVIEW=0) or the file could not be scanned at all.
 	 */
-	private scanAndPreview(target: SwitchTarget, file: string): TranscriptScan | null {
+	private async scanAndPreview(target: SwitchTarget, file: string): Promise<TranscriptScan | null> {
 		if (!OPEN_PREVIEW) return null;
 		let scan: TranscriptScan;
 		try {
@@ -10260,7 +10302,7 @@ export class ClientSession {
 			return null;
 		}
 		try {
-			if (scan.problem === null) this.emitSwitchPreview(target, scan);
+			if (scan.problem === null) await this.emitSwitchPreview(target, scan);
 		} catch {
 			// Best-effort: the real snapshot is on its way regardless.
 		} finally {
@@ -10275,11 +10317,11 @@ export class ClientSession {
 	 *  Built with the very same code as a snapshot (chatIndexOf / fullRangeOf / question index /
 	 *  exchange digests) over a stand-in conversation holding the messages the SDK will load,
 	 *  so ids, positions and picture addresses match the snapshot that replaces it. */
-	private emitSwitchPreview(target: SwitchTarget, scan: TranscriptScan): void {
+	private async emitSwitchPreview(target: SwitchTarget, scan: TranscriptScan): Promise<void> {
 		const messages = contextMessagesOf(scan) as AgentMessage[];
 		if (messages.length === 0) return;
 		// A stand-in conversation: chatIndexOf only reads the message list, the id counter and the
-		// caches. Its numbering starts at 1 in first-seen order \u2014 exactly what the real conversation
+		// caches. Its numbering starts at 1 in first-seen order — exactly what the real conversation
 		// does with the same messages a moment later, so the ids are the same ones.
 		const pconv = {
 			session: { sessionId: scan.sessionId, sessionFile: scan.file, agent: { state: { messages } } },
@@ -10319,7 +10361,10 @@ export class ClientSession {
 			dialog: null,
 			draft: null,
 		};
-		this.emit({ type: "switch_preview", target, state });
+		// Wait until it has really left: the caller blocks the event loop for a second or more right
+		// after this (reading the file with the SDK), and a big frame is squeezed on the loop before
+		// it goes out — without the wait the preview would land together with the snapshot.
+		await this.emitAndFlush({ type: "switch_preview", target, state });
 	}
 
 	/**
@@ -12050,16 +12095,14 @@ export class ClientSession {
 			// #235：先修后开——坏转录到 open 后的 getBranch 会死循环，修完再读。
 			// 单文件预扫描，健康文件只多一次小读；修过即弹提示（含压缩被打断）。
 			// chat-open-speed: one read of the file answers "is it intact?" and "what are its
-			// newest messages?". Intact \u2192 the page gets the end of the chat now (switch_preview)
+			// newest messages?". Intact → the page gets the end of the chat now (switch_preview)
 			// and the repair, heal and marker passes are skipped; otherwise the old path runs.
-			const scan = this.scanAndPreview(target, targetPath);
+			// scanAndPreview waits until the preview has really left the socket: the SDK read below
+			// blocks this thread for a second or more, and a frame still in the queue would be stuck
+			// behind it — which is exactly what the preview is there to avoid.
+			const scan = await this.scanAndPreview(target, targetPath);
 			const fastOpen = scan !== null && scan.problem === null;
 			if (!fastOpen) this.repairTranscriptFileBeforeOpen(targetPath);
-			else {
-				// Let the preview reach the socket before the SDK load blocks this thread for
-				// seconds \u2014 without this the frame would sit in the queue until the open is done.
-				await new Promise<void>((done) => setImmediate(done));
-			}
 			const sessionManager = SessionManager.open(targetPath);
 			const targetCwd = sessionManager.getCwd();
 			const conversationId = this.nextConversationId();

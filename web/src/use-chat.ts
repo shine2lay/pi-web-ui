@@ -1784,7 +1784,7 @@ export function useChat() {
 					dispatch({ type: "switch_preview", target: msg.target, state: msg.state });
 					break;
 				case "switch_done":
-					// chat-open-speed: the chat is ready \u2014 anything written while it was opening goes now.
+					// chat-open-speed: the chat is ready, so anything written while it was opening goes now.
 					flushHeldSends(msg.target);
 					dispatch({ type: "switch_done", target: msg.target });
 					break;
@@ -2412,7 +2412,7 @@ export function useChat() {
 
 	/** switch-loading：遮罩上的两个按钮（重试不在这里 —— 它就是再发一次 switch_*，走 send）。 */
 	const switchHide = useCallback(() => {
-		// chat-open-speed: back to the chat the window was on \u2014 anything written into the one that was
+		// chat-open-speed: back to the chat the window was on; anything written into the one that was
 		// opening has nowhere to go.
 		failHeldSends("The chat it was written in was left before it opened, so this wasn't sent.");
 		dispatch({ type: "switch_hide" });
