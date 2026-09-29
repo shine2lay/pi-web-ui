@@ -292,4 +292,56 @@ describe("syncPluginCatalog", () => {
 		expect(r2.installRefused).toBeUndefined();
 		expect(accepted.calls.map((c) => c.action)).toEqual(["install"]);
 	});
+
+	// English only (PATCHES.md, english-only): upstream's online list names some add-ons only in Chinese.
+	it("a synced entry named only in Chinese takes the English name our built-in list gives the same add-on", async () => {
+		const builtin = join(dir, "catalog.json");
+		writeFileSync(
+			builtin,
+			JSON.stringify([
+				{ id: "notes", name: "Notes", source: "xing-shuyin/pi-web-ui/plugins/notes" },
+				{ id: "cn-only", name: "\u53ea\u6709\u4e2d\u6587", source: "a/cn-only" },
+				{ id: "voice-input", name: "Voice input", source: "xing-shuyin/pi-web-ui/plugins/voice-input" },
+			]),
+		);
+		const src = join(dir, "remote.json");
+		writeFileSync(
+			src,
+			JSON.stringify([
+				{
+					id: "notes",
+					name: "\u7b14\u8bb0",
+					source: "xing-shuyin/pi-web-ui/plugins/notes",
+					descriptionEn: "Notes and todos",
+				},
+				{ id: "cn-only", name: "\u4e2d\u6587\u540d", source: "a/cn-only" },
+				{ id: "voice-input", name: "\u8bed\u97f3\u8f93\u5165", source: "someone-else/voice-input" },
+				ENTRY,
+				{ id: "mermaid", name: "mermaid", source: "a/mermaid" },
+			]),
+		);
+		const deps = {
+			customCatalogPath: custom,
+			pluginsDir,
+			installer: fakeInstaller().installer,
+			workspaceRoot: dir,
+			afterWrite: async () => {},
+		};
+		const names = () =>
+			(JSON.parse(readFileSync(custom, "utf8")) as { entries: { id: string; name: string }[] }).entries.map((e) => [
+				e.id,
+				e.name,
+			]);
+		expect((await syncPluginCatalog(src, {}, { ...deps, builtinCatalogPath: builtin })).ok).toBe(true);
+		expect(names()).toEqual([
+			["notes", "Notes"], // our English name
+			["cn-only", "\u4e2d\u6587\u540d"], // our list has no English name for it: kept
+			["voice-input", "\u8bed\u97f3\u8f93\u5165"], // same id, another source: not our add-on, kept
+			["third-party", ENTRY.name], // not in our list: kept
+			["mermaid", "mermaid"],
+		]);
+		// without our list the names are kept as they come
+		expect((await syncPluginCatalog(src, { replace: true }, deps)).ok).toBe(true);
+		expect(names()[0]).toEqual(["notes", "\u7b14\u8bb0"]);
+	});
 });

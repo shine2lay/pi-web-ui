@@ -3028,6 +3028,8 @@ wss.on("connection", (ws) => {
 						workspaceRoot: cs?.cwd ?? CWD,
 						// 安装确认门（P0）：拒绝/超时只写目录不安装。
 						confirmInstall: (items) => confirmPluginInstallHelper(items),
+						// English only: entries named only in Chinese take our built-in list's English name.
+						builtinCatalogPath: join(pkgRoot, "plugins", "catalog.json"),
 					},
 				).then((r) => {
 					if (r.installRefused) {
@@ -3458,6 +3460,8 @@ if (!bootCatalogDisabled) {
 			installer: pluginInstaller,
 			// 默认仅同步市场列表；重载插件会重复触发其激活广播。
 			afterWrite: () => (autoInstall ? reloadPluginsAndPush() : pluginMgr.pushCatalog()),
+			// English only: entries named only in Chinese take our built-in list's English name.
+			builtinCatalogPath: join(pkgRoot, "plugins", "catalog.json"),
 		},
 	).then((r) => {
 		if (!r.ok) {

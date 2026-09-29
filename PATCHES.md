@@ -2767,6 +2767,12 @@ scheduler add-ons. pi-web-ui is English only now: the Chinese language and the l
      quick phrases start in English.
    - Settings > UI plugins shows each add-on's English description, and the built-in list's names
      (`plugins/catalog.json`) are English.
+   - The add-on list the server fetches from upstream at start (`OFFICIAL_PLUGIN_CATALOG_URL`, saved in
+     `<dataDir>/plugin-catalog.json`) names three add-ons only in Chinese (notes, voice-input,
+     wechat-ilink). A synced entry whose name has Chinese in it takes the English name our built-in list
+     gives the same add-on, same id and same source (`withEnglishNames()` in `server/plugin-catalog.ts`,
+     used by `syncPluginCatalog()`); any other entry keeps its own name. The next start rewrites the saved
+     names.
 3. **The installed add-ons**, in their own repos (installed by copying into `~/.pi-web-ui/plugins/<id>`):
    - temper (`~/projects/pi-web-ui-temper`): notices, `/temper` replies, logs, the manifest and the panel;
      the panel's Chinese word table and its browser-language switch are gone. The installed copy's fix that
@@ -2809,7 +2815,8 @@ The add-ons' only Chinese left is in their tests' labels.
   Chinese-only local strings in `goal-service.ts` and the Chinese half of a two-language DSH prompt,
   dropped. The page commit, apart from the language menu and word list (`i18n.tsx`, `TopBar.tsx`,
   `ui-slots.ts`, `use-chat.ts`, `quick-phrases.ts`, `PluginPage.tsx`) and their tests. The catalog commit,
-  apart from `descriptionEn || description`. The add-ons: temper's panel word table, and scheduler's
+  apart from `descriptionEn || description`. The synced-names commit is a code change on purpose
+  (`withEnglishNames()`, tested in `tests/unit/plugin-catalog-sync.test.ts`). The add-ons: temper's panel word table, and scheduler's
   `cron.mjs` taking `lib/cron.mjs`'s minute padding.
 - Tests expect the English text. `tests/i18n-test.mjs` is an English-only check now: with a Chinese browser
   the page is `lang="en"`, a new chat is "New chat", there is no language entry on the bar or in the "..."
@@ -2818,6 +2825,7 @@ The add-ons' only Chinese left is in their tests' labels.
 - Screenshots of 39 screens with a Chinese browser (top bar and its menus, a chat, a notice, the slash
   menu, model setup, every settings tab, the Files, TL;DR, Schedules and Queue tabs, the temper and
   scheduler pages, the first-run setup): no Chinese besides the ＋ icon.
+- The same screenshots of the live install found the three synced add-on names above.
 - `scripts/check.sh` (types, lint, format, 3,619 unit tests, the build, the terminal tests) and the 176
   sealed browser tests pass. `tests/notes-ui-test.mjs` pins the notes add-on's own language switch to
   Chinese: the page no longer turns that add-on Chinese, and it is built in, not installed, and left alone.

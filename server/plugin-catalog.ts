@@ -133,6 +133,27 @@ export function readCatalog(builtinPath: string, customPath: string): UiPluginCa
 	return out;
 }
 
+/** A name with Chinese characters in it. */
+const HAN_RE = /[\u3400-\u9fff\uf900-\ufaff]/;
+
+/** English only (PATCHES.md, english-only): a synced catalog (upstream's online list) names some
+ *  add-ons only in Chinese. An entry whose name has Chinese in it takes the English name our built-in
+ *  list gives the same add-on (same id and source); any other entry keeps its own name. */
+export function withEnglishNames(entries: UiPluginCatalogEntry[], builtinPath: string): UiPluginCatalogEntry[] {
+	const names = new Map<string, { name: string; source: string }>();
+	const raw = existsSync(builtinPath) ? readJsonSafe<unknown>(builtinPath, []) : [];
+	if (Array.isArray(raw)) {
+		for (const it of raw) {
+			const e = it && typeof it === "object" ? toEntry(it as Record<string, unknown>, true) : null;
+			if (e && !HAN_RE.test(e.name) && !names.has(e.id)) names.set(e.id, { name: e.name, source: e.source });
+		}
+	}
+	return entries.map((e) => {
+		const en = HAN_RE.test(e.name) ? names.get(e.id) : undefined;
+		return en && en.source === e.source ? { ...e, name: en.name } : e;
+	});
+}
+
 export interface CatalogAddInput {
 	source: string;
 	id?: string;

@@ -19,7 +19,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type ServerLang } from "./i18n.js";
-import { normalizeSyncPayload, writeCustomCatalog } from "./plugin-catalog.js";
+import { normalizeSyncPayload, withEnglishNames, writeCustomCatalog } from "./plugin-catalog.js";
 import { workspacePath } from "./files-service.js";
 import type { PluginInstaller } from "./plugin-installer.js";
 import type { UiPluginCatalogEntry } from "./protocol.js";
@@ -51,6 +51,9 @@ export interface CatalogSyncDeps {
 	 *  （列出将安装的插件 id/source）。拒绝 / 超时 / 未接入（无头 DSH）一律
 	 *  fail-closed —— 只写目录不安装。 */
 	confirmInstall?: (items: Array<{ id: string; source: string }>) => Promise<boolean>;
+	/** Our built-in list (<pkgRoot>/plugins/catalog.json): a synced entry named only in Chinese takes
+	 *  its English name from here (English only, PATCHES.md). Missing = names are kept as they come. */
+	builtinCatalogPath?: string;
 }
 
 export interface CatalogSyncResult {
@@ -155,7 +158,10 @@ export async function syncPluginCatalog(
 	const payload = normalizeSyncPayload(raw, lang);
 	if ("error" in payload) return { ok: false, error: payload.error };
 	// 到这里才动磁盘：校验失败的文档绝不覆盖一份有效目录。
-	writeCustomCatalog(deps.customCatalogPath, payload.entries, opts.replace === true);
+	const entries = deps.builtinCatalogPath
+		? withEnglishNames(payload.entries, deps.builtinCatalogPath)
+		: payload.entries;
+	writeCustomCatalog(deps.customCatalogPath, entries, opts.replace === true);
 	await deps.afterWrite();
 
 	let installed: { id: string; ok: boolean; error?: string }[] | undefined;
