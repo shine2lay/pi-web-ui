@@ -124,7 +124,7 @@ try {
 
 	// 2. Choosing white injects a <link> and applies the palette.
 	await openThemeMenu(page);
-	await page.locator(".dd-item", { hasText: "白色" }).first().click();
+	await page.locator(".dd-item", { hasText: "White" }).first().click();
 	await page.waitForTimeout(1500);
 	const hasLink = await page.evaluate(() => document.getElementById("theme-stylesheet")?.getAttribute("href"));
 	check("theme <link> injected for white", hasLink === "/themes/white.css", `href=${hasLink}`);

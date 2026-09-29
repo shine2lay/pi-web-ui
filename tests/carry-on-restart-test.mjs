@@ -75,7 +75,7 @@ const mock = createServer(async (req, res) => {
 	const users = msgs
 		.filter((m) => m.role === "user")
 		.map(textOf)
-		.filter((t) => !/parallel-work|并行/i.test(t));
+		.filter((t) => !/parallel-work|并行|System reminder: \d+ other run/i.test(t));
 	const first = users.find((t) => /^(IDLE|STOP|REPLY|CMD|ASK|QUEUE)-CHAT/.test(t)) ?? "";
 	const last = msgs.at(-1);
 	const lastUser = users.at(-1) ?? "";

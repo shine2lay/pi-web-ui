@@ -172,7 +172,7 @@ const titlesNow = await page.locator(".panel-left .panel-section-title").allText
 // running chat with a status light (.conv-dot.conv-running) instead of upstream's .conv-streaming.
 check(
 	"running-chats section title is rendered now",
-	titlesNow.some((t) => /\u8fd0\u884c\u7684\u5bf9\u8bdd|\u6700\u8fd1\u5bf9\u8bdd/.test(t)),
+	titlesNow.some((t) => /\u8fd0\u884c\u7684\u5bf9\u8bdd|\u6700\u8fd1\u5bf9\u8bdd|Running chats|Recent chats/.test(t)),
 	titlesNow.join("|"),
 );
 check(

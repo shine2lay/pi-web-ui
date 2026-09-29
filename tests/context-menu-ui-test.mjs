@@ -430,7 +430,7 @@ async function main() {
 	const modalOpen = await until(async () => (await page.locator(".settings-modal").count()) > 0, 30, 250);
 	check("设置面板打开", modalOpen);
 	if (modalOpen) {
-		await tap(page, page.locator(".settings-tab", { hasText: /界面布局|UI layout/ }).first());
+		await tap(page, page.locator(".settings-tab", { hasText: /界面布局|Interface layout/ }).first());
 		const panelsSlot = page.locator(".set-ui-slot", { hasText: /右侧面板|Right panel/ }).first();
 		const filesRow = panelsSlot.locator(".set-row", { hasText: /文件列表|Files/ }).first();
 		const listed = await until(async () => (await filesRow.count()) > 0, 30, 250);
@@ -467,7 +467,7 @@ async function main() {
 	if (modalOpen) {
 		await tap(page, await revealTopbarItem(page, SETTINGS_CHIP));
 		if (await until(async () => (await page.locator(".settings-modal").count()) > 0, 30, 250)) {
-			await tap(page, page.locator(".settings-tab", { hasText: /界面布局|UI layout/ }).first());
+			await tap(page, page.locator(".settings-tab", { hasText: /界面布局|Interface layout/ }).first());
 			const topbarSlot = page.locator(".set-ui-slot", { hasText: /顶栏|Top bar/ }).first();
 			const tasksRow = topbarSlot.locator(".set-row", { hasText: /后台任务|Background tasks/ }).first();
 			if (await until(async () => (await tasksRow.count()) > 0, 30, 250)) {

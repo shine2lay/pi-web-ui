@@ -90,9 +90,21 @@ async function main() {
 		if (m.type() === "error") errors.push(m.text());
 	});
 
+	// The app is English only now (PATCHES.md, english-only), so its page language no longer turns the notes
+	// plugin Chinese. The plugin (built in, not installed, left alone) still has its own language switch, stored
+	// in its browser prefs: pin it to Chinese so this test keeps checking the plugin's Chinese wording and parsing.
+	await page.addInitScript(() => {
+		try {
+			const prefs = JSON.parse(localStorage.getItem("notes:prefs") ?? "{}");
+			if (!prefs.lang || prefs.lang === "auto")
+				localStorage.setItem("notes:prefs", JSON.stringify({ ...prefs, lang: "zh" }));
+		} catch {
+			/* no storage on this document (about:blank) */
+		}
+	});
 	await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
 	// 顶栏插件条目（📌 笔记）
-	const topbarBtn = page.locator(".plugin-topbar-item", { hasText: "笔记" }).first();
+	const topbarBtn = page.locator(".plugin-topbar-item", { hasText: "Notes" }).first();
 	await topbarBtn.waitFor({ timeout: 20000 });
 	check("顶栏出现笔记按钮", await topbarBtn.isVisible());
 	// 关掉顶栏文字后只剩图标 —— 图标必须在、且是内联 SVG（不能是空 span，否则用户只看到一个点）
@@ -340,7 +352,7 @@ async function main() {
 	const panels = await page.locator(".nt-panel").count();
 	check("热重载后只剩一个浮窗（旧实例已拆干净）", panels === 1);
 	// 预加载（manifest preload）：热重载后新 bundle 的顶栏动作照旧能开合浮窗
-	await page.locator(".plugin-topbar-item", { hasText: "笔记" }).first().click();
+	await page.locator(".plugin-topbar-item", { hasText: "Notes" }).first().click();
 	await sleep(600);
 	check("热重载后顶栏按钮仍能开合浮窗（动作处理器已重注册）", (await page.locator(".nt-panel").count()) === 1);
 	reloadSock.close();

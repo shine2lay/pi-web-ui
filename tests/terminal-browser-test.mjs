@@ -204,7 +204,7 @@ async function main() {
 	check("second tab + shell prompt", true);
 
 	// Switch back to chat view — terminals must SURVIVE (no unmount kill).
-	await page.click('.topbar-flow [role="tab"]:has-text("对话")');
+	await page.click('.topbar-flow [role="tab"]:has-text("Chat")');
 	await sleep(800);
 	await page.click('.topbar-flow [role="tab"]:has-text("Terminal")');
 	await sleep(800);
@@ -224,7 +224,7 @@ async function main() {
 	// upstream); pick the real new-chat button, on the bar or in the "..." menu.
 	await (await revealTopbarItem(page, "button.chip.newchat:not(.ephemeral-chat-btn)")).click();
 	await sleep(1800);
-	await page.click('.topbar-flow [role="tab"]:has-text("对话")');
+	await page.click('.topbar-flow [role="tab"]:has-text("Chat")');
 	await page.waitForSelector(".panel-convs .session-item", { timeout: 5000 });
 	check("conversation with terminal remains listed", (await page.locator(".panel-convs .session-item").count()) >= 1);
 	await page.locator(".panel-convs .session-item").first().click();

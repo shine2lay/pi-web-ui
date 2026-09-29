@@ -225,7 +225,7 @@ async function main() {
 
 	// ---- 布局页里把该页取消勾选：导航项消失 + 分区回落 --------------------
 	// 「界面布局」是**独立页签**（SettingsModal 的 { id: "layout" }），不再挂在「界面插件」下面。
-	await tap(page, page.locator(".settings-tab", { hasText: /界面布局|UI layout/ }).first());
+	await tap(page, page.locator(".settings-tab", { hasText: /界面布局|Interface layout/ }).first());
 	const slotRow = page.locator(".set-ui-slot", { hasText: /设置页|Settings pages/ }).first();
 	const pageRow = slotRow.locator(".set-row", { hasText: "Set Test" }).first();
 	const listed = await until(async () => (await pageRow.count()) > 0, 30, 200);

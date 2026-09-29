@@ -132,7 +132,7 @@ async function run() {
 	const opts = await modelSelect.locator("option").allTextContents();
 	check(
 		"picker lists auto + 2 vision models",
-		opts.length === 3 && opts.some((o) => o.includes("自动")),
+		opts.length === 3 && opts.some((o) => o.includes("Auto")),
 		JSON.stringify(opts),
 	);
 

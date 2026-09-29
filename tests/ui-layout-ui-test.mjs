@@ -177,7 +177,7 @@ async function openLayoutPage(page) {
 		if (await until(async () => (await page.locator(".settings-modal").count()) > 0, 8, 250)) break;
 		await page.waitForSelector(".chat-input, .inputbar, textarea", { timeout: 30000 }).catch(() => {});
 	}
-	await tap(page, page.locator(".settings-tab", { hasText: /界面布局|UI layout/ }).first());
+	await tap(page, page.locator(".settings-tab", { hasText: /界面布局|Interface layout/ }).first());
 	return until(async () => (await page.locator(".set-ui-slot").count()) > 0, 30, 250);
 }
 
@@ -242,7 +242,7 @@ async function main() {
 	check(
 		"插件的 hint 落成底栏条目的 title（悬浮提示不会静默丢掉）",
 		(await page.locator(".statusbar .status-action", { hasText: "B-ONE" }).first().getAttribute("title")) ===
-			"底栏条目的悬浮提示",
+			"bottombar tooltip",
 	);
 
 	// ---- 3. 插件贡献的右栏 tab 排在宿主「文件」tab 之后 --------------------
@@ -312,7 +312,7 @@ async function main() {
 		});
 	};
 	const before = await orderOf();
-	const msgRow = layoutRow(page, /底栏|Bottom bar/, /消息|Messages/);
+	const msgRow = layoutRow(page, /底栏|Bottom bar/, /消息|messages/i);
 	const upBtn = msgRow.locator("button", { hasText: "↑" }).first();
 	await tap(page, upBtn);
 	// 多按几次把「消息」挪到「上下文」前面（默认顺序是 上下文→消息）
