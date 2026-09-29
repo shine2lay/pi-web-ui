@@ -193,7 +193,7 @@ describe("纯格式化/归一（页面桥共用）", () => {
 	it("formatBrowserPageError：中英双份 + 可执行的下一步", () => {
 		const msg = formatBrowserPageError("click", "boom");
 		expect(msg).toContain('browser_page "click" failed: boom');
-		expect(msg).toContain("失败：boom");
+		expect(msg).toContain("Next: ");
 		expect(msg).toContain('op:"pages"');
 	});
 });

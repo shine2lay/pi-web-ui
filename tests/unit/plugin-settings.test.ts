@@ -103,7 +103,7 @@ describe("optionsFrom（select 候选值由宿主动态提供）", () => {
 			thinking: "",
 		});
 		// 只做长度护栏（防手写 storage.json 塞垃圾）
-		expect(mgr.savePluginSettings("dyn", { model: "x".repeat(300) }, () => "zh").error).toContain("过长");
+		expect(mgr.savePluginSettings("dyn", { model: "x".repeat(300) }, () => "zh").error).toContain("too long");
 		expect(h.getSettings().model).toBe("gone/model");
 	});
 });
@@ -196,7 +196,7 @@ describe("secret 类型（P0-4 加密存、浏览器只见有无）", () => {
 		expect(mgr.savePluginSettings("sec", { apiKey: "sk-new" }).error).toBeUndefined();
 		expect(h.getSettings().apiKey).toBe("sk-new");
 		// 超长拒绝
-		expect(mgr.savePluginSettings("sec", { apiKey: "x".repeat(5000) }, () => "zh").error).toContain("过长");
+		expect(mgr.savePluginSettings("sec", { apiKey: "x".repeat(5000) }, () => "zh").error).toContain("too long");
 		expect(h.getSettings().apiKey).toBe("sk-new");
 	});
 	it("onSettingsChanged 收到的 clean 含 secret 真值（插件可用，但不下发浏览器）", async () => {

@@ -100,10 +100,10 @@ describe("computeNextFire", () => {
 
 describe("describeIntervalMs", () => {
 	it("秒/分/时/天", () => {
-		expect(describeIntervalMs(30_000)).toBe("每 30 秒");
-		expect(describeIntervalMs(3_600_000)).toBe("每 1 小时");
-		expect(describeIntervalMs(7_200_000)).toBe("每 2 小时");
-		expect(describeIntervalMs(86_400_000)).toBe("每 1 天");
+		expect(describeIntervalMs(30_000)).toBe("every 30s");
+		expect(describeIntervalMs(3_600_000)).toBe("every 1 h");
+		expect(describeIntervalMs(7_200_000)).toBe("every 2 h");
+		expect(describeIntervalMs(86_400_000)).toBe("every 1 d");
 	});
 });
 

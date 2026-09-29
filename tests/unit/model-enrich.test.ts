@@ -103,7 +103,7 @@ describe("enrichBatch 自动匹配", () => {
 		expect(claude?.source).toContain("OpenRouter");
 		const gemini = byId.get("gemini-3-pro-high");
 		expect(gemini?.status).toBe("matched");
-		expect(gemini?.source).toContain("别名");
+		expect(gemini?.source).toContain("alias");
 		const missing = byId.get("no-such-model");
 		expect(missing?.status).toBe("unmatched");
 	});

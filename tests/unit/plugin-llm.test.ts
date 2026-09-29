@@ -16,7 +16,7 @@ describe("completeWithIsolatedSession 入参校验（不建会话）", () => {
 	it("空 prompt 拒绝", async () => {
 		expect(await completeWithIsolatedSession(env, { prompt: "" })).toEqual({
 			ok: false,
-			error: "llm.complete: prompt 为空",
+			error: "llm.complete: prompt is empty",
 		});
 		expect(await completeWithIsolatedSession(env, { prompt: "   " })).toMatchObject({ ok: false });
 		expect(llmInflight()).toBe(0); // 校验失败不占并发位
@@ -25,10 +25,10 @@ describe("completeWithIsolatedSession 入参校验（不建会话）", () => {
 		const r1 = await completeWithIsolatedSession(env, { prompt: "x".repeat(8001) });
 		expect(r1.ok).toBe(false);
 		expect(r1).toMatchObject({ ok: false });
-		if (!r1.ok) expect(r1.error).toContain("超长");
+		if (!r1.ok) expect(r1.error).toContain("too long");
 		const r2 = await completeWithIsolatedSession(env, { prompt: "hi", system: "y".repeat(4001) });
 		expect(r2.ok).toBe(false);
-		if (!r2.ok) expect(r2.error).toContain("超长");
+		if (!r2.ok) expect(r2.error).toContain("too long");
 		expect(llmInflight()).toBe(0);
 	});
 	it("未知模型在本地即拒绝（不发请求、不花 token）", async () => {

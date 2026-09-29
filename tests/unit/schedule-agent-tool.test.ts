@@ -151,7 +151,7 @@ describe("schedule_* 工具闭环", () => {
 			label: "巡检",
 			recurring: true,
 		});
-		expect(resultText(r)).toContain("周期");
+		expect(resultText(r)).toContain("(recurring)");
 		const tasks = store.list();
 		expect(tasks).toHaveLength(1);
 		expect(tasks[0]!.oneShot).toBe(false);

@@ -196,14 +196,14 @@ describe("WorkspaceFS 写类操作 realpath 复核（item 5）", () => {
 	it("write 穿过指向工作区外的链接：拒绝且不落地", async () => {
 		const { root, outside, fs } = setup();
 		linkInside(root, outside, "escape");
-		await expect(fs.write("escape/evil.txt", "x")).rejects.toThrow(/越界/);
+		await expect(fs.write("escape/evil.txt", "x")).rejects.toThrow(/out of bounds/);
 		expect(existsSync(join(outside, "evil.txt"))).toBe(false);
 	});
 
 	it("write 目标本身是链接：拒绝", async () => {
 		const { root, outside, fs } = setup();
 		linkInside(root, outside, "escape");
-		await expect(fs.write("escape", "x")).rejects.toThrow(/越界/);
+		await expect(fs.write("escape", "x")).rejects.toThrow(/out of bounds/);
 	});
 
 	it("mkdir/remove 穿过链接：同样拒绝（递归删除跟随目录链接更危险）", async () => {
@@ -211,11 +211,11 @@ describe("WorkspaceFS 写类操作 realpath 复核（item 5）", () => {
 		linkInside(root, outside, "escape");
 		mkdirSync(join(outside, "junk"), { recursive: true });
 		writeFileSync(join(outside, "junk", "keep.txt"), "data");
-		await expect(fs.mkdir("escape/newdir")).rejects.toThrow(/越界/);
-		await expect(fs.remove("escape/junk/keep.txt")).rejects.toThrow(/越界/);
-		await expect(fs.remove("escape/junk")).rejects.toThrow(/越界/);
+		await expect(fs.mkdir("escape/newdir")).rejects.toThrow(/out of bounds/);
+		await expect(fs.remove("escape/junk/keep.txt")).rejects.toThrow(/out of bounds/);
+		await expect(fs.remove("escape/junk")).rejects.toThrow(/out of bounds/);
 		expect(existsSync(join(outside, "junk", "keep.txt"))).toBe(true); // 没删到外面
-		await expect(fs.append("escape/log.txt", "x")).rejects.toThrow(/越界/);
+		await expect(fs.append("escape/log.txt", "x")).rejects.toThrow(/out of bounds/);
 	});
 
 	it("工作区内的正常写/删不受影响", async () => {

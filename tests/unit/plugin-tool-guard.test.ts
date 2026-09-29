@@ -56,10 +56,10 @@ describe("guard 纯函数", () => {
 
 	it("denialText：ask 注明待确认+按拒绝处理；中英按 lang 取", () => {
 		const askZh = denialText({ decision: "ask", reason: "等我确认" }, "p", "zh");
-		expect(askZh).toContain("等我确认");
+		expect(askZh).toContain("Plugin p asked for confirmation");
 		const askEn = denialText({ decision: "ask" }, "p", "en");
 		expect(askEn).toMatch(/ask.*deny/i);
-		expect(denialText({ decision: "deny", reason: "危险" }, "p", "zh")).toContain("危险");
+		expect(denialText({ decision: "deny", reason: "危险" }, "p", "zh")).toContain("Plugin p denied this tool call");
 		expect(denialText({ decision: "deny" }, "p", "en")).toContain("p");
 	});
 
@@ -257,7 +257,7 @@ describe("withToolGuard 包装", () => {
 			details: Record<string, unknown>;
 		};
 		expect(def.execute).not.toHaveBeenCalled();
-		expect(out.content[0]?.text).toContain("不许");
+		expect(out.content[0]?.text).toContain("Plugin g denied this tool call");
 		expect(out.details).toMatchObject({ guardDenied: true, pluginId: "g" });
 	});
 

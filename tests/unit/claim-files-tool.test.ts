@@ -85,7 +85,7 @@ describe("claim_files", () => {
 			expect(bad.text).toContain("escape the project directory");
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			const badAction = await run({ action: "nope" } as any);
-			expect(badAction.text).toContain("action 非法");
+			expect(badAction.text).toContain("Invalid action");
 			const noStore = makeClaimFilesTool(
 				{ cwd: () => CWD, self: () => ({ convId: "c", title: "t" }), store: () => undefined },
 				() => "zh",

@@ -98,8 +98,8 @@ describe("SubagentTemplatesStore", () => {
 
 	it("非法名称拒绝保存", () => {
 		const store = tmpStore();
-		expect(store.upsert({ ...base, name: "   " })).toMatch(/名称/);
-		expect(store.upsert({ ...base, name: "x".repeat(61) })).toMatch(/名称/);
+		expect(store.upsert({ ...base, name: "   " })).toMatch(/template name/);
+		expect(store.upsert({ ...base, name: "x".repeat(61) })).toMatch(/template name/);
 		expect(store.upsert({ ...base, name: "  合法 名称 " })).toBeNull();
 		// 名字做空白折叠
 		expect(store.get("合法 名称")).toBeDefined();
@@ -121,7 +121,7 @@ describe("SubagentTemplatesStore", () => {
 	it("体积超限拒绝保存（明确报错，不静默截断）", () => {
 		const store = tmpStore();
 		// systemPrompt / systemPromptEn 各自计上限
-		expect(store.upsert({ ...base, systemPrompt: "x".repeat(TEMPLATE_LIMITS.systemPrompt + 1) })).toMatch(/超长/);
+		expect(store.upsert({ ...base, systemPrompt: "x".repeat(TEMPLATE_LIMITS.systemPrompt + 1) })).toMatch(/too long/);
 		expect(
 			store.upsert({ ...base, name: "long-en", systemPromptEn: "x".repeat(TEMPLATE_LIMITS.systemPrompt + 1) }),
 		).toMatch(/English system prompt is too long/);

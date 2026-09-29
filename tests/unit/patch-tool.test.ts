@@ -230,7 +230,7 @@ PUT 1.=1:
 		});
 
 		expect(execRes.details.ok).toBe(true);
-		expect(execRes.content[0].text).toContain("修改 agent.js");
+		expect(execRes.content[0].text).toContain("Changed agent.js");
 		expect(readFileSync(join(tempDir, "agent.js"), "utf8")).toBe("const x = 42;\n");
 	});
 

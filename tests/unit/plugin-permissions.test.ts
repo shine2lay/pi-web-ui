@@ -108,7 +108,7 @@ describe("host.requestPermission", () => {
 	it("非法族抛错；net 不给 hosts 抛错", async () => {
 		makePlugin("p", { permissions: ["net"] });
 		const h = await hostOf("p");
-		await expect(h.requestPermission({ family: "bogus" as never })).rejects.toThrow(/Unsupported capability family/);
+		await expect(h.requestPermission({ family: "bogus" as never })).rejects.toThrow(/unsupported capability family/);
 		await expect(h.requestPermission({ family: "net", hosts: [] })).rejects.toThrow(/needs hosts/);
 	});
 	it("基础族未声明 → 直接 false（不弹框，requester 不被调用）", async () => {

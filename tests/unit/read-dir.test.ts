@@ -140,7 +140,7 @@ describe("read 覆盖：非目录照旧", () => {
 	it("中文 UI 语言 → 目录头用中文", async () => {
 		const tool = makeReadDirTool(root, { getLang: () => "zh" });
 		const text = await readText(tool as never, { path: "." });
-		expect(text).toContain("[目录：.]");
+		expect(text).toContain("[Directory: .]");
 	});
 });
 

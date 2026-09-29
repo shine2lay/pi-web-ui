@@ -76,8 +76,8 @@ describe("translator tables", () => {
 	it("hit → translation; miss → English; zh ignores table", () => {
 		registerServerStrings("xx", { "demo.hello": "XX-HELLO" });
 		expect(pick("xx", "甲", "A", "demo.hello")).toBe("XX-HELLO");
+		expect(pick("xx", "甲", "A", "demo.missing")).toBe("A");
 		expect(pick("zh", "甲", "A", "demo.hello")).toBe("A");
-		expect(pick("zh", "甲", "A", "demo.hello")).toBe("甲");
 		expect(pick("en", "甲", "A", "demo.hello")).toBe("A");
 		expect(getServerString("xx", "demo.hello")).toBe("XX-HELLO");
 		expect(registeredServerLangs()).toContain("xx");
@@ -91,10 +91,10 @@ describe("translator tables", () => {
 		unregisterServerStrings("pt");
 	});
 	it("getServerBlock splits \\n-joined hits, passes through zh/en arrays", () => {
-		expect(getServerBlock("zh", "blk.g", ["甲"], ["A"])).toEqual(["A"]);
+		registerServerStrings("xxb", { "blk.g": "l1\nl2\nl3" });
 		expect(getServerBlock("xxb", "blk.g", ["甲"], ["A"])).toEqual(["l1", "l2", "l3"]);
 		expect(getServerBlock("xxb", "blk.missing", ["甲"], ["A"])).toEqual(["A"]);
-		expect(getServerBlock("zh", "blk.g", ["甲"], ["A"])).toEqual(["甲"]);
+		expect(getServerBlock("zh", "blk.g", ["甲"], ["A"])).toEqual(["A"]);
 		unregisterServerStrings("xxb");
 	});
 });

@@ -96,7 +96,7 @@ describe("McpClient 握手与工具", () => {
 		expect(res.content[0].type).toBe("text");
 		expect(res.content[0].text).toContain("application/pdf");
 		// blob "JVBERi0xLjQK" = 12 个 base64 字符 ≈ 9 字节
-		expect(res.content[0].text).toContain("9 字节");
+		expect(res.content[0].text).toContain("9 bytes");
 	});
 
 	it("textfile 的文本型 resource 不丢正文（按文本形状返回）", async () => {
@@ -211,7 +211,7 @@ describe("超时", () => {
 		const c = client();
 		await c.start();
 		// call 用 ~80ms 小超时
-		await expect(c.call("slow", {}, 80)).rejects.toThrow(/超时/);
+		await expect(c.call("slow", {}, 80)).rejects.toThrow(/timed out/);
 	});
 });
 

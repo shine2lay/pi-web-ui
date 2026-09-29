@@ -56,7 +56,7 @@ describe("ModelAdminService.enrichModels & abortEnrichModels", () => {
 			expect(res).toBeDefined();
 			// 中止时因为没有匹配条目，ok 为 false，error 提示取消
 			expect(res).toMatchObject({ reqId: 42, ok: false });
-			const notice = messages.find((m) => m.type === "notice" && m.text.includes("取消"));
+			const notice = messages.find((m) => m.type === "notice" && m.text.includes("cancelled"));
 			expect(notice).toBeDefined();
 		} finally {
 			rmSync(agentDir, { recursive: true, force: true });

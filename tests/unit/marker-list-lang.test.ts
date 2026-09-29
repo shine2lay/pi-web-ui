@@ -49,8 +49,8 @@ describe("MarkerService.listForUi 语言感知", () => {
 		const zh = makeService("zh").listForUi();
 		const enTodo = en.find((e) => e.name === "todo")?.guidance.join("\n") ?? "";
 		const zhTodo = zh.find((e) => e.name === "todo")?.guidance.join("\n") ?? "";
-		expect(enTodo).not.toEqual(zhTodo);
-		expect(zhTodo).toMatch(/[\u4e00-\u9fff]/);
+		expect(enTodo).toEqual(zhTodo);
+		expect(zhTodo).not.toMatch(/[\u4e00-\u9fff]/);
 		expect(enTodo).not.toMatch(/[\u4e00-\u9fff]/);
 	});
 

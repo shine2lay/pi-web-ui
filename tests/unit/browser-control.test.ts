@@ -32,7 +32,7 @@ describe("queryBrowserControl", () => {
 		expect(status.available).toBe(false);
 		expect(status.pages).toEqual([]);
 		expect(status.error).toContain("page-picker"); // 点名要装什么
-		expect(status.error).toContain("刷新"); // 给下一步
+		expect(status.error).toContain("reload"); // 给下一步
 	});
 
 	it("桥在但扩展报错 → 把原因原样带出来（不吞掉）", async () => {

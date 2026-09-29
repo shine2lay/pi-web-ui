@@ -211,7 +211,7 @@ describe.skipIf(!hasGit)("失败即停（ok:false + 可读原因 + 保留日志�
 		expect(res.error?.length ?? 0).toBeGreaterThan(0);
 		expect(res.log.length).toBeGreaterThan(0);
 		expect(res.log.join("\n")).toContain(`clone ${url} → sub`);
-		expect(res.log.join("\n")).toContain("失败：");
+		expect(res.log.join("\n")).toContain("Failed: ");
 	});
 
 	it("多仓库中途失败：前面的成果与日志保留，后面的步骤不再执行", async () => {
@@ -239,7 +239,7 @@ describe.skipIf(!hasGit)("失败即停（ok:false + 可读原因 + 保留日志�
 		writeFileSync(join(ws, "sub", "mine.txt"), "我的东西\n", "utf8");
 		const res = await createProject({ dir: ws, repos: [{ url, subdir: "sub" }] });
 		expect(res.ok).toBe(false);
-		expect(res.error).toContain("已存在");
+		expect(res.error).toContain("already exists");
 		expect(readFileSync(join(ws, "sub", "mine.txt"), "utf8")).toBe("我的东西\n");
 		expect(existsSync(join(ws, "sub", "a.txt"))).toBe(false);
 	});
@@ -286,7 +286,7 @@ describe.skipIf(!hasGit)("失败即停（ok:false + 可读原因 + 保留日志�
 	it("url / ref 以 '-' 开头（git 选项注入）→ 拒绝", async () => {
 		const url = await createProject({ dir: ws, repos: [{ url: "--upload-pack=touch pwned" }] });
 		expect(url.ok).toBe(false);
-		expect(url.error).toContain("注入");
+		expect(url.error).toContain("injection");
 
 		const ref = await createProject({ dir: ws, repos: [{ url: "https://example.com/x.git", ref: "-c" }] });
 		expect(ref.ok).toBe(false);
@@ -307,7 +307,7 @@ describe.skipIf(!hasGit)("失败即停（ok:false + 可读原因 + 保留日志�
 		const url = makeRepo("slow", { "a.txt": "a\n" });
 		const res = await createProject({ dir: ws, repos: [{ url, subdir: "sub" }] }, { gitTimeoutMs: 1 });
 		expect(res.ok).toBe(false);
-		expect(res.error).toContain("超时");
+		expect(res.error).toContain("timed out");
 	}, 30000);
 
 	it("files 条目数与单文件大小超限 → 拒绝", async () => {
@@ -334,7 +334,7 @@ describe.skipIf(!hasGit)("路径越界防护", () => {
 			files: { "../evil.txt": "pwn", [escapeAbs]: "pwn", "ok.txt": "ok" },
 		});
 		expect(res.ok).toBe(false);
-		expect(res.error).toContain("越界");
+		expect(res.error).toContain("out of bounds");
 		expect(existsSync(escapeRel)).toBe(false);
 		expect(existsSync(escapeAbs)).toBe(false);
 		// 越界是**校验阶段**就拒的：连同一个 spec 里合法的那条也不写（不留半成品）。
@@ -347,7 +347,7 @@ describe.skipIf(!hasGit)("路径越界防护", () => {
 		const escapeTarget = join(tmpdir(), "pi-plugin-project-escape-x");
 		const res = await createProject({ dir: ws, repos: [{ url, subdir: "../../pi-plugin-project-escape-x" }] });
 		expect(res.ok).toBe(false);
-		expect(res.error).toContain("越界");
+		expect(res.error).toContain("out of bounds");
 		expect(existsSync(escapeTarget)).toBe(false);
 		expect(readdirSync(ws)).toEqual([]);
 	});
@@ -364,13 +364,13 @@ describe.skipIf(!hasGit)("路径越界防护", () => {
 
 		const viaFile = await createProject({ dir: ws, files: { "link/evil.txt": "pwn" } });
 		expect(viaFile.ok).toBe(false);
-		expect(viaFile.error).toContain("越界");
+		expect(viaFile.error).toContain("out of bounds");
 		expect(existsSync(join(outside, "evil.txt"))).toBe(false);
 
 		const url = makeRepo("linkrepo", { "a.txt": "a\n" });
 		const viaRepo = await createProject({ dir: ws, repos: [{ url, subdir: "link/sub" }] });
 		expect(viaRepo.ok).toBe(false);
-		expect(viaRepo.error).toContain("越界");
+		expect(viaRepo.error).toContain("out of bounds");
 		expect(existsSync(join(outside, "sub"))).toBe(false);
 	});
 });
