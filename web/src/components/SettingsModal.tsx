@@ -3353,7 +3353,9 @@ export function SettingsModal({
 																</span>
 															)}
 														</div>
-														{e.description && <div className="set-catalog-desc">{e.description}</div>}
+														{(e.descriptionEn || e.description) && (
+															<div className="set-catalog-desc">{e.descriptionEn || e.description}</div>
+														)}
 														<div className="set-catalog-source">{e.source}</div>
 														{renderJobStatus(e.id)}
 													</div>
