@@ -58,6 +58,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | queue-lanes                  | `local`        | `server/queue-host.ts` (new), `agent-service.ts` (task chats), `index.ts`, `task-queue.ts`, `protocol.ts`, `tldr-lines.ts`, `web/src/components/TaskQueuePanel.tsx`, `TldrPanel.tsx`, `RightPanel.tsx`, i18n, styles, `tests/queue-lanes-test.mjs`, `tests/queue-panel-test.mjs`, `scripts/sealed.sh` (`PI_QUEUE_PKG`), `tests/unit/` |
 | telegram-answers             | `local`        | `server/asks.ts` (new), `server/stuck-asks.ts` (new), `agent-service.ts` (questions, approvals, stuck asks), `chat-dialogs.ts`, `plugins.ts`, `plugin-facilities.ts`, `task-queue.ts`, `protocol.ts`, `protocol-version.ts`, `plugins/telegram/` (new), `plugin-sdk/`, `web/src/open-chat-link.ts` (new), `TaskQueuePanel.tsx`, `use-chat.ts`, `tests/telegram-answers-test.mjs`, `tests/queue-panel-test.mjs`, `tests/unit/` |
 | english-only                 | `local`        | `server/i18n.ts`, `agent-service.ts`, `dsh/dsh-agent-service.ts` and ~130 other server files (text only), `web/src/i18n.tsx`, `TopBar.tsx`, `ui-slots.ts`, `LocaleModal.tsx` + `pick-locale.ts` (removed), `SettingsModal.tsx`, `plugins/catalog.json`, `tests/` |
+| optimistic-send              | `local`        | `server/prompt-ack.ts` (new), `agent-service.ts` (`prompt()`), `dsh/dsh-agent-service.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (26), `web/src/pending-sends.ts` (new), `use-chat.ts`, `MessageList.tsx`, `App.tsx`, `ChatInput.tsx`, `PromptTemplates.tsx`, `plugin-host.ts`, i18n + `locales/`, styles, `tests/optimistic-send-test.mjs`, `tests/unit/` |
 
 ---
 
@@ -2840,3 +2841,83 @@ The add-ons' only Chinese left is in their tests' labels.
 `getServerBlock()` give English anyway, so on a conflict in one of those, upstream's line is fine. New
 hard-coded Chinese, and new `zh` keys in `web/src/i18n.tsx` (keep only the `en` ones), need translating: after
 a sync, search `server/` and `web/src/` for Chinese outside comments and compare with the table above.
+
+## optimistic-send
+
+**Status**: `local`
+**Baseline**: v0.96.1
+
+**Why** (owner, 2026-09-28): after pressing Send, the message took about 5 s to show. pi emits the user
+message only after every add-on's "before the AI starts" step (`before_agent_start`; pi-coding-agent
+`AgentSession.prompt` waits for `emitBeforeAgentStart`), and pi-memory's search alone can wait 3 s
+(pi-subagents, billion-context-pi, pi-control-chrome and pi-web-access have such steps too). Now the
+message shows the moment you press Send, faded with "Sending…", and turns into the normal one in place
+when the server has it. Making the add-ons' steps faster is a separate question.
+
+### Changes
+
+1. **Protocol 26** (`server/protocol.ts`, both `protocol-version.ts`): `prompt` carries an optional `id`
+   made by the window; the server answers it with exactly one `prompt_ack {id, conversationId, ok, reason?,
+   rev?}`, only to that window. ok goes out after the snapshot that shows the message (in the chat, or in
+   its queue while the AI works): "snapshot first, then receipt", as with `switch_done`. `rev` is the
+   window's latest snapshot rev, so a window whose state is older (a dropped snapshot) keeps its copy until
+   a snapshot that new arrives. `prompt_status {ids}` asks, after a reconnect or reload, what became of
+   sends still shown as "Sending". Old pages send no id and get no acks.
+2. **Server** (`server/prompt-ack.ts`, new, and both engines):
+   - `PromptReceipt`: one send's answer; the first answer wins, so every exit of `prompt()` just answers.
+   - `promptIds` (`PromptIdLedger`): the same id sent twice never lands twice. Still being handled: waits
+     for the first answer. Already in the chat: acknowledged again. Refused: forgotten, so Retry runs it.
+     Unknown (never arrived, or the server restarted): not ok, `NOT_RECEIVED_REASON`.
+   - `agent-service.ts` `prompt()` answers at every exit: not ok when the server is draining, the
+     transcript is blocked, Stop was pressed before it started, a broken tool call can't be healed, or pi
+     throws (no model, compaction running, ...); ok for a slash command it ran or a text an add-on took
+     over. pi's `preflightResult` callback says when the message is admitted: an idle chat's receipt waits
+     on the conversation (`ackOnUserMessage`) and is answered in `onEventNow` right after the user
+     message's `message_end` and its snapshots (`flushConvSnapshots`); a running chat's (steer/follow-up)
+     after the final snapshot. The DSH engine answers after its optimistic append.
+   - **Admission line** (`takePromptAdmission`): pi marks a chat as running only after the add-ons'
+     steps, so a second message sent meanwhile started a second run, failed with "Agent is already
+     processing a prompt" and left pi's running flag wrong. Each prompt now takes its place before its
+     first await and waits until the one before it is admitted; it then sees the running chat and joins
+     the steer/follow-up queue. Order and content are unchanged. A slash command the server runs itself
+     gives up its place before running (`/new <text>` sends <text> from inside it, maybe to the same
+     chat) and takes a new one only if it turns out to be pi's.
+   - **Sends in flight count as busy** (`Conversation.sendsInFlight`): switching away from a chat whose
+     message was still in the add-ons' steps closed that chat and lost the message (found by the new
+     test). `displaceActive` and `busyConversations` now treat such a chat as running.
+   - `index.ts`: passes the id on; a prompt refused by managed mode or tabs mode is acknowledged not ok;
+     `prompt_status` is answered from the ledger.
+3. **Window**:
+   - `web/src/pending-sends.ts` (new, pure, unit-tested) keeps the list of sends not confirmed yet. A send
+     remembers the chat's last message when it was sent; a snapshot shows it when a user message with the
+     same text comes after that one (one per send), or when its queue has one more copy of the text. Each
+     snapshot drops the copies it shows, in the same render, so there is never a frame with two or none.
+     Chats are matched by session id when known (conversation ids are renumbered after a server restart).
+   - `use-chat.ts`: `send()` adds an entry for every prompt with an id (never for a slash command);
+     `prompt_ack` removes it or marks it "Not sent" with the reason; after a reconnect it asks with
+     `prompt_status`; the list is kept in `sessionStorage` across a reload.
+   - `MessageList.tsx` `PendingMessage`: the same bubble as the real one (same height, so the swap moves
+     nothing), faded, "Sending…" where the time goes, pictures and files shown until the server's cards
+     land, "working" after the last one. While a copy is on its way the list is drawn as during a run, and
+     the short moment where pi reports the run before its message is in (`runStartingFor`) is drawn as
+     before, so nothing above moves either. While the AI works the copy looks queued. "Not sent" shows the
+     reason, Retry (the same id again) and ×, which removes it and puts the text and files back in the
+     input box (`App.tsx`).
+   - Sends from the input box (`ChatInput.tsx`, both paths), prompt templates and add-ons' new chats
+     (`plugin-host.ts`) carry an id. Five new words in `i18n.tsx` and the eight dormant `locales/` packs.
+   - Other windows see the message when the server has it, as before.
+
+### How it was checked
+
+- `tests/unit/pending-sends.test.ts` (44) and `tests/unit/prompt-ack.test.ts` (14).
+- `tests/optimistic-send-test.mjs`: a mock model and a test add-on whose "before the AI starts" step
+  waits 3 s. Watching every frame: the message shows in about 30 ms, stays faded for the 3 s, and the
+  server's copy takes its place at the same spot and height, never two copies and never none. Also a
+  slash command (no copy), a picture and a file, a message while the AI works, two quick sends, a refused
+  send (draining) with Retry, × putting the text and file back, switching chats while sending, a reload,
+  and a server restart before the message arrived ("Not sent", then Retry).
+
+**When syncing**: upstream changes `agent-service.ts` `prompt()` and `onEventNow` often. Keep one
+answer at every exit of `prompt()` and the admission line around the pi call; if pi's `preflightResult`
+changes, the new browser test shows it. If upstream starts showing sent messages early itself, compare
+and drop what it covers.
