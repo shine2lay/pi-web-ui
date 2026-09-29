@@ -2818,6 +2818,9 @@ The add-ons' only Chinese left is in their tests' labels.
 - Screenshots of 39 screens with a Chinese browser (top bar and its menus, a chat, a notice, the slash
   menu, model setup, every settings tab, the Files, TL;DR, Schedules and Queue tabs, the temper and
   scheduler pages, the first-run setup): no Chinese besides the ＋ icon.
+- `scripts/check.sh` (types, lint, format, 3,619 unit tests, the build, the terminal tests) and the 176
+  sealed browser tests pass. `tests/notes-ui-test.mjs` pins the notes add-on's own language switch to
+  Chinese: the page no longer turns that add-on Chinese, and it is built in, not installed, and left alone.
 
 ### Not done (later, if wanted)
 
