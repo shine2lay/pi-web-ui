@@ -46,6 +46,7 @@ import { listThemes, resolveThemeFile } from "./themes.js";
 import { isManaged, managedRefusal } from "./managed.js";
 import { launchOrigin, toServiceInfo } from "./launch-origin.js";
 import { parseTabs, tabsRefusal } from "./tabs.js";
+import { promptIds } from "./prompt-ack.js";
 import { recordUnknownWsType } from "./ws-unknown-types.js";
 import { validateClientId } from "./ws-client-id.js";
 import { PendingCommandQueue } from "./ws-pending-queue.js";
@@ -1098,7 +1099,8 @@ export interface TerminalManagerLike {
 
 export interface DispatchSession {
 	cwd: string;
-	prompt(text: string, attachments?: PromptAttachment[], queue?: boolean): Promise<void>;
+	/** id: optimistic-send - the window's id for this send, answered with one prompt_ack. */
+	prompt(text: string, attachments?: PromptAttachment[], queue?: boolean, id?: string): Promise<void>;
 	/** Remove one queued prompt (steer/followUp) — the ✕ on a pending bubble.
 	 *  `index` is the bubble position (identity); omitted = text fallback. */
 	removeQueued(kind: "steer" | "followUp", text: string, index?: number): void;
@@ -2226,11 +2228,24 @@ wss.on("connection", (ws) => {
 		const refusal = managedRefusal(msg.type, MANAGED) ?? tabsRefusal(msg.type, TABS);
 		if (refusal) {
 			send({ type: "notice", level: "error", text: refusal });
+			// optimistic-send: a refused prompt still gets its receipt, or its faded copy would wait forever.
+			if (msg.type === "prompt" && msg.id) {
+				send({ type: "prompt_ack", id: msg.id, conversationId: "", ok: false, reason: refusal });
+			}
 			return;
 		}
 		switch (msg.type) {
 			case "prompt":
-				void cs.prompt(msg.text, msg.attachments, msg.queue);
+				void cs.prompt(msg.text, msg.attachments, msg.queue, typeof msg.id === "string" ? msg.id : undefined);
+				break;
+			case "prompt_status":
+				// optimistic-send: a window that reconnected or reloaded asks about sends it still shows as
+				// "Sending". Answered on this socket; if it drops too, the next reconnect asks again.
+				if (Array.isArray(msg.ids)) {
+					for (const id of msg.ids.slice(0, 100)) {
+						if (typeof id === "string" && id) promptIds.status(id, send);
+					}
+				}
 				break;
 			case "queue_remove":
 				cs.removeQueued(msg.kind, msg.text, msg.index);

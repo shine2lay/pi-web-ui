@@ -612,7 +612,23 @@ export type ClientMessage =
 			 */
 			queue?: boolean;
 			attachments?: PromptAttachment[];
+			/**
+			 * optimistic-send: an id the window made for this send. The window draws
+			 * the message at once as a faded "Sending" bubble and the server answers
+			 * with exactly one `prompt_ack` carrying the same id. Without an id (plugins,
+			 * old pages) nothing is acknowledged. Sending the same id again (Retry after
+			 * a reconnect) never adds the message twice: an id the server is still
+			 * handling is ignored (its ack will come), an id that already made it into
+			 * the chat is acknowledged again, and only a refused id runs again.
+			 */
+			id?: string;
 	  }
+	/** optimistic-send: after a reconnect or a reload, the window asks what became of
+	 *  the sends it still shows as "Sending" and doesn't see in the chat yet. Each id
+	 *  gets one `prompt_ack`: ok when it reached the chat, the normal ack later when
+	 *  the server is still handling it, and ok:false when the server never got it (or
+	 *  refused it, or restarted since). */
+	| { type: "prompt_status"; ids: string[] }
 	// -- queued prompt management ---------------------------------------------
 	/** Remove ONE queued prompt (steer = 插队, followUp = 排队) — the
 	 *  ✕ delete button on a pending user bubble. `index` is the bubble's position
@@ -2861,6 +2877,20 @@ export type ServerMessage =
 	 *  早先那次的回执都对不上，直接忽略）。不用 notice：那只是一条 toast，对不到目标上。 */
 	| { type: "switch_done"; target: SwitchTarget }
 	| { type: "switch_failed"; target: SwitchTarget; error: string; errorEn?: string }
+	/** optimistic-send: the receipt for a `prompt` that carried an `id`, sent only to
+	 *  the window that sent it. `ok: true` goes out AFTER the snapshot that holds the
+	 *  message (in the chat, or its place in the waiting queue while the AI works), so
+	 *  the window can drop its faded copy without a gap or a duplicate (the same
+	 *  "snapshot first, then receipt" order as switch_done). A slash command the server
+	 *  ran, or a message an add-on took over, is also `ok`. `ok: false` means the
+	 *  message did NOT reach the chat (server draining, transcript blocked, stopped
+	 *  before it started, no model, compaction running, any other error); `reason` is
+	 *  a short English explanation. Every exit of the server's prompt() sends exactly
+	 *  one ack. `rev` (ok only, when the chat is the window's open one) is the rev of
+	 *  the window's latest snapshot, which already shows the message: a window whose
+	 *  state is older (that snapshot was dropped under backpressure) keeps its faded
+	 *  copy until a snapshot at least that new has arrived. */
+	| { type: "prompt_ack"; id: string; conversationId: string; ok: boolean; reason?: string; rev?: number }
 	/** The watched git dir changed outside the panel (terminal commit,
 	 *  CLI, IDE) — the client should re-run its scm_status query. */
 	| { type: "scm_changed" }

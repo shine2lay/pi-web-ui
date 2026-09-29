@@ -19,4 +19,7 @@
 // 25: telegram-answers - permission prompts go to every open window, and a window closes only the one
 //     whose id was resolved (old pages closed any on any tool_approval_resolved); the Queue tab answers
 //     a stuck task with task_queue_answer.
-export const PROTOCOL_VERSION = 25;
+// 26: optimistic-send - `prompt` carries a window-made id and the server answers it with
+//     `prompt_ack` (after the snapshot that holds the message, or on any refusal). Old pages
+//     never see the ack and would keep a faded "Sending" copy of every message they send.
+export const PROTOCOL_VERSION = 26;

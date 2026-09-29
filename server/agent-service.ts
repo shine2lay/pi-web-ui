@@ -304,6 +304,13 @@ import type {
 	UiDialog,
 	UiTooBig,
 } from "./protocol.js";
+import {
+	type PromptAckMsg,
+	type PromptAdmission,
+	type PromptReceipt,
+	promptIds,
+	takePromptAdmission,
+} from "./prompt-ack.js";
 import { buildQuestionIndex } from "./question-index.js";
 import { TASK_QUEUE_ENTRY_TYPE, taskQueueCommandLine, taskQueueFromEntries } from "./task-queue.js";
 import { installQueueHost, makeChain, type QueueChatStart, waitUntil } from "./queue-host.js";
@@ -1968,6 +1975,18 @@ export interface Conversation {
 	tooBig?: UiTooBig | null;
 	/** rewind-to-here：回退进行中时是一个回退结束就 resolve 的 promise（这期间发来的话等它）。 */
 	rewindDone?: Promise<void>;
+	/** optimistic-send: resolves when the latest prompt sent to this chat has been admitted by the SDK
+	 *  (its message started, got queued, or was refused). The next prompt waits for it, so two quick
+	 *  sends can't both take the "not streaming" path while the first one is still in the add-ons'
+	 *  "before the AI starts" step (the second used to fail with "Agent is already processing"). */
+	promptAdmission?: Promise<void>;
+	/** optimistic-send: messages on their way into this chat (from prompt() until pi takes them in or
+	 *  refuses them; takePromptAdmission counts). Such a chat is busy: the add-ons' "before the AI
+	 *  starts" step can take seconds, and a chat closed during it would lose the message. */
+	sendsInFlight?: number;
+	/** optimistic-send: the receipt of the prompt whose user message is about to start a run. The
+	 *  next user message_end of this chat is that message: its snapshot goes out, then this ack. */
+	ackOnUserMessage?: PromptReceipt;
 }
 
 /** 轨迹事件 payload 封顶（可直接广播/持久化，不撑爆 storage.json）。 */
@@ -2030,6 +2049,21 @@ function atomicWriteFileSync(file: string, data: string): void {
  *  runtime alive; conversations of other projects keep their own lists).
  *  子代理不计入：子代理是 inMemory 后台任务，不参与此上限，既不占位也不被此上限拦截。 */
 const MAX_OPEN_CONVERSATIONS = 8;
+
+/** optimistic-send: how far one prompt() got, for its final answer (see ClientSession.prompt). */
+interface PromptFlow {
+	/** pi put the text off until the previous run has settled: its preflight callback answers later. */
+	deferred: boolean;
+	/** pi took the text (its preflight said yes). */
+	handedOver: boolean;
+	/** The prompt's place in the chat's line (a slash command gives it up and may take a new one). */
+	admission: PromptAdmission;
+}
+
+/** optimistic-send: prompt_ack reasons (English, shown under a "Not sent" message). */
+const TRANSCRIPT_BLOCKED_REASON =
+	"This chat ends with a tool call that never got a result, so it can't take new messages. Open it again from history or start a new chat.";
+const STOPPED_BEFORE_SEND_REASON = "Stopped before it was sent.";
 
 /** carry-on: the process-wide live list of working chats (set by AgentService.prepareCarryOn). */
 let runningChats: RunningChats | null = null;
@@ -2524,7 +2558,15 @@ export class ClientSession {
 			let doing: BusyConversation["doing"] | undefined;
 			try {
 				const s = c.session;
-				doing = s.isStreaming ? "run" : s.isCompacting ? "compaction" : s.isBashRunning ? "bash" : undefined;
+				// (optimistic-send: a message still in the add-ons' "before the AI starts" step is a run starting.)
+				doing =
+					s.isStreaming || (c.sendsInFlight ?? 0) > 0
+						? "run"
+						: s.isCompacting
+							? "compaction"
+							: s.isBashRunning
+								? "bash"
+								: undefined;
 			} catch {
 				// 会话替换中——按没在干活算（同 conversationStreaming）
 			}
@@ -4861,6 +4903,19 @@ export class ClientSession {
 	 *  看客只能靠 noteForeignDelta 的慢节奏（流式中 2 秒一次），连自己刚发的问题都要等 2 秒
 	 *  才出现。没 socket 的会话（client-per-load 之后每次刷新都留下一个）跳过：没人收，
 	 *  白算；它重连时 get_state 会拿整份快照。 */
+	/** optimistic-send: an ok receipt for the chat this window shows carries the rev of the window's
+	 *  latest snapshot (it already shows the message; see prompt_ack in protocol.ts). */
+	private withAckRev(msg: PromptAckMsg): PromptAckMsg {
+		return msg.ok && msg.conversationId === this.activeId ? { ...msg, rev: this.emittedRev } : msg;
+	}
+
+	/** optimistic-send: sends a chat's state now to every window showing it, this one included (so a
+	 *  receipt sent right after can't overtake the message it confirms). */
+	private flushConvSnapshots(conv: Conversation): void {
+		this.checkpointViewers(conv.id, true);
+		if (conv.id === this.activeId) this.flushSnapshot();
+	}
+
 	private checkpointViewers(convId: string, now: boolean): void {
 		for (const other of ClientSession.liveSessions) {
 			if (other === this || other.disposed || other.sinkCount() === 0) continue;
@@ -5591,6 +5646,20 @@ export class ClientSession {
 			console.error(
 				`[crash-guard] window ${this.clientId}: handling ${event.type} in chat ${conv.id} failed (the same error is logged at most once a minute):\n${describeError(err)}`,
 			);
+		} finally {
+			// optimistic-send: the user message of a prompt that just started a run has ended. onEventNow
+			// has already sent the snapshot that holds it (to this window if it shows the chat, and to
+			// every other window that shows it), so now its sender gets the receipt. (Also after a failure
+			// above: the message is in the chat either way, and the next snapshot brings it.)
+			if (
+				conv.ackOnUserMessage &&
+				event.type === "message_end" &&
+				(event.message as { role?: string } | undefined)?.role === "user"
+			) {
+				const receipt = conv.ackOnUserMessage;
+				conv.ackOnUserMessage = undefined;
+				receipt.ok();
+			}
 		}
 	}
 
@@ -8882,19 +8951,60 @@ export class ClientSession {
 		 * after the current turn settles, skipping remaining planned tool calls.
 		 */
 		queue = false,
+		/** optimistic-send: the window's id for this send, answered with one prompt_ack (prompt-ack.ts). */
+		id?: string,
+	): Promise<void> {
+		let conv: Conversation;
+		try {
+			conv = this.conv;
+		} catch (err) {
+			if (id) this.emit({ type: "prompt_ack", id, conversationId: "", ok: false, reason: "No chat is open." });
+			throw err;
+		}
+		// optimistic-send: the window drew this message at once and waits for exactly one receipt.
+		// The same id sent again (Retry after a reconnect) stops here when it is already in the chat
+		// or still being handled, so it can never land twice.
+		const receipt = promptIds.begin(id, conv.id, (msg) => this.emit(this.withAckRev(msg)));
+		if (!receipt) return;
+		// optimistic-send: this message's place in the chat's line, taken before any await so the
+		// places follow the order the messages came in (see takePromptAdmission).
+		const flow: PromptFlow = { deferred: false, handedOver: false, admission: takePromptAdmission(conv) };
+		try {
+			await this.promptInLine(conv, receipt, flow, text, attachments, queue);
+		} finally {
+			// A prompt pi put off until the previous run settled is answered by its preflight callback.
+			if (!flow.deferred) {
+				flow.admission.release();
+				// Every exit answers. The refusals answer for themselves; what is left here is a text pi
+				// took without a user message of its own (an add-on handled it: sent), or an unexpected
+				// throw before pi got the text (not sent).
+				if (!receipt.answered) {
+					if (conv.ackOnUserMessage === receipt) conv.ackOnUserMessage = undefined;
+					if (flow.handedOver) receipt.ok();
+					else receipt.fail("The message could not be sent.");
+				}
+			}
+		}
+	}
+
+	/** prompt()'s body, run once the receipt and the message's place in the chat's line are taken. */
+	private async promptInLine(
+		conv: Conversation,
+		receipt: PromptReceipt,
+		flow: PromptFlow,
+		text: string,
+		attachments: Parameters<ClientSession["prompt"]>[1],
+		queue: boolean,
 	): Promise<void> {
 		// Captured at the START (before any await): the conversation being
 		// addressed by this prompt. See the naming block below — a concurrent
 		// switch/new_chat while prompt() is in flight must never target a
-		// different conversation.
-		const conv = this.conv;
+		// different conversation. (optimistic-send: prompt() captures it and passes it in.)
 		// telegram-answers: what the user said here last (a stuck task answered in the chat shows it).
 		conv.lastPrompt = { text, at: Date.now() };
 		// rewind-to-here：正在回退（换分支 + 写摘要）时发来的话等回退做完再发——输入框已经清了，
 		// 拒掉就丢了；等完话落在回退后的分支上，正是用户要的顺序。
 		if (conv.rewindDone) await conv.rewindDone;
-		const promptAc = new AbortController();
-		conv.activePromptAc = promptAc;
 		// 输入框内容被消费（发送/斜杠执行）→ 清掉该会话存过的草稿（best-effort）。
 		// 快捷短语发送（不碰输入框）同样清：客户端发送成功后会把当前草稿重存回来。
 		// clear() 同时记录 clear 时间戳水位：清掉之后才 landing 的旧 draft_update
@@ -8906,20 +9016,42 @@ export class ClientSession {
 		}
 		// 用户往这条对话里发了话 = 看过也回了：绿灯灭掉，并把它拉回「最近对话」。
 		this.markRecentSeen(conv);
+		// optimistic-send: wait until every earlier message to this chat has been taken in (started,
+		// queued or refused), so this one sees a running chat and joins its queue instead of racing
+		// it into a second run (see takePromptAdmission).
+		await flow.admission.ready;
+		const promptAc = new AbortController();
+		conv.activePromptAc = promptAc;
 		try {
-			const s = this.session;
+			// optimistic-send: the chat this prompt was sent to, not whichever one the window shows
+			// after the waits above.
+			const s = conv.session;
 			// Native slash commands (see NATIVE_COMMANDS) are executed here and
 			// never reach the SDK. Extension / skill / template commands fall
 			// through — AgentSession.prompt() handles those itself.
 			const slash = parseSlash(text);
-			if (slash && (await this.slash.exec(slash.name, slash.args))) {
-				this.flushSnapshot();
-				return;
+			if (slash) {
+				// optimistic-send: a command run here never reaches pi, so it gives up its place in the
+				// chat's line first: `/new <text>` sends <text> from inside it, maybe to this same blank
+				// chat, and that must not wait behind the command that is waiting for it.
+				flow.admission.release();
+				if (await this.slash.exec(slash.name, slash.args)) {
+					this.flushSnapshot();
+					receipt.ok();
+					return;
+				}
+				// Not one of ours (an add-on's command, a skill, a template): it goes to pi, so it takes a
+				// place in the line again.
+				flow.admission = takePromptAdmission(conv);
+				await flow.admission.ready;
 			}
 			// Native commands above are pure config tweaks (no tokens) — allow them
 			// even while quiesced. Everything that reaches the SDK is NEW work and
 			// is refused until admission reopens.
-			if (this.quiesceBlocked()) return;
+			if (this.quiesceBlocked()) {
+				receipt.fail("The server is about to restart and is not taking new messages right now.");
+				return;
+			}
 
 			// 首轮用户发言后锁定当前会话的预设（对齐 DSH 预设语义）
 			conv.presetLocked = true;
@@ -8934,6 +9066,7 @@ export class ClientSession {
 					textEn: `Prompt refused: this transcript ends with a tool call that never got a result (last run was force-terminated) and auto-repair failed. Reopen it from history or start a new conversation.`,
 				});
 				this.flushSnapshot();
+				receipt.fail(TRANSCRIPT_BLOCKED_REASON);
 				return;
 			}
 			if (!s.isStreaming) {
@@ -8995,6 +9128,7 @@ export class ClientSession {
 								textEn: `Prompt refused: this transcript ends with a tool call that never got a result (last run was force-terminated) and auto-repair failed. Reopen it from history or start a new conversation.`,
 							});
 							this.flushSnapshot();
+							receipt.fail(TRANSCRIPT_BLOCKED_REASON);
 							return;
 						}
 					} else {
@@ -9195,6 +9329,7 @@ export class ClientSession {
 			);
 			if (promptAc.signal.aborted) {
 				conv.activePromptAc = undefined;
+				receipt.fail(STOPPED_BEFORE_SEND_REASON);
 				return;
 			}
 			for (const aside of asides) {
@@ -9217,9 +9352,33 @@ export class ClientSession {
 			}
 			if (promptAc.signal.aborted) {
 				conv.activePromptAc = undefined;
+				receipt.fail(STOPPED_BEFORE_SEND_REASON);
 				return;
 			}
 			conv.activePromptAc = undefined;
+			// optimistic-send: pi calls this once it has taken the text in (the run is about to start, or
+			// the text joined the queue of a running chat, or an add-on handled it) or refused it. Here the
+			// next message may go (admission), and the window gets its receipt: right away for a queued
+			// text (after a snapshot that shows it), or with the user message that starts the run.
+			const preflightResult = (ok: boolean): void => {
+				flow.handedOver = ok;
+				flow.admission.release();
+				if (!ok) {
+					// The error reaches the catch below, which answers with its message. A text pi put off
+					// (flow.deferred) has no catch here, so answer after it with a general reason.
+					setTimeout(() => receipt.fail("The message could not be sent."), 0);
+					return;
+				}
+				if (s.isStreaming) {
+					this.flushConvSnapshots(conv);
+					receipt.ok();
+				} else {
+					// (An older receipt still waiting here belongs to a text an add-on took without a
+					// message of its own: it was handled.)
+					conv.ackOnUserMessage?.ok();
+					conv.ackOnUserMessage = receipt;
+				}
+			};
 
 			if (s.isStreaming) {
 				// queue=true (补充 button) → followUp: the message is delivered only
@@ -9234,10 +9393,14 @@ export class ClientSession {
 				// to finish, which users perceive as ordinary queueing.
 				await s.prompt(text, {
 					streamingBehavior: queue ? "followUp" : "steer",
+					preflightResult,
 				});
 			} else {
-				await s.prompt(text);
+				await s.prompt(text, { preflightResult });
 			}
+			// optimistic-send: pi came back without calling preflightResult (a refusal would have thrown):
+			// it put the text off until the previous run has settled and calls it then.
+			if (!flow.handedOver) flow.deferred = true;
 
 			// 关联快照与本次 prompt 产生的用户消息 entry
 			if (snapshotRef) {
@@ -9268,6 +9431,13 @@ export class ClientSession {
 				text: `Failed to send prompt: ${(err as Error).message}`,
 				textEn: `Failed to send prompt: ${(err as Error).message}`,
 			});
+			// optimistic-send: pi refused the text (compaction running, no model, no key...), an earlier
+			// step broke, or the run broke before its user message came out. A run that already showed
+			// the message keeps its answer (the receipt answers once).
+			if (!flow.handedOver || conv.ackOnUserMessage === receipt) {
+				if (conv.ackOnUserMessage === receipt) conv.ackOnUserMessage = undefined;
+				receipt.fail((err as Error)?.message || "The message could not be sent.");
+			}
 		}
 		// The active conversation (captured at prompt start — see above) has been
 		// continued since it was opened — it must not be dismissed when the user
@@ -10167,7 +10337,9 @@ export class ClientSession {
 			shouldRetainActive({
 				reviewing: conv.goal.reviewing,
 				wizardRunning: conv.wizardRunning,
-				streaming: conv.session.isStreaming,
+				// optimistic-send: a message on its way (still in the add-ons' "before the AI starts" step)
+				// counts as a run: closing the chat now would lose it.
+				streaming: conv.session.isStreaming || (conv.sendsInFlight ?? 0) > 0,
 				compacting: conv.session.isCompacting,
 				// 只看“用过”的存活终端：没动过的空 shell（点开终端 tab 自动建的
 				// 那个）不保留对话，切走即随对话释放（见 countBlockingLive）。

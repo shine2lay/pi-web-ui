@@ -25,6 +25,16 @@
 
 `hello` 可带 `protocolVersion`，`ready` 回带服务端版本；前端比对不一致时显示持久刷新横幅（应用原地更新后「界面新的/WS 旧的」混跑防护）。常量在 server/ 与 web/ 各一份 protocol-version.ts，`check:protocol` 校验两份一致——改协议时必须同步 bump。
 
+### optimistic-send: a sent message shows at once (protocol 26)
+
+Pressing Send draws the message right away, faded with "Sending…" (the "working" row follows it), instead of waiting for the snapshot with the server's copy: pi only emits the user message after every add-on's `before_agent_start` step (pi-memory's search alone can take 3 s). The window gives each `prompt` an `id` (`newPromptId()`); the server answers with exactly one `prompt_ack {id, conversationId, ok, reason?, rev?}` (`server/prompt-ack.ts`, both engines):
+
+- **ok** goes out after the snapshot that shows the message (in the chat, or in its queue while the AI works) — the same "snapshot first, then receipt" order as `switch_done`. `rev` is the window's latest snapshot rev: a window whose state is older (that snapshot was dropped under backpressure) keeps its copy until a snapshot that new arrives. A slash command, or a text an add-on took over, is also ok.
+- **not ok** (draining, blocked transcript, stopped before it started, no model, compaction running, any error) keeps the message in the chat marked "Not sent" with the reason, Retry (the same id again) and × (the text goes back to the input box).
+- **Ledger**: the same id sent twice never lands twice — still being handled → waits for the first answer; already in the chat → acknowledged again; refused → forgotten, so Retry runs it again. `prompt_status {ids}` (after a reconnect or reload) is answered from the ledger; an unknown id (never arrived, server restarted) is not ok.
+- **Admission line** (`takePromptAdmission`): pi only marks a chat as running after the hooks, so a second message sent during them used to fail with "Agent is already processing". Each prompt takes its place before its first await and waits for the one before it to be admitted, so it sees the running chat and joins the steer/follow-up queue.
+- Window side: `web/src/pending-sends.ts` (pure, unit-tested) keeps the list; `use-chat.ts` adds an entry in `send()` for every prompt with an id (no copy for slash commands), drops copies as soon as a snapshot shows the real message (after the chat's last message at send time, one copy per send) and on ok acks, keeps the list in `sessionStorage` across a reload; `MessageList.tsx` draws the copies at the end of their chat (queued look while the AI works). Other windows see the message when the server has it, as before. Sends from ChatInput, prompt templates and plugins' startChat (`plugin-host.ts`, after the new chat is shown) all carry an id; a `prompt` without one is never acknowledged. Tests: `tests/unit/pending-sends.test.ts`, `tests/unit/prompt-ack.test.ts`, E2E `tests/optimistic-send-test.mjs`.
+
 ## 协议单源（types.ts 是 re-export shim，不再手工同步）
 
 `server/protocol.ts` 是唯一事实源；`web/src/types.ts` 用 `export type * from "../../server/protocol"` 全量再导出（纯类型，构建时擦除），前端本地类型（FileContent/FileListing/ToolStatus）附在 shim 下方。

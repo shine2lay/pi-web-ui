@@ -71,6 +71,7 @@ import type {
 	UiState,
 	UiLayoutPrefs,
 } from "../protocol.js";
+import { PromptReceipt, promptIds } from "../prompt-ack.js";
 import { launchOrigin, toServiceInfo } from "../launch-origin.js";
 import { DshRuntime, loadDeepSeekKey, type DshAgentPreset } from "./dsh-client.js";
 import {
@@ -1723,12 +1724,34 @@ export class DshClientSession {
 	// prompt / 附件
 	// -----------------------------------------------------------------------
 
-	async prompt(text: string, attachments?: PromptAttachment[], queue = false): Promise<void> {
+	/** id: optimistic-send - the window's id for this send, answered with one prompt_ack (prompt-ack.ts). */
+	async prompt(text: string, attachments?: PromptAttachment[], queue = false, id?: string): Promise<void> {
+		// A Retry of an id that is already in the chat, or still being handled, stops here.
+		// An ok receipt for the chat this window shows carries the rev of its latest snapshot (which
+		// already shows the message; see prompt_ack in protocol.ts).
+		const receipt = promptIds.begin(id, this.activeId, (msg) =>
+			this.emit(msg.ok && msg.conversationId === this.activeId ? { ...msg, rev: this.emittedRev } : msg),
+		);
+		if (!receipt) return;
+		try {
+			await this.promptNow(receipt, text, attachments, queue);
+		} finally {
+			if (!receipt.answered) receipt.fail("The message could not be sent.");
+		}
+	}
+
+	private async promptNow(
+		receipt: PromptReceipt,
+		text: string,
+		attachments?: PromptAttachment[],
+		queue = false,
+	): Promise<void> {
 		// 斜杠命令拦截（内置 NATIVE + 插件 registerCommand）；带附件时不拦截。
 		const parsed = parseSlash(text);
 		if (parsed && !attachments?.length) {
 			const handled = await this.execSlash(parsed.name, parsed.args);
 			if (handled) {
+				receipt.ok();
 				// 与 pi 一致：命令执行后强制刷一次快照（notice/状态变化立即可见）。
 				this.flushSnapshot();
 				return;
@@ -1745,6 +1768,9 @@ export class DshClientSession {
 				textEn: `Prompt blocked: this conversation is running in another window ("${fileOwner.title}"). Wait for it to finish or continue there — two writers on one transcript would leave one run permanently invisible.`,
 			});
 			this.flushSnapshot();
+			receipt.fail(
+				`This chat is running in another window ("${fileOwner.title}"). Wait for it to finish or continue there.`,
+			);
 			return;
 		}
 		// issue #145：同项目并行感知（与 pi 引擎同语义；DSH 无 display:false 的
@@ -1798,7 +1824,7 @@ export class DshClientSession {
 			conv.title = trimmed.length > 30 ? `${trimmed.slice(0, 30)}…` : trimmed;
 			this.emitConversations();
 		}
-		await this.promptConv(conv, text, attachments, queue, sysPrefix);
+		await this.promptConv(conv, text, attachments, queue, sysPrefix, receipt);
 	}
 
 	/**
@@ -1869,9 +1895,14 @@ export class DshClientSession {
 		_queue = false,
 		// issue #145 同项目并行提醒：只进运行时上下文，不进用户气泡。
 		sysPrefix = "",
+		/** optimistic-send: answered once the message is in the chat, or on a refusal. */
+		receipt: PromptReceipt = PromptReceipt.none(conv.id),
 	): Promise<void> {
 		try {
-			if (this.quiesceBlocked()) return;
+			if (this.quiesceBlocked()) {
+				receipt.fail("The server is about to restart and is not taking new messages right now.");
+				return;
+			}
 			conv.promptedSinceActive = true;
 			conv.lastEventAt = Date.now();
 			// Agent 预设：运行时世代过期 → 重登 preset/assign（创建时消费；
@@ -1902,6 +1933,8 @@ export class DshClientSession {
 			};
 			this.appendMessage(conv, optimistic);
 			this.flushSnapshot();
+			// optimistic-send: the message is in the chat and its snapshot has gone out.
+			receipt.ok();
 			if (conv.isStreaming) {
 				// DSH 无 mid-run steering：isStreaming 时入队（followUp），
 				// 运行时 inbox 在 run 结束后消费。
@@ -1923,6 +1956,8 @@ export class DshClientSession {
 				text: `Failed to send prompt: ${(err as Error).message}`,
 				textEn: `Failed to send prompt: ${(err as Error).message}`,
 			});
+			// (A message already in the chat keeps its answer: the receipt answers once.)
+			receipt.fail((err as Error)?.message || "The message could not be sent.");
 		}
 		this.flushSnapshot();
 	}
