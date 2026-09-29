@@ -72,7 +72,10 @@ export function sameChat(
 	p: Pick<PendingSend, "conversationId" | "sessionId">,
 	state: { conversationId: string; sessionId?: string },
 ): boolean {
-	return p.sessionId && state.sessionId ? p.sessionId === state.sessionId : p.conversationId === state.conversationId;
+	if (p.sessionId && state.sessionId) return p.sessionId === state.sessionId;
+	// chat-open-speed: a message written into a chat that was still opening has no chat id yet
+	// (only its session), so an empty id must never stand for "the same chat".
+	return !!p.conversationId && p.conversationId === state.conversationId;
 }
 
 /** A text is a slash command (runs a command instead of chatting): it gets no faded copy. */
@@ -348,7 +351,8 @@ export function pendingFor(
 	list: readonly PendingSend[],
 	shown: { conversationId: string; sessionId?: string } | null | undefined,
 ): PendingSend[] {
-	if (!shown?.conversationId) return [];
+	// chat-open-speed: a chat that is still opening is known by its session alone (no chat id yet).
+	if (!shown?.conversationId && !shown?.sessionId) return [];
 	return list.filter((p) => sameChat(p, shown)).sort((a, b) => a.createdAt - b.createdAt);
 }
 

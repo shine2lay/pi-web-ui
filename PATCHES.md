@@ -2921,3 +2921,70 @@ when the server has it. Making the add-ons' steps faster is a separate question.
 answer at every exit of `prompt()` and the admission line around the pi call; if pi's `preflightResult`
 changes, the new browser test shows it. If upstream starts showing sent messages early itself, compare
 and drop what it covers.
+
+## chat-open-speed
+
+**Status**: `local`
+**Baseline**: v0.96.1
+
+**Why** (owner, 2026-09-28): opening a big chat from the history list took 6-8 s with nothing on screen.
+Measured on the server (copies of real chats, 267 MB / 141 MB / 22 MB), the 267 MB open was 6.0 s:
+repair pre-scan 1.7 s + dangling-tool heal 1.5 s + pi's `SessionManager.open` 1.3 s + the
+"interrupted compaction?" scan 1.1 s + the add-ons' session start 0.2-0.7 s; building the snapshot was
+60 ms. So the file was read and parsed four times before anything could be shown. Now the newest
+messages appear while the rest loads, and a healthy file is read once.
+
+### Changes
+
+1. **One read instead of four** (`server/transcript-scan.ts`, new): `scanTranscriptFile()` reads the
+   file once, parses it line by line (per-line `Buffer` slices; 460 ms for 280 MB against 975 ms for a
+   whole-file decode) and answers two questions at once: is the file healthy, and what does the newest
+   window look like. Healthy means a v3 header, no interrupted-compaction marker, no duplicate entry id,
+   no parent loop (`transcriptDefectOf()` in `compaction-markers.ts`, the same three things
+   `repairSessionTranscript` rewrites) and no tool call left unanswered at the tip
+   (`tailDanglingToolCallsOf()` in `dangling-tools.ts`). It never writes and never runs pi's
+   `SessionManager`, so a chat open in another window can't be disturbed.
+   For a healthy file `switchSessionNow` then skips `repairTranscriptFileBeforeOpen` (repair + heal) and
+   `noticeInterruptedCompaction` \u2014 three of the four reads. Anything unusual falls back to today's path
+   exactly as before, and pi's own load still repairs whatever it finds.
+2. **The newest messages first** (`agent-service.ts` `scanAndPreview` / `emitSwitchPreview`, new frame
+   `switch_preview` in `protocol.ts`): from the same read, the server builds the branch the chat is on
+   with pi's own `buildSessionContext` (so branches, rewinds, compaction summaries and context edits are
+   the ones you would see), takes the same last 100 messages as a normal snapshot and sends them as a
+   read-only state, before pi loads the file. The stand-in conversation it builds runs through the very
+   same snapshot code (`chatIndexOf` \u2192 `fullRangeOf` \u2192 `buildQuestionIndex` \u2192 `snapshotDigests`), so the
+   ids, the window start, the question index, the exchange digests and the picture links are identical to
+   the real snapshot that follows \u2014 the swap changes nothing on screen (`chat-cache.ts` `nextListKey`
+   keeps the list, so no row is rebuilt). The preview carries no conversation id, which is what marks it
+   read-only. `PI_WEB_OPEN_PREVIEW=0` turns the whole thing off.
+3. **Window** (`use-chat.ts`, `App.tsx`, `SwitchOverlay.tsx`, `styles.css`): a `switch_preview` for the
+   chat being opened is shown through the existing preview slot (the one the window's own chat cache
+   uses), so it is read-only and marked "still opening". The veil over a preview no longer swallows
+   clicks, so you can read, scroll and write while the rest loads.
+4. **Writing before the chat is open**: a message written during a preview is held in the window
+   (`heldSendsRef`), shown faded as "Sending" by the optimistic-send patch, and sent the moment
+   `switch_done` arrives. It carries `forSession`, and the server refuses a prompt whose chat is not the
+   open one any more (`index.ts`), so a slow open can never drop a message into the wrong chat. Leaving
+   the chat before it opened (New chat, or opening another one) marks the message "Not sent" with a
+   reason instead of sending it late; a failed switch and a dropped connection do the same.
+
+### How it was checked
+
+- `tests/unit/transcript-scan.test.ts` (16): the messages the scan produces are compared with pi's own
+  `buildSessionContext` for a plain chat, a branch, a rewind, a compaction, a context edit (replace and
+  remove), a half-written last line and a file without a final newline; the file is byte-identical after
+  a scan; and each unhealthy case (unanswered tool call, interrupted-compaction marker, duplicate id,
+  parent loop, old version, no header, empty, missing) is recognised.
+- `tests/chat-open-preview-test.mjs` (sealed, 26 checks). Over the socket: the preview arrives before the
+  snapshot and before `switch_done`, with the same ids, texts, window start, question index and digests;
+  a branched-and-rewound chat previews only the branch it is on; a chat cut off mid tool call gets no
+  preview but still opens; a file that is not a chat gets no preview and fails with the usual error; a
+  prompt meant for another chat is refused and never reaches the file. In a real browser, with the
+  snapshot frames held back: the newest messages of a 1800-message chat show in 153 ms, a message typed
+  during the wait shows as "Sending" and no prompt goes out, releasing the snapshot sends it, the rows
+  that were on screen are not rebuilt, and leaving the chat instead marks it "Not sent".
+
+**When syncing**: `switchSessionNow` is upstream code \u2014 keep the `scanAndPreview` call in place of the
+unconditional repair, and keep `noticeInterruptedCompaction` behind `fastOpen`. `transcript-scan.ts`
+uses pi's `buildSessionContext`, `parseSessionEntries` and `CURRENT_SESSION_VERSION`; if pi changes how
+a session file is laid out, the unit test that compares against `buildSessionContext` says so.

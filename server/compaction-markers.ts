@@ -271,6 +271,60 @@ export function repairSessionTranscript(raw: string): TranscriptRepairResult {
 	return result;
 }
 
+/** chat-open-speed: what repairSessionTranscript would change, if anything (read-only). */
+export type TranscriptDefect = "pending-marker" | "duplicate-id" | "parent-cycle";
+
+/**
+ * chat-open-speed: does this transcript need repairSessionTranscript at all?
+ *
+ * repairSessionTranscript only ever rewrites a file for three reasons: a leftover
+ * pending marker, a duplicate id, or a parent cycle (rewired parents are a
+ * consequence of the first two). These are the same three checks on ALREADY PARSED
+ * entries, so a caller that parsed the file once (transcript-scan.ts) can decide
+ * in memory instead of reading and parsing the whole file a second time.
+ * null = healthy, the repair pass can be skipped.
+ */
+export function transcriptDefectOf(entries: readonly unknown[]): TranscriptDefect | null {
+	const live: Record<string, unknown>[] = [];
+	const seen = new Set<string>();
+	for (const e of entries) {
+		if (typeof e !== "object" || e === null) continue;
+		const entry = e as Record<string, unknown>;
+		if (markerKindOf(entry) === "pending") return "pending-marker";
+		const id = entry.id;
+		if (typeof id !== "string") continue;
+		if (seen.has(id)) return "duplicate-id";
+		seen.add(id);
+		live.push(entry);
+	}
+	// Cycle check, linear (same colouring as repairSessionTranscript's step 3):
+	// 1 = on the path walked right now, 2 = settled (its chain ends at a root or a
+	// settled node, so it can never close a loop).
+	const byId = new Map<string, Record<string, unknown>>();
+	for (const s of live) byId.set(s.id as string, s);
+	const state = new Map<Record<string, unknown>, 1 | 2>();
+	const path: Record<string, unknown>[] = [];
+	for (const s of live) {
+		if (state.has(s)) continue;
+		state.set(s, 1);
+		path.push(s);
+		let cur = parentIdOf(s);
+		while (cur !== null) {
+			const next = byId.get(cur);
+			if (!next) break;
+			const st = state.get(next);
+			if (st === 1) return "parent-cycle";
+			if (st === 2) break;
+			state.set(next, 1);
+			path.push(next);
+			cur = parentIdOf(next);
+		}
+		for (const n of path) state.set(n, 2);
+		path.length = 0;
+	}
+	return null;
+}
+
 export interface SessionFileRepair extends TranscriptRepairResult {
 	file: string;
 	/** 备份路径；null = 文件健康、无需备份 */

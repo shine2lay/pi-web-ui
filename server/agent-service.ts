@@ -121,6 +121,7 @@ import {
 	findTailDanglingToolCalls,
 	healDanglingToolCallFile,
 } from "./dangling-tools.js";
+import { contextMessagesOf, scanTranscriptFile, type TranscriptScan } from "./transcript-scan.js";
 import { removeQueuedByIndexOrText } from "./queue-utils.js";
 import type {
 	PluginAgentTool,
@@ -399,6 +400,11 @@ const EXCHANGE_DIGESTS = (() => {
 	if (!Number.isFinite(v)) return 5;
 	return v <= 0 ? 0 : Math.floor(v);
 })();
+/** chat-open-speed: send the newest messages of a chat opened from history before the open
+ *  itself finishes (see ClientSession.scanAndPreview). PI_WEB_OPEN_PREVIEW=0 turns it off:
+ *  the open then works exactly as it did before this patch (repair pre-scan and all). */
+const OPEN_PREVIEW = process.env.PI_WEB_OPEN_PREVIEW !== "0";
+
 /** Preview panel cap: only the first 512KB of a file is ever read/sent. */
 
 /** Thrown when the service is quiesced (draining) and the request is NEW work
@@ -10226,6 +10232,97 @@ export class ClientSession {
 	}
 
 	/**
+	 * chat-open-speed: read the transcript ONCE before the open and, when it is provably
+	 * intact, send its newest messages straight away.
+	 *
+	 * Opening a 267 MB chat from history used to read and parse the whole file three times
+	 * before the page saw anything (repair pre-scan 1.7 s + dangling-tool heal 1.5 s +
+	 * interrupted-compaction scan 1.1 s, on top of the SDK's own 1.3 s load). This single
+	 * pass (0.5 s for that file) answers what all three asked:
+	 *
+	 *  - healthy (problem === null): no repair pass, no heal pass, no marker scan, and the
+	 *    newest window goes out at once as `switch_preview` — read-only, with the same
+	 *    message ids as the snapshot that follows, so the swap doesn't rebuild the list.
+	 *  - anything odd (old format, duplicate ids, a leftover compaction marker, a parent
+	 *    cycle, a dangling tool call, an unreadable or oversized file): no preview, and the
+	 *    open runs exactly as it did before — repair, heal, notice.
+	 *
+	 * Returns the scan (its `problem` tells the caller which path to take), or null when the
+	 * fast path is off (PI_WEB_OPEN_PREVIEW=0) or the file could not be scanned at all.
+	 */
+	private scanAndPreview(target: SwitchTarget, file: string): TranscriptScan | null {
+		if (!OPEN_PREVIEW) return null;
+		let scan: TranscriptScan;
+		try {
+			scan = scanTranscriptFile(file);
+		} catch {
+			// A scan must never keep a chat from opening: fall back to the old path.
+			return null;
+		}
+		try {
+			if (scan.problem === null) this.emitSwitchPreview(target, scan);
+		} catch {
+			// Best-effort: the real snapshot is on its way regardless.
+		} finally {
+			// Drop the parsed entries before the SDK loads its own copy: holding both would
+			// double the peak memory of an open (a 267 MB transcript parses to ~0.5 GB).
+			scan.entries.length = 0;
+		}
+		return scan;
+	}
+
+	/** chat-open-speed: the newest window of a chat that is still opening (see scanAndPreview).
+	 *  Built with the very same code as a snapshot (chatIndexOf / fullRangeOf / question index /
+	 *  exchange digests) over a stand-in conversation holding the messages the SDK will load,
+	 *  so ids, positions and picture addresses match the snapshot that replaces it. */
+	private emitSwitchPreview(target: SwitchTarget, scan: TranscriptScan): void {
+		const messages = contextMessagesOf(scan) as AgentMessage[];
+		if (messages.length === 0) return;
+		// A stand-in conversation: chatIndexOf only reads the message list, the id counter and the
+		// caches. Its numbering starts at 1 in first-seen order \u2014 exactly what the real conversation
+		// does with the same messages a moment later, so the ids are the same ones.
+		const pconv = {
+			session: { sessionId: scan.sessionId, sessionFile: scan.file, agent: { state: { messages } } },
+			msgIds: new Map<string, number>(),
+			nextMsgId: 1,
+			uiMessageCache: new Map<string, UiMessage>(),
+			chatIndex: undefined,
+			retryState: null,
+		} as unknown as Conversation;
+		const idx = chatIndexOf(pconv);
+		const total = idx.raw.length;
+		if (total === 0) return;
+		const start = Math.max(0, total - MESSAGE_WINDOW);
+		const full = (i: number) => fullAt(pconv, idx, i);
+		const state: UiState = {
+			...this.buildLightState(0, false),
+			// The chat being opened, not the one the server is still on.
+			cwd: scan.cwd || this.cwd,
+			sessionId: scan.sessionId,
+			sessionFile: scan.file,
+			// No conversation exists yet; the page keys the list by the session (see nextListKey).
+			conversationId: "",
+			isEphemeral: false,
+			rev: 0,
+			messages: fullRangeOf(pconv, idx, start, total),
+			messagesStart: start,
+			questionIndex: buildQuestionIndex(idx.raw, (i) => idx.ids[i]),
+			...(EXCHANGE_DIGESTS > 0 ? { exchanges: snapshotDigests(idx.raw, start, EXCHANGE_DIGESTS, full) } : {}),
+			// Nothing is running in a chat that isn't open yet.
+			streamingMessage: null,
+			isStreaming: false,
+			queue: { steering: [], followUp: [] },
+			retry: null,
+			compaction: null,
+			rewinding: null,
+			tooBig: null,
+			dialog: null,
+			draft: null,
+		};
+		this.emit({ type: "switch_preview", target, state });
+	}
+
+	/**
 	 * #235：已知路径先修后开（openConversation 走这条——单文件预扫描零负担）。
 	 * 返回 null = 文件健康或无需处理；返回 repair = 修过，调用方弹提示。
 	 * #280：顺带修悬空 toolCall（强制重置/崩溃残留的有调用无结果），修过同样弹提示。
@@ -10658,6 +10755,18 @@ export class ClientSession {
 
 	private emitSwitchFailed(target: SwitchTarget, text: string, textEn: string): void {
 		this.emit({ type: "switch_failed", target, error: text, errorEn: textEn });
+	}
+
+	/** chat-open-speed: the pi session of the chat this window is on, "" when there is none.
+	 *  A `prompt` may name the session it was typed into (it can now be written while a chat
+	 *  is still opening); index.ts refuses it when the two differ. */
+	activeSessionId(): string {
+		if (!this.convs.has(this.activeId)) return "";
+		try {
+			return this.conv.session.sessionId ?? "";
+		} catch {
+			return "";
+		}
 	}
 
 	/** crash-guard: does this window's active chat still exist in the shared table? */
@@ -11940,7 +12049,17 @@ export class ClientSession {
 
 			// #235：先修后开——坏转录到 open 后的 getBranch 会死循环，修完再读。
 			// 单文件预扫描，健康文件只多一次小读；修过即弹提示（含压缩被打断）。
-			this.repairTranscriptFileBeforeOpen(targetPath);
+			// chat-open-speed: one read of the file answers "is it intact?" and "what are its
+			// newest messages?". Intact \u2192 the page gets the end of the chat now (switch_preview)
+			// and the repair, heal and marker passes are skipped; otherwise the old path runs.
+			const scan = this.scanAndPreview(target, targetPath);
+			const fastOpen = scan !== null && scan.problem === null;
+			if (!fastOpen) this.repairTranscriptFileBeforeOpen(targetPath);
+			else {
+				// Let the preview reach the socket before the SDK load blocks this thread for
+				// seconds \u2014 without this the frame would sit in the queue until the open is done.
+				await new Promise<void>((done) => setImmediate(done));
+			}
 			const sessionManager = SessionManager.open(targetPath);
 			const targetCwd = sessionManager.getCwd();
 			const conversationId = this.nextConversationId();
@@ -11985,7 +12104,9 @@ export class ClientSession {
 			// Deliberately resumed — must not be dismissed when the user later
 			// switches away without sending a new message.
 			conv.promptedSinceActive = true;
-			this.noticeInterruptedCompaction(conv);
+			// chat-open-speed: the scan already read the whole file and found no pending marker,
+			// so this second whole-file read (1.1 s on a 267 MB chat) has nothing to find.
+			if (!fastOpen) this.noticeInterruptedCompaction(conv);
 			this.convs.set(conv.id, conv);
 			this.activeId = conv.id;
 			// 从历史/「最近对话」打开 = 看过了：绿灯灭掉，并撤销它的「移出最近」墓碑。

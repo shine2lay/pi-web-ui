@@ -622,6 +622,14 @@ export type ClientMessage =
 			 * the chat is acknowledged again, and only a refused id runs again.
 			 */
 			id?: string;
+			/**
+			 * chat-open-speed: the pi session this message was typed into. A message can now
+			 * be written while a chat is still opening (the preview shows its end); the window
+			 * holds it until the chat is ready and sends it with the chat it was meant for. The
+			 * server refuses it (ack ok:false) if the active chat is a different session by
+			 * then \u2014 e.g. the user opened yet another chat in between. Absent = no check.
+			 */
+			forSession?: string;
 	  }
 	/** optimistic-send: after a reconnect or a reload, the window asks what became of
 	 *  the sends it still shows as "Sending" and doesn't see in the chat yet. Each id
@@ -2877,6 +2885,17 @@ export type ServerMessage =
 	 *  早先那次的回执都对不上，直接忽略）。不用 notice：那只是一条 toast，对不到目标上。 */
 	| { type: "switch_done"; target: SwitchTarget }
 	| { type: "switch_failed"; target: SwitchTarget; error: string; errorEn?: string }
+	/** chat-open-speed: the newest messages of the chat being opened, sent BEFORE the open
+	 *  itself (the SDK load, the add-ons' session start, the folder side effects). A 267 MB
+	 *  chat took 6 s to open; this frame arrives in well under a second, so the page shows
+	 *  the chat's end while the rest loads. Read-only: the server is still on the old chat
+	 *  (the overlay stays until switch_done, which brings the real snapshot).
+	 *
+	 *  The window ignores it unless it is still waiting for exactly this target. The state
+	 *  carries the same message ids as the snapshot that follows, so replacing one with the
+	 *  other doesn't rebuild the list. Only sent when the transcript is provably intact;
+	 *  anything odd about the file and the open runs the old way, with no preview. */
+	| { type: "switch_preview"; target: SwitchTarget; state: UiState }
 	/** optimistic-send: the receipt for a `prompt` that carried an `id`, sent only to
 	 *  the window that sent it. `ok: true` goes out AFTER the snapshot that holds the
 	 *  message (in the chat, or its place in the waiting queue while the AI works), so

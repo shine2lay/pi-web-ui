@@ -769,7 +769,13 @@ export function App() {
 	const listConvId = listState?.conversationId;
 	const listSessionId = listState?.sessionId;
 	const listPending = useMemo(
-		() => pendingFor(chat.pendingSends, listConvId ? { conversationId: listConvId, sessionId: listSessionId } : null),
+		// chat-open-speed: a chat that is still opening has no chat id yet, only its session \u2014 a
+		// message written into it is drawn faded by session (see pending-sends.ts sameChat).
+		() =>
+			pendingFor(
+				chat.pendingSends,
+				listConvId || listSessionId ? { conversationId: listConvId ?? "", sessionId: listSessionId } : null,
+			),
 		[chat.pendingSends, listConvId, listSessionId],
 	);
 	const listKeyRef = useRef<ListKey | null>(null);

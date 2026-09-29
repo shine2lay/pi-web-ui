@@ -9396,8 +9396,13 @@ div.chead[role="button"]:focus-visible,
 	background: transparent;
 	backdrop-filter: none;
 	animation: none;
+	/* chat-open-speed: what shows under it IS the chat being opened, and a message written now
+	   waits for that chat (use-chat.ts heldSendsRef) instead of landing in the old one \u2014 so reading
+	   and writing stay possible while it loads. Only the little card takes clicks. */
+	pointer-events: none;
 }
 .switch-overlay-preview .switch-card {
+	pointer-events: auto;
 	gap: 10px;
 	padding: 6px 12px;
 	border-radius: 10px;

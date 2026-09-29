@@ -223,6 +223,18 @@ export function findTailDanglingToolCalls(messagesOrEntries: unknown[]): Danglin
 }
 
 /**
+ * chat-open-speed: the dangling calls healDanglingToolCallFile would fill in, computed
+ * from ALREADY PARSED entries (transcript-scan.ts has just read the file once; reading
+ * and parsing a 280 MB transcript a second time costs ~1.5 s). Empty = nothing to heal.
+ */
+export function tailDanglingToolCallsOf(entries: readonly unknown[], lastId: string | null): DanglingToolCall[] {
+	if (entries.length === 0 || !lastId) return [];
+	const tailIds = tailAssistantToolCallIds(entries as unknown[], lastId);
+	if (tailIds.size === 0) return [];
+	return findDanglingToolCalls(entries as unknown[]).filter((d) => tailIds.has(d.toolCallId));
+}
+
+/**
  * 落盘修复：向会话文件尾追加合成 toolResult（仅针对当前分支尾部生效的悬空调用），
  * parentId 链式接在当前尾行之后。append-only——历史字节不动，无需备份。
  * 返回追加条数（0 = 健康，无需处理；-1 = 文件不可读/不可写）。

@@ -1101,6 +1101,10 @@ export interface DispatchSession {
 	cwd: string;
 	/** id: optimistic-send - the window's id for this send, answered with one prompt_ack. */
 	prompt(text: string, attachments?: PromptAttachment[], queue?: boolean, id?: string): Promise<void>;
+	/** chat-open-speed: the pi session of the chat this window is on ("" when none). Used to refuse
+	 *  a message written into a chat that was still opening if the window ended up elsewhere.
+	 *  Optional: engines without sessions (DSH) don't implement it and the check is skipped. */
+	activeSessionId?(): string;
 	/** Remove one queued prompt (steer/followUp) — the ✕ on a pending bubble.
 	 *  `index` is the bubble position (identity); omitted = text fallback. */
 	removeQueued(kind: "steer" | "followUp", text: string, index?: number): void;
@@ -2235,9 +2239,21 @@ wss.on("connection", (ws) => {
 			return;
 		}
 		switch (msg.type) {
-			case "prompt":
+			case "prompt": {
+				// chat-open-speed: a message written while a chat was still opening carries the chat
+				// it was meant for. If the window is on a different one by now (another chat opened
+				// in between, the open failed), refuse it instead of sending it to the wrong chat.
+				const want = typeof msg.forSession === "string" ? msg.forSession : "";
+				const on = want ? (cs.activeSessionId?.() ?? want) : want;
+				if (want && on !== want) {
+					const reason = "The chat it was written in is not the open one any more, so it wasn't sent.";
+					send({ type: "notice", level: "error", text: reason });
+					if (msg.id) send({ type: "prompt_ack", id: msg.id, conversationId: "", ok: false, reason });
+					break;
+				}
 				void cs.prompt(msg.text, msg.attachments, msg.queue, typeof msg.id === "string" ? msg.id : undefined);
 				break;
+			}
 			case "prompt_status":
 				// optimistic-send: a window that reconnected or reloaded asks about sends it still shows as
 				// "Sending". Answered on this socket; if it drops too, the next reconnect asks again.

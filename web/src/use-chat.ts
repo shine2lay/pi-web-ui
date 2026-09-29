@@ -456,6 +456,7 @@ type Action =
 	| { type: "prompt_ack"; ack: PromptAckInfo }
 	| { type: "status"; status: ConnStatus }
 	| { type: "switch_started"; target: SwitchTarget; startedAt: number; preview?: UiState }
+	| { type: "switch_preview"; target: SwitchTarget; state: UiState }
 	| { type: "switch_done"; target: SwitchTarget }
 	| { type: "switch_failed"; target: SwitchTarget; error: string; errorEn?: string }
 	| { type: "switch_hide" }
@@ -890,6 +891,14 @@ function reducer(state: ChatState, action: Action): ChatState {
 				// switch-cache：缓存里有目标就先显示它（连点两条时换成后一条的，没有就清掉）。
 				preview: action.preview ?? null,
 			};
+		case "switch_preview":
+			// chat-open-speed: the newest messages of the chat being opened, read from its file while
+			// the rest of it still loads. Only for the switch we are still waiting on, and only while
+			// the overlay is up: a late one must not paint over a chat that finished opening. It
+			// replaces the page's own cached preview (same messages, but current).
+			return sameSwitchTarget(state.pendingSwitch?.target, action.target) && !state.pendingSwitch?.hidden
+				? { ...state, preview: action.state }
+				: state;
 		case "switch_done":
 			// 只认自己还在等的那次：连点两条时早先那次的回执不能把后一次的遮罩撤掉。
 			return sameSwitchTarget(state.pendingSwitch?.target, action.target)
@@ -1420,6 +1429,36 @@ export function useChat() {
 		// 自动消失计时由通知组件（NoticeToast）管理：悬浮暂停、移开继续。
 	}, []);
 
+	/** chat-open-speed: messages written while their chat was still opening. They show as faded
+	 *  copies straight away and go out once that chat is ready (`switch_done`), each tagged with the
+	 *  chat it was written in so the server refuses it if the window ended up on another one. */
+	const heldSendsRef = useRef<{ target: SwitchTarget; id: string; msg: ClientMessage }[]>([]);
+
+	/** The chat they were written in is ready: send them, oldest first. */
+	const flushHeldSends = (target: SwitchTarget): void => {
+		const held = heldSendsRef.current;
+		if (held.length === 0) return;
+		const mine = held.filter((h) => sameSwitchTarget(h.target, target));
+		if (mine.length === 0) return;
+		heldSendsRef.current = held.filter((h) => !sameSwitchTarget(h.target, target));
+		const ws = wsRef.current;
+		for (const h of mine) {
+			if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(h.msg));
+			else dispatch({ type: "pending_fail", id: h.id, reason: "The connection dropped before it was sent." });
+		}
+	};
+
+	/** That chat never came up (the open failed, the window went back, the connection dropped):
+	 *  mark the copies "Not sent" instead of leaving them waiting for ever. */
+	const failHeldSends = (reason: string, target?: SwitchTarget): void => {
+		const held = heldSendsRef.current;
+		if (held.length === 0) return;
+		const mine = target ? held.filter((h) => sameSwitchTarget(h.target, target)) : held;
+		if (mine.length === 0) return;
+		heldSendsRef.current = target ? held.filter((h) => !sameSwitchTarget(h.target, target)) : [];
+		for (const h of mine) dispatch({ type: "pending_fail", id: h.id, reason });
+	};
+
 	const send = useCallback((msg: ClientMessage) => {
 		const ws = wsRef.current;
 		if (ws && ws.readyState === WebSocket.OPEN) {
@@ -1440,6 +1479,16 @@ export function useChat() {
 					: msg.type === "switch_conversation"
 						? { kind: "conversation", id: msg.id }
 						: null;
+			// chat-open-speed: going somewhere else while a chat is still opening drops what was written
+			// in it — better a clear "not sent" than a message arriving in a chat they have left.
+			if (
+				heldSendsRef.current.length > 0 &&
+				(msg.type === "new_chat" ||
+					((msg.type === "switch_session" || msg.type === "switch_conversation") &&
+						heldSendsRef.current.some((h) => switchTarget === null || !sameSwitchTarget(h.target, switchTarget))))
+			) {
+				failHeldSends("You left the chat before it opened, so this wasn't sent.");
+			}
 			let out: ClientMessage = msg;
 			if (switchTarget && !switchAlreadyShown(switchTarget, chatApi.current.chat.state)) {
 				// switch-cache：看过这条就先显示缓存的那份，并告诉服务端手里有哪一截（它只补差异）。
@@ -1458,8 +1507,21 @@ export function useChat() {
 			}
 			// optimistic-send: a message sent with an id is drawn at once, faded, until the server
 			// answers (web/src/pending-sends.ts). Slash commands run a command instead: no copy.
+			// chat-open-speed: written while the chat was still opening? Then the copy belongs to the
+			// chat being opened (the one on screen), and the message itself waits for it.
+			const opening = chatApi.current.chat.pendingSwitch;
+			const shownPreview = chatApi.current.chat.preview;
+			const hold =
+				out.type === "prompt" &&
+				out.id &&
+				!isSlashText(out.text) &&
+				opening &&
+				!opening.hidden &&
+				shownPreview?.sessionId
+					? { target: opening.target, id: out.id, forSession: shownPreview.sessionId, state: shownPreview }
+					: null;
 			if (out.type === "prompt" && out.id && !isSlashText(out.text)) {
-				const ui = chatApi.current.chat.state;
+				const ui = hold ? hold.state : chatApi.current.chat.state;
 				const id = out.id;
 				if (ui && !chatApi.current.chat.pendingSends.some((p) => p.id === id)) {
 					dispatch({
@@ -1474,6 +1536,11 @@ export function useChat() {
 						}),
 					});
 				}
+			}
+			if (hold && out.type === "prompt") {
+				// Waits for switch_done (flushHeldSends); the faded copy above shows it meanwhile.
+				heldSendsRef.current.push({ target: hold.target, id: hold.id, msg: { ...out, forSession: hold.forSession } });
+				return true;
 			}
 			ws.send(JSON.stringify(out));
 			// 提交/取消模型提问后立即收起对话框：服务端只 resolve 模型侧 Promise，
@@ -1712,7 +1779,13 @@ export function useChat() {
 					});
 					break;
 				}
+				case "switch_preview":
+					// chat-open-speed: the end of the chat, sent before the whole of it is loaded.
+					dispatch({ type: "switch_preview", target: msg.target, state: msg.state });
+					break;
 				case "switch_done":
+					// chat-open-speed: the chat is ready \u2014 anything written while it was opening goes now.
+					flushHeldSends(msg.target);
 					dispatch({ type: "switch_done", target: msg.target });
 					break;
 				case "prompt_ack":
@@ -1727,6 +1800,7 @@ export function useChat() {
 				case "switch_failed": {
 					// 是自己在等的那次 → 聊天区错误态；不是（服务端内部自动切换失败）→ 降级成 toast，
 					// 与以前的行为一致，不丢信息。
+					failHeldSends("The chat didn't open, so this wasn't sent.", msg.target);
 					if (sameSwitchTarget(chatApi.current.chat.pendingSwitch?.target, msg.target)) {
 						dispatch({ type: "switch_failed", target: msg.target, error: msg.error, errorEn: msg.errorEn });
 					} else {
@@ -2213,6 +2287,8 @@ export function useChat() {
 
 		ws.onclose = () => {
 			if (wsRef.current === ws) wsRef.current = null;
+			// chat-open-speed: messages still waiting for a chat to open never left this window.
+			failHeldSends("The connection dropped before it was sent.");
 			// Terminals died with the server-side PTYs — drop writers/buffers.
 			bridgeRef.current.clear();
 			// Cleanup closed this socket on purpose — do not reconnect.
@@ -2335,7 +2411,13 @@ export function useChat() {
 	}, []);
 
 	/** switch-loading：遮罩上的两个按钮（重试不在这里 —— 它就是再发一次 switch_*，走 send）。 */
-	const switchHide = useCallback(() => dispatch({ type: "switch_hide" }), []);
+	const switchHide = useCallback(() => {
+		// chat-open-speed: back to the chat the window was on \u2014 anything written into the one that was
+		// opening has nowhere to go.
+		failHeldSends("The chat it was written in was left before it opened, so this wasn't sent.");
+		dispatch({ type: "switch_hide" });
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- failHeldSends only touches refs.
+	}, []);
 	const switchDismissError = useCallback(() => dispatch({ type: "switch_dismiss_error" }), []);
 
 	// -- terminal tab management ----------------------------------------------

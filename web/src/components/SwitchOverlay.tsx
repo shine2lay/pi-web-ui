@@ -13,6 +13,14 @@
  * 点击和输入（服务端还在原对话上），只在顶上留一张小卡片；快的切换连卡片都不出来（CSS 延迟淡入）。
  * 「隐藏」要等到慢了才给：看着的是目标对话，隐藏却是回到原对话。
  */
+/*
+ * chat-open-speed: with a preview the overlay no longer takes clicks (styles.css
+ * `.switch-overlay-preview { pointer-events: none }`). What shows underneath is the chat being
+ * opened, read from its own file, and a message written while it loads waits for that chat and is
+ * sent with the chat it was written in (use-chat.ts heldSendsRef + `prompt.forSession`), so it can
+ * no longer land in the one the window is leaving. Without a preview the overlay still covers
+ * everything, as before.
+ */
 import { useEffect, useState } from "react";
 import { FiAlertCircle } from "react-icons/fi";
 import { useT } from "../i18n";
