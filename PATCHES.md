@@ -59,6 +59,8 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | telegram-answers             | `local`        | `server/asks.ts` (new), `server/stuck-asks.ts` (new), `agent-service.ts` (questions, approvals, stuck asks), `chat-dialogs.ts`, `plugins.ts`, `plugin-facilities.ts`, `task-queue.ts`, `protocol.ts`, `protocol-version.ts`, `plugins/telegram/` (new), `plugin-sdk/`, `web/src/open-chat-link.ts` (new), `TaskQueuePanel.tsx`, `use-chat.ts`, `tests/telegram-answers-test.mjs`, `tests/queue-panel-test.mjs`, `tests/unit/` |
 | english-only                 | `local`        | `server/i18n.ts`, `agent-service.ts`, `dsh/dsh-agent-service.ts` and ~130 other server files (text only), `web/src/i18n.tsx`, `TopBar.tsx`, `ui-slots.ts`, `LocaleModal.tsx` + `pick-locale.ts` (removed), `SettingsModal.tsx`, `plugins/catalog.json`, `tests/` |
 | optimistic-send              | `local`        | `server/prompt-ack.ts` (new), `agent-service.ts` (`prompt()`), `dsh/dsh-agent-service.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (26), `web/src/pending-sends.ts` (new), `use-chat.ts`, `MessageList.tsx`, `App.tsx`, `ChatInput.tsx`, `PromptTemplates.tsx`, `plugin-host.ts`, i18n + `locales/`, styles, `tests/optimistic-send-test.mjs`, `tests/unit/` |
+| no-prompt-templates          | `local`        | `web/src/components/PromptTemplates.tsx` (removed), `App.tsx`, `ChatInput.tsx`, `MessageList.tsx`, `ui-slots.ts`, `i18n.tsx`, `locales/`, `styles.css`, `tests/prompt-templates-test.mjs` (removed) |
+| no-project-controls          | `local`        | `web/src/components/ProjectPicker.tsx` (removed), `TopBar.tsx`, `LeftPanel.tsx`, `App.tsx`, `ui-slots.ts`, `i18n.tsx`, `locales/`, `styles.css`, `tests/unit/` |
 
 ---
 
@@ -2800,7 +2802,7 @@ scheduler add-ons. pi-web-ui is English only now: the Chinese language and the l
 | `web/src/App.tsx` | 🔗 已自动在浏览器打开 | Matches the line the built-in live-preview add-on writes (not installed, left alone, still Chinese). |
 | `web/src/at-mention.ts` | 网页, 页面 | User input: Chinese words for "page" still work as @-mention triggers. |
 | `web/src/components/ChatInput.tsx`, `Markdown.tsx` @-mention regexes | full-width brackets and punctuation | Punctuation around @mentions in text the user types. |
-| `FooterBar.tsx`, `ProjectPicker.tsx`, `context-menu-state.ts` | ＋, 〜 | Full-width plus and wave used as icons, not words. |
+| `FooterBar.tsx`, `context-menu-state.ts` | ＋, 〜 | Full-width plus and wave used as icons, not words. |
 
 Code comments, test names and docs (the older sections of this file too) are still Chinese: out of scope.
 The add-ons' only Chinese left is in their tests' labels.
@@ -2997,3 +2999,88 @@ messages appear while the rest loads, and a healthy file is read once.
 unconditional repair, and keep `noticeInterruptedCompaction` behind `fastOpen`. `transcript-scan.ts`
 uses pi's `buildSessionContext`, `parseSessionEntries` and `CURRENT_SESSION_VERSION`; if pi changes how
 a session file is laid out, the unit test that compares against `buildSessionContext` says so.
+
+## no-prompt-templates
+
+**Status**: `local`
+**Baseline**: v0.96.1
+
+**Why** (owner, 2026-09-28): the owner never uses upstream's prompt templates, and the button next to
+the message box and the card gallery in every empty chat were just clutter. The code is removed outright,
+not hidden.
+
+### Changes
+
+- `web/src/components/PromptTemplates.tsx` deleted (the provider, the `useTemplates` hook, the picker and
+  editor windows, `EmptyTemplateCards`).
+- `App.tsx`: the `<TemplateProvider>` wrapper around `.layout` is gone (the block inside lost one tab of
+  indentation, which is most of this file's diff).
+- `ChatInput.tsx`: `useTemplates` and both `tpl-open` buttons (the desktop tool row and the phone "+"
+  menu) are gone. `ui-slots.ts`: the `host:composer-templates` entry is gone, so the Layout settings and
+  the phone menu no longer list it.
+- `MessageList.tsx`: the empty chat's `.empty-state` keeps only the add-ons' `chat.empty` slot.
+- The `tpl.*` keys (`web/src/i18n.tsx` and `locales/*.json`) and the `.template-*`, `.empty-template*`
+  and `.btn.tpl-open` styles are gone. The `.tpl-chip`, `.tpl-modal`, `.tpl-fields`, `.tpl-badge` styles
+  stay: Settings (subagent templates, skill pickers) and the scheduler use them.
+- `tests/prompt-templates-test.mjs` deleted; `tests/unit/chatinput-send-notice.test.ts` mounts
+  `ChatInput` without the provider.
+
+Not touched, despite the names: the system prompt layout (server `promptTemplate`, Settings > System
+prompt), subagent templates, and pi's own prompt-template `/commands`. Saved templates in the browser
+(`localStorage` "pi-web-ui:prompt-templates") are left in place, unused.
+
+### How it was checked
+
+`tests/unit/ui-slots.test.ts` checks the composer has six host actions and that a saved layout naming
+`host:composer-templates` is skipped; a search of `web/src` and `tests` finds no template-picker code;
+screenshots at desktop and phone width show no templates button and an empty chat without cards.
+
+**When syncing**: if upstream changes `PromptTemplates.tsx`, drop the change (the file stays deleted).
+If upstream adds template calls to `ChatInput.tsx`, `MessageList.tsx` or `App.tsx`, or new `tpl.*`
+keys, `.tpl-open` / `.template-*` / `.empty-template*` styles or a `host:composer-templates` entry, leave them out. The
+`App.tsx` re-indent will conflict with upstream edits inside `.layout`: take upstream's lines and keep
+them one tab shallower, without the wrapper.
+
+## no-project-controls
+
+**Status**: `local`
+**Baseline**: v0.96.1
+
+**Why** (owner, 2026-09-28): the owner never uses the "Open project" button or the "Recent projects"
+section. The workspace folder can still be switched with the footer's folder field or with "Open as
+project" on a folder in the file tree, and chats opened from history keep their own folder
+(chat-cwd-pin). Web page only: the server's `set_cwd`, `remove_project` and recent-projects list stay,
+because global search, the plugin API (`listProjects`) and the footer use them.
+
+### Changes
+
+- `TopBar.tsx`: the `host:open-project` node, its action case and the `ProjectPicker` mount are gone;
+  `ui-slots.ts`: its slot entry is gone, so it's also out of the overflow menu, the command menu and Layout
+  settings.
+- `LeftPanel.tsx`: the "Recent projects" section, its folder+ button, its sash, the `projects` share of
+  the section sizing and collapsing, and the `ProjectPicker` mount are gone. The panel starts with Recent
+  chats; the other sections collapse and resize as before. `host:lp-projects` is gone from
+  `ui-slots.ts` and `LP_SECTION_ENTRY_IDS`. `App.tsx` no longer passes `projects` / `pathCompletions`
+  to the panel.
+- `web/src/components/ProjectPicker.tsx` deleted (nothing else used it).
+- Keys `openProject`, `manageProjects`, `recentProjects`, `deleteProject`, `deleteProjectConfirm` and the
+  picker's own keys (`web/src/i18n.tsx`, `locales/*.json`), and the `.panel-projects`, `.project-item`,
+  `.project-time`, `.projects-scroll`, `.project-picker*` styles are gone.
+- Tests: the picker's unit tests and the Open-project TopBar tests are gone; the left-panel and TopBar
+  tests now check that none of it renders. `tests/left-panel-delete-test.mjs` stays: it tests the
+  server's `remove_project`, which is kept.
+
+Saved panel sizes and top-bar layouts that mention the removed items are left in place; unknown ids
+are already skipped.
+
+### How it was checked
+
+`tests/unit/left-panel-actions.test.ts` (no section, no folder+ button, no picker; the first section is
+the chat list), `tests/unit/topbar-panel-toggle.test.ts` (no Open project button or picker),
+`tests/unit/ui-slots.test.ts` (ten always-shown top-bar items, a saved layout naming the removed ids is
+skipped), and screenshots at desktop and phone width.
+
+**When syncing**: `ProjectPicker.tsx` stays deleted. If upstream changes the Open project button, the
+Recent projects section or the picker, drop those changes; if it adds new callers of `ProjectPicker` or
+new `host:open-project` / `host:lp-projects` entries, leave them out. Upstream changes to the server's
+project list or `set_cwd` still come in as usual.
