@@ -172,23 +172,6 @@ export const en = {
 	removeUnsentTip: "Remove it and put the text back in the input box",
 	sendTip: "Send (Enter)",
 	composerResize: "Drag to resize the input height (double-click to reset)",
-	quickPhrases: "Quick phrases",
-	quickPhrasesDesc:
-		"A row of frequently-used phrase buttons above the input box — click to send (current file attachments are included, the input draft is kept)",
-	quickPhrasesEnabled: "Enable quick phrases",
-	quickPhrasesOffHint:
-		"Off: the phrase buttons above the input box are hidden (saved phrases are kept and can be re-enabled anytime)",
-	quickPhrasesPlaceholder: "Type a frequently-used phrase… (Enter to add)",
-	quickPhrasesAdd: "Add",
-	quickPhrasesEmpty: "No quick phrases yet — add your first one below",
-	quickPhrasesTip: "Click to send: {text}",
-	quickPhrasesSendTip: "Left-click to steer, right-click to queue",
-	quickPhrasesMoveUp: "Move up",
-	quickPhrasesMoveDown: "Move down",
-	quickPhrasesDelete: "Delete this phrase",
-	quickPhrasesEdit: "Edit this phrase",
-	quickPhrasesEditPh: "Edit phrase… (Enter to save, Esc to cancel)",
-	quickPhrasesReset: "Reset to defaults",
 
 	/* slash commands */
 	slashCommands: "Commands",

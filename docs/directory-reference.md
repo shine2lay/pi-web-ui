@@ -210,7 +210,6 @@ web/src/
 ├── plugin-icon.tsx     # 插件图标渲染
 ├── at-mention.ts       # @ 提及补全
 ├── slash-filter.ts     # 斜杠命令过滤
-├── quick-phrases.ts    # 快捷短语
 ├── conv-groups.ts      # 对话分组（左栏）
 ├── copy-text.ts        # 复制文本辅助
 ├── use-copy-feedback.ts # 复制反馈 Hook

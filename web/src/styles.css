@@ -1860,16 +1860,10 @@ button.session-item.elsewhere-item.confirm {
 	color: var(--text-faint);
 }
 
-/* ------------------------------------------------- quick phrases (inputbar) */
-/* 输入框上方的快捷短语按钮行：与上面的文件引用 chips（.attach-row）是两套
- * 独立 UI —— 文件引用管附件，短语管一键发送，视觉与职责都不重叠。 */
-.quick-row {
-	margin: 0 0 6px;
-	display: flex;
-	flex-wrap: wrap;
-	gap: 6px;
-	align-items: center;
-}
+/* ------------------------------------------------------------- quick chips */
+/* no-quick-phrases: the phrase row above the message box is gone. These chip rules stay because the
+ * model picker's "Quick presets" chips (.quick-chip in ModelConfigModal) get them too: this file comes
+ * after model-management.css, so they win there, and removing them would change that picker. */
 .quick-chip {
 	display: inline-flex;
 	align-items: center;
@@ -1896,10 +1890,6 @@ button.session-item.elsewhere-item.confirm {
 	border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
 	background: var(--accent-soft);
 	color: var(--text);
-}
-.quick-chip:disabled {
-	opacity: 0.5;
-	cursor: default;
 }
 
 /* ----------------------------------------------------------- attachment card */
@@ -9831,7 +9821,7 @@ div.chead[role="button"]:focus-visible,
 
 .inputbar {
 	flex-shrink: 0;
-	/* 左右内缩走列 token（见 .main）→ 内部的 inputbox / attach-row / quick-row /
+	/* 左右内缩走列 token（见 .main）→ 内部的 inputbox / attach-row /
 	 * queue-hint / slash-menu 全部与消息列同宽齐平。 */
 	padding: 12px var(--chat-inset) 14px;
 	position: relative;
@@ -11385,9 +11375,6 @@ div.chead[role="button"]:focus-visible,
 }
 .settings-tab[data-tab="display"] {
 	--tile: #2dd4bf;
-}
-.settings-tab[data-tab="quick"] {
-	--tile: #f472b6;
 }
 .settings-tab[data-tab="skills"] {
 	--tile: #e879f9;
@@ -15641,17 +15628,7 @@ button.source-default-toggle {
 		margin: -12px -10px -12px 0;
 	}
 
-	/* ---- quick phrases: one row that scrolls sideways (it was two or three rows) ---- */
-	.quick-row {
-		flex-wrap: nowrap;
-		overflow-x: auto;
-		overscroll-behavior-x: contain;
-		scrollbar-width: none;
-		margin: -4px 0 2px;
-	}
-	.quick-row::-webkit-scrollbar {
-		display: none;
-	}
+	/* ---- quick chips: finger-size (no-quick-phrases keeps these: the model picker's chips use them) ---- */
 	.quick-chip,
 	.quick-chip:hover:not(:disabled) {
 		position: relative;

@@ -131,9 +131,6 @@ interface ChatInputProps {
 	providerKeys: Record<string, ProviderKeyInfo[]>;
 	/** 全局默认模型（undefined = 隐藏该功能，App 按 engine==='pi' 才传）。 */
 	defaultModel?: string | null;
-	/** 输入框上方的快捷短语（点击即发送；与文件引用 chips 是两套独立 UI，互不干扰）。 */
-	quickPhrases: string[];
-	quickPhrasesEnabled: boolean;
 	/** DSH 引擎：权限下拉（思考强度右侧；undefined/空 = 非 dsh 或未就绪，不渲染）。 */
 	dshPermCurrent?: string | null;
 	dshPermOptions?: DshPermissionOption[];
@@ -171,8 +168,6 @@ export const ChatInput = memo(function ChatInput({
 	onManageModels,
 	providerKeys,
 	defaultModel,
-	quickPhrases,
-	quickPhrasesEnabled,
 	recallDrafts,
 	composerLeading,
 	composerActions,
@@ -415,7 +410,7 @@ export const ChatInput = memo(function ChatInput({
 		appSend({ type: "draft_update", sessionId: sid, text: capped, ts });
 	};
 
-	/** 把镜像里的当前内容刷出去（timer 到期 / blur / 切会话 / 快捷短语发送后回存）。 */
+	/** 把镜像里的当前内容刷出去（timer 到期 / blur / 切会话）。 */
 	const flushComposerDraft = () => {
 		if (draftTimerRef.current) {
 			clearTimeout(draftTimerRef.current);
@@ -942,8 +937,7 @@ export const ChatInput = memo(function ChatInput({
 	/* 光标是否在首/末**视觉行**交给 caret-visual-line.ts：自动折行的长草稿（没有 \n，
 	 * 但界面上是多行）也必须先让 ↑/↓ 走普通光标移动，不能误触发历史（issue #127）。 */
 
-	/** 把当前待发送附件（含粘贴图/上传文件/工作区引用）转成 prompt 消息格式。
-	 *  submit 与快捷短语发送共用 —— 点短语时文件引用同样带上，不丢失。 */
+	/** 把当前待发送附件（含粘贴图/上传文件/工作区引用）转成 prompt 消息格式（submit 用）。 */
 	const buildPromptAttachments = () =>
 		attachments.map((a) => {
 			if (a.imageData) {
@@ -1058,33 +1052,6 @@ export const ChatInput = memo(function ChatInput({
 		} else {
 			// 发送瞬间连接断开（appSend 返回 false）：文本保留，给出可见提示，
 			// 否则与草稿恢复竞态的表现完全一样（字还在、无任何提示）。
-			onNotice("error", t("netDisconnected"));
-		}
-	};
-
-	/** 快捷短语一键发送：直接发出短语文本（带上当前文件附件），不碰输入框草稿。
-	 *  左键 = 立即发送（运行中为插队 steer）；右键 = 排队发送（followUp，整轮结束后才发）。 */
-	const sendPhrase = (phrase: string, queue = false) => {
-		const trimmed = phrase.trim();
-		if (!trimmed) return;
-		if (!connected) {
-			onNotice("error", t("netDisconnected"));
-			return;
-		}
-		if (appSend({ type: "prompt", text: trimmed, queue, attachments: buildPromptAttachments(), id: newPromptId() })) {
-			if (trimmed) pushPromptHistory(trimmed);
-			historyIndexRef.current = -1;
-			draftRef.current = "";
-			// 快捷短语不碰输入框：服务端 prompt() 会清草稿，这里把当前内容重存回去。
-			flushComposerDraft();
-			onSent();
-			const m = modelState?.model;
-			if (m) recordModelUsage(`${m.provider}/${m.id}`);
-			// 触屏设备点击快捷短语后不回焦输入框：点按钮时虚拟键盘本未弹出，回焦会
-			// 立刻把它弹起来盖住界面（发送按钮/回车路径本就处于键盘开启状态，不受
-			// 影响，仍保留 submit() 里的回焦）。桌面端保留回焦，方便直接接着输入。
-			if (!IS_TOUCH) taRef.current?.focus();
-		} else {
 			onNotice("error", t("netDisconnected"));
 		}
 	};
@@ -1574,27 +1541,6 @@ export const ChatInput = memo(function ChatInput({
 							)}
 						</div>
 					</div>
-				</div>
-			)}
-			{quickPhrasesEnabled && quickPhrases.length > 0 && (
-				<div className="quick-row" aria-label={t("quickPhrases")}>
-					{quickPhrases.map((p) => (
-						<button
-							key={p}
-							type="button"
-							className="quick-chip"
-							title={`${t("quickPhrasesTip", { text: p })} (${t("quickPhrasesSendTip")})`}
-							disabled={!connected}
-							onClick={() => sendPhrase(p)}
-							onContextMenu={(e) => {
-								e.preventDefault();
-								e.stopPropagation();
-								sendPhrase(p, true);
-							}}
-						>
-							{p}
-						</button>
-					))}
 				</div>
 			)}
 			<div className="inputbox" data-pi-anchor="composer">

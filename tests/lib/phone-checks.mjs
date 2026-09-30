@@ -369,7 +369,7 @@ export async function measureTargets(phone, { shots = "" } = {}) {
 	const res = {};
 	res.chat = await tapTargets(
 		page,
-		[".topbar", ".quick-row", ".inputbox", ".statusbar", ".goal-bar, [class*='goal-pill']"],
+		[".topbar", ".inputbox", ".statusbar", ".goal-bar, [class*='goal-pill']"],
 		{
 			mainSelectors: main,
 		},

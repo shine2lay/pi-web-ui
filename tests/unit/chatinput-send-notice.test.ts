@@ -52,8 +52,6 @@ function mount(opts: {
 					onSent: opts.onSent,
 					onManageModels: () => {},
 					providerKeys: {},
-					quickPhrases: [],
-					quickPhrasesEnabled: false,
 				}),
 			),
 		);

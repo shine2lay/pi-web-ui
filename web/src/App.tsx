@@ -82,7 +82,6 @@ import { appUrl } from "./base-url";
 import { resolveImageUrls } from "./chat-image";
 import type { ClientMessage, CommandDef, PromptAttachment, UiMessage } from "./types";
 import { useT, useI18n } from "./i18n";
-import { QUICK_PHRASE_DEFAULTS } from "./quick-phrases";
 import { FiAlertCircle, FiAlertTriangle, FiChevronsLeft, FiChevronsRight, FiInfo, FiX } from "react-icons/fi";
 import type { Notice } from "./use-chat";
 import { fileToProcessedImage, isRasterImage, type ProcessedImage } from "./image-paste";
@@ -313,11 +312,6 @@ export function App() {
 	const { locale } = useI18n();
 	const { chat, send, retrySend, removeSend, dismissNotice, pushNotice, terminal, switchHide, switchDismissError } =
 		useChat();
-	// 快捷短语 seeding：首次看到空列表 → 按界面语言填一批内置常用短语，之后即为用户
-	// 数据（增删改/恢复默认/关闭都在设置里）。「已 seed」标记存服务端全局
-	// （settings.quickPhrasesSeeded，非浏览器 localStorage）——clientId 在
-	// sessionStorage、每次新会话都是新 id，若按浏览器记 seed，重启后删掉的默认
-	// 短语又会被填回默认；存服务端则跨会话/跨浏览器一致。
 	// telegram-answers: a link with ?chat=<saved chat file> (Telegram puts one under every question)
 	// opens that chat as soon as the page is connected, once.
 	useEffect(() => {
@@ -325,19 +319,6 @@ export function App() {
 		const path = takeChatLink();
 		if (path) void send({ type: "switch_session", path });
 	}, [chat.ready, send]);
-	const quickSeedRef = useRef(false);
-	useEffect(() => {
-		if (!chat.ready || !chat.settings) return;
-		if (quickSeedRef.current || chat.settings.quickPhrasesSeeded) return;
-		quickSeedRef.current = true;
-		if (chat.settings.quickPhrases.length === 0) {
-			send({
-				type: "set_settings",
-				quickPhrases: QUICK_PHRASE_DEFAULTS[locale] ?? QUICK_PHRASE_DEFAULTS.en,
-				quickPhrasesSeeded: true,
-			});
-		}
-	}, [chat.ready, chat.settings, send, locale]);
 	// 浏览器标题：开关开启时显示当前项目（工作目录文件夹名），否则固定应用名。
 	const cwd = chat.state?.cwd ?? "";
 	const projectTitle = useProjectTitle();
@@ -2104,8 +2085,6 @@ export function App() {
 							onNotice={pushNotice}
 							onManageModels={openManageModels}
 							onSent={clearAttachments}
-							quickPhrases={chat.settings?.quickPhrases ?? []}
-							quickPhrasesEnabled={chat.settings?.quickPhrasesEnabled ?? true}
 							recallDrafts={recallDrafts}
 							dshPermCurrent={chat.state?.permission ?? null}
 							dshPermOptions={chat.dshPermission?.options ?? undefined}

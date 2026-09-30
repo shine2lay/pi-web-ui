@@ -61,6 +61,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | optimistic-send              | `local`        | `server/prompt-ack.ts` (new), `agent-service.ts` (`prompt()`), `dsh/dsh-agent-service.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (26), `web/src/pending-sends.ts` (new), `use-chat.ts`, `MessageList.tsx`, `App.tsx`, `ChatInput.tsx`, `PromptTemplates.tsx`, `plugin-host.ts`, i18n + `locales/`, styles, `tests/optimistic-send-test.mjs`, `tests/unit/` |
 | no-prompt-templates          | `local`        | `web/src/components/PromptTemplates.tsx` (removed), `App.tsx`, `ChatInput.tsx`, `MessageList.tsx`, `ui-slots.ts`, `i18n.tsx`, `locales/`, `styles.css`, `tests/prompt-templates-test.mjs` (removed) |
 | no-project-controls          | `local`        | `web/src/components/ProjectPicker.tsx` (removed), `TopBar.tsx`, `LeftPanel.tsx`, `App.tsx`, `ui-slots.ts`, `i18n.tsx`, `locales/`, `styles.css`, `tests/unit/` |
+| no-quick-phrases             | `local`        | `web/src/quick-phrases.ts` (removed), `ChatInput.tsx`, `App.tsx`, `SettingsModal.tsx`, `i18n.tsx`, `locales/`, `styles.css`, `tests/unit/`, `tests/lib/phone-checks.mjs` |
 
 ---
 
@@ -2767,7 +2768,7 @@ scheduler add-ons. pi-web-ui is English only now: the Chinese language and the l
    - Hard-coded Chinese is translated: model setup, settings, the plugin host's errors, notices, relative
      times ("5m ago"), console logs.
    - Plugin top-bar items and themes show their English names (`labelEn`, `nameEn`) when they have one;
-     quick phrases start in English.
+     quick phrases started in English (the phrases are gone since `no-quick-phrases`).
    - Settings > UI plugins shows each add-on's English description, and the built-in list's names
      (`plugins/catalog.json`) are English.
    - The add-on list the server fetches from upstream at start (`OFFICIAL_PLUGIN_CATALOG_URL`, saved in
@@ -3202,8 +3203,8 @@ the terminal included. Desktop is unchanged; iPhone is not a target but nothing 
    controls, the message box's attach key and tool chips, the / and @ menus, the "⋯" menu, the
    quick phrases, the Goal pill, the status line, a message's action keys and copy key, and the chats
    drawer's headers and rows are at least 44×44 px; Send / Stop are 48. Small pills keep their look:
-   the pill is drawn with `::before` inside a taller invisible tap area. Quick phrases are one row that
-   scrolls sideways (they took two or three rows). The top bar's existing fit logic (`topbar-fit.ts`)
+   the pill is drawn with `::before` inside a taller invisible tap area. Quick phrases were one row that
+   scrolled sideways (the row is gone since `no-quick-phrases`). The top bar's existing fit logic (`topbar-fit.ts`)
    moves whatever doesn't fit into "⋯"; on a phone that is everything after Chat and Terminal (Git,
    Plugins, Search, New chat, Ephemeral chat, add-on buttons, Settings, Sound, Theme, Update), with
    Files kept pinned. Nothing is hidden for good.
@@ -3275,3 +3276,51 @@ if upstream changes its connect loop, keep: drop a dead socket without waiting f
 at once on coming back, and send `hello.frameHints`. On the server keep `ping`/`pong` and the
 `frame_hint` before big sends in `send()`. If upstream imports the terminal, KaTeX, rehype-raw or the
 settings windows at startup again, keep them lazy. Run both phone tests after a sync.
+
+## no-quick-phrases
+
+**Status**: `local`
+**Baseline**: v0.96.1
+
+**Why** (owner, 2026-09-29): the owner never uses the quick-phrase buttons above the message box
+(Continue, Summarize, Explain in detail, …) or their Settings section. The code is removed from the
+page, not hidden. Web page only, like `no-project-controls`: the server's settings fields stay, which
+means fewer clashes when syncing, and a rollback brings the buttons back as they were.
+
+### Changes
+
+- `ChatInput.tsx`: the `.quick-row` of phrase buttons, `sendPhrase` (a left click sent the phrase, a
+  right click queued it) and the `quickPhrases` / `quickPhrasesEnabled` props are gone.
+- `App.tsx`: the effect that filled in the default phrases the first time (it sent `quickPhrases` and
+  `quickPhrasesSeeded`) and the two props it passed to `ChatInput` are gone.
+- `SettingsModal.tsx`: the "Quick phrases" section is gone: its entry in the list of sections, the
+  on/off switch, the add / edit / move / delete list and "Reset to defaults".
+- `web/src/quick-phrases.ts` deleted (the default phrases for each language).
+- The `quickPhrases*` keys (`web/src/i18n.tsx` and `locales/*.json`) are gone. In `styles.css` the
+  `.quick-row` rules (including the phone block's one-row sideways scroll from `mobile-fixes`),
+  `.quick-chip:disabled` and the section's tile color (`.settings-tab[data-tab="quick"]`) are gone.
+- Docs: both READMEs, `docs/directory-reference.md`, `docs/architecture-core.md`.
+- Tests: `tests/unit/quick-phrases.test.ts` deleted; `tests/unit/chatinput-send-notice.test.ts` mounts
+  `ChatInput` without the two props; `tests/lib/phone-checks.mjs` no longer measures `.quick-row`.
+
+Not touched: the server keeps `quickPhrases`, `quickPhrasesEnabled` and `quickPhrasesSeeded` (settings,
+`set_settings`, `settings_state`, both engines), and the saved list stays on disk, unused. The
+`.quick-chip*` styles in `model-management.css` stay (the model picker's "Quick presets" chips use
+them), and so do the other `.quick-chip` rules in `styles.css`: that file loads after
+`model-management.css`, so those rules style the picker's chips too, on desktop and phone, and removing
+them would change the picker.
+
+### How it was checked
+
+`tests/unit/no-quick-phrases.test.ts`: with settings that have phrases, the message box shows no phrase
+row or phrase buttons, Settings lists its sections without "Quick phrases", the word list has no
+`quickPhrases*` keys, and `App.tsx` never fills in phrases. A search of `web/src` and `tests` finds no
+phrase code, only the server's kept fields and their tests. `TZ=UTC scripts/check.sh`, the build and the
+full sealed E2E run pass; screenshots at desktop and phone width (a chat with its message box, Settings
+with its list of sections) on a sealed server and on the live app.
+
+**When syncing**: `quick-phrases.ts` stays deleted. If upstream changes the phrase row, `sendPhrase`, the
+seeding effect or the Settings section, drop those changes; if it adds new `quickPhrases*` keys, phrase
+defaults or callers on the page, leave them out. Upstream changes to the server's quick-phrase fields
+still come in as usual. Keep the `.quick-chip` rules in `styles.css` while the model picker uses the
+class.

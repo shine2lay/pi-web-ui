@@ -19,7 +19,6 @@ import {
 	FiPackage,
 	FiPlus,
 	FiRefreshCw,
-	FiSend,
 	FiSettings,
 	FiShield,
 	FiVolume2,
@@ -92,7 +91,6 @@ import {
 	subscribePluginLogs,
 	type PluginLogLevel,
 } from "../plugin-logs";
-import { QUICK_PHRASE_DEFAULTS } from "../quick-phrases";
 import {
 	DEFAULT_PROMPT_TEMPLATE,
 	PROMPT_TOKENS,
@@ -402,7 +400,6 @@ type SettingsTab =
 	| "question"
 	| "display"
 	| "sound"
-	| "quick"
 	| "markers"
 	| "skills"
 	| "extensions"
@@ -448,8 +445,6 @@ interface SettingsPatch {
 	devNoCache?: boolean;
 	autoReload?: boolean;
 	skillsFullText?: string[];
-	quickPhrases?: string[];
-	quickPhrasesEnabled?: boolean;
 	visionBridgeEnabled?: boolean;
 	visionBridgeModel?: string | null;
 	visionBridgePromptMode?: "append" | "replace";
@@ -699,10 +694,6 @@ export function SettingsModal({
 	const [catSyncReq, setCatSyncReq] = useState<string | null>(null);
 	const [catSyncSent, setCatSyncSent] = useState("");
 	const [catSyncRecent, setCatSyncRecent] = useState<string[]>(() => loadCatalogSyncRecent());
-	// 快捷短语新增输入框草稿（Enter / 添加按钮提交）。
-	const [quickNew, setQuickNew] = useState("");
-	// 快捷短语行内编辑（null = 未在编辑；输入框受控于 value，回显不打断输入）。
-	const [quickEdit, setQuickEdit] = useState<{ index: number; value: string } | null>(null);
 
 	useEffect(() => {
 		if (!settings) return;
@@ -892,7 +883,6 @@ export function SettingsModal({
 				]),
 		{ id: "display", icon: <FiMessageSquare />, label: t("settingsMessageDisplay") },
 		{ id: "sound", icon: <FiVolume2 />, label: t("settingsSoundVoice") },
-		{ id: "quick", icon: <FiSend />, label: t("quickPhrases"), count: settings.quickPhrases.length },
 		{ id: "skills", icon: <FiCpu />, label: t("settingsSkills"), count: settings.skills.length },
 		{ id: "extensions", icon: <FiPackage />, label: t("settingsExtensions"), count: settings.extensions.length },
 		{
@@ -956,18 +946,6 @@ export function SettingsModal({
 			return stamped;
 		});
 		appSend({ type: "set_settings", ...patch });
-	};
-
-	/** 提交快捷短语行内编辑（空 = 取消；与原值相同 = 无操作；其余走服务端归一化）。 */
-	const commitQuickEdit = () => {
-		if (!quickEdit || !settings) return;
-		const v = quickEdit.value.trim();
-		const i = quickEdit.index;
-		setQuickEdit(null);
-		if (!v || v === settings.quickPhrases[i]) return;
-		const next = [...settings.quickPhrases];
-		next[i] = v;
-		setPartial({ quickPhrases: next });
 	};
 
 	const toggleSkill = (s: UiSkillInfo) => {
@@ -2589,144 +2567,6 @@ export function SettingsModal({
 									onChange={onTtsChange}
 									onPreview={() => speak(t("ttsPreviewLine"), { ...tts, enabled: true })}
 								/>
-							</div>
-						)}
-
-						{/* ---- 快捷短语（输入框上方一键发送） ------------------------------ */}
-						{tab === "quick" && (
-							<div className="set-section">
-								<div className="set-section-title">
-									<FiSend className="set-section-icon" />
-									{t("quickPhrases")}
-									<HintTip text={t("quickPhrasesDesc")} />
-									<span className="set-count">{settings.quickPhrases.length}</span>
-								</div>
-								<ToggleRow
-									title={t("quickPhrasesEnabled")}
-									tip={t("quickPhrasesDesc")}
-									enabled={settings.quickPhrasesEnabled}
-									onToggle={() => setPartial({ quickPhrasesEnabled: !settings.quickPhrasesEnabled })}
-								/>
-								{!settings.quickPhrasesEnabled && <p className="set-hint">{t("quickPhrasesOffHint")}</p>}
-								<div className="set-preset-save">
-									<input
-										className="set-input"
-										placeholder={t("quickPhrasesPlaceholder")}
-										value={quickNew}
-										maxLength={200}
-										onChange={(e) => setQuickNew(e.target.value)}
-										onKeyDown={(e) => {
-											if (e.key === "Enter" && quickNew.trim()) {
-												setPartial({ quickPhrases: [...settings.quickPhrases, quickNew.trim()] });
-												setQuickNew("");
-											}
-										}}
-									/>
-									<button
-										type="button"
-										className="set-save-btn"
-										disabled={!quickNew.trim()}
-										onClick={() => {
-											setPartial({ quickPhrases: [...settings.quickPhrases, quickNew.trim()] });
-											setQuickNew("");
-										}}
-									>
-										<FiPlus /> {t("quickPhrasesAdd")}
-									</button>
-								</div>
-								{settings.quickPhrases.length === 0 ? (
-									<p className="set-empty">{t("quickPhrasesEmpty")}</p>
-								) : (
-									<div className="set-list">
-										{settings.quickPhrases.map((p, i) => (
-											<div className="set-row" key={`${i}:${p}`}>
-												{quickEdit?.index === i ? (
-													<div className="set-row-info">
-														<input
-															className="set-input"
-															autoFocus
-															value={quickEdit.value}
-															maxLength={200}
-															placeholder={t("quickPhrasesEditPh")}
-															onChange={(e) => setQuickEdit({ index: i, value: e.target.value })}
-															onKeyDown={(e) => {
-																if (e.key === "Enter") commitQuickEdit();
-																else if (e.key === "Escape") setQuickEdit(null);
-															}}
-															onBlur={commitQuickEdit}
-														/>
-													</div>
-												) : (
-													<>
-														<div className="set-row-info">
-															<div className="set-row-name" title={p}>
-																{p}
-															</div>
-														</div>
-														<div className="set-row-actions">
-															<button
-																type="button"
-																className="set-icon-btn"
-																title={t("quickPhrasesEdit")}
-																onClick={() => setQuickEdit({ index: i, value: p })}
-															>
-																<FiEdit3 />
-															</button>
-															<button
-																type="button"
-																className="set-icon-btn"
-																title={t("quickPhrasesMoveUp")}
-																disabled={i === 0}
-																onClick={() => {
-																	const next = [...settings.quickPhrases];
-																	[next[i - 1], next[i]] = [next[i], next[i - 1]];
-																	setPartial({ quickPhrases: next });
-																}}
-															>
-																↑
-															</button>
-															<button
-																type="button"
-																className="set-icon-btn"
-																title={t("quickPhrasesMoveDown")}
-																disabled={i === settings.quickPhrases.length - 1}
-																onClick={() => {
-																	const next = [...settings.quickPhrases];
-																	[next[i], next[i + 1]] = [next[i + 1], next[i]];
-																	setPartial({ quickPhrases: next });
-																}}
-															>
-																↓
-															</button>
-															<button
-																type="button"
-																className="set-icon-btn danger"
-																title={t("quickPhrasesDelete")}
-																onClick={() =>
-																	setPartial({ quickPhrases: settings.quickPhrases.filter((_, j) => j !== i) })
-																}
-															>
-																<FiTrash2 />
-															</button>
-														</div>
-													</>
-												)}
-											</div>
-										))}
-									</div>
-								)}
-								<div className="compose-toolbar">
-									<button
-										type="button"
-										className="dd-refresh"
-										onClick={() => {
-											setQuickEdit(null);
-											setPartial({ quickPhrases: QUICK_PHRASE_DEFAULTS[locale] ?? QUICK_PHRASE_DEFAULTS.en });
-										}}
-									>
-										{t("quickPhrasesReset")}
-									</button>
-								</div>
 							</div>
 						)}
 
