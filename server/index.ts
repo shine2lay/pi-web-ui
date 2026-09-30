@@ -1308,7 +1308,6 @@ export interface DispatchSession {
 	): boolean;
 	/** 设置当前对话的审批放行策略（设置面板撤销区；纯内存态）。 */
 	setApprovalPolicy?(partial: { conversationId?: string; allowAll?: boolean; categories?: string[] }): void;
-	updatePlan?(steps: import("./protocol.js").PlanStep[], activeStepId?: string | null, conversationId?: string): void;
 	savePreset(name: string): Promise<void>;
 	applyPreset(name: string): Promise<void>;
 	deletePreset(name: string): Promise<void>;
@@ -3150,9 +3149,6 @@ wss.on("connection", (ws) => {
 					allowAll: msg.allowAll,
 					categories: msg.categories,
 				});
-				break;
-			case "plan_update":
-				cs.updatePlan?.(msg.steps, msg.activeStepId, msg.conversationId);
 				break;
 			case "page_response":
 				// 浏览器（page-picker 扩展经前端）对 browser_page 的回包：恢复挂起的

@@ -64,6 +64,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | no-quick-phrases             | `local`        | `web/src/quick-phrases.ts` (removed), `ChatInput.tsx`, `App.tsx`, `SettingsModal.tsx`, `i18n.tsx`, `locales/`, `styles.css`, `tests/unit/`, `tests/lib/phone-checks.mjs` |
 | fast-mode                    | `local`        | `server/fast-mode.ts` (new), `agent-service.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (27), `web/src/components/FastModeButton.tsx` (new), `ChatInput.tsx`, `App.tsx`, `SettingsModal.tsx`, `ui-slots.ts`, i18n + `locales/`, `styles.css`, `tests/fast-mode-test.mjs`, `tests/lib/mock-model.mjs`, `tests/tools/fast-mode-*`, `tests/unit/` |
 | list-freeze                  | `local`        | `server/message-count.ts` (new), `agent-service.ts`, `tests/unit/list-freeze.test.ts` |
+| no-plan-board                | `local`        | `server/plan-manager.ts` (removed), `agent-service.ts`, `tool-manager.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (28), `web/src/components/PlanBoard.tsx` (removed), `App.tsx`, `i18n.tsx`, `locales/`, `styles.css`, `tests/unit/plan-state.test.ts` (removed), `tests/no-plan-board-test.mjs`, `tests/unit/` |
 
 ---
 
@@ -3499,3 +3500,64 @@ windows-times-windows rebuilds.
 - The tools used to find this are in `~/.cache/pi/reconnect-probe/`: `probe.mjs` times the heartbeats on
   a bare socket; `profile.mjs` takes a CPU profile of the live server (after `kill -USR1 <pid>`, which
   opens Node's inspector on 127.0.0.1 only) and switches the inspector off again.
+
+## no-plan-board
+
+**Status**: `local`
+**Baseline**: v0.96.1
+
+**Why** (owner, 2026-09-30): the Task Plan Board above the message box (upstream's "Plan Mode") didn't
+work well for the owner, so it goes, together with the AI's `plan_update` tool that filled it. The code is
+removed outright, not hidden, the same way as `no-prompt-templates`.
+
+### Changes
+
+- `server/plan-manager.ts` deleted (`PlanManager`: each chat's plan, kept in memory only; plans were
+  never saved).
+- `server/agent-service.ts`: `makePlanUpdateTool` is gone, and with it the tool's instructions to the AI
+  (its `promptSnippet` and the two `promptGuidelines` lines telling it to use `plan_update` early and keep
+  the step statuses current). Also gone: the `planManager` field, the tool's place in every chat's tool
+  list, `plan` in the chat state (snapshot) and `updatePlan()`.
+- `server/tool-manager.ts`: `PLAN_UPDATE_TOOL_NAME` and its catalog entry are gone, so Settings > Tools has
+  no switch for it and no chat gets it.
+- `server/index.ts`: the page's `plan_update` message and `updatePlan` in the `ClientSession` interface are
+  gone.
+- `server/protocol.ts`: `UiState.plan`, the `plan_update` message (page to server), the `plan_updated`
+  message (server to page) and the `PlanState` / `PlanStep` / `PlanStepStatus` types are gone.
+  `PROTOCOL_VERSION` 27 → 28 (`server/protocol-version.ts` and `web/src/protocol-version.ts`), so a page
+  from before reloads instead of offering a board the server ignores.
+- `web/src/components/PlanBoard.tsx` deleted; `App.tsx` no longer mounts it above `<ChatInput>`.
+- The `planBoard*` and `planUpdate*` keys (`web/src/i18n.tsx` and `locales/*.json`) and the `.plan-board`
+  style are gone; `docs/directory-reference.md` lost its two lines.
+- Tests: `tests/unit/plan-state.test.ts` deleted; `tool-manager.test.ts` (31 tools with a switch now, 16 of
+  them "other") and `tool-registration.test.ts` lost their plan-tool lines; `pi-presets.test.ts` uses `todo_list` as its example of a tool that isn't
+  for coding; `tests/chat-column-align-test.mjs` lost its `.plan-board` entry.
+
+Not touched, despite the word "plan": the TL;DR, the inline to-do markers and `todo_list`, the task queue
+(`server/task-queue.ts`, `stuck-asks.ts`, `TaskQueuePanel.tsx` and pi-queue, where a task's plan is the
+plan agreed with the owner), the sol-savings plugin's own plan footer, DSH's preset plans and the build plan
+in `bin/pi-web-ui.mjs`. Saved data stays where it is: saved settings or presets whose list of switched-off
+tools names `plan_update` still load (unknown tool names are skipped, as before), and old chats keep their
+`plan_update` calls, which now show as ordinary tool calls.
+
+### How it was checked
+
+- `tests/unit/no-plan-board.test.ts`: the tool catalog has no `plan_update`; no server file registers it
+  or tells the AI to use it; switching tools on for a chat never adds it, even when a saved list names
+  it; the page has no board, board style or reader of a plan in the chat state; a saved
+  `client-state.json` naming `plan_update` loads with the name skipped, and the file is left as it was.
+- `tests/no-plan-board-test.mjs` (sealed browser test with a stand-in model): a new chat's model is
+  offered no `plan_update` tool and no instruction to use it, there is no board at desktop or phone
+  width, and Settings > Tools has no `plan_update` switch; a state message that still carries a plan, and the old `plan_updated` message, show nothing and
+  cause no page error; a saved chat with two old `plan_update` calls opens, shows both as ordinary tool
+  calls and carries on with a new question.
+- A search of `web/src`, `server` and `tests` finds none of the feature's names apart from these tests;
+  screenshots at desktop and phone width show the message box with no board and Settings' tool list with
+  no plan switch.
+
+**When syncing**: if upstream changes `PlanBoard.tsx` or `plan-manager.ts`, drop the change (the files stay
+deleted). If upstream adds anything back for the board (`plan_update`, `makePlanUpdateTool`,
+`PlanManager` or `PLAN_UPDATE_TOOL_NAME` in `agent-service.ts`, `tool-manager.ts` or `index.ts`; `plan`,
+`plan_update` or `plan_updated` in `protocol.ts`; a `<PlanBoard>` in `App.tsx`; `planBoard*` /
+`planUpdate*` keys; `.plan-board` styles), leave it out; `tests/unit/no-plan-board.test.ts` catches most
+of it. If upstream also bumps `PROTOCOL_VERSION`, use one more than the higher of the two numbers.

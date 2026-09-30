@@ -397,14 +397,6 @@ export const en = {
 	approvalRuleEmpty: "No approval rules configured. Click '+ Add Rule' to add custom policies.",
 	approvalRuleMoveUp: "Move Up",
 	approvalRuleMoveDown: "Move Down",
-	planBoardTitle: "Task Plan Board (Plan Mode)",
-	planBoardSteps: "Step List",
-	planBoardProgress: "Overall Progress",
-	planBoardNoPlan: "No active plan",
-	planBoardCompleted: "Completed",
-	planBoardInProgress: "In Progress",
-	planBoardPending: "Pending",
-	planBoardFailed: "Failed",
 	clear: "Clear",
 	confirm: "Confirm",
 	forkBadge: "Branch",
@@ -1726,9 +1718,6 @@ export const en = {
 		"Declare which files you are about to edit so parallel runs in the same project can steer clear (advisory only — it never blocks edits). First-wins; claims expire automatically.",
 	claimFilesOffHint:
 		"Disabled: the AI can no longer claim files (post-hoc touch reminders still work, only the up-front intent signal is gone)",
-	planUpdateEnabledDesc:
-		"Structured task plan updates (Plan Mode / Step State Machine): allows the model to break complex tasks into steps and track progress in real time.",
-	planUpdateOffHint: "Disabled: AI can no longer update the structured plan board",
 	compactContextEnabledDesc:
 		"Proactively compact context based on the current issue: allows AI to independently specify compression focus, retain core task context, drop irrelevant history, and control retention scope.",
 	compactContextOffHint:

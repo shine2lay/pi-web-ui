@@ -183,7 +183,6 @@ import {
 	type PendingApprovalEntry,
 	type ToolApprovalResolution,
 } from "./tool-approval.js";
-import { PlanManager } from "./plan-manager.js";
 
 import {
 	applyHeadTail,
@@ -202,7 +201,6 @@ import {
 	MARKERS_LIST_TOOL_NAME,
 	PI_AGENT_PRESETS,
 	PI_PERMISSION_OPTIONS,
-	PLAN_UPDATE_TOOL_NAME,
 	PRESENT_FILES_TOOL_NAME,
 	presetAllowsPluginTools,
 	presetHasQuestionnaire,
@@ -1089,66 +1087,6 @@ function wrapEditSoftToolWithPermission(
 				};
 			}
 			return result as never;
-		},
-	};
-}
-
-/**
- * 结构化任务执行计划更新工具（plan_update）— Plan Mode / Step State Machine。
- */
-export function makePlanUpdateTool(
-	planManager: PlanManager,
-	getActiveConvId: () => string,
-	emit: (msg: ServerMessage) => void,
-	flushSnapshot: () => void,
-): ToolDefinition {
-	return {
-		name: PLAN_UPDATE_TOOL_NAME,
-		label: "plan_update",
-		description:
-			"Update the structured task plan / step state machine (Plan Mode): break non-trivial work into decision-ready steps and track progress (pending -> in_progress -> done/failed). Prefer steps that note discovery conclusions, files to be touched, and a rollback strategy.",
-		promptSnippet: "update structured task plan with decision-ready steps, file touch list, and live status",
-		promptGuidelines: [
-			"When executing non-trivial tasks, use plan_update early to outline decision-ready steps before coding: " +
-				"specify discovery conclusions, explicitly list files to be touched (File Touch List), and note potential rollback strategies",
-			"Keep step status updated as work progresses (pending -> in_progress -> done/failed) so the user has real-time visibility",
-		],
-		parameters: Type.Object({
-			steps: Type.Array(
-				Type.Object({
-					id: Type.String({ description: "Unique step ID, e.g. '1', 'step-1'" }),
-					title: Type.String({ description: "Short step title" }),
-					status: Type.Optional(
-						Type.Union(
-							[Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("done"), Type.Literal("failed")],
-							{ description: "Step status: pending | in_progress | done | failed (default: pending)" },
-						),
-					),
-					description: Type.Optional(
-						Type.String({
-							description: "Optional detailed description, acceptance criteria, file touch list, or rollback note.",
-						}),
-					),
-				}),
-				{ description: "List of plan steps" },
-			),
-			activeStepId: Type.Optional(Type.String({ description: "ID of the step currently being executed" })),
-		}),
-		execute: async (toolCallId: string, params: unknown) => {
-			const convId = getActiveConvId();
-			const p = params as { steps: import("./protocol.js").PlanStep[]; activeStepId?: string | null };
-			const plan = planManager.setPlan(convId, p.steps, p.activeStepId);
-			emit({
-				type: "plan_updated",
-				conversationId: convId,
-				plan,
-			});
-			flushSnapshot();
-			const summary = planManager.describePlan(convId);
-			return {
-				content: [{ type: "text", text: `Plan updated successfully.\n\n${summary}` }],
-				details: { plan },
-			};
 		},
 	};
 }
@@ -3862,8 +3800,6 @@ export class ClientSession {
 		return ClientSession.sharedQuestions;
 	}
 
-	/** 任务计划管理器（Plan Mode / Step State Machine）。 */
-	private planManager = new PlanManager();
 	/** 待审批高危工具调用（Human-in-the-Loop: Edit & Run）。
 	 *
 	 *  telegram-answers: process-wide, like questions. A permission prompt belongs to its chat, not
@@ -4436,13 +4372,6 @@ export class ClientSession {
 					// todo-list-owner：读本 runtime 所属对话（ownerId，标记就写在 conv.id 下），不是建它的
 					// 那个窗口此刻正开着的对话——对话在后台跑时两者不同，以前会拿到前台对话的任务。
 					makeMarkersListTool(() => ownerId ?? this.activeId, this.markerSvc),
-					// 结构化任务计划更新（Plan Mode / Step State Machine）。
-					makePlanUpdateTool(
-						this.planManager,
-						() => ownerId ?? this.activeId,
-						(msg) => this.emit(msg),
-						() => this.flushSnapshot(),
-					),
 					// 标准引擎的 ask_user_question：模型调用 → 浏览器富渲染问卷（复用 DSH
 					// 的 question_pending/question_answer 协议，前端 DshQuestionDialog）。
 					// DSH 引擎不经此（它走 goal-rpc 的 userQuestions provider）。
@@ -6537,7 +6466,6 @@ export class ClientSession {
 			tooBig: conv.tooBig ?? null,
 			pendingQuestion: this.pendingQuestionForSnapshot(),
 			pendingApproval: this.pendingApprovalForSnapshot(),
-			plan: this.planManager.getPlan(this.activeId),
 			subagentHandoffs: this.subagentHandoffs.length > 0 ? [...this.subagentHandoffs] : undefined,
 			agentPreset: conv
 				? {
@@ -7254,17 +7182,6 @@ export class ClientSession {
 			conversationId: p.conversationId,
 			conversationTitle: liveTitle ?? p.conversationTitle,
 		};
-	}
-
-	updatePlan(steps: import("./protocol.js").PlanStep[], activeStepId?: string | null, conversationId?: string): void {
-		const convId = conversationId ?? this.activeId;
-		const plan = this.planManager.setPlan(convId, steps, activeStepId);
-		this.emit({
-			type: "plan_updated",
-			conversationId: convId,
-			plan,
-		});
-		this.flushSnapshot();
 	}
 
 	/** 关闭所有挂起提问（dispose 时清理）：以「取消」解析，避免模型挂死。

@@ -72,8 +72,6 @@ export const PRESENT_FILES_TOOL_NAME = "present_files";
 /** 文件认领工具（定义见 claim-files-tool.ts）：声明要改哪些文件，让同项目的
  *  并行对话绕行（纯建议，不拦编辑）。 */
 export const CLAIM_FILES_TOOL_NAME = "claim_files";
-/** 任务计划看板更新工具（定义见 plan-manager.ts，Plan Mode / 步骤状态机）。 */
-export const PLAN_UPDATE_TOOL_NAME = "plan_update";
 /** 主动上下文压缩工具（定义见 compact-context-tool.ts）。 */
 export const COMPACT_CONTEXT_TOOL_NAME = "compact_context";
 /** 高可靠结构化补丁工具（定义见 patch-tool.ts）：基于内容哈希锚点与语法块的行补丁工具。 */
@@ -171,15 +169,6 @@ export const AGENT_TOOL_CATALOG: AgentToolEntry[] = [
 		dshVisible: false,
 		descKey: "claimFilesEnabledDesc",
 		offHintKey: "claimFilesOffHint",
-	},
-	// 结构化任务计划更新（Plan Mode / Step State Machine），默认开。
-	{
-		name: PLAN_UPDATE_TOOL_NAME,
-		group: "other",
-		defaultOn: true,
-		dshVisible: true,
-		descKey: "planUpdateEnabledDesc",
-		offHintKey: "planUpdateOffHint",
 	},
 	{
 		name: PATCH_TOOL_NAME,

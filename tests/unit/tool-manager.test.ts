@@ -11,7 +11,6 @@ import {
 	CONVERSATION_READ_TOOL_NAME,
 	LSP_TOOL_NAME,
 	PATCH_TOOL_NAME,
-	PLAN_UPDATE_TOOL_NAME,
 	PRESENT_FILES_TOOL_NAME,
 	SKILL_TOOL_NAME,
 	applyAgentToolsGating,
@@ -49,8 +48,9 @@ function fakeSet(initial: string[] = []) {
 }
 
 describe("catalog", () => {
-	it("共 32 个可开关工具（终端 7＋子代理 8＋其他 17）", () => {
-		expect(AGENT_TOOL_CATALOG).toHaveLength(32);
+	// no-plan-board: plan_update left the "other" group (it had 17).
+	it("共 31 个可开关工具（终端 7＋子代理 8＋其他 16）", () => {
+		expect(AGENT_TOOL_CATALOG).toHaveLength(31);
 		expect(TERMINAL_TOOL_NAMES).toHaveLength(7);
 		expect(SUBAGENT_TOOL_NAMES).toHaveLength(8);
 	});
@@ -74,8 +74,6 @@ describe("catalog", () => {
 		expect(off.has(PRESENT_FILES_TOOL_NAME)).toBe(false);
 		// 文件认领（事前打招呼，纯 advisory）默认开：不打开 AI 不知道能认领。
 		expect(off.has(CLAIM_FILES_TOOL_NAME)).toBe(false);
-		// 结构化任务计划更新默认开。
-		expect(off.has(PLAN_UPDATE_TOOL_NAME)).toBe(false);
 		// 主动上下文压缩默认开：让 AI 可根据当前任务主动压缩精简上下文。
 		expect(off.has(COMPACT_CONTEXT_TOOL_NAME)).toBe(false);
 	});

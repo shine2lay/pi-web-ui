@@ -84,7 +84,6 @@ server/
 ├── hashline-engine.ts      # 基于内容哈希锚定与语法块解析的高可靠 Patch 引擎
 ├── patch-tool.ts           # 导出给 AI 的结构化补丁工具（Hashline Patch Tool）
 ├── lsp-tool.ts             # 导出给 AI 的原生 LSP 语言服务器工具
-├── plan-manager.ts         # 结构化任务计划看板与步骤状态机（Plan Mode / Step State Machine）
 ├── schedule-agent-tool.ts  # 把内置调度器暴露给 Agent（issue #193）
 ├── scheduler-tasks.ts      # 内置定时任务调度（issue #184）：任务 CRUD + cron/间隔触发 + 无头执行
 ├── tool-info.ts            # 工具定义说明（工具卡右键 → 显示工具详细信息）：按名现取 SDK / DSH 运行时的工具定义 → `tool_info`（定义是大对象，不进快照；DSH 拿不到时回 `unsupported`）
@@ -272,7 +271,6 @@ web/src/
 | `SettingsModal.tsx` | 设置面板（侧边栏分页：提示词/工具/消息显示/技能/插件/界面插件/目标审查/视觉桥/预设/子代理模板；DSH 另有问卷页、无工具页） |
 | `PluginSettingsForm.tsx` | 插件声明式设置表单（schema 驱动） |
 | `GoalBar.tsx` | 输入框上方目标条：设目标/清除/AI 提炼/轮数下拉 |
-| `PlanBoard.tsx` | 结构化任务计划看板（配 plan-manager.ts） |
 | `BgTasksModal.tsx` | 后台任务弹窗：AI 启动的监听端口进程列表 |
 | `SchedulerPanel.tsx` | 定时任务面板（配 scheduler-tasks.ts） |
 | `ModelThinking.tsx` | 模型 + 思考强度下拉（按服务商筛选 + 顶部搜索） |

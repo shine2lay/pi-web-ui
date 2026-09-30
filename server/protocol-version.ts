@@ -24,4 +24,7 @@
 //     never see the ack and would keep a faded "Sending" copy of every message they send.
 // 27: fast-mode - the snapshot carries the chat's Fast button (UiState.fastMode) and pages send
 //     `set_fast_mode`. Old pages never show the button; an old server would drop the toggle.
-export const PROTOCOL_VERSION = 27;
+// 28: no-plan-board - the Task Plan Board and the AI's tool that filled it are gone: the snapshot
+//     no longer carries the board, and the board's messages are gone both ways. An old page would
+//     still offer a board whose buttons the server now ignores.
+export const PROTOCOL_VERSION = 28;

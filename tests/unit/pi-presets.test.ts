@@ -56,8 +56,8 @@ describe("pi 引擎 Agent 预设（Agent Presets）", () => {
 		applyAgentToolsGating(mockSession, [], "minimal");
 		expect(current).toEqual(["bash", "read"]);
 
-		// 代码开发模式：只留代码读写与执行工具，排除了 plan_update 等规划工具
-		const fullWithPlan = ["bash", "read", "edit", "write", "edit_soft", "plan_update", "subagent_spawn"];
+		// 代码开发模式：只留代码读写与执行工具，排除了 todo_list 等规划工具
+		const fullWithPlan = ["bash", "read", "edit", "write", "edit_soft", "todo_list", "subagent_spawn"];
 		let currentCode = [...fullWithPlan];
 		const mockCodeSession: ActiveToolSet = {
 			getActiveToolNames: () => [...currentCode],
@@ -68,7 +68,7 @@ describe("pi 引擎 Agent 预设（Agent Presets）", () => {
 		};
 		applyAgentToolsGating(mockCodeSession, [], "code");
 		expect(currentCode).toEqual(["bash", "read", "edit", "write", "edit_soft"]);
-		expect(currentCode.includes("plan_update")).toBe(false);
+		expect(currentCode.includes("todo_list")).toBe(false);
 
 		// 纯对话模式：无工具
 		applyAgentToolsGating(mockSession, [], "ask");

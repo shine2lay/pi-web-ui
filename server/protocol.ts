@@ -443,10 +443,6 @@ export interface UiState {
 	 */
 	subagentHandoffs?: Array<{ fromRunId: string; toRunId: string; timestamp: number }>;
 	/**
-	 * 当前会话的任务计划看板状态（Plan Mode / Step State Machine）。
-	 */
-	plan?: PlanState | null;
-	/**
 	 * 当前对话的未发送输入框草稿（issue #166，单中心文件方案）。
 	 *  只在**全量快照**里携带（切会话 / new_chat / get_state）：增量
 	 *  snapshot_delta 永远不带 —— 同一标签页的草稿本来就是自己打的，不需要
@@ -1321,13 +1317,6 @@ export type ClientMessage =
 			allowAll?: boolean;
 			categories?: string[];
 	  }
-	/** 客户端更新任务计划看板（或清空计划）。 */
-	| {
-			type: "plan_update";
-			conversationId?: string;
-			steps: PlanStep[];
-			activeStepId?: string | null;
-	  }
 	/** Answer to page_request (id echoes page_request.id). `ok:false` carries a
 	 *  human-readable `error` — no browser/extension, page not allowed, or the
 	 *  action itself failed. The server never inspects `result`'s shape; it is
@@ -1565,24 +1554,6 @@ export interface UiToolApproval {
 	category?: UiApprovalCategory;
 	conversationId?: string;
 	conversationTitle?: string;
-}
-
-/** 任务计划步骤状态。 */
-export type PlanStepStatus = "pending" | "in_progress" | "done" | "failed";
-
-/** 任务计划单个步骤（Plan Step）。 */
-export interface PlanStep {
-	id: string;
-	title: string;
-	status: PlanStepStatus;
-	description?: string;
-}
-
-/** 任务步骤状态机看板状态（Plan State）。 */
-export interface PlanState {
-	steps: PlanStep[];
-	activeStepId?: string | null;
-	updatedAt?: number;
 }
 
 /** A background server the agent left running (listening-port diff around a
@@ -3387,12 +3358,6 @@ export type ServerMessage =
 	  }
 	/** 审批已完成或被取消/撤回（前端关闭审批弹窗）。 */
 	| { type: "tool_approval_resolved"; id: string }
-	/** 任务计划更新推送（增量或全量广播）。 */
-	| {
-			type: "plan_updated";
-			conversationId?: string;
-			plan: PlanState | null;
-	  }
 	/** 待答问卷被搬走/取消：前端若正展示该 id 的对话框立即收起（不过户/不恢复）。
 	 *  手动过户把问卷搬到另一会话时，源页面靠它收起旧对话框（快照为 null 只能收
 	 *  snapshot 来源的面板，即时通道弹出的收不到 —— 见 pending-question.ts）。 */

@@ -9398,16 +9398,6 @@ div.chead[role="button"]:focus-visible,
 	}
 }
 
-/* ------------------------------------------------------------- plan board */
-
-/* 任务执行看板（Plan Mode，PlanBoard.tsx）：渲染在 .main 里、输入框上方。
- * 与消息列 / 输入框 / goalbar 完全同宽齐平 —— 左右内缩走同一条列 token
- * （--chat-inset，见 .main 的「中央列几何」），不再自写固定 margin（曾写死
- * 16px：宽屏聊天列 / 窄屏下都比对话列宽一截，边缘对不齐）。 */
-.plan-board {
-	margin: 0 var(--chat-inset) 8px;
-}
-
 /* ---------------------------------------------------------------- goalbar */
 
 /* DSH Agent 预设条（输入框上方，goalbar 同列宽；只在 dsh 引擎 + 名录可用时渲染） */
