@@ -23,15 +23,26 @@ It restarts the server.                 (a single question's header is the title
 
 Busy chats carry on after it.         ← its detail, in italics
 
-Now                                   ← each choice in bold, its description under it
+── CHOICES ────────                   ← the choices, numbered like their buttons: each in
+1 · Now                                 bold, its description under it
 Restart right away.
 
+2 · Later
+Don't deploy yet.
+──────────────────                    ← a line over the footer
 📁 ~/projects/pi-web-ui · Open the chat
+
+[ 1 · Now ]                           ← the buttons, one per row
+[ 2 · Later ]
+[ ✏️ Type an answer ]
 ```
 
 - The part in bold is the question up to its question mark, else its first sentence, else its
   first line. The rest of it follows on the next line. A question that starts with a list, a quote,
   a heading or code, or is too long, has no part in bold.
+- The choices are listed when one of them has a description to read; then they're all listed, so
+  the numbers match the buttons. Choices that are only a name (Yes / No) show on their buttons
+  alone, without numbers. The text lists 12 at most; the buttons hold them all.
 - Several questions in one ask show which one this is above it: *Colour (1/3)*.
 - "Type an answer" asks for your reply under the question in bold.
 - A stuck queued task opens with "📌 Task #26 needs you", with the task's title under it.

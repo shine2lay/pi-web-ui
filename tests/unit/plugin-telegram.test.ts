@@ -36,6 +36,9 @@ const SESSION = "/home/x/.pi/agent/sessions/abc.jsonl";
 const LINK = chatLink(ADDRESS, SESSION) as string;
 /** The link that opens the chat, as it shows in a message. */
 const OPEN = `<a href="${LINK.replace(/&/g, "&amp;")}">Open the chat</a>`;
+/** The line over a question's listed choices, and the one over the footer. */
+const CHOICES = `\u2500\u2500 CHOICES ${"\u2500".repeat(8)}`;
+const RULE = "\u2500".repeat(18);
 /** The one line an answered or gone question shrinks to (see the "finished messages" tests). */
 const finalLine = (title: string, chat: string) =>
 	`<a href="${LINK.replace(/&/g, "&amp;")}"><b>${title}</b></a> \u00B7 <i>${chat}</i>`;
@@ -244,11 +247,14 @@ describe("telegram plugin: sending", () => {
 			[
 				"\u2753 <b>Pick a colour</b> \u00B7 <i>from Throwaway</i>",
 				"<b>Which colour?</b>",
-				"<b>Red</b>\nwarm",
-				`<i>\u{1F4C1} ~/projects/demo</i> \u00B7 ${OPEN}`,
-			].join("\n\n"),
+				`${CHOICES}\n<b>1 \u00B7 Red</b>\nwarm\n\n<b>2 \u00B7 Blue</b>`,
+			].join("\n\n") + `\n${RULE}\n<i>\u{1F4C1} ~/projects/demo</i> \u00B7 ${OPEN}`,
 		);
-		expect(buttons(sent[0]).map((b: Any) => b.text)).toEqual(["Red", "Blue", "\u270F\uFE0F Type an answer"]);
+		expect(buttons(sent[0]).map((b: Any) => b.text)).toEqual([
+			"1 \u00B7 Red",
+			"2 \u00B7 Blue",
+			"\u270F\uFE0F Type an answer",
+		]);
 	});
 
 	it("cuts a long permission prompt to fit Telegram, pointing to the chat for the rest", async () => {
@@ -636,7 +642,11 @@ describe("telegram plugin: answering from Telegram", () => {
 		const again = tg.last("editMessageText") as Call;
 		expect(again.params.text).toContain("that answer doesn't fit");
 		expect(again.params.text).toContain("Please answer again.");
-		expect(buttons(again).map((b: Any) => b.text)).toEqual(["Red", "Blue", "\u270F\uFE0F Type an answer"]);
+		expect(buttons(again).map((b: Any) => b.text)).toEqual([
+			"1 \u00B7 Red",
+			"2 \u00B7 Blue",
+			"\u270F\uFE0F Type an answer",
+		]);
 	});
 });
 
@@ -750,12 +760,15 @@ describe("telegram plugin: how messages look", () => {
 		sessionFile: SESSION,
 	};
 	const footer = `<i>\u{1F4C1} ~/projects/pi-web-ui</i> \u00B7 ${OPEN}`;
+	/** How every message ends: a line, then the footer right under it. */
+	const end = `\n${RULE}\n${footer}`;
+	const labels = (r: Any) => r.reply_markup.inline_keyboard.map((row: Any) => row[0].text);
 	const yesNo = [
 		{ value: "yes", label: "Yes" },
 		{ value: "no", label: "No" },
 	];
 
-	it("a question: a one-line head, then the question, its detail and each choice apart, and a footer", () => {
+	it("a question: a one-line head, the question, its detail, its choices numbered like their buttons, a footer", () => {
 		const ask = {
 			...base,
 			kind: "question",
@@ -783,18 +796,20 @@ describe("telegram plugin: how messages look", () => {
 				// The question, the part you must read, in bold (so its own bold goes).
 				"<b>Deploy now with <code>pi-web-deploy</code>?</b>",
 				"<i>It restarts right away.</i>",
-				"<b>Now</b>\nRestart <b>right away</b>.",
-				"<b>When idle</b>\nWait for idle chats (<code>--when-idle</code>).",
-				"<b>Later</b>\nDon't deploy yet.",
-				footer,
-			].join("\n\n"),
+				// The choices under a "CHOICES" line, each numbered like its button, apart from each other.
+				[
+					`${CHOICES}\n<b>1 \u00B7 Now</b>\nRestart <b>right away</b>.`,
+					"<b>2 \u00B7 When idle</b>\nWait for idle chats (<code>--when-idle</code>).",
+					"<b>3 \u00B7 Later</b>\nDon't deploy yet.",
+				].join("\n\n"),
+			].join("\n\n") + end,
 		);
 		// One question: its header is the title, said once.
 		expect(text.match(/Deploy<\/b>/g)).toHaveLength(1);
 		expect(reply_markup.inline_keyboard.map((r: Any) => r[0].text)).toEqual([
-			"Now",
-			"When idle",
-			"Later",
+			"1 \u00B7 Now",
+			"2 \u00B7 When idle",
+			"3 \u00B7 Later",
 			"\u270F\uFE0F Type an answer",
 		]);
 	});
@@ -831,9 +846,22 @@ describe("telegram plugin: how messages look", () => {
 			],
 		};
 		const head = "\u2753 <b>3 questions</b> \u00B7 <i>from tooling</i>";
-		expect(renderAsk(ask, st()).text).toBe(
-			[head, "<i>Colour (1/3)</i>\n<b>Which colour?</b>", "<b>Red</b>\nWarm.", footer].join("\n\n"),
+		const colour = renderAsk(ask, st());
+		expect(colour.text).toBe(
+			[
+				head,
+				"<i>Colour (1/3)</i>\n<b>Which colour?</b>",
+				// One choice has a description: all of them are listed, so the numbers match the buttons.
+				`${CHOICES}\n<b>1 \u00B7 Red</b>\nWarm.\n\n<b>2 \u00B7 Blue</b>`,
+			].join("\n\n") + end,
 		);
+		expect(labels(colour)).toEqual(["1 \u00B7 Red", "2 \u00B7 Blue", "\u270F\uFE0F Type an answer"]);
+		// Choices without descriptions show on their buttons alone, without numbers.
+		const size = renderAsk(ask, st({ step: 1, answers: { c: { selected: ["Red"] } } }));
+		expect(size.text).toBe(
+			[head, "\u2714\uFE0F Colour: Red", "<i>Size (2/3)</i>\n<b>Which size?</b>"].join("\n\n") + end,
+		);
+		expect(labels(size)).toEqual(["S", "L", "\u270F\uFE0F Type an answer"]);
 		const answers = { c: { selected: ["Red"] }, s: { selected: ["L"] } };
 		expect(renderAsk(ask, st({ step: 2, answers })).text).toBe(
 			[
@@ -841,8 +869,7 @@ describe("telegram plugin: how messages look", () => {
 				"\u2714\uFE0F Colour: Red\n\u2714\uFE0F Size: L",
 				"<i>Note (3/3)</i>\n<b>Anything else?</b>",
 				"<i>Reply to this message with your answer.</i>",
-				footer,
-			].join("\n\n"),
+			].join("\n\n") + end,
 		);
 	});
 
@@ -867,8 +894,7 @@ describe("telegram plugin: how messages look", () => {
 			[
 				"\u{1F4CC} <b>Task #26 needs you</b>\n<i>Make it nice</i>",
 				"<b>The run failed because the model was busy (503 overloaded).</b>\nReply here to carry on.\n<code>503 overloaded_error</code>",
-				footer,
-			].join("\n\n"),
+			].join("\n\n") + end,
 		);
 		// From a server that doesn't say which task: the title does.
 		const { task: _task, ...older } = ask;
@@ -901,10 +927,14 @@ describe("telegram plugin: how messages look", () => {
 				"\u{1F510} <b>Allow bash?</b> \u00B7 <i>from tooling</i>",
 				"<pre>git push origin mine</pre>",
 				"<b>It pushes the branch.</b>",
-				"<b>Allow this kind here</b>\ngit push",
-				footer,
-			].join("\n\n"),
+				`${CHOICES}\n<b>1 \u00B7 Approve</b>\n\n<b>2 \u00B7 Allow this kind here</b>\ngit push\n\n<b>3 \u00B7 Deny</b>`,
+			].join("\n\n") + end,
 		);
+		expect(labels(renderAsk(approval("x"), st()))).toEqual([
+			"1 \u00B7 Approve",
+			"2 \u00B7 Allow this kind here",
+			"3 \u00B7 Deny",
+		]);
 		const long = 'cd ~/projects/pi-web-ui && git push origin mine --force-with-lease && echo "<done>"';
 		expect(long.length).toBeGreaterThan(QUOTE_OVER);
 		expect(renderAsk(approval(long), st()).text).toContain(`\n\n<blockquote expandable>${esc(long)}</blockquote>\n\n`);
@@ -940,9 +970,39 @@ describe("telegram plugin: how messages look", () => {
 				"1. Add a <b>converter</b>.\n2. Rework <code>renderAsk</code>:\n   \u25E6 blank lines\n   \u25E6 one footer",
 				"<pre>Step  | Time\n------+-----\nbuild | 2m</pre>",
 				"<blockquote><b>HTML</b> is <i>fine</i> too.</blockquote>",
-				footer,
-			].join("\n\n"),
+			].join("\n\n") + end,
 		);
+		expect(labels(renderAsk(ask, st()))).toEqual(["Yes", "No"]);
+	});
+
+	it("many described choices: the text lists 12 and says how many more; the buttons hold them all", () => {
+		const ask = {
+			...base,
+			kind: "question",
+			title: "Pick",
+			fields: [
+				{
+					id: "p",
+					text: "Which ones?",
+					options: Array.from({ length: 15 }, (_, i) => ({
+						value: `v${i}`,
+						label: `C${i + 1}`,
+						description: `d${i + 1}`,
+					})),
+					multi: true,
+					allowText: false,
+				},
+			],
+		};
+		const r = renderAsk(ask, st({ ticks: ["v1"] }));
+		expect(r.text).toContain(`${CHOICES}\n<b>1 \u00B7 C1</b>\nd1\n\n<b>2 \u00B7 C2</b>\nd2\n\n`);
+		expect(r.text).toContain("<b>12 \u00B7 C12</b>\nd12\n\n<i>and 3 more on the buttons</i>");
+		expect(r.text).not.toContain("C13");
+		expect(r.text.endsWith(`<i>Tick all that fit, then tap Done.</i>${end}`)).toBe(true);
+		const shown = labels(r);
+		expect(shown).toHaveLength(16);
+		expect(shown.slice(0, 2)).toEqual(["\u2610 1 \u00B7 C1", "\u2611 2 \u00B7 C2"]);
+		expect(shown.slice(-2)).toEqual(["\u2610 15 \u00B7 C15", "\u2705 Done"]);
 	});
 
 	it("the head and the footer: markup in titles is dropped, the rest escaped", () => {
@@ -1077,8 +1137,8 @@ describe("telegram plugin: how messages look", () => {
 		const { text } = renderAsk(ask, st());
 		expect(visibleLength(text)).toBeLessThanOrEqual(TEXT_BUDGET);
 		expect(visibleLength(text)).toBeGreaterThan(TEXT_BUDGET - 500);
-		expect(text).toContain("\n\n<i>(cut: open the chat for the rest)</i>\n\n");
-		expect(text.endsWith(`\n\n${footer}`)).toBe(true);
+		expect(text).toContain(`\n\n<i>(cut: open the chat for the rest)</i>${end}`);
+		expect(text.endsWith(end)).toBe(true);
 		expect(htmlProblem(text)).toBe("");
 
 		// Too much even without the text above: the question alone, then the footer.
@@ -1382,9 +1442,8 @@ describe("telegram plugin: formatting Telegram can't read", () => {
 			[
 				"\u2753 Pick a colour \u00B7 from Throwaway",
 				"Which colour?",
-				"Red\nwarm",
-				`\u{1F4C1} ~/projects/demo \u00B7 Open the chat (${LINK})`,
-			].join("\n\n"),
+				`${CHOICES}\n1 \u00B7 Red\nwarm\n\n2 \u00B7 Blue`,
+			].join("\n\n") + `\n${RULE}\n\u{1F4C1} ~/projects/demo \u00B7 Open the chat (${LINK})`,
 		);
 		expect(plain.params.reply_markup).toEqual(html.params.reply_markup);
 		expect(plain.params.link_preview_options).toEqual({ is_disabled: true });

@@ -5,9 +5,10 @@
  * browser. The real plugin (plugins/telegram) is installed into the server's own data folder.
  *
  *  1. a question: it's sent with its choices as buttons, a one-line head with the chat it's from,
- *     the question and each described choice apart, and a footer with the folder and a link to the
- *     chat; a stranger's tap and text, and the owner writing in a group, are ignored; the owner's
- *     tap answers the chat, closes the browser's dialog and shrinks the message to one line
+ *     the question in bold, its choices apart under a "CHOICES" line and numbered like their
+ *     buttons, and under a line a footer with the folder and a link to the chat; a stranger's tap
+ *     and text, and the owner writing in a group, are ignored; the owner's tap answers the chat,
+ *     closes the browser's dialog and shrinks the message to one line
  *     ("\u2705 Colour \u00B7 <chat>: Blue (on Telegram)");
  *  2. a question answered in the browser: its message shrinks to one line too, and its old buttons
  *     only say "No longer waiting.";
@@ -47,6 +48,9 @@ const TOKEN = "700000001:TEST-secret-part-not-a-real-token";
 const TOKEN_SECRET = TOKEN.split(":")[1];
 const WEB = "https://pi.test.example:8787/";
 const TYPE_ANSWER = "\u270F\uFE0F Type an answer";
+/** The line over a question's listed choices, and the one over the footer. */
+const CHOICES_LINE = `\u2500\u2500 CHOICES ${"\u2500".repeat(8)}`;
+const RULE = "\u2500".repeat(18);
 const NO_BROWSER_GRACE_MS = 30_000; // server/ask-delivery.ts ASK_USER_NO_CLIENT_GRACE_MS
 
 const PLAN = {
@@ -247,6 +251,15 @@ function fakeTelegram(token) {
 }
 const labels = (msg) => (msg?.markup?.inline_keyboard ?? []).flat().map((b) => b.text);
 const noButtons = (msg) => labels(msg).length === 0;
+/** The buttons' labels without the numbers they carry when the text lists the choices. */
+const bare = (msg) => labels(msg).map((l) => l.replace(/^\d+ \u00B7 /, ""));
+/** The choices' buttons are numbered like the text's list of them when it has one, and not otherwise. */
+const numberedRight = (msg) => {
+	const opts = labels(msg).filter((l) => l !== TYPE_ANSWER && !l.startsWith("\u2705"));
+	return msg.text.includes(CHOICES_LINE)
+		? opts.every((l, i) => l.startsWith(`${i + 1} \u00B7 `) && msg.text.includes(`<b>${l}</b>`))
+		: opts.every((l) => !/^\d+ \u00B7 /.test(l));
+};
 /**
  * A message's final words: one line, "\u2705 <title, linking to the chat> \u00B7 <what>: ...<end>".
  * `what` is the chat's title (any, when not given) or, for a queued task, the task's title.
@@ -485,8 +498,8 @@ try {
 	);
 	if (!m1) throw new Error("no Telegram message for the question");
 	check(
-		"its choices are buttons, plus a typed answer",
-		same(labels(m1), ["Red", "Blue", TYPE_ANSWER]),
+		"its choices are buttons, numbered like the text lists them, plus a typed answer",
+		same(labels(m1), ["1 \u00B7 Red", "2 \u00B7 Blue", TYPE_ANSWER]) && numberedRight(m1),
 		labels(m1).join(" | "),
 	);
 	const [m1Head, ...m1Parts] = m1.text.split("\n\n");
@@ -496,16 +509,18 @@ try {
 		m1Head,
 	);
 	check(
-		"... then the question in bold and each described choice, apart, with the header said only once",
+		"... then the question in bold and its choices apart under a CHOICES line, with the header said only once",
 		m1Parts[0] === "<b>Which colour, round 1?</b>" &&
-			m1Parts.includes("<b>Red</b>\nwarm") &&
+			m1.text.includes(`\n\n${CHOICES_LINE}\n<b>1 \u00B7 Red</b>\nwarm\n\n<b>2 \u00B7 Blue</b>\n${RULE}\n`) &&
 			m1.text.split("Colour").length === 2,
 		m1.text,
 	);
+	const m1Lines = m1.text.split("\n");
 	check(
-		"it ends with one line: the folder, and a link to the chat",
-		/^<i>\u{1F4C1} [^<]*work<\/i> \u00B7 <a href="[^"]+">Open the chat<\/a>$/u.test(m1Parts.at(-1) ?? ""),
-		m1Parts.at(-1),
+		"it ends with a line, then one line: the folder, and a link to the chat",
+		m1Lines.at(-2) === RULE &&
+			/^<i>\u{1F4C1} [^<]*work<\/i> \u00B7 <a href="[^"]+">Open the chat<\/a>$/u.test(m1Lines.at(-1) ?? ""),
+		m1Lines.slice(-2).join("\n"),
 	);
 	const href = /<a href="([^"]+)">Open the chat<\/a>/.exec(m1.text)?.[1]?.replace(/&amp;/g, "&");
 	const link = href ? new URL(href) : null;
@@ -574,7 +589,11 @@ try {
 	if (!m3) throw new Error("no Telegram message for the permission prompt");
 	check(
 		"a permission prompt reaches Telegram with the browser's allow / deny choices",
-		labels(m3).includes("Approve") && labels(m3).includes("Allow all here") && labels(m3).at(-1) === "Deny",
+		bare(m3).includes("Approve") &&
+			bare(m3).includes("Allow all here") &&
+			bare(m3).at(-1) === "Deny" &&
+			numberedRight(m3) &&
+			m3.text.split("\n").at(-2) === RULE,
 		labels(m3).join(" | "),
 	);
 	tg.tap(m3, "Approve");
@@ -632,8 +651,8 @@ try {
 	const m6 = await tg.waitMessage((m) => m.text.includes("Add to the queue?") && m.text.includes(PLAN.title), 30_000);
 	if (!m6) throw new Error("no Telegram message for the plan's pop-up");
 	check(
-		"the plan's approval pop-up reaches Telegram with Yes / No",
-		same(labels(m6), ["Yes", "No"]),
+		"the plan's approval pop-up reaches Telegram with Yes / No (no numbers: there's nothing to read about them)",
+		same(labels(m6), ["Yes", "No"]) && numberedRight(m6),
 		labels(m6).join(" | "),
 	);
 	check(

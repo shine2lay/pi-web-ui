@@ -880,15 +880,33 @@ export function lineFromOldHead(head, link) {
 	return lineOf(title || "A question", chat, link);
 }
 
-/** The buttons for the current part of a question. */
+/** The line over a question's choices, and the one over the footer. */
+const CHOICES_LINE = `\u2500\u2500 CHOICES ${"\u2500".repeat(8)}`;
+const RULE = "\u2500".repeat(18);
+/** How many choices the text lists at most (the buttons hold them all). */
+const LISTED_MAX = 12;
+
+/** A choice's name, for its button and its line in the text. */
+const choiceName = (o) => cut(plainText(o.label) || String(o.value ?? ""), LABEL_MAX) || "\u2026";
+
+/**
+ * Whether the text lists a part's choices, numbered to match their buttons: when any of them has
+ * a description to read. Choices that are only a name show on their buttons alone.
+ */
+function listsChoices(opts) {
+	return opts.some((o) => o.description);
+}
+
+/** The buttons for the current part of a question (numbered when the text lists the choices). */
 export function renderButtons(ask, st) {
 	const i = st?.step ?? 0;
 	const f = ask?.fields?.[i];
 	if (!f || st?.sending) return { inline_keyboard: [] };
 	const opts = fieldOptions(ask, i, st.answers);
 	const ticks = st.ticks ?? [];
+	const numbered = listsChoices(opts);
 	const rows = opts.map((o, n) => {
-		const label = cut(plainText(o.label) || String(o.value ?? ""), LABEL_MAX) || "\u2026";
+		const label = numbered ? `${n + 1} \u00B7 ${choiceName(o)}` : choiceName(o);
 		const text = f.multi ? `${ticks.includes(o.value) ? "\u2611" : "\u2610"} ${label}` : label;
 		return [{ text, callback_data: `${st.ref}:${i}:o${n}` }];
 	});
@@ -989,8 +1007,9 @@ function questionHtml(question, max = 1000) {
 
 /**
  * The whole message for a waiting question: { text, reply_markup }. A one-line head, then the
- * body, the question, its detail and each described choice with a blank line between them, and a
- * footer with the folder and a link to the chat.
+ * body, the question and its detail with a blank line between them; when a choice has a
+ * description, a "CHOICES" line and every choice numbered like its button, each with its
+ * description under it; then a line, and a footer with the folder and a link to the chat.
  * st = { ref, step, answers, ticks, sending, link }. extra = { warning, note }.
  */
 export function renderAsk(ask, st, extra = {}) {
@@ -1022,10 +1041,15 @@ export function renderAsk(ask, st, extra = {}) {
 		} else if (text) parts.push(text);
 		if (f.detail) parts.push(italic(toTelegramHtml(cut(f.detail, 500), { outer: ["i"] })));
 		const opts = fieldOptions(ask, step, answers);
-		for (const o of opts.filter((o) => o.description).slice(0, 12)) {
-			const label = `<b>${escapeHtml(cut(plainText(o.label) || String(o.value ?? ""), LABEL_MAX))}</b>`;
-			const description = toTelegramHtml(cut(o.description, 200));
-			parts.push(description ? `${label}\n${description}` : label);
+		if (listsChoices(opts)) {
+			const items = opts.slice(0, LISTED_MAX).map((o, n) => {
+				const label = `<b>${n + 1} \u00B7 ${escapeHtml(choiceName(o))}</b>`;
+				const description = toTelegramHtml(cut(o.description ?? "", 200));
+				return description ? `${label}\n${description}` : label;
+			});
+			const more = opts.length - LISTED_MAX;
+			if (more > 0) items.push(`<i>and ${more} more on the buttons</i>`);
+			parts.push(`${CHOICES_LINE}\n${items.join("\n\n")}`);
 		}
 		if (f.multi && opts.length) parts.push("<i>Tick all that fit, then tap Done.</i>");
 		else if (f.allowText && !opts.length) parts.push("<i>Reply to this message with your answer.</i>");
@@ -1035,12 +1059,14 @@ export function renderAsk(ask, st, extra = {}) {
 	if (extra.warning) tail.push(`\u26A0\uFE0F ${escapeHtml(cut(extra.warning, 300))}`);
 	if (st?.sending) tail.push(`<i>${escapeHtml(extra.note || "Sending your answer\u2026")}</i>`);
 	const footer = renderFooter(ask, st?.link);
+	// The footer sits under a line, right after the last part.
+	const end = footer ? `\n${RULE}\n${footer}` : "";
 
 	const body = (raw) => (!raw ? "" : approval ? codeBlock(raw) : toTelegramHtml(raw));
 	const build = (bodyRaw, note = "") =>
-		[head, body(bodyRaw), note ? `<i>${escapeHtml(note)}</i>` : "", done.join("\n"), ...parts, ...tail, footer]
+		[head, body(bodyRaw), note ? `<i>${escapeHtml(note)}</i>` : "", done.join("\n"), ...parts, ...tail]
 			.filter(Boolean)
-			.join("\n\n");
+			.join("\n\n") + end;
 
 	let bodyRaw = ask?.body ? String(ask.body) : "";
 	let text = build(bodyRaw);
@@ -1059,7 +1085,7 @@ export function renderAsk(ask, st, extra = {}) {
 		// Still too long (a huge question): the short form, and when even that is too long (formatting
 		// can make a text longer: a table's columns), the question as it was written.
 		const question = f ? questionOf(ask, f) || f.header || "" : "";
-		const short = (q) => [head, q, `<i>${escapeHtml(CUT_NOTE)}</i>`, ...tail, footer].filter(Boolean).join("\n\n");
+		const short = (q) => [head, q, `<i>${escapeHtml(CUT_NOTE)}</i>`, ...tail].filter(Boolean).join("\n\n") + end;
 		text = short(questionHtml(question, 1500));
 		if (visibleLength(text) > TEXT_BUDGET) text = short(escapeHtml(cut(question, 1500)));
 	}

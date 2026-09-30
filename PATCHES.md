@@ -2703,6 +2703,11 @@ wanted needs-you notes to become questions with choices: pi-queue's `queue_stuck
    - several questions: the header as a label above the question, "<i>Header (1/3)</i>";
    - "Type your answer to:" puts the question's must-read part in bold on a line of its own;
    - a markdown heading inside a text that sits in bold no longer makes a bold inside a bold.
+   Then (owner, 2026-09-30, picked layout "D" of four terminal-style samples sent to his phone):
+   - when a choice has a description, the choices are listed under a "── CHOICES ───" line, all of
+     them, numbered "1 · Label" like their buttons (12 at most in the text; the buttons hold them all);
+     choices that are only a name show on their buttons alone, without numbers;
+   - a line (18 × "─") right over the footer.
 10. **A new window's background list has the plugins' lines at once** (`agent-service.ts` attach): the
     plugin providers are wired before `attachSink`, whose first push builds the list. Before, the
     plugins' lines (such as Telegram's status) were missing until one of them changed (upstream has this
@@ -2726,8 +2731,9 @@ pi-tldr (agents are told to ask with choices when they need the user).
     window opened after a save sees the saved values: each fails without its half of point 8).
 - `tests/telegram-answers-test.mjs` (sealed server, fake Telegram via `PI_WEB_TELEGRAM_API_BASE`, mock model,
   real pi-queue from `PI_QUEUE_PKG`, no tokens):
-  1. A question reaches Telegram with its choices: a one-line head with its chat, the question and each
-     described choice apart, the header said once, and a footer with the folder and link. A stranger's tap
+  1. A question reaches Telegram with its choices: a one-line head with its chat, the question, its
+     choices apart under a CHOICES line and numbered like their buttons, the header said once, and under a
+     line a footer with the folder and link (permission prompts and pop-ups: numbered only when listed). A stranger's tap
      and text, and the owner writing in a group, are ignored. The owner's tap answers the chat and closes
      the browser's dialog; the message shrinks to one line, "… Blue (on Telegram)".
   2. A question answered in the browser: its message shrinks to one line that says so, and its old buttons
