@@ -14,6 +14,7 @@ import telegramPlugin, {
 	createPoller,
 	createTelegramApi,
 	htmlToPlain,
+	leadOf,
 	lineFromOldHead,
 	plainText,
 	renderAnswered,
@@ -242,7 +243,7 @@ describe("telegram plugin: sending", () => {
 		expect(p.text).toBe(
 			[
 				"\u2753 <b>Pick a colour</b> \u00B7 <i>from Throwaway</i>",
-				"Which colour?",
+				"<b>Which colour?</b>",
 				"<b>Red</b>\nwarm",
 				`<i>\u{1F4C1} ~/projects/demo</i> \u00B7 ${OPEN}`,
 			].join("\n\n"),
@@ -462,7 +463,7 @@ describe("telegram plugin: copies from a send whose answer was lost", () => {
 				reply_to_message: {
 					message_id: lostPrompt.result.message_id,
 					from: { id: 123456, is_bot: true },
-					text: "Type your answer to: Which colour?",
+					text: "Type your answer to:\nWhich colour?",
 				},
 			},
 		});
@@ -588,7 +589,8 @@ describe("telegram plugin: answering from Telegram", () => {
 		const msg = tg.last("sendMessage") as Call;
 		await send(tap(dataOf(msg, "Type an answer"), msg.result.message_id));
 		const prompt = tg.last("sendMessage") as Call;
-		expect(prompt.params.text).toContain("Type your answer to: Which colour?");
+		expect(prompt.params.text).toBe("Type your answer to:\n<b>Which colour?</b>");
+		expect(prompt.params.parse_mode).toBe("HTML");
 		expect(prompt.params.reply_markup.force_reply).toBe(true);
 		expect(prompt.params.reply_parameters.message_id).toBe(msg.result.message_id);
 		await send(say("Green", prompt.result.message_id));
@@ -778,7 +780,8 @@ describe("telegram plugin: how messages look", () => {
 		expect(text).toBe(
 			[
 				"\u2753 <b>Deploy</b> \u00B7 <i>from tooling</i>",
-				"Deploy <b>now</b> with <code>pi-web-deploy</code>?",
+				// The question, the part you must read, in bold (so its own bold goes).
+				"<b>Deploy now with <code>pi-web-deploy</code>?</b>",
 				"<i>It restarts right away.</i>",
 				"<b>Now</b>\nRestart <b>right away</b>.",
 				"<b>When idle</b>\nWait for idle chats (<code>--when-idle</code>).",
@@ -829,14 +832,14 @@ describe("telegram plugin: how messages look", () => {
 		};
 		const head = "\u2753 <b>3 questions</b> \u00B7 <i>from tooling</i>";
 		expect(renderAsk(ask, st()).text).toBe(
-			[head, "<b>Colour</b> (1/3)\nWhich colour?", "<b>Red</b>\nWarm.", footer].join("\n\n"),
+			[head, "<i>Colour (1/3)</i>\n<b>Which colour?</b>", "<b>Red</b>\nWarm.", footer].join("\n\n"),
 		);
 		const answers = { c: { selected: ["Red"] }, s: { selected: ["L"] } };
 		expect(renderAsk(ask, st({ step: 2, answers })).text).toBe(
 			[
 				head,
 				"\u2714\uFE0F Colour: Red\n\u2714\uFE0F Size: L",
-				"<b>Note</b> (3/3)\nAnything else?",
+				"<i>Note (3/3)</i>\n<b>Anything else?</b>",
 				"<i>Reply to this message with your answer.</i>",
 				footer,
 			].join("\n\n"),
@@ -863,7 +866,7 @@ describe("telegram plugin: how messages look", () => {
 		expect(renderAsk(ask, st()).text).toBe(
 			[
 				"\u{1F4CC} <b>Task #26 needs you</b>\n<i>Make it nice</i>",
-				"The run failed because the model was busy (503 overloaded). Reply here to carry on.\n<code>503 overloaded_error</code>",
+				"<b>The run failed because the model was busy (503 overloaded).</b>\nReply here to carry on.\n<code>503 overloaded_error</code>",
 				footer,
 			].join("\n\n"),
 		);
@@ -897,7 +900,7 @@ describe("telegram plugin: how messages look", () => {
 			[
 				"\u{1F510} <b>Allow bash?</b> \u00B7 <i>from tooling</i>",
 				"<pre>git push origin mine</pre>",
-				"It pushes the branch.",
+				"<b>It pushes the branch.</b>",
 				"<b>Allow this kind here</b>\ngit push",
 				footer,
 			].join("\n\n"),
@@ -951,6 +954,53 @@ describe("telegram plugin: how messages look", () => {
 		expect(renderFooter({ cwd: "/srv/a&b" }, null)).toBe("<i>\u{1F4C1} /srv/a&amp;b</i>");
 		expect(renderFooter({}, LINK)).toBe(OPEN);
 		expect(renderFooter({}, null)).toBe("");
+	});
+
+	it("a head too long for a phone's line puts the chat on the next line, cut at a word", () => {
+		const ask = {
+			kind: "question",
+			title: "Telegram look",
+			conversationTitle: "Queue #26: Telegram messages easy to read",
+		};
+		expect(renderHead(ask)).toBe("\u2753 <b>Telegram look</b>\n<i>from Queue #26: Telegram messages\u2026</i>");
+		expect(renderHead({ ...ask, conversationTitle: "tooling" })).toBe(
+			"\u2753 <b>Telegram look</b> \u00B7 <i>from tooling</i>",
+		);
+		// A chat title in one long word is cut where it has to be.
+		expect(renderHead({ ...ask, conversationTitle: "x".repeat(60) })).toBe(
+			`\u2753 <b>Telegram look</b>\n<i>from ${"x".repeat(30)}\u2026</i>`,
+		);
+	});
+
+	it("the part of a question you must read is in bold: up to its question mark, else its first sentence", () => {
+		const lead = (s: string) => leadOf(s).lead;
+		expect(leadOf("What now?\n\nMore text here.")).toEqual({ lead: "What now?", sep: "\n\n", rest: "More text here." });
+		expect(leadOf("It failed. Retry? Or not.")).toEqual({ lead: "It failed. Retry?", sep: "\n", rest: "Or not." });
+		expect(lead("The run failed (503 overloaded). Reply here.")).toBe("The run failed (503 overloaded).");
+		expect(lead("Pick one:\n- a\n- b")).toBe("Pick one:");
+		// Full stops that don't end a sentence.
+		expect(lead("Use v3.5 and notes.md, e.g. the new one. Then go")).toBe("Use v3.5 and notes.md, e.g. the new one.");
+		expect(lead("Ask Mr. Smith first. Then go")).toBe("Ask Mr. Smith first.");
+		expect(lead("Open https://x.y/a?b=1 now? ok")).toBe("Open https://x.y/a?b=1 now?");
+		expect(lead("See [the docs. here](https://x.y) (they say so. really). Next")).toBe(
+			"See [the docs. here](https://x.y) (they say so. really).",
+		);
+		expect(lead("Run `a. B` now. Next")).toBe("Run `a. B` now.");
+		expect(lead("**Why?** Because.")).toBe("**Why?**");
+		// None to pick out: it would cut a piece of formatting, it starts with a block or HTML, it's too long.
+		expect(lead("**Note. This matters** a lot")).toBe("");
+		expect(lead("- a list? yes")).toBe("");
+		expect(lead("> a quote? yes")).toBe("");
+		expect(lead("## Plan? yes")).toBe("");
+		expect(lead("```\ncode?\n```")).toBe("");
+		expect(lead("<p>Why?</p>")).toBe("");
+		expect(lead(`${"x ".repeat(120)}?`)).toBe("");
+		expect(lead("")).toBe("");
+		// Without one, the question shows as it was.
+		const ask = { kind: "question", title: "Q", fields: [{ id: "q", text: "- one\n- two", options: [] }] };
+		expect(renderAsk(ask, { ref: 1, step: 0, answers: {}, ticks: [] }).text).toBe(
+			"\u2753 <b>Q</b>\n\n\u2022 one\n\u2022 two",
+		);
 	});
 
 	it("finished messages are one line: what it was, which chat, and the answer or why it stopped", () => {
@@ -1235,6 +1285,14 @@ describe("telegram plugin: a chat's text as Telegram HTML", () => {
 			"x".repeat(90),
 			"- [ ] ",
 			"- [x] ",
+			// Where a question's part in bold ends.
+			"?",
+			"? ",
+			". ",
+			"! ",
+			"e.g. ",
+			"Why? ",
+			"Done. Next",
 		];
 		// A small seeded random generator, so a failure can be run again.
 		let seed = 20260917;
@@ -1260,6 +1318,7 @@ describe("telegram plugin: a chat's text as Telegram HTML", () => {
 			const html = toTelegramHtml(src);
 			expectFine("text", src, html);
 			expectFine("in italics", src, toTelegramHtml(src, { outer: ["i"] }), ["i"]);
+			expectFine("in bold", src, toTelegramHtml(src, { outer: ["b"] }), ["b"]);
 			const plain = plainText(src);
 			if (marks.test(html) || marks.test(plain) || plain.includes("\n")) bad.push({ what: "marks", input: src });
 		}

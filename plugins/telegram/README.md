@@ -15,11 +15,13 @@ answer and where it came from ("✅ Deploy · tooling: Now (on Telegram)").
 ## How a message looks
 
 ```
-❓ Deploy · from tooling              ← one line: what it is, and the chat it's from
+❓ Deploy · from tooling              ← what it is, and the chat it's from (the chat goes on
+                                        a line of its own when both don't fit a phone's line)
 
-Deploy now with pi-web-deploy?        ← the question (a single question's header is the title)
+Deploy now with pi-web-deploy?        ← the question in bold: the part you must read
+It restarts the server.                 (a single question's header is the title)
 
-It restarts right away.               ← its detail, in italics
+Busy chats carry on after it.         ← its detail, in italics
 
 Now                                   ← each choice in bold, its description under it
 Restart right away.
@@ -27,7 +29,11 @@ Restart right away.
 📁 ~/projects/pi-web-ui · Open the chat
 ```
 
-- Several questions in one ask show which one this is: **Colour** (1/3).
+- The part in bold is the question up to its question mark, else its first sentence, else its
+  first line. The rest of it follows on the next line. A question that starts with a list, a quote,
+  a heading or code, or is too long, has no part in bold.
+- Several questions in one ask show which one this is above it: *Colour (1/3)*.
+- "Type an answer" asks for your reply under the question in bold.
 - A stuck queued task opens with "📌 Task #26 needs you", with the task's title under it.
 - A chat's markdown and HTML show as Telegram's own formatting: bold, italics, `code`, code blocks,
   links, lists (• and ◦), headings (bold), tables (lined up in a code block) and quotes. Other HTML

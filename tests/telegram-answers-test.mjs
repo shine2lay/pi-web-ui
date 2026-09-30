@@ -491,13 +491,13 @@ try {
 	);
 	const [m1Head, ...m1Parts] = m1.text.split("\n\n");
 	check(
-		"it opens with one line: the question's header and the chat it's from",
-		/^\u2753 <b>Colour<\/b> \u00B7 <i>from [^<\n]+<\/i>$/.test(m1Head) && !/Chat: |Folder: /.test(m1.text),
+		"it opens with the question's header and the chat it's from (on one line when it fits a phone's)",
+		/^\u2753 <b>Colour<\/b>(?: \u00B7 |\n)<i>from [^<\n]+<\/i>$/.test(m1Head) && !/Chat: |Folder: /.test(m1.text),
 		m1Head,
 	);
 	check(
-		"... then the question and each described choice, apart, with the header said only once",
-		m1Parts[0] === "Which colour, round 1?" &&
+		"... then the question in bold and each described choice, apart, with the header said only once",
+		m1Parts[0] === "<b>Which colour, round 1?</b>" &&
 			m1Parts.includes("<b>Red</b>\nwarm") &&
 			m1.text.split("Colour").length === 2,
 		m1.text,
@@ -675,8 +675,9 @@ try {
 		labels(m8).join(" | "),
 	);
 	check(
-		"... under 'Task #1 needs you' and the task's title, with no chat line",
-		m8.text.startsWith(`\u{1F4CC} <b>Task #1 needs you</b>\n<i>${PLAN.title}</i>\n\n`) && !m8.text.includes("Chat: "),
+		"... under 'Task #1 needs you' and the task's title, with no chat line, and its question in bold",
+		m8.text.startsWith(`\u{1F4CC} <b>Task #1 needs you</b>\n<i>${PLAN.title}</i>\n\n<b>${STUCK_QUESTION}</b>`) &&
+			!m8.text.includes("Chat: "),
 		m8.text,
 	);
 	const task1 = () => A.state.taskQueue?.tasks?.find((t) => t.id === 1);

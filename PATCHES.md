@@ -2696,6 +2696,13 @@ wanted needs-you notes to become questions with choices: pi-queue's `queue_stuck
      collapsed quote; if Telegram still can't parse a text, it goes again as plain text (send and edit);
    - finished messages shrink to one line: "✅ <title> · <chat>: <answer> (on Telegram)" or "⏹ … no
      longer waiting (<reason>)"; messages sent before this keep working (their line comes from the old head).
+   Then (owner, 2026-09-30: "improve spacing, and bold for the thing I absolutely need to read"):
+   - the question's must-read part in bold (`leadOf`: up to its question mark, else its first sentence,
+     else its first line; none when the cut would change how the text shows), the rest on the next line;
+   - the head's chat goes on a line of its own, cut at a word, when both don't fit a phone's line;
+   - several questions: the header as a label above the question, "<i>Header (1/3)</i>";
+   - "Type your answer to:" puts the question's must-read part in bold on a line of its own;
+   - a markdown heading inside a text that sits in bold no longer makes a bold inside a bold.
 10. **A new window's background list has the plugins' lines at once** (`agent-service.ts` attach): the
     plugin providers are wired before `attachSink`, whose first push builds the list. Before, the
     plugins' lines (such as Telegram's status) were missing until one of them changed (upstream has this
@@ -2711,8 +2718,9 @@ pi-tldr (agents are told to ask with choices when they need the user).
   - new: `asks.test.ts`, `stuck-asks.test.ts`, `plugin-asks.test.ts`, `plugin-telegram.test.ts` (the
     plugin against a fake Telegram; with the owner check taken out, the stranger test fails; retries,
     no retry on a refusal, copies from a lost answer, clock refs, which setting is missing; each kind
-    of message's layout, the one-line finals, the length budget, the markdown/HTML converter with
-    thousands of random texts checked for tags Telegram takes, balanced, and the plain-text fallback);
+    of message's layout, the one-line finals, the length budget, the must-read part in bold, the
+    markdown/HTML converter with thousands of random texts checked for tags Telegram takes, balanced
+    (also inside italics and inside bold), and the plain-text fallback);
   - `chat-dialogs.test.ts` (the watcher), `task-queue.test.ts` (choices), `task-queue-panel.test.ts`
     (choice buttons, typed answer), `plugin-settings.test.ts` (the first secret reaches the plugin, and a
     window opened after a save sees the saved values: each fails without its half of point 8).

@@ -63,6 +63,14 @@ export function cut(s, max) {
 /** One line, at most `max` characters. */
 const oneLine = (s, max) => cut(String(s ?? "").replace(/\s+/g, " ").trim(), max);
 
+/** Like cut, at the end of a word when there's one near. */
+export function cutWords(s, max) {
+	const t = String(s ?? "");
+	if (t.length <= max) return t;
+	const space = t.lastIndexOf(" ", max - 1);
+	return space > max * 0.6 ? `${t.slice(0, space).replace(/[\s,;:.\-\u2013\u2014]+$/, "")}\u2026` : cut(t, max);
+}
+
 /** How long Telegram counts our own HTML (tags don't count, entities count as one). */
 export function visibleLength(html) {
 	return String(html ?? "")
@@ -555,7 +563,8 @@ function renderBlocks(t, saved, { quoteOver, outer }) {
 		}
 		let m = /^ {0,3}#{1,6}[ \t]+(.*?)(?:[ \t]+#+)?$/.exec(line);
 		if (m) {
-			emit("", m[1], { inner: [...outer, "b"], wrap: (h) => `<b>${h}</b>` });
+			// In bold (unless the whole text will be in bold already).
+			emit("", m[1], outer.includes("b") ? {} : { inner: [...outer, "b"], wrap: (h) => `<b>${h}</b>` });
 			continue;
 		}
 		if ((isPipeRow(line) && isPipeRow(lines[i + 1])) || (isRow(line) && isRule(lines[i + 1]))) {
@@ -814,9 +823,13 @@ export function stuckTask(ask) {
 	return m ? { id: Number(m[1]), title: m[2] ?? "" } : { id: 0, title: "" };
 }
 
+/** About how many characters one line of a Telegram message holds on a phone. */
+const PHONE_LINE = 36;
+
 /**
- * The top of every message, one line: icon, what it is, and which chat it's from. A queued task
- * that needs you says "Task #N needs you", with the task's title under it.
+ * The top of every message: icon, what it is, and which chat it's from, on one line when that fits
+ * on a phone (else the chat goes on the next line, so the head doesn't break in the middle of a
+ * name). A queued task that needs you says "Task #N needs you", with the task's title under it.
  */
 export function renderHead(ask) {
 	const icon = KIND_ICON[ask?.kind] ?? KIND_ICON.question;
@@ -825,9 +838,12 @@ export function renderHead(ask) {
 		const title = oneLine(plainText(task.title), 200);
 		return `${icon} <b>Task #${task.id} needs you</b>${title ? `\n<i>${escapeHtml(title)}</i>` : ""}`;
 	}
-	const head = `${icon} <b>${escapeHtml(oneLine(plainText(ask?.title), 200) || "A chat needs you")}</b>`;
+	const title = oneLine(plainText(ask?.title), 200) || "A chat needs you";
+	const head = `${icon} <b>${escapeHtml(title)}</b>`;
 	const chat = oneLine(plainText(ask?.conversationTitle), 100);
-	return chat ? `${head} \u00B7 <i>from ${escapeHtml(chat)}</i>` : head;
+	if (!chat) return head;
+	if ([...`${icon} ${title} \u00B7 from ${chat}`].length <= PHONE_LINE) return `${head} \u00B7 <i>from ${escapeHtml(chat)}</i>`;
+	return `${head}\n<i>from ${escapeHtml(cutWords(chat, PHONE_LINE - 5))}</i>`;
 }
 
 /** The bottom line: the chat's folder, and a link that opens the chat. */
@@ -899,8 +915,77 @@ function questionOf(ask, f) {
 	return text;
 }
 
+/** Short words that end in a full stop without ending the sentence. */
+const ABBREVIATION = /(?:^|[\s(])(?:e\.g|i\.e|etc|vs|approx|incl|cf|Mr|Mrs|Ms|Dr|St|No|Nr|Fig)\.$/i;
+const LEAD_MAX = 200;
+
+/**
+ * Whether a paragraph cut in two at `end` shows the same as it did whole: the cut doesn't break a
+ * piece of formatting (bold, a code span, a link) or turn the rest into something else (a list).
+ */
+function cutsClean(para, end) {
+	const norm = (s) => s.replace(/\s+/g, " ").trim();
+	const lead = toTelegramHtml(para.slice(0, end));
+	const rest = toTelegramHtml(para.slice(end).trim());
+	return norm(`${lead} ${rest}`) === norm(toTelegramHtml(para));
+}
+
+/**
+ * The part of a question you must read, to show in bold: up to its first question mark, else its
+ * first sentence, else its first line (all within the first line). { lead, sep, rest }: sep is how
+ * the rest followed it ("\n\n" a new paragraph, "\n" the same one). lead is "" when there's none to
+ * pick out: the text starts with a list, a quote, a heading, a table or code, holds HTML, the part
+ * is too long, or cutting there would break a piece of formatting.
+ */
+export function leadOf(src) {
+	const text = String(src ?? "")
+		.replace(/\r\n?/g, "\n")
+		.trim();
+	const none = { lead: "", sep: "", rest: text };
+	const line = text.split("\n", 1)[0] ?? "";
+	if (!line || /^(?:```|~~~|>|#{1,6}\s|[-*+]\s|\d+[.)]\s|\|)/.test(line) || /<\/?[a-zA-Z][^>]*>/.test(line)) return none;
+	let question = 0;
+	let sentence = 0;
+	let code = false;
+	let depth = 0;
+	for (let i = 0; i < line.length && !question; i++) {
+		const c = line[i];
+		if (c === "`") code = !code;
+		if (code) continue;
+		if (c === "(" || c === "[") depth++;
+		else if ((c === ")" || c === "]") && depth > 0) depth--;
+		if (depth > 0 || !"?!.".includes(c)) continue;
+		// Closing marks right after the end go with it: "**Why?**", "\u201CYes?\u201D".
+		let j = i + 1;
+		while (j < line.length && /[*_~"'\u201D\u2019]/.test(line[j])) j++;
+		if (j < line.length && !/\s/.test(line[j])) continue; // "3.5", "notes.md", "?x=1"
+		if (c === ".") {
+			const next = line.slice(j).trimStart()[0] ?? "";
+			if (next && !/[\p{Lu}\p{N}`*_["'\u201C(]/u.test(next)) continue; // "e.g. the", "see p. 4"
+			if (ABBREVIATION.test(line.slice(0, i + 1)) || /(?:^|\s)\p{Lu}\.$/u.test(line.slice(0, i + 1))) continue;
+		}
+		if (c === "?") question = j;
+		else sentence ||= j;
+	}
+	const end = question || sentence || line.length;
+	const lead = line.slice(0, end).trim();
+	if (!lead || [...lead].length > LEAD_MAX || !cutsClean(text.split(/\n[ \t]*\n/, 1)[0], end)) return none;
+	const after = text.slice(end);
+	return { lead, sep: /^[ \t]*\n[ \t]*\n/.test(after) ? "\n\n" : "\n", rest: after.trim() };
+}
+
 /** In italics, unless it holds a quote or a code block. */
 const italic = (html) => (!html || /<(blockquote|pre)\b/.test(html) ? html : `<i>${html}</i>`);
+/** In bold, unless it holds a quote or a code block. */
+const bold = (html) => (!html || /<(blockquote|pre)\b/.test(html) ? html : `<b>${html}</b>`);
+
+/** A question as Telegram HTML, with the part you must read in bold. */
+function questionHtml(question, max = 1000) {
+	const { lead, sep, rest } = leadOf(question);
+	if (!lead) return question ? toTelegramHtml(cut(question, max)) : "";
+	const restHtml = rest ? toTelegramHtml(cut(rest, Math.max(100, max - lead.length))) : "";
+	return [bold(toTelegramHtml(lead, { outer: ["b"] })), restHtml].filter(Boolean).join(sep);
+}
 
 /**
  * The whole message for a waiting question: { text, reply_markup }. A one-line head, then the
@@ -925,14 +1010,14 @@ export function renderAsk(ask, st, extra = {}) {
 
 	const parts = [];
 	if (f && !st?.sending) {
-		const question = questionOf(ask, f);
-		const text = question ? toTelegramHtml(cut(question, 1000)) : "";
+		const text = questionHtml(questionOf(ask, f));
 		if (several) {
-			// Several questions: each shows its header (a single one has it as the title already).
+			// Several questions: each shows its header (a single one has it as the title already), as a
+			// label: the question under it is the part in bold.
 			const shown = ask.fields.map((_, i) => i).filter((i) => visibleField(ask, i, answers));
 			const pos = shown.indexOf(step) + 1;
 			const count = pos > 0 && shown.length > 1 ? ` (${pos}/${shown.length})` : "";
-			const header = `<b>${escapeHtml(oneLine(plainText(f.header), 100) || "Question")}</b>${count}`;
+			const header = `<i>${escapeHtml(oneLine(plainText(f.header), 100) || "Question")}${count}</i>`;
 			parts.push(text ? `${header}\n${text}` : header);
 		} else if (text) parts.push(text);
 		if (f.detail) parts.push(italic(toTelegramHtml(cut(f.detail, 500), { outer: ["i"] })));
@@ -975,7 +1060,7 @@ export function renderAsk(ask, st, extra = {}) {
 		// can make a text longer: a table's columns), the question as it was written.
 		const question = f ? questionOf(ask, f) || f.header || "" : "";
 		const short = (q) => [head, q, `<i>${escapeHtml(CUT_NOTE)}</i>`, ...tail, footer].filter(Boolean).join("\n\n");
-		text = short(toTelegramHtml(cut(question, 1500)));
+		text = short(questionHtml(question, 1500));
 		if (visibleLength(text) > TEXT_BUDGET) text = short(escapeHtml(cut(question, 1500)));
 	}
 	return { text, reply_markup: renderButtons(ask, st) };
@@ -1316,8 +1401,14 @@ export function createBridge({
 				return;
 			}
 			await reply();
-			const about = plainText(field.text) || plainText(field.header) || plainText(ask.title);
-			const p = await send(escapeHtml(`Type your answer to: ${cut(about, 300)}`), {
+			// Just the part you must read (the whole question is right above), on a line of its own.
+			const question = questionOf(ask, field) || String(field.text ?? "");
+			const about =
+				plainText(leadOf(question).lead || question) ||
+				plainText(field.header) ||
+				plainText(ask.title) ||
+				"the question above";
+			const p = await send(`Type your answer to:\n<b>${escapeHtml(cut(about, 200))}</b>`, {
 				reply_parameters: { message_id: e.messageId, allow_sending_without_reply: true },
 				reply_markup: { force_reply: true, input_field_placeholder: "Your answer" },
 			});
