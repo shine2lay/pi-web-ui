@@ -82,6 +82,8 @@ import {
 import { stuckGoneReason, stuckKey, stuckSig, stuckTarget, type StuckSource, wantedStuckAsks } from "./stuck-asks.js";
 import { type AdoptCandidate, pickAdoptTarget } from "./attach-adopt.js";
 import { describeError, errorMessage, planForLostActive } from "./crash-guard.js";
+// list-freeze: message counts without getSessionStats() (which re-projects the whole context).
+import { messageCountOf } from "./message-count.js";
 import {
 	checkAll as checkAllUpdates,
 	collectTargets,
@@ -3026,7 +3028,7 @@ export class ClientSession {
 		const state: SubagentState = streaming ? "running" : canceled ? "canceled" : "done";
 		let messageCount = 0;
 		try {
-			messageCount = conv.session.getSessionStats().totalMessages;
+			messageCount = messageCountOf(conv.session);
 		} catch {
 			// session being replaced — report defaults
 		}
@@ -3502,7 +3504,7 @@ export class ClientSession {
 					let messageCount = 0;
 					let isStreaming = false;
 					try {
-						messageCount = c.session.getSessionStats().totalMessages;
+						messageCount = messageCountOf(c.session);
 						isStreaming = c.session.isStreaming;
 					} catch {
 						// 会话替换中——报默认值
@@ -4755,7 +4757,7 @@ export class ClientSession {
 		if (!conv) return null;
 		let blank = false;
 		try {
-			blank = conv.session.getSessionStats().totalMessages === 0;
+			blank = messageCountOf(conv.session) === 0;
 		} catch {
 			// session being replaced: leave it alone
 		}
@@ -6055,7 +6057,7 @@ export class ClientSession {
 				try {
 					let count = conv.touchSidecarCount ?? -1;
 					try {
-						count = conv.session.getSessionStats().totalMessages;
+						count = messageCountOf(conv.session);
 					} catch {
 						// 会话替换中 —— 按上次条数处理（多半直接跳过）
 					}
@@ -8238,7 +8240,7 @@ export class ClientSession {
 		const savedModel = this.stateStore.getProjectModel(this.clientId, cwd) ?? this.stateStore.getDefaultModel();
 		if (!savedModel) return;
 		try {
-			if (this.conv.session.getSessionStats().totalMessages > 0) return;
+			if (messageCountOf(this.conv.session) > 0) return;
 		} catch {
 			return;
 		}
@@ -8982,7 +8984,7 @@ export class ClientSession {
 			if (c.isSubagent) continue;
 			if (c.listed) return true;
 			try {
-				if (c.session.getSessionStats().totalMessages > 0) return true;
+				if (messageCountOf(c.session) > 0) return true;
 			} catch {
 				// 会话替换中 —— 按无消息处理
 			}
@@ -10003,7 +10005,7 @@ export class ClientSession {
 		// this branch normally can't exist — kept as a safety net).
 		const isBlank = (c: Conversation): boolean => {
 			try {
-				return c.session.getSessionStats().totalMessages === 0 && c.terminals.list().length === 0;
+				return messageCountOf(c.session) === 0 && c.terminals.list().length === 0;
 			} catch {
 				// session being replaced — treat as used so we don't switch onto it
 				return false;
@@ -11069,7 +11071,7 @@ export class ClientSession {
 		// 首条提示词给对话命名 = 用户真的开始聊了（此刻消息可能还没落进会话统计）。
 		if (!isUntitledTitle(conv.title)) return true;
 		try {
-			return conv.session.getSessionStats().totalMessages > 0;
+			return messageCountOf(conv.session) > 0;
 		} catch {
 			// 会话替换中 —— 先不列，下一次 emit 会补上
 			return false;
@@ -11101,7 +11103,9 @@ export class ClientSession {
 			let messageCount = 0;
 			let isStreaming = false;
 			try {
-				messageCount = conv.session.getSessionStats().totalMessages;
+				// list-freeze: this ran for every loaded chat in every window on each running change; the
+				// full stats took seconds per big chat and froze the server (pages reconnected).
+				messageCount = messageCountOf(conv.session);
 				isStreaming = conv.session.isStreaming;
 			} catch {
 				// session being replaced — report defaults
@@ -14251,15 +14255,32 @@ export class AgentService {
 	}
 
 	/** issue #145: 某客户端流式集合变化 → 其他客户端重推 conversations。 */
+	/** list-freeze: windows waiting for their coalesced list refresh (see pokeExternalRunning). */
+	private readonly pokedClients = new Set<string>();
+	private pokeTimer: ReturnType<typeof setImmediate> | null = null;
+
+	/** Every other window rebuilds its running list (their Elsewhere rows changed).
+	 *  list-freeze: the rebuilds wait for the end of the current turn of the event loop, and a window
+	 *  poked several times meanwhile rebuilds once. Each window's rebuild used to poke all the others
+	 *  straight away, so one change cost windows-times-windows rebuilds and froze the server with big chats. */
 	pokeExternalRunning(excludeClientId: string): void {
-		for (const [clientId, cs] of this.clients) {
-			if (clientId === excludeClientId) continue;
-			try {
-				cs.refreshExternalRunning();
-			} catch {
-				// 单客户端坏了不影响其他
+		for (const clientId of this.clients.keys()) if (clientId !== excludeClientId) this.pokedClients.add(clientId);
+		if (this.pokeTimer || this.pokedClients.size === 0) return;
+		this.pokeTimer = setImmediate(() => {
+			this.pokeTimer = null;
+			const ids = [...this.pokedClients];
+			this.pokedClients.clear();
+			for (const clientId of ids) {
+				const cs = this.clients.get(clientId);
+				if (!cs) continue;
+				try {
+					cs.refreshExternalRunning();
+				} catch {
+					// 单客户端坏了不影响其他
+				}
 			}
-		}
+		});
+		this.pokeTimer.unref?.();
 	}
 
 	/** issue #145：向除请求方外的所有客户端发一条 notice（并行通告用）。 */

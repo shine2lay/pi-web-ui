@@ -63,6 +63,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | no-project-controls          | `local`        | `web/src/components/ProjectPicker.tsx` (removed), `TopBar.tsx`, `LeftPanel.tsx`, `App.tsx`, `ui-slots.ts`, `i18n.tsx`, `locales/`, `styles.css`, `tests/unit/` |
 | no-quick-phrases             | `local`        | `web/src/quick-phrases.ts` (removed), `ChatInput.tsx`, `App.tsx`, `SettingsModal.tsx`, `i18n.tsx`, `locales/`, `styles.css`, `tests/unit/`, `tests/lib/phone-checks.mjs` |
 | fast-mode                    | `local`        | `server/fast-mode.ts` (new), `agent-service.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (27), `web/src/components/FastModeButton.tsx` (new), `ChatInput.tsx`, `App.tsx`, `SettingsModal.tsx`, `ui-slots.ts`, i18n + `locales/`, `styles.css`, `tests/fast-mode-test.mjs`, `tests/lib/mock-model.mjs`, `tests/tools/fast-mode-*`, `tests/unit/` |
+| list-freeze                  | `local`        | `server/message-count.ts` (new), `agent-service.ts`, `tests/unit/list-freeze.test.ts` |
 
 ---
 
@@ -3442,3 +3443,59 @@ doubles when the tier was used). **When OpenAI adds or changes models with fast 
 `FAST_MODE_MODELS`** (and `fastTierFor` if a model needs another tier value);
 `node tests/tools/fast-mode-models.mjs` shows which models the account has and which offer fast mode.
 If pi starts pricing the `fast` tier GPT-6 models report, let `fastPriceTells` cover them too.
+
+## list-freeze
+
+**Status**: `local`
+**Baseline**: v0.96.1
+
+**Why** (owner, 2026-09-30): the chat page "reconnected" every now and then, with no restart and no
+network trouble. A probe on the live server (a bare socket timing the 2 s heartbeats) saw the server go
+silent for 9.9, 9.8, 22.3 and 10.5 s within 15 minutes. The page drops its socket after 5 s of silence
+(the mobile-fixes watchdog, `web/src/conn-health.ts`), so every open page reconnected. A 10-minute CPU
+profile of the live server put both big freezes (21.3 s and 9.8 s) in `emitConversations`: to show
+"N messages" on each row of the running-chats list, it called `session.getSessionStats()` for every
+loaded chat. pi's getSessionStats walks every entry and also works out the context usage (it rebuilds the
+whole context projection), which takes seconds on a 30k-message chat. Since server-owned-chats every
+window holds the same shared chats, so any chat starting or finishing a step changed every window's
+running list, and each window's rebuild poked all the others (`pokeExternalRunning`): one change cost
+windows-times-windows rebuilds.
+
+### Changes
+
+1. **Cheap message counts** (`server/message-count.ts`, new): `messageCountOf(session)` gives the same
+   number as `getSessionStats().totalMessages` (message entries on every branch) without the context
+   work. It's remembered per chat (keyed by pi's SessionManager object) until the chat's leaf moves or
+   its entry list grows (pi's own `fileEntries.length`, read without a copy), so it's shared by every
+   window and costs one pass over the entries per change. Sessions without a session manager (test
+   fakes) are asked the old way.
+2. **Every count-only caller uses it** (`agent-service.ts`): the running list (`emitConversations`) and
+   the eight other places that only needed the count or "is it empty?" (blank-chat checks, the saved
+   model on a fresh chat, the touch sidecar, the attach and list paths). Callers that want tokens or cost
+   (the `sessionStats()` memo, plugin stats) still call getSessionStats.
+3. **One rebuild per window per change** (`agent-service.ts` `pokeExternalRunning`): pokes are gathered,
+   and each other window refreshes once at the end of the current turn of the event loop
+   (`setImmediate`), however many windows poked it meanwhile. Direct `refreshExternalRunning()` calls
+   (takeover, attach) stay immediate.
+
+### How it was checked
+
+- `tests/unit/list-freeze.test.ts`: the count matches (every branch; other entry types don't count), is
+  remembered until a new entry, recounts when the chat goes back to a counted leaf after new entries
+  elsewhere, falls back for fakes, and works on pi's own in-memory SessionManager (which also checks that
+  `fileEntries` is still there). Pokes from three windows in one turn make three refreshes, not six; the
+  poking window isn't refreshed by its own poke; a closed window is skipped and a broken one doesn't stop
+  the rest.
+- check.sh, the build and the full sealed E2E suite.
+- Live, after the install: the same probe, run as long as before (numbers in the daily log of
+  2026-09-30).
+
+### When syncing
+
+- Keep the running list's counts off `getSessionStats()`: every count-only call upstream adds
+  (`getSessionStats().totalMessages`) should use `messageCountOf`.
+- If pi renames `SessionManager.fileEntries`, the unit test says so. The count still works keyed by the
+  leaf alone, but update `changeKey()` in `message-count.ts`.
+- The tools used to find this are in `~/.cache/pi/reconnect-probe/`: `probe.mjs` times the heartbeats on
+  a bare socket; `profile.mjs` takes a CPU profile of the live server (after `kill -USR1 <pid>`, which
+  opens Node's inspector on 127.0.0.1 only) and switches the inspector off again.
