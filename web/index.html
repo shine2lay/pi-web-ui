@@ -2,7 +2,10 @@
 <html lang="en">
 	<head>
 		<meta charset="UTF-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<!-- mobile-fixes: interactive-widget=resizes-content: on Android Chrome the on-screen keyboard
+		     shrinks the page (not just the visible part), so the message box sits right above it and the
+		     top bar stays put. -->
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
 		<meta name="color-scheme" content="dark" />
 		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 		<!-- PWA manifest: relative so nginx sub-path deployments (/pi/) resolve correctly -->

@@ -2067,6 +2067,10 @@ const SNAPSHOT_BACKPRESSURE_FACTOR = 3;
 const SNAPSHOT_BACKPRESSURE_MIN_BYTES = 262_144;
 /** 背压丢弃后的延迟重发间隔。 */
 const SNAPSHOT_RETRY_MS = 250;
+/** mobile-fixes: messages this big (characters) are announced first with `frame_hint` (to pages that
+ *  ask): on a slow mobile link they take seconds, and nothing else, not even the heartbeat, gets
+ *  through meanwhile. 64k characters take about 2.5 s on the slowest link the page still waits for. */
+const FRAME_HINT_MIN_CHARS = 64 * 1024;
 /** issue #295：attach（会话初始化）超过此时长未完成，先给浏览器一句可见提示，
  *  避免界面永久停在「正在连接」而用户不知发生了什么。attach 本体继续等（不取消），
  *  完成后照常走快照流程。 */
@@ -2106,6 +2110,8 @@ wss.on("connection", (ws) => {
 	 *  ready 先行后，ready 只代表传输通，插件命令目录/首快照都还没好，直接分发
 	 *  会撞「未知命令」/ rev 链断裂。 */
 	let attachDone = false;
+	/** mobile-fixes: this page asked for big messages to be announced (hello.frameHints). */
+	let frameHints = false;
 	/** 背压丢快照后的延迟重发定时器（去重：一次只排一个）。 */
 	let snapshotRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -2165,6 +2171,10 @@ wss.on("connection", (ws) => {
 			lastSnapshotBytes = wire.length * 2;
 			lastSnapshotConvId = msg.state.conversationId;
 		}
+		// mobile-fixes: announce a big message, so the page waits for it on a slow link instead of
+		// taking the silence for a dead connection (web/src/conn-health.ts).
+		if (frameHints && wire.length >= FRAME_HINT_MIN_CHARS)
+			ws.send(JSON.stringify({ type: "frame_hint", chars: wire.length }));
 		if (onSent) ws.send(wire, () => onSent());
 		else ws.send(wire);
 	};
@@ -3263,7 +3273,14 @@ wss.on("connection", (ws) => {
 			return;
 		}
 
+		// mobile-fixes: "are you there?" is answered at once, even before the chat is attached.
+		if (msg.type === "ping") {
+			send({ type: "pong", id: typeof msg.id === "number" ? msg.id : undefined });
+			return;
+		}
+
 		if (msg.type === "hello") {
+			if (!clientId) frameHints = msg.frameHints === true;
 			// 重放守卫：一条连接只允许 attach 一次。clientId 已赋值说明 hello 处理过
 			//（或进行中），再来的 hello 幂等回一条 ready 即可——否则重复 hello 会把
 			// service.attach 整个再跑一遍：重型 ClientSession 重复创建 + 旧 send sink

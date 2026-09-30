@@ -41,6 +41,7 @@ import { buildUiSlots, withPluginViewItems, type UiDiagnostic, type UiSlotEntry 
 import { renderSlotToolbar } from "./slot-toolbar";
 import { ContextMenu } from "./components/ContextMenu";
 import { BannerContainer } from "./components/BannerContainer";
+import { ReconnectingNote } from "./components/ReconnectingNote";
 import { showBanner, dismissBanner, dismissBannersWhere } from "./banner-notice";
 import { ensurePluginViewLoaded } from "./plugin-loader";
 import { registerAttachmentSink, insertTextAtCursor, removeMentionFromComposer } from "./composer-bridge";
@@ -55,9 +56,13 @@ import {
 import { setFenceSend, syncFenceRenderers, syncMessageWidgets } from "./plugin-fence";
 import { findFileHandler, syncFileHandlers, type FileHandlerPlugin } from "./plugin-file-handlers";
 import { PiSetupModal } from "./components/PiSetupModal";
-import { ModelConfigModal } from "./components/ModelConfigModal";
+// mobile-fixes: the Settings and model setup windows load when first opened (a sixth of the app's
+// own code, not needed to show a chat).
+const ModelConfigModal = lazy(() =>
+	import("./components/ModelConfigModal").then((m) => ({ default: m.ModelConfigModal })),
+);
 
-import { SettingsModal } from "./components/SettingsModal";
+const SettingsModal = lazy(() => import("./components/SettingsModal").then((m) => ({ default: m.SettingsModal })));
 import { BgTasksModal } from "./components/BgTasksModal";
 import { RollbackDialog } from "./components/RollbackDialog";
 import { openRollbackDialog } from "./rollback-state";
@@ -1573,6 +1578,14 @@ export function App() {
 		if (createShell()) terminalOpenRequested.current = false;
 	}, [chat.terminals.length, createShell, view]);
 
+	// mobile-fixes: the terminal (xterm: code a chat doesn't need) loads only once it is needed: the
+	// Terminal view is opened, or this chat has terminals to keep running. Then it stays.
+	const needTerminal = view === "terminal" || chat.terminals.length > 0;
+	const [terminalLoaded, setTerminalLoaded] = useState(needTerminal);
+	useEffect(() => {
+		if (needTerminal) setTerminalLoaded(true);
+	}, [needTerminal]);
+
 	return (
 		// Whole window is a drop target (issue #19): dragover highlights + any
 		// drop attaches. The plain preventDefault used to merely stop the browser
@@ -1650,6 +1663,7 @@ export function App() {
 				reloadThemes={reloadThemes}
 			/>
 			{chat.protocolMismatch && <div className="protocol-banner">⚠ {t("protocolMismatch")}</div>}
+			<ReconnectingNote />
 			<div className="notices">
 				{chat.notices.map((n) => (
 					<NoticeToast key={n.id} notice={n} onDismiss={dismissNotice} />
@@ -2143,14 +2157,16 @@ export function App() {
 					{!isMobile && rightCollapsed && <PanelRail side="right" onClick={toggleRight} />}
 				</div>
 				<div className={`view-pane ${view === "terminal" ? "" : "hidden"}`}>
-					<Suspense fallback={null}>
-						<TerminalPanel
-							chat={chat}
-							terminal={terminal}
-							uiTerminalToolbar={uiTerminalToolbar}
-							onUiAction={onUiAction}
-						/>
-					</Suspense>
+					{(terminalLoaded || needTerminal) && (
+						<Suspense fallback={null}>
+							<TerminalPanel
+								chat={chat}
+								terminal={terminal}
+								uiTerminalToolbar={uiTerminalToolbar}
+								onUiAction={onUiAction}
+							/>
+						</Suspense>
+					)}
 				</div>
 				<div className={`view-pane ${view === "git" ? "" : "hidden"}`}>
 					<ScmPanel
@@ -2218,35 +2234,39 @@ export function App() {
 				/>
 			)}
 			{manageModelsOpen && (
-				<ModelConfigModal
-					providers={chat.modelsConfig}
-					providerStatus={chat.providers}
-					providerKeys={chat.providerKeys}
-					providerOAuthFlows={chat.providerOAuthFlows}
-					providerOAuthResults={chat.providerOAuthResults}
-					fetchModelsResult={chat.fetchModelsResult}
-					testModelConnectionResult={chat.testModelConnectionResult}
-					enrichModelsResult={chat.enrichModelsResult}
-					enrichModelsProgress={chat.enrichModelsProgress}
-					refreshBuiltinResult={chat.refreshBuiltinResult}
-					appendBuiltinResult={chat.appendBuiltinResult}
-					cloneProviderResult={chat.cloneProviderResult}
-					defaultModel={chat.defaultModel}
-					onClose={() => setManageModelsOpen(false)}
-				/>
+				<Suspense fallback={null}>
+					<ModelConfigModal
+						providers={chat.modelsConfig}
+						providerStatus={chat.providers}
+						providerKeys={chat.providerKeys}
+						providerOAuthFlows={chat.providerOAuthFlows}
+						providerOAuthResults={chat.providerOAuthResults}
+						fetchModelsResult={chat.fetchModelsResult}
+						testModelConnectionResult={chat.testModelConnectionResult}
+						enrichModelsResult={chat.enrichModelsResult}
+						enrichModelsProgress={chat.enrichModelsProgress}
+						refreshBuiltinResult={chat.refreshBuiltinResult}
+						appendBuiltinResult={chat.appendBuiltinResult}
+						cloneProviderResult={chat.cloneProviderResult}
+						defaultModel={chat.defaultModel}
+						onClose={() => setManageModelsOpen(false)}
+					/>
+				</Suspense>
 			)}
 			{settingsOpen && (
-				<SettingsModal
-					chat={chat}
-					terminal={terminal}
-					initialSection={settingsInitialSection}
-					onSwitchToTerminal={() => setView("terminal")}
-					onClose={() => setSettingsOpen(false)}
-					sound={sound}
-					onSoundChange={setSound}
-					tts={tts}
-					onTtsChange={setTts}
-				/>
+				<Suspense fallback={null}>
+					<SettingsModal
+						chat={chat}
+						terminal={terminal}
+						initialSection={settingsInitialSection}
+						onSwitchToTerminal={() => setView("terminal")}
+						onClose={() => setSettingsOpen(false)}
+						sound={sound}
+						onSoundChange={setSound}
+						tts={tts}
+						onTtsChange={setTts}
+					/>
+				</Suspense>
 			)}
 			{bgTasksOpen && <BgTasksModal servers={chat.bgServers} onClose={() => setBgTasksOpen(false)} />}
 			{/* 工具定义说明弹窗（工具卡右键菜单 host:tool-info）：自己订阅 store，无 props。 */}

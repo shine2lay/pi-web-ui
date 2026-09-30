@@ -3164,3 +3164,114 @@ screenshots of each culprit.
 the extra-folders menu in `RightPanel.tsx`, keep it inside the window. If upstream
 fixes one of these itself, keep whichever is stricter. Run `tests/no-sideways-scroll-test.mjs` after a
 sync: it lists any new culprit.
+
+## mobile-fixes
+
+**Status**: `local`
+**Baseline**: v0.96.1
+
+**Why** (owner, 2026-09-29): on the owner's Android phone (Chrome) the keyboard could cover the message
+box, the buttons were too small for a finger, and a chat froze until a refresh after the phone slept
+or moved between Wi-Fi and mobile data. Measured on an emulated Android phone (CPU 4× slower, a
+1.6 Mbit/s link with 150-300 ms delay): the chat only caught up 80 s after the tab came back from the
+background, and never (within 90 s) after the phone slept, the network came back or the connection
+died silently; every tap target was 22-40 px; the app downloaded 704 KB before a chat was usable,
+the terminal included. Desktop is unchanged; iPhone is not a target but nothing on it may break.
+
+### Changes
+
+1. **Typing** (`web/index.html`, `web/src/mobile-viewport.ts` new, `main.tsx`, `ChatInput.tsx`,
+   `styles.css`, `i18n.tsx`, `locales/*.json`):
+   - The viewport asks for `interactive-widget=resizes-content`: Android Chrome 108+ then shrinks the
+     whole page for the keyboard, so the message box sits right above it and the top bar stays put.
+   - `installMobileViewport()` (Android only): where that setting isn't understood, the app follows
+     the visible part while the keyboard is up (`--app-vh`, `html.vv-fallback`). While the keyboard is
+     up `html` gets `kb-up`: on phones the status line and the Goal pill step aside, and a long message
+     box stays within a quarter of the screen (it scrolls inside), so the chat keeps some room.
+   - Touch devices get shorter placeholders without "Enter to send" (on a phone Enter adds a line and
+     Send sends, as before).
+   - `components/MessageList.tsx`: a chat at the bottom stays there when the list's box shrinks or
+     grows with nothing inside it changing (the keyboard, the Goal row that appears just after a chat
+     opens, the "Reconnecting…" note). And a scroll that comes with a change of the list's or the
+     screen's height, and is no bigger than that change, is no longer read as the user scrolling up
+     (the keyboard going down is two steps: the page grows by the keyboard's height, which pulls the
+     list back that far, then the status line comes back under the list). Before, closing the
+     keyboard at the bottom of a chat stopped it from following a reply. A real wheel or finger drag
+     up still counts, and so does a bigger jump (scrolling something into view).
+2. **Finger-size buttons** (`styles.css`, one block at the end, `max-width: 768px` only): top-bar
+   controls, the message box's attach key and tool chips, the / and @ menus, the "⋯" menu, the
+   quick phrases, the Goal pill, the status line, a message's action keys and copy key, and the chats
+   drawer's headers and rows are at least 44×44 px; Send / Stop are 48. Small pills keep their look:
+   the pill is drawn with `::before` inside a taller invisible tap area. Quick phrases are one row that
+   scrolls sideways (they took two or three rows). The top bar's existing fit logic (`topbar-fit.ts`)
+   moves whatever doesn't fit into "⋯"; on a phone that is everything after Chat and Terminal (Git,
+   Plugins, Search, New chat, Ephemeral chat, add-on buttons, Settings, Sound, Theme, Update), with
+   Files kept pinned. Nothing is hidden for good.
+3. **Chats that keep updating** (`web/src/conn-health.ts` new, `use-chat.ts`,
+   `components/ReconnectingNote.tsx` new, `App.tsx`, `server/index.ts`, `server/protocol.ts`):
+   - The server speaks every 2 s, so a socket quiet for 5 s is dead (it was 30 s). A dead socket is
+     dropped on the spot (handlers removed; waiting for its `close` could take minutes) and a new one
+     opens at once, without the old back-off. A connect attempt that doesn't open in 10 s is retried.
+   - When the page comes back (`visibilitychange`, `resume` after a freeze, `pageshow`), the network
+     returns (`online`) or changes (`navigator.connection` `change`), or the page's own timers were
+     held up, the page sends `ping {id}` and the server answers `pong {id}` at once (even before the
+     chat is attached). No answer within 2.5 s means dead. Other messages don't count then: after a
+     freeze the browser hands over what arrived before the connection died.
+   - Slow links can't loop: a page that says `hello.frameHints` gets `frame_hint {chars}` before any
+     message of 64k characters or more, and the allowed silence grows with that size (25k characters
+     a second, the slowest link still waited for). And each socket dropped for unexplained silence
+     makes the next one twice as patient (up to 8×), relaxing again after calm stretches.
+   - A small "Reconnecting…" note under the top bar shows while a lost connection is replaced and the
+     chat catches up, or when the answer after coming back is late; it goes once the chat's content
+     arrives. The existing snapshot back-pressure path is unchanged; a long reply on the slow link and a
+     big chat on a 64 kbit/s link were checked to arrive whole.
+4. **Faster start** (`App.tsx`, `Markdown.tsx`, `md-math.ts` / `md-raw.ts` new, `vite.config.ts`):
+   the terminal (xterm) loads only when the Terminal view opens or the chat has terminals to keep;
+   Settings and the model setup window load when first opened; KaTeX (math) loads the first time a
+   text contains `$`, and HTML-in-markdown support (rehype-raw) the first time a `rawHtml` text shows
+   (a shared store re-renders what showed before they arrived; `loadMarkdownExtras()` for tests).
+   Library code stays in its own content-named files (`react`, `markdown`, `katex`, `md-html`,
+   `xterm`), which keep their names across installs as long as the libraries don't change.
+5. **Tests and tools**: `tests/lib/phone.mjs` (headless Chrome as an Android phone, 412×915 and
+   360×800, touch, slower CPU, keyboard shown by shortening the screen as Android does, sleep via
+   Chrome's freeze/resume, background tab, Android-style composed typing, tap-target measuring),
+   `tests/lib/slow-link.mjs` (a proxy that slows the link to mobile-data speed and can go silent
+   without closing, or offline), `tests/lib/phone-chat.mjs` (sealed server with a stand-in model that
+   streams numbered lines, seeded chats), `tests/lib/phone-checks.mjs` (the measurements),
+   `tests/lib/mock-model.mjs` (a reply can stream piece by piece), `tests/tools/phone-measure.mjs`,
+   `phone-look.mjs`, `desktop-look.mjs` (before/after numbers and screenshots),
+   `tests/tools/compare-shots.py` (how much two sets of screenshots differ).
+   `tests/composer-overlap-test.mjs` expects the phone's Goal pill at 96 px (two 48 px halves).
+   `tests/freeze-test.mjs` waits for the reconnected chat's first snapshot before typing (and types
+   again if the box was reset): after a server restart that snapshot can start a new session for an
+   empty chat, which saves the box's text as the old session's draft; typing in those ~70 ms made the
+   test flaky under parallel load. It also prints each socket's messages when it fails.
+
+### How it was checked
+
+- `tests/phone-layout-test.mjs` (sealed, 72 checks): startup on the slow link without the terminal,
+  math, HTML support or settings, each of which then loads and works when used; the keyboard-up
+  layout (message box and Send fully visible, top bar at 0, still at the bottom of the chat, no jump
+  while a message grows, still at the bottom after the keyboard goes down and up again); a chat at
+  the bottom stays there when something appears under it and keeps following after it goes away;
+  Android-style typing plain, mid-text and in the / and @ menus; at 412 and 360: every tap target
+  at least 44 (Send 48), no overlaps, nothing cut off on the chat screen, a message's keys, the "⋯" menu and the drawer; every desktop top-bar item reachable on the phone.
+- `tests/phone-connection-test.mjs` (sealed, 19 checks): catch-up within 5 s after the background
+  (110 ms), a short trip to the background with a dead socket (3.2 s), sleep (220 ms), network gone
+  (630 ms); a silent death caught within 9 s of the silence starting (6.0 s) with the note shown and
+  gone; a long reply on the slow link complete with no reconnects; a big chat at 64 kbit/s (351k
+  characters, 24 s) opening on one connection, and a reply in it complete.
+- `tests/unit/conn-health.test.ts`: the rules above, and a simulated slow link that can't loop.
+- Before/after on the emulated phone: usable chat on a cold start 5.4 s → 4.6 s, 704 KB → 460 KB;
+  the numbers and screenshots are in the task notes.
+- `TZ=UTC scripts/check.sh`, the build, the sealed E2E run (180 tests, 0 fence hits), and desktop
+  screenshots at 1440 compared before/after (only the footer's live numbers and temp-folder names
+  differ).
+
+**When syncing**: keep the viewport setting and `installMobileViewport()`. The phone block at the
+end of `styles.css` only overrides sizes; if upstream renames a class it targets, move the rule with
+it. In `use-chat.ts` keep the watchdog and `replace()` in place of the old 30 s check and back-off;
+if upstream changes its connect loop, keep: drop a dead socket without waiting for `close`, reconnect
+at once on coming back, and send `hello.frameHints`. On the server keep `ping`/`pong` and the
+`frame_hint` before big sends in `send()`. If upstream imports the terminal, KaTeX, rehype-raw or the
+settings windows at startup again, keep them lazy. Run both phone tests after a sync.

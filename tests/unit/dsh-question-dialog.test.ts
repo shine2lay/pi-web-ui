@@ -1,11 +1,15 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react-dom/test-utils";
 import { DshQuestionDialog } from "../../web/src/components/DshQuestionDialog.js";
 import { setAppSend } from "../../web/src/app-globals.js";
 import { LanguageProvider } from "../../web/src/i18n.js";
+import { loadMarkdownExtras } from "../../web/src/components/Markdown.js";
+
+// mobile-fixes: HTML inside markdown loads on first use; have it ready, as a real page soon does.
+beforeAll(() => loadMarkdownExtras());
 
 /**
  * DshQuestionDialog 测试（jsdom）：验证

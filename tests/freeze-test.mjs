@@ -120,18 +120,40 @@ const isExpectedError = (text) => text.includes("ERR_CONNECTION_REFUSED") || tex
 // Instrument WebSocket before app code runs: count instances / active sockets.
 await page.addInitScript(() => {
 	window.__wsCount = { created: 0, active: 0, maxActive: 0, closed: 0 };
+	// For a failure report: which socket sent/received which message types, and when it opened/closed
+	// (types and times only).
+	window.__wsLog = [];
+	const log = (s) => {
+		window.__wsLog.push(`${Math.round(performance.now())} ${s}`);
+		if (window.__wsLog.length > 400) window.__wsLog.splice(0, 100);
+	};
+	const typeOf = (d) => (typeof d === "string" ? (/"type":"([^"]+)"/.exec(d)?.[1] ?? "?") : "bin");
 	const Orig = window.WebSocket;
 	window.WebSocket = class extends Orig {
 		constructor(...args) {
 			super(...args);
-			window.__wsCount.created++;
+			const n = ++window.__wsCount.created;
 			window.__wsCount.active++;
 			window.__wsCount.maxActive = Math.max(window.__wsCount.maxActive, window.__wsCount.active);
+			log(`#${n} new`);
+			this.addEventListener("open", () => log(`#${n} open`));
+			this.addEventListener("message", (e) => {
+				const t = typeOf(e.data);
+				if (t !== "heartbeat") log(`#${n} got ${t}`);
+				// The newest socket that has delivered a full chat snapshot (see "prompt round-trip").
+				if (t === "snapshot") window.__snapshotSocket = n;
+			});
 			this.addEventListener("close", () => {
 				window.__wsCount.active--;
 				window.__wsCount.closed++;
+				log(`#${n} close`);
 			});
 			this.addEventListener("error", () => {});
+			this.__n = n;
+		}
+		send(data) {
+			log(`#${this.__n} sent ${typeOf(data)}`);
+			return super.send(data);
 		}
 	};
 });
@@ -184,8 +206,21 @@ check("auto-reconnect after server restart", recovered);
 // Type and send like a user (Playwright fills the box and presses Enter), then wait for the
 // stand-in model's answer. The old way set the textarea's value from page script and clicked the
 // send button by its title: React never saw that text, so the click sent nothing.
+// "Connected" shows as soon as the new socket opens, before the chat's snapshot arrives. After a
+// server restart that snapshot brings a new session for this empty chat, and switching session
+// clears the box (what was typed is kept as the old session's draft). On a loaded machine the test
+// typed in that gap and pressed Enter on an empty box, so: wait for the new socket's snapshot, let
+// the page settle, and type again if the box was still cleared.
+await page
+	.waitForFunction(() => window.__snapshotSocket === window.__wsCount.created, null, { timeout: 15000 })
+	.catch(() => {});
 const box = page.locator("textarea").first();
-await box.fill("Reply with exactly: recovered");
+const prompt = "Reply with exactly: recovered";
+for (let i = 0; i < 3; i++) {
+	await box.fill(prompt);
+	await sleep(300);
+	if ((await box.inputValue()) === prompt) break;
+}
 await box.press("Enter");
 const reply = await page
 	.waitForFunction(
@@ -221,6 +256,11 @@ if (!reply) {
 		}))
 		.catch((e) => ({ error: String(e) }));
 	console.log(`  page: ${JSON.stringify(seen)}`);
+	const sockets = await page
+		.evaluate(() => ({ count: window.__wsCount, log: window.__wsLog.slice(-80) }))
+		.catch(() => null);
+	console.log(`  sockets: ${JSON.stringify(sockets?.count)}`);
+	for (const line of sockets?.log ?? []) console.log(`    ${line}`);
 	console.log(`  model requests: ${mock.requests.length}`);
 	console.log(`  server stderr: ${serverErr.slice(-1500) || "(none)"}`);
 }

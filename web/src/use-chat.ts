@@ -60,6 +60,8 @@ import { emitPluginData } from "./plugin-loader";
 import { ingestPluginLogsData } from "./plugin-logs";
 import { resolveCatalogSyncResult } from "./plugin-host";
 import { PROTOCOL_VERSION } from "./protocol-version";
+// mobile-fixes: a quiet socket is found dead within seconds and replaced at once (see conn-health.ts).
+import { ConnHealth, setReconnectingNote } from "./conn-health";
 import {
 	applyPromptAck,
 	failPending,
@@ -1369,6 +1371,17 @@ export function useChat() {
 	const aliveRef = useRef(true);
 	/** Last time any server message arrived — used to detect half-open connections. */
 	const lastBeatRef = useRef(0);
+	/** mobile-fixes: is the current socket alive? (quiet too long / no answer after coming back = dead) */
+	const healthRef = useRef(new ConnHealth());
+	/** mobile-fixes: when the current socket started connecting (a hanging attempt is given up). */
+	const connectAtRef = useRef(0);
+	/** mobile-fixes: a socket was open before (the note is for losing a connection, not the first load). */
+	const hadOpenRef = useRef(false);
+	/** mobile-fixes: catching up after a lost connection since (ms; 0 = not): the note stays until the
+	 *  chat's content has come in again. */
+	const catchUpRef = useRef(0);
+	/** mobile-fixes: the open socket is in doubt (no answer yet after coming back / quiet for a while). */
+	const doubtRef = useRef(false);
 	const noticeId = useRef(0);
 	/** Last delta seq seen per conversation (message_delta + tool_delta share
 	 *  one per-conversation sequence) — a gap on the ACTIVE conversation
@@ -1594,18 +1607,30 @@ export function useChat() {
 	// 静默丢包。send 是 useCallback([]) 的稳定引用，重复赋值无副作用（StrictMode 双渲染亦然）。
 	setAppSend(send);
 
+	/** mobile-fixes: the "Reconnecting…" note: a connection was lost (or is in doubt) and the chat
+	 *  hasn't caught up yet. Refs only, so it is stable. */
+	const refreshNote = useCallback(() => {
+		const ws = wsRef.current;
+		const open = !!ws && ws.readyState === WebSocket.OPEN;
+		setReconnectingNote(hadOpenRef.current && (!open || catchUpRef.current > 0 || doubtRef.current));
+	}, []);
+
 	/** Stable across renders — the reconnect loop lives entirely inside this closure. */
 	const connect = useCallback(() => {
 		if (!aliveRef.current) return;
 		dispatch({ type: "status", status: "connecting" });
 		const ws = new WebSocket(wsUrl());
 		wsRef.current = ws;
+		connectAtRef.current = Date.now();
 
 		ws.onopen = () => {
 			if (wsRef.current !== ws) return; // stale socket
 			dispatch({ type: "status", status: "open" });
 			retryRef.current = 0;
 			lastBeatRef.current = Date.now();
+			healthRef.current.opened(Date.now());
+			hadOpenRef.current = true;
+			doubtRef.current = false;
 			ws.send(
 				JSON.stringify({
 					type: "hello",
@@ -1613,8 +1638,11 @@ export function useChat() {
 					// UI language report (issue #91): server persists it per
 					// client and uses it for tool return values / AI prompts.
 					locale: readUiLocale(),
+					// mobile-fixes: announce big messages first, so a slow link doesn't look dead.
+					frameHints: true,
 				} satisfies ClientMessage),
 			);
+			refreshNote();
 		};
 
 		ws.onmessage = (ev) => {
@@ -1625,6 +1653,32 @@ export function useChat() {
 				msg = JSON.parse(ev.data as string) as ServerMessage;
 			} catch {
 				return;
+			}
+			// mobile-fixes: connection health (conn-health.ts). A big message is announced first; after
+			// the page comes back only the answer to its ping proves the socket alive.
+			if (msg.type === "frame_hint") {
+				healthRef.current.heard(Date.now(), msg.chars);
+				return;
+			}
+			healthRef.current.heard(Date.now());
+			if (msg.type === "pong") {
+				healthRef.current.answered(msg.id);
+				if (doubtRef.current && !healthRef.current.checking) {
+					doubtRef.current = false;
+					refreshNote();
+				}
+				return;
+			}
+			// Caught up after a lost connection once the chat's content comes in again.
+			if (
+				catchUpRef.current &&
+				(msg.type === "snapshot" ||
+					msg.type === "snapshot_delta" ||
+					msg.type === "switch_preview" ||
+					msg.type === "switch_done")
+			) {
+				catchUpRef.current = 0;
+				refreshNote();
 			}
 			switch (msg.type) {
 				case "ready": {
@@ -2298,7 +2352,10 @@ export function useChat() {
 			// shadow the live one and drop its incoming messages.
 			if (wsRef.current && wsRef.current !== ws) return;
 			dispatch({ type: "status", status: "closed" });
+			if (hadOpenRef.current && !catchUpRef.current) catchUpRef.current = Date.now();
+			refreshNote();
 			// Reconnect with exponential backoff (1s → 2s → 4s → … capped at 10s).
+			// mobile-fixes: the page coming back or the network returning skips the wait (see below).
 			const delay = Math.min(1000 * 2 ** retryRef.current, 10_000);
 			retryRef.current += 1;
 			timerRef.current = setTimeout(() => {
@@ -2319,18 +2376,146 @@ export function useChat() {
 	useEffect(() => {
 		aliveRef.current = true;
 		connect();
-		// Watchdog: if no server message arrives for 30s, assume the connection is
-		// half-open and force a close, which triggers the normal reconnect path.
-		const watchdog = setInterval(() => {
+		// mobile-fixes: the watchdog. The server speaks every 2 s, so a socket that stays quiet (or doesn't
+		// answer after the page comes back) is dead: it is dropped on the spot (waiting for a dead socket
+		// to close took minutes) and a new one opens at once. Rules and slow-link allowance: conn-health.ts.
+		const CHECK_EVERY_MS = 500;
+		/** A connection attempt that hangs this long (made while the network was gone) is given up. */
+		const CONNECT_GIVE_UP_MS = 10_000;
+		/** Safety net: the note goes once the new socket has been open this long, even if no chat content came. */
+		const CATCH_UP_GIVE_UP_MS = 20_000;
+		let lastCheckAt = Date.now();
+		/** When the page was last hidden or frozen (a phone may cut a background tab's network). */
+		let hiddenAt = document.visibilityState === "visible" ? 0 : Date.now();
+		const replace = (ws: WebSocket, retryNow: boolean) => {
+			ws.onopen = null;
+			ws.onmessage = null;
+			ws.onerror = null;
+			ws.onclose = null;
+			if (wsRef.current === ws) wsRef.current = null;
+			try {
+				ws.close();
+			} catch {
+				/* already closing */
+			}
+			// What onclose would have done for this socket.
+			failHeldSends("The connection dropped before it was sent.");
+			bridgeRef.current.clear();
+			if (hadOpenRef.current && !catchUpRef.current) catchUpRef.current = Date.now();
+			doubtRef.current = false;
+			dispatch({ type: "status", status: "closed" });
+			if (timerRef.current) {
+				clearTimeout(timerRef.current);
+				timerRef.current = null;
+			}
+			if (retryNow) {
+				retryRef.current = 0;
+				connect();
+			} else {
+				const delay = Math.min(1000 * 2 ** retryRef.current, 10_000);
+				retryRef.current += 1;
+				timerRef.current = setTimeout(() => {
+					timerRef.current = null;
+					connect();
+				}, delay);
+			}
+			refreshNote();
+		};
+		const check = () => {
+			if (!aliveRef.current) return;
+			const now = Date.now();
+			const stalled = now - lastCheckAt > 4 * CHECK_EVERY_MS;
+			lastCheckAt = now;
+			const ws = wsRef.current;
+			if (!ws) return;
+			if (ws.readyState === WebSocket.CONNECTING) {
+				if (now - connectAtRef.current > CONNECT_GIVE_UP_MS) replace(ws, false);
+				return;
+			}
+			if (ws.readyState !== WebSocket.OPEN) return;
+			// The page was frozen, throttled or busy: messages may still be waiting to be handed over,
+			// so the silence so far proves nothing. Ask instead.
+			if (stalled) {
+				cameBack();
+				return;
+			}
+			const verdict = healthRef.current.verdict(now);
+			if (verdict === "dead") {
+				// Quiet with nothing to explain it may be a very slow link: the next socket gets more
+				// patience, so it can't loop. Explained, so no more patience: it didn't answer after the
+				// page came back, the phone knows it is offline, or the page was in the background.
+				const h = healthRef.current;
+				const explained =
+					h.checking ||
+					navigator.onLine === false ||
+					document.visibilityState !== "visible" ||
+					hiddenAt >= h.lastHeardAt;
+				if (!explained) h.droppedForSilence();
+				replace(ws, true);
+				return;
+			}
+			const doubt = verdict === "doubt";
+			const caughtUpAnyway = catchUpRef.current > 0 && now - healthRef.current.openedAt > CATCH_UP_GIVE_UP_MS;
+			if (caughtUpAnyway) catchUpRef.current = 0;
+			if (doubt !== doubtRef.current || caughtUpAnyway) {
+				doubtRef.current = doubt;
+				refreshNote();
+			}
+		};
+		/** The page came back or the network changed: the socket must answer now; a lost one is retried now. */
+		const cameBack = () => {
 			if (!aliveRef.current) return;
 			const ws = wsRef.current;
-			if (ws && ws.readyState === WebSocket.OPEN && Date.now() - lastBeatRef.current > 30_000) {
-				ws.close();
+			const now = Date.now();
+			if (ws && ws.readyState === WebSocket.OPEN) {
+				const id = healthRef.current.cameBack(now);
+				if (id !== null) {
+					try {
+						ws.send(JSON.stringify({ type: "ping", id } satisfies ClientMessage));
+					} catch {
+						/* the check finds out */
+					}
+				}
+			} else if (ws && ws.readyState === WebSocket.CONNECTING) {
+				// An attempt from before (maybe made with no network) may never finish.
+				if (now - connectAtRef.current > 1_500) replace(ws, true);
+			} else if (timerRef.current) {
+				// Waiting to retry after a lost connection: retry now.
+				clearTimeout(timerRef.current);
+				timerRef.current = null;
+				retryRef.current = 0;
+				connect();
 			}
-		}, 5_000);
+		};
+		const watchdog = setInterval(check, CHECK_EVERY_MS);
+		const onVisible = () => {
+			if (document.visibilityState === "visible") cameBack();
+			else hiddenAt = Date.now();
+		};
+		const onFreeze = () => {
+			hiddenAt = Date.now();
+		};
+		const onPageShow = (e: PageTransitionEvent) => {
+			if (e.persisted) cameBack();
+		};
+		// Android Chrome tells when the phone moves between Wi-Fi and mobile data.
+		const netInfo = (navigator as Navigator & { connection?: EventTarget }).connection;
+		document.addEventListener("visibilitychange", onVisible);
+		document.addEventListener("resume", cameBack);
+		document.addEventListener("freeze", onFreeze);
+		window.addEventListener("pageshow", onPageShow);
+		window.addEventListener("online", cameBack);
+		netInfo?.addEventListener?.("change", cameBack);
 		return () => {
 			aliveRef.current = false;
 			clearInterval(watchdog);
+			document.removeEventListener("visibilitychange", onVisible);
+			document.removeEventListener("resume", cameBack);
+			document.removeEventListener("freeze", onFreeze);
+			window.removeEventListener("pageshow", onPageShow);
+			window.removeEventListener("online", cameBack);
+			netInfo?.removeEventListener?.("change", cameBack);
+			setReconnectingNote(false);
 			if (timerRef.current) {
 				clearTimeout(timerRef.current);
 				timerRef.current = null;

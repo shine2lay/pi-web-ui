@@ -252,6 +252,12 @@ body {
 	line-height: 1.6;
 }
 
+/* mobile-fixes: a phone browser that doesn't shrink the page for the keyboard: the app follows the
+   visible part instead (web/src/mobile-viewport.ts). */
+html.vv-fallback .app {
+	height: var(--app-vh, 100%);
+}
+
 .app {
 	display: flex;
 	flex-direction: column;
@@ -6157,6 +6163,35 @@ body.panel-resizing .scm-divider::after {
 	color: var(--amber);
 	font-size: 12px;
 	white-space: nowrap;
+}
+
+/* mobile-fixes: "Reconnecting…" while a lost connection is replaced and the chat catches up. */
+.reconnecting-note {
+	position: fixed;
+	top: 52px;
+	left: 50%;
+	transform: translateX(-50%);
+	z-index: 61;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 14px;
+	border-radius: 999px;
+	background: var(--bg-elev2);
+	border: 1px solid var(--border);
+	color: var(--text-dim);
+	font-size: 12px;
+	white-space: nowrap;
+	box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+	pointer-events: none;
+}
+.reconnecting-note-spin {
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	border: 2px solid currentColor;
+	border-right-color: transparent;
+	animation: spin 0.8s linear infinite;
 }
 
 /* 临时会话提示条：常驻消息流顶部（跟随滚动），不遮挡 protocol-banner */
@@ -15534,4 +15569,220 @@ button.source-default-toggle {
 	max-width: 280px;
 	overflow: hidden;
 	text-overflow: ellipsis;
+}
+
+/* ======================================================= mobile-fixes: finger-size taps on phones
+   Phones only (≤768px, the app's phone breakpoint); the desktop look is untouched. Every tap target
+   is at least 44×44 px, Send / Stop 48, and nothing in the top bar or the message-box toolbar gets
+   cut off: what doesn't fit in the top bar moves into "⋯" (topbar-fit.ts). Small pills keep their
+   look: the pill is drawn (::before) inside a taller, invisible tap area. */
+@media (max-width: 768px) {
+	/* ---- top bar: 44 px controls (they were 30); less padding, so the bar grows by only 5 px ---- */
+	.topbar {
+		--topbar-ctl-h: 44px;
+		padding: 4px 10px;
+	}
+	.plugin-topbar-menu.portal {
+		--topbar-ctl-h: 44px;
+	}
+	.topbar .tb-tab,
+	.topbar .chip,
+	.topbar .plugin-topbar-item,
+	.topbar .panel-toggle {
+		height: var(--topbar-ctl-h);
+		min-width: 44px;
+		justify-content: center;
+	}
+	.plugin-topbar-menu.portal .tb-tab,
+	.plugin-topbar-menu.portal .chip,
+	.plugin-topbar-menu.portal .plugin-topbar-item,
+	.plugin-topbar-menu.portal .panel-toggle,
+	.plugin-topbar-menu.portal > a.plugin-topbar-menu-link {
+		min-height: 44px;
+	}
+	/* Menus opened from the top bar or the message box (bottom sheets on phones). */
+	.dd-item {
+		min-height: 44px;
+	}
+
+	/* ---- message box: attach and the tool chips 44, Send / Stop 48 ---- */
+	.inputbox .btn {
+		width: 44px;
+		height: 44px;
+	}
+	.inputbox .btn.send,
+	.inputbox .btn.stop {
+		width: 48px;
+		height: 48px;
+	}
+	.inputbox .split-send {
+		width: 96px;
+		height: 48px;
+	}
+	.inputbox .split-send.single {
+		width: 48px;
+	}
+	.composer-tools .chip {
+		min-width: 44px;
+		min-height: 44px;
+		justify-content: center;
+	}
+	/* The / and @ menus. */
+	.slash-item {
+		min-height: 44px;
+		align-items: center;
+	}
+	.slash-menu-close {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-width: 44px;
+		min-height: 44px;
+		margin: -12px -10px -12px 0;
+	}
+
+	/* ---- quick phrases: one row that scrolls sideways (it was two or three rows) ---- */
+	.quick-row {
+		flex-wrap: nowrap;
+		overflow-x: auto;
+		overscroll-behavior-x: contain;
+		scrollbar-width: none;
+		margin: -4px 0 2px;
+	}
+	.quick-row::-webkit-scrollbar {
+		display: none;
+	}
+	.quick-chip,
+	.quick-chip:hover:not(:disabled) {
+		position: relative;
+		isolation: isolate;
+		flex-shrink: 0;
+		min-height: 44px;
+		padding: 0 14px;
+		border-color: transparent;
+		background: transparent;
+		font-size: 13px;
+	}
+	.quick-chip::before {
+		content: "";
+		position: absolute;
+		inset: 5px 0;
+		z-index: -1;
+		border: 1px solid var(--border);
+		border-radius: 10px;
+		background: var(--card-bg, var(--bg-elev));
+	}
+	.quick-chip:hover:not(:disabled)::before {
+		border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+		background: var(--accent-soft);
+	}
+
+	/* ---- the Goal pill ---- */
+	.goalbar-collapsed {
+		margin-bottom: 0;
+	}
+	.goalbar-hint,
+	.goalbar-hint:hover {
+		position: relative;
+		isolation: isolate;
+		min-height: 44px;
+		padding: 0 14px;
+		border-color: transparent;
+		background: transparent;
+	}
+	.goalbar-hint::before {
+		content: "";
+		position: absolute;
+		inset: 7px 0;
+		z-index: -1;
+		border: 1px dashed var(--border);
+		border-radius: 999px;
+		background: var(--chip-bg, var(--bg-elev2));
+	}
+	.goalbar-hint:hover::before {
+		border-color: var(--amber);
+		border-style: solid;
+	}
+
+	/* ---- the status line: its buttons get a full tap height; the folder shortens with "…" ---- */
+	.statusbar {
+		min-height: 44px;
+		padding-block: 0;
+		row-gap: 0;
+	}
+	.statusbar button {
+		min-height: 44px;
+	}
+	.statusbar .status-cwd,
+	.statusbar .status-cwd:hover {
+		position: relative;
+		isolation: isolate;
+		display: block;
+		height: 44px;
+		line-height: 44px;
+		padding: 0 10px;
+		border-color: transparent;
+		background: transparent;
+	}
+	.statusbar .status-cwd::before {
+		content: "";
+		position: absolute;
+		inset: 8px 0;
+		z-index: -1;
+		border: 1px solid var(--border);
+		border-radius: 5px;
+		background: var(--bg-elev);
+	}
+
+	/* ---- under each message: copy, fork, read aloud... ---- */
+	.msg-action,
+	.msg-action-label,
+	.msg-copy-main-btn,
+	.msg-copy-caret-btn {
+		min-width: 44px;
+		height: 44px;
+	}
+	.msg-actions {
+		gap: 2px;
+	}
+	/* The copy key on each text block: a 44 px tap area around the same small icon, which stays
+	   where it was (the area reaches past the icon, not the text). */
+	.msg-text-copy {
+		width: 44px;
+		height: 44px;
+		top: -2px;
+		right: 0;
+	}
+	.msg-text.single .msg-text-copy {
+		margin: 0 -8px;
+	}
+
+	/* ---- the chat list drawer ---- */
+	.lp-section-header,
+	.lp-section-header .lp-section-title,
+	.lp-section-title {
+		height: 44px;
+		min-height: 44px;
+	}
+	.lp-section.collapsed {
+		flex-basis: 44px !important;
+		min-height: 44px;
+		max-height: 44px;
+	}
+	.lp-section-action {
+		width: 44px;
+		height: 44px;
+	}
+	.session-item {
+		min-height: 44px;
+	}
+}
+
+/* mobile-fixes: while the phone's keyboard is up (html.kb-up, mobile-viewport.ts) the chat keeps
+   some room: the status line and the Goal pill step aside until the keyboard goes down. */
+@media (max-width: 768px) {
+	html.kb-up .statusbar,
+	html.kb-up .goalbar-collapsed {
+		display: none;
+	}
 }

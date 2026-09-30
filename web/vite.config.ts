@@ -41,8 +41,15 @@ export default defineConfig({
 						{ name: "react", test: /node_modules[\\/](react|react-dom)[\\/]/ },
 						{
 							name: "markdown",
-							test: /node_modules[\\/](react-markdown|remark-gfm|remark-math|remark-breaks|rehype-katex|rehype-highlight|rehype-raw|katex|highlight\.js)[\\/]/,
+							// (hastscript, web-namespaces: tiny, used by both math and HTML support below; here, so
+							// neither of those files needs the other.)
+							test: /node_modules[\\/](react-markdown|remark-gfm|remark-math|remark-breaks|rehype-highlight|highlight\.js|hastscript|hast-util-parse-selector|web-namespaces)[\\/]/,
 						},
+						// mobile-fixes: math (KaTeX) and HTML inside markdown load only when a text needs them
+						// (Markdown.tsx), each from its own library file. After "markdown" on purpose: what they
+						// share with it stays there, so neither drags the other in.
+						{ name: "katex", test: /node_modules[\\/](rehype-katex|katex)[\\/]/ },
+						{ name: "md-html", test: /node_modules[\\/](rehype-raw|rehype-sanitize|hast-util-sanitize)[\\/]/ },
 						{ name: "xterm", test: /node_modules[\\/]@xterm[\\/](xterm|addon-fit)[\\/]/ },
 					],
 				},

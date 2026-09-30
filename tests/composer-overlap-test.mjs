@@ -1,6 +1,6 @@
 /* Composer toolbar E2E: at any width the left group (attach / model / thinking)
  * must never slide under the right group (send / stop / 对半胶囊) — the widest
- * right side happens while streaming, when the「排队|插队」对半胶囊 (62px; 82px ≤768px)
+ * right side happens while streaming, when the「排队|插队」对半胶囊 (62px; 96px ≤768px)
  * shows up next to 停止 (hence it is injected here). Below 560px the labels give
  * way: model/thinking become icon-only buttons (the pill is already icon-only).
  * Run: npm run build && node tests/composer-overlap-test.mjs
@@ -114,10 +114,11 @@ for (const w of WIDTHS) {
 		`间距 ${gap}px，溢出 ${info.leftOverflow}`,
 	);
 	check(
-		`w=${w} → 对半胶囊 ${w <= 768 ? 82 : 62}px 且两半等宽`,
+		`w=${w} → 对半胶囊 ${w <= 768 ? 96 : 62}px 且两半等宽`,
 		// Upstream 8fb004e made the pill 62px on desktop and 82px (two 40px touch halves) at
-		// ≤768px without updating this test (it still said 78px). Those sizes are the design.
-		info.pillWidth === (w <= 768 ? 82 : 62) && Math.abs(info.halfWidths[0] - info.halfWidths[1]) <= 0.5,
+		// ≤768px without updating this test (it still said 78px). mobile-fixes made the phone pill
+		// 96×48 (two 48px halves, as big as the Send button).
+		info.pillWidth === (w <= 768 ? 96 : 62) && Math.abs(info.halfWidths[0] - info.halfWidths[1]) <= 0.5,
 		`胶囊 ${info.pillWidth}px，两半 ${info.halfWidths.join(" / ")}`,
 	);
 	if (w <= 560) {

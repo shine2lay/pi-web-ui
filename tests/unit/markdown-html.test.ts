@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
-import { MarkdownBody } from "../../web/src/components/Markdown.js";
+import { MarkdownBody, loadMarkdownExtras } from "../../web/src/components/Markdown.js";
+
+// mobile-fixes: HTML and math support load when first needed; rendering to a string in one go needs
+// them loaded first.
+beforeAll(() => loadMarkdownExtras());
 import { LanguageProvider } from "../../web/src/i18n.js";
 
 /**

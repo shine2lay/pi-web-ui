@@ -134,6 +134,10 @@ export const en = {
 	placeholderStreamingQueued:
 		"The agent is working… press Enter or click Queue — delivered after the reply finishes (this engine cannot steer)",
 	placeholderIdle: "Message pi — Enter to send, / for commands",
+	// mobile-fixes: on a phone Enter adds a new line (the Send button sends), and the box is narrow.
+	placeholderIdleTouch: "Message pi — / for commands",
+	placeholderStreamingTouch: "Working… write to steer or queue",
+	placeholderStreamingQueuedTouch: "Working… write to queue for after the reply",
 	placeholderConnecting: "Connecting to server…",
 	stopAgent: "Stop agent",
 	stop: "Stop",

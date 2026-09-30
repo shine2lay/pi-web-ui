@@ -460,6 +460,10 @@ export function MessageList({
 	const prevStRef = useRef(0);
 	/** 上一帧 scrollHeight —— 布局塌缩/增长的判据（用户滚轮不会改变内容高度）。 */
 	const prevScrollHeightRef = useRef(0);
+	/** mobile-fixes: the list's own height and the screen's visible height at the last scroll event
+	 *  (a scroll that comes with a new height is layout keeping the list in place, not the user). */
+	const prevClientHRef = useRef(0);
+	const prevViewHRef = useRef(0);
 	/** 用户已主动离开底部：流式结束 / finalize 塌缩时不再自动吸回。 */
 	const escapedRef = useRef(false);
 	/** Timestamp until which scroll events are treated as programmatic. */
@@ -1043,10 +1047,26 @@ export function MessageList({
 		const dSh = el.scrollHeight - prevScrollHeightRef.current;
 		prevStRef.current = el.scrollTop;
 		prevScrollHeightRef.current = el.scrollHeight;
+		// mobile-fixes: the list's box or the screen changed height since the last scroll (a phone's
+		// keyboard going up or down, the message box growing or emptied, a row appearing or leaving
+		// under the list), and the scroll is no bigger than those changes. That is the browser or the
+		// message box keeping the list in place, and it can arrive before the ResizeObserver below has
+		// run. (The keyboard going down is two steps: the page grows by the keyboard's height, which
+		// pulls the list back that far, then the status line comes back under the list.) Not the user
+		// leaving the bottom: a real wheel or finger drag up still counts (userInput), and a bigger
+		// jump (scrolling something into view) is judged as before.
+		const prevClientH = prevClientHRef.current;
+		const viewH = Math.round(window.visualViewport?.height ?? window.innerHeight);
+		const dClientH = el.clientHeight - prevClientH;
+		const dViewH = viewH - prevViewHRef.current;
+		prevClientHRef.current = el.clientHeight;
+		prevViewHRef.current = viewH;
+		const boxMoved =
+			prevClientH > 0 && (dClientH !== 0 || dViewH !== 0) && Math.abs(dSt) <= Math.abs(dClientH) + Math.abs(dViewH) + 2;
 		const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
 		// Programmatic jumps (scrollToBottom re-asserts) land here too — never
 		// treat them as upward user intent, or the stick gets undone instantly.
-		const programmatic = Date.now() < progUntilRef.current;
+		const programmatic = Date.now() < progUntilRef.current || boxMoved;
 		const decision = classifyScroll({
 			dSt,
 			dSh,
@@ -1156,7 +1176,18 @@ export function MessageList({
 			const h = el.clientHeight;
 			const grew = h - prevH;
 			prevH = h;
-			if (grew > 0) el.scrollTop = Math.min(el.scrollTop, el.scrollHeight - el.clientHeight);
+			// mobile-fixes: a list that follows the bottom stays there whichever way its box changes
+			// (the browser pulling it back as the box grows is handled in onScroll: boxMoved).
+			if (grew > 0) {
+				if (stickRef.current && !escapedRef.current) el.scrollTop = el.scrollHeight;
+				else el.scrollTop = Math.min(el.scrollTop, el.scrollHeight - el.clientHeight);
+			} else if (grew < 0 && stickRef.current && !escapedRef.current) {
+				// mobile-fixes: the box also shrinks when something other than the composer appears
+				// below it (the goal row just after a chat opens, a phone's keyboard, the
+				// "Reconnecting…" note), and nothing inside the list changes then. A chat that was at
+				// the bottom stays there. (This scroll goes down, which never reads as leaving the bottom.)
+				el.scrollTop = el.scrollHeight;
+			}
 		});
 		ro.observe(el);
 		return () => ro.disconnect();

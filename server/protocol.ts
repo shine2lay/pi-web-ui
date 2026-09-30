@@ -592,7 +592,11 @@ export interface PromptAttachment {
 }
 
 export type ClientMessage =
-	| { type: "hello"; clientId: string; protocolVersion?: number; locale?: string }
+	/** frameHints (mobile-fixes): announce every big message first with `frame_hint`. */
+	| { type: "hello"; clientId: string; protocolVersion?: number; locale?: string; frameHints?: boolean }
+	/** mobile-fixes: "are you there?", answered at once with `pong` carrying the same id (the page came
+	 *  back, the network changed). */
+	| { type: "ping"; id?: number }
 	/** Browser UI language changed (or first report after hello) — server
 	 *  persists it per client and uses it for tool return values / AI-facing
 	 *  prompts. "zh" (zh-CN/…) → Chinese; anything else → English
@@ -2915,6 +2919,12 @@ export type ServerMessage =
 	| { type: "scm_changed" }
 	/** Sent every ~2s so clients can detect half-open connections and display host metrics. */
 	| { type: "heartbeat"; hostMetrics?: UiHostMetrics }
+	/** mobile-fixes: the answer to `ping` (same id). */
+	| { type: "pong"; id?: number }
+	/** mobile-fixes: the next message is big (`chars` characters): on a slow link it takes a while and
+	 *  nothing else arrives meanwhile, which must not look like a dead connection. Only for sockets whose
+	 *  hello asked for it (frameHints). */
+	| { type: "frame_hint"; chars: number }
 	| { type: "sessions"; sessions: SessionSummary[] }
 	/** Filename matches for the global search panel (reqId echo). Always sent
 	 *  in reply to a search_files request — ok:false means the walk failed. */

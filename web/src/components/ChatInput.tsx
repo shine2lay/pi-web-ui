@@ -1,4 +1,4 @@
-import { Fragment, memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { FiList, FiSquare, FiPaperclip, FiArrowUp, FiMic, FiCamera } from "react-icons/fi";
 import type { FileSearchResult, ModelInfo, ProviderKeyInfo, SlashCommandInfo, UiMessage, UiState } from "../types";
 import { useT } from "../i18n";
@@ -27,6 +27,7 @@ import {
 import { getLastBrowserControlPages, pokeBrowserControl } from "../browser-control";
 import { getPluginComposerProvider, listPluginComposerProviders } from "../plugin-host";
 import { detectTouchFirstDevice } from "../touch-device";
+import { isKeyboardUp, subscribeKeyboard } from "../mobile-viewport";
 import { groupByAlign } from "../ui-slots";
 
 import { ModelThinking } from "./ModelThinking";
@@ -908,6 +909,9 @@ export const ChatInput = memo(function ChatInput({
 	// box), so lines 2+ computed delta 0. The passive effect runs after the
 	// flex layout settles — the measured delta is real each line.
 	const composerRef = useRef<HTMLDivElement>(null);
+	// mobile-fixes: with a phone's keyboard up a long message box stays within a quarter of the
+	// screen (it scrolls inside), so the chat above it keeps some room (mobile-viewport.ts).
+	const keyboardUp = useSyncExternalStore(subscribeKeyboard, isKeyboardUp, () => false);
 	useEffect(() => {
 		const ta = taRef.current;
 		const box = composerRef.current;
@@ -918,7 +922,10 @@ export const ChatInput = memo(function ChatInput({
 		const hBefore = box.getBoundingClientRect().height;
 		const stBefore = list?.scrollTop ?? 0;
 		ta.style.height = "auto"; // natural height first, then clamp
-		const cap = composerH != null ? COMPOSER_MAX_H : COMPOSER_AUTO_H;
+		const cap = Math.min(
+			composerH != null ? COMPOSER_MAX_H : COMPOSER_AUTO_H,
+			keyboardUp ? Math.max(72, Math.round(window.innerHeight * 0.25)) : Number.POSITIVE_INFINITY,
+		);
 		ta.style.maxHeight = `${cap}px`;
 		const h = Math.min(Math.max(ta.scrollHeight, composerH ?? 0), cap);
 		ta.style.height = `${h}px`;
@@ -930,7 +937,7 @@ export const ChatInput = memo(function ChatInput({
 			// restores (undoes the transient clamp).
 			list.scrollTop = stBefore + grew;
 		}
-	}, [text, composerH]);
+	}, [text, composerH, keyboardUp]);
 
 	/* 光标是否在首/末**视觉行**交给 caret-visual-line.ts：自动折行的长草稿（没有 \n，
 	 * 但界面上是多行）也必须先让 ↑/↓ 走普通光标移动，不能误触发历史（issue #127）。 */
@@ -1664,9 +1671,11 @@ export const ChatInput = memo(function ChatInput({
 						connected
 							? streaming
 								? isDsh
-									? t("placeholderStreamingQueued")
-									: t("placeholderStreaming")
-								: t("placeholderIdle")
+									? t(IS_TOUCH ? "placeholderStreamingQueuedTouch" : "placeholderStreamingQueued")
+									: t(IS_TOUCH ? "placeholderStreamingTouch" : "placeholderStreaming")
+								: IS_TOUCH
+									? t("placeholderIdleTouch")
+									: t("placeholderIdle")
 							: t("placeholderConnecting")
 					}
 					disabled={!connected}

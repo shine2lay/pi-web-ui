@@ -1,15 +1,11 @@
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { JSX } from "react";
 import ReactMarkdown from "react-markdown";
-import type { PluggableList } from "unified";
+import type { Pluggable, PluggableList } from "unified";
 import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
 import remarkMath from "remark-math";
 import rehypeHighlight from "rehype-highlight";
-import rehypeKatex from "rehype-katex";
-import rehypeRaw from "rehype-raw";
-import rehypeSanitize from "rehype-sanitize";
-import "katex/dist/katex.min.css";
 import { CopyButton } from "./copy-button";
 import { splitCodeLines } from "../code-lines";
 import { childrenText, fenceLanguage } from "./mermaid";
@@ -44,12 +40,80 @@ export const remarkPlugins = [remarkGfm, remarkMath];
 /** Same pipeline + hard line breaks — used for USER bubbles so typed/pasted
  *  multi-line text keeps every line break (see MarkdownProps.hardBreaks). */
 export const remarkPluginsHardBreaks = [remarkGfm, remarkBreaks, remarkMath];
-export const rehypePlugins: PluggableList = [
-	// KaTeX 在 highlight 之前：两者目标节点不相交（.math vs pre code），
-	// 公式解析失败时只显示红色源码（throwOnError: false），不打断整条消息。
-	[rehypeKatex, { strict: false, throwOnError: false }],
-	[rehypeHighlight, { detect: true, ignoreMissing: true }],
-];
+const highlightPlugin: Pluggable = [rehypeHighlight, { detect: true, ignoreMissing: true }];
+
+// mobile-fixes: math (KaTeX) and HTML inside markdown (parse5) are big and rarely needed, so they
+// don't load with the app any more: each loads the first time a text needs it (math: the text has a
+// "$"; HTML: it is shown with rawHtml). Until then that text shows without it (a formula as its TeX
+// source, HTML as text), and every text on screen re-renders once it has arrived.
+let mathPlugin: Pluggable | null = null;
+let rawHtmlPlugins: PluggableList | null = null;
+let mathLoad: Promise<void> | null = null;
+let rawLoad: Promise<void> | null = null;
+let extrasVersion = 0;
+const extrasListeners = new Set<() => void>();
+function extrasArrived(): void {
+	extrasVersion++;
+	for (const l of extrasListeners) l();
+}
+function subscribeExtras(l: () => void): () => void {
+	extrasListeners.add(l);
+	return () => {
+		extrasListeners.delete(l);
+	};
+}
+const getExtrasVersion = () => extrasVersion;
+
+/** Load math support (a failed download is tried again the next time a text needs it). */
+export function loadMath(): Promise<void> {
+	mathLoad ??= import("./md-math").then(
+		(m) => {
+			mathPlugin = m.mathPlugin;
+			extrasArrived();
+		},
+		() => {
+			mathLoad = null;
+		},
+	);
+	return mathLoad;
+}
+
+/** Load support for HTML inside markdown. */
+export function loadRawHtml(): Promise<void> {
+	rawLoad ??= import("./md-raw").then(
+		(m) => {
+			rawHtmlPlugins = m.rawHtmlPlugins;
+			extrasArrived();
+		},
+		() => {
+			rawLoad = null;
+		},
+	);
+	return rawLoad;
+}
+
+/** Both, right away (for rendering to a string in one go, as the unit tests do). */
+export async function loadMarkdownExtras(): Promise<void> {
+	await Promise.all([loadMath(), loadRawHtml()]);
+}
+
+/** Does this text need math support? remark-math only knows $x$ and $$x$$. */
+export function mayHaveMath(text: string): boolean {
+	return text.includes("$");
+}
+
+/**
+ * The rehype steps, in this order: HTML (parse, then clean) before everything else, so what it adds
+ * is highlighted and typeset like the rest; KaTeX before highlight (they never touch the same nodes:
+ * .math vs pre code).
+ */
+export function rehypePluginsFor(rawHtml: boolean): PluggableList {
+	const list: PluggableList = [];
+	if (rawHtml && rawHtmlPlugins) list.push(...rawHtmlPlugins);
+	if (mathPlugin) list.push(mathPlugin);
+	list.push(highlightPlugin);
+	return list;
+}
 
 /**
  * 把正文中的 @file.ext 提及安全转换为 pi-file:// 链接，供 MdLink 渲染为小药丸微标。
@@ -87,12 +151,18 @@ export function MarkdownBody({
 	// 常用标签与 markdown 生成的结构（含 language-* 类名，KaTeX 的 language-math
 	// 走同一前缀）保留。sanitize 必须在 katex/highlight 之前：它们后续添加的
 	// class/元素不会被白名单误伤。非 rawHtml 路径本来就没有原始 HTML，不接 sanitize。
-	const rh: PluggableList = rawHtml ? [rehypeRaw, rehypeSanitize, ...rehypePlugins] : rehypePlugins;
 	const processedText = useMemo(() => linkifyFileMentions(text), [text]);
+	// mobile-fixes: math and HTML support load when first needed; render again once they are here.
+	useSyncExternalStore(subscribeExtras, getExtrasVersion, getExtrasVersion);
+	const wantsMath = mayHaveMath(processedText);
+	useEffect(() => {
+		if (wantsMath && !mathPlugin) void loadMath();
+		if (rawHtml && !rawHtmlPlugins) void loadRawHtml();
+	}, [wantsMath, rawHtml]);
 	return (
 		<ReactMarkdown
 			remarkPlugins={hardBreaks ? remarkPluginsHardBreaks : remarkPlugins}
-			rehypePlugins={rh}
+			rehypePlugins={rehypePluginsFor(rawHtml)}
 			components={{ pre: PreWithCopy, a: MdLink }}
 		>
 			{processedText}

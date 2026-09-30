@@ -9,6 +9,7 @@ import { initAuthToken } from "./auth-token";
 import { initChatLink } from "./open-chat-link";
 import { installScrollbarGutterVar } from "./scrollbar-gutter";
 import { appBase } from "./base-url";
+import { installMobileViewport } from "./mobile-viewport";
 
 // 吸收地址栏 ?token=（PI_WEB_TOKEN 鉴权入口）并持久化，须在首次请求前执行
 initAuthToken();
@@ -21,6 +22,10 @@ applyTheme(loadTheme());
 // 首帧前实测滚动条宽（scrollbar-gutter 预留 gutter 的宽度）→ 宽屏消息列与
 // 输入列的对齐补偿变量 --msgs-gutter，见 scrollbar-gutter.ts。
 installScrollbarGutterVar();
+// mobile-fixes: the message box stays above the phone's keyboard even where index.html's
+// interactive-widget setting isn't understood, and a short screen keeps room for the chat while the
+// keyboard is up (see mobile-viewport.ts).
+installMobileViewport();
 
 createRoot(document.getElementById("root")!).render(
 	<StrictMode>

@@ -7,8 +7,9 @@
  *   mock.requests                               // every request body received
  *   await mock.close();
  *
- * A reply is a string (text), { text }, or { tool, args } (one tool call). The callback may be
- * async. It gets:
+ * A reply is a string (text), { text }, or { tool, args } (one tool call). { text, stream: { everyMs,
+ * pieceChars } } sends the text a piece at a time, like a real model typing its answer. The callback
+ * may be async. It gets:
  *   - payload: the request body;
  *   - lastUser: the text of the last user message;
  *   - toolResult: { content } when the last message is a tool result, else null;
@@ -80,6 +81,17 @@ export async function startMockModel(respond) {
 				],
 			});
 			send({}, "tool_calls");
+		} else if (reply && typeof reply === "object" && reply.stream) {
+			const text = String(reply.text ?? "");
+			const size = Math.max(1, reply.stream.pieceChars ?? 20);
+			const every = Math.max(0, reply.stream.everyMs ?? 50);
+			send({ role: "assistant", content: "" });
+			for (let i = 0; i < text.length; i += size) {
+				if (res.destroyed) return;
+				send({ content: text.slice(i, i + size) });
+				if (every) await new Promise((r) => setTimeout(r, every));
+			}
+			send({}, "stop");
 		} else {
 			const text = typeof reply === "string" ? reply : (reply?.text ?? "");
 			send({ role: "assistant", content: text });
