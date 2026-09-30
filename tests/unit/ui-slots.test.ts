@@ -191,11 +191,12 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 		// 没用到的槽位是空数组（渲染层不必判空），且全部槽位都在（21 个 + modal.dialog）
 		expect(Object.keys(slots)).toHaveLength(22);
 		expect(slots["composer.leading"]).toEqual([]);
-		// 输入框动作区有 6 个宿主内置（上传/模型/思考/DSH×2/发送），发送簇 align=end
+		// 输入框动作区有 7 个宿主内置（上传/模型/思考/fast-mode 的 Fast/DSH×2/发送），发送簇 align=end
 		expect(ids(slots["composer.actions"])).toEqual([
 			"host:composer-upload",
 			"host:composer-model",
 			"host:composer-thinking",
+			"host:composer-fast",
 			"host:composer-dsh-perm",
 			"host:composer-dsh-preset",
 			"host:composer-send",
@@ -325,11 +326,12 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			}),
 		]);
 		expect(ids(slots["composer.leading"])).toEqual(["third:a", "third:b"]);
-		// leading 的贡献不串进 actions（actions 只有 6 个宿主内置）
+		// leading 的贡献不串进 actions（actions 只有 7 个宿主内置）
 		expect(ids(slots["composer.actions"])).toEqual([
 			"host:composer-upload",
 			"host:composer-model",
 			"host:composer-thinking",
+			"host:composer-fast",
 			"host:composer-dsh-perm",
 			"host:composer-dsh-preset",
 			"host:composer-send",
@@ -348,6 +350,7 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"p:x",
 			"host:composer-model",
 			"host:composer-thinking",
+			"host:composer-fast",
 			"host:composer-dsh-perm",
 			"host:composer-dsh-preset",
 			"host:composer-send",

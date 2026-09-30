@@ -8,8 +8,9 @@
  *   await mock.close();
  *
  * A reply is a string (text), { text }, or { tool, args } (one tool call). { text, stream: { everyMs,
- * pieceChars } } sends the text a piece at a time, like a real model typing its answer. The callback
- * may be async. It gets:
+ * pieceChars } } sends the text a piece at a time, like a real model typing its answer.
+ * { httpStatus, error } refuses the request: that HTTP status with an OpenAI-style error body
+ * ({ error: { message, ... } }). The callback may be async. It gets:
  *   - payload: the request body;
  *   - lastUser: the text of the last user message;
  *   - toolResult: { content } when the last message is a tool result, else null;
@@ -54,6 +55,11 @@ export async function startMockModel(respond) {
 			reply = await respond(ctx);
 		} catch (e) {
 			res.writeHead(500).end(String(e));
+			return;
+		}
+		if (reply && typeof reply === "object" && typeof reply.httpStatus === "number") {
+			const error = typeof reply.error === "string" ? { message: reply.error } : (reply.error ?? { message: "refused" });
+			res.writeHead(reply.httpStatus, { "content-type": "application/json" }).end(JSON.stringify({ error }));
 			return;
 		}
 		res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });

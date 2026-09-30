@@ -163,6 +163,13 @@ import { SubagentTemplatesStore, pickTemplatePrompt, type SubagentTemplate } fro
 import { ApprovalRulesStore, extractTargetPath, type ApprovalRule } from "./approval-rules.js";
 import { ComposerDraftsStore } from "./composer-drafts.js";
 import { readPermissionFromSession } from "./permission-preset.js";
+import {
+	FAST_MODE_ENTRY,
+	FAST_MODE_EXT_NAME,
+	fastModeEntryData,
+	fastModeExtension,
+	fastModeRegistry,
+} from "./fast-mode.js";
 import { createWorkspaceSnapshot, restoreWorkspaceSnapshot } from "./workspace-snapshot.js";
 import { isPathInsideRoot } from "./approval-rules.js";
 import {
@@ -431,6 +438,8 @@ export class QuiesceRejectedError extends Error {
 /** 自家内联扩展名（组合模板渲染，见 prompt-composer.ts）。SDK 以其
  *  "<inline:<name>>" 作为 path；扩展白名单/禁用过滤必须放行它。 */
 const INLINE_PERSONA_EXT = "<inline:pi-webui-persona>";
+/** fast-mode: the hidden extension that sends ChatGPT's fast tier (see fast-mode.ts). */
+const INLINE_FAST_MODE_EXT = `<inline:${FAST_MODE_EXT_NAME}>`;
 
 /** Pi 包文档路径（composer 的 {{pi_docs}} 自动内容用）。随安装位置解析一次。 */
 const PI_DOC_PATHS = (() => {
@@ -1945,6 +1954,9 @@ export interface Conversation {
 	 *  assistant 消息（重试成功则用户永远看不到，耗尽才永久标红），前端改显
 	 *  温和的「正在重试」条，而非一闪而过的红色报错。 */
 	retryState?: { attempt: number; maxAttempts: number; delayMs: number; errorMessage: string } | null;
+	/** fast-mode: retryState is the placeholder for a refused fast reply being retried at normal
+	 *  speed (cleared by its reply, or at agent_settled if the retry never started). */
+	fastRetrying?: boolean;
 	/** AI 主动调 compact_context 登记的压缩请求（agent_settled 结算时执行）。 */
 	pendingCompaction?: PendingCompaction | null;
 	/** 上下文压缩进行中（compaction_start 已到、compaction_end 未到）。置位期间
@@ -2096,6 +2108,16 @@ function runningRef(conv: Conversation): { sessionFile: string; title: string; c
 	}
 }
 
+/** fast-mode: this run ended on a refused fast reply that the fast-mode extension retries at
+ *  normal speed right away — the same turn going on, like the SDK's own auto-retry. */
+function fastRetryAfter(conv: Conversation, messages: readonly unknown[]): boolean {
+	try {
+		return fastModeRegistry.retryPending(conv.session.sessionManager, messages);
+	} catch {
+		return false; // runtime being replaced
+	}
+}
+
 /** carry-on: keep the live list of working chats up to date from the SDK events. */
 function trackRunning(conv: Conversation, event: AgentSessionEvent): void {
 	const list = runningChats;
@@ -2112,8 +2134,8 @@ function trackRunning(conv: Conversation, event: AgentSessionEvent): void {
 	try {
 		if (event.type === "agent_start") list.start(ref);
 		else if (event.type === "agent_end") {
-			// A failed call the SDK retries is the same turn going on.
-			if (!event.willRetry) list.finish(ref.sessionFile);
+			// A failed call the SDK retries is the same turn going on (so is a refused fast reply).
+			if (!event.willRetry && !fastRetryAfter(conv, event.messages)) list.finish(ref.sessionFile);
 		} else if (event.type === "tool_execution_start")
 			list.toolStart(ref, {
 				id: event.toolCallId,
@@ -4153,7 +4175,8 @@ export class ClientSession {
 					// 匹配 —— isExtensionDisabled / isExtensionEnabled 同时比对 npm:<pkg> 候选键。
 					extensionsOverride: (res) => {
 						// 自家内联扩展（灵魂替换）是基础设施，不参与白名单/禁用过滤。
-						const keepOwn = (e: { path: string }) => !e.path.startsWith(INLINE_PERSONA_EXT);
+						const keepOwn = (e: { path: string }) =>
+							e.path === INLINE_FAST_MODE_EXT || !e.path.startsWith(INLINE_PERSONA_EXT);
 						if (apply && apply.enabledExtensions.length > 0) {
 							const set = new Set(apply.enabledExtensions);
 							return {
@@ -4243,6 +4266,9 @@ export class ClientSession {
 								});
 							},
 						},
+						// fast-mode: ChatGPT's fast tier for chats with "⚡ Fast" on (openai-codex only),
+						// normal speed for 15 minutes after a refusal. State lives in fastModeRegistry.
+						{ name: FAST_MODE_EXT_NAME, hidden: true, factory: fastModeExtension() },
 					],
 				},
 			});
@@ -5933,7 +5959,12 @@ export class ClientSession {
 				// 可重试错误：SDK 随后发 auto_retry_start 并把末尾 error 消息从
 				// state 摘掉。这里先立占位，让本次立即 flush 的快照就不含瞬时红错
 				// ——否则快照先画红、摘掉后又消失，即「红色报错一闪而过」。
-				if (event.willRetry) {
+				// fast-mode: a refused fast reply is retried at normal speed right after this (the fast-mode
+				// extension's agent_before_settle) — the same turn going on, treated like the SDK's retry.
+				const fastRetry = !event.willRetry && fastRetryAfter(conv, event.messages);
+				const willRetry = event.willRetry || fastRetry;
+				conv.fastRetrying = fastRetry;
+				if (willRetry) {
 					let errorMessage = "";
 					for (let i = event.messages.length - 1; i >= 0; i--) {
 						const m = event.messages[i] as { role?: unknown; errorMessage?: unknown };
@@ -5941,6 +5972,10 @@ export class ClientSession {
 							errorMessage = m.errorMessage;
 							break;
 						}
+					}
+					if (fastRetry) {
+						const reason = fastModeRegistry.view(conv.session.sessionManager, conv.session.agent.state.model)?.reason;
+						errorMessage = `${reason ?? "ChatGPT refused fast mode"}; normal speed for now`;
 					}
 					conv.retryState = { attempt: 0, maxAttempts: 0, delayMs: 0, errorMessage };
 				} else {
@@ -5965,7 +6000,7 @@ export class ClientSession {
 				this.scheduleSessionsRefresh();
 				this.refreshConversationTitle(conv);
 				// 本轮真的结束了（不是重试中间态）：没在看的对话点绿灯（「轮到你了」）。
-				if (!event.willRetry) this.markRecentWaiting(conv);
+				if (!willRetry) this.markRecentWaiting(conv);
 				// 内联标记不在此兜底扫最后一条 assistant：每条气泡结束已走 message_end
 				// 即时解析（含中间文本块）；这里再扫会把最后一条标记重复执行（todo 重复建号）。
 
@@ -5989,7 +6024,8 @@ export class ClientSession {
 				// 子代理运行报错（provider 400 / 超时等）→ 通知主对话，让用户/AI 知道
 				// 拿回的结果可能是空或无意义的（否则子代理只是安静地停在「done」，
 				// 主对话永远收不到失败信号）。错误文本变化时允许再次通知（去重）。
-				if (conv.isSubagent) {
+				// fast-mode: not while a refused fast reply is being retried (it is not the run's outcome).
+				if (conv.isSubagent && !fastRetry) {
 					const { error } = this.subagentRunOutcome(conv);
 					if (error && error !== conv.subagentErrorNotified) {
 						conv.subagentError = error;
@@ -6006,7 +6042,7 @@ export class ClientSession {
 					this.emitConversations();
 				}
 				// Goal review hook lives in GoalService.onAgentEnd(conv, false).
-				this.goalSvc.onAgentEnd(conv, false);
+				if (!fastRetry) this.goalSvc.onAgentEnd(conv, false);
 				// Deferred settings reload: settings (system prompt / skills /
 				// extensions) changed while the run was streaming — applying now
 				// would have torn down the in-flight run.
@@ -6037,7 +6073,7 @@ export class ClientSession {
 					// sidecar 只是加速 + 防压缩丢失，失败了下次重算
 				}
 				// AI 主动上下文压缩：若本轮调过 compact_context，在回合结算后异步执行压缩
-				if (!event.willRetry && !aborted && conv.pendingCompaction && !this.disposed) {
+				if (!willRetry && !aborted && conv.pendingCompaction && !this.disposed) {
 					const pending = conv.pendingCompaction;
 					conv.pendingCompaction = null;
 					setTimeout(() => {
@@ -6047,12 +6083,18 @@ export class ClientSession {
 					}, 50);
 				}
 				// 本轮真正结束且不再重试：立即向客户端广播最新会话状态（流式状态及时复位）
-				if (!event.willRetry) {
+				if (!willRetry) {
 					this.emitConversations();
 				}
 				break;
 			}
 			case "agent_settled": {
+				// fast-mode: the refused fast reply was not retried after all (stopped, or pi retried it
+				// itself) — drop its "retrying" placeholder so the error and the Retry button show.
+				if (conv.fastRetrying) {
+					conv.fastRetrying = false;
+					conv.retryState = null;
+				}
 				// 记录本会话自己的 Base 基线：currentBaseTokens 必须传 conv（否则串成
 				// 活跃会话的基线）；快照未就绪时保持 undefined，宁可少补偿也不把 0 钉死。
 				const settledBaseTokens = this.currentBaseTokens(conv);
@@ -6505,6 +6547,9 @@ export class ClientSession {
 			permission: conv
 				? (conv.permissionPreset ?? this.settingsSvc.current.defaultPermissionPreset ?? "workspace-write-never")
 				: null,
+			// fast-mode: the "⚡ Fast" button (null = this model has no fast mode, no button). Always present:
+			// snapshot deltas are merged shallowly, a missing key would leave the last chat's button behind.
+			fastMode: conv ? fastModeRegistry.view(conv.session.sessionManager, model) : null,
 			// 未发送草稿只跟全量快照走（切会话/new_chat/get_state）：增量 delta 里
 			// 这个 key 必须整个缺席（不能是显式的 undefined——前端 delta 合并是
 			// {...ui, ...d.state} 整批覆盖，显式 undefined 会把上次全量带回的草稿洗掉）。
@@ -12708,6 +12753,8 @@ export class ClientSession {
 			// branch with the ModelRuntime default model otherwise.
 			const prevModel = this.session.agent.state.model ?? null;
 			const prevThinking = this.session.thinkingLevel ?? null;
+			// fast-mode: the re-asked branch is a new session id; it keeps the chat's choice.
+			const prevFast = fastModeRegistry.isOn(this.session.sessionManager);
 			const result = await this.runtime.fork(entryId);
 			if (result.cancelled) {
 				this.emit({
@@ -12736,6 +12783,15 @@ export class ClientSession {
 					this.session.setThinkingLevel(prevThinking as Parameters<AgentSession["setThinkingLevel"]>[0]);
 				} catch {
 					// model no longer supports previous thinking level
+				}
+			}
+			if (prevFast) {
+				try {
+					const sm = this.session.sessionManager;
+					fastModeRegistry.setOn(sm, true);
+					sm.appendCustomEntry(FAST_MODE_ENTRY, fastModeEntryData(sm, true));
+				} catch {
+					// best effort: the chat is just back to normal speed
 				}
 			}
 			await this.prompt(trimmed, attachments);
@@ -13505,6 +13561,27 @@ export class ClientSession {
 				level: "error",
 				text: `Failed to switch thinking level: ${(err as Error).message}`,
 				textEn: `Failed to switch thinking level: ${(err as Error).message}`,
+			});
+		}
+		this.flushSnapshot();
+	}
+
+	/** fast-mode: turn "⚡ Fast" on/off for the chat in view (ChatGPT fast-mode models only; the
+	 *  extension never sends the tier to other models anyway). Saved with the chat; any toggle clears
+	 *  the "normal speed for now" cooldown, so off-and-on tries fast again right away. */
+	setFastMode(on: boolean): void {
+		const conv = this.conv;
+		if (!conv) return;
+		try {
+			const sm = conv.session.sessionManager;
+			fastModeRegistry.setOn(sm, on === true);
+			sm.appendCustomEntry(FAST_MODE_ENTRY, fastModeEntryData(sm, on === true));
+		} catch (err) {
+			this.emit({
+				type: "notice",
+				level: "error",
+				text: `Failed to switch fast mode: ${(err as Error).message}`,
+				textEn: `Failed to switch fast mode: ${(err as Error).message}`,
 			});
 		}
 		this.flushSnapshot();

@@ -106,6 +106,7 @@ server/
 ├── file-transfer-routes.ts # 见文件头注释
 ├── office-parse.ts         # Office 文档纯文本提取（docx / xlsx，供预览与附件走 file_content 用）
 ├── composer-drafts.ts      # 未发送输入框草稿单中心文件（<dataDir>/composer-drafts.json，issue #166）
+├── fast-mode.ts            # fast-mode: ChatGPT fast tier per chat (model list, hidden extension, refusal cooldown + one retry)
 ├── webui-context.ts        # 扩展 UI 桥（WebUIContext：widgets/statuses/dialog → 浏览器）
 ├── themes.ts               # 主题管理（listThemes/resolveThemeFile）
 ├── tabs.ts                 # 实例能力页签选择（Chat / Terminal / Git / Search / …）
@@ -275,6 +276,7 @@ web/src/
 | `BgTasksModal.tsx` | 后台任务弹窗：AI 启动的监听端口进程列表 |
 | `SchedulerPanel.tsx` | 定时任务面板（配 scheduler-tasks.ts） |
 | `ModelThinking.tsx` | 模型 + 思考强度下拉（按服务商筛选 + 顶部搜索） |
+| `FastModeButton.tsx` | fast-mode: the chat's Fast button (ChatGPT fast-mode models only) |
 | `GlobalSearchModal.tsx` | 全局搜索弹窗（Ctrl+K）：搜历史对话/最近项目/工作区文件名 |
 | `LocaleModal.tsx` | 语言切换弹窗 |
 | `PluginView.tsx` | 插件视图宿主：薄 React 壳 + 动态 import client bundle |

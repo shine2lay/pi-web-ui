@@ -22,4 +22,6 @@
 // 26: optimistic-send - `prompt` carries a window-made id and the server answers it with
 //     `prompt_ack` (after the snapshot that holds the message, or on any refusal). Old pages
 //     never see the ack and would keep a faded "Sending" copy of every message they send.
-export const PROTOCOL_VERSION = 26;
+// 27: fast-mode - the snapshot carries the chat's Fast button (UiState.fastMode) and pages send
+//     `set_fast_mode`. Old pages never show the button; an old server would drop the toggle.
+export const PROTOCOL_VERSION = 27;

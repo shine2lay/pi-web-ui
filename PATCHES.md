@@ -62,6 +62,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | no-prompt-templates          | `local`        | `web/src/components/PromptTemplates.tsx` (removed), `App.tsx`, `ChatInput.tsx`, `MessageList.tsx`, `ui-slots.ts`, `i18n.tsx`, `locales/`, `styles.css`, `tests/prompt-templates-test.mjs` (removed) |
 | no-project-controls          | `local`        | `web/src/components/ProjectPicker.tsx` (removed), `TopBar.tsx`, `LeftPanel.tsx`, `App.tsx`, `ui-slots.ts`, `i18n.tsx`, `locales/`, `styles.css`, `tests/unit/` |
 | no-quick-phrases             | `local`        | `web/src/quick-phrases.ts` (removed), `ChatInput.tsx`, `App.tsx`, `SettingsModal.tsx`, `i18n.tsx`, `locales/`, `styles.css`, `tests/unit/`, `tests/lib/phone-checks.mjs` |
+| fast-mode                    | `local`        | `server/fast-mode.ts` (new), `agent-service.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (27), `web/src/components/FastModeButton.tsx` (new), `ChatInput.tsx`, `App.tsx`, `SettingsModal.tsx`, `ui-slots.ts`, i18n + `locales/`, `styles.css`, `tests/fast-mode-test.mjs`, `tests/lib/mock-model.mjs`, `tests/tools/fast-mode-*`, `tests/unit/` |
 
 ---
 
@@ -3324,3 +3325,120 @@ seeding effect or the Settings section, drop those changes; if it adds new `quic
 defaults or callers on the page, leave them out. Upstream changes to the server's quick-phrase fields
 still come in as usual. Keep the `.quick-chip` rules in `styles.css` while the model picker uses the
 class.
+
+## fast-mode
+
+**Status**: `local`
+**Baseline**: v0.96.1
+
+**Why** (owner, 2026-09-29): the owner wants speed on demand, chat by chat. OpenAI's fast mode
+(the `service_tier` of a request) makes replies come faster and, with ChatGPT sign-in, uses the plan's
+limits 2.5× quicker at no extra money. So a chat on a ChatGPT (Codex) model that has fast mode gets a
+"⚡ Fast" button. Decided with the owner: ChatGPT sign-in (`openai-codex`) only, never Claude or any other
+provider; per chat, off in every new chat; when ChatGPT refuses fast mode the reply still comes at normal
+speed.
+
+### Changes
+
+1. **The model list and the extension** (`server/fast-mode.ts`, new):
+   - `FAST_MODE_MODELS`: the models with fast mode, from OpenAI's Codex speed page
+     (<https://developers.openai.com/codex/speed>): gpt-6.1-sol, gpt-6-astra, gpt-6-sol, gpt-6-luna,
+     gpt-5.6-sol, gpt-5.6-luna, gpt-5.5. Only for the `openai-codex` provider (`fastModeSupported`).
+   - A hidden in-process extension (`fastModeExtension`, added next to `pi-webui-persona` in
+     `extensionFactories`, kept by the extension whitelist/disable filter). Its
+     `before_provider_request` adds `service_tier: "priority"` (`fastTierFor`) when the chat has fast
+     on, its model is on the list, the request is for that model, and fast isn't cooling down.
+   - Refusals: `after_provider_response` notes the HTTP status of a fast request (the SSE transport
+     reports one; the WebSocket transport, pi's default, only gives the error text). At `message_end`
+     a failed fast reply that is a refusal (`fastRefusalReason`: a 4xx other than 401, or an error
+     text that isn't about sign-in, a too-long chat or server trouble) puts the chat on "normal speed
+     for now" for 15 minutes with the reason "ChatGPT refused fast mode (HTTP n)", and a server log line
+     `[fast-mode] …` (no request contents).
+   - Quiet refusals: ChatGPT may also take a fast request and answer it at normal speed (a plan without
+     fast mode ignores the tier; a busy fast tier downgrades it). pi prices each reply by the tier
+     ChatGPT reports back, so a fast reply priced at the normal rate (`replyPriceMultiplier` < 1.5) also
+     means "normal speed for now" for 15 minutes, reason "ChatGPT answered at normal speed (fast mode
+     may not be in your plan, or is busy)", without a retry (the reply is fine). Only on GPT-5.x
+     (`fastPriceTells`): GPT-6 models report a fast reply as `fast`, which pi 0.87 prices like a
+     normal one, so there the price can't tell.
+   - The one retry: at `agent_before_settle` the extension hides the refused reply from the model (a
+     `context_edit`, as pi's own auto-retry does) and continues the run, so the reply comes at normal
+     speed, and the user's message is neither lost nor sent twice. Not when the user stopped the run,
+     when pi already retried it itself (rate limits: pi's auto-retry, which then goes at normal speed
+     because of the cooldown), or when the model would see two replies in a row.
+   - `FastModeRegistry`: per-chat state keyed by the session id (a chat can move between windows).
+     The choice is saved in the session file as a custom entry `pi-web-ui/fast-mode` `{ on, sessionId }`;
+     only an entry naming the chat's own session id counts, so copies of a chat (which copy the
+     entries) start off. New chats, queue chats and helper (subagent) chats have no entry: off.
+2. **Server wiring** (`server/agent-service.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` 26
+   → 27):
+   - `set_fast_mode {on}` → `ClientSession.setFastMode`: saves the entry, and any toggle clears the
+     cooldown (off and on again tries fast right away). DSH has no handler, so no button there.
+   - The snapshot's `fastMode` (`UiFastMode {on, coolingUntil?, reason?}` or `null` = no button: a
+     model without fast mode, a Claude chat). It is always present, because snapshot deltas are merged
+     shallowly.
+   - `agent_end`: a run that ends on a refused fast reply about to be retried is treated like pi's
+     auto-retry (`willRetry`): no red error flash (the "retrying" note says "ChatGPT refused fast mode
+     (HTTP n); normal speed for now"), the chat doesn't count as done, no goal review, no helper-chat
+     error notice, no compaction yet. `agent_settled` drops that note if the retry didn't happen.
+   - Edit-and-reask (a new session id for the same chat) carries the chat's choice over.
+3. **The button** (`web/src/components/FastModeButton.tsx`, new, `ChatInput.tsx`, `App.tsx`,
+   `ui-slots.ts`, `SettingsModal.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`):
+   - A new host action `host:composer-fast` (order 135, between the thinking picker and the DSH
+     controls), so Layout settings can move or hide it; Settings lists it for pi chats only.
+   - A "Fast" chip with a lightning-bolt icon by the model and thinking pickers: grey when off,
+     highlighted when on, dimmed and dashed with "Normal speed for now" while cooling down.
+     Tip: "Fast mode: faster replies; uses your ChatGPT plan's limits 2.5× quicker", plus the reason and
+     when it tries fast again while cooling down. The tip opens upward; on a phone it spans the tool row.
+   - On a phone the chip is in the same tool row of the message box (icon only, 44 px), like the model
+     and thinking chips: this fork has no "+" menu there.
+4. **Tests, tools and docs**: `tests/lib/mock-model.mjs` can refuse a request (`{ httpStatus, error }`);
+   `tests/unit/ui-slots.test.ts` expects the new host action; `docs/directory-reference.md` lists
+   `server/fast-mode.ts` and `FastModeButton.tsx`. Two live tools (they use the owner's ChatGPT sign-in and print numbers and model ids
+   only, never requests or replies): `tests/tools/fast-mode-models.mjs` lists the account's ChatGPT
+   models and their speed tiers; `tests/tools/fast-mode-probe.mjs` (with `fast-mode-probe-ext.ts`)
+   sends a few tiny one-off messages with fast off and on through this extension and prints the
+   price multiplier pi applied, tokens per second and the button's reason.
+
+### How it was checked
+
+- `tests/unit/fast-mode.test.ts` (32 tests): which chats get the button (openai-codex models from the
+  list only, never Claude or other providers even with a listed id); the rewrite only when on,
+  supported and not cooling down, never for a side request to another model; a refusal gives the
+  reason, 15 minutes at normal speed, one retry, then fast again; off-and-on clears the cooldown;
+  errors that aren't about the tier (sign-in, too-long chat, server trouble, a normal-speed request)
+  start nothing, and a retry that fails too drops the cooldown; a fast reply priced at the normal
+  rate means normal speed for now (GPT-5.x only, never on GPT-6); the retry drafts (stopped run,
+  pi's own retry, two replies in a row); the extension end to end through its hooks; the saved choice
+  (new chat off, survives the file being opened again, latest wins, a copy starts off).
+- `tests/unit/fast-mode-button.test.ts` (7 tests): no button without fast mode; off / on / cooling
+  looks and tips; a click sends `set_fast_mode`; disabled while disconnected.
+- `tests/fast-mode-test.mjs` (sealed browser test, a stand-in model playing ChatGPT and Claude,
+  checking only whether each request carried the tier): the button on a ChatGPT model, off, with its
+  tip; on sends `priority`; still on after a reload and after a server restart; a refusal (HTTP 400)
+  brings the reply once at normal speed with no error left, the button says "Normal speed for now"
+  with the reason, the next message goes at normal speed, off-and-on sends fast again; a Claude model:
+  no button and no tier, and back on ChatGPT the button is back, still on; a new chat starts off; on
+  a phone the chip is 44 px, a tap turns it on, no button on Claude; no page errors.
+- Live, before landing (`tests/tools/fast-mode-probe.mjs` and `fast-mode-models.mjs`, the owner's
+  account, 2026-09-29): the owner's ChatGPT sign-in is on the **Free plan**, whose model list offers
+  fast mode on no model; gpt-5.6-sol, gpt-6-sol, gpt-6-astra and gpt-6.1-sol aren't available with it
+  at all ("not supported when using Codex with a ChatGPT account"), gpt-5.5 answers "no access".
+  On gpt-5.6-luna and gpt-6-luna the `priority` tier is accepted and ignored: ChatGPT reports
+  `default`, pi prices the reply at the normal rate and tokens per second match fast off (about
+  50-56 both ways), so on gpt-5.6-luna the button goes to "normal speed for now". The refusal path,
+  live: the tier `fast` on gpt-5.6-luna got HTTP 400 "Unsupported service_tier: fast", the reply came
+  once at normal speed (HTTP 200) and the button said "ChatGPT refused fast mode (HTTP 400)". A real
+  speed-up could not be measured on this plan.
+- `TZ=UTC scripts/check.sh`, the build and the full sealed E2E run.
+
+**When syncing**: keep `server/fast-mode.ts` and its entry in `extensionFactories` (and in the
+`keepOwn` filter). If upstream changes the `agent_end` handler, keep the `willRetry || fastRetry`
+treatment and the `agent_settled` cleanup. Keep `fastMode` in `buildLightState` always present. If pi
+changes its hooks (`before_provider_request`, `after_provider_response`, `message_end`,
+`agent_before_settle`), its Codex error texts or how it prices `service_tier`, re-run the unit and
+browser tests and a live check (a few tiny messages with fast off and on: the recorded cost per token
+doubles when the tier was used). **When OpenAI adds or changes models with fast mode, update
+`FAST_MODE_MODELS`** (and `fastTierFor` if a model needs another tier value);
+`node tests/tools/fast-mode-models.mjs` shows which models the account has and which offer fast mode.
+If pi starts pricing the `fast` tier GPT-6 models report, let `fastPriceTells` cover them too.

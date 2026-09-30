@@ -1532,6 +1532,15 @@ export function App() {
 		// so the object identity survives token deltas and ChatInput's memo holds.
 		[model, thinkingLevel, availableThinkingLevels],
 	);
+	// fast-mode: the chat's Fast button, rebuilt only when one of its values changes.
+	const hasFast = chat.state?.fastMode != null;
+	const fastOn = chat.state?.fastMode?.on === true;
+	const fastUntil = chat.state?.fastMode?.coolingUntil;
+	const fastReason = chat.state?.fastMode?.reason;
+	const fastMode = useMemo(
+		() => (hasFast ? { on: fastOn, coolingUntil: fastUntil, reason: fastReason } : null),
+		[hasFast, fastOn, fastUntil, fastReason],
+	);
 
 	const createShell = useCallback(() => {
 		if (!chat.ready || chat.terminals.length !== 0) return false;
@@ -2071,6 +2080,7 @@ export function App() {
 							messages={chat.state?.messages ?? EMPTY_MESSAGES}
 							slashCommands={chat.slashCommands}
 							modelState={modelState}
+							fastMode={fastMode}
 							models={chat.models}
 							modelsLoading={chat.modelsLoading}
 							providerKeys={chat.providerKeys}

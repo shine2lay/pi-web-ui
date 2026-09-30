@@ -31,6 +31,7 @@ import { isKeyboardUp, subscribeKeyboard } from "../mobile-viewport";
 import { groupByAlign } from "../ui-slots";
 
 import { ModelThinking } from "./ModelThinking";
+import { FastModeButton } from "./FastModeButton";
 import { DshPresetBar, type DshPresetInfo } from "./DshPresetBar";
 import { DshPermissionBar } from "./DshPermissionBar";
 import type { DshPermissionOption, UiAgentPreset } from "../types";
@@ -74,6 +75,8 @@ interface ChatInputProps {
 	} | null;
 	models: ModelInfo[];
 	modelsLoading: boolean;
+	/** fast-mode: the chat's Fast button (null/absent = this model has no fast mode, no button). */
+	fastMode?: UiState["fastMode"];
 	/** Files/folders attached via the right panel / preview, waiting to be sent. */
 	attachments: {
 		path: string;
@@ -156,6 +159,7 @@ export const ChatInput = memo(function ChatInput({
 	modelState,
 	models,
 	modelsLoading,
+	fastMode,
 	attachments,
 	onRemoveAttachment,
 	onAddImageFiles,
@@ -1379,6 +1383,7 @@ export const ChatInput = memo(function ChatInput({
 				compact
 			/>
 		),
+		"host:composer-fast": fastMode ? <FastModeButton fast={fastMode} disabled={!connected} /> : null,
 		"host:composer-dsh-perm":
 			dshPermOptions && dshPermOptions.length > 0 && dshPermDefault !== undefined ? (
 				<DshPermissionBar
@@ -1673,6 +1678,7 @@ export const ChatInput = memo(function ChatInput({
 									defaultModel={defaultModel}
 									compact
 								/>
+								{fastMode && <FastModeButton fast={fastMode} disabled={!connected} />}
 								{/* DSH 引擎：权限 + 模式下拉（思考强度右侧，只留按钮）。 */}
 								{dshPermOptions && dshPermOptions.length > 0 && dshPermDefault !== undefined && (
 									<DshPermissionBar

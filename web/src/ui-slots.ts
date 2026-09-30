@@ -615,6 +615,16 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		order: 130,
 		align: "start",
 	},
+	// fast-mode: the chat's Fast button (ChatGPT fast-mode models only; renders nothing elsewhere).
+	{
+		id: "host:composer-fast",
+		slot: "composer.actions",
+		labelKey: "fastMode",
+		icon: "\u26a1",
+		kind: "action",
+		order: 135,
+		align: "start",
+	},
 	{
 		id: "host:composer-dsh-perm",
 		slot: "composer.actions",

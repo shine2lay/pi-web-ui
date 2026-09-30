@@ -2706,6 +2706,8 @@ export function SettingsModal({
 									const entries = (uiSlots[slot] ?? []).filter(
 										(e) =>
 											(isDsh || (e.id !== "host:composer-dsh-perm" && e.id !== "host:composer-dsh-preset")) &&
+											// fast-mode: pi chats only (DSH has no Fast button).
+											(!isDsh || e.id !== "host:composer-fast") &&
 											!HIDDEN_FROM_LAYOUT_ITEM_IDS.has(e.id),
 									);
 									const q = uiLayoutFilter.trim().toLowerCase();

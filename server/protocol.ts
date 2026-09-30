@@ -95,6 +95,16 @@ export interface UiModelInfo {
 	vision: boolean;
 }
 
+/** fast-mode: the "⚡ Fast" button of a ChatGPT chat (see UiState.fastMode). */
+export interface UiFastMode {
+	/** The chat's saved choice. */
+	on: boolean;
+	/** Epoch ms: ChatGPT refused fast mode, so the chat runs at normal speed until then. */
+	coolingUntil?: number;
+	/** Why, e.g. "ChatGPT refused fast mode (HTTP 400)". */
+	reason?: string;
+}
+
 /** Platform service manager supervising this instance: someone restarts the
  *  process after it exits. Detected at boot by server/launch-origin.ts. */
 export type ServiceSupervisor = "launchd" | "systemd" | "windows-watchdog";
@@ -363,6 +373,10 @@ export interface UiState {
 	/** DSH 当前会话的权限预设值（read-only/workspace-write-never/danger-full-access/custom；
 	 *  pi 引擎不填。null = 运行时未就绪/legacy）。 */
 	permission?: string | null;
+	/** fast-mode: the chat's "⚡ Fast" button (ChatGPT fast tier). null/absent = no button (the model
+	 *  has no fast mode, or not a pi chat). on = the chat's saved choice. coolingUntil (epoch ms) and
+	 *  reason = ChatGPT refused fast mode, so the chat runs at normal speed until then. */
+	fastMode?: UiFastMode | null;
 	/**
 	 * Thinking levels the CURRENT model actually supports (SDK clamps any
 	 * request outside this set). The UI must only offer these — selecting an
@@ -881,6 +895,8 @@ export type ClientMessage =
 	/** 清除全局默认模型（新项目回落到 SDK 默认）。 */
 	| { type: "clear_default_model" }
 	| { type: "set_thinking"; level: string }
+	/** fast-mode: turn the chat's "⚡ Fast" on/off (ChatGPT fast-mode models; pi chats only). */
+	| { type: "set_fast_mode"; on: boolean }
 	| { type: "set_cwd"; path: string }
 	| { type: "complete_path"; path: string }
 	/** Create a folder for the cwd picker (absolute, ~- or session-relative).

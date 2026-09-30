@@ -9957,6 +9957,72 @@ div.chead[role="button"]:focus-visible,
 	position: relative;
 	z-index: 100;
 }
+/* fast-mode: the chat's Fast button (ChatGPT fast tier). Off = a plain chip with a grey \26A1;
+   on = highlighted; "normal speed for now" (ChatGPT refused fast mode) = dimmed, dashed.
+   Its tip opens upward and to the right (the bar sits at the bottom, the button near the left)
+   and wraps, so the cooling reason fits on a second line. */
+.fast-chip .fast-glyph {
+	flex-shrink: 0;
+	font-size: 13px;
+	line-height: 1;
+	filter: grayscale(1);
+	opacity: 0.65;
+}
+.fast-chip.on {
+	border-color: var(--accent);
+	background: var(--accent-soft);
+}
+.fast-chip.on .chip-sub {
+	color: var(--text);
+}
+.fast-chip.on .fast-glyph {
+	filter: none;
+	opacity: 1;
+}
+/* Dim the contents, not the chip: an opacity on the chip would make its tip see-through too. */
+.fast-chip.on.cooling {
+	border-style: dashed;
+	background: var(--chip-bg, var(--bg-elev2));
+}
+.fast-chip.on.cooling .chip-sub {
+	color: var(--text-faint);
+}
+.fast-chip.on.cooling .fast-glyph {
+	filter: grayscale(1);
+	opacity: 0.6;
+}
+.fast-chip:disabled {
+	cursor: default;
+}
+.fast-chip:disabled > span {
+	opacity: 0.5;
+}
+.chip.fast-chip[data-tip]::after {
+	top: auto;
+	bottom: calc(100% + 8px);
+	left: 0;
+	right: auto;
+	text-align: left;
+	white-space: pre-line;
+	width: max-content;
+	max-width: min(440px, calc(100vw - 40px));
+}
+/* On a phone the chips are icons only and the Fast chip sits mid-row: from its own spot the tip
+   would run past the window's edge and be cut off, so it spans the tool row, just above it. */
+@media (max-width: 560px) {
+	.composer-tools {
+		position: relative;
+	}
+	.composer-tools .chip.fast-chip[data-tip] {
+		position: static;
+	}
+	.composer-tools .chip.fast-chip[data-tip]::after {
+		left: 0;
+		right: 0;
+		width: auto;
+		max-width: none;
+	}
+}
 .inputbox:focus-within {
 	border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
 	box-shadow:

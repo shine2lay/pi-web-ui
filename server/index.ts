@@ -1190,6 +1190,8 @@ export interface DispatchSession {
 	setDefaultModel?(modelId: string): Promise<void>;
 	clearDefaultModel?(): void;
 	setThinking(level: string): void;
+	/** fast-mode: the chat's Fast button (pi chats only; DSH has none). */
+	setFastMode?(on: boolean): void;
 	setCwd(path: string): Promise<void>;
 	/** 设置当前项目的额外工作区根（宿主侧多根，见 protocol 的 set_workspace_roots）。 */
 	setWorkspaceRoots(roots?: string[]): Promise<void>;
@@ -2507,6 +2509,9 @@ wss.on("connection", (ws) => {
 				break;
 			case "set_thinking":
 				cs.setThinking(msg.level);
+				break;
+			case "set_fast_mode":
+				cs.setFastMode?.(msg.on === true);
 				break;
 			case "set_cwd":
 				void cs.setCwd(msg.path);
