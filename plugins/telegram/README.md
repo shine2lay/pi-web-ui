@@ -9,8 +9,42 @@ stall while you're away from the browser:
 - a queued task that is stuck and needs you, with its 2-4 choices.
 
 You can answer on Telegram or in the browser. The first answer counts, and the other side
-catches up: the browser's dialog closes, and the Telegram message shows the answer and where it
-came from ("Answered on Telegram" / "Answered in the browser").
+catches up: the browser's dialog closes, and the Telegram message shrinks to one line with the
+answer and where it came from ("✅ Deploy · tooling: Now (on Telegram)").
+
+## How a message looks
+
+```
+❓ Deploy · from tooling              ← one line: what it is, and the chat it's from
+
+Deploy now with pi-web-deploy?        ← the question (a single question's header is the title)
+
+It restarts right away.               ← its detail, in italics
+
+Now                                   ← each choice in bold, its description under it
+Restart right away.
+
+📁 ~/projects/pi-web-ui · Open the chat
+```
+
+- Several questions in one ask show which one this is: **Colour** (1/3).
+- A stuck queued task opens with "📌 Task #26 needs you", with the task's title under it.
+- A chat's markdown and HTML show as Telegram's own formatting: bold, italics, `code`, code blocks,
+  links, lists (• and ◦), headings (bold), tables (lined up in a code block) and quotes. Other HTML
+  tags are dropped and their text kept.
+- Long technical text (code over 80 characters, JSON, long commands, big code blocks) goes in a
+  collapsed quote: tap it to open it.
+- If Telegram still can't read a message's formatting, it's sent again as plain text, so nothing is lost.
+
+When it's done, a message becomes one line and loses its buttons:
+
+```
+✅ Deploy · tooling: Now (on Telegram)
+⏹ Deploy · tooling: no longer waiting (the chat was closed)
+✅ Task #26 · Make it nice: Carry on (on Telegram)
+```
+
+The title in it links to the chat.
 
 ## Why no public address is needed
 
@@ -49,7 +83,7 @@ The plugin's status shows in the background list (📨 Telegram): polling, not s
 Long texts (plans, big commands) are cut to fit Telegram's limit; the link opens the chat for the rest.
 
 When something stops waiting (answered elsewhere, the chat was closed, pi restarted), its message
-is edited to say so, and its old buttons only answer "No longer waiting."
+shrinks to one line that says so, and its old buttons only answer "No longer waiting."
 
 ## When Telegram has a hiccup
 
@@ -83,6 +117,8 @@ normal behaviour.
 
 ## Tests
 
-- `npx vitest run tests/unit/plugin-telegram.test.ts`: the plugin against a fake Telegram.
+- `npx vitest run tests/unit/plugin-telegram.test.ts`: the plugin against a fake Telegram, how each
+  kind of message looks, and the formatting (thousands of random texts, checked to give only tags
+  Telegram takes, balanced).
 - `npm run build && scripts/sealed.sh node tests/telegram-answers-test.mjs`: the whole server with
   the plugin, a fake Telegram (`PI_WEB_TELEGRAM_API_BASE`) and the mock model; no real messages.

@@ -2686,6 +2686,16 @@ wanted needs-you notes to become questions with choices: pi-queue's `queue_stuck
      from the clock, so a fresh start never reuses an old message's;
    - waiting for new messages restarts every 25 s (was 50), so a dead connection is noticed sooner;
    - the status says which setting is missing ("add the bot token", "add your Telegram id").
+   Made easier to read (owner, 2026-09-29: the messages were cramped):
+   - a one-line head (icon, title, "from <chat>"; a stuck task: "📌 Task #N needs you" with the task's
+     title under it, from the new `Ask.task` that `stuckAsk` fills), a single question's header said
+     once, several questions as "<b>Header</b> (1/3)", blank lines between the question, its detail and
+     each described choice, and one footer line: "📁 folder · Open the chat";
+   - a chat's markdown and HTML become Telegram HTML (`toTelegramHtml`: only b, i, u, s, code, pre, a,
+     blockquote, always balanced; other tags dropped, their text kept); long technical text goes in a
+     collapsed quote; if Telegram still can't parse a text, it goes again as plain text (send and edit);
+   - finished messages shrink to one line: "✅ <title> · <chat>: <answer> (on Telegram)" or "⏹ … no
+     longer waiting (<reason>)"; messages sent before this keep working (their line comes from the old head).
 10. **A new window's background list has the plugins' lines at once** (`agent-service.ts` attach): the
     plugin providers are wired before `attachSink`, whose first push builds the list. Before, the
     plugins' lines (such as Telegram's status) were missing until one of them changed (upstream has this
@@ -2700,22 +2710,26 @@ pi-tldr (agents are told to ask with choices when they need the user).
 - Unit tests:
   - new: `asks.test.ts`, `stuck-asks.test.ts`, `plugin-asks.test.ts`, `plugin-telegram.test.ts` (the
     plugin against a fake Telegram; with the owner check taken out, the stranger test fails; retries,
-    no retry on a refusal, copies from a lost answer, clock refs, which setting is missing);
+    no retry on a refusal, copies from a lost answer, clock refs, which setting is missing; each kind
+    of message's layout, the one-line finals, the length budget, the markdown/HTML converter with
+    thousands of random texts checked for tags Telegram takes, balanced, and the plain-text fallback);
   - `chat-dialogs.test.ts` (the watcher), `task-queue.test.ts` (choices), `task-queue-panel.test.ts`
     (choice buttons, typed answer), `plugin-settings.test.ts` (the first secret reaches the plugin, and a
     window opened after a save sees the saved values: each fails without its half of point 8).
 - `tests/telegram-answers-test.mjs` (sealed server, fake Telegram via `PI_WEB_TELEGRAM_API_BASE`, mock model,
   real pi-queue from `PI_QUEUE_PKG`, no tokens):
-  1. A question reaches Telegram with its choices, chat, folder and link. A stranger's tap and text, and
-     the owner writing in a group, are ignored. The owner's tap answers the chat and closes the browser's
-     dialog; the message says "Answered on Telegram".
-  2. A question answered in the browser: the message says so, and its old buttons only say "No longer
-     waiting.".
+  1. A question reaches Telegram with its choices: a one-line head with its chat, the question and each
+     described choice apart, the header said once, and a footer with the folder and link. A stranger's tap
+     and text, and the owner writing in a group, are ignored. The owner's tap answers the chat and closes
+     the browser's dialog; the message shrinks to one line, "… Blue (on Telegram)".
+  2. A question answered in the browser: its message shrinks to one line that says so, and its old buttons
+     only say "No longer waiting.".
   3. Permission prompts: Approve on Telegram runs the command, Deny doesn't; one answered in the browser
-     updates its message.
-  4. The queue: the plan's approval pop-up is answered on Telegram. The task's own chat (no browser on it)
-     asks permission, then gets stuck with choices; both are answered on Telegram; the answer goes into
-     the task's chat and the task finishes.
+     shrinks its message to one line.
+  4. The queue: the plan's approval pop-up (its markdown shown as formatting) is answered on Telegram. The
+     task's own chat (no browser on it) asks permission, then gets stuck with choices ("Task #1 needs
+     you", the task's title under it); both are answered on Telegram; the answer goes into the task's
+     chat and the task finishes; the message shrinks to "✅ Task #1 · <title>: Settings (on Telegram)".
   5. No browser open at all: a question outlives the 30 s no-browser wait and, like the permission prompt
      after it, is answered on Telegram. With point 2's wait taken out, this case fails.
   6. The bot token is in no file the server wrote, nor in its output.

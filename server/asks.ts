@@ -59,6 +59,8 @@ export interface Ask {
 	/** Longer text shown above the choices (the command, a plan…). May be long. */
 	body?: string;
 	fields: AskField[];
+	/** A queued task that needs you (kind "stuck"): its number and title. */
+	task?: { id: number; title: string };
 }
 
 /** The answer to one field: the chosen values, and/or a typed text. */
@@ -408,6 +410,7 @@ export function stuckAsk(id: string, s: StuckAskInput, meta: AskMeta, now = Date
 		createdAt: now,
 		...meta,
 		title: `Task #${s.taskId} needs you: ${s.taskTitle}`,
+		task: { id: s.taskId, title: s.taskTitle },
 		fields: [
 			{
 				id: "answer",

@@ -259,6 +259,8 @@ describe("stuck queued tasks", () => {
 			meta,
 		);
 		expect(ask.title).toBe("Task #3 needs you: Ship it");
+		// The task's number and title, for a messenger that shows them apart (the Telegram plugin).
+		expect(ask.task).toEqual({ id: 3, title: "Ship it" });
 		expect(ask.fields[0]).toMatchObject({ text: "Which branch?", allowText: true, multi: false });
 		expect(ask.fields[0]?.options.map((o) => o.value)).toEqual(["main", "dev"]);
 		expect(stuckTextFrom([{ id: "answer", selected: ["dev"] }])).toBe("dev");

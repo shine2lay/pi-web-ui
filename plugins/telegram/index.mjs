@@ -51,11 +51,17 @@ export function escapeHtml(s) {
 		.replace(/"/g, "&quot;");
 }
 
-/** Cut to at most `max` characters, ending with "…" when something was cut. */
+/** Cut to at most `max` characters, ending with "…" when something was cut (never half an emoji). */
 export function cut(s, max) {
 	const t = String(s ?? "");
-	return t.length <= max ? t : `${t.slice(0, Math.max(0, max - 1)).trimEnd()}\u2026`;
+	if (t.length <= max) return t;
+	let end = Math.max(0, max - 1);
+	if (end > 0 && /[\uD800-\uDBFF]/.test(t[end - 1])) end--;
+	return `${t.slice(0, end).trimEnd()}\u2026`;
 }
+
+/** One line, at most `max` characters. */
+const oneLine = (s, max) => cut(String(s ?? "").replace(/\s+/g, " ").trim(), max);
 
 /** How long Telegram counts our own HTML (tags don't count, entities count as one). */
 export function visibleLength(html) {
@@ -81,6 +87,584 @@ export function chatLink(webAppAddress, sessionFile) {
 	} catch {
 		return null;
 	}
+}
+
+// ---------------------------------------------------------------------------
+// A chat's text (markdown, and some HTML) as Telegram HTML
+// ---------------------------------------------------------------------------
+
+/** Inline code, a command or a JSON blob longer than this goes in a collapsed quote. */
+export const QUOTE_OVER = 80;
+/** A code block longer than this goes in a collapsed quote too. */
+const PRE_MAX_CHARS = 600;
+const PRE_MAX_LINES = 12;
+
+// While a text is converted, its formatting is carried by characters from Unicode's private use
+// area. Every such character is removed from the text first, so nothing in a text can pass for one.
+const PRIVATE = /[\uE000-\uF8FF]/g;
+const OPEN = { b: "\uE000", i: "\uE001", u: "\uE002", s: "\uE003" };
+const CLOSE = { b: "\uE004", i: "\uE005", u: "\uE006", s: "\uE007" };
+const LINK_END = "\uE008";
+const MARKS = /[\uE000-\uE008]/g;
+const MARK_OF = new Map([
+	...Object.entries(OPEN).map(([tag, c]) => [c, { open: tag }]),
+	...Object.entries(CLOSE).map(([tag, c]) => [c, { close: tag }]),
+	[LINK_END, { close: "a" }],
+]);
+/** REF + n + REF_END stands for the n-th saved piece: code, a code block, a link, a URL, an escaped character. */
+const REF = "\uE00A";
+const REF_END = "\uE00B";
+const REF_RE = /\uE00A(\d+)\uE00B/g;
+const TOKEN_RE = /\uE00A(\d+)\uE00B|[\uE000-\uE008]/g;
+
+const ENTITIES = {
+	amp: "&",
+	lt: "<",
+	gt: ">",
+	quot: '"',
+	apos: "'",
+	nbsp: "\u00A0",
+	ndash: "\u2013",
+	mdash: "\u2014",
+	hellip: "\u2026",
+	lsquo: "\u2018",
+	rsquo: "\u2019",
+	ldquo: "\u201C",
+	rdquo: "\u201D",
+	laquo: "\u00AB",
+	raquo: "\u00BB",
+	bull: "\u2022",
+	middot: "\u00B7",
+	times: "\u00D7",
+	larr: "\u2190",
+	rarr: "\u2192",
+	copy: "\u00A9",
+	reg: "\u00AE",
+	trade: "\u2122",
+	deg: "\u00B0",
+	euro: "\u20AC",
+};
+
+/** &amp;, &#39;, &mdash;\u2026 as the characters they stand for (unknown ones stay as they are). */
+export function decodeEntities(s) {
+	return String(s ?? "").replace(/&(#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[a-zA-Z]{2,8});/g, (all, e) => {
+		if (e[0] !== "#") return ENTITIES[e.toLowerCase()] ?? all;
+		const cp = e[1] === "x" || e[1] === "X" ? Number.parseInt(e.slice(2), 16) : Number.parseInt(e.slice(1), 10);
+		const ok =
+			(cp === 9 || cp === 10 || (cp >= 32 && (cp < 0x7f || cp >= 0xa0))) &&
+			cp <= 0x10ffff &&
+			!(cp >= 0xd800 && cp <= 0xdfff) &&
+			!(cp >= 0xe000 && cp <= 0xf8ff);
+		return ok ? String.fromCodePoint(cp) : all;
+	});
+}
+
+/** A link Telegram opens: web, tg: or mailto: (anything else is left out, its text kept). */
+function safeHref(href) {
+	const h = decodeEntities(href ?? "").trim();
+	return h.length <= 2048 && /^(https?:\/\/|tg:\/\/|mailto:)[^\s<>"]+$/i.test(h) ? h : "";
+}
+
+const restoreSrc = (s, saved) => String(s).replace(REF_RE, (_, n) => saved[Number(n)]?.src ?? "");
+const restorePlain = (s, saved) =>
+	String(s)
+		.replace(REF_RE, (_, n) => {
+			const item = saved[Number(n)];
+			return item && item.kind !== "link" ? item.text : "";
+		})
+		.replace(MARKS, "");
+
+/** ``` and ~~~ blocks, saved whole (a block that never closes runs to the end). */
+function saveFences(t, keep) {
+	const lines = t.split("\n");
+	const out = [];
+	for (let i = 0; i < lines.length; i++) {
+		const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(lines[i]);
+		if (!m || (m[1][0] === "`" && m[2].includes("`"))) {
+			out.push(lines[i]);
+			continue;
+		}
+		const close = new RegExp(`^ {0,3}${m[1][0]}{${m[1].length},}\\s*$`);
+		let j = i + 1;
+		while (j < lines.length && !close.test(lines[j])) j++;
+		const text = lines.slice(i + 1, j).join("\n");
+		out.push(keep({ kind: "pre", text, src: lines.slice(i, j + 1).join("\n") }));
+		i = j;
+	}
+	return out.join("\n");
+}
+
+/** `code` on one line (a run of n backticks closes with n backticks). */
+function saveCodeSpans(t, keep, saved) {
+	return t.replace(/(`+)([^`\n]|[^`\n][^\n]*?[^`\n])\1(?!`)/g, (src, _ticks, body) => {
+		const inner = /^ .*\S.* $/.test(body) ? body.slice(1, -1) : body;
+		return keep({ kind: "code", text: restoreSrc(inner, saved), src });
+	});
+}
+
+/** HTML <pre> and <code>: their text, exactly. */
+function saveHtmlLiterals(t, keep, saved) {
+	const inner = (s) => decodeEntities(restoreSrc(s, saved).replace(/<\/?[a-zA-Z][^<>]*>/g, ""));
+	return t
+		.replace(
+			/<pre\b[^<>]*>([\s\S]*?)<\/pre\s*>/gi,
+			(src, body) => `\n${keep({ kind: "pre", text: inner(body).replace(/^\n+|\n+$/g, ""), src })}\n`,
+		)
+		.replace(/<code\b[^<>]*>([\s\S]*?)<\/code\s*>/gi, (src, body) => keep({ kind: "code", text: inner(body), src }));
+}
+
+// The HTML a chat may write. Any other <name> ("<sha>", "<folder>") is just text.
+const HTML_TAGS = new Set(
+	(
+		"a b blockquote br code del div em h1 h2 h3 h4 h5 h6 hr i img li ol p pre s span strong table tbody td th " +
+		"thead tr u ul"
+	).split(" "),
+);
+// These could be a placeholder too ("<label>", "<time>"): they count as HTML only with attributes,
+// or when the text also closes them.
+const MAYBE_HTML_TAGS = new Set(
+	(
+		"abbr address article aside big body button caption center cite col colgroup dd details dfn dl dt figcaption " +
+		"figure font footer form head header html iframe input ins kbd label main mark nav noscript option q samp " +
+		"script section select small strike style sub summary sup svg tfoot textarea time title tt var wbr"
+	).split(" "),
+);
+const HTML_TAG = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:[\s/][^<>]*)?)>/g;
+
+function attrOf(attrs, name) {
+	const m = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))`, "i").exec(attrs ?? "");
+	return m ? (m[1] ?? m[2] ?? m[3] ?? "") : "";
+}
+
+/** HTML tags become formatting marks, line breaks and list items; any other tag is dropped, its text kept. */
+function htmlToMarks(t, keep) {
+	const lists = [];
+	const src = t.replace(/<!--[\s\S]*?(?:-->|$)/g, "");
+	const closed = new Set([...src.matchAll(/<\/([a-zA-Z][a-zA-Z0-9]*)\s*>/g)].map((m) => m[1].toLowerCase()));
+	const opened = new Set([...src.matchAll(/<([a-zA-Z][a-zA-Z0-9]*)[\s/>]/g)].map((m) => m[1].toLowerCase()));
+	const isHtml = (name, attrs) =>
+		HTML_TAGS.has(name) ||
+		(MAYBE_HTML_TAGS.has(name) && (/[^\s/]/.test(attrs) || (opened.has(name) && closed.has(name))));
+	const out = src.replace(HTML_TAG, (all, slash, rawName, attrs) => {
+		const name = rawName.toLowerCase();
+		if (!isHtml(name, attrs)) return all;
+		const close = slash === "/";
+		switch (name) {
+			case "b":
+			case "strong":
+				return close ? CLOSE.b : OPEN.b;
+			case "i":
+			case "em":
+			case "cite":
+			case "dfn":
+			case "var":
+				return close ? CLOSE.i : OPEN.i;
+			case "u":
+			case "ins":
+				return close ? CLOSE.u : OPEN.u;
+			case "s":
+			case "strike":
+			case "del":
+				return close ? CLOSE.s : OPEN.s;
+			case "a": {
+				if (close) return LINK_END;
+				const href = safeHref(attrOf(attrs, "href"));
+				return href ? keep({ kind: "link", href, src: "" }) : "";
+			}
+			case "br":
+				return "\n";
+			case "p":
+				return "\n\n";
+			case "h1":
+			case "h2":
+			case "h3":
+			case "h4":
+			case "h5":
+			case "h6":
+				return close ? "\n\n" : "\n\n# ";
+			case "ul":
+			case "ol":
+				if (close) lists.pop();
+				else lists.push({ ordered: name === "ol", n: 0 });
+				return "\n";
+			case "li": {
+				if (close) return "";
+				const list = lists[lists.length - 1];
+				const pad = "  ".repeat(Math.max(0, lists.length - 1));
+				return list?.ordered ? `\n${pad}${++list.n}. ` : `\n${pad}- `;
+			}
+			case "hr":
+				return "\n\n---\n\n";
+			case "tr":
+				return close ? "\n" : "\n|";
+			case "td":
+			case "th":
+				return close ? " |" : " ";
+			case "img":
+				return attrOf(attrs, "alt");
+			case "address":
+			case "article":
+			case "aside":
+			case "blockquote":
+			case "body":
+			case "caption":
+			case "center":
+			case "dd":
+			case "details":
+			case "div":
+			case "dl":
+			case "dt":
+			case "figcaption":
+			case "figure":
+			case "footer":
+			case "head":
+			case "header":
+			case "html":
+			case "main":
+			case "nav":
+			case "section":
+			case "summary":
+			case "table":
+			case "tbody":
+			case "tfoot":
+			case "thead":
+				return "\n";
+			default:
+				return "";
+		}
+	});
+	return decodeEntities(out);
+}
+
+/** [text](url) links, <url> autolinks and bare URLs (which Telegram links by itself). */
+function saveLinks(t, keep, saved) {
+	return t
+		.replace(
+			/(!?)\[([^[\]\n]*)\]\(\s*<?([^\s<>()]*(?:\([^\s<>()]*\)[^\s<>()]*)*)>?(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\s*\)/g,
+			(src, bang, text, url) => {
+				if (bang) return text; // a picture: its description
+				const href = safeHref(restorePlain(url, saved));
+				if (!href) return text;
+				const shown = text.trim() ? text : keep({ kind: "url", text: href, src: href });
+				return `${keep({ kind: "link", href, src: "" })}${shown}${LINK_END}`;
+			},
+		)
+		.replace(/<((?:https?|tg):\/\/[^\s<>]+|mailto:[^\s<>]+)>/gi, (src, url) => keep({ kind: "url", text: url, src }))
+		.replace(/\bhttps?:\/\/[^\s<>"'`\uE000-\uF8FF]*[^\s<>"'`.,;:!?)\]}*_~\uE000-\uF8FF]/gi, (src) =>
+			keep({ kind: "url", text: src, src }),
+		);
+}
+
+const LETTER = "\\p{L}\\p{N}_";
+const EMPHASIS = [
+	[/\*\*(?=[^\s*])([^\n]*?[^\s*])\*\*/gu, "b", false],
+	[new RegExp(`(^|[^${LETTER}])__(?=[^\\s_])([^\\n]*?[^\\s_])__(?![${LETTER}])`, "gu"), "b", true],
+	[/~~(?=[^\s~])([^\n]*?[^\s~])~~/gu, "s", false],
+	[new RegExp(`(^|[^${LETTER}*])\\*(?=[^\\s*])([^\\n]*?[^\\s*])\\*(?![${LETTER}*])`, "gu"), "i", true],
+	[new RegExp(`(^|[^${LETTER}])_(?=[^\\s_])([^\\n]*?[^\\s_])_(?![${LETTER}])`, "gu"), "i", true],
+];
+
+/** **bold**, __bold__, *italic*, _italic_ and ~~struck~~ as marks (an _ inside a word stays an _). */
+function emphasis(s) {
+	let t = s;
+	for (const [re, tag, lead] of EMPHASIS) {
+		t = t.replace(re, (...m) =>
+			lead ? `${m[1]}${OPEN[tag]}${m[2]}${CLOSE[tag]}` : `${OPEN[tag]}${m[1]}${CLOSE[tag]}`,
+		);
+	}
+	return t;
+}
+
+const plainOf = (s, saved) => restorePlain(emphasis(s), saved);
+
+/** Empty tags go, and a tag closed and opened again right away is one tag. */
+function tidy(html) {
+	let t = html;
+	for (let prev = ""; prev !== t; ) {
+		prev = t;
+		t = t
+			.replace(/<(b|i|u|s)><\/\1>/g, "")
+			.replace(/<a href="[^"]*"><\/a>/g, "")
+			.replace(/<\/(b|i|u|s)><\1>/g, "");
+	}
+	return t;
+}
+
+/**
+ * One line of marked-up text as HTML. Tags are opened and closed in order, so they always balance:
+ * a tag closed out of turn closes the ones inside it and opens them again; one never closed is
+ * closed at the end (and named in `open`, to go on in the next line). No link inside a link, no
+ * formatting inside code; inline code longer than `quoteOver` becomes a collapsed quote of its own
+ * (`parts`: { html } and { quote }).
+ */
+function inlineParts(src, saved, { outer = [], quoteOver = Infinity, carry = [] } = {}) {
+	const s = emphasis(src);
+	const parts = [];
+	const stack = [];
+	let html = "";
+	const active = (tag) => outer.includes(tag) || stack.some((x) => x.tag === tag && !x.skip);
+	const start = (x) => {
+		html += x.tag === "a" ? `<a href="${escapeHtml(x.href)}">` : `<${x.tag}>`;
+	};
+	const closeAll = () => {
+		for (let j = stack.length - 1; j >= 0; j--) if (!stack[j].skip) html += `</${stack[j].tag}>`;
+	};
+	const push = (tag, href) => {
+		const x = { tag, href, skip: active(tag) };
+		stack.push(x);
+		if (!x.skip) start(x);
+	};
+	const pop = (tag) => {
+		let k = stack.length - 1;
+		while (k >= 0 && stack[k].tag !== tag) k--;
+		if (k < 0) return;
+		const above = stack.splice(k);
+		for (let j = above.length - 1; j >= 0; j--) if (!above[j].skip) html += `</${above[j].tag}>`;
+		for (const x of above.slice(1)) push(x.tag, x.href);
+	};
+	const text = (t) => {
+		html += escapeHtml(String(t ?? "").replace(PRIVATE, ""));
+	};
+	const code = (t) => {
+		const c = String(t ?? "");
+		if (active("a")) return text(c);
+		if (c.length > quoteOver && !outer.includes("blockquote")) {
+			closeAll();
+			parts.push({ html });
+			parts.push({ quote: c });
+			html = "";
+			for (const x of stack) if (!x.skip) start(x);
+			return;
+		}
+		if (c) html += `<code>${escapeHtml(c)}</code>`;
+	};
+	for (const tag of carry) push(tag);
+	let last = 0;
+	for (const m of s.matchAll(TOKEN_RE)) {
+		text(s.slice(last, m.index));
+		last = m.index + m[0].length;
+		if (m[1] !== undefined) {
+			const item = saved[Number(m[1])];
+			if (!item) continue;
+			if (item.kind === "link") push("a", item.href);
+			else if (item.kind === "code" || item.kind === "pre") code(item.text);
+			else text(item.text);
+			continue;
+		}
+		const mark = MARK_OF.get(m[0]);
+		if (mark?.open) push(mark.open);
+		else if (mark?.close) pop(mark.close);
+	}
+	text(s.slice(last));
+	const open = stack.filter((x) => !x.skip && x.tag !== "a").map((x) => x.tag);
+	closeAll();
+	parts.push({ html });
+	return { parts: parts.map((p) => (p.quote === undefined ? { html: tidy(p.html) } : p)), open };
+}
+
+const quoteBlock = (text) => {
+	const t = String(text ?? "").replace(/^\n+|\s+$/g, "");
+	return t ? `<blockquote expandable>${escapeHtml(t)}</blockquote>` : "";
+};
+
+function preBlock(text) {
+	const t = String(text ?? "").replace(/^\n+|\s+$/g, "");
+	if (!t) return "";
+	return t.length > PRE_MAX_CHARS || t.split("\n").length > PRE_MAX_LINES ? quoteBlock(t) : `<pre>${escapeHtml(t)}</pre>`;
+}
+
+/** A command, a path or some JSON: a code block, or a collapsed quote when it's long. */
+export function codeBlock(raw, quoteOver = QUOTE_OVER) {
+	const t = String(raw ?? "").replace(/^\n+|\s+$/g, "");
+	if (!t) return "";
+	return t.length > quoteOver || t.includes("\n") ? quoteBlock(t) : `<pre>${escapeHtml(t)}</pre>`;
+}
+
+const isPipeRow = (l) => /^\s*\|.*\|\s*$/.test(l ?? "");
+const isRow = (l) => (l ?? "").includes("|") && (l ?? "").trim() !== "";
+const isRule = (l) => /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(l ?? "") && (l ?? "").includes("|");
+
+/** A markdown table, as lined-up columns in a monospace block. */
+function tableBlock(rows, saved) {
+	const cellsOf = (r) => {
+		let s = r.trim();
+		if (s.startsWith("|")) s = s.slice(1);
+		if (s.endsWith("|")) s = s.slice(0, -1);
+		return s.split("|").map((c) => plainOf(c.trim(), saved).replace(/\s+/g, " "));
+	};
+	const ruled = isRule(rows[1]);
+	const cells = rows.filter((r) => !isRule(r)).map(cellsOf);
+	const n = Math.max(1, ...cells.map((r) => r.length));
+	const width = Array.from({ length: n }, (_, k) => Math.min(30, Math.max(1, ...cells.map((r) => (r[k] ?? "").length))));
+	const lines = cells.map((r) =>
+		width
+			.map((w, k) => (r[k] ?? "").padEnd(w))
+			.join(" | ")
+			.trimEnd(),
+	);
+	if (ruled && lines.length > 1) lines.splice(1, 0, width.map((w) => "-".repeat(w)).join("-+-"));
+	return `<pre>${escapeHtml(lines.join("\n"))}</pre>`;
+}
+
+function isJson(s) {
+	try {
+		const v = JSON.parse(s);
+		return v !== null && typeof v === "object";
+	} catch {
+		return false;
+	}
+}
+
+/** Line by line: code blocks, rules, headings, tables, quotes, JSON, list items, text. */
+function renderBlocks(t, saved, { quoteOver, outer }) {
+	const lines = t.split("\n");
+	const out = [];
+	let carry = [];
+	const blank = () => {
+		if (out.length && out[out.length - 1] !== "") out.push("");
+	};
+	const emit = (prefix, content, { inner = outer, wrap = (h) => h } = {}) => {
+		const r = inlineParts(content, saved, { outer: inner, quoteOver, carry });
+		carry = r.open;
+		let first = true;
+		for (const p of r.parts) {
+			if (p.quote !== undefined) {
+				const q = quoteBlock(p.quote);
+				if (q) out.push(q);
+			} else if (p.html.trim()) out.push(wrap((first ? prefix : "") + (first ? p.html : p.html.trimStart()).trimEnd()));
+			first = false;
+		}
+	};
+	const level = (indent) => Math.min(3, Math.floor(indent.replace(/\t/g, "  ").length / 2));
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i].replace(/\s+$/, "");
+		if (!line.replace(MARKS, "").trim()) {
+			if (line) carry = inlineParts(line, saved, { outer, carry }).open;
+			else blank();
+			continue;
+		}
+		const ref = /^\s*\uE00A(\d+)\uE00B\s*$/.exec(line);
+		if (ref && saved[Number(ref[1])]?.kind === "pre") {
+			const b = preBlock(saved[Number(ref[1])].text);
+			if (b) out.push(b);
+			continue;
+		}
+		if (/^ {0,3}([-*_])(?:[ \t]*\1){2,}$/.test(line)) {
+			out.push("\u2014\u2014\u2014");
+			continue;
+		}
+		let m = /^ {0,3}#{1,6}[ \t]+(.*?)(?:[ \t]+#+)?$/.exec(line);
+		if (m) {
+			emit("", m[1], { inner: [...outer, "b"], wrap: (h) => `<b>${h}</b>` });
+			continue;
+		}
+		if ((isPipeRow(line) && isPipeRow(lines[i + 1])) || (isRow(line) && isRule(lines[i + 1]))) {
+			let j = i;
+			while (j + 1 < lines.length && isRow(lines[j + 1])) j++;
+			out.push(tableBlock(lines.slice(i, j + 1), saved));
+			i = j;
+			continue;
+		}
+		if (/^ {0,3}>/.test(line) && !outer.includes("blockquote")) {
+			const quoted = [];
+			let j = i;
+			for (; j < lines.length && /^ {0,3}>/.test(lines[j]); j++) {
+				const content = lines[j].replace(/^(?: {0,3}>[ \t]?)+/, "").replace(/^([-*+])[ \t]+/, "\u2022 ");
+				const r = inlineParts(content, saved, { outer: [...outer, "blockquote"], carry });
+				carry = r.open;
+				quoted.push(r.parts.map((p) => p.html ?? "").join(""));
+			}
+			const inner = quoted.join("\n").replace(/^\n+|\s+$/g, "");
+			if (inner) out.push(`<blockquote>${inner}</blockquote>`);
+			i = j - 1;
+			continue;
+		}
+		if (/^\s*[[{]/.test(line)) {
+			let j = i;
+			while (j + 1 < lines.length && lines[j + 1].trim()) j++;
+			const plain = (s) => restoreSrc(s, saved).replace(MARKS, "").trim();
+			const whole = plain(lines.slice(i, j + 1).join("\n"));
+			const single = plain(line);
+			if (whole.length > quoteOver && isJson(whole)) {
+				out.push(quoteBlock(whole));
+				i = j;
+				continue;
+			}
+			if (single.length > quoteOver && isJson(single)) {
+				out.push(quoteBlock(single));
+				continue;
+			}
+		}
+		m = /^([ \t]*)([-*+\u2022])[ \t]+(.*)$/.exec(line);
+		if (m) {
+			const depth = level(m[1]);
+			let bullet = depth ? "\u25E6" : "\u2022";
+			let content = m[3];
+			const box = /^\[([ xX])\][ \t]+/.exec(content);
+			if (box) {
+				bullet = box[1] === " " ? "\u2610" : "\u2611";
+				content = content.slice(box[0].length);
+			}
+			emit(`${"   ".repeat(depth)}${bullet} `, content);
+			continue;
+		}
+		m = /^([ \t]*)(\d{1,9})[.)][ \t]+(.*)$/.exec(line);
+		if (m) {
+			emit(`${"   ".repeat(level(m[1]))}${m[2]}. `, m[3]);
+			continue;
+		}
+		emit("", line);
+	}
+	while (out.length && out[out.length - 1] === "") out.pop();
+	while (out.length && out[0] === "") out.shift();
+	return out.join("\n");
+}
+
+/**
+ * A chat's text as Telegram HTML: markdown (**bold**, *italic*, `code`, code blocks, [links](url),
+ * lists, headings, quotes, tables) and common HTML (<b>, <em>, <br>, <p>, <ul>/<li>, <h1>\u2026) become
+ * Telegram's own tags; any other tag is dropped and its text kept; everything else is escaped.
+ * Long code and JSON go in collapsed quotes. The result only ever uses Telegram's tags (b, i, u, s,
+ * code, pre, a, blockquote), always balanced and properly nested, whatever the input.
+ * `outer`: tags the result will sit inside (not repeated inside it).
+ * @param {unknown} src
+ * @param {{ quoteOver?: number, outer?: string[] }} [options]
+ * @returns {string}
+ */
+export function toTelegramHtml(src, { quoteOver = QUOTE_OVER, outer = [] } = {}) {
+	const saved = [];
+	const keep = (item) => `${REF}${saved.push(item) - 1}${REF_END}`;
+	let t = String(src ?? "")
+		.replace(/\r\n?/g, "\n")
+		.replace(PRIVATE, "");
+	t = saveFences(t, keep);
+	t = t.replace(/\\([\x21-\x2F\x3A-\x40\x5B-\x60\x7B-\x7E])/g, (src, c) => keep({ kind: "char", text: c, src }));
+	t = saveCodeSpans(t, keep, saved);
+	t = saveHtmlLiterals(t, keep, saved);
+	t = htmlToMarks(t, keep);
+	t = saveLinks(t, keep, saved);
+	return renderBlocks(t, saved, { quoteOver, outer });
+}
+
+/** Telegram HTML as plain text (links as "text (address)", or just their text). */
+export function htmlToPlain(html, { links = true } = {}) {
+	return String(html ?? "")
+		.replace(/<a href="([^"]*)">([\s\S]*?)<\/a>/g, (_, href, inner) => {
+			const text = inner.replace(/<[^>]*>/g, "");
+			return links && text !== href ? `${text} (${href})` : text;
+		})
+		.replace(/<[^>]*>/g, "")
+		.replace(/&lt;/g, "<")
+		.replace(/&gt;/g, ">")
+		.replace(/&quot;/g, '"')
+		.replace(/&amp;/g, "&");
+}
+
+/** A chat's text as one line of plain text, without its markdown or HTML (for buttons and titles). */
+export function plainText(src) {
+	return htmlToPlain(toTelegramHtml(src, { quoteOver: Infinity }), { links: false })
+		.replace(/\s+/g, " ")
+		.trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -213,7 +797,7 @@ function describeAnswer(ask, index, answers) {
 	const a = answers?.[f.id];
 	if (!a) return "";
 	const opts = fieldOptions(ask, index, answers);
-	const labels = (a.selected ?? []).map((v) => opts.find((o) => o.value === v)?.label ?? v);
+	const labels = (a.selected ?? []).map((v) => plainText(opts.find((o) => o.value === v)?.label ?? v) || v);
 	if (a.text) labels.push(`\u201C${a.text}\u201D`);
 	return labels.join(", ");
 }
@@ -222,17 +806,62 @@ function describeAnswer(ask, index, answers) {
 // Messages
 // ---------------------------------------------------------------------------
 
-/** The top of every message: what it is, which chat, which folder. */
-export function renderHead(ask) {
-	const icon = KIND_ICON[ask?.kind] ?? KIND_ICON.question;
-	const lines = [`${icon} <b>${escapeHtml(cut(ask?.title || "A chat needs you", 200))}</b>`];
-	if (ask?.conversationTitle) lines.push(`Chat: ${escapeHtml(cut(ask.conversationTitle, 100))}`);
-	if (ask?.cwd) lines.push(`Folder: <code>${escapeHtml(cut(shortPath(ask.cwd), 150))}</code>`);
-	return lines.join("\n");
+/** Which queued task a "stuck" ask is about: { id, title } (id 0 when it doesn't say). */
+export function stuckTask(ask) {
+	const t = ask?.task;
+	if (t && Number(t.id) > 0) return { id: Number(t.id), title: String(t.title ?? "") };
+	const m = /^Task #(\d+) needs you(?::\s*([\s\S]*))?$/.exec(String(ask?.title ?? ""));
+	return m ? { id: Number(m[1]), title: m[2] ?? "" } : { id: 0, title: "" };
 }
 
-function linkLine(link) {
-	return link ? `<a href="${escapeHtml(link)}">Open the chat</a>` : "";
+/**
+ * The top of every message, one line: icon, what it is, and which chat it's from. A queued task
+ * that needs you says "Task #N needs you", with the task's title under it.
+ */
+export function renderHead(ask) {
+	const icon = KIND_ICON[ask?.kind] ?? KIND_ICON.question;
+	const task = ask?.kind === "stuck" ? stuckTask(ask) : null;
+	if (task?.id) {
+		const title = oneLine(plainText(task.title), 200);
+		return `${icon} <b>Task #${task.id} needs you</b>${title ? `\n<i>${escapeHtml(title)}</i>` : ""}`;
+	}
+	const head = `${icon} <b>${escapeHtml(oneLine(plainText(ask?.title), 200) || "A chat needs you")}</b>`;
+	const chat = oneLine(plainText(ask?.conversationTitle), 100);
+	return chat ? `${head} \u00B7 <i>from ${escapeHtml(chat)}</i>` : head;
+}
+
+/** The bottom line: the chat's folder, and a link that opens the chat. */
+export function renderFooter(ask, link) {
+	const folder = ask?.cwd ? `<i>\u{1F4C1} ${escapeHtml(cut(shortPath(ask.cwd), 150))}</i>` : "";
+	const open = link ? `<a href="${escapeHtml(link)}">Open the chat</a>` : "";
+	return [folder, open].filter(Boolean).join(" \u00B7 ");
+}
+
+function lineOf(titleHtml, whatHtml, link) {
+	const title = `<b>${titleHtml}</b>`;
+	const head = link ? `<a href="${escapeHtml(link)}">${title}</a>` : title;
+	return whatHtml ? `${head} \u00B7 <i>${whatHtml}</i>` : head;
+}
+
+/**
+ * What an ask was, in one line, for its final words: its title (a link to the chat) and its chat;
+ * for a queued task, "Task #N" and the task's title.
+ */
+export function renderLine(ask, link) {
+	const task = ask?.kind === "stuck" ? stuckTask(ask) : null;
+	if (task?.id) return lineOf(`Task #${task.id}`, escapeHtml(oneLine(plainText(task.title), 100)), link);
+	const title = oneLine(plainText(ask?.title), 120) || "A question";
+	return lineOf(escapeHtml(title), escapeHtml(oneLine(plainText(ask?.conversationTitle), 100)), link);
+}
+
+/** The same line for a message sent before this layout, from the head that was kept with it. */
+export function lineFromOldHead(head, link) {
+	const lines = String(head ?? "").split("\n");
+	const title = /<b>([\s\S]*?)<\/b>/.exec(lines[0] ?? "")?.[1] ?? "";
+	const task = /^Task #(\d+) needs you: ([\s\S]*)$/.exec(title);
+	if (task) return lineOf(`Task #${task[1]}`, task[2], link);
+	const chat = lines.find((l) => l.startsWith("Chat: "))?.slice(6) ?? "";
+	return lineOf(title || "A question", chat, link);
 }
 
 /** The buttons for the current part of a question. */
@@ -243,7 +872,7 @@ export function renderButtons(ask, st) {
 	const opts = fieldOptions(ask, i, st.answers);
 	const ticks = st.ticks ?? [];
 	const rows = opts.map((o, n) => {
-		const label = cut(o.label || o.value, LABEL_MAX);
+		const label = cut(plainText(o.label) || String(o.value ?? ""), LABEL_MAX) || "\u2026";
 		const text = f.multi ? `${ticks.includes(o.value) ? "\u2611" : "\u2610"} ${label}` : label;
 		return [{ text, callback_data: `${st.ref}:${i}:o${n}` }];
 	});
@@ -252,8 +881,31 @@ export function renderButtons(ask, st) {
 	return { inline_keyboard: rows };
 }
 
+const CUT_NOTE = "(cut: open the chat for the rest)";
+const TOO_LONG = "(too long for Telegram: open the chat to read it)";
+
+/** Cut to at most `max` characters, at the end of a line when there's one near. */
+function cutAtLine(s, max) {
+	const nl = s.lastIndexOf("\n", max);
+	return nl > max * 0.8 ? s.slice(0, nl).trimEnd() : cut(s, max);
+}
+
+/** A field's question, without the ask's title said again (an approval's "Allow bash? <reason>"). */
+function questionOf(ask, f) {
+	const text = String(f?.text ?? "").trim();
+	const title = String(ask?.title ?? "").trim();
+	if (!text || text === title) return "";
+	if (ask?.kind === "approval" && title && text.startsWith(title)) return text.slice(title.length).trim();
+	return text;
+}
+
+/** In italics, unless it holds a quote or a code block. */
+const italic = (html) => (!html || /<(blockquote|pre)\b/.test(html) ? html : `<i>${html}</i>`);
+
 /**
- * The whole message for a waiting question: { text, reply_markup }.
+ * The whole message for a waiting question: { text, reply_markup }. A one-line head, then the
+ * body, the question, its detail and each described choice with a blank line between them, and a
+ * footer with the folder and a link to the chat.
  * st = { ref, step, answers, ticks, sending, link }. extra = { warning, note }.
  */
 export function renderAsk(ask, st, extra = {}) {
@@ -262,91 +914,82 @@ export function renderAsk(ask, st, extra = {}) {
 	const f = ask?.fields?.[step];
 	const head = renderHead(ask);
 	const approval = ask?.kind === "approval";
+	const several = (ask?.fields?.length ?? 0) > 1;
 
 	const done = [];
 	(ask?.fields ?? []).forEach((field, i) => {
 		if (!answers[field.id] || !visibleField(ask, i, answers)) return;
-		const q = cut(field.header || field.text || field.id, 80);
+		const q = oneLine(plainText(field.header || field.text || field.id), 80);
 		done.push(`\u2714\uFE0F ${escapeHtml(q)}: ${escapeHtml(cut(describeAnswer(ask, i, answers), 150))}`);
 	});
 
-	const fieldPart = [];
+	const parts = [];
 	if (f && !st?.sending) {
-		const shown = (ask.fields ?? []).map((_, i) => i).filter((i) => visibleField(ask, i, answers));
-		const pos = shown.indexOf(step) + 1;
-		const count = shown.length > 1 && pos > 0 ? ` (${pos}/${shown.length})` : "";
-		if (f.header) fieldPart.push(`<b>${escapeHtml(cut(f.header, 100))}</b>${count}`);
-		else if (count) fieldPart.push(`<b>Part${count}</b>`);
-		if (f.text && f.text !== ask.title) fieldPart.push(escapeHtml(cut(f.text, 1000)));
-		if (f.detail) fieldPart.push(`<i>${escapeHtml(cut(f.detail, 500))}</i>`);
+		const question = questionOf(ask, f);
+		const text = question ? toTelegramHtml(cut(question, 1000)) : "";
+		if (several) {
+			// Several questions: each shows its header (a single one has it as the title already).
+			const shown = ask.fields.map((_, i) => i).filter((i) => visibleField(ask, i, answers));
+			const pos = shown.indexOf(step) + 1;
+			const count = pos > 0 && shown.length > 1 ? ` (${pos}/${shown.length})` : "";
+			const header = `<b>${escapeHtml(oneLine(plainText(f.header), 100) || "Question")}</b>${count}`;
+			parts.push(text ? `${header}\n${text}` : header);
+		} else if (text) parts.push(text);
+		if (f.detail) parts.push(italic(toTelegramHtml(cut(f.detail, 500), { outer: ["i"] })));
 		const opts = fieldOptions(ask, step, answers);
-		const described = opts.filter((o) => o.description);
-		if (described.length) {
-			fieldPart.push(
-				described
-					.slice(0, 12)
-					.map(
-						(o) =>
-							`\u2022 <b>${escapeHtml(cut(o.label || o.value, LABEL_MAX))}</b>: ${escapeHtml(cut(o.description, 200))}`,
-					)
-					.join("\n"),
-			);
+		for (const o of opts.filter((o) => o.description).slice(0, 12)) {
+			const label = `<b>${escapeHtml(cut(plainText(o.label) || String(o.value ?? ""), LABEL_MAX))}</b>`;
+			const description = toTelegramHtml(cut(o.description, 200));
+			parts.push(description ? `${label}\n${description}` : label);
 		}
-		if (f.multi && opts.length) fieldPart.push("<i>Tick all that fit, then tap Done.</i>");
-		else if (f.allowText && !opts.length) fieldPart.push("<i>Reply to this message with your answer.</i>");
+		if (f.multi && opts.length) parts.push("<i>Tick all that fit, then tap Done.</i>");
+		else if (f.allowText && !opts.length) parts.push("<i>Reply to this message with your answer.</i>");
 	}
 
 	const tail = [];
 	if (extra.warning) tail.push(`\u26A0\uFE0F ${escapeHtml(cut(extra.warning, 300))}`);
 	if (st?.sending) tail.push(`<i>${escapeHtml(extra.note || "Sending your answer\u2026")}</i>`);
-	const link = linkLine(st?.link);
-	if (link) tail.push(link);
+	const footer = renderFooter(ask, st?.link);
 
-	const renderBody = (raw) => {
-		if (!raw) return "";
-		return approval ? `<pre>${escapeHtml(raw)}</pre>` : escapeHtml(raw);
-	};
-	const build = (bodyRaw) =>
-		[head, renderBody(bodyRaw), done.join("\n"), fieldPart.join("\n"), tail.join("\n")].filter(Boolean).join("\n\n");
+	const body = (raw) => (!raw ? "" : approval ? codeBlock(raw) : toTelegramHtml(raw));
+	const build = (bodyRaw, note = "") =>
+		[head, body(bodyRaw), note ? `<i>${escapeHtml(note)}</i>` : "", done.join("\n"), ...parts, ...tail, footer]
+			.filter(Boolean)
+			.join("\n\n");
 
 	let bodyRaw = ask?.body ? String(ask.body) : "";
 	let text = build(bodyRaw);
-	const over = visibleLength(text) - TEXT_BUDGET;
-	if (over > 0 && bodyRaw) {
-		const note = "\n\u2026 (cut: open the chat for the rest)";
-		const keep = bodyRaw.length - over - note.length - 20;
-		bodyRaw = keep > 200 ? bodyRaw.slice(0, keep) + note : "(Too long for Telegram: open the chat to read it.)";
-		text = build(bodyRaw);
+	if (bodyRaw && visibleLength(text) > TEXT_BUDGET) {
+		// Too long: cut the body to the room left (formatting changes a text's length, so the cut
+		// goes by how long it shows, and is tried again a little shorter when it's still too long).
+		const room = TEXT_BUDGET - visibleLength(build("", CUT_NOTE)) - 2;
+		for (let n = 1; bodyRaw && visibleLength(text) > TEXT_BUDGET && n <= 8; n++) {
+			const shown = visibleLength(body(bodyRaw)) || 1;
+			const keep = Math.min(bodyRaw.length - 1, Math.floor((bodyRaw.length * room * (1 - 0.03 * n)) / shown));
+			bodyRaw = room > 200 && keep > 200 ? cutAtLine(bodyRaw, keep) : "";
+			text = build(bodyRaw, bodyRaw ? CUT_NOTE : TOO_LONG);
+		}
 	}
 	if (visibleLength(text) > TEXT_BUDGET) {
-		// Still too long (a huge question): the short form.
-		text = [
-			head,
-			f ? escapeHtml(cut(f.text || f.header || "", 1500)) : "",
-			"(Cut: open the chat for the rest.)",
-			tail.join("\n"),
-		]
-			.filter(Boolean)
-			.join("\n\n");
+		// Still too long (a huge question): the short form, and when even that is too long (formatting
+		// can make a text longer: a table's columns), the question as it was written.
+		const question = f ? questionOf(ask, f) || f.header || "" : "";
+		const short = (q) => [head, q, `<i>${escapeHtml(CUT_NOTE)}</i>`, ...tail, footer].filter(Boolean).join("\n\n");
+		text = short(toTelegramHtml(cut(question, 1500)));
+		if (visibleLength(text) > TEXT_BUDGET) text = short(escapeHtml(cut(question, 1500)));
 	}
 	return { text, reply_markup: renderButtons(ask, st) };
 }
 
-export function renderAnswered(head, summary, from, link) {
+/** The final words once it's answered: one line (the buttons go). `line` comes from renderLine. */
+export function renderAnswered(line, summary, from) {
 	const where = from === PLUGIN_ID ? "on Telegram" : from === "browser" || !from ? "in the browser" : `by ${from}`;
-	return [
-		head,
-		`\u2705 <b>Answered ${escapeHtml(where)}</b>: ${escapeHtml(cut(summary || "done", 1500))}`,
-		linkLine(link),
-	]
-		.filter(Boolean)
-		.join("\n\n");
+	return `\u2705 ${line}: ${escapeHtml(oneLine(summary || "done", 300))} <i>(${escapeHtml(where)})</i>`;
 }
 
-export function renderGone(head, reason, link) {
-	return [head, `\u23F9 <b>No longer waiting</b>: ${escapeHtml(cut(reason || "it went away", 300))}`, linkLine(link)]
-		.filter(Boolean)
-		.join("\n\n");
+/** The final words once it's no longer waiting: one line (the buttons go). */
+export function renderGone(line, reason) {
+	return `\u23F9 ${line}: no longer waiting (${escapeHtml(oneLine(reason || "it went away", 200))})`;
 }
 
 // ---------------------------------------------------------------------------
@@ -380,6 +1023,8 @@ const keyOf = (ask) => `${ask.id}@${ask.createdAt}`;
 /** A no-op for optional callbacks (takes any arguments, so callers' signatures check). */
 const ignore = (..._args) => {};
 const notModified = (err) => /not modified/i.test(String(err?.description ?? err?.message ?? ""));
+/** Telegram couldn't read a text's formatting. */
+const cantParse = (err) => err?.code === 400 && /can't parse entities/i.test(String(err?.description ?? ""));
 /** Worth another try: Telegram asked us to slow down (429), had a hiccup (5xx), or the connection
  *  failed or got no answer in time (code 0). */
 const retryable = (err) => err?.code === 429 || err?.code === 0 || (err?.code >= 500 && err?.code <= 599);
@@ -456,11 +1101,21 @@ export function createBridge({
 		}
 	}
 
+	/** A call with an HTML text. When Telegram can't read its formatting, the same text goes as plain text. */
+	async function callHtml(method, params) {
+		try {
+			return await call(method, { ...params, parse_mode: "HTML" });
+		} catch (err) {
+			if (!cantParse(err)) throw err;
+			log("warn", `telegram: Telegram couldn't read a message's formatting (${cut(err.description, 160)}); sent as plain text`);
+			return call(method, { ...params, text: cut(htmlToPlain(params.text), 4000) });
+		}
+	}
+
 	const send = (text, extra = {}) =>
-		call("sendMessage", {
+		callHtml("sendMessage", {
 			chat_id: owner,
 			text,
-			parse_mode: "HTML",
 			link_preview_options: { is_disabled: true },
 			...extra,
 		});
@@ -478,11 +1133,11 @@ export function createBridge({
 	}
 
 	/** One edit on every message that shows e. A copy that can't be edited (deleted) doesn't matter. */
-	async function editAll(e, method, params) {
+	async function editAll(e, method, params, via = call) {
 		let failed = null;
 		for (const id of messagesOf(e)) {
 			try {
-				await call(method, { chat_id: owner, message_id: id, ...params });
+				await via(method, { chat_id: owner, message_id: id, ...params });
 			} catch (err) {
 				if (!notModified(err) && id === e.messageId) failed ??= err;
 			}
@@ -491,12 +1146,10 @@ export function createBridge({
 	}
 
 	const edit = (e, text, reply_markup = { inline_keyboard: [] }) =>
-		editAll(e, "editMessageText", {
-			text,
-			parse_mode: "HTML",
-			link_preview_options: { is_disabled: true },
-			reply_markup,
-		});
+		editAll(e, "editMessageText", { text, link_preview_options: { is_disabled: true }, reply_markup }, callHtml);
+
+	/** What e was, in one line, for its final words (a message sent before this layout kept only its head). */
+	const lineOfEntry = (e) => e.line || lineFromOldHead(e.head, e.link);
 
 	async function removePrompts(e, onlyField) {
 		for (const [pid, fi] of Object.entries(e.prompts ?? {})) {
@@ -534,6 +1187,7 @@ export function createBridge({
 				let e = entries.get(key);
 				if (e?.messageId) return;
 				if (!e) {
+					const link = chatLink(webAppAddress, live.sessionFile);
 					e = {
 						key,
 						ref: nextRef++,
@@ -545,8 +1199,8 @@ export function createBridge({
 						ticks: [],
 						prompts: {},
 						sending: false,
-						link: chatLink(webAppAddress, live.sessionFile),
-						head: renderHead(live),
+						link,
+						line: renderLine(live, link),
 					};
 					storage.set("nextRef", nextRef);
 					e.step = Math.max(0, nextStep(live, e.answers));
@@ -571,14 +1225,12 @@ export function createBridge({
 			return;
 		}
 		const key = keyOf(ev.ask);
-		const head = renderHead(ev.ask);
 		enqueue(async () => {
 			const e = entries.get(key);
 			if (!e) return;
+			const line = renderLine(ev.ask, e.link);
 			const text =
-				ev.type === "answered"
-					? renderAnswered(head, ev.summary, ev.from, e.link)
-					: renderGone(head, ev.reason, e.link);
+				ev.type === "answered" ? renderAnswered(line, ev.summary, ev.from) : renderGone(line, ev.reason);
 			await finish(e, text);
 		});
 	}
@@ -600,7 +1252,7 @@ export function createBridge({
 			return;
 		}
 		if (/no longer waiting/i.test(String(res?.error ?? ""))) {
-			await finish(e, renderGone(e.head, "it was answered or went away", e.link));
+			await finish(e, renderGone(lineOfEntry(e), "it was answered or went away"));
 			return;
 		}
 		e.sending = false;
@@ -644,7 +1296,7 @@ export function createBridge({
 		const ask = liveAsk(e);
 		if (!ask) {
 			await reply("No longer waiting.");
-			await finish(e, renderGone(e.head, "it went away", e.link));
+			await finish(e, renderGone(lineOfEntry(e), "it went away"));
 			return;
 		}
 		if (e.sending) {
@@ -664,7 +1316,8 @@ export function createBridge({
 				return;
 			}
 			await reply();
-			const p = await send(escapeHtml(`Type your answer to: ${cut(field.text || field.header || ask.title, 300)}`), {
+			const about = plainText(field.text) || plainText(field.header) || plainText(ask.title);
+			const p = await send(escapeHtml(`Type your answer to: ${cut(about, 300)}`), {
 				reply_parameters: { message_id: e.messageId, allow_sending_without_reply: true },
 				reply_markup: { force_reply: true, input_field_placeholder: "Your answer" },
 			});
@@ -713,7 +1366,7 @@ export function createBridge({
 		const ask = liveAsk(e);
 		if (!ask) {
 			await say("That question is no longer waiting.");
-			await finish(e, renderGone(e.head, "it went away", e.link));
+			await finish(e, renderGone(lineOfEntry(e), "it went away"));
 			return;
 		}
 		if (e.sending) {
@@ -826,8 +1479,8 @@ export function createBridge({
 				await finish(
 					e,
 					e.sending
-						? renderAnswered(e.head, "your answer was sent", selfId, e.link)
-						: renderGone(e.head, reason, e.link),
+						? renderAnswered(lineOfEntry(e), "your answer was sent", selfId)
+						: renderGone(lineOfEntry(e), reason),
 				);
 			}
 			for (const a of live) if (!entries.get(keyOf(a))?.messageId) sendAsk(a);

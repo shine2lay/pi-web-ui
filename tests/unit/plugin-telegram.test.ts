@@ -6,11 +6,24 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMockHost } from "../../plugin-sdk/index.mjs";
 import telegramPlugin, {
+	QUOTE_OVER,
 	TEXT_BUDGET,
 	chatLink,
+	codeBlock,
 	createBridge,
 	createPoller,
 	createTelegramApi,
+	htmlToPlain,
+	lineFromOldHead,
+	plainText,
+	renderAnswered,
+	renderAsk,
+	renderFooter,
+	renderGone,
+	renderHead,
+	renderLine,
+	stuckTask,
+	toTelegramHtml,
 	visibleLength,
 } from "../../plugins/telegram/index.mjs";
 
@@ -19,6 +32,12 @@ const STRANGER = "5550001111";
 const TOKEN = "123456:SECRET-token-value";
 const ADDRESS = "https://pi.example.ts.net:8787/";
 const SESSION = "/home/x/.pi/agent/sessions/abc.jsonl";
+const LINK = chatLink(ADDRESS, SESSION) as string;
+/** The link that opens the chat, as it shows in a message. */
+const OPEN = `<a href="${LINK.replace(/&/g, "&amp;")}">Open the chat</a>`;
+/** The one line an answered or gone question shrinks to (see the "finished messages" tests). */
+const finalLine = (title: string, chat: string) =>
+	`<a href="${LINK.replace(/&/g, "&amp;")}"><b>${title}</b></a> \u00B7 <i>${chat}</i>`;
 
 // biome-ignore lint/suspicious/noExplicitAny: test doubles
 type Any = any;
@@ -219,12 +238,15 @@ describe("telegram plugin: sending", () => {
 		const p = sent[0].params;
 		expect(p.chat_id).toBe(OWNER);
 		expect(p.parse_mode).toBe("HTML");
-		expect(p.text).toContain("<b>Pick a colour</b>");
-		expect(p.text).toContain("Chat: Throwaway");
-		expect(p.text).toContain("Folder: <code>~/projects/demo</code>");
-		expect(p.text).toContain("Which colour?");
-		expect(p.text).toContain("<b>Red</b>: warm");
-		expect(p.text).toContain(`<a href="${chatLink(ADDRESS, SESSION)}">Open the chat</a>`);
+		expect(p.link_preview_options).toEqual({ is_disabled: true });
+		expect(p.text).toBe(
+			[
+				"\u2753 <b>Pick a colour</b> \u00B7 <i>from Throwaway</i>",
+				"Which colour?",
+				"<b>Red</b>\nwarm",
+				`<i>\u{1F4C1} ~/projects/demo</i> \u00B7 ${OPEN}`,
+			].join("\n\n"),
+		);
 		expect(buttons(sent[0]).map((b: Any) => b.text)).toEqual(["Red", "Blue", "\u270F\uFE0F Type an answer"]);
 	});
 
@@ -252,8 +274,9 @@ describe("telegram plugin: sending", () => {
 		await settle();
 		const p = tg.last("sendMessage")?.params;
 		expect(visibleLength(p.text)).toBeLessThanOrEqual(TEXT_BUDGET);
-		expect(p.text).toContain("<pre>echo xxx");
-		expect(p.text).toContain("cut: open the chat for the rest");
+		expect(p.text).toContain("<blockquote expandable>echo xxx");
+		expect(p.text).toContain("<i>(cut: open the chat for the rest)</i>");
+		expect(p.text.endsWith(OPEN)).toBe(true);
 		expect(buttons(tg.last("sendMessage")).map((b: Any) => b.text)).toEqual(["Allow", "Deny"]);
 	});
 
@@ -281,7 +304,8 @@ describe("telegram plugin: sending", () => {
 		void bridge.resync("pi restarted");
 		await settle();
 		const edit = tg.of("editMessageText").find((c) => c.params.message_id === 42);
-		expect(edit?.params.text).toContain("No longer waiting</b>: pi restarted");
+		// A message sent before the one-line finals kept only its head: its line comes from that.
+		expect(edit?.params.text).toBe("\u23F9 <b>Old</b>: no longer waiting (pi restarted)");
 		expect(edit?.params.reply_markup).toEqual({ inline_keyboard: [] });
 		expect(tg.of("sendMessage")).toHaveLength(1);
 		expect(buttons(tg.last("sendMessage"))[0].callback_data).toBe("8:0:o0");
@@ -360,7 +384,7 @@ describe("telegram plugin: copies from a send whose answer was lost", () => {
 		expect(asks.answered).toEqual([{ id: ask.id, answers: [{ id: "colour", selected: ["Blue"] }] }]);
 		const finals = tg
 			.of("editMessageText")
-			.filter((c) => String(c.params.text).includes("Answered on Telegram</b>: Blue"))
+			.filter((c) => c.params.text === `\u2705 ${finalLine("Pick a colour", "Throwaway")}: Blue <i>(on Telegram)</i>`)
 			.map((c) => c.params.message_id);
 		expect(finals.sort()).toEqual([lost.result.message_id, kept.result.message_id].sort());
 		expect(bridge.entries.size).toBe(0);
@@ -459,7 +483,7 @@ describe("telegram plugin: answering from Telegram", () => {
 		expect(tg.last("answerCallbackQuery")?.params.text).toBe("Chosen: Blue");
 		const final = tg.last("editMessageText")?.params;
 		expect(final.message_id).toBe(msg.result.message_id);
-		expect(final.text).toContain("Answered on Telegram</b>: Blue");
+		expect(final.text).toBe(`\u2705 ${finalLine("Pick a colour", "Throwaway")}: Blue <i>(on Telegram)</i>`);
 		expect(final.reply_markup).toEqual({ inline_keyboard: [] });
 	});
 
@@ -570,7 +594,7 @@ describe("telegram plugin: answering from Telegram", () => {
 		await send(say("Green", prompt.result.message_id));
 		expect(asks.answered).toEqual([{ id: ask.id, answers: [{ id: "colour", selected: [], text: "Green" }] }]);
 		expect(tg.of("deleteMessage").map((c) => c.params.message_id)).toContain(prompt.result.message_id);
-		expect(tg.last("editMessageText")?.params.text).toContain("Answered on Telegram</b>: Green");
+		expect(tg.last("editMessageText")?.params.text).toContain(": Green <i>(on Telegram)</i>");
 	});
 
 	it("a reply to the question itself is a typed answer; a question that needs a button says so", async () => {
@@ -623,7 +647,7 @@ describe("telegram plugin: answered elsewhere, gone, strangers", () => {
 		asks.answerInBrowser(ask.id, "Red");
 		await settle();
 		const edit = tg.last("editMessageText")?.params;
-		expect(edit.text).toContain("Answered in the browser</b>: Red");
+		expect(edit.text).toBe(`\u2705 ${finalLine("Pick a colour", "Throwaway")}: Red <i>(in the browser)</i>`);
 		expect(edit.reply_markup).toEqual({ inline_keyboard: [] });
 		expect(bridge.entries.size).toBe(0);
 
@@ -642,7 +666,9 @@ describe("telegram plugin: answered elsewhere, gone, strangers", () => {
 		await settle();
 		asks.goAway(ask.id, "the chat was closed");
 		await settle();
-		expect(tg.last("editMessageText")?.params.text).toContain("No longer waiting</b>: the chat was closed");
+		expect(tg.last("editMessageText")?.params.text).toBe(
+			`\u23F9 ${finalLine("Pick a colour", "Throwaway")}: no longer waiting (the chat was closed)`,
+		);
 	});
 
 	it("ignores everyone but the owner, and the owner outside the private chat", async () => {
@@ -666,6 +692,663 @@ describe("telegram plugin: answered elsewhere, gone, strangers", () => {
 		await send(say("/start"));
 		const hello = tg.of("sendMessage").find((c) => String(c.params.text).startsWith("Hi!"));
 		expect(hello?.params.text).toContain("Waiting now: 1.");
+	});
+});
+
+const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/**
+ * Why `html` isn't Telegram HTML we may send, or "" when it is: only Telegram's tags (b, i, u, s,
+ * code, pre, a with an address, blockquote), balanced and properly nested, nothing inside code, no
+ * link in a link, no quote in a quote, no tag inside itself; every <, > and & escaped.
+ * `outer`: the tags it will sit inside.
+ */
+function htmlProblem(html: string, outer: string[] = []): string {
+	const stack: string[] = [];
+	const textProblem = (t: string) => {
+		if (/[<>]/.test(t)) return `a bare < or > in ${JSON.stringify(t.slice(0, 60))}`;
+		if (/&(?!(amp|lt|gt|quot);)/.test(t)) return `a bare & in ${JSON.stringify(t.slice(0, 60))}`;
+		return "";
+	};
+	let last = 0;
+	for (const m of html.matchAll(/<[^<>]*>/g)) {
+		const bad = textProblem(html.slice(last, m.index));
+		if (bad) return bad;
+		last = (m.index ?? 0) + m[0].length;
+		const tag = /^<(\/?)(b|i|u|s|code|pre|a|blockquote)( expandable| href="[^"<>]*")?>$/.exec(m[0]);
+		if (!tag) return `a tag Telegram doesn't take: ${m[0]}`;
+		const [, slash, name, attr = ""] = tag;
+		if (slash) {
+			if (attr) return `attributes on a closing tag: ${m[0]}`;
+			const top = stack.pop();
+			if (top !== name) return `</${name}> closes <${top ?? "nothing"}>`;
+			continue;
+		}
+		if (attr.startsWith(" href") !== (name === "a")) return `a link without an address, or an address on <${name}>`;
+		if (attr === " expandable" && name !== "blockquote") return `expandable on <${name}>`;
+		if (/&(?!(amp|lt|gt|quot);)/.test(attr)) return `a bare & in ${m[0]}`;
+		const inside = [...outer, ...stack];
+		if (inside.some((t) => t === "code" || t === "pre")) return `<${name}> inside code`;
+		if (name === "a" && inside.includes("a")) return "a link inside a link";
+		if ((name === "code" || name === "pre") && inside.includes("a")) return "code inside a link";
+		if (name === "blockquote" && inside.includes("blockquote")) return "a quote inside a quote";
+		if (inside.includes(name)) return `<${name}> inside <${name}>`;
+		stack.push(name);
+	}
+	return textProblem(html.slice(last)) || (stack.length ? `never closed: ${stack.join(", ")}` : "");
+}
+
+describe("telegram plugin: how messages look", () => {
+	const st = (over: Any = {}) => ({ ref: 7, step: 0, answers: {}, ticks: [], link: LINK, ...over });
+	const base = {
+		id: "a1",
+		createdAt: 1,
+		conversationTitle: "tooling",
+		cwd: `${process.env.HOME}/projects/pi-web-ui`,
+		sessionFile: SESSION,
+	};
+	const footer = `<i>\u{1F4C1} ~/projects/pi-web-ui</i> \u00B7 ${OPEN}`;
+	const yesNo = [
+		{ value: "yes", label: "Yes" },
+		{ value: "no", label: "No" },
+	];
+
+	it("a question: a one-line head, then the question, its detail and each choice apart, and a footer", () => {
+		const ask = {
+			...base,
+			kind: "question",
+			title: "Deploy",
+			fields: [
+				{
+					id: "d",
+					header: "Deploy",
+					text: "Deploy **now** with `pi-web-deploy`?",
+					detail: "It restarts _right away_.",
+					options: [
+						{ value: "Now", label: "Now", description: "Restart **right away**." },
+						{ value: "Idle", label: "When idle", description: "Wait for idle chats (`--when-idle`)." },
+						{ value: "Later", label: "Later", description: "Don't deploy yet." },
+					],
+					multi: false,
+					allowText: true,
+				},
+			],
+		};
+		const { text, reply_markup } = renderAsk(ask, st());
+		expect(text).toBe(
+			[
+				"\u2753 <b>Deploy</b> \u00B7 <i>from tooling</i>",
+				"Deploy <b>now</b> with <code>pi-web-deploy</code>?",
+				"<i>It restarts right away.</i>",
+				"<b>Now</b>\nRestart <b>right away</b>.",
+				"<b>When idle</b>\nWait for idle chats (<code>--when-idle</code>).",
+				"<b>Later</b>\nDon't deploy yet.",
+				footer,
+			].join("\n\n"),
+		);
+		// One question: its header is the title, said once.
+		expect(text.match(/Deploy<\/b>/g)).toHaveLength(1);
+		expect(reply_markup.inline_keyboard.map((r: Any) => r[0].text)).toEqual([
+			"Now",
+			"When idle",
+			"Later",
+			"\u270F\uFE0F Type an answer",
+		]);
+	});
+
+	it("several questions: each shows its header and where it is, then the answers so far", () => {
+		const ask = {
+			...base,
+			kind: "question",
+			title: "3 questions",
+			fields: [
+				{
+					id: "c",
+					header: "Colour",
+					text: "Which colour?",
+					options: [
+						{ value: "Red", label: "Red", description: "Warm." },
+						{ value: "Blue", label: "Blue" },
+					],
+					multi: false,
+					allowText: true,
+				},
+				{
+					id: "s",
+					header: "Size",
+					text: "Which size?",
+					options: [
+						{ value: "S", label: "S" },
+						{ value: "L", label: "L" },
+					],
+					multi: false,
+					allowText: true,
+				},
+				{ id: "n", header: "Note", text: "Anything else?", options: [], multi: false, allowText: true },
+			],
+		};
+		const head = "\u2753 <b>3 questions</b> \u00B7 <i>from tooling</i>";
+		expect(renderAsk(ask, st()).text).toBe(
+			[head, "<b>Colour</b> (1/3)\nWhich colour?", "<b>Red</b>\nWarm.", footer].join("\n\n"),
+		);
+		const answers = { c: { selected: ["Red"] }, s: { selected: ["L"] } };
+		expect(renderAsk(ask, st({ step: 2, answers })).text).toBe(
+			[
+				head,
+				"\u2714\uFE0F Colour: Red\n\u2714\uFE0F Size: L",
+				"<b>Note</b> (3/3)\nAnything else?",
+				"<i>Reply to this message with your answer.</i>",
+				footer,
+			].join("\n\n"),
+		);
+	});
+
+	it("a stuck task: 'Task #N needs you' with the task's title under it, and no chat line", () => {
+		const ask = {
+			...base,
+			conversationTitle: "Queue #26",
+			kind: "stuck",
+			title: "Task #26 needs you: Make *it* nice",
+			task: { id: 26, title: "Make *it* nice" },
+			fields: [
+				{
+					id: "answer",
+					text: "The run failed because the model was busy (503 overloaded). Reply here to carry on.\n`503 overloaded_error`",
+					options: [{ value: "Carry on", label: "Carry on" }],
+					multi: false,
+					allowText: true,
+				},
+			],
+		};
+		expect(renderAsk(ask, st()).text).toBe(
+			[
+				"\u{1F4CC} <b>Task #26 needs you</b>\n<i>Make it nice</i>",
+				"The run failed because the model was busy (503 overloaded). Reply here to carry on.\n<code>503 overloaded_error</code>",
+				footer,
+			].join("\n\n"),
+		);
+		// From a server that doesn't say which task: the title does.
+		const { task: _task, ...older } = ask;
+		expect(stuckTask(older)).toEqual({ id: 26, title: "Make *it* nice" });
+		expect(renderHead(older)).toBe("\u{1F4CC} <b>Task #26 needs you</b>\n<i>Make it nice</i>");
+	});
+
+	it("a permission prompt: the command as code (in a collapsed quote when long), and the reason once", () => {
+		const approval = (command: string) => ({
+			...base,
+			kind: "approval",
+			title: "Allow bash?",
+			body: command,
+			fields: [
+				{
+					id: "decision",
+					text: "Allow bash? It pushes the branch.",
+					options: [
+						{ value: "approve", label: "Approve" },
+						{ value: "category", label: "Allow this kind here", description: "git push" },
+						{ value: "deny", label: "Deny" },
+					],
+					multi: false,
+					allowText: false,
+				},
+			],
+		});
+		expect(renderAsk(approval("git push origin mine"), st()).text).toBe(
+			[
+				"\u{1F510} <b>Allow bash?</b> \u00B7 <i>from tooling</i>",
+				"<pre>git push origin mine</pre>",
+				"It pushes the branch.",
+				"<b>Allow this kind here</b>\ngit push",
+				footer,
+			].join("\n\n"),
+		);
+		const long = 'cd ~/projects/pi-web-ui && git push origin mine --force-with-lease && echo "<done>"';
+		expect(long.length).toBeGreaterThan(QUOTE_OVER);
+		expect(renderAsk(approval(long), st()).text).toContain(`\n\n<blockquote expandable>${esc(long)}</blockquote>\n\n`);
+		expect(codeBlock("line 1\nline 2")).toBe("<blockquote expandable>line 1\nline 2</blockquote>");
+	});
+
+	it("an add-on's pop-up shows its text formatted: a heading, lists, code, a table, a quote", () => {
+		const plan = [
+			"## Plan",
+			"",
+			"1. Add a **converter**.",
+			"2. Rework `renderAsk`:",
+			"   - blank lines",
+			"   - one footer",
+			"",
+			"| Step | Time |",
+			"|---|---|",
+			"| build | 2m |",
+			"",
+			"> <b>HTML</b> is <em>fine</em> too.",
+		].join("\n");
+		const ask = {
+			...base,
+			kind: "dialog",
+			title: "Approve the plan?",
+			body: plan,
+			fields: [{ id: "value", text: "Approve the plan?", options: yesNo, multi: false, allowText: false }],
+		};
+		expect(renderAsk(ask, st()).text).toBe(
+			[
+				"\u{1F4AC} <b>Approve the plan?</b> \u00B7 <i>from tooling</i>",
+				"<b>Plan</b>",
+				"1. Add a <b>converter</b>.\n2. Rework <code>renderAsk</code>:\n   \u25E6 blank lines\n   \u25E6 one footer",
+				"<pre>Step  | Time\n------+-----\nbuild | 2m</pre>",
+				"<blockquote><b>HTML</b> is <i>fine</i> too.</blockquote>",
+				footer,
+			].join("\n\n"),
+		);
+	});
+
+	it("the head and the footer: markup in titles is dropped, the rest escaped", () => {
+		expect(renderHead({ kind: "question", title: "**Big** `x` <b>y</b>", conversationTitle: "a\nb & <c>" })).toBe(
+			"\u2753 <b>Big x y</b> \u00B7 <i>from a b &amp; &lt;c&gt;</i>",
+		);
+		expect(renderHead({ kind: "dialog", title: "" })).toBe("\u{1F4AC} <b>A chat needs you</b>");
+		expect(renderFooter({ cwd: `${process.env.HOME}/x` }, LINK)).toBe(`<i>\u{1F4C1} ~/x</i> \u00B7 ${OPEN}`);
+		expect(renderFooter({ cwd: "/srv/a&b" }, null)).toBe("<i>\u{1F4C1} /srv/a&amp;b</i>");
+		expect(renderFooter({}, LINK)).toBe(OPEN);
+		expect(renderFooter({}, null)).toBe("");
+	});
+
+	it("finished messages are one line: what it was, which chat, and the answer or why it stopped", () => {
+		const q = { ...base, kind: "question", title: "Deploy", fields: [] };
+		const several = { ...base, kind: "question", title: "2 questions", fields: [] };
+		const d = { ...base, kind: "dialog", title: "Approve the plan?", fields: [] };
+		const p = { ...base, kind: "approval", title: "Allow bash?", fields: [] };
+		const s = {
+			...base,
+			kind: "stuck",
+			title: "Task #3 needs you: Ship it",
+			task: { id: 3, title: "Ship it" },
+			fields: [],
+		};
+		const line = (t: string, c: string) => `<a href="${LINK}"><b>${t}</b></a> \u00B7 <i>${c}</i>`;
+		const finals = [
+			[
+				renderAnswered(renderLine(q, LINK), "Now", "telegram"),
+				`\u2705 ${line("Deploy", "tooling")}: Now <i>(on Telegram)</i>`,
+			],
+			[
+				renderAnswered(renderLine(several, LINK), "Colour: Red; Size: L", "browser"),
+				`\u2705 ${line("2 questions", "tooling")}: Colour: Red; Size: L <i>(in the browser)</i>`,
+			],
+			[
+				renderAnswered(renderLine(d, LINK), "Yes", undefined),
+				`\u2705 ${line("Approve the plan?", "tooling")}: Yes <i>(in the browser)</i>`,
+			],
+			[
+				renderAnswered(renderLine(p, LINK), "Approved <all>", "telegram"),
+				`\u2705 ${line("Allow bash?", "tooling")}: Approved &lt;all&gt; <i>(on Telegram)</i>`,
+			],
+			[
+				renderAnswered(renderLine(s, LINK), "Carry on,\nplease", "telegram"),
+				`\u2705 ${line("Task #3", "Ship it")}: Carry on, please <i>(on Telegram)</i>`,
+			],
+			[
+				renderGone(renderLine(q, LINK), "the chat was closed"),
+				`\u23F9 ${line("Deploy", "tooling")}: no longer waiting (the chat was closed)`,
+			],
+			[
+				renderGone(renderLine(s, null), ""),
+				"\u23F9 <b>Task #3</b> \u00B7 <i>Ship it</i>: no longer waiting (it went away)",
+			],
+			// A message sent before this layout kept only its head: its line comes from that.
+			[
+				lineFromOldHead("\u2753 <b>Deploy</b>\nChat: tooling\nFolder: <code>~/x</code>", LINK),
+				line("Deploy", "tooling"),
+			],
+			[
+				lineFromOldHead("\u{1F4CC} <b>Task #3 needs you: Ship it</b>\nChat: Queue #3", null),
+				"<b>Task #3</b> \u00B7 <i>Ship it</i>",
+			],
+		];
+		for (const [got, want] of finals) {
+			expect(got).toBe(want);
+			expect(got).not.toContain("\n");
+			expect(htmlProblem(got)).toBe("");
+		}
+	});
+
+	it("a long text is cut to fit Telegram, keeping the question, the choices and the footer", () => {
+		const plan = Array.from(
+			{ length: 400 },
+			(_, i) => `- step ${i}: **do** \`thing ${i}\` [see](https://x.y/${i}) & more`,
+		).join("\n");
+		const ask = {
+			...base,
+			kind: "dialog",
+			title: "Approve?",
+			body: plan,
+			fields: [{ id: "value", text: "Approve?", options: yesNo, multi: false, allowText: false }],
+		};
+		const { text } = renderAsk(ask, st());
+		expect(visibleLength(text)).toBeLessThanOrEqual(TEXT_BUDGET);
+		expect(visibleLength(text)).toBeGreaterThan(TEXT_BUDGET - 500);
+		expect(text).toContain("\n\n<i>(cut: open the chat for the rest)</i>\n\n");
+		expect(text.endsWith(`\n\n${footer}`)).toBe(true);
+		expect(htmlProblem(text)).toBe("");
+
+		// Too much even without the text above: the question alone, then the footer.
+		const crowded = {
+			...base,
+			kind: "question",
+			title: "Q",
+			fields: [
+				{
+					id: "q",
+					// A table of empty cells gets longer as lined-up columns.
+					text: "|||||||||||\n".repeat(600),
+					options: Array.from({ length: 12 }, (_, i) => ({
+						value: `o${i}`,
+						label: `Choice ${i}`,
+						description: "words ".repeat(40),
+					})),
+					multi: false,
+					allowText: true,
+				},
+			],
+		};
+		const short = renderAsk(crowded, st()).text;
+		expect(visibleLength(short)).toBeLessThanOrEqual(TEXT_BUDGET);
+		expect(short).toContain("<i>(cut: open the chat for the rest)</i>");
+		expect(short.endsWith(footer)).toBe(true);
+		expect(htmlProblem(short)).toBe("");
+	});
+});
+
+describe("telegram plugin: a chat's text as Telegram HTML", () => {
+	it.each([
+		[
+			"**bold** and *it* and _it_ and __b__ and ~~s~~",
+			"<b>bold</b> and <i>it</i> and <i>it</i> and <b>b</b> and <s>s</s>",
+		],
+		["snake_case_name and 2 * 3 * 4 stay", "snake_case_name and 2 * 3 * 4 stay"],
+		["`a < b && c` and `**not bold**`", "<code>a &lt; b &amp;&amp; c</code> and <code>**not bold**</code>"],
+		["**`code` in bold**", "<b><code>code</code> in bold</b>"],
+		[
+			"[the docs](https://example.com/a_b?x=1&y=2) and [bad](javascript:alert(1))",
+			'<a href="https://example.com/a_b?x=1&amp;y=2">the docs</a> and bad',
+		],
+		["[`code` in a link](https://x.y)", '<a href="https://x.y">code in a link</a>'],
+		["see https://example.com/x_y_z. and <https://a.b/c>", "see https://example.com/x_y_z. and https://a.b/c"],
+		[
+			"- one\n* two\n  - nested\n- [ ] todo\n- [x] done\n1. first\n2) second",
+			"\u2022 one\n\u2022 two\n   \u25E6 nested\n\u2610 todo\n\u2611 done\n1. first\n2. second",
+		],
+		["# Title\n\nText under it", "<b>Title</b>\n\nText under it"],
+		["| a | b |\n|---|---|\n| 1 | 2 |", "<pre>a | b\n--+--\n1 | 2</pre>"],
+		["```js\nconst x = 1 < 2;\n```", "<pre>const x = 1 &lt; 2;</pre>"],
+		["> quoted **text**\n> more", "<blockquote>quoted <b>text</b>\nmore</blockquote>"],
+		["\\*not italic\\*", "*not italic*"],
+		["a\n\n\n\nb", "a\n\nb"],
+		// HTML
+		[
+			"<p>Hello <strong>you</strong><br>there</p><ul><li>one</li><li>two</li></ul>",
+			"Hello <b>you</b>\nthere\n\n\u2022 one\n\u2022 two",
+		],
+		["<h2>Plan</h2><p>Do <em>it</em></p><ol><li>a</li><li>b</li></ol>", "<b>Plan</b>\n\nDo <i>it</i>\n\n1. a\n2. b"],
+		["<p>one<p>two", "one\n\ntwo"],
+		['<div class="x"><span>kept</span> <script>alert(1)</script></div>', "kept alert(1)"],
+		// A <word> that isn't HTML is text ("<sha>"), and so is one that could be but isn't closed.
+		[
+			"Use <sha> and <folder>, or <label> and <time>",
+			"Use &lt;sha&gt; and &lt;folder&gt;, or &lt;label&gt; and &lt;time&gt;",
+		],
+		['<label>Name</label> <time datetime="x">now</time>', "Name now"],
+		["&amp; &lt;b&gt; &#39; &mdash; &unknown; & <", "&amp; &lt;b&gt; ' \u2014 &amp;unknown; &amp; &lt;"],
+		// Unbalanced or tangled: always balanced after.
+		["**bold without end and <b>open never closed", "**bold without end and <b>open never closed</b>"],
+		["</i>stray close", "stray close"],
+		["<b><i>x</b></i>", "<b><i>x</i></b>"],
+		['<a href="https://a">x <a href="https://b">y</a></a>', '<a href="https://a">x y</a>'],
+		["<b>line1\nline2</b>", "<b>line1</b>\n<b>line2</b>"],
+		["\uE000bold\uE004 and \uE00A0\uE00B", "bold and 0"],
+		// Long technical text: a collapsed quote.
+		[
+			'{"type":"error","error":{"type":"overloaded_error","message":"Overloaded, please try again later"}}',
+			`<blockquote expandable>${esc('{"type":"error","error":{"type":"overloaded_error","message":"Overloaded, please try again later"}}')}</blockquote>`,
+		],
+		[`Run \`${"x".repeat(90)}\` now`, `Run\n<blockquote expandable>${"x".repeat(90)}</blockquote>\nnow`],
+	])("%j", (src, want) => {
+		expect(toTelegramHtml(src)).toBe(want);
+		expect(htmlProblem(want)).toBe("");
+	});
+
+	it("plain text for buttons and titles, and Telegram HTML back to plain text", () => {
+		expect(plainText("**Bold** label with `code` and [link](https://x.y) <b>x</b>\n& more")).toBe(
+			"Bold label with code and link x & more",
+		);
+		expect(htmlToPlain('<b>x</b> <a href="https://a.b">site</a> &amp; <a href="https://c.d">https://c.d</a>')).toBe(
+			"x site (https://a.b) & https://c.d",
+		);
+	});
+
+	it("no input makes tags Telegram can't take, unbalanced ones, or a bare < > &", () => {
+		const pieces = [
+			"**",
+			"*",
+			"_",
+			"__",
+			"~~",
+			"`",
+			"``",
+			"```",
+			"\n```\n",
+			"~~~",
+			"[",
+			"]",
+			"(",
+			")",
+			"](",
+			"](https://ex.am/p_q?a=1&b=2)",
+			"](javascript:x)",
+			"![",
+			"<b>",
+			"</b>",
+			"<i>",
+			"</i>",
+			"<em>",
+			"</strong>",
+			"<u>",
+			"<s>",
+			"<del>",
+			'<a href="https://a.b/c?x=1&y=2">',
+			"<a href='tg://x'>",
+			'<a href="javascript:x">',
+			"<a>",
+			"</a>",
+			"<pre>",
+			"</pre>",
+			"<code>",
+			"</code>",
+			"<blockquote>",
+			"</blockquote>",
+			"<script>",
+			"</script>",
+			"<br>",
+			"<br/>",
+			"<p>",
+			"</p>",
+			"<ul>",
+			"<li>",
+			"</li>",
+			"<ol>",
+			"</ol>",
+			"<h2>",
+			"</h2>",
+			"<hr>",
+			"<table><tr><td>",
+			"</td></tr></table>",
+			"<sha>",
+			"<label>",
+			"</label>",
+			'<div class="x">',
+			"</div>",
+			"<!--",
+			"-->",
+			"<",
+			">",
+			"&",
+			"&amp;",
+			"&lt;",
+			"&#0;",
+			"&#x1F600;",
+			"&#xE000;",
+			"&bogus;",
+			'"',
+			"'",
+			"\n",
+			"\n\n",
+			"\n> ",
+			"\n>> ",
+			"\n- ",
+			"\n  * ",
+			"\n1. ",
+			"\n# ",
+			"\n## ",
+			"|",
+			"\n| a | b |\n|---|---|\n| 1 | 2 |\n",
+			"\n---\n",
+			"\\",
+			"\\*",
+			"\\`",
+			'{"k":[1,2,{"v":"x"}]}',
+			"https://example.com/a_b",
+			"<https://x.y/z>",
+			"mailto:a@b.c",
+			"\uE000",
+			"\uE004",
+			"\uE008",
+			"\uE00A0\uE00B",
+			"\uE00A",
+			"\uE00B",
+			"\uF8FF",
+			"\uD83D\uDE00",
+			"\uD83D",
+			"  ",
+			"\t",
+			"word",
+			"snake_case",
+			"x".repeat(90),
+			"- [ ] ",
+			"- [x] ",
+		];
+		// A small seeded random generator, so a failure can be run again.
+		let seed = 20260917;
+		const rand = () => {
+			seed = (seed + 0x6d2b79f5) | 0;
+			let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+			t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+			return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+		};
+		const gen = (max: number) =>
+			Array.from({ length: 1 + Math.floor(rand() * max) }, () => pieces[Math.floor(rand() * pieces.length)]).join(
+				rand() < 0.5 ? "" : " ",
+			);
+		const bad: Any[] = [];
+		const expectFine = (what: string, input: Any, html: string, outer: string[] = []) => {
+			const problem = htmlProblem(html, outer);
+			if (problem && bad.length < 5) bad.push({ what, problem, input, html });
+		};
+		// The characters the converter marks formatting with never get out (a text's own are dropped).
+		const marks = /[\uE000-\uF8FF]/;
+		for (let n = 0; n < 3000; n++) {
+			const src = gen(30);
+			const html = toTelegramHtml(src);
+			expectFine("text", src, html);
+			expectFine("in italics", src, toTelegramHtml(src, { outer: ["i"] }), ["i"]);
+			const plain = plainText(src);
+			if (marks.test(html) || marks.test(plain) || plain.includes("\n")) bad.push({ what: "marks", input: src });
+		}
+		// Whole messages made of such texts: fine, and within the length Telegram takes.
+		const kinds = ["question", "dialog", "approval", "stuck"];
+		for (let n = 0; n < 400; n++) {
+			const kind = kinds[n % kinds.length];
+			const ask = {
+				id: `r${n}`,
+				kind,
+				createdAt: n,
+				conversationTitle: gen(8),
+				cwd: `/tmp/${gen(3)}`,
+				title: kind === "stuck" ? `Task #${n} needs you: ${gen(6)}` : gen(6),
+				...(kind === "stuck" ? { task: { id: n, title: gen(6) } } : {}),
+				...(n % 3 ? { body: gen(n % 5 === 0 ? 3000 : 60) } : {}),
+				fields: [0, 1].slice(0, 1 + (n % 2)).map((i) => ({
+					id: `f${i}`,
+					header: gen(4),
+					text: gen(n % 7 === 0 ? 800 : 30),
+					detail: gen(10),
+					options: Array.from({ length: n % 6 }, (_, k) => ({
+						value: `v${k}`,
+						label: gen(4),
+						...(k % 2 ? { description: gen(20) } : {}),
+					})),
+					multi: n % 4 === 1,
+					allowText: n % 2 === 0,
+				})),
+			};
+			const { text, reply_markup } = renderAsk(ask, { ref: 1, step: 0, answers: {}, ticks: [], link: LINK });
+			expectFine(`${kind} message`, ask, text);
+			if (visibleLength(text) > TEXT_BUDGET) bad.push({ what: "too long", input: ask, length: visibleLength(text) });
+			for (const row of reply_markup.inline_keyboard) {
+				if (!row[0].text.trim() || Buffer.byteLength(row[0].callback_data) > 64) bad.push({ what: "button", row });
+			}
+			const line = renderLine(ask, LINK);
+			for (const final of [renderAnswered(line, gen(10), "telegram"), renderGone(line, gen(5))]) {
+				expectFine(`${kind} final words`, ask, final);
+				if (final.includes("\n")) bad.push({ what: "final words on more than one line", final });
+			}
+		}
+		expect(bad).toEqual([]);
+	});
+});
+
+describe("telegram plugin: formatting Telegram can't read", () => {
+	const cantParse = () =>
+		errResponse(400, 'Bad Request: can\'t parse entities: Unsupported start tag "x" at byte offset 12');
+
+	it("a message goes again as plain text, so it's never lost; so do its final words", async () => {
+		const { tg, asks, bridge, settle } = setup();
+		tg.failNext("sendMessage", cantParse());
+		const ask = asks.add(question());
+		await settle();
+		const [html, plain] = tg.of("sendMessage");
+		expect(tg.of("sendMessage")).toHaveLength(2);
+		expect(html.params.parse_mode).toBe("HTML");
+		expect(plain.params.parse_mode).toBeUndefined();
+		expect(plain.params.text).toBe(
+			[
+				"\u2753 Pick a colour \u00B7 from Throwaway",
+				"Which colour?",
+				"Red\nwarm",
+				`\u{1F4C1} ~/projects/demo \u00B7 Open the chat (${LINK})`,
+			].join("\n\n"),
+		);
+		expect(plain.params.reply_markup).toEqual(html.params.reply_markup);
+		expect(plain.params.link_preview_options).toEqual({ is_disabled: true });
+		expect(bridge.entries.get(`${ask.id}@${ask.createdAt}`)?.messageId).toBe(plain.result.message_id);
+
+		tg.failNext("editMessageText", cantParse());
+		asks.answerInBrowser(ask.id, "Red");
+		await settle();
+		const [editHtml, editPlain] = tg.of("editMessageText");
+		expect(tg.of("editMessageText")).toHaveLength(2);
+		expect(editHtml.params.parse_mode).toBe("HTML");
+		expect(editPlain.params.parse_mode).toBeUndefined();
+		expect(editPlain.params.text).toBe(`\u2705 Pick a colour (${LINK}) \u00B7 Throwaway: Red (in the browser)`);
+		expect(editPlain.params.message_id).toBe(plain.result.message_id);
+		expect(editPlain.params.reply_markup).toEqual({ inline_keyboard: [] });
+	});
+
+	it("any other refusal isn't sent again as plain text", async () => {
+		const { tg, asks, settle } = setup();
+		tg.failNext("sendMessage", errResponse(400, "Bad Request: message is too long"));
+		asks.add(question());
+		await settle();
+		expect(tg.of("sendMessage")).toHaveLength(1);
 	});
 });
 

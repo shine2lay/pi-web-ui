@@ -4,16 +4,19 @@
  * (PI_WEB_TELEGRAM_API_BASE), the mock model for the model, and plain WebSocket clients for the
  * browser. The real plugin (plugins/telegram) is installed into the server's own data folder.
  *
- *  1. a question: it's sent with its choices as buttons, the chat and folder, and a link to the chat;
- *     a stranger's tap and text, and the owner writing in a group, are ignored; the owner's tap
- *     answers the chat, closes the browser's dialog and marks the message "Answered on Telegram";
- *  2. a question answered in the browser: the message says so, and its old buttons only say
- *     "No longer waiting.";
+ *  1. a question: it's sent with its choices as buttons, a one-line head with the chat it's from,
+ *     the question and each described choice apart, and a footer with the folder and a link to the
+ *     chat; a stranger's tap and text, and the owner writing in a group, are ignored; the owner's
+ *     tap answers the chat, closes the browser's dialog and shrinks the message to one line
+ *     ("\u2705 Colour \u00B7 <chat>: Blue (on Telegram)");
+ *  2. a question answered in the browser: its message shrinks to one line too, and its old buttons
+ *     only say "No longer waiting.";
  *  3. permission prompts: Approve on Telegram runs the command, Deny doesn't; one answered in the
- *     browser updates its message;
- *  4. the queue: a plan's approval pop-up is answered on Telegram; the task's own chat (no browser
- *     on it) asks permission, then gets stuck with choices; both are answered on Telegram; the
- *     answer goes into the task's chat and the task finishes;
+ *     browser shrinks its message to one line;
+ *  4. the queue: a plan's approval pop-up (its markdown shown as formatting) is answered on
+ *     Telegram; the task's own chat (no browser on it) asks permission, then gets stuck with
+ *     choices ("Task #1 needs you"); both are answered on Telegram; the answer goes into the task's
+ *     chat and the task finishes;
  *  5. no browser open at all: a question outlives the 30 s no-browser wait and, like the permission
  *     prompt after it, is answered on Telegram;
  *  6. the bot token is in no file the server wrote.
@@ -244,6 +247,16 @@ function fakeTelegram(token) {
 }
 const labels = (msg) => (msg?.markup?.inline_keyboard ?? []).flat().map((b) => b.text);
 const noButtons = (msg) => labels(msg).length === 0;
+/**
+ * A message's final words: one line, "\u2705 <title, linking to the chat> \u00B7 <what>: ...<end>".
+ * `what` is the chat's title (any, when not given) or, for a queued task, the task's title.
+ */
+const oneLineFinal = (msg, title, end, what = null) => {
+	const t = msg?.text ?? "";
+	const whatRe = what === null ? "[^<]+" : what.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const head = new RegExp(`^\\u2705 <a href="[^"]+">${title.replace(/[?]/g, "\\?")}</a> \\u00B7 <i>${whatRe}</i>: `);
+	return !t.includes("\n") && head.test(t) && t.endsWith(end);
+};
 
 // ---- the mock model ------------------------------------------------------------
 /** What the model saw come back, by script step (tool results and answers). */
@@ -476,10 +489,23 @@ try {
 		same(labels(m1), ["Red", "Blue", TYPE_ANSWER]),
 		labels(m1).join(" | "),
 	);
+	const [m1Head, ...m1Parts] = m1.text.split("\n\n");
 	check(
-		"it says which chat and folder",
-		m1.text.includes("Chat: ") && /Folder: <code>[^<]*work<\/code>/.test(m1.text),
+		"it opens with one line: the question's header and the chat it's from",
+		/^\u2753 <b>Colour<\/b> \u00B7 <i>from [^<\n]+<\/i>$/.test(m1Head) && !/Chat: |Folder: /.test(m1.text),
+		m1Head,
+	);
+	check(
+		"... then the question and each described choice, apart, with the header said only once",
+		m1Parts[0] === "Which colour, round 1?" &&
+			m1Parts.includes("<b>Red</b>\nwarm") &&
+			m1.text.split("Colour").length === 2,
 		m1.text,
+	);
+	check(
+		"it ends with one line: the folder, and a link to the chat",
+		/^<i>\u{1F4C1} [^<]*work<\/i> \u00B7 <a href="[^"]+">Open the chat<\/a>$/u.test(m1Parts.at(-1) ?? ""),
+		m1Parts.at(-1),
 	);
 	const href = /<a href="([^"]+)">Open the chat<\/a>/.exec(m1.text)?.[1]?.replace(/&amp;/g, "&");
 	const link = href ? new URL(href) : null;
@@ -515,9 +541,9 @@ try {
 		await waitFor(() => tg.callbackAnswer(tap1.id)?.params.text === "Chosen: Blue", 10_000),
 	);
 	check(
-		"the message says it was answered on Telegram, and its buttons are gone",
-		await waitFor(() => /Answered on Telegram<\/b>: Blue/.test(m1.text) && noButtons(m1), 10_000),
-		m1.text.slice(-160),
+		"the message shrinks to one line: answered on Telegram, and its buttons are gone",
+		await waitFor(() => oneLineFinal(m1, "<b>Colour</b>", "Blue <i>(on Telegram)</i>") && noButtons(m1), 10_000),
+		m1.text,
 	);
 	await waitIdle(A);
 
@@ -529,9 +555,9 @@ try {
 	A.send({ type: "question_answer", id: q2.id, answers: [{ id: "colour", selected: ["Red"] }] });
 	check("the browser's answer reaches the chat", await waitFor(() => /Red/.test(seen["ask 2"] ?? "")), seen["ask 2"]);
 	check(
-		"the Telegram message says it was answered in the browser",
-		await waitFor(() => /Answered in the browser<\/b>: Red/.test(m2.text) && noButtons(m2), 10_000),
-		m2.text.slice(-160),
+		"the Telegram message shrinks to one line: answered in the browser",
+		await waitFor(() => oneLineFinal(m2, "<b>Colour</b>", "Red <i>(in the browser)</i>") && noButtons(m2), 10_000),
+		m2.text,
 	);
 	const tap2 = tg.tap(m2, "Blue", { stale: true });
 	check(
@@ -562,9 +588,9 @@ try {
 		await waitFor(() => A.has("tool_approval_resolved", (m) => m.id === a1.id), 10_000),
 	);
 	check(
-		"the message says it was answered on Telegram",
-		await waitFor(() => /Answered on Telegram<\/b>/.test(m3.text) && noButtons(m3), 10_000),
-		m3.text.slice(-160),
+		"the message shrinks to one line: answered on Telegram",
+		await waitFor(() => oneLineFinal(m3, "<b>Allow bash?</b>", "<i>(on Telegram)</i>") && noButtons(m3), 10_000),
+		m3.text,
 	);
 	await waitIdle(A);
 
@@ -595,9 +621,9 @@ try {
 		seen["run 3"],
 	);
 	check(
-		"... and its Telegram message says it was answered in the browser",
-		await waitFor(() => /Answered in the browser<\/b>/.test(m5.text) && noButtons(m5), 10_000),
-		m5.text.slice(-160),
+		"... and its Telegram message shrinks to one line: answered in the browser",
+		await waitFor(() => oneLineFinal(m5, "<b>Allow bash?</b>", "<i>(in the browser)</i>") && noButtons(m5), 10_000),
+		m5.text,
 	);
 	await waitIdle(A);
 
@@ -609,6 +635,11 @@ try {
 		"the plan's approval pop-up reaches Telegram with Yes / No",
 		same(labels(m6), ["Yes", "No"]),
 		labels(m6).join(" | "),
+	);
+	check(
+		"... its plan shown as formatting, not as markdown marks",
+		m6.text.includes(`<b>Task #1: ${PLAN.title}</b>`) && !/\*\*|###/.test(m6.text),
+		m6.text,
 	);
 	check(
 		"... while the browser shows it too",
@@ -643,6 +674,11 @@ try {
 		same(labels(m8), [...CHOICES, TYPE_ANSWER]),
 		labels(m8).join(" | "),
 	);
+	check(
+		"... under 'Task #1 needs you' and the task's title, with no chat line",
+		m8.text.startsWith(`\u{1F4CC} <b>Task #1 needs you</b>\n<i>${PLAN.title}</i>\n\n`) && !m8.text.includes("Chat: "),
+		m8.text,
+	);
 	const task1 = () => A.state.taskQueue?.tasks?.find((t) => t.id === 1);
 	check(
 		"the Queue tab shows it stuck, with the same choices",
@@ -661,9 +697,12 @@ try {
 		JSON.stringify(task1()),
 	);
 	check(
-		"the message says it was answered on Telegram",
-		await waitFor(() => /Answered on Telegram<\/b>: Settings/.test(m8.text) && noButtons(m8), 10_000),
-		m8.text.slice(-160),
+		"the message shrinks to one line: the task, and the answer given on Telegram",
+		await waitFor(
+			() => oneLineFinal(m8, "<b>Task #1</b>", "Settings <i>(on Telegram)</i>", PLAN.title) && noButtons(m8),
+			10_000,
+		),
+		m8.text,
 	);
 	await waitIdle(A);
 
@@ -678,7 +717,7 @@ try {
 	await sleep(NO_BROWSER_GRACE_MS + 3000);
 	check(
 		"... and still waits after the no-browser wait",
-		!/No longer waiting/.test(m9.text) &&
+		!/no longer waiting/i.test(m9.text) &&
 			same(labels(m9), ["Small", "Large", TYPE_ANSWER]) &&
 			seen.quietAsk === undefined,
 		m9.text.slice(-160),
