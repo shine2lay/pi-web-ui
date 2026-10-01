@@ -295,4 +295,4 @@ web/src/
 | `BannerContainer.tsx` | 公告条容器（配 banner-notice.ts） |
 | `NotifyToggle.tsx` | 声音/通知开关（含隐藏的通知诊断面板 `SHOW_NOTIFY_TEST_PANEL`） |
 | `Markdown.tsx` / `Dropdown.tsx` / `copy-button.tsx` / `HintTip.tsx` / `SoundSettings.tsx` | 通用件（HintTip：`?` 悬浮提示 portal 顶层渲染） |
-| `mermaid.ts` / `scroll-classify.ts` | 非组件辅助（mermaid 渲染 / 滚动分类，与组件同目录存放） |
+| `mermaid.ts` / `scroll-classify.ts` / `md-adaptive-math.ts` | 非组件辅助（mermaid 渲染 / 滚动分类 / adaptive-math 补丁：逐个 `$` 判断是价格还是公式，与组件同目录存放） |

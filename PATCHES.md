@@ -67,6 +67,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | no-plan-board                | `local`        | `server/plan-manager.ts` (removed), `agent-service.ts`, `tool-manager.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (28), `web/src/components/PlanBoard.tsx` (removed), `App.tsx`, `i18n.tsx`, `locales/`, `styles.css`, `tests/unit/plan-state.test.ts` (removed), `tests/no-plan-board-test.mjs`, `tests/unit/` |
 | identities                   | `local`        | `server/identities.ts` (new), `agent-service.ts` (incl. `personaFirst`), `index.ts`, `protocol.ts`, `protocol-version.ts` (29), `web/src/identity-state.ts` + `identity-menu.ts` (new), `components/IdentityTag.tsx` + `IdentityPicker.tsx` + `IdentitiesSettings.tsx` (new), `App.tsx`, `LeftPanel.tsx`, `MessageList.tsx`, `SettingsModal.tsx`, `slot-toolbar.tsx`, `ui-slots.ts`, `use-chat.ts`, i18n + `locales/`, `styles.css`, `tests/identities-test.mjs`, `tests/unit/` |
 | queue-side-by-side           | `local`        | `server/task-queue.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TaskQueuePanel.tsx`, i18n + `locales/`, `styles.css`, `tests/run-sealed.mjs`, `tests/lib/sealed-runs.mjs` (new), `tests/queue-side-by-side-test.mjs` (new), `tests/unit/task-queue.test.ts`, `tests/unit/sealed-runs.test.ts` (new) |
+| adaptive-math                | `local`        | `web/src/components/md-adaptive-math.ts` (new), `Markdown.tsx`, `tests/unit/adaptive-math.test.ts`, `tests/adaptive-math-test.mjs`, `tests/tools/adaptive-math-corpus.mjs` |
 
 ---
 
@@ -3780,3 +3781,89 @@ draw the same lanes, and lets a long sealed test run survive the installs the si
   fails until they match.
 - If upstream changes `tests/run-sealed.mjs`, keep the restart-proof start (`inService` → systemd-run),
   `--result`, the run record and the slot before the build.
+
+## adaptive-math
+
+**Status**: `local`
+**Baseline**: v0.96.1
+
+**Why** (owner, 2026-09-30, with a screenshot): AI replies garbled dollar amounts. remark-math drew any
+text between two `$` signs as a formula, so in the AVGO reply (RollCall chat, 2026-09-22) "the stock is
+$353.55 and the call is $166.82" came out as slanted math with the spaces gone, and the bold after it
+broke. Chat replies are full of prices and almost never hold a formula: the last 30 chats had 2,124 `$`
+signs in 9,457 replies, plain remark-math drew 485 spans as math, and every one was a price. The owner:
+"It should be adaptive, we should write a layer to intercept and change it accordingly." The survey he
+saw first: ChatGPT writes `\(\dots\)` and `\[\dots\]`, Claude.ai started with `$$` only, LibreChat and Open
+WebUI allow `$\dots$` only when it passes Pandoc's rule.
+
+### Changes
+
+1. **The layer** (`web/src/components/md-adaptive-math.ts`, new): a micromark extension plus its
+   mdast handlers and a small tree pass, modelled on LibreChat's `client/src/utils/latex.ts`. It works
+   on the parser's tokens, not on the text, so code spans, code blocks and links are left alone by
+   construction, and a span it turns down stays exactly the text it was. It decides sign by sign:
+   - **`$\dots$`** is a formula only when all of these hold, else it's plain text: Pandoc's rule (no space
+     just inside either `$`; the closing `$` not followed by a digit, so "$100-$200" and "$5/$10" stay
+     prices); one line; no backtick; balanced braces; and the inside looks like math (`looksLikeMath`: a
+     TeX command, `^`, `_`, braces, an `=` with something on both sides, or a single-letter variable; a
+     bare number, a price such as "5M" or "1,200.50", or words don't; nor does an inside that ends on an
+     operator, as in "$a=$b" or "$a,$b", unless it's a script as in `$H^+$`). The opening `$` can't
+     follow a letter or digit ("US$5", "A$ 7" are money). The first `$` after the opening decides: a
+     failed span is given up whole, so "$5 and $10" can't stretch on to a later dollar.
+   - **`\(\dots\)`** (inline) and **`\[\dots\]`** (display) are always formulas once closed and not empty, and
+     may run over several lines. They're read before markdown's backslash escapes would eat the
+     brackets (an extension's constructs run before the built-in ones for the same character).
+   - **`$$\dots$$`** stays with remark-math, now `singleDollarTextMath: false`: inline within a sentence, a
+     block on lines of its own.
+   - **`\$`** stays a literal dollar (markdown's own escape).
+   - **Streaming**: a formula that hasn't closed yet stays text, so nothing flickers into math and back.
+     The tree pass also turns a `$$` block that never closed (a reply still arriving, or a stray `$$`
+     at the start of a line) into its text instead of a formula that swallows the rest of the reply.
+   - The tree pass makes a paragraph that is nothing but one `$$\dots$$` or `\[\dots\]` a display block, the
+     same as a `$$` block on lines of its own.
+   - It makes the same `inlineMath` nodes as remark-math (`code.language-math.math-inline`, or
+     `math-display` for `\[`), so KaTeX (`md-math.ts`, unchanged) draws them all.
+2. **Wiring** (`web/src/components/Markdown.tsx`): `remarkPlugins` and `remarkPluginsHardBreaks` both
+   end in `[remarkMath, { singleDollarTextMath: false }], remarkAdaptiveMath`, so replies, user bubbles,
+   the streaming renderer (`StreamMarkdown.tsx` goes through `MarkdownBody`) and every panel that uses
+   `<Markdown>` follow the same rules. `mayHaveMath` also says yes to `\(` and `\[`, so KaTeX still loads
+   lazily, now for those too.
+
+Only the display changes: saved chats and what the copy buttons copy keep the original text. The
+Telegram bot isn't affected (it draws no formulas).
+
+### How it was checked
+
+- `tests/unit/adaptive-math.test.ts` (70 cases, rendered to a string through the chat's pipeline with
+  KaTeX loaded; each case lists exactly which TeX sources come out as math): the AVGO reply word for word
+  (no formula, its sentences and bold intact); 19 price shapes ("$353.55 and the call is $166.82",
+  "**$85.49** is the $101.85 a day", "$1,200.50", "$2bn", "$5M", "$100-$200", "$5/$10", "costs $5 and
+  $10", "US$5", "$a=$b", `\$5`, ...) and a table of prices; 20 formulas (`$x^2$`, `$\frac{a}{b}$`,
+  `$a_i$`, `$E = mc^2$`, `$$\dots$$` inline and alone, `$$` blocks also in a quote and a list, `\(\dots\)`,
+  `\[\dots\]` on one line and over several, a matrix); a price next to a formula in one sentence; user
+  bubbles (hard breaks); code spans and blocks, odd spans (spaces inside, a digit after, two lines,
+  unbalanced braces, a backtick, empty `\(\)`); streaming (each formula still open stays text, then
+  renders once closed; an open `$$` block shows its text).
+- `tests/tools/adaptive-math-corpus.mjs` (`npx tsx`, reads only the text of assistant messages) over
+  real chats. The last 30: 9,457 replies, 2,124 `$` signs; plain remark-math drew 485 spans as math,
+  the layer draws none. All 39 chats and the 16 in `session-backups/`: 18,594 replies, 895 spans before,
+  none now; none of the 895 had a TeX command, `^` or `_` outside code, and no reply holds `\(`, `\[` or
+  `$$` outside code, so no real formula was lost. About 0.2 ms per reply.
+- `tests/adaptive-math-test.mjs` (sealed browser test with a stand-in model that types the reply a piece
+  at a time): while it streams, only the four real formulas ever render and KaTeX never reports an
+  error; no price text ever holds KaTeX; at the end exactly `x^2`, `a_i`, the `$$` block and the `\[ \]`
+  block render (the last two as display blocks), the price sentences read word for word with their bold;
+  the user's bubble renders `$y^2$` and keeps its prices; the copy button copies the original text.
+- check.sh, the build and the full sealed E2E suite; live, a copy of the RollCall chat with the AVGO
+  reply, before and after the install.
+
+### When syncing
+
+- Keep `singleDollarTextMath: false` and `remarkAdaptiveMath` in both plugin lists. If upstream changes
+  how markdown is rendered (another markdown component, another math plugin), route it through the same
+  lists; `tests/unit/adaptive-math.test.ts` fails if prices turn into math again.
+- micromark's `previous` only decides whether any construct for `$` may start (remark-math's always
+  may); all are then tried, so `tokenizeDollar` checks the opening itself. Keep that if micromark or
+  remark-math changes.
+- If upstream moves to remark-math 7 or micromark-extension-math 4, check that `$$` still makes
+  `inlineMath`/`math` nodes with the `language-math` classes rehype-katex looks for.

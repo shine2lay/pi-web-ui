@@ -6,6 +6,7 @@ import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
 import remarkMath from "remark-math";
 import rehypeHighlight from "rehype-highlight";
+import { remarkAdaptiveMath } from "./md-adaptive-math";
 import { CopyButton } from "./copy-button";
 import { splitCodeLines } from "../code-lines";
 import { childrenText, fenceLanguage } from "./mermaid";
@@ -36,15 +37,18 @@ interface MarkdownProps {
  *  StreamMarkdown's per-segment renderers reuse the exact same configuration
  *  as this full-document renderer — streaming preview and final render must
  *  be visually identical. */
-export const remarkPlugins = [remarkGfm, remarkMath];
+// adaptive-math: remark-math only reads `$$…$$`; md-adaptive-math decides which single `$` spans
+// are formulas (prices stay text) and reads ChatGPT's `\(…\)` and `\[…\]`.
+const mathSyntax: PluggableList = [[remarkMath, { singleDollarTextMath: false }], remarkAdaptiveMath];
+export const remarkPlugins: PluggableList = [remarkGfm, ...mathSyntax];
 /** Same pipeline + hard line breaks — used for USER bubbles so typed/pasted
  *  multi-line text keeps every line break (see MarkdownProps.hardBreaks). */
-export const remarkPluginsHardBreaks = [remarkGfm, remarkBreaks, remarkMath];
+export const remarkPluginsHardBreaks: PluggableList = [remarkGfm, remarkBreaks, ...mathSyntax];
 const highlightPlugin: Pluggable = [rehypeHighlight, { detect: true, ignoreMissing: true }];
 
 // mobile-fixes: math (KaTeX) and HTML inside markdown (parse5) are big and rarely needed, so they
 // don't load with the app any more: each loads the first time a text needs it (math: the text has a
-// "$"; HTML: it is shown with rawHtml). Until then that text shows without it (a formula as its TeX
+// "$", "\(" or "\["; HTML: it is shown with rawHtml). Until then that text shows without it (a formula as its TeX
 // source, HTML as text), and every text on screen re-renders once it has arrived.
 let mathPlugin: Pluggable | null = null;
 let rawHtmlPlugins: PluggableList | null = null;
@@ -97,9 +101,9 @@ export async function loadMarkdownExtras(): Promise<void> {
 	await Promise.all([loadMath(), loadRawHtml()]);
 }
 
-/** Does this text need math support? remark-math only knows $x$ and $$x$$. */
+/** Does this text need math support? Formulas come as $x$, $$x$$, \(x\) or \[x\] (adaptive-math). */
 export function mayHaveMath(text: string): boolean {
-	return text.includes("$");
+	return text.includes("$") || text.includes("\\(") || text.includes("\\[");
 }
 
 /**
