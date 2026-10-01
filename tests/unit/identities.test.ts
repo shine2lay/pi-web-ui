@@ -393,7 +393,13 @@ describe("Settings: about.md and notebook.md", () => {
 		const saved = saveIdentityFile(ids, "temper", "notebook", "- #fact two\n", textHash("- #fact one\n"));
 		expect(saved).toEqual({ ok: true, hash: textHash("- #fact two\n"), size: 12, archived: 1 });
 		expect(readFileSync(notebook(), "utf8")).toBe("- #fact two\n");
-		expect(readdirSync(join(idDir, "temper")).sort()).toEqual(["about.md", "identity.json", "notebook.md"]);
+		// No temp file left; the line the save took out is kept in the role's own folder (removed.md).
+		expect(readdirSync(join(idDir, "temper")).sort()).toEqual([
+			"about.md",
+			"identity.json",
+			"notebook.md",
+			"removed.md",
+		]);
 		// A first about.md for an identity that had none.
 		expect(saveIdentityFile(ids, "ops", "about", "# ops\n", textHash(""))).toMatchObject({ ok: true });
 		expect(readFileSync(join(idDir, "ops", "about.md"), "utf8")).toBe("# ops\n");
