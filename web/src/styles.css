@@ -1234,6 +1234,60 @@ button.session-item.elsewhere-item.confirm {
 	border-bottom: 1px solid var(--border);
 	border-radius: 0 0 0 5px;
 }
+/* queue-grouping: a queue chat with its open tasks' chats under it. The chevron takes the message icon's
+   place; the fold toggle lies over the row's left end (the chevron and the padding around it), the rest
+   of the row opens the chat as always. Task chats hang under it with the subagents' tree branch. */
+.lp-row .queue-fold-toggle {
+	position: absolute;
+	left: 0;
+	top: 0;
+	bottom: 2px;
+	width: 32px;
+	z-index: 1;
+	padding: 0;
+	border: none;
+	border-radius: 8px 0 0 8px;
+	background: transparent;
+	cursor: pointer;
+}
+.lp-row .queue-fold-toggle:hover {
+	background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.lp-row .queue-fold-toggle:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+.lp-row:has(.queue-fold-toggle:hover) .queue-fold-icon {
+	color: var(--accent);
+}
+.queue-fold-count {
+	display: inline-block;
+	vertical-align: 1px;
+	margin-right: 6px;
+	min-width: 16px;
+	padding: 0 5px;
+	border-radius: 999px;
+	border: 1px solid var(--border);
+	color: var(--text-dim);
+	font-size: 10px;
+	line-height: 1.4;
+	text-align: center;
+	box-sizing: border-box;
+}
+.queue-fold-count.running {
+	border-color: var(--amber);
+	color: var(--amber);
+}
+.queue-fold-count.needs-you {
+	border-color: var(--accent);
+	color: var(--accent);
+	background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+@media (max-width: 768px) {
+	.lp-row .queue-fold-toggle {
+		width: 40px;
+	}
+}
 .lp-row .lp-del {
 	position: absolute;
 	right: 8px;

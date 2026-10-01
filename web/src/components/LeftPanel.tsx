@@ -2,6 +2,7 @@ import { memo, useEffect, useState, useCallback, useRef } from "react";
 import {
 	FiCheck,
 	FiChevronDown,
+	FiChevronRight,
 	FiChevronUp,
 	FiChevronsLeft,
 	FiEdit2,
@@ -17,6 +18,7 @@ import { useT } from "../i18n";
 import { useAppField, useIsDsh } from "../app-globals";
 import { applySashDrag, parseWeights } from "../panel-sash";
 import { orderConversations } from "../conv-groups";
+import { LS_QUEUE_FOLDED, parseQueueFolds, queueFoldKey, toggledQueueFolds } from "../queue-folds";
 // 宿主 UI 扩展点（issue #146）：会话行的右键菜单走「slot 条目」这一条通道。
 import { CONV_IDENTITY_ENTRY_ID, LP_IDENTITY_ENTRY_ID, LP_SECTION_ENTRY_IDS, type UiSlotEntry } from "../ui-slots";
 import { useIdentityList } from "../identity-state";
@@ -134,6 +136,27 @@ function useCollapsed(key: string, defaultCollapsed = false): [boolean, () => vo
 	return [collapsed, toggle];
 }
 
+/** queue-grouping: the queue chats whose task chats are folded away (queue-folds.ts), kept in localStorage. */
+function useQueueFolds(): [ReadonlySet<string>, (key: string) => void] {
+	const [folds, setFolds] = useState<ReadonlySet<string>>(() => {
+		try {
+			return parseQueueFolds(localStorage.getItem(LS_QUEUE_FOLDED));
+		} catch {
+			return new Set();
+		}
+	});
+	const toggle = useCallback((key: string) => {
+		setFolds((prev) => {
+			const next = toggledQueueFolds(prev, key);
+			try {
+				localStorage.setItem(LS_QUEUE_FOLDED, JSON.stringify(next));
+			} catch {}
+			return new Set(next);
+		});
+	}, []);
+	return [folds, toggle];
+}
+
 /* VSCode 风格可拖拽分割：展开区的 flex-grow 权重持久化，折叠区不占空间 */
 const LS_LP_SIZES = "pi-web-ui:lp-sizes";
 type LpWeights = { convs: number; sessions: number };
@@ -188,6 +211,7 @@ export const LeftPanel = memo(function LeftPanel({
 	const [renameDraft, setRenameDraft] = useState("");
 	const [collapseConvs, toggleConvs] = useCollapsed(LS_COLLAPSE_CONVS, false);
 	const [collapseSessions, toggleSessions] = useCollapsed(LS_COLLAPSE_SESSIONS, false);
+	const [queueFolds, toggleQueueFold] = useQueueFolds();
 	/** 会话右键菜单（`contextmenu.session` 槽位）：见下面的 showSessionMenu / openSessionMenu /
 	 *  dispatchHostSessionEntry。宿主自己的两条（关闭已结束子代理 / 强行关闭对话）也在这个槽位里，
 	 *  与插件贡献的条目同排 —— 插件条目由 App 分发给插件，host 条目由本组件分派。 */
@@ -726,7 +750,10 @@ export const LeftPanel = memo(function LeftPanel({
 							{/* flat-recent-chats：一条扁平列表 —— 无项目分组、无组标题，按创建
 							    时间倒序（不变量），收消息/点开/切项目都不会让行换位置。 */}
 							{(() => {
-								return orderConversations(runningAll).map(({ conv: c, depth }) => {
+								// queue-grouping: open queued tasks' chats hang under the queue chat they came from; a queue
+								// chat's toggle folds them away (remembered per queue chat in this browser).
+								const isFolded = (home: ConversationSummary) => queueFolds.has(queueFoldKey(home));
+								return orderConversations(runningAll, isFolded).map(({ conv: c, depth, queueTask, queueGroup }) => {
 									if ((c as RowConv).elsewhere) {
 										const elseOwner = (c as RowConv).owner;
 										const elseConvId = (c as RowConv).convId;
@@ -828,14 +855,32 @@ export const LeftPanel = memo(function LeftPanel({
 									// 旧对话上等快照。失败后 pendingSwitch 清空，高亮自然回到真正的当前行。
 									const opening = isSwitchTargetRow(pendingSwitch, c);
 									const active = pendingSwitch ? opening : activeConversationId === c.id;
+									const foldTip = queueGroup
+										? t(queueGroup.folded ? "queueFoldShow" : "queueFoldHide", { n: queueGroup.count })
+										: "";
 									return (
 										<div
-											className={`lp-row${depth > 0 ? " lp-sub" : ""}`}
+											className={`lp-row${depth > 0 ? " lp-sub" : ""}${queueTask ? " lp-queue-task" : ""}${queueGroup ? " lp-queue-home" : ""}`}
 											key={c.id}
 											style={depth > 0 ? { marginLeft: depth * 18 } : undefined}
 											onMouseLeave={() => setConfirmDel((k) => (k === `conv:${c.id}` ? null : k))}
 											onContextMenu={(e) => openSessionMenu(e, { id: c.id, kind: "running", label: c.title })}
 										>
+											{/* queue-grouping: the fold toggle lies over the row's left end, where its chevron
+											    is (a big enough target on phones); the rest of the row opens the chat. */}
+											{queueGroup && (
+												<button
+													type="button"
+													className="queue-fold-toggle"
+													aria-expanded={!queueGroup.folded}
+													aria-label={foldTip}
+													title={foldTip}
+													onClick={(e) => {
+														e.stopPropagation();
+														toggleQueueFold(queueFoldKey(c));
+													}}
+												/>
+											)}
 											<button
 												type="button"
 												className={`session-item ${active ? "active" : ""}${opening ? " opening" : ""}`}
@@ -854,6 +899,12 @@ export const LeftPanel = memo(function LeftPanel({
 											>
 												{opening ? (
 													<span className="session-icon switch-spinner" aria-hidden />
+												) : queueGroup ? (
+													queueGroup.folded ? (
+														<FiChevronRight className="session-icon queue-fold-icon" aria-hidden />
+													) : (
+														<FiChevronDown className="session-icon queue-fold-icon" aria-hidden />
+													)
 												) : (
 													<FiMessageSquare className="session-icon" />
 												)}
@@ -905,6 +956,18 @@ export const LeftPanel = memo(function LeftPanel({
 																</span>
 															)}
 															{showIdentityTags && c.identity && <IdentityTag identity={c.identity} />}
+															{/* queue-grouping: folded away: how many task chats; marked when one is working or
+															    waits for you. Before the title, so a long title's ellipsis doesn't eat it. */}
+															{queueGroup?.folded && (
+																<span
+																	className={`queue-fold-count${queueGroup.needsYou ? " needs-you" : ""}${queueGroup.streaming ? " running" : ""}`}
+																	title={t(queueGroup.needsYou ? "queueFoldCountNeedsYou" : "queueFoldCount", {
+																		n: queueGroup.count,
+																	})}
+																>
+																	{queueGroup.count}
+																</span>
+															)}
 															{c.title}
 															{c.error && (
 																<span className="conv-error-badge" title={t("convErrorBadge", { error: c.error })} />

@@ -70,6 +70,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | adaptive-math                | `local`        | `web/src/components/md-adaptive-math.ts` (new), `Markdown.tsx`, `tests/unit/adaptive-math.test.ts`, `tests/adaptive-math-test.mjs`, `tests/tools/adaptive-math-corpus.mjs` |
 | queue-done-hidden            | `local`        | `server/agent-service.ts` (`queueCloseChat`, `markRecentSeen`, `recentSessions`), `task-queue.ts`, `queue-host.ts` (comment), `tests/unit/queue-done-hidden.test.ts` (new), `tests/queue-lanes-test.mjs`, `tests/tools/queue-done-sweep.mjs` (new) |
 | identity-notebook-tab        | `local`        | `server/notebook-watch.ts` (new), `identities.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (30), `web/src/notebook-state.ts` + `components/NotebookPanel.tsx` (new), `RightPanel.tsx`, `App.tsx`, `SettingsModal.tsx`, `IdentitiesSettings.tsx`, `ui-slots.ts`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `scripts/sealed.sh`, `tests/identity-notebook-test.mjs` (new), `tests/unit/` |
+| queue-grouping               | `local`        | `server/queue-groups.ts` (new), `agent-service.ts`, `client-state.ts`, `protocol.ts`, `protocol-version.ts` (31), `web/src/conv-groups.ts`, `queue-folds.ts` (new), `components/LeftPanel.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/queue-grouping-test.mjs` (new), `tests/unit/queue-groups.test.ts` (new), `conv-groups.test.ts`, `docs/directory-reference.md` |
 
 ---
 
@@ -4021,3 +4022,81 @@ tidy-up nudge past 6,000 characters) and gives a chat a changed notebook once, b
   show whole at the default width.
 - pi-identity's notebook format (`notebook.md`, the cap, the archive file and its format) is its own:
   if it changes, change `notebookArchivePath` and `archiveLines` with it.
+
+## queue-grouping
+
+**Status**: `local`
+**Baseline**: v0.96.1 (on top of `queue-done-hidden`)
+
+**Why** (owner, 2026-09-30, queue task #34: "okay, lets do grouping instead then"): every open queued
+task runs in a chat of its own (`Queue #n: <title>`), and with three home chats queuing work (tooling,
+RollCall, temper) those chats crowded the chat list. Running tasks as subagents was weighed and turned
+down: light subagents die at a restart and get no role, and the subagents add-on's helpers answer to the
+home chat instead of the owner. So task chats stay full chats and only the list changes: an open task's
+chat sits under the chat that queued it, the way a subagent sits under its parent, and the home chat's
+row can fold them away. Finished tasks' chats already leave the list (queue-done-hidden), so only open
+tasks are grouped.
+
+### Changes
+
+1. **The links** (`server/queue-groups.ts`, new): `queueHomesFrom(loaded, known)` works out "open task
+   chat -> its home chat" (transcript paths) from the open chats' queues as already cached for the Queue
+   tab (`taskQueueOfConv`'s `taskQueueCache`; nothing is read again). A task's own chat names its queue
+   (`UiTaskQueue.from`) and has the last word on its task (open = ready, working, stuck or waiting); a
+   home chat lists its tasks' chats (`tasks[].chat`) and drops the ones it no longer lists as open. At
+   most 500 links, the oldest go first. `queueLinksSig` is what a queue says about the links, to notice
+   a change.
+2. **Kept up to date** (`ClientSession` in `agent-service.ts`): when `taskQueueOfConv` works a chat's
+   queue out anew (a chat opened, or its queue now says something else about the links), it schedules
+   `refreshQueueHomes` (50 ms, once for a burst). That walks the open chats' cached queues and, only
+   when the links changed, keeps them in the server's client state (`client-state.json`, global
+   `queueHomes`, `getQueueHomes` / `setQueueHomes`) and sends every window its chat list again. So a task
+   chat that is only a Recent chats row stays under its home chat while neither chat is open, and after
+   a restart.
+3. **On the rows** (`emitConversations`): `applyQueueHomes` gives an open task chat's row its home chat's
+   row id (`ConversationSummary.queueHomeId`, protocol 31) when both are in the list. Lookups only: no
+   chat file read, no history walk (list-freeze stays as it is). A task chat whose home chat isn't
+   listed stays a normal row; subagents are left alone. An old page shows task chats as rows of their own.
+4. **The page** (`web/src/conv-groups.ts`, `components/LeftPanel.tsx`): `orderConversations` hangs task
+   rows under their home chat's row like subagents (a `parentId` wins over `queueHomeId`), newest first,
+   mixed with its subagents by creation time; titles and badges unchanged (`queueTask`). The home chat's
+   row (`queueGroup`: how many, folded, one working, one needing you) has a chevron in place of the chat
+   icon and a fold toggle over the row's left end (32 px wide; 40 x 44 px on phones); the rest of the row
+   opens the chat as before. Folded, the task chats leave the rows and a small count before the title
+   says how many (amber while one works, accent when one needs you: a question, a pop-up, or a TL;DR
+   line that needs you). Folds are kept per home chat in this browser (localStorage
+   `pi-web-ui:lp-queue-folded`, by its transcript path since its id changes at a restart, at most 100;
+   `web/src/queue-folds.ts`, new). "Dismiss finished subagents" still counts subagents only (it walks
+   `parentId`).
+5. Styles `.queue-fold-*` in `styles.css`; English strings in `i18n.tsx`, translated in all 8
+   `locales/*.json`.
+
+### How it was checked
+
+- `tests/unit/queue-groups.test.ts` (new): `queueHomesFrom` (either side, the task chat's word wins, a
+  closed task loses its link, nothing new = the same map, the cap), `queueLinksSig`, `applyQueueHomes`;
+  and the production `emitConversations`, `refreshQueueHomes` and `taskQueueOfConv` on stand-in windows:
+  grouped from the task chat's side and from the home chat's, Recent chats rows at either end, a home
+  that isn't listed, finished and removed tasks, subagents unchanged, links surviving a restart, a queue
+  worked out anew bringing its link in, and building the list reading no file (fs spied) and walking no
+  chat's history.
+- `tests/unit/conv-groups.test.ts`: the nesting and its order, the group's count and marks, folding
+  (with whatever hangs under a folded task chat), a home that isn't listed, `parentId` winning, no queue
+  links = the rows as before; the folds' storage.
+- `tests/queue-grouping-test.mjs` (new, sealed browser test, stand-in model, chats saved the way
+  pi-queue leaves them): a task chat whose home isn't listed stays a row of its own; the home chat's two
+  open tasks (one working, one on hold) gather under it, newest first, indented like subagents; a nested
+  chat opens from its row, stays nested and shows its working dot; the toggle folds and unfolds without
+  opening the home chat, and both survive a reload; phone width: the same in the chats drawer, a 40 x 44
+  px toggle, a tap folds and unfolds. `GROUPING_SHOT=<prefix>` saves screenshots of the list.
+- check.sh, the build and the full sealed E2E suite; live after the install: the home chats' open tasks
+  grouped on desktop and phone, and a 15-minute reconnect probe with no freeze over 5 s.
+
+### When syncing
+
+- Keep `applyQueueHomes` a lookup over the kept links: no chat file read and no history walk in
+  `emitConversations` (list-freeze).
+- If pi-queue changes its open states or where a task's chat and its queue are recorded (the
+  `assigned` entry's `from`, the `chat` op), follow it in `queue-groups.ts` (`OPEN`) and `task-queue.ts`.
+- If the left panel's nesting changes (`orderConversations`, the `lp-sub` rows), run
+  `tests/queue-grouping-test.mjs` and `tests/unit/conv-groups.test.ts`.

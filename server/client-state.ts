@@ -483,6 +483,10 @@ export interface ClientState {
 	 *  (session-file paths) — the left panel shows a solid green light for these
 	 *  (「轮到你了」). Cleared when the chat is opened or continued. Also global. */
 	recentWaiting?: string[];
+	/** queue-grouping: open queued tasks' chats (transcript paths) → the queue chat each came from (its home
+	 *  chat), as last worked out from the open chats' queues (server/queue-groups.ts). Kept here so a task
+	 *  chat that is only a Recent chats row stays under its home chat after a restart. Also global. */
+	queueHomes?: Record<string, string>;
 	/** Browser UI locale code as reported by hello/set_locale (e.g. "zh",
 	 *  "en", "ja"). Server resolves it via resolveServerLang (non-zh →
 	 *  English default, issue #91) for tool return values / AI prompts.
@@ -691,6 +695,20 @@ export class ClientStateStore {
 		state.recentWaiting = waiting ? [path, ...current].slice(0, 500) : current.filter((p) => p !== path);
 		this.save();
 		return true;
+	}
+
+	/** queue-grouping: the links last worked out (task chat → its queue chat), see queueHomes above. */
+	getQueueHomes(): Record<string, string> {
+		return { ...(this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY]?.queueHomes ?? {}) };
+	}
+
+	/** queue-grouping: keep these links instead (written only when they changed; none = the key goes). */
+	setQueueHomes(homes: Record<string, string>): void {
+		const all = this.load();
+		const state = (all[ClientStateStore.GLOBAL_SETTINGS_KEY] ??= { projects: [] });
+		if (Object.keys(homes).length > 0) state.queueHomes = { ...homes };
+		else delete state.queueHomes;
+		this.save();
 	}
 
 	/** Last-used goal/review prefs for a client, or undefined if never set. */

@@ -106,6 +106,7 @@ server/
 ├── office-parse.ts         # Office 文档纯文本提取（docx / xlsx，供预览与附件走 file_content 用）
 ├── composer-drafts.ts      # 未发送输入框草稿单中心文件（<dataDir>/composer-drafts.json，issue #166）
 ├── fast-mode.ts            # fast-mode: ChatGPT fast tier per chat (model list, hidden extension, refusal cooldown + one retry)
+├── queue-groups.ts         # queue-grouping: open queued tasks' chats -> the queue chat they came from (from the cached queues; rows get queueHomeId)
 ├── webui-context.ts        # 扩展 UI 桥（WebUIContext：widgets/statuses/dialog → 浏览器）
 ├── themes.ts               # 主题管理（listThemes/resolveThemeFile）
 ├── tabs.ts                 # 实例能力页签选择（Chat / Terminal / Git / Search / …）
@@ -211,6 +212,7 @@ web/src/
 ├── at-mention.ts       # @ 提及补全
 ├── slash-filter.ts     # 斜杠命令过滤
 ├── conv-groups.ts      # 对话分组（左栏）
+├── queue-folds.ts      # queue-grouping: which queue chats have their task chats folded away (localStorage)
 ├── copy-text.ts        # 复制文本辅助
 ├── use-copy-feedback.ts # 复制反馈 Hook
 ├── scroll-classify.ts（在 components/，见下）

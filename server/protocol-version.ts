@@ -33,4 +33,6 @@
 // 30: identity-notebook-tab - the right panel's Notebook tab: pages send identity_notebook_watch and
 //     the server pushes `identity_notebook` on every change; identity_file_save/_saved carry a ref.
 //     An old page shows no tab; an old server would never answer the watch.
-export const PROTOCOL_VERSION = 30;
+// 31: queue-grouping - chat rows carry queueHomeId: an open queued task's chat sits under the queue
+//     chat it came from. An old page shows the task chats as rows of their own.
+export const PROTOCOL_VERSION = 31;

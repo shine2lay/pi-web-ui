@@ -2464,6 +2464,10 @@ export interface ConversationSummary {
 	canceled?: boolean;
 	/** 父对话 id（Running 面板嵌套展示用）。 */
 	parentId?: string;
+	/** queue-grouping: this is an open queued task's own chat, and the queue chat it came from (its home
+	 *  chat) is a row of the same list: that row's id. The left panel shows the task under it, the way a
+	 *  subagent sits under its parent (server/queue-groups.ts). */
+	queueHomeId?: string;
 	/** 落盘会话文件（persisted conversation 才有；inMemory 子代理缺省）。
 	 *  右键「复制会话文件路径」与 AI 按 path 读历史时用。 */
 	sessionFile?: string;

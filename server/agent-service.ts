@@ -330,6 +330,7 @@ import {
 	taskQueueShareableFrom,
 } from "./task-queue.js";
 import { installQueueHost, makeChain, type QueueChatStart, waitUntil } from "./queue-host.js";
+import { applyQueueHomes, type LoadedQueue, queueHomesFrom, queueLinksSig } from "./queue-groups.js";
 import { idsHash } from "./window-hash.js";
 import {
 	isTldrReply,
@@ -3993,6 +3994,8 @@ export class ClientSession {
 		opts?: { blank?: boolean },
 	): Promise<ClientSession> {
 		const agentDir = process.env.PI_CODING_AGENT_DIR ?? getAgentDir();
+		// queue-grouping: the queue links are kept in the server's client state (one store per server).
+		ClientSession.queueHomesStore = stateStore;
 
 		const cs = new ClientSession(clientId, cwd, agentDir, stateStore);
 		const conversationId = cs.nextConversationId();
@@ -5092,6 +5095,59 @@ export class ClientSession {
 	/** telegram-answers: sends a stuck task's answer into the chat with this transcript, as the user's
 	 *  reply (AgentService sets it: the wake-up client opens the chat, or switches to it, and sends). */
 	static stuckAnswerSender: ((file: string, text: string) => Promise<AskResult>) | null = null;
+
+	/** queue-grouping: open queued tasks' chats (transcripts), each with the queue chat it came from (queue-groups.ts),
+	 *  as known so far; read from the client state the first time it's needed. */
+	private static queueHomes: ReadonlyMap<string, string> | null = null;
+	/** queue-grouping: where the links are kept across restarts (the server's client state). */
+	private static queueHomesStore: ClientStateStore | null = null;
+	private static queueHomesTimer: ReturnType<typeof setTimeout> | null = null;
+
+	/** queue-grouping: the links known so far. Only memory after the first call: building the chat list
+	 *  looks them up and nothing else (no chat file, no chat's history). */
+	private static knownQueueHomes(): ReadonlyMap<string, string> {
+		if (!ClientSession.queueHomes) {
+			const saved = ClientSession.queueHomesStore?.getQueueHomes() ?? {};
+			ClientSession.queueHomes = new Map(Object.entries(saved).filter(([, v]) => typeof v === "string"));
+		}
+		return ClientSession.queueHomes;
+	}
+
+	/** queue-grouping: work the links out again from the open chats' queues as cached (never re-read here);
+	 *  when they changed, keep them and send every window its chat list again. */
+	static refreshQueueHomes(): void {
+		const loaded: LoadedQueue[] = [];
+		for (const conv of ClientSession.sharedConvs.values()) {
+			if (conv.isSubagent) continue;
+			let file: string | undefined;
+			try {
+				file = conv.session.sessionFile;
+			} catch {
+				continue;
+			}
+			if (file) loaded.push({ file, queue: conv.taskQueueCache?.queue });
+		}
+		const known = ClientSession.knownQueueHomes();
+		const next = queueHomesFrom(loaded, known);
+		if (next === known) return;
+		ClientSession.queueHomes = next;
+		ClientSession.queueHomesStore?.setQueueHomes(Object.fromEntries(next));
+		ClientSession.emitConversationsToAll();
+	}
+
+	/** queue-grouping: a chat's queue changed what it says about the links: look again soon, once. */
+	private static scheduleQueueHomesRefresh(): void {
+		if (ClientSession.queueHomesTimer) return;
+		ClientSession.queueHomesTimer = setTimeout(() => {
+			ClientSession.queueHomesTimer = null;
+			try {
+				ClientSession.refreshQueueHomes();
+			} catch (err) {
+				console.error("[queue-grouping]", err);
+			}
+		}, 50);
+		ClientSession.queueHomesTimer.unref?.();
+	}
 
 	/** telegram-answers: look at the open chats' queues again soon (several changes come at once). */
 	private static scheduleStuckReconcile(): void {
@@ -6421,6 +6477,8 @@ export class ClientSession {
 			if (c && c.key === key) return c.queue;
 			const queue = taskQueueFromEntries(sm.getBranch(), available, undefined, shareable.patterns);
 			const sig = JSON.stringify(queue);
+			// queue-grouping: a chat opened, or its queue moved a task chat in or out of a queue's group.
+			if (!c || queueLinksSig(queue) !== queueLinksSig(c.queue)) ClientSession.scheduleQueueHomesRefresh();
 			conv.taskQueueCache = { key, sig, queue: c && c.sig === sig ? c.queue : queue };
 			return conv.taskQueueCache.queue;
 		} catch {
@@ -11294,6 +11352,9 @@ export class ClientSession {
 		const elsewhere = this.listExternalRunning?.() ?? [];
 		// recent-chats：活着的行之后拼上磁盘上的常驻历史行。
 		for (const recent of this.recentHistoryRows(livePaths, waiting)) conversations.push(recent);
+		// queue-grouping: an open task's chat goes under the queue chat it came from when both are listed. The
+		// links come from the open chats' cached queues (refreshQueueHomes); here they're only looked up.
+		applyQueueHomes(conversations, ClientSession.knownQueueHomes());
 		this.emit({
 			type: "conversations",
 			conversations,
