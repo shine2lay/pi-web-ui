@@ -321,7 +321,12 @@ import {
 	takePromptAdmission,
 } from "./prompt-ack.js";
 import { buildQuestionIndex } from "./question-index.js";
-import { TASK_QUEUE_ENTRY_TYPE, taskQueueCommandLine, taskQueueFromEntries } from "./task-queue.js";
+import {
+	TASK_QUEUE_ENTRY_TYPE,
+	taskQueueCommandLine,
+	taskQueueFromEntries,
+	taskQueueShareableFrom,
+} from "./task-queue.js";
 import { installQueueHost, makeChain, type QueueChatStart, waitUntil } from "./queue-host.js";
 import { idsHash } from "./window-hash.js";
 import {
@@ -6399,10 +6404,12 @@ export class ClientSession {
 		try {
 			const sm = conv.session.sessionManager;
 			const available = !!conv.session.extensionRunner?.getCommand?.("queue");
-			const key = `${sm.getSessionId()}\u0001${sm.getLeafId() ?? ""}\u0001${available}`;
+			// queue-side-by-side: pi-queue's shareable list (its settings file) decides the lanes too.
+			const shareable = taskQueueShareableFrom(join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "pi-queue.json"));
+			const key = `${sm.getSessionId()}\u0001${sm.getLeafId() ?? ""}\u0001${available}\u0001${shareable.stamp}`;
 			const c = conv.taskQueueCache;
 			if (c && c.key === key) return c.queue;
-			const queue = taskQueueFromEntries(sm.getBranch(), available);
+			const queue = taskQueueFromEntries(sm.getBranch(), available, undefined, shareable.patterns);
 			const sig = JSON.stringify(queue);
 			conv.taskQueueCache = { key, sig, queue: c && c.sig === sig ? c.queue : queue };
 			return conv.taskQueueCache.queue;

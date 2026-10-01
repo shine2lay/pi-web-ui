@@ -272,6 +272,8 @@
 		"taskQueueLane": "Spur {n}",
 		"taskQueueTouches": "Betrifft",
 		"taskQueueRunsAlone": "Nichts angegeben: läuft allein",
+		"taskQueueAfter": "Nach {list}",
+		"taskQueueAfterWaiting": "Nach {list}, wartet noch auf {open}",
 		"taskQueueOpenChat": "Ihren Chat öffnen",
 		"taskQueueOpenQueue": "Warteschlange öffnen",
 		"taskQueueFrom": "Dieser Chat arbeitet an einer Aufgabe aus der Warteschlange (die Warteschlange ist in „{title}“).",

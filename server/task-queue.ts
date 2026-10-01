@@ -22,8 +22,15 @@
  * pi-queue's lane rules: lane tasks may be open at the same time, the in-chat "one current task" rule
  * applies to the other tasks only. In a task's own chat the first entry (`assigned`) says which queue
  * it came from.
+ *
+ * queue-side-by-side: touches in pi-queue's shareable list (~/.pi/agent/pi-queue.json `shareable`;
+ * by default every "* repo" and pi-web-deploy) don't join lanes, so tasks that share only those run side
+ * by side; and a task can come after others (`after`): it starts only once each is done or removed.
+ * tests/unit/task-queue.test.ts replays the same queues through pi-queue's own queue.ts to keep the two
+ * sets of rules equal.
  */
 
+import { readFileSync, statSync } from "node:fs";
 import type {
 	UiTaskQueue,
 	UiTaskQueueChat,
@@ -102,6 +109,76 @@ export function normTouches(raw: unknown): string[] | undefined {
 	return out.slice(0, 20);
 }
 
+/** queue-side-by-side: pi-queue's normAfter: whole task numbers ("#4" too), no duplicates, never the task
+ *  itself; undefined = not a list. */
+export function normAfter(raw: unknown, self?: number): number[] | undefined {
+	if (!Array.isArray(raw)) return undefined;
+	const out: number[] = [];
+	for (const x of raw) {
+		const n = typeof x === "number" ? x : typeof x === "string" ? Number(x.trim().replace(/^#/, "")) : Number.NaN;
+		if (Number.isInteger(n) && n > 0 && n !== self && !out.includes(n)) out.push(n);
+	}
+	return out.slice(0, 20);
+}
+
+/** queue-side-by-side: pi-queue's DEFAULT_SHAREABLE: touches tasks may share and still run side by side. */
+export const TASK_QUEUE_DEFAULT_SHAREABLE: readonly string[] = ["* repo", "pi-web-deploy"];
+
+/** queue-side-by-side: pi-queue's shareableOf: `*` stands for any run of characters, the rest matches itself. */
+export function taskQueueShareableOf(
+	patterns: readonly unknown[] = TASK_QUEUE_DEFAULT_SHAREABLE,
+): (touch: string) => boolean {
+	const exact = new Set<string>();
+	const globs: RegExp[] = [];
+	for (const p of normTouches([...patterns]) ?? []) {
+		if (!p.includes("*")) exact.add(p);
+		else
+			globs.push(
+				new RegExp(
+					`^${p
+						.split("*")
+						.map((x) => x.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+						.join(".*")}$`,
+				),
+			);
+	}
+	return (touch) => exact.has(touch) || globs.some((g) => g.test(touch));
+}
+
+/** queue-side-by-side: pi-queue's shareableSetting: the settings' `shareable` list, or the default without one. */
+export function taskQueueShareableSetting(settings: unknown): string[] {
+	const list = settings && typeof settings === "object" ? (settings as { shareable?: unknown }).shareable : undefined;
+	return normTouches(list) ?? [...TASK_QUEUE_DEFAULT_SHAREABLE];
+}
+
+let shareableCache: { file: string; stamp: string; patterns: string[] } | undefined;
+
+/**
+ * queue-side-by-side: the shareable patterns in pi-queue's settings file (read again only when it
+ * changes, like pi-queue does), and a stamp that changes with them (for the snapshot cache). A missing
+ * or unreadable file means the default.
+ */
+export function taskQueueShareableFrom(file: string): { stamp: string; patterns: string[] } {
+	let stamp = "none";
+	try {
+		const st = statSync(file);
+		stamp = `${st.mtimeMs}:${st.size}`;
+	} catch {
+		// no settings file: the default
+	}
+	if (shareableCache?.file === file && shareableCache.stamp === stamp) return shareableCache;
+	let settings: unknown;
+	if (stamp !== "none") {
+		try {
+			settings = JSON.parse(readFileSync(file, "utf8"));
+		} catch {
+			// unreadable or half written: the default until it reads
+		}
+	}
+	shareableCache = { file, stamp, patterns: taskQueueShareableSetting(settings) };
+	return shareableCache;
+}
+
 /** telegram-answers: pi-queue's MAX_CHOICES / CHOICE_MAX. */
 const MAX_CHOICES = 4;
 const CHOICE_MAX = 100;
@@ -164,6 +241,8 @@ function apply(s: State, raw: unknown): void {
 		const task: Task = { id: op.id, plan: planOf(op.plan), status: "ready", addedAt: num(op.ts) };
 		const touches = normTouches(op.touches);
 		if (touches) task.touches = touches;
+		const after = normAfter(op.after, op.id);
+		if (after?.length) task.after = after;
 		if (op.op === "assigned") {
 			// A task's own chat: it works on this one task from the start.
 			const from = chatOf(op.from);
@@ -184,6 +263,10 @@ function apply(s: State, raw: unknown): void {
 			task.plan = planOf(op.plan);
 			const touches = normTouches(op.touches);
 			if (touches) task.touches = touches;
+			// queue-side-by-side: after is replaced when given ([] clears it), kept when not.
+			const after = normAfter(op.after, task.id);
+			if (after?.length) task.after = after;
+			else if (after) delete task.after;
 			return;
 		}
 		case "chat": {
@@ -288,11 +371,13 @@ export interface TaskQueueEntryLike {
  * 分支条目（按根 → 叶的顺序）→ 这条对话的任务队列。
  * tasks 按队列顺序（排着的就按这个顺序做），删掉的不带；做完的只留最近 `maxDone` 个。
  * `available`：这条对话装了 pi-queue（有 /queue 命令），面板据此决定给不给按钮。
+ * queue-side-by-side: `shareable`: pi-queue's shareable patterns (taskQueueShareableFrom).
  */
 export function taskQueueFromEntries(
 	entries: Iterable<TaskQueueEntryLike>,
 	available: boolean,
 	maxDone = TASK_QUEUE_MAX_DONE,
+	shareable: readonly string[] = TASK_QUEUE_DEFAULT_SHAREABLE,
 ): UiTaskQueue {
 	const s: State = { tasks: [], running: false, lanes: TASK_QUEUE_DEFAULT_LANES };
 	for (const e of entries) {
@@ -300,9 +385,16 @@ export function taskQueueFromEntries(
 	}
 	const done = s.tasks.filter((t) => t.status === "done").sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0));
 	const dropped = new Set(done.slice(maxDone));
+	// queue-side-by-side: an open task that comes after others shows which of them are still open
+	// (pi-queue's openDeps: not done or removed yet, in queue order).
+	for (const t of s.tasks) {
+		if (!t.after || !OPEN.has(t.status)) continue;
+		const open = s.tasks.filter((d) => t.after?.includes(d.id) && OPEN.has(d.status)).map((d) => d.id);
+		if (open.length) t.waitingFor = open;
+	}
 	const tasks = s.tasks.filter((t): t is UiTaskQueueTask => t.status !== "removed" && !dropped.has(t));
 	// queue-lanes: only a queue with tasks that run in chats of their own shows lanes (a task's own chat never).
-	const lanes = s.from ? [] : lanesOf(s.tasks);
+	const lanes = s.from ? [] : lanesOf(s.tasks, taskQueueShareableOf(shareable));
 	return {
 		running: s.running,
 		...(s.pausedReason ? { pausedReason: s.pausedReason } : {}),
@@ -321,8 +413,9 @@ export function taskQueueFromEntries(
  * tasks that share a touch, directly or through other open tasks, are one lane. A task that runs
  * alone (nothing declared, or added before lanes existed: it runs in the queue's own chat) is a lane
  * of its own. Lanes are numbered in queue order of their first open task.
+ * queue-side-by-side: shareable touches don't join lanes (a task with only those still has its own).
  */
-function lanesOf(all: Task[]): (UiTaskQueueLane & { inChat: boolean })[] {
+function lanesOf(all: Task[], shareable: (touch: string) => boolean): (UiTaskQueueLane & { inChat: boolean })[] {
 	const open = all.filter((t) => OPEN.has(t.status));
 	const inChat = (t: Task) => !t.lane && t.touches === undefined;
 	const alone = (t: Task) => inChat(t) || !t.touches || t.touches.length === 0;
@@ -332,6 +425,7 @@ function lanesOf(all: Task[]): (UiTaskQueueLane & { inChat: boolean })[] {
 	open.forEach((t, i) => {
 		if (alone(t)) return;
 		for (const touch of t.touches ?? []) {
+			if (shareable(touch)) continue;
 			const j = owner.get(touch);
 			if (j === undefined) owner.set(touch, i);
 			else parent[find(i)] = find(j);

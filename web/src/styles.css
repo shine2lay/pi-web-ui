@@ -2672,11 +2672,15 @@ button.session-item.elsewhere-item.confirm {
 	font-size: 11px;
 	line-height: 16px;
 }
-.task-queue-touches {
+.task-queue-touches,
+.task-queue-after {
 	margin-top: 1px;
 	color: var(--text-faint);
 	font-size: 11px;
 	overflow-wrap: anywhere;
+}
+.task-queue-after.waiting {
+	color: var(--text-dim);
 }
 .task-queue-open-chat,
 .tldr-open-chat {

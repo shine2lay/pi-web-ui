@@ -243,6 +243,10 @@ export interface UiTaskQueueTask {
 	lane?: boolean;
 	/** queue-lanes: that chat, once known. */
 	chat?: UiTaskQueueChat;
+	/** queue-side-by-side: the tasks it comes after: it starts only once each is done or removed. */
+	after?: number[];
+	/** queue-side-by-side: of those, the ones still open (not done or removed), in queue order; only on open tasks. */
+	waitingFor?: number[];
 }
 
 /** queue-lanes: a chat a task runs in, or the queue a task chat came from. */
@@ -252,7 +256,8 @@ export interface UiTaskQueueChat {
 	title?: string;
 }
 
-/** queue-lanes: open tasks that share a touch (directly or through each other) run one after another. */
+/** queue-lanes: open tasks that share a touch (directly or through each other) run one after another.
+ *  queue-side-by-side: shareable touches (pi-queue's settings: every repo and pi-web-deploy by default) don't count. */
 export interface UiTaskQueueLane {
 	/** 1, 2, 3 and so on, in queue order of each lane's first open task. */
 	n: number;

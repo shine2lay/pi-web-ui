@@ -272,6 +272,8 @@
 		"taskQueueLane": "Faixa {n}",
 		"taskQueueTouches": "Afeta",
 		"taskQueueRunsAlone": "Nada declarado: roda sozinha",
+		"taskQueueAfter": "Depois de {list}",
+		"taskQueueAfterWaiting": "Depois de {list}, ainda espera {open}",
 		"taskQueueOpenChat": "Abrir o chat dela",
 		"taskQueueOpenQueue": "Abrir a fila",
 		"taskQueueFrom": "Este chat trabalha numa tarefa da fila (a fila está em “{title}”).",

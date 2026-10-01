@@ -3,14 +3,23 @@
  * 规则必须和 pi-queue queue.ts 的 applyOp 一样（面板显示的就是 pi-queue 接下来会做的），
  * 所以前几条用例照搬 pi-queue tests/queue.test.ts 的 replay 用例。
  */
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir, userInfo } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+	normAfter,
 	normChoices,
 	normTouches,
+	TASK_QUEUE_DEFAULT_SHAREABLE,
 	TASK_QUEUE_ENTRY_TYPE,
 	TASK_QUEUE_MAX_DONE,
 	taskQueueCommandLine,
 	taskQueueFromEntries,
+	taskQueueShareableFrom,
+	taskQueueShareableOf,
+	taskQueueShareableSetting,
 	type TaskQueueEntryLike,
 } from "../../server/task-queue.js";
 import type { UiTaskQueuePlan } from "../../server/protocol.js";
@@ -322,15 +331,15 @@ describe("taskQueueFromEntries (lanes)", () => {
 	it("groups open tasks that share a touch into one lane; unrelated ones get lanes of their own", () => {
 		const q = replay(
 			entries([
-				{ op: "add", id: 1, plan: plan("One"), touches: ["pi-web-ui repo", "pi-web-deploy"] },
+				{ op: "add", id: 1, plan: plan("One"), touches: ["pi-web-ui repo", "pi memory files"] },
 				{ op: "add", id: 2, plan: plan("Two"), touches: ["temper"] },
-				{ op: "add", id: 3, plan: plan("Three"), touches: ["  PI-WEB-DEPLOY "] },
+				{ op: "add", id: 3, plan: plan("Three"), touches: ["  PI MEMORY  FILES "] },
 				{ op: "add", id: 4, plan: plan("Four"), touches: [] },
 			]),
 		);
-		expect(byId(q, 3)?.touches).toEqual(["pi-web-deploy"]);
+		expect(byId(q, 3)?.touches).toEqual(["pi memory files"]);
 		expect(q.lanes).toEqual([
-			{ n: 1, touches: ["pi-web-ui repo", "pi-web-deploy"], alone: false, taskIds: [1, 3] },
+			{ n: 1, touches: ["pi-web-ui repo", "pi memory files"], alone: false, taskIds: [1, 3] },
 			{ n: 2, touches: ["temper"], alone: false, taskIds: [2] },
 			{ n: 3, touches: [], alone: true, taskIds: [4] },
 		]);
@@ -457,6 +466,205 @@ describe("taskQueueFromEntries (lanes)", () => {
 		expect(normTouches("temper")).toBeUndefined();
 		expect(normTouches([])).toEqual([]);
 		expect(normTouches(["x".repeat(81)])).toEqual([]);
+	});
+});
+
+/**
+ * queue-side-by-side: shareable touches and "after", the same rules as pi-queue's (its tests/lanes.test.ts),
+ * and a check against pi-queue's own queue.ts so the two never drift.
+ */
+describe("taskQueueFromEntries (queue-side-by-side)", () => {
+	const byId = (q: ReturnType<typeof replay>, id: number) => q.tasks.find((t) => t.id === id);
+	/** The open tasks of the queue in the chat "tooling" on 2026-09-30, with what they touch. */
+	const TODAY: Array<[number, string[]]> = [
+		[29, ["pi-web-ui repo", "pi-web-deploy"]],
+		[31, ["pi-web-ui repo", "pi-web-deploy"]],
+		[32, ["pi-web-ui repo", "pi-web-deploy", "pi-identity repo", "pi memory files"]],
+		[33, ["pi-worktree repo", "pi-identity repo", "pi memory files", "scheduler", "pi-web-deploy"]],
+		[34, ["pi-web-ui repo", "pi-web-deploy"]],
+	];
+	const today = () => entries(TODAY.map(([id, touches]) => ({ op: "add", id, plan: plan(`Task ${id}`), touches })));
+
+	it("today's queue: #29, #31, #32 and #34 side by side, and #33 in #32's lane (both change the memory files)", () => {
+		const q = replay(today());
+		expect(q.lanes?.map((l) => [l.taskIds, l.alone])).toEqual([
+			[[29], false],
+			[[31], false],
+			[[32, 33], false],
+			[[34], false],
+		]);
+		// Before shareable touches (an empty list in the settings): one lane.
+		const old = taskQueueFromEntries(today(), true, TASK_QUEUE_MAX_DONE, []);
+		expect(old.lanes?.map((l) => l.taskIds)).toEqual([[29, 31, 32, 33, 34]]);
+	});
+
+	it("shareable: every repo and pi-web-deploy by default; a list in pi-queue's settings replaces it", () => {
+		const byDefault = taskQueueShareableOf();
+		for (const t of ["pi-web-ui repo", "agent-tools repo", "pi-web-deploy"]) expect(byDefault(t)).toBe(true);
+		for (const t of ["pi memory files", "scheduler", "temper-deploy", "repo", "chrome extension"]) {
+			expect(byDefault(t)).toBe(false);
+		}
+		expect(taskQueueShareableSetting(undefined)).toEqual(["* repo", "pi-web-deploy"]);
+		expect(taskQueueShareableSetting({ shareable: "x" })).toEqual(["* repo", "pi-web-deploy"]);
+		expect(taskQueueShareableSetting({ shareable: [" Temper-Deploy "] })).toEqual(["temper-deploy"]);
+		const q = taskQueueFromEntries(
+			entries([
+				{ op: "add", id: 1, plan: plan("A"), touches: ["temper", "temper-deploy"] },
+				{ op: "add", id: 2, plan: plan("B"), touches: ["temper-deploy"] },
+				{ op: "add", id: 3, plan: plan("C"), touches: ["pi-web-ui repo"] },
+				{ op: "add", id: 4, plan: plan("D"), touches: ["pi-web-ui repo"] },
+			]),
+			true,
+			TASK_QUEUE_MAX_DONE,
+			["temper-*"],
+		);
+		expect(q.lanes?.map((l) => l.taskIds)).toEqual([[1], [2], [3, 4]]);
+	});
+
+	it("a task with only shareable touches has a lane of its own; one that lists nothing still runs alone", () => {
+		const q = replay(
+			entries([
+				{ op: "add", id: 1, plan: plan("A"), touches: ["pi-web-ui repo"] },
+				{ op: "add", id: 2, plan: plan("B"), touches: [] },
+				{ op: "add", id: 3, plan: plan("C"), touches: ["pi-web-ui repo", "pi-web-deploy"] },
+			]),
+		);
+		expect(q.lanes).toEqual([
+			{ n: 1, touches: ["pi-web-ui repo"], alone: false, taskIds: [1] },
+			{ n: 2, touches: [], alone: true, taskIds: [2] },
+			{ n: 3, touches: ["pi-web-ui repo", "pi-web-deploy"], alone: false, taskIds: [3] },
+		]);
+	});
+
+	it("after: kept as pi-queue saves it, with the tasks still open; done or removed ones release it", () => {
+		const base = [
+			{ op: "add", id: 1, plan: plan("A"), touches: ["a"] },
+			{ op: "add", id: 2, plan: plan("B"), touches: ["b"] },
+			{ op: "add", id: 3, plan: plan("C"), touches: ["c"], after: [1, "#2", 3, 0, "x", 1] },
+		];
+		const q = replay(entries(base));
+		expect(byId(q, 3)).toMatchObject({ after: [1, 2], waitingFor: [1, 2] });
+		expect(byId(q, 1)?.after).toBeUndefined();
+		const one = replay(entries([...base, { op: "start", id: 1, lane: true }, { op: "done", id: 1, summary: "ok" }]));
+		expect(byId(one, 3)).toMatchObject({ after: [1, 2], waitingFor: [2] });
+		const both = replay(
+			entries([
+				...base,
+				{ op: "start", id: 1, lane: true },
+				{ op: "done", id: 1, summary: "ok" },
+				{ op: "remove", id: 2 },
+			]),
+		);
+		expect(byId(both, 3)?.after).toEqual([1, 2]);
+		expect(byId(both, 3)?.waitingFor).toBeUndefined();
+		// Stuck or on hold, a task still holds back the ones after it.
+		const stuck = replay(entries([...base, { op: "start", id: 1, lane: true }, { op: "stuck", id: 1, question: "?" }]));
+		expect(byId(stuck, 3)?.waitingFor).toEqual([1, 2]);
+		// update: replaced when given, [] clears it, kept when not; never the task itself.
+		const upd = (more: Record<string, unknown>) =>
+			byId(replay(entries([...base, { op: "update", id: 3, plan: plan("C2"), ...more }])), 3);
+		expect(upd({})?.after).toEqual([1, 2]);
+		expect(upd({ after: [2, 3] })?.after).toEqual([2]);
+		expect(upd({ after: [] })?.after).toBeUndefined();
+		expect(upd({ after: [] })?.waitingFor).toBeUndefined();
+		// A task's own chat keeps it too.
+		const own = replay(
+			entries([
+				{ op: "assigned", id: 5, plan: plan("Five"), touches: ["a"], after: [3], from: { file: "/s/q.jsonl" } },
+			]),
+		);
+		expect(own.tasks[0].after).toEqual([3]);
+		expect(normAfter([3, "#4", " 5 ", 3, 0, -1, 2.5, "x", 7], 7)).toEqual([3, 4, 5]);
+		expect(normAfter("3")).toBeUndefined();
+	});
+
+	it("reads the shareable list from pi-queue's settings file, again only when it changes", () => {
+		const dir = mkdtempSync(join(tmpdir(), "queue-shareable-"));
+		try {
+			const file = join(dir, "pi-queue.json");
+			const none = taskQueueShareableFrom(file);
+			expect(none.patterns).toEqual(["* repo", "pi-web-deploy"]);
+			writeFileSync(file, JSON.stringify({ lanes: 3, shareable: ["* repo", "temper-deploy"] }));
+			const set = taskQueueShareableFrom(file);
+			expect(set.patterns).toEqual(["* repo", "temper-deploy"]);
+			expect(set.stamp).not.toBe(none.stamp);
+			expect(taskQueueShareableFrom(file)).toBe(set);
+			writeFileSync(file, "{ half written");
+			expect(taskQueueShareableFrom(file).patterns).toEqual(["* repo", "pi-web-deploy"]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	// The Queue tab must show what pi-queue will do: replay the same queues through pi-queue's own queue.ts.
+	it("draws the same lanes and the same 'after' as pi-queue itself", async () => {
+		const pkg = process.env.PI_QUEUE_PKG ?? join(userInfo().homedir, "projects", "pi-queue");
+		const file = join(pkg, "queue.ts");
+		if (!existsSync(file)) throw new Error(`pi-queue not found at ${pkg} (set PI_QUEUE_PKG)`);
+		const pq = await import(/* @vite-ignore */ pathToFileURL(file).href);
+		const patternSets: string[][] = [["* repo", "pi-web-deploy"], [], ["temper-*", "scheduler"]];
+		const scenarios: Array<Array<Record<string, unknown>>> = [
+			TODAY.map(([id, touches]) => ({ op: "add", id, plan: plan(`Task ${id}`), touches })),
+			[
+				...TODAY.map(([id, touches]) => ({ op: "add", id, plan: plan(`Task ${id}`), touches })),
+				{ op: "update", id: 33, plan: plan("Task 33"), after: [32] },
+				{ op: "run" },
+				{ op: "start", id: 29, lane: true },
+				{ op: "done", id: 29, summary: "ok" },
+				{ op: "start", id: 32, lane: true },
+				{ op: "stuck", id: 32, question: "?" },
+			],
+			[
+				{ op: "add", id: 1, plan: plan("Old") },
+				{ op: "add", id: 2, plan: plan("A"), touches: ["a", "x repo"] },
+				{ op: "add", id: 3, plan: plan("B"), touches: ["b", "x repo"], after: [2, "#9"] },
+				{ op: "add", id: 4, plan: plan("AB"), touches: ["a", "b"] },
+				{ op: "add", id: 5, plan: plan("None"), touches: [], after: [4] },
+				{ op: "add", id: 6, plan: plan("T"), touches: ["temper-deploy", "scheduler"] },
+				{ op: "add", id: 7, plan: plan("U"), touches: ["temper-deploy"], after: [6, 5] },
+				{ op: "run" },
+				{ op: "start", id: 2, lane: true },
+				{ op: "remove", id: 4 },
+				{ op: "start", id: 6, lane: true },
+				{ op: "wait", id: 6, what: "CI", check: "false", everyMs: 60_000, until: 9e12 },
+				{ op: "update", id: 7, plan: plan("U2"), after: [] },
+			],
+		];
+		for (const ops of scenarios) {
+			const e = entries(ops);
+			for (const patterns of patternSets) {
+				const mine = taskQueueFromEntries(e, true, TASK_QUEUE_MAX_DONE, patterns);
+				const s = pq.replay(e);
+				const theirs = pq.lanesOf(s, true, pq.shareableOf(patterns)) as Array<{
+					n: number;
+					tasks: Array<{ id: number }>;
+					touches: string[];
+					alone: boolean;
+				}>;
+				const open = s.tasks.filter((t: { status: string }) => t.status !== "done" && t.status !== "removed");
+				expect(mine.lanes ?? []).toEqual(
+					theirs.map((l) => ({ n: l.n, touches: l.touches, alone: l.alone, taskIds: l.tasks.map((t) => t.id) })),
+				);
+				for (const t of open as Array<{ id: number; after?: number[] }>) {
+					const deps = (pq.openDeps(s, t) as Array<{ id: number }>).map((d) => d.id);
+					expect(byId(mine, t.id)?.after, `#${t.id} after`).toEqual(t.after);
+					expect(byId(mine, t.id)?.waitingFor ?? [], `#${t.id} waiting for`).toEqual(deps);
+				}
+			}
+		}
+		// The settings read the same way, and touches and "after" lists are cleaned the same way.
+		for (const settings of [undefined, {}, { shareable: "x" }, { shareable: [" A *", 3, "b"] }, { shareable: [] }]) {
+			expect(taskQueueShareableSetting(settings)).toEqual(pq.shareableSetting(settings));
+		}
+		expect([...TASK_QUEUE_DEFAULT_SHAREABLE]).toEqual([...pq.DEFAULT_SHAREABLE]);
+		const touches = ["pi-web-ui repo", "repo", "x.repo", "pi-web-deploy", "temper-deploy", "a.b (x) y", "axb (x) y"];
+		for (const patterns of [...patternSets, ["a.b (x) *"]]) {
+			const a = taskQueueShareableOf(patterns);
+			const b = pq.shareableOf(patterns);
+			expect(touches.map((t) => a(t))).toEqual(touches.map((t) => b(t)));
+		}
+		const raw = [3, "#4", " 5 ", 3, 0, -1, 2.5, "x", 7];
+		expect(normAfter(raw, 7)).toEqual(pq.normAfter(raw, 7));
 	});
 });
 

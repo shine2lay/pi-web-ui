@@ -272,6 +272,8 @@
 		"taskQueueLane": "Voie {n}",
 		"taskQueueTouches": "Concerne",
 		"taskQueueRunsAlone": "Rien de déclaré : s'exécute seule",
+		"taskQueueAfter": "Après {list}",
+		"taskQueueAfterWaiting": "Après {list}, attend encore {open}",
 		"taskQueueOpenChat": "Ouvrir son chat",
 		"taskQueueOpenQueue": "Ouvrir la file",
 		"taskQueueFrom": "Ce chat travaille sur une tâche de la file (la file est dans « {title} »).",

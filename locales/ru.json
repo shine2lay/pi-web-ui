@@ -272,6 +272,8 @@
 		"taskQueueLane": "Полоса {n}",
 		"taskQueueTouches": "Затрагивает",
 		"taskQueueRunsAlone": "Ничего не указано: выполняется отдельно",
+		"taskQueueAfter": "После {list}",
+		"taskQueueAfterWaiting": "После {list}, ещё ждёт {open}",
 		"taskQueueOpenChat": "Открыть её чат",
 		"taskQueueOpenQueue": "Открыть очередь",
 		"taskQueueFrom": "Этот чат работает над задачей из очереди (очередь в чате «{title}»).",

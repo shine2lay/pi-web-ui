@@ -272,6 +272,8 @@
 		"taskQueueLane": "レーン {n}",
 		"taskQueueTouches": "対象",
 		"taskQueueRunsAlone": "対象の指定なし：単独で実行",
+		"taskQueueAfter": "{list} の後",
+		"taskQueueAfterWaiting": "{list} の後（{open} を待っています）",
 		"taskQueueOpenChat": "そのチャットを開く",
 		"taskQueueOpenQueue": "キューを開く",
 		"taskQueueFrom": "このチャットはキューのタスクを作業しています（キューは「{title}」にあります）。",

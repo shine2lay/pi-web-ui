@@ -66,6 +66,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | list-freeze                  | `local`        | `server/message-count.ts` (new), `agent-service.ts`, `tests/unit/list-freeze.test.ts` |
 | no-plan-board                | `local`        | `server/plan-manager.ts` (removed), `agent-service.ts`, `tool-manager.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (28), `web/src/components/PlanBoard.tsx` (removed), `App.tsx`, `i18n.tsx`, `locales/`, `styles.css`, `tests/unit/plan-state.test.ts` (removed), `tests/no-plan-board-test.mjs`, `tests/unit/` |
 | identities                   | `local`        | `server/identities.ts` (new), `agent-service.ts` (incl. `personaFirst`), `index.ts`, `protocol.ts`, `protocol-version.ts` (29), `web/src/identity-state.ts` + `identity-menu.ts` (new), `components/IdentityTag.tsx` + `IdentityPicker.tsx` + `IdentitiesSettings.tsx` (new), `App.tsx`, `LeftPanel.tsx`, `MessageList.tsx`, `SettingsModal.tsx`, `slot-toolbar.tsx`, `ui-slots.ts`, `use-chat.ts`, i18n + `locales/`, `styles.css`, `tests/identities-test.mjs`, `tests/unit/` |
+| queue-side-by-side           | `local`        | `server/task-queue.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TaskQueuePanel.tsx`, i18n + `locales/`, `styles.css`, `tests/run-sealed.mjs`, `tests/lib/sealed-runs.mjs` (new), `tests/queue-side-by-side-test.mjs` (new), `tests/unit/task-queue.test.ts`, `tests/unit/sealed-runs.test.ts` (new) |
 
 ---
 
@@ -3704,3 +3705,78 @@ chats: see change 6.
   test.
 - If upstream adds its own host entries to `chat.header` or `chat.empty`, keep ours in the same slots.
   If upstream also bumps `PROTOCOL_VERSION`, use one more than the higher of the two numbers.
+
+## queue-side-by-side
+
+**Status**: `local`
+**Baseline**: v0.96.1
+
+**Why** (owner, 2026-09-30, queued task #35): the owner allowed 3 lanes, but only one task ran. Every
+pi-web-ui task lists the pi-web-ui repo and the installer, so the queue put them all in one lane, and one
+waiting install held it. Yet each task works in its own copy of the code (`wt new`) and landing rebases
+onto the newest version, so only the install has to take turns, and pi-web-deploy now does that by itself
+(agent-tools 06cb8b1). pi-queue (its own repo) now runs tasks side by side when all they share is
+"shareable" (every touch ending in " repo", and pi-web-deploy, by default; a list in
+`~/.pi/agent/pi-queue.json`), and a task can come after others (`after`). This patch makes the Queue tab
+draw the same lanes, and lets a long sealed test run survive the installs the side-by-side tasks now make.
+
+### Changes
+
+1. **The Queue tab's lanes** (`server/task-queue.ts`): the same rules as pi-queue's `queue.ts`:
+   - shareable touches don't join lanes (`taskQueueShareableOf`, `taskQueueShareableSetting`, the
+     default `TASK_QUEUE_DEFAULT_SHAREABLE`); a task with only shareable touches still has a lane of its
+     own, and one that lists nothing still runs alone;
+   - the list comes from pi-queue's settings file (`taskQueueShareableFrom`, read again only when it
+     changes; `agent-service.ts` adds its stamp to the snapshot cache key);
+   - `after` (`normAfter`, as pi-queue cleans it) is kept from add, update and assigned entries (update:
+     replaced when given, `[]` clears it); an open task carries `waitingFor`, the tasks of its `after`
+     still open (not done or removed), in queue order.
+2. **Protocol** (`protocol.ts`): `UiTaskQueueTask.after` and `waitingFor`, both optional (no version bump).
+3. **Page** (`TaskQueuePanel.tsx`): an open task with `after` shows "After #3" under its touches, or "After
+   #3, still waiting for #3" (`.task-queue-after`, `.waiting`). i18n keys `taskQueueAfter`,
+   `taskQueueAfterWaiting` in `i18n.tsx` and all 8 `locales/`; styles next to `.task-queue-touches`.
+4. **Sealed runs survive restarts** (`tests/run-sealed.mjs`, `tests/lib/sealed-runs.mjs` new):
+   - Started inside pi-web-ui's service (its cgroup in `/proc/self/cgroup`; a chat's bash is), the runner
+     starts itself again outside it with `systemd-run --user` (unit `pi-sealed-<time>`, its output
+     appended to `<out>/run.log`, the starting command's environment passed on through a 0600 file the
+     run deletes at once), and follows that log until the run ends, with its exit code. A restart cuts
+     off the following command, not the run. `--here` runs in place anyway; if systemd-run fails it runs
+     in place and says so.
+   - `node tests/run-sealed.mjs --result` shows this folder's newest run (by `run.json`'s repo and start
+     time; `--out=<dir>` for another) from the start and waits for its end; 1 and a line saying so when
+     its runner is gone without a result; 2 when there is none.
+   - Every run's folder has `run.json` (repo, args, unit, start), `pid`, `run.log` (in place: a copy of
+     the console) and `exit` (written on exit, also on SIGTERM 143 and SIGINT 130).
+   - At most 2 runs at once (`PI_SEALED_MAX_SUITES`): slots `<tmp>/pi-sealed-runs/slots/slot-<n>`, each
+     created exclusively, holding the runner's pid; a slot whose runner is gone is freed; a third run
+     says once that it waits, and starts when a slot frees. `scripts/check.sh` is unchanged (a cut-off
+     check.sh just runs again).
+
+### How it was checked
+
+- `tests/unit/task-queue.test.ts`: today's queue (#29, #31, #32, #34 side by side, #33 in #32's lane:
+  both change the memory files; one lane with an empty shareable list), the default and a custom list,
+  only-shareable vs nothing listed, `after` (kept, released by done or removed, held by stuck, update
+  replaces or clears), the settings file (default, custom, re-read on change, half-written); and the
+  same queues replayed through pi-queue's own `queue.ts` (`PI_QUEUE_PKG`, else `~/projects/pi-queue`)
+  give the same lanes, `after` and `waitingFor`, the same settings, the same matching and cleaning.
+- `tests/unit/sealed-runs.test.ts`: the cgroup check, the slots (two taken, the third waits and starts
+  when one frees; a dead runner's slot freed; a half-written one only once old; only its own freed),
+  finding the newest run of a folder, following a run (output as it grows, a character cut by a read,
+  the exit code, a run already over, a runner gone without a result, a unit that never started).
+- `tests/queue-side-by-side-test.mjs` (sealed browser test, real pi-queue, stand-in model, no tokens):
+  four planned tasks; #2's dialog says it has a lane of its own though it shares the repo and the
+  installer with #1; #4's says it shares #3's lane (memory files) and comes after #3; making #3 come
+  after #4 is refused (a loop) with no dialog; the tab shows lanes 1, 2, 3, 3 and "After #3, still
+  waiting for #3"; with 3 lanes at once, Start starts #1, #2 and #3 together in chats of their own;
+  #4 starts only when #3 is done, and its first message says how #3 ended; all end done; no page errors.
+- check.sh, the build and the full sealed suite, started from a chat (so it ran outside the service);
+  live: a sealed run started from a chat outlived the install's restart and `--result` showed it.
+
+### When syncing
+
+- pi-queue owns the rules: when its `lanesOf`, `openDeps`, `normAfter`, `shareableOf` or settings
+  change, follow them in `server/task-queue.ts`; the replay test in `tests/unit/task-queue.test.ts`
+  fails until they match.
+- If upstream changes `tests/run-sealed.mjs`, keep the restart-proof start (`inService` → systemd-run),
+  `--result`, the run record and the slot before the build.

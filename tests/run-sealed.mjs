@@ -16,27 +16,92 @@
  * It builds first (npm run build): most scripts start dist/server/index.js. Scripts that share a
  * fixed port never run at the same time (see portsOf below). A full run skips the few upstream
  * tests that don't apply to this fork and prints why (NOT_FOR_THIS_FORK below).
+ *
+ * queue-side-by-side:
+ *  - Started from a chat (inside pi-web-ui's service, whose restart stops everything in it), it starts
+ *    itself again outside it (systemd-run --user, a unit pi-sealed-<time>) and shows that run's output
+ *    until it ends, with its exit code. A restart cuts this command off, but not the run:
+ *      node tests/run-sealed.mjs --result             # how this folder's newest run went (waits for its end)
+ *      node tests/run-sealed.mjs --result --out=<dir> # that run
+ *    --here runs it in place anyway.
+ *  - At most 2 suites run at once (PI_SEALED_MAX_SUITES): the next one waits for a free slot and says so.
+ *  - <out> also holds run.json, pid, run.log (the output) and exit (the exit code, once it has ended).
  */
-import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import {
+	appendFileSync,
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { format } from "node:util";
+import { findRun, follow, inService, runOf, runsBase, takeSlot } from "./lib/sealed-runs.mjs";
+
+// queue-side-by-side: the run this script started outside pi-web-ui's service (below) takes the
+// environment of the command that started it, exactly: systemd gives a service the user manager's own.
+// What systemd sets for one service (pi-web-ui's, in that environment) stays this unit's own.
+const envFile = process.env.PI_SEALED_ENV_FILE;
+if (envFile) {
+	try {
+		const env = JSON.parse(readFileSync(envFile, "utf8"));
+		const ownKeys = ["INVOCATION_ID", "JOURNAL_STREAM", "NOTIFY_SOCKET", "MANAGER_PID", "SYSTEMD_EXEC_PID"];
+		const own = Object.fromEntries(ownKeys.filter((k) => k in process.env).map((k) => [k, process.env[k]]));
+		for (const k of Object.keys(process.env)) delete process.env[k];
+		for (const k of ownKeys) delete env[k];
+		Object.assign(process.env, env, own);
+	} catch (e) {
+		console.error(`couldn't read the environment of the command that started this run (${e.message})`);
+	}
+	rmSync(envFile, { force: true });
+	delete process.env.PI_SEALED_ENV_FILE;
+}
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "..");
 const sealedSh = join(repo, "scripts", "sealed.sh");
+/** This folder, the way runs record it (a worktree's own path). */
+const repoKey = (() => {
+	try {
+		return realpathSync(repo);
+	} catch {
+		return resolve(repo);
+	}
+})();
 
 const args = process.argv.slice(2);
 const opt = (name, fallback) => {
 	const a = args.find((x) => x.startsWith(`--${name}=`));
 	return a ? a.slice(name.length + 3) : fallback;
 };
+
+// --result: how this folder's newest run went (or the one in --out), waiting for it to end if it hasn't.
+if (args.includes("--result")) {
+	const dir = opt("out", undefined);
+	const found = dir
+		? runOf(resolve(dir))
+			? { dir: resolve(dir), run: runOf(resolve(dir)) }
+			: undefined
+		: findRun(runsBase(), repoKey);
+	if (!found) {
+		console.log(dir ? `no sealed run in ${dir}` : `no sealed run of ${repoKey} in ${runsBase()}`);
+		process.exit(2);
+	}
+	const what = (found.run.args ?? []).filter((a) => !a.startsWith("--")).join(" ") || "every script";
+	console.log(`the sealed run of ${what}, started ${found.run.at} (logs: ${found.dir}):`);
+	process.exit(await follow(found.dir));
+}
+
 const report = args.includes("--report");
 const jobs = Math.max(1, Number(opt("jobs", "6")) || 6);
 const timeoutSec = Math.max(10, Number(opt("timeout", "600")) || 600);
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-const out = opt("out", join(tmpdir(), "pi-sealed-runs", stamp));
+const out = resolve(opt("out", join(runsBase(), stamp)));
 mkdirSync(out, { recursive: true });
 
 const all = readdirSync(here)
@@ -50,6 +115,88 @@ for (const n of named) {
 		process.exit(2);
 	}
 }
+
+// queue-side-by-side: a chat's bash runs inside pi-web-ui's service, and a pi-web-ui restart (an
+// install) stops everything in it, a long suite too. So, started there, this starts itself again
+// outside it, as a systemd user service of its own, and just shows that run's output (run.log) until
+// it ends. Cut off by a restart, `node tests/run-sealed.mjs --result` picks it up again.
+if (!envFile && !args.includes("--here") && inService()) {
+	const unit = `pi-sealed-${stamp}`;
+	const logFile = join(out, "run.log");
+	const passOn = join(out, "env.json");
+	writeFileSync(join(out, "run.json"), JSON.stringify({ repo: repoKey, args, unit, at: new Date().toISOString() }));
+	writeFileSync(passOn, JSON.stringify(process.env), { mode: 0o600 });
+	const r = spawnSync(
+		"systemd-run",
+		[
+			"--user",
+			"--quiet",
+			"--collect",
+			`--unit=${unit}`,
+			`--description=sealed tests of ${repoKey}`,
+			`--working-directory=${repoKey}`,
+			`--property=StandardOutput=append:${logFile}`,
+			`--property=StandardError=append:${logFile}`,
+			`--setenv=PI_SEALED_ENV_FILE=${passOn}`,
+			process.execPath,
+			fileURLToPath(import.meta.url),
+			...args.filter((a) => !a.startsWith("--out=")),
+			`--out=${out}`,
+		],
+		{ encoding: "utf8" },
+	);
+	if (r.status === 0) {
+		console.log(`running outside pi-web-ui's service, as ${unit}: a pi-web-ui restart doesn't stop it.`);
+		console.log(
+			"  Cut off (by a restart, say)? `node tests/run-sealed.mjs --result` shows it again and waits for its end.",
+		);
+		console.log(`  Stop it: systemctl --user stop ${unit}`);
+		process.exit(await follow(out));
+	}
+	rmSync(passOn, { force: true });
+	rmSync(join(out, "run.json"), { force: true });
+	const why = (r.stderr || r.error?.message || `exit ${r.status}`).trim();
+	console.log(
+		`couldn't start it outside pi-web-ui's service (${why}); running it here, where a pi-web-ui restart stops it`,
+	);
+}
+
+// The run's record, for --result: run.json (the command that started this run outside the service
+// wrote it), the runner's pid, and its exit code once it ends. Stopped (systemctl stop, Ctrl+C), it
+// still writes one. In place, its output goes to run.log too (outside the service, systemd puts it there).
+if (!runOf(out))
+	writeFileSync(
+		join(out, "run.json"),
+		JSON.stringify({ repo: repoKey, args, unit: null, at: new Date().toISOString() }),
+	);
+writeFileSync(join(out, "pid"), String(process.pid));
+process.on("exit", (code) => {
+	try {
+		writeFileSync(join(out, "exit"), String(code));
+	} catch {
+		/* the folder is gone */
+	}
+});
+process.on("SIGTERM", () => process.exit(143));
+process.on("SIGINT", () => process.exit(130));
+if (!envFile) {
+	const logFile = join(out, "run.log");
+	for (const k of ["log", "error"]) {
+		const write = console[k].bind(console);
+		console[k] = (...a) => {
+			write(...a);
+			try {
+				appendFileSync(logFile, `${format(...a)}\n`);
+			} catch {
+				/* the folder is gone */
+			}
+		};
+	}
+}
+
+// At most 2 suites at once (PI_SEALED_MAX_SUITES): the queue runs tasks side by side, and more suites
+// at once slow each other down until their tests time out. The next one waits for a free slot.
+process.on("exit", await takeSlot({ owner: { pid: process.pid, repo: repoKey, out, at: new Date().toISOString() } }));
 
 // Upstream tests of behaviour our fork changed on purpose, plus one upstream test left behind by
 // an upstream redesign. They fail here by design, so a full run lists them as "skip" with the

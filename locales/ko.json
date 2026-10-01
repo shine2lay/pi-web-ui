@@ -272,6 +272,8 @@
 		"taskQueueLane": "레인 {n}",
 		"taskQueueTouches": "관련 대상",
 		"taskQueueRunsAlone": "지정 없음: 단독 실행",
+		"taskQueueAfter": "{list} 다음",
+		"taskQueueAfterWaiting": "{list} 다음, 아직 {open} 대기 중",
 		"taskQueueOpenChat": "그 채팅 열기",
 		"taskQueueOpenQueue": "대기열 열기",
 		"taskQueueFrom": "이 채팅은 대기열의 작업을 하고 있습니다(대기열은 ‘{title}’ 채팅에 있습니다).",

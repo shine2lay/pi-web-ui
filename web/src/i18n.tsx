@@ -268,6 +268,8 @@ export const en = {
 	taskQueueLane: "Lane {n}",
 	taskQueueTouches: "Touches",
 	taskQueueRunsAlone: "Nothing declared: runs alone",
+	taskQueueAfter: "After {list}",
+	taskQueueAfterWaiting: "After {list}, still waiting for {open}",
 	taskQueueOpenChat: "Open its chat",
 	taskQueueOpenQueue: "Open the queue",
 	taskQueueFrom: 'This chat works on a queued task (the queue is in "{title}").',

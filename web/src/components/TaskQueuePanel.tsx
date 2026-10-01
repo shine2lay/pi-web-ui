@@ -99,6 +99,11 @@ export function taskQueueStatusKey(q: UiTaskQueue, s: TaskQueueSections): TKey {
 	}
 }
 
+/** queue-side-by-side: "#31", "#31, #32", "#1, #2, #3": plain numbers, so every language reads them. */
+export function taskNumbers(ids: number[]): string {
+	return ids.map((n) => `#${n}`).join(", ");
+}
+
 /** telegram-answers: answer a stuck task here: one of its choices, or typed words. The answer goes
  *  into the chat the task runs in, as your reply, and it carries on (Telegram gets told too). */
 function StuckAnswer({ task, onAnswer }: { task: UiTaskQueueTask; onAnswer: (taskId: number, text: string) => void }) {
@@ -334,6 +339,16 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 				{kind !== "done" && task.touches !== undefined && (
 					<div className="task-queue-touches">
 						{task.touches.length > 0 ? `${t("taskQueueTouches")}: ${task.touches.join(", ")}` : t("taskQueueRunsAlone")}
+					</div>
+				)}
+				{kind !== "done" && !!task.after?.length && (
+					<div
+						className={`task-queue-after${task.waitingFor?.length ? " waiting" : ""}`}
+						data-after={task.after.join(",")}
+					>
+						{task.waitingFor?.length
+							? t("taskQueueAfterWaiting", { list: taskNumbers(task.after), open: taskNumbers(task.waitingFor) })
+							: t("taskQueueAfter", { list: taskNumbers(task.after) })}
 					</div>
 				)}
 				{wait &&
