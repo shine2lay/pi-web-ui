@@ -73,7 +73,8 @@ const IDENTITIES = {
 	},
 };
 const notebookFile = (id) => join(idDir, id, "notebook.md");
-const archiveFile = (id) => join(memDir, "archive", `notebook-${id}-removed.md`);
+// identity-notebook-tab: the lines a save takes out are kept in the role's own folder (private to it).
+const archiveFile = (id) => join(idDir, id, "removed.md");
 for (const [id, def] of Object.entries(IDENTITIES)) {
 	mkdirSync(join(idDir, id));
 	writeFileSync(join(idDir, id, "identity.json"), JSON.stringify(def.json, null, "\t"));
@@ -201,7 +202,7 @@ const server = spawn(process.execPath, [join(REPO, "dist", "server", "index.js")
 		PI_WEB_DATA_DIR: dataDir,
 		PI_CODING_AGENT_DIR: agentDir,
 		PI_WEB_TOKEN: "",
-		// pi-identity and the server read the identities from here and archive into its archive/.
+		// pi-identity and the server read the identities from PI_IDENTITY_DIR; removed lines go to <id>/removed.md.
 		PI_MEMORY_DIR: memDir,
 		PI_IDENTITY_DIR: idDir,
 		PI_IDENTITY_REINDEX: "0",
@@ -406,7 +407,7 @@ try {
 		await waitFor(async () => ((await W.locator(".notebook-note").textContent()) ?? "").includes("Saved"), 3000),
 	);
 	check(
-		"the line it took out is in the memory archive",
+		"the line it took out is in the role's removed.md",
 		existsSync(archiveFile("temper")) && readFileSync(archiveFile("temper"), "utf8").includes(LESSON),
 	);
 	check(

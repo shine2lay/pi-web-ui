@@ -4049,9 +4049,12 @@ tidy-up nudge past 6,000 characters) and gives a chat a changed notebook once, b
    the hash differs from the one it last got. Not `fs.watch`: pi-identity and the save replace the file
    by rename (a new inode each time), which a file watcher loses.
 2. **Saving** (`server/identities.ts`, `saveIdentityFile`): unchanged for about pages. A notebook save now
-   first keeps the lines it takes out (or the old wording of a line it changes) in the memory archive,
-   `archive/notebook-<id>-removed.md`, in pi-identity's format, stamped "removed or changed by the owner
-   (pi-web-ui)" (`droppedLines`, `notebookArchivePath`); a failed archive refuses the save. The answer
+   first keeps the lines it takes out (or the old wording of a line it changes) in the role's own folder,
+   `identities/<id>/removed.md` (was `archive/notebook-<id>-removed.md` until queue #33 made role folders
+   private: only the role's chats may read them, so its archive lives there too), in pi-identity's format,
+   stamped "removed or changed by the owner (pi-web-ui)" (`droppedLines`, `notebookArchivePath`); a failed
+   archive refuses the save. The owner's views and saves are the server's own, not agent tool calls, so
+   pi-worktree's role-folder rule doesn't apply to them. The answer
    says how many lines it archived, and the server logs `[identities] the owner saved the <id> notebook:
    N characters, M removed or changed lines archived` (never the text). `identity_file_save` takes an
    optional `ref` that comes back in `identity_file_saved`, so the tab's saves don't reach the Settings

@@ -4,7 +4,7 @@
  * - the server's NotebookWatch: a window gets the notebook at once and again on every change, whoever
  *   made it (a rename-replace like pi-identity's, an in-place edit); a touch without a change sends
  *   nothing; each window is sent only what it hasn't got; a closed window or tab stops it;
- * - the owner's save keeps the lines it takes out in the memory archive (pi-identity's format);
+ * - the owner's save keeps the lines it takes out in the role's own removed.md (pi-identity's format);
  * - the page's store (notebook-state.ts): watch, the live push, a save with the tab's ref, the conflict
  *   and cap refusals, a reconnect;
  * - the panel's render (view only: the draft is local state).
@@ -214,7 +214,9 @@ describe("the owner's save keeps what it takes out", () => {
 		);
 		expect(r1).toEqual({ ok: true, hash: textHash("- #fact two\n"), size: 12, archived: 1 });
 		const archive = notebookArchivePath("temper");
-		expect(archive).toBe(join(root, "memory", "archive", "notebook-temper-removed.md"));
+		// Inside the role's own folder, as private as its notebook; nothing in the shared archive.
+		expect(archive).toBe(join(idDir, "temper", "removed.md"));
+		expect(existsSync(join(root, "memory", "archive"))).toBe(false);
 		expect(readFileSync(archive, "utf8")).toBe(
 			"# Lines removed from the temper notebook\n\n<!-- 2026-09-30 21:05 removed or changed by the owner (pi-web-ui) -->\n- #fact one\n",
 		);
@@ -244,9 +246,8 @@ describe("the owner's save keeps what it takes out", () => {
 
 	it("a save whose lines can't be archived is refused, the notebook kept as it was", () => {
 		const ids = identityRegistry(true).identities;
-		// The archive folder can't be made: a file sits where it should be.
-		mkdirSync(join(root, "memory"), { recursive: true });
-		writeFileSync(join(root, "memory", "archive"), "not a folder");
+		// The archive can't be written: a folder sits where the file should be.
+		mkdirSync(join(idDir, "temper", "removed.md"));
 		expect(saveIdentityFile(ids, "temper", "notebook", "- #fact two\n", textHash("- #fact one\n"))).toEqual({
 			ok: false,
 			code: "io",

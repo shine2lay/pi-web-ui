@@ -446,14 +446,15 @@ export function readIdentityFile(identities: IdentityDef[], id: string, file: Id
 }
 
 /** identity-notebook-tab: archived = how many lines the owner's save took out of the notebook (they're
- *  kept in the memory archive, like pi-identity keeps the lines its notebook tool removes). */
+ *  kept in the role's own folder, like pi-identity keeps the lines its notebook tool removes). */
 export type IdentityFileSave =
 	{ ok: true; hash: string; size: number; archived: number } | { ok: false; code: IdentitySaveError };
 
-/** identity-notebook-tab: where a notebook's removed lines are kept (pi-identity's removedPath; memory_search
- *  still finds them). */
+/** identity-notebook-tab: where a notebook's removed lines are kept: <identities>/<id>/removed.md, inside
+ *  the role's own folder, which only the role's chats may read (pi-identity's removedPath; pi-worktree
+ *  enforces the privacy; memory_search still finds them for the role's own chats). */
 export function notebookArchivePath(id: string, env: Env = process.env): string {
-	return join(env.PI_MEMORY_DIR || join(home(env), ".pi", "agent", "memory"), "archive", `notebook-${id}-removed.md`);
+	return join(identitiesDir(env), id, "removed.md");
 }
 
 /** The lines of `before` that `after` no longer has, in order and once each (blank lines and headings
@@ -495,7 +496,7 @@ function writeWhole(path: string, text: string): void {
 /**
  * 存一个身份的 about.md / notebook.md（整个文件）。拒绝：没有这个身份（unknown）、笔记本超上限
  * （over_cap）、about 超安全上限（too_big）、文件在读出 baseHash 之后被改过（changed）、写不进去（io）。
- * identity-notebook-tab: a notebook save first keeps the lines it takes out in the memory archive.
+ * identity-notebook-tab: a notebook save first keeps the lines it takes out in the role's removed.md.
  */
 export function saveIdentityFile(
 	identities: IdentityDef[],
