@@ -104,7 +104,9 @@ for (const file of transcripts(SESSIONS)) {
 // ---- 2. what the chat list shows now ----------------------------------------------------------------
 const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
 const st = { ready: false, closed: false, convs: null, sessions: null, error: "" };
-ws.on("open", () => ws.send(JSON.stringify({ type: "hello", clientId: "queue-done-sweep" })));
+// A carry-on: client starts on a blank chat of its own. A plain new client would take over the chat
+// open last in the server's folder (reload-adopt), as if someone had looked at it.
+ws.on("open", () => ws.send(JSON.stringify({ type: "hello", clientId: "carry-on:queue-done-sweep" })));
 ws.on("close", () => (st.closed = true));
 ws.on("error", (e) => {
 	st.closed = true;

@@ -3912,7 +3912,8 @@ reports back (`/queue sync`), or when the queue's chat loads again; a `closed` o
 **The ones from before** (`tests/tools/queue-done-sweep.mjs`, once, after the install): finds every chat
 holding a queue (read only), replays it with pi-queue's `replayTranscript`, and sends `remove_recent_chat`
 (the ✕) for each done or removed task's chat that isn't open; a dry run without `--apply`. It prints
-counts and the queue chats' names only.
+counts and the queue chats' names only. Its socket is a `carry-on:` client: it starts on a blank chat
+of its own, where a plain new client would take over the chat open last in the server's folder.
 
 ### How it was checked
 
