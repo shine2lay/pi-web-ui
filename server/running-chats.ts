@@ -9,8 +9,10 @@
  * At startup the server reads the list of the process before it and plans the carry-on:
  *   - every chat in it is reopened and sent the carry-on note (a normal user message), so it
  *     checks where it stopped and carries on by itself;
- *   - a chat that got cut off LOOP_GUARD_CUTOFFS times in a row without finishing a turn gets no
- *     note, only a notice for the user (so a chat that brings the server down can't loop);
+ *   - cut-offs are counted per chat until it finishes a turn, crashes and planned stops apart: a
+ *     chat cut off by its LOOP_GUARD_CUTOFFS-th crash (no shutdown mark) gets no note, only a notice
+ *     for the user (so a chat that brings the server down can't loop); planned stops (installs,
+ *     pi-web-deploy restarts) don't count towards that, only towards PLANNED_CUTOFF_CEILING;
  *   - why the server restarted: the reason pi-web-deploy left in restart-reason.json, "a restart"
  *     for any other planned stop, and "it crashed or was killed" when the old process left no
  *     shutdown mark.
@@ -36,8 +38,14 @@ export const RUNNING_CHATS_FILE = "running-chats.json";
 export const RESTART_REASON_FILE = "restart-reason.json";
 /** Every carry-on note starts with this (pi-queue keys on it to pick its queue back up). */
 export const CARRY_ON_PREFIX = "pi-web-ui restarted at";
-/** The cut-off that gets a notice instead of a note (the 3rd in a row without finishing). */
+/** The crash cut-off that gets a notice instead of a note (the 3rd without a turn finishing in between). */
 export const LOOP_GUARD_CUTOFFS = 3;
+/**
+ * The planned cut-off (a stop that left its shutdown mark) that gets a notice instead of a note (the
+ * 10th without a turn finishing in between). Installs restart the server often, and a queued task's
+ * whole job is one long turn, so planned stops only stop a chat that keeps restarting the server itself.
+ */
+export const PLANNED_CUTOFF_CEILING = 10;
 /** A restart reason older than this belongs to some earlier restart. */
 export const REASON_FRESH_MS = 15 * 60_000;
 
@@ -54,8 +62,12 @@ export interface RunningChat {
 	cwd: string;
 	/** When this turn started (ms). */
 	startedAt: number;
-	/** Restarts that cut this chat off in a row, without a turn finishing in between. */
+	/** Restarts that cut this chat off in a row, without a turn finishing in between (both kinds). */
 	cutoffs: number;
+	/** Of those, the crashes (no shutdown mark). Missing in a list an older build wrote. */
+	crashes?: number;
+	/** Of those, the planned stops (shutdown mark). Missing in a list an older build wrote. */
+	planned?: number;
 	/** Tools running now. Empty = the model is writing (or thinking about) its reply. */
 	tools: RunningTool[];
 	/** The step as text, when it came from the transcript rather than live events. */
@@ -72,11 +84,24 @@ export interface RunningChatsFile {
 	chats: RunningChat[];
 }
 
-export interface CarryOnItem {
-	chat: RunningChat;
-	/** This cut-off's number in the row (1 or 2). */
+/** A chat's cut-offs without a turn finishing in between: all of them, and the two kinds. */
+export interface CutoffCounts {
 	cutoffs: number;
+	crashes: number;
+	planned: number;
+}
+
+/** A chat that gets the carry-on note, with its counts including this cut-off. */
+export interface CarryOnItem extends CutoffCounts {
+	chat: RunningChat;
 	note: string;
+}
+
+/** A chat left alone (a notice instead of a note), with its counts including this cut-off. */
+export interface GuardedItem extends CutoffCounts {
+	chat: RunningChat;
+	/** The limit it reached: LOOP_GUARD_CUTOFFS crashes, or PLANNED_CUTOFF_CEILING planned stops. */
+	why: "crashes" | "planned";
 }
 
 export interface CarryOnPlan {
@@ -86,8 +111,8 @@ export interface CarryOnPlan {
 	kind: "planned" | "crash";
 	at: number;
 	carry: CarryOnItem[];
-	/** Cut off LOOP_GUARD_CUTOFFS times in a row: a notice instead of a note. */
-	guarded: RunningChat[];
+	/** At a limit (LOOP_GUARD_CUTOFFS crashes, PLANNED_CUTOFF_CEILING planned stops): a notice instead of a note. */
+	guarded: GuardedItem[];
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +170,36 @@ export function carryOnNote(at: Date, reason: string, step: string): string {
 	return `${CARRY_ON_PREFIX} ${hhmm(at)} (${reason}). You were in the middle of ${step}; it was cut off. Check where it stopped and carry on.`;
 }
 
+/**
+ * A chat's cut-offs in a row, for the log: "cut off 1x", "cut off 1x: a crash", "cut off 4x in a row: all
+ * planned", "cut off 3x in a row: 2 planned, 1 crash", "cut off 3x in a row: all crashes".
+ */
+export function cutoffWords(c: CutoffCounts): string {
+	if (c.cutoffs <= 1) return c.crashes ? "cut off 1x: a crash" : "cut off 1x";
+	const crashes = c.crashes === 1 ? "1 crash" : `${c.crashes} crashes`;
+	const kinds = c.crashes && c.planned ? `${c.planned} planned, ${crashes}` : c.crashes ? "all crashes" : "all planned";
+	return `cut off ${c.cutoffs}x in a row: ${kinds}`;
+}
+
+/** The server log's line about a restart's carry-on: every chat with its own count of cut-offs. */
+export function carryOnLogLine(plan: CarryOnPlan): string {
+	const one = (i: CutoffCounts & { chat: RunningChat }) => `"${i.chat.title}" (${cutoffWords(i)})`;
+	return (
+		`[carry-on] restarted (${plan.reason}): carrying on ${plan.carry.length} chat(s)` +
+		(plan.carry.length ? `: ${plan.carry.map(one).join(", ")}` : "") +
+		(plan.guarded.length ? `; left alone: ${plan.guarded.map(one).join(", ")}` : "")
+	);
+}
+
+/** The notice the user gets about a chat the carry-on left alone. */
+export function guardNotice(g: GuardedItem): string {
+	const why =
+		g.why === "crashes"
+			? `${g.crashes} crashes without finishing a turn in between (pi-web-ui may be crashing because of it)`
+			: `${g.planned} planned restarts without finishing a turn in between`;
+	return `"${g.chat.title}" was cut off by ${why}, so it wasn't told to carry on this time. Open it and tell it what to do.`;
+}
+
 // ---------------------------------------------------------------------------
 // Planning the carry-on (pure)
 // ---------------------------------------------------------------------------
@@ -155,9 +210,25 @@ export interface RestartReason {
 }
 
 /**
+ * A chat's cut-offs as the list has them. A list an older build wrote has one count of both kinds:
+ * it is read as crashes, which keeps the crash guard as strict as it was.
+ */
+export function cutoffCounts(chat: Partial<Pick<RunningChat, "cutoffs" | "crashes" | "planned">>): CutoffCounts {
+	const n = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? Math.max(0, Math.floor(x)) : undefined);
+	let crashes = n(chat.crashes);
+	let planned = n(chat.planned);
+	if (crashes === undefined && planned === undefined) crashes = n(chat.cutoffs);
+	crashes ??= 0;
+	planned ??= 0;
+	return { cutoffs: crashes + planned, crashes, planned };
+}
+
+/**
  * What to do after a restart, from the list the old process left.
  * `reasonRec`: pi-web-deploy's restart-reason.json, if any (used only when it is fresh and the
  * old process stopped on purpose).
+ * A planned stop (the old process left its shutdown mark) counts towards PLANNED_CUTOFF_CEILING, a
+ * crash towards LOOP_GUARD_CUTOFFS; a chat at either limit gets a notice instead of a note.
  */
 export function planCarryOn(prev: RunningChatsFile | null, reasonRec: RestartReason | null, now: number): CarryOnPlan {
 	const planned = Boolean(prev?.shutdown);
@@ -172,13 +243,18 @@ export function planCarryOn(prev: RunningChatsFile | null, reasonRec: RestartRea
 	for (const chat of prev?.chats ?? []) {
 		if (!chat || typeof chat.sessionFile !== "string" || !chat.sessionFile || seen.has(chat.sessionFile)) continue;
 		seen.add(chat.sessionFile);
-		const cutoffs = (Number.isFinite(chat.cutoffs) ? Math.max(0, Math.floor(chat.cutoffs)) : 0) + 1;
-		if (cutoffs >= LOOP_GUARD_CUTOFFS) {
-			plan.guarded.push(chat);
+		const before = cutoffCounts(chat);
+		const counts: CutoffCounts = {
+			cutoffs: before.cutoffs + 1,
+			crashes: before.crashes + (planned ? 0 : 1),
+			planned: before.planned + (planned ? 1 : 0),
+		};
+		if (counts.crashes >= LOOP_GUARD_CUTOFFS || counts.planned >= PLANNED_CUTOFF_CEILING) {
+			plan.guarded.push({ chat, ...counts, why: counts.crashes >= LOOP_GUARD_CUTOFFS ? "crashes" : "planned" });
 			continue;
 		}
 		const step = chat.step ?? describeStep(Array.isArray(chat.tools) ? chat.tools : []);
-		plan.carry.push({ chat, cutoffs, note: carryOnNote(new Date(now), reason, step) });
+		plan.carry.push({ chat, ...counts, note: carryOnNote(new Date(now), reason, step) });
 	}
 	return plan;
 }
@@ -321,7 +397,7 @@ export class RunningChats {
 		this.write();
 	}
 
-	/** A turn started. A chat carried over from the restart keeps its cut-off count. */
+	/** A turn started. A chat carried over from the restart keeps its cut-off counts. */
 	start(ref: ChatRef): void {
 		if (this.frozen) return;
 		const old = this.chats.get(ref.sessionFile);
@@ -330,7 +406,7 @@ export class RunningChats {
 			title: ref.title,
 			cwd: ref.cwd,
 			startedAt: this.now(),
-			cutoffs: old?.cutoffs ?? 0,
+			...(old ? cutoffCounts(old) : { cutoffs: 0, crashes: 0, planned: 0 }),
 			tools: [],
 		});
 		this.write();
@@ -382,6 +458,12 @@ export class RunningChats {
 
 	has(sessionFile: string): boolean {
 		return this.chats.has(sessionFile);
+	}
+
+	/** The chat with this transcript, if it is in the list (a copy). */
+	get(sessionFile: string): RunningChat | undefined {
+		const c = this.chats.get(sessionFile);
+		return c ? { ...c, tools: [...c.tools] } : undefined;
 	}
 
 	private write(shutdown?: { at: number; signal: string }): void {

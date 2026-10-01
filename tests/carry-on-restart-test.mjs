@@ -16,7 +16,12 @@
  *   2. crash (kill -9): the notes say it crashed; the cut-off count goes up (the queue chat's
  *      starts again, because its task #1 finished in between).
  *   3. planned restart without a reason: REPLY, CMD and ASK are now cut off for the 3rd time in a
- *      row: no note, a notice instead (loop guard); QUEUE (2nd time) gets its note.
+ *      row, but only one of those was a crash: planned restarts don't count towards the crash
+ *      guard, so every busy chat gets its note.
+ *   4. crash: the 2nd crash in a row still gets notes.
+ *   5. crash: the 3rd crash in a row trips the crash guard: no note, a notice instead, for every
+ *      busy chat.
+ *   Every restart's log line gives each chat's real count of cut-offs, planned and crashes apart.
  *   IDLE and STOP never get anything.
  *
  * Usage: npm run build:server && node tests/carry-on-restart-test.mjs [port]   (CARRY_DEBUG=1: server log)
@@ -175,6 +180,8 @@ writeFileSync(
 const repoRoot = realpathSync(new URL("../", import.meta.url));
 let server = null;
 let serverLog = "";
+/** Everything every server process of this test printed (the carry-on log lines are checked). */
+let fullLog = "";
 function startServer() {
 	const child = spawn(process.execPath, ["dist/server/index.js"], {
 		cwd: repoRoot,
@@ -189,6 +196,7 @@ function startServer() {
 	});
 	const log = (d) => {
 		serverLog = (serverLog + d).slice(-20000);
+		fullLog += d;
 		if (process.env.CARRY_DEBUG) process.stderr.write(d);
 	};
 	child.stdout.on("data", log);
@@ -308,6 +316,13 @@ const runningList = () => {
 	}
 };
 const runningEntry = (file) => runningList()?.chats?.find((c) => c.sessionFile === file);
+/** The server's carry-on log lines, one per restart that cut off a working chat. */
+const carryLines = () => fullLog.split("\n").filter((l) => l.includes("[carry-on] restarted"));
+const countOf = (text, part) => (text ?? "").split(part).length - 1;
+const noteCounts = (busy) =>
+	Object.entries(busy)
+		.map(([k, c]) => `${k}:${notes(c.file).length}`)
+		.join(" ");
 
 /** Open a new chat in its own window and have a first quick exchange; returns the window and transcript. */
 async function newChat(name) {
@@ -468,6 +483,14 @@ try {
 		Object.values(n1).every((t) => noteShape.test(t)),
 		JSON.stringify(n1),
 	);
+	const line1 = carryLines()[0] ?? "";
+	check(
+		"the log line: 4 chats carried on, each cut off once",
+		line1.includes("(test restart one): carrying on 4 chat(s)") &&
+			countOf(line1, "(cut off 1x)") === 4 &&
+			!line1.includes("left alone"),
+		line1,
+	);
 	check("REPLY: cut off writing a reply", n1.reply.includes("in the middle of writing a reply;"), n1.reply);
 	check(
 		"CMD: cut off running its command",
@@ -549,6 +572,12 @@ try {
 		Object.values(n2).every((t) => t.includes("(it crashed or was killed). You were in the middle of")),
 		JSON.stringify(n2),
 	);
+	const line2 = carryLines()[1] ?? "";
+	check(
+		"the log line: REPLY, CMD and ASK cut off 2x in a row (1 planned, 1 crash), QUEUE 1x (a crash)",
+		countOf(line2, "(cut off 2x in a row: 1 planned, 1 crash)") === 3 && countOf(line2, "(cut off 1x: a crash)") === 1,
+		line2,
+	);
 	check("CMD: the redone command was cut off again", n2.cmd.includes("running the bash command `sleep 60`"), n2.cmd);
 	check("QUEUE: cut off in task #2's reply", n2.queue.includes("writing a reply"), n2.queue);
 	const counted = await waitFor(
@@ -567,39 +596,107 @@ try {
 		entries(idle.file).length === quietLines.idle && entries(stop.file).length === quietLines.stop,
 	);
 
-	// ---------------------------------------------------------------- 3. the loop guard
-	console.log("3. planned restart without a reason: the 3rd cut-off in a row");
+	// ---------------------------------------------------------------- 3. planned restarts don't trip the guard
+	console.log("3. planned restart without a reason: the 3rd cut-off in a row, only one of them a crash");
+	for (const c of clients) c.close();
+	clients.length = 0;
 	await stopServer("SIGTERM");
 	startServer();
 	await waitForPort();
 	const w3 = await Client.connect(`carry-window-${randomBytes(3).toString("hex")}`);
 	clients.push(w3);
+	const got3 = await waitFor(() => Object.values(busy).every((c) => notes(c.file).length === 3), 40000);
 	check(
-		'QUEUE (cut off twice) got its note, saying "a restart"',
-		Boolean(await waitFor(() => notes(queue.file).length === 3, 40000)) &&
-			notes(queue.file)[2].includes("(a restart)."),
-		notes(queue.file).at(-1),
+		'every busy chat got its 3rd note, saying "a restart" (planned restarts don\'t count towards the crash guard)',
+		Boolean(got3) && Object.values(busy).every((c) => notes(c.file)[2]?.includes("(a restart).")),
+		noteCounts(busy),
 	);
-	const guardNotices = await waitFor(() => {
-		const n = w3.notices().filter((t) => t.includes("was cut off by 3 restarts in a row"));
-		return n.length === 3 ? n : null;
-	}, 10000);
+	const line3 = carryLines()[2] ?? "";
 	check(
-		"REPLY, CMD and ASK (3rd time): a notice each instead of a note",
-		Boolean(guardNotices),
+		"the log line: REPLY, CMD and ASK cut off 3x in a row (2 planned, 1 crash), QUEUE 2x (1 planned, 1 crash)",
+		line3.includes("(a restart): carrying on 4 chat(s)") &&
+			countOf(line3, "(cut off 3x in a row: 2 planned, 1 crash)") === 3 &&
+			countOf(line3, "(cut off 2x in a row: 1 planned, 1 crash)") === 1 &&
+			!line3.includes("left alone"),
+		line3,
+	);
+	check(
+		"no chat was left alone",
+		!w3.notices().some((t) => t.includes(" was cut off by ")),
 		JSON.stringify(w3.notices()),
 	);
-	await sleep(2000);
+	/** Every busy chat working again (its carry-on note sent), with these counts. */
+	const workingAgain = (counts) =>
+		waitFor(
+			() =>
+				Object.entries(busy).every(([k, c]) => {
+					const e = runningEntry(c.file);
+					const [cutoffs, planned, crashes] = counts[k];
+					return (
+						e && !e.awaiting && e.cutoffs === cutoffs && (e.planned ?? 0) === planned && (e.crashes ?? 0) === crashes
+					);
+				}),
+			30000,
+		);
 	check(
-		"...and no third note",
-		notes(reply.file).length === 2 && notes(cmd.file).length === 2 && notes(askc.file).length === 2,
-		`${notes(reply.file).length} ${notes(cmd.file).length} ${notes(askc.file).length}`,
-	);
-	check(
-		"the list keeps only the queue chat",
-		(runningList()?.chats ?? []).map((c) => c.sessionFile).join() === queue.file,
+		"working again, planned cut-offs and crashes counted apart",
+		Boolean(await workingAgain({ reply: [3, 2, 1], cmd: [3, 2, 1], ask: [3, 2, 1], queue: [2, 1, 1] })),
 		JSON.stringify(runningList()),
 	);
+
+	// ---------------------------------------------------------------- 4. the 2nd crash in a row
+	console.log("4. crash: the 2nd crash in a row still gets notes");
+	for (const c of clients) c.close();
+	clients.length = 0;
+	await stopServer("SIGKILL");
+	startServer();
+	await waitForPort();
+	const got4 = await waitFor(() => Object.values(busy).every((c) => notes(c.file).length === 4), 40000);
+	check(
+		"every busy chat got its 4th note, saying it crashed",
+		Boolean(got4) && Object.values(busy).every((c) => notes(c.file)[3]?.includes("(it crashed or was killed).")),
+		noteCounts(busy),
+	);
+	const line4 = carryLines()[3] ?? "";
+	check(
+		"the log line: REPLY, CMD and ASK cut off 4x in a row (2 planned, 2 crashes), QUEUE 3x (1 planned, 2 crashes)",
+		countOf(line4, "(cut off 4x in a row: 2 planned, 2 crashes)") === 3 &&
+			countOf(line4, "(cut off 3x in a row: 1 planned, 2 crashes)") === 1,
+		line4,
+	);
+	check(
+		"working again",
+		Boolean(await workingAgain({ reply: [4, 2, 2], cmd: [4, 2, 2], ask: [4, 2, 2], queue: [3, 1, 2] })),
+		JSON.stringify(runningList()),
+	);
+
+	// ---------------------------------------------------------------- 5. the crash guard
+	console.log("5. crash: the 3rd crash in a row trips the crash guard");
+	await stopServer("SIGKILL");
+	startServer();
+	await waitForPort();
+	const w5 = await Client.connect(`carry-window-${randomBytes(3).toString("hex")}`);
+	clients.push(w5);
+	const guardNotices = await waitFor(() => {
+		const n = w5.notices().filter((t) => t.includes(" was cut off by 3 crashes without finishing a turn in between"));
+		return n.length === 4 ? n : null;
+	}, 15000);
+	check("every busy chat (3rd crash): a notice instead of a note", Boolean(guardNotices), JSON.stringify(w5.notices()));
+	await sleep(2000);
+	check(
+		"...and no 5th note",
+		Object.values(busy).every((c) => notes(c.file).length === 4),
+		noteCounts(busy),
+	);
+	const line5 = carryLines()[4] ?? "";
+	check(
+		"the log line: none carried on; left alone: REPLY, CMD and ASK 5x in a row (2 planned, 3 crashes), QUEUE 4x",
+		line5.includes("carrying on 0 chat(s); left alone: ") &&
+			countOf(line5, "(cut off 5x in a row: 2 planned, 3 crashes)") === 3 &&
+			countOf(line5, "(cut off 4x in a row: 1 planned, 3 crashes)") === 1,
+		line5,
+	);
+	check("the list is empty", (runningList()?.chats ?? []).length === 0, JSON.stringify(runningList()));
 	check(
 		"the idle and the stopped chat never got anything",
 		entries(idle.file).length === quietLines.idle && entries(stop.file).length === quietLines.stop,

@@ -5,14 +5,19 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	chatStateFrom,
+	cleanChatState,
 	installQueueHost,
 	isQueueCommand,
+	isWakeNote,
 	makeChain,
 	parseQueueChatStart,
 	QUEUE_HOST_KEY,
 	type QueueHost,
 	type QueueHostImpl,
+	WAKE_NOTE_MAX,
 	waitUntil,
+	wakeRefusal,
 } from "../../server/queue-host.js";
 
 const good = {
@@ -111,6 +116,55 @@ describe("waitUntil", () => {
 	});
 });
 
+describe("stall-watch: a chat's state, and when it may be woken", () => {
+	it("working while a turn runs or a restart's carry-on is about to start one; idle when open; closed when not loaded", () => {
+		// Open, a turn (or a compaction, or a message on its way) running.
+		expect(chatStateFrom(true, { awaiting: false })).toBe("working");
+		expect(chatStateFrom(true, undefined)).toBe("working");
+		// Open, between the attempts of an automatic retry: its turn isn't over (it's in the running list).
+		expect(chatStateFrom(false, {})).toBe("working");
+		// Open, nothing running, its turn over.
+		expect(chatStateFrom(false, undefined)).toBe("idle");
+		// Not loaded, but the carry-on is about to reopen it.
+		expect(chatStateFrom(undefined, { awaiting: true })).toBe("working");
+		// Not loaded: closed (a leftover entry without awaiting can't be running anything).
+		expect(chatStateFrom(undefined, undefined)).toBe("closed");
+		expect(chatStateFrom(undefined, {})).toBe("closed");
+	});
+
+	it("never wakes a working chat, nor one the carry-on left alone at this start until it does something", () => {
+		const LEFT = 5_000;
+		expect(wakeRefusal({ state: "working", lastActiveAt: 1 })).toBe("the chat is working");
+		expect(wakeRefusal({ state: "idle", lastActiveAt: 1 })).toBeUndefined();
+		expect(wakeRefusal({ state: "closed" })).toBeUndefined();
+		expect(wakeRefusal({ state: "closed", lastActiveAt: LEFT - 1 }, LEFT)).toMatch(/^the carry-on left it alone/);
+		expect(wakeRefusal({ state: "closed" }, LEFT)).toMatch(/^the carry-on left it alone/);
+		expect(wakeRefusal({ state: "idle", lastActiveAt: LEFT }, LEFT)).toMatch(/^the carry-on left it alone/);
+		// The owner opened it and it did something since: it's a chat like any other again.
+		expect(wakeRefusal({ state: "idle", lastActiveAt: LEFT + 1 }, LEFT)).toBeUndefined();
+		expect(wakeRefusal({ state: "working", lastActiveAt: LEFT + 1 }, LEFT)).toBe("the chat is working");
+	});
+
+	it("checks what it hands pi-queue: a known state, and a time only when it is one", () => {
+		expect(cleanChatState({ state: "idle", lastActiveAt: 1234.6 })).toEqual({ state: "idle", lastActiveAt: 1235 });
+		expect(cleanChatState({ state: "working" })).toEqual({ state: "working" });
+		expect(cleanChatState({ state: "busy", lastActiveAt: 5 })).toEqual({ state: "closed", lastActiveAt: 5 });
+		expect(cleanChatState({ state: "idle", lastActiveAt: Number.NaN })).toEqual({ state: "idle" });
+		expect(cleanChatState({ state: "idle", lastActiveAt: -1 })).toEqual({ state: "idle" });
+		expect(cleanChatState({ state: "idle", lastActiveAt: "5" })).toEqual({ state: "idle" });
+		expect(cleanChatState(null)).toEqual({ state: "closed" });
+	});
+
+	it("a wake note is some text of a few lines", () => {
+		expect(isWakeNote("[Queue] This chat stopped while its task was still being worked on.")).toBe(true);
+		expect(isWakeNote("x".repeat(WAKE_NOTE_MAX))).toBe(true);
+		expect(isWakeNote("x".repeat(WAKE_NOTE_MAX + 1))).toBe(false);
+		expect(isWakeNote("  \n ")).toBe(false);
+		expect(isWakeNote(42)).toBe(false);
+		expect(isWakeNote(undefined)).toBe(false);
+	});
+});
+
 describe("installQueueHost", () => {
 	let uninstall: (() => void) | undefined;
 	afterEach(() => {
@@ -122,6 +176,8 @@ describe("installQueueHost", () => {
 		startChat: vi.fn(async () => ({ sessionFile: "/s/new.jsonl", conversationId: "c9" })),
 		runCommand: vi.fn(async () => true),
 		closeChat: vi.fn(async () => true),
+		chatState: vi.fn(async () => ({ state: "idle" as const, lastActiveAt: 1234 })),
+		wakeChat: vi.fn(async () => true),
 	});
 
 	it("puts version 1 where pi-queue looks, and passes checked options on", async () => {
@@ -155,11 +211,40 @@ describe("installQueueHost", () => {
 			closeChat: () => {
 				throw new Error("gone");
 			},
+			chatState: () => {
+				throw new Error("gone");
+			},
+			wakeChat: async () => {
+				throw new Error("gone");
+			},
 		});
 		const host = hostOnGlobal();
 		await expect(host?.startChat(good)).rejects.toThrow("no runtime");
 		await expect(host?.runCommand("/s/a.jsonl", "/queue go")).resolves.toBe(false);
 		await expect(host?.closeChat("/s/a.jsonl")).resolves.toBe(false);
+		// pi-queue skips a task whose chat it can't look at this time, and records a wake that failed.
+		await expect(host?.chatState("/s/a.jsonl")).rejects.toThrow("gone");
+		await expect(host?.wakeChat("/s/a.jsonl", "wake up")).resolves.toBe(false);
+	});
+
+	it("stall-watch: says how a chat is, checked, and wakes it with a note only", async () => {
+		const i = impl();
+		uninstall = installQueueHost(i);
+		const host = hostOnGlobal();
+		await expect(host?.chatState("/s/a.jsonl")).resolves.toEqual({ state: "idle", lastActiveAt: 1234 });
+		expect(i.chatState).toHaveBeenCalledWith("/s/a.jsonl");
+		await expect(host?.chatState(" ")).rejects.toThrow(/no chat/);
+		vi.mocked(i.chatState).mockResolvedValueOnce({ state: "sleeping", lastActiveAt: "soon" } as never);
+		await expect(host?.chatState("/s/a.jsonl")).resolves.toEqual({ state: "closed" });
+		expect(await host?.wakeChat("/s/a.jsonl", "[Queue] carry on")).toBe(true);
+		expect(i.wakeChat).toHaveBeenCalledWith("/s/a.jsonl", "[Queue] carry on");
+		expect(await host?.wakeChat("/s/a.jsonl", " ")).toBe(false);
+		expect(await host?.wakeChat("/s/a.jsonl", "x".repeat(WAKE_NOTE_MAX + 1))).toBe(false);
+		expect(await host?.wakeChat("", "[Queue] carry on")).toBe(false);
+		expect(i.wakeChat).toHaveBeenCalledTimes(1);
+		// The server refusing (the chat is working) comes back as false.
+		vi.mocked(i.wakeChat).mockResolvedValueOnce(false);
+		expect(await host?.wakeChat("/s/a.jsonl", "[Queue] carry on")).toBe(false);
 	});
 
 	it("only runs /queue commands, for a real chat", async () => {

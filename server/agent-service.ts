@@ -97,7 +97,9 @@ import { checkPluginUpdates } from "./plugin-updater.js";
 import { isBundledInUse, sdkCopies } from "./sdk-origin.js";
 import { hasActiveSubagentRun, hasPendingWaitSubscription, shouldRetainActive } from "./wait-subscription-scan.js";
 import {
+	carryOnLogLine,
 	type CarryOnPlan,
+	guardNotice,
 	newestInterrupted,
 	planCarryOn,
 	readRunningChatsFile,
@@ -329,8 +331,16 @@ import {
 	taskQueueFromEntries,
 	taskQueueShareableFrom,
 } from "./task-queue.js";
-import { installQueueHost, makeChain, type QueueChatStart, waitUntil } from "./queue-host.js";
-import { applyQueueHomes, type LoadedQueue, queueHomesFrom, queueLinksSig } from "./queue-groups.js";
+import {
+	type ChatState,
+	chatStateFrom,
+	installQueueHost,
+	makeChain,
+	type QueueChatStart,
+	waitUntil,
+	wakeRefusal,
+} from "./queue-host.js";
+import { applyQueueHomes, type LoadedQueue, queueHomesFrom, queueHomesToOpen, queueLinksSig } from "./queue-groups.js";
 import { idsHash } from "./window-hash.js";
 import {
 	isTldrReply,
@@ -4673,8 +4683,9 @@ export class ClientSession {
 	/**
 	 * queue-lanes: open the chat with this transcript to run a queue command in it (this client is the
 	 * queue's pseudo client for commands). A task chat whose task is still open stays listed and
-	 * loaded (its waits run there); any other chat is let go again at this client's next open.
-	 * null = it couldn't be opened.
+	 * loaded (its waits run there); so does a queue chat with tasks at work in chats of their own
+	 * (stall-watch: pi-queue's watchdog for them runs there). Any other chat is let go again at this
+	 * client's next open. null = it couldn't be opened.
 	 */
 	async openChatForQueue(file: string): Promise<AgentSession | null> {
 		await this.switchSession(file);
@@ -4685,7 +4696,9 @@ export class ClientSession {
 		let keep = false;
 		try {
 			const q = taskQueueFromEntries(conv.session.sessionManager.getBranch(), true);
-			keep = !!q.from && q.tasks.some((t) => t.status !== "done");
+			keep = q.from
+				? q.tasks.some((t) => t.status !== "done")
+				: q.tasks.some((t) => t.lane === true && !!t.chat && t.status !== "done");
 		} catch {
 			// unreadable: treat it as a plain chat
 		}
@@ -4698,6 +4711,32 @@ export class ClientSession {
 	queueSessionFor(file: string): AgentSession | null {
 		const id = this.conversationIdBySessionFile(file);
 		return (id && this.convs.get(id)?.session) || null;
+	}
+
+	/**
+	 * stall-watch: whether the chat with this transcript is at work, when it is open (the chats are the
+	 * server's, whichever window or pseudo client opened them): a turn or a compaction runs, or a message
+	 * is on its way. undefined = it isn't open.
+	 */
+	static chatBusy(file: string): boolean | undefined {
+		let abs: string;
+		try {
+			abs = resolve(file);
+		} catch {
+			return undefined;
+		}
+		let busy: boolean | undefined;
+		for (const c of ClientSession.sharedConvs.values()) {
+			if (c.isSubagent) continue;
+			try {
+				const f = c.session.sessionFile;
+				if (!f || resolve(f) !== abs) continue;
+				busy = (busy ?? false) || c.session.isStreaming || c.session.isCompacting || (c.sendsInFlight ?? 0) > 0;
+			} catch {
+				// a chat whose runtime is being replaced right now can't be matched: skipped
+			}
+		}
+		return busy;
 	}
 
 	/**
@@ -5102,6 +5141,12 @@ export class ClientSession {
 	/** queue-grouping: where the links are kept across restarts (the server's client state). */
 	private static queueHomesStore: ClientStateStore | null = null;
 	private static queueHomesTimer: ReturnType<typeof setTimeout> | null = null;
+
+	/** stall-watch: the links as kept (an open task's chat → its queue chat), for the queue chats to open
+	 *  after a restart. */
+	static savedQueueHomes(): ReadonlyMap<string, string> {
+		return ClientSession.knownQueueHomes();
+	}
 
 	/** queue-grouping: the links known so far. Only memory after the first call: building the chat list
 	 *  looks them up and nothing else (no chat file, no chat's history). */
@@ -14213,12 +14258,18 @@ export class AgentService {
 	async wakeClosedChat(
 		sessionFile: string,
 		text: string,
+		opts: { unlessWorking?: boolean } = {},
 	): Promise<{ ok: boolean; conversationId?: string; sessionFile?: string; error?: string }> {
 		const file = String(sessionFile ?? "").trim();
 		if (!file || !text.trim()) return { ok: false, error: "Wake target or text is empty" };
 		if (this.quiesced) return { ok: false, error: "Server is busy (quiesced), retry later" };
 		if (!existsSync(file)) return { ok: false, error: "the chat's transcript is gone" };
-		const run = this.wakeReopenChain.then(() => this.reopenAndWake(file, text));
+		const run = this.wakeReopenChain.then(() =>
+			// stall-watch: a chat that started working while this waited its turn is left alone.
+			opts.unlessWorking && this.queueChatState(file).state === "working"
+				? { ok: false, error: "the chat is working" }
+				: this.reopenAndWake(file, text),
+		);
 		this.wakeReopenChain = run.catch(() => {});
 		return run;
 	}
@@ -14277,7 +14328,66 @@ export class AgentService {
 				this.queueTasksChain(() => this.withQueueClient(QUEUE_TASKS_CLIENT_ID, (cs) => cs.openTaskChat(o))),
 			runCommand: (file, line) => this.queueRunCommand(file, line),
 			closeChat: (file) => this.queueCloseChat(file),
+			chatState: async (file) => this.queueChatState(file),
+			wakeChat: (file, note) => this.queueWakeChat(file, note),
 		});
+	}
+
+	/**
+	 * stall-watch: whether the chat with this transcript is working now, for pi-queue's watchdog.
+	 * working: a turn (or a compaction) runs in it, its turn goes on (an automatic retry, a message on its
+	 * way), or a restart's carry-on is about to start one; idle: it is open with no turn running; closed:
+	 * it isn't loaded. lastActiveAt: its transcript's last write.
+	 */
+	queueChatState(file: string): ChatState {
+		const abs = resolve(file);
+		let lastActiveAt: number | undefined;
+		try {
+			lastActiveAt = Math.round(statSync(abs).mtimeMs);
+		} catch {
+			lastActiveAt = undefined; // no transcript (any more)
+		}
+		const state = chatStateFrom(ClientSession.chatBusy(abs), runningChats?.get(abs));
+		return lastActiveAt === undefined ? { state } : { state, lastActiveAt };
+	}
+
+	/**
+	 * stall-watch: wake a task's chat that stopped while its task was still being worked on: open it if it
+	 * isn't open and send it the note as a user message, the way carry-on does. Never a working chat.
+	 */
+	private async queueWakeChat(file: string, note: string): Promise<boolean> {
+		const abs = resolve(file);
+		const refusal = wakeRefusal(this.queueChatState(abs), this.carryOnLeftAlone.get(abs));
+		if (refusal) {
+			console.log(`[stall-watch] not waking ${abs}: ${refusal}`);
+			return false;
+		}
+		const r = await this.wakeClosedChat(file, note, { unlessWorking: true });
+		if (!r.ok) console.error(`[stall-watch] couldn't wake ${file}: ${r.error ?? "unknown error"}`);
+		return r.ok;
+	}
+
+	/**
+	 * stall-watch: after a restart, open the queue chats whose tasks are at work in chats of their own (the
+	 * links queue-grouping keeps), so pi-queue's watchdog looks after those tasks there even when no
+	 * window shows the queue chat and none of its task chats was carried on to report back.
+	 * `/queue ping` changes nothing in a queue chat; opening it starts its checks.
+	 */
+	async reopenQueueHomes(): Promise<void> {
+		if (!this.uninstallQueueHost) return;
+		const homes = queueHomesToOpen(ClientSession.savedQueueHomes(), (f) => existsSync(f));
+		if (homes.length === 0) return;
+		const opened: string[] = [];
+		for (const home of homes) {
+			try {
+				if (await this.queueRunCommand(home, "/queue ping")) opened.push(home);
+			} catch (err) {
+				console.error(`[stall-watch] couldn't open the queue chat ${home}: ${(err as Error).message}`);
+			}
+		}
+		console.log(
+			`[stall-watch] opened ${opened.length} of ${homes.length} queue chat(s) with tasks at work in chats of their own`,
+		);
 	}
 
 	/** queue-lanes: do something through one of the queue's pseudo clients; open windows list the result. */
@@ -15133,6 +15243,8 @@ export class AgentService {
 	private startupNotices: { level: "info" | "warning"; text: string; textEn: string }[] = [];
 	private startupNoticesUntil = 0;
 	private noticedClients = new Set<string>();
+	/** stall-watch: the chats the carry-on left alone at this start (by transcript), with when (wakeRefusal). */
+	private carryOnLeftAlone = new Map<string, number>();
 
 	/**
 	 * Startup, before the server takes connections: read the list of chats the last process left
@@ -15169,21 +15281,21 @@ export class AgentService {
 		const list = new RunningChats(file);
 		runningChats = list;
 		list.seed(
-			plan.carry.map((item): RunningChat => ({ ...item.chat, cutoffs: item.cutoffs, awaiting: true, startedAt: now })),
+			plan.carry.map((item): RunningChat => ({
+				...item.chat,
+				cutoffs: item.cutoffs,
+				crashes: item.crashes,
+				planned: item.planned,
+				awaiting: true,
+				startedAt: now,
+			})),
 		);
 		if (plan.carry.length === 0 && plan.guarded.length === 0) return;
-		const names = (chats: RunningChat[]) => chats.map((c) => `"${c.title}"`).join(", ");
-		console.log(
-			`[carry-on] restarted (${plan.reason}): carrying on ${plan.carry.length} chat(s)` +
-				(plan.carry.length ? `: ${names(plan.carry.map((i) => i.chat))}` : "") +
-				(plan.guarded.length ? `; cut off ${plan.guarded.length}x in a row, left alone: ${names(plan.guarded)}` : ""),
-		);
-		for (const chat of plan.guarded) {
-			this.startupNotices.push({
-				level: "warning",
-				text: `"${chat.title}" was cut off by 3 restarts in a row without finishing, so it wasn't told to carry on this time. Open it and tell it what to do.`,
-				textEn: `"${chat.title}" was cut off by 3 restarts in a row without finishing, so it wasn't told to carry on this time. Open it and tell it what to do.`,
-			});
+		console.log(carryOnLogLine(plan));
+		for (const g of plan.guarded) {
+			this.carryOnLeftAlone.set(resolve(g.chat.sessionFile), now);
+			const text = guardNotice(g);
+			this.startupNotices.push({ level: "warning", text, textEn: text });
 		}
 		this.startupNoticesUntil = now + 10 * 60_000;
 		if (plan.carry.length === 0) return;

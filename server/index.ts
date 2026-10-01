@@ -1355,6 +1355,8 @@ export interface EngineService {
 	carryOnAfterRestart?(): Promise<void>;
 	/** queue-lanes (pi engine): let pi-queue run queued tasks in chats of their own. */
 	installQueueHost?(): void;
+	/** stall-watch (pi engine): after the carry-on, open the queue chats whose tasks run in chats of their own. */
+	reopenQueueHomes?(): Promise<void>;
 	noteSocketOpen(): void;
 	noteSocketClose(): void;
 	isQuiesced(): boolean;
@@ -3574,8 +3576,18 @@ try {
 service.installQueueHost?.();
 
 httpServer.listen(PORT, HOST, () => {
-	// carry-on: give plugins and MCP servers a moment to come up, then reopen the cut-off chats.
-	setTimeout(() => void service.carryOnAfterRestart?.().catch(() => {}), 1500);
+	// carry-on: give plugins and MCP servers a moment to come up, then reopen the cut-off chats;
+	// stall-watch: then the queue chats, whose watchdog looks after their tasks' chats.
+	setTimeout(
+		() =>
+			void (async () => {
+				await service.carryOnAfterRestart?.().catch(() => {});
+				await service.reopenQueueHomes?.().catch((err: Error) => {
+					console.error(`[stall-watch] couldn't open the queue chats: ${err.message}`);
+				});
+			})(),
+		1500,
+	);
 	console.log("");
 	console.log("  ⚡ pi-web-ui — web chat for the pi coding agent");
 	console.log(`    http://localhost:${PORT}`);

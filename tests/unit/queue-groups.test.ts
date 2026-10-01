@@ -9,7 +9,9 @@ import {
 	applyQueueHomes,
 	type LoadedQueue,
 	QUEUE_HOMES_MAX,
+	QUEUE_HOMES_REOPEN_MAX,
 	queueHomesFrom,
+	queueHomesToOpen,
 	queueLinksSig,
 } from "../../server/queue-groups.js";
 
@@ -158,6 +160,26 @@ describe("queueHomesFrom: the links, from the open chats' cached queues", () => 
 		expect(next.size).toBe(QUEUE_HOMES_MAX);
 		expect(next.has("/s/t0.jsonl")).toBe(false);
 		expect(next.get(TASK)).toBe(HOME2);
+	});
+
+	it("stall-watch: the queue chats to open after a restart: each once, newest first, still there, at most 10", () => {
+		const links = new Map<string, string>([
+			["/s/t1.jsonl", "/s/old-home.jsonl"],
+			["/s/t2.jsonl", "/s/home.jsonl"],
+			["/s/t3.jsonl", "/s/gone-home.jsonl"],
+			["/s/t4.jsonl", "/s/home.jsonl"],
+			["/s/self.jsonl", "/s/self.jsonl"],
+		]);
+		const exists = (f: string) => f !== "/s/gone-home.jsonl";
+		expect(queueHomesToOpen(links, exists)).toEqual(["/s/home.jsonl", "/s/old-home.jsonl"]);
+		expect(queueHomesToOpen(new Map(), exists)).toEqual([]);
+		const many = new Map(
+			Array.from({ length: 25 }, (_, i) => [`/s/t${i}.jsonl`, `/s/home${i}.jsonl`] as [string, string]),
+		);
+		const open = queueHomesToOpen(many, () => true);
+		expect(QUEUE_HOMES_REOPEN_MAX).toBe(10);
+		expect(open).toHaveLength(QUEUE_HOMES_REOPEN_MAX);
+		expect(open[0]).toBe("/s/home24.jsonl");
 	});
 
 	it("queueLinksSig changes only with what the queue says about the links", () => {

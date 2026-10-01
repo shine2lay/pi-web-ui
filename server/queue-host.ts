@@ -13,6 +13,15 @@
  *  - closeChat(sessionFile) lets go of the chat of a task that's done or removed once it is idle: it
  *    leaves the running list and, being a queued task's own chat, Recent chats too (queue-done-hidden).
  *    Its transcript stays: History lists it and opening it brings it back.
+ *  - chatState(sessionFile) (stall-watch) says whether the chat with that transcript is working now:
+ *    {state: "working"} while a turn runs (or a restart's carry-on is about to start one), "idle" when
+ *    it is open with no turn running, "closed" when it isn't loaded; `lastActiveAt` is when it last did
+ *    something (its transcript's last write, ms), when that can be read.
+ *  - wakeChat(sessionFile, note) (stall-watch) opens the chat if it isn't open and sends it `note` as a
+ *    user message, the way carry-on does. It refuses (false) while a turn runs there, and for a chat the
+ *    carry-on left alone at this start (cut off too often without finishing a turn) until it does
+ *    something again (wakeRefusal).
+ *  pi-queue checks for chatState and wakeChat before it uses them: an older pi-web-ui has no watchdog.
  *
  * This file is the glue: it checks what the extension hands in and serializes the work. The chats
  * themselves are opened by AgentService / ClientSession (agent-service.ts).
@@ -31,10 +40,21 @@ export interface QueueChatStart {
 	thinking?: string;
 }
 
+/** Whether a chat is working now (see chatState). */
+export type ChatStateName = "working" | "idle" | "closed";
+
+export interface ChatState {
+	state: ChatStateName;
+	/** When it last did something: its transcript's last write (ms). Missing when that can't be read. */
+	lastActiveAt?: number;
+}
+
 export interface QueueHostImpl {
 	startChat(opts: QueueChatStart): Promise<{ sessionFile: string; conversationId?: string }>;
 	runCommand(sessionFile: string, line: string): Promise<boolean>;
 	closeChat(sessionFile: string): Promise<boolean>;
+	chatState(sessionFile: string): Promise<ChatState>;
+	wakeChat(sessionFile: string, note: string): Promise<boolean>;
 }
 
 /** The object pi-queue sees. */
@@ -44,6 +64,9 @@ export interface QueueHost extends QueueHostImpl {
 
 const THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const PROMPT_MAX = 200_000;
+/** A wake-up note is a few lines. */
+export const WAKE_NOTE_MAX = 4000;
+const CHAT_STATES: ReadonlySet<string> = new Set(["working", "idle", "closed"]);
 const NAME_MAX = 200;
 const ENTRIES_MAX = 20;
 
@@ -75,6 +98,43 @@ export function parseQueueChatStart(raw: unknown): QueueChatStart | string {
 /** A command the host runs for pi-queue: one "/queue …" line, nothing else. */
 export function isQueueCommand(line: unknown): line is string {
 	return typeof line === "string" && line.length <= 4000 && /^\/queue(?: |$)/.test(line) && !/[\r\n]/.test(line);
+}
+
+/** A note wakeChat sends: some text, not too long. */
+export function isWakeNote(note: unknown): note is string {
+	return typeof note === "string" && note.trim().length > 0 && note.length <= WAKE_NOTE_MAX;
+}
+
+/**
+ * A chat's state from what the server knows: `busy` is undefined when it isn't open, true while a turn
+ * or a compaction runs there or a message is on its way; `listed` is its running-list entry, if any (its
+ * turn hasn't ended: an automatic retry between attempts, or a restart's carry-on about to start one).
+ */
+export function chatStateFrom(busy: boolean | undefined, listed: { awaiting?: boolean } | undefined): ChatStateName {
+	if (busy === true || listed?.awaiting) return "working";
+	if (busy === false) return listed ? "working" : "idle";
+	return "closed";
+}
+
+/**
+ * Why wakeChat won't wake a chat that looks like this, or undefined when it may: never one that is
+ * working, and never one the carry-on left alone at this start (`leftAloneAt`: when; cut off by too many
+ * crashes or planned restarts without finishing a turn), unless it has done something since. Waking it
+ * would undo the carry-on's guard; the queue then asks the owner instead.
+ */
+export function wakeRefusal(look: ChatState, leftAloneAt?: number): string | undefined {
+	if (look.state === "working") return "the chat is working";
+	if (leftAloneAt !== undefined && (look.lastActiveAt ?? 0) <= leftAloneAt)
+		return "the carry-on left it alone at this start (cut off too often without finishing a turn)";
+	return undefined;
+}
+
+/** What chatState hands back, checked: a known state, and a time only when it is one. */
+export function cleanChatState(raw: unknown): ChatState {
+	const r = (raw ?? {}) as Record<string, unknown>;
+	const state = typeof r.state === "string" && CHAT_STATES.has(r.state) ? (r.state as ChatStateName) : "closed";
+	const at = r.lastActiveAt;
+	return typeof at === "number" && Number.isFinite(at) && at > 0 ? { state, lastActiveAt: Math.round(at) } : { state };
 }
 
 /** Runs async jobs one at a time, in the order they were handed in. A failing job doesn't stop the next. */
@@ -133,6 +193,22 @@ export function installQueueHost(impl: QueueHostImpl): () => void {
 			if (typeof sessionFile !== "string" || !sessionFile.trim()) return Promise.resolve(false);
 			try {
 				return impl.closeChat(sessionFile).catch(() => false);
+			} catch {
+				return Promise.resolve(false);
+			}
+		},
+		chatState: (sessionFile: string) => {
+			if (typeof sessionFile !== "string" || !sessionFile.trim()) return Promise.reject(new Error("no chat given"));
+			try {
+				return impl.chatState(sessionFile).then(cleanChatState);
+			} catch (err) {
+				return Promise.reject(asError(err));
+			}
+		},
+		wakeChat: (sessionFile: string, note: string) => {
+			if (typeof sessionFile !== "string" || !sessionFile.trim() || !isWakeNote(note)) return Promise.resolve(false);
+			try {
+				return impl.wakeChat(sessionFile, note).catch(() => false);
 			} catch {
 				return Promise.resolve(false);
 			}

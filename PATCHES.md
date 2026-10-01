@@ -55,7 +55,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | carry-on                     | `local`        | `server/running-chats.ts`, `agent-service.ts`, `client-state.ts`, `index.ts`, `scheduler-tasks.ts`, `tests/carry-on-restart-test.mjs`, `tests/unit/` |
 | sealed-tests                 | `local`        | `scripts/sealed.sh`, `sealed-summary.mjs`, `check.sh`, `tests/lib/sealed-fence.cjs`, `tests/run-sealed.mjs`, `tests/lib/`, `vitest.config.ts`, `tests/*-test.mjs`, 6 处测试查出的 bug |
 | wake-reopen                  | `local`        | `server/agent-service.ts`（`wakeClosedChat`、`wakeConversation` 的 id 相位）、`server/index.ts`（调度执行器）、`tests/wake-reopen-test.mjs`、`tests/unit/schedule-agent-tool.test.ts` |
-| queue-lanes                  | `local`        | `server/queue-host.ts` (new), `agent-service.ts` (task chats), `index.ts`, `task-queue.ts`, `protocol.ts`, `tldr-lines.ts`, `web/src/components/TaskQueuePanel.tsx`, `TldrPanel.tsx`, `RightPanel.tsx`, i18n, styles, `tests/queue-lanes-test.mjs`, `tests/queue-panel-test.mjs`, `scripts/sealed.sh` (`PI_QUEUE_PKG`), `tests/unit/` |
+| queue-lanes                  | `local`        | `server/queue-host.ts` (new), `agent-service.ts` (task chats; the watchdog's `queueChatState`, `queueWakeChat`, `reopenQueueHomes`), `queue-groups.ts` (`queueHomesToOpen`), `tests/stall-watch-test.mjs` (new), `index.ts`, `task-queue.ts`, `protocol.ts`, `tldr-lines.ts`, `web/src/components/TaskQueuePanel.tsx`, `TldrPanel.tsx`, `RightPanel.tsx`, i18n, styles, `tests/queue-lanes-test.mjs`, `tests/queue-panel-test.mjs`, `scripts/sealed.sh` (`PI_QUEUE_PKG`), `tests/unit/` |
 | telegram-answers             | `local`        | `server/asks.ts` (new), `server/stuck-asks.ts` (new), `agent-service.ts` (questions, approvals, stuck asks), `chat-dialogs.ts`, `plugins.ts`, `plugin-facilities.ts`, `task-queue.ts`, `protocol.ts`, `protocol-version.ts`, `plugins/telegram/` (new), `plugin-sdk/`, `web/src/open-chat-link.ts` (new), `TaskQueuePanel.tsx`, `use-chat.ts`, `tests/telegram-answers-test.mjs`, `tests/queue-panel-test.mjs`, `tests/unit/` |
 | english-only                 | `local`        | `server/i18n.ts`, `agent-service.ts`, `dsh/dsh-agent-service.ts` and ~130 other server files (text only), `web/src/i18n.tsx`, `TopBar.tsx`, `ui-slots.ts`, `LocaleModal.tsx` + `pick-locale.ts` (removed), `SettingsModal.tsx`, `plugins/catalog.json`, `tests/` |
 | optimistic-send              | `local`        | `server/prompt-ack.ts` (new), `agent-service.ts` (`prompt()`), `dsh/dsh-agent-service.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (26), `web/src/pending-sends.ts` (new), `use-chat.ts`, `MessageList.tsx`, `App.tsx`, `ChatInput.tsx`, `PromptTemplates.tsx`, `plugin-host.ts`, i18n + `locales/`, styles, `tests/optimistic-send-test.mjs`, `tests/unit/` |
@@ -2309,8 +2309,10 @@ tool_result；这条坏记录已经落盘，所以对话从此发不出去。上
      it was cut off. Check where it stopped and carry on.` step 是 `writing a reply`、`running the bash command \`…\``、
      `running the read tool (…)`、多个工具时 `running 2 tools at once: …`；在等用户回答（`ask_user_question`）时是
      `asking the user a question (ask_user_question) (they hadn't answered yet, so ask it again)`，它就会重新问。
-   - 防循环：`cutoffs` 是「连续被重启打断、中间没做完一个回合」的次数。第 3 次不再发提示，改成给窗口一条警告
-     （「连续 3 次被重启打断都没做完…请打开它，告诉它接下来做什么」）。回合正常结束就清零。
+   - Loop guard (changed 2026-10-01, see "Planned restarts and crashes, counted apart" below): a chat cut off
+     by 3 crashes, or by 10 planned restarts, without finishing a turn in between gets a notice in the windows
+     instead of a note ("... Open it and tell it what to do"). A finished turn resets both counts.
+     (Before: every cut-off counted alike, and the 3rd in a row, planned or not, tripped the guard.)
    新表先放进这些对话（`awaiting`，保留 `cutoffs`），它们的回合开始后照常记。
    `carryOnAfterRestart()`（listen 后 1.5 秒）用伪客户端 `carry-on:startup`（`isPseudoClientId` 认它，空白开局）
    逐个 `switchSession` + 发提示（`ClientSession.carryOn`：等到回合开始或消息进去，最多 20 秒，再 `listed = true`，
@@ -2346,13 +2348,53 @@ tool_result；这条坏记录已经落盘，所以对话从此发不出去。上
      队列接着跑（任务 #1 完成、#2 开始）；它们都又在干活，`cutoffs` 是 1（队列的新任务从 0 起）。
   2. `kill -9`：没有关机标记；提示写「it crashed or was killed」；CMD 重跑的命令又被打断；QUEUE 在任务 #2 里被打断；
      `cutoffs` 变成 2（队列 1）。
-  3. 没原因的计划内重启：REPLY、CMD、ASK 第 3 次 → 没有第三条提示，各一条警告；QUEUE 收到写着「a restart」的提示；
-     表里只剩 QUEUE。
-  三轮里 IDLE 和 STOP 都什么也没收到。
+  3. (since 2026-10-01) A planned restart without a reason, the 3rd cut-off in a row for REPLY, CMD and ASK:
+     all four still get a note saying "a restart"; the log line gives "(cut off 3x in a row: 2 planned,
+     1 crash)". (Before: REPLY, CMD and ASK got a notice instead, as the 3-in-a-row guard counted planned
+     restarts too.)
+  4. `kill -9`, the 2nd crash in a row: every busy chat still gets its note.
+  5. `kill -9`, the 3rd crash in a row: the crash guard. A notice for each ("was cut off by 3 crashes"), no
+     note, the list empty, the log line's counts ("5x in a row: 2 planned, 3 crashes").
+  IDLE and STOP never get anything.
 - `pi-queue` 的 `tests/queue.test.ts`：`resumesAfterRestart`；`pi-web-deploy` 的测试：默认马上重启并写原因、
   `--when-idle` 等待、`--reason`、`--now` 仍然接受。
 - 反证（2026-09-27）：同一个 E2E 在改动前（`mine` 28ab26b）上 20 项失败：没有一个忙的对话收到任何东西
   （上游的 per-clientId 恢复对不上新的 clientId），表文件不存在，队列停着。
+
+### Planned restarts and crashes, counted apart (2026-10-01, queue task #38)
+
+**Why**: on 2026-09-30 two queued tasks (#32 and #35) were each cut off three times in a row by planned
+installs. Tasks now run side by side and install right away, so the server restarts often, and a task's
+whole job is one long turn. The guard counted every cut-off alike, so the third got a page notice instead of
+a note. Nobody saw it overnight, and both task chats sat stopped for about 9 hours while the queue still
+counted them as working. The log line said "cut off 1x in a row": it printed how many chats were left
+alone, not how often they were cut off.
+
+**Changes** (`server/running-chats.ts`, `agent-service.ts`):
+- Each running-list entry counts its cut-offs apart: `crashes` (the old process left no shutdown mark: a
+  crash or `kill -9`) and `planned` (it did: an install, `pi-web-deploy restart`, any clean stop).
+  `cutoffs` stays their sum, so the file still reads the old way. An old file (only `cutoffs`) reads as that
+  many crashes (`cutoffCounts`).
+- The guard (`planCarryOn`) leaves a chat alone after 3 crashes (`LOOP_GUARD_CUTOFFS`) or 10 planned
+  restarts (`PLANNED_CUTOFF_CEILING`) without a finished turn in between, whichever comes first. Planned
+  restarts between crashes don't reset the crash count. A finished turn resets both, as before.
+- The notice says which (`guardNotice`): `"<title>" was cut off by 3 crashes without finishing a turn in
+  between (pi-web-ui may be crashing because of it), so it wasn't told to carry on this time. Open it and
+  tell it what to do.`, or `... by 10 planned restarts ...`.
+- The log line (`carryOnLogLine`) gives each chat's own count: `[carry-on] restarted (install of 1a2b3c4):
+  carrying on 2 chat(s): "A" (cut off 1x), "B" (cut off 3x in a row: 2 planned, 1 crash); left alone: "C"
+  (cut off 3x in a row: all crashes)`.
+- The server remembers which chats the guard left alone at this start (`carryOnLeftAlone`). The queue host's
+  `wakeChat` (queue-lanes) won't wake one of them until it has done something since, so pi-queue's
+  watchdog can't undo the guard; the queue asks the owner instead.
+
+**Tests**:
+- `tests/unit/running-chats.test.ts`: planned restarts never guard below 10 (9 installs carried on, the 10th
+  left alone), crashes still at 3, mixed sequences, a finished turn resets both, an old file on disk, the
+  log line and the notice texts.
+- `tests/carry-on-restart-test.mjs`: steps 3 to 5 above, with each restart's log line checked.
+- Before the change, step 3 of the same E2E checked the opposite: the 3rd planned cut-off got a notice
+  instead of a note.
 
 ---
 
@@ -2555,7 +2597,8 @@ reporting) lives in pi-queue (`~/projects/pi-queue`, README "Lanes"); this patch
 
 1. **The queue host** (`server/queue-host.ts`, new). pi-queue finds it on `globalThis` under
    `Symbol.for("pi-web-ui.queue-host")` (version 1). The command-line pi has none, so there tasks run the
-   old way. It checks what the extension hands in and offers three calls:
+   old way. It checks what the extension hands in and offers three calls (five since 2026-10-01: `chatState`
+   and `wakeChat`, see "The watchdog's two calls" below):
    - `startChat({cwd, name, prompt, entries, model?, thinking?})` opens a new chat and resolves once its run
      has started;
    - `runCommand(sessionFile, line)` runs a one-line `/queue ...` command in that chat, opening it if needed
@@ -2618,6 +2661,46 @@ reporting) lives in pi-queue (`~/projects/pi-queue`, README "Lanes"); this patch
   done-settle merges stops that come within 1.5 s into one sound.
 - `scripts/sealed.sh` passes `PI_QUEUE_PKG` through, so a full run can point both queue tests at a
   pi-queue checkout: `PI_QUEUE_PKG=<checkout> node tests/run-sealed.mjs`.
+
+### The watchdog's two calls (2026-10-01, queue task #38)
+
+**Why**: the queue had no way to notice a task chat that stopped while its task was still being worked on
+(cut off by restarts and left alone, or its turn ended without reporting). The task's lane stayed taken
+and nothing new started: #32 and #35 sat like that for about 9 hours on 2026-09-30. pi-queue now has a
+watchdog (pi-queue README, "Watchdog"); pi-web-ui gives it two more calls on the host:
+- `chatState(sessionFile)` resolves `{state, lastActiveAt?}`. `working`: a turn or a compaction runs
+  there, a message is on its way, or its running-list entry says its turn hasn't ended (an automatic retry
+  between attempts, or a restart's carry-on about to start one). `idle`: it is open with no turn running.
+  `closed`: it isn't loaded. `lastActiveAt` is the transcript's last write. (`AgentService.queueChatState`,
+  `ClientSession.chatBusy`, `chatStateFrom`.)
+- `wakeChat(sessionFile, note)` opens the chat if it isn't open and sends the note as a user message, the
+  way the carry-on does (`wakeClosedChat` with `unlessWorking`, which looks again inside its chain). It
+  refuses (false) a working chat, and one the carry-on left alone at this start until it has done
+  something since (`wakeRefusal`). The note must be text of at most 4,000 characters.
+- pi-queue checks for both before using them, so an older pi-web-ui simply has no watchdog. The host's
+  version stays 1.
+- After a restart, once the carry-on is done, the server opens the queue chats that have tasks at work in
+  chats of their own (the queue-grouping links, at most 10, newest first: `reopenQueueHomes`,
+  `queueHomesToOpen`) by running `/queue ping` in each. Their watchdogs then run even when no window shows
+  them and none of their task chats was carried on to report back. Log: `[stall-watch] opened X of Y queue
+  chat(s) with tasks at work in chats of their own`.
+- `openChatForQueue` keeps a queue chat it opened loaded while it has a task at work in a chat of its own
+  (before, it let go of it once the command had run), so its checks go on.
+
+**Tests**:
+- `tests/unit/queue-host.test.ts`: `chatStateFrom` (working, idle, closed), `wakeRefusal`,
+  `cleanChatState`, `isWakeNote`, and the host's checks around both calls. `tests/unit/queue-groups.test.ts`:
+  `queueHomesToOpen`.
+- `tests/stall-watch-test.mjs` (new; sealed server, mock model, real pi-queue from `PI_QUEUE_PKG` with a
+  tiny `stalledAfterMinutes`, no tokens): a queue chat starts three tasks, each in a chat of its own running
+  a long command. `kill -9`; while the server is down, ONE drops out of the running list (a chat that
+  stopped) and TWO has crashed twice already. After the restart:
+  - THREE is carried on and TWO left alone (its 3rd crash in a row); the server opens the queue chat.
+  - ONE is woken once with the watchdog's note and finishes its task; the queue chat and the TL;DR say so.
+  - TWO isn't woken (the carry-on left it alone), so the queue records a wake that didn't get there. Still
+    stopped after the wait, it becomes "needs you" in its chat ("Carry on" / "Remove it") and the queue
+    follows; answering "Carry on" finishes it.
+  - THREE, working the whole time, is never woken. The first look's log line names all three.
 
 **When syncing**: all local. If upstream ever adds its own way for an extension to open chats, move the host
 onto it.

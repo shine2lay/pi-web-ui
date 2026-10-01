@@ -22,6 +22,8 @@ const OPEN: ReadonlySet<string> = new Set(["ready", "working", "stuck", "waiting
 
 /** At most this many links are kept; the oldest go first. */
 export const QUEUE_HOMES_MAX = 500;
+/** stall-watch: at most this many queue chats are opened after a restart (queueHomesToOpen). */
+export const QUEUE_HOMES_REOPEN_MAX = 10;
 
 /** An open chat's queue as cached (undefined: not worked out yet, so nothing is learned from it). */
 export interface LoadedQueue {
@@ -83,6 +85,21 @@ export function queueHomesFrom(
 		next.delete(oldest);
 	}
 	return sameLinks(next, known) ? known : next;
+}
+
+/**
+ * stall-watch: the queue chats to open after a restart, so pi-queue's watchdog looks after their tasks'
+ * chats: each queue chat the links name (an open task's chat → its queue chat) once, newest link first,
+ * only those whose transcript is still there, at most QUEUE_HOMES_REOPEN_MAX.
+ */
+export function queueHomesToOpen(homes: ReadonlyMap<string, string>, exists: (file: string) => boolean): string[] {
+	const out: string[] = [];
+	for (const [chat, home] of [...homes].reverse()) {
+		if (out.length >= QUEUE_HOMES_REOPEN_MAX) break;
+		if (chat === home || out.includes(home)) continue;
+		if (exists(home)) out.push(home);
+	}
+	return out;
 }
 
 /**
