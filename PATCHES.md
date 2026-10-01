@@ -68,6 +68,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | identities                   | `local`        | `server/identities.ts` (new), `agent-service.ts` (incl. `personaFirst`), `index.ts`, `protocol.ts`, `protocol-version.ts` (29), `web/src/identity-state.ts` + `identity-menu.ts` (new), `components/IdentityTag.tsx` + `IdentityPicker.tsx` + `IdentitiesSettings.tsx` (new), `App.tsx`, `LeftPanel.tsx`, `MessageList.tsx`, `SettingsModal.tsx`, `slot-toolbar.tsx`, `ui-slots.ts`, `use-chat.ts`, i18n + `locales/`, `styles.css`, `tests/identities-test.mjs`, `tests/unit/` |
 | queue-side-by-side           | `local`        | `server/task-queue.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TaskQueuePanel.tsx`, i18n + `locales/`, `styles.css`, `tests/run-sealed.mjs`, `tests/lib/sealed-runs.mjs` (new), `tests/queue-side-by-side-test.mjs` (new), `tests/unit/task-queue.test.ts`, `tests/unit/sealed-runs.test.ts` (new) |
 | adaptive-math                | `local`        | `web/src/components/md-adaptive-math.ts` (new), `Markdown.tsx`, `tests/unit/adaptive-math.test.ts`, `tests/adaptive-math-test.mjs`, `tests/tools/adaptive-math-corpus.mjs` |
+| queue-done-hidden            | `local`        | `server/agent-service.ts` (`queueCloseChat`, `markRecentSeen`, `recentSessions`), `task-queue.ts`, `queue-host.ts` (comment), `tests/unit/queue-done-hidden.test.ts` (new), `tests/queue-lanes-test.mjs`, `tests/tools/queue-done-sweep.mjs` (new) |
 
 ---
 
@@ -2557,7 +2558,8 @@ reporting) lives in pi-queue (`~/projects/pi-queue`, README "Lanes"); this patch
      has started;
    - `runCommand(sessionFile, line)` runs a one-line `/queue ...` command in that chat, opening it if needed
      (nothing else gets through);
-   - `closeChat(sessionFile)` takes a finished task's chat out of the running list once it is idle.
+   - `closeChat(sessionFile)` takes a finished task's chat out of the running list once it is idle
+     (and, since queue-done-hidden, out of Recent chats).
 2. **Opening task chats** (`agent-service.ts`). The work goes through two pseudo clients, like the carry-on
    and wake-reopen ones: `carry-on:queue` opens task chats one at a time (`ClientSession.openTaskChat`), and
    `carry-on:queue-home` opens a closed chat to run a command in it (`openChatForQueue`), each on its own
@@ -2570,7 +2572,8 @@ reporting) lives in pi-queue (`~/projects/pi-queue`, README "Lanes"); this patch
    - The pseudo clients only ever let go of chats the queue opened, or blank ones (`queueLetGo`). They
      never let go of a user's chat they were moved onto (`recoverLostActive` can do that).
    - `releaseQueueChat` unlists a done task's chat and frees it. Then every window re-reads its saved
-     chats (`sessionsChangedForAll`), so the chat moves to Recent chats right away.
+     chats (`sessionsChangedForAll`), so the chat moves to Recent chats right away. [queue-done-hidden:
+     it no longer comes back under Recent chats; History still lists it.]
    - `server/index.ts` installs the host for the pi engine, and `disposeAll` takes it down.
 3. **The Queue tab mirror** (`server/task-queue.ts`, `protocol.ts`).
    - The new ops are mirrored: `touches`, `start` with `lane`, `chat`, `requeue`, `lanes`, `assigned`.
@@ -2605,7 +2608,8 @@ reporting) lives in pi-queue (`~/projects/pi-queue`, README "Lanes"); this patch
   - Stop lets #1 finish but doesn't start #2. #3 asks a question, which shows in the Queue tab and as a
     needs-you TL;DR line with a link.
   - Start again: #2 runs and finishes. Answering #3 in its chat (opened from the link) finishes it.
-  - Finished chats leave the running list and show under Recent chats; transcripts stay.
+  - Finished chats leave the running list and show under Recent chats; transcripts stay. [Now:
+    they leave Recent chats too, see queue-done-hidden.]
   - No page errors, and the mock model saw no unexpected messages.
 - `tests/queue-panel-test.mjs` now follows this flow (see queue-panel, Tests): each task runs alone in a
   chat of its own, and #1 is answered there. Its mock has #1's chat stop well after #2's, because
@@ -3867,3 +3871,71 @@ Telegram bot isn't affected (it draws no formulas).
   remark-math changes.
 - If upstream moves to remark-math 7 or micromark-extension-math 4, check that `$$` still makes
   `inlineMath`/`math` nodes with the `language-math` classes rehype-katex looks for.
+
+## queue-done-hidden
+
+**Status**: `local`
+**Baseline**: v0.96.1
+
+**Why** (owner, 2026-09-30, queued task #36: "add to task queue feature to close the chat after it's
+done", then "i want it gone from recent chats essentially"): a finished queued task's chat left the
+running list (queue-lanes) and came straight back under Recent chats, so finished tasks piled up there.
+Now it leaves the whole chat list. Its transcript stays: History lists it, the queue chat's Queue tab and
+the TL;DR and Telegram links open it, and opening it puts it back in Recent chats like any chat.
+
+### Changes
+
+1. **A finished task's chat leaves Recent chats** (`AgentService.queueCloseChat`): pi-queue's `closeChat`
+   (a task done, or removed once its chat stopped working on it, pi-queue's side) also gives the chat the
+   Recent chats tombstone, the same `recentRemoved` entry as the ✕ on its row
+   (`ClientStateStore.removeRecent`), before any window's list is read again. Then, as before,
+   `releaseQueueChat` lets it go right away, or once the window looking at it moves on, and every window's
+   list goes out again (`sessionsChangedForAll`; its comment says so). A task chat that isn't open any
+   more gets the tombstone too, and every window's list goes out (`ClientSession.recentChangedForAll`).
+2. **Only a queued task's own chat** (`server/task-queue.ts`): `isQueueTaskChatEntries` (the open chat's
+   entries) or `isQueueTaskChatFile` (the transcript's start, at most 1 MB): pi-queue writes `assigned`,
+   with the queue the task came from, before the chat's first message. A chat the user started, or a
+   queue's own chat, is never taken out of Recent chats; asked to close one, `closeChat` only lets it go
+   from the running list, as before.
+3. **Opening it brings it back**: `markRecentSeen` (opening or continuing a chat lifts its tombstone) as
+   before, except for the queue's own clients (`carry-on:queue`, `carry-on:queue-home`): a chat they
+   open to run a `/queue` command isn't the user looking at it (no tombstone lifted, no green light
+   turned off).
+4. **Recent chats keep their rows** (`pushSessions`): `recentSessions` is the whole saved-chat list (at
+   most 200) instead of 3 times the limit, so many hidden task chats can't leave Recent chats short.
+5. `server/queue-host.ts`: the comment says what `closeChat` does now.
+
+pi-queue (its own repo, same task): a lane task removed from the queue gets `closeChat` once its chat has
+stopped working on it (done, needs you or on hold, by its own record): at once, or when that chat next
+reports back (`/queue sync`), or when the queue's chat loads again; a `closed` op makes it happen once.
+
+**The ones from before** (`tests/tools/queue-done-sweep.mjs`, once, after the install): finds every chat
+holding a queue (read only), replays it with pi-queue's `replayTranscript`, and sends `remove_recent_chat`
+(the ✕) for each done or removed task's chat that isn't open; a dry run without `--apply`. It prints
+counts and the queue chats' names only.
+
+### How it was checked
+
+- `tests/unit/queue-done-hidden.test.ts` (the production `queueCloseChat`, `releaseQueueChat`,
+  `emitConversations`, `markRecentSeen` and `pushSessions` on stand-in windows sharing one conversation
+  table and a real `ClientStateStore`): which transcripts are a task's own chat (its first message first,
+  a queue's chat, no `from`, a missing or empty file, a long plan of 3-byte characters read in pieces, the
+  read limit, no line break at the end); a closed task chat leaves Running and Recent chats on two
+  windows, its transcript unchanged and History still listing it; a window looking at it keeps it until
+  it moves on; open tasks' and the user's chats stay; the queue's clients opening it don't bring it back,
+  the user opening it does; a task chat that isn't open is tombstoned and every window's list goes out,
+  a user's chat or a missing file isn't; 60 hidden task chats still leave Recent chats its 15 rows; it
+  waits for the chat's run to end first.
+- `tests/queue-lanes-test.mjs` (sealed browser test, real pi-queue, stand-in model): a finished task's
+  chat leaves the observer's list and window A's left panel within seconds, #3's (open in A) once A
+  moves on; the transcripts stay and History lists them; the Queue tab's link opens #1's chat, which is
+  back in the list.
+- pi-queue `npm test`; check.sh, the build and the full sealed suite; live after the install: the sweep's
+  counts, no finished task chat in Recent chats, History finds them, the Queue tab opens one.
+
+### When syncing
+
+- Keep the tombstone in `queueCloseChat` before the release (`releaseQueueChat` refreshes every window's
+  list) and the queue-client check in `markRecentSeen`.
+- If pi-queue changes how a task's chat starts (the `assigned` entry before the first message),
+  follow it in `taskChatHeadEntry`.

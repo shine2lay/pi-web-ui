@@ -31,6 +31,8 @@
  */
 
 import { readFileSync, statSync } from "node:fs";
+import { type FileHandle, open } from "node:fs/promises";
+import { StringDecoder } from "node:string_decoder";
 import type {
 	UiTaskQueue,
 	UiTaskQueueChat,
@@ -456,4 +458,66 @@ export function taskQueueCommandLine(action: unknown, id: unknown): string | nul
 	}
 	if (action === "up" || action === "down" || action === "remove") return isId(id) ? `/queue ${action} ${id}` : null;
 	return null;
+}
+
+/**
+ * queue-done-hidden: one entry of a transcript, read from the start. A queued task's own chat starts
+ * with pi-queue's "assigned" entry (the task, and the queue it came from), written before its first
+ * message. true = that entry, false = a message came first (not a task's chat), undefined = neither:
+ * read on.
+ */
+export function taskChatHeadEntry(raw: unknown): boolean | undefined {
+	if (!raw || typeof raw !== "object") return undefined;
+	const e = raw as { type?: unknown; customType?: unknown; data?: unknown };
+	if (e.type === "message") return false;
+	if (e.type !== "custom" || e.customType !== TASK_QUEUE_ENTRY_TYPE) return undefined;
+	const op = (e.data ?? {}) as { op?: unknown; from?: unknown };
+	return op.op === "assigned" ? chatOf(op.from) !== null : undefined;
+}
+
+/** queue-done-hidden: whether these entries (oldest first) are a queued task's own chat. */
+export function isQueueTaskChatEntries(entries: Iterable<unknown>): boolean {
+	for (const e of entries) {
+		const verdict = taskChatHeadEntry(e);
+		if (verdict !== undefined) return verdict;
+	}
+	return false;
+}
+
+/**
+ * queue-done-hidden: whether the transcript at `file` is a queued task's own chat. Reads only its
+ * start, up to the first message (at most `maxBytes`); false when it can't tell.
+ */
+export async function isQueueTaskChatFile(file: string, maxBytes = 1024 * 1024): Promise<boolean> {
+	let fh: FileHandle | undefined;
+	try {
+		fh = await open(file, "r");
+		const decoder = new StringDecoder("utf8");
+		const chunk = Buffer.alloc(64 * 1024);
+		let carry = "";
+		const verdictOf = (line: string): boolean | undefined => {
+			if (!line.includes('"type":"message"') && !line.includes(`"${TASK_QUEUE_ENTRY_TYPE}"`)) return undefined;
+			try {
+				return taskChatHeadEntry(JSON.parse(line));
+			} catch {
+				return undefined;
+			}
+		};
+		for (let pos = 0; pos < maxBytes;) {
+			const { bytesRead } = await fh.read(chunk, 0, Math.min(chunk.length, maxBytes - pos), pos);
+			if (!bytesRead) return verdictOf(carry + decoder.end()) === true;
+			pos += bytesRead;
+			const lines = (carry + decoder.write(chunk.subarray(0, bytesRead))).split("\n");
+			carry = lines.pop() ?? "";
+			for (const line of lines) {
+				const verdict = verdictOf(line);
+				if (verdict !== undefined) return verdict;
+			}
+		}
+		return false;
+	} catch {
+		return false;
+	} finally {
+		await fh?.close().catch(() => {});
+	}
 }

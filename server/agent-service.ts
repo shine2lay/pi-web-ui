@@ -322,6 +322,8 @@ import {
 } from "./prompt-ack.js";
 import { buildQuestionIndex } from "./question-index.js";
 import {
+	isQueueTaskChatEntries,
+	isQueueTaskChatFile,
 	TASK_QUEUE_ENTRY_TYPE,
 	taskQueueCommandLine,
 	taskQueueFromEntries,
@@ -4698,7 +4700,8 @@ export class ClientSession {
 	/**
 	 * queue-lanes: a task chat whose task is done leaves the running list. It is freed right away,
 	 * or, when it is this client's active chat or a window is looking at it, as soon as that moves on.
-	 * It stays in the history. false = this client doesn't have it open.
+	 * It stays in the history (queue-done-hidden: but not in Recent chats, see queueCloseChat).
+	 * false = this client doesn't have it open.
 	 */
 	releaseQueueChat(file: string): boolean {
 		const id = this.conversationIdBySessionFile(file);
@@ -5007,9 +5010,16 @@ export class ClientSession {
 	}
 	private static identitySessionsTimer: ReturnType<typeof setTimeout> | null = null;
 
+	/** queue-done-hidden: a saved chat left Recent chats (a finished queued task's chat that wasn't open):
+	 *  every window's chat list again. */
+	static recentChangedForAll(): void {
+		ClientSession.emitConversationsToAll();
+	}
+
 	/** queue-lanes: a chat was let go to its transcript (a queued task finished). Every window reads its
-	 *  list of saved chats again, so the chat shows up under Recent chats right away instead of vanishing
-	 *  until the next refresh. Windows that never asked for the list just get the new running list. */
+	 *  list of saved chats again, so History shows the chat as it is now. queue-done-hidden: it doesn't
+	 *  come back under Recent chats, because queueCloseChat took it out of there first (the ✕ tombstone).
+	 *  Windows that never asked for the list just get the new running list. */
 	private static sessionsChangedForAll(): void {
 		for (const cs of ClientSession.liveSessions) {
 			if (cs.disposed || cs.sinkCount() === 0) continue;
@@ -11343,6 +11353,9 @@ export class ClientSession {
 
 	/** 用户打开/继续了这条对话 —— 绿灯灭掉，并撤销它的「移出最近」墓碑。 */
 	private markRecentSeen(conv: Conversation | undefined): void {
+		// queue-done-hidden: the queue opening (or moving through) chats isn't the user looking at them: a
+		// finished task's chat stays out of Recent chats, and a green light stays on.
+		if (this.clientId === QUEUE_TASKS_CLIENT_ID || this.clientId === QUEUE_HOME_CLIENT_ID) return;
 		const path = conv?.session.sessionFile;
 		if (!path) return;
 		const abs = resolve(path);
@@ -11477,7 +11490,9 @@ export class ClientSession {
 			this.emit({ type: "sessions", sessions: sorted });
 			// 「最近对话」常驻行的来源（recent-chats 补丁）：复用这份已解析好的
 			// 列表，emitConversations() 同步取用，不再单独扫盘。
-			this.recentSessions = sorted.slice(0, Math.max(recentChatLimit() * 3, 30));
+			// queue-done-hidden: the whole list (at most 200), not a few times the limit: finished task
+			// chats are taken out of Recent chats, and must not leave it short of rows.
+			this.recentSessions = sorted;
 			this.emitConversations();
 		} catch {
 			this.emit({ type: "sessions", sessions: [] });
@@ -14248,12 +14263,20 @@ export class AgentService {
 		);
 	}
 
-	/** queue-lanes: a done task's chat leaves the running list once it is idle (at most 2 minutes). */
+	/**
+	 * queue-lanes: a done (or removed) task's chat leaves the running list once it is idle (at most 2
+	 * minutes). queue-done-hidden: it leaves Recent chats too, with the same tombstone as its ✕ there,
+	 * set before every window's list is read again. Its transcript stays: History lists it, the queue's
+	 * links open it, and opening it puts it back in Recent chats (markRecentSeen). Only a queued task's
+	 * own chat gets the tombstone, also when it isn't open any more.
+	 */
 	private async queueCloseChat(file: string): Promise<boolean> {
 		const session = this.queueSessionFor(file);
-		if (!session) return false;
-		await waitUntil(() => !session.isStreaming && !session.isCompacting, 120_000, 500);
+		if (session) await waitUntil(() => !session.isStreaming && !session.isCompacting, 120_000, 500);
+		const open = this.queueSessionFor(file);
+		const taskChat = open ? isQueueTaskChatEntries(open.sessionManager.getEntries()) : await isQueueTaskChatFile(file);
 		return this.queueTasksChain(async () => {
+			if (taskChat) this.stateStore.removeRecent(resolve(file));
 			for (const cs of this.clients.values()) {
 				try {
 					if (cs.releaseQueueChat(file)) return true;
@@ -14261,7 +14284,8 @@ export class AgentService {
 					// try the next client
 				}
 			}
-			return false;
+			if (taskChat) ClientSession.recentChangedForAll();
+			return taskChat;
 		});
 	}
 

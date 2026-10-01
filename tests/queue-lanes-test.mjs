@@ -18,7 +18,9 @@
  *  - the lanes limit: with 1 lane at once, #2 doesn't start while #3 holds its lane; with 2 it does;
  *  - the TL;DR link opens #3's chat, whose Queue tab says where the queue is; answering there
  *    finishes #3, and the queue's chat shows every task done;
- *  - finished task chats leave the running list but stay in the chat list, with their transcripts;
+ *  - finished task chats leave the chat list, running and Recent chats, on every window (#3's, which
+ *    window A is looking at, once A moves on); their transcripts stay and History lists them; the
+ *    Queue tab's link opens one, which puts it back in the chat list (queue-done-hidden);
  *  - no page errors, and the mock saw no user message it had no script for.
  * Usage: npm run build && node tests/queue-lanes-test.mjs   (QUEUE_DEBUG=1 prints the mock's requests;
  *        QUEUE_SHOT=/tmp/x.png saves screenshots of the right panel: x-lanes.png, x-stuck.png, x-done.png)
@@ -26,7 +28,7 @@
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { chromium } from "playwright-core";
 import WebSocket from "ws";
 import { startMockModel, textOf, writeMockModelConfig } from "./lib/mock-model.mjs";
@@ -201,19 +203,35 @@ const srv = await ownServer({
 // A second client that only watches the chat list (running chats and recent transcripts). Like a
 // window, it asks for the saved chats once: the Recent chats rows come from that list.
 let convs = [];
+/** The saved chats (History) as last sent to the observer. */
+let saved = [];
+/** Each task chat's transcript, as soon as its row shows one. */
+const taskFiles = new Map();
 const observer = new WebSocket(`ws://127.0.0.1:${srv.port}/ws`);
 observer.on("open", () => observer.send(JSON.stringify({ type: "hello", clientId: "lanes-observer" })));
 observer.on("message", (raw) => {
 	try {
 		const m = JSON.parse(String(raw));
 		if (m.type === "ready") observer.send(JSON.stringify({ type: "list_sessions" }));
-		if (m.type === "conversations" && Array.isArray(m.conversations)) convs = m.conversations;
+		if (m.type === "conversations" && Array.isArray(m.conversations)) {
+			convs = m.conversations;
+			for (const id of [1, 2, 3]) {
+				const file = convRow(id)?.sessionFile ?? convRow(id)?.sessionPath;
+				if (file) taskFiles.set(id, file);
+			}
+		}
+		if (m.type === "sessions" && Array.isArray(m.sessions)) saved = m.sessions;
 	} catch {
 		/* not JSON */
 	}
 });
 /** The chat list's row for a task's chat (running, or a recent transcript with live: false). */
 const convRow = (id) => convs.find((c) => c.title === chatName(id));
+/** Whether a task chat's transcript is still there, and History (the saved chats) lists it. */
+const kept = (id) => {
+	const file = taskFiles.get(id);
+	return !!file && existsSync(file) && saved.some((s) => resolve(s.path) === resolve(file));
+};
 
 // ---- browser ---------------------------------------------------------------
 const pageErrors = [];
@@ -277,6 +295,16 @@ const view = (page) =>
 		};
 	});
 const show = async (page) => JSON.stringify(await view(page));
+/** The left panel's rows (running and Recent chats): their tooltips ("<title> \u2014 <folder>") and the open one. */
+const leftPanel = (page) =>
+	page.evaluate(() => {
+		const items = [...document.querySelectorAll(".panel-left .panel-convs .session-item")];
+		return {
+			rows: items.map((el) => el.getAttribute("title") ?? el.textContent ?? ""),
+			active: items.find((el) => el.classList.contains("active"))?.getAttribute("title") ?? "",
+		};
+	});
+const inLeftPanel = async (page, id) => (await leftPanel(page)).rows.some((row) => row.includes(chatName(id)));
 /** The TL;DR tab's lines: text, needs-you, and whether it links to a chat. */
 const tldrLines = (page) =>
 	page.evaluate(() =>
@@ -391,11 +419,13 @@ try {
 	a = await view(A);
 	check("#2 didn't start while the queue is stopped", !kickoff.has(2) && same(a.next, [2]), JSON.stringify(a));
 	check("#3 wasn't interrupted", convRow(3)?.isStreaming === true && same(a.inChats, [3]), JSON.stringify(convRow(3)));
+	check("#1's chat had a transcript while it ran", taskFiles.has(1));
 	check(
-		"#1's finished chat left the running list but stays in the chat list",
-		await waitFor(() => convRow(1)?.live === false, 15000),
-		JSON.stringify(convRow(1)),
+		"#1's finished chat left the chat list, running and Recent chats, on every window",
+		await waitFor(async () => !convRow(1) && !(await inLeftPanel(A, 1)), 15000),
+		JSON.stringify({ row: convRow(1), panel: await leftPanel(A) }),
 	);
+	check("#1's transcript stays, and History lists it", await waitFor(() => kept(1), 15000), String(taskFiles.get(1)));
 	check(
 		"a note in the queue's chat says #1 is done in its chat",
 		(await pageText(A)).includes(`Task #1 (${PLANS[0].title}) is done in its chat`),
@@ -488,17 +518,31 @@ try {
 
 	console.log("the task chats afterwards");
 	check(
-		"all three task chats left the running list and stay in the chat list, with their transcripts",
+		"all three task chats left the chat list, running and Recent chats, on every window (#3 once A moved on)",
+		await waitFor(async () => {
+			if ([1, 2, 3].some((id) => convRow(id))) return false;
+			for (const id of [1, 2, 3]) if (await inLeftPanel(A, id)) return false;
+			return true;
+		}, 20000),
+		JSON.stringify({
+			rows: [1, 2, 3].map((id) => convRow(id) && [convRow(id).title, convRow(id).live]),
+			panel: await leftPanel(A),
+		}),
+	);
+	check(
+		"their transcripts stay, and History lists them",
+		await waitFor(() => [1, 2, 3].every(kept), 20000),
+		JSON.stringify([1, 2, 3].map((id) => [id, taskFiles.has(id), kept(id)])),
+	);
+	await shot(A, "gone");
+	await A.locator('li.task-queue-task.done[data-task-id="1"] .task-queue-open-chat').click();
+	check(
+		"the Queue tab's link opens #1's chat, and it's back in the chat list",
 		await waitFor(
-			() =>
-				[1, 2, 3].every(
-					(id) => convRow(id)?.live === false && existsSync(convRow(id)?.sessionPath ?? convRow(id)?.sessionFile ?? ""),
-				),
-			20000,
+			async () => (await leftPanel(A)).active.includes(chatName(1)) && !!convRow(1) && (await inLeftPanel(A, 1)),
+			15000,
 		),
-		JSON.stringify(
-			[1, 2, 3].map((id) => convRow(id) && [convRow(id).title, convRow(id).live, !!convRow(id).sessionFile]),
-		),
+		JSON.stringify({ row: convRow(1), panel: await leftPanel(A) }),
 	);
 	check("no page errors", pageErrors.length === 0, pageErrors.join(" | "));
 	check("the mock saw no user message it had no script for", unexpected.length === 0, unexpected.join(" | "));

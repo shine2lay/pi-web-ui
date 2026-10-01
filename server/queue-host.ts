@@ -10,8 +10,9 @@
  *    with the reason otherwise.
  *  - runCommand(sessionFile, line) runs a "/queue …" command in the chat with that transcript,
  *    opening the chat if it isn't open. false = it couldn't.
- *  - closeChat(sessionFile) takes a finished chat out of the running list once it is idle. It stays
- *    in the history.
+ *  - closeChat(sessionFile) lets go of the chat of a task that's done or removed once it is idle: it
+ *    leaves the running list and, being a queued task's own chat, Recent chats too (queue-done-hidden).
+ *    Its transcript stays: History lists it and opening it brings it back.
  *
  * This file is the glue: it checks what the extension hands in and serializes the work. The chats
  * themselves are opened by AgentService / ClientSession (agent-service.ts).
