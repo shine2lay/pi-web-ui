@@ -4,8 +4,10 @@
  * Lists each identity (pi-identity, ~/.pi/agent/memory/identities/<id>/) with its home chat (a link
  * that opens it) and its notebook size against the cap, and opens about.md / notebook.md in a plain
  * text editor. Saving writes the whole file (the server writes it atomically and refuses a notebook
- * over its cap, or a file that changed after it was opened). Chats pick an edit up at their next
- * refresh point (a new session, a compaction or a notebook write) — the page says so.
+ * over its cap, or a file that changed after it was opened). Chats get a changed notebook before their
+ * next reply (pi-identity notices it by its hash); an about page edit reaches them at their next new
+ * session or compaction — the page says so. The chat's own Notebook tab (NotebookPanel.tsx) shows and
+ * edits the same notebook live.
  *
  * State: identity-state.ts (the list + the open file); the draft lives here.
  */

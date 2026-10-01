@@ -69,6 +69,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | queue-side-by-side           | `local`        | `server/task-queue.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TaskQueuePanel.tsx`, i18n + `locales/`, `styles.css`, `tests/run-sealed.mjs`, `tests/lib/sealed-runs.mjs` (new), `tests/queue-side-by-side-test.mjs` (new), `tests/unit/task-queue.test.ts`, `tests/unit/sealed-runs.test.ts` (new) |
 | adaptive-math                | `local`        | `web/src/components/md-adaptive-math.ts` (new), `Markdown.tsx`, `tests/unit/adaptive-math.test.ts`, `tests/adaptive-math-test.mjs`, `tests/tools/adaptive-math-corpus.mjs` |
 | queue-done-hidden            | `local`        | `server/agent-service.ts` (`queueCloseChat`, `markRecentSeen`, `recentSessions`), `task-queue.ts`, `queue-host.ts` (comment), `tests/unit/queue-done-hidden.test.ts` (new), `tests/queue-lanes-test.mjs`, `tests/tools/queue-done-sweep.mjs` (new) |
+| identity-notebook-tab        | `local`        | `server/notebook-watch.ts` (new), `identities.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (30), `web/src/notebook-state.ts` + `components/NotebookPanel.tsx` (new), `RightPanel.tsx`, `App.tsx`, `SettingsModal.tsx`, `IdentitiesSettings.tsx`, `ui-slots.ts`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `scripts/sealed.sh`, `tests/identity-notebook-test.mjs` (new), `tests/unit/` |
 
 ---
 
@@ -3940,3 +3941,83 @@ of its own, where a plain new client would take over the chat open last in the s
   list) and the queue-client check in `markRecentSeen`.
 - If pi-queue changes how a task's chat starts (the `assigned` entry before the first message),
   follow it in `taskChatHeadEntry`.
+
+## identity-notebook-tab
+
+**Status**: `local`
+**Baseline**: v0.96.1 (on top of `identities`)
+
+**Why** (owner, 2026-09-30, queue task #32): each identity's notebook (pi-identity's `notebook.md`) is
+the role's memory, and the owner wants to see it next to the chat and edit it there. It isn't a log
+book: "i don't want a log book, i want it to be maintained, cleaned so that only relevant information
+are there similar to memory systems". So the tab shows the notebook as it is now, with no history.
+pi-identity 0650425 makes the AI keep it that way (add / update / remove against what's there, a
+tidy-up nudge past 6,000 characters) and gives a chat a changed notebook once, before its next reply.
+
+### Changes
+
+1. **Watching a notebook** (`server/notebook-watch.ts`, new; `index.ts`): a window sends
+   `identity_notebook_watch {id}` while its Notebook tab shows (null when it closes; a closed socket ends
+   it too). It gets `identity_notebook {id, text, hash, size, cap}` at once and again whenever the file's
+   text changes, whoever changed it: a chat's notebook tool, the owner, the weekly tidy-up, a hand edit.
+   Changes are found by polling, and only while some window watches: a stat each second (inode, size,
+   mtime, ctime), a read + hash only when the stat changed, and a window is sent the notebook only when
+   the hash differs from the one it last got. Not `fs.watch`: pi-identity and the save replace the file
+   by rename (a new inode each time), which a file watcher loses.
+2. **Saving** (`server/identities.ts`, `saveIdentityFile`): unchanged for about pages. A notebook save now
+   first keeps the lines it takes out (or the old wording of a line it changes) in the memory archive,
+   `archive/notebook-<id>-removed.md`, in pi-identity's format, stamped "removed or changed by the owner
+   (pi-web-ui)" (`droppedLines`, `notebookArchivePath`); a failed archive refuses the save. The answer
+   says how many lines it archived, and the server logs `[identities] the owner saved the <id> notebook:
+   N characters, M removed or changed lines archived` (never the text). `identity_file_save` takes an
+   optional `ref` that comes back in `identity_file_saved`, so the tab's saves don't reach the Settings
+   page and back.
+3. **The tab** (`web/src/components/NotebookPanel.tsx` + `notebook-state.ts`, new; `RightPanel.tsx`,
+   `App.tsx`): host slot `host:right-notebook` in `rightpanel.tabs` (order 40, after TL;DR and Queue;
+   Layout settings can move or hide it), shown only for a chat with an identity (`chatIdentity`).
+   - The view: "<title>'s notebook", its size against the cap with a small bar, Edit, an "About page"
+     link (opens Settings -> Identities; the about pages stay the owner's), one line on what the notebook
+     is, then the notebook as markdown (`<Markdown>`). Empty: says so.
+   - Edit: a plain-text editor with the live size; Save writes the whole file (atomic, refused over the
+     cap: the button goes off and the size turns red); Cancel; "Saved." for 3 s.
+   - The notebook changing while you edit: the tab says so at once and keeps your draft; Save is refused
+     ("Not saved: the notebook changed while you were editing"), with "Load the new version" and "Save
+     mine anyway" (the lines that drops are archived, as above).
+   - A new socket re-sends the watch (`resendNotebookWatch` in `use-chat.ts`). SlotTabs mounts only the
+     open tab, so the server watches only while it shows.
+   - Desktop and the phone's side panel drawer. The right panel's tab bar now wraps instead of
+     scrolling (four tabs don't fit 240 px) and leaves room for the collapse button, which used to sit on
+     the last tab.
+4. Protocol 30. English strings in `i18n.tsx`, translated in all 8 `locales/*.json` packs (the locales
+   unit test wants every key); styles `.notebook-*`. `IdentitiesSettings.tsx`'s note now says chats get a
+   changed notebook before their next reply. `scripts/sealed.sh` passes
+   `PI_IDENTITY_PKG` through, so a sealed run can load an unlanded pi-identity.
+
+### How it was checked
+
+- `tests/unit/identity-notebook.test.ts`: the watch (sent at once, a change sent once to each watcher, a
+  touch without a change sends nothing, a rename-replace and an edit in place are seen, a closed tab or
+  socket ends it, another identity is a new watch, an unknown identity is an error, a throwing sender
+  doesn't stop the others), `droppedLines`, the save's archive (lines removed and changed, nothing for
+  an add, about pages and refused saves untouched, a failed archive refuses the save), the tab's store
+  (watch, pushes, saves with the ref, refusals, reconnect) and its view; `tests/unit/identities.test.ts`
+  and `ui-slots.test.ts` updated.
+- `tests/identity-notebook-test.mjs` (sealed browser test, the real pi-identity, a stand-in model): no
+  tab without an identity; picking one brings it, every tab whole and clear of the collapse button; the
+  notebook as markdown with its size; a rename-replace from outside shows within seconds; the chat's
+  next request carries the change exactly once and the server log has pi-identity's line once, without
+  the text; Edit -> Save writes the file, archives the removed line, logs the save, and the chat's next
+  request has the edit; a change while editing warns at once, Save doesn't overwrite, both ways out
+  work; over the cap can't save; the About page link opens Settings -> Identities; a new chat with None
+  has no tab; the phone drawer has the tab, live.
+- check.sh, the build and the full sealed E2E suite; live, the three home chats' tabs and a throwaway
+  identity.
+
+### When syncing
+
+- Keep the `ref` on `identity_file_save` / `identity_file_saved`: without it the tab's answers go to the
+  Settings page.
+- If the right panel's tab bar changes, run `tests/identity-notebook-test.mjs`: it checks that four tabs
+  show whole at the default width.
+- pi-identity's notebook format (`notebook.md`, the cap, the archive file and its format) is its own:
+  if it changes, change `notebookArchivePath` and `archiveLines` with it.

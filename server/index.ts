@@ -81,6 +81,7 @@ import {
 	saveIdentityFile,
 	scheduleMemoryReindex,
 } from "./identities.js";
+import { NotebookWatch } from "./notebook-watch.js";
 import { initHttpProxy } from "./http-proxy.js";
 import { globalLspPool } from "./lsp-tool.js";
 import { buildPiWebTokenCookie, decodeCookieToken, isTlsRequest } from "./auth-cookie.js";
@@ -1852,6 +1853,9 @@ function pushIdentities(): void {
 	}
 }
 
+/** identity-notebook-tab: the Notebook tab's live notebook, per window (keyed by its socket). */
+const notebookWatch = new NotebookWatch<object>({ identities: () => identityRegistry().identities });
+
 /** 广播通知条给全部在线客户端（全局事件，不属于某个 ClientSession —— 如 mcp.json 坏）。 */
 function pushNoticeToAll(level: "info" | "warning" | "error", text: string, textEn: string): void {
 	const payload = JSON.stringify({ type: "notice", level, text, textEn });
@@ -2412,17 +2416,30 @@ wss.on("connection", (ws) => {
 					break;
 				}
 				const r = saveIdentityFile(identityRegistry(true).identities, msg.id, file, msg.text, msg.baseHash);
+				// identity-notebook-tab: the ref comes back, so the Notebook tab knows the answer is its own.
+				const ref = typeof msg.ref === "string" && msg.ref.length <= 64 ? { ref: msg.ref } : {};
 				send(
 					r.ok
-						? { type: "identity_file_saved", id: msg.id, file, ok: true, hash: r.hash, size: r.size }
-						: { type: "identity_file_saved", id: msg.id, file, ok: false, code: r.code },
+						? { type: "identity_file_saved", id: msg.id, file, ok: true, hash: r.hash, size: r.size, ...ref }
+						: { type: "identity_file_saved", id: msg.id, file, ok: false, code: r.code, ...ref },
 				);
 				if (r.ok) {
+					if (file === "notebook") {
+						console.log(
+							`[identities] the owner saved the ${msg.id} notebook: ${r.size} characters` +
+								(r.archived ? `, ${r.archived} removed or changed line${r.archived === 1 ? "" : "s"} archived` : ""),
+						);
+						notebookWatch.check(); // other windows' tabs now, not at the next tick
+					}
 					pushIdentities();
 					scheduleMemoryReindex();
 				}
 				break;
 			}
+			case "identity_notebook_watch":
+				// identity-notebook-tab: this window's Notebook tab shows that identity's notebook (null = closed).
+				if (msg.id === null || typeof msg.id === "string") notebookWatch.watch(ws, msg.id, send);
+				break;
 			case "task_queue_answer":
 				// telegram-answers: the Queue tab answered a stuck task; it goes into the task's chat.
 				if (typeof msg.conversationId === "string" && Number.isInteger(msg.taskId) && typeof msg.text === "string") {
@@ -3513,6 +3530,7 @@ wss.on("connection", (ws) => {
 		closed = true;
 		pending.clear();
 		removePluginSender();
+		notebookWatch.drop(ws);
 		if (snapshotRetryTimer) {
 			clearTimeout(snapshotRetryTimer);
 			snapshotRetryTimer = null;

@@ -30,4 +30,7 @@
 // 29: identities - chat rows and history rows carry the chat's identity (pi-identity), the server
 //     pushes `identities`, and pages send set_chat_identity / identities_get / identity_file_get /
 //     identity_file_save. An old page shows no labels; an old server would drop the new messages.
-export const PROTOCOL_VERSION = 29;
+// 30: identity-notebook-tab - the right panel's Notebook tab: pages send identity_notebook_watch and
+//     the server pushes `identity_notebook` on every change; identity_file_save/_saved carry a ref.
+//     An old page shows no tab; an old server would never answer the watch.
+export const PROTOCOL_VERSION = 30;

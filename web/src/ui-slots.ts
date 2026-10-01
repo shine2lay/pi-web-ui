@@ -868,6 +868,17 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		view: "queue",
 		order: 30,
 	},
+	// identity-notebook-tab: the chat identity's notebook (pi-identity), live, editable. Only shown for a
+	// chat that has an identity.
+	{
+		id: "host:right-notebook",
+		slot: "rightpanel.tabs",
+		labelKey: "notebookTab",
+		icon: "text",
+		kind: "view",
+		view: "notebook",
+		order: 40,
+	},
 
 	// ---- 左栏会话右键菜单 ----
 	// 重命名：运行中对话行（rename_conversation）与历史行（rename_session）都有；

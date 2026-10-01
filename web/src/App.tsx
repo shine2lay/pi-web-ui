@@ -714,7 +714,7 @@ export function App() {
 	const [manageModelsOpen, setManageModelsOpen] = useState(false);
 	// Settings panel (system prompt / skills / extensions / presets).
 	const [settingsOpen, setSettingsOpen] = useState(false);
-	const [settingsInitialSection, setSettingsInitialSection] = useState<"plugins" | undefined>();
+	const [settingsInitialSection, setSettingsInitialSection] = useState<"plugins" | "identities" | undefined>();
 	// 插件请求目录授权时的确认（host.openSession，issue #146）——非模态 inline 面板。
 	const [pluginPathConfirm, setPluginPathConfirm] = useState<{ path: string; resolve: (ok: boolean) => void } | null>(
 		null,
@@ -2200,6 +2200,13 @@ export function App() {
 							tldr={chat.state?.tldr}
 							tldrConversationId={chat.state?.conversationId}
 							taskQueue={chat.state?.taskQueue}
+							/* identity-notebook-tab: the Notebook tab shows the chat identity's notebook. */
+							identity={chatIdentity}
+							onOpenIdentities={() => {
+								setDrawer(null);
+								setSettingsInitialSection("identities");
+								setSettingsOpen(true);
+							}}
 							onAttach={(path, name, mode, isDir) => {
 								setDrawer(null);
 								attach(path, name, mode, isDir);

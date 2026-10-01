@@ -1762,7 +1762,7 @@ export const en = {
 	identitiesHint:
 		"Each identity is a folder in ~/.pi/agent/memory/identities/. Its about page and its notebook go into every chat that has the identity.",
 	identitiesRefreshNote:
-		"Chats pick up an edit at their next refresh point: a new session, a compaction or a notebook write.",
+		"Chats get a changed notebook before their next reply. An about page edit reaches them at their next new session or compaction.",
 	identitiesEmpty: "No identities yet.",
 	identitiesProblems: "Some identity folders couldn't be read:",
 	identityHomeChat: "Home chat",
@@ -1783,6 +1783,26 @@ export const en = {
 	identitySaveUnknown: "Not saved: this identity is gone.",
 	identitySaveIo: "Not saved: the file couldn't be written.",
 	identityFileError: "Couldn't read the file: {error}",
+	/* identity-notebook-tab: the right panel's Notebook tab */
+	notebookTab: "Notebook",
+	notebookOf: "{title}'s notebook",
+	notebookSize: "{size} / {cap}",
+	notebookSizeTip: "{size} of the notebook's {cap}-character cap",
+	notebookEmpty: "Nothing in the notebook yet. Chats of this identity add what they learn about the role.",
+	notebookLoading: "Loading the notebook\u2026",
+	notebookError: "Couldn't read the notebook: {error}",
+	notebookEdit: "Edit",
+	notebookCancel: "Cancel",
+	notebookAboutPage: "About page",
+	notebookAboutPageTip: "Open this identity in Settings \u2192 Identities",
+	notebookHint:
+		"This role's memory: what's still true and useful. Chats keep it tidy; your edits reach them before their next reply.",
+	notebookChangedWhileEditing:
+		"The notebook changed while you were editing (a chat or another window). Saving would overwrite that change.",
+	notebookSaveChanged: "Not saved: the notebook changed while you were editing.",
+	notebookLoadNew: "Load the new version",
+	notebookSaveMine: "Save mine anyway",
+	notebookUnsaved: "Unsaved changes",
 	toolInfoFootnote: "This is the tool's definition — not this call's arguments or result.",
 };
 

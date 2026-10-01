@@ -57,6 +57,7 @@ import { setAppGlobals, setAppSend } from "./app-globals";
 // 不进 ChatState（弹窗挂在 App 上，消息列表里几十张卡片不必为此各拿一份数据）。
 import { receiveToolInfo } from "./tool-info-state";
 import { receiveIdentities, receiveIdentityFile, receiveIdentitySaved } from "./identity-state";
+import { NOTEBOOK_TAB_REF, receiveNotebook, receiveNotebookSaved, resendNotebookWatch } from "./notebook-state";
 import { emitPluginData } from "./plugin-loader";
 import { ingestPluginLogsData } from "./plugin-logs";
 import { resolveCatalogSyncResult } from "./plugin-host";
@@ -1741,6 +1742,8 @@ export function useChat() {
 					dispatch({ type: "question", question: null });
 					// Ensure a fresh snapshot on (re)connect.
 					ws.send(JSON.stringify({ type: "get_state" } satisfies ClientMessage));
+					// identity-notebook-tab: a new socket has no notebook watch yet; the open tab asks again.
+					resendNotebookWatch();
 					// optimistic-send: ask what became of the sends still shown as "Sending" (after the
 					// snapshot, which may show them already). Same list the "ready" reducer case keeps.
 					const unanswered = idsToCheck(onReconnect(chatApi.current.chat.pendingSends));
@@ -2037,7 +2040,12 @@ export function useChat() {
 					receiveIdentityFile(msg);
 					break;
 				case "identity_file_saved":
-					receiveIdentitySaved(msg);
+					// identity-notebook-tab: the Notebook tab's saves carry its ref; Settings' don't.
+					if (msg.ref === NOTEBOOK_TAB_REF) receiveNotebookSaved(msg);
+					else receiveIdentitySaved(msg);
+					break;
+				case "identity_notebook":
+					receiveNotebook(msg);
 					break;
 				case "heartbeat":
 					if (msg.hostMetrics) {

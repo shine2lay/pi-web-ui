@@ -137,8 +137,8 @@ interface SettingsTerminalBridge {
 }
 
 interface SettingsModalProps {
-	/** Optional direct entry used by the top-bar plugin menu. */
-	initialSection?: "plugins";
+	/** Optional direct entry used by the top-bar plugin menu (and the Notebook tab's "About page" link). */
+	initialSection?: "plugins" | "identities";
 	chat: {
 		settings: UiSettingsState | null;
 		plugins: UiPluginInfo[];

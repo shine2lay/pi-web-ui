@@ -26,7 +26,16 @@
 
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import {
+	appendFileSync,
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	renameSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { open, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -436,7 +445,44 @@ export function readIdentityFile(identities: IdentityDef[], id: string, file: Id
 	}
 }
 
-export type IdentityFileSave = { ok: true; hash: string; size: number } | { ok: false; code: IdentitySaveError };
+/** identity-notebook-tab: archived = how many lines the owner's save took out of the notebook (they're
+ *  kept in the memory archive, like pi-identity keeps the lines its notebook tool removes). */
+export type IdentityFileSave =
+	{ ok: true; hash: string; size: number; archived: number } | { ok: false; code: IdentitySaveError };
+
+/** identity-notebook-tab: where a notebook's removed lines are kept (pi-identity's removedPath; memory_search
+ *  still finds them). */
+export function notebookArchivePath(id: string, env: Env = process.env): string {
+	return join(env.PI_MEMORY_DIR || join(home(env), ".pi", "agent", "memory"), "archive", `notebook-${id}-removed.md`);
+}
+
+/** The lines of `before` that `after` no longer has, in order and once each (blank lines and headings
+ *  aside): what an owner's save removed, or the old wording of a line it changed. */
+export function droppedLines(before: string, after: string): string[] {
+	const kept = new Set(after.split("\n").map((l) => l.trimEnd()));
+	const out: string[] = [];
+	const seen = new Set<string>();
+	for (const raw of before.split("\n")) {
+		const line = raw.trimEnd();
+		if (!line.trim() || /^#{1,6}\s/.test(line) || kept.has(line) || seen.has(line)) continue;
+		seen.add(line);
+		out.push(line);
+	}
+	return out;
+}
+
+function stampOf(d: Date): string {
+	const p = (x: number) => String(x).padStart(2, "0");
+	return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** Append lines to the archive in pi-identity's format (keepRemoved). */
+function archiveLines(path: string, id: string, lines: string[], note: string): void {
+	if (!lines.length) return;
+	mkdirSync(dirname(path), { recursive: true });
+	const head = existsSync(path) ? "" : `# Lines removed from the ${id} notebook\n`;
+	appendFileSync(path, `${head}\n<!-- ${note} -->\n${lines.join("\n")}\n`, "utf8");
+}
 
 /** 整个文件写进去，不会写一半：同目录的临时文件，再 rename（同 pi-identity 的 writeWhole）。 */
 function writeWhole(path: string, text: string): void {
@@ -449,6 +495,7 @@ function writeWhole(path: string, text: string): void {
 /**
  * 存一个身份的 about.md / notebook.md（整个文件）。拒绝：没有这个身份（unknown）、笔记本超上限
  * （over_cap）、about 超安全上限（too_big）、文件在读出 baseHash 之后被改过（changed）、写不进去（io）。
+ * identity-notebook-tab: a notebook save first keeps the lines it takes out in the memory archive.
  */
 export function saveIdentityFile(
 	identities: IdentityDef[],
@@ -456,6 +503,8 @@ export function saveIdentityFile(
 	file: IdentityFileName,
 	text: string,
 	baseHash: string,
+	env: Env = process.env,
+	now: Date = new Date(),
 ): IdentityFileSave {
 	const def = identities.find((i) => i.id === id);
 	if (!def || typeof text !== "string") return { ok: false, code: "unknown" };
@@ -463,13 +512,26 @@ export function saveIdentityFile(
 	if (file === "notebook" && size > NOTEBOOK_CAP) return { ok: false, code: "over_cap" };
 	if (file === "about" && size > ABOUT_MAX) return { ok: false, code: "too_big" };
 	const path = identityFilePath(def, file);
+	let archived = 0;
 	try {
-		if (textHash(readTextOrEmpty(path)) !== baseHash) return { ok: false, code: "changed" };
+		const current = readTextOrEmpty(path);
+		if (textHash(current) !== baseHash) return { ok: false, code: "changed" };
+		if (file === "notebook") {
+			// Archive first: a failed archive refuses the save rather than lose the lines.
+			const dropped = droppedLines(current, text);
+			archiveLines(
+				notebookArchivePath(def.id, env),
+				def.id,
+				dropped,
+				`${stampOf(now)} removed or changed by the owner (pi-web-ui)`,
+			);
+			archived = dropped.length;
+		}
 		writeWhole(path, text);
 	} catch {
 		return { ok: false, code: "io" };
 	}
-	return { ok: true, hash: textHash(text), size };
+	return { ok: true, hash: textHash(text), size, archived };
 }
 
 let reindexTimer: ReturnType<typeof setTimeout> | null = null;

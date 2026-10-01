@@ -60,6 +60,7 @@ let root: string;
 let idDir: string;
 let sessions: string;
 const savedEnv = process.env.PI_IDENTITY_DIR;
+const savedMemoryEnv = process.env.PI_MEMORY_DIR;
 
 function writeIdentity(id: string, json: Record<string, unknown>, files: { about?: string; notebook?: string } = {}) {
 	const d = join(idDir, id);
@@ -84,6 +85,8 @@ beforeEach(() => {
 	mkdirSync(idDir);
 	mkdirSync(sessions);
 	process.env.PI_IDENTITY_DIR = idDir;
+	// A notebook save archives the lines it drops: into the temp folder, never the real memory.
+	process.env.PI_MEMORY_DIR = join(root, "memory");
 	writeIdentity(
 		"temper",
 		{ title: "temper", folder: "/work/temper-ai", homeChat: join(sessions, "temper-home.jsonl") },
@@ -101,6 +104,8 @@ beforeEach(() => {
 afterEach(() => {
 	if (savedEnv === undefined) delete process.env.PI_IDENTITY_DIR;
 	else process.env.PI_IDENTITY_DIR = savedEnv;
+	if (savedMemoryEnv === undefined) delete process.env.PI_MEMORY_DIR;
+	else process.env.PI_MEMORY_DIR = savedMemoryEnv;
 	rmSync(root, { recursive: true, force: true });
 	setAppSend(null);
 	resetIdentityState();
@@ -386,7 +391,7 @@ describe("Settings: about.md and notebook.md", () => {
 	it("saves the whole file (no temp file left) and returns the new hash", () => {
 		const ids = identityRegistry(true).identities;
 		const saved = saveIdentityFile(ids, "temper", "notebook", "- #fact two\n", textHash("- #fact one\n"));
-		expect(saved).toEqual({ ok: true, hash: textHash("- #fact two\n"), size: 12 });
+		expect(saved).toEqual({ ok: true, hash: textHash("- #fact two\n"), size: 12, archived: 1 });
 		expect(readFileSync(notebook(), "utf8")).toBe("- #fact two\n");
 		expect(readdirSync(join(idDir, "temper")).sort()).toEqual(["about.md", "identity.json", "notebook.md"]);
 		// A first about.md for an identity that had none.

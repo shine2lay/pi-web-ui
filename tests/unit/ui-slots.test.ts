@@ -297,6 +297,7 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			["host:right-files", "files"],
 			["host:right-tldr", "tldr"],
 			["host:right-queue", "queue"],
+			["host:right-notebook", "notebook"],
 		]);
 	});
 

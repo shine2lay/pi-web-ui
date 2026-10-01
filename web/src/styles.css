@@ -2238,6 +2238,17 @@ button.session-item.elsewhere-item.confirm {
 	background: var(--bg-elev2);
 	color: var(--text);
 }
+/* The right panel's tab bar (identity-notebook-tab): with the Notebook tab, four tabs don't fit one row at
+   the default 240 px, so the bar wraps instead of scrolling (no tab hides off the edge). On desktop it
+   leaves room for the collapse button in the corner, which used to sit on top of the last tab. */
+.panel-right .slot-tabs-bar {
+	flex-wrap: wrap;
+	row-gap: 2px;
+	overflow-x: visible;
+}
+.panel-right .panel-collapse-btn ~ div .slot-tabs-bar {
+	padding-right: 32px;
+}
 .slot-tabs-extra {
 	margin-left: auto;
 	display: flex;
@@ -16100,5 +16111,152 @@ button.source-default-toggle {
 	}
 	.identity-folder {
 		display: none;
+	}
+}
+
+/* identity-notebook-tab: the right panel's Notebook tab (NotebookPanel.tsx). */
+.notebook-panel {
+	flex: 1 1 0;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 10px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.notebook-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 4px 10px;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+.notebook-title {
+	font-weight: 600;
+	color: var(--text);
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.notebook-size {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	font-variant-numeric: tabular-nums;
+}
+.notebook-size .identity-meter {
+	width: 60px;
+}
+.notebook-size.over {
+	color: var(--red);
+}
+.notebook-size.over .identity-meter-fill {
+	background: var(--red);
+}
+.notebook-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+}
+.notebook-about-link {
+	padding: 2px 4px;
+	border: none;
+	background: none;
+	color: var(--accent);
+	font: inherit;
+	font-size: 12px;
+	cursor: pointer;
+}
+.notebook-about-link:hover {
+	text-decoration: underline;
+}
+.notebook-note {
+	font-size: 12px;
+	color: var(--text-dim);
+}
+.notebook-hint,
+.notebook-empty {
+	margin: 0;
+	color: var(--text-faint);
+	font-size: 12px;
+	line-height: 1.5;
+}
+.notebook-view .md {
+	font-size: 12.5px;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+}
+.notebook-view .md > :first-child {
+	margin-top: 0;
+}
+.notebook-view .md > :last-child {
+	margin-bottom: 0;
+}
+.notebook-view .md h2 {
+	font-size: 13px;
+	margin: 14px 0 4px;
+}
+.notebook-view .md ul {
+	padding-left: 16px;
+}
+.notebook-view .md li + li {
+	margin-top: 3px;
+}
+.notebook-conflict {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 8px 10px;
+	border: 1px solid var(--amber);
+	border-radius: 8px;
+	font-size: 12px;
+	color: var(--amber-text);
+}
+.notebook-conflict p {
+	margin: 0;
+}
+.notebook-editor {
+	flex: 1 1 auto;
+	width: 100%;
+	box-sizing: border-box;
+	min-height: 320px;
+	resize: vertical;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	color: var(--text);
+	padding: 8px 10px;
+	font-family: var(--mono);
+	font-size: 12px;
+	line-height: 1.5;
+	outline: none;
+}
+.notebook-editor:focus {
+	border-color: var(--accent);
+}
+.notebook-over {
+	margin: 0;
+	font-size: 12px;
+	color: var(--red);
+}
+.notebook-save.set-save-btn {
+	padding: 5px 14px;
+	font-size: 12.5px;
+}
+@media (max-width: 768px) {
+	.notebook-about-link {
+		min-height: 36px;
+		font-size: 13px;
+	}
+	.notebook-editor {
+		min-height: 50vh;
+		font-size: 13px;
+	}
+	.notebook-save.set-save-btn {
+		min-height: 36px;
 	}
 }

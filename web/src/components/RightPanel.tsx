@@ -13,8 +13,9 @@ import {
 	FiMaximize2,
 	FiX,
 } from "react-icons/fi";
-import type { ClientMessage, FileListing, UiPluginInfo, UiTaskQueue, UiTldrLine } from "../types";
+import type { ClientMessage, FileListing, UiChatIdentity, UiPluginInfo, UiTaskQueue, UiTldrLine } from "../types";
 import { TldrPanel } from "./TldrPanel";
+import { NotebookPanel } from "./NotebookPanel";
 import { TaskQueuePanel, type TaskQueueAction } from "./TaskQueuePanel";
 import { useT } from "../i18n";
 import { useAppField } from "../app-globals";
@@ -69,11 +70,14 @@ const FILES_TAB_ID = "files";
 const TLDR_TAB_ID = "tldr";
 /** 内置「队列」tab（queue-panel，pi-queue 的任务队列）的 tab id，同样不带冒号。 */
 const TASK_QUEUE_TAB_ID = "queue";
+/** identity-notebook-tab: the chat identity's notebook (only for a chat with an identity). */
+const NOTEBOOK_TAB_ID = "notebook";
 /** 内置 tab id → 它在 `rightpanel.tabs` 槽位里的条目 id（排序 / 隐藏走槽位）。 */
 const HOST_TAB_SLOT_ID: Record<string, string> = {
 	[FILES_TAB_ID]: "host:right-files",
 	[TLDR_TAB_ID]: "host:right-tldr",
 	[TASK_QUEUE_TAB_ID]: "host:right-queue",
+	[NOTEBOOK_TAB_ID]: "host:right-notebook",
 };
 
 /** 未接线时的稳定回退（空插件清单 / 空发送器）：避免每次渲染新建引用喂给下游比较。 */
@@ -122,6 +126,10 @@ interface RightPanelProps {
 	tldrConversationId?: string;
 	/** 当前对话的任务队列（UiState.taskQueue，queue-panel）。delta 不带时引用不变。 */
 	taskQueue?: UiTaskQueue;
+	/** identity-notebook-tab: the open chat's identity (UiState.identity); the Notebook tab shows only with one. */
+	identity?: UiChatIdentity | null;
+	/** identity-notebook-tab: the tab's "About page" link (opens Settings -> Identities). */
+	onOpenIdentities?: () => void;
 	/** Desktop: show the collapse button (mobile drawers close via the topbar). */
 	collapsible?: boolean;
 	/** Fired when the user clicks the collapse button. */
@@ -154,6 +162,8 @@ export const RightPanel = memo(function RightPanel({
 	tldr,
 	tldrConversationId,
 	taskQueue,
+	identity,
+	onOpenIdentities,
 	collapsible,
 	onToggleCollapse,
 	uiRightPanelTabs,
@@ -945,6 +955,7 @@ export const RightPanel = memo(function RightPanel({
 		[panelSend, tldrConversationId],
 	);
 	const taskQueueTabHidden = (uiRightPanelTabs ?? []).some((e) => e.id === "host:right-queue" && e.hidden);
+	const notebookTabHidden = (uiRightPanelTabs ?? []).some((e) => e.id === "host:right-notebook" && e.hidden);
 	/** queue-lanes: open a queued task's own chat (or the queue's chat) from the Queue and TL;DR tabs. */
 	const onOpenChat = useCallback((file: string) => void panelSend({ type: "switch_session", path: file }), [panelSend]);
 	/** 队列 tab 的按钮（queue-panel）：服务端转成 `/queue …` 交给这条对话的 pi-queue。 */
@@ -1360,6 +1371,15 @@ export const RightPanel = memo(function RightPanel({
 												onOpenChat={onOpenChat}
 											/>
 										),
+									},
+								]),
+						...(notebookTabHidden || !identity
+							? []
+							: [
+									{
+										id: NOTEBOOK_TAB_ID,
+										label: t("notebookTab"),
+										element: <NotebookPanel key={identity.id} identity={identity} onOpenAbout={onOpenIdentities} />,
 									},
 								]),
 						...pluginTabs,

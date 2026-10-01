@@ -1401,8 +1401,14 @@ export type ClientMessage =
 	/** Read an identity's about.md / notebook.md (answered with `identity_file`). */
 	| { type: "identity_file_get"; id: string; file: IdentityFileName }
 	/** Save a whole about.md / notebook.md (answered with `identity_file_saved`). baseHash = the hash from
-	 *  `identity_file`: a file changed since then is refused ("changed"); a notebook over its cap too. */
-	| { type: "identity_file_save"; id: string; file: IdentityFileName; text: string; baseHash: string };
+	 *  `identity_file`: a file changed since then is refused ("changed"); a notebook over its cap too.
+	 *  ref (identity-notebook-tab) comes back in identity_file_saved, so the right panel's Notebook tab
+	 *  can tell its own saves from the Settings page's. */
+	| { type: "identity_file_save"; id: string; file: IdentityFileName; text: string; baseHash: string; ref?: string }
+	/** identity-notebook-tab: this window's Notebook tab shows identity `id`'s notebook (null = it closed).
+	 *  Answered at once with `identity_notebook`, then again whenever the file changes (anyone: a chat's
+	 *  notebook tool, the owner, the weekly tidy-up). One watch per window; a new one replaces it. */
+	| { type: "identity_notebook_watch"; id: string | null };
 
 // ---------------------------------------------------------------------------
 // Server -> Client
@@ -3478,7 +3484,8 @@ export type ServerMessage =
 			cap?: number;
 			error?: string;
 	  }
-	/** The answer to identity_file_save: ok with the new hash and size, or refused (code). */
+	/** The answer to identity_file_save: ok with the new hash and size, or refused (code). ref = the
+	 *  save's ref (identity-notebook-tab). */
 	| {
 			type: "identity_file_saved";
 			id: string;
@@ -3487,4 +3494,16 @@ export type ServerMessage =
 			code?: IdentitySaveError;
 			hash?: string;
 			size?: number;
+			ref?: string;
+	  }
+	/** identity-notebook-tab: the watched notebook (identity_notebook_watch), sent at once and on every
+	 *  change. error = no such identity, or the file couldn't be read. */
+	| {
+			type: "identity_notebook";
+			id: string;
+			text?: string;
+			hash?: string;
+			size?: number;
+			cap?: number;
+			error?: string;
 	  };

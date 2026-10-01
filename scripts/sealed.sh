@@ -68,7 +68,7 @@ sessions_before="$(ls -A "$real_sessions" 2>/dev/null)"
 
 # The environment: a short list survives, everything else (keys, tokens, PI_WEB_*) is dropped.
 envs=()
-for v in PATH LANG LANGUAGE LC_ALL LC_CTYPE LC_MESSAGES TERM COLORTERM NO_COLOR FORCE_COLOR USER LOGNAME SHELL TZ CI PI_WEB_CHROME PI_QUEUE_PKG; do
+for v in PATH LANG LANGUAGE LC_ALL LC_CTYPE LC_MESSAGES TERM COLORTERM NO_COLOR FORCE_COLOR USER LOGNAME SHELL TZ CI PI_WEB_CHROME PI_QUEUE_PKG PI_IDENTITY_PKG; do
 	if [ -n "${!v+x}" ]; then envs+=("$v=${!v}"); fi
 done
 browsers="${PLAYWRIGHT_BROWSERS_PATH:-$real_home/.cache/ms-playwright}"
