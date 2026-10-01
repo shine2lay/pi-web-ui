@@ -217,6 +217,7 @@
 		"identitySize": "{size} Bytes",
 		"identitySizeOfCap": "{size} / {cap} Bytes",
 		"identityOverCap": "{n} Bytes über dem Limit: zum Speichern kürzen.",
+		"identityOverCapOne": "1 Byte über dem Limit: zum Speichern kürzen.",
 		"identitySaveOverCap": "Nicht gespeichert: Das Notizbuch ist über seinem Limit.",
 		"identitySaveChanged": "Nicht gespeichert: Die Datei wurde nach dem Öffnen geändert. Bitte zuerst neu laden.",
 		"identitySaveTooBig": "Nicht gespeichert: Die Datei ist zu groß.",

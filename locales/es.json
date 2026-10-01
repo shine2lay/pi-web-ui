@@ -217,6 +217,7 @@
 		"identitySize": "{size} bytes",
 		"identitySizeOfCap": "{size} / {cap} bytes",
 		"identityOverCap": "{n} bytes por encima del límite: acórtalo para guardar.",
+		"identityOverCapOne": "1 byte por encima del límite: acórtalo para guardar.",
 		"identitySaveOverCap": "No guardado: el cuaderno supera su límite.",
 		"identitySaveChanged": "No guardado: el archivo cambió después de abrirlo. Recárgalo primero.",
 		"identitySaveTooBig": "No guardado: el archivo es demasiado grande.",

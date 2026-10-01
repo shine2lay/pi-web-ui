@@ -15824,7 +15824,9 @@ button.source-default-toggle {
    the picker in a blank chat, and Settings > Identities (the list + the about/notebook editor). */
 .identity-tag {
 	display: inline-block;
-	vertical-align: 1px;
+	/* middle, not a baseline nudge: overflow hidden (for the ellipsis) puts an inline-block's baseline at
+	   its bottom edge, so on the baseline the tag sat a few px above the chat's title. */
+	vertical-align: middle;
 	margin-right: 6px;
 	max-width: 12em;
 	overflow: hidden;

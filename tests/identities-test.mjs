@@ -270,6 +270,23 @@ async function rowTag(row) {
 		.evaluateAll((els) => els.map((el) => ({ id: el.getAttribute("data-identity"), text: el.textContent?.trim() })));
 	return tags[0] ?? null;
 }
+/** How far a row's tag sits above its title text, in px (centre to centre; null = no tag or no text).
+ *  The text is measured by a Range over its text nodes, not the title span: the tag stretches the line. */
+async function tagLift(row) {
+	return row.locator(".session-title").evaluate((title) => {
+		const tag = title.querySelector(".identity-tag");
+		const walk = document.createTreeWalker(title, NodeFilter.SHOW_TEXT);
+		let text = null;
+		for (let n = walk.nextNode(); n && !text; n = walk.nextNode())
+			if (n.nodeValue.trim() && !n.parentElement?.closest(".identity-tag")) text = n;
+		if (!tag || !text) return null;
+		const range = document.createRange();
+		range.selectNodeContents(text);
+		const t = range.getBoundingClientRect();
+		const g = tag.getBoundingClientRect();
+		return Math.round((t.top + t.height / 2 - (g.top + g.height / 2)) * 10) / 10;
+	});
+}
 const headerTag = (page) => page.locator(".chat-header .identity-tag-btn");
 async function headerTagId(page) {
 	const ids = await headerTag(page).evaluateAll((els) => els.map((el) => el.getAttribute("data-identity")));
@@ -372,6 +389,8 @@ try {
 		JSON.stringify(await rowTag(runningRow(W, "T"))),
 	);
 	check("the row tag shows the title", (await rowTag(runningRow(W, "T")))?.text === "temper");
+	const lift = await tagLift(runningRow(W, "T"));
+	check("...lined up with the chat's title (centres within 2 px)", lift !== null && Math.abs(lift) <= 2, String(lift));
 
 	console.log("desktop: the next new chat starts with None");
 	await newChat(W);
@@ -506,7 +525,11 @@ try {
 	await shot(W, "desktop-settings");
 	await editorText(W).fill("x".repeat(NOTEBOOK_CAP + 1));
 	check("over the cap: Save is off", await W.locator(".identity-editor .identity-save").isDisabled());
-	check("...and the page says how much to cut", (await W.locator(".identity-editor-over").count()) === 1);
+	const overText =
+		(await W.locator(".identity-editor-over")
+			.textContent()
+			.catch(() => null)) ?? "";
+	check("...and the page says how much to cut", overText.startsWith("1 byte over the cap"), overText);
 	await editorText(W).press("Control+s");
 	await sleep(1000);
 	check(

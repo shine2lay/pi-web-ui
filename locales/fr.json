@@ -217,6 +217,7 @@
 		"identitySize": "{size} octets",
 		"identitySizeOfCap": "{size} / {cap} octets",
 		"identityOverCap": "{n} octets au-delà de la limite : raccourcissez pour enregistrer.",
+		"identityOverCapOne": "1 octet au-delà de la limite : raccourcissez pour enregistrer.",
 		"identitySaveOverCap": "Non enregistré : le carnet dépasse sa limite.",
 		"identitySaveChanged": "Non enregistré : le fichier a changé depuis son ouverture. Rechargez-le d’abord.",
 		"identitySaveTooBig": "Non enregistré : le fichier est trop volumineux.",

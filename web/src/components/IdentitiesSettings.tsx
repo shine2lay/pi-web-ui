@@ -238,7 +238,11 @@ function IdentityFileEditor({ file, cap }: { file: IdentityFileState; cap?: numb
 					}
 				}}
 			/>
-			{overBy > 0 && <p className="identity-editor-over">{t("identityOverCap", { n: fmt(overBy) })}</p>}
+			{overBy > 0 && (
+				<p className="identity-editor-over">
+					{overBy === 1 ? t("identityOverCapOne") : t("identityOverCap", { n: fmt(overBy) })}
+				</p>
+			)}
 			<div className="identity-editor-actions">
 				<button type="button" className="set-save-btn identity-save" disabled={!canSave} onClick={save}>
 					{file.saving ? t("identitySaving") : t("save")}

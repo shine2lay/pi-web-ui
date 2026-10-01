@@ -217,6 +217,7 @@
 		"identitySize": "{size} バイト",
 		"identitySizeOfCap": "{size} / {cap} バイト",
 		"identityOverCap": "上限を {n} バイト超えています。短くすると保存できます。",
+		"identityOverCapOne": "上限を 1 バイト超えています。短くすると保存できます。",
 		"identitySaveOverCap": "保存されませんでした: ノートが上限を超えています。",
 		"identitySaveChanged": "保存されませんでした: 開いた後にファイルが変更されました。先に再読み込みしてください。",
 		"identitySaveTooBig": "保存されませんでした: ファイルが大きすぎます。",

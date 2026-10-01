@@ -217,6 +217,7 @@
 		"identitySize": "{size} bytes",
 		"identitySizeOfCap": "{size} / {cap} bytes",
 		"identityOverCap": "{n} bytes acima do limite: encurte para salvar.",
+		"identityOverCapOne": "1 byte acima do limite: encurte para salvar.",
 		"identitySaveOverCap": "Não salvo: o caderno passou do limite.",
 		"identitySaveChanged": "Não salvo: o arquivo mudou depois que você o abriu. Recarregue primeiro.",
 		"identitySaveTooBig": "Não salvo: o arquivo é grande demais.",

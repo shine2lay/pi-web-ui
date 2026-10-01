@@ -1774,6 +1774,7 @@ export const en = {
 	identitySize: "{size} bytes",
 	identitySizeOfCap: "{size} / {cap} bytes",
 	identityOverCap: "{n} bytes over the cap: shorten it to save.",
+	identityOverCapOne: "1 byte over the cap: shorten it to save.",
 	identitySaveOverCap: "Not saved: the notebook is over its cap.",
 	identitySaveChanged: "Not saved: the file changed after you opened it. Reload it first.",
 	identitySaveTooBig: "Not saved: the file is too big.",

@@ -3643,7 +3643,9 @@ chats: see change 6.
      after "+".
    - **Tags** (`IdentityTag.tsx`): the identity's title in a small tag before the chat's title in the
      running list and History, and at the top of the chat, where it's a button that opens the identity
-     choices (the way to change it on a phone).
+     choices (the way to change it on a phone). A row's tag sits on the middle of the title's line
+     (`vertical-align: middle`: with `overflow: hidden` an inline-block's baseline is its bottom edge, so
+     on the baseline the tag sat about 5 px above the title).
    - **Chat menu** (`LeftPanel.tsx`, `identity-menu.ts`): right-click a running or History row →
      Identity → None or an identity (the current one ticked).
    - **Layout** (`ui-slots.ts`): host entries `host:chat-identity` (chat.header), `host:identity-picker`
@@ -3680,12 +3682,13 @@ chats: see change 6.
   the page (the choices, the menu entry, the Layout entries, the Settings store); the persona loads first
   and the others keep their order.
 - `tests/identities-test.mjs` (sealed browser test with the real pi-identity and a stand-in model): a
-  blank chat offers the picker with None picked; starting a chat as temper shows the header and row tags,
-  and its first message reaches the model with temper's about page (the test only checks a marker is
+  blank chat offers the picker with None picked; starting a chat as temper shows the header and row tags
+  (the row tag lined up with the title: centres within 2 px), and its first message reaches the model with temper's about page (the test only checks a marker is
   there); the next new chat starts with None; RollCall works the same; the tags survive a reload, and
   History rows show them; the chat menu sets ops/tooling on a running row and None on a History row clears
   it everywhere; Settings → Identities lists the three with sizes, saves a notebook edit to the file (no
-  temp file left), won't save a notebook over its cap (button off, Ctrl+S too, the file stays), saves
+  temp file left), won't save a notebook over its cap (button off, Ctrl+S too, the file stays; the page says "1 byte
+  over the cap"), saves
   about.md, and its home-chat link opens the chat; on a phone, "+" gives the picker, the header tag's
   menu clears it, and Settings → Identities is there. No page errors.
 - check.sh, the build and the full sealed E2E suite.

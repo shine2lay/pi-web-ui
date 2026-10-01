@@ -217,6 +217,7 @@
 		"identitySize": "{size} байт",
 		"identitySizeOfCap": "{size} / {cap} байт",
 		"identityOverCap": "На {n} байт больше лимита: сократите, чтобы сохранить.",
+		"identityOverCapOne": "На 1 байт больше лимита: сократите, чтобы сохранить.",
 		"identitySaveOverCap": "Не сохранено: блокнот превышает лимит.",
 		"identitySaveChanged": "Не сохранено: файл изменился после открытия. Сначала перезагрузите его.",
 		"identitySaveTooBig": "Не сохранено: файл слишком большой.",
