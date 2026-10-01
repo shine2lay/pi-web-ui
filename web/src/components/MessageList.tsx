@@ -378,8 +378,11 @@ interface MessageListProps {
 	uiContextMessage?: import("../ui-slots").UiSlotEntry[];
 	/** 工具卡的工具名右键菜单条目（contextmenu.toolcall 槽位）。 */
 	uiContextToolCall?: import("../ui-slots").UiSlotEntry[];
-	/** 空对话占位区条目（chat.empty 槽位：纯插件新增位，无条目时不渲染）。 */
+	/** 空对话占位区条目（chat.empty 槽位：插件条目 + identities 的宿主身份选择，无条目时不渲染）。 */
 	uiChatEmpty?: import("../ui-slots").UiSlotEntry[];
+	/** identities: draws the host entries of chat.empty that have their own UI (the identity picker);
+	 *  see renderSlotToolbar's renderHostEntry. */
+	renderHostSlotEntry?: (entry: import("../ui-slots").UiSlotEntry) => import("react").ReactNode | undefined;
 	/** 条目的动作分发（view 切视图 / action 交给插件）。 */
 	onUiAction?: (item: import("../ui-slots").UiSlotEntry) => void;
 	state: UiState;
@@ -449,6 +452,7 @@ export function MessageList({
 	uiContextMessage,
 	uiContextToolCall,
 	uiChatEmpty,
+	renderHostSlotEntry,
 	onUiAction,
 }: MessageListProps) {
 	const t = useT();
@@ -1457,7 +1461,7 @@ export function MessageList({
 				{state.messages.length === 0 && !state.streamingMessage && pendingSends.length === 0 && (
 					<div className="empty-state">
 						{uiChatEmpty && uiChatEmpty.length > 0 && (
-							<div className="chat-empty-slots">{renderSlotToolbar(uiChatEmpty, onUiAction)}</div>
+							<div className="chat-empty-slots">{renderSlotToolbar(uiChatEmpty, onUiAction, renderHostSlotEntry)}</div>
 						)}
 					</div>
 				)}

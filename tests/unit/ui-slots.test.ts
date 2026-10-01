@@ -944,7 +944,8 @@ describe("面板 chrome 宿主条目（file.preview / goalbar / scm / terminal /
 			"host:scm-term",
 		]);
 		expect(ids(slots["terminal.toolbar"])).toEqual(["host:term-cmd-refresh", "host:term-cmd-new", "host:term-tab-new"]);
-		expect(ids(slots["leftpanel.sessions"])).toEqual(["host:lp-running", "host:lp-history"]);
+		// identities: the identity-tag entry sits after the two section entries (a tag, not a row button).
+		expect(ids(slots["leftpanel.sessions"])).toEqual(["host:lp-running", "host:lp-history", "host:lp-identity"]);
 	});
 
 	it("隐藏与调序走同一套偏好（与顶栏同口径）", () => {

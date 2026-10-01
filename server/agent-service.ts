@@ -301,6 +301,7 @@ import type {
 	UiApprovalCategory,
 	UiApprovalPolicyState,
 	UiApprovalRule,
+	UiChatIdentity,
 	UiMessage,
 	UiPluginUpdateInfo,
 	UiQuestion,
@@ -332,6 +333,16 @@ import {
 	tldrCollapseData,
 	tldrLinesFromEntries,
 } from "./tldr-lines.js";
+import {
+	fileIdentityIds,
+	IDENTITY_ENTRY_TYPE,
+	identityCommandLine,
+	identityIdOfEntry,
+	identityRegistry,
+	liveChatIdentityId,
+	uiChatIdentity,
+	type IdentityEntryLike,
+} from "./identities.js";
 import { digestsBefore, snapshotDigests, straddleDigest } from "./exchange-digest.js";
 import { launchOrigin, toServiceInfo } from "./launch-origin.js";
 import { imageIfVersion, type ChatImage } from "./chat-image.js";
@@ -440,6 +451,17 @@ export class QuiesceRejectedError extends Error {
 const INLINE_PERSONA_EXT = "<inline:pi-webui-persona>";
 /** fast-mode: the hidden extension that sends ChatGPT's fast tier (see fast-mode.ts). */
 const INLINE_FAST_MODE_EXT = `<inline:${FAST_MODE_EXT_NAME}>`;
+
+/** identities: the persona extension first. When the prompt is customized (a template, overrides, a
+ *  preset, a tool turned off) it builds the whole system prompt from the template, without what the
+ *  extensions before it added. The SDK runs before_agent_start in load order, each handler getting the
+ *  prompt the one before returned, and loads inline extensions last: so pi-identity's about page and
+ *  notebook (and any extension's addition) were dropped. First, it builds the base and the others add to it. */
+export function personaFirst<T extends { path: string }>(extensions: T[]): T[] {
+	const i = extensions.findIndex((e) => e.path === INLINE_PERSONA_EXT);
+	if (i <= 0) return extensions;
+	return [extensions[i], ...extensions.slice(0, i), ...extensions.slice(i + 1)];
+}
 
 /** Pi 包文档路径（composer 的 {{pi_docs}} 自动内容用）。随安装位置解析一次。 */
 const PI_DOC_PATHS = (() => {
@@ -1876,6 +1898,10 @@ export interface Conversation {
 	/** TL;DR 行的缓存（tldr-panel，见 ClientSession.tldrOf）：key = 会话 + 叶子，树没动就不重扫分支；
 	 *  sig = 行 id 串，行没变就沿用同一个数组引用（emitSnapshotNow 靠引用判断要不要随 delta 重发）。 */
 	tldrCache?: { key: string; sig: string; lines: UiTldrLine[] };
+	/** identities: the chat's identity on its branch (see ClientSession.identityOf): the last `identity`
+	 *  entry on the branch up to leafId (null = cleared, undefined = none written). A new leaf that grew from
+	 *  leafId only needs the entries after it. */
+	identityCache?: { sessionId: string; leafId: string | null; onBranch: string | null | undefined };
 	/** 任务队列的缓存（queue-panel，见 ClientSession.taskQueueOf）：同 tldrCache。key 还带「装没装 pi-queue」，
 	 *  sig = 整份 JSON，队列没变就沿用同一个对象。 */
 	taskQueueCache?: { key: string; sig: string; queue: UiTaskQueue };
@@ -3744,6 +3770,9 @@ export class ClientSession {
 	private emittedTaskQueue: UiTaskQueue | null = null;
 	/** 上一次发出去的弹窗（引用）：delta 只在它变了时带 `dialog`。 */
 	private emittedDialog: UiDialog | null = null;
+	/** identities: the identity the last snapshot carried, as `id\u0001title` ("" = can't have one, "-" =
+	 *  none): snapshot_delta carries `identity` only when this changed. */
+	private emittedIdentity = "";
 	/** switch-cache：这次切换客户端报上来的缓存窗口。只在 switchSession / switchConversation
 	 *  进行中有值（它们的 finally 清掉），由目标对话的第一份整份快照用掉（resumeWindow）。 */
 	private switchHave: CachedWindow | null = null;
@@ -4119,13 +4148,15 @@ export class ClientSession {
 							const set = new Set(apply.enabledExtensions);
 							return {
 								...res,
-								extensions: res.extensions.filter((e) => keepOwn(e) || isExtensionEnabled(e, [...set])),
+								extensions: personaFirst(res.extensions.filter((e) => keepOwn(e) || isExtensionEnabled(e, [...set]))),
 							};
 						}
 						return {
 							...res,
-							extensions: res.extensions.filter(
-								(e) => keepOwn(e) || !isExtensionDisabled(e, this.settingsSvc.current.disabledExtensions),
+							extensions: personaFirst(
+								res.extensions.filter(
+									(e) => keepOwn(e) || !isExtensionDisabled(e, this.settingsSvc.current.disabledExtensions),
+								),
 							),
 						};
 					},
@@ -4957,6 +4988,19 @@ export class ClientSession {
 			cs.emitConversations();
 		}
 	}
+
+	/** identities: a chat's identity changed. Every window's running list now, and its History list (read
+	 *  again, so the labels of saved chats follow) a moment later: one read for several changes in a row. */
+	private static identityChangedForAll(): void {
+		ClientSession.emitConversationsToAll();
+		if (ClientSession.identitySessionsTimer) return;
+		ClientSession.identitySessionsTimer = setTimeout(() => {
+			ClientSession.identitySessionsTimer = null;
+			ClientSession.sessionsChangedForAll();
+		}, 300);
+		ClientSession.identitySessionsTimer.unref?.();
+	}
+	private static identitySessionsTimer: ReturnType<typeof setTimeout> | null = null;
 
 	/** queue-lanes: a chat was let go to its transcript (a queued task finished). Every window reads its
 	 *  list of saved chats again, so the chat shows up under Recent chats right away instead of vanishing
@@ -6056,6 +6100,11 @@ export class ClientSession {
 				if ((event.entry as { customType?: string } | undefined)?.customType === TASK_QUEUE_ENTRY_TYPE) {
 					ClientSession.scheduleStuckReconcile();
 				}
+				// identities: pi-identity set or cleared this chat's identity -> every window's labels change now
+				// (the refresh above waits 800 ms, reaches only this window, and not at all once it's gone).
+				if ((event.entry as { customType?: string } | undefined)?.customType === IDENTITY_ENTRY_TYPE) {
+					ClientSession.identityChangedForAll();
+				}
 				break;
 			}
 			case "message_end": {
@@ -6203,7 +6252,10 @@ export class ClientSession {
 			// 任务队列变了（queue-panel）：队列 tab 的按钮、agent 跑完后 pi-queue 的推进都只写条目、
 			// 不产生消息，跑着的时候定时器要 2 秒才到。队列一个任务才变几次，立即对账。
 			(event.type === "entry_appended" &&
-				(event.entry as { customType?: string } | undefined)?.customType === TASK_QUEUE_ENTRY_TYPE);
+				(event.entry as { customType?: string } | undefined)?.customType === TASK_QUEUE_ENTRY_TYPE) ||
+			// identities: the chat's identity changed -> the header tag / the picker change now.
+			(event.type === "entry_appended" &&
+				(event.entry as { customType?: string } | undefined)?.customType === IDENTITY_ENTRY_TYPE);
 		this.checkpointViewers(conv.id, boundary);
 		// crash-guard: ids, not `this.conv` (see compaction_start above).
 		if (conv.id !== this.activeId) return;
@@ -6278,6 +6330,60 @@ export class ClientSession {
 		} catch {
 			return conv.tldrCache?.lines ?? [];
 		}
+	}
+
+	/** identities: this chat's identity label (server/identities.ts). The last `identity` entry pi-identity
+	 *  wrote on the current branch; with none ever written, the identity whose home chat this is. The walk
+	 *  goes back from the leaf and stops at the first identity entry or at the leaf it saw last time, so an
+	 *  ordinary append looks only at the new entries. The cache lives on the Conversation (all windows). */
+	private identityOf(conv: Conversation): UiChatIdentity | undefined {
+		const { identities } = identityRegistry();
+		if (identities.length === 0) return undefined;
+		let onBranch = conv.identityCache?.onBranch;
+		let file: string | undefined;
+		try {
+			const sm = conv.session.sessionManager;
+			file = sm.getSessionFile() ?? undefined;
+			const sessionId = sm.getSessionId();
+			const leafId = sm.getLeafId();
+			const c = conv.identityCache;
+			if (!c || c.sessionId !== sessionId || c.leafId !== leafId) {
+				onBranch = undefined;
+				let id = leafId;
+				while (id) {
+					if (c && c.sessionId === sessionId && id === c.leafId) {
+						onBranch = c.onBranch;
+						break;
+					}
+					const entry = sm.getEntry(id);
+					if (!entry) break;
+					const found = identityIdOfEntry(entry as IdentityEntryLike);
+					if (found !== undefined) {
+						onBranch = found;
+						break;
+					}
+					id = entry.parentId;
+				}
+				conv.identityCache = { sessionId, leafId, onBranch };
+			}
+		} catch {
+			// the session is being replaced: keep what was known
+		}
+		return uiChatIdentity(liveChatIdentityId(onBranch, file, identities), identities);
+	}
+
+	/** identities: the open chat's identity for the snapshot (the header tag, a blank chat's picker). null =
+	 *  none yet; undefined = this chat can't have one: a subagent, no identities, or pi-identity isn't loaded
+	 *  in it (then `/identity` would go to the model as a question). */
+	private snapshotIdentityOf(conv: Conversation): UiChatIdentity | null | undefined {
+		if (conv.isSubagent) return undefined;
+		if (identityRegistry().identities.length === 0) return undefined;
+		try {
+			if (!conv.session.extensionRunner?.getCommand?.("identity")) return undefined;
+		} catch {
+			return undefined;
+		}
+		return this.identityOf(conv) ?? null;
 	}
 
 	/** 这条对话的任务队列（queue-panel）：当前分支上 pi-queue 存的 `queue` 条目重放出来的。
@@ -6535,6 +6641,10 @@ export class ClientSession {
 		const dialog = this.conv.dialogs.current;
 		const dialogChanged = dialog !== this.emittedDialog;
 		this.emittedDialog = dialog;
+		const identity = this.snapshotIdentityOf(this.conv);
+		const identitySig = identity === undefined ? "" : identity ? `${identity.id}\u0001${identity.title}` : "-";
+		const identityChanged = identitySig !== this.emittedIdentity;
+		this.emittedIdentity = identitySig;
 		if (incremental && prev) {
 			const baseRev = this.emittedRev;
 			this.emittedKeys = idx.keys;
@@ -6561,6 +6671,9 @@ export class ClientSession {
 					...(taskQueueChanged ? { taskQueue } : {}),
 					// 弹窗同理（没变时 current 是同一个对象）。
 					...(dialogChanged ? { dialog } : {}),
+					// identities: the chat's identity, only when it changed (a delta can't say "can't have one"; that
+					// changes only with a new session or a reload, which send a full snapshot).
+					...(identityChanged && identity !== undefined ? { identity } : {}),
 				},
 			});
 		} else {
@@ -6592,6 +6705,8 @@ export class ClientSession {
 					taskQueue,
 					// 弹窗也是（没有就是 null）：切回来、刷新都靠这里把它带回来。
 					dialog,
+					// identities: the chat's identity (null = none); left out = this chat can't have one.
+					...(identity !== undefined ? { identity } : {}),
 				},
 			});
 		}
@@ -6705,6 +6820,56 @@ export class ClientSession {
 		} catch (err) {
 			console.warn(`[queue-panel] ${line}: ${err instanceof Error ? err.message : String(err)}`);
 		}
+	}
+
+	/** identities: set_chat_identity (the chat menu, the header label, the blank-chat picker). Runs
+	 *  pi-identity's own `/identity <id>` / `/identity none` in that chat, so the rules live in one place: the
+	 *  command writes the `identity` entry (entry_appended -> every window's labels) and says what changed.
+	 *  A loaded chat is found by conversationId or by its file; a chat only on disk (a History row) is opened
+	 *  first, like clicking it. Nothing happens for an unknown identity, or a chat without pi-identity (then
+	 *  `/identity` would go to the model as a question), which gets a notice instead. */
+	async setChatIdentity(conversationId: unknown, sessionPath: unknown, identity: unknown): Promise<void> {
+		if (this.disposed) return;
+		const line = identityCommandLine(identity, identityRegistry(true).identities);
+		if (!line) return;
+		const find = (): Conversation | undefined => {
+			if (typeof conversationId === "string" && conversationId) {
+				const byId = this.convs.get(conversationId);
+				if (byId) return byId;
+			}
+			if (typeof sessionPath !== "string" || !sessionPath) return undefined;
+			const want = resolve(sessionPath);
+			for (const c of this.convs.values()) {
+				const f = c.session.sessionFile;
+				if (f && resolve(f) === want) return c;
+			}
+			return undefined;
+		};
+		let conv = find();
+		if (!conv && typeof sessionPath === "string" && sessionPath) {
+			await this.switchSession(sessionPath);
+			if (this.disposed) return;
+			conv = find();
+		}
+		if (!conv) return;
+		const session = conv.session;
+		if (!session.extensionRunner?.getCommand?.("identity")) {
+			this.emit({
+				type: "notice",
+				level: "warning",
+				text: "This chat can't take an identity: the pi-identity extension isn't loaded in it.",
+				textEn: "This chat can't take an identity: the pi-identity extension isn't loaded in it.",
+			});
+			return;
+		}
+		try {
+			await session.prompt(line);
+		} catch (err) {
+			console.warn(`[identities] ${line}: ${err instanceof Error ? err.message : String(err)}`);
+		}
+		// The entry is in memory now (a blank chat writes its file with the first reply): the labels change
+		// here, not at the next disk refresh.
+		ClientSession.emitConversationsToAll();
 	}
 
 	/** Resolve a browser-bridged dialog (select/confirm/input) for this session. */
@@ -9913,6 +10078,12 @@ export class ClientSession {
 	 *  空白新对话」——/new <prompt> 只在 true 时投递首条提示；false 表示没能进入
 	 *  新对话（准入关闭 / 同项目对话数达上限 / runtime 创建失败），此时照发会把
 	 *  首条提示投进用户原本正在用的那个对话里。 */
+	/** identities: newChat reuses a blank chat; if an identity was picked for it, clear it (pi-identity's
+	 *  `/identity none`), so every new chat starts with none. Nothing to do for a blank chat without one. */
+	private async clearBlankChatIdentity(conv: Conversation): Promise<void> {
+		if (this.identityOf(conv)) await this.setChatIdentity(conv.id, undefined, null);
+	}
+
 	async newChat(_preset?: string, ephemeral?: boolean): Promise<boolean> {
 		if (this.quiesceBlocked()) return false;
 		// Reuse an already-open blank conversation instead of piling up new ones
@@ -9932,6 +10103,8 @@ export class ClientSession {
 		// gets a new one (ensureActiveConversation), and then there is no active chat.
 		const active = this.convs.get(this.activeId);
 		if (!ephemeral && active && isBlank(active)) {
+			// identities: a new chat starts with no identity, even when it's the blank chat you picked one for.
+			await this.clearBlankChatIdentity(active);
 			if (_preset) await this.selectAgentPreset(_preset);
 			else {
 				// 先快照后设置（见 switchConversationNow 末尾）。
@@ -9945,6 +10118,7 @@ export class ClientSession {
 				if (conv.id === this.activeId) continue;
 				if (isBlank(conv)) {
 					await this.switchConversation(conv.id);
+					await this.clearBlankChatIdentity(conv);
 					if (_preset) await this.selectAgentPreset(_preset);
 					else this.flushSnapshot();
 					return true;
@@ -11061,6 +11235,11 @@ export class ClientSession {
 					const tldr = latestUnseenTldr(this.tldrOf(conv));
 					return tldr ? { tldr } : {};
 				})(),
+				// identities: the chat's identity label (its branch; cached per leaf).
+				...(() => {
+					const identity = this.identityOf(conv);
+					return identity ? { identity } : {};
+				})(),
 				parentId: conv.parentId,
 				...(conv.forkFrom ? { forkFrom: conv.forkFrom } : {}),
 				sessionPath,
@@ -11140,6 +11319,8 @@ export class ClientSession {
 				// 磁盘行的创建时间：转录文件名的 ISO 前缀就是它（比 mtime 可靠 —— mtime
 				// 会因为继续聊而变，而文件名不会）；解不出来才退回 mtime。
 				createdAt: sessionCreatedAt(s.path) ?? s.modified,
+				// identities: worked out with the history list (pushSessions -> attachIdentities).
+				...(s.identity ? { identity: s.identity } : {}),
 			});
 		}
 		return rows;
@@ -11278,6 +11459,14 @@ export class ClientSession {
 				});
 			}
 			const sorted = [...sessions.values()].sort((a, b) => b.modified - a.modified).slice(0, 200); // newest first — the panel shows recent history
+			// identities: each row's identity label, before the list goes out (or right after it, when the
+			// first read of big transcripts takes a while; a newer list wins).
+			const gen = ++this.sessionsPushGen;
+			await this.attachIdentities(sorted, () => {
+				if (gen !== this.sessionsPushGen || this.disposed) return;
+				this.emit({ type: "sessions", sessions: sorted });
+				this.emitConversations();
+			});
 			this.emit({ type: "sessions", sessions: sorted });
 			// 「最近对话」常驻行的来源（recent-chats 补丁）：复用这份已解析好的
 			// 列表，emitConversations() 同步取用，不再单独扫盘。
@@ -11286,6 +11475,45 @@ export class ClientSession {
 		} catch {
 			this.emit({ type: "sessions", sessions: [] });
 		}
+	}
+
+	/** identities: bumped by every pushSessions, so a late identity pass never resends an older list. */
+	private sessionsPushGen = 0;
+
+	/** identities: the History rows' identity labels (server/identities.ts: home chat, else the last
+	 *  `identity` entry in the file, else a past home chat). Files are read incrementally and shared by all
+	 *  windows, but the very first pass over big transcripts can take a moment: wait at most 400 ms, then
+	 *  let the list go without the labels and call `resend` once they're known. */
+	private async attachIdentities(rows: SessionSummary[], resend: () => void): Promise<void> {
+		const { identities } = identityRegistry();
+		if (rows.length === 0 || identities.length === 0) return;
+		const apply = (ids: Map<string, string | null>): boolean => {
+			let changed = false;
+			for (const row of rows) {
+				const identity = uiChatIdentity(ids.get(row.path), identities);
+				if (identity?.id !== row.identity?.id || identity?.title !== row.identity?.title) changed = true;
+				if (identity) row.identity = identity;
+				else delete row.identity;
+			}
+			return changed;
+		};
+		const scan = fileIdentityIds(
+			rows.map((r) => r.path),
+			identities,
+		);
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const ids = await Promise.race([
+			scan,
+			new Promise<null>((res) => {
+				timer = setTimeout(() => res(null), 400);
+			}),
+		]).catch(() => null);
+		if (timer) clearTimeout(timer);
+		if (ids) {
+			apply(ids);
+			return;
+		}
+		void scan.then((late) => apply(late) && resend()).catch(() => {});
 	}
 
 	/** Remove an entry from the client's recent-project list (UI state only). */

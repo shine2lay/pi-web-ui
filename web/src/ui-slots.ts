@@ -219,9 +219,10 @@ export function applyUiSlotCardinality<T extends { id: string; hidden: boolean }
  *   settings.pages   不列内置（按契约：这一槽位是插件专属）。
  *   v8 新增槽位：file.preview.toolbar / leftpanel.sessions / terminal.toolbar /
  *                    scm.toolbar / goalbar.actions 均已登记宿主条目（见下表），与插件贡献
- *                    按同一顺序统一渲染；chat.header / chat.empty / notice.actions 仍是
- *                    纯插件新增位（宁缺勿造），无插件贡献时渲染层返回 null、不渲染，
- *                    DOM 与旧版一字不差。渲染位置：chat.header 在 App 主列顶部、
+ *                    按同一顺序统一渲染；identities 补丁给 chat.header（对话的身份标签
+ *                    host:chat-identity）和 chat.empty（空白对话的身份选择 host:identity-picker）
+ *                    各登记了一个宿主条目（pi 对话、有身份时才画）；notice.actions 仍是纯插件新增位。
+ *                    整个槽位什么都不画时渲染层返回 null、不渲染，DOM 与旧版一字不差。渲染位置：chat.header 在 App 主列顶部、
  *                    chat.empty 在 MessageList 空态区、
  *                    file.preview.toolbar 在 FilePreview 的 .fp-head-actions 尾部。
  */
@@ -808,6 +809,34 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		kind: "action",
 		order: 30,
 	},
+	// identities: the chat's identity tag in the chat header (pi chats with an identity; a click opens
+	// the identity menu) and the identity picker in a blank chat (None + each identity).
+	{
+		id: "host:chat-identity",
+		slot: "chat.header",
+		labelKey: "identityTag",
+		icon: "👤",
+		kind: "badge",
+		order: 10,
+	},
+	{
+		id: "host:identity-picker",
+		slot: "chat.empty",
+		labelKey: "identityPicker",
+		icon: "👤",
+		kind: "select",
+		order: 10,
+	},
+	// identities: the identity tag in each chat row's title (running chats and History). Not a row
+	// button (renderLeftSessions skips it); hiding it here drops the tags from the list.
+	{
+		id: "host:lp-identity",
+		slot: "leftpanel.sessions",
+		labelKey: "identityTag",
+		icon: "👤",
+		kind: "badge",
+		order: 40,
+	},
 
 	// ---- 右栏 tab（文件树 + TL;DR + 队列） ----
 	{
@@ -921,6 +950,17 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		kind: "action",
 		context: "session",
 		order: 50,
+	},
+	// identities: "Identity" submenu (None + each identity, the chat's own one ticked). LeftPanel
+	// fills the children from the identity list; pi chats only (not on DSH, not on subagents).
+	{
+		id: "host:conv-identity",
+		slot: "contextmenu.session",
+		labelKey: "identityMenu",
+		icon: "👤",
+		kind: "menu",
+		context: "session",
+		order: 55,
 	},
 
 	// ---- 文件树右键菜单（contextmenu.file，渲染与分派见 RightPanel.tsx）----
@@ -1300,6 +1340,17 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
  * no-project-controls: the "Recent projects" section and its host:lp-projects entry are gone.
  */
 export const LP_SECTION_ENTRY_IDS: ReadonlySet<string> = new Set(["host:lp-running", "host:lp-history"]);
+
+/** identities: the identity-tag entry of leftpanel.sessions. Not a row button either (renderLeftSessions
+ *  skips it); while it's visible each chat row shows its identity tag, hidden = no tags in the list. */
+export const LP_IDENTITY_ENTRY_ID = "host:lp-identity";
+
+/** identities: the chat-header identity tag and the blank-chat identity picker (their slot entries). */
+export const CHAT_IDENTITY_ENTRY_ID = "host:chat-identity";
+export const IDENTITY_PICKER_ENTRY_ID = "host:identity-picker";
+
+/** identities: the chat menu's "Identity" submenu; its children are `<id>:<identity id>` / `<id>:none`. */
+export const CONV_IDENTITY_ENTRY_ID = "host:conv-identity";
 
 /** 插件视图 tab 的合成条目 id（`<pluginId>:__view`，`__view` 为保留字）。 */
 export const PLUGIN_VIEW_ITEM_ID = "__view";

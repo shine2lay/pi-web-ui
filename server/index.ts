@@ -74,6 +74,13 @@ import { McpBridge } from "./mcp-bridge.js";
 import { createMcpHotReload } from "./mcp-hot-reload.js";
 import { createHostMetricsSampler } from "./host-metrics.js";
 import { SchedulerStore } from "./scheduler-tasks.js";
+import {
+	identityInfos,
+	identityRegistry,
+	readIdentityFile,
+	saveIdentityFile,
+	scheduleMemoryReindex,
+} from "./identities.js";
 import { initHttpProxy } from "./http-proxy.js";
 import { globalLspPool } from "./lsp-tool.js";
 import { buildPiWebTokenCookie, decodeCookieToken, isTlsRequest } from "./auth-cookie.js";
@@ -1143,6 +1150,8 @@ export interface DispatchSession {
 	taskQueueCommand?(action: unknown, id: unknown, conversationId?: unknown): Promise<void>;
 	/** telegram-answers: the Queue tab answers a stuck task (a choice or typed words); optional like above. */
 	taskQueueAnswer?(conversationId: string, taskId: number, text: string): Promise<void>;
+	/** identities: set / clear a chat's identity through pi-identity's `/identity`. Optional: DSH has none. */
+	setChatIdentity?(conversationId: unknown, sessionPath: unknown, identity: unknown): Promise<void>;
 	pushSlashCommands(): Promise<void>;
 	/** 取一条工具的**定义说明** → `tool_info`（工具卡右键 → 「显示工具详细信息」）。
 	 *  pi 与 dsh 都实现了；缺失时 dispatch 回 `unsupported`（不静默 —— 否则点开弹窗
@@ -1820,6 +1829,29 @@ function pushSchedulerTasks(): void {
 	}
 }
 
+/** identities：身份表（Settings → Identities、左栏菜单和空白对话页的选择器用）。force 立即重读文件夹。 */
+function identitiesMessage(force = false): ServerMessage {
+	const { identities, problems } = identityRegistry(force);
+	return { type: "identities", identities: identityInfos(identities), problems };
+}
+
+/** identities：存盘之后把新的身份表（笔记本大小变了）推给所有在线客户端。 */
+function pushIdentities(): void {
+	try {
+		const payload = JSON.stringify(identitiesMessage(true));
+		for (const client of wss.clients) {
+			if (client.readyState !== WebSocket.OPEN) continue;
+			try {
+				client.send(payload);
+			} catch {
+				/* 死连接：index.ts 自己会清理 */
+			}
+		}
+	} catch {
+		/* 读不了身份表不影响别的 */
+	}
+}
+
 /** 广播通知条给全部在线客户端（全局事件，不属于某个 ClientSession —— 如 mcp.json 坏）。 */
 function pushNoticeToAll(level: "info" | "warning" | "error", text: string, textEn: string): void {
 	const payload = JSON.stringify({ type: "notice", level, text, textEn });
@@ -2343,6 +2375,54 @@ wss.on("connection", (ws) => {
 				// 队列 tab 里点了开始 / 停下 / ↑ ↓ / 删除（queue-panel）。
 				void cs.taskQueueCommand?.(msg.action, msg.id, msg.conversationId);
 				break;
+			case "set_chat_identity":
+				// identities: the chat menu, the header label or the blank-chat picker (pi-identity's /identity).
+				if (msg.identity === null || typeof msg.identity === "string") {
+					void cs.setChatIdentity?.(msg.conversationId, msg.sessionPath, msg.identity);
+				}
+				break;
+			case "identities_get":
+				// identities: Settings -> Identities opened (or asked again).
+				send(identitiesMessage(true));
+				break;
+			case "identity_file_get": {
+				// identities: open about.md / notebook.md in the Settings editor.
+				const file = msg.file === "about" || msg.file === "notebook" ? msg.file : null;
+				if (typeof msg.id !== "string" || !file) break;
+				const r = readIdentityFile(identityRegistry(true).identities, msg.id, file);
+				send(
+					r.ok
+						? {
+								type: "identity_file",
+								id: msg.id,
+								file,
+								text: r.text,
+								hash: r.hash,
+								size: r.size,
+								...(r.cap !== undefined ? { cap: r.cap } : {}),
+							}
+						: { type: "identity_file", id: msg.id, file, error: r.error },
+				);
+				break;
+			}
+			case "identity_file_save": {
+				// identities: save the whole file (refused over the notebook's cap, or when it changed since it was read).
+				const file = msg.file === "about" || msg.file === "notebook" ? msg.file : null;
+				if (typeof msg.id !== "string" || !file || typeof msg.text !== "string" || typeof msg.baseHash !== "string") {
+					break;
+				}
+				const r = saveIdentityFile(identityRegistry(true).identities, msg.id, file, msg.text, msg.baseHash);
+				send(
+					r.ok
+						? { type: "identity_file_saved", id: msg.id, file, ok: true, hash: r.hash, size: r.size }
+						: { type: "identity_file_saved", id: msg.id, file, ok: false, code: r.code },
+				);
+				if (r.ok) {
+					pushIdentities();
+					scheduleMemoryReindex();
+				}
+				break;
+			}
 			case "task_queue_answer":
 				// telegram-answers: the Queue tab answered a stuck task; it goes into the task's chat.
 				if (typeof msg.conversationId === "string" && Number.isInteger(msg.taskId) && typeof msg.text === "string") {
@@ -3348,6 +3428,12 @@ wss.on("connection", (ws) => {
 								send({ type: "scheduler_tasks", tasks: scheduler.list() });
 							} catch {
 								/* 推送失败不挡快照 */
+							}
+							// identities：身份表也随附推一次（左栏菜单、空白对话页的选择器用；存盘后经 pushIdentities 广播）。
+							try {
+								send(identitiesMessage());
+							} catch {
+								/* 读不了身份表不挡快照 */
 							}
 							replayQueued();
 						})

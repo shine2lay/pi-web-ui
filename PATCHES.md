@@ -65,6 +65,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | fast-mode                    | `local`        | `server/fast-mode.ts` (new), `agent-service.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (27), `web/src/components/FastModeButton.tsx` (new), `ChatInput.tsx`, `App.tsx`, `SettingsModal.tsx`, `ui-slots.ts`, i18n + `locales/`, `styles.css`, `tests/fast-mode-test.mjs`, `tests/lib/mock-model.mjs`, `tests/tools/fast-mode-*`, `tests/unit/` |
 | list-freeze                  | `local`        | `server/message-count.ts` (new), `agent-service.ts`, `tests/unit/list-freeze.test.ts` |
 | no-plan-board                | `local`        | `server/plan-manager.ts` (removed), `agent-service.ts`, `tool-manager.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (28), `web/src/components/PlanBoard.tsx` (removed), `App.tsx`, `i18n.tsx`, `locales/`, `styles.css`, `tests/unit/plan-state.test.ts` (removed), `tests/no-plan-board-test.mjs`, `tests/unit/` |
+| identities                   | `local`        | `server/identities.ts` (new), `agent-service.ts` (incl. `personaFirst`), `index.ts`, `protocol.ts`, `protocol-version.ts` (29), `web/src/identity-state.ts` + `identity-menu.ts` (new), `components/IdentityTag.tsx` + `IdentityPicker.tsx` + `IdentitiesSettings.tsx` (new), `App.tsx`, `LeftPanel.tsx`, `MessageList.tsx`, `SettingsModal.tsx`, `slot-toolbar.tsx`, `ui-slots.ts`, `use-chat.ts`, i18n + `locales/`, `styles.css`, `tests/identities-test.mjs`, `tests/unit/` |
 
 ---
 
@@ -3589,3 +3590,114 @@ deleted). If upstream adds anything back for the board (`plan_update`, `makePlan
 `plan_update` or `plan_updated` in `protocol.ts`; a `<PlanBoard>` in `App.tsx`; `planBoard*` /
 `planUpdate*` keys; `.plan-board` styles), leave it out; `tests/unit/no-plan-board.test.ts` catches most
 of it. If upstream also bumps `PROTOCOL_VERSION`, use one more than the higher of the two numbers.
+
+## identities
+
+**Status**: `local`
+**Baseline**: v0.96.1
+
+**Why** (owner, 2026-09-30): pi-identity (`~/projects/pi-identity`, queued task #28) gives a chat an
+identity (temper, RollCall, ops/tooling) whose about page and notebook load into the chat. pi-web-ui
+showed none of it: you couldn't start a chat as one, see which chat had which, or read and edit the about
+pages and notebooks without opening files. The identity logic stays in pi-identity: pi-web-ui reads its
+files (`identities/<id>/identity.json`, `about.md`, `notebook.md`) and its session entries (`custom`,
+`customType: "identity"`), and sets or clears a chat's identity by running pi-identity's own `/identity`
+command in that chat.
+
+The sealed browser test also found that the about page and notebook never reached the model in pi-web-ui
+chats: see change 6.
+
+### Changes
+
+1. **Reading identities** (`server/identities.ts`, new):
+   - The list: every `identities/*/identity.json`, in the folder pi-identity uses (`PI_IDENTITY_DIR`, else
+     `PI_MEMORY_DIR/identities`, else `~/.pi/agent/memory/identities`), with its id rules; the title
+     defaults to the id; broken folders are reported, not shown. Read again at most every 3 s.
+   - A loaded chat's identity: the last identity entry on its branch (`id: null` = cleared), else the
+     identity whose home chat it is. Kept per chat until its leaf moves.
+   - A History chat's identity, from its file, the way pi-identity's `identityOfFile` does it: its home
+     chat (matched by path, the file isn't read), else the last identity entry in the file, else a past
+     home chat. Session files run to hundreds of MB, so `IdentityFileIndex` reads each file once and then
+     only what was added (by size and mtime), looking for the entry in 1 MB chunks.
+2. **Server** (`agent-service.ts`, `index.ts`):
+   - Running-list rows and History rows carry `identity {id, title}`. The open chat's snapshot carries
+     `identity` (null = none; missing = it can't have one: pi-identity isn't loaded in it, a subagent,
+     DSH), so the header tag and a blank chat's picker work before the chat is in the list.
+   - `set_chat_identity` runs `/identity <id>` or `/identity none` in the chat, found by conversation id
+     or session file (a History chat is opened first). A chat without pi-identity gets a warning notice.
+     When pi-identity writes its entry, every window's running list changes at once and its History list
+     a moment later.
+   - "New chat" reusing a blank chat that has an identity runs `/identity none` in it: new chats start
+     with None, nothing is remembered.
+   - `identities_get` → `identities` (also sent on connect and after a save), `identity_file_get` →
+     `identity_file`, `identity_file_save` → `identity_file_saved`. A save writes the whole file (a temp
+     file, then a rename) and refuses a notebook over pi-identity's cap (8,000 bytes), an about page over
+     64 KB and a file changed since it was opened (hash); then it reindexes memory search the way
+     pi-identity's notebook tool does (`PI_IDENTITY_REINDEX=0` turns that off).
+3. **Protocol** (`protocol.ts`): those messages, `UiChatIdentity`, `UiIdentityInfo`,
+   `ConversationSummary.identity`, `SessionSummary.identity` and `UiState.identity`. `PROTOCOL_VERSION`
+   28 → 29.
+4. **Page**:
+   - **Picker** (`IdentityPicker.tsx`): a blank pi chat offers "Start as: None, ops/tooling, RollCall,
+     temper" with None picked; a pick sets it at once (pi-identity's notice says so). Same on a phone
+     after "+".
+   - **Tags** (`IdentityTag.tsx`): the identity's title in a small tag before the chat's title in the
+     running list and History, and at the top of the chat, where it's a button that opens the identity
+     choices (the way to change it on a phone).
+   - **Chat menu** (`LeftPanel.tsx`, `identity-menu.ts`): right-click a running or History row →
+     Identity → None or an identity (the current one ticked).
+   - **Layout** (`ui-slots.ts`): host entries `host:chat-identity` (chat.header), `host:identity-picker`
+     (chat.empty), `host:lp-identity` (leftpanel.sessions: hiding it hides the row tags) and
+     `host:conv-identity` (contextmenu.session), so Settings → Layout can move or hide them.
+     `renderSlotToolbar` takes a renderer for host entries.
+   - **Settings → Identities** (`IdentitiesSettings.tsx`, `identity-state.ts`, `SettingsModal.tsx`; pi
+     only): each identity with its folder, its home chat (a link by the chat's title that opens it) and
+     its notebook size against the cap. about.md and notebook.md open in a plain-text editor with a byte
+     count; Save (or Ctrl+S) is off when nothing changed or the notebook is over its cap; Reload. The page
+     says chats pick up an edit at their next refresh point (a new session, a compaction or a notebook
+     write).
+   - i18n keys in `i18n.tsx` and all 8 `locales/`; styles at the end of `styles.css`.
+5. DSH chats get no picker, menu entry or Settings page (DSH doesn't run pi-identity).
+6. **The persona extension first** (`agent-service.ts` `personaFirst`): when the system prompt is
+   customized (a template, overrides, a preset other than standard, or any tool switched off; live, that's
+   `edit_soft` switched off), pi-web-ui's hidden `pi-webui-persona` extension rebuilds the whole prompt
+   from the template in `before_agent_start`. pi runs those handlers in load order, each getting the
+   prompt the one before returned, and loads inline extensions last, so what the others added there was
+   thrown away: pi-identity's about page and notebook, and also pi-memory's memory snapshot and the other
+   extensions that add to the prompt. The persona now loads first: it builds the base and the others add
+   to it, as they do in pi's terminal. So every pi-web-ui chat now gets those additions (pi-memory's is up
+   to 16,000 characters; an identity's about page and notebook up to about 10,000).
+
+### How it was checked
+
+- `tests/unit/identities.test.ts` (24): the list (titles, broken folders, home chats, notebook sizes); a
+  loaded chat's tag (the last entry on the branch, a cleared one, a home chat before it wrote any entry,
+  following the session tree); History chats (home chat without reading, last entry, past home chat,
+  reading only what was added, waiting for a line still being written; the rows carry the tag); set and
+  clear run pi-identity's own command in the right chat (by id, by file, a History chat opened first; no
+  pi-identity → a notice and nothing sent to the model); reading and saving (hash, whole file, no temp file
+  left, the cap refusal in bytes, a file changed meanwhile, an identity that's gone, a huge about page);
+  the page (the choices, the menu entry, the Layout entries, the Settings store); the persona loads first
+  and the others keep their order.
+- `tests/identities-test.mjs` (sealed browser test with the real pi-identity and a stand-in model): a
+  blank chat offers the picker with None picked; starting a chat as temper shows the header and row tags,
+  and its first message reaches the model with temper's about page (the test only checks a marker is
+  there); the next new chat starts with None; RollCall works the same; the tags survive a reload, and
+  History rows show them; the chat menu sets ops/tooling on a running row and None on a History row clears
+  it everywhere; Settings → Identities lists the three with sizes, saves a notebook edit to the file (no
+  temp file left), won't save a notebook over its cap (button off, Ctrl+S too, the file stays), saves
+  about.md, and its home-chat link opens the chat; on a phone, "+" gives the picker, the header tag's
+  menu clears it, and Settings → Identities is there. No page errors.
+- check.sh, the build and the full sealed E2E suite.
+
+### When syncing
+
+- Keep `personaFirst` on both returns of `extensionsOverride`. If upstream changes how the persona builds
+  the prompt (or pi changes the order of `before_agent_start` handlers or of inline extensions), check
+  that what other extensions add still reaches the model: `tests/identities-test.mjs` fails if temper's
+  about page doesn't.
+- pi-identity owns the format: if it changes the entry (`customType`, `data.id`), the identity.json fields
+  or the cap, follow it in `server/identities.ts` (`IDENTITY_ENTRY_TYPE`, `NOTEBOOK_CAP`) and the unit
+  test.
+- If upstream adds its own host entries to `chat.header` or `chat.empty`, keep ours in the same slots.
+  If upstream also bumps `PROTOCOL_VERSION`, use one more than the higher of the two numbers.

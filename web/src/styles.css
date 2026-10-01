@@ -15819,3 +15819,280 @@ button.source-default-toggle {
 		display: none;
 	}
 }
+
+/* identities: a chat's identity (pi-identity). The tag in the chat list rows and the chat header,
+   the picker in a blank chat, and Settings > Identities (the list + the about/notebook editor). */
+.identity-tag {
+	display: inline-block;
+	vertical-align: 1px;
+	margin-right: 6px;
+	max-width: 12em;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	font-size: 9.5px;
+	line-height: 1.4;
+	padding: 0 5px;
+	border-radius: 999px;
+	border: 1px solid color-mix(in srgb, var(--green) 45%, var(--border));
+	color: var(--green);
+	background: color-mix(in srgb, var(--green) 10%, transparent);
+	white-space: nowrap;
+	flex-shrink: 0;
+}
+.identity-tag.identity-tag-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	margin: 0;
+	max-width: 16em;
+	font-family: inherit;
+	font-size: 11.5px;
+	line-height: 1.5;
+	padding: 1px 9px;
+	cursor: pointer;
+}
+.identity-tag.identity-tag-btn:hover {
+	background: color-mix(in srgb, var(--green) 18%, transparent);
+}
+.identity-tag-title {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.identity-picker {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	font-size: 12.5px;
+	color: var(--text-dim);
+}
+.identity-picker-chips {
+	display: inline-flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: 6px;
+}
+.identity-chip {
+	padding: 4px 12px;
+	border-radius: 999px;
+	border: 1px solid var(--border);
+	background: var(--bg-elev);
+	color: var(--text-dim);
+	font: inherit;
+	font-size: 12.5px;
+	cursor: pointer;
+}
+.identity-chip:hover {
+	color: var(--text);
+	border-color: var(--text-faint);
+}
+.identity-chip.on {
+	color: var(--green);
+	border-color: color-mix(in srgb, var(--green) 55%, var(--border));
+	background: color-mix(in srgb, var(--green) 12%, transparent);
+	font-weight: 600;
+}
+
+.identity-list {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.identity-row {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 10px 12px;
+	background: var(--bg-elev2);
+	border: 1px solid var(--border-soft);
+	border-radius: 8px;
+}
+.identity-row-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+.identity-row-head .identity-tag {
+	margin: 0;
+	max-width: none;
+	font-size: 12px;
+	padding: 1px 8px;
+}
+.identity-id {
+	font-family: var(--mono);
+	font-size: 11.5px;
+	color: var(--text-faint);
+}
+.identity-folder {
+	margin-left: auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-family: var(--mono);
+	font-size: 11px;
+	color: var(--text-faint);
+}
+.identity-row-meta {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 18px;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+.identity-home-link {
+	max-width: 28em;
+	padding: 0;
+	border: none;
+	background: none;
+	color: var(--link);
+	font: inherit;
+	text-decoration: underline;
+	text-underline-offset: 2px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	vertical-align: bottom;
+	cursor: pointer;
+}
+.identity-home-link:hover {
+	color: var(--link-hover);
+}
+.identity-muted {
+	color: var(--text-faint);
+}
+.identity-notebook-size {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+}
+.identity-notebook-size.over {
+	color: var(--red);
+}
+.identity-meter {
+	display: inline-block;
+	width: 80px;
+	height: 5px;
+	border-radius: 999px;
+	background: var(--border-soft);
+	overflow: hidden;
+}
+.identity-meter-fill {
+	display: block;
+	height: 100%;
+	border-radius: inherit;
+	background: var(--green);
+}
+.identity-notebook-size.over .identity-meter-fill {
+	background: var(--red);
+}
+.identity-row-actions,
+.identity-editor-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+}
+.identity-btn {
+	padding: 4px 10px;
+	border-radius: 6px;
+	border: 1px solid var(--border);
+	background: transparent;
+	color: var(--text-dim);
+	font: inherit;
+	font-size: 12px;
+	cursor: pointer;
+}
+.identity-btn:hover:not(:disabled) {
+	color: var(--text);
+	border-color: var(--text-faint);
+}
+.identity-btn.on {
+	color: var(--accent);
+	border-color: var(--accent);
+	background: var(--accent-soft);
+}
+.identity-btn:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+.identity-open-btn {
+	font-family: var(--mono);
+}
+.identity-editor {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.identity-editor-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+.identity-editor-size.over,
+.identity-editor-over {
+	color: var(--red);
+}
+.identity-editor-over {
+	margin: 0;
+	font-size: 12px;
+}
+.identity-editor-text {
+	width: 100%;
+	box-sizing: border-box;
+	min-height: 240px;
+	resize: vertical;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	color: var(--text);
+	padding: 10px 12px;
+	font-family: var(--mono);
+	font-size: 12.5px;
+	line-height: 1.55;
+	outline: none;
+}
+.identity-editor-text:focus {
+	border-color: var(--accent);
+}
+.identity-editor-note {
+	font-size: 12px;
+	color: var(--text-dim);
+}
+.identity-save.set-save-btn {
+	padding: 5px 14px;
+	font-size: 12.5px;
+}
+.identity-problems ul {
+	margin: 4px 0 0;
+	padding-left: 18px;
+}
+@media (max-width: 768px) {
+	.identity-picker {
+		font-size: 14px;
+	}
+	.identity-chip {
+		min-height: 36px;
+		padding: 6px 14px;
+		font-size: 14px;
+	}
+	.identity-btn {
+		min-height: 36px;
+		padding: 6px 12px;
+		font-size: 13px;
+	}
+	.identity-editor-text {
+		min-height: 50vh;
+		font-size: 13px;
+	}
+	.identity-folder {
+		display: none;
+	}
+}

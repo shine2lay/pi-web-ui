@@ -58,6 +58,7 @@ type Proto = {
 	loadSessionInfos(this: FakeSession): Promise<{ path: string; cwd: string }[]>;
 	pushSessions(this: FakeSession): Promise<void>;
 	searchSessions(this: FakeSession, query: string, reqId: number): Promise<void>;
+	attachIdentities(this: FakeSession, rows: unknown[], resend: () => void): Promise<void>;
 };
 const proto = ClientSession.prototype as unknown as Proto;
 
@@ -73,6 +74,9 @@ interface FakeSession {
 	 *  本用例只关心 sessions 推送，这里只给出最小承载点。 */
 	recentSessions: unknown[];
 	emitConversations(): void;
+	/** identities: pushSessions gives each row its identity label first (none here). */
+	sessionsPushGen: number;
+	attachIdentities: Proto["attachIdentities"];
 }
 
 function fakeSession(cwd: string): FakeSession {
@@ -86,6 +90,8 @@ function fakeSession(cwd: string): FakeSession {
 			emitted.push(msg);
 		},
 		loadSessionInfos: proto.loadSessionInfos,
+		sessionsPushGen: 0,
+		attachIdentities: proto.attachIdentities,
 		recentSessions: [],
 		emitConversations() {
 			/* 左栏推送不在本用例范围内（见 recent-chats.test.ts） */

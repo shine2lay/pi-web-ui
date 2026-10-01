@@ -7,6 +7,7 @@ import {
 	useRef,
 	useState,
 	type CSSProperties,
+	type MouseEvent as ReactMouseEvent,
 	type PointerEvent as ReactPointerEvent,
 } from "react";
 import { TopBar } from "./components/TopBar";
@@ -37,8 +38,20 @@ import {
 	installPluginHostApi,
 	triggerPluginUiAction,
 } from "./plugin-host";
-import { buildUiSlots, withPluginViewItems, type UiDiagnostic, type UiSlotEntry } from "./ui-slots";
+import {
+	buildUiSlots,
+	CHAT_IDENTITY_ENTRY_ID,
+	IDENTITY_PICKER_ENTRY_ID,
+	withPluginViewItems,
+	type UiDiagnostic,
+	type UiSlotEntry,
+} from "./ui-slots";
 import { renderSlotToolbar } from "./slot-toolbar";
+import { openContextMenu } from "./context-menu-state";
+import { IdentityTag } from "./components/IdentityTag";
+import { IdentityPicker } from "./components/IdentityPicker";
+import { identityChoiceOf, identityMenuChildren } from "./identity-menu";
+import { getIdentityList } from "./identity-state";
 import { ContextMenu } from "./components/ContextMenu";
 import { BannerContainer } from "./components/BannerContainer";
 import { ReconnectingNote } from "./components/ReconnectingNote";
@@ -1246,6 +1259,70 @@ export function App() {
 	const dismissedQuestionIdsRef = useRef<Set<string>>(new Set());
 	const activeConvId = chat.activeConversationId || chat.state?.conversationId || "";
 
+	// identities: the open chat's identity (pi-identity), from the snapshot: a blank chat isn't in the chat
+	// list yet. The server leaves it out for a chat that can't have one (pi-identity isn't loaded in it, a
+	// subagent, DSH); preset-agent chats don't get one either. The header shows the tag (a click opens the
+	// choices), a blank chat shows the picker; both send `set_chat_identity` for this chat.
+	const activeConv = useMemo(
+		() => (activeConvId ? chat.conversations.find((c) => c.id === activeConvId) : undefined),
+		[chat.conversations, activeConvId],
+	);
+	const snapshotIdentity = chat.state?.identity;
+	const identityCapable =
+		chat.engine !== "dsh" && snapshotIdentity !== undefined && !activeConv?.isSubagent && !activeConv?.agentPreset;
+	const chatIdentity = identityCapable ? (snapshotIdentity ?? undefined) : undefined;
+	const pickIdentity = useCallback(
+		(identity: string | null) => {
+			if (activeConvId) send({ type: "set_chat_identity", conversationId: activeConvId, identity });
+		},
+		[send, activeConvId],
+	);
+	const openIdentityMenu = useCallback(
+		(e: ReactMouseEvent<HTMLButtonElement>) => {
+			if (!activeConvId) return;
+			const r = e.currentTarget.getBoundingClientRect();
+			openContextMenu({
+				x: r.left,
+				y: r.bottom + 4,
+				slot: "contextmenu.session",
+				target: { id: activeConvId, kind: "running", label: activeConv?.title },
+				entries: identityMenuChildren(
+					{ slot: "contextmenu.session", align: "start" },
+					getIdentityList().identities,
+					chatIdentity?.id,
+					t("identityNone"),
+				),
+				onHostAction: (entry) => {
+					const choice = identityChoiceOf(entry.id);
+					if (choice !== undefined) pickIdentity(choice);
+				},
+			});
+		},
+		[activeConvId, activeConv?.title, chatIdentity?.id, pickIdentity, t],
+	);
+	/** chat.header / chat.empty host entries: the identity tag and the blank-chat picker (null = nothing). */
+	const renderIdentityEntry = useCallback(
+		(entry: UiSlotEntry) => {
+			if (entry.id === CHAT_IDENTITY_ENTRY_ID)
+				return chatIdentity ? (
+					<IdentityTag identity={chatIdentity} onClick={openIdentityMenu} className="chat-header-identity" />
+				) : null;
+			if (entry.id === IDENTITY_PICKER_ENTRY_ID)
+				return identityCapable ? <IdentityPicker current={chatIdentity} onPick={pickIdentity} /> : null;
+			return undefined;
+		},
+		[chatIdentity, identityCapable, openIdentityMenu, pickIdentity],
+	);
+	// The header bar only when something in it shows (the tag only for a chat with an identity).
+	const chatHeaderShown = useMemo(
+		() => uiChatHeader.filter((e) => e.id !== CHAT_IDENTITY_ENTRY_ID || chatIdentity),
+		[uiChatHeader, chatIdentity],
+	);
+	const chatEmptyShown = useMemo(
+		() => uiChatEmpty.filter((e) => e.id !== IDENTITY_PICKER_ENTRY_ID || identityCapable),
+		[uiChatEmpty, identityCapable],
+	);
+
 	useEffect(() => {
 		const convsWithQuestion = chat.conversations.filter((c) => c.hasQuestion);
 		const currentQuestionConvIds = new Set(convsWithQuestion.map((c) => c.id));
@@ -1769,9 +1846,9 @@ export function App() {
 					{!isMobile && <ResizeHandle side="left" width={leftWidth} onResize={resizeLeft} />}
 					<main className={wide ? "main wide-chat" : "main"}>
 						{/* 对话头部条（chat.header 槽位）：纯插件新增位，无条目时不渲染。 */}
-						{uiChatHeader.length > 0 && (
+						{chatHeaderShown.length > 0 && (
 							<div className="chat-header" role="toolbar">
-								{renderSlotToolbar(uiChatHeader, onUiAction)}
+								{renderSlotToolbar(chatHeaderShown, onUiAction, renderIdentityEntry)}
 							</div>
 						)}
 						{/* switch-loading：点了另一条对话到新快照到达之间的那几秒（大会话更久），
@@ -1817,7 +1894,8 @@ export function App() {
 									/* 工具调用卡片的工具名右键菜单（contextmenu.toolcall）：条目已合并好，
 										   工具卡只管开菜单 + 分派它自己的 host:tool-info。 */
 									uiContextToolCall={uiSlots["contextmenu.toolcall"]}
-									uiChatEmpty={uiChatEmpty}
+									uiChatEmpty={chatEmptyShown}
+									renderHostSlotEntry={renderIdentityEntry}
 									onUiAction={onUiAction}
 									key={listKeyRef.current?.key ?? "boot"}
 									state={listState}

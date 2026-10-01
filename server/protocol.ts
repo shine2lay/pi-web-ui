@@ -358,6 +358,11 @@ export interface UiState {
 	 *  显示，切回来、刷新都还在，哪个窗口都能答。整份快照总带（没有就是 null）；snapshot_delta 只在
 	 *  变了时带，缺省 = 沿用上一份。窗口自己的弹窗（目标向导）仍走 `dialog` 消息。DSH 引擎不填。 */
 	dialog?: UiDialog | null;
+	/** identities: the open chat's identity (pi-identity), for the header tag and a blank chat's picker (a
+	 *  blank chat isn't in the chat list yet, so the snapshot carries it). null = none. Left out of a full
+	 *  snapshot = this chat can't have one (pi-identity isn't loaded in it, there are no identities, a
+	 *  subagent, DSH). snapshot_delta carries it only when it changed; left out = keep the last one. */
+	identity?: UiChatIdentity | null;
 	/**
 	 * Live partial assistant message while a run is streaming. The SDK keeps the
 	 * in-progress message in agent.state.streamingMessage — it only enters
@@ -1380,7 +1385,19 @@ export type ClientMessage =
 	/** Manually trigger a task once right now (does not shift its next fire). */
 	| { type: "schedule_run"; id: string }
 	/** Enable / disable a scheduled task (re-arms its next fire). */
-	| { type: "schedule_toggle"; id: string; enabled: boolean };
+	| { type: "schedule_toggle"; id: string; enabled: boolean }
+	// -- identities (pi-identity) ----------------------------------------------
+	/** Set (identity = id) or clear (null) a chat's identity. The server runs pi-identity's own
+	 *  `/identity <id>` / `/identity none` in that chat. A loaded chat by conversationId; a chat only on
+	 *  disk by sessionPath (the server opens it first). */
+	| { type: "set_chat_identity"; conversationId?: string; sessionPath?: string; identity: string | null }
+	/** Ask for the identity list (answered with `identities`). */
+	| { type: "identities_get" }
+	/** Read an identity's about.md / notebook.md (answered with `identity_file`). */
+	| { type: "identity_file_get"; id: string; file: IdentityFileName }
+	/** Save a whole about.md / notebook.md (answered with `identity_file_saved`). baseHash = the hash from
+	 *  `identity_file`: a file changed since then is refused ("changed"); a notebook over its cap too. */
+	| { type: "identity_file_save"; id: string; file: IdentityFileName; text: string; baseHash: string };
 
 // ---------------------------------------------------------------------------
 // Server -> Client
@@ -1397,7 +1414,37 @@ export interface SessionSummary {
 	/** 该对话自己的工作目录（转录头的 cwd）。History 跨文件夹列表时，左栏用
 	 *  它给「不属于当前工作目录」的对话标文件夹徽章（见 historyScope）。 */
 	cwd?: string;
+	/** identities：这条对话的身份（pi-identity），左栏标签用。按文件算（server/identities.ts）；没有就缺省。 */
+	identity?: UiChatIdentity;
 }
+
+/** identities：一条对话的身份（pi-identity 的 id + 显示名），左栏和对话头部的小标签用。 */
+export interface UiChatIdentity {
+	id: string;
+	title: string;
+}
+
+/** identities：Settings → Identities 的一行（~/.pi/agent/memory/identities/<id>/）。 */
+export interface UiIdentityInfo {
+	id: string;
+	title: string;
+	/** identity.json 的 folder（这个身份干活的文件夹）。 */
+	folder?: string;
+	/** 家对话的会话文件（绝对路径）；页面点它打开那条对话。 */
+	homeChat?: string;
+	/** about.md / notebook.md 的字节数（没有文件 = 0）。 */
+	aboutSize: number;
+	notebookSize: number;
+	/** 笔记本的上限（字节），超了存不进去。 */
+	notebookCap: number;
+}
+
+/** identities：Settings 里能读写的两个文件。 */
+export type IdentityFileName = "about" | "notebook";
+
+/** identities：存盘被拒的原因。over_cap = 笔记本超上限；changed = 文件在你打开之后被改过（先重新载入）；
+ *  too_big = about 超安全上限；unknown = 没有这个身份；io = 读写出错。 */
+export type IdentitySaveError = "over_cap" | "changed" | "too_big" | "unknown" | "io";
 
 /** 会话转录中一条命中消息的定位锚点：会话载入后按 role + timestamp 在
  *  UiMessage[] 里找到对应消息，用于「搜索会话 → 跳到对应位置」。 */
@@ -2430,6 +2477,9 @@ export interface ConversationSummary {
 	 *  左栏显示在标题下面，代替「N 条消息」；needsYou 的行高亮。只有服务端加载着的对话才带
 	 *  （历史行不读会话文件）；没有 TL;DR、或者最新一行已经折叠了就缺省。 */
 	tldr?: Pick<UiTldrLine, "text" | "needsYou">;
+	/** identities：这条对话的身份（pi-identity），左栏和对话头部的小标签用。加载着的对话按当前分支上
+	 *  最后一条 identity 条目算，磁盘行按文件算（server/identities.ts）；没有身份就缺省。 */
+	identity?: UiChatIdentity;
 	/** 这条对话的转录文件路径（recent-chats 补丁）。左栏「最近对话」用它做
 	 *  **稳定键**：运行时被释放后，同一条对话仍以 live:false 的行留在列表里。
 	 *  会话还没落盘时缺省。 */
@@ -3406,4 +3456,30 @@ export type ServerMessage =
 	// -- scheduled tasks (issue #184) ----------------------------------------
 	/** Built-in scheduler task list (global, all projects). Pushed on attach,
 	 *  on request (schedule_list) and on every change (save/delete/toggle/run). */
-	| { type: "scheduler_tasks"; tasks: SchedulerTaskView[] };
+	| { type: "scheduler_tasks"; tasks: SchedulerTaskView[] }
+	// -- identities (pi-identity) ----------------------------------------------
+	/** The identities (global). Pushed on attach, on request (identities_get) and after a save.
+	 *  problems = identity folders that couldn't be read (shown on the Settings page). */
+	| { type: "identities"; identities: UiIdentityInfo[]; problems: string[] }
+	/** One identity file's text. hash goes back with identity_file_save; error = couldn't read it. */
+	| {
+			type: "identity_file";
+			id: string;
+			file: IdentityFileName;
+			text?: string;
+			hash?: string;
+			size?: number;
+			/** The notebook's cap in bytes (notebook only). */
+			cap?: number;
+			error?: string;
+	  }
+	/** The answer to identity_file_save: ok with the new hash and size, or refused (code). */
+	| {
+			type: "identity_file_saved";
+			id: string;
+			file: IdentityFileName;
+			ok: boolean;
+			code?: IdentitySaveError;
+			hash?: string;
+			size?: number;
+	  };

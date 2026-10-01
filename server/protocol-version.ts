@@ -27,4 +27,7 @@
 // 28: no-plan-board - the Task Plan Board and the AI's tool that filled it are gone: the snapshot
 //     no longer carries the board, and the board's messages are gone both ways. An old page would
 //     still offer a board whose buttons the server now ignores.
-export const PROTOCOL_VERSION = 28;
+// 29: identities - chat rows and history rows carry the chat's identity (pi-identity), the server
+//     pushes `identities`, and pages send set_chat_identity / identities_get / identity_file_get /
+//     identity_file_save. An old page shows no labels; an old server would drop the new messages.
+export const PROTOCOL_VERSION = 29;

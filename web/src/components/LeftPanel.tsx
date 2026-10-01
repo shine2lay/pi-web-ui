@@ -14,11 +14,14 @@ import {
 import type { ConversationSummary, ElsewhereRunning, SessionSummary, SwitchTarget } from "../types";
 import { isSwitchTargetRow } from "../switch-pending";
 import { useT } from "../i18n";
-import { useAppField } from "../app-globals";
+import { useAppField, useIsDsh } from "../app-globals";
 import { applySashDrag, parseWeights } from "../panel-sash";
 import { orderConversations } from "../conv-groups";
 // 宿主 UI 扩展点（issue #146）：会话行的右键菜单走「slot 条目」这一条通道。
-import { LP_SECTION_ENTRY_IDS, type UiSlotEntry } from "../ui-slots";
+import { CONV_IDENTITY_ENTRY_ID, LP_IDENTITY_ENTRY_ID, LP_SECTION_ENTRY_IDS, type UiSlotEntry } from "../ui-slots";
+import { useIdentityList } from "../identity-state";
+import { identityChoiceOf, withIdentityChildren } from "../identity-menu";
+import { IdentityTag } from "./IdentityTag";
 import { contextMenuItems, openContextMenu, type ContextMenuRequest } from "../context-menu-state";
 import { composeToComposer, focusComposer } from "../composer-bridge";
 
@@ -52,7 +55,8 @@ interface LeftPanelProps {
 			| { type: "persist_conversation"; id: string }
 			| { type: "take_over_conversation"; owner: string; id: string }
 			| { type: "peek_elsewhere_question"; owner: string; id: string }
-			| { type: "remove_recent_chat"; path: string },
+			| { type: "remove_recent_chat"; path: string }
+			| { type: "set_chat_identity"; conversationId?: string; sessionPath?: string; identity: string | null },
 	) => boolean;
 	/** True while the panel is actually on screen (desktop: always; mobile:
 	 *  only while the drawer is open). Drives lazy loading of the session
@@ -172,6 +176,12 @@ export const LeftPanel = memo(function LeftPanel({
 	const status = useAppField("status");
 	const cwd = useAppField("cwd");
 	const currentCwd = cwd;
+	// identities: pi chats only (a DSH server gets no tags / menu), and Layout can hide the tags
+	// (the leftpanel.sessions entry host:lp-identity; mounted without slot entries = tags on).
+	const isDsh = useIsDsh();
+	const identityList = useIdentityList();
+	const showIdentityTags =
+		!isDsh && (uiLeftSessions ? uiLeftSessions.some((e) => e.id === LP_IDENTITY_ENTRY_ID) : true);
 	const [confirmDel, setConfirmDel] = useState<string | null>(null);
 	const [confirmTakeover, setConfirmTakeover] = useState<string | null>(null);
 	const [renaming, setRenaming] = useState<string | null>(null);
@@ -334,6 +344,21 @@ export const LeftPanel = memo(function LeftPanel({
 				}
 				if (entry.id === "host:conv-quote")
 					return takeId || target.kind === "history" ? entry : { ...entry, hidden: true };
+				// identities: "Identity" submenu (None + each identity, the chat's own one ticked). Pi chats
+				// only: running rows that aren't subagents or DSH-preset chats, and History rows.
+				if (entry.id === CONV_IDENTITY_ENTRY_ID) {
+					if (isDsh) return { ...entry, hidden: true };
+					if (scopeId) {
+						const conv = conversations.find((c) => c.id === scopeId);
+						if (!conv || conv.isSubagent || conv.agentPreset) return { ...entry, hidden: true };
+						return withIdentityChildren(entry, identityList.identities, conv.identity?.id, t("identityNone"));
+					}
+					if (target.kind === "history" && target.id) {
+						const sess = sessions.find((s) => s.path === target.id);
+						return withIdentityChildren(entry, identityList.identities, sess?.identity?.id, t("identityNone"));
+					}
+					return { ...entry, hidden: true };
+				}
 				return entry;
 			});
 			openContextMenu({
@@ -346,7 +371,7 @@ export const LeftPanel = memo(function LeftPanel({
 				onHostAction: (entry, tgt) => hostActionRef.current(entry, tgt),
 			});
 		},
-		[uiContextSession, conversations, finishedSubagentCount, t],
+		[uiContextSession, conversations, sessions, finishedSubagentCount, t, isDsh, identityList],
 	);
 
 	/** host 内置条目的分派：作用范围（scopeId）来自打开菜单时记下的 target。
@@ -358,6 +383,15 @@ export const LeftPanel = memo(function LeftPanel({
 			const scopeId = target.kind === "running" ? target.id : undefined;
 			// 复制 id / 引用的实际对象：运行中行是本会话 conv，「另一处」行是对方会话 conv。
 			const takeId = scopeId ?? (target.kind === "elsewhere" ? target.id || undefined : undefined);
+			// identities: a pick in the "Identity" submenu -> the server runs pi-identity's `/identity`
+			// in that chat (a History chat is opened for it).
+			const identityChoice = identityChoiceOf(entry.id);
+			if (identityChoice !== undefined) {
+				if (scopeId) panelSend({ type: "set_chat_identity", conversationId: scopeId, identity: identityChoice });
+				else if (target.kind === "history" && target.id)
+					panelSend({ type: "set_chat_identity", sessionPath: target.id, identity: identityChoice });
+				return;
+			}
 			if (entry.id === "host:conv-takeover") {
 				if (target.kind === "elsewhere" && takeId && target.owner) {
 					panelSend({ type: "take_over_conversation", owner: target.owner, id: takeId });
@@ -454,7 +488,7 @@ export const LeftPanel = memo(function LeftPanel({
 	 *  分区别名条目（LP_SECTION_ENTRY_IDS）只管分区显隐/排序，不进会话行；
 	 *  无条目时返回 null —— 会话行 DOM 与旧版一字不差。 */
 	const renderLeftSessions = () => {
-		const rows = (uiLeftSessions ?? []).filter((e) => !LP_SECTION_ENTRY_IDS.has(e.id));
+		const rows = (uiLeftSessions ?? []).filter((e) => !LP_SECTION_ENTRY_IDS.has(e.id) && e.id !== LP_IDENTITY_ENTRY_ID);
 		if (rows.length === 0) return null;
 		return (
 			<span className="lp-slot-sessions">
@@ -870,6 +904,7 @@ export const LeftPanel = memo(function LeftPanel({
 																	{presetNames?.[c.agentPreset] ?? c.agentPreset}
 																</span>
 															)}
+															{showIdentityTags && c.identity && <IdentityTag identity={c.identity} />}
 															{c.title}
 															{c.error && (
 																<span className="conv-error-badge" title={t("convErrorBadge", { error: c.error })} />
@@ -1101,7 +1136,10 @@ export const LeftPanel = memo(function LeftPanel({
 													onBlur={() => setRenaming(null)}
 												/>
 											) : (
-												<span className="session-title">{displayName(s)}</span>
+												<span className="session-title">
+													{showIdentityTags && s.identity && <IdentityTag identity={s.identity} />}
+													{displayName(s)}
+												</span>
 											)}
 											{renaming === s.path ? null : (
 												<span className="session-sub">

@@ -26,6 +26,7 @@ import {
 	FiTool,
 	FiTrash2,
 	FiUpload,
+	FiUser,
 	FiUsers,
 	FiX,
 	FiZap,
@@ -39,8 +40,10 @@ import { PluginPage } from "./PluginPage";
 import { PluginSettingsForm } from "./PluginSettingsForm";
 import type {
 	CommandDef,
+	ConversationSummary,
 	DshPermissionOption,
 	SchedulerTaskView,
+	SessionSummary,
 	UiAgentPreset,
 	UiApprovalRule,
 	UiExtensionInfo,
@@ -54,6 +57,8 @@ import type {
 	UiSubagentTemplate,
 } from "../types";
 import { SchedulerPanel } from "./SchedulerPanel";
+import { IdentitiesSettings } from "./IdentitiesSettings";
+import { useIdentityList } from "../identity-state";
 import { SoundSettingsPanel, TtsSettingsPanel } from "./SoundSettings";
 import { playSound, type SoundSettings } from "../sounds";
 import { speak, type TtsSettings } from "../tts";
@@ -180,6 +185,9 @@ interface SettingsModalProps {
 		}[];
 		state?: { cwd: string; conversationId: string } | null;
 		activeConversationId?: string | null;
+		/** identities: History + running chats (Settings -> Identities shows each home chat by its title). */
+		sessions?: SessionSummary[];
+		conversations?: ConversationSummary[];
 		/** 内置定时任务（issue #184，全局列表；DSH 引擎下为空） */
 		schedulerTasks: SchedulerTaskView[];
 	};
@@ -409,6 +417,7 @@ type SettingsTab =
 	| "vision"
 	| "presets"
 	| "subagent-templates"
+	| "identities"
 	| `plugin-page:${string}`;
 
 /** set_settings 允许的字段（原 setPartial 内联类型提出为具名类型，供乐观合并层复用）。 */
@@ -525,6 +534,8 @@ export function SettingsModal({
 	const { engine, managed } = useAppGlobals();
 	// DSH 引擎：无 pi 扩展/技能体系与视觉桥概念 —— 隐藏对应分区/改占位说明。
 	const isDsh = engine === "dsh";
+	// identities: the Identities page's count (pi only).
+	const identityCount = useIdentityList().identities.length;
 	// 当前左侧导航选中的分组。
 	const [tab, setTab] = useState<SettingsTab>(initialSection ?? "prompt");
 	// 界面插件分组内的子页签：市场 / 已安装（一次只看一坨，免得 5 大块堆在一起滚半天；默认进市场，安装一步直达）。
@@ -910,6 +921,17 @@ export function SettingsModal({
 				]),
 		// 插件自定义设置页（settings.pages，issue #146）：排在内置分区之后。内容由
 		// PluginPage 挂载插件自己的 client bundle 渲染（设置弹窗不关、主视图不切）。
+		// identities: Settings -> Identities (pi-identity; DSH has no pi sessions to give one to).
+		...(isDsh
+			? []
+			: [
+					{
+						id: "identities" as const,
+						icon: <FiUser />,
+						label: t("settingsIdentities"),
+						count: identityCount || undefined,
+					},
+				]),
 		...pluginPages.map((p) => ({
 			id: pluginPageTabId(p.entry.id),
 			// 图标：插件给 emoji/单字符就照原样画；给的是宿主图标词表名（或没给）时用通用盒图标，
@@ -3766,6 +3788,16 @@ export function SettingsModal({
 									)}
 								</div>
 							</div>
+						)}
+						{tab === "identities" && !isDsh && (
+							<IdentitiesSettings
+								sessions={chat.sessions}
+								conversations={chat.conversations}
+								onOpenChat={(path) => {
+									appSend({ type: "switch_session", path });
+									onClose();
+								}}
+							/>
 						)}
 						{tab === "presets" && (
 							<div className="set-section">

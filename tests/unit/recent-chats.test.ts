@@ -64,6 +64,8 @@ interface FakeSession {
 	getPendingQuestionForConv(convId: string): { id: string; title?: string } | undefined;
 	// tldr-sidebar：emitConversations 给加载着的行带最新一行 TL;DR。本用例没有 TL;DR 行。
 	tldrOf(conv: FakeConv): UiTldrLine[];
+	// identities: emitConversations gives each loaded row its identity label. None here.
+	identityOf(conv: FakeConv): undefined;
 }
 
 function conv(id: string, opts: Partial<FakeConv> & { messages?: number; streaming?: boolean } = {}): FakeConv {
@@ -117,6 +119,8 @@ beforeEach(() => {
 		getPendingQuestionForConv: () => undefined,
 		// tldr-sidebar：本用例的对话没有 TL;DR 行。
 		tldrOf: () => [],
+		// identities: no chat here has an identity.
+		identityOf: () => undefined,
 	};
 });
 

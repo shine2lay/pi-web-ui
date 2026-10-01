@@ -15,20 +15,26 @@ import type { UiSlotEntry } from "./ui-slots";
 export function renderSlotToolbar(
 	entries: UiSlotEntry[] | undefined,
 	onUiAction: ((item: UiSlotEntry, value?: string) => void) | undefined,
+	/** identities: host entries with their own UI (the chat-header identity tag, the blank-chat identity
+	 *  picker). Returns what to draw for a host entry (null = nothing), undefined = draw it the usual way. */
+	renderHostEntry?: (entry: UiSlotEntry) => ReactNode | undefined,
 ) {
 	if (!entries || entries.length === 0) return null;
 	return (
 		<span className="slot-toolbar">
-			{entries.map((entry, i) => (
-				<SlotErrorBoundary
-					key={`${entry.id}#${i}`}
-					label={entry.label || entry.id}
-					slot={entry.slot}
-					entryId={entry.id}
-				>
-					{renderSlotEntry(entry, i, onUiAction)}
-				</SlotErrorBoundary>
-			))}
+			{entries.map((entry, i) => {
+				const own = renderHostEntry && entry.source === "host" ? renderHostEntry(entry) : undefined;
+				return (
+					<SlotErrorBoundary
+						key={`${entry.id}#${i}`}
+						label={entry.label || entry.id}
+						slot={entry.slot}
+						entryId={entry.id}
+					>
+						{own !== undefined ? own : renderSlotEntry(entry, i, onUiAction)}
+					</SlotErrorBoundary>
+				);
+			})}
 		</span>
 	);
 }
