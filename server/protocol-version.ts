@@ -50,4 +50,5 @@
 //     identity_notes_search / identity_note_get / identity_note_save / identity_note_delete and the
 //     server answers identity_notes_found / identity_note / identity_note_saved. An old page shows no
 //     notes; an old server would drop the asks.
-export const PROTOCOL_VERSION = 35;
+// 36: per-chat speed — explicit Standard/Fast/Ultrafast and conversation-fenced changes.
+export const PROTOCOL_VERSION = 36;

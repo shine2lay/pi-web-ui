@@ -3458,12 +3458,16 @@ class.
 **Status**: `local`
 **Baseline**: v0.96.1
 
-**Why** (owner, 2026-09-29): the owner wants speed on demand, chat by chat. OpenAI's fast mode
-(the `service_tier` of a request) makes replies come faster and, with ChatGPT sign-in, uses the plan's
-limits 2.5× quicker at no extra money. So a chat on a ChatGPT (Codex) model that has fast mode gets a
-"⚡ Fast" button. Decided with the owner: ChatGPT sign-in (`openai-codex`) only, never Claude or any other
-provider; per chat, off in every new chat; when ChatGPT refuses fast mode the reply still comes at normal
-speed.
+**Why** (owner, 2026-09-29; Astra addition 2026-10-02, queue #44): speed is a deliberate per-chat
+choice. Astra offers one **Standard / Fast / Ultrafast** selector; other supported ChatGPT models
+keep Standard/Fast. New and copied chats start **Standard**, and legacy saved Fast never becomes
+Ultrafast. ChatGPT sign-in (`openai-codex`) only, never Claude or API-key billing.
+
+Fast uses **2.5× included usage**. Astra Ultrafast uses **8× included usage**; once that runs out it
+can draw **available purchased credits at 6×**. Up to 8× token-generation speed is NOT 8× faster task
+completion. Pro $500 or eligible Enterprise/Edu, plus workspace/client/rollout availability, is needed;
+we do not infer entitlement from a model name. The owner now reports Pro $500 (the September Free-plan
+probe below is historical, not current). This UI neither buys credits nor enables faster speed globally.
 
 ### Changes
 
@@ -3471,65 +3475,94 @@ speed.
    - `FAST_MODE_MODELS`: the models with fast mode, from OpenAI's Codex speed page
      (<https://developers.openai.com/codex/speed>): gpt-6.1-sol, gpt-6-astra, gpt-6-sol, gpt-6-luna,
      gpt-5.6-sol, gpt-5.6-luna, gpt-5.5. Only for the `openai-codex` provider (`fastModeSupported`).
-   - A hidden in-process extension (`fastModeExtension`, added next to `pi-webui-persona` in
-     `extensionFactories`, kept by the extension whitelist/disable filter). Its
-     `before_provider_request` adds `service_tier: "priority"` (`fastTierFor`) when the chat has fast
-     on, its model is on the list, the request is for that model, and fast isn't cooling down.
-   - Refusals: `after_provider_response` notes the HTTP status of a fast request (the SSE transport
-     reports one; the WebSocket transport, pi's default, only gives the error text). At `message_end`
-     a failed fast reply that is a refusal (`fastRefusalReason`: a 4xx other than 401, or an error
-     text that isn't about sign-in, a too-long chat or server trouble) puts the chat on "normal speed
-     for now" for 15 minutes with the reason "ChatGPT refused fast mode (HTTP n)", and a server log line
-     `[fast-mode] …` (no request contents).
-   - Quiet refusals: ChatGPT may also take a fast request and answer it at normal speed (a plan without
-     fast mode ignores the tier; a busy fast tier downgrades it). pi prices each reply by the tier
-     ChatGPT reports back, so a fast reply priced at the normal rate (`replyPriceMultiplier` < 1.5) also
-     means "normal speed for now" for 15 minutes, reason "ChatGPT answered at normal speed (fast mode
-     may not be in your plan, or is busy)", without a retry (the reply is fine). Only on GPT-5.x
-     (`fastPriceTells`): GPT-6 models report a fast reply as `fast`, which pi 0.87 prices like a
-     normal one, so there the price can't tell.
+   - A hidden in-process extension (`fastModeExtension`, kept by the extension whitelist/disable
+     filter). `before_provider_request` sets `service_tier: "priority"` for Fast, or `"ultrafast"`
+     **only for gpt-6-astra**. It checks the current provider/model on EVERY request, including automatic
+     model switches; mismatched side requests are untouched. Standard/cooldown removes an inherited
+     tier on a supported request. No shared model object, headers or transport are mutated.
+   - ChatGPT transport evidence: official [Codex speed](https://developers.openai.com/codex/speed),
+     [config reference](https://developers.openai.com/codex/config-reference) and
+     [Ultrafast API guide](https://developers.openai.com/api/docs/guides/ultrafast-mode), checked Oct 2.
+     The API guide alone is not a ChatGPT contract. OpenAI's
+     [Codex source test](https://github.com/openai/codex/blob/91168365a579420f7932f48bfb1ad15d810da3af/codex-rs/core/tests/suite/client_websockets.rs)
+     (`responses_websocket_prewarm_reuses_advisory_model_and_tier_routing_hint`) explicitly treats the
+     `OpenAI-Service-Tier` header as an advisory connection-routing hint: a prewarmed socket with one
+     hint can carry another per-request tier. We set the supported request field, not a guessed global
+     header. The SDK's persistent socket reuse and SSE both remain intact (real-adapter loopback tests).
+   - Refusals: `after_provider_response` notes HTTP status (SSE); WebSockets provide error text.
+     Only tier/allowance refusals trigger temporary **Standard** for 15 minutes, with a short sanitized
+     reason. Auth, network, context-length and unrelated errors remain ordinary errors. A run-level
+     fallback latch and retry-used flag prevent the selected tier returning partway through a run or
+     repeated retries. The selected mode is never overwritten by a refusal.
+   - Acceptance is separate from requesting a tier. Prefer retained `service_tier` / `serviceTier`
+     reply metadata when present. The current SDK drops it, so GPT-6 shows **requested / unconfirmed**,
+     not a false success. A returned downgrade causes temporary Standard without retrying a successful
+     reply. `fastPriceTells` remains a legacy GPT-5-only downgrade signal (<1.5 cost multiplier);
+     **never infer accepted GPT-6 speed from price**.
    - The one retry: at `agent_before_settle` the extension hides the refused reply from the model (a
      `context_edit`, as pi's own auto-retry does) and continues the run, so the reply comes at normal
      speed, and the user's message is neither lost nor sent twice. Not when the user stopped the run,
-     when pi already retried it itself (rate limits: pi's auto-retry, which then goes at normal speed
-     because of the cooldown), or when the model would see two replies in a row.
+     when pi already retried it itself, or when the boundary is no longer the failed message. Only an
+     empty failed reply directly following an existing user or completed tool-result boundary is safe.
+     Any output or tool-call content blocks this retry; completed tools are not replayed.
    - `FastModeRegistry`: per-chat state keyed by the session id (a chat can move between windows).
-     The choice is saved in the session file as a custom entry `pi-web-ui/fast-mode` `{ on, sessionId }`;
-     only an entry naming the chat's own session id counts, so copies of a chat (which copy the
-     entries) start off. New chats, queue chats and helper (subagent) chats have no entry: off.
-2. **Server wiring** (`server/agent-service.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` 26
-   → 27):
-   - `set_fast_mode {on}` → `ClientSession.setFastMode`: saves the entry, and any toggle clears the
-     cooldown (off and on again tries fast right away). DSH has no handler, so no button there.
-   - The snapshot's `fastMode` (`UiFastMode {on, coolingUntil?, reason?}` or `null` = no button: a
-     model without fast mode, a Claude chat). It is always present, because snapshot deltas are merged
-     shallowly.
+     New custom entries `pi-web-ui/fast-mode` contain `{ mode, sessionId }`. Read legacy `{ on: true }`
+     as Fast, false/absent as Standard; invalid explicit modes fail to Standard. Session-id binding
+     makes copies Standard. Existing files are not rewritten. New/queue/helper chats have no opt-in.
+     A saved Ultrafast selection becomes effective Standard on other models and returns on Astra.
+2. **Server wiring** (`server/agent-service.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` 35
+   → 36 for the explicit-mode command):
+   - `set_fast_mode {mode, conversationId}` → `ClientSession.setFastMode`: validates mode, conversation
+     identity, current model and idle state server-side before saving. A selection clears cooldown;
+     Standard then Ultrafast retries intentionally. No DSH handler. Old boolean commands are rejected.
+   - `UiFastMode {mode, effective, ultrafastAvailable, confirmedMode?, coolingUntil?, reason?}` or null
+     on unsupported providers/models. Always present in light state (snapshot deltas merge shallowly).
+     `ultrafastAvailable` describes the model, NOT confirmed account entitlement.
    - `agent_end`: a run that ends on a refused fast reply about to be retried is treated like pi's
      auto-retry (`willRetry`): no red error flash (the "retrying" note says "ChatGPT refused fast mode
      (HTTP n); normal speed for now"), the chat doesn't count as done, no goal review, no helper-chat
      error notice, no compaction yet. `agent_settled` drops that note if the retry didn't happen.
-   - Edit-and-reask (a new session id for the same chat) carries the chat's choice over.
+   - Edit-and-reask creates a new session id and starts Standard, like other copied chats.
 3. **The button** (`web/src/components/FastModeButton.tsx`, new, `ChatInput.tsx`, `App.tsx`,
    `ui-slots.ts`, `SettingsModal.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`):
    - A new host action `host:composer-fast` (order 135, between the thinking picker and the DSH
      controls), so Layout settings can move or hide it; Settings lists it for pi chats only.
-   - A "Fast" chip with a lightning-bolt icon by the model and thinking pickers: grey when off,
-     highlighted when on, dimmed and dashed with "Normal speed for now" while cooling down.
-     Tip: "Fast mode: faster replies; uses your ChatGPT plan's limits 2.5× quicker", plus the reason and
-     when it tries fast again while cooling down. The tip opens upward; on a phone it spans the tool row.
-   - On a phone the chip is in the same tool row of the message box (icon only, 44 px), like the model
-     and thinking chips: this fork has no "+" menu there.
+   - One compact chip shows effective speed, **Standard · now** during fallback or **?** when requested
+     but unconfirmed. Opens a labelled radio group with allowance/credit costs, requirements, retry time
+     and official help. Native radio keyboard controls; Escape/outside closes, focus returns to trigger.
+     Disabled during streaming, disconnection or without a conversation id.
+   - Phone: same selector with visible speed text and 44px touch target; panel stays inside the composer.
 4. **Tests, tools and docs**: `tests/lib/mock-model.mjs` can refuse a request (`{ httpStatus, error }`);
    `tests/unit/ui-slots.test.ts` expects the new host action; `docs/directory-reference.md` lists
    `server/fast-mode.ts` and `FastModeButton.tsx`. Two live tools (they use the owner's ChatGPT sign-in and print numbers and model ids
    only, never requests or replies): `tests/tools/fast-mode-models.mjs` lists the account's ChatGPT
    models and their speed tiers; `tests/tools/fast-mode-probe.mjs` (with `fast-mode-probe-ext.ts`)
-   sends a few tiny one-off messages with fast off and on through this extension and prints the
-   price multiplier pi applied, tokens per second and the button's reason.
+   makes at most two tiny no-tool one-off requests, after an explicit included-allowance/eligibility
+   attestation, printing only requested/returned tier, timing and pass/fail. It does not retry refusals.
+   Its disposable SSE observer extracts only returned tier metadata; no request/reply content is logged.
 
 ### How it was checked
 
-- `tests/unit/fast-mode.test.ts` (32 tests): which chats get the button (openai-codex models from the
+**Astra coverage (2026-10-02)**: updated unit tests cover explicit/legacy/invalid storage, reopened and
+copied sessions, independent chats, manual/automatic model switches, cooldown expiry, partial output,
+completed tools, once-only retry, unrelated errors, and returned-vs-unconfirmed state.
+`tests/unit/fast-mode-transport.test.ts` drives the installed SDK against loopback HTTP/SSE and persistent
+WebSockets: Standard → priority → ultrafast → Standard, with one reused socket and no logged payloads.
+UI unit tests cover radios, usage help, requested/confirmed state and Escape. The sealed browser check
+covers desktop/phone controls, invalid/stale/streaming commands, reload/reopen/restart persistence,
+refusal and tool-boundary retry, cross-chat isolation, unsupported models and screenshots. No live chats
+are switched. Live acceptance, if unverified, must be reported explicitly rather than inferred.
+
+Build and `TZ=UTC scripts/check.sh`: 333 unit files, 4,039 tests passed (5 skipped), PTY checks passed.
+Full sealed browser run: 189/191 initially passed, no fence hits. Fixed the speed test's controlled-radio
+click timing; its full check then passed, including actual separate-chat request isolation. The unrelated
+composer-history test hit its existing 3-second draft timeout under load and passed unchanged in the
+focused rerun. The two failed scripts both passed in the sealed rerun (2/2, no fence hits). Desktop and
+phone screenshots cover the selector, requested/unconfirmed state and temporary Standard fallback.
+
+**Historical initial Fast-only checks (2026-09-29; not current entitlement evidence):**
+
+- `tests/unit/fast-mode.test.ts` (32 tests at initial introduction): which chats get the button (openai-codex models from the
   list only, never Claude or other providers even with a listed id); the rewrite only when on,
   supported and not cooling down, never for a side request to another model; a refusal gives the
   reason, 15 minutes at normal speed, one retry, then fast again; off-and-on clears the cooldown;
@@ -3547,8 +3580,8 @@ speed.
   with the reason, the next message goes at normal speed, off-and-on sends fast again; a Claude model:
   no button and no tier, and back on ChatGPT the button is back, still on; a new chat starts off; on
   a phone the chip is 44 px, a tap turns it on, no button on Claude; no page errors.
-- Live, before landing (`tests/tools/fast-mode-probe.mjs` and `fast-mode-models.mjs`, the owner's
-  account, 2026-09-29): the owner's ChatGPT sign-in is on the **Free plan**, whose model list offers
+- Live, before the original landing (`tests/tools/fast-mode-probe.mjs` and `fast-mode-models.mjs`, the
+  account as observed 2026-09-29, **superseded by owner's Oct 2 Pro $500 report**): it then showed **Free**, whose model list offers
   fast mode on no model; gpt-5.6-sol, gpt-6-sol, gpt-6-astra and gpt-6.1-sol aren't available with it
   at all ("not supported when using Codex with a ChatGPT account"), gpt-5.5 answers "no access".
   On gpt-5.6-luna and gpt-6-luna the `priority` tier is accepted and ignored: ChatGPT reports
@@ -3563,12 +3596,11 @@ speed.
 `keepOwn` filter). If upstream changes the `agent_end` handler, keep the `willRetry || fastRetry`
 treatment and the `agent_settled` cleanup. Keep `fastMode` in `buildLightState` always present. If pi
 changes its hooks (`before_provider_request`, `after_provider_response`, `message_end`,
-`agent_before_settle`), its Codex error texts or how it prices `service_tier`, re-run the unit and
-browser tests and a live check (a few tiny messages with fast off and on: the recorded cost per token
-doubles when the tier was used). **When OpenAI adds or changes models with fast mode, update
-`FAST_MODE_MODELS`** (and `fastTierFor` if a model needs another tier value);
-`node tests/tools/fast-mode-models.mjs` shows which models the account has and which offer fast mode.
-If pi starts pricing the `fast` tier GPT-6 models report, let `fastPriceTells` cover them too.
+`agent_before_settle`), transport or tier metadata, re-run the sealed tests. Live probes require refreshed,
+positively confirmed included allowance and eligibility: never spend purchased credits, print model-bound
+content, or infer GPT-6 acceptance from prices. **When OpenAI changes supported models, update
+`FAST_MODE_MODELS`, `ultrafastSupported` and tests together**. `node tests/tools/fast-mode-models.mjs`
+shows account-advertised models/tiers; absence is not proof of entitlement. Keep the protocol mirror in sync.
 
 ## list-freeze
 

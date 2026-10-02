@@ -10165,10 +10165,90 @@ div.chead[role="button"]:focus-visible,
 	position: relative;
 	z-index: 100;
 }
-/* fast-mode: the chat's Fast button (ChatGPT fast tier). Off = a plain chip with a grey \26A1;
-   on = highlighted; "normal speed for now" (ChatGPT refused fast mode) = dimmed, dashed.
-   Its tip opens upward and to the right (the bar sits at the bottom, the button near the left)
-   and wraps, so the cooling reason fits on a second line. */
+/* One compact per-chat speed control; the touch/keyboard panel includes costs and fallbacks. */
+.speed-control {
+	position: relative;
+	flex-shrink: 0;
+}
+.fast-chip .fast-label {
+	display: inline;
+	font-size: 12px;
+	white-space: nowrap;
+}
+.speed-menu {
+	position: absolute;
+	bottom: calc(100% + 8px);
+	left: 0;
+	z-index: 120;
+	width: min(380px, calc(100vw - 32px));
+	padding: 14px;
+	background: var(--bg-elev2);
+	color: var(--text);
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	box-shadow: 0 6px 24px #0005;
+	font-size: 12px;
+	max-height: min(480px, 65dvh);
+	overflow-y: auto;
+	box-sizing: border-box;
+}
+.speed-menu fieldset {
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+.speed-menu legend {
+	font-weight: 600;
+	margin-bottom: 8px;
+}
+.speed-options {
+	display: flex;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+.speed-options label {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	min-height: 44px;
+	cursor: pointer;
+}
+.speed-options input {
+	accent-color: var(--accent);
+}
+.speed-menu p {
+	margin: 10px 0;
+	line-height: 1.5;
+}
+.speed-menu .speed-status {
+	border-left: 3px solid var(--accent);
+	padding-left: 8px;
+}
+.speed-menu a {
+	color: var(--accent);
+}
+.speed-menu :focus-visible,
+.fast-chip:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 3px;
+}
+.fast-chip.cooling {
+	border-style: dashed;
+}
+@media (max-width: 560px) {
+	.composer-tools .speed-control {
+		position: static;
+	}
+	.composer-tools .speed-menu {
+		left: 0;
+		right: 0;
+		width: auto;
+	}
+	.composer-tools .fast-chip {
+		min-height: 44px;
+		max-width: 126px;
+	}
+}
 .fast-chip .fast-glyph {
 	flex-shrink: 0;
 	font-size: 13px;

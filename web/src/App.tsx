@@ -1608,14 +1608,28 @@ export function App() {
 		// so the object identity survives token deltas and ChatInput's memo holds.
 		[model, thinkingLevel, availableThinkingLevels],
 	);
-	// fast-mode: the chat's Fast button, rebuilt only when one of its values changes.
-	const hasFast = chat.state?.fastMode != null;
-	const fastOn = chat.state?.fastMode?.on === true;
-	const fastUntil = chat.state?.fastMode?.coolingUntil;
-	const fastReason = chat.state?.fastMode?.reason;
+	// Preserve the protocol's requested/effective distinction, including tier confirmation.
+	const speed = chat.state?.fastMode;
 	const fastMode = useMemo(
-		() => (hasFast ? { on: fastOn, coolingUntil: fastUntil, reason: fastReason } : null),
-		[hasFast, fastOn, fastUntil, fastReason],
+		() =>
+			speed
+				? {
+						mode: speed.mode,
+						effective: speed.effective,
+						ultrafastAvailable: speed.ultrafastAvailable,
+						coolingUntil: speed.coolingUntil,
+						reason: speed.reason,
+						confirmedMode: speed.confirmedMode,
+					}
+				: null,
+		[
+			speed?.mode,
+			speed?.effective,
+			speed?.ultrafastAvailable,
+			speed?.coolingUntil,
+			speed?.reason,
+			speed?.confirmedMode,
+		],
 	);
 
 	const createShell = useCallback(() => {

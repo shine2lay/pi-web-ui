@@ -8,29 +8,22 @@
  *
  * Env:
  *   FAST_PROBE_OUT    file to append the JSON lines to (required)
- *   FAST_PROBE_FAST=1 the chat has fast mode on
- *   FAST_PROBE_FORCE=1 treat this model as a fast-mode model (the tier forced on a model off the list)
- *   FAST_PROBE_TIER   send this tier value instead of pi-web-ui's default ("priority")
+ *   FAST_PROBE_MODE   standard | fast | ultrafast (no forced models or arbitrary tiers)
  *   FAST_PROBE_SSE=1  (with the SSE transport) also record the tier ChatGPT reports back for each
  *                     reply: only that one field of the response is read, nothing else is kept
  */
 import { appendFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { FastModeRegistry, fastModeExtension, type FastModeSession } from "../../server/fast-mode.ts";
+import { FastModeRegistry, fastModeExtension, isChatSpeed } from "../../server/fast-mode.ts";
 
 const OUT = process.env.FAST_PROBE_OUT ?? "";
-const FAST = process.env.FAST_PROBE_FAST === "1";
-const FORCE = process.env.FAST_PROBE_FORCE === "1";
-const TIER = process.env.FAST_PROBE_TIER ?? "";
-/** A model on the list, to stand in for a forced one. */
-const LISTED = { provider: "openai-codex", id: "gpt-5.6-sol" };
-
-type ModelArg = Parameters<FastModeRegistry["shouldSendFast"]>[1];
+const mode = process.env.FAST_PROBE_MODE;
+const MODE = isChatSpeed(mode) ? mode : "standard";
 
 class ProbeRegistry extends FastModeRegistry {
-	override shouldSendFast(sm: FastModeSession, model: ModelArg): boolean {
-		const m = model as { provider?: unknown } | null | undefined;
-		return super.shouldSendFast(sm, FORCE && m?.provider === LISTED.provider ? LISTED : model);
+	// This disposable probe has a strict request budget: report a refusal, never retry it.
+	override takeRefused(): unknown {
+		return undefined;
 	}
 }
 
@@ -77,7 +70,7 @@ export default function (pi: ExtensionAPI): void {
 	pi.on("before_agent_start", (_event, ctx) => {
 		if (!started) {
 			started = true;
-			registry.setOn(ctx.sessionManager, FAST);
+			registry.setMode(ctx.sessionManager, MODE);
 		}
 		return undefined;
 	});
@@ -85,16 +78,11 @@ export default function (pi: ExtensionAPI): void {
 	fastModeExtension(registry)(pi);
 	pi.on("before_provider_request", (event) => {
 		const p = event.payload as Record<string, unknown> | null;
-		let tier = p && typeof p.service_tier === "string" ? p.service_tier : null;
-		let next: unknown;
-		if (tier && TIER && p) {
-			tier = TIER;
-			next = { ...p, service_tier: TIER };
-		}
+		const tier = p && typeof p.service_tier === "string" ? p.service_tier : null;
 		requestAt = Date.now();
 		firstUpdate = undefined;
 		write({ kind: "request", tier });
-		return next;
+		return undefined;
 	});
 	pi.on("after_provider_response", (event) => {
 		write({ kind: "response", status: event.status });
@@ -117,8 +105,7 @@ export default function (pi: ExtensionAPI): void {
 			kind: "reply",
 			model: ctx.model?.id,
 			stopReason: m.stopReason,
-			// The provider's error text (not request contents), cut short.
-			error: m.errorMessage ? String(m.errorMessage).slice(0, 160) : undefined,
+			failed: m.stopReason === "error",
 			input: u?.input,
 			output: u?.output,
 			cacheRead: u?.cacheRead,
@@ -131,6 +118,6 @@ export default function (pi: ExtensionAPI): void {
 		return undefined;
 	});
 	pi.on("agent_settled", (_event, ctx) => {
-		write({ kind: "settled", view: registry.view(ctx.sessionManager, LISTED) });
+		write({ kind: "settled", view: registry.view(ctx.sessionManager, ctx.model) });
 	});
 }

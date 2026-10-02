@@ -175,6 +175,8 @@ import {
 	fastModeEntryData,
 	fastModeExtension,
 	fastModeRegistry,
+	isChatSpeed,
+	speedSupported,
 } from "./fast-mode.js";
 import { createWorkspaceSnapshot, restoreWorkspaceSnapshot } from "./workspace-snapshot.js";
 import { isPathInsideRoot } from "./approval-rules.js";
@@ -6090,7 +6092,7 @@ export class ClientSession {
 					}
 					if (fastRetry) {
 						const reason = fastModeRegistry.view(conv.session.sessionManager, conv.session.agent.state.model)?.reason;
-						errorMessage = `${reason ?? "ChatGPT refused fast mode"}; normal speed for now`;
+						errorMessage = `${reason ?? "ChatGPT refused the selected speed"}; Standard for now`;
 					}
 					conv.retryState = { attempt: 0, maxAttempts: 0, delayMs: 0, errorMessage };
 				} else {
@@ -13122,8 +13124,7 @@ export class ClientSession {
 			// branch with the ModelRuntime default model otherwise.
 			const prevModel = this.session.agent.state.model ?? null;
 			const prevThinking = this.session.thinkingLevel ?? null;
-			// fast-mode: the re-asked branch is a new session id; it keeps the chat's choice.
-			const prevFast = fastModeRegistry.isOn(this.session.sessionManager);
+			// A re-asked branch is a new session: like every copy, it starts at Standard.
 			const result = await this.runtime.fork(entryId);
 			if (result.cancelled) {
 				this.emit({
@@ -13152,15 +13153,6 @@ export class ClientSession {
 					this.session.setThinkingLevel(prevThinking as Parameters<AgentSession["setThinkingLevel"]>[0]);
 				} catch {
 					// model no longer supports previous thinking level
-				}
-			}
-			if (prevFast) {
-				try {
-					const sm = this.session.sessionManager;
-					fastModeRegistry.setOn(sm, true);
-					sm.appendCustomEntry(FAST_MODE_ENTRY, fastModeEntryData(sm, true));
-				} catch {
-					// best effort: the chat is just back to normal speed
 				}
 			}
 			await this.prompt(trimmed, attachments);
@@ -13935,16 +13927,30 @@ export class ClientSession {
 		this.flushSnapshot();
 	}
 
-	/** fast-mode: turn "⚡ Fast" on/off for the chat in view (ChatGPT fast-mode models only; the
-	 *  extension never sends the tier to other models anyway). Saved with the chat; any toggle clears
-	 *  the "normal speed for now" cooldown, so off-and-on tries fast again right away. */
-	setFastMode(on: boolean): void {
+	/** Per-chat speed, fenced against stale tabs and in-flight model/tool work. */
+	setFastMode(mode: unknown, conversationId: unknown): void {
 		const conv = this.conv;
-		if (!conv) return;
+		if (!conv || conversationId !== conv.id) return;
+		if (
+			!isChatSpeed(mode) ||
+			!speedSupported(conv.session.agent.state.model, mode) ||
+			conv.session.isStreaming ||
+			!conv.session.isIdle ||
+			(conv.sendsInFlight ?? 0) > 0
+		) {
+			this.emit({
+				type: "notice",
+				level: "warning",
+				text: "Speed unchanged: wait until this chat is idle and select a supported speed.",
+				textEn: "Speed unchanged: wait until this chat is idle and select a supported speed.",
+			});
+			this.flushSnapshot();
+			return;
+		}
 		try {
 			const sm = conv.session.sessionManager;
-			fastModeRegistry.setOn(sm, on === true);
-			sm.appendCustomEntry(FAST_MODE_ENTRY, fastModeEntryData(sm, on === true));
+			sm.appendCustomEntry(FAST_MODE_ENTRY, fastModeEntryData(sm, mode));
+			fastModeRegistry.setMode(sm, mode);
 		} catch (err) {
 			this.emit({
 				type: "notice",

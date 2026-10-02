@@ -1,21 +1,14 @@
 // @vitest-environment jsdom
-/**
- * fast-mode: the "⚡ Fast" button (web/src/components/FastModeButton.tsx): nothing without fast mode,
- * highlighted when on, dimmed with the reason while at "normal speed for now", and a click asks the
- * server for the other state.
- */
-import { createElement } from "react";
+import { createElement, act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { act } from "react-dom/test-utils";
 import { afterEach, describe, expect, it } from "vitest";
 import { setAppSend } from "../../web/src/app-globals.js";
 import { FastModeButton, fastCooling } from "../../web/src/components/FastModeButton.js";
 import { LanguageProvider } from "../../web/src/i18n.js";
 import type { UiFastMode } from "../../web/src/types.js";
-
 let root: Root | null = null;
-
-function mount(fast: UiFastMode | null, disabled = false) {
+const standard: UiFastMode = { mode: "standard", effective: "standard", ultrafastAvailable: true };
+function mount(fast: UiFastMode | null, disabled = false, conversationId: string | undefined = "c-test") {
 	const container = document.createElement("div");
 	document.body.appendChild(container);
 	const sent: unknown[] = [];
@@ -24,78 +17,88 @@ function mount(fast: UiFastMode | null, disabled = false) {
 		return true;
 	});
 	root = createRoot(container);
-	act(() => {
-		root!.render(createElement(LanguageProvider, null, createElement(FastModeButton, { fast, disabled })));
-	});
-	return { container, sent, button: container.querySelector("button.fast-chip") as HTMLButtonElement | null };
+	act(() =>
+		root!.render(
+			createElement(LanguageProvider, null, createElement(FastModeButton, { fast, disabled, conversationId })),
+		),
+	);
+	const button = container.querySelector<HTMLButtonElement>(".fast-chip");
+	return { container, sent, button };
 }
-
 afterEach(() => {
 	act(() => root?.unmount());
 	root = null;
 	document.body.innerHTML = "";
 });
-
-const TIP = "Fast mode: faster replies; uses your ChatGPT plan's limits 2.5\u00d7 quicker";
-
-describe("fast-mode button", () => {
-	it("no fast mode (Claude, other models): no button", () => {
-		const { container } = mount(null);
-		expect(container.innerHTML).toBe("");
+describe("per-chat speed selector", () => {
+	it("is absent for unsupported providers/models", () => {
+		expect(mount(null).container.innerHTML).toBe("");
 	});
-
-	it("off: a plain chip with the tip; a click turns it on", () => {
-		const { button, sent } = mount({ on: false });
-		expect(button).not.toBeNull();
-		expect(button!.classList.contains("on")).toBe(false);
-		expect(button!.getAttribute("aria-pressed")).toBe("false");
-		expect(button!.dataset.tip).toBe(TIP);
-		expect(button!.textContent).toContain("\u26a1");
-		expect(button!.textContent).toContain("Fast");
+	it("starts Standard; exposes three named radios and usage requirements", () => {
+		const { button, container, sent } = mount(standard);
+		expect(button?.textContent).toContain("Standard");
 		act(() => button!.click());
-		expect(sent).toEqual([{ type: "set_fast_mode", on: true }]);
+		expect(button?.getAttribute("aria-expanded")).toBe("true");
+		expect(container.querySelectorAll("input[type=radio]").length).toBe(3);
+		expect(container.textContent).toContain("2.5×");
+		expect(container.textContent).toContain("8× included");
+		expect(container.textContent).toContain("credits at 6×");
+		expect(container.textContent).toContain("Pro $500");
+		expect(container.textContent).toContain("does not mean tasks finish 8× faster");
+		act(() => container.querySelector<HTMLInputElement>('input[value="ultrafast"]')!.click());
+		expect(sent).toEqual([{ type: "set_fast_mode", mode: "ultrafast", conversationId: "c-test" }]);
 	});
-
-	it("on: highlighted; a click turns it off", () => {
-		const { button, sent } = mount({ on: true });
-		expect(button!.classList.contains("on")).toBe(true);
-		expect(button!.classList.contains("cooling")).toBe(false);
-		expect(button!.getAttribute("aria-pressed")).toBe("true");
-		expect(button!.dataset.tip).toBe(TIP);
+	it("Fast stays Fast; the other ChatGPT models offer only two choices", () => {
+		const { button, container } = mount({ ...standard, mode: "fast", effective: "fast", ultrafastAvailable: false });
+		expect(button?.textContent).toContain("Fast ?");
 		act(() => button!.click());
-		expect(sent).toEqual([{ type: "set_fast_mode", on: false }]);
+		expect(container.querySelectorAll("input").length).toBe(2);
+		expect(container.querySelector('input[value="ultrafast"]')).toBeNull();
 	});
-
-	it("normal speed for now: dimmed, says so, and the tip gives the reason", () => {
-		const reason = "ChatGPT refused fast mode (HTTP 400)";
-		const { button, sent } = mount({ on: true, coolingUntil: Date.now() + 15 * 60_000, reason });
-		expect(button!.classList.contains("on")).toBe(true);
-		expect(button!.classList.contains("cooling")).toBe(true);
-		expect(button!.textContent).toContain("Normal speed for now");
-		expect(button!.dataset.tip).toContain(TIP);
-		expect(button!.dataset.tip).toContain(reason);
-		// Clicking turns it off (off-and-on again tries fast right away).
+	it("visible temporary Standard preserves the requested Ultrafast radio", () => {
+		const { button, container } = mount({
+			...standard,
+			mode: "ultrafast",
+			coolingUntil: Date.now() + 60_000,
+			reason: "ChatGPT refused Ultrafast",
+		});
+		expect(button?.textContent).toContain("Standard · now");
 		act(() => button!.click());
-		expect(sent).toEqual([{ type: "set_fast_mode", on: false }]);
+		expect(container.querySelector<HTMLInputElement>('input[value="ultrafast"]')?.checked).toBe(true);
+		expect(container.querySelector('[role="status"]')?.textContent).toContain("ChatGPT refused Ultrafast");
 	});
-
-	it("a cooldown that has run out shows plain on", () => {
-		const { button } = mount({ on: true, coolingUntil: Date.now() - 1000, reason: "old" });
-		expect(button!.classList.contains("cooling")).toBe(false);
-		expect(button!.dataset.tip).toBe(TIP);
+	it("honestly labels unconfirmed vs returned metadata", () => {
+		const { button, container } = mount({
+			...standard,
+			mode: "ultrafast",
+			effective: "ultrafast",
+			confirmedMode: "ultrafast",
+		});
+		expect(button?.textContent).not.toContain("?");
+		act(() => button!.click());
+		expect(container.textContent).toContain("Last reply confirmed by ChatGPT: Ultrafast");
 	});
-
-	it("while disconnected the button can't be clicked", () => {
-		const { button } = mount({ on: false }, true);
-		expect(button!.disabled).toBe(true);
+	it("Escape closes and restores focus", () => {
+		const { button, container } = mount(standard);
+		act(() => button!.click());
+		expect(document.activeElement?.getAttribute("value")).toBe("standard");
+		act(() =>
+			container.querySelector("input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+		);
+		expect(button?.getAttribute("aria-expanded")).toBe("false");
+		expect(document.activeElement).toBe(button);
 	});
-
-	it("fastCooling", () => {
-		const now = 1000;
-		expect(fastCooling(null, now)).toBe(false);
-		expect(fastCooling({ on: false, coolingUntil: 2000 }, now)).toBe(false);
-		expect(fastCooling({ on: true }, now)).toBe(false);
-		expect(fastCooling({ on: true, coolingUntil: 2000 }, now)).toBe(true);
-		expect(fastCooling({ on: true, coolingUntil: 500 }, now)).toBe(false);
+	it("disconnected, streaming or read-only without a chat id cannot change speed", () => {
+		const { button, sent } = mount(standard, true);
+		expect(button?.disabled).toBe(true);
+		act(() => button!.click());
+		expect(sent.length).toBe(0);
+	});
+	it("cooldown expires and requested mode can return", () => {
+		expect(fastCooling(null, 100)).toBe(false);
+		expect(fastCooling({ ...standard, mode: "ultrafast", coolingUntil: 101 }, 100)).toBe(true);
+		expect(fastCooling({ ...standard, mode: "ultrafast", coolingUntil: 99 }, 100)).toBe(false);
+		const { button } = mount({ ...standard, mode: "ultrafast", coolingUntil: Date.now() - 1000 });
+		expect(button?.textContent).toContain("Ultrafast ?");
 	});
 });

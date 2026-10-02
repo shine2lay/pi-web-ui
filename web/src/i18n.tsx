@@ -56,12 +56,23 @@ export const en = {
 	thinkingLevel: "Thinking level",
 	thinking: "Thinking",
 	thinkingChip: "{level}",
-	/* fast-mode: the chat's Fast button (ChatGPT fast tier) */
-	fastMode: "Fast mode",
+	/* Per-chat speed; these are allowance multipliers, not task-completion promises. */
+	fastMode: "Chat speed",
 	fastChip: "Fast",
-	fastTip: "Fast mode: faster replies; uses your ChatGPT plan's limits 2.5\u00d7 quicker",
-	fastNormalForNow: "Normal speed for now",
-	fastCooling: "Normal speed for now: {reason}. Tries fast again at {time}.",
+	fastTip: "Fast uses 2.5× included usage. Standard is the default in new and copied chats.",
+	speedStandard: "Standard",
+	speedUltrafast: "Ultrafast",
+	speedThisChat: "Speed for this chat only",
+	speedTemporary: "Standard temporarily",
+	speedUnavailable: "The selected speed is unavailable",
+	speedRetryAt: "Tries the saved speed again at {time}",
+	speedUnconfirmed: "Requested speed; acceptance is unconfirmed unless ChatGPT returns tier metadata.",
+	speedConfirmed: "Last reply confirmed by ChatGPT: {mode}.",
+	speedUltraUsage:
+		"Ultrafast uses 8× included usage. Once that runs out, it can draw available purchased credits at 6×. This does not mean tasks finish 8× faster.",
+	speedEligibility:
+		"Astra Ultrafast requires Pro $500 or eligible Enterprise/Edu. Plan, client, workspace and rollout affect availability. A refusal temporarily uses Standard.",
+	speedLearnMore: "OpenAI speed and usage details",
 	sound: "Sound",
 	theme: "Theme",
 	themeDefault: "Dark (default)",

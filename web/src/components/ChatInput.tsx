@@ -1383,7 +1383,10 @@ export const ChatInput = memo(function ChatInput({
 				compact
 			/>
 		),
-		"host:composer-fast": fastMode ? <FastModeButton fast={fastMode} disabled={!connected} /> : null,
+		"host:composer-fast":
+			fastMode && !isDsh ? (
+				<FastModeButton fast={fastMode} conversationId={conversationId} disabled={!connected || streaming} />
+			) : null,
 		"host:composer-dsh-perm":
 			dshPermOptions && dshPermOptions.length > 0 && dshPermDefault !== undefined ? (
 				<DshPermissionBar
@@ -1678,7 +1681,9 @@ export const ChatInput = memo(function ChatInput({
 									defaultModel={defaultModel}
 									compact
 								/>
-								{fastMode && <FastModeButton fast={fastMode} disabled={!connected} />}
+								{fastMode && !isDsh && (
+									<FastModeButton fast={fastMode} conversationId={conversationId} disabled={!connected || streaming} />
+								)}
 								{/* DSH 引擎：权限 + 模式下拉（思考强度右侧，只留按钮）。 */}
 								{dshPermOptions && dshPermOptions.length > 0 && dshPermDefault !== undefined && (
 									<DshPermissionBar

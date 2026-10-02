@@ -95,14 +95,18 @@ export interface UiModelInfo {
 	vision: boolean;
 }
 
-/** fast-mode: the "⚡ Fast" button of a ChatGPT chat (see UiState.fastMode). */
+/** Per-chat choice, never a global default or an entitlement claim. */
+export type ChatSpeed = "standard" | "fast" | "ultrafast";
 export interface UiFastMode {
-	/** The chat's saved choice. */
-	on: boolean;
-	/** Epoch ms: ChatGPT refused fast mode, so the chat runs at normal speed until then. */
+	mode: ChatSpeed;
+	/** The tier requested next; temporarily Standard after a refusal or model switch. */
+	effective: ChatSpeed;
+	/** Model capability only, not proof that the signed-in plan is eligible. */
+	ultrafastAvailable: boolean;
 	coolingUntil?: number;
-	/** Why, e.g. "ChatGPT refused fast mode (HTTP 400)". */
 	reason?: string;
+	/** Last reply's returned tier, only when exposed by the SDK. Absent = unconfirmed. */
+	confirmedMode?: ChatSpeed;
 }
 
 /** Platform service manager supervising this instance: someone restarts the
@@ -902,7 +906,7 @@ export type ClientMessage =
 	| { type: "clear_default_model" }
 	| { type: "set_thinking"; level: string }
 	/** fast-mode: turn the chat's "⚡ Fast" on/off (ChatGPT fast-mode models; pi chats only). */
-	| { type: "set_fast_mode"; on: boolean }
+	| { type: "set_fast_mode"; mode: ChatSpeed; conversationId: string }
 	| { type: "set_cwd"; path: string }
 	| { type: "complete_path"; path: string }
 	/** Create a folder for the cwd picker (absolute, ~- or session-relative).
