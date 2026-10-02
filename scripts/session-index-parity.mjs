@@ -6,12 +6,15 @@
  *
  * 1. A fresh index (memory only, nothing saved) against listAll: same rows, same order, same fields.
  * 2. With --saved: the same, from a throwaway copy of the server's saved index (the saved file itself is
- *    never written), plus how many chat files that copy needed to read.
+ *    never written), plus how many chat files that copy needed to read. A copy the index rejects (so the
+ *    server would start cold) counts as a difference.
+ * Both indexes use the server's own settings (they follow the chats' identity entries, as the server's does).
  * Exit 0 when every comparison shows 0 differences. Run it from the build that's installed (dist/). */
 import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { IDENTITY_ENTRY_TYPE, identityIdOfEntry } from "../dist/server/identities.js";
 import { SessionIndex } from "../dist/server/session-index.js";
 
 const args = process.argv.slice(2);
@@ -56,8 +59,12 @@ function compare(label, want, got) {
 	return total;
 }
 
+// The server's own settings (agent-service.ts `sessionIndex.configure`): the index also follows each chat's
+// identity entries, and a saved file made with other settings is rejected (rebuilt).
+const SERVER_OPTS = { identity: { customType: IDENTITY_ENTRY_TYPE, idOf: (entry) => identityIdOfEntry(entry) } };
+
 let t = performance.now();
-const fresh = new SessionIndex({ workers: 2 });
+const fresh = new SessionIndex({ workers: 2, ...SERVER_OPTS });
 const freshRows = await fresh.listAll(root);
 const freshMs = Math.round(performance.now() - t);
 
@@ -70,7 +77,7 @@ if (saved) {
 	const copy = join(tmp, "session-index.json");
 	copyFileSync(saved, copy);
 	t = performance.now();
-	savedIndex = new SessionIndex({ workers: 2, file: copy });
+	savedIndex = new SessionIndex({ workers: 2, file: copy, ...SERVER_OPTS });
 	savedRows = await savedIndex.listAll(root);
 	savedMs = Math.round(performance.now() - t);
 }
@@ -91,6 +98,8 @@ if (savedRows) {
 			`${s.fullReads} read in full, ${s.partialReads} read from where they stopped` +
 			(s.rejectedSaves ? "; the saved file was unusable (rebuilt)" : ""),
 	);
+	// The server would reject it the same way and start cold: that counts as a difference.
+	if (s.rejectedSaves) total += 1;
 	rmSync(tmp, { recursive: true, force: true });
 }
 console.log(total === 0 ? "0 differences" : `${total} differences`);

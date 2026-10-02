@@ -4450,9 +4450,14 @@ server beside the resuming chats' reloads. Nothing was kept across restarts.
   to before the restart within 2 s of reconnecting (0.2 to 0.5 s), and the restarted server read no
   transcript (40 from the saved index, in 3 to 18 ms).
 - Live: `scripts/session-index-parity.mjs` compares the index with `listAll` on the real folders and
-  prints counts only (60 rows, 0 differences; cold 1.4 s against pi's 4.8 s).
+  prints counts only (61 rows, 0 differences; cold 1.7 s against pi's 5.8 s). With `--saved`, from a copy
+  of the server's saved index: 0 differences, 43 ms, 0 files read in full, the 2 chats that grew since
+  the save read from where they stopped. It uses the server's own settings: an index without them
+  rejects the server's saved file (the first try did, and wrongly reported a cold start).
   `scripts/session-index-restart-probe.mjs`, started with systemd-run before an install, times the
   reconnect to the full list across the restart and reads the server's own count of files read in full.
+  Across the install of this patch: the full list (60 rows) 1.03 s after reconnecting; that first start
+  read every file in full, as the server before it kept no saved index.
 
 ### When syncing
 
