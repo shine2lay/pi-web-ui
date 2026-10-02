@@ -42,4 +42,7 @@
 // 33: identity-config - a role's own skills (from its private folder) leave the identity rows, which
 //     only count them (ownSkills); Settings asks for them with identity_skills_get and the server
 //     answers identity_skills. An old page would list no own skills; an old server would drop the ask.
-export const PROTOCOL_VERSION = 33;
+// 34: subs-limits-box - subs_limits (every subscription's limits, pushed to every window) answers
+//     subs_limits_get / subs_limits_refresh. An old page would show no Limits box; an old server would
+//     drop the asks and the box would stay on "Not checked yet".
+export const PROTOCOL_VERSION = 34;

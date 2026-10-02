@@ -1603,6 +1603,22 @@
 		"toolInfoSchemaDropped": "Le schéma des paramètres est trop volumineux et a été omis (voir le JSON brut ci-dessous)",
 		"toolInfoRawSchema": "Schéma JSON brut",
 		"toolInfoRequired": "obligatoire",
-		"toolInfoFootnote": "Ceci est la définition de l’outil — pas les arguments ni le résultat de cet appel."
+		"toolInfoFootnote": "Ceci est la définition de l’outil — pas les arguments ni le résultat de cet appel.",
+		"limitsSection": "Limites",
+		"limitsRefresh": "Vérifier maintenant les limites de tous les abonnements",
+		"limitsChecking": "Vérification de tous les abonnements…",
+		"limitsNotChecked": "Pas encore vérifié",
+		"limitsNotCheckedHint": "Appuyez sur ↻ pour vérifier tous les abonnements.",
+		"limitsUsed": "{percent} % utilisé",
+		"limitsResetsIn": "réinitialisé dans {time}",
+		"limitsResetSince": "réinitialisé depuis",
+		"limitsLimited": "Limité",
+		"limitsThisChat": "Le chat ouvert utilise ce compte",
+		"limitsChecked": "vérifié {ago}",
+		"limitsNoNumbers": "pas encore de chiffres",
+		"limitsJustNow": "à l’instant",
+		"limitsMinAgo": "il y a {n} min",
+		"limitsHoursAgo": "il y a {n} h",
+		"limitsDaysAgo": "il y a {n} j"
 	}
 }

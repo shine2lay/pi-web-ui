@@ -1603,6 +1603,22 @@
 		"toolInfoSchemaDropped": "Das Parameter-Schema ist zu groß und wurde weggelassen (siehe rohes JSON unten)",
 		"toolInfoRawSchema": "Rohes JSON-Schema",
 		"toolInfoRequired": "erforderlich",
-		"toolInfoFootnote": "Dies ist die Definition des Werkzeugs — nicht die Argumente oder das Ergebnis dieses Aufrufs."
+		"toolInfoFootnote": "Dies ist die Definition des Werkzeugs — nicht die Argumente oder das Ergebnis dieses Aufrufs.",
+		"limitsSection": "Limits",
+		"limitsRefresh": "Limits aller Abos jetzt prüfen",
+		"limitsChecking": "Alle Abos werden geprüft…",
+		"limitsNotChecked": "Noch nicht geprüft",
+		"limitsNotCheckedHint": "Drücke ↻, um alle Abos zu prüfen.",
+		"limitsUsed": "{percent}% verbraucht",
+		"limitsResetsIn": "zurückgesetzt in {time}",
+		"limitsResetSince": "inzwischen zurückgesetzt",
+		"limitsLimited": "Limit erreicht",
+		"limitsThisChat": "Der offene Chat nutzt dieses Konto",
+		"limitsChecked": "geprüft {ago}",
+		"limitsNoNumbers": "noch keine Zahlen",
+		"limitsJustNow": "gerade eben",
+		"limitsMinAgo": "vor {n} Min.",
+		"limitsHoursAgo": "vor {n} Std.",
+		"limitsDaysAgo": "vor {n} T."
 	}
 }

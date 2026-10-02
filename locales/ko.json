@@ -1603,6 +1603,22 @@
 		"toolInfoSchemaDropped": "매개변수 스키마가 너무 커서 생략했습니다(아래 원본 JSON 참고)",
 		"toolInfoRawSchema": "원본 JSON 스키마",
 		"toolInfoRequired": "필수",
-		"toolInfoFootnote": "이것은 도구의 정의이며 이번 호출의 인수나 결과는 포함하지 않습니다."
+		"toolInfoFootnote": "이것은 도구의 정의이며 이번 호출의 인수나 결과는 포함하지 않습니다.",
+		"limitsSection": "한도",
+		"limitsRefresh": "모든 구독의 한도를 지금 확인",
+		"limitsChecking": "모든 구독을 확인하는 중…",
+		"limitsNotChecked": "아직 확인하지 않음",
+		"limitsNotCheckedHint": "↻를 눌러 모든 구독을 확인하세요.",
+		"limitsUsed": "{percent}% 사용",
+		"limitsResetsIn": "{time} 후 초기화",
+		"limitsResetSince": "이미 초기화됨",
+		"limitsLimited": "한도 도달",
+		"limitsThisChat": "열린 채팅이 이 계정을 사용 중",
+		"limitsChecked": "{ago} 확인",
+		"limitsNoNumbers": "아직 수치 없음",
+		"limitsJustNow": "방금",
+		"limitsMinAgo": "{n}분 전",
+		"limitsHoursAgo": "{n}시간 전",
+		"limitsDaysAgo": "{n}일 전"
 	}
 }

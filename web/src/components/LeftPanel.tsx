@@ -24,6 +24,7 @@ import { CONV_IDENTITY_ENTRY_ID, LP_IDENTITY_ENTRY_ID, LP_SECTION_ENTRY_IDS, typ
 import { useIdentityList } from "../identity-state";
 import { identityChoiceOf, withIdentityChildren } from "../identity-menu";
 import { IdentityTag } from "./IdentityTag";
+import { LimitsSection } from "./LimitsBox";
 import { contextMenuItems, openContextMenu, type ContextMenuRequest } from "../context-menu-state";
 import { composeToComposer, focusComposer } from "../composer-bridge";
 
@@ -34,6 +35,8 @@ import { composeToComposer, focusComposer } from "../composer-bridge";
  *  field usage — TypeScript enforces it at the call site. */
 interface LeftPanelProps {
 	sessionFile: string | null;
+	/** subs-limits-box: the provider the open chat's model comes from; its Limits row gets a mark. */
+	currentProvider?: string;
 	conversations: ConversationSummary[];
 	/** issue #145：其他客户端正在跑的对话（只读，不可点）。 */
 	elsewhere: ElsewhereRunning[];
@@ -114,6 +117,7 @@ function isEditableTarget(el: EventTarget | null): boolean {
 
 const LS_COLLAPSE_CONVS = "pi-web-ui:lp-collapse-convs";
 const LS_COLLAPSE_SESSIONS = "pi-web-ui:lp-collapse-sessions";
+const LS_COLLAPSE_LIMITS = "pi-web-ui:lp-collapse-limits";
 
 function useCollapsed(key: string, defaultCollapsed = false): [boolean, () => void] {
 	const [collapsed, setCollapsed] = useState(() => {
@@ -177,6 +181,7 @@ function loadLpWeights(): LpWeights {
 
 export const LeftPanel = memo(function LeftPanel({
 	sessionFile,
+	currentProvider,
 	conversations,
 	elsewhere,
 	sessions,
@@ -211,6 +216,7 @@ export const LeftPanel = memo(function LeftPanel({
 	const [renameDraft, setRenameDraft] = useState("");
 	const [collapseConvs, toggleConvs] = useCollapsed(LS_COLLAPSE_CONVS, false);
 	const [collapseSessions, toggleSessions] = useCollapsed(LS_COLLAPSE_SESSIONS, false);
+	const [collapseLimits, toggleLimits] = useCollapsed(LS_COLLAPSE_LIMITS, false);
 	const [queueFolds, toggleQueueFold] = useQueueFolds();
 	/** 会话右键菜单（`contextmenu.session` 槽位）：见下面的 showSessionMenu / openSessionMenu /
 	 *  dispatchHostSessionEntry。宿主自己的两条（关闭已结束子代理 / 强行关闭对话）也在这个槽位里，
@@ -1252,6 +1258,15 @@ export const LeftPanel = memo(function LeftPanel({
 					</div>
 				)}
 			</div>
+			{/* subs-limits-box: every subscription's limits, under History (pi-multi-pass is pi's). */}
+			{!isDsh && (
+				<LimitsSection
+					collapsed={collapseLimits}
+					onToggle={toggleLimits}
+					currentProvider={currentProvider}
+					header={sectionHeader}
+				/>
+			)}
 		</aside>
 	);
 });

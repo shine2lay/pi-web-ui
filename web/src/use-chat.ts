@@ -65,6 +65,7 @@ import {
 	receiveIdentitySaved,
 } from "./identity-state";
 import { NOTEBOOK_TAB_REF, receiveNotebook, receiveNotebookSaved, resendNotebookWatch } from "./notebook-state";
+import { receiveSubsLimits, requestSubsLimits } from "./subs-limits-state";
 import { emitPluginData } from "./plugin-loader";
 import { ingestPluginLogsData } from "./plugin-logs";
 import { resolveCatalogSyncResult } from "./plugin-host";
@@ -1751,6 +1752,8 @@ export function useChat() {
 					ws.send(JSON.stringify({ type: "get_state" } satisfies ClientMessage));
 					// identity-notebook-tab: a new socket has no notebook watch yet; the open tab asks again.
 					resendNotebookWatch();
+					// subs-limits-box: the Limits box needs the readings (and whether a check runs) again.
+					requestSubsLimits();
 					// optimistic-send: ask what became of the sends still shown as "Sending" (after the
 					// snapshot, which may show them already). Same list the "ready" reducer case keeps.
 					const unanswered = idsToCheck(onReconnect(chatApi.current.chat.pendingSends));
@@ -2038,6 +2041,10 @@ export function useChat() {
 					break;
 				case "tool_info":
 					receiveToolInfo(msg);
+					break;
+				// subs-limits-box: every subscription's limits, for the Limits box (subs-limits-state.ts).
+				case "subs_limits":
+					receiveSubsLimits(msg);
 					break;
 				// identities: the identity list and the Settings editor (identity-state.ts).
 				case "identities":

@@ -1603,6 +1603,22 @@
 		"toolInfoSchemaDropped": "Схема параметров слишком большая и была опущена (см. исходный JSON ниже)",
 		"toolInfoRawSchema": "Исходная схема JSON",
 		"toolInfoRequired": "обязательный",
-		"toolInfoFootnote": "Это описание инструмента, а не аргументы и результат текущего вызова."
+		"toolInfoFootnote": "Это описание инструмента, а не аргументы и результат текущего вызова.",
+		"limitsSection": "Лимиты",
+		"limitsRefresh": "Проверить лимиты всех подписок сейчас",
+		"limitsChecking": "Проверяю все подписки…",
+		"limitsNotChecked": "Ещё не проверено",
+		"limitsNotCheckedHint": "Нажмите ↻, чтобы проверить все подписки.",
+		"limitsUsed": "{percent}% использовано",
+		"limitsResetsIn": "сброс через {time}",
+		"limitsResetSince": "уже сброшен",
+		"limitsLimited": "Лимит исчерпан",
+		"limitsThisChat": "Открытый чат использует этот аккаунт",
+		"limitsChecked": "проверено {ago}",
+		"limitsNoNumbers": "пока нет цифр",
+		"limitsJustNow": "только что",
+		"limitsMinAgo": "{n} мин назад",
+		"limitsHoursAgo": "{n} ч назад",
+		"limitsDaysAgo": "{n} д назад"
 	}
 }

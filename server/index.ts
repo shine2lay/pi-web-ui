@@ -84,6 +84,7 @@ import {
 } from "./identities.js";
 import { acceptDraft, discardDraft, ownSkillList, readDraft, saveDraft, type DraftResult } from "./identity-roles.js";
 import { NotebookWatch } from "./notebook-watch.js";
+import { SubsLimitsHub, limitsFilePath } from "./subs-limits.js";
 import { initHttpProxy } from "./http-proxy.js";
 import { globalLspPool } from "./lsp-tool.js";
 import { buildPiWebTokenCookie, decodeCookieToken, isTlsRequest } from "./auth-cookie.js";
@@ -1876,6 +1877,22 @@ function pushIdentities(): void {
 	}
 }
 
+/** subs-limits-box: the Limits box's readings (pi-multi-pass's file), pushed to every window on change. */
+const subsLimits = new SubsLimitsHub({
+	file: limitsFilePath(getAgentDir()),
+	broadcast: (msg) => {
+		const payload = JSON.stringify(msg);
+		for (const client of wss.clients) {
+			if (client.readyState !== WebSocket.OPEN) continue;
+			try {
+				client.send(payload);
+			} catch {
+				/* a dead socket is cleaned up elsewhere */
+			}
+		}
+	},
+});
+
 /** identity-notebook-tab: the Notebook tab's live notebook, per window (keyed by its socket). */
 const notebookWatch = new NotebookWatch<object>({ identities: () => identityRegistry().identities });
 
@@ -2411,6 +2428,17 @@ wss.on("connection", (ws) => {
 			case "identities_get":
 				// identities: Settings -> Identities opened (or asked again).
 				send(identitiesMessage(true));
+				break;
+			case "subs_limits_get":
+				// subs-limits-box: the Limits box (and every reconnect) asks for the readings.
+				send(subsLimits.message());
+				break;
+			case "subs_limits_refresh":
+				// subs-limits-box: the refresh button. Every window gets the readings; a reason it couldn't
+				// run goes to this window only.
+				void subsLimits.refresh().then((error) => {
+					if (error && !closed) send(subsLimits.message(undefined, error));
+				});
 				break;
 			case "identity_file_get": {
 				// identities: open about.md / notebook.md in the Settings editor.
@@ -3700,6 +3728,8 @@ try {
 
 // queue-lanes: before any chat loads pi-queue, so it finds the host from the start.
 service.installQueueHost?.();
+// subs-limits-box: the channel pi-multi-pass joins when a chat loads it (and the file, until then).
+subsLimits.start();
 
 httpServer.listen(PORT, HOST, () => {
 	// carry-on: give plugins and MCP servers a moment to come up, then reopen the cut-off chats;

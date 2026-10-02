@@ -73,6 +73,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | queue-grouping               | `local`        | `server/queue-groups.ts` (new), `agent-service.ts`, `client-state.ts`, `protocol.ts`, `protocol-version.ts` (31), `web/src/conv-groups.ts`, `queue-folds.ts` (new), `components/LeftPanel.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/queue-grouping-test.mjs` (new), `tests/unit/queue-groups.test.ts` (new), `conv-groups.test.ts`, `docs/directory-reference.md` |
 | new-chat-default             | `local`        | `server/new-chat-model.ts` (new), `agent-service.ts`, `web/src/i18n.tsx`, `tests/unit/new-chat-model.test.ts` (new) |
 | identity-config              | `local`        | `server/identity-config.ts` (new, pi-identity's `config.ts` copied byte for byte), `identity-roles.ts` (new), `identities.ts`, `index.ts`, `agent-service.ts` (`reloadForIdentity`), `protocol.ts`, `protocol-version.ts` (33), `web/src/identity-state.ts`, `components/IdentitiesSettings.tsx`, `NotebookPanel.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `.prettierignore`, `tests/identity-config-test.mjs` (new), `tests/unit/identity-config.test.ts` (new), `tests/unit/identities.test.ts` |
+| subs-limits-box              | `local`        | `server/subs-limits.ts` (new), `index.ts`, `protocol.ts`, `protocol-version.ts` (34), `web/src/components/LimitsBox.tsx` (new), `web/src/subs-limits-state.ts` (new), `components/LeftPanel.tsx`, `App.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/subs-limits-box-test.mjs` (new), `tests/unit/subs-limits.test.ts` (new) |
 
 ---
 
@@ -4322,3 +4323,68 @@ sees and edits all of it, and where suggested prompts (drafts) wait for the owne
   (the unit test fails until they match).
 - If upstream changes `session.reload()` or `applyToolGating`, keep `reloadForIdentity` doing what a
   settings reload does, for the one chat whose role changed.
+
+## subs-limits-box
+
+**Status**: `local`
+**Baseline**: v0.96.1 (on top of `identity-config`)
+
+**Why** (owner, 2026-10-01, queue task #41): "/subs limit-check" sometimes missed accounts (it only asked
+ChatGPT; Claude accounts showed numbers seen in recent replies, filtered by the chat's model). The owner
+wants every subscription's limits shown reliably "in the box on the left hand side bottom below history",
+with a refresh button; "only the refresh button" runs checks, numbers seen in replies still update it
+for free, and use is shown as "% used".
+
+The checks belong to pi-multi-pass (its `subs-limits` patch: Anthropic's free usage page, the one Claude
+Code's /usage reads, and ChatGPT's `/wham/usage`; every account, retries, last good numbers kept with
+the reason a check failed). This patch only shows its readings and passes the button on.
+
+### Changes
+
+1. **The bridge** (`server/subs-limits.ts`, new): pi-multi-pass keeps the readings in one file,
+   `<agent dir>/multi-pass-quota/subs-limits.json` (version 1, written whole). The server meets it on
+   `globalThis[Symbol.for("pi-multi-pass.limits")]`, version 1: `{v: 1, listeners: Set, api?: {check(),
+   readings(), checking(), file}}` (either side may create it; a channel of another version is left
+   alone). `SubsLimitsHub` listens there (a check starts or ends, a reply brings numbers), also watches
+   the file (a check from the command-line pi), checks every row it passes on, and sends `subs_limits` to
+   every window when the readings change (never the same twice). With no chat that has loaded
+   pi-multi-pass, the box still shows the file and a press says so.
+2. **Protocol 34** (`protocol.ts`, `protocol-version.ts`): `subs_limits_get` (sent on every connect) and
+   `subs_limits_refresh` (the button) from the page; `subs_limits {accounts, checkedAt?, checking,
+   error?}` from the server (`error` only to the window whose press couldn't run). Types `UiLimitsAccount`,
+   `UiLimitWindow`, `UiLimitsFailureReason`.
+3. **The box** (`web/src/components/LimitsBox.tsx`, new; `web/src/subs-limits-state.ts`, new;
+   `LeftPanel.tsx`, `App.tsx`, `use-chat.ts`, `styles.css`, `i18n.tsx`, `locales/*.json`): the last
+   section of the left panel, under History (so in the phone's side drawer too; not on a DSH server). It
+   folds like the others (`pi-web-ui:lp-collapse-limits`). The header reads "Limits" and has a refresh
+   button that spins at once and until the check is over (a press while one runs joins it). One row per
+   account: name, plan, label or email, a "Limited" mark, the 5-hour and weekly windows (then per-model
+   ones) as "N% used" with a thin bar and "resets in …", then (under the last numbers it kept) the
+   reason a check failed, "checked N min ago", and a dot on the open chat's account (`currentProvider` = the chat's
+   model's provider). Plain under 75%, amber from 75%, red from 90% or limited. Before the first press:
+   "Not checked yet".
+
+### How it was checked
+
+- `tests/unit/subs-limits.test.ts`: the file read and cleaned (version 1 only, bad rows and windows left
+  out, a missing or broken file = nothing); the channel created, joined, another version left alone; the
+  hub pushing announced readings once, refresh spinning every window and joining a press while it runs,
+  a check that throws reported, no chat loaded = the file and a reason, a channel replaced later
+  followed; the store (a press spins until the check starts or ends, a reply's numbers don't stop it, an
+  unanswered press stops after 60 s, offline sends nothing); colors, "resets in", ages, window order.
+- `tests/subs-limits-box-test.mjs` (sealed browser test, a stand-in for pi-multi-pass in the agent's
+  extensions folder, no real account asked): "Not checked yet", every account's row after one press with
+  plan, who, windows in order, "% used", "resets in", colors, "Limited" and the open chat's mark; a
+  second window shows the same and spins too; a failed account keeps its last numbers with "timed out"; a
+  write of the file from elsewhere shows up by itself; the fold kept over a reload; the readings kept
+  over a server restart; the phone's drawer has every row and a 44 px refresh button.
+- check.sh, the build and the full sealed suite pass (scroll-attr-collapse-test, a known load flake,
+  passed when run alone); live after the install: one press, all four accounts, the Claude numbers the
+  same as `~/epd-autopilot/pool_usage.py`.
+
+### When syncing
+
+- The hook's shape is pi-multi-pass's (`extensions/mine/subs-limits.ts`): change both together, and bump
+  `v` in both if it stops being compatible (the server then shows the file only).
+- If upstream rebuilds the left panel, keep the box the last section, after History, using its
+  `sectionHeader`.

@@ -1830,6 +1830,7 @@ export function App() {
 							panelSend={panelSend}
 							active={!isMobile || drawer === "left"}
 							sessionFile={chat.state?.sessionFile ?? null}
+							currentProvider={chat.state?.model?.provider}
 							conversations={chat.conversations}
 							elsewhere={chat.elsewhere}
 							sessions={chat.sessions}

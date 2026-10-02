@@ -1840,6 +1840,23 @@ export const en = {
 	notebookLoadNew: "Load the new version",
 	notebookSaveMine: "Save mine anyway",
 	notebookUnsaved: "Unsaved changes",
+	/* subs-limits-box: the Limits box under History */
+	limitsSection: "Limits",
+	limitsRefresh: "Check every subscription's limits now",
+	limitsChecking: "Checking every subscription\u2026",
+	limitsNotChecked: "Not checked yet",
+	limitsNotCheckedHint: "Press \u21bb to check every subscription.",
+	limitsUsed: "{percent}% used",
+	limitsResetsIn: "resets in {time}",
+	limitsResetSince: "has reset since",
+	limitsLimited: "Limited",
+	limitsThisChat: "The open chat uses this account",
+	limitsChecked: "checked {ago}",
+	limitsNoNumbers: "no numbers yet",
+	limitsJustNow: "just now",
+	limitsMinAgo: "{n} min ago",
+	limitsHoursAgo: "{n} h ago",
+	limitsDaysAgo: "{n} d ago",
 	toolInfoFootnote: "This is the tool's definition — not this call's arguments or result.",
 };
 

@@ -772,6 +772,155 @@ body.rp-resizing .rp-sash.dragging::after {
 	scrollbar-color: var(--scroll-thumb) transparent;
 	overscroll-behavior: contain;
 }
+/* subs-limits-box: the Limits box under History. Open, it takes only what its rows need (at most
+   45% of the panel; the rest scrolls) and leaves the rest to the chat lists. */
+.lp-section.lp-section-limits:not(.collapsed) {
+	flex: 0 0 auto;
+	min-height: 72px;
+	max-height: 45%;
+}
+.lp-limits-refresh.spinning svg {
+	animation: spin 0.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+	.lp-limits-refresh.spinning svg {
+		animation-duration: 2.4s;
+	}
+}
+.lp-limits-body {
+	padding-top: 4px;
+	padding-bottom: 8px;
+}
+.lp-limits-empty {
+	color: var(--text-dim);
+	font-size: 12px;
+	padding: 6px 0;
+}
+.lp-limits-hint {
+	color: var(--text-faint);
+	font-size: 11px;
+	margin-top: 2px;
+}
+.lp-limits-error {
+	color: var(--red-text);
+	font-size: 11px;
+	padding: 2px 0 6px;
+}
+.lp-limit-row {
+	padding: 6px 0 7px;
+	border-bottom: 1px solid var(--border-soft);
+	font-size: 11px;
+	color: var(--text-dim);
+}
+.lp-limit-row:last-child {
+	border-bottom: none;
+}
+.lp-limit-head {
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+	min-width: 0;
+	margin-bottom: 3px;
+}
+.lp-limit-name {
+	color: var(--text);
+	font-size: 12px;
+	font-weight: 600;
+	white-space: nowrap;
+}
+.lp-limit-current {
+	color: var(--accent);
+	font-size: 9px;
+	line-height: 1;
+}
+.lp-limit-plan {
+	flex: none;
+	padding: 0 5px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	font-size: 10px;
+	color: var(--text-dim);
+}
+.lp-limit-who {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--text-faint);
+}
+.lp-limit-badge {
+	flex: none;
+	margin-left: auto;
+	padding: 0 5px;
+	border-radius: 8px;
+	background: var(--red-soft);
+	color: var(--red-text);
+	font-size: 10px;
+	font-weight: 600;
+}
+.lp-limit-window {
+	display: grid;
+	grid-template-columns: minmax(52px, auto) minmax(28px, 1fr) auto;
+	grid-template-areas:
+		"label bar pct"
+		". reset reset";
+	align-items: center;
+	column-gap: 6px;
+	padding: 1px 0;
+}
+.lp-limit-wlabel {
+	grid-area: label;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.lp-limit-bar {
+	grid-area: bar;
+	height: 3px;
+	border-radius: 2px;
+	background: var(--bg-elev3);
+	overflow: hidden;
+}
+.lp-limit-fill {
+	display: block;
+	height: 100%;
+	border-radius: 2px;
+	background: var(--text-dim);
+}
+.lp-limit-pct {
+	grid-area: pct;
+	white-space: nowrap;
+	color: var(--text);
+	font-variant-numeric: tabular-nums;
+}
+.lp-limit-reset {
+	grid-area: reset;
+	color: var(--text-faint);
+	font-size: 10px;
+	white-space: nowrap;
+}
+.lp-limit-warn .lp-limit-fill {
+	background: var(--amber);
+}
+.lp-limit-warn .lp-limit-pct {
+	color: var(--amber-text);
+}
+.lp-limit-bad .lp-limit-fill {
+	background: var(--red);
+}
+.lp-limit-bad .lp-limit-pct {
+	color: var(--red-text);
+}
+.lp-limit-failure {
+	margin-top: 2px;
+	color: var(--amber-text);
+}
+.lp-limit-age {
+	margin-top: 2px;
+	color: var(--text-faint);
+	font-size: 10px;
+}
 .lp-section-body.convs-scroll,
 .lp-section-body.sessions-scroll {
 	padding-bottom: 6px;

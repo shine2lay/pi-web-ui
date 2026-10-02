@@ -1603,6 +1603,22 @@
 		"toolInfoSchemaDropped": "Lo schema dei parametri è troppo grande ed è stato omesso (vedi il JSON grezzo qui sotto)",
 		"toolInfoRawSchema": "Schema JSON grezzo",
 		"toolInfoRequired": "obbligatorio",
-		"toolInfoFootnote": "Questa è la definizione dello strumento, non gli argomenti o il risultato di questa chiamata."
+		"toolInfoFootnote": "Questa è la definizione dello strumento, non gli argomenti o il risultato di questa chiamata.",
+		"limitsSection": "Limiti",
+		"limitsRefresh": "Controlla ora i limiti di tutti gli abbonamenti",
+		"limitsChecking": "Controllo di tutti gli abbonamenti…",
+		"limitsNotChecked": "Non ancora controllato",
+		"limitsNotCheckedHint": "Premi ↻ per controllare tutti gli abbonamenti.",
+		"limitsUsed": "{percent}% usato",
+		"limitsResetsIn": "si azzera tra {time}",
+		"limitsResetSince": "già azzerato",
+		"limitsLimited": "Limitato",
+		"limitsThisChat": "La chat aperta usa questo account",
+		"limitsChecked": "controllato {ago}",
+		"limitsNoNumbers": "ancora nessun numero",
+		"limitsJustNow": "proprio ora",
+		"limitsMinAgo": "{n} min fa",
+		"limitsHoursAgo": "{n} h fa",
+		"limitsDaysAgo": "{n} g fa"
 	}
 }

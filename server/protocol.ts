@@ -1425,7 +1425,12 @@ export type ClientMessage =
 	/** identity-notebook-tab: this window's Notebook tab shows identity `id`'s notebook (null = it closed).
 	 *  Answered at once with `identity_notebook`, then again whenever the file changes (anyone: a chat's
 	 *  notebook tool, the owner, the weekly tidy-up). One watch per window; a new one replaces it. */
-	| { type: "identity_notebook_watch"; id: string | null };
+	| { type: "identity_notebook_watch"; id: string | null }
+	/** subs-limits-box: the Limits box opened (or the page reconnected). Answered with `subs_limits`. */
+	| { type: "subs_limits_get" }
+	/** subs-limits-box: the Limits box's refresh button. pi-multi-pass checks every account (a press while
+	 *  a check runs joins it); every window then gets `subs_limits`. */
+	| { type: "subs_limits_refresh" };
 
 // ---------------------------------------------------------------------------
 // Server -> Client
@@ -1796,6 +1801,46 @@ export interface ScmCommitEntry {
 	decorations: string;
 	/** The graph prefix emitted by `git log --graph` (for example `| * `). */
 	graph: string;
+}
+
+/** subs-limits-box: one limit window of an account (pi-multi-pass's readings, version 1). */
+export interface UiLimitWindow {
+	/** "5h", "7d", "7d:opus", "m:<model>" */
+	key: string;
+	/** "5-hour", "Weekly", "Weekly · Opus" */
+	label: string;
+	/** 0-100 */
+	usedPercent?: number;
+	/** unix seconds */
+	resetAt?: number;
+	limited?: boolean;
+}
+
+/** subs-limits-box: why an account's last check failed. */
+export type UiLimitsFailureReason =
+	"signed-out" | "sign-in-expired" | "busy" | "timeout" | "no-answer" | "not-subscription" | "unsupported" | "error";
+
+/** subs-limits-box: one subscription's row. A failed check keeps the last good numbers (windows,
+ *  checkedAt) and says why in failure.text (plain words). */
+export interface UiLimitsAccount {
+	/** pi provider id: "anthropic", "anthropic-2", "openai-codex" */
+	provider: string;
+	base: string;
+	number: number;
+	/** "Claude 2", "ChatGPT 1" */
+	name: string;
+	label?: string;
+	email?: string;
+	/** "Max", "Pro", "Plus", "Free" */
+	plan?: string;
+	windows: UiLimitWindow[];
+	limited?: boolean;
+	/** When the numbers were read (ms). */
+	checkedAt?: number;
+	source?: "check" | "reply";
+	/** When the last check ran (ms), failed or not. */
+	triedAt?: number;
+	failure?: { reason: UiLimitsFailureReason; text: string; at: number };
 }
 
 export interface ModelInfo {
@@ -3576,6 +3621,17 @@ export type ServerMessage =
 	/** identity-config: each role's own skills (identity_skills_get), by role id; a role whose own skills
 	 *  are off is left out. Only to the window that asked. */
 	| { type: "identity_skills"; skills: Record<string, UiRoleSkill[]> }
+	/** subs-limits-box: every subscription's limits, from pi-multi-pass's readings file. Sent to every
+	 *  window whenever they change (a check starts or ends, a reply brings numbers), and to a window that
+	 *  asks. checkedAt missing = never checked ("Not checked yet"). error = this window's refresh
+	 *  couldn't start (only to the window that pressed it). */
+	| {
+			type: "subs_limits";
+			accounts: UiLimitsAccount[];
+			checkedAt?: number;
+			checking: boolean;
+			error?: string;
+	  }
 	/** identity-notebook-tab: the watched notebook (identity_notebook_watch), sent at once and on every
 	 *  change. error = no such identity, or the file couldn't be read. */
 	| {

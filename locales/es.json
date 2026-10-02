@@ -1603,6 +1603,22 @@
 		"toolInfoSchemaDropped": "El esquema de parámetros es demasiado grande y se omitió (ver el JSON sin formato abajo)",
 		"toolInfoRawSchema": "Esquema JSON sin formato",
 		"toolInfoRequired": "obligatorio",
-		"toolInfoFootnote": "Esta es la definición de la herramienta, no los argumentos ni el resultado de esta llamada."
+		"toolInfoFootnote": "Esta es la definición de la herramienta, no los argumentos ni el resultado de esta llamada.",
+		"limitsSection": "Límites",
+		"limitsRefresh": "Comprobar ahora los límites de todas las suscripciones",
+		"limitsChecking": "Comprobando todas las suscripciones…",
+		"limitsNotChecked": "Aún sin comprobar",
+		"limitsNotCheckedHint": "Pulsa ↻ para comprobar todas las suscripciones.",
+		"limitsUsed": "{percent}% usado",
+		"limitsResetsIn": "se restablece en {time}",
+		"limitsResetSince": "ya se restableció",
+		"limitsLimited": "Limitada",
+		"limitsThisChat": "El chat abierto usa esta cuenta",
+		"limitsChecked": "comprobado {ago}",
+		"limitsNoNumbers": "aún sin cifras",
+		"limitsJustNow": "ahora mismo",
+		"limitsMinAgo": "hace {n} min",
+		"limitsHoursAgo": "hace {n} h",
+		"limitsDaysAgo": "hace {n} d"
 	}
 }
