@@ -35,4 +35,8 @@
 //     An old page shows no tab; an old server would never answer the watch.
 // 31: queue-grouping - chat rows carry queueHomeId: an open queued task's chat sits under the queue
 //     chat it came from. An old page shows the task chats as rows of their own.
-export const PROTOCOL_VERSION = 31;
+// 32: identity-config - identity rows carry a role's settings (prompt, skills, tool limits, unique,
+//     problems, a waiting draft); identity_file_get/_save take "prompt" and "config"; pages send
+//     identity_draft_get / _save / _accept / _discard and the server answers identity_draft /
+//     identity_draft_done. An old page shows none of it; an old server would drop the new messages.
+export const PROTOCOL_VERSION = 32;

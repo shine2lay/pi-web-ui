@@ -1405,6 +1405,19 @@ export type ClientMessage =
 	 *  ref (identity-notebook-tab) comes back in identity_file_saved, so the right panel's Notebook tab
 	 *  can tell its own saves from the Settings page's. */
 	| { type: "identity_file_save"; id: string; file: IdentityFileName; text: string; baseHash: string; ref?: string }
+	/** identity-config: read a role's waiting draft (answered with `identity_draft`). */
+	| { type: "identity_draft_get"; id: string }
+	/** identity-config: save the owner's edits to a draft (it stays a draft), accept it as shown (its
+	 *  prompt and settings go into the role's folder, an app save), or discard it. Answered with
+	 *  `identity_draft_done`. baseHash = the hash from `identity_draft` (a draft changed since is refused). */
+	| {
+			type: "identity_draft_save" | "identity_draft_accept";
+			id: string;
+			prompt: string;
+			config: string;
+			baseHash: string;
+	  }
+	| { type: "identity_draft_discard"; id: string }
 	/** identity-notebook-tab: this window's Notebook tab shows identity `id`'s notebook (null = it closed).
 	 *  Answered at once with `identity_notebook`, then again whenever the file changes (anyone: a chat's
 	 *  notebook tool, the owner, the weekly tidy-up). One watch per window; a new one replaces it. */
@@ -1446,16 +1459,46 @@ export interface UiIdentityInfo {
 	/** about.md / notebook.md 的字节数（没有文件 = 0）。 */
 	aboutSize: number;
 	notebookSize: number;
-	/** 笔记本的上限（字节），超了存不进去。 */
+	/** 笔记本的上限（字节），超了存不进去。identity-config: from ~/.pi/agent/pi-identity.json (notebookCap). */
 	notebookCap: number;
+	/** identity-config: the role's prompt file (prompt.md unless identity.json names another) and its
+	 *  size in bytes (0 = no prompt yet). promptOff = identity.json turns the prompt off ("prompt": null). */
+	promptFile: string;
+	promptSize: number;
+	promptOff?: boolean;
+	/** identity-config: the skills its chats load (its own skills/ folder, plus the shared role skills it
+	 *  takes), read like pi reads them. */
+	skills: UiRoleSkill[];
+	/** identity-config: its tool limits in a few words ("none" when there are none). */
+	toolLimits: string;
+	/** identity-config: limited to one chat (`unique`, for the queue). */
+	unique?: boolean;
+	/** identity-config: what pi-identity refuses in its identity.json, and leaves out (one line each). */
+	configProblems: string[];
+	/** identity-config: a draft waits for the owner (role-drafts/<id>/): its prompt size and the settings
+	 *  it suggests (field names). */
+	draft?: { promptSize: number; fields: string[] };
 }
 
-/** identities：Settings 里能读写的两个文件。 */
-export type IdentityFileName = "about" | "notebook";
+/** identity-config: one skill a role's chats load. shared = from the shared role skills folder. */
+export interface UiRoleSkill {
+	name: string;
+	description: string;
+	shared: boolean;
+	path: string;
+}
+
+/** identities：Settings 里能读写的文件。identity-config: prompt = the role's prompt file, config = its
+ *  identity.json (its settings: prompt file, skills, tool limits, unique). */
+export type IdentityFileName = "about" | "notebook" | "prompt" | "config";
 
 /** identities：存盘被拒的原因。over_cap = 笔记本超上限；changed = 文件在你打开之后被改过（先重新载入）；
- *  too_big = about 超安全上限；unknown = 没有这个身份；io = 读写出错。 */
-export type IdentitySaveError = "over_cap" | "changed" | "too_big" | "unknown" | "io";
+ *  too_big = about 超安全上限；unknown = 没有这个身份；io = 读写出错。identity-config: invalid = settings
+ *  pi-identity would refuse (the reasons come in `problems`). */
+export type IdentitySaveError = "over_cap" | "changed" | "too_big" | "unknown" | "io" | "invalid";
+
+/** identity-config: what to do with a waiting draft. */
+export type IdentityDraftAction = "save" | "accept" | "discard";
 
 /** 会话转录中一条命中消息的定位锚点：会话载入后按 role + timestamp 在
  *  UiMessage[] 里找到对应消息，用于「搜索会话 → 跳到对应位置」。 */
@@ -3496,9 +3539,33 @@ export type ServerMessage =
 			file: IdentityFileName;
 			ok: boolean;
 			code?: IdentitySaveError;
+			/** identity-config: why a settings save was refused (code "invalid"), one line each. */
+			problems?: string[];
 			hash?: string;
 			size?: number;
 			ref?: string;
+	  }
+	/** identity-config: a role's waiting draft (identity_draft_get): its suggested prompt, settings
+	 *  (config.json) and reasons (notes.md). hash goes back with a save or accept. error = none waits. */
+	| {
+			type: "identity_draft";
+			id: string;
+			prompt?: string;
+			config?: string;
+			notes?: string;
+			hash?: string;
+			error?: string;
+	  }
+	/** identity-config: the answer to identity_draft_save / _accept / _discard. ok, or refused (code, and
+	 *  problems for settings pi-identity would refuse). hash = a saved draft's new hash. */
+	| {
+			type: "identity_draft_done";
+			id: string;
+			action: IdentityDraftAction;
+			ok: boolean;
+			code?: IdentitySaveError;
+			problems?: string[];
+			hash?: string;
 	  }
 	/** identity-notebook-tab: the watched notebook (identity_notebook_watch), sent at once and on every
 	 *  change. error = no such identity, or the file couldn't be read. */

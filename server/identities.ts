@@ -25,27 +25,35 @@
  */
 
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
-import {
-	appendFileSync,
-	existsSync,
-	mkdirSync,
-	readdirSync,
-	readFileSync,
-	renameSync,
-	statSync,
-	writeFileSync,
-} from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { open, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { IdentityFileName, IdentitySaveError, UiChatIdentity, UiIdentityInfo } from "./protocol.js";
+// identity-config: a role's settings (prompt, skills, tool limits, unique), its prompt and the drafts waiting
+// for the owner are read, checked and saved with pi-identity's own rules (identity-config.ts, identity-roles.ts).
+import { loadSettings, PROMPT_MAX, type Settings } from "./identity-config.js";
+import {
+	checkConfigText,
+	draftIds,
+	draftsDir,
+	draftSummary,
+	promptPathOf,
+	readTextOrEmpty,
+	roleInfoParts,
+	roleViewOf,
+	textHash,
+	writeWhole,
+	type RoleView,
+} from "./identity-roles.js";
+
+export { textHash } from "./identity-roles.js";
 
 /** pi-identity 的 customType（与 pi-identity identity.ts 的 ENTRY_TYPE 一致）。 */
 export const IDENTITY_ENTRY_TYPE = "identity";
 
 /** 笔记本的上限（字节），与 pi-identity 的 NOTEBOOK_CAP 一致。 */
-export const NOTEBOOK_CAP = 8_000;
+export const NOTEBOOK_CAP = 8_000; // identity-config: the default; notebookCap in pi-identity.json wins
 
 /** about.md 的安全上限（字节）：它没有规定的上限，这里只防一次粘贴把整份注入撑爆。 */
 export const ABOUT_MAX = 64_000;
@@ -63,6 +71,10 @@ export interface IdentityDef {
 	/** 家对话的会话文件（绝对路径）；没有就是 null。 */
 	homeChat: string | null;
 	pastHomeChats: string[];
+	/** identity-config: identity.json as read (accepting a draft merges its fields into it). */
+	raw: Record<string, unknown>;
+	/** identity-config: its settings as pi-identity reads them (prompt, skills, tools, unique), and their problems. */
+	role: RoleView;
 	/** 身份文件夹。 */
 	dir: string;
 }
@@ -91,7 +103,11 @@ export function samePath(a: string | null | undefined, b: string | null | undefi
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
 
 /** dir 里的每个身份（一个文件夹一个，带 identity.json），加上坏掉的那些的问题。规则同 pi-identity 的 loadIdentities。 */
-export function loadIdentities(dir: string, env: Env = process.env): { identities: IdentityDef[]; problems: string[] } {
+export function loadIdentities(
+	dir: string,
+	env: Env = process.env,
+	settings: Settings = loadSettings(env),
+): { identities: IdentityDef[]; problems: string[] } {
 	const identities: IdentityDef[] = [];
 	const problems: string[] = [];
 	let names: string[];
@@ -139,6 +155,8 @@ export function loadIdentities(dir: string, env: Env = process.env): { identitie
 			homeChat: homeChat ? expandHome(homeChat, env) : null,
 			pastHomeChats: past.map((p) => expandHome(p, env)),
 			dir: d,
+			raw: o,
+			role: roleViewOf(d, o, settings),
 		});
 	}
 	return { identities, problems };
@@ -150,6 +168,11 @@ interface Registry {
 	at: number;
 	identities: IdentityDef[];
 	problems: string[];
+	/** identity-config: the shared settings (pi-identity.json) the roles were read with. */
+	settings: Settings;
+	/** identity-config: where drafts wait, and the roles with one waiting. */
+	draftsDir: string;
+	drafts: string[];
 }
 
 const REGISTRY_TTL_MS = 3_000;
@@ -160,9 +183,34 @@ export function identityRegistry(force = false, env: Env = process.env): Registr
 	const dir = identitiesDir(env);
 	const now = Date.now();
 	if (!force && registry && registry.dir === dir && now - registry.at < REGISTRY_TTL_MS) return registry;
-	const { identities, problems } = loadIdentities(dir, env);
-	registry = { dir, at: now, identities, problems };
+	const settings = loadSettings(env);
+	const { identities, problems: found } = loadIdentities(dir, env, settings);
+	const drafts = draftsDir(dir, env);
+	const waiting = draftIds(drafts);
+	const problems = [
+		...settings.problems.map((p) => (p.includes("pi-identity.json") ? p : `pi-identity.json: ${p}`)),
+		...found,
+		...waiting
+			.filter((id) => !identities.some((i) => i.id === id))
+			.map((id) => `role-drafts/${id}: a draft for a role that doesn't exist`),
+	];
+	logRoleProblems(identities, problems);
+	registry = { dir, at: now, identities, problems, settings, draftsDir: drafts, drafts: waiting };
 	return registry;
+}
+
+/** identity-config: the problems last logged, so each one is logged once, when it shows up. */
+const loggedProblems = new Set<string>();
+
+/** identity-config: log the roles' settings problems (and the shared file's) to the server log as they show up. */
+function logRoleProblems(identities: IdentityDef[], problems: string[]): void {
+	const lines = new Set(problems.map((p) => `[identities] ${p}`));
+	for (const def of identities) {
+		for (const p of def.role.problems) lines.add(`[identities] ${def.id}'s settings: ${p}`);
+	}
+	for (const line of lines) if (!loggedProblems.has(line)) console.log(line);
+	loggedProblems.clear();
+	for (const line of lines) loggedProblems.add(line);
 }
 
 // ---------------------------------------------------------------------------
@@ -385,22 +433,17 @@ export async function fileIdentityIds(
 // Settings → Identities：读写 about.md / notebook.md
 // ---------------------------------------------------------------------------
 
+/** identity-config: the files Settings edits (prompt: the file identity.json names, else prompt.md). */
+export const IDENTITY_FILES: readonly IdentityFileName[] = ["about", "notebook", "prompt", "config"];
+
+export function isIdentityFileName(v: unknown): v is IdentityFileName {
+	return typeof v === "string" && (IDENTITY_FILES as readonly string[]).includes(v);
+}
+
 export function identityFilePath(def: IdentityDef, file: IdentityFileName): string {
+	if (file === "prompt") return promptPathOf(def.dir, def.role.config);
+	if (file === "config") return join(def.dir, "identity.json");
 	return join(def.dir, file === "about" ? "about.md" : "notebook.md");
-}
-
-/** 文件内容的指纹：存盘时拿它确认文件在页面打开之后没被别人改过。 */
-export function textHash(text: string): string {
-	return createHash("sha1").update(text, "utf8").digest("hex");
-}
-
-function readTextOrEmpty(path: string): string {
-	try {
-		return readFileSync(path, "utf8");
-	} catch (err) {
-		if ((err as NodeJS.ErrnoException).code === "ENOENT") return "";
-		throw err;
-	}
 }
 
 function sizeOf(path: string): number {
@@ -412,23 +455,38 @@ function sizeOf(path: string): number {
 }
 
 /** Settings 页的身份列表。 */
-export function identityInfos(identities: IdentityDef[]): UiIdentityInfo[] {
-	return identities.map((d) => ({
-		id: d.id,
-		title: d.title,
-		...(d.folder ? { folder: d.folder } : {}),
-		...(d.homeChat ? { homeChat: d.homeChat } : {}),
-		aboutSize: sizeOf(identityFilePath(d, "about")),
-		notebookSize: sizeOf(identityFilePath(d, "notebook")),
-		notebookCap: NOTEBOOK_CAP,
-	}));
+export function identityInfos(
+	identities: IdentityDef[],
+	settings: Settings = loadSettings(),
+	drafts: { dir: string; ids: string[] } | null = null,
+): UiIdentityInfo[] {
+	return identities.map((d) => {
+		const draft = drafts?.ids.includes(d.id) ? draftSummary(drafts.dir, d.id) : null;
+		return {
+			id: d.id,
+			title: d.title,
+			...(d.folder ? { folder: d.folder } : {}),
+			...(d.homeChat ? { homeChat: d.homeChat } : {}),
+			aboutSize: sizeOf(identityFilePath(d, "about")),
+			notebookSize: sizeOf(identityFilePath(d, "notebook")),
+			notebookCap: settings.notebookCap,
+			// identity-config: its prompt, skills, tool limits and problems, and a draft waiting for the owner
+			...roleInfoParts(d.dir, d.role, settings),
+			...(draft ? { draft } : {}),
+		};
+	});
 }
 
 export type IdentityFileRead =
 	{ ok: true; text: string; hash: string; size: number; cap?: number } | { ok: false; error: string };
 
 /** 读一个身份的 about.md / notebook.md（没有这个文件 = 空）。 */
-export function readIdentityFile(identities: IdentityDef[], id: string, file: IdentityFileName): IdentityFileRead {
+export function readIdentityFile(
+	identities: IdentityDef[],
+	id: string,
+	file: IdentityFileName,
+	settings: Settings = loadSettings(),
+): IdentityFileRead {
 	const def = identities.find((i) => i.id === id);
 	if (!def) return { ok: false, error: `No identity "${id}"` };
 	try {
@@ -438,7 +496,7 @@ export function readIdentityFile(identities: IdentityDef[], id: string, file: Id
 			text,
 			hash: textHash(text),
 			size: Buffer.byteLength(text, "utf8"),
-			...(file === "notebook" ? { cap: NOTEBOOK_CAP } : {}),
+			...(file === "notebook" ? { cap: settings.notebookCap } : file === "prompt" ? { cap: PROMPT_MAX } : {}),
 		};
 	} catch (err) {
 		return { ok: false, error: (err as Error).message };
@@ -448,7 +506,8 @@ export function readIdentityFile(identities: IdentityDef[], id: string, file: Id
 /** identity-notebook-tab: archived = how many lines the owner's save took out of the notebook (they're
  *  kept in the role's own folder, like pi-identity keeps the lines its notebook tool removes). */
 export type IdentityFileSave =
-	{ ok: true; hash: string; size: number; archived: number } | { ok: false; code: IdentitySaveError };
+	| { ok: true; hash: string; size: number; archived: number }
+	| { ok: false; code: IdentitySaveError; problems?: string[] };
 
 /** identity-notebook-tab: where a notebook's removed lines are kept: <identities>/<id>/removed.md, inside
  *  the role's own folder, which only the role's chats may read (pi-identity's removedPath; pi-worktree
@@ -485,14 +544,6 @@ function archiveLines(path: string, id: string, lines: string[], note: string): 
 	appendFileSync(path, `${head}\n<!-- ${note} -->\n${lines.join("\n")}\n`, "utf8");
 }
 
-/** 整个文件写进去，不会写一半：同目录的临时文件，再 rename（同 pi-identity 的 writeWhole）。 */
-function writeWhole(path: string, text: string): void {
-	mkdirSync(dirname(path), { recursive: true });
-	const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-	writeFileSync(tmp, text, "utf8");
-	renameSync(tmp, path);
-}
-
 /**
  * 存一个身份的 about.md / notebook.md（整个文件）。拒绝：没有这个身份（unknown）、笔记本超上限
  * （over_cap）、about 超安全上限（too_big）、文件在读出 baseHash 之后被改过（changed）、写不进去（io）。
@@ -506,17 +557,24 @@ export function saveIdentityFile(
 	baseHash: string,
 	env: Env = process.env,
 	now: Date = new Date(),
+	settings: Settings = loadSettings(env),
 ): IdentityFileSave {
 	const def = identities.find((i) => i.id === id);
 	if (!def || typeof text !== "string") return { ok: false, code: "unknown" };
 	const size = Buffer.byteLength(text, "utf8");
-	if (file === "notebook" && size > NOTEBOOK_CAP) return { ok: false, code: "over_cap" };
-	if (file === "about" && size > ABOUT_MAX) return { ok: false, code: "too_big" };
+	if (file === "notebook" && size > settings.notebookCap) return { ok: false, code: "over_cap" };
+	if ((file === "about" || file === "config") && size > ABOUT_MAX) return { ok: false, code: "too_big" };
+	if (file === "prompt" && size > PROMPT_MAX) return { ok: false, code: "too_big" };
 	const path = identityFilePath(def, file);
 	let archived = 0;
 	try {
 		const current = readTextOrEmpty(path);
 		if (textHash(current) !== baseHash) return { ok: false, code: "changed" };
+		// identity-config: a role's settings are saved only when pi-identity would read every part of them.
+		if (file === "config") {
+			const checked = checkConfigText(text, def.id, def.dir, settings);
+			if (!checked.ok) return { ok: false, code: "invalid", problems: checked.problems };
+		}
 		if (file === "notebook") {
 			// Archive first: a failed archive refuses the save rather than lose the lines.
 			const dropped = droppedLines(current, text);

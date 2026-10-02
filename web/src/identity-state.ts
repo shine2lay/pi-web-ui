@@ -8,17 +8,22 @@
  *  - the one file open in Settings -> Identities (about.md or notebook.md): its text as it is on
  *    disk, its hash (goes back with the save, so a file changed meanwhile isn't overwritten) and the
  *    last save's answer. The draft being typed stays in the editor component.
+ *  - identity-config: the one role draft open (role-drafts/<id>/, waiting for the owner): its suggested
+ *    prompt, settings and reasons, its hash, and the answer to the last save, accept or discard. Opening
+ *    a draft closes the file editor and the other way round.
  *
  * Same pattern as tool-info-state.ts: module-level `cached` values + listeners +
  * `useSyncExternalStore`; the getters return stable references between changes.
  */
 import { useSyncExternalStore } from "react";
 import { appSend } from "./app-globals";
-import type { IdentityFileName, IdentitySaveError, ServerMessage, UiIdentityInfo } from "./types";
+import type { IdentityDraftAction, IdentityFileName, IdentitySaveError, ServerMessage, UiIdentityInfo } from "./types";
 
 export type IdentitiesPayload = Extract<ServerMessage, { type: "identities" }>;
 export type IdentityFilePayload = Extract<ServerMessage, { type: "identity_file" }>;
 export type IdentitySavedPayload = Extract<ServerMessage, { type: "identity_file_saved" }>;
+export type IdentityDraftPayload = Extract<ServerMessage, { type: "identity_draft" }>;
+export type IdentityDraftDonePayload = Extract<ServerMessage, { type: "identity_draft_done" }>;
 
 /** The identity list. loaded = the server has sent it at least once. */
 export interface IdentityListState {
@@ -40,8 +45,25 @@ export interface IdentityFileState {
 	error?: string;
 	/** A save is on its way. */
 	saving: boolean;
-	/** The last save's answer (cleared when the file is opened again). */
-	saved?: { ok: true } | { ok: false; code: IdentitySaveError };
+	/** The last save's answer (cleared when the file is opened again). identity-config: problems = why
+	 *  pi-identity would refuse the settings (code "invalid"). */
+	saved?: { ok: true } | { ok: false; code: IdentitySaveError; problems?: string[] };
+}
+
+/** identity-config: the role draft open in Settings -> Identities. */
+export interface IdentityDraftState {
+	id: string;
+	/** loading = asked, not back yet; ready = the draft as it is on disk; error = none waits (or unreadable). */
+	status: "loading" | "ready" | "error";
+	prompt?: string;
+	config?: string;
+	notes?: string;
+	hash?: string;
+	error?: string;
+	/** An action on its way. */
+	busy?: IdentityDraftAction;
+	/** The last action's answer. */
+	done?: { action: IdentityDraftAction; ok: boolean; code?: IdentitySaveError; problems?: string[] };
 }
 
 const EMPTY_LIST: IdentityListState = { identities: [], problems: [], loaded: false };
@@ -50,6 +72,9 @@ let list: IdentityListState = EMPTY_LIST;
 let open: IdentityFileState | null = null;
 /** The text of the save on its way (becomes the file's text when the server says ok). */
 let pendingText: string | null = null;
+/** identity-config: the draft open, and the texts of a draft save on its way. */
+let draft: IdentityDraftState | null = null;
+let pendingDraft: { prompt: string; config: string } | null = null;
 
 const listeners = new Set<() => void>();
 
@@ -76,6 +101,8 @@ export function requestIdentities(): void {
 export function openIdentityFile(id: string, file: IdentityFileName): void {
 	open = { id, file, status: "loading", saving: false };
 	pendingText = null;
+	draft = null;
+	pendingDraft = null;
 	notify();
 	appSend({ type: "identity_file_get", id, file });
 }
@@ -125,9 +152,84 @@ export function receiveIdentitySaved(payload: IdentitySavedPayload): void {
 	if (payload.ok && typeof payload.hash === "string" && pendingText !== null) {
 		open = { ...open, text: pendingText, hash: payload.hash, saving: false, saved: { ok: true } };
 	} else {
-		open = { ...open, saving: false, saved: { ok: false, code: payload.code ?? "io" } };
+		const problems = Array.isArray(payload.problems) ? { problems: payload.problems } : {};
+		open = { ...open, saving: false, saved: { ok: false, code: payload.code ?? "io", ...problems } };
 	}
 	pendingText = null;
+	notify();
+}
+
+/** identity-config: open a role's waiting draft (closes the file editor) and ask the server for it. */
+export function openIdentityDraft(id: string): void {
+	draft = { id, status: "loading" };
+	pendingDraft = null;
+	open = null;
+	pendingText = null;
+	notify();
+	appSend({ type: "identity_draft_get", id });
+}
+
+/** identity-config: close the draft. */
+export function closeIdentityDraft(): void {
+	if (draft === null) return;
+	draft = null;
+	pendingDraft = null;
+	notify();
+}
+
+/** identity-config: `identity_draft` from the server. Only the draft open counts. */
+export function receiveIdentityDraft(payload: IdentityDraftPayload): void {
+	if (!draft || draft.id !== payload.id) return;
+	if (typeof payload.error === "string" || typeof payload.hash !== "string") {
+		draft = { id: draft.id, status: "error", error: payload.error ?? "" };
+	} else {
+		draft = {
+			id: draft.id,
+			status: "ready",
+			prompt: payload.prompt ?? "",
+			config: payload.config ?? "",
+			notes: payload.notes ?? "",
+			hash: payload.hash,
+		};
+	}
+	pendingDraft = null;
+	notify();
+}
+
+/**
+ * identity-config: save the owner's edits to the draft, accept it as shown, or discard it. Does nothing
+ * while it isn't loaded or an action is on its way.
+ */
+export function sendIdentityDraftAction(action: IdentityDraftAction, prompt: string, config: string): boolean {
+	if (!draft || draft.status !== "ready" || draft.busy || typeof draft.hash !== "string") return false;
+	const { id, hash } = draft;
+	draft = { ...draft, busy: action, done: undefined };
+	pendingDraft = action === "save" ? { prompt, config } : null;
+	notify();
+	if (action === "discard") appSend({ type: "identity_draft_discard", id });
+	else {
+		const type = action === "accept" ? "identity_draft_accept" : "identity_draft_save";
+		appSend({ type, id, prompt, config, baseHash: hash });
+	}
+	return true;
+}
+
+/** identity-config: `identity_draft_done` from the server: a saved draft's texts are the draft now. */
+export function receiveIdentityDraftDone(payload: IdentityDraftDonePayload): void {
+	if (!draft || draft.id !== payload.id || draft.busy !== payload.action) return;
+	const done = {
+		action: payload.action,
+		ok: payload.ok === true,
+		...(payload.code ? { code: payload.code } : {}),
+		...(Array.isArray(payload.problems) ? { problems: payload.problems } : {}),
+	};
+	if (done.ok && payload.action === "save" && pendingDraft && typeof payload.hash === "string") {
+		draft = { ...draft, ...pendingDraft, hash: payload.hash, busy: undefined, done };
+	} else {
+		// Accepted or discarded: the draft is gone; the row says what happened until it's closed.
+		draft = { ...draft, busy: undefined, done };
+	}
+	pendingDraft = null;
 	notify();
 }
 
@@ -146,11 +248,17 @@ export function getIdentityFile(): IdentityFileState | null {
 	return open;
 }
 
+export function getIdentityDraft(): IdentityDraftState | null {
+	return draft;
+}
+
 /** Only for unit tests: back to the start (no notifications). */
 export function resetIdentityState(): void {
 	list = EMPTY_LIST;
 	open = null;
 	pendingText = null;
+	draft = null;
+	pendingDraft = null;
 }
 
 /** The identity list (re-renders when it changes). */
@@ -161,6 +269,11 @@ export function useIdentityList(): IdentityListState {
 /** The file open in Settings -> Identities (null = none). */
 export function useIdentityFile(): IdentityFileState | null {
 	return useSyncExternalStore(subscribeIdentities, getIdentityFile, getIdentityFile);
+}
+
+/** identity-config: the role draft open in Settings -> Identities (null = none). */
+export function useIdentityDraft(): IdentityDraftState | null {
+	return useSyncExternalStore(subscribeIdentities, getIdentityDraft, getIdentityDraft);
 }
 
 /** How many bytes a text takes in UTF-8 (what the notebook cap counts). */

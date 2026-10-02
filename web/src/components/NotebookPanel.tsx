@@ -32,6 +32,7 @@ const SAVE_ERROR_KEY: Record<IdentitySaveError, Parameters<Translate>[0]> = {
 	too_big: "identitySaveTooBig",
 	unknown: "identitySaveUnknown",
 	io: "identitySaveIo",
+	invalid: "identitySaveInvalid", // identity-config: settings only; a notebook save never gets it
 };
 
 function fmt(n: number): string {

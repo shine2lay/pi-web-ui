@@ -10,3 +10,5 @@ plugins/legado-web/client/app
 plugins/legado-web/server
 # 插件的运行期数据（书源/书架/进度）
 plugins/*/storage
+# identity-config: a byte-identical copy of pi-identity's config.ts (a unit test compares them), in its style
+server/identity-config.ts

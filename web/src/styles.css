@@ -16145,6 +16145,86 @@ button.source-default-toggle {
 	margin: 4px 0 0;
 	padding-left: 18px;
 }
+/* identity-config: a role's prompt, skills, tool limits, problems and its waiting draft */
+.identity-role-meta {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 18px;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+.identity-role-muted {
+	color: var(--text-faint);
+}
+.identity-role-skill {
+	font-family: var(--mono);
+	font-size: 11.5px;
+}
+.identity-role-unique {
+	padding: 0 6px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	font-size: 11px;
+}
+.identity-config-problems,
+.identity-editor-problems {
+	color: var(--red);
+	font-size: 12px;
+}
+.identity-config-problems ul,
+.identity-editor-problems {
+	margin: 4px 0 0;
+	padding-left: 18px;
+}
+.identity-draft-badge,
+.identity-drafts-count {
+	padding: 1px 8px;
+	border-radius: 999px;
+	background: var(--accent-soft);
+	color: var(--accent);
+	font-size: 11px;
+	font-weight: 500;
+	white-space: nowrap;
+}
+.identity-drafts-count {
+	margin-left: 6px;
+}
+.identity-draft {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 8px 10px;
+	border: 1px dashed var(--accent);
+	border-radius: 8px;
+}
+.identity-draft-hint {
+	margin: 0;
+}
+.identity-draft-label {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+.identity-draft-config.identity-editor-text {
+	min-height: 110px;
+}
+.identity-draft-notes {
+	font-size: 12px;
+	color: var(--text-dim);
+}
+.identity-draft-notes pre {
+	margin: 4px 0 0;
+	white-space: pre-wrap;
+	font-family: var(--mono);
+	font-size: 11.5px;
+}
+.identity-draft-accept.set-save-btn {
+	padding: 5px 14px;
+	font-size: 12.5px;
+}
 @media (max-width: 768px) {
 	.identity-picker {
 		font-size: 14px;

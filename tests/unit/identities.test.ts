@@ -52,6 +52,7 @@ import { buildUiSlots, CONV_IDENTITY_ENTRY_ID } from "../../web/src/ui-slots.js"
 type Proto = {
 	identityOf(this: unknown, conv: unknown): UiChatIdentity | undefined;
 	setChatIdentity(this: unknown, conversationId: unknown, sessionPath: unknown, identity: unknown): Promise<void>;
+	reloadForIdentity(this: unknown, conv: unknown): Promise<void>;
 	attachIdentities(this: unknown, rows: SessionSummary[], resend: () => void): Promise<void>;
 };
 const proto = ClientSession.prototype as unknown as Proto;
@@ -145,6 +146,12 @@ describe("the identity list", () => {
 			aboutSize: Buffer.byteLength("About temper\n"),
 			notebookSize: Buffer.byteLength("- #fact one\n"),
 			notebookCap: NOTEBOOK_CAP,
+			// identity-config: no prompt, skills or limits set (identity-config.test.ts covers them)
+			promptFile: "prompt.md",
+			promptSize: 0,
+			skills: [],
+			toolLimits: "none",
+			configProblems: [],
 		});
 		const ops = infos.find((i) => i.id === "ops");
 		expect(ops).toMatchObject({ aboutSize: 0, notebookSize: 0, notebookCap: NOTEBOOK_CAP });
@@ -324,6 +331,7 @@ describe("set and clear go through pi-identity's /identity", () => {
 				emitted.push(msg);
 			},
 			switchSession: vi.fn(async (_path: string) => {}),
+			reloadForIdentity: vi.fn(async (_conv: unknown) => {}),
 		};
 	}
 
@@ -346,6 +354,47 @@ describe("set and clear go through pi-identity's /identity", () => {
 		await proto.setChatIdentity.call(win, "c1", undefined, "nobody");
 		expect(chat.session.prompt.mock.calls).toEqual([["/identity rollcall"], ["/identity none"]]);
 		expect(win.switchSession).not.toHaveBeenCalled();
+		// identity-config: after each change the chat reloads once, so the role's skills load (or go) as real skills.
+		expect(win.reloadForIdentity.mock.calls).toEqual([[chat], [chat]]);
+	});
+
+	it("identity-config: the reload after a change, only when the chat isn't working, and a failure is only logged", async () => {
+		const calls: string[] = [];
+		const session = {
+			isStreaming: false,
+			reload: vi.fn(async () => {
+				calls.push("reload");
+			}),
+		};
+		const conv = { id: "c1", session, agentPreset: undefined };
+		const other = { id: "c2", session, agentPreset: undefined };
+		const win = {
+			disposed: false,
+			conv,
+			applyRetryOverrides: () => calls.push("retry"),
+			applyCompactionOverrides: () => calls.push("compaction"),
+			applyToolGating: (s: unknown) => calls.push(s === session ? "gating" : "gating?"),
+			pushSlashCommands: async () => {
+				calls.push("commands");
+			},
+			pushSettings: () => calls.push("settings"),
+		};
+		await proto.reloadForIdentity.call(win, conv);
+		expect(calls).toEqual(["reload", "retry", "compaction", "gating", "commands", "settings"]);
+		calls.length = 0;
+		await proto.reloadForIdentity.call(win, other);
+		expect(calls).toEqual(["reload", "retry", "compaction", "gating"]);
+		calls.length = 0;
+		session.isStreaming = true;
+		await proto.reloadForIdentity.call(win, conv);
+		expect(calls).toEqual([]);
+		session.isStreaming = false;
+		session.reload.mockRejectedValueOnce(new Error("boom"));
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		await proto.reloadForIdentity.call(win, conv);
+		expect(calls).toEqual([]);
+		expect(warn).toHaveBeenCalledWith("[identities] reloading the chat after its identity changed failed: boom");
+		warn.mockRestore();
 	});
 
 	it("a chat found by its file; a History chat is opened first", async () => {
@@ -429,9 +478,10 @@ describe("Settings: about.md and notebook.md", () => {
 });
 
 describe("the page", () => {
+	const role = { promptFile: "prompt.md", promptSize: 0, skills: [], toolLimits: "none", configProblems: [] };
 	const list: UiIdentityInfo[] = [
-		{ id: "temper", title: "temper", aboutSize: 10, notebookSize: 100, notebookCap: NOTEBOOK_CAP },
-		{ id: "rollcall", title: "RollCall", aboutSize: 10, notebookSize: 100, notebookCap: NOTEBOOK_CAP },
+		{ id: "temper", title: "temper", aboutSize: 10, notebookSize: 100, notebookCap: NOTEBOOK_CAP, ...role },
+		{ id: "rollcall", title: "RollCall", aboutSize: 10, notebookSize: 100, notebookCap: NOTEBOOK_CAP, ...role },
 	];
 	const t = (key: string) => key;
 

@@ -56,7 +56,13 @@ import { setAppGlobals, setAppSend } from "./app-globals";
 // 工具定义说明弹窗（工具卡右键 → 「显示工具详细信息」）：应答直接回模块级 store，
 // 不进 ChatState（弹窗挂在 App 上，消息列表里几十张卡片不必为此各拿一份数据）。
 import { receiveToolInfo } from "./tool-info-state";
-import { receiveIdentities, receiveIdentityFile, receiveIdentitySaved } from "./identity-state";
+import {
+	receiveIdentities,
+	receiveIdentityDraft,
+	receiveIdentityDraftDone,
+	receiveIdentityFile,
+	receiveIdentitySaved,
+} from "./identity-state";
 import { NOTEBOOK_TAB_REF, receiveNotebook, receiveNotebookSaved, resendNotebookWatch } from "./notebook-state";
 import { emitPluginData } from "./plugin-loader";
 import { ingestPluginLogsData } from "./plugin-logs";
@@ -2043,6 +2049,13 @@ export function useChat() {
 					// identity-notebook-tab: the Notebook tab's saves carry its ref; Settings' don't.
 					if (msg.ref === NOTEBOOK_TAB_REF) receiveNotebookSaved(msg);
 					else receiveIdentitySaved(msg);
+					break;
+				// identity-config: a role's waiting draft, and the answer to its save / accept / discard.
+				case "identity_draft":
+					receiveIdentityDraft(msg);
+					break;
+				case "identity_draft_done":
+					receiveIdentityDraftDone(msg);
 					break;
 				case "identity_notebook":
 					receiveNotebook(msg);

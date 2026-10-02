@@ -6992,9 +6992,33 @@ export class ClientSession {
 		} catch (err) {
 			console.warn(`[identities] ${line}: ${err instanceof Error ? err.message : String(err)}`);
 		}
+		await this.reloadForIdentity(conv);
 		// The entry is in memory now (a blank chat writes its file with the first reply): the labels change
 		// here, not at the next disk refresh.
 		ClientSession.emitConversationsToAll();
+	}
+
+	/** identity-config: a role's own skills reach its chats through pi's resource discovery, which ran when
+	 *  the chat started, before it had the role. So after an identity change the chat reloads once, like after
+	 *  a settings change: pi-identity then hands pi the role's skill folders (and none once the role is gone),
+	 *  and they load as real skills. Not while the chat is working; pi-identity's prompt lists them then. */
+	private async reloadForIdentity(conv: Conversation): Promise<void> {
+		const session = conv.session;
+		if (this.disposed || session.isStreaming) return;
+		try {
+			await session.reload();
+			this.applyRetryOverrides();
+			this.applyCompactionOverrides();
+			this.applyToolGating(session, conv.agentPreset);
+			if (conv === this.conv) {
+				await this.pushSlashCommands();
+				this.pushSettings();
+			}
+		} catch (err) {
+			console.warn(
+				`[identities] reloading the chat after its identity changed failed: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
 	}
 
 	/** Resolve a browser-bridged dialog (select/confirm/input) for this session. */

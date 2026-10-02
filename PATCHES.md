@@ -72,6 +72,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | identity-notebook-tab        | `local`        | `server/notebook-watch.ts` (new), `identities.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (30), `web/src/notebook-state.ts` + `components/NotebookPanel.tsx` (new), `RightPanel.tsx`, `App.tsx`, `SettingsModal.tsx`, `IdentitiesSettings.tsx`, `ui-slots.ts`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `scripts/sealed.sh`, `tests/identity-notebook-test.mjs` (new), `tests/unit/` |
 | queue-grouping               | `local`        | `server/queue-groups.ts` (new), `agent-service.ts`, `client-state.ts`, `protocol.ts`, `protocol-version.ts` (31), `web/src/conv-groups.ts`, `queue-folds.ts` (new), `components/LeftPanel.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/queue-grouping-test.mjs` (new), `tests/unit/queue-groups.test.ts` (new), `conv-groups.test.ts`, `docs/directory-reference.md` |
 | new-chat-default             | `local`        | `server/new-chat-model.ts` (new), `agent-service.ts`, `web/src/i18n.tsx`, `tests/unit/new-chat-model.test.ts` (new) |
+| identity-config              | `local`        | `server/identity-config.ts` (new, pi-identity's `config.ts` copied byte for byte), `identity-roles.ts` (new), `identities.ts`, `index.ts`, `agent-service.ts` (`reloadForIdentity`), `protocol.ts`, `protocol-version.ts` (32), `web/src/identity-state.ts`, `components/IdentitiesSettings.tsx`, `NotebookPanel.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `.prettierignore`, `tests/identity-config-test.mjs` (new), `tests/unit/identity-config.test.ts` (new), `tests/unit/identities.test.ts` |
 
 ---
 
@@ -4232,3 +4233,82 @@ then the global default. pi-queue also started each task's chat on the queue cha
 - If upstream changes `newChat`'s carry-over (`prevModel`, `prevThinking`), the runtime factory's blank-chat
   model or `restoreProjectModelForCwd`, keep the order: the global default first, then the folder's memory.
   Without a global default, keep upstream's.
+
+## identity-config
+
+**Status**: `local`
+**Baseline**: v0.96.1 (on top of `identity-notebook-tab`)
+
+**Why** (owner, 2026-10-01, queue task #39): roles get their own prompt, their own skills and their own
+tool limits, and "Lets make this configurable and modular so we dont change the code to change but a
+config file". So a role is set by files: its `identity.json` (`prompt`, `skills {own, shared}`,
+`tools {allow, deny}`, `unique`) and one shared file, `~/.pi/agent/pi-identity.json` (notebook cap, tidy
+threshold, tool groups, the always-allowed tools, the shared role-skills folder). pi-identity applies the
+prompt and skills, pi-worktree the tool limits and the rule that a role's settings, about page and
+prompt are the owner's (no chat may change them, not even the role's own). pi-web-ui is where the owner
+sees and edits all of it, and where suggested prompts (drafts) wait for the owner to accept them.
+
+### Changes
+
+1. **One reading of the settings** (`server/identity-config.ts`, new): pi-identity's `config.ts`, copied
+   byte for byte (prettier skips it), so Settings refuses exactly what pi-identity would refuse. The unit
+   test compares the two files when pi-identity's checkout is there (`PI_IDENTITY_SRC`, else
+   `~/projects/pi-identity/config.ts`).
+2. **A role's parts** (`server/identity-roles.ts`, new; `identities.ts`): each `identities` row also carries
+   its prompt file and size (or `promptOff` for `"prompt": null`), its skills (its own `skills/` folder
+   and the shared ones it names, read with pi's own `loadSkillsFromDir`), its tool limits in words,
+   `unique`, and `configProblems` (what pi-identity leaves out of its identity.json, one line each; the rest
+   of the role still works). Problems in `pi-identity.json` show at the top of the page. The server logs a
+   role's problems once when they show up: `[identities] <id>'s settings: <problem>`. The notebook cap is
+   the shared file's `notebookCap` (default 8,000).
+3. **The owner's editors** (`identities.ts`, `index.ts`): `identity_file_get/save` also take `prompt` (the
+   file the settings name, default `prompt.md`, up to 32,000 bytes) and `config` (the whole identity.json).
+   A settings save is refused with code `invalid` and `problems` unless pi-identity would read every part
+   of it, its `id` stays the folder's name and every file it names exists; the log says
+   `[identities] refused the owner's <id> settings: ...`. Saves are the server's own writes (atomic), not
+   agent tool calls, so pi-worktree's owner-only rule doesn't apply to them.
+4. **Drafts** (`identity-roles.ts`, `index.ts`): a draft waits in `role-drafts/<id>/` next to the
+   identities folder (`PI_ROLE_DRAFTS_DIR` overrides): `prompt.md`, `config.json` (only the fields a role's
+   settings add: prompt, skills, tools, unique) and `notes.md` (why). Rows carry `draft {promptSize,
+   fields}`. `identity_draft_get` -> `identity_draft`; `identity_draft_save` / `identity_draft_accept` /
+   `identity_draft_discard` -> `identity_draft_done`. Accepting writes the prompt into the role's prompt
+   file (an old prompt with other words goes to the role's `archive/` first) and merges the settings into
+   its identity.json, checked like a settings save; then the draft moves to `role-drafts/.old/` (kept).
+   A draft that changed since it was opened is refused (`changed`). Discarding moves it to `.old/` too.
+   Logs: `[identities] the owner accepted the draft for <id>: its prompt into prompt.md; tools, skills
+   into identity.json`, `refused the draft for <id>: ...`, `the owner discarded the draft for <id>`.
+5. **Settings -> Identities** (`IdentitiesSettings.tsx`, `identity-state.ts`, `use-chat.ts`): each row shows
+   the prompt, skills (shared ones marked), tool limits, "One chat at a time" for `unique`, and what was left
+   out of its settings. Buttons open about.md, notebook.md, the prompt and the settings in the same editor;
+   a refused save lists the reasons. "Draft waiting" shows on a row and as a count in the header; "View
+   draft" opens its prompt and settings (both editable), its reasons, and Accept / Save draft / Discard.
+   A note says these reach a role's chats at their next start or compaction, tool limits at the next start,
+   and that only the owner can change them. The Notebook tab knows the `invalid` answer too.
+6. **Skills in a chat that just got its role** (`agent-service.ts`, `reloadForIdentity`): pi hands a chat
+   its skills when it starts, before "Start as" or the chat menu gave it a role. After `/identity` the
+   chat reloads once, like after a settings change (not while it's working), so pi-identity can hand pi
+   the role's skill folders (or none once the role is gone) and they load as real skills.
+7. Protocol 32. English strings in `i18n.tsx`, translated in all 8 `locales/*.json`; styles
+   `.identity-role-*`, `.identity-draft*`, `.identity-config-problems`, `.identity-editor-problems`.
+
+### How it was checked
+
+- `tests/unit/identity-config.test.ts`: the copied config file matches pi-identity's; a row's prompt,
+  skills, limits and problems; broken parts left out and logged once; the shared settings file (cap,
+  groups, its own problems); settings saves refused with reasons and saved when good; the prompt file
+  (named one, too big); drafts listed, read, saved, accepted (prompt, archive, merged settings, `.old/`),
+  refused (bad fields, changed since read) and discarded; the client's draft store and the row's view.
+  `tests/unit/identities.test.ts` updated for the new row fields.
+- `tests/identity-config-test.mjs` (sealed browser test, no model asked): the rows' prompt, skills, limits
+  and problems, "Draft waiting" on rows and in the header; the settings editor refuses bad settings with
+  each reason (file hash unchanged, log line) and saves good ones (row updated); a draft opened, its
+  prompt edited and accepted (prompt written, old one archived, settings merged, draft in `.old/`, row
+  updated, log line); a bad draft refused with its reason (nothing written), then discarded.
+- check.sh, the build and the full sealed suite; live, a throwaway role (prompt, own skill, `deny bash`).
+
+### When syncing
+
+- `server/identity-config.ts` is pi-identity's file: after changing pi-identity's `config.ts`, copy it over
+  (the unit test fails until they match).
+- If upstream changes `session.reload()` or `applyToolGating`, keep `reloadForIdentity` doing what a
+  settings reload does, for the one chat whose role changed.

@@ -77,10 +77,12 @@ import { SchedulerStore } from "./scheduler-tasks.js";
 import {
 	identityInfos,
 	identityRegistry,
+	isIdentityFileName,
 	readIdentityFile,
 	saveIdentityFile,
 	scheduleMemoryReindex,
 } from "./identities.js";
+import { acceptDraft, discardDraft, readDraft, saveDraft, type DraftResult } from "./identity-roles.js";
 import { NotebookWatch } from "./notebook-watch.js";
 import { initHttpProxy } from "./http-proxy.js";
 import { globalLspPool } from "./lsp-tool.js";
@@ -1834,8 +1836,27 @@ function pushSchedulerTasks(): void {
 
 /** identities：身份表（Settings → Identities、左栏菜单和空白对话页的选择器用）。force 立即重读文件夹。 */
 function identitiesMessage(force = false): ServerMessage {
-	const { identities, problems } = identityRegistry(force);
-	return { type: "identities", identities: identityInfos(identities), problems };
+	const { identities, problems, settings, draftsDir, drafts } = identityRegistry(force);
+	// identity-config: each row also says its prompt, skills, tool limits, problems and a waiting draft.
+	return {
+		type: "identities",
+		identities: identityInfos(identities, settings, { dir: draftsDir, ids: drafts }),
+		problems,
+	};
+}
+
+/** identity-config: the answer to a draft's save, accept or discard. */
+function draftDone(id: string, action: "save" | "accept" | "discard", r: DraftResult): ServerMessage {
+	return r.ok
+		? { type: "identity_draft_done", id, action, ok: true, ...(r.hash ? { hash: r.hash } : {}) }
+		: {
+				type: "identity_draft_done",
+				id,
+				action,
+				ok: false,
+				code: r.code,
+				...(r.problems ? { problems: r.problems } : {}),
+			};
 }
 
 /** identities：存盘之后把新的身份表（笔记本大小变了）推给所有在线客户端。 */
@@ -2393,9 +2414,11 @@ wss.on("connection", (ws) => {
 				break;
 			case "identity_file_get": {
 				// identities: open about.md / notebook.md in the Settings editor.
-				const file = msg.file === "about" || msg.file === "notebook" ? msg.file : null;
+				// identity-config: also its prompt and its settings (identity.json).
+				const file = isIdentityFileName(msg.file) ? msg.file : null;
 				if (typeof msg.id !== "string" || !file) break;
-				const r = readIdentityFile(identityRegistry(true).identities, msg.id, file);
+				const reg = identityRegistry(true);
+				const r = readIdentityFile(reg.identities, msg.id, file, reg.settings);
 				send(
 					r.ok
 						? {
@@ -2413,18 +2436,41 @@ wss.on("connection", (ws) => {
 			}
 			case "identity_file_save": {
 				// identities: save the whole file (refused over the notebook's cap, or when it changed since it was read).
-				const file = msg.file === "about" || msg.file === "notebook" ? msg.file : null;
+				// identity-config: its settings are refused (code "invalid", with the problems) when pi-identity
+				// wouldn't read every part of them.
+				const file = isIdentityFileName(msg.file) ? msg.file : null;
 				if (typeof msg.id !== "string" || !file || typeof msg.text !== "string" || typeof msg.baseHash !== "string") {
 					break;
 				}
-				const r = saveIdentityFile(identityRegistry(true).identities, msg.id, file, msg.text, msg.baseHash);
+				const reg = identityRegistry(true);
+				const r = saveIdentityFile(
+					reg.identities,
+					msg.id,
+					file,
+					msg.text,
+					msg.baseHash,
+					process.env,
+					new Date(),
+					reg.settings,
+				);
 				// identity-notebook-tab: the ref comes back, so the Notebook tab knows the answer is its own.
 				const ref = typeof msg.ref === "string" && msg.ref.length <= 64 ? { ref: msg.ref } : {};
 				send(
 					r.ok
 						? { type: "identity_file_saved", id: msg.id, file, ok: true, hash: r.hash, size: r.size, ...ref }
-						: { type: "identity_file_saved", id: msg.id, file, ok: false, code: r.code, ...ref },
+						: {
+								type: "identity_file_saved",
+								id: msg.id,
+								file,
+								ok: false,
+								code: r.code,
+								...(r.problems ? { problems: r.problems } : {}),
+								...ref,
+							},
 				);
+				if (!r.ok && r.problems) {
+					console.log(`[identities] refused the owner's ${msg.id} settings: ${r.problems.join("; ")}`);
+				}
 				if (r.ok) {
 					if (file === "notebook") {
 						console.log(
@@ -2432,9 +2478,79 @@ wss.on("connection", (ws) => {
 								(r.archived ? `, ${r.archived} removed or changed line${r.archived === 1 ? "" : "s"} archived` : ""),
 						);
 						notebookWatch.check(); // other windows' tabs now, not at the next tick
+					} else if (file === "prompt" || file === "config") {
+						const what = file === "prompt" ? "prompt" : "settings";
+						console.log(`[identities] the owner saved the ${msg.id} ${what}: ${r.size} characters`);
 					}
 					pushIdentities();
 					scheduleMemoryReindex();
+				}
+				break;
+			}
+			case "identity_draft_get": {
+				// identity-config: a role's waiting draft (its suggested prompt, settings and reasons).
+				if (typeof msg.id !== "string") break;
+				const d = readDraft(identityRegistry(true).draftsDir, msg.id);
+				send(
+					d
+						? { type: "identity_draft", id: msg.id, prompt: d.prompt, config: d.config, notes: d.notes, hash: d.hash }
+						: { type: "identity_draft", id: msg.id, error: `No draft waits for "${msg.id}"` },
+				);
+				break;
+			}
+			case "identity_draft_save":
+			case "identity_draft_accept": {
+				// identity-config: save the owner's edits to a draft, or accept it as shown. Accepting writes its
+				// prompt and settings into the role's folder (an app save; no chat can write there).
+				if (
+					typeof msg.id !== "string" ||
+					typeof msg.prompt !== "string" ||
+					typeof msg.config !== "string" ||
+					typeof msg.baseHash !== "string"
+				) {
+					break;
+				}
+				const reg = identityRegistry(true);
+				const action = msg.type === "identity_draft_accept" ? "accept" : "save";
+				const def = reg.identities.find((i) => i.id === msg.id);
+				let r: DraftResult;
+				if (action === "save") r = saveDraft(reg.draftsDir, msg.id, msg.prompt, msg.config, msg.baseHash);
+				else if (!def) r = { ok: false, code: "unknown" };
+				else {
+					r = acceptDraft(
+						{ id: def.id, dir: def.dir, raw: def.raw },
+						reg.draftsDir,
+						msg.prompt,
+						msg.config,
+						msg.baseHash,
+						reg.settings,
+					);
+				}
+				send(draftDone(msg.id, action, r));
+				if (r.ok && action === "accept") {
+					const parts = [
+						...(r.promptFile ? [`its prompt into ${r.promptFile}`] : []),
+						...(r.fields?.length ? [`${r.fields.join(", ")} into identity.json`] : []),
+					];
+					console.log(
+						`[identities] the owner accepted the draft for ${msg.id}` +
+							(parts.length ? `: ${parts.join("; ")}` : " (it changed nothing)"),
+					);
+					scheduleMemoryReindex();
+				} else if (!r.ok && r.problems) {
+					console.log(`[identities] refused the draft for ${msg.id}: ${r.problems.join("; ")}`);
+				}
+				if (r.ok) pushIdentities();
+				break;
+			}
+			case "identity_draft_discard": {
+				// identity-config: the owner doesn't want this draft; it moves to role-drafts/.old/ (kept, in case).
+				if (typeof msg.id !== "string") break;
+				const r = discardDraft(identityRegistry(true).draftsDir, msg.id);
+				send(draftDone(msg.id, "discard", r));
+				if (r.ok) {
+					console.log(`[identities] the owner discarded the draft for ${msg.id}`);
+					pushIdentities();
 				}
 				break;
 			}
