@@ -3528,11 +3528,12 @@ probe below is historical, not current). This UI neither buys credits nor enable
    - Refusals: `after_provider_response` notes HTTP status (SSE); WebSockets provide error text.
      Only tier/allowance refusals trigger temporary **Standard** for 15 minutes, with a short sanitized
      reason. Auth, network, context-length and unrelated errors remain ordinary errors. A run-level
-     fallback latch and retry-used flag prevent the selected tier returning partway through a run or
-     repeated retries. The selected mode is never overwritten by a refusal.
+     fallback latch and retry-used flag prevent automatic re-entry partway through a run or repeated
+     retries. An explicit owner selection can clear the latch, but never resets the once-per-run retry
+     budget. The selected mode is never overwritten by a refusal.
    - Acceptance is separate from requesting a tier. Prefer retained `service_tier` / `serviceTier`
-     reply metadata when present. The current SDK drops it, so GPT-6 shows **requested / unconfirmed**,
-     not a false success. A returned downgrade causes temporary Standard without retrying a successful
+     reply metadata when present. The current SDK drops it, so GPT-6 remains **requested / unconfirmed**
+     internally; the selector shows the requested setting, not a confirmation claim. A returned downgrade causes temporary Standard without retrying a successful
      reply. `fastPriceTells` remains a legacy GPT-5-only downgrade signal (<1.5 cost multiplier);
      **never infer accepted GPT-6 speed from price**.
    - The one retry: at `agent_before_settle` the extension hides the refused reply from the model (a
@@ -3546,10 +3547,15 @@ probe below is historical, not current). This UI neither buys credits nor enable
      as Fast, false/absent as Standard; invalid explicit modes fail to Standard. Session-id binding
      makes copies Standard. Existing files are not rewritten. New/queue/helper chats have no opt-in.
      A saved Ultrafast selection becomes effective Standard on other models and returns on Astra.
+     Every explicit selection advances a revision. Each request captures its revision, so a delayed
+     refusal or tier confirmation from the old selection cannot cool down, retry or confirm the new
+     choice—even after switching away and back to the same mode.
 2. **Server wiring** (`server/agent-service.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` 35
    → 36 for the explicit-mode command):
    - `set_fast_mode {mode, conversationId}` → `ClientSession.setFastMode`: validates mode, conversation
-     identity, current model and idle state server-side before saving. A selection clears cooldown;
+     identity and current model server-side before saving. Like model/thinking, a choice can be made
+     while the agent runs: it applies at the next provider request, never alters an in-flight request,
+     and does not interrupt or replay work. A selection clears cooldown and stale pending fallback;
      Standard then Ultrafast retries intentionally. No DSH handler. Old boolean commands are rejected.
    - `UiFastMode {mode, effective, ultrafastAvailable, confirmedMode?, coolingUntil?, reason?}` or null
      on unsupported providers/models. Always present in light state (snapshot deltas merge shallowly).
@@ -3563,10 +3569,12 @@ probe below is historical, not current). This UI neither buys credits nor enable
    `ui-slots.ts`, `SettingsModal.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`):
    - A new host action `host:composer-fast` (order 135, between the thinking picker and the DSH
      controls), so Layout settings can move or hide it; Settings lists it for pi chats only.
-   - One compact chip shows effective speed, **Standard · now** during fallback or **?** when requested
-     but unconfirmed. Opens a labelled radio group with allowance/credit costs, requirements, retry time
-     and official help. Native radio keyboard controls; Escape/outside closes, focus returns to trigger.
-     Disabled during streaming, disconnection or without a conversation id.
+   - One compact chip shows requested speed, or **Standard · now** during temporary fallback. Opens
+     a labelled radio group. Owner follow-up (2026-10-02): remove allowance/credit, eligibility and
+     confirmation commentary, help link and question-mark suffix. Actual fallback reason/retry time
+     remains visible; no false provider-confirmation claim is added. Native radio keyboard controls;
+     Escape/outside closes, focus returns to trigger. Disabled only when disconnected or without a
+     conversation id, not during streaming or tool work.
    - Phone: same selector with visible speed text and 44px touch target; panel stays inside the composer.
 4. **Tests, tools and docs**: `tests/lib/mock-model.mjs` can refuse a request (`{ httpStatus, error }`);
    `tests/unit/ui-slots.test.ts` expects the new host action; `docs/directory-reference.md` lists
@@ -3584,8 +3592,9 @@ copied sessions, independent chats, manual/automatic model switches, cooldown ex
 completed tools, once-only retry, unrelated errors, and returned-vs-unconfirmed state.
 `tests/unit/fast-mode-transport.test.ts` drives the installed SDK against loopback HTTP/SSE and persistent
 WebSockets: Standard → priority → ultrafast → Standard, with one reused socket and no logged payloads.
-UI unit tests cover radios, usage help, requested/confirmed state and Escape. The sealed browser check
-covers desktop/phone controls, invalid/stale/streaming commands, reload/reopen/restart persistence,
+UI unit tests cover radios, absence of warning/help copy, fallback state and Escape. The sealed browser
+check covers desktop/phone controls, invalid/stale commands, next-request selection during streaming,
+unchanged in-flight responses, reload/reopen/restart persistence,
 refusal and tool-boundary retry, cross-chat isolation, unsupported models and screenshots. No live chats
 are switched. Live acceptance, if unverified, must be reported explicitly rather than inferred.
 

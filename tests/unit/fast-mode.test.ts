@@ -102,6 +102,57 @@ describe("validated per-chat speed", () => {
 	});
 });
 
+describe("speed changes between requests", () => {
+	it.each(modes)("selects %s during a request without changing that request or accepting stale feedback", (mode) => {
+		const { reg, sm } = setup(),
+			inflight = request(reg, sm);
+		reg.setMode(sm, mode);
+		expect(inflight?.service_tier).toBe("ultrafast");
+		expect(reg.view(sm, ASTRA)?.mode).toBe(mode);
+		// Even reselecting the same tier is a new choice; old metadata cannot confirm or cool it.
+		expect(reg.noteReplySpeed(sm, { ...ok(), service_tier: "default" }, ASTRA)).toBeNull();
+		expect(reg.view(sm, ASTRA)?.confirmedMode).toBeUndefined();
+		expect(reg.view(sm, ASTRA)?.coolingUntil).toBeUndefined();
+		reg.noteMessageEnd(sm, ok());
+		expect(request(reg, sm)?.service_tier).toBe(
+			mode === "standard" ? undefined : mode === "fast" ? "priority" : "ultrafast",
+		);
+	});
+	it("ignores a delayed refusal after switching away and back to the same speed", () => {
+		const { reg, sm } = setup();
+		request(reg, sm);
+		reg.setMode(sm, "standard");
+		reg.setMode(sm, "ultrafast");
+		reg.noteResponse(sm, 400);
+		expect(reg.noteMessageEnd(sm, failure())).toBeNull();
+		expect(reg.takeRefused(sm)).toBeUndefined();
+		expect(reg.view(sm, ASTRA)?.effective).toBe("ultrafast");
+		expect(reg.view(sm, ASTRA)?.coolingUntil).toBeUndefined();
+		expect(request(reg, sm)?.service_tier).toBe("ultrafast");
+	});
+	it("an explicit choice clears an old pending retry and fallback without waiting for settle", () => {
+		const { reg, sm } = setup();
+		request(reg, sm);
+		reg.noteMessageEnd(sm, failure());
+		reg.setMode(sm, "fast");
+		expect(reg.takeRefused(sm)).toBeUndefined();
+		expect(reg.view(sm, ASTRA)?.effective).toBe("fast");
+		expect(reg.view(sm, ASTRA)?.coolingUntil).toBeUndefined();
+		expect(request(reg, sm)?.service_tier).toBe("priority");
+	});
+	it("changing speed does not grant another automatic retry in the same run", () => {
+		const { reg, sm } = setup();
+		request(reg, sm);
+		reg.noteMessageEnd(sm, failure());
+		reg.takeRefused(sm);
+		reg.noteRetrying(sm);
+		reg.setMode(sm, "fast");
+		request(reg, sm);
+		reg.noteMessageEnd(sm, failure());
+		expect(reg.takeRefused(sm)).toBeUndefined();
+	});
+});
+
 describe("storage compatibility and copy safety", () => {
 	it("legacy on=true stays Fast; absent, invalid or foreign data fail to Standard", () => {
 		expect(readFastModeFromSession(session())).toBe("standard");

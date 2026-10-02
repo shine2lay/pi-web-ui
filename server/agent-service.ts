@@ -13979,22 +13979,16 @@ export class ClientSession {
 		this.flushSnapshot();
 	}
 
-	/** Per-chat speed, fenced against stale tabs and in-flight model/tool work. */
+	/** Per-chat speed for the next request, like model/thinking; never alters an in-flight request. */
 	setFastMode(mode: unknown, conversationId: unknown): void {
 		const conv = this.conv;
 		if (!conv || conversationId !== conv.id) return;
-		if (
-			!isChatSpeed(mode) ||
-			!speedSupported(conv.session.agent.state.model, mode) ||
-			conv.session.isStreaming ||
-			!conv.session.isIdle ||
-			(conv.sendsInFlight ?? 0) > 0
-		) {
+		if (!isChatSpeed(mode) || !speedSupported(conv.session.agent.state.model, mode)) {
 			this.emit({
 				type: "notice",
 				level: "warning",
-				text: "Speed unchanged: wait until this chat is idle and select a supported speed.",
-				textEn: "Speed unchanged: wait until this chat is idle and select a supported speed.",
+				text: "Speed unchanged: select a supported speed.",
+				textEn: "Speed unchanged: select a supported speed.",
 			});
 			this.flushSnapshot();
 			return;

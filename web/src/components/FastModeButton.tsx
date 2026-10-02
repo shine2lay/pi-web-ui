@@ -55,8 +55,8 @@ export const FastModeButton = memo(function FastModeButton({
 		: supported
 			? ""
 			: fast.reason;
-	const unconfirmed = effective !== "standard" && fast.confirmedMode !== effective;
-	const tip = `${label(effective)}${temporary ? ` — ${t("speedTemporary")}: ${reason}` : unconfirmed ? ` — ${t("speedUnconfirmed")}` : ""}`;
+	// This is the selected request setting, not a claim about the provider's returned tier.
+	const tip = `${label(effective)}${temporary ? ` — ${t("speedTemporary")}: ${reason}` : ""}`;
 	return (
 		<div
 			className="speed-control"
@@ -86,7 +86,7 @@ export const FastModeButton = memo(function FastModeButton({
 				</span>
 				<span className="fast-label">
 					{label(effective)}
-					{temporary ? " · now" : unconfirmed ? " ?" : ""}
+					{temporary ? " · now" : ""}
 				</span>
 			</button>
 			{open && (
@@ -115,17 +115,6 @@ export const FastModeButton = memo(function FastModeButton({
 							{t("speedTemporary")}: {reason}
 						</p>
 					)}
-					<p>{fast.confirmedMode ? t("speedConfirmed", { mode: label(fast.confirmedMode) }) : t("speedUnconfirmed")}</p>
-					<p>{t("fastTip")}</p>
-					{fast.ultrafastAvailable && (
-						<>
-							<p>{t("speedUltraUsage")}</p>
-							<p>{t("speedEligibility")}</p>
-						</>
-					)}
-					<a href="https://developers.openai.com/codex/speed" target="_blank" rel="noreferrer">
-						{t("speedLearnMore")}
-					</a>
 				</div>
 			)}
 		</div>

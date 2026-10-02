@@ -28,7 +28,7 @@ const srv = await ownServer({
 				httpStatus: 400,
 				error: { message: "Unsupported service_tier ultrafast", type: "invalid_request_error", param: "service_tier" },
 			};
-		if (token === "FM-SLOW") return { text: `ANSWER ${token}`, stream: { everyMs: 150, pieceChars: 1 } };
+		if (token === "FM-SLOW") return { text: `ANSWER ${token}`, stream: { everyMs: 300, pieceChars: 1 } };
 		return `ANSWER ${token}`;
 	},
 	prepare: async ({ agentDir }) => {
@@ -149,10 +149,12 @@ try {
 	await openMenu();
 	check("three accessible speed choices", (await page.locator(`${MENU} input[type=radio]`).count()) === 3);
 	check(
-		"usage and eligibility help",
+		"compact selector has no warning or help text",
 		await page
 			.locator(MENU)
-			.evaluate((el) => ["2.5×", "8×", "6×", "Pro $500", "unconfirmed"].every((text) => el.textContent.includes(text))),
+			.evaluate(
+				(el) => !el.querySelector("p, a") && !/2\.5×|8×|6×|Pro \$500|unconfirmed|credits/i.test(el.textContent),
+			),
 	);
 	await shot("desktop-standard");
 	await page.keyboard.press("Escape");
@@ -178,11 +180,22 @@ try {
 	check("invalid wire mode cannot change speed", (await state()).speed?.mode === "ultrafast");
 	await page.locator(TA).fill("hello FM-SLOW");
 	await page.keyboard.press("Enter");
-	check("stream started", await until(async () => (await state()).streaming === true));
-	check("selector disabled during streaming", await page.locator(CHIP).isDisabled());
-	await wire("standard", firstId);
+	check("stream started", await until(async () => (await state()).streaming === true && tiers.has("FM-SLOW")));
+	check("selector stays enabled during streaming", await page.locator(CHIP).isEnabled());
+	await choose("fast");
+	check("server saves speed while the response is still running", (await state()).streaming === true);
 	await idle();
-	check("server also refuses mid-stream change", (await state()).speed?.mode === "ultrafast");
+	tierCheck("FM-SLOW", ["ultrafast"]);
+	check(
+		"speed selection did not abort or replay the current response",
+		await page.evaluate(() => {
+			const text = document.querySelector(".messages")?.textContent ?? "";
+			return (text.match(/ANSWER FM-SLOW/g) ?? []).length === 1;
+		}),
+	);
+	await send("FM-NEXT");
+	tierCheck("FM-NEXT", ["priority"]);
+	await choose("ultrafast");
 
 	await page.reload();
 	await page.waitForSelector(TA);

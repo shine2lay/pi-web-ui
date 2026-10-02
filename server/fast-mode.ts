@@ -169,9 +169,11 @@ function returnedMode(tier: unknown): ChatSpeed | undefined {
 }
 interface FastState {
 	mode: ChatSpeed;
+	selectionRevision: number;
 	coolingUntil?: number;
 	reason?: string;
 	inflightMode?: ChatSpeed;
+	inflightSelectionRevision?: number;
 	inflightModel?: unknown;
 	inflightStatus?: number;
 	confirmedMode?: ChatSpeed;
@@ -194,7 +196,7 @@ export class FastModeRegistry {
 		if (!id) return undefined;
 		let s = this.states.get(id);
 		if (!s) {
-			s = { mode: readFastModeFromSession(sm) };
+			s = { mode: readFastModeFromSession(sm), selectionRevision: 0 };
 			this.states.set(id, s);
 			if (this.states.size > 2000)
 				for (const [key, v] of this.states) {
@@ -212,6 +214,10 @@ export class FastModeRegistry {
 		if (!s) return;
 		Object.assign(s, {
 			mode: isChatSpeed(mode) ? mode : "standard",
+			selectionRevision: s.selectionRevision + 1,
+			// Explicit choices supersede old feedback/retries, not the request already on the wire.
+			runFallback: false,
+			refused: undefined,
 			coolingUntil: undefined,
 			reason: undefined,
 			confirmedMode: undefined,
@@ -244,6 +250,7 @@ export class FastModeRegistry {
 		const s = this.state(sm);
 		if (!s) return undefined;
 		s.inflightMode = undefined;
+		s.inflightSelectionRevision = undefined;
 		s.inflightStatus = undefined;
 		s.inflightModel = undefined;
 		s.confirmedMode = undefined;
@@ -259,6 +266,7 @@ export class FastModeRegistry {
 			return undefined;
 		const mode = this.view(sm, model)?.effective ?? "standard";
 		s.inflightMode = mode;
+		s.inflightSelectionRevision = s.selectionRevision;
 		s.inflightModel = model?.id;
 		const tier = fastTierFor(String(model?.id), mode);
 		if (tier) return { ...body, service_tier: tier };
@@ -284,6 +292,7 @@ export class FastModeRegistry {
 			m.stopReason === "error" ||
 			m.stopReason === "aborted" ||
 			!s?.inflightMode ||
+			s.inflightSelectionRevision !== s.selectionRevision ||
 			s.inflightModel !== id ||
 			(typeof m.model === "string" && m.model !== id)
 		)
@@ -311,10 +320,14 @@ export class FastModeRegistry {
 			s = this.state(sm);
 		if (m?.role !== "assistant" || !s) return null;
 		const mode = s.inflightMode,
-			status = s.inflightStatus;
+			status = s.inflightStatus,
+			selectionRevision = s.inflightSelectionRevision;
 		s.inflightMode = undefined;
+		s.inflightSelectionRevision = undefined;
 		s.inflightStatus = undefined;
-		if (!mode || mode === "standard" || m.stopReason !== "error") return null;
+		// A delayed refusal of the previous choice must not disable or retry the new choice.
+		if (!mode || mode === "standard" || m.stopReason !== "error" || selectionRevision !== s.selectionRevision)
+			return null;
 		const reason = fastRefusalReason(status, m.errorMessage, mode);
 		if (!reason) return null;
 		s.coolingUntil = this.now() + FAST_MODE_COOLDOWN_MS;
@@ -346,6 +359,7 @@ export class FastModeRegistry {
 				retryUsed: false,
 				runFallback: false,
 				inflightMode: undefined,
+				inflightSelectionRevision: undefined,
 				inflightStatus: undefined,
 			});
 	}
