@@ -74,6 +74,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | new-chat-default             | `local`        | `server/new-chat-model.ts` (new), `agent-service.ts`, `web/src/i18n.tsx`, `tests/unit/new-chat-model.test.ts` (new) |
 | identity-config              | `local`        | `server/identity-config.ts` (new, pi-identity's `config.ts` copied byte for byte), `identity-roles.ts` (new), `identities.ts`, `index.ts`, `agent-service.ts` (`reloadForIdentity`), `protocol.ts`, `protocol-version.ts` (33), `web/src/identity-state.ts`, `components/IdentitiesSettings.tsx`, `NotebookPanel.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `.prettierignore`, `tests/identity-config-test.mjs` (new), `tests/unit/identity-config.test.ts` (new), `tests/unit/identities.test.ts` |
 | subs-limits-box              | `local`        | `server/subs-limits.ts` (new), `index.ts`, `protocol.ts`, `protocol-version.ts` (34), `web/src/components/LimitsBox.tsx` (new), `web/src/subs-limits-state.ts` (new), `components/LeftPanel.tsx`, `App.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/subs-limits-box-test.mjs` (new), `tests/unit/subs-limits.test.ts` (new) |
+| session-index                | `local`        | `server/session-index.ts` (new), `session-index-worker.ts` (new), `agent-service.ts`, `identities.ts`, `index.ts`, `tests/unit/session-index.test.ts` (new), `tests/unit/global-history.test.ts`, `tests/session-index-restart-test.mjs` (new), `scripts/session-index-parity.mjs` (new), `scripts/session-index-restart-probe.mjs` (new) |
 
 ---
 
@@ -4388,3 +4389,76 @@ the reason a check failed). This patch only shows its readings and passes the bu
   `v` in both if it stops being compatible (the server then shows the file only).
 - If upstream rebuilds the left panel, keep the box the last section, after History, using its
   `sectionHeader`.
+
+## session-index
+
+**Status**: `local`
+**Baseline**: v0.96.1 (on top of `subs-limits-box`)
+
+**Why** (owner, 2026-10-01): "how come when the pi restart i dont see the recent chats beside the ones
+that are resuming for a long time?" Recent chats' saved rows and History come only from the session list,
+and until a window's list was built it showed just the live rows (the resuming chats). Measured
+2026-10-01: building the list was pi's `SessionManager.listAll`, which reads every transcript in full (59
+files, 1.4 GB: 5.8 s in a quiet process) and builds every chat's full search text on the way. Every
+window built its own (a 3-second cache per window), twice (`pushSessions` and `pushProjects`), and all
+windows reconnect at once after a restart: four at once took 24.4 s in a quiet process, longer in the
+server beside the resuming chats' reloads. Nothing was kept across restarts.
+
+### Changes
+
+1. **The index** (`server/session-index.ts`, new): one per server, shared by every window. Per
+   transcript it keeps dev/inode, size and mtime, how far it was read (always a line start), a
+   fingerprint of the bytes there, and the listing's fields (id, name, first message, message count,
+   created, modified, cwd, parent session) folded line by line as pi's `buildSessionInfo` does; no full
+   text (`allMessagesText` is ""). Each listing walks the folders (readdir + stat): unchanged files come
+   from the index, grown files are read from where the last read stopped, shrunk, replaced or rewritten
+   ones (new inode, fingerprint changed) are read from the start, removed ones are dropped. Same rows and
+   order as `listAll(root)` / `list(cwd, root)`; `listProject(cwd)` without a root reads pi's default
+   folder for that cwd, like `list(cwd)`. On Windows it hands straight to pi.
+2. **Reading off the event loop** (`server/session-index-worker.ts`, new): the line folding runs in up
+   to 4 worker threads (idle ones stop after 30 s), so a giant line never blocks the server.
+3. **Single-flight**: listings that arrive while a walk runs join it; `invalidate()` (chat created,
+   renamed or deleted: `invalidateSessionInfos`) makes the next listing walk afresh.
+4. **Saved** to `<dataDir>/session-index.json`: versioned (`SAVE_VERSION`, the worker's `FOLD_VERSION`),
+   written atomically (temp file + rename) 2 s after a change. A missing, broken or old-version file only
+   means one cold read. The server's first listing after a start logs one line of counts
+   (`[session-index] first listing: ...`: files from the saved index, read in full, read from where they
+   stopped).
+5. **Callers** (`agent-service.ts`): `loadSessionInfos` (History, Recent chats' saved rows), `pushProjects`,
+   `deleteSession`'s look at the current folder, the project switch's check for a chat open elsewhere, the
+   conversation_read tool's lists (`conversationReadHost`), and the open fallback's "newest chat" (passed
+   to `openManagerAndRuntime`, two places) use the index. Global search (`searchSessions`) keeps reading full text through pi's
+   `listAll`, in its own few-seconds cache (`loadSessionInfosWithText`), so its results don't change.
+6. **At attach** (`pushHistoryAtAttach`): a real window gets History at once, even before its panel
+   asks: the rows of the last listing (global scope; the same for every window), then its own listing
+   from the index. Plugin, scheduler and carry-on clients are skipped. At startup `warmSessionIndex`
+   (`index.ts`) brings the index up to date while the cut-off chats reopen.
+7. **Identity labels** (`identities.ts`): `identityFileIndex.useSource` answers a file the index knows as
+   it is now from the index (the index also follows the identity `custom` entries), so History's labels
+   need no read of their own after a restart.
+
+### How it was checked
+
+- `tests/unit/session-index.test.ts`: the same rows as `listAll` / `list` on a varied set (branches,
+  names set later, forks, in workers and in-process); a grown file read only from where it stopped (also
+  after an unfinished last line); shrunk, replaced and rewritten files read again, a removed one dropped;
+  three windows at once share one walk; a restart with nothing changed reads no chat file; a broken or
+  old-version saved file is rebuilt; identity answers only for unchanged files; a 48 MB line among 40 MB
+  of others keeps every event-loop pause under 200 ms. `tests/unit/global-history.test.ts` follows.
+- `tests/session-index-restart-test.mjs` (sealed, Chrome): 40 saved chats (four of 25 MB), the server
+  killed and started again, three windows reloading at once: each shows Recent chats and History equal
+  to before the restart within 2 s of reconnecting (0.2 to 0.5 s), and the restarted server read no
+  transcript (40 from the saved index, in 3 to 18 ms).
+- Live: `scripts/session-index-parity.mjs` compares the index with `listAll` on the real folders and
+  prints counts only (60 rows, 0 differences; cold 1.4 s against pi's 4.8 s).
+  `scripts/session-index-restart-probe.mjs`, started with systemd-run before an install, times the
+  reconnect to the full list across the restart and reads the server's own count of files read in full.
+
+### When syncing
+
+- If pi changes `SessionInfo`, `buildSessionInfo` or `listSessionsFromDir` (which entries count, the
+  name, first message, created/modified rules, the sort, the folder layout or path normalising), change
+  the fold in `session-index-worker.ts` to match, bump `FOLD_VERSION`, and rerun the parity test and
+  script.
+- A new caller of `SessionManager.listAll` / `list` that needs only these fields should use
+  `sessionIndex`; one that needs the full text stays on pi.

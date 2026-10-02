@@ -1356,6 +1356,8 @@ export interface EngineService {
 	prepareCarryOn?(): void;
 	/** carry-on (pi engine): reopen them and send each the carry-on note (after listen). */
 	carryOnAfterRestart?(): Promise<void>;
+	/** session-index (pi engine): bring the saved chat index up to date at startup. */
+	warmSessionIndex?(): void;
 	/** queue-lanes (pi engine): let pi-queue run queued tasks in chats of their own. */
 	installQueueHost?(): void;
 	/** stall-watch (pi engine): after the carry-on, open the queue chats whose tasks run in chats of their own. */
@@ -3732,6 +3734,8 @@ service.installQueueHost?.();
 subsLimits.start();
 
 httpServer.listen(PORT, HOST, () => {
+	// session-index: History and Recent chats are ready for the windows that reconnect.
+	service.warmSessionIndex?.();
 	// carry-on: give plugins and MCP servers a moment to come up, then reopen the cut-off chats;
 	// stall-watch: then the queue chats, whose watchdog looks after their tasks' chats.
 	setTimeout(

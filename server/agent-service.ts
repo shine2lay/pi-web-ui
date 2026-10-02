@@ -357,6 +357,7 @@ import {
 	fileIdentityIds,
 	IDENTITY_ENTRY_TYPE,
 	identityCommandLine,
+	identityFileIndex,
 	identityIdOfEntry,
 	identityRegistry,
 	liveChatIdentityId,
@@ -364,6 +365,7 @@ import {
 	type IdentityEntryLike,
 } from "./identities.js";
 import { digestsBefore, snapshotDigests, straddleDigest } from "./exchange-digest.js";
+import { sessionIndex } from "./session-index.js";
 import { launchOrigin, toServiceInfo } from "./launch-origin.js";
 import { imageIfVersion, type ChatImage } from "./chat-image.js";
 import {
@@ -2265,6 +2267,20 @@ export function piSessionsRoot(): string | undefined {
 	return process.env.PI_CODING_AGENT_SESSION_DIR || undefined;
 }
 
+// session-index: the server's saved index of the chat files (server/session-index.ts) also follows each
+// chat's identity entries, so History's identity labels need no read of their own after a restart.
+sessionIndex.configure({
+	identity: {
+		customType: IDENTITY_ENTRY_TYPE,
+		idOf: (entry) => identityIdOfEntry(entry),
+	},
+});
+identityFileIndex.useSource((file, st) => sessionIndex.identityOf(file, st));
+
+/** session-index: the History rows of the last listing (global scope; the same for every window), so a
+ *  window that attaches gets them at once, before its own listing finishes. */
+let lastHistoryRows: SessionSummary[] | null = null;
+
 /** Guardrail: only transcripts under a sessions root may be opened/deleted/renamed
  *  — never arbitrary files. Two roots count as “a sessions root”, and they must stay
  *  the **same two** the history list reads from (`loadSessionInfos` →
@@ -3514,8 +3530,8 @@ export class ClientSession {
 			listHistorySessions: async (scope, cwd) => {
 				const infos =
 					scope === "all"
-						? await SessionManager.listAll(piSessionsRoot())
-						: await SessionManager.list(cwd || this.cwd, piSessionsRoot());
+						? await sessionIndex.listAll(piSessionsRoot())
+						: await sessionIndex.listProject(cwd || this.cwd, piSessionsRoot());
 				return infos.map((s) => ({
 					path: s.path,
 					name: s.name,
@@ -3546,7 +3562,7 @@ export class ClientSession {
 				}
 			},
 			readHistorySession: async (path) => {
-				const all = await SessionManager.listAll(piSessionsRoot());
+				const all = await sessionIndex.listAll(piSessionsRoot());
 				// win32 路径大小写不敏感：客户端回传的盘符/目录大小写常与服务端
 				// 列表不一致，严格相等会把合法请求误判为“不在白名单”。大小写
 				// 归一后再比（posix 不受影响）。
@@ -4026,7 +4042,7 @@ export class ClientSession {
 					agentDir,
 					sessionManager: m,
 				}),
-			async () => (await SessionManager.list(cwd))[0]?.path,
+			async () => (await sessionIndex.listProject(cwd))[0]?.path,
 		);
 		const runtime = opened.runtime;
 		if (opened.repair) {
@@ -4833,6 +4849,9 @@ export class ClientSession {
 		if (widgets.length > 0) send({ type: "widgets", widgets });
 		const statuses = this.webUi.statusSnapshot();
 		if (statuses.length > 0) send({ type: "statuses", statuses });
+		// session-index: History and Recent chats' saved rows go out with the running chats, without
+		// waiting for the page to ask (it asks once its panel mounts; that push is the same list).
+		this.pushHistoryAtAttach();
 		// Reconnect: push the current project's running-conversation list so the
 		// left panel shows every background chat (a fresh socket never got the
 		// newChat/switch pushes).
@@ -5564,7 +5583,7 @@ export class ClientSession {
 	}
 
 	/** 插件扩展点 v2（conversationLister 的历史一半）：当前项目历史会话摘要，最多 50 条。
-	 *  复用 refreshSessions/searchSessions 共用的 loadSessionInfos 缓存（3s TTL，不扫两遍盘）。 */
+	 *  session-index: rows from the server's saved chat index (loadSessionInfos), shared by every window. */
 	async listHistoryForPlugins(
 		limit = 50,
 	): Promise<{ id: string; title: string; cwd: string; kind: "history"; isStreaming: false }[]> {
@@ -5593,7 +5612,7 @@ export class ClientSession {
 			if (out.length >= limit) return out;
 		}
 		try {
-			const infos = await this.loadSessionInfos();
+			const infos = await this.loadSessionInfosWithText();
 			for (const s of infos) {
 				if (!sessionMatchesSearch(q, s)) continue;
 				out.push({
@@ -11554,7 +11573,16 @@ export class ClientSession {
 	private static readonly PROJECTS_CACHE_TTL = 15_000;
 	private projectsInFlight: Promise<ProjectSummary[] | null> | null = null;
 
+	/** session-index: History's rows from the server's saved index (shared by every window; reads only what
+	 *  changed since the last listing). Same rows and order as pi's listAll/list, without the full text. */
 	private async loadSessionInfos(): Promise<SessionInfo[]> {
+		return historyScope() === "all"
+			? sessionIndex.listAll(piSessionsRoot())
+			: sessionIndex.listProject(this.cwd, piSessionsRoot());
+	}
+
+	/** Global search needs every chat's full text (`allMessagesText`): pi reads it, kept a few seconds. */
+	private async loadSessionInfosWithText(): Promise<SessionInfo[]> {
 		const now = Date.now();
 		// 全局范围的缓存键固定为 `"*"`：列表与 cwd 无关，切项目不应该把全部
 		// 转录重新解析一遍。
@@ -11577,6 +11605,20 @@ export class ClientSession {
 	 *  window, which would re-push the just-removed session). */
 	private invalidateSessionInfos(): void {
 		this.sessionInfosCache = null;
+		sessionIndex.invalidate();
+	}
+
+	/** session-index: at attach (also right after a restart) a real window gets History and the Recent chats
+	 *  rows straight away: the rows the last listing produced (any window's; they're the same in global
+	 *  scope), then its own listing from the index (only what changed since is read). */
+	private pushHistoryAtAttach(): void {
+		if (AgentService.isPseudoClientId(this.clientId) || this.clientId.startsWith(CARRY_ON_CLIENT_PREFIX)) return;
+		this.sessionsRequested = true;
+		if (lastHistoryRows && historyScope() === "all" && this.recentSessions.length === 0) {
+			this.recentSessions = lastHistoryRows;
+			this.emit({ type: "sessions", sessions: lastHistoryRows });
+		}
+		void this.pushSessions().catch(() => {});
 	}
 
 	/** Push the persisted session list to the client (client-requested). */
@@ -11635,6 +11677,9 @@ export class ClientSession {
 			// identities: each row's identity label, before the list goes out (or right after it, when the
 			// first read of big transcripts takes a while; a newer list wins).
 			const gen = ++this.sessionsPushGen;
+			// session-index: the same rows for every window in global scope; a window that attaches next gets them
+			// at once (attachIdentities labels these same objects, so late labels reach it too).
+			if (historyScope() === "all") lastHistoryRows = sorted;
 			await this.attachIdentities(sorted, () => {
 				if (gen !== this.sessionsPushGen || this.disposed) return;
 				this.emit({ type: "sessions", sessions: sorted });
@@ -11742,7 +11787,7 @@ export class ClientSession {
 			if (holder) {
 				// 故意只看**当前文件夹**（即使 History 是全局的）：删当前对话不应该
 				// 把人踢到别的项目去，而是回退到本文件夹的上一个对话。newest first。
-				const infos = await SessionManager.list(this.cwd, piSessionsRoot());
+				const infos = await sessionIndex.listProject(this.cwd, piSessionsRoot());
 				const next = infos
 					.filter((s) => resolve(s.path) !== abs)
 					.sort((a, b) => b.modified.getTime() - a.modified.getTime())[0];
@@ -13165,7 +13210,7 @@ export class ClientSession {
 				const removedProjects = new Set(this.stateStore.getRemovedProjects(this.clientId).map(normalizePathKey));
 				const map = new Map<string, number>();
 				for (const p of saved.projects) map.set(p.path, p.lastUsed);
-				const all = await SessionManager.listAll(piSessionsRoot());
+				const all = await sessionIndex.listAll(piSessionsRoot());
 				for (const s of all) {
 					if (s.cwd) {
 						const t = s.modified.getTime();
@@ -13230,7 +13275,7 @@ export class ClientSession {
 	/** 全局搜索：在会话转录全文里做大小写不敏感匹配（范围同 History：
 	 *  historyScope() 为 "all" 时跨文件夹）——
 	 *  不止首条消息，而是每一段 user 与 assistant 文本（AI 输出也在内）。
-	 *  结果经 session_search_results 回推（reqId 匹配）；复用 loadSessionInfos()
+	 *  结果经 session_search_results 回推（reqId 匹配）；复用 loadSessionInfosWithText()
 	 *  缓存，避免每个按键都重新解析全部转录文件。 */
 	async searchSessions(query: string, reqId: number): Promise<void> {
 		const q = query.trim().toLowerCase();
@@ -13239,7 +13284,7 @@ export class ClientSession {
 			return;
 		}
 		try {
-			const infos = await this.loadSessionInfos();
+			const infos = await this.loadSessionInfosWithText();
 			const results = infos
 				.filter((s) => sessionMatchesSearch(q, s))
 				.sort((a, b) => b.modified.getTime() - a.modified.getTime())
@@ -13542,7 +13587,7 @@ export class ClientSession {
 				// 别处无可见行时不扫目录（首访切项目的常见情形零开销）。
 				if ((this.listExternalRunning?.() ?? []).length > 0) {
 					try {
-						const infos = await SessionManager.list(abs, piSessionsRoot());
+						const infos = await sessionIndex.listProject(abs, piSessionsRoot());
 						const recent = infos[0]?.path ? resolve(infos[0].path) : undefined;
 						const owner = recent ? this.findSessionOwner?.(recent) : null;
 						if (owner && (owner.connected || owner.isStreaming)) {
@@ -13565,7 +13610,7 @@ export class ClientSession {
 							agentDir: this.agentDir,
 							sessionManager: m,
 						}),
-					async () => (await SessionManager.list(abs))[0]?.path,
+					async () => (await sessionIndex.listProject(abs))[0]?.path,
 				);
 				const newRuntime = opened.runtime;
 				if (opened.repair) {
@@ -14107,6 +14152,13 @@ export class AgentService {
 	) {
 		this.stateStore = new ClientStateStore(stateFile);
 		this.claimStore = new ClaimStore(join(this.stateStore.dataDir, "claims.json"));
+		sessionIndex.configure({ file: join(this.stateStore.dataDir, "session-index.json") });
+	}
+
+	/** session-index: bring the saved chat index up to date at startup (while the cut-off chats reopen),
+	 *  so the windows that reconnect get History and Recent chats from it at once. */
+	warmSessionIndex(): void {
+		void sessionIndex.listAll(piSessionsRoot()).catch(() => {});
 	}
 
 	/** Get or create the session for a client, racing attach calls safely. */

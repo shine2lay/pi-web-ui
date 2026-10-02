@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { ClientSession, historyScope } from "../../server/agent-service.js";
+import { sessionIndex } from "../../server/session-index.js";
 import type { ServerMessage } from "../../server/protocol.js";
 
 /**
@@ -56,6 +57,7 @@ function writeTranscript(cwd: string, userText: string, at: number): string {
 
 type Proto = {
 	loadSessionInfos(this: FakeSession): Promise<{ path: string; cwd: string }[]>;
+	loadSessionInfosWithText(this: FakeSession): Promise<{ path: string; cwd: string }[]>;
 	pushSessions(this: FakeSession): Promise<void>;
 	searchSessions(this: FakeSession, query: string, reqId: number): Promise<void>;
 	attachIdentities(this: FakeSession, rows: unknown[], resend: () => void): Promise<void>;
@@ -70,6 +72,8 @@ interface FakeSession {
 	emit(msg: ServerMessage): void;
 	/** pushSessions/searchSessions 调 `this.loadSessionInfos()` —— 挂上真实实现。 */
 	loadSessionInfos: Proto["loadSessionInfos"];
+	/** session-index: global search still reads the full text through pi (kept a few seconds). */
+	loadSessionInfosWithText: Proto["loadSessionInfosWithText"];
 	/** recent-chats 补丁：pushSessions 把这份列表存给「最近对话」并重推左栏。
 	 *  本用例只关心 sessions 推送，这里只给出最小承载点。 */
 	recentSessions: unknown[];
@@ -90,6 +94,7 @@ function fakeSession(cwd: string): FakeSession {
 			emitted.push(msg);
 		},
 		loadSessionInfos: proto.loadSessionInfos,
+		loadSessionInfosWithText: proto.loadSessionInfosWithText,
 		sessionsPushGen: 0,
 		attachIdentities: proto.attachIdentities,
 		recentSessions: [],
@@ -137,15 +142,17 @@ describe("History 列表（全局范围）", () => {
 		const infos = await proto.loadSessionInfos.call(s);
 		expect(infos.map((i) => i.path).sort()).toEqual([fileA, fileB].sort());
 		expect(new Set(infos.map((i) => i.cwd))).toEqual(new Set([projA, projB]));
-		expect(s.sessionInfosCache?.cwd).toBe("*");
 	});
 
 	it("TTL 内切工作目录复用同一份缓存（不重新解析全部转录）", async () => {
 		const s = fakeSession(projA);
 		const first = await proto.loadSessionInfos.call(s);
+		const reads = sessionIndex.stats.fullReads + sessionIndex.stats.partialReads;
 		s.cwd = projB;
 		const second = await proto.loadSessionInfos.call(s);
-		expect(second).toBe(first);
+		// session-index: the same rows from the server's index, no transcript read again.
+		expect(second.map((i) => i.path)).toEqual(first.map((i) => i.path));
+		expect(sessionIndex.stats.fullReads + sessionIndex.stats.partialReads).toBe(reads);
 	});
 
 	it("scope=project 时恢复原来的按文件夹列表", async () => {
@@ -153,7 +160,6 @@ describe("History 列表（全局范围）", () => {
 		try {
 			const s = fakeSession(projA);
 			expect((await proto.loadSessionInfos.call(s)).map((i) => i.path)).toEqual([fileA]);
-			expect(s.sessionInfosCache?.cwd).toBe(projA);
 			s.cwd = projB;
 			expect((await proto.loadSessionInfos.call(s)).map((i) => i.path)).toEqual([fileB]);
 		} finally {
@@ -203,6 +209,8 @@ describe("History 列表（全局范围）", () => {
 		expect(msg.reqId).toBe(1);
 		expect(msg.ok).toBe(true);
 		expect(msg.results.map((r) => [r.path, r.cwd])).toEqual([[fileB, projB]]);
+		// Search reads the full text through pi and keeps it a few seconds (the list uses the index).
+		expect(s.sessionInfosCache?.cwd).toBe("*");
 		await proto.searchSessions.call(s, "task", 2);
 		const all = s.emitted.at(-1)!;
 		expect(all.type === "session_search_results" ? all.results.map((r) => r.path) : []).toEqual([fileB, fileA]);

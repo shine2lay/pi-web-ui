@@ -306,6 +306,12 @@ function identityIdOfLine(line: string): string | null | undefined {
 	}
 }
 
+/** session-index: answers for a file as `st` shows it, or null (not known as it is now: read it). */
+export type IdentitySource = (
+	file: string,
+	st: { ino: number; size: number; mtimeMs: number },
+) => { id: string | null | undefined } | null;
+
 interface FileScan {
 	ino: number;
 	size: number;
@@ -325,6 +331,13 @@ interface FileScan {
 export class IdentityFileIndex {
 	private scans = new Map<string, FileScan>();
 	private inflight = new Map<string, Promise<string | null | undefined>>();
+	private source: IdentitySource | null = null;
+
+	/** session-index: the server's chat index (server/session-index.ts) follows the identity entries too
+	 *  and is saved across restarts; a file it knows as it is now is answered from it without reading. */
+	useSource(source: IdentitySource | null): void {
+		this.source = source;
+	}
 
 	/** 文件里最后一条 identity 条目的 id（null = 清掉了；undefined = 没有，或读不了）。 */
 	lastEntry(file: string): Promise<string | null | undefined> {
@@ -343,6 +356,8 @@ export class IdentityFileIndex {
 			this.scans.delete(file);
 			return undefined;
 		}
+		const known = this.source?.(file, st);
+		if (known) return known.id;
 		let prev = this.scans.get(file);
 		if (prev && (prev.ino !== st.ino || st.size < prev.offset)) prev = undefined;
 		if (prev && prev.size === st.size && prev.mtimeMs === st.mtimeMs) return prev.last;
