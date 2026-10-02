@@ -84,6 +84,8 @@ import { type AdoptCandidate, pickAdoptTarget } from "./attach-adopt.js";
 import { describeError, errorMessage, planForLostActive } from "./crash-guard.js";
 // list-freeze: message counts without getSessionStats() (which re-projects the whole context).
 import { messageCountOf } from "./message-count.js";
+// new-chat-default: the global default model is what every new chat starts on.
+import { carryOverToNewChat, freshChatModel } from "./new-chat-model.js";
 import {
 	checkAll as checkAllUpdates,
 	collectTargets,
@@ -4273,8 +4275,11 @@ export class ClientSession {
 			if (!sessionModel) {
 				const isBlank = sessionManager.buildSessionContext().messages.length === 0;
 				if (isBlank) {
-					const savedModelId =
-						this.stateStore.getProjectModel(this.clientId, effectiveCwd) ?? this.stateStore.getDefaultModel();
+					// new-chat-default: the global default first, then the folder's memory.
+					const savedModelId = freshChatModel(
+						this.stateStore.getDefaultModel(),
+						this.stateStore.getProjectModel(this.clientId, effectiveCwd),
+					);
 					if (savedModelId) {
 						const slash = savedModelId.indexOf("/");
 						if (slash > 0 && slash < savedModelId.length - 1) {
@@ -8437,9 +8442,13 @@ export class ClientSession {
 	 *  silently overwrite its model with the project default. So a fresh chat in the
 	 *  project gets the remembered model; an in-progress one keeps what it had and
 	 *  the user switches via the picker. Silent on failure (model no longer in catalog).
-	 *  Fallback chain: project memory > GLOBAL default model > SDK default (no-op). */
+	 *  Fallback chain (new-chat-default): GLOBAL default model > project memory > SDK default (no-op).
+	 *  The model is set at its own thinking level (pi's per-model level, else its default level). */
 	private async restoreProjectModelForCwd(cwd: string): Promise<void> {
-		const savedModel = this.stateStore.getProjectModel(this.clientId, cwd) ?? this.stateStore.getDefaultModel();
+		const savedModel = freshChatModel(
+			this.stateStore.getDefaultModel(),
+			this.stateStore.getProjectModel(this.clientId, cwd),
+		);
 		if (!savedModel) return;
 		try {
 			if (messageCountOf(this.conv.session) > 0) return;
@@ -10268,8 +10277,12 @@ export class ClientSession {
 		const displaced = this.displaceActive();
 		// Carry the model chosen in the active chat over to the new chat so it
 		// doesn't silently revert to the ModelRuntime default model.
-		const prevModel = active?.session.agent.state.model ?? null;
-		const prevThinking = active?.session.thinkingLevel ?? null;
+		// new-chat-default: unless a global default model is set; then every new chat starts on that.
+		const startOnDefault = !!this.stateStore.getDefaultModel();
+		const { model: prevModel, thinking: prevThinking } = carryOverToNewChat(this.stateStore.getDefaultModel(), {
+			model: active?.session.agent.state.model ?? null,
+			thinking: active?.session.thinkingLevel ?? null,
+		});
 		let ready = false;
 		try {
 			const conversationId = this.nextConversationId();
@@ -10324,6 +10337,16 @@ export class ClientSession {
 			// New session seeds with the ModelRuntime default model — restore the
 			// model the user had selected in the previous chat.
 			let modelRestored = !!this.session.model;
+			if (startOnDefault) {
+				// new-chat-default: the global default model, at its own thinking level. The runtime was
+				// seeded with it already; this also puts the thinking level right.
+				try {
+					await this.restoreProjectModelForCwd(this.cwd);
+				} catch {
+					/* keep what the session has */
+				}
+				modelRestored = true;
+			}
 			if (!modelRestored && prevModel && this.sharedModelRuntime) {
 				try {
 					const p = (prevModel as unknown as { provider: string }).provider;
@@ -13764,8 +13787,8 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "info",
-				text: `🌍 Global default model set to ${modelId} (new projects follow it; project memory wins)`,
-				textEn: `🌍 Global default model set to ${modelId} (new projects follow it; project memory wins)`,
+				text: `🌍 Global default model set to ${modelId}: every new chat and queued task starts on it, at the model's own thinking level`,
+				textEn: `🌍 Global default model set to ${modelId}: every new chat and queued task starts on it, at the model's own thinking level`,
 			});
 		} catch (err) {
 			this.emit({
@@ -13793,8 +13816,8 @@ export class ClientSession {
 		this.emit({
 			type: "notice",
 			level: "info",
-			text: "🌍 Global default model cleared (new projects use the SDK default)",
-			textEn: "🌍 Global default model cleared (new projects use the SDK default)",
+			text: "🌍 Global default model cleared: a new chat takes the model of the chat you were in",
+			textEn: "🌍 Global default model cleared: a new chat takes the model of the chat you were in",
 		});
 		this.flushSnapshot();
 	}

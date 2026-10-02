@@ -71,6 +71,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | queue-done-hidden            | `local`        | `server/agent-service.ts` (`queueCloseChat`, `markRecentSeen`, `recentSessions`), `task-queue.ts`, `queue-host.ts` (comment), `tests/unit/queue-done-hidden.test.ts` (new), `tests/queue-lanes-test.mjs`, `tests/tools/queue-done-sweep.mjs` (new) |
 | identity-notebook-tab        | `local`        | `server/notebook-watch.ts` (new), `identities.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (30), `web/src/notebook-state.ts` + `components/NotebookPanel.tsx` (new), `RightPanel.tsx`, `App.tsx`, `SettingsModal.tsx`, `IdentitiesSettings.tsx`, `ui-slots.ts`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `scripts/sealed.sh`, `tests/identity-notebook-test.mjs` (new), `tests/unit/` |
 | queue-grouping               | `local`        | `server/queue-groups.ts` (new), `agent-service.ts`, `client-state.ts`, `protocol.ts`, `protocol-version.ts` (31), `web/src/conv-groups.ts`, `queue-folds.ts` (new), `components/LeftPanel.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/queue-grouping-test.mjs` (new), `tests/unit/queue-groups.test.ts` (new), `conv-groups.test.ts`, `docs/directory-reference.md` |
+| new-chat-default             | `local`        | `server/new-chat-model.ts` (new), `agent-service.ts`, `web/src/i18n.tsx`, `tests/unit/new-chat-model.test.ts` (new) |
 
 ---
 
@@ -4186,3 +4187,48 @@ tasks are grouped.
   `assigned` entry's `from`, the `chat` op), follow it in `queue-groups.ts` (`OPEN`) and `task-queue.ts`.
 - If the left panel's nesting changes (`orderConversations`, the `lp-sub` rows), run
   `tests/queue-grouping-test.mjs` and `tests/unit/conv-groups.test.ts`.
+
+## new-chat-default
+
+**Status**: `local`
+**Baseline**: v0.96.1
+
+**Why** (owner, 2026-10-01): "all new chats and queued tasks chat as well, gets claude opus 5.5 from
+anthropic 1 as default at max thinking". Upstream's global default model hardly ever applied: a new chat
+takes the model and thinking level of the chat that was open, and a fresh chat otherwise takes the model
+its folder remembers (any window's past pick for that folder; the home folder remembered Fable), and only
+then the global default. pi-queue also started each task's chat on the queue chat's own model.
+
+### Changes
+
+1. **The rule** (`server/new-chat-model.ts`, new): `carryOverToNewChat` (a new chat takes nothing from
+   the open chat when a global default is set) and `freshChatModel` (the global default first, then the
+   folder's memory). Without a global default, upstream's way stays.
+2. **Where chats start** (`agent-service.ts`): `newChat` uses `carryOverToNewChat`, and with a global
+   default it calls `restoreProjectModelForCwd`, which also sets the thinking level. That covers New chat
+   and a role's chat ("Start as"). A blank chat's first model in `makeRuntimeFactory` and
+   `restoreProjectModelForCwd` use `freshChatModel`. That covers a queued task's chat started without a
+   model (`openTaskChat`) and a fresh chat moved to another folder. The model is set with pi's `setModel`,
+   which applies the model's own thinking level (`modelThinkingLevels` in pi's settings.json, else
+   `defaultThinkingLevel`). A model picked in a chat stays with that chat.
+3. **Words** (`agent-service.ts` notices, `i18n.tsx` `setGlobalDefault`): setting the default says every
+   new chat and queued task starts on it; clearing it says a new chat takes the model of the chat you were
+   in.
+4. **pi-queue** (its own repo, `taskModel` in ~/.pi/agent/pi-queue.json): by default a task's chat is
+   started with no model, so it gets the global default. `"same"` starts it on the queue chat's model and
+   thinking level, as before.
+
+### How it was checked
+
+- `tests/unit/new-chat-model.test.ts`: both rules, with and without a global default, plus source checks
+  that `newChat`, the runtime factory and `restoreProjectModelForCwd` use them.
+- check.sh, the build and the full sealed suite. No sealed test sets a global default, so they check that
+  upstream's carry-over is unchanged.
+- Live: with `anthropic/claude-opus-5-5` as the global default, a throwaway new chat started on it at max
+  thinking.
+
+### When syncing
+
+- If upstream changes `newChat`'s carry-over (`prevModel`, `prevThinking`), the runtime factory's blank-chat
+  model or `restoreProjectModelForCwd`, keep the order: the global default first, then the folder's memory.
+  Without a global default, keep upstream's.

@@ -50,7 +50,7 @@ export const en = {
 	refreshModels: "Refresh model list (keeps manual rows, merges new ones)",
 	manageModels: "⚙ Manage models (add / edit)",
 	manageModelsTitle: "Manage models",
-	setGlobalDefault: "☆ Set as global default (new projects follow it)",
+	setGlobalDefault: "☆ Set as global default (every new chat starts on it)",
 	clearGlobalDefault: "★ Clear global default",
 	globalDefaultBadge: "Global default",
 	thinkingLevel: "Thinking level",
