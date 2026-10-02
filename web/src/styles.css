@@ -2628,31 +2628,30 @@ button.session-item.elsewhere-item.confirm {
 	padding: 10px 12px;
 }
 .task-queue-autonomy {
-	border: 1px solid var(--border);
-	border-radius: 8px;
-	padding: 10px;
-	margin-bottom: 14px;
-}
-.task-queue-setting + .task-queue-setting {
-	margin-top: 12px;
-}
-.task-queue-setting-head {
 	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 10px;
-	font-size: 13px;
-	font-weight: 600;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-bottom: 12px;
 }
 .task-queue-switch {
-	min-width: 56px;
+	display: inline-flex;
+	flex: 1 1 auto;
+	align-items: center;
+	justify-content: space-between;
+	gap: 6px;
 	min-height: 44px;
+	padding: 6px;
 	border: 1px solid var(--border);
-	border-radius: 22px;
+	border-radius: 6px;
 	background: transparent;
 	color: var(--text-dim);
 	font: inherit;
+	font-size: 12px;
+	white-space: nowrap;
 	cursor: pointer;
+}
+.task-queue-switch-state {
+	font-weight: 600;
 }
 .task-queue-switch[aria-checked="true"] {
 	border-color: var(--accent);
@@ -2665,12 +2664,6 @@ button.session-item.elsewhere-item.confirm {
 .task-queue-switch:disabled {
 	opacity: 0.5;
 	cursor: default;
-}
-.task-queue-setting-hint {
-	margin: 2px 0 0;
-	font-size: 12px;
-	line-height: 1.5;
-	color: var(--text-faint);
 }
 .task-queue-empty,
 .task-queue-note {

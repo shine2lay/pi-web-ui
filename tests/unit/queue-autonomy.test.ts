@@ -123,7 +123,16 @@ describe("queue autonomy replay parity and panel", () => {
 		expect(html.match(/aria-checked="false"/g)).toHaveLength(2);
 		expect(html).toContain('aria-label="Auto approve"');
 		expect(html).toContain('aria-label="Auto start"');
-		expect(html).toContain("This queue only");
+		expect(html).toContain('role="group" aria-label="This queue only"');
+		expect(html).toContain(">Auto approve</span>");
+		expect(html).toContain(">Auto start</span>");
+		expect(html).not.toContain(">This queue only<");
+		expect(html).not.toContain("task-queue-setting-hint");
+		expect(html).not.toContain("Accept complete plans");
+		expect(html).not.toContain("Start eligible work");
+		expect(html).toContain("The queue is empty.");
+		expect(html).not.toContain("Plan a complete task");
+		expect(html).not.toContain("aria-describedby");
 		const readOnly = renderToStaticMarkup(
 			createElement(LanguageProvider, null, createElement(TaskQueuePanel, { queue })),
 		);

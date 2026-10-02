@@ -5,9 +5,7 @@
 	"strings": {
 		"taskQueueThisQueue": "This queue only",
 		"taskQueueAutoApprove": "Auto approve",
-		"taskQueueAutoApproveHint": "Accept complete plans and plan changes without a dialog. Other approvals and permissions still apply.",
 		"taskQueueAutoStart": "Auto start",
-		"taskQueueAutoStartHint": "Start eligible work when it arrives, within lane limits and dependencies. Stop turns this off. Errors still need attention.",
 		"taskQueueOn": "On",
 		"taskQueueOff": "Off",
 		"taskQueueStatusArmed": "Armed · waiting for tasks",
@@ -317,7 +315,7 @@
 		"tldrFoldedOne": "1 прочитанная строка",
 		"tldrUnfold": "Показать эти строки снова",
 		"taskQueueTab": "Очередь",
-		"taskQueueEmpty": "Очередь пуста. Подготовьте здесь полный план. Планы требуют подтверждения, если вы не включили Auto approve для этой очереди.",
+		"taskQueueEmpty": "Очередь пуста.",
 		"taskQueueNotLoaded": "В этом чате не загружен pi-queue, поэтому очередь не может работать.",
 		"taskQueueStart": "Начать",
 		"taskQueueStartHint": "Агент выполняет ожидающие задачи одну за другой",

@@ -5,9 +5,7 @@
 	"strings": {
 		"taskQueueThisQueue": "This queue only",
 		"taskQueueAutoApprove": "Auto approve",
-		"taskQueueAutoApproveHint": "Accept complete plans and plan changes without a dialog. Other approvals and permissions still apply.",
 		"taskQueueAutoStart": "Auto start",
-		"taskQueueAutoStartHint": "Start eligible work when it arrives, within lane limits and dependencies. Stop turns this off. Errors still need attention.",
 		"taskQueueOn": "On",
 		"taskQueueOff": "Off",
 		"taskQueueStatusArmed": "Armed · waiting for tasks",
@@ -317,7 +315,7 @@
 		"tldrFoldedOne": "1 ligne lue",
 		"tldrUnfold": "Réafficher ces lignes",
 		"taskQueueTab": "File d'attente",
-		"taskQueueEmpty": "La file est vide. Préparez ici un plan complet. Les plans demandent votre confirmation, sauf si vous activez Auto approve pour cette file.",
+		"taskQueueEmpty": "La file est vide.",
 		"taskQueueNotLoaded": "pi-queue n'est pas chargé dans ce chat, la file ne peut pas avancer.",
 		"taskQueueStart": "Démarrer",
 		"taskQueueStartHint": "L'agent traite les tâches en attente, l'une après l'autre",

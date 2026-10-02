@@ -5,9 +5,7 @@
 	"strings": {
 		"taskQueueThisQueue": "This queue only",
 		"taskQueueAutoApprove": "Auto approve",
-		"taskQueueAutoApproveHint": "Accept complete plans and plan changes without a dialog. Other approvals and permissions still apply.",
 		"taskQueueAutoStart": "Auto start",
-		"taskQueueAutoStartHint": "Start eligible work when it arrives, within lane limits and dependencies. Stop turns this off. Errors still need attention.",
 		"taskQueueOn": "On",
 		"taskQueueOff": "Off",
 		"taskQueueStatusArmed": "Armed · waiting for tasks",
@@ -317,7 +315,7 @@
 		"tldrFoldedOne": "既読 1 行",
 		"tldrUnfold": "これらの行をもう一度表示",
 		"taskQueueTab": "キュー",
-		"taskQueueEmpty": "キューは空です。ここで完全な計画を作成してください。このキューで Auto approve を有効にしない限り、計画には確認が必要です。",
+		"taskQueueEmpty": "キューは空です。",
 		"taskQueueNotLoaded": "このチャットでは pi-queue が読み込まれていないため、キューを実行できません。",
 		"taskQueueStart": "開始",
 		"taskQueueStartHint": "エージェントが待機中のタスクを順番に一つずつ進めます",

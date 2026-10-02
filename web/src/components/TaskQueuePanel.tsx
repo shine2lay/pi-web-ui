@@ -17,7 +17,7 @@
  * 新的队列（或 5 秒后）再放开，防连点。
  */
 
-import { memo, useEffect, useId, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import type { UiTaskQueue, UiTaskQueuePlan, UiTaskQueueTask } from "../types";
 import { useT, type Translate } from "../i18n";
 import { Markdown } from "./Markdown";
@@ -185,7 +185,6 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 	const [removing, setRemoving] = useState<number | null>(null);
 	const [open, setOpen] = useState<ReadonlySet<number>>(() => new Set(defaultOpen));
 	const [allDone, setAllDone] = useState(false);
-	const hintId = useId();
 	const [pendingSetting, setPendingSetting] = useState<{
 		key: "autoApprove" | "autoStart";
 		value: boolean;
@@ -228,32 +227,26 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 		setRemoving(null);
 		controls(action, id);
 	};
-	const settingControl = (key: "autoApprove" | "autoStart", label: TKey, hint: TKey) => (
-		<div className="task-queue-setting">
-			<div className="task-queue-setting-head">
-				<span>{t(label)}</span>
-				<button
-					type="button"
-					role="switch"
-					aria-label={t(label)}
-					aria-checked={queue[key] === true}
-					aria-describedby={`${hintId}-${key}`}
-					className="task-queue-switch"
-					disabled={!controls || !queue.queueId || busy || !!pendingSetting}
-					onClick={() => {
-						if (!controls || !queue.queueId) return;
-						const value = queue[key] !== true;
-						setPendingSetting({ key, value, queueId: queue.queueId });
-						controls(key, undefined, value);
-					}}
-				>
-					{t(queue[key] === true ? "taskQueueOn" : "taskQueueOff")}
-				</button>
-			</div>
-			<p id={`${hintId}-${key}`} className="task-queue-setting-hint">
-				{t(hint)}
-			</p>
-		</div>
+	const settingControl = (key: "autoApprove" | "autoStart", label: TKey) => (
+		<button
+			type="button"
+			role="switch"
+			aria-label={t(label)}
+			aria-checked={queue[key] === true}
+			className="task-queue-switch"
+			disabled={!controls || !queue.queueId || busy || !!pendingSetting}
+			onClick={() => {
+				if (!controls || !queue.queueId) return;
+				const value = queue[key] !== true;
+				setPendingSetting({ key, value, queueId: queue.queueId });
+				controls(key, undefined, value);
+			}}
+		>
+			<span>{t(label)}</span>
+			<span className="task-queue-switch-state" aria-hidden="true">
+				{t(queue[key] === true ? "taskQueueOn" : "taskQueueOff")}
+			</span>
+		</button>
 	);
 	const toggle = (id: number) =>
 		setOpen((prev) => {
@@ -474,10 +467,9 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 					))}
 			</div>
 			{!queue.from && (
-				<div className="task-queue-autonomy" aria-label={t("taskQueueThisQueue")}>
-					<div className="task-queue-heading">{t("taskQueueThisQueue")}</div>
-					{settingControl("autoApprove", "taskQueueAutoApprove", "taskQueueAutoApproveHint")}
-					{settingControl("autoStart", "taskQueueAutoStart", "taskQueueAutoStartHint")}
+				<div className="task-queue-autonomy" role="group" aria-label={t("taskQueueThisQueue")}>
+					{settingControl("autoApprove", "taskQueueAutoApprove")}
+					{settingControl("autoStart", "taskQueueAutoStart")}
 				</div>
 			)}
 			{queue.tasks.length === 0 && <p className="task-queue-empty">{t("taskQueueEmpty")}</p>}

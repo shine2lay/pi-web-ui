@@ -5,9 +5,7 @@
 	"strings": {
 		"taskQueueThisQueue": "This queue only",
 		"taskQueueAutoApprove": "Auto approve",
-		"taskQueueAutoApproveHint": "Accept complete plans and plan changes without a dialog. Other approvals and permissions still apply.",
 		"taskQueueAutoStart": "Auto start",
-		"taskQueueAutoStartHint": "Start eligible work when it arrives, within lane limits and dependencies. Stop turns this off. Errors still need attention.",
 		"taskQueueOn": "On",
 		"taskQueueOff": "Off",
 		"taskQueueStatusArmed": "Armed · waiting for tasks",
@@ -317,7 +315,7 @@
 		"tldrFoldedOne": "1 linha lida",
 		"tldrUnfold": "Mostrar estas linhas de novo",
 		"taskQueueTab": "Fila",
-		"taskQueueEmpty": "A fila está vazia. Prepare aqui um plano completo. Os planos pedem sua confirmação, a menos que você ative Auto approve para esta fila.",
+		"taskQueueEmpty": "A fila está vazia.",
 		"taskQueueNotLoaded": "O pi-queue não está carregado neste chat, então a fila não pode rodar.",
 		"taskQueueStart": "Iniciar",
 		"taskQueueStartHint": "O agente faz as tarefas em espera, uma depois da outra",

@@ -99,6 +99,11 @@ the public slash-command builder. The extension stores `autonomy` entries bound 
 opt-in (or an automatic `run`). Plans have `approval: "dialog" | "auto"`, with no invented owner click.
 The shared `TaskQueuePanel` shows accessible, server-confirmed switches and disables pending changes;
 read-only panels are disabled and task chats have no switches. Protocol versions change together.
+The compact layout keeps both labelled On/Off switches in one wrapping row, without a visible group
+heading or explanatory paragraphs; the empty state is simply “The queue is empty.” The whole switch
+is a 44px touch target; accessible names, checked
+states, focus styling, owner authorization and confirmation behavior are unchanged. Removed hint keys
+are also removed from the locale schema. No protocol or queue behavior change.
 
 **Checks:** `PI_QUEUE_PKG=<pi-queue checkout> TZ=UTC scripts/check.sh`, the pi-queue suite, and the full
 sealed browser suite. `tests/unit/queue-autonomy.test.ts` covers capability validation/replay parity and
@@ -106,7 +111,8 @@ read-only rendering; pi-queue's autonomy tests cover plan checks, confirmation r
 forks/task chats, scheduling, errors, startup guards and Stop. `tests/queue-autonomy-test.mjs` runs the
 real extension through a command fixture in an isolated server (no model calls, no real task chats),
 checks desktop/phone controls, owner fences, approval on/off, scheduling and restart persistence, and
-removes its temporary sessions. `QUEUE_AUTONOMY_SHOTS=<directory>` saves four panel screenshots;
+removes its temporary sessions. It also checks the compact row, absent explanatory copy, 44px targets
+and overflow at desktop, 390px and 320px widths. `QUEUE_AUTONOMY_SHOTS=<directory>` saves four panel screenshots;
 `PI_TEST_APP_REPO=<installed app>` can smoke-check the installed build in that same isolated fixture.
 
 **Sync:** keep both replay implementations, pi-queue's owner-host contract, protocol types/versions and

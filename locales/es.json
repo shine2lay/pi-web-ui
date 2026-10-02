@@ -5,9 +5,7 @@
 	"strings": {
 		"taskQueueThisQueue": "This queue only",
 		"taskQueueAutoApprove": "Auto approve",
-		"taskQueueAutoApproveHint": "Accept complete plans and plan changes without a dialog. Other approvals and permissions still apply.",
 		"taskQueueAutoStart": "Auto start",
-		"taskQueueAutoStartHint": "Start eligible work when it arrives, within lane limits and dependencies. Stop turns this off. Errors still need attention.",
 		"taskQueueOn": "On",
 		"taskQueueOff": "Off",
 		"taskQueueStatusArmed": "Armed · waiting for tasks",
@@ -317,7 +315,7 @@
 		"tldrFoldedOne": "1 línea leída",
 		"tldrUnfold": "Volver a mostrar estas líneas",
 		"taskQueueTab": "Cola",
-		"taskQueueEmpty": "La cola está vacía. Prepara aquí un plan completo. Los planes requieren tu confirmación, salvo que actives Auto approve para esta cola.",
+		"taskQueueEmpty": "La cola está vacía.",
 		"taskQueueNotLoaded": "pi-queue no está cargado en este chat, así que la cola no puede avanzar.",
 		"taskQueueStart": "Empezar",
 		"taskQueueStartHint": "El agente hace las tareas en espera, una tras otra",

@@ -5,9 +5,7 @@
 	"strings": {
 		"taskQueueThisQueue": "This queue only",
 		"taskQueueAutoApprove": "Auto approve",
-		"taskQueueAutoApproveHint": "Accept complete plans and plan changes without a dialog. Other approvals and permissions still apply.",
 		"taskQueueAutoStart": "Auto start",
-		"taskQueueAutoStartHint": "Start eligible work when it arrives, within lane limits and dependencies. Stop turns this off. Errors still need attention.",
 		"taskQueueOn": "On",
 		"taskQueueOff": "Off",
 		"taskQueueStatusArmed": "Armed · waiting for tasks",
@@ -317,7 +315,7 @@
 		"tldrFoldedOne": "1 gelesene Zeile",
 		"tldrUnfold": "Diese Zeilen wieder anzeigen",
 		"taskQueueTab": "Warteschlange",
-		"taskQueueEmpty": "Die Warteschlange ist leer. Plane hier eine vollständige Aufgabe. Pläne benötigen deine Bestätigung, außer du aktivierst Auto approve für diese Warteschlange.",
+		"taskQueueEmpty": "Die Warteschlange ist leer.",
 		"taskQueueNotLoaded": "pi-queue ist in diesem Chat nicht geladen, die Warteschlange kann nicht laufen.",
 		"taskQueueStart": "Starten",
 		"taskQueueStartHint": "Der Agent arbeitet die wartenden Aufgaben nacheinander ab",

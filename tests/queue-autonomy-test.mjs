@@ -216,7 +216,38 @@ async function toggle(page, name, value) {
 async function tasks(page, count) {
 	await page.waitForFunction((n) => window.__queue?.taskQueue?.tasks.length === n, count);
 }
+async function compactControls(page, name) {
+	await page.evaluate(() => document.fonts.ready);
+	const empty = page.locator(".task-queue-empty").filter({ visible: true });
+	if (await empty.count())
+		assert.equal(await empty.innerText(), "The queue is empty.", `${name}: no empty-state tutorial`);
+	const layout = await page
+		.locator(".task-queue-autonomy")
+		.filter({ visible: true })
+		.evaluate((row) => {
+			const bounds = row.getBoundingClientRect();
+			return {
+				text: row.innerText.replace(/\s+/g, " ").trim(),
+				height: bounds.height,
+				overflow: row.scrollWidth > row.clientWidth,
+				buttons: [...row.querySelectorAll('[role="switch"]')].map((button) => {
+					const box = button.getBoundingClientRect();
+					return { y: box.y, width: box.width, height: box.height, overflow: button.scrollWidth > button.clientWidth };
+				}),
+			};
+		});
+	assert.match(layout.text, /^Auto approve (On|Off) Auto start (On|Off)$/, `${name}: only labels and states`);
+	assert.equal(layout.buttons.length, 2, `${name}: both switches`);
+	assert.ok(layout.height <= 48, `${name}: one compact row (${layout.height}px)`);
+	assert.ok(Math.abs(layout.buttons[0].y - layout.buttons[1].y) < 1, `${name}: switches sit side by side`);
+	assert.equal(layout.overflow, false, `${name}: no horizontal overflow`);
+	for (const button of layout.buttons) {
+		assert.ok(button.width >= 44 && button.height >= 44, `${name}: 44px touch target`);
+		assert.equal(button.overflow, false, `${name}: labels fit their buttons`);
+	}
+}
 async function shot(page, name) {
+	await compactControls(page, name);
 	if (shots)
 		await page
 			.locator(".task-queue-panel")
@@ -310,6 +341,9 @@ try {
 	await tasks(a, 4);
 	assert.equal((await state(a)).taskQueue.tasks[3].status, "ready");
 	const phone = await openPage(true);
+	await phone.setViewportSize({ width: 320, height: 744 });
+	await compactControls(phone, "phone-320px");
+	await phone.setViewportSize({ width: 390, height: 844 });
 	await shot(phone, "phone-off");
 	await toggle(phone, "Auto approve", true);
 	await toggle(phone, "Auto start", true);
@@ -322,7 +356,7 @@ try {
 	assert.equal(await phone.getByRole("switch").count(), 0, "task chat has no autonomy controls");
 	assert.equal(modelCalls, 0, "fixture never calls a model");
 	console.log(
-		"PASS: isolated desktop/phone switches, owner fences, independent queues, approval on/off, empty rearm, Stop, reload and restart; zero model calls",
+		"PASS: compact desktop/phone switches including 320px layout and touch targets, owner fences, independent queues, approval on/off, empty rearm, Stop, reload and restart; zero model calls",
 	);
 } finally {
 	if (browser) await browser.close();

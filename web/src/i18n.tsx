@@ -233,17 +233,12 @@ export const en = {
 	taskQueueTab: "Queue",
 	taskQueueThisQueue: "This queue only",
 	taskQueueAutoApprove: "Auto approve",
-	taskQueueAutoApproveHint:
-		"Accept complete plans and plan changes without a dialog. Other approvals and permissions still apply.",
 	taskQueueAutoStart: "Auto start",
-	taskQueueAutoStartHint:
-		"Start eligible work when it arrives, within lane limits and dependencies. Stop turns this off. Errors still need attention.",
 	taskQueueOn: "On",
 	taskQueueOff: "Off",
 	taskQueueStatusArmed: "Armed · waiting for tasks",
 
-	taskQueueEmpty:
-		"The queue is empty. Plan a complete task with the agent. Plans ask for your approval unless Auto approve is on for this queue.",
+	taskQueueEmpty: "The queue is empty.",
 	taskQueueNotLoaded: "pi-queue isn't loaded in this chat, so the queue can't run.",
 	taskQueueStart: "Start",
 	taskQueueStartHint: "The agent works through the waiting tasks, one after another",
