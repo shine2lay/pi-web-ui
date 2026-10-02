@@ -11,7 +11,9 @@
  *  - alpha's draft opens with its prompt, settings and reasons; accepting it with an edited prompt
  *    writes the prompt (the old one kept in archive/) and merges the settings into identity.json; the
  *    draft moves to role-drafts/.old/; the row shows the new limits and skills;
- *  - beta's draft is refused (its settings are wrong: reasons listed, nothing written), then discarded.
+ *  - beta's draft is refused (its settings are wrong: reasons listed, nothing written), then discarded;
+ *  - alpha's own skill lives in its private folder: the identity list every window gets only counts it;
+ *    its name and description come only in the answer to the Settings page's own ask (identity_skills).
  * Usage: npm run build && node tests/identity-config-test.mjs   (ROLECFG_SHOT=/tmp/rc saves screenshots)
  */
 import { CHROME_PATH } from "./lib/chrome.mjs";
@@ -165,6 +167,8 @@ async function shot(page, name) {
 	await sleep(300);
 	await page.screenshot({ path: `${SHOT}-${name}.png`, fullPage: true });
 }
+/** Every server message the windows got, parsed (for the own-skills privacy checks). */
+const received = [];
 async function openWindow(clientId) {
 	const ctx = await browser.newContext({ viewport: { width: 1400, height: 1000 } });
 	await ctx.addInitScript((id) => {
@@ -173,6 +177,16 @@ async function openWindow(clientId) {
 	}, clientId);
 	const page = await ctx.newPage();
 	page.on("pageerror", (e) => pageErrors.push(`${clientId}: ${e}`));
+	page.on("websocket", (ws) =>
+		ws.on("framereceived", (f) => {
+			if (typeof f.payload !== "string") return;
+			try {
+				received.push(JSON.parse(f.payload));
+			} catch {
+				// not JSON: not one of ours
+			}
+		}),
+	);
 	await page.goto(`http://localhost:${PORT}/`);
 	await page.waitForSelector(".topbar", { timeout: 60000 });
 	return page;
@@ -212,8 +226,35 @@ try {
 		await textOf(row(W, "alpha").locator(".identity-role-prompt")),
 	);
 	check(
-		"alpha's own skill is listed",
-		(await row(W, "alpha").locator(".identity-role-skill").allTextContents()).some((s) => s.includes("own-skill")),
+		"alpha's own skill is listed (the page asked for it)",
+		await waitFor(
+			async () =>
+				(await row(W, "alpha").locator(".identity-role-skill").allTextContents()).some((s) => s.includes("own-skill")),
+			10000,
+		),
+	);
+	const lists = received.filter((m) => m && m.type === "identities");
+	const alphaRows = lists.map((m) => (m.identities ?? []).find((i) => i.id === "alpha")).filter(Boolean);
+	check(
+		"the identity list every window gets only counts alpha's own skills",
+		alphaRows.length > 0 &&
+			alphaRows.every((i) => i.ownSkills === 1) &&
+			lists.every(
+				(m) => !JSON.stringify(m).includes("own-skill") && !JSON.stringify(m).includes("checks its own work"),
+			),
+		`${lists.length} lists`,
+	);
+	const answers = received.filter((m) => m && m.type === "identity_skills");
+	check(
+		"...its name and description come only in the answer to the page's ask",
+		answers.some(
+			(m) =>
+				m.skills?.alpha?.length === 1 &&
+				m.skills.alpha[0].name === "own-skill" &&
+				m.skills.alpha[0].description === "How alpha checks its own work." &&
+				m.skills.alpha[0].shared === false,
+		),
+		`${answers.length} answers`,
 	);
 	check(
 		"alpha has no tool limits yet",
@@ -350,11 +391,14 @@ try {
 		),
 		await textOf(row(W, "alpha").locator(".identity-role-tools")),
 	);
-	const skills = await row(W, "alpha").locator(".identity-role-skill").allTextContents();
+	const skillsNow = async () => await row(W, "alpha").locator(".identity-role-skill").allTextContents();
 	check(
 		"...its own and the shared skill",
-		skills.some((s) => s.includes("own-skill")) && skills.some((s) => s.includes("team-skill (shared)")),
-		skills.join(" | "),
+		await waitFor(async () => {
+			const s = await skillsNow();
+			return s.some((x) => x.includes("own-skill")) && s.some((x) => x.includes("team-skill (shared)"));
+		}, 10000),
+		(await skillsNow()).join(" | "),
 	);
 	check("...and no draft waiting", (await row(W, "alpha").locator(".identity-draft-badge").count()) === 0);
 	check(

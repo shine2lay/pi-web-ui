@@ -72,7 +72,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | identity-notebook-tab        | `local`        | `server/notebook-watch.ts` (new), `identities.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (30), `web/src/notebook-state.ts` + `components/NotebookPanel.tsx` (new), `RightPanel.tsx`, `App.tsx`, `SettingsModal.tsx`, `IdentitiesSettings.tsx`, `ui-slots.ts`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `scripts/sealed.sh`, `tests/identity-notebook-test.mjs` (new), `tests/unit/` |
 | queue-grouping               | `local`        | `server/queue-groups.ts` (new), `agent-service.ts`, `client-state.ts`, `protocol.ts`, `protocol-version.ts` (31), `web/src/conv-groups.ts`, `queue-folds.ts` (new), `components/LeftPanel.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/queue-grouping-test.mjs` (new), `tests/unit/queue-groups.test.ts` (new), `conv-groups.test.ts`, `docs/directory-reference.md` |
 | new-chat-default             | `local`        | `server/new-chat-model.ts` (new), `agent-service.ts`, `web/src/i18n.tsx`, `tests/unit/new-chat-model.test.ts` (new) |
-| identity-config              | `local`        | `server/identity-config.ts` (new, pi-identity's `config.ts` copied byte for byte), `identity-roles.ts` (new), `identities.ts`, `index.ts`, `agent-service.ts` (`reloadForIdentity`), `protocol.ts`, `protocol-version.ts` (32), `web/src/identity-state.ts`, `components/IdentitiesSettings.tsx`, `NotebookPanel.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `.prettierignore`, `tests/identity-config-test.mjs` (new), `tests/unit/identity-config.test.ts` (new), `tests/unit/identities.test.ts` |
+| identity-config              | `local`        | `server/identity-config.ts` (new, pi-identity's `config.ts` copied byte for byte), `identity-roles.ts` (new), `identities.ts`, `index.ts`, `agent-service.ts` (`reloadForIdentity`), `protocol.ts`, `protocol-version.ts` (33), `web/src/identity-state.ts`, `components/IdentitiesSettings.tsx`, `NotebookPanel.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `.prettierignore`, `tests/identity-config-test.mjs` (new), `tests/unit/identity-config.test.ts` (new), `tests/unit/identities.test.ts` |
 
 ---
 
@@ -4255,12 +4255,17 @@ sees and edits all of it, and where suggested prompts (drafts) wait for the owne
    test compares the two files when pi-identity's checkout is there (`PI_IDENTITY_SRC`, else
    `~/projects/pi-identity/config.ts`).
 2. **A role's parts** (`server/identity-roles.ts`, new; `identities.ts`): each `identities` row also carries
-   its prompt file and size (or `promptOff` for `"prompt": null`), its skills (its own `skills/` folder
-   and the shared ones it names, read with pi's own `loadSkillsFromDir`), its tool limits in words,
-   `unique`, and `configProblems` (what pi-identity leaves out of its identity.json, one line each; the rest
+   its prompt file and size (or `promptOff` for `"prompt": null`), the shared skills it names (read with
+   pi's own `loadSkillsFromDir`), `ownSkills` (only how many skills its own `skills/` folder holds), its
+   tool limits in words, `unique`, and `configProblems` (what pi-identity leaves out of its identity.json, one line each; the rest
    of the role still works). Problems in `pi-identity.json` show at the top of the page. The server logs a
    role's problems once when they show up: `[identities] <id>'s settings: <problem>`. The notebook cap is
    the shared file's `notebookCap` (default 8,000).
+   **A role's own skills stay private** (#33: only a role's own chats may read its folder). Every window
+   gets the `identities` list, and anything holding the app's token can open one, so the list only counts
+   them. Settings asks for them with `identity_skills_get` and the server answers that window alone with
+   `identity_skills {skills: {<id>: [...]}}` (roles whose own skills are off left out); pi-worktree blocks
+   agents from sending it, like the other identity views.
 3. **The owner's editors** (`identities.ts`, `index.ts`): `identity_file_get/save` also take `prompt` (the
    file the settings name, default `prompt.md`, up to 32,000 bytes) and `config` (the whole identity.json).
    A settings save is refused with code `invalid` and `problems` unless pi-identity would read every part
@@ -4278,7 +4283,8 @@ sees and edits all of it, and where suggested prompts (drafts) wait for the owne
    Logs: `[identities] the owner accepted the draft for <id>: its prompt into prompt.md; tools, skills
    into identity.json`, `refused the draft for <id>: ...`, `the owner discarded the draft for <id>`.
 5. **Settings -> Identities** (`IdentitiesSettings.tsx`, `identity-state.ts`, `use-chat.ts`): each row shows
-   the prompt, skills (shared ones marked), tool limits, "One chat at a time" for `unique`, and what was left
+   the prompt, skills (its own first, as its chats load them, once the page's own ask is answered; the
+   shared ones marked; "Loading" until then), tool limits, "One chat at a time" for `unique`, and what was left
    out of its settings. Buttons open about.md, notebook.md, the prompt and the settings in the same editor;
    a refused save lists the reasons. "Draft waiting" shows on a row and as a count in the header; "View
    draft" opens its prompt and settings (both editable), its reasons, and Accept / Save draft / Discard.
@@ -4288,7 +4294,7 @@ sees and edits all of it, and where suggested prompts (drafts) wait for the owne
    its skills when it starts, before "Start as" or the chat menu gave it a role. After `/identity` the
    chat reloads once, like after a settings change (not while it's working), so pi-identity can hand pi
    the role's skill folders (or none once the role is gone) and they load as real skills.
-7. Protocol 32. English strings in `i18n.tsx`, translated in all 8 `locales/*.json`; styles
+7. Protocol 32, then 33 (a role's own skills left the list for `identity_skills_get`). English strings in `i18n.tsx`, translated in all 8 `locales/*.json`; styles
    `.identity-role-*`, `.identity-draft*`, `.identity-config-problems`, `.identity-editor-problems`.
 
 ### How it was checked
@@ -4297,13 +4303,17 @@ sees and edits all of it, and where suggested prompts (drafts) wait for the owne
   skills, limits and problems; broken parts left out and logged once; the shared settings file (cap,
   groups, its own problems); settings saves refused with reasons and saved when good; the prompt file
   (named one, too big); drafts listed, read, saved, accepted (prompt, archive, merged settings, `.old/`),
-  refused (bad fields, changed since read) and discarded; the client's draft store and the row's view.
+  refused (bad fields, changed since read) and discarded; the client's draft store and the row's view;
+  a role's own skills only counted in its row, listed only when asked (own first, a shared one with the
+  same name left out), and the page asking for them and showing them first once they come.
   `tests/unit/identities.test.ts` updated for the new row fields.
 - `tests/identity-config-test.mjs` (sealed browser test, no model asked): the rows' prompt, skills, limits
   and problems, "Draft waiting" on rows and in the header; the settings editor refuses bad settings with
   each reason (file hash unchanged, log line) and saves good ones (row updated); a draft opened, its
   prompt edited and accepted (prompt written, old one archived, settings merged, draft in `.old/`, row
-  updated, log line); a bad draft refused with its reason (nothing written), then discarded.
+  updated, log line); a bad draft refused with its reason (nothing written), then discarded; from the
+  WebSocket frames the windows got, no `identities` list ever names alpha's own skill (only `ownSkills: 1`)
+  and the `identity_skills` answer to the page's ask does.
 - check.sh, the build and the full sealed suite; live, a throwaway role (prompt, own skill, `deny bash`).
 
 ### When syncing

@@ -82,7 +82,7 @@ import {
 	saveIdentityFile,
 	scheduleMemoryReindex,
 } from "./identities.js";
-import { acceptDraft, discardDraft, readDraft, saveDraft, type DraftResult } from "./identity-roles.js";
+import { acceptDraft, discardDraft, ownSkillList, readDraft, saveDraft, type DraftResult } from "./identity-roles.js";
 import { NotebookWatch } from "./notebook-watch.js";
 import { initHttpProxy } from "./http-proxy.js";
 import { globalLspPool } from "./lsp-tool.js";
@@ -2552,6 +2552,16 @@ wss.on("connection", (ws) => {
 					console.log(`[identities] the owner discarded the draft for ${msg.id}`);
 					pushIdentities();
 				}
+				break;
+			}
+			case "identity_skills_get": {
+				// identity-config: each role's own skills (its private skills/ folder), only to the window that
+				// asked (Settings → Identities); the identity list every window gets only counts them.
+				const skills: Record<string, ReturnType<typeof ownSkillList>> = {};
+				for (const def of identityRegistry(true).identities) {
+					if (def.role.config.skills.own) skills[def.id] = ownSkillList(def.dir, def.role.config);
+				}
+				send({ type: "identity_skills", skills });
 				break;
 			}
 			case "identity_notebook_watch":

@@ -105,40 +105,60 @@ export function promptPathOf(dir: string, config: RoleConfig): string {
 	return join(dir, config.prompt ?? DEFAULT_PROMPT);
 }
 
-/** The skills a role's chats load (same folders as pi-identity's roleSkillDirs, read with pi's own loader). */
-export function roleSkillList(dir: string, config: RoleConfig, settings: Settings): UiRoleSkill[] {
-	const folders: { dir: string; shared: boolean }[] = [];
-	const own = join(dir, "skills");
-	if (config.skills.own && existsSync(own)) folders.push({ dir: own, shared: false });
+/** The skills in one folder, read with pi's own loader (as a role's chats load them). */
+function skillsIn(dir: string, shared: boolean): UiRoleSkill[] {
+	try {
+		return loadSkillsFromDir({ dir, source: "pi-identity" }).skills.map((s) => ({
+			name: s.name,
+			description: s.description ?? "",
+			shared,
+			path: s.filePath,
+		}));
+	} catch {
+		return [];
+	}
+}
+
+/** Adds the skills whose names aren't in `out` yet (the first of a name wins, as in pi). */
+function addNew(out: UiRoleSkill[], found: UiRoleSkill[]): UiRoleSkill[] {
+	for (const s of found) if (!out.some((o) => o.name === s.name)) out.push(s);
+	return out;
+}
+
+/** The shared role skills a role takes, in the order its settings name them. The shared folder isn't
+ *  private, so these may go in the identity list every window gets. */
+export function sharedSkillList(config: RoleConfig, settings: Settings): UiRoleSkill[] {
+	const out: UiRoleSkill[] = [];
 	for (const name of config.skills.shared) {
 		const d = join(settings.roleSkillsDir, name);
-		if (existsSync(join(d, "SKILL.md"))) folders.push({ dir: d, shared: true });
-	}
-	const out: UiRoleSkill[] = [];
-	for (const f of folders) {
-		let found: { name: string; description: string; filePath: string }[] = [];
-		try {
-			found = loadSkillsFromDir({ dir: f.dir, source: "pi-identity" }).skills;
-		} catch {
-			found = [];
-		}
-		for (const s of found) {
-			if (!out.some((o) => o.name === s.name)) {
-				out.push({ name: s.name, description: s.description ?? "", shared: f.shared, path: s.filePath });
-			}
-		}
+		if (existsSync(join(d, "SKILL.md"))) addNew(out, skillsIn(d, true));
 	}
 	return out;
 }
 
-/** The role parts of a Settings row. */
+/** A role's own skills (its skills/ folder) when its settings take them, else none. They live in its
+ *  private folder (#33), so they go only to the window that asks (identity_skills_get), never in the
+ *  identity list every window gets. */
+export function ownSkillList(dir: string, config: RoleConfig): UiRoleSkill[] {
+	const own = join(dir, "skills");
+	return config.skills.own && existsSync(own) ? addNew([], skillsIn(own, false)) : [];
+}
+
+/** The skills a role's chats load: its own first, then the shared ones not named like one of them (the
+ *  same folders and order as pi-identity's roleSkillDirs). */
+export function roleSkillList(dir: string, config: RoleConfig, settings: Settings): UiRoleSkill[] {
+	return addNew(ownSkillList(dir, config), sharedSkillList(config, settings));
+}
+
+/** The role parts of a Settings row, which every window gets: its own skills only as a count. */
 export function roleInfoParts(dir: string, view: RoleView, settings: Settings) {
 	const promptPath = promptPathOf(dir, view.config);
 	return {
 		promptFile: basename(promptPath),
 		promptSize: sizeOf(promptPath),
 		...(view.config.prompt === null ? { promptOff: true } : {}),
-		skills: roleSkillList(dir, view.config, settings),
+		skills: sharedSkillList(view.config, settings),
+		...(view.config.skills.own ? { ownSkills: ownSkillList(dir, view.config).length } : {}),
 		toolLimits: limitsText(view.config.tools, settings),
 		...(view.config.unique ? { unique: true } : {}),
 		configProblems: view.problems,

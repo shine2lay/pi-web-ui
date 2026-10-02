@@ -146,10 +146,12 @@ describe("the identity list", () => {
 			aboutSize: Buffer.byteLength("About temper\n"),
 			notebookSize: Buffer.byteLength("- #fact one\n"),
 			notebookCap: NOTEBOOK_CAP,
-			// identity-config: no prompt, skills or limits set (identity-config.test.ts covers them)
+			// identity-config: no prompt, skills or limits set (identity-config.test.ts covers them); its own
+			// skills are on by default, and the list only counts them
 			promptFile: "prompt.md",
 			promptSize: 0,
 			skills: [],
+			ownSkills: 0,
 			toolLimits: "none",
 			configProblems: [],
 		});

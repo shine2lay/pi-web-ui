@@ -1418,6 +1418,10 @@ export type ClientMessage =
 			baseHash: string;
 	  }
 	| { type: "identity_draft_discard"; id: string }
+	/** identity-config: the roles' own skills (names and descriptions from each role's private skills/
+	 *  folder), answered with `identity_skills`. Settings → Identities asks; they stay out of the identity
+	 *  list every window gets, and pi-worktree keeps agents from asking. */
+	| { type: "identity_skills_get" }
 	/** identity-notebook-tab: this window's Notebook tab shows identity `id`'s notebook (null = it closed).
 	 *  Answered at once with `identity_notebook`, then again whenever the file changes (anyone: a chat's
 	 *  notebook tool, the owner, the weekly tidy-up). One watch per window; a new one replaces it. */
@@ -1466,9 +1470,11 @@ export interface UiIdentityInfo {
 	promptFile: string;
 	promptSize: number;
 	promptOff?: boolean;
-	/** identity-config: the skills its chats load (its own skills/ folder, plus the shared role skills it
-	 *  takes), read like pi reads them. */
+	/** identity-config: the shared role skills its chats load (from the shared folder, which isn't
+	 *  private), read like pi reads them. Its own skills live in its private folder, so this list every
+	 *  window gets only counts them (ownSkills, when they're on); their names come with identity_skills. */
 	skills: UiRoleSkill[];
+	ownSkills?: number;
 	/** identity-config: its tool limits in a few words ("none" when there are none). */
 	toolLimits: string;
 	/** identity-config: limited to one chat (`unique`, for the queue). */
@@ -3567,6 +3573,9 @@ export type ServerMessage =
 			problems?: string[];
 			hash?: string;
 	  }
+	/** identity-config: each role's own skills (identity_skills_get), by role id; a role whose own skills
+	 *  are off is left out. Only to the window that asked. */
+	| { type: "identity_skills"; skills: Record<string, UiRoleSkill[]> }
 	/** identity-notebook-tab: the watched notebook (identity_notebook_watch), sent at once and on every
 	 *  change. error = no such identity, or the file couldn't be read. */
 	| {

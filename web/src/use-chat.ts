@@ -60,6 +60,7 @@ import {
 	receiveIdentities,
 	receiveIdentityDraft,
 	receiveIdentityDraftDone,
+	receiveOwnSkills,
 	receiveIdentityFile,
 	receiveIdentitySaved,
 } from "./identity-state";
@@ -2056,6 +2057,10 @@ export function useChat() {
 					break;
 				case "identity_draft_done":
 					receiveIdentityDraftDone(msg);
+					break;
+				// identity-config: the roles' own skills (Settings asked; they stay out of the identity list).
+				case "identity_skills":
+					receiveOwnSkills(msg);
 					break;
 				case "identity_notebook":
 					receiveNotebook(msg);

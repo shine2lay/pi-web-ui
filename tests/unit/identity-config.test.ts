@@ -3,8 +3,9 @@
  *
  * - server/identity-config.ts is pi-identity's config.ts byte for byte (when that checkout is on this
  *   machine: PI_IDENTITY_SRC, else ~/projects/pi-identity), so Settings refuses what pi-identity refuses;
- * - a role's row: its prompt, its skills (its own and the shared ones it opts into), its tool limits,
- *   `unique`, and what's left out of a broken identity.json (also logged once, when it shows up);
+ * - a role's row: its prompt, its skills (the shared ones it opts into; its own, from its private folder,
+ *   only counted), its tool limits, `unique`, and what's left out of a broken identity.json (also logged
+ *   once, when it shows up); its own skills only through the page's own ask;
  * - the shared settings file: the notebook cap comes from it, a bad field is reported;
  * - Settings' saves: identity.json refused with its reasons unless pi-identity reads every part of it
  *   (the file stays as it was), the prompt (the file identity.json names) with its own cap;
@@ -34,7 +35,9 @@ import {
 	checkConfigText,
 	discardDraft,
 	draftIds,
+	ownSkillList,
 	readDraft,
+	roleSkillList,
 	saveDraft,
 } from "../../server/identity-roles.js";
 import type { UiIdentityInfo } from "../../server/protocol.js";
@@ -48,6 +51,8 @@ import {
 	receiveIdentities,
 	receiveIdentityDraft,
 	receiveIdentityDraftDone,
+	receiveOwnSkills,
+	requestOwnSkills,
 	resetIdentityState,
 	sendIdentityDraftAction,
 } from "../../web/src/identity-state.js";
@@ -163,12 +168,38 @@ describe("a role's row in Settings", () => {
 			unique: true,
 			configProblems: [],
 		});
+		// The row every window gets: the shared skills (their folder isn't private), its own only counted.
 		expect(alpha?.skills?.map((s) => [s.name, s.shared, s.description])).toEqual([
-			["own-skill", false, "A how-to alpha wrote."],
 			["team-skill", true, "How the team works."],
 		]);
+		expect(alpha?.ownSkills).toBe(1);
+		expect(JSON.stringify(alpha)).not.toContain("own-skill");
+		expect(JSON.stringify(alpha)).not.toContain("A how-to alpha wrote");
 		expect(alpha?.promptOff).toBeUndefined();
 		expect(alpha?.draft).toBeUndefined();
+	});
+
+	it("its own skills come from its private folder only when asked; its chats load its own first, then the shared", () => {
+		const reg = identityRegistry(true);
+		const def = reg.identities.find((d) => d.id === "alpha")!;
+		expect(ownSkillList(def.dir, def.role.config).map((s) => [s.name, s.shared, s.description])).toEqual([
+			["own-skill", false, "A how-to alpha wrote."],
+		]);
+		expect(roleSkillList(def.dir, def.role.config, reg.settings).map((s) => [s.name, s.shared])).toEqual([
+			["own-skill", false],
+			["team-skill", true],
+		]);
+		// A shared skill named like one of its own is left out (pi keeps the first of a name).
+		mkdirSync(join(agent, "role-skills", "own-skill"), { recursive: true });
+		writeFileSync(join(agent, "role-skills", "own-skill", "SKILL.md"), skillText("own-skill", "The shared one."));
+		const both = { ...def.role.config, skills: { own: true, shared: ["own-skill", "team-skill"] } };
+		expect(roleSkillList(def.dir, both, reg.settings).map((s) => [s.name, s.description])).toEqual([
+			["own-skill", "A how-to alpha wrote."],
+			["team-skill", "How the team works."],
+		]);
+		// Own skills off: none.
+		const off = { ...def.role.config, skills: { own: false, shared: [] } };
+		expect(ownSkillList(def.dir, off)).toEqual([]);
 	});
 
 	it("a role with no settings: no prompt, no skills, no limits, nothing wrong", () => {
@@ -190,6 +221,7 @@ describe("a role's row in Settings", () => {
 			{ "prompt.md": "unused\n", "skills/x/SKILL.md": skillText("x", "An own skill.") },
 		);
 		expect(info("gamma")).toMatchObject({ promptOff: true, skills: [], configProblems: [] });
+		expect(info("gamma")?.ownSkills).toBeUndefined();
 	});
 
 	it("a broken part is refused with its reason and left out; the role still loads, and each reason is logged once", () => {
@@ -493,9 +525,9 @@ describe("the page", () => {
 		promptFile: "prompt.md",
 		promptSize: 1234,
 		skills: [
-			{ name: "own-skill", description: "A how-to", shared: false, path: "/r/alpha/skills/own-skill/SKILL.md" },
 			{ name: "temper-improve", description: "Rounds", shared: true, path: "/a/role-skills/temper-improve/SKILL.md" },
 		],
+		ownSkills: 1,
 		toolLimits: "deny subagents, browser",
 		unique: true,
 		configProblems: ['unknown field "colour" (known: id, title)'],
@@ -598,8 +630,10 @@ describe("the page", () => {
 		expect(html).toContain('class="identity-drafts-count" data-count="1"');
 		expect(html).toContain("Draft waiting");
 		expect(html).toContain("prompt.md, 1,234 bytes");
-		expect(html).toContain("own-skill");
+		// Its own skills aren't in the list: until the page's ask is answered, the shared one and "Loading".
+		expect(html).not.toContain("own-skill");
 		expect(html).toContain("temper-improve (shared)");
+		expect(html).toContain("identity-role-skills-pending");
 		expect(html).toContain("deny subagents, browser");
 		expect(html).toContain("One chat at a time");
 		expect(html).toContain("unknown field &quot;colour&quot;");
@@ -610,5 +644,32 @@ describe("the page", () => {
 		expect(betaRow).toContain("none yet");
 		expect(betaRow).toContain("none");
 		expect(betaRow).not.toContain("Draft waiting");
+		expect(betaRow).not.toContain("identity-role-skills-pending");
+	});
+
+	it("the page asks for the roles' own skills and lists them first once they come", () => {
+		const sent: unknown[] = [];
+		setAppSend((msg) => {
+			sent.push(msg);
+			return true;
+		});
+		requestOwnSkills();
+		expect(sent).toEqual([{ type: "identity_skills_get" }]);
+		receiveIdentities({ type: "identities", identities: [alpha, beta], problems: [] });
+		receiveOwnSkills({
+			type: "identity_skills",
+			skills: {
+				alpha: [
+					{ name: "own-skill", description: "A how-to", shared: false, path: "/r/alpha/skills/own-skill/SKILL.md" },
+				],
+			},
+		});
+		const html = renderToStaticMarkup(
+			createElement(LanguageProvider, null, createElement(IdentitiesSettings, { onOpenChat: () => {} })),
+		);
+		const alphaRow = html.slice(html.indexOf('data-identity="alpha"'), html.indexOf('data-identity="beta"'));
+		expect(alphaRow).toContain("own-skill");
+		expect(alphaRow.indexOf("own-skill")).toBeLessThan(alphaRow.indexOf("temper-improve (shared)"));
+		expect(alphaRow).not.toContain("identity-role-skills-pending");
 	});
 });

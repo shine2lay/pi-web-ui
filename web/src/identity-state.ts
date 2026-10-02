@@ -11,19 +11,29 @@
  *  - identity-config: the one role draft open (role-drafts/<id>/, waiting for the owner): its suggested
  *    prompt, settings and reasons, its hash, and the answer to the last save, accept or discard. Opening
  *    a draft closes the file editor and the other way round.
+ *  - identity-config: each role's own skills (`identity_skills`, which Settings -> Identities asks for):
+ *    they live in the role's private folder, so the identity list every window gets only counts them.
  *
  * Same pattern as tool-info-state.ts: module-level `cached` values + listeners +
  * `useSyncExternalStore`; the getters return stable references between changes.
  */
 import { useSyncExternalStore } from "react";
 import { appSend } from "./app-globals";
-import type { IdentityDraftAction, IdentityFileName, IdentitySaveError, ServerMessage, UiIdentityInfo } from "./types";
+import type {
+	IdentityDraftAction,
+	IdentityFileName,
+	IdentitySaveError,
+	ServerMessage,
+	UiIdentityInfo,
+	UiRoleSkill,
+} from "./types";
 
 export type IdentitiesPayload = Extract<ServerMessage, { type: "identities" }>;
 export type IdentityFilePayload = Extract<ServerMessage, { type: "identity_file" }>;
 export type IdentitySavedPayload = Extract<ServerMessage, { type: "identity_file_saved" }>;
 export type IdentityDraftPayload = Extract<ServerMessage, { type: "identity_draft" }>;
 export type IdentityDraftDonePayload = Extract<ServerMessage, { type: "identity_draft_done" }>;
+export type IdentitySkillsPayload = Extract<ServerMessage, { type: "identity_skills" }>;
 
 /** The identity list. loaded = the server has sent it at least once. */
 export interface IdentityListState {
@@ -75,6 +85,9 @@ let pendingText: string | null = null;
 /** identity-config: the draft open, and the texts of a draft save on its way. */
 let draft: IdentityDraftState | null = null;
 let pendingDraft: { prompt: string; config: string } | null = null;
+/** identity-config: each role's own skills by role id, as last asked (null = not asked yet). */
+const NO_SKILLS: Record<string, UiRoleSkill[]> = {};
+let ownSkills: Record<string, UiRoleSkill[]> | null = null;
 
 const listeners = new Set<() => void>();
 
@@ -95,6 +108,21 @@ export function receiveIdentities(payload: IdentitiesPayload): void {
 /** Ask the server for the list again (Settings -> Identities opened). */
 export function requestIdentities(): void {
 	appSend({ type: "identities_get" });
+}
+
+/** identity-config: ask for each role's own skills (Settings -> Identities, when it opens and when the
+ *  list changes). */
+export function requestOwnSkills(): void {
+	appSend({ type: "identity_skills_get" });
+}
+
+/** identity-config: `identity_skills` from the server (use-chat). */
+export function receiveOwnSkills(payload: IdentitySkillsPayload): void {
+	const got = payload.skills && typeof payload.skills === "object" ? payload.skills : {};
+	const next: Record<string, UiRoleSkill[]> = {};
+	for (const [id, skills] of Object.entries(got)) if (Array.isArray(skills)) next[id] = skills;
+	ownSkills = next;
+	notify();
 }
 
 /** Open about.md / notebook.md in the editor: shows "loading" and asks the server for the text. */
@@ -252,6 +280,11 @@ export function getIdentityDraft(): IdentityDraftState | null {
 	return draft;
 }
 
+/** identity-config: each role's own skills by role id ({} until the server has answered). */
+export function getOwnSkills(): Record<string, UiRoleSkill[]> {
+	return ownSkills ?? NO_SKILLS;
+}
+
 /** Only for unit tests: back to the start (no notifications). */
 export function resetIdentityState(): void {
 	list = EMPTY_LIST;
@@ -259,6 +292,7 @@ export function resetIdentityState(): void {
 	pendingText = null;
 	draft = null;
 	pendingDraft = null;
+	ownSkills = null;
 }
 
 /** The identity list (re-renders when it changes). */
@@ -274,6 +308,11 @@ export function useIdentityFile(): IdentityFileState | null {
 /** identity-config: the role draft open in Settings -> Identities (null = none). */
 export function useIdentityDraft(): IdentityDraftState | null {
 	return useSyncExternalStore(subscribeIdentities, getIdentityDraft, getIdentityDraft);
+}
+
+/** identity-config: each role's own skills by role id (re-renders when they come). */
+export function useOwnSkills(): Record<string, UiRoleSkill[]> {
+	return useSyncExternalStore(subscribeIdentities, getOwnSkills, getOwnSkills);
 }
 
 /** How many bytes a text takes in UTF-8 (what the notebook cap counts). */

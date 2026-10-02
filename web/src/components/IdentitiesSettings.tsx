@@ -13,9 +13,12 @@
  * pi-identity leaves out of its identity.json; its prompt and its settings open in the same editor (the
  * server refuses settings pi-identity wouldn't read, and says why). A draft waiting for the owner
  * (role-drafts/<id>/) shows as "Draft waiting": view and edit it, then accept it (an app save into the
- * role's folder) or discard it.
+ * role's folder) or discard it. A role's own skills live in its private folder, so the identity list
+ * every window gets only counts them: this page asks for them (identity_skills_get) when it opens and
+ * whenever the list changes.
  *
- * State: identity-state.ts (the list, the open file, the open draft); the texts being typed live here.
+ * State: identity-state.ts (the list, the open file, the open draft, the own skills); the texts being
+ * typed live here.
  */
 import { useEffect, useMemo, useState } from "react";
 import { FiUser } from "react-icons/fi";
@@ -27,12 +30,14 @@ import {
 	openIdentityDraft,
 	openIdentityFile,
 	requestIdentities,
+	requestOwnSkills,
 	saveOpenIdentityFile,
 	sendIdentityDraftAction,
 	shortChatName,
 	useIdentityDraft,
 	useIdentityFile,
 	useIdentityList,
+	useOwnSkills,
 	utf8Bytes,
 	type IdentityDraftState,
 	type IdentityFileState,
@@ -44,6 +49,7 @@ import type {
 	IdentitySaveError,
 	SessionSummary,
 	UiIdentityInfo,
+	UiRoleSkill,
 } from "../types";
 import { HintTip } from "./HintTip";
 
@@ -101,6 +107,7 @@ export function IdentitiesSettings({
 	const { identities, problems, loaded } = useIdentityList();
 	const open = useIdentityFile();
 	const draft = useIdentityDraft();
+	const ownSkills = useOwnSkills();
 	// Fresh sizes whenever the page opens; the editor closes when the page goes away. The History
 	// list is loaded lazily by the left panel (not yet on a phone whose drawer stayed shut): ask for
 	// it too, so the home chats show by their titles.
@@ -114,6 +121,10 @@ export function IdentitiesSettings({
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- once per opening
 	}, []);
+	// identity-config: the roles' own skills, asked again with every new list (a draft accepted, a save).
+	useEffect(() => {
+		if (loaded) requestOwnSkills();
+	}, [identities, loaded]);
 
 	const titleOfChat = useMemo(() => {
 		const byPath = new Map<string, string>();
@@ -164,6 +175,7 @@ export function IdentitiesSettings({
 							identity={identity}
 							open={open && open.id === identity.id ? open : null}
 							draft={draft && draft.id === identity.id ? draft : null}
+							ownSkills={ownSkills[identity.id]}
 							homeTitle={identity.homeChat ? titleOfChat(identity.homeChat) : undefined}
 							onOpenChat={onOpenChat}
 						/>
@@ -178,12 +190,15 @@ function IdentityRow({
 	identity,
 	open,
 	draft,
+	ownSkills,
 	homeTitle,
 	onOpenChat,
 }: {
 	identity: UiIdentityInfo;
 	open: IdentityFileState | null;
 	draft: IdentityDraftState | null;
+	/** identity-config: its own skills, once the server has sent them (undefined = not yet, or off). */
+	ownSkills?: UiRoleSkill[];
 	homeTitle?: string;
 	onOpenChat: (sessionPath: string) => void;
 }) {
@@ -192,7 +207,13 @@ function IdentityRow({
 	const over = cap > 0 && identity.notebookSize > cap;
 	const pct = cap > 0 ? Math.min(100, Math.round((identity.notebookSize / cap) * 100)) : 0;
 	const home = identity.homeChat;
-	const skills = identity.skills ?? [];
+	// identity-config: its own skills first, then the shared ones not named like one of them (as its chats
+	// load them); until its own come, the shared ones and "loading".
+	const shared = identity.skills ?? [];
+	const skills = ownSkills
+		? [...ownSkills, ...shared.filter((s) => !ownSkills.some((o) => o.name === s.name))]
+		: shared;
+	const ownPending = !ownSkills && (identity.ownSkills ?? 0) > 0;
 	const configProblems = identity.configProblems ?? [];
 	return (
 		<div className="identity-row" data-identity={identity.id} data-draft={identity.draft ? "1" : undefined}>
@@ -248,7 +269,7 @@ function IdentityRow({
 				</span>
 				<span className="identity-role-skills">
 					{t("identitySkills")}:{" "}
-					{skills.length === 0 ? (
+					{skills.length === 0 && !ownPending ? (
 						<span className="identity-role-muted">{t("identitySkillsNone")}</span>
 					) : (
 						skills.map((s, i) => (
@@ -258,6 +279,12 @@ function IdentityRow({
 								{s.shared ? ` (${t("identitySkillShared")})` : ""}
 							</span>
 						))
+					)}
+					{ownPending && (
+						<span className="identity-role-muted identity-role-skills-pending">
+							{skills.length > 0 ? ", " : ""}
+							{t("loading")}
+						</span>
 					)}
 				</span>
 				<span className="identity-role-tools">

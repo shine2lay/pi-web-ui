@@ -39,4 +39,7 @@
 //     problems, a waiting draft); identity_file_get/_save take "prompt" and "config"; pages send
 //     identity_draft_get / _save / _accept / _discard and the server answers identity_draft /
 //     identity_draft_done. An old page shows none of it; an old server would drop the new messages.
-export const PROTOCOL_VERSION = 32;
+// 33: identity-config - a role's own skills (from its private folder) leave the identity rows, which
+//     only count them (ownSkills); Settings asks for them with identity_skills_get and the server
+//     answers identity_skills. An old page would list no own skills; an old server would drop the ask.
+export const PROTOCOL_VERSION = 33;
