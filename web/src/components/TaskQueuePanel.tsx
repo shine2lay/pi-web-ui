@@ -17,7 +17,7 @@
  * 新的队列（或 5 秒后）再放开，防连点。
  */
 
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useId, useState } from "react";
 import type { UiTaskQueue, UiTaskQueuePlan, UiTaskQueueTask } from "../types";
 import { useT, type Translate } from "../i18n";
 import { Markdown } from "./Markdown";
@@ -26,7 +26,8 @@ import { lineTime } from "./TldrPanel";
 type TKey = Parameters<Translate>[0];
 
 /** 面板按钮能发的命令（服务端 taskQueueCommandLine 转成 `/queue …`）。 */
-export type TaskQueueAction = "start" | "stop" | "up" | "down" | "remove" | "clear" | "lanes";
+export type TaskQueueAction =
+	"start" | "stop" | "up" | "down" | "remove" | "clear" | "lanes" | "autoApprove" | "autoStart";
 
 /** queue-lanes: the most lanes that may run at once (pi-queue MAX_LANES); 2 when not set. */
 const MAX_LANES = 8;
@@ -83,7 +84,7 @@ export function taskQueueStatusKey(q: UiTaskQueue, s: TaskQueueSections): TKey {
 		return s.waiting.length > 0 ? "taskQueueStatusOnHold" : "taskQueueStatusRunning";
 	}
 	if (!s.current && s.ready.length === 0 && s.waiting.length === 0 && s.inChats.length === 0) {
-		return "taskQueueStatusFinished";
+		return q.autoStart ? "taskQueueStatusArmed" : "taskQueueStatusFinished";
 	}
 	switch (q.pausedReason) {
 		case "user":
@@ -173,7 +174,7 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 	/** telegram-answers: answer a stuck task (a choice or typed words). Not given = answer in the chat. */
 	onAnswer?: (taskId: number, text: string) => void;
 	/** 发一条 `/queue …` 命令给这条对话的 pi-queue。不给就不出按钮（只读）。 */
-	onCommand?: (action: TaskQueueAction, id?: number) => void;
+	onCommand?: (action: TaskQueueAction, id?: number, value?: boolean) => void;
 	/** queue-lanes: open a task's own chat (or the queue's chat). Not given = no links. */
 	onOpenChat?: (file: string) => void;
 	/** 初始展开计划的任务（测试用；界面上点标题切换）。 */
@@ -184,6 +185,21 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 	const [removing, setRemoving] = useState<number | null>(null);
 	const [open, setOpen] = useState<ReadonlySet<number>>(() => new Set(defaultOpen));
 	const [allDone, setAllDone] = useState(false);
+	const hintId = useId();
+	const [pendingSetting, setPendingSetting] = useState<{
+		key: "autoApprove" | "autoStart";
+		value: boolean;
+		queueId?: string;
+	} | null>(null);
+	useEffect(() => {
+		if (!pendingSetting) return;
+		if (queue?.queueId !== pendingSetting.queueId || queue?.[pendingSetting.key] === pendingSetting.value) {
+			setPendingSetting(null);
+			return;
+		}
+		const timer = setTimeout(() => setPendingSetting(null), BUSY_MS);
+		return () => clearTimeout(timer);
+	}, [pendingSetting, queue]);
 	// 服务端发来新的队列 = 刚才的命令有结果了（或者别的窗口改了它）。
 	useEffect(() => {
 		setBusy(false);
@@ -195,11 +211,10 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 		return () => clearTimeout(timer);
 	}, [busy]);
 
-	if (!queue || queue.tasks.length === 0) {
+	if (!queue) {
 		return (
 			<div className="task-queue-panel">
 				<p className="task-queue-empty">{t("taskQueueEmpty")}</p>
-				{queue && !queue.available && <p className="task-queue-note">{t("taskQueueNotLoaded")}</p>}
 			</div>
 		);
 	}
@@ -208,11 +223,38 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 	// queue-lanes: a task's own chat only shows its task; the queue is steered from the queue's chat.
 	const controls = queue.available && onCommand && !queue.from ? onCommand : undefined;
 	const run = (action: TaskQueueAction, id?: number) => {
-		if (!controls || busy) return;
+		if (!controls || busy || pendingSetting) return;
 		setBusy(true);
 		setRemoving(null);
 		controls(action, id);
 	};
+	const settingControl = (key: "autoApprove" | "autoStart", label: TKey, hint: TKey) => (
+		<div className="task-queue-setting">
+			<div className="task-queue-setting-head">
+				<span>{t(label)}</span>
+				<button
+					type="button"
+					role="switch"
+					aria-label={t(label)}
+					aria-checked={queue[key] === true}
+					aria-describedby={`${hintId}-${key}`}
+					className="task-queue-switch"
+					disabled={!controls || !queue.queueId || busy || !!pendingSetting}
+					onClick={() => {
+						if (!controls || !queue.queueId) return;
+						const value = queue[key] !== true;
+						setPendingSetting({ key, value, queueId: queue.queueId });
+						controls(key, undefined, value);
+					}}
+				>
+					{t(queue[key] === true ? "taskQueueOn" : "taskQueueOff")}
+				</button>
+			</div>
+			<p id={`${hintId}-${key}`} className="task-queue-setting-hint">
+				{t(hint)}
+			</p>
+		</div>
+	);
 	const toggle = (id: number) =>
 		setOpen((prev) => {
 			const next = new Set(prev);
@@ -409,7 +451,7 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 					})}
 				</span>
 				{controls &&
-					(queue.running ? (
+					(queue.running || queue.autoStart ? (
 						<button
 							type="button"
 							className="task-queue-toggle stop"
@@ -431,6 +473,14 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 						</button>
 					))}
 			</div>
+			{!queue.from && (
+				<div className="task-queue-autonomy" aria-label={t("taskQueueThisQueue")}>
+					<div className="task-queue-heading">{t("taskQueueThisQueue")}</div>
+					{settingControl("autoApprove", "taskQueueAutoApprove", "taskQueueAutoApproveHint")}
+					{settingControl("autoStart", "taskQueueAutoStart", "taskQueueAutoStartHint")}
+				</div>
+			)}
+			{queue.tasks.length === 0 && <p className="task-queue-empty">{t("taskQueueEmpty")}</p>}
 			{!queue.available && <p className="task-queue-note">{t("taskQueueNotLoaded")}</p>}
 			{queue.from && (
 				<p className="task-queue-from">

@@ -27,6 +27,8 @@
  * themselves are opened by AgentService / ClientSession (agent-service.ts).
  */
 
+import { consumeOwnerSetting } from "./queue-owner.js";
+
 export const QUEUE_HOST_KEY = Symbol.for("pi-web-ui.queue-host");
 
 /** What startChat gets, checked. */
@@ -60,6 +62,7 @@ export interface QueueHostImpl {
 /** The object pi-queue sees. */
 export interface QueueHost extends QueueHostImpl {
 	v: 1;
+	consumeOwnerSetting: typeof consumeOwnerSetting;
 }
 
 const THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -171,6 +174,7 @@ export function installQueueHost(impl: QueueHostImpl): () => void {
 	const g = globalThis as Record<symbol, unknown>;
 	const host: QueueHost = Object.freeze({
 		v: 1 as const,
+		consumeOwnerSetting,
 		startChat: (raw: QueueChatStart) => {
 			const opts = parseQueueChatStart(raw);
 			if (typeof opts === "string") return Promise.reject(new Error(opts));

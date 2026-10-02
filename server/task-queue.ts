@@ -64,6 +64,9 @@ interface Task extends Omit<UiTaskQueueTask, "status"> {
 }
 
 interface State {
+	queueId?: string;
+	autoApprove: boolean;
+	autoStart: boolean;
 	tasks: Task[];
 	running: boolean;
 	pausedReason?: PauseReason;
@@ -217,7 +220,15 @@ function apply(s: State, raw: unknown): void {
 	if (!raw || typeof raw !== "object") return;
 	const op = raw as Record<string, unknown>;
 	if (op.v !== 1) return;
+	if (op.op === "autonomy") {
+		if (s.from || !s.queueId || op.queueId !== s.queueId) return;
+		if (op.setting !== "autoApprove" && op.setting !== "autoStart") return;
+		s[op.setting] = op.value === true;
+		if (op.setting === "autoStart" && s.autoStart && s.pausedReason === "user") s.pausedReason = undefined;
+		return;
+	}
 	if (op.op === "run") {
+		if (op.queueId !== undefined && op.queueId !== s.queueId) return;
 		s.running = true;
 		s.pausedReason = undefined;
 		return;
@@ -226,6 +237,7 @@ function apply(s: State, raw: unknown): void {
 		s.running = false;
 		const reason = op.reason as PauseReason;
 		s.pausedReason = PAUSE_REASONS.has(reason) ? reason : undefined;
+		if (reason === "user") s.autoStart = false;
 		return;
 	}
 	if (op.op === "clear") {
@@ -241,6 +253,7 @@ function apply(s: State, raw: unknown): void {
 	if (op.op === "add" || op.op === "assigned") {
 		if (s.tasks.some((t) => t.id === op.id)) return;
 		const task: Task = { id: op.id, plan: planOf(op.plan), status: "ready", addedAt: num(op.ts) };
+		if (op.op === "add" && (op.approval === "dialog" || op.approval === "auto")) task.approval = op.approval;
 		const touches = normTouches(op.touches);
 		if (touches) task.touches = touches;
 		const after = normAfter(op.after, op.id);
@@ -250,6 +263,8 @@ function apply(s: State, raw: unknown): void {
 			const from = chatOf(op.from);
 			if (s.from || !from) return;
 			s.from = from;
+			s.autoApprove = false;
+			s.autoStart = false;
 			task.status = "working";
 			task.startedAt = num(op.ts);
 			s.running = true;
@@ -263,6 +278,7 @@ function apply(s: State, raw: unknown): void {
 	switch (op.op) {
 		case "update": {
 			task.plan = planOf(op.plan);
+			task.approval = op.approval === "dialog" || op.approval === "auto" ? op.approval : undefined;
 			const touches = normTouches(op.touches);
 			if (touches) task.touches = touches;
 			// queue-side-by-side: after is replaced when given ([] clears it), kept when not.
@@ -380,8 +396,16 @@ export function taskQueueFromEntries(
 	available: boolean,
 	maxDone = TASK_QUEUE_MAX_DONE,
 	shareable: readonly string[] = TASK_QUEUE_DEFAULT_SHAREABLE,
+	queueId?: string,
 ): UiTaskQueue {
-	const s: State = { tasks: [], running: false, lanes: TASK_QUEUE_DEFAULT_LANES };
+	const s: State = {
+		tasks: [],
+		running: false,
+		lanes: TASK_QUEUE_DEFAULT_LANES,
+		autoApprove: false,
+		autoStart: false,
+		queueId,
+	};
 	for (const e of entries) {
 		if (e.type === "custom" && e.customType === TASK_QUEUE_ENTRY_TYPE) apply(s, e.data);
 	}
@@ -398,6 +422,9 @@ export function taskQueueFromEntries(
 	// queue-lanes: only a queue with tasks that run in chats of their own shows lanes (a task's own chat never).
 	const lanes = s.from ? [] : lanesOf(s.tasks, taskQueueShareableOf(shareable));
 	return {
+		...(queueId ? { queueId } : {}),
+		autoApprove: s.autoApprove,
+		autoStart: s.autoStart,
 		running: s.running,
 		...(s.pausedReason ? { pausedReason: s.pausedReason } : {}),
 		available,

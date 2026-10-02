@@ -225,6 +225,8 @@ export interface UiTaskQueueWait {
 /** 队列里的一个任务（queue-panel）。ready：排着；working：正在做；stuck：等用户拍板；
  *  waiting：搁着等外面的事（别的任务照做）；done：做完了。 */
 export interface UiTaskQueueTask {
+	/** queue-autonomy: attribution for the latest plan, absent for old records. */
+	approval?: "dialog" | "auto";
 	/** pi-queue 的任务编号（#n），一条对话里从 1 往上数。 */
 	id: number;
 	status: "ready" | "working" | "stuck" | "waiting" | "done";
@@ -276,6 +278,11 @@ export interface UiTaskQueueLane {
 /** 这条对话的任务队列（queue-panel）：pi-queue 存在会话里的 `queue` 条目沿当前分支重放出来的。
  *  不是 UiState.queue（那是输入框里排队 / 插队的提问）。 */
 export interface UiTaskQueue {
+	/** queue-autonomy: session fence; opt-in never follows a fork to a different session. */
+	queueId?: string;
+	/** Owner-only opt-ins. Missing values (old servers/records) mean off. */
+	autoApprove?: boolean;
+	autoStart?: boolean;
 	/** 队列在自己往下走（按过开始，还没停）。 */
 	running: boolean;
 	/** 没在走的原因：user 按了停下；stopped 这一轮被停了；error 这一轮出错；restart pi 重启过；finished 都做完了。 */
@@ -848,9 +855,12 @@ export type ClientMessage =
 	| {
 			type: "task_queue_command";
 			/** lanes: how many lanes may run at once, the number in `id` (queue-lanes). */
-			action: "start" | "stop" | "up" | "down" | "remove" | "clear" | "lanes";
+			action: "start" | "stop" | "up" | "down" | "remove" | "clear" | "lanes" | "autoApprove" | "autoStart";
 			id?: number;
 			conversationId?: string;
+			/** Required with conversationId for owner-only settings; value must be a boolean. */
+			queueId?: string;
+			value?: boolean;
 	  }
 	/** telegram-answers: the user's answer to a stuck queued task, from the Queue tab (a choice or typed
 	 *  words). It goes into the chat the task runs in (a lane task's own chat), as their reply. */

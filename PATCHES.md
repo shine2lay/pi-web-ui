@@ -73,11 +73,47 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | queue-grouping               | `local`        | `server/queue-groups.ts` (new), `agent-service.ts`, `client-state.ts`, `protocol.ts`, `protocol-version.ts` (31), `web/src/conv-groups.ts`, `queue-folds.ts` (new), `components/LeftPanel.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/queue-grouping-test.mjs` (new), `tests/unit/queue-groups.test.ts` (new), `conv-groups.test.ts`, `docs/directory-reference.md` |
 | new-chat-default             | `local`        | `server/new-chat-model.ts` (new), `agent-service.ts`, `web/src/i18n.tsx`, `tests/unit/new-chat-model.test.ts` (new) |
 | identity-config              | `local`        | `server/identity-config.ts` (new, pi-identity's `config.ts` copied byte for byte), `identity-roles.ts` (new), `identities.ts`, `index.ts`, `agent-service.ts` (`reloadForIdentity`), `protocol.ts`, `protocol-version.ts` (33), `web/src/identity-state.ts`, `components/IdentitiesSettings.tsx`, `NotebookPanel.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `.prettierignore`, `tests/identity-config-test.mjs` (new), `tests/unit/identity-config.test.ts` (new), `tests/unit/identities.test.ts` |
+| queue-autonomy               | `local`        | `server/queue-owner.ts` (new), `task-queue.ts`, `queue-host.ts`, `agent-service.ts`, `index.ts`, `protocol.ts`, protocol versions, `web/src/components/TaskQueuePanel.tsx`, `RightPanel.tsx`, `App.tsx`, i18n, styles, `tests/queue-autonomy-test.mjs` (new), `tests/unit/queue-autonomy.test.ts` (new); paired with pi-queue |
 | subs-limits-box              | `local`        | `server/subs-limits.ts` (new), `index.ts`, `protocol.ts`, `protocol-version.ts` (34), `web/src/components/LimitsBox.tsx` (new), `web/src/subs-limits-state.ts` (new), `components/LeftPanel.tsx`, `App.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/subs-limits-box-test.mjs` (new), `tests/unit/subs-limits.test.ts` (new) |
 | session-index                | `local`        | `server/session-index.ts` (new), `session-index-worker.ts` (new), `agent-service.ts`, `identities.ts`, `index.ts`, `tests/unit/session-index.test.ts` (new), `tests/unit/global-history.test.ts`, `tests/session-index-restart-test.mjs` (new), `scripts/session-index-parity.mjs` (new), `scripts/session-index-restart-probe.mjs` (new) |
 | identity-notes               | `local`        | `server/identity-notes.ts` (new, pi-identity's `notes.ts` copied byte for byte), `identity-memory.ts` (new), `identity-config.ts` (recopied), `identities.ts`, `notebook-watch.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (35), `web/src/notebook-state.ts`, `components/NotebookPanel.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/identity-notebook-test.mjs`, `tests/unit/identity-notebook.test.ts`, `identity-config.test.ts`, `identities.test.ts` |
 
 ---
+
+## queue-autonomy
+
+**Why / scope:** the owner can grant autonomy to one queue, not a role or all chats. Desktop and phone
+Queue panels have separate **Auto approve** and **Auto start** switches, including when empty. Both are
+off by default. Auto approve skips only the complete-plan confirmation in pi-queue; Auto start uses its
+existing lane scheduler. Start/Stop, dependencies, touches, stuck questions, deletions and safety rules
+retain their meaning. Stop also disarms Auto start; switching Auto start off alone leaves an already
+running queue alone. Failed/stuck work is not automatically retried.
+
+**Hooks:** `server/queue-owner.ts` validates settings and both conversation/session fences, issues a
+one-use, five-second owner capability, and persists an empty opted-in session without a model turn.
+`ClientSession.taskQueueCommand` accepts settings only from the authenticated panel dispatch, rejects
+assigned task chats/ephemeral sessions, rechecks the active target, and never records the capability in a
+transcript. `queue-host.ts` lets pi-queue consume it. No enabling action is added to model-facing tools or
+the public slash-command builder. The extension stores `autonomy` entries bound to the session ID;
+`server/task-queue.ts` mirrors default-off replay and Stop. A fork has a different ID, so it cannot inherit
+opt-in (or an automatic `run`). Plans have `approval: "dialog" | "auto"`, with no invented owner click.
+The shared `TaskQueuePanel` shows accessible, server-confirmed switches and disables pending changes;
+read-only panels are disabled and task chats have no switches. Protocol versions change together.
+
+**Checks:** `PI_QUEUE_PKG=<pi-queue checkout> TZ=UTC scripts/check.sh`, the pi-queue suite, and the full
+sealed browser suite. `tests/unit/queue-autonomy.test.ts` covers capability validation/replay parity and
+read-only rendering; pi-queue's autonomy tests cover plan checks, confirmation races, queue isolation,
+forks/task chats, scheduling, errors, startup guards and Stop. `tests/queue-autonomy-test.mjs` runs the
+real extension through a command fixture in an isolated server (no model calls, no real task chats),
+checks desktop/phone controls, owner fences, approval on/off, scheduling and restart persistence, and
+removes its temporary sessions. `QUEUE_AUTONOMY_SHOTS=<directory>` saves four panel screenshots;
+`PI_TEST_APP_REPO=<installed app>` can smoke-check the installed build in that same isolated fixture.
+
+**Sync:** keep both replay implementations, pi-queue's owner-host contract, protocol types/versions and
+the panel callbacks together. `persistEmptyQueue` mirrors the SDK's session persistence convention
+(`flushed` after initial creation); revisit on SDK changes. Land/install pi-queue with the app so restarted
+chats load its new local package. Never opt any real queue in during installation or verification. Local
+fork patch only; no upstream PR.
 
 ## 同步到 v0.96.1 时要知道的（2026-09-26）
 

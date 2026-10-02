@@ -51,4 +51,5 @@
 //     server answers identity_notes_found / identity_note / identity_note_saved. An old page shows no
 //     notes; an old server would drop the asks.
 // 36: per-chat speed — explicit Standard/Fast/Ultrafast and conversation-fenced changes.
-export const PROTOCOL_VERSION = 36;
+// 37: owner-only per-queue Auto approve / Auto start, session-fenced settings.
+export const PROTOCOL_VERSION = 37;

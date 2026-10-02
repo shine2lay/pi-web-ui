@@ -1152,7 +1152,13 @@ export interface DispatchSession {
 	/** TL;DR tab 里折叠 / 重新展开几行，记进会话（tldr-collapse）。可选：没有 TL;DR 的引擎（DSH）不实现。 */
 	setTldrCollapsed?(ids: unknown, collapsed: unknown, conversationId?: unknown): void;
 	/** 队列 tab 的按钮 → pi-queue 的 /queue 命令（queue-panel）。可选：没有队列的引擎（DSH）不实现。 */
-	taskQueueCommand?(action: unknown, id: unknown, conversationId?: unknown): Promise<void>;
+	taskQueueCommand?(
+		action: unknown,
+		id: unknown,
+		conversationId?: unknown,
+		queueId?: unknown,
+		value?: unknown,
+	): Promise<void>;
 	/** telegram-answers: the Queue tab answers a stuck task (a choice or typed words); optional like above. */
 	taskQueueAnswer?(conversationId: string, taskId: number, text: string): Promise<void>;
 	/** identities: set / clear a chat's identity through pi-identity's `/identity`. Optional: DSH has none. */
@@ -2423,7 +2429,7 @@ wss.on("connection", (ws) => {
 				break;
 			case "task_queue_command":
 				// 队列 tab 里点了开始 / 停下 / ↑ ↓ / 删除（queue-panel）。
-				void cs.taskQueueCommand?.(msg.action, msg.id, msg.conversationId);
+				void cs.taskQueueCommand?.(msg.action, msg.id, msg.conversationId, msg.queueId, msg.value);
 				break;
 			case "set_chat_identity":
 				// identities: the chat menu, the header label or the blank-chat picker (pi-identity's /identity).

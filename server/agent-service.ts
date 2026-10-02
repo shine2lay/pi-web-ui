@@ -328,6 +328,13 @@ import {
 } from "./prompt-ack.js";
 import { buildQuestionIndex } from "./question-index.js";
 import {
+	hasQueueEntries,
+	issueOwnerSetting,
+	ownerQueueMatches,
+	parseOwnerSetting,
+	persistEmptyQueue,
+} from "./queue-owner.js";
+import {
 	isQueueTaskChatEntries,
 	isQueueTaskChatFile,
 	TASK_QUEUE_ENTRY_TYPE,
@@ -6546,7 +6553,13 @@ export class ClientSession {
 			const key = `${sm.getSessionId()}\u0001${sm.getLeafId() ?? ""}\u0001${available}\u0001${shareable.stamp}`;
 			const c = conv.taskQueueCache;
 			if (c && c.key === key) return c.queue;
-			const queue = taskQueueFromEntries(sm.getBranch(), available, undefined, shareable.patterns);
+			const queue = taskQueueFromEntries(
+				sm.getBranch(),
+				available,
+				undefined,
+				shareable.patterns,
+				conv.isEphemeral ? undefined : sm.getSessionId(),
+			);
 			const sig = JSON.stringify(queue);
 			// queue-grouping: a chat opened, or its queue moved a task chat in or out of a queue's group.
 			if (!c || queueLinksSig(queue) !== queueLinksSig(c.queue)) ClientSession.scheduleQueueHomesRefresh();
@@ -6954,8 +6967,43 @@ export class ClientSession {
 	 *  立即对账（见 onEvent 的 boundary）。pi-web-ui 自己不写队列条目。
 	 *  对话已经换了（conversationId 对不上）、参数不对、这条对话没装 pi-queue 就不做：没有 /queue
 	 *  命令时 prompt 会把这行字当成普通提问发给模型。 */
-	async taskQueueCommand(action: unknown, id: unknown, conversationId?: unknown): Promise<void> {
+	async taskQueueCommand(
+		action: unknown,
+		id: unknown,
+		conversationId?: unknown,
+		queueId?: unknown,
+		value?: unknown,
+	): Promise<void> {
 		if (this.disposed) return;
+		if (action === "autoApprove" || action === "autoStart") {
+			const conv = this.conv;
+			const session = conv.session;
+			const change = parseOwnerSetting(action, value);
+			const current = () =>
+				!this.disposed &&
+				!conv.isEphemeral &&
+				this.conv === conv &&
+				conv.session === session &&
+				ownerQueueMatches(conversationId, queueId, this.activeId, session.sessionManager.getSessionId()) &&
+				!this.taskQueueOf(conv).from;
+			if (!change || !current() || !session.extensionRunner?.getCommand?.("queue")) return;
+			const ticket = issueOwnerSetting(session.sessionManager.getSessionId(), change, current);
+			try {
+				persistEmptyQueue(session.sessionManager);
+				await session.prompt(`/queue owner-setting ${ticket.token}`);
+				if (current() && this.taskQueueOf(conv)[change.setting] === change.value) {
+					conv.listed = true;
+					this.scheduleSessionsRefresh();
+				}
+			} catch {
+				// Never log the capability (nor place it in a model-bound message).
+				console.warn("[queue-autonomy] setting change failed");
+			} finally {
+				ticket.dispose();
+				this.flushSnapshot();
+			}
+			return;
+		}
 		if (typeof conversationId === "string" && conversationId && conversationId !== this.activeId) return;
 		const line = taskQueueCommandLine(action, id);
 		if (!line) return;
@@ -10267,7 +10315,11 @@ export class ClientSession {
 		// this branch normally can't exist — kept as a safety net).
 		const isBlank = (c: Conversation): boolean => {
 			try {
-				return messageCountOf(c.session) === 0 && c.terminals.list().length === 0;
+				return (
+					messageCountOf(c.session) === 0 &&
+					c.terminals.list().length === 0 &&
+					!hasQueueEntries(c.session.sessionManager.getEntries())
+				);
 			} catch {
 				// session being replaced — treat as used so we don't switch onto it
 				return false;

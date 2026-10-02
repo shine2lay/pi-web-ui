@@ -1244,7 +1244,9 @@ export function App() {
 			// LeftPanel fires read-only list_* probes that must NOT collapse the
 			// freshly-opened drawer (they run through panelSend too). Otherwise the
 			// drawer opens and immediately snaps shut.
-			if (!msg.type.startsWith("list_") && !msg.type.startsWith("get_")) {
+			const queueSetting =
+				msg.type === "task_queue_command" && (msg.action === "autoApprove" || msg.action === "autoStart");
+			if (!queueSetting && !msg.type.startsWith("list_") && !msg.type.startsWith("get_")) {
 				setDrawer(null);
 			}
 			if (msg.type === "new_chat" || msg.type === "switch_conversation" || msg.type === "switch_session") {

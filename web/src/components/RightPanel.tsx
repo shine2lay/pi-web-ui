@@ -960,15 +960,16 @@ export const RightPanel = memo(function RightPanel({
 	const onOpenChat = useCallback((file: string) => void panelSend({ type: "switch_session", path: file }), [panelSend]);
 	/** 队列 tab 的按钮（queue-panel）：服务端转成 `/queue …` 交给这条对话的 pi-queue。 */
 	const onTaskQueueCommand = useCallback(
-		(action: TaskQueueAction, id?: number) => {
+		(action: TaskQueueAction, id?: number, value?: boolean) => {
 			panelSend({
 				type: "task_queue_command",
 				action,
+				...(value !== undefined ? { value, queueId: taskQueue?.queueId } : {}),
 				...(id !== undefined ? { id } : {}),
 				...(tldrConversationId ? { conversationId: tldrConversationId } : {}),
 			});
 		},
-		[panelSend, tldrConversationId],
+		[panelSend, tldrConversationId, taskQueue?.queueId],
 	);
 	/** telegram-answers: the Queue tab answers a stuck task; the server sends it into the task's chat. */
 	const onTaskQueueAnswer = useCallback(

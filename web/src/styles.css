@@ -2627,6 +2627,51 @@ button.session-item.elsewhere-item.confirm {
 	overflow-y: auto;
 	padding: 10px 12px;
 }
+.task-queue-autonomy {
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 10px;
+	margin-bottom: 14px;
+}
+.task-queue-setting + .task-queue-setting {
+	margin-top: 12px;
+}
+.task-queue-setting-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	font-size: 13px;
+	font-weight: 600;
+}
+.task-queue-switch {
+	min-width: 56px;
+	min-height: 44px;
+	border: 1px solid var(--border);
+	border-radius: 22px;
+	background: transparent;
+	color: var(--text-dim);
+	font: inherit;
+	cursor: pointer;
+}
+.task-queue-switch[aria-checked="true"] {
+	border-color: var(--accent);
+	color: var(--accent);
+}
+.task-queue-switch:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+.task-queue-switch:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+.task-queue-setting-hint {
+	margin: 2px 0 0;
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--text-faint);
+}
 .task-queue-empty,
 .task-queue-note {
 	margin: 0;

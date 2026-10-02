@@ -320,7 +320,13 @@ describe("taskQueueFromEntries (defensive parts)", () => {
 	});
 
 	it("reports whether pi-queue is loaded", () => {
-		expect(replay([], false)).toEqual({ running: false, available: false, tasks: [] });
+		expect(replay([], false)).toEqual({
+			running: false,
+			available: false,
+			tasks: [],
+			autoApprove: false,
+			autoStart: false,
+		});
 	});
 });
 
@@ -457,7 +463,7 @@ describe("taskQueueFromEntries (lanes)", () => {
 
 	it("keeps old queues exactly as they were: no lanes, no new fields", () => {
 		const q = replay(entries([{ op: "add", id: 1, plan: plan("One") }, { op: "run" }, { op: "start", id: 1 }]));
-		expect(Object.keys(q).sort()).toEqual(["available", "running", "tasks"]);
+		expect(Object.keys(q).sort()).toEqual(["autoApprove", "autoStart", "available", "running", "tasks"]);
 		expect(q.tasks[0].touches).toBeUndefined();
 	});
 
