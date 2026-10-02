@@ -2019,6 +2019,7 @@ if ("schedulerStore" in service) {
 			return undefined;
 		}
 	};
+	pm.participantRouteProvider = () => (service instanceof AgentService ? service.participantRoutesForPlugins() : []);
 	// conversationLister：本客户端运行中对话 + 当前项目历史会话摘要，只读组装
 	// {id,title,cwd,kind,isStreaming}。无客户端/方法缺失回空数组（插件显示空态）。
 	(pm as any).conversationLister = async () => {

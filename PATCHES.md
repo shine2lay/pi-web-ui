@@ -12,6 +12,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 | 补丁                         | 状态           | 主要文件                                                                                                                                       |
 | ---------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| plugin-participant-routes | `local` | `server/plugins.ts`, `server/agent-service.ts`, `server/index.ts`, `plugin-sdk/index.d.ts`, `tests/unit/plugin-participant-routes.test.ts` |
 | terminal-bash-script         | `local`        | `server/terminals.ts`                                                                                                                          |
 | terminal-view-lifecycle      | `local`        | `server/terminals.ts`, `server/index.ts`                                                                                                       |
 | global-history               | `local`        | `server/agent-service.ts`, `server/protocol.ts`, `web/src/`                                                                                    |

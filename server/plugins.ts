@@ -186,6 +186,14 @@ export interface PluginChatResult {
 	conversationId: string;
 	clientId: string;
 }
+/** Metadata only. Never infer a participant from the active browser conversation. */
+export interface PluginParticipantRoute {
+	sessionId: string;
+	role: string;
+	isHome: boolean;
+	busy: boolean;
+}
+
 /** host.conversations.list 的条目（running/history 等，kind 原样透传）。 */
 export interface PluginConversationListItem {
 	id: string;
@@ -294,6 +302,8 @@ export function isPluginLogsRequest(p: unknown): p is PluginLogsWireUp {
 
 /** 插件服务端入口拿到的宿主接口。 */
 export interface PluginHost {
+	/** Exact loaded Pi sessions with host-derived role metadata; no titles, paths or transcripts. */
+	participantRoutes(): PluginParticipantRoute[];
 	/** 向所有已连接的浏览器广播一条本插件的消息（plugin_data）。 */
 	broadcast(payload: unknown): void;
 	/** 发一条系统通知条（notice）给所有已连接的浏览器。 */
@@ -2167,6 +2177,7 @@ export class PluginManager {
 
 	/** index.ts 注入：读取当前打开对话的快照（轨迹类插件经 host.getActiveConversation 调用）。 */
 	conversationProvider: (() => PluginConversationSnapshot | null) | undefined = undefined;
+	participantRouteProvider: (() => PluginParticipantRoute[]) | undefined = undefined;
 	/** index.ts 注入：插件无头调用 agent（微信通道等经 host.chat 调用）。 */
 	chatProvider: ((pluginId: string, req: PluginChatRequest) => Promise<PluginChatResult>) | undefined = undefined;
 	/** 由 index.ts 接入 agent-service：插件直调模型（host.llm.complete 的底层，孤立无工具会话）。
@@ -3616,6 +3627,18 @@ export class PluginManager {
 					/* 推送失败不影响已完成的授权 */
 				}
 				return true;
+			},
+			participantRoutes: () => {
+				try {
+					return (self.participantRouteProvider?.() ?? []).map(({ sessionId, role, isHome, busy }) => ({
+						sessionId,
+						role,
+						isHome,
+						busy,
+					}));
+				} catch {
+					return [];
+				}
 			},
 			conversations: {
 				list: () => {

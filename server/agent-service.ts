@@ -5574,6 +5574,29 @@ export class ClientSession {
 		}
 	}
 
+	/** Metadata-only collaboration routes. Refuse transient/ephemeral/unidentified sessions. */
+	participantRoutesForPlugins(): import("./plugins.js").PluginParticipantRoute[] {
+		const out: import("./plugins.js").PluginParticipantRoute[] = [];
+		for (const conv of this.convs.values()) {
+			try {
+				const identity = this.snapshotIdentityOf(conv);
+				const sm = conv.session.sessionManager;
+				const file = sm.getSessionFile();
+				if (!identity || !file || conv.isSubagent) continue;
+				const home = identityRegistry().identities.find((i) => i.id === identity.id)?.homeChat;
+				out.push({
+					sessionId: sm.getSessionId(),
+					role: identity.id,
+					isHome: !!home && resolve(home) === resolve(file),
+					busy: conv.session.isStreaming,
+				});
+			} catch {
+				/* Session replacement must fail closed, not reuse cached routing. */
+			}
+		}
+		return out;
+	}
+
 	/** 插件扩展点 v2（只读组装，供 index.ts 注入给 PluginManager 的 conversationLister）。
 	 *  本客户端运行中对话（kind:"running"）+ 当前项目历史会话摘要（kind:"history"，最多 50 条）。
 	 *  纯数据组装，不 emit、不改任何状态；历史会话读失败时只回运行中部分。 */
@@ -15583,6 +15606,20 @@ export class AgentService {
 
 	get(clientId: string): ClientSession | undefined {
 		return this.clients.get(clientId);
+	}
+
+	/** All loaded participants, not whichever browser happens to be active. Conflicts fail closed. */
+	participantRoutesForPlugins(): import("./plugins.js").PluginParticipantRoute[] {
+		const routes = new Map<string, import("./plugins.js").PluginParticipantRoute>();
+		const conflicts = new Set<string>();
+		for (const cs of this.clients.values()) {
+			for (const route of cs.participantRoutesForPlugins()) {
+				const old = routes.get(route.sessionId);
+				if (old && old.role !== route.role) conflicts.add(route.sessionId);
+				routes.set(route.sessionId, route);
+			}
+		}
+		return [...routes.values()].filter((r) => !conflicts.has(r.sessionId));
 	}
 
 	/** 插件扩展点 v2：挑一个最合适的客户端会话供无浏览器调用的插件 API 用

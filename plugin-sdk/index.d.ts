@@ -210,6 +210,8 @@ export type ToolGuardPreDecision =
 
 /** 插件服务端入口拿到的宿主接口（精简：全量见 server/plugins.ts PluginHost）。 */
 export interface PluginHost {
+	/** Optional additive capability: exact loaded Pi role/session metadata, never transcripts. */
+	participantRoutes?(): Array<{ sessionId: string; role: string; isHome: boolean; busy: boolean }>;
 	broadcast(payload: unknown): void;
 	notify(level: "info" | "warning" | "error", text: string, textEn?: string): void;
 	onMessage(handler: (payload: unknown, from?: string) => void): () => void;
