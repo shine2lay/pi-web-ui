@@ -145,14 +145,24 @@ describe("the rules are pi-identity's own", () => {
 			return "";
 		}
 	})();
-	const source = [process.env.PI_IDENTITY_SRC, realHome ? join(realHome, "projects", "pi-identity") : ""]
-		.filter((d): d is string => !!d)
-		.map((d) => join(d, "config.ts"))
-		.find((f) => existsSync(f));
+	const sourceOf = (file: string) =>
+		[process.env.PI_IDENTITY_SRC, realHome ? join(realHome, "projects", "pi-identity") : ""]
+			.filter((d): d is string => !!d)
+			.map((d) => join(d, file))
+			.find((f) => existsSync(f));
+	const source = sourceOf("config.ts");
 
 	it.skipIf(!source)("server/identity-config.ts is pi-identity's config.ts, byte for byte", () => {
 		const here = readFileSync(join(import.meta.dirname, "..", "..", "server", "identity-config.ts"));
 		expect(here.equals(readFileSync(source!)), `copy ${source} over server/identity-config.ts`).toBe(true);
+	});
+
+	// identity-notes: the notes store (files, index, search) is pi-identity's notes.ts, so the tab reads and
+	// writes notes exactly as the role's chats do.
+	const notesSource = sourceOf("notes.ts");
+	it.skipIf(!notesSource)("server/identity-notes.ts is pi-identity's notes.ts, byte for byte", () => {
+		const here = readFileSync(join(import.meta.dirname, "..", "..", "server", "identity-notes.ts"));
+		expect(here.equals(readFileSync(notesSource!)), `copy ${notesSource} over server/identity-notes.ts`).toBe(true);
 	});
 });
 
@@ -247,7 +257,7 @@ describe("a role's row in Settings", () => {
 		expect(problems).toContain("its prompt file notes.md isn't in the role's folder");
 		const logged = log.mock.calls.map((c) => String(c[0]));
 		expect(logged).toContain(
-			`[identities] gamma's settings: unknown field "colour" (known: id, title, folder, homeChat, pastHomeChats, prompt, skills, tools, unique)`,
+			`[identities] gamma's settings: unknown field "colour" (known: id, title, folder, homeChat, pastHomeChats, prompt, skills, tools, unique, memory)`,
 		);
 		const before = log.mock.calls.length;
 		identityRegistry(true);
@@ -272,8 +282,9 @@ describe("the shared settings file", () => {
 		expect(reg.settings.tidyAt).toBe(6000);
 		expect(reg.problems.join("\n")).toMatch(/pi-identity\.json.*tidyAt/);
 		expect(reg.problems.join("\n")).toContain("colour");
-		expect(info("alpha")?.notebookCap).toBe(9000);
-		expect(readIdentityFile(reg.identities, "alpha", "notebook", reg.settings)).toMatchObject({ cap: 9000 });
+		// identity-notes: the rules (notebook.md) may hold the cap minus the notes index's budget (2,000).
+		expect(info("alpha")?.notebookCap).toBe(7000);
+		expect(readIdentityFile(reg.identities, "alpha", "notebook", reg.settings)).toMatchObject({ cap: 7000 });
 		const base = textHash("");
 		expect(
 			saveIdentityFile(
@@ -290,20 +301,24 @@ describe("the shared settings file", () => {
 			ok: false,
 			code: "over_cap",
 		});
-		expect(
-			saveIdentityFile(
-				reg.identities,
-				"alpha",
-				"notebook",
-				"x".repeat(8500),
-				base,
-				process.env,
-				new Date(),
-				reg.settings,
-			),
-		).toMatchObject({
-			ok: true,
-		});
+		const save = (n: number) =>
+			saveIdentityFile(reg.identities, "alpha", "notebook", "x".repeat(n), base, process.env, new Date(), reg.settings);
+		expect(save(7001)).toEqual({ ok: false, code: "over_cap" });
+		expect(save(7000)).toMatchObject({ ok: true });
+	});
+
+	it("identity-notes: a role's own memory limits (identity.json) win over the shared ones", () => {
+		writeFileSync(join(agent, "pi-identity.json"), JSON.stringify({ notebookCap: 9000, indexBudget: 3000 }));
+		writeRole("gamma", { memory: { indexBudget: 1000 } });
+		writeRole("delta", { memory: { notebookCap: 4000, indexBudget: "lots" } });
+		const reg = identityRegistry(true);
+		expect(info("alpha")?.notebookCap).toBe(6000);
+		expect(info("gamma")).toMatchObject({ notebookCap: 8000, configProblems: [] });
+		// A bad field is left out (its shared value stays) and said so.
+		const delta = info("delta");
+		expect(delta?.notebookCap).toBe(1000);
+		expect(delta?.configProblems?.join("\n")).toContain("indexBudget");
+		expect(readIdentityFile(reg.identities, "gamma", "notebook", reg.settings)).toMatchObject({ cap: 8000 });
 	});
 
 	it("its tool groups and its shared skills folder are used by every role", () => {

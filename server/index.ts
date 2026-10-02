@@ -82,6 +82,7 @@ import {
 	saveIdentityFile,
 	scheduleMemoryReindex,
 } from "./identities.js";
+import { deleteRoleNote, readRoleNote, saveRoleNote, searchRoleNotes } from "./identity-memory.js";
 import { acceptDraft, discardDraft, ownSkillList, readDraft, saveDraft, type DraftResult } from "./identity-roles.js";
 import { NotebookWatch } from "./notebook-watch.js";
 import { SubsLimitsHub, limitsFilePath } from "./subs-limits.js";
@@ -1896,7 +1897,10 @@ const subsLimits = new SubsLimitsHub({
 });
 
 /** identity-notebook-tab: the Notebook tab's live notebook, per window (keyed by its socket). */
-const notebookWatch = new NotebookWatch<object>({ identities: () => identityRegistry().identities });
+const notebookWatch = new NotebookWatch<object>({
+	identities: () => identityRegistry().identities,
+	settings: () => identityRegistry().settings, // identity-notes: the role's limits and notes folder
+});
 
 /** 广播通知条给全部在线客户端（全局事件，不属于某个 ClientSession —— 如 mcp.json 坏）。 */
 function pushNoticeToAll(level: "info" | "warning" | "error", text: string, textEn: string): void {
@@ -2598,6 +2602,104 @@ wss.on("connection", (ws) => {
 				// identity-notebook-tab: this window's Notebook tab shows that identity's notebook (null = closed).
 				if (msg.id === null || typeof msg.id === "string") notebookWatch.watch(ws, msg.id, send);
 				break;
+			case "identity_notes_search": {
+				// identity-notes: the Notebook tab's notes list (empty query) or search, like a role chat's
+				// `notebook search` (its own notes and old archive; never removed.md).
+				if (typeof msg.id !== "string" || typeof msg.query !== "string" || msg.query.length > 500) break;
+				const reg = identityRegistry();
+				const def = reg.identities.find((d) => d.id === msg.id);
+				if (!def) {
+					send({
+						type: "identity_notes_found",
+						id: msg.id,
+						query: msg.query,
+						hits: [],
+						total: 0,
+						error: `No identity "${msg.id}"`,
+					});
+					break;
+				}
+				try {
+					const found = searchRoleNotes(def, reg.settings, msg.query);
+					send({ type: "identity_notes_found", id: msg.id, query: msg.query, ...found });
+				} catch (err) {
+					send({
+						type: "identity_notes_found",
+						id: msg.id,
+						query: msg.query,
+						hits: [],
+						total: 0,
+						error: (err as Error).message,
+					});
+				}
+				break;
+			}
+			case "identity_note_get": {
+				// identity-notes: open one note (or a stretch of the old archive) in the Notebook tab.
+				if (typeof msg.id !== "string" || typeof msg.ref !== "string" || msg.ref.length > 200) break;
+				const reg = identityRegistry();
+				const def = reg.identities.find((d) => d.id === msg.id);
+				const r = def
+					? readRoleNote(def, reg.settings, msg.ref)
+					: { ok: false as const, error: `No identity "${msg.id}"` };
+				send(
+					r.ok
+						? {
+								type: "identity_note",
+								id: msg.id,
+								ref: r.ref,
+								text: r.text,
+								hash: r.hash,
+								size: r.size,
+								editable: r.editable,
+							}
+						: { type: "identity_note", id: msg.id, ref: msg.ref, error: r.error },
+				);
+				break;
+			}
+			case "identity_note_save":
+			case "identity_note_delete": {
+				// identity-notes: the owner edits or deletes a note; the old version goes to the role's removed.md.
+				if (typeof msg.id !== "string" || typeof msg.ref !== "string" || typeof msg.baseHash !== "string") break;
+				if (msg.type === "identity_note_save" && typeof msg.text !== "string") break;
+				const reg = identityRegistry(true);
+				const def = reg.identities.find((d) => d.id === msg.id);
+				if (!def) {
+					send({ type: "identity_note_saved", id: msg.id, ref: msg.ref, ok: false, code: "unknown" });
+					break;
+				}
+				if (msg.type === "identity_note_save") {
+					const r = saveRoleNote(def, reg.settings, msg.ref, msg.text, msg.baseHash);
+					send(
+						r.ok
+							? { type: "identity_note_saved", id: msg.id, ref: msg.ref, ok: true, hash: r.hash, size: r.size }
+							: {
+									type: "identity_note_saved",
+									id: msg.id,
+									ref: msg.ref,
+									ok: false,
+									code: r.code,
+									...(r.problems ? { problems: r.problems } : {}),
+								},
+					);
+					if (!r.ok) break;
+					console.log(
+						`[identities] the owner edited ${msg.id}'s note ${msg.ref}: ${r.size} characters, old version in removed.md`,
+					);
+				} else {
+					const r = deleteRoleNote(def, reg.settings, msg.ref, msg.baseHash);
+					send(
+						r.ok
+							? { type: "identity_note_saved", id: msg.id, ref: msg.ref, ok: true, deleted: true, freed: r.freed }
+							: { type: "identity_note_saved", id: msg.id, ref: msg.ref, ok: false, deleted: true, code: r.code },
+					);
+					if (!r.ok) break;
+					console.log(`[identities] the owner deleted ${msg.id}'s note ${msg.ref} (kept in removed.md)`);
+				}
+				notebookWatch.check(); // every Notebook tab on that role: its index and counts now
+				scheduleMemoryReindex();
+				break;
+			}
 			case "task_queue_answer":
 				// telegram-answers: the Queue tab answered a stuck task; it goes into the task's chat.
 				if (typeof msg.conversationId === "string" && Number.isInteger(msg.taskId) && typeof msg.text === "string") {

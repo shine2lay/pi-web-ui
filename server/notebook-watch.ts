@@ -11,10 +11,16 @@
  * and the Settings page replace the file by rename (a new inode on every save), which a watcher on
  * the file loses, and a watcher on the folder is noisy across platforms. A window is sent the notebook
  * only when its hash differs from the one it last got, so a touch without a change sends nothing.
+ *
+ * identity-notes: the push also carries the role's notes index and what rules + index take (pi-identity's
+ * two layers), so the stat signature covers the notes folder's files and the role's limits too, and a
+ * window's "hash" is the whole push's (a note recorded by a chat updates the tab like a notebook edit).
  */
 
 import { statSync } from "node:fs";
-import { type IdentityDef, identityFilePath, readIdentityFile } from "./identities.js";
+import { type IdentityDef, identityFilePath, readIdentityFile, textHash } from "./identities.js";
+import { loadSettings, type Settings } from "./identity-config.js";
+import { memorySignature, roleMemory } from "./identity-memory.js";
 import type { ServerMessage } from "./protocol.js";
 
 export type NotebookPush = Extract<ServerMessage, { type: "identity_notebook" }>;
@@ -22,13 +28,18 @@ export type NotebookPush = Extract<ServerMessage, { type: "identity_notebook" }>
 interface Watcher {
 	id: string;
 	send: (msg: NotebookPush) => void;
-	/** The hash this window last got (null: none yet, or an error). */
+	/** The hash of the push this window last got (null: none yet, or an error). */
 	hash: string | null;
 }
+
+/** A push's hash: the notebook's and the notes' together (null: an error, always sent). */
+const pushHash = (msg: NotebookPush): string | null => (msg.error !== undefined ? null : textHash(JSON.stringify(msg)));
 
 export interface NotebookWatchOptions {
 	/** The identities as they are now (the cached registry). */
 	identities: () => IdentityDef[];
+	/** identity-notes: the shared settings (the cached registry's; default: read them). */
+	settings?: () => Settings;
 	/** How often to look while someone watches (default 1 s). */
 	intervalMs?: number;
 }
@@ -81,8 +92,9 @@ export class NotebookWatch<K = unknown> {
 				if (this.seen.get(id) === sig) continue;
 				this.seen.set(id, sig);
 				const msg = this.read(id);
+				const hash = pushHash(msg);
 				for (const w of this.watchers.values()) {
-					if (w.id === id && (msg.error !== undefined || w.hash !== msg.hash)) this.deliver(w, msg);
+					if (w.id === id && (hash === null || w.hash !== hash)) this.deliver(w, msg);
 				}
 			}
 		} catch {
@@ -97,33 +109,52 @@ export class NotebookWatch<K = unknown> {
 		this.stopTimer();
 	}
 
+	private settings(): Settings {
+		return this.opts.settings ? this.opts.settings() : loadSettings();
+	}
+
 	private read(id: string): NotebookPush {
-		const r = readIdentityFile(this.opts.identities(), id, "notebook");
-		return r.ok
-			? {
-					type: "identity_notebook",
-					id,
-					text: r.text,
-					hash: r.hash,
-					size: r.size,
-					...(r.cap !== undefined ? { cap: r.cap } : {}),
-				}
-			: { type: "identity_notebook", id, error: r.error };
+		const identities = this.opts.identities();
+		const settings = this.settings();
+		const r = readIdentityFile(identities, id, "notebook", settings);
+		if (!r.ok) return { type: "identity_notebook", id, error: r.error };
+		const def = identities.find((d) => d.id === id);
+		let memory: NotebookPush["memory"];
+		try {
+			memory = def ? roleMemory(def, settings, r.text) : undefined;
+		} catch {
+			memory = undefined; // the notes couldn't be read: the rules still show
+		}
+		return {
+			type: "identity_notebook",
+			id,
+			text: r.text,
+			hash: r.hash,
+			size: r.size,
+			...(r.cap !== undefined ? { cap: r.cap } : {}),
+			...(memory ? { memory } : {}),
+		};
 	}
 
 	private signature(id: string): string {
 		const def = this.opts.identities().find((d) => d.id === id);
 		if (!def) return "unknown";
+		let notes = "";
+		try {
+			notes = memorySignature(def, this.settings());
+		} catch {
+			notes = "notes unreadable";
+		}
 		try {
 			const s = statSync(identityFilePath(def, "notebook"));
-			return `${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`;
+			return `${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}#${notes}`;
 		} catch (err) {
-			return (err as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "unreadable";
+			return `${(err as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "unreadable"}#${notes}`;
 		}
 	}
 
 	private deliver(w: Watcher, msg: NotebookPush): void {
-		w.hash = msg.hash ?? null;
+		w.hash = pushHash(msg);
 		try {
 			w.send(msg);
 		} catch {

@@ -3,11 +3,13 @@
  * Plain logic with no pi imports (the tests load it directly).
  *
  * Two places:
- *   ~/.pi/agent/pi-identity.json   what every role shares: the notebook's cap and tidy point, the tool
- *                                  groups, the tools an allow list always keeps, and the folder of
- *                                  shared role skills. A missing file means the defaults below.
+ *   ~/.pi/agent/pi-identity.json   what every role shares: the memory's cap, tidy point and index budget,
+ *                                  the notes folder's name, the tool groups, the tools an allow list
+ *                                  always keeps, and the folder of shared role skills. A missing file
+ *                                  means the defaults below.
  *   <role>/identity.json           one role's own settings, next to its id and title: its prompt file,
- *                                  its skills, its tool limits, and whether it's one chat at a time.
+ *                                  its skills, its tool limits, whether it's one chat at a time, and its
+ *                                  own memory limits (memory: notebookCap, tidyAt, indexBudget).
  *
  * Every part is read and checked on its own (a "feature" reads only its own field): a wrong or unknown
  * field is refused with a reason, a "problem", and only that part is left out. Nothing here ever stops
@@ -62,10 +64,17 @@ const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v =
 // ---------------------------------------------------------------------------
 
 export interface Settings {
-	/** A notebook's cap, in bytes (what `wc -c` shows). */
+	/**
+	 * What a role's chats get with every message, in bytes (what `wc -c` shows): its rules (notebook.md) and
+	 * the index of its notes together.
+	 */
 	notebookCap: number;
-	/** Past this size an add is held once per reply and the chat is asked to tidy first. */
+	/** Past this size (rules and index) an add to the rules is held once per reply and the chat is asked to tidy first. */
 	tidyAt: number;
+	/** The index's share of notebookCap; the rules get the rest. */
+	indexBudget: number;
+	/** The notes folder's name in each role's folder. */
+	notesDir: string;
 	/**
 	 * Names a role's tool limits may use for several tools at once; `*` matches any characters. The file's
 	 * groups are added to the default ones (one of the same name replaces the default).
@@ -91,13 +100,19 @@ export const DEFAULT_TOOL_GROUPS: Readonly<Record<string, readonly string[]>> = 
 
 export const DEFAULT_ALWAYS_ALLOW: readonly string[] = ["notebook", "tldr", "queue_done", "queue_stuck", "queue_wait"];
 
-export const SETTINGS_FIELDS = ["notebookCap", "tidyAt", "toolGroups", "alwaysAllow", "roleSkillsDir"] as const;
+export const SETTINGS_FIELDS = ["notebookCap", "tidyAt", "indexBudget", "notesDir", "toolGroups", "alwaysAllow", "roleSkillsDir"] as const;
+
+/** A notes folder's name: a plain folder name that isn't one of a role's other files or folders. */
+const NOTES_DIR_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const NOT_NOTES = new Set(["archive", "skills"]);
 
 /** The defaults, as a missing settings file gives them. */
 export function defaultSettings(env: Env = process.env): Settings {
 	return {
 		notebookCap: 8_000,
 		tidyAt: 6_000,
+		indexBudget: 2_000,
+		notesDir: "notes",
 		toolGroups: Object.fromEntries(Object.entries(DEFAULT_TOOL_GROUPS).map(([k, v]) => [k, [...v]])),
 		alwaysAllow: [...DEFAULT_ALWAYS_ALLOW],
 		roleSkillsDir: join(agentDir(env), "role-skills"),
@@ -138,7 +153,7 @@ export function checkSettings(raw: unknown, env: Env = process.env, path = setti
 			s.problems.push(`unknown field "${key}" (known: ${SETTINGS_FIELDS.join(", ")})`);
 		}
 	}
-	const int = (key: "notebookCap" | "tidyAt", min: number, max: number) => {
+	const int = (key: "notebookCap" | "tidyAt" | "indexBudget", min: number, max: number) => {
 		const v = raw[key];
 		if (v === undefined) return;
 		if (typeof v === "number" && Number.isInteger(v) && v >= min && v <= max) s[key] = v;
@@ -150,6 +165,17 @@ export function checkSettings(raw: unknown, env: Env = process.env, path = setti
 		const fallback = Math.floor(s.notebookCap * 0.75);
 		s.problems.push(`"tidyAt" (${n(s.tidyAt)}) must be under "notebookCap" (${n(s.notebookCap)}), so it's ${n(fallback)}`);
 		s.tidyAt = fallback;
+	}
+	int("indexBudget", 0, 1_000_000);
+	if (s.indexBudget >= s.notebookCap) {
+		const fallback = Math.floor(s.notebookCap / 4);
+		s.problems.push(`"indexBudget" (${n(s.indexBudget)}) must be under "notebookCap" (${n(s.notebookCap)}), so it's ${n(fallback)}`);
+		s.indexBudget = fallback;
+	}
+	if (raw.notesDir !== undefined) {
+		const v = typeof raw.notesDir === "string" ? raw.notesDir.trim() : "";
+		if (NOTES_DIR_RE.test(v) && !NOT_NOTES.has(v.toLowerCase())) s.notesDir = v;
+		else s.problems.push(`"notesDir" must be a plain folder name (letters, digits, _ and -; not archive or skills); got ${quote(raw.notesDir)}, so it stays ${s.notesDir}`);
 	}
 	if (raw.toolGroups !== undefined) {
 		if (!isObject(raw.toolGroups)) {
@@ -218,6 +244,28 @@ export interface RoleConfig {
 	tools: { allow: string[] | null; deny: string[] };
 	/** One chat at a time for this role. */
 	unique: boolean;
+	/** The role's own memory limits, where it has any (the shared settings' otherwise). */
+	memory: Partial<MemoryLimits>;
+}
+
+/** What a role's chats get with every message (rules and index), and when to tidy; see notes.ts. */
+export interface MemoryLimits {
+	notebookCap: number;
+	tidyAt: number;
+	indexBudget: number;
+}
+
+const MEMORY_FIELDS = ["notebookCap", "tidyAt", "indexBudget"] as const;
+
+/** A role's memory limits: its own (identity.json's memory) over the shared ones, kept consistent. */
+export function roleCaps(settings: Settings, config?: RoleConfig | null): MemoryLimits {
+	const m = config?.memory ?? {};
+	const notebookCap = m.notebookCap ?? settings.notebookCap;
+	let tidyAt = m.tidyAt ?? settings.tidyAt;
+	if (tidyAt >= notebookCap) tidyAt = Math.floor(notebookCap * 0.75);
+	let indexBudget = m.indexBudget ?? settings.indexBudget;
+	if (indexBudget >= notebookCap) indexBudget = Math.floor(notebookCap / 4);
+	return { notebookCap, tidyAt, indexBudget };
 }
 
 export const DEFAULT_PROMPT = "prompt.md";
@@ -229,7 +277,14 @@ const PROMPT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/;
 const SKILL_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
 export function defaultRoleConfig(): RoleConfig {
-	return { prompt: DEFAULT_PROMPT, promptSet: false, skills: { own: true, shared: [] }, tools: { allow: null, deny: [] }, unique: false };
+	return {
+		prompt: DEFAULT_PROMPT,
+		promptSet: false,
+		skills: { own: true, shared: [] },
+		tools: { allow: null, deny: [] },
+		unique: false,
+		memory: {},
+	};
 }
 
 /** The fields pi-identity knows in identity.json; any other is refused. */
@@ -300,7 +355,43 @@ export const FEATURES: Record<string, Feature> = {
 		if (typeof value === "boolean") config.unique = value;
 		else problems.push(`"unique" must be true or false; got ${quote(value)}`);
 	},
+	memory(value, config, problems, settings) {
+		if (!isObject(value)) {
+			problems.push(`"memory" must be an object like {"indexBudget": 1500}; got ${quote(value)}`);
+			return;
+		}
+		for (const key of Object.keys(value)) {
+			if (!(MEMORY_FIELDS as readonly string[]).includes(key)) problems.push(`unknown field "memory.${key}" (known: ${MEMORY_FIELDS.join(", ")})`);
+		}
+		const range: Record<(typeof MEMORY_FIELDS)[number], [number, number]> = {
+			notebookCap: [500, 1_000_000],
+			tidyAt: [100, 1_000_000],
+			indexBudget: [0, 1_000_000],
+		};
+		for (const key of MEMORY_FIELDS) {
+			const v = value[key];
+			if (v === undefined) continue;
+			const [min, max] = range[key];
+			if (typeof v === "number" && Number.isInteger(v) && v >= min && v <= max) config.memory[key] = v;
+			else problems.push(`"memory.${key}" must be a whole number from ${n(min)} to ${n(max)}; got ${quote(v)}, so the shared one applies`);
+		}
+		const cap = config.memory.notebookCap ?? settings.notebookCap;
+		for (const key of ["tidyAt", "indexBudget"] as const) {
+			const v = config.memory[key];
+			if (v !== undefined && v >= cap) {
+				problems.push(`"memory.${key}" (${n(v)}) must be under the cap (${n(cap)}): left out`);
+				delete config.memory[key];
+			}
+		}
+	},
 };
+
+/** A role's own memory limits in words, or "" when it has none. */
+export function memoryText(config: RoleConfig): string {
+	return MEMORY_FIELDS.filter((k) => config.memory[k] !== undefined)
+		.map((k) => `${k} ${n(config.memory[k] as number)}`)
+		.join(", ");
+}
 
 export const ROLE_FIELDS: readonly string[] = [...BASE_FIELDS, ...Object.keys(FEATURES)];
 

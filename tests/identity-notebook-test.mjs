@@ -3,8 +3,8 @@
  * The real pi-identity extension is loaded through settings.json `packages` (PI_IDENTITY_PKG, default
  * ~/projects/pi-identity). Its identities live in a temp folder (PI_IDENTITY_DIR), its archive in a temp
  * memory folder (PI_MEMORY_DIR). A mock OpenAI-compatible model answers every chat. Checks:
- *  - a chat with no identity has no Notebook tab; picking temper brings it, showing temper's notebook as
- *    markdown with its size against the cap;
+ *  - a chat with no identity has no Notebook tab; picking temper brings it, showing temper's rules as raw
+ *    text (identity-notes: the AI's own format, no markdown view) with their size against the rules' cap;
  *  - a change made outside the page (a rename-replace, like pi-identity's notebook tool) shows in the tab
  *    within seconds;
  *  - the chat's next reply gets the whole changed notebook once (its request carries the change, and the
@@ -17,6 +17,10 @@
  *  - a notebook over the cap can't be saved; the About page link opens Settings -> Identities;
  *  - a new chat without an identity has no tab; back in the temper chat it's there again;
  *  - phone: the side panel drawer has the tab; a change shows live there too; Edit opens the editor.
+ *  - identity-notes: the chat records a note through pi-identity's notebook tool; the tab's notes list, the
+ *    index and the "sent" size (characters, estimated tokens) follow by themselves; search finds it and an
+ *    old archive line (marked old, opens read-only); open shows it raw; Edit saves it (the old text goes
+ *    to removed.md); Delete takes it out (to removed.md too) and the tab says so.
  * Never prints what goes to the model (rule 11): only how often a mark was in it.
  * Usage: npm run build && node tests/identity-notebook-test.mjs
  *        (NB_SHOT=/tmp/nb saves /tmp/nb-desktop-view.png, -desktop-edit, -desktop-conflict, -phone-view, -phone-edit)
@@ -50,6 +54,8 @@ const idDir = join(memDir, "identities");
 for (const d of [workdir, dataDir, agentDir, idDir]) mkdirSync(d, { recursive: true });
 
 const NOTEBOOK_CAP = 8000;
+/** identity-notes: what the rules may hold: the cap minus the notes index's budget (2,000). */
+const RULES_CAP = 6000;
 const LESSON = "- #lesson Check a run's gate before restarting the engine.";
 const START_NOTEBOOK = `## Queue\n- #decision Tasks that share a touch run **one after another**.\n${LESSON}\n`;
 /** Marks put into the notebook along the way: the mock counts how often each reached the model. */
@@ -59,7 +65,15 @@ const MARK = {
 	conflict: "nb-conflict-3e77",
 	conflict2: "nb-conflict-5a20",
 	phone: "nb-phone-c4d8",
+	note: "nb-note-7f31",
 };
+/** identity-notes: the note the mock model records through the notebook tool. */
+const RECORD = {
+	topic: "queue",
+	summary: `Queue lanes default to 3 (${MARK.note})`,
+	detail: "Set with /queue lanes <n>; shareable touches live in ~/.pi/agent/pi-queue.json.",
+};
+const ARCHIVE_LINE = "- #fact The ARCHIVEWORD line, from before the split into rules and notes.";
 const IDENTITIES = {
 	temper: {
 		json: { id: "temper", title: "temper", folder: workdir },
@@ -81,6 +95,10 @@ for (const [id, def] of Object.entries(IDENTITIES)) {
 	writeFileSync(join(idDir, id, "about.md"), def.about);
 	writeFileSync(notebookFile(id), def.notebook);
 }
+// identity-notes: an old archive (the weekly tidy-up's copy): searchable, marked old, read-only.
+mkdirSync(join(idDir, "temper", "archive"));
+writeFileSync(join(idDir, "temper", "archive", "notebook-2026-09-27.md"), `# old notebook\n${ARCHIVE_LINE}\n`);
+const noteFile = (id, note) => join(idDir, id, "notes", `${note}.md`);
 /** Change the notebook the way pi-identity's notebook tool does: a temp file, then rename. */
 function replaceNotebook(id, text) {
 	const tmp = `${notebookFile(id)}.tmp-test`;
@@ -96,7 +114,10 @@ const CHATS = {
 	T2: { prompt: "Second round for the queue", answer: "Done: second round." },
 	T3: { prompt: "Third round for the queue", answer: "Done: third round." },
 	T4: { prompt: "Fourth round for the queue", answer: "Done: fourth round." },
+	R: { prompt: "Record the queue finding", answer: "Recorded the finding." },
 };
+/** identity-notes: whether the record call's result said it was recorded (a yes/no, never its text). */
+let recordOk = null;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failures = 0;
@@ -167,6 +188,17 @@ const mock = createServer(async (req, res) => {
 	if (k) {
 		const text = JSON.stringify(history);
 		marks[k] = Object.fromEntries(Object.entries(MARK).map(([name, mark]) => [name, text.split(mark).length - 1]));
+	}
+	// identity-notes: the R chat calls the notebook tool to record a note, then answers.
+	if (k === "R") {
+		const last = history[history.length - 1];
+		if (last?.role !== "tool") {
+			const call = { index: 0, id: "call_record_1", type: "function" };
+			call.function = { name: "notebook", arguments: JSON.stringify({ action: "record", ...RECORD }) };
+			await sse(res, [chunk(m, { tool_calls: [call] }), chunk(m, {}, "tool_calls")]);
+			return;
+		}
+		recordOk = /^Recorded n\d+ \[queue\]/.test(userText(last));
 	}
 	await sleep(200);
 	await sse(res, [chunk(m, { content: k ? CHATS[k].answer : "Done." }), chunk(m, {}, "stop")]);
@@ -292,7 +324,7 @@ const panelStatus = async (page) =>
 	(await panel(page)
 		.getAttribute("data-status")
 		.catch(() => null)) ?? null;
-const viewText = (page) => page.locator(".notebook-view").innerText();
+const viewText = (page) => page.locator(".notebook-rules").innerText();
 const editor = (page) => page.locator("textarea.notebook-editor");
 const fmt = (n) => n.toLocaleString("en-US");
 const bytes = (s) => Buffer.byteLength(s);
@@ -343,16 +375,26 @@ try {
 	await openNotebookTab(W);
 	check("the tab shows the notebook", (await panelStatus(W)) === "ready", String(await panelStatus(W)));
 	check(
-		"...as markdown (a heading, bold text), not the raw text",
-		(await W.locator(".notebook-view h2", { hasText: "Queue" }).count()) === 1 &&
-			(await W.locator(".notebook-view strong", { hasText: "one after another" }).count()) === 1 &&
-			!(await viewText(W)).includes("**"),
+		"...as raw text, the way the AI writes it (no markdown view)",
+		(await viewText(W)).includes("## Queue") &&
+			(await viewText(W)).includes("**one after another**") &&
+			(await W.locator(".notebook-panel h2").count()) === 0,
 	);
 	const sizeText = async () => (await W.locator(".notebook-size").textContent())?.trim() ?? "";
 	check(
-		"...with its size against the cap",
-		(await sizeText()) === `${fmt(bytes(START_NOTEBOOK))} / ${fmt(NOTEBOOK_CAP)}`,
+		"...with their size against the rules' cap (the notebook's minus the index's)",
+		(await sizeText()) === `${fmt(bytes(START_NOTEBOOK))} / ${fmt(RULES_CAP)}`,
 		await sizeText(),
+	);
+	const sentOf = async (page) => ({
+		sent: Number(await page.locator(".notebook-sent").getAttribute("data-sent")),
+		tokens: Number(await page.locator(".notebook-sent").getAttribute("data-tokens")),
+	});
+	check(
+		"...and what's sent with every message, in characters and estimated tokens",
+		JSON.stringify(await sentOf(W)) ===
+			JSON.stringify({ sent: bytes(START_NOTEBOOK), tokens: Math.round(bytes(START_NOTEBOOK) / 3.6) }),
+		JSON.stringify(await sentOf(W)),
 	);
 	await shot(W, "desktop-view");
 
@@ -366,7 +408,7 @@ try {
 	check("...within a few seconds", appeared && took < 5000, `${took} ms`);
 	check(
 		"...and the new size",
-		(await sizeText()) === `${fmt(bytes(outsideText))} / ${fmt(NOTEBOOK_CAP)}`,
+		(await sizeText()) === `${fmt(bytes(outsideText))} / ${fmt(RULES_CAP)}`,
 		await sizeText(),
 	);
 
@@ -404,7 +446,10 @@ try {
 	check("the view shows the edit", (await viewText(W)).includes("Edited in the tab"));
 	check(
 		"it says Saved.",
-		await waitFor(async () => ((await W.locator(".notebook-note").textContent()) ?? "").includes("Saved"), 3000),
+		await waitFor(
+			async () => ((await W.locator(".notebook-actions .notebook-note").first().textContent()) ?? "").includes("Saved"),
+			3000,
+		),
 	);
 	check(
 		"the line it took out is in the role's removed.md",
@@ -475,9 +520,9 @@ try {
 
 	console.log("desktop: over the cap");
 	await W.locator(".notebook-edit").click();
-	await editor(W).fill("x".repeat(NOTEBOOK_CAP + 1));
+	await editor(W).fill("x".repeat(RULES_CAP + 1));
 	check(
-		"a notebook over the cap can't be saved, and the tab says so",
+		"rules over their cap can't be saved, and the tab says so",
 		(await W.locator(".notebook-save").isDisabled()) &&
 			(await W.locator(".notebook-over").count()) === 1 &&
 			(await W.locator(".notebook-size.over").count()) === 1,
@@ -493,6 +538,126 @@ try {
 	);
 	await W.locator(".settings-modal .modal-close").first().click();
 	await waitFor(async () => (await W.locator(".settings-modal").count()) === 0, 5000);
+
+	console.log("desktop: identity-notes, the role's notes");
+	await openNotebookTab(W);
+	const rows = () => W.locator(".notebook-notes .notebook-note-row");
+	const rowRefs = () => rows().evaluateAll((els) => els.map((el) => el.dataset.ref));
+	check(
+		"no notes yet: the tab says so",
+		await waitFor(async () => (await W.locator(".notebook-notes-none").count()) === 1, 5000),
+	);
+	check("the chat records a note with the notebook tool", await send(W, "R"));
+	check("...and the tool said it was recorded", recordOk === true, String(recordOk));
+	check("...as a file in the role's notes folder", existsSync(noteFile("temper", "n1")));
+	check(
+		"the notes list shows it by itself",
+		await waitFor(async () => JSON.stringify(await rowRefs()) === '["n1"]', 8000),
+		JSON.stringify(await rowRefs().catch(() => [])),
+	);
+	const indexText = async () =>
+		(await W.locator(".notebook-index")
+			.textContent()
+			.catch(() => "")) ?? "";
+	check(
+		"...and the index has its line, under its topic",
+		await waitFor(async () => (await indexText()) === `[queue]\nn1 ${RECORD.summary}`, 5000),
+	);
+	const rulesNow = bytes(readNotebook("temper"));
+	const expectSent = rulesNow + bytes(`[queue]\nn1 ${RECORD.summary}`);
+	check(
+		"...and what's sent grows by the index line (characters and tokens)",
+		JSON.stringify(await sentOf(W)) === JSON.stringify({ sent: expectSent, tokens: Math.round(expectSent / 3.6) }),
+		JSON.stringify(await sentOf(W)),
+	);
+
+	/** The list's answer for query q, once it's in: the rows' refs. */
+	const searched = async (q) => {
+		const list = W.locator(`ul.notebook-notes[data-query="${q}"][data-status="ready"]`);
+		return (await list.count()) === 1 ? rowRefs() : null;
+	};
+	const search = async (q) => {
+		await W.locator(".notebook-search-input").fill(q);
+		await W.locator(".notebook-search-btn").click();
+	};
+	await search("lanes");
+	check(
+		"search finds it by a word of its summary",
+		await waitFor(async () => JSON.stringify(await searched("lanes")) === '["n1"]', 5000),
+		JSON.stringify(await searched("lanes")),
+	);
+	await search("ARCHIVEWORD");
+	const archiveRef = "archive/notebook-2026-09-27.md:2";
+	check(
+		"...and an old archive line, marked old",
+		await waitFor(
+			async () =>
+				JSON.stringify(await searched("ARCHIVEWORD")) === JSON.stringify([archiveRef]) &&
+				((await rows().first().textContent()) ?? "").includes("(old)"),
+			5000,
+		),
+		JSON.stringify(await searched("ARCHIVEWORD")),
+	);
+	await rows().first().click();
+	check(
+		"the archive line opens read-only",
+		(await waitFor(async () => (await W.locator(`.notebook-open[data-ref="${archiveRef}"]`).count()) === 1, 5000)) &&
+			((await W.locator(".notebook-note-text").textContent()) ?? "").includes("ARCHIVEWORD") &&
+			(await W.locator(".notebook-note-edit").count()) === 0 &&
+			(await W.locator(".notebook-note-delete").count()) === 0,
+	);
+	await W.locator(".notebook-note-close").click();
+	await W.locator(".notebook-search-all").click();
+	await waitFor(async () => JSON.stringify(await rowRefs()) === '["n1"]', 5000);
+	await rows().first().click();
+	check(
+		"the note opens whole, as raw text",
+		(await waitFor(async () => (await W.locator('.notebook-open[data-ref="n1"]').count()) === 1, 5000)) &&
+			((await W.locator(".notebook-note-text").textContent()) ?? "") === readFileSync(noteFile("temper", "n1"), "utf8"),
+	);
+	await W.locator(".notebook-note-edit").click();
+	const noteEditor = W.locator("textarea.notebook-note-editor");
+	const before = await noteEditor.inputValue();
+	const NEW_SUMMARY = `Queue lanes: 3 by default, /queue lanes <n> (${MARK.note})`;
+	await noteEditor.fill(before.replace(`summary: ${RECORD.summary}`, `summary: ${NEW_SUMMARY}`));
+	await W.locator(".notebook-note-save").click();
+	check(
+		"Edit -> Save writes the note",
+		await waitFor(async () => readFileSync(noteFile("temper", "n1"), "utf8").includes(`summary: ${NEW_SUMMARY}`), 5000),
+	);
+	check(
+		"...keeps the old text in removed.md",
+		existsSync(archiveFile("temper")) &&
+			readFileSync(archiveFile("temper"), "utf8").includes("note n1 replaced by the owner (pi-web-ui)") &&
+			readFileSync(archiveFile("temper"), "utf8").includes(`summary: ${RECORD.summary}`),
+	);
+	check(
+		"...and the index follows",
+		await waitFor(async () => (await indexText()) === `[queue]\nn1 ${NEW_SUMMARY}`, 5000),
+	);
+	await shot(W, "desktop-notes");
+	await waitFor(async () => (await W.locator(".notebook-note-delete").count()) === 1, 5000);
+	await W.locator(".notebook-note-delete").click();
+	await W.locator(".notebook-note-delete-yes").click();
+	check("Delete takes the note out", await waitFor(async () => !existsSync(noteFile("temper", "n1")), 5000));
+	check(
+		"...into removed.md",
+		readFileSync(archiveFile("temper"), "utf8").includes("note n1 deleted by the owner (pi-web-ui)"),
+	);
+	check(
+		"...and the tab says so; the list and the index are empty again",
+		(await waitFor(
+			async () =>
+				(
+					(await W.locator(".notebook-note-deleted")
+						.textContent()
+						.catch(() => "")) ?? ""
+				).includes("n1 deleted"),
+			5000,
+		)) &&
+			(await waitFor(async () => (await W.locator(".notebook-notes-none").count()) === 1, 5000)) &&
+			(await waitFor(async () => (await W.locator(".notebook-index").count()) === 0, 5000)),
+	);
 
 	console.log("desktop: a chat without an identity");
 	await newChat(W);

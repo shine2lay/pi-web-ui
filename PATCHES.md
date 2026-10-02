@@ -75,6 +75,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | identity-config              | `local`        | `server/identity-config.ts` (new, pi-identity's `config.ts` copied byte for byte), `identity-roles.ts` (new), `identities.ts`, `index.ts`, `agent-service.ts` (`reloadForIdentity`), `protocol.ts`, `protocol-version.ts` (33), `web/src/identity-state.ts`, `components/IdentitiesSettings.tsx`, `NotebookPanel.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `.prettierignore`, `tests/identity-config-test.mjs` (new), `tests/unit/identity-config.test.ts` (new), `tests/unit/identities.test.ts` |
 | subs-limits-box              | `local`        | `server/subs-limits.ts` (new), `index.ts`, `protocol.ts`, `protocol-version.ts` (34), `web/src/components/LimitsBox.tsx` (new), `web/src/subs-limits-state.ts` (new), `components/LeftPanel.tsx`, `App.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/subs-limits-box-test.mjs` (new), `tests/unit/subs-limits.test.ts` (new) |
 | session-index                | `local`        | `server/session-index.ts` (new), `session-index-worker.ts` (new), `agent-service.ts`, `identities.ts`, `index.ts`, `tests/unit/session-index.test.ts` (new), `tests/unit/global-history.test.ts`, `tests/session-index-restart-test.mjs` (new), `scripts/session-index-parity.mjs` (new), `scripts/session-index-restart-probe.mjs` (new) |
+| identity-notes               | `local`        | `server/identity-notes.ts` (new, pi-identity's `notes.ts` copied byte for byte), `identity-memory.ts` (new), `identity-config.ts` (recopied), `identities.ts`, `notebook-watch.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (35), `web/src/notebook-state.ts`, `components/NotebookPanel.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/identity-notebook-test.mjs`, `tests/unit/identity-notebook.test.ts`, `identity-config.test.ts`, `identities.test.ts` |
 
 ---
 
@@ -4467,3 +4468,83 @@ server beside the resuming chats' reloads. Nothing was kept across restarts.
   script.
 - A new caller of `SessionManager.listAll` / `list` that needs only these fields should use
   `sessionIndex`; one that needs the full text stays on pi.
+
+## identity-notes
+
+**Status**: `local`
+**Baseline**: v0.96.1 (on top of `session-index`)
+
+**Why** (owner, 2026-10-01, queue task #40): a role's notebook was capped at 8,000 characters and sent
+whole with every message. "I want the role note book to not be limited, so lets do two layer, the
+character that gets fed into each message should be highly optimized but all other things to note
+should be store in other files that gets fetch when appropriate like long term memory", "similar to
+acp", and "lets make the notebook be optimized for tokens and for AI reading, i don't care about
+reading since it'll be used and maintained by AI". pi-identity now keeps two layers: the rules
+(`notebook.md`, what applies to almost every task) and unlimited notes (`identities/<id>/notes/`, one
+file each, found by search), with an index of the notes' one-line summaries sent alongside the rules,
+both within the cap. The Notebook tab shows all three as the AI writes them.
+
+### Changes
+
+1. **One reading of the notes** (`server/identity-notes.ts`, new): pi-identity's `notes.ts`, copied byte
+   for byte (no imports of its own), so the tab lists, searches, opens, edits and deletes notes exactly as
+   the role's chats do: the same files, index, ranking, flags and removed.md format. `identity-config.ts`
+   is recopied for the new memory settings (`indexBudget`, `notesDir`, identity.json's `memory`).
+2. **The role's memory** (`server/identity-memory.ts`, new): `roleMemory` = what the role's chats get:
+   the index cut to its room, its full size, lines hidden, over budget or not, rules + index in bytes
+   against the cap, estimated tokens (bytes ÷ 3.6, display only), the rules' own cap, counts (notes,
+   digests, outdated, made rules) and a version that changes with any note. `searchRoleNotes` (an empty
+   query lists the newest 200), `readRoleNote` (a note's whole file, or the archive around a hit,
+   10 lines before to 30 after, read-only), `saveRoleNote` (the whole file as edited: same id, summary 1-240 characters,
+   refused if the note changed since it was opened; the old file goes to removed.md "replaced by the
+   owner (pi-web-ui)") and `deleteRoleNote` (to removed.md "deleted by the owner (pi-web-ui)"; deleting a
+   digest frees the notes it rolled up). removed.md is never searched or listed, and only the asked
+   role's folder is read. The owner's views and saves are the server's own, not agent tool calls, so
+   pi-worktree's role-folder rule doesn't apply to them; pi-worktree's API guard knows the new message
+   types (a chat can't send them through curl or a script).
+3. **Protocol** (`protocol.ts`, 35): `identity_notes_search {id, query}` -> `identity_notes_found {id,
+   query, hits, total}`; `identity_note_get {id, ref}` -> `identity_note {id, ref, text, hash, size,
+   editable}`; `identity_note_save {id, ref, text, baseHash}` and `identity_note_delete {id, ref,
+   baseHash}` -> `identity_note_saved {id, ref, ok, code?, problems?, hash?, deleted?, freed?}`. The
+   `identity_notebook` push gains `memory` (`UiRoleMemory`), and its `cap` is now the rules' cap
+   (notebookCap minus indexBudget). The watch (`notebook-watch.ts`) also stats the notes folder, so a
+   note recorded by a chat updates the open tab within a second.
+4. **Saving the rules** (`identities.ts`): refused past the rules' cap, as pi-identity's tool refuses;
+   an older notebook past it may still be saved if it doesn't grow (never past the whole cap). Settings'
+   rows show the rules' cap.
+5. **The tab** (`NotebookPanel.tsx`, `notebook-state.ts`): raw text everywhere (`<pre>`, no Markdown;
+   the AI's own format). The head shows what's sent with every message ("Sent: 3,410 / 8,000 (~947
+   tokens)") with a bar; then Rules (size against their cap, Edit as before), the notes Index (size
+   against its budget; lines hidden; "over budget" when the role's chats are asked to distill), and
+   Notes: counts, a keyword search (the role's notes and its archive, archive hits marked "(old)"), "All
+   notes", rows with id, date, topic, flags and a preview; a row opens the note raw with Edit (a plain
+   editor of the whole file; a note changed meanwhile is refused and said so) and Delete (asks first,
+   then "n12 deleted (kept in removed.md)"); archive stretches open read-only. A changed note version
+   re-runs the list or search; a new socket resends it (`use-chat.ts`). Strings in `i18n.tsx` and all 8
+   `locales/*.json`; styles `.notebook-*`.
+
+### How it was checked
+
+- `tests/unit/identity-config.test.ts`: `server/identity-notes.ts` and `identity-config.ts` match
+  pi-identity's files byte for byte; the rules' cap (shared and per-role `memory`, a bad field reported).
+- `tests/unit/identities.test.ts`: the rules' cap, an older notebook may shrink, never grow.
+- `tests/unit/identity-notebook.test.ts`: the push carries the memory and follows a new note (a touch
+  sends nothing); the index over its budget; list, search, open (never removed.md, never another
+  role's notes); archive hits old and read-only; owner edit and delete keep the old text in removed.md;
+  a digest stands in for its notes and deleting it frees them; the store (current query only, re-search
+  on a new version, open, save, delete, resend) and the view (raw rules, sent and tokens, index,
+  counts, rows, search with no hits, an open note, read-only archive, deleted).
+- `tests/identity-notebook-test.mjs` (sealed browser test, the real pi-identity, a stand-in model):
+  rules as raw text with their cap and the sent size; the stand-in model records a note through
+  pi-identity's notebook tool (the tool's answer checked as yes/no only), the list, index and sent size
+  follow by themselves; search finds the note and an old archive line (marked old, opens read-only);
+  the note opens raw; Edit -> Save writes it, removed.md keeps the old one, the index follows; Delete
+  takes it out to removed.md and the tab says so.
+- check.sh, the build and the full sealed E2E suite; live, a throwaway role.
+
+### When syncing
+
+- `server/identity-notes.ts` and `identity-config.ts` are pi-identity's files: after changing
+  pi-identity's `notes.ts` or `config.ts`, copy them over (the unit test says so when they differ).
+- If pi-identity's note format changes (header fields, ids, flags, removed.md lines), it changes here
+  with the copy; `identity-memory.ts` only adds the tab's reads, saves and the owner's removed.md stamp.

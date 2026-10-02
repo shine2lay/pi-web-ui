@@ -31,6 +31,7 @@ import {
 	textHash,
 	uiChatIdentity,
 } from "../../server/identities.js";
+import { INDEX_BUDGET } from "../../server/identity-notes.js";
 import type { ServerMessage, SessionSummary, UiChatIdentity, UiIdentityInfo } from "../../server/protocol.js";
 import { setAppSend } from "../../web/src/app-globals.js";
 import { identityChoiceOf, identityMenuChildren, withIdentityChildren } from "../../web/src/identity-menu.js";
@@ -56,6 +57,9 @@ type Proto = {
 	attachIdentities(this: unknown, rows: SessionSummary[], resend: () => void): Promise<void>;
 };
 const proto = ClientSession.prototype as unknown as Proto;
+
+/** identity-notes: what the rules (notebook.md) may hold: the notebook cap minus the notes index's budget. */
+const RULES_CAP = NOTEBOOK_CAP - INDEX_BUDGET;
 
 let root: string;
 let idDir: string;
@@ -145,7 +149,7 @@ describe("the identity list", () => {
 			homeChat: join(sessions, "temper-home.jsonl"),
 			aboutSize: Buffer.byteLength("About temper\n"),
 			notebookSize: Buffer.byteLength("- #fact one\n"),
-			notebookCap: NOTEBOOK_CAP,
+			notebookCap: RULES_CAP,
 			// identity-config: no prompt, skills or limits set (identity-config.test.ts covers them); its own
 			// skills are on by default, and the list only counts them
 			promptFile: "prompt.md",
@@ -156,7 +160,7 @@ describe("the identity list", () => {
 			configProblems: [],
 		});
 		const ops = infos.find((i) => i.id === "ops");
-		expect(ops).toMatchObject({ aboutSize: 0, notebookSize: 0, notebookCap: NOTEBOOK_CAP });
+		expect(ops).toMatchObject({ aboutSize: 0, notebookSize: 0, notebookCap: RULES_CAP });
 		expect(ops?.homeChat).toBeUndefined();
 	});
 });
@@ -432,7 +436,7 @@ describe("Settings: about.md and notebook.md", () => {
 			text: "- #fact one\n",
 			hash: textHash("- #fact one\n"),
 			size: 12,
-			cap: NOTEBOOK_CAP,
+			cap: RULES_CAP,
 		});
 		expect(readIdentityFile(ids, "temper", "about")).toMatchObject({ ok: true, text: "About temper\n" });
 		expect(readIdentityFile(ids, "ops", "about")).toMatchObject({ ok: true, text: "", hash: textHash("") });
@@ -456,15 +460,34 @@ describe("Settings: about.md and notebook.md", () => {
 		expect(readFileSync(join(idDir, "ops", "about.md"), "utf8")).toBe("# ops\n");
 	});
 
-	it("refuses a notebook over its cap (in bytes) and leaves the file alone", () => {
+	it("refuses rules over their cap (in bytes: the notebook cap minus the notes index's) and leaves the file alone", () => {
 		const ids = identityRegistry(true).identities;
 		const base = textHash("- #fact one\n");
-		const over = `${"é".repeat(NOTEBOOK_CAP / 2)}x`;
-		expect(Buffer.byteLength(over)).toBe(NOTEBOOK_CAP + 1);
+		const over = `${"é".repeat(RULES_CAP / 2)}x`;
+		expect(Buffer.byteLength(over)).toBe(RULES_CAP + 1);
 		expect(saveIdentityFile(ids, "temper", "notebook", over, base)).toEqual({ ok: false, code: "over_cap" });
 		expect(readFileSync(notebook(), "utf8")).toBe("- #fact one\n");
-		const atCap = "é".repeat(NOTEBOOK_CAP / 2);
-		expect(saveIdentityFile(ids, "temper", "notebook", atCap, base)).toMatchObject({ ok: true, size: NOTEBOOK_CAP });
+		const atCap = "é".repeat(RULES_CAP / 2);
+		expect(saveIdentityFile(ids, "temper", "notebook", atCap, base)).toMatchObject({ ok: true, size: RULES_CAP });
+	});
+
+	it("identity-notes: an older notebook past the rules' cap may shrink, never grow or pass the whole cap", () => {
+		const old = "x".repeat(RULES_CAP + 500);
+		writeFileSync(notebook(), old);
+		const ids = identityRegistry(true).identities;
+		const base = textHash(old);
+		expect(saveIdentityFile(ids, "temper", "notebook", `${old}y`, base)).toEqual({ ok: false, code: "over_cap" });
+		expect(readFileSync(notebook(), "utf8")).toBe(old);
+		const shorter = "x".repeat(RULES_CAP + 100);
+		expect(saveIdentityFile(ids, "temper", "notebook", shorter, base)).toMatchObject({
+			ok: true,
+			size: RULES_CAP + 100,
+		});
+		const whole = "x".repeat(NOTEBOOK_CAP + 1);
+		writeFileSync(notebook(), `${whole}x`);
+		expect(
+			saveIdentityFile(identityRegistry(true).identities, "temper", "notebook", whole, textHash(`${whole}x`)),
+		).toEqual({ ok: false, code: "over_cap" });
 	});
 
 	it("refuses a file changed after it was opened, an identity that's gone, and a huge about page", () => {

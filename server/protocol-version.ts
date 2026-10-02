@@ -45,4 +45,9 @@
 // 34: subs-limits-box - subs_limits (every subscription's limits, pushed to every window) answers
 //     subs_limits_get / subs_limits_refresh. An old page would show no Limits box; an old server would
 //     drop the asks and the box would stay on "Not checked yet".
-export const PROTOCOL_VERSION = 34;
+// 35: identity-notes - identity_notebook carries `memory` (pi-identity's notes index and what rules +
+//     index take) and its cap is the rules' (notebookCap minus indexBudget); pages send
+//     identity_notes_search / identity_note_get / identity_note_save / identity_note_delete and the
+//     server answers identity_notes_found / identity_note / identity_note_saved. An old page shows no
+//     notes; an old server would drop the asks.
+export const PROTOCOL_VERSION = 35;

@@ -1426,6 +1426,18 @@ export type ClientMessage =
 	 *  Answered at once with `identity_notebook`, then again whenever the file changes (anyone: a chat's
 	 *  notebook tool, the owner, the weekly tidy-up). One watch per window; a new one replaces it. */
 	| { type: "identity_notebook_watch"; id: string | null }
+	/** identity-notes: search role `id`'s notes and its old archive by keywords, as its chats' `notebook
+	 *  search` does (never removed.md); an empty query lists the notes, newest first. Answered with
+	 *  `identity_notes_found`. */
+	| { type: "identity_notes_search"; id: string; query: string }
+	/** identity-notes: one note's whole file, or a stretch of the old archive (ref archive/<file>:<line>).
+	 *  Answered with `identity_note`. */
+	| { type: "identity_note_get"; id: string; ref: string }
+	/** identity-notes: save a note's whole file as edited, or delete it. baseHash = the hash from
+	 *  `identity_note` (a note changed since is refused). The old version goes to the role's removed.md.
+	 *  Answered with `identity_note_saved`. */
+	| { type: "identity_note_save"; id: string; ref: string; text: string; baseHash: string }
+	| { type: "identity_note_delete"; id: string; ref: string; baseHash: string }
 	/** subs-limits-box: the Limits box opened (or the page reconnected). Answered with `subs_limits`. */
 	| { type: "subs_limits_get" }
 	/** subs-limits-box: the Limits box's refresh button. pi-multi-pass checks every account (a press while
@@ -1468,7 +1480,9 @@ export interface UiIdentityInfo {
 	/** about.md / notebook.md 的字节数（没有文件 = 0）。 */
 	aboutSize: number;
 	notebookSize: number;
-	/** 笔记本的上限（字节），超了存不进去。identity-config: from ~/.pi/agent/pi-identity.json (notebookCap). */
+	/** 笔记本的上限（字节），超了存不进去。identity-config: from ~/.pi/agent/pi-identity.json (notebookCap).
+	 *  identity-notes: what the rules (notebook.md) may hold, notebookCap minus indexBudget (the notes index
+	 *  gets the rest); with identity.json's `memory` over them. */
 	notebookCap: number;
 	/** identity-config: the role's prompt file (prompt.md unless identity.json names another) and its
 	 *  size in bytes (0 = no prompt yet). promptOff = identity.json turns the prompt off ("prompt": null). */
@@ -1489,6 +1503,44 @@ export interface UiIdentityInfo {
 	/** identity-config: a draft waits for the owner (role-drafts/<id>/): its prompt size and the settings
 	 *  it suggests (field names). */
 	draft?: { promptSize: number; fields: string[] };
+}
+
+/** identity-notes: a role's two-layer memory as its chats get it (pi-identity): the rules (notebook.md)
+ *  and the index of its notes go out with every message, within `cap`; the notes are found by search. */
+export interface UiRoleMemory {
+	/** The notes index as sent (cut to its room: the budget, or less when the rules leave less). */
+	index: string;
+	indexSize: number;
+	/** What the whole index would take; past indexBudget the role's chat is asked to distill. */
+	indexFull: number;
+	indexBudget: number;
+	/** Index lines left out for room (the oldest), and whether the whole index is over its budget. */
+	hidden: number;
+	over: boolean;
+	/** Rules + index in bytes, the cap on both, and the estimated tokens (bytes ÷ 3.6). */
+	sent: number;
+	cap: number;
+	tokens: number;
+	/** What the rules may hold (cap − index budget), and hold now. */
+	rulesCap: number;
+	rulesSize: number;
+	counts: { notes: number; digests: number; outdated: number; rules: number };
+	/** Changes whenever a note does (the tab reloads its list then). */
+	notesVersion: string;
+}
+
+/** identity-notes: a note in the Notebook tab's list or search hits. ref = n12, d3 or
+ *  archive/<file>:<line> (old). flags: outdated, rule, in d3, digest, overview, old. score 0 = a plain
+ *  list (no search). */
+export interface UiNoteHit {
+	ref: string;
+	score: number;
+	size: number;
+	date: string;
+	topic: string;
+	flags: string[];
+	summary: string;
+	preview: string;
 }
 
 /** identity-config: one skill a role's chats load. shared = from the shared role skills folder. */
@@ -3640,6 +3692,36 @@ export type ServerMessage =
 			text?: string;
 			hash?: string;
 			size?: number;
+			/** identity-notes: what the rules (this text) may hold: notebookCap − indexBudget. */
 			cap?: number;
+			/** identity-notes: the notes index and what rules + index take (sent with every message). */
+			memory?: UiRoleMemory;
 			error?: string;
+	  }
+	/** identity-notes: the answer to identity_notes_search. total = how many notes the role has. */
+	| { type: "identity_notes_found"; id: string; query: string; hits: UiNoteHit[]; total: number; error?: string }
+	/** identity-notes: the answer to identity_note_get. editable = a note (an archive stretch isn't). */
+	| {
+			type: "identity_note";
+			id: string;
+			ref: string;
+			text?: string;
+			hash?: string;
+			size?: number;
+			editable?: boolean;
+			error?: string;
+	  }
+	/** identity-notes: the answer to identity_note_save / identity_note_delete. freed = a deleted digest's
+	 *  notes, back in the index. problems = why an edit was refused (code "invalid"). */
+	| {
+			type: "identity_note_saved";
+			id: string;
+			ref: string;
+			ok: boolean;
+			deleted?: boolean;
+			code?: IdentitySaveError;
+			problems?: string[];
+			hash?: string;
+			size?: number;
+			freed?: string[];
 	  };

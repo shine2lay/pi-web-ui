@@ -64,7 +64,15 @@ import {
 	receiveIdentityFile,
 	receiveIdentitySaved,
 } from "./identity-state";
-import { NOTEBOOK_TAB_REF, receiveNotebook, receiveNotebookSaved, resendNotebookWatch } from "./notebook-state";
+import {
+	NOTEBOOK_TAB_REF,
+	receiveNote,
+	receiveNotebook,
+	receiveNotebookSaved,
+	receiveNoteSaved,
+	receiveNotesFound,
+	resendNotebookWatch,
+} from "./notebook-state";
 import { receiveSubsLimits, requestSubsLimits } from "./subs-limits-state";
 import { emitPluginData } from "./plugin-loader";
 import { ingestPluginLogsData } from "./plugin-logs";
@@ -2071,6 +2079,16 @@ export function useChat() {
 					break;
 				case "identity_notebook":
 					receiveNotebook(msg);
+					break;
+				// identity-notes: the Notebook tab's notes list or search, the open note, an edit or delete's answer.
+				case "identity_notes_found":
+					receiveNotesFound(msg);
+					break;
+				case "identity_note":
+					receiveNote(msg);
+					break;
+				case "identity_note_saved":
+					receiveNoteSaved(msg);
 					break;
 				case "heartbeat":
 					if (msg.hostMetrics) {

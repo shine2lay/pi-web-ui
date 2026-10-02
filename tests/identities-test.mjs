@@ -46,6 +46,8 @@ const idDir = join(base, "identities");
 for (const d of [workdir, dataDir, agentDir, idDir]) mkdirSync(d, { recursive: true });
 
 const NOTEBOOK_CAP = 8000;
+/** The rules' own budget: the cap less the notes index's budget (2,000 by default). */
+const RULES_CAP = NOTEBOOK_CAP - 2000;
 /** Marks in each about page: the mock says whether a chat's requests carried them (and nothing else). */
 const ABOUT_MARK = { temper: "temper-about-5f3a", rollcall: "rollcall-about-9c1e" };
 const IDENTITIES = {
@@ -489,7 +491,7 @@ try {
 	const sizeText = () => settingsRow(W, "temper").locator(".identity-notebook-size").textContent();
 	check(
 		"temper's notebook size against the cap",
-		(await sizeText())?.includes(`${fmt(temperSize)} / ${fmt(NOTEBOOK_CAP)}`) === true,
+		(await sizeText())?.includes(`${fmt(temperSize)} / ${fmt(RULES_CAP)}`) === true,
 		String(await sizeText()),
 	);
 	check(
@@ -523,7 +525,7 @@ try {
 		String(await sizeText()),
 	);
 	await shot(W, "desktop-settings");
-	await editorText(W).fill("x".repeat(NOTEBOOK_CAP + 1));
+	await editorText(W).fill("x".repeat(RULES_CAP + 1));
 	check("over the cap: Save is off", await W.locator(".identity-editor .identity-save").isDisabled());
 	const overText =
 		(await W.locator(".identity-editor-over")

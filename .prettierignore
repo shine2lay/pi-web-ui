@@ -12,3 +12,5 @@ plugins/legado-web/server
 plugins/*/storage
 # identity-config: a byte-identical copy of pi-identity's config.ts (a unit test compares them), in its style
 server/identity-config.ts
+# identity-notes: a byte-identical copy of pi-identity's notes.ts (a unit test compares them), in its style
+server/identity-notes.ts

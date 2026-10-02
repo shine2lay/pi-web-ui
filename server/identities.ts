@@ -32,7 +32,8 @@ import { dirname, join, resolve } from "node:path";
 import type { IdentityFileName, IdentitySaveError, UiChatIdentity, UiIdentityInfo } from "./protocol.js";
 // identity-config: a role's settings (prompt, skills, tool limits, unique), its prompt and the drafts waiting
 // for the owner are read, checked and saved with pi-identity's own rules (identity-config.ts, identity-roles.ts).
-import { loadSettings, PROMPT_MAX, type Settings } from "./identity-config.js";
+import { loadSettings, PROMPT_MAX, roleCaps, type Settings } from "./identity-config.js";
+import { rulesCap } from "./identity-notes.js";
 import {
 	checkConfigText,
 	draftIds,
@@ -484,12 +485,18 @@ export function identityInfos(
 			...(d.homeChat ? { homeChat: d.homeChat } : {}),
 			aboutSize: sizeOf(identityFilePath(d, "about")),
 			notebookSize: sizeOf(identityFilePath(d, "notebook")),
-			notebookCap: settings.notebookCap,
+			notebookCap: notebookCapOf(d, settings),
 			// identity-config: its prompt, skills, tool limits and problems, and a draft waiting for the owner
 			...roleInfoParts(d.dir, d.role, settings),
 			...(draft ? { draft } : {}),
 		};
 	});
+}
+
+/** identity-notes: what a role's notebook.md (its rules) may hold: notebookCap minus the notes index's
+ *  budget (pi-identity's rulesCap), with identity.json's `memory` over the shared settings. */
+export function notebookCapOf(def: IdentityDef, settings: Settings): number {
+	return rulesCap(roleCaps(settings, def.role.config));
 }
 
 export type IdentityFileRead =
@@ -511,7 +518,7 @@ export function readIdentityFile(
 			text,
 			hash: textHash(text),
 			size: Buffer.byteLength(text, "utf8"),
-			...(file === "notebook" ? { cap: settings.notebookCap } : file === "prompt" ? { cap: PROMPT_MAX } : {}),
+			...(file === "notebook" ? { cap: notebookCapOf(def, settings) } : file === "prompt" ? { cap: PROMPT_MAX } : {}),
 		};
 	} catch (err) {
 		return { ok: false, error: (err as Error).message };
@@ -577,13 +584,19 @@ export function saveIdentityFile(
 	const def = identities.find((i) => i.id === id);
 	if (!def || typeof text !== "string") return { ok: false, code: "unknown" };
 	const size = Buffer.byteLength(text, "utf8");
-	if (file === "notebook" && size > settings.notebookCap) return { ok: false, code: "over_cap" };
+	// identity-notes: the rules may hold the role's notebookCap minus the index's budget; an older notebook
+	// past it may still be saved if it doesn't grow (as pi-identity's notebook tool lets such edits through),
+	// but never past the whole cap.
+	const limits = roleCaps(settings, def.role.config);
+	const cap = file === "notebook" ? rulesCap(limits) : Number.POSITIVE_INFINITY;
+	if (file === "notebook" && size > limits.notebookCap) return { ok: false, code: "over_cap" };
 	if ((file === "about" || file === "config") && size > ABOUT_MAX) return { ok: false, code: "too_big" };
 	if (file === "prompt" && size > PROMPT_MAX) return { ok: false, code: "too_big" };
 	const path = identityFilePath(def, file);
 	let archived = 0;
 	try {
 		const current = readTextOrEmpty(path);
+		if (size > cap && size > Buffer.byteLength(current, "utf8")) return { ok: false, code: "over_cap" };
 		if (textHash(current) !== baseHash) return { ok: false, code: "changed" };
 		// identity-config: a role's settings are saved only when pi-identity would read every part of them.
 		if (file === "config") {
