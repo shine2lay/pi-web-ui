@@ -21,6 +21,7 @@ import {
 	appendFileSync,
 	existsSync,
 	readFileSync,
+	realpathSync,
 	renameSync,
 	rmSync,
 	statSync,
@@ -379,6 +380,8 @@ import {
 } from "./identities.js";
 import { digestsBefore, snapshotDigests, straddleDigest } from "./exchange-digest.js";
 import { sessionIndex } from "./session-index.js";
+import { ParticipantLifecycle, type ParticipantTarget, type ParticipantLease } from "./participant-lifecycle.js";
+import { identityIdOnBranch } from "./identities.js";
 import { launchOrigin, toServiceInfo } from "./launch-origin.js";
 import { imageIfVersion, type ChatImage } from "./chat-image.js";
 import {
@@ -2576,6 +2579,9 @@ export class ClientSession {
 	}
 	/** 所有客户端共用的一份对话表（见上）。 */
 	private static readonly sharedConvs = new Map<string, Conversation>();
+	/** One persisted-session opener across browser, scheduler and participant clients. */
+	private static readonly sessionOpenChain = makeChain();
+	static participantRetained: ((sessionId: string, role: string) => boolean) | undefined;
 
 	/** reload-adopt：共享表里已经开着的对话（只暴露判断所需的字段）。 */
 	static openConversations(): AdoptCandidate[] {
@@ -4024,6 +4030,21 @@ export class ClientSession {
 	}
 
 	static async create(
+		clientId: string,
+		cwd: string,
+		stateStore: ClientStateStore,
+		opts?: { blank?: boolean },
+	): Promise<ClientSession> {
+		return ClientSession.sessionOpenChain(async () => {
+			// An opener may have finished while this browser was waiting for the gate.
+			const existing = !opts?.blank ? pickAdoptTarget(cwd, ClientSession.openConversations()) : null;
+			const cs = await ClientSession.createNow(clientId, cwd, stateStore, existing ? { blank: true } : opts);
+			if (existing) cs.adoptConversation(existing);
+			return cs;
+		});
+	}
+
+	private static async createNow(
 		clientId: string,
 		cwd: string,
 		stateStore: ClientStateStore,
@@ -10467,6 +10488,10 @@ export class ClientSession {
 	}
 
 	async newChat(_preset?: string, ephemeral?: boolean): Promise<boolean> {
+		return ClientSession.sessionOpenChain(() => ClientSession.prototype.newChatNow.call(this, _preset, ephemeral));
+	}
+
+	private async newChatNow(_preset?: string, ephemeral?: boolean): Promise<boolean> {
 		if (this.quiesceBlocked()) return false;
 		// Reuse an already-open blank conversation instead of piling up new ones
 		// on every click: if the active chat has no messages it IS the new chat
@@ -10477,6 +10502,7 @@ export class ClientSession {
 			try {
 				return (
 					messageCountOf(c.session) === 0 &&
+					!this.retainedParticipant(c) &&
 					c.terminals.list().length === 0 &&
 					!hasQueueEntries(c.session.sessionManager.getEntries())
 				);
@@ -10978,12 +11004,21 @@ export class ClientSession {
 		return false;
 	}
 
+	private retainedParticipant(conv: Conversation): boolean {
+		try {
+			const role = this.snapshotIdentityOf(conv)?.id;
+			return !!role && !!ClientSession.participantRetained?.(conv.session.sessionManager.getSessionId(), role);
+		} catch {
+			return false;
+		}
+	}
+
 	private displaceActive(): Conversation | null {
 		// crash-guard: the active chat may already be gone (closed by another window); nothing to displace.
 		const conv = this.convs.get(this.activeId);
 		if (!conv) return null;
 		// 别人还在看 → 留着（保留 = 展示口径，不改运行时归属）。
-		if (this.viewedElsewhere(conv.id)) {
+		if (this.viewedElsewhere(conv.id) || this.retainedParticipant(conv)) {
 			conv.listed = true;
 			return null;
 		}
@@ -11041,7 +11076,7 @@ export class ClientSession {
 	 *  history list. Never removes the active conversation. */
 	private removeConversation(id: string): void {
 		const conv = this.convs.get(id);
-		if (!conv || id === this.activeId) return;
+		if (!conv || id === this.activeId || this.retainedParticipant(conv)) return;
 		// server-owned-chats：对话表是进程共享的 —— 别的窗口正看着这条时不能回收它，
 		// 否则那边的界面会当场失去自己正在读的对话（而它并没有做错任何事）。
 		// 必须在释放认领之前：没回收的对话就没有关闭，认领还得留着。
@@ -12296,6 +12331,16 @@ export class ClientSession {
 			this.emitConversations();
 			return;
 		}
+		if (this.retainedParticipant(conv)) {
+			this.sendNotice({
+				type: "notice",
+				level: "info",
+				text: "This chat is a bound Team participant and stays available in the background. Change its Team assignment before removing it.",
+				textEn:
+					"This chat is a bound Team participant and stays available in the background. Change its Team assignment before removing it.",
+			});
+			return;
+		}
 		// Streaming / retained conversations refuse dismissal — mirrors displaceActive retention.
 		// 运行中的子代理后代也阻止关闭（绝不连带 abort）；已结束的子代理后代：
 		// withFinishedSubagents 才连带，否则拒绝并提示（前端确认框先问用户）。
@@ -12663,16 +12708,18 @@ export class ClientSession {
 	 * user opened history while it was streaming.
 	 */
 	/** have：switch-cache，见 switchConversation。 */
-	async switchSession(path: string, have?: CachedWindow): Promise<void> {
-		this.switchHave = have ?? null;
-		try {
-			await this.switchSessionNow(path);
-		} finally {
-			this.switchHave = null;
-		}
+	async switchSession(path: string, have?: CachedWindow, validate?: (sm: SessionManager) => void): Promise<void> {
+		await ClientSession.sessionOpenChain(async () => {
+			this.switchHave = have ?? null;
+			try {
+				await this.switchSessionNow(path, validate);
+			} finally {
+				this.switchHave = null;
+			}
+		});
 	}
 
-	private async switchSessionNow(path: string): Promise<void> {
+	private async switchSessionNow(path: string, validate?: (sm: SessionManager) => void): Promise<void> {
 		// switch-loading：target 用客户端发来的原始 path（不是 resolve 后的），客户端才能对上。
 		const target: SwitchTarget = { kind: "session", path };
 		if (this.quiesceBlocked()) {
@@ -12704,6 +12751,11 @@ export class ClientSession {
 			for (const conv of this.convs.values()) {
 				const sessionFile = conv.session.sessionFile;
 				if (sessionFile && resolve(sessionFile) === targetPath) {
+					validate?.(conv.session.sessionManager);
+					if (validate) {
+						conv.listed = true;
+						return; // A browser won the open race; keep its activity/unread state unchanged.
+					}
 					// 已经是当前对话时 switchConversation 不发快照；客户端照样在等回执，
 					// 补一个快照再回执（先快照后回执的顺序不能反）。先记下「切之前是不是它」：
 					// 切完之后 activeId 永远等于它，事后判断会把大会话白白序列化两遍。
@@ -12728,11 +12780,24 @@ export class ClientSession {
 			// scanAndPreview waits until the preview has really left the socket: the SDK read below
 			// blocks this thread for a second or more, and a frame still in the queue would be stuck
 			// behind it — which is exactly what the preview is there to avoid.
-			const scan = await this.scanAndPreview(target, targetPath);
+			const scan = validate ? scanTranscriptFile(targetPath) : await this.scanAndPreview(target, targetPath);
 			const fastOpen = scan !== null && scan.problem === null;
+			if (validate && !fastOpen) throw new Error("Participant recovery refused: transcript requires owner repair");
 			if (!fastOpen) this.repairTranscriptFileBeforeOpen(targetPath);
 			const sessionManager = SessionManager.open(targetPath);
+			validate?.(sessionManager);
 			const targetCwd = sessionManager.getCwd();
+			if (validate) {
+				const listed = this.conv.listed;
+				const disposable = this.displaceActive();
+				this.conv.listed = listed;
+				const count = [...this.convs.values()].filter(
+					(c) => c.cwd === targetCwd && !c.isSubagent && !c.isEphemeral,
+				).length;
+				const replacing = disposable?.cwd === targetCwd && !disposable.isSubagent && !disposable.isEphemeral ? 1 : 0;
+				if (count + 1 - replacing > MAX_OPEN_CONVERSATIONS)
+					throw new Error("Participant recovery is waiting for open-chat capacity");
+			}
 			const conversationId = this.nextConversationId();
 			openedTerminals = this.makeTerminalManager(conversationId, targetCwd);
 			openedRuntime = await createAgentSessionRuntime(
@@ -12744,6 +12809,8 @@ export class ClientSession {
 				},
 			);
 
+			// Rebinding or shutdown during extension loading invalidates this recovery.
+			validate?.(sessionManager);
 			// Only displace the old active conversation after the replacement runtime
 			// is known-good. This keeps a failed history open entirely non-destructive.
 			const oldListed = this.conv.listed;
@@ -12774,14 +12841,15 @@ export class ClientSession {
 			const conv = this.makeConversation(openedRuntime, conversationId, openedTerminals);
 			// Deliberately resumed — must not be dismissed when the user later
 			// switches away without sending a new message.
-			conv.promptedSinceActive = true;
+			conv.promptedSinceActive = !validate;
+			if (validate) conv.listed = true;
 			// chat-open-speed: the scan already read the whole file and found no pending marker,
 			// so this second whole-file read (1.1 s on a 267 MB chat) has nothing to find.
 			if (!fastOpen) this.noticeInterruptedCompaction(conv);
 			this.convs.set(conv.id, conv);
 			this.activeId = conv.id;
 			// 从历史/「最近对话」打开 = 看过了：绿灯灭掉，并撤销它的「移出最近」墓碑。
-			this.markRecentSeen(conv);
+			if (!validate) this.markRecentSeen(conv);
 			openedRuntime = null;
 			openedTerminals = null;
 			if (displaced) this.removeConversation(displaced.id);
@@ -12796,7 +12864,8 @@ export class ClientSession {
 				await this.restoreProjectProviderKeysForCwd(targetCwd);
 				await this.restoreProjectModelForCwd(targetCwd);
 			}
-			this.conv.lastActiveAt = Date.now();
+			// Background recovery must not steal the next browser's most-recent-chat selection.
+			this.conv.lastActiveAt = validate ? 0 : Date.now();
 			this.webUi.refresh();
 			this.emitConversations();
 			this.goalSvc.emitGoalStatus();
@@ -13713,6 +13782,10 @@ export class ClientSession {
 	}
 
 	async setCwd(newCwd: string): Promise<void> {
+		await ClientSession.sessionOpenChain(() => ClientSession.prototype.setCwdNow.call(this, newCwd));
+	}
+
+	private async setCwdNow(newCwd: string): Promise<void> {
 		try {
 			const { resolve } = await import("node:path");
 			this.files.unwatchGit(); // stale repo's watcher must not fire across projects
@@ -14344,6 +14417,9 @@ export class AgentService {
 	/** index.ts 注入：内置调度存储（attach 时拷贝到每个新会话，供 schedule_* 工具）。 */
 	schedulerStore: SchedulerStore | undefined = undefined;
 	private clients = new Map<string, ClientSession>();
+	private readonly participants = new ParticipantLifecycle((target, current) =>
+		this.recoverParticipant(target, current),
+	);
 	/** 全局认领表（跨浏览器标签页共享；<dataDir>/claims.json，best-effort 持久化）。 */
 	private claimStore: ClaimStore;
 	/** Quiesce (draining) state — the service refuses NEW work (prompts, forks,
@@ -14370,6 +14446,7 @@ export class AgentService {
 	) {
 		this.stateStore = new ClientStateStore(stateFile);
 		this.claimStore = new ClaimStore(join(this.stateStore.dataDir, "claims.json"));
+		ClientSession.participantRetained = (id, role) => this.participants.has(id, role);
 		sessionIndex.configure({ file: join(this.stateStore.dataDir, "session-index.json") });
 	}
 
@@ -15502,7 +15579,7 @@ export class AgentService {
 					clientId,
 					cwd,
 					this.stateStore,
-					openHere || clientId.startsWith(CARRY_ON_CLIENT_PREFIX) ? { blank: true } : undefined,
+					openHere || AgentService.isPseudoClientId(clientId) ? { blank: true } : undefined,
 				).finally(() => {
 					this.pending.delete(clientId);
 				});
@@ -15753,6 +15830,48 @@ export class AgentService {
 		return this.clients.get(clientId);
 	}
 
+	/** Trusted plugin lifecycle: keep exact owner-bound sessions reachable without a model turn. */
+	retainParticipantRoutes(source: () => ParticipantTarget[]): ParticipantLease {
+		return this.participants.register(source);
+	}
+
+	private async recoverParticipant(target: ParticipantTarget, current: () => boolean): Promise<void> {
+		if (this.quiesced || !current()) return;
+		// A live session with the wrong identity is not replaced or rebound.
+		if (this.participantRoutesForPlugins().some((r) => r.sessionId === target.sessionId)) return;
+		const matches = (await sessionIndex.listAll(piSessionsRoot())).filter((s) => s.id === target.sessionId);
+		if (matches.length !== 1 || !current() || this.quiesced) return;
+		const path = matches[0]!.path;
+		const agentDir = process.env.PI_CODING_AGENT_DIR ?? getAgentDir();
+		if (
+			!isInsideSessionsDir(agentDir, path) ||
+			realpathSync(path) !== resolve(path) ||
+			scanTranscriptFile(path).problem
+		)
+			return;
+		const validate = (sm: SessionManager) => {
+			const role = liveChatIdentityId(
+				identityIdOnBranch(sm.getBranch()),
+				sm.getSessionFile(),
+				identityRegistry(true).identities,
+			);
+			if (this.quiesced || !current() || sm.getSessionId() !== target.sessionId || role !== target.role) {
+				throw new Error("Participant recovery refused: binding or identity changed");
+			}
+		};
+		// Validate before attaching even the empty lifecycle client. Never pick a home/alias fallback.
+		validate(SessionManager.open(path));
+		const clientId = "plugin:participant-lifecycle";
+		const sink = () => {};
+		const cs = await this.attach(clientId, sink);
+		try {
+			await cs.switchSession(path, undefined, validate);
+			this.pokeExternalRunning(clientId);
+		} finally {
+			this.detach(clientId, sink);
+		}
+	}
+
 	/** All loaded participants, not whichever browser happens to be active. Conflicts fail closed. */
 	participantRoutesForPlugins(): import("./plugins.js").PluginParticipantRoute[] {
 		const routes = new Map<string, import("./plugins.js").PluginParticipantRoute>();
@@ -15800,6 +15919,8 @@ export class AgentService {
 	}
 
 	async disposeAll(): Promise<void> {
+		this.participants.dispose();
+		ClientSession.participantRetained = undefined;
 		this.uninstallQueueHost?.();
 		this.uninstallQueueHost = null;
 		ClientSession.stuckAnswerSender = null;

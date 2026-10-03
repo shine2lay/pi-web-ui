@@ -2503,7 +2503,18 @@ export interface UiPluginUi {
  *  dom:anchor = 仅限 anchors 挂载点的范围 DOM（免用户授权，完整 document
  *  仍需 "dom" + 用户授权）。 */
 export type PluginPermissionFamily =
-	"fs" | "fs:read" | "fs:write" | "ui" | "tools" | "http" | "chat" | "llm" | "net" | "dom" | "dom:anchor";
+	| "fs"
+	| "fs:read"
+	| "fs:write"
+	| "ui"
+	| "tools"
+	| "http"
+	| "chat"
+	| "participants"
+	| "llm"
+	| "net"
+	| "dom"
+	| "dom:anchor";
 
 /** 插件间事件总线的一条事件（host.events.emit/on）。 */
 export interface PluginBusEvent {

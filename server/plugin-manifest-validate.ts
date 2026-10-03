@@ -39,6 +39,7 @@ export const KNOWN_PERMISSION_FAMILIES: ReadonlySet<string> = new Set([
 	"tools",
 	"http",
 	"chat",
+	"participants",
 	"net",
 	"llm",
 	"dom",

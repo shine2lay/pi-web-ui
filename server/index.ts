@@ -33,6 +33,7 @@ import { PROTOCOL_VERSION } from "./protocol-version.js";
 import { AgentService, workspacePath, QuiesceRejectedError } from "./agent-service.js";
 import { describeError, errorMessage, guardCalls, installProcessGuards } from "./crash-guard.js";
 import type { BusyConversation } from "./agent-service.js";
+import type { ParticipantTarget } from "./participant-lifecycle.js";
 import { chatImageHeaders, parseChatImageAddress, type ChatImage } from "./chat-image.js";
 import { WS_MAX_PAYLOAD_BYTES, isAbsoluteWirePath, wireToAbs } from "./files-service.js";
 import { httpHostAllowed } from "./host-guard.js";
@@ -2021,6 +2022,10 @@ if ("schedulerStore" in service) {
 		}
 	};
 	pm.participantRouteProvider = () => (service instanceof AgentService ? service.participantRoutesForPlugins() : []);
+	pm.participantRouteRetainer = (source: () => ParticipantTarget[]) =>
+		service instanceof AgentService
+			? service.retainParticipantRoutes(source)
+			: { refresh: async () => {}, dispose: () => {} };
 	// conversationLister：本客户端运行中对话 + 当前项目历史会话摘要，只读组装
 	// {id,title,cwd,kind,isStreaming}。无客户端/方法缺失回空数组（插件显示空态）。
 	(pm as any).conversationLister = async () => {

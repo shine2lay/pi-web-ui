@@ -304,6 +304,10 @@ export function isPluginLogsRequest(p: unknown): p is PluginLogsWireUp {
 export interface PluginHost {
 	/** Exact loaded Pi sessions with host-derived role metadata; no titles, paths or transcripts. */
 	participantRoutes(): PluginParticipantRoute[];
+	/** Passive exact-session recovery; requires participants, never starts a model turn. */
+	retainParticipantRoutes(
+		source: () => import("./participant-lifecycle.js").ParticipantTarget[],
+	): import("./participant-lifecycle.js").ParticipantLease;
 	/** 向所有已连接的浏览器广播一条本插件的消息（plugin_data）。 */
 	broadcast(payload: unknown): void;
 	/** 发一条系统通知条（notice）给所有已连接的浏览器。 */
@@ -2178,6 +2182,11 @@ export class PluginManager {
 	/** index.ts 注入：读取当前打开对话的快照（轨迹类插件经 host.getActiveConversation 调用）。 */
 	conversationProvider: (() => PluginConversationSnapshot | null) | undefined = undefined;
 	participantRouteProvider: (() => PluginParticipantRoute[]) | undefined = undefined;
+	participantRouteRetainer:
+		| ((
+				source: () => import("./participant-lifecycle.js").ParticipantTarget[],
+		  ) => import("./participant-lifecycle.js").ParticipantLease)
+		| undefined;
 	/** index.ts 注入：插件无头调用 agent（微信通道等经 host.chat 调用）。 */
 	chatProvider: ((pluginId: string, req: PluginChatRequest) => Promise<PluginChatResult>) | undefined = undefined;
 	/** 由 index.ts 接入 agent-service：插件直调模型（host.llm.complete 的底层，孤立无工具会话）。
@@ -3627,6 +3636,14 @@ export class PluginManager {
 					/* 推送失败不影响已完成的授权 */
 				}
 				return true;
+			},
+			retainParticipantRoutes: (source) => {
+				if (!can("participants") || !self.participantRouteRetainer || typeof source !== "function") {
+					return { refresh: async () => {}, dispose: () => {} };
+				}
+				const lease = self.participantRouteRetainer(() => (can("participants") ? source() : []));
+				const dispose = effects.add("participantRoutes", () => lease.dispose());
+				return { refresh: () => lease.refresh(), dispose };
 			},
 			participantRoutes: () => {
 				try {

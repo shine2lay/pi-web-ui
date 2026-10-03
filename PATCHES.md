@@ -10,6 +10,12 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## participant-lifecycle: keep assigned Team sessions reachable
+
+- `local`: explicit `participants` plugin permission and lifecycle-scoped exact-session leases retain owner-bound role chats independently of browser selection. Passive recovery opens only the existing, uniquely indexed, matching-identity session; it never chooses another role chat, repairs a transcript, changes a binding, sends a prompt or approves work.
+- Startup, authorized panel refresh and plugin maintenance share recovery. Browser/history/project opens share a gate to avoid duplicate runtimes. Current bindings are rechecked after asynchronous loading; plugin unload/revocation releases retention. The normal sixteen-chat project limit still applies, and recovery leaves browser focus/unread state alone.
+- Regression coverage: `tests/unit/participant-lifecycle.test.ts` and sealed `tests/participant-lifecycle-test.mjs`; existing route, capacity, lifecycle, switch and carry-on suites remain gates. Details: [participant lifecycle](docs/participant-lifecycle.md).
+
 ## company-team-capacity: allow sixteen open role chats per project
 
 - `local`：owner-approved 8 → 16 open regular chats per project so the eleven Company roles can stay connected alongside ordinary chats. Both pi and DSH import one `server/conversation-limits.ts` constant; admission/counting, ephemeral/subagent exemptions and non-destructive refusal are otherwise unchanged.

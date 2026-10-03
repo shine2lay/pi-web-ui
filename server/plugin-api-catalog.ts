@@ -54,6 +54,12 @@ export const SLOT_EXAMPLES: Readonly<Record<string, string>> = {
  *  needs="-" = 观察/基础设施类（无需能力声明）；其余走 can() 门控。 */
 export const HOST_METHODS: ReadonlyArray<CatalogHostMethod> = [
 	{
+		name: "retainParticipantRoutes",
+		needs: "participants",
+		summary: "Keep exact existing role sessions available without sending prompts or changing bindings",
+		example: `const lease = host.retainParticipantRoutes(() => ownerBindings); await lease.refresh()`,
+	},
+	{
 		name: "ui.register",
 		needs: "ui",
 		summary: "Register UI items at runtime (same rules as the manifest: alias mapping + enum checks)",

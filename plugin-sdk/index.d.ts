@@ -5,7 +5,18 @@
  */
 
 export type PluginPermissionFamily =
-	"fs" | "fs:read" | "fs:write" | "ui" | "tools" | "http" | "chat" | "net" | "dom" | "dom:anchor" | "asks";
+	| "fs"
+	| "fs:read"
+	| "fs:write"
+	| "ui"
+	| "tools"
+	| "http"
+	| "chat"
+	| "participants"
+	| "net"
+	| "dom"
+	| "dom:anchor"
+	| "asks";
 
 /** host.asks: something a chat waits on you for. */
 export type PluginAskKind = "question" | "dialog" | "approval" | "stuck";
@@ -212,6 +223,11 @@ export type ToolGuardPreDecision =
 export interface PluginHost {
 	/** Optional additive capability: exact loaded Pi role/session metadata, never transcripts. */
 	participantRoutes?(): Array<{ sessionId: string; role: string; isHome: boolean; busy: boolean }>;
+	/** Requires participants. Keeps exact existing sessions loaded; no prompt or role assignment. */
+	retainParticipantRoutes?(source: () => Array<{ sessionId: string; role: string }>): {
+		refresh(): Promise<void>;
+		dispose(): void;
+	};
 	broadcast(payload: unknown): void;
 	notify(level: "info" | "warning" | "error", text: string, textEn?: string): void;
 	onMessage(handler: (payload: unknown, from?: string) => void): () => void;
