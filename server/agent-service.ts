@@ -52,6 +52,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { BgServerTracker } from "./bg-servers.js";
+import { MAX_OPEN_CONVERSATIONS } from "./conversation-limits.js";
 import {
 	ASK_USER_NO_CLIENT_ERROR,
 	ASK_USER_NO_CLIENT_GRACE_MS,
@@ -2062,11 +2063,6 @@ function atomicWriteFileSync(file: string, data: string): void {
 		}
 	}
 }
-
-/** Cap on simultaneously open NON-subagent conversations of ONE project (each keeps a full
- *  runtime alive; conversations of other projects keep their own lists).
- *  子代理不计入：子代理是 inMemory 后台任务，不参与此上限，既不占位也不被此上限拦截。 */
-const MAX_OPEN_CONVERSATIONS = 8;
 
 /** optimistic-send: how far one prompt() got, for its final answer (see ClientSession.prompt). */
 interface PromptFlow {

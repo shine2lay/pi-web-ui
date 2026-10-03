@@ -30,6 +30,7 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { BgServerTracker } from "../bg-servers.js";
+import { MAX_OPEN_CONVERSATIONS } from "../conversation-limits.js";
 import {
 	ClientStateStore,
 	DEFAULT_RETRY_MAX_ATTEMPTS,
@@ -96,7 +97,6 @@ const SNAPSHOT_INTERVAL_MS = 60;
 const HOME_WIRE = homedir().replace(/\\/g, "/");
 /** 桌面目录（wire 格式）：进程内不变，不存在则空串 → 前端不渲染 🖥️。 */
 const DESKTOP_WIRE = desktopDirWire(HOME_WIRE);
-const MAX_OPEN_CONVERSATIONS = 8;
 /** 新会话默认权限预设（沙箱内 + 无审批弹窗；无头运行的当前行为，保持不变）。 */
 const PERMISSION_DEFAULT_PRESET = "workspace-write-never";
 /** 前端提供的三档（官方 workspace-write 走 ask，无应答者时是死路，不提供）。 */

@@ -48,7 +48,7 @@ QQ群 1126050727
   - **右侧文件树** —— 在任意文件夹上点右键 →「以项目打开」（同一菜单里还有「上传文件到此文件夹」）。
   - 输入框里 `/cwd <路径>`（只输 `/cwd` 显示当前目录）。
   - 启动默认工作目录来自 `--cwd <dir>` / `PI_WEB_CWD`。
-- **对话并行** —— 每个对话独立 agent runtime，切走后仍在后台流式；每项目最多同时 8 个（子代理不计入）。
+- **对话并行** —— 每个对话独立 agent runtime，切走后仍在后台流式；每项目最多同时打开 16 个（子代理不计入）；仅增加可打开的对话数，不改变任务并发限制或权限。
 - **「运行的对话」列表** —— 按项目分组（当前项目置顶），子代理缩进挂在父对话下，带子代理 / 报错（悬停看原因）/ 流式徽标；✎ 行内改名；✕ 可选「仅关已结束的子代理」或「强行全关」（运行中会二次确认）；右键某行只作用于该对话的子代理子树。
 - **历史会话** —— 读的是 `<agentDir>/sessions/--<cwd>--/`，也就是 pi CLI/TUI 写的同一份转录：浏览器和终端里的 `pi` 共用每个项目的一份列表。支持 ✎ 行内重命名（写入的 `session_info` 与 pi 的 `/name` 同机制）与两步确认删除。
 - **最近项目**（全局搜索会用到的列表）—— 本浏览器的记录 ∪ 所有有转录的目录，去掉你删过的（墓碑）和不存在的路径，按最近使用排序（显示 20 条，最多存 30）。
@@ -160,7 +160,7 @@ QQ群 1126050727
 - 底栏的 token/成本/上下文按 DeepSeek 官方每百万定价与 100 万窗口计算。
 - 打开历史会话是只读回放：一发消息就会开**新分支**并把旧对话作为上下文注入（运行时不允许原地续聊）；编辑重问同理。
 - **停止**会杀掉运行时进程树，所以所有进行中的 DSH 对话都会停（有提示），半成品目标会先清除；不支持只中止 bash 工具。
-- 会话存在 `<dataDir>/dsh-sessions/`（与 pi 引擎的转录隔离），超过 `PI_WEB_DSH_SESSION_RETENTION_DAYS`（90）天自动清理；每项目最多同时 8 个对话；运行时崩溃按 1s/3s/9s 退避重启，60 秒内最多 2 次，超限就停下并提示你去查 API key 与 DSH 依赖。
+- 会话存在 `<dataDir>/dsh-sessions/`（与 pi 引擎的转录隔离），超过 `PI_WEB_DSH_SESSION_RETENTION_DAYS`（90）天自动清理；每项目最多同时打开 16 个对话；运行时崩溃按 1s/3s/9s 退避重启，60 秒内最多 2 次，超限就停下并提示你去查 API key 与 DSH 依赖。
 - 工具跑在 `workspace-write` 沙箱里、审批为 never——你的「停止」按钮就是控制阀。问卷是逐题向导（带选项预览与倒计时）。
 - pi 专属能力（会话重命名、`/compact`、`/reload`、扩展热重载、子代理模板、自定义服务商/多密钥、服务商模型探测、装 pi CLI、视觉桥、逐工具开关）都会给明确提示并被隐藏入口，而不是静默失败。
 
@@ -418,11 +418,11 @@ volumes:
 | 📊 [图表 mermaid](https://github.com/xing-shuyin/pi-web-ui/tree/main/plugins/mermaid)                     | 把对话里的 ` ```mermaid ` 围栏渲染成 SVG 图表（fenced-code 渲染插件，本地引擎离线优先）。                                                                                                                                                                                                                          |
 | 🧭 [运行轨迹 run-trace](https://github.com/xing-shuyin/pi-web-ui/tree/main/plugins/run-trace)             | 运行轨迹：任务 → 思考 → 工具 → 文件改动 → 结果的时间线聚合视图，支持回放与节点详情。                                                                                                                                                                                                                               |
 | 📖 [阅读 legado-web](https://github.com/xing-shuyin/pi-web-ui/tree/main/plugins/legado-web)               | Legado 阅读（文本源）：基于兼容安卓书源的搜书 / 发现 / 详情 / 目录 / 正文阅读，支持书源导入、检测与删废源，并提供四个修源 AI 工具（`legado_rules`、`legado_book_sources`、`legado_source_probe`、`legado_run_rule`）与「🤖 AI 修复源」按钮（带失败现场直接开新对话）。书源/书架/进度存在 `<dataDir>/legado-web/`。 |
-| 💬 [微信通道 wechat-ilink](https://github.com/xing-shuyin/pi-web-ui/tree/main/plugins/wechat-ilink) | 微信扫码登录（与腾讯 openclaw-weixin 同源的 ilink 协议）：出站长轮询收消息，在微信里直接指挥 agent，无需公网 IP。 |
-| 🎤 [语音输入 voice-input](https://github.com/xing-shuyin/pi-web-ui/tree/main/plugins/voice-input) | 输入框旁的麦克风按钮：浏览器语音识别直接听写进输入框；不支持/识别失败时自动降级为服务端转写（远端接口，或一键安装的本地 Whisper，免费不出网）。 |
-| 🌐 [实时预览 live-preview](https://github.com/xing-shuyin/pi-web-ui/tree/main/plugins/live-preview) | Live Server 式预览：`/liveserver` 看 HTML（含相对资源与自动刷新）、`/md` 看 Markdown 渲染；真服务只绑回环地址，经宿主通用代理对外只露同源前缀。 |
-| 🖼 [图片处理 image-toolkit](https://github.com/xing-shuyin/pi-web-ui/tree/main/plugins/image-toolkit) | 图片处理工作台：压缩（按目标体积二分逼近）、裁剪、缩放、旋转/翻转、格式转换（PNG/JPEG/WebP/AVIF）、批量导出 ZIP、水印、滤镜调色、图片信息与 EXIF，可直接读写工作区图片；另给 AI 配了 4 个工具。 |
-| 📓 [笔记 notes](https://github.com/xing-shuyin/pi-web-ui/tree/main/plugins/notes) | 随手记：笔记 + 待办 + 日程提醒三合一。顶栏按钮打开可自由拖拽的全局浮窗（位置/尺寸记忆，设置也在浮窗里，无独立视图页）；提醒走服务端定时（重启不丢、错过补送），另有 5 个 AI 工具与 `/note` `/todo` `/remind` 快速捕获。 |
+| 💬 [微信通道 wechat-ilink](https://github.com/xing-shuyin/pi-web-ui/tree/main/plugins/wechat-ilink)       | 微信扫码登录（与腾讯 openclaw-weixin 同源的 ilink 协议）：出站长轮询收消息，在微信里直接指挥 agent，无需公网 IP。                                                                                                                                                                                                  |
+| 🎤 [语音输入 voice-input](https://github.com/xing-shuyin/pi-web-ui/tree/main/plugins/voice-input)         | 输入框旁的麦克风按钮：浏览器语音识别直接听写进输入框；不支持/识别失败时自动降级为服务端转写（远端接口，或一键安装的本地 Whisper，免费不出网）。                                                                                                                                                                    |
+| 🌐 [实时预览 live-preview](https://github.com/xing-shuyin/pi-web-ui/tree/main/plugins/live-preview)       | Live Server 式预览：`/liveserver` 看 HTML（含相对资源与自动刷新）、`/md` 看 Markdown 渲染；真服务只绑回环地址，经宿主通用代理对外只露同源前缀。                                                                                                                                                                    |
+| 🖼 [图片处理 image-toolkit](https://github.com/xing-shuyin/pi-web-ui/tree/main/plugins/image-toolkit)      | 图片处理工作台：压缩（按目标体积二分逼近）、裁剪、缩放、旋转/翻转、格式转换（PNG/JPEG/WebP/AVIF）、批量导出 ZIP、水印、滤镜调色、图片信息与 EXIF，可直接读写工作区图片；另给 AI 配了 4 个工具。                                                                                                                    |
+| 📓 [笔记 notes](https://github.com/xing-shuyin/pi-web-ui/tree/main/plugins/notes)                         | 随手记：笔记 + 待办 + 日程提醒三合一。顶栏按钮打开可自由拖拽的全局浮窗（位置/尺寸记忆，设置也在浮窗里，无独立视图页）；提醒走服务端定时（重启不丢、错过补送），另有 5 个 AI 工具与 `/note` `/todo` `/remind` 快速捕获。                                                                                            |
 
 `plugins/demo-mailbox` 作为最小插件模板保留在仓库里（服务端入口 + 客户端视图 + 双向消息协议），兼作测试夹具——想自己写插件从这里入手。
 
@@ -445,8 +445,8 @@ pi-web-ui install https://github.com/xing-shuyin/pi-web-ui/tree/main/plugins/web
 装的时候代码是从那个仓库拉的，本仓库不做内置拷贝：社区条目只是一条指针，许可证、issue 与发布节奏都归插件作者。
 想要固定版本，在 `source` 里带上 `#ref`。
 
-| 插件 | 功能 |
-| ---- | ---- |
+| 插件                                                                   | 功能                                                                                                                                                                  |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 🌿 [多仓库 Git multi-git](https://github.com/EinErste/pi-web-multigit) | 多仓库 Git 总览：项目目录下每个仓库的变更、差异、历史、分支、贮藏、跨仓搜索、时间线与单文件回滚，另有工作区分支聚合、Fetch/Pull（仅快进）与可选的内置终端；其余只读。 |
 
 想被收录，和任何条目一样只差一行：往 `plugins/catalog.json` 加一条并发 PR。不提 PR 也可以在市场里自行登记（存在
@@ -574,28 +574,28 @@ pi-web-ui uninstall <id>      # 卸载插件
 
 以下全部可选——默认值就是开发时一直在用的配置。完整参考：[`docs/env-vars.md`](docs/env-vars.md)。
 
-| 变量                           | 默认               | 作用                                                                                                                                                                                                           |
-| ------------------------------ | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PI_WEB_TOOL_TIMEOUT_MS`       | `1200000`（20 分） | 单工具调用看门狗；超时自动中止（`ask_user_question` 豁免）。只做默认值，设置面板「工具」页优先。                                                                                                              |
-| `PI_WEB_STALL_NOTIFY_MS`       | `180000`（3 分）   | 流式运行完全没事件时给警告（不中止）；`0` = 关。                                                                                                                                                               |
-| `PI_WEB_TERMINAL_IDLE_MS`      | `15000`            | AI 开过的终端静默这么久就催它去看一眼；`0` = 关。                                                                                                                                                              |
-| `PI_WEB_TERMINAL_IDLE_LINES`   | `10`               | 该催命消息回送的终端尾部行数（1–500）。                                                                                                                                                                        |
-| `PI_WEB_VISION_TIMEOUT_MS`     | `90000`            | 视觉桥整批转写的超时。                                                                                                                                                                                         |
-| `PI_WEB_UPLOAD_RETENTION_DAYS` | `14`               | `<dataDir>/uploads/` 保留天数；`0` = 不清理。                                                                                                                                                                  |
-| `PI_WEB_SHELL`                 | 自动               | 仅 Windows：node-pty 用哪个 shell（自动顺序：`PI_WEB_SHELL` → `$SHELL` → Git Bash → 随包 busybox → `%COMSPEC%` → PowerShell）。                                                                                |
-| `PI_WEB_TABS`                  | 全部标签页         | 逗号分隔的标签页白名单（`chat,terminal,git,search,tasks,settings,plugins`）；未列入的在服务端也被拒绝，`chat` 不可关。                                                                                         |
-| `PI_WEB_MANAGED`               | 关                 | `1`/`true` 声明实例由外部部署管理：自更新、装 pi CLI、装插件都被拒绝并说明原因，前端也隐藏入口。                                                                                                               |
-| `PI_WEB_ALLOW_HOSTS`           | 空                 | 严格的主机名白名单（叠加在始终生效的同权威校验之上）。                                                                                                                                                         |
-| `PI_WEB_LOCALE`                | 空                 | 首访回退语言（显式选择与浏览器语言优先级更高）。                                                                                                                                                               |
-| `PI_WEB_LOCALE_BASE_URL`       | GitHub raw         | 语言包下载根 —— 指向镜像即可做离线/内网安装。                                                                                                                                                                  |
-| `PI_WEB_PKG_ROOT`              | 自动               | 显式指定包根目录（非标准安装位置时用）。                                                                                                                                                                       |
-| `PI_CODING_AGENT_SESSION_DIR`  | 空                 | 让 pi 把转录扁平写入该目录（而非 `<agentDir>/sessions/--<cwd>--/`，会改变历史列表读到的内容）。                                                                                                                |
-| `PI_WEB_SDK`                   | `bundled`          | 用哪一份 pi SDK：`bundled`（pi-web-ui 自带的副本）或 `global`（祖先链上更新的那份）。 |
-| `PI_WEB_ALLOW_ORIGINS`         | 空                 | WebSocket Origin 校验的额外白名单（逗号分隔；dev 代理 / 反向代理用）。 |
-| `PI_WEB_GIT_EXTENSION_CHECK`   | `1`（默认开）      | 设 `0`/`false`/`no`/`off` 关闭「全部组件更新」里的 git 行（走 `git ls-remote`），大型单体仓库场景可用。 |
-| `PI_WEB_PLUGIN_CATALOG_URL`    | 官方清单 URL       | 开机插件市场清单来源：默认指向官方社区清单 `https://xing-shuyin.github.io/pi-web-ui-plugins/catalog.json`（仅拉取文档写可安装列表，**不自动安装插件**）。设为空串或 `off`/`0`/`false`/`no` 可关闭；设 `PI_WEB_PLUGIN_CATALOG_INSTALL=1` 时顺手自动全部安装。 |
-| `PI_WEB_LAUNCHED_BY` / `PI_WEB_SERVICE_NAME` | 空 | 由 `pi-web-ui server install` 写进服务单元/启动脚本（`service` / `--name`）：服务端据此知道实例由平台服务托管，更新面板才会出现「重启服务」按钮。 |
-| `PI_WEB_DSH_*`                 | —                  | DSH 运行时旋钮：`PI_WEB_DSH_RUNTIME`、`PI_WEB_DSH_DATA_DIR`、`PI_WEB_DSH_PATCH_DIR`、`PI_WEB_DSH_QUESTION_TIMEOUT_MS`、`PI_WEB_DSH_TOOL_TIMEOUT_MS`、`PI_WEB_DSH_SESSION_RETENTION_DAYS`、`PI_WEB_DSH_DEBUG`。 |
+| 变量                                         | 默认               | 作用                                                                                                                                                                                                                                                         |
+| -------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `PI_WEB_TOOL_TIMEOUT_MS`                     | `1200000`（20 分） | 单工具调用看门狗；超时自动中止（`ask_user_question` 豁免）。只做默认值，设置面板「工具」页优先。                                                                                                                                                             |
+| `PI_WEB_STALL_NOTIFY_MS`                     | `180000`（3 分）   | 流式运行完全没事件时给警告（不中止）；`0` = 关。                                                                                                                                                                                                             |
+| `PI_WEB_TERMINAL_IDLE_MS`                    | `15000`            | AI 开过的终端静默这么久就催它去看一眼；`0` = 关。                                                                                                                                                                                                            |
+| `PI_WEB_TERMINAL_IDLE_LINES`                 | `10`               | 该催命消息回送的终端尾部行数（1–500）。                                                                                                                                                                                                                      |
+| `PI_WEB_VISION_TIMEOUT_MS`                   | `90000`            | 视觉桥整批转写的超时。                                                                                                                                                                                                                                       |
+| `PI_WEB_UPLOAD_RETENTION_DAYS`               | `14`               | `<dataDir>/uploads/` 保留天数；`0` = 不清理。                                                                                                                                                                                                                |
+| `PI_WEB_SHELL`                               | 自动               | 仅 Windows：node-pty 用哪个 shell（自动顺序：`PI_WEB_SHELL` → `$SHELL` → Git Bash → 随包 busybox → `%COMSPEC%` → PowerShell）。                                                                                                                              |
+| `PI_WEB_TABS`                                | 全部标签页         | 逗号分隔的标签页白名单（`chat,terminal,git,search,tasks,settings,plugins`）；未列入的在服务端也被拒绝，`chat` 不可关。                                                                                                                                       |
+| `PI_WEB_MANAGED`                             | 关                 | `1`/`true` 声明实例由外部部署管理：自更新、装 pi CLI、装插件都被拒绝并说明原因，前端也隐藏入口。                                                                                                                                                             |
+| `PI_WEB_ALLOW_HOSTS`                         | 空                 | 严格的主机名白名单（叠加在始终生效的同权威校验之上）。                                                                                                                                                                                                       |
+| `PI_WEB_LOCALE`                              | 空                 | 首访回退语言（显式选择与浏览器语言优先级更高）。                                                                                                                                                                                                             |
+| `PI_WEB_LOCALE_BASE_URL`                     | GitHub raw         | 语言包下载根 —— 指向镜像即可做离线/内网安装。                                                                                                                                                                                                                |
+| `PI_WEB_PKG_ROOT`                            | 自动               | 显式指定包根目录（非标准安装位置时用）。                                                                                                                                                                                                                     |
+| `PI_CODING_AGENT_SESSION_DIR`                | 空                 | 让 pi 把转录扁平写入该目录（而非 `<agentDir>/sessions/--<cwd>--/`，会改变历史列表读到的内容）。                                                                                                                                                              |
+| `PI_WEB_SDK`                                 | `bundled`          | 用哪一份 pi SDK：`bundled`（pi-web-ui 自带的副本）或 `global`（祖先链上更新的那份）。                                                                                                                                                                        |
+| `PI_WEB_ALLOW_ORIGINS`                       | 空                 | WebSocket Origin 校验的额外白名单（逗号分隔；dev 代理 / 反向代理用）。                                                                                                                                                                                       |
+| `PI_WEB_GIT_EXTENSION_CHECK`                 | `1`（默认开）      | 设 `0`/`false`/`no`/`off` 关闭「全部组件更新」里的 git 行（走 `git ls-remote`），大型单体仓库场景可用。                                                                                                                                                      |
+| `PI_WEB_PLUGIN_CATALOG_URL`                  | 官方清单 URL       | 开机插件市场清单来源：默认指向官方社区清单 `https://xing-shuyin.github.io/pi-web-ui-plugins/catalog.json`（仅拉取文档写可安装列表，**不自动安装插件**）。设为空串或 `off`/`0`/`false`/`no` 可关闭；设 `PI_WEB_PLUGIN_CATALOG_INSTALL=1` 时顺手自动全部安装。 |
+| `PI_WEB_LAUNCHED_BY` / `PI_WEB_SERVICE_NAME` | 空                 | 由 `pi-web-ui server install` 写进服务单元/启动脚本（`service` / `--name`）：服务端据此知道实例由平台服务托管，更新面板才会出现「重启服务」按钮。                                                                                                            |
+| `PI_WEB_DSH_*`                               | —                  | DSH 运行时旋钮：`PI_WEB_DSH_RUNTIME`、`PI_WEB_DSH_DATA_DIR`、`PI_WEB_DSH_PATCH_DIR`、`PI_WEB_DSH_QUESTION_TIMEOUT_MS`、`PI_WEB_DSH_TOOL_TIMEOUT_MS`、`PI_WEB_DSH_SESSION_RETENTION_DAYS`、`PI_WEB_DSH_DEBUG`。                                               |
 
 ## 安全
 
@@ -675,7 +675,7 @@ pi-web-ui 是一个小型开源项目 —— **你的贡献就是它成长的力
 
 | 贡献方式               | 如何开始                                                                                                                                                                                                    |
 | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 🧩 **写插件**          | 打造你自己的界面 tab + AI 工具。以 `plugins/demo-mailbox` 为最小模板（它兼作测试夹具），本地开发后既可开 PR 收录进[插件目录](#插件目录)，也可独立发布并照样收录（见[社区插件](#社区插件)）。                                                     |
+| 🧩 **写插件**          | 打造你自己的界面 tab + AI 工具。以 `plugins/demo-mailbox` 为最小模板（它兼作测试夹具），本地开发后既可开 PR 收录进[插件目录](#插件目录)，也可独立发布并照样收录（见[社区插件](#社区插件)）。                |
 | 🎨 **贡献主题**        | 以 `themes/white.css`（浅色）或 `themes/cyberpunk.css`（深色）为纯调色板模板，调整 `:root` 配色 + `--term-*` + `.hljs`，用 `npm run dev` 验证后开 PR —— 完整步骤见[向仓库贡献主题](#向仓库贡献主题github)。 |
 | 💻 **修 bug / 加功能** | 在 [Issues](https://github.com/xing-shuyin/pi-web-ui/issues) 里挑一个，或提出新想法。Fork → 分支 → PR。代码约定见 `AGENTS.md`（Tab 缩进、i18n 双语 key、协议改动只动 `server/protocol.ts`）。               |
 | 📖 **文档与翻译**      | 完善 README、补插件文档、改错别字，或帮忙把界面/文档翻译成更多语言。                                                                                                                                        |

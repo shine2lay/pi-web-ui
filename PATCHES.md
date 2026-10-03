@@ -10,75 +10,82 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
-| 补丁                         | 状态           | 主要文件                                                                                                                                       |
-| ---------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| plugin-participant-routes | `local` | `server/plugins.ts`, `server/agent-service.ts`, `server/index.ts`, `plugin-sdk/index.d.ts`, `tests/unit/plugin-participant-routes.test.ts` |
-| terminal-bash-script         | `local`        | `server/terminals.ts`                                                                                                                          |
-| terminal-view-lifecycle      | `local`        | `server/terminals.ts`, `server/index.ts`                                                                                                       |
-| global-history               | `local`        | `server/agent-service.ts`, `server/protocol.ts`, `web/src/`                                                                                    |
-| status-placement             | `local`        | `web/src/status-placement.ts`, `FooterBar.tsx`, `RightPanel.tsx`                                                                               |
-| recent-chats                 | `local`        | `server/agent-service.ts`, `client-state.ts`, `web/src/`                                                                                       |
-| chat-cwd-pin                 | `local`        | `server/agent-service.ts`                                                                                                                      |
-| client-per-load              | `local`        | `web/src/use-chat.ts`                                                                                                                          |
-| server-owned-chats           | `local`        | `server/agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/`                                                                               |
-| topbar-crowding              | `local`        | `web/src/ui-slots.ts`, `App.tsx`, `TopBar.tsx`                                                                                                 |
-| no-cwd-restore               | `local`        | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `use-chat.ts`                                                                           |
-| flat-recent-chats            | `local`        | `web/src/conv-groups.ts`, `LeftPanel.tsx`, `server/agent-service.ts`, `protocol.ts`                                                            |
-| no-mcp-restart-nag           | `local`        | `server/webui-context.ts`, `tests/unit/mute-mcp-restart-nag.test.ts`                                                                           |
-| ask-question-delivery        | `local`        | `server/ask-delivery.ts`, `agent-service.ts`                                                                                                   |
-| reload-adopt                 | `local`        | `server/attach-adopt.ts`, `agent-service.ts`                                                                                                   |
-| switch-loading               | `local`        | `web/src/switch-pending.ts`, `SwitchOverlay.tsx`, `use-chat.ts`, `server/agent-service.ts`, `index.ts`, `dsh/dsh-agent-service.ts`, `protocol.ts` |
-| qn-rail-window               | `local`        | `web/src/qn-window.ts`, `components/MessageList.tsx`, `styles.css`, `i18n.tsx`                                                                 |
-| terminal-cwd-anywhere        | `local`        | `server/terminals.ts`, `tests/unit/terminal-cwd.test.ts`                                                                                       |
-| chat-window-pagination       | `local`        | `server/question-index.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `web/src/message-window.ts`, `MessageList.tsx`, `use-chat.ts`       |
-| bg-tasks-push-dedupe         | `local`        | `server/bg-servers.ts`, `agent-service.ts`, `tests/unit/bg-servers-dedupe.test.ts`                                                             |
-| load-older-survives-snapshot | `local`        | `web/src/message-window.ts`, `use-chat.ts`, `tests/chat-pagination-test.mjs`                                                                   |
-| exchange-fold                | `local`        | `web/src/exchange-fold.ts`, `components/ExchangeFoldRow.tsx`, `MessageList.tsx`, `exchange-fold.css`, `i18n.tsx`, `locales/*.json`             |
-| exchange-digest              | `local`        | `server/exchange-digest.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `web/src/message-window.ts`, `exchange-fold.ts`, `MessageList.tsx` |
-| done-any-chat                | `local`        | `web/src/done-watch.ts`, `App.tsx`, `server/agent-service.ts`, `i18n.tsx`, `locales/*.json`                                                    |
-| todo-list-owner              | `local`        | `server/agent-service.ts`                                                                                                                      |
-| markers-skip-code            | `local`        | `server/markers/marker.ts`                                                                                                                     |
-| single-load                  | `local`        | `web/src/use-chat.ts`, `server/index.ts`, `server/protocol.ts`                                                                                 |
-| tldr-panel                   | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TldrPanel.tsx`, `RightPanel.tsx`, `ui-slots.ts`, i18n           |
-| fast-reopen                  | `local`        | `server/compaction-markers.ts`                                                                                                                 |
-| switch-cache                 | `local`        | `web/src/chat-cache.ts`, `server/window-hash.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `use-chat.ts`, `App.tsx`, `SwitchOverlay.tsx` |
-| tldr-collapse                | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/components/TldrPanel.tsx`, `RightPanel.tsx`, `App.tsx`, i18n   |
-| queue-task-profiles          | `local`        | `server/queue-profile.ts` (new), `queue-owner.ts`, `queue-host.ts`, `task-queue.ts`, `agent-service.ts`, protocol/mirrors, Queue panel and `QueueProfile.tsx` (new), i18n/locales, tests; paired with pi-queue; `docs/queue-task-profiles.md` |
-| queue-panel                  | `local`        | `server/task-queue.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TaskQueuePanel.tsx`, `RightPanel.tsx`, `done-settle.ts`, i18n   |
-| per-chat-dialogs             | `local`        | `server/chat-dialogs.ts`, `webui-context.ts`, `agent-service.ts`, `protocol.ts`, `web/src/App.tsx`, `LeftPanel.tsx`, i18n                      |
-| image-aside-label            | `local`        | `server/attachments.ts`, `serialize.ts`                                                                                                        |
-| tldr-sidebar                 | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/LeftPanel.tsx`, `styles.css`                                    |
-| tldr-answered                | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TldrPanel.tsx`                                                  |
-| busy-endpoint                | `local`        | `server/agent-service.ts`, `index.ts`, `tests/busy-endpoint-test.mjs`                                                                          |
-| rewind-to-here               | `local`        | `server/rewind.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/Message.tsx`, `MessageList.tsx`, `tests/rewind-to-here-test.mjs`   |
-| crash-guard                  | `local`        | `server/crash-guard.ts`, `agent-service.ts`, `goal-service.ts`, `index.ts`, `tests/no-active-chat-crash-test.mjs`, `tests/unit/`              |
-| dangling-tail-only           | `local`        | `server/dangling-tools.ts`, `agent-service.ts`, `tests/unit/dangling-tools.test.ts`, `tests/dangling-tail-test.mjs`                           |
-| lazy-images                  | `local`        | `server/image-meta.ts`, `chat-image.ts`, `serialize.ts`, `agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/components/ChatImage.tsx`, `chat-image.ts` |
-| carry-on                     | `local`        | `server/running-chats.ts`, `agent-service.ts`, `client-state.ts`, `index.ts`, `scheduler-tasks.ts`, `tests/carry-on-restart-test.mjs`, `tests/unit/` |
-| sealed-tests                 | `local`        | `scripts/sealed.sh`, `sealed-summary.mjs`, `check.sh`, `tests/lib/sealed-fence.cjs`, `tests/run-sealed.mjs`, `tests/lib/`, `vitest.config.ts`, `tests/*-test.mjs`, 6 处测试查出的 bug |
-| wake-reopen                  | `local`        | `server/agent-service.ts`（`wakeClosedChat`、`wakeConversation` 的 id 相位）、`server/index.ts`（调度执行器）、`tests/wake-reopen-test.mjs`、`tests/unit/schedule-agent-tool.test.ts` |
-| queue-lanes                  | `local`        | `server/queue-host.ts` (new), `agent-service.ts` (task chats; the watchdog's `queueChatState`, `queueWakeChat`, `reopenQueueHomes`), `queue-groups.ts` (`queueHomesToOpen`), `tests/stall-watch-test.mjs` (new), `index.ts`, `task-queue.ts`, `protocol.ts`, `tldr-lines.ts`, `web/src/components/TaskQueuePanel.tsx`, `TldrPanel.tsx`, `RightPanel.tsx`, i18n, styles, `tests/queue-lanes-test.mjs`, `tests/queue-panel-test.mjs`, `scripts/sealed.sh` (`PI_QUEUE_PKG`), `tests/unit/` |
-| telegram-answers             | `local`        | `server/asks.ts` (new), `server/stuck-asks.ts` (new), `agent-service.ts` (questions, approvals, stuck asks), `chat-dialogs.ts`, `plugins.ts`, `plugin-facilities.ts`, `task-queue.ts`, `protocol.ts`, `protocol-version.ts`, `plugins/telegram/` (new), `plugin-sdk/`, `web/src/open-chat-link.ts` (new), `TaskQueuePanel.tsx`, `use-chat.ts`, `tests/telegram-answers-test.mjs`, `tests/queue-panel-test.mjs`, `tests/unit/` |
-| english-only                 | `local`        | `server/i18n.ts`, `agent-service.ts`, `dsh/dsh-agent-service.ts` and ~130 other server files (text only), `web/src/i18n.tsx`, `TopBar.tsx`, `ui-slots.ts`, `LocaleModal.tsx` + `pick-locale.ts` (removed), `SettingsModal.tsx`, `plugins/catalog.json`, `tests/` |
-| optimistic-send              | `local`        | `server/prompt-ack.ts` (new), `agent-service.ts` (`prompt()`), `dsh/dsh-agent-service.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (26), `web/src/pending-sends.ts` (new), `use-chat.ts`, `MessageList.tsx`, `App.tsx`, `ChatInput.tsx`, `PromptTemplates.tsx`, `plugin-host.ts`, i18n + `locales/`, styles, `tests/optimistic-send-test.mjs`, `tests/unit/` |
-| no-prompt-templates          | `local`        | `web/src/components/PromptTemplates.tsx` (removed), `App.tsx`, `ChatInput.tsx`, `MessageList.tsx`, `ui-slots.ts`, `i18n.tsx`, `locales/`, `styles.css`, `tests/prompt-templates-test.mjs` (removed) |
-| no-project-controls          | `local`        | `web/src/components/ProjectPicker.tsx` (removed), `TopBar.tsx`, `LeftPanel.tsx`, `App.tsx`, `ui-slots.ts`, `i18n.tsx`, `locales/`, `styles.css`, `tests/unit/` |
-| no-quick-phrases             | `local`        | `web/src/quick-phrases.ts` (removed), `ChatInput.tsx`, `App.tsx`, `SettingsModal.tsx`, `i18n.tsx`, `locales/`, `styles.css`, `tests/unit/`, `tests/lib/phone-checks.mjs` |
-| fast-mode                    | `local`        | `server/fast-mode.ts` (new), `agent-service.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (27), `web/src/components/FastModeButton.tsx` (new), `ChatInput.tsx`, `App.tsx`, `SettingsModal.tsx`, `ui-slots.ts`, i18n + `locales/`, `styles.css`, `tests/fast-mode-test.mjs`, `tests/lib/mock-model.mjs`, `tests/tools/fast-mode-*`, `tests/unit/` |
-| list-freeze                  | `local`        | `server/message-count.ts` (new), `agent-service.ts`, `tests/unit/list-freeze.test.ts` |
-| no-plan-board                | `local`        | `server/plan-manager.ts` (removed), `agent-service.ts`, `tool-manager.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (28), `web/src/components/PlanBoard.tsx` (removed), `App.tsx`, `i18n.tsx`, `locales/`, `styles.css`, `tests/unit/plan-state.test.ts` (removed), `tests/no-plan-board-test.mjs`, `tests/unit/` |
-| identities                   | `local`        | `server/identities.ts` (new), `agent-service.ts` (incl. `personaFirst`), `index.ts`, `protocol.ts`, `protocol-version.ts` (29), `web/src/identity-state.ts` + `identity-menu.ts` (new), `components/IdentityTag.tsx` + `IdentityPicker.tsx` + `IdentitiesSettings.tsx` (new), `App.tsx`, `LeftPanel.tsx`, `MessageList.tsx`, `SettingsModal.tsx`, `slot-toolbar.tsx`, `ui-slots.ts`, `use-chat.ts`, i18n + `locales/`, `styles.css`, `tests/identities-test.mjs`, `tests/unit/` |
-| queue-side-by-side           | `local`        | `server/task-queue.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TaskQueuePanel.tsx`, i18n + `locales/`, `styles.css`, `tests/run-sealed.mjs`, `tests/lib/sealed-runs.mjs` (new), `tests/queue-side-by-side-test.mjs` (new), `tests/unit/task-queue.test.ts`, `tests/unit/sealed-runs.test.ts` (new) |
-| adaptive-math                | `local`        | `web/src/components/md-adaptive-math.ts` (new), `Markdown.tsx`, `tests/unit/adaptive-math.test.ts`, `tests/adaptive-math-test.mjs`, `tests/tools/adaptive-math-corpus.mjs` |
-| queue-done-hidden            | `local`        | `server/agent-service.ts` (`queueCloseChat`, `markRecentSeen`, `recentSessions`), `task-queue.ts`, `queue-host.ts` (comment), `tests/unit/queue-done-hidden.test.ts` (new), `tests/queue-lanes-test.mjs`, `tests/tools/queue-done-sweep.mjs` (new) |
-| identity-notebook-tab        | `local`        | `server/notebook-watch.ts` (new), `identities.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (30), `web/src/notebook-state.ts` + `components/NotebookPanel.tsx` (new), `RightPanel.tsx`, `App.tsx`, `SettingsModal.tsx`, `IdentitiesSettings.tsx`, `ui-slots.ts`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `scripts/sealed.sh`, `tests/identity-notebook-test.mjs` (new), `tests/unit/` |
-| queue-grouping               | `local`        | `server/queue-groups.ts` (new), `agent-service.ts`, `client-state.ts`, `protocol.ts`, `protocol-version.ts` (31), `web/src/conv-groups.ts`, `queue-folds.ts` (new), `components/LeftPanel.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/queue-grouping-test.mjs` (new), `tests/unit/queue-groups.test.ts` (new), `conv-groups.test.ts`, `docs/directory-reference.md` |
-| new-chat-default             | `local`        | `server/new-chat-model.ts` (new), `agent-service.ts`, `web/src/i18n.tsx`, `tests/unit/new-chat-model.test.ts` (new) |
-| identity-config              | `local`        | `server/identity-config.ts` (new, pi-identity's `config.ts` copied byte for byte), `identity-roles.ts` (new), `identities.ts`, `index.ts`, `agent-service.ts` (`reloadForIdentity`), `protocol.ts`, `protocol-version.ts` (33), `web/src/identity-state.ts`, `components/IdentitiesSettings.tsx`, `NotebookPanel.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `.prettierignore`, `tests/identity-config-test.mjs` (new), `tests/unit/identity-config.test.ts` (new), `tests/unit/identities.test.ts` |
-| queue-autonomy               | `local`        | `server/queue-owner.ts` (new), `task-queue.ts`, `queue-host.ts`, `agent-service.ts`, `index.ts`, `protocol.ts`, protocol versions, `web/src/components/TaskQueuePanel.tsx`, `RightPanel.tsx`, `App.tsx`, i18n, styles, `tests/queue-autonomy-test.mjs` (new), `tests/unit/queue-autonomy.test.ts` (new); paired with pi-queue |
-| subs-limits-box              | `local`        | `server/subs-limits.ts` (new), `index.ts`, `protocol.ts`, `protocol-version.ts` (34), `web/src/components/LimitsBox.tsx` (new), `web/src/subs-limits-state.ts` (new), `components/LeftPanel.tsx`, `App.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/subs-limits-box-test.mjs` (new), `tests/unit/subs-limits.test.ts` (new) |
-| session-index                | `local`        | `server/session-index.ts` (new), `session-index-worker.ts` (new), `agent-service.ts`, `identities.ts`, `index.ts`, `tests/unit/session-index.test.ts` (new), `tests/unit/global-history.test.ts`, `tests/session-index-restart-test.mjs` (new), `scripts/session-index-parity.mjs` (new), `scripts/session-index-restart-probe.mjs` (new) |
-| identity-notes               | `local`        | `server/identity-notes.ts` (new, pi-identity's `notes.ts` copied byte for byte), `identity-memory.ts` (new), `identity-config.ts` (recopied), `identities.ts`, `notebook-watch.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (35), `web/src/notebook-state.ts`, `components/NotebookPanel.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/identity-notebook-test.mjs`, `tests/unit/identity-notebook.test.ts`, `identity-config.test.ts`, `identities.test.ts` |
+## company-team-capacity: allow sixteen open role chats per project
+
+- `local`：owner-approved 8 → 16 open regular chats per project so the eleven Company roles can stay connected alongside ordinary chats. Both pi and DSH import one `server/conversation-limits.ts` constant; admission/counting, ephemeral/subagent exemptions and non-destructive refusal are otherwise unchanged.
+- This does **not** change queue lanes, Company’s four implementation slots, models, permissions, role definitions, scheduling, product approval or resource registration.
+- Verification: `tests/unit/conversation-limits.test.ts` pins the shared cap and both engine imports; sealed `tests/conversation-capacity-test.mjs` opens sixteen saved fixtures without model calls, refuses history/new-chat number seventeen, reuses existing runtimes at capacity, checks per-project/ephemeral exemptions, and retries after releasing one slot.
+
+| 补丁                         | 状态    | 主要文件                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ---------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| company-team-capacity        | `local` | `server/conversation-limits.ts`, both agent services, `tests/unit/conversation-limits.test.ts`, `tests/conversation-capacity-test.mjs`                                                                                                                                                                                                                                                                                                                                                                                   |
+| plugin-participant-routes    | `local` | `server/plugins.ts`, `server/agent-service.ts`, `server/index.ts`, `plugin-sdk/index.d.ts`, `tests/unit/plugin-participant-routes.test.ts`                                                                                                                                                                                                                                                                                                                                                                               |
+| terminal-bash-script         | `local` | `server/terminals.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| terminal-view-lifecycle      | `local` | `server/terminals.ts`, `server/index.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| global-history               | `local` | `server/agent-service.ts`, `server/protocol.ts`, `web/src/`                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| status-placement             | `local` | `web/src/status-placement.ts`, `FooterBar.tsx`, `RightPanel.tsx`                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| recent-chats                 | `local` | `server/agent-service.ts`, `client-state.ts`, `web/src/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| chat-cwd-pin                 | `local` | `server/agent-service.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| client-per-load              | `local` | `web/src/use-chat.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| server-owned-chats           | `local` | `server/agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/`                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| topbar-crowding              | `local` | `web/src/ui-slots.ts`, `App.tsx`, `TopBar.tsx`                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| no-cwd-restore               | `local` | `server/agent-service.ts`, `dsh/dsh-agent-service.ts`, `use-chat.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| flat-recent-chats            | `local` | `web/src/conv-groups.ts`, `LeftPanel.tsx`, `server/agent-service.ts`, `protocol.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| no-mcp-restart-nag           | `local` | `server/webui-context.ts`, `tests/unit/mute-mcp-restart-nag.test.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ask-question-delivery        | `local` | `server/ask-delivery.ts`, `agent-service.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| reload-adopt                 | `local` | `server/attach-adopt.ts`, `agent-service.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| switch-loading               | `local` | `web/src/switch-pending.ts`, `SwitchOverlay.tsx`, `use-chat.ts`, `server/agent-service.ts`, `index.ts`, `dsh/dsh-agent-service.ts`, `protocol.ts`                                                                                                                                                                                                                                                                                                                                                                        |
+| qn-rail-window               | `local` | `web/src/qn-window.ts`, `components/MessageList.tsx`, `styles.css`, `i18n.tsx`                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| terminal-cwd-anywhere        | `local` | `server/terminals.ts`, `tests/unit/terminal-cwd.test.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| chat-window-pagination       | `local` | `server/question-index.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `web/src/message-window.ts`, `MessageList.tsx`, `use-chat.ts`                                                                                                                                                                                                                                                                                                                                                                                 |
+| bg-tasks-push-dedupe         | `local` | `server/bg-servers.ts`, `agent-service.ts`, `tests/unit/bg-servers-dedupe.test.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| load-older-survives-snapshot | `local` | `web/src/message-window.ts`, `use-chat.ts`, `tests/chat-pagination-test.mjs`                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| exchange-fold                | `local` | `web/src/exchange-fold.ts`, `components/ExchangeFoldRow.tsx`, `MessageList.tsx`, `exchange-fold.css`, `i18n.tsx`, `locales/*.json`                                                                                                                                                                                                                                                                                                                                                                                       |
+| exchange-digest              | `local` | `server/exchange-digest.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `web/src/message-window.ts`, `exchange-fold.ts`, `MessageList.tsx`                                                                                                                                                                                                                                                                                                                                                                           |
+| done-any-chat                | `local` | `web/src/done-watch.ts`, `App.tsx`, `server/agent-service.ts`, `i18n.tsx`, `locales/*.json`                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| todo-list-owner              | `local` | `server/agent-service.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| markers-skip-code            | `local` | `server/markers/marker.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| single-load                  | `local` | `web/src/use-chat.ts`, `server/index.ts`, `server/protocol.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| tldr-panel                   | `local` | `server/tldr-lines.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TldrPanel.tsx`, `RightPanel.tsx`, `ui-slots.ts`, i18n                                                                                                                                                                                                                                                                                                                                                                                     |
+| fast-reopen                  | `local` | `server/compaction-markers.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| switch-cache                 | `local` | `web/src/chat-cache.ts`, `server/window-hash.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `use-chat.ts`, `App.tsx`, `SwitchOverlay.tsx`                                                                                                                                                                                                                                                                                                                                                                           |
+| tldr-collapse                | `local` | `server/tldr-lines.ts`, `agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/components/TldrPanel.tsx`, `RightPanel.tsx`, `App.tsx`, i18n                                                                                                                                                                                                                                                                                                                                                                             |
+| queue-task-profiles          | `local` | `server/queue-profile.ts` (new), `queue-owner.ts`, `queue-host.ts`, `task-queue.ts`, `agent-service.ts`, protocol/mirrors, Queue panel and `QueueProfile.tsx` (new), i18n/locales, tests; paired with pi-queue; `docs/queue-task-profiles.md`                                                                                                                                                                                                                                                                            |
+| queue-panel                  | `local` | `server/task-queue.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TaskQueuePanel.tsx`, `RightPanel.tsx`, `done-settle.ts`, i18n                                                                                                                                                                                                                                                                                                                                                                             |
+| per-chat-dialogs             | `local` | `server/chat-dialogs.ts`, `webui-context.ts`, `agent-service.ts`, `protocol.ts`, `web/src/App.tsx`, `LeftPanel.tsx`, i18n                                                                                                                                                                                                                                                                                                                                                                                                |
+| image-aside-label            | `local` | `server/attachments.ts`, `serialize.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| tldr-sidebar                 | `local` | `server/tldr-lines.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/LeftPanel.tsx`, `styles.css`                                                                                                                                                                                                                                                                                                                                                                                                              |
+| tldr-answered                | `local` | `server/tldr-lines.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TldrPanel.tsx`                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| busy-endpoint                | `local` | `server/agent-service.ts`, `index.ts`, `tests/busy-endpoint-test.mjs`                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| rewind-to-here               | `local` | `server/rewind.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/Message.tsx`, `MessageList.tsx`, `tests/rewind-to-here-test.mjs`                                                                                                                                                                                                                                                                                                                                                                              |
+| crash-guard                  | `local` | `server/crash-guard.ts`, `agent-service.ts`, `goal-service.ts`, `index.ts`, `tests/no-active-chat-crash-test.mjs`, `tests/unit/`                                                                                                                                                                                                                                                                                                                                                                                         |
+| dangling-tail-only           | `local` | `server/dangling-tools.ts`, `agent-service.ts`, `tests/unit/dangling-tools.test.ts`, `tests/dangling-tail-test.mjs`                                                                                                                                                                                                                                                                                                                                                                                                      |
+| lazy-images                  | `local` | `server/image-meta.ts`, `chat-image.ts`, `serialize.ts`, `agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/components/ChatImage.tsx`, `chat-image.ts`                                                                                                                                                                                                                                                                                                                                                              |
+| carry-on                     | `local` | `server/running-chats.ts`, `agent-service.ts`, `client-state.ts`, `index.ts`, `scheduler-tasks.ts`, `tests/carry-on-restart-test.mjs`, `tests/unit/`                                                                                                                                                                                                                                                                                                                                                                     |
+| sealed-tests                 | `local` | `scripts/sealed.sh`, `sealed-summary.mjs`, `check.sh`, `tests/lib/sealed-fence.cjs`, `tests/run-sealed.mjs`, `tests/lib/`, `vitest.config.ts`, `tests/*-test.mjs`, 6 处测试查出的 bug                                                                                                                                                                                                                                                                                                                                    |
+| wake-reopen                  | `local` | `server/agent-service.ts`（`wakeClosedChat`、`wakeConversation` 的 id 相位）、`server/index.ts`（调度执行器）、`tests/wake-reopen-test.mjs`、`tests/unit/schedule-agent-tool.test.ts`                                                                                                                                                                                                                                                                                                                                    |
+| queue-lanes                  | `local` | `server/queue-host.ts` (new), `agent-service.ts` (task chats; the watchdog's `queueChatState`, `queueWakeChat`, `reopenQueueHomes`), `queue-groups.ts` (`queueHomesToOpen`), `tests/stall-watch-test.mjs` (new), `index.ts`, `task-queue.ts`, `protocol.ts`, `tldr-lines.ts`, `web/src/components/TaskQueuePanel.tsx`, `TldrPanel.tsx`, `RightPanel.tsx`, i18n, styles, `tests/queue-lanes-test.mjs`, `tests/queue-panel-test.mjs`, `scripts/sealed.sh` (`PI_QUEUE_PKG`), `tests/unit/`                                  |
+| telegram-answers             | `local` | `server/asks.ts` (new), `server/stuck-asks.ts` (new), `agent-service.ts` (questions, approvals, stuck asks), `chat-dialogs.ts`, `plugins.ts`, `plugin-facilities.ts`, `task-queue.ts`, `protocol.ts`, `protocol-version.ts`, `plugins/telegram/` (new), `plugin-sdk/`, `web/src/open-chat-link.ts` (new), `TaskQueuePanel.tsx`, `use-chat.ts`, `tests/telegram-answers-test.mjs`, `tests/queue-panel-test.mjs`, `tests/unit/`                                                                                            |
+| english-only                 | `local` | `server/i18n.ts`, `agent-service.ts`, `dsh/dsh-agent-service.ts` and ~130 other server files (text only), `web/src/i18n.tsx`, `TopBar.tsx`, `ui-slots.ts`, `LocaleModal.tsx` + `pick-locale.ts` (removed), `SettingsModal.tsx`, `plugins/catalog.json`, `tests/`                                                                                                                                                                                                                                                         |
+| optimistic-send              | `local` | `server/prompt-ack.ts` (new), `agent-service.ts` (`prompt()`), `dsh/dsh-agent-service.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (26), `web/src/pending-sends.ts` (new), `use-chat.ts`, `MessageList.tsx`, `App.tsx`, `ChatInput.tsx`, `PromptTemplates.tsx`, `plugin-host.ts`, i18n + `locales/`, styles, `tests/optimistic-send-test.mjs`, `tests/unit/`                                                                                                                                                    |
+| no-prompt-templates          | `local` | `web/src/components/PromptTemplates.tsx` (removed), `App.tsx`, `ChatInput.tsx`, `MessageList.tsx`, `ui-slots.ts`, `i18n.tsx`, `locales/`, `styles.css`, `tests/prompt-templates-test.mjs` (removed)                                                                                                                                                                                                                                                                                                                      |
+| no-project-controls          | `local` | `web/src/components/ProjectPicker.tsx` (removed), `TopBar.tsx`, `LeftPanel.tsx`, `App.tsx`, `ui-slots.ts`, `i18n.tsx`, `locales/`, `styles.css`, `tests/unit/`                                                                                                                                                                                                                                                                                                                                                           |
+| no-quick-phrases             | `local` | `web/src/quick-phrases.ts` (removed), `ChatInput.tsx`, `App.tsx`, `SettingsModal.tsx`, `i18n.tsx`, `locales/`, `styles.css`, `tests/unit/`, `tests/lib/phone-checks.mjs`                                                                                                                                                                                                                                                                                                                                                 |
+| fast-mode                    | `local` | `server/fast-mode.ts` (new), `agent-service.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (27), `web/src/components/FastModeButton.tsx` (new), `ChatInput.tsx`, `App.tsx`, `SettingsModal.tsx`, `ui-slots.ts`, i18n + `locales/`, `styles.css`, `tests/fast-mode-test.mjs`, `tests/lib/mock-model.mjs`, `tests/tools/fast-mode-*`, `tests/unit/`                                                                                                                                                                 |
+| list-freeze                  | `local` | `server/message-count.ts` (new), `agent-service.ts`, `tests/unit/list-freeze.test.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| no-plan-board                | `local` | `server/plan-manager.ts` (removed), `agent-service.ts`, `tool-manager.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (28), `web/src/components/PlanBoard.tsx` (removed), `App.tsx`, `i18n.tsx`, `locales/`, `styles.css`, `tests/unit/plan-state.test.ts` (removed), `tests/no-plan-board-test.mjs`, `tests/unit/`                                                                                                                                                                                                |
+| identities                   | `local` | `server/identities.ts` (new), `agent-service.ts` (incl. `personaFirst`), `index.ts`, `protocol.ts`, `protocol-version.ts` (29), `web/src/identity-state.ts` + `identity-menu.ts` (new), `components/IdentityTag.tsx` + `IdentityPicker.tsx` + `IdentitiesSettings.tsx` (new), `App.tsx`, `LeftPanel.tsx`, `MessageList.tsx`, `SettingsModal.tsx`, `slot-toolbar.tsx`, `ui-slots.ts`, `use-chat.ts`, i18n + `locales/`, `styles.css`, `tests/identities-test.mjs`, `tests/unit/`                                          |
+| queue-side-by-side           | `local` | `server/task-queue.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TaskQueuePanel.tsx`, i18n + `locales/`, `styles.css`, `tests/run-sealed.mjs`, `tests/lib/sealed-runs.mjs` (new), `tests/queue-side-by-side-test.mjs` (new), `tests/unit/task-queue.test.ts`, `tests/unit/sealed-runs.test.ts` (new)                                                                                                                                                                                                       |
+| adaptive-math                | `local` | `web/src/components/md-adaptive-math.ts` (new), `Markdown.tsx`, `tests/unit/adaptive-math.test.ts`, `tests/adaptive-math-test.mjs`, `tests/tools/adaptive-math-corpus.mjs`                                                                                                                                                                                                                                                                                                                                               |
+| queue-done-hidden            | `local` | `server/agent-service.ts` (`queueCloseChat`, `markRecentSeen`, `recentSessions`), `task-queue.ts`, `queue-host.ts` (comment), `tests/unit/queue-done-hidden.test.ts` (new), `tests/queue-lanes-test.mjs`, `tests/tools/queue-done-sweep.mjs` (new)                                                                                                                                                                                                                                                                       |
+| identity-notebook-tab        | `local` | `server/notebook-watch.ts` (new), `identities.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (30), `web/src/notebook-state.ts` + `components/NotebookPanel.tsx` (new), `RightPanel.tsx`, `App.tsx`, `SettingsModal.tsx`, `IdentitiesSettings.tsx`, `ui-slots.ts`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `scripts/sealed.sh`, `tests/identity-notebook-test.mjs` (new), `tests/unit/`                                                                                                         |
+| queue-grouping               | `local` | `server/queue-groups.ts` (new), `agent-service.ts`, `client-state.ts`, `protocol.ts`, `protocol-version.ts` (31), `web/src/conv-groups.ts`, `queue-folds.ts` (new), `components/LeftPanel.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/queue-grouping-test.mjs` (new), `tests/unit/queue-groups.test.ts` (new), `conv-groups.test.ts`, `docs/directory-reference.md`                                                                                                                                         |
+| new-chat-default             | `local` | `server/new-chat-model.ts` (new), `agent-service.ts`, `web/src/i18n.tsx`, `tests/unit/new-chat-model.test.ts` (new)                                                                                                                                                                                                                                                                                                                                                                                                      |
+| identity-config              | `local` | `server/identity-config.ts` (new, pi-identity's `config.ts` copied byte for byte), `identity-roles.ts` (new), `identities.ts`, `index.ts`, `agent-service.ts` (`reloadForIdentity`), `protocol.ts`, `protocol-version.ts` (33), `web/src/identity-state.ts`, `components/IdentitiesSettings.tsx`, `NotebookPanel.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `.prettierignore`, `tests/identity-config-test.mjs` (new), `tests/unit/identity-config.test.ts` (new), `tests/unit/identities.test.ts` |
+| queue-autonomy               | `local` | `server/queue-owner.ts` (new), `task-queue.ts`, `queue-host.ts`, `agent-service.ts`, `index.ts`, `protocol.ts`, protocol versions, `web/src/components/TaskQueuePanel.tsx`, `RightPanel.tsx`, `App.tsx`, i18n, styles, `tests/queue-autonomy-test.mjs` (new), `tests/unit/queue-autonomy.test.ts` (new); paired with pi-queue                                                                                                                                                                                            |
+| subs-limits-box              | `local` | `server/subs-limits.ts` (new), `index.ts`, `protocol.ts`, `protocol-version.ts` (34), `web/src/components/LimitsBox.tsx` (new), `web/src/subs-limits-state.ts` (new), `components/LeftPanel.tsx`, `App.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/subs-limits-box-test.mjs` (new), `tests/unit/subs-limits.test.ts` (new)                                                                                                                                                                   |
+| session-index                | `local` | `server/session-index.ts` (new), `session-index-worker.ts` (new), `agent-service.ts`, `identities.ts`, `index.ts`, `tests/unit/session-index.test.ts` (new), `tests/unit/global-history.test.ts`, `tests/session-index-restart-test.mjs` (new), `scripts/session-index-parity.mjs` (new), `scripts/session-index-restart-probe.mjs` (new)                                                                                                                                                                                |
+| identity-notes               | `local` | `server/identity-notes.ts` (new, pi-identity's `notes.ts` copied byte for byte), `identity-memory.ts` (new), `identity-config.ts` (recopied), `identities.ts`, `notebook-watch.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (35), `web/src/notebook-state.ts`, `components/NotebookPanel.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/identity-notebook-test.mjs`, `tests/unit/identity-notebook.test.ts`, `identity-config.test.ts`, `identities.test.ts`                           |
 
 ---
 
@@ -1983,6 +1990,7 @@ billion-context-pi（ACP）每轮用自己的「核心」重建发给模型的�
 
 **诉求**（用户 2026-09-25）：不点进对话也能跟上所有 agent：左栏每条对话标题下面显示它最新的一行 TL;DR，
 需要你的行要醒目。用户的选择：
+
 - 代替标题下面的「N 条消息」（行高不变）；正在打开 / 当前对话照旧（当前对话还是「当前」）。
 - 只显示最新的一行：在 TL;DR tab 里把它折叠了（看过了）就回到条数；更早的行永远不上左栏。
 - 只有服务端加载着的对话有；历史行（运行时已释放的）照旧显示条数，也不去读它们的会话文件。
@@ -2288,12 +2296,12 @@ tool_result；这条坏记录已经落盘，所以对话从此发不出去。上
 
 ### 量出来的（2026-09-26，测试服务器，4 个最大对话的副本在同一进程里按顺序打开，`/tmp/lazy-measure.mjs`）
 
-| 对话               | 打开时 WS      | 首次绘制     | 往上 10 页（1000 条）           | 服务端 heap（GC 后，累计） |
-| ------------------ | -------------- | ------------ | ------------------------------- | -------------------------- |
-| temper（01a09d92） | 2.95 → 0.31 MB | 4.8 → 4.3 s  | 5.74 → 3.84 MB，867 → 513 ms    | 321 → 308 MB               |
-| EPD（01a0b25d）    | 0.44 → 0.44 MB | 3.4 → 3.3 s  | 3.13 → 3.13 MB，881 → 607 ms    | 554 → 517 MB               |
-| rollcall（01a0ca43）| 0.32 → 0.32 MB | 2.5 → 2.4 s  | 5.09 → 4.60 MB，1119 → 954 ms   | 726 → 677 MB               |
-| tooling（01a0a269）| 0.66 → 0.66 MB | 2.3 → 2.4 s  | 2.92 → 2.63 MB，849 → 601 ms    | 872 → 813 MB               |
+| 对话                 | 打开时 WS      | 首次绘制    | 往上 10 页（1000 条）         | 服务端 heap（GC 后，累计） |
+| -------------------- | -------------- | ----------- | ----------------------------- | -------------------------- |
+| temper（01a09d92）   | 2.95 → 0.31 MB | 4.8 → 4.3 s | 5.74 → 3.84 MB，867 → 513 ms  | 321 → 308 MB               |
+| EPD（01a0b25d）      | 0.44 → 0.44 MB | 3.4 → 3.3 s | 3.13 → 3.13 MB，881 → 607 ms  | 554 → 517 MB               |
+| rollcall（01a0ca43） | 0.32 → 0.32 MB | 2.5 → 2.4 s | 5.09 → 4.60 MB，1119 → 954 ms | 726 → 677 MB               |
+| tooling（01a0a269）  | 0.66 → 0.66 MB | 2.3 → 2.4 s | 2.92 → 2.63 MB，849 → 601 ms  | 872 → 813 MB               |
 
 - 四个都开完后 RSS 1313 → 1274 MB。内存大头是 pi 自己那份整段对话（模型要用），这个补丁不碰。
 - temper 改前打开时是 2.95 MB 而不是早上的 9.9 MB：对话又长了，最新 100 条里只剩 2 张图；而且 2e6 上限已经把最大的
@@ -2355,20 +2363,20 @@ tool_result；这条坏记录已经落盘，所以对话从此发不出去。上
      不超过 15 分钟 → 用它的原因（如 `install of 1a2b3c4`）；有标记没原因 → `a restart`；没有标记 →
      `it crashed or was killed`。
    - 每个对话一条提示（普通的用户消息）：`pi-web-ui restarted at HH:MM (reason). You were in the middle of <step>;
-     it was cut off. Check where it stopped and carry on.` step 是 `writing a reply`、`running the bash command \`…\``、
-     `running the read tool (…)`、多个工具时 `running 2 tools at once: …`；在等用户回答（`ask_user_question`）时是
-     `asking the user a question (ask_user_question) (they hadn't answered yet, so ask it again)`，它就会重新问。
+it was cut off. Check where it stopped and carry on.` step 是 `writing a reply`、`running the bash command \`…\``、
+`running the read tool (…)`、多个工具时 `running 2 tools at once: …`；在等用户回答（`ask_user_question`）时是
+`asking the user a question (ask_user_question) (they hadn't answered yet, so ask it again)`，它就会重新问。
    - Loop guard (changed 2026-10-01, see "Planned restarts and crashes, counted apart" below): a chat cut off
      by 3 crashes, or by 10 planned restarts, without finishing a turn in between gets a notice in the windows
      instead of a note ("... Open it and tell it what to do"). A finished turn resets both counts.
      (Before: every cut-off counted alike, and the 3rd in a row, planned or not, tripped the guard.)
-   新表先放进这些对话（`awaiting`，保留 `cutoffs`），它们的回合开始后照常记。
-   `carryOnAfterRestart()`（listen 后 1.5 秒）用伪客户端 `carry-on:startup`（`isPseudoClientId` 认它，空白开局）
-   逐个 `switchSession` + 发提示（`ClientSession.carryOn`：等到回合开始或消息进去，最多 20 秒，再 `listed = true`，
-   这样切走时它继续跑，所有窗口的运行列表里看得到），完了把伪客户端的 sink 摘掉（不算「有人在看」）。重开不了的
-   从表里拿掉并提示用户。
-   这期间真窗口的 `attach` 先等（最多 30 秒）：否则窗口打开最近的对话（`continueRecent`）会给同一个会话文件第二个
-   writer。之后 10 分钟内每个连上来的窗口收到一次通知（接着干了哪些、哪些被防循环拦下、哪些没重开成）。
+     新表先放进这些对话（`awaiting`，保留 `cutoffs`），它们的回合开始后照常记。
+     `carryOnAfterRestart()`（listen 后 1.5 秒）用伪客户端 `carry-on:startup`（`isPseudoClientId` 认它，空白开局）
+     逐个 `switchSession` + 发提示（`ClientSession.carryOn`：等到回合开始或消息进去，最多 20 秒，再 `listed = true`，
+     这样切走时它继续跑，所有窗口的运行列表里看得到），完了把伪客户端的 sink 摘掉（不算「有人在看」）。重开不了的
+     从表里拿掉并提示用户。
+     这期间真窗口的 `attach` 先等（最多 30 秒）：否则窗口打开最近的对话（`continueRecent`）会给同一个会话文件第二个
+     writer。之后 10 分钟内每个连上来的窗口收到一次通知（接着干了哪些、哪些被防循环拦下、哪些没重开成）。
 4. **过渡**：还没有 `running-chats.json` 时（第一次装这个补丁），从 `client-state.json` 的旧 `interrupted` 记录里
    取**最近一次**关机的（最新一条 15 分钟内、与它相差 1 分钟内的），按会话文件去重，step 从会话文件尾部读
    （`stepFromTranscriptTail`：最后一条 assistant 消息里没结果的工具调用）。然后清掉所有客户端的旧记录
@@ -2404,7 +2412,7 @@ tool_result；这条坏记录已经落盘，所以对话从此发不出去。上
   4. `kill -9`, the 2nd crash in a row: every busy chat still gets its note.
   5. `kill -9`, the 3rd crash in a row: the crash guard. A notice for each ("was cut off by 3 crashes"), no
      note, the list empty, the log line's counts ("5x in a row: 2 planned, 3 crashes").
-  IDLE and STOP never get anything.
+     IDLE and STOP never get anything.
 - `pi-queue` 的 `tests/queue.test.ts`：`resumesAfterRestart`；`pi-web-deploy` 的测试：默认马上重启并写原因、
   `--when-idle` 等待、`--reason`、`--now` 仍然接受。
 - 反证（2026-09-27）：同一个 E2E 在改动前（`mine` 28ab26b）上 20 项失败：没有一个忙的对话收到任何东西
@@ -2420,6 +2428,7 @@ counted them as working. The log line said "cut off 1x in a row": it printed how
 alone, not how often they were cut off.
 
 **Changes** (`server/running-chats.ts`, `agent-service.ts`):
+
 - Each running-list entry counts its cut-offs apart: `crashes` (the old process left no shutdown mark: a
   crash or `kill -9`) and `planned` (it did: an install, `pi-web-deploy restart`, any clean stop).
   `cutoffs` stays their sum, so the file still reads the old way. An old file (only `cutoffs`) reads as that
@@ -2428,16 +2437,17 @@ alone, not how often they were cut off.
   restarts (`PLANNED_CUTOFF_CEILING`) without a finished turn in between, whichever comes first. Planned
   restarts between crashes don't reset the crash count. A finished turn resets both, as before.
 - The notice says which (`guardNotice`): `"<title>" was cut off by 3 crashes without finishing a turn in
-  between (pi-web-ui may be crashing because of it), so it wasn't told to carry on this time. Open it and
-  tell it what to do.`, or `... by 10 planned restarts ...`.
+between (pi-web-ui may be crashing because of it), so it wasn't told to carry on this time. Open it and
+tell it what to do.`, or `... by 10 planned restarts ...`.
 - The log line (`carryOnLogLine`) gives each chat's own count: `[carry-on] restarted (install of 1a2b3c4):
-  carrying on 2 chat(s): "A" (cut off 1x), "B" (cut off 3x in a row: 2 planned, 1 crash); left alone: "C"
-  (cut off 3x in a row: all crashes)`.
+carrying on 2 chat(s): "A" (cut off 1x), "B" (cut off 3x in a row: 2 planned, 1 crash); left alone: "C"
+(cut off 3x in a row: all crashes)`.
 - The server remembers which chats the guard left alone at this start (`carryOnLeftAlone`). The queue host's
   `wakeChat` (queue-lanes) won't wake one of them until it has done something since, so pi-queue's
   watchdog can't undo the guard; the queue asks the owner instead.
 
 **Tests**:
+
 - `tests/unit/running-chats.test.ts`: planned restarts never guard below 10 (9 installs carried on, the 10th
   left alone), crashes still at 3, mixed sequences, a finished turn resets both, an old file on disk, the
   log line and the notice texts.
@@ -2717,6 +2727,7 @@ reporting) lives in pi-queue (`~/projects/pi-queue`, README "Lanes"); this patch
 (cut off by restarts and left alone, or its turn ended without reporting). The task's lane stayed taken
 and nothing new started: #32 and #35 sat like that for about 9 hours on 2026-09-30. pi-queue now has a
 watchdog (pi-queue README, "Watchdog"); pi-web-ui gives it two more calls on the host:
+
 - `chatState(sessionFile)` resolves `{state, lastActiveAt?}`. `working`: a turn or a compaction runs
   there, a message is on its way, or its running-list entry says its turn hasn't ended (an automatic retry
   between attempts, or a restart's carry-on about to start one). `idle`: it is open with no turn running.
@@ -2732,11 +2743,12 @@ watchdog (pi-queue README, "Watchdog"); pi-web-ui gives it two more calls on the
   chats of their own (the queue-grouping links, at most 10, newest first: `reopenQueueHomes`,
   `queueHomesToOpen`) by running `/queue ping` in each. Their watchdogs then run even when no window shows
   them and none of their task chats was carried on to report back. Log: `[stall-watch] opened X of Y queue
-  chat(s) with tasks at work in chats of their own`.
+chat(s) with tasks at work in chats of their own`.
 - `openChatForQueue` keeps a queue chat it opened loaded while it has a task at work in a chat of its own
   (before, it let go of it once the command had run), so its checks go on.
 
 **Tests**:
+
 - `tests/unit/queue-host.test.ts`: `chatStateFrom` (working, idle, closed), `wakeRefusal`,
   `cleanChatState`, `isWakeNote`, and the host's checks around both calls. `tests/unit/queue-groups.test.ts`:
   `queueHomesToOpen`.
@@ -2782,7 +2794,7 @@ wanted needs-you notes to become questions with choices: pi-queue's `queue_stuck
    last window doesn't cancel it.
 3. **Pop-ups** (`chat-dialogs.ts`): `ChatDialogs` takes a watcher that hears each pop-up open and close
    (answered, cancelled, timed out, stopped, the chat moved on, the chat was closed). `answer(id, value,
-   from)` says who answered.
+from)` says who answered.
 4. **Permission prompts** (`agent-service.ts` `askApproval`, `resolveToolApproval`):
    - Waiting approvals are shared by the whole process (like questions), with one id counter, so any
      window or a plugin can answer them.
@@ -2805,7 +2817,7 @@ wanted needs-you notes to become questions with choices: pi-queue's `queue_stuck
    permission family `asks` gives `host.asks.list()`, `on(handler)` and `answer(id, answers)` (answered
    `from` the plugin's id). `createMockHost` has it too.
 7. **A link that opens a chat** (`web/src/open-chat-link.ts` new, `main.tsx`, `App.tsx`): `/?chat=<transcript
-   path>` opens that chat once the page is ready, then drops the parameter. The server only opens
+path>` opens that chat once the page is ready, then drops the parameter. The server only opens
    transcripts inside the sessions folder.
 8. **The first secret reaches the plugin** (`plugin-facilities.ts`): `PluginSecrets` kept a copy per instance,
    so the first secret ever saved (through the settings page's own instance) reached the running plugin
@@ -2827,7 +2839,7 @@ wanted needs-you notes to become questions with choices: pi-queue's `queue_stuck
      from the clock, so a fresh start never reuses an old message's;
    - waiting for new messages restarts every 25 s (was 50), so a dead connection is noticed sooner;
    - the status says which setting is missing ("add the bot token", "add your Telegram id").
-   Made easier to read (owner, 2026-09-29: the messages were cramped):
+     Made easier to read (owner, 2026-09-29: the messages were cramped):
    - a one-line head (icon, title, "from <chat>"; a stuck task: "📌 Task #N needs you" with the task's
      title under it, from the new `Ask.task` that `stuckAsk` fills), a single question's header said
      once, several questions as "<b>Header</b> (1/3)", blank lines between the question, its detail and
@@ -2837,14 +2849,14 @@ wanted needs-you notes to become questions with choices: pi-queue's `queue_stuck
      collapsed quote; if Telegram still can't parse a text, it goes again as plain text (send and edit);
    - finished messages shrink to one line: "✅ <title> · <chat>: <answer> (on Telegram)" or "⏹ … no
      longer waiting (<reason>)"; messages sent before this keep working (their line comes from the old head).
-   Then (owner, 2026-09-30: "improve spacing, and bold for the thing I absolutely need to read"):
+     Then (owner, 2026-09-30: "improve spacing, and bold for the thing I absolutely need to read"):
    - the question's must-read part in bold (`leadOf`: up to its question mark, else its first sentence,
      else its first line; none when the cut would change how the text shows), the rest on the next line;
    - the head's chat goes on a line of its own, cut at a word, when both don't fit a phone's line;
    - several questions: the header as a label above the question, "<i>Header (1/3)</i>";
    - "Type your answer to:" puts the question's must-read part in bold on a line of its own;
    - a markdown heading inside a text that sits in bold no longer makes a bold inside a bold.
-   Then (owner, 2026-09-30, picked layout "D" of four terminal-style samples sent to his phone):
+     Then (owner, 2026-09-30, picked layout "D" of four terminal-style samples sent to his phone):
    - when a choice has a description, the choices are listed under a "── CHOICES ───" line, all of
      them, numbered "1 · Label" like their buttons (12 at most in the text; the buttons hold them all);
      choices that are only a name show on their buttons alone, without numbers;
@@ -2961,21 +2973,21 @@ scheduler add-ons. pi-web-ui is English only now: the Chinese language and the l
 
 ### Chinese that stays (each matches user input, model output or old saved data)
 
-| where | what | why |
-| --- | --- | --- |
-| `agent-service.ts` `LEGACY_CONV_TITLE`, `dsh/dsh-agent-service.ts` `DEFAULT_CONV_TITLE` | 新对话 | Old chats with this title still count as untitled. |
-| `goal-service.ts` goal-done regex | 【目标达成】 ... | A model's goal-done marker, old Chinese form included. |
-| `goal-service.ts`, `dsh/dsh-agent-service.ts` `GOAL\s*[:：]`; `goal-service.ts` `[。.!?？]` | full-width colon, full stop, question mark | Punctuation in model or user text. |
-| `model-enrich.ts` `[,，]` | full-width comma | Thousands separators in numbers the user types. |
-| `scm-commitmsg.ts` | 提交信息 / 提交消息 / 提交说明 | Strips a "commit message:" label a model may put first, in either language. |
-| `slash-commands.ts` `/thinking` aliases | 关闭 极简 低 中 高 极高 最大 | User input: the Chinese level names still work. |
-| `terminals.ts`, `web/src/components/TermXterm.tsx` exit-line filters | 进程已退出... | Terminal scrollback saved before this change has Chinese exit lines. |
-| `tldr-lines.ts` `AUTOMATED_PREFIXES` | [定时任务, （系统 | Old chats have the Chinese automated-message prefixes. |
-| `locales.ts`, `web/src/i18n.tsx` `langJa` | 日本語 | The Japanese pack's own name (dormant packs). |
-| `web/src/App.tsx` | 🔗 已自动在浏览器打开 | Matches the line the built-in live-preview add-on writes (not installed, left alone, still Chinese). |
-| `web/src/at-mention.ts` | 网页, 页面 | User input: Chinese words for "page" still work as @-mention triggers. |
-| `web/src/components/ChatInput.tsx`, `Markdown.tsx` @-mention regexes | full-width brackets and punctuation | Punctuation around @mentions in text the user types. |
-| `FooterBar.tsx`, `context-menu-state.ts` | ＋, 〜 | Full-width plus and wave used as icons, not words. |
+| where                                                                                       | what                                       | why                                                                                                  |
+| ------------------------------------------------------------------------------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `agent-service.ts` `LEGACY_CONV_TITLE`, `dsh/dsh-agent-service.ts` `DEFAULT_CONV_TITLE`     | 新对话                                     | Old chats with this title still count as untitled.                                                   |
+| `goal-service.ts` goal-done regex                                                           | 【目标达成】 ...                           | A model's goal-done marker, old Chinese form included.                                               |
+| `goal-service.ts`, `dsh/dsh-agent-service.ts` `GOAL\s*[:：]`; `goal-service.ts` `[。.!?？]` | full-width colon, full stop, question mark | Punctuation in model or user text.                                                                   |
+| `model-enrich.ts` `[,，]`                                                                   | full-width comma                           | Thousands separators in numbers the user types.                                                      |
+| `scm-commitmsg.ts`                                                                          | 提交信息 / 提交消息 / 提交说明             | Strips a "commit message:" label a model may put first, in either language.                          |
+| `slash-commands.ts` `/thinking` aliases                                                     | 关闭 极简 低 中 高 极高 最大               | User input: the Chinese level names still work.                                                      |
+| `terminals.ts`, `web/src/components/TermXterm.tsx` exit-line filters                        | 进程已退出...                              | Terminal scrollback saved before this change has Chinese exit lines.                                 |
+| `tldr-lines.ts` `AUTOMATED_PREFIXES`                                                        | [定时任务, （系统                          | Old chats have the Chinese automated-message prefixes.                                               |
+| `locales.ts`, `web/src/i18n.tsx` `langJa`                                                   | 日本語                                     | The Japanese pack's own name (dormant packs).                                                        |
+| `web/src/App.tsx`                                                                           | 🔗 已自动在浏览器打开                      | Matches the line the built-in live-preview add-on writes (not installed, left alone, still Chinese). |
+| `web/src/at-mention.ts`                                                                     | 网页, 页面                                 | User input: Chinese words for "page" still work as @-mention triggers.                               |
+| `web/src/components/ChatInput.tsx`, `Markdown.tsx` @-mention regexes                        | full-width brackets and punctuation        | Punctuation around @mentions in text the user types.                                                 |
+| `FooterBar.tsx`, `context-menu-state.ts`                                                    | ＋, 〜                                     | Full-width plus and wave used as icons, not words.                                                   |
 
 Code comments, test names and docs (the older sections of this file too) are still Chinese: out of scope.
 The add-ons' only Chinese left is in their tests' labels.
@@ -3033,7 +3045,7 @@ when the server has it. Making the add-ons' steps faster is a separate question.
 
 1. **Protocol 26** (`server/protocol.ts`, both `protocol-version.ts`): `prompt` carries an optional `id`
    made by the window; the server answers it with exactly one `prompt_ack {id, conversationId, ok, reason?,
-   rev?}`, only to that window. ok goes out after the snapshot that shows the message (in the chat, or in
+rev?}`, only to that window. ok goes out after the snapshot that shows the message (in the chat, or in
    its queue while the AI works): "snapshot first, then receipt", as with `switch_done`. `rev` is the
    window's latest snapshot rev, so a window whose state is older (a dropped snapshot) keeps its copy until
    a snapshot that new arrives. `prompt_status {ids}` asks, after a reconnect or reload, what became of
@@ -3303,10 +3315,10 @@ chat, terminal, git and files views, with a chat full of wide content:
   - `.panel` `flex-shrink: 1; min-width: 180px` (PANEL_MIN) and `.main` `min-width: min(240px, 100%)`:
     panels that don't fit next to the chat give way, never below their narrowest drag width.
   - `overflow-wrap: anywhere` on `.notice-text`, `.thinking-body` and a folder's `.file-dir-main >
-    .file-name`.
+.file-name`.
   - `.toolcall-images` is a size container; `.toolcall-image img` `max-width: min(280px, 100cqi - 2px)`.
   - `.msg-text table` and `.dialog-inline .md table`, `.question-desc-tip .md table`: `display: block;
-    width: max-content; max-width: 100%; overflow-x: auto` (like `.fp-markdown table`), so a wide table
+width: max-content; max-width: 100%; overflow-x: auto` (like `.fp-markdown table`), so a wide table
     scrolls in its own box and a narrow one stays as it was.
 - `web/src/components/TopBar.tsx`: each `.tb-spacer` says which segment follows it (`data-next="center"`
   or `"end"`).
@@ -4146,7 +4158,7 @@ tidy-up nudge past 6,000 characters) and gives a chat a changed notebook once, b
    archive refuses the save. The owner's views and saves are the server's own, not agent tool calls, so
    pi-worktree's role-folder rule doesn't apply to them. The answer
    says how many lines it archived, and the server logs `[identities] the owner saved the <id> notebook:
-   N characters, M removed or changed lines archived` (never the text). `identity_file_save` takes an
+N characters, M removed or changed lines archived` (never the text). `identity_file_save` takes an
    optional `ref` that comes back in `identity_file_saved`, so the tab's saves don't reach the Settings
    page and back.
 3. **The tab** (`web/src/components/NotebookPanel.tsx` + `notebook-state.ts`, new; `RightPanel.tsx`,
@@ -4363,13 +4375,13 @@ sees and edits all of it, and where suggested prompts (drafts) wait for the owne
 4. **Drafts** (`identity-roles.ts`, `index.ts`): a draft waits in `role-drafts/<id>/` next to the
    identities folder (`PI_ROLE_DRAFTS_DIR` overrides): `prompt.md`, `config.json` (only the fields a role's
    settings add: prompt, skills, tools, unique) and `notes.md` (why). Rows carry `draft {promptSize,
-   fields}`. `identity_draft_get` -> `identity_draft`; `identity_draft_save` / `identity_draft_accept` /
+fields}`. `identity_draft_get` -> `identity_draft`; `identity_draft_save` / `identity_draft_accept` /
    `identity_draft_discard` -> `identity_draft_done`. Accepting writes the prompt into the role's prompt
    file (an old prompt with other words goes to the role's `archive/` first) and merges the settings into
    its identity.json, checked like a settings save; then the draft moves to `role-drafts/.old/` (kept).
    A draft that changed since it was opened is refused (`changed`). Discarding moves it to `.old/` too.
    Logs: `[identities] the owner accepted the draft for <id>: its prompt into prompt.md; tools, skills
-   into identity.json`, `refused the draft for <id>: ...`, `the owner discarded the draft for <id>`.
+into identity.json`, `refused the draft for <id>: ...`, `the owner discarded the draft for <id>`.
 5. **Settings -> Identities** (`IdentitiesSettings.tsx`, `identity-state.ts`, `use-chat.ts`): each row shows
    the prompt, skills (its own first, as its chats load them, once the page's own ask is answered; the
    shared ones marked; "Loading" until then), tool limits, "One chat at a time" for `unique`, and what was left
@@ -4431,14 +4443,14 @@ the reason a check failed). This patch only shows its readings and passes the bu
 1. **The bridge** (`server/subs-limits.ts`, new): pi-multi-pass keeps the readings in one file,
    `<agent dir>/multi-pass-quota/subs-limits.json` (version 1, written whole). The server meets it on
    `globalThis[Symbol.for("pi-multi-pass.limits")]`, version 1: `{v: 1, listeners: Set, api?: {check(),
-   readings(), checking(), file}}` (either side may create it; a channel of another version is left
+readings(), checking(), file}}` (either side may create it; a channel of another version is left
    alone). `SubsLimitsHub` listens there (a check starts or ends, a reply brings numbers), also watches
    the file (a check from the command-line pi), checks every row it passes on, and sends `subs_limits` to
    every window when the readings change (never the same twice). With no chat that has loaded
    pi-multi-pass, the box still shows the file and a press says so.
 2. **Protocol 34** (`protocol.ts`, `protocol-version.ts`): `subs_limits_get` (sent on every connect) and
    `subs_limits_refresh` (the button) from the page; `subs_limits {accounts, checkedAt?, checking,
-   error?}` from the server (`error` only to the window whose press couldn't run). Types `UiLimitsAccount`,
+error?}` from the server (`error` only to the window whose press couldn't run). Types `UiLimitsAccount`,
    `UiLimitWindow`, `UiLimitsFailureReason`.
 3. **The box** (`web/src/components/LimitsBox.tsx`, new; `web/src/subs-limits-state.ts`, new;
    `LeftPanel.tsx`, `App.tsx`, `use-chat.ts`, `styles.css`, `i18n.tsx`, `locales/*.json`): the last
@@ -4588,9 +4600,9 @@ both within the cap. The Notebook tab shows all three as the AI writes them.
    pi-worktree's role-folder rule doesn't apply to them; pi-worktree's API guard knows the new message
    types (a chat can't send them through curl or a script).
 3. **Protocol** (`protocol.ts`, 35): `identity_notes_search {id, query}` -> `identity_notes_found {id,
-   query, hits, total}`; `identity_note_get {id, ref}` -> `identity_note {id, ref, text, hash, size,
-   editable}`; `identity_note_save {id, ref, text, baseHash}` and `identity_note_delete {id, ref,
-   baseHash}` -> `identity_note_saved {id, ref, ok, code?, problems?, hash?, deleted?, freed?}`. The
+query, hits, total}`; `identity_note_get {id, ref}` -> `identity_note {id, ref, text, hash, size,
+editable}`; `identity_note_save {id, ref, text, baseHash}` and `identity_note_delete {id, ref,
+baseHash}` -> `identity_note_saved {id, ref, ok, code?, problems?, hash?, deleted?, freed?}`. The
    `identity_notebook` push gains `memory` (`UiRoleMemory`), and its `cap` is now the rules' cap
    (notebookCap minus indexBudget). The watch (`notebook-watch.ts`) also stats the notes folder, so a
    note recorded by a chat updates the open tab within a second.
