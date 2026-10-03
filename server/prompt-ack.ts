@@ -232,3 +232,45 @@ export function takePromptAdmission(
 	});
 	return { ready, release: () => releaseMine() };
 }
+
+let warnedNoDeferredList = false;
+
+/**
+ * Hands a text to pi (`send` calls session.prompt) and keeps an answer for a text pi puts off.
+ *
+ * pi (1.0) puts a prompt that arrives while it tells the add-ons that the last run has settled off
+ * until that step is done (AgentSession._deferredSettledActions, a private list) and runs it then.
+ * pi calls preflightResult only for a text it takes, so if it refuses the text at that point
+ * (compaction running, no model, no key...) nobody would answer the send: the error goes to
+ * whoever waits for the earlier run. prompt() puts a text off in its first, synchronous step, so an
+ * entry that appears in that list while `send` runs is this text's: it gets wrapped, so `onDeferredError`
+ * gets anything it throws and pi goes on with its next put-off call.
+ * tests/unit/prompt-ack.test.ts checks this against the real pi.
+ */
+export function promptCatchingDeferred(
+	session: object,
+	send: () => Promise<void>,
+	onDeferredError: (err: unknown) => void,
+): Promise<void> {
+	const deferred = (session as { _deferredSettledActions?: unknown })._deferredSettledActions;
+	if (!Array.isArray(deferred)) {
+		if (!warnedNoDeferredList) {
+			warnedNoDeferredList = true;
+			console.warn("[optimistic-send] pi has no _deferredSettledActions: a put-off text it refuses goes unanswered");
+		}
+		return send();
+	}
+	const before = deferred.length;
+	const sent = send();
+	if (deferred.length === before + 1) {
+		const putOff = deferred[before] as () => Promise<void>;
+		deferred[before] = async () => {
+			try {
+				await putOff();
+			} catch (err) {
+				onDeferredError(err);
+			}
+		};
+	}
+	return sent;
+}

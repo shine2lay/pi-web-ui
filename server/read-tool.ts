@@ -37,7 +37,7 @@ import {
 	createReadToolDefinition,
 	defineTool,
 	type AgentToolResult,
-	type ExtensionContext,
+	type ExtensionToolContext,
 } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { type ServerLang } from "./i18n.js";
@@ -149,7 +149,7 @@ async function dirAwareExecute(
 	params: unknown,
 	signal: AbortSignal | undefined,
 	onUpdate: unknown,
-	ctx: ExtensionContext,
+	ctx: ExtensionToolContext,
 ): Promise<AgentToolResult<any>> {
 	const input = (params ?? {}) as ReadDirInput;
 	// 兜底（不依赖 prepareArguments 一定跑过）：path 缺省/空时用 file_path。

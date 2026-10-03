@@ -7,13 +7,13 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { AgentService, sameCwd } from "../../server/agent-service.js";
 import { SchedulerStore, sameSessionFile } from "../../server/scheduler-tasks.js";
 import { makeScheduleTools, parseScheduleSpec, type ScheduleToolHost } from "../../server/schedule-agent-tool.js";
 import { normalizeSchedulerInput } from "../../server/scheduler-tasks.js";
 
-const CTX = { cwd: "/tmp" } as unknown as ExtensionContext;
+const CTX = { cwd: "/tmp" } as unknown as ExtensionToolContext;
 
 function resultText(r: { content: { type: string; text?: string }[] }): string {
 	return r.content.map((c) => c.text ?? "").join("\n");

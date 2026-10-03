@@ -27,7 +27,7 @@ describe("Conversation Permission Persistence", () => {
 
 	it("persists and restores permission preset across reload", () => {
 		const sm = SessionManager.create(tempDir);
-		// Pi SessionManager flushes entries to file once the first assistant response arrives
+		// Pi 1.0 SessionManager flushes entries when the first user or assistant message arrives
 		sm.appendMessage({ role: "user", content: [{ type: "text", text: "hello" }], timestamp: Date.now() });
 		sm.appendMessage({ role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: Date.now() } as any);
 

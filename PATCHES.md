@@ -10,6 +10,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## pi-1-0: upgrade the bundled SDK and preserve prompt receipts and remote models
+
+- `local`: pin `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent` to **1.0.1** (all bundled `@earendil-works` packages in the lockfile are 1.0.1). No upstream web-app merge; command-line pi must be the same version. New codemode, tool_search and virtual-model features remain off; keep pi-mcp-adapter and the existing openai-codex accounts.
+- `server/agent-service.ts` handles pi's `started` / `queued` / `handled` prompt dispositions; rejections now throw without a preflight callback. `server/prompt-ack.ts` catches refusal of a prompt deferred during `agent_settled`, answers its own receipt and releases admission rather than attributing the refusal to the previous run. This one private-SDK hook (`_deferredSettledActions`) has a real-SDK canary in `tests/unit/prompt-ack.test.ts`.
+- `server/read-tool.ts` uses `ExtensionToolContext` (including the SDK's new tools/executeTool fields). Empty queue and draft persistence still work before any message; pi now creates transcripts on the first user **or** assistant message. Inline extension names used by the host remain valid; it does not depend on old built-in diagnostic labels.
+- `server/patch-remote-catalog.ts` now matches pi's chat-filtered `getModels` and all-type `getAllModels`: pi.dev replaces the static catalog per model type, with a static fallback until that type is received. Patching is all-or-nothing, idempotent and warns on mismatch. `tests/unit/patch-remote-catalog.test.ts` checks the installed SDK, explicitly rejects changed source, and verifies replacement behavior without network calls. Future SDK updates must pass this canary, not silently skip the patch.
+- Gate: `TZ=UTC scripts/check.sh`; sealed E2E: `node tests/run-sealed.mjs --jobs=4`; additionally load all installed packages and run pi-multi-pass's tests on the target SDK in a sealed HOME before deploying.
+
 ## model-all-chats: switch existing chats without changing defaults
 
 - `local`: the chat model menu has visible **Make default** and **All chats** actions on the current chat's model, replacing hover-only row stars. All chats has only a one-line Switch/Cancel confirmation; the existing ★ default banner and clear action remain. Phone-width footer actions stay visible.

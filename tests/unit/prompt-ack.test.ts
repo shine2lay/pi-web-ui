@@ -8,10 +8,12 @@
  *  - messages sent while the add-ons' "before the AI starts" step runs keep their order.
  */
 
+import { AgentSession } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import {
 	NOT_RECEIVED_REASON,
 	type PromptAckMsg,
+	promptCatchingDeferred,
 	PromptIdLedger,
 	PromptReceipt,
 	takePromptAdmission,
@@ -213,5 +215,86 @@ describe("takePromptAdmission", () => {
 		expect(through).toBe(false);
 		await new Promise((resolve) => setTimeout(resolve, 60));
 		expect(through).toBe(true);
+	});
+});
+
+describe("promptCatchingDeferred", () => {
+	type PutOff = () => Promise<void>;
+
+	it("answers a text the real pi put off and then refused", async () => {
+		// pi's own prompt() on a stand-in for a session that is telling the add-ons the last run has
+		// settled: it puts the text off. If pi stops doing it this way, this test fails.
+		const session = {
+			prompt: AgentSession.prototype.prompt,
+			_isEmittingAgentSettled: true,
+			_deferredSettledActions: [] as PutOff[],
+			_compactionAbortController: undefined as AbortController | undefined,
+		};
+		const preflightResult = vi.fn();
+		const refused: unknown[] = [];
+		const prompt = AgentSession.prototype.prompt as (this: unknown, ...args: unknown[]) => Promise<void>;
+		await promptCatchingDeferred(
+			session,
+			() => prompt.call(session, "hello", { preflightResult }),
+			(err) => refused.push(err),
+		);
+		expect(session._deferredSettledActions).toHaveLength(1);
+		expect(preflightResult).not.toHaveBeenCalled();
+
+		// Settled; pi runs the put-off text while a compaction runs, so it refuses it.
+		session._isEmittingAgentSettled = false;
+		session._compactionAbortController = new AbortController();
+		await expect(session._deferredSettledActions[0]!()).resolves.toBeUndefined();
+		expect(preflightResult).not.toHaveBeenCalled();
+		expect(refused).toHaveLength(1);
+		expect((refused[0] as Error).message).toMatch(/compaction is in progress/);
+	});
+
+	it("lets pi go on with its next put-off call after a refusal", async () => {
+		const session = { _deferredSettledActions: [] as PutOff[] };
+		const ran: string[] = [];
+		const refused: unknown[] = [];
+		await promptCatchingDeferred(
+			session,
+			async () => {
+				session._deferredSettledActions.push(async () => {
+					ran.push("mine");
+					throw new Error("No API key found");
+				});
+			},
+			(err) => refused.push(err),
+		);
+		session._deferredSettledActions.push(async () => {
+			ran.push("next");
+		});
+		// What pi's _emitAgentSettled does with its list: one after the other, a throw ends the loop.
+		for (const putOff of session._deferredSettledActions.splice(0)) await putOff();
+		expect(ran).toEqual(["mine", "next"]);
+		expect((refused[0] as Error).message).toBe("No API key found");
+	});
+
+	it("leaves pi's list alone when the text wasn't put off", async () => {
+		const other: PutOff = async () => {};
+		const session = { _deferredSettledActions: [other] };
+		const onError = vi.fn();
+		await expect(promptCatchingDeferred(session, async () => {}, onError)).resolves.toBeUndefined();
+		await expect(
+			promptCatchingDeferred(session, async () => Promise.reject(new Error("refused at once")), onError),
+		).rejects.toThrow("refused at once");
+		expect(session._deferredSettledActions).toEqual([other]);
+		expect(onError).not.toHaveBeenCalled();
+	});
+
+	it("still sends when pi has no such list (and says so once)", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const send = vi.fn(async () => {});
+			await promptCatchingDeferred({}, send, () => {});
+			await promptCatchingDeferred({}, send, () => {});
+			expect(send).toHaveBeenCalledTimes(2);
+			expect(warn).toHaveBeenCalledTimes(1);
+		} finally {
+			warn.mockRestore();
+		}
 	});
 });

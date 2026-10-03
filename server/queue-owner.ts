@@ -20,7 +20,7 @@ interface Ticket {
 }
 const tickets = new Map<string, Ticket>();
 
-/** The SDK normally waits for the first assistant message before creating a transcript.
+/** The SDK normally waits for the first user or assistant message before creating a transcript.
  * An owner's empty-queue opt-in must survive too. Create only a NEW file, synchronously, through
  * the owning session's state (never rewrite an existing/open transcript or invent a model turn).
  * Like persistConversation, the SDK's flushed bit makes all subsequent entries append normally.

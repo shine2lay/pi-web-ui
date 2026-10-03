@@ -6,7 +6,7 @@
  * conversationId 每次重启都变，不能做 key（见 agent-service 的 compaction 注释）。
  *
  * - 空白新会话也能存：sessionId 在 SessionManager.create() 时内存里就有了，
- *   不依赖转录文件落盘（SDK 的 _persist 门控要等首轮 assistant 才写盘）。
+ *   不依赖转录文件落盘（SDK 的 _persist 门控要等首条 user 或 assistant 消息才写盘）。
  * - 每会话只留最新一条（last-write-wins，按 ts，比 marker-store 的扫描模式更轻）。
  * - 与 per-client 的 client-state.json 不同：按 sessionId 全局存，跨标签页可见。
  * - 文件 I/O 一律 best-effort：持久化故障绝不能弄崩 server（同 subagent-templates）。

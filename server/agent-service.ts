@@ -328,6 +328,7 @@ import {
 	type PromptAckMsg,
 	type PromptAdmission,
 	type PromptReceipt,
+	promptCatchingDeferred,
 	promptIds,
 	takePromptAdmission,
 } from "./prompt-ack.js";
@@ -9580,6 +9581,29 @@ export class ClientSession {
 		}
 	}
 
+	/**
+	 * optimistic-send: pi refused a text it had put off until the previous run settled, or the run it
+	 * started for it broke (promptCatchingDeferred). Answers the way prompt()'s catch and finally answer
+	 * a text pi refused at once.
+	 */
+	private deferredPromptFailed(conv: Conversation, receipt: PromptReceipt, flow: PromptFlow, err: unknown): void {
+		const message = (err as Error)?.message || "The message could not be sent.";
+		this.emit({
+			type: "notice",
+			level: "error",
+			text: `Failed to send prompt: ${message}`,
+			textEn: `Failed to send prompt: ${message}`,
+		});
+		if (!flow.handedOver || conv.ackOnUserMessage === receipt) {
+			if (conv.ackOnUserMessage === receipt) conv.ackOnUserMessage = undefined;
+			receipt.fail(message);
+		}
+		if (!flow.handedOver) {
+			flow.admission.release();
+			if (conv.pendingAllChatsModel) void this.restoreChatModelChoice(conv);
+		}
+	}
+
 	/** prompt()'s body, run once the receipt and the message's place in the chat's line are taken. */
 	private async promptInLine(
 		conv: Conversation,
@@ -9952,20 +9976,18 @@ export class ClientSession {
 				return;
 			}
 			conv.activePromptAc = undefined;
-			// optimistic-send: pi calls this once it has taken the text in (the run is about to start, or
-			// the text joined the queue of a running chat, or an add-on handled it) or refused it. Here the
+			// optimistic-send: pi calls this once it has taken the text in ("started": the run is about to
+			// start; "queued": the text joined the queue of a running chat; "handled": an add-on or a
+			// command took it). A refusal throws instead (pi 1.0 no longer calls this with false). Here the
 			// next message may go (admission), and the window gets its receipt: right away for a queued
 			// text (after a snapshot that shows it), or with the user message that starts the run.
-			const preflightResult = (ok: boolean): void => {
-				flow.handedOver = ok;
+			const preflightResult = (disposition: "started" | "queued" | "handled"): void => {
+				flow.handedOver = true;
 				flow.admission.release();
-				if (!ok) {
-					// The error reaches the catch below, which answers with its message. A text pi put off
-					// (flow.deferred) has no catch here, so answer after it with a general reason.
-					setTimeout(() => receipt.fail("The message could not be sent."), 0);
-					return;
-				}
-				if (s.isStreaming) {
+				if (disposition === "handled") {
+					// Commands/input handlers need no user-message event, including after deferral.
+					receipt.ok();
+				} else if (disposition === "queued") {
 					this.flushConvSnapshots(conv);
 					receipt.ok();
 				} else {
@@ -9987,15 +10009,22 @@ export class ClientSession {
 				// Enter-during-streaming semantic (docs/usage: Enter queues a
 				// steering message); followUp would wait for the whole run
 				// to finish, which users perceive as ordinary queueing.
-				await s.prompt(text, {
-					streamingBehavior: queue ? "followUp" : "steer",
-					preflightResult,
-				});
+				const streamingBehavior = queue ? "followUp" : "steer";
+				await promptCatchingDeferred(
+					s,
+					() => s.prompt(text, { streamingBehavior, preflightResult }),
+					(err) => this.deferredPromptFailed(conv, receipt, flow, err),
+				);
 			} else {
-				await s.prompt(text, { preflightResult });
+				await promptCatchingDeferred(
+					s,
+					() => s.prompt(text, { preflightResult }),
+					(err) => this.deferredPromptFailed(conv, receipt, flow, err),
+				);
 			}
 			// optimistic-send: pi came back without calling preflightResult (a refusal would have thrown):
-			// it put the text off until the previous run has settled and calls it then.
+			// it put the text off until the previous run has settled and calls it then, or refuses it
+			// then (deferredPromptFailed answers that).
 			if (!flow.handedOver) flow.deferred = true;
 
 			// 关联快照与本次 prompt 产生的用户消息 entry

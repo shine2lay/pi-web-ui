@@ -6,11 +6,9 @@ import { WebSocketServer } from "ws";
 import { describe, expect, it } from "vitest";
 import { FastModeRegistry } from "../../server/fast-mode.js";
 import type { ChatSpeed } from "../../server/protocol.js";
-const adapterUrl = new URL(
-	"../node_modules/@earendil-works/pi-ai/dist/api/openai-codex-responses.js",
-	import.meta.resolve("@earendil-works/pi-coding-agent"),
-);
-const sdk = await import(adapterUrl.href);
+// pi 1.0 no longer shrinkwraps a private pi-ai copy inside pi-coding-agent.
+// Both dependencies are pinned to the same version; resolve its public import path.
+const sdk = await import(import.meta.resolve("@earendil-works/pi-ai/api/openai-codex-responses"));
 const token = `test.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "fixture" } })).toString("base64url")}.test`;
 const completed = (id: number, tier: unknown) => ({
 	type: "response.completed",

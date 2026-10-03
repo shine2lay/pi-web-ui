@@ -172,6 +172,17 @@ const lists = (page) =>
 		};
 	});
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+/** The first row where two windows' lists differ, for a failing check's detail. */
+const firstDiff = (a, b) => {
+	for (const key of ["recent", "history"]) {
+		const n = Math.max(a?.[key]?.length ?? 0, b?.[key]?.length ?? 0);
+		for (let i = 0; i < n; i++) {
+			if (a?.[key]?.[i] !== b?.[key]?.[i])
+				return `${key}[${i}]: "${a?.[key]?.[i] ?? "(none)"}" vs "${b?.[key]?.[i] ?? "(none)"}"`;
+		}
+	}
+	return "";
+};
 
 let browser = null;
 try {
@@ -209,7 +220,10 @@ try {
 		"History is newest first and names the named chats",
 		before.history[0]?.includes("Named chat 40") && before.history.at(-1)?.includes("saved chat 1 question 0"),
 	);
-	for (const w of wins.slice(1)) check("every window shows the same lists", same(await lists(w.page), before));
+	for (const w of wins.slice(1)) {
+		const shown = await lists(w.page);
+		check("every window shows the same lists", same(shown, before), firstDiff(shown, before));
+	}
 	check("the index is saved", await waitFor(() => existsSync(INDEX_FILE), 10000, "the saved index"));
 	await sleep(500);
 
@@ -240,7 +254,7 @@ try {
 		check(
 			`window ${i + 1}: Recent chats and History match the lists before the restart`,
 			r.ok,
-			r.ok ? "" : `recent ${r.shown?.recent.length}, history ${r.shown?.history.length}`,
+			r.ok ? "" : `recent ${r.shown?.recent.length}, history ${r.shown?.history.length}; ${firstDiff(r.shown, before)}`,
 		);
 		check(`window ${i + 1}: complete within ${LIMIT_MS} ms of reconnecting`, r.ok && r.ms <= LIMIT_MS, `${r.ms} ms`);
 	});
