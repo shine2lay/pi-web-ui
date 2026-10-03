@@ -54,7 +54,8 @@ describe("the server uses these rules everywhere a chat starts", () => {
 
 	it("a blank chat's first model and the fresh-chat fallback put the global default first", () => {
 		const uses = src.match(/freshChatModel\(\s*this\.stateStore\.getDefaultModel\(\)/g) ?? [];
-		expect(uses.length).toBe(2);
+		// Queue launch previews and inherited panel settings use this same route too.
+		expect(uses.length).toBe(4);
 		expect(src).not.toMatch(/getProjectModel\([^)]*\) \?\? this\.stateStore\.getDefaultModel\(\)/);
 	});
 });

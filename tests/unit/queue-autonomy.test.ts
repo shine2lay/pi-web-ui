@@ -136,7 +136,9 @@ describe("queue autonomy replay parity and panel", () => {
 		const readOnly = renderToStaticMarkup(
 			createElement(LanguageProvider, null, createElement(TaskQueuePanel, { queue })),
 		);
-		expect(readOnly.match(/disabled=""/g)).toHaveLength(2);
+		expect(readOnly.match(/<button(?=[^>]*disabled="")(?=[^>]*role="switch")[^>]*>/g)).toHaveLength(2);
+		expect(readOnly).toMatch(/<fieldset[^>]*disabled=""[^>]*aria-label="Defaults"/);
+		expect(taskQueueFromEntries([], true, undefined, undefined, "s1").profile).toBeUndefined();
 		const own = taskQueueFromEntries(
 			[entry({ op: "assigned", id: 1, plan, from: { file: "/fixture/parent.jsonl" } })],
 			true,

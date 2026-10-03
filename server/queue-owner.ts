@@ -6,12 +6,12 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { UiProfilePatch } from "./protocol.js";
+import { checkPatch } from "./queue-profile.js";
 
 export type QueueSetting = "autoApprove" | "autoStart";
-export interface OwnerSetting {
-	setting: QueueSetting;
-	value: boolean;
-}
+export type OwnerSetting =
+	{ setting: QueueSetting; value: boolean } | { setting: "profile"; id?: number; patch: UiProfilePatch };
 interface Ticket {
 	queueId: string;
 	change: OwnerSetting;
@@ -43,7 +43,18 @@ export function hasQueueEntries(entries: readonly { type: string; customType?: s
 	return entries.some((entry) => entry.type === "custom" && entry.customType === "queue");
 }
 
-export function parseOwnerSetting(action: unknown, value: unknown): OwnerSetting | undefined {
+export function parseOwnerSetting(
+	action: unknown,
+	value: unknown,
+	profile?: unknown,
+	id?: unknown,
+): OwnerSetting | undefined {
+	if (action === "defaults" || action === "taskProfile") {
+		const { patch, problems } = checkPatch(profile);
+		if (problems.length || !Object.keys(patch).length) return undefined;
+		if (action === "taskProfile" && (typeof id !== "number" || !Number.isInteger(id) || id <= 0)) return undefined;
+		return { setting: "profile", ...(action === "taskProfile" ? { id: id as number } : {}), patch };
+	}
 	if ((action !== "autoApprove" && action !== "autoStart") || typeof value !== "boolean") return undefined;
 	return { setting: action, value };
 }

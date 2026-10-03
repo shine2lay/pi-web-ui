@@ -33,6 +33,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { type FileHandle, open } from "node:fs/promises";
 import { StringDecoder } from "node:string_decoder";
+import { checkPatch, normProfile, normLaunch, patchProfile } from "./queue-profile.js";
 import type {
 	UiTaskQueue,
 	UiTaskQueueChat,
@@ -40,6 +41,7 @@ import type {
 	UiTaskQueuePlan,
 	UiTaskQueueTask,
 	UiTaskQueueWait,
+	UiTaskProfile,
 } from "./protocol.js";
 
 /** pi-queue 的 customType（与 pi-queue queue.ts 的 ENTRY_TYPE 一致）。 */
@@ -61,12 +63,14 @@ type Status = UiTaskQueueTask["status"] | "removed";
 /** 重放用的任务（带 removed；发出去之前滤掉）。 */
 interface Task extends Omit<UiTaskQueueTask, "status"> {
 	status: Status;
+	launchPrepared?: boolean;
 }
 
 interface State {
 	queueId?: string;
 	autoApprove: boolean;
 	autoStart: boolean;
+	profile?: UiTaskProfile;
 	tasks: Task[];
 	running: boolean;
 	pausedReason?: PauseReason;
@@ -227,6 +231,21 @@ function apply(s: State, raw: unknown): void {
 		if (op.setting === "autoStart" && s.autoStart && s.pausedReason === "user") s.pausedReason = undefined;
 		return;
 	}
+	if (op.op === "profile" || op.op === "task_profile") {
+		if (s.from || !s.queueId || op.queueId !== s.queueId) return;
+		const { patch } = checkPatch(op);
+		if (!Object.keys(patch).length) return;
+		if (op.op === "profile") {
+			s.profile = patchProfile(s.profile, patch);
+			for (const t of s.tasks) if (t.status === "ready") t.problem = undefined;
+		} else {
+			const task = s.tasks.find((t) => t.id === op.id);
+			if (!task || task.status !== "ready" || task.startedAt !== undefined) return;
+			task.profile = patchProfile(task.profile, patch);
+			task.problem = undefined;
+		}
+		return;
+	}
 	if (op.op === "run") {
 		if (op.queueId !== undefined && op.queueId !== s.queueId) return;
 		s.running = true;
@@ -258,7 +277,10 @@ function apply(s: State, raw: unknown): void {
 		if (touches) task.touches = touches;
 		const after = normAfter(op.after, op.id);
 		if (after?.length) task.after = after;
+		if (op.op === "add") task.profile = normProfile(op.profile);
 		if (op.op === "assigned") {
+			task.launch = normLaunch(op.launch);
+			s.profile = undefined;
 			// A task's own chat: it works on this one task from the start.
 			const from = chatOf(op.from);
 			if (s.from || !from) return;
@@ -285,8 +307,27 @@ function apply(s: State, raw: unknown): void {
 			const after = normAfter(op.after, task.id);
 			if (after?.length) task.after = after;
 			else if (after) delete task.after;
+			if (op.profile && task.status === "ready" && task.startedAt === undefined) {
+				const { patch } = checkPatch(op.profile);
+				if (Object.keys(patch).length) {
+					task.profile = patchProfile(task.profile, patch);
+					task.problem = undefined;
+				}
+			}
 			return;
 		}
+		case "prepared": {
+			if (!task.lane || !task.launch || task.launchPrepared) return;
+			const launch = normLaunch(op.launch);
+			if (launch) {
+				task.launch = launch;
+				task.launchPrepared = true;
+			}
+			return;
+		}
+		case "blocked":
+			if (task.status === "ready" && typeof op.reason === "string" && op.reason) task.problem = op.reason.slice(0, 500);
+			return;
 		case "chat": {
 			const chat = chatOf(op);
 			if (!task.lane || task.chat || !chat) return;
@@ -295,13 +336,15 @@ function apply(s: State, raw: unknown): void {
 		}
 		case "requeue":
 			// A lane task whose chat never got going goes back to its place in the queue.
-			if (!task.lane || task.chat) return;
+			if ((!task.lane || task.chat) && !(!task.lane && task.touches !== undefined && task.status === "working")) return;
 			task.status = "ready";
 			task.lane = undefined;
 			task.question = undefined;
 			task.choices = undefined;
 			task.wait = undefined;
 			task.startedAt = undefined;
+			task.launch = undefined;
+			task.launchPrepared = undefined;
 			return;
 		case "start":
 		case "resume": {
@@ -314,6 +357,10 @@ function apply(s: State, raw: unknown): void {
 				if ((op.op === "start" || task.status === "waiting") && cur && cur !== task) return;
 			}
 			if (lane) task.lane = true;
+			if (op.op === "start") {
+				task.problem = undefined;
+				task.launch = normLaunch(op.launch);
+			}
 			task.status = "working";
 			task.question = undefined;
 			task.choices = undefined;
@@ -425,6 +472,7 @@ export function taskQueueFromEntries(
 		...(queueId ? { queueId } : {}),
 		autoApprove: s.autoApprove,
 		autoStart: s.autoStart,
+		...(s.profile ? { profile: s.profile } : {}),
 		running: s.running,
 		...(s.pausedReason ? { pausedReason: s.pausedReason } : {}),
 		available,

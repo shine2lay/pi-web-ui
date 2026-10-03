@@ -18,7 +18,8 @@
  */
 
 import { memo, useEffect, useState } from "react";
-import type { UiTaskQueue, UiTaskQueuePlan, UiTaskQueueTask } from "../types";
+import type { UiTaskQueue, UiTaskQueuePlan, UiTaskQueueTask, UiModelInfo, UiProfilePatch } from "../types";
+import { effectiveProfile, ProfileEditor, ProfileSummary } from "./QueueProfile";
 import { useT, type Translate } from "../i18n";
 import { Markdown } from "./Markdown";
 import { lineTime } from "./TldrPanel";
@@ -27,7 +28,17 @@ type TKey = Parameters<Translate>[0];
 
 /** 面板按钮能发的命令（服务端 taskQueueCommandLine 转成 `/queue …`）。 */
 export type TaskQueueAction =
-	"start" | "stop" | "up" | "down" | "remove" | "clear" | "lanes" | "autoApprove" | "autoStart";
+	| "start"
+	| "stop"
+	| "up"
+	| "down"
+	| "remove"
+	| "clear"
+	| "lanes"
+	| "autoApprove"
+	| "autoStart"
+	| "defaults"
+	| "taskProfile";
 
 /** queue-lanes: the most lanes that may run at once (pi-queue MAX_LANES); 2 when not set. */
 const MAX_LANES = 8;
@@ -168,13 +179,15 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 	onCommand,
 	onAnswer,
 	onOpenChat,
+	models = [],
 	defaultOpen = [],
 }: {
 	queue: UiTaskQueue | undefined;
 	/** telegram-answers: answer a stuck task (a choice or typed words). Not given = answer in the chat. */
 	onAnswer?: (taskId: number, text: string) => void;
 	/** 发一条 `/queue …` 命令给这条对话的 pi-queue。不给就不出按钮（只读）。 */
-	onCommand?: (action: TaskQueueAction, id?: number, value?: boolean) => void;
+	onCommand?: (action: TaskQueueAction, id?: number, value?: boolean, profile?: UiProfilePatch) => void;
+	models?: UiModelInfo[];
 	/** queue-lanes: open a task's own chat (or the queue's chat). Not given = no links. */
 	onOpenChat?: (file: string) => void;
 	/** 初始展开计划的任务（测试用；界面上点标题切换）。 */
@@ -255,6 +268,12 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 			else next.add(id);
 			return next;
 		});
+	const changeProfile = (profile: UiProfilePatch, id?: number) => {
+		if (!controls || !queue.queueId || busy) return;
+		setBusy(true);
+		controls(id === undefined ? "defaults" : "taskProfile", id, undefined, profile);
+	};
+	const defaultsEffective = effectiveProfile(queue.profile, undefined, queue.inherited, models);
 	const statusKey = taskQueueStatusKey(queue, s);
 	const canStart = !!s.current || s.ready.length > 0 || s.waiting.length > 0 || s.inChats.length > 0;
 	// queue-lanes: which lane each open task is in, and whether the lanes setting is worth showing.
@@ -410,8 +429,48 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 							)}
 						</div>
 					))}
+				{task.problem && (
+					<p className="queue-profile-problem" role="alert">
+						{task.problem}
+					</p>
+				)}
 				{kind === "done" && task.summary && <div className="task-queue-summary">{task.summary}</div>}
 				{when && <div className="task-queue-time">{when}</div>}
+				{expanded && (
+					<div className="task-queue-profile" data-profile-task={task.id}>
+						<ProfileSummary
+							models={models}
+							launch={task.launch ?? effectiveProfile(queue.profile, task.profile, queue.inherited, models)}
+							title={t(task.launch ? "queueProfileLaunch" : "queueProfileEffective")}
+						/>
+						{queue.from && queue.currentProfile && (
+							<ProfileSummary
+								models={models}
+								launch={{ ...queue.currentProfile, from: { model: "app", thinking: "app", speed: "app" } }}
+								title={t("queueProfileCurrent")}
+							/>
+						)}
+						{kind === "ready" && task.startedAt === undefined && controls && (
+							<ProfileEditor
+								label={t("queueProfileOverride")}
+								profile={task.profile}
+								models={models}
+								disabled={busy || !!pendingSetting}
+								effective={effectiveProfile(queue.profile, task.profile, queue.inherited, models)}
+								onChange={(patch) => changeProfile(patch, task.id)}
+							/>
+						)}
+						{task.startedAt !== undefined && task.chat && onOpenChat && (
+							<button
+								type="button"
+								className="task-queue-open-chat"
+								onClick={() => task.chat && onOpenChat(task.chat.file)}
+							>
+								{t("queueProfileChatSettings")}
+							</button>
+						)}
+					</div>
+				)}
 				{expanded && (
 					<dl className="task-queue-plan">
 						{TASK_QUEUE_PLAN_PARTS.map(([part, label]) =>
@@ -471,6 +530,20 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 					{settingControl("autoApprove", "taskQueueAutoApprove")}
 					{settingControl("autoStart", "taskQueueAutoStart")}
 				</div>
+			)}
+			{!queue.from && (
+				<details className="queue-defaults">
+					<summary>{t("queueProfileDefaults")}</summary>
+					<ProfileSummary models={models} launch={defaultsEffective} />
+					<ProfileEditor
+						label={t("queueProfileDefaults")}
+						profile={queue.profile}
+						effective={defaultsEffective}
+						models={models}
+						disabled={!controls || !queue.queueId || busy || !!pendingSetting}
+						onChange={(patch) => changeProfile(patch)}
+					/>
+				</details>
 			)}
 			{queue.tasks.length === 0 && <p className="task-queue-empty">{t("taskQueueEmpty")}</p>}
 			{!queue.available && <p className="task-queue-note">{t("taskQueueNotLoaded")}</p>}

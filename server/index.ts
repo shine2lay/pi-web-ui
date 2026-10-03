@@ -1158,6 +1158,7 @@ export interface DispatchSession {
 		conversationId?: unknown,
 		queueId?: unknown,
 		value?: unknown,
+		profile?: unknown,
 	): Promise<void>;
 	/** telegram-answers: the Queue tab answers a stuck task (a choice or typed words); optional like above. */
 	taskQueueAnswer?(conversationId: string, taskId: number, text: string): Promise<void>;
@@ -2430,7 +2431,7 @@ wss.on("connection", (ws) => {
 				break;
 			case "task_queue_command":
 				// 队列 tab 里点了开始 / 停下 / ↑ ↓ / 删除（queue-panel）。
-				void cs.taskQueueCommand?.(msg.action, msg.id, msg.conversationId, msg.queueId, msg.value);
+				void cs.taskQueueCommand?.(msg.action, msg.id, msg.conversationId, msg.queueId, msg.value, msg.profile);
 				break;
 			case "set_chat_identity":
 				// identities: the chat menu, the header label or the blank-chat picker (pi-identity's /identity).

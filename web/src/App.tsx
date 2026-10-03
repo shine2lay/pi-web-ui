@@ -1245,7 +1245,11 @@ export function App() {
 			// freshly-opened drawer (they run through panelSend too). Otherwise the
 			// drawer opens and immediately snaps shut.
 			const queueSetting =
-				msg.type === "task_queue_command" && (msg.action === "autoApprove" || msg.action === "autoStart");
+				msg.type === "task_queue_command" &&
+				(msg.action === "autoApprove" ||
+					msg.action === "autoStart" ||
+					msg.action === "defaults" ||
+					msg.action === "taskProfile");
 			if (!queueSetting && !msg.type.startsWith("list_") && !msg.type.startsWith("get_")) {
 				setDrawer(null);
 			}
@@ -2217,6 +2221,7 @@ export function App() {
 							tldr={chat.state?.tldr}
 							tldrConversationId={chat.state?.conversationId}
 							taskQueue={chat.state?.taskQueue}
+							models={chat.models}
 							/* identity-notebook-tab: the Notebook tab shows the chat identity's notebook. */
 							identity={chatIdentity}
 							onOpenIdentities={() => {

@@ -88,6 +88,10 @@ export interface UiMessage {
 }
 
 export interface UiModelInfo {
+	/** SDK/catalog capabilities; no guessed thinking or provider speed support. */
+	thinkingLevels?: string[];
+	thinkingDefault?: string;
+	speeds?: ChatSpeed[];
 	id: string;
 	name: string;
 	provider: string;
@@ -224,6 +228,21 @@ export interface UiTaskQueueWait {
 
 /** 队列里的一个任务（queue-panel）。ready：排着；working：正在做；stuck：等用户拍板；
  *  waiting：搁着等外面的事（别的任务照做）；done：做完了。 */
+/** Per-task override > queue default > existing app rules, independently per field. */
+export interface UiTaskProfile {
+	model?: string;
+	thinking?: string;
+	speed?: ChatSpeed;
+}
+export interface UiProfilePatch {
+	model?: string | null;
+	thinking?: string | null;
+	speed?: ChatSpeed | null;
+}
+export interface UiTaskLaunch extends UiTaskProfile {
+	from: Record<keyof UiTaskProfile, "task" | "queue" | "app">;
+}
+
 export interface UiTaskQueueTask {
 	/** queue-autonomy: attribution for the latest plan, absent for old records. */
 	approval?: "dialog" | "auto";
@@ -231,6 +250,10 @@ export interface UiTaskQueueTask {
 	id: number;
 	status: "ready" | "working" | "stuck" | "waiting" | "done";
 	plan: UiTaskQueuePlan;
+	profile?: UiTaskProfile;
+	/** Frozen dispatch choices, completed with app-selected values before the first request. */
+	launch?: UiTaskLaunch;
+	problem?: string;
 	/** stuck：agent 要用户回答的问题。 */
 	question?: string;
 	/** telegram-answers: stuck: answers the user can pick with one tap (they can always type their own). */
@@ -283,6 +306,11 @@ export interface UiTaskQueue {
 	/** Owner-only opt-ins. Missing values (old servers/records) mean off. */
 	autoApprove?: boolean;
 	autoStart?: boolean;
+	profile?: UiTaskProfile;
+	/** Read-only preview of existing app selection rules; never persisted as queue defaults. */
+	inherited?: UiTaskProfile;
+	/** In a task's own chat: actual current settings, separate from its requested launch. */
+	currentProfile?: UiTaskProfile;
 	/** 队列在自己往下走（按过开始，还没停）。 */
 	running: boolean;
 	/** 没在走的原因：user 按了停下；stopped 这一轮被停了；error 这一轮出错；restart pi 重启过；finished 都做完了。 */
@@ -855,12 +883,25 @@ export type ClientMessage =
 	| {
 			type: "task_queue_command";
 			/** lanes: how many lanes may run at once, the number in `id` (queue-lanes). */
-			action: "start" | "stop" | "up" | "down" | "remove" | "clear" | "lanes" | "autoApprove" | "autoStart";
+			action:
+				| "start"
+				| "stop"
+				| "up"
+				| "down"
+				| "remove"
+				| "clear"
+				| "lanes"
+				| "autoApprove"
+				| "autoStart"
+				| "defaults"
+				| "taskProfile";
 			id?: number;
 			conversationId?: string;
 			/** Required with conversationId for owner-only settings; value must be a boolean. */
 			queueId?: string;
 			value?: boolean;
+			/** Owner-only profile patch: null clears, omission preserves. */
+			profile?: UiProfilePatch;
 	  }
 	/** telegram-answers: the user's answer to a stuck queued task, from the Queue tab (a choice or typed
 	 *  words). It goes into the chat the task runs in (a lane task's own chat), as their reply. */

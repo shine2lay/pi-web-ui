@@ -43,6 +43,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | fast-reopen                  | `local`        | `server/compaction-markers.ts`                                                                                                                 |
 | switch-cache                 | `local`        | `web/src/chat-cache.ts`, `server/window-hash.ts`, `agent-service.ts`, `protocol.ts`, `index.ts`, `use-chat.ts`, `App.tsx`, `SwitchOverlay.tsx` |
 | tldr-collapse                | `local`        | `server/tldr-lines.ts`, `agent-service.ts`, `index.ts`, `protocol.ts`, `web/src/components/TldrPanel.tsx`, `RightPanel.tsx`, `App.tsx`, i18n   |
+| queue-task-profiles          | `local`        | `server/queue-profile.ts` (new), `queue-owner.ts`, `queue-host.ts`, `task-queue.ts`, `agent-service.ts`, protocol/mirrors, Queue panel and `QueueProfile.tsx` (new), i18n/locales, tests; paired with pi-queue; `docs/queue-task-profiles.md` |
 | queue-panel                  | `local`        | `server/task-queue.ts`, `agent-service.ts`, `protocol.ts`, `web/src/components/TaskQueuePanel.tsx`, `RightPanel.tsx`, `done-settle.ts`, i18n   |
 | per-chat-dialogs             | `local`        | `server/chat-dialogs.ts`, `webui-context.ts`, `agent-service.ts`, `protocol.ts`, `web/src/App.tsx`, `LeftPanel.tsx`, i18n                      |
 | image-aside-label            | `local`        | `server/attachments.ts`, `serialize.ts`                                                                                                        |

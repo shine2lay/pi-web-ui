@@ -13,7 +13,16 @@ import {
 	FiMaximize2,
 	FiX,
 } from "react-icons/fi";
-import type { ClientMessage, FileListing, UiChatIdentity, UiPluginInfo, UiTaskQueue, UiTldrLine } from "../types";
+import type {
+	ClientMessage,
+	FileListing,
+	UiChatIdentity,
+	UiPluginInfo,
+	UiTaskQueue,
+	UiTldrLine,
+	UiModelInfo,
+	UiProfilePatch,
+} from "../types";
 import { TldrPanel } from "./TldrPanel";
 import { NotebookPanel } from "./NotebookPanel";
 import { TaskQueuePanel, type TaskQueueAction } from "./TaskQueuePanel";
@@ -126,6 +135,7 @@ interface RightPanelProps {
 	tldrConversationId?: string;
 	/** 当前对话的任务队列（UiState.taskQueue，queue-panel）。delta 不带时引用不变。 */
 	taskQueue?: UiTaskQueue;
+	models?: UiModelInfo[];
 	/** identity-notebook-tab: the open chat's identity (UiState.identity); the Notebook tab shows only with one. */
 	identity?: UiChatIdentity | null;
 	/** identity-notebook-tab: the tab's "About page" link (opens Settings -> Identities). */
@@ -162,6 +172,7 @@ export const RightPanel = memo(function RightPanel({
 	tldr,
 	tldrConversationId,
 	taskQueue,
+	models,
 	identity,
 	onOpenIdentities,
 	collapsible,
@@ -960,11 +971,13 @@ export const RightPanel = memo(function RightPanel({
 	const onOpenChat = useCallback((file: string) => void panelSend({ type: "switch_session", path: file }), [panelSend]);
 	/** 队列 tab 的按钮（queue-panel）：服务端转成 `/queue …` 交给这条对话的 pi-queue。 */
 	const onTaskQueueCommand = useCallback(
-		(action: TaskQueueAction, id?: number, value?: boolean) => {
+		(action: TaskQueueAction, id?: number, value?: boolean, profile?: UiProfilePatch) => {
 			panelSend({
 				type: "task_queue_command",
 				action,
-				...(value !== undefined ? { value, queueId: taskQueue?.queueId } : {}),
+				...(value !== undefined ? { value } : {}),
+				...(value !== undefined || profile !== undefined ? { queueId: taskQueue?.queueId } : {}),
+				...(profile !== undefined ? { profile } : {}),
 				...(id !== undefined ? { id } : {}),
 				...(tldrConversationId ? { conversationId: tldrConversationId } : {}),
 			});
@@ -1367,6 +1380,7 @@ export const RightPanel = memo(function RightPanel({
 											<TaskQueuePanel
 												key={tldrConversationId ?? ""}
 												queue={taskQueue}
+												models={models}
 												onCommand={onTaskQueueCommand}
 												onAnswer={tldrConversationId ? onTaskQueueAnswer : undefined}
 												onOpenChat={onOpenChat}

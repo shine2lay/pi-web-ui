@@ -52,4 +52,5 @@
 //     notes; an old server would drop the asks.
 // 36: per-chat speed — explicit Standard/Fast/Ultrafast and conversation-fenced changes.
 // 37: owner-only per-queue Auto approve / Auto start, session-fenced settings.
-export const PROTOCOL_VERSION = 37;
+// 38: queue-task-profiles — owner defaults/task overrides and per-field launch sources.
+export const PROTOCOL_VERSION = 38;

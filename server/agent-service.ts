@@ -86,6 +86,8 @@ import { describeError, errorMessage, planForLostActive } from "./crash-guard.js
 import { messageCountOf } from "./message-count.js";
 // new-chat-default: the global default model is what every new chat starts on.
 import { carryOverToNewChat, freshChatModel } from "./new-chat-model.js";
+import { defaultThinking, prepareLaunch, profileChoices, QueueLaunchRefused } from "./queue-profile.js";
+import type { UiTaskLaunch } from "./protocol.js";
 import {
 	checkAll as checkAllUpdates,
 	collectTargets,
@@ -346,6 +348,7 @@ import {
 	type ChatState,
 	chatStateFrom,
 	installQueueHost,
+	previewExistingQueueLaunch,
 	makeChain,
 	type QueueChatStart,
 	waitUntil,
@@ -4631,6 +4634,36 @@ export class ClientSession {
 	 * in every window's running list and stays open when this client moves on, until the queue
 	 * closes it (releaseQueueChat) once its task is done.
 	 */
+	async previewQueueLaunch(
+		request: UiTaskLaunch,
+		cwd: string,
+		sourceSessionId: string,
+	): Promise<UiTaskLaunch | undefined> {
+		const conv = [...this.convs.values()].find((c) => c.session.sessionManager.getSessionId() === sourceSessionId);
+		if (!conv) return undefined;
+		if (resolve(conv.cwd) !== resolve(cwd)) throw new QueueLaunchRefused("Queue preview folder is no longer current");
+		const sm = conv.session.settingsManager;
+		const fallbackProvider = sm.getDefaultProvider();
+		const fallbackModel = sm.getDefaultModel();
+		const modelId =
+			request.model ??
+			freshChatModel(this.stateStore.getDefaultModel(), this.stateStore.getProjectModel(QUEUE_TASKS_CLIENT_ID, cwd)) ??
+			(fallbackProvider && fallbackModel ? `${fallbackProvider}/${fallbackModel}` : undefined);
+		const mr = conv.runtime.services.modelRuntime;
+		const slash = modelId?.indexOf("/") ?? -1;
+		const model = modelId && slash > 0 ? mr.getModel(modelId.slice(0, slash), modelId.slice(slash + 1)) : undefined;
+		return {
+			...request,
+			model: modelId,
+			thinking:
+				request.thinking ??
+				(model
+					? defaultThinking(model, sm.getModelThinkingLevel(model.provider, model.id) ?? sm.getDefaultThinkingLevel())
+					: sm.getDefaultThinkingLevel()),
+			speed: request.speed ?? "standard",
+		};
+	}
+
 	async openTaskChat(o: QueueChatStart): Promise<{ sessionFile: string; conversationId: string }> {
 		if (this.quiesceBlocked()) throw new Error("the server is shutting down");
 		const conversationId = this.nextConversationId();
@@ -4659,36 +4692,75 @@ export class ClientSession {
 		// Named before its first message, so it shows up as "Queue #n: ..." right away.
 		session.setSessionName(o.name);
 		conv.title = o.name;
-		for (const e of o.entries) session.sessionManager.appendCustomEntry(e.customType, e.data);
-		let modelSet = false;
-		if (o.model) {
-			const slash = o.model.indexOf("/");
-			const model = conv.runtime.services.modelRuntime.getModel(o.model.slice(0, slash), o.model.slice(slash + 1));
-			if (model) {
-				try {
-					// Key first, then the model (checkAuth). Not setModel(): that remembers the model for the
-					// project, which is the user's choice to make.
-					await this.restoreKeyForModel(o.model, o.cwd);
-					await session.setModel(model);
-					modelSet = true;
-				} catch {
-					// the model can't be used: fall back to the project's
-				}
+		try {
+			const requested = o.launch ?? {
+				model: o.model,
+				thinking: o.thinking,
+				speed: o.speed,
+				from: { model: "app" as const, thinking: "app" as const, speed: "app" as const },
+			};
+			const prepared = await prepareLaunch(requested, {
+				selectModel: async (id, strict) => {
+					let set = false;
+					if (id) {
+						const mr = conv.runtime.services.modelRuntime;
+						const available = strict ? await mr.getAvailable() : undefined;
+						const slash = id.indexOf("/");
+						const model = available
+							? available.find((m) => `${m.provider}/${m.id}` === id)
+							: mr.getModel(id.slice(0, slash), id.slice(slash + 1));
+						if (!model && strict) throw new QueueLaunchRefused(`Model unavailable: ${id}`);
+						if (model) {
+							try {
+								await this.restoreKeyForModel(id, o.cwd);
+								await session.setModel(model, { persist: false });
+								set = true;
+							} catch {
+								if (strict) throw new QueueLaunchRefused(`Model could not be selected: ${id}`);
+							}
+						}
+					}
+					if (!set) await this.restoreProjectModelForCwd(o.cwd).catch(() => {});
+				},
+				model: () => session.model,
+				thinking: () => session.thinkingLevel,
+				preferredThinking: () =>
+					session.model
+						? defaultThinking(
+								session.model,
+								session.settingsManager.getModelThinkingLevel(session.model.provider, session.model.id) ??
+									session.settingsManager.getDefaultThinkingLevel(),
+							)
+						: session.thinkingLevel,
+				setThinking: (level) =>
+					session.setThinkingLevel(level as Parameters<AgentSession["setThinkingLevel"]>[0], { persist: false }),
+				speed: () => fastModeRegistry.view(session.sessionManager, session.model)?.mode ?? "standard",
+				setSpeed: (mode) => {
+					const sm = session.sessionManager;
+					sm.appendCustomEntry(FAST_MODE_ENTRY, fastModeEntryData(sm, mode));
+					fastModeRegistry.setMode(sm, mode);
+				},
+				record: (launch) => {
+					if (o.onPrepared && !o.onPrepared(launch)) throw new QueueLaunchRefused("Task dispatch is no longer current");
+				},
+			});
+			for (const e of o.entries) {
+				// Assigned task carries the same resolved launch snapshot as its queue, not newer defaults.
+				const data =
+					e.customType === "queue" &&
+					e.data &&
+					typeof e.data === "object" &&
+					(e.data as { op?: unknown }).op === "assigned"
+						? { ...e.data, launch: prepared }
+						: e.data;
+				session.sessionManager.appendCustomEntry(e.customType, data);
 			}
-		}
-		if (!modelSet) {
-			try {
-				await this.restoreProjectModelForCwd(o.cwd);
-			} catch {
-				// keep the default
-			}
-		}
-		if (o.thinking) {
-			try {
-				session.setThinkingLevel(o.thinking as Parameters<AgentSession["setThinkingLevel"]>[0]);
-			} catch {
-				// the model has no such level
-			}
+		} catch (err) {
+			// No prompt was sent. A refused launch must not leave a running/disposable task chat behind.
+			conv.listed = false;
+			conv.promptedSinceActive = false;
+			this.removeConversation(conv.id);
+			throw err;
 		}
 		const before = session.messages.length;
 		void this.prompt(o.prompt).catch(() => {});
@@ -6558,11 +6630,74 @@ export class ClientSession {
 		return this.identityOf(conv) ?? null;
 	}
 
+	private queueProfileViews = new WeakMap<UiTaskQueue, { key: string; view: UiTaskQueue }>();
+
+	/** Keep snapshot/delta identity stable when neither the queue nor its effective profile changed. */
+	private queueProfileView(
+		queue: UiTaskQueue,
+		profile: Pick<UiTaskQueue, "inherited" | "currentProfile">,
+	): UiTaskQueue {
+		const key = JSON.stringify(profile);
+		const cached = this.queueProfileViews.get(queue);
+		if (cached?.key === key) return cached.view;
+		const view = { ...queue, ...profile };
+		this.queueProfileViews.set(queue, { key, view });
+		return view;
+	}
+
 	/** 这条对话的任务队列（queue-panel）：当前分支上 pi-queue 存的 `queue` 条目重放出来的。
 	 *  缓存同 tldrOf（树没动就不重扫，队列没变就返回同一个对象）。没装 pi-queue 的对话也返回一份
 	 *  （available=false），tab 拿它说怎么装。 */
 	private taskQueueOf(conv: Conversation): UiTaskQueue {
-		return ClientSession.taskQueueOfConv(conv);
+		const queue = ClientSession.taskQueueOfConv(conv);
+		if (!queue.available && !queue.from) return queue;
+		const session = conv.session;
+		const model = session.model;
+		if (queue.from)
+			return this.queueProfileView(queue, {
+				currentProfile: {
+					model: model ? `${model.provider}/${model.id}` : undefined,
+					thinking: session.thinkingLevel,
+					speed: fastModeRegistry.view(session.sessionManager, model)?.effective ?? "standard",
+				},
+			});
+		let same = false;
+		try {
+			same =
+				JSON.parse(readFileSync(join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "pi-queue.json"), "utf8"))
+					?.taskModel === "same";
+		} catch {
+			/* default */
+		}
+		const fallbackProvider = session.settingsManager.getDefaultProvider();
+		const fallbackModel = session.settingsManager.getDefaultModel();
+		const inheritedModel =
+			same && model
+				? `${model.provider}/${model.id}`
+				: (freshChatModel(
+						this.stateStore.getDefaultModel(),
+						this.stateStore.getProjectModel(QUEUE_TASKS_CLIENT_ID, conv.cwd),
+					) ?? (fallbackProvider && fallbackModel ? `${fallbackProvider}/${fallbackModel}` : undefined));
+		const slash = inheritedModel?.indexOf("/") ?? -1;
+		const inherited =
+			inheritedModel && slash > 0
+				? conv.runtime.services.modelRuntime.getModel(inheritedModel.slice(0, slash), inheritedModel.slice(slash + 1))
+				: undefined;
+		return this.queueProfileView(queue, {
+			inherited: {
+				model: inheritedModel,
+				thinking: same
+					? session.thinkingLevel
+					: inherited
+						? defaultThinking(
+								inherited,
+								session.settingsManager.getModelThinkingLevel(inherited.provider, inherited.id) ??
+									session.settingsManager.getDefaultThinkingLevel(),
+							)
+						: session.settingsManager.getDefaultThinkingLevel(),
+				speed: "standard",
+			},
+		});
 	}
 
 	/** telegram-answers: taskQueueOf for any open chat (it needs no window), for the stuck asks. */
@@ -6996,25 +7131,31 @@ export class ClientSession {
 		conversationId?: unknown,
 		queueId?: unknown,
 		value?: unknown,
+		profile?: unknown,
 	): Promise<void> {
 		if (this.disposed) return;
-		if (action === "autoApprove" || action === "autoStart") {
+		if (action === "autoApprove" || action === "autoStart" || action === "defaults" || action === "taskProfile") {
 			const conv = this.conv;
 			const session = conv.session;
-			const change = parseOwnerSetting(action, value);
+			const change = parseOwnerSetting(action, value, profile, id);
 			const current = () =>
 				!this.disposed &&
 				!conv.isEphemeral &&
 				this.conv === conv &&
 				conv.session === session &&
 				ownerQueueMatches(conversationId, queueId, this.activeId, session.sessionManager.getSessionId()) &&
-				!this.taskQueueOf(conv).from;
+				!this.taskQueueOf(conv).from &&
+				(change?.setting !== "profile" ||
+					change.id === undefined ||
+					this.taskQueueOf(conv).tasks.some(
+						(t) => t.id === change.id && t.status === "ready" && t.startedAt === undefined,
+					));
 			if (!change || !current() || !session.extensionRunner?.getCommand?.("queue")) return;
 			const ticket = issueOwnerSetting(session.sessionManager.getSessionId(), change, current);
 			try {
 				persistEmptyQueue(session.sessionManager);
 				await session.prompt(`/queue owner-setting ${ticket.token}`);
-				if (current() && this.taskQueueOf(conv)[change.setting] === change.value) {
+				if (current() && (change.setting === "profile" || this.taskQueueOf(conv)[change.setting] === change.value)) {
 					conv.listed = true;
 					this.scheduleSessionsRefresh();
 				}
@@ -13788,6 +13929,12 @@ export class ClientSession {
 				provider: m.provider,
 				reasoning: m.reasoning,
 				vision: m.input?.includes("image") ?? false,
+				...profileChoices(m),
+				thinkingDefault: defaultThinking(
+					m,
+					this.session.settingsManager.getModelThinkingLevel(m.provider, m.id) ??
+						this.session.settingsManager.getDefaultThinkingLevel(),
+				),
 			}));
 			this.emit({ type: "models", models });
 		} catch (err) {
@@ -14498,6 +14645,8 @@ export class AgentService {
 			return r.ok ? { ok: true } : { ok: false, error: r.error ?? "couldn't send the answer" };
 		};
 		this.uninstallQueueHost = installQueueHost({
+			previewLaunch: (request, cwd, sourceSessionId) =>
+				previewExistingQueueLaunch(request, cwd, sourceSessionId, this.clients.values()),
 			startChat: (o) =>
 				this.queueTasksChain(() => this.withQueueClient(QUEUE_TASKS_CLIENT_ID, (cs) => cs.openTaskChat(o))),
 			runCommand: (file, line) => this.queueRunCommand(file, line),

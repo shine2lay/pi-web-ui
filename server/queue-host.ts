@@ -28,6 +28,8 @@
  */
 
 import { consumeOwnerSetting } from "./queue-owner.js";
+import { checkPatch, normLaunch, QueueLaunchRefused } from "./queue-profile.js";
+import type { ChatSpeed, UiTaskLaunch } from "./protocol.js";
 
 export const QUEUE_HOST_KEY = Symbol.for("pi-web-ui.queue-host");
 
@@ -40,6 +42,10 @@ export interface QueueChatStart {
 	/** "provider/id" */
 	model?: string;
 	thinking?: string;
+	speed?: ChatSpeed;
+	launch?: UiTaskLaunch;
+	/** Queue extension commits the completed snapshot synchronously; false cancels a stale launch. */
+	onPrepared?: (launch: UiTaskLaunch) => boolean;
 }
 
 /** Whether a chat is working now (see chatState). */
@@ -57,12 +63,31 @@ export interface QueueHostImpl {
 	closeChat(sessionFile: string): Promise<boolean>;
 	chatState(sessionFile: string): Promise<ChatState>;
 	wakeChat(sessionFile: string, note: string): Promise<boolean>;
+	/** Preview from the exact loaded source session; never creates a chat/request or edits settings. */
+	previewLaunch?(profile: UiTaskLaunch, cwd: string, sourceSessionId: string): Promise<UiTaskLaunch>;
 }
 
 /** The object pi-queue sees. */
 export interface QueueHost extends QueueHostImpl {
 	v: 1;
+	profiles: 1;
 	consumeOwnerSetting: typeof consumeOwnerSetting;
+}
+
+/** Approval previews may only consult already-loaded sources, never create a task client. */
+export async function previewExistingQueueLaunch(
+	profile: UiTaskLaunch,
+	cwd: string,
+	sourceSessionId: string,
+	clients: Iterable<{
+		previewQueueLaunch(profile: UiTaskLaunch, cwd: string, sourceSessionId: string): Promise<UiTaskLaunch | undefined>;
+	}>,
+): Promise<UiTaskLaunch> {
+	for (const client of clients) {
+		const preview = await client.previewQueueLaunch(profile, cwd, sourceSessionId);
+		if (preview) return preview;
+	}
+	throw new QueueLaunchRefused("Queue preview session is no longer loaded");
 }
 
 const THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -95,6 +120,23 @@ export function parseQueueChatStart(raw: unknown): QueueChatStart | string {
 	const out: QueueChatStart = { cwd, name, prompt, entries };
 	if (typeof o.model === "string" && /^[^/\s]+\/\S+$/.test(o.model)) out.model = o.model;
 	if (typeof o.thinking === "string" && THINKING.has(o.thinking)) out.thinking = o.thinking;
+	if (o.launch !== undefined) {
+		const launch = normLaunch(o.launch);
+		const checked = checkPatch(o.launch);
+		if (!launch || checked.problems.length) return "invalid launch profile";
+		for (const f of ["model", "thinking", "speed"] as const) {
+			if (launch.from[f] !== "app" && launch[f] === undefined) return `missing launch ${f}`;
+		}
+		out.launch = launch;
+	}
+	if (o.speed !== undefined) {
+		if (o.speed !== "standard" && o.speed !== "fast" && o.speed !== "ultrafast") return "invalid speed";
+		out.speed = o.speed;
+	}
+	if (o.onPrepared !== undefined) {
+		if (typeof o.onPrepared !== "function") return "invalid launch callback";
+		out.onPrepared = o.onPrepared as QueueChatStart["onPrepared"];
+	}
 	return out;
 }
 
@@ -174,7 +216,9 @@ export function installQueueHost(impl: QueueHostImpl): () => void {
 	const g = globalThis as Record<symbol, unknown>;
 	const host: QueueHost = Object.freeze({
 		v: 1 as const,
+		profiles: 1 as const,
 		consumeOwnerSetting,
+		...(impl.previewLaunch ? { previewLaunch: impl.previewLaunch } : {}),
 		startChat: (raw: QueueChatStart) => {
 			const opts = parseQueueChatStart(raw);
 			if (typeof opts === "string") return Promise.reject(new Error(opts));
