@@ -13,7 +13,8 @@ let idsDir;
 let pluginDir;
 const roles = ["product", "design", "architecture", "qa"];
 const required = roles.map((role) => ({ sessionId: randomUUID(), role }));
-const capacity = Array.from({ length: 17 }, () => ({ sessionId: randomUUID(), role: "qa" }));
+const OPEN_CHAT_LIMIT = 24; // Independent of the production constant.
+const capacity = Array.from({ length: OPEN_CHAT_LIMIT + 1 }, () => ({ sessionId: randomUUID(), role: "qa" }));
 const wrong = { sessionId: randomUUID(), role: "qa" };
 const missing = { sessionId: randomUUID(), role: "qa" };
 const corrupt = { sessionId: randomUUID(), role: "qa" };
@@ -232,7 +233,7 @@ try {
 	console.log("PASS: simultaneous browser opens and background recovery use one runtime");
 
 	const full = await api("targets", { targets: [...required, ...capacity] });
-	assert(full.routes.length <= 16, "open-chat capacity is respected");
+	assert(full.routes.length <= OPEN_CHAT_LIMIT, "open-chat capacity is respected");
 	assert(full.routes.filter((r) => capacity.some((c) => c.sessionId === r.sessionId)).length < capacity.length);
 	assert.equal(full.turns, 0);
 	console.log("PASS: passive recovery respects the per-project open-chat limit");

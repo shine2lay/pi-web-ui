@@ -87,7 +87,7 @@ QQ群 1126050727
   - **Right panel file tree** — right-click any folder → **Open as project** (the same menu has **Upload files to this folder**).
   - `/cwd <path>` from the input box (`/cwd` alone reports the current directory).
   - The startup default comes from `--cwd <dir>` / `PI_WEB_CWD`.
-- **Conversations run in parallel** — each conversation has its own agent runtime and keeps streaming after you switch away; up to 16 can be open per project (subagents don't count). This is an open-chat limit, not a task-concurrency or permission change.
+- **Conversations run in parallel** — each conversation has its own agent runtime and keeps streaming after you switch away; up to 24 can be open per project (subagents don't count). This is an open-chat limit, not a task-concurrency or permission change.
 - **Running list** — grouped by project (the current one first), with subagent children indented under their parent, badges for subagent / error (the tooltip carries the reason) / streaming, inline rename (✎) and a scoped ✕ that offers “dismiss finished subagents only” or “force-dismiss everything” (a second confirmation while a run is streaming). Right-clicking a row scopes the menu to that conversation's subtree.
 - **History** — sessions are read from `<agentDir>/sessions/--<cwd>--/`, i.e. the same transcripts the pi CLI/TUI writes, so the browser and a terminal `pi` session share one list per project. Rename (✎ — the same `session_info` entry pi's `/name` writes) and two-step delete.
 - **Recent projects** (a list global search draws on) — stored per browser, merged with every directory that has transcripts, minus the ones you removed (tombstones) and the ones that no longer exist, sorted by last use (20 shown, 30 stored).
@@ -199,7 +199,7 @@ QQ群 1126050727
 - The footer's token/cost/context figures come from DeepSeek's published per-million pricing against a 1M-token window.
 - Opening a past session replays it read-only: sending a prompt starts a **new** branch with the old conversation injected as context, because the runtime has no in-place resume. The same applies to edit-&-re-ask.
 - **Stop** kills the runtime process tree, so every running DSH conversation stops (you get a notice), and a half-finished goal is cleared first. Stopping only the bash tool isn't supported.
-- Sessions live in `<dataDir>/dsh-sessions/` (separate from the pi engine's transcripts) and are swept after `PI_WEB_DSH_SESSION_RETENTION_DAYS` (90); open conversations are capped at 16 per project; a crashed runtime is restarted with 1 s/3 s/9 s back-off, at most twice per 60 s, then it stops and points you at the API key and the DSH dependencies.
+- Sessions live in `<dataDir>/dsh-sessions/` (separate from the pi engine's transcripts) and are swept after `PI_WEB_DSH_SESSION_RETENTION_DAYS` (90); open conversations are capped at 24 per project; a crashed runtime is restarted with 1 s/3 s/9 s back-off, at most twice per 60 s, then it stops and points you at the API key and the DSH dependencies.
 - The tool runs in a `workspace-write` sandbox with approvals off — your Stop button is the control. Questionnaires are a one-question-at-a-time wizard with option previews and a countdown.
 - pi-only features answer with an explicit notice (and their UI is hidden) instead of failing silently: session rename, `/compact`, `/reload`, extension hot-reload, subagent templates, custom providers / multiple keys, provider model probing, installing the pi CLI, the vision bridge and the per-tool switches.
 

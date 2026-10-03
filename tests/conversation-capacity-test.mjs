@@ -1,5 +1,5 @@
 /**
- * company-team-capacity: sixteen saved role chats can stay open, the seventeenth
+ * company-team-capacity: twenty-four saved role chats can stay open, the twenty-fifth
  * is refused non-destructively, and existing exemptions/recovery still work.
  * No model/provider or prompt: only disposable saved transcripts and normal WS operations.
  * Run through tests/run-sealed.mjs after building.
@@ -16,7 +16,7 @@ import WebSocket from "ws";
 import { portUp } from "./lib/port-utils.mjs";
 
 const PORT = 9126;
-const LIMIT = 16; // Deliberate contract, independent of the production constant.
+const LIMIT = 24; // Deliberate contract, independent of the production constant.
 const repo = fileURLToPath(new URL("..", import.meta.url));
 const base = mkdtempSync(join(tmpdir(), "pi-web-conversation-capacity-"));
 const work = join(base, "work");
@@ -157,7 +157,7 @@ try {
 		await keepOpen(file);
 	}
 	assert.equal(new Set(ids.values()).size, LIMIT);
-	console.log("PASS: sixteen distinct saved chats opened without a model call");
+	console.log("PASS: twenty-four distinct saved chats opened without a model call");
 
 	const atLimit = state.conversationId;
 	await switchTo(files[LIMIT], false);
@@ -169,18 +169,18 @@ try {
 			events
 				.slice(mark)
 				.some(
-					(event) => event.type === "notice" && /max open conversations \(16\)/.test(event.textEn ?? event.text ?? ""),
+					(event) => event.type === "notice" && /max open conversations \(24\)/.test(event.textEn ?? event.text ?? ""),
 				),
 		"new-chat cap notice",
 	);
 	assert.equal(state.conversationId, atLimit);
-	console.log("PASS: history and new-chat routes refuse the seventeenth without displacement");
+	console.log("PASS: history and new-chat routes refuse the twenty-fifth without displacement");
 
 	for (const file of files.slice(0, LIMIT)) {
 		await switchTo(file);
 		assert.equal(state.conversationId, ids.get(file), "reopen reuses its runtime at capacity");
 	}
-	console.log("PASS: all sixteen runtimes survive; reopening does not duplicate them");
+	console.log("PASS: all twenty-four runtimes survive; reopening does not duplicate them");
 
 	send({ type: "new_chat", ephemeral: true });
 	await waitFor(() => state?.isEphemeral === true, "ephemeral exemption");

@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { MAX_OPEN_CONVERSATIONS } from "../../server/conversation-limits.js";
 
 describe("company-team-capacity", () => {
-	it("allows sixteen open regular chats without changing task concurrency", () => {
-		expect(MAX_OPEN_CONVERSATIONS).toBe(16);
+	it("allows twenty-four open regular chats without changing task concurrency", () => {
+		expect(MAX_OPEN_CONVERSATIONS).toBe(24);
 	});
 
 	it.each([

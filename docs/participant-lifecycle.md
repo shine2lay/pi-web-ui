@@ -18,7 +18,7 @@ rebinds a role, creates an assigned chat, prompts a model or approves execution.
 Missing, ambiguous, changed-identity, corrupt and capacity-limited targets remain
 disconnected. A plugin must still read `participantRoutes()` for actual readiness.
 
-The ordinary sixteen-open-chat limit applies per project. Concurrent browser,
+The ordinary twenty-four-open-chat limit applies per project. Concurrent browser,
 project and participant session opens share an admission gate. Current bindings
 and shutdown state are rechecked after loading, and a newly loaded runtime is
 rolled back on failure. Recovery uses a detached internal client, does not mark
