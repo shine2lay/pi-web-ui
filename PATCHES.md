@@ -10,6 +10,12 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## model-all-chats: switch existing chats without changing defaults
+
+- `local`: the chat model menu has visible **Make default** and **All chats** actions on the current chat's model, replacing hover-only row stars. All chats has only a one-line Switch/Cancel confirmation; the existing ★ default banner and clear action remain. Phone-width footer actions stay visible.
+- One dated global choice replaces the previous press. Every loaded chat switches through the SDK model-change path, busy chats wait for settlement, and every runtime open/recovery checks the current branch's latest model choice/creation. Later manual picks win, including blank chats whose SDK transcript is not yet flushed. New chats, app/queue defaults, template-pinned subagents, Temper and account rotation are unchanged; thinking and speed stay per-chat and clamp to supported levels.
+- Model-free verification: `tests/unit/model-all-chats.test.ts`, `tests/model-all-chats-test.mjs`, plus affected model/default, speed, opening, queue and participant suites. No live button presses and no direct chat-file edits.
+
 ## participant-lifecycle: keep assigned Team sessions reachable
 
 - `local`: explicit `participants` plugin permission and lifecycle-scoped exact-session leases retain owner-bound role chats independently of browser selection. Passive recovery opens only the existing, uniquely indexed, matching-identity session; it never chooses another role chat, repairs a transcript, changes a binding, sends a prompt or approves work.

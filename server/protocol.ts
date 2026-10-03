@@ -950,6 +950,8 @@ export type ClientMessage =
 	| { type: "file_open_default"; path: string }
 	| { type: "list_models" }
 	| { type: "set_model"; modelId: string }
+	/** One dated choice for existing chats only; never changes new-chat defaults. */
+	| { type: "set_model_all_chats"; modelId: string }
 	/** 设全局默认模型（"provider/id"）：无项目记忆的新项目回落到它（项目记忆优先）。
 	 *  服务端回 default_model 广播；pi 引擎专有。 */
 	| { type: "set_default_model"; modelId: string }

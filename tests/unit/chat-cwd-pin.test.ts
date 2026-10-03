@@ -86,6 +86,7 @@ function session(): FakeSession {
 		},
 		// 同步 v0.96.1：上游每次切对话都推一份 settings_state（不是搬家，每次都有）。
 		pushSettings: () => {},
+		restoreChatModelChoice: async () => false,
 		applyCwdSideEffects,
 		displaceActive: () => null,
 		markRecentSeen: () => {},

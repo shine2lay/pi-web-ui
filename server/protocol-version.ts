@@ -53,4 +53,5 @@
 // 36: per-chat speed — explicit Standard/Fast/Ultrafast and conversation-fenced changes.
 // 37: owner-only per-queue Auto approve / Auto start, session-fenced settings.
 // 38: queue-task-profiles — owner defaults/task overrides and per-field launch sources.
-export const PROTOCOL_VERSION = 38;
+// 39: all-chats model choice + labelled default action in the model picker.
+export const PROTOCOL_VERSION = 39;

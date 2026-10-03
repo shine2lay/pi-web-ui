@@ -11,6 +11,7 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import { normalizeSoftCapByModel, normalizeSoftCapTokens } from "./soft-cap.js";
 import { deriveLegacy, legacyToDisabled, normalizeDisabledAgentTools } from "./tool-manager.js";
 import type { UiAlign, UiLayoutPrefs } from "./protocol.js";
+import { validModelChoice, type ModelChoice } from "./model-all-chats.js";
 
 /** System-prompt mode: append the custom text to the built prompt, or replace
  *  the whole system prompt with it. (遗留字段：主会话已迁移到 compose 模板，
@@ -467,6 +468,10 @@ export interface ClientState {
 	 *  放 per-client 下新标签页会丢），所有客户端共享、服务端持久化、重启不丢。
 	 *  优先级：项目记忆 projectModels[cwd] > 全局默认 > SDK 默认。 */
 	defaultModel?: string;
+	/** One all-chats press, separate from defaults and per-project preferences. */
+	allChatsModel?: ModelChoice;
+	/** Explicit picks on blank chats may not yet be flushed by the SDK. */
+	chatModelChoices?: Record<string, ModelChoice>;
 	/** 全局默认模型各 provider 当时用的 key（provider -> keyName），随全局默认一起记；
 	 *  新项目回落到全局默认模型时一并恢复 key（同 projectProviderKeys 的作用）。 */
 	defaultProviderKeys?: Record<string, string>;
@@ -1104,6 +1109,52 @@ export class ClientStateStore {
 		if (!map || !(cwd in map)) return;
 		delete map[cwd];
 		if (Object.keys(map).length === 0) delete all[clientId]!.projectModels;
+		this.save();
+	}
+
+	getAllChatsModel(): ModelChoice | undefined {
+		const record = this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY]?.allChatsModel;
+		return validModelChoice(record) ? record : undefined;
+	}
+
+	getChatModelChoice(sessionId: string): ModelChoice | undefined {
+		const record = this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY]?.chatModelChoices?.[sessionId];
+		return validModelChoice(record) ? record : undefined;
+	}
+
+	/** Monotonic action time: a pick after a press wins even within the same millisecond. */
+	private nextModelChoiceAt(): number {
+		const state = this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY];
+		// Fractional logical ticks keep same-millisecond actions ordered without
+		// moving the press into a future creation millisecond.
+		let at = Math.max(Date.now(), (this.getAllChatsModel()?.at ?? 0) + 0.001);
+		for (const choice of Object.values(state?.chatModelChoices ?? {})) {
+			if (validModelChoice(choice)) at = Math.max(at, choice.at + 0.001);
+		}
+		return at;
+	}
+
+	saveAllChatsModel(modelId: string): ModelChoice {
+		const record = { modelId, at: this.nextModelChoiceAt() };
+		const state = (this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY] ??= { projects: [] });
+		state.allChatsModel = record;
+		this.save();
+		return record;
+	}
+
+	saveChatModelChoice(sessionId: string, modelId: string): ModelChoice {
+		const record = { modelId, at: this.nextModelChoiceAt() };
+		const state = (this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY] ??= { projects: [] });
+		(state.chatModelChoices ??= {})[sessionId] = record;
+		this.save();
+		return record;
+	}
+
+	/** A cycle learns its target after async SDK work; keep its original click time. */
+	finishChatModelChoice(sessionId: string, at: number, modelId: string): void {
+		const choice = this.getChatModelChoice(sessionId);
+		if (choice?.at !== at) return; // never overwrite a newer click
+		choice.modelId = modelId;
 		this.save();
 	}
 

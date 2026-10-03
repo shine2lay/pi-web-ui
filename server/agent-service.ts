@@ -88,6 +88,7 @@ import { describeError, errorMessage, planForLostActive } from "./crash-guard.js
 import { messageCountOf } from "./message-count.js";
 // new-chat-default: the global default model is what every new chat starts on.
 import { carryOverToNewChat, freshChatModel } from "./new-chat-model.js";
+import { chatModelChoice, latestChatModelChoice, inModelChangeLane, type ModelChoice } from "./model-all-chats.js";
 import { defaultThinking, prepareLaunch, profileChoices, QueueLaunchRefused } from "./queue-profile.js";
 import type { UiTaskLaunch } from "./protocol.js";
 import {
@@ -2006,6 +2007,10 @@ export interface Conversation {
 	 *  refuses them; takePromptAdmission counts). Such a chat is busy: the add-ons' "before the AI
 	 *  starts" step can take seconds, and a chat closed during it would lose the message. */
 	sendsInFlight?: number;
+	/** Serialized model changes and the all-chats choice waiting for this reply to finish. */
+	modelChangeTail?: Promise<unknown>;
+	pendingAllChatsModel?: ModelChoice;
+	modelPinned?: boolean;
 	/** optimistic-send: the receipt of the prompt whose user message is about to start a run. The
 	 *  next user message_end of this chat is that message: its snapshot goes out, then this ack. */
 	ackOnUserMessage?: PromptReceipt;
@@ -2909,6 +2914,8 @@ export class ClientSession {
 		// 模板快照留在对话上：forceReset 重建 runtime 时工厂要按同一模板组装
 		// （system prompt/技能/扩展白名单），否则重建后回落主会话设置。
 		conv.subagentTemplate = apply;
+		conv.modelPinned = !!(model || apply?.model);
+		if (conv.modelPinned) conv.session.sessionManager.appendCustomEntry("pi-web-ui/model-pinned", { pinned: true });
 		// 插件工具门与模板扩展白名单对齐：白名单非空时插件/MCP 工具（无 SDK
 		// extensionKey 身份）不进该会话。工厂期 customTools 不注册 + 下面的
 		// syncPluginTools 不回补，模板热改不影响已运行的子代理（与 prompt/技能一致）。
@@ -5484,6 +5491,8 @@ export class ClientSession {
 		this.webUi.refresh();
 		this.startWidgetsTimer();
 		this.startStallTimer();
+		// Every runtime open/rebuild (UI, queue, plugin, Telegram, recovery) comes here.
+		await this.restoreChatModelChoice(conv);
 	}
 
 	/** Poll extension widgets so TUI-only overlays (e.g. rpiv-todo) stay live.
@@ -6325,6 +6334,7 @@ export class ClientSession {
 				break;
 			}
 			case "agent_settled": {
+				if (conv.pendingAllChatsModel) void this.restoreChatModelChoice(conv);
 				// fast-mode: the refused fast reply was not retried after all (stopped, or pi retried it
 				// itself) — drop its "retrying" placeholder so the error and the Retry button show.
 				if (conv.fastRetrying) {
@@ -8719,6 +8729,8 @@ export class ClientSession {
 	 *  Fallback chain (new-chat-default): GLOBAL default model > project memory > SDK default (no-op).
 	 *  The model is set at its own thinking level (pi's per-model level, else its default level). */
 	private async restoreProjectModelForCwd(cwd: string): Promise<void> {
+		// A saved chat's newer choice beats project/default fallback, including blank chats.
+		if (await this.restoreChatModelChoice(this.conv)) return;
 		const savedModel = freshChatModel(
 			this.stateStore.getDefaultModel(),
 			this.stateStore.getProjectModel(this.clientId, cwd),
@@ -9555,6 +9567,7 @@ export class ClientSession {
 			// A prompt pi put off until the previous run settled is answered by its preflight callback.
 			if (!flow.deferred) {
 				flow.admission.release();
+				if (conv.pendingAllChatsModel) void this.restoreChatModelChoice(conv);
 				// Every exit answers. The refusals answer for themselves; what is left here is a text pi
 				// took without a user message of its own (an add-on handled it: sent), or an unexpected
 				// throw before pi got the text (not sent).
@@ -9600,6 +9613,9 @@ export class ClientSession {
 		// queued or refused), so this one sees a running chat and joins its queue instead of racing
 		// it into a second run (see takePromptAdmission).
 		await flow.admission.ready;
+		// A switch already admitted finishes before this new reply starts.
+		await conv.modelChangeTail;
+		if (conv.pendingAllChatsModel && !conv.session.isStreaming) await this.restoreChatModelChoice(conv, true);
 		const promptAc = new AbortController();
 		conv.activePromptAc = promptAc;
 		try {
@@ -11513,7 +11529,10 @@ export class ClientSession {
 	}
 
 	private async switchConversationNow(id: string): Promise<void> {
-		if (id === this.activeId) return;
+		if (id === this.activeId) {
+			await this.restoreChatModelChoice(this.conv);
+			return;
+		}
 		if (!this.convs.has(id)) {
 			// 客户端点的那一行在它点下去之前刚好被释放/移除了（列表推送有延迟）。
 			// 以前这里静默返回，前端什么都看不到；现在它在等回执，得告诉它为什么没切成。
@@ -11539,6 +11558,7 @@ export class ClientSession {
 		if (displaced) this.removeConversation(displaced.id);
 		this.conv.promptedSinceActive = false;
 		this.conv.lastActiveAt = Date.now();
+		await this.restoreChatModelChoice(this.conv);
 		this.webUi.refresh();
 		this.emitConversations();
 		this.goalSvc.emitGoalStatus();
@@ -13721,14 +13741,30 @@ export class ClientSession {
 	}
 
 	async cycleModel(): Promise<void> {
+		const conv = this.conv;
 		try {
-			const result = await this.session.cycleModel();
-			if (result?.model) {
-				const mid = `${result.model.provider}/${result.model.id}`;
-				await this.restoreKeyForModel(mid, this.cwd);
-				// Remember per-project like setModel — cycling is also a model switch.
-				this.rememberProjectModel(mid);
-			}
+			const current = modelKeyOf(conv.session);
+			const sessionId = conv.session.sessionManager.getSessionId();
+			const choice = current ? this.stateStore.saveChatModelChoice(sessionId, current) : undefined;
+			conv.pendingAllChatsModel = undefined;
+			await inModelChangeLane(conv, async () => {
+				if (
+					choice &&
+					(this.stateStore.getChatModelChoice(sessionId)?.at !== choice.at ||
+						(this.stateStore.getAllChatsModel()?.at ?? 0) > choice.at)
+				)
+					return;
+				const result = await conv.session.cycleModel();
+				if (result?.model) {
+					const mid = `${result.model.provider}/${result.model.id}`;
+					if (choice) {
+						this.stateStore.finishChatModelChoice(sessionId, choice.at, mid);
+						this.markChatModelChoice(conv, { ...choice, modelId: mid });
+					}
+					await this.restoreKeyForModel(mid, conv.cwd);
+					if (this.activeId === conv.id) this.rememberProjectModel(mid);
+				}
+			});
 		} catch (err) {
 			this.emit({
 				type: "notice",
@@ -14082,25 +14118,18 @@ export class ClientSession {
 	 *  失败时只发 notice 不抛错（UI 路径靠 notice 提示，见 cycleModel 等调用方）。
 	 *  需要「失败即拒绝」的无头路径（插件/定时任务）用 switchModelOrThrow。 */
 	async setModel(modelId: string): Promise<void> {
+		const conv = this.conv;
 		try {
-			const mr = this.runtime.services.modelRuntime;
-			const slash = modelId.indexOf("/");
-			if (slash <= 0 || slash === modelId.length - 1) {
-				throw new Error(`Invalid model ID: ${modelId}`);
-			}
-			const provider = modelId.slice(0, slash);
-			const id = modelId.slice(slash + 1);
-			const model = mr.getModel(provider, id);
-			if (!model) throw new Error(`Model not found: ${modelId}`);
-			// 先恢复 provider key，再 setModel（否则 checkAuth 鉴权失败）
-			await this.restoreKeyForModel(modelId, this.cwd);
-			await this.session.setModel(model);
-			// Immediately remember the model + the key it uses for the current
-			// project (not only after a turn). This is what makes project switching
-			// restore both the model and the provider key.
-			this.rememberProjectModel(modelId);
-			// 换模型后按新模型的窗口重算软上限覆盖（按模型覆盖可能不同，issue #229）。
-			this.applyCompactionOverrides();
+			this.modelForConversation(conv, modelId); // refuse before recording an invalid choice
+			const choice = this.stateStore.saveChatModelChoice(conv.session.sessionManager.getSessionId(), modelId);
+			conv.pendingAllChatsModel = undefined;
+			await inModelChangeLane(conv, async () => {
+				// Later manual picks and repeat presses win over this queued operation.
+				const newest = this.stateStore.getChatModelChoice(conv.session.sessionManager.getSessionId());
+				if (newest?.at !== choice.at || (this.stateStore.getAllChatsModel()?.at ?? 0) > choice.at) return;
+				await this.applyModelToConversation(conv, modelId, undefined, choice);
+				if (this.activeId === conv.id) this.rememberProjectModel(modelId);
+			});
 		} catch (err) {
 			this.emit({
 				type: "notice",
@@ -14110,6 +14139,174 @@ export class ClientSession {
 			});
 		}
 		this.flushSnapshot();
+	}
+
+	private modelForConversation(conv: Conversation, modelId: string) {
+		const slash = modelId.indexOf("/");
+		if (slash <= 0 || slash === modelId.length - 1) throw new Error(`Invalid model ID: ${modelId}`);
+		const model = conv.runtime.services.modelRuntime.getModel(modelId.slice(0, slash), modelId.slice(slash + 1));
+		if (!model) throw new Error(`Model not found: ${modelId}`);
+		return model;
+	}
+
+	private modelChoiceForConversation(conv: Conversation): ModelChoice | undefined {
+		const sm = conv.session.sessionManager;
+		const entries = sm.getBranch();
+		const pinned =
+			conv.modelPinned ||
+			!!conv.subagentTemplate?.model ||
+			entries.some(
+				(entry) =>
+					entry.type === "custom" &&
+					entry.customType === "pi-web-ui/model-pinned" &&
+					(entry.data as { pinned?: boolean } | undefined)?.pinned === true,
+			);
+		const createdAt = Date.parse(sm.getHeader()?.timestamp ?? "") || conv.createdAt;
+		return chatModelChoice(
+			this.stateStore.getAllChatsModel(),
+			createdAt,
+			latestChatModelChoice(createdAt, entries),
+			this.stateStore.getChatModelChoice(sm.getSessionId()),
+			!!pinned,
+		);
+	}
+
+	private modelSwitchBusy(conv: Conversation, beforePrompt = false): boolean {
+		return (
+			conv.session.isStreaming ||
+			conv.session.isCompacting ||
+			(!beforePrompt && (conv.sendsInFlight ?? 0) > 0) ||
+			conv.wizardRunning
+		);
+	}
+
+	private markChatModelChoice(conv: Conversation, choice: ModelChoice): void {
+		const change = conv.session.sessionManager
+			.getBranch()
+			.findLast((entry) => entry.type === "model_change" && `${entry.provider}/${entry.modelId}` === choice.modelId);
+		if (change)
+			conv.session.sessionManager.appendCustomEntry("pi-web-ui/model-choice", {
+				modelChangeId: change.id,
+				at: choice.at,
+			});
+	}
+
+	/** The normal SDK model path, targeted to a captured chat, never the active-chat getter.
+	 * Bulk switches do not write defaults/project memory. Auth stays in the existing key pool. */
+	private async applyModelToConversation(
+		conv: Conversation,
+		modelId: string,
+		guard?: () => boolean,
+		manualChoice?: ModelChoice,
+	): Promise<void> {
+		const model = this.modelForConversation(conv, modelId);
+		const session = conv.session;
+		const thinking = session.thinkingLevel;
+		const speed = fastModeRegistry.mode(session.sessionManager);
+		await this.restoreKeyForModel(modelId, conv.cwd);
+		if (guard && !guard()) return;
+		await session.setModel(model);
+		if (manualChoice) this.markChatModelChoice(conv, manualChoice);
+		if (guard && !manualChoice) {
+			const change = session.sessionManager
+				.getBranch()
+				.findLast(
+					(entry) => entry.type === "model_change" && entry.provider === model.provider && entry.modelId === model.id,
+				);
+			if (change) session.sessionManager.appendCustomEntry("pi-web-ui/all-chats-applied", { modelChangeId: change.id });
+		}
+		// Bulk keeps this chat's thinking; manual picks retain the existing SDK defaults.
+		if (!manualChoice) session.setThinkingLevel(thinking);
+		const nextSpeed =
+			speed === "ultrafast" && !speedSupported(model, speed)
+				? speedSupported(model, "fast")
+					? "fast"
+					: "standard"
+				: speed !== "standard" && !speedSupported(model, speed)
+					? "standard"
+					: speed;
+		if (!manualChoice && nextSpeed !== speed) {
+			fastModeRegistry.setMode(session.sessionManager, nextSpeed);
+			session.sessionManager.appendCustomEntry(FAST_MODE_ENTRY, fastModeEntryData(session.sessionManager, nextSpeed));
+		}
+		this.applyCompactionOverrides();
+		for (const client of ClientSession.liveSessions) {
+			if (client.activeId === conv.id) client.flushSnapshot();
+			client.checkpointViewers(conv.id, true);
+		}
+	}
+
+	/** Called at ALL open paths and at settlement. Re-reading inside the lane prevents
+	 * stale pending presses from defeating a later pick or a second press. */
+	private async restoreChatModelChoice(conv: Conversation, beforePrompt = false): Promise<boolean> {
+		return inModelChangeLane(conv, async () => {
+			const choice = this.modelChoiceForConversation(conv);
+			if (!choice) {
+				conv.pendingAllChatsModel = undefined;
+				return false;
+			}
+			if (modelKeyOf(conv.session) === choice.modelId) {
+				conv.pendingAllChatsModel = undefined;
+				return true;
+			}
+			if (this.modelSwitchBusy(conv, beforePrompt)) {
+				conv.pendingAllChatsModel = choice;
+				return true;
+			}
+			conv.pendingAllChatsModel = choice;
+			try {
+				await this.applyModelToConversation(
+					conv,
+					choice.modelId,
+					() => {
+						const latest = this.modelChoiceForConversation(conv);
+						return (
+							latest?.at === choice.at && latest.modelId === choice.modelId && !this.modelSwitchBusy(conv, beforePrompt)
+						);
+					},
+					this.stateStore.getAllChatsModel()?.at === choice.at ? undefined : choice,
+				);
+				if (modelKeyOf(conv.session) === choice.modelId) conv.pendingAllChatsModel = undefined;
+			} catch (err) {
+				conv.pendingAllChatsModel = undefined;
+				this.emit({
+					type: "notice",
+					level: "error",
+					text: `Failed to switch model: ${(err as Error).message}`,
+					textEn: `Failed to switch model: ${(err as Error).message}`,
+				});
+			}
+			return true;
+		});
+	}
+
+	async setModelAllChats(modelId: string): Promise<void> {
+		try {
+			this.modelForConversation(this.conv, modelId); // validate BEFORE persisting
+			this.stateStore.saveAllChatsModel(modelId);
+			let switched = 0,
+				pending = 0;
+			// Shared map: every window, folder and headless client, not just this browser.
+			for (const conv of this.convs.values()) {
+				const before = modelKeyOf(conv.session);
+				await this.restoreChatModelChoice(conv);
+				if (before !== modelId && modelKeyOf(conv.session) === modelId) switched++;
+				if (conv.pendingAllChatsModel?.modelId === modelId) pending++;
+			}
+			this.emit({
+				type: "notice",
+				level: "info",
+				text: `${switched} open chats switched${pending ? `; ${pending} after replies` : ""}.`,
+				textEn: `${switched} open chats switched${pending ? `; ${pending} after replies` : ""}.`,
+			});
+		} catch (err) {
+			this.emit({
+				type: "notice",
+				level: "error",
+				text: `Failed to switch all chats: ${(err as Error).message}`,
+				textEn: `Failed to switch all chats: ${(err as Error).message}`,
+			});
+		}
 	}
 
 	/** Set the GLOBAL default model ("provider/id"): projects with no memory

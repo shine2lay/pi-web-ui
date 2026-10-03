@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
 import { FiCpu, FiSearch, FiZap } from "react-icons/fi";
 import type { ModelInfo, ProviderKeyInfo, UiState } from "../types";
 import { Dropdown, DropdownItem } from "./Dropdown";
@@ -12,6 +12,7 @@ export type ModelThinkingMsg =
 	| { type: "list_models" }
 	| { type: "set_model"; modelId: string }
 	| { type: "set_default_model"; modelId: string }
+	| { type: "set_model_all_chats"; modelId: string }
 	| { type: "clear_default_model" }
 	| { type: "set_thinking"; level: string }
 	| { type: "activate_provider_key"; provider: string; keyName: string };
@@ -58,6 +59,9 @@ export const ModelThinking = memo(function ModelThinking({
 	// snapshot model.id is the bare id; list ids are "provider/id".
 	const currentModelId = model ? `${model.provider}/${model.id}` : null;
 	const [modelOpen, setModelOpen] = useState(false);
+	const [confirmAllChats, setConfirmAllChats] = useState(false);
+	const confirmId = useId();
+	useEffect(() => setConfirmAllChats(false), [modelOpen, currentModelId]);
 	const [thinkingOpen, setThinkingOpen] = useState(false);
 	// Model dropdown filter — the list can be long (all providers × models),
 	// so a type-to-filter box sits above it, plus a provider sidebar on the
@@ -256,7 +260,6 @@ export const ModelThinking = memo(function ModelThinking({
 					{displayRows.map((row) => {
 						const m = row.model;
 						const isActive = currentModelId === m.id && (!row.key || row.key.active);
-						const isDefault = defaultModel !== undefined && defaultModel === m.id;
 						return (
 							<DropdownItem
 								key={row.key ? `${m.id}::${row.key.name}` : m.id}
@@ -295,25 +298,6 @@ export const ModelThinking = memo(function ModelThinking({
 										)}
 									</span>
 								</span>
-								{defaultModel !== undefined && (
-									<button
-										type="button"
-										className={`dd-star-btn ${isDefault ? "active" : ""}`}
-										title={
-											isDefault ? "Current global default model (click to unset)" : "Set as the global default model"
-										}
-										onClick={(e) => {
-											e.stopPropagation();
-											if (isDefault) {
-												appSend({ type: "clear_default_model" });
-											} else {
-												appSend({ type: "set_default_model", modelId: m.id });
-											}
-										}}
-									>
-										{isDefault ? "★" : "☆"}
-									</button>
-								)}
 							</DropdownItem>
 						);
 					})}
@@ -321,6 +305,49 @@ export const ModelThinking = memo(function ModelThinking({
 			</div>
 			{/* Fixed footer — refresh / manage never scroll away. */}
 			<div className="dd-footer">
+				{defaultModel !== undefined &&
+					currentModelId &&
+					(confirmAllChats ? (
+						<div className="dd-model-confirm" role="alertdialog" aria-labelledby={confirmId}>
+							<div
+								id={confirmId}
+								className="dd-model-confirm-question"
+								title={t("switchAllChatsConfirm", { model: model?.name ?? currentModelId })}
+							>
+								{t("switchAllChatsConfirm", { model: model?.name ?? currentModelId })}
+							</div>
+							<div className="dd-model-actions">
+								<button
+									type="button"
+									className="dd-model-action"
+									autoFocus
+									onClick={() => {
+										if (appSend({ type: "set_model_all_chats", modelId: currentModelId })) setModelOpen(false);
+									}}
+								>
+									{t("switchAllChatsSwitch")}
+								</button>
+								<button type="button" className="dd-model-action" onClick={() => setConfirmAllChats(false)}>
+									{t("cancel")}
+								</button>
+							</div>
+						</div>
+					) : (
+						<div className="dd-model-actions">
+							{defaultModel !== currentModelId && (
+								<button
+									type="button"
+									className="dd-model-action"
+									onClick={() => appSend({ type: "set_default_model", modelId: currentModelId })}
+								>
+									{t("makeDefaultModel")}
+								</button>
+							)}
+							<button type="button" className="dd-model-action" onClick={() => setConfirmAllChats(true)}>
+								{t("allChatsModel")}
+							</button>
+						</div>
+					))}
 				{/* 全局默认模型状态条 */}
 				{defaultModel !== undefined && defaultModel && (
 					<div className="dd-default-banner">

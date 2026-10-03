@@ -79,20 +79,23 @@ describe("switchModelOrThrow", () => {
 
 	it("UI 路径的 setModel 仍然只发 notice、不抛（行为不变）", async () => {
 		const emitted: unknown[] = [];
-		const ctx = {
-			runtime: {
-				services: {
-					modelRuntime: {
-						getModel: () => {
-							throw new Error("boom");
+		const ctx = Object.assign(Object.create(ClientSession.prototype), {
+			emit: (m: unknown) => emitted.push(m),
+			flushSnapshot: () => {},
+		});
+		Object.defineProperty(ctx, "conv", {
+			value: {
+				runtime: {
+					services: {
+						modelRuntime: {
+							getModel: () => {
+								throw new Error("boom");
+							},
 						},
 					},
 				},
 			},
-			emit: (m: unknown) => emitted.push(m),
-			flushSnapshot: () => {},
-			cwd: "/tmp",
-		} as unknown as ClientSession;
+		});
 		await expect(ClientSession.prototype.setModel.call(ctx, "a/b")).resolves.toBeUndefined();
 		expect(emitted).toHaveLength(1);
 		expect(emitted[0]).toMatchObject({ type: "notice", level: "error" });
