@@ -12,6 +12,7 @@ import {
 	FiFileText,
 	FiGitBranch,
 	FiImage,
+	FiMessageSquare,
 	FiRefreshCw,
 	FiRotateCcw,
 	FiSquare,
@@ -26,6 +27,7 @@ import type {
 	UiContentBlock,
 	UiImageBlock,
 	UiMessage,
+	UiRoleMessage,
 	UiTextBlock,
 	UiThinkingBlock,
 	UiToolCallBlock,
@@ -312,14 +314,19 @@ export const Message = memo(function Message({
 	// expansion) renders as a compact collapsible skill card instead of dumping
 	// the whole SKILL.md into the user bubble — same as the pi CLI.
 	const skillBlock = message.role === "user" ? parseSkillBlock(userText) : null;
-	const questionText = skillBlock
-		? (skillBlock.userMessage ?? `skill:${skillBlock.name}`)
-		: userText.split("\n").join(" ").trim();
+	// role-messages: a message from another role (message_role), confirmed by the server, shows as a
+	// labelled card (who sent it is the server's, never the text's).
+	const roleMsg = message.role === "user" ? message.roleMessage : undefined;
+	const questionText = roleMsg
+		? roleMsg.text.split("\n").join(" ").trim()
+		: skillBlock
+			? (skillBlock.userMessage ?? `skill:${skillBlock.name}`)
+			: userText.split("\n").join(" ").trim();
 	// Streaming bubble with no content yet (first token not arrived) — show a
 	// visible “thinking…” placeholder instead of an invisible empty bubble.
 	const isEmptyStreaming = streaming && isLast && message.content.length === 0;
 
-	const canEdit = message.role === "user" && !streaming && !isEmptyStreaming && !!onEdit;
+	const canEdit = message.role === "user" && !roleMsg && !streaming && !isEmptyStreaming && !!onEdit;
 	// rewind-to-here：用户和助手消息都能「回到这里」（正在流式的那条除外）；对话在跑时按钮灰掉不藏。
 	const canRewind =
 		(message.role === "user" || message.role === "assistant") &&
@@ -965,7 +972,9 @@ export const Message = memo(function Message({
 								: message.customType === "file"
 									? t("attachment")
 									: `${t("plugin")} · ${message.customType ?? t("unknown")}`
-						: roleLabel(message.role, t)}
+						: roleMsg
+							? roleMessageLabel(roleMsg, t)
+							: roleLabel(message.role, t)}
 				</span>
 				{message.model && <span className="msg-model">{message.model}</span>}
 				{message.timestamp && <span className="msg-time">{formatTime(message.timestamp)}</span>}
@@ -1123,6 +1132,8 @@ export const Message = memo(function Message({
 						)}
 						{isFileAttachment ? (
 							<AttachmentCard message={message} forceOpen={searchActive} />
+						) : roleMsg ? (
+							<RoleMessageCard roleMessage={roleMsg} />
 						) : skillBlock ? (
 							<>
 								<SkillCard block={skillBlock} forceOpen={searchActive} />
@@ -1483,6 +1494,37 @@ function CompactionCard({
 						<div className="compaction-hint">{t("compactionKeptHint")}</div>
 					</div>
 				)}
+			</div>
+		</div>
+	);
+}
+
+/** role-messages: the chat's label for a role message, e.g. "from ops (Queue #58) \u00b7 fyi". */
+export function roleMessageLabel(m: UiRoleMessage, t: Translate): string {
+	const kind = m.kind === "reply" && m.replyTo ? t("roleMessageReplyKind", { id: m.replyTo }) : m.kind;
+	return t("roleMessageLabel", { from: m.from, chat: m.fromChat, kind });
+}
+
+/**
+ * role-messages: a message from another role. The head says who sent it and from which chat (the
+ * server's stamp); the body is the text the sender wrote (the header and hint lines the model reads
+ * aren't repeated).
+ */
+function RoleMessageCard({ roleMessage: m }: { roleMessage: UiRoleMessage }) {
+	const t = useT();
+	return (
+		<div className={`rolemsg-card rolemsg-${m.kind}`} data-role-message={m.id}>
+			<div className="chead rolemsg-head">
+				<span className="chead-icon rolemsg-icon">
+					<FiMessageSquare />
+				</span>
+				<span className="chead-title rolemsg-title">{t("roleMessageCardTitle", { id: m.id })}</span>
+				<span className="rolemsg-from">
+					{t("roleMessageCardFrom", { title: m.fromTitle, from: m.from, chat: m.fromChat })}
+				</span>
+			</div>
+			<div className="rolemsg-body msg-text">
+				<Markdown text={m.text} hardBreaks />
 			</div>
 		</div>
 	);

@@ -38,9 +38,12 @@ export function agentDir(env: Env = process.env): string {
 export const SETTINGS_NAME = "pi-identity.json";
 /** The text that tells a role's chats how to use their notebook and skills (see prompt.ts). */
 export const TEMPLATE_NAME = "pi-identity-role.md";
+/** The text that tells a role's chats how to work with the other roles (see roster.ts). */
+export const ROLES_TEMPLATE_NAME = "pi-identity-roles.md";
 
 export const settingsPath = (env: Env = process.env) => join(agentDir(env), SETTINGS_NAME);
 export const templatePath = (env: Env = process.env) => join(agentDir(env), TEMPLATE_NAME);
+export const rolesTemplatePath = (env: Env = process.env) => join(agentDir(env), ROLES_TEMPLATE_NAME);
 
 function expandTilde(p: string, env: Env): string {
 	if (p === "~") return homeOf(env);
@@ -98,7 +101,7 @@ export const DEFAULT_TOOL_GROUPS: Readonly<Record<string, readonly string[]>> = 
 	browser: ["browser_*"],
 };
 
-export const DEFAULT_ALWAYS_ALLOW: readonly string[] = ["notebook", "tldr", "queue_done", "queue_stuck", "queue_wait"];
+export const DEFAULT_ALWAYS_ALLOW: readonly string[] = ["notebook", "tldr", "queue_done", "queue_stuck", "queue_wait", "message_role"];
 
 export const SETTINGS_FIELDS = ["notebookCap", "tidyAt", "indexBudget", "notesDir", "toolGroups", "alwaysAllow", "roleSkillsDir"] as const;
 

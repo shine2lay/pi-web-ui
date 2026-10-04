@@ -278,6 +278,8 @@ import {
 import { extractTouches, formatTouchesCompact, intersectTouches } from "./conversation-touches.js";
 import { ClaimStore, matchClaims, mergeTouchSidecar, readTouchSidecar, removeTouchSidecar } from "./claim-store.js";
 import { makeClaimFilesTool, type ClaimFilesHost } from "./claim-files-tool.js";
+import { makeMessageRoleTool, type MessageRoleHost } from "./role-message-tool.js";
+import { chatLabel, ownTaskOf, RoleMessages, type RoleMessageSender } from "./role-messages.js";
 import { makeSkillTool, type SkillToolHost } from "./skill-tool.js";
 import { makeScheduleTools, type ScheduleToolHost } from "./schedule-agent-tool.js";
 import { makePatchTool } from "./patch-tool.js";
@@ -316,6 +318,7 @@ import type {
 	UiMessage,
 	UiPluginUpdateInfo,
 	UiQuestion,
+	UiRoleMessageRow,
 	UiServiceInfo,
 	UiState,
 	UiSubagentTemplate,
@@ -377,6 +380,7 @@ import {
 	identityIdOfEntry,
 	identityRegistry,
 	liveChatIdentityId,
+	samePath,
 	uiChatIdentity,
 	type IdentityEntryLike,
 } from "./identities.js";
@@ -1774,8 +1778,48 @@ function fullAt(conv: Conversation, idx: ChatIndex, i: number): UiMessage {
 		content: [],
 		timestamp: m.timestamp,
 	};
+	// role-messages: a message from another role that the store confirms shows as a labelled card.
+	if (roleMessageService && m.role === "user") {
+		const text = firstUserText(m);
+		if (text?.startsWith("[Role message ")) {
+			let file: string | undefined;
+			try {
+				file = conv.session.sessionFile ?? undefined;
+			} catch {
+				file = undefined;
+			}
+			const stamp = roleMessageService.stampFor(file, text);
+			if (stamp) msg.roleMessage = stamp;
+		}
+	}
 	conv.uiMessageCache.set(key, msg);
 	return msg;
+}
+
+/** role-messages: the server's role message service (AgentService sets it; null in other engines). */
+let roleMessageService: RoleMessages | null = null;
+
+/** role-messages: the first text of a user message. */
+function firstUserText(m: AgentMessage): string | undefined {
+	if (m.role !== "user") return undefined;
+	const c = (m as { content?: unknown }).content;
+	if (typeof c === "string") return c;
+	if (!Array.isArray(c)) return undefined;
+	const first = c.find((b) => (b as { type?: unknown })?.type === "text") as { text?: unknown } | undefined;
+	return typeof first?.text === "string" ? first.text : undefined;
+}
+
+/** role-messages: the text of the chat's last user message (the one its turn answers). */
+function lastUserTextOf(conv: Conversation): string | undefined {
+	try {
+		const msgs = conv.session.messages;
+		for (let i = msgs.length - 1; i >= 0; i--) {
+			if (msgs[i].role === "user") return firstUserText(msgs[i]);
+		}
+	} catch {
+		// session being replaced
+	}
+	return undefined;
 }
 
 /** Display forms of shown messages [from, to). */
@@ -2075,6 +2119,10 @@ function atomicWriteFileSync(file: string, data: string): void {
 
 /** optimistic-send: how far one prompt() got, for its final answer (see ClientSession.prompt). */
 interface PromptFlow {
+	/** role-messages: "extension" = the server sends it for someone else (a role message), not the
+	 *  owner typing: pi's input hooks see that source (pi-queue doesn't take it for the owner's answer),
+	 *  and the owner's draft, last prompt and seen marks stay as they are. */
+	source?: "extension";
 	/** pi put the text off until the previous run has settled: its preflight callback answers later. */
 	deferred: boolean;
 	/** pi took the text (its preflight said yes). */
@@ -2101,6 +2149,10 @@ const WAKE_REOPEN_SINK = (): void => {};
 const QUEUE_TASKS_CLIENT_ID = `${CARRY_ON_CLIENT_PREFIX}queue`;
 const QUEUE_HOME_CLIENT_ID = `${CARRY_ON_CLIENT_PREFIX}queue-home`;
 const QUEUE_HOST_SINK = (): void => {};
+/** role-messages: the pseudo client (a carry-on one) that opens a role's chat to deliver a role message. */
+const ROLE_MESSAGES_CLIENT_ID = `${CARRY_ON_CLIENT_PREFIX}role-messages`;
+/** role-messages: how long a delivery waits for its prompt's receipt. */
+const ROLE_MESSAGE_ACK_MS = 120_000;
 
 /** carry-on: the chat's transcript as the live list keys it (null for chats that don't count). */
 function runningRef(conv: Conversation): { sessionFile: string; title: string; cwd: string } | null {
@@ -3632,6 +3684,46 @@ export class ClientSession {
 		};
 	}
 
+	/** role-messages: message_role's host. The sender is this runtime's chat as the server knows it (its
+	 *  role, which chat, the depth of the role message it is handling), never what the model says. */
+	private roleMessageHost(ownerId?: string): MessageRoleHost {
+		const target = (): Conversation | undefined => {
+			try {
+				return (ownerId ?? "").trim() !== "" ? this.convs.get(ownerId!.trim()) : this.convs.get(this.activeId);
+			} catch {
+				return undefined;
+			}
+		};
+		return {
+			service: () => roleMessageService ?? undefined,
+			sender: (): RoleMessageSender | string => {
+				const conv = target();
+				if (!conv) return "This chat isn't open any more.";
+				if (conv.isSubagent) return "A helper chat (subagent) can't message roles; the chat that started it can.";
+				const identity = this.identityOf(conv);
+				if (!identity) return "Only a chat with a role can message other roles, and this chat has none.";
+				let file: string | undefined;
+				let taskId: number | undefined;
+				try {
+					file = conv.session.sessionFile ?? undefined;
+					taskId = ownTaskOf(conv.session.sessionManager.getBranch())?.id;
+				} catch {
+					// the session is being replaced
+				}
+				if (!file) return "This chat isn't saved yet, so an answer couldn't find it. Try again after its first reply.";
+				const def = identityRegistry().identities.find((i) => i.id === identity.id);
+				const isHome = !!def?.homeChat && samePath(def.homeChat, file);
+				return {
+					role: identity.id,
+					title: identity.title,
+					file,
+					chat: chatLabel({ taskId, isHome, title: conv.title }),
+					handling: roleMessageService?.handlingDepth(file, lastUserTextOf(conv)) ?? 0,
+				};
+			},
+		};
+	}
+
 	/** compact_context 工具的数据宿主：提供消息统计用于预检，以及注册 pending 压缩请求。
 	 *  ownerId 语义同 skill / claimFiles（本 runtime 所属会话，不是派发瞬间 active）。 */
 	private compactContextHost(ownerId?: string): CompactContextHost {
@@ -4506,6 +4598,9 @@ export class ClientSession {
 					// ownerId 语义同 subagent/skill（本 runtime 所属会话）。
 					// DSH 引擎无 customTool 注册面，不接（提醒里照样能看到认领）。
 					makeClaimFilesTool(this.claimToolHost(ownerId), () => this.getLang()),
+					// role-messages: message another role's chat. Registered everywhere; pi-identity offers it only
+					// in chats with a role, and it refuses chats without one and helper chats (subagents).
+					makeMessageRoleTool(this.roleMessageHost(ownerId)),
 					// 展示文件给用户（present_files，issue #231）：模型给路径清单，服务端
 					// 只做只读探测（stat + 未知扩展嗅探 + 文本摘录），结构化 items 走 tool
 					// result 的 details 下发，前端渲染成图片/视频内联 + 预览/本地打开/
@@ -4650,6 +4745,37 @@ export class ClientSession {
 		// In the running list of every window, and kept open when switched away from.
 		if (started) conv.listed = true;
 		return started;
+	}
+
+	/**
+	 * role-messages: deliver a role message into the chat with this transcript (this client is the role
+	 * message service's pseudo client, see AgentService.sendRoleMessage). The chat is opened if it isn't
+	 * (in the background, like carry-on), then the text goes in the way a typed message does: queued
+	 * behind any running turn (follow-up, never steer) and marked as sent by an extension. Returns once
+	 * pi has taken it (the receipt for ackId answered ok) or why not.
+	 */
+	async deliverRoleMessage(
+		file: string,
+		text: string,
+		ackId: string,
+		receipt: Promise<{ ok: boolean; reason?: string }>,
+	): Promise<{ ok: true } | { ok: false; error: string }> {
+		await this.switchSession(file);
+		const id = this.conversationIdBySessionFile(file);
+		const conv = id ? this.convs.get(id) : undefined;
+		if (!id || !conv || id !== this.activeId) return { ok: false, error: "couldn't open the chat" };
+		void this.prompt(text, undefined, true, ackId, { source: "extension" }).catch(() => {});
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const answer = await Promise.race([
+			receipt,
+			new Promise<{ ok: boolean; reason?: string }>((r) => {
+				timer = setTimeout(() => r({ ok: false, reason: "the chat didn't take it in time" }), ROLE_MESSAGE_ACK_MS);
+			}),
+		]).finally(() => clearTimeout(timer));
+		if (!answer.ok) return { ok: false, error: answer.reason || "the chat didn't take it" };
+		// In the running list of every window, and kept open when switched away from.
+		conv.listed = true;
+		return { ok: true };
 	}
 
 	/**
@@ -9546,6 +9672,8 @@ export class ClientSession {
 		queue = false,
 		/** optimistic-send: the window's id for this send, answered with one prompt_ack (prompt-ack.ts). */
 		id?: string,
+		/** role-messages: source "extension" = sent by the server for someone else (see PromptFlow.source). */
+		opts?: { source?: "extension" },
 	): Promise<void> {
 		let conv: Conversation;
 		try {
@@ -9561,7 +9689,12 @@ export class ClientSession {
 		if (!receipt) return;
 		// optimistic-send: this message's place in the chat's line, taken before any await so the
 		// places follow the order the messages came in (see takePromptAdmission).
-		const flow: PromptFlow = { deferred: false, handedOver: false, admission: takePromptAdmission(conv) };
+		const flow: PromptFlow = {
+			...(opts?.source ? { source: opts.source } : {}),
+			deferred: false,
+			handedOver: false,
+			admission: takePromptAdmission(conv),
+		};
 		try {
 			await this.promptInLine(conv, receipt, flow, text, attachments, queue);
 		} finally {
@@ -9618,7 +9751,9 @@ export class ClientSession {
 		// switch/new_chat while prompt() is in flight must never target a
 		// different conversation. (optimistic-send: prompt() captures it and passes it in.)
 		// telegram-answers: what the user said here last (a stuck task answered in the chat shows it).
-		conv.lastPrompt = { text, at: Date.now() };
+		// role-messages: a role message isn't the owner saying something (nor are the draft and seen
+		// steps below: the owner's draft and the chat's green light stay as they are).
+		if (!flow.source) conv.lastPrompt = { text, at: Date.now() };
 		// rewind-to-here：正在回退（换分支 + 写摘要）时发来的话等回退做完再发——输入框已经清了，
 		// 拒掉就丢了；等完话落在回退后的分支上，正是用户要的顺序。
 		if (conv.rewindDone) await conv.rewindDone;
@@ -9627,12 +9762,12 @@ export class ClientSession {
 		// clear() 同时记录 clear 时间戳水位：清掉之后才 landing 的旧 draft_update
 		// （防抖延迟 / 跨 tab 陈旧写，ts <= 水位）由 store 直接丢弃，不复活。
 		try {
-			this.drafts.clear(conv.session.sessionId);
+			if (!flow.source) this.drafts.clear(conv.session.sessionId);
 		} catch {
 			// ignore
 		}
 		// 用户往这条对话里发了话 = 看过也回了：绿灯灭掉，并把它拉回「最近对话」。
-		this.markRecentSeen(conv);
+		if (!flow.source) this.markRecentSeen(conv);
 		// optimistic-send: wait until every earlier message to this chat has been taken in (started,
 		// queued or refused), so this one sees a running chat and joins its queue instead of racing
 		// it into a second run (see takePromptAdmission).
@@ -10012,13 +10147,22 @@ export class ClientSession {
 				const streamingBehavior = queue ? "followUp" : "steer";
 				await promptCatchingDeferred(
 					s,
-					() => s.prompt(text, { streamingBehavior, preflightResult }),
+					() =>
+						s.prompt(text, {
+							streamingBehavior,
+							preflightResult,
+							...(flow.source ? { source: flow.source, expandPromptTemplates: false } : {}),
+						}),
 					(err) => this.deferredPromptFailed(conv, receipt, flow, err),
 				);
 			} else {
 				await promptCatchingDeferred(
 					s,
-					() => s.prompt(text, { preflightResult }),
+					() =>
+						s.prompt(text, {
+							preflightResult,
+							...(flow.source ? { source: flow.source, expandPromptTemplates: false } : {}),
+						}),
 					(err) => this.deferredPromptFailed(conv, receipt, flow, err),
 				);
 			}
@@ -14674,6 +14818,79 @@ export class AgentService {
 		this.claimStore = new ClaimStore(join(this.stateStore.dataDir, "claims.json"));
 		ClientSession.participantRetained = (id, role) => this.participants.has(id, role);
 		sessionIndex.configure({ file: join(this.stateStore.dataDir, "session-index.json") });
+		// role-messages: the store is read now (message_role works at once); delivery starts with
+		// startRoleMessages, once the restart's carry-on is done.
+		this.roleMessages = new RoleMessages(join(this.stateStore.dataDir, "role-messages.json"), {
+			roles: () => identityRegistry().identities,
+			chatState: (file) => this.queueChatState(file).state,
+			deliver: (file, text) => this.sendRoleMessage(file, text),
+			changed: () => this.onRoleMessagesChanged?.(),
+			log: (line) => console.log(line),
+		});
+		roleMessageService = this.roleMessages;
+	}
+
+	// -----------------------------------------------------------------------
+	// role-messages: role chats message each other (role-messages.ts)
+	// -----------------------------------------------------------------------
+
+	private readonly roleMessages: RoleMessages;
+	/** One delivery at a time (the pseudo client has one active chat). */
+	private roleMessagesChain = makeChain();
+	/** index.ts: the list in Settings -> Identities changed (it is pushed to every window). */
+	onRoleMessagesChanged: (() => void) | null = null;
+
+	/** role-messages: start delivering (index.ts, once the chats a restart cut off are carried on). */
+	startRoleMessages(): void {
+		this.roleMessages.start();
+	}
+
+	/** role-messages: Settings -> Identities -> Role messages (the last 100, newest first). */
+	roleMessagesView(): { enabled: boolean; paused: boolean; messages: UiRoleMessageRow[] } {
+		return { enabled: true, paused: this.roleMessages.paused, messages: this.roleMessages.rows() };
+	}
+
+	/** role-messages: the owner's switch. Paused = held, not dropped. */
+	setRoleMessagesPaused(paused: boolean): void {
+		this.roleMessages.setPaused(paused);
+	}
+
+	/**
+	 * role-messages: send a role message into the chat with this transcript as a queued user message
+	 * marked as sent by an extension. A closed chat is opened in the background for it (the way a
+	 * scheduled wake-up reopens one); a working chat gets nothing now (busy: the service tries again
+	 * after its turn). One at a time.
+	 */
+	private sendRoleMessage(
+		file: string,
+		text: string,
+	): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> {
+		return this.roleMessagesChain(async (): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> => {
+			if (this.carryOnGate) await this.carryOnGate.catch(() => {});
+			if (this.quiesced) return { ok: false, error: "the server is restarting" };
+			if (!existsSync(file)) return { ok: false, error: "the chat's transcript is gone" };
+			if (this.queueChatState(file).state === "working") return { ok: false, busy: true, error: "the chat is working" };
+			const ackId = `rm:${randomUUID()}`;
+			let answer: (a: { ok: boolean; reason?: string }) => void = () => {};
+			const receipt = new Promise<{ ok: boolean; reason?: string }>((r) => {
+				answer = r;
+			});
+			const sink = (msg: ServerMessage): void => {
+				if (msg.type === "prompt_ack" && msg.id === ackId) answer({ ok: msg.ok, reason: msg.reason });
+			};
+			try {
+				const cs = await this.attach(ROLE_MESSAGES_CLIENT_ID, sink);
+				try {
+					return await cs.deliverRoleMessage(file, text, ackId, receipt);
+				} finally {
+					// Open windows list the chat now; nobody watches through this client (its done ring rings).
+					this.pokeExternalRunning(ROLE_MESSAGES_CLIENT_ID);
+					this.detach(ROLE_MESSAGES_CLIENT_ID, sink);
+				}
+			} catch (err) {
+				return { ok: false, error: (err as Error).message };
+			}
+		});
 	}
 
 	/** session-index: bring the saved chat index up to date at startup (while the cut-off chats reopen),
@@ -16145,6 +16362,8 @@ export class AgentService {
 	}
 
 	async disposeAll(): Promise<void> {
+		this.roleMessages.stop();
+		if (roleMessageService === this.roleMessages) roleMessageService = null;
 		this.participants.dispose();
 		ClientSession.participantRetained = undefined;
 		this.uninstallQueueHost?.();

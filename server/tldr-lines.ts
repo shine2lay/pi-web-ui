@@ -77,7 +77,8 @@ const REPLY_TOOLS = new Set(["ask_user_question", "queue_add"]);
 
 /** 自动发的「用户消息」开头：定时任务唤醒（server/index.ts、agent-service 无头执行）、pi-queue 交任务和
  *  催办（pi-queue queue.ts）、pi-web-ui 自己的系统提醒（终端没输出、后台命令结束、用户停了 bash）。 */
-const AUTOMATED_PREFIXES = ["[Scheduled task", "[Queue]", "(System", "[定时任务", "（系统"];
+// role-messages: a message from another role (message_role) isn't the owner answering either.
+const AUTOMATED_PREFIXES = ["[Scheduled task", "[Queue]", "[Role message ", "(System", "[定时任务", "（系统"];
 
 /** 这条会话消息算不算「用户回话了」（tldr-answered）：
  *  - 用户发的消息（文字、只有图都算），自动发的不算（AUTOMATED_PREFIXES）；

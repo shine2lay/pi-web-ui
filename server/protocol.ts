@@ -85,6 +85,48 @@ export interface UiMessage {
 	 *  compaction — the card header renders "compacted from N tokens" like
 	 *  the pi CLI. Absent on older snapshots. */
 	tokensBefore?: number;
+	/** role-messages: this user message is a message from another role (message_role) that the server
+	 *  confirmed (its store has this id, for this chat, with exactly this text): shown as a labelled card. */
+	roleMessage?: UiRoleMessage;
+}
+
+/** role-messages: what a message between roles is. */
+export type UiRoleMessageKind = "question" | "request" | "fyi" | "reply";
+/** role-messages: where it is (waiting = not delivered yet; replied = delivered and answered). */
+export type UiRoleMessageState = "waiting" | "delivered" | "replied" | "failed";
+
+/** role-messages: the card for a role message in the chat that got it (sender stamped by the server). */
+export interface UiRoleMessage {
+	id: string;
+	/** The sending role's id and title. */
+	from: string;
+	fromTitle: string;
+	/** Which of its chats sent it: "home chat", "Queue #N" or chat "<title>". */
+	fromChat: string;
+	kind: UiRoleMessageKind;
+	/** kind reply: the message it answers. */
+	replyTo?: string;
+	/** The text as the sender wrote it (without the header and hint lines). */
+	text: string;
+}
+
+/** role-messages: one row of Settings -> Identities -> Role messages (newest first). */
+export interface UiRoleMessageRow {
+	id: string;
+	at: number;
+	from: string;
+	fromChat: string;
+	to: string;
+	/** The chat it went to ("home chat", "Queue #N", ...), once chosen. */
+	toChat?: string;
+	kind: UiRoleMessageKind;
+	replyTo?: string;
+	/** held = waiting while the owner has role messages paused. */
+	state: UiRoleMessageState | "held";
+	firstLine: string;
+	chain: number;
+	deliveredAt?: number;
+	error?: string;
 }
 
 export interface UiModelInfo {
@@ -1455,6 +1497,10 @@ export type ClientMessage =
 	| { type: "set_chat_identity"; conversationId?: string; sessionPath?: string; identity: string | null }
 	/** Ask for the identity list (answered with `identities`). */
 	| { type: "identities_get" }
+	/** role-messages: the last messages between roles and the pause switch (Settings -> Identities). */
+	| { type: "role_messages_get" }
+	/** role-messages: the owner pauses (held, not dropped) or resumes delivery. */
+	| { type: "role_messages_pause"; paused: boolean }
 	/** Read an identity's about.md / notebook.md (answered with `identity_file`). */
 	| { type: "identity_file_get"; id: string; file: IdentityFileName }
 	/** Save a whole about.md / notebook.md (answered with `identity_file_saved`). baseHash = the hash from
@@ -3690,6 +3736,9 @@ export type ServerMessage =
 	/** The identities (global). Pushed on attach, on request (identities_get) and after a save.
 	 *  problems = identity folders that couldn't be read (shown on the Settings page). */
 	| { type: "identities"; identities: UiIdentityInfo[]; problems: string[] }
+	/** role-messages: the last messages between roles (newest first) and whether delivery is paused.
+	 *  enabled false = this server has no role messages (another engine). */
+	| { type: "role_messages"; enabled: boolean; paused: boolean; messages: UiRoleMessageRow[] }
 	/** One identity file's text. hash goes back with identity_file_save; error = couldn't read it. */
 	| {
 			type: "identity_file";

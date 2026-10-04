@@ -4665,3 +4665,113 @@ baseHash}` -> `identity_note_saved {id, ref, ok, code?, problems?, hash?, delete
   pi-identity's `notes.ts` or `config.ts`, copy them over (the unit test says so when they differ).
 - If pi-identity's note format changes (header fields, ids, flags, removed.md lines), it changes here
   with the copy; `identity-memory.ts` only adds the tab's reads, saves and the owner's removed.md stamp.
+
+## role-messages
+
+**Status**: `local`
+**Baseline**: v0.96.1 (on top of `identity-notes`)
+
+**Why** (owner, 2026-10-03 and 2026-10-04, queue task #58; M8 step 1 of the Pi-in-Temper build plan):
+role chats (Product, Design, Architecture, Temper, QA, ...) should know which other roles exist and
+consult them or ask them to do work in their area, with one built-in chat-to-chat message tool that is
+queued and never interrupts. It replaces the stopgaps: peer hand-off by conversation id (ids change on
+reload), Design's own `tell_chat.mjs`, and the daily log as a back channel. The owner's choices: the
+receiving role does small things in its area at once, queues bigger work as a task in its own queue
+(approved as usual) and always replies once (done / queued as #N / not its area, and whose / needs the
+owner); a closed chat is woken so answers come within minutes; caps stop runaway back-and-forth. The
+who's-who list itself comes from pi-identity (its "other roles" section); pi-company's Team stays until M7.
+
+### Changes
+
+1. **The tool** (`server/role-message-tool.ts`, new; `tool-manager.ts` `MESSAGE_ROLE_TOOL_NAME`):
+   `message_role {to, kind: question | request | fyi | reply, text, replyTo?}`, registered next to
+   `claim_files` for every chat runtime but not in the tool catalog (no Settings switch). pi-identity
+   hides it in chats without a role (its role-only tools) and the server refuses a caller without a
+   role, a subagent, or a chat with no transcript. The sender is the server's: the calling chat's role
+   (id and title) and which chat it is ("home chat", "Queue #N" from the chat's own queue entries, or
+   `chat "<title>"`), never the model's text. Refusals are tool errors with the reason (and one
+   `[role-messages] refused ...` line in the server log: who, to whom, kind, why; never the text); a sent message
+   answers "Sent rm-... (fyi to ops). It arrives in its home chat after any running turn there." (+
+   "the answer comes back to this chat as a new message: don't wait for it" for questions and requests),
+   or "Held ..." while paused.
+2. **The engine** (`server/role-messages.ts`, new): the store `<data dir>/role-messages.json` (atomic
+   writes; the newest 1,000 kept, a waiting one never dropped; a store it can't read is kept aside as
+   `.bad-<time>`), states waiting / delivered / replied / failed ("held" in the list = waiting while
+   paused). Checks: kind, text 1-4,000 characters, unknown role (the answer lists the roles), a role
+   with no home chat, a home chat writing to its own role, replies (need `replyTo`, only to a question
+   or request sent to this role, to its sender, once), at most 20 messages an hour per sending role,
+   and a chain limit of 6 (a message sent by a chat whose last user message is a role message delivered
+   to it is one deeper); over a cap the model is told to ask the owner. Routing: to the role's home chat
+   (identity.json `homeChat`, stable across reloads); a reply to the exact chat that asked, unless that
+   transcript is gone or it is a queue task chat whose task is done or removed (its own entries and its
+   queue chat's), then to the asking role's home chat. Delivery: a loop (3 s, plus a kick on send and
+   resume) that waits while the target is working; exactly once across restarts because "delivered"
+   means the header line with the message's id is found in the target's transcript after the byte
+   offset noted just before the first send (a restart in between finds it and doesn't send again); a
+   send that got in but never landed is sent again after the chat sat idle 30 s, at most 5 times; a
+   question answered before its delivery was confirmed is still marked delivered, then "replied"; a
+   failed send backs off (15 s doubling to 5 min) and fails after a day (counted from the resume when
+   it was held).
+3. **Delivered as the chat's next turn** (`agent-service.ts`): `AgentService.sendRoleMessage` on its
+   own chain attaches the pseudo client `carry-on:role-messages`, which opens the chat (in the
+   background if it is closed, then lists it; an open chat is found in the shared conversation table,
+   no browser is moved) and `ClientSession.deliverRoleMessage` sends the text with `prompt(text,
+   undefined, true, ackId, { source: "extension" })`: queued as a follow-up, never a steer, and only when
+   the chat isn't working. The `source` path skips the owner-only side effects (the Telegram answer's
+   `lastPrompt`, clearing the owner's draft, the seen mark) and hands `source: "extension"` and
+   `expandPromptTemplates: false` to the SDK, so pi-queue's input hook doesn't take it for the owner's
+   answer in a stuck task chat. Why a user message and not a custom message: in SDK 1.0.1
+   `sendCustomMessage(..., { triggerTurn })` starts the run without `input` and `before_agent_start`,
+   so the turn would have no role section, memory or persona; `prompt()` runs them. The text is the
+   server's header line (`[Role message rm-1a2b3c4d from ops (ops/tooling), sent from its Queue #58 ·
+   fyi]`), the body, and a hint line (how to reply, or "no reply needed"). `tldr-lines.ts` counts
+   "[Role message " as automated, so it doesn't clear a needs-you line.
+4. **The card** (`fullAt` in `agent-service.ts`, `protocol.ts` `UiMessage.roleMessage`, `Message.tsx`
+   `RoleMessageCard`, styles `.rolemsg-*`): a user message whose first line is a role message header
+   is stamped only when the store has that id, delivered it to this chat, and the whole text's sha1 is
+   what the server sent; a header typed by hand, or a body claiming another sender, stays a plain
+   message. The stamped one shows as a card labelled "from ops (Queue #58) · fyi" with the server's
+   sender and the body (header and hint hidden), and can't be edited.
+5. **The owner's view and switch** (`index.ts`, `protocol.ts`, `identity-state.ts`, `use-chat.ts`,
+   `IdentitiesSettings.tsx`, `i18n.tsx`): Settings -> Identities -> Role messages: On / Paused (paused
+   holds messages, never drops them, and survives restarts; resuming delivers them) and the last 100
+   (time, from, to, kind, state, first line). WS `role_messages_get` and `role_messages_pause {paused}`
+   -> `role_messages {enabled, paused, messages}`, pushed to every socket on a change; the DSH engine
+   answers `enabled: false` and the section hides. pi-worktree's API guard knows both types (a chat
+   can't read every role's messages or lift a pause through curl or a script). Delivery starts after
+   the restart's carry-on and queue homes.
+6. `identity-config.ts` recopied from pi-identity (the roles template name and path, `message_role` in
+   `DEFAULT_ALWAYS_ALLOW`).
+
+### How it was checked
+
+- `tests/unit/role-messages.test.ts`: the header, id and chat labels; every refusal (kind, empty, too
+  long, unknown role with the list, no home chat, own home chat, the reply rules); 20 an hour per role
+  (another role still may, an hour later again) and the chain (6 ok, 7 refused); delivery only after
+  the running turn and once; a look with nothing waiting doesn't stop later looks (it once finished
+  before `running` was set and left it set); the card only for the same chat and the same text (not a typed header);
+  the handling depth; a question answered before it is seen in its chat ends "replied" with its
+  delivery time; a restart with the header already in the transcript doesn't send again; a send
+  that never landed is sent again and fails after 5; a failed send backs off and fails after a day;
+  paused messages held across a restart with a fresh day after the resume; a reply to the asking queue
+  chat, to the home chat once that task is done or that chat is gone; an unreadable store kept aside.
+- `tests/role-messages-test.mjs` (sealed, the real pi-identity, a scripted model, fake roles in a temp
+  HOME): a chat without a role isn't offered the tool (a forced call stores nothing); role chats get the
+  other roles (a role with no home chat marked) and the server log's roster line; unknown role and no
+  home chat refused; a closed home chat is woken and shows the card with the server's sender (a body
+  claiming another sender changes nothing); a busy chat gets the message only after its turn; a reply
+  reaches the exact queue task chat that asked, and the home chat once that task is done; pause holds
+  (across a restart) and resume delivers exactly once (another restart doesn't send again); the chain
+  limit and the hourly cap refuse.
+- check.sh, the build and the full sealed E2E suite; live, one FYI from a queue task chat to the ops
+  role's home chat.
+
+### When syncing
+
+- `identity-config.ts` stays pi-identity's copy (the unit test says so when they differ); pi-identity's
+  role-only tool name must stay `message_role` (`MESSAGE_ROLE_TOOL_NAME`).
+- If the SDK starts running `before_agent_start` for custom-message turns, delivery could become a
+  custom message; if `prompt()`'s `source` or `ClientSession.prompt`'s flow changes, keep the `source`
+  path (no steer, no owner side effects).
+- The card depends on `fullAt` serializing user messages; a new path that serializes messages without
+  it would show the header line as plain text (harmless).

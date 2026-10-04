@@ -17,8 +17,11 @@
  * every window gets only counts them: this page asks for them (identity_skills_get) when it opens and
  * whenever the list changes.
  *
- * State: identity-state.ts (the list, the open file, the open draft, the own skills); the texts being
- * typed live here.
+ * role-messages: below the list, "Role messages": the owner's switch (on / paused: held, not dropped)
+ * and the last 100 messages role chats sent each other (time, from, to, kind, state, first line).
+ *
+ * State: identity-state.ts (the list, the open file, the open draft, the own skills, the role
+ * messages); the texts being typed live here.
  */
 import { useEffect, useMemo, useState } from "react";
 import { FiUser } from "react-icons/fi";
@@ -31,13 +34,16 @@ import {
 	openIdentityFile,
 	requestIdentities,
 	requestOwnSkills,
+	requestRoleMessages,
 	saveOpenIdentityFile,
+	setRoleMessagesPaused,
 	sendIdentityDraftAction,
 	shortChatName,
 	useIdentityDraft,
 	useIdentityFile,
 	useIdentityList,
 	useOwnSkills,
+	useRoleMessages,
 	utf8Bytes,
 	type IdentityDraftState,
 	type IdentityFileState,
@@ -49,9 +55,26 @@ import type {
 	IdentitySaveError,
 	SessionSummary,
 	UiIdentityInfo,
+	UiRoleMessageRow,
 	UiRoleSkill,
 } from "../types";
 import { HintTip } from "./HintTip";
+
+/** role-messages: a row's state -> its word. */
+const ROLE_MESSAGE_STATE_KEY: Record<
+	UiRoleMessageRow["state"],
+	| "roleMessageStateWaiting"
+	| "roleMessageStateDelivered"
+	| "roleMessageStateReplied"
+	| "roleMessageStateFailed"
+	| "roleMessageStateHeld"
+> = {
+	waiting: "roleMessageStateWaiting",
+	delivered: "roleMessageStateDelivered",
+	replied: "roleMessageStateReplied",
+	failed: "roleMessageStateFailed",
+	held: "roleMessageStateHeld",
+};
 
 /** The file a button / editor opens (identity-config: the prompt's name comes from identity.json). */
 function fileLabel(file: IdentityFileName, identity?: UiIdentityInfo): string {
@@ -114,6 +137,7 @@ export function IdentitiesSettings({
 	const noSessions = !sessions || sessions.length === 0;
 	useEffect(() => {
 		requestIdentities();
+		requestRoleMessages();
 		if (noSessions) appSend({ type: "list_sessions" });
 		return () => {
 			closeIdentityFile();
@@ -182,8 +206,91 @@ export function IdentitiesSettings({
 					))}
 				</div>
 			)}
+			<RoleMessagesList />
 		</div>
 	);
+}
+
+/** role-messages: the owner's switch and the last messages between role chats (newest first). */
+function RoleMessagesList() {
+	const t = useT();
+	const { enabled, paused, messages, loaded } = useRoleMessages();
+	if (loaded && !enabled) return null;
+	return (
+		<div className="role-messages" data-paused={paused ? "1" : "0"}>
+			<div className="set-section-title role-messages-title">
+				{t("roleMessagesTitle")}
+				<HintTip text={t("roleMessagesHint")} />
+				{messages.length > 0 && <span className="set-count">{messages.length}</span>}
+			</div>
+			<div className="rolemsg-switch" role="group" aria-label={t("roleMessagesSwitch")}>
+				<span>{t("roleMessagesSwitch")}:</span>
+				<button
+					type="button"
+					className={`identity-btn rolemsg-on${!paused ? " on" : ""}`}
+					aria-pressed={!paused}
+					disabled={!loaded}
+					onClick={() => paused && setRoleMessagesPaused(false)}
+				>
+					{t("roleMessagesOn")}
+				</button>
+				<button
+					type="button"
+					className={`identity-btn rolemsg-pause${paused ? " on" : ""}`}
+					aria-pressed={paused}
+					disabled={!loaded}
+					onClick={() => !paused && setRoleMessagesPaused(true)}
+				>
+					{t("roleMessagesPause")}
+				</button>
+			</div>
+			{paused && <p className="set-hint rolemsg-paused-note">{t("roleMessagesPausedNote")}</p>}
+			{!loaded ? (
+				<p className="set-empty">{t("loading")}</p>
+			) : messages.length === 0 ? (
+				<p className="set-empty">{t("roleMessagesEmpty")}</p>
+			) : (
+				<table className="rolemsg-list">
+					<thead>
+						<tr>
+							<th>{t("roleMessagesTime")}</th>
+							<th>{t("roleMessagesFrom")}</th>
+							<th>{t("roleMessagesTo")}</th>
+							<th>{t("roleMessagesKind")}</th>
+							<th>{t("roleMessagesState")}</th>
+							<th>{t("roleMessagesText")}</th>
+						</tr>
+					</thead>
+					<tbody>
+						{messages.map((m) => (
+							<tr key={m.id} data-id={m.id} data-state={m.state}>
+								<td title={new Date(m.at).toLocaleString()}>{shortTime(m.at)}</td>
+								<td>
+									{m.from} ({m.fromChat})
+								</td>
+								<td>{m.toChat ? `${m.to} (${m.toChat})` : m.to}</td>
+								<td title={m.replyTo ? t("roleMessageReplyKind", { id: m.replyTo }) : undefined}>{m.kind}</td>
+								<td className={`rolemsg-state-${m.state}`} title={m.error}>
+									{t(ROLE_MESSAGE_STATE_KEY[m.state])}
+								</td>
+								<td className="rolemsg-first" title={`${m.id}: ${m.firstLine}`}>
+									{m.firstLine}
+								</td>
+							</tr>
+						))}
+					</tbody>
+				</table>
+			)}
+		</div>
+	);
+}
+
+/** role-messages: "14:05" today, "Oct 3 14:05" before. */
+function shortTime(at: number): string {
+	const d = new Date(at);
+	const hm = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+	if (d.toDateString() === new Date().toDateString()) return hm;
+	return `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })} ${hm}`;
 }
 
 function IdentityRow({

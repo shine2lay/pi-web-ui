@@ -2257,6 +2257,90 @@ button.session-item.elsewhere-item.confirm {
 	margin-top: 0;
 }
 
+/* ---------------------------------------- role message card (role-messages) */
+
+.rolemsg-card {
+	margin: 4px 0;
+	border: 1px solid var(--border);
+	border-left: 3px solid var(--accent, var(--border));
+	border-radius: 8px;
+	background: var(--card-bg, var(--bg-elev2));
+	overflow: hidden;
+}
+
+.rolemsg-head {
+	cursor: default;
+	flex-wrap: wrap;
+	row-gap: 2px;
+}
+
+.rolemsg-title {
+	font-family: var(--mono);
+	font-weight: 600;
+	color: var(--text);
+	font-size: 12.5px;
+}
+
+.rolemsg-from {
+	flex: 1;
+	min-width: 0;
+	color: var(--text-faint);
+	font-size: 11.5px;
+}
+
+.rolemsg-body {
+	padding: 8px 14px 10px;
+	border-top: 1px solid var(--border-soft);
+}
+
+.rolemsg-body .markdown > :first-child {
+	margin-top: 0;
+}
+
+/* Settings > Identities > Role messages */
+
+.rolemsg-list {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 12px;
+}
+
+.rolemsg-list th,
+.rolemsg-list td {
+	text-align: left;
+	padding: 4px 6px;
+	border-bottom: 1px solid var(--border-soft);
+	vertical-align: top;
+}
+
+.rolemsg-list th {
+	color: var(--text-faint);
+	font-weight: 500;
+}
+
+.rolemsg-list td.rolemsg-first {
+	max-width: 320px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.rolemsg-state-failed {
+	color: var(--red-text);
+}
+
+.rolemsg-state-held,
+.rolemsg-state-waiting {
+	color: var(--amber-text);
+}
+
+.rolemsg-switch {
+	display: flex;
+	gap: 6px;
+	align-items: center;
+	margin: 6px 0 8px;
+}
+
 /* ------------------------------------------------------------ view switch */
 
 .view-pane {

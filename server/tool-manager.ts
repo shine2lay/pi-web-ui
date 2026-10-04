@@ -74,6 +74,10 @@ export const PRESENT_FILES_TOOL_NAME = "present_files";
 export const CLAIM_FILES_TOOL_NAME = "claim_files";
 /** 主动上下文压缩工具（定义见 compact-context-tool.ts）。 */
 export const COMPACT_CONTEXT_TOOL_NAME = "compact_context";
+/** role-messages: a role chat messages another role (definition in role-message-tool.ts). Not in the
+ *  catalog: it is always registered; pi-identity offers it only in chats that have a role, and the tool
+ *  itself refuses a chat without one. */
+export const MESSAGE_ROLE_TOOL_NAME = "message_role";
 /** 高可靠结构化补丁工具（定义见 patch-tool.ts）：基于内容哈希锚点与语法块的行补丁工具。 */
 export const PATCH_TOOL_NAME = "patch";
 /** 原生语言服务器工具（定义见 lsp-tool.ts）：代码定义跳转、引用查询、类型悬停与诊断。 */

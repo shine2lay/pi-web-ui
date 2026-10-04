@@ -99,6 +99,7 @@ import type {
 	CommandDef,
 	PromptAttachment,
 	ServerMessage,
+	UiRoleMessageRow,
 	UiServiceInfo,
 	UiSubagentTemplate,
 } from "./protocol.js";
@@ -1372,6 +1373,14 @@ export interface EngineService {
 	installQueueHost?(): void;
 	/** stall-watch (pi engine): after the carry-on, open the queue chats whose tasks run in chats of their own. */
 	reopenQueueHomes?(): Promise<void>;
+	/** role-messages (pi engine): start delivering messages between role chats (after the carry-on). */
+	startRoleMessages?(): void;
+	/** role-messages (pi engine): the last messages between roles and the pause switch. */
+	roleMessagesView?(): { enabled: boolean; paused: boolean; messages: UiRoleMessageRow[] };
+	/** role-messages (pi engine): the owner pauses (held, not dropped) or resumes delivery. */
+	setRoleMessagesPaused?(paused: boolean): void;
+	/** role-messages (pi engine): set by index.ts; the list changed. */
+	onRoleMessagesChanged?: (() => void) | null;
 	noteSocketOpen(): void;
 	noteSocketClose(): void;
 	isQuiesced(): boolean;
@@ -1886,6 +1895,29 @@ function pushIdentities(): void {
 		}
 	} catch {
 		/* 读不了身份表不影响别的 */
+	}
+}
+
+/** role-messages: Settings -> Identities -> Role messages (the last 100 and the pause switch). */
+function roleMessagesMessage(): ServerMessage {
+	const view = service.roleMessagesView?.() ?? { enabled: false, paused: false, messages: [] };
+	return { type: "role_messages", ...view };
+}
+
+/** role-messages: the list changed: every window gets it. */
+function pushRoleMessages(): void {
+	try {
+		const payload = JSON.stringify(roleMessagesMessage());
+		for (const client of wss.clients) {
+			if (client.readyState !== WebSocket.OPEN) continue;
+			try {
+				client.send(payload);
+			} catch {
+				/* a dead socket: cleaned up elsewhere */
+			}
+		}
+	} catch {
+		/* the list only */
 	}
 }
 
@@ -2448,6 +2480,15 @@ wss.on("connection", (ws) => {
 			case "identities_get":
 				// identities: Settings -> Identities opened (or asked again).
 				send(identitiesMessage(true));
+				break;
+			case "role_messages_get":
+				// role-messages: Settings -> Identities -> Role messages opened.
+				send(roleMessagesMessage());
+				break;
+			case "role_messages_pause":
+				// role-messages: the owner's switch (every window gets the new state through the change hook).
+				if (typeof msg.paused === "boolean") service.setRoleMessagesPaused?.(msg.paused);
+				send(roleMessagesMessage());
 				break;
 			case "subs_limits_get":
 				// subs-limits-box: the Limits box (and every reconnect) asks for the readings.
@@ -3849,6 +3890,8 @@ try {
 
 // queue-lanes: before any chat loads pi-queue, so it finds the host from the start.
 service.installQueueHost?.();
+// role-messages: Settings -> Identities -> Role messages follows the store.
+service.onRoleMessagesChanged = () => pushRoleMessages();
 // subs-limits-box: the channel pi-multi-pass joins when a chat loads it (and the file, until then).
 subsLimits.start();
 
@@ -3864,6 +3907,8 @@ httpServer.listen(PORT, HOST, () => {
 				await service.reopenQueueHomes?.().catch((err: Error) => {
 					console.error(`[stall-watch] couldn't open the queue chats: ${err.message}`);
 				});
+				// role-messages: then the messages between role chats that are still waiting.
+				service.startRoleMessages?.();
 			})(),
 		1500,
 	);

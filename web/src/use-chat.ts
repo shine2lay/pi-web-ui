@@ -63,6 +63,7 @@ import {
 	receiveOwnSkills,
 	receiveIdentityFile,
 	receiveIdentitySaved,
+	receiveRoleMessages,
 } from "./identity-state";
 import {
 	NOTEBOOK_TAB_REF,
@@ -2057,6 +2058,10 @@ export function useChat() {
 				// identities: the identity list and the Settings editor (identity-state.ts).
 				case "identities":
 					receiveIdentities(msg);
+					break;
+				case "role_messages":
+					// role-messages: Settings -> Identities -> Role messages.
+					receiveRoleMessages(msg);
 					break;
 				case "identity_file":
 					receiveIdentityFile(msg);

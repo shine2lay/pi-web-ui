@@ -1816,6 +1816,32 @@ export const en = {
 	identitySaveUnknown: "Not saved: this identity is gone.",
 	identitySaveIo: "Not saved: the file couldn't be written.",
 	identityFileError: "Couldn't read the file: {error}",
+	/* role-messages: messages between role chats (message_role): the card in the chat, Settings > Identities */
+	roleMessageLabel: "from {from} ({chat}) \u00b7 {kind}",
+	roleMessageReplyKind: "reply to {id}",
+	roleMessageCardTitle: "Role message {id}",
+	roleMessageCardFrom: "From {title} ({from}), sent from its {chat}. The server set the sender.",
+	roleMessagesTitle: "Role messages",
+	roleMessagesHint:
+		"What role chats sent each other with message_role (the last 100). The server sets who sent each one; a message waits for any running turn and wakes a closed chat.",
+	roleMessagesSwitch: "Role messages",
+	roleMessagesOn: "On",
+	roleMessagesPause: "Paused",
+	roleMessagesPausedNote:
+		"Paused: new and waiting messages are held, not dropped. They go out when you turn them back on.",
+	roleMessagesEmpty: "No role messages yet.",
+	roleMessagesOff: "This server has no role messages.",
+	roleMessagesTime: "Time",
+	roleMessagesFrom: "From",
+	roleMessagesTo: "To",
+	roleMessagesKind: "Kind",
+	roleMessagesState: "State",
+	roleMessagesText: "Message",
+	roleMessageStateWaiting: "waiting",
+	roleMessageStateDelivered: "delivered",
+	roleMessageStateReplied: "replied",
+	roleMessageStateFailed: "failed",
+	roleMessageStateHeld: "held",
 	/* identity-config: a role's prompt, skills, tool limits and drafts (Settings > Identities) */
 	identitiesRoleNote:
 		"A role's prompt, skills and settings (identity.json) reach its chats at their next start or compaction; tool limits at their next start. Only you can change them, here or by hand: no chat can, not even the role's own.",

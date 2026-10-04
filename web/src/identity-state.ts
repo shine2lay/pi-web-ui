@@ -13,6 +13,8 @@
  *    a draft closes the file editor and the other way round.
  *  - identity-config: each role's own skills (`identity_skills`, which Settings -> Identities asks for):
  *    they live in the role's private folder, so the identity list every window gets only counts them.
+ *  - role-messages: the last messages between role chats and the owner's pause switch (`role_messages`,
+ *    which Settings -> Identities asks for; pushed to every window when it changes).
  *
  * Same pattern as tool-info-state.ts: module-level `cached` values + listeners +
  * `useSyncExternalStore`; the getters return stable references between changes.
@@ -25,6 +27,7 @@ import type {
 	IdentitySaveError,
 	ServerMessage,
 	UiIdentityInfo,
+	UiRoleMessageRow,
 	UiRoleSkill,
 } from "./types";
 
@@ -34,6 +37,18 @@ export type IdentitySavedPayload = Extract<ServerMessage, { type: "identity_file
 export type IdentityDraftPayload = Extract<ServerMessage, { type: "identity_draft" }>;
 export type IdentityDraftDonePayload = Extract<ServerMessage, { type: "identity_draft_done" }>;
 export type IdentitySkillsPayload = Extract<ServerMessage, { type: "identity_skills" }>;
+export type RoleMessagesPayload = Extract<ServerMessage, { type: "role_messages" }>;
+
+/** role-messages: the list in Settings -> Identities. loaded = the server has answered at least once. */
+export interface RoleMessagesState {
+	enabled: boolean;
+	paused: boolean;
+	messages: UiRoleMessageRow[];
+	loaded: boolean;
+}
+
+const EMPTY_ROLE_MESSAGES: RoleMessagesState = { enabled: false, paused: false, messages: [], loaded: false };
+let roleMessages: RoleMessagesState = EMPTY_ROLE_MESSAGES;
 
 /** The identity list. loaded = the server has sent it at least once. */
 export interface IdentityListState {
@@ -123,6 +138,36 @@ export function receiveOwnSkills(payload: IdentitySkillsPayload): void {
 	for (const [id, skills] of Object.entries(got)) if (Array.isArray(skills)) next[id] = skills;
 	ownSkills = next;
 	notify();
+}
+
+/** role-messages: ask for the list (Settings -> Identities opened). */
+export function requestRoleMessages(): void {
+	appSend({ type: "role_messages_get" });
+}
+
+/** role-messages: the owner's switch (the answer comes back as `role_messages`). */
+export function setRoleMessagesPaused(paused: boolean): void {
+	appSend({ type: "role_messages_pause", paused });
+}
+
+/** role-messages: `role_messages` from the server (use-chat). */
+export function receiveRoleMessages(payload: RoleMessagesPayload): void {
+	roleMessages = {
+		enabled: payload.enabled === true,
+		paused: payload.paused === true,
+		messages: Array.isArray(payload.messages) ? payload.messages : [],
+		loaded: true,
+	};
+	notify();
+}
+
+export function getRoleMessages(): RoleMessagesState {
+	return roleMessages;
+}
+
+/** role-messages: the list and the switch (re-renders when they change). */
+export function useRoleMessages(): RoleMessagesState {
+	return useSyncExternalStore(subscribeIdentities, getRoleMessages, getRoleMessages);
 }
 
 /** Open about.md / notebook.md in the editor: shows "loading" and asks the server for the text. */
@@ -293,6 +338,7 @@ export function resetIdentityState(): void {
 	draft = null;
 	pendingDraft = null;
 	ownSkills = null;
+	roleMessages = EMPTY_ROLE_MESSAGES;
 }
 
 /** The identity list (re-renders when it changes). */
