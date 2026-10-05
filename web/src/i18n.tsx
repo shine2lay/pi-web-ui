@@ -285,6 +285,7 @@ export const en = {
 	taskQueueWaitFailed: "Stopped waiting; it will ask you once the task in progress is done:",
 	taskQueueDone: "Done",
 	taskQueueNeedsYou: "Needs you",
+	taskQueueAskingMain: "Asking the main chat",
 	taskQueueAnswerHint: "Answer in the chat and it carries on.",
 	taskQueueAnswerInChat: "Answer in its own chat and it carries on.",
 	taskQueueAnswerPlaceholder: "Or type your answer",

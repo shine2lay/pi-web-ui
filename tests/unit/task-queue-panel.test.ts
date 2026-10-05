@@ -253,6 +253,45 @@ describe("TaskQueuePanel (lanes)", () => {
 		expect(render(laneQueue(), { onCommand: noop })).not.toContain("task-queue-open-chat");
 	});
 
+	// queue-main-chat: the task asked its main chat: one plain line and its chat's link; nothing for the user.
+	it("shows a task asking its main chat plainly, with its chat's link and no answer buttons", () => {
+		const asking = task(1, "asking", {
+			lane: true,
+			touches: ["pi-web-ui repo"],
+			question: "Which port?",
+			choices: ["8080", "9090"],
+			startedAt: 10,
+			chat: { file: "/s/one.jsonl", title: "Queue #1: Task 1" },
+		});
+		const queue = q([asking, task(3, "ready")], {
+			running: true,
+			lanes: [{ n: 1, touches: ["pi-web-ui repo"], alone: false, taskIds: [1, 3] }],
+		});
+		const html = render(queue, { onCommand: noop, onOpenChat: noop, onAnswer: noop });
+		expect(taskIds(html, "lane")).toEqual([1]);
+		expect(html).toContain('class="task-queue-task lane asking"');
+		expect(html).toContain('class="task-queue-asking"');
+		expect(html).toContain("Asking the main chat");
+		expect(html).toContain('title="Queue #1: Task 1"');
+		expect(html).not.toContain("needs-you");
+		expect(html).not.toContain("task-queue-badge");
+		expect(html).not.toContain("task-queue-answer");
+		expect(html).not.toContain("task-queue-choice");
+		expect(taskQueueStatusKey(queue, taskQueueSections(queue))).toBe("taskQueueStatusLane");
+		// In the task's own chat it is the current task, shown the same way.
+		const own = render(
+			q([task(5, "asking", { question: "Which port?", choices: ["8080", "9090"], startedAt: 1 })], {
+				running: true,
+				from: { file: "/s/queue.jsonl", title: "tooling" },
+			}),
+			{ onCommand: noop, onOpenChat: noop, onAnswer: noop },
+		);
+		expect(taskIds(own, "current")).toEqual([5]);
+		expect(own).toContain("Asking the main chat");
+		expect(own).not.toContain("needs-you");
+		expect(own).not.toContain("task-queue-answer");
+	});
+
 	it("shows the lanes-at-once setting, with buttons only for the queue's own controls", () => {
 		const html = render(laneQueue(), { onCommand: noop });
 		expect(html).toContain('class="task-queue-lanes-at-once"');

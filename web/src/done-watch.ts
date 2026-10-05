@@ -12,3 +12,16 @@
 export function cueConversations<T extends { isSubagent?: boolean; live?: boolean }>(list: readonly T[]): T[] {
 	return list.filter((c) => !c.isSubagent && c.live !== false);
 }
+
+/**
+ * queue-main-chat: the "done" cues left once the chats whose task asks its main chat are taken out (the
+ * run stopped to wait for the main chat's answer; nothing says the user is needed). The list is read when
+ * the cue goes off (done-settle waits a moment first), so a question asked as the run ended counts too.
+ */
+export function withoutAskingChats<T extends { id: string }>(
+	cues: readonly T[],
+	list: readonly { id: string; queueAsking?: boolean }[] | undefined,
+): T[] {
+	const asking = new Set((list ?? []).filter((c) => c.queueAsking).map((c) => c.id));
+	return cues.filter((c) => !asking.has(c.id));
+}

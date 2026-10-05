@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cueConversations } from "../../web/src/done-watch.js";
+import { cueConversations, withoutAskingChats } from "../../web/src/done-watch.js";
 import { diffStreamingCues } from "../../web/src/streaming-cues.js";
 
 type Row = { id: string; title?: string; isStreaming?: boolean; isSubagent?: boolean; live?: boolean };
@@ -8,6 +8,17 @@ type Row = { id: string; title?: string; isStreaming?: boolean; isSubagent?: boo
 function step(prev: Map<string, boolean> | null, activeId: string, activeStreaming: boolean, rows: Row[]) {
 	return diffStreamingCues(prev, activeId, activeStreaming, cueConversations(rows), activeId);
 }
+
+/** queue-main-chat: a task chat that stopped to ask its main chat makes no "done" cue. */
+describe("withoutAskingChats", () => {
+	it("drops the chats whose task asks its main chat, as the list says when the cue goes off", () => {
+		const cues = [{ id: "a" }, { id: "task" }, { id: "b" }];
+		const list = [{ id: "a" }, { id: "task", queueAsking: true }, { id: "b", queueAsking: false }];
+		expect(withoutAskingChats(cues, list).map((c) => c.id)).toEqual(["a", "b"]);
+		expect(withoutAskingChats(cues, undefined)).toEqual(cues);
+		expect(withoutAskingChats([{ id: "task" }], list)).toEqual([]);
+	});
+});
 
 describe("cueConversations (done-any-chat)", () => {
 	it("keeps ordinary chats and drops subagents and history rows", () => {

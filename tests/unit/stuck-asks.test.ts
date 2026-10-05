@@ -104,5 +104,53 @@ describe("stuckSig / stuckGoneReason", () => {
 		expect(stuckGoneReason("done").reason).toBe("the task is done");
 		expect(stuckGoneReason("stuck").reason).toBe("it asks something else now");
 		expect(stuckGoneReason("ready").reason).toBe("the task moved on");
+		// queue-main-chat: back at work with its main chat's answer; asking its main chat again.
+		expect(stuckGoneReason("working", true)).toEqual({ answered: false, reason: "its main chat answered it" });
+		expect(stuckGoneReason("waiting", true).answered).toBe(true);
+		expect(stuckGoneReason("asking")).toEqual({ answered: false, reason: "it asks something else now" });
+	});
+});
+
+/** queue-main-chat: a task asking its main chat doesn't wait on the user. */
+describe("wantedStuckAsks: a task asking its main chat", () => {
+	it("makes no ask, and its chat is listed as asking (the speaking chat decides)", () => {
+		const laneCopy = task(4, {
+			lane: true,
+			status: "asking",
+			question: "Which port?",
+			choices: ["8080", "9090"],
+			chat: { file: "/t4.jsonl", title: "Lane chat" },
+		});
+		const onlyQueue = wantedStuckAsks([src("/q.jsonl", [laneCopy])]);
+		expect(onlyQueue.wanted.size).toBe(0);
+		expect(onlyQueue.seen.get("/t4.jsonl#4")).toBe("asking");
+		expect([...onlyQueue.asking]).toEqual(["/t4.jsonl"]);
+		// The task's own chat is open and says it asks: same answer from its own record.
+		const own = wantedStuckAsks([src("/q.jsonl", [laneCopy]), src("/t4.jsonl", [task(4, { status: "asking" })])]);
+		expect([...own.asking]).toEqual(["/t4.jsonl"]);
+		// Its own chat is back at work (the queue chat's copy lags): not asking any more.
+		const back = wantedStuckAsks([
+			src("/q.jsonl", [laneCopy]),
+			src("/t4.jsonl", [task(4, { status: "working", mainAnswered: true })]),
+		]);
+		expect(back.asking.size).toBe(0);
+		expect([...back.mainAnswered]).toEqual(["/t4.jsonl#4"]);
+	});
+
+	it("a question passed on to the user is an ask again; the main chat's later answer is told apart", () => {
+		const stuck = task(4, {
+			lane: true,
+			status: "stuck",
+			question: "Port 8080 or 9090?",
+			choices: ["8080 (recommended)", "9090"],
+			chat: { file: "/t4.jsonl", title: "Lane chat" },
+		});
+		const passed = wantedStuckAsks([src("/q.jsonl", [stuck])]);
+		expect(passed.wanted.get("/t4.jsonl#4")).toMatchObject({ question: "Port 8080 or 9090?" });
+		expect(passed.asking.size).toBe(0);
+		const owner = wantedStuckAsks([src("/q.jsonl", [{ ...stuck, status: "working" }])]);
+		expect(owner.mainAnswered.size).toBe(0);
+		const main = wantedStuckAsks([src("/q.jsonl", [{ ...stuck, status: "working", mainAnswered: true }])]);
+		expect([...main.mainAnswered]).toEqual(["/t4.jsonl#4"]);
 	});
 });

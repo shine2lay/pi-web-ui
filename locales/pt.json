@@ -391,6 +391,7 @@
 		"taskQueueWaitFailed": "Parou de esperar; vai te perguntar quando a tarefa atual terminar:",
 		"taskQueueDone": "Feitas",
 		"taskQueueNeedsYou": "Precisa de você",
+		"taskQueueAskingMain": "Perguntando ao chat principal",
 		"taskQueueAnswerHint": "Responda no chat e ela continua.",
 		"taskQueueAnswerInChat": "Responda no chat dela e ela continua.",
 		"taskQueueAnswerPlaceholder": "Ou digite sua resposta",

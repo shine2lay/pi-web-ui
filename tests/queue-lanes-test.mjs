@@ -5,8 +5,9 @@
  * waits on a gate the test opens, so the test decides when each task finishes.
  *  - the queue's chat plans three tasks: #1 touches repo-a, #2 touches repo-a and service-x (so it
  *    shares #1's lane), #3 touches repo-b (a lane of its own);
- *  - task chats: #1 and #2 call queue_done, #3 calls queue_stuck (with 2 choices); the user's answer in #3's chat
- *    makes it call queue_done.
+ *  - task chats: #1 and #2 call queue_done, #3 calls queue_stuck (with 2 choices); its question goes to the
+ *    queue's chat first (queue-main-chat), which passes it on to the user as it is; the user's answer in
+ *    #3's chat makes it call queue_done.
  * Checks:
  *  - the approval dialog says which queued task a plan shares a lane with;
  *  - the Queue tab shows the lanes and the lanes-at-once setting (2);
@@ -112,12 +113,16 @@ for (const id of [1, 2, 3]) {
 }
 /** When each task chat's first request arrived, and what it carried. */
 const kickoff = new Map();
+/** Task questions the queue's chat got first (queue-main-chat), by task number. */
+const cards = [];
 let queueAddOffered = false;
 /** User messages the mock had no script for (a reminder, a "continue", …): should stay empty. */
 const unexpected = [];
 
 /** pi-web-ui adds reminders of its own as user messages (e.g. other runs going on); they aren't the user's. */
 const isAppReminder = (text) => /^\(System reminder/.test(text);
+/** A note the queue posts in its chat when a task's state changed ("[Queue] Task #1 (<title>) needs the user …"). */
+const isQueueNote = (text) => /^\[Queue\] Task #\d+ \(/.test(text);
 /** What an unscripted message was, for the failure note (never its text). */
 const kindOf = (text) => (text.startsWith("[Queue]") ? "a queue reminder" : "a user message");
 
@@ -129,12 +134,15 @@ const mock = await startMockModel(async ({ payload, sideRequest }) => {
 		if (m.role === "user" && !isAppReminder(textOf(m))) users.push(i);
 	});
 	const first = users[0] ?? -1;
-	const last = users.at(-1) ?? -1;
 	const firstUser = first >= 0 ? textOf(history[first]) : "";
+	const kick = firstUser.match(/^\[Queue\] Task #(\d+): /);
+	// In the queue's chat, its notes can land in the middle of a turn (after a tool result: passing a task's
+	// question on makes the task need the user); that turn is still about the card (or the plan) before them.
+	const anchors = kick ? users : users.filter((i) => !isQueueNote(textOf(history[i])));
+	const last = anchors.at(-1) ?? -1;
 	const lastUser = last >= 0 ? textOf(history[last]) : "";
 	const results = history.slice(last + 1).filter((m) => m.role === "tool").length;
 	const names = (payload.tools ?? []).map((t) => t.function?.name ?? t.name);
-	const kick = firstUser.match(/^\[Queue\] Task #(\d+): /);
 	if (process.env.QUEUE_DEBUG) {
 		console.log(`    [mock] ${kick ? `task #${kick[1]}` : "queue chat"} step ${results}`);
 	}
@@ -147,6 +155,15 @@ const mock = await startMockModel(async ({ payload, sideRequest }) => {
 				return { tool: "queue_add", args: PLANS[results] };
 			}
 			return PLANNED;
+		}
+		const card = /^\[Queue\] Task #(\d+) asks\b/.exec(lastUser);
+		if (card) {
+			// A task's question comes here first (its main chat): pass it on to the user as it is.
+			if (results === 0) {
+				cards.push(Number(card[1]));
+				return { tool: "queue_reply", args: { id: Number(card[1]), question: STUCK_QUESTION, choices: STUCK_CHOICES } };
+			}
+			return "LANES-PASSED it's the user's call.";
 		}
 		unexpected.push(`queue chat: ${kindOf(lastUser)}`);
 		return "LANES-OTHER ok.";
@@ -441,6 +458,7 @@ try {
 		}, 30000),
 		await show(A),
 	);
+	check("its question went to the queue's chat first, which passed it on", same(cards, [3]), JSON.stringify(cards));
 	a = await view(A);
 	check(
 		"it says the answer goes into the task's own chat",

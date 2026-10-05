@@ -3011,6 +3011,10 @@ button.session-item.elsewhere-item.confirm {
 	flex-direction: column;
 	gap: 3px;
 }
+/* queue-main-chat: the task asked its main chat: one plain line, nothing for the user to do. */
+.task-queue-asking {
+	margin-top: 2px;
+}
 .task-queue-badge {
 	align-self: flex-start;
 	padding: 0 5px;

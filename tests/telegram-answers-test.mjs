@@ -16,8 +16,9 @@
  *     browser shrinks its message to one line;
  *  4. the queue: a plan's approval pop-up (its markdown shown as formatting) is answered on
  *     Telegram; the task's own chat (no browser on it) asks permission, then gets stuck with
- *     choices ("Task #1 needs you"); both are answered on Telegram; the answer goes into the task's
- *     chat and the task finishes;
+ *     choices; its question goes to the queue's chat first (queue-main-chat), which passes it on
+ *     as it is ("Task #1 needs you"); both are answered on Telegram; the answer goes into the
+ *     task's chat and the task finishes;
  *  5. no browser open at all: a question outlives the 30 s no-browser wait and, like the permission
  *     prompt after it, is answered on Telegram;
  *  6. the bot token is in no file the server wrote.
@@ -284,14 +285,17 @@ async function modelReply({ payload, sideRequest }) {
 		if (m.role === "user" && !/^\(System reminder/.test(textOf(m))) users.push(i);
 	});
 	const first = users[0] ?? -1;
-	const last = users.at(-1) ?? -1;
+	const kick = first >= 0 ? textOf(history[first]).match(/^\[Queue\] Task #(\d+): ([^\n]+)/) : null;
+	// In the queue's chat, its notes ("[Queue] Task #1 (<title>) needs the user …") can land in the middle of
+	// a turn (passing a task's question on makes the task need the user); that turn is still about the card.
+	const anchors = kick ? users : users.filter((i) => !/^\[Queue\] Task #\d+ \(/.test(textOf(history[i])));
+	const last = anchors.at(-1) ?? -1;
 	const userText = last >= 0 ? textOf(history[last]) : "";
 	const results = history
 		.slice(last + 1)
 		.filter((m) => m.role === "tool")
 		.map(textOf);
 	const step = results.length;
-	const kick = first >= 0 ? textOf(history[first]).match(/^\[Queue\] Task #(\d+): ([^\n]+)/) : null;
 	let m;
 	if ((m = /^TG-ASK (\d+)/.exec(userText))) {
 		if (step === 0)
@@ -322,6 +326,15 @@ async function modelReply({ payload, sideRequest }) {
 		if (step === 0) return { tool: "queue_add", args: PLAN };
 		seen.plan = results[0];
 		return "TG-PLANNED";
+	}
+	if (!kick && (m = /^\[Queue\] Task #(\d+) asks\b/.exec(userText))) {
+		// The task's question comes to the queue's chat first (its main chat): pass it on as it is.
+		if (step === 0) {
+			seen.card = (seen.card ?? 0) + 1;
+			return { tool: "queue_reply", args: { id: Number(m[1]), question: STUCK_QUESTION, choices: CHOICES } };
+		}
+		seen.passed = results[0];
+		return "TG-PASSED";
 	}
 	if (kick && last === first) {
 		// The task's own chat: ask permission, then get stuck with choices.
@@ -688,6 +701,11 @@ try {
 	check("Approve runs the task's command", await waitFor(() => /TG-RAN-201/.test(seen.taskRun ?? "")), seen.taskRun);
 	const m8 = await tg.waitMessage((m) => m.text.includes("needs you") && m.text.includes(STUCK_QUESTION), 30_000);
 	if (!m8) throw new Error("no Telegram message for the stuck task");
+	check(
+		"its question went to the queue's chat first, which passed it on",
+		seen.card === 1 && /^Passed on: /.test(seen.passed ?? ""),
+		`cards: ${seen.card ?? 0}`,
+	);
 	check(
 		"the stuck task asks on Telegram with its choices and a typed answer",
 		same(labels(m8), [...CHOICES, TYPE_ANSWER]),

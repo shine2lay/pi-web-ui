@@ -290,7 +290,9 @@ export interface UiTaskQueueTask {
 	approval?: "dialog" | "auto";
 	/** pi-queue 的任务编号（#n），一条对话里从 1 往上数。 */
 	id: number;
-	status: "ready" | "working" | "stuck" | "waiting" | "done";
+	/** queue-main-chat: asking = a task in a chat of its own asked its main chat (the chat whose queue holds
+	 *  it); the main chat answers it or passes it on (stuck). Nothing says the user is needed meanwhile. */
+	status: "ready" | "working" | "asking" | "stuck" | "waiting" | "done";
 	plan: UiTaskQueuePlan;
 	profile?: UiTaskProfile;
 	/** Frozen dispatch choices, completed with app-selected values before the first request. */
@@ -300,6 +302,9 @@ export interface UiTaskQueueTask {
 	question?: string;
 	/** telegram-answers: stuck: answers the user can pick with one tap (they can always type their own). */
 	choices?: string[];
+	/** queue-main-chat: working again with its main chat's answer to its last question (a Telegram ask for
+	 *  that question then goes away saying so). */
+	mainAnswered?: boolean;
 	/** waiting：在等什么。 */
 	wait?: UiTaskQueueWait;
 	/** done：做了什么（agent 的总结）。 */
@@ -2767,6 +2772,9 @@ export interface ConversationSummary {
 	live?: boolean;
 	/** 本轮跑完但用户还没看过（左栏绿色常亮 = 轮到你了）。打开该对话即清除。 */
 	waiting?: boolean;
+	/** queue-main-chat: a task chat whose task asks its main chat now: nothing says the user is needed (no
+	 *  green light, and its run ending makes no "done" cue). */
+	queueAsking?: boolean;
 	/** 「最近对话」列内的**稳定排序键**（转录最后活动时间 ms，缺省时用对话创建时间）。
 	 *  只有**真的聊了**才变 —— 光是点开看一眼（常驻行变成活行）不会让行换位置。
 	 *  （flat-recent-chats 之后左栏不再用它排序；保留给其他调用方。） */

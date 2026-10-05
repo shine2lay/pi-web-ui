@@ -391,6 +391,7 @@
 		"taskQueueWaitFailed": "더 기다리지 않아요. 지금 작업이 끝나면 물어볼게요:",
 		"taskQueueDone": "완료",
 		"taskQueueNeedsYou": "확인 필요",
+		"taskQueueAskingMain": "메인 채팅에 묻는 중",
 		"taskQueueAnswerHint": "채팅에서 답하면 이어서 합니다.",
 		"taskQueueAnswerInChat": "그 작업의 채팅에서 답하면 이어서 합니다.",
 		"taskQueueAnswerPlaceholder": "또는 답을 입력하세요",

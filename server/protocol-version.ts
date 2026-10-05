@@ -58,4 +58,7 @@
 //     currentAbout, identity_draft_save / _accept carry about, and a row's draft carries aboutSize. An
 //     old page wouldn't show the about page (the server refuses its accept as changed); an old server
 //     would drop the about page from a save.
-export const PROTOCOL_VERSION = 40;
+// 41: queue-main-chat - a queued task can be "asking" (it asked its main chat; mainAnswered once that
+//     chat answered it) and chat rows carry queueAsking. An old page would drop asking tasks from the
+//     Queue panel and sound "done" for their chats.
+export const PROTOCOL_VERSION = 41;

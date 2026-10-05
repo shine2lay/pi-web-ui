@@ -28,6 +28,11 @@
  * by side; and a task can come after others (`after`): it starts only once each is done or removed.
  * tests/unit/task-queue.test.ts replays the same queues through pi-queue's own queue.ts to keep the two
  * sets of rules equal.
+ *
+ * queue-main-chat: a task in a chat of its own asks its main chat (the chat whose queue holds it) before
+ * the user. pi-queue's "ask" op makes it "asking": the main chat has the question, and nothing says the
+ * user is needed meanwhile. The main chat answers it (a resume with `answered`: mainAnswered), or the
+ * question goes on to the user (stuck, as before).
  */
 
 import { readFileSync, statSync } from "node:fs";
@@ -101,10 +106,12 @@ function planOf(raw: unknown): UiTaskQueuePlan {
 	};
 }
 
-const OPEN: ReadonlySet<Status> = new Set(["ready", "working", "stuck", "waiting"]);
+const OPEN: ReadonlySet<Status> = new Set(["ready", "working", "asking", "stuck", "waiting"]);
 /** 当前任务：正在做或卡住的那个（最多一个）。搁着等的任务不算当前任务，别的任务可以接着做。
- *  queue-lanes: tasks running in chats of their own don't count (they run side by side). */
-const current = (s: State) => s.tasks.find((t) => !t.lane && (t.status === "working" || t.status === "stuck"));
+ *  queue-lanes: tasks running in chats of their own don't count (they run side by side).
+ *  queue-main-chat: asking counts like stuck. */
+const current = (s: State) =>
+	s.tasks.find((t) => !t.lane && (t.status === "working" || t.status === "asking" || t.status === "stuck"));
 
 /** pi-queue's normTouches: trimmed, lower case, inner spaces collapsed, no duplicates; undefined = not a list. */
 export function normTouches(raw: unknown): string[] | undefined {
@@ -341,6 +348,7 @@ function apply(s: State, raw: unknown): void {
 			task.lane = undefined;
 			task.question = undefined;
 			task.choices = undefined;
+			task.mainAnswered = undefined;
 			task.wait = undefined;
 			task.startedAt = undefined;
 			task.launch = undefined;
@@ -365,6 +373,8 @@ function apply(s: State, raw: unknown): void {
 			task.question = undefined;
 			task.choices = undefined;
 			task.wait = undefined;
+			// queue-main-chat: back at work with its main chat's answer (pi-queue's resume `answered`).
+			task.mainAnswered = op.op === "resume" && typeof op.answered === "number" && op.answered > 0 ? true : undefined;
 			task.startedAt ??= num(op.ts);
 			return;
 		}
@@ -376,6 +386,23 @@ function apply(s: State, raw: unknown): void {
 			const choices = normChoices(op.choices);
 			if (choices.length) task.choices = choices;
 			else delete task.choices;
+			task.mainAnswered = undefined;
+			task.wait = undefined;
+			task.startedAt ??= num(op.ts);
+			return;
+		}
+		case "ask": {
+			// queue-main-chat: its n-th question to its main chat (pi-queue's normAsk: n >= 1, a real time).
+			const cur = current(s);
+			if (!task.lane && cur && cur !== task) return;
+			const n = typeof op.n === "number" && Number.isFinite(op.n) ? Math.round(op.n) : 0;
+			if (task.status === "ready" || n < 1 || num(op.ts) <= 0) return;
+			task.status = "asking";
+			task.question = str(op.question, NOTE_MAX);
+			const choices = normChoices(op.choices);
+			if (choices.length) task.choices = choices;
+			else delete task.choices;
+			task.mainAnswered = undefined;
 			task.wait = undefined;
 			task.startedAt ??= num(op.ts);
 			return;
@@ -393,6 +420,7 @@ function apply(s: State, raw: unknown): void {
 			task.status = "waiting";
 			task.question = undefined;
 			task.choices = undefined;
+			task.mainAnswered = undefined;
 			task.wait = wait;
 			task.startedAt ??= since;
 			return;
@@ -406,6 +434,7 @@ function apply(s: State, raw: unknown): void {
 			task.status = "done";
 			task.question = undefined;
 			task.choices = undefined;
+			task.mainAnswered = undefined;
 			task.wait = undefined;
 			task.summary = str(op.summary, NOTE_MAX);
 			task.doneAt = num(op.ts);

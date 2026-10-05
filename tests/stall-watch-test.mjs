@@ -14,9 +14,10 @@
  *   - ONE: closed and quiet, so it is woken once with the watchdog's note; told so, it finishes its
  *     task, and the queue shows #1 done; the queue chat and the TL;DR say it was woken;
  *   - TWO: the server won't wake a chat the carry-on left alone at this start, so the wake is
- *     recorded as one that didn't get there; still stopped after the wait, the task becomes "needs
- *     you" in its own chat (choices "Carry on" and "Remove it") and the queue follows; answering
- *     "Carry on" there makes it carry on and finish;
+ *     recorded as one that didn't get there; still stopped after the wait, its task asks the queue
+ *     chat first (queue-main-chat; choices "Carry on" and "Remove it"); the queue chat's turn ends
+ *     without an answer, so the task becomes "needs you" in its own chat and the queue follows;
+ *     answering "Carry on" there makes it carry on and finish;
  *   - THREE: working the whole time, never woken.
  *
  * Usage: npm run build:server && node tests/stall-watch-test.mjs [port]   (STALL_DEBUG=1: server log)
@@ -468,6 +469,27 @@ try {
 		serverLog.includes("[pi-queue] watchdog: task #2's chat had stopped; couldn't wake it") &&
 			hasOp(queueFile, "woke", 2, (o) => o.ok === false),
 	);
+	const askedMain = await waitFor(
+		() =>
+			hasOp(
+				two,
+				"ask",
+				2,
+				(o) =>
+					o.stalled === true &&
+					JSON.stringify(o.choices) === JSON.stringify(["Carry on", "Remove it"]) &&
+					o.question?.startsWith("This task's chat stopped"),
+			) && hasOp(queueFile, "ask", 2, (o) => o.stalled === true),
+		20000,
+	);
+	check(
+		"still stopped after the wait: its task asks the queue chat first (Carry on / Remove it)",
+		Boolean(askedMain),
+		JSON.stringify({
+			own: queueOps(two).filter((o) => o.op !== "assigned"),
+			queue: queueOps(queueFile).filter((o) => o.id === 2),
+		}),
+	);
 	const asked = await waitFor(
 		() =>
 			hasOp(
@@ -477,12 +499,13 @@ try {
 				(o) =>
 					o.stalled === true &&
 					JSON.stringify(o.choices) === JSON.stringify(["Carry on", "Remove it"]) &&
-					o.question?.startsWith("This task's chat stopped"),
+					o.question?.startsWith("This task's chat stopped") &&
+					o.question.includes("your main chat ended its turn without answering it"),
 			) && hasOp(queueFile, "stuck", 2, (o) => o.stalled === true),
 		20000,
 	);
 	check(
-		'still stopped after the wait: "needs you" in its chat (Carry on / Remove it), and the queue follows',
+		'the queue chat\'s turn ends without an answer: "needs you" in its chat (Carry on / Remove it), and the queue follows',
 		Boolean(asked),
 		JSON.stringify({
 			own: queueOps(two).filter((o) => o.op !== "assigned"),
@@ -491,7 +514,9 @@ try {
 	);
 	check(
 		"...logged",
-		serverLog.includes("[pi-queue] watchdog: task #2's chat stopped again after the wake; marking it needs you"),
+		serverLog.includes(
+			"[pi-queue] watchdog: task #2's chat stopped again after the wake; its task asks this chat first",
+		),
 	);
 	check("TWO never got the watchdog's note", wakes(two).length === 0, String(wakes(two).length));
 	const firstLook = serverLog.split("\n").find((l) => l.includes("[pi-queue] watchdog in "));

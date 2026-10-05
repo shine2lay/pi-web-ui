@@ -106,7 +106,8 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | subs-limits-box              | `local` | `server/subs-limits.ts` (new), `index.ts`, `protocol.ts`, `protocol-version.ts` (34), `web/src/components/LimitsBox.tsx` (new), `web/src/subs-limits-state.ts` (new), `components/LeftPanel.tsx`, `App.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/subs-limits-box-test.mjs` (new), `tests/unit/subs-limits.test.ts` (new)                                                                                                                                                                   |
 | session-index                | `local` | `server/session-index.ts` (new), `session-index-worker.ts` (new), `agent-service.ts`, `identities.ts`, `index.ts`, `tests/unit/session-index.test.ts` (new), `tests/unit/global-history.test.ts`, `tests/session-index-restart-test.mjs` (new), `scripts/session-index-parity.mjs` (new), `scripts/session-index-restart-probe.mjs` (new)                                                                                                                                                                                |
 | identity-notes               | `local` | `server/identity-notes.ts` (new, pi-identity's `notes.ts` copied byte for byte), `identity-memory.ts` (new), `identity-config.ts` (recopied), `identities.ts`, `notebook-watch.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (35), `web/src/notebook-state.ts`, `components/NotebookPanel.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/identity-notebook-test.mjs`, `tests/unit/identity-notebook.test.ts`, `identity-config.test.ts`, `identities.test.ts`                           |
-| about-drafts                 | `local` | `server/identity-roles.ts` (about.md in a draft; accept writes and archives the about page), `identities.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (40), `web/src/line-diff.ts` (new), `identity-state.ts`, `components/IdentitiesSettings.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/unit/identity-config.test.ts`, `tests/unit/line-diff.test.ts` (new), `tests/identity-config-test.mjs` |
+| about-drafts                 | `local` | `server/identity-roles.ts` (about.md in a draft; accept writes and archives the about page), `identities.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (40), `web/src/line-diff.ts` (new), `identity-state.ts`, `components/IdentitiesSettings.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/unit/identity-config.test.ts`, `tests/unit/line-diff.test.ts` (new), `tests/identity-config-test.mjs`                                                                                                    |
+| queue-main-chat              | `local` | `server/task-queue.ts`, `stuck-asks.ts`, `agent-service.ts` (`askingChats`, `emitConversations`), `queue-groups.ts`, `protocol.ts`, `protocol-version.ts` (41), `web/src/components/TaskQueuePanel.tsx`, `done-watch.ts`, `App.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/queue-main-chat-test.mjs` (new), `tests/queue-lanes-test.mjs`, `queue-panel-test.mjs`, `stall-watch-test.mjs`, `telegram-answers-test.mjs`, `tests/unit/`; paired with pi-queue                                                  |
 
 ---
 
@@ -117,7 +118,8 @@ Queue panels have separate **Auto approve** and **Auto start** switches, includi
 off by default. Auto approve skips only the complete-plan confirmation in pi-queue; Auto start uses its
 existing lane scheduler. Start/Stop, dependencies, touches, stuck questions, deletions and safety rules
 retain their meaning. Stop also disarms Auto start; switching Auto start off alone leaves an already
-running queue alone. Failed/stuck work is not automatically retried.
+running queue alone. Failed/stuck work is not automatically retried; since queue-main-chat its question
+goes to the queue's chat first, which can answer it so the task carries on.
 
 **Hooks:** `server/queue-owner.ts` validates settings and both conversation/session fences, issues a
 one-use, five-second owner capability, and persists an empty opted-in session without a model turn.
@@ -4717,7 +4719,7 @@ who's-who list itself comes from pi-identity (its "other roles" section); pi-com
    own chain attaches the pseudo client `carry-on:role-messages`, which opens the chat (in the
    background if it is closed, then lists it; an open chat is found in the shared conversation table,
    no browser is moved) and `ClientSession.deliverRoleMessage` sends the text with `prompt(text,
-   undefined, true, ackId, { source: "extension" })`: queued as a follow-up, never a steer, and only when
+undefined, true, ackId, { source: "extension" })`: queued as a follow-up, never a steer, and only when
    the chat isn't working. The `source` path skips the owner-only side effects (the Telegram answer's
    `lastPrompt`, clearing the owner's draft, the seen mark) and hands `source: "extension"` and
    `expandPromptTemplates: false` to the SDK, so pi-queue's input hook doesn't take it for the owner's
@@ -4725,7 +4727,7 @@ who's-who list itself comes from pi-identity (its "other roles" section); pi-com
    `sendCustomMessage(..., { triggerTurn })` starts the run without `input` and `before_agent_start`,
    so the turn would have no role section, memory or persona; `prompt()` runs them. The text is the
    server's header line (`[Role message rm-1a2b3c4d from ops (ops/tooling), sent from its Queue #58 ·
-   fyi]`), the body, and a hint line (how to reply, or "no reply needed"). `tldr-lines.ts` counts
+fyi]`), the body, and a hint line (how to reply, or "no reply needed"). `tldr-lines.ts` counts
    "[Role message " as automated, so it doesn't clear a needs-you line.
 4. **The card** (`fullAt` in `agent-service.ts`, `protocol.ts` `UiMessage.roleMessage`, `Message.tsx`
    `RoleMessageCard`, styles `.rolemsg-*`): a user message whose first line is a role message header
@@ -4801,7 +4803,7 @@ write them) and role folders are private, so each role writes a suggested page i
    `about`) can't accept or save a draft that has one: refused as `changed`.
 3. **Protocol 40**: `identity_draft` carries `about` and `currentAbout` (the role's about page now, for
    "What changes"); `identity_draft_save` / `_accept` carry `about`. Log line: `[identities] the owner
-   accepted the draft for <id>: its about page into about.md (an old one kept in archive/); ...`.
+accepted the draft for <id>: its about page into about.md (an old one kept in archive/); ...`.
 4. **Settings -> Identities** (`IdentitiesSettings.tsx`, `web/src/line-diff.ts`): a draft with an about
    page shows it first, editable, with a "Suggested page | What changes" switch. "What changes" is a line
    diff against the role's page now, in the source-control panel's diff look (`.scm-diff-*`), long
@@ -4827,3 +4829,79 @@ write them) and role folders are private, so each role writes a suggested page i
   that role's chats only; the owner's Settings writes are the server's own and pass no guard.
 - pi-identity reads `about.md` at a chat's start and compaction, so an accepted page reaches running
   chats at their next start or compaction, new chats at once.
+
+## queue-main-chat
+
+**Status**: `local`
+**Baseline**: v0.96.1 (on top of `about-drafts`)
+
+**Why** (owner, 2026-10-04, queue task #61): a queued task that needs a decision should ask its main
+chat first (the chat whose queue holds the task; for a role, normally its home chat). The main chat
+answers it, and the task carries on, or passes the question on to the owner with its recommendation
+when only he can decide or act. The owner then hears only about the questions that really need him.
+His choices: everything goes to the main chat except a run he stopped himself (that still goes straight
+to him); after 30 minutes without an answer the question goes to him; each question the main chat
+answers gets a TL;DR line.
+
+**pi-queue's part** (paired; its README, "Questions go to the main chat first"): a task's own chat asks
+its main chat for its `queue_stuck` question, a failed run, a stalled run (two stops, or the
+watchdog's) and a failed wait. Ops: `{op: "ask", id, question, choices, stalled?, n, ts}` (status
+"asking"), `stuck.ask {n, at, why?, passed?}`, `resume.answered`. The main chat gets a "[Queue] Task #N
+asks (question k of at most 5)" card (a user message from the extension, queued as a follow-up that starts
+a turn, never a steer; a user message and not a custom one for the reason in role-messages: the turn gets
+the chat's role section and memory, and it starts its own exchange in exchange-fold) and answers with
+`queue_reply`: an answer goes into the task's chat as "[Queue] Answer from your main chat" and the TL;DR
+gets "Task #N asked …; the main chat answered …" (linked, not needs-you); passing it on makes the task
+"needs you" as before, in the main chat's words. The question reaches the owner by itself, worded as
+the task asked it plus why, when that turn ends without a `queue_reply` for it, after 30 minutes, when
+the answer can't be delivered, or on a task's 6th question. The first answer wins (the owner typing in
+the task's chat, or the main chat answering before the owner did). In a task's own chat
+`ask_user_question` and needs-you TL;DR lines are refused with a pointer to `queue_stuck`. Tasks that
+run inside their queue's chat (no chat of their own) ask the owner directly, as before.
+
+### Changes
+
+1. **The asking state** (`server/task-queue.ts`, `protocol.ts`): the panel's copy of the queue follows
+   the new ops: "asking" is open and current (like stuck), with its question and choices;
+   `mainAnswered` is set by a `resume` with `answered` (the main chat's answer settled it) and cleared
+   by stuck, requeue, start, wait and done. `UiTaskQueueTask.status` gains "asking",
+   `ConversationSummary` gains `queueAsking`; protocol 41 (an old page would drop asking tasks from the
+   panel and sound "done" for their chats).
+2. **Nothing says the owner is needed while the main chat has the question**: Telegram asks stay for
+   stuck tasks only (`stuck-asks.ts`; a Telegram ask whose task the main chat answered settles as gone,
+   "its main chat answered it"; one whose task went back to asking, "it asks something else now");
+   `agent-service.ts` keeps the transcripts of asking task chats (`ClientSession.askingChats`, from
+   `reconcileStuckAsks`, which runs with or without Telegram) and `emitConversations` drops their
+   green "your turn" light and marks their rows `queueAsking`; `App.tsx` + `done-watch.ts`
+   (`withoutAskingChats`, read when done-settle fires) skip the "done" sound and notification for
+   them. pi-queue writes no needs-you TL;DR line and no notice for an asking task (`tldr-lines.ts`
+   unchanged: `queue_reply` is not a TL;DR reply, so other tasks' needs-you lines stay).
+3. **The panel** (`TaskQueuePanel.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`): an asking task
+   shows "Asking the main chat" (the question as its tooltip), compact, with no answer buttons and no
+   needs-you mark; its row's open-chat button links the task's chat, where typing still answers it.
+4. **After a restart** (`queue-groups.ts`): asking counts as open, so `reopenQueueHomes` reopens a queue
+   chat whose task asks; pi-queue then re-sends a card it never handled, once (the 30 minutes count
+   from the ask).
+
+### How it was checked
+
+- Unit: `tests/unit/task-queue.test.ts` (asking from the ops, current, cleared by every op that moves
+  on, `mainAnswered`), `stuck-asks.test.ts` (no ask while asking, the gone reasons, the asking chats),
+  `task-queue-panel.test.ts` (the asking row: label, tooltip, no buttons, no needs-you),
+  `done-watch.test.ts` (`withoutAskingChats`).
+- `tests/queue-main-chat-test.mjs` (sealed, the real pi-queue via `PI_QUEUE_PKG`, a scripted model, a
+  fake Telegram; `PI_QUEUE_TEST_ASK_WAIT_MS` stands in for the 30 minutes): the main chat answers (the
+  task carries on and finishes, the TL;DR line, and while it asked no Telegram ask, no needs-you line,
+  no green light); it passes the question on (needs-you line, Telegram ask in its words, the owner
+  answers on Telegram); its turn ends without a reply (to the owner at once); no answer in time (to
+  the owner after the wait, the late turn changes nothing); the owner stops a run (straight to him, no
+  card). `queue-lanes`, `queue-panel`, `telegram-answers` and `stall-watch` now have their queue chat
+  pass the question on (or, in stall-watch, end its turn without a reply).
+- check.sh, the build and the sealed queue and Telegram tests; live after the install.
+
+### When syncing
+
+- pi-queue's ops are the contract: if it changes `ask`, `asking`, `stuck.ask` or `resume.answered`,
+  change `task-queue.ts` with it (the unit tests replay its ops).
+- "[Queue]" stays an automated prefix in `tldr-lines.ts`, so the card and the answer never count as
+  the owner's reply.

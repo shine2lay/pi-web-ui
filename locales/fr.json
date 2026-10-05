@@ -391,6 +391,7 @@
 		"taskQueueWaitFailed": "N’attend plus ; elle te demandera quand la tâche en cours sera finie :",
 		"taskQueueDone": "Terminées",
 		"taskQueueNeedsYou": "Action requise",
+		"taskQueueAskingMain": "Demande au chat principal",
 		"taskQueueAnswerHint": "Répondez dans le chat et elle continue.",
 		"taskQueueAnswerInChat": "Répondez dans son propre chat et elle continue.",
 		"taskQueueAnswerPlaceholder": "Ou tapez votre réponse",

@@ -391,6 +391,7 @@
 		"taskQueueWaitFailed": "Больше не ждёт; спросит вас, когда текущая задача закончится:",
 		"taskQueueDone": "Сделано",
 		"taskQueueNeedsYou": "Нужны вы",
+		"taskQueueAskingMain": "Спрашивает главный чат",
 		"taskQueueAnswerHint": "Ответьте в чате, и работа продолжится.",
 		"taskQueueAnswerInChat": "Ответьте в её собственном чате, и работа продолжится.",
 		"taskQueueAnswerPlaceholder": "Или введите свой ответ",

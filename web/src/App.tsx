@@ -102,7 +102,7 @@ import { recordModelUsage } from "./model-usage";
 import { loadSoundSettings, playSound, saveSoundSettings, type SoundKind, type SoundSettings } from "./sounds";
 import { assistantPlainText, loadTtsSettings, saveTtsSettings, speak, type TtsSettings } from "./tts";
 import { shouldSuppressNotify, currentPresence } from "./notify";
-import { cueConversations } from "./done-watch";
+import { cueConversations, withoutAskingChats } from "./done-watch";
 import { useWideChat } from "./chat-width-settings";
 import { registerFilePreviewHost } from "./file-preview-bridge";
 import { projectNameFromCwd, useProjectTitle } from "./title-settings";
@@ -936,6 +936,9 @@ export function App() {
 	const prevActiveIdRef = useRef<string | null>(null);
 	const latestMessagesRef = useRef(chat.state?.messages);
 	latestMessagesRef.current = chat.state?.messages;
+	/** queue-main-chat: the chat list as it is now (the "done" cue skips chats whose task asks its main chat). */
+	const conversationsRef = useRef(chat.conversations);
+	conversationsRef.current = chat.conversations;
 	const notifiedQuestionIds = useRef<Set<string>>(new Set());
 	const notifiedApprovalIds = useRef<Set<string>>(new Set());
 	// done-settle: "done" waits a moment in case the chat starts again (the next queued task),
@@ -944,7 +947,10 @@ export function App() {
 	cueEnv.current = { sound, tts, t };
 	const doneCuesRef = useRef<DoneCues | null>(null);
 	const doneCues = (): DoneCues =>
-		(doneCuesRef.current ??= new DoneCues((cues) => {
+		(doneCuesRef.current ??= new DoneCues((settled) => {
+			// queue-main-chat: a task chat that stopped to ask its main chat doesn't need the user: no cue.
+			const cues = withoutAskingChats(settled, conversationsRef.current);
+			if (cues.length === 0) return;
 			const { sound, tts, t } = cueEnv.current;
 			playSound("done", sound);
 			const quiet = shouldSuppressNotify(currentPresence());

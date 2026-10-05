@@ -5387,6 +5387,9 @@ export class ClientSession {
 	 *  chat, by ask id: what was answered and who answered, for when the task moves on. */
 	private static readonly stuckAnswers = new Map<string, { summary: string; from: string }>();
 	private static stuckReconcileTimer: ReturnType<typeof setTimeout> | null = null;
+	/** queue-main-chat: the transcripts of task chats whose task asks its main chat now (as the open chats'
+	 *  queues say): nothing says the user is needed there (no green light, no "done" cue). */
+	private static askingChats: Set<string> = new Set();
 	/** telegram-answers: sends a stuck task's answer into the chat with this transcript, as the user's
 	 *  reply (AgentService sets it: the wake-up client opens the chat, or switches to it, and sends). */
 	static stuckAnswerSender: ((file: string, text: string) => Promise<AskResult>) | null = null;
@@ -5475,7 +5478,14 @@ export class ClientSession {
 			const meta = ClientSession.askMetaOf(conv);
 			if (meta.sessionFile) sources.push({ file: meta.sessionFile, queue, meta });
 		}
-		const { wanted, seen } = wantedStuckAsks(sources);
+		const { wanted, seen, mainAnswered, asking } = wantedStuckAsks(sources);
+		// queue-main-chat: the chats whose task asks its main chat changed: every window's list drops (or
+		// gets back) their green light.
+		const askingSig = [...asking].sort().join("\n");
+		if (askingSig !== [...ClientSession.askingChats].sort().join("\n")) {
+			ClientSession.askingChats = asking;
+			ClientSession.emitConversationsToAll();
+		}
 		for (const [key, have] of [...ClientSession.stuckAsks]) {
 			const w = wanted.get(key);
 			if (w && stuckSig(w) === have.sig) continue;
@@ -5486,7 +5496,7 @@ export class ClientSession {
 				askHub.settle(have.askId, { how: "answered", summary: given.summary, from: given.from });
 				continue;
 			}
-			const why = stuckGoneReason(w ? "stuck" : seen.get(key));
+			const why = stuckGoneReason(w ? "stuck" : seen.get(key), !w && mainAnswered.has(key));
 			if (why.answered) {
 				askHub.settle(have.askId, {
 					how: "answered",
@@ -11805,6 +11815,8 @@ export class ClientSession {
 	private emitConversations(): void {
 		const conversations: ConversationSummary[] = [];
 		const waiting = new Set(this.stateStore.getRecentWaiting().map((p) => resolve(p)));
+		// queue-main-chat: a task chat whose task asks its main chat isn't waiting on the user.
+		for (const p of ClientSession.askingChats) waiting.delete(p);
 		/** 活着的行占用的转录路径 —— 下面拼接历史行时用它去重。 */
 		const livePaths = new Set<string>();
 		/** 转录最后活动时间（排序用，见 ConversationSummary.sortAt）。 */
@@ -11882,6 +11894,8 @@ export class ClientSession {
 				createdAt: (sessionPath ? sessionCreatedAt(sessionPath) : undefined) ?? conv.createdAt,
 				// 正在跑的行用黄灯，不叠绿灯；当前对话就在眼前，也不算「等你」。
 				waiting: !isStreaming && conv.id !== this.activeId && !!sessionPath && waiting.has(resolve(sessionPath)),
+				// queue-main-chat: its task asks its main chat: its run ending makes no "done" cue.
+				...(sessionPath && ClientSession.askingChats.has(resolve(sessionPath)) ? { queueAsking: true } : {}),
 			});
 		}
 		// issue #145：流式集合签名变化 → 通知其他客户端重推（左栏「另一处正在运行」近实时）。

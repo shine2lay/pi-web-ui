@@ -391,6 +391,7 @@
 		"taskQueueWaitFailed": "待つのをやめました。今のタスクが終わったらあなたに聞きます：",
 		"taskQueueDone": "完了",
 		"taskQueueNeedsYou": "要対応",
+		"taskQueueAskingMain": "メインチャットに確認中",
 		"taskQueueAnswerHint": "チャットで答えると続きをやります。",
 		"taskQueueAnswerInChat": "そのタスク自身のチャットで答えると続きをやります。",
 		"taskQueueAnswerPlaceholder": "または回答を入力",

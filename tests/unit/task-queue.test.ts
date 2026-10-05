@@ -674,6 +674,127 @@ describe("taskQueueFromEntries (queue-side-by-side)", () => {
 	});
 });
 
+/** queue-main-chat: pi-queue's "ask" op (a task in a chat of its own asked its main chat). */
+describe("taskQueueFromEntries (queue-main-chat)", () => {
+	const byId = (q: ReturnType<typeof replay>, id: number) => q.tasks.find((t) => t.id === id);
+	const laneBase = [
+		{ op: "add", id: 1, plan: plan("One") },
+		{ op: "add", id: 2, plan: plan("Two") },
+		{ op: "run" },
+		{ op: "start", id: 1, lane: true },
+		{ op: "chat", id: 1, file: "/chats/one.jsonl", title: "Queue #1: One" },
+	];
+	const ask = { op: "ask", id: 1, question: "Which port?", choices: ["8080", "9090"], n: 1 };
+
+	it("an ask makes the task 'asking' with its question and choices; nothing else changes", () => {
+		const q = replay(entries([...laneBase, ask]));
+		expect(byId(q, 1)).toMatchObject({ status: "asking", question: "Which port?", choices: ["8080", "9090"] });
+		expect(byId(q, 1)?.mainAnswered).toBeUndefined();
+		expect(byId(q, 2)?.status).toBe("ready");
+		// Still an open task in its lane.
+		expect(q.lanes?.flatMap((l) => l.taskIds)).toContain(1);
+	});
+
+	it("refuses an ask without a number or time, or for a task not started", () => {
+		for (const bad of [{ n: 0 }, { n: "1" }, { ts: 0 }]) {
+			expect(byId(replay(entries([...laneBase, { ...ask, ...bad }])), 1)?.status).toBe("working");
+		}
+		expect(byId(replay(entries([...laneBase, { ...ask, id: 2 }])), 2)?.status).toBe("ready");
+	});
+
+	it("in a task's own chat the asking task stays the current one", () => {
+		const own = [
+			{ op: "add", id: 7, plan: plan("Seven") },
+			{ op: "start", id: 7 },
+			{ ...ask, id: 7 },
+		];
+		const q = replay(entries(own));
+		expect(byId(q, 7)?.status).toBe("asking");
+		// A second task can't start beside it, the same as beside a stuck one.
+		const second = replay(entries([...own, { op: "add", id: 8, plan: plan("Eight") }, { op: "start", id: 8 }]));
+		expect(byId(second, 8)?.status).toBe("ready");
+	});
+
+	it("the main chat's answer (resume with answered) is marked; the user's own answer isn't", () => {
+		const main = replay(entries([...laneBase, ask, { op: "resume", id: 1, answered: 1 }]));
+		expect(byId(main, 1)).toMatchObject({ status: "working", mainAnswered: true });
+		expect(byId(main, 1)?.question).toBeUndefined();
+		expect(byId(main, 1)?.choices).toBeUndefined();
+		const owner = replay(entries([...laneBase, ask, { op: "resume", id: 1 }]));
+		expect(byId(owner, 1)?.mainAnswered).toBeUndefined();
+		// Passed on to the user (stuck), asked again, on hold or done: the mark goes.
+		for (const next of [
+			{ op: "stuck", id: 1, question: "Port?" },
+			{ ...ask, n: 2 },
+			{ op: "wait", id: 1, what: "CI", check: "false", everyMs: 60_000, until: 9e12 },
+			{ op: "done", id: 1, summary: "ok" },
+		]) {
+			const q = replay(entries([...laneBase, ask, { op: "resume", id: 1, answered: 1 }, next]));
+			expect(byId(q, 1)?.mainAnswered, next.op).toBeUndefined();
+		}
+	});
+
+	it("a question passed on to the user is stuck as before, with the main chat's wording", () => {
+		const q = replay(
+			entries([
+				...laneBase,
+				ask,
+				{
+					op: "stuck",
+					id: 1,
+					question: "Port 8080 or 9090?",
+					choices: ["8080 (recommended)", "9090"],
+					ask: { n: 1, at: 5, passed: true },
+				},
+			]),
+		);
+		expect(byId(q, 1)).toMatchObject({
+			status: "stuck",
+			question: "Port 8080 or 9090?",
+			choices: ["8080 (recommended)", "9090"],
+		});
+	});
+
+	it("says the same as pi-queue's own replay", async () => {
+		const pkg = process.env.PI_QUEUE_PKG ?? join(userInfo().homedir, "projects", "pi-queue");
+		const file = join(pkg, "queue.ts");
+		if (!existsSync(file)) throw new Error(`pi-queue not found at ${pkg} (set PI_QUEUE_PKG)`);
+		const pq = await import(/* @vite-ignore */ pathToFileURL(file).href);
+		// An older pi-queue has no asking state yet: nothing to compare.
+		if (typeof pq.normAsk !== "function") return;
+		const scenarios: Array<Array<Record<string, unknown>>> = [
+			[...laneBase, ask],
+			[...laneBase, ask, { op: "resume", id: 1, answered: 1 }],
+			[...laneBase, ask, { op: "stuck", id: 1, question: "Port?", choices: ["a", "b"], ask: { n: 1, at: 9 } }],
+			[...laneBase, ask, { op: "resume", id: 1 }, { ...ask, n: 2, question: "Again?" }],
+			[...laneBase, { ...ask, n: 0 }, { ...ask, id: 2 }],
+			[
+				{ op: "add", id: 7, plan: plan("Seven") },
+				{ op: "start", id: 7 },
+				{ ...ask, id: 7 },
+				{ op: "remove", id: 7 },
+			],
+			[
+				{ op: "add", id: 7, plan: plan("Seven") },
+				{ op: "start", id: 7 },
+				{ ...ask, id: 7 },
+				{ op: "done", id: 7 },
+			],
+		];
+		for (const ops of scenarios) {
+			const e = entries(ops);
+			const mine = taskQueueFromEntries(e, true);
+			const s = pq.replay(e) as {
+				tasks: Array<{ id: number; status: string; question?: string; choices?: string[]; answered?: number }>;
+			};
+			const theirs = s.tasks.filter((t) => t.status !== "removed");
+			expect(mine.tasks.map((t) => [t.id, t.status, t.question, t.choices])).toEqual(
+				theirs.map((t) => [t.id, t.status, t.question, t.choices]),
+			);
+		}
+	});
+});
+
 describe("taskQueueCommandLine", () => {
 	it("queue-lanes: sets how many lanes run at once", () => {
 		expect(taskQueueCommandLine("lanes", 3)).toBe("/queue lanes 3");

@@ -61,7 +61,8 @@ export const TASK_QUEUE_PLAN_PARTS: readonly (readonly [Exclude<keyof UiTaskQueu
 ];
 
 export interface TaskQueueSections {
-	/** queue-lanes: tasks working in chats of their own (working, stuck or on hold there), in queue order. */
+	/** queue-lanes: tasks working in chats of their own (working, asking their main chat, stuck or on hold
+	 *  there), in queue order. */
 	inChats: UiTaskQueueTask[];
 	/** 正在做或卡住等用户的那个（最多一个）。 */
 	current?: UiTaskQueueTask;
@@ -75,10 +76,11 @@ export interface TaskQueueSections {
 
 export function taskQueueSections(q: UiTaskQueue | undefined): TaskQueueSections {
 	const tasks = q?.tasks ?? [];
-	const open = (t: UiTaskQueueTask) => t.status === "working" || t.status === "stuck" || t.status === "waiting";
+	const open = (t: UiTaskQueueTask) =>
+		t.status === "working" || t.status === "asking" || t.status === "stuck" || t.status === "waiting";
 	return {
 		inChats: tasks.filter((t) => t.lane && open(t)),
-		current: tasks.find((t) => !t.lane && (t.status === "working" || t.status === "stuck")),
+		current: tasks.find((t) => !t.lane && (t.status === "working" || t.status === "asking" || t.status === "stuck")),
 		waiting: tasks.filter((t) => !t.lane && t.status === "waiting"),
 		ready: tasks.filter((t) => t.status === "ready"),
 		done: tasks.filter((t) => t.status === "done").sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0)),
@@ -290,7 +292,14 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 	const row = (task: UiTaskQueueTask, kind: "current" | "lane" | "waiting" | "ready" | "done", index = 0) => {
 		const expanded = open.has(task.id);
 		const wait = kind === "waiting" ? task.wait : undefined;
-		const cls = ["task-queue-task", kind, task.status === "stuck" ? "needs-you" : "", wait?.failed ? "wait-failed" : ""]
+		// queue-main-chat: a task asking its main chat doesn't need the user (yet): plain, no needs-you.
+		const cls = [
+			"task-queue-task",
+			kind,
+			task.status === "stuck" ? "needs-you" : "",
+			task.status === "asking" ? "asking" : "",
+			wait?.failed ? "wait-failed" : "",
+		]
 			.filter(Boolean)
 			.join(" ");
 		const when =
@@ -379,6 +388,11 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 							</span>
 						))}
 				</div>
+				{task.status === "asking" && (
+					<div className="task-queue-asking" title={task.question}>
+						<span className="task-queue-hint">{t("taskQueueAskingMain")}</span>
+					</div>
+				)}
 				{task.status === "stuck" && (
 					<div className="task-queue-question">
 						<span className="task-queue-badge">{t("taskQueueNeedsYou")}</span>

@@ -4,7 +4,8 @@
  * ~/projects/pi-queue). A mock OpenAI-compatible model plays the agent:
  *  - the planning run calls queue_add three times (the user approves each plan in the dialog), then answers;
  *  - each task runs in a chat of its own, which starts with "[Queue] Task #N: <title>": "Add a timing
- *    check" -> queue_done; "Rename the settings button" -> queue_stuck (with 2 choices); the user's answer,
+ *    check" -> queue_done; "Rename the settings button" -> queue_stuck (with 2 choices), whose question goes
+ *    to the queue's chat first (queue-main-chat): it passes it on to the user as it is; the user's answer,
  *    typed in the Queue tab, goes into that task's chat -> queue_done.
  *    The plans list nothing they touch, so each runs alone: one task chat at a time.
  * Checks:
@@ -17,7 +18,7 @@
  *  - Start runs the queue: #2 works in a chat of its own (its row links to it), then is done with its
  *    summary; only then #1 starts in its own chat and needs the user, with the question, its choices as
  *    buttons and a box to type an answer, highlighted in both windows; the queue's chat gets a note for each; each task chat that stopped rings one done cue
- *    in each window, and the windows on the queue's chat hear no start tick (it doesn't run itself);
+ *    in each window, and the windows on the queue's chat hear one start tick: its one turn, passing #1's question on;
  *  - an answer typed in the Queue tab goes into #1's chat and finishes #1; #1's row opens its chat: it
  *    has only its plan, the question, the answer and the finish, and its Queue tab says where the queue
  *    is; the queue's chat shows "All done.", Start disabled, done tasks newest first;
@@ -131,6 +132,8 @@ let queueAddOffered = false;
 const unexpected = [];
 /** Task chats' kickoffs and finishes, in the order the mock saw them. */
 const taskEvents = [];
+/** Task questions the queue's chat got first (queue-main-chat), by task number. */
+const cards = [];
 const taskEvent = (e) => {
 	if (!taskEvents.includes(e)) taskEvents.push(e);
 };
@@ -171,11 +174,14 @@ const mock = createServer(async (req, res) => {
 		if (x.role === "user" && !/^\(System reminder/.test(textOf(x))) users.push(i);
 	});
 	const first = users[0] ?? -1;
-	const last = users.at(-1) ?? -1;
-	const userText = last >= 0 ? textOf(history[last]) : "";
-	const results = history.slice(last + 1).filter((x) => x.role === "tool").length;
 	// A task's chat starts with its kickoff, "[Queue] Task #N: <title>" on the first line.
 	const kick = (first >= 0 ? textOf(history[first]) : "").match(/^\[Queue\] Task #(\d+): ([^\n]+)/);
+	// In the queue's chat, its notes ("[Queue] Task #1 (<title>) needs the user …") can land in the middle of
+	// a turn (passing #1's question on makes it need the user); that turn is still about the card.
+	const anchors = kick ? users : users.filter((i) => !/^\[Queue\] Task #\d+ \(/.test(textOf(history[i])));
+	const last = anchors.at(-1) ?? -1;
+	const userText = last >= 0 ? textOf(history[last]) : "";
+	const results = history.slice(last + 1).filter((x) => x.role === "tool").length;
 	const kickoffTurn = !!kick && last === first;
 	if (process.env.QUEUE_DEBUG) console.log(`    [mock] ${kick ? `task #${kick[1]}` : "queue chat"} step ${results}`);
 
@@ -221,6 +227,23 @@ const mock = createServer(async (req, res) => {
 		}
 		await sleep(300);
 		await say("QUEUE-DONE-RENAME renamed.");
+		return;
+	}
+	const card = /^\[Queue\] Task #(\d+) asks\b/.exec(userText);
+	if (!kick && card) {
+		// #1's question comes to the queue's chat first (its main chat): it passes it on as it is, once #1's
+		// chat's stop has settled (a chat that stopped while it asks its main chat rings no done cue).
+		if (results === 0) {
+			cards.push(Number(card[1]));
+			await sleep(SETTLE_WAIT);
+			await call(
+				"queue_reply",
+				{ id: Number(card[1]), question: STUCK_QUESTION, choices: STUCK_CHOICES },
+				`call_reply_${card[1]}`,
+			);
+			return;
+		}
+		await say("QUEUE-PASSED it's the user's call.");
 		return;
 	}
 	unexpected.push(kick ? `task #${kick[1]}: a user message` : "queue chat: a user message");
@@ -568,6 +591,7 @@ try {
 		same(taskEvents, ["start #2", "done #2", "start #1"]),
 		JSON.stringify(taskEvents),
 	);
+	check("#1's question went to the queue's chat first, which passed it on", same(cards, [1]), JSON.stringify(cards));
 	// pi-queue saves the new state first (the tab shows it) and posts the note right after, so wait for it.
 	const wanted = [
 		`Task #2 (${PLANS[1].title}) is done in its chat`,
@@ -577,15 +601,19 @@ try {
 	check(
 		"the queue's chat got a note for each: #2 is done, #1 needs you, each in its own chat",
 		await waitFor(async () => {
+			// #1's note came while the queue's chat passed its question on: it sits in that turn's folded steps.
+			await A.locator(".xfold:not(.open) .xfold-head").evaluateAll((heads) => heads.forEach((h) => h.click()));
 			const text = await pageText(A);
 			missing = wanted.filter((n) => !text.includes(n));
 			return missing.length === 0;
 		}, 10000),
 		missing.length ? `missing: ${missing.join(" | ")}` : "",
 	);
-	// Each task chat that stopped rings one done cue in every window (done-any-chat). done-settle merges
-	// stops within DONE_SETTLE_MS into one sound, so #1's chat stops well after #2's (the mock above).
-	// The queue's chat doesn't run itself, so the windows on it hear no start tick.
+	// A chat that stopped rings one done cue in every window (done-any-chat); done-settle merges stops
+	// within DONE_SETTLE_MS into one sound, so #1's chat stops well after #2's (the mock above). #1's chat
+	// stops while it asks its main chat: no done cue for it (the user isn't needed yet). The queue's chat's
+	// one turn (passing #1's question on, after #1's stop settled) rings one, and is its only run, so the
+	// windows on it hear one start tick.
 	await waitFor(async () => (await cueCounts(A)).done >= a0.done + 2, SETTLE_WAIT + 10000);
 	await sleep(SETTLE_WAIT);
 	for (const [name, page, c0] of [
@@ -594,8 +622,8 @@ try {
 	]) {
 		const c = await cueCounts(page);
 		check(
-			`${name}: one done cue per task chat that stopped (2), no start tick`,
-			c.start - c0.start === 0 && c.done - c0.done === 2,
+			`${name}: done cues for #2's chat and the queue's chat's turn, none for #1's asking chat (2), one start tick (that turn)`,
+			c.start - c0.start === 1 && c.done - c0.done === 2,
 			`start +${c.start - c0.start}, done +${c.done - c0.done}`,
 		);
 	}
