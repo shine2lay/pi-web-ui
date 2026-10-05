@@ -315,8 +315,12 @@ export const Message = memo(function Message({
 	// the whole SKILL.md into the user bubble — same as the pi CLI.
 	const skillBlock = message.role === "user" ? parseSkillBlock(userText) : null;
 	// role-messages: a message from another role (message_role), confirmed by the server, shows as a
-	// labelled card (who sent it is the server's, never the text's).
-	const roleMsg = message.role === "user" ? message.roleMessage : undefined;
+	// labelled card (who sent it is the server's, never the text's). An FYI is a custom message (added to
+	// the chat without a turn) and shows the same card.
+	const roleMsg =
+		message.role === "user" || (message.role === "custom" && message.customType === "role-message")
+			? message.roleMessage
+			: undefined;
 	const questionText = roleMsg
 		? roleMsg.text.split("\n").join(" ").trim()
 		: skillBlock
@@ -964,16 +968,16 @@ export const Message = memo(function Message({
 					</button>
 				)}
 				<span className="msg-role">
-					{message.role === "custom"
-						? isGoalWizard
-							? t("goalWizardCard")
-							: isGoalReview
-								? t("goalBarTitle")
-								: message.customType === "file"
-									? t("attachment")
-									: `${t("plugin")} · ${message.customType ?? t("unknown")}`
-						: roleMsg
-							? roleMessageLabel(roleMsg, t)
+					{roleMsg
+						? roleMessageLabel(roleMsg, t)
+						: message.role === "custom"
+							? isGoalWizard
+								? t("goalWizardCard")
+								: isGoalReview
+									? t("goalBarTitle")
+									: message.customType === "file"
+										? t("attachment")
+										: `${t("plugin")} · ${message.customType ?? t("unknown")}`
 							: roleLabel(message.role, t)}
 				</span>
 				{message.model && <span className="msg-model">{message.model}</span>}

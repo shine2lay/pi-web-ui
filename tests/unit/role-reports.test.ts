@@ -86,6 +86,8 @@ function fake(roles: IdentityDef[]): Fake {
 				say(file, "user", text);
 				return { ok: true };
 			},
+			// A report is never an FYI: it always starts a turn (deliver).
+			note: async () => ({ ok: false, error: "a report must not go as a note" }),
 			log: (line) => f.lines.push(line),
 		},
 	};

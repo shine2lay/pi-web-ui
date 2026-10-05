@@ -4695,9 +4695,10 @@ who's-who list itself comes from pi-identity (its "other roles" section); pi-com
    (id and title) and which chat it is ("home chat", "Queue #N" from the chat's own queue entries, or
    `chat "<title>"`), never the model's text. Refusals are tool errors with the reason (and one
    `[role-messages] refused ...` line in the server log: who, to whom, kind, why; never the text); a sent message
-   answers "Sent rm-... (fyi to ops). It arrives in its home chat after any running turn there." (+
-   "the answer comes back to this chat as a new message: don't wait for it" for questions and requests),
-   or "Held ..." while paused.
+   answers "Sent rm-... (request to ops). It arrives in its home chat after any running turn there." (+
+   "the answer comes back to this chat as a new message: don't wait for it" for questions and requests;
+   an fyi: "Sent rm-... (fyi to ops). It's added to its home chat without starting a turn; that chat
+   reads it with its next message."), or "Held ..." while paused.
 2. **The engine** (`server/role-messages.ts`, new): the store `<data dir>/role-messages.json` (atomic
    writes; the newest 1,000 kept, a waiting one never dropped; a store it can't read is kept aside as
    `.bad-<time>`), states waiting / delivered / replied / failed ("held" in the list = waiting while
@@ -4716,7 +4717,7 @@ who's-who list itself comes from pi-identity (its "other roles" section); pi-com
    question answered before its delivery was confirmed is still marked delivered, then "replied"; a
    failed send backs off (15 s doubling to 5 min) and fails after a day (counted from the resume when
    it was held).
-3. **Delivered as the chat's next turn** (`agent-service.ts`): `AgentService.sendRoleMessage` on its
+3. **Delivered as the chat's next turn** (questions, requests, replies, reports; `agent-service.ts`): `AgentService.sendRoleMessage` on its
    own chain attaches the pseudo client `carry-on:role-messages`, which opens the chat (in the
    background if it is closed, then lists it; an open chat is found in the shared conversation table,
    no browser is moved) and `ClientSession.deliverRoleMessage` sends the text with `prompt(text,
@@ -4730,9 +4731,23 @@ undefined, true, ackId, { source: "extension" })`: queued as a follow-up, never 
    server's header line (`[Role message rm-1a2b3c4d from ops (ops/tooling), sent from its Queue #58 ·
 fyi]`), the body, and a hint line (how to reply, or "no reply needed"). `tldr-lines.ts` counts
    "[Role message " as automated, so it doesn't clear a needs-you line.
+3b. **An fyi starts no turn** (owner, 2026-10-04, queue task #65, to save tokens): the engine sends it
+   with `host.note` instead of `host.deliver`. `AgentService.noteRoleMessage` (same chain, carry-on gate,
+   quiesce, transcript and "working" -> busy checks) attaches the same pseudo client and
+   `ClientSession.noteRoleMessage` calls `sendCustomMessage({customType: "role-message", content, display:
+   true}, {triggerTurn: false})` on the idle chat: pi appends a `custom_message` entry to the history and
+   the transcript at once, no turn, and puts it into the context of the chat's next turn, whatever starts
+   it (the owner, a role, a queue card, a wake-up). A closed chat is opened in the background only to
+   append (not listed, not marked running). Same store, routing, waits, retries, give-up and pause; the
+   proof is the header in a `role-message` custom entry after the noted offset
+   (`transcriptHasRoleMessage` reads both kinds). Hint line: "(An FYI from another role, added without a
+   turn of its own: no reply needed.)". An fyi never deepens a chain (it is no user message), and a 6 am
+   report's answer scan ignores it (not a `message` entry). Not `deliverAs: "nextTurn"` or
+   `before_agent_start`: those live only in memory and are lost on unload or restart.
 4. **The card** (`fullAt` in `agent-service.ts`, `protocol.ts` `UiMessage.roleMessage`, `Message.tsx`
-   `RoleMessageCard`, styles `.rolemsg-*`): a user message whose first line is a role message header
-   is stamped only when the store has that id, delivered it to this chat, and the whole text's sha1 is
+   `RoleMessageCard`, styles `.rolemsg-*`; `RoleMessages.stampForMessage`): a user message, or a custom
+   message of customType `role-message` (an fyi; label "from ops (Queue #58) · fyi", not "plugin ·
+   role-message"), whose first line is a role message header is stamped only when the store has that id, delivered it to this chat, and the whole text's sha1 is
    what the server sent; a header typed by hand, or a body claiming another sender, stays a plain
    message. The stamped one shows as a card labelled "from ops (Queue #58) · fyi" with the server's
    sender and the body (header and hint hidden), and can't be edited.
@@ -4758,7 +4773,12 @@ fyi]`), the body, and a hint line (how to reply, or "no reply needed"). `tldr-li
   delivery time; a restart with the header already in the transcript doesn't send again; a send
   that never landed is sent again and fails after 5; a failed send backs off and fails after a day;
   paused messages held across a restart with a fresh day after the resume; a reply to the asking queue
-  chat, to the home chat once that task is done or that chat is gone; an unreadable store kept aside.
+  chat, to the home chat once that task is done or that chat is gone; an unreadable store kept aside;
+  an fyi goes by note and the other kinds by deliver, delivered once; an fyi waits while its chat works
+  (busy is no failed attempt); the proof through a role-message custom entry (not another custom type);
+  the card for a custom entry only with the stored text, chat and type, serialized as a custom message;
+  a 6 am report's answer scan isn't ended by an fyi's custom entry (`role-reports.test.ts`'s host refuses
+  a note for a report).
 - `tests/role-messages-test.mjs` (sealed, the real pi-identity, a scripted model, fake roles in a temp
   HOME): a chat without a role isn't offered the tool (a forced call stores nothing); role chats get the
   other roles (a role with no home chat marked) and the server log's roster line; unknown role and no
@@ -4766,7 +4786,11 @@ fyi]`), the body, and a hint line (how to reply, or "no reply needed"). `tldr-li
   claiming another sender changes nothing); a busy chat gets the message only after its turn; a reply
   reaches the exact queue task chat that asked, and the home chat once that task is done; pause holds
   (across a restart) and resume delivers exactly once (another restart doesn't send again); the chain
-  limit and the hourly cap refuse.
+  limit and the hourly cap refuse (sections 3 and 4 use requests; the held one is an fyi).
+- `tests/role-messages-fyi-test.mjs` (sealed): an fyi to a closed and to an open idle home chat lands
+  as a role-message custom entry and card, the store says delivered, and the receiving chat's model
+  gets no call; the next typed message makes one call whose context carries both (asserted in the test,
+  never printed); each delivered exactly once; a request still starts a turn at once.
 - check.sh, the build and the full sealed E2E suite; live, one FYI from a queue task chat to the ops
   role's home chat.
 
@@ -4775,7 +4799,8 @@ fyi]`), the body, and a hint line (how to reply, or "no reply needed"). `tldr-li
 - `identity-config.ts` stays pi-identity's copy (the unit test says so when they differ); pi-identity's
   role-only tool name must stay `message_role` (`MESSAGE_ROLE_TOOL_NAME`).
 - If the SDK starts running `before_agent_start` for custom-message turns, delivery could become a
-  custom message; if `prompt()`'s `source` or `ClientSession.prompt`'s flow changes, keep the `source`
+  custom message; an fyi relies on `sendCustomMessage` without a trigger appending to the transcript
+  at once when idle (and to `_pendingCustomMessages` mid-turn, which the busy check avoids); if `prompt()`'s `source` or `ClientSession.prompt`'s flow changes, keep the `source`
   path (no steer, no owner side effects).
 - The card depends on `fullAt` serializing user messages; a new path that serializes messages without
   it would show the header line as plain text (harmless).

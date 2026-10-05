@@ -10,19 +10,23 @@
 // across reloads, unlike conversation ids). A reply goes back to the exact chat that asked (it may be a
 // queued task's chat); when that chat is gone or its task is finished, to the asking role's home chat.
 //
-// The message arrives as a user message whose first line is the server-built header
+// Its text starts with the server-built header
 // "[Role message rm-… from <role> (<title>), sent from its <chat> · <kind>]", then the text, then one
-// hint line. It goes in through the same path as a typed message (so the chat's add-ons run: its role
-// section, memory, persona), marked as coming from an extension (pi-queue doesn't take it for the
-// owner's answer), queued behind any running turn (follow-up, never steer), and only once the chat
-// isn't working. A closed chat is opened in the background for it. The page shows such a message as
-// a labelled card when the store confirms it (same id, same chat, same text): a body that claims
-// another sender changes nothing.
+// hint line. A question, a request, a reply or a report arrives as a user message and starts a turn:
+// it goes in through the same path as a typed message (so the chat's add-ons run: its role section,
+// memory, persona), marked as coming from an extension (pi-queue doesn't take it for the owner's
+// answer), queued behind any running turn (follow-up, never steer). An FYI starts no turn (owner,
+// 2026-10-04: it costs no model call): it is added to the chat's history as a shown custom message
+// (customType "role-message", host.note) and the model reads it with the chat's next turn, whatever
+// starts it. Either way only once the chat isn't working; a closed chat is opened in the background
+// for it. The page shows such a message as a labelled card when the store confirms it (same id, same
+// chat, same text): a body that claims another sender changes nothing.
 //
 // Exactly once: before the first send the target chat's transcript size is noted; the message counts
-// as delivered once its header line is in the transcript after that point. A send that got in but
-// never landed (the run was stopped while it waited) is sent again after the chat has been idle a
-// while; a restart forgets nothing (the store is on disk, the transcript is the proof).
+// as delivered once its header line is in the transcript after that point (in a user message, or for
+// an FYI in a role-message custom entry). A send that got in but never landed (the run was stopped
+// while it waited) is sent again after the chat has been idle a while; a restart forgets nothing (the
+// store is on disk, the transcript is the proof).
 //
 // Caps: 20 messages an hour per sending role; a chain limit of 6 (a message sent while handling a
 // role message is one deeper than it). The owner can pause delivery (Settings → Identities): messages
@@ -84,6 +88,9 @@ const REPORT_GIVE_UP_MS = 6 * HOUR_MS;
 const REPORT_KEEP_MS = (ROLE_REPORT_MAX_AGE_DAYS + 2) * 24 * HOUR_MS;
 
 const HEADER_RE = /^\[Role message (rm-[0-9a-f]{8}) /;
+
+/** The customType of an FYI added to a chat without a turn (host.note). */
+export const ROLE_MESSAGE_CUSTOM_TYPE = "role-message";
 
 export type RoleMessageKind = UiRoleMessageKind;
 export type RoleMessageState = UiRoleMessageState;
@@ -187,6 +194,10 @@ export interface RoleMessageHost {
 	/** Send the text into the chat as a queued user message (opening it if it is closed). busy = it
 	 *  started working meanwhile: try later, not a failed attempt. */
 	deliver(file: string, text: string): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }>;
+	/** An FYI: add the text to the chat's history as a shown custom message (customType
+	 *  ROLE_MESSAGE_CUSTOM_TYPE) without starting a turn (opening the chat if it is closed). busy as for
+	 *  deliver. */
+	note(file: string, text: string): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }>;
 	/** The store changed (the page's list). */
 	changed?(): void;
 	log?(line: string): void;
@@ -254,7 +265,7 @@ export function roleMessageHint(r: HeaderParts): string {
 		case "report":
 			return "(The app's 6 am report request: your answer in this chat is the report the owner reads. No message_role, no new work, no tasks started.)";
 		case "fyi":
-			return "(An FYI from another role: no reply needed.)";
+			return "(An FYI from another role, added without a turn of its own: no reply needed.)";
 		case "reply":
 			return `(The answer to your message ${r.replyTo ?? ""}: no need to answer it.)`;
 		case "question":
@@ -409,22 +420,34 @@ async function eachLine(file: string, from: number, take: (line: string) => bool
 	}
 }
 
-function userTextOf(entry: unknown): string | undefined {
-	const e = entry as { type?: unknown; message?: { role?: unknown; content?: unknown } };
-	if (e?.type !== "message" || e.message?.role !== "user") return undefined;
-	const c = e.message.content;
+/** A message's first text (content as a string or as blocks). */
+function firstTextOf(c: unknown): string | undefined {
 	if (typeof c === "string") return c;
 	if (!Array.isArray(c)) return undefined;
 	const first = c.find((b) => (b as { type?: unknown })?.type === "text") as { text?: unknown } | undefined;
 	return typeof first?.text === "string" ? first.text : undefined;
 }
 
-/** Whether a user message starting with this message's header is in the transcript after `from`. */
+function userTextOf(entry: unknown): string | undefined {
+	const e = entry as { type?: unknown; message?: { role?: unknown; content?: unknown } };
+	if (e?.type !== "message" || e.message?.role !== "user") return undefined;
+	return firstTextOf(e.message.content);
+}
+
+/** The first text of a role-message custom entry (an FYI added without a turn). */
+function noteTextOf(entry: unknown): string | undefined {
+	const e = entry as { type?: unknown; customType?: unknown; content?: unknown };
+	if (e?.type !== "custom_message" || e.customType !== ROLE_MESSAGE_CUSTOM_TYPE) return undefined;
+	return firstTextOf(e.content);
+}
+
+/** Whether a user message (or, for an FYI, a role-message custom entry) starting with this message's
+ *  header is in the transcript after `from`. */
 export async function transcriptHasRoleMessage(file: string, from: number, id: string): Promise<boolean> {
 	const needle = `[Role message ${id} `;
 	let found = false;
 	await eachLineWith(file, from, needle, (entry) => {
-		found = userTextOf(entry)?.startsWith(needle) === true;
+		found = (userTextOf(entry) ?? noteTextOf(entry))?.startsWith(needle) === true;
 		return found;
 	});
 	return found;
@@ -709,6 +732,17 @@ export class RoleMessages {
 			...(r.kind === "report" && r.report ? { reportDate: r.report.date } : {}),
 			text: r.text,
 		};
+	}
+
+	/** The page's card for a chat message: a user message, or an FYI's role-message custom entry, whose
+	 *  text is a role message the store confirms. Other messages: undefined. */
+	stampForMessage(
+		sessionFile: string | undefined,
+		m: { role?: unknown; customType?: unknown; content?: unknown },
+	): UiRoleMessage | undefined {
+		if (m.role !== "user" && !(m.role === "custom" && m.customType === ROLE_MESSAGE_CUSTOM_TYPE)) return undefined;
+		const text = firstTextOf(m.content);
+		return text?.startsWith("[Role message ") ? this.stampFor(sessionFile, text) : undefined;
 	}
 
 	/** The last `n` messages, newest first, for Settings → Identities. */
@@ -1068,7 +1102,9 @@ export class RoleMessages {
 			delete r.nextTryAt;
 			this.inFlight.delete(r.id);
 			this.save();
-			this.log(`${r.id} delivered to ${r.to.role} (${r.targetChat ?? "?"})`);
+			this.log(
+				`${r.id} delivered to ${r.to.role} (${r.targetChat ?? "?"})${r.kind === "fyi" ? ", added without a turn" : ""}`,
+			);
 			return;
 		}
 		const state = this.host.chatState(target);
@@ -1089,7 +1125,8 @@ export class RoleMessages {
 			this.fail(r, `sent ${r.sends} times but it never landed in the chat`);
 			return;
 		}
-		const res = await this.host.deliver(target, text);
+		// An FYI starts no turn: it is added to the chat and read with its next message.
+		const res = r.kind === "fyi" ? await this.host.note(target, text) : await this.host.deliver(target, text);
 		if (res.ok) {
 			r.sends++;
 			delete r.error;

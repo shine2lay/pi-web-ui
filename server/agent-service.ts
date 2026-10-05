@@ -284,6 +284,7 @@ import {
 	chatLabel,
 	ownTaskOf,
 	queueEntriesOf,
+	ROLE_MESSAGE_CUSTOM_TYPE,
 	RoleMessages,
 	type RoleMessageSender,
 	type RoleReportReceipt,
@@ -1787,19 +1788,17 @@ function fullAt(conv: Conversation, idx: ChatIndex, i: number): UiMessage {
 		content: [],
 		timestamp: m.timestamp,
 	};
-	// role-messages: a message from another role that the store confirms shows as a labelled card.
-	if (roleMessageService && m.role === "user") {
-		const text = firstUserText(m);
-		if (text?.startsWith("[Role message ")) {
-			let file: string | undefined;
-			try {
-				file = conv.session.sessionFile ?? undefined;
-			} catch {
-				file = undefined;
-			}
-			const stamp = roleMessageService.stampFor(file, text);
-			if (stamp) msg.roleMessage = stamp;
+	// role-messages: a message from another role that the store confirms shows as a labelled card (an FYI
+	// is a role-message custom entry: added without a turn).
+	if (roleMessageService && (m.role === "user" || m.role === "custom")) {
+		let file: string | undefined;
+		try {
+			file = conv.session.sessionFile ?? undefined;
+		} catch {
+			file = undefined;
 		}
+		const stamp = roleMessageService.stampForMessage(file, m);
+		if (stamp) msg.roleMessage = stamp;
 	}
 	conv.uiMessageCache.set(key, msg);
 	return msg;
@@ -4784,6 +4783,30 @@ export class ClientSession {
 		if (!answer.ok) return { ok: false, error: answer.reason || "the chat didn't take it" };
 		// In the running list of every window, and kept open when switched away from.
 		conv.listed = true;
+		return { ok: true };
+	}
+
+	/**
+	 * role-messages: add an FYI to the chat with this transcript without starting a turn (this client is
+	 * the role message service's pseudo client, see AgentService.noteRoleMessage). The chat is opened if
+	 * it isn't (in the background); the text goes into its history as a shown custom message, which the
+	 * model reads with the chat's next turn. Nothing runs, so the chat isn't put in the running list.
+	 */
+	async noteRoleMessage(
+		file: string,
+		text: string,
+	): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> {
+		await this.switchSession(file);
+		const id = this.conversationIdBySessionFile(file);
+		const conv = id ? this.convs.get(id) : undefined;
+		if (!id || !conv || id !== this.activeId) return { ok: false, error: "couldn't open the chat" };
+		// A turn started meanwhile: after it (triggerTurn false never starts one, nor steers into one).
+		if (conv.session.isStreaming || (conv.sendsInFlight ?? 0) > 0)
+			return { ok: false, busy: true, error: "the chat is working" };
+		await conv.session.sendCustomMessage(
+			{ customType: ROLE_MESSAGE_CUSTOM_TYPE, content: [{ type: "text", text }], display: true },
+			{ triggerTurn: false },
+		);
 		return { ok: true };
 	}
 
@@ -14861,6 +14884,7 @@ export class AgentService {
 			roles: () => identityRegistry().identities,
 			chatState: (file) => this.queueChatState(file).state,
 			deliver: (file, text) => this.sendRoleMessage(file, text),
+			note: (file, text) => this.noteRoleMessage(file, text),
 			changed: () => this.onRoleMessagesChanged?.(),
 			log: (line) => console.log(line),
 		});
@@ -14938,6 +14962,36 @@ export class AgentService {
 				} finally {
 					// Open windows list the chat now; nobody watches through this client (its done ring rings).
 					this.pokeExternalRunning(ROLE_MESSAGES_CLIENT_ID);
+					this.detach(ROLE_MESSAGES_CLIENT_ID, sink);
+				}
+			} catch (err) {
+				return { ok: false, error: (err as Error).message };
+			}
+		});
+	}
+
+	/**
+	 * role-messages: add an FYI to the chat with this transcript without starting a turn: it is in the
+	 * chat's history at once (shown as the role message card) and the model reads it with the chat's next
+	 * turn. A closed chat is opened in the background only to add it (not listed as running); a working
+	 * chat gets nothing now (busy: the service tries again after its turn). One at a time, in line with
+	 * the deliveries.
+	 */
+	private noteRoleMessage(
+		file: string,
+		text: string,
+	): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> {
+		return this.roleMessagesChain(async (): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> => {
+			if (this.carryOnGate) await this.carryOnGate.catch(() => {});
+			if (this.quiesced) return { ok: false, error: "the server is restarting" };
+			if (!existsSync(file)) return { ok: false, error: "the chat's transcript is gone" };
+			if (this.queueChatState(file).state === "working") return { ok: false, busy: true, error: "the chat is working" };
+			const sink = (_msg: ServerMessage): void => {};
+			try {
+				const cs = await this.attach(ROLE_MESSAGES_CLIENT_ID, sink);
+				try {
+					return await cs.noteRoleMessage(file, text);
+				} finally {
 					this.detach(ROLE_MESSAGES_CLIENT_ID, sink);
 				}
 			} catch (err) {

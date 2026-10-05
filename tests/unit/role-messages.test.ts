@@ -4,14 +4,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { IdentityDef } from "../../server/identities.js";
+import { serializeMessage } from "../../server/serialize.js";
 import {
 	ROLE_MESSAGE_CHAIN_MAX,
+	ROLE_MESSAGE_CUSTOM_TYPE,
 	ROLE_MESSAGES_PER_HOUR,
 	RoleMessages as RoleMessagesBase,
 	chatLabel,
+	reportReplyIn,
 	roleMessageIdOf,
 	roleMessageText,
 	sha1,
+	transcriptHasRoleMessage,
 	type RoleMessageHost,
 	type RoleMessageSender,
 } from "../../server/role-messages.js";
@@ -42,6 +46,13 @@ function land(file: string, text: string): void {
 		`${JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text }] } })}\n`,
 	);
 }
+/** The chat got an FYI added without a turn (what pi appends for sendCustomMessage when idle). */
+function landNote(file: string, text: string, customType = ROLE_MESSAGE_CUSTOM_TYPE): void {
+	appendFileSync(
+		file,
+		`${JSON.stringify({ type: "custom_message", customType, content: [{ type: "text", text }], display: true })}\n`,
+	);
+}
 function queueEntry(file: string, data: Record<string, unknown>): void {
 	appendFileSync(
 		file,
@@ -62,7 +73,8 @@ const role = (id: string, title: string, homeChat?: string): IdentityDef =>
 
 interface Fake {
 	host: RoleMessageHost;
-	sent: Array<{ file: string; text: string }>;
+	/** via: "deliver" = a user message that starts a turn; "note" = an FYI added without one. */
+	sent: Array<{ file: string; text: string; via: "deliver" | "note" }>;
 	state: Map<string, "working" | "idle" | "closed">;
 	/** false: a send gets in but never lands (the run was stopped). */
 	lands: boolean;
@@ -80,8 +92,14 @@ function fake(roles: IdentityDef[]): Fake {
 			chatState: (file) => f.state.get(file) ?? "closed",
 			deliver: async (file, text) => {
 				if (f.fail) return { ok: false, error: f.fail };
-				f.sent.push({ file, text });
+				f.sent.push({ file, text, via: "deliver" });
 				if (f.lands) land(file, text);
+				return { ok: true };
+			},
+			note: async (file, text) => {
+				if (f.fail) return { ok: false, error: f.fail };
+				f.sent.push({ file, text, via: "note" });
+				if (f.lands) landNote(file, text);
 				return { ok: true };
 			},
 			log: () => {},
@@ -451,6 +469,119 @@ describe("delivery", () => {
 		await s.tick();
 		expect(existsSync(Q2)).toBe(false);
 		expect(s.byId(a3)).toMatchObject({ state: "delivered", target: A });
+	});
+
+	it("an FYI is added without a turn (note); a question, a request and a reply start one (deliver)", async () => {
+		const f = fake([role("alpha", "Alpha", A), role("beta", "Beta", B)]);
+		f.state.set(A, "idle");
+		f.state.set(B, "idle");
+		const s = new RoleMessages(store, f.host, clock);
+		const alpha = sender({ role: "alpha", file: A });
+		const fyi = s.send(alpha, { to: "beta", kind: "fyi", text: "FYI-1" });
+		const q = s.send(alpha, { to: "beta", kind: "question", text: "Q-1" });
+		const req = s.send(alpha, { to: "beta", kind: "request", text: "R-1" });
+		if (!fyi.ok || !q.ok || !req.ok) throw new Error("not sent");
+		await s.tick();
+		const re = s.send(sender({ role: "beta", file: B }), {
+			to: "alpha",
+			kind: "reply",
+			replyTo: q.record.id,
+			text: "A-1",
+		});
+		if (!re.ok) throw new Error(re.error);
+		await s.tick();
+		const via = (mark: string) => f.sent.filter((x) => x.text.includes(mark)).map((x) => x.via);
+		expect(via("FYI-1")).toEqual(["note"]);
+		expect(via("Q-1")).toEqual(["deliver"]);
+		expect(via("R-1")).toEqual(["deliver"]);
+		expect(via("A-1")).toEqual(["deliver"]);
+		// The FYI's proof is its role-message custom entry; delivered exactly once.
+		expect(s.byId(fyi.record.id)).toMatchObject({ state: "delivered", target: B, sends: 1 });
+		await s.tick();
+		expect(via("FYI-1")).toHaveLength(1);
+		const text = f.sent.find((x) => x.via === "note")?.text ?? "";
+		expect(text.split("\n").at(-1)).toBe(
+			"(An FYI from another role, added without a turn of its own: no reply needed.)",
+		);
+		// An FYI never deepens a chain: the chat's last user message is still not a role message.
+		expect(s.handlingDepth(B, "hello")).toBe(0);
+	});
+
+	it("an FYI waits while its chat works, and isn't sent again once its custom entry is there", async () => {
+		const f = fake([role("alpha", "Alpha", A), role("beta", "Beta", B)]);
+		f.state.set(B, "working");
+		const s = new RoleMessages(store, f.host, clock);
+		const fyi = s.send(sender({ role: "alpha", file: A }), { to: "beta", kind: "fyi", text: "wait for it" });
+		if (!fyi.ok) throw new Error(fyi.error);
+		await s.tick();
+		now += 60_000;
+		await s.tick();
+		expect(f.sent).toHaveLength(0);
+		expect(s.byId(fyi.record.id)?.state).toBe("waiting");
+		f.state.set(B, "idle");
+		await s.tick();
+		expect(f.sent.map((x) => x.via)).toEqual(["note"]);
+		expect(s.byId(fyi.record.id)?.state).toBe("delivered");
+		// A busy answer from note (a turn started meanwhile) is no failed attempt.
+		const f2 = fake([role("alpha", "Alpha", A), role("beta", "Beta", B)]);
+		f2.state.set(B, "idle");
+		f2.host.note = async () => ({ ok: false, busy: true, error: "the chat is working" });
+		const s2 = new RoleMessages(join(dir, "data2", "role-messages.json"), f2.host, clock);
+		const b = s2.send(sender({ role: "alpha", file: A }), { to: "beta", kind: "fyi", text: "busy" });
+		if (!b.ok) throw new Error(b.error);
+		await s2.tick();
+		expect(s2.byId(b.record.id)).toMatchObject({ state: "waiting", attempts: 0 });
+	});
+
+	it("the delivery proof: a role-message custom entry after scanFrom counts, another custom type doesn't", async () => {
+		const id = "rm-0123abcd";
+		const text = `[Role message ${id} from alpha (Alpha), sent from its home chat \u00b7 fyi]\n\nx`;
+		const from = readFileSync(B).length;
+		landNote(B, text, "file");
+		expect(await transcriptHasRoleMessage(B, from, id)).toBe(false);
+		landNote(B, text);
+		expect(await transcriptHasRoleMessage(B, from, id)).toBe(true);
+		expect(await transcriptHasRoleMessage(B, readFileSync(B).length, id)).toBe(false);
+	});
+
+	it("the card for an FYI's custom entry: only for the text the store sent there, and serialized as custom", async () => {
+		const f = fake([role("alpha", "Alpha", A), role("beta", "Beta", B)]);
+		f.state.set(B, "idle");
+		const s = new RoleMessages(store, f.host, clock);
+		const fyi = s.send(sender({ role: "alpha", file: A }), { to: "beta", kind: "fyi", text: "carded" });
+		if (!fyi.ok) throw new Error(fyi.error);
+		await s.tick();
+		const text = f.sent[0]?.text ?? "";
+		const custom = (t: string, customType = ROLE_MESSAGE_CUSTOM_TYPE) => ({
+			role: "custom",
+			customType,
+			content: [{ type: "text", text: t }],
+			display: true,
+			timestamp: now,
+		});
+		expect(s.stampForMessage(B, custom(text))).toMatchObject({ id: fyi.record.id, from: "alpha", kind: "fyi" });
+		// Same id, other text: no card. Another custom type, another chat: no card.
+		expect(s.stampForMessage(B, custom(`${text} (changed)`))).toBeUndefined();
+		expect(s.stampForMessage(B, custom(text, "file"))).toBeUndefined();
+		expect(s.stampForMessage(A, custom(text))).toBeUndefined();
+		// A user message with that text still gets it (role messages sent before the FYI change).
+		expect(s.stampForMessage(B, { role: "user", content: [{ type: "text", text }] })?.id).toBe(fyi.record.id);
+		expect(s.stampForMessage(B, { role: "assistant", content: [{ type: "text", text }] })).toBeUndefined();
+		// What the page gets: a shown custom message of that type, with the text.
+		const ui = serializeMessage(custom(text) as unknown as Parameters<typeof serializeMessage>[0], 1);
+		expect(ui).toMatchObject({ role: "custom", customType: "role-message", content: [{ type: "text", text }] });
+	});
+
+	it("a 6 am report's answer isn't ended by an FYI's custom entry", async () => {
+		const id = "rm-0badcafe";
+		land(B, `[Role message ${id} from the app \u00b7 6 am report \u00b7 2026-10-03]\n\nreport please`);
+		landNote(B, "[Role message rm-11112222 from alpha (Alpha), sent from its home chat \u00b7 fyi]\n\nnews");
+		appendFileSync(
+			B,
+			`${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "## Goal or hypothesis\nx" }] } })}\n`,
+		);
+		const scan = await reportReplyIn(B, 0, id);
+		expect(scan).toMatchObject({ request: true, ended: false, answered: true });
 	});
 
 	it("keeps a store it can't read aside instead of dropping it", () => {

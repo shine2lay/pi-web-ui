@@ -28,6 +28,7 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 		description:
 			"Send a message to another role's chat (see the roles list in your role section): ask it a question, ask it to do work in its area (request), tell it something it should know (fyi), or answer a question or request you got (reply, with replyTo). " +
 			"The server delivers it to that role's home chat after any running turn there, marked as from your role and this chat; a reply goes back to the chat that asked. " +
+			"A question, request or reply starts a turn there at once; an fyi is added to that chat without starting a turn, and that chat reads it with its next message. " +
 			"Answers arrive later as new messages in this chat: don't wait for them. Keep it self-contained (paths, ids; no secrets).",
 		promptSnippet: "message another role's chat (question / request / fyi / reply); answers come later as new messages",
 		parameters: Type.Object({
@@ -65,7 +66,9 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 					: "";
 			const text = res.paused
 				? `Held ${r.id} (${r.kind} to ${r.to.role}): the owner has paused role messages. It is delivered once they are resumed.${answerComes}`
-				: `Sent ${r.id} (${r.kind} to ${r.to.role}). It arrives in ${res.targetChat} after any running turn there.${answerComes}`;
+				: r.kind === "fyi"
+					? `Sent ${r.id} (fyi to ${r.to.role}). It's added to ${res.targetChat} without starting a turn; that chat reads it with its next message.`
+					: `Sent ${r.id} (${r.kind} to ${r.to.role}). It arrives in ${res.targetChat} after any running turn there.${answerComes}`;
 			return {
 				content: [{ type: "text", text }],
 				details: { id: r.id, to: r.to.role, kind: r.kind, chain: r.chain, state: res.paused ? "held" : "waiting" },
