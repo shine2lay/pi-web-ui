@@ -35,6 +35,7 @@ import type { IdentityFileName, IdentitySaveError, UiChatIdentity, UiIdentityInf
 import { loadSettings, PROMPT_MAX, roleCaps, type Settings } from "./identity-config.js";
 import { rulesCap } from "./identity-notes.js";
 import {
+	ABOUT_MAX,
 	checkConfigText,
 	draftIds,
 	draftsDir,
@@ -48,16 +49,14 @@ import {
 	type RoleView,
 } from "./identity-roles.js";
 
-export { textHash } from "./identity-roles.js";
+// about-drafts: ABOUT_MAX lives in identity-roles.ts now (an accepted draft's about page has the same cap).
+export { ABOUT_MAX, textHash } from "./identity-roles.js";
 
 /** pi-identity 的 customType（与 pi-identity identity.ts 的 ENTRY_TYPE 一致）。 */
 export const IDENTITY_ENTRY_TYPE = "identity";
 
 /** 笔记本的上限（字节），与 pi-identity 的 NOTEBOOK_CAP 一致。 */
 export const NOTEBOOK_CAP = 8_000; // identity-config: the default; notebookCap in pi-identity.json wins
-
-/** about.md 的安全上限（字节）：它没有规定的上限，这里只防一次粘贴把整份注入撑爆。 */
-export const ABOUT_MAX = 64_000;
 
 const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 

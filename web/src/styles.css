@@ -16642,6 +16642,40 @@ button.source-default-toggle {
 .identity-draft-config.identity-editor-text {
 	min-height: 110px;
 }
+/* about-drafts: the suggested about page, and "What changes" against the role's page now */
+.identity-draft-about-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 6px;
+}
+.identity-draft-views {
+	display: inline-flex;
+	gap: 4px;
+}
+.identity-draft-about.identity-editor-text {
+	min-height: 260px;
+}
+.identity-draft-changes {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.identity-draft-change-count {
+	margin: 0;
+}
+.identity-draft-diff.scm-diff-pre {
+	max-height: 420px;
+	overflow: auto;
+	padding: 4px 0;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--bg);
+}
+.identity-draft-diff .scm-diff-line {
+	padding: 0 10px;
+}
 .identity-draft-notes {
 	font-size: 12px;
 	color: var(--text-dim);

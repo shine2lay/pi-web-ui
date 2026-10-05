@@ -11,7 +11,12 @@
  *  - alpha's draft opens with its prompt, settings and reasons; accepting it with an edited prompt
  *    writes the prompt (the old one kept in archive/) and merges the settings into identity.json; the
  *    draft moves to role-drafts/.old/; the row shows the new limits and skills;
- *  - beta's draft is refused (its settings are wrong: reasons listed, nothing written), then discarded;
+ *  - beta's draft is refused (its settings are wrong: reasons listed, nothing written), then discarded
+ *    (its about page with it, into role-drafts/.old/);
+ *  - about-drafts: gamma's draft has only an about page: it opens editable with no prompt box, "What
+ *    changes" shows it line by line against gamma's page now; a draft the role wrote again after it was
+ *    opened is refused (nothing written); reopened, edited and accepted, it is gamma's about page (the old
+ *    one kept in archive/, the server log names it);
  *  - alpha's own skill lives in its private folder: the identity list every window gets only counts it;
  *    its name and description come only in the answer to the Settings page's own ask (identity_skills).
  * Usage: npm run build && node tests/identity-config-test.mjs   (ROLECFG_SHOT=/tmp/rc saves screenshots)
@@ -75,6 +80,21 @@ write(join(draftsRoot, "alpha", "config.json"), DRAFT_CONFIG);
 write(join(draftsRoot, "alpha", "notes.md"), "No subagents: alpha's work is small.\n");
 write(join(draftsRoot, "beta", "prompt.md"), "You are beta.\n");
 write(join(draftsRoot, "beta", "config.json"), `${JSON.stringify({ skills: { own: "yes" } })}\n`);
+const BETA_DRAFT_ABOUT = "# Beta\nLooks after the beta things, drafted.\n";
+write(join(draftsRoot, "beta", "about.md"), BETA_DRAFT_ABOUT);
+
+// about-drafts: gamma's draft suggests only a new about page (and says why).
+const GAMMA_ABOUT = "# Gamma\n\n**Focus:** the gamma things.\n\n## Rules\n- Keep it small.\n- Ask before deleting.\n";
+const GAMMA_DRAFT_ABOUT =
+	"# Gamma\n\n**Focus:** the gamma things.\n\n## How you work\n- You run the gamma department.\n\n## Rules\n- Keep it small.\n";
+write(roleFile("gamma", "identity.json"), `${JSON.stringify({ id: "gamma", title: "Gamma" }, null, "\t")}\n`);
+write(roleFile("gamma", "about.md"), GAMMA_ABOUT);
+write(roleFile("gamma", "notebook.md"), "");
+write(join(draftsRoot, "gamma", "about.md"), GAMMA_DRAFT_ABOUT);
+write(
+	join(draftsRoot, "gamma", "notes.md"),
+	"## What changes\n- a How you work part\n## Why\n- the owner asked\n## Notebook lines to fix\n- none\n",
+);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failures = 0;
@@ -214,8 +234,8 @@ try {
 
 	console.log("the rows: prompt, skills, tool limits, problems, drafts");
 	check(
-		"lists both roles",
-		await waitFor(async () => (await W.locator(".identity-row").count()) === 2, 10000),
+		"lists the three roles",
+		await waitFor(async () => (await W.locator(".identity-row").count()) === 3, 10000),
 		String(await W.locator(".identity-row").count()),
 	);
 	check(
@@ -276,13 +296,21 @@ try {
 		await waitFor(async () => serverLog.includes("[identities] beta's settings:"), 5000),
 	);
 	check(
-		"both rows say a draft is waiting",
+		"the three rows say a draft is waiting",
 		(await row(W, "alpha").locator(".identity-draft-badge").count()) === 1 &&
-			(await row(W, "beta").locator(".identity-draft-badge").count()) === 1,
+			(await row(W, "beta").locator(".identity-draft-badge").count()) === 1 &&
+			(await row(W, "gamma").locator(".identity-draft-badge").count()) === 1,
 	);
 	check(
-		"the header counts two drafts",
-		(await W.locator('.identity-drafts-count[data-count="2"]').count()) === 1,
+		"...gamma's badge says it suggests an about page",
+		(await row(W, "gamma").locator(".identity-draft-badge").getAttribute("title"))?.startsWith(
+			`A suggested about page (${Buffer.byteLength(GAMMA_DRAFT_ABOUT)} bytes), prompt (0 bytes)`,
+		) === true,
+		String(await row(W, "gamma").locator(".identity-draft-badge").getAttribute("title")),
+	);
+	check(
+		"the header counts three drafts",
+		(await W.locator('.identity-drafts-count[data-count="3"]').count()) === 1,
 		await textOf(W.locator(".identity-drafts-count")),
 	);
 	await shot(W, "rows");
@@ -428,7 +456,10 @@ try {
 	);
 	check(
 		"...nothing written: beta's identity.json and folder as they were",
-		read(roleFile("beta", "identity.json")) === BETA_JSON && !existsSync(roleFile("beta", "prompt.md")),
+		read(roleFile("beta", "identity.json")) === BETA_JSON &&
+			!existsSync(roleFile("beta", "prompt.md")) &&
+			read(roleFile("beta", "about.md")) === "# Beta\nLooks after the beta things.\n" &&
+			!existsSync(join(idDir, "beta", "archive")),
 	);
 	check("...the draft still waits", existsSync(join(draftsRoot, "beta", "config.json")));
 	check("...and the server log says so", serverLog.includes("[identities] refused the draft for beta:"));
@@ -445,6 +476,125 @@ try {
 		"...and the draft is kept in role-drafts/.old/",
 		!existsSync(join(draftsRoot, "beta")) && oldDrafts().some((n) => n.startsWith("beta-") && n.endsWith("-discarded")),
 		oldDrafts().join(", "),
+	);
+	const betaOld = oldDrafts().find((n) => n.startsWith("beta-") && n.endsWith("-discarded"));
+	check(
+		"...its about page with it; beta's own page as it was",
+		!!betaOld &&
+			read(join(draftsRoot, ".old", betaOld, "about.md")) === BETA_DRAFT_ABOUT &&
+			read(roleFile("beta", "about.md")) === "# Beta\nLooks after the beta things.\n",
+	);
+	await draftBox(W, "beta").locator(".identity-close").click();
+
+	console.log("gamma's draft (about page only): view, what changes, refused when changed, edit, accept");
+	await row(W, "gamma").locator(".identity-draft-btn").click();
+	const gammaAbout = draftBox(W, "gamma").locator(".identity-draft-about");
+	check(
+		"the draft opens with its about page",
+		await waitFor(async () => (await gammaAbout.inputValue()) === GAMMA_DRAFT_ABOUT, 10000),
+	);
+	check(
+		"...no prompt box (it suggests none)",
+		(await draftBox(W, "gamma").locator(".identity-draft-prompt").count()) === 0,
+	);
+	check(
+		"...and why",
+		(await textOf(draftBox(W, "gamma").locator(".identity-draft-notes"))).includes("the owner asked"),
+	);
+	await draftBox(W, "gamma").locator(".identity-draft-view-changes").click();
+	const diff = draftBox(W, "gamma").locator(".identity-draft-diff");
+	check(
+		"What changes: a line diff against gamma's page now",
+		await waitFor(async () => (await diff.count()) === 1, 5000),
+	);
+	const added = (await diff.locator(".scm-diff-line.add").allTextContents()).map((s) => s.trim());
+	const removed = (await diff.locator(".scm-diff-line.del").allTextContents()).map((s) => s.trim());
+	check(
+		"...the new lines added, the dropped one removed",
+		added.includes("+ ## How you work") &&
+			added.includes("+ - You run the gamma department.") &&
+			removed.includes("- - Ask before deleting.") &&
+			!added.some((s) => s.includes("Keep it small")),
+		`added ${added.join(" | ")}; removed ${removed.join(" | ")}`,
+	);
+	check(
+		"...and counts them",
+		(await textOf(draftBox(W, "gamma").locator(".identity-draft-change-count"))) ===
+			`Against the role's about page now: ${added.length} lines added, ${removed.length} removed.`,
+		await textOf(draftBox(W, "gamma").locator(".identity-draft-change-count")),
+	);
+	await diff.scrollIntoViewIfNeeded();
+	await shot(W, "about-changes");
+	// The role's chat writes its draft again while the owner looks at it: accepting the old view is refused.
+	const GAMMA_REDRAFT = `${GAMMA_DRAFT_ABOUT}- Check results yourself.\n`;
+	write(join(draftsRoot, "gamma", "about.md"), GAMMA_REDRAFT);
+	await draftBox(W, "gamma").locator(".identity-draft-accept").click();
+	check(
+		"a draft that changed since it was opened is refused",
+		await waitFor(
+			async () =>
+				(await draftNote(W, "gamma").textContent()) ===
+				"Not saved: the file changed after you opened it. Reload it first.",
+			10000,
+		),
+		String(await draftNote(W, "gamma").textContent()),
+	);
+	check(
+		"...nothing written: gamma's page as it was, nothing archived, the draft still waits",
+		read(roleFile("gamma", "about.md")) === GAMMA_ABOUT &&
+			!existsSync(join(idDir, "gamma", "archive")) &&
+			read(join(draftsRoot, "gamma", "about.md")) === GAMMA_REDRAFT,
+	);
+	await draftBox(W, "gamma").locator(".identity-close").click();
+	await row(W, "gamma").locator(".identity-draft-btn").click();
+	check(
+		"reopened, it shows the draft as the role wrote it last",
+		await waitFor(
+			async () => (await draftBox(W, "gamma").locator(".identity-draft-about").inputValue()) === GAMMA_REDRAFT,
+			10000,
+		),
+	);
+	const gammaFinal = `${GAMMA_REDRAFT}- Edited by the owner.\n`;
+	await draftBox(W, "gamma").locator(".identity-draft-about").fill(gammaFinal);
+	await draftBox(W, "gamma").locator(".identity-draft-accept").click();
+	check(
+		"accepted: the page says so",
+		await waitFor(
+			async () =>
+				(await draftNote(W, "gamma").textContent()) === "Accepted: the role's chats use it from their next start.",
+			10000,
+		),
+		String(await draftNote(W, "gamma").textContent()),
+	);
+	check("the edited about page is gamma's page now", read(roleFile("gamma", "about.md")) === gammaFinal);
+	const gammaArchive = existsSync(join(idDir, "gamma", "archive")) ? readdirSync(join(idDir, "gamma", "archive")) : [];
+	check(
+		"...the old page is kept in archive/",
+		gammaArchive.length === 1 &&
+			gammaArchive[0].startsWith("about-") &&
+			read(join(idDir, "gamma", "archive", gammaArchive[0])) === GAMMA_ABOUT,
+		gammaArchive.join(", "),
+	);
+	check(
+		"...gamma's settings untouched, and no prompt appeared",
+		JSON.parse(read(roleFile("gamma", "identity.json"))).title === "Gamma" &&
+			!existsSync(roleFile("gamma", "prompt.md")),
+	);
+	check(
+		"...the draft moved to role-drafts/.old/",
+		!existsSync(join(draftsRoot, "gamma")) &&
+			oldDrafts().some((n) => n.startsWith("gamma-") && n.endsWith("-accepted")),
+		oldDrafts().join(", "),
+	);
+	check(
+		"the server log names the about page",
+		await waitFor(
+			async () =>
+				serverLog.includes(
+					"[identities] the owner accepted the draft for gamma: its about page into about.md (an old one kept in archive/)",
+				),
+			5000,
+		),
 	);
 	check(
 		"no drafts waiting now",

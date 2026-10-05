@@ -54,4 +54,8 @@
 // 37: owner-only per-queue Auto approve / Auto start, session-fenced settings.
 // 38: queue-task-profiles — owner defaults/task overrides and per-field launch sources.
 // 39: all-chats model choice + labelled default action in the model picker.
-export const PROTOCOL_VERSION = 39;
+// 40: about-drafts - a role draft can suggest an about page: identity_draft carries about and
+//     currentAbout, identity_draft_save / _accept carry about, and a row's draft carries aboutSize. An
+//     old page wouldn't show the about page (the server refuses its accept as changed); an old server
+//     would drop the about page from a save.
+export const PROTOCOL_VERSION = 40;

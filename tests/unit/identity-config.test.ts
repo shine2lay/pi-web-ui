@@ -12,6 +12,9 @@
  * - drafts: listed, read, saved against their hash, accepted (an app save: the prompt into the role's
  *   prompt file, the old one archived, the settings merged into identity.json, the draft kept in .old/),
  *   refused (bad settings, an older read), discarded;
+ * - about-drafts: a draft with only an about page (listed, read, saved), accepted (about.md written whole,
+ *   the old page in the role's archive/, the rest of the role untouched), refused when it changed since it
+ *   was read (an older hash, a page that never showed the about page, a too big page), discarded to .old/;
  * - the page's draft store, and the row's render.
  *
  * No model and no port: the production functions, a temp pi folder and a fake sender.
@@ -23,6 +26,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	ABOUT_MAX,
 	identityInfos,
 	identityRegistry,
 	readIdentityFile,
@@ -77,9 +81,10 @@ function writeRole(id: string, config: Record<string, unknown>, files: Record<st
 	}
 }
 
-function writeDraft(id: string, files: { prompt?: string; config?: string; notes?: string }) {
+function writeDraft(id: string, files: { about?: string; prompt?: string; config?: string; notes?: string }) {
 	const d = join(drafts, id);
 	mkdirSync(d, { recursive: true });
+	if (files.about !== undefined) writeFileSync(join(d, "about.md"), files.about);
 	if (files.prompt !== undefined) writeFileSync(join(d, "prompt.md"), files.prompt);
 	if (files.config !== undefined) writeFileSync(join(d, "config.json"), files.config);
 	if (files.notes !== undefined) writeFileSync(join(d, "notes.md"), files.notes);
@@ -423,7 +428,11 @@ describe("drafts waiting for the owner", () => {
 		mkdirSync(join(drafts, ".old", "alpha-old"), { recursive: true });
 		writeDraft("nobody", { prompt: "x\n" });
 		expect(draftIds(drafts)).toEqual(["alpha", "nobody"]);
-		expect(info("alpha")?.draft).toEqual({ promptSize: Buffer.byteLength(draftPrompt), fields: ["tools", "skills"] });
+		expect(info("alpha")?.draft).toEqual({
+			aboutSize: 0,
+			promptSize: Buffer.byteLength(draftPrompt),
+			fields: ["tools", "skills"],
+		});
 		expect(info("beta")?.draft).toBeUndefined();
 		expect(identityRegistry(true).problems).toContain("role-drafts/nobody: a draft for a role that doesn't exist");
 	});
@@ -437,13 +446,16 @@ describe("drafts waiting for the owner", () => {
 		});
 		expect(readDraft(drafts, "beta")).toBeNull();
 		expect(readDraft(drafts, "../identities")).toBeNull();
-		expect(saveDraft(drafts, "alpha", "edited\n", draftConfig, textHash("old"))).toEqual({
+		const edited = { about: "", prompt: "edited\n", config: draftConfig };
+		expect(saveDraft(drafts, "alpha", edited, textHash("old"))).toEqual({
 			ok: false,
 			code: "changed",
 		});
-		const saved = saveDraft(drafts, "alpha", "edited\n", draftConfig, d!.hash);
+		const saved = saveDraft(drafts, "alpha", edited, d!.hash);
 		expect(saved).toMatchObject({ ok: true });
 		expect(read(drafts, "alpha", "prompt.md")).toBe("edited\n");
+		// No about page in the draft, none written into it.
+		expect(existsSync(join(drafts, "alpha", "about.md"))).toBe(false);
 		expect(readDraft(drafts, "alpha")?.hash).toBe((saved as { hash: string }).hash);
 		// A draft stays a draft: nothing in the role's folder changed.
 		expect(read(idDir, "alpha", "prompt.md")).toBe(PROMPT);
@@ -457,14 +469,15 @@ describe("drafts waiting for the owner", () => {
 		const r = acceptDraft(
 			{ id: "alpha", dir: def.dir, raw: def.raw },
 			drafts,
-			d.prompt,
-			d.config,
+			{ about: d.about, prompt: d.prompt, config: d.config },
 			d.hash,
 			reg.settings,
 			now,
 		);
 		expect(r).toEqual({ ok: true, promptFile: "prompt.md", fields: ["tools", "skills"] });
 		expect(read(idDir, "alpha", "prompt.md")).toBe(draftPrompt);
+		// No about page in the draft: the role's stays as it is.
+		expect(read(idDir, "alpha", "about.md")).toBe("About alpha\n");
 		expect(read(idDir, "alpha", "archive", "prompt-2026-10-02-103000.md")).toBe(PROMPT);
 		const config = JSON.parse(read(idDir, "alpha", "identity.json"));
 		// Its own fields stay; the draft's replace the ones it sets.
@@ -484,8 +497,7 @@ describe("drafts waiting for the owner", () => {
 		const r = acceptDraft(
 			{ id: "beta", dir: def.dir, raw: def.raw },
 			drafts,
-			"The owner's words",
-			JSON.stringify({ unique: true }),
+			{ about: "", prompt: "The owner's words", config: JSON.stringify({ unique: true }) },
 			d.hash,
 			reg.settings,
 		);
@@ -502,7 +514,13 @@ describe("drafts waiting for the owner", () => {
 		const d = readDraft(drafts, "alpha")!;
 		const before = { config: read(idDir, "alpha", "identity.json"), prompt: read(idDir, "alpha", "prompt.md") };
 		const accept = (config: string, hash = d.hash) =>
-			acceptDraft({ id: "alpha", dir: def.dir, raw: def.raw }, drafts, d.prompt, config, hash, reg.settings);
+			acceptDraft(
+				{ id: "alpha", dir: def.dir, raw: def.raw },
+				drafts,
+				{ about: d.about, prompt: d.prompt, config },
+				hash,
+				reg.settings,
+			);
 
 		const bad = accept(JSON.stringify({ tools: { deny: "bash" }, title: "Renamed", homeChat: "/x" }));
 		expect(bad).toMatchObject({ ok: false, code: "invalid" });
@@ -530,6 +548,113 @@ describe("drafts waiting for the owner", () => {
 	});
 });
 
+describe("about-page drafts (about-drafts)", () => {
+	const newAbout = "# Alpha\n\n**Focus:** the new focus.\n\n## How you work\n- You run it.\n";
+	const notes = "## What changes\n- new page\n## Why\n- the owner asked\n## Notebook lines to fix\n- none\n";
+	beforeEach(() => {
+		writeDraft("alpha", { about: newAbout, notes });
+	});
+	const alphaDef = () => {
+		const reg = identityRegistry(true);
+		return { reg, def: reg.identities.find((i) => i.id === "alpha")! };
+	};
+
+	it("a draft with only an about page is listed (its size), read and saved; the role's page doesn't move", () => {
+		expect(info("alpha")?.draft).toEqual({ aboutSize: Buffer.byteLength(newAbout), promptSize: 0, fields: [] });
+		const d = readDraft(drafts, "alpha")!;
+		expect(d).toMatchObject({ about: newAbout, prompt: "", config: "", notes });
+		const saved = saveDraft(drafts, "alpha", { about: "# Alpha, edited\n", prompt: "", config: "" }, d.hash);
+		expect(saved).toMatchObject({ ok: true });
+		expect(read(drafts, "alpha", "about.md")).toBe("# Alpha, edited\n");
+		// No empty prompt.md or config.json appears in the draft.
+		expect(readdirSync(join(drafts, "alpha")).sort()).toEqual(["about.md", "notes.md"]);
+		expect(readDraft(drafts, "alpha")?.hash).toBe((saved as { hash: string }).hash);
+		expect(read(idDir, "alpha", "about.md")).toBe("About alpha\n");
+	});
+
+	it("accepting writes the about page whole, keeps the old one in archive/, leaves the rest, retires the draft", () => {
+		const { reg, def } = alphaDef();
+		const before = { config: read(idDir, "alpha", "identity.json"), prompt: read(idDir, "alpha", "prompt.md") };
+		const d = readDraft(drafts, "alpha")!;
+		const now = new Date(2026, 9, 4, 12, 0, 0);
+		const r = acceptDraft(
+			{ id: "alpha", dir: def.dir, raw: def.raw },
+			drafts,
+			{ about: d.about, prompt: d.prompt, config: d.config },
+			d.hash,
+			reg.settings,
+			now,
+		);
+		expect(r).toEqual({ ok: true, aboutFile: "about.md", fields: [] });
+		expect(read(idDir, "alpha", "about.md")).toBe(newAbout);
+		expect(read(idDir, "alpha", "archive", "about-2026-10-04-120000.md")).toBe("About alpha\n");
+		expect(read(idDir, "alpha", "identity.json")).toBe(before.config);
+		expect(read(idDir, "alpha", "prompt.md")).toBe(before.prompt);
+		expect(readDraft(drafts, "alpha")).toBeNull();
+		expect(readdirSync(join(drafts, ".old"))).toEqual(["alpha-2026-10-04-120000-accepted"]);
+		expect(read(drafts, ".old", "alpha-2026-10-04-120000-accepted", "about.md")).toBe(newAbout);
+		expect(info("alpha")).toMatchObject({ aboutSize: Buffer.byteLength(newAbout) });
+		expect(info("alpha")?.draft).toBeUndefined();
+	});
+
+	it("accepts the owner's edits to the page as shown; a role with no page gets its first one, nothing archived", () => {
+		const reg = identityRegistry(true);
+		const def = reg.identities.find((i) => i.id === "beta")!;
+		writeDraft("beta", { about: "# Beta\n" });
+		const d = readDraft(drafts, "beta")!;
+		const r = acceptDraft(
+			{ id: "beta", dir: def.dir, raw: def.raw },
+			drafts,
+			{ about: "# Beta, as the owner wrote it", prompt: "", config: "" },
+			d.hash,
+			reg.settings,
+		);
+		expect(r).toEqual({ ok: true, aboutFile: "about.md", fields: [] });
+		expect(read(idDir, "beta", "about.md")).toBe("# Beta, as the owner wrote it\n");
+		expect(existsSync(join(idDir, "beta", "archive"))).toBe(false);
+		expect(existsSync(join(idDir, "beta", "prompt.md"))).toBe(false);
+	});
+
+	it("refuses a draft that changed since it was read, a page that never showed it, and a page too big; nothing changes", () => {
+		const { reg, def } = alphaDef();
+		const d = readDraft(drafts, "alpha")!;
+		const accept = (about: string | null, hash = d.hash) =>
+			acceptDraft(
+				{ id: "alpha", dir: def.dir, raw: def.raw },
+				drafts,
+				{ about, prompt: "", config: "" },
+				hash,
+				reg.settings,
+			);
+		// The role's chat wrote the draft again after the owner opened it.
+		writeDraft("alpha", { about: `${newAbout}- one more line\n` });
+		expect(accept(d.about)).toEqual({ ok: false, code: "changed" });
+		expect(saveDraft(drafts, "alpha", { about: d.about, prompt: "", config: "" }, d.hash)).toEqual({
+			ok: false,
+			code: "changed",
+		});
+		const fresh = readDraft(drafts, "alpha")!;
+		// A page from before about-drafts sends no about page: refused, so nobody accepts one unseen.
+		expect(accept(null, fresh.hash)).toEqual({ ok: false, code: "changed" });
+		expect(accept("x".repeat(ABOUT_MAX + 1), fresh.hash)).toEqual({ ok: false, code: "too_big" });
+		expect(read(idDir, "alpha", "about.md")).toBe("About alpha\n");
+		expect(existsSync(join(idDir, "alpha", "archive"))).toBe(false);
+		expect(readDraft(drafts, "alpha")?.about).toBe(`${newAbout}- one more line\n`);
+		expect(existsSync(join(drafts, ".old"))).toBe(false);
+		// The fresh read is accepted.
+		expect(accept(fresh.about, fresh.hash)).toMatchObject({ ok: true, aboutFile: "about.md" });
+	});
+
+	it("discarding moves the draft, about page and all, to .old/; the role's page stays", () => {
+		const now = new Date(2026, 9, 4, 12, 30, 0);
+		expect(discardDraft(drafts, "alpha", now)).toEqual({ ok: true });
+		expect(readDraft(drafts, "alpha")).toBeNull();
+		expect(read(drafts, ".old", "alpha-2026-10-04-123000-discarded", "about.md")).toBe(newAbout);
+		expect(read(drafts, ".old", "alpha-2026-10-04-123000-discarded", "notes.md")).toBe(notes);
+		expect(read(idDir, "alpha", "about.md")).toBe("About alpha\n");
+	});
+});
+
 describe("the page", () => {
 	const alpha: UiIdentityInfo = {
 		id: "alpha",
@@ -546,7 +671,7 @@ describe("the page", () => {
 		toolLimits: "deny subagents, browser",
 		unique: true,
 		configProblems: ['unknown field "colour" (known: id, title)'],
-		draft: { promptSize: 2100, fields: ["tools", "skills"] },
+		draft: { aboutSize: 3000, promptSize: 2100, fields: ["tools", "skills"] },
 	};
 	const beta: UiIdentityInfo = {
 		id: "beta",
@@ -633,6 +758,64 @@ describe("the page", () => {
 		expect(getIdentityDraft()?.done).toEqual({ action: "discard", ok: true });
 		closeIdentityDraft();
 		expect(getIdentityDraft()).toBeNull();
+	});
+
+	it("about-drafts: the store keeps the suggested about page and the page now; save and accept send the page as shown", () => {
+		const sent: unknown[] = [];
+		setAppSend((msg) => {
+			sent.push(msg);
+			return true;
+		});
+		receiveIdentities({ type: "identities", identities: [alpha, beta], problems: [] });
+		openIdentityDraft("alpha");
+		receiveIdentityDraft({
+			type: "identity_draft",
+			id: "alpha",
+			about: "# Alpha\n\nNew page\n",
+			currentAbout: "# Alpha\n\nOld page\n",
+			prompt: "",
+			config: "",
+			notes: "## Why\n",
+			hash: "h1",
+		});
+		expect(getIdentityDraft()).toMatchObject({
+			status: "ready",
+			about: "# Alpha\n\nNew page\n",
+			currentAbout: "# Alpha\n\nOld page\n",
+		});
+		// The open draft renders the about page (editable), its two views, and no empty prompt box.
+		const html = renderToStaticMarkup(
+			createElement(LanguageProvider, null, createElement(IdentitiesSettings, { onOpenChat: () => {} })),
+		);
+		expect(html).toContain("identity-draft-about");
+		expect(html).toContain("New page");
+		expect(html).toContain("Suggested page");
+		expect(html).toContain("What changes");
+		expect(html).not.toContain("identity-draft-prompt");
+		expect(html).toContain("identity-draft-config");
+		// The row's badge says what the draft suggests.
+		expect(html).toContain("A suggested about page (3,000 bytes), prompt (2,100 bytes) and settings (tools, skills)");
+
+		expect(sendIdentityDraftAction("save", "", "", "# Alpha\n\nEdited\n")).toBe(true);
+		expect(sent.at(-1)).toEqual({
+			type: "identity_draft_save",
+			id: "alpha",
+			about: "# Alpha\n\nEdited\n",
+			prompt: "",
+			config: "",
+			baseHash: "h1",
+		});
+		receiveIdentityDraftDone({ type: "identity_draft_done", id: "alpha", action: "save", ok: true, hash: "h2" });
+		expect(getIdentityDraft()).toMatchObject({ about: "# Alpha\n\nEdited\n", hash: "h2" });
+		expect(sendIdentityDraftAction("accept", "", "", "# Alpha\n\nEdited\n")).toBe(true);
+		expect(sent.at(-1)).toEqual({
+			type: "identity_draft_accept",
+			id: "alpha",
+			about: "# Alpha\n\nEdited\n",
+			prompt: "",
+			config: "",
+			baseHash: "h2",
+		});
 	});
 
 	it("each row shows the role's prompt, skills, tool limits and problems, and a waiting draft", () => {

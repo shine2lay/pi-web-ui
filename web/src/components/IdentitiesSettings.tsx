@@ -13,7 +13,9 @@
  * pi-identity leaves out of its identity.json; its prompt and its settings open in the same editor (the
  * server refuses settings pi-identity wouldn't read, and says why). A draft waiting for the owner
  * (role-drafts/<id>/) shows as "Draft waiting": view and edit it, then accept it (an app save into the
- * role's folder) or discard it. A role's own skills live in its private folder, so the identity list
+ * role's folder) or discard it. about-drafts: a draft can also suggest a new about page: it shows editable,
+ * and "What changes" shows it line by line against the role's page now (accepting keeps the old page in the
+ * role's archive/). A role's own skills live in its private folder, so the identity list
  * every window gets only counts them: this page asks for them (identity_skills_get) when it opens and
  * whenever the list changes.
  *
@@ -58,6 +60,7 @@ import type {
 	UiRoleMessageRow,
 	UiRoleSkill,
 } from "../types";
+import { diffCounts, foldDiff, lineDiff } from "../line-diff";
 import { HintTip } from "./HintTip";
 
 /** role-messages: a row's state -> its word. */
@@ -336,6 +339,7 @@ function IdentityRow({
 					<span
 						className="identity-draft-badge"
 						title={t("identityDraftWaitingTip", {
+							about: fmt(identity.draft.aboutSize ?? 0),
 							size: fmt(identity.draft.promptSize),
 							fields: identity.draft.fields.join(", ") || "-",
 						})}
@@ -539,9 +543,47 @@ function IdentityFileEditor({ file, label, cap }: { file: IdentityFileState; lab
 	);
 }
 
-/** identity-config: a role's waiting draft: its suggested prompt and settings (editable), and why. */
+/**
+ * about-drafts: "What changes": the role's about page now against the page its draft suggests (as edited
+ * so far), line by line in the app's diff look, long unchanged stretches folded away.
+ */
+function DraftChanges({ before, after }: { before: string; after: string }) {
+	const t = useT();
+	const lines = useMemo(() => lineDiff(before, after), [before, after]);
+	const rows = useMemo(() => foldDiff(lines), [lines]);
+	const { added, removed } = diffCounts(lines);
+	if (!added && !removed) return <p className="set-hint identity-draft-change-count">{t("identityDraftSame")}</p>;
+	return (
+		<div className="identity-draft-changes">
+			<p className="set-hint identity-draft-change-count">
+				{before.trim() ? t("identityDraftChangeCount", { added, removed }) : t("identityDraftAllNew")}
+			</p>
+			<pre className="scm-diff-pre identity-draft-diff">
+				{rows.map((r, i) =>
+					r.kind === "skip" ? (
+						<div key={i} className="scm-diff-line hunk">
+							{t("identityDraftUnchanged", { count: r.count })}
+						</div>
+					) : (
+						<div key={i} className={`scm-diff-line${r.kind === "same" ? "" : ` ${r.kind}`}`}>
+							{`${r.kind === "add" ? "+" : r.kind === "del" ? "-" : " "} ${r.text}`}
+						</div>
+					),
+				)}
+			</pre>
+		</div>
+	);
+}
+
+/**
+ * identity-config: a role's waiting draft: its suggested prompt and settings (editable), and why.
+ * about-drafts: and its suggested about page (editable), with "What changes" against the role's page now.
+ * A draft with an about page but no prompt shows no prompt box (an empty prompt changes nothing).
+ */
 function IdentityDraftEditor({ draft, title }: { draft: IdentityDraftState; title: string }) {
 	const t = useT();
+	const [about, setAbout] = useState(draft.about ?? "");
+	const [aboutView, setAboutView] = useState<"page" | "changes">("page");
 	const [prompt, setPrompt] = useState(draft.prompt ?? "");
 	const [config, setConfig] = useState(draft.config ?? "");
 	if (draft.status === "loading") return <p className="set-empty identity-draft-status">{t("loading")}</p>;
@@ -550,10 +592,12 @@ function IdentityDraftEditor({ draft, title }: { draft: IdentityDraftState; titl
 	const done = draft.done;
 	// Accepted or discarded: the draft is gone; only the answer stays until the row's button closes it.
 	const finished = done?.ok === true && done.action !== "save";
-	const dirty = prompt !== (draft.prompt ?? "") || config !== (draft.config ?? "");
+	const hasAbout = (draft.about ?? "") !== "";
+	const showPrompt = (draft.prompt ?? "") !== "" || !hasAbout;
+	const dirty = about !== (draft.about ?? "") || prompt !== (draft.prompt ?? "") || config !== (draft.config ?? "");
 	const busy = draft.busy !== undefined;
 	const act = (action: IdentityDraftAction) => {
-		if (!busy && !finished) sendIdentityDraftAction(action, prompt, config);
+		if (!busy && !finished) sendIdentityDraftAction(action, prompt, config, about);
 	};
 	return (
 		<div className="identity-draft" data-identity={draft.id}>
@@ -563,17 +607,59 @@ function IdentityDraftEditor({ draft, title }: { draft: IdentityDraftState; titl
 			<p className="set-hint identity-draft-hint">{t("identityDraftHint")}</p>
 			{!finished && (
 				<>
-					<label className="identity-draft-label">
-						{t("identityDraftPrompt")}{" "}
-						<span className="identity-editor-size">{t("identitySize", { size: fmt(utf8Bytes(prompt)) })}</span>
-						<textarea
-							className="identity-editor-text identity-draft-prompt"
-							spellCheck={false}
-							value={prompt}
-							rows={14}
-							onChange={(e) => setPrompt(e.target.value)}
-						/>
-					</label>
+					{hasAbout && (
+						<div className="identity-draft-label identity-draft-about-box">
+							<div className="identity-draft-about-head">
+								<span>
+									{t("identityDraftAbout")}{" "}
+									<span className="identity-editor-size">{t("identitySize", { size: fmt(utf8Bytes(about)) })}</span>
+								</span>
+								<span className="identity-draft-views">
+									<button
+										type="button"
+										className={`identity-btn identity-draft-view-page${aboutView === "page" ? " on" : ""}`}
+										aria-pressed={aboutView === "page"}
+										onClick={() => setAboutView("page")}
+									>
+										{t("identityDraftShowPage")}
+									</button>
+									<button
+										type="button"
+										className={`identity-btn identity-draft-view-changes${aboutView === "changes" ? " on" : ""}`}
+										aria-pressed={aboutView === "changes"}
+										onClick={() => setAboutView("changes")}
+									>
+										{t("identityDraftShowChanges")}
+									</button>
+								</span>
+							</div>
+							{aboutView === "page" ? (
+								<textarea
+									className="identity-editor-text identity-draft-about"
+									aria-label={t("identityDraftAbout")}
+									spellCheck={false}
+									value={about}
+									rows={18}
+									onChange={(e) => setAbout(e.target.value)}
+								/>
+							) : (
+								<DraftChanges before={draft.currentAbout ?? ""} after={about} />
+							)}
+						</div>
+					)}
+					{showPrompt && (
+						<label className="identity-draft-label">
+							{t("identityDraftPrompt")}{" "}
+							<span className="identity-editor-size">{t("identitySize", { size: fmt(utf8Bytes(prompt)) })}</span>
+							<textarea
+								className="identity-editor-text identity-draft-prompt"
+								spellCheck={false}
+								value={prompt}
+								rows={14}
+								onChange={(e) => setPrompt(e.target.value)}
+							/>
+						</label>
+					)}
 					<label className="identity-draft-label">
 						{t("identityDraftConfig")}
 						<textarea

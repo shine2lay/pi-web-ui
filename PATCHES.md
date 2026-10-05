@@ -106,6 +106,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | subs-limits-box              | `local` | `server/subs-limits.ts` (new), `index.ts`, `protocol.ts`, `protocol-version.ts` (34), `web/src/components/LimitsBox.tsx` (new), `web/src/subs-limits-state.ts` (new), `components/LeftPanel.tsx`, `App.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/subs-limits-box-test.mjs` (new), `tests/unit/subs-limits.test.ts` (new)                                                                                                                                                                   |
 | session-index                | `local` | `server/session-index.ts` (new), `session-index-worker.ts` (new), `agent-service.ts`, `identities.ts`, `index.ts`, `tests/unit/session-index.test.ts` (new), `tests/unit/global-history.test.ts`, `tests/session-index-restart-test.mjs` (new), `scripts/session-index-parity.mjs` (new), `scripts/session-index-restart-probe.mjs` (new)                                                                                                                                                                                |
 | identity-notes               | `local` | `server/identity-notes.ts` (new, pi-identity's `notes.ts` copied byte for byte), `identity-memory.ts` (new), `identity-config.ts` (recopied), `identities.ts`, `notebook-watch.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (35), `web/src/notebook-state.ts`, `components/NotebookPanel.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/identity-notebook-test.mjs`, `tests/unit/identity-notebook.test.ts`, `identity-config.test.ts`, `identities.test.ts`                           |
+| about-drafts                 | `local` | `server/identity-roles.ts` (about.md in a draft; accept writes and archives the about page), `identities.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (40), `web/src/line-diff.ts` (new), `identity-state.ts`, `components/IdentitiesSettings.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/unit/identity-config.test.ts`, `tests/unit/line-diff.test.ts` (new), `tests/identity-config-test.mjs` |
 
 ---
 
@@ -4775,3 +4776,54 @@ who's-who list itself comes from pi-identity (its "other roles" section); pi-com
   path (no steer, no owner side effects).
 - The card depends on `fullAt` serializing user messages; a new path that serializes messages without
   it would show the header line as plain text (harmless).
+
+## about-drafts
+
+**Status**: `local`
+**Baseline**: v0.96.1 (on top of `role-messages`)
+
+**Why** (owner, 2026-10-04, queue task #59): the eleven department roles become orchestrators of their
+departments, and each needs a new about page. About pages are the owner's (pi-worktree: no chat may
+write them) and role folders are private, so each role writes a suggested page into its own draft
+(`role-drafts/<id>/about.md`) and the owner accepts it in Settings -> Identities, like a prompt draft.
+
+### Changes
+
+1. **Drafts can hold an about page** (`server/identity-roles.ts`): `DRAFT_FILES` gains `about.md`;
+   `readDraft` returns `about`, the draft's hash covers it, and a row's `draft` carries `aboutSize`.
+   `saveDraft` / `acceptDraft` take the texts as shown (`DraftTexts {about, prompt, config}`); a save
+   writes no new empty files into the draft. `ABOUT_MAX` (64,000 bytes) moved here from `identities.ts`.
+2. **Accepting writes the about page** (`acceptDraft`): checked first like the rest (refused, with nothing
+   written, when the draft changed since it was opened or a text is too big). Then the about page goes
+   into the role's `about.md` (written whole; an old page with other words is kept in the role's
+   `archive/about-<time>.md` first), then the prompt and the settings as before, then the draft moves to
+   `.old/`. An empty about page leaves the role's own. A page that never showed an about page (sent no
+   `about`) can't accept or save a draft that has one: refused as `changed`.
+3. **Protocol 40**: `identity_draft` carries `about` and `currentAbout` (the role's about page now, for
+   "What changes"); `identity_draft_save` / `_accept` carry `about`. Log line: `[identities] the owner
+   accepted the draft for <id>: its about page into about.md (an old one kept in archive/); ...`.
+4. **Settings -> Identities** (`IdentitiesSettings.tsx`, `web/src/line-diff.ts`): a draft with an about
+   page shows it first, editable, with a "Suggested page | What changes" switch. "What changes" is a line
+   diff against the role's page now, in the source-control panel's diff look (`.scm-diff-*`), long
+   unchanged stretches folded, with a count of added and removed lines. A draft with an about page and no
+   prompt shows no prompt box. The badge's tip and the hint name the about page (all 9 languages).
+
+### How it was checked
+
+- `tests/unit/identity-config.test.ts`: a draft with only an about page (listed with its size, read,
+  saved without new empty files); accepting writes it, archives the old page and leaves the prompt and
+  settings; a role with no page gets its first one (nothing archived); refused when the draft changed
+  since it was read, when the page never showed it, and when it's too big (nothing written); discard keeps
+  it in `.old/`; the page's store sends the about page with save and accept; the open draft renders it.
+- `tests/unit/line-diff.test.ts`: the diff, its size limit and the folding.
+- `tests/identity-config-test.mjs` (sealed): gamma's about-only draft opens editable with no prompt box,
+  "What changes" shows the added and removed lines and their count; a draft the role wrote again after it
+  was opened is refused (nothing written); reopened, edited and accepted it is gamma's page, the old one in
+  `archive/`, the log names it; beta's refused-then-discarded draft takes its about page into `.old/`.
+
+### When syncing
+
+- pi-worktree (`roles.ts`) keeps a role's own draft folder (`role-drafts/<id>/`) writable and readable by
+  that role's chats only; the owner's Settings writes are the server's own and pass no guard.
+- pi-identity reads `about.md` at a chat's start and compaction, so an accepted page reaches running
+  chats at their next start or compaction, new chats at once.

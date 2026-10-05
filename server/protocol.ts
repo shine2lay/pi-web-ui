@@ -1512,10 +1512,13 @@ export type ClientMessage =
 	| { type: "identity_draft_get"; id: string }
 	/** identity-config: save the owner's edits to a draft (it stays a draft), accept it as shown (its
 	 *  prompt and settings go into the role's folder, an app save), or discard it. Answered with
-	 *  `identity_draft_done`. baseHash = the hash from `identity_draft` (a draft changed since is refused). */
+	 *  `identity_draft_done`. baseHash = the hash from `identity_draft` (a draft changed since is refused).
+	 *  about-drafts: about = the about page as shown (into the role's about.md on accept); missing = the
+	 *  page showed none, and a draft that has one is refused as changed. */
 	| {
 			type: "identity_draft_save" | "identity_draft_accept";
 			id: string;
+			about?: string;
 			prompt: string;
 			config: string;
 			baseHash: string;
@@ -1604,8 +1607,8 @@ export interface UiIdentityInfo {
 	/** identity-config: what pi-identity refuses in its identity.json, and leaves out (one line each). */
 	configProblems: string[];
 	/** identity-config: a draft waits for the owner (role-drafts/<id>/): its prompt size and the settings
-	 *  it suggests (field names). */
-	draft?: { promptSize: number; fields: string[] };
+	 *  it suggests (field names). about-drafts: aboutSize = its about page's size (0 = none). */
+	draft?: { aboutSize?: number; promptSize: number; fields: string[] };
 }
 
 /** identity-notes: a role's two-layer memory as its chats get it (pi-identity): the rules (notebook.md)
@@ -3766,10 +3769,14 @@ export type ServerMessage =
 			ref?: string;
 	  }
 	/** identity-config: a role's waiting draft (identity_draft_get): its suggested prompt, settings
-	 *  (config.json) and reasons (notes.md). hash goes back with a save or accept. error = none waits. */
+	 *  (config.json) and reasons (notes.md). hash goes back with a save or accept. error = none waits.
+	 *  about-drafts: about = its suggested about page ("" = none); currentAbout = the role's about page
+	 *  now, for the "What changes" view. */
 	| {
 			type: "identity_draft";
 			id: string;
+			about?: string;
+			currentAbout?: string;
 			prompt?: string;
 			config?: string;
 			notes?: string;

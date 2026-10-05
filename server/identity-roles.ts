@@ -16,13 +16,15 @@
  * what pi-identity refuses and leaves out. Settings never saves a settings file with a problem in it; a
  * file edited by hand may still have one, and then the role's row says what's left out.
  *
- * Drafts: <memory>/role-drafts/<id>/ (next to the identities folder) holds a suggested prompt.md, the
- * suggested settings (config.json: only the fields a role's settings add, like tools and skills) and the
- * reasons (notes.md). Nothing in a draft takes effect until the owner accepts it here: accepting writes
- * the prompt into the role's prompt file (the old one, if any, is kept in the role's archive/) and the
- * settings into its identity.json, then moves the draft to role-drafts/.old/. Discarding moves it there
- * too. These are the app's own saves, not an agent's: pi-worktree keeps every chat from changing a role's
- * identity.json, about page and prompt.
+ * Drafts: <memory>/role-drafts/<id>/ (next to the identities folder) holds a suggested about page
+ * (about.md, about-drafts), a suggested prompt.md, the suggested settings (config.json: only the fields a
+ * role's settings add, like tools and skills) and the reasons (notes.md); any of them may be missing.
+ * Nothing in a draft takes effect until the owner accepts it here: accepting writes the about page into
+ * the role's about.md and the prompt into its prompt file (an old one with other words is kept in the
+ * role's archive/ first) and the settings into its identity.json, then moves the draft to
+ * role-drafts/.old/. Discarding moves it there too. These are the app's own saves, not an agent's:
+ * pi-worktree keeps every chat from changing a role's identity.json, about page and prompt, and keeps a
+ * role's drafts to that role's own chats (it writes them; the owner reads them here).
  */
 
 import { createHash } from "node:crypto";
@@ -78,6 +80,9 @@ function sizeOf(path: string): number {
 }
 
 const bytes = (text: string) => Buffer.byteLength(text, "utf8");
+
+/** about.md's safety cap in bytes: it has no set limit; this only stops one paste from swamping the role section. */
+export const ABOUT_MAX = 64_000;
 
 function stampOf(d: Date): string {
 	const p = (x: number) => String(x).padStart(2, "0");
@@ -203,8 +208,16 @@ export function draftsDir(identitiesDir: string, env: Env = process.env): string
 	return env.PI_ROLE_DRAFTS_DIR || join(dirname(identitiesDir), "role-drafts");
 }
 
-/** A draft's files. config holds only the fields it suggests (FEATURES: prompt, skills, tools, unique). */
-export const DRAFT_FILES = { prompt: "prompt.md", config: "config.json", notes: "notes.md" } as const;
+/**
+ * A draft's files. about-drafts: about.md is the suggested about page. config holds only the fields it
+ * suggests (FEATURES: prompt, skills, tools, unique).
+ */
+export const DRAFT_FILES = {
+	about: "about.md",
+	prompt: "prompt.md",
+	config: "config.json",
+	notes: "notes.md",
+} as const;
 /** The fields a draft may suggest: a role's settings, not its id, title, folder or home chat. */
 export const DRAFT_FIELDS: readonly string[] = Object.keys(FEATURES);
 
@@ -228,8 +241,14 @@ export function draftIds(root: string): string[] {
 	});
 }
 
-/** What a waiting draft suggests, for the role's row: its prompt's size and the settings fields it sets. */
-export function draftSummary(root: string, id: string): { promptSize: number; fields: string[] } | null {
+/**
+ * What a waiting draft suggests, for the role's row: its about page's and prompt's sizes (about-drafts:
+ * aboutSize) and the settings fields it sets.
+ */
+export function draftSummary(
+	root: string,
+	id: string,
+): { aboutSize: number; promptSize: number; fields: string[] } | null {
 	const d = readDraft(root, id);
 	if (!d) return null;
 	let fields: string[] = [];
@@ -239,27 +258,73 @@ export function draftSummary(root: string, id: string): { promptSize: number; fi
 	} catch {
 		fields = [];
 	}
-	return { promptSize: bytes(d.prompt), fields };
+	return { aboutSize: bytes(d.about), promptSize: bytes(d.prompt), fields };
 }
 
 export interface DraftFiles {
+	/** about-drafts: the suggested about page ("" = none). */
+	about: string;
 	prompt: string;
 	config: string;
 	notes: string;
-	/** One hash over all three: a save or accept made from an older read is refused ("changed"). */
+	/** One hash over all four: a save or accept made from an older read is refused ("changed"). */
 	hash: string;
 }
 
-const draftHash = (prompt: string, config: string, notes: string) => textHash(`${prompt}\0${config}\0${notes}`);
+const draftHash = (about: string, prompt: string, config: string, notes: string) =>
+	textHash(`${about}\0${prompt}\0${config}\0${notes}`);
 
 /** A role's draft, or null when none waits. */
 export function readDraft(root: string, id: string): DraftFiles | null {
 	if (!DRAFT_ID_RE.test(id) || !draftIds(root).includes(id)) return null;
 	const dir = join(root, id);
+	const about = readTextOrEmpty(join(dir, DRAFT_FILES.about));
 	const prompt = readTextOrEmpty(join(dir, DRAFT_FILES.prompt));
 	const config = readTextOrEmpty(join(dir, DRAFT_FILES.config));
 	const notes = readTextOrEmpty(join(dir, DRAFT_FILES.notes));
-	return { prompt, config, notes, hash: draftHash(prompt, config, notes) };
+	return { about, prompt, config, notes, hash: draftHash(about, prompt, config, notes) };
+}
+
+/**
+ * The texts the owner saves or accepts. about-drafts: about = null when the page that sent them didn't
+ * show an about page (a page from before about-drafts): a draft that has one is then refused as changed,
+ * so nobody accepts an about page they never saw.
+ */
+export interface DraftTexts {
+	about: string | null;
+	prompt: string;
+	config: string;
+}
+
+/** The draft's texts as the owner sent them, or a refusal: the draft changed, or a text is too big. */
+function checkTexts(
+	cur: DraftFiles,
+	texts: DraftTexts,
+	baseHash: string,
+): { ok: false; code: IdentitySaveError } | { ok: true; about: string } {
+	if (cur.hash !== baseHash) return { ok: false, code: "changed" };
+	if (texts.about === null && cur.about !== "") return { ok: false, code: "changed" };
+	const about = texts.about ?? "";
+	if (bytes(texts.prompt) > PROMPT_MAX || bytes(about) > ABOUT_MAX) return { ok: false, code: "too_big" };
+	return { ok: true, about };
+}
+
+/** Write one of a draft's files: a file it has, or a new one with words in it (no empty files appear). */
+function writeDraftFile(dir: string, name: string, text: string): void {
+	const path = join(dir, name);
+	if (text !== "" || existsSync(path)) writeWhole(path, text);
+}
+
+/** A whole page with a final newline, or "" when it has no words (nothing to write). */
+const pageText = (text: string) => (text.trim() ? (text.endsWith("\n") ? text : `${text}\n`) : "");
+
+/** Write a role's page (about.md or its prompt file); an old one with other words goes to its archive/ first. */
+function writePage(dir: string, target: string, text: string, now: Date): void {
+	const old = readTextOrEmpty(target);
+	if (old.trim() && old !== text) {
+		writeWhole(join(dir, "archive", `${basename(target, ".md")}-${stampOf(now)}.md`), old);
+	}
+	writeWhole(target, text);
 }
 
 /**
@@ -288,22 +353,24 @@ export function checkDraftConfig(
 }
 
 export type DraftResult =
-	| { ok: true; hash?: string; promptFile?: string; fields?: string[] }
+	| { ok: true; hash?: string; aboutFile?: string; promptFile?: string; fields?: string[] }
 	| { ok: false; code: IdentitySaveError; problems?: string[] };
 
 /** Save the owner's edits to a draft (it stays a draft). Refused when it changed since it was read. */
-export function saveDraft(root: string, id: string, prompt: string, config: string, baseHash: string): DraftResult {
+export function saveDraft(root: string, id: string, texts: DraftTexts, baseHash: string): DraftResult {
 	const cur = readDraft(root, id);
 	if (!cur) return { ok: false, code: "unknown" };
-	if (cur.hash !== baseHash) return { ok: false, code: "changed" };
-	if (bytes(prompt) > PROMPT_MAX) return { ok: false, code: "too_big" };
+	const checked = checkTexts(cur, texts, baseHash);
+	if (!checked.ok) return checked;
+	const dir = join(root, id);
 	try {
-		writeWhole(join(root, id, DRAFT_FILES.prompt), prompt);
-		writeWhole(join(root, id, DRAFT_FILES.config), config);
+		writeDraftFile(dir, DRAFT_FILES.about, checked.about);
+		writeDraftFile(dir, DRAFT_FILES.prompt, texts.prompt);
+		writeDraftFile(dir, DRAFT_FILES.config, texts.config);
 	} catch {
 		return { ok: false, code: "io" };
 	}
-	return { ok: true, hash: draftHash(prompt, config, cur.notes) };
+	return { ok: true, hash: draftHash(checked.about, texts.prompt, texts.config, cur.notes) };
 }
 
 /** Move a finished draft out of the way: role-drafts/.old/<id>-<time>-<how>/, kept, not deleted. */
@@ -323,44 +390,46 @@ export interface DraftTarget {
 }
 
 /**
- * Accept a draft as shown (the owner's unsaved edits included): its prompt goes into the role's prompt
- * file (an old prompt with other words is kept in the role's archive/ first) and its settings into the
- * role's identity.json; then the draft moves to .old/. Refused when the draft changed since it was read,
- * the prompt is too big, or the settings have a problem.
+ * Accept a draft as shown (the owner's unsaved edits included). about-drafts: its about page goes into the
+ * role's about.md first; then, as before, its prompt into the role's prompt file and its settings into the
+ * role's identity.json (an old about page or prompt with other words is kept in the role's archive/ first;
+ * each file is written whole, never half). Then the draft moves to .old/. Refused, with nothing written,
+ * when the draft changed since it was read, a text is too big, or the settings have a problem. An empty
+ * about page or prompt leaves the role's own as it is.
  */
 export function acceptDraft(
 	role: DraftTarget,
 	root: string,
-	prompt: string,
-	config: string,
+	texts: DraftTexts,
 	baseHash: string,
 	settings: Settings,
 	now: Date = new Date(),
 ): DraftResult {
 	const cur = readDraft(root, role.id);
 	if (!cur) return { ok: false, code: "unknown" };
-	if (cur.hash !== baseHash) return { ok: false, code: "changed" };
-	if (bytes(prompt) > PROMPT_MAX) return { ok: false, code: "too_big" };
-	const checked = checkDraftConfig(config, role.dir, role.raw, settings);
+	const checkedTexts = checkTexts(cur, texts, baseHash);
+	if (!checkedTexts.ok) return checkedTexts;
+	const checked = checkDraftConfig(texts.config, role.dir, role.raw, settings);
 	if (!checked.ok) return { ok: false, code: "invalid", problems: checked.problems };
 	const fields = Object.keys(checked.value);
 	const merged = { ...role.raw, ...checked.value };
 	const target = promptPathOf(role.dir, parseRoleConfig(merged, settings).config);
-	const text = prompt.trim() ? (prompt.endsWith("\n") ? prompt : `${prompt}\n`) : "";
+	const about = pageText(checkedTexts.about);
+	const text = pageText(texts.prompt);
 	try {
-		if (text) {
-			const old = readTextOrEmpty(target);
-			if (old.trim() && old !== text) {
-				writeWhole(join(role.dir, "archive", `${basename(target, ".md")}-${stampOf(now)}.md`), old);
-			}
-			writeWhole(target, text);
-		}
+		if (about) writePage(role.dir, join(role.dir, "about.md"), about, now);
+		if (text) writePage(role.dir, target, text, now);
 		if (fields.length) writeWhole(join(role.dir, "identity.json"), `${JSON.stringify(merged, null, "\t")}\n`);
 		retireDraft(root, role.id, "accepted", now);
 	} catch {
 		return { ok: false, code: "io" };
 	}
-	return { ok: true, ...(text ? { promptFile: basename(target) } : {}), fields };
+	return {
+		ok: true,
+		...(about ? { aboutFile: "about.md" } : {}),
+		...(text ? { promptFile: basename(target) } : {}),
+		fields,
+	};
 }
 
 /** Discard a draft: it moves to .old/ (kept, in case). */

@@ -1859,11 +1859,19 @@ export const en = {
 	identityConfigProblems: "Left out of its settings (the rest works):",
 	identityDraftWaiting: "Draft waiting",
 	identityDraftWaitingTip:
-		"A suggested prompt ({size} bytes) and settings ({fields}). Nothing changes until you accept it.",
+		"A suggested about page ({about} bytes), prompt ({size} bytes) and settings ({fields}). Nothing changes until you accept it.",
 	identityDraftOpen: "View draft",
 	identityDraftTitle: "Draft for {title}",
 	identityDraftHint:
-		"Nothing changes until you accept it. Accepting writes the prompt into the role's folder and merges the settings into its identity.json; discarding moves the draft to role-drafts/.old/.",
+		"Nothing changes until you accept it. Accepting writes the about page and the prompt into the role's folder (the old ones stay in its archive/) and merges the settings into its identity.json; an empty box leaves the role's own as it is. Discarding moves the draft to role-drafts/.old/.",
+	/* about-drafts: the suggested about page and "What changes" */
+	identityDraftAbout: "About page",
+	identityDraftShowPage: "Suggested page",
+	identityDraftShowChanges: "What changes",
+	identityDraftSame: "Same as the role's about page now.",
+	identityDraftChangeCount: "Against the role's about page now: {added} lines added, {removed} removed.",
+	identityDraftAllNew: "The role has no about page yet: all of it is new.",
+	identityDraftUnchanged: "\u2026 {count} unchanged lines \u2026",
 	identityDraftPrompt: "Prompt",
 	identityDraftConfig: "Settings it suggests (JSON, merged into identity.json)",
 	identityDraftNotes: "Why",

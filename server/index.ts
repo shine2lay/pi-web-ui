@@ -76,6 +76,7 @@ import { createMcpHotReload } from "./mcp-hot-reload.js";
 import { createHostMetricsSampler } from "./host-metrics.js";
 import { SchedulerStore } from "./scheduler-tasks.js";
 import {
+	identityFilePath,
 	identityInfos,
 	identityRegistry,
 	isIdentityFileName,
@@ -84,7 +85,15 @@ import {
 	scheduleMemoryReindex,
 } from "./identities.js";
 import { deleteRoleNote, readRoleNote, saveRoleNote, searchRoleNotes } from "./identity-memory.js";
-import { acceptDraft, discardDraft, ownSkillList, readDraft, saveDraft, type DraftResult } from "./identity-roles.js";
+import {
+	acceptDraft,
+	discardDraft,
+	ownSkillList,
+	readDraft,
+	readTextOrEmpty,
+	saveDraft,
+	type DraftResult,
+} from "./identity-roles.js";
 import { NotebookWatch } from "./notebook-watch.js";
 import { SubsLimitsHub, limitsFilePath } from "./subs-limits.js";
 import { initHttpProxy } from "./http-proxy.js";
@@ -2577,12 +2586,24 @@ wss.on("connection", (ws) => {
 				break;
 			}
 			case "identity_draft_get": {
-				// identity-config: a role's waiting draft (its suggested prompt, settings and reasons).
+				// identity-config: a role's waiting draft (its suggested prompt, settings and reasons). about-drafts:
+				// and its suggested about page, with the role's about page as it is now (for "What changes").
 				if (typeof msg.id !== "string") break;
-				const d = readDraft(identityRegistry(true).draftsDir, msg.id);
+				const reg = identityRegistry(true);
+				const d = readDraft(reg.draftsDir, msg.id);
+				const def = reg.identities.find((i) => i.id === msg.id);
 				send(
 					d
-						? { type: "identity_draft", id: msg.id, prompt: d.prompt, config: d.config, notes: d.notes, hash: d.hash }
+						? {
+								type: "identity_draft",
+								id: msg.id,
+								about: d.about,
+								currentAbout: def ? readTextOrEmpty(identityFilePath(def, "about")) : "",
+								prompt: d.prompt,
+								config: d.config,
+								notes: d.notes,
+								hash: d.hash,
+							}
 						: { type: "identity_draft", id: msg.id, error: `No draft waits for "${msg.id}"` },
 				);
 				break;
@@ -2595,29 +2616,26 @@ wss.on("connection", (ws) => {
 					typeof msg.id !== "string" ||
 					typeof msg.prompt !== "string" ||
 					typeof msg.config !== "string" ||
-					typeof msg.baseHash !== "string"
+					typeof msg.baseHash !== "string" ||
+					(msg.about !== undefined && typeof msg.about !== "string")
 				) {
 					break;
 				}
 				const reg = identityRegistry(true);
 				const action = msg.type === "identity_draft_accept" ? "accept" : "save";
 				const def = reg.identities.find((i) => i.id === msg.id);
+				// about-drafts: no about from a page that never showed one (a draft with one is then refused).
+				const texts = { about: msg.about ?? null, prompt: msg.prompt, config: msg.config };
 				let r: DraftResult;
-				if (action === "save") r = saveDraft(reg.draftsDir, msg.id, msg.prompt, msg.config, msg.baseHash);
+				if (action === "save") r = saveDraft(reg.draftsDir, msg.id, texts, msg.baseHash);
 				else if (!def) r = { ok: false, code: "unknown" };
 				else {
-					r = acceptDraft(
-						{ id: def.id, dir: def.dir, raw: def.raw },
-						reg.draftsDir,
-						msg.prompt,
-						msg.config,
-						msg.baseHash,
-						reg.settings,
-					);
+					r = acceptDraft({ id: def.id, dir: def.dir, raw: def.raw }, reg.draftsDir, texts, msg.baseHash, reg.settings);
 				}
 				send(draftDone(msg.id, action, r));
 				if (r.ok && action === "accept") {
 					const parts = [
+						...(r.aboutFile ? [`its about page into ${r.aboutFile} (an old one kept in archive/)`] : []),
 						...(r.promptFile ? [`its prompt into ${r.promptFile}`] : []),
 						...(r.fields?.length ? [`${r.fields.join(", ")} into identity.json`] : []),
 					];

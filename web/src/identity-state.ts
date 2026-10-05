@@ -10,7 +10,8 @@
  *    last save's answer. The draft being typed stays in the editor component.
  *  - identity-config: the one role draft open (role-drafts/<id>/, waiting for the owner): its suggested
  *    prompt, settings and reasons, its hash, and the answer to the last save, accept or discard. Opening
- *    a draft closes the file editor and the other way round.
+ *    a draft closes the file editor and the other way round. about-drafts: and its suggested about page,
+ *    with the role's about page as it is now (for "What changes").
  *  - identity-config: each role's own skills (`identity_skills`, which Settings -> Identities asks for):
  *    they live in the role's private folder, so the identity list every window gets only counts them.
  *  - role-messages: the last messages between role chats and the owner's pause switch (`role_messages`,
@@ -80,6 +81,9 @@ export interface IdentityDraftState {
 	id: string;
 	/** loading = asked, not back yet; ready = the draft as it is on disk; error = none waits (or unreadable). */
 	status: "loading" | "ready" | "error";
+	/** about-drafts: the suggested about page ("" = none) and the role's about page now. */
+	about?: string;
+	currentAbout?: string;
 	prompt?: string;
 	config?: string;
 	notes?: string;
@@ -99,7 +103,7 @@ let open: IdentityFileState | null = null;
 let pendingText: string | null = null;
 /** identity-config: the draft open, and the texts of a draft save on its way. */
 let draft: IdentityDraftState | null = null;
-let pendingDraft: { prompt: string; config: string } | null = null;
+let pendingDraft: { about?: string; prompt: string; config: string } | null = null;
 /** identity-config: each role's own skills by role id, as last asked (null = not asked yet). */
 const NO_SKILLS: Record<string, UiRoleSkill[]> = {};
 let ownSkills: Record<string, UiRoleSkill[]> | null = null;
@@ -259,6 +263,8 @@ export function receiveIdentityDraft(payload: IdentityDraftPayload): void {
 		draft = {
 			id: draft.id,
 			status: "ready",
+			about: payload.about ?? "",
+			currentAbout: payload.currentAbout ?? "",
 			prompt: payload.prompt ?? "",
 			config: payload.config ?? "",
 			notes: payload.notes ?? "",
@@ -271,18 +277,23 @@ export function receiveIdentityDraft(payload: IdentityDraftPayload): void {
 
 /**
  * identity-config: save the owner's edits to the draft, accept it as shown, or discard it. Does nothing
- * while it isn't loaded or an action is on its way.
+ * while it isn't loaded or an action is on its way. about-drafts: about = the about page as shown.
  */
-export function sendIdentityDraftAction(action: IdentityDraftAction, prompt: string, config: string): boolean {
+export function sendIdentityDraftAction(
+	action: IdentityDraftAction,
+	prompt: string,
+	config: string,
+	about?: string,
+): boolean {
 	if (!draft || draft.status !== "ready" || draft.busy || typeof draft.hash !== "string") return false;
 	const { id, hash } = draft;
 	draft = { ...draft, busy: action, done: undefined };
-	pendingDraft = action === "save" ? { prompt, config } : null;
+	pendingDraft = action === "save" ? { ...(about !== undefined ? { about } : {}), prompt, config } : null;
 	notify();
 	if (action === "discard") appSend({ type: "identity_draft_discard", id });
 	else {
 		const type = action === "accept" ? "identity_draft_accept" : "identity_draft_save";
-		appSend({ type, id, prompt, config, baseHash: hash });
+		appSend({ type, id, ...(about !== undefined ? { about } : {}), prompt, config, baseHash: hash });
 	}
 	return true;
 }
