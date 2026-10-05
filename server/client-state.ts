@@ -492,6 +492,9 @@ export interface ClientState {
 	 *  chat), as last worked out from the open chats' queues (server/queue-groups.ts). Kept here so a task
 	 *  chat that is only a Recent chats row stays under its home chat after a restart. Also global. */
 	queueHomes?: Record<string, string>;
+	/** queue-blocked: queue chats (transcript paths) the background check for blocked tasks looks at
+	 *  (server/queue-blocks.ts), kept across restarts. Also global. */
+	queueWatch?: string[];
 	/** Browser UI locale code as reported by hello/set_locale (e.g. "zh",
 	 *  "en", "ja"). Server resolves it via resolveServerLang (non-zh →
 	 *  English default, issue #91) for tool return values / AI prompts.
@@ -713,6 +716,21 @@ export class ClientStateStore {
 		const state = (all[ClientStateStore.GLOBAL_SETTINGS_KEY] ??= { projects: [] });
 		if (Object.keys(homes).length > 0) state.queueHomes = { ...homes };
 		else delete state.queueHomes;
+		this.save();
+	}
+
+	/** queue-blocked: the queue chats the background check looks at. */
+	getQueueWatch(): string[] {
+		const w = this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY]?.queueWatch;
+		return Array.isArray(w) ? w.filter((f): f is string => typeof f === "string") : [];
+	}
+
+	/** queue-blocked: keep this list instead (none = the key goes). */
+	setQueueWatch(files: string[]): void {
+		const all = this.load();
+		const state = (all[ClientStateStore.GLOBAL_SETTINGS_KEY] ??= { projects: [] });
+		if (files.length > 0) state.queueWatch = [...files].slice(0, 500);
+		else delete state.queueWatch;
 		this.save();
 	}
 

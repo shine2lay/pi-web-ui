@@ -795,6 +795,116 @@ describe("taskQueueFromEntries (queue-main-chat)", () => {
 	});
 });
 
+describe("taskQueueFromEntries (queue-blocked)", () => {
+	const byId = (q: ReturnType<typeof replay>, id: number) => q.tasks.find((t) => t.id === id);
+	const laneBase = [
+		{ op: "add", id: 1, plan: plan("One"), touches: ["a"] },
+		{ op: "add", id: 2, plan: plan("Two"), touches: ["b"] },
+		{ op: "run" },
+		{ op: "start", id: 1, lane: true },
+		{ op: "chat", id: 1, file: "/chats/one.jsonl", title: "Queue #1: One" },
+	];
+	const ref = { file: "/chats/temper.jsonl", name: "temper", id: 38 };
+	const block = { op: "block", id: 1, on: [ref], need: "  the staging   login ", start: 0, tries: 0 };
+
+	it("a block makes the task 'blocked' with what it waits on; it keeps its lane", () => {
+		const q = replay(entries([...laneBase, block]));
+		const t = byId(q, 1);
+		expect(t?.status).toBe("blocked");
+		expect(t?.block).toMatchObject({ on: [ref], need: "the staging login", tries: 0 });
+		expect(t?.block?.start).toBe(0);
+		expect(q.lanes?.flatMap((l) => l.taskIds)).toContain(1);
+	});
+
+	it("refuses a block for a task not being worked on, not in a chat of its own, or with nothing to wait on", () => {
+		expect(byId(replay(entries([...laneBase, { ...block, id: 2 }])), 2)?.status).toBe("ready");
+		expect(byId(replay(entries([...laneBase, { ...block, on: [], need: " " }])), 1)?.status).toBe("working");
+		const inChat = [
+			{ op: "add", id: 3, plan: plan("Three") },
+			{ op: "run" },
+			{ op: "start", id: 3 },
+			{ ...block, id: 3 },
+		];
+		expect(byId(replay(entries(inChat)), 3)?.status).toBe("working");
+	});
+
+	it("a poke is recorded once, for the same block only; any status change ends the block", () => {
+		const e = entries([...laneBase, block]);
+		const since = (e.at(-1)?.data as { ts: number }).ts;
+		const poked = replay([...e, ...entries([{ op: "poke", id: 1, since, note: "x" }])]);
+		expect(byId(poked, 1)?.block?.poke?.at).toBeGreaterThan(0);
+		const wrong = replay([...e, ...entries([{ op: "poke", id: 1, since: since + 1, note: "x" }])]);
+		expect(byId(wrong, 1)?.block?.poke).toBeUndefined();
+		for (const next of [
+			{ op: "resume", id: 1 },
+			{ op: "done", id: 1, summary: "ok" },
+			{ op: "stuck", id: 1, question: "?" },
+		]) {
+			const q = replay([...e, ...entries([next])]);
+			expect(byId(q, 1)?.block, next.op).toBeUndefined();
+		}
+	});
+
+	it("outside after: kept with after, and recorded over by after_over", () => {
+		const add = [{ op: "add", id: 4, plan: plan("Four"), outside: [ref, ref, { file: "", id: 1 }] }];
+		const q = replay(entries(add));
+		expect(byId(q, 4)?.outside).toEqual([ref]);
+		const over = replay(entries([...add, { op: "after_over", id: 4, file: ref.file, n: 38, removed: true }]));
+		expect(byId(over, 4)?.outside?.[0].over).toMatchObject({ removed: true });
+		// An update without after keeps it; with after it's replaced (and [] with no outside clears it).
+		expect(byId(replay(entries([...add, { op: "update", id: 4, plan: plan("Four") }])), 4)?.outside).toEqual([ref]);
+		expect(
+			byId(replay(entries([...add, { op: "update", id: 4, plan: plan("Four"), after: [] }])), 4)?.outside,
+		).toBeUndefined();
+	});
+
+	it("says the same as pi-queue's own replay", async () => {
+		const pkg = process.env.PI_QUEUE_PKG ?? join(userInfo().homedir, "projects", "pi-queue");
+		const file = join(pkg, "queue.ts");
+		if (!existsSync(file)) throw new Error(`pi-queue not found at ${pkg} (set PI_QUEUE_PKG)`);
+		const pq = await import(/* @vite-ignore */ pathToFileURL(file).href);
+		// An older pi-queue has no blocked state yet: nothing to compare.
+		if (typeof pq.blockVerdict !== "function") return;
+		const scenarios: Array<Array<Record<string, unknown>>> = [
+			[...laneBase, block],
+			[...laneBase, block, { op: "resume", id: 1 }],
+			[...laneBase, block, { op: "resume", id: 1 }, { ...block, need: "other" }],
+			[...laneBase, { ...block, id: 2 }, { ...block, on: [], need: "" }],
+			[...laneBase, block, { op: "done", id: 1, summary: "ok" }],
+			[...laneBase, block, { op: "remove", id: 1 }],
+			[...laneBase, block, { op: "ask", id: 1, question: "?", n: 1 }],
+			[
+				{ op: "add", id: 4, plan: plan("Four"), outside: [ref] },
+				{ op: "after_over", id: 4, file: ref.file, n: 38, summary: "s" },
+			],
+			[
+				{ op: "add", id: 4, plan: plan("Four"), outside: [ref] },
+				{ op: "update", id: 4, plan: plan("4"), after: [] },
+			],
+		];
+		for (const ops of scenarios) {
+			const e = entries(ops);
+			const mine = taskQueueFromEntries(e, true);
+			const s = pq.replay(e) as {
+				tasks: Array<{
+					id: number;
+					status: string;
+					block?: { on?: unknown[]; need?: string; since: number; start: number; tries: number };
+					outside?: Array<{ file: string; id: number; over?: { removed?: boolean } }>;
+				}>;
+			};
+			const theirs = s.tasks.filter((t) => t.status !== "removed");
+			const shape = (t: (typeof theirs)[number] | (typeof mine.tasks)[number]) => [
+				t.id,
+				t.status,
+				t.block ? [t.block.on ?? null, t.block.need ?? null, t.block.since, t.block.start, t.block.tries] : null,
+				(t.outside ?? []).map((o) => [o.file, o.id, !!o.over, o.over?.removed ?? false]),
+			];
+			expect(mine.tasks.map(shape), JSON.stringify(ops.at(-1))).toEqual(theirs.map(shape));
+		}
+	});
+});
+
 describe("taskQueueCommandLine", () => {
 	it("queue-lanes: sets how many lanes run at once", () => {
 		expect(taskQueueCommandLine("lanes", 3)).toBe("/queue lanes 3");

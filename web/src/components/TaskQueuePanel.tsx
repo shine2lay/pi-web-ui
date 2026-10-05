@@ -18,7 +18,15 @@
  */
 
 import { memo, useEffect, useState } from "react";
-import type { UiTaskQueue, UiTaskQueuePlan, UiTaskQueueTask, UiModelInfo, UiProfilePatch } from "../types";
+import type {
+	UiTaskQueue,
+	UiTaskQueueBlock,
+	UiTaskQueuePlan,
+	UiTaskQueueRef,
+	UiTaskQueueTask,
+	UiModelInfo,
+	UiProfilePatch,
+} from "../types";
 import { effectiveProfile, ProfileEditor, ProfileSummary } from "./QueueProfile";
 import { useT, type Translate } from "../i18n";
 import { Markdown } from "./Markdown";
@@ -77,7 +85,11 @@ export interface TaskQueueSections {
 export function taskQueueSections(q: UiTaskQueue | undefined): TaskQueueSections {
 	const tasks = q?.tasks ?? [];
 	const open = (t: UiTaskQueueTask) =>
-		t.status === "working" || t.status === "asking" || t.status === "stuck" || t.status === "waiting";
+		t.status === "working" ||
+		t.status === "asking" ||
+		t.status === "stuck" ||
+		t.status === "waiting" ||
+		t.status === "blocked";
 	return {
 		inChats: tasks.filter((t) => t.lane && open(t)),
 		current: tasks.find((t) => !t.lane && (t.status === "working" || t.status === "asking" || t.status === "stuck")),
@@ -116,6 +128,110 @@ export function taskQueueStatusKey(q: UiTaskQueue, s: TaskQueueSections): TKey {
 /** queue-side-by-side: "#31", "#31, #32", "#1, #2, #3": plain numbers, so every language reads them. */
 export function taskNumbers(ids: number[]): string {
 	return ids.map((n) => `#${n}`).join(", ");
+}
+
+/** queue-blocked: "#12" in its own queue, "temper #38" in another. */
+export function refLabel(r: Pick<UiTaskQueueRef, "name" | "id">): string {
+	return r.name ? `${r.name} #${r.id}` : `#${r.id}`;
+}
+
+/** queue-blocked: an outside `after` its queue hasn't recorded over, and that isn't over there either. */
+function outsideOpen(r: UiTaskQueueRef): boolean {
+	return !r.over && r.status !== "done" && r.status !== "removed" && r.status !== "gone";
+}
+
+/** queue-blocked: the after line's lists: this queue's numbers, then other queues' tasks ("temper #38"). */
+export function afterLists(task: Pick<UiTaskQueueTask, "after" | "waitingFor" | "outside">): {
+	list: string;
+	open: string;
+} {
+	const list = [...(task.after ?? []).map((n) => `#${n}`), ...(task.outside ?? []).map(refLabel)].join(", ");
+	const open = [
+		...(task.waitingFor ?? []).map((n) => `#${n}`),
+		...(task.outside ?? []).filter(outsideOpen).map(refLabel),
+	].join(", ");
+	return { list, open };
+}
+
+/** queue-blocked: how a task a blocked task waits on stands, in a word or two. */
+function refStateKey(status: UiTaskQueueRef["status"]): TKey | undefined {
+	switch (status) {
+		case "working":
+			return "taskQueueRefWorking";
+		case "asking":
+			return "taskQueueAskingMain";
+		case "stuck":
+			return "taskQueueNeedsYou";
+		case "waiting":
+			return "taskQueueRefOnHold";
+		case "blocked":
+			return "taskQueueBlocked";
+		case "ready":
+			return "taskQueueRefNotStarted";
+		case "done":
+			return "taskQueueDone";
+		case "removed":
+		case "gone":
+			return "taskQueueRefRemoved";
+		default:
+			return undefined;
+	}
+}
+
+/** queue-blocked: the Blocked line: "on temper #38 (working)", or the need, plus when it's poked next. One line. */
+function BlockedLine({ block, onOpenChat }: { block: UiTaskQueueBlock; onOpenChat?: (file: string) => void }) {
+	const t = useT();
+	const refs = block.on ?? [];
+	const next = block.poke
+		? t("taskQueueBlockedPoked", { time: lineTime(block.poke.at) })
+		: block.nextPokeAt !== undefined
+			? t(block.nextIsAsk ? "taskQueueBlockedAsk" : "taskQueueBlockedNext", { time: lineTime(block.nextPokeAt) })
+			: "";
+	return (
+		<div className="task-queue-blocked">
+			<span className="task-queue-blocked-badge">{t("taskQueueBlocked")}</span>
+			<span className="task-queue-blocked-text">
+				{refs.length > 0 && (
+					<>
+						{t("taskQueueBlockedOn")}{" "}
+						{refs.map((r, i) => {
+							const key = refStateKey(r.status);
+							const needsYou = r.status === "stuck";
+							return (
+								<span
+									key={`${r.file}#${r.id}`}
+									className={`task-queue-ref${needsYou ? " needs-you" : ""}`}
+									data-ref={refLabel(r)}
+								>
+									{i > 0 && ", "}
+									{r.chat && onOpenChat ? (
+										<button
+											type="button"
+											className="task-queue-ref-link"
+											title={r.title ?? r.chat.title}
+											onClick={() => r.chat && onOpenChat(r.chat.file)}
+										>
+											{refLabel(r)}
+										</button>
+									) : (
+										<span title={r.title}>{refLabel(r)}</span>
+									)}
+									{key && <span className="task-queue-ref-state"> ({t(key)})</span>}
+								</span>
+							);
+						})}
+					</>
+				)}
+				{block.need && (
+					<span className="task-queue-blocked-need">
+						{refs.length > 0 && "; "}
+						{t("taskQueueBlockedNeed", { need: block.need })}
+					</span>
+				)}
+				{next && <span className="task-queue-blocked-next">{` \u00b7 ${next}`}</span>}
+			</span>
+		</div>
+	);
 }
 
 /** telegram-answers: answer a stuck task here: one of its choices, or typed words. The answer goes
@@ -298,6 +414,7 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 			kind,
 			task.status === "stuck" ? "needs-you" : "",
 			task.status === "asking" ? "asking" : "",
+			task.status === "blocked" ? "blocked" : "",
 			wait?.failed ? "wait-failed" : "",
 		]
 			.filter(Boolean)
@@ -393,6 +510,7 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 						<span className="task-queue-hint">{t("taskQueueAskingMain")}</span>
 					</div>
 				)}
+				{task.status === "blocked" && task.block && <BlockedLine block={task.block} onOpenChat={onOpenChat} />}
 				{task.status === "stuck" && (
 					<div className="task-queue-question">
 						<span className="task-queue-badge">{t("taskQueueNeedsYou")}</span>
@@ -409,16 +527,20 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 						{task.touches.length > 0 ? `${t("taskQueueTouches")}: ${task.touches.join(", ")}` : t("taskQueueRunsAlone")}
 					</div>
 				)}
-				{kind !== "done" && !!task.after?.length && (
-					<div
-						className={`task-queue-after${task.waitingFor?.length ? " waiting" : ""}`}
-						data-after={task.after.join(",")}
-					>
-						{task.waitingFor?.length
-							? t("taskQueueAfterWaiting", { list: taskNumbers(task.after), open: taskNumbers(task.waitingFor) })
-							: t("taskQueueAfter", { list: taskNumbers(task.after) })}
-					</div>
-				)}
+				{kind !== "done" &&
+					(!!task.after?.length || !!task.outside?.length) &&
+					(() => {
+						// queue-blocked: tasks in other queues ("temper #38") after this queue's numbers.
+						const { list, open } = afterLists(task);
+						return (
+							<div
+								className={`task-queue-after${open ? " waiting" : ""}`}
+								data-after={[...(task.after ?? []).map(String), ...(task.outside ?? []).map(refLabel)].join(",")}
+							>
+								{open ? t("taskQueueAfterWaiting", { list, open }) : t("taskQueueAfter", { list })}
+							</div>
+						);
+					})()}
 				{wait &&
 					(wait.failed ? (
 						<div className="task-queue-wait failed">

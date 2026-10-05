@@ -29,6 +29,7 @@
  * ("Task #N asked …; the main chat answered …") has `kind: "answered"` in its data. The line keeps it
  * (`kind: "answered"`), and the tab and the left list show it in blue. Any other kind is dropped: the
  * line stays an ordinary one. Not the same as `answered` above (the owner replied to a needs-you line).
+ * queue-blocked: `kind: "blocked"` ("Task #N is blocked on …") passes too, shown in the Blocked colour.
  */
 
 import type { UiTldrLine } from "./protocol.js";
@@ -157,6 +158,8 @@ export function tldrLinesFromEntries(entries: readonly TldrEntryLike[], max = TL
 		}
 		// queue-main-chat: the main chat answered a task's question (shown in blue); nothing else passes.
 		if (d.kind === "answered") line.kind = "answered";
+		// queue-blocked: a task is blocked (shown in the Blocked colour).
+		else if (d.kind === "blocked") line.kind = "blocked";
 		out.push(line);
 		if (line.needsYou) waiting.push(line);
 	}

@@ -107,6 +107,9 @@ describe("queue-main-chat: line classes", () => {
 		expect(tldrLineClass({ ...base, needsYou: true })).toBe("tldr-line needs-you");
 		expect(tldrLineClass({ ...base, needsYou: true, answered: true })).toBe("tldr-line");
 		expect(tldrLineClass({ ...base, needsYou: true, kind: "answered" })).toBe("tldr-line needs-you");
+		// queue-blocked: its own colour (cyan), needs-you still wins.
+		expect(tldrLineClass({ ...base, kind: "blocked" })).toBe("tldr-line blocked");
+		expect(tldrLineClass({ ...base, needsYou: true, kind: "blocked" })).toBe("tldr-line needs-you");
 	});
 
 	it("tldrSubClass: the left list's line gets the same colours", () => {
@@ -114,6 +117,9 @@ describe("queue-main-chat: line classes", () => {
 		expect(tldrSubClass({ needsYou: false, kind: "answered" })).toBe("session-sub tldr-sub answered");
 		expect(tldrSubClass({ needsYou: true })).toBe("session-sub tldr-sub needs-you");
 		expect(tldrSubClass({ needsYou: true, kind: "answered" })).toBe("session-sub tldr-sub needs-you");
+		// queue-blocked: a blocked task's line, in the Blocked colour; needs-you still wins.
+		expect(tldrSubClass({ needsYou: false, kind: "blocked" })).toBe("session-sub tldr-sub blocked");
+		expect(tldrSubClass({ needsYou: true, kind: "blocked" })).toBe("session-sub tldr-sub needs-you");
 	});
 });
 

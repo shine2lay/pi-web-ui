@@ -34,14 +34,15 @@ export function awaitingYou(line: UiTldrLine): boolean {
  *  Needs-you wins if a line ever carried both. */
 export function tldrLineClass(line: UiTldrLine): string {
 	if (awaitingYou(line)) return "tldr-line needs-you";
-	return line.kind === "answered" ? "tldr-line answered" : "tldr-line";
+	// queue-blocked: "Task #N is blocked on …" in the Blocked colour.
+	return line.kind ? `tldr-line ${line.kind}` : "tldr-line";
 }
 
 /** The same colours for the left list's line under a chat's title (tldr-sidebar). Its needsYou already
  *  leaves out lines the owner replied to (latestUnseenTldr). */
 export function tldrSubClass(tldr: Pick<UiTldrLine, "needsYou" | "kind">): string {
 	if (tldr.needsYou) return "session-sub tldr-sub needs-you";
-	return tldr.kind === "answered" ? "session-sub tldr-sub answered" : "session-sub tldr-sub";
+	return tldr.kind ? `session-sub tldr-sub ${tldr.kind}` : "session-sub tldr-sub";
 }
 
 /** 最新在上的行 → 显示用的行：连着的已折叠行并成一行。 */

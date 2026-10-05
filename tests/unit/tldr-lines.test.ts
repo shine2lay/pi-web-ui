@@ -78,6 +78,17 @@ describe("tldrLinesFromEntries", () => {
 		for (const l of out.slice(1)) expect("kind" in l).toBe(false);
 	});
 
+	it('queue-blocked: keeps kind "blocked" (a task is blocked on other tasks or a need)', () => {
+		const chat = { file: "/s/--tmp--/task.jsonl", title: "Task 4" };
+		const text = "Task #4 (Wait on runner) is blocked: on temper #38";
+		const out = tldrLinesFromEntries([
+			line("t1", text, { kind: "blocked", chat }),
+			line("t2", "case matters", { kind: "Blocked" }),
+		]);
+		expect(out[0]).toStrictEqual({ id: "t1", text, needsYou: false, ts: 1001, chat, kind: "blocked" });
+		expect("kind" in out[1]).toBe(false);
+	});
+
 	it("falls back to the entry timestamp when data.ts is missing", () => {
 		const [l] = tldrLinesFromEntries([
 			{ type: "custom", id: "x", customType: "tldr", data: { text: "hi" }, timestamp: "2026-09-24T12:00:00.000Z" },

@@ -73,7 +73,8 @@ export function wantedStuckAsks(sources: StuckSource[]): {
 			if (!seen.has(key)) {
 				seen.set(key, t.status);
 				if (t.status === "working" && t.mainAnswered) mainAnswered.add(key);
-				if (t.status === "asking") asking.add(target);
+				// queue-blocked: a blocked task's chat doesn't need the user either (the queue pokes it).
+				if (t.status === "asking" || t.status === "blocked") asking.add(target);
 			}
 			if (t.status !== "stuck" || wanted.has(key)) continue;
 			const meta: AskMeta =

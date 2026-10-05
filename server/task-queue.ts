@@ -33,6 +33,12 @@
  * the user. pi-queue's "ask" op makes it "asking": the main chat has the question, and nothing says the
  * user is needed meanwhile. The main chat answers it (a resume with `answered`: mainAnswered), or the
  * question goes on to the user (stuck, as before).
+ *
+ * queue-blocked: a task in a chat of its own can be "blocked" (pi-queue's "block" op): it waits on tasks
+ * in any queue (refs: that queue's chat file, how people name it, the task number) and/or a need in plain
+ * words. It keeps its lane but frees its slot. The queue's chat records a "poke" when it's due (it comes
+ * back first once a slot is free). A task that hasn't started may come after tasks in other queues
+ * (`outside`); "after_over" records one done or removed. queue-blocks.ts is the background check.
  */
 
 import { readFileSync, statSync } from "node:fs";
@@ -41,7 +47,9 @@ import { StringDecoder } from "node:string_decoder";
 import { checkPatch, normProfile, normLaunch, patchProfile } from "./queue-profile.js";
 import type {
 	UiTaskQueue,
+	UiTaskQueueBlock,
 	UiTaskQueueChat,
+	UiTaskQueueRef,
 	UiTaskQueueLane,
 	UiTaskQueuePlan,
 	UiTaskQueueTask,
@@ -106,7 +114,54 @@ function planOf(raw: unknown): UiTaskQueuePlan {
 	};
 }
 
-const OPEN: ReadonlySet<Status> = new Set(["ready", "working", "asking", "stuck", "waiting"]);
+const OPEN: ReadonlySet<Status> = new Set(["ready", "working", "asking", "stuck", "waiting", "blocked"]);
+
+/** queue-blocked: pi-queue's REF_NAME_MAX / NEED_MAX. */
+const REF_NAME_MAX = 120;
+const NEED_MAX = 300;
+
+/** queue-blocked: pi-queue's normRef. */
+function refOf(raw: unknown): UiTaskQueueRef | undefined {
+	if (!raw || typeof raw !== "object") return undefined;
+	const r = raw as Record<string, unknown>;
+	const id = typeof r.id === "number" ? r.id : Number.NaN;
+	if (typeof r.file !== "string" || !r.file || !Number.isInteger(id) || id < 1) return undefined;
+	const name = typeof r.name === "string" ? r.name.trim().slice(0, REF_NAME_MAX) : "";
+	return { file: r.file, name, id };
+}
+
+/** queue-blocked: pi-queue's normRefs: checked, no duplicates (same file and number), at most 20; undefined when none. */
+export function normTaskRefs(raw: unknown): UiTaskQueueRef[] | undefined {
+	if (!Array.isArray(raw)) return undefined;
+	const out: UiTaskQueueRef[] = [];
+	for (const x of raw) {
+		const r = refOf(x);
+		if (r && !out.some((o) => o.file === r.file && o.id === r.id)) out.push(r);
+	}
+	return out.length ? out.slice(0, 20) : undefined;
+}
+
+/** queue-blocked: pi-queue's normNeed. */
+function needOf(raw: unknown): string | undefined {
+	if (typeof raw !== "string") return undefined;
+	const t = raw.replace(/\s+/g, " ").trim();
+	return t ? t.slice(0, NEED_MAX) : undefined;
+}
+
+/** queue-blocked: pi-queue's outsideOf: a saved outside list, keeping what was recorded over already. */
+function outsideOf(raw: unknown, old: UiTaskQueueRef[] | undefined): UiTaskQueueRef[] | undefined {
+	const refs = normTaskRefs(raw);
+	if (!refs) return undefined;
+	return refs.map((r) => {
+		const was = old?.find((o) => o.file === r.file && o.id === r.id);
+		return was?.over ? { ...r, over: was.over } : r;
+	});
+}
+
+/** queue-blocked: "#12" in its own queue, "temper #38" in another (pi-queue's refLabel). */
+export function taskRefLabel(r: { name: string; id: number }): string {
+	return r.name ? `${r.name} #${r.id}` : `#${r.id}`;
+}
 /** 当前任务：正在做或卡住的那个（最多一个）。搁着等的任务不算当前任务，别的任务可以接着做。
  *  queue-lanes: tasks running in chats of their own don't count (they run side by side).
  *  queue-main-chat: asking counts like stuck. */
@@ -285,6 +340,10 @@ function apply(s: State, raw: unknown): void {
 		const after = normAfter(op.after, op.id);
 		if (after?.length) task.after = after;
 		if (op.op === "add") task.profile = normProfile(op.profile);
+		if (op.op === "add") {
+			const outside = outsideOf(op.outside, undefined);
+			if (outside) task.outside = outside;
+		}
 		if (op.op === "assigned") {
 			task.launch = normLaunch(op.launch);
 			s.profile = undefined;
@@ -314,6 +373,12 @@ function apply(s: State, raw: unknown): void {
 			const after = normAfter(op.after, task.id);
 			if (after?.length) task.after = after;
 			else if (after) delete task.after;
+			// queue-blocked: the outside list goes with after.
+			if (after) {
+				const outside = outsideOf(op.outside, task.outside);
+				if (outside) task.outside = outside;
+				else delete task.outside;
+			}
 			if (op.profile && task.status === "ready" && task.startedAt === undefined) {
 				const { patch } = checkPatch(op.profile);
 				if (Object.keys(patch).length) {
@@ -350,6 +415,7 @@ function apply(s: State, raw: unknown): void {
 			task.choices = undefined;
 			task.mainAnswered = undefined;
 			task.wait = undefined;
+			task.block = undefined;
 			task.startedAt = undefined;
 			task.launch = undefined;
 			task.launchPrepared = undefined;
@@ -373,6 +439,7 @@ function apply(s: State, raw: unknown): void {
 			task.question = undefined;
 			task.choices = undefined;
 			task.wait = undefined;
+			task.block = undefined;
 			// queue-main-chat: back at work with its main chat's answer (pi-queue's resume `answered`).
 			task.mainAnswered = op.op === "resume" && typeof op.answered === "number" && op.answered > 0 ? true : undefined;
 			task.startedAt ??= num(op.ts);
@@ -388,6 +455,7 @@ function apply(s: State, raw: unknown): void {
 			else delete task.choices;
 			task.mainAnswered = undefined;
 			task.wait = undefined;
+			task.block = undefined;
 			task.startedAt ??= num(op.ts);
 			return;
 		}
@@ -404,6 +472,7 @@ function apply(s: State, raw: unknown): void {
 			else delete task.choices;
 			task.mainAnswered = undefined;
 			task.wait = undefined;
+			task.block = undefined;
 			task.startedAt ??= num(op.ts);
 			return;
 		}
@@ -425,6 +494,38 @@ function apply(s: State, raw: unknown): void {
 			task.startedAt ??= since;
 			return;
 		}
+		case "block": {
+			// queue-blocked: only a task being worked on, in a chat of its own (pi-queue's "block").
+			if (task.status !== "working" || !(task.lane || s.from)) return;
+			const on = normTaskRefs(op.on);
+			const need = needOf(op.need);
+			if (!on && !need) return;
+			const since = num(op.ts);
+			const block: UiTaskQueueBlock = {
+				...(on ? { on } : {}),
+				...(need ? { need } : {}),
+				since,
+				start: Math.min(numOr(op.start, since), since),
+				tries: Math.max(0, Math.round(numOr(op.tries, 0))),
+			};
+			task.status = "blocked";
+			task.question = undefined;
+			task.choices = undefined;
+			task.mainAnswered = undefined;
+			task.wait = undefined;
+			task.block = block;
+			return;
+		}
+		case "poke":
+			if (task.status !== "blocked" || !task.block || task.block.since !== op.since || task.block.poke) return;
+			task.block.poke = { at: num(op.ts), ...(op.ask === true ? { ask: true } : {}) };
+			return;
+		case "after_over": {
+			const o = task.outside?.find((x) => x.file === op.file && x.id === op.n);
+			if (!o || o.over) return;
+			o.over = { at: num(op.ts), ...(op.removed === true ? { removed: true } : {}) };
+			return;
+		}
 		case "wait_over":
 			if (task.status !== "waiting" || !task.wait || task.wait.overAt) return;
 			task.wait.overAt = num(op.ts);
@@ -436,11 +537,13 @@ function apply(s: State, raw: unknown): void {
 			task.choices = undefined;
 			task.mainAnswered = undefined;
 			task.wait = undefined;
+			task.block = undefined;
 			task.summary = str(op.summary, NOTE_MAX);
 			task.doneAt = num(op.ts);
 			return;
 		case "remove":
 			task.status = "removed";
+			task.block = undefined;
 			return;
 		case "move": {
 			if (task.status !== "ready") return;
@@ -494,6 +597,17 @@ export function taskQueueFromEntries(
 		const open = s.tasks.filter((d) => t.after?.includes(d.id) && OPEN.has(d.status)).map((d) => d.id);
 		if (open.length) t.waitingFor = open;
 	}
+	// queue-blocked: a block's own-queue refs ("#12") show how those tasks stand here (in the queue's
+	// own chat; a task's chat has only its task). queue-blocks.ts fills in the others.
+	for (const t of s.from ? [] : s.tasks) {
+		for (const r of t.block?.on ?? []) {
+			if (r.name) continue;
+			const d = s.tasks.find((x) => x.id === r.id);
+			r.status = d ? d.status : "gone";
+			if (d) r.title = d.plan.title;
+			if (d?.chat) r.chat = d.chat;
+		}
+	}
 	const tasks = s.tasks.filter((t): t is UiTaskQueueTask => t.status !== "removed" && !dropped.has(t));
 	// queue-lanes: only a queue with tasks that run in chats of their own shows lanes (a task's own chat never).
 	const lanes = s.from ? [] : lanesOf(s.tasks, taskQueueShareableOf(shareable));
@@ -512,6 +626,24 @@ export function taskQueueFromEntries(
 		...(s.lanes !== TASK_QUEUE_DEFAULT_LANES ? { lanesAtOnce: s.lanes } : {}),
 		...(s.from ? { from: s.from } : {}),
 	};
+}
+
+/** queue-blocked: a task as replayed, removed ones too. */
+export type TaskQueueTaskAny = Omit<UiTaskQueueTask, "status"> & { status: Status };
+
+/**
+ * queue-blocked: every task in a queue as replayed (removed ones and every done one too), and in a
+ * task's own chat the queue it came from. For looking up tasks other tasks wait on (queue-blocks.ts).
+ */
+export function taskQueueAll(entries: Iterable<TaskQueueEntryLike>): {
+	tasks: TaskQueueTaskAny[];
+	from?: UiTaskQueueChat;
+} {
+	const s: State = { tasks: [], running: false, lanes: TASK_QUEUE_DEFAULT_LANES, autoApprove: false, autoStart: false };
+	for (const e of entries) {
+		if (e.type === "custom" && e.customType === TASK_QUEUE_ENTRY_TYPE) apply(s, e.data);
+	}
+	return { tasks: s.tasks, ...(s.from ? { from: s.from } : {}) };
 }
 
 /**

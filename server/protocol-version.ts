@@ -61,4 +61,7 @@
 // 41: queue-main-chat - a queued task can be "asking" (it asked its main chat; mainAnswered once that
 //     chat answered it) and chat rows carry queueAsking. An old page would drop asking tasks from the
 //     Queue panel and sound "done" for their chats.
-export const PROTOCOL_VERSION = 41;
+// 42: queue-blocked - a queued task can be "blocked" (block: what it waits on, tasks in any queue and/or a
+//     need) and come after tasks in other queues (outside); TL;DR lines can be kind "blocked". An old page
+//     would drop blocked tasks from the Queue panel.
+export const PROTOCOL_VERSION = 42;

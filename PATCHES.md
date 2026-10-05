@@ -108,6 +108,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | identity-notes               | `local` | `server/identity-notes.ts` (new, pi-identity's `notes.ts` copied byte for byte), `identity-memory.ts` (new), `identity-config.ts` (recopied), `identities.ts`, `notebook-watch.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (35), `web/src/notebook-state.ts`, `components/NotebookPanel.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/identity-notebook-test.mjs`, `tests/unit/identity-notebook.test.ts`, `identity-config.test.ts`, `identities.test.ts`                           |
 | about-drafts                 | `local` | `server/identity-roles.ts` (about.md in a draft; accept writes and archives the about page), `identities.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (40), `web/src/line-diff.ts` (new), `identity-state.ts`, `components/IdentitiesSettings.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/unit/identity-config.test.ts`, `tests/unit/line-diff.test.ts` (new), `tests/identity-config-test.mjs`                                                                                                    |
 | queue-main-chat              | `local` | `server/task-queue.ts`, `stuck-asks.ts`, `agent-service.ts` (`askingChats`, `emitConversations`), `queue-groups.ts`, `protocol.ts`, `protocol-version.ts` (41), `web/src/components/TaskQueuePanel.tsx`, `done-watch.ts`, `App.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/queue-main-chat-test.mjs` (new), `tests/queue-lanes-test.mjs`, `queue-panel-test.mjs`, `stall-watch-test.mjs`, `telegram-answers-test.mjs`, `tests/unit/`; the answer line in blue (#62): `server/tldr-lines.ts`, `TldrPanel.tsx`, `LeftPanel.tsx`; paired with pi-queue |
+| queue-blocked                | `local` | `server/queue-blocks.ts` (new), `task-queue.ts`, `queue-host.ts`, `client-state.ts` (`queueWatch`), `agent-service.ts`, `queue-groups.ts`, `stuck-asks.ts`, `tldr-lines.ts`, `protocol.ts`, `protocol-version.ts` (42), `web/src/components/TaskQueuePanel.tsx`, `TldrPanel.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/queue-blocked-test.mjs` (new), `tests/unit/queue-blocks.test.ts` (new), `tests/unit/task-queue.test.ts`; paired with pi-queue |
 
 ---
 
@@ -4920,6 +4921,82 @@ run inside their queue's chat (no chat of their own) ask the owner directly, as 
   change `task-queue.ts` with it (the unit tests replay its ops).
 - "[Queue]" stays an automated prefix in `tldr-lines.ts`, so the card and the answer never count as
   the owner's reply.
+
+## queue-blocked
+
+**Status**: `local`
+**Baseline**: v0.96.1 (on top of `queue-main-chat`)
+
+**Why** (owner, 2026-10-04, queue task #63): tasks waiting on another queue's task sat forever, because
+nobody told them the blocker was done; the workarounds were hand-made marker files someone had to touch,
+or "tell me when X is in" questions nobody answered. A task that can't move forward because it waits on
+other tasks (in any queue) or on something it needs is now "Blocked", and a background check pokes it the
+moment the tasks it waits on are over. His choices: On hold stays separate (waiting for something a
+script can check, or set aside); while a blocker is still worked on, nothing happens; a need on its own
+is poked at 10, 30 and 60 minutes, then the task asks its main chat (queue-main-chat's path); a blocker
+removed without finishing pokes at once with that news; a blocker that needs the owner is shown, not
+poked; a task that hasn't started may come `after` a task in another queue; no Telegram before it asks.
+
+**pi-queue's part** (paired; its README, "Blocked on other tasks"): the tool `queue_blocked {on?, need?}`
+in a task's own chat; ops `block` (status "blocked": `on` as `{file, name, id}`, `need`, `start`,
+`tries`), `poke` (the queue chat: `since`, `note`, `ask`) and `after_over`, and `outside` on add/update
+(the old `blocked` op, a refused launch, is unrelated). A blocked task keeps its lane and frees its slot;
+once poked it comes back first; any new turn in its chat puts it back to work. The queue chat decides
+and writes the pokes itself (`/queue blocks`), reading the blockers' queues from disk, and sends
+`/queue go <id> <note> [ask]` to the task's chat.
+
+### Changes
+
+1. **The rules, mirrored** (`server/task-queue.ts`, `protocol.ts`): the panel's replay follows
+   `block`, `poke`, `after_over` and `outside` (the unit test replays the same entries through
+   pi-queue's `queue.ts` and compares). `UiTaskQueueTask` gains `block` (its refs with their state in
+   their own queue, the need, the next poke and whether it's the question) and `outside` (other-queue
+   `after`s with `over`). Protocol 42: an old page would drop blocked tasks.
+2. **Names to queue files** (`server/queue-host.ts`, `queue-blocks.ts` `resolveRefs`): pi-queue's tool
+   and `queue_add` ask the host to resolve `#12`, `temper #38` (a role id: its home chat's queue) or
+   `<queue chat title> #4` (from the session index) to the queue chat's file and task. Refused: unknown
+   names, the task itself, a role without a home chat, a missing task, a loop through blocks and
+   `after`s across queues (walk capped at 400 tasks).
+3. **The background check** (`server/queue-blocks.ts`, `QueueBlocks`): every 60 s
+   (`PI_WEB_QUEUE_BLOCKS_MS`), from the transcripts on disk (cached by size and mtime), for each watched
+   queue chat (`ClientStateStore.queueWatch`, kept across restarts; pi-queue adds a queue through
+   `watchQueue` when a task blocks or names an outside `after`): the same verdict as pi-queue's
+   `blockVerdict`. Due (blockers over, a need's poke time, the question) -> it runs `/queue blocks` in
+   that queue's chat through the queue host (`queueRunCommand` opens a closed chat), at most once per 5
+   minutes for the same thing; a queue with nothing left drops off the list. A blocker's state change
+   refreshes the Queue panels (`ClientSession.refreshQueuePanels`). Wired in `agent-service.ts`
+   (`installQueueHost`); stopped with the sessions.
+4. **Not "your turn"** (`stuck-asks.ts`, `queue-groups.ts`): a blocked task's chat is treated like an
+   asking one (no green light, no done sound: the queue pokes it), and blocked counts as open, so a
+   restart reopens its queue chat like any open task's.
+5. **The panel and the TL;DR** (`TaskQueuePanel.tsx`, `TldrPanel.tsx`, `tldr-lines.ts`, `i18n.tsx`,
+   `locales/*.json`, `styles.css`): a blocked task shows a "Blocked" badge in the theme's
+   `--term-cyan` (not amber needs-you, not #62's blue) and one line: "on temper #38 (working)" (the name
+   links that task's chat), or the need, and "next poke HH:MM" for a need. An outside `after` shows as
+   "after temper #2". pi-queue's TL;DR line for a block carries `kind: "blocked"`, shown in the same
+   cyan.
+
+### How it was checked
+
+- Unit: `tests/unit/queue-blocks.test.ts` (names, the verdict on the real 10/30/60 minutes and a fake
+  clock, the loop's nudges: none while worked on, at once when over or removed, never for needs-you, a
+  need's schedule then the question, outside `after`, the panel refresh; `resolveRefs` and its
+  refusals), `tests/unit/task-queue.test.ts` (the new ops, and the mirror replay against pi-queue).
+- `tests/queue-blocked-test.mjs` (sealed, the real pi-queue and pi-identity, a scripted model): A's tasks
+  in role chats with an allow list block on queue B's tasks; no poke while worked on; every chat closed
+  and the server restarted, then B#1 finishes: A#1 is poked within seconds with its summary and
+  finishes; an `after "temper #2"` task starts by itself; a removed blocker pokes at once with the news;
+  a needs-you blocker shows and is never poked; a need is poked three times, then asks its main chat,
+  then reaches the owner; the Queue tab in a real browser, dark and white themes (`QB_SHOT_DIR` keeps
+  the screenshots). It also reports (not a check) whether On hold waits are still checked after a
+  restart in a fully idle queue: they are.
+- check.sh, the build, the sealed queue tests; live after the install.
+
+### When syncing
+
+- pi-queue's ops are the contract: if it changes `block`, `poke`, `after_over`, `outside` or
+  `blockVerdict`, change `task-queue.ts` and `queue-blocks.ts` with it (the unit tests replay its ops
+  and compare the verdicts).
 
 ## role-reports
 

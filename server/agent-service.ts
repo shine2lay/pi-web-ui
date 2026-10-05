@@ -279,9 +279,11 @@ import { extractTouches, formatTouchesCompact, intersectTouches } from "./conver
 import { ClaimStore, matchClaims, mergeTouchSidecar, readTouchSidecar, removeTouchSidecar } from "./claim-store.js";
 import { makeClaimFilesTool, type ClaimFilesHost } from "./claim-files-tool.js";
 import { makeMessageRoleTool, type MessageRoleHost } from "./role-message-tool.js";
+import { QueueBlocks } from "./queue-blocks.js";
 import {
 	chatLabel,
 	ownTaskOf,
+	queueEntriesOf,
 	RoleMessages,
 	type RoleMessageSender,
 	type RoleReportReceipt,
@@ -5410,6 +5412,17 @@ export class ClientSession {
 
 	/** stall-watch: the links as kept (an open task's chat → its queue chat), for the queue chats to open
 	 *  after a restart. */
+	/** queue-blocked: the background check for blocked tasks (AgentService.installQueueHost sets it); the
+	 *  panels' queues get how tasks in other queues stand from it. */
+	static queueBlocks: QueueBlocks | null = null;
+
+	/** queue-blocked: how a task in another queue stands changed: every window gets its queue again. */
+	static refreshQueuePanels(): void {
+		for (const s of ClientSession.liveSessions) {
+			if (!s.disposed && s.sinkCount() > 0) s.scheduleSnapshot();
+		}
+	}
+
 	static savedQueueHomes(): ReadonlyMap<string, string> {
 		return ClientSession.knownQueueHomes();
 	}
@@ -6879,7 +6892,8 @@ export class ClientSession {
 			const available = !!conv.session.extensionRunner?.getCommand?.("queue");
 			// queue-side-by-side: pi-queue's shareable list (its settings file) decides the lanes too.
 			const shareable = taskQueueShareableFrom(join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "pi-queue.json"));
-			const key = `${sm.getSessionId()}\u0001${sm.getLeafId() ?? ""}\u0001${available}\u0001${shareable.stamp}`;
+			const blocks = ClientSession.queueBlocks;
+			const key = `${sm.getSessionId()}\u0001${sm.getLeafId() ?? ""}\u0001${available}\u0001${shareable.stamp}\u0001${blocks?.stamp ?? 0}`;
 			const c = conv.taskQueueCache;
 			if (c && c.key === key) return c.queue;
 			const queue = taskQueueFromEntries(
@@ -6889,6 +6903,8 @@ export class ClientSession {
 				shareable.patterns,
 				conv.isEphemeral ? undefined : sm.getSessionId(),
 			);
+			// queue-blocked: how tasks in other queues stand, and when a block is poked next.
+			if (blocks && !conv.isEphemeral) blocks.enrich(sm.getSessionFile(), queue);
 			const sig = JSON.stringify(queue);
 			// queue-grouping: a chat opened, or its queue moved a task chat in or out of a queue's group.
 			if (!c || queueLinksSig(queue) !== queueLinksSig(c.queue)) ClientSession.scheduleQueueHomesRefresh();
@@ -15197,7 +15213,35 @@ export class AgentService {
 			const r = await this.wakeClosedChat(file, text);
 			return r.ok ? { ok: true } : { ok: false, error: r.error ?? "couldn't send the answer" };
 		};
+		// queue-blocked: the background check for blocked tasks and outside afters (queue-blocks.ts).
+		const blocks = new QueueBlocks({
+			now: () => Date.now(),
+			readQueue: async (file) => (existsSync(file) ? await queueEntriesOf(file) : null),
+			stamp: (file) => {
+				try {
+					const st = statSync(file);
+					return { size: st.size, mtimeMs: st.mtimeMs };
+				} catch {
+					return undefined;
+				}
+			},
+			runCommand: (file, line) => this.queueRunCommand(file, line),
+			roles: () => identityRegistry().identities.map((i) => ({ id: i.id, homeChat: i.homeChat ?? undefined })),
+			titledChats: async () =>
+				(await sessionIndex.listAll(piSessionsRoot()))
+					.filter((s) => !!s.name?.trim())
+					.map((s): [string, string] => [s.path, s.name as string]),
+			sameFile: (a, b) => samePath(a, b),
+			loadWatch: () => this.stateStore.getQueueWatch(),
+			saveWatch: (files) => this.stateStore.setQueueWatch(files),
+			changed: () => ClientSession.refreshQueuePanels(),
+			log: (line) => console.log(line),
+		});
+		ClientSession.queueBlocks = blocks;
+		blocks.start();
 		this.uninstallQueueHost = installQueueHost({
+			queueRefs: (req) => blocks.resolveRefs(req),
+			watchQueue: (file) => blocks.watchQueue(file),
 			previewLaunch: (request, cwd, sourceSessionId) =>
 				previewExistingQueueLaunch(request, cwd, sourceSessionId, this.clients.values()),
 			startChat: (o) =>
@@ -16405,6 +16449,8 @@ export class AgentService {
 		ClientSession.participantRetained = undefined;
 		this.uninstallQueueHost?.();
 		this.uninstallQueueHost = null;
+		ClientSession.queueBlocks?.stop();
+		ClientSession.queueBlocks = null;
 		ClientSession.stuckAnswerSender = null;
 		this.recordInterruptedRuns();
 		const all = [...this.clients.values()];

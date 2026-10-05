@@ -242,8 +242,9 @@ export interface UiTldrLine {
 	chat?: UiTaskQueueChat;
 	/** queue-main-chat: "answered" = pi-queue's line for a task's question the main chat answered itself
 	 *  ("Task #N asked …; the main chat answered …"): the tab and the left list show it in blue. Any other
-	 *  value in the session is dropped; left out on every other line. Not the same as `answered` above. */
-	kind?: "answered";
+	 *  value in the session is dropped; left out on every other line. Not the same as `answered` above.
+	 *  queue-blocked: "blocked" = pi-queue's "Task #N is blocked on …" line: shown in the Blocked colour. */
+	kind?: "answered" | "blocked";
 }
 
 /** 任务队列里一个任务的计划（queue-panel）：用户和 agent 一起定下、用户在对话框里批准过的六部分。 */
@@ -302,8 +303,12 @@ export interface UiTaskQueueTask {
 	id: number;
 	/** queue-main-chat: asking = a task in a chat of its own asked its main chat (the chat whose queue holds
 	 *  it); the main chat answers it or passes it on (stuck). Nothing says the user is needed meanwhile. */
-	status: "ready" | "working" | "asking" | "stuck" | "waiting" | "done";
+	status: "ready" | "working" | "asking" | "stuck" | "waiting" | "blocked" | "done";
 	plan: UiTaskQueuePlan;
+	/** queue-blocked: blocked: what it waits on (tasks in any queue and/or a need) and when it's poked. */
+	block?: UiTaskQueueBlock;
+	/** queue-blocked: tasks in other queues it comes after ("temper #38"); `over` once its queue recorded them done or removed. */
+	outside?: UiTaskQueueRef[];
 	profile?: UiTaskProfile;
 	/** Frozen dispatch choices, completed with app-selected values before the first request. */
 	launch?: UiTaskLaunch;
@@ -333,6 +338,37 @@ export interface UiTaskQueueTask {
 	after?: number[];
 	/** queue-side-by-side: of those, the ones still open (not done or removed), in queue order; only on open tasks. */
 	waitingFor?: number[];
+}
+
+/** queue-blocked: a task in a queue, maybe another one (that queue's chat file and the task's number). */
+export interface UiTaskQueueRef {
+	file: string;
+	/** "" = the task's own queue ("#12"), else a role id or the queue chat's title ("temper #38"). */
+	name: string;
+	id: number;
+	/** Filled in by the server's background check (queue-blocks.ts): how that task stands now. */
+	status?: UiTaskQueueTask["status"] | "removed" | "gone";
+	title?: string;
+	/** Its own chat, to open from the line. */
+	chat?: UiTaskQueueChat;
+	/** outside after: its queue recorded it over (done, or removed when `removed`). */
+	over?: { at: number; removed?: boolean };
+}
+
+/** queue-blocked: what a blocked task waits on. */
+export interface UiTaskQueueBlock {
+	on?: UiTaskQueueRef[];
+	need?: string;
+	since: number;
+	/** The 10/30/60 min clock runs from here (same block again goes on with it). */
+	start: number;
+	tries: number;
+	/** The queue poked it: it comes back to work first once a slot is free (ask: to ask its main chat). */
+	poke?: { at: number; ask?: boolean };
+	/** Filled in by the server: when it's poked next (a need, or a poked task that blocked again). */
+	nextPokeAt?: number;
+	/** Filled in by the server: the next step is asking its main chat instead of a poke. */
+	nextIsAsk?: boolean;
 }
 
 /** queue-lanes: a chat a task runs in, or the queue a task chat came from. */

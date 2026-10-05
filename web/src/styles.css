@@ -1264,6 +1264,14 @@ button.session-item.elsewhere-item.confirm {
 	background: color-mix(in srgb, var(--blue) 12%, transparent);
 	color: var(--text);
 }
+/* queue-blocked: "Task #N is blocked on ..." in the Blocked colour (the theme's cyan; every theme has one). */
+.session-sub.tldr-sub.blocked {
+	padding-left: 5px;
+	border-left: 2px solid var(--term-cyan);
+	border-radius: 0 3px 3px 0;
+	background: color-mix(in srgb, var(--term-cyan) 12%, transparent);
+	color: var(--text);
+}
 
 .session-src {
 	margin-left: 6px;
@@ -2625,6 +2633,12 @@ button.session-item.elsewhere-item.confirm {
 	background: color-mix(in srgb, var(--blue) 12%, transparent);
 	border-radius: 0 4px 4px 0;
 }
+/* queue-blocked: "Task #N is blocked on ..." in the Blocked colour (the theme's cyan), like the Queue tab. */
+.tldr-line.blocked {
+	border-left-color: var(--term-cyan);
+	background: color-mix(in srgb, var(--term-cyan) 12%, transparent);
+	border-radius: 0 4px 4px 0;
+}
 .tldr-badge {
 	display: inline-block;
 	margin-right: 6px;
@@ -3030,6 +3044,46 @@ button.session-item.elsewhere-item.confirm {
 /* queue-main-chat: the task asked its main chat: one plain line, nothing for the user to do. */
 .task-queue-asking {
 	margin-top: 2px;
+}
+/* queue-blocked: a blocked task: the theme's cyan edge and badge (not Needs you's amber, not the blue of the
+   main chat's answers), and one line saying what it waits on. */
+.task-queue-task.blocked {
+	border-left-color: var(--term-cyan);
+	background: color-mix(in srgb, var(--term-cyan) 8%, transparent);
+	border-radius: 0 4px 4px 0;
+}
+.task-queue-blocked {
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+	margin-top: 2px;
+	font-size: 11px;
+	color: var(--text-dim);
+	overflow-wrap: anywhere;
+}
+.task-queue-blocked-badge {
+	flex-shrink: 0;
+	padding: 0 5px;
+	border: 1px solid var(--term-cyan);
+	border-radius: 3px;
+	color: var(--term-cyan);
+	font-weight: 600;
+	line-height: 16px;
+}
+.task-queue-ref.needs-you .task-queue-ref-state {
+	color: var(--amber);
+}
+.task-queue-ref-link {
+	padding: 0;
+	border: none;
+	background: none;
+	color: var(--term-cyan);
+	font: inherit;
+	text-decoration: underline;
+	cursor: pointer;
+}
+.task-queue-blocked-next {
+	color: var(--text-faint);
 }
 .task-queue-badge {
 	align-self: flex-start;

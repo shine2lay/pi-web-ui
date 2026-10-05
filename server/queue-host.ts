@@ -22,6 +22,10 @@
  *    carry-on left alone at this start (cut off too often without finishing a turn) until it does
  *    something again (wakeRefusal).
  *  pi-queue checks for chatState and wakeChat before it uses them: an older pi-web-ui has no watchdog.
+ *  - queueRefs({file, self, refs, after?, why}) (queue-blocked) resolves task refs ("#12", "temper #38",
+ *    "<queue chat title> #4") for the queue whose chat is `file` and its task `self`: {refs} with how each
+ *    stands, or {problem} (unknown, the task itself, a loop). queue-blocks.ts.
+ *  - watchQueue(file) (queue-blocked): the background check looks at that queue from now on.
  *
  * This file is the glue: it checks what the extension hands in and serializes the work. The chats
  * themselves are opened by AgentService / ClientSession (agent-service.ts).
@@ -65,6 +69,42 @@ export interface QueueHostImpl {
 	wakeChat(sessionFile: string, note: string): Promise<boolean>;
 	/** Preview from the exact loaded source session; never creates a chat/request or edits settings. */
 	previewLaunch?(profile: UiTaskLaunch, cwd: string, sourceSessionId: string): Promise<UiTaskLaunch>;
+	/** queue-blocked: see the header. */
+	queueRefs?(req: QueueRefsRequest): Promise<QueueRefsResult>;
+	watchQueue?(file: string): void;
+}
+
+/** queue-blocked: what queueRefs gets, checked. */
+export interface QueueRefsRequest {
+	file: string;
+	self: number;
+	refs: string[];
+	after?: number[];
+	why: "block" | "after";
+}
+
+export type QueueRefsResult =
+	| { refs: { file: string; name: string; id: number; status?: string; title?: string; summary?: string }[] }
+	| { problem: string };
+
+/** queue-blocked: queueRefs' request as pi-queue handed it in: cleaned, or the reason it can't be used. */
+export function parseQueueRefsRequest(raw: unknown): QueueRefsRequest | string {
+	if (!raw || typeof raw !== "object") return "no request";
+	const o = raw as Record<string, unknown>;
+	if (typeof o.file !== "string" || !o.file.startsWith("/")) return "no queue chat given";
+	if (typeof o.self !== "number" || !Number.isInteger(o.self) || o.self < 1) return "no task number given";
+	if (!Array.isArray(o.refs) || o.refs.length > 20 || o.refs.some((r) => typeof r !== "string" || r.length > 200))
+		return "refs must be up to 20 short texts";
+	const after = Array.isArray(o.after)
+		? o.after.filter((n): n is number => typeof n === "number" && Number.isInteger(n) && n > 0)
+		: undefined;
+	return {
+		file: o.file,
+		self: o.self,
+		refs: o.refs as string[],
+		...(after?.length ? { after } : {}),
+		why: o.why === "after" ? "after" : "block",
+	};
 }
 
 /** The object pi-queue sees. */
@@ -219,6 +259,33 @@ export function installQueueHost(impl: QueueHostImpl): () => void {
 		profiles: 1 as const,
 		consumeOwnerSetting,
 		...(impl.previewLaunch ? { previewLaunch: impl.previewLaunch } : {}),
+		...(impl.queueRefs
+			? {
+					queueRefs: (raw: QueueRefsRequest): Promise<QueueRefsResult> => {
+						const req = parseQueueRefsRequest(raw);
+						if (typeof req === "string") return Promise.resolve({ problem: req });
+						try {
+							return impl.queueRefs!(req).catch((err) => ({
+								problem: `couldn't look the tasks up (${asError(err).message})`,
+							}));
+						} catch (err) {
+							return Promise.resolve({ problem: `couldn't look the tasks up (${asError(err).message})` });
+						}
+					},
+				}
+			: {}),
+		...(impl.watchQueue
+			? {
+					watchQueue: (file: string) => {
+						if (typeof file !== "string" || !file.startsWith("/")) return;
+						try {
+							impl.watchQueue!(file);
+						} catch {
+							// the check picks it up from the panel later
+						}
+					},
+				}
+			: {}),
 		startChat: (raw: QueueChatStart) => {
 			const opts = parseQueueChatStart(raw);
 			if (typeof opts === "string") return Promise.reject(new Error(opts));

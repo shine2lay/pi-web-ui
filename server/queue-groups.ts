@@ -18,7 +18,7 @@ import { resolve } from "node:path";
 import type { ConversationSummary, UiTaskQueue } from "./protocol.js";
 
 /** pi-queue's open task states (task-queue.ts OPEN): not done and not removed. */
-const OPEN: ReadonlySet<string> = new Set(["ready", "working", "asking", "stuck", "waiting"]);
+const OPEN: ReadonlySet<string> = new Set(["ready", "working", "asking", "stuck", "waiting", "blocked"]);
 
 /** At most this many links are kept; the oldest go first. */
 export const QUEUE_HOMES_MAX = 500;
