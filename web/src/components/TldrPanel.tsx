@@ -4,6 +4,7 @@
  * 长任务里 agent 用 pi-tldr 的 `tldr` 工具边做边写一句大白话进展；这里把当前对话的
  * 这些行倒过来列（最新的在最上面），默认只显示最新几行，「显示全部」展开整份。
  * 「需要你」的行（要用户出手或拍板）高亮；用户之后回过话了（answered，tldr-answered）就不再高亮。
+ * queue-main-chat: a task's question the main chat answered itself (kind "answered") shows in blue.
  *
  * tldr-collapse：看过的行可以折叠（每行右上角的 ▾，或顶上的「全部折叠」）。连着的折叠行
  * 并成一行「N 行已读」，点它重新展开。折叠状态存在服务端的会话里（UiTldrLine.collapsed），
@@ -26,6 +27,21 @@ export type TldrRow = { kind: "line"; line: UiTldrLine } | { kind: "folded"; lin
 /** 这一行还在等用户：needs-you，且用户之后没回过话。 */
 export function awaitingYou(line: UiTldrLine): boolean {
 	return line.needsYou && !line.answered;
+}
+
+/** The class of a line in the tab: amber when it waits for the owner (needs-you), blue when it is pi-queue's
+ *  "Task #N asked …; the main chat answered …" (kind "answered", queue-main-chat), else plain.
+ *  Needs-you wins if a line ever carried both. */
+export function tldrLineClass(line: UiTldrLine): string {
+	if (awaitingYou(line)) return "tldr-line needs-you";
+	return line.kind === "answered" ? "tldr-line answered" : "tldr-line";
+}
+
+/** The same colours for the left list's line under a chat's title (tldr-sidebar). Its needsYou already
+ *  leaves out lines the owner replied to (latestUnseenTldr). */
+export function tldrSubClass(tldr: Pick<UiTldrLine, "needsYou" | "kind">): string {
+	if (tldr.needsYou) return "session-sub tldr-sub needs-you";
+	return tldr.kind === "answered" ? "session-sub tldr-sub answered" : "session-sub tldr-sub";
 }
 
 /** 最新在上的行 → 显示用的行：连着的已折叠行并成一行。 */
@@ -135,7 +151,7 @@ export const TldrPanel = memo(function TldrPanel({
 							</button>
 						</li>
 					) : (
-						<li key={row.line.id} className={awaitingYou(row.line) ? "tldr-line needs-you" : "tldr-line"}>
+						<li key={row.line.id} className={tldrLineClass(row.line)}>
 							{awaitingYou(row.line) && <span className="tldr-badge">{t("tldrNeedsYou")}</span>}
 							<span className="tldr-text">{row.line.text}</span>
 							{row.line.chat && onOpenChat && (

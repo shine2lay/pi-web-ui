@@ -63,6 +63,21 @@ describe("tldrLinesFromEntries", () => {
 		expect(out[3].chat).toEqual({ file: "/s/b.jsonl" });
 	});
 
+	it('queue-main-chat: keeps kind "answered" (the main chat answered a task\'s question) and drops any other kind', () => {
+		const chat = { file: "/s/--tmp--/task.jsonl", title: "Task 4" };
+		const answer = "Task #4 asked: Which port?; the main chat answered: Use 8080";
+		const out = tldrLinesFromEntries([
+			line("t1", answer, { kind: "answered", chat }),
+			line("t2", "something else", { kind: "other" }),
+			line("t3", "a number", { kind: 7 }),
+			line("t4", "no kind"),
+			line("t5", "case matters", { kind: "Answered" }),
+		]);
+		expect(out[0]).toStrictEqual({ id: "t1", text: answer, needsYou: false, ts: 1001, chat, kind: "answered" });
+		expect(out).toHaveLength(5);
+		for (const l of out.slice(1)) expect("kind" in l).toBe(false);
+	});
+
 	it("falls back to the entry timestamp when data.ts is missing", () => {
 		const [l] = tldrLinesFromEntries([
 			{ type: "custom", id: "x", customType: "tldr", data: { text: "hi" }, timestamp: "2026-09-24T12:00:00.000Z" },
@@ -176,6 +191,21 @@ describe("tldr-sidebar: latestUnseenTldr", () => {
 			text: "Need your OK to delete the branch",
 			needsYou: true,
 		});
+	});
+
+	it("queue-main-chat: the main chat's answer keeps its kind, so the left list shows it in blue", () => {
+		const answer = "Task #4 asked: Which port?; the main chat answered: Use 8080";
+		expect(pick([line("t1", "one"), line("t2", answer, { kind: "answered" })])).toStrictEqual({
+			text: answer,
+			needsYou: false,
+			kind: "answered",
+		});
+		// Only the newest line counts; other lines and bad kinds carry nothing.
+		expect(pick([line("t1", answer, { kind: "answered" }), line("t2", "two")])).toStrictEqual({
+			text: "two",
+			needsYou: false,
+		});
+		expect(pick([line("t1", "one", { kind: "bogus" })])).toStrictEqual({ text: "one", needsYou: false });
 	});
 
 	it("no lines gives none", () => {

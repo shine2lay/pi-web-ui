@@ -240,6 +240,10 @@ export interface UiTldrLine {
 	/** queue-lanes: the chat this line is about (pi-queue's report of a task that runs in a chat of its
 	 *  own): the tab links to it. */
 	chat?: UiTaskQueueChat;
+	/** queue-main-chat: "answered" = pi-queue's line for a task's question the main chat answered itself
+	 *  ("Task #N asked …; the main chat answered …"): the tab and the left list show it in blue. Any other
+	 *  value in the session is dropped; left out on every other line. Not the same as `answered` above. */
+	kind?: "answered";
 }
 
 /** 任务队列里一个任务的计划（queue-panel）：用户和 agent 一起定下、用户在对话框里批准过的六部分。 */
@@ -2764,8 +2768,9 @@ export interface ConversationSummary {
 	dialogId?: number;
 	/** tldr-sidebar：这条对话最新的一行 TL;DR，用户还没在 TL;DR tab 里把它折叠（看过）。
 	 *  左栏显示在标题下面，代替「N 条消息」；needsYou 的行高亮。只有服务端加载着的对话才带
-	 *  （历史行不读会话文件）；没有 TL;DR、或者最新一行已经折叠了就缺省。 */
-	tldr?: Pick<UiTldrLine, "text" | "needsYou">;
+	 *  （历史行不读会话文件）；没有 TL;DR、或者最新一行已经折叠了就缺省。
+	 *  queue-main-chat: kind "answered" (the main chat answered a task's question) shows in blue. */
+	tldr?: Pick<UiTldrLine, "text" | "needsYou" | "kind">;
 	/** identities：这条对话的身份（pi-identity），左栏和对话头部的小标签用。加载着的对话按当前分支上
 	 *  最后一条 identity 条目算，磁盘行按文件算（server/identities.ts）；没有身份就缺省。 */
 	identity?: UiChatIdentity;

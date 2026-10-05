@@ -107,7 +107,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | session-index                | `local` | `server/session-index.ts` (new), `session-index-worker.ts` (new), `agent-service.ts`, `identities.ts`, `index.ts`, `tests/unit/session-index.test.ts` (new), `tests/unit/global-history.test.ts`, `tests/session-index-restart-test.mjs` (new), `scripts/session-index-parity.mjs` (new), `scripts/session-index-restart-probe.mjs` (new)                                                                                                                                                                                |
 | identity-notes               | `local` | `server/identity-notes.ts` (new, pi-identity's `notes.ts` copied byte for byte), `identity-memory.ts` (new), `identity-config.ts` (recopied), `identities.ts`, `notebook-watch.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (35), `web/src/notebook-state.ts`, `components/NotebookPanel.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/identity-notebook-test.mjs`, `tests/unit/identity-notebook.test.ts`, `identity-config.test.ts`, `identities.test.ts`                           |
 | about-drafts                 | `local` | `server/identity-roles.ts` (about.md in a draft; accept writes and archives the about page), `identities.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (40), `web/src/line-diff.ts` (new), `identity-state.ts`, `components/IdentitiesSettings.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/unit/identity-config.test.ts`, `tests/unit/line-diff.test.ts` (new), `tests/identity-config-test.mjs`                                                                                                    |
-| queue-main-chat              | `local` | `server/task-queue.ts`, `stuck-asks.ts`, `agent-service.ts` (`askingChats`, `emitConversations`), `queue-groups.ts`, `protocol.ts`, `protocol-version.ts` (41), `web/src/components/TaskQueuePanel.tsx`, `done-watch.ts`, `App.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/queue-main-chat-test.mjs` (new), `tests/queue-lanes-test.mjs`, `queue-panel-test.mjs`, `stall-watch-test.mjs`, `telegram-answers-test.mjs`, `tests/unit/`; paired with pi-queue                                                  |
+| queue-main-chat              | `local` | `server/task-queue.ts`, `stuck-asks.ts`, `agent-service.ts` (`askingChats`, `emitConversations`), `queue-groups.ts`, `protocol.ts`, `protocol-version.ts` (41), `web/src/components/TaskQueuePanel.tsx`, `done-watch.ts`, `App.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/queue-main-chat-test.mjs` (new), `tests/queue-lanes-test.mjs`, `queue-panel-test.mjs`, `stall-watch-test.mjs`, `telegram-answers-test.mjs`, `tests/unit/`; the answer line in blue (#62): `server/tldr-lines.ts`, `TldrPanel.tsx`, `LeftPanel.tsx`; paired with pi-queue |
 
 ---
 
@@ -4882,6 +4882,15 @@ run inside their queue's chat (no chat of their own) ask the owner directly, as 
 4. **After a restart** (`queue-groups.ts`): asking counts as open, so `reopenQueueHomes` reopens a queue
    chat whose task asks; pi-queue then re-sends a card it never handled, once (the 30 minutes count
    from the ask).
+5. **The main chat's answer line is blue** (owner, 2026-10-04, queue task #62: "can you make it a
+   different color in tldr so its obvious"). pi-queue marks it `kind: "answered"` in the tldr entry's
+   data. `tldr-lines.ts` (`parseTldrLine`, `latestTldrLine`) passes that one value on and drops any
+   other; `UiTldrLine` and the left list's latest line gain `kind?: "answered"`. `TldrPanel.tsx` gives
+   the line the `answered` class, `LeftPanel.tsx` (`tldrSubClass`) the line under the chat's title.
+   `styles.css`: the theme's `--blue` as the left bar plus a 12% tint, the same shape as the amber
+   needs-you lines and after the newest-line rule, so blue beats the newest line's violet bar as amber
+   does. Colour only: no badge, no extra words. A needs-you line stays amber even if marked (needs-you
+   wins). Older pages ignore the field, and lines written before the mark stay plain.
 
 ### How it was checked
 
@@ -4897,6 +4906,12 @@ run inside their queue's chat (no chat of their own) ask the owner directly, as 
   the owner after the wait, the late turn changes nothing); the owner stops a run (straight to him, no
   card). `queue-lanes`, `queue-panel`, `telegram-answers` and `stall-watch` now have their queue chat
   pass the question on (or, in stall-watch, end its turn without a reply).
+- The blue line (#62): `tests/unit/tldr-lines.test.ts` (the kind is passed on, bad values dropped,
+  needs-you wins), `tldr-panel.test.ts` (the class, with or without the newest mark; plain and
+  needs-you lines unchanged). `queue-main-chat-test.mjs` opens the main chat in a real browser: the
+  answer line is blue in the TL;DR tab (over the newest line's accent bar) and under the chat's title in
+  the left list, and side by side with an amber and a plain line in the dark and the white theme.
+  `QMC_SHOT_DIR` keeps the screenshots.
 - check.sh, the build and the sealed queue and Telegram tests; live after the install.
 
 ### When syncing

@@ -1255,6 +1255,15 @@ button.session-item.elsewhere-item.confirm {
 	background: color-mix(in srgb, var(--amber) 12%, transparent);
 	color: var(--text);
 }
+/* queue-main-chat: the main chat answered a task's question itself (kind "answered"): the same shape in the
+   theme's blue, like .tldr-line.answered in the TL;DR tab. */
+.session-sub.tldr-sub.answered {
+	padding-left: 5px;
+	border-left: 2px solid var(--blue);
+	border-radius: 0 3px 3px 0;
+	background: color-mix(in srgb, var(--blue) 12%, transparent);
+	color: var(--text);
+}
 
 .session-src {
 	margin-left: 6px;
@@ -2607,6 +2616,13 @@ button.session-item.elsewhere-item.confirm {
 .tldr-line.needs-you {
 	border-left-color: var(--amber);
 	background: color-mix(in srgb, var(--amber) 12%, transparent);
+	border-radius: 0 4px 4px 0;
+}
+/* queue-main-chat: "Task #N asked ...; the main chat answered ..." (kind "answered") in the theme's blue: the
+   needs-you shape without the badge. After :first-child, so blue beats the newest line's accent bar. */
+.tldr-line.answered {
+	border-left-color: var(--blue);
+	background: color-mix(in srgb, var(--blue) 12%, transparent);
 	border-radius: 0 4px 4px 0;
 }
 .tldr-badge {

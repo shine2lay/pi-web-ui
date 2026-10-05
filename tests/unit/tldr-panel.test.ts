@@ -5,7 +5,13 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
-import { TLDR_COLLAPSED_LINES, TldrPanel, tldrRows } from "../../web/src/components/TldrPanel.js";
+import {
+	TLDR_COLLAPSED_LINES,
+	TldrPanel,
+	tldrLineClass,
+	tldrRows,
+	tldrSubClass,
+} from "../../web/src/components/TldrPanel.js";
 import { LanguageProvider } from "../../web/src/i18n.js";
 import type { UiTldrLine } from "../../server/protocol.js";
 
@@ -69,6 +75,45 @@ describe("TldrPanel", () => {
 			/class="tldr-line needs-you"><span class="tldr-badge">[^<]+<\/span><span class="tldr-text">step 3</,
 		);
 		expect(html).toMatch(/class="tldr-line"><span class="tldr-text">step 1</);
+	});
+
+	const liClasses = (html: string) => [...html.matchAll(/<li class="([^"]+)"/g)].map((m) => m[1]);
+
+	it("queue-main-chat: the main chat's answer to a task's question is blue (class answered), with no badge", () => {
+		const answer = "Task #4 asked: Which port?; the main chat answered: Use 8080";
+		const lines: UiTldrLine[] = mk(3, [1]).map((l) => (l.id === "t2" ? { ...l, text: answer, kind: "answered" } : l));
+		const html = render(lines);
+		// Newest first: a plain line, the blue answer, the amber needs-you line.
+		expect(liClasses(html)).toEqual(["tldr-line", "tldr-line answered", "tldr-line needs-you"]);
+		expect(html.match(/class="tldr-badge"/g)).toHaveLength(1);
+		expect(html).toContain(`class="tldr-line answered"><span class="tldr-text">${answer}</span>`);
+	});
+
+	it("queue-main-chat: the newest line can be blue too, and an answered line folds like any other", () => {
+		const lines: UiTldrLine[] = mk(2).map((l) => (l.id === "t2" ? { ...l, kind: "answered" } : l));
+		expect(liClasses(render(lines))).toEqual(["tldr-line answered", "tldr-line"]);
+		const folded = lines.map((l) => (l.id === "t2" ? { ...l, collapsed: true } : l));
+		expect(liClasses(render(folded))).toEqual(["tldr-folded", "tldr-line"]);
+	});
+});
+
+/** queue-main-chat: the classes that colour a line: amber needs-you, blue main-chat answer, else plain. */
+describe("queue-main-chat: line classes", () => {
+	const base: UiTldrLine = { id: "t1", text: "step", needsYou: false, ts: 0 };
+
+	it("tldrLineClass: needs-you is amber, answered is blue, the rest plain; needs-you wins", () => {
+		expect(tldrLineClass(base)).toBe("tldr-line");
+		expect(tldrLineClass({ ...base, kind: "answered" })).toBe("tldr-line answered");
+		expect(tldrLineClass({ ...base, needsYou: true })).toBe("tldr-line needs-you");
+		expect(tldrLineClass({ ...base, needsYou: true, answered: true })).toBe("tldr-line");
+		expect(tldrLineClass({ ...base, needsYou: true, kind: "answered" })).toBe("tldr-line needs-you");
+	});
+
+	it("tldrSubClass: the left list's line gets the same colours", () => {
+		expect(tldrSubClass({ needsYou: false })).toBe("session-sub tldr-sub");
+		expect(tldrSubClass({ needsYou: false, kind: "answered" })).toBe("session-sub tldr-sub answered");
+		expect(tldrSubClass({ needsYou: true })).toBe("session-sub tldr-sub needs-you");
+		expect(tldrSubClass({ needsYou: true, kind: "answered" })).toBe("session-sub tldr-sub needs-you");
 	});
 });
 

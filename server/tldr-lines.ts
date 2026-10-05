@@ -24,6 +24,11 @@
  *
  * needs-you 行之后用户回过话（tldr-answered：发了消息，或在问卷 / 计划批准框里作了答，见
  * isTldrReply），这一行带 `answered: true`：tab 和左栏都不再高亮它。同样是沿分支按顺序算的。
+ *
+ * queue-main-chat: pi-queue's line for a task's question that the queue's main chat answered itself
+ * ("Task #N asked …; the main chat answered …") has `kind: "answered"` in its data. The line keeps it
+ * (`kind: "answered"`), and the tab and the left list show it in blue. Any other kind is dropped: the
+ * line stays an ordinary one. Not the same as `answered` above (the owner replied to a needs-you line).
  */
 
 import type { UiTldrLine } from "./protocol.js";
@@ -132,7 +137,7 @@ export function tldrLinesFromEntries(entries: readonly TldrEntryLike[], max = TL
 			continue;
 		}
 		if (e.customType !== TLDR_ENTRY_TYPE) continue;
-		const d = (e.data ?? {}) as { text?: unknown; needsYou?: unknown; ts?: unknown; chat?: unknown };
+		const d = (e.data ?? {}) as { text?: unknown; needsYou?: unknown; ts?: unknown; chat?: unknown; kind?: unknown };
 		const text = typeof d.text === "string" ? d.text.trim() : "";
 		if (!text || !e.id) continue;
 		const ts = typeof d.ts === "number" && Number.isFinite(d.ts) ? d.ts : Date.parse(e.timestamp ?? "") || 0;
@@ -150,6 +155,8 @@ export function tldrLinesFromEntries(entries: readonly TldrEntryLike[], max = TL
 				...(typeof chat.title === "string" && chat.title ? { title: chat.title.slice(0, 200) } : {}),
 			};
 		}
+		// queue-main-chat: the main chat answered a task's question (shown in blue); nothing else passes.
+		if (d.kind === "answered") line.kind = "answered";
 		out.push(line);
 		if (line.needsYou) waiting.push(line);
 	}
@@ -160,10 +167,18 @@ export function tldrLinesFromEntries(entries: readonly TldrEntryLike[], max = TL
 
 /** 左栏显示的那一行（tldr-sidebar）：只看最新的一行（`lines` 按时间升序，同 tldrLinesFromEntries）。
  *  用户在 TL;DR tab 里把它折叠了（看过了）就没有，左栏回到「N 条消息」；更早的行永远不上左栏。
- *  needs-you 行用户回过话了（answered）：行还在，只是不再高亮。 */
-export function latestUnseenTldr(lines: readonly UiTldrLine[]): Pick<UiTldrLine, "text" | "needsYou"> | undefined {
+ *  needs-you 行用户回过话了（answered）：行还在，只是不再高亮。
+ *  queue-main-chat: a main chat's answer keeps its kind, so the left list shows it in blue too. */
+export function latestUnseenTldr(
+	lines: readonly UiTldrLine[],
+): Pick<UiTldrLine, "text" | "needsYou" | "kind"> | undefined {
 	const last = lines[lines.length - 1];
-	return last && !last.collapsed ? { text: last.text, needsYou: last.needsYou && !last.answered } : undefined;
+	if (!last || last.collapsed) return undefined;
+	return {
+		text: last.text,
+		needsYou: last.needsYou && !last.answered,
+		...(last.kind === "answered" ? { kind: last.kind } : {}),
+	};
 }
 
 /** 这条对话最新的一行正在等用户回话（左栏高亮着）：用户一回话就要马上推左栏。 */

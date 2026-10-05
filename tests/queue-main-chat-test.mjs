@@ -9,7 +9,9 @@
  *      main chat") and finishes, and the main chat's TL;DR says "Task #1 asked …; the main chat
  *      answered …", linking to the task's chat and not "needs you". While it asked, nothing said the
  *      user was needed: no Telegram ask, no needs-you line or notice, and its chat's row asking with no
- *      green light.
+ *      green light. The answer line is marked kind "answered" and shows in blue: a real browser checks it
+ *      in the TL;DR tab (blue beats the newest line's accent bar) and under the main chat's title in the
+ *      left list, while #1's chat holds its turn so the answer stays the newest line.
  *   #2 asks; the main chat passes it on in its own words: the task needs the user as before (its Queue
  *      tab shows the main chat's question and choices, a needs-you TL;DR line, the notice, a Telegram
  *      ask); the owner answers on Telegram and it finishes.
@@ -22,13 +24,17 @@
  *
  * Usage: npm run build && scripts/sealed.sh node tests/queue-main-chat-test.mjs
  *        PI_QUEUE_PKG=<pi-queue checkout> picks the pi-queue to load. QMC_DEBUG=1: server log.
+ *        QMC_SHOT_DIR=<absolute folder> (pass it with scripts/sealed.sh env) keeps screenshots: the TL;DR
+ *        tab with a blue, a plain and an amber line in the dark and the white theme, and the left list.
  */
-import { cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { userInfo } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { chromium } from "playwright-core";
 import WebSocket from "ws";
+import { CHROME_PATH } from "./lib/chrome.mjs";
 import { textOf } from "./lib/mock-model.mjs";
 import { ownServer } from "./lib/own-server.mjs";
 
@@ -219,6 +225,11 @@ let releaseRun5 = () => {};
 const run5Held = new Promise((r) => {
 	releaseRun5 = r;
 });
+/** #1's turn with the main chat's answer waits here while a browser looks at the blue answer line. */
+let releaseRun1 = () => {};
+const run1Held = new Promise((r) => {
+	releaseRun1 = r;
+});
 
 async function modelReply({ payload, sideRequest }) {
 	if (sideRequest) return "Main chat test";
@@ -295,6 +306,7 @@ async function modelReply({ payload, sideRequest }) {
 		}
 	} else if (step === 0) {
 		seen.answers.set(id, userText);
+		if (id === 1) await Promise.race([run1Held, new Promise((r) => setTimeout(r, 90_000).unref())]);
 		return { tool: "queue_done", args: { summary: `Task ${id} used the answer it got` } };
 	} else {
 		return `MC-DONE-${id}`;
@@ -387,7 +399,7 @@ const srv = await ownServer({
 const hardStop = setTimeout(() => {
 	console.log("✗ FAIL: the test took too long");
 	process.exit(1);
-}, 300_000);
+}, 420_000);
 hardStop.unref();
 
 async function openClient(clientId) {
@@ -406,6 +418,110 @@ async function openClient(clientId) {
 async function waitIdle(c) {
 	await sleep(300);
 	await c.waitForState((s) => !s.isStreaming, 30_000);
+}
+
+// ---- a real browser, for the colours (the main chat's answer line is blue) --------------------------
+let browser = null;
+const pageErrors = [];
+const SHOTS = process.env.QMC_SHOT_DIR;
+/** A browser window on one chat (`?chat=<its file>`), in English, in a theme (none: the default dark). */
+async function openPage(clientId, file, theme = "") {
+	const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+	await ctx.addInitScript(
+		([id, t]) => {
+			localStorage.setItem("pi-web-client-id", id);
+			localStorage.setItem("pi-web-ui:lang", "en");
+			if (t) localStorage.setItem("pi-web-ui:theme", t);
+		},
+		[clientId, theme],
+	);
+	const page = await ctx.newPage();
+	page.on("pageerror", (e) => pageErrors.push(`${clientId}: ${e}`));
+	await page.goto(`${srv.http}/?chat=${encodeURIComponent(file)}`);
+	await page.waitForSelector(".topbar", { timeout: 60_000 });
+	await page.locator(".inputbox textarea").waitFor({ timeout: 20_000 });
+	return page;
+}
+async function openTldr(page) {
+	await page.locator(".panel-right .slot-tab", { hasText: "TL;DR" }).first().click();
+	await page.locator(".tldr-panel").waitFor({ timeout: 5000 });
+}
+/** The theme's colours as the browser works them out (rgb strings, like the computed styles below). */
+const colours = (page) =>
+	page.evaluate(() => {
+		const probe = document.createElement("span");
+		document.body.append(probe);
+		const of = (name) => {
+			probe.style.color = `var(${name})`;
+			return getComputedStyle(probe).color;
+		};
+		const out = { blue: of("--blue"), amber: of("--amber"), accent: of("--accent"), border: of("--border") };
+		probe.remove();
+		return out;
+	});
+/** The TL;DR tab's lines, newest first: text, class, left bar, background and whether it has the badge. */
+const tldrLines = (page) =>
+	page.evaluate(() =>
+		[...document.querySelectorAll(".tldr-panel .tldr-line")].map((li) => {
+			const s = getComputedStyle(li);
+			return {
+				text: li.querySelector(".tldr-text")?.textContent ?? "",
+				cls: li.className,
+				bar: s.borderLeftColor,
+				bg: s.backgroundColor,
+				badge: !!li.querySelector(".tldr-badge"),
+			};
+		}),
+	);
+/** The left list's line under a chat's title that reads `text`: class, left bar and background. */
+const subLine = (page, text) =>
+	page.evaluate((t) => {
+		const el = [...document.querySelectorAll(".panel-left .session-sub.tldr-sub")].find((e) => e.textContent === t);
+		if (!el) return null;
+		const s = getComputedStyle(el);
+		return { cls: el.className, bar: s.borderLeftColor, bg: s.backgroundColor };
+	}, text);
+const clear = (bg) => bg === "rgba(0, 0, 0, 0)" || bg === "transparent";
+async function shot(page, name, selector = ".panel-right") {
+	if (!SHOTS) return;
+	mkdirSync(SHOTS, { recursive: true });
+	await page
+		.locator(selector)
+		.first()
+		.screenshot({ path: join(SHOTS, name) });
+}
+/** Side by side in the TL;DR tab, newest first: #2's amber needs-you line, #1's plain done line, #1's blue answer. */
+async function sideBySide(page, theme, answerLine) {
+	await openTldr(page);
+	const c = await colours(page);
+	let v = [];
+	const ok = await waitFor(async () => {
+		v = await tldrLines(page);
+		const [amber, plain, blue] = v;
+		return (
+			same(
+				v.map((l) => l.cls),
+				["tldr-line needs-you", "tldr-line", "tldr-line answered"],
+			) &&
+			amber.text === `Task #2 needs you: ${PASS_QUESTION}` &&
+			amber.bar === c.amber &&
+			amber.badge &&
+			plain.text.startsWith("Task #1 done") &&
+			plain.bar === c.border &&
+			clear(plain.bg) &&
+			!plain.badge &&
+			blue.text === answerLine &&
+			blue.bar === c.blue &&
+			!clear(blue.bg) &&
+			blue.bg !== amber.bg &&
+			!blue.badge
+		);
+	}, 15_000);
+	check(
+		`${theme}: the TL;DR tab shows an amber needs-you line, a plain line and the main chat's answer in blue`,
+		ok && c.blue !== c.amber && c.blue !== c.border,
+		JSON.stringify({ c, v }),
+	);
 }
 
 let A = null;
@@ -480,6 +596,46 @@ try {
 		"... and the main chat's TL;DR has no needs-you line for it",
 		!tldr().some((l) => l.needsYou && l.text.startsWith("Task #1")),
 	);
+
+	// The answer line is blue. #1's chat holds its turn (run1Held), so the answer stays the newest line.
+	const line1 = `Task #1 asked: ${ASKS[1].question}; the main chat answered: ${MAIN_ANSWER}`;
+	check(
+		"the newest line in the main chat's TL;DR is the answer, marked kind answered",
+		await waitFor(() => tldr().at(-1)?.text === line1 && tldr().at(-1)?.kind === "answered", 20_000),
+		JSON.stringify(tldr().map((l) => [l.text, l.needsYou, l.kind])),
+	);
+	const mainFile = A.state.sessionFile ?? A.convs.find((c) => c.id === A.state.conversationId)?.sessionPath;
+	if (!mainFile) throw new Error("the main chat has no saved file to open in a browser");
+	browser = await chromium.launch({ executablePath: CHROME_PATH });
+	const P = await openPage("mc-browser-dark", mainFile);
+	await openTldr(P);
+	const dark = await colours(P);
+	let top = null;
+	check(
+		"in the browser it is blue: the answered class, a blue bar (not the newest line's accent), a tint, no badge",
+		(await waitFor(async () => {
+			top = (await tldrLines(P))[0];
+			return (
+				top?.text === line1 && top.cls === "tldr-line answered" && top.bar === dark.blue && !clear(top.bg) && !top.badge
+			);
+		}, 15_000)) && dark.blue !== dark.accent,
+		JSON.stringify({ dark, top }),
+	);
+	await P.locator(".tldr-line.answered .tldr-open-chat").first().click();
+	let sub = null;
+	check(
+		"its link opens #1's chat; then the main chat's row in the left list shows the answer in blue too",
+		await waitFor(async () => {
+			sub = await subLine(P, line1);
+			return sub?.cls === "session-sub tldr-sub answered" && sub.bar === dark.blue && !clear(sub.bg);
+		}, 15_000),
+		JSON.stringify(sub),
+	);
+	await shot(P, "left-list-dark.png", ".panel-left");
+	// Back on the main chat before #1 finishes (its chat closes then); it stays there for the side-by-side check.
+	await P.goto(`${srv.http}/?chat=${encodeURIComponent(mainFile)}`);
+	await P.waitForSelector(".topbar", { timeout: 60_000 });
+	releaseRun1();
 	check(
 		"#1 carries on with the main chat's answer and finishes",
 		await waitFor(() => task(1)?.status === "done", 30_000),
@@ -496,11 +652,13 @@ try {
 		"queue_reply told the main chat the answer got there",
 		(seen.replies.get(1) ?? "").startsWith("Answered: task #1's chat got your answer"),
 	);
-	const line1 = `Task #1 asked: ${ASKS[1].question}; the main chat answered: ${MAIN_ANSWER}`;
 	check(
 		'the main chat\'s TL;DR says "Task #1 asked …; the main chat answered …", linking to its chat, not needs-you',
 		await waitFor(
-			() => tldr().some((l) => l.text === line1 && !l.needsYou && l.chat?.file === task(1)?.chat?.file),
+			() =>
+				tldr().some(
+					(l) => l.text === line1 && !l.needsYou && l.kind === "answered" && l.chat?.file === task(1)?.chat?.file,
+				),
 			10_000,
 		),
 		JSON.stringify(tldr().map((l) => [l.text, l.needsYou])),
@@ -534,6 +692,31 @@ try {
 		),
 		JSON.stringify(tldr().map((l) => [l.text, l.needsYou])),
 	);
+	check(
+		"only #1's answer line is marked answered",
+		same(
+			tldr()
+				.filter((l) => l.kind === "answered")
+				.map((l) => l.text),
+			[line1],
+		),
+		JSON.stringify(tldr().map((l) => [l.text, l.kind])),
+	);
+	// A blue, a plain and an amber line side by side, in the default dark theme and in the white one.
+	await sideBySide(P, "dark theme", line1);
+	await shot(P, "tldr-tab-dark.png");
+	await P.context().close();
+	const W = await openPage("mc-browser-white", mainFile, "white");
+	check(
+		"the white theme is on",
+		await waitFor(
+			() => W.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() === "#ffffff"),
+			10_000,
+		),
+	);
+	await sideBySide(W, "white theme", line1);
+	await shot(W, "tldr-tab-white.png");
+	await W.context().close();
 	check(
 		"the queue's chat shows the notice, in the main chat's words",
 		await waitFor(
@@ -684,13 +867,16 @@ try {
 		"each asking task's queue_stuck said it asked its main chat",
 		[1, 2, 3, 4].every((id) => (seen.stuckResults.get(id) ?? "").startsWith("Asked your main chat")),
 	);
+	check("the browser windows threw no errors", pageErrors.length === 0, pageErrors.join(" | "));
 	check("the model saw no message it had no script for", unexpected.length === 0, unexpected.join(" | "));
 } catch (e) {
 	failures++;
 	console.log(`✗ FAIL: ${e?.message ?? e}`);
 	if (process.env.QMC_DEBUG) console.log(srv.stderr().slice(-3000));
 } finally {
+	releaseRun1();
 	releaseRun5();
+	await browser?.close().catch(() => {});
 	B?.close();
 	A?.close();
 	await srv.stop();
