@@ -5101,3 +5101,42 @@ machinery, and a receipt that says whether the answer has the four headings.
   path (the header must still match `HEADER_RE`, the store must keep recent report records).
 - The control socket's `role_report` must keep checking the app token; the token file name
   (`app-token`) is what pi-worktree blocks.
+
+## force-reset-rebind
+
+**Status**: `local`
+**Baseline**: v0.96.1
+
+**Why** (found on the first 6 am report morning, 2026-10-05, queue task #60): a role message opened
+Architecture's home chat through the role-messages client; a tool in that turn waited on another
+chat's whole turn, the tool watchdog stopped it, and the abort couldn't end the run, so the chat was
+force-reset (`forceResetConversation`). By then that client had moved on to another chat, and the
+reset bound the client's active chat again instead of the rebuilt one. The rebuilt chat got no events
+(its turns never reached the working list) and no extension session start (pi-identity logged "no
+role", so `message_role` was hidden), and the stuck turn stayed on the working list (its `agent_end`
+never came, the old session was unsubscribed). Every later role message, and the 6 am report
+request, waited on it until a restart.
+
+### Changes
+
+1. `bindSession(conv = this.conv)` takes the chat to bind; the force-reset passes the rebuilt chat
+   (subagents keep the old path). The overrides it applies already go over every open chat.
+2. The force-reset takes the chat's place on the working list (`runningRef`) before the runtime is
+   disposed, and finishes it right after: the stuck run is over and its `agent_end` will never come.
+
+### How it was checked
+
+- `tests/force-reset-rebind-test.mjs` (sealed, the real pi-identity, a scripted model, a test tool
+  that never ends and ignores the abort, tool watchdog 4 s, fake roles alpha and beta with closed
+  home chats): alpha's report request wakes its chat and hangs in the tool; beta's request is
+  delivered meanwhile (the client moves on); the watchdog force-resets alpha's chat; it leaves the
+  working list; alpha's next request is delivered; that turn is on the working list while it runs and
+  off after; alpha still has its role (its `message_role` call goes through, no "no role"); its answer
+  has the four headings. Without the fix it fails like the live case: the chat stays on the working
+  list and the next request waits (5 of 14 checks fail).
+- check.sh and the sealed E2E suite.
+
+### When syncing
+
+- If upstream changes `forceResetConversation` or `bindSession`, keep both: bind the chat that was
+  rebuilt, and take it off the working list when its run is torn down.

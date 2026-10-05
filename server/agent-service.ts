@@ -5645,9 +5645,9 @@ export class ClientSession {
 		};
 	}
 
-	/** (Re)attach event plumbing to the ACTIVE conversation's session. */
-	private async bindSession(): Promise<void> {
-		const conv = this.conv;
+	/** (Re)attach event plumbing to a conversation's session: the ACTIVE one unless another is given
+	 *  (force-reset-rebind: a background chat rebuilt by a force-reset is bound itself). */
+	private async bindSession(conv: Conversation = this.conv): Promise<void> {
 		conv.unsubscribe?.();
 		conv.session = conv.runtime.session;
 		// per-chat-dialogs：换了会话（/new、/resume、强制重建）→ 旧会话问的弹窗作废。
@@ -10638,6 +10638,8 @@ export class ClientSession {
 			}
 		})();
 		try {
+			// force-reset-rebind: the chat's place on the working list, taken before the runtime goes.
+			const listedRef = runningRef(conv);
 			conv.unsubscribe?.();
 			conv.unsubscribe = undefined;
 			conv.dialogs.cancelAll();
@@ -10645,6 +10647,10 @@ export class ClientSession {
 			conv.toolStartTimes.clear();
 			disposeEvalSession(conv.id);
 			await conv.runtime.dispose();
+			// force-reset-rebind: the stuck run is over, and its agent_end never comes (unsubscribed above),
+			// so the chat leaves the working list here; otherwise it would look busy until a restart, and
+			// role messages and the queue would wait on it for good.
+			if (listedRef) runningChats?.finish(listedRef.sessionFile);
 			// #280：dispose 丢弃了内存里的在飞状态（未落盘的工具结果蒸发），
 			// 文件尾可能留下一个悬空 toolCall——先补合成 toolResult 再重建，
 			// 否则重建后的 prompt 会把非法转录链喂给 provider（零落盘黑洞）。
@@ -10709,7 +10715,11 @@ export class ClientSession {
 				text: reason,
 				textEn: `${reason}`,
 			});
-			await this.bindSession();
+			// force-reset-rebind: bind the chat that was rebuilt, which need not be this client's active one
+			// (the watchdog or a Stop can hit a chat a pseudo client opened earlier: a role message, the
+			// queue, the carry-on). Binding the active one instead left the rebuilt chat without its events
+			// and its extensions' session start (pi-identity: no role). Subagents keep the old path.
+			await this.bindSession(conv.isSubagent ? undefined : conv);
 			this.emitConversations();
 			void this.pushSlashCommands();
 		} catch (err) {
