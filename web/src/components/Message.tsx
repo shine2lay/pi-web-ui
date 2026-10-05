@@ -1501,6 +1501,7 @@ function CompactionCard({
 
 /** role-messages: the chat's label for a role message, e.g. "from ops (Queue #58) \u00b7 fyi". */
 export function roleMessageLabel(m: UiRoleMessage, t: Translate): string {
+	if (m.kind === "report") return t("roleReportLabel", { date: m.reportDate ?? "?" });
 	const kind = m.kind === "reply" && m.replyTo ? t("roleMessageReplyKind", { id: m.replyTo }) : m.kind;
 	return t("roleMessageLabel", { from: m.from, chat: m.fromChat, kind });
 }
@@ -1518,10 +1519,20 @@ function RoleMessageCard({ roleMessage: m }: { roleMessage: UiRoleMessage }) {
 				<span className="chead-icon rolemsg-icon">
 					<FiMessageSquare />
 				</span>
-				<span className="chead-title rolemsg-title">{t("roleMessageCardTitle", { id: m.id })}</span>
-				<span className="rolemsg-from">
-					{t("roleMessageCardFrom", { title: m.fromTitle, from: m.from, chat: m.fromChat })}
-				</span>
+				{m.kind === "report" ? (
+					// role-reports: the app's 6 am report request (not from a role).
+					<>
+						<span className="chead-title rolemsg-title">{t("roleReportCardTitle", { date: m.reportDate ?? "?" })}</span>
+						<span className="rolemsg-from">{t("roleReportCardFrom", { id: m.id })}</span>
+					</>
+				) : (
+					<>
+						<span className="chead-title rolemsg-title">{t("roleMessageCardTitle", { id: m.id })}</span>
+						<span className="rolemsg-from">
+							{t("roleMessageCardFrom", { title: m.fromTitle, from: m.from, chat: m.fromChat })}
+						</span>
+					</>
+				)}
 			</div>
 			<div className="rolemsg-body msg-text">
 				<Markdown text={m.text} hardBreaks />

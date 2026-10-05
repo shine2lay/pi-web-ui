@@ -11,6 +11,10 @@
  *   → {"cmd":"status"}        ← {"ok":true, ...serviceStatus}
  *   → {"cmd":"quiesce"}       ← {"ok":true}
  *   → {"cmd":"unquiesce"}     ← {"ok":true}
+ *   → {"cmd":"role_report","token":"<app token>","role":"design","date":"YYYY-MM-DD","activity":{...}}
+ *                             ← {"ok":true,"receipt":{...},"existing":false,"paused":false}
+ *     role-reports: only the app's 6 am report job (it shows <dataDir>/app-token); once per role and day.
+ *   → {"cmd":"role_reports","date":"YYYY-MM-DD"}  ← {"ok":true,"receipts":[...]} (no text)
  *   → anything else           ← {"ok":false,"error":"..."}
  *
  * Idle connections are closed after a short timeout so a stuck CLI never
@@ -20,7 +24,9 @@ import { createServer, createConnection, type Server, type Socket } from "node:n
 import { chmodSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentService } from "./agent-service.js";
+import { isAppToken } from "./app-token.js";
 import type { UiServiceInfo } from "./protocol.js";
+import type { RoleReportReceipt } from "./role-messages.js";
 
 /** 探测既有 socket 的超时：活实例对 connect 的响应是内核级的，300ms 足够。 */
 const CONTROL_PROBE_TIMEOUT_MS = 300;
@@ -45,8 +51,10 @@ function probeControlPath(path: string): Promise<string | null> {
 	});
 }
 
-/** 控制 socket 只需服务状态与 quiesce 控制（pi/dsh 引擎都满足）。 */
-type ControlService = Pick<AgentService, "serviceStatus" | "quiesce" | "unquiesce">;
+/** 控制 socket 只需服务状态与 quiesce 控制（pi/dsh 引擎都满足）。role-reports: the report requests
+ *  (pi engine only). */
+type ControlService = Pick<AgentService, "serviceStatus" | "quiesce" | "unquiesce"> &
+	Partial<Pick<AgentService, "requestRoleReport" | "roleReportReceipts" | "noteRoleReportRefused">>;
 
 /** How long a control connection may sit idle before the server closes it. */
 const CONTROL_IDLE_TIMEOUT_MS = 5_000;
@@ -60,7 +68,12 @@ export function controlPath(dataDir: string, port: number): string {
 }
 
 export interface ControlCommand {
-	cmd: "status" | "quiesce" | "unquiesce";
+	cmd: "status" | "quiesce" | "unquiesce" | "role_report" | "role_reports";
+	/** role-reports: role_report's app token, role, day and what the job found; role_reports' day. */
+	token?: unknown;
+	role?: unknown;
+	date?: unknown;
+	activity?: unknown;
 }
 
 export interface ControlStatus {
@@ -77,11 +90,23 @@ export interface ControlStatus {
 	pendingMessages?: number;
 	/** 托管本实例的平台服务（null = 前台/dev/Docker）——CLI 显示启动方式。 */
 	service?: UiServiceInfo | null;
+	/** role-reports: role_report's request (new or the day's first), and whether delivery is paused. */
+	receipt?: RoleReportReceipt;
+	existing?: boolean;
+	paused?: boolean;
+	/** role-reports: role_reports' receipts. */
+	receipts?: RoleReportReceipt[];
 }
 
 /** Start the control socket; returns a stop function. */
-export function startControlServer(opts: { service: ControlService; dataDir: string; port: number }): () => void {
-	const { service, dataDir, port } = opts;
+export function startControlServer(opts: {
+	service: ControlService;
+	dataDir: string;
+	port: number;
+	/** role-reports: the app's token (app-token.ts); none = role_report is refused. */
+	appToken?: string;
+}): () => void {
+	const { service, dataDir, port, appToken } = opts;
 	const path = controlPath(dataDir, port);
 	let server: Server;
 	// 只有本实例真正 bind 成功才允许 stop 时删 socket 文件：探测发现活实例而
@@ -132,6 +157,22 @@ export function startControlServer(opts: { service: ControlService; dataDir: str
 		}
 	});
 
+	/** role-reports: the app's 6 am report job asks a role for its report (only with the app token). */
+	function roleReport(req: ControlCommand): ControlStatus {
+		if (!service.requestRoleReport || !service.roleReportReceipts) {
+			return { ok: false, error: "report requests aren't supported here" };
+		}
+		if (!appToken || !isAppToken(req.token, appToken)) {
+			const why = req.token === undefined ? "no app token" : "a wrong app token";
+			service.noteRoleReportRefused?.(req.role, req.date, why);
+			return { ok: false, error: `refused: only the app's report job may ask for reports (${why})` };
+		}
+		const res = service.requestRoleReport({ role: req.role, date: req.date, activity: req.activity });
+		if (!res.ok) return { ok: false, error: res.error };
+		const receipt = service.roleReportReceipts(res.record.report?.date).find((x) => x.id === res.record.id);
+		return { ok: true, ...(receipt ? { receipt } : {}), existing: res.existing, paused: res.paused };
+	}
+
 	function handleConnection(sock: Socket): void {
 		let buf = "";
 		const timer = setTimeout(() => {
@@ -164,6 +205,14 @@ export function startControlServer(opts: { service: ControlService; dataDir: str
 					case "unquiesce":
 						service.unquiesce();
 						resp = { ok: true };
+						break;
+					case "role_report":
+						resp = roleReport(req);
+						break;
+					case "role_reports":
+						resp = service.roleReportReceipts
+							? { ok: true, receipts: service.roleReportReceipts(typeof req.date === "string" ? req.date : undefined) }
+							: { ok: false, error: "report requests aren't supported here" };
 						break;
 					default:
 						resp = { ok: false, error: `unknown cmd: ${String((req as { cmd?: unknown }).cmd)}` };

@@ -1822,6 +1822,9 @@ export const en = {
 	roleMessageReplyKind: "reply to {id}",
 	roleMessageCardTitle: "Role message {id}",
 	roleMessageCardFrom: "From {title} ({from}), sent from its {chat}. The server set the sender.",
+	roleReportLabel: "the app \u00b7 6 am report \u00b7 {date}",
+	roleReportCardTitle: "6 am report \u00b7 {date}",
+	roleReportCardFrom: "From the app's 6 am report job ({id}). The server set the sender.",
 	roleMessagesTitle: "Role messages",
 	roleMessagesHint:
 		"What role chats sent each other with message_role (the last 100). The server sets who sent each one; a message waits for any running turn and wakes a closed chat.",

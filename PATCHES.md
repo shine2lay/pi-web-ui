@@ -4905,3 +4905,82 @@ run inside their queue's chat (no chat of their own) ask the owner directly, as 
   change `task-queue.ts` with it (the unit tests replay its ops).
 - "[Queue]" stays an automated prefix in `tldr-lines.ts`, so the card and the answer never count as
   the owner's reply.
+
+## role-reports
+
+**Status**: `local`
+**Baseline**: v0.96.1 (on top of `role-messages`)
+
+**Why** (owner, 2026-10-04, queue task #60): every morning at 6:00 Pacific each department role that
+worked the day before writes a short report in its home chat (goal or hypothesis, done yesterday,
+learned, next); a role with no activity writes nothing. Only the role can write it (no one may start pi
+as another role, and role folders are private), so the app's job (agent-tools `role-reports run`, the
+scheduler at 0 6 * * *) asks each active role's home chat once, and the role answers there. This patch
+is the asking: a request card only the app can send, delivered with role-messages' exactly-once
+machinery, and a receipt that says whether the answer has the four headings.
+
+### Changes
+
+1. **The request** (`server/role-messages.ts`): a role message of kind `report`, from
+   `{ role: "app", title: "the app", chat: "6 am report job" }`, with `report: { date, activity? }`.
+   `RoleMessages.requestReport({ role, date, activity })` checks the role (known, has a home chat) and
+   the day (YYYY-MM-DD, already over in the server's local time, at most 7 days back) and keeps one
+   request per role and day: asking again (a retry, a second run, after a restart) returns the first
+   (`existing: true`), and recent report records are never dropped from the store (they are the
+   proof). No hourly cap or chain for it. Held while paused like any role message. The header is
+   `[Role message rm-... from the app · 6 am report · YYYY-MM-DD]`, so the card, the once-only delivery
+   (header found in the transcript after the noted offset) and the restart handling are role-messages'.
+   The body (`roleReportText`) names the day (weekday, 00:00 to 24:00 Pacific), what the job found
+   (messages, chats, queue events, daily-log entries: counts only), and the steps: read that day's
+   daily-log entries with the role's `#tag` or its chats' ids, look at the queue (`queue_control`
+   list), then answer in this chat, about 200 to 4,000 characters, under exactly
+   `## Goal or hypothesis`, `## Done yesterday`, `## Learned`, `## Next`.
+2. **Only the app sends it**: `message_role` refuses kind `report` (not one of its kinds) and refuses a
+   reply to a report request (it is answered in the chat itself). The control socket
+   (`server/control-socket.ts`) takes `{"cmd":"role_report","token","role","date","activity"}` only with
+   the app token: `server/app-token.ts` (new) makes `<data dir>/app-token` (32 random bytes hex, 0600)
+   at start (`index.ts`), compared in constant time, never logged or sent to a page. A missing or wrong
+   token is refused and logged (`[role-messages] refused a report request for <role> (<date>): ...`).
+   pi-worktree keeps chats from naming the token file or giving the command, so a chat can't ask on
+   its own. `{"cmd":"role_reports","date"}` lists the receipts (no token needed: no text in them).
+3. **The receipt** (`RoleMessages.reportReceipts`, `checkReport`): once a request is delivered and the
+   chat isn't working, the server reads the transcript after the request line: the assistant's text
+   (not tool results) up to the next user message that isn't a restart's carry-on note. It is final
+   when the four headings are there, the owner wrote next, the chat sat idle 2 minutes after its turn,
+   or 6 hours passed; then `report.reply = { at, answered, headings, missing, chars }` is stored (state
+   `replied` when answered) and one log line says how (`rm-... beta's report for 2026-10-03: answered
+   with the four headings (183 chars)`). No reply text is kept anywhere.
+4. **The card and the list** (`protocol.ts`, `Message.tsx`, `i18n.tsx` + locales): kind `report` and
+   `UiRoleMessage.reportDate`; the card's title is "6 am report · {date}" and its line says it is from the
+   app's 6 am report job (the server set the sender); Settings -> Identities -> Role messages lists it
+   with `report: { date, headings }`.
+
+### How it was checked
+
+- `tests/unit/role-reports.test.ts` (fake host): once per role and day (again, after a restart, other
+  days and roles their own); refusals (unknown role, no home chat, a day not over, too old, not a date);
+  the local-day rule; the text (day, daily-log file, tag, queue, the headings); message_role can't send
+  or reply to one; a closed chat (sent once), a busy chat (waits for the turn, never steered), a restart
+  after the send landed (not sent again, a retry returns it), paused (held, then sent); the receipt
+  (headings only from the assistant's text after the turn, not from a tool result; without headings
+  final after idle, with what's missing; a carry-on note doesn't end the answer, the owner's next
+  message does; no answer); the heading reader; the app token (0600, kept, constant-time check); the
+  control socket (refused without and with a wrong token and logged, once per day, receipts listed
+  without text or token).
+- `tests/role-reports-test.mjs` (sealed, the real pi-identity, a scripted model, fake roles in a temp
+  HOME, TZ America/Los_Angeles): an agent can't send one (message_role, the socket without or with a
+  wrong token; logged without the token); a closed home chat is woken, gets the request and answers;
+  the card is the server's (the app, that day); message_role can't reply to it; a busy chat gets it
+  only after its turn, which ends whole; the receipts (one per role, replied with the headings, no
+  text; the store keeps no answer text; Settings lists them); a retry returns the first request before
+  and after a restart and nothing is sent twice; a held request survives a restart and is delivered
+  once after the resume, and not again after another restart. `tests/lib/own-server.mjs` gained
+  `stdout: true` (the server's console.log lines as `srv.stdout()`).
+- check.sh, the build and the sealed E2E suite; live, the first 6:00 run's receipts.
+
+### When syncing
+
+- Rides on role-messages: if its header, delivery or store changes, keep kind `report` on the same
+  path (the header must still match `HEADER_RE`, the store must keep recent report records).
+- The control socket's `role_report` must keep checking the app token; the token file name
+  (`app-token`) is what pi-worktree blocks.

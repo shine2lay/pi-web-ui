@@ -279,7 +279,14 @@ import { extractTouches, formatTouchesCompact, intersectTouches } from "./conver
 import { ClaimStore, matchClaims, mergeTouchSidecar, readTouchSidecar, removeTouchSidecar } from "./claim-store.js";
 import { makeClaimFilesTool, type ClaimFilesHost } from "./claim-files-tool.js";
 import { makeMessageRoleTool, type MessageRoleHost } from "./role-message-tool.js";
-import { chatLabel, ownTaskOf, RoleMessages, type RoleMessageSender } from "./role-messages.js";
+import {
+	chatLabel,
+	ownTaskOf,
+	RoleMessages,
+	type RoleMessageSender,
+	type RoleReportReceipt,
+	type RoleReportResult,
+} from "./role-messages.js";
 import { makeSkillTool, type SkillToolHost } from "./skill-tool.js";
 import { makeScheduleTools, type ScheduleToolHost } from "./schedule-agent-tool.js";
 import { makePatchTool } from "./patch-tool.js";
@@ -14867,6 +14874,22 @@ export class AgentService {
 	/** role-messages: the owner's switch. Paused = held, not dropped. */
 	setRoleMessagesPaused(paused: boolean): void {
 		this.roleMessages.setPaused(paused);
+	}
+
+	/** role-reports: the app's 6 am report job asks a role for its report on a day (control socket, after
+	 *  the app token was checked). Once per role and day; delivered like a role message. */
+	requestRoleReport(input: { role?: unknown; date?: unknown; activity?: unknown }): RoleReportResult {
+		return this.roleMessages.requestReport(input);
+	}
+
+	/** role-reports: the report requests' receipts (one day's, or all); no text. */
+	roleReportReceipts(date?: string): RoleReportReceipt[] {
+		return this.roleMessages.reportReceipts(date);
+	}
+
+	/** role-reports: a report request the control socket refused (no token, a wrong one): logged. */
+	noteRoleReportRefused(role: unknown, date: unknown, why: string): void {
+		this.roleMessages.noteReportRefused(role, date, why);
 	}
 
 	/**

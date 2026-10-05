@@ -15,7 +15,8 @@
  * stand-in model as its only model, reachable as srv.mock; it replaces `model`), env (extra server
  * environment), verbose (server output to this process), prepare (an async function({ root, dataDir,
  * agentDir, workdir }) run once before the first start, after the model is set up: put plugins or
- * settings in place).
+ * settings in place), stdout (keep the server's standard output too, as srv.stdout(); its
+ * console.log lines go there, srv.stderr() has only its error output).
  */
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync } from "node:fs";
@@ -50,6 +51,7 @@ export async function ownServer(opts = {}) {
 	const port = opts.port ?? (await freeTcpPort());
 	let proc = null;
 	let stderr = "";
+	let stdout = "";
 
 	const start = async () => {
 		proc = spawn(process.execPath, [join(REPO, "dist", "server", "index.js")], {
@@ -63,12 +65,16 @@ export async function ownServer(opts = {}) {
 				PI_WEB_PLUGIN_CATALOG_URL: process.env.PI_WEB_PLUGIN_CATALOG_URL ?? "",
 				...opts.env,
 			},
-			stdio: ["ignore", opts.verbose ? "inherit" : "ignore", "pipe"],
+			stdio: ["ignore", opts.stdout ? "pipe" : opts.verbose ? "inherit" : "ignore", "pipe"],
 			detached: process.platform !== "win32",
 		});
 		proc.stderr.on("data", (d) => {
 			stderr = (stderr + d).slice(-8000);
 			if (opts.verbose) process.stderr.write(d);
+		});
+		proc.stdout?.on("data", (d) => {
+			stdout = (stdout + d).slice(-64000);
+			if (opts.verbose) process.stdout.write(d);
 		});
 		const started = Date.now();
 		while (Date.now() - started < (opts.startTimeoutMs ?? 30_000)) {
@@ -120,5 +126,6 @@ export async function ownServer(opts = {}) {
 			await start();
 		},
 		stderr: () => stderr,
+		stdout: () => stdout,
 	};
 }

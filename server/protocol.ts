@@ -90,8 +90,9 @@ export interface UiMessage {
 	roleMessage?: UiRoleMessage;
 }
 
-/** role-messages: what a message between roles is. */
-export type UiRoleMessageKind = "question" | "request" | "fyi" | "reply";
+/** role-messages: what a message between roles is. role-reports: "report" = the app's 6 am report
+ *  request (only the app's job sends it; message_role can't). */
+export type UiRoleMessageKind = "question" | "request" | "fyi" | "reply" | "report";
 /** role-messages: where it is (waiting = not delivered yet; replied = delivered and answered). */
 export type UiRoleMessageState = "waiting" | "delivered" | "replied" | "failed";
 
@@ -106,6 +107,8 @@ export interface UiRoleMessage {
 	kind: UiRoleMessageKind;
 	/** kind reply: the message it answers. */
 	replyTo?: string;
+	/** role-reports: kind report: the day the report is about (YYYY-MM-DD, Pacific). */
+	reportDate?: string;
 	/** The text as the sender wrote it (without the header and hint lines). */
 	text: string;
 }
@@ -127,6 +130,9 @@ export interface UiRoleMessageRow {
 	chain: number;
 	deliveredAt?: number;
 	error?: string;
+	/** role-reports: kind report: the day, and once the role answered whether its reply had the four
+	 *  headings (the server keeps no reply text). */
+	report?: { date: string; headings?: boolean };
 }
 
 export interface UiModelInfo {

@@ -41,6 +41,8 @@ import { registerFileTransferRoutes } from "./file-transfer-routes.js";
 import { initAttachmentStore, readAttachment } from "./attachment-store.js";
 import { isAudioFile, previewKind } from "./text-sniff.js";
 import { startControlServer } from "./control-socket.js";
+import { ensureAppToken } from "./app-token.js";
+import type { RoleReportReceipt, RoleReportResult } from "./role-messages.js";
 import { scheduleUploadCleanup } from "./uploads.js";
 import { ensureWindowsBash, windowsBashDir } from "./ensure-bash.js";
 import { listThemes, resolveThemeFile } from "./themes.js";
@@ -1388,6 +1390,12 @@ export interface EngineService {
 	roleMessagesView?(): { enabled: boolean; paused: boolean; messages: UiRoleMessageRow[] };
 	/** role-messages (pi engine): the owner pauses (held, not dropped) or resumes delivery. */
 	setRoleMessagesPaused?(paused: boolean): void;
+	/** role-reports (pi engine): the app's 6 am report job asks a role for its report (control socket). */
+	requestRoleReport?(input: { role?: unknown; date?: unknown; activity?: unknown }): RoleReportResult;
+	/** role-reports (pi engine): the report requests' receipts (no text). */
+	roleReportReceipts?(date?: string): RoleReportReceipt[];
+	/** role-reports (pi engine): a refused report request, logged. */
+	noteRoleReportRefused?(role: unknown, date: unknown, why: string): void;
 	/** role-messages (pi engine): set by index.ts; the list changed. */
 	onRoleMessagesChanged?: (() => void) | null;
 	noteSocketOpen(): void;
@@ -3996,7 +4004,15 @@ if (!bootCatalogDisabled) {
 
 // Local control socket (status / quiesce / unquiesce) — same data dir the
 // CLI uses, so `pi-web-ui server status|quiesce|unquiesce` just works.
-const stopControl = startControlServer({ service, dataDir: DATA_DIR, port: PORT });
+// role-reports: the app's own token (<data dir>/app-token), which the app's jobs show for commands
+// only they may give (the 6 am report request). Made when missing; never logged.
+let appToken: string | undefined;
+try {
+	appToken = ensureAppToken(DATA_DIR);
+} catch (err) {
+	console.warn(`[control] couldn't make the app token: ${(err as Error).message} (report requests refused)`);
+}
+const stopControl = startControlServer({ service, dataDir: DATA_DIR, port: PORT, appToken });
 
 /**
  * Graceful shutdown budget (issue #172): disposeAll() can hang forever on a

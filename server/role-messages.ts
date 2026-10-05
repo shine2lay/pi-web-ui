@@ -27,6 +27,13 @@
 // Caps: 20 messages an hour per sending role; a chain limit of 6 (a message sent while handling a
 // role message is one deeper than it). The owner can pause delivery (Settings → Identities): messages
 // are held, not dropped.
+//
+// role-reports: the app's 6 am report job (agent-tools' role-reports, through the control socket with
+// the app token) asks a department role for its report on a day: kind "report", from "the app", one per
+// role and day ever (asking again returns the first). It is delivered like any role message (after a
+// running turn, waking a closed chat, exactly once). Once the chat has answered, the service checks
+// the answer for the four headings and keeps only the result (yes/no, which are missing, how long),
+// never the answer's text. message_role can't send one or reply to one.
 // ---------------------------------------------------------------------------
 
 import { createHash, randomBytes } from "node:crypto";
@@ -36,8 +43,10 @@ import { dirname } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { samePath, type IdentityDef } from "./identities.js";
 import type { UiRoleMessage, UiRoleMessageKind, UiRoleMessageRow, UiRoleMessageState } from "./protocol.js";
+import { CARRY_ON_PREFIX } from "./running-chats.js";
 import { TASK_QUEUE_ENTRY_TYPE, taskQueueFromEntries, type TaskQueueEntryLike } from "./task-queue.js";
 
+/** The kinds message_role sends (role-reports' "report" is the app's alone). */
 export const ROLE_MESSAGE_KINDS: readonly UiRoleMessageKind[] = ["question", "request", "fyi", "reply"];
 /** Messages a sending role may send in an hour. */
 export const ROLE_MESSAGES_PER_HOUR = 20;
@@ -60,6 +69,19 @@ const MAX_SENDS = 5;
 /** A message not delivered within a day fails. */
 const GIVE_UP_MS = 24 * HOUR_MS;
 const FILE_VERSION = 1;
+
+/** role-reports: the four headings a 6 am report has, in this order, each on a line of its own. */
+export const ROLE_REPORT_HEADINGS = ["## Goal or hypothesis", "## Done yesterday", "## Learned", "## Next"] as const;
+/** role-reports: how many days back a report may be asked for (the day must be over). */
+export const ROLE_REPORT_MAX_AGE_DAYS = 7;
+/** role-reports: who a report request is from (not a role: the app). */
+export const ROLE_REPORT_SENDER = { role: "app", title: "the app", chat: "6 am report job", file: "" } as const;
+/** role-reports: an answer without the four headings counts as final once the chat has been idle this long. */
+const REPORT_SETTLE_MS = 2 * 60_000;
+/** role-reports: no answer this long after delivery: recorded as none. */
+const REPORT_GIVE_UP_MS = 6 * HOUR_MS;
+/** role-reports: report records younger than this are never dropped (they are the once-per-day proof). */
+const REPORT_KEEP_MS = (ROLE_REPORT_MAX_AGE_DAYS + 2) * 24 * HOUR_MS;
 
 const HEADER_RE = /^\[Role message (rm-[0-9a-f]{8}) /;
 
@@ -99,7 +121,54 @@ export interface RoleMessageRecord {
 	/** The reply that answered it. */
 	replyId?: string;
 	error?: string;
+	/** role-reports: kind report: the day it is about, what the job found, and the answer's check. */
+	report?: RoleReportInfo;
 }
+
+/** role-reports: what the app's job found that day (counts only). */
+export interface RoleReportActivity {
+	messages: number;
+	chats: number;
+	queue: number;
+	log: number;
+}
+
+/** role-reports: the check of the chat's answer (no text kept). */
+export interface RoleReportReply {
+	/** When it was checked (final). */
+	at: number;
+	/** The chat answered with some text after the request. */
+	answered: boolean;
+	/** All four headings, each on its own line, in order. */
+	headings: boolean;
+	/** The headings it lacks (or has out of order). */
+	missing: string[];
+	/** The answer's length in characters. */
+	chars: number;
+}
+
+export interface RoleReportInfo {
+	/** YYYY-MM-DD: the day (the server's local time: Pacific on the box). */
+	date: string;
+	activity?: RoleReportActivity;
+	reply?: RoleReportReply;
+}
+
+/** role-reports: a report request's receipt (the control socket's role_reports; no text). */
+export interface RoleReportReceipt {
+	id: string;
+	role: string;
+	date: string;
+	at: number;
+	state: RoleMessageState;
+	targetChat?: string;
+	deliveredAt?: number;
+	reply?: RoleReportReply;
+	error?: string;
+}
+
+export type RoleReportResult =
+	{ ok: true; record: RoleMessageRecord; existing: boolean; paused: boolean } | { ok: false; error: string };
 
 interface StoreFile {
 	v: number;
@@ -170,9 +239,11 @@ export function chatLabel(o: { taskId?: number; isHome: boolean; title?: string 
 	return t ? `chat "${t}"` : "a chat";
 }
 
-type HeaderParts = Pick<RoleMessageRecord, "id" | "from" | "kind" | "replyTo">;
+type HeaderParts = Pick<RoleMessageRecord, "id" | "from" | "kind" | "replyTo" | "report">;
 
 export function roleMessageHeader(r: HeaderParts): string {
+	if (r.kind === "report")
+		return `[Role message ${r.id} from the app \u00b7 6 am report \u00b7 ${r.report?.date ?? "?"}]`;
 	const what = r.kind === "reply" && r.replyTo ? `reply to ${r.replyTo}` : r.kind;
 	return `[Role message ${r.id} from ${r.from.role} (${oneLine(r.from.title)}), sent from its ${r.from.chat} · ${what}]`;
 }
@@ -180,6 +251,8 @@ export function roleMessageHeader(r: HeaderParts): string {
 export function roleMessageHint(r: HeaderParts): string {
 	const reply = `message_role with to "${r.from.role}", kind "reply", replyTo "${r.id}"`;
 	switch (r.kind) {
+		case "report":
+			return "(The app's 6 am report request: your answer in this chat is the report the owner reads. No message_role, no new work, no tasks started.)";
 		case "fyi":
 			return "(An FYI from another role: no reply needed.)";
 		case "reply":
@@ -194,6 +267,74 @@ export function roleMessageHint(r: HeaderParts): string {
 /** The text that goes into the receiving chat. */
 export function roleMessageText(r: HeaderParts & { text: string }): string {
 	return `${roleMessageHeader(r)}\n\n${r.text}\n\n${roleMessageHint(r)}`;
+}
+
+// ---------------------------------------------------------------------------
+// role-reports: the 6 am report request
+// ---------------------------------------------------------------------------
+
+/** YYYY-MM-DD of a moment, in the server's local time. */
+export function localDay(ms: number): string {
+	const d = new Date(ms);
+	const p = (n: number) => String(n).padStart(2, "0");
+	return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** Why a report can't be asked for this day now (undefined = it can): it must be a real date, over,
+ *  and at most ROLE_REPORT_MAX_AGE_DAYS back (the server's local time). */
+export function reportDateProblem(date: string, now: number): string | undefined {
+	const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+	if (!m) return `date must be YYYY-MM-DD (got "${oneLine(date, 20)}")`;
+	const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+	const at = new Date(y, mo - 1, d);
+	if (at.getFullYear() !== y || at.getMonth() !== mo - 1 || at.getDate() !== d) return `${date} is not a date`;
+	const today = localDay(now);
+	if (date >= today) return `${date} isn't over yet (today is ${today})`;
+	const t = new Date(now);
+	const oldest = localDay(new Date(t.getFullYear(), t.getMonth(), t.getDate() - ROLE_REPORT_MAX_AGE_DAYS).getTime());
+	if (date < oldest) return `${date} is more than ${ROLE_REPORT_MAX_AGE_DAYS} days ago`;
+	return undefined;
+}
+
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/** Counts the job sent, cleaned (small whole numbers); undefined when there are none. */
+export function cleanActivity(v: unknown): RoleReportActivity | undefined {
+	if (!v || typeof v !== "object") return undefined;
+	const o = v as Record<string, unknown>;
+	const n = (x: unknown) => (typeof x === "number" && Number.isInteger(x) && x >= 0 && x <= 1_000_000 ? x : 0);
+	return { messages: n(o.messages), chats: n(o.chats), queue: n(o.queue), log: n(o.log) };
+}
+
+/** The request's text (the server's words, no one else's): the day, what to read, the four headings. */
+export function roleReportText(role: string, date: string, activity?: RoleReportActivity): string {
+	const [y, mo, d] = date.split("-").map(Number);
+	const day = WEEKDAYS[new Date(Date.UTC(y, mo - 1, d)).getUTCDay()] ?? "";
+	const found = activity
+		? ` The app saw activity of yours that day: ${activity.messages} messages in ${activity.chats} of your chats, ${activity.queue} queue events, ${activity.log} daily-log entries.`
+		: "";
+	return [
+		`Your 6 am report for ${day} ${date} (00:00 to 24:00 Pacific time).${found}`,
+		"",
+		`1. Read your entries in that day's daily log, ~/.pi/agent/memory/daily/${date}.md: they carry your #${role} tag or one of your chats' ids (for example grep -n "#${role}" on that file).`,
+		`2. See what your queue did that day: queue_control with action "list" (tasks done, stuck, waiting or started).`,
+		"3. Then answer here, in this chat, with the report: plain words, about 200 to 4,000 characters, under exactly these four headings, in this order:",
+		"",
+		...ROLE_REPORT_HEADINGS,
+	].join("\n");
+}
+
+/** Whether an answer has the four headings (each a line of its own, in order) and which it lacks. */
+export function reportHeadings(text: string): { headings: boolean; missing: string[] } {
+	const lines = text.split(/\r?\n/).map((l) => l.trim().toLowerCase());
+	const missing: string[] = [];
+	let from = 0;
+	for (const h of ROLE_REPORT_HEADINGS) {
+		const at = lines.indexOf(h.toLowerCase(), from);
+		if (at < 0) missing.push(h);
+		else from = at + 1;
+	}
+	return { headings: missing.length === 0, missing };
 }
 
 /** The role message id a user message's text starts with (any text: verify it with the store). */
@@ -232,20 +373,24 @@ async function eachLineWith(
 	needle: string,
 	fn: (entry: unknown) => boolean,
 ): Promise<void> {
+	await eachLine(file, from, (line) => {
+		if (!line.includes(needle)) return false;
+		try {
+			return fn(JSON.parse(line));
+		} catch {
+			return false;
+		}
+	});
+}
+
+/** Each line of the transcript from byte `from` (raw); streamed. `take` returns true to stop. */
+async function eachLine(file: string, from: number, take: (line: string) => boolean): Promise<void> {
 	let fh: FileHandle | undefined;
 	try {
 		fh = await open(file, "r");
 		const decoder = new StringDecoder("utf8");
 		const chunk = Buffer.alloc(256 * 1024);
 		let carry = "";
-		const take = (line: string): boolean => {
-			if (!line.includes(needle)) return false;
-			try {
-				return fn(JSON.parse(line));
-			} catch {
-				return false;
-			}
-		};
 		for (let pos = Math.max(0, from); ;) {
 			const { bytesRead } = await fh.read(chunk, 0, chunk.length, pos);
 			if (!bytesRead) {
@@ -283,6 +428,89 @@ export async function transcriptHasRoleMessage(file: string, from: number, id: s
 		return found;
 	});
 	return found;
+}
+
+/** An assistant message's text blocks, joined (thinking and tool calls left out). */
+function assistantTextOf(entry: unknown): string | undefined {
+	const e = entry as { type?: unknown; message?: { role?: unknown; content?: unknown } };
+	if (e?.type !== "message" || e.message?.role !== "assistant") return undefined;
+	const c = e.message.content;
+	if (typeof c === "string") return c;
+	if (!Array.isArray(c)) return undefined;
+	return c
+		.filter((b) => (b as { type?: unknown })?.type === "text" && typeof (b as { text?: unknown }).text === "string")
+		.map((b) => (b as { text: string }).text)
+		.join("\n");
+}
+
+/** role-reports: what a chat answered to a report request, as checks only (no text leaves this). */
+export interface RoleReportScan {
+	/** The request's own line is in the transcript (after `from`). */
+	request: boolean;
+	/** A later user message (not the restart's carry-on note) came: the answer is over. */
+	ended: boolean;
+	/** Some answer text came. */
+	answered: boolean;
+	headings: boolean;
+	missing: string[];
+	chars: number;
+}
+
+/**
+ * role-reports: the chat's answer to report request `id`: the assistant text after the request's line
+ * (from byte `from`) up to the next user message that isn't the restart's carry-on note. The report is
+ * the last assistant message with the first heading in it (else the last one with text).
+ */
+export async function reportReplyIn(file: string, from: number, id: string): Promise<RoleReportScan> {
+	const needle = `[Role message ${id} `;
+	const first = ROLE_REPORT_HEADINGS[0].toLowerCase();
+	let request = false;
+	let ended = false;
+	let report: string | undefined;
+	let last: string | undefined;
+	await eachLine(file, from, (line) => {
+		if (!request) {
+			if (!line.includes(needle)) return false;
+			try {
+				request = userTextOf(JSON.parse(line))?.startsWith(needle) === true;
+			} catch {
+				// not it
+			}
+			return false;
+		}
+		if (!line.includes('"type":"message"')) return false;
+		// A tool's result can be big (images): its role comes early in the line, so it isn't parsed.
+		if (line.slice(0, 400).includes('"role":"toolResult"')) return false;
+		let entry: unknown;
+		try {
+			entry = JSON.parse(line);
+		} catch {
+			return false;
+		}
+		const user = userTextOf(entry);
+		if (user !== undefined) {
+			if (user.startsWith(CARRY_ON_PREFIX)) return false;
+			ended = true;
+			return true;
+		}
+		const text = assistantTextOf(entry)?.trim();
+		if (text) {
+			last = text;
+			if (
+				text
+					.toLowerCase()
+					.split(/\r?\n/)
+					.some((l) => l.trim() === first)
+			)
+				report = text;
+		}
+		return false;
+	});
+	const answer = report ?? last ?? "";
+	const { headings, missing } = answer
+		? reportHeadings(answer)
+		: { headings: false, missing: [...ROLE_REPORT_HEADINGS] };
+	return { request, ended, answered: answer.length > 0, headings, missing, chars: answer.length };
 }
 
 /** pi-queue's entries in a transcript (file order). */
@@ -324,6 +552,8 @@ export async function taskChatFinished(file: string): Promise<boolean> {
 export class RoleMessages {
 	private data: StoreFile = { v: FILE_VERSION, paused: false, messages: [] };
 	private readonly inFlight = new Map<string, { idleSince?: number }>();
+	/** role-reports: since when a delivered report request's chat has been idle without a full report. */
+	private readonly reportIdle = new Map<string, number>();
 	private timer: ReturnType<typeof setInterval> | null = null;
 	/** The look at the waiting messages that is going on now. */
 	private running: Promise<void> | null = null;
@@ -379,8 +609,11 @@ export class RoleMessages {
 		if (keep.length > ROLE_MESSAGES_KEEP) {
 			const extra = keep.length - ROLE_MESSAGES_KEEP;
 			let dropped = 0;
+			const now = this.now();
 			this.data.messages = keep.filter((m) => {
-				if (dropped < extra && m.state !== "waiting") {
+				// role-reports: a recent report request stays: it is the proof that the day was asked for.
+				const proof = m.kind === "report" && now - m.at < REPORT_KEEP_MS;
+				if (dropped < extra && m.state !== "waiting" && !proof) {
 					dropped++;
 					return false;
 				}
@@ -473,6 +706,7 @@ export class RoleMessages {
 			fromChat: r.from.chat,
 			kind: r.kind,
 			...(r.replyTo ? { replyTo: r.replyTo } : {}),
+			...(r.kind === "report" && r.report ? { reportDate: r.report.date } : {}),
 			text: r.text,
 		};
 	}
@@ -496,7 +730,77 @@ export class RoleMessages {
 				chain: m.chain,
 				...(m.deliveredAt ? { deliveredAt: m.deliveredAt } : {}),
 				...(m.error && m.state !== "delivered" && m.state !== "replied" ? { error: m.error } : {}),
+				...(m.kind === "report" && m.report
+					? {
+							report: {
+								date: m.report.date,
+								...(m.report.reply ? { headings: m.report.reply.headings } : {}),
+							},
+						}
+					: {}),
 			}));
+	}
+
+	/** role-reports: the report requests' receipts (one day's, or all), oldest first; no text. */
+	reportReceipts(date?: string): RoleReportReceipt[] {
+		return this.data.messages
+			.filter((m) => m.kind === "report" && m.report && (!date || m.report.date === date))
+			.map((m) => ({
+				id: m.id,
+				role: m.to.role,
+				date: m.report?.date ?? "",
+				at: m.at,
+				state: m.state,
+				...(m.targetChat ? { targetChat: m.targetChat } : {}),
+				...(m.deliveredAt ? { deliveredAt: m.deliveredAt } : {}),
+				...(m.report?.reply ? { reply: m.report.reply } : {}),
+				...(m.error ? { error: m.error } : {}),
+			}));
+	}
+
+	/**
+	 * role-reports: the app's 6 am report job asks `role` for its report on `date` (the caller has
+	 * shown the app token). Once per role and day, ever: asking again returns the first request
+	 * (existing). Delivered like a role message; held while the owner has them paused.
+	 */
+	requestReport(input: { role?: unknown; date?: unknown; activity?: unknown }): RoleReportResult {
+		const roleId = typeof input.role === "string" ? input.role.trim().toLowerCase() : "";
+		const role = this.host.roles().find((r) => r.id === roleId);
+		if (!role) return { ok: false, error: `there's no role "${oneLine(roleId || String(input.role ?? ""), 40)}"` };
+		const date = typeof input.date === "string" ? input.date.trim() : "";
+		const now = this.now();
+		const problem = reportDateProblem(date, now);
+		if (problem) return { ok: false, error: problem };
+		const existing = this.data.messages.find(
+			(m) => m.kind === "report" && m.to.role === role.id && m.report?.date === date,
+		);
+		if (existing) return { ok: true, record: existing, existing: true, paused: this.data.paused };
+		if (!role.homeChat) return { ok: false, error: `${role.id} has no home chat` };
+		const activity = cleanActivity(input.activity);
+		const record: RoleMessageRecord = {
+			id: newRoleMessageId((id) => !!this.byId(id)),
+			at: now,
+			from: { ...ROLE_REPORT_SENDER },
+			to: { role: role.id, title: role.title },
+			kind: "report",
+			chain: 1,
+			text: roleReportText(role.id, date, activity),
+			state: "waiting",
+			sends: 0,
+			attempts: 0,
+			report: { date, ...(activity ? { activity } : {}) },
+		};
+		this.data.messages.push(record);
+		this.save();
+		this.log(`${record.id} app (6 am report job) -> ${role.id} \u00b7 report ${date}`);
+		this.kick();
+		return { ok: true, record, existing: false, paused: this.data.paused };
+	}
+
+	/** role-reports: a refused report request, in the server log (never the token). */
+	noteReportRefused(role: unknown, date: unknown, why: string): void {
+		const short = (v: unknown) => oneLine(String(v ?? "?"), 40);
+		this.log(`refused a report request for ${short(role)} (${short(date)}): ${why.slice(0, 200)}`);
 	}
 
 	/** A message_role call that was refused, in the server log (who, to whom, what kind, why; not the text). */
@@ -533,6 +837,12 @@ export class RoleMessages {
 			if (!replyTo) return { ok: false, error: "kind reply needs replyTo: the id of the message you answer (rm-…)." };
 			original = this.byId(replyTo);
 			if (!original) return { ok: false, error: `There's no message ${replyTo} to reply to.` };
+			if (original.kind === "report") {
+				return {
+					ok: false,
+					error: `${replyTo} is the app's 6 am report request: answer it in your chat with the report, not with message_role.`,
+				};
+			}
 			if (original.kind !== "question" && original.kind !== "request") {
 				return {
 					ok: false,
@@ -574,7 +884,9 @@ export class RoleMessages {
 			};
 		}
 		const now = this.now();
-		const lastHour = this.data.messages.filter((m) => m.from.role === sender.role && now - m.at < HOUR_MS).length;
+		const lastHour = this.data.messages.filter(
+			(m) => m.kind !== "report" && m.from.role === sender.role && now - m.at < HOUR_MS,
+		).length;
 		if (lastHour >= ROLE_MESSAGES_PER_HOUR) {
 			return {
 				ok: false,
@@ -636,12 +948,64 @@ export class RoleMessages {
 							this.log(`${r.id}: ${(err as Error).message}`);
 						}
 					}
+					// role-reports: the delivered report requests whose answer isn't checked yet.
+					for (const r of this.data.messages.filter(
+						(m) => m.kind === "report" && m.state !== "waiting" && m.state !== "failed" && m.report && !m.report.reply,
+					)) {
+						if (this.stopped) break;
+						try {
+							await this.checkReport(r);
+						} catch (err) {
+							this.log(`${r.id}: ${(err as Error).message}`);
+						}
+					}
 				} while (this.again && !this.stopped);
 			} finally {
 				this.running = null;
 			}
 		})();
 		return this.running;
+	}
+
+	/**
+	 * role-reports: check a delivered report request's answer once its chat isn't working: final when the
+	 * answer has the four headings, when a new user message came after it, when the chat has stayed idle
+	 * REPORT_SETTLE_MS without them, or REPORT_GIVE_UP_MS after delivery. Only the result is kept.
+	 */
+	private async checkReport(r: RoleMessageRecord): Promise<void> {
+		const info = r.report;
+		if (!info || info.reply || !r.target) return;
+		const now = this.now();
+		const late = now - (r.deliveredAt ?? r.at) > REPORT_GIVE_UP_MS;
+		const state = existsSync(r.target) ? this.host.chatState(r.target) : "closed";
+		if (state === "working" && !late) {
+			this.reportIdle.delete(r.id);
+			return;
+		}
+		const scan = await reportReplyIn(r.target, r.scanFrom ?? 0, r.id);
+		let final = late || scan.ended || scan.headings;
+		if (!final) {
+			const idle = this.reportIdle.get(r.id) ?? now;
+			this.reportIdle.set(r.id, idle);
+			final = now - idle >= REPORT_SETTLE_MS;
+		}
+		if (!final) return;
+		this.reportIdle.delete(r.id);
+		info.reply = {
+			at: now,
+			answered: scan.answered,
+			headings: scan.headings,
+			missing: scan.missing,
+			chars: scan.chars,
+		};
+		if (scan.answered) r.state = "replied";
+		this.save();
+		const how = !scan.answered
+			? "no answer"
+			: scan.headings
+				? "answered with the four headings"
+				: `answered without ${scan.missing.join(", ")}`;
+		this.log(`${r.id} ${r.to.role}'s report for ${info.date}: ${how} (${scan.chars} chars)`);
 	}
 
 	private fail(r: RoleMessageRecord, error: string): void {
