@@ -13,10 +13,13 @@
  *  2. two fixed groups, alphabetical; status words (Needs you > Busy > Paused > Idle > Nothing yet);
  *  3. "Waiting on you": every distinct owner ask oldest first, the copied task ask once, the task that
  *     asks its main chat not at all; the tiles' newest line and queue words (never cut); a tile opens
- *     the role's panel: TL;DR, queue counts, the two Architecture goals from the rules, the full report
- *     or why there is none;
+ *     the role's panel: TL;DR, queue counts, the two Architecture goals from the rules, the report's
+ *     Goal in plain text or why there is none;
  *  4. density: all 14 tiles fully on the desktop's first screen, >= 6 on the phone's; no sideways
- *     overflow at 320, 390, 768, 769 and 1440; full reports in the panel and in the reports view;
+ *     overflow at 320, 390, 768, 769 and 1440; a whole report opens in a window over at least 80% of
+ *     the desktop screen and all of the phone's, from the panel and from a tap anywhere on a report
+ *     card, its Markdown drawn (bold, list, code, link) under its own four headings, an older
+ *     report's headings too;
  *  5. WCAG AA text contrast, icons 3:1, targets (phone 44 px, desktop 24 px), axe-core with no serious
  *     or critical finding, a visible focus ring all the way through, no pulse under reduced motion;
  *  6. the panel closes with Escape, its close button and a click beside it, focus back on the tile;
@@ -203,21 +206,28 @@ function bytesBefore(sessionId, cwd, lines, k) {
 	return n;
 }
 
+/** A report in Markdown (bold, a list, code, a link); qa answers under the headings asked for before 2026-10-06. */
 function reportText(role, chars) {
 	const filler = (seed, n) => {
 		const words = `${seed} measured the change against the plan and wrote down what moved and why `;
 		let s = "";
 		while (s.length < n) s += words;
-		return s.slice(0, n).trim();
+		return s.slice(0, Math.max(8, n)).trim();
 	};
 	const each = Math.max(40, Math.floor((chars - 80) / 4));
+	const half = Math.floor(each / 2);
+	const [goal, yesterday, learnings] =
+		role === "qa"
+			? ["## Goal or hypothesis", "## Done yesterday", "## Learned"]
+			: ["## Goal", "## Yesterday", "## Learnings"];
 	return [
-		"## Goal or hypothesis",
-		`${role} goal: ${filler("The team", each - 12)}`,
-		"## Done yesterday",
-		filler("We", each),
-		"## Learned",
-		filler("It", each),
+		goal,
+		`${role} goal: **${filler("The team", 24)}** ${filler("The team", each - 40)}`,
+		yesterday,
+		`- ${filler("We", half - 4)}`,
+		`- ${filler("We also", half - 4)}`,
+		learnings,
+		`${filler("It", each - 50)} See \`role-reports\` and [the plan](https://example.test/plan).`,
 		"## Next",
 		`${filler("Next we", each - 20)} END-OF-${role.toUpperCase()}-REPORT`,
 	].join("\n");
@@ -729,6 +739,8 @@ const MEASURE = () => {
 	const small = [];
 	for (const el of root.querySelectorAll("a[href], button")) {
 		if (!vis(el)) continue;
+		// a link inside a report's running text is sized by its sentence (WCAG 2.5.8's inline exception)
+		if (el.closest(".rv-md") && getComputedStyle(el).display === "inline") continue;
 		const b = el.getBoundingClientRect();
 		const w = Math.round(b.width);
 		const h = Math.round(b.height);
@@ -848,6 +860,49 @@ async function openPanel(page, id) {
 async function closePanel(page) {
 	await page.keyboard.press("Escape");
 	await waitFor(() => page.evaluate(() => !document.querySelector(".roles-view dialog.rv-drawer")));
+}
+
+/** Opens a whole 6 am report with a click on `at` (a selector, or a point on the screen); returns what its window shows. */
+async function openReport(page, at) {
+	if (typeof at === "string") await page.click(at);
+	else await page.mouse.click(at.x, at.y);
+	await waitFor(() => page.evaluate(() => !!document.querySelector(".roles-view dialog.rv-rwin[open]")));
+	// its opening rise has ended
+	await waitFor(() =>
+		page.evaluate(() =>
+			(document.querySelector(".roles-view dialog.rv-rwin")?.getAnimations() ?? []).every(
+				(a) => a.playState === "finished",
+			),
+		),
+	);
+	return page.evaluate(() => {
+		const d = document.querySelector(".roles-view dialog.rv-rwin");
+		const r = d?.getBoundingClientRect();
+		const body = d?.querySelector(".rv-rwbody");
+		const text = [...(d?.querySelectorAll(".rv-md") ?? [])].map((x) => x.textContent).join("\n");
+		return {
+			w: Math.round(r?.width ?? 0),
+			h: Math.round(r?.height ?? 0),
+			vw: innerWidth,
+			vh: innerHeight,
+			inside: !!r && r.left >= 0 && r.top >= 0 && r.right <= innerWidth + 0.5 && r.bottom <= innerHeight + 0.5,
+			modal: d?.matches(":modal") ?? false,
+			focus: !!d && document.activeElement === d.querySelector(".rv-dclose"),
+			title: d?.querySelector("#rv-r-title")?.textContent ?? "",
+			headings: [...(d?.querySelectorAll(".rv-rwh") ?? [])].map((x) => x.textContent),
+			chars: text.length,
+			endOf: text.match(/END-OF-(\w+)-REPORT/)?.[1] ?? "",
+			// all of it can be reached: the body scrolls when the report is longer than the window
+			reach:
+				!!body &&
+				(body.scrollHeight <= body.clientHeight + 1 || ["auto", "scroll"].includes(getComputedStyle(body).overflowY)),
+			strong: d?.querySelectorAll(".rv-md strong").length ?? 0,
+			items: d?.querySelectorAll(".rv-md li").length ?? 0,
+			code: d?.querySelectorAll(".rv-md code").length ?? 0,
+			links: d?.querySelectorAll('.rv-md a[href="https://example.test/plan"]').length ?? 0,
+			marks: /\*\*|\]\(|`/.test(text),
+		};
+	});
 }
 const statusOfRow = (page, id) =>
 	page.evaluate(
@@ -1085,36 +1140,68 @@ const desk = await openPage({ width: 1440, height: 900 });
 		`${walk.inside} / ${walk.without.join("; ")}`,
 	);
 
-	// A tile opens its role's panel: the whole 4,000-character report, nothing cut.
+	// A tile opens its role's panel: the report's Goal as plain text, and a button that opens it whole.
 	await openPanel(page, "product");
-	const full = await page.evaluate(() => {
+	const pane = await page.evaluate(() => {
 		const d = document.querySelector(".roles-view dialog.rv-drawer[open]");
-		const dds = [...(d?.querySelectorAll("dd") ?? [])];
 		return {
 			title: d?.querySelector("#rv-d-title")?.textContent,
 			modal: d?.matches(":modal") ?? false,
 			focus: document.activeElement?.classList.contains("rv-dclose") ?? false,
-			headings: [...(d?.querySelectorAll("dt") ?? [])].map((x) => x.textContent),
-			chars: dds.reduce((n, x) => n + x.textContent.length, 0),
-			end: d?.textContent?.includes("END-OF-PRODUCT-REPORT"),
-			cut: dds.filter((x) => x.scrollHeight > x.clientHeight + 1).length,
+			lead: d?.querySelector(".rv-dreport .rv-rlead")?.textContent ?? "",
+			read: d?.querySelector(".rv-dreport button.rv-rread")?.textContent ?? "",
 		};
 	});
 	check(
 		"desktop: a tile opens its role's panel, focus on its close button",
-		full.title === "product" && full.modal && full.focus,
-		JSON.stringify({ title: full.title, modal: full.modal, focus: full.focus }),
+		pane.title === "product" && pane.modal && pane.focus,
+		JSON.stringify({ title: pane.title, modal: pane.modal, focus: pane.focus }),
 	);
 	check(
-		"desktop: the full report under its four headings, nothing cut",
-		JSON.stringify(full.headings) === JSON.stringify(["Goal or hypothesis", "Done yesterday", "Learned", "Next"]) &&
-			full.end &&
-			full.cut === 0 &&
-			full.chars > 3500,
-		JSON.stringify({ headings: full.headings, chars: full.chars, end: full.end, cut: full.cut }),
+		"desktop: the panel shows the report's Goal as plain text and a Show full report button",
+		pane.lead.startsWith("product goal: The team") && !/[*`]|\]\(/.test(pane.lead) && pane.read === "Show full report",
+		JSON.stringify({ lead: pane.lead.slice(0, 80), read: pane.read }),
 	);
 	await shot(page, "desktop-dark-open");
 	await visualChecks(page, "desktop dark, panel open", { phone: false });
+
+	// The whole report opens in a window over at least 80% of the screen, its Markdown drawn.
+	const win = await openReport(page, ".roles-view .rv-dreport .rv-rread");
+	check(
+		"desktop: the report window covers at least 80% of the screen, focus on its close button",
+		win.w >= 0.8 * win.vw &&
+			win.h >= 0.8 * win.vh &&
+			win.inside &&
+			win.modal &&
+			win.focus &&
+			win.title.startsWith("product"),
+		JSON.stringify({ ...win, headings: undefined }),
+	);
+	check(
+		"desktop: the whole report under its four headings, nothing cut",
+		JSON.stringify(win.headings) === JSON.stringify(["Goal", "Yesterday", "Learnings", "Next"]) &&
+			win.endOf === "PRODUCT" &&
+			win.chars > 3500 &&
+			win.reach,
+		JSON.stringify({ headings: win.headings, chars: win.chars, endOf: win.endOf, reach: win.reach }),
+	);
+	check(
+		"desktop: the report's Markdown is drawn (bold, list, code, link), no marks left",
+		win.strong >= 1 && win.items >= 2 && win.code >= 1 && win.links >= 1 && !win.marks,
+		JSON.stringify({ strong: win.strong, items: win.items, code: win.code, links: win.links, marks: win.marks }),
+	);
+	await shot(page, "desktop-dark-report");
+	await visualChecks(page, "desktop dark, report window", { phone: false });
+	await page.keyboard.press("Escape");
+	const winClosed = await waitFor(() =>
+		page.evaluate(
+			() =>
+				!document.querySelector(".roles-view dialog.rv-rwin") &&
+				!!document.querySelector(".roles-view dialog.rv-drawer[open]") &&
+				(document.activeElement?.classList.contains("rv-rread") ?? false),
+		),
+	);
+	check("desktop: Escape closes the report window, the panel stays, focus back on Show full report", !!winClosed);
 
 	// The panel closes with Escape, its close button and a click beside it; focus goes back to the tile.
 	const backOn = (id) =>
@@ -1214,7 +1301,7 @@ const desk = await openPage({ width: 1440, height: 900 });
 	await page.click(".tb-tab.roles-tab");
 	await openPanel(page, "qa");
 	const repAt = Date.now();
-	await page.click(".roles-view .rv-drawer .rv-racts .rv-act");
+	await page.click(".roles-view .rv-drawer .rv-rstart .rv-acts a.rv-act");
 	const qaChat = await waitFor(
 		() => lastSnapshot && lastSnapshot.at >= repAt && lastSnapshot.sessionFile === files.qa && lastSnapshot,
 	);
@@ -1223,6 +1310,40 @@ const desk = await openPage({ width: 1440, height: 900 });
 	check(
 		"navigation: the panel closed on the way",
 		await page.evaluate(() => !document.querySelector(".roles-view dialog.rv-drawer")),
+	);
+
+	// The same link in the report window: the window and the panel both close on the way.
+	await page.click(".tb-tab.roles-tab");
+	await openPanel(page, "design");
+	await openReport(page, ".roles-view .rv-dreport .rv-rread");
+	const winAt = Date.now();
+	await page.click(".roles-view .rv-rwin .rv-rwhead a.rv-act");
+	const designChat = await waitFor(
+		() => lastSnapshot && lastSnapshot.at >= winAt && lastSnapshot.sessionFile === files.design && lastSnapshot,
+	);
+	check(
+		"navigation: Report in chat in the report window opens the chat with the report",
+		!!designChat,
+		JSON.stringify(lastSnapshot),
+	);
+	check(
+		"navigation: the report window and the panel closed on the way",
+		await page.evaluate(
+			() =>
+				!document.querySelector(".roles-view dialog.rv-rwin") &&
+				!document.querySelector(".roles-view dialog.rv-drawer"),
+		),
+		// what is still there (a panel left open behind a hidden page makes the whole app inert)
+		JSON.stringify(
+			await page.evaluate(() =>
+				[...document.querySelectorAll("dialog")].map((d) => ({
+					cls: d.className,
+					open: d.open,
+					modal: d.matches(":modal"),
+					title: d.querySelector("h2")?.textContent,
+				})),
+			),
+		),
 	);
 
 	// About & rules (in the role's panel): Settings at that role.
@@ -1426,6 +1547,27 @@ const phone = await openPage({ width: 390, height: 844, phone: true });
 	);
 	await shot(page, "phone-dark-open");
 	await visualChecks(page, "phone dark, panel open", { phone: true });
+
+	// On a phone the whole report opens over all of the screen; its close button brings the panel back.
+	const pwin = await openReport(page, ".roles-view .rv-dreport .rv-rread");
+	check(
+		"phone: the report window covers the whole screen",
+		pwin.w >= pwin.vw - 1 && pwin.h >= pwin.vh - 1 && pwin.inside && pwin.endOf === "DESIGN" && pwin.reach,
+		JSON.stringify({ w: pwin.w, h: pwin.h, vw: pwin.vw, vh: pwin.vh, endOf: pwin.endOf, reach: pwin.reach }),
+	);
+	await shot(page, "phone-dark-report");
+	await visualChecks(page, "phone dark, report window", { phone: true });
+	await page.click(".roles-view .rv-rwin .rv-dclose");
+	check(
+		"phone: the report window's close button brings the panel back",
+		!!(await waitFor(() =>
+			page.evaluate(
+				() =>
+					!document.querySelector(".roles-view dialog.rv-rwin") &&
+					!!document.querySelector(".roles-view dialog.rv-drawer[open]"),
+			),
+		)),
+	);
 	await page.click(".roles-view .rv-dclose");
 	const closed = await waitFor(() =>
 		page.evaluate(
@@ -1469,15 +1611,42 @@ const phone = await openPage({ width: 390, height: 844, phone: true });
 		JSON.stringify(reports) === JSON.stringify(["design", "product", "qa", "data", "frontend"]),
 		JSON.stringify(reports),
 	);
-	await page.click('.roles-view .rv-r6[data-role-id="product"] .rv-acts button');
-	const whole = await waitFor(() =>
-		page.evaluate(() =>
-			document
-				.querySelector('.roles-view .rv-r6[data-role-id="product"]')
-				?.textContent?.includes("END-OF-PRODUCT-REPORT"),
+	// A tap anywhere on a report card (here: on its text) opens the whole report over the screen.
+	const leadAt = await page.evaluate(() => {
+		const r = document.querySelector('.roles-view .rv-r6[data-role-id="product"] .rv-rlead')?.getBoundingClientRect();
+		return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null;
+	});
+	const rwin = leadAt ? await openReport(page, leadAt) : null;
+	check(
+		"phone: a tap on a report card's text opens the whole report over the screen",
+		!!rwin &&
+			rwin.title.startsWith("product") &&
+			rwin.endOf === "PRODUCT" &&
+			rwin.w >= rwin.vw - 1 &&
+			rwin.h >= rwin.vh - 1,
+		JSON.stringify(rwin && { title: rwin.title, endOf: rwin.endOf, w: rwin.w, h: rwin.h }),
+	);
+	await page.keyboard.press("Escape");
+	const backOnCard = await waitFor(() =>
+		page.evaluate(
+			() =>
+				!document.querySelector(".roles-view dialog.rv-rwin") &&
+				document.activeElement === document.querySelector('.roles-view .rv-r6[data-role-id="product"] .rv-rread'),
 		),
 	);
-	check("phone: Show full report opens the whole report in place", !!whole);
+	check("phone: Escape closes the report, focus back on its card", !!backOnCard);
+	// a report written under the headings asked for before 2026-10-06 opens under its own headings
+	const older = await openReport(page, '.roles-view .rv-r6[data-role-id="qa"] .rv-rread');
+	check(
+		"phone: an older report keeps its own four headings, Markdown drawn",
+		JSON.stringify(older.headings) === JSON.stringify(["Goal or hypothesis", "Done yesterday", "Learned", "Next"]) &&
+			older.endOf === "QA" &&
+			older.items >= 2 &&
+			!older.marks,
+		JSON.stringify({ headings: older.headings, endOf: older.endOf, items: older.items, marks: older.marks }),
+	);
+	await page.keyboard.press("Escape");
+	await waitFor(() => page.evaluate(() => !document.querySelector(".roles-view dialog.rv-rwin")));
 	const mr = await visualChecks(page, "phone reports", { phone: true });
 	check("phone reports: nothing scrolls sideways", mr.overflowX <= 1);
 	await shot(page, "phone-dark-reports");

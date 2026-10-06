@@ -25,10 +25,17 @@ table. Patch: `roles-overview` in [PATCHES.md](../PATCHES.md).
   tile cuts is in the panel.
 - **Tap a tile for the rest**: a side panel (full screen on a phone) with the role's home chat and
   "About & rules", every TL;DR line, the queue (counts, active tasks with their words, what is
-  queued), the goals and the whole 6 am report. Escape, the close button or a click beside the
-  panel closes it, back on the tile. Every link in it closes it first. No separate detail page.
+  queued), the goals and the 6 am report's Goal in plain words. Escape, the close button or a click
+  beside the panel closes it, back on the tile. Every link in it closes it first. No separate detail
+  page.
+- **The whole report** opens from "Show full report" (or a tap anywhere on the report part) in a big
+  window over 85% of the screen, all of a phone's: the report's Markdown drawn like a chat's (bold,
+  lists, code, links), each heading's part in its own box, side by side when there is room. Escape,
+  its close button or a click beside it closes it, back where it opened. "Report in chat" opens the
+  chat the answer is in.
 - **6 am reports** (the switch at the top, on the phone and the desktop): only the roles the 6 am job
-  asks, each with its report under the four headings or the reason there is none.
+  asks, each with its Goal in a few lines (a tap anywhere on the card opens the whole report) or the
+  reason there is none.
 
 Status, strongest first:
 

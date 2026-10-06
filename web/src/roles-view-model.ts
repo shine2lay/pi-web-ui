@@ -14,6 +14,7 @@
  * - Whether the "Waiting on you" strip is open is kept on this device, the phone and the desktop layouts
  *   each their own.
  */
+import { stripMarkdown } from "./copy-text";
 import type { Translate } from "./i18n";
 import type { UiRoleAsk, UiRoleGoal, UiRoleOverview, UiRoleQueue, UiRoleReport, UiRoleTask } from "./types";
 
@@ -283,16 +284,12 @@ export function whenIn(at: number, tz: string): string {
 	}
 }
 
-/** The report's goal line (first line of "Goal or hypothesis", else of the reply). */
-export function reportGoal(report: UiRoleReport): string {
+/** A report's opening for a card, as plain text: its Goal part ("Goal"; before 2026-10-06 "Goal or
+ *  hypothesis"), else its first part or the reply as it is; Markdown marks dropped, one paragraph. */
+export function reportLead(report: UiRoleReport): string {
 	const goal = report.sections?.find((s) => s.heading.toLowerCase().startsWith("goal"));
 	const text = goal?.text ?? report.sections?.[0]?.text ?? report.text ?? "";
-	return (
-		text
-			.split("\n")
-			.map((l) => l.trim())
-			.find(Boolean) ?? ""
-	);
+	return stripMarkdown(text).replace(/\s+/g, " ").trim();
 }
 
 /** Why there is no report, in a few words (null: there is one). */

@@ -686,37 +686,6 @@
 .rv-phone .rv-dbody {
 	padding: 4px 16px 32px;
 }
-.rv-dl {
-	display: grid;
-	grid-template-columns: 140px minmax(0, 1fr);
-	gap: 8px 16px;
-}
-.rv-phone .rv-dl {
-	grid-template-columns: minmax(0, 1fr);
-	gap: 2px;
-}
-.rv-phone .rv-dl dd {
-	margin-bottom: 8px;
-}
-.rv-dlrow {
-	display: contents;
-}
-.rv-dl dt {
-	font-size: var(--rv-fs3);
-	line-height: var(--rv-lh2);
-	font-weight: 600;
-	color: var(--text-dim);
-}
-.rv-dl dd,
-.rv-rtext {
-	font-size: var(--rv-fs2);
-	line-height: var(--rv-lh2);
-	white-space: pre-line;
-	overflow-wrap: anywhere;
-}
-.rv-racts {
-	margin-top: 12px;
-}
 
 /* ---- lines (TL;DR, asks) ---- */
 .rv-lt {
@@ -971,20 +940,189 @@ a.rv-task:hover {
 	gap: 6px;
 	white-space: nowrap;
 }
-.rv-rep {
+/* ---- the start of a report (a card, the panel's report part): a click anywhere on it opens the report ---- */
+.rv-r6,
+.rv-dreport {
+	position: relative;
+}
+.rv-rstart {
 	display: flex;
 	flex-direction: column;
-	gap: 8px;
+	gap: 10px;
 }
-.rv-rep p {
+.rv-rlead {
+	display: -webkit-box;
+	-webkit-line-clamp: 4;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+	max-width: 75ch;
+	overflow-wrap: anywhere;
 	font-size: var(--rv-fs2);
 	line-height: var(--rv-lh2);
-	max-width: 75ch;
-	white-space: pre-line;
+	color: var(--text);
+}
+/* The button's hit area covers the whole card (or the panel's report part); its own box stays as is. */
+.rv-rread::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+}
+.rv-rstart .rv-acts a {
+	position: relative;
+	z-index: 1;
+}
+.rv-r6:has(.rv-rread) {
+	cursor: pointer;
+	transition: border-color 0.12s;
+}
+.rv-r6:has(.rv-rread:hover) {
+	border-color: var(--text-dim);
+}
+
+/* ---- a whole report in a big window: at least 80% of the screen (85%), all of it on a phone ---- */
+.rv-rwin {
+	position: fixed;
+	inset: 0;
+	width: max(85vw, min(960px, calc(100vw - 32px)));
+	height: max(85vh, min(720px, calc(100vh - 32px)));
+	max-width: none;
+	max-height: none;
+	margin: auto;
+	padding: 0;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--bg-elev);
+	color: var(--text);
+	box-shadow: 0 24px 64px rgb(0 0 0 / 40%);
+	overflow: hidden;
+}
+.rv-rwin[open] {
+	display: flex;
+	flex-direction: column;
+	animation: rv-up 0.12s ease-out;
+}
+.rv-rwin::backdrop {
+	background: rgb(0 0 0 / 55%);
+}
+.rv-phone .rv-rwin {
+	width: 100vw;
+	height: 100dvh;
+	border: 0;
+	border-radius: 0;
+	box-shadow: none;
+}
+/* A short rise, never a fade: the window is opaque from its first frame. */
+@keyframes rv-up {
+	from {
+		transform: translateY(12px);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.rv-rwin[open] {
+		animation: none;
+	}
+}
+.rv-rwhead {
+	flex: none;
+	display: flex;
+	align-items: center;
+	gap: 8px 12px;
+	padding: 10px 20px 10px 28px;
+	border-bottom: 1px solid var(--border-soft);
+}
+.rv-phone .rv-rwhead {
+	flex-wrap: wrap;
+	padding: 6px 12px 8px 16px;
+}
+.rv-rwtitle {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0 12px;
+}
+.rv-rwname {
+	font-size: 22px;
+	line-height: 30px;
+	font-weight: 600;
 	overflow-wrap: anywhere;
 }
-.rv-rl {
-	font-size: var(--rv-fs3);
-	font-weight: 600;
+.rv-rwday {
+	font-size: var(--rv-fs2);
+	line-height: var(--rv-lh2);
+	font-weight: 500;
 	color: var(--text-dim);
+}
+.rv-rwbody {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	padding: 24px 28px 40px;
+}
+.rv-phone .rv-rwbody {
+	padding: 16px 16px 32px;
+}
+/* The parts side by side when there is room (two columns from about 900 px), else one under another. */
+.rv-rwgrid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+	gap: 16px;
+	align-items: start;
+}
+.rv-rwsec {
+	min-width: 0;
+	padding: 16px 20px 18px;
+	border: 1px solid var(--border-soft);
+	border-radius: 10px;
+	background: var(--bg);
+}
+.rv-phone .rv-rwsec {
+	padding: 12px 14px 14px;
+}
+.rv-rwh {
+	margin-bottom: 8px;
+	font-size: 17px;
+	line-height: 24px;
+	font-weight: 600;
+}
+.rv-rwtext {
+	margin: 0 auto;
+}
+.rv-rwcut {
+	margin-top: 16px;
+}
+/* Markdown in a report: the chat's look (msg-text), a reading size, and what the page's resets took away. */
+.rv-md {
+	max-width: 75ch;
+	font-size: 16px;
+	line-height: 1.6;
+}
+.rv-phone .rv-md {
+	font-size: 15px;
+}
+.rv-md ul {
+	list-style: disc;
+}
+.rv-md ol {
+	list-style: decimal;
+}
+.rv-md ul ul {
+	list-style: circle;
+}
+.rv-md a {
+	text-decoration: underline;
+}
+.rv-md :is(h1, h2, h3, h4, h5, h6) {
+	margin: 14px 0 6px;
+	font-size: 16px;
+	line-height: 1.4;
+	font-weight: 600;
+}
+.rv-md :is(h1, h2, h3, h4, h5, h6):first-child {
+	margin-top: 0;
+}
+.rv-md code {
+	font-size: 0.85em;
 }

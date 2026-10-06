@@ -35,7 +35,7 @@ import {
 	queueStopped,
 	readStripOpen,
 	reportDay,
-	reportGoal,
+	reportLead,
 	reportReason,
 	reportRoles,
 	rolesSummary,
@@ -100,9 +100,9 @@ const REPORT: UiRoleReport = {
 	date: "2026-10-04",
 	askedAt: Date.parse("2026-10-05T13:00:00Z"),
 	sections: [
-		{ heading: "Goal or hypothesis", text: "Ship the Roles page\nso the owner sees it all" },
-		{ heading: "Done yesterday", text: "Built it." },
-		{ heading: "Learned", text: "Small is fast." },
+		{ heading: "Goal", text: "Ship the **Roles page**\nso the owner sees it all" },
+		{ heading: "Yesterday", text: "Built it." },
+		{ heading: "Learnings", text: "Small is fast, so we ship small." },
 		{ heading: "Next", text: "Land it." },
 	],
 	chat: { file: HOME("design") },
@@ -223,7 +223,20 @@ describe("what a row shows", () => {
 		expect(reportDay(REPORT, TZ)).toBe("Mon");
 		expect(reportDay({ state: "pending", date: "2026-10-04" }, TZ)).toBe("Mon");
 		expect(whenIn(Date.parse("2026-10-06T13:00:00Z"), TZ)).toBe("Tue 6:00");
-		expect(reportGoal(REPORT)).toBe("Ship the Roles page");
+		// a card shows the Goal part as plain text: Markdown marks dropped, one paragraph
+		expect(reportLead(REPORT)).toBe("Ship the Roles page so the owner sees it all");
+		// a report written under the headings asked for before 2026-10-06
+		expect(
+			reportLead({
+				state: "report",
+				sections: [
+					{ heading: "Goal or hypothesis", text: "- Make the `board` readable" },
+					{ heading: "Done yesterday", text: "x" },
+				],
+			}),
+		).toBe("Make the board readable");
+		expect(reportLead({ state: "report", sections: [{ heading: "Yesterday", text: "Did _x_." }] })).toBe("Did x.");
+		expect(reportLead({ state: "report", text: "# Hi\n\nSee [the plan](https://x.test)." })).toBe("Hi See the plan.");
 		expect(reportReason(t, REPORT, TZ)).toBeNull();
 		expect(reportReason(t, { state: "first", next: Date.parse("2026-10-06T13:00:00Z") }, TZ)).toBe(
 			"First report Tue 6:00",

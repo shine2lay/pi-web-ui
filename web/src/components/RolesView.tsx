@@ -8,9 +8,11 @@
  *
  * Layout (owner, 2026-10-05: "show less, tap for more"): every role is a tile in a grid, coloured by its
  * status, with its newest line and a few words on its queue. Tapping a tile opens that role's details
- * (every TL;DR line, the queue, its goals and the full 6 am report) in a side panel, full screen on the
- * phone. Tiles sit in two groups, alphabetical, so a role is always in the same place. A "Now | 6 am
- * reports" switch shows every report at once.
+ * (every TL;DR line, the queue, its goals and the start of its 6 am report) in a side panel, full screen
+ * on the phone. Tiles sit in two groups, alphabetical, so a role is always in the same place. A "Now | 6 am
+ * reports" switch shows every report's start at once. A click on a report (its card, or its part of the
+ * panel) opens the whole report in a big window, at least 80% of the screen (owner, 2026-10-05), its
+ * Markdown drawn like a chat message's.
  *
  * Data: roles-state.ts (the server pushes while the page is shown); what to show: roles-view-model.ts.
  */
@@ -25,11 +27,21 @@ import {
 	type MouseEvent,
 	type ReactNode,
 } from "react";
-import { FiCheckCircle, FiChevronDown, FiChevronRight, FiInfo, FiMessageSquare, FiSettings, FiX } from "react-icons/fi";
+import {
+	FiCheckCircle,
+	FiChevronDown,
+	FiChevronRight,
+	FiInfo,
+	FiMaximize2,
+	FiMessageSquare,
+	FiSettings,
+	FiX,
+} from "react-icons/fi";
 import { useAppField } from "../app-globals";
 import { parseFocus, type ChatFocusKind } from "../chat-focus";
 import { useT, type Translate } from "../i18n";
 import { reloadRoles, useRoles } from "../roles-state";
+import { Markdown } from "./Markdown";
 import {
 	ageOf,
 	agoOf,
@@ -51,6 +63,7 @@ import {
 	queueStopped,
 	readStripOpen,
 	reportDay,
+	reportLead,
 	reportReason,
 	reportRoles,
 	rolesSummary,
@@ -328,6 +341,43 @@ export const RolesView = memo(function RolesView({ active, phone, focusRole, onO
 		if (shown && (!active || (o && !detailsRole))) setShown(null);
 	}, [active, o, shown, detailsRole]);
 
+	// The role whose 6 am report is open in the big window (over its details, when opened from there).
+	const [reading, setReading] = useState<string | null>(null);
+	const readFrom = useRef<HTMLElement | null>(null);
+	const showReport = useCallback((id: string, from: HTMLElement) => {
+		readFrom.current = from;
+		setReading(id);
+	}, []);
+	const closeReport = useCallback((back: boolean) => {
+		const from = readFrom.current;
+		readFrom.current = null;
+		setReading(null);
+		// Back to the button it was opened with (a card, or the panel, which stays open).
+		if (back && from) requestAnimationFrame(() => from.focus());
+	}, []);
+	const readingRole = reading && o ? o.roles.find((r) => r.id === reading) : undefined;
+	useEffect(() => {
+		if (reading && (!active || (o && readingRole?.report.state !== "report"))) setReading(null);
+	}, [active, o, reading, readingRole]);
+	// "Report in chat" in the window closes it and the details first: the chat shows instead.
+	const readNav = useMemo<Nav>(
+		() => ({
+			open: (target) => {
+				readFrom.current = null;
+				setReading(null);
+				setShown(null);
+				onOpen(target);
+			},
+			about: (id) => {
+				readFrom.current = null;
+				setReading(null);
+				setShown(null);
+				onAbout(id);
+			},
+		}),
+		[onOpen, onAbout],
+	);
+
 	// The sticky strip must not cover the focused element: scroll-padding-top follows its height.
 	useLayoutEffect(() => {
 		const page = pageRef.current;
@@ -347,6 +397,7 @@ export const RolesView = memo(function RolesView({ active, phone, focusRole, onO
 		shownRole.current = focusRole.seq;
 		setMode("now");
 		setShown(null);
+		setReading(null);
 		requestAnimationFrame(() => {
 			const row = pageRef.current?.querySelector(`[data-role-id="${CSS.escape(focusRole.id)}"]`);
 			if (!(row instanceof HTMLElement)) return;
@@ -447,7 +498,7 @@ export const RolesView = memo(function RolesView({ active, phone, focusRole, onO
 						{o.roles.length === 0 ? (
 							<p className="rv-empty rv-meta">{t("rolesNoRoles")}</p>
 						) : mode === "reports" ? (
-							<ReportList roles={reportList} tz={tz} nav={nav} />
+							<ReportList roles={reportList} tz={tz} nav={nav} onRead={showReport} />
 						) : (
 							<>
 								<TileGroup
@@ -468,8 +519,21 @@ export const RolesView = memo(function RolesView({ active, phone, focusRole, onO
 					</>
 				)}
 			</div>
+			{/* Distinct keys: with one key for both (the role's id), React lost the panel when both closed
+			    at once and it stayed open, invisible, over a hidden page (found by roles-page). */}
 			{active && detailsRole && (
-				<RoleDetails key={detailsRole.id} role={detailsRole} now={now} tz={tz} nav={nav} onClose={closeDetails} />
+				<RoleDetails
+					key={`details:${detailsRole.id}`}
+					role={detailsRole}
+					now={now}
+					tz={tz}
+					nav={nav}
+					onClose={closeDetails}
+					onRead={showReport}
+				/>
+			)}
+			{active && readingRole?.report.state === "report" && (
+				<ReportWindow key={`report:${readingRole.id}`} role={readingRole} tz={tz} nav={readNav} onClose={closeReport} />
 			)}
 		</section>
 	);
@@ -692,6 +756,7 @@ function RoleDetails({
 	tz,
 	nav,
 	onClose,
+	onRead,
 }: {
 	role: UiRoleOverview;
 	now: number;
@@ -699,6 +764,8 @@ function RoleDetails({
 	nav: Nav;
 	/** `back`: focus goes back to the role's tile (not when a target in the panel opened something). */
 	onClose: (back: boolean) => void;
+	/** Open the role's 6 am report in the big window (over the panel, which stays open). */
+	onRead: (id: string, from: HTMLElement) => void;
 }) {
 	const t = useT();
 	const ref = useRef<HTMLDialogElement>(null);
@@ -843,7 +910,7 @@ function RoleDetails({
 							<Goals role={role} />
 						</section>
 					)}
-					<section className="rv-sec">
+					<section className="rv-sec rv-dreport">
 						<h3 className="rv-sech">
 							{reason ? t("rolesColReport") : t("rolesReportHead", { day: reportDay(role.report, tz) })}
 						</h3>
@@ -853,24 +920,7 @@ function RoleDetails({
 								{reason}
 							</p>
 						) : (
-							<>
-								{role.report.sections?.length ? (
-									<dl className="rv-dl">
-										{role.report.sections.map((s) => (
-											<div key={s.heading} className="rv-dlrow">
-												<dt>{s.heading}</dt>
-												<dd>{s.text}</dd>
-											</div>
-										))}
-									</dl>
-								) : (
-									<p className="rv-rtext">{role.report.text}</p>
-								)}
-								{role.report.cut && <p className="rv-meta">{t("rolesReportCut")}</p>}
-								<div className="rv-acts rv-racts">
-									<ReportInChat report={role.report} nav={inner} />
-								</div>
-							</>
+							<ReportStart role={role} nav={inner} onRead={onRead} />
 						)}
 					</section>
 				</div>
@@ -998,21 +1048,114 @@ function QueuedList({ queue }: { queue: NonNullable<UiRoleOverview["queue"]> }) 
 	);
 }
 
-function ReportText({ report, clamp }: { report: UiRoleReport; clamp?: boolean }) {
+type OnRead = (id: string, from: HTMLElement) => void;
+
+/** The start of a role's report and its buttons. A click anywhere on the box around it (a report card,
+ *  the panel's report part) opens the whole report in the big window: the button's hit area is
+ *  stretched over that box in CSS, and "Report in chat" stays a target of its own above it. */
+function ReportStart({ role, nav, onRead }: { role: UiRoleOverview; nav: Nav; onRead: OnRead }) {
 	const t = useT();
+	const lead = reportLead(role.report);
 	return (
-		<div className="rv-rep">
-			{report.sections?.length ? (
-				report.sections.map((s) => (
-					<p key={s.heading} className={clamp ? "rv-cl2" : undefined}>
-						<span className="rv-rl">{s.heading}:</span> {s.text}
-					</p>
-				))
-			) : (
-				<p className={clamp ? "rv-cl2" : undefined}>{report.text}</p>
-			)}
-			{!clamp && report.cut && <p className="rv-meta">{t("rolesReportCut")}</p>}
+		<div className="rv-rstart">
+			{lead && <p className="rv-rlead">{lead}</p>}
+			<div className="rv-acts">
+				<button
+					type="button"
+					className="rv-act rv-rread"
+					aria-haspopup="dialog"
+					onClick={(e) => onRead(role.id, e.currentTarget)}
+				>
+					<FiMaximize2 className="rv-ic" aria-hidden="true" />
+					{t("rolesShowFullReport")}
+				</button>
+				<ReportInChat report={role.report} nav={nav} />
+			</div>
 		</div>
+	);
+}
+
+/** A role's whole 6 am report in a big window: at least 80% of the screen, all of it on a phone (owner,
+ *  2026-10-05). Each part under its heading, its Markdown drawn as in a chat message, the parts side by
+ *  side when the window is wide enough. Esc, the close button or a click beside the window closes it. */
+function ReportWindow({
+	role,
+	tz,
+	nav,
+	onClose,
+}: {
+	role: UiRoleOverview;
+	tz: string;
+	nav: Nav;
+	/** `back`: focus goes back to the button that opened it. */
+	onClose: (back: boolean) => void;
+}) {
+	const t = useT();
+	const ref = useRef<HTMLDialogElement>(null);
+	const closeRef = useRef<HTMLButtonElement>(null);
+	// A modal (the page behind is inert), shown before the first paint; removing it closes it.
+	useLayoutEffect(() => {
+		const d = ref.current;
+		if (d && !d.open) {
+			try {
+				d.showModal();
+			} catch {
+				d.setAttribute("open", "");
+			}
+		}
+		closeRef.current?.focus();
+	}, []);
+	const report = role.report;
+	return (
+		<dialog
+			ref={ref}
+			className="rv-rwin"
+			aria-labelledby="rv-r-title"
+			onCancel={(e) => {
+				e.preventDefault();
+				onClose(true);
+			}}
+			onClick={(e) => {
+				// A click on the dimmed page around the window (the dialog itself, outside its content).
+				if (e.target === e.currentTarget) onClose(true);
+			}}
+		>
+			<header className="rv-rwhead">
+				<h2 id="rv-r-title" className="rv-rwtitle">
+					<span className="rv-rwname">{role.id}</span>
+					<span className="rv-rwday">{t("rolesReportHead", { day: reportDay(report, tz) })}</span>
+				</h2>
+				<ReportInChat report={report} nav={nav} />
+				<button
+					ref={closeRef}
+					type="button"
+					className="rv-dclose"
+					aria-label={t("close")}
+					onClick={() => onClose(true)}
+				>
+					<FiX className="rv-ic" aria-hidden="true" />
+				</button>
+			</header>
+			<div className="rv-rwbody">
+				{report.sections?.length ? (
+					<div className="rv-rwgrid">
+						{report.sections.map((s) => (
+							<section key={s.heading} className="rv-rwsec">
+								<h3 className="rv-rwh">{s.heading}</h3>
+								<div className="rv-md msg-text">
+									<Markdown text={s.text} />
+								</div>
+							</section>
+						))}
+					</div>
+				) : (
+					<div className="rv-md rv-rwtext msg-text">
+						<Markdown text={report.text ?? ""} />
+					</div>
+				)}
+				{report.cut && <p className="rv-meta rv-rwcut">{t("rolesReportCut")}</p>}
+			</div>
+		</dialog>
 	);
 }
 
@@ -1032,21 +1175,20 @@ function ReportInChat({ report, nav }: { report: UiRoleReport; nav: Nav }) {
 // The 6 am reports view
 // ---------------------------------------------------------------------------
 
-function ReportList({ roles, tz, nav }: { roles: UiRoleOverview[]; tz: string; nav: Nav }) {
+function ReportList({ roles, tz, nav, onRead }: { roles: UiRoleOverview[]; tz: string; nav: Nav; onRead: OnRead }) {
 	const t = useT();
 	if (roles.length === 0) return <p className="rv-empty rv-meta">{t("rolesNoReports")}</p>;
 	return (
 		<div className="rv-reports">
 			{roles.map((r) => (
-				<ReportCard key={r.id} role={r} tz={tz} nav={nav} />
+				<ReportCard key={r.id} role={r} tz={tz} nav={nav} onRead={onRead} />
 			))}
 		</div>
 	);
 }
 
-function ReportCard({ role, tz, nav }: { role: UiRoleOverview; tz: string; nav: Nav }) {
+function ReportCard({ role, tz, nav, onRead }: { role: UiRoleOverview; tz: string; nav: Nav; onRead: OnRead }) {
 	const t = useT();
-	const [full, setFull] = useState(false);
 	const reason = reportReason(t, role.report, tz);
 	return (
 		<article className="rv-role rv-r6" data-role-id={role.id}>
@@ -1063,15 +1205,7 @@ function ReportCard({ role, tz, nav }: { role: UiRoleOverview; tz: string; nav: 
 						{reason}
 					</p>
 				) : (
-					<>
-						<ReportText report={role.report} clamp={!full} />
-						<div className="rv-acts">
-							<button type="button" className="rv-act" aria-expanded={full} onClick={() => setFull((v) => !v)}>
-								{full ? t("rolesShowLess") : t("rolesShowFullReport")}
-							</button>
-							<ReportInChat report={role.report} nav={nav} />
-						</div>
-					</>
+					<ReportStart role={role} nav={nav} onRead={onRead} />
 				)}
 			</div>
 		</article>

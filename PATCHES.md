@@ -5203,9 +5203,15 @@ answers, queue controls and edits stay in the chats and Settings. Details:
    status, newest line (two lines on a desktop), one footer line: a few queue words with a hold named
    in a word, else when the line is from; all 14 on a 1440x900 screen), a tile opening the role's
    panel (a modal `<dialog>` at the side, full screen on a phone: home chat, About & rules, every
-   TL;DR line, the queue, goals, the whole report; Escape, close or a click beside it closes it and
-   focus returns to the tile; a link in it closes it first), the 6 am report view (phone and
-   desktop), loading, not-live, refresh-failed, partial and paused-messages states. The strip's fold
+   TL;DR line, the queue, goals, the report's Goal as plain text; Escape, close or a click beside it
+   closes it and focus returns to the tile; a link in it closes it first), the whole report in a
+   second modal window (85% of the screen, all of a phone's; its Markdown drawn with the chat's look,
+   each heading's part in its own box, side by side when there is room; opened from the panel's
+   report part or a tap anywhere on a report card; Escape, close or a click beside it closes it, back
+   on what opened it; its "Report in chat" closes it and the panel first), the 6 am report view
+   (phone and desktop), loading, not-live, refresh-failed, partial and paused-messages states. The
+   report window came the evening after (owner, 2026-10-05: "when i click it it should open a model
+   taking at least 80% of the screen, and make sure if its markdown its dislaying correctly"). The strip's fold
    is kept per device layout in the browser. The other panes stay mounted. The tiles replaced SPEC's
    board the same day (owner: the board was "too one dimensional, and hard to read anything"; he
    chose "show less, tap for more"). That evening the live page showed only 8 of 14 tiles on the
@@ -5240,8 +5246,11 @@ answers, queue controls and edits stay in the chats and Settings. Details:
 - `tests/roles-page-test.mjs` (sealed: temporary HOME, data and sessions, its own port, a mock model
   that counts calls): 14 and 20 synthetic roles in both themes at 320, 390, 768, 769 and 1440 pixels
   wide: the badge, groups and order, statuses, the strip, tiles per screen, contrast, target sizes, axe
-  (no serious or critical, also with a panel open), keyboard and focus ring, reduced motion, the
-  panel (opens from a tile, the full report, closes three ways with focus back on the tile),
+  (no serious or critical, also with a panel or a report open), keyboard and focus ring, reduced
+  motion, the panel (opens from a tile, the report's Goal, closes three ways with focus back on the
+  tile), the report window (at least 80% of the desktop screen, all of the phone's; Markdown drawn
+  under the report's own headings, an older report's too; from the panel and from a tap on a report
+  card; closes back on what opened it; its Report in chat closes it and the panel),
   navigation to the same chat with the item marked, the report jump, the Settings link, the owner's
   save (and a refused save after the file changed), live updates, a server restart (not live, then
   back), no leaks, no model calls, no chat file written.
