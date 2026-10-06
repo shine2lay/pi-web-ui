@@ -74,8 +74,17 @@ const MAX_SENDS = 5;
 const GIVE_UP_MS = 24 * HOUR_MS;
 const FILE_VERSION = 1;
 
-/** role-reports: the four headings a 6 am report has, in this order, each on a line of its own. */
-export const ROLE_REPORT_HEADINGS = ["## Goal or hypothesis", "## Done yesterday", "## Learned", "## Next"] as const;
+/** role-reports: the four headings a 6 am report has, in this order, each on a line of its own (owner,
+ *  2026-10-05: the direction and what is being done, in simple English, not the details). */
+export const ROLE_REPORT_HEADINGS = ["## Goal", "## Yesterday", "## Learnings", "## Next"] as const;
+/** role-reports: the headings reports were asked for before 2026-10-06. The Roles page still reads them
+ *  (a report stays shown for days); the receipt check asks for today's headings only. */
+export const ROLE_REPORT_HEADINGS_BEFORE = [
+	"## Goal or hypothesis",
+	"## Done yesterday",
+	"## Learned",
+	"## Next",
+] as const;
 /** role-reports: how many days back a report may be asked for (the day must be over). */
 export const ROLE_REPORT_MAX_AGE_DAYS = 7;
 /** role-reports: who a report request is from (not a role: the app). */
@@ -317,7 +326,8 @@ export function cleanActivity(v: unknown): RoleReportActivity | undefined {
 	return { messages: n(o.messages), chats: n(o.chats), queue: n(o.queue), log: n(o.log) };
 }
 
-/** The request's text (the server's words, no one else's): the day, what to read, the four headings. */
+/** The request's text (the server's words, no one else's): the day, what to read, how to write it (the
+ *  owner reads it for the direction, at a glance: plain words, no detail), the four headings. */
 export function roleReportText(role: string, date: string, activity?: RoleReportActivity): string {
 	const [y, mo, d] = date.split("-").map(Number);
 	const day = WEEKDAYS[new Date(Date.UTC(y, mo - 1, d)).getUTCDay()] ?? "";
@@ -329,7 +339,7 @@ export function roleReportText(role: string, date: string, activity?: RoleReport
 		"",
 		`1. Read your entries in that day's daily log, ~/.pi/agent/memory/daily/${date}.md: they carry your #${role} tag or one of your chats' ids (for example grep -n "#${role}" on that file).`,
 		`2. See what your queue did that day: queue_control with action "list" (tasks done, stuck, waiting or started).`,
-		"3. Then answer here, in this chat, with the report: plain words, about 200 to 4,000 characters, under exactly these four headings, in this order:",
+		"3. Then answer here, in this chat. The owner reads it to see the direction you're going and what you're doing, not how: write simple, plain English at a high level, as you'd tell a busy person in a minute. No bullet points, and no ids, file names, commands or numbers unless one really matters. Write 1 to 3 short sentences under each of these four headings, in this order, about 80 to 250 words in all: Goal (the direction you're going, and why), Yesterday (what you got done, the big picture), Learnings (what you learned and how you're applying it), Next (what you'll do next).",
 		"",
 		...ROLE_REPORT_HEADINGS,
 	].join("\n");

@@ -438,12 +438,12 @@ describe("the 6 am report", () => {
 	}
 	const report = (body: string) =>
 		[
-			"## Goal or hypothesis",
+			"## Goal",
 			`Goal ${body}`,
-			"## Done yesterday",
+			"## Yesterday",
 			"Built it.",
-			"## Learned",
-			"Small is fast.",
+			"## Learnings",
+			"Small is fast, so we ship small.",
 			"## Next",
 			"Ship it.",
 		].join("\n");
@@ -502,7 +502,7 @@ describe("the 6 am report", () => {
 		const o = await read(f);
 		const rep = byId(o, "rep").report;
 		expect(rep.state).toBe("report");
-		expect(rep.sections?.map((s) => s.heading)).toEqual(["Goal or hypothesis", "Done yesterday", "Learned", "Next"]);
+		expect(rep.sections?.map((s) => s.heading)).toEqual(["Goal", "Yesterday", "Learnings", "Next"]);
 		expect(rep.sections?.[0].text).toBe(`Goal ${long}`);
 		expect(rep.cut).toBeUndefined();
 		expect(rep.chat).toEqual({ file: chat });
@@ -550,6 +550,14 @@ describe("the 6 am report", () => {
 		expect(reportSections("## Next\nShip\n## goal or hypothesis\nG")).toEqual([
 			{ heading: "Next", text: "Ship" },
 			{ heading: "Goal or hypothesis", text: "G" },
+		]);
+		// today's headings (any case), and the ones asked for before 2026-10-06 still read
+		expect(reportSections("## Goal\nG\n## yesterday\nY\n## Learnings\nL\n## Next\nN\n## Learned\nOld")).toEqual([
+			{ heading: "Goal", text: "G" },
+			{ heading: "Yesterday", text: "Y" },
+			{ heading: "Learnings", text: "L" },
+			{ heading: "Next", text: "N" },
+			{ heading: "Learned", text: "Old" },
 		]);
 	});
 });

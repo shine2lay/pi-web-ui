@@ -70,11 +70,11 @@ const D3 = pacificDay(3); // alpha's request after the force-reset
 const REPORT_HEAD = /^\[Role message (rm-[0-9a-f]{8}) from the app · 6 am report · (\d{4}-\d{2}-\d{2})\]/;
 const reportText = (date) =>
 	[
-		"## Goal or hypothesis",
+		"## Goal",
 		`Check the morning report for ${date}. ${"Plain words about the day. ".repeat(4)}`,
-		"## Done yesterday",
+		"## Yesterday",
 		"Built and tested it.",
-		"## Learned",
+		"## Learnings",
 		"Metadata was enough.",
 		"## Next",
 		"Watch the first real morning.",

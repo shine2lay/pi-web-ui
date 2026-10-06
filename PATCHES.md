@@ -5052,8 +5052,16 @@ machinery, and a receipt that says whether the answer has the four headings.
    The body (`roleReportText`) names the day (weekday, 00:00 to 24:00 Pacific), what the job found
    (messages, chats, queue events, daily-log entries: counts only), and the steps: read that day's
    daily-log entries with the role's `#tag` or its chats' ids, look at the queue (`queue_control`
-   list), then answer in this chat, about 200 to 4,000 characters, under exactly
-   `## Goal or hypothesis`, `## Done yesterday`, `## Learned`, `## Next`.
+   list), then answer in this chat for the owner, who reads it for the direction the role is going and
+   what it is doing, not how: simple, plain English at a high level, no bullet points, no ids, file
+   names, commands or numbers unless one really matters, 1 to 3 short sentences under each heading,
+   about 80 to 250 words in all, under exactly `## Goal` (the direction, and why), `## Yesterday`,
+   `## Learnings` (what was learned and how it is being applied), `## Next`. The four headings close
+   the request, one per line, as a template. (Owner, 2026-10-05: "what i care more about is the
+   direction we are going and what are doing from high level in simple english, not all the detailed
+   bullet points"; his headings "Goal, Yesterday, Learnings how its being applied, Next". Asked before:
+   `## Goal or hypothesis`, `## Done yesterday`, `## Learned`, `## Next`, 200 to 4,000 characters;
+   `ROLE_REPORT_HEADINGS_BEFORE` keeps them so the Roles page still reads those reports.)
 2. **Only the app sends it**: `message_role` refuses kind `report` (not one of its kinds) and refuses a
    reply to a report request (it is answered in the chat itself). The control socket
    (`server/control-socket.ts`) takes `{"cmd":"role_report","token","role","date","activity"}` only with
@@ -5170,7 +5178,8 @@ answers, queue controls and edits stay in the chats and Settings. Details:
    (a task's question copied into the home chat counts once; a task asking its main chat is not an
    owner ask), oldest first, unknown start times last. The 6 am report: role-reports' run record
    (`role-reports/runs.json`), the store's report request and the reply text read with the receipt's
-   own boundaries (`reportReplyText`, which `reportReplyIn` now wraps), cut into the four headings;
+   own boundaries (`reportReplyText`, which `reportReplyIn` now wraps), cut into its four headings
+   (today's, or the ones asked for before 2026-10-06);
    otherwise the reason (not active, not in the job, couldn't ask, not answered yet, no answer, the
    first report still to come), Pacific days. Bounds: 20 TL;DR lines, 20 queued tasks, 8 task chats
    per role, 12,000 report characters.

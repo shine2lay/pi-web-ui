@@ -36,7 +36,13 @@ import type {
 	UiTaskQueueTask,
 	UiTldrLine,
 } from "./protocol.js";
-import { ROLE_REPORT_HEADINGS, reportReplyText, type RoleMessageState, type RoleReportReply } from "./role-messages.js";
+import {
+	ROLE_REPORT_HEADINGS,
+	ROLE_REPORT_HEADINGS_BEFORE,
+	reportReplyText,
+	type RoleMessageState,
+	type RoleReportReply,
+} from "./role-messages.js";
 import { rulesGoals, rulesWorkMode } from "./role-rules.js";
 import { TASK_QUEUE_ENTRY_TYPE, taskQueueFromEntries, taskRefLabel, type TaskQueueEntryLike } from "./task-queue.js";
 import {
@@ -466,15 +472,21 @@ class JsonFile<T> {
 	}
 }
 
+/** The headings a report is split by: today's four, then the ones asked for before 2026-10-06 (a report
+ *  stays on the Roles page for days, so one written under the old headings still shows in parts). */
+const REPORT_HEADINGS_READ: readonly string[] = [
+	...new Set<string>([...ROLE_REPORT_HEADINGS, ...ROLE_REPORT_HEADINGS_BEFORE]),
+];
+
 /** A report's text under its four headings (heading names without "## "), or null when it has none. */
 export function reportSections(text: string): { heading: string; text: string }[] | null {
-	const wanted = ROLE_REPORT_HEADINGS.map((h) => h.toLowerCase());
+	const wanted = REPORT_HEADINGS_READ.map((h) => h.toLowerCase());
 	const out: { heading: string; lines: string[] }[] = [];
 	let cur: { heading: string; lines: string[] } | null = null;
 	for (const line of text.split(/\r?\n/)) {
 		const i = wanted.indexOf(line.trim().toLowerCase());
 		if (i >= 0) {
-			const heading = ROLE_REPORT_HEADINGS[i].slice(3);
+			const heading = REPORT_HEADINGS_READ[i].slice(3);
 			cur = out.find((s) => s.heading === heading) ?? null;
 			if (!cur) {
 				cur = { heading, lines: [] };

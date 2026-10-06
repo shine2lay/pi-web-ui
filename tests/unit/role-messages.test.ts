@@ -578,7 +578,7 @@ describe("delivery", () => {
 		landNote(B, "[Role message rm-11112222 from alpha (Alpha), sent from its home chat \u00b7 fyi]\n\nnews");
 		appendFileSync(
 			B,
-			`${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "## Goal or hypothesis\nx" }] } })}\n`,
+			`${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "## Goal\nx" }] } })}\n`,
 		);
 		const scan = await reportReplyIn(B, 0, id);
 		expect(scan).toMatchObject({ request: true, ended: false, answered: true });

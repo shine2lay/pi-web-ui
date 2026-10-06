@@ -11,10 +11,12 @@ import type { IdentityDef } from "../../server/identities.js";
 import { CARRY_ON_PREFIX } from "../../server/running-chats.js";
 import {
 	ROLE_REPORT_HEADINGS,
+	ROLE_REPORT_HEADINGS_BEFORE,
 	RoleMessages as RoleMessagesBase,
 	reportDateProblem,
 	reportHeadings,
 	roleMessageIdOf,
+	roleReportText,
 	type RoleMessageHost,
 	type RoleMessageSender,
 } from "../../server/role-messages.js";
@@ -50,7 +52,7 @@ function toolCall(file: string): void {
 	);
 	appendFileSync(
 		file,
-		`${JSON.stringify({ type: "message", message: { role: "toolResult", toolCallId: "t1", content: [{ type: "text", text: "## Goal or hypothesis\n## Done yesterday\n## Learned\n## Next" }] } })}\n`,
+		`${JSON.stringify({ type: "message", message: { role: "toolResult", toolCallId: "t1", content: [{ type: "text", text: "## Goal\n## Yesterday\n## Learnings\n## Next" }] } })}\n`,
 	);
 }
 const role = (id: string, title: string, homeChat?: string): IdentityDef =>
@@ -101,12 +103,12 @@ const sender = (o: { role: string; file: string }): RoleMessageSender => ({
 });
 
 const REPORT = [
-	"## Goal or hypothesis",
+	"## Goal",
 	"Make the morning reports useful.",
-	"## Done yesterday",
+	"## Yesterday",
 	"Built the job.",
-	"## Learned",
-	"Metadata is enough.",
+	"## Learnings",
+	"Metadata is enough, so the job reads no chat text.",
 	"## Next",
 	"Watch the first run.",
 ].join("\n");
@@ -333,7 +335,7 @@ describe("the receipt", () => {
 		const f = fake([role("beta", "Beta", B)]);
 		const s = new RoleMessages(store, f.host, clock);
 		await delivered(f, s);
-		say(B, "assistant", "## Goal or hypothesis\nx\n## Next\ny");
+		say(B, "assistant", "## Goal\nx\n## Next\ny");
 		await s.tick();
 		expect(s.reportReceipts()[0].reply).toBeUndefined();
 		now += 3 * MIN;
@@ -341,7 +343,7 @@ describe("the receipt", () => {
 		expect(s.reportReceipts()[0].reply).toMatchObject({
 			answered: true,
 			headings: false,
-			missing: ["## Done yesterday", "## Learned"],
+			missing: ["## Yesterday", "## Learnings"],
 		});
 	});
 
@@ -388,8 +390,29 @@ describe("the receipt", () => {
 	it("reads headings as their own lines, in order, any case", () => {
 		expect(reportHeadings(REPORT)).toEqual({ headings: true, missing: [] });
 		expect(reportHeadings(REPORT.toUpperCase())).toEqual({ headings: true, missing: [] });
-		expect(reportHeadings("## Next\n## Learned\n## Done yesterday\n## Goal or hypothesis").headings).toBe(false);
-		expect(reportHeadings("Goal or hypothesis: x. Done yesterday: y. Learned: z. Next: w.").missing).toHaveLength(4);
+		expect(reportHeadings("## Next\n## Learnings\n## Yesterday\n## Goal").headings).toBe(false);
+		expect(reportHeadings("Goal: x. Yesterday: y. Learnings: z. Next: w.").missing).toHaveLength(4);
+		// the headings asked for before 2026-10-06 are not today's (only "## Next" is the same)
+		expect(reportHeadings(ROLE_REPORT_HEADINGS_BEFORE.join("\nx\n")).missing).toEqual([
+			"## Goal",
+			"## Yesterday",
+			"## Learnings",
+		]);
+	});
+
+	it("asks for the direction in plain English under the four headings (owner, 2026-10-05)", () => {
+		expect(ROLE_REPORT_HEADINGS).toEqual(["## Goal", "## Yesterday", "## Learnings", "## Next"]);
+		const text = roleReportText("design", "2026-10-05");
+		const lines = text.split("\n");
+		expect(lines[0]).toBe("Your 6 am report for Monday 2026-10-05 (00:00 to 24:00 Pacific time).");
+		// the four headings close the request, each on a line of its own, in order: a template to copy
+		expect(lines.slice(-4)).toEqual([...ROLE_REPORT_HEADINGS]);
+		expect(text).toContain("the direction you're going and what you're doing, not how");
+		expect(text).toContain("simple, plain English at a high level");
+		expect(text).toContain("No bullet points");
+		expect(text).toContain("Learnings (what you learned and how you're applying it)");
+		expect(text).toContain('grep -n "#design"');
+		expect(text).not.toMatch(/Goal or hypothesis|Done yesterday|4,000/);
 	});
 });
 

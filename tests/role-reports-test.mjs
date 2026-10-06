@@ -68,12 +68,12 @@ const SLOW_TEXT = `SLOW-ANSWER ${"lorem ipsum dolor sit amet ".repeat(12)}END-OF
 const REPORT_HEAD = /^\[Role message (rm-[0-9a-f]{8}) from the app · 6 am report · (\d{4}-\d{2}-\d{2})\]/;
 const reportText = (date) =>
 	[
-		"## Goal or hypothesis",
+		"## Goal",
 		`Check the morning report for ${date}. REPORT-MARK`,
-		"## Done yesterday",
+		"## Yesterday",
 		"Built and tested it.",
-		"## Learned",
-		"Metadata was enough.",
+		"## Learnings",
+		"Metadata was enough, so the job reads no chat text.",
 		"## Next",
 		"Watch the first real morning.",
 	].join("\n");
@@ -364,7 +364,8 @@ try {
 	check(
 		"the request names the day and the four headings",
 		req.startsWith(`[Role message ${betaId} from the app · 6 am report · ${D1}]`) &&
-			["## Goal or hypothesis", "## Done yesterday", "## Learned", "## Next"].every((h) => req.split("\n").includes(h)),
+			["## Goal", "## Yesterday", "## Learnings", "## Next"].every((h) => req.split("\n").includes(h)) &&
+			req.includes("simple, plain English"),
 	);
 	w2 = await Client.connect("rolereport-w2");
 	await w2.open(files.B);

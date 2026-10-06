@@ -63,7 +63,10 @@ Everything is read; nothing is written, opened or started.
   `role-reports/runs.json`), the store's report requests, and the reply in the home chat, read with
   the same boundaries as role-reports' receipt. The reasons for no report: not active the day before,
   not in the job, the request couldn't be sent, not answered yet, answered without a report, or the
-  first report is still to come (the scheduler's `role-reports run` job). Days are Pacific.
+  first report is still to come (the scheduler's `role-reports run` job). Days are Pacific. Since
+  2026-10-06 the roles are asked for a short plain-English report under `## Goal`, `## Yesterday`,
+  `## Learnings`, `## Next`; older reports, under `## Goal or hypothesis`, `## Done yesterday`,
+  `## Learned`, `## Next`, still show under their own headings.
 - **Work mode and goals**: the owner's `workMode` and `goals` in `identity.json`; without them, the
   every-chat rules' defaults (`server/role-rules.ts`): product, design and qa start their own work, all
   other roles (and any new one) work on request, and Architecture keeps its two approved goals. An
