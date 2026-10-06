@@ -1835,6 +1835,20 @@ export const en = {
 	roleReportLabel: "the app \u00b7 6 am report \u00b7 {date}",
 	roleReportCardTitle: "6 am report \u00b7 {date}",
 	roleReportCardFrom: "From the app's 6 am report job ({id}). The server set the sender.",
+	/* role-message-fold: role messages fold into one row in the chat; message_role cards stay folded */
+	roleReportCardFromText:
+		"From the app's 6 am report job ({id}), as the message's first line says (the server no longer has its record).",
+	roleMessageCardFromText:
+		"From {title} ({from}), sent from its {chat}, as the message's first line says (the server no longer has its record).",
+	roleMessageFoldFrom: "From {from}",
+	roleMessageFoldApp: "From the app",
+	roleMessageFoldReport: "6 am report \u00b7 {date}",
+	roleMessageFoldOpen: "Show the whole message",
+	roleMessageFoldClose: "Fold the message into one line",
+	roleMessageFoldUnstamped: "sender as its first line says",
+	roleMessageToolTo: "To {to} \u00b7 {kind}",
+	roleMessageToolSent: "Sent {id}",
+	roleMessageToolHeld: "Held {id}",
 	roleMessagesTitle: "Role messages",
 	roleMessagesHint:
 		"What role chats sent each other with message_role (the last 100). The server sets who sent each one; a message waits for any running turn and wakes a closed chat.",

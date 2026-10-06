@@ -2301,7 +2301,8 @@ button.session-item.elsewhere-item.confirm {
 .rolemsg-from {
 	flex: 1;
 	min-width: 0;
-	color: var(--text-faint);
+	/* role-message-fold: --text-faint fell short of 4.5:1 (axe, every theme) */
+	color: var(--text-dim);
 	font-size: 11.5px;
 }
 
@@ -2312,6 +2313,127 @@ button.session-item.elsewhere-item.confirm {
 
 .rolemsg-body .markdown > :first-child {
 	margin-top: 0;
+}
+
+/* role-message-fold: a role message folded into one row (looks like the old-message rows, .msg-collapsed) */
+.rolemsg-row {
+	margin: 0 0 2px;
+}
+.rolemsg-row-btn {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	min-height: 36px;
+	margin: 0;
+	padding: 7px 12px 7px 10px;
+	box-sizing: border-box;
+	border: 1px solid var(--border-soft);
+	border-left: 3px solid var(--accent, var(--border));
+	border-radius: 8px;
+	background: var(--card-bg, var(--bg-elev2));
+	color: var(--text-dim);
+	font: inherit;
+	font-size: 12px;
+	text-align: left;
+	cursor: pointer;
+	transition:
+		border-color 0.15s ease,
+		background 0.15s ease,
+		color 0.15s ease;
+}
+.rolemsg-row-btn:hover {
+	border-color: var(--border);
+	border-left-color: var(--accent, var(--border));
+	background: var(--chip-bg, var(--bg-elev2));
+	color: var(--text);
+}
+.rolemsg-row-btn:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+.rolemsg-unstamped .rolemsg-row-btn {
+	border-left-style: dashed;
+}
+/* the closed chevron, drawn in CSS like .msg-collapsed-action */
+.rolemsg-row-chevron {
+	flex: none;
+	width: 5px;
+	height: 5px;
+	margin: 0 3px 0 2px;
+	border-right: 1.5px solid currentColor;
+	border-bottom: 1.5px solid currentColor;
+	transform: rotate(-45deg);
+}
+.rolemsg-row-icon {
+	flex: none;
+	width: 13px;
+	height: 13px;
+	color: var(--accent);
+}
+.rolemsg-row-from {
+	flex: none;
+	font-weight: 600;
+	color: var(--text);
+	white-space: nowrap;
+}
+.rolemsg-row-kind {
+	flex: none;
+	padding: 0 6px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	font-size: 11px;
+	color: var(--text-dim);
+	white-space: nowrap;
+}
+.rolemsg-row-preview {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--text-dim);
+}
+.rolemsg-row-time {
+	flex: none;
+	font-size: 11px;
+	color: var(--text-dim);
+}
+/* the open card's head is the button that folds it again */
+button.rolemsg-fold {
+	font: inherit;
+	font-size: 12.5px;
+	text-align: left;
+	cursor: pointer;
+}
+button.rolemsg-fold:hover {
+	background: var(--bg-elev2);
+}
+button.rolemsg-fold:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+/* message_role card head: the name keeps its room; the line gives way first */
+.toolcall-name:has(~ .toolcall-rolemsg) {
+	flex: none;
+}
+/* message_role card head: the id it was sent under */
+.toolcall-rolemsg-id {
+	flex: none;
+	font-family: var(--mono);
+	font-size: 11px;
+	color: var(--text-dim);
+	white-space: nowrap;
+}
+@media (max-width: 640px) {
+	.rolemsg-row-time {
+		display: none;
+	}
+	.rolemsg-row-btn {
+		gap: 6px;
+		min-height: 44px;
+		padding-right: 8px;
+	}
 }
 
 /* Settings > Identities > Role messages */

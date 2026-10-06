@@ -21,7 +21,8 @@ import { openContextMenu } from "../context-menu-state";
 import { openToolInfo } from "../tool-info-state";
 import type { UiSlotEntry } from "../ui-slots";
 import { parseDelegateArgs, shortenPath, toolArgHints, type DelegateField } from "../tool-args";
-import { PRESENT_FILES_TOOL_NAME } from "../../../server/tool-manager.js";
+import { MESSAGE_ROLE_TOOL_NAME, PRESENT_FILES_TOOL_NAME } from "../../../server/tool-manager.js";
+import { messageRoleSentOf, parseMessageRoleArgs, roleMessagePreview } from "../role-message-text";
 import { parsePresentArgs } from "../present-items";
 import { PresentedFiles } from "./PresentedFiles";
 import { ChatImage } from "./ChatImage";
@@ -101,7 +102,11 @@ export const ToolCallBlock = memo(function ToolCallBlock({
 	// 在折叠态下等于没展示），折叠开关的意图不是「把卡片藏起来」。
 	const [open, setOpen] = useState<boolean | null>(null);
 	const isPresent = block.name === PRESENT_FILES_TOOL_NAME;
-	const expanded = open ?? (isPresent ? true : wrap);
+	// role-message-fold: message_role is the opposite exception: a message to another role stays folded
+	// into one line even when the switch shows tool details (owner 2026-10-06: "Make the agent to agent
+	// messages collapsed by default"). A click opens it.
+	const isRoleMessage = block.name === MESSAGE_ROLE_TOOL_NAME;
+	const expanded = open ?? (isPresent ? true : isRoleMessage ? false : wrap);
 	// 搜索期间 forceOpen 只是“视口展开”，用户 open 状态不受影响
 	const shown = expanded || forceOpen;
 	const [copied, setCopied] = useState(false);
@@ -200,6 +205,21 @@ export const ToolCallBlock = memo(function ToolCallBlock({
 	// 折叠预览：只取首行（空白压成单空格），80 字截断；多行折成 +N 后缀。
 	// 完整命令放 title 悬浮里；展开时正文有完整终端行，这里不再显示。
 	const collapsedCmd = !shown && bashCommand ? collapsedBashPreview(bashCommand) : undefined;
+	// role-message-fold: the folded message_role line: who it goes to, its kind, its first words, and
+	// the id it was sent (or held) under once that is known.
+	const roleArgs = isRoleMessage ? parseMessageRoleArgs(block.argumentsText) : undefined;
+	const roleSent = isRoleMessage ? messageRoleSentOf(view.result) : null;
+	const roleKind = roleArgs
+		? roleArgs.kind === "reply" && roleArgs.replyTo
+			? t("roleMessageReplyKind", { id: roleArgs.replyTo })
+			: (roleArgs.kind ?? "")
+		: "";
+	const roleLine =
+		roleArgs && !shown && roleArgs.to
+			? `${t("roleMessageToolTo", { to: roleArgs.to, kind: roleKind || "?" })}${
+					roleArgs.text ? ` \u00b7 ${roleMessagePreview(roleArgs.text, 80)}` : ""
+				}`
+			: undefined;
 
 	const copyArgs = () => {
 		if (block.argumentsText) {
@@ -304,6 +324,12 @@ export const ToolCallBlock = memo(function ToolCallBlock({
 				{collapsedCmd && (
 					<span className="toolcall-cmd" title={bashCommand}>
 						$ {collapsedCmd}
+					</span>
+				)}
+				{roleLine && <span className="toolcall-cmd toolcall-rolemsg">{roleLine}</span>}
+				{roleSent && (
+					<span className="toolcall-rolemsg-id">
+						{t(roleSent.held ? "roleMessageToolHeld" : "roleMessageToolSent", { id: roleSent.id })}
 					</span>
 				)}
 				{hints.path && (

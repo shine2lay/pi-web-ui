@@ -135,6 +135,17 @@ to start, the whole report). Times are Pacific. Output is capped (24,000 charact
 200 per line in short). On a busy day the details shrink together so every role still fits in
 one call. An unknown role is a plain error naming the roles. It reads nothing the page doesn't.
 
+## Role messages in a chat (folded)
+
+In a chat, a message from another role (question, request, reply, an FYI added without a turn, the
+app's 6 am report request) is one folded row: an envelope, "From <role>", its kind and its first
+words (role-message-fold). A click, Enter or Space opens it; the open card's head folds it again.
+What is open is kept while the page is open, nowhere else. The Ctrl+F search opens them all while it
+searches. `message_role` calls are folded too, even with the tool-details switch on: "To <role> ·
+<kind> · first words" and the id it was sent (or held) under. Display only: the model and the
+transcript get the full text. On Telegram, turns that role messages start never reach the owner,
+except COO's answers to his own questions (telegram-coo).
+
 ## Tests
 
 - `tests/unit/roles-overview.test.ts`: the server reader and push (temporary folders, synthetic
@@ -145,3 +156,5 @@ one call. An unknown role is a plain error naming the roles. It reads nothing th
   roles, both themes, phone and desktop).
 - `tests/unit/roles-overview-tool.test.ts`: the `roles_overview` text (short, one role, an unknown
   role, the report states, the cap).
+- `tests/unit/role-message-text.test.ts`, `tests/role-message-fold-test.mjs`: folded role messages and
+  message_role cards in a chat (both themes, phone and desktop, Ctrl+F, axe).

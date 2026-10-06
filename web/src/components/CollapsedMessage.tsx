@@ -5,6 +5,8 @@ import { asBash, asImage, asText, asThinking, asToolCall, roleLabel } from "./Me
 import { isExportableMessage, toggleExportImageSelect, useExportImage } from "../export-image-state";
 
 import { parseSkillBlock } from "../skill-block";
+import { roleMessagePreview, roleMessageViewOf } from "../role-message-text";
+import { roleMessageFrom, roleMessageKindWord } from "./RoleMessageRow";
 
 interface CollapsedMessageProps {
 	message: UiMessage;
@@ -32,7 +34,11 @@ export const CollapsedMessage = memo(function CollapsedMessage({ message, onExpa
 			// Skill invocations collapse to a `skill:name · <args>` chip instead
 			// of the raw SKILL.md dump.
 			const sb = parseSkillBlock(text.text);
-			if (sb) {
+			// role-message-fold: a role message reads like its folded row, not its header line.
+			const rm = sb ? null : roleMessageViewOf(message, text.text);
+			if (rm) {
+				preview = `${roleMessageFrom(rm, t)} \u00b7 ${roleMessageKindWord(rm, t)} \u00b7 ${roleMessagePreview(rm.text, 200)}`;
+			} else if (sb) {
 				preview = `skill:${sb.name}` + (sb.userMessage ? ` · ${sb.userMessage.replace(/\s+/g, " ").trim()}` : "");
 			} else {
 				preview = text.text.replace(/\s+/g, " ").trim();

@@ -111,6 +111,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | queue-main-chat              | `local` | `server/task-queue.ts`, `stuck-asks.ts`, `agent-service.ts` (`askingChats`, `emitConversations`), `queue-groups.ts`, `protocol.ts`, `protocol-version.ts` (41), `web/src/components/TaskQueuePanel.tsx`, `done-watch.ts`, `App.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/queue-main-chat-test.mjs` (new), `tests/queue-lanes-test.mjs`, `queue-panel-test.mjs`, `stall-watch-test.mjs`, `telegram-answers-test.mjs`, `tests/unit/`; the answer line in blue (#62): `server/tldr-lines.ts`, `TldrPanel.tsx`, `LeftPanel.tsx`; paired with pi-queue |
 | queue-blocked                | `local` | `server/queue-blocks.ts` (new), `task-queue.ts`, `queue-host.ts`, `client-state.ts` (`queueWatch`), `agent-service.ts`, `queue-groups.ts`, `stuck-asks.ts`, `tldr-lines.ts`, `protocol.ts`, `protocol-version.ts` (42), `web/src/components/TaskQueuePanel.tsx`, `TldrPanel.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/queue-blocked-test.mjs` (new), `tests/unit/queue-blocks.test.ts` (new), `tests/unit/task-queue.test.ts`; paired with pi-queue |
 | roles-overview               | `local` | `server/roles-overview.ts` (new), `role-rules.ts` (new), `role-messages.ts`, `identities.ts`, `identity-roles.ts`, `identity-config.ts` (pi-identity copy), `agent-service.ts`, `index.ts`, `tabs.ts`, `protocol.ts`, `protocol-version.ts` (43), `web/src/components/RolesView.tsx` (new), `roles-view-model.ts` (new), `roles-state.ts` (new), `roles-view.css` (new), `chat-focus.ts` (new), `owner-fields.ts` (new), `IdentitiesSettings.tsx`, `TopBar.tsx`, `ui-slots.ts`, `topbar-fit.ts`, `App.tsx`, `RightPanel.tsx`, `TaskQueuePanel.tsx`, `TldrPanel.tsx`, `i18n.tsx`, `locales/*.json`, `docs/roles-overview.md` (new); paired with pi-identity |
+| role-message-fold            | `local` | `web/src/role-message-text.ts` (new), `components/RoleMessageRow.tsx` (new), `Message.tsx`, `ToolCallBlock.tsx`, `CollapsedMessage.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `docs/roles-overview.md`, `tests/role-message-fold-test.mjs` (new), `tests/unit/role-message-text.test.ts` (new) |
 | telegram-coo                 | `local` | `server/role-replies.ts` (new), `roles-overview-tool.ts` (new), `agent-service.ts` (turn records, `sendToRole`), `index.ts`, `plugins.ts` (`host.roles`), `plugin-manifest-validate.ts`, `plugin-api-catalog.ts`, `tool-manager.ts`, `plugin-sdk/`, `plugins/telegram/` (0.2.0), `docs/architecture-plugins.md`, `docs/roles-overview.md`, `tests/telegram-coo-test.mjs` (new), `tests/unit/` |
 
 ---
@@ -5381,3 +5382,66 @@ the COO, which can see every role's state in one call.
 - `host.roles` stays plugin-only; agents reach other roles with `message_role`.
 - The plugin reuses telegram-answers' formatting (`toTelegramHtml`, `TEXT_BUDGET`); keep both in
   step.
+
+## role-message-fold
+
+**Status**: `local`
+**Baseline**: v0.96.1 (on top of `role-messages`, `role-reports`, `telegram-coo`)
+
+**Why** (owner on Telegram, 2026-10-06 ~12:25 PDT, queue task #75, via COO rm-ef861b36): "Make the
+agent to agent messages collapsed by default, right now It can take too much space and its not
+relevant to me most of the time". The Telegram half of #75 landed in `telegram-coo` (role turns never
+reach his Telegram, except COO's answers to his own questions); this is the chat half.
+
+### Changes
+
+1. **One row per role message** (`web/src/components/RoleMessageRow.tsx` new, `Message.tsx`): a
+   question, request, reply, FYI added without a turn, or 6 am report request is one folded row by
+   default: an envelope, "From <role>" ("From the app" for a report request), the kind ("reply to
+   rm-…", "6 am report · <day>") and the first words as plain text cut with an ellipsis, like the
+   collapsed old-message rows. The row is a button (`aria-expanded`); a click, Enter or Space opens
+   the card (Markdown drawn only then), whose head is the button that folds it again; focus follows.
+   Which ones are open is kept in a module-level set for as long as the page is open (it survives
+   the list re-mounting rows and going to another chat and back); nothing is saved.
+2. **Read from the text too** (`web/src/role-message-text.ts` new): rows come from the server's stamp
+   (`roleMessage`), and when the store no longer confirms a message (it keeps 1,000) from its first
+   line: `parseRoleMessageText` reads every header shape `server/role-messages.ts` writes and splits
+   off the hint line ("(A request: …)" and the others), which never shows. A first line that isn't a
+   whole header is left as it is. Such rows get a dashed edge and "sender as its first line says".
+3. **Search** (`Message.tsx`): while the Ctrl+F bar is open every role message is open (like the other
+   cards' `forceOpen`), so words inside a folded one are found and shown; closing it folds them back.
+   Old-message rows (`CollapsedMessage.tsx`) show the same "From … · kind · first words" preview.
+4. **message_role cards** (`ToolCallBlock.tsx`): folded by default whatever the tool-details switch
+   says (the opposite exception to `present_files`); the folded head reads "To <role> · <kind> ·
+   first words" (from the arguments, also while they stream: `parseMessageRoleArgs`) and "Sent rm-…"
+   or "Held rm-…" once done (`messageRoleSentOf`). A click opens one as before.
+5. **Looks** (`styles.css`, `i18n.tsx`, the eight `locales/*.json` packs): `.rolemsg-row*`; 44 px rows on phones; the card's sender line
+   moved from `--text-faint` to `--text-dim` (axe: under 4.5:1 in every theme).
+
+Display only: the model gets the same text and no transcript line changes.
+
+### How it was checked
+
+- `tests/unit/role-message-text.test.ts` (new, 10): every kind built with the server's own
+  `roleMessageText`, the 6 am report header, home and titled chats, broken or foreign first lines left
+  alone, a bracketed last paragraph kept in the body, stamp over text, previews, streamed arguments,
+  sent/held ids.
+- `tests/role-message-fold-test.mjs` (new, 44 checks, sealed, a stand-in model never called): a chat
+  with three confirmed and two unconfirmed role messages, an FYI, a broken header, a "[Queue] …"
+  message, an owner message, and two message_role calls next to a bash call. Rows folded with the
+  right sender, kind and words, no header, hint or Markdown, words deep in a body not on the page;
+  click opens, Enter folds and opens again, focus follows; open after another chat and back; Ctrl+F
+  finds a word in a folded message (1/1) and opens it, Esc folds it back; message_role folded with the
+  switch on (the bash card open), its line and Sent/Held ids, name not cut, a click opens it; axe
+  (nothing serious or critical), one-line rows, 24/44 px targets and no sideways scroll in dark and
+  white, desktop and phone; no transcript line changed, no page error. Screenshots with
+  `ROLE_FOLD_SHOT=<dir>`.
+- On the code before it the unit file fails (no parser) and the E2E fails at its first wait (no
+  folded row).
+
+### When syncing
+
+- The row is an early return in `Message` after all its hooks; keep it after any hook added later.
+- If `roleMessageHeader`/`roleMessageHint` in `server/role-messages.ts` change, change
+  `parseRoleMessageText` with them (its unit test builds the text with the server's functions, so it
+  fails first).

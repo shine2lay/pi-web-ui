@@ -36,6 +36,8 @@ import { Markdown, PluginWidgetBlock } from "./Markdown";
 import { StreamMarkdown } from "./StreamMarkdown";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolCallBlock, type ToolView } from "./ToolCallBlock";
+import { RoleMessageRow, setRoleMessageOpen, useFocusAfterToggle, useRoleMessageOpen } from "./RoleMessageRow";
+import { roleMessageViewOf, type RoleMessageView } from "../role-message-text";
 import { ChatImage } from "./ChatImage";
 import { imageSrc, isShownImage } from "../chat-image";
 import { useT, type Translate } from "../i18n";
@@ -317,10 +319,14 @@ export const Message = memo(function Message({
 	// role-messages: a message from another role (message_role), confirmed by the server, shows as a
 	// labelled card (who sent it is the server's, never the text's). An FYI is a custom message (added to
 	// the chat without a turn) and shows the same card.
-	const roleMsg =
-		message.role === "user" || (message.role === "custom" && message.customType === "role-message")
-			? message.roleMessage
-			: undefined;
+	// role-message-fold: one the server no longer has a record of (it keeps the last 1000) is read from
+	// its header line, and its card says so. Either way it shows as one folded row until it is opened:
+	// by the reader (kept while the page is open), while the in-chat search is open (its words must be in
+	// the page to be found), or when it was just expanded from an old-message row.
+	const roleMsg = roleMessageViewOf(message, userText) ?? undefined;
+	const roleOpened = useRoleMessageOpen(roleMsg ? message.id : null);
+	const roleFoldable = !!roleMsg && !searchActive && !onCollapse;
+	const roleFolded = roleFoldable && !roleOpened;
 	const questionText = roleMsg
 		? roleMsg.text.split("\n").join(" ").trim()
 		: skillBlock
@@ -537,6 +543,11 @@ export const Message = memo(function Message({
 			document.removeEventListener("keydown", onKey);
 		};
 	}, [copyDropdownOpen]);
+
+	// role-message-fold: folded, the whole message is one row (after every hook of this component).
+	if (roleFolded && roleMsg) {
+		return <RoleMessageRow msgId={message.id} view={roleMsg} timestamp={message.timestamp} />;
+	}
 
 	const speakNode = (key: string): ReactNode =>
 		canSpeak ? (
@@ -1137,7 +1148,7 @@ export const Message = memo(function Message({
 						{isFileAttachment ? (
 							<AttachmentCard message={message} forceOpen={searchActive} />
 						) : roleMsg ? (
-							<RoleMessageCard roleMessage={roleMsg} />
+							<RoleMessageCard roleMessage={roleMsg} msgId={message.id} foldable={roleFoldable} />
 						) : skillBlock ? (
 							<>
 								<SkillCard block={skillBlock} forceOpen={searchActive} />
@@ -1514,30 +1525,68 @@ export function roleMessageLabel(m: UiRoleMessage, t: Translate): string {
  * role-messages: a message from another role. The head says who sent it and from which chat (the
  * server's stamp); the body is the text the sender wrote (the header and hint lines the model reads
  * aren't repeated).
+ * role-message-fold: when it can fold, the head is the button that folds it back into its row.
  */
-function RoleMessageCard({ roleMessage: m }: { roleMessage: UiRoleMessage }) {
+function RoleMessageCard({
+	roleMessage: m,
+	msgId,
+	foldable,
+}: {
+	roleMessage: RoleMessageView;
+	msgId: string;
+	foldable: boolean;
+}) {
 	const t = useT();
+	const foldRef = useRef<HTMLButtonElement>(null);
+	useFocusAfterToggle(msgId, foldRef);
+	const head = (
+		<>
+			{foldable && (
+				<span className="chead-toggle" aria-hidden="true">
+					<FiChevronDown />
+				</span>
+			)}
+			<span className="chead-icon rolemsg-icon">
+				<FiMessageSquare />
+			</span>
+			{m.kind === "report" ? (
+				// role-reports: the app's 6 am report request (not from a role).
+				<>
+					<span className="chead-title rolemsg-title">{t("roleReportCardTitle", { date: m.reportDate ?? "?" })}</span>
+					<span className="rolemsg-from">
+						{m.stamped ? t("roleReportCardFrom", { id: m.id }) : t("roleReportCardFromText", { id: m.id })}
+					</span>
+				</>
+			) : (
+				<>
+					<span className="chead-title rolemsg-title">{t("roleMessageCardTitle", { id: m.id })}</span>
+					<span className="rolemsg-from">
+						{t(m.stamped ? "roleMessageCardFrom" : "roleMessageCardFromText", {
+							title: m.fromTitle,
+							from: m.from,
+							chat: m.fromChat,
+						})}
+					</span>
+				</>
+			)}
+		</>
+	);
 	return (
 		<div className={`rolemsg-card rolemsg-${m.kind}`} data-role-message={m.id}>
-			<div className="chead rolemsg-head">
-				<span className="chead-icon rolemsg-icon">
-					<FiMessageSquare />
-				</span>
-				{m.kind === "report" ? (
-					// role-reports: the app's 6 am report request (not from a role).
-					<>
-						<span className="chead-title rolemsg-title">{t("roleReportCardTitle", { date: m.reportDate ?? "?" })}</span>
-						<span className="rolemsg-from">{t("roleReportCardFrom", { id: m.id })}</span>
-					</>
-				) : (
-					<>
-						<span className="chead-title rolemsg-title">{t("roleMessageCardTitle", { id: m.id })}</span>
-						<span className="rolemsg-from">
-							{t("roleMessageCardFrom", { title: m.fromTitle, from: m.from, chat: m.fromChat })}
-						</span>
-					</>
-				)}
-			</div>
+			{foldable ? (
+				<button
+					ref={foldRef}
+					type="button"
+					className="chead rolemsg-head rolemsg-fold"
+					aria-expanded={true}
+					title={t("roleMessageFoldClose")}
+					onClick={() => setRoleMessageOpen(msgId, false, true)}
+				>
+					{head}
+				</button>
+			) : (
+				<div className="chead rolemsg-head">{head}</div>
+			)}
 			<div className="rolemsg-body msg-text">
 				<Markdown text={m.text} hardBreaks />
 			</div>
