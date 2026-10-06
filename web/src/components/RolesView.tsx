@@ -805,12 +805,7 @@ function RoleDetails({
 							<TldrLink key={`${l.chat.file}:${l.id}`} line={l} newest={i === 0} now={now} nav={inner} />
 						))}
 						{lines.length > CARD_LINES_SHOWN && (
-							<button
-								type="button"
-								className="rv-more"
-								aria-expanded={allLines}
-								onClick={() => setAllLines((v) => !v)}
-							>
+							<button type="button" className="rv-more" aria-expanded={allLines} onClick={() => setAllLines((v) => !v)}>
 								{allLines ? t("rolesFewerLines") : t("rolesMoreLines", { n: moreLines })}
 							</button>
 						)}
