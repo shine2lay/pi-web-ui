@@ -2,6 +2,9 @@
 export interface ModelChoice {
 	modelId: string;
 	at: number;
+	/** All chats also reaches chats whose first model was pinned (subagent template or explicit
+	 * model). Presses saved before this existed lack it, so an install never moves a pinned chat. */
+	reachesPinned?: boolean;
 }
 
 export function validModelChoice(value: unknown): value is ModelChoice {
@@ -51,7 +54,8 @@ export function latestChatModelChoice(createdAt: number, entries: readonly unkno
 }
 
 /** A later pick wins, including unflushed blank chats (stored outside transcripts).
- * A chat born at/after the press keeps its usual new-chat default. */
+ * A chat born at/after the press keeps its usual new-chat default. A pinned chat keeps its
+ * own model unless a press that reaches pinned chats came after it. */
 export function chatModelChoice(
 	press: ModelChoice | undefined,
 	createdAt: number,
@@ -59,12 +63,12 @@ export function chatModelChoice(
 	manual: ModelChoice | undefined,
 	pinned = false,
 ): ModelChoice | undefined {
-	if (pinned) return undefined;
 	const last = manual && manual.at >= latest.at ? manual : latest;
 	// SDK creation timestamps have millisecond precision; a same-millisecond
 	// creation is not older than the press, even if it has a fractional action tick.
-	if (press && createdAt < Math.floor(press.at) && last.at < press.at) return press;
-	return manual && manual.at >= latest.at ? manual : undefined;
+	if (press && (!pinned || press.reachesPinned === true) && createdAt < Math.floor(press.at) && last.at < press.at)
+		return press;
+	return !pinned && manual && manual.at >= latest.at ? manual : undefined;
 }
 
 /** One writer per chat. Re-check choices INSIDE the lane after async auth/key work. */

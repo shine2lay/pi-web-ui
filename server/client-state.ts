@@ -1153,7 +1153,7 @@ export class ClientStateStore {
 	}
 
 	saveAllChatsModel(modelId: string): ModelChoice {
-		const record = { modelId, at: this.nextModelChoiceAt() };
+		const record: ModelChoice = { modelId, at: this.nextModelChoiceAt(), reachesPinned: true };
 		const state = (this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY] ??= { projects: [] });
 		state.allChatsModel = record;
 		this.save();

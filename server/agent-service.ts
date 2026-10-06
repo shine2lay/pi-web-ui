@@ -2062,9 +2062,8 @@ export interface Conversation {
 	 *  refuses them; takePromptAdmission counts). Such a chat is busy: the add-ons' "before the AI
 	 *  starts" step can take seconds, and a chat closed during it would lose the message. */
 	sendsInFlight?: number;
-	/** Serialized model changes and the all-chats choice waiting for this reply to finish. */
+	/** Serialized model changes (picker, cycle, All chats, restores): one writer per chat. */
 	modelChangeTail?: Promise<unknown>;
-	pendingAllChatsModel?: ModelChoice;
 	modelPinned?: boolean;
 	/** optimistic-send: the receipt of the prompt whose user message is about to start a run. The
 	 *  next user message_end of this chat is that message: its snapshot goes out, then this ack. */
@@ -6516,7 +6515,6 @@ export class ClientSession {
 				break;
 			}
 			case "agent_settled": {
-				if (conv.pendingAllChatsModel) void this.restoreChatModelChoice(conv);
 				// fast-mode: the refused fast reply was not retried after all (stopped, or pi retried it
 				// itself) — drop its "retrying" placeholder so the error and the Retry button show.
 				if (conv.fastRetrying) {
@@ -9759,7 +9757,6 @@ export class ClientSession {
 			// A prompt pi put off until the previous run settled is answered by its preflight callback.
 			if (!flow.deferred) {
 				flow.admission.release();
-				if (conv.pendingAllChatsModel) void this.restoreChatModelChoice(conv);
 				// Every exit answers. The refusals answer for themselves; what is left here is a text pi
 				// took without a user message of its own (an add-on handled it: sent), or an unexpected
 				// throw before pi got the text (not sent).
@@ -9789,10 +9786,7 @@ export class ClientSession {
 			if (conv.ackOnUserMessage === receipt) conv.ackOnUserMessage = undefined;
 			receipt.fail(message);
 		}
-		if (!flow.handedOver) {
-			flow.admission.release();
-			if (conv.pendingAllChatsModel) void this.restoreChatModelChoice(conv);
-		}
+		if (!flow.handedOver) flow.admission.release();
 	}
 
 	/** prompt()'s body, run once the receipt and the message's place in the chat's line are taken. */
@@ -9832,7 +9826,6 @@ export class ClientSession {
 		await flow.admission.ready;
 		// A switch already admitted finishes before this new reply starts.
 		await conv.modelChangeTail;
-		if (conv.pendingAllChatsModel && !conv.session.isStreaming) await this.restoreChatModelChoice(conv, true);
 		const promptAc = new AbortController();
 		conv.activePromptAc = promptAc;
 		try {
@@ -13991,7 +13984,6 @@ export class ClientSession {
 			const current = modelKeyOf(conv.session);
 			const sessionId = conv.session.sessionManager.getSessionId();
 			const choice = current ? this.stateStore.saveChatModelChoice(sessionId, current) : undefined;
-			conv.pendingAllChatsModel = undefined;
 			await inModelChangeLane(conv, async () => {
 				if (
 					choice &&
@@ -14367,7 +14359,6 @@ export class ClientSession {
 		try {
 			this.modelForConversation(conv, modelId); // refuse before recording an invalid choice
 			const choice = this.stateStore.saveChatModelChoice(conv.session.sessionManager.getSessionId(), modelId);
-			conv.pendingAllChatsModel = undefined;
 			await inModelChangeLane(conv, async () => {
 				// Later manual picks and repeat presses win over this queued operation.
 				const newest = this.stateStore.getChatModelChoice(conv.session.sessionManager.getSessionId());
@@ -14413,15 +14404,6 @@ export class ClientSession {
 			latestChatModelChoice(createdAt, entries),
 			this.stateStore.getChatModelChoice(sm.getSessionId()),
 			!!pinned,
-		);
-	}
-
-	private modelSwitchBusy(conv: Conversation, beforePrompt = false): boolean {
-		return (
-			conv.session.isStreaming ||
-			conv.session.isCompacting ||
-			(!beforePrompt && (conv.sendsInFlight ?? 0) > 0) ||
-			conv.wizardRunning
 		);
 	}
 
@@ -14481,45 +14463,35 @@ export class ClientSession {
 		}
 	}
 
-	/** Called at ALL open paths and at settlement. Re-reading inside the lane prevents
-	 * stale pending presses from defeating a later pick or a second press. */
-	private async restoreChatModelChoice(conv: Conversation, beforePrompt = false): Promise<boolean> {
+	/** Called at ALL open paths and by All chats. Like the chat's own picker, a running reply is
+	 * not stopped or replayed: pi reads the model again for its next request. Re-reading inside
+	 * the lane prevents a stale press from defeating a later pick or a second press. A failure is
+	 * reported here, or handed to `failed` (All chats sums them up in one notice). */
+	private async restoreChatModelChoice(conv: Conversation, failed?: (message: string) => void): Promise<boolean> {
 		return inModelChangeLane(conv, async () => {
 			const choice = this.modelChoiceForConversation(conv);
-			if (!choice) {
-				conv.pendingAllChatsModel = undefined;
-				return false;
-			}
-			if (modelKeyOf(conv.session) === choice.modelId) {
-				conv.pendingAllChatsModel = undefined;
-				return true;
-			}
-			if (this.modelSwitchBusy(conv, beforePrompt)) {
-				conv.pendingAllChatsModel = choice;
-				return true;
-			}
-			conv.pendingAllChatsModel = choice;
+			if (!choice) return false;
+			if (modelKeyOf(conv.session) === choice.modelId) return true;
 			try {
 				await this.applyModelToConversation(
 					conv,
 					choice.modelId,
 					() => {
 						const latest = this.modelChoiceForConversation(conv);
-						return (
-							latest?.at === choice.at && latest.modelId === choice.modelId && !this.modelSwitchBusy(conv, beforePrompt)
-						);
+						return latest?.at === choice.at && latest.modelId === choice.modelId;
 					},
 					this.stateStore.getAllChatsModel()?.at === choice.at ? undefined : choice,
 				);
-				if (modelKeyOf(conv.session) === choice.modelId) conv.pendingAllChatsModel = undefined;
 			} catch (err) {
-				conv.pendingAllChatsModel = undefined;
-				this.emit({
-					type: "notice",
-					level: "error",
-					text: `Failed to switch model: ${(err as Error).message}`,
-					textEn: `Failed to switch model: ${(err as Error).message}`,
-				});
+				const message = (err as Error).message;
+				if (failed) failed(message);
+				else
+					this.emit({
+						type: "notice",
+						level: "error",
+						text: `Failed to switch model: ${message}`,
+						textEn: `Failed to switch model: ${message}`,
+					});
 			}
 			return true;
 		});
@@ -14529,20 +14501,28 @@ export class ClientSession {
 		try {
 			this.modelForConversation(this.conv, modelId); // validate BEFORE persisting
 			this.stateStore.saveAllChatsModel(modelId);
-			let switched = 0,
-				pending = 0;
-			// Shared map: every window, folder and headless client, not just this browser.
+			let switched = 0;
+			const failures: string[] = [];
+			const failed = (message: string) => failures.push(message);
+			// Shared map: every window, folder and headless client, not just this browser. Running
+			// chats switch now too, like their own picker; one chat's failure doesn't stop the rest.
 			for (const conv of this.convs.values()) {
 				const before = modelKeyOf(conv.session);
-				await this.restoreChatModelChoice(conv);
+				try {
+					await this.restoreChatModelChoice(conv, failed);
+				} catch (err) {
+					failed((err as Error).message);
+				}
 				if (before !== modelId && modelKeyOf(conv.session) === modelId) switched++;
-				if (conv.pendingAllChatsModel?.modelId === modelId) pending++;
 			}
+			const notSwitched = failures.length
+				? `; ${failures.length} couldn't switch: ${failures[0].replace(/\.$/, "")}`
+				: "";
 			this.emit({
 				type: "notice",
-				level: "info",
-				text: `${switched} open chats switched${pending ? `; ${pending} after replies` : ""}.`,
-				textEn: `${switched} open chats switched${pending ? `; ${pending} after replies` : ""}.`,
+				level: failures.length ? "warning" : "info",
+				text: `${switched} open chats switched${notSwitched}.`,
+				textEn: `${switched} open chats switched${notSwitched}.`,
 			});
 		} catch (err) {
 			this.emit({
