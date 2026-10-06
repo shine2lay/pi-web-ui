@@ -33,6 +33,7 @@ import type {
 	UiRoleStatus,
 	UiRoleTask,
 	UiRoleTldrLine,
+	UiTaskQueueHold,
 	UiTaskQueueTask,
 	UiTldrLine,
 } from "./protocol.js";
@@ -44,7 +45,13 @@ import {
 	type RoleReportReply,
 } from "./role-messages.js";
 import { rulesGoals, rulesWorkMode } from "./role-rules.js";
-import { TASK_QUEUE_ENTRY_TYPE, taskQueueFromEntries, taskRefLabel, type TaskQueueEntryLike } from "./task-queue.js";
+import {
+	TASK_QUEUE_ENTRY_TYPE,
+	taskQueueFromEntries,
+	taskQueueHeld,
+	taskRefLabel,
+	type TaskQueueEntryLike,
+} from "./task-queue.js";
 import {
 	isTldrReply,
 	TLDR_ENTRY_TYPE,
@@ -651,6 +658,8 @@ export class RolesOverviewReader {
 		let tasks: UiTaskQueueTask[] = [];
 		let running = false;
 		let pausedReason: string | undefined;
+		// queue-paused: the owner's pause on the whole queue.
+		let queueHold: UiTaskQueueHold | undefined;
 		let stuckAt = new Map<number, number>();
 		let lastActivity: number | undefined;
 		if (home) {
@@ -663,6 +672,7 @@ export class RolesOverviewReader {
 				tasks = q.tasks;
 				running = q.running;
 				pausedReason = q.pausedReason;
+				queueHold = q.hold;
 				stuckAt = s.stuckAt;
 			} catch {
 				problems.push("home chat");
@@ -696,6 +706,9 @@ export class RolesOverviewReader {
 		}
 		const taskOfChat = (file: string | undefined) =>
 			file ? tasks.find((t) => t.chat?.file && samePath(t.chat.file, file)) : undefined;
+		// queue-paused: the owner's pause a task is under (its own or its queue's); a paused task never
+		// counts as needing him.
+		const heldOf = (t: UiTaskQueueTask | undefined) => (t ? taskQueueHeld(t, { hold: queueHold }) : undefined);
 
 		const homeRef: UiRoleChatRef = { file: home ?? def.homeChat ?? "", where: "home" };
 		const taskRef = (t: UiTaskQueueTask): UiRoleChatRef => ({
@@ -709,9 +722,10 @@ export class RolesOverviewReader {
 		const tldr: UiRoleTldrLine[] = [];
 		const own = new Set<string>();
 		for (const info of infos) {
+			const quiet = !!heldOf(info.task);
 			for (const l of info.lines) {
 				own.add(`${info.file}\n${l.text}`);
-				tldr.push(lineOf(l, taskRef(info.task)));
+				tldr.push(lineOf(l, taskRef(info.task), quiet));
 			}
 		}
 		for (const l of homeLines) {
@@ -719,7 +733,7 @@ export class RolesOverviewReader {
 			if (t?.chat?.file && own.has(`${t.chat.file}\n${l.text}`)) continue;
 			// A copy stays a home chat line (its id is there) that says which task it is about.
 			const ref: UiRoleChatRef = t ? { file: homeRef.file, where: t.id } : homeRef;
-			tldr.push(lineOf(l, ref));
+			tldr.push(lineOf(l, ref, !!heldOf(t)));
 		}
 		tldr.sort((a, b) => b.ts - a.ts);
 
@@ -742,7 +756,7 @@ export class RolesOverviewReader {
 		}
 		for (const info of infos) {
 			const t = info.task;
-			if (t.status !== "stuck") continue;
+			if (t.status !== "stuck" || heldOf(t)) continue;
 			const since = stuckAt.get(t.id);
 			const line = newestWaiting([
 				...info.lines,
@@ -769,7 +783,8 @@ export class RolesOverviewReader {
 				lines = homeLines.filter((l) => !l.chat);
 			} else {
 				const info = infos.find((i) => i.file && samePath(i.file, file));
-				if (info) {
+				// queue-paused: a question in a paused task's chat doesn't count as needing the owner.
+				if (info && !heldOf(info.task)) {
 					ref = { ...taskRef(info.task), file: info.file ?? file };
 					lines = info.lines;
 				}
@@ -795,7 +810,7 @@ export class RolesOverviewReader {
 
 		// The queue in short.
 		let queue: UiRoleQueue | undefined;
-		if (tasks.length || pausedReason || running) {
+		if (tasks.length || pausedReason || running || queueHold) {
 			const active: UiRoleTask[] = [];
 			const queued: UiRoleTask[] = [];
 			let ready = 0;
@@ -805,23 +820,25 @@ export class RolesOverviewReader {
 					done++;
 					continue;
 				}
+				const held = heldOf(t);
 				if (t.status === "ready") {
 					ready++;
-					if (queued.length < ROLES_QUEUED_MAX) queued.push(taskOf(t));
+					if (queued.length < ROLES_QUEUED_MAX) queued.push(taskOf(t, held));
 					continue;
 				}
 				const info = infos.find((i) => i.task === t);
 				const busy = info?.file ? this.host.chatState(info.file) === "working" : false;
 				const latest = info?.lines.length ? info.lines[info.lines.length - 1] : undefined;
 				active.push({
-					...taskOf(t),
+					...taskOf(t, held),
 					...(busy ? { busy: true } : {}),
-					...(latest ? { latest: lineOf(latest, taskRef(t)) } : {}),
+					...(latest ? { latest: lineOf(latest, taskRef(t), !!held) } : {}),
 				});
 			}
 			queue = {
 				running,
 				...(pausedReason ? { pausedReason } : {}),
+				...(queueHold ? { hold: queueHold } : {}),
 				active,
 				queued,
 				counts: { active: active.length, queued: ready, done },
@@ -842,12 +859,15 @@ export class RolesOverviewReader {
 		const sortedAsks = sortAsks(asks);
 		const status = statusOf({
 			asks: sortedAsks.length,
-			busy: homeBusy || (queue?.active.some((t) => t.busy || t.status === "working") ?? false),
+			// queue-paused: a paused task's record keeps saying working; only its chat at work counts then.
+			busy: homeBusy || (queue?.active.some((t) => t.busy || (t.status === "working" && !t.paused)) ?? false),
 			paused:
-				!!queue &&
-				!queue.running &&
-				(queue.pausedReason === "user" || queue.pausedReason === "stopped") &&
-				tasks.some((t) => t.status === "ready" || t.status === "waiting" || t.status === "blocked"),
+				(!!queue &&
+					!queue.running &&
+					(queue.pausedReason === "user" || queue.pausedReason === "stopped") &&
+					tasks.some((t) => t.status === "ready" || t.status === "waiting" || t.status === "blocked")) ||
+				// queue-paused: the owner paused the queue or one of its open tasks.
+				tasks.some((t) => !!heldOf(t)),
 			something: !!home && (homeLines.length > 0 || tasks.length > 0),
 		});
 		return {
@@ -918,12 +938,13 @@ function short(s: string): string {
 	return line.length > 160 ? `${line.slice(0, 159)}…` : line;
 }
 
-function lineOf(l: UiTldrLine, chat: UiRoleChatRef): UiRoleTldrLine {
+/** quiet (queue-paused): the line is from a task the owner paused: it doesn't say it needs him. */
+function lineOf(l: UiTldrLine, chat: UiRoleChatRef, quiet = false): UiRoleTldrLine {
 	return {
 		id: l.id,
 		text: l.text,
 		ts: l.ts,
-		...(l.needsYou && !l.answered ? { needsYou: true } : {}),
+		...(l.needsYou && !l.answered && !quiet ? { needsYou: true } : {}),
 		...(l.needsYou && l.answered ? { answered: true } : {}),
 		...(l.kind ? { kind: l.kind } : {}),
 		chat,
@@ -936,7 +957,7 @@ function newestWaiting(lines: UiTldrLine[]): UiTldrLine | undefined {
 	return best;
 }
 
-function taskOf(t: UiTaskQueueTask): UiRoleTask {
+function taskOf(t: UiTaskQueueTask, held?: UiTaskQueueHold): UiRoleTask {
 	let waitsOn: string | undefined;
 	if (t.status === "waiting" && t.wait?.what) waitsOn = t.wait.what;
 	else if (t.status === "blocked" && t.block) {
@@ -949,6 +970,7 @@ function taskOf(t: UiTaskQueueTask): UiRoleTask {
 		title: t.plan.title,
 		...(t.chat ? { chat: { file: t.chat.file, ...(t.chat.title ? { title: t.chat.title } : {}) } } : {}),
 		...(waitsOn ? { waitsOn } : {}),
+		...(held ? { paused: { at: held.at, why: held.why } } : {}),
 	};
 }
 

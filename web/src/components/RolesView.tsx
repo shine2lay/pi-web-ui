@@ -60,6 +60,7 @@ import {
 	oldestSince,
 	queueCounts,
 	queueHasWork,
+	queuePausedText,
 	queueStopped,
 	readStripOpen,
 	reportDay,
@@ -129,6 +130,7 @@ const TASK_ICON: Record<TaskLook, IconKind> = {
 	hold: "hold",
 	asking: "asking",
 	queued: "queued",
+	paused: "paused",
 };
 
 /** The page's own 16 px marks (status is always an icon and a word, never colour alone). */
@@ -691,11 +693,14 @@ function tileQueue(t: Translate, role: UiRoleOverview): { head: string; counts: 
 	const queue = role.queue;
 	if (!queueHasWork(queue)) return null;
 	const lead = leadTask(queue);
-	const head = lead
-		? `#${lead.id} ${taskWord(t, lead, true)}`
-		: queueStopped(queue)
-			? t("rolesQueueStopped")
-			: t("rolesNoActiveTask");
+	// queue-paused: the owner's pause on the whole queue says more than any one task's state.
+	const head = queue?.hold
+		? t("rolesQueuePausedByYou")
+		: lead
+			? `#${lead.id} ${taskWord(t, lead, true)}`
+			: queueStopped(queue)
+				? t("rolesQueueStopped")
+				: t("rolesNoActiveTask");
 	const counts = queueCounts(t, queue, !!lead, false);
 	return counts ? { head: `${head} ·`, counts } : { head, counts: "" };
 }
@@ -895,6 +900,8 @@ function RoleDetails({
 										t("rolesQueued", { n: queue.counts.queued }),
 										t("rolesDone", { n: queue.counts.done }),
 										...(queueStopped(queue) ? [t("rolesQueueStopped")] : []),
+										// queue-paused: the owner paused the whole queue.
+										...(queue.hold ? [queuePausedText(t, queue, Date.now())] : []),
 									].join(" · ")}
 								</p>
 								{queue.active.map((task) => (

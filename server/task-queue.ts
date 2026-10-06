@@ -39,6 +39,12 @@
  * words. It keeps its lane but frees its slot. The queue's chat records a "poke" when it's due (it comes
  * back first once a slot is free). A task that hasn't started may come after tasks in other queues
  * (`outside`); "after_over" records one done or removed. queue-blocks.ts is the background check.
+ *
+ * queue-paused: the owner can pause a task, or the whole queue (pi-queue's "hold" and "release", `id` for
+ * a task, none for the queue). A pause is a layer on top of a task's status, not a status: the task stays
+ * waiting, blocked, stuck or asking, so Resume carries on there; it is paused when it or its queue is held.
+ * Resuming the queue leaves a task paused on its own paused. The clocks stop while paused: on release a
+ * wait gives up as much later, and an unpoked block's pokes count from the release.
  */
 
 import { readFileSync, statSync } from "node:fs";
@@ -49,6 +55,7 @@ import type {
 	UiTaskQueue,
 	UiTaskQueueBlock,
 	UiTaskQueueChat,
+	UiTaskQueueHold,
 	UiTaskQueueRef,
 	UiTaskQueueLane,
 	UiTaskQueuePlan,
@@ -77,6 +84,8 @@ type Status = UiTaskQueueTask["status"] | "removed";
 interface Task extends Omit<UiTaskQueueTask, "status"> {
 	status: Status;
 	launchPrepared?: boolean;
+	/** queue-paused: since when it has been paused (by itself or its queue), for the clock shift on release. */
+	heldFrom?: number;
 }
 
 interface State {
@@ -89,6 +98,8 @@ interface State {
 	pausedReason?: PauseReason;
 	/** queue-lanes: how many lanes may run at once (pi-queue's DEFAULT_LANES / MAX_LANES). */
 	lanes: number;
+	/** queue-paused: the owner paused the whole queue. */
+	hold?: UiTaskQueueHold;
 	/** queue-lanes: set in a task's own chat — the queue it came from. */
 	from?: UiTaskQueueChat;
 }
@@ -281,6 +292,57 @@ const DEFAULT_EVERY_MS = 2 * 60_000;
 const DEFAULT_GIVE_UP_MS = 24 * 3_600_000;
 const numOr = (x: unknown, fallback: number) => (typeof x === "number" && Number.isFinite(x) ? x : fallback);
 
+/** queue-paused: pi-queue's HOLD_WHY_MAX. */
+const HOLD_WHY_MAX = 500;
+
+/** queue-paused: what the Queue panel stores as the reason when the owner presses Pause there (pi-queue's PANEL_HOLD_WHY). */
+export const TASK_QUEUE_PANEL_PAUSE_WHY = "pressed Pause in the Queue panel";
+
+/** queue-paused: pi-queue's heldBy: the pause an open task is under, its own or else its queue's. */
+function heldBy(s: State, t: Task): UiTaskQueueHold | undefined {
+	if (!OPEN.has(t.status)) return undefined;
+	return t.hold ?? s.hold;
+}
+
+/** queue-paused: pi-queue's unhold: the pause doesn't count against the task (a wait gives up that much
+ *  later, an unpoked block's pokes count from the release). */
+function unhold(t: Task, at: number): void {
+	const from = t.heldFrom ?? at;
+	t.heldFrom = undefined;
+	if (t.status === "waiting" && t.wait && !t.wait.overAt)
+		t.wait.until += Math.max(0, at - Math.max(from, t.wait.since));
+	if (t.status === "blocked" && t.block && !t.block.poke) t.block.start = Math.max(t.block.start, at);
+}
+
+/** queue-paused: a task finished or left the queue: a pause on it ends with it. */
+function endHold(t: Task): void {
+	t.hold = undefined;
+	t.heldFrom = undefined;
+}
+
+/** queue-paused: pi-queue's applyHold: the owner's pause on a task or the whole queue ("hold"), or its lifting ("release"). */
+function applyHold(s: State, op: Record<string, unknown>): void {
+	const at = numOr(op.at, num(op.ts));
+	const one = op.id === undefined ? undefined : s.tasks.find((t) => t.id === op.id);
+	if (op.id !== undefined && (!one || !OPEN.has(one.status))) return;
+	const open = one ? [one] : s.tasks.filter((t) => OPEN.has(t.status));
+	const was = new Set(open.filter((t) => heldBy(s, t)).map((t) => t.id));
+	if (op.op === "hold") {
+		const why = typeof op.why === "string" ? op.why.trim().slice(0, HOLD_WHY_MAX) : "";
+		if (!why) return;
+		const before = one ? one.hold : s.hold;
+		const hold: UiTaskQueueHold = { at: before?.at ?? at, why };
+		if (one) one.hold = hold;
+		else s.hold = hold;
+		for (const t of open) if (!was.has(t.id)) t.heldFrom = at;
+		return;
+	}
+	if (one ? !one.hold : !s.hold) return;
+	if (one) one.hold = undefined;
+	else s.hold = undefined;
+	for (const t of open) if (was.has(t.id) && !heldBy(s, t)) unhold(t, at);
+}
+
 /** 应用一条变化（pi-queue applyOp 的镜像）：和队列现状对不上的变化忽略。 */
 function apply(s: State, raw: unknown): void {
 	if (!raw || typeof raw !== "object") return;
@@ -328,6 +390,10 @@ function apply(s: State, raw: unknown): void {
 	if (op.op === "lanes") {
 		const n = typeof op.n === "number" && Number.isFinite(op.n) ? op.n : TASK_QUEUE_DEFAULT_LANES;
 		s.lanes = Math.round(Math.min(TASK_QUEUE_MAX_LANES, Math.max(1, n)));
+		return;
+	}
+	if (op.op === "hold" || op.op === "release") {
+		applyHold(s, op);
 		return;
 	}
 	if (!isId(op.id)) return;
@@ -540,10 +606,12 @@ function apply(s: State, raw: unknown): void {
 			task.block = undefined;
 			task.summary = str(op.summary, NOTE_MAX);
 			task.doneAt = num(op.ts);
+			endHold(task);
 			return;
 		case "remove":
 			task.status = "removed";
 			task.block = undefined;
+			endHold(task);
 			return;
 		case "move": {
 			if (task.status !== "ready") return;
@@ -606,9 +674,13 @@ export function taskQueueFromEntries(
 			r.status = d ? d.status : "gone";
 			if (d) r.title = d.plan.title;
 			if (d?.chat) r.chat = d.chat;
+			// queue-paused: the task it waits on is paused (it keeps waiting quietly).
+			if (d && heldBy(s, d)) r.held = true;
 		}
 	}
-	const tasks = s.tasks.filter((t): t is UiTaskQueueTask => t.status !== "removed" && !dropped.has(t));
+	const tasks = s.tasks
+		.filter((t): t is Task & UiTaskQueueTask => t.status !== "removed" && !dropped.has(t))
+		.map(({ heldFrom: _heldFrom, ...t }): UiTaskQueueTask => t);
 	// queue-lanes: only a queue with tasks that run in chats of their own shows lanes (a task's own chat never).
 	const lanes = s.from ? [] : lanesOf(s.tasks, taskQueueShareableOf(shareable));
 	return {
@@ -625,6 +697,7 @@ export function taskQueueFromEntries(
 			: {}),
 		...(s.lanes !== TASK_QUEUE_DEFAULT_LANES ? { lanesAtOnce: s.lanes } : {}),
 		...(s.from ? { from: s.from } : {}),
+		...(s.hold ? { hold: s.hold } : {}),
 	};
 }
 
@@ -638,12 +711,23 @@ export type TaskQueueTaskAny = Omit<UiTaskQueueTask, "status"> & { status: Statu
 export function taskQueueAll(entries: Iterable<TaskQueueEntryLike>): {
 	tasks: TaskQueueTaskAny[];
 	from?: UiTaskQueueChat;
+	/** queue-paused: the owner paused the whole queue. */
+	hold?: UiTaskQueueHold;
 } {
 	const s: State = { tasks: [], running: false, lanes: TASK_QUEUE_DEFAULT_LANES, autoApprove: false, autoStart: false };
 	for (const e of entries) {
 		if (e.type === "custom" && e.customType === TASK_QUEUE_ENTRY_TYPE) apply(s, e.data);
 	}
-	return { tasks: s.tasks, ...(s.from ? { from: s.from } : {}) };
+	return { tasks: s.tasks, ...(s.from ? { from: s.from } : {}), ...(s.hold ? { hold: s.hold } : {}) };
+}
+
+/** queue-paused: the pause an open task is under (its own, else its whole queue's); undefined when it isn't paused. */
+export function taskQueueHeld(
+	t: Pick<TaskQueueTaskAny, "status" | "hold">,
+	queue: { hold?: UiTaskQueueHold },
+): UiTaskQueueHold | undefined {
+	if (!OPEN.has(t.status)) return undefined;
+	return t.hold ?? queue.hold;
 }
 
 /**
@@ -693,6 +777,14 @@ export function taskQueueCommandLine(action: unknown, id: unknown): string | nul
 		return isId(id) && id <= TASK_QUEUE_MAX_LANES ? `/queue lanes ${id}` : null;
 	}
 	if (action === "up" || action === "down" || action === "remove") return isId(id) ? `/queue ${action} ${id}` : null;
+	// queue-paused: the owner's Pause / Resume, on a task (id) or the whole queue (no id). The panel's pause
+	// stores where it came from as its reason (pi-queue takes it base64url-encoded).
+	if (action === "pause" || action === "resume") {
+		if (id !== undefined && id !== null && !isId(id)) return null;
+		const which = isId(id) ? ` ${id}` : "";
+		if (action === "resume") return `/queue resume${which}`;
+		return `/queue pause${which} ${Buffer.from(TASK_QUEUE_PANEL_PAUSE_WHY, "utf8").toString("base64url")}`;
+	}
 	return null;
 }
 

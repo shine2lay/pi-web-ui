@@ -283,9 +283,12 @@ import { QueueBlocks } from "./queue-blocks.js";
 import {
 	chatLabel,
 	ownTaskOf,
+	pausedNoteText,
+	QUEUE_PAUSED_CUSTOM_TYPE,
 	queueEntriesOf,
 	ROLE_MESSAGE_CUSTOM_TYPE,
 	roleMessageIdOf,
+	taskChatPaused,
 	RoleMessages,
 	type RoleMessageSender,
 	type RoleReportReceipt,
@@ -4918,6 +4921,8 @@ export class ClientSession {
 	async noteRoleMessage(
 		file: string,
 		text: string,
+		/** queue-paused: QUEUE_PAUSED_CUSTOM_TYPE for what reached a paused task's chat. */
+		customType: string = ROLE_MESSAGE_CUSTOM_TYPE,
 	): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> {
 		await this.switchSession(file);
 		const id = this.conversationIdBySessionFile(file);
@@ -4927,7 +4932,7 @@ export class ClientSession {
 		if (conv.session.isStreaming || (conv.sendsInFlight ?? 0) > 0)
 			return { ok: false, busy: true, error: "the chat is working" };
 		await conv.session.sendCustomMessage(
-			{ customType: ROLE_MESSAGE_CUSTOM_TYPE, content: [{ type: "text", text }], display: true },
+			{ customType, content: [{ type: "text", text }], display: true },
 			{ triggerTurn: false },
 		);
 		return { ok: true };
@@ -5548,6 +5553,11 @@ export class ClientSession {
 	/** telegram-answers: sends a stuck task's answer into the chat with this transcript, as the user's
 	 *  reply (AgentService sets it: the wake-up client opens the chat, or switches to it, and sends). */
 	static stuckAnswerSender: ((file: string, text: string) => Promise<AskResult>) | null = null;
+	/** queue-paused: when the chat with this transcript works on a queued task the owner paused, adds the
+	 *  text there without a turn and says how that went; undefined otherwise (deliver as usual). AgentService
+	 *  sets it (noteToPausedTaskChat). */
+	static pausedChatNote: ((file: string, text: string) => Promise<{ ok: boolean; error?: string } | undefined>) | null =
+		null;
 
 	/** queue-grouping: open queued tasks' chats (transcripts), each with the queue chat it came from (queue-groups.ts),
 	 *  as known so far; read from the client state the first time it's needed. */
@@ -6068,6 +6078,9 @@ export class ClientSession {
 			const conv = this.convs.get(id);
 			if (!conv) return { ok: false, error: `Unknown conversation: ${id}` };
 			if (!text.trim()) return { ok: false, error: "Text to deliver is empty" };
+			// queue-paused: a queued task's chat the owner paused gets it without a turn.
+			const quiet = await ClientSession.pausedChatNote?.(String(conv.session.sessionFile ?? ""), text);
+			if (quiet) return quiet;
 			if (id !== this.activeId) await this.switchConversation(id);
 			await this.prompt(text);
 			return { ok: true };
@@ -6097,6 +6110,9 @@ export class ClientSession {
 	async steerOwnConversation(id: string, text: string): Promise<{ ok: boolean; error?: string } | undefined> {
 		const conv = this.convs.get(id);
 		if (!conv?.session) return undefined;
+		// queue-paused: a queued task's chat the owner paused gets it without a turn.
+		const quiet = await ClientSession.pausedChatNote?.(String(conv.session.sessionFile ?? ""), text);
+		if (quiet) return quiet;
 		await conv.session.sendUserMessage(text, conv.session.isStreaming ? { deliverAs: "steer" } : undefined);
 		return { ok: true };
 	}
@@ -15189,6 +15205,7 @@ export class AgentService {
 	private noteRoleMessage(
 		file: string,
 		text: string,
+		customType: string = ROLE_MESSAGE_CUSTOM_TYPE,
 	): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> {
 		return this.roleMessagesChain(async (): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> => {
 			if (this.carryOnGate) await this.carryOnGate.catch(() => {});
@@ -15199,7 +15216,7 @@ export class AgentService {
 			try {
 				const cs = await this.attach(ROLE_MESSAGES_CLIENT_ID, sink);
 				try {
-					return await cs.noteRoleMessage(file, text);
+					return await cs.noteRoleMessage(file, text, customType);
 				} finally {
 					this.detach(ROLE_MESSAGES_CLIENT_ID, sink);
 				}
@@ -15207,6 +15224,63 @@ export class AgentService {
 				return { ok: false, error: (err as Error).message };
 			}
 		});
+	}
+
+	/**
+	 * queue-paused: the transcript of the chat a scheduled task or a plugin names: its transcript when known
+	 * (who the chat is), else the open chat with that id (in that folder); "" when there's none.
+	 */
+	chatFileOf(ref: { conversationId?: string; sessionFile?: string; cwd?: string }): string {
+		const file = String(ref.sessionFile ?? "").trim();
+		if (file) return file;
+		const id = String(ref.conversationId ?? "").trim();
+		if (!id) return "";
+		for (const cs of this.clients.values()) {
+			try {
+				const conv = cs.resolveSchedulerTarget({ conversationId: id, ...(ref.cwd ? { cwd: ref.cwd } : {}) });
+				const f = conv ? String(conv.session.sessionFile ?? "") : "";
+				if (f) return f;
+			} catch {
+				// a broken client: the next one
+			}
+		}
+		return "";
+	}
+
+	/**
+	 * queue-paused: the chat with this transcript works on a queued task the owner paused (the task or its
+	 * whole queue), so nothing automatic may start a turn there. The text (a scheduled wake-up, a plugin's
+	 * message) is added without one, like an fyi: shown in the chat and read with its next turn, once the
+	 * pause is lifted. A chat still finishing its step gets it after that turn (tried again every 15 s, for
+	 * up to 30 minutes). undefined: not such a chat, deliver as usual.
+	 */
+	async noteToPausedTaskChat(file: string, text: string): Promise<{ ok: boolean; error?: string } | undefined> {
+		if (!file || !text.trim() || !(await taskChatPaused(file))) return undefined;
+		const body = pausedNoteText(text);
+		const first = await this.noteRoleMessage(file, body, QUEUE_PAUSED_CUSTOM_TYPE);
+		if (first.ok) {
+			console.log(`[queue-paused] added to ${file} without a turn: its task is paused by the owner`);
+			return { ok: true };
+		}
+		if (!first.busy)
+			return { ok: false, error: `its task is paused by the owner, and the chat couldn't take it: ${first.error}` };
+		const env = Number(process.env.PI_WEB_PAUSED_NOTE_RETRY_MS);
+		const every = Number.isFinite(env) && env > 0 ? env : 15_000;
+		const again = (left: number): void => {
+			const timer = setTimeout(() => {
+				void (async () => {
+					const r = await this.noteRoleMessage(file, body, QUEUE_PAUSED_CUSTOM_TYPE).catch(
+						(err): { ok: false; busy?: boolean; error: string } => ({ ok: false, error: (err as Error).message }),
+					);
+					if (r.ok) console.log(`[queue-paused] added to ${file} without a turn, after its step`);
+					else if (r.busy && left > 1 && !this.quiesced) again(left - 1);
+					else console.error(`[queue-paused] couldn't add a message to ${file}: ${r.error}`);
+				})();
+			}, every);
+			timer.unref?.();
+		};
+		again(Math.max(1, Math.ceil((30 * 60_000) / every)));
+		return { ok: true };
 	}
 
 	/** session-index: bring the saved chat index up to date at startup (while the cut-off chats reopen),
@@ -15472,6 +15546,8 @@ export class AgentService {
 		if (this.uninstallQueueHost) return;
 		// telegram-answers: a stuck task's answer from elsewhere (Telegram, the Queue tab) goes into its
 		// chat the way a scheduled wake-up does: the chat is opened (or switched to) and gets the text.
+		// queue-paused: what a plugin sends a paused task's chat goes in without a turn.
+		ClientSession.pausedChatNote = (file, text) => this.noteToPausedTaskChat(file, text);
 		ClientSession.stuckAnswerSender = async (file, text) => {
 			const r = await this.wakeClosedChat(file, text);
 			return r.ok ? { ok: true } : { ok: false, error: r.error ?? "couldn't send the answer" };
@@ -15540,6 +15616,11 @@ export class AgentService {
 	 */
 	private async queueWakeChat(file: string, note: string): Promise<boolean> {
 		const abs = resolve(file);
+		// queue-paused: nothing automatic starts a turn in a paused task's chat.
+		if (await taskChatPaused(abs)) {
+			console.log(`[stall-watch] not waking ${abs}: its task is paused by the owner`);
+			return false;
+		}
 		const refusal = wakeRefusal(this.queueChatState(abs), this.carryOnLeftAlone.get(abs));
 		if (refusal) {
 			console.log(`[stall-watch] not waking ${abs}: ${refusal}`);
@@ -15889,6 +15970,10 @@ export class AgentService {
 		// miss/已回收时不抛错，回落无头伪客户端（浏览器关着时微信照常可用）。
 		const target = String(req?.conversationId ?? "").trim();
 		if (target) {
+			// queue-paused: a queued task's chat the owner paused gets it without a turn.
+			const quiet = await this.noteToPausedTaskChat(this.chatFileOf({ conversationId: target }), text);
+			if (quiet?.ok) return { conversationId: target, clientId };
+			if (quiet) throw new Error(`chatFromPlugin: ${quiet.error}`);
 			const w = await this.wakeConversation(target, text);
 			if (w.ok) return { conversationId: target, clientId: w.clientId ?? clientId };
 		}
@@ -16507,10 +16592,18 @@ export class AgentService {
 		const noop = () => {};
 		const carried: string[] = [];
 		const failed: string[] = [];
+		const paused: string[] = [];
 		try {
 			const cs = await this.attach(clientId, noop);
 			for (const item of plan.carry) {
 				const file = item.chat.sessionFile;
+				// queue-paused: a queued task's chat the owner paused isn't carried on (nothing automatic starts
+				// a turn there); it carries on when he lifts the pause.
+				if (await taskChatPaused(file).catch(() => false)) {
+					paused.push(item.chat.title);
+					runningChats?.finish(file);
+					continue;
+				}
 				let ok = false;
 				try {
 					ok = existsSync(file) && (await cs.carryOn(file, item.note));
@@ -16534,7 +16627,8 @@ export class AgentService {
 		const quote = (list: string[]) => list.map((t) => `"${t}"`).join(", ");
 		console.log(
 			`[carry-on] carried on: ${carried.length ? quote(carried) : "none"}` +
-				(failed.length ? `; couldn't reopen: ${quote(failed)}` : ""),
+				(failed.length ? `; couldn't reopen: ${quote(failed)}` : "") +
+				(paused.length ? `; left alone (task paused by the owner): ${quote(paused)}` : ""),
 		);
 		if (carried.length > 0) {
 			this.startupNotices.push({
@@ -16715,6 +16809,7 @@ export class AgentService {
 		ClientSession.queueBlocks?.stop();
 		ClientSession.queueBlocks = null;
 		ClientSession.stuckAnswerSender = null;
+		ClientSession.pausedChatNote = null;
 		this.recordInterruptedRuns();
 		const all = [...this.clients.values()];
 		this.clients.clear();

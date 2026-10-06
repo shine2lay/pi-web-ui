@@ -113,6 +113,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | roles-overview               | `local` | `server/roles-overview.ts` (new), `role-rules.ts` (new), `role-messages.ts`, `identities.ts`, `identity-roles.ts`, `identity-config.ts` (pi-identity copy), `agent-service.ts`, `index.ts`, `tabs.ts`, `protocol.ts`, `protocol-version.ts` (43), `web/src/components/RolesView.tsx` (new), `roles-view-model.ts` (new), `roles-state.ts` (new), `roles-view.css` (new), `chat-focus.ts` (new), `owner-fields.ts` (new), `IdentitiesSettings.tsx`, `TopBar.tsx`, `ui-slots.ts`, `topbar-fit.ts`, `App.tsx`, `RightPanel.tsx`, `TaskQueuePanel.tsx`, `TldrPanel.tsx`, `i18n.tsx`, `locales/*.json`, `docs/roles-overview.md` (new); paired with pi-identity |
 | role-message-fold            | `local` | `web/src/role-message-text.ts` (new), `components/RoleMessageRow.tsx` (new), `Message.tsx`, `ToolCallBlock.tsx`, `CollapsedMessage.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `docs/roles-overview.md`, `tests/role-message-fold-test.mjs` (new), `tests/unit/role-message-text.test.ts` (new) |
 | telegram-coo                 | `local` | `server/role-replies.ts` (new), `roles-overview-tool.ts` (new), `agent-service.ts` (turn records, `sendToRole`), `index.ts`, `plugins.ts` (`host.roles`), `plugin-manifest-validate.ts`, `plugin-api-catalog.ts`, `tool-manager.ts`, `plugin-sdk/`, `plugins/telegram/` (0.2.0), `docs/architecture-plugins.md`, `docs/roles-overview.md`, `tests/telegram-coo-test.mjs` (new), `tests/unit/` |
+| queue-paused                 | `local` | `server/task-queue.ts`, `queue-blocks.ts`, `role-messages.ts`, `agent-service.ts` (`noteToPausedTaskChat`, carry-on, plugin notes), `index.ts` (scheduler), `roles-overview.ts`, `roles-overview-tool.ts`, `protocol.ts`, `protocol-version.ts` (44), `web/src/components/TaskQueuePanel.tsx`, `RolesView.tsx`, `Message.tsx`, `roles-view-model.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `roles-view.css`, `docs/roles-overview.md`, `tests/queue-paused-test.mjs` (new), `tests/unit/`; paired with pi-queue |
 
 ---
 
@@ -5445,3 +5446,87 @@ Display only: the model gets the same text and no transcript line changes.
 - If `roleMessageHeader`/`roleMessageHint` in `server/role-messages.ts` change, change
   `parseRoleMessageText` with them (its unit test builds the text with the server's functions, so it
   fails first).
+
+## queue-paused
+
+**Status**: `local`
+**Baseline**: v0.96.1 (on top of `queue-autonomy`, `queue-main-chat`, `queue-blocked`, `roles-overview`, `telegram-coo`, `role-message-fold`)
+
+**Why** (owner, 2026-10-06, queue task #74, on Telegram through the COO, rm-45590094): "Right now
+paused tasks are pinging because theres no progress has been made in the past hour or so, lets respect
+the explicit pause"; asked about a proper "paused by you" setting, he said "Yes". Tasks parked with
+`queue_blocked` and a need were poked and asked again and again (4-5 Claude turns an hour during a pause
+meant to save Claude limits), `queue_wait` workarounds give up after at most 168 h, and a role's home
+chat couldn't reach a task already working in its own chat. Now a task, or a whole queue, can be
+**paused by the owner**: it stays silent until he lifts the pause, then carries on where it stopped.
+
+**pi-queue's part** (paired; its README, "Paused by you"): a hold `{at, why, by}` on a task and a
+separate one on the queue, a layer over the status (a waiting task keeps its check, a blocked one its
+tasks or need, a stuck or asking one its question). Ops `hold {id?, why, by}` and `release {id?}`; while
+held the clock stops (on release a waiting task's give-up time, a blocked task's poke clock and an
+asking task's timer move later by the time held). `queue_control` `pause`/`resume` (id optional, `why`
+required: the owner's words and where they came from; only in the queue's own chat, only on the
+owner's word), `/queue pause [id] <why>` / `/queue resume [id]` for the panel. Nothing automatic
+starts, pokes, asks, checks, gives up, wakes or carries on a paused task; a working one gets one
+"stop at a safe point" note (never aborted), frees its slot and keeps its lane; on resume it gets
+"[Queue] Back to task #n: the owner lifted the pause (paused HH:MM–HH:MM)." first. Resuming the
+queue doesn't lift a task's own pause. Stop, Auto start and Auto approve keep their meaning.
+
+### Changes
+
+1. **The rules, mirrored** (`server/task-queue.ts`, `protocol.ts`): the panel's replay follows
+   `hold`/`release` with the same clock shifts (the unit test replays the same entries through
+   pi-queue's `queue.ts` and compares). `UiTaskQueueTask.hold`, `UiTaskQueue.hold` (`{at, why}`),
+   `UiTaskQueueRef.held`; `taskQueueHeld(t, queue)`. `taskQueueCommandLine` builds `pause [id] <why>`
+   (the panel's why: "pressed Pause in the Queue panel", base64url) and `resume [id]`; the panel's
+   `task_queue_command` accepts both. Protocol 44.
+2. **No pokes** (`server/queue-blocks.ts`): a paused blocked task, or any task of a paused queue, is
+   never nudged (`/queue blocks` isn't run for it); a blocker the owner paused reads `held`, its waiter
+   keeps waiting quietly, and a paused stuck blocker doesn't count as needs-you.
+3. **Nothing starts a turn in a paused task's chat** (`role-messages.ts`, `agent-service.ts`,
+   `index.ts`): a role-message question or reply, a scheduled wake-up bound to that chat and a
+   plugin's prompt ("Temper run finished") go in as a custom message `queue-paused` without a turn, like
+   an fyi ("This came while the owner had this task paused, so it started no turn."), waiting for the
+   chat's turn to end first if it is still finishing its step (`noteToPausedTaskChat`, retried every
+   15 s for up to 30 min, `PI_WEB_PAUSED_NOTE_RETRY_MS`); the chat reads them on resume. The
+   carry-on after a restart leaves a paused task's chat alone, and `queueWakeChat` refuses it. The
+   owner typing in that chat still gets an answer (it doesn't lift the pause). A paused chat is a lane
+   task's own chat whose task is open and held (`taskChatPaused`, from its queue chat's record).
+4. **The Queue panel** (`TaskQueuePanel.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`): Pause /
+   Resume on every open task, Pause queue / Resume queue in the header with a banner, and a "Paused by
+   you · since HH:MM · why" line ("with the whole queue" for a task under the queue's pause). A
+   paused stuck or asking task has no needs-you badge and no answer box ("Resume it to answer."); a
+   paused waiting task says its give-up time moves later; a blocker the owner paused reads "paused by
+   you". Buttons only where the panel has the controls (not in a task chat's view of its queue).
+   `Message.tsx` labels the kept notes "Kept for after the pause".
+5. **The Roles page and `roles_overview`** (`roles-overview.ts`, `roles-overview-tool.ts`,
+   `roles-view-model.ts`, `RolesView.tsx`, `roles-view.css`, docs/roles-overview.md): a paused task
+   says "Paused by you" (with since when and why in the panel and the tool's text), a paused queue
+   "Queue paused by you"; a paused task's question isn't an ask, its TL;DR lines lose needs-you, a
+   paused working task doesn't make the role busy unless its chat is at work, and the role's status is
+   Paused.
+
+### How it was checked
+
+- Unit: `tests/unit/task-queue.test.ts` ("taskQueueFromEntries (queue-paused)": the ops, the shifts,
+  a task pause outliving the queue's, the mirror replay against pi-queue, the command lines),
+  `queue-blocks.test.ts` ("paused by you": no poke for a paused task or queue, a paused blocker,
+  needs-you), `role-messages.test.ts` (a reply to a paused task's chat goes in without a turn, also
+  under a queue pause; delivered normally after resume), `roles-overview.test.ts`,
+  `roles-overview-tool.test.ts`, `task-queue-panel.test.ts`, `roles-view.test.ts`.
+- `tests/queue-paused-test.mjs` (sealed: the real pi-queue and pi-identity, the mock model, fast
+  queue clocks, a real browser): a working task paused by a click finishes its step, gets one note and
+  stops; a role reply, a scheduled wake-up and the watchdog then start no turn there; a blocked task
+  paused through `queue_control` gets no poke and no ask over its whole poke schedule, and its pokes
+  count from the resume; a waiting task's checks stop, it doesn't give up past its give-up time, which
+  moves later by exactly the time paused; Resume (a click) sends one "Back to task" turn that reads
+  what came meanwhile; a queue with Auto start on skips its paused ready task, starts nothing while the
+  whole queue is paused, resumes the working task first, and a task's own pause outlives the queue's;
+  the panel's buttons, lines and banner, and the Roles tile. `QP_SHOT_DIR` keeps screenshots.
+- The new tests fail on the code before this patch.
+
+### When syncing
+
+- The quiet delivery hooks `deliverRoleMessage`, the scheduler executor, the plugin prompt paths and
+  `carryOnAfterRestart`; if a new path starts turns in other chats, check `taskChatPaused` there too.
+- The mirror must keep pi-queue's clock shifts (`unhold`); the replay comparison test catches drift.

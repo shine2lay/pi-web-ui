@@ -67,4 +67,7 @@
 // 43: roles-overview - the Roles page: roles_watch / roles_unwatch and the roles snapshot (every role's
 //     state, asks, TL;DR, queue and 6 am report), identity rows carry the owner's workMode and goals and
 //     the Focus line. An old page has no Roles view; an old server never answers roles_watch.
-export const PROTOCOL_VERSION = 43;
+// 44: queue-paused - the owner's pause ("Paused by you"): queued tasks and queues carry hold {at, why},
+//     blocked lines a paused ref (held), task_queue_command takes pause / resume. An old page would show a
+//     paused stuck task as needing the owner and has no Pause; an old server ignores pause / resume.
+export const PROTOCOL_VERSION = 44;

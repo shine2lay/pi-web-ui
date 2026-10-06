@@ -49,7 +49,7 @@ import { samePath, type IdentityDef } from "./identities.js";
 import type { UiRoleMessage, UiRoleMessageKind, UiRoleMessageRow, UiRoleMessageState } from "./protocol.js";
 import { OWNER_IDS_MAX } from "./role-replies.js";
 import { CARRY_ON_PREFIX } from "./running-chats.js";
-import { TASK_QUEUE_ENTRY_TYPE, taskQueueFromEntries, type TaskQueueEntryLike } from "./task-queue.js";
+import { TASK_QUEUE_ENTRY_TYPE, taskQueueFromEntries, taskQueueHeld, type TaskQueueEntryLike } from "./task-queue.js";
 
 /** The kinds message_role sends (role-reports' "report" is the app's alone). */
 export const ROLE_MESSAGE_KINDS: readonly UiRoleMessageKind[] = ["question", "request", "fyi", "reply"];
@@ -101,6 +101,15 @@ const HEADER_RE = /^\[Role message (rm-[0-9a-f]{8}) /;
 
 /** The customType of an FYI added to a chat without a turn (host.note). */
 export const ROLE_MESSAGE_CUSTOM_TYPE = "role-message";
+
+/** queue-paused: the customType of a message that reached a queued task's chat while the owner had the task
+ *  paused (a scheduled wake-up, a plugin's message): added without a turn, read once the pause is lifted. */
+export const QUEUE_PAUSED_CUSTOM_TYPE = "queue-paused";
+
+/** queue-paused: how such a message reads in the chat (and to its model, with its next turn). */
+export function pausedNoteText(text: string): string {
+	return `${text.trim()}\n\n(This came while the owner had this task paused, so it started no turn.)`;
+}
 
 export type RoleMessageKind = UiRoleMessageKind;
 export type RoleMessageState = UiRoleMessageState;
@@ -592,14 +601,38 @@ export async function queueEntriesOf(file: string): Promise<TaskQueueEntryLike[]
 	return out;
 }
 
-/** The task a queued task's chat works on (from its own entries); undefined = not a task's chat. */
+/** The task a queued task's chat works on (from its own entries); undefined = not a task's chat.
+ *  queue-paused: `held`: its own chat recorded the owner's pause (the queue's chat tells it). */
 export function ownTaskOf(
 	entries: Iterable<TaskQueueEntryLike>,
-): { id?: number; done: boolean; queueChat?: string } | undefined {
+): { id?: number; done: boolean; queueChat?: string; held: boolean } | undefined {
 	const q = taskQueueFromEntries(entries, true, Number.POSITIVE_INFINITY);
 	if (!q.from) return undefined;
 	const own = q.tasks[0];
-	return { id: own?.id, done: !own || own.status === "done", queueChat: q.from.file };
+	return {
+		id: own?.id,
+		done: !own || own.status === "done",
+		queueChat: q.from.file,
+		held: !!own && !!taskQueueHeld(own, q),
+	};
+}
+
+/**
+ * queue-paused: a queued task's chat whose task the owner paused (the task itself or its whole queue), as
+ * its queue's chat records it (as its own chat does when that one can't be read). Other chats: false.
+ * Nothing automatic starts a turn there: messages go in without one, like an fyi.
+ */
+export async function taskChatPaused(file: string): Promise<boolean> {
+	try {
+		const own = ownTaskOf(await queueEntriesOf(file));
+		if (!own || own.done || own.id === undefined) return false;
+		if (!own.queueChat || !existsSync(own.queueChat)) return own.held;
+		const q = taskQueueFromEntries(await queueEntriesOf(own.queueChat), true, Number.POSITIVE_INFINITY);
+		const t = q.tasks.find((x) => x.id === own.id);
+		return !!t && !!taskQueueHeld(t, q);
+	} catch {
+		return false;
+	}
 }
 
 /** A queued task's chat whose task is done or removed (here or in its queue). Other chats: false. */
@@ -1249,8 +1282,12 @@ export class RoleMessages {
 			this.fail(r, `sent ${r.sends} times but it never landed in the chat`);
 			return;
 		}
-		// An FYI starts no turn: it is added to the chat and read with its next message.
-		const res = r.kind === "fyi" ? await this.host.note(target, text) : await this.host.deliver(target, text);
+		// An FYI starts no turn: it is added to the chat and read with its next message. queue-paused: so is
+		// anything for a task's chat the owner paused; the chat reads it once the pause is lifted.
+		const paused = r.kind !== "fyi" && (await taskChatPaused(target));
+		const res = r.kind === "fyi" || paused ? await this.host.note(target, text) : await this.host.deliver(target, text);
+		if (res.ok && paused)
+			this.log(`${r.id} added to ${r.targetChat ?? "?"} without a turn: its task is paused by the owner`);
 		if (res.ok) {
 			r.sends++;
 			delete r.error;

@@ -326,6 +326,112 @@ describe("TaskQueuePanel (lanes)", () => {
 	});
 });
 
+/** queue-paused: the owner's Pause / Resume on a task and on the whole queue, and how a paused task looks. */
+describe("TaskQueuePanel (paused by you)", () => {
+	const at = Date.parse("2026-10-06T19:10:00Z");
+	const hold = { at, why: "pressed Pause in the Queue panel" };
+	const lane = (id: number, status: UiTaskQueueTask["status"], extra: Partial<UiTaskQueueTask> = {}) =>
+		task(id, status, { lane: true, touches: ["a"], chat: { file: `/t${id}.jsonl` }, ...extra });
+	const buttons = (html: string, cls: string) =>
+		[...html.matchAll(new RegExp(`<button[^>]*class="${cls} (pause|resume)"[^>]*>([^<]*)<`, "g"))].map((m) => [
+			m[1],
+			m[2],
+		]);
+
+	it("gives every open task Pause, and a paused one Resume; never a done task or someone else's queue", () => {
+		const queue = q(
+			[
+				lane(1, "working"),
+				lane(2, "blocked", { hold, block: { need: "a login", since: 1, start: 1, tries: 0 } }),
+				task(3, "ready"),
+				task(4, "done", { doneAt: 1 }),
+			],
+			{ running: true },
+		);
+		const html = render(queue, { onCommand: noop });
+		expect(buttons(html, "task-queue-pause")).toEqual([
+			["pause", "Pause"],
+			["resume", "Resume"],
+			["pause", "Pause"],
+		]);
+		expect([...html.matchAll(/data-pause-task="(\d+)"/g)].map((m) => Number(m[1]))).toEqual([1, 2, 3]);
+		// The header: Pause queue (the queue isn't paused).
+		expect(buttons(html, "task-queue-pause-queue")).toEqual([["pause", "Pause queue"]]);
+		// The paused task: its line says so, with since when and why; it's marked paused.
+		expect(html).toMatch(/<li class="task-queue-task lane[^"]* paused[^"]*" data-task-id="2"/);
+		expect(html).toContain('data-paused="task"');
+		expect(html).toContain("Paused by you");
+		expect(html).toContain("pressed Pause in the Queue panel");
+		// Without the controls (no pi-queue, a task chat's view of its queue): no buttons, the line stays.
+		const noButtons = /class="task-queue-pause(-queue)? (pause|resume)"/;
+		expect(render(queue)).not.toMatch(noButtons);
+		expect(render(queue)).toContain('data-paused="task"');
+		expect(render(q(queue.tasks, { from: { file: "/main.jsonl", title: "main" } }), { onCommand: noop })).not.toMatch(
+			noButtons,
+		);
+		expect(render(q(queue.tasks, { available: false }), { onCommand: noop })).not.toMatch(noButtons);
+	});
+
+	it("a task paused on its own inside a paused queue: Resume lifts its own pause, Resume queue the queue's", () => {
+		// (The clicks themselves are checked in the browser: tests/queue-paused-test.mjs.)
+		const html = render(q([task(1, "ready", { hold }), task(2, "ready")], { hold }), { onCommand: noop });
+		expect(buttons(html, "task-queue-pause")).toEqual([
+			["resume", "Resume"],
+			["pause", "Pause"],
+		]);
+		expect(buttons(html, "task-queue-pause-queue")).toEqual([["resume", "Resume queue"]]);
+		// Task 1's line names its own pause; task 2's says it's paused with the queue.
+		expect(html).toMatch(/data-task-id="1"[^]*?data-paused="task"[^]*?data-task-id="2"[^]*?data-paused="queue"/);
+	});
+
+	it("a paused queue: a banner with since when and why, every open task marked paused with the queue", () => {
+		const queue = q([lane(1, "working"), task(2, "ready"), task(3, "done", { doneAt: 1 })], { running: true, hold });
+		const html = render(queue, { onCommand: noop });
+		expect(html).toContain('class="task-queue-paused-banner"');
+		expect(html).toContain('data-paused="true"');
+		expect(buttons(html, "task-queue-pause-queue")).toEqual([["resume", "Resume queue"]]);
+		// Each open task: paused with the whole queue (its own button still says Pause: its own pause is separate).
+		expect([...html.matchAll(/data-paused="queue"/g)]).toHaveLength(2);
+		expect(html).toContain("with the whole queue");
+		expect(buttons(html, "task-queue-pause")).toEqual([
+			["pause", "Pause"],
+			["pause", "Pause"],
+		]);
+		expect(html).toContain('data-paused="banner"');
+		expect(taskIds(html, "done")).toEqual([3]);
+		expect(taskQueueStatusKey(queue, taskQueueSections(queue))).toBe("taskQueueStatusPausedByYou");
+	});
+
+	it("a paused stuck task doesn't need you: no needs-you, no answer box, its question still shown", () => {
+		const stuck = lane(1, "stuck", { hold, question: "Which port?", choices: ["8080", "9090"] });
+		const html = render(q([stuck], { running: true }), { onCommand: noop, onAnswer: noop });
+		expect(html).not.toContain("needs-you");
+		expect(html).not.toContain('class="task-queue-badge"');
+		expect(html).not.toContain("task-queue-answer");
+		expect(html).toContain("Which port?");
+		expect(html).toContain("Resume it to answer.");
+		const queue = q([stuck], { running: true });
+		expect(taskQueueStatusKey(queue, taskQueueSections(queue))).not.toBe("taskQueueStatusStuck");
+		// Resumed: it needs you again.
+		const back = render(q([{ ...stuck, hold: undefined }], { running: true }), { onCommand: noop, onAnswer: noop });
+		expect(back).toContain("needs-you");
+	});
+
+	it("a paused waiting task says its give-up clock is stopped; a blocked task waiting on a paused one says so", () => {
+		const wait = { what: "CI", check: "true", everyMs: 60_000, since: at - 60_000, until: at + 3_600_000 };
+		const html = render(q([task(1, "waiting", { hold, wait })], { running: true }), { onCommand: noop });
+		expect(html).toContain("its give-up time moves later by as long as it stays paused");
+		expect(render(q([task(1, "waiting", { wait })], { running: true }), { onCommand: noop })).not.toContain(
+			"its give-up time moves later",
+		);
+		const ref = { file: "/main.jsonl", name: "this queue", id: 1, status: "stuck" as const, held: true };
+		const blocked = lane(2, "blocked", { block: { on: [ref], since: 1, start: 1, tries: 0 } });
+		const b = render(q([blocked], { running: true }), { onCommand: noop });
+		expect(b).toContain("paused by you");
+		expect(b).not.toContain("needs-you");
+	});
+});
+
 describe("taskQueueStatusKey", () => {
 	const key = (queue: UiTaskQueue) => taskQueueStatusKey(queue, taskQueueSections(queue));
 	it("queue-lanes: counts tasks running in chats of their own", () => {

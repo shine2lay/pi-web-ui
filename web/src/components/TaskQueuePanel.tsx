@@ -17,10 +17,11 @@
  * 新的队列（或 5 秒后）再放开，防连点。
  */
 
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, type ReactNode, useEffect, useRef, useState } from "react";
 import type {
 	UiTaskQueue,
 	UiTaskQueueBlock,
+	UiTaskQueueHold,
 	UiTaskQueuePlan,
 	UiTaskQueueRef,
 	UiTaskQueueTask,
@@ -39,6 +40,9 @@ type TKey = Parameters<Translate>[0];
 export type TaskQueueAction =
 	| "start"
 	| "stop"
+	// queue-paused: the owner's pause on a task (id) or the whole queue (no id), and its lifting.
+	| "pause"
+	| "resume"
 	| "up"
 	| "down"
 	| "remove"
@@ -102,7 +106,10 @@ export function taskQueueSections(q: UiTaskQueue | undefined): TaskQueueSections
 
 /** 顶上那行状态说哪句话。 */
 export function taskQueueStatusKey(q: UiTaskQueue, s: TaskQueueSections): TKey {
-	if (s.current?.status === "stuck" || s.inChats.some((t) => t.status === "stuck")) return "taskQueueStatusStuck";
+	// queue-paused: the owner paused the whole queue; a task he paused doesn't wait on him.
+	if (q.hold) return "taskQueueStatusPausedByYou";
+	const needsYou = (t: UiTaskQueueTask | undefined) => t?.status === "stuck" && !t.hold;
+	if (needsYou(s.current) || s.inChats.some(needsYou)) return "taskQueueStatusStuck";
 	if (q.running) {
 		if (s.current) return "taskQueueStatusWorking";
 		if (s.inChats.length === 1) return "taskQueueStatusLane";
@@ -124,6 +131,38 @@ export function taskQueueStatusKey(q: UiTaskQueue, s: TaskQueueSections): TKey {
 		default:
 			return "taskQueueStatusIdle";
 	}
+}
+
+/** queue-paused: the owner's pause an open task is under: its own, else its whole queue's. */
+export function taskQueueHeldOf(q: Pick<UiTaskQueue, "hold">, task: UiTaskQueueTask): UiTaskQueueHold | undefined {
+	return task.status === "done" ? undefined : (task.hold ?? q.hold);
+}
+
+/** queue-paused: "Paused by you \u00b7 since 12:10 \u00b7 why" ("with the whole queue" when it's the queue's pause). */
+function PausedLine({
+	hold,
+	whole,
+	banner,
+	children,
+}: {
+	hold: UiTaskQueueHold;
+	/** A task paused with its whole queue (not on its own). */
+	whole?: boolean;
+	/** The queue's own banner. */
+	banner?: boolean;
+	children?: ReactNode;
+}) {
+	const t = useT();
+	return (
+		<div className="task-queue-paused" data-paused={banner ? "banner" : whole ? "queue" : "task"}>
+			<span className="task-queue-paused-badge">{t("taskQueuePausedByYou")}</span>
+			<span className="task-queue-paused-text" title={hold.why}>
+				{whole ? `${t("taskQueuePausedWithQueue")} \u00b7 ` : ""}
+				{t("taskQueuePausedSince", { time: lineTime(hold.at), why: hold.why })}
+			</span>
+			{children}
+		</div>
+	);
 }
 
 /** queue-side-by-side: "#31", "#31, #32", "#1, #2, #3": plain numbers, so every language reads them. */
@@ -196,8 +235,9 @@ function BlockedLine({ block, onOpenChat }: { block: UiTaskQueueBlock; onOpenCha
 					<>
 						{t("taskQueueBlockedOn")}{" "}
 						{refs.map((r, i) => {
-							const key = refStateKey(r.status);
-							const needsYou = r.status === "stuck";
+							// queue-paused: a task the owner paused doesn't need him while paused.
+							const key = r.held ? "taskQueueRefPaused" : refStateKey(r.status);
+							const needsYou = r.status === "stuck" && !r.held;
 							return (
 								<span
 									key={`${r.file}#${r.id}`}
@@ -426,16 +466,20 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 		(!!queue.lanes ||
 			queue.lanesAtOnce !== undefined ||
 			queue.tasks.some((x) => x.touches !== undefined && x.status !== "done"));
-	const stuckInChat = s.inChats.find((x) => x.status === "stuck");
+	const stuckInChat = s.inChats.find((x) => x.status === "stuck" && !taskQueueHeldOf(queue, x));
+	const currentNeedsYou = s.current?.status === "stuck" && !taskQueueHeldOf(queue, s.current);
 
 	const row = (task: UiTaskQueueTask, kind: "current" | "lane" | "waiting" | "ready" | "done", index = 0) => {
 		const expanded = open.has(task.id);
 		const wait = kind === "waiting" ? task.wait : undefined;
+		// queue-paused: the owner's pause on it (its own, or its whole queue's).
+		const held = taskQueueHeldOf(queue, task);
 		// queue-main-chat: a task asking its main chat doesn't need the user (yet): plain, no needs-you.
 		const cls = [
 			"task-queue-task",
 			kind,
-			task.status === "stuck" ? "needs-you" : "",
+			task.status === "stuck" && !held ? "needs-you" : "",
+			held ? "paused" : "",
 			task.status === "asking" ? "asking" : "",
 			task.status === "blocked" ? "blocked" : "",
 			wait?.failed ? "wait-failed" : "",
@@ -474,6 +518,19 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 							onClick={() => task.chat && onOpenChat(task.chat.file)}
 						>
 							{t("taskQueueOpenChat")}
+						</button>
+					)}
+					{kind !== "done" && controls && (
+						// queue-paused: the owner's Pause / Resume on this task (Resume lifts only its own pause).
+						<button
+							type="button"
+							className={`task-queue-pause ${task.hold ? "resume" : "pause"}`}
+							data-pause-task={task.id}
+							title={t(task.hold ? "taskQueueResumeHint" : "taskQueuePauseHint")}
+							disabled={busy}
+							onClick={() => run(task.hold ? "resume" : "pause", task.id)}
+						>
+							{t(task.hold ? "taskQueueResume" : "taskQueuePause")}
 						</button>
 					)}
 					{kind === "ready" &&
@@ -528,6 +585,7 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 							</span>
 						))}
 				</div>
+				{held && kind !== "done" && <PausedLine hold={held} whole={!task.hold} />}
 				{task.status === "asking" && (
 					<div className="task-queue-asking" title={task.question}>
 						<span className="task-queue-hint">{t("taskQueueAskingMain")}</span>
@@ -536,9 +594,12 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 				{task.status === "blocked" && task.block && <BlockedLine block={task.block} onOpenChat={onOpenChat} />}
 				{task.status === "stuck" && (
 					<div className="task-queue-question">
-						<span className="task-queue-badge">{t("taskQueueNeedsYou")}</span>
+						{/* queue-paused: a paused task doesn't need you while paused: resume it to answer. */}
+						{!held && <span className="task-queue-badge">{t("taskQueueNeedsYou")}</span>}
 						{task.question && <span className="task-queue-question-text">{task.question}</span>}
-						{onAnswer && queue.available ? (
+						{held ? (
+							<span className="task-queue-hint">{t("taskQueuePausedAnswerLater")}</span>
+						) : onAnswer && queue.available ? (
 							<StuckAnswer task={task} onAnswer={onAnswer} />
 						) : (
 							<span className="task-queue-hint">{t(task.lane ? "taskQueueAnswerInChat" : "taskQueueAnswerHint")}</span>
@@ -579,7 +640,8 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 							<span className="task-queue-wait-text">
 								{t("taskQueueWaitingOn", { what: wait.what, time: lineTime(wait.since) })}
 								{" \u00b7 "}
-								{t("taskQueueWaitGivesUp", { time: lineTime(wait.until) })}
+								{/* queue-paused: its give-up clock stops while paused (it moves later on resume). */}
+								{held ? t("taskQueueWaitClockStopped") : t("taskQueueWaitGivesUp", { time: lineTime(wait.until) })}
 							</span>
 							{wait.check && (
 								<span className="task-queue-wait-check">
@@ -653,8 +715,9 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 		<div className="task-queue-panel" ref={rootRef}>
 			<div className="task-queue-head">
 				<span
-					className={s.current?.status === "stuck" || stuckInChat ? "task-queue-status needs-you" : "task-queue-status"}
+					className={currentNeedsYou || stuckInChat ? "task-queue-status needs-you" : "task-queue-status"}
 					data-running={queue.running ? "true" : "false"}
+					data-paused={queue.hold ? "true" : undefined}
 				>
 					{t(statusKey, {
 						id: s.current?.id ?? stuckInChat?.id ?? s.inChats[0]?.id ?? s.waiting[0]?.id ?? "",
@@ -683,7 +746,24 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 							{t("taskQueueStart")}
 						</button>
 					))}
+				{controls && (
+					// queue-paused: the owner's pause on the whole queue (separate from Stop, and stronger).
+					<button
+						type="button"
+						className={`task-queue-pause-queue ${queue.hold ? "resume" : "pause"}`}
+						title={t(queue.hold ? "taskQueueResumeQueueHint" : "taskQueuePauseQueueHint")}
+						disabled={busy}
+						onClick={() => run(queue.hold ? "resume" : "pause")}
+					>
+						{t(queue.hold ? "taskQueueResumeQueue" : "taskQueuePauseQueue")}
+					</button>
+				)}
 			</div>
+			{queue.hold && (
+				<div className="task-queue-paused-banner" role="status">
+					<PausedLine hold={queue.hold} banner />
+				</div>
+			)}
 			{!queue.from && (
 				<div className="task-queue-autonomy" role="group" aria-label={t("taskQueueThisQueue")}>
 					{settingControl("autoApprove", "taskQueueAutoApprove")}

@@ -19,13 +19,17 @@
  * task), plus every open queue showing one; kept in the client state across restarts. A queue with
  * nothing blocked and no outside after left is dropped.
  *
+ * queue-paused: a task the owner paused, or any task of a queue he paused, is never nudged (no poke, no
+ * ask); its queue stays watched, so it carries on once the pause is lifted. A paused task another task
+ * waits on shows as paused (`held`) and doesn't count as needs-you.
+ *
  * resolveRefs: what pi-queue asks when a task names tasks ("#12", "temper #38", "<queue chat title> #4"):
  * a role id means that role's home chat's queue, anything else a queue chat's title. Unknown refs, the
  * task itself and loops (through blocks and afters, in any queue) are refused.
  */
 
 import type { UiTaskQueue, UiTaskQueueRef } from "./protocol.js";
-import { type TaskQueueEntryLike, type TaskQueueTaskAny, taskQueueAll } from "./task-queue.js";
+import { type TaskQueueEntryLike, type TaskQueueTaskAny, taskQueueAll, taskQueueHeld } from "./task-queue.js";
 
 /** How often the check runs (tests: PI_WEB_QUEUE_BLOCKS_MS). */
 export function queueBlocksEveryMs(env: NodeJS.ProcessEnv = process.env): number {
@@ -69,6 +73,9 @@ export interface RefLook {
 	title?: string;
 	summary?: string;
 	chat?: { file: string; title?: string };
+	/** queue-paused: the owner paused it (or its whole queue): a task blocked on it waits quietly, and it
+	 *  doesn't count as needs-you. */
+	held?: boolean;
 }
 /** undefined: can't tell right now (unreadable). */
 export type LookRef = (r: { file: string; id: number }) => RefLook | undefined;
@@ -88,7 +95,11 @@ export function blockVerdict(
 			!!l && (l.status === "done" || l.status === "removed" || l.status === "gone");
 		const gone = (l: RefLook | undefined) => !!l && (l.status === "removed" || l.status === "gone");
 		if (looks.some(gone) || looks.every(over)) return { kind: "due", at: b.since, why: "over" };
-		return { kind: "wait", needsYou: looks.filter((l) => l?.status === "stuck" || l?.status === "asking").length };
+		// queue-paused: a paused task waiting for an answer doesn't count as needs-you.
+		return {
+			kind: "wait",
+			needsYou: looks.filter((l) => !l?.held && (l?.status === "stuck" || l?.status === "asking")).length,
+		};
 	}
 	if (b.tries >= pokes.length) return { kind: "due", at: b.since, why: "ask" };
 	return { kind: "due", at: Math.max(b.since, b.start + pokes[b.tries]), why: "need" };
@@ -118,7 +129,7 @@ export interface QueueBlocksHost {
 interface Cached {
 	size: number;
 	mtimeMs: number;
-	all: { tasks: TaskQueueTaskAny[]; from?: { file: string; title?: string } } | null;
+	all: ReturnType<typeof taskQueueAll> | null;
 }
 
 export class QueueBlocks {
@@ -191,6 +202,7 @@ export class QueueBlocks {
 			title: t.plan.title,
 			...(t.summary ? { summary: t.summary } : {}),
 			...(t.chat ? { chat: t.chat } : {}),
+			...(taskQueueHeld(t, c.all) ? { held: true } : {}),
 		};
 	}
 
@@ -230,11 +242,17 @@ export class QueueBlocks {
 				for (const r of [...(t.block?.on ?? []), ...(t.outside ?? [])]) await this.read(r.file);
 			}
 			const look: LookRef = (r) => this.lookCached(r);
+			const refSig = (r: { file: string; id: number }) => {
+				const l = look(r);
+				return `${r.file}#${r.id}:${l?.status ?? "?"}${l?.held ? ":held" : ""}`;
+			};
 			let due: string | undefined;
 			for (const t of blocked) {
 				const b = t.block!;
-				for (const r of b.on ?? []) sig.push(`${r.file}#${r.id}:${look(r)?.status ?? "?"}`);
-				if (b.poke) continue;
+				for (const r of b.on ?? []) sig.push(refSig(r));
+				// queue-paused: a paused task (or a task in a paused queue) is never poked or asked about; the
+				// queue stays watched, so it carries on once the pause is lifted.
+				if (b.poke || taskQueueHeld(t, q)) continue;
 				const v = blockVerdict(b, look, pokes);
 				if (v.kind === "due" && v.at <= now) due ??= `#${t.id}@${b.since}:${v.why}`;
 			}
@@ -244,8 +262,9 @@ export class QueueBlocks {
 					const l = look(o);
 					return !!l && (l.status === "done" || l.status === "removed" || l.status === "gone");
 				});
-				for (const o of t.outside ?? []) sig.push(`${o.file}#${o.id}:${look(o)?.status ?? "?"}`);
-				if (over.length) due ??= `#${t.id}:after:${over.map((o) => `${o.file}#${o.id}`).join(",")}`;
+				for (const o of t.outside ?? []) sig.push(refSig(o));
+				if (over.length && !taskQueueHeld(t, q))
+					due ??= `#${t.id}:after:${over.map((o) => `${o.file}#${o.id}`).join(",")}`;
 			}
 			if (!due) continue;
 			const key = `${file}\u0001${due}`;
@@ -283,12 +302,14 @@ export class QueueBlocks {
 			r.status = l.status;
 			if (l.title) r.title = l.title;
 			if (l.chat) r.chat = l.chat;
+			if (l.held) r.held = true;
 		};
 		for (const t of queue.tasks) {
 			if (t.status === "blocked" && t.block) {
 				shows = true;
 				for (const r of t.block.on ?? []) fill(r);
-				if (!t.block.on?.length && !t.block.poke) {
+				// queue-paused: a paused task gets no pokes, so there's no next one to show.
+				if (!t.block.on?.length && !t.block.poke && !taskQueueHeld(t, queue)) {
 					const v = blockVerdict(t.block, () => undefined, pokes);
 					if (v.kind === "due") {
 						t.block.nextPokeAt = v.at;

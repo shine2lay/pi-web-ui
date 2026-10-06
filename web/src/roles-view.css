@@ -816,6 +816,10 @@ a.rv-task:hover {
 .rv-task.hold {
 	border-left-style: dashed;
 }
+/* queue-paused: a task the owner paused: dotted, quiet (not needs-you's amber). */
+.rv-task.paused {
+	border-left-style: dotted;
+}
 .rv-num {
 	font-size: var(--rv-fs3);
 	line-height: var(--rv-lh2);
@@ -845,6 +849,12 @@ a.rv-task:hover {
 }
 .rv-ts .rv-st {
 	flex: none;
+}
+/* queue-paused: "Paused by you since 12:10: why" may be long: it wraps instead of pushing the line out. */
+.rv-ts .rv-st.paused {
+	flex: 0 1 auto;
+	white-space: normal;
+	overflow-wrap: anywhere;
 }
 .rv-qlist {
 	display: flex;

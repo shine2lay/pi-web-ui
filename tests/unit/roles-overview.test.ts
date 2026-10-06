@@ -305,6 +305,60 @@ describe("what waits on the owner", () => {
 		]);
 	});
 
+	// queue-paused: the owner's pause on a task or a whole queue.
+	it("a task the owner paused doesn't wait on him: no ask, no needs-you lines, and its queue says it's paused", async () => {
+		const t5 = transcript("task5", [tldr("Task 5 started", T0 + MIN), needs("Which database?", T0 + 4 * MIN)]);
+		const t6 = transcript("task6", [tldr("Task 6 started", T0 + MIN)]);
+		const ops = [
+			queue({ op: "add", id: 5, plan: plan("Five") }, T0 + MIN),
+			queue({ op: "add", id: 6, plan: plan("Six") }, T0 + MIN),
+			queue({ op: "add", id: 7, plan: plan("Seven") }, T0 + MIN),
+			queue({ op: "run" }, T0 + MIN),
+			queue({ op: "start", id: 5, lane: true }, T0 + MIN),
+			queue({ op: "chat", id: 5, file: t5, title: "Task 5" }, T0 + MIN),
+			queue({ op: "start", id: 6, lane: true }, T0 + MIN),
+			queue({ op: "chat", id: 6, file: t6, title: "Task 6" }, T0 + MIN),
+			queue({ op: "stuck", id: 5, question: "Which database: Postgres or SQLite?" }, T0 + 5 * MIN),
+			// the queue chat's copy of the task chat's line
+			needs("Which database?", T0 + 5 * MIN, { chat: { file: t5, title: "Task 5" } }),
+		];
+		const held = queue({ op: "hold", id: 5, why: "owner on Telegram: pause it", by: "tool" }, T0 + 30 * MIN);
+		const home = transcript("home", [...ops, held]);
+		const f = fake([role("arch", home)]);
+		// the paused task's chat has a question box open: not the owner's to answer now either
+		f.asks.push(ask({ id: "q5", sessionFile: t5, createdAt: T0 + 4 * MIN + 2000 }));
+		const o = await read(f);
+		const r = byId(o, "arch");
+		expect(r.asks).toEqual([]);
+		expect(o.asks).toEqual([]);
+		// Task 6 still works: busy, not needs-you.
+		expect(r.status).toBe("busy");
+		expect(r.tldr.filter((l) => l.needsYou)).toEqual([]);
+		const five = r.queue?.active.find((t) => t.id === 5);
+		expect(five).toMatchObject({ status: "stuck", paused: { at: T0 + 30 * MIN, why: "owner on Telegram: pause it" } });
+		expect(r.queue?.active.find((t) => t.id === 6)?.paused).toBeUndefined();
+		expect(r.queue?.hold).toBeUndefined();
+
+		// The whole queue paused: every open task is paused, ready ones too.
+		const home2 = transcript("home2", [
+			...ops,
+			queue({ op: "hold", why: "pressed Pause in the Queue panel", by: "panel" }, T0 + 40 * MIN),
+		]);
+		const f2 = fake([role("arch", home2)]);
+		const r2 = byId(await read(f2), "arch");
+		expect(r2.queue?.hold).toEqual({ at: T0 + 40 * MIN, why: "pressed Pause in the Queue panel" });
+		expect(r2.queue?.queued.map((t) => [t.id, t.paused?.at])).toEqual([[7, T0 + 40 * MIN]]);
+		expect(r2.asks).toEqual([]);
+		expect(r2.status).toBe("paused");
+
+		// Resumed: the question waits on the owner again.
+		const home3 = transcript("home3", [...ops, held, queue({ op: "release", id: 5 }, T0 + 50 * MIN)]);
+		const r3 = byId(await read(fake([role("arch", home3)])), "arch");
+		expect(r3.asks.map((a) => [a.kind, a.text])).toEqual([["task", "Which database: Postgres or SQLite?"]]);
+		expect(r3.status).toBe("needs-you");
+		expect(r3.queue?.active.find((t) => t.id === 5)?.paused).toBeUndefined();
+	});
+
 	it("puts every role's asks on one oldest-first list, unknown starts last", async () => {
 		const a = transcript("a", [needs("A asks", T0 + 9 * MIN)]);
 		const b = transcript("b", [needs("B asks", T0 + 2 * MIN), needs("B asks again", T0 + 30 * MIN)]);

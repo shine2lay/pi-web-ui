@@ -988,7 +988,9 @@ export const Message = memo(function Message({
 									? t("goalBarTitle")
 									: message.customType === "file"
 										? t("attachment")
-										: `${t("plugin")} · ${message.customType ?? t("unknown")}`
+										: message.customType === "queue-paused"
+											? t("queuePausedNoteLabel")
+											: `${t("plugin")} · ${message.customType ?? t("unknown")}`
 							: roleLabel(message.role, t)}
 				</span>
 				{message.model && <span className="msg-model">{message.model}</span>}

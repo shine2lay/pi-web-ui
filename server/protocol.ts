@@ -338,6 +338,16 @@ export interface UiTaskQueueTask {
 	after?: number[];
 	/** queue-side-by-side: of those, the ones still open (not done or removed), in queue order; only on open tasks. */
 	waitingFor?: number[];
+	/** queue-paused: the owner paused this task itself (only open tasks). A pause of the whole queue is
+	 *  UiTaskQueue.hold; a task is paused when either is set. It keeps its status, so Resume carries on there. */
+	hold?: UiTaskQueueHold;
+}
+
+/** queue-paused: the owner's pause on a task or a whole queue (pi-queue's hold): since when, and why
+ *  (the owner's words and where they came from; the Queue panel stores "pressed Pause in the Queue panel"). */
+export interface UiTaskQueueHold {
+	at: number;
+	why: string;
 }
 
 /** queue-blocked: a task in a queue, maybe another one (that queue's chat file and the task's number). */
@@ -353,6 +363,8 @@ export interface UiTaskQueueRef {
 	chat?: UiTaskQueueChat;
 	/** outside after: its queue recorded it over (done, or removed when `removed`). */
 	over?: { at: number; removed?: boolean };
+	/** queue-paused: that task is paused by the owner (itself or its whole queue). */
+	held?: boolean;
 }
 
 /** queue-blocked: what a blocked task waits on. */
@@ -418,6 +430,8 @@ export interface UiTaskQueue {
 	lanesAtOnce?: number;
 	/** queue-lanes: set in a task's own chat: the queue chat it came from. */
 	from?: UiTaskQueueChat;
+	/** queue-paused: the owner paused the whole queue: nothing starts and every open task stays quiet. */
+	hold?: UiTaskQueueHold;
 }
 
 /** 扩展弹窗（ctx.ui.select / confirm / input）。页面用 dialog_response 按 id 回答，null = 取消。 */
@@ -975,10 +989,13 @@ export type ClientMessage =
 	 *  （扩展命令即时执行，agent 在跑也行，不进消息列表）。conversationId 对不上当前对话就不做。 */
 	| {
 			type: "task_queue_command";
-			/** lanes: how many lanes may run at once, the number in `id` (queue-lanes). */
+			/** lanes: how many lanes may run at once, the number in `id` (queue-lanes).
+			 *  pause / resume: the owner's pause on task `id`, or on the whole queue without an id (queue-paused). */
 			action:
 				| "start"
 				| "stop"
+				| "pause"
+				| "resume"
 				| "up"
 				| "down"
 				| "remove"
@@ -1743,6 +1760,9 @@ export interface UiRoleTask {
 	busy?: boolean;
 	/** The newest TL;DR line of its own chat. */
 	latest?: UiRoleTldrLine;
+	/** queue-paused: paused by the owner (the task itself or its whole queue): since when and why.
+	 *  A paused task never counts as needing the owner. */
+	paused?: UiTaskQueueHold;
 }
 
 /** roles-overview: a role's home queue in short. */
@@ -1750,6 +1770,8 @@ export interface UiRoleQueue {
 	running: boolean;
 	/** Why it isn't running (the queue's pausedReason). */
 	pausedReason?: string;
+	/** queue-paused: the owner paused the whole queue: since when and why. */
+	hold?: UiTaskQueueHold;
 	/** Tasks being worked on, asking, needing the owner, on hold or blocked (queue order). */
 	active: UiRoleTask[];
 	/** Tasks not started yet (queue order, at most ROLES_QUEUED_MAX). */

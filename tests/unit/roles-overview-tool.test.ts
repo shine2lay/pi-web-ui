@@ -122,6 +122,44 @@ describe("formatRolesOverview", () => {
 		expect(text).not.toContain("By status");
 	});
 
+	// queue-paused: the owner's pause on a task or a whole queue.
+	it("says 'Paused by you' with since when and why, for a task and for the whole queue", () => {
+		const paused = role("frontend", {
+			status: "paused",
+			queue: {
+				running: true,
+				hold: { at: NOW - 60 * MIN, why: "pressed Pause in the Queue panel" },
+				counts: { active: 1, queued: 1, done: 0 },
+				active: [
+					{
+						id: 1,
+						status: "blocked",
+						title: "Grade the boards",
+						paused: { at: NOW - 120 * MIN, why: "owner on Telegram: save Claude limits" },
+					},
+				],
+				queued: [
+					{
+						id: 2,
+						status: "ready",
+						title: "Next one",
+						paused: { at: NOW - 60 * MIN, why: "pressed Pause in the Queue panel" },
+					},
+				],
+			},
+		});
+		const text = formatRolesOverview(view([paused]), { role: "frontend", now: NOW });
+		expect(text).toContain(
+			"Queue: running, the whole queue paused by you (since 2026-10-06 07:00 (1 h ago): pressed Pause in the Queue panel); 1 active, 1 waiting to start, 0 done",
+		);
+		expect(text).toContain(
+			"- #1 blocked: Grade the boards; Paused by you (since 2026-10-06 06:00 (2 h ago): owner on Telegram: save Claude limits)",
+		);
+		expect(text).toContain(
+			"- #2 ready: Next one; Paused by you (since 2026-10-06 07:00 (1 h ago): pressed Pause in the Queue panel)",
+		);
+	});
+
 	it("a role that isn't there: a plain error naming the roles", () => {
 		expect(() => formatRolesOverview(view([busy, role("qa")]), { role: "ceo", now: NOW })).toThrow(
 			'There is no role "ceo". Roles: temper, qa.',

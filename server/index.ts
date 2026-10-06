@@ -1727,6 +1727,8 @@ const scheduler = new SchedulerStore(DATA_DIR, {
 					busy?: boolean;
 					error?: string;
 				}>;
+				chatFileOf?: (ref: { conversationId?: string; sessionFile?: string; cwd?: string }) => string;
+				noteToPausedTaskChat?: (file: string, text: string) => Promise<{ ok: boolean; error?: string } | undefined>;
 			};
 			if (typeof svc.chatFromScheduler !== "function" && typeof svc.wakeConversation !== "function") {
 				result = { ok: false, error: "The current engine does not support scheduled tasks (standard pi engine only)" };
@@ -1742,7 +1744,19 @@ const scheduler = new SchedulerStore(DATA_DIR, {
 				const target = String(task.conversationId ?? "").trim();
 				const taskFile = String((task as { sessionFile?: unknown }).sessionFile ?? "").trim();
 				const text = `[Scheduled task ${task.name}] ${task.prompt}`;
-				if (!target && !taskFile) {
+				// queue-paused: its chat works on a queued task the owner paused: the wake-up goes in without a
+				// turn (read once the pause is lifted), and never to another chat.
+				const quietFile =
+					(target || taskFile) && typeof svc.chatFileOf === "function"
+						? svc.chatFileOf({ conversationId: target, sessionFile: taskFile, cwd: task.cwd })
+						: "";
+				const quiet =
+					quietFile && typeof svc.noteToPausedTaskChat === "function"
+						? await svc.noteToPausedTaskChat(quietFile, text)
+						: undefined;
+				if (quiet) {
+					result = quiet.ok ? { ok: true } : { ok: false, error: quiet.error ?? "its task is paused by the owner" };
+				} else if (!target && !taskFile) {
 					// 面板建的任务：创建时就没绑对话，保持无头语义（不抢占用户视口）。
 					result = await runHeadless();
 				} else if (typeof svc.wakeConversation === "function") {

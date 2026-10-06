@@ -471,6 +471,99 @@ describe("delivery", () => {
 		expect(s.byId(a3)).toMatchObject({ state: "delivered", target: A });
 	});
 
+	// queue-paused: nothing automatic starts a turn in the chat of a task the owner paused.
+	it("a reply to a paused task's chat goes in without a turn; once the pause is lifted, replies start turns again", async () => {
+		const Q = chat("alpha-task");
+		const QC = chat("alpha-queue");
+		queueEntry(Q, { op: "assigned", id: 7, plan: { title: "t" }, from: { file: QC, title: "q" } });
+		queueEntry(QC, { op: "add", id: 7, plan: { title: "t" } });
+		queueEntry(QC, { op: "run" });
+		queueEntry(QC, { op: "start", id: 7, lane: true });
+		queueEntry(QC, { op: "chat", id: 7, file: Q, title: "Queue #7" });
+		const f = fake([role("alpha", "Alpha", A), role("beta", "Beta", B)]);
+		for (const file of [A, B, Q]) f.state.set(file, "idle");
+		const s = new RoleMessages(store, f.host, clock);
+		const ask = (text: string) => {
+			const r = s.send(sender({ role: "alpha", file: Q, chat: "Queue #7" }), { to: "beta", kind: "question", text });
+			if (!r.ok) throw new Error(r.error);
+			return r.record.id;
+		};
+		const answer = (id: string) => {
+			const r = s.send(sender({ role: "beta", file: B }), {
+				to: "alpha",
+				kind: "reply",
+				replyTo: id,
+				text: `re ${id}`,
+			});
+			if (!r.ok) throw new Error(r.error);
+			return r.record.id;
+		};
+		const q1 = ask("one");
+		const q2 = ask("two");
+		const q3 = ask("three");
+		await s.tick();
+		expect(f.sent.map((m) => [m.file, m.via])).toEqual([
+			[B, "deliver"],
+			[B, "deliver"],
+			[B, "deliver"],
+		]);
+		// The owner pauses task #7 (in its queue's chat): the reply lands there without a turn.
+		queueEntry(QC, { op: "hold", id: 7, why: "owner: pause it", by: "panel" });
+		const a1 = answer(q1);
+		await s.tick();
+		expect(s.byId(a1)).toMatchObject({ state: "delivered", target: Q });
+		expect(f.sent.at(-1)).toMatchObject({ file: Q, via: "note" });
+
+		// The whole queue paused (the task's own pause lifted): still without a turn.
+		queueEntry(QC, { op: "hold", why: "owner: the whole queue", by: "tool" });
+		queueEntry(QC, { op: "release", id: 7 });
+		const a2 = answer(q2);
+		await s.tick();
+		expect(s.byId(a2)).toMatchObject({ state: "delivered", target: Q });
+		expect(f.sent.at(-1)).toMatchObject({ file: Q, via: "note" });
+
+		// Resumed: a reply starts a turn again.
+		queueEntry(QC, { op: "release" });
+		const a3 = answer(q3);
+		await s.tick();
+		expect(s.byId(a3)).toMatchObject({ state: "delivered", target: Q });
+		expect(f.sent.at(-1)).toMatchObject({ file: Q, via: "deliver" });
+	});
+
+	it("taskChatPaused: only a paused task's own chat, as its queue's chat records it", async () => {
+		const { taskChatPaused } = await import("../../server/role-messages.js");
+		const Q = chat("t-task");
+		const QC = chat("t-queue");
+		queueEntry(Q, { op: "assigned", id: 4, plan: { title: "t" }, from: { file: QC, title: "q" } });
+		queueEntry(QC, { op: "add", id: 4, plan: { title: "t" } });
+		queueEntry(QC, { op: "add", id: 5, plan: { title: "u" } });
+		expect(await taskChatPaused(Q)).toBe(false);
+		queueEntry(QC, { op: "hold", id: 5, why: "another task", by: "panel" });
+		expect(await taskChatPaused(Q)).toBe(false);
+		queueEntry(QC, { op: "hold", id: 4, why: "this one", by: "panel" });
+		expect(await taskChatPaused(Q)).toBe(true);
+		// The queue's chat itself and a plain chat aren't paused task chats.
+		expect(await taskChatPaused(QC)).toBe(false);
+		expect(await taskChatPaused(A)).toBe(false);
+		expect(await taskChatPaused(join(dir, "missing.jsonl"))).toBe(false);
+		// Once its task is done the pause is over.
+		queueEntry(QC, { op: "done", id: 4 });
+		expect(await taskChatPaused(Q)).toBe(false);
+		// The queue's chat can't be read: the task chat's own copy of the pause counts.
+		const Q2 = chat("t2-task");
+		queueEntry(Q2, {
+			op: "assigned",
+			id: 8,
+			plan: { title: "t" },
+			from: { file: join(dir, "gone.jsonl"), title: "q" },
+		});
+		expect(await taskChatPaused(Q2)).toBe(false);
+		queueEntry(Q2, { op: "hold", id: 8, why: "relayed", by: "tool" });
+		expect(await taskChatPaused(Q2)).toBe(true);
+		queueEntry(Q2, { op: "release", id: 8 });
+		expect(await taskChatPaused(Q2)).toBe(false);
+	});
+
 	it("an FYI is added without a turn (note); a question, a request and a reply start one (deliver)", async () => {
 		const f = fake([role("alpha", "Alpha", A), role("beta", "Beta", B)]);
 		f.state.set(A, "idle");

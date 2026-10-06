@@ -32,6 +32,7 @@ import {
 	nowLineOf,
 	oldestSince,
 	queueCounts,
+	queuePausedText,
 	queueStopped,
 	readStripOpen,
 	reportDay,
@@ -189,6 +190,27 @@ describe("what a row shows", () => {
 		expect(taskLook(task(1, "blocked"))).toBe("hold");
 		expect(queueStopped({ ...queue, running: false })).toBe(true);
 		expect(queueStopped({ ...queue, running: false, counts: { active: 0, queued: 0, done: 3 } })).toBe(false);
+	});
+
+	// queue-paused: the owner's pause on a task or a whole queue.
+	it("a task the owner paused: 'Paused by you', never the lead over one that works or needs him", () => {
+		const paused = { at: NOW - 30 * MIN, why: "owner on Telegram: save Claude limits" };
+		const stuck = task(1, "stuck", { paused });
+		expect(taskWord(t, stuck, true)).toBe("Paused by you");
+		expect(taskWord(t, stuck)).toMatch(/^Paused by you since .+: owner on Telegram: save Claude limits$/);
+		expect(taskLook(stuck)).toBe("paused");
+		const queue = {
+			running: true,
+			active: [stuck, task(2, "working")],
+			queued: [],
+			counts: { active: 2, queued: 0, done: 0 },
+		};
+		expect(leadTask(queue)?.id).toBe(2);
+		expect(leadTask({ ...queue, active: [stuck, task(3, "blocked", { waitsOn: "CI" })] })?.id).toBe(1);
+		// The whole queue paused: its line says so, with since when and why.
+		const held = { ...queue, hold: { at: NOW - 60 * MIN, why: "pressed Pause in the Queue panel" } };
+		expect(queuePausedText(t, held, NOW)).toMatch(/^Queue paused by you since .+: pressed Pause in the Queue panel$/);
+		expect(queuePausedText(t, queue, NOW)).toBe("");
 	});
 
 	it("writes times, ages and the summary the way the design does", () => {
@@ -480,6 +502,39 @@ describe("the page", () => {
 		resetRolesState();
 		setAppSend(null);
 		vi.useRealTimers();
+	});
+
+	// queue-paused: a paused task or queue reads "Paused by you" and doesn't wait on the owner.
+	it("a role whose task or whole queue the owner paused: 'Paused by you' on its tile, not needs-you", () => {
+		const paused = { at: NOW - 30 * MIN, why: "owner on Telegram: save Claude limits" };
+		const o = fourteen();
+		const frontend = o.roles.find((r) => r.id === "frontend")!;
+		frontend.status = "paused";
+		frontend.queue = {
+			running: true,
+			active: [task(1, "stuck", { title: "Grade the boards", paused })],
+			queued: [],
+			counts: { active: 1, queued: 0, done: 0 },
+		};
+		const backend = o.roles.find((r) => r.id === "backend")!;
+		backend.status = "paused";
+		backend.queue = {
+			running: true,
+			hold: { at: NOW - 60 * MIN, why: "pressed Pause in the Queue panel" },
+			// A task still marked working: the queue's pause is what the tile says.
+			active: [task(3, "working", { paused: { at: NOW - 60 * MIN, why: "pressed Pause in the Queue panel" } })],
+			queued: [task(2, "ready", { paused: { at: NOW - 60 * MIN, why: "pressed Pause in the Queue panel" } })],
+			counts: { active: 1, queued: 1, done: 0 },
+		};
+		receiveRoles({ type: "roles", overview: o, asks: 2, checkedAt: NOW });
+		const html = render(false);
+		expect(html).toContain('class="rv-tile paused" data-role-id="frontend"');
+		expect(html).toContain('class="rv-tile paused" data-role-id="backend"');
+		const text = html.replace(/<!-- -->/g, "").replace(/<[^>]+>/g, "");
+		expect(text).toContain("#1 Paused by you");
+		expect(text).toContain("Queue paused by you");
+		// Only marketing's two asks wait on the owner.
+		expect(html).toContain("Waiting on you (2)");
 	});
 
 	it("shows every role as a tile in two fixed groups, the asks oldest first, and links straight to the chat", () => {

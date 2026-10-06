@@ -3004,12 +3004,14 @@ button.rolemsg-fold:focus-visible {
 }
 .task-queue-head {
 	display: flex;
+	/* queue-paused: with Pause queue next to Stop, a narrow panel puts the buttons on a line of their own. */
+	flex-wrap: wrap;
 	align-items: center;
 	gap: 8px;
 	margin-bottom: 12px;
 }
 .task-queue-status {
-	flex: 1 1 auto;
+	flex: 1 1 12em;
 	min-width: 0;
 	color: var(--text-dim);
 	font-size: 12.5px;
@@ -3043,6 +3045,68 @@ button.rolemsg-fold:focus-visible {
 .task-queue-toggle:disabled {
 	opacity: 0.5;
 	cursor: default;
+}
+/* queue-paused: the owner's Pause / Resume (a task's, and the whole queue's in the header). Quiet buttons:
+   a pause is never alarming, and Resume stands out a little more. */
+.task-queue-pause,
+.task-queue-pause-queue {
+	flex: 0 0 auto;
+	padding: 1px 8px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: none;
+	color: var(--text-dim);
+	font-size: 11px;
+	cursor: pointer;
+}
+.task-queue-pause-queue {
+	padding: 3px 10px;
+	font-size: 12px;
+}
+.task-queue-pause.resume,
+.task-queue-pause-queue.resume {
+	border-color: var(--accent);
+	color: var(--accent);
+	font-weight: 600;
+}
+.task-queue-pause:hover:not(:disabled),
+.task-queue-pause-queue:hover:not(:disabled) {
+	color: var(--text);
+}
+.task-queue-pause:disabled,
+.task-queue-pause-queue:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+/* queue-paused: "Paused by you \00b7 since 12:10 \00b7 why": one quiet line, dotted edge on the task. */
+.task-queue-task.paused {
+	border-left-style: dotted;
+}
+.task-queue-paused {
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+	margin-top: 2px;
+	font-size: 11px;
+	color: var(--text-dim);
+	overflow-wrap: anywhere;
+}
+.task-queue-paused-badge {
+	flex-shrink: 0;
+	padding: 0 5px;
+	border: 1px dotted var(--text-dim);
+	border-radius: 3px;
+	font-weight: 600;
+	line-height: 16px;
+}
+.task-queue-paused-banner {
+	margin: 4px 0 8px;
+	padding: 4px 8px;
+	border: 1px dotted var(--border);
+	border-radius: 6px;
+}
+.task-queue-paused-banner .task-queue-paused {
+	margin-top: 0;
 }
 .task-queue-section + .task-queue-section {
 	margin-top: 14px;
@@ -3092,11 +3156,14 @@ button.rolemsg-fold:focus-visible {
 }
 .task-queue-task-head {
 	display: flex;
+	/* queue-paused: a task's lane, Open its chat and Pause / Resume move under its title when the panel is
+	   too narrow for them, so the title keeps room to be read. */
+	flex-wrap: wrap;
 	align-items: flex-start;
 	gap: 6px;
 }
 .task-queue-title {
-	flex: 1 1 auto;
+	flex: 1 1 10em;
 	min-width: 0;
 	padding: 0;
 	border: none;

@@ -272,6 +272,97 @@ describe("QueueBlocks: the background check", () => {
 	});
 });
 
+/** queue-paused: a task the owner paused, or any task of a queue he paused, is never nudged. */
+describe("QueueBlocks: paused by you", () => {
+	const hold = (id?: number) => ({
+		op: "hold",
+		...(id !== undefined ? { id } : {}),
+		why: "owner: pause it",
+		by: "panel",
+	});
+	const release = (id?: number) => ({ op: "release", ...(id !== undefined ? { id } : {}) });
+
+	it("a paused task blocked on a need gets no pokes and no ask, however long; after the resume they count from then", async () => {
+		const { w, blocks } = world();
+		const t0 = w.now;
+		w.ops(A, { op: "block", id: 1, need: "a login", start: t0, tries: 0 });
+		blocks.watchQueue(A);
+		w.now = t0 + 5 * MIN;
+		w.ops(A, hold(1));
+		for (let i = 0; i < 180; i++) {
+			w.now += MIN;
+			await blocks.tick();
+		}
+		expect(w.commands).toEqual([]);
+		const q = panelOf(w.files.get(A)!);
+		blocks.enrich(A, q);
+		expect(q.tasks[0].hold).toMatchObject({ why: "owner: pause it" });
+		expect(q.tasks[0].block?.nextPokeAt).toBeUndefined();
+		// Still watched, so it carries on once the pause is lifted: the first poke 10 min after the resume.
+		expect(blocks.watched()).toEqual([A]);
+		const back = w.now;
+		w.ops(A, release(1));
+		const q2 = panelOf(w.files.get(A)!);
+		blocks.enrich(A, q2);
+		expect(q2.tasks[0].block?.nextPokeAt).toBe(back + 10 * MIN);
+		w.now = back + 9 * MIN;
+		await blocks.tick();
+		expect(w.commands).toEqual([]);
+		w.now = back + 10 * MIN;
+		await blocks.tick();
+		expect(w.commands).toEqual([[A, "/queue blocks"]]);
+	});
+
+	it("a paused queue: a blocker that's done nudges nobody until the queue is resumed", async () => {
+		const { w, blocks } = world();
+		w.ops(A, { op: "block", id: 1, on: [onB(1)], start: w.now, tries: 0 }, hold());
+		blocks.watchQueue(A);
+		w.ops(B, { op: "done", id: 1, summary: "Landed" });
+		for (let i = 0; i < 30; i++) {
+			w.now += MIN;
+			await blocks.tick();
+		}
+		expect(w.commands).toEqual([]);
+		w.ops(A, release());
+		await blocks.tick();
+		expect(w.commands).toEqual([[A, "/queue blocks"]]);
+	});
+
+	it("a paused task with an outside after isn't nudged when that task is over", async () => {
+		const { w, blocks } = world();
+		w.ops(A, { op: "add", id: 3, plan: plan("After temper"), outside: [onB(2)] }, hold(3));
+		blocks.watchQueue(A);
+		w.ops(B, { op: "start", id: 2 }, { op: "done", id: 2, summary: "Docs written" });
+		await blocks.tick();
+		expect(w.commands).toEqual([]);
+		w.ops(A, release(3));
+		await blocks.tick();
+		expect(w.commands).toEqual([[A, "/queue blocks"]]);
+	});
+
+	it("a paused blocker shows as paused, doesn't count as needs-you, and the panels are told when it's paused", async () => {
+		const { w, blocks } = world();
+		w.ops(A, { op: "block", id: 1, on: [onB(1)], start: w.now, tries: 0 });
+		blocks.watchQueue(A);
+		w.ops(B, { op: "stuck", id: 1, question: "Which port?", choices: ["a", "b"] });
+		await blocks.tick();
+		const first = w.changes;
+		w.ops(B, hold(1));
+		await blocks.tick();
+		expect(w.changes).toBe(first + 1);
+		const q = panelOf(w.files.get(A)!);
+		blocks.enrich(A, q);
+		expect(q.tasks[0].block?.on?.[0]).toMatchObject({ id: 1, status: "stuck", held: true });
+		expect(w.commands).toEqual([]);
+		const b = { since: 100, start: 100, tries: 0, on: [onB(1), onB(2)] };
+		expect(blockVerdict(b, (r) => ({ status: "stuck", ...(r.id === 1 ? { held: true } : {}) }))).toEqual({
+			kind: "wait",
+			needsYou: 1,
+		});
+		expect(blockVerdict(b, () => ({ status: "asking", held: true }))).toEqual({ kind: "wait", needsYou: 0 });
+	});
+});
+
 describe("QueueBlocks.resolveRefs", () => {
 	it("resolves #n in the own queue, a role id to its home chat, a chat title; with status and title", async () => {
 		const { w, blocks } = world();

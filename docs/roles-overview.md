@@ -19,7 +19,8 @@ table. Patch: `roles-overview` in [PATCHES.md](../PATCHES.md).
   for "needs you", a blue edge for busy, a grey edge for paused, a dashed one for nothing yet; the
   word and its icon always say it too). A tile shows the name, the status, the newest line (two
   lines on a desktop, three on a phone) and one footer line: a few words on the queue ("#20 Working ·
-  2 queued"; a hold is just "On hold" or "Blocked", since what it waits on can be a paragraph) or,
+  2 queued"; a hold is just "On hold" or "Blocked", since what it waits on can be a paragraph; a
+  task the owner paused says "Paused by you", a whole paused queue "Queue paused by you") or,
   with nothing queued, when the line is from. A role with nothing going on for a day steps back. All
   14 tiles fit on a 1440x900 screen with real lines (80-130 characters) and long hold reasons; what a
   tile cuts is in the panel.
@@ -43,7 +44,7 @@ Status, strongest first:
 | ----------- | -------------------------------------------------------------------------------------- |
 | Needs you   | the role has an open owner ask                                                         |
 | Busy        | its home chat or a task chat is working, or a queued task is being worked              |
-| Paused      | its home chat's queue was stopped (by the owner or after a stop) with tasks still in it |
+| Paused      | its home chat's queue was stopped (by the owner or after a stop) with tasks still in it, or the owner paused its queue or one of its open tasks (a paused task is never "needs you") |
 | Idle        | it has a home chat and has done something                                              |
 | Nothing yet | no home chat that can be read, or no TL;DR line or task in it yet                      |
 

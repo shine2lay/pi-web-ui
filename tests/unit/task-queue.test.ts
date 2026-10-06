@@ -905,7 +905,179 @@ describe("taskQueueFromEntries (queue-blocked)", () => {
 	});
 });
 
+/** queue-paused: the owner's pause on a task or the whole queue (pi-queue's "hold" and "release" ops). */
+describe("taskQueueFromEntries (queue-paused)", () => {
+	const byId = (q: ReturnType<typeof replay>, id: number) => q.tasks.find((t) => t.id === id);
+	const laneBase = [
+		{ op: "add", id: 1, plan: plan("One"), touches: ["a"] },
+		{ op: "add", id: 2, plan: plan("Two"), touches: ["b"] },
+		{ op: "run" },
+		{ op: "start", id: 1, lane: true },
+		{ op: "chat", id: 1, file: "/chats/one.jsonl", title: "Queue #1: One" },
+	];
+	const wait = { op: "wait", id: 1, what: "CI", check: "false", everyMs: 60_000, until: 50_000, ts: 10_000 };
+	const hold = (id: number | undefined, ts: number, why = "owner on Telegram: pause it") => ({
+		op: "hold",
+		...(id !== undefined ? { id } : {}),
+		why,
+		by: "tool",
+		ts,
+	});
+	const release = (id: number | undefined, ts: number) => ({ op: "release", ...(id !== undefined ? { id } : {}), ts });
+
+	it("a pause is a layer on the task: it keeps its status, and shows since when and why", () => {
+		const q = replay(entries([...laneBase, wait, hold(1, 20_000, "  owner:   keep quiet ")]));
+		expect(byId(q, 1)).toMatchObject({ status: "waiting", hold: { at: 20_000, why: "owner:   keep quiet" } });
+		expect(byId(q, 1)?.wait?.until).toBe(50_000);
+		expect(byId(q, 2)?.hold).toBeUndefined();
+		expect(q.hold).toBeUndefined();
+		// The mirror's own bookkeeping doesn't reach the UI.
+		expect(byId(q, 1)).not.toHaveProperty("heldFrom");
+		const back = replay(entries([...laneBase, wait, hold(1, 20_000), release(1, 35_000)]));
+		expect(byId(back, 1)?.status).toBe("waiting");
+		expect(byId(back, 1)?.hold).toBeUndefined();
+	});
+
+	it("the pause doesn't count: a wait gives up as much later as it was paused", () => {
+		const q = replay(entries([...laneBase, wait, hold(1, 20_000), release(1, 35_000)]));
+		expect(byId(q, 1)?.wait?.until).toBe(65_000);
+		// Paused before the wait began (the wait came while paused): only the time since the wait counts.
+		const early = replay(entries([...laneBase, hold(1, 5_000), { ...wait, ts: 10_000 }, release(1, 30_000)]));
+		expect(byId(early, 1)?.wait?.until).toBe(70_000);
+	});
+
+	it("an unpoked block's pokes count from the release", () => {
+		const block = { op: "block", id: 1, need: "the staging login", start: 0, tries: 0, ts: 10_000 };
+		const q = replay(entries([...laneBase, block, hold(1, 20_000), release(1, 40_000)]));
+		expect(byId(q, 1)?.status).toBe("blocked");
+		expect(byId(q, 1)?.block?.start).toBe(40_000);
+	});
+
+	it("the whole queue: every open task is paused; a task paused on its own stays paused after the queue's resume", () => {
+		const ops = [...laneBase, wait, hold(undefined, 20_000, "queue why"), hold(1, 25_000, "task why")];
+		const both = replay(entries(ops));
+		expect(both.hold).toEqual({ at: 20_000, why: "queue why" });
+		expect(byId(both, 1)?.hold).toEqual({ at: 25_000, why: "task why" });
+		const queueBack = replay(entries([...ops, release(undefined, 30_000)]));
+		expect(queueBack.hold).toBeUndefined();
+		expect(byId(queueBack, 1)?.hold).toEqual({ at: 25_000, why: "task why" });
+		// Still paused: the wait hasn't moved yet.
+		expect(byId(queueBack, 1)?.wait?.until).toBe(50_000);
+		// Lifting the task's own pause counts the whole time from the queue's pause on.
+		const allBack = replay(entries([...ops, release(undefined, 30_000), release(1, 40_000)]));
+		expect(byId(allBack, 1)?.hold).toBeUndefined();
+		expect(byId(allBack, 1)?.wait?.until).toBe(70_000);
+	});
+
+	it("pausing again keeps since when, with the new why; done or removed ends a pause", () => {
+		const again = replay(entries([...laneBase, hold(1, 20_000, "a"), hold(1, 30_000, "b")]));
+		expect(byId(again, 1)?.hold).toEqual({ at: 20_000, why: "b" });
+		const done = replay(entries([...laneBase, hold(1, 20_000), { op: "done", id: 1, summary: "ok" }]));
+		expect(byId(done, 1)?.status).toBe("done");
+		expect(byId(done, 1)?.hold).toBeUndefined();
+		// A ready task can be paused too, and keeps its pause when it's moved.
+		const ready2 = replay(entries([...laneBase, hold(2, 20_000), { op: "move", id: 2, index: 0 }]));
+		expect(byId(ready2, 2)).toMatchObject({ status: "ready", hold: { at: 20_000 } });
+	});
+
+	it("ignores a pause without a why, for a finished or unknown task, and a resume with nothing paused", () => {
+		expect(byId(replay(entries([...laneBase, hold(1, 20_000, "   ")])), 1)?.hold).toBeUndefined();
+		const done = [...laneBase, { op: "done", id: 1, summary: "ok" }];
+		expect(byId(replay(entries([...done, hold(1, 20_000)])), 1)?.hold).toBeUndefined();
+		const unknown = replay(entries([...laneBase, hold(9, 20_000)]));
+		expect(unknown.hold).toBeUndefined();
+		expect(unknown.tasks.every((t) => !t.hold)).toBe(true);
+		const stray = replay(entries([...laneBase, wait, release(1, 30_000), release(undefined, 30_000)]));
+		expect(byId(stray, 1)?.wait?.until).toBe(50_000);
+		// A task's pause isn't lifted by the queue's resume, nor the queue's by a task's.
+		const mixed = replay(entries([...laneBase, hold(undefined, 20_000), release(1, 30_000)]));
+		expect(mixed.hold).toMatchObject({ at: 20_000 });
+	});
+
+	it("a task waiting on a paused task of its own queue shows that it's paused", () => {
+		const ops = [
+			{ op: "add", id: 1, plan: plan("One"), touches: ["a"] },
+			{ op: "add", id: 2, plan: plan("Two"), touches: ["b"] },
+			{ op: "run" },
+			{ op: "start", id: 1, lane: true },
+			{ op: "chat", id: 1, file: "/chats/one.jsonl", title: "Queue #1: One" },
+			{ op: "start", id: 2, lane: true },
+			{ op: "chat", id: 2, file: "/chats/two.jsonl", title: "Queue #2: Two" },
+			{ op: "block", id: 2, on: [{ file: "/chats/main.jsonl", id: 1 }], start: 0, tries: 0 },
+		];
+		const before = replay(entries(ops));
+		expect(byId(before, 2)?.block?.on?.[0]).toMatchObject({ id: 1, status: "working" });
+		expect(byId(before, 2)?.block?.on?.[0]?.held).toBeUndefined();
+		const paused = replay(entries([...ops, hold(1, 20_000)]));
+		expect(byId(paused, 2)?.block?.on?.[0]).toMatchObject({ id: 1, status: "working", held: true });
+		const whole = replay(entries([...ops, hold(undefined, 20_000)]));
+		expect(byId(whole, 2)?.block?.on?.[0]?.held).toBe(true);
+	});
+
+	it("says the same as pi-queue's own replay", async () => {
+		const pkg = process.env.PI_QUEUE_PKG ?? join(userInfo().homedir, "projects", "pi-queue");
+		const file = join(pkg, "queue.ts");
+		if (!existsSync(file)) throw new Error(`pi-queue not found at ${pkg} (set PI_QUEUE_PKG)`);
+		const pq = await import(/* @vite-ignore */ pathToFileURL(file).href);
+		// An older pi-queue has no pause yet: nothing to compare.
+		if (typeof pq.heldBy !== "function") return;
+		const block = { op: "block", id: 1, need: "the staging login", start: 0, tries: 0, ts: 10_000 };
+		const scenarios: Array<Array<Record<string, unknown>>> = [
+			[...laneBase, wait, hold(1, 20_000)],
+			[...laneBase, wait, hold(1, 20_000), release(1, 35_000)],
+			[...laneBase, hold(1, 5_000), wait, release(1, 30_000)],
+			[...laneBase, wait, hold(undefined, 20_000), hold(1, 25_000), release(undefined, 30_000)],
+			[...laneBase, wait, hold(undefined, 20_000), hold(1, 25_000), release(undefined, 30_000), release(1, 40_000)],
+			[...laneBase, block, hold(1, 20_000), release(1, 40_000)],
+			[...laneBase, block, hold(undefined, 20_000), release(undefined, 40_000)],
+			[...laneBase, hold(1, 20_000, "a"), hold(1, 30_000, "b")],
+			[...laneBase, hold(1, 20_000), { op: "done", id: 1, summary: "ok" }],
+			[...laneBase, hold(1, 20_000, " "), hold(9, 20_000), release(undefined, 25_000)],
+			[...laneBase, hold(undefined, 20_000), { op: "add", id: 3, plan: plan("Three") }, release(undefined, 30_000)],
+			[...laneBase, hold(2, 20_000), { op: "start", id: 2, lane: true }, release(2, 30_000)],
+		];
+		type Theirs = {
+			hold?: { at: number; why: string };
+			tasks: Array<{
+				id: number;
+				status: string;
+				hold?: { at: number; why: string };
+				wait?: { until: number };
+				block?: { start: number };
+			}>;
+		};
+		const holdOf = (h: { at: number; why: string } | undefined) => (h ? [h.at, h.why] : null);
+		for (const ops of scenarios) {
+			const e = entries(ops);
+			const mine = taskQueueFromEntries(e, true);
+			const s = pq.replay(e) as Theirs;
+			const theirs = s.tasks.filter((t) => t.status !== "removed");
+			const shape = (t: Theirs["tasks"][number] | (typeof mine.tasks)[number]) => [
+				t.id,
+				t.status,
+				holdOf(t.hold),
+				t.wait?.until ?? null,
+				t.block?.start ?? null,
+			];
+			const what = JSON.stringify(ops.slice(laneBase.length));
+			expect(mine.tasks.map(shape), what).toEqual(theirs.map(shape));
+			expect(holdOf(mine.hold), what).toEqual(holdOf(s.hold));
+		}
+	});
+});
+
 describe("taskQueueCommandLine", () => {
+	it("queue-paused: the owner's Pause and Resume, on a task or the whole queue", () => {
+		const why = Buffer.from("pressed Pause in the Queue panel", "utf8").toString("base64url");
+		expect(taskQueueCommandLine("pause", 3)).toBe(`/queue pause 3 ${why}`);
+		expect(taskQueueCommandLine("pause", undefined)).toBe(`/queue pause ${why}`);
+		expect(taskQueueCommandLine("resume", 3)).toBe("/queue resume 3");
+		expect(taskQueueCommandLine("resume", undefined)).toBe("/queue resume");
+		expect(taskQueueCommandLine("pause", "3; rm -rf /")).toBeNull();
+		expect(taskQueueCommandLine("resume", -1)).toBeNull();
+		expect(taskQueueCommandLine("resume", 2.5)).toBeNull();
+	});
+
 	it("queue-lanes: sets how many lanes run at once", () => {
 		expect(taskQueueCommandLine("lanes", 3)).toBe("/queue lanes 3");
 		expect(taskQueueCommandLine("lanes", 8)).toBe("/queue lanes 8");

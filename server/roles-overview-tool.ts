@@ -84,8 +84,14 @@ export function whenText(ms: number | undefined, tz: string, now: number): strin
 const whereText = (c: UiRoleChatRef | undefined): string =>
 	!c ? "" : c.where === "home" ? "home chat" : `task #${c.where}`;
 
-function taskLine(t: UiRoleTask, lim: Limits): string {
+/** queue-paused: "Paused by you (since <when>: <why>)". */
+const pausedText = (h: { at: number; why: string }, tz: string, now: number): string =>
+	`Paused by you (since ${whenText(h.at, tz, now)}: ${clip(h.why, 160)})`;
+
+function taskLine(t: UiRoleTask, tz: string, now: number, lim: Limits): string {
 	const bits = [`#${t.id} ${t.status}${t.busy ? " (working now)" : ""}: ${clip(t.title, 120)}`];
+	// queue-paused: the owner paused it (or its whole queue): it doesn't need him while paused.
+	if (t.paused) bits.push(pausedText(t.paused, tz, now));
 	if (t.waitsOn) bits.push(`waits on: ${clip(t.waitsOn, 160)}`);
 	if (t.latest) bits.push(`latest: ${clip(t.latest.text, lim.lineMax)}`);
 	return `- ${bits.join("; ")}`;
@@ -157,10 +163,14 @@ export function roleText(r: UiRoleOverview, tz: string, now: number, lim: Limits
 	if (r.queue) {
 		const q = r.queue;
 		const state = q.running ? "running" : `stopped${q.pausedReason ? ` (${clip(q.pausedReason, 100)})` : ""}`;
-		out.push(`Queue: ${state}; ${q.counts.active} active, ${q.counts.queued} waiting to start, ${q.counts.done} done`);
-		for (const t of q.active.slice(0, lim.tasks)) out.push(taskLine(t, lim));
+		// queue-paused: the owner paused the whole queue.
+		const held = q.hold ? `, the whole queue ${pausedText(q.hold, tz, now).replace(/^P/, "p")}` : "";
+		out.push(
+			`Queue: ${state}${held}; ${q.counts.active} active, ${q.counts.queued} waiting to start, ${q.counts.done} done`,
+		);
+		for (const t of q.active.slice(0, lim.tasks)) out.push(taskLine(t, tz, now, lim));
 		if (q.active.length > lim.tasks) out.push(`- (${q.active.length - lim.tasks} more active)`);
-		for (const t of q.queued.slice(0, lim.queued)) out.push(taskLine(t, lim));
+		for (const t of q.queued.slice(0, lim.queued)) out.push(taskLine(t, tz, now, lim));
 	}
 	if (r.requests.open) {
 		const n = r.requests.newest;

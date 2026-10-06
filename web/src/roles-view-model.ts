@@ -84,6 +84,8 @@ export function nowLineOf(role: UiRoleOverview, now: number): NowLine {
 }
 
 function taskRank(task: UiRoleTask): number {
+	// queue-paused: a task the owner paused neither needs him nor works: it ranks with the ones on hold.
+	if (task.paused) return 3;
 	if (task.status === "stuck") return 0;
 	if (task.status === "working" || task.busy) return 1;
 	if (task.status === "asking") return 2;
@@ -98,6 +100,11 @@ export function leadTask(queue: UiRoleQueue | undefined): UiRoleTask | undefined
 		if (!best || taskRank(task) < taskRank(best)) best = task;
 	}
 	return best;
+}
+
+/** queue-paused: "Queue paused by you since 12:10: why" when the owner paused the whole queue. */
+export function queuePausedText(t: Translate, queue: UiRoleQueue | undefined, now: number): string {
+	return queue?.hold ? t("rolesQueuePausedSince", { time: clockOf(queue.hold.at, now), why: queue.hold.why }) : "";
 }
 
 /** The queue stopped (by the owner or its run) while it still has open tasks. */
@@ -126,6 +133,12 @@ export function queueCounts(t: Translate, queue: UiRoleQueue | undefined, shown:
 export function taskWord(t: Translate, task: UiRoleTask, short = false): string {
 	// `short` (a tile): the word alone; what a hold waits on is often a paragraph, so it stays in the panel
 	const waitsOn = short ? undefined : task.waitsOn;
+	// queue-paused: the owner paused it (or its whole queue); the panel says since when and why.
+	if (task.paused) {
+		return short
+			? t("rolesTaskPausedByYou")
+			: t("rolesTaskPausedSince", { time: clockOf(task.paused.at, Date.now()), why: task.paused.why });
+	}
 	switch (task.status) {
 		case "stuck":
 			return t("rolesTaskNeedsYou");
@@ -144,10 +157,11 @@ export function taskWord(t: Translate, task: UiRoleTask, short = false): string 
 	}
 }
 
-export type TaskLook = "needs" | "working" | "hold" | "asking" | "queued";
+export type TaskLook = "needs" | "working" | "hold" | "asking" | "queued" | "paused";
 
-/** How a task looks: needs (amber), working (accent), hold (dashed), asking (dim), queued. */
+/** How a task looks: needs (amber), working (accent), hold (dashed), asking (dim), queued, paused (by the owner). */
 export function taskLook(task: UiRoleTask): TaskLook {
+	if (task.paused) return "paused";
 	if (task.status === "stuck") return "needs";
 	if (task.status === "working" || task.busy) return "working";
 	if (task.status === "waiting" || task.status === "blocked") return "hold";
