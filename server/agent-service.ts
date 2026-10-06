@@ -285,12 +285,26 @@ import {
 	ownTaskOf,
 	queueEntriesOf,
 	ROLE_MESSAGE_CUSTOM_TYPE,
+	roleMessageIdOf,
 	RoleMessages,
 	type RoleMessageSender,
 	type RoleReportReceipt,
 	type RoleReportResult,
 } from "./role-messages.js";
 import { RolesOverviewReader } from "./roles-overview.js";
+import { makeRolesOverviewTool } from "./roles-overview-tool.js";
+import {
+	newTurnRecord,
+	oneLineOf,
+	roleHomeChat,
+	roleReplyOf,
+	sendWhenFree,
+	type RoleReply,
+	type RoleSendOptions,
+	type RoleSendResult,
+	type RoleTurnCause,
+	type RoleTurnRecord,
+} from "./role-replies.js";
 import { makeSkillTool, type SkillToolHost } from "./skill-tool.js";
 import { makeScheduleTools, type ScheduleToolHost } from "./schedule-agent-tool.js";
 import { makePatchTool } from "./patch-tool.js";
@@ -1808,6 +1822,10 @@ function fullAt(conv: Conversation, idx: ChatIndex, i: number): UiMessage {
 
 /** role-messages: the server's role message service (AgentService sets it; null in other engines). */
 let roleMessageService: RoleMessages | null = null;
+/** telegram-coo: AgentService hears each run that settles in a chat (role-replies.ts); null until it is made. */
+let roleTurnSettled: ((file: string, rec: RoleTurnRecord) => void) | null = null;
+/** telegram-coo: the Roles page's snapshot for the roles_overview tool (AgentService.readRolesOverview). */
+let rolesOverviewSource: (() => Promise<UiRolesOverview>) | null = null;
 
 /** role-messages: the first text of a user message. */
 function firstUserText(m: AgentMessage): string | undefined {
@@ -2030,6 +2048,10 @@ export interface Conversation {
 	/** 下一轮 agent_start 消费的用户任务文本（prompt() 暂存，轨迹插件的 run_start 用；
 	 *  steer/内部续跑无暂存时为空，由插件回退为「继续执行」）。 */
 	pendingTask?: string;
+	/** telegram-coo: what the next run was started by (texts pi took before it starts; agent_start takes them). */
+	turnPending?: { causes: RoleTurnCause[]; ids: string[] };
+	/** telegram-coo: the running run's causes, send ids, last text and error (handed over when it settles). */
+	turnRecord?: RoleTurnRecord;
 	/** tool_call watchdog timers keyed by toolCallId — a tool that runs past
 	 *  TOOL_WATCHDOG_TIMEOUT_MS gets the session aborted instead of hanging
 	 *  the conversation forever (the SDK bash tool has no default timeout). */
@@ -2132,12 +2154,30 @@ interface PromptFlow {
 	 *  owner typing: pi's input hooks see that source (pi-queue doesn't take it for the owner's answer),
 	 *  and the owner's draft, last prompt and seen marks stay as they are. */
 	source?: "extension";
+	/** telegram-coo: who sent it (a role's reply goes to Telegram when the run's cause is telegram, plugin
+	 *  or role) and the host.roles.send id it answers (see role-replies.ts). */
+	cause?: RoleTurnCause;
+	sendId?: string;
 	/** pi put the text off until the previous run has settled: its preflight callback answers later. */
 	deferred: boolean;
 	/** pi took the text (its preflight said yes). */
 	handedOver: boolean;
 	/** The prompt's place in the chat's line (a slash command gives it up and may take a new one). */
 	admission: PromptAdmission;
+}
+
+/** telegram-coo: pi took a text: the run it starts (pending until agent_start) or the running run it
+ *  joined (queued) remembers who sent it and the host.roles.send id. */
+function noteTurnCause(conv: Conversation, flow: PromptFlow, joined: boolean): void {
+	const cause = flow.cause ?? "other";
+	if (joined && conv.turnRecord) {
+		conv.turnRecord.causes.add(cause);
+		if (flow.sendId) conv.turnRecord.ids.push(flow.sendId);
+		return;
+	}
+	const p = (conv.turnPending ??= { causes: [], ids: [] });
+	p.causes.push(cause);
+	if (flow.sendId) p.ids.push(flow.sendId);
 }
 
 /** optimistic-send: prompt_ack reasons (English, shown under a "Not sent" message). */
@@ -4610,6 +4650,13 @@ export class ClientSession {
 					// role-messages: message another role's chat. Registered everywhere; pi-identity offers it only
 					// in chats with a role, and it refuses chats without one and helper chats (subagents).
 					makeMessageRoleTool(this.roleMessageHost(ownerId)),
+					// telegram-coo: every role's state in one call, read-only (the Roles page's snapshot as text).
+					makeRolesOverviewTool({
+						read: () =>
+							rolesOverviewSource
+								? rolesOverviewSource()
+								: Promise.reject(new Error("The roles overview isn't available in this app.")),
+					}),
 					// 展示文件给用户（present_files，issue #231）：模型给路径清单，服务端
 					// 只做只读探测（stat + 未知扩展嗅探 + 文本摘录），结构化 items 走 tool
 					// result 的 details 下发，前端渲染成图片/视频内联 + 预览/本地打开/
@@ -4768,12 +4815,18 @@ export class ClientSession {
 		text: string,
 		ackId: string,
 		receipt: Promise<{ ok: boolean; reason?: string }>,
+		/** telegram-coo: who sent it (default a role) and the host.roles.send id (role-replies.ts). */
+		how: { cause?: RoleTurnCause; sendId?: string } = {},
 	): Promise<{ ok: true } | { ok: false; error: string }> {
 		await this.switchSession(file);
 		const id = this.conversationIdBySessionFile(file);
 		const conv = id ? this.convs.get(id) : undefined;
 		if (!id || !conv || id !== this.activeId) return { ok: false, error: "couldn't open the chat" };
-		void this.prompt(text, undefined, true, ackId, { source: "extension" }).catch(() => {});
+		void this.prompt(text, undefined, true, ackId, {
+			source: "extension",
+			cause: how.cause ?? "role",
+			...(how.sendId ? { sendId: how.sendId } : {}),
+		}).catch(() => {});
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const answer = await Promise.race([
 			receipt,
@@ -4785,6 +4838,49 @@ export class ClientSession {
 		// In the running list of every window, and kept open when switched away from.
 		conv.listed = true;
 		return { ok: true };
+	}
+
+	/** telegram-coo: a run starts: its record (role-replies.ts) takes the causes of the texts pi took for it. */
+	private startTurnRecord(conv: Conversation): void {
+		const rec = (conv.turnRecord ??= newTurnRecord());
+		const p = conv.turnPending;
+		conv.turnPending = undefined;
+		if (!p) return;
+		for (const c of p.causes) rec.causes.add(c);
+		rec.ids.push(...p.ids);
+	}
+
+	/** telegram-coo: an assistant message ended: the run's last text with words in it, and whether it failed. */
+	private noteTurnMessage(
+		conv: Conversation,
+		msg: { stopReason?: unknown; errorMessage?: unknown },
+		text: string,
+	): void {
+		const rec = conv.turnRecord;
+		if (!rec) return;
+		if (text.trim()) rec.text = text;
+		if (msg.stopReason === "error") rec.error = oneLineOf(msg.errorMessage) || "the model call failed";
+		else if (msg.stopReason === "aborted") rec.error = "it was stopped";
+		else delete rec.error;
+	}
+
+	/** telegram-coo: the run settled: its record goes to AgentService (a role's home chat hands it to the plugins). */
+	private settleTurnRecord(conv: Conversation): void {
+		const rec = conv.turnRecord;
+		conv.turnRecord = undefined;
+		if (!rec || !roleTurnSettled || conv.isSubagent || conv.isEphemeral) return;
+		let file: string | undefined;
+		try {
+			file = conv.session.sessionFile ?? undefined;
+		} catch {
+			file = undefined;
+		}
+		if (!file) return;
+		try {
+			roleTurnSettled(file, rec);
+		} catch (err) {
+			console.error("[role-replies] handing a reply over failed:", (err as Error)?.message ?? err);
+		}
 	}
 
 	/**
@@ -6440,6 +6536,7 @@ export class ClientSession {
 					return a.role === "assistant" && a.stopReason === "aborted";
 				});
 				if (aborted) {
+					if (conv.turnRecord) conv.turnRecord.error = "it was stopped";
 					const stopNotice = this.goalSvc.onAgentEnd(conv, true);
 					if (stopNotice) {
 						this.emit({ type: "notice", level: "warning", text: stopNotice.text, textEn: stopNotice.textEn });
@@ -6535,6 +6632,8 @@ export class ClientSession {
 				// 之后 800ms 那次刷新碰运气（收尾慢就还显示在跑），而且只推给订阅方。
 				// 同步 v0.96.1：上游自己加了这个 case，这行并进来；两个同名 case 时后一个永远不跑。
 				ClientSession.emitConversationsToAll();
+				// telegram-coo: the run is over: a role's home chat hands its reply to the plugins that listen.
+				this.settleTurnRecord(conv);
 				break;
 			}
 			case "entry_appended": {
@@ -6598,6 +6697,8 @@ export class ClientSession {
 				}
 				const text = extractAssistantTextFromContent(mm.content);
 				if (text && text.includes("[[")) void this.markerSvc.handleAssistantText(conv.id, text);
+				// telegram-coo: the run's last text, and whether it failed.
+				this.noteTurnMessage(conv, event.message as { stopReason?: unknown; errorMessage?: unknown }, text);
 				break;
 			}
 			case "agent_start": {
@@ -6605,6 +6706,8 @@ export class ClientSession {
 				// 无暂存时省略，插件回退为「继续执行」）。
 				const task = conv.pendingTask;
 				conv.pendingTask = undefined;
+				// telegram-coo: the run's record starts (a retry's new start keeps the one already going).
+				this.startTurnRecord(conv);
 				// rewind-to-here：新一轮开跑，上一次「对话太大」的卡片作废（这轮再被拒会重新记上）。
 				conv.tooBig = null;
 				this.emitRun(conv, task ? { type: "run_start", task } : { type: "run_start" });
@@ -9728,8 +9831,9 @@ export class ClientSession {
 		queue = false,
 		/** optimistic-send: the window's id for this send, answered with one prompt_ack (prompt-ack.ts). */
 		id?: string,
-		/** role-messages: source "extension" = sent by the server for someone else (see PromptFlow.source). */
-		opts?: { source?: "extension" },
+		/** role-messages: source "extension" = sent by the server for someone else (see PromptFlow.source).
+		 *  telegram-coo: cause = who sent it, sendId = the host.roles.send it is (see PromptFlow.cause). */
+		opts?: { source?: "extension"; cause?: RoleTurnCause; sendId?: string },
 	): Promise<void> {
 		let conv: Conversation;
 		try {
@@ -9747,6 +9851,8 @@ export class ClientSession {
 		// places follow the order the messages came in (see takePromptAdmission).
 		const flow: PromptFlow = {
 			...(opts?.source ? { source: opts.source } : {}),
+			cause: opts?.cause ?? "other",
+			...(opts?.sendId ? { sendId: opts.sendId } : {}),
 			deferred: false,
 			handedOver: false,
 			admission: takePromptAdmission(conv),
@@ -10170,6 +10276,8 @@ export class ClientSession {
 			const preflightResult = (disposition: "started" | "queued" | "handled"): void => {
 				flow.handedOver = true;
 				flow.admission.release();
+				// telegram-coo: the run this text starts (or joins) remembers who sent it.
+				if (disposition !== "handled") noteTurnCause(conv, flow, disposition === "queued");
 				if (disposition === "handled") {
 					// Commands/input handlers need no user-message event, including after deferral.
 					receipt.ok();
@@ -14875,12 +14983,15 @@ export class AgentService {
 		this.roleMessages = new RoleMessages(join(this.stateStore.dataDir, "role-messages.json"), {
 			roles: () => identityRegistry().identities,
 			chatState: (file) => this.queueChatState(file).state,
-			deliver: (file, text) => this.sendRoleMessage(file, text),
+			deliver: (file, text) => this.sendRoleMessage(file, text, { cause: this.roleMessageCause(text) }),
 			note: (file, text) => this.noteRoleMessage(file, text),
 			changed: () => this.onRoleMessagesChanged?.(),
 			log: (line) => console.log(line),
 		});
 		roleMessageService = this.roleMessages;
+		// telegram-coo: a role home chat's replies go to the plugins; roles_overview reads the Roles page.
+		roleTurnSettled = (file, rec) => this.roleTurnSettled(file, rec);
+		rolesOverviewSource = () => this.readRolesOverview();
 	}
 
 	// -----------------------------------------------------------------------
@@ -14951,6 +15062,42 @@ export class AgentService {
 		return this.rolesReader.read();
 	}
 
+	/** telegram-coo: index.ts hands each role reply to the plugins (PluginManager.emitRoleReply). */
+	onRoleReply: ((reply: RoleReply) => void) | null = null;
+
+	/** telegram-coo: a role message's cause: a role's, except the app's 6 am report request (its answer is
+	 *  the report the Roles page shows, not a reply for Telegram). */
+	private roleMessageCause(text: string): RoleTurnCause {
+		const id = roleMessageIdOf(text);
+		return id && this.roleMessages.byId(id)?.kind === "report" ? "other" : "role";
+	}
+
+	/** telegram-coo: a run settled in the chat with this transcript: a role's home chat hands its reply on. */
+	private roleTurnSettled(file: string, rec: RoleTurnRecord): void {
+		if (!this.onRoleReply) return;
+		const reply = roleReplyOf(file, rec, identityRegistry().identities, Date.now());
+		if (reply) this.onRoleReply(reply);
+	}
+
+	/**
+	 * telegram-coo: host.roles.send. The text goes into a role's home chat as the owner's own message, the
+	 * way a typed one does: a closed chat is opened in the background, a busy one gets it right after its
+	 * current turn (onQueued is called once first). Resolves once the chat took it, or why not.
+	 */
+	async sendToRole(role: string, text: string, opts: RoleSendOptions = {}): Promise<RoleSendResult> {
+		const body = String(text ?? "");
+		if (!body.trim()) return { ok: false, error: "the message is empty" };
+		const home = roleHomeChat(role, identityRegistry().identities);
+		if (!home.ok) return home;
+		const sendId = `rs-${randomUUID()}`;
+		const cause: RoleTurnCause = opts.via === "telegram" ? "telegram" : "plugin";
+		const res = await sendWhenFree(() => this.sendRoleMessage(home.file, body, { cause, sendId }), {
+			...(opts.onQueued ? { onQueued: opts.onQueued } : {}),
+			stopped: () => this.quiesced,
+		});
+		return res.ok ? { ok: true, id: sendId } : res;
+	}
+
 	/**
 	 * role-messages: send a role message into the chat with this transcript as a queued user message
 	 * marked as sent by an extension. A closed chat is opened in the background for it (the way a
@@ -14960,6 +15107,8 @@ export class AgentService {
 	private sendRoleMessage(
 		file: string,
 		text: string,
+		/** telegram-coo: who sent it (default a role) and the host.roles.send id (role-replies.ts). */
+		how: { cause?: RoleTurnCause; sendId?: string } = {},
 	): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> {
 		return this.roleMessagesChain(async (): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> => {
 			if (this.carryOnGate) await this.carryOnGate.catch(() => {});
@@ -14977,7 +15126,7 @@ export class AgentService {
 			try {
 				const cs = await this.attach(ROLE_MESSAGES_CLIENT_ID, sink);
 				try {
-					return await cs.deliverRoleMessage(file, text, ackId, receipt);
+					return await cs.deliverRoleMessage(file, text, ackId, receipt, how);
 				} finally {
 					// Open windows list the chat now; nobody watches through this client (its done ring rings).
 					this.pokeExternalRunning(ROLE_MESSAGES_CLIENT_ID);

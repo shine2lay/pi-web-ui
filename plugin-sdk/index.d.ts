@@ -16,7 +16,8 @@ export type PluginPermissionFamily =
 	| "net"
 	| "dom"
 	| "dom:anchor"
-	| "asks";
+	| "asks"
+	| "roles";
 
 /** host.asks: something a chat waits on you for. */
 export type PluginAskKind = "question" | "dialog" | "approval" | "stuck";
@@ -70,6 +71,27 @@ export type PluginAskEvent =
 	| { type: "appeared"; ask: PluginAsk }
 	| { type: "answered"; ask: PluginAsk; summary: string; from: string }
 	| { type: "gone"; ask: PluginAsk; reason: string };
+
+/** host.roles: what started a run in a role's home chat (the first that applies wins, in this order). */
+export type PluginRoleTurnCause = "telegram" | "plugin" | "role" | "browser" | "other";
+
+/** host.roles.onReply: a run in a role's home chat ended. */
+export interface PluginRoleReply {
+	role: string;
+	/** The role's home chat (its transcript), e.g. for a link that opens it. */
+	file: string;
+	/** The run's last assistant text, whole up to 20,000 characters; "" when it wrote none. */
+	text: string;
+	cause: PluginRoleTurnCause;
+	/** When it ended (ms). */
+	at: number;
+	/** The host.roles.send ids the run took in. */
+	ids: string[];
+	/** The run failed or was stopped: one line saying why. */
+	error?: string;
+	/** The text was longer and was cut at 20,000 characters. */
+	cut?: boolean;
+}
 
 export interface WsEntry {
 	name: string;
@@ -359,6 +381,17 @@ export interface PluginHost {
 		list(): PluginAsk[];
 		on(handler: (ev: PluginAskEvent) => void): () => void;
 		answer(id: string, answers: PluginAskFieldAnswer[]): Promise<{ ok: boolean; error?: string }>;
+	};
+	/** A role's home chat (needs "roles"). send() puts text in it as the owner's message (a busy chat
+	 *  gets it after its turn; onQueued is called once then; never throws); onReply() hears each run
+	 *  that ends there, with its last text and what started it. */
+	roles: {
+		send(
+			role: string,
+			text: string,
+			opts?: { via?: "telegram" | "plugin"; onQueued?: () => void },
+		): Promise<{ ok: true; id: string } | { ok: false; error: string }>;
+		onReply(handler: (reply: PluginRoleReply) => void): () => void;
 	};
 	/** 只读 git 查询（失败回 {ok:false,error} 对象而非抛错）。 */
 	scm: {

@@ -124,6 +124,17 @@ layout (`pi-web-ui:roles:strip:<layout>`). Nothing else on the page is remembere
 
 `PI_WEB_TABS` can turn the page off (`roles`).
 
+## For chats: roles_overview
+
+The same data as text, for a chat (telegram-coo; the COO uses it for its morning brief): the
+read-only tool `roles_overview` (`server/roles-overview-tool.ts`), in every chat. Without arguments it
+gives every role in short: the counts, then per role its title, home chat, status, last activity,
+newest 3 TL;DR lines, open asks, queue (running, active tasks and counts) and the latest 6 am report
+in a line. `{ role: "<id>" }` gives one role in full (every TL;DR line the page has, the tasks waiting
+to start, the whole report). Times are Pacific. Output is capped (24,000 characters; 300 per part,
+200 per line in short). On a busy day the details shrink together so every role still fits in
+one call. An unknown role is a plain error naming the roles. It reads nothing the page doesn't.
+
 ## Tests
 
 - `tests/unit/roles-overview.test.ts`: the server reader and push (temporary folders, synthetic
@@ -132,3 +143,5 @@ layout (`pi-web-ui:roles:strip:<layout>`). Nothing else on the page is remembere
 - `tests/unit/topbar-fit.test.ts`, `tests/unit/ui-slots.test.ts`: the tab and its place in the top bar.
 - `tests/roles-page-test.mjs`: the page in a sealed server and headless Chrome (14 and 20 synthetic
   roles, both themes, phone and desktop).
+- `tests/unit/roles-overview-tool.test.ts`: the `roles_overview` text (short, one role, an unknown
+  role, the report states, the cap).

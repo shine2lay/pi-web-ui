@@ -1127,7 +1127,15 @@ export interface TerminalManagerLike {
 export interface DispatchSession {
 	cwd: string;
 	/** id: optimistic-send - the window's id for this send, answered with one prompt_ack. */
-	prompt(text: string, attachments?: PromptAttachment[], queue?: boolean, id?: string): Promise<void>;
+	/** opts.cause (telegram-coo): who started the turn; the browser's messages say "browser" so a role's
+	 *  home chat keeps their answers off Telegram. Engines without roles (DSH) ignore it. */
+	prompt(
+		text: string,
+		attachments?: PromptAttachment[],
+		queue?: boolean,
+		id?: string,
+		opts?: { cause?: "browser" },
+	): Promise<void>;
 	/** chat-open-speed: the pi session of the chat this window is on ("" when none). Used to refuse
 	 *  a message written into a chat that was still opening if the window ended up elsewhere.
 	 *  Optional: engines without sessions (DSH) don't implement it and the check is skipped. */
@@ -2175,6 +2183,19 @@ if ("schedulerStore" in service) {
 			return { ok: false, error: (err as Error).message };
 		}
 	};
+	// telegram-coo: host.roles. send = a message into a role's home chat (AgentService.sendToRole); a run in
+	// a role's home chat hands its reply to the plugins (onReply). DSH has no roles: send says so.
+	if (service instanceof AgentService) {
+		const svc = service;
+		pluginMgr.roleSender = async (role, text, opts) => {
+			try {
+				return await svc.sendToRole(role, text, opts);
+			} catch (err) {
+				return { ok: false, error: (err as Error)?.message || "sending failed" };
+			}
+		};
+		svc.onRoleReply = (reply) => pluginMgr.emitRoleReply(reply);
+	}
 }
 // 插件宿主工作区实时跟随当前项目：任意客户端 set_cwd 成功后同步给
 // PluginManager，编辑器等工作区跟随型插件随即切根（详见 plugins.ts notifyCwd）。
@@ -2427,7 +2448,9 @@ wss.on("connection", (ws) => {
 					if (msg.id) send({ type: "prompt_ack", id: msg.id, conversationId: "", ok: false, reason });
 					break;
 				}
-				void cs.prompt(msg.text, msg.attachments, msg.queue, typeof msg.id === "string" ? msg.id : undefined);
+				void cs.prompt(msg.text, msg.attachments, msg.queue, typeof msg.id === "string" ? msg.id : undefined, {
+					cause: "browser", // telegram-coo: a turn the owner starts in the browser stays there
+				});
 				break;
 			}
 			case "prompt_status":

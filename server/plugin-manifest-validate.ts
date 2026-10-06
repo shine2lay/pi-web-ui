@@ -46,6 +46,8 @@ export const KNOWN_PERMISSION_FAMILIES: ReadonlySet<string> = new Set([
 	"dom:anchor",
 	// telegram-answers: see and answer what chats wait on you for (host.asks).
 	"asks",
+	// telegram-coo: send to a role's home chat and hear its replies (host.roles).
+	"roles",
 ]);
 
 function isRecord(v: unknown): v is Record<string, unknown> {

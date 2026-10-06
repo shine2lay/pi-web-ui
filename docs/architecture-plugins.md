@@ -131,6 +131,22 @@
 | `http`  | `host.route` + `host.registerProxy`                                                                                                                              |
 | `chat`  | `host.chat`（无头调用）                                                                                                                                          |
 | `llm`   | `host.llm.complete`（孤立无工具补全；实现见 `server/plugin-llm.ts`，经 agent-service `completeForPlugins` + index.ts `llmProvider` 注入；DSH 下回 `{ok:false}`） |
+| `roles` | `host.roles.send` / `host.roles.onReply` (telegram-coo): send text into a role's home chat as the owner's message, and get each turn's last answer there; see below |
+
+`host.roles` (telegram-coo, `server/role-replies.ts`, wired in `index.ts`):
+
+- `send(role, text, { via?: "telegram" | "plugin", onQueued? })` -> `{ ok: true, id }` or
+  `{ ok: false, error }` (never throws). The role's home chat (from the identity registry) gets the
+  text the way a typed message does (a closed chat opens in the background) through the role-message
+  path (`sendRoleMessage`). A busy chat is retried every 3 s (up to 6 h) and `onQueued` is called
+  once first; it resolves when the chat took the text. Errors in plain words: no such role, no home
+  chat, its transcript gone, the server restarting.
+- `onReply(handler)` -> unsubscribe. At the end of every turn in any role's home chat: `{ role, file,
+  text, cause, at, ids, error?, cut? }`. `text` is the turn's last assistant text (markers stripped,
+  at most 20,000 characters, `cut` when shortened); `error` one line when the turn failed or was
+  stopped; `ids` the `send` ids the turn took in; `cause` the strongest of what started or joined
+  the turn: `telegram` > `plugin` > `role` (a role message; the 6 am report counts as `other`) >
+  `browser` > `other`.
 
 **严格模式** = 声明了 `permissions` **或** `apiVersion >= 2`；**旧全权模式** = 未声明 `permissions` 且
 `apiVersion < 2`（放行但每激活期警告一次「apiVersion 2 起将默认拒绝」）。宿主 API 版本

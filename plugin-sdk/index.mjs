@@ -435,6 +435,12 @@ export function createMockHost(overrides) {
 			on: sub("asks.on"),
 			answer: async () => okFalse("asks"),
 		},
+		// roles: no role chat in the mock; drive a plugin with host.mock.emit("roles.onReply", reply), or
+		// pass overrides { roles: { send } } for a fake chat.
+		roles: {
+			send: async () => okFalse("roles"),
+			onReply: sub("roles.onReply"),
+		},
 		log: logImpl,
 		// effect 栈：mock 里只记调用 + 返回可撤函数（真实宿主在反激活时逆序回卷）。
 		// 单测里测试 dispose 真跑的写法：拿到 off() 后调它，或断言 host.calls 里有 effect。
@@ -532,6 +538,7 @@ export function createMockHost(overrides) {
 		"net",
 		"events",
 		"asks",
+		"roles",
 		"dialogs",
 		"shortcuts",
 		"searchProviders",

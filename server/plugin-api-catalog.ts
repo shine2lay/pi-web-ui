@@ -312,6 +312,20 @@ export const HOST_METHODS: ReadonlyArray<CatalogHostMethod> = [
 		example: `await host.asks.answer(ask.id, [{ id: "q0", selected: ["Yes"] }])`,
 	},
 	{
+		name: "roles.send",
+		needs: "roles",
+		summary:
+			"Send text into a role's home chat as the owner's message (a busy chat gets it after its turn; onQueued says so); never throws",
+		example: `await host.roles.send("coo", "How are we doing?", { via: "telegram", onQueued: () => note() })`,
+	},
+	{
+		name: "roles.onReply",
+		needs: "roles",
+		summary:
+			"Hear each run that ends in a role's home chat: last text, cause (telegram/plugin/role/browser/other), send ids, error",
+		example: `host.roles.onReply((r) => { if (r.cause === "telegram") forward(r.text); })`,
+	},
+	{
 		name: "net.fetch",
 		needs: "net",
 		summary: "Outbound network (allowed only on allow-list hits; failures return {ok:false} instead of throwing)",

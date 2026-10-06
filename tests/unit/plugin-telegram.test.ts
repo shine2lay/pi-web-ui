@@ -6,11 +6,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMockHost } from "../../plugin-sdk/index.mjs";
 import telegramPlugin, {
+	BRIEF_WAIT_MS,
+	NOW_ENV,
+	ONLY_TEXT,
 	QUOTE_OVER,
 	TEXT_BUDGET,
+	briefRequest,
 	chatLink,
+	clockFrom,
 	codeBlock,
 	createBridge,
+	createChat,
+	parseClock,
+	roleName,
+	splitReply,
+	zoneClock,
 	createPoller,
 	createTelegramApi,
 	htmlToPlain,
@@ -1581,7 +1591,8 @@ describe("telegram plugin: activate", () => {
 			}),
 		);
 		const statuses: string[] = [];
-		const host = hostWith({ botToken: TOKEN, ownerId: OWNER }, statuses);
+		// Chatting off: the bot as it was before telegram-coo (the chat's own test is below).
+		const host = hostWith({ botToken: TOKEN, ownerId: OWNER, routeTo: "" }, statuses);
 		host.storage.set("bot", "999");
 		host.storage.set("offset", 77);
 		const off = telegramPlugin.activate(host);
@@ -1593,5 +1604,598 @@ describe("telegram plugin: activate", () => {
 		off?.();
 		expect(host.mock.handlers["asks.on"]).toHaveLength(0);
 		await vi.waitFor(() => expect(aborted).toBe(true));
+	});
+
+	it("by default messages go to the COO with a brief at 06:30; an empty setting turns chatting off", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				(_url: string, init: Any) =>
+					new Promise((_resolve, reject) => init.signal?.addEventListener("abort", () => reject(new Error("aborted")))),
+			),
+		);
+		// Outside the brief's hours, so nothing is asked.
+		process.env[NOW_ENV] = "2026-10-06T03:00:00-07:00";
+		try {
+			const statuses: string[] = [];
+			const host = hostWith({ botToken: TOKEN, ownerId: OWNER }, statuses);
+			const off = telegramPlugin.activate(host);
+			expect(statuses.at(-1)).toContain(" \u00B7 messages go to coo \u00B7 brief at 06:30");
+			expect(host.mock.handlers["roles.onReply"]).toHaveLength(1);
+			off?.();
+			expect(host.mock.handlers["roles.onReply"]).toHaveLength(0);
+
+			const quiet: string[] = [];
+			const host2 = hostWith({ botToken: TOKEN, ownerId: OWNER, routeTo: "" }, quiet);
+			const off2 = telegramPlugin.activate(host2);
+			expect(quiet.at(-1)).not.toContain("messages go to");
+			expect(host2.mock.handlers["roles.onReply"] ?? []).toHaveLength(0);
+			off2?.();
+
+			const odd: string[] = [];
+			const host3 = hostWith({ botToken: TOKEN, ownerId: OWNER, briefAt: "half six" }, odd);
+			const off3 = telegramPlugin.activate(host3);
+			expect(odd.at(-1)).toContain("messages go to coo \u00B7 no brief: its time isn't HH:MM");
+			off3?.();
+		} finally {
+			delete process.env[NOW_ENV];
+		}
+	});
+});
+
+// ---------------------------------------------------------------------------
+// telegram-coo: chatting with a role, and its morning brief
+// ---------------------------------------------------------------------------
+
+const COO_FILE = "/home/x/.pi/agent/sessions/coo.jsonl";
+const COO_LINK = (chatLink(ADDRESS, COO_FILE) as string).replace(/&/g, "&amp;");
+const OPEN_COO = ` <a href="${COO_LINK}">Open the chat</a>`;
+
+/** A fake host.roles.send: records each send; "busy" holds it (after onQueued) until release(). */
+function fakeRoles() {
+	const sent: Any[] = [];
+	const held: (() => void)[] = [];
+	let next = 1;
+	const state = {
+		mode: "ok" as "ok" | "busy" | "error" | "throw",
+		error: "no home chat for coo",
+		beforeAck: undefined as ((id: string) => void) | undefined,
+	};
+	return {
+		sent,
+		state,
+		send: async (role: string, text: string, opts: Any) => {
+			const id = `s${next++}`;
+			sent.push({ role, text, via: opts?.via, id });
+			if (state.mode === "throw") throw new Error(state.error);
+			if (state.mode === "error") return { ok: false, error: state.error };
+			if (state.mode === "busy") {
+				opts?.onQueued?.();
+				await new Promise<void>((r) => held.push(r));
+			}
+			state.beforeAck?.(id);
+			return { ok: true, id };
+		},
+		release: () => {
+			for (const r of held.splice(0)) r();
+		},
+	};
+}
+
+type Timer = { fn: () => void; ms: number; live: boolean };
+
+function chatSetup({
+	routeTo = "coo",
+	briefAt = "06:30",
+	at = "2026-10-06T08:00:00-07:00",
+	storageInit = {} as Record<string, unknown>,
+} = {}) {
+	const tg = fakeTelegram();
+	const asks = fakeAsks();
+	const roles = fakeRoles();
+	const storage = memStorage(storageInit);
+	const logs: string[] = [];
+	const log = (_level: string, m: string) => {
+		logs.push(m);
+	};
+	const clock = { t: Date.parse(at) };
+	const timers: Timer[] = [];
+	const chat = createChat({
+		api: tg.api,
+		roles,
+		storage,
+		ownerId: OWNER,
+		routeTo,
+		briefAt,
+		webAppAddress: ADDRESS,
+		log,
+		now: () => clock.t,
+		sleep: async () => {},
+		setTimer: ((fn: () => void, ms: number) => {
+			const t = { fn, ms, live: true };
+			timers.push(t);
+			return t;
+		}) as Any,
+		clearTimer: (t: Timer) => {
+			t.live = false;
+		},
+	});
+	const bridge = createBridge({
+		api: tg.api,
+		asks,
+		storage,
+		ownerId: OWNER,
+		webAppAddress: ADDRESS,
+		sleep: async () => {},
+		log,
+		chat: chat as Any,
+	});
+	asks.on((ev) => bridge.onAskEvent(ev));
+	const settle = async () => {
+		for (let i = 0; i < 40; i++) await new Promise((r) => setTimeout(r, 0));
+		await bridge.idle();
+		await chat.idle();
+	};
+	const send = async (update: Any) => {
+		await bridge.handleUpdate(update);
+		await settle();
+		return update.message?.message_id as number;
+	};
+	const reply = async (r: Record<string, unknown>) => {
+		chat.onReply({ role: "coo", file: COO_FILE, at: clock.t, text: "", cause: "telegram", ids: [], ...r });
+		await settle();
+	};
+	const tick = async (advanceMs = 0) => {
+		clock.t += advanceMs;
+		chat.tick();
+		await settle();
+	};
+	const sends = () => tg.of("sendMessage");
+	const typingOn = () => timers.filter((t) => t.live && t.ms === 4500).length;
+	return { tg, asks, roles, storage, logs, clock, timers, chat, bridge, settle, send, reply, tick, sends, typingOn };
+}
+
+/** A reply to a given message (Telegram puts the whole message in reply_to_message). */
+const sayTo = (text: string, to: Any) => {
+	const u = say(text) as Any;
+	u.message.reply_to_message = to;
+	return u;
+};
+/** A photo with no caption. */
+const photo = () => {
+	const u = say("") as Any;
+	delete u.message.text;
+	u.message.photo = [{ file_id: "f1", width: 90, height: 90 }];
+	return u;
+};
+
+describe("telegram plugin: chatting with the COO", () => {
+	it("a plain message goes to the COO as the owner's, with \u{1F4F1}; its answer comes back under it", async () => {
+		const c = chatSetup();
+		const mid = await c.send(say("How is temper doing?"));
+		expect(c.roles.sent).toEqual([{ role: "coo", text: "\u{1F4F1} How is temper doing?", via: "telegram", id: "s1" }]);
+		expect(c.sends()).toHaveLength(0);
+		expect(c.tg.of("sendChatAction").at(-1)?.params).toEqual({ chat_id: OWNER, action: "typing" });
+		expect(c.typingOn()).toBe(1);
+		expect(c.chat.store.pending).toEqual({ s1: { to: mid, at: c.clock.t } });
+
+		await c.reply({ text: "All **good**: 3 runs passed.", ids: ["s1"] });
+		const out = c.tg.last("sendMessage") as Call;
+		expect(out.params.text).toBe("All <b>good</b>: 3 runs passed.");
+		expect(out.params.parse_mode).toBe("HTML");
+		expect(out.params.reply_parameters).toEqual({ message_id: mid, allow_sending_without_reply: true });
+		expect(c.typingOn()).toBe(0);
+		expect(c.chat.store.pending).toEqual({});
+		expect(c.chat.owns(out.result.message_id)).toBe(true);
+		expect((c.storage.get("chat") as Any).ids).toContain(out.result.message_id);
+	});
+
+	it("a turn that finishes before the send receipt is still threaded under the owner's message", async () => {
+		const c = chatSetup();
+		c.roles.state.beforeAck = (id) =>
+			c.chat.onReply({
+				role: "coo",
+				file: COO_FILE,
+				at: c.clock.t,
+				text: "Fast answer.",
+				cause: "telegram",
+				ids: [id],
+			});
+		const mid = await c.send(say("Quick one"));
+		expect(c.sends()).toHaveLength(1);
+		expect(c.tg.last("sendMessage")?.params.reply_parameters.message_id).toBe(mid);
+		expect(c.chat.store.pending).toEqual({});
+		expect(c.typingOn()).toBe(0);
+	});
+
+	it("/start stays a bot command even when replying to the COO", async () => {
+		const c = chatSetup({ storageInit: { chat: { ids: [77] } } });
+		await c.send(sayTo("/start", { message_id: 77, from: { id: 1, is_bot: true } }));
+		expect(c.roles.sent).toHaveLength(0);
+		expect(c.tg.last("sendMessage")?.params.text).toContain("Hi! Write here to talk to the COO");
+	});
+
+	it("a reply to the COO's message or to his own goes to it; a reply to an old bot message doesn't", async () => {
+		const c = chatSetup();
+		await c.send(say("First"));
+		await c.reply({ text: "Answer one", ids: ["s1"] });
+		const ours = c.tg.last("sendMessage") as Call;
+		await c.send(
+			sayTo("And rollcall?", { message_id: ours.result.message_id, from: { id: 1, is_bot: true }, text: "Answer one" }),
+		);
+		expect(c.roles.sent.at(-1).text).toBe("\u{1F4F1} And rollcall?");
+		await c.send(sayTo("Again", { message_id: 4100, from: { id: Number(OWNER), is_bot: false }, text: "First" }));
+		expect(c.roles.sent.at(-1).text).toBe("\u{1F4F1} Again");
+		const before = c.roles.sent.length;
+		await c.send(sayTo("Hm", { message_id: 4200, from: { id: 1, is_bot: true }, text: "Pick a colour" }));
+		expect(c.roles.sent).toHaveLength(before);
+		expect(c.tg.last("sendMessage")?.params.text).toBe("That question is no longer waiting.");
+	});
+
+	it("/start, 'Type an answer' and a reply to a question still answer as before", async () => {
+		const c = chatSetup();
+		await c.send(say("/start"));
+		const hi = c.tg.last("sendMessage")?.params.text as string;
+		expect(hi).toContain(
+			"Hi! Write here to talk to the COO: your message goes to its chat, and its answer comes back here.",
+		);
+		expect(hi).toContain("Every morning at 06:30 (Pacific time) it sends you a short brief.");
+		expect(hi).toContain("pi also sends you its questions and permission prompts here.");
+
+		const ask = c.asks.add(question());
+		await c.settle();
+		const msg = c.tg.last("sendMessage") as Call;
+		await c.send(tap(dataOf(msg, "Type an answer"), msg.result.message_id));
+		await c.send(say("Green"));
+		expect(c.asks.answered).toEqual([{ id: ask.id, answers: [{ id: "colour", selected: [], text: "Green" }] }]);
+
+		const ask2 = c.asks.add(question());
+		await c.settle();
+		const msg2 = c.tg.last("sendMessage") as Call;
+		await c.send(say("Blue", msg2.result.message_id));
+		expect(c.asks.answered.at(-1).id).toBe(ask2.id);
+		expect(c.roles.sent).toHaveLength(0);
+
+		await c.send(say("Now a real message"));
+		expect(c.roles.sent.map((s) => s.text)).toEqual(["\u{1F4F1} Now a real message"]);
+	});
+
+	it("a photo, voice note or file gets 'Only text messages for now.'", async () => {
+		const c = chatSetup();
+		const mid = await c.send(photo());
+		expect(c.roles.sent).toHaveLength(0);
+		const out = c.tg.last("sendMessage") as Call;
+		expect(out.params.text).toBe(ONLY_TEXT);
+		expect(out.params.reply_parameters.message_id).toBe(mid);
+	});
+
+	it("a busy COO: the bot says so once, and the message goes in after its turn", async () => {
+		const c = chatSetup();
+		c.roles.state.mode = "busy";
+		const mid = await c.send(say("Are you there?"));
+		const note = c.tg.last("sendMessage") as Call;
+		expect(note.params.text).toBe("The COO is busy right now: your message goes in right after its current turn.");
+		expect(note.params.reply_parameters.message_id).toBe(mid);
+		expect(Object.keys(c.chat.store.waiting)).toEqual([String(mid)]);
+		expect(c.typingOn()).toBe(1);
+
+		c.roles.release();
+		await c.settle();
+		expect(c.chat.store.waiting).toEqual({});
+		expect(c.chat.store.pending.s1.to).toBe(mid);
+		expect(c.sends()).toHaveLength(1);
+		await c.reply({ text: "Yes.", ids: ["s1"] });
+		expect(c.tg.last("sendMessage")?.params.reply_parameters.message_id).toBe(mid);
+	});
+
+	it("a message that can't reach the COO says why", async () => {
+		for (const mode of ["error", "throw"] as const) {
+			const c = chatSetup();
+			c.roles.state.mode = mode;
+			const mid = await c.send(say("Hello?"));
+			const out = c.tg.last("sendMessage") as Call;
+			expect(out.params.text).toBe("Couldn't send it to the COO: no home chat for coo.");
+			expect(out.params.reply_parameters.message_id).toBe(mid);
+			expect(c.typingOn()).toBe(0);
+			expect(c.chat.store.waiting).toEqual({});
+		}
+	});
+
+	it("a long answer comes in at most 3 messages, the last pointing to the chat", async () => {
+		const c = chatSetup();
+		const mid = await c.send(say("Tell me everything"));
+		const para = (i: number) => `Part ${i}: ${"word ".repeat(TEXT_BUDGET / 9)}`.trim();
+		await c.reply({ text: Array.from({ length: 8 }, (_, i) => para(i)).join("\n\n"), ids: ["s1"] });
+		const out = c.sends();
+		expect(out).toHaveLength(3);
+		expect(out[0].params.reply_parameters.message_id).toBe(mid);
+		expect(out[1].params.reply_parameters).toBeUndefined();
+		expect(out[0].params.text.startsWith("Part 0:")).toBe(true);
+		expect(out[2].params.text.endsWith(`\n\n<i>The rest is in the chat: <a href="${COO_LINK}">open it</a></i>`)).toBe(
+			true,
+		);
+		for (const m of out) expect(visibleLength(m.params.text)).toBeLessThanOrEqual(4096);
+		for (const m of out) expect(c.chat.owns(m.result.message_id)).toBe(true);
+	});
+
+	it("a reply cut by the server still points to the rest even if the formatted text fits", async () => {
+		const c = chatSetup();
+		await c.send(say("Show me"));
+		await c.reply({ text: "Short after formatting", cut: true, ids: ["s1"] });
+		expect(c.tg.last("sendMessage")?.params.text).toContain("The rest is in the chat");
+	});
+
+	it("a failed turn sends one line saying why; an empty one says so", async () => {
+		const c = chatSetup();
+		const mid = await c.send(say("Do it"));
+		await c.reply({ error: "model overloaded", ids: ["s1"] });
+		const out = c.tg.last("sendMessage") as Call;
+		expect(out.params.text).toBe(`The COO couldn't finish: model overloaded.${OPEN_COO}`);
+		expect(out.params.reply_parameters.message_id).toBe(mid);
+		expect(c.typingOn()).toBe(0);
+
+		await c.send(say("Again"));
+		await c.reply({ text: "  ", ids: ["s2"] });
+		expect(c.tg.last("sendMessage")?.params.text).toBe(`The COO finished without writing an answer.${OPEN_COO}`);
+	});
+
+	it("only turns from Telegram, the brief or another role come back; browser turns stay in the chat", async () => {
+		const c = chatSetup();
+		await c.reply({ text: "typed in the browser", cause: "browser" });
+		await c.reply({ text: "the app's own", cause: "other" });
+		await c.reply({ text: "another plugin's", cause: "plugin", ids: ["x9"] });
+		await c.reply({ text: "someone else's", role: "rollcall", cause: "telegram" });
+		expect(c.sends()).toHaveLength(0);
+		await c.reply({ text: "After asking temper: all good.", cause: "role" });
+		const out = c.tg.last("sendMessage") as Call;
+		expect(out.params.text).toBe("After asking temper: all good.");
+		expect(out.params.reply_parameters).toBeUndefined();
+	});
+
+	it("never logs what he or the COO wrote", async () => {
+		const c = chatSetup();
+		c.roles.state.mode = "busy";
+		await c.send(say("secret-question-text"));
+		c.roles.release();
+		await c.settle();
+		await c.reply({ text: "secret-answer-text", ids: ["s1"] });
+		await c.send(say("/start"));
+		expect(c.logs.length).toBeGreaterThan(2);
+		const all = c.logs.join("\n");
+		expect(all).not.toContain("secret");
+		expect(all).toContain("telegram: coo answered (telegram, 18 characters)");
+	});
+
+	it("with chatting off (empty setting) the bot only answers questions, as before", async () => {
+		const c = chatSetup({ routeTo: "" });
+		expect(c.chat.on).toBe(false);
+		await c.send(say("Hello"));
+		expect(c.roles.sent).toHaveLength(0);
+		expect(c.tg.last("sendMessage")?.params.text).toBe(
+			"To answer a question, tap one of its buttons, or reply to its message to type an answer.",
+		);
+		await c.send(say("/start"));
+		expect(c.tg.last("sendMessage")?.params.text).toBe(
+			"Hi! pi sends you its questions and permission prompts here. Tap a button to answer, or reply to a question's message to type an answer.",
+		);
+		c.chat.start({ restarted: true });
+		expect(c.timers).toHaveLength(0);
+	});
+
+	it("after a restart, messages left on their way get a note under them", async () => {
+		const t = Date.parse("2026-10-06T08:00:00-07:00");
+		const c = chatSetup({
+			storageInit: {
+				chat: { ids: [5], waiting: { "77": t - 1000 }, pending: { s9: { to: 78, at: t - 1000 } }, file: COO_FILE },
+			},
+		});
+		c.chat.start({ restarted: true });
+		await c.settle();
+		const out = c.sends().map((m) => [m.params.reply_parameters?.message_id, m.params.text]);
+		expect(out).toEqual([
+			[77, "pi restarted before your message reached the COO: please send it again."],
+			[78, `pi restarted while the COO was on your message: its answer will be in the chat, not here.${OPEN_COO}`],
+		]);
+		expect(c.storage.get("chat")).toMatchObject({ waiting: {}, pending: {} });
+		expect(c.chat.owns(5)).toBe(true);
+	});
+});
+
+describe("telegram plugin: the morning brief", () => {
+	const DAY = "2026-10-06";
+
+	it("asks the COO at 06:30 Pacific, once, and sends its answer", async () => {
+		const c = chatSetup({ at: `${DAY}T06:29:00-07:00` });
+		c.chat.start();
+		await c.settle();
+		expect(c.timers.filter((t) => t.ms === 10_000)).toHaveLength(1);
+		expect(c.roles.sent).toHaveLength(0);
+		await c.tick(60_000);
+		expect(c.roles.sent).toEqual([{ role: "coo", text: briefRequest(DAY), via: "plugin", id: "s1" }]);
+		await c.tick(10_000);
+		expect(c.roles.sent).toHaveLength(1);
+		expect(c.storage.get("brief")).toMatchObject({ date: DAY, ids: ["s1"], state: "asked" });
+
+		await c.reply({ text: `Morning brief, ${DAY}\n\nAll quiet.`, cause: "plugin", ids: ["s1"] });
+		const out = c.tg.last("sendMessage") as Call;
+		expect(out.params.text).toBe(`Morning brief, ${DAY}\n\nAll quiet.`);
+		expect(out.params.reply_parameters).toBeUndefined();
+		expect((c.storage.get("brief") as Any).state).toBe("done");
+		await c.tick(BRIEF_WAIT_MS);
+		expect(c.sends()).toHaveLength(1);
+
+		// The next day, again.
+		c.clock.t = Date.parse("2026-10-07T06:30:05-07:00");
+		await c.tick();
+		expect(c.roles.sent.at(-1).text).toBe(briefRequest("2026-10-07"));
+	});
+
+	it("a very fast brief is correlated before the send receipt comes back", async () => {
+		const c = chatSetup({ at: `${DAY}T06:30:00-07:00` });
+		c.roles.state.beforeAck = (id) =>
+			c.chat.onReply({
+				role: "coo",
+				file: COO_FILE,
+				at: c.clock.t,
+				text: "Morning brief: all quiet.",
+				cause: "plugin",
+				ids: [id],
+			});
+		c.chat.start();
+		await c.settle();
+		expect(c.tg.last("sendMessage")?.params.text).toBe("Morning brief: all quiet.");
+		expect(c.storage.get("brief")).toMatchObject({ state: "done", alerted: true });
+	});
+
+	it("an empty brief gets the no-brief line once, not a success record", async () => {
+		const c = chatSetup({ at: `${DAY}T06:30:00-07:00` });
+		c.chat.start();
+		await c.settle();
+		await c.reply({ text: "  ", cause: "plugin", ids: ["s1"] });
+		expect(c.sends().map((m) => m.params.text)).toEqual([
+			"No morning brief today: the COO finished without writing a brief.",
+		]);
+		expect(c.storage.get("brief")).toMatchObject({ state: "failed", alerted: true });
+		await c.tick(BRIEF_WAIT_MS);
+		expect(c.sends()).toHaveLength(1);
+	});
+
+	it("the request asks for the direction, what needs him, a line per busy role, the quiet ones, ~300 words", () => {
+		const r = briefRequest(DAY);
+		expect(r).toContain("roles_overview");
+		expect(r).toContain("The overall direction, in one or two sentences.");
+		expect(r).toContain("Anything that needs the owner, first.");
+		expect(r).toContain("One line for each role that did something");
+		expect(r).toContain("The quiet roles together, in one line.");
+		expect(r).toContain("under about 300 words");
+	});
+
+	it("if pi was down at 06:30 it asks at start-up, until noon; never twice a day", async () => {
+		const late = chatSetup({ at: `${DAY}T09:15:00-07:00` });
+		late.chat.start({ restarted: true });
+		await late.settle();
+		expect(late.roles.sent.map((s) => s.via)).toEqual(["plugin"]);
+
+		const noon = chatSetup({ at: `${DAY}T12:00:00-07:00` });
+		noon.chat.start({ restarted: true });
+		await noon.settle();
+		expect(noon.roles.sent).toHaveLength(0);
+
+		const early = chatSetup({ at: `${DAY}T06:00:00-07:00` });
+		early.chat.start({ restarted: true });
+		await early.settle();
+		expect(early.roles.sent).toHaveLength(0);
+
+		const done = chatSetup({ at: `${DAY}T09:15:00-07:00`, storageInit: { brief: { date: DAY, state: "done" } } });
+		done.chat.start({ restarted: true });
+		await done.settle();
+		expect(done.roles.sent).toHaveLength(0);
+	});
+
+	it("no answer 45 minutes after asking: one 'No morning brief today' line; a late brief still comes", async () => {
+		const c = chatSetup({ at: `${DAY}T06:30:00-07:00` });
+		c.chat.start();
+		await c.settle();
+		await c.tick(BRIEF_WAIT_MS - 1000);
+		expect(c.sends()).toHaveLength(0);
+		await c.tick(1000);
+		expect(c.sends().map((m) => m.params.text)).toEqual([
+			"No morning brief today: the COO hasn't answered in 45 minutes.",
+		]);
+		await c.tick(60_000);
+		expect(c.sends()).toHaveLength(1);
+		await c.reply({ text: "Morning brief, late", cause: "plugin", ids: ["s1"] });
+		expect(c.tg.last("sendMessage")?.params.text).toBe("Morning brief, late");
+	});
+
+	it("says why when the COO's chat stays busy, the request can't go, or its turn fails", async () => {
+		const busy = chatSetup({ at: `${DAY}T06:30:00-07:00` });
+		busy.roles.state.mode = "busy";
+		busy.chat.start();
+		await busy.settle();
+		await busy.tick(BRIEF_WAIT_MS);
+		expect(busy.sends().map((m) => m.params.text)).toEqual([
+			"No morning brief today: the COO's chat stayed busy for 45 minutes.",
+		]);
+
+		const cant = chatSetup({ at: `${DAY}T06:30:00-07:00` });
+		cant.roles.state.mode = "error";
+		cant.chat.start();
+		await cant.settle();
+		expect(cant.sends().map((m) => m.params.text)).toEqual(["No morning brief today: no home chat for coo."]);
+		await cant.tick(BRIEF_WAIT_MS);
+		expect(cant.sends()).toHaveLength(1);
+
+		const failed = chatSetup({ at: `${DAY}T06:30:00-07:00` });
+		failed.chat.start();
+		await failed.settle();
+		await failed.reply({ error: "model overloaded", cause: "plugin", ids: ["s1"] });
+		expect(failed.sends().map((m) => m.params.text)).toEqual([
+			"No morning brief today: the COO's turn failed (model overloaded).",
+		]);
+		await failed.tick(BRIEF_WAIT_MS);
+		expect(failed.sends()).toHaveLength(1);
+	});
+
+	it("an empty or odd brief time turns the brief off", async () => {
+		for (const briefAt of ["", "half six", "25:00"]) {
+			const c = chatSetup({ briefAt, at: `${DAY}T06:30:00-07:00` });
+			expect(c.chat.briefAt).toBe("");
+			c.chat.start();
+			await c.settle();
+			expect(c.timers).toHaveLength(0);
+			expect(c.roles.sent).toHaveLength(0);
+		}
+	});
+});
+
+describe("telegram plugin: chat helpers", () => {
+	it("reads HH:MM, the Pacific date and time, a forced clock and the role's name", () => {
+		expect(parseClock("06:30")).toBe(390);
+		expect(parseClock("6:30")).toBe(390);
+		expect(parseClock("")).toBeNull();
+		expect(parseClock("24:00")).toBeNaN();
+		expect(zoneClock(Date.parse("2026-10-06T13:30:00Z"))).toEqual({ date: "2026-10-06", minutes: 390 });
+		expect(zoneClock(Date.parse("2026-12-01T14:30:00Z"))).toEqual({ date: "2026-12-01", minutes: 390 });
+		expect(zoneClock(Date.parse("2026-10-07T03:00:00Z"))).toEqual({ date: "2026-10-06", minutes: 20 * 60 });
+		let real = 1000;
+		const now = clockFrom("2026-10-06T06:30:00-07:00", () => real);
+		expect(now()).toBe(Date.parse("2026-10-06T13:30:00Z"));
+		real += 5000;
+		expect(now()).toBe(Date.parse("2026-10-06T13:30:05Z"));
+		const realNow = () => 42;
+		expect(clockFrom("", realNow)).toBe(realNow);
+		expect(clockFrom("not a date", realNow)).toBe(realNow);
+		expect(roleName("coo")).toBe("the COO");
+		expect(roleName("rollcall")).toBe("the rollcall role");
+	});
+
+	it("splits an answer between blocks, keeps a code block's fences in each piece, and caps the parts", () => {
+		expect(splitReply("Short **one**.")).toEqual({ parts: ["Short <b>one</b>."], more: false });
+		const code = [
+			"```js",
+			...Array.from({ length: 400 }, (_, i) => `const line${i} = ${i}; // filler text`),
+			"```",
+		].join("\n");
+		const { parts, more } = splitReply(code, { maxParts: 10 });
+		expect(parts.length).toBeGreaterThan(1);
+		expect(more).toBe(false);
+		// Each piece is code on its own (a long one shows as a collapsed quote), and no line is lost.
+		const open = /^<(pre|blockquote expandable)>/.exec(parts[0])?.[0] as string;
+		expect(open).toBeTruthy();
+		const close = open.startsWith("<pre") ? "</pre>" : "</blockquote>";
+		for (const p of parts) {
+			expect(p.startsWith(open)).toBe(true);
+			expect(p.endsWith(close)).toBe(true);
+			expect(visibleLength(p)).toBeLessThanOrEqual(TEXT_BUDGET);
+		}
+		const all = parts.join("\n");
+		for (const i of [0, 113, 114, 399]) expect(all).toContain(`const line${i} = ${i};`);
+		expect(all).not.toContain("```");
+		const oneLong = splitReply("x".repeat(TEXT_BUDGET * 2 + 10), { maxParts: 5 });
+		expect(oneLong.parts).toHaveLength(3);
+		const capped = splitReply("x".repeat(TEXT_BUDGET * 5), { maxParts: 3 });
+		expect(capped.parts).toHaveLength(3);
+		expect(capped.more).toBe(true);
 	});
 });

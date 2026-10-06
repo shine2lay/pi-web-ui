@@ -56,6 +56,7 @@ import { PluginDomConsent, declarationWantsDom } from "./plugin-dom.js";
 import { validatePluginManifest, formatManifestIssue, isKnownPermission } from "./plugin-manifest-validate.js";
 import { buildPluginApiCatalog } from "./plugin-api-catalog.js";
 import { askHub, type Ask, type AskEvent, type AskFieldAnswer, type AskResult } from "./asks.js";
+import type { RoleReply, RoleSendOptions, RoleSendResult, RoleSendVia } from "./role-replies.js";
 import { AGENT_TOOL_CATALOG } from "./tool-manager.js";
 
 /** telegram-answers: a plugin gets its own copy of an ask, so it can't change the shared one. */
@@ -601,6 +602,21 @@ export interface PluginHost {
 		list(): Ask[];
 		on(handler: (ev: AskEvent) => void): () => void;
 		answer(id: string, answers: AskFieldAnswer[]): Promise<AskResult>;
+	};
+	/** telegram-coo: talk to a role's home chat (see server/role-replies.ts). Needs permission "roles"
+	 *  (without it: send() = {ok:false}, onReply() hears nothing).
+	 *  - send(role, text, {via, onQueued}): the text goes into the role's home chat as the owner's own
+	 *    message, the way a typed one does (a closed chat opens in the background). A busy chat gets
+	 *    it right after its current turn: onQueued() is called once first. via "telegram" or "plugin"
+	 *    (the default) becomes the turn's cause. Resolves {ok:true, id} once the chat took it, else
+	 *    {ok:false, error}. Never throws.
+	 *  - onReply(handler): hear each run that ends in a role's home chat: its last assistant text
+	 *    (whole, up to 20,000 characters), what started it (cause: telegram, plugin, role, browser or
+	 *    other), the send ids it took in, and error when it failed. Returns the way to stop;
+	 *    unloading the plugin stops it too. */
+	roles: {
+		send(role: string, text: string, opts?: RoleSendOptions): Promise<RoleSendResult>;
+		onReply(handler: (reply: RoleReply) => void): () => void;
 	};
 	/** 插件间事件总线：emit 回填 from=本插件 id，payload 经 JSON 往返（超 4KB
 	 *  截断字符串化）；on 返回取消函数；反激活时清理本插件全部订阅。 */
@@ -2231,6 +2247,12 @@ export class PluginManager {
 	runAborter: ((conversationId: string) => Promise<{ ok: boolean; error?: string }>) | undefined = undefined;
 	/** 由 index.ts 接入 agent-service：模型列表（host.models.list 的底层）。无注入回 []。 */
 	modelLister: (() => PluginModelInfo[] | Promise<PluginModelInfo[]>) | undefined = undefined;
+	/** telegram-coo: wired by index.ts to AgentService.sendToRole (host.roles.send). Unwired: {ok:false}. */
+	roleSender:
+		| ((role: string, text: string, opts: { via: RoleSendVia; onQueued?: () => void }) => Promise<RoleSendResult>)
+		| undefined = undefined;
+	/** telegram-coo: host.roles.onReply listeners (emitRoleReply fans out to them, errors kept apart). */
+	readonly roleReplyHandlers = new Set<(reply: RoleReply) => void>();
 	/** 插件能力动态授权表（host.requestPermission 的底层，见 server/plugin-permissions.ts）。 */
 	readonly permGrants: PluginPermissionStore;
 	/** 由 index.ts 注入：向浏览器请求能力授权的用户确认（{ok, remember}）。
@@ -2254,6 +2276,17 @@ export class PluginManager {
 	/** 激活期插件的能力门控快照（activate 开头写入、落盘 loaded 或失败即删）：
 	 *  canUse 在 host 对象可用之前（loaded.set 之前）也要能判定。 */
 	private activatingGates = new Map<string, GateRecord>();
+
+	/** telegram-coo: a run in a role's home chat ended (AgentService.onRoleReply, wired by index.ts). */
+	emitRoleReply(reply: RoleReply): void {
+		for (const h of [...this.roleReplyHandlers]) {
+			try {
+				h(reply);
+			} catch (err) {
+				console.error("[plugins] role reply handler failed:", err);
+			}
+		}
+	}
 
 	/** 会话统计扇出（异常隔离；订阅者崩了只记日志）。发送方（如定期推送快照统计处）负责节流。 */
 	emitStats(s: PluginStats): void {
@@ -4368,6 +4401,46 @@ export class PluginManager {
 				answer: async (id, answers) => {
 					if (!can("asks")) return { ok: false, error: 'the plugin did not declare permission "asks"' };
 					return askHub.answer(String(id ?? ""), Array.isArray(answers) ? answers : [], info.id);
+				},
+			},
+			roles: {
+				send: async (role, text, opts) => {
+					if (!can("roles")) return { ok: false, error: 'the plugin did not declare permission "roles"' };
+					const sender = self.roleSender;
+					if (!sender) return { ok: false, error: "roles aren't available here" };
+					const onQueued = typeof opts?.onQueued === "function" ? opts.onQueued : undefined;
+					try {
+						return await sender(String(role ?? ""), String(text ?? ""), {
+							via: opts?.via === "telegram" ? "telegram" : "plugin",
+							...(onQueued
+								? {
+										onQueued: () => {
+											try {
+												onQueued();
+											} catch (err) {
+												console.error(`[plugin:${info.id}] roles.send onQueued failed:`, err);
+											}
+										},
+									}
+								: {}),
+						});
+					} catch (err) {
+						return { ok: false, error: (err as Error)?.message || String(err) };
+					}
+				},
+				onReply: (handler) => {
+					if (!can("roles") || typeof handler !== "function") return () => {};
+					const h = (reply: RoleReply): void => {
+						try {
+							handler({ ...reply, ids: [...reply.ids] });
+						} catch (err) {
+							console.error(`[plugin:${info.id}] roles reply handler failed:`, err);
+						}
+					};
+					self.roleReplyHandlers.add(h);
+					return effects.add("roles.onReply", () => {
+						self.roleReplyHandlers.delete(h);
+					});
 				},
 			},
 			events: {

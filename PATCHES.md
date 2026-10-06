@@ -111,6 +111,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | queue-main-chat              | `local` | `server/task-queue.ts`, `stuck-asks.ts`, `agent-service.ts` (`askingChats`, `emitConversations`), `queue-groups.ts`, `protocol.ts`, `protocol-version.ts` (41), `web/src/components/TaskQueuePanel.tsx`, `done-watch.ts`, `App.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/queue-main-chat-test.mjs` (new), `tests/queue-lanes-test.mjs`, `queue-panel-test.mjs`, `stall-watch-test.mjs`, `telegram-answers-test.mjs`, `tests/unit/`; the answer line in blue (#62): `server/tldr-lines.ts`, `TldrPanel.tsx`, `LeftPanel.tsx`; paired with pi-queue |
 | queue-blocked                | `local` | `server/queue-blocks.ts` (new), `task-queue.ts`, `queue-host.ts`, `client-state.ts` (`queueWatch`), `agent-service.ts`, `queue-groups.ts`, `stuck-asks.ts`, `tldr-lines.ts`, `protocol.ts`, `protocol-version.ts` (42), `web/src/components/TaskQueuePanel.tsx`, `TldrPanel.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/queue-blocked-test.mjs` (new), `tests/unit/queue-blocks.test.ts` (new), `tests/unit/task-queue.test.ts`; paired with pi-queue |
 | roles-overview               | `local` | `server/roles-overview.ts` (new), `role-rules.ts` (new), `role-messages.ts`, `identities.ts`, `identity-roles.ts`, `identity-config.ts` (pi-identity copy), `agent-service.ts`, `index.ts`, `tabs.ts`, `protocol.ts`, `protocol-version.ts` (43), `web/src/components/RolesView.tsx` (new), `roles-view-model.ts` (new), `roles-state.ts` (new), `roles-view.css` (new), `chat-focus.ts` (new), `owner-fields.ts` (new), `IdentitiesSettings.tsx`, `TopBar.tsx`, `ui-slots.ts`, `topbar-fit.ts`, `App.tsx`, `RightPanel.tsx`, `TaskQueuePanel.tsx`, `TldrPanel.tsx`, `i18n.tsx`, `locales/*.json`, `docs/roles-overview.md` (new); paired with pi-identity |
+| telegram-coo                 | `local` | `server/role-replies.ts` (new), `roles-overview-tool.ts` (new), `agent-service.ts` (turn records, `sendToRole`), `index.ts`, `plugins.ts` (`host.roles`), `plugin-manifest-validate.ts`, `plugin-api-catalog.ts`, `tool-manager.ts`, `plugin-sdk/`, `plugins/telegram/` (0.2.0), `docs/architecture-plugins.md`, `docs/roles-overview.md`, `tests/telegram-coo-test.mjs` (new), `tests/unit/` |
 
 ---
 
@@ -5266,3 +5267,75 @@ answers, queue controls and edits stay in the chats and Settings. Details:
 - The reader depends on the transcript entry shapes of pi-tldr (`tldr`), pi-queue (`task-queue`) and
   role-messages' report records; if one changes, keep `lineKind` and the report boundaries in step.
 - Keep the page read-only: no queue command, answer or edit may be sent from it.
+
+## telegram-coo
+
+**Status**: `local`
+**Baseline**: v0.96.1 (on top of `telegram-answers`, `role-messages`, `roles-overview`)
+
+**Why** (owner, 2026-10-06, queue task #72): "make that role also listen to me on telegram, so if i
+send a message, it'll go to that role and give me response"; asked when it should write to him, he
+chose "When I ask + morning brief". The owner follows everything from his phone through one role,
+the COO, which can see every role's state in one call.
+
+### Changes
+
+1. **The roles host API** (`server/role-replies.ts` new, `plugins.ts`, `plugin-manifest-validate.ts`,
+   `plugin-api-catalog.ts`, `plugin-sdk/`, `index.ts`): a plugin permission family `roles` with
+   `host.roles.send(role, text, { via, onQueued })` and `host.roles.onReply(handler)` (see
+   docs/architecture-plugins.md). `send` resolves the role's home chat from the identity registry
+   (`roleHomeChat`) and reuses the role-message delivery (`sendRoleMessage` ->
+   `deliverRoleMessage`), so a closed chat opens in the background and a busy one is retried every
+   3 s (`sendWhenFree`, `onQueued` once) until its turn ends.
+2. **Turn records** (`agent-service.ts`): every prompt carries a cause (`telegram`, `plugin`, a role
+   message, the browser's prompt from `index.ts`, or other) and an optional send id; a role home
+   chat's run keeps a `RoleTurnRecord` (causes, send ids, last assistant text, error) from
+   `preflightResult`/`agent_start` to `agent_settled`, then hands `roleReplyOf` (markers stripped,
+   20,000 characters at most) to `AgentService.onRoleReply` -> `PluginManager.emitRoleReply`.
+   The strongest cause wins: telegram > plugin > role > browser > other; the 6 am report's role
+   messages count as other.
+3. **`roles_overview`** (`server/roles-overview-tool.ts` new, `tool-manager.ts`): a read-only chat tool
+   with the Roles page's data as text (`readRolesOverview`), all roles in short or one in full, capped
+   at 24,000 characters (docs/roles-overview.md). Not a catalog row: there is nothing to switch
+   off; a role's tools are limited in its identity.json.
+4. **The Telegram plugin 0.2.0** (`plugins/telegram/`): two settings, **Messages go to** (`routeTo`,
+   default `coo`; empty = the old behaviour) and **Morning brief at** (`briefAt`, HH:MM Pacific,
+   default `06:30`; empty = off). The owner's plain messages, and his replies to the role's messages
+   or his own, go to the role with the phone sign (U+1F4F1) and a space in front (`via: "telegram"`); `/start`, a reply to a waiting
+   question and the message after "Type an answer" answer as before. Non-text gets "Only text
+   messages for now." Telegram shows typing while the role works; a busy role gets one note. The
+   role's answers to turns from Telegram, the brief or another role come back in the plugin's
+   Markdown-to-Telegram formatting, threaded under his message, at most 3 messages, then "The rest
+   is in the chat" with its link; a failed turn sends one line. The brief: asked daily at the set
+   time (at start-up if pi was down, until noon), "No morning brief today: <why>" after 45 minutes
+   without an answer. The plugin stores the brief's state and the role's message ids, and never
+   logs message text. A reply arriving before its send receipt waits for the id to be bound, so
+   even a very fast answer stays threaded and a fast brief is not lost. An empty brief gets the
+   no-brief line too. `PI_WEB_TELEGRAM_NOW` forces its clock (tests).
+
+### How it was checked
+
+- `tests/unit/plugin-telegram.test.ts` (fake Telegram, fake `host.roles`): routing and the
+  exceptions, replies to the role, text only, `/start`, typing, the busy note, threading, splitting
+  into 3 with the link, the failure lines, browser turns kept out, no message text in logs, the
+  restart notes, the brief at its time, the catch-up until noon, once a day, the missed-brief line
+  and its reasons, an empty brief, replies before the send receipt, `/start` in a reply, a
+  server-cut answer's link, the settings' defaults and off.
+- `tests/unit/role-replies.test.ts`, `plugin-roles.test.ts`, `roles-overview-tool.test.ts`,
+  `plugin-api-catalog.test.ts`, `tool-registration.test.ts`.
+- `tests/telegram-coo-test.mjs` (sealed: fake Telegram via `PI_WEB_TELEGRAM_API_BASE`, mock model, a
+  made-up coo role with a closed home chat and a ghost role without one): the status line, a message
+  into the closed chat with the phone sign in front and the answer formatted and threaded back, a reply to the role,
+  a browser turn kept out, a busy turn (note, delivered after it, answer threaded), the brief
+  through `roles_overview`, once, a role without a home chat, no message text in the server's
+  Telegram lines.
+- The new tests fail on the code before this patch (30 unit tests in 5 files; the E2E from its
+  first step).
+
+### When syncing
+
+- The turn records hook `prompt()`, `preflightResult`, `agent_start`, `message_end` and
+  `agent_settled`; if one moves, keep the record's start and end with it.
+- `host.roles` stays plugin-only; agents reach other roles with `message_role`.
+- The plugin reuses telegram-answers' formatting (`toTelegramHtml`, `TEXT_BUDGET`); keep both in
+  step.

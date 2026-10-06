@@ -30,6 +30,7 @@ import {
 	MESSAGE_ROLE_TOOL_NAME,
 	PATCH_TOOL_NAME,
 	PRESENT_FILES_TOOL_NAME,
+	ROLES_OVERVIEW_TOOL_NAME,
 	SCHEDULE_CANCEL_TOOL_NAME,
 	SCHEDULE_LIST_TOOL_NAME,
 	SCHEDULE_TASK_TOOL_NAME,
@@ -48,6 +49,10 @@ const INTRINSIC = new Set(["bash", "read"]);
  *  chats (ROLE_ONLY_TOOLS there), and the owner's switch is Settings -> Identities -> Role messages (pause). */
 const ROLE_ONLY = new Set([MESSAGE_ROLE_TOOL_NAME]);
 
+/** telegram-coo: read-only tools every chat always has. Not a catalog row: roles_overview only reads the
+ *  Roles page's data, so there is nothing to switch off; the owner limits a role's tools in identity.json. */
+const ALWAYS = new Set([ROLES_OVERVIEW_TOOL_NAME]);
+
 /** 工厂 → 它注册的工具名（与各工厂的 name: 对齐；makeSubagentTools 产出 7 个子代理工具，见 subagents.ts）。 */
 const FACTORY_TOOLS: Record<string, string[]> = {
 	makeAdaptiveBashTool: ["bash"],
@@ -64,6 +69,7 @@ const FACTORY_TOOLS: Record<string, string[]> = {
 	makeConversationReadTool: [CONVERSATION_READ_TOOL_NAME],
 	makeClaimFilesTool: [CLAIM_FILES_TOOL_NAME],
 	makeMessageRoleTool: [MESSAGE_ROLE_TOOL_NAME],
+	makeRolesOverviewTool: [ROLES_OVERVIEW_TOOL_NAME],
 	makePresentFilesTool: [PRESENT_FILES_TOOL_NAME],
 	makeSkillTool: [SKILL_TOOL_NAME],
 	makeCompactContextTool: [COMPACT_CONTEXT_TOOL_NAME],
@@ -98,7 +104,7 @@ describe("注册→目录", () => {
 		const homeless: string[] = [];
 		for (const [factory, tools] of Object.entries(FACTORY_TOOLS)) {
 			for (const name of tools) {
-				if (!known.has(name) && !INTRINSIC.has(name) && !ROLE_ONLY.has(name))
+				if (!known.has(name) && !INTRINSIC.has(name) && !ROLE_ONLY.has(name) && !ALWAYS.has(name))
 					homeless.push(`${name}（来自 ${factory}）`);
 			}
 		}
@@ -121,5 +127,6 @@ describe("注册→目录", () => {
 		const known = new Set(AGENT_TOOL_CATALOG.map((t) => t.name));
 		expect([...INTRINSIC].filter((n) => known.has(n))).toEqual([]);
 		expect([...ROLE_ONLY].filter((n) => known.has(n))).toEqual([]);
+		expect([...ALWAYS].filter((n) => known.has(n))).toEqual([]);
 	});
 });

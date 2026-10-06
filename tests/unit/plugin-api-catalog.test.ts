@@ -122,6 +122,8 @@ describe("静态表与源码同口径", () => {
 			"models.list",
 			"net.fetch",
 			"events.emit/on",
+			"roles.send",
+			"roles.onReply",
 			"storage",
 			"secrets",
 			"effect",

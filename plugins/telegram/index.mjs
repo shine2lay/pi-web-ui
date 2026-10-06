@@ -61,7 +61,13 @@ export function cut(s, max) {
 }
 
 /** One line, at most `max` characters. */
-const oneLine = (s, max) => cut(String(s ?? "").replace(/\s+/g, " ").trim(), max);
+const oneLine = (s, max) =>
+	cut(
+		String(s ?? "")
+			.replace(/\s+/g, " ")
+			.trim(),
+		max,
+	);
 
 /** Like cut, at the end of a word when there's one near. */
 export function cutWords(s, max) {
@@ -388,7 +394,7 @@ const plainOf = (s, saved) => restorePlain(emphasis(s), saved);
 /** Empty tags go, and a tag closed and opened again right away is one tag. */
 function tidy(html) {
 	let t = html;
-	for (let prev = ""; prev !== t; ) {
+	for (let prev = ""; prev !== t;) {
 		prev = t;
 		t = t
 			.replace(/<(b|i|u|s)><\/\1>/g, "")
@@ -478,7 +484,9 @@ const quoteBlock = (text) => {
 function preBlock(text) {
 	const t = String(text ?? "").replace(/^\n+|\s+$/g, "");
 	if (!t) return "";
-	return t.length > PRE_MAX_CHARS || t.split("\n").length > PRE_MAX_LINES ? quoteBlock(t) : `<pre>${escapeHtml(t)}</pre>`;
+	return t.length > PRE_MAX_CHARS || t.split("\n").length > PRE_MAX_LINES
+		? quoteBlock(t)
+		: `<pre>${escapeHtml(t)}</pre>`;
 }
 
 /** A command, a path or some JSON: a code block, or a collapsed quote when it's long. */
@@ -503,7 +511,9 @@ function tableBlock(rows, saved) {
 	const ruled = isRule(rows[1]);
 	const cells = rows.filter((r) => !isRule(r)).map(cellsOf);
 	const n = Math.max(1, ...cells.map((r) => r.length));
-	const width = Array.from({ length: n }, (_, k) => Math.min(30, Math.max(1, ...cells.map((r) => (r[k] ?? "").length))));
+	const width = Array.from({ length: n }, (_, k) =>
+		Math.min(30, Math.max(1, ...cells.map((r) => (r[k] ?? "").length))),
+	);
 	const lines = cells.map((r) =>
 		width
 			.map((w, k) => (r[k] ?? "").padEnd(w))
@@ -842,7 +852,8 @@ export function renderHead(ask) {
 	const head = `${icon} <b>${escapeHtml(title)}</b>`;
 	const chat = oneLine(plainText(ask?.conversationTitle), 100);
 	if (!chat) return head;
-	if ([...`${icon} ${title} \u00B7 from ${chat}`].length <= PHONE_LINE) return `${head} \u00B7 <i>from ${escapeHtml(chat)}</i>`;
+	if ([...`${icon} ${title} \u00B7 from ${chat}`].length <= PHONE_LINE)
+		return `${head} \u00B7 <i>from ${escapeHtml(chat)}</i>`;
 	return `${head}\n<i>from ${escapeHtml(cutWords(chat, PHONE_LINE - 5))}</i>`;
 }
 
@@ -961,7 +972,8 @@ export function leadOf(src) {
 		.trim();
 	const none = { lead: "", sep: "", rest: text };
 	const line = text.split("\n", 1)[0] ?? "";
-	if (!line || /^(?:```|~~~|>|#{1,6}\s|[-*+]\s|\d+[.)]\s|\|)/.test(line) || /<\/?[a-zA-Z][^>]*>/.test(line)) return none;
+	if (!line || /^(?:```|~~~|>|#{1,6}\s|[-*+]\s|\d+[.)]\s|\|)/.test(line) || /<\/?[a-zA-Z][^>]*>/.test(line))
+		return none;
 	let question = 0;
 	let sentence = 0;
 	let code = false;
@@ -1152,6 +1164,40 @@ function refOfButtons(message) {
 }
 
 /**
+ * Telegram calls that try again when Telegram asks us to slow down, has a hiccup or doesn't answer
+ * (call), and an HTML text that goes as plain text when Telegram can't read its formatting
+ * (callHtml). Shared by the question bridge and the chat (telegram-coo).
+ */
+export function telegramCalls({ api, wait, log = ignore, closed = () => false }) {
+	async function call(method, params) {
+		for (let attempt = 0; ; attempt++) {
+			try {
+				return await api.call(method, params);
+			} catch (err) {
+				if (!retryable(err) || attempt >= RETRY_DELAYS_MS.length || closed()) throw err;
+				await wait(err.code === 429 ? Math.min(60, Math.max(1, err.retryAfter || 1)) * 1000 : RETRY_DELAYS_MS[attempt]);
+			}
+		}
+	}
+
+	/** A call with an HTML text. When Telegram can't read its formatting, the same text goes as plain text. */
+	async function callHtml(method, params) {
+		try {
+			return await call(method, { ...params, parse_mode: "HTML" });
+		} catch (err) {
+			if (!cantParse(err)) throw err;
+			log(
+				"warn",
+				`telegram: Telegram couldn't read a message's formatting (${cut(err.description, 160)}); sent as plain text`,
+			);
+			return call(method, { ...params, text: cut(htmlToPlain(params.text), 4000) });
+		}
+	}
+
+	return { call, callHtml };
+}
+
+/**
  * Keeps one Telegram message per waiting ask. Everything that talks to Telegram runs one at a
  * time, in order, so an edit never overtakes the message it edits.
  *
@@ -1161,6 +1207,8 @@ function refOfButtons(message) {
  * repeat even if the storage is lost; a tap on an old message can't hit a newer question.
  *
  * storage keys: "sent" (key -> message state), "nextRef" (button ids).
+ *
+ * chat (telegram-coo, see createChat): when it's on, the owner's other messages go to a role.
  */
 export function createBridge({
 	api,
@@ -1171,6 +1219,7 @@ export function createBridge({
 	selfId = PLUGIN_ID,
 	log = ignore,
 	sleep,
+	chat = null,
 }) {
 	const owner = String(ownerId);
 	const wait = sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
@@ -1197,31 +1246,7 @@ export function createBridge({
 		return run;
 	}
 
-	async function call(method, params) {
-		for (let attempt = 0; ; attempt++) {
-			try {
-				return await api.call(method, params);
-			} catch (err) {
-				if (!retryable(err) || attempt >= RETRY_DELAYS_MS.length || closed) throw err;
-				await wait(
-					err.code === 429
-						? Math.min(60, Math.max(1, err.retryAfter || 1)) * 1000
-						: RETRY_DELAYS_MS[attempt],
-				);
-			}
-		}
-	}
-
-	/** A call with an HTML text. When Telegram can't read its formatting, the same text goes as plain text. */
-	async function callHtml(method, params) {
-		try {
-			return await call(method, { ...params, parse_mode: "HTML" });
-		} catch (err) {
-			if (!cantParse(err)) throw err;
-			log("warn", `telegram: Telegram couldn't read a message's formatting (${cut(err.description, 160)}); sent as plain text`);
-			return call(method, { ...params, text: cut(htmlToPlain(params.text), 4000) });
-		}
-	}
+	const { call, callHtml } = telegramCalls({ api, wait, log, closed: () => closed });
 
 	const send = (text, extra = {}) =>
 		callHtml("sendMessage", {
@@ -1322,7 +1347,10 @@ export function createBridge({
 				const msg = await send(text, { reply_markup });
 				e.messageId = Number(msg?.message_id) || 0;
 				save();
-				log("info", `telegram: sent ${live.kind === "approval" ? "permission prompt" : "question"} ${live.id} as message ${e.messageId}`);
+				log(
+					"info",
+					`telegram: sent ${live.kind === "approval" ? "permission prompt" : "question"} ${live.id} as message ${e.messageId}`,
+				);
 			} finally {
 				pendingSends.delete(key);
 			}
@@ -1340,8 +1368,7 @@ export function createBridge({
 			const e = entries.get(key);
 			if (!e) return;
 			const line = renderLine(ev.ask, e.link);
-			const text =
-				ev.type === "answered" ? renderAnswered(line, ev.summary, ev.from) : renderGone(line, ev.reason);
+			const text = ev.type === "answered" ? renderAnswered(line, ev.summary, ev.from) : renderGone(line, ev.reason);
 			await finish(e, text);
 		});
 	}
@@ -1525,6 +1552,26 @@ export function createBridge({
 			send(escapeHtml(t), {
 				reply_parameters: { message_id: msg.message_id, allow_sending_without_reply: true },
 			}).catch(ignore);
+		// telegram-coo: the role that gets the owner's other messages (null: chatting is off).
+		const talk = chat?.on ? chat : null;
+		/** To the role: text only. Never awaited here: a busy chat may take a while, and questions go on meanwhile. */
+		const toRole = async () => {
+			if (!text) return say(ONLY_TEXT);
+			talk.fromOwner(msg, text);
+		};
+		if (/^\/start(\s|@|$)/.test(text)) {
+			const n = asks.list().length;
+			await say(
+				(talk
+					? `Hi! Write here to talk to ${talk.name}: your message goes to its chat, and its answer comes back here.${
+							talk.briefAt ? ` Every morning at ${talk.briefAt} (Pacific time) it sends you a short brief.` : ""
+						}\n\npi also sends you its questions and permission prompts here. Tap a button to answer, or reply to a question's message to type an answer.`
+					: "Hi! pi sends you its questions and permission prompts here. Tap a button to answer, or reply to a question's message to type an answer.") +
+					(n ? `\n\nWaiting now: ${n}.` : ""),
+			);
+			resync("it went away");
+			return;
+		}
 		const replyTo = Number(msg.reply_to_message?.message_id) || 0;
 		if (replyTo) {
 			for (const e of entries.values()) {
@@ -1550,20 +1597,16 @@ export function createBridge({
 					return typedAnswer(open[0], open[0].step, text, say);
 				}
 			}
+			// telegram-coo: a reply to one of the role's messages, or to a message that isn't the bot's
+			// (his own), goes to the role.
+			if (talk && (talk.owns(replyTo) || !to?.from?.is_bot)) return toRole();
 			await say("That question is no longer waiting.");
-			return;
-		}
-		if (/^\/start(\s|@|$)/.test(text)) {
-			const n = asks.list().length;
-			await say(
-				"Hi! pi sends you its questions and permission prompts here. Tap a button to answer, or reply to a question's message to type an answer." +
-					(n ? `\n\nWaiting now: ${n}.` : ""),
-			);
-			resync("it went away");
 			return;
 		}
 		const open = openPrompts();
 		if (open.length === 1 && text) return typedAnswer(open[0], open[0].step, text, say);
+		// telegram-coo: with no question waiting for a typed answer, the message is for the role.
+		if (talk && !open.length) return toRole();
 		await say("To answer a question, tap one of its buttons, or reply to its message to type an answer.");
 	}
 
@@ -1710,12 +1753,525 @@ export function createPoller({
 }
 
 // ---------------------------------------------------------------------------
+// Chatting with a role (telegram-coo): the owner's messages go to a role's home chat (the COO's),
+// its answers come back here, and each morning it sends a short brief.
+// ---------------------------------------------------------------------------
+
+/** What a photo, voice note or file gets. */
+export const ONLY_TEXT = "Only text messages for now.";
+/** The morning brief's time is in this time zone. */
+export const BRIEF_ZONE = "America/Los_Angeles";
+/** No answer this long after asking for the brief -> one line saying there's none today. */
+export const BRIEF_WAIT_MS = 45 * 60_000;
+/** A brief missed at its time (pi was down) is still asked for until noon, or an hour after a later time. */
+const BRIEF_LATEST_MIN = 12 * 60;
+const BRIEF_TICK_MS = 10_000;
+/** At most this many messages per answer; then "the rest is in the chat". */
+export const REPLY_PARTS_MAX = 3;
+const TYPING_EVERY_MS = 4_500;
+const TYPING_MAX_MS = 10 * 60_000;
+/** How many of the role's messages a reply is still recognised by. */
+const CHAT_IDS_MAX = 300;
+/** An answer is waited for this long; then its message is forgotten. */
+const PENDING_MAX_MS = 24 * 60 * 60_000;
+/** Tests: a forced start time (ISO); the clock runs on from there. */
+export const NOW_ENV = "PI_WEB_TELEGRAM_NOW";
+
+/** The role's name in a sentence: "the COO" for a short id, else "the <id> role". */
+export function roleName(id) {
+	const s = String(id ?? "").trim();
+	return s.length <= 3 ? `the ${s.toUpperCase()}` : `the ${s} role`;
+}
+const capital = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** "HH:MM" -> minutes after midnight; empty -> null (off); anything else -> NaN. */
+export function parseClock(s) {
+	const t = String(s ?? "").trim();
+	if (!t) return null;
+	const m = /^(\d{1,2}):(\d{2})$/.exec(t);
+	if (!m) return Number.NaN;
+	const h = Number(m[1]);
+	const min = Number(m[2]);
+	return h < 24 && min < 60 ? h * 60 + min : Number.NaN;
+}
+
+/** The date ("YYYY-MM-DD") and the minutes after midnight at a moment, in a time zone. */
+export function zoneClock(ms, tz = BRIEF_ZONE) {
+	const parts = new Intl.DateTimeFormat("en-CA", {
+		timeZone: tz,
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit",
+		hourCycle: "h23",
+	}).formatToParts(new Date(ms));
+	const p = (t) => parts.find((x) => x.type === t)?.value ?? "";
+	return { date: `${p("year")}-${p("month")}-${p("day")}`, minutes: Number(p("hour")) * 60 + Number(p("minute")) };
+}
+
+/** The clock: real time, or a forced start (tests, NOW_ENV) that runs on from there. */
+export function clockFrom(forced, realNow = Date.now) {
+	const at = forced ? Date.parse(String(forced)) : Number.NaN;
+	if (!Number.isFinite(at)) return realNow;
+	const t0 = realNow();
+	return () => at + (realNow() - t0);
+}
+
+/** What the morning brief asks the role for. */
+export function briefRequest(date) {
+	return [
+		`Morning brief for the owner, ${date}. He reads it on his phone (Telegram), so keep it under about 300 words.`,
+		"Use roles_overview to see every role's state, then write:",
+		"1. The overall direction, in one or two sentences.",
+		"2. Anything that needs the owner, first.",
+		"3. One line for each role that did something since yesterday's brief.",
+		"4. The quiet roles together, in one line.",
+		`Start with "Morning brief, ${date}".`,
+	].join("\n");
+}
+
+const FENCE_OPEN = /^\s*(`{3,}|~{3,})/;
+
+/** A markdown text in blocks: split at blank lines, a fenced code block kept whole. */
+function blocksOf(src) {
+	const out = [];
+	let cur = [];
+	let fence = "";
+	for (const line of String(src ?? "")
+		.replace(/\r\n?/g, "\n")
+		.split("\n")) {
+		if (fence) {
+			cur.push(line);
+			const m = /^\s*(`{3,}|~{3,})\s*$/.exec(line);
+			if (m && m[1][0] === fence[0] && m[1].length >= fence.length) fence = "";
+			continue;
+		}
+		const open = FENCE_OPEN.exec(line);
+		if (open) {
+			fence = open[1];
+			cur.push(line);
+			continue;
+		}
+		if (!line.trim()) {
+			if (cur.length) out.push(cur.join("\n"));
+			cur = [];
+			continue;
+		}
+		cur.push(line);
+	}
+	if (cur.length) out.push(cur.join("\n"));
+	return out;
+}
+
+/**
+ * An answer as Telegram messages: the plugin's own markdown formatting, split between blocks so
+ * each message fits, at most maxParts of them; more = there was more than fits.
+ */
+export function splitReply(src, { budget = TEXT_BUDGET, maxParts = REPLY_PARTS_MAX } = {}) {
+	const fits = (s) => visibleLength(toTelegramHtml(s)) <= budget;
+	const pieces = [];
+	for (const block of blocksOf(src)) {
+		if (fits(block)) {
+			pieces.push(block);
+			continue;
+		}
+		// Too long for one message: by lines (a code block keeps its fences in each piece).
+		const lines = block.split("\n");
+		const open = FENCE_OPEN.exec(lines[0] ?? "");
+		const fenced = open && lines.length > 1 && /^\s*(`{3,}|~{3,})\s*$/.test(lines[lines.length - 1]);
+		const inner = fenced ? lines.slice(1, -1) : lines;
+		const wrap = fenced ? (s) => `${lines[0]}\n${s}\n${lines[lines.length - 1]}` : (s) => s;
+		let cur = "";
+		for (const line of inner) {
+			const next = cur ? `${cur}\n${line}` : line;
+			if (fits(wrap(next))) {
+				cur = next;
+				continue;
+			}
+			if (cur) pieces.push(wrap(cur));
+			cur = "";
+			if (fits(wrap(line))) {
+				cur = line;
+				continue;
+			}
+			// One line longer than a message: in slices.
+			let rest = line;
+			while (rest) {
+				let n = Math.min(rest.length, budget);
+				while (n > 1 && !fits(wrap(rest.slice(0, n)))) n = Math.floor(n * 0.8);
+				pieces.push(wrap(rest.slice(0, n)));
+				rest = rest.slice(n);
+			}
+		}
+		if (cur) pieces.push(wrap(cur));
+	}
+	const parts = [];
+	let cur = "";
+	for (const p of pieces) {
+		const next = cur ? `${cur}\n\n${p}` : p;
+		if (cur && !fits(next)) {
+			parts.push(cur);
+			cur = p;
+		} else cur = next;
+	}
+	if (cur) parts.push(cur);
+	return { parts: parts.slice(0, maxParts).map((p) => toTelegramHtml(p)), more: parts.length > maxParts };
+}
+
+/** What the chat keeps between restarts (storage key "chat"). */
+export function loadChatStore(storage) {
+	const s = storage?.get?.("chat", null) ?? {};
+	return {
+		// The role's messages here: a reply to one goes to the role.
+		ids: Array.isArray(s.ids) ? s.ids.map(Number).filter((n) => n > 0) : [],
+		// The owner's messages not yet taken by the role's chat: message id -> when.
+		waiting: s.waiting && typeof s.waiting === "object" ? { ...s.waiting } : {},
+		// Taken, answer not back yet: send id -> { to: the owner's message id, at }.
+		pending: s.pending && typeof s.pending === "object" ? { ...s.pending } : {},
+		// The role's home chat, from its replies (for the link to it).
+		file: typeof s.file === "string" ? s.file : "",
+	};
+}
+
+/**
+ * The chat with a role. fromOwner: the owner's text goes to the role's home chat as his message,
+ * with "\u{1F4F1} " in front ("typing\u2026" shows meanwhile; a busy chat gets it after its turn, and
+ * he's told). onReply: the role's last message of a turn that a Telegram message, the morning brief
+ * or another role started comes back, under his message when it answers one, in at most 3 messages.
+ * tick: asks for the morning brief at its time, or says why there's none.
+ *
+ * Its own Telegram messages go one at a time, apart from the question bridge's, so a long wait for
+ * a busy chat never holds a question up. Message text never goes in the log.
+ *
+ * storage keys: "chat" (see loadChatStore), "brief" ({date, askedAt, ids, state, alerted}).
+ */
+export function createChat({
+	api,
+	roles,
+	storage,
+	ownerId,
+	routeTo = "",
+	briefAt = "",
+	webAppAddress = "",
+	log = ignore,
+	now = Date.now,
+	sleep,
+	store = loadChatStore(storage),
+	setTimer = (fn, ms) => {
+		const t = setInterval(fn, ms);
+		t.unref?.();
+		return t;
+	},
+	clearTimer = (t) => clearInterval(t),
+}) {
+	const owner = String(ownerId);
+	const role = String(routeTo ?? "").trim();
+	const on = Boolean(role);
+	const name = roleName(role);
+	const Name = capital(name);
+	const briefMin = on ? parseClock(briefAt) : null;
+	const briefOn = typeof briefMin === "number" && !Number.isNaN(briefMin);
+	const wait = sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+	let closed = false;
+	const { callHtml } = telegramCalls({ api, wait, log, closed: () => closed });
+
+	const save = () => {
+		const old = now() - PENDING_MAX_MS;
+		for (const [k, p] of Object.entries(store.pending)) if (!(Number(p?.at) > old)) delete store.pending[k];
+		for (const [k, at] of Object.entries(store.waiting)) if (!(Number(at) > old)) delete store.waiting[k];
+		if (store.ids.length > CHAT_IDS_MAX) store.ids.splice(0, store.ids.length - CHAT_IDS_MAX);
+		storage.set("chat", store);
+	};
+
+	let chain = Promise.resolve();
+	function enqueue(job) {
+		const run = chain
+			.then(() => (closed ? undefined : job()))
+			.catch((err) => {
+				log("warn", `telegram: ${err?.message ?? err}`);
+			});
+		chain = run;
+		return run;
+	}
+
+	const under = (to) => (to ? { reply_parameters: { message_id: to, allow_sending_without_reply: true } } : {});
+	async function sendHtml(html, to = 0) {
+		const m = await callHtml("sendMessage", {
+			chat_id: owner,
+			text: html,
+			link_preview_options: { is_disabled: true },
+			...under(to),
+		});
+		const id = Number(m?.message_id) || 0;
+		if (id) {
+			store.ids.push(id);
+			save();
+		}
+		return m;
+	}
+	/** One plain line from us (not the role), in order with the rest. */
+	const line = (text, to = 0, linkHtml = "") => enqueue(() => sendHtml(`${escapeHtml(text)}${linkHtml}`, to));
+	const openLink = () => {
+		const link = chatLink(webAppAddress, store.file);
+		return link ? ` <a href="${escapeHtml(link)}">Open the chat</a>` : "";
+	};
+
+	// "typing\u2026" while the role works on one of his messages (Telegram shows it for 5 seconds).
+	const typing = new Map();
+	let typingTimer = null;
+	function typingTick() {
+		const t = now();
+		for (const [to, since] of typing) if (t - since > TYPING_MAX_MS) typing.delete(to);
+		if (!typing.size || closed) {
+			if (typingTimer) clearTimer(typingTimer);
+			typingTimer = null;
+			return;
+		}
+		Promise.resolve()
+			.then(() => api.call("sendChatAction", { chat_id: owner, action: "typing" }))
+			.catch(ignore);
+	}
+	function startTyping(to) {
+		typing.set(to, now());
+		if (!typingTimer) typingTimer = setTimer(typingTick, TYPING_EVERY_MS);
+		typingTick();
+	}
+	function stopTyping(to) {
+		typing.delete(to);
+		if (!typing.size && typingTimer) {
+			clearTimer(typingTimer);
+			typingTimer = null;
+		}
+	}
+
+	// A very fast turn can finish before roles.send resolves with its id. Hold its reply until
+	// that receipt is bound to the owner's Telegram message (or to the brief).
+	let sendsInFlight = 0;
+	const earlyReplies = [];
+	function finishSend() {
+		sendsInFlight--;
+		for (const r of earlyReplies.splice(0)) onReply(r);
+	}
+
+	function fromOwner(msg, text) {
+		if (closed || !on) return;
+		const to = Number(msg?.message_id) || 0;
+		if (to) {
+			store.waiting[to] = now();
+			save();
+		}
+		startTyping(to);
+		log("info", `telegram: the owner's message ${to} goes to ${role} (${text.length} characters)`);
+		let told = false;
+		sendsInFlight++;
+		const failed = (why) => {
+			delete store.waiting[to];
+			save();
+			stopTyping(to);
+			log("warn", `telegram: message ${to} didn't reach ${role}: ${why}`);
+			line(`Couldn't send it to ${name}: ${why}.`, to);
+		};
+		Promise.resolve()
+			.then(() =>
+				roles.send(role, `\u{1F4F1} ${text}`, {
+					via: "telegram",
+					onQueued: () => {
+						if (told || closed) return;
+						told = true;
+						log("info", `telegram: ${role} is busy; message ${to} goes in after its turn`);
+						line(`${Name} is busy right now: your message goes in right after its current turn.`, to);
+					},
+				}),
+			)
+			.then(
+				(res) => {
+					if (!res?.ok) return failed(oneLine(res?.error || "it didn't go through", 200));
+					delete store.waiting[to];
+					store.pending[res.id] = { to, at: now() };
+					save();
+				},
+				(err) => failed(oneLine(err?.message || "it didn't go through", 200)),
+			)
+			.finally(finishSend);
+	}
+
+	// The morning brief.
+	const briefState = () => storage.get("brief", null) ?? {};
+	const setBrief = (patch) => storage.set("brief", { ...briefState(), ...patch });
+	const briefWaitMin = Math.round(BRIEF_WAIT_MS / 60_000);
+	const noBrief = (why) => {
+		log("warn", `telegram: no morning brief today: ${why}`);
+		line(`No morning brief today: ${why}.`);
+	};
+
+	async function askBrief(date) {
+		setBrief({ date, askedAt: now(), ids: [], state: "asking", alerted: false });
+		log("info", `telegram: asking ${role} for the morning brief (${date})`);
+		sendsInFlight++;
+		try {
+			let res;
+			try {
+				res = await roles.send(role, briefRequest(date), { via: "plugin" });
+			} catch (err) {
+				res = { ok: false, error: err?.message || String(err) };
+			}
+			const b = briefState();
+			if (b.date !== date || closed) return;
+			if (res?.ok) {
+				setBrief({ ids: [...(b.ids ?? []), res.id], state: b.state === "asking" ? "asked" : b.state });
+				return;
+			}
+			if (b.state === "asking") {
+				setBrief({ state: "failed", alerted: true });
+				noBrief(oneLine(res?.error || "it didn't go through", 200));
+			}
+		} finally {
+			finishSend();
+		}
+	}
+
+	function tick() {
+		if (closed || !briefOn) return;
+		const t = now();
+		const { date, minutes } = zoneClock(t);
+		const b = briefState();
+		if (b.date !== date) {
+			if (minutes >= briefMin && minutes < Math.max(BRIEF_LATEST_MIN, briefMin + 60)) void askBrief(date);
+			return;
+		}
+		if ((b.state === "asking" || b.state === "asked") && !b.alerted && t - (Number(b.askedAt) || t) >= BRIEF_WAIT_MS) {
+			setBrief({ state: "missed", alerted: true });
+			noBrief(
+				b.state === "asking"
+					? `${name}'s chat stayed busy for ${briefWaitMin} minutes`
+					: `${name} hasn't answered in ${briefWaitMin} minutes`,
+			);
+		}
+	}
+
+	function onReply(r) {
+		if (closed || !on || r?.role !== role) return;
+		const ids = Array.isArray(r.ids) ? r.ids.map(String) : [];
+		if (typeof r.file === "string" && r.file && r.file !== store.file) {
+			store.file = r.file;
+			save();
+		}
+		const b = briefState();
+		const brief = ids.some((id) => (b.ids ?? []).includes(id));
+		if (
+			sendsInFlight &&
+			ids.length &&
+			!brief &&
+			!ids.some((id) => store.pending[id]) &&
+			(r.cause === "telegram" || r.cause === "plugin")
+		) {
+			earlyReplies.push(r);
+			if (earlyReplies.length > CHAT_IDS_MAX) earlyReplies.shift();
+			return;
+		}
+		const text = String(r.text ?? "");
+		if (brief) setBrief({ state: r.error || !text.trim() ? "failed" : "done", alerted: true });
+		// A plugin's turn only when it's our brief (another plugin's sends get their own answers); the
+		// turns started in the browser, or by the app itself, stay in the chat.
+		if (r.cause === "plugin" ? !brief : r.cause !== "telegram" && r.cause !== "role") return;
+		let to = 0;
+		for (const id of ids) {
+			const p = store.pending[id];
+			if (!p) continue;
+			if (!to) to = Number(p.to) || 0;
+			stopTyping(Number(p.to) || 0);
+			delete store.pending[id];
+		}
+		save();
+		log(
+			"info",
+			`telegram: ${role} answered (${brief ? "the morning brief" : r.cause}, ${text.length} characters${r.error ? ", failed" : ""})`,
+		);
+		if (r.error) {
+			const why = oneLine(r.error, 300);
+			if (brief) return noBrief(`${name}'s turn failed (${why})`);
+			return line(`${Name} couldn't finish: ${why}.`, to, openLink());
+		}
+		if (!text.trim())
+			return brief
+				? noBrief(`${name} finished without writing a brief`)
+				: line(`${Name} finished without writing an answer.`, to, openLink());
+		enqueue(async () => {
+			const { parts, more: splitMore } = splitReply(text);
+			const more = splitMore || r.cut;
+			for (let i = 0; i < parts.length; i++) {
+				const link = more && i === parts.length - 1 ? chatLink(webAppAddress, store.file) : null;
+				const rest =
+					more && i === parts.length - 1
+						? `\n\n<i>The rest is in the chat${link ? `: <a href="${escapeHtml(link)}">open it</a>` : "."}</i>`
+						: "";
+				await sendHtml(parts[i] + rest, i === 0 ? to : 0);
+			}
+		});
+	}
+
+	let briefTimer = null;
+	return {
+		on,
+		name,
+		briefAt: briefOn ? String(briefAt).trim() : "",
+		/** One of the role's messages here (a reply to it goes to the role). */
+		owns: (messageId) => store.ids.includes(Number(messageId)),
+		fromOwner,
+		onReply,
+		tick,
+		/** Starts the brief's clock. restarted: pi started, so messages left on their way are lost: say so. */
+		start({ restarted = false } = {}) {
+			if (!on) return;
+			if (restarted) {
+				const lost = Object.keys(store.waiting).map(Number).filter(Boolean);
+				const cutOff = [...new Set(Object.values(store.pending).map((p) => Number(p?.to) || 0))].filter(Boolean);
+				store.waiting = {};
+				store.pending = {};
+				save();
+				for (const to of lost) line(`pi restarted before your message reached ${name}: please send it again.`, to);
+				for (const to of cutOff)
+					line(
+						`pi restarted while ${name} was on your message: its answer will be in the chat, not here.`,
+						to,
+						openLink(),
+					);
+			}
+			if (briefOn && !briefTimer) briefTimer = setTimer(tick, BRIEF_TICK_MS);
+			tick();
+		},
+		/** Resolves when everything queued so far has gone out (tests). */
+		idle: () => chain,
+		close() {
+			closed = true;
+			earlyReplies.length = 0;
+			if (briefTimer) clearTimer(briefTimer);
+			briefTimer = null;
+			if (typingTimer) clearTimer(typingTimer);
+			typingTimer = null;
+			typing.clear();
+		},
+		/** For tests. */
+		store,
+	};
+}
+
+// ---------------------------------------------------------------------------
 // The plugin
 // ---------------------------------------------------------------------------
+
+/** The settings' defaults (as in manifest.json), for a host that doesn't fill them in. */
+const DEFAULT_ROUTE_TO = "coo";
+const DEFAULT_BRIEF_AT = "06:30";
 
 export default {
 	activate(host) {
 		let current = null;
+		// telegram-coo: what the chat keeps between restarts; shared by the chats a settings change makes.
+		let chatStore = loadChatStore(host.storage);
+		let firstStart = true;
+		const now = clockFrom(process.env[NOW_ENV]);
 		const task = host.registerBackgroundTask({
 			id: "telegram-bot",
 			label: "\u{1F4E8} Telegram",
@@ -1726,7 +2282,10 @@ export default {
 			},
 		});
 		let lastStatus = "";
-		function setStatus(status) {
+		/** telegram-coo: where messages go and the brief's time, after the bot's own status. */
+		let statusNote = "";
+		function setStatus(st) {
+			const status = `${st}${statusNote}`;
 			if (status === lastStatus) return;
 			lastStatus = status;
 			try {
@@ -1752,19 +2311,28 @@ export default {
 			} catch {
 				/* ignore */
 			}
+			try {
+				c.offReplies?.();
+			} catch {
+				/* ignore */
+			}
 			clearInterval(c.timer);
 			c.poller?.stop();
 			c.bridge?.close();
+			c.chat?.close();
 		}
 
 		function start() {
 			stopAll();
+			const restarted = firstStart;
+			firstStart = false;
 			let s = {};
 			try {
 				s = host.getSettings?.() ?? {};
 			} catch {
 				s = {};
 			}
+			statusNote = "";
 			if (s.enabled === false) {
 				setStatus("off");
 				return;
@@ -1782,18 +2350,46 @@ export default {
 				host.storage.set("bot", botId);
 				host.storage.delete("offset");
 				host.storage.delete("sent");
+				host.storage.delete("chat");
+				chatStore = loadChatStore(host.storage);
 			}
 			const api = createTelegramApi({ base: process.env[API_BASE_ENV] || API_BASE_DEFAULT, token });
+			const webAppAddress = String(s.webAppAddress ?? "").trim();
+			// telegram-coo: the owner's messages go to a role (empty setting, or a host without roles: off).
+			const routeTo = host.roles?.send ? String(s.routeTo ?? DEFAULT_ROUTE_TO).trim() : "";
+			const briefAt = String(s.briefAt ?? DEFAULT_BRIEF_AT).trim();
+			const chat = createChat({
+				api,
+				roles: host.roles,
+				storage: host.storage,
+				ownerId,
+				routeTo,
+				briefAt,
+				webAppAddress,
+				log,
+				now,
+				store: chatStore,
+			});
+			if (chat.on) {
+				const briefNote = chat.briefAt
+					? ` \u00B7 brief at ${chat.briefAt}`
+					: briefAt
+						? " \u00B7 no brief: its time isn't HH:MM"
+						: "";
+				statusNote = ` \u00B7 messages go to ${routeTo}${briefNote}`;
+			}
 			const bridge = createBridge({
 				api,
 				asks: host.asks,
 				storage: host.storage,
 				ownerId,
-				webAppAddress: String(s.webAppAddress ?? "").trim(),
+				webAppAddress,
 				log,
+				chat,
 			});
-			const c = { bridge };
+			const c = { bridge, chat };
 			current = c;
+			if (chat.on) c.offReplies = host.roles.onReply((r) => chat.onReply(r));
 			// While we listen, a chat with no browser open waits for an answer instead of refusing.
 			c.offAsks = host.asks.on((ev) => bridge.onAskEvent(ev));
 			c.poller = createPoller({
@@ -1817,6 +2413,7 @@ export default {
 				log,
 			});
 			c.poller.start();
+			chat.start({ restarted });
 			void bridge.resync("pi restarted");
 			c.timer = setInterval(() => void bridge.resync("it went away"), RESYNC_MS);
 			c.timer.unref?.();

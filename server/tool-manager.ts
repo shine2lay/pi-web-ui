@@ -78,6 +78,10 @@ export const COMPACT_CONTEXT_TOOL_NAME = "compact_context";
  *  catalog: it is always registered; pi-identity offers it only in chats that have a role, and the tool
  *  itself refuses a chat without one. */
 export const MESSAGE_ROLE_TOOL_NAME = "message_role";
+/** telegram-coo: every role's state in one call (definition in roles-overview-tool.ts). Not in the catalog:
+ *  read-only and small, it is always registered (any chat may look at the Roles page's data; the owner
+ *  limits a role's tools in its identity.json). */
+export const ROLES_OVERVIEW_TOOL_NAME = "roles_overview";
 /** 高可靠结构化补丁工具（定义见 patch-tool.ts）：基于内容哈希锚点与语法块的行补丁工具。 */
 export const PATCH_TOOL_NAME = "patch";
 /** 原生语言服务器工具（定义见 lsp-tool.ts）：代码定义跳转、引用查询、类型悬停与诊断。 */

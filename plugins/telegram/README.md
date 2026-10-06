@@ -8,6 +8,9 @@ stall while you're away from the browser:
 - permission prompts, with the browser's choices: Approve, Allow this kind here, Allow all here, Deny;
 - a queued task that is stuck and needs you, with its 2-4 choices.
 
+Everything else you write to the bot goes to a role, the COO by default, and its answer comes
+back here; each morning it also sends you a short brief (see [Chatting](#chatting)).
+
 You can answer on Telegram or in the browser. The first answer counts, and the other side
 catches up: the browser's dialog closes, and the Telegram message shrinks to one line with the
 answer and where it came from ("✅ Deploy · tooling: Now (on Telegram)").
@@ -85,6 +88,9 @@ and the plugin's memory of its messages are lost.
    - **Your Telegram id**: the number of the only person who may answer.
    - **Web app address**: where you open pi-web-ui, for the "Open the chat" link under each
      message (for example `https://my-machine.my-tailnet.ts.net:8787/`).
+   - **Messages go to**: the role your other messages go to (default `coo`); empty turns chatting off.
+   - **Morning brief at**: when that role sends you its brief, HH:MM Pacific time (default `06:30`);
+     empty turns the brief off.
 3. Open the new bot's chat in Telegram and press **Start**. It replies with how many things are
    waiting and sends them.
 
@@ -112,6 +118,36 @@ shrinks to one line that says so, and its old buttons only answer "No longer wai
 - Waiting for new messages restarts every 25 seconds, so a connection that died quietly is
   noticed within half a minute.
 
+## Chatting
+
+When **Messages go to** names a role (the COO by default), what you write to the bot goes to that
+role's home chat, and its answer comes back here:
+
+- Your message arrives there as your own, with "📱 " in front, the way a typed one does: a
+  closed chat opens in the background. If the role is in the middle of a turn, the bot says so and
+  your message goes in right after that turn.
+- Telegram shows "typing…" while the role works. Its last message of the turn comes back under
+  yours, in Telegram's own formatting, in at most 3 messages; a longer one ends with "The rest is
+  in the chat" and a link. A turn that fails gets one line saying why.
+- Reply to one of its messages to go on with it; that goes to the role too.
+- Only text for now: a photo, voice note or file gets "Only text messages for now."
+- What comes back: the role's turns started from Telegram, by the morning brief, or by another
+  role's message (so answers to its follow-up questions reach you). Turns you start in the browser
+  stay there.
+- Answers still work as before: tap a button, reply to a question's message, or send your answer
+  right after tapping **Type an answer**. `/start` says what the bot does. (With two questions
+  waiting for a typed answer at once, reply to the question's message.)
+- If pi restarts while your message waits for a busy role, the bot asks you to send it again; if
+  the role was in the middle of answering it, its answer is in the chat.
+
+**Morning brief**: at **Morning brief at** (06:30 Pacific by default) the plugin asks the role for
+a short brief: the overall direction in a sentence or two, what needs you first, one line per role
+that did something, the quiet ones together, under about 300 words. If pi was down then, it asks
+as soon as it's back, until noon. With no answer 45 minutes after asking, you get one line:
+"No morning brief today: <why>".
+
+The bot never logs what you or the role wrote: its log only says that a message came or went.
+
 ## Who can answer
 
 Only the Telegram id in the settings, and only in a private chat with the bot. Everyone else's
@@ -130,7 +166,7 @@ normal behaviour.
 ## Not included
 
 - Notices when a chat finishes or fails.
-- Chatting with pi from Telegram: the bot only answers what chats ask.
+- Photos, voice notes and files in a chat with the role.
 
 ## Tests
 
@@ -139,3 +175,6 @@ normal behaviour.
   Telegram takes, balanced).
 - `npm run build && scripts/sealed.sh node tests/telegram-answers-test.mjs`: the whole server with
   the plugin, a fake Telegram (`PI_WEB_TELEGRAM_API_BASE`) and the mock model; no real messages.
+- `npm run build && scripts/sealed.sh node tests/telegram-coo-test.mjs`: chatting with a role the
+  same way, with a made-up role and its home chat; `PI_WEB_TELEGRAM_NOW` sets the clock for the
+  morning brief.
