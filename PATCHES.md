@@ -5208,7 +5208,9 @@ answers, queue controls and edits stay in the chats and Settings. Details:
    second modal window (85% of the screen, all of a phone's; its Markdown drawn with the chat's look,
    each heading's part in its own box, side by side when there is room; opened from the panel's
    report part or a tap anywhere on a report card; Escape, close or a click beside it closes it, back
-   on what opened it; its "Report in chat" closes it and the panel first), the 6 am report view
+   on what opened it; its "Report in chat" closes it and the panel first; its text is a keyboard
+   stop of its own, right after close, so Page Down and the arrows scroll a long report even when it
+   has no links, found by axe on the live reports), the 6 am report view
    (phone and desktop), loading, not-live, refresh-failed, partial and paused-messages states. The
    report window came the evening after (owner, 2026-10-05: "when i click it it should open a model
    taking at least 80% of the screen, and make sure if its markdown its dislaying correctly"). The strip's fold
@@ -5250,7 +5252,8 @@ answers, queue controls and edits stay in the chats and Settings. Details:
   motion, the panel (opens from a tile, the report's Goal, closes three ways with focus back on the
   tile), the report window (at least 80% of the desktop screen, all of the phone's; Markdown drawn
   under the report's own headings, an older report's too; from the panel and from a tap on a report
-  card; closes back on what opened it; its Report in chat closes it and the panel),
+  card; closes back on what opened it; its Report in chat closes it and the panel; Tab after close
+  reaches its text and Page Down scrolls it),
   navigation to the same chat with the item marked, the report jump, the Settings link, the owner's
   save (and a refused save after the file changed), live updates, a server restart (not live, then
   back), no leaks, no model calls, no chat file written.

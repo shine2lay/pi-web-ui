@@ -1192,6 +1192,31 @@ const desk = await openPage({ width: 1440, height: 900 });
 	);
 	await shot(page, "desktop-dark-report");
 	await visualChecks(page, "desktop dark, report window", { phone: false });
+	// A keyboard reaches the report's text right after the close button and scrolls it (a report
+	// without links has no other stop inside).
+	await page.keyboard.press("Tab");
+	const bodyFocus = await page.evaluate(() => {
+		const b = document.querySelector(".roles-view .rv-rwin .rv-rwbody");
+		return {
+			focused: !!b && document.activeElement === b,
+			scrolls: !!b && b.scrollHeight > b.clientHeight + 1,
+			ring: b ? getComputedStyle(b).boxShadow : "",
+			at: document.activeElement?.className ?? "",
+		};
+	});
+	await page.keyboard.press("PageDown");
+	const scrolledBy = await waitFor(
+		() =>
+			page
+				.evaluate(() => document.querySelector(".roles-view .rv-rwin .rv-rwbody")?.scrollTop ?? 0)
+				.then((y) => y > 0 && y),
+		3000,
+	);
+	check(
+		"desktop: Tab after the close button reaches the report's text, and Page Down scrolls it",
+		bodyFocus.focused && bodyFocus.scrolls && bodyFocus.ring !== "none" && !!scrolledBy,
+		JSON.stringify({ ...bodyFocus, scrolledBy }),
+	);
 	await page.keyboard.press("Escape");
 	const winClosed = await waitFor(() =>
 		page.evaluate(

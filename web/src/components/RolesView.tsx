@@ -1136,7 +1136,9 @@ function ReportWindow({
 					<FiX className="rv-ic" aria-hidden="true" />
 				</button>
 			</header>
-			<div className="rv-rwbody">
+			{/* A stop of its own so a keyboard can scroll a long report: a report without links has no
+			    other stop inside (axe scrollable-region-focusable, found on the live reports). */}
+			<div className="rv-rwbody" role="region" aria-labelledby="rv-r-title" tabIndex={0}>
 				{report.sections?.length ? (
 					<div className="rv-rwgrid">
 						{report.sections.map((s) => (

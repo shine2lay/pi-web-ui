@@ -1064,6 +1064,11 @@ a.rv-task:hover {
 .rv-phone .rv-rwbody {
 	padding: 16px 16px 32px;
 }
+/* The report's text takes focus to scroll by keyboard; the ring sits inside, as the window clips. */
+.rv-rwbody:focus-visible {
+	outline: none;
+	box-shadow: inset 0 0 0 2px var(--accent);
+}
 /* The parts side by side when there is room (two columns from about 900 px), else one under another. */
 .rv-rwgrid {
 	display: grid;
