@@ -1,7 +1,7 @@
 {
 	"id": "telegram",
 	"name": "Telegram answers",
-	"version": "0.2.0",
+	"version": "0.2.1",
 	"icon": "📨",
 	"description": "Sends you on Telegram every question, pop-up and permission prompt a chat waits on, with its choices as buttons; tap or reply there to answer. What else you write to the bot goes to a role (the COO), whose answers and a morning brief come back there. Uses its own bot, long polling only (no public address needed).",
 	"descriptionEn": "Sends you on Telegram every question, pop-up and permission prompt a chat waits on, with its choices as buttons; tap or reply there to answer. What else you write to the bot goes to a role (the COO), whose answers and a morning brief come back there. Uses its own bot, long polling only (no public address needed).",

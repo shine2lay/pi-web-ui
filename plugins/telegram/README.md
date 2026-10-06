@@ -131,9 +131,10 @@ role's home chat, and its answer comes back here:
   in the chat" and a link. A turn that fails gets one line saying why.
 - Reply to one of its messages to go on with it; that goes to the role too.
 - Only text for now: a photo, voice note or file gets "Only text messages for now."
-- What comes back: the role's turns started from Telegram, by the morning brief, or by another
-  role's message (so answers to its follow-up questions reach you). Turns you start in the browser
-  stay there.
+- What comes back: the role's turns started from Telegram or by the morning brief. A turn another
+  role's message started stays in the role's chat and never comes here (owner, 2026-10-06: "No I
+  dont want to read agent to agent messages at all"). Turns you start in the browser stay there
+  too.
 - Answers still work as before: tap a button, reply to a question's message, or send your answer
   right after tapping **Type an answer**. `/start` says what the bot does. (With two questions
   waiting for a typed answer at once, reply to the question's message.)

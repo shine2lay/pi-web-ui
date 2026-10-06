@@ -1937,8 +1937,9 @@ export function loadChatStore(storage) {
 /**
  * The chat with a role. fromOwner: the owner's text goes to the role's home chat as his message,
  * with "\u{1F4F1} " in front ("typing\u2026" shows meanwhile; a busy chat gets it after its turn, and
- * he's told). onReply: the role's last message of a turn that a Telegram message, the morning brief
- * or another role started comes back, under his message when it answers one, in at most 3 messages.
+ * he's told). onReply: the role's last message of a turn that a Telegram message or the morning brief
+ * started comes back, under his message when it answers one, in at most 3 messages; a turn another
+ * role's message started stays in the chat.
  * tick: asks for the morning brief at its time, or says why there's none.
  *
  * Its own Telegram messages go one at a time, apart from the question bridge's, so a long wait for
@@ -2172,9 +2173,15 @@ export function createChat({
 		}
 		const text = String(r.text ?? "");
 		if (brief) setBrief({ state: r.error || !text.trim() ? "failed" : "done", alerted: true });
+		// A turn another role's message started stays in the chat, never here (owner, 2026-10-06: "No I dont
+		// want to read agent to agent messages at all").
+		if (r.cause === "role") {
+			log("info", `telegram: ${role} answered another role's message (not sent, ${text.length} characters)`);
+			return;
+		}
 		// A plugin's turn only when it's our brief (another plugin's sends get their own answers); the
 		// turns started in the browser, or by the app itself, stay in the chat.
-		if (r.cause === "plugin" ? !brief : r.cause !== "telegram" && r.cause !== "role") return;
+		if (r.cause === "plugin" ? !brief : r.cause !== "telegram") return;
 		let to = 0;
 		for (const id of ids) {
 			const p = store.pending[id];

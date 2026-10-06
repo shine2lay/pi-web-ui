@@ -5304,7 +5304,7 @@ the COO, which can see every role's state in one call.
    or his own, go to the role with the phone sign (U+1F4F1) and a space in front (`via: "telegram"`); `/start`, a reply to a waiting
    question and the message after "Type an answer" answer as before. Non-text gets "Only text
    messages for now." Telegram shows typing while the role works; a busy role gets one note. The
-   role's answers to turns from Telegram, the brief or another role come back in the plugin's
+   role's answers to turns from Telegram or the brief come back in the plugin's
    Markdown-to-Telegram formatting, threaded under his message, at most 3 messages, then "The rest
    is in the chat" with its link; a failed turn sends one line. The brief: asked daily at the set
    time (at start-up if pi was down, until noon), "No morning brief today: <why>" after 45 minutes
@@ -5312,6 +5312,12 @@ the COO, which can see every role's state in one call.
    logs message text. A reply arriving before its send receipt waits for the id to be bound, so
    even a very fast answer stays threaded and a fast brief is not lost. An empty brief gets the
    no-brief line too. `PI_WEB_TELEGRAM_NOW` forces its clock (tests).
+5. **Other roles' turns stay off Telegram** (owner, 2026-10-06 ~12:52 PDT, COO request rm-263ea486,
+   with queue task #75: "No I dont want to read agent to agent messages at all"): a turn another
+   role's message started (cause `role`) sends nothing to Telegram, not even a failure line; the
+   plugin only logs that it answered another role's message (length only). Until then those turns
+   came back like his own. His own exchanges and the brief are unchanged. Plugin-only (0.2.1), so it
+   went live through a plugin reload (Settings -> Plugins -> Rescan), without restarting pi-web-ui.
 
 ### How it was checked
 
@@ -5331,6 +5337,10 @@ the COO, which can see every role's state in one call.
   Telegram lines.
 - The new tests fail on the code before this patch (30 unit tests in 5 files; the E2E from its
   first step).
+- Change 5: `plugin-telegram.test.ts` "a role-started turn sends nothing, not even a failure line;
+  his own exchange and the brief still do" (a role turn while his message waits neither goes out
+  nor takes its place) and the rewritten "only turns from Telegram or the brief come back"; both
+  fail on the code before it (3 sends and 1).
 
 ### When syncing
 

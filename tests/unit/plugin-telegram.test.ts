@@ -1939,17 +1939,15 @@ describe("telegram plugin: chatting with the COO", () => {
 		expect(c.tg.last("sendMessage")?.params.text).toBe(`The COO finished without writing an answer.${OPEN_COO}`);
 	});
 
-	it("only turns from Telegram, the brief or another role come back; browser turns stay in the chat", async () => {
+	it("only turns from Telegram or the brief come back; browser, app and other roles' turns stay in the chat", async () => {
 		const c = chatSetup();
 		await c.reply({ text: "typed in the browser", cause: "browser" });
 		await c.reply({ text: "the app's own", cause: "other" });
 		await c.reply({ text: "another plugin's", cause: "plugin", ids: ["x9"] });
 		await c.reply({ text: "someone else's", role: "rollcall", cause: "telegram" });
-		expect(c.sends()).toHaveLength(0);
 		await c.reply({ text: "After asking temper: all good.", cause: "role" });
-		const out = c.tg.last("sendMessage") as Call;
-		expect(out.params.text).toBe("After asking temper: all good.");
-		expect(out.params.reply_parameters).toBeUndefined();
+		expect(c.sends()).toHaveLength(0);
+		expect(c.logs).toContain("telegram: coo answered another role's message (not sent, 30 characters)");
 	});
 
 	it("never logs what he or the COO wrote", async () => {
@@ -1998,6 +1996,46 @@ describe("telegram plugin: chatting with the COO", () => {
 		]);
 		expect(c.storage.get("chat")).toMatchObject({ waiting: {}, pending: {} });
 		expect(c.chat.owns(5)).toBe(true);
+	});
+});
+
+describe("telegram plugin: turns another role's message started (owner 2026-10-06: none reach him)", () => {
+	const DAY = "2026-10-06";
+
+	it("a role-started turn sends nothing, not even a failure line; his own exchange and the brief still do", async () => {
+		const c = chatSetup({ at: `${DAY}T06:29:00-07:00` });
+		c.chat.start();
+		await c.settle();
+
+		// Another role's message started these turns in the COO's chat: an answer, a failed turn, an empty one.
+		await c.reply({ text: "Temper answered: the runs are fine. Nothing for the owner.", cause: "role" });
+		await c.reply({ error: "model overloaded", cause: "role" });
+		await c.reply({ text: "  ", cause: "role" });
+		expect(c.sends()).toHaveLength(0);
+
+		// His own message: while it waits for its answer, a role-started turn ends; it neither goes out nor
+		// takes his message's place, and his answer still comes back under his message.
+		const mid = await c.send(say("How is temper doing?"));
+		await c.reply({ text: "An fyi from ops, noted.", cause: "role" });
+		expect(c.sends()).toHaveLength(0);
+		expect(c.chat.store.pending).toEqual({ s1: { to: mid, at: c.clock.t } });
+		expect(c.typingOn()).toBe(1);
+		await c.reply({ text: "Temper is fine: 3 runs passed.", ids: ["s1"] });
+		expect(c.sends().map((m) => [m.params.reply_parameters?.message_id, m.params.text])).toEqual([
+			[mid, "Temper is fine: 3 runs passed."],
+		]);
+		expect(c.sends()[0].params.disable_notification).toBeUndefined();
+
+		// The morning brief.
+		await c.tick(60_000);
+		expect(c.roles.sent.at(-1)).toEqual({ role: "coo", text: briefRequest(DAY), via: "plugin", id: "s2" });
+		await c.reply({ text: "After a request from temper: done.", cause: "role" });
+		await c.reply({ text: `Morning brief, ${DAY}\n\nAll quiet.`, cause: "plugin", ids: ["s2"] });
+		expect(c.sends().map((m) => m.params.text)).toEqual([
+			"Temper is fine: 3 runs passed.",
+			`Morning brief, ${DAY}\n\nAll quiet.`,
+		]);
+		expect((c.storage.get("brief") as Any).state).toBe("done");
 	});
 });
 
