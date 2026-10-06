@@ -607,26 +607,28 @@ function tileText(t: Translate, line: NowLine): { text: string; dim: boolean } {
 	}
 }
 
-/** Where and when the tile's line is from ("Task #3 · 2h", "07:12 · Home"), else the role's last activity. */
+/** When the tile's line is from ("07:12"; an ask also where: "Task #3 · 2h"), else the role's last activity.
+ *  Which chat a line came from is in the panel. */
 function tileWhen(t: Translate, line: NowLine, role: UiRoleOverview, now: number): string {
 	if (line.kind === "ask") {
 		return `${askWhere(t, line.ask)}${line.ask.since !== undefined ? ` · ${ageOf(line.ask.since, now)}` : ""}`;
 	}
 	if (line.kind === "line") {
-		const when = `${clockOf(line.line.ts, now)} · ${whereTag(t, line.line.chat.where)}`;
+		const when = clockOf(line.line.ts, now);
 		return line.line.answered ? `${when} · ${t("rolesAnswered")}` : when;
 	}
 	return role.lastActivity ? agoOf(role.lastActivity, now) : "";
 }
 
-/** The tile's queue in a few words: "#20 Working ·" and "2 queued" (the counts stay on one line). */
+/** The tile's queue in a few words: "#20 Working ·" and "2 queued" (the counts stay on one line).
+ *  A hold is named in a word; what it waits on is in the panel. */
 function tileQueue(t: Translate, role: UiRoleOverview): { head: string; counts: string } | null {
 	if (hasProblem(role, "queue")) return { head: t("rolesNotAvailable", { what: t("rolesPartQueue") }), counts: "" };
 	const queue = role.queue;
 	if (!queueHasWork(queue)) return null;
 	const lead = leadTask(queue);
 	const head = lead
-		? `#${lead.id} ${taskWord(t, lead)}`
+		? `#${lead.id} ${taskWord(t, lead, true)}`
 		: queueStopped(queue)
 			? t("rolesQueueStopped")
 			: t("rolesNoActiveTask");
@@ -657,10 +659,10 @@ const Tile = memo(function Tile({
 					<StatusWord status={role.status} />
 				</span>
 				<span className={body.dim || quiet ? "rv-ttext rv-dim" : "rv-ttext"}>{body.text}</span>
-				{(when || queue) && (
+				{/* one item, so every tile keeps one footer line: the queue when it has work, else when */}
+				{(queue || when) && (
 					<span className="rv-tfoot">
-						{when && <span className="rv-twhen">{when}</span>}
-						{queue && (
+						{queue ? (
 							<span className="rv-tq">
 								{queue.head}
 								{queue.counts && (
@@ -670,6 +672,8 @@ const Tile = memo(function Tile({
 									</>
 								)}
 							</span>
+						) : (
+							<span className="rv-twhen">{when}</span>
 						)}
 					</span>
 				)}

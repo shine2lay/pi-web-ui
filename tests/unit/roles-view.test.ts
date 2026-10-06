@@ -179,6 +179,9 @@ describe("what a row shows", () => {
 		);
 		expect(taskWord(t, task(1, "waiting", { waitsOn: "CI" }))).toBe("On hold: waits on CI");
 		expect(taskWord(t, task(1, "blocked", { waitsOn: "temper #38" }))).toBe("Blocked: temper #38");
+		// a tile's short word: the reason (often a paragraph) waits in the panel
+		expect(taskWord(t, task(1, "waiting", { waitsOn: "CI" }), true)).toBe("On hold");
+		expect(taskWord(t, task(1, "blocked", { waitsOn: "temper #38" }), true)).toBe("Blocked");
 		expect(taskWord(t, task(1, "asking"))).toBe("Asking its main chat");
 		expect(taskWord(t, task(1, "stuck"))).toBe("Needs you");
 		expect(taskLook(task(1, "stuck"))).toBe("needs");

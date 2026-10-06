@@ -17,9 +17,12 @@ table. Patch: `roles-overview` in [PATCHES.md](../PATCHES.md).
 - **Two groups**: "Start their own work" and "Work on request", alphabetical in each.
 - **One tile per role**, in a grid (two columns on a phone), coloured by its status (an amber tile
   for "needs you", a blue edge for busy, a grey edge for paused, a dashed one for nothing yet; the
-  word and its icon always say it too). A tile shows the name, the status, the newest line (up to
-  three lines) and a few words on the queue ("#20 Working · 2 queued"). A role with nothing going on
-  for a day steps back. All 14 tiles fit on a 1440x900 screen.
+  word and its icon always say it too). A tile shows the name, the status, the newest line (two
+  lines on a desktop, three on a phone) and one footer line: a few words on the queue ("#20 Working ·
+  2 queued"; a hold is just "On hold" or "Blocked", since what it waits on can be a paragraph) or,
+  with nothing queued, when the line is from. A role with nothing going on for a day steps back. All
+  14 tiles fit on a 1440x900 screen with real lines (80-130 characters) and long hold reasons; what a
+  tile cuts is in the panel.
 - **Tap a tile for the rest**: a side panel (full screen on a phone) with the role's home chat and
   "About & rules", every TL;DR line, the queue (counts, active tasks with their words, what is
   queued), the goals and the whole 6 am report. Escape, the close button or a click beside the

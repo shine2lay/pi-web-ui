@@ -122,7 +122,9 @@ export function queueCounts(t: Translate, queue: UiRoleQueue | undefined, shown:
 }
 
 /** A task's status in a word or a few (an icon carries it too). */
-export function taskWord(t: Translate, task: UiRoleTask): string {
+export function taskWord(t: Translate, task: UiRoleTask, short = false): string {
+	// `short` (a tile): the word alone; what a hold waits on is often a paragraph, so it stays in the panel
+	const waitsOn = short ? undefined : task.waitsOn;
 	switch (task.status) {
 		case "stuck":
 			return t("rolesTaskNeedsYou");
@@ -131,9 +133,9 @@ export function taskWord(t: Translate, task: UiRoleTask): string {
 		case "asking":
 			return t("rolesTaskAsking");
 		case "waiting":
-			return task.waitsOn ? t("rolesTaskOnHoldOn", { what: task.waitsOn }) : t("rolesTaskOnHold");
+			return waitsOn ? t("rolesTaskOnHoldOn", { what: waitsOn }) : t("rolesTaskOnHold");
 		case "blocked":
-			return task.waitsOn ? t("rolesTaskBlockedOn", { what: task.waitsOn }) : t("rolesTaskBlocked");
+			return waitsOn ? t("rolesTaskBlockedOn", { what: waitsOn }) : t("rolesTaskBlocked");
 		case "ready":
 			return task.busy ? t("rolesTaskWorking") : t("rolesTaskQueued");
 		default:

@@ -529,6 +529,23 @@
 .rv-tqc {
 	white-space: nowrap;
 }
+/* Desktop: two lines of text and a one-line footer keep all 14 tiles on one 1440x900 screen, even with real
+   lines of 80-130 characters; the whole line, every task and what a hold waits on are a tap away, in the panel. */
+.rv-desk .rv-tname {
+	line-height: 22px;
+}
+.rv-desk .rv-ttext {
+	-webkit-line-clamp: 2;
+}
+.rv-desk .rv-tfoot {
+	flex-wrap: nowrap;
+}
+.rv-desk .rv-tfoot > span {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
 /* The colour of a status: the tile's left edge (and a tint for "needs you"); the word and its icon say it too. */
 .rv-tile.needs-you .rv-tbtn {
 	border-color: var(--rv-amber-line);

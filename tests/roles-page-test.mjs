@@ -295,7 +295,11 @@ function seed({ root, dataDir, workdir, agentDir }) {
 			timestamp: iso(NOW - 2 * DAY),
 		},
 		tldr("Read the design notes", NOW - 5 * HOUR),
-		tldr("Checked the plan for the Roles page", NOW - 40 * MIN),
+		// real lines run 80-130 characters; the tiles must fit with them, not only with short ones
+		tldr(
+			"Checked the plan for the Roles page: the land-check trial is moving, 9 of 12 runs done and the verdicts right so far",
+			NOW - 40 * MIN,
+		),
 	]);
 	chat("backend", [
 		...opening("backend"),
@@ -307,14 +311,35 @@ function seed({ root, dataDir, workdir, agentDir }) {
 		q({ op: "start", id: 8, lane: true }),
 		q({ op: "block", id: 8, need: "a design review" }, NOW - 4 * HOUR),
 		q({ op: "add", id: 9, plan: plan("Clean old branches") }),
-		tldr("Waiting for CI on the build change", NOW - 3 * HOUR),
+		tldr(
+			"Waiting for CI on the build change; the cache retry is blocked on a design review, and the old branches wait their turn",
+			NOW - 3 * HOUR,
+		),
 	]);
 	chat("data", [...opening("data"), tldr("Looked at last week's numbers", NOW - 2 * DAY)]);
 	withReport("design", "design", 1200, "rm-0000d001", [
 		...opening("design"),
-		tldr("Drafted the onboarding screens", NOW - HOUR),
+		tldr(
+			"Drafted the onboarding screens, then caught up on tonight's backlog by adding Design's key to a few more lab tools",
+			NOW - HOUR,
+		),
 	]);
-	chat("frontend", [...opening("frontend"), tldr("Fixed the settings layout", NOW - 5 * HOUR)]);
+	chat("frontend", [
+		...opening("frontend"),
+		q({ op: "run" }),
+		q({ op: "add", id: 1, plan: plan("Planted-bug check") }),
+		q({ op: "start", id: 1, lane: true }),
+		// a real block reason can be a paragraph; a tile shows only "Blocked", the panel all of it
+		q(
+			{
+				op: "block",
+				id: 1,
+				need: "the owner's or a role's request to resume; on 2026-10-04 the owner chose to keep it paused under rule 14, and if resumed it starts at planted case P2 with the base and P1 test copies still up",
+			},
+			NOW - 20 * HOUR,
+		),
+		tldr("Fixed the settings layout", NOW - 5 * HOUR),
+	]);
 	chat("marketing", [
 		...opening("marketing"),
 		tldr("Wrote two launch headlines", NOW - 10 * HOUR),
@@ -340,7 +365,26 @@ function seed({ root, dataDir, workdir, agentDir }) {
 	]);
 	withReport("product", "product", 4000, "rm-0000d002", [
 		...opening("product"),
-		tldr("Sizing the next experiment", NOW - 20 * MIN),
+		q({ op: "run" }),
+		q({ op: "add", id: 30, plan: plan("Repeatable early-screen scores") }),
+		q({ op: "start", id: 30, lane: true }),
+		q(
+			{
+				op: "wait",
+				id: 30,
+				what: "screen repeat run B finishing (about 50 min), then the scoreboard check",
+				check: "true",
+				everyMs: 120_000,
+				until: NOW + DAY,
+			},
+			NOW - HOUR,
+		),
+		q({ op: "add", id: 31, plan: plan("Critic checks from research") }),
+		q({ op: "add", id: 32, plan: plan("Scoreboard for the early screen") }),
+		tldr(
+			"Sizing the next experiment: run one of three finished and passed every check, starting run two next",
+			NOW - 20 * MIN,
+		),
 	]);
 	withReport("qa", "qa", 300, "rm-0000d003", [...opening("qa"), tldr("Ran the checkout checks", NOW - 6 * HOUR)]);
 	chat("rollcall", [
@@ -948,11 +992,33 @@ const desk = await openPage({ width: 1440, height: 900 });
 		opsPanel.slice(0, 400),
 	);
 	await closePanel(page);
-	const backend = await rowText(page, "backend");
+	// A tile names a hold in a word; what it waits on (a paragraph, on real data) is in the panel.
+	const tileQueues = await page.evaluate(() =>
+		Object.fromEntries(
+			["backend", "frontend", "product"].map((id) => [
+				id,
+				document.querySelector(`.roles-view [data-role-id="${id}"] .rv-tq`)?.textContent?.trim() ?? "",
+			]),
+		),
+	);
 	check(
-		"desktop: holds say what they wait on",
-		backend.includes("On hold: waits on CI") || backend.includes("Blocked: a design review"),
-		backend.slice(0, 300),
+		"desktop: a tile names a hold in a word, without what it waits on",
+		/^#[78] (On hold|Blocked) · \+1 active · 1 queued$/.test(tileQueues.backend) &&
+			tileQueues.frontend === "#1 Blocked" &&
+			tileQueues.product === "#30 On hold · 2 queued",
+		JSON.stringify(tileQueues),
+	);
+	const backendPanel = await openPanel(page, "backend");
+	await closePanel(page);
+	const frontendPanel = await openPanel(page, "frontend");
+	await closePanel(page);
+	check(
+		"desktop: the panel says what each hold waits on, in full",
+		backendPanel.includes("On hold: waits on CI") &&
+			backendPanel.includes("Blocked: a design review") &&
+			frontendPanel.includes("Blocked: the owner's or a role's request to resume") &&
+			frontendPanel.includes("base and P1 test copies still up"),
+		`${backendPanel.slice(0, 300)} | ${frontendPanel.slice(0, 300)}`,
 	);
 	const temper = await rowText(page, "temper");
 	check("desktop: a tile counts the queued tasks", temper.includes("2 queued"), temper.slice(0, 300));
@@ -964,9 +1030,9 @@ const desk = await openPage({ width: 1440, height: 900 });
 		temperPanel.slice(0, 300),
 	);
 	check(
-		"desktop: the newest line comes from the task chat, tagged",
-		temper.includes("Wrote the run viewer page") && temper.includes("#20"),
-		temper.slice(0, 300),
+		"desktop: the newest line comes from the task chat; the panel tags it with the task",
+		temper.includes("Wrote the run viewer page") && temperPanel.includes("· #20 Wrote the run viewer page"),
+		`${temper.slice(0, 200)} | ${temperPanel.slice(0, 300)}`,
 	);
 	const arch = await openPanel(page, "architecture");
 	await closePanel(page);

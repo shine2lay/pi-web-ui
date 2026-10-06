@@ -5191,14 +5191,18 @@ answers, queue controls and edits stay in the chats and Settings. Details:
    `roles-view.css`): a Roles view in the top bar (`host:roles`, folds into the overflow menu after
    Terminal and Git: `LATE_TOPBAR_ITEM_IDS` in `topbar-fit.ts`) with the open-ask count as a badge;
    the waiting strip, the two alphabetical groups of tiles (one per role, coloured by status: name,
-   status, newest line, a few queue words; all 14 on a 1440x900 screen), a tile opening the role's
+   status, newest line (two lines on a desktop), one footer line: a few queue words with a hold named
+   in a word, else when the line is from; all 14 on a 1440x900 screen), a tile opening the role's
    panel (a modal `<dialog>` at the side, full screen on a phone: home chat, About & rules, every
    TL;DR line, the queue, goals, the whole report; Escape, close or a click beside it closes it and
    focus returns to the tile; a link in it closes it first), the 6 am report view (phone and
    desktop), loading, not-live, refresh-failed, partial and paused-messages states. The strip's fold
    is kept per device layout in the browser. The other panes stay mounted. The tiles replaced SPEC's
    board the same day (owner: the board was "too one dimensional, and hard to read anything"; he
-   chose "show less, tap for more").
+   chose "show less, tap for more"). That evening the live page showed only 8 of 14 tiles on the
+   screen: real lines (80-130 characters) and hold reasons (a paragraph) made the tiles tall, while
+   the test data had short ones. The tiles were tightened (the footer line, two text lines on a
+   desktop) and the test data now has lines and hold reasons of real length.
 5. **Links** (`web/src/chat-focus.ts`, `open-chat-link.ts`, `App.tsx`): `?view=roles#r-<role>`, and
    `focus=tldr:<id>|task:<n>|question:<id>|report:<day>` next to a chat link: the existing chat is
    opened (never a new one), the right panel shows TL;DR or Queue with the item marked
