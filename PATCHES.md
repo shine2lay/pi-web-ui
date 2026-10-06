@@ -5189,10 +5189,15 @@ answers, queue controls and edits stay in the chats and Settings. Details:
 4. **The page** (`web/src/components/RolesView.tsx`, `roles-view-model.ts`, `roles-state.ts`,
    `roles-view.css`): a Roles view in the top bar (`host:roles`, folds into the overflow menu after
    Terminal and Git: `LATE_TOPBAR_ITEM_IDS` in `topbar-fit.ts`) with the open-ask count as a badge;
-   the waiting strip, the two alphabetical groups, rows (cards on a phone) that open in place,
-   the 6 am report view, loading, not-live, refresh-failed, partial and paused-messages states.
-   Open rows and the strip's fold are kept per device layout in the browser. The other panes stay
-   mounted.
+   the waiting strip, the two alphabetical groups of tiles (one per role, coloured by status: name,
+   status, newest line, a few queue words; all 14 on a 1440x900 screen), a tile opening the role's
+   panel (a modal `<dialog>` at the side, full screen on a phone: home chat, About & rules, every
+   TL;DR line, the queue, goals, the whole report; Escape, close or a click beside it closes it and
+   focus returns to the tile; a link in it closes it first), the 6 am report view (phone and
+   desktop), loading, not-live, refresh-failed, partial and paused-messages states. The strip's fold
+   is kept per device layout in the browser. The other panes stay mounted. The tiles replaced SPEC's
+   board the same day (owner: the board was "too one dimensional, and hard to read anything"; he
+   chose "show less, tap for more").
 5. **Links** (`web/src/chat-focus.ts`, `open-chat-link.ts`, `App.tsx`): `?view=roles#r-<role>`, and
    `focus=tldr:<id>|task:<n>|question:<id>|report:<day>` next to a chat link: the existing chat is
    opened (never a new one), the right panel shows TL;DR or Queue with the item marked
@@ -5213,15 +5218,16 @@ answers, queue controls and edits stay in the chats and Settings. Details:
   over the whole store (past the newest 100); the push (only while watched, only changes, the
   heartbeat, the count-only watch, a failed look); no file changed.
 - `tests/unit/roles-view.test.ts`: the view model (groups for 14 and 20 roles, the now line, quiet
-  rows, queue words, ages, Pacific days, report reasons, device-local memory), the owner's form
+  tiles, queue words, ages, Pacific days, report reasons, the strip's fold), the owner's form
   (writes only the two fields, keeps the rest; the same problems as the server's parser), the focus
   and view links, and the page's markup. `topbar-fit.test.ts`, `ui-slots.test.ts`: the tab and its
   late fold. `identity-config.test.ts`: the owner's fields saved and refused with reasons, nothing
   else moved; a draft can't set them.
 - `tests/roles-page-test.mjs` (sealed: temporary HOME, data and sessions, its own port, a mock model
   that counts calls): 14 and 20 synthetic roles in both themes at 320, 390, 768, 769 and 1440 pixels
-  wide: the badge, groups and order, statuses, the strip, rows per screen, contrast, target sizes, axe
-  (no serious or critical), keyboard and focus ring, reduced motion, open in place and remembered,
+  wide: the badge, groups and order, statuses, the strip, tiles per screen, contrast, target sizes, axe
+  (no serious or critical, also with a panel open), keyboard and focus ring, reduced motion, the
+  panel (opens from a tile, the full report, closes three ways with focus back on the tile),
   navigation to the same chat with the item marked, the report jump, the Settings link, the owner's
   save (and a refused save after the file changed), live updates, a server restart (not live, then
   back), no leaks, no model calls, no chat file written.

@@ -5,26 +5,26 @@
  * Rules (design-lab/roles-page/SPEC.md):
  * - Two groups, "Start their own work" and "Work on request", alphabetical inside each, so a role is
  *   always in the same place.
- * - A row's "now" line: its newest open ask, else its newest TL;DR line (home chat and task chats), else
+ * - A tile's one line: its newest open ask, else its newest TL;DR line (home chat and task chats), else
  *   for a role that works on request the open request to it ("<from> asked: ...") or "Waiting for
  *   requests", and for a role that starts its own work "Nothing yet". A quiet role (nothing going on and
- *   no TL;DR line in 24 h) is one short row.
- * - A row's queue line: the first active task in the order needs you, working, asking, on hold
+ *   no TL;DR line in 24 h) is a tile that steps back.
+ * - A tile's queue words: the first active task in the order needs you, working, asking, on hold
  *   (queue order among equals) and the counts, never cut.
- * - Which rows (and the "Waiting on you" strip) are open is kept on this device, the phone and the
- *   desktop layouts each their own.
+ * - Whether the "Waiting on you" strip is open is kept on this device, the phone and the desktop layouts
+ *   each their own.
  */
 import type { Translate } from "./i18n";
 import type { UiRoleAsk, UiRoleGoal, UiRoleOverview, UiRoleQueue, UiRoleReport, UiRoleTask } from "./types";
 
 export const HOUR_MS = 3_600_000;
 export const DAY_MS = 24 * HOUR_MS;
-/** A role without a TL;DR line this long (and nothing going on) is a quiet, short row. */
+/** A role without a TL;DR line this long (and nothing going on) is a quiet tile. */
 export const QUIET_MS = DAY_MS;
 /** Goals shown before "+N more". */
 export const GOALS_SHOWN = 3;
-/** TL;DR lines an opened phone card shows before "More (n)". */
-export const CARD_LINES_SHOWN = 3;
+/** TL;DR lines a role's details panel shows before "More (n)". */
+export const CARD_LINES_SHOWN = 5;
 /** No word from the server this long (it pushes at least every 30 s while watched): not live. */
 export const STALE_MS = 75_000;
 
@@ -42,7 +42,7 @@ export function groupRoles(roles: readonly UiRoleOverview[]): {
 	};
 }
 
-/** Nothing going on and no TL;DR line in 24 h: one short row. */
+/** Nothing going on and no TL;DR line in 24 h: a quiet tile. */
 export function isQuiet(role: UiRoleOverview, now: number): boolean {
 	if (role.asks.length > 0) return false;
 	if (role.status === "needs-you" || role.status === "busy" || role.status === "paused") return false;
@@ -68,7 +68,7 @@ export type NowLine =
 	| { kind: "waiting" }
 	| { kind: "nothing" };
 
-/** A closed row's "now" line (SPEC section 4). */
+/** A tile's one line (SPEC section 4). */
 export function nowLineOf(role: UiRoleOverview, now: number): NowLine {
 	const ask = newestAsk(role.asks);
 	if (ask) return { kind: "ask", ask };
@@ -90,7 +90,7 @@ function taskRank(task: UiRoleTask): number {
 	return 4;
 }
 
-/** The task a closed row shows: needs you, working, asking, on hold (queue order among equals). */
+/** The task a tile names: needs you, working, asking, on hold (queue order among equals). */
 export function leadTask(queue: UiRoleQueue | undefined): UiRoleTask | undefined {
 	let best: UiRoleTask | undefined;
 	for (const task of queue?.active ?? []) {
@@ -335,47 +335,14 @@ export function chatHref(file: string, focus?: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// What is open, kept on this device (phone and desktop each their own)
+// Whether the strip is open, kept on this device (phone and desktop each their own)
 // ---------------------------------------------------------------------------
 
 type ReadStore = Pick<Storage, "getItem">;
 type WriteStore = Pick<Storage, "setItem" | "removeItem">;
 
-export function openRolesKey(layout: RolesLayout): string {
-	return `pi-web-ui:roles:open:${layout}`;
-}
-
 export function stripKey(layout: RolesLayout): string {
 	return `pi-web-ui:roles:strip:${layout}`;
-}
-
-const ROLE_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
-
-/** The rows open on this device in this layout. */
-export function readOpenRoles(layout: RolesLayout, storage: ReadStore | null = safeStorage()): string[] {
-	try {
-		const raw = storage?.getItem(openRolesKey(layout));
-		const list: unknown = raw ? JSON.parse(raw) : [];
-		return Array.isArray(list)
-			? list.filter((x): x is string => typeof x === "string" && ROLE_ID.test(x)).slice(0, 200)
-			: [];
-	} catch {
-		return [];
-	}
-}
-
-export function saveOpenRoles(
-	layout: RolesLayout,
-	ids: Iterable<string>,
-	storage: WriteStore | null = safeStorage(),
-): void {
-	try {
-		const list = [...ids].filter((x) => ROLE_ID.test(x)).sort();
-		if (list.length === 0) storage?.removeItem(openRolesKey(layout));
-		else storage?.setItem(openRolesKey(layout), JSON.stringify(list));
-	} catch {
-		/* storage unavailable: the rows still open, just not remembered */
-	}
 }
 
 /** The strip's fold: open by default on the desktop, folded on the phone. */

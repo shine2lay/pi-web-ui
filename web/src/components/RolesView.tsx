@@ -1,15 +1,16 @@
 /**
  * roles-overview: the Roles page, a top bar view beside Chat, Terminal and Git.
  *
- * One look at every role: what it is doing (status, newest TL;DR line), what waits on the owner (the
+ * One look at every role: what it is doing (its status and newest line), what waits on the owner (the
  * "Waiting on you" strip, oldest first), its queue and its 6 am report. It only shows and opens: every
  * target opens an existing chat (at the item: `?chat=<file>&focus=...`), Settings -> Identities at the
  * role, or a part of the page in place. Nothing here starts, stops or answers anything.
  *
- * Layout (design-lab/roles-page/SPEC.md, final gate): phone (<= 768 px) compact cards that open in place
- * plus a "Now | 6 am reports" switch; desktop a board (Role | Now | Queue | 6 am report | expand). Rows in
- * two groups, alphabetical, so a role is always in the same place. Which rows are open is kept on this
- * device (roles-view-model.ts).
+ * Layout (owner, 2026-10-05: "show less, tap for more"): every role is a tile in a grid, coloured by its
+ * status, with its newest line and a few words on its queue. Tapping a tile opens that role's details
+ * (every TL;DR line, the queue, its goals and the full 6 am report) in a side panel, full screen on the
+ * phone. Tiles sit in two groups, alphabetical, so a role is always in the same place. A "Now | 6 am
+ * reports" switch shows every report at once.
  *
  * Data: roles-state.ts (the server pushes while the page is shown); what to show: roles-view-model.ts.
  */
@@ -24,7 +25,7 @@ import {
 	type MouseEvent,
 	type ReactNode,
 } from "react";
-import { FiCheckCircle, FiChevronDown, FiChevronRight, FiInfo, FiMessageSquare, FiSettings } from "react-icons/fi";
+import { FiCheckCircle, FiChevronDown, FiChevronRight, FiInfo, FiMessageSquare, FiSettings, FiX } from "react-icons/fi";
 import { useAppField } from "../app-globals";
 import { parseFocus, type ChatFocusKind } from "../chat-focus";
 import { useT, type Translate } from "../i18n";
@@ -48,14 +49,11 @@ import {
 	queueCounts,
 	queueHasWork,
 	queueStopped,
-	readOpenRoles,
 	readStripOpen,
 	reportDay,
-	reportGoal,
 	reportReason,
 	reportRoles,
 	rolesSummary,
-	saveOpenRoles,
 	saveStripOpen,
 	STALE_MS,
 	taskLook,
@@ -282,49 +280,53 @@ function useNow(active: boolean): number {
 // The page
 // ---------------------------------------------------------------------------
 
-/** What this device remembers for one layout: its open rows and whether the strip is open. */
-function layoutMemory(layout: RolesLayout): { layout: RolesLayout; ids: ReadonlySet<string>; strip: boolean } {
-	return { layout, ids: new Set(readOpenRoles(layout)), strip: readStripOpen(layout) };
-}
-
 export const RolesView = memo(function RolesView({ active, phone, focusRole, onOpen, onAbout }: RolesViewProps) {
 	const t = useT();
 	const roles = useRoles(active ? "full" : "off");
 	const conn = useAppField("status");
 	const now = useNow(active);
 	const layout: RolesLayout = phone ? "phone" : "desktop";
-	// Open rows and the strip are remembered per layout (phone / desktop). Switching layout reads the
-	// other layout's memory while rendering, so no frame shows one layout's open rows on the other.
-	const [memory, setMemory] = useState(() => layoutMemory(layout));
-	let mem = memory;
-	if (memory.layout !== layout) {
-		mem = layoutMemory(layout);
-		setMemory(mem);
+	// Whether the strip is open is remembered per layout (phone / desktop). Switching layout reads the
+	// other layout's memory while rendering, so no frame shows one layout's fold on the other.
+	const [fold, setFold] = useState(() => ({ layout, open: readStripOpen(layout) }));
+	let stripOpen = fold.open;
+	if (fold.layout !== layout) {
+		stripOpen = readStripOpen(layout);
+		setFold({ layout, open: stripOpen });
 	}
-	const openIds = mem.ids;
-	const stripOpen = mem.strip;
-	const [mode, setMode] = useState<"now" | "reports">("now");
-	const toggleRow = useCallback((id: string) => {
-		setMemory((prev) => {
-			const next = new Set(prev.ids);
-			if (next.has(id)) next.delete(id);
-			else next.add(id);
-			saveOpenRoles(prev.layout, next);
-			return { ...prev, ids: next };
-		});
-	}, []);
 	const toggleStrip = useCallback(() => {
-		setMemory((prev) => {
-			saveStripOpen(prev.layout, !prev.strip);
-			return { ...prev, strip: !prev.strip };
+		setFold((prev) => {
+			saveStripOpen(prev.layout, !prev.open);
+			return { ...prev, open: !prev.open };
 		});
 	}, []);
+	const [mode, setMode] = useState<"now" | "reports">("now");
 	const nav = useMemo<Nav>(() => ({ open: onOpen, about: onAbout }), [onOpen, onAbout]);
 
 	const pageRef = useRef<HTMLElement>(null);
 	const stripRef = useRef<HTMLDivElement>(null);
 	const headRef = useRef<HTMLHeadingElement>(null);
 	const o = roles.overview;
+
+	// The role whose details are open (one at a time).
+	const [shown, setShown] = useState<string | null>(null);
+	const shownRef = useRef<string | null>(null);
+	shownRef.current = shown;
+	const showDetails = useCallback((id: string) => setShown(id), []);
+	const closeDetails = useCallback((back: boolean) => {
+		const id = shownRef.current;
+		setShown(null);
+		if (!back || !id) return;
+		// Back to the tile it was opened from.
+		requestAnimationFrame(() =>
+			pageRef.current?.querySelector<HTMLElement>(`[data-role-id="${CSS.escape(id)}"] .rv-tbtn`)?.focus(),
+		);
+	}, []);
+	const detailsRole = shown && o ? o.roles.find((r) => r.id === shown) : undefined;
+	// Leaving the page, or the role going away, closes its details.
+	useEffect(() => {
+		if (shown && (!active || (o && !detailsRole))) setShown(null);
+	}, [active, o, shown, detailsRole]);
 
 	// The sticky strip must not cover the focused element: scroll-padding-top follows its height.
 	useLayoutEffect(() => {
@@ -343,14 +345,15 @@ export const RolesView = memo(function RolesView({ active, phone, focusRole, onO
 	useEffect(() => {
 		if (!active || !o || !focusRole || shownRole.current === focusRole.seq) return;
 		shownRole.current = focusRole.seq;
-		if (phone) setMode("now");
+		setMode("now");
+		setShown(null);
 		requestAnimationFrame(() => {
 			const row = pageRef.current?.querySelector(`[data-role-id="${CSS.escape(focusRole.id)}"]`);
 			if (!(row instanceof HTMLElement)) return;
 			row.scrollIntoView?.({ block: "start" });
 			row.querySelector<HTMLElement>("a, button")?.focus({ preventScroll: true });
 		});
-	}, [active, o, focusRole, phone]);
+	}, [active, o, focusRole]);
 
 	const reload = () => {
 		reloadRoles();
@@ -380,7 +383,7 @@ export const RolesView = memo(function RolesView({ active, phone, focusRole, onO
 					<h1 id="rv-title" ref={headRef} tabIndex={-1}>
 						{t("rolesTitle")}
 					</h1>
-					{phone && o && (
+					{o && (
 						<div className="rv-switch" role="group" aria-label={t("rolesShow")}>
 							<button type="button" aria-pressed={mode === "now"} onClick={() => setMode("now")}>
 								{t("rolesViewNow")}
@@ -434,7 +437,7 @@ export const RolesView = memo(function RolesView({ active, phone, focusRole, onO
 					</div>
 				)}
 
-				{loading && <Skeleton phone={phone} />}
+				{loading && <Skeleton />}
 
 				{o && (
 					<>
@@ -443,81 +446,45 @@ export const RolesView = memo(function RolesView({ active, phone, focusRole, onO
 						</div>
 						{o.roles.length === 0 ? (
 							<p className="rv-empty rv-meta">{t("rolesNoRoles")}</p>
-						) : phone && mode === "reports" ? (
+						) : mode === "reports" ? (
 							<ReportList roles={reportList} tz={tz} nav={nav} />
-						) : phone ? (
+						) : (
 							<>
-								<PhoneGroup
+								<TileGroup
 									first
 									title={t("rolesGroupSelf", { n: groups.selfStart.length })}
 									roles={groups.selfStart}
-									openIds={openIds}
-									onToggle={toggleRow}
 									now={now}
-									tz={tz}
-									nav={nav}
+									onShow={showDetails}
 								/>
-								<PhoneGroup
+								<TileGroup
 									title={t("rolesGroupRequest", { n: groups.onRequest.length })}
 									roles={groups.onRequest}
-									openIds={openIds}
-									onToggle={toggleRow}
 									now={now}
-									tz={tz}
-									nav={nav}
+									onShow={showDetails}
 								/>
 							</>
-						) : (
-							<section className="rv-board" aria-label={t("rolesBoardLabel")}>
-								<div className="rv-bhead" aria-hidden="true">
-									<div>{t("rolesColRole")}</div>
-									<div>{t("rolesColNow")}</div>
-									<div>{t("rolesColQueue")}</div>
-									<div>{t("rolesColReport")}</div>
-									<div />
-								</div>
-								<h2 className="rv-bgrp">{t("rolesGroupSelf", { n: groups.selfStart.length })}</h2>
-								{groups.selfStart.map((r) => (
-									<BoardRow
-										key={r.id}
-										role={r}
-										open={openIds.has(r.id)}
-										onToggle={toggleRow}
-										now={now}
-										tz={tz}
-										nav={nav}
-									/>
-								))}
-								<h2 className="rv-bgrp">{t("rolesGroupRequest", { n: groups.onRequest.length })}</h2>
-								{groups.onRequest.map((r) => (
-									<BoardRow
-										key={r.id}
-										role={r}
-										open={openIds.has(r.id)}
-										onToggle={toggleRow}
-										now={now}
-										tz={tz}
-										nav={nav}
-									/>
-								))}
-							</section>
 						)}
 					</>
 				)}
 			</div>
+			{active && detailsRole && (
+				<RoleDetails key={detailsRole.id} role={detailsRole} now={now} tz={tz} nav={nav} onClose={closeDetails} />
+			)}
 		</section>
 	);
 });
 
-function Skeleton({ phone }: { phone: boolean }) {
-	const rows = phone ? 6 : 8;
+function Skeleton() {
 	return (
 		<div className="rv-skeleton" aria-hidden="true">
 			<span className="rv-skel rv-skel-strip" />
 			<span className="rv-skel rv-skel-h" />
-			{Array.from({ length: rows }, (_, i) => (
-				<span key={i} className="rv-skel rv-skel-row" />
-			))}
+			<div className="rv-skel-tiles">
+				{Array.from({ length: 8 }, (_, i) => (
+					<span key={i} className="rv-skel rv-skel-tile" />
+				))}
+			</div>
 		</div>
 	);
 }
@@ -594,44 +561,323 @@ function Strip({
 }
 
 // ---------------------------------------------------------------------------
-// Shared pieces
+// Tiles
 // ---------------------------------------------------------------------------
 
-/** The "now" line's content (phone card and desktop cell). */
-function NowContent({ line, now, wide }: { line: NowLine; now: number; wide?: boolean }) {
-	const t = useT();
+function TileGroup({
+	title,
+	roles,
+	first,
+	now,
+	onShow,
+}: {
+	title: string;
+	roles: UiRoleOverview[];
+	first?: boolean;
+	now: number;
+	onShow: (id: string) => void;
+}) {
+	return (
+		<>
+			<h2 className={first ? "rv-grp first" : "rv-grp"}>{title}</h2>
+			{roles.length > 0 && (
+				<ul className="rv-tiles">
+					{roles.map((r) => (
+						<Tile key={r.id} role={r} now={now} onShow={onShow} />
+					))}
+				</ul>
+			)}
+		</>
+	);
+}
+
+/** A tile's one line: the newest ask, else TL;DR line, else the open request (nowLineOf), as plain text. */
+function tileText(t: Translate, line: NowLine): { text: string; dim: boolean } {
 	switch (line.kind) {
 		case "ask":
-			return (
-				<>
-					<span className="rv-lb">
-						<Ic kind="needs" />
-						{t("rolesNeedsYou")}
-					</span>{" "}
-					<span className="rv-lt">
-						{askWhere(t, line.ask)}
-						{line.ask.since !== undefined ? ` · ${ageOf(line.ask.since, now)}` : ""}
-					</span>{" "}
-					<span className={wide ? "rv-tx rv-cl2" : "rv-tx"}>{line.ask.text}</span>
-				</>
-			);
+			return { text: line.ask.text, dim: false };
 		case "line":
-			return (
-				<>
-					<span className="rv-lt">
-						{clockOf(line.line.ts, now)} · {whereTag(t, line.line.chat.where)}
-					</span>{" "}
-					{line.line.answered && <span className="rv-lb rv-ans">{t("rolesAnswered")} </span>}
-					<span className={wide ? "rv-tx rv-cl2" : "rv-tx"}>{line.line.text}</span>
-				</>
-			);
+			return { text: line.line.text, dim: false };
 		case "request":
-			return <span className="rv-tx rv-dim">{t("rolesAsked", { from: line.from, text: line.text })}</span>;
+			return { text: t("rolesAsked", { from: line.from, text: line.text }), dim: true };
 		case "waiting":
-			return <span className="rv-tx rv-dim">{t("rolesWaitingRequests")}</span>;
+			return { text: t("rolesWaitingRequests"), dim: true };
 		default:
-			return <span className="rv-tx rv-dim">{t("rolesNothingYet")}</span>;
+			return { text: t("rolesNothingYet"), dim: true };
 	}
+}
+
+/** Where and when the tile's line is from ("Task #3 · 2h", "07:12 · Home"), else the role's last activity. */
+function tileWhen(t: Translate, line: NowLine, role: UiRoleOverview, now: number): string {
+	if (line.kind === "ask") {
+		return `${askWhere(t, line.ask)}${line.ask.since !== undefined ? ` · ${ageOf(line.ask.since, now)}` : ""}`;
+	}
+	if (line.kind === "line") {
+		const when = `${clockOf(line.line.ts, now)} · ${whereTag(t, line.line.chat.where)}`;
+		return line.line.answered ? `${when} · ${t("rolesAnswered")}` : when;
+	}
+	return role.lastActivity ? agoOf(role.lastActivity, now) : "";
+}
+
+/** The tile's queue in a few words: "#20 Working ·" and "2 queued" (the counts stay on one line). */
+function tileQueue(t: Translate, role: UiRoleOverview): { head: string; counts: string } | null {
+	if (hasProblem(role, "queue")) return { head: t("rolesNotAvailable", { what: t("rolesPartQueue") }), counts: "" };
+	const queue = role.queue;
+	if (!queueHasWork(queue)) return null;
+	const lead = leadTask(queue);
+	const head = lead
+		? `#${lead.id} ${taskWord(t, lead)}`
+		: queueStopped(queue)
+			? t("rolesQueueStopped")
+			: t("rolesNoActiveTask");
+	const counts = queueCounts(t, queue, !!lead, false);
+	return counts ? { head: `${head} ·`, counts } : { head, counts: "" };
+}
+
+const Tile = memo(function Tile({
+	role,
+	now,
+	onShow,
+}: {
+	role: UiRoleOverview;
+	now: number;
+	onShow: (id: string) => void;
+}) {
+	const t = useT();
+	const quiet = isQuiet(role, now);
+	const line = nowLineOf(role, now);
+	const body = tileText(t, line);
+	const when = tileWhen(t, line, role, now);
+	const queue = tileQueue(t, role);
+	return (
+		<li className={`rv-tile ${role.status}${quiet ? " quiet" : ""}`} data-role-id={role.id}>
+			<button type="button" className="rv-tbtn" aria-haspopup="dialog" onClick={() => onShow(role.id)}>
+				<span className="rv-thead">
+					<span className="rv-tname">{role.id}</span>
+					<StatusWord status={role.status} />
+				</span>
+				<span className={body.dim || quiet ? "rv-ttext rv-dim" : "rv-ttext"}>{body.text}</span>
+				{(when || queue) && (
+					<span className="rv-tfoot">
+						{when && <span className="rv-twhen">{when}</span>}
+						{queue && (
+							<span className="rv-tq">
+								{queue.head}
+								{queue.counts && (
+									<>
+										{" "}
+										<span className="rv-tqc">{queue.counts}</span>
+									</>
+								)}
+							</span>
+						)}
+					</span>
+				)}
+			</button>
+		</li>
+	);
+});
+
+// ---------------------------------------------------------------------------
+// One role's details: a side panel (full screen on the phone)
+// ---------------------------------------------------------------------------
+
+function RoleDetails({
+	role,
+	now,
+	tz,
+	nav,
+	onClose,
+}: {
+	role: UiRoleOverview;
+	now: number;
+	tz: string;
+	nav: Nav;
+	/** `back`: focus goes back to the role's tile (not when a target in the panel opened something). */
+	onClose: (back: boolean) => void;
+}) {
+	const t = useT();
+	const ref = useRef<HTMLDialogElement>(null);
+	const closeRef = useRef<HTMLButtonElement>(null);
+	const [allLines, setAllLines] = useState(false);
+	// A modal (the page behind is inert), shown before the first paint; removing it closes it.
+	useLayoutEffect(() => {
+		const d = ref.current;
+		if (d && !d.open) {
+			try {
+				d.showModal();
+			} catch {
+				d.setAttribute("open", "");
+			}
+		}
+		closeRef.current?.focus();
+	}, []);
+	// A target in the panel closes it first: the chat or Settings shows instead.
+	const inner = useMemo<Nav>(
+		() => ({
+			open: (target) => {
+				onClose(false);
+				nav.open(target);
+			},
+			about: (id) => {
+				onClose(false);
+				nav.about(id);
+			},
+		}),
+		[nav, onClose],
+	);
+	const gl = goalsLine(t, role);
+	const questions = role.asks.filter((a) => a.kind === "question");
+	const lines = role.tldr;
+	const shownLines = allLines ? lines : lines.slice(0, CARD_LINES_SHOWN);
+	const moreLines = lines.length - shownLines.length;
+	const queue = role.queue;
+	const reason = reportReason(t, role.report, tz);
+	return (
+		<dialog
+			ref={ref}
+			className="rv-drawer"
+			aria-labelledby="rv-d-title"
+			onCancel={(e) => {
+				e.preventDefault();
+				onClose(true);
+			}}
+			onClick={(e) => {
+				// A click on the dimmed page beside the panel (the dialog itself, outside its content).
+				if (e.target === e.currentTarget) onClose(true);
+			}}
+		>
+			<div className="rv-dwrap">
+				<header className="rv-dhead">
+					<div className="rv-dh1">
+						<h2 id="rv-d-title" className="rv-dname">
+							{role.id}
+						</h2>
+						<button
+							ref={closeRef}
+							type="button"
+							className="rv-dclose"
+							aria-label={t("close")}
+							onClick={() => onClose(true)}
+						>
+							<FiX className="rv-ic" aria-hidden="true" />
+						</button>
+					</div>
+					<div className="rv-dstat">
+						<StatusWord status={role.status} />
+						{role.lastActivity ? <span className="rv-meta">{agoOf(role.lastActivity, now)}</span> : null}
+						{gl && <span className="rv-meta">{gl}</span>}
+					</div>
+					<div className="rv-acts">
+						{role.homeChat ? (
+							<ChatLink nav={inner} target={{ file: role.homeChat.file }} className="rv-act">
+								<FiMessageSquare className="rv-ic" aria-hidden="true" />
+								{t("rolesOpenChatOf", { role: role.id })}
+							</ChatLink>
+						) : (
+							<span className="rv-meta rv-pad">{t("rolesNoHomeChat")}</span>
+						)}
+						<button type="button" className="rv-act" onClick={() => inner.about(role.id)}>
+							<FiSettings className="rv-ic" aria-hidden="true" />
+							{t("rolesAboutRules")}
+						</button>
+					</div>
+				</header>
+				<div className="rv-dbody">
+					{role.conflict && (
+						<p className="rv-note rv-in">
+							<FiInfo className="rv-ic" aria-hidden="true" />
+							{t("rolesConflict", { text: role.conflict })}
+						</p>
+					)}
+					<section className="rv-sec">
+						<h3 className="rv-sech">{t("rolesTldrHeading")}</h3>
+						{questions.map((a) => (
+							<AskLink key={a.key} ask={a} now={now} nav={inner} />
+						))}
+						{hasProblem(role, "tldr") && (
+							<p className="rv-meta">{t("rolesNotAvailable", { what: t("rolesPartTldr") })}</p>
+						)}
+						{lines.length === 0 && !hasProblem(role, "tldr") && questions.length === 0 && (
+							<p className="rv-meta rv-pad">{t("rolesNoTldr")}</p>
+						)}
+						{shownLines.map((l, i) => (
+							<TldrLink key={`${l.chat.file}:${l.id}`} line={l} newest={i === 0} now={now} nav={inner} />
+						))}
+						{lines.length > CARD_LINES_SHOWN && (
+							<button
+								type="button"
+								className="rv-more"
+								aria-expanded={allLines}
+								onClick={() => setAllLines((v) => !v)}
+							>
+								{allLines ? t("rolesFewerLines") : t("rolesMoreLines", { n: moreLines })}
+							</button>
+						)}
+					</section>
+					<section className="rv-sec">
+						<h3 className="rv-sech">{t("rolesQueueHeading")}</h3>
+						{hasProblem(role, "queue") ? (
+							<p className="rv-meta rv-pad">{t("rolesNotAvailable", { what: t("rolesPartQueue") })}</p>
+						) : !queue ? (
+							<p className="rv-meta rv-pad">{t("rolesNoQueue")}</p>
+						) : (
+							<>
+								<p className="rv-meta">
+									{[
+										t("rolesActive", { n: queue.counts.active }),
+										t("rolesQueued", { n: queue.counts.queued }),
+										t("rolesDone", { n: queue.counts.done }),
+										...(queueStopped(queue) ? [t("rolesQueueStopped")] : []),
+									].join(" · ")}
+								</p>
+								{queue.active.map((task) => (
+									<TaskLink key={task.id} task={task} role={role} nav={inner} />
+								))}
+								{queue.active.length === 0 && <p className="rv-meta rv-pad">{t("rolesNoActiveTask")}</p>}
+								{queue.queued.length > 0 && <QueuedList queue={queue} />}
+							</>
+						)}
+					</section>
+					{role.goals.length > 0 && (
+						<section className="rv-sec">
+							<Goals role={role} />
+						</section>
+					)}
+					<section className="rv-sec">
+						<h3 className="rv-sech">
+							{reason ? t("rolesColReport") : t("rolesReportHead", { day: reportDay(role.report, tz) })}
+						</h3>
+						{reason ? (
+							<p className="rv-repnone">
+								<FiInfo className="rv-ic" aria-hidden="true" />
+								{reason}
+							</p>
+						) : (
+							<>
+								{role.report.sections?.length ? (
+									<dl className="rv-dl">
+										{role.report.sections.map((s) => (
+											<div key={s.heading} className="rv-dlrow">
+												<dt>{s.heading}</dt>
+												<dd>{s.text}</dd>
+											</div>
+										))}
+									</dl>
+								) : (
+									<p className="rv-rtext">{role.report.text}</p>
+								)}
+								{role.report.cut && <p className="rv-meta">{t("rolesReportCut")}</p>}
+								<div className="rv-acts rv-racts">
+									<ReportInChat report={role.report} nav={inner} />
+								</div>
+							</>
+						)}
+					</section>
+				</div>
+			</div>
+		</dialog>
+	);
 }
 
 function lineClass(base: string, line: UiRoleTldrLine, newest: boolean): string {
@@ -643,23 +889,11 @@ function lineClass(base: string, line: UiRoleTldrLine, newest: boolean): string 
 }
 
 /** A TL;DR line that opens its chat at the line. */
-function TldrLink({
-	line,
-	newest,
-	now,
-	nav,
-	desk,
-}: {
-	line: UiRoleTldrLine;
-	newest: boolean;
-	now: number;
-	nav: Nav;
-	desk?: boolean;
-}) {
+function TldrLink({ line, newest, now, nav }: { line: UiRoleTldrLine; newest: boolean; now: number; nav: Nav }) {
 	const t = useT();
 	const needs = !!line.needsYou && !line.answered;
 	return (
-		<ChatLink nav={nav} target={lineTarget(line)} className={lineClass(desk ? "rv-dline" : "rv-line", line, newest)}>
+		<ChatLink nav={nav} target={lineTarget(line)} className={lineClass("rv-line", line, newest)}>
 			<span className="rv-lt">
 				{clockOf(line.ts, now)} · {whereTag(t, line.chat.where)}
 			</span>{" "}
@@ -671,16 +905,16 @@ function TldrLink({
 			)}
 			{line.answered && <span className="rv-lb">{t("rolesAnswered")} </span>}
 			{line.kind === "blocked" && !needs && <span className="rv-lb rv-dim">{t("rolesBlockedLine")} </span>}
-			<span className={desk && !needs ? "rv-tx rv-cl1" : "rv-tx"}>{line.text}</span>
+			<span className="rv-tx">{line.text}</span>
 		</ChatLink>
 	);
 }
 
 /** An ask that isn't a TL;DR line (a question waiting in a chat), as a needs line. */
-function AskLink({ ask, now, nav, desk }: { ask: UiRoleAsk; now: number; nav: Nav; desk?: boolean }) {
+function AskLink({ ask, now, nav }: { ask: UiRoleAsk; now: number; nav: Nav }) {
 	const t = useT();
 	return (
-		<ChatLink nav={nav} target={askTarget(ask)} className={desk ? "rv-dline needs rv-wrap" : "rv-line needs"}>
+		<ChatLink nav={nav} target={askTarget(ask)} className="rv-line needs">
 			<span className="rv-lt">
 				{askWhere(t, ask)}
 				{ask.since !== undefined ? ` · ${ageOf(ask.since, now)}` : ""}
@@ -694,7 +928,7 @@ function AskLink({ ask, now, nav, desk }: { ask: UiRoleAsk; now: number; nav: Na
 	);
 }
 
-function Goals({ role, full }: { role: UiRoleOverview; full?: boolean }) {
+function Goals({ role }: { role: UiRoleOverview }) {
 	const t = useT();
 	const [all, setAll] = useState(false);
 	if (role.goals.length === 0) return null;
@@ -702,13 +936,13 @@ function Goals({ role, full }: { role: UiRoleOverview; full?: boolean }) {
 	const more = role.goals.length - shown.length;
 	return (
 		<div className="rv-goals">
-			{full && <h4 className="rv-sech">{t("rolesGoalsHeading")}</h4>}
-			<ul aria-label={full ? undefined : t("rolesGoalsHeading")}>
+			<h3 className="rv-sech">{t("rolesGoalsHeading")}</h3>
+			<ul>
 				{shown.map((g) => (
 					<li key={g.name}>
 						<span>
 							<b>{g.name}</b>
-							{full && <span className="rv-meta"> · {goalRest(t, g)}</span>}
+							<span className="rv-meta"> · {goalRest(t, g)}</span>
 						</span>
 					</li>
 				))}
@@ -722,293 +956,7 @@ function Goals({ role, full }: { role: UiRoleOverview; full?: boolean }) {
 	);
 }
 
-function ReportText({ report, clamp }: { report: UiRoleReport; clamp?: boolean }) {
-	const t = useT();
-	return (
-		<div className="rv-rep">
-			{report.sections?.length ? (
-				report.sections.map((s) => (
-					<p key={s.heading} className={clamp ? "rv-cl2" : undefined}>
-						<span className="rv-rl">{s.heading}:</span> {s.text}
-					</p>
-				))
-			) : (
-				<p className={clamp ? "rv-cl2" : undefined}>{report.text}</p>
-			)}
-			{!clamp && report.cut && <p className="rv-meta">{t("rolesReportCut")}</p>}
-		</div>
-	);
-}
-
-function ReportInChat({ report, nav }: { report: UiRoleReport; nav: Nav }) {
-	const t = useT();
-	const target = reportTarget(report);
-	if (!target) return null;
-	return (
-		<ChatLink nav={nav} target={target} className="rv-act">
-			<FiMessageSquare className="rv-ic" aria-hidden="true" />
-			{t("rolesReportInChat")}
-		</ChatLink>
-	);
-}
-
-// ---------------------------------------------------------------------------
-// Phone: cards
-// ---------------------------------------------------------------------------
-
-function PhoneGroup({
-	title,
-	roles,
-	first,
-	openIds,
-	onToggle,
-	now,
-	tz,
-	nav,
-}: {
-	title: string;
-	roles: UiRoleOverview[];
-	first?: boolean;
-	openIds: ReadonlySet<string>;
-	onToggle: (id: string) => void;
-	now: number;
-	tz: string;
-	nav: Nav;
-}) {
-	return (
-		<>
-			<h2 className={first ? "rv-grp first" : "rv-grp"}>{title}</h2>
-			<div className="rv-rows">
-				{roles.map((r) => (
-					<PhoneCard key={r.id} role={r} open={openIds.has(r.id)} onToggle={onToggle} now={now} tz={tz} nav={nav} />
-				))}
-			</div>
-		</>
-	);
-}
-
-function QueueLine({ role }: { role: UiRoleOverview }) {
-	const t = useT();
-	if (hasProblem(role, "queue")) {
-		return <span className="rv-qs">{t("rolesNotAvailable", { what: t("rolesPartQueue") })}</span>;
-	}
-	const queue = role.queue;
-	if (!queueHasWork(queue)) return null;
-	const lead = leadTask(queue);
-	return (
-		<span className="rv-qs">
-			<span className="rv-qt rv-cl1">
-				{lead
-					? `#${lead.id} ${taskWord(t, lead)} · ${lead.title}`
-					: queueStopped(queue)
-						? t("rolesQueueStopped")
-						: t("rolesNoActiveTask")}
-			</span>
-			<span className="rv-qc">{queueCounts(t, queue, !!lead, false)}</span>
-		</span>
-	);
-}
-
-const PhoneCard = memo(function PhoneCard({
-	role,
-	open,
-	onToggle,
-	now,
-	tz,
-	nav,
-}: {
-	role: UiRoleOverview;
-	open: boolean;
-	onToggle: (id: string) => void;
-	now: number;
-	tz: string;
-	nav: Nav;
-}) {
-	const t = useT();
-	const quiet = isQuiet(role, now);
-	const line = nowLineOf(role, now);
-	const needs = role.status === "needs-you";
-	const panelId = `rv-p-${role.id}`;
-	const gl = goalsLine(t, role);
-	const head = (
-		<>
-			<span className="rv-r1">
-				<h3 className="rv-name">{role.id}</h3>
-				{role.homeChat && (
-					<span className="rv-go" aria-hidden="true">
-						<FiMessageSquare className="rv-ic" />
-					</span>
-				)}
-				<span className="rv-stg">
-					<StatusWord status={role.status} />
-					{role.lastActivity ? <span className="rv-meta"> · {agoOf(role.lastActivity, now)}</span> : null}
-				</span>
-			</span>
-			{gl && !quiet && <span className="rv-gl">{gl}</span>}
-			<span className={`rv-now rv-cl2${line.kind === "ask" ? " needs" : ""}`}>
-				<NowContent line={line} now={now} />
-			</span>
-			{!quiet && <QueueLine role={role} />}
-		</>
-	);
-	let cls = "rv-role";
-	if (needs) cls += " needs";
-	if (role.status === "busy") cls += " busy";
-	if (quiet) cls += " quiet";
-	return (
-		<article className={cls} data-role-id={role.id}>
-			<div className="rv-rhead">
-				{role.homeChat ? (
-					<ChatLink nav={nav} target={{ file: role.homeChat.file }} className="rv-rmain">
-						{head}
-					</ChatLink>
-				) : (
-					<div className="rv-rmain">{head}</div>
-				)}
-				<button
-					type="button"
-					className="rv-rexp"
-					aria-expanded={open}
-					aria-controls={panelId}
-					aria-label={open ? t("rolesCloseRow", { role: role.id }) : t("rolesOpenCard", { role: role.id })}
-					onClick={() => onToggle(role.id)}
-				>
-					<Chevron open={open} />
-				</button>
-			</div>
-			{open && <CardPanel id={panelId} role={role} now={now} tz={tz} nav={nav} />}
-		</article>
-	);
-});
-
-function CardPanel({
-	id,
-	role,
-	now,
-	tz,
-	nav,
-}: {
-	id: string;
-	role: UiRoleOverview;
-	now: number;
-	tz: string;
-	nav: Nav;
-}) {
-	const t = useT();
-	const [allLines, setAllLines] = useState(false);
-	const [queuedOpen, setQueuedOpen] = useState(false);
-	const [reportOpen, setReportOpen] = useState(false);
-	const questions = role.asks.filter((a) => a.kind === "question");
-	const lines = role.tldr;
-	const shownLines = allLines ? lines : lines.slice(0, CARD_LINES_SHOWN);
-	const moreLines = lines.length - shownLines.length;
-	const queue = role.queue;
-	const reason = reportReason(t, role.report, tz);
-	const day = reportDay(role.report, tz);
-	const goal = reportGoal(role.report);
-	return (
-		<div className="rv-panel" id={id}>
-			{role.conflict && (
-				<p className="rv-note rv-in">
-					<FiInfo className="rv-ic" aria-hidden="true" />
-					{t("rolesConflict", { text: role.conflict })}
-				</p>
-			)}
-			{role.goals.length > 0 && <Goals role={role} full />}
-			<section className="rv-sec">
-				<h4 className="rv-sech">{t("rolesTldrHeading")}</h4>
-				{questions.map((a) => (
-					<AskLink key={a.key} ask={a} now={now} nav={nav} />
-				))}
-				{hasProblem(role, "tldr") && <p className="rv-meta">{t("rolesNotAvailable", { what: t("rolesPartTldr") })}</p>}
-				{lines.length === 0 && !hasProblem(role, "tldr") && questions.length === 0 && (
-					<p className="rv-meta rv-pad">{t("rolesNoTldr")}</p>
-				)}
-				{shownLines.map((l, i) => (
-					<TldrLink key={`${l.chat.file}:${l.id}`} line={l} newest={i === 0} now={now} nav={nav} />
-				))}
-				{(moreLines > 0 || allLines) && lines.length > CARD_LINES_SHOWN && (
-					<button type="button" className="rv-more" aria-expanded={allLines} onClick={() => setAllLines((v) => !v)}>
-						{allLines ? t("rolesFewerLines") : t("rolesMoreLines", { n: moreLines })}
-					</button>
-				)}
-			</section>
-			<section className="rv-sec">
-				<h4 className="rv-sech">{t("rolesQueueHeading")}</h4>
-				{hasProblem(role, "queue") ? (
-					<p className="rv-meta rv-pad">{t("rolesNotAvailable", { what: t("rolesPartQueue") })}</p>
-				) : !queue ? (
-					<p className="rv-meta rv-pad">{t("rolesNoQueue")}</p>
-				) : (
-					<>
-						{queueStopped(queue) && <p className="rv-meta">{t("rolesQueueStopped")}</p>}
-						{queue.active.map((task) => (
-							<PhoneTask key={task.id} task={task} role={role} nav={nav} />
-						))}
-						{queue.active.length === 0 && <p className="rv-meta rv-pad">{t("rolesNoActiveTask")}</p>}
-						{queue.counts.queued + queue.counts.done > 0 && (
-							<button
-								type="button"
-								className="rv-more"
-								aria-expanded={queuedOpen}
-								onClick={() => setQueuedOpen((v) => !v)}
-								disabled={queue.counts.queued === 0}
-							>
-								{[t("rolesQueued", { n: queue.counts.queued }), t("rolesDone", { n: queue.counts.done })].join(" · ")}
-							</button>
-						)}
-						{queuedOpen && <QueuedList queue={queue} />}
-					</>
-				)}
-			</section>
-			<section className="rv-sec">
-				{reason ? (
-					<p className="rv-repnone">
-						<FiInfo className="rv-ic" aria-hidden="true" />
-						{reason}
-					</p>
-				) : (
-					<>
-						<button
-							type="button"
-							className="rv-rep-btn"
-							aria-expanded={reportOpen}
-							onClick={() => setReportOpen((v) => !v)}
-						>
-							<span className="rv-rh">{t("rolesReportHead", { day })}</span>
-							{!reportOpen && goal && <span className="rv-rgl rv-cl2">{goal}</span>}
-							<Chevron open={reportOpen} />
-						</button>
-						{reportOpen && (
-							<>
-								<ReportText report={role.report} />
-								<div className="rv-acts">
-									<ReportInChat report={role.report} nav={nav} />
-								</div>
-							</>
-						)}
-					</>
-				)}
-			</section>
-			<div className="rv-pfoot">
-				{role.homeChat ? (
-					<ChatLink nav={nav} target={{ file: role.homeChat.file }} className="rv-act">
-						<FiMessageSquare className="rv-ic" aria-hidden="true" />
-						{t("rolesOpenChatOf", { role: role.id })}
-					</ChatLink>
-				) : (
-					<span className="rv-meta rv-pad">{t("rolesNoHomeChat")}</span>
-				)}
-				<button type="button" className="rv-act" onClick={() => nav.about(role.id)}>
-					<FiSettings className="rv-ic" aria-hidden="true" />
-					{t("rolesAboutRules")}
-				</button>
-			</div>
-		</div>
-	);
-}
-
-function PhoneTask({ task, role, nav }: { task: UiRoleTask; role: UiRoleOverview; nav: Nav }) {
+function TaskLink({ task, role, nav }: { task: UiRoleTask; role: UiRoleOverview; nav: Nav }) {
 	const t = useT();
 	const look = taskLook(task);
 	const target = taskTarget(task, role);
@@ -1016,7 +964,7 @@ function PhoneTask({ task, role, nav }: { task: UiRoleTask; role: UiRoleOverview
 		<>
 			<span className="rv-num">#{task.id}</span>
 			<span className="rv-tb">
-				<span className="rv-tt1 rv-cl1">{task.title}</span>
+				<span className="rv-tt1">{task.title}</span>
 				<span className="rv-ts">
 					<span className={`rv-st ${look}`}>
 						<Ic kind={TASK_ICON[look]} />
@@ -1051,15 +999,45 @@ function QueuedList({ queue }: { queue: NonNullable<UiRoleOverview["queue"]> }) 
 	);
 }
 
+function ReportText({ report, clamp }: { report: UiRoleReport; clamp?: boolean }) {
+	const t = useT();
+	return (
+		<div className="rv-rep">
+			{report.sections?.length ? (
+				report.sections.map((s) => (
+					<p key={s.heading} className={clamp ? "rv-cl2" : undefined}>
+						<span className="rv-rl">{s.heading}:</span> {s.text}
+					</p>
+				))
+			) : (
+				<p className={clamp ? "rv-cl2" : undefined}>{report.text}</p>
+			)}
+			{!clamp && report.cut && <p className="rv-meta">{t("rolesReportCut")}</p>}
+		</div>
+	);
+}
+
+function ReportInChat({ report, nav }: { report: UiRoleReport; nav: Nav }) {
+	const t = useT();
+	const target = reportTarget(report);
+	if (!target) return null;
+	return (
+		<ChatLink nav={nav} target={target} className="rv-act">
+			<FiMessageSquare className="rv-ic" aria-hidden="true" />
+			{t("rolesReportInChat")}
+		</ChatLink>
+	);
+}
+
 // ---------------------------------------------------------------------------
-// Phone: the 6 am reports view
+// The 6 am reports view
 // ---------------------------------------------------------------------------
 
 function ReportList({ roles, tz, nav }: { roles: UiRoleOverview[]; tz: string; nav: Nav }) {
 	const t = useT();
 	if (roles.length === 0) return <p className="rv-empty rv-meta">{t("rolesNoReports")}</p>;
 	return (
-		<div className="rv-rows rv-reports">
+		<div className="rv-reports">
 			{roles.map((r) => (
 				<ReportCard key={r.id} role={r} tz={tz} nav={nav} />
 			))}
@@ -1100,220 +1078,3 @@ function ReportCard({ role, tz, nav }: { role: UiRoleOverview; tz: string; nav: 
 		</article>
 	);
 }
-
-// ---------------------------------------------------------------------------
-// Desktop: the board
-// ---------------------------------------------------------------------------
-
-function DeskTask({ task, role, nav }: { task: UiRoleTask; role: UiRoleOverview; nav: Nav }) {
-	const t = useT();
-	const look = taskLook(task);
-	const target = taskTarget(task, role);
-	const hold = look === "hold";
-	const inner = (
-		<>
-			<Ic kind={TASK_ICON[look]} />
-			<span className="rv-num">#{task.id}</span>
-			<span className="rv-ttl rv-cl1">{task.title}</span>
-			<span className={hold ? "rv-stw full" : "rv-stw rv-cl1"}>{taskWord(t, task)}</span>
-		</>
-	);
-	const cls = `rv-dtask ${look}${hold ? " rv-wrap" : ""}`;
-	return target ? (
-		<ChatLink nav={nav} target={target} className={cls}>
-			{inner}
-		</ChatLink>
-	) : (
-		<div className={cls}>{inner}</div>
-	);
-}
-
-const BoardRow = memo(function BoardRow({
-	role,
-	open,
-	onToggle,
-	now,
-	tz,
-	nav,
-}: {
-	role: UiRoleOverview;
-	open: boolean;
-	onToggle: (id: string) => void;
-	now: number;
-	tz: string;
-	nav: Nav;
-}) {
-	const t = useT();
-	const needs = role.status === "needs-you";
-	const expId = `rv-x-${role.id}`;
-	const line = nowLineOf(role, now);
-	const queue = role.queue;
-	const lead = leadTask(queue);
-	const reason = reportReason(t, role.report, tz);
-	const gl = goalsLine(t, role, true);
-	const questions = role.asks.filter((a) => a.kind === "question");
-
-	let nowCell: ReactNode;
-	if (hasProblem(role, "tldr") && role.tldr.length === 0 && role.asks.length === 0) {
-		nowCell = <span className="rv-meta">{t("rolesNotAvailable", { what: t("rolesPartTldr") })}</span>;
-	} else if (open) {
-		nowCell = (
-			<>
-				{questions.map((a) => (
-					<AskLink key={a.key} ask={a} now={now} nav={nav} desk />
-				))}
-				{role.tldr.map((l, i) => (
-					<TldrLink key={`${l.chat.file}:${l.id}`} line={l} newest={i === 0} now={now} nav={nav} desk />
-				))}
-				{role.tldr.length === 0 && questions.length === 0 && (
-					<span className="rv-dline rv-plain">
-						<NowContent line={line} now={now} wide />
-					</span>
-				)}
-			</>
-		);
-	} else if (line.kind === "ask") {
-		nowCell = (
-			<ChatLink nav={nav} target={askTarget(line.ask)} className="rv-dline needs rv-wrap">
-				<NowContent line={line} now={now} wide />
-			</ChatLink>
-		);
-	} else if (line.kind === "line") {
-		nowCell = (
-			<ChatLink nav={nav} target={lineTarget(line.line)} className={lineClass("rv-dline rv-wrap", line.line, true)}>
-				<NowContent line={line} now={now} wide />
-			</ChatLink>
-		);
-	} else {
-		nowCell = (
-			<span className="rv-dline rv-plain rv-wrap">
-				<NowContent line={line} now={now} wide />
-			</span>
-		);
-	}
-
-	let queueCell: ReactNode;
-	if (hasProblem(role, "queue")) {
-		queueCell = <span className="rv-meta">{t("rolesNotAvailable", { what: t("rolesPartQueue") })}</span>;
-	} else if (!queue) {
-		queueCell = <span className="rv-meta rv-dcount">{t("rolesNoQueue")}</span>;
-	} else {
-		const tasks = open ? queue.active : lead ? [lead] : [];
-		const counts = queueCounts(t, queue, !open && !!lead, true);
-		queueCell = (
-			<>
-				{tasks.map((task) => (
-					<DeskTask key={task.id} task={task} role={role} nav={nav} />
-				))}
-				{open && queue.queued.length > 0 && <QueuedList queue={queue} />}
-				<span className="rv-dcount">
-					{tasks.length === 0
-						? `${queueStopped(queue) ? t("rolesQueueStopped") : t("rolesNoActiveTask")} · ${counts}`
-						: open
-							? `${t("rolesActive", { n: queue.counts.active })} · ${counts}`
-							: counts}
-				</span>
-			</>
-		);
-	}
-
-	const day = reportDay(role.report, tz);
-	const reportCell = reason ? (
-		<span className="rv-meta">{reason}</span>
-	) : (
-		<span className="rv-rg rv-cl2">
-			<span className="rv-rh">{t("rolesReportShort", { day })}</span> {reportGoal(role.report)}
-		</span>
-	);
-
-	return (
-		<div className="rv-brow-wrap" data-role-id={role.id}>
-			<div className={needs ? "rv-brow needs" : "rv-brow"}>
-				<div className="rv-bc">
-					<div className="rv-bn">
-						<h3 className="rv-bh">
-							{role.homeChat ? (
-								<ChatLink
-									nav={nav}
-									target={{ file: role.homeChat.file }}
-									className="rv-bname"
-									label={t("rolesHomeChatOf", { role: role.id })}
-								>
-									{role.id}
-								</ChatLink>
-							) : (
-								<span className="rv-bname">{role.id}</span>
-							)}
-						</h3>
-						<button
-							type="button"
-							className="rv-dabout"
-							aria-label={t("rolesAboutRulesOf", { role: role.id })}
-							data-tip={t("rolesAboutRules")}
-							onClick={() => nav.about(role.id)}
-						>
-							<FiSettings className="rv-ic" aria-hidden="true" />
-						</button>
-					</div>
-					<div className="rv-dcnt">
-						<StatusWord status={role.status} />
-						{role.lastActivity ? <span className="rv-meta">{agoOf(role.lastActivity, now)}</span> : null}
-					</div>
-					{gl && <span className="rv-gl">{gl}</span>}
-					{role.goals.length > 0 && <Goals role={role} full={open} />}
-					{open && role.conflict && (
-						<p className="rv-note rv-in">
-							<FiInfo className="rv-ic" aria-hidden="true" />
-							{t("rolesConflict", { text: role.conflict })}
-						</p>
-					)}
-				</div>
-				<div className="rv-bc">{nowCell}</div>
-				<div className="rv-bc">{queueCell}</div>
-				<div className="rv-bc">{reportCell}</div>
-				<div className="rv-bc rv-bxc">
-					<button
-						type="button"
-						className="rv-bx"
-						aria-expanded={open}
-						aria-controls={expId}
-						aria-label={open ? t("rolesCloseRow", { role: role.id }) : t("rolesOpenRow", { role: role.id })}
-						onClick={() => onToggle(role.id)}
-					>
-						<Chevron open={open} />
-					</button>
-				</div>
-			</div>
-			{open && (
-				<div className={needs ? "rv-bexp needs" : "rv-bexp"} id={expId}>
-					{reason ? (
-						<p className="rv-repnone">
-							<FiInfo className="rv-ic" aria-hidden="true" />
-							{reason}
-						</p>
-					) : (
-						<>
-							<p className="rv-bexph">{t("rolesReportHead", { day })}</p>
-							{role.report.sections?.length ? (
-								<dl>
-									{role.report.sections.map((s) => (
-										<div key={s.heading} className="rv-dlrow">
-											<dt>{s.heading}</dt>
-											<dd>{s.text}</dd>
-										</div>
-									))}
-								</dl>
-							) : (
-								<p className="rv-rtext">{role.report.text}</p>
-							)}
-							{role.report.cut && <p className="rv-meta">{t("rolesReportCut")}</p>}
-							<div className="rv-acts">
-								<ReportInChat report={role.report} nav={nav} />
-							</div>
-						</>
-					)}
-				</div>
-			)}
-		</div>
-	);
-});

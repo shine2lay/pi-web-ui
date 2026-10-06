@@ -1,14 +1,15 @@
 /*
- * roles-overview: the Roles page (components/RolesView.tsx). Final direction C of
- * design-lab/roles-page/SPEC.md with its final density pass: phone cards (<= 768 px, the app's phone
- * layout) and the desktop board. Theme tokens only (dark default and White), 8 px spacing scale,
- * status always an icon plus a word. Every class is prefixed rv- and scoped to .roles-view.
+ * roles-overview: the Roles page (components/RolesView.tsx). Tiles in a grid, coloured by status, and
+ * one role's details in a side panel (owner, 2026-10-05: "show less, tap for more"; this replaced the
+ * board of design-lab/roles-page/SPEC.md, which read as a flat table). Theme tokens only (dark default
+ * and White), 4/8 px spacing, status always an icon plus a word. Every class is prefixed rv- and scoped
+ * to .roles-view (the side panel is a <dialog> inside it, so it inherits the same variables).
  */
 .roles-view {
-	--rv-fs1: 16px;
-	--rv-lh1: 22px;
-	--rv-fs2: 14px;
-	--rv-lh2: 20px;
+	--rv-fs1: 17px;
+	--rv-lh1: 24px;
+	--rv-fs2: 15px;
+	--rv-lh2: 22px;
 	--rv-fs3: 13px;
 	--rv-lh3: 18px;
 	--rv-pad: 32px;
@@ -30,8 +31,6 @@
 	scroll-padding-top: calc(var(--rv-strip-h) + 8px);
 }
 .roles-view.rv-phone {
-	--rv-fs1: 17px;
-	--rv-fs2: 15px;
 	--rv-pad: 16px;
 }
 .roles-view *,
@@ -134,13 +133,13 @@
 	overflow-wrap: break-word;
 }
 
-/* ---- page header: title, view switch (phone), summary (desktop), updated time ---- */
+/* ---- page header: title, view switch, summary (desktop), updated time ---- */
 .rv-phead {
 	display: flex;
 	align-items: center;
 	gap: 16px;
-	min-height: 56px;
-	padding: 8px 0;
+	min-height: 52px;
+	padding: 4px 0;
 }
 .rv-phone .rv-phead {
 	gap: 8px;
@@ -148,8 +147,8 @@
 	padding: 2px 0;
 }
 .rv-phead h1 {
-	font-size: var(--rv-fs1);
-	line-height: var(--rv-lh1);
+	font-size: 20px;
+	line-height: 28px;
 	font-weight: 600;
 }
 .rv-upd {
@@ -166,12 +165,15 @@
 	flex: none;
 }
 .rv-switch button {
-	min-height: 44px;
+	min-height: 36px;
 	padding: 0 12px;
 	font-size: var(--rv-fs3);
 	line-height: var(--rv-lh3);
 	color: var(--text-dim);
 	white-space: nowrap;
+}
+.rv-phone .rv-switch button {
+	min-height: 44px;
 }
 .rv-switch button + button {
 	border-left: 1px solid var(--border);
@@ -212,7 +214,7 @@
 	margin-top: 1px;
 }
 .rv-note.rv-in {
-	margin: 4px 0;
+	margin: 8px 0 4px;
 }
 .rv-errbox {
 	display: flex;
@@ -274,8 +276,17 @@
 	width: 180px;
 	margin-top: 8px;
 }
-.rv-skel-row {
-	height: 64px;
+.rv-skel-tiles {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+	gap: 12px;
+}
+.rv-phone .rv-skel-tiles {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 8px;
+}
+.rv-skel-tile {
+	height: 128px;
 	border-radius: 10px;
 }
 
@@ -293,7 +304,7 @@
 }
 .rv-wbox {
 	border: 1px solid var(--rv-amber-line);
-	border-left: 3px solid var(--amber);
+	border-left: 4px solid var(--amber);
 	border-radius: 8px;
 	background: var(--rv-amber-tint);
 	overflow: hidden;
@@ -372,6 +383,7 @@
 	column-gap: 16px;
 	align-items: center;
 	min-height: 36px;
+	padding: 6px 12px;
 }
 .rv-desk .rv-w1 {
 	white-space: nowrap;
@@ -419,7 +431,274 @@
 }
 .rv-st.busy,
 .rv-st.working {
-	color: var(--link);
+	color: var(--info-blue);
+}
+
+/* ---- tiles: two groups, alphabetical, coloured by status ---- */
+.rv-grp {
+	margin: 16px 0 8px;
+	font-size: 14px;
+	line-height: 20px;
+	font-weight: 600;
+	color: var(--text-dim);
+}
+.rv-grp.first {
+	margin-top: 8px;
+}
+.rv-tiles {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+	gap: 10px;
+}
+.rv-phone .rv-tiles {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 8px;
+}
+@media (max-width: 359px) {
+	.rv-phone .rv-tiles {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+.rv-tile {
+	display: flex;
+	min-width: 0;
+}
+.rv-tbtn {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 10px 14px;
+	border: 1px solid var(--border);
+	border-left: 4px solid var(--border);
+	border-radius: 10px;
+	background: var(--bg-elev);
+	transition: background-color 0.12s;
+}
+.rv-phone .rv-tbtn {
+	gap: 4px;
+	padding: 10px 10px 10px 12px;
+}
+.rv-tbtn:hover {
+	background: var(--bg-elev2);
+}
+.roles-view .rv-tbtn:focus-visible {
+	border-radius: 10px;
+}
+.rv-thead {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 2px 8px;
+	min-width: 0;
+}
+.rv-tname {
+	margin-right: auto;
+	font-size: var(--rv-fs1);
+	line-height: var(--rv-lh1);
+	font-weight: 600;
+	color: var(--text);
+	overflow-wrap: anywhere;
+}
+.rv-ttext {
+	display: -webkit-box;
+	-webkit-line-clamp: 3;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+	overflow-wrap: anywhere;
+	font-size: var(--rv-fs2);
+	line-height: var(--rv-lh2);
+	color: var(--text);
+}
+.rv-phone .rv-ttext {
+	font-size: 14px;
+	line-height: 20px;
+}
+.rv-tfoot {
+	margin-top: auto;
+	padding-top: 2px;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0 12px;
+	font-size: var(--rv-fs3);
+	line-height: var(--rv-lh3);
+	color: var(--text-dim);
+}
+/* The queue's counts stay together ("+1 active \00b7 2 queued"); the task before them may wrap. */
+.rv-tqc {
+	white-space: nowrap;
+}
+/* The colour of a status: the tile's left edge (and a tint for "needs you"); the word and its icon say it too. */
+.rv-tile.needs-you .rv-tbtn {
+	border-color: var(--rv-amber-line);
+	border-left-color: var(--amber);
+	background: color-mix(in srgb, var(--amber) 8%, var(--bg-elev));
+}
+.rv-tile.needs-you .rv-tbtn:hover {
+	background: color-mix(in srgb, var(--amber) 13%, var(--bg-elev));
+}
+.rv-tile.needs-you .rv-st {
+	padding: 1px 8px 1px 6px;
+	border-radius: 999px;
+	background: var(--amber);
+	color: var(--on-amber);
+	font-weight: 600;
+}
+.rv-tile.busy .rv-tbtn {
+	border-left-color: var(--info-blue);
+}
+.rv-tile.paused .rv-tbtn {
+	border-left-color: var(--text-dim);
+}
+.rv-tile.nothing-yet .rv-tbtn {
+	border-style: dashed;
+}
+/* Nothing going on for a day: the tile steps back. */
+.rv-tile.quiet .rv-tbtn {
+	background: var(--bg);
+}
+.rv-tile.quiet .rv-tbtn:hover {
+	background: var(--bg-elev);
+}
+
+/* ---- one role's details: a side panel, full screen on the phone ---- */
+.rv-drawer {
+	position: fixed;
+	inset: 0 0 0 auto;
+	width: min(560px, calc(100vw - 48px));
+	max-width: none;
+	height: auto;
+	max-height: none;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	border-left: 1px solid var(--border);
+	background: var(--bg-elev);
+	color: var(--text);
+	box-shadow: -12px 0 32px rgb(0 0 0 / 30%);
+	font-size: var(--rv-fs2);
+	line-height: var(--rv-lh2);
+	overflow: hidden;
+}
+.rv-drawer[open] {
+	display: flex;
+	flex-direction: column;
+	animation: rv-in 0.12s ease-out;
+}
+.rv-drawer::backdrop {
+	background: rgb(0 0 0 / 45%);
+}
+.rv-phone .rv-drawer {
+	width: 100vw;
+	border-left: 0;
+	box-shadow: none;
+}
+/* A short slide, never a fade: the panel is opaque from its first frame. */
+@keyframes rv-in {
+	from {
+		transform: translateX(16px);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.rv-drawer[open] {
+		animation: none;
+	}
+}
+.rv-dwrap {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+.rv-dhead {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 12px 20px;
+	background: var(--bg-elev);
+	border-bottom: 1px solid var(--border-soft);
+}
+.rv-phone .rv-dhead {
+	padding: 8px 16px 12px;
+}
+.rv-dh1 {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.rv-dname {
+	flex: 1;
+	min-width: 0;
+	font-size: 22px;
+	line-height: 30px;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+.rv-dclose {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 44px;
+	height: 44px;
+	margin-right: -10px;
+	border-radius: 8px;
+	color: var(--text-dim);
+}
+.rv-dclose .rv-ic {
+	width: 20px;
+	height: 20px;
+}
+.rv-dclose:hover {
+	background: var(--bg-elev2);
+	color: var(--text);
+}
+.rv-dstat {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 12px;
+}
+.rv-dbody {
+	padding: 4px 20px 32px;
+}
+.rv-phone .rv-dbody {
+	padding: 4px 16px 32px;
+}
+.rv-dl {
+	display: grid;
+	grid-template-columns: 140px minmax(0, 1fr);
+	gap: 8px 16px;
+}
+.rv-phone .rv-dl {
+	grid-template-columns: minmax(0, 1fr);
+	gap: 2px;
+}
+.rv-phone .rv-dl dd {
+	margin-bottom: 8px;
+}
+.rv-dlrow {
+	display: contents;
+}
+.rv-dl dt {
+	font-size: var(--rv-fs3);
+	line-height: var(--rv-lh2);
+	font-weight: 600;
+	color: var(--text-dim);
+}
+.rv-dl dd,
+.rv-rtext {
+	font-size: var(--rv-fs2);
+	line-height: var(--rv-lh2);
+	white-space: pre-line;
+	overflow-wrap: anywhere;
+}
+.rv-racts {
+	margin-top: 12px;
 }
 
 /* ---- lines (TL;DR, asks) ---- */
@@ -439,9 +718,6 @@
 	margin-right: 2px;
 	vertical-align: -2px;
 }
-.rv-ans {
-	color: var(--info-blue);
-}
 .rv-line {
 	display: block;
 	min-height: 44px;
@@ -451,6 +727,11 @@
 	font-size: var(--rv-fs2);
 	line-height: var(--rv-lh2);
 	overflow-wrap: anywhere;
+}
+a.rv-line:hover,
+a.rv-task:hover {
+	background: var(--bg-elev2);
+	border-radius: 0 4px 4px 0;
 }
 .rv-line.newest {
 	border-left-color: var(--accent);
@@ -485,172 +766,49 @@
 	color: var(--text-dim);
 }
 .rv-desk .rv-more {
-	min-height: 24px;
+	min-height: 32px;
 }
 .rv-pad {
 	padding: 8px 0;
 }
 
-/* ---- phone: groups and cards ---- */
-.rv-grp {
-	margin: 16px 0 8px;
-	font-size: var(--rv-fs3);
-	line-height: var(--rv-lh3);
-	font-weight: 600;
-	letter-spacing: 0.04em;
-	text-transform: uppercase;
-	color: var(--text-dim);
+/* ---- the panel's sections: TL;DR, queue, goals, 6 am report ---- */
+.rv-sec {
+	padding: 12px 0;
 }
-.rv-grp.first {
-	margin-top: 8px;
-}
-.rv-rows {
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
-}
-.rv-role {
-	background: var(--bg-elev);
-	border: 1px solid var(--border);
-	border-radius: 10px;
-	overflow: hidden;
-}
-.rv-role.needs {
-	border-color: var(--rv-amber-line);
-}
-.rv-rhead {
-	display: flex;
-	align-items: stretch;
-}
-.rv-rmain {
-	flex: 1;
-	min-width: 0;
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-	padding: 8px 12px;
-	min-height: 56px;
-}
-.rv-quiet .rv-rmain,
-.rv-role.quiet .rv-rmain {
-	gap: 2px;
-}
-.rv-r1 {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	min-height: var(--rv-lh1);
-}
-.rv-name {
-	font-size: var(--rv-fs1);
-	line-height: var(--rv-lh1);
-	font-weight: 600;
-	overflow-wrap: anywhere;
-}
-.rv-go {
-	display: inline-flex;
-	color: var(--text-dim);
-}
-.rv-go .rv-ic {
-	width: 14px;
-	height: 14px;
-}
-.rv-stg {
-	margin-left: auto;
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	white-space: nowrap;
-}
-.rv-gl {
-	font-size: var(--rv-fs3);
-	line-height: var(--rv-lh3);
-	color: var(--text-dim);
-}
-.rv-now {
-	font-size: var(--rv-fs2);
-	line-height: var(--rv-lh2);
-	overflow-wrap: anywhere;
-}
-.rv-now.needs {
-	color: var(--amber-text);
-}
-.rv-now.needs .rv-lb {
-	color: var(--amber-text);
-}
-.rv-qs {
-	display: flex;
-	gap: 12px;
-	font-size: var(--rv-fs3);
-	line-height: var(--rv-lh3);
-	color: var(--text-dim);
-	min-width: 0;
-}
-.rv-qt {
-	flex: 1 1 auto;
-}
-.rv-qc {
-	flex: none;
-	margin-left: auto;
-	white-space: nowrap;
-}
-.rv-rexp {
-	flex: none;
-	width: 48px;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	border-left: 1px solid var(--border-soft);
-	background: var(--bg-elev2);
-	color: var(--text-dim);
-}
-
-/* ---- phone: an opened card ---- */
-.rv-panel {
+.rv-sec + .rv-sec {
 	border-top: 1px solid var(--border-soft);
-	padding: 0 12px;
 }
-.rv-goals {
-	padding: 12px 0 4px;
+.rv-sech {
+	padding: 4px 0;
+	font-size: 14px;
+	line-height: 20px;
+	font-weight: 600;
+	color: var(--text-dim);
 }
 .rv-goals ul {
 	margin-top: 4px;
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
+	gap: 6px;
 }
 .rv-goals li {
 	display: flex;
 	gap: 8px;
-	font-size: var(--rv-fs3);
-	line-height: var(--rv-lh3);
+	font-size: var(--rv-fs2);
+	line-height: var(--rv-lh2);
 }
 .rv-goals li::before {
 	content: "";
 	flex: none;
 	width: 4px;
 	height: 4px;
-	margin-top: 7px;
+	margin-top: 9px;
 	border-radius: 2px;
 	background: var(--text-dim);
 }
 .rv-goals li b {
 	font-weight: 600;
-}
-.rv-sec {
-	padding: 8px 0;
-}
-.rv-sec + .rv-sec {
-	border-top: 1px solid var(--border-soft);
-}
-.rv-sech {
-	font-size: var(--rv-fs3);
-	line-height: var(--rv-lh3);
-	font-weight: 600;
-	letter-spacing: 0.04em;
-	text-transform: uppercase;
-	color: var(--text-dim);
-	padding: 4px 0;
 }
 .rv-task {
 	display: flex;
@@ -662,7 +820,7 @@
 	border-left: 2px solid var(--border);
 }
 .rv-task.working {
-	border-left-color: var(--accent);
+	border-left-color: var(--info-blue);
 }
 .rv-task.needs {
 	border-left-color: var(--amber);
@@ -688,6 +846,7 @@
 .rv-tt1 {
 	font-size: var(--rv-fs2);
 	line-height: var(--rv-lh2);
+	overflow-wrap: anywhere;
 }
 .rv-ts {
 	display: flex;
@@ -716,50 +875,6 @@
 .rv-qlist .rv-num {
 	font-weight: 600;
 }
-.rv-rep-btn {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) auto;
-	column-gap: 8px;
-	align-items: center;
-	width: 100%;
-	min-height: 44px;
-}
-.rv-rep-btn .rv-rh {
-	grid-column: 1;
-	white-space: nowrap;
-	font-size: var(--rv-fs2);
-	line-height: var(--rv-lh2);
-	font-weight: 600;
-	color: var(--link);
-}
-.rv-rep-btn .rv-rgl {
-	grid-column: 1;
-	font-size: var(--rv-fs3);
-	line-height: var(--rv-lh3);
-	color: var(--text-dim);
-}
-.rv-rep-btn > .rv-chev {
-	grid-column: 2;
-	grid-row: 1 / span 2;
-}
-.rv-rep {
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
-	padding: 4px 0;
-}
-.rv-rep p {
-	font-size: var(--rv-fs2);
-	line-height: var(--rv-lh2);
-	max-width: 75ch;
-	white-space: pre-line;
-	overflow-wrap: anywhere;
-}
-.rv-rl {
-	font-size: var(--rv-fs3);
-	font-weight: 600;
-	color: var(--text-dim);
-}
 .rv-acts {
 	display: flex;
 	gap: 8px;
@@ -783,7 +898,7 @@
 	color: var(--text-dim);
 }
 .rv-desk .rv-act {
-	min-height: 32px;
+	min-height: 36px;
 }
 .rv-repnone {
 	display: flex;
@@ -794,321 +909,65 @@
 	font-size: var(--rv-fs3);
 	line-height: var(--rv-lh3);
 }
-.rv-pfoot {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 8px;
-	padding: 8px 0 12px;
-	border-top: 1px solid var(--border-soft);
-}
 
-/* ---- phone: the 6 am view ---- */
-.rv-r6 .rv-rmain {
+/* ---- the 6 am reports view: one card per role ---- */
+.rv-reports {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+	gap: 12px;
+	align-items: start;
+	margin-top: 12px;
+}
+.rv-phone .rv-reports {
+	grid-template-columns: minmax(0, 1fr);
 	gap: 8px;
+	margin-top: 8px;
 }
-.rv-r6 .rv-rep {
-	padding: 0;
-}
-
-/* ---- desktop board ---- */
-.rv-board {
+.rv-role {
+	background: var(--bg-elev);
 	border: 1px solid var(--border);
 	border-radius: 10px;
 	overflow: hidden;
-	background: var(--bg-elev);
 }
-.rv-bhead,
-.rv-brow {
-	display: grid;
-	grid-template-columns: 224px minmax(0, 1.6fr) minmax(0, 1.4fr) minmax(0, 1fr) 48px;
-}
-.rv-bhead {
-	background: var(--bg-elev2);
-	border-bottom: 1px solid var(--border);
-}
-.rv-bhead div {
-	padding: 8px 12px;
-	font-size: var(--rv-fs3);
-	line-height: var(--rv-lh3);
-	font-weight: 600;
-	letter-spacing: 0.04em;
-	text-transform: uppercase;
-	color: var(--text-dim);
-}
-.rv-bgrp {
-	padding: 8px 12px;
-	font-size: var(--rv-fs3);
-	line-height: var(--rv-lh3);
-	font-weight: 600;
-	letter-spacing: 0.04em;
-	text-transform: uppercase;
-	color: var(--text-dim);
-	background: var(--bg-elev2);
-	border-bottom: 1px solid var(--border-soft);
-}
-.rv-brow {
-	border-bottom: 1px solid var(--border-soft);
-}
-.rv-brow.needs {
-	box-shadow: inset 3px 0 0 var(--amber);
-}
-.rv-bc {
-	padding: 8px 12px;
-	min-width: 0;
+.rv-rmain {
 	display: flex;
 	flex-direction: column;
-	gap: 2px;
+	gap: 8px;
+	padding: 12px 14px;
 }
-.rv-bc + .rv-bc {
-	border-left: 1px solid var(--border-soft);
-}
-.rv-bn {
+.rv-r1 {
 	display: flex;
 	align-items: center;
-	gap: 4px;
-	min-width: 0;
+	gap: 8px;
+	min-height: var(--rv-lh1);
 }
-.rv-bh {
-	font-size: inherit;
-	line-height: inherit;
-	font-weight: inherit;
-	min-width: 0;
-}
-.rv-bname {
-	display: inline-flex;
-	align-items: center;
-	min-height: 24px;
-	min-width: 24px;
+.rv-name {
 	font-size: var(--rv-fs1);
 	line-height: var(--rv-lh1);
 	font-weight: 600;
 	overflow-wrap: anywhere;
 }
-a.rv-bname:hover {
-	color: var(--link);
-}
-.rv-dabout {
+.rv-stg {
+	margin-left: auto;
 	display: inline-flex;
 	align-items: center;
-	justify-content: center;
-	flex: none;
-	width: 24px;
-	height: 24px;
-	border-radius: 6px;
-	color: var(--text-dim);
-}
-.rv-dabout:hover {
-	color: var(--link);
-	background: var(--bg-elev2);
-}
-.rv-dcnt {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 4px 12px;
-	align-items: center;
-}
-.rv-bc .rv-goals {
-	padding: 2px 0 0;
-}
-.rv-bc .rv-goals ul {
-	margin-top: 2px;
-	gap: 0;
-}
-.rv-dline {
-	display: flex;
-	align-items: center;
 	gap: 6px;
-	min-height: 24px;
-	padding: 2px 8px 2px 10px;
-	border-left: 2px solid var(--border);
-	font-size: var(--rv-fs2);
-	line-height: var(--rv-lh2);
-	min-width: 0;
+	white-space: nowrap;
 }
-.rv-dline.newest {
-	border-left-color: var(--accent);
-}
-.rv-dline.needs {
-	border-left-color: var(--amber);
-	background: var(--rv-amber-tint);
-}
-.rv-dline.answered {
-	border-left-color: var(--blue);
-	background: var(--blue-soft);
-}
-.rv-dline .rv-lt,
-.rv-dline .rv-lb {
-	flex: none;
-}
-.rv-dline.needs .rv-lb,
-.rv-dline.needs .rv-tx {
-	color: var(--amber-text);
-}
-.rv-dline.answered .rv-lb {
-	color: var(--info-blue);
-}
-.rv-dline .rv-tx {
-	min-width: 0;
-	flex: 1 1 auto;
-	overflow-wrap: anywhere;
-}
-.rv-dline.rv-wrap {
-	display: block;
-}
-.rv-dline.rv-plain {
-	border-left-color: transparent;
-	padding-left: 0;
-}
-a.rv-dline:hover,
-a.rv-dtask:hover {
-	background: var(--bg-elev2);
-}
-a.rv-dline.needs:hover,
-a.rv-dtask.needs:hover {
-	background: color-mix(in srgb, var(--amber) 16%, transparent);
-}
-.rv-dtask {
+.rv-rep {
 	display: flex;
-	align-items: center;
-	gap: 6px;
-	min-height: 24px;
-	padding: 2px 8px 2px 10px;
-	border-left: 2px solid var(--border);
-	font-size: var(--rv-fs2);
-	line-height: var(--rv-lh2);
-	min-width: 0;
+	flex-direction: column;
+	gap: 8px;
 }
-.rv-dtask.working {
-	border-left-color: var(--accent);
-}
-.rv-dtask.needs {
-	border-left-color: var(--amber);
-	background: var(--rv-amber-tint);
-}
-.rv-dtask.hold {
-	border-left-style: dashed;
-}
-/* A hold says what it waits on in full: beside the title, wrapping in its own column when long (the
-   final board keeps task rows on one line; only holds may wrap). */
-.rv-dtask.rv-wrap {
-	align-items: flex-start;
-}
-.rv-dtask .rv-num {
-	flex: none;
-	min-width: 0;
-}
-.rv-ttl {
-	flex: 1 1 0;
-	min-width: 96px;
-}
-.rv-stw {
-	flex: 0 1 auto;
-	font-size: var(--rv-fs3);
-	font-weight: 500;
-	max-width: 60%;
-	color: var(--text-dim);
-}
-.rv-stw.full {
-	white-space: normal;
-}
-.rv-dtask.needs .rv-stw,
-.rv-dtask.needs .rv-ic {
-	color: var(--amber-text);
-}
-.rv-dtask.working .rv-stw,
-.rv-dtask.working .rv-ic {
-	color: var(--link);
-}
-.rv-dtask.hold .rv-ic,
-.rv-dtask.asking .rv-ic,
-.rv-dtask.queued .rv-ic {
-	color: var(--text-dim);
-}
-.rv-dcount {
-	font-size: var(--rv-fs3);
-	line-height: var(--rv-lh3);
-	color: var(--text-dim);
-	padding: 2px 0 0 12px;
-}
-.rv-bc .rv-qlist {
-	padding: 2px 0 2px 12px;
-}
-.rv-bc .rv-qlist li {
-	padding: 2px 0;
-}
-.rv-rg {
-	font-size: var(--rv-fs2);
-	line-height: var(--rv-lh2);
-}
-.rv-rg .rv-rh {
-	font-size: var(--rv-fs3);
-	font-weight: 600;
-	color: var(--text-dim);
-}
-.rv-bxc {
-	align-items: center;
-	padding: 8px 4px;
-}
-.rv-bx {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	width: 32px;
-	height: 32px;
-	border-radius: 6px;
-	color: var(--text-dim);
-	background: var(--bg-elev2);
-}
-.rv-bx:hover {
-	color: var(--link);
-}
-.rv-bexp {
-	border-bottom: 1px solid var(--border-soft);
-	padding: 12px 12px 16px 236px;
-	background: var(--bg-elev);
-}
-.rv-bexp.needs {
-	box-shadow: inset 3px 0 0 var(--amber);
-}
-.rv-bexph {
-	font-size: var(--rv-fs3);
-	line-height: var(--rv-lh3);
-	font-weight: 600;
-	color: var(--text-dim);
-	padding-bottom: 8px;
-}
-.rv-bexp dl {
-	display: grid;
-	grid-template-columns: 150px minmax(0, 1fr);
-	gap: 8px 16px;
-}
-.rv-dlrow {
-	display: contents;
-}
-.rv-bexp dt {
-	font-size: var(--rv-fs3);
-	line-height: var(--rv-lh2);
-	font-weight: 600;
-	color: var(--text-dim);
-}
-.rv-bexp dd,
-.rv-rtext {
+.rv-rep p {
 	font-size: var(--rv-fs2);
 	line-height: var(--rv-lh2);
 	max-width: 75ch;
 	white-space: pre-line;
 	overflow-wrap: anywhere;
 }
-.rv-bexp .rv-acts {
-	margin-top: 12px;
-}
-/* A narrow desktop (769-1100 px): the opened report starts at the row's left edge. */
-@media (max-width: 1100px) {
-	.rv-bexp {
-		padding-left: 12px;
-	}
-	.rv-bhead,
-	.rv-brow {
-		grid-template-columns: 184px minmax(0, 1.5fr) minmax(0, 1.4fr) minmax(0, 1fr) 48px;
-	}
+.rv-rl {
+	font-size: var(--rv-fs3);
+	font-weight: 600;
+	color: var(--text-dim);
 }

@@ -33,14 +33,12 @@ import {
 	oldestSince,
 	queueCounts,
 	queueStopped,
-	readOpenRoles,
 	readStripOpen,
 	reportDay,
 	reportGoal,
 	reportReason,
 	reportRoles,
 	rolesSummary,
-	saveOpenRoles,
 	saveStripOpen,
 	taskLook,
 	taskWord,
@@ -244,7 +242,7 @@ describe("what a row shows", () => {
 		expect(chatHref("/s/x.jsonl")).toBe("?chat=%2Fs%2Fx.jsonl");
 	});
 
-	it("remembers open rows and the strip on this device, phone and desktop each their own", () => {
+	it("remembers whether the strip is open on this device, phone and desktop each their own", () => {
 		const store = new Map<string, string>();
 		const storage = {
 			getItem: (k: string) => store.get(k) ?? null,
@@ -253,16 +251,9 @@ describe("what a row shows", () => {
 		};
 		expect(readStripOpen("desktop", storage)).toBe(true);
 		expect(readStripOpen("phone", storage)).toBe(false);
-		saveOpenRoles("phone", ["qa", "ops", "../evil", "Bad Id"], storage);
-		expect(readOpenRoles("phone", storage)).toEqual(["ops", "qa"]);
-		expect(readOpenRoles("desktop", storage)).toEqual([]);
 		saveStripOpen("desktop", false, storage);
 		saveStripOpen("phone", true, storage);
 		expect([readStripOpen("desktop", storage), readStripOpen("phone", storage)]).toEqual([false, true]);
-		store.set("pi-web-ui:roles:open:desktop", "{not json");
-		expect(readOpenRoles("desktop", storage)).toEqual([]);
-		saveOpenRoles("phone", [], storage);
-		expect(store.has("pi-web-ui:roles:open:phone")).toBe(false);
 	});
 });
 
@@ -475,7 +466,7 @@ describe("the page", () => {
 		vi.useRealTimers();
 	});
 
-	it("shows every role in two fixed groups, the asks oldest first, and links straight to the chat", () => {
+	it("shows every role as a tile in two fixed groups, the asks oldest first, and links straight to the chat", () => {
 		receiveRoles({ type: "roles", overview: fourteen(), asks: 2, checkedAt: NOW });
 		const html = render(false);
 		expect(html).toContain("Start their own work \u00b7 3");
@@ -487,13 +478,23 @@ describe("the page", () => {
 		expect(first).toBeGreaterThan(-1);
 		expect(first).toBeLessThan(html.indexOf("marketing asks 2"));
 		expect(html).toContain(`href="${chatHref(HOME("marketing"), "task:3").replaceAll("&", "&amp;")}"`);
-		expect(html).toContain("2 queued \u00b7 11 done");
-		expect(html).toContain("Team in Temper");
-		expect(html).toContain("6 am \u00b7 Mon");
 		expect(html).toContain("14 roles \u00b7 1 busy");
+		// one tile per role, coloured by its status; each opens that role's details in a panel
+		expect([...html.matchAll(/class="rv-tbtn" aria-haspopup="dialog"/g)]).toHaveLength(14);
+		expect(html).toContain('class="rv-tile needs-you" data-role-id="marketing"');
+		expect(html).toContain('class="rv-tile busy" data-role-id="ops"');
+		// a tile's queue in a few words, its counts kept on one line; the full counts and goals wait in
+		// the panel, closed at first
+		const text = html.replace(/<!-- -->/g, "").replace(/<[^>]+>/g, "");
+		expect(text).toContain("#69 Working \u00b7 2 queued");
+		expect(html).toContain('<span class="rv-tqc">2 queued</span>');
+		expect(html).not.toContain("11 done");
+		expect(html).not.toContain("Team in Temper");
+		expect(html).not.toContain("<dialog");
+		// the reports are one switch away on the desktop too
+		expect(html).toContain("6 am reports (1)");
 		// no detail page, no jump chips, no "Open all"
 		expect(html).not.toMatch(/Open all|Jump to/i);
-		expect(html).toMatch(/aria-expanded="false"/);
 	});
 
 	it("lays out twenty roles and the phone's cards the same way", () => {

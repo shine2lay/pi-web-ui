@@ -5,8 +5,9 @@ Settings -> Identities on one page: what each one is doing, what is waiting on t
 TL;DR line, its queue, its goals and its 6 am report. It only shows and links. Answers, queue
 controls and edits stay in the chats and in Settings, and nothing on the page starts or stops work.
 
-Design: `~/design-lab/roles-page/SPEC.md` (approved by the owner, final density pass). Patch:
-`roles-overview` in [PATCHES.md](../PATCHES.md).
+Design: `~/design-lab/roles-page/SPEC.md` for what the page says; the layout is the owner's
+2026-10-05 call ("show less, tap for more"): tiles instead of SPEC's board, which read as a flat
+table. Patch: `roles-overview` in [PATCHES.md](../PATCHES.md).
 
 ## What it shows
 
@@ -14,11 +15,17 @@ Design: `~/design-lab/roles-page/SPEC.md` (approved by the owner, final density 
   it is (home chat or task #N), how long it has waited and a link to that chat. The strip is open on
   a desktop and folded on a phone (both remembered on the device).
 - **Two groups**: "Start their own work" and "Work on request", alphabetical in each.
-- **One row per role** (a card on a phone): name (opens the home chat), status, the newest line, the
-  queue, the 6 am report and a button that opens the row in place with every TL;DR line, the active
-  and queued tasks, the goals and the whole report. No separate detail page.
-- **6 am reports** (the switch at the top): only the roles the 6 am job asks, each with its report
-  under the four headings or the reason there is none.
+- **One tile per role**, in a grid (two columns on a phone), coloured by its status (an amber tile
+  for "needs you", a blue edge for busy, a grey edge for paused, a dashed one for nothing yet; the
+  word and its icon always say it too). A tile shows the name, the status, the newest line (up to
+  three lines) and a few words on the queue ("#20 Working · 2 queued"). A role with nothing going on
+  for a day steps back. All 14 tiles fit on a 1440x900 screen.
+- **Tap a tile for the rest**: a side panel (full screen on a phone) with the role's home chat and
+  "About & rules", every TL;DR line, the queue (counts, active tasks with their words, what is
+  queued), the goals and the whole 6 am report. Escape, the close button or a click beside the
+  panel closes it, back on the tile. Every link in it closes it first. No separate detail page.
+- **6 am reports** (the switch at the top, on the phone and the desktop): only the roles the 6 am job
+  asks, each with its report under the four headings or the reason there is none.
 
 Status, strongest first:
 
@@ -57,13 +64,13 @@ Everything is read; nothing is written, opened or started.
 - **Work mode and goals**: the owner's `workMode` and `goals` in `identity.json`; without them, the
   every-chat rules' defaults (`server/role-rules.ts`): product, design and qa start their own work, all
   other roles (and any new one) work on request, and Architecture keeps its two approved goals. An
-  ended goal leaves the page. When the owner's setting disagrees with the rules, the row says so;
-  nothing acts on either.
+  ended goal leaves the page. When the owner's setting disagrees with the rules, the role's panel
+  says so; nothing acts on either.
 
 Every chat file must be an absolute path that is its own resolved path (no `..`, no symlink), end in
 `.jsonl` and lie inside the sessions folders (`PI_CODING_AGENT_SESSION_DIR`, `<agent dir>/sessions`).
-Anything else is not read, and the row says what couldn't be read ("home chat", "task #N chat",
-"report"); the rest of the page still shows.
+Anything else is not read: a note at the top names those roles, and the role's panel says what
+couldn't be read ("home chat", "task #N chat", "report"); the rest of the page still shows.
 
 ## How it stays current
 
@@ -78,8 +85,8 @@ Limits per role: 20 TL;DR lines, 20 queued tasks, report text up to 12,000 chara
 
 ## Links
 
-- `?view=roles` opens the page, `?view=roles#r-<role>` at that role.
-- A row's links open the chat that already exists for that transcript (never a new one), with
+- `?view=roles` opens the page, `?view=roles#r-<role>` at that role's tile.
+- The page's links open the chat that already exists for that transcript (never a new one), with
   `focus=tldr:<id>`, `task:<n>`, `question:<id>` or `report:<day>`: the right panel opens at TL;DR or
   Queue and the item is marked, or the chat scrolls to the report.
 - The gear next to a name opens Settings -> Identities at that role.
@@ -99,8 +106,8 @@ role's prompt or the every-chat rules.
 
 ## On the device
 
-Which rows are open and whether the strip is folded are kept in the browser, separately for the
-phone and the desktop layout (`pi-web-ui:roles:open:<layout>`, `pi-web-ui:roles:strip:<layout>`).
+Whether the strip is folded is kept in the browser, separately for the phone and the desktop
+layout (`pi-web-ui:roles:strip:<layout>`). Nothing else on the page is remembered.
 
 `PI_WEB_TABS` can turn the page off (`roles`).
 

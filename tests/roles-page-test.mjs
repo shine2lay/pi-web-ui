@@ -8,17 +8,18 @@
  * a failed and a "not active" report, an open request, and thinking, tool and prompt text that must never
  * reach the page. Then six more roles (20), and last two home chats the page must refuse (one behind a
  * symlink to a file outside, one behind ".."): the density bars are for the page as it normally is.
- * Checks, in the dark and the White theme, at 390x844 (phone cards) and 1440x900 (desktop board):
+ * Checks, in the dark and the White theme, at 390x844 (phone) and 1440x900 (desktop), the roles as tiles:
  *  1. the top bar's Roles tab and its count; ?view=roles opens the page;
  *  2. two fixed groups, alphabetical; status words (Needs you > Busy > Paused > Idle > Nothing yet);
  *  3. "Waiting on you": every distinct owner ask oldest first, the copied task ask once, the task that
- *     asks its main chat not at all; the rows' TL;DR, queue words and counts (never cut), the two
- *     Architecture goals from the rules, the reports and why there is none;
- *  4. density: >= 5 full rows on the phone's first screen, >= 7 on the desktop's, 14 roles within two
- *     desktop screens; no sideways overflow at 320, 390, 768, 769 and 1440; full reports open in place;
+ *     asks its main chat not at all; the tiles' newest line and queue words (never cut); a tile opens
+ *     the role's panel: TL;DR, queue counts, the two Architecture goals from the rules, the full report
+ *     or why there is none;
+ *  4. density: all 14 tiles fully on the desktop's first screen, >= 6 on the phone's; no sideways
+ *     overflow at 320, 390, 768, 769 and 1440; full reports in the panel and in the reports view;
  *  5. WCAG AA text contrast, icons 3:1, targets (phone 44 px, desktop 24 px), axe-core with no serious
  *     or critical finding, a visible focus ring all the way through, no pulse under reduced motion;
- *  6. open rows are remembered on this device, phone and desktop each their own;
+ *  6. the panel closes with Escape, its close button and a click beside it, focus back on the tile;
  *  7. navigation opens the existing chat at the item (TL;DR line, task, report) and the same chat again
  *     the second time; "About & rules" opens Settings at that role;
  *  8. the owner's form saves only workMode (other keys and their order kept) through the hash-checked
@@ -695,19 +696,19 @@ const MEASURE = () => {
 		if (!el.querySelector("svg") || !el.textContent.trim()) statusNoWord.push(label(el));
 	}
 	const clipped = [];
-	for (const el of root.querySelectorAll(".rv-dcount, .rv-qc, .rv-dcnt .rv-st, .rv-wbtn b")) {
+	for (const el of root.querySelectorAll(".rv-tq, .rv-tname, .rv-st, .rv-wbtn b")) {
 		if (!vis(el)) continue;
 		if (el.scrollWidth > el.clientWidth + 1) clipped.push(label(el));
 	}
-	const rows = [...root.querySelectorAll(narrow ? ".rv-role" : ".rv-brow-wrap")].filter(vis);
+	const rows = [...root.querySelectorAll(".rv-tile")].filter(vis);
 	const heightOf = (sel) => Math.round(root.querySelector(sel)?.getBoundingClientRect().height ?? 0);
-	// Where the room goes (shown when a density check fails): first row's top, row heights, strip, header.
-	const layout = `first row at ${Math.round(rows[0]?.getBoundingClientRect().top ?? 0)}px; rows ${rows
+	// Where the room goes (shown when a density check fails): first tile's top, tile heights, strip, header.
+	const layout = `first tile at ${Math.round(rows[0]?.getBoundingClientRect().top ?? 0)}px; tiles ${rows
 		.slice(0, 9)
 		.map((e) => Math.round(e.getBoundingClientRect().height))
 		.join(
 			"/",
-		)}; strip ${heightOf(".rv-strip")}; header ${heightOf(".rv-phead")}; board head ${heightOf(".rv-bhead")}; scroll box ends at ${Math.round(root.getBoundingClientRect().bottom)}px`;
+		)}; strip ${heightOf(".rv-strip")}; header ${heightOf(".rv-phead")}; group heading ${heightOf(".rv-grp")}; scroll box ends at ${Math.round(root.getBoundingClientRect().bottom)}px`;
 	return {
 		layout,
 		textFails,
@@ -742,7 +743,12 @@ async function runAxe(page) {
 					(v) =>
 						`${v.id}: ${v.nodes
 							.slice(0, 3)
-							.map((n) => n.target.join(" "))
+							.map((n) => {
+								// color-contrast: the colours axe measured, to tell a real failure from a layering one
+								const d = n.any?.[0]?.data;
+								const c = d?.fgColor ? ` (${d.fgColor} on ${d.bgColor}, ${d.contrastRatio}:1)` : "";
+								return `${n.target.join(" ")}${c}`;
+							})
 							.join(", ")}`,
 				),
 			other: r.violations.filter((v) => v.impact !== "serious" && v.impact !== "critical").map((v) => v.id),
@@ -774,6 +780,31 @@ async function focusWalk(page, steps = 24) {
 
 const rowText = (page, id) =>
 	page.evaluate((r) => document.querySelector(`.roles-view [data-role-id="${r}"]`)?.textContent ?? "", id);
+
+/** Opens a role's panel from its tile; returns the panel's text. */
+async function openPanel(page, id) {
+	await page.click(`.roles-view [data-role-id="${id}"] .rv-tbtn`);
+	await waitFor(() =>
+		page.evaluate(
+			(r) => document.querySelector(".roles-view dialog.rv-drawer[open] #rv-d-title")?.textContent === r,
+			id,
+		),
+	);
+	// its opening slide has ended (only the panel's own animation: a busy role's pulse never ends)
+	await waitFor(() =>
+		page.evaluate(() =>
+			(document.querySelector(".roles-view dialog.rv-drawer")?.getAnimations() ?? []).every(
+				(a) => a.playState === "finished",
+			),
+		),
+	);
+	return page.evaluate(() => document.querySelector(".roles-view dialog.rv-drawer")?.textContent ?? "");
+}
+
+async function closePanel(page) {
+	await page.keyboard.press("Escape");
+	await waitFor(() => page.evaluate(() => !document.querySelector(".roles-view dialog.rv-drawer")));
+}
 const statusOfRow = (page, id) =>
 	page.evaluate(
 		(r) => document.querySelector(`.roles-view [data-role-id="${r}"] .rv-st`)?.textContent?.trim() ?? "",
@@ -824,7 +855,7 @@ const desk = await openPage({ width: 1440, height: 900 });
 	const head = await page.evaluate(() => document.querySelector(".roles-view .rv-sum")?.textContent ?? "");
 	check("desktop: summary counts roles, busy and paused", head === "14 roles · 1 busy · 1 paused", head);
 	const groups = await page.evaluate(() =>
-		[...document.querySelectorAll(".roles-view .rv-bgrp")].map((h) => h.textContent),
+		[...document.querySelectorAll(".roles-view .rv-grp")].map((h) => h.textContent),
 	);
 	check(
 		"desktop: two fixed groups",
@@ -832,7 +863,7 @@ const desk = await openPage({ width: 1440, height: 900 });
 		JSON.stringify(groups),
 	);
 	const order = await page.evaluate(() =>
-		[...document.querySelectorAll(".roles-view .rv-brow-wrap")].map((r) => r.dataset.roleId),
+		[...document.querySelectorAll(".roles-view .rv-tile")].map((r) => r.dataset.roleId),
 	);
 	const want = [...SELF, ...ROLES.map(([id]) => id).filter((id) => !SELF.includes(id))];
 	check("desktop: alphabetical inside each group", JSON.stringify(order) === JSON.stringify(want), order.join(","));
@@ -900,24 +931,23 @@ const desk = await openPage({ width: 1440, height: 900 });
 		strip.items[1]?.href ?? "",
 	);
 
-	// Closed, a row shows its first task in the order needs you, working, asking, on hold, and counts the
-	// rest; open, every active task with its word.
+	// A tile names its first task in the order needs you, working, asking, on hold, and counts the rest;
+	// its panel lists every active task with its word.
 	const ops = await rowText(page, "ops");
 	check(
-		"desktop: closed, the queue shows the task that needs you first and counts the other",
-		ops.includes("Rotate the backup keys") && ops.includes("+1 active") && !ops.includes("Asking its main chat"),
+		"desktop: a tile's queue words name the task that needs you first and count the other",
+		ops.includes("#3 Needs you") && ops.includes("+1 active") && !ops.includes("Asking its main chat"),
 		ops.slice(0, 300),
 	);
-	await page.click('.roles-view [data-role-id="ops"] .rv-bx');
-	await waitFor(() => page.evaluate(() => !!document.querySelector('.roles-view [data-role-id="ops"] .rv-bexp')));
-	const opsOpen = await rowText(page, "ops");
+	const opsPanel = await openPanel(page, "ops");
 	check(
-		"desktop: open, the task asking its main chat shows as such",
-		opsOpen.includes("Asking its main chat") && opsOpen.includes("Tidy the scheduler"),
-		opsOpen.slice(0, 400),
+		"desktop: the panel lists every active task, the one asking its main chat as such",
+		opsPanel.includes("Rotate the backup keys") &&
+			opsPanel.includes("Asking its main chat") &&
+			opsPanel.includes("Tidy the scheduler"),
+		opsPanel.slice(0, 400),
 	);
-	await page.click('.roles-view [data-role-id="ops"] .rv-bx');
-	await waitFor(() => page.evaluate(() => !document.querySelector('.roles-view [data-role-id="ops"] .rv-bexp')));
+	await closePanel(page);
 	const backend = await rowText(page, "backend");
 	check(
 		"desktop: holds say what they wait on",
@@ -925,15 +955,23 @@ const desk = await openPage({ width: 1440, height: 900 });
 		backend.slice(0, 300),
 	);
 	const temper = await rowText(page, "temper");
-	check("desktop: queue counts in full", temper.includes("2 queued · 15 done"), temper.slice(0, 300));
+	check("desktop: a tile counts the queued tasks", temper.includes("2 queued"), temper.slice(0, 300));
+	const temperPanel = await openPanel(page, "temper");
+	await closePanel(page);
+	check(
+		"desktop: the panel counts the queue in full",
+		temperPanel.includes("2 queued · 15 done"),
+		temperPanel.slice(0, 300),
+	);
 	check(
 		"desktop: the newest line comes from the task chat, tagged",
 		temper.includes("Wrote the run viewer page") && temper.includes("#20"),
 		temper.slice(0, 300),
 	);
-	const arch = await rowText(page, "architecture");
+	const arch = await openPanel(page, "architecture");
+	await closePanel(page);
 	check(
-		"desktop: Architecture's two goals from the rules, by name",
+		"desktop: Architecture's two goals from the rules, by name, in its panel",
 		arch.includes("Team in Temper") && arch.includes("Land check workflow (#23)"),
 		arch.slice(0, 300),
 	);
@@ -943,15 +981,19 @@ const desk = await openPage({ width: 1440, height: 900 });
 		security.includes("Please check the new login flow"),
 		security.slice(0, 200),
 	);
-	const design = await rowText(page, "design");
+	const design = await openPanel(page, "design");
+	await closePanel(page);
 	check(
-		"desktop: the 6 am report by day and goal",
-		design.includes("6 am · ") && design.includes("design goal:"),
+		"desktop: the panel's 6 am report by day and goal",
+		design.includes("6 am report · ") && design.includes("design goal:"),
 		design.slice(0, 300),
 	);
-	const data = await rowText(page, "data");
-	const frontend = await rowText(page, "frontend");
-	const docs = await rowText(page, "docs");
+	const data = await openPanel(page, "data");
+	await closePanel(page);
+	const frontend = await openPanel(page, "frontend");
+	await closePanel(page);
+	const docs = await openPanel(page, "docs");
+	await closePanel(page);
 	check(
 		"desktop: why there is no report (not active, failed, not asked)",
 		data.includes("not active yesterday") &&
@@ -961,13 +1003,12 @@ const desk = await openPage({ width: 1440, height: 900 });
 	);
 	const m = await visualChecks(page, "desktop dark", { phone: false });
 	check(
-		"desktop dark: at least 7 roles fully on the first 1440x900 screen",
-		m.fullRows >= 7,
-		`${m.fullRows} (${m.layout})`,
+		"desktop dark: all 14 tiles fully on the first 1440x900 screen, above the app's status bar",
+		m.rows === 14 && m.fullRowsAboveBar === 14,
+		`${m.fullRowsAboveBar} of ${m.rows} above the bar, ${m.fullRows} on the window (${m.layout})`,
 	);
-	check("desktop dark: 14 roles within two screens", m.screens <= 2, `${m.screens}`);
 	console.log(
-		`  (desktop dark: ${m.fullRows} rows on the window, ${m.fullRowsAboveBar} above the app's status bar; ${m.screens} screens; ${m.layout})`,
+		`  (desktop dark: ${m.fullRows} tiles on the window, ${m.fullRowsAboveBar} above the app's status bar; ${m.screens} screens; ${m.layout})`,
 	);
 	await shot(page, "desktop-dark");
 
@@ -978,56 +1019,58 @@ const desk = await openPage({ width: 1440, height: 900 });
 		`${walk.inside} / ${walk.without.join("; ")}`,
 	);
 
-	// Open the product row in place: the whole 4,000-character report, nothing cut.
-	await page.click('.roles-view [data-role-id="product"] .rv-bx');
-	await waitFor(() => page.evaluate(() => !!document.querySelector('.roles-view [data-role-id="product"] .rv-bexp')));
+	// A tile opens its role's panel: the whole 4,000-character report, nothing cut.
+	await openPanel(page, "product");
 	const full = await page.evaluate(() => {
-		const exp = document.querySelector('.roles-view [data-role-id="product"] .rv-bexp');
-		const dds = [...(exp?.querySelectorAll("dd") ?? [])];
+		const d = document.querySelector(".roles-view dialog.rv-drawer[open]");
+		const dds = [...(d?.querySelectorAll("dd") ?? [])];
 		return {
-			expanded: document.querySelector('.roles-view [data-role-id="product"] .rv-bx')?.getAttribute("aria-expanded"),
-			headings: [...(exp?.querySelectorAll("dt") ?? [])].map((d) => d.textContent),
-			chars: dds.reduce((n, d) => n + d.textContent.length, 0),
-			end: exp?.textContent?.includes("END-OF-PRODUCT-REPORT"),
-			cut: dds.filter((d) => d.scrollHeight > d.clientHeight + 1).length,
+			title: d?.querySelector("#rv-d-title")?.textContent,
+			modal: d?.matches(":modal") ?? false,
+			focus: document.activeElement?.classList.contains("rv-dclose") ?? false,
+			headings: [...(d?.querySelectorAll("dt") ?? [])].map((x) => x.textContent),
+			chars: dds.reduce((n, x) => n + x.textContent.length, 0),
+			end: d?.textContent?.includes("END-OF-PRODUCT-REPORT"),
+			cut: dds.filter((x) => x.scrollHeight > x.clientHeight + 1).length,
 		};
 	});
-	check("desktop: a row opens in place", full.expanded === "true", JSON.stringify(full.expanded));
+	check(
+		"desktop: a tile opens its role's panel, focus on its close button",
+		full.title === "product" && full.modal && full.focus,
+		JSON.stringify({ title: full.title, modal: full.modal, focus: full.focus }),
+	);
 	check(
 		"desktop: the full report under its four headings, nothing cut",
 		JSON.stringify(full.headings) === JSON.stringify(["Goal or hypothesis", "Done yesterday", "Learned", "Next"]) &&
 			full.end &&
 			full.cut === 0 &&
 			full.chars > 3500,
-		JSON.stringify(full),
+		JSON.stringify({ headings: full.headings, chars: full.chars, end: full.end, cut: full.cut }),
 	);
 	await shot(page, "desktop-dark-open");
-	const mOpen = await page.evaluate(MEASURE);
-	check("desktop: an open row still has no sideways scroll", mOpen.overflowX <= 1, `${mOpen.overflowX}`);
+	await visualChecks(page, "desktop dark, panel open", { phone: false });
 
-	// Keyboard: Enter on a row's button opens it; the row stays open after a reload (this device).
-	await page.focus('.roles-view [data-role-id="qa"] .rv-bx');
+	// The panel closes with Escape, its close button and a click beside it; focus goes back to the tile.
+	const backOn = (id) =>
+		page.evaluate(
+			(r) =>
+				!document.querySelector(".roles-view dialog.rv-drawer") &&
+				document.activeElement === document.querySelector(`.roles-view [data-role-id="${r}"] .rv-tbtn`),
+			id,
+		);
+	await page.keyboard.press("Escape");
+	check("desktop: Escape closes the panel, focus back on the tile", !!(await waitFor(() => backOn("product"))));
+	await page.focus('.roles-view [data-role-id="qa"] .rv-tbtn');
 	await page.keyboard.press("Enter");
 	const qaOpen = await waitFor(() =>
-		page.evaluate(
-			() => document.querySelector('.roles-view [data-role-id="qa"] .rv-bx')?.getAttribute("aria-expanded") === "true",
-		),
+		page.evaluate(() => document.querySelector(".roles-view dialog.rv-drawer #rv-d-title")?.textContent === "qa"),
 	);
-	check("desktop: Enter opens a row", !!qaOpen);
-	await page.reload();
-	// (the app opens on the chat; the link's ?view=roles was used up by the first load)
-	await page.waitForSelector(".tb-tab.roles-tab");
-	await page.evaluate(() => document.querySelector(".tb-tab.roles-tab")?.click());
-	await page.waitForSelector(".roles-view [data-role-id]");
-	const kept = await waitFor(() =>
-		page.evaluate(() =>
-			["product", "qa"].every(
-				(id) =>
-					document.querySelector(`.roles-view [data-role-id="${id}"] .rv-bx`)?.getAttribute("aria-expanded") === "true",
-			),
-		),
-	);
-	check("desktop: open rows are remembered on this device", !!kept);
+	check("desktop: Enter on a tile opens its panel", !!qaOpen);
+	await page.click(".roles-view .rv-dclose");
+	check("desktop: the close button closes the panel, focus back on the tile", !!(await waitFor(() => backOn("qa"))));
+	await openPanel(page, "qa");
+	await page.mouse.click(200, 450);
+	check("desktop: a click beside the panel closes it", !!(await waitFor(() => backOn("qa"))));
 
 	// Reduced motion: the busy pulse runs, and stops when the person asks for less motion.
 	const pulse = await page.evaluate(() => {
@@ -1101,20 +1144,25 @@ const desk = await openPage({ width: 1440, height: 900 });
 		`${second?.sessionFile === files.marketing} ${chatsBefore} -> ${chatsAfter}`,
 	);
 
-	// The report: "Report in chat" opens the chat the answer is in.
+	// The report: "Report in chat" in the role's panel opens the chat the answer is in.
 	await page.click(".tb-tab.roles-tab");
-	await page.waitForSelector('.roles-view [data-role-id="qa"] .rv-bexp');
+	await openPanel(page, "qa");
 	const repAt = Date.now();
-	await page.click('.roles-view [data-role-id="qa"] .rv-bexp .rv-act');
+	await page.click(".roles-view .rv-drawer .rv-racts .rv-act");
 	const qaChat = await waitFor(
 		() => lastSnapshot && lastSnapshot.at >= repAt && lastSnapshot.sessionFile === files.qa && lastSnapshot,
 	);
 	check("navigation: Report in chat opens the chat with the report", !!qaChat, JSON.stringify(lastSnapshot));
 
-	// About & rules: Settings at that role.
+	check(
+		"navigation: the panel closed on the way",
+		await page.evaluate(() => !document.querySelector(".roles-view dialog.rv-drawer")),
+	);
+
+	// About & rules (in the role's panel): Settings at that role.
 	await page.click(".tb-tab.roles-tab");
-	await page.waitForSelector('.roles-view [data-role-id="backend"] .rv-dabout');
-	await page.click('.roles-view [data-role-id="backend"] .rv-dabout');
+	await openPanel(page, "backend");
+	await page.click(".roles-view .rv-drawer .rv-dhead button.rv-act");
 	const marked = await waitFor(() =>
 		page.evaluate(() => !!document.querySelector('[data-identity="backend"].identity-row-marked')),
 	);
@@ -1200,7 +1248,7 @@ const desk = await openPage({ width: 1440, height: 900 });
 	// The page follows the owner's save: backend now starts its own work.
 	await page.evaluate(() => document.querySelector(".tb-tab.roles-tab")?.click());
 	const moved = await waitFor(() =>
-		page.evaluate(() => document.querySelector(".roles-view .rv-bgrp")?.textContent === "Start their own work · 4"),
+		page.evaluate(() => document.querySelector(".roles-view .rv-grp")?.textContent === "Start their own work · 4"),
 	);
 	check("settings: the Roles page follows the owner's save", !!moved);
 
@@ -1210,7 +1258,7 @@ const desk = await openPage({ width: 1440, height: 900 });
 		`${JSON.stringify({ id: "backend", title: "Backend engineering", homeChat: files.backend }, null, "\t")}\n`,
 	);
 	const back = await waitFor(() =>
-		page.evaluate(() => document.querySelector(".roles-view .rv-bgrp")?.textContent === "Start their own work · 3"),
+		page.evaluate(() => document.querySelector(".roles-view .rv-grp")?.textContent === "Start their own work · 3"),
 	);
 	check("settings: an outside edit back to the rules moves the role back", !!back);
 }
@@ -1268,7 +1316,7 @@ const desk = await openPage({ width: 1440, height: 900 });
 }
 
 // =========================================================================================================
-// 4. Phone, dark: cards, strip folded, reports view, remembered per device
+// 4. Phone, dark: tiles, strip folded, the panel full screen, reports view
 // =========================================================================================================
 const phone = await openPage({ width: 390, height: 844, phone: true });
 {
@@ -1276,9 +1324,9 @@ const phone = await openPage({ width: 390, height: 844, phone: true });
 	const tab = await page.evaluate(() => !!document.querySelector(".tb-tab.roles-tab .roles-badge"));
 	check("phone: Roles with its count in the top bar", tab);
 	const cards = await page.evaluate(() =>
-		[...document.querySelectorAll(".roles-view .rv-role")].map((r) => r.dataset.roleId),
+		[...document.querySelectorAll(".roles-view .rv-tile")].map((r) => r.dataset.roleId),
 	);
-	check("phone: one card per role", cards.length === 14, `${cards.length}`);
+	check("phone: one tile per role", cards.length === 14, `${cards.length}`);
 	const folded = await page.evaluate(() => ({
 		open: document.querySelector(".roles-view .rv-wbtn")?.getAttribute("aria-expanded"),
 		prev: document.querySelector(".roles-view .rv-wprev")?.textContent,
@@ -1292,40 +1340,35 @@ const phone = await openPage({ width: 390, height: 844, phone: true });
 	);
 	const m = await visualChecks(page, "phone dark", { phone: true });
 	check(
-		"phone dark: at least 5 roles fully on the first 390x844 screen",
-		m.fullRows >= 5,
+		"phone dark: at least 6 tiles fully on the first 390x844 screen",
+		m.fullRows >= 6,
 		`${m.fullRows} (${m.layout})`,
 	);
+	console.log(`  (phone dark: ${m.fullRows} tiles on the window; ${m.screens} screens; ${m.layout})`);
 	await shot(page, "phone-dark");
 
-	// Open a card; remembered on the phone layout, not on the desktop layout of the same browser.
-	await page.click('.roles-view [data-role-id="design"] .rv-rexp');
-	const open = await waitFor(() =>
-		page.evaluate(() => !!document.querySelector('.roles-view [data-role-id="design"] .rv-panel')),
+	// A tile opens the role's panel over the whole screen; the close button brings the tile back.
+	const panel = await openPanel(page, "design");
+	const wide = await page.evaluate(
+		() => document.querySelector(".roles-view dialog.rv-drawer")?.getBoundingClientRect().width ?? 0,
 	);
-	check("phone: a card opens in place", !!open);
-	const panel = await page.evaluate(
-		() => document.querySelector('.roles-view [data-role-id="design"] .rv-panel')?.textContent ?? "",
-	);
+	check("phone: the panel covers the screen", wide >= 389, `${wide}`);
 	check(
-		"phone: the open card has TL;DR, queue and report",
-		panel.includes("TL;DR") && panel.includes("6 am report"),
+		"phone: the panel has TL;DR, queue and report",
+		panel.includes("TL;DR") && panel.includes("Queue") && panel.includes("6 am report"),
 		panel.slice(0, 200),
 	);
 	await shot(page, "phone-dark-open");
-	await page.setViewportSize({ width: 1440, height: 900 });
-	const deskOpen = await waitFor(() =>
-		page.evaluate(() => {
-			const b = document.querySelector('.roles-view [data-role-id="design"] .rv-bx');
-			return b ? b.getAttribute("aria-expanded") : null;
-		}),
+	await visualChecks(page, "phone dark, panel open", { phone: true });
+	await page.click(".roles-view .rv-dclose");
+	const closed = await waitFor(() =>
+		page.evaluate(
+			() =>
+				!document.querySelector(".roles-view dialog.rv-drawer") &&
+				document.activeElement === document.querySelector('.roles-view [data-role-id="design"] .rv-tbtn'),
+		),
 	);
-	check("phone/desktop: each layout remembers its own open rows", deskOpen === "false", String(deskOpen));
-	await page.setViewportSize({ width: 390, height: 844 });
-	const phoneAgain = await waitFor(() =>
-		page.evaluate(() => !!document.querySelector('.roles-view [data-role-id="design"] .rv-panel')),
-	);
-	check("phone/desktop: back on the phone layout the card is open again", !!phoneAgain);
+	check("phone: the close button closes the panel, focus back on the tile", !!closed);
 
 	for (const width of [320, 768]) {
 		await page.setViewportSize({ width, height: 844 });
@@ -1386,11 +1429,14 @@ for (const [w, h, isPhone] of [
 	check(`white ${w}: the White theme is on`, /rgb\(25[0-5], 25[0-5], 25[0-5]\)/.test(themed), themed);
 	const m = await visualChecks(light.page, `white ${w}`, { phone: isPhone });
 	if (isPhone)
-		check("white 390: at least 5 roles fully on the first screen", m.fullRows >= 5, `${m.fullRows} (${m.layout})`);
+		check("white 390: at least 6 tiles fully on the first screen", m.fullRows >= 6, `${m.fullRows} (${m.layout})`);
 	else {
-		check("white 1440: at least 7 roles fully on the first screen", m.fullRows >= 7, `${m.fullRows} (${m.layout})`);
-		console.log(`  (white 1440: ${m.fullRows} rows on the window, ${m.fullRowsAboveBar} above the status bar)`);
-		check("white 1440: 14 roles within two screens", m.screens <= 2, `${m.screens}`);
+		check(
+			"white 1440: all 14 tiles fully on the first screen, above the app's status bar",
+			m.rows === 14 && m.fullRowsAboveBar === 14,
+			`${m.fullRowsAboveBar} of ${m.rows} above the bar, ${m.fullRows} on the window (${m.layout})`,
+		);
+		console.log(`  (white 1440: ${m.fullRows} tiles on the window, ${m.fullRowsAboveBar} above the status bar)`);
 	}
 	await shot(light.page, `${isPhone ? "phone" : "desktop"}-white`);
 	await light.context.close();
@@ -1411,12 +1457,12 @@ for (const [w, h, isPhone] of [
 	const { page } = desk;
 	await page.setViewportSize({ width: 1440, height: 900 });
 	const twenty = await waitFor(
-		() => page.evaluate(() => document.querySelectorAll(".roles-view .rv-brow-wrap").length === 20),
+		() => page.evaluate(() => document.querySelectorAll(".roles-view .rv-tile").length === 20),
 		20_000,
 	);
 	check("20 roles: they appear by themselves", !!twenty);
 	const order = await page.evaluate(() =>
-		[...document.querySelectorAll(".roles-view .rv-brow-wrap")].map((r) => r.dataset.roleId),
+		[...document.querySelectorAll(".roles-view .rv-tile")].map((r) => r.dataset.roleId),
 	);
 	const groupB = order.slice(3);
 	check(
@@ -1424,14 +1470,11 @@ for (const [w, h, isPhone] of [
 		JSON.stringify(groupB) === JSON.stringify([...groupB].sort()) && order.slice(0, 3).join() === "design,product,qa",
 		order.join(","),
 	);
-	// Close the open rows first: the measure is for the board as it opens.
-	for (const id of ["product", "qa"]) {
-		const b = await page.$(`.roles-view [data-role-id="${id}"] .rv-bx[aria-expanded="true"]`);
-		if (b) await b.click();
-	}
+	// The measure is for the page as it opens: no panel open.
+	if (await page.$(".roles-view dialog.rv-drawer")) await closePanel(page);
 	await sleep(200);
 	const m = await page.evaluate(MEASURE);
-	check("20 roles desktop: at least 7 fully on the first screen", m.fullRows >= 7, `${m.fullRows} (${m.layout})`);
+	check("20 roles desktop: at least 14 fully on the first screen", m.fullRows >= 14, `${m.fullRows} (${m.layout})`);
 	check("20 roles desktop: nothing scrolls sideways", m.overflowX <= 1, `${m.overflowX}`);
 	console.log(`  (20 roles: ${m.screens} desktop screens)`);
 	await shot(page, "desktop-dark-20");
@@ -1440,7 +1483,7 @@ for (const [w, h, isPhone] of [
 	await p.click(".roles-view .rv-switch button >> nth=0");
 	const pm = await p.evaluate(MEASURE);
 	check(
-		"20 roles phone: one card each, nothing sideways",
+		"20 roles phone: one tile each, nothing sideways",
 		pm.rows === 20 && pm.overflowX <= 1,
 		`${pm.rows} ${pm.overflowX}`,
 	);
