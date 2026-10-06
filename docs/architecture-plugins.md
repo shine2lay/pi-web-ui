@@ -142,11 +142,17 @@
   once first; it resolves when the chat took the text. Errors in plain words: no such role, no home
   chat, its transcript gone, the server restarting.
 - `onReply(handler)` -> unsubscribe. At the end of every turn in any role's home chat: `{ role, file,
-  text, cause, at, ids, error?, cut? }`. `text` is the turn's last assistant text (markers stripped,
-  at most 20,000 characters, `cut` when shortened); `error` one line when the turn failed or was
-  stopped; `ids` the `send` ids the turn took in; `cause` the strongest of what started or joined
-  the turn: `telegram` > `plugin` > `role` (a role message; the 6 am report counts as `other`) >
-  `browser` > `other`.
+  text, cause, at, ids, error?, cut?, forOwner?, answeredBy?, ownerIds? }`. `text` is the turn's last
+  assistant text (markers stripped, at most 20,000 characters, `cut` when shortened); `error` one
+  line when the turn failed or was stopped; `ids` the `send` ids the turn took in; `cause` the
+  strongest of what started or joined the turn: `telegram` > `plugin` > `role` (a role message; the
+  6 am report counts as `other`) > `browser` > `other`. `forOwner: true` (cause stays `role`) when a
+  reply to a question or request the chat asked during one of the owner's turns started or joined
+  the turn: `answeredBy` the roles that replied, `ownerIds` the `send` ids of his messages behind it
+  (at most 10). A turn is the owner's when his `send` (cause `telegram`) started or joined it, or a
+  reply to such a question did (so chains keep it); `message_role` then stores `forOwner: true` and
+  `ownerIds` on the question in role-messages.json (`RoleMessages.ownerAnswerOf` finds them from the
+  reply). FYIs and replies are never marked.
 
 **严格模式** = 声明了 `permissions` **或** `apiVersion >= 2`；**旧全权模式** = 未声明 `permissions` 且
 `apiVersion < 2`（放行但每激活期警告一次「apiVersion 2 起将默认拒绝」）。宿主 API 版本

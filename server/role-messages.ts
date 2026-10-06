@@ -47,6 +47,7 @@ import { dirname } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { samePath, type IdentityDef } from "./identities.js";
 import type { UiRoleMessage, UiRoleMessageKind, UiRoleMessageRow, UiRoleMessageState } from "./protocol.js";
+import { OWNER_IDS_MAX } from "./role-replies.js";
 import { CARRY_ON_PREFIX } from "./running-chats.js";
 import { TASK_QUEUE_ENTRY_TYPE, taskQueueFromEntries, type TaskQueueEntryLike } from "./task-queue.js";
 
@@ -139,6 +140,12 @@ export interface RoleMessageRecord {
 	error?: string;
 	/** role-reports: kind report: the day it is about, what the job found, and the answer's check. */
 	report?: RoleReportInfo;
+	/** telegram-coo: a question or request a role's home chat sent while its turn was the owner's (his
+	 *  Telegram message started it, or a reply to an earlier one of these did): the turn its reply starts
+	 *  goes to his Telegram (role-replies.ts forOwner). */
+	forOwner?: boolean;
+	/** forOwner: the host.roles.send ids of the owner's messages behind it (the plugin threads under them). */
+	ownerIds?: string[];
 }
 
 /** role-reports: what the app's job found that day (counts only). */
@@ -222,6 +229,9 @@ export interface RoleMessageSender {
 	chat: string;
 	/** The depth of the role message this chat is handling now (0 = none). */
 	handling: number;
+	/** telegram-coo: the chat is a role's home chat and its running turn is the owner's (role-replies.ts
+	 *  ownerTurnOf): a question or request it sends is marked forOwner, with these send ids. */
+	forOwner?: { ownerIds: string[] };
 }
 
 export interface RoleMessageSendInput {
@@ -738,6 +748,19 @@ export class RoleMessages {
 		setTimeout(() => void this.tick(), 0).unref?.();
 	}
 
+	/**
+	 * telegram-coo: the role message with this id, when it is a reply to a question or request that was
+	 * asked for the owner (forOwner): who answered, and the owner's send ids behind the question. The turn
+	 * it starts is the owner's (role-replies.ts). Anything else: null.
+	 */
+	ownerAnswerOf(id: string | undefined): { answeredBy: string; ownerIds: string[] } | null {
+		const r = id ? this.byId(id) : undefined;
+		if (!r || r.kind !== "reply" || !r.replyTo) return null;
+		const original = this.byId(r.replyTo);
+		if (!original?.forOwner) return null;
+		return { answeredBy: r.from.role, ownerIds: [...(original.ownerIds ?? [])] };
+	}
+
 	/** The depth of the role message a chat is handling, from its last user message (0 = none). */
 	handlingDepth(sessionFile: string | undefined, lastUserText: string | undefined): number {
 		const r = this.verified(sessionFile, lastUserText ?? "");
@@ -1023,6 +1046,8 @@ export class RoleMessages {
 				error: `Not sent: ${sender.role} has sent ${lastHour} role messages in the last hour (the limit is ${ROLE_MESSAGES_PER_HOUR}). Ask the owner before sending more.`,
 			};
 		}
+		// telegram-coo: asked for the owner, so the reply's turn goes to his Telegram.
+		const forOwner = (kind === "question" || kind === "request") && sender.forOwner ? sender.forOwner : undefined;
 		const record: RoleMessageRecord = {
 			id: newRoleMessageId((id) => !!this.byId(id)),
 			at: now,
@@ -1035,6 +1060,9 @@ export class RoleMessages {
 			state: "waiting",
 			sends: 0,
 			attempts: 0,
+			...(forOwner
+				? { forOwner: true, ownerIds: [...new Set(forOwner.ownerIds.map(String))].slice(0, OWNER_IDS_MAX) }
+				: {}),
 		};
 		this.data.messages.push(record);
 		if (original) {
@@ -1045,7 +1073,7 @@ export class RoleMessages {
 		}
 		this.save();
 		this.log(
-			`${record.id} ${sender.role} (${sender.chat}) -> ${to.id} · ${kind}${replyTo ? ` to ${replyTo}` : ""}, chain ${chain}`,
+			`${record.id} ${sender.role} (${sender.chat}) -> ${to.id} · ${kind}${replyTo ? ` to ${replyTo}` : ""}, chain ${chain}${forOwner ? ", for the owner" : ""}`,
 		);
 		this.kick();
 		const targetChat =

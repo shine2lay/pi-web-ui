@@ -594,3 +594,56 @@ describe("delivery", () => {
 		expect(existsSync(`${store}.bad-${now}`)).toBe(true);
 	});
 });
+
+describe('telegram-coo: forOwner (owner 2026-10-06: "Yes, answers to my questions")', () => {
+	it("marks a question or request sent while the chat's turn is the owner's, keeps his send ids, and survives a reload", () => {
+		const f = fake([role("alpha", "Alpha", A), role("beta", "Beta", B)]);
+		const s = new RoleMessages(store, f.host, clock);
+		const owners = sender({ role: "alpha", file: A, forOwner: { ownerIds: ["s1", "s1", "s2"] } });
+		const q = s.send(owners, { to: "beta", kind: "question", text: "why?" });
+		const r = s.send(owners, { to: "beta", kind: "request", text: "do it" });
+		const fyi = s.send(owners, { to: "beta", kind: "fyi", text: "fyi" });
+		const plain = s.send(sender({ role: "alpha", file: A }), { to: "beta", kind: "question", text: "and?" });
+		if (!q.ok || !r.ok || !fyi.ok || !plain.ok) throw new Error("not sent");
+		expect(q.record).toMatchObject({ forOwner: true, ownerIds: ["s1", "s2"] });
+		expect(r.record).toMatchObject({ forOwner: true, ownerIds: ["s1", "s2"] });
+		// An FYI gets no answer, so it isn't marked; nor is a question from a turn that isn't his.
+		expect(fyi.record.forOwner).toBeUndefined();
+		expect(plain.record.forOwner).toBeUndefined();
+		expect(plain.record.ownerIds).toBeUndefined();
+		const saved = JSON.parse(readFileSync(store, "utf8")).messages;
+		expect(saved.find((m: { id: string }) => m.id === q.record.id)).toMatchObject({
+			forOwner: true,
+			ownerIds: ["s1", "s2"],
+		});
+		s.stop();
+		const again = new RoleMessages(store, f.host, clock);
+		expect(again.byId(q.record.id)).toMatchObject({ forOwner: true, ownerIds: ["s1", "s2"] });
+	});
+
+	it("ownerAnswerOf: a reply to a forOwner message gives who answered and his send ids; anything else gives null", async () => {
+		const f = fake([role("alpha", "Alpha", A), role("beta", "Beta", B)]);
+		const s = new RoleMessages(store, f.host, clock);
+		const q = s.send(sender({ role: "alpha", file: A, forOwner: { ownerIds: ["s7"] } }), {
+			to: "beta",
+			kind: "question",
+			text: "for him",
+		});
+		const other = s.send(sender({ role: "alpha", file: A }), { to: "beta", kind: "question", text: "not for him" });
+		if (!q.ok || !other.ok) throw new Error("not sent");
+		await s.tick();
+		const beta = sender({ role: "beta", file: B });
+		const answer = s.send(beta, { to: "alpha", kind: "reply", replyTo: q.record.id, text: "here" });
+		const answer2 = s.send(beta, { to: "alpha", kind: "reply", replyTo: other.record.id, text: "there" });
+		const note = s.send(beta, { to: "alpha", kind: "fyi", text: "note" });
+		if (!answer.ok || !answer2.ok || !note.ok) throw new Error("not sent");
+		expect(s.ownerAnswerOf(answer.record.id)).toEqual({ answeredBy: "beta", ownerIds: ["s7"] });
+		// The reply itself isn't marked (it asks nothing).
+		expect(answer.record.forOwner).toBeUndefined();
+		expect(s.ownerAnswerOf(answer2.record.id)).toBeNull();
+		expect(s.ownerAnswerOf(note.record.id)).toBeNull();
+		expect(s.ownerAnswerOf(q.record.id)).toBeNull();
+		expect(s.ownerAnswerOf("rm-00000000")).toBeNull();
+		expect(s.ownerAnswerOf(undefined)).toBeNull();
+	});
+});

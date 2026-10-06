@@ -612,8 +612,10 @@ export interface PluginHost {
 	 *    {ok:false, error}. Never throws.
 	 *  - onReply(handler): hear each run that ends in a role's home chat: its last assistant text
 	 *    (whole, up to 20,000 characters), what started it (cause: telegram, plugin, role, browser or
-	 *    other), the send ids it took in, and error when it failed. Returns the way to stop;
-	 *    unloading the plugin stops it too. */
+	 *    other), the send ids it took in, and error when it failed. forOwner: true when another role's
+	 *    reply to a question the chat asked for the owner started it (cause stays role), with
+	 *    answeredBy (those roles) and ownerIds (the send ids of his messages behind the question).
+	 *    Returns the way to stop; unloading the plugin stops it too. */
 	roles: {
 		send(role: string, text: string, opts?: RoleSendOptions): Promise<RoleSendResult>;
 		onReply(handler: (reply: RoleReply) => void): () => void;
@@ -4432,7 +4434,12 @@ export class PluginManager {
 					if (!can("roles") || typeof handler !== "function") return () => {};
 					const h = (reply: RoleReply): void => {
 						try {
-							handler({ ...reply, ids: [...reply.ids] });
+							handler({
+								...reply,
+								ids: [...reply.ids],
+								...(reply.answeredBy ? { answeredBy: [...reply.answeredBy] } : {}),
+								...(reply.ownerIds ? { ownerIds: [...reply.ownerIds] } : {}),
+							});
 						} catch (err) {
 							console.error(`[plugin:${info.id}] roles reply handler failed:`, err);
 						}

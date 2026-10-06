@@ -2039,6 +2039,84 @@ describe("telegram plugin: turns another role's message started (owner 2026-10-0
 	});
 });
 
+describe('telegram plugin: answers to his own questions (owner 2026-10-06: "Yes, answers to my questions")', () => {
+	const LEAD = "<i>The COO, after the temper role answered:</i>\n\n";
+
+	it("a role turn that answers a question asked for him comes back in full, under his message, with a notification", async () => {
+		const c = chatSetup();
+		const mid = await c.send(say("What does temper think?"));
+		await c.reply({ text: "I asked temper, back soon.", ids: ["s1"] });
+		// His message is still known after its own answer came back.
+		expect(c.chat.store.pending).toEqual({});
+		expect(c.chat.store.asked).toEqual({ s1: { to: mid, at: c.clock.t } });
+		expect((c.storage.get("chat") as Any).asked).toEqual({ s1: { to: mid, at: c.clock.t } });
+		const text = "Temper says **all good**.";
+		await c.reply({ text, cause: "role", forOwner: true, answeredBy: ["temper"], ownerIds: ["s1"] });
+		expect(c.sends().map((m) => [m.params.reply_parameters?.message_id, m.params.text])).toEqual([
+			[mid, "I asked temper, back soon."],
+			[mid, `${LEAD}Temper says <b>all good</b>.`],
+		]);
+		expect(c.sends()[1].params.parse_mode).toBe("HTML");
+		expect(c.sends()[1].params.disable_notification).toBeUndefined();
+		expect(c.logs).toContain(`telegram: coo answered (for the owner, after temper, ${text.length} characters)`);
+		expect(c.logs.join("\n")).not.toContain("all good");
+	});
+
+	it("names every role that answered; unthreaded when his message isn't known; a failed or empty turn says so", async () => {
+		const c = chatSetup();
+		await c.reply({
+			text: "Both agree.",
+			cause: "role",
+			forOwner: true,
+			answeredBy: ["temper", "qa"],
+			ownerIds: ["gone"],
+		});
+		await c.reply({ error: "model overloaded", cause: "role", forOwner: true, answeredBy: ["temper"], ownerIds: [] });
+		await c.reply({ text: " ", cause: "role", forOwner: true, answeredBy: [] });
+		const out = c.sends().map((m) => [m.params.reply_parameters?.message_id, m.params.text]);
+		expect(out[0]).toEqual([undefined, "<i>The COO, after the temper role and the QA answered:</i>\n\nBoth agree."]);
+		expect(out[1][0]).toBeUndefined();
+		expect(out[1][1]).toMatch(/^The COO couldn't finish after the temper role answered: model overloaded\./);
+		expect(out[2][1]).toMatch(/^The COO finished without writing an answer after another role answered\./);
+		expect(out).toHaveLength(3);
+	});
+
+	it("forOwner counts only on a role turn, and only when true", async () => {
+		const c = chatSetup();
+		await c.reply({ text: "from the browser", cause: "browser", forOwner: true, answeredBy: ["temper"] });
+		await c.reply({ text: "the app's own", cause: "other", forOwner: true });
+		await c.reply({ text: "not his", cause: "role", forOwner: false, answeredBy: ["temper"] });
+		await c.reply({ text: "not his either", cause: "role", forOwner: "yes" });
+		await c.reply({ text: "someone else's", role: "rollcall", cause: "role", forOwner: true });
+		expect(c.sends()).toHaveLength(0);
+	});
+
+	it("his messages are kept a week across restarts, then forgotten", async () => {
+		const t = Date.parse("2026-10-06T08:00:00-07:00");
+		const c = chatSetup({
+			at: "2026-10-06T08:00:00-07:00",
+			storageInit: {
+				chat: {
+					ids: [],
+					waiting: {},
+					pending: {},
+					asked: { s5: { to: 55, at: t - 6 * 86_400_000 }, s6: { to: 66, at: t - 8 * 86_400_000 } },
+					file: COO_FILE,
+				},
+			},
+		});
+		c.chat.start({ restarted: true });
+		await c.settle();
+		await c.reply({ text: "Old one.", cause: "role", forOwner: true, answeredBy: ["temper"], ownerIds: ["s6"] });
+		await c.reply({ text: "Recent one.", cause: "role", forOwner: true, answeredBy: ["temper"], ownerIds: ["s5"] });
+		expect(c.sends().map((m) => [m.params.reply_parameters?.message_id, m.params.text])).toEqual([
+			[undefined, `${LEAD}Old one.`],
+			[55, `${LEAD}Recent one.`],
+		]);
+		expect(Object.keys((c.storage.get("chat") as Any).asked)).toEqual(["s5"]);
+	});
+});
+
 describe("telegram plugin: the morning brief", () => {
 	const DAY = "2026-10-06";
 

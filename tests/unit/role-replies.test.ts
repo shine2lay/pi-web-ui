@@ -8,8 +8,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IdentityDef } from "../../server/identities.js";
 import {
+	mergeOwnerAnswer,
 	newTurnRecord,
 	oneLineOf,
+	OWNER_IDS_MAX,
+	ownerTurnOf,
 	ROLE_REPLY_TEXT_MAX,
 	roleHomeChat,
 	roleReplyOf,
@@ -80,6 +83,69 @@ describe("roleReplyOf", () => {
 		const r = roleReplyOf(home, rec, [role({})], 1)!;
 		rec.ids.push("rs-2");
 		expect(r.ids).toEqual(["rs-1"]);
+	});
+
+	it("a run a reply to a question asked for the owner started: forOwner, who answered, his send ids; cause stays role", () => {
+		const rec = newTurnRecord();
+		rec.causes.add("role");
+		rec.text = "Temper says yes.";
+		rec.forOwner = { answeredBy: ["temper"], ownerIds: ["rs-1"] };
+		const r = roleReplyOf(home, rec, [role({})], 9)!;
+		expect(r).toEqual({
+			role: "coo",
+			file: home,
+			text: "Temper says yes.",
+			cause: "role",
+			at: 9,
+			ids: [],
+			forOwner: true,
+			answeredBy: ["temper"],
+			ownerIds: ["rs-1"],
+		});
+		rec.forOwner.answeredBy.push("qa");
+		expect(r.answeredBy).toEqual(["temper"]);
+		// Any other run has no forOwner fields at all.
+		const plain = newTurnRecord();
+		plain.causes.add("role");
+		expect(roleReplyOf(home, plain, [role({})], 1)).not.toHaveProperty("forOwner");
+	});
+});
+
+describe("forOwner: ownerTurnOf and mergeOwnerAnswer", () => {
+	it("a run his Telegram message started (or joined) is his, with its send ids", () => {
+		const rec = newTurnRecord();
+		rec.causes.add("telegram");
+		rec.ids.push("rs-1");
+		expect(ownerTurnOf(rec)).toEqual({ answeredBy: [], ownerIds: ["rs-1"] });
+		rec.causes.add("browser");
+		rec.ids.push("rs-2");
+		expect(ownerTurnOf(rec)?.ownerIds).toEqual(["rs-1", "rs-2"]);
+	});
+
+	it("a run a reply to a question asked for him started is his too (chains keep it)", () => {
+		const rec = newTurnRecord();
+		rec.causes.add("role");
+		rec.forOwner = { answeredBy: ["temper"], ownerIds: ["rs-1"] };
+		expect(ownerTurnOf(rec)?.ownerIds).toEqual(["rs-1"]);
+	});
+
+	it("any other run isn't: the browser, the brief, the app, another role's message", () => {
+		for (const cause of ["browser", "plugin", "other", "role"] as const) {
+			const rec = newTurnRecord();
+			rec.causes.add(cause);
+			rec.ids.push("rs-9");
+			expect(ownerTurnOf(rec)).toBeNull();
+		}
+		expect(ownerTurnOf(undefined)).toBeNull();
+	});
+
+	it("mergeOwnerAnswer keeps each name and id once, and at most OWNER_IDS_MAX ids", () => {
+		const a = mergeOwnerAnswer(undefined, { answeredBy: ["temper"], ownerIds: ["rs-1"] });
+		const b = mergeOwnerAnswer(a, { answeredBy: ["temper", "qa"], ownerIds: ["rs-1", "rs-2"] });
+		expect(b).toEqual({ answeredBy: ["temper", "qa"], ownerIds: ["rs-1", "rs-2"] });
+		const many = mergeOwnerAnswer(b, { ownerIds: Array.from({ length: 20 }, (_, i) => `x${i}`) });
+		expect(many.ownerIds).toHaveLength(OWNER_IDS_MAX);
+		expect(many.ownerIds.slice(0, 2)).toEqual(["rs-1", "rs-2"]);
 	});
 });
 

@@ -294,11 +294,14 @@ import {
 import { RolesOverviewReader } from "./roles-overview.js";
 import { makeRolesOverviewTool } from "./roles-overview-tool.js";
 import {
+	mergeOwnerAnswer,
 	newTurnRecord,
 	oneLineOf,
+	ownerTurnOf,
 	roleHomeChat,
 	roleReplyOf,
 	sendWhenFree,
+	type RoleOwnerAnswer,
 	type RoleReply,
 	type RoleSendOptions,
 	type RoleSendResult,
@@ -2049,7 +2052,7 @@ export interface Conversation {
 	 *  steer/内部续跑无暂存时为空，由插件回退为「继续执行」）。 */
 	pendingTask?: string;
 	/** telegram-coo: what the next run was started by (texts pi took before it starts; agent_start takes them). */
-	turnPending?: { causes: RoleTurnCause[]; ids: string[] };
+	turnPending?: { causes: RoleTurnCause[]; ids: string[]; forOwner?: RoleOwnerAnswer };
 	/** telegram-coo: the running run's causes, send ids, last text and error (handed over when it settles). */
 	turnRecord?: RoleTurnRecord;
 	/** tool_call watchdog timers keyed by toolCallId — a tool that runs past
@@ -2148,6 +2151,15 @@ function atomicWriteFileSync(file: string, data: string): void {
 	}
 }
 
+/** telegram-coo: how a role message or a plugin's send goes into a chat: who sent it (the turn's cause),
+ *  the host.roles.send id, and, for a reply to a question asked for the owner, who answered and his
+ *  send ids (role-replies.ts forOwner). */
+interface RoleDeliveryHow {
+	cause?: RoleTurnCause;
+	sendId?: string;
+	forOwner?: { answeredBy: string; ownerIds: string[] };
+}
+
 /** optimistic-send: how far one prompt() got, for its final answer (see ClientSession.prompt). */
 interface PromptFlow {
 	/** role-messages: "extension" = the server sends it for someone else (a role message), not the
@@ -2158,6 +2170,9 @@ interface PromptFlow {
 	 *  or role) and the host.roles.send id it answers (see role-replies.ts). */
 	cause?: RoleTurnCause;
 	sendId?: string;
+	/** telegram-coo: a role's reply to a question asked for the owner (role-replies.ts forOwner): who
+	 *  answered and the owner's send ids; the run it starts or joins is the owner's. */
+	forOwner?: { answeredBy: string; ownerIds: string[] };
 	/** pi put the text off until the previous run has settled: its preflight callback answers later. */
 	deferred: boolean;
 	/** pi took the text (its preflight said yes). */
@@ -2170,14 +2185,19 @@ interface PromptFlow {
  *  joined (queued) remembers who sent it and the host.roles.send id. */
 function noteTurnCause(conv: Conversation, flow: PromptFlow, joined: boolean): void {
 	const cause = flow.cause ?? "other";
+	const owner = flow.forOwner
+		? { answeredBy: [flow.forOwner.answeredBy], ownerIds: flow.forOwner.ownerIds }
+		: undefined;
 	if (joined && conv.turnRecord) {
 		conv.turnRecord.causes.add(cause);
 		if (flow.sendId) conv.turnRecord.ids.push(flow.sendId);
+		if (owner) conv.turnRecord.forOwner = mergeOwnerAnswer(conv.turnRecord.forOwner, owner);
 		return;
 	}
 	const p = (conv.turnPending ??= { causes: [], ids: [] });
 	p.causes.push(cause);
 	if (flow.sendId) p.ids.push(flow.sendId);
+	if (owner) p.forOwner = mergeOwnerAnswer(p.forOwner, owner);
 }
 
 /** optimistic-send: prompt_ack reasons (English, shown under a "Not sent" message). */
@@ -3762,12 +3782,15 @@ export class ClientSession {
 				if (!file) return "This chat isn't saved yet, so an answer couldn't find it. Try again after its first reply.";
 				const def = identityRegistry().identities.find((i) => i.id === identity.id);
 				const isHome = !!def?.homeChat && samePath(def.homeChat, file);
+				// telegram-coo: a home chat whose running turn is the owner's asks for him (forOwner).
+				const owner = isHome ? ownerTurnOf(conv.turnRecord) : null;
 				return {
 					role: identity.id,
 					title: identity.title,
 					file,
 					chat: chatLabel({ taskId, isHome, title: conv.title }),
 					handling: roleMessageService?.handlingDepth(file, lastUserTextOf(conv)) ?? 0,
+					...(owner ? { forOwner: owner } : {}),
 				};
 			},
 		};
@@ -4815,8 +4838,9 @@ export class ClientSession {
 		text: string,
 		ackId: string,
 		receipt: Promise<{ ok: boolean; reason?: string }>,
-		/** telegram-coo: who sent it (default a role) and the host.roles.send id (role-replies.ts). */
-		how: { cause?: RoleTurnCause; sendId?: string } = {},
+		/** telegram-coo: who sent it (default a role), the host.roles.send id, and whether it answers a
+		 *  question asked for the owner (role-replies.ts). */
+		how: RoleDeliveryHow = {},
 	): Promise<{ ok: true } | { ok: false; error: string }> {
 		await this.switchSession(file);
 		const id = this.conversationIdBySessionFile(file);
@@ -4826,6 +4850,7 @@ export class ClientSession {
 			source: "extension",
 			cause: how.cause ?? "role",
 			...(how.sendId ? { sendId: how.sendId } : {}),
+			...(how.forOwner ? { forOwner: how.forOwner } : {}),
 		}).catch(() => {});
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const answer = await Promise.race([
@@ -4848,6 +4873,7 @@ export class ClientSession {
 		if (!p) return;
 		for (const c of p.causes) rec.causes.add(c);
 		rec.ids.push(...p.ids);
+		if (p.forOwner) rec.forOwner = mergeOwnerAnswer(rec.forOwner, p.forOwner);
 	}
 
 	/** telegram-coo: an assistant message ended: the run's last text with words in it, and whether it failed. */
@@ -9832,8 +9858,14 @@ export class ClientSession {
 		/** optimistic-send: the window's id for this send, answered with one prompt_ack (prompt-ack.ts). */
 		id?: string,
 		/** role-messages: source "extension" = sent by the server for someone else (see PromptFlow.source).
-		 *  telegram-coo: cause = who sent it, sendId = the host.roles.send it is (see PromptFlow.cause). */
-		opts?: { source?: "extension"; cause?: RoleTurnCause; sendId?: string },
+		 *  telegram-coo: cause = who sent it, sendId = the host.roles.send it is (see PromptFlow.cause),
+		 *  forOwner = a reply to a question asked for the owner (see PromptFlow.forOwner). */
+		opts?: {
+			source?: "extension";
+			cause?: RoleTurnCause;
+			sendId?: string;
+			forOwner?: { answeredBy: string; ownerIds: string[] };
+		},
 	): Promise<void> {
 		let conv: Conversation;
 		try {
@@ -9853,6 +9885,7 @@ export class ClientSession {
 			...(opts?.source ? { source: opts.source } : {}),
 			cause: opts?.cause ?? "other",
 			...(opts?.sendId ? { sendId: opts.sendId } : {}),
+			...(opts?.forOwner ? { forOwner: opts.forOwner } : {}),
 			deferred: false,
 			handedOver: false,
 			admission: takePromptAdmission(conv),
@@ -14983,7 +15016,7 @@ export class AgentService {
 		this.roleMessages = new RoleMessages(join(this.stateStore.dataDir, "role-messages.json"), {
 			roles: () => identityRegistry().identities,
 			chatState: (file) => this.queueChatState(file).state,
-			deliver: (file, text) => this.sendRoleMessage(file, text, { cause: this.roleMessageCause(text) }),
+			deliver: (file, text) => this.sendRoleMessage(file, text, this.roleMessageHow(text)),
 			note: (file, text) => this.noteRoleMessage(file, text),
 			changed: () => this.onRoleMessagesChanged?.(),
 			log: (line) => console.log(line),
@@ -15072,6 +15105,13 @@ export class AgentService {
 		return id && this.roleMessages.byId(id)?.kind === "report" ? "other" : "role";
 	}
 
+	/** telegram-coo: how a role message goes in: its cause, and when it is a reply to a question asked for
+	 *  the owner, who answered and his send ids (the turn it starts is his, role-replies.ts forOwner). */
+	private roleMessageHow(text: string): RoleDeliveryHow {
+		const owner = this.roleMessages.ownerAnswerOf(roleMessageIdOf(text) ?? undefined);
+		return { cause: this.roleMessageCause(text), ...(owner ? { forOwner: owner } : {}) };
+	}
+
 	/** telegram-coo: a run settled in the chat with this transcript: a role's home chat hands its reply on. */
 	private roleTurnSettled(file: string, rec: RoleTurnRecord): void {
 		if (!this.onRoleReply) return;
@@ -15107,8 +15147,9 @@ export class AgentService {
 	private sendRoleMessage(
 		file: string,
 		text: string,
-		/** telegram-coo: who sent it (default a role) and the host.roles.send id (role-replies.ts). */
-		how: { cause?: RoleTurnCause; sendId?: string } = {},
+		/** telegram-coo: who sent it (default a role), the host.roles.send id, and whether it answers a
+		 *  question asked for the owner (role-replies.ts). */
+		how: RoleDeliveryHow = {},
 	): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> {
 		return this.roleMessagesChain(async (): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> => {
 			if (this.carryOnGate) await this.carryOnGate.catch(() => {});

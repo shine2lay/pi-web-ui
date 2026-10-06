@@ -5318,6 +5318,26 @@ the COO, which can see every role's state in one call.
    plugin only logs that it answered another role's message (length only). Until then those turns
    came back like his own. His own exchanges and the brief are unchanged. Plugin-only (0.2.1), so it
    went live through a plugin reload (Settings -> Plugins -> Rescan), without restarting pi-web-ui.
+6. **Answers to his own questions come through** (owner, 2026-10-06 ~13:20 PDT, asked by ops whether
+   the COO's answers to his own questions should still reach him: "Yes, answers to my questions";
+   in full: "Only COO's answer to something you asked it comes through. Everything else between
+   roles stays off your Telegram."). `forOwner`:
+   - Mark (`role-messages.ts`, `agent-service.ts` sender): a question or request a role's home chat
+     sends with `message_role` while its running turn is the owner's is stored with `forOwner: true`
+     and `ownerIds` (the `host.roles.send` ids of his messages behind it, at most 10) in
+     role-messages.json (additive fields). The turn is his when his Telegram message started or
+     joined it (cause `telegram`), or when a reply to an earlier `forOwner` message did, so chains of
+     questions keep it (`ownerTurnOf`). An FYI or a reply is never marked.
+   - Turn (`role-replies.ts`, `agent-service.ts`): a reply to a `forOwner` message
+     (`RoleMessages.ownerAnswerOf`) goes in with `forOwner { answeredBy, ownerIds }`; the run it starts
+     or joins keeps them (`mergeOwnerAnswer`), its cause stays `role`, and `host.roles.onReply` gets
+     `forOwner: true`, `answeredBy` and `ownerIds`.
+   - Plugin 0.2.2: a role turn goes to Telegram only with `forOwner: true`, like his own exchanges
+     (in full, with a notification, at most 3 messages), threaded under his message (the plugin keeps
+     send id -> his message id for 7 days, at most 300, in `asked`), with one line in front:
+     "The COO, after the temper role answered:". A failed or empty one gets its line, naming who
+     answered. Every other role turn still sends nothing. Server change: installed with
+     pi-web-deploy, the plugin copy with it.
 
 ### How it was checked
 
@@ -5341,6 +5361,18 @@ the COO, which can see every role's state in one call.
   his own exchange and the brief still do" (a role turn while his message waits neither goes out
   nor takes its place) and the rewritten "only turns from Telegram or the brief come back"; both
   fail on the code before it (3 sends and 1).
+- Change 6: `tests/telegram-owner-answers-test.mjs` (sealed: fake Telegram, mock model, made-up coo,
+  temper and security roles with closed home chats): the owner asks on Telegram, the COO asks temper
+  (marked `forOwner` with his send id) and answers him as before; temper's reply starts a COO turn
+  that reaches him in full, under his message, with a notification and the line naming temper; in
+  that turn the COO asks security, whose reply reaches him too (the chain); a question the COO asks
+  from a browser turn, an unrelated request from temper and an FYI send nothing; exactly three
+  Telegram messages; no plugin line holds the text. Unit: `role-messages.test.ts` (the mark, kept
+  across a reload; `ownerAnswerOf`), `role-replies.test.ts` (`ownerTurnOf`, `mergeOwnerAnswer`,
+  `roleReplyOf`), `plugin-telegram.test.ts` (in full and threaded, several roles, unthreaded when
+  unknown, failed and empty turns, only on a role turn, a week across restarts). On the code before
+  it 10 of the 11 new unit tests fail (the "only on a role turn" check passes on both), and the E2E
+  fails at the mark and at both answers.
 
 ### When syncing
 

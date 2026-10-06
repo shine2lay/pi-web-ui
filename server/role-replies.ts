@@ -6,8 +6,13 @@
 // (the delivery is tried again until the chat is free).
 // onReply: when a run in a role's home chat ends, its last assistant text and what started it go to
 // the plugins that listen. The cause decides who gets the answer: the Telegram plugin passes on only
-// the turns a Telegram message, a plugin (its morning brief) or another role's message started;
+// the turns a Telegram message or a plugin (its morning brief) started, and the turns another role's
+// reply started when that reply answers a question the role's chat asked for the owner (forOwner);
 // the turns the owner starts in the browser stay there.
+// forOwner (owner, 2026-10-06: "Yes, answers to my questions"): a question or request a role's home
+// chat sends with message_role while its turn is the owner's (his Telegram message started it, or a
+// reply to an earlier such question did) is marked forOwner in role-messages.json; the turn its reply
+// starts is the owner's again, so chains of questions keep it.
 // ---------------------------------------------------------------------------
 
 import { existsSync } from "node:fs";
@@ -46,7 +51,17 @@ export interface RoleReply {
 	error?: string;
 	/** The text was longer than ROLE_REPLY_TEXT_MAX and was cut there. */
 	cut?: boolean;
+	/** The run answers the owner's own question: another role's reply to a question or request this
+	 *  chat sent for him started it (see forOwner above). cause stays "role". */
+	forOwner?: boolean;
+	/** forOwner: the roles whose replies started it, e.g. ["temper"]. */
+	answeredBy?: string[];
+	/** forOwner: the host.roles.send ids of the owner's messages behind the question (to thread under). */
+	ownerIds?: string[];
 }
+
+/** The most send ids a forOwner question keeps. */
+export const OWNER_IDS_MAX = 10;
 
 /** The most of a reply's text handed over. */
 export const ROLE_REPLY_TEXT_MAX = 20_000;
@@ -63,10 +78,41 @@ export interface RoleTurnRecord {
 	text: string;
 	/** The last assistant message failed or was stopped (cleared by a later one that didn't). */
 	error?: string;
+	/** A reply to a question asked for the owner started it (or joined it): who answered, and the owner's
+	 *  send ids behind the question. */
+	forOwner?: RoleOwnerAnswer;
+}
+
+/** forOwner: who answered, and the owner's send ids behind the question. */
+export interface RoleOwnerAnswer {
+	answeredBy: string[];
+	ownerIds: string[];
 }
 
 export function newTurnRecord(): RoleTurnRecord {
 	return { causes: new Set(), ids: [], text: "" };
+}
+
+/** Adds `more` to `into` (each name and id once, ownerIds at most OWNER_IDS_MAX); returns the result. */
+export function mergeOwnerAnswer(
+	into: RoleOwnerAnswer | undefined,
+	more: { answeredBy?: readonly string[]; ownerIds?: readonly string[] },
+): RoleOwnerAnswer {
+	const answeredBy = [...new Set([...(into?.answeredBy ?? []), ...(more.answeredBy ?? [])])];
+	const ownerIds = [...new Set([...(into?.ownerIds ?? []), ...(more.ownerIds ?? [])])].slice(0, OWNER_IDS_MAX);
+	return { answeredBy, ownerIds };
+}
+
+/**
+ * forOwner: whether a run that is going now is the owner's, so a question or request its chat sends is
+ * marked forOwner: his Telegram message started it (or joined it), or a reply to an earlier forOwner
+ * question did. Returns the owner's send ids behind it (for threading), else null.
+ */
+export function ownerTurnOf(rec: RoleTurnRecord | undefined): { ownerIds: string[] } | null {
+	if (!rec) return null;
+	const telegram = rec.causes.has("telegram");
+	if (!telegram && !rec.forOwner) return null;
+	return mergeOwnerAnswer(rec.forOwner, { ownerIds: telegram ? rec.ids : [] });
 }
 
 /** The cause that decides where the answer goes. */
@@ -104,6 +150,9 @@ export function roleReplyOf(
 		ids: [...rec.ids],
 		...(rec.error ? { error: rec.error } : {}),
 		...(cut ? { cut: true } : {}),
+		...(rec.forOwner
+			? { forOwner: true, answeredBy: [...rec.forOwner.answeredBy], ownerIds: [...rec.forOwner.ownerIds] }
+			: {}),
 	};
 }
 

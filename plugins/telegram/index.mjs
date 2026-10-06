@@ -1774,6 +1774,10 @@ const TYPING_MAX_MS = 10 * 60_000;
 const CHAT_IDS_MAX = 300;
 /** An answer is waited for this long; then its message is forgotten. */
 const PENDING_MAX_MS = 24 * 60 * 60_000;
+/** The owner's messages the role took are remembered this long (and at most ASKED_MAX of them): the
+ *  answer to a question it asked another role for him comes back under his message. */
+const ASKED_MAX_MS = 7 * 24 * 60 * 60_000;
+const ASKED_MAX = 300;
 /** Tests: a forced start time (ISO); the clock runs on from there. */
 export const NOW_ENV = "PI_WEB_TELEGRAM_NOW";
 
@@ -1929,6 +1933,9 @@ export function loadChatStore(storage) {
 		waiting: s.waiting && typeof s.waiting === "object" ? { ...s.waiting } : {},
 		// Taken, answer not back yet: send id -> { to: the owner's message id, at }.
 		pending: s.pending && typeof s.pending === "object" ? { ...s.pending } : {},
+		// Taken (kept after the answer, ASKED_MAX_MS): send id -> { to, at }, so an answer to a question the
+		// role asked another role for him (forOwner) comes back under his message.
+		asked: s.asked && typeof s.asked === "object" ? { ...s.asked } : {},
 		// The role's home chat, from its replies (for the link to it).
 		file: typeof s.file === "string" ? s.file : "",
 	};
@@ -1938,8 +1945,10 @@ export function loadChatStore(storage) {
  * The chat with a role. fromOwner: the owner's text goes to the role's home chat as his message,
  * with "\u{1F4F1} " in front ("typing\u2026" shows meanwhile; a busy chat gets it after its turn, and
  * he's told). onReply: the role's last message of a turn that a Telegram message or the morning brief
- * started comes back, under his message when it answers one, in at most 3 messages; a turn another
- * role's message started stays in the chat.
+ * started comes back, under his message when it answers one, in at most 3 messages. A turn another
+ * role's message started stays in the chat, unless it is that role's reply to a question the role
+ * asked for him (forOwner): then it comes back the same way, under his message, with a line saying
+ * who answered.
  * tick: asks for the morning brief at its time, or says why there's none.
  *
  * Its own Telegram messages go one at a time, apart from the question bridge's, so a long wait for
@@ -1981,6 +1990,10 @@ export function createChat({
 		const old = now() - PENDING_MAX_MS;
 		for (const [k, p] of Object.entries(store.pending)) if (!(Number(p?.at) > old)) delete store.pending[k];
 		for (const [k, at] of Object.entries(store.waiting)) if (!(Number(at) > old)) delete store.waiting[k];
+		const oldAsk = now() - ASKED_MAX_MS;
+		for (const [k, a] of Object.entries(store.asked)) if (!(Number(a?.at) > oldAsk)) delete store.asked[k];
+		const asks = Object.keys(store.asked);
+		for (const k of asks.slice(0, Math.max(0, asks.length - ASKED_MAX))) delete store.asked[k];
 		if (store.ids.length > CHAT_IDS_MAX) store.ids.splice(0, store.ids.length - CHAT_IDS_MAX);
 		storage.set("chat", store);
 	};
@@ -2090,6 +2103,7 @@ export function createChat({
 					if (!res?.ok) return failed(oneLine(res?.error || "it didn't go through", 200));
 					delete store.waiting[to];
 					store.pending[res.id] = { to, at: now() };
+					if (to) store.asked[res.id] = { to, at: now() };
 					save();
 				},
 				(err) => failed(oneLine(err?.message || "it didn't go through", 200)),
@@ -2174,14 +2188,16 @@ export function createChat({
 		const text = String(r.text ?? "");
 		if (brief) setBrief({ state: r.error || !text.trim() ? "failed" : "done", alerted: true });
 		// A turn another role's message started stays in the chat, never here (owner, 2026-10-06: "No I dont
-		// want to read agent to agent messages at all").
-		if (r.cause === "role") {
+		// want to read agent to agent messages at all"), unless it is that role's reply to a question the
+		// role asked for him (forOwner; owner, 2026-10-06: "Yes, answers to my questions").
+		const forOwner = r.cause === "role" && r.forOwner === true;
+		if (r.cause === "role" && !forOwner) {
 			log("info", `telegram: ${role} answered another role's message (not sent, ${text.length} characters)`);
 			return;
 		}
 		// A plugin's turn only when it's our brief (another plugin's sends get their own answers); the
 		// turns started in the browser, or by the app itself, stay in the chat.
-		if (r.cause === "plugin" ? !brief : r.cause !== "telegram") return;
+		if (r.cause === "plugin" ? !brief : r.cause !== "telegram" && !forOwner) return;
 		let to = 0;
 		for (const id of ids) {
 			const p = store.pending[id];
@@ -2190,22 +2206,39 @@ export function createChat({
 			stopTyping(Number(p.to) || 0);
 			delete store.pending[id];
 		}
+		// forOwner: under the owner's message the question was asked for, when it's still known.
+		if (forOwner && !to) {
+			const oldAsk = now() - ASKED_MAX_MS;
+			for (const id of Array.isArray(r.ownerIds) ? r.ownerIds.map(String) : []) {
+				const a = store.asked[id] ?? store.pending[id];
+				if (a && Number(a.to) && Number(a.at) > oldAsk) {
+					to = Number(a.to);
+					break;
+				}
+			}
+		}
 		save();
+		const roles = Array.isArray(r.answeredBy) ? r.answeredBy.map(String).filter(Boolean) : [];
+		const who = roles.length ? roles.map(roleName).join(" and ") : "another role";
 		log(
 			"info",
-			`telegram: ${role} answered (${brief ? "the morning brief" : r.cause}, ${text.length} characters${r.error ? ", failed" : ""})`,
+			`telegram: ${role} answered (${brief ? "the morning brief" : forOwner ? `for the owner, after ${roles.join("+") || "a role"}` : r.cause}, ${text.length} characters${r.error ? ", failed" : ""})`,
 		);
 		if (r.error) {
 			const why = oneLine(r.error, 300);
 			if (brief) return noBrief(`${name}'s turn failed (${why})`);
+			if (forOwner) return line(`${Name} couldn't finish after ${who} answered: ${why}.`, to, openLink());
 			return line(`${Name} couldn't finish: ${why}.`, to, openLink());
 		}
-		if (!text.trim())
-			return brief
-				? noBrief(`${name} finished without writing a brief`)
-				: line(`${Name} finished without writing an answer.`, to, openLink());
+		if (!text.trim()) {
+			if (brief) return noBrief(`${name} finished without writing a brief`);
+			if (forOwner) return line(`${Name} finished without writing an answer after ${who} answered.`, to, openLink());
+			return line(`${Name} finished without writing an answer.`, to, openLink());
+		}
+		// forOwner: one short line in front saying who answered.
+		const lead = forOwner ? `<i>${escapeHtml(`${Name}, after ${who} answered:`)}</i>\n\n` : "";
 		enqueue(async () => {
-			const { parts, more: splitMore } = splitReply(text);
+			const { parts, more: splitMore } = splitReply(text, lead ? { budget: TEXT_BUDGET - lead.length } : {});
 			const more = splitMore || r.cut;
 			for (let i = 0; i < parts.length; i++) {
 				const link = more && i === parts.length - 1 ? chatLink(webAppAddress, store.file) : null;
@@ -2213,7 +2246,7 @@ export function createChat({
 					more && i === parts.length - 1
 						? `\n\n<i>The rest is in the chat${link ? `: <a href="${escapeHtml(link)}">open it</a>` : "."}</i>`
 						: "";
-				await sendHtml(parts[i] + rest, i === 0 ? to : 0);
+				await sendHtml((i === 0 ? lead : "") + parts[i] + rest, i === 0 ? to : 0);
 			}
 		});
 	}
