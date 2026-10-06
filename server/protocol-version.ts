@@ -64,4 +64,7 @@
 // 42: queue-blocked - a queued task can be "blocked" (block: what it waits on, tasks in any queue and/or a
 //     need) and come after tasks in other queues (outside); TL;DR lines can be kind "blocked". An old page
 //     would drop blocked tasks from the Queue panel.
-export const PROTOCOL_VERSION = 42;
+// 43: roles-overview - the Roles page: roles_watch / roles_unwatch and the roles snapshot (every role's
+//     state, asks, TL;DR, queue and 6 am report), identity rows carry the owner's workMode and goals and
+//     the Focus line. An old page has no Roles view; an old server never answers roles_watch.
+export const PROTOCOL_VERSION = 43;

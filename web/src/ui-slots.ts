@@ -323,6 +323,19 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		group: "views",
 		align: "start",
 	},
+	// roles-overview: the Roles page, the fourth view (what every role is doing and what waits on you).
+	// It folds into "\u22ef" only after Terminal and Git (LATE_TOPBAR_ITEM_IDS, topbar-fit.ts).
+	{
+		id: "host:roles",
+		slot: "topbar.primary",
+		labelKey: "rolesTab",
+		icon: "users",
+		kind: "view",
+		view: "roles",
+		order: 22.5,
+		group: "views",
+		align: "start",
+	},
 	// 插件面板（Chrome 扩展图标那个位置）：一个 🧩 入口列出全部已装插件，每行带「钉到顶栏」
 	// 开关。插件视图 tab 默认不钉（合成条目 hidden，见 withPluginViewItems），钉住的才回到
 	// 这里当 tab（order 23，紧跟本条目之前）。图标用 emoji 而不是词表名：词表名会被布局页
@@ -1738,7 +1751,7 @@ function placeTopbarPluginViews(entries: WorkingEntry[]): WorkingEntry[] {
 	if (views.length === 0) return entries;
 	const rest = entries.filter((entry) => !isPluginViewItem(entry));
 	const anchor =
-		["host:git", "host:terminal", "host:chat"]
+		["host:roles", "host:git", "host:terminal", "host:chat"]
 			.map((id) => rest.findIndex((entry) => entry.id === id))
 			.find((index) => index >= 0) ?? -1;
 	const panel = rest.findIndex((entry) => entry.id === "host:plugins");
@@ -2123,7 +2136,7 @@ function omitKey<T>(rec: Record<string, T> | undefined, key: string): Record<str
  *   chat / terminal / git / search / browser / layers / settings / sound / globe / sun /
  *   download / github / plus / menu / folder / dot / cpu / gauge / coins / database /
  *   download / github / plus / menu / folder / dot / cpu / gauge / coins / database /
- *   message / activity / edit / copy / text / markdown / image / x / upload / mic / rewind
+ *   message / activity / edit / copy / text / markdown / image / x / upload / mic / rewind / users
  * 插件条目里的 icon 可以是 emoji/单字符（manifest 已裁剪长度）：渲染层按「是否落在词表内」
  * 二选一即可 —— 不认识的字符串原样当文本画，不报错。
  */

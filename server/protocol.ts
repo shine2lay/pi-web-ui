@@ -1552,6 +1552,10 @@ export type ClientMessage =
 	| { type: "role_messages_get" }
 	/** role-messages: the owner pauses (held, not dropped) or resumes delivery. */
 	| { type: "role_messages_pause"; paused: boolean }
+	/** roles-overview: the Roles page wants the snapshot and its updates (full) or just the ask count for
+	 *  the top bar (count); roles_unwatch stops them. */
+	| { type: "roles_watch"; full: boolean }
+	| { type: "roles_unwatch" }
 	/** Read an identity's about.md / notebook.md (answered with `identity_file`). */
 	| { type: "identity_file_get"; id: string; file: IdentityFileName }
 	/** Save a whole about.md / notebook.md (answered with `identity_file_saved`). baseHash = the hash from
@@ -1660,6 +1664,171 @@ export interface UiIdentityInfo {
 	/** identity-config: a draft waits for the owner (role-drafts/<id>/): its prompt size and the settings
 	 *  it suggests (field names). about-drafts: aboutSize = its about page's size (0 = none). */
 	draft?: { aboutSize?: number; promptSize: number; fields: string[] };
+	/** roles-overview: the owner's word on how it works (identity.json workMode); absent = not set. */
+	workMode?: UiRoleWorkMode;
+	/** roles-overview: the goals the owner approved (identity.json goals, ended ones too); absent = not set. */
+	goals?: UiRoleGoal[];
+	/** roles-overview: the first sentence of its about page's Focus line (120 characters at most). */
+	focus?: string;
+	/** roles-overview: the every-chat rules' default where the owner's fields aren't set (read-only). */
+	rules?: { workMode: UiRoleWorkMode; goals: UiRoleGoal[] };
+}
+
+// ---------------------------------------------------------------------------
+// roles-overview: the Roles page (one snapshot with every role's state)
+// ---------------------------------------------------------------------------
+
+/** roles-overview: how a role works: it starts its own work, or works on request. */
+export type UiRoleWorkMode = "self-start" | "request-only";
+
+/** roles-overview: a goal the owner approved for a role (identity.json goals). */
+export interface UiRoleGoal {
+	name: string;
+	scope: string;
+	/** A day (2026-10-04) or a time (2026-10-04T22:20), as the owner wrote it. */
+	approvedAt: string;
+	endsAt?: string;
+}
+
+/** roles-overview: one state per role; the first that applies wins (needs-you > busy > paused > idle > nothing-yet). */
+export type UiRoleStatus = "needs-you" | "busy" | "paused" | "idle" | "nothing-yet";
+
+/** roles-overview: a chat a line, a task or an ask comes from. */
+export interface UiRoleChatRef {
+	file: string;
+	title?: string;
+	/** Its role's home chat, or the chat of its queue task #n. */
+	where: "home" | number;
+}
+
+/** roles-overview: something waiting on the owner, from a role's home chat or one of its task chats. */
+export interface UiRoleAsk {
+	/** Stable and unique: "task:<n>", "tldr:<line id>" or "question:<ask id>" with the role in front. */
+	key: string;
+	role: string;
+	kind: "tldr" | "task" | "question";
+	text: string;
+	/** When it opened (ms); absent when the app can't know (an old question). */
+	since?: number;
+	/** Where to answer it. */
+	chat: UiRoleChatRef;
+	/** The item in that chat: "tldr:<id>", "task:<n>" or "question:<id>". */
+	focus: string;
+}
+
+/** roles-overview: a TL;DR line of a role's home chat or one of its task chats. */
+export interface UiRoleTldrLine {
+	id: string;
+	text: string;
+	ts: number;
+	/** Still waiting on the owner (needs you, not answered). */
+	needsYou?: boolean;
+	/** A needs-you line that has been answered. */
+	answered?: boolean;
+	kind?: "answered" | "blocked";
+	/** The chat it came from (a line copied up from a task chat keeps that chat). */
+	chat: UiRoleChatRef;
+}
+
+/** roles-overview: a task of a role's home queue. */
+export interface UiRoleTask {
+	id: number;
+	status: "ready" | "working" | "asking" | "stuck" | "waiting" | "blocked" | "done";
+	title: string;
+	/** Its own chat, once started. */
+	chat?: { file: string; title?: string };
+	/** On hold: what it waits on; blocked: what it is blocked on. */
+	waitsOn?: string;
+	/** Its chat is working now. */
+	busy?: boolean;
+	/** The newest TL;DR line of its own chat. */
+	latest?: UiRoleTldrLine;
+}
+
+/** roles-overview: a role's home queue in short. */
+export interface UiRoleQueue {
+	running: boolean;
+	/** Why it isn't running (the queue's pausedReason). */
+	pausedReason?: string;
+	/** Tasks being worked on, asking, needing the owner, on hold or blocked (queue order). */
+	active: UiRoleTask[];
+	/** Tasks not started yet (queue order, at most ROLES_QUEUED_MAX). */
+	queued: UiRoleTask[];
+	counts: { active: number; queued: number; done: number };
+}
+
+/** roles-overview: a request or question to a role that has no reply yet (the whole role-message store). */
+export interface UiRoleRequest {
+	id: string;
+	from: string;
+	kind: "question" | "request";
+	firstLine: string;
+	at: number;
+}
+
+/** roles-overview: a role's latest 6 am report, or why there is none. */
+export interface UiRoleReport {
+	state: "report" | "pending" | "failed" | "no-answer" | "unavailable" | "first" | "not-active" | "not-in-job";
+	/** The day it is about (YYYY-MM-DD). */
+	date?: string;
+	/** When it was asked for (ms). */
+	askedAt?: number;
+	/** report: the four headings' text (a heading the reply lacks is left out). */
+	sections?: { heading: string; text: string }[];
+	/** report without the four headings: the reply as it is. */
+	text?: string;
+	/** report: the reply cut at ROLES_REPORT_MAX characters. */
+	cut?: boolean;
+	/** report: the chat it was written in, and its message's time there ("Report in chat" jumps to it). */
+	chat?: { file: string };
+	messageAt?: number;
+	/** first: the job's next run (ms), when it is known. */
+	next?: number;
+	/** failed / unavailable: why, in a few words. */
+	error?: string;
+}
+
+/** roles-overview: one role on the Roles page. */
+export interface UiRoleOverview {
+	id: string;
+	title: string;
+	focus?: string;
+	homeChat?: { file: string; title?: string };
+	workMode: UiRoleWorkMode;
+	/** owner: identity.json says it; rules: the every-chat rules' default (read-only). */
+	workModeFrom: "owner" | "rules";
+	/** Approved goals still running (ended ones leave the page). */
+	goals: UiRoleGoal[];
+	goalsFrom: "owner" | "rules";
+	/** The owner's fields and the every-chat rules disagree (shown, never acted on). */
+	conflict?: string;
+	status: UiRoleStatus;
+	/** The newest write to its home chat or a task chat (ms). */
+	lastActivity?: number;
+	/** Its home chat is working now. */
+	homeBusy?: boolean;
+	/** Its open asks, oldest first. */
+	asks: UiRoleAsk[];
+	/** TL;DR lines of its home chat and task chats, newest first (at most ROLES_TLDR_MAX). */
+	tldr: UiRoleTldrLine[];
+	queue?: UiRoleQueue;
+	requests: { open: number; newest?: UiRoleRequest };
+	report: UiRoleReport;
+	/** What couldn't be read ("queue", "tldr", "report", "home chat"): the rest is shown. */
+	problems?: string[];
+}
+
+/** roles-overview: the Roles page's snapshot. */
+export interface UiRolesOverview {
+	/** When it was made (ms). */
+	at: number;
+	roles: UiRoleOverview[];
+	/** Every open ask, oldest first (an ask whose time isn't known goes last). */
+	asks: UiRoleAsk[];
+	/** Role messages are paused (the owner's switch in Settings). */
+	paused: boolean;
+	/** The 6 am report job's time zone (its days and "6 am" are in it). */
+	reportTz: string;
 }
 
 /** identity-notes: a role's two-layer memory as its chats get it (pi-identity): the rules (notebook.md)
@@ -3797,6 +3966,9 @@ export type ServerMessage =
 	/** role-messages: the last messages between roles (newest first) and whether delivery is paused.
 	 *  enabled false = this server has no role messages (another engine). */
 	| { type: "role_messages"; enabled: boolean; paused: boolean; messages: UiRoleMessageRow[] }
+	/** roles-overview: the snapshot (full watchers), or just the open asks' count (count watchers);
+	 *  error: it couldn't be made (the page keeps what it had). */
+	| { type: "roles"; overview?: UiRolesOverview; asks: number; error?: string; checkedAt?: number }
 	/** One identity file's text. hash goes back with identity_file_save; error = couldn't read it. */
 	| {
 			type: "identity_file";

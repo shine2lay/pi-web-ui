@@ -139,6 +139,8 @@ interface SettingsTerminalBridge {
 interface SettingsModalProps {
 	/** Optional direct entry used by the top-bar plugin menu (and the Notebook tab's "About page" link). */
 	initialSection?: "plugins" | "identities";
+	/** roles-overview: Settings -> Identities at this role (the Roles page's "About & rules"). */
+	initialRole?: { id: string; seq: number } | null;
 	chat: {
 		settings: UiSettingsState | null;
 		plugins: UiPluginInfo[];
@@ -488,6 +490,7 @@ export function SettingsModal({
 	chat,
 	terminal,
 	initialSection,
+	initialRole,
 	onSwitchToTerminal,
 	onClose,
 	sound,
@@ -3793,6 +3796,7 @@ export function SettingsModal({
 							<IdentitiesSettings
 								sessions={chat.sessions}
 								conversations={chat.conversations}
+								focusRole={initialRole ?? null}
 								onOpenChat={(path) => {
 									appSend({ type: "switch_session", path });
 									onClose();

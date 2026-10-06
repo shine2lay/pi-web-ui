@@ -167,6 +167,9 @@ export function roleInfoParts(dir: string, view: RoleView, settings: Settings) {
 		toolLimits: limitsText(view.config.tools, settings),
 		...(view.config.unique ? { unique: true } : {}),
 		configProblems: view.problems,
+		// roles-overview: the owner's fields, as identity.json has them (pi-identity checked them).
+		...(view.config.workMode ? { workMode: view.config.workMode } : {}),
+		...(view.config.goals ? { goals: view.config.goals.map((g) => ({ ...g })) } : {}),
 	};
 }
 

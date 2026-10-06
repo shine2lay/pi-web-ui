@@ -15,6 +15,12 @@
  * field is refused with a reason, a "problem", and only that part is left out. Nothing here ever stops
  * a chat: a role with a broken part runs without it.
  *
+ * Two identity.json fields are the owner's alone (OWNER_FIELDS): how the role works (workMode) and the
+ * goals the owner approved for it (goals). pi-identity checks them but never acts on them: they change
+ * no prompt, tool or schedule, and a draft can't suggest them. pi-web-ui's Roles page shows them.
+ *
+ * A role's Focus line (focusOf) is read here too, so the roster and pi-web-ui cut it the same way.
+ *
  * pi-web-ui keeps a byte-identical copy (server/identity-config.ts) to check and show these settings in
  * Settings -> Identities; a test there fails when the two differ, so change this file, then copy it over.
  */
@@ -61,6 +67,60 @@ const quote = (v: unknown) => {
 	}
 };
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+// ---------------------------------------------------------------------------
+// A role's Focus line (its about page's "Focus:" line, the one part of it others see)
+// ---------------------------------------------------------------------------
+
+/** A focus line longer than this is cut on a word. */
+export const FOCUS_MAX = 120;
+const FOCUS_RE = /^[ \t]*(?:[-*+][ \t]+)?(?:\*\*|__)?focus(?:\*\*|__)?[ \t]*:[ \t]*(?:\*\*|__)?[ \t]*(.*)$/im;
+/** Abbreviations whose period doesn't end a sentence. */
+const ABBREV_RE = /\b(?:e\.g|i\.e|etc|vs|incl|approx|cf|ca|no|nr|esp)\.$/i;
+
+/** Markdown taken out of one line: emphasis, code marks, links (their text stays), extra spaces. */
+function plain(text: string): string {
+	return text
+		.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+		.replace(/\*\*|__|`/g, "")
+		.replace(/(^|\s)[*_]([^*_\s][^*_]*?)[*_](?=\s|[.,;:!?)]|$)/g, "$1$2")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
+/** The first sentence of a text (an abbreviation's period doesn't end one). */
+export function firstSentence(text: string): string {
+	const re = /[.!?](?=\s|$)/g;
+	for (let m = re.exec(text); m; m = re.exec(text)) {
+		const upTo = text.slice(0, m.index + 1);
+		if (ABBREV_RE.test(upTo)) continue;
+		return upTo.trim();
+	}
+	return text.trim();
+}
+
+/** Cut a text to at most max characters, on a word, marking the cut with "…". */
+export function cutAt(text: string, max: number): string {
+	if (text.length <= max) return text;
+	if (max <= 1) return "…";
+	const head = text.slice(0, max - 1);
+	// The head ends on a whole word when a space follows it; else back to the last space (when not too far).
+	const space = /\s/.test(text[max - 1] ?? "") ? head.length : head.lastIndexOf(" ");
+	const cut = (space >= max / 2 ? head.slice(0, space) : head).replace(/[\s,;:(\-–—]+$/, "");
+	return `${cut}…`;
+}
+
+/**
+ * A role's focus from its about page: the first sentence of its "Focus:" line ("**Focus:** ...",
+ * "Focus: ..." or a bullet of either), markdown taken out, the final period dropped, cut at FOCUS_MAX.
+ * null when there's no such line or it's empty.
+ */
+export function focusOf(about: string): string | null {
+	const m = FOCUS_RE.exec(about);
+	if (!m) return null;
+	const sentence = firstSentence(plain(m[1] ?? "")).replace(/\.$/, "").trim();
+	return sentence ? cutAt(sentence, FOCUS_MAX) : null;
+}
 
 // ---------------------------------------------------------------------------
 // The shared settings file
@@ -249,6 +309,10 @@ export interface RoleConfig {
 	unique: boolean;
 	/** The role's own memory limits, where it has any (the shared settings' otherwise). */
 	memory: Partial<MemoryLimits>;
+	/** The owner's word on how the role works (an owner field); null: not set. */
+	workMode: WorkMode | null;
+	/** The goals the owner approved for it (an owner field), ended ones too; null: not set. */
+	goals: RoleGoal[] | null;
 }
 
 /** What a role's chats get with every message (rules and index), and when to tidy; see notes.ts. */
@@ -287,6 +351,8 @@ export function defaultRoleConfig(): RoleConfig {
 		tools: { allow: null, deny: [] },
 		unique: false,
 		memory: {},
+		workMode: null,
+		goals: null,
 	};
 }
 
@@ -396,7 +462,135 @@ export function memoryText(config: RoleConfig): string {
 		.join(", ");
 }
 
-export const ROLE_FIELDS: readonly string[] = [...BASE_FIELDS, ...Object.keys(FEATURES)];
+// ---------------------------------------------------------------------------
+// The owner's fields: how a role works, and the goals the owner approved
+// ---------------------------------------------------------------------------
+
+/**
+ * Fields only the owner sets (Settings -> Identities), which pi-identity checks and never acts on: no
+ * prompt, tool or schedule changes with them, and a draft can't suggest them (they aren't FEATURES).
+ *   "workMode": "self-start" | "request-only"       whether the role starts its own work or works on request
+ *   "goals": [{"name", "scope", "approvedAt", "endsAt"?}]   work the owner approved it to take on by itself;
+ *                                                    a goal past its endsAt has ended
+ */
+export const OWNER_FIELDS = ["workMode", "goals"] as const;
+
+export const WORK_MODES = ["self-start", "request-only"] as const;
+export type WorkMode = (typeof WORK_MODES)[number];
+
+/** A goal the owner approved: what, how far, since when, and (maybe) until when. */
+export interface RoleGoal {
+	name: string;
+	scope: string;
+	/** A day (2026-10-04) or a time (2026-10-04T22:20, maybe with seconds and Z or +hh:mm). */
+	approvedAt: string;
+	/** The same kinds; the goal has ended after it (a day ends at its midnight). None: it runs on. */
+	endsAt?: string;
+}
+
+/** At most this many goals, each a short line: name and scope. */
+export const GOALS_MAX = 12;
+export const GOAL_NAME_MAX = 80;
+export const GOAL_SCOPE_MAX = 160;
+const GOAL_FIELDS: readonly string[] = ["name", "scope", "approvedAt", "endsAt"];
+const WHEN_RE = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{3}))?)?(Z|[+-]\d{2}:\d{2})?)?$/;
+/** A line break, tab or other control character (a goal's name and scope are one plain line). */
+const hasControl = (t: string) => [...t].some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127);
+
+/**
+ * The time a goal's date stands for, in ms; NaN when it isn't a real date. A day alone is a local day:
+ * it starts at its midnight, and (end = true) ends at the next one. A time without a zone is local.
+ */
+export function goalTime(when: string, end = false): number {
+	const m = WHEN_RE.exec(when);
+	if (!m) return Number.NaN;
+	const [y, mo, d] = [Number(m[1]), Number(m[2]) - 1, Number(m[3])];
+	const day = new Date(Date.UTC(y, mo, d));
+	if (day.getUTCFullYear() !== y || day.getUTCMonth() !== mo || day.getUTCDate() !== d) return Number.NaN;
+	if (m[4] === undefined) return new Date(y, mo, d + (end ? 1 : 0)).getTime();
+	const [h, mi, s, ms] = [Number(m[4]), Number(m[5]), Number(m[6] ?? 0), Number(m[7] ?? 0)];
+	if (h > 23 || mi > 59 || s > 59) return Number.NaN;
+	if (!m[8]) return new Date(y, mo, d, h, mi, s, ms).getTime();
+	if (m[8] === "Z") return Date.UTC(y, mo, d, h, mi, s, ms);
+	const [zh, zm] = [Number(m[8].slice(1, 3)), Number(m[8].slice(4, 6))];
+	if (zh > 23 || zm > 59) return Number.NaN;
+	return Date.UTC(y, mo, d, h, mi, s, ms) - (m[8][0] === "-" ? -1 : 1) * (zh * 60 + zm) * 60_000;
+}
+
+/** A goal has ended once its endsAt has passed. */
+export function goalEnded(goal: RoleGoal, now: number = Date.now()): boolean {
+	return goal.endsAt !== undefined && goalTime(goal.endsAt, true) <= now;
+}
+
+/** One line of text, 1 to max characters (trimmed), or null. */
+function lineOf(v: unknown, max: number): string | null {
+	if (typeof v !== "string") return null;
+	const t = v.trim();
+	return t && t.length <= max && !hasControl(t) ? t : null;
+}
+
+/** One goal as written, or null with one problem saying everything wrong with it. */
+function goalOf(g: unknown, where: string, problems: string[]): RoleGoal | null {
+	if (!isObject(g)) {
+		problems.push(`${where} must be an object with name, scope and approvedAt; got ${quote(g)}: left out`);
+		return null;
+	}
+	const wrong: string[] = [];
+	for (const key of Object.keys(g)) {
+		if (!GOAL_FIELDS.includes(key)) wrong.push(`unknown field "${key}" (known: ${GOAL_FIELDS.join(", ")})`);
+	}
+	const name = lineOf(g.name, GOAL_NAME_MAX);
+	if (!name) wrong.push(`"name" must be one line of 1 to ${GOAL_NAME_MAX} characters; got ${quote(g.name)}`);
+	const scope = lineOf(g.scope, GOAL_SCOPE_MAX);
+	if (!scope) wrong.push(`"scope" must be one line of 1 to ${GOAL_SCOPE_MAX} characters; got ${quote(g.scope)}`);
+	const approvedAt = typeof g.approvedAt === "string" ? g.approvedAt.trim() : "";
+	const start = goalTime(approvedAt);
+	if (Number.isNaN(start)) wrong.push(`"approvedAt" must be a date like 2026-10-04 or 2026-10-04T22:20; got ${quote(g.approvedAt)}`);
+	let endsAt: string | undefined;
+	if (g.endsAt !== undefined) {
+		endsAt = typeof g.endsAt === "string" ? g.endsAt.trim() : "";
+		const end = goalTime(endsAt, true);
+		if (Number.isNaN(end)) wrong.push(`"endsAt" must be a date like 2026-12-31 or 2026-12-31T18:00; got ${quote(g.endsAt)}`);
+		else if (!Number.isNaN(start) && end <= start) wrong.push(`"endsAt" (${endsAt}) must be after "approvedAt" (${approvedAt})`);
+	}
+	if (wrong.length || !name || !scope) {
+		problems.push(`${where} left out: ${wrong.join("; ")}`);
+		return null;
+	}
+	return { name, scope, approvedAt, ...(endsAt !== undefined ? { endsAt } : {}) };
+}
+
+type OwnerFeature = (value: unknown, config: RoleConfig, problems: string[]) => void;
+
+/** The owner fields' readers, like FEATURES: a wrong value is a problem and is left out. */
+export const OWNER_FEATURES: Record<(typeof OWNER_FIELDS)[number], OwnerFeature> = {
+	workMode(value, config, problems) {
+		if (typeof value === "string" && (WORK_MODES as readonly string[]).includes(value)) config.workMode = value as WorkMode;
+		else problems.push(`"workMode" must be "self-start" or "request-only"; got ${quote(value)}: left out`);
+	},
+	goals(value, config, problems) {
+		const goals: RoleGoal[] = [];
+		config.goals = goals;
+		if (!Array.isArray(value)) {
+			problems.push(`"goals" must be a list of goals like {"name": ..., "scope": ..., "approvedAt": "2026-10-04"}; got ${quote(value)}: none kept`);
+			return;
+		}
+		const names = new Set<string>();
+		value.forEach((g, i) => {
+			const where = `goal ${i + 1}`;
+			const goal = goalOf(g, where, problems);
+			if (!goal) return;
+			if (names.has(goal.name.toLowerCase())) problems.push(`${where} left out: an earlier goal has the same name (${quote(goal.name)})`);
+			else if (goals.length >= GOALS_MAX) problems.push(`${where} left out: a role has at most ${GOALS_MAX} goals`);
+			else {
+				names.add(goal.name.toLowerCase());
+				goals.push(goal);
+			}
+		});
+	},
+};
+
+export const ROLE_FIELDS: readonly string[] = [...BASE_FIELDS, ...Object.keys(FEATURES), ...OWNER_FIELDS];
 
 /** The base fields' types (id, title, folder, homeChat, pastHomeChats): a wrong one is a problem. */
 function baseProblems(raw: Record<string, unknown>): string[] {
@@ -422,6 +616,9 @@ export function parseRoleConfig(raw: Record<string, unknown>, settings: Settings
 	}
 	for (const [key, feature] of Object.entries(FEATURES)) {
 		if (raw[key] !== undefined) feature(raw[key], config, problems, settings);
+	}
+	for (const [key, feature] of Object.entries(OWNER_FEATURES)) {
+		if (raw[key] !== undefined) feature(raw[key], config, problems);
 	}
 	return { config, problems };
 }

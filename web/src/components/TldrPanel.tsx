@@ -11,9 +11,10 @@
  * 所有窗口、所有设备一致；点下去先在本地生效，等服务端的行对上。
  */
 
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { UiTldrLine } from "../types";
 import { useT } from "../i18n";
+import { FOCUS_FLASH_MS } from "../chat-focus";
 
 /** 收起时显示几行（最新的；一行「N 行已读」也算一行）。 */
 export const TLDR_COLLAPSED_LINES = 5;
@@ -77,8 +78,12 @@ export const TldrPanel = memo(function TldrPanel({
 	defaultShowAll = false,
 	onCollapse,
 	onOpenChat,
+	focus,
 }: {
 	lines: UiTldrLine[] | undefined;
+	/** roles-overview: show this line (scrolled to and marked for a moment; a folded line marks its "N read"
+	 *  row, which stays folded). seq grows with every request. */
+	focus?: { id: string; seq: number } | null;
 	/** 初始是否展开（测试用；界面上由按钮切换）。 */
 	defaultShowAll?: boolean;
 	/** 折叠（collapsed=true）或重新展开这些行：发给服务端记进会话。不给就不出折叠按钮。 */
@@ -90,6 +95,33 @@ export const TldrPanel = memo(function TldrPanel({
 	const [showAll, setShowAll] = useState(defaultShowAll);
 	const [pending, setPending] = useState<Pending>({});
 	const all = lines ?? [];
+	// roles-overview: the line asked for from the Roles page.
+	const listRef = useRef<HTMLUListElement>(null);
+	const [flash, setFlash] = useState<string | null>(null);
+	useEffect(() => {
+		if (!focus || all.length === 0) return;
+		const newest = [...all].reverse();
+		const at = newest.findIndex((l) => l.id === focus.id);
+		if (at < 0) return;
+		const folded = (l: UiTldrLine) => l.collapsed === true;
+		const rows = tldrRows(newest, folded);
+		const rowAt = rows.findIndex((r) =>
+			r.kind === "line" ? r.line.id === focus.id : r.lines.some((l) => l.id === focus.id),
+		);
+		if (rowAt >= TLDR_COLLAPSED_LINES) setShowAll(true);
+		const row = rows[rowAt];
+		setFlash(row ? (row.kind === "line" ? row.line.id : row.lines[0].id) : focus.id);
+		const timer = setTimeout(() => setFlash(null), FOCUS_FLASH_MS);
+		return () => clearTimeout(timer);
+		// Only a new request (seq) moves the view; later lines don't.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [focus?.seq, all.length === 0]);
+	useEffect(() => {
+		if (!flash) return;
+		// The marked row is the only one with tldr-focus (the rows' markup stays as it was).
+		const el = listRef.current?.querySelector(".tldr-focus");
+		if (el instanceof HTMLElement) el.scrollIntoView?.({ block: "nearest" });
+	}, [flash, showAll]);
 	// 服务端的行对上了（或者等太久了）的本地改动就丢掉。
 	useEffect(() => {
 		setPending((p) => {
@@ -132,10 +164,13 @@ export const TldrPanel = memo(function TldrPanel({
 					</button>
 				</div>
 			)}
-			<ul className="tldr-list">
+			<ul className="tldr-list" ref={listRef}>
 				{shown.map((row) =>
 					row.kind === "folded" ? (
-						<li key={`folded:${row.lines[0].id}`} className="tldr-folded">
+						<li
+							key={`folded:${row.lines[0].id}`}
+							className={flash === row.lines[0].id ? "tldr-folded tldr-focus" : "tldr-folded"}
+						>
 							<button
 								type="button"
 								className="tldr-unfold"
@@ -152,7 +187,10 @@ export const TldrPanel = memo(function TldrPanel({
 							</button>
 						</li>
 					) : (
-						<li key={row.line.id} className={tldrLineClass(row.line)}>
+						<li
+							key={row.line.id}
+							className={flash === row.line.id ? `${tldrLineClass(row.line)} tldr-focus` : tldrLineClass(row.line)}
+						>
 							{awaitingYou(row.line) && <span className="tldr-badge">{t("tldrNeedsYou")}</span>}
 							<span className="tldr-text">{row.line.text}</span>
 							{row.line.chat && onOpenChat && (

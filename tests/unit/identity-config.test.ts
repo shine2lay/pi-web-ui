@@ -262,7 +262,7 @@ describe("a role's row in Settings", () => {
 		expect(problems).toContain("its prompt file notes.md isn't in the role's folder");
 		const logged = log.mock.calls.map((c) => String(c[0]));
 		expect(logged).toContain(
-			`[identities] gamma's settings: unknown field "colour" (known: id, title, folder, homeChat, pastHomeChats, prompt, skills, tools, unique, memory)`,
+			`[identities] gamma's settings: unknown field "colour" (known: id, title, folder, homeChat, pastHomeChats, prompt, skills, tools, unique, memory, workMode, goals)`,
 		);
 		const before = log.mock.calls.length;
 		identityRegistry(true);
@@ -376,6 +376,66 @@ describe("Settings saves a role's settings and prompt", () => {
 		expect(info("alpha")?.toolLimits).toBe(
 			"allow read, edit (and always notebook, tldr, queue_done, queue_stuck, queue_wait, message_role)",
 		);
+	});
+
+	// roles-overview: the owner's two fields (how a role works, the goals the owner approved) are saved the
+	// same way, checked by pi-identity's own rules, and nothing else in the file moves.
+	it("takes the owner's work mode and goals, refuses broken ones with their reasons, and keeps the rest of the file", () => {
+		const reg = identityRegistry(true);
+		const before = read(configPath());
+		const save = (text: string, base = textHash(read(configPath()))) =>
+			saveIdentityFile(reg.identities, "alpha", "config", text, base, process.env, new Date(), reg.settings);
+		const raw = JSON.parse(before) as Record<string, unknown>;
+		const limitsBefore = info("alpha")?.toolLimits;
+		expect(limitsBefore).toBeTruthy();
+
+		const bad = save(
+			JSON.stringify({
+				...raw,
+				workMode: "always",
+				goals: [
+					{ name: "Speed", scope: "line one\nline two", approvedAt: "2026-10-04" },
+					{ name: "Late", scope: "x", approvedAt: "2026-10-04", endsAt: "2026-10-01" },
+					{ name: "Odd", scope: "x", approvedAt: "yesterday", by: "agent" },
+				],
+			}),
+		);
+		expect(bad).toMatchObject({ ok: false, code: "invalid" });
+		const problems = (bad as { problems: string[] }).problems.join("\n");
+		expect(problems).toContain('"workMode" must be "self-start" or "request-only"');
+		expect(problems).toContain('goal 1 left out: "scope" must be one line');
+		expect(problems).toContain('goal 2 left out: "endsAt" (2026-10-01) must be after "approvedAt" (2026-10-04)');
+		expect(problems).toContain('unknown field "by"');
+		expect(problems).toContain('"approvedAt" must be a date');
+		expect(read(configPath())).toBe(before);
+
+		const good = `${JSON.stringify(
+			{
+				...raw,
+				workMode: "self-start",
+				goals: [
+					{ name: "Speed up builds", scope: "the CI cache", approvedAt: "2026-10-04T22:20", endsAt: "2026-12-31" },
+				],
+			},
+			null,
+			"\t",
+		)}\n`;
+		expect(save(good)).toMatchObject({ ok: true, hash: textHash(good) });
+		expect(read(configPath())).toBe(good);
+		const row = info("alpha");
+		expect(row).toMatchObject({
+			workMode: "self-start",
+			goals: [{ name: "Speed up builds", scope: "the CI cache", approvedAt: "2026-10-04T22:20", endsAt: "2026-12-31" }],
+		});
+		// the role's other settings are as they were
+		expect(row?.toolLimits).toBe(limitsBefore);
+		expect(JSON.parse(read(configPath()))).toMatchObject({ homeChat: "/s/alpha-home.jsonl", unique: true });
+		// an older read can't overwrite it
+		expect(save(before, textHash(before))).toEqual({ ok: false, code: "changed" });
+		expect(read(configPath())).toBe(good);
+		// a role without the fields has none set (the rules decide)
+		expect(info("beta")).not.toHaveProperty("workMode");
+		expect(info("beta")).not.toHaveProperty("goals");
 	});
 
 	it("checks the same way without saving (the editor's check)", () => {
@@ -527,6 +587,14 @@ describe("drafts waiting for the owner", () => {
 		const problems = (bad as { problems: string[] }).problems.join("\n");
 		expect(problems).toContain('a draft can\'t set "title"');
 		expect(problems).toContain('a draft can\'t set "homeChat"');
+		// roles-overview: only the owner sets how a role works and its goals, never a draft (even a valid value)
+		const owner = accept(
+			JSON.stringify({ workMode: "self-start", goals: [{ name: "Mine", scope: "all", approvedAt: "2026-10-04" }] }),
+		);
+		expect(owner).toMatchObject({ ok: false, code: "invalid" });
+		const ownerProblems = (owner as { problems: string[] }).problems.join("\n");
+		expect(ownerProblems).toContain('a draft can\'t set "workMode"');
+		expect(ownerProblems).toContain('a draft can\'t set "goals"');
 		expect(problems).toContain('"tools.deny" must be a list of tool names');
 		expect(accept("not json")).toMatchObject({ ok: false, code: "invalid" });
 		expect(accept(JSON.stringify({ skills: { shared: ["nowhere"] } }))).toMatchObject({ ok: false, code: "invalid" });

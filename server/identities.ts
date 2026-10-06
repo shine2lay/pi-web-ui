@@ -32,8 +32,9 @@ import { dirname, join, resolve } from "node:path";
 import type { IdentityFileName, IdentitySaveError, UiChatIdentity, UiIdentityInfo } from "./protocol.js";
 // identity-config: a role's settings (prompt, skills, tool limits, unique), its prompt and the drafts waiting
 // for the owner are read, checked and saved with pi-identity's own rules (identity-config.ts, identity-roles.ts).
-import { loadSettings, PROMPT_MAX, roleCaps, type Settings } from "./identity-config.js";
+import { focusOf, loadSettings, PROMPT_MAX, roleCaps, type Settings } from "./identity-config.js";
 import { rulesCap } from "./identity-notes.js";
+import { rulesGoals, rulesWorkMode } from "./role-rules.js";
 import {
 	ABOUT_MAX,
 	checkConfigText,
@@ -488,8 +489,23 @@ export function identityInfos(
 			// identity-config: its prompt, skills, tool limits and problems, and a draft waiting for the owner
 			...roleInfoParts(d.dir, d.role, settings),
 			...(draft ? { draft } : {}),
+			// roles-overview: its Focus line (what pi-identity shares with every role chat; the rest of the
+			// about page stays in Settings), and the every-chat rules' default for the owner's fields.
+			...focusPart(identityFilePath(d, "about")),
+			rules: { workMode: rulesWorkMode(d.id), goals: rulesGoals(d.id) },
 		};
 	});
+}
+
+/** roles-overview: { focus } from an about page, or nothing (no file, too big, no Focus line). */
+export function focusPart(path: string): { focus?: string } {
+	try {
+		if (statSync(path).size > ABOUT_MAX) return {};
+		const focus = focusOf(readFileSync(path, "utf8"));
+		return focus ? { focus } : {};
+	} catch {
+		return {};
+	}
 }
 
 /** identity-notes: what a role's notebook.md (its rules) may hold: notebookCap minus the notes index's

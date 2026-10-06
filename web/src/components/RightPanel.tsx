@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
 	FiCheck,
 	FiChevronRight,
@@ -24,6 +24,7 @@ import type {
 	UiProfilePatch,
 } from "../types";
 import { TldrPanel } from "./TldrPanel";
+import type { ChatFocus } from "../chat-focus";
 import { NotebookPanel } from "./NotebookPanel";
 import { TaskQueuePanel, type TaskQueueAction } from "./TaskQueuePanel";
 import { useT } from "../i18n";
@@ -140,6 +141,9 @@ interface RightPanelProps {
 	identity?: UiChatIdentity | null;
 	/** identity-notebook-tab: the tab's "About page" link (opens Settings -> Identities). */
 	onOpenIdentities?: () => void;
+	/** roles-overview: an item of this chat asked for from the Roles page (a TL;DR line or a queued task):
+	 *  its tab is selected and the item shown. App passes it only while this chat is the one asked for. */
+	focus?: ChatFocus | null;
 	/** Desktop: show the collapse button (mobile drawers close via the topbar). */
 	collapsible?: boolean;
 	/** Fired when the user clicks the collapse button. */
@@ -175,6 +179,7 @@ export const RightPanel = memo(function RightPanel({
 	models,
 	identity,
 	onOpenIdentities,
+	focus,
 	collapsible,
 	onToggleCollapse,
 	uiRightPanelTabs,
@@ -184,6 +189,28 @@ export const RightPanel = memo(function RightPanel({
 	send,
 }: RightPanelProps) {
 	const t = useT();
+	// roles-overview: which tab and item the Roles page asked for (one object per request).
+	const focusSeq = focus?.seq;
+	const focusKind = focus?.kind;
+	const focusId = focus?.id;
+	const tabSelect = useMemo(
+		() =>
+			focusSeq !== undefined && (focusKind === "tldr" || focusKind === "task")
+				? { id: focusKind === "tldr" ? TLDR_TAB_ID : TASK_QUEUE_TAB_ID, seq: focusSeq }
+				: null,
+		[focusSeq, focusKind],
+	);
+	const tldrFocus = useMemo(
+		() => (focusSeq !== undefined && focusKind === "tldr" && focusId ? { id: focusId, seq: focusSeq } : null),
+		[focusSeq, focusKind, focusId],
+	);
+	const taskFocus = useMemo(
+		() =>
+			focusSeq !== undefined && focusKind === "task" && focusId && /^\d+$/.test(focusId)
+				? { id: Number(focusId), seq: focusSeq }
+				: null,
+		[focusSeq, focusKind, focusId],
+	);
 	/** 插件清单回退：未接线时查找只在空数组里跑，不会抛。 */
 	const pluginList = plugins ?? EMPTY_PLUGINS;
 	// 当前工作目录：走全局（web/src/app-globals.ts），不再从 App 传。
@@ -1024,6 +1051,7 @@ export const RightPanel = memo(function RightPanel({
  插件 tab 的内容交给 PluginPage 渲染（只挂当前选中项，切走即 cleanup）。全被隐藏时 SlotTabs 自己返回 null。 */}
 				<SlotTabs
 					storageKey="rightpanel"
+					select={tabSelect}
 					epoch={pluginsEpoch ?? 0}
 					send={send ?? NOOP_SEND}
 					tabs={orderTabs([
@@ -1366,6 +1394,7 @@ export const RightPanel = memo(function RightPanel({
 												lines={tldr}
 												onCollapse={onTldrCollapse}
 												onOpenChat={onOpenChat}
+												focus={tldrFocus}
 											/>
 										),
 									},
@@ -1384,6 +1413,7 @@ export const RightPanel = memo(function RightPanel({
 												onCommand={onTaskQueueCommand}
 												onAnswer={tldrConversationId ? onTaskQueueAnswer : undefined}
 												onOpenChat={onOpenChat}
+												focus={taskFocus}
 											/>
 										),
 									},

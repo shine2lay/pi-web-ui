@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { fitTopbar, MOBILE_ASIDE_TOPBAR_IDS, sortOverflowMenuItems } from "../../web/src/topbar-fit.js";
+import {
+	fitTopbar,
+	LATE_TOPBAR_ITEM_IDS,
+	MOBILE_ASIDE_TOPBAR_IDS,
+	sortOverflowMenuItems,
+} from "../../web/src/topbar-fit.js";
 
 /** 造一批等宽条目（宽度可变）——只关心「谁被丢」，不关心具体几何。 */
 const items = (list: [string, number][]) => list.map(([id, width]) => ({ id, width }));
@@ -72,6 +77,32 @@ describe("fitTopbar", () => {
 		]);
 		expect([...fitTopbar(rows, 150, gap, 0, new Set(["host:settings"]))]).toEqual(["plugin"]);
 		expect(fitTopbar(items([["host:settings", 200]]), 20, gap, 0, new Set(["host:settings"])).size).toBe(0);
+	});
+
+	// roles-overview: the Roles tab (its badge counts what waits on the owner) folds after Terminal and Git.
+	it("roles-overview: Roles folds last: Terminal and Git go first, and only a bar too narrow for it folds it too", () => {
+		expect(LATE_TOPBAR_ITEM_IDS.has("host:roles")).toBe(true);
+		const bar = items([
+			["host:chat", 60],
+			["host:terminal", 60],
+			["host:git", 60],
+			["host:roles", 60],
+			["host:settings", 60],
+		]);
+		const keep = new Set(["host:settings"]);
+		const fit = (w: number) => [...fitTopbar(bar, w, gap, 0, keep, LATE_TOPBAR_ITEM_IDS)];
+		// room for all five (5 \u00d7 68 = 340)
+		expect(fit(340)).toEqual([]);
+		// room for four: Git goes, Roles stays (its place in the order is after Git)
+		expect(fit(300)).toEqual(["host:git"]);
+		// room for three: Terminal and Git go
+		expect(fit(210)).toEqual(["host:terminal", "host:git"]);
+		// room for Settings and Roles only: Chat folds too, Roles stays
+		expect(fit(140)).toEqual(["host:chat", "host:terminal", "host:git"]);
+		// not even Roles fits: everything that can fold does, so a narrower bar never shows more
+		expect(fit(100)).toEqual(["host:chat", "host:terminal", "host:git", "host:roles"]);
+		// without late ids the old rule holds: the tail folds first
+		expect([...fitTopbar(bar, 300, gap, 0, keep)]).toEqual(["host:roles"]);
 	});
 });
 

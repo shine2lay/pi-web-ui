@@ -290,6 +290,7 @@ import {
 	type RoleReportReceipt,
 	type RoleReportResult,
 } from "./role-messages.js";
+import { RolesOverviewReader } from "./roles-overview.js";
 import { makeSkillTool, type SkillToolHost } from "./skill-tool.js";
 import { makeScheduleTools, type ScheduleToolHost } from "./schedule-agent-tool.js";
 import { makePatchTool } from "./patch-tool.js";
@@ -329,6 +330,7 @@ import type {
 	UiPluginUpdateInfo,
 	UiQuestion,
 	UiRoleMessageRow,
+	UiRolesOverview,
 	UiServiceInfo,
 	UiState,
 	UiSubagentTemplate,
@@ -14940,6 +14942,33 @@ export class AgentService {
 	/** role-reports: a report request the control socket refused (no token, a wrong one): logged. */
 	noteRoleReportRefused(role: unknown, date: unknown, why: string): void {
 		this.roleMessages.noteReportRefused(role, date, why);
+	}
+
+	/** roles-overview: the Roles page's reader (made on first use; it only reads, see roles-overview.ts). */
+	private rolesReader: RolesOverviewReader | null = null;
+
+	/** roles-overview: every role's state for the Roles page (no chat is loaded for it, nothing is written). */
+	readRolesOverview(): Promise<UiRolesOverview> {
+		if (!this.rolesReader) {
+			const home = process.env.HOME || homedir();
+			this.rolesReader = new RolesOverviewReader({
+				identities: () => identityRegistry().identities,
+				chatState: (file) => this.queueChatState(file).state,
+				asks: () => askHub.list(),
+				openRequestsTo: (role) => this.roleMessages.openRequestsTo(role),
+				latestReportTo: (role) => this.roleMessages.latestReportTo(role),
+				rolePaused: () => this.roleMessages.paused,
+				sessionRoots: () =>
+					[process.env.PI_CODING_AGENT_SESSION_DIR, join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "sessions")]
+						.filter((r): r is string => !!r)
+						.map((r) => resolve(r)),
+				// role-reports.mjs pathsOf: its runs, and the scheduler's jobs (the 6 am job's next run).
+				reportRunsFile: () =>
+					join(process.env.XDG_STATE_HOME || join(home, ".local", "state"), "role-reports", "runs.json"),
+				schedulerJobsFile: () => join(home, ".pi-scheduler", "jobs.json"),
+			});
+		}
+		return this.rolesReader.read();
 	}
 
 	/**

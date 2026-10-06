@@ -158,6 +158,8 @@ describe("the identity list", () => {
 			ownSkills: 0,
 			toolLimits: "none",
 			configProblems: [],
+			// roles-overview: no owner fields set, so the every-chat rules' default shows (read-only)
+			rules: { workMode: "request-only", goals: [] },
 		});
 		const ops = infos.find((i) => i.id === "ops");
 		expect(ops).toMatchObject({ aboutSize: 0, notebookSize: 0, notebookCap: RULES_CAP });

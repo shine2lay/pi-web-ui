@@ -485,12 +485,27 @@ export interface RoleReportScan {
  * the last assistant message with the first heading in it (else the last one with text).
  */
 export async function reportReplyIn(file: string, from: number, id: string): Promise<RoleReportScan> {
+	return (await reportReplyText(file, from, id)).scan;
+}
+
+/**
+ * roles-overview: the same answer as reportReplyIn (the same boundaries), with its text, for the Roles
+ * page: only the owner's page gets it (the role-reports job keeps checks only).
+ */
+export async function reportReplyText(
+	file: string,
+	from: number,
+	id: string,
+): Promise<{ scan: RoleReportScan; text: string; at?: number }> {
 	const needle = `[Role message ${id} `;
 	const first = ROLE_REPORT_HEADINGS[0].toLowerCase();
 	let request = false;
 	let ended = false;
 	let report: string | undefined;
 	let last: string | undefined;
+	// roles-overview: the answer's own message time (the chat can jump to it).
+	let reportAt: number | undefined;
+	let lastAt: number | undefined;
 	await eachLine(file, from, (line) => {
 		if (!request) {
 			if (!line.includes(needle)) return false;
@@ -518,22 +533,32 @@ export async function reportReplyIn(file: string, from: number, id: string): Pro
 		}
 		const text = assistantTextOf(entry)?.trim();
 		if (text) {
+			const ts = (entry as { message?: { timestamp?: unknown } }).message?.timestamp;
+			const at = typeof ts === "number" ? ts : undefined;
 			last = text;
+			lastAt = at;
 			if (
 				text
 					.toLowerCase()
 					.split(/\r?\n/)
 					.some((l) => l.trim() === first)
-			)
+			) {
 				report = text;
+				reportAt = at;
+			}
 		}
 		return false;
 	});
 	const answer = report ?? last ?? "";
+	const at = report !== undefined ? reportAt : lastAt;
 	const { headings, missing } = answer
 		? reportHeadings(answer)
 		: { headings: false, missing: [...ROLE_REPORT_HEADINGS] };
-	return { request, ended, answered: answer.length > 0, headings, missing, chars: answer.length };
+	return {
+		scan: { request, ended, answered: answer.length > 0, headings, missing, chars: answer.length },
+		text: answer,
+		...(at !== undefined ? { at } : {}),
+	};
 }
 
 /** pi-queue's entries in a transcript (file order). */
@@ -773,6 +798,67 @@ export class RoleMessages {
 						}
 					: {}),
 			}));
+	}
+
+	/**
+	 * roles-overview: the requests and questions to a role that have no reply yet, from the whole store
+	 * (not just the last 100 rows): how many, and the newest. A failed one isn't open.
+	 */
+	openRequestsTo(role: string): {
+		open: number;
+		newest?: { id: string; from: string; kind: "question" | "request"; firstLine: string; at: number };
+	} {
+		let open = 0;
+		let newest: RoleMessageRecord | undefined;
+		for (const m of this.data.messages) {
+			if (m.to.role !== role || (m.kind !== "request" && m.kind !== "question")) continue;
+			if (m.replyId || m.state === "replied" || m.state === "failed") continue;
+			open++;
+			if (!newest || m.at >= newest.at) newest = m;
+		}
+		if (!newest) return { open };
+		return {
+			open,
+			newest: {
+				id: newest.id,
+				from: newest.from.title || newest.from.role,
+				kind: newest.kind as "question" | "request",
+				firstLine: firstLine(newest.text),
+				at: newest.at,
+			},
+		};
+	}
+
+	/** roles-overview: a role's newest 6 am report request (by its day), where to find the answer; no text. */
+	latestReportTo(role: string):
+		| {
+				id: string;
+				date: string;
+				at: number;
+				state: RoleMessageState | "held";
+				target?: string;
+				scanFrom?: number;
+				reply?: RoleReportReply;
+				error?: string;
+		  }
+		| undefined {
+		let best: RoleMessageRecord | undefined;
+		for (const m of this.data.messages) {
+			if (m.kind !== "report" || !m.report || m.to.role !== role) continue;
+			if (!best || m.report.date > (best.report?.date ?? "") || (m.report.date === best.report?.date && m.at > best.at))
+				best = m;
+		}
+		if (!best?.report) return undefined;
+		return {
+			id: best.id,
+			date: best.report.date,
+			at: best.at,
+			state: best.state === "waiting" && this.data.paused ? "held" : best.state,
+			...(best.target ? { target: best.target } : {}),
+			...(best.scanFrom !== undefined ? { scanFrom: best.scanFrom } : {}),
+			...(best.report.reply ? { reply: { ...best.report.reply, missing: [...best.report.reply.missing] } } : {}),
+			...(best.error ? { error: best.error } : {}),
+		};
 	}
 
 	/** role-reports: the report requests' receipts (one day's, or all), oldest first; no text. */

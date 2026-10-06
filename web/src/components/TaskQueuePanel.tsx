@@ -17,7 +17,7 @@
  * 新的队列（或 5 秒后）再放开，防连点。
  */
 
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type {
 	UiTaskQueue,
 	UiTaskQueueBlock,
@@ -31,6 +31,7 @@ import { effectiveProfile, ProfileEditor, ProfileSummary } from "./QueueProfile"
 import { useT, type Translate } from "../i18n";
 import { Markdown } from "./Markdown";
 import { lineTime } from "./TldrPanel";
+import { FOCUS_FLASH_MS } from "../chat-focus";
 
 type TKey = Parameters<Translate>[0];
 
@@ -299,6 +300,7 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 	onOpenChat,
 	models = [],
 	defaultOpen = [],
+	focus,
 }: {
 	queue: UiTaskQueue | undefined;
 	/** telegram-answers: answer a stuck task (a choice or typed words). Not given = answer in the chat. */
@@ -310,12 +312,33 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 	onOpenChat?: (file: string) => void;
 	/** 初始展开计划的任务（测试用；界面上点标题切换）。 */
 	defaultOpen?: readonly number[];
+	/** roles-overview: show this task (scrolled to and marked for a moment); seq grows with every request. */
+	focus?: { id: number; seq: number } | null;
 }) {
 	const t = useT();
 	const [busy, setBusy] = useState(false);
 	const [removing, setRemoving] = useState<number | null>(null);
 	const [open, setOpen] = useState<ReadonlySet<number>>(() => new Set(defaultOpen));
 	const [allDone, setAllDone] = useState(false);
+	// roles-overview: the task asked for from the Roles page (a done one beyond the first few shows them all).
+	const rootRef = useRef<HTMLDivElement>(null);
+	const [flash, setFlash] = useState<number | null>(null);
+	useEffect(() => {
+		if (!focus || !queue) return;
+		const task = queue.tasks.find((x) => x.id === focus.id);
+		if (!task) return;
+		if (task.status === "done") setAllDone(true);
+		setFlash(task.id);
+		const timer = setTimeout(() => setFlash(null), FOCUS_FLASH_MS);
+		return () => clearTimeout(timer);
+		// Only a new request (seq) moves the view; later queue updates don't.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [focus?.seq, queue === undefined]);
+	useEffect(() => {
+		if (flash === null) return;
+		const el = rootRef.current?.querySelector(`[data-task-id="${flash}"]`);
+		if (el instanceof HTMLElement) el.scrollIntoView?.({ block: "nearest" });
+	}, [flash, allDone]);
 	const [pendingSetting, setPendingSetting] = useState<{
 		key: "autoApprove" | "autoStart";
 		value: boolean;
@@ -426,7 +449,7 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 					? t("taskQueueStarted", { time: lineTime(task.startedAt) })
 					: "";
 		return (
-			<li key={task.id} className={cls} data-task-id={task.id}>
+			<li key={task.id} className={flash === task.id ? `${cls} task-queue-focus` : cls} data-task-id={task.id}>
 				<div className="task-queue-task-head">
 					<button
 						type="button"
@@ -627,7 +650,7 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 
 	const doneShown = allDone ? s.done : s.done.slice(0, TASK_QUEUE_DONE_SHOWN);
 	return (
-		<div className="task-queue-panel">
+		<div className="task-queue-panel" ref={rootRef}>
 			<div className="task-queue-head">
 				<span
 					className={s.current?.status === "stuck" || stuckInChat ? "task-queue-status needs-you" : "task-queue-status"}

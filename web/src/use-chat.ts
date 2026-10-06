@@ -75,6 +75,7 @@ import {
 	resendNotebookWatch,
 } from "./notebook-state";
 import { receiveSubsLimits, requestSubsLimits } from "./subs-limits-state";
+import { receiveRoles, resendRolesWatch } from "./roles-state";
 import { emitPluginData } from "./plugin-loader";
 import { ingestPluginLogsData } from "./plugin-logs";
 import { resolveCatalogSyncResult } from "./plugin-host";
@@ -1761,6 +1762,8 @@ export function useChat() {
 					ws.send(JSON.stringify({ type: "get_state" } satisfies ClientMessage));
 					// identity-notebook-tab: a new socket has no notebook watch yet; the open tab asks again.
 					resendNotebookWatch();
+					// roles-overview: the Roles page / top bar count watch is per socket too.
+					resendRolesWatch();
 					// subs-limits-box: the Limits box needs the readings (and whether a check runs) again.
 					requestSubsLimits();
 					// optimistic-send: ask what became of the sends still shown as "Sending" (after the
@@ -2062,6 +2065,10 @@ export function useChat() {
 				case "role_messages":
 					// role-messages: Settings -> Identities -> Role messages.
 					receiveRoleMessages(msg);
+					break;
+				case "roles":
+					// roles-overview: the Roles page and the top bar's count (roles-state.ts).
+					receiveRoles(msg);
 					break;
 				case "identity_file":
 					receiveIdentityFile(msg);

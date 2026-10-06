@@ -97,6 +97,7 @@ import {
 	type DraftResult,
 } from "./identity-roles.js";
 import { NotebookWatch } from "./notebook-watch.js";
+import { RolesWatch } from "./roles-overview.js";
 import { SubsLimitsHub, limitsFilePath } from "./subs-limits.js";
 import { initHttpProxy } from "./http-proxy.js";
 import { globalLspPool } from "./lsp-tool.js";
@@ -111,6 +112,7 @@ import type {
 	PromptAttachment,
 	ServerMessage,
 	UiRoleMessageRow,
+	UiRolesOverview,
 	UiServiceInfo,
 	UiSubagentTemplate,
 } from "./protocol.js";
@@ -1398,6 +1400,8 @@ export interface EngineService {
 	noteRoleReportRefused?(role: unknown, date: unknown, why: string): void;
 	/** role-messages (pi engine): set by index.ts; the list changed. */
 	onRoleMessagesChanged?: (() => void) | null;
+	/** roles-overview (pi engine): every role's state for the Roles page. */
+	readRolesOverview?(): Promise<UiRolesOverview>;
 	noteSocketOpen(): void;
 	noteSocketClose(): void;
 	isQuiesced(): boolean;
@@ -1954,6 +1958,15 @@ const subsLimits = new SubsLimitsHub({
 	},
 });
 
+/** roles-overview: the Roles page (everything) and every top bar (the count of asks), per window. */
+const rolesWatch = new RolesWatch<object>(
+	async () => {
+		if (!service.readRolesOverview) throw new Error("this engine has no roles");
+		return service.readRolesOverview();
+	},
+	{ log: (line) => console.log(line) },
+);
+
 /** identity-notebook-tab: the Notebook tab's live notebook, per window (keyed by its socket). */
 const notebookWatch = new NotebookWatch<object>({
 	identities: () => identityRegistry().identities,
@@ -2507,6 +2520,13 @@ wss.on("connection", (ws) => {
 				if (typeof msg.paused === "boolean") service.setRoleMessagesPaused?.(msg.paused);
 				send(roleMessagesMessage());
 				break;
+			case "roles_watch":
+				// roles-overview: the Roles page opened (full) or a top bar wants the count of asks.
+				rolesWatch.watch(ws, msg.full === true, send);
+				break;
+			case "roles_unwatch":
+				rolesWatch.drop(ws);
+				break;
 			case "subs_limits_get":
 				// subs-limits-box: the Limits box (and every reconnect) asks for the readings.
 				send(subsLimits.message());
@@ -2589,6 +2609,9 @@ wss.on("connection", (ws) => {
 						console.log(`[identities] the owner saved the ${msg.id} ${what}: ${r.size} characters`);
 					}
 					pushIdentities();
+					// roles-overview: the Roles page shows the owner's fields and the about page's Focus line now
+					// (after pushIdentities, which re-read the roles).
+					if (file === "config" || file === "about") rolesWatch.poke();
 					scheduleMemoryReindex();
 				}
 				break;
@@ -3875,6 +3898,7 @@ wss.on("connection", (ws) => {
 		pending.clear();
 		removePluginSender();
 		notebookWatch.drop(ws);
+		rolesWatch.drop(ws);
 		if (snapshotRetryTimer) {
 			clearTimeout(snapshotRetryTimer);
 			snapshotRetryTimer = null;
@@ -3917,7 +3941,10 @@ try {
 // queue-lanes: before any chat loads pi-queue, so it finds the host from the start.
 service.installQueueHost?.();
 // role-messages: Settings -> Identities -> Role messages follows the store.
-service.onRoleMessagesChanged = () => pushRoleMessages();
+service.onRoleMessagesChanged = () => {
+	pushRoleMessages();
+	rolesWatch.poke(); // roles-overview: open requests and reports come from the store
+};
 // subs-limits-box: the channel pi-multi-pass joins when a chat loads it (and the file, until then).
 subsLimits.start();
 

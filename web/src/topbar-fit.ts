@@ -31,6 +31,13 @@ export interface TopbarFitItem {
 export const MOBILE_ASIDE_TOPBAR_IDS: ReadonlySet<string> = new Set(["host:files"]);
 
 /**
+ * roles-overview: entries that fold into "\u22ef" last (after every other entry that can fold): the Roles
+ * tab, whose badge says how many things wait on the owner, stays on the bar after Terminal and Git
+ * have folded. Only when even it doesn't fit does it fold too (with everything else).
+ */
+export const LATE_TOPBAR_ITEM_IDS: ReadonlySet<string> = new Set(["host:roles"]);
+
+/**
  * 溢出菜单排序（折叠前后顺序一致的不变量）：先按对齐段（左→中→右），
  * 段内按 slot 顺序（= 布局页 ↑↓ 的顺序）。两个来源（用户隐藏的常驻项 +
  * 实测放不下的项）合并后统一排，而不是两截拼接（否则隐藏项永远插在最前，
@@ -61,6 +68,7 @@ export function fitTopbar(
 	gap: number,
 	reserve: number,
 	keepIds: ReadonlySet<string> = new Set(),
+	lateIds: ReadonlySet<string> = new Set(),
 ): Set<string> {
 	const drop = new Set<string>();
 	// 没测到宽度（未挂载 / jsdom / display:none 的容器）时**全保留**：
@@ -70,7 +78,16 @@ export function fitTopbar(
 	const keptWidth = items
 		.filter((it) => keepIds.has(it.id) && it.width > 0)
 		.reduce((sum, it) => sum + it.width + gap, 0);
-	const budget = Math.max(0, available - Math.max(0, reserve) - keptWidth);
+	const room = Math.max(0, available - Math.max(0, reserve) - keptWidth);
+	// roles-overview: entries that fold last take their room next; if even they don't fit, everything
+	// that can fold does (they included), so a narrower bar never shows more.
+	const late = items.filter((it) => lateIds.has(it.id) && !keepIds.has(it.id) && it.width > 0);
+	const lateWidth = late.reduce((sum, it) => sum + it.width + gap, 0);
+	if (late.length > 0 && lateWidth > room) {
+		for (const it of items) if (it.width > 0 && !keepIds.has(it.id)) drop.add(it.id);
+		return drop;
+	}
+	const budget = room - lateWidth;
 	let acc = 0;
 	// 一旦某个条目放不下，它后面的条目（有宽度的）一律跟着进溢出：
 	// 跳过式的「抽空隙塞」会让剩余条目在宽度变化时反复换位。
@@ -80,6 +97,7 @@ export function fitTopbar(
 		// 既不占宽度、也不该被丢进溢出菜单（那会给落地页一个点了没用的入口）。
 		if (!(it.width > 0)) continue;
 		if (keepIds.has(it.id)) continue;
+		if (lateIds.has(it.id)) continue;
 		const need = it.width + gap;
 		if (overflowing || acc + need > budget) {
 			overflowing = true;

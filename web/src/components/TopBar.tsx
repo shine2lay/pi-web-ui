@@ -13,6 +13,7 @@ import {
 	FiSettings,
 	FiLayers,
 	FiTerminal,
+	FiUsers,
 	FiVolume2,
 	FiX,
 } from "react-icons/fi";
@@ -36,7 +37,8 @@ import {
 	setPluginViewPinned,
 	type UiSlotEntry,
 } from "../ui-slots";
-import { fitTopbar, MOBILE_ASIDE_TOPBAR_IDS, sortOverflowMenuItems } from "../topbar-fit";
+import { fitTopbar, LATE_TOPBAR_ITEM_IDS, MOBILE_ASIDE_TOPBAR_IDS, sortOverflowMenuItems } from "../topbar-fit";
+import { useRoles } from "../roles-state";
 import { openContextMenu } from "../context-menu-state";
 import { appSend, useAppGlobals, useIsDsh, useIsManaged, useServiceInfo } from "../app-globals";
 import { PluginMenu } from "./PluginMenu";
@@ -154,8 +156,8 @@ interface TopBarProps {
 		}) => void;
 		restart: (id: string) => void;
 	};
-	view: "chat" | "terminal" | "git" | `plugin:${string}`;
-	onViewChange: (view: "chat" | "terminal" | "git" | `plugin:${string}`) => void;
+	view: "chat" | "terminal" | "git" | "roles" | `plugin:${string}`;
+	onViewChange: (view: "chat" | "terminal" | "git" | "roles" | `plugin:${string}`) => void;
 	/** Installed optional plugins (<dataDir>/plugins) — one view tab each
 	 *  (view:false renderer-only plugins are filtered out by the caller). */
 	plugins: {
@@ -247,7 +249,13 @@ export function TopBar({
 	   drawing them would only offer an action that comes back refused. No list
 	   means every tab, which is the default. */
 	const tabOn = (tab: string) => !chat.tabs || tab === "chat" || chat.tabs.includes(tab);
-	/** 常驻溢出菜单的条目：「布局页里被隐藏的宿主条目 ＋ topbar.overflow 声明项」。
+	// roles-overview: the Roles tab's badge = open asks of every role (the server pushes the count). Only
+	// while the bar (or its menu) has the tab: no tab, no badge, nothing for the server to count.
+	const rolesInBar =
+		tabOn("roles") &&
+		(uiPrimary === undefined || [...uiPrimary, ...(uiOverflow ?? [])].some((it) => it.id === "host:roles"));
+	const rolesAsks = useRoles(rolesInBar ? "count" : "off").asks;
+	/** 	 常驻溢出菜单的条目:「布局页里被隐藏的宿主条目 + topbar.overflow 声明项」。
 	 *  品牌（host:brand）没有动作，进菜单会变成死按钮 —— 直接过滤（布局页仍可勾回来）。
 	 *  另外还有「本断点放不下」的条目，那是实测出来的（见下面的 fitTopbar），不在这里。 */
 	const pinnedOverflowItems = [...(uiOverflow ?? [])].filter(
@@ -289,6 +297,7 @@ export function TopBar({
 		"host:chat",
 		"host:terminal",
 		"host:git",
+		"host:roles",
 		"host:plugins",
 		"host:search",
 		"host:browser",
@@ -1037,6 +1046,26 @@ export function TopBar({
 				<span>{t("scmTab")}</span>
 			</button>
 		) : null,
+		// roles-overview: the Roles page; the amber badge counts what waits on the owner (none: no badge).
+		"host:roles": tabOn("roles") ? (
+			<button
+				type="button"
+				role="tab"
+				aria-selected={view === "roles"}
+				className={`tb-tab roles-tab${view === "roles" ? " active" : ""}`}
+				data-tip={t("rolesTabTip")}
+				{...(rolesAsks > 0 ? { "aria-label": t("rolesTabWaiting", { n: rolesAsks }) } : {})}
+				onClick={() => onViewChange("roles")}
+			>
+				<FiUsers />
+				<span>{t("rolesTab")}</span>
+				{rolesAsks > 0 && (
+					<span className="roles-badge" aria-hidden="true">
+						{rolesAsks > 99 ? "99+" : rolesAsks}
+					</span>
+				)}
+			</button>
+		) : null,
 		// 插件面板入口（Chrome 扩展图标那个位置）：列出全部已装插件，每行带「钉到顶栏」
 		// 开关。钉住的插件视图 tab 才回到直流里（合成条目默认 hidden，见 withPluginViewItems）。
 		// 图标用矢量 FiBox 而不用 🧩 emoji：🧩 是 Unicode 11（2018）的字，旧 Windows 的
@@ -1306,6 +1335,7 @@ export function TopBar({
 			gap,
 			0,
 			REQUIRED_TOPBAR_ITEM_IDS,
+			LATE_TOPBAR_ITEM_IDS,
 		);
 		setDroppedIds((prev) => (prev.size === next.size && [...next].every((id) => prev.has(id)) ? prev : next));
 	};
@@ -1313,7 +1343,7 @@ export function TopBar({
 	// 下面的 ResizeObserver 兜。**不**随快照流每次渲染都量（那会变成 60ms 一次的强制重排）。
 	const measureKey = `${keptItems.map((it) => `${it.id}:${it.entry?.label ?? ""}`).join("|")}|${view}|${(
 		chat.tabs ?? []
-	).join(",")}|${isMobile ? "m" : "d"}`;
+	).join(",")}|${isMobile ? "m" : "d"}|${rolesAsks > 0 ? String(Math.min(rolesAsks, 100)).length : 0}`;
 	useLayoutEffect(measure, [measureKey]); // eslint-disable-line react-hooks/exhaustive-deps
 	useEffect(() => {
 		const flow = flowRef.current;

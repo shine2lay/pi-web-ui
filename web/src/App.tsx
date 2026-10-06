@@ -26,6 +26,8 @@ import { Dialog } from "./components/Dialog";
 import { DshQuestionDialog } from "./components/DshQuestionDialog";
 // 终端视图懒加载：xterm.js 体积大且只在切到终端时才需要，拆出主包
 const TerminalPanel = lazy(() => import("./components/TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
+// roles-overview: the Roles page loads with its first opening and stays mounted after it.
+const RolesView = lazy(() => import("./components/RolesView").then((m) => ({ default: m.RolesView })));
 import { ScmPanel } from "./components/SCMPanel";
 import { PluginView } from "./components/PluginView";
 import { PluginViewFallback } from "./components/PluginViewFallback";
@@ -89,7 +91,9 @@ import { FilePreview, type PreviewFile } from "./components/FilePreview";
 import { PluginFilePreview } from "./components/PluginFilePreview";
 import { useChat } from "./use-chat";
 import { pendingFor } from "./pending-sends";
-import { takeChatLink } from "./open-chat-link";
+import { takeChatFocusLink, takeChatLink, takeViewLink } from "./open-chat-link";
+import { clearChatFocus, FOCUS_FLASH_MS, parseFocus, requestChatFocus, useChatFocus } from "./chat-focus";
+import type { RolesOpenTarget } from "./components/RolesView";
 import { appUrl } from "./base-url";
 import { resolveImageUrls } from "./chat-image";
 import type { ClientMessage, CommandDef, PromptAttachment, UiMessage } from "./types";
@@ -267,8 +271,8 @@ function PanelRail({ side, onClick }: { side: PanelSide; onClick: () => void }) 
 	);
 }
 
-/** 顶栏视图：内置三个 + 每个已装插件一个 `plugin:<id>`。 */
-type ViewName = "chat" | "terminal" | "git" | `plugin:${string}`;
+/** 顶栏视图：内置三个 + 每个已装插件一个 `plugin:<id>`。 roles-overview: plus the Roles page. */
+type ViewName = "chat" | "terminal" | "git" | "roles" | `plugin:${string}`;
 
 /**
  * 插件项目会话的目录授权（issue #146）：插件经 host.openSession 打开一个新目录的会话前，
@@ -326,10 +330,14 @@ export function App() {
 		useChat();
 	// telegram-answers: a link with ?chat=<saved chat file> (Telegram puts one under every question)
 	// opens that chat as soon as the page is connected, once.
+	// roles-overview: `&focus=` with it opens the chat at that item (a TL;DR line, a task, a question, a report).
 	useEffect(() => {
 		if (!chat.ready) return;
 		const path = takeChatLink();
-		if (path) void send({ type: "switch_session", path });
+		const focus = parseFocus(takeChatFocusLink());
+		if (!path) return;
+		if (focus) requestChatFocus({ file: path, ...focus });
+		void send({ type: "switch_session", path });
 	}, [chat.ready, send]);
 	// 浏览器标题：开关开启时显示当前项目（工作目录文件夹名），否则固定应用名。
 	const cwd = chat.state?.cwd ?? "";
@@ -398,6 +406,19 @@ export function App() {
 	const tabOn = (tab: string) => !chat.tabs || tab === "chat" || chat.tabs.includes(tab);
 	const viewTab = viewChosen.startsWith("plugin:") ? "plugins" : viewChosen;
 	const view: ViewName = tabOn(viewTab) ? viewChosen : "chat";
+	// roles-overview: `?view=roles` (maybe `#r-<id>`) opens the Roles page (at that role), once. The page
+	// mounts with its first opening and stays mounted, like the terminal.
+	const [rolesFocus, setRolesFocus] = useState<{ id: string; seq: number } | null>(null);
+	useEffect(() => {
+		const link = takeViewLink();
+		if (!link) return;
+		setView("roles");
+		if (link.role) setRolesFocus({ id: link.role, seq: 1 });
+	}, []);
+	const [rolesLoaded, setRolesLoaded] = useState(false);
+	useEffect(() => {
+		if (view === "roles") setRolesLoaded(true);
+	}, [view]);
 	// 已安装且未在设置面板禁用的插件（决定 tab 与视图加载）。
 	const enabledPlugins = useMemo(
 		() => chat.plugins.filter((p) => !chat.settings?.disabledPlugins?.includes(p.id)),
@@ -708,6 +729,22 @@ export function App() {
 		mq.addEventListener("change", onChange);
 		return () => mq.removeEventListener("change", onChange);
 	}, []);
+	// roles-overview: an item asked for in the chat that is open now. A TL;DR line or a task shows in the
+	// right panel (opened for it: the drawer on a phone); a report scrolls the chat (searchJump). The
+	// request is done once the item has been marked.
+	const chatFocus = useChatFocus();
+	const focusHere = chatFocus && chat.state?.sessionFile === chatFocus.file ? chatFocus : null;
+	const focusHereSeq = focusHere?.seq;
+	const focusHereKind = focusHere?.kind;
+	useEffect(() => {
+		if (focusHereSeq === undefined) return;
+		if (focusHereKind === "tldr" || focusHereKind === "task") {
+			if (isMobile) setDrawer("right");
+			else setRightCollapsed(false);
+		}
+		const timer = setTimeout(() => clearChatFocus(focusHereSeq), FOCUS_FLASH_MS + 500);
+		return () => clearTimeout(timer);
+	}, [focusHereSeq, focusHereKind, isMobile]);
 	// Setup modal: one-time prompt when the pi agent config is missing.
 	const [setupDismissed, setSetupDismissed] = useState(false);
 	// Custom model config panel (model dropdown → 管理模型).
@@ -797,6 +834,31 @@ export function App() {
 		const t = setTimeout(() => setSearchJump(null), 15_000);
 		return () => clearTimeout(t);
 	}, [searchJump]);
+	// roles-overview: the Roles page opens an existing chat (switch_session reuses the open conversation
+	// of that transcript), maybe at one item; it never starts, answers or changes anything.
+	const openFromRoles = useCallback(
+		(target: RolesOpenTarget) => {
+			if (target.focus) {
+				requestChatFocus({
+					file: target.file,
+					...target.focus,
+					...(target.jumpAt ? { timestamp: target.jumpAt } : {}),
+				});
+			} else clearChatFocus();
+			setSearchJump(target.jumpAt ? { path: target.file, role: "assistant", timestamp: target.jumpAt } : null);
+			setDrawer(null);
+			setView("chat");
+			void send({ type: "switch_session", path: target.file });
+		},
+		[send],
+	);
+	// roles-overview: "About & rules": Settings -> Identities at that role.
+	const [settingsRole, setSettingsRole] = useState<{ id: string; seq: number } | null>(null);
+	const aboutFromRoles = useCallback((roleId: string) => {
+		setSettingsRole((prev) => ({ id: roleId, seq: (prev?.seq ?? 0) + 1 }));
+		setSettingsInitialSection("identities");
+		setSettingsOpen(true);
+	}, []);
 
 	// 插件视图桥：插件无 chat 上下文，通过窗口事件请求在可见终端执行命令
 	// （与 SCM 面板同款：已有同名 tab 原地重跑，否则新建并自动切到终端视图）。
@@ -2230,6 +2292,8 @@ export function App() {
 							models={chat.models}
 							/* identity-notebook-tab: the Notebook tab shows the chat identity's notebook. */
 							identity={chatIdentity}
+							/* roles-overview: a TL;DR line or a task the Roles page opened this chat at. */
+							focus={focusHere}
 							onOpenIdentities={() => {
 								setDrawer(null);
 								setSettingsInitialSection("identities");
@@ -2276,6 +2340,20 @@ export function App() {
 						uiScmToolbar={uiScmToolbar}
 						onUiAction={onUiAction}
 					/>
+				</div>
+				{/* roles-overview: the Roles page: what every role is doing and what waits on the owner. */}
+				<div className={`view-pane roles-pane ${view === "roles" ? "" : "hidden"}`}>
+					{(rolesLoaded || view === "roles") && (
+						<Suspense fallback={null}>
+							<RolesView
+								active={view === "roles"}
+								phone={isMobile}
+								focusRole={rolesFocus}
+								onOpen={openFromRoles}
+								onAbout={aboutFromRoles}
+							/>
+						</Suspense>
+					)}
 				</div>
 				{pluginViews.map((entry) => {
 					const name = `plugin:${entry.info.id}` as ViewName;
@@ -2358,8 +2436,12 @@ export function App() {
 						chat={chat}
 						terminal={terminal}
 						initialSection={settingsInitialSection}
+						initialRole={settingsInitialSection === "identities" ? settingsRole : null}
 						onSwitchToTerminal={() => setView("terminal")}
-						onClose={() => setSettingsOpen(false)}
+						onClose={() => {
+							setSettingsOpen(false);
+							setSettingsRole(null);
+						}}
 						sound={sound}
 						onSoundChange={setSound}
 						tts={tts}

@@ -48,6 +48,8 @@ export interface SlotTabsProps {
 	/** 顶栏右侧附加内容（可选，比如「全部收起」按钮）。 */
 	extra?: ReactNode;
 	className?: string;
+	/** roles-overview: select this tab (once per seq; the owner's own choice afterwards stays). */
+	select?: { id: string; seq: number } | null;
 }
 
 /** 持久化 key：与其它前端偏好同前缀（`pi-web-ui:`），便于一次性清理。 */
@@ -98,7 +100,15 @@ function labelOf(tab: SlotTab): string {
 }
 
 // 返回值必须允许 null（空 tabs 什么都不画），所以比 PluginPage 多一个 `| null`。
-export function SlotTabs({ storageKey, tabs, epoch, send, extra, className }: SlotTabsProps): JSX.Element | null {
+export function SlotTabs({
+	storageKey,
+	tabs,
+	epoch,
+	send,
+	extra,
+	className,
+	select,
+}: SlotTabsProps): JSX.Element | null {
 	// aria 关联用的 DOM id 前缀：useId 保证多实例（右栏 + 设置面板同时开着）不撞车。
 	// 插件 id 可能含怪字符，所以 id 里只放**索引**，不放业务 id。
 	const baseId = useId();
@@ -128,6 +138,15 @@ export function SlotTabs({ storageKey, tabs, epoch, send, extra, className }: Sl
 		savedRef.current = `${storageKey}:${tab.id}`;
 		saveActiveId(storageKey, tab.id);
 	};
+
+	// roles-overview: a request to show a tab (an item of it was asked for from the Roles page).
+	useEffect(() => {
+		if (!select) return;
+		const tab = tabs.find((x) => x.id === select.id);
+		if (tab) selectTab(tab);
+		// Only a new request (seq) selects; tab list changes don't.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [select?.seq]);
 
 	/**
 	 * 键盘切换：←/→ 环绕、Home/End 跳首尾，并**同时移动焦点**（roving tabindex：只有

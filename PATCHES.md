@@ -109,6 +109,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | about-drafts                 | `local` | `server/identity-roles.ts` (about.md in a draft; accept writes and archives the about page), `identities.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (40), `web/src/line-diff.ts` (new), `identity-state.ts`, `components/IdentitiesSettings.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/unit/identity-config.test.ts`, `tests/unit/line-diff.test.ts` (new), `tests/identity-config-test.mjs`                                                                                                    |
 | queue-main-chat              | `local` | `server/task-queue.ts`, `stuck-asks.ts`, `agent-service.ts` (`askingChats`, `emitConversations`), `queue-groups.ts`, `protocol.ts`, `protocol-version.ts` (41), `web/src/components/TaskQueuePanel.tsx`, `done-watch.ts`, `App.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/queue-main-chat-test.mjs` (new), `tests/queue-lanes-test.mjs`, `queue-panel-test.mjs`, `stall-watch-test.mjs`, `telegram-answers-test.mjs`, `tests/unit/`; the answer line in blue (#62): `server/tldr-lines.ts`, `TldrPanel.tsx`, `LeftPanel.tsx`; paired with pi-queue |
 | queue-blocked                | `local` | `server/queue-blocks.ts` (new), `task-queue.ts`, `queue-host.ts`, `client-state.ts` (`queueWatch`), `agent-service.ts`, `queue-groups.ts`, `stuck-asks.ts`, `tldr-lines.ts`, `protocol.ts`, `protocol-version.ts` (42), `web/src/components/TaskQueuePanel.tsx`, `TldrPanel.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/queue-blocked-test.mjs` (new), `tests/unit/queue-blocks.test.ts` (new), `tests/unit/task-queue.test.ts`; paired with pi-queue |
+| roles-overview               | `local` | `server/roles-overview.ts` (new), `role-rules.ts` (new), `role-messages.ts`, `identities.ts`, `identity-roles.ts`, `identity-config.ts` (pi-identity copy), `agent-service.ts`, `index.ts`, `tabs.ts`, `protocol.ts`, `protocol-version.ts` (43), `web/src/components/RolesView.tsx` (new), `roles-view-model.ts` (new), `roles-state.ts` (new), `roles-view.css` (new), `chat-focus.ts` (new), `owner-fields.ts` (new), `IdentitiesSettings.tsx`, `TopBar.tsx`, `ui-slots.ts`, `topbar-fit.ts`, `App.tsx`, `RightPanel.tsx`, `TaskQueuePanel.tsx`, `TldrPanel.tsx`, `i18n.tsx`, `locales/*.json`, `docs/roles-overview.md` (new); paired with pi-identity |
 
 ---
 
@@ -5140,3 +5141,96 @@ request, waited on it until a restart.
 
 - If upstream changes `forceResetConversation` or `bindSession`, keep both: bind the chat that was
   rebuilt, and take it off the working list when its run is torn down.
+
+## roles-overview
+
+**Status**: `local`
+**Baseline**: v0.96.1 (on top of `role-messages`, `role-reports`, `queue-main-chat`, `queue-blocked`)
+
+**Why** (owner, 2026-10-05, queue task #69; design `~/design-lab/roles-page/SPEC.md` and its final
+density pass, approved by the owner): one page to see what every role is doing, what waits on the
+owner, each role's TL;DR, queue and 6 am report, and to open the right chat. It only shows and links:
+answers, queue controls and edits stay in the chats and Settings. Details:
+[docs/roles-overview.md](docs/roles-overview.md).
+
+### Changes
+
+1. **The reader** (`server/roles-overview.ts`, new): `RolesOverviewReader.read()` builds
+   `UiRolesOverview` from the identity registry, the app's runtime state (working or not, the queue
+   of an open chat), the open ask cards, the whole role-message store and the saved transcripts. It
+   reads transcripts from where it last stopped (1 MB pieces, by inode, size and modification time)
+   and keeps only TL;DR entries, queue entries and a marker per owner reply; no message text,
+   thinking, tool calls or results, prompts or model requests leave it. Chat paths must be absolute,
+   their own resolved path (no `..`, no symlink), `.jsonl` and inside the sessions folders
+   (`ChatPaths`); anything else is a per-role problem, not an error. It loads no chat, starts no
+   worker, calls no model and changes no file. Status order: needs you, busy, paused (a stopped home
+   queue with tasks left), idle, nothing yet. Owner asks: unanswered needs-you lines, stuck tasks (with
+   the queue's own stuck time) and open question/dialog/approval cards, deduplicated by source item
+   (a task's question copied into the home chat counts once; a task asking its main chat is not an
+   owner ask), oldest first, unknown start times last. The 6 am report: role-reports' run record
+   (`role-reports/runs.json`), the store's report request and the reply text read with the receipt's
+   own boundaries (`reportReplyText`, which `reportReplyIn` now wraps), cut into the four headings;
+   otherwise the reason (not active, not in the job, couldn't ask, not answered yet, no answer, the
+   first report still to come), Pacific days. Bounds: 20 TL;DR lines, 20 queued tasks, 8 task chats
+   per role, 12,000 report characters.
+2. **The push** (`index.ts`): `roles_watch { full }` / `roles_unwatch` (owned by the `roles` tab in
+   `tabs.ts`). `RolesWatch` reads only while a socket watches (every 3 s for the page, 10 s for the
+   top bar's count, right after a role message or an identity file changes), sends only what changed
+   plus a `checkedAt` every 30 s, and keeps the last data with an error when a look fails. Protocol 43.
+3. **The owner's fields**: `workMode` (`self-start` / `request-only`) and `goals` (name, one-line
+   scope, `approvedAt`, optional `endsAt`; at most 12) in `identity.json`, parsed by pi-identity's
+   `config.ts` (`server/identity-config.ts` is its byte-identical copy); about-drafts can't set them.
+   Without them the every-chat rules' defaults apply, read-only (`server/role-rules.ts`: product,
+   design, qa self-start; everyone else on request; Architecture's two approved goals). A disagreement
+   is shown, never acted on. `UiIdentityInfo` gains `workMode`, `goals`, `focus` (the about page's
+   Focus line, 120 characters) and `rules`. Settings -> Identities -> a role -> **How it works** edits
+   them (`OwnerFieldsEditor`, `web/src/owner-fields.ts`) through the existing hash-checked
+   `identity_file_save`; every other field and the key order stay.
+4. **The page** (`web/src/components/RolesView.tsx`, `roles-view-model.ts`, `roles-state.ts`,
+   `roles-view.css`): a Roles view in the top bar (`host:roles`, folds into the overflow menu after
+   Terminal and Git: `LATE_TOPBAR_ITEM_IDS` in `topbar-fit.ts`) with the open-ask count as a badge;
+   the waiting strip, the two alphabetical groups, rows (cards on a phone) that open in place,
+   the 6 am report view, loading, not-live, refresh-failed, partial and paused-messages states.
+   Open rows and the strip's fold are kept per device layout in the browser. The other panes stay
+   mounted.
+5. **Links** (`web/src/chat-focus.ts`, `open-chat-link.ts`, `App.tsx`): `?view=roles#r-<role>`, and
+   `focus=tldr:<id>|task:<n>|question:<id>|report:<day>` next to a chat link: the existing chat is
+   opened (never a new one), the right panel shows TL;DR or Queue with the item marked
+   (`RightPanel.tsx`, `SlotTabs.tsx` `select`, `TldrPanel.tsx`, `TaskQueuePanel.tsx`), or the chat
+   scrolls to the report. The gear opens Settings -> Identities at that role (`SettingsModal`
+   `initialRole`).
+
+### How it was checked
+
+- `tests/unit/roles-overview.test.ts` (temporary folders, synthetic transcripts): alphabetical roles
+  with closed chats; the status order; asks oldest first with their real start times, a copied task
+  ask once, two asks from one role both kept, a task asking its main chat left out, an ask answered
+  after 300 more lines closed; incremental reads; refused paths (`..`, a symlink out, NUL, not
+  `.jsonl`, outside the roots) without reading them; no canary text from thinking, tools, prompts,
+  custom entries or model requests; the report states and the four headings (300, 1,200 and 4,000
+  characters); the rules' defaults, Architecture's two goals, the owner's fields winning, a
+  conflict, ended and broken goals; 20 roles with 45 tasks within the bounds; open requests counted
+  over the whole store (past the newest 100); the push (only while watched, only changes, the
+  heartbeat, the count-only watch, a failed look); no file changed.
+- `tests/unit/roles-view.test.ts`: the view model (groups for 14 and 20 roles, the now line, quiet
+  rows, queue words, ages, Pacific days, report reasons, device-local memory), the owner's form
+  (writes only the two fields, keeps the rest; the same problems as the server's parser), the focus
+  and view links, and the page's markup. `topbar-fit.test.ts`, `ui-slots.test.ts`: the tab and its
+  late fold. `identity-config.test.ts`: the owner's fields saved and refused with reasons, nothing
+  else moved; a draft can't set them.
+- `tests/roles-page-test.mjs` (sealed: temporary HOME, data and sessions, its own port, a mock model
+  that counts calls): 14 and 20 synthetic roles in both themes at 320, 390, 768, 769 and 1440 pixels
+  wide: the badge, groups and order, statuses, the strip, rows per screen, contrast, target sizes, axe
+  (no serious or critical), keyboard and focus ring, reduced motion, open in place and remembered,
+  navigation to the same chat with the item marked, the report jump, the Settings link, the owner's
+  save (and a refused save after the file changed), live updates, a server restart (not live, then
+  back), no leaks, no model calls, no chat file written.
+- check.sh and the sealed E2E suite.
+
+### When syncing
+
+- `server/identity-config.ts` must stay byte-identical to pi-identity's `config.ts`
+  (`identity-config.test.ts` compares them).
+- The reader depends on the transcript entry shapes of pi-tldr (`tldr`), pi-queue (`task-queue`) and
+  role-messages' report records; if one changes, keep `lineKind` and the report boundaries in step.
+- Keep the page read-only: no queue command, answer or edit may be sent from it.
