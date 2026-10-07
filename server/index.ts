@@ -43,6 +43,7 @@ import { isAudioFile, previewKind } from "./text-sniff.js";
 import { startControlServer } from "./control-socket.js";
 import { ensureAppToken } from "./app-token.js";
 import type { RoleReportReceipt, RoleReportResult } from "./role-messages.js";
+import type { BoardChangeResult, BoardPostInput, BoardPostResult } from "./role-board.js";
 import { scheduleUploadCleanup } from "./uploads.js";
 import { ensureWindowsBash, windowsBashDir } from "./ensure-bash.js";
 import { listThemes, resolveThemeFile } from "./themes.js";
@@ -1410,6 +1411,12 @@ export interface EngineService {
 	onRoleMessagesChanged?: (() => void) | null;
 	/** roles-overview (pi engine): every role's state for the Roles page. */
 	readRolesOverview?(): Promise<UiRolesOverview>;
+	/** board (pi engine): the owner posts on the roles' board from the Roles page. */
+	boardPost?(input: BoardPostInput): Promise<BoardPostResult>;
+	/** board (pi engine): the owner closes a post. */
+	boardClose?(id: unknown, note: unknown): BoardChangeResult;
+	/** board (pi engine): set by index.ts; the board changed. */
+	onBoardChanged?: (() => void) | null;
 	noteSocketOpen(): void;
 	noteSocketClose(): void;
 	isQuiesced(): boolean;
@@ -2564,6 +2571,54 @@ wss.on("connection", (ws) => {
 			case "roles_unwatch":
 				rolesWatch.drop(ws);
 				break;
+			case "board_post": {
+				// board: the owner posts from the Roles page's Board view (this socket is his, like every owner
+				// action here). Every Roles page follows the board through the change hook.
+				const reqId = typeof msg.reqId === "string" ? msg.reqId : undefined;
+				if (!service.boardPost) {
+					send({ type: "board_result", reqId, op: "post", ok: false, error: "this engine has no board" });
+					break;
+				}
+				void service
+					.boardPost({ kind: msg.kind, to: msg.to, title: msg.title, text: msg.text })
+					.then(
+						(res): ServerMessage =>
+							res.ok
+								? {
+										type: "board_result",
+										reqId,
+										op: "post",
+										ok: true,
+										id: res.post.id,
+										direct: res.direct.map((d) => d.role),
+										later: res.later,
+									}
+								: { type: "board_result", reqId, op: "post", ok: false, error: res.error },
+						(err: unknown): ServerMessage => ({
+							type: "board_result",
+							reqId,
+							op: "post",
+							ok: false,
+							error: (err as Error).message,
+						}),
+					)
+					.then((reply) => {
+						if (!closed) send(reply);
+					});
+				break;
+			}
+			case "board_close": {
+				const reqId = typeof msg.reqId === "string" ? msg.reqId : undefined;
+				const res = service.boardClose
+					? service.boardClose(msg.id, msg.note)
+					: ({ ok: false, error: "this engine has no board" } as const);
+				send(
+					res.ok
+						? { type: "board_result", reqId, op: "close", ok: true, id: res.post.id }
+						: { type: "board_result", reqId, op: "close", ok: false, error: res.error },
+				);
+				break;
+			}
 			case "subs_limits_get":
 				// subs-limits-box: the Limits box (and every reconnect) asks for the readings.
 				send(subsLimits.message());
@@ -3982,6 +4037,8 @@ service.onRoleMessagesChanged = () => {
 	pushRoleMessages();
 	rolesWatch.poke(); // roles-overview: open requests and reports come from the store
 };
+// board: the Roles page's Board view (and each role's open orders) follows the board.
+service.onBoardChanged = () => rolesWatch.poke();
 // subs-limits-box: the channel pi-multi-pass joins when a chat loads it (and the file, until then).
 subsLimits.start();
 

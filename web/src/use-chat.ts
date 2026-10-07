@@ -75,7 +75,7 @@ import {
 	resendNotebookWatch,
 } from "./notebook-state";
 import { receiveSubsLimits, requestSubsLimits } from "./subs-limits-state";
-import { receiveRoles, resendRolesWatch } from "./roles-state";
+import { receiveBoardResult, receiveRoles, resendRolesWatch } from "./roles-state";
 import { emitPluginData } from "./plugin-loader";
 import { ingestPluginLogsData } from "./plugin-logs";
 import { resolveCatalogSyncResult } from "./plugin-host";
@@ -2069,6 +2069,10 @@ export function useChat() {
 				case "roles":
 					// roles-overview: the Roles page and the top bar's count (roles-state.ts).
 					receiveRoles(msg);
+					break;
+				case "board_result":
+					// board: the answer to the Board view's post or close (roles-state.ts).
+					receiveBoardResult(msg);
 					break;
 				case "identity_file":
 					receiveIdentityFile(msg);

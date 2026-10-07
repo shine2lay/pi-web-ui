@@ -78,6 +78,10 @@ export const COMPACT_CONTEXT_TOOL_NAME = "compact_context";
  *  catalog: it is always registered; pi-identity offers it only in chats that have a role, and the tool
  *  itself refuses a chat without one. */
 export const MESSAGE_ROLE_TOOL_NAME = "message_role";
+/** board (task #76): the roles' shared board (definition in board-tool.ts). Not in the catalog: like
+ *  message_role it is always registered; pi-identity offers it only in chats that have a role, and the tool
+ *  itself refuses a chat without one. */
+export const BOARD_TOOL_NAME = "board";
 /** telegram-coo: every role's state in one call (definition in roles-overview-tool.ts). Not in the catalog:
  *  read-only and small, it is always registered (any chat may look at the Roles page's data; the owner
  *  limits a role's tools in its identity.json). */

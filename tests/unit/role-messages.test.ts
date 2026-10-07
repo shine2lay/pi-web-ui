@@ -19,6 +19,7 @@ import {
 	type RoleMessageHost,
 	type RoleMessageSender,
 } from "../../server/role-messages.js";
+import { makeMessageRoleTool, sameTextHint } from "../../server/role-message-tool.js";
 
 let dir = "";
 let now = Date.parse("2026-10-04T12:00:00Z");
@@ -738,5 +739,64 @@ describe('telegram-coo: forOwner (owner 2026-10-06: "Yes, answers to my question
 		expect(s.ownerAnswerOf(q.record.id)).toBeNull();
 		expect(s.ownerAnswerOf("rm-00000000")).toBeNull();
 		expect(s.ownerAnswerOf(undefined)).toBeNull();
+	});
+});
+
+// board (task #76): the owner's routing rule (rm-c4989975) in message_role, and its pointer to the board
+// when the same general info goes to several roles one by one.
+describe("board: the same text to several roles", () => {
+	function five(): Fake {
+		return fake([
+			role("alpha", "Alpha", A),
+			role("beta", "Beta", B),
+			role("gamma", "Gamma", chat("gamma-home")),
+			role("delta", "Delta", chat("delta-home")),
+			role("eps", "Eps", chat("eps-home")),
+		]);
+	}
+
+	it("counts the roles one role sent the same text to (spacing and case aside) in the last 10 minutes", () => {
+		const f = five();
+		const s = new RoleMessages(store, f.host, clock);
+		const alpha = sender({ role: "alpha", file: A });
+		const text = "Pause new work until 15:00.";
+		expect(s.send(alpha, { to: "beta", kind: "fyi", text }).ok).toBe(true);
+		now += 60_000;
+		expect(s.send(alpha, { to: "gamma", kind: "request", text: `  pause NEW work\nuntil 15:00. ` }).ok).toBe(true);
+		expect(s.sameTextRecipients("alpha", text)).toEqual(["beta", "gamma"]);
+		now += 60_000;
+		expect(s.send(alpha, { to: "delta", kind: "question", text }).ok).toBe(true);
+		expect(s.sameTextRecipients("alpha", text)).toEqual(["beta", "gamma", "delta"]);
+		// Another text, another sender, or older than 10 minutes: not counted.
+		expect(s.sameTextRecipients("alpha", "Something else")).toEqual([]);
+		expect(s.sameTextRecipients("beta", text)).toEqual([]);
+		now += 9 * 60_000 + 1_000;
+		expect(s.sameTextRecipients("alpha", text)).toEqual(["delta"]);
+	});
+
+	it("message_role still sends; from the third role on its result points to the board", async () => {
+		const f = five();
+		const s = new RoleMessages(store, f.host, clock);
+		const tool = makeMessageRoleTool({ service: () => s, sender: () => sender({ role: "alpha", file: A }) });
+		expect(tool.description).toContain("if a role has something waiting");
+		expect(tool.description).toContain("to tell several roles the same general info, post it on the board");
+		const run = (to: string) =>
+			(
+				tool.execute as unknown as (
+					id: string,
+					p: Record<string, unknown>,
+				) => Promise<{ content: { text: string }[]; details: { id: string } }>
+			)("call", { to, kind: "fyi", text: "The Roles page has a Board view now." });
+		const one = await run("beta");
+		const two = await run("gamma");
+		const three = await run("delta");
+		expect(one.content[0].text).not.toContain("board");
+		expect(two.content[0].text).not.toContain("board");
+		expect(three.content[0].text).toContain(
+			"The same text went to 3 roles in the last 10 minutes (beta, gamma, delta): to tell several roles the same general info, post it once on the board instead",
+		);
+		expect(three.details.id).toMatch(/^rm-/);
+		expect(s.rows().map((r) => r.to)).toEqual(["delta", "gamma", "beta"]);
+		expect(sameTextHint(["beta", "gamma"])).toBe("");
 	});
 });

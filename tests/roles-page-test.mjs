@@ -1623,8 +1623,8 @@ const phone = await openPage({ width: 390, height: 844, phone: true });
 		[...document.querySelectorAll(".roles-view .rv-switch button")].map((b) => b.textContent),
 	);
 	check(
-		"phone: the switch counts today's reports",
-		JSON.stringify(sw) === JSON.stringify(["Now", "6 am reports (3)"]),
+		"phone: the switch counts today's reports (and the board's open posts)",
+		JSON.stringify(sw) === JSON.stringify(["Now", "6 am reports (3)", "Board (0)"]),
 		JSON.stringify(sw),
 	);
 	await page.click(".roles-view .rv-switch button >> nth=1");

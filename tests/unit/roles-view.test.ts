@@ -5,10 +5,18 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultSettings, parseRoleConfig } from "../../server/identity-config.js";
-import type { UiRoleAsk, UiRoleOverview, UiRoleReport, UiRolesOverview, UiRoleTask } from "../../server/protocol.js";
+import type {
+	UiBoard,
+	UiBoardPost,
+	UiRoleAsk,
+	UiRoleOverview,
+	UiRoleReport,
+	UiRolesOverview,
+	UiRoleTask,
+} from "../../server/protocol.js";
 import { setAppSend } from "../../web/src/app-globals.js";
 import { parseFocus } from "../../web/src/chat-focus.js";
-import { RolesView } from "../../web/src/components/RolesView.js";
+import { BoardView, RolesView } from "../../web/src/components/RolesView.js";
 import { en, LanguageProvider, type Translate } from "../../web/src/i18n.js";
 import { initChatLink, takeChatFocusLink, takeChatLink, takeViewLink } from "../../web/src/open-chat-link.js";
 import {
@@ -22,7 +30,17 @@ import { receiveRoles, resetRolesState } from "../../web/src/roles-state.js";
 import {
 	ageOf,
 	agoOf,
+	boardAudience,
+	boardClosedText,
+	boardCounts,
+	boardFromText,
+	boardMarks,
+	boardOpenCount,
+	boardPostedText,
+	boardSplit,
+	boardToText,
 	chatHref,
+	clockOf,
 	dayOfStamp,
 	goalRest,
 	goalsLine,
@@ -597,5 +615,170 @@ describe("the page", () => {
 		const html = render(false);
 		expect(html).toContain("1 role could not be read fully (backend). Showing what is there.");
 		expect(html).toContain("Role messages are paused (Settings)");
+	});
+
+	// board (task #76): the Board view sits beside Now and the 6 am reports; its switch counts open posts.
+	it("has a Board switch with the open posts' count, and no Board view without the server's board", () => {
+		const o = fourteen();
+		o.board = { posts: [boardPost(), boardPost({ id: "bp-00000009", closed: { at: NOW, by: "owner" } })] };
+		receiveRoles({ type: "roles", overview: o, asks: 2, checkedAt: NOW });
+		expect(render(false)).toContain("Board (1)");
+		expect(render(true)).toContain("Board (1)");
+		receiveRoles({ type: "roles", overview: fourteen(), asks: 2, checkedAt: NOW });
+		expect(render(false)).not.toContain("Board (");
+	});
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// board (task #76): the roles' shared board on the Roles page
+// ---------------------------------------------------------------------------------------------------------
+
+const ROLE_IDS = ["backend", "coo", "design", "frontend", "ops"];
+function boardPost(over: Partial<UiBoardPost> = {}): UiBoardPost {
+	return {
+		id: "bp-00c0ffee",
+		at: NOW - 40 * MIN,
+		from: "owner",
+		kind: "order",
+		to: ["backend", "design", "frontend"],
+		title: "Pause new work",
+		text: "Finish what you have; **start nothing new**.",
+		...over,
+	};
+}
+
+describe("board: what a post shows", () => {
+	it("a post is for the roles it lists (or every role), never for the role that posted it", () => {
+		expect(boardAudience(boardPost(), ROLE_IDS)).toEqual(["backend", "design", "frontend"]);
+		expect(boardAudience(boardPost({ to: "all" }), ROLE_IDS)).toEqual(ROLE_IDS);
+		// The owner's words relayed by COO: COO wrote it, so it isn't for COO.
+		expect(boardAudience(boardPost({ to: "all", via: "coo" }), ROLE_IDS)).toEqual([
+			"backend",
+			"design",
+			"frontend",
+			"ops",
+		]);
+		expect(boardAudience(boardPost({ from: "ops", kind: "news", to: ["ops", "ops", "coo"] }), ROLE_IDS)).toEqual([
+			"coo",
+		]);
+	});
+
+	it("an order's marks: done first with the note, then the rest; who got it directly and who read it", () => {
+		const p = boardPost({
+			sent: { frontend: { at: NOW - 39 * MIN, how: "turn" }, design: { at: NOW - 39 * MIN, how: "steer" } },
+			reads: { design: NOW - 39 * MIN, frontend: NOW - 38 * MIN },
+			done: { frontend: { at: NOW - 20 * MIN, note: "Parked task #4." } },
+		});
+		const marks = boardMarks(p, ROLE_IDS);
+		expect(marks.map((m) => m.role)).toEqual(["frontend", "backend", "design"]);
+		expect(marks[0]).toEqual({
+			role: "frontend",
+			done: { at: NOW - 20 * MIN, note: "Parked task #4." },
+			sent: { at: NOW - 39 * MIN, how: "turn" },
+			read: NOW - 38 * MIN,
+		});
+		expect(marks[1]).toEqual({ role: "backend" });
+		expect(boardCounts(p, ROLE_IDS)).toEqual({ of: 3, done: 1, read: 2, direct: 2 });
+		// News keeps the roles' order (nothing to be done).
+		const news = boardPost({ kind: "news", reads: { frontend: NOW }, done: undefined });
+		expect(boardMarks(news, ROLE_IDS).map((m) => m.role)).toEqual(["backend", "design", "frontend"]);
+	});
+
+	it("open posts and closed ones, newest first; the switch counts the open ones", () => {
+		const a = boardPost({ id: "bp-0000000a", at: NOW - 3 * MIN });
+		const b = boardPost({ id: "bp-0000000b", at: NOW - 1 * MIN });
+		const c = boardPost({ id: "bp-0000000c", at: NOW - 2 * MIN, closed: { at: NOW, by: "owner" } });
+		const split = boardSplit([a, b, c]);
+		expect(split.open.map((p) => p.id)).toEqual(["bp-0000000b", "bp-0000000a"]);
+		expect(split.closed.map((p) => p.id)).toEqual(["bp-0000000c"]);
+		expect(boardOpenCount({ posts: [a, b, c] })).toBe(2);
+		expect(boardOpenCount(undefined)).toBe(0);
+	});
+
+	it("says who wrote it, who it is for, how it closed, and what posting did", () => {
+		expect(boardFromText(t, boardPost())).toBe("From owner");
+		expect(boardFromText(t, boardPost({ via: "coo" }))).toBe("From owner, via coo");
+		expect(boardToText(t, boardPost())).toBe("to backend, design, frontend");
+		expect(boardToText(t, boardPost({ to: "all" }))).toBe("to all roles");
+		const closed = boardPost({ closed: { at: NOW - 5 * MIN, by: "owner", note: "pause lifted" } });
+		expect(boardClosedText(t, closed, NOW)).toBe(`Closed ${clockOf(NOW - 5 * MIN, NOW)} by owner: pause lifted`);
+		expect(boardClosedText(t, boardPost(), NOW)).toBe("");
+		expect(boardPostedText(t, "news", { id: "bp-1" })).toBe(
+			"Posted bp-1. News wakes nobody: each role sees it at its next turn.",
+		);
+		expect(boardPostedText(t, "order", { id: "bp-1", direct: ["backend", "design"] })).toContain(
+			"Sent straight to backend, design, which had something waiting",
+		);
+		expect(boardPostedText(t, "order", { id: "bp-1", direct: [] })).toContain("No listed role had anything waiting");
+	});
+});
+
+describe("board: the Board view", () => {
+	const view = (board: UiBoard) =>
+		renderToStaticMarkup(
+			createElement(
+				LanguageProvider,
+				null,
+				createElement(BoardView, { board, roleIds: ROLE_IDS, now: NOW, focus: null }),
+			),
+		);
+	const plain = (html: string) =>
+		html
+			.replace(/<!-- -->/g, "")
+			.replace(/<[^>]+>/g, " ")
+			.replaceAll("&#x27;", "'")
+			.replace(/\s+/g, " ");
+
+	it("shows an order's done count, each role's tick and note, and whether it got the order directly or on the board", () => {
+		const order = boardPost({
+			via: "coo",
+			ownerWords: "Telegram 12:25: pause new work",
+			sent: { frontend: { at: NOW - 39 * MIN, how: "turn" }, design: { at: NOW - 39 * MIN, how: "steer" } },
+			reads: { design: NOW - 39 * MIN, frontend: NOW - 38 * MIN, backend: NOW - 10 * MIN },
+			done: { frontend: { at: NOW - 20 * MIN, note: "Parked task #4." } },
+		});
+		const html = view({ posts: [order] });
+		const text = plain(html);
+		expect(html).toContain('data-post-id="bp-00c0ffee"');
+		expect(html).toContain('class="rv-bkind rv-bkind-order"');
+		expect(text).toContain("Open posts (1)");
+		expect(text).toContain("Pause new work");
+		expect(text).toContain("From owner, via coo \u00b7 to backend, design, frontend");
+		expect(text).toContain("Owner's words: Telegram 12:25: pause new work");
+		// The text is drawn as Markdown.
+		expect(html).toContain("<strong>start nothing new</strong>");
+		expect(text).toContain("Done 1/3");
+		expect(text).toContain("2 got it directly");
+		const mark = (role: string) => {
+			const at = html.indexOf(`data-role="${role}"`);
+			return plain(html.slice(at, html.indexOf("</li>", at)));
+		};
+		expect(mark("frontend")).toContain(`done ${clockOf(NOW - 20 * MIN, NOW)}`);
+		expect(mark("frontend")).toContain("got it directly, as a turn in its home chat");
+		expect(mark("frontend")).toContain("Parked task #4.");
+		expect(mark("design")).toContain("not done yet");
+		expect(mark("design")).toContain("got it directly, in its running turn");
+		expect(mark("backend")).toContain(`on the board, read ${clockOf(NOW - 10 * MIN, NOW)}`);
+		expect(html).toContain('class="rv-bmark done" data-role="frontend"');
+		// An open post can be closed; the owner writes new posts from the same view.
+		expect(text).toContain("Close");
+		expect(text).toContain("New post");
+	});
+
+	it("shows who has read news, and folds the closed posts with how each ended", () => {
+		const news = boardPost({ id: "bp-0000000e", kind: "news", to: "all", reads: { ops: NOW - 2 * MIN } });
+		const closed = boardPost({
+			id: "bp-0000000f",
+			closed: { at: NOW - 5 * MIN, by: "owner", note: "pause lifted" },
+		});
+		const html = view({ posts: [news, closed] });
+		const text = plain(html);
+		expect(html).toContain('class="rv-bkind rv-bkind-news"');
+		expect(text).toContain("Read by 1/5");
+		expect(text).not.toContain("Done 0/");
+		expect(text).toContain("Closed posts (1)");
+		// Folded: the closed post's card isn't drawn until opened.
+		expect(html).not.toContain('data-post-id="bp-0000000f"');
+		expect(view({ posts: [closed] })).toContain("No open posts.");
 	});
 });

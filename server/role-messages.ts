@@ -63,6 +63,15 @@ export const ROLE_MESSAGE_TEXT_MAX = 4000;
 export const ROLE_MESSAGES_KEEP = 1000;
 /** Rows Settings → Identities shows. */
 export const ROLE_MESSAGES_LIST = 100;
+/** board (task #76): the same text to this many roles within SAME_TEXT_WINDOW_MS -> message_role's result
+ *  points to the board. */
+export const SAME_TEXT_ROLES = 3;
+export const SAME_TEXT_WINDOW_MS = 10 * 60_000;
+
+/** board: a message's text as compared for "the same text" (spacing and case aside). */
+export function sameTextKey(text: string): string {
+	return text.trim().replace(/\s+/g, " ").toLowerCase();
+}
 
 const HOUR_MS = 60 * 60 * 1000;
 /** How often waiting messages are looked at. */
@@ -407,7 +416,7 @@ function firstLine(text: string, max = 120): string {
 // ---------------------------------------------------------------------------
 
 /** Each line of the transcript (from byte `from`) that holds `needle`, parsed; streamed. */
-async function eachLineWith(
+export async function eachLineWith(
 	file: string,
 	from: number,
 	needle: string,
@@ -450,7 +459,7 @@ async function eachLine(file: string, from: number, take: (line: string) => bool
 }
 
 /** A message's first text (content as a string or as blocks). */
-function firstTextOf(c: unknown): string | undefined {
+export function firstTextOf(c: unknown): string | undefined {
 	if (typeof c === "string") return c;
 	if (!Array.isArray(c)) return undefined;
 	const first = c.find((b) => (b as { type?: unknown })?.type === "text") as { text?: unknown } | undefined;
@@ -864,6 +873,23 @@ export class RoleMessages {
 						}
 					: {}),
 			}));
+	}
+
+	/**
+	 * board (task #76): the roles this role sent the same text to (spacing and case aside) in the last
+	 * SAME_TEXT_WINDOW_MS, the message just sent included. Questions, requests and fyis only. message_role
+	 * points to the board when they are SAME_TEXT_ROLES or more (the message is still sent).
+	 */
+	sameTextRecipients(fromRole: string, text: string, windowMs = SAME_TEXT_WINDOW_MS): string[] {
+		const want = sameTextKey(text);
+		const since = this.now() - windowMs;
+		const roles = new Set<string>();
+		for (const m of this.data.messages) {
+			if (m.at < since || m.from.role !== fromRole) continue;
+			if (m.kind !== "question" && m.kind !== "request" && m.kind !== "fyi") continue;
+			if (sameTextKey(m.text) === want) roles.add(m.to.role);
+		}
+		return [...roles];
 	}
 
 	/**

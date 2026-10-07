@@ -19,6 +19,7 @@ import type {
 	UiRoleTask,
 } from "./protocol.js";
 import { ROLES_OVERVIEW_TOOL_NAME } from "./tool-manager.js";
+import { audienceOf, BOARD_FIRST_NEWS_DAYS } from "./role-board.js";
 
 export { ROLES_OVERVIEW_TOOL_NAME };
 
@@ -180,9 +181,46 @@ export function roleText(r: UiRoleOverview, tz: string, now: number, lim: Limits
 			}`,
 		);
 	}
+	if (r.boardOrders?.length) {
+		out.push(`Board orders it hasn't marked done (${r.boardOrders.length}):`);
+		for (const o of r.boardOrders.slice(0, lim.asks)) {
+			out.push(
+				`- ${o.id} "${clip(o.title, lim.lineMax)}" from ${o.via ? `${o.from} via ${o.via}` : o.from}, ${whenText(o.at, tz, now)}`,
+			);
+		}
+		if (r.boardOrders.length > lim.asks) out.push(`- (${r.boardOrders.length - lim.asks} more)`);
+	}
 	out.push(...reportLines(r.report, tz, now, lim));
 	if (r.problems?.length) out.push(`Couldn't read: ${r.problems.join(", ")}`);
 	return out.join("\n");
+}
+
+/** Open orders the board summary lists at most. */
+const BOARD_SUMMARY_ORDERS = 6;
+
+/** board (task #76): the board in short: its open orders and who hasn't done each, and recent news. */
+export function boardSummary(view: UiRolesOverview, tz: string, now: number): string[] {
+	const posts = view.board?.posts;
+	if (!posts) return [];
+	const roleIds = view.roles.map((r) => r.id);
+	const orders = posts.filter((p) => p.kind === "order" && !p.closed);
+	const newsFrom = now - BOARD_FIRST_NEWS_DAYS * 24 * 3600_000;
+	const news = posts.filter((p) => p.kind === "news" && !p.closed && p.at >= newsFrom).length;
+	const newsText = news ? `; ${news} news post${news === 1 ? "" : "s"} in the last ${BOARD_FIRST_NEWS_DAYS} days` : "";
+	if (!orders.length) return [`Board: no open orders${newsText}.`];
+	const out = [`Board: ${orders.length} open order${orders.length === 1 ? "" : "s"}${newsText}.`];
+	for (const p of orders.slice(0, BOARD_SUMMARY_ORDERS)) {
+		const audience = audienceOf(p, roleIds);
+		const notDone = audience.filter((r) => !p.done?.[r]);
+		const from = p.via ? `${p.from} via ${p.via}` : p.from;
+		out.push(
+			`- ${p.id} "${clip(p.title, 100)}" from ${from}, ${whenText(p.at, tz, now)}: done ${audience.length - notDone.length}/${audience.length}${
+				notDone.length ? `; not done: ${notDone.join(", ")}` : ""
+			}`,
+		);
+	}
+	if (orders.length > BOARD_SUMMARY_ORDERS) out.push(`- (${orders.length - BOARD_SUMMARY_ORDERS} more open orders)`);
+	return out;
 }
 
 /** The overview as text: all roles in short, or one role in full. Throws for a role that isn't there. */
@@ -204,6 +242,7 @@ export function formatRolesOverview(view: UiRolesOverview, opts: { role?: string
 		const counts = new Map<string, number>();
 		for (const r of view.roles) counts.set(STATUS_WORDS[r.status], (counts.get(STATUS_WORDS[r.status]) ?? 0) + 1);
 		head.push(`By status: ${[...counts].map(([s, n]) => `${n} ${s}`).join(", ")}.`);
+		head.push(...boardSummary(view, tz, now));
 	}
 	let text = head.join("\n");
 	let parts = roles.map((r) => `\n\n${roleText(r, tz, now, lim)}`);
@@ -236,7 +275,7 @@ export function makeRolesOverviewTool(host: RolesOverviewToolHost): ToolDefiniti
 		name: ROLES_OVERVIEW_TOOL_NAME,
 		label: "Roles overview",
 		description:
-			"Every role's state in one call, as the Roles page shows it: status, home chat, last activity, newest TL;DR lines, what waits on the owner, its queue (active tasks and counts), open requests to it and its latest 6 am report. " +
+			"Every role's state in one call, as the Roles page shows it: status, home chat, last activity, newest TL;DR lines, what waits on the owner, its queue (active tasks and counts), open requests to it, the board orders it hasn't marked done and its latest 6 am report; with all roles, the board's open orders and who hasn't done each. " +
 			"Read-only. Without role: all roles in short. With role (an id): that role in full.",
 		promptSnippet: "every role's state at once (status, TL;DR, asks, queue, 6 am report); role: one role in full",
 		parameters: Type.Object({

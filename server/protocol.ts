@@ -1569,6 +1569,18 @@ export type ClientMessage =
 	| { type: "role_messages_get" }
 	/** role-messages: the owner pauses (held, not dropped) or resumes delivery. */
 	| { type: "role_messages_pause"; paused: boolean }
+	/** board: the owner posts on the roles' board from the Roles page (answered with board_result). to =
+	 *  "all" or role ids. reqId comes back in board_result. */
+	| {
+			type: "board_post";
+			kind: UiBoardPostKind;
+			to: "all" | string[];
+			title: string;
+			text: string;
+			reqId?: string;
+	  }
+	/** board: the owner closes a post (answered with board_result). */
+	| { type: "board_close"; id: string; note?: string; reqId?: string }
 	/** roles-overview: the Roles page wants the snapshot and its updates (full) or just the ask count for
 	 *  the top bar (count); roles_unwatch stops them. */
 	| { type: "roles_watch"; full: boolean }
@@ -1836,8 +1848,57 @@ export interface UiRoleOverview {
 	queue?: UiRoleQueue;
 	requests: { open: number; newest?: UiRoleRequest };
 	report: UiRoleReport;
+	/** board: open orders to it that it hasn't marked done, oldest first. */
+	boardOrders?: UiRoleBoardOrder[];
 	/** What couldn't be read ("queue", "tldr", "report", "home chat"): the rest is shown. */
 	problems?: string[];
+}
+
+/** board (task #76): the roles' shared board. A post is news or one of the owner's orders. */
+export type UiBoardPostKind = "order" | "news";
+
+/** board: how an order reached a role directly (a role that has nothing waiting reads it at its next turn). */
+export type UiBoardSentHow = "steer" | "turn";
+
+/** board: one post (role-board.json, as the page and roles_overview get it). */
+export interface UiBoardPost {
+	/** "bp-<8 hex>". */
+	id: string;
+	at: number;
+	/** "owner" or a role id. */
+	from: string;
+	/** The role that posted the owner's words for him (COO). */
+	via?: string;
+	kind: UiBoardPostKind;
+	/** "all" or role ids. */
+	to: "all" | string[];
+	title: string;
+	/** Markdown. */
+	text: string;
+	/** An order (or news) a role posted for the owner: his words and where they came from. */
+	ownerWords?: string;
+	/** Orders: the roles it reached directly, and how (a steer into a running turn, or a turn in its home chat). */
+	sent?: Record<string, { at: number; how: UiBoardSentHow }>;
+	closed?: { at: number; by: string; note?: string };
+	/** When each role first saw it (in any of its chats). */
+	reads?: Record<string, number>;
+	/** Orders: the roles that marked it done, and what they did. */
+	done?: Record<string, { at: number; note: string }>;
+}
+
+/** board: the page's part of the Roles snapshot. */
+export interface UiBoard {
+	/** Newest first, at most 200 (closed ones too). */
+	posts: UiBoardPost[];
+}
+
+/** board: an open order a role hasn't marked done (its panel and roles_overview). */
+export interface UiRoleBoardOrder {
+	id: string;
+	title: string;
+	at: number;
+	from: string;
+	via?: string;
 }
 
 /** roles-overview: the Roles page's snapshot. */
@@ -1851,6 +1912,8 @@ export interface UiRolesOverview {
 	paused: boolean;
 	/** The 6 am report job's time zone (its days and "6 am" are in it). */
 	reportTz: string;
+	/** board: the roles' shared board (absent: this server has none). */
+	board?: UiBoard;
 }
 
 /** identity-notes: a role's two-layer memory as its chats get it (pi-identity): the rules (notebook.md)
@@ -3991,6 +4054,18 @@ export type ServerMessage =
 	/** roles-overview: the snapshot (full watchers), or just the open asks' count (count watchers);
 	 *  error: it couldn't be made (the page keeps what it had). */
 	| { type: "roles"; overview?: UiRolesOverview; asks: number; error?: string; checkedAt?: number }
+	/** board: what a board_post / board_close did. ok false: error says why (nothing changed). For a post:
+	 *  id, the roles it reached directly (direct) and the ones that read it at their next turn (later). */
+	| {
+			type: "board_result";
+			reqId?: string;
+			op: "post" | "close";
+			ok: boolean;
+			id?: string;
+			error?: string;
+			direct?: string[];
+			later?: string[];
+	  }
 	/** One identity file's text. hash goes back with identity_file_save; error = couldn't read it. */
 	| {
 			type: "identity_file";

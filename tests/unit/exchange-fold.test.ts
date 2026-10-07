@@ -137,6 +137,30 @@ describe("planExchangeFolds: finished exchanges", () => {
 		expect(plan.role.has(review.id)).toBe(false);
 	});
 
+	// board (task #76): the board's turn-start note sits right after a role chat's prompt; it stays one row
+	// under the prompt instead of hiding in the turn's steps.
+	it("keeps the board note right after the question visible, like an attachment", () => {
+		const q = user("HELLO");
+		const note = custom("board");
+		const a1 = asst(["tool"]);
+		const t1 = result(a1);
+		const a2 = asst(["Done."]);
+		const plan = planExchangeFolds([q, note, a1, t1, a2], DONE);
+		const f = only(plan);
+		expect(plan.role.has(note.id)).toBe(false);
+		expect(f.rowBefore).toBe(a1.id);
+		expect(f.hidden).toEqual([a1.id, t1.id]);
+		// with a file attached as well, both stay with the question
+		const q2 = user("look");
+		const file = custom("file");
+		const note2 = custom("board");
+		const b1 = asst(["tool"]);
+		const plan2 = planExchangeFolds([q2, file, note2, b1, result(b1), asst(["ok"])], DONE);
+		expect(plan2.role.has(file.id)).toBe(false);
+		expect(plan2.role.has(note2.id)).toBe(false);
+		expect(only(plan2).rowBefore).toBe(b1.id);
+	});
+
 	it("hides a mid-run compaction summary or reminder with the steps", () => {
 		const a1 = asst(["tool"]);
 		const t1 = result(a1);

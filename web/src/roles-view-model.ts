@@ -16,7 +16,18 @@
  */
 import { stripMarkdown } from "./copy-text";
 import type { Translate } from "./i18n";
-import type { UiRoleAsk, UiRoleGoal, UiRoleOverview, UiRoleQueue, UiRoleReport, UiRoleTask } from "./types";
+import type {
+	UiBoard,
+	UiBoardPost,
+	UiBoardPostKind,
+	UiBoardSentHow,
+	UiRoleAsk,
+	UiRoleGoal,
+	UiRoleOverview,
+	UiRoleQueue,
+	UiRoleReport,
+	UiRoleTask,
+} from "./types";
 
 export const HOUR_MS = 3_600_000;
 export const DAY_MS = 24 * HOUR_MS;
@@ -345,6 +356,105 @@ export function chatHref(file: string, focus?: string): string {
 	const q = new URLSearchParams({ chat: file });
 	if (focus) q.set("focus", focus);
 	return `?${q.toString()}`;
+}
+
+// ---------------------------------------------------------------------------
+// board (task #76): the Board view, the roles' shared board
+// ---------------------------------------------------------------------------
+
+/** A post's per-role list is open at first when it is for this many roles or fewer. */
+export const BOARD_ROLES_SHOWN = 6;
+/** The server's limits (server/role-board.ts BOARD_TITLE_MAX, BOARD_TEXT_MAX, BOARD_NOTE_MAX). */
+export const BOARD_TITLE_MAX = 100;
+export const BOARD_TEXT_MAX = 2000;
+export const BOARD_CLOSE_NOTE_MAX = 500;
+
+/** Who wrote a post: the role that posted it (also when it relayed the owner's words), or "owner". */
+export function boardAuthor(post: Pick<UiBoardPost, "from" | "via">): string {
+	return post.via ?? post.from;
+}
+
+/** The roles a post is for, its author left out (server/role-board.ts audienceOf). */
+export function boardAudience(post: Pick<UiBoardPost, "to" | "from" | "via">, roleIds: readonly string[]): string[] {
+	const author = boardAuthor(post);
+	const listed = post.to === "all" ? roleIds : post.to;
+	return [...new Set(listed)].filter((r) => r !== author);
+}
+
+/** One role's marks on a post: whether it has done an order (and what it did), whether the order
+ *  reached it directly (and how), and when one of its chats first saw the post. */
+export interface BoardRoleMark {
+	role: string;
+	done?: { at: number; note: string };
+	sent?: { at: number; how: UiBoardSentHow };
+	read?: number;
+}
+
+/** Every role a post is for, with its marks: done first (orders), then in the roles' order. */
+export function boardMarks(post: UiBoardPost, roleIds: readonly string[]): BoardRoleMark[] {
+	const marks = boardAudience(post, roleIds).map((role) => ({
+		role,
+		...(post.done?.[role] ? { done: post.done[role] } : {}),
+		...(post.sent?.[role] ? { sent: post.sent[role] } : {}),
+		...(post.reads?.[role] !== undefined ? { read: post.reads[role] } : {}),
+	}));
+	if (post.kind !== "order") return marks;
+	return [...marks.filter((m) => m.done), ...marks.filter((m) => !m.done)];
+}
+
+/** How many roles a post is for, have done it (orders), have read it, and got it directly. */
+export function boardCounts(
+	post: UiBoardPost,
+	roleIds: readonly string[],
+): { of: number; done: number; read: number; direct: number } {
+	const marks = boardMarks(post, roleIds);
+	return {
+		of: marks.length,
+		done: marks.filter((m) => m.done).length,
+		read: marks.filter((m) => m.read !== undefined).length,
+		direct: marks.filter((m) => m.sent).length,
+	};
+}
+
+/** Open posts and closed ones, each newest first. */
+export function boardSplit(posts: readonly UiBoardPost[]): { open: UiBoardPost[]; closed: UiBoardPost[] } {
+	const newest = [...posts].sort((a, b) => b.at - a.at);
+	return { open: newest.filter((p) => !p.closed), closed: newest.filter((p) => !!p.closed) };
+}
+
+/** The switch's count: open posts. */
+export function boardOpenCount(board: UiBoard | undefined): number {
+	return board ? board.posts.filter((p) => !p.closed).length : 0;
+}
+
+/** "From owner", "From owner, via coo", "From backend". */
+export function boardFromText(t: Translate, post: Pick<UiBoardPost, "from" | "via">): string {
+	return post.via ? t("boardFromVia", { from: post.from, via: post.via }) : t("boardFrom", { from: post.from });
+}
+
+/** "to all roles", "to backend, frontend". */
+export function boardToText(t: Translate, post: Pick<UiBoardPost, "to">): string {
+	return post.to === "all" ? t("boardToAllRoles") : t("boardToRoles", { roles: post.to.join(", ") });
+}
+
+/** What the page says once a post is on the board: for an order, who got it directly. */
+export function boardPostedText(
+	t: Translate,
+	kind: UiBoardPostKind,
+	res: { id?: string; direct?: readonly string[] },
+): string {
+	const id = res.id ?? "";
+	if (kind === "news") return t("boardPostedNews", { id });
+	const direct = res.direct ?? [];
+	return direct.length ? t("boardPostedOrder", { id, direct: direct.join(", ") }) : t("boardPostedOrderNone", { id });
+}
+
+/** A post's closing line: "Closed 15:02 by owner: pause lifted". */
+export function boardClosedText(t: Translate, post: UiBoardPost, now: number): string {
+	const c = post.closed;
+	if (!c) return "";
+	const time = clockOf(c.at, now);
+	return c.note ? t("boardClosedByNote", { time, by: c.by, note: c.note }) : t("boardClosedBy", { time, by: c.by });
 }
 
 // ---------------------------------------------------------------------------

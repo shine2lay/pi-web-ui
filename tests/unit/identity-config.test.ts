@@ -374,7 +374,7 @@ describe("Settings saves a role's settings and prompt", () => {
 		expect(save(good)).toMatchObject({ ok: true, hash: textHash(good) });
 		expect(read(configPath())).toBe(good);
 		expect(info("alpha")?.toolLimits).toBe(
-			"allow read, edit (and always notebook, tldr, queue_done, queue_stuck, queue_wait, message_role)",
+			"allow read, edit (and always notebook, tldr, queue_done, queue_stuck, queue_wait, message_role, board)",
 		);
 	});
 

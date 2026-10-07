@@ -14,6 +14,10 @@
  * panel) opens the whole report in a big window, at least 80% of the screen (owner, 2026-10-05), its
  * Markdown drawn like a chat message's.
  *
+ * board (task #76): a third view, "Board", shows the roles' shared board: news and the owner's orders,
+ * who got each order directly, who has read each post and who has done each order (with its note). It
+ * is the one place on this page that changes something: the owner posts and closes posts there.
+ *
  * Data: roles-state.ts (the server pushes while the page is shown); what to show: roles-view-model.ts.
  */
 import {
@@ -24,6 +28,7 @@ import {
 	useMemo,
 	useRef,
 	useState,
+	type FormEvent,
 	type MouseEvent,
 	type ReactNode,
 } from "react";
@@ -31,21 +36,35 @@ import {
 	FiCheckCircle,
 	FiChevronDown,
 	FiChevronRight,
+	FiCircle,
 	FiInfo,
 	FiMaximize2,
 	FiMessageSquare,
+	FiPlus,
 	FiSettings,
 	FiX,
 } from "react-icons/fi";
 import { useAppField } from "../app-globals";
 import { parseFocus, type ChatFocusKind } from "../chat-focus";
 import { useT, type Translate } from "../i18n";
-import { reloadRoles, useRoles } from "../roles-state";
+import { boardRequest, reloadRoles, useRoles } from "../roles-state";
 import { Markdown } from "./Markdown";
 import {
 	ageOf,
 	agoOf,
 	askWhere,
+	BOARD_CLOSE_NOTE_MAX,
+	BOARD_ROLES_SHOWN,
+	BOARD_TEXT_MAX,
+	BOARD_TITLE_MAX,
+	boardClosedText,
+	boardCounts,
+	boardFromText,
+	boardMarks,
+	boardOpenCount,
+	boardPostedText,
+	boardSplit,
+	boardToText,
 	CARD_LINES_SHOWN,
 	chatHref,
 	clockOf,
@@ -73,11 +92,22 @@ import {
 	taskLook,
 	taskWord,
 	whereTag,
+	type BoardRoleMark,
 	type NowLine,
 	type RolesLayout,
 	type TaskLook,
 } from "../roles-view-model";
-import type { UiRoleAsk, UiRoleOverview, UiRoleReport, UiRoleStatus, UiRoleTask, UiRoleTldrLine } from "../types";
+import type {
+	UiBoard,
+	UiBoardPost,
+	UiBoardPostKind,
+	UiRoleAsk,
+	UiRoleOverview,
+	UiRoleReport,
+	UiRoleStatus,
+	UiRoleTask,
+	UiRoleTldrLine,
+} from "../types";
 import "../roles-view.css";
 
 /** Where a target of the page leads: a chat, maybe at one item of it. */
@@ -315,8 +345,11 @@ export const RolesView = memo(function RolesView({ active, phone, focusRole, onO
 			return { ...prev, open: !prev.open };
 		});
 	}, []);
-	const [mode, setMode] = useState<"now" | "reports">("now");
+	// board (task #76): "Board" is the third view, beside Now and the 6 am reports.
+	const [mode, setMode] = useState<"now" | "reports" | "board">("now");
 	const nav = useMemo<Nav>(() => ({ open: onOpen, about: onAbout }), [onOpen, onAbout]);
+	// board: a post to scroll to in the Board view (a role panel's open order); seq grows with each.
+	const [boardFocus, setBoardFocus] = useState<{ id: string; seq: number } | null>(null);
 
 	const pageRef = useRef<HTMLElement>(null);
 	const stripRef = useRef<HTMLDivElement>(null);
@@ -338,6 +371,12 @@ export const RolesView = memo(function RolesView({ active, phone, focusRole, onO
 		);
 	}, []);
 	const detailsRole = shown && o ? o.roles.find((r) => r.id === shown) : undefined;
+	// board: an open order in a role's panel opens the Board view at that post.
+	const showPost = useCallback((id: string) => {
+		setShown(null);
+		setMode("board");
+		setBoardFocus((prev) => ({ id, seq: (prev?.seq ?? 0) + 1 }));
+	}, []);
 	// Leaving the page, or the role going away, closes its details.
 	useEffect(() => {
 		if (shown && (!active || (o && !detailsRole))) setShown(null);
@@ -420,6 +459,7 @@ export const RolesView = memo(function RolesView({ active, phone, focusRole, onO
 	const groups = useMemo(() => groupRoles(o?.roles ?? []), [o]);
 	const withProblems = useMemo(() => (o?.roles ?? []).filter((r) => (r.problems?.length ?? 0) > 0), [o]);
 	const reportList = useMemo(() => reportRoles([...groups.selfStart, ...groups.onRequest]), [groups]);
+	const roleIds = useMemo(() => (o?.roles ?? []).map((r) => r.id).sort(), [o]);
 
 	let liveText = "";
 	if (loading) liveText = t("rolesLoading");
@@ -444,6 +484,11 @@ export const RolesView = memo(function RolesView({ active, phone, focusRole, onO
 							<button type="button" aria-pressed={mode === "reports"} onClick={() => setMode("reports")}>
 								{t("rolesViewReports", { n: reportList.filter((r) => r.report.state === "report").length })}
 							</button>
+							{o.board && (
+								<button type="button" aria-pressed={mode === "board"} onClick={() => setMode("board")}>
+									{t("rolesViewBoard", { n: boardOpenCount(o.board) })}
+								</button>
+							)}
 						</div>
 					)}
 					{!phone && o && <span className="rv-sum rv-meta">{rolesSummary(t, o.roles)}</span>}
@@ -499,6 +544,12 @@ export const RolesView = memo(function RolesView({ active, phone, focusRole, onO
 						</div>
 						{o.roles.length === 0 ? (
 							<p className="rv-empty rv-meta">{t("rolesNoRoles")}</p>
+						) : mode === "board" ? (
+							o.board ? (
+								<BoardView board={o.board} roleIds={roleIds} now={now} focus={boardFocus} />
+							) : (
+								<p className="rv-empty rv-meta">{t("boardUnavailable")}</p>
+							)
 						) : mode === "reports" ? (
 							<ReportList roles={reportList} tz={tz} nav={nav} onRead={showReport} />
 						) : (
@@ -532,6 +583,7 @@ export const RolesView = memo(function RolesView({ active, phone, focusRole, onO
 					nav={nav}
 					onClose={closeDetails}
 					onRead={showReport}
+					onPost={o?.board ? showPost : undefined}
 				/>
 			)}
 			{active && readingRole?.report.state === "report" && (
@@ -762,6 +814,7 @@ function RoleDetails({
 	nav,
 	onClose,
 	onRead,
+	onPost,
 }: {
 	role: UiRoleOverview;
 	now: number;
@@ -771,6 +824,8 @@ function RoleDetails({
 	onClose: (back: boolean) => void;
 	/** Open the role's 6 am report in the big window (over the panel, which stays open). */
 	onRead: (id: string, from: HTMLElement) => void;
+	/** board: open the Board view at this post (absent: no board). */
+	onPost?: (id: string) => void;
 }) {
 	const t = useT();
 	const ref = useRef<HTMLDialogElement>(null);
@@ -912,6 +967,18 @@ function RoleDetails({
 							</>
 						)}
 					</section>
+					{onPost && role.boardOrders && role.boardOrders.length > 0 && (
+						// board: the open orders this role hasn't marked done.
+						<section className="rv-sec">
+							<h3 className="rv-sech">{t("boardRoleOrders", { n: role.boardOrders.length })}</h3>
+							{role.boardOrders.map((order) => (
+								<button key={order.id} type="button" className="rv-line rv-bord" onClick={() => onPost(order.id)}>
+									<span className="rv-lt">{`${clockOf(order.at, now)} · ${boardFromText(t, order)}`}</span>{" "}
+									<span className="rv-tx">{order.title}</span>
+								</button>
+							))}
+						</section>
+					)}
 					{role.goals.length > 0 && (
 						<section className="rv-sec">
 							<Goals role={role} />
@@ -1218,5 +1285,467 @@ function ReportCard({ role, tz, nav, onRead }: { role: UiRoleOverview; tz: strin
 				)}
 			</div>
 		</article>
+	);
+}
+
+// ---------------------------------------------------------------------------
+// board (task #76): the Board view, the roles' shared board
+// ---------------------------------------------------------------------------
+
+/** The Board view: open posts, then the closed ones (folded). The owner posts and closes here; what each
+ *  role did with a post (got an order directly or on the board, read it, done it) shows on its card.
+ *  Exported for tests/unit/roles-view.test.ts (the page itself opens on Now). */
+export function BoardView({
+	board,
+	roleIds,
+	now,
+	focus,
+}: {
+	board: UiBoard;
+	roleIds: string[];
+	now: number;
+	/** A post to show (a role panel's open order); seq grows with each. */
+	focus: { id: string; seq: number } | null;
+}) {
+	const t = useT();
+	const ref = useRef<HTMLDivElement>(null);
+	const newRef = useRef<HTMLButtonElement>(null);
+	const [writing, setWriting] = useState(false);
+	const [said, setSaid] = useState("");
+	const [showClosed, setShowClosed] = useState(false);
+	const { open, closed } = useMemo(() => boardSplit(board.posts), [board.posts]);
+	// After the form closes, focus goes back to "New post".
+	const refocus = useRef(false);
+	useEffect(() => {
+		if (writing || !refocus.current) return;
+		refocus.current = false;
+		newRef.current?.focus();
+	}, [writing]);
+	// A role panel's open order: open the closed list if it is there, then scroll to the post and focus it.
+	const shownSeq = useRef(0);
+	useEffect(() => {
+		if (!focus || focus.seq === shownSeq.current) return;
+		if (!showClosed && closed.some((p) => p.id === focus.id)) {
+			setShowClosed(true);
+			return;
+		}
+		const el = [...(ref.current?.querySelectorAll<HTMLElement>("[data-post-id]") ?? [])].find(
+			(e) => e.dataset.postId === focus.id,
+		);
+		if (!el) return;
+		shownSeq.current = focus.seq;
+		el.scrollIntoView({ block: "start" });
+		el.focus({ preventScroll: true });
+	}, [focus, showClosed, closed]);
+	const done = useCallback((text: string) => {
+		refocus.current = true;
+		setWriting(false);
+		if (text) setSaid(text);
+	}, []);
+	return (
+		<div className="rv-board" ref={ref}>
+			<div className="rv-bbar">
+				<p className="rv-meta rv-bintro">{t("boardIntro")}</p>
+				{!writing && (
+					<button
+						ref={newRef}
+						type="button"
+						className="rv-act"
+						onClick={() => {
+							setSaid("");
+							setWriting(true);
+						}}
+					>
+						<FiPlus className="rv-ic" aria-hidden="true" />
+						{t("boardNewPost")}
+					</button>
+				)}
+			</div>
+			{writing && <BoardForm roleIds={roleIds} onDone={done} />}
+			<p className="rv-meta rv-bsaid" role="status">
+				{said}
+			</p>
+			<h2 className="rv-sech">{t("boardOpenHead", { n: open.length })}</h2>
+			{open.length === 0 ? (
+				<p className="rv-empty rv-meta">{t("boardNoOpen")}</p>
+			) : (
+				<div className="rv-bposts">
+					{open.map((p) => (
+						<BoardPostCard key={p.id} post={p} roleIds={roleIds} now={now} />
+					))}
+				</div>
+			)}
+			{closed.length > 0 && (
+				<>
+					<h2 className="rv-sech rv-bclosedh">
+						<button
+							type="button"
+							className="rv-more"
+							aria-expanded={showClosed}
+							onClick={() => setShowClosed((v) => !v)}
+						>
+							<Chevron open={showClosed} />
+							{t("boardClosedHead", { n: closed.length })}
+						</button>
+					</h2>
+					{showClosed && (
+						<div className="rv-bposts">
+							{closed.map((p) => (
+								<BoardPostCard key={p.id} post={p} roleIds={roleIds} now={now} />
+							))}
+						</div>
+					)}
+				</>
+			)}
+		</div>
+	);
+}
+
+/** One post: kind, title, from/via, to, time, its text (folded after about 6 lines), and per role whether
+ *  it got an order directly or on the board, read it and did it (with its note). Close on open posts. */
+function BoardPostCard({ post, roleIds, now }: { post: UiBoardPost; roleIds: string[]; now: number }) {
+	const t = useT();
+	const [closing, setClosing] = useState(false);
+	const [allRoles, setAllRoles] = useState(false);
+	const closeRef = useRef<HTMLButtonElement>(null);
+	const marks = useMemo(() => boardMarks(post, roleIds), [post, roleIds]);
+	const counts = useMemo(() => boardCounts(post, roleIds), [post, roleIds]);
+	const order = post.kind === "order";
+	const shown = allRoles || marks.length <= BOARD_ROLES_SHOWN ? marks : marks.slice(0, BOARD_ROLES_SHOWN);
+	const titleId = `rv-bp-${post.id}`;
+	const endClose = useCallback((back: boolean) => {
+		setClosing(false);
+		if (back) requestAnimationFrame(() => closeRef.current?.focus());
+	}, []);
+	return (
+		<article
+			className={`rv-role rv-bpost${post.closed ? " rv-bclosed" : ""}`}
+			data-post-id={post.id}
+			data-kind={post.kind}
+			tabIndex={-1}
+			aria-labelledby={titleId}
+		>
+			<div className="rv-rmain">
+				<div className="rv-r1">
+					<span className={`rv-bkind rv-bkind-${post.kind}`}>{order ? t("boardKindOrder") : t("boardKindNews")}</span>
+					<h3 id={titleId} className="rv-btitle">
+						{post.title}
+					</h3>
+				</div>
+				<p className="rv-meta">
+					{`${boardFromText(t, post)} · ${boardToText(t, post)} · `}
+					<time dateTime={new Date(post.at).toISOString()}>{clockOf(post.at, now)}</time>
+				</p>
+				{post.ownerWords && <p className="rv-meta rv-bwords">{t("boardOwnerWords", { words: post.ownerWords })}</p>}
+				<BoardText text={post.text} />
+				<p className="rv-bsum">
+					{order ? (
+						<>
+							{counts.of > 0 && counts.done === counts.of && (
+								<FiCheckCircle className="rv-ic rv-btick" aria-hidden="true" />
+							)}
+							<span className="rv-bcount">{t("boardDoneCount", { n: counts.done, m: counts.of })}</span>
+							<span className="rv-meta">{t("boardDirectCount", { n: counts.direct })}</span>
+						</>
+					) : (
+						<span className="rv-bcount">{t("boardReadCount", { n: counts.read, m: counts.of })}</span>
+					)}
+				</p>
+				{marks.length > 0 && (
+					<ul className="rv-bmarks" aria-label={order ? t("boardMarksOrder") : t("boardMarksNews")}>
+						{shown.map((m) => (
+							<BoardMark key={m.role} mark={m} order={order} now={now} />
+						))}
+					</ul>
+				)}
+				{marks.length > BOARD_ROLES_SHOWN && (
+					<button type="button" className="rv-more" aria-expanded={allRoles} onClick={() => setAllRoles((v) => !v)}>
+						<Chevron open={allRoles} />
+						{allRoles ? t("boardFewerRoles") : t("boardAllRoles", { n: marks.length })}
+					</button>
+				)}
+				{post.closed ? (
+					<p className="rv-meta rv-bend">{boardClosedText(t, post, now)}</p>
+				) : closing ? (
+					<BoardCloseForm post={post} onDone={endClose} />
+				) : (
+					<div className="rv-acts">
+						<button
+							ref={closeRef}
+							type="button"
+							className="rv-act"
+							aria-describedby={titleId}
+							onClick={() => setClosing(true)}
+						>
+							<FiX className="rv-ic" aria-hidden="true" />
+							{t("boardClose")}
+						</button>
+					</div>
+				)}
+			</div>
+		</article>
+	);
+}
+
+/** One role on a post: for an order, a tick when it is done (with its note), and whether it got the order
+ *  directly (into a running turn, or a turn in its home chat) or on the board; for news, whether it read it. */
+function BoardMark({ mark, order, now }: { mark: BoardRoleMark; order: boolean; now: number }) {
+	const t = useT();
+	const got = mark.sent
+		? mark.sent.how === "steer"
+			? t("boardGotSteer", { time: clockOf(mark.sent.at, now) })
+			: t("boardGotTurn", { time: clockOf(mark.sent.at, now) })
+		: mark.read !== undefined
+			? t("boardGotBoardRead", { time: clockOf(mark.read, now) })
+			: t("boardGotBoardUnread");
+	const read = mark.read !== undefined ? t("boardMarkRead", { time: clockOf(mark.read, now) }) : t("boardMarkNotRead");
+	return (
+		<li className={`rv-bmark${mark.done ? " done" : ""}`} data-role={mark.role}>
+			{order ? (
+				mark.done ? (
+					<FiCheckCircle className="rv-ic rv-btick" aria-hidden="true" />
+				) : (
+					<FiCircle className="rv-ic rv-dim" aria-hidden="true" />
+				)
+			) : null}
+			<span className="rv-bwho">
+				<span className="rv-brole">{mark.role}</span>{" "}
+				{order ? (
+					<>
+						<span className="rv-bstate">
+							{mark.done ? t("boardMarkDone", { time: clockOf(mark.done.at, now) }) : t("boardMarkNotDone")}
+						</span>{" "}
+						<span className="rv-meta">{`· ${got}`}</span>
+					</>
+				) : (
+					<span className="rv-meta">{read}</span>
+				)}
+			</span>
+			{mark.done?.note && <span className="rv-bnote">{mark.done.note}</span>}
+		</li>
+	);
+}
+
+/** A post's text, its Markdown drawn as in a chat message, folded after about 6 lines. */
+function BoardText({ text }: { text: string }) {
+	const t = useT();
+	const ref = useRef<HTMLDivElement>(null);
+	const [open, setOpen] = useState(false);
+	const [long, setLong] = useState(false);
+	useLayoutEffect(() => {
+		const el = ref.current;
+		if (!el || open) return;
+		setLong(el.scrollHeight > el.clientHeight + 2);
+	}, [text, open]);
+	return (
+		<>
+			<div ref={ref} className={`rv-md msg-text rv-btext${open ? "" : " rv-bfold"}${long && !open ? " rv-bfade" : ""}`}>
+				<Markdown text={text} />
+			</div>
+			{(long || open) && (
+				<button type="button" className="rv-more" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+					<Chevron open={open} />
+					{open ? t("boardShowLess") : t("boardShowAll")}
+				</button>
+			)}
+		</>
+	);
+}
+
+/** The owner's new post: kind, to (all roles or picked ones), title and text. */
+function BoardForm({ roleIds, onDone }: { roleIds: string[]; onDone: (said: string) => void }) {
+	const t = useT();
+	const [kind, setKind] = useState<UiBoardPostKind>("news");
+	const [toAll, setToAll] = useState(true);
+	const [picked, setPicked] = useState<string[]>([]);
+	const [title, setTitle] = useState("");
+	const [text, setText] = useState("");
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState("");
+	const firstRef = useRef<HTMLInputElement>(null);
+	useEffect(() => {
+		firstRef.current?.focus();
+	}, []);
+	const submit = async (e: FormEvent) => {
+		e.preventDefault();
+		if (busy) return;
+		if (!toAll && picked.length === 0) {
+			setError(t("boardFormPickRoles"));
+			return;
+		}
+		if (!title.trim() || !text.trim()) {
+			setError(t("boardFormNeedText"));
+			return;
+		}
+		setBusy(true);
+		setError("");
+		const res = await boardRequest({
+			type: "board_post",
+			kind,
+			to: toAll ? "all" : [...picked].sort(),
+			title: title.trim(),
+			text: text.trim(),
+		});
+		setBusy(false);
+		if (!res.ok) {
+			setError(t("boardFormFailed", { error: res.error ?? "" }));
+			return;
+		}
+		onDone(boardPostedText(t, kind, res));
+	};
+	return (
+		<form className="rv-role rv-bform" onSubmit={submit} aria-labelledby="rv-bform-h">
+			<h2 id="rv-bform-h" className="rv-sech">
+				{t("boardNewPost")}
+			</h2>
+			<fieldset className="rv-bfs">
+				<legend className="rv-blabel">{t("boardFormKind")}</legend>
+				<div className="rv-bopts">
+					<label className="rv-bopt">
+						<input
+							ref={firstRef}
+							type="radio"
+							name="rv-bkind"
+							value="news"
+							checked={kind === "news"}
+							onChange={() => setKind("news")}
+						/>
+						{t("boardKindNews")}
+					</label>
+					<label className="rv-bopt">
+						<input
+							type="radio"
+							name="rv-bkind"
+							value="order"
+							checked={kind === "order"}
+							onChange={() => setKind("order")}
+						/>
+						{t("boardKindOrder")}
+					</label>
+				</div>
+				<p className="rv-meta">{kind === "order" ? t("boardFormOrderHint") : t("boardFormNewsHint")}</p>
+			</fieldset>
+			<fieldset className="rv-bfs">
+				<legend className="rv-blabel">{t("boardFormTo")}</legend>
+				<div className="rv-bopts">
+					<label className="rv-bopt">
+						<input type="radio" name="rv-bto" checked={toAll} onChange={() => setToAll(true)} />
+						{t("boardFormToAll")}
+					</label>
+					<label className="rv-bopt">
+						<input type="radio" name="rv-bto" checked={!toAll} onChange={() => setToAll(false)} />
+						{t("boardFormToSome")}
+					</label>
+				</div>
+				{!toAll && (
+					<div className="rv-bopts rv-broles">
+						{roleIds.map((id) => (
+							<label key={id} className="rv-bopt">
+								<input
+									type="checkbox"
+									value={id}
+									checked={picked.includes(id)}
+									onChange={(e) => {
+										const on = e.currentTarget.checked;
+										setPicked((p) => (on ? [...p, id] : p.filter((x) => x !== id)));
+									}}
+								/>
+								{id}
+							</label>
+						))}
+					</div>
+				)}
+			</fieldset>
+			<label className="rv-bfield">
+				<span className="rv-blabel">{t("boardFormTitle")}</span>
+				<input
+					type="text"
+					name="title"
+					value={title}
+					maxLength={BOARD_TITLE_MAX}
+					required
+					onChange={(e) => setTitle(e.target.value)}
+				/>
+			</label>
+			<label className="rv-bfield">
+				<span className="rv-blabel">{t("boardFormText")}</span>
+				<textarea
+					name="text"
+					value={text}
+					maxLength={BOARD_TEXT_MAX}
+					rows={6}
+					required
+					onChange={(e) => setText(e.target.value)}
+				/>
+				<span className="rv-meta">{t("boardFormCount", { n: text.length, max: BOARD_TEXT_MAX })}</span>
+			</label>
+			{error && (
+				<p className="rv-berr" role="alert">
+					{error}
+				</p>
+			)}
+			<div className="rv-acts">
+				<button type="submit" className="rv-act rv-bprimary" disabled={busy}>
+					{busy ? t("boardFormPosting") : t("boardFormPost")}
+				</button>
+				<button type="button" className="rv-act" disabled={busy} onClick={() => onDone("")}>
+					{t("boardFormCancel")}
+				</button>
+			</div>
+		</form>
+	);
+}
+
+/** Closing a post: an optional note ("pause lifted"), then Close post. */
+function BoardCloseForm({ post, onDone }: { post: UiBoardPost; onDone: (back: boolean) => void }) {
+	const t = useT();
+	const [note, setNote] = useState("");
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState("");
+	const ref = useRef<HTMLInputElement>(null);
+	useEffect(() => {
+		ref.current?.focus();
+	}, []);
+	const submit = async (e: FormEvent) => {
+		e.preventDefault();
+		if (busy) return;
+		setBusy(true);
+		setError("");
+		const res = await boardRequest({ type: "board_close", id: post.id, ...(note.trim() ? { note: note.trim() } : {}) });
+		setBusy(false);
+		if (!res.ok) {
+			setError(t("boardCloseFailed", { error: res.error ?? "" }));
+			return;
+		}
+		onDone(false);
+	};
+	return (
+		<form className="rv-bclose" onSubmit={submit}>
+			<label className="rv-bfield">
+				<span className="rv-blabel">{t("boardCloseNote")}</span>
+				<input
+					ref={ref}
+					type="text"
+					name="note"
+					value={note}
+					maxLength={BOARD_CLOSE_NOTE_MAX}
+					placeholder={t("boardCloseNoteHint")}
+					onChange={(e) => setNote(e.target.value)}
+				/>
+			</label>
+			{error && (
+				<p className="rv-berr" role="alert">
+					{error}
+				</p>
+			)}
+			<div className="rv-acts">
+				<button type="submit" className="rv-act rv-bprimary" disabled={busy}>
+					{t("boardCloseConfirm")}
+				</button>
+				<button type="button" className="rv-act" disabled={busy} onClick={() => onDone(true)}>
+					{t("boardFormCancel")}
+				</button>
+			</div>
+		</form>
 	);
 }

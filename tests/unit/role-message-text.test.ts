@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { BOARD_CUSTOM_TYPE, type BoardPostRecord, boardNote, boardOrderText } from "../../server/role-board.js";
 import { roleMessageText } from "../../server/role-messages.js";
 import {
 	messageRoleSentOf,
+	parseBoardNoteText,
+	parseBoardOrderText,
 	parseMessageRoleArgs,
 	parseRoleMessageText,
 	roleMessagePreview,
+	roleMessageRowText,
 	roleMessageViewOf,
 } from "../../web/src/role-message-text.js";
 
@@ -132,6 +136,106 @@ describe("role-message-fold: roleMessageViewOf", () => {
 		expect(roleMessageViewOf({ role: "toolResult" }, t)).toBeNull();
 		expect(roleMessageViewOf({ role: "user" }, "[Queue] Task #75: fold")).toBeNull();
 		expect(roleMessageViewOf({ role: "user" }, "just the owner typing")).toBeNull();
+	});
+});
+
+// board (task #76): a role chat's turn-start note about new posts (custom message "board") and an order the
+// board sent to a chat directly (a user message) fold like role messages. The texts come from the server's
+// own writers (server/role-board.ts), so the two sides can't drift apart.
+describe("board: notes and orders fold like role messages", () => {
+	const AT = Date.parse("2026-10-06T19:10:00Z");
+	const post = (over: Partial<BoardPostRecord> = {}): BoardPostRecord => ({
+		id: "bp-00c0ffee",
+		seq: 1,
+		at: AT,
+		from: "owner",
+		kind: "order",
+		to: ["backend", "frontend"],
+		title: "Pause new work",
+		text: "Finish what you have, **start nothing new**.",
+		...over,
+	});
+	const store = (posts: BoardPostRecord[]) => ({ epoch: "e1", seq: posts.length, posts });
+
+	it("reads an order sent directly: its id, the owner, the role that relayed it, the time, the body and the hint apart", () => {
+		const relayed = boardOrderText(
+			post({ via: "coo", ownerWords: "Telegram 12:25: pause new work" }),
+			"America/Los_Angeles",
+		);
+		const p = parseBoardOrderText(relayed);
+		expect(p).toEqual({
+			id: "bp-00c0ffee",
+			kind: "board-order",
+			from: "owner",
+			via: "coo",
+			what: "2026-10-06 12:10 PDT",
+			body: "**Pause new work**\n\nFinish what you have, **start nothing new**.\n\nOwner's words: Telegram 12:25: pause new work",
+			hint: expect.stringContaining('board ack bp-00c0ffee "<what you did>"'),
+		});
+		const own = parseBoardOrderText(boardOrderText(post(), "America/Los_Angeles"));
+		expect(own?.from).toBe("owner");
+		expect(own?.via).toBeUndefined();
+		expect(own?.body).toBe("**Pause new work**\n\nFinish what you have, **start nothing new**.");
+		// Not one: a broken header, a role message, or text that only starts the same way.
+		expect(parseBoardOrderText("[Board order bp-00c0ffee from owner]\n\nx")).toBeNull();
+		expect(parseBoardOrderText("[Board order bp-xyz from owner \u00b7 now]")).toBeNull();
+		expect(parseBoardOrderText(text({ kind: "request" }))).toBeNull();
+		// The folded row reads "Title: first words" (a title ending in punctuation keeps its own).
+		const row = (t: string) => roleMessagePreview(roleMessageRowText({ kind: "board-order", text: t }));
+		expect(row(own?.body ?? "")).toBe("Pause new work: Finish what you have, start nothing new.");
+		expect(row("**Ready?**\n\nSay so.")).toBe("Ready? Say so.");
+		expect(roleMessageRowText({ kind: "request", text: "**Bold** start" })).toBe("**Bold** start");
+	});
+
+	it("reads a turn-start note: its head and the posts, whatever it holds", () => {
+		const one = boardNote(store([post()]), { role: "backend", isHome: true, got: [] }, AT, "UTC");
+		const p = parseBoardNoteText(one!.text);
+		expect(p).toMatchObject({ id: "bp-00c0ffee", kind: "board", what: "1 new post" });
+		expect(p?.body).toContain("Order bp-00c0ffee \u00b7 from owner");
+		expect(p?.body).toContain('board ack bp-00c0ffee "<what you did>"');
+
+		// Two new posts and one that ended since the chat saw it; then only the ended one.
+		const closed = post({ id: "bp-0000dead", seq: 1, closed: { at: AT + 60_000, by: "owner", note: "pause lifted" } });
+		const two = [
+			closed,
+			post({ id: "bp-00000002", seq: 2, kind: "news", title: "Deploy at 15:00", text: "FYI." }),
+			post({ id: "bp-00000003", seq: 3 }),
+		];
+		const mark = { v: 1 as const, epoch: "e1", upTo: 1, open: ["bp-0000dead"] };
+		const both = boardNote(store(two), { role: "backend", isHome: true, mark, got: [] }, AT, "UTC");
+		expect(parseBoardNoteText(both!.text)?.what).toBe("2 new posts, 1 ended");
+		const endedOnly = boardNote(store([closed]), { role: "backend", isHome: true, mark, got: [] }, AT, "UTC");
+		expect(parseBoardNoteText(endedOnly!.text)).toMatchObject({
+			id: "bp-0000dead",
+			kind: "board",
+			what: "1 post ended",
+		});
+
+		expect(parseBoardNoteText("[Board] whatever")).toBeNull();
+		expect(parseBoardNoteText("[Board]")).toBeNull();
+	});
+
+	it("roleMessageViewOf: a 'board' note and an order sent directly fold; other messages stay as they are", () => {
+		const note = boardNote(store([post()]), { role: "backend", isHome: false, got: [] }, AT, "UTC")!.text;
+		expect(roleMessageViewOf({ role: "custom", customType: BOARD_CUSTOM_TYPE }, note)).toMatchObject({
+			id: "bp-00c0ffee",
+			kind: "board",
+			what: "1 new post",
+			stamped: true,
+		});
+		const order = boardOrderText(post({ via: "coo", ownerWords: "his words" }), "UTC");
+		expect(roleMessageViewOf({ role: "user" }, order)).toMatchObject({
+			id: "bp-00c0ffee",
+			kind: "board-order",
+			from: "owner",
+			via: "coo",
+			stamped: true,
+		});
+		// Only the server's own kinds: an assistant quoting an order, or a note in another custom type, stay.
+		expect(roleMessageViewOf({ role: "assistant" }, order)).toBeNull();
+		expect(roleMessageViewOf({ role: "custom", customType: "role-message" }, note)).toBeNull();
+		expect(roleMessageViewOf({ role: "custom", customType: BOARD_CUSTOM_TYPE }, "[Board] hello")).toBeNull();
+		expect(roleMessageViewOf({ role: "user" }, "[Board] 1 new post\n\nthe owner typing this")).toBeNull();
 	});
 });
 

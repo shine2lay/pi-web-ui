@@ -114,6 +114,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | role-message-fold            | `local` | `web/src/role-message-text.ts` (new), `components/RoleMessageRow.tsx` (new), `Message.tsx`, `ToolCallBlock.tsx`, `CollapsedMessage.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `docs/roles-overview.md`, `tests/role-message-fold-test.mjs` (new), `tests/unit/role-message-text.test.ts` (new) |
 | telegram-coo                 | `local` | `server/role-replies.ts` (new), `roles-overview-tool.ts` (new), `agent-service.ts` (turn records, `sendToRole`), `index.ts`, `plugins.ts` (`host.roles`), `plugin-manifest-validate.ts`, `plugin-api-catalog.ts`, `tool-manager.ts`, `plugin-sdk/`, `plugins/telegram/` (0.2.0), `docs/architecture-plugins.md`, `docs/roles-overview.md`, `tests/telegram-coo-test.mjs` (new), `tests/unit/` |
 | queue-paused                 | `local` | `server/task-queue.ts`, `queue-blocks.ts`, `role-messages.ts`, `agent-service.ts` (`noteToPausedTaskChat`, carry-on, plugin notes), `index.ts` (scheduler), `roles-overview.ts`, `roles-overview-tool.ts`, `protocol.ts`, `protocol-version.ts` (44), `web/src/components/TaskQueuePanel.tsx`, `RolesView.tsx`, `Message.tsx`, `roles-view-model.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `roles-view.css`, `docs/roles-overview.md`, `tests/queue-paused-test.mjs` (new), `tests/unit/`; paired with pi-queue |
+| role-board                   | `local` | `server/role-board.ts` (new), `board-tool.ts` (new), `agent-service.ts` (turn-start note, steer, direct turn), `index.ts`, `role-messages.ts`, `role-message-tool.ts`, `roles-overview.ts`, `roles-overview-tool.ts`, `identity-config.ts`, `tool-manager.ts`, `protocol.ts`, `protocol-version.ts` (45), `web/src/components/RolesView.tsx`, `RoleMessageRow.tsx`, `Message.tsx`, `roles-view-model.ts`, `roles-state.ts`, `role-message-text.ts`, `exchange-fold.ts`, `use-chat.ts`, `roles-view.css`, `i18n.tsx`, `locales/*.json`, `docs/board.md` (new), `docs/roles-overview.md`, `tests/board-test.mjs` (new), `tests/unit/role-board.test.ts` (new), `tests/unit/`; paired with pi-identity |
 
 ---
 
@@ -5530,3 +5531,107 @@ queue doesn't lift a task's own pause. Stop, Auto start and Auto approve keep th
 - The quiet delivery hooks `deliverRoleMessage`, the scheduler executor, the plugin prompt paths and
   `carryOnAfterRestart`; if a new path starts turns in other chats, check `taskChatPaused` there too.
 - The mirror must keep pi-queue's clock shifts (`unhold`); the replay comparison test catches drift.
+
+## role-board
+
+**Status**: `local`
+**Baseline**: v0.96.1 (on top of `role-messages`, `roles-overview`, `telegram-coo`, `role-message-fold`, `queue-paused`)
+
+**Why** (owner on Telegram, 2026-10-06 ~12:25 PDT, queue task #76, via COO rm-ef861b36): "Lets create a
+message board that everyone can check, instead of poking the same message to all roles that needs to
+read it. Have one place where the roles can read it. Unless its a direct requests. Those should go
+directly." His routing rule (~12:35, rm-c4989975): "If the role has something waiting then the message
+should go directly to them. Because something needs to poke it to wake its session otherwise general info
+should be put in the message board". That day his pause and focus orders (07:20, 07:25, 10:30) each went
+to 5-6 roles as separate requests: each started a turn and each role answered separately. Asked whether
+the board may live in pi-web-ui although AGENTS.md rule 13 keeps team work out of it, he chose "Yes, chat
+app, this wording": rule 13 gets an exception line for the Board and his routing line (added at install).
+
+### Changes
+
+1. **The store** (`server/role-board.ts` new): `<dataDir>/role-board.json`, written atomically like
+   `role-messages.json` (keeps 1,000, oldest closed first; the page gets the newest 200). A post: id
+   `bp-<8 hex>`, `from` "owner" or a role (`via` when a role relays the owner, as COO does), kind
+   `order` | `news`, `to` "all" or role ids, title (100) and Markdown text (2,000), `ownerWords` (required
+   on an order a role posts), `sent {role: {at, how: steer|turn}}`, `closed {at, by, note}`, `reads`,
+   `done {role: {at, note}}`. A role may post 10 an hour; orders only with the owner's words.
+2. **Routing by the owner's rule** (`routeOrder`, `boardRoleStateOf`): posting wakes nobody by itself.
+   News never pokes anyone. An order goes directly only to each listed role that has something waiting,
+   checked when it is posted from the Roles page's own data: (a) one of its chats is mid-turn, (b) an
+   open task in its queue (anything not done or removed, paused ones too), (c) a request or question to
+   it not yet answered. (a): one steer into each mid-turn chat (`ClientSession.midTurnRoleChats`,
+   `steerChat`: only while that turn still runs, so a steer never starts one). (b) or (c) with its home
+   chat not mid-turn: one "[Board order <id> from <poster> (via <relay>) · <time>]" turn there, through
+   the path role requests use (`sendRoleMessage`, cause "role", so `telegram-coo` keeps it off
+   Telegram): opened in the background, busy means try again (every 3 s, up to 3 sends, gives up after
+   24 h), exactly once (the transcript is checked before each try). Not stored as a role request, asks
+   for no reply, ends with the ack line. The rest see it at their next turn.
+3. **What a chat sees** (`agent-service.ts`, inline extension `pi-webui-board`, `before_agent_start`):
+   at the start of a role chat's turn, the posts it hasn't seen are one shown custom message "board"
+   ("[Board] N new posts[, M ended]"), saved in the transcript; the system prompt is left alone (prompt
+   cache). Its details carry the chat's "seen up to" mark, so it survives reloads. Orders in every chat
+   of the listed roles, in full, ending "When you have acted on it: board ack <id> "<what you did>"";
+   news only in the role's home chat (all its chats without one), cut at about 600 characters with
+   "board read <id>" for the rest. A chat's first turn (no mark) sees open orders, and in a home chat
+   news from the last 3 days. An order a chat got directly counts as seen there; a post closed after a
+   chat saw it shows there once as ended. A role's read time is its first chat's sight. A held task's
+   chat (`queue-paused`) sees the posts when it resumes.
+4. **The `board` tool** (`server/board-tool.ts` new; `tool-manager.ts`; in `DEFAULT_ALWAYS_ALLOW` like
+   notebook, `identity-config.ts`; role-only in pi-identity like message_role): read (open posts for the
+   role, or one in full), post, ack (once per role per order, a second replaces the note; nothing goes to
+   the poster), close (the author or the owner, with a note). Its description gives the owner's routing
+   rule and when to post news or an order.
+5. **message_role** (`role-message-tool.ts`, `role-messages.ts`): its description gives the routing rule
+   and says to post general info for several roles on the board; when the same text went to 3 or more
+   roles within 10 minutes its result adds a one-line hint (the message is still sent). fyi unchanged.
+6. **roles_overview** (`roles-overview.ts`, `roles-overview-tool.ts`): a "Board:" line with the open
+   orders and who hasn't done each; per role, the open orders it hasn't marked done.
+7. **The Board view** (`RolesView.tsx`, `roles-view-model.ts`, `roles-state.ts`, `roles-view.css`,
+   `i18n.tsx`, `locales/*.json`; ws `board_post`/`board_close` -> `board_result`, only from the page's
+   own socket; protocol 45): a third switch "Board (n)" beside Now and 6 am reports. Each post: kind
+   chip, title, from/via, time, to, the text drawn with `Markdown` (folded after about 6 lines); an
+   order shows "Done n/m" and per role a tick and note, or not done, and whether it got the order
+   directly (a turn in its home chat, or its running turn) or on the board (read or not yet); news shows
+   who read it. Close (with a note) on open posts; closed posts in a fold. "New post": kind, to (All
+   roles or picked roles), title, text. A role's panel lists its open orders not done; a click opens
+   the Board at that post. On a phone the view switch takes a row of its own.
+8. **Folding in chats** (`role-message-text.ts`, `RoleMessageRow.tsx`, `Message.tsx`, `exchange-fold.ts`):
+   "[Board]" notes and "[Board order]" messages fold to one row like role messages (`role-message-fold`):
+   "From the board · 2 new posts" and "From owner · Board order · Title: first words". The note stays
+   under its prompt (like an attachment) instead of hiding in the turn's steps.
+9. Nothing new on Telegram: the owner tells COO, and COO posts with his words. `pi-backup` already
+   covers the whole `~/.pi-web-ui` folder (`role-board.json` included, like `role-messages.json`).
+
+### How it was checked
+
+- `tests/unit/role-board.test.ts` (new, 37): the routing rule for (a), (b), (c) and none; posting an
+  order (one steer per mid-turn chat, one direct turn, retries while busy, exactly once, give-up, the
+  sent record); who posts what (ownerWords on role orders, rate, rule-14 wording); what a chat sees
+  (orders in every chat, news in home chats only, first-turn window, cuts, got-directly counts as seen,
+  ended once, read times); the mark from a transcript; ack replacing the note, close; the store; the
+  tool. Plus `role-messages.test.ts` (same-text recipients), `roles-overview-tool.test.ts` (open
+  orders), `roles-view.test.ts` (the Board view's model and markup), `role-message-text.test.ts`
+  (board notes and orders fold), `exchange-fold.test.ts` (the note stays under its prompt),
+  `identity-config.test.ts`, `tool-registration.test.ts`.
+- `tests/board-test.mjs` (new, 56 checks, sealed: the real pi-identity, a scripted model, a real
+  browser): the owner posts an order from the Board view to alpha (an open queue task, idle home chat),
+  beta (only a running turn) and gamma (nothing waiting): alpha's home chat gets exactly one "[Board
+  order]" turn, beta exactly one steer and no new turn, gamma nothing (its transcript unchanged), and
+  the card says who got it how; news to the same roles while beta runs starts no turn and no steer;
+  gamma's next turn has exactly one "[Board]" note with the order and its ack line and the news; the
+  tool is offered in role chats and not without a role; gamma's ack shows a tick and its note ("Done
+  1/3"); roles_overview lists the order for the roles not done; alpha's panel lists it and opens the
+  Board at it; close shows "ended" once in each chat that saw it; the chat view folds both; axe (nothing
+  serious or critical) and no sideways scroll in dark and white, desktop and phone; no page error.
+  Screenshots with `BOARD_SHOT=<dir>`.
+- On the code before it the new unit files fail (no board) and the E2E fails at its first wait (no
+  Board switch).
+
+### When syncing
+
+- The note rides on `before_agent_start` messages (pi SDK: a returned `message` is saved and sent after
+  the prompt); if that changes, the note must still be saved and the system prompt left alone.
+- If `roleMessageHeader` or the order header in `role-board.ts` (`boardOrderText`) change, change
+  `parseBoardOrderText` / `parseBoardNoteText` with them (their unit tests build the text with the
+  server's functions).
+- The direct turn reuses `sendRoleMessage`; if role requests get another delivery path, move this too.

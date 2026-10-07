@@ -37,6 +37,10 @@ table. Patch: `roles-overview` in [PATCHES.md](../PATCHES.md).
 - **6 am reports** (the switch at the top, on the phone and the desktop): only the roles the 6 am job
   asks, each with its Goal in a few lines (a tap anywhere on the card opens the whole report) or the
   reason there is none.
+- **Board** (the third switch, with the number of open posts): the roles' board, news and the owner's
+  orders for several roles in one post each. Who read each post, who got an order directly, who has
+  done it (with their notes); the owner posts and closes from here. A role's panel lists its open
+  orders not yet done. See [board.md](board.md).
 
 Status, strongest first:
 
@@ -135,6 +139,8 @@ in a line. `{ role: "<id>" }` gives one role in full (every TL;DR line the page 
 to start, the whole report). Times are Pacific. Output is capped (24,000 characters; 300 per part,
 200 per line in short). On a busy day the details shrink together so every role still fits in
 one call. An unknown role is a plain error naming the roles. It reads nothing the page doesn't.
+With posts on the board it adds a "Board:" line (the open orders and who hasn't done each) and, per
+role, the open orders it hasn't marked done.
 
 ## Role messages in a chat (folded)
 
@@ -145,7 +151,9 @@ What is open is kept while the page is open, nowhere else. The Ctrl+F search ope
 searches. `message_role` calls are folded too, even with the tool-details switch on: "To <role> ·
 <kind> · first words" and the id it was sent (or held) under. Display only: the model and the
 transcript get the full text. On Telegram, turns that role messages start never reach the owner,
-except COO's answers to his own questions (telegram-coo).
+except COO's answers to his own questions (telegram-coo). The board's turn-start notes ("From the
+board · 2 new posts") and orders sent directly ("From owner · Board order · Title: first words")
+fold the same way (role-board).
 
 ## Tests
 
@@ -159,3 +167,4 @@ except COO's answers to his own questions (telegram-coo).
   role, the report states, the cap).
 - `tests/unit/role-message-text.test.ts`, `tests/role-message-fold-test.mjs`: folded role messages and
   message_role cards in a chat (both themes, phone and desktop, Ctrl+F, axe).
+- `tests/unit/role-board.test.ts`, `tests/board-test.mjs`: the board (see [board.md](board.md)).

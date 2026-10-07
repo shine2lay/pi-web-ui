@@ -27,7 +27,6 @@ import type {
 	UiContentBlock,
 	UiImageBlock,
 	UiMessage,
-	UiRoleMessage,
 	UiTextBlock,
 	UiThinkingBlock,
 	UiToolCallBlock,
@@ -1517,8 +1516,13 @@ function CompactionCard({
 }
 
 /** role-messages: the chat's label for a role message, e.g. "from ops (Queue #58) \u00b7 fyi". */
-export function roleMessageLabel(m: UiRoleMessage, t: Translate): string {
+export function roleMessageLabel(m: RoleMessageView, t: Translate): string {
 	if (m.kind === "report") return t("roleReportLabel", { date: m.reportDate ?? "?" });
+	// board (task #76): the turn-start note and an order sent directly.
+	if (m.kind === "board") return t("boardNoteLabel", { what: m.what ?? "" });
+	if (m.kind === "board-order") {
+		return m.via ? t("boardOrderLabelVia", { from: m.from, via: m.via }) : t("boardOrderLabel", { from: m.from });
+	}
 	const kind = m.kind === "reply" && m.replyTo ? t("roleMessageReplyKind", { id: m.replyTo }) : m.kind;
 	return t("roleMessageLabel", { from: m.from, chat: m.fromChat, kind });
 }
@@ -1551,7 +1555,23 @@ function RoleMessageCard({
 			<span className="chead-icon rolemsg-icon">
 				<FiMessageSquare />
 			</span>
-			{m.kind === "report" ? (
+			{m.kind === "board" || m.kind === "board-order" ? (
+				// board (task #76): the turn-start note, or an order the board sent directly.
+				<>
+					<span className="chead-title rolemsg-title">
+						{m.kind === "board"
+							? t("boardNoteCardTitle", { what: m.what ?? "" })
+							: t("boardOrderCardTitle", { id: m.id })}
+					</span>
+					<span className="rolemsg-from">
+						{m.kind === "board"
+							? t("boardNoteCardFrom")
+							: m.via
+								? t("boardOrderCardFromVia", { from: m.from, via: m.via, when: m.what ?? "" })
+								: t("boardOrderCardFrom", { from: m.from, when: m.what ?? "" })}
+					</span>
+				</>
+			) : m.kind === "report" ? (
 				// role-reports: the app's 6 am report request (not from a role).
 				<>
 					<span className="chead-title rolemsg-title">{t("roleReportCardTitle", { date: m.reportDate ?? "?" })}</span>

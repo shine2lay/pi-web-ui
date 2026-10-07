@@ -279,6 +279,18 @@ import { extractTouches, formatTouchesCompact, intersectTouches } from "./conver
 import { ClaimStore, matchClaims, mergeTouchSidecar, readTouchSidecar, removeTouchSidecar } from "./claim-store.js";
 import { makeClaimFilesTool, type ClaimFilesHost } from "./claim-files-tool.js";
 import { makeMessageRoleTool, type MessageRoleHost } from "./role-message-tool.js";
+import { makeBoardTool } from "./board-tool.js";
+import {
+	BOARD_CUSTOM_TYPE,
+	boardChatState,
+	boardOrderIdOf,
+	boardRoleStateOf,
+	RoleBoard,
+	type BoardChangeResult,
+	type BoardPostInput,
+	type BoardPostResult,
+	type BoardRoleState,
+} from "./role-board.js";
 import { QueueBlocks } from "./queue-blocks.js";
 import {
 	chatLabel,
@@ -1828,6 +1840,8 @@ function fullAt(conv: Conversation, idx: ChatIndex, i: number): UiMessage {
 
 /** role-messages: the server's role message service (AgentService sets it; null in other engines). */
 let roleMessageService: RoleMessages | null = null;
+/** board: the roles' shared board (AgentService sets it; null in other engines). */
+let roleBoardService: RoleBoard | null = null;
 /** telegram-coo: AgentService hears each run that settles in a chat (role-replies.ts); null until it is made. */
 let roleTurnSettled: ((file: string, rec: RoleTurnRecord) => void) | null = null;
 /** telegram-coo: the Roles page's snapshot for the roles_overview tool (AgentService.readRolesOverview). */
@@ -3799,6 +3813,99 @@ export class ClientSession {
 		};
 	}
 
+	/** board (task #76): the "[Board]" note for the turn about to start in this runtime's chat: a role chat
+	 *  (not a helper chat) with posts it hasn't seen, or posts it saw that have ended since. Its mark is its
+	 *  newest note's details; orders it got directly since (a steer, a direct turn, this turn's own prompt)
+	 *  count as seen. Nothing for any other chat, or when the board is empty. */
+	private boardTurnNote(
+		ownerId: string | undefined,
+		prompt: string,
+	):
+		| {
+				message: {
+					customType: string;
+					content: { type: "text"; text: string }[];
+					display: boolean;
+					details: unknown;
+				};
+		  }
+		| undefined {
+		const board = roleBoardService;
+		if (!board || board.empty) return undefined;
+		try {
+			const conv =
+				(ownerId ?? "").trim() !== "" ? this.convs.get(ownerId!.trim()) : (this.convs.get(this.activeId) ?? this.conv);
+			if (!conv || conv.isSubagent) return undefined;
+			const identity = this.identityOf(conv);
+			if (!identity) return undefined;
+			const file = conv.session.sessionFile;
+			const def = identityRegistry().identities.find((i) => i.id === identity.id);
+			// News shows only in a role's home chat; a role that has none gets it in all its chats.
+			const isHome = def?.homeChat ? !!file && samePath(def.homeChat, file) : true;
+			const state = boardChatState(conv.session.sessionManager.getBranch());
+			const own = boardOrderIdOf(prompt);
+			const got = own && !state.got.includes(own) ? [...state.got, own] : state.got;
+			const note = board.turnNote({ role: identity.id, isHome, ...(state.mark ? { mark: state.mark } : {}), got });
+			if (!note) return undefined;
+			return {
+				message: {
+					customType: BOARD_CUSTOM_TYPE,
+					content: [{ type: "text", text: note.text }],
+					display: true,
+					details: note.details,
+				},
+			};
+		} catch (err) {
+			console.warn(`[board] couldn't make a turn's note: ${(err as Error).message}`);
+			return undefined;
+		}
+	}
+
+	/** board: the role chats in this server whose turn is running now (a steer reaches them), by role.
+	 *  Helper chats (subagents) are left out. */
+	static midTurnRoleChats(): Map<string, string[]> {
+		const out = new Map<string, string[]>();
+		for (const c of ClientSession.sharedConvs.values()) {
+			if (c.isSubagent) continue;
+			try {
+				if (!c.session.isStreaming) continue;
+				const file = c.session.sessionFile;
+				const role = file ? ClientSession.identityOfConv(c)?.id : undefined;
+				if (!file || !role) continue;
+				const files = out.get(role) ?? [];
+				if (!files.some((f) => samePath(f, file))) files.push(file);
+				out.set(role, files);
+			} catch {
+				// a chat whose runtime is being replaced right now: skipped
+			}
+		}
+		return out;
+	}
+
+	/** board: steer this text into the running turn of the chat with this transcript; the turn takes it before
+	 *  its next model call and it shows as a user message. false = no turn runs there now: nothing is sent (a
+	 *  steer never starts a turn). */
+	static async steerChat(file: string, text: string): Promise<boolean> {
+		let abs: string;
+		try {
+			abs = resolve(file);
+		} catch {
+			return false;
+		}
+		for (const c of ClientSession.sharedConvs.values()) {
+			if (c.isSubagent) continue;
+			try {
+				const f = c.session.sessionFile;
+				if (!f || resolve(f) !== abs) continue;
+				if (!c.session.isStreaming) return false;
+				return (await c.session.steer(text, undefined, { source: "extension" })) !== "handled";
+			} catch {
+				return false;
+			}
+		}
+		return false;
+	}
+
 	/** compact_context 工具的数据宿主：提供消息统计用于预检，以及注册 pending 压缩请求。
 	 *  ownerId 语义同 skill / claimFiles（本 runtime 所属会话，不是派发瞬间 active）。 */
 	private compactContextHost(ownerId?: string): CompactContextHost {
@@ -4480,6 +4587,16 @@ export class ClientSession {
 						// fast-mode: ChatGPT's fast tier for chats with "⚡ Fast" on (openai-codex only),
 						// normal speed for 15 minutes after a refusal. State lives in fastModeRegistry.
 						{ name: FAST_MODE_EXT_NAME, hidden: true, factory: fastModeExtension() },
+						// board (task #76): a role chat's new posts on the roles' board, as one "[Board]" note at the
+						// start of a turn: a shown custom message saved in its transcript (its details are the chat's
+						// "seen up to" mark). It returns no system prompt, so the prompt and its cache stay as they are.
+						{
+							name: "pi-webui-board",
+							hidden: true,
+							factory: (pi) => {
+								pi.on("before_agent_start", (event) => this.boardTurnNote(ownerId, event.prompt));
+							},
+						},
 					],
 				},
 			});
@@ -4676,6 +4793,12 @@ export class ClientSession {
 					// role-messages: message another role's chat. Registered everywhere; pi-identity offers it only
 					// in chats with a role, and it refuses chats without one and helper chats (subagents).
 					makeMessageRoleTool(this.roleMessageHost(ownerId)),
+					// board: the roles' shared board. Like message_role: registered everywhere, offered by pi-identity
+					// only in chats with a role; the poster is this chat's role as the server knows it.
+					makeBoardTool({
+						service: () => roleBoardService ?? undefined,
+						sender: () => this.roleMessageHost(ownerId).sender(),
+					}),
 					// telegram-coo: every role's state in one call, read-only (the Roles page's snapshot as text).
 					makeRolesOverviewTool({
 						read: () =>
@@ -6933,6 +7056,11 @@ export class ClientSession {
 	 *  goes back from the leaf and stops at the first identity entry or at the leaf it saw last time, so an
 	 *  ordinary append looks only at the new entries. The cache lives on the Conversation (all windows). */
 	private identityOf(conv: Conversation): UiChatIdentity | undefined {
+		return ClientSession.identityOfConv(conv);
+	}
+
+	/** identities: identityOf for any loaded chat (board: the role chats mid-turn). */
+	private static identityOfConv(conv: Conversation): UiChatIdentity | undefined {
 		const { identities } = identityRegistry();
 		if (identities.length === 0) return undefined;
 		let onBranch = conv.identityCache?.onBranch;
@@ -15038,6 +15166,19 @@ export class AgentService {
 			log: (line) => console.log(line),
 		});
 		roleMessageService = this.roleMessages;
+		// board (task #76): the roles' shared board. Posting wakes nobody by itself; an order goes directly
+		// to the listed roles that have something waiting (the owner's rule, role-board.ts). Its direct turns
+		// go the way role requests do; they start with startRoleMessages.
+		this.roleBoard = new RoleBoard(join(this.stateStore.dataDir, "role-board.json"), {
+			roles: () => identityRegistry().identities,
+			roleStates: (roles) => this.boardRoleStates(roles),
+			steer: (file, text) => ClientSession.steerChat(file, text),
+			chatState: (file) => this.queueChatState(file).state,
+			deliver: (file, text) => this.sendRoleMessage(file, text, { cause: "role" }),
+			changed: () => this.onBoardChanged?.(),
+			log: (line) => console.log(line),
+		});
+		roleBoardService = this.roleBoard;
 		// telegram-coo: a role home chat's replies go to the plugins; roles_overview reads the Roles page.
 		roleTurnSettled = (file, rec) => this.roleTurnSettled(file, rec);
 		rolesOverviewSource = () => this.readRolesOverview();
@@ -15053,9 +15194,45 @@ export class AgentService {
 	/** index.ts: the list in Settings -> Identities changed (it is pushed to every window). */
 	onRoleMessagesChanged: (() => void) | null = null;
 
-	/** role-messages: start delivering (index.ts, once the chats a restart cut off are carried on). */
+	/** role-messages: start delivering (index.ts, once the chats a restart cut off are carried on). The
+	 *  board's direct turns start with them. */
 	startRoleMessages(): void {
 		this.roleMessages.start();
+		this.roleBoard.start();
+	}
+
+	// -----------------------------------------------------------------------
+	// board (task #76): the roles' shared board (role-board.ts)
+	// -----------------------------------------------------------------------
+
+	private readonly roleBoard: RoleBoard;
+	/** index.ts: the board changed (the Roles page follows it). */
+	onBoardChanged: (() => void) | null = null;
+
+	/** board: the listed roles' state when an order is posted, which decides whether it goes to them
+	 *  directly (the owner's rule): the Roles page's data (queues, requests not yet answered) and the chats
+	 *  whose turn runs in this server. */
+	private async boardRoleStates(roles: string[]): Promise<Map<string, BoardRoleState>> {
+		const overview = await this.readRolesOverview();
+		const running = ClientSession.midTurnRoleChats();
+		const identities = identityRegistry().identities;
+		const out = new Map<string, BoardRoleState>();
+		for (const role of roles) {
+			const home = identities.find((i) => i.id === role)?.homeChat ?? undefined;
+			const r = overview.roles.find((x) => x.id === role);
+			out.set(role, boardRoleStateOf(role, r, home, running.get(role) ?? []));
+		}
+		return out;
+	}
+
+	/** board: the owner posts from the Roles page (the page's socket is his). */
+	boardPost(input: BoardPostInput): Promise<BoardPostResult> {
+		return this.roleBoard.post({ owner: true }, input);
+	}
+
+	/** board: the owner closes a post from the Roles page. */
+	boardClose(id: unknown, note: unknown): BoardChangeResult {
+		return this.roleBoard.close({ owner: true }, id, note);
 	}
 
 	/** role-messages: Settings -> Identities -> Role messages (the last 100, newest first). */
@@ -15097,6 +15274,8 @@ export class AgentService {
 				asks: () => askHub.list(),
 				openRequestsTo: (role) => this.roleMessages.openRequestsTo(role),
 				latestReportTo: (role) => this.roleMessages.latestReportTo(role),
+				board: () => this.roleBoard.view(),
+				boardOrdersOf: (role) => this.roleBoard.openOrdersOf(role),
 				rolePaused: () => this.roleMessages.paused,
 				sessionRoots: () =>
 					[process.env.PI_CODING_AGENT_SESSION_DIR, join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "sessions")]
@@ -16802,6 +16981,8 @@ export class AgentService {
 	async disposeAll(): Promise<void> {
 		this.roleMessages.stop();
 		if (roleMessageService === this.roleMessages) roleMessageService = null;
+		this.roleBoard.stop();
+		if (roleBoardService === this.roleBoard) roleBoardService = null;
 		this.participants.dispose();
 		ClientSession.participantRetained = undefined;
 		this.uninstallQueueHost?.();

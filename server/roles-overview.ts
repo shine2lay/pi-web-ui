@@ -22,7 +22,9 @@ import { goalEnded, type RoleGoal, type WorkMode } from "./identity-config.js";
 import { samePath, type IdentityDef } from "./identities.js";
 import type {
 	ServerMessage,
+	UiBoard,
 	UiRoleAsk,
+	UiRoleBoardOrder,
 	UiRoleChatRef,
 	UiRoleGoal,
 	UiRoleOverview,
@@ -589,6 +591,10 @@ export interface RolesOverviewHost {
 		  }
 		| undefined;
 	rolePaused(): boolean;
+	/** board (task #76): the roles' shared board for the page (absent: none in this app). */
+	board?(): UiBoard;
+	/** board: a role's open orders it hasn't marked done. */
+	boardOrdersOf?(role: string): UiRoleBoardOrder[];
 	/** The folders transcripts may be in. */
 	sessionRoots(): string[];
 	/** role-reports' runs.json and the scheduler's jobs.json. */
@@ -639,7 +645,20 @@ export class RolesOverviewReader {
 		}
 		this.scans.retain(keep);
 		const all = roles.flatMap((r) => r.asks);
-		return { at, roles, asks: sortAsks(all), paused: this.host.rolePaused(), reportTz: REPORT_TZ };
+		let board: UiBoard | undefined;
+		try {
+			board = this.host.board?.();
+		} catch {
+			board = undefined;
+		}
+		return {
+			at,
+			roles,
+			asks: sortAsks(all),
+			paused: this.host.rolePaused(),
+			reportTz: REPORT_TZ,
+			...(board ? { board } : {}),
+		};
 	}
 
 	private async role(
@@ -855,6 +874,12 @@ export class RolesOverviewReader {
 		}
 
 		const requests = this.host.openRequestsTo(def.id);
+		let boardOrders: UiRoleBoardOrder[] = [];
+		try {
+			boardOrders = this.host.boardOrdersOf?.(def.id) ?? [];
+		} catch {
+			problems.push("board");
+		}
 		const homeBusy = home ? this.host.chatState(home) === "working" : false;
 		const sortedAsks = sortAsks(asks);
 		const status = statusOf({
@@ -883,6 +908,7 @@ export class RolesOverviewReader {
 			...(queue ? { queue } : {}),
 			requests: { open: requests.open, ...(requests.newest ? { newest: requests.newest } : {}) },
 			report,
+			...(boardOrders.length ? { boardOrders } : {}),
 			...(problems.length ? { problems } : {}),
 		};
 	}

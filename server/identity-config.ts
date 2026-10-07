@@ -161,7 +161,15 @@ export const DEFAULT_TOOL_GROUPS: Readonly<Record<string, readonly string[]>> = 
 	browser: ["browser_*"],
 };
 
-export const DEFAULT_ALWAYS_ALLOW: readonly string[] = ["notebook", "tldr", "queue_done", "queue_stuck", "queue_wait", "message_role"];
+export const DEFAULT_ALWAYS_ALLOW: readonly string[] = [
+	"notebook",
+	"tldr",
+	"queue_done",
+	"queue_stuck",
+	"queue_wait",
+	"message_role",
+	"board",
+];
 
 export const SETTINGS_FIELDS = ["notebookCap", "tidyAt", "indexBudget", "notesDir", "toolGroups", "alwaysAllow", "roleSkillsDir"] as const;
 

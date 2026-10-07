@@ -1,7 +1,7 @@
 import { memo, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { FiMail } from "react-icons/fi";
 import { useT, type Translate } from "../i18n";
-import { roleMessagePreview, type RoleMessageView } from "../role-message-text";
+import { roleMessagePreview, roleMessageRowText, type RoleMessageView } from "../role-message-text";
 
 /**
  * role-message-fold (owner 2026-10-06: "Make the agent to agent messages collapsed by default"):
@@ -50,12 +50,18 @@ export function useFocusAfterToggle(msgId: string, ref: { current: HTMLElement |
 
 /** The row's "From ..." label. */
 export function roleMessageFrom(m: RoleMessageView, t: Translate): string {
-	return m.kind === "report" ? t("roleMessageFoldApp") : t("roleMessageFoldFrom", { from: m.from || "?" });
+	if (m.kind === "report") return t("roleMessageFoldApp");
+	// board (task #76): the turn-start note comes from the board; an order from its poster.
+	if (m.kind === "board") return t("roleMessageFoldBoard");
+	if (m.kind === "board-order" && m.via) return t("roleMessageFoldFromVia", { from: m.from || "?", via: m.via });
+	return t("roleMessageFoldFrom", { from: m.from || "?" });
 }
 
 /** The row's kind word. */
 export function roleMessageKindWord(m: RoleMessageView, t: Translate): string {
 	if (m.kind === "report") return t("roleMessageFoldReport", { date: m.reportDate ?? "?" });
+	if (m.kind === "board") return m.what ?? "";
+	if (m.kind === "board-order") return t("roleMessageFoldBoardOrder");
 	if (m.kind === "reply" && m.replyTo) return t("roleMessageReplyKind", { id: m.replyTo });
 	return m.kind;
 }
@@ -83,7 +89,7 @@ export const RoleMessageRow = memo(function RoleMessageRow({
 	useFocusAfterToggle(msgId, ref);
 	const from = roleMessageFrom(view, t);
 	const kind = roleMessageKindWord(view, t);
-	const preview = roleMessagePreview(view.text);
+	const preview = roleMessagePreview(roleMessageRowText(view));
 	return (
 		<div
 			className={`rolemsg-row rolemsg-${view.kind}${view.stamped ? "" : " rolemsg-unstamped"}`}

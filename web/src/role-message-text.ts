@@ -8,13 +8,20 @@
  * Pure and dependency-free, so tests/unit can import it.
  */
 
-export type ParsedRoleMessageKind = "question" | "request" | "fyi" | "reply" | "report";
+/** board (task #76): "board" is a role chat's turn-start note about new posts on the roles' board (a
+ *  custom message "board"); "board-order" is an order the board sent to the chat directly (a steer into a
+ *  running turn, or a turn of its own). Both fold like role messages. */
+export type ParsedRoleMessageKind = "question" | "request" | "fyi" | "reply" | "report" | "board" | "board-order";
 
 export interface ParsedRoleMessage {
 	id: string;
 	kind: ParsedRoleMessageKind;
-	/** Sending role id (absent for the 6 am report, which the app sends). */
+	/** Sending role id (absent for the 6 am report, which the app sends; "owner" or a role for a board order). */
 	from?: string;
+	/** A board order the owner gave through a role (COO): that role. */
+	via?: string;
+	/** A board note's head ("2 new posts, 1 ended"); a board order's time. */
+	what?: string;
 	/** Sending role's title, as the header gives it. */
 	title?: string;
 	/** Sending chat's title, as the header gives it. */
@@ -42,6 +49,55 @@ const HINT_STARTS = [
 	"(Answer it once, with message_role",
 	"(A request: do it if",
 ];
+
+const BOARD_ORDER_RE =
+	/^\[Board order (bp-[0-9a-f]{8}) from ([a-z0-9][a-z0-9._-]*)(?: \(via ([a-z0-9][a-z0-9._-]*)\))? \u00b7 ([^\]]+)\]$/;
+/** "[Board] 2 new posts", "[Board] 1 new post, 1 ended", "[Board] 2 posts ended" (role-board.ts boardNote). */
+const BOARD_NOTE_RE = /^\[Board\] (\d+ new posts?(?:, \d+ ended)?|\d+ posts? ended)$/;
+/** The hint paragraph that ends an order sent directly (server/role-board.ts boardOrderText). */
+const BOARD_ORDER_HINT = "(The owner's order on the roles' board,";
+
+function headAndRest(text: string): { head: string; rest: string } {
+	const nl = text.indexOf("\n");
+	const head = (nl === -1 ? text : text.slice(0, nl)).trimEnd();
+	const rest = (nl === -1 ? "" : text.slice(nl + 1)).replace(/^\n+/, "").replace(/\s+$/, "");
+	return { head, rest };
+}
+
+/** board: an order the board sent to a chat directly, or null when the first line isn't its header. */
+export function parseBoardOrderText(text: string): ParsedRoleMessage | null {
+	if (!text.startsWith("[Board order bp-")) return null;
+	const { head, rest: all } = headAndRest(text);
+	const m = BOARD_ORDER_RE.exec(head);
+	if (!m) return null;
+	let rest = all;
+	let hint: string | undefined;
+	const cut = rest.lastIndexOf("\n\n");
+	const last = (cut === -1 ? rest : rest.slice(cut + 2)).trim();
+	if (last.startsWith(BOARD_ORDER_HINT)) {
+		hint = last;
+		rest = cut === -1 ? "" : rest.slice(0, cut).replace(/\s+$/, "");
+	}
+	return {
+		id: m[1],
+		kind: "board-order",
+		from: m[2],
+		...(m[3] ? { via: m[3] } : {}),
+		what: m[4],
+		body: rest,
+		...(hint ? { hint } : {}),
+	};
+}
+
+/** board: a role chat's turn-start note ("[Board] 2 new posts" and the posts), or null. */
+export function parseBoardNoteText(text: string): ParsedRoleMessage | null {
+	if (!text.startsWith("[Board] ")) return null;
+	const { head, rest } = headAndRest(text);
+	const m = BOARD_NOTE_RE.exec(head);
+	if (!m) return null;
+	const ids = rest.match(/\bbp-[0-9a-f]{8}\b/);
+	return { id: ids ? ids[0] : "board", kind: "board", what: m[1], body: rest };
+}
 
 /** The role message in a chat message's text, or null when its first line isn't a whole header. */
 export function parseRoleMessageText(text: string): ParsedRoleMessage | null {
@@ -81,6 +137,10 @@ export interface RoleMessageView {
 	fromChat: string;
 	replyTo?: string;
 	reportDate?: string;
+	/** board: an order the owner gave through a role (COO): that role. */
+	via?: string;
+	/** board: a note's head ("2 new posts"), an order's time. */
+	what?: string;
 	/** What the sender wrote (no header or hint line). */
 	text: string;
 	stamped: boolean;
@@ -93,10 +153,21 @@ interface ChatMessageLike {
 }
 
 /** The role message a chat message carries, or null. Only a user message or an FYI (custom message
- *  "role-message") can be one; `text` is the message's text, for the ones without a stamp. */
+ *  "role-message") can be one; `text` is the message's text, for the ones without a stamp.
+ *  board (task #76): a board note (custom message "board") and an order the board sent directly (a user
+ *  message) fold the same way. Only the server writes their headers, and the board itself is on the Roles
+ *  page, so they count as stamped. */
 export function roleMessageViewOf(message: ChatMessageLike, text: string): RoleMessageView | null {
+	if (message.role === "custom" && message.customType === "board") {
+		const note = parseBoardNoteText(text);
+		return note ? boardView(note) : null;
+	}
 	if (message.role !== "user" && !(message.role === "custom" && message.customType === "role-message")) return null;
 	if (message.roleMessage) return { ...message.roleMessage, stamped: true };
+	if (message.role === "user") {
+		const order = parseBoardOrderText(text);
+		if (order) return boardView(order);
+	}
 	const p = parseRoleMessageText(text);
 	if (!p) return null;
 	return {
@@ -109,6 +180,20 @@ export function roleMessageViewOf(message: ChatMessageLike, text: string): RoleM
 		...(p.reportDate ? { reportDate: p.reportDate } : {}),
 		text: p.body,
 		stamped: false,
+	};
+}
+
+function boardView(p: ParsedRoleMessage): RoleMessageView {
+	return {
+		id: p.id,
+		kind: p.kind,
+		from: p.from ?? "",
+		fromTitle: "",
+		fromChat: "",
+		...(p.via ? { via: p.via } : {}),
+		...(p.what ? { what: p.what } : {}),
+		text: p.body,
+		stamped: true,
 	};
 }
 
@@ -167,6 +252,15 @@ export function messageRoleSentOf(
 
 /** One line of plain text from the start of a message: Markdown marks dropped, spaces squeezed, cut
  *  at `max` characters with an ellipsis. */
+/** What a folded row previews: the message's text; an order sent directly starts with its title in bold
+ *  (server/role-board.ts boardOrderText), so its row reads "Title: first words". */
+export function roleMessageRowText(view: { kind: string; text: string }): string {
+	if (view.kind !== "board-order") return view.text;
+	return view.text.replace(/^\*\*(.+?)\*\*\n+/, (_all, title: string) =>
+		/[.!?:]$/.test(title) ? `${title} ` : `${title}: `,
+	);
+}
+
 export function roleMessagePreview(text: string, max = 90): string {
 	const plain = text
 		.replace(/```[^\n]*\n?/g, " ")

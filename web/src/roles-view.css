@@ -136,15 +136,17 @@
 /* ---- page header: title, view switch, summary (desktop), updated time ---- */
 .rv-phead {
 	display: flex;
+	/* board: with a third view, what doesn't fit goes to a next row, never off the side. */
+	flex-wrap: wrap;
 	align-items: center;
-	gap: 16px;
+	gap: 4px 16px;
 	min-height: 52px;
 	padding: 4px 0;
 }
 .rv-phone .rv-phead {
-	gap: 8px;
+	gap: 4px 8px;
 	min-height: 48px;
-	padding: 2px 0;
+	padding: 2px 0 6px;
 }
 .rv-phead h1 {
 	font-size: 20px;
@@ -174,6 +176,14 @@
 }
 .rv-phone .rv-switch button {
 	min-height: 44px;
+	flex: 1 1 auto;
+	white-space: normal;
+}
+/* board: on a phone the three views take a row of their own, under the title and the updated time. */
+.rv-phone .rv-switch {
+	order: 3;
+	flex: 1 1 100%;
+	margin-left: 0;
 }
 .rv-switch button + button {
 	border-left: 1px solid var(--border);
@@ -1140,4 +1150,238 @@ a.rv-task:hover {
 }
 .rv-md code {
 	font-size: 0.85em;
+}
+
+/* ---- board (task #76): the Board view, the roles' shared board ---- */
+.rv-board {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	max-width: 960px;
+	margin-top: 12px;
+}
+.rv-phone .rv-board {
+	margin-top: 8px;
+}
+.rv-bbar {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px 12px;
+}
+.rv-bintro {
+	flex: 1 1 280px;
+	max-width: 75ch;
+}
+.rv-bsaid:empty {
+	display: none;
+}
+.rv-bposts {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+.rv-phone .rv-bposts {
+	gap: 8px;
+}
+.rv-bpost:focus {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+.rv-bpost.rv-bclosed {
+	border-style: dashed;
+}
+.rv-bclosedh {
+	padding: 0;
+}
+.rv-bkind {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	min-height: 22px;
+	padding: 0 8px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	font-size: var(--rv-fs3);
+	line-height: var(--rv-lh3);
+	font-weight: 600;
+}
+.rv-bkind-order {
+	background: var(--rv-amber-tint);
+	border-color: var(--rv-amber-line);
+	color: var(--amber-text);
+}
+.rv-bkind-news {
+	background: var(--blue-soft);
+	border-color: color-mix(in srgb, var(--blue) 40%, transparent);
+	color: var(--info-blue);
+}
+.rv-btitle {
+	min-width: 0;
+	font-size: var(--rv-fs1);
+	line-height: var(--rv-lh1);
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+/* A post's text: about 6 lines, then "Show all". */
+.rv-btext.rv-bfold {
+	max-height: calc(16px * 1.6 * 6);
+	overflow: hidden;
+}
+.rv-phone .rv-btext.rv-bfold {
+	max-height: calc(15px * 1.6 * 6);
+}
+.rv-btext.rv-bfade {
+	-webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent);
+	mask-image: linear-gradient(to bottom, #000 70%, transparent);
+}
+.rv-bsum {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 4px 10px;
+}
+.rv-bcount {
+	font-weight: 600;
+}
+.rv-btick {
+	color: var(--green);
+}
+.rv-bmarks {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding-top: 8px;
+	border-top: 1px solid var(--border-soft);
+}
+.rv-bmark {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 2px 8px;
+	font-size: var(--rv-fs3);
+	line-height: var(--rv-lh3);
+}
+.rv-bmark > .rv-ic {
+	flex: none;
+	align-self: center;
+	width: 14px;
+	height: 14px;
+}
+.rv-bwho {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.rv-brole {
+	font-weight: 600;
+}
+.rv-bmark.done .rv-bstate {
+	font-weight: 600;
+}
+.rv-bnote {
+	flex-basis: 100%;
+	padding-left: 22px;
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
+}
+.rv-bend {
+	padding-top: 8px;
+	border-top: 1px solid var(--border-soft);
+}
+/* The owner's forms: a new post, closing one. */
+.rv-bform {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	padding: 12px 14px;
+}
+.rv-bfs {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+.rv-blabel {
+	padding: 0;
+	font-size: var(--rv-fs3);
+	line-height: var(--rv-lh3);
+	font-weight: 600;
+	color: var(--text-dim);
+}
+.rv-bopts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0 16px;
+}
+.rv-bopt {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 44px;
+	cursor: pointer;
+}
+.rv-desk .rv-bopt {
+	min-height: 32px;
+}
+.rv-bopt input {
+	width: 16px;
+	height: 16px;
+	margin: 0;
+	accent-color: var(--accent);
+}
+.rv-bfield {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.rv-bfield input,
+.rv-bfield textarea {
+	width: 100%;
+	min-height: 40px;
+	padding: 8px 10px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg);
+	color: var(--text);
+	font: inherit;
+	font-size: var(--rv-fs2);
+	line-height: var(--rv-lh2);
+}
+/* 16px on a phone, so the browser doesn't zoom in on the field. */
+.rv-phone .rv-bfield input,
+.rv-phone .rv-bfield textarea {
+	font-size: 16px;
+}
+.rv-bfield textarea {
+	min-height: 132px;
+	resize: vertical;
+}
+.rv-bfield input:focus-visible,
+.rv-bfield textarea:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
+}
+.rv-berr {
+	color: var(--err-text);
+	font-size: var(--rv-fs3);
+	line-height: var(--rv-lh3);
+}
+.rv-act.rv-bprimary {
+	border-color: var(--accent);
+	font-weight: 600;
+}
+.rv-act:disabled {
+	cursor: default;
+	color: var(--text-dim);
+}
+.rv-bclose {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding-top: 8px;
+	border-top: 1px solid var(--border-soft);
 }

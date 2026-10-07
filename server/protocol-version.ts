@@ -70,4 +70,7 @@
 // 44: queue-paused - the owner's pause ("Paused by you"): queued tasks and queues carry hold {at, why},
 //     blocked lines a paused ref (held), task_queue_command takes pause / resume. An old page would show a
 //     paused stuck task as needing the owner and has no Pause; an old server ignores pause / resume.
-export const PROTOCOL_VERSION = 44;
+// 45: board - the roles' shared board: the Roles snapshot carries board (posts) and each role's open
+//     boardOrders; board_post / board_close and their board_result. An old page has no Board view; an old
+//     server never answers board_post.
+export const PROTOCOL_VERSION = 45;

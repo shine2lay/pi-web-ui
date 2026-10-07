@@ -87,9 +87,11 @@ function isBoundary(m: UiMessage): boolean {
 	return m.role === "user" || m.role === "bashExecution";
 }
 
-/** 提问后紧跟的附件（custom "file"）属于提问本身，不折。 */
+/** 提问后紧跟的附件（custom "file"）属于提问本身，不折。
+ *  board (task #76): so does the roles' board note (custom "board") the app adds right after a role chat's
+ *  prompt: it stays one row under the prompt instead of hiding in the turn's steps. */
 function isAttachment(m: UiMessage): boolean {
-	return m.role === "custom" && m.customType === "file";
+	return m.role === "custom" && (m.customType === "file" || m.customType === "board");
 }
 
 /** 有非空白的文字块。 */

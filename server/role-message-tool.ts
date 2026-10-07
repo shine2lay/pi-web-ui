@@ -9,7 +9,20 @@
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MESSAGE_ROLE_TOOL_NAME } from "./tool-manager.js";
-import { ROLE_MESSAGE_TEXT_MAX, type RoleMessages, type RoleMessageSender } from "./role-messages.js";
+import {
+	ROLE_MESSAGE_TEXT_MAX,
+	SAME_TEXT_ROLES,
+	SAME_TEXT_WINDOW_MS,
+	type RoleMessages,
+	type RoleMessageSender,
+} from "./role-messages.js";
+import { BOARD_ROUTING_RULE } from "./board-tool.js";
+
+/** board (task #76): what message_role's result adds when the same text went to several roles. */
+export function sameTextHint(roles: readonly string[]): string {
+	if (roles.length < SAME_TEXT_ROLES) return "";
+	return `\nThe same text went to ${roles.length} roles in the last ${Math.round(SAME_TEXT_WINDOW_MS / 60_000)} minutes (${roles.join(", ")}): to tell several roles the same general info, post it once on the board instead (board, action post, kind news).`;
+}
 
 export { MESSAGE_ROLE_TOOL_NAME };
 
@@ -26,10 +39,12 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 		name: MESSAGE_ROLE_TOOL_NAME,
 		label: "Message another role",
 		description:
-			"Send a message to another role's chat (see the roles list in your role section): ask it a question, ask it to do work in its area (request), tell it something it should know (fyi), or answer a question or request you got (reply, with replyTo). " +
-			"The server delivers it to that role's home chat after any running turn there, marked as from your role and this chat; a reply goes back to the chat that asked. " +
-			"A question, request or reply starts a turn there at once; an fyi is added to that chat without starting a turn, and that chat reads it with its next message. " +
-			"Answers arrive later as new messages in this chat: don't wait for them. Keep it self-contained (paths, ids; no secrets).",
+			"Message another role's chat: a question, a request (work in its area), an fyi, or a reply (replyTo) to one you got. " +
+			"It lands in that role's home chat after any running turn, marked as from you; a reply goes to the chat that asked. " +
+			"A question, request or reply starts a turn there; an fyi doesn't (it is read with that chat's next message). " +
+			"Answers come later as new messages. No secrets. " +
+			`${BOARD_ROUTING_RULE} ` +
+			"So direct messages go here; to tell several roles the same general info, post it on the board.",
 		promptSnippet: "message another role's chat (question / request / fyi / reply); answers come later as new messages",
 		parameters: Type.Object({
 			to: Type.String({ description: "The receiving role's id (from the roles list in your role section)." }),
@@ -60,6 +75,7 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 				throw new Error(res.error);
 			}
 			const r = res.record;
+			const sameText = sameTextHint(service.sameTextRecipients(sender.role, r.text));
 			const answerComes =
 				r.kind === "question" || r.kind === "request"
 					? " The answer comes back to this chat as a new message: don't wait for it, carry on."
@@ -70,7 +86,7 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 					? `Sent ${r.id} (fyi to ${r.to.role}). It's added to ${res.targetChat} without starting a turn; that chat reads it with its next message.`
 					: `Sent ${r.id} (${r.kind} to ${r.to.role}). It arrives in ${res.targetChat} after any running turn there.${answerComes}`;
 			return {
-				content: [{ type: "text", text }],
+				content: [{ type: "text", text: text + sameText }],
 				details: { id: r.id, to: r.to.role, kind: r.kind, chain: r.chain, state: res.paused ? "held" : "waiting" },
 			};
 		},

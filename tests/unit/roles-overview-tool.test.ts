@@ -4,7 +4,7 @@
  * the whole answer; the tool itself only reads.
  */
 import { describe, expect, it } from "vitest";
-import type { UiRoleOverview, UiRolesOverview } from "../../server/protocol.js";
+import type { UiBoardPost, UiRoleOverview, UiRolesOverview } from "../../server/protocol.js";
 import {
 	formatRolesOverview,
 	makeRolesOverviewTool,
@@ -227,6 +227,58 @@ describe("formatRolesOverview", () => {
 		const text = formatRolesOverview(view(roles), { now: NOW });
 		expect(text.length).toBeLessThanOrEqual(ROLES_OVERVIEW_TEXT_MAX);
 		expect(text).toContain('(Cut here to stay short: ask for one role with role "<id>" to see the rest.)');
+	});
+});
+
+// board (task #76): COO reads open orders and who hasn't done them here.
+describe("the board in roles_overview", () => {
+	const post = (o: Partial<UiBoardPost> & { id: string }): UiBoardPost => ({
+		at: NOW - 20 * MIN,
+		from: "owner",
+		kind: "order",
+		to: "all",
+		title: "Pause new work",
+		text: "x",
+		...o,
+	});
+	const roles = [
+		role("qa", {
+			boardOrders: [{ id: "bp-0000000a", title: "Pause new work", at: NOW - 20 * MIN, from: "owner", via: "coo" }],
+		}),
+		role("coo"),
+		role("ops"),
+	];
+	const board = {
+		posts: [
+			post({ id: "bp-0000000c", kind: "news", title: "New Roles page" }),
+			post({ id: "bp-0000000b", title: "Old order", closed: { at: NOW - MIN, by: "owner" } }),
+			post({
+				id: "bp-0000000a",
+				via: "coo",
+				ownerWords: "Owner 10:30: pause",
+				done: { ops: { at: NOW - 5 * MIN, note: "paused #12" } },
+			}),
+		],
+	};
+
+	it("all roles: the open orders, done n/m and who hasn't; recent news counted", () => {
+		const text = formatRolesOverview(view(roles, { board }), { now: NOW });
+		expect(text).toContain("Board: 1 open order; 1 news post in the last 3 days.");
+		// From the owner via coo: coo relayed it, so it's for qa and ops; ops is done.
+		expect(text).toContain(
+			'- bp-0000000a "Pause new work" from owner via coo, 2026-10-06 07:40 (20 min ago): done 1/2; not done: qa',
+		);
+		expect(text).not.toContain("Old order");
+		expect(text).toContain("Board orders it hasn't marked done (1):\n- bp-0000000a");
+	});
+
+	it("one role in full: its open orders; no board in the overview: no board line", () => {
+		const qa = formatRolesOverview(view(roles, { board }), { role: "qa", now: NOW });
+		expect(qa).toContain("Board orders it hasn't marked done (1):");
+		expect(qa).not.toContain("Board: 1 open order");
+		expect(formatRolesOverview(view([role("qa")]), { now: NOW })).not.toContain("Board");
+		const none = formatRolesOverview(view([role("qa")], { board: { posts: [] } }), { now: NOW });
+		expect(none).toContain("Board: no open orders.");
 	});
 });
 
