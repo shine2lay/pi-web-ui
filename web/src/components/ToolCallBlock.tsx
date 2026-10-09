@@ -217,8 +217,8 @@ export const ToolCallBlock = memo(function ToolCallBlock({
 	const roleLine =
 		roleArgs && !shown && roleArgs.to
 			? `${t("roleMessageToolTo", { to: roleArgs.to, kind: roleKind || "?" })}${
-					roleArgs.text ? ` \u00b7 ${roleMessagePreview(roleArgs.text, 80)}` : ""
-				}`
+					roleArgs.initiative ? ` \u00b7 ${t("initiativeTag", { id: roleArgs.initiative })}` : ""
+				}${roleArgs.text ? ` \u00b7 ${roleMessagePreview(roleArgs.text, 80)}` : ""}`
 			: undefined;
 
 	const copyArgs = () => {

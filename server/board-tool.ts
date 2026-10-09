@@ -78,6 +78,7 @@ export function boardPostText(board: RoleBoard, p: BoardPostRecord): string {
 		p.text,
 	];
 	if (p.ownerWords) lines.push("", `Owner's words: ${p.ownerWords}`);
+	if (p.initiative) lines.push("", `Initiative: ${p.initiative}`);
 	const audience = board.audience(p);
 	if (p.kind === "order") {
 		const done = audience.filter((r) => p.done?.[r]);
@@ -136,6 +137,12 @@ export function makeBoardTool(host: BoardToolHost): ToolDefinition {
 					description: `post, an order: the owner's words and where they came from, e.g. 'Owner on Telegram 11:51, via COO: "pause it until Monday"' (at most ${BOARD_OWNER_WORDS_MAX} characters).`,
 				}),
 			),
+			initiative: Type.Optional(
+				Type.String({
+					description:
+						'post, optional: the initiative it belongs to, a short id (lowercase letters, digits, dashes; at most 60; like "team-in-temper").',
+				}),
+			),
 			note: Type.Optional(
 				Type.String({
 					description: `ack: what you did; close: why it ends, e.g. "pause lifted" (at most ${BOARD_NOTE_MAX} characters).`,
@@ -167,7 +174,14 @@ export function makeBoardTool(host: BoardToolHost): ToolDefinition {
 			if (action === "post") {
 				const res = await board.post(
 					{ role },
-					{ kind: p.kind, to: p.to, title: p.title, text: p.text, ownerWords: p.ownerWords },
+					{
+						kind: p.kind,
+						to: p.to,
+						title: p.title,
+						text: p.text,
+						ownerWords: p.ownerWords,
+						initiative: p.initiative,
+					},
 				);
 				if (!res.ok) throw new Error(res.error);
 				const post = res.post;

@@ -1478,7 +1478,7 @@ function controlPath(opts) {
 }
 
 /** Send one control command to a RUNNING server; resolves null if unreachable. */
-function controlCommand(opts, cmd) {
+function controlCommand(opts, cmd, extra = {}) {
 	const path = controlPath(opts);
 	return new Promise((resolvePromise) => {
 		const sock = createConnection(path);
@@ -1492,7 +1492,7 @@ function controlCommand(opts, cmd) {
 		};
 		const timer = setTimeout(() => finish(null), 3000);
 		let buf = "";
-		sock.on("connect", () => sock.write(JSON.stringify({ cmd }) + "\n"));
+		sock.on("connect", () => sock.write(JSON.stringify({ ...extra, cmd }) + "\n"));
 		sock.on("data", (chunk) => {
 			buf += chunk.toString("utf8");
 			const nl = buf.indexOf("\n");
@@ -3390,6 +3390,80 @@ async function serverCmd(argv) {
 	}
 }
 
+/**
+ * decision-records (task #83): `decisions backfill [--from YYYY-MM-DD]` fills the running server's decision
+ * records (<dataDir>/decisions/records.jsonl) from that day on (default 2026-10-03; safe to run again) and waits
+ * for it; `decisions status` shows the records per day and source.
+ */
+async function decisionsCmd(argv) {
+	const action = argv[0];
+	let from;
+	const rest = [];
+	for (let i = 1; i < argv.length; i++) {
+		const a = argv[i];
+		if (a === "--from") from = argv[++i];
+		else if (a.startsWith("--from=")) from = a.slice("--from=".length);
+		else rest.push(a);
+	}
+	const { opts } = parseFlags(rest);
+	const unreachable = () =>
+		fail(`Server not running or control channel unreachable (${controlPath(opts)}); start it, then run this again.`);
+	const showCounts = (d) => {
+		const days = Object.keys(d.counts || {}).sort();
+		const sources = ["message", "board", "answer", "plan"];
+		console.log(`Records: ${d.file}`);
+		console.log(["day       ", ...sources.map((s) => s.padStart(8)), "   total"].join(" "));
+		const sum = { message: 0, board: 0, answer: 0, plan: 0 };
+		for (const day of days) {
+			const c = d.counts[day];
+			let t = 0;
+			for (const s of sources) {
+				t += c[s] || 0;
+				sum[s] += c[s] || 0;
+			}
+			console.log([day, ...sources.map((s) => String(c[s] || 0).padStart(8)), String(t).padStart(8)].join(" "));
+		}
+		const total = sources.reduce((n, s) => n + sum[s], 0);
+		console.log(["total     ", ...sources.map((s) => String(sum[s]).padStart(8)), String(total).padStart(8)].join(" "));
+	};
+	if (action === "status") {
+		const st = await controlCommand(opts, "decisions_status");
+		if (!st) unreachable();
+		if (!st.ok) fail(st.error);
+		const b = st.decisions.backfill;
+		if (b)
+			console.log(
+				`Backfill from ${b.from}: ${b.running ? "running" : "done"}, ${b.filesDone}/${b.filesTotal} chat files, added ${JSON.stringify(b.added)}${b.error ? `, error: ${b.error}` : ""}`,
+			);
+		showCounts(st.decisions);
+		return;
+	}
+	if (action === "backfill") {
+		const st = await controlCommand(opts, "decisions_backfill", from ? { date: from } : {});
+		if (!st) unreachable();
+		if (!st.ok) fail(st.error);
+		console.log(
+			`Backfill from ${st.decisions.from} started; it reads the chat files (read only), this can take a few minutes.`,
+		);
+		for (;;) {
+			await new Promise((r) => setTimeout(r, 2000));
+			const s = await controlCommand(opts, "decisions_status");
+			if (!s || !s.ok) unreachable();
+			const b = s.decisions.backfill;
+			if (!b || b.running) {
+				if (b) process.stdout.write(`\r  ${b.filesDone}/${b.filesTotal} chat files   `);
+				continue;
+			}
+			process.stdout.write("\n");
+			if (b.error) fail(`Backfill stopped: ${b.error}`);
+			console.log(`Backfill done: added ${JSON.stringify(b.added)} (records already there were left alone).`);
+			showCounts(s.decisions);
+			return;
+		}
+	}
+	fail("Usage: pi-web-ui decisions backfill [--from YYYY-MM-DD] [--data-dir DIR] | pi-web-ui decisions status");
+}
+
 async function main() {
 	checkNodeVersion();
 	const argv = process.argv.slice(2);
@@ -3416,6 +3490,10 @@ async function main() {
 	}
 	if (first === "uninstall") {
 		pluginUninstallCmd(argv.slice(1));
+		return;
+	}
+	if (first === "decisions") {
+		await decisionsCmd(argv.slice(1));
 		return;
 	}
 	if (first === "plugins" || first === "plugin") {

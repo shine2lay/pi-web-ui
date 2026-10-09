@@ -60,6 +60,12 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 					description: 'kind "reply" only: the id of the message you answer (rm-…, from its first line).',
 				}),
 			),
+			initiative: Type.Optional(
+				Type.String({
+					description:
+						'Optional: the initiative it belongs to, a short id (lowercase letters, digits, dashes; at most 60; like "team-in-temper"). A reply without one keeps its original\'s.',
+				}),
+			),
 		}),
 		execute: async (_id, p, _signal, _onUpdate, _ctx) => {
 			const service = host.service();
@@ -69,7 +75,13 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 				service.noteRefused(undefined, p.to, p.kind, sender);
 				throw new Error(sender);
 			}
-			const res = service.send(sender, { to: p.to, kind: p.kind, text: p.text, replyTo: p.replyTo });
+			const res = service.send(sender, {
+				to: p.to,
+				kind: p.kind,
+				text: p.text,
+				replyTo: p.replyTo,
+				initiative: p.initiative,
+			});
 			if (!res.ok) {
 				service.noteRefused(sender, p.to, p.kind, res.error);
 				throw new Error(res.error);
@@ -87,7 +99,14 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 					: `Sent ${r.id} (${r.kind} to ${r.to.role}). It arrives in ${res.targetChat} after any running turn there.${answerComes}`;
 			return {
 				content: [{ type: "text", text: text + sameText }],
-				details: { id: r.id, to: r.to.role, kind: r.kind, chain: r.chain, state: res.paused ? "held" : "waiting" },
+				details: {
+					id: r.id,
+					to: r.to.role,
+					kind: r.kind,
+					chain: r.chain,
+					state: res.paused ? "held" : "waiting",
+					...(r.initiative ? { initiative: r.initiative } : {}),
+				},
 			};
 		},
 	});

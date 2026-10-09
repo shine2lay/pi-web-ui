@@ -2143,6 +2143,7 @@ export const en = {
 	boardToAllRoles: "to all roles",
 	boardToRoles: "to {roles}",
 	boardOwnerWords: "Owner's words: {words}",
+	initiativeTag: "Initiative: {id}",
 	boardDoneCount: "Done {n}/{m}",
 	boardDirectCount: "{n} got it directly",
 	boardReadCount: "Read by {n}/{m}",

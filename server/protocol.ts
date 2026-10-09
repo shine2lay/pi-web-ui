@@ -109,6 +109,8 @@ export interface UiRoleMessage {
 	replyTo?: string;
 	/** role-reports: kind report: the day the report is about (YYYY-MM-DD, Pacific). */
 	reportDate?: string;
+	/** decision-records: the initiative it is part of (a short id). */
+	initiative?: string;
 	/** The text as the sender wrote it (without the header and hint lines). */
 	text: string;
 }
@@ -133,6 +135,8 @@ export interface UiRoleMessageRow {
 	/** role-reports: kind report: the day, and once the role answered whether its reply had the four
 	 *  headings (the server keeps no reply text). */
 	report?: { date: string; headings?: boolean };
+	/** decision-records: the initiative it is part of (a short id). */
+	initiative?: string;
 }
 
 export interface UiModelInfo {
@@ -1877,6 +1881,8 @@ export interface UiBoardPost {
 	text: string;
 	/** An order (or news) a role posted for the owner: his words and where they came from. */
 	ownerWords?: string;
+	/** decision-records: the initiative it is part of (a short id). */
+	initiative?: string;
 	/** Orders: the roles it reached directly, and how (a steer into a running turn, or a turn in its home chat). */
 	sent?: Record<string, { at: number; how: UiBoardSentHow }>;
 	closed?: { at: number; by: string; note?: string };

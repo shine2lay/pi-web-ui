@@ -203,6 +203,8 @@ export interface MessageRoleArgs {
 	kind?: string;
 	replyTo?: string;
 	text?: string;
+	/** decision-records: the initiative it is tagged with. */
+	initiative?: string;
 }
 
 export function parseMessageRoleArgs(argumentsText: string | undefined): MessageRoleArgs {
@@ -211,7 +213,7 @@ export function parseMessageRoleArgs(argumentsText: string | undefined): Message
 		const v = JSON.parse(argumentsText) as Record<string, unknown>;
 		if (v && typeof v === "object") {
 			const out: MessageRoleArgs = {};
-			for (const k of ["to", "kind", "replyTo", "text"] as const) {
+			for (const k of ["to", "kind", "replyTo", "text", "initiative"] as const) {
 				if (typeof v[k] === "string") out[k] = v[k] as string;
 			}
 			return out;
@@ -220,7 +222,7 @@ export function parseMessageRoleArgs(argumentsText: string | undefined): Message
 		// still streaming: read the fields that are there
 	}
 	const out: MessageRoleArgs = {};
-	for (const k of ["to", "kind", "replyTo", "text"] as const) {
+	for (const k of ["to", "kind", "replyTo", "text", "initiative"] as const) {
 		const m = new RegExp(`"${k}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)("?)`).exec(argumentsText);
 		if (!m) continue;
 		let raw = m[1];

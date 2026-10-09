@@ -61,6 +61,8 @@ export interface Ask {
 	fields: AskField[];
 	/** A queued task that needs you (kind "stuck"): its number and title. */
 	task?: { id: number; title: string };
+	/** decision-records: kind "question": the ask_user_question tool call it came from. */
+	toolCallId?: string;
 }
 
 /** The answer to one field: the chosen values, and/or a typed text. */
@@ -72,7 +74,7 @@ export interface AskFieldAnswer {
 
 export type AskEvent =
 	| { type: "appeared"; ask: Ask }
-	| { type: "answered"; ask: Ask; summary: string; from: string }
+	| { type: "answered"; ask: Ask; summary: string; from: string; answers?: AskFieldAnswer[] }
 	| { type: "gone"; ask: Ask; reason: string };
 
 export interface AskResult {
@@ -82,7 +84,9 @@ export interface AskResult {
 
 export type AskAnswerFn = (answers: AskFieldAnswer[], from: string) => AskResult | Promise<AskResult>;
 
-export type AskOutcome = { how: "answered"; summary: string; from: string } | { how: "gone"; reason: string };
+/** decision-records: `answers` = what was picked and typed, per field (when the settler knows it). */
+export type AskOutcome =
+	{ how: "answered"; summary: string; from: string; answers?: AskFieldAnswer[] } | { how: "gone"; reason: string };
 
 /** Who answered in the browser (the default for every answer that comes over the page socket). */
 export const FROM_BROWSER = "browser";
@@ -112,7 +116,13 @@ export class AskHub {
 		if (!e) return;
 		this.asks.delete(id);
 		if (outcome.how === "answered") {
-			this.emit({ type: "answered", ask: e.ask, summary: outcome.summary, from: outcome.from });
+			this.emit({
+				type: "answered",
+				ask: e.ask,
+				summary: outcome.summary,
+				from: outcome.from,
+				...(outcome.answers ? { answers: outcome.answers } : {}),
+			});
 		} else {
 			this.emit({ type: "gone", ask: e.ask, reason: outcome.reason });
 		}
@@ -307,6 +317,13 @@ export function dialogValueFrom(ui: UiDialog, answers: AskFieldAnswer[]): string
 	if (ui.kind === "select") return a.selected[0];
 	const text = a.text ?? a.selected[0];
 	return typeof text === "string" ? text : undefined;
+}
+
+/** decision-records: a pop-up's answer, per field (the inverse of dialogValueFrom). */
+export function dialogAnswersOf(ui: UiDialog, value: string | boolean): AskFieldAnswer[] {
+	if (ui.kind === "confirm") return [{ id: "value", selected: [value === true ? "yes" : "no"] }];
+	if (ui.kind === "select") return [{ id: "value", selected: [String(value)] }];
+	return [{ id: "value", selected: [], text: String(value) }];
 }
 
 export function summarizeDialogValue(ui: UiDialog, value: string | boolean): string {

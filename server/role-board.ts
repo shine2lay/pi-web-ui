@@ -34,6 +34,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { checkInitiative } from "./decision-records.js";
 import { samePath, type IdentityDef } from "./identities.js";
 import type {
 	UiBoard,
@@ -180,6 +181,8 @@ export interface BoardHost {
 	/** Send this text as a message that starts a turn (the role-request path). */
 	deliver(file: string, text: string): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }>;
 	changed?(): void;
+	/** decision-records: a post was just made. */
+	posted?(post: UiBoardPost): void;
 	log?(line: string): void;
 }
 
@@ -192,6 +195,8 @@ export interface BoardPostInput {
 	title?: unknown;
 	text?: unknown;
 	ownerWords?: unknown;
+	/** decision-records: optional initiative id (lowercase letters, digits, dashes; at most 60). */
+	initiative?: unknown;
 }
 
 export type BoardPostResult =
@@ -670,6 +675,9 @@ export class RoleBoard {
 		if (ownerWords.length > BOARD_OWNER_WORDS_MAX) {
 			return { ok: false, error: `ownerWords is over ${BOARD_OWNER_WORDS_MAX} characters` };
 		}
+		const initiativeCheck = checkInitiative(input.initiative);
+		if (!initiativeCheck.ok) return { ok: false, error: initiativeCheck.error };
+		const initiative = initiativeCheck.value;
 		const roleIds = this.roleIds();
 		let to: "all" | string[];
 		const rawTo = input.to;
@@ -726,11 +734,17 @@ export class RoleBoard {
 			title,
 			text,
 			...(ownerWords ? { ownerWords } : {}),
+			...(initiative ? { initiative } : {}),
 		};
 		this.data.posts.push(post);
 		this.prune();
 		this.save();
 		this.log(`${post.id} ${kind} from ${fromWords(post)} to ${toWords(post)}: "${title}"`);
+		try {
+			this.host.posted?.(uiBoardPost(post));
+		} catch (err) {
+			this.log(`${post.id}: couldn't keep its decision record (${(err as Error).message})`);
+		}
 
 		const direct: { role: string; how: UiBoardSentHow[]; why: string[] }[] = [];
 		const later: string[] = [];

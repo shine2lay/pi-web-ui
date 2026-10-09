@@ -314,7 +314,15 @@ function RoleMessagesList() {
 									{m.from} ({m.fromChat})
 								</td>
 								<td>{m.toChat ? `${m.to} (${m.toChat})` : m.to}</td>
-								<td title={m.replyTo ? t("roleMessageReplyKind", { id: m.replyTo }) : undefined}>{m.kind}</td>
+								<td title={m.replyTo ? t("roleMessageReplyKind", { id: m.replyTo }) : undefined}>
+									{m.kind}
+									{m.initiative && (
+										<span className="rolemsg-init" data-initiative={m.initiative}>
+											{" \u00b7 "}
+											{t("initiativeTag", { id: m.initiative })}
+										</span>
+									)}
+								</td>
 								<td className={`rolemsg-state-${m.state}`} title={m.error}>
 									{t(ROLE_MESSAGE_STATE_KEY[m.state])}
 								</td>

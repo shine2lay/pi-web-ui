@@ -115,6 +115,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | telegram-coo                 | `local` | `server/role-replies.ts` (new), `roles-overview-tool.ts` (new), `agent-service.ts` (turn records, `sendToRole`), `index.ts`, `plugins.ts` (`host.roles`), `plugin-manifest-validate.ts`, `plugin-api-catalog.ts`, `tool-manager.ts`, `plugin-sdk/`, `plugins/telegram/` (0.2.0), `docs/architecture-plugins.md`, `docs/roles-overview.md`, `tests/telegram-coo-test.mjs` (new), `tests/unit/` |
 | queue-paused                 | `local` | `server/task-queue.ts`, `queue-blocks.ts`, `role-messages.ts`, `agent-service.ts` (`noteToPausedTaskChat`, carry-on, plugin notes), `index.ts` (scheduler), `roles-overview.ts`, `roles-overview-tool.ts`, `protocol.ts`, `protocol-version.ts` (44), `web/src/components/TaskQueuePanel.tsx`, `RolesView.tsx`, `Message.tsx`, `roles-view-model.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `roles-view.css`, `docs/roles-overview.md`, `tests/queue-paused-test.mjs` (new), `tests/unit/`; paired with pi-queue |
 | role-board                   | `local` | `server/role-board.ts` (new), `board-tool.ts` (new), `agent-service.ts` (turn-start note, steer, direct turn), `index.ts`, `role-messages.ts`, `role-message-tool.ts`, `roles-overview.ts`, `roles-overview-tool.ts`, `identity-config.ts`, `tool-manager.ts`, `protocol.ts`, `protocol-version.ts` (45), `web/src/components/RolesView.tsx`, `RoleMessageRow.tsx`, `Message.tsx`, `roles-view-model.ts`, `roles-state.ts`, `role-message-text.ts`, `exchange-fold.ts`, `use-chat.ts`, `roles-view.css`, `i18n.tsx`, `locales/*.json`, `docs/board.md` (new), `docs/roles-overview.md`, `tests/board-test.mjs` (new), `tests/unit/role-board.test.ts` (new), `tests/unit/`; paired with pi-identity |
+| decision-records             | `local` | `server/decision-records.ts` (new), `agent-service.ts` (hooks, scanner, backfill), `role-messages.ts`, `role-board.ts`, `role-message-tool.ts`, `board-tool.ts`, `asks.ts`, `control-socket.ts`, `protocol.ts`, `bin/pi-web-ui.mjs` (`decisions`), `web/src/components/RolesView.tsx`, `IdentitiesSettings.tsx`, `ToolCallBlock.tsx`, `role-message-text.ts`, `i18n.tsx`, `locales/*.json`, `tests/unit/decision-records.test.ts` (new) |
 
 ---
 
@@ -5635,3 +5636,63 @@ app, this wording": rule 13 gets an exception line for the Board and his routing
   `parseBoardOrderText` / `parseBoardNoteText` with them (their unit tests build the text with the
   server's functions).
 - The direct turn reuses `sendRoleMessage`; if role requests get another delivery path, move this too.
+
+## decision-records
+
+**Status**: `local`
+**Baseline**: v0.96.1 (on top of `role-messages`, `role-board`, `asks`, pi-queue's queue entries)
+
+**Why** (queue task #83, owner-approved plan; Data rm-541b44a1; owner: "a more centralized way to see the
+initiative's design decision being made"): decisions hide in role messages, Board posts, the owner's
+answers and queue plans. `role-messages.json` keeps only the newest 1,000 (a few days), answers and plans
+only sit inside chat transcripts. Data's check (~/company-lab/shared/decision-log-check-2026-10-09/) found
+queue plans + role messages would have shown 81% of the decisions the owner didn't make, about 42 h sooner.
+This part only collects; the page comes later. No model calls.
+
+### Changes
+
+1. **The store** (`server/decision-records.ts` new): `<dataDir>/decisions/records.jsonl`, append-only, one
+   JSON line per record, deduped by source + ref (an index built at start), no size cap, text only
+   (`pi-backup` already covers `~/.pi-web-ui`). A cut-off last line is ended before the next append. A
+   record: `v`, `id` (hash of source + ref), `source` message | board | answer | plan, `at`, `from` (role id
+   or "owner"), `to`, `initiative`, `ref` (rm-… / bp-… / `ask:<toolCallId>` / `<transcript>:<line>`), `how`
+   live | backfill, `seen`, and only the fields its source needs: message kind/text/replyTo/chat; board
+   kind/title/text/ownerWords/via; answer ask kind, questions (question, options with label + description,
+   picked, typed), chat title, transcript; plan queue chat, task, op add/update/done, plan fields, approval
+   auto | dialog, done summary. `list({since, until, source, initiative})`, `counts()` per local day.
+2. **Live hooks**: `RoleMessages.send` calls `host.sent` once a message is stored (a reply without an
+   initiative takes its original's, `host.initiativeOf`); `RoleBoard.post` calls `host.posted` (an order a
+   role relays is from "owner", `via` the role); `asks.ts` "answered" events now carry the picked/typed
+   answers (`answers`, `dialogAnswersOf`) and an ask keeps its `toolCallId`, so `agent-service.ts` turns
+   each owner answer (not tool approvals) into a record; `QueueScanner` reads the transcripts' new bytes
+   about once a minute for `customType "queue"` entries (add/update/done; offsets in
+   `decisions/scan-state.json`; a shrunk file is read again; a half-written line waits). Transcripts are
+   only read. A failure to keep a record is logged, never thrown at the sender. `role-messages.json`'s
+   format and 1,000 cap are unchanged (one optional field added).
+3. **Initiative tag**: optional `initiative` on `message_role` and `board` post (lowercase letters,
+   digits, dashes, max 60, like pi-queue's task tag); refused with how to write one; stored on the
+   message/post and the record, shown as "Initiative: <id>" on the Roles page's message row, the Board
+   post, the tool card and `board read`. Protocol: one optional field each on `UiRoleMessage`,
+   `UiBoardPost` (old pages ignore it; no version bump).
+4. **Backfill** (`backfill()`; control socket `decisions_backfill {date}` / `decisions_status`; CLI
+   `pi-web-ui decisions backfill [--from YYYY-MM-DD]`, `pi-web-ui decisions status`): from a day (default
+   2026-10-03), idempotent, in the background. Reads `role-messages.json` (not 6 am reports),
+   `role-board.json`, and every transcript: queue entries, `ask_user_question` calls with their answers,
+   `message_role` calls with their results (messages older than the 1,000), and delivered copies of
+   messages (a turn's prompt or an fyi note, `custom_message` "role-message"), earliest copy wins.
+
+### How it was checked
+
+- `tests/unit/decision-records.test.ts` (new, 16): the store (dedupe, restart, a cut-off line, filters,
+  counts); each hook (a sent message, a reply taking the initiative, a refused tag; a news post and a
+  relayed order; an answered question, dialog and stuck question, approvals skipped; the scanner's
+  offsets across a restart, a half line); the tools' `initiative` param; the backfill on fixture files
+  (each source, a second run adds nothing). Without each hook its test fails (no record).
+- A dry run of the backfill against the real data from 2026-10-03 (read only, into a scratch store): 2,759
+  records in 6.4 s; every caught S1-S4 ref in Data's events.csv was in it (18 + 10 + 14 + 31).
+
+### When syncing
+
+- If pi-queue's queue entry (`customType "queue"`, `data.op/id/plan/approval/initiative/summary`) or the
+  role message header (`roleMessageHeader`) change, change `planRecord` / `parseDeliveredRoleMessage`.
+- If `ask_user_question` stops passing its toolCallId to `askUser`, answers get a dialog-style ref.

@@ -15,6 +15,9 @@
  *                             ← {"ok":true,"receipt":{...},"existing":false,"paused":false}
  *     role-reports: only the app's 6 am report job (it shows <dataDir>/app-token); once per role and day.
  *   → {"cmd":"role_reports","date":"YYYY-MM-DD"}  ← {"ok":true,"receipts":[...]} (no text)
+ *   → {"cmd":"decisions_backfill","date":"YYYY-MM-DD"}  ← {"ok":true,"decisions":{...}} (starts it in the
+ *     background; decision-records, task #83)
+ *   → {"cmd":"decisions_status"}  ← {"ok":true,"decisions":{file, backfill, counts}}
  *   → anything else           ← {"ok":false,"error":"..."}
  *
  * Idle connections are closed after a short timeout so a stuck CLI never
@@ -54,7 +57,12 @@ function probeControlPath(path: string): Promise<string | null> {
 /** 控制 socket 只需服务状态与 quiesce 控制（pi/dsh 引擎都满足）。role-reports: the report requests
  *  (pi engine only). */
 type ControlService = Pick<AgentService, "serviceStatus" | "quiesce" | "unquiesce"> &
-	Partial<Pick<AgentService, "requestRoleReport" | "roleReportReceipts" | "noteRoleReportRefused">>;
+	Partial<
+		Pick<
+			AgentService,
+			"requestRoleReport" | "roleReportReceipts" | "noteRoleReportRefused" | "decisionsBackfill" | "decisionsStatus"
+		>
+	>;
 
 /** How long a control connection may sit idle before the server closes it. */
 const CONTROL_IDLE_TIMEOUT_MS = 5_000;
@@ -68,7 +76,7 @@ export function controlPath(dataDir: string, port: number): string {
 }
 
 export interface ControlCommand {
-	cmd: "status" | "quiesce" | "unquiesce" | "role_report" | "role_reports";
+	cmd: "status" | "quiesce" | "unquiesce" | "role_report" | "role_reports" | "decisions_backfill" | "decisions_status";
 	/** role-reports: role_report's app token, role, day and what the job found; role_reports' day. */
 	token?: unknown;
 	role?: unknown;
@@ -96,6 +104,8 @@ export interface ControlStatus {
 	paused?: boolean;
 	/** role-reports: role_reports' receipts. */
 	receipts?: RoleReportReceipt[];
+	/** decision-records: decisions_backfill's progress, or decisions_status. */
+	decisions?: unknown;
 }
 
 /** Start the control socket; returns a stop function. */
@@ -214,6 +224,20 @@ export function startControlServer(opts: {
 							? { ok: true, receipts: service.roleReportReceipts(typeof req.date === "string" ? req.date : undefined) }
 							: { ok: false, error: "report requests aren't supported here" };
 						break;
+					case "decisions_backfill": {
+						if (!service.decisionsBackfill) {
+							resp = { ok: false, error: "decision records aren't kept here" };
+							break;
+						}
+						const res = service.decisionsBackfill(req.date);
+						resp = res.ok ? { ok: true, decisions: res.progress } : { ok: false, error: res.error };
+						break;
+					}
+					case "decisions_status":
+						resp = service.decisionsStatus
+							? { ok: true, decisions: service.decisionsStatus() }
+							: { ok: false, error: "decision records aren't kept here" };
+						break;
 					default:
 						resp = { ok: false, error: `unknown cmd: ${String((req as { cmd?: unknown }).cmd)}` };
 						break;
@@ -245,6 +269,7 @@ export function sendControlCommand(
 	dataDir: string,
 	port: number,
 	cmd: ControlCommand["cmd"],
+	extra: Omit<ControlCommand, "cmd"> = {},
 ): Promise<ControlStatus | null> {
 	const path = controlPath(dataDir, port);
 	return new Promise((resolve) => {
@@ -260,7 +285,7 @@ export function sendControlCommand(
 		const timer = setTimeout(() => finish(null), CONTROL_CLIENT_TIMEOUT_MS);
 		let buf = "";
 		sock.on("connect", () => {
-			sock.write(JSON.stringify({ cmd }) + "\n");
+			sock.write(JSON.stringify({ ...extra, cmd }) + "\n");
 		});
 		sock.on("data", (chunk) => {
 			buf += chunk.toString("utf8");

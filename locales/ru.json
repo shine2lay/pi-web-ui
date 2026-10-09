@@ -1778,6 +1778,7 @@
 		"boardToAllRoles": "всем ролям",
 		"boardToRoles": "для {roles}",
 		"boardOwnerWords": "Слова владельца: {words}",
+		"initiativeTag": "Инициатива: {id}",
 		"boardDoneCount": "Выполнено {n}/{m}",
 		"boardDirectCount": "{n} получили напрямую",
 		"boardReadCount": "Прочитали {n}/{m}",

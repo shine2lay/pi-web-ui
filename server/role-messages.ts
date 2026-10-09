@@ -45,6 +45,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { open, type FileHandle } from "node:fs/promises";
 import { dirname } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { checkInitiative } from "./decision-records.js";
 import { samePath, type IdentityDef } from "./identities.js";
 import type { UiRoleMessage, UiRoleMessageKind, UiRoleMessageRow, UiRoleMessageState } from "./protocol.js";
 import { OWNER_IDS_MAX } from "./role-replies.js";
@@ -164,6 +165,8 @@ export interface RoleMessageRecord {
 	forOwner?: boolean;
 	/** forOwner: the host.roles.send ids of the owner's messages behind it (the plugin threads under them). */
 	ownerIds?: string[];
+	/** decision-records: the initiative it is part of (a short id; a reply without one takes its original's). */
+	initiative?: string;
 }
 
 /** role-reports: what the app's job found that day (counts only). */
@@ -234,6 +237,10 @@ export interface RoleMessageHost {
 	note(file: string, text: string): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }>;
 	/** The store changed (the page's list). */
 	changed?(): void;
+	/** decision-records: a role message was just sent (report requests aren't). */
+	sent?(record: RoleMessageRecord): void;
+	/** decision-records: the initiative a message carries even when role-messages.json no longer has it. */
+	initiativeOf?(id: string): string | undefined;
 	log?(line: string): void;
 }
 
@@ -257,6 +264,8 @@ export interface RoleMessageSendInput {
 	kind?: unknown;
 	text?: unknown;
 	replyTo?: unknown;
+	/** decision-records: optional initiative id (lowercase letters, digits, dashes; at most 60). */
+	initiative?: unknown;
 }
 
 export type RoleMessageSendResult =
@@ -830,6 +839,7 @@ export class RoleMessages {
 			kind: r.kind,
 			...(r.replyTo ? { replyTo: r.replyTo } : {}),
 			...(r.kind === "report" && r.report ? { reportDate: r.report.date } : {}),
+			...(r.initiative ? { initiative: r.initiative } : {}),
 			text: r.text,
 		};
 	}
@@ -862,6 +872,7 @@ export class RoleMessages {
 				state: m.state === "waiting" && this.data.paused ? "held" : m.state,
 				firstLine: firstLine(m.text),
 				chain: m.chain,
+				...(m.initiative ? { initiative: m.initiative } : {}),
 				...(m.deliveredAt ? { deliveredAt: m.deliveredAt } : {}),
 				...(m.error && m.state !== "delivered" && m.state !== "replied" ? { error: m.error } : {}),
 				...(m.kind === "report" && m.report
@@ -1043,6 +1054,8 @@ export class RoleMessages {
 			const ids = roles.map((r) => r.id).join(", ");
 			return { ok: false, error: `There's no role "${toId || String(input.to ?? "")}". Roles: ${ids || "none"}.` };
 		}
+		const initiativeCheck = checkInitiative(input.initiative);
+		if (!initiativeCheck.ok) return { ok: false, error: initiativeCheck.error };
 		const replyTo = typeof input.replyTo === "string" ? input.replyTo.trim() : "";
 		let original: RoleMessageRecord | undefined;
 		if (kind === "reply") {
@@ -1107,6 +1120,13 @@ export class RoleMessages {
 		}
 		// telegram-coo: asked for the owner, so the reply's turn goes to his Telegram.
 		const forOwner = (kind === "question" || kind === "request") && sender.forOwner ? sender.forOwner : undefined;
+		// decision-records: given, else (a reply) its original's; "" = none on purpose.
+		const initiative =
+			initiativeCheck.value !== undefined
+				? initiativeCheck.value
+				: original
+					? (original.initiative ?? this.host.initiativeOf?.(original.id) ?? "")
+					: "";
 		const record: RoleMessageRecord = {
 			id: newRoleMessageId((id) => !!this.byId(id)),
 			at: now,
@@ -1122,6 +1142,7 @@ export class RoleMessages {
 			...(forOwner
 				? { forOwner: true, ownerIds: [...new Set(forOwner.ownerIds.map(String))].slice(0, OWNER_IDS_MAX) }
 				: {}),
+			...(initiative ? { initiative } : {}),
 		};
 		this.data.messages.push(record);
 		if (original) {
@@ -1135,6 +1156,11 @@ export class RoleMessages {
 			`${record.id} ${sender.role} (${sender.chat}) -> ${to.id} · ${kind}${replyTo ? ` to ${replyTo}` : ""}, chain ${chain}${forOwner ? ", for the owner" : ""}`,
 		);
 		this.kick();
+		try {
+			this.host.sent?.(record);
+		} catch (err) {
+			this.log(`${record.id}: couldn't keep its decision record (${(err as Error).message})`);
+		}
 		const targetChat =
 			kind === "reply" && original
 				? `the chat that asked (${original.from.chat}), else its home chat`

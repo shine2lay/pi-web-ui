@@ -1778,6 +1778,7 @@
 		"boardToAllRoles": "a tutti i ruoli",
 		"boardToRoles": "a {roles}",
 		"boardOwnerWords": "Parole del proprietario: {words}",
+		"initiativeTag": "Iniziativa: {id}",
 		"boardDoneCount": "Fatto {n}/{m}",
 		"boardDirectCount": "{n} l'hanno ricevuto direttamente",
 		"boardReadCount": "Letto da {n}/{m}",

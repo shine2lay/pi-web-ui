@@ -1778,6 +1778,7 @@
 		"boardToAllRoles": "모든 역할에게",
 		"boardToRoles": "{roles}에게",
 		"boardOwnerWords": "소유자의 말: {words}",
+		"initiativeTag": "이니셔티브: {id}",
 		"boardDoneCount": "완료 {n}/{m}",
 		"boardDirectCount": "{n}개 역할이 바로 받음",
 		"boardReadCount": "읽음 {n}/{m}",

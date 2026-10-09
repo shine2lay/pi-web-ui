@@ -68,6 +68,7 @@ import {
 	approvalFrom,
 	askHub,
 	type AskMeta,
+	dialogAnswersOf,
 	dialogAsk,
 	dialogValueFrom,
 	FROM_BROWSER,
@@ -432,6 +433,20 @@ import { digestsBefore, snapshotDigests, straddleDigest } from "./exchange-diges
 import { sessionIndex } from "./session-index.js";
 import { ParticipantLifecycle, type ParticipantTarget, type ParticipantLease } from "./participant-lifecycle.js";
 import { identityIdOnBranch } from "./identities.js";
+import {
+	answerRecord,
+	backfill,
+	BACKFILL_FROM_DEFAULT,
+	type BackfillProgress,
+	boardRecord,
+	dayStart,
+	DECISIONS_DIR,
+	DecisionRecords,
+	messageRecord,
+	type NewDecisionRecord,
+	QueueScanner,
+	SCAN_STATE_FILE,
+} from "./decision-records.js";
 import { launchOrigin, toServiceInfo } from "./launch-origin.js";
 import { imageIfVersion, type ChatImage } from "./chat-image.js";
 import {
@@ -1282,7 +1297,11 @@ function makeMarkersListTool(
  */
 export function makeAskUserQuestionTool(
 	clientSession: {
-		askUser: (q: UiQuestion[], sig: { aborted?: boolean }, conversationId?: string) => Promise<QuestionAnswer[] | null>;
+		askUser: (
+			q: UiQuestion[],
+			sig: { aborted?: boolean; toolCallId?: string },
+			conversationId?: string,
+		) => Promise<QuestionAnswer[] | null>;
 	},
 	/** 本 runtime 所属会话：提问跟着对话走，快照只把当前对话的问卷推给客户端。 */
 	ownerId?: string,
@@ -1366,6 +1385,8 @@ export function makeAskUserQuestionTool(
 				qs,
 				{
 					aborted: signal?.aborted,
+					// decision-records: the answer's record is keyed by this call.
+					toolCallId: _id,
 				},
 				ownerId,
 			);
@@ -2420,6 +2441,11 @@ function collectSessionAnchors(filePath: string, q: string, cap = 10): MessageAn
  */
 export function piSessionsRoot(): string | undefined {
 	return process.env.PI_CODING_AGENT_SESSION_DIR || undefined;
+}
+
+/** decision-records: the folder the transcripts are in (flat env dir, or <agentDir>/sessions). */
+function decisionsSessionsRoot(): string {
+	return piSessionsRoot() ?? join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "sessions");
 }
 
 // session-index: the server's saved index of the chat files (server/session-index.ts) also follows each
@@ -5896,6 +5922,7 @@ export class ClientSession {
 						how: "answered",
 						summary: summarizeDialogValue(ui, value),
 						from: how.from ?? FROM_BROWSER,
+						answers: dialogAnswersOf(ui, value),
 					});
 			},
 		};
@@ -7766,7 +7793,7 @@ export class ClientSession {
 			return found ?? { session: this, convId: ownerId };
 		};
 		return {
-			askUser: (questions: UiQuestion[], sig: { aborted?: boolean }) => {
+			askUser: (questions: UiQuestion[], sig: { aborted?: boolean; toolCallId?: string }) => {
 				const h = home();
 				return h.session.askUser(questions, sig, h.convId);
 			},
@@ -7789,7 +7816,7 @@ export class ClientSession {
 	 *  （见 tool_execution_start）、不算 stall 失联（见 startStallTimer）。 */
 	askUser(
 		questions: UiQuestion[],
-		sig: { aborted?: boolean },
+		sig: { aborted?: boolean; toolCallId?: string },
 		conversationId?: string,
 	): Promise<QuestionAnswer[] | null> {
 		return new Promise((resolve, reject) => {
@@ -7812,11 +7839,14 @@ export class ClientSession {
 			this.pendingQuestions.set(id, entry);
 			// telegram-answers: also in the list of asks, so a plugin (Telegram) can show and answer it.
 			askHub.add(
-				questionAsk(
-					id,
-					questions,
-					ClientSession.askMetaOf(conversationId ? this.convs.get(conversationId) : undefined),
-				),
+				{
+					...questionAsk(
+						id,
+						questions,
+						ClientSession.askMetaOf(conversationId ? this.convs.get(conversationId) : undefined),
+					),
+					...(sig.toolCallId ? { toolCallId: sig.toolCallId } : {}),
+				},
 				(answers, from) => {
 					const qid = ClientSession.questionIdOfAsk(id);
 					const current = qid ? this.pendingQuestions.get(qid) : undefined;
@@ -7886,6 +7916,11 @@ export class ClientSession {
 					how: "answered",
 					summary: summarizeQuestionAnswers(pending.questions, answers),
 					from,
+					answers: answers.map((a) => ({
+						id: a.id,
+						selected: a.selected ?? [],
+						...(a.custom ? { text: a.custom } : {}),
+					})),
 				});
 		}
 		// multi-device：别的设备上还开着同一张问卷 —— 广播收起，第一个答的生效。
@@ -15155,6 +15190,17 @@ export class AgentService {
 		this.claimStore = new ClaimStore(join(this.stateStore.dataDir, "claims.json"));
 		ClientSession.participantRetained = (id, role) => this.participants.has(id, role);
 		sessionIndex.configure({ file: join(this.stateStore.dataDir, "session-index.json") });
+		// decision-records (task #83): every record a decision can hide in, kept as it happens.
+		this.decisions = new DecisionRecords(join(this.stateStore.dataDir, DECISIONS_DIR), {
+			log: (line) => console.log(line),
+		});
+		this.queueScanner = new QueueScanner(this.decisions, {
+			root: () => decisionsSessionsRoot(),
+			statePath: join(this.decisions.dir, SCAN_STATE_FILE),
+			roleOf: (files) => this.decisionChatRoles(files),
+			chatOf: (file) => this.decisionChatTitles.get(file),
+			log: (line) => console.log(line),
+		});
 		// role-messages: the store is read now (message_role works at once); delivery starts with
 		// startRoleMessages, once the restart's carry-on is done.
 		this.roleMessages = new RoleMessages(join(this.stateStore.dataDir, "role-messages.json"), {
@@ -15163,6 +15209,8 @@ export class AgentService {
 			deliver: (file, text) => this.sendRoleMessage(file, text, this.roleMessageHow(text)),
 			note: (file, text) => this.noteRoleMessage(file, text),
 			changed: () => this.onRoleMessagesChanged?.(),
+			sent: (record) => this.keepDecision(messageRecord(record)),
+			initiativeOf: (id) => this.decisions.messageInitiativeOf(id),
 			log: (line) => console.log(line),
 		});
 		roleMessageService = this.roleMessages;
@@ -15176,6 +15224,7 @@ export class AgentService {
 			chatState: (file) => this.queueChatState(file).state,
 			deliver: (file, text) => this.sendRoleMessage(file, text, { cause: "role" }),
 			changed: () => this.onBoardChanged?.(),
+			posted: (post) => this.keepDecision(boardRecord(post)),
 			log: (line) => console.log(line),
 		});
 		roleBoardService = this.roleBoard;
@@ -15199,6 +15248,114 @@ export class AgentService {
 	startRoleMessages(): void {
 		this.roleMessages.start();
 		this.roleBoard.start();
+		this.startDecisionRecords();
+	}
+
+	// -----------------------------------------------------------------------
+	// decision-records (task #83): role messages, Board posts, the owner's answers and queue plans,
+	// kept as they happen (decision-records.ts)
+	// -----------------------------------------------------------------------
+
+	private readonly decisions: DecisionRecords;
+	private readonly queueScanner: QueueScanner;
+	private decisionChatTitles = new Map<string, string>();
+	private stopDecisionAnswers: (() => void) | null = null;
+	private decisionBackfill: BackfillProgress | null = null;
+
+	/** Keep one record; a failure is logged, never thrown at the sender. */
+	private keepDecision(rec: NewDecisionRecord | undefined): void {
+		if (!rec) return;
+		try {
+			this.decisions.append(rec);
+		} catch (err) {
+			console.error(`[decisions] couldn't keep ${rec.source} ${rec.ref}:`, (err as Error).message);
+		}
+	}
+
+	/** The owner's answers (asks.ts "answered") and the queue scanner (about once a minute). */
+	private startDecisionRecords(): void {
+		if (this.stopDecisionAnswers) return;
+		this.stopDecisionAnswers = askHub.on((ev) => {
+			if (ev.type !== "answered" || ev.ask.kind === "approval") return;
+			const at = Date.now();
+			const file = ev.ask.sessionFile;
+			void (file ? this.decisionChatRoles([file]) : Promise.resolve(new Map<string, string | null>()))
+				.catch(() => new Map<string, string | null>())
+				.then((roles) =>
+					this.keepDecision(
+						answerRecord(
+							ev.ask,
+							{ summary: ev.summary, from: ev.from, ...(ev.answers ? { answers: ev.answers } : {}) },
+							at,
+							file ? roles.get(file) : undefined,
+						),
+					),
+				);
+		});
+		this.queueScanner.start();
+	}
+
+	/** Each chat file's role (pi-identity), and the chats' titles for the records. */
+	private async decisionChatRoles(files: string[]): Promise<Map<string, string | null>> {
+		try {
+			const rows = await sessionIndex.listAll(piSessionsRoot());
+			this.decisionChatTitles = new Map(
+				rows.map((r) => [r.path, (r.name || r.firstMessage || "").replace(/\s+/g, " ").slice(0, 80)]),
+			);
+		} catch {
+			/* titles are a nicety */
+		}
+		const { identities } = identityRegistry();
+		if (identities.length === 0) return new Map();
+		return fileIdentityIds(files, identities);
+	}
+
+	/** Control socket decisions_backfill: fill the store from a day on (default 2026-10-03), in the
+	 *  background; decisions_status shows how it goes and the counts. */
+	decisionsBackfill(fromDay?: unknown): { ok: true; progress: BackfillProgress } | { ok: false; error: string } {
+		if (this.decisionBackfill?.running) return { ok: true, progress: this.decisionBackfill };
+		const day = typeof fromDay === "string" && fromDay.trim() ? fromDay.trim() : BACKFILL_FROM_DEFAULT;
+		const from = dayStart(day);
+		if (from === undefined) return { ok: false, error: `from must be YYYY-MM-DD, not "${day}"` };
+		const dataDir = this.stateStore.dataDir;
+		this.decisionBackfill = {
+			running: true,
+			from: day,
+			startedAt: Date.now(),
+			filesDone: 0,
+			filesTotal: 0,
+			added: { message: 0, board: 0, answer: 0, plan: 0, files: 0 },
+		};
+		console.log(`[decisions] backfill from ${day} started`);
+		void backfill(
+			this.decisions,
+			{
+				root: decisionsSessionsRoot(),
+				roleMessagesFile: join(dataDir, "role-messages.json"),
+				roleBoardFile: join(dataDir, "role-board.json"),
+				roleOf: (files) => this.decisionChatRoles(files),
+				chatOf: (file) => this.decisionChatTitles.get(file),
+				onProgress: (p) => {
+					this.decisionBackfill = { ...p, added: { ...p.added } };
+				},
+			},
+			from,
+			day,
+		).then((p) => {
+			this.decisionBackfill = p;
+			console.log(
+				`[decisions] backfill from ${day} done: ${JSON.stringify(p.added)}${p.error ? ` (error: ${p.error})` : ""}`,
+			);
+		});
+		return { ok: true, progress: this.decisionBackfill };
+	}
+
+	decisionsStatus(): {
+		file: string;
+		backfill: BackfillProgress | null;
+		counts: Record<string, Partial<Record<string, number>>>;
+	} {
+		return { file: this.decisions.file, backfill: this.decisionBackfill, counts: this.decisions.counts() };
 	}
 
 	// -----------------------------------------------------------------------
@@ -16983,6 +17140,9 @@ export class AgentService {
 		if (roleMessageService === this.roleMessages) roleMessageService = null;
 		this.roleBoard.stop();
 		if (roleBoardService === this.roleBoard) roleBoardService = null;
+		this.queueScanner.stop();
+		this.stopDecisionAnswers?.();
+		this.stopDecisionAnswers = null;
 		this.participants.dispose();
 		ClientSession.participantRetained = undefined;
 		this.uninstallQueueHost?.();

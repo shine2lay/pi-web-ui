@@ -1778,6 +1778,7 @@
 		"boardToAllRoles": "全ロールへ",
 		"boardToRoles": "{roles} へ",
 		"boardOwnerWords": "オーナーの言葉：{words}",
+		"initiativeTag": "イニシアチブ：{id}",
 		"boardDoneCount": "完了 {n}/{m}",
 		"boardDirectCount": "{n} ロールが直接受信",
 		"boardReadCount": "既読 {n}/{m}",

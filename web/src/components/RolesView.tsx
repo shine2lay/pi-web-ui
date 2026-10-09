@@ -1437,6 +1437,11 @@ function BoardPostCard({ post, roleIds, now }: { post: UiBoardPost; roleIds: str
 					<time dateTime={new Date(post.at).toISOString()}>{clockOf(post.at, now)}</time>
 				</p>
 				{post.ownerWords && <p className="rv-meta rv-bwords">{t("boardOwnerWords", { words: post.ownerWords })}</p>}
+				{post.initiative && (
+					<p className="rv-meta rv-binit" data-initiative={post.initiative}>
+						{t("initiativeTag", { id: post.initiative })}
+					</p>
+				)}
 				<BoardText text={post.text} />
 				<p className="rv-bsum">
 					{order ? (
