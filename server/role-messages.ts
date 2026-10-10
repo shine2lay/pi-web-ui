@@ -305,25 +305,38 @@ export function roleMessageHeader(r: HeaderParts): string {
 	return `[Role message ${r.id} from ${r.from.role} (${oneLine(r.from.title)}), sent from its ${r.from.chat} · ${what}]`;
 }
 
-export function roleMessageHint(r: HeaderParts): string {
+/** quiet-turns (task #96, AGENTS.md rule 18): a turn another role began leaves nothing for the owner to
+ *  read (owner, 2026-10-10: "the response should be sent to the agent only if needed or just don't respond
+ *  at all"). The page folds such a turn into one row; this tells the role not to write for him. */
+export const QUIET_TURN_HINT =
+	"The owner doesn't read this turn: write nothing for him. If the sender needs an answer, send it with message_role; otherwise end the turn without a summary.";
+/** quiet-turns: a reply that answers a question asked for the owner starts a turn that is his to read. */
+export const FOR_OWNER_TURN_HINT =
+	"This answers a question you asked for the owner: your answer in this turn goes to him in full.";
+
+/** `ownerAnswer`: this reply answers a question that was asked for the owner (RoleMessageService.ownerAnswerOf). */
+export function roleMessageHint(r: HeaderParts, opts: { ownerAnswer?: boolean } = {}): string {
 	const reply = `message_role with to "${r.from.role}", kind "reply", replyTo "${r.id}"`;
 	switch (r.kind) {
 		case "report":
 			return "(The app's 6 am report request: your answer in this chat is the report the owner reads. No message_role, no new work, no tasks started.)";
 		case "fyi":
-			return "(An FYI from another role, added without a turn of its own: no reply needed.)";
+			// No turn of its own: it is read with the chat's next message, which may be the owner's.
+			return "(An FYI from another role, added without a turn of its own: no reply needed. Write nothing for the owner about it; if the sender needs an answer, send it with message_role.)";
 		case "reply":
-			return `(The answer to your message ${r.replyTo ?? ""}: no need to answer it.)`;
+			return opts.ownerAnswer
+				? `(The answer to your message ${r.replyTo ?? ""}: no need to answer it. ${FOR_OWNER_TURN_HINT})`
+				: `(The answer to your message ${r.replyTo ?? ""}: no need to answer it. ${QUIET_TURN_HINT})`;
 		case "question":
-			return `(Answer it once, with ${reply}.)`;
+			return `(Answer it once, with ${reply}. ${QUIET_TURN_HINT})`;
 		default:
-			return `(A request: do it if it is small and in your area, else queue it as a task; then reply once, with ${reply}: done, queued as #N, not your area (and whose it is), or needs the owner.)`;
+			return `(A request: do it if it is small and in your area, else queue it as a task; then reply once, with ${reply}: done, queued as #N, not your area (and whose it is), or needs the owner. ${QUIET_TURN_HINT})`;
 	}
 }
 
 /** The text that goes into the receiving chat. */
-export function roleMessageText(r: HeaderParts & { text: string }): string {
-	return `${roleMessageHeader(r)}\n\n${r.text}\n\n${roleMessageHint(r)}`;
+export function roleMessageText(r: HeaderParts & { text: string }, opts: { ownerAnswer?: boolean } = {}): string {
+	return `${roleMessageHeader(r)}\n\n${r.text}\n\n${roleMessageHint(r, opts)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -840,6 +853,8 @@ export class RoleMessages {
 			...(r.replyTo ? { replyTo: r.replyTo } : {}),
 			...(r.kind === "report" && r.report ? { reportDate: r.report.date } : {}),
 			...(r.initiative ? { initiative: r.initiative } : {}),
+			// quiet-turns: a reply answering a question asked for the owner starts his turn, never folded.
+			...(this.ownerAnswerOf(r.id) ? { forOwner: true } : {}),
 			text: r.text,
 		};
 	}
@@ -1283,7 +1298,7 @@ export class RoleMessages {
 			return;
 		}
 		if (r.nextTryAt && now < r.nextTryAt) return;
-		const text = roleMessageText(r);
+		const text = roleMessageText(r, { ownerAnswer: !!this.ownerAnswerOf(r.id) });
 		if (!r.target || !existsSync(r.target)) {
 			const route = await this.route(r);
 			if ("error" in route) {
@@ -1337,6 +1352,12 @@ export class RoleMessages {
 		// An FYI starts no turn: it is added to the chat and read with its next message. queue-paused: so is
 		// anything for a task's chat the owner paused; the chat reads it once the pause is lifted.
 		const paused = r.kind !== "fyi" && (await taskChatPaused(target));
+		// quiet-turns: a message routed before an update changed its hint line goes in with the new text; the
+		// store's hash follows what is sent, so the page still gets its stamp.
+		if (r.hash !== sha1(text)) {
+			r.hash = sha1(text);
+			this.save();
+		}
 		const res = r.kind === "fyi" || paused ? await this.host.note(target, text) : await this.host.deliver(target, text);
 		if (res.ok && paused)
 			this.log(`${r.id} added to ${r.targetChat ?? "?"} without a turn: its task is paused by the owner`);

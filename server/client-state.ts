@@ -267,6 +267,11 @@ export interface ClientSettings {
 	/** 工具结果里的图片直接显示（默认开 = 卡片里出缩略图、点开放大；关 = 不渲染）。
 	 *  纯 UI 偏好，不进预设。 */
 	toolImagesEnabled: boolean;
+	/** quiet-turns (task #96): also fold finished-task wake-ups, stall-check pokes and scheduled wake-ups
+	 *  into one closed row (default off = shown in full). The owner decides; not in presets. */
+	quietQueueWakes?: boolean;
+	quietStallPokes?: boolean;
+	quietScheduledWakes?: boolean;
 	/** skill 全文注入名单（默认空 = 名录模式）。名单里的技能 {{skills}} 展开正文
 	 *  （oh-my-pi 式全文注入；单文件 8KB、总量 32KB 封顶，超限回落名录）。
 	 *  进预设；逐 run 实时读取，改动下一轮即生效。 */
@@ -314,6 +319,9 @@ export interface SettingsPreset extends Omit<
 	| "thinkingWrap"
 	| "toolsWrap"
 	| "toolImagesEnabled"
+	| "quietQueueWakes"
+	| "quietStallPokes"
+	| "quietScheduledWakes"
 	| "devNoCache"
 	| "autoReload"
 	| "subagentDefaultModel"
@@ -887,6 +895,9 @@ export class ClientStateStore {
 			autoReload: stored?.autoReload,
 			toolsWrap: stored?.toolsWrap ?? true,
 			toolImagesEnabled: stored?.toolImagesEnabled ?? true,
+			quietQueueWakes: stored?.quietQueueWakes === true,
+			quietStallPokes: stored?.quietStallPokes === true,
+			quietScheduledWakes: stored?.quietScheduledWakes === true,
 			skillsFullText: normalizeSkillList(stored?.skillsFullText),
 			visionBridgeEnabled: stored?.visionBridgeEnabled ?? true,
 			visionBridgeModel: stored?.visionBridgeModel ?? null,
@@ -947,6 +958,9 @@ export class ClientStateStore {
 			autoReload: settings.autoReload ?? cur.autoReload,
 			toolsWrap: settings.toolsWrap ?? cur.toolsWrap ?? true,
 			toolImagesEnabled: settings.toolImagesEnabled ?? cur.toolImagesEnabled ?? true,
+			quietQueueWakes: settings.quietQueueWakes ?? cur.quietQueueWakes ?? false,
+			quietStallPokes: settings.quietStallPokes ?? cur.quietStallPokes ?? false,
+			quietScheduledWakes: settings.quietScheduledWakes ?? cur.quietScheduledWakes ?? false,
 			skillsFullText: normalizeSkillList(settings.skillsFullText ?? cur.skillsFullText),
 			visionBridgeEnabled: settings.visionBridgeEnabled ?? cur.visionBridgeEnabled ?? true,
 			// 按键存在性合并：null 是合法值（清除语义），`null ?? cur` 会把旧值

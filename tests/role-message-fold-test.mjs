@@ -531,6 +531,10 @@ const { context: deskCtx, page } = await openPage({ width: 1280, height: 900 });
 // 4. message_role cards are folded with the tool-details switch on
 // =========================================================================================================
 {
+	// quiet-turns (#96): the question's turn is one another agent began, so it is folded into the question's
+	// row; opening the row shows the turn, the message_role cards with it.
+	await page.click(`${rowSel(Q.id)} button`);
+	await waitFor(() => page.$(cardSel(Q.id)));
 	await openSteps(page);
 	const bash = await toolCard(page, "bash");
 	check(

@@ -111,6 +111,9 @@ export interface UiRoleMessage {
 	reportDate?: string;
 	/** decision-records: the initiative it is part of (a short id). */
 	initiative?: string;
+	/** quiet-turns: a reply that answers a question asked for the owner: the turn it starts is his to
+	 *  read, so it is never folded away. */
+	forOwner?: boolean;
 	/** The text as the sender wrote it (without the header and hint lines). */
 	text: string;
 }
@@ -194,11 +197,50 @@ export interface UiQuestionRef {
 	text: string;
 }
 
+/** quiet-turns (task #96): what started or joined a turn another agent began. "role": a message from
+ *  another role; "board-order": an order the Board sent the chat directly; the other three fold only when
+ *  the owner's switch for them is on (UiSettings.quietQueueWakes, quietStallPokes, quietScheduledWakes). */
+export type UiQuietKind = "role" | "board-order" | "queue-wake" | "stall-poke" | "scheduled";
+
+/** quiet-turns: one thing a quiet turn sent, for its row ("→ replied to coo", "→ acked bp-…"). */
+export type UiQuietSent =
+	| { t: "message"; kind: string; to: string }
+	| { t: "ack"; id: string }
+	| { t: "post" }
+	| { t: "close"; id: string }
+	| { t: "queued"; n?: number }
+	| { t: "plan"; n: number }
+	| { t: "answered"; n: number }
+	| { t: "passed"; n: number }
+	| { t: "done" };
+
+/** quiet-turns: a turn another agent began, as the server sees it in the whole transcript (for the parts of
+ *  it the page hasn't loaded: UiExchangeDigest.quiet, UiState.quietLead). */
+export interface UiQuietRun {
+	kinds: UiQuietKind[];
+	/** Something shown in full started or joined the turn (the owner's own message…): never folded. */
+	visible?: boolean;
+	/** What the whole turn sent (the page adds what it sees itself; each item counts once). */
+	sent: UiQuietSent[];
+	/** Incoming messages that joined it after the first. */
+	joined?: number;
+	/** Its last answer failed or was stopped. */
+	ended?: "error" | "aborted";
+	/** Still going (no final answer yet). */
+	running?: boolean;
+	/** The message that began the turn (UiMessage.id), when this piece is a later part of it. */
+	rowId?: string;
+	/** UiExchangeDigest.quiet: how many of the digest's last `after` messages come after the turn (shown as usual). */
+	outside?: number;
+}
+
 /** 分页窗口之前的一轮对话的摘要（exchange-digest，见 server/exchange-digest.ts）。
  *  窗口只带最新一截消息，agent 一轮动辄上千步，这一截常常全落在最后一轮里——
  *  折叠之后前面几轮问了什么、答了什么都看不到。摘要只带页面折着时显示的东西：
  *  提问、回答（只留文字）和折叠行的计数；步骤要等点开这一轮才取（load_older）。 */
 export interface UiExchangeDigest {
+	/** quiet-turns: this exchange is part of a turn another agent began (shown as one closed row). */
+	quiet?: UiQuietRun;
 	/** 这一轮第一条消息（提问 / `!` 命令）在完整消息列表里的下标。 */
 	index: number;
 	/** 摘要覆盖到哪（不含）：一整轮 = 下一轮的开头；partial = 窗口起点。 */
@@ -498,6 +540,9 @@ export interface UiState {
 	 *  所以完整长度恒等于 `messagesStart + messages.length`——不另发 total，
 	 *  免得两处不一致。 */
 	messagesStart?: number;
+	/** quiet-turns: the window starts inside a turn (messagesStart isn't where it began): that turn, so the
+	 *  page folds the rest of it the same way. Absent = the window starts where a turn begins. */
+	quietLead?: UiQuietRun;
 	/** 全量提问索引：每条 user 消息一项，按顺序。提问导轨据此列出**整段**
 	 *  对话的提问——哪怕消息本体还没加载，编号也是全局的。
 	 *  只在真的多了提问时随 snapshot_delta 重发；缺省 = 沿用上一次。 */
@@ -1299,6 +1344,11 @@ export type ClientMessage =
 			/** 工具结果里的图片直接显示（默认开）。关 → 工具卡不渲染缩略图
 				（快照仍带图，纯 UI 偏好，不需要 reload runtime）。 */
 			toolImagesEnabled?: boolean;
+			/** quiet-turns: fold these turns too (default off): a finished queue task waking its main chat,
+			 *  stall-check pokes, scheduled wake-ups. */
+			quietQueueWakes?: boolean;
+			quietStallPokes?: boolean;
+			quietScheduledWakes?: boolean;
 			/** skill 全文注入名单（默认空 = 名录模式）。名单里的技能 {{skills}} 展开正文。 */
 			skillsFullText?: string[];
 			/** 子代理默认模型（"provider/id"；null/未设 = 子代理跟随主对话当前模型）。
@@ -3086,6 +3136,9 @@ export interface ConversationSummary {
 	/** queue-main-chat: a task chat whose task asks its main chat now: nothing says the user is needed (no
 	 *  green light, and its run ending makes no "done" cue). */
 	queueAsking?: boolean;
+	/** quiet-turns: its last turn was one another agent began (a role message, a Board order…): nothing for
+	 *  the owner to read, so its end makes no "done" cue. */
+	quietRun?: boolean;
 	/** 「最近对话」列内的**稳定排序键**（转录最后活动时间 ms，缺省时用对话创建时间）。
 	 *  只有**真的聊了**才变 —— 光是点开看一眼（常驻行变成活行）不会让行换位置。
 	 *  （flat-recent-chats 之后左栏不再用它排序；保留给其他调用方。） */
@@ -3288,6 +3341,13 @@ export interface UiSettingsState {
 	/** 工具结果里的图片直接显示（默认开）。关 → 工具卡不渲染缩略图。
 	 *  纯 UI 偏好，不进预设。 */
 	toolImagesEnabled: boolean;
+	/** quiet-turns (task #96): also fold, as one closed row, a finished queue task waking its main chat
+	 *  ("[Queue] Task #N (…) is done in its chat …"), stall-check pokes (role messages starting
+	 *  "[Stall check] ") and scheduled wake-ups ("[Scheduled task …]"). Off (absent) = shown in full.
+	 *  Kept on the server, so every browser agrees. */
+	quietQueueWakes?: boolean;
+	quietStallPokes?: boolean;
+	quietScheduledWakes?: boolean;
 	/** skill 全文注入名单（默认空 = 名录模式）：名单里的技能 {{skills}} 展开正文。 */
 	skillsFullText: string[];
 	/** Vision bridge on/off (default on). Off → images are sent as-is. */
@@ -3423,6 +3483,8 @@ export type ServerMessage =
 			/** 新的窗口起点落在一轮中间时，这一轮开头那一截的摘要（exchange-digest，partial）：
 			 *  替换客户端手里同一轮的摘要（它的计数覆盖到旧的起点，现在会和载入的消息重复）。 */
 			straddle?: UiExchangeDigest;
+			/** quiet-turns: the turn the new window start falls inside (UiState.quietLead for the new start). */
+			quietLead?: UiQuietRun;
 	  }
 	| {
 			/** load_exchanges 的回执：beforeIndex 之前的几轮摘要（升序，最后一份接到 beforeIndex）。

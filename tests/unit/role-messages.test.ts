@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { IdentityDef } from "../../server/identities.js";
 import { serializeMessage } from "../../server/serialize.js";
 import {
+	FOR_OWNER_TURN_HINT,
+	QUIET_TURN_HINT,
 	ROLE_MESSAGE_CHAIN_MAX,
 	ROLE_MESSAGE_CUSTOM_TYPE,
 	ROLE_MESSAGES_PER_HOUR,
@@ -595,7 +597,7 @@ describe("delivery", () => {
 		expect(via("FYI-1")).toHaveLength(1);
 		const text = f.sent.find((x) => x.via === "note")?.text ?? "";
 		expect(text.split("\n").at(-1)).toBe(
-			"(An FYI from another role, added without a turn of its own: no reply needed.)",
+			"(An FYI from another role, added without a turn of its own: no reply needed. Write nothing for the owner about it; if the sender needs an answer, send it with message_role.)",
 		);
 		// An FYI never deepens a chain: the chat's last user message is still not a role message.
 		expect(s.handlingDepth(B, "hello")).toBe(0);
@@ -739,6 +741,57 @@ describe('telegram-coo: forOwner (owner 2026-10-06: "Yes, answers to my question
 		expect(s.ownerAnswerOf(q.record.id)).toBeNull();
 		expect(s.ownerAnswerOf("rm-00000000")).toBeNull();
 		expect(s.ownerAnswerOf(undefined)).toBeNull();
+	});
+
+	it("quiet-turns: the answer to a question asked for the owner goes in with the for-owner hint, and its card says forOwner", async () => {
+		const f = fake([role("alpha", "Alpha", A), role("beta", "Beta", B)]);
+		const s = new RoleMessages(store, f.host, clock);
+		const q = s.send(sender({ role: "alpha", file: A, forOwner: { ownerIds: ["s7"] } }), {
+			to: "beta",
+			kind: "question",
+			text: "for him",
+		});
+		const other = s.send(sender({ role: "alpha", file: A }), { to: "beta", kind: "question", text: "not for him" });
+		if (!q.ok || !other.ok) throw new Error("not sent");
+		await s.tick();
+		const beta = sender({ role: "beta", file: B });
+		const answer = s.send(beta, { to: "alpha", kind: "reply", replyTo: q.record.id, text: "here" });
+		const answer2 = s.send(beta, { to: "alpha", kind: "reply", replyTo: other.record.id, text: "there" });
+		if (!answer.ok || !answer2.ok) throw new Error("not sent");
+		await s.tick();
+		const inA = f.sent.filter((x) => x.file === A).map((x) => x.text);
+		expect(inA).toHaveLength(2);
+		const [forHim, plain] = [answer.record.id, answer2.record.id].map((id) => inA.find((t) => t.includes(id)) ?? "");
+		expect(
+			forHim.endsWith(`(The answer to your message ${q.record.id}: no need to answer it. ${FOR_OWNER_TURN_HINT})`),
+		).toBe(true);
+		expect(plain).toContain(QUIET_TURN_HINT);
+		expect(plain).not.toContain(FOR_OWNER_TURN_HINT);
+		// The page's card: forOwner on the answer to his question only (never on the question itself).
+		expect(s.stampFor(A, forHim)).toMatchObject({ id: answer.record.id, kind: "reply", forOwner: true });
+		expect(s.stampFor(A, plain)?.forOwner).toBeUndefined();
+		const inB = f.sent.find((x) => x.file === B && x.text.includes(q.record.id))?.text ?? "";
+		expect(s.stampFor(B, inB)).toMatchObject({ id: q.record.id });
+		expect(s.stampFor(B, inB)?.forOwner).toBeUndefined();
+	});
+
+	it("quiet-turns: a message routed before an update changed its hint goes in with the new text and keeps its card", async () => {
+		const f = fake([role("alpha", "Alpha", A), role("beta", "Beta", B)]);
+		f.state.set(B, "working");
+		const s = new RoleMessages(store, f.host, clock);
+		const q = s.send(sender({ role: "alpha", file: A }), { to: "beta", kind: "question", text: "why?" });
+		if (!q.ok) throw new Error("not sent");
+		await s.tick();
+		expect(f.sent).toHaveLength(0);
+		// What an older build stored: the hash of the text before this change.
+		const rec = s.byId(q.record.id);
+		if (!rec) throw new Error("no record");
+		rec.hash = sha1("the old text");
+		f.state.set(B, "idle");
+		await s.tick();
+		expect(f.sent).toHaveLength(1);
+		expect(f.sent[0].text).toContain(QUIET_TURN_HINT);
+		expect(s.stampFor(B, f.sent[0].text)).toMatchObject({ id: q.record.id, kind: "question" });
 	});
 });
 

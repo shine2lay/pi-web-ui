@@ -2404,6 +2404,20 @@ button.session-item.elsewhere-item.confirm {
 	font-size: 11px;
 	color: var(--text-dim);
 }
+/* quiet-turns: what the turn another agent began did ("\2192 replied to coo"), after the message's words */
+.rolemsg-row-turn {
+	flex: 0 1 auto;
+	min-width: 0;
+	max-width: 45%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+.quiet-turn-open .rolemsg-row-chevron {
+	transform: rotate(45deg);
+}
 /* the open card's head is the button that folds it again */
 button.rolemsg-fold {
 	font: inherit;
@@ -2438,6 +2452,9 @@ button.rolemsg-fold:focus-visible {
 		gap: 6px;
 		min-height: 44px;
 		padding-right: 8px;
+	}
+	.rolemsg-row-turn {
+		max-width: 50%;
 	}
 }
 

@@ -44,7 +44,7 @@ import type {
 	UiRoleBoardOrder,
 	UiRoleOverview,
 } from "./protocol.js";
-import { eachLineWith, firstTextOf } from "./role-messages.js";
+import { eachLineWith, firstTextOf, QUIET_TURN_HINT } from "./role-messages.js";
 
 /** The custom message type of a chat's turn-start note (and its mark in details). */
 export const BOARD_CUSTOM_TYPE = "board";
@@ -346,13 +346,17 @@ function endedLine(p: BoardPostRecord, tz?: string): string {
 	return `Ended: ${kindWord(p.kind).toLowerCase()} ${p.id} "${p.title}", closed by ${c?.by ?? "?"}${when}${note}`;
 }
 
-/** The text of an order sent directly (a steer into a running turn, or a turn in a home chat). */
-export function boardOrderText(p: UiBoardPost, tz?: string): string {
+/** The text of an order sent directly (a steer into a running turn, or a turn in a home chat).
+ *  quiet-turns (task #96): a turn the order starts leaves nothing for the owner to read; steered into a
+ *  running turn (maybe the owner's own), it adds nothing for him about the order. */
+export function boardOrderText(p: UiBoardPost, tz?: string, how: "turn" | "steer" = "turn"): string {
 	const header = `${BOARD_ORDER_PREFIX}${p.id} from ${fromWords(p)} · ${boardTime(p.at, tz)}]`;
 	const parts = [header, `**${p.title}**`, p.text];
 	if (p.ownerWords) parts.push(`Owner's words: ${p.ownerWords}`);
 	parts.push(
-		"(The owner's order on the roles' board, sent to you directly because you have something waiting. It asks for no reply.)\n" +
+		(how === "turn"
+			? `(The owner's order on the roles' board, sent to you directly because you have something waiting. It asks for no reply. ${QUIET_TURN_HINT})\n`
+			: "(The owner's order on the roles' board, sent to you directly because you have something waiting. It asks for no reply: write nothing for the owner about it.)\n") +
 			ackLine(p.id),
 	);
 	return parts.join("\n\n");
@@ -761,7 +765,7 @@ export class RoleBoard {
 			);
 			states = new Map();
 		}
-		const text1 = boardOrderText(post);
+		const text1 = boardOrderText(post, undefined, "steer");
 		for (const role of audience) {
 			const s = states.get(role);
 			const route = s ? routeOrder(s) : undefined;

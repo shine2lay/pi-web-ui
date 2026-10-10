@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 
 import type { CSSProperties, ReactNode } from "react";
@@ -32,6 +32,16 @@ import { useT } from "../i18n";
 import { isExportableMessage, setExportMessageCatalog, useExportImage } from "../export-image-state";
 import { SaveImageDialog } from "./SaveImageDialog";
 import { attachmentsLandedIds, type PendingSend, runStartingFor } from "../pending-sends";
+import {
+	ownerOnly,
+	planChatQuiet,
+	quietTurnSummary,
+	quietUnder,
+	type QuietRun,
+	type QuietSwitches,
+} from "../quiet-turns";
+import { isRoleMessageOpen, NoticeTurnRow, RoleMessageRow, useRoleMessageOpenVersion } from "./RoleMessageRow";
+import { roleMessageViewOf } from "../role-message-text";
 
 /** Stable shared empty map — passing this (instead of a fresh Map) lets
  *  React.memo skip messages that have no live tool output to show. */
@@ -371,6 +381,25 @@ function withRow(row: ReactNode, el: ReactNode): ReactNode[] {
 	return row ? [row, el] : [el];
 }
 
+const NO_QUIET_SWITCHES: QuietSwitches = {};
+
+/** quiet-turns: a user message's text (the row's preview, the role-message header). */
+function plainTextOf(m: UiMessage): string {
+	let out = "";
+	for (const b of m.content) if (b.type === "text" && typeof b.text === "string") out += b.text;
+	return out;
+}
+
+/** quiet-turns: how a message in a closed quiet turn is drawn. "row": the turn's one row (its first
+ *  message); "keep": only its calls for the owner; "hide": not at all. `lead`: a row goes first (the turn
+ *  began before the loaded messages and no earlier piece shows its row). */
+interface QuietPlace {
+	role: "row" | "keep" | "hide";
+	run: QuietRun;
+	key: string;
+	lead?: boolean;
+}
+
 interface MessageListProps {
 	/** 消息工具条条目（message.actions 槽位：内置 + 插件的最终结果）。 */
 	uiMessageActions?: import("../ui-slots").UiSlotEntry[];
@@ -425,10 +454,13 @@ interface MessageListProps {
 	onRetrySend?: (id: string) => void;
 	/** optimistic-send: × on a "Not sent" message (takes it out; the text goes back to the input box). */
 	onRemoveSend?: (id: string) => void;
+	/** quiet-turns: the owner's switches for the kinds he decides on (Settings; absent = off). */
+	quietSwitches?: QuietSwitches;
 }
 
 export function MessageList({
 	state,
+	quietSwitches,
 	pendingSends = EMPTY_PENDING,
 	onRetrySend,
 	onRemoveSend,
@@ -591,6 +623,52 @@ export function MessageList({
 		},
 		[foldPlan],
 	);
+
+	// ---- quiet-turns ----------------------------------------------------
+	// A turn another agent began (a role's message, a Board order, kinds the owner switched on) shows as one
+	// closed row: the incoming message's row plus what the turn sent. Open = the turn as before.
+	const quietVersion = useRoleMessageOpenVersion();
+	const quietSw = quietSwitches ?? NO_QUIET_SWITCHES;
+	const quietRuns = useMemo(() => planChatQuiet(state.messages, state.quietLead), [state.messages, state.quietLead]);
+	/** Rows the digests above the window already show (a turn there began in the digest's own head). */
+	const digestQuietRows = useMemo(() => {
+		const out = new Set<string>();
+		for (const d of state.exchanges ?? []) if (d.quiet && !d.quiet.rowId && d.head[0]) out.add(d.head[0].id);
+		return out;
+	}, [state.exchanges]);
+	const quietPlan = useMemo(() => {
+		void quietVersion; // re-plan when a row opens or folds
+		const place = new Map<string, QuietPlace>();
+		/** Open turns an app notice began (or that began before the window): the row that folds them again. */
+		const openHeads = new Map<string, QuietPlace>();
+		let leadRow: QuietPlace | undefined;
+		let lastClosed: QuietRun | undefined;
+		for (const r of quietRuns) {
+			if (!quietUnder(r, quietSw)) continue;
+			const key = r.row >= 0 ? state.messages[r.row]?.id : state.quietLead?.rowId;
+			if (!key) continue;
+			const starter = r.row >= 0 ? state.messages[r.row] : undefined;
+			const roleStarter = !!starter && !!roleMessageViewOf(starter, plainTextOf(starter));
+			const open = searchOpen || isRoleMessageOpen(key);
+			const first = Math.max(0, r.start);
+			if (open) {
+				if (r.row < 0 && !digestQuietRows.has(key) && state.messages[first]) {
+					openHeads.set(state.messages[first].id, { role: "row", run: r, key, lead: true });
+				} else if (starter && !roleStarter) {
+					openHeads.set(starter.id, { role: "row", run: r, key });
+				}
+				continue;
+			}
+			const keep = new Set(r.keep);
+			for (let i = first; i <= r.last && i < state.messages.length; i++) {
+				const m = state.messages[i];
+				place.set(m.id, { role: i === r.row ? "row" : keep.has(i) ? "keep" : "hide", run: r, key });
+			}
+			if (r.row < 0 && !digestQuietRows.has(key)) leadRow = { role: "row", run: r, key, lead: true };
+			if (r.last >= state.messages.length - 1) lastClosed = r;
+		}
+		return { place, openHeads, leadRow, lastClosed };
+	}, [quietRuns, quietSw, quietVersion, searchOpen, state.messages, state.quietLead, digestQuietRows]);
 	/** 点折叠行：展开/收起这一轮。贴底看着直播轮时展开 = 继续贴底跟着最新步骤走；
 	 *  其它情况把这一行钉在原位（内容在它下面长出/收回，贴底再钉不该把它拽走）。 */
 	const toggleFold = useCallback((fold: ExchangeFold, el: HTMLElement | null) => {
@@ -1389,7 +1467,49 @@ export function MessageList({
 			/>
 		);
 	};
+	/** quiet-turns: the one row of a quiet turn. Its starter is a role message or Board order -> the #75 row
+	 *  with what the turn did; an app notice -> a notice row; began before the loaded messages -> "earlier". */
+	const renderQuietRow = (p: QuietPlace, starter: UiMessage | undefined, open = false, keyPrefix = "quiet") => {
+		const turn = quietTurnSummary(p.run, t);
+		const text = starter ? plainTextOf(starter) : "";
+		const view = starter && !p.lead ? roleMessageViewOf(starter, text) : null;
+		if (view && !open) {
+			return (
+				<RoleMessageRow
+					key={`${keyPrefix}:${p.key}`}
+					msgId={p.key}
+					view={view}
+					timestamp={starter?.timestamp}
+					turn={turn}
+				/>
+			);
+		}
+		const kind = p.lead || !starter ? "earlier" : p.run.kinds.includes("scheduled") ? "scheduled" : "queue-wake";
+		return (
+			<NoticeTurnRow
+				key={`${keyPrefix}:${p.key}`}
+				msgId={p.key}
+				kind={kind}
+				text={p.lead || !starter ? "" : text}
+				timestamp={starter?.timestamp}
+				turn={turn}
+				open={open}
+			/>
+		);
+	};
 	const renderDigest = (d: UiExchangeDigest) => {
+		const q = d.quiet;
+		if (q && quietUnder(q, quietSw)) {
+			const key = q.rowId ?? d.head[0]?.id;
+			if (key && !searchOpen && !isRoleMessageOpen(key)) {
+				const run = { ...q, sent: q.sent, ended: q.ended, running: !!q.running } as unknown as QuietRun;
+				const out = q.outside ? d.after.slice(-q.outside) : [];
+				return [
+					...(q.rowId ? [] : [renderQuietRow({ role: "row", run, key }, d.head[0], false, "qd")]),
+					...out.map(renderDigestMessage),
+				];
+			}
+		}
 		const fold = d.head[0] ? digestFolds.get(d.head[0].id) : undefined;
 		return [
 			...d.head.map(renderDigestMessage),
@@ -1412,7 +1532,13 @@ export function MessageList({
 	const lastFold = foldPlan.folds[foldPlan.folds.length - 1];
 	const liveFolded = !!lastFold?.live && !foldOpen.has(lastFold.key);
 	const sm = state.streamingMessage;
-	const streamShown = !sm ? null : !liveFolded ? sm : hasVisibleText(sm) && !hasToolCall(sm) ? textOnly(sm) : null;
+	const streamFold = !sm ? null : !liveFolded ? sm : hasVisibleText(sm) && !hasToolCall(sm) ? textOnly(sm) : null;
+	// quiet-turns: a closed quiet turn that is still running shows nothing live (its calls for the owner do).
+	const quietLive = !!quietPlan.lastClosed && listStreaming;
+	const streamOwner = quietLive && sm ? ownerOnly(sm) : null;
+	const streamShown = !quietLive ? streamFold : streamOwner && streamOwner.content.length > 0 ? streamOwner : null;
+	const tailShown =
+		foldPlan.tailRow && !(quietPlan.lastClosed && quietPlan.place.has(foldPlan.tailRow.key)) ? foldPlan.tailRow : null;
 
 	return (
 		<div className={`messages-wrap${exportImage.open ? " messages-exporting" : ""}`}>
@@ -1467,10 +1593,53 @@ export function MessageList({
 				)}
 				{state.messages.flatMap((m, i) => {
 					// exchange-fold：这一轮的折叠行画在正文第一条之前；折着时步骤不画，回答只画文字
-					const rowFold = foldPlan.rowBefore.get(m.id);
-					const row = rowFold ? renderFoldRow(rowFold) : null;
+					const qp = quietPlan.place.get(m.id);
+					const rowFold = qp ? undefined : foldPlan.rowBefore.get(m.id);
+					const openHead = quietPlan.openHeads.get(m.id);
+					const leadHead =
+						i === 0 && quietPlan.leadRow ? renderQuietRow(quietPlan.leadRow, undefined, false, "ql") : null;
+					const row = (
+						<>
+							{leadHead}
+							{openHead ? renderQuietRow(openHead, openHead.lead ? undefined : m, true, "qo") : null}
+							{rowFold ? renderFoldRow(rowFold) : null}
+						</>
+					);
+					const hasRow = !!(leadHead || openHead || rowFold);
+					if (qp) {
+						if (qp.role === "hide") return withRow(hasRow ? <Fragment key={`qh:${m.id}`}>{row}</Fragment> : null, null);
+						if (qp.role === "row")
+							return withRow(hasRow ? <Fragment key={`qh:${m.id}`}>{row}</Fragment> : null, renderQuietRow(qp, m));
+						const kept = ownerOnly(m);
+						return withRow(
+							hasRow ? <Fragment key={`qh:${m.id}`}>{row}</Fragment> : null,
+							kept.content.length === 0 ? null : (
+								<Message
+									uiMessageActions={uiMessageActions}
+									uiContextMessage={uiContextMessage}
+									uiContextToolCall={uiContextToolCall}
+									onUiAction={onUiAction}
+									key={m.id}
+									message={kept}
+									onJump={jumpTo}
+									toolResults={toolResults}
+									liveOutputs={EMPTY_LIVE}
+									toolStatuses={toolStatuses}
+									streaming={msgStreaming}
+									onKillBash={onKillBash}
+									toolsWrap={toolsWrap}
+									toolImages={toolImages}
+									thinkingWrap={thinkingWrap}
+									isLast={false}
+									onEdit={onEdit}
+									searchActive={searchOpen}
+								/>
+							),
+						);
+					}
+					const rowEl = hasRow ? <Fragment key={`qh:${m.id}`}>{row}</Fragment> : null;
 					// system 不占位——旧快照残留的空 SYSTEM 气泡直接丢掉，不进折叠行也不进 LazyMount。
-					if (m.role === "system" || foldHides(m.id)) return withRow(row, null);
+					if (m.role === "system" || foldHides(m.id)) return withRow(rowEl, null);
 					const fold = foldPlan.byMsg.get(m.id);
 					const shown = fold && !foldOpen.has(fold.key) ? textOnly(m) : m;
 					const isOld = oldRow(i, m);
@@ -1478,13 +1647,13 @@ export function MessageList({
 					if (isOld && !isExpandedOld) {
 						// toolResult content lives inside its toolCall card — nothing to
 						// show in the collapsed row either.
-						if (m.role === "toolResult") return withRow(row, null);
-						return withRow(row, <CollapsedMessage key={m.id} message={shown} onExpand={expand} />);
+						if (m.role === "toolResult") return withRow(rowEl, null);
+						return withRow(rowEl, <CollapsedMessage key={m.id} message={shown} onExpand={expand} />);
 					}
 					const qIdx = m.role === "user" ? qnIndex.get(m.id) : undefined;
 					const show = !virtualOn || alwaysSet.has(m.id) || pinned.has(m.id) || !hidden.has(m.id);
 					return withRow(
-						row,
+						rowEl,
 						<LazyMount
 							key={m.id}
 							id={m.id}
@@ -1531,7 +1700,7 @@ export function MessageList({
 						</LazyMount>,
 					);
 				})}
-				{foldPlan.tailRow && renderFoldRow(foldPlan.tailRow)}
+				{tailShown && renderFoldRow(tailShown)}
 				{streamShown && (
 					<Message
 						uiMessageActions={uiMessageActions}

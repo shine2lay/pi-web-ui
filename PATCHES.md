@@ -117,6 +117,8 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | role-board                   | `local` | `server/role-board.ts` (new), `board-tool.ts` (new), `agent-service.ts` (turn-start note, steer, direct turn), `index.ts`, `role-messages.ts`, `role-message-tool.ts`, `roles-overview.ts`, `roles-overview-tool.ts`, `identity-config.ts`, `tool-manager.ts`, `protocol.ts`, `protocol-version.ts` (45), `web/src/components/RolesView.tsx`, `RoleMessageRow.tsx`, `Message.tsx`, `roles-view-model.ts`, `roles-state.ts`, `role-message-text.ts`, `exchange-fold.ts`, `use-chat.ts`, `roles-view.css`, `i18n.tsx`, `locales/*.json`, `docs/board.md` (new), `docs/roles-overview.md`, `tests/board-test.mjs` (new), `tests/unit/role-board.test.ts` (new), `tests/unit/`; paired with pi-identity |
 | decision-records             | `local` | `server/decision-records.ts` (new), `agent-service.ts` (hooks, scanner, backfill), `role-messages.ts`, `role-board.ts`, `role-message-tool.ts`, `board-tool.ts`, `asks.ts`, `control-socket.ts`, `protocol.ts`, `bin/pi-web-ui.mjs` (`decisions`), `web/src/components/RolesView.tsx`, `IdentitiesSettings.tsx`, `ToolCallBlock.tsx`, `role-message-text.ts`, `i18n.tsx`, `locales/*.json`, `tests/unit/decision-records.test.ts` (new) |
 | faint-contrast               | `local` | `web/src/styles.css` (`:root` `--text-faint`, new `--text-disabled`, five `:disabled` rules), `make-light-theme.mjs` (White palette, `--text-disabled` fallback, `CLASSIC_LIGHT_NOTICE`), `themes/*.css` (regenerated; Translucent / Transparent and the six hand-made themes by hand), `tests/faint-contrast-test.mjs` (new), `tests/unit/faint-contrast.test.ts` (new) |
+| quiet-turns                  | `local` | `server/quiet-turns.ts` (new), `agent-service.ts`, `role-messages.ts`, `role-board.ts`, `protocol.ts`, `client-state.ts`, `settings-service.ts`, `index.ts`, `web/src/quiet-turns.ts` (new), `MessageList.tsx`, `RoleMessageRow.tsx`, `SettingsModal.tsx`, `App.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `docs/roles-overview.md`, `tests/quiet-turns-test.mjs` (new), `tests/unit/quiet-turns.test.ts` (new) |
+>>>>>>> 508ea5b (quiet-turns: a turn another agent began folds into one row (Ops #96))
 
 ---
 
@@ -5835,3 +5837,78 @@ pinned one that stops showing, so the list is trimmed when Design's fix lands.
   by hand (without it, its disabled controls take the default dark's old grey `#6b7284`).
 - If upstream fixes the notice colours in `make-light-theme.mjs` itself, drop `CLASSIC_LIGHT_NOTICE`.
 - When Design's fix for the pinned hits lands, trim `PINNED` in `tests/faint-contrast-test.mjs`.
+
+## quiet-turns
+
+**Status**: `local`
+**Baseline**: v0.96.1 (on top of `role-messages`, `telegram-coo`, `role-message-fold`, `role-board`, `exchange-digest`)
+
+**Why** (queue task #96; the owner in COO's home chat, 2026-10-10 ~11:12 PDT, via COO rm-37872561): "in
+alot of chat, i see response to agent's message, like i see an actual output to me in chat, i dont need
+anything to see, the response should be sent to the agent only if needed or just don't respond at all".
+`role-message-fold` folded the incoming message, but the role's own turn still showed in full, written
+to him.
+
+### Changes
+
+1. **Which turns are quiet** (`server/quiet-turns.ts` new, pure; the page imports it too): a run is
+   quiet when everything that began or joined it is agent-sent: a role message (question, request,
+   reply, fyi; user message or FYI note) or a "[Board order " message. Never quiet: anything the owner
+   typed, a role message stamped `forOwner` (a reply answering a question asked for him), a 6 am report
+   request, plugin messages (the morning brief), a "(System" note joins without deciding, a bash run
+   by the owner ends it. A stamp-less old message is read from its header: from another role, not "from
+   the app" → quiet. Three more kinds count only when the owner's switch is on: "[Queue] Task #N … is
+   done in its chat" / "[Queue] N tasks are done" wakes, role messages starting "[Stall check] ", and
+   "[Scheduled task …]" wake-ups. The plan also gives what the turn sent (`message_role`, `board`
+   ack/post/close, `queue_add` queued #N or plan change, `queue_reply`, `queue_done`, read from the
+   calls and their results), whether it failed or stopped, and the messages that stay in sight
+   (`ask_user_question`, `queue_stuck`, a `tldr` with `needs_you`, a `queue_reply` passing a question on).
+2. **Server** (`agent-service.ts`): the runs are cached per chat index; digests get `quiet`, a window
+   starting inside a quiet turn gets `quietLead` (snapshot, preview, older pages). When a run ends and
+   it was quiet (switches from the settings), the chat isn't marked waiting/unread and its list row
+   carries `quietRun: true`. The role-message stamp (`stampForMessage`) adds `forOwner` (additive).
+3. **Display** (`MessageList.tsx`, `RoleMessageRow.tsx`, `web/src/quiet-turns.ts` new): a closed quiet
+   turn is one row: the `role-message-fold` row of the message that began it, plus "→ replied to coo ·
+   acked bp-…" ("→ nothing sent", "working…", "· failed"); queue and scheduled wake-ups get a
+   notice row; a window that starts mid-turn gets an "earlier" row. Opening the row (same open-set as
+   role-message-fold, kept while the page is open; Ctrl+F opens all) shows the turn exactly as before.
+   Owner-facing calls stay outside the fold. The turn-finished sound and browser notice skip chats
+   whose last run was quiet (`withoutQuietRuns` in `DoneCues`).
+4. **Switches** (`client-state.ts`, `settings-service.ts`, `index.ts`, `SettingsModal.tsx`): server
+   settings `quietQueueWakes`, `quietStallPokes`, `quietScheduledWakes` ("Fold finished-task wake-ups",
+   "Fold stall-check pokes", "Fold scheduled wake-ups" in Settings → Display), off by default: the owner
+   hadn't answered COO about these three kinds when this landed.
+5. **Hint lines** (`role-messages.ts`, `role-board.ts`): question, request (keeps reply-once), reply and
+   Board-order turns add "The owner doesn't read this turn: write nothing for him. If the sender needs
+   an answer, send it with message_role; otherwise end the turn without a summary." A forOwner reply
+   says "This answers a question you asked for the owner: your answer in this turn goes to him in
+   full." The FYI and steered Board-order notes say to write nothing for him about it. A message whose
+   text changes this way is re-hashed before it is sent, so its stamp still matches. Every-chat rule
+   18 in `~/.pi/agent/AGENTS.md` says the same.
+6. i18n: en + the eight `locales/*.json`; CSS `.rolemsg-row-turn`, `.quiet-turn-*` (44 px on phones).
+
+Display and hint text only: no transcript line changes, Telegram, caps and routing unchanged.
+
+### How it was checked
+
+- `tests/unit/quiet-turns.test.ts` (new, 27): every quiet and visible case from the plan (role kinds,
+  Board order, joined runs, stamp-less header, forOwner, report, brief, owner mid-turn, FYI then owner,
+  "[Board]" note on an owner message), the three switches on and off, owner-facing calls kept, what was
+  sent, failed/stopped, lead runs, `quietSince`, cut JSON arguments, and every hint line.
+  `tests/unit/role-messages.test.ts` (+2): the forOwner hint and stamp, re-hash before sending.
+- `tests/quiet-turns-test.mjs` (new, sealed, a stand-in model only for the live turns): a seeded chat
+  with every case; four quiet rows, closed, with the right words; no quiet text, thinking or tool card
+  outside them, the dialog in sight; the owner's turns, forOwner answer, report and brief in full;
+  open/fold; the switches on and off; live: a role-begun turn folds, no done sound, `quietRun`, no
+  unread light in the background while an owner turn still sounds and lights; axe, one-line rows,
+  24/44 px targets, no sideways scroll, dark and white, desktop and phone; transcript unchanged.
+  Screenshots with `QUIET_SHOT=<dir>`. On mine before it (aeea5e4) it fails at its first check.
+- `tests/role-message-fold-test.mjs`: the question's turn is now quiet, so the test opens its row
+  before looking at its tool cards.
+
+### When syncing
+
+- If the role-message header or hint (`roleMessageHeader`/`roleMessageHint`), `boardOrderText`, the
+  "[Queue]" done notice of pi-queue or the scheduler's "[Scheduled task" prefix change, change
+  `starterOf` in `server/quiet-turns.ts` (its unit tests build the texts with the server's functions).
+- Keep the quiet plan pure (types only from `protocol.ts`): the page bundles it.

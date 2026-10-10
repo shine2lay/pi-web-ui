@@ -198,6 +198,19 @@ describe("最近对话：状态灯", () => {
 		expect(row?.isStreaming).toBe(false);
 	});
 
+	it("quiet-turns: a turn another agent began lights no green light, and the row says so", () => {
+		const c = conv("b", { listed: true });
+		(c as unknown as { lastRunQuiet?: boolean }).lastRunQuiet = true;
+		s.convs.set("a", conv("a"));
+		s.convs.set("b", c);
+		proto.markRecentWaiting.call(s, c);
+		expect(s.stateStore.getRecentWaiting()).toHaveLength(0);
+		proto.emitConversations.call(s);
+		const row = pushed().find((r) => r.id === "b");
+		expect(row?.waiting).toBe(false);
+		expect((row as { quietRun?: boolean } | undefined)?.quietRun).toBe(true);
+	});
+
 	it("当前正看着的对话跑完不点绿灯（人就在那儿）", () => {
 		const c = conv("a");
 		s.convs.set("a", c);

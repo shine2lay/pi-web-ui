@@ -453,6 +453,10 @@ interface SettingsPatch {
 	thinkingWrap?: boolean;
 	toolsWrap?: boolean;
 	toolImagesEnabled?: boolean;
+	/** quiet-turns: the owner's switches for the kinds he decides on (server settings; default off). */
+	quietQueueWakes?: boolean;
+	quietStallPokes?: boolean;
+	quietScheduledWakes?: boolean;
 	devNoCache?: boolean;
 	autoReload?: boolean;
 	skillsFullText?: string[];
@@ -2437,6 +2441,24 @@ export function SettingsModal({
 									tip={t("toolImagesDesc")}
 									enabled={settings.toolImagesEnabled ?? true}
 									onToggle={() => setPartial({ toolImagesEnabled: !(settings.toolImagesEnabled ?? true) })}
+								/>
+								<ToggleRow
+									title={t("quietQueueWakes")}
+									tip={t("quietQueueWakesDesc")}
+									enabled={settings.quietQueueWakes ?? false}
+									onToggle={() => setPartial({ quietQueueWakes: !(settings.quietQueueWakes ?? false) })}
+								/>
+								<ToggleRow
+									title={t("quietStallPokes")}
+									tip={t("quietStallPokesDesc")}
+									enabled={settings.quietStallPokes ?? false}
+									onToggle={() => setPartial({ quietStallPokes: !(settings.quietStallPokes ?? false) })}
+								/>
+								<ToggleRow
+									title={t("quietScheduledWakes")}
+									tip={t("quietScheduledWakesDesc")}
+									enabled={settings.quietScheduledWakes ?? false}
+									onToggle={() => setPartial({ quietScheduledWakes: !(settings.quietScheduledWakes ?? false) })}
 								/>
 								<ToggleRow
 									title={t("presentAutoOpen")}

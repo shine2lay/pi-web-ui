@@ -107,6 +107,7 @@ import { loadSoundSettings, playSound, saveSoundSettings, type SoundKind, type S
 import { assistantPlainText, loadTtsSettings, saveTtsSettings, speak, type TtsSettings } from "./tts";
 import { shouldSuppressNotify, currentPresence } from "./notify";
 import { cueConversations, withoutAskingChats } from "./done-watch";
+import { quietSwitchesOf, withoutQuietRuns } from "./quiet-turns";
 import { useWideChat } from "./chat-width-settings";
 import { registerFilePreviewHost } from "./file-preview-bridge";
 import { projectNameFromCwd, useProjectTitle } from "./title-settings";
@@ -423,6 +424,11 @@ export function App() {
 	const enabledPlugins = useMemo(
 		() => chat.plugins.filter((p) => !chat.settings?.disabledPlugins?.includes(p.id)),
 		[chat.plugins, chat.settings?.disabledPlugins],
+	);
+	// quiet-turns: the owner's switches (server settings, so phone and laptop agree).
+	const quietSwitches = useMemo(
+		() => quietSwitchesOf(chat.settings),
+		[chat.settings?.quietQueueWakes, chat.settings?.quietStallPokes, chat.settings?.quietScheduledWakes],
 	);
 	// 插件贡献的顶栏条目（issue #146）：插件只声明，宿主渲染/排序/溢出；用户可在设置
 	// 面板隐藏或调序（偏好 per-client 持久化）。顺序与设置面板里看到的一致。
@@ -1011,7 +1017,8 @@ export function App() {
 	const doneCues = (): DoneCues =>
 		(doneCuesRef.current ??= new DoneCues((settled) => {
 			// queue-main-chat: a task chat that stopped to ask its main chat doesn't need the user: no cue.
-			const cues = withoutAskingChats(settled, conversationsRef.current);
+			// quiet-turns: a turn another agent began left nothing for the owner to read: no cue for it.
+			const cues = withoutQuietRuns(withoutAskingChats(settled, conversationsRef.current), conversationsRef.current);
 			if (cues.length === 0) return;
 			const { sound, tts, t } = cueEnv.current;
 			playSound("done", sound);
@@ -2009,6 +2016,7 @@ export function App() {
 									thinkingWrap={chat.settings?.thinkingWrap ?? true}
 									toolsWrap={chat.settings?.toolsWrap ?? true}
 									toolImages={chat.settings?.toolImagesEnabled ?? true}
+									quietSwitches={quietSwitches}
 									/* switch-cache：预览期间不跳（缓存里可能还没有那条消息，会被当成「找不到」放弃）。 */
 									jumpTarget={chat.preview ? null : searchJump}
 									onJumpDone={() => setSearchJump(null)}

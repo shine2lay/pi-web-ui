@@ -155,6 +155,22 @@ except COO's answers to his own questions (telegram-coo). The board's turn-start
 board · 2 new posts") and orders sent directly ("From owner · Board order · Title: first words")
 fold the same way (role-board).
 
+## Turns another agent started (quiet turns)
+
+A turn begun only by another role's message (question, request, reply, FYI) or a Board order is
+not for the owner (quiet-turns): the whole turn folds into that message's row, which adds what the
+turn sent ("→ replied to coo", "→ acked bp-…", "→ queued #12", "→ nothing sent", "· failed").
+Opening the row shows the turn as before. Two role messages in one run share the first one's row.
+Never folded: turns the owner began or joined, a reply answering a question asked for him
+(forOwner), the 6 am report request, plugin messages such as the morning brief, and inside a folded
+turn its ask_user_question dialogs and Needs-you items (queue_stuck, a needs-you TL;DR line, a question
+passed on with queue_reply). A quiet turn plays no "done" sound, sends no browser notice and lights no
+unread mark. Three switches in Settings → Display (server settings, so phone and laptop agree; all
+off by default) fold more kinds the same way: a finished queue task waking its main chat ("[Queue] Task
+#N … is done in its chat"), stall-check pokes (a role message starting "[Stall check] ") and scheduled
+wake-ups. The hint line under each delivered role message and Board order tells the role to write
+nothing for the owner and to answer the sender with message_role only if it needs an answer.
+
 ## Tests
 
 - `tests/unit/roles-overview.test.ts`: the server reader and push (temporary folders, synthetic
@@ -167,4 +183,6 @@ fold the same way (role-board).
   role, the report states, the cap).
 - `tests/unit/role-message-text.test.ts`, `tests/role-message-fold-test.mjs`: folded role messages and
   message_role cards in a chat (both themes, phone and desktop, Ctrl+F, axe).
+- `tests/unit/quiet-turns.test.ts`, `tests/quiet-turns-test.mjs`: which turns are quiet, the row's
+  words, the hint lines, the switches, no sound or unread mark (both themes, phone and desktop, axe).
 - `tests/unit/role-board.test.ts`, `tests/board-test.mjs`: the board (see [board.md](board.md)).

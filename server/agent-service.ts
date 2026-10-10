@@ -370,6 +370,8 @@ import type {
 	UiTldrLine,
 	UiTaskQueue,
 	UiDialog,
+	UiExchangeDigest,
+	UiQuietRun,
 	UiTooBig,
 } from "./protocol.js";
 import {
@@ -430,6 +432,15 @@ import {
 	type IdentityEntryLike,
 } from "./identities.js";
 import { digestsBefore, snapshotDigests, straddleDigest } from "./exchange-digest.js";
+import {
+	planQuietRuns,
+	type QuietMsg,
+	type QuietRun,
+	quietMsgOfAgent,
+	quietUnder,
+	runAt,
+	runInfo,
+} from "./quiet-turns.js";
 import { sessionIndex } from "./session-index.js";
 import { ParticipantLifecycle, type ParticipantTarget, type ParticipantLease } from "./participant-lifecycle.js";
 import { identityIdOnBranch } from "./identities.js";
@@ -1757,6 +1768,8 @@ interface ChatIndex {
 	len: number;
 	last: AgentMessage | undefined;
 	retry: boolean;
+	/** quiet-turns: the chat's turns, planned on first use (quietRunsOf). */
+	quiet?: QuietRun[];
 	raw: AgentMessage[];
 	keys: string[];
 	ids: string[];
@@ -1857,6 +1870,78 @@ function fullAt(conv: Conversation, idx: ChatIndex, i: number): UiMessage {
 	}
 	conv.uiMessageCache.set(key, msg);
 	return msg;
+}
+
+/** quiet-turns: each transcript message as the classifier reads it (messages don't change once in). */
+const quietMsgCache = new WeakMap<object, QuietMsg>();
+
+/** quiet-turns: the chat's turns (server/quiet-turns.ts), kept with its index. */
+function quietRunsOf(conv: Conversation, idx: ChatIndex): QuietRun[] {
+	if (idx.quiet) return idx.quiet;
+	let file: string | undefined;
+	try {
+		file = conv.session.sessionFile ?? undefined;
+	} catch {
+		file = undefined;
+	}
+	const stampOf = (m: unknown) => {
+		const s = roleMessageService?.stampForMessage(file, m as AgentMessage);
+		return s ? { kind: s.kind, ...(s.forOwner ? { forOwner: true } : {}) } : null;
+	};
+	const msgs = idx.raw.map((m) => {
+		let q = quietMsgCache.get(m);
+		if (!q) {
+			q = quietMsgOfAgent(m, stampOf);
+			quietMsgCache.set(m, q);
+		}
+		return q;
+	});
+	idx.quiet = planQuietRuns(msgs);
+	return idx.quiet;
+}
+
+/** quiet-turns: a run another agent began (whatever the owner's switches say: the page applies them). */
+function agentRun(r: QuietRun | null): r is QuietRun {
+	return !!r && !r.visible && r.kinds.length > 0;
+}
+
+/** quiet-turns: the digests, each marked when it is part of a turn another agent began. */
+function withQuietDigests(conv: Conversation, idx: ChatIndex, digests: UiExchangeDigest[]): UiExchangeDigest[] {
+	if (digests.length === 0) return digests;
+	const runs = quietRunsOf(conv, idx);
+	return digests.map((d) => {
+		const r = runAt(runs, d.index);
+		if (!agentRun(r)) return d;
+		const outside = d.partial ? 0 : Math.max(0, d.end - 1 - r.last);
+		return {
+			...d,
+			quiet: runInfo(r, {
+				...(r.row >= 0 && r.row !== d.index ? { rowId: idx.ids[r.row] } : {}),
+				...(outside ? { outside } : {}),
+			}),
+		};
+	});
+}
+
+function withQuietDigest(
+	conv: Conversation,
+	idx: ChatIndex,
+	d: UiExchangeDigest | undefined,
+): UiExchangeDigest | undefined {
+	return d ? withQuietDigests(conv, idx, [d])[0] : undefined;
+}
+
+/** quiet-turns: `{ quietLead }` when there is one, else nothing (spread into a snapshot or reply). */
+function withLead(lead: UiQuietRun | undefined): { quietLead?: UiQuietRun } {
+	return lead ? { quietLead: lead } : {};
+}
+
+/** quiet-turns: the turn a window starting at `start` begins inside of, when another agent began it. */
+function quietLeadAt(conv: Conversation, idx: ChatIndex, start: number): UiQuietRun | undefined {
+	if (start <= 0 || start >= idx.raw.length) return undefined;
+	const r = runAt(quietRunsOf(conv, idx), start);
+	if (!agentRun(r) || r.start >= start) return undefined;
+	return runInfo(r, r.row >= 0 ? { rowId: idx.ids[r.row] } : {});
 }
 
 /** role-messages: the server's role message service (AgentService sets it; null in other engines). */
@@ -2093,6 +2178,8 @@ export interface Conversation {
 	turnPending?: { causes: RoleTurnCause[]; ids: string[]; forOwner?: RoleOwnerAnswer };
 	/** telegram-coo: the running run's causes, send ids, last text and error (handed over when it settles). */
 	turnRecord?: RoleTurnRecord;
+	/** quiet-turns: its last run was one another agent began (no "done" cue, no green light). */
+	lastRunQuiet?: boolean;
 	/** tool_call watchdog timers keyed by toolCallId — a tool that runs past
 	 *  TOOL_WATCHDOG_TIMEOUT_MS gets the session aborted instead of hanging
 	 *  the conversation forever (the SDK bash tool has no default timeout). */
@@ -6714,7 +6801,15 @@ export class ClientSession {
 				this.scheduleSessionsRefresh();
 				this.refreshConversationTitle(conv);
 				// 本轮真的结束了（不是重试中间态）：没在看的对话点绿灯（「轮到你了」）。
-				if (!willRetry) this.markRecentWaiting(conv);
+				// quiet-turns: a turn another agent began left nothing for the owner to read: no green light, and
+				// its list row says so (the page makes no "done" cue for it).
+				if (!willRetry) {
+					const quiet = this.quietRunEnded(conv);
+					const was = !!conv.lastRunQuiet;
+					conv.lastRunQuiet = quiet || undefined;
+					if (!quiet) this.markRecentWaiting(conv);
+					if (quiet !== was) this.emitConversations();
+				}
 				// 内联标记不在此兜底扫最后一条 assistant：每条气泡结束已走 message_end
 				// 即时解析（含中间文本块）；这里再扫会把最后一条标记重复执行（todo 重复建号）。
 
@@ -6900,6 +6995,7 @@ export class ClientSession {
 				conv.pendingTask = undefined;
 				// telegram-coo: the run's record starts (a retry's new start keeps the one already going).
 				this.startTurnRecord(conv);
+				conv.lastRunQuiet = undefined;
 				// rewind-to-here：新一轮开跑，上一次「对话太大」的卡片作废（这轮再被拒会重新记上）。
 				conv.tooBig = null;
 				this.emitRun(conv, task ? { type: "run_start", task } : { type: "run_start" });
@@ -7525,7 +7621,11 @@ export class ClientSession {
 					questionIndex: buildQuestionIndex(idx.raw, (i) => idx.ids[i]),
 					// 窗口之前最近几轮的摘要（exchange-digest）：窗口常常全落在最后一轮里，
 					// 没有它页面上就只剩一行。delta 不带：窗口前面的历史只随整份快照变。
-					...(EXCHANGE_DIGESTS > 0 ? { exchanges: snapshotDigests(idx.raw, start, EXCHANGE_DIGESTS, full) } : {}),
+					...(EXCHANGE_DIGESTS > 0
+						? { exchanges: withQuietDigests(conv, idx, snapshotDigests(idx.raw, start, EXCHANGE_DIGESTS, full)) }
+						: {}),
+					// quiet-turns: the window starts inside a turn another agent began: the page folds the rest of it too.
+					...withLead(quietLeadAt(conv, idx, start)),
 					// 整份快照总带 TL;DR（没有就是 []）：切对话时要把上一条的行换掉。
 					tldr,
 					// 任务队列同理：切对话时换成这一条的。
@@ -7573,13 +7673,19 @@ export class ClientSession {
 		if (end <= start) return;
 		// 新起点落在一轮中间：附上这一轮开头那一截的摘要（exchange-digest），客户端手里的那份
 		// 计数覆盖到旧起点，和这次载入的消息重复了。
-		const straddle = EXCHANGE_DIGESTS > 0 ? straddleDigest(idx.raw, start, (i) => fullAt(conv, idx, i)) : undefined;
+		const straddle = withQuietDigest(
+			conv,
+			idx,
+			EXCHANGE_DIGESTS > 0 ? straddleDigest(idx.raw, start, (i) => fullAt(conv, idx, i)) : undefined,
+		);
 		this.emit({
 			type: "older_messages",
 			conversationId: this.activeId,
 			start,
 			messages: fullRangeOf(conv, idx, start, end),
 			...(straddle ? { straddle } : {}),
+			// quiet-turns: the turn the new window start falls inside, when another agent began it.
+			...withLead(quietLeadAt(conv, idx, start)),
 		});
 	}
 
@@ -7600,7 +7706,11 @@ export class ClientSession {
 			type: "older_exchanges",
 			conversationId: this.activeId,
 			beforeIndex: before,
-			exchanges: digestsBefore(idx.raw, before, pick, undefined, (i) => fullAt(conv, idx, i)),
+			exchanges: withQuietDigests(
+				conv,
+				idx,
+				digestsBefore(idx.raw, before, pick, undefined, (i) => fullAt(conv, idx, i)),
+			),
 		});
 	}
 
@@ -9352,6 +9462,9 @@ export class ClientSession {
 		thinkingWrap?: boolean;
 		toolsWrap?: boolean;
 		toolImagesEnabled?: boolean;
+		quietQueueWakes?: boolean;
+		quietStallPokes?: boolean;
+		quietScheduledWakes?: boolean;
 		visionBridgeEnabled?: boolean;
 		visionBridgeModel?: string | null;
 		visionBridgePromptMode?: PromptMode;
@@ -11483,7 +11596,10 @@ export class ClientSession {
 			messages: fullRangeOf(pconv, idx, start, total),
 			messagesStart: start,
 			questionIndex: buildQuestionIndex(idx.raw, (i) => idx.ids[i]),
-			...(EXCHANGE_DIGESTS > 0 ? { exchanges: snapshotDigests(idx.raw, start, EXCHANGE_DIGESTS, full) } : {}),
+			...(EXCHANGE_DIGESTS > 0
+				? { exchanges: withQuietDigests(pconv, idx, snapshotDigests(idx.raw, start, EXCHANGE_DIGESTS, full)) }
+				: {}),
+			...withLead(quietLeadAt(pconv, idx, start)),
 			// Nothing is running in a chat that isn't open yet.
 			streamingMessage: null,
 			isStreaming: false,
@@ -12267,6 +12383,8 @@ export class ClientSession {
 				waiting: !isStreaming && conv.id !== this.activeId && !!sessionPath && waiting.has(resolve(sessionPath)),
 				// queue-main-chat: its task asks its main chat: its run ending makes no "done" cue.
 				...(sessionPath && ClientSession.askingChats.has(resolve(sessionPath)) ? { queueAsking: true } : {}),
+				// quiet-turns: its last turn was one another agent began: its end makes no "done" cue.
+				...(conv.lastRunQuiet && !isStreaming ? { quietRun: true } : {}),
 			});
 		}
 		// issue #145：流式集合签名变化 → 通知其他客户端重推（左栏「另一处正在运行」近实时）。
@@ -12344,10 +12462,29 @@ export class ClientSession {
 
 	/** 一轮跑完了：没在看这条对话的话给它点上绿灯（「轮到你了」）。 */
 	private markRecentWaiting(conv: Conversation): void {
+		// quiet-turns: a turn another agent began leaves no green light.
+		if (conv.lastRunQuiet) return;
 		const path = conv.session.sessionFile;
 		if (!path) return;
 		if (conv.id === this.activeId) return;
 		if (this.stateStore.setRecentWaiting(resolve(path), true)) this.emitConversations();
+	}
+
+	/** quiet-turns: was the run that just ended one another agent began, under the owner's switches? */
+	private quietRunEnded(conv: Conversation): boolean {
+		try {
+			const runs = quietRunsOf(conv, chatIndexOf(conv));
+			const r = runs[runs.length - 1];
+			if (!r || r.row < 0) return false;
+			const s = this.stateStore.getSettings(this.clientId);
+			return quietUnder(r, {
+				queueWakes: s.quietQueueWakes === true,
+				stallPokes: s.quietStallPokes === true,
+				scheduledWakes: s.quietScheduledWakes === true,
+			});
+		} catch {
+			return false;
+		}
 	}
 
 	/** 用户打开/继续了这条对话 —— 绿灯灭掉，并撤销它的「移出最近」墓碑。 */
