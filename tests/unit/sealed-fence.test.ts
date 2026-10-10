@@ -365,7 +365,9 @@ describe("sealed fence: the clone helper's door", () => {
 	});
 });
 
-describe("scripts/sealed.sh", () => {
+// Each test here runs scripts/sealed.sh for real and gives it up to 60 s (spawnSync's timeout), so the test
+// gets the same 60 s: it takes about 3.5 s on a quiet machine, but more than vitest's 5 s default on a busy one.
+describe("scripts/sealed.sh", { timeout: 60_000 }, () => {
 	it("runs in a clean temp home, stops leftovers, removes the home, and fails on a fence hit", () => {
 		const realPwHome = spawnSync("sh", ["-c", 'getent passwd "$(id -u)" | cut -d: -f6'], {
 			encoding: "utf8",

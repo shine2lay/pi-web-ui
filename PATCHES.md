@@ -2593,6 +2593,9 @@ carrying on 2 chat(s): "A" (cut off 1x), "B" (cut off 3x in a row: 2 planned, 1 
   sealed.sh 本身）。
 - 2026-09-27：`TZ=UTC scripts/check.sh` 连过两次，不带 TZ 也过；`run-sealed` 全量 173/173 过、7 个跳过、
   0 次栅栏命中；真 sessions 列表没有多出文件夹。
+- 2026-10-10 (task #93's land): the two `scripts/sealed.sh` tests get 60 s (`describe` option), the same as
+  their `spawnSync` timeout. They take about 3.5 s on a quiet machine; at load 30 on 20 cores they ran past
+  vitest's 5 s default and `wt land` failed twice ("Test timed out in 5000ms").
 
 ---
 
