@@ -118,7 +118,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | decision-records             | `local` | `server/decision-records.ts` (new), `agent-service.ts` (hooks, scanner, backfill), `role-messages.ts`, `role-board.ts`, `role-message-tool.ts`, `board-tool.ts`, `asks.ts`, `control-socket.ts`, `protocol.ts`, `bin/pi-web-ui.mjs` (`decisions`), `web/src/components/RolesView.tsx`, `IdentitiesSettings.tsx`, `ToolCallBlock.tsx`, `role-message-text.ts`, `i18n.tsx`, `locales/*.json`, `tests/unit/decision-records.test.ts` (new) |
 | faint-contrast               | `local` | `web/src/styles.css` (`:root` `--text-faint`, new `--text-disabled`, five `:disabled` rules), `make-light-theme.mjs` (White palette, `--text-disabled` fallback, `CLASSIC_LIGHT_NOTICE`), `themes/*.css` (regenerated; Translucent / Transparent and the six hand-made themes by hand), `tests/faint-contrast-test.mjs` (new), `tests/unit/faint-contrast.test.ts` (new) |
 | quiet-turns                  | `local` | `server/quiet-turns.ts` (new), `agent-service.ts`, `role-messages.ts`, `role-board.ts`, `protocol.ts`, `client-state.ts`, `settings-service.ts`, `index.ts`, `web/src/quiet-turns.ts` (new), `MessageList.tsx`, `RoleMessageRow.tsx`, `SettingsModal.tsx`, `App.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `docs/roles-overview.md`, `tests/quiet-turns-test.mjs` (new), `tests/unit/quiet-turns.test.ts` (new) |
->>>>>>> 508ea5b (quiet-turns: a turn another agent began folds into one row (Ops #96))
+| accent-contrast              | `local` | `web/src/styles.css` (`:root` `--accent-text`, `--accent-fill`, `--accent-fill-hover`, `--amber-fg`; 148 text rules, the accent fills under white text), `model-management.css`, `exchange-fold.css`, `ToolApprovalDialog.tsx`, `RollbackDialog.tsx`, `ModelConfigModal.tsx`, `plugins/db-client`, `plugins/vscode-editor`, `make-light-theme.mjs` (identity tokens, White `--amber-fg`), `themes/*.css`, `tests/faint-contrast-test.mjs` (pins gone, live-queue fixture), `tests/accent-contrast-test.mjs` (new), `tests/unit/accent-contrast.test.ts` (new) |
 
 ---
 
@@ -5836,7 +5836,85 @@ pinned one that stops showing, so the list is trimmed when Design's fix lands.
   test). New generated themes get `--text-disabled` from the generator; a new hand-made one needs the line
   by hand (without it, its disabled controls take the default dark's old grey `#6b7284`).
 - If upstream fixes the notice colours in `make-light-theme.mjs` itself, drop `CLASSIC_LIGHT_NOTICE`.
-- When Design's fix for the pinned hits lands, trim `PINNED` in `tests/faint-contrast-test.mjs`.
+- The pinned hits are fixed by `accent-contrast` (below): `PINNED` is gone and the test requires 0 hits.
+
+## accent-contrast
+
+**Status**: `local`
+**Baseline**: v0.96.1 (on top of `faint-contrast`: its Queue-tab test is extended here)
+
+**Why** (queue task #97, owner-approved plan; Design request rm-2c447ce9, its pick after #93's report): after
+`faint-contrast`, two colours used as text still failed WCAG 2.2 AA 1.4.3 (4.5:1), app-wide, not just on the
+Queue tab: the violet `--accent` `#8b5cf6` (4.27-4.56:1 on the surfaces, 3.36-3.97 on tinted rows and the
+selected tab tint) with white text on violet buttons at 4.23:1, and White's amber `#d97706` (3.19 on white,
+2.79 on the needs-you row `#faeee1`). #93's live look also found Stop, the Auto switches when on and "Show
+all done" in violet, which its fixture didn't show. Design's reasons for the values: a value right on the
+line fails with the first tweak (a hover, a rendering change), so the text tokens take margin; and "needs you"
+deserves more contrast than the least that passes, unlike faint text, which should recede.
+
+### Changes
+
+1. **Tokens by role** (`:root` in `web/src/styles.css`):
+   - `--accent-text` `#a78bfa` (the link violet): violet used as text. 7.09:1 on `--bg`, 6.64 on `--bg-elev`,
+     6.18 on `--bg-elev2`, 6.83 on the panel, 5.23 on the needs-you row (the lowest), 5.78-5.99 on the
+     blocked row, 5.30 on the selected-tab tint.
+   - `--accent-fill` `#7c3aed` / `--accent-fill-hover` `#6d28d9`: the fill under white text, 5.70 / 7.10:1.
+     There are no `:active` rules on these buttons, so active is the hover. Disabled stays on `--text-disabled`.
+   - `--amber-fg`: amber used as text, `var(--amber)` by default (dark's `#fbbf24` already passes: 11.56:1 on `--bg`, 10.08 on `--bg-elev2`).
+     Not `--amber-text`, which is another, lighter amber (dark `#fcd34d`, 13 rules) and keeps its meaning.
+   - `--accent` itself stays `#8b5cf6` for what isn't text (focus rings, borders, switch tracks, bars, the
+     cursor): 4.56 / 4.27 / 3.97 / 4.39:1 against `--bg` / `--bg-elev` / `--bg-elev2` / the panel (1.4.11, 3:1).
+2. **Rules**: every `color: var(--accent)` and `color: var(--amber)` (with or without a fallback) in
+   `styles.css` (148), `model-management.css` (13), `exchange-fold.css` (1) now uses `--accent-text` /
+   `--amber-fg`; the components' inline amber text (`ToolApprovalDialog`, `RollbackDialog`, `ModelConfigModal`)
+   and the db-client and vscode-editor plugins too (with fallbacks, as plugins may run without the tokens).
+   Fills under white text (`.task-queue-toggle`, `.btn.primary`, `.dialog-submit`, `.goalbar-btn`,
+   `.cmd-run:hover`, `.qn-list-idx`, `.fp-attach` buttons, db-client's primary buttons) use `--accent-fill`;
+   their border follows the fill. Fills without text (tracks, bars, dots, sliders) keep `--accent`.
+3. **Hover without the filter**: `.btn.primary` and `.task-queue-toggle` hovered with `filter: brightness(1.12)`,
+   which would lift `#7c3aed` towards the failing violet. They now set `--accent-fill-hover`. The outlined Stop
+   (no fill under its text) keeps the filter.
+4. **The other palettes keep today's look**: `make-light-theme.mjs` gives every palette with its own accent
+   `--accent-text` = `--accent-fill` = its accent and `--accent-fill-hover` = its accent as Chrome drew the old
+   filter (each sRGB channel times 1.12, clamped; checked in Chrome: `#8b5cf6` -> `#9c67ff`). Purple Haze has no
+   accent of its own, so it gets the default's new violet. White gets `--amber-fg` `#92400e` (7.09:1 on white,
+   6.66 on `--bg-elev2`, 6.21 on `#faeee1`) and keeps its blue (white on `#0969da` 5.19:1). The six hand-made
+   themes carry the identity values by hand; Translucent and Transparent Design's violet (they copy the default;
+   their contrast depends on the wallpaper, so it isn't axe-tested). Regenerating adds only the new lines.
+5. No change to `--accent`, layout, font sizes or opacity.
+
+### Known and left for Design (opt-in, not changed here)
+
+- White's hover on its blue fills is `#0a76f4` (the old filter), 4.28:1 under white text: as before.
+- White's selected Settings tab: blue `--accent-text` on its tint, 4.25:1 (`tests/accent-contrast-test.mjs`
+  lists it as known).
+- "Ephemeral chat" (`.chip.ephemeral-chat-btn`) hard-codes the link violet `#a78bfa` in every theme: fine in
+  dark (on its tint), 2.48:1 in White. Repointing it would change all the light palettes' look.
+- The other 24 palettes' own accents and ambers are unchanged, whatever their ratios.
+
+### How it was checked
+
+- `tests/unit/accent-contrast.test.ts` (new): the default, Purple Haze, Translucent and Transparent violet text
+  at 4.5:1 or more on every dark background incl. the tinted rows; white on the fill and the hover; `--accent`
+  at 3:1 against the surfaces and the panel; White's amber on white, `--bg-elev2`, `#faeee1`; each of the other
+  24 themes renders as before (text, fill, hover, amber); no CSS rule left with violet or amber text or white on
+  a `--accent` fill. On the old mine it fails 49 of 59 checks.
+- `tests/faint-contrast-test.mjs` (extended): the queue now runs (Stop), has Auto approve and Auto start on,
+  two lanes in use (nothing starts, no model call) and six done tasks ("Show all done (6)"); `PINNED` is gone,
+  so any colour-contrast hit fails; Stop, both Auto switches and "Show all done" are measured at 4.5:1. On the
+  old mine: 10 failed checks (dark 11 hits per look, White 2).
+- `tests/accent-contrast-test.mjs` (new, sealed): the chat with fixture messages, Settings and the Roles page,
+  dark and White at 1440x900: no colour-contrast hit in violet or amber, and nothing beyond a known list of other
+  colours' hits. On the old mine: 42 failed checks (30 violet hits in dark, 10 amber in White).
+- Before / after screenshots of the Queue tab and the main views; live look-only check after install.
+
+### When syncing
+
+- Upstream rules with `color: var(--accent)` / `var(--amber)` or white text on `var(--accent)`: switch them to
+  the tokens (the unit test's lint finds them).
+- A new hand-made theme with its own accent needs the three accent lines (without them it takes the default's
+  violet text and fills); generated ones get them from the generator.
+- If upstream brings back `filter: brightness()` hovers on filled buttons, use `--accent-fill-hover` instead.
 
 ## quiet-turns
 

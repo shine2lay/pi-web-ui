@@ -1,10 +1,14 @@
-/* faint-contrast E2E (no tokens): the Queue tab's faint secondary text is readable: WCAG 2.2 AA 1.4.3, 4.5:1
- * (Design rm-947a15e3, after Ops #91's finding rm-04c8efaf: --text-faint was 3.86:1 in dark, 3.45:1 in White).
+/* faint-contrast E2E (no tokens): all the Queue tab's text is readable: WCAG 2.2 AA 1.4.3, 4.5:1. First its faint
+ * secondary text (Design rm-947a15e3, after Ops #91's finding rm-04c8efaf: --text-faint was 3.86:1 in dark, 3.45:1
+ * in White); since accent-contrast (Design rm-2c447ce9, task #97) the violet and amber text too, which this test
+ * used to pin as known hits: now every colour-contrast hit fails, whatever its colour.
  *
  * A sealed test server with the real pi-queue (PI_QUEUE_PKG, default ~/projects/pi-queue), the mock model (no
- * turn is expected) and a real browser. One seeded queue chat, "gamma", not started, with every kind of faint
- * line the Queue tab has:
+ * turn is expected) and a real browser. One seeded queue chat, "gamma", running (so "Stop" shows) with Auto
+ * approve and Auto start on, two lanes (both in use: nothing new starts), and every kind of faint line the Queue
+ * tab has:
  *   #1 "Write the wording"        done (the Done section: the whole row is faint; "Clear done");
+ *   #9-#13                        done earlier: six done tasks, so the list shows five and "Show all done (6)";
  *   #2 "Build the page"           working in a chat of its own (its started time, Touches);
  *   #3 "Ask about the colours"    needs you, in a chat of its own (the question, the answer hint);
  *   #4 "Wait for the design files" blocked on a need (the Blocked line and when it's poked next);
@@ -15,12 +19,12 @@
  *                                 until you resume #7", Touches).
  *   #6's plan is opened (its part labels). Section headings, ids, Lane and Pause buttons are there as always.
  * Checks, in the default dark theme and in White, on a desktop (1440x900) and a phone (390x844):
- *  - each of those faint lines is on screen;
+ *  - each of those faint lines is on screen, and so are Stop, the two Auto switches (on) and "Show all done";
  *  - axe's color-contrast rule finds no faint text in the Queue tab (the panel is scrolled through, so every
  *    line is looked at in view; each hit is listed with its ratio and colours);
- *  - nothing else either, apart from the pinned hits below (PINNED): the brand violet and the status amber are
- *    Design's colours across the app, outside this patch, and wait on Design. A new hit fails, and so does a
- *    pinned one that no longer shows (take it off the list when Design's fix lands);
+ *  - nor anything else: no pinned hits any more (the violet --accent-text and White's amber --amber-fg);
+ *  - Stop, the Auto switches when on and "Show all done" (violet text, which only a live queue showed before)
+ *    are measured at 4.5:1 or more on the background they sit on;
  *  - the faint text axe measured is at 4.5:1 or more, and --text-faint stays fainter than --text-dim (dim's
  *    ratio on the same background at least 1.15 times faint's);
  *  - no model call, no page errors.
@@ -57,41 +61,18 @@ const ONLY = process.env.FC_ONLY;
 const AA = 4.5;
 /** Faint must stay visibly fainter than dim: dim's ratio on the same background is at least this times faint's. */
 const DIM_OVER_FAINT = 1.15;
-/** The Queue tab's colour-contrast hits that are NOT faint text, per theme (the same at both widths): the brand
- *  violet (--accent #8b5cf6) in dark and the status amber (--amber #d97706) in White. They are Design's colours
- *  across the whole app, so changing them on this tab alone is Design's call (main chat's decision on Ops #93,
- *  2026-10-10); Ops' reply to Design's rm-947a15e3 lists them with measured suggestions. Pinned so that any new
- *  hit fails, and a pinned one that stops showing fails too: when Design's fix lands, take it off this list. */
-const PINNED = {
-	dark: [
-		{ what: `"Start" (white on --accent)`, cls: "task-queue-toggle", text: "Start" },
-		{ what: `#2 "Open its chat" (--accent)`, cls: "task-queue-open-chat", task: "2", text: "Open its chat" },
-		{
-			what: `#3 "Open its chat" (--accent, needs-you row)`,
-			cls: "task-queue-open-chat",
-			task: "3",
-			text: "Open its chat",
-		},
-		{
-			what: `#4 "Open its chat" (--accent, blocked row)`,
-			cls: "task-queue-open-chat",
-			task: "4",
-			text: "Open its chat",
-		},
-		{ what: `#5 "Open its chat" (--accent)`, cls: "task-queue-open-chat", task: "5", text: "Open its chat" },
-		{ what: `#7 "Resume" (--accent)`, cls: "resume", task: "7", text: "Resume" },
-	],
-	white: [
-		{
-			what: `"Waiting for your answer on #3" (--amber)`,
-			cls: "task-queue-status",
-			text: "Waiting for your answer on #3",
-		},
-		{ what: `#3 "Needs you" badge (--amber, needs-you row)`, cls: "task-queue-badge", task: "3", text: "Needs you" },
-	],
-};
-const isPinned = (pin, hit) =>
-	hit.cls.split(/\s+/).includes(pin.cls) && hit.text === pin.text && (pin.task === undefined || hit.task === pin.task);
+/** The violet and amber controls measured by hand too (accent-contrast, task #97): #93's live look found them
+ *  under 4.5:1 where this fixture didn't show them (a running queue, Auto switches on, more than five done). */
+const ACCENT_CONTROLS = [
+	{ what: "Stop", sel: ".task-queue-toggle.stop", count: 1, text: /^Stop$/ },
+	{
+		what: "the Auto switches, on",
+		sel: '.task-queue-switch[aria-checked="true"]',
+		count: 2,
+		text: /^Auto (approve|start)/,
+	},
+	{ what: '"Show all done"', sel: ".task-queue-more", count: 1, text: /^Show all done \(6\)$/ },
+];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failures = 0;
@@ -156,6 +137,8 @@ function seed({ agentDir, workdir: wd }) {
 	const file = (minute, n) =>
 		join(dir, `2026-10-01T10-0${minute}-00-000Z_01a0f000-0000-7000-8000-0000000000c${n}.jsonl`);
 	files.Q = file(1, 1);
+	/** The queue chat's session id: Auto approve and Auto start are bound to it (an "autonomy" op names it). */
+	const queueId = files.Q.match(/_([^_]+)\.jsonl$/)?.[1];
 	files.T2 = file(2, 2);
 	files.T3 = file(3, 3);
 	files.T4 = file(4, 4);
@@ -200,7 +183,14 @@ function seed({ agentDir, workdir: wd }) {
 		add(6, "Check the page", ["web repo", "pi-web-deploy"], [1]),
 		add(7, "Paused task", ["api repo"]),
 		add(8, "Follow the paused task", ["api repo"], [7]),
+		add(9, "Collect the notes", ["docs repo"]),
+		add(10, "Sort the notes", ["docs repo"]),
+		add(11, "Name the parts", ["docs repo"]),
+		add(12, "Draw the layout", ["design files"]),
+		add(13, "Agree the layout", ["design files"]),
 		{ op: "lanes", n: 4 },
+		// Done before #1, so #1 (the newest) is among the five the Done list shows.
+		...[9, 10, 11, 12, 13].map((id) => ({ op: "done", id, summary: "Done and checked." })),
 		{ op: "done", id: 1, summary: "The wording is in place and checked on the test account." },
 		{ op: "start", id: 2, lane: true },
 		{ op: "chat", id: 2, file: files.T2, title: "Build the page" },
@@ -217,8 +207,15 @@ function seed({ agentDir, workdir: wd }) {
 		{ op: "block", id: 4, need: "the design files from Design" },
 		{ op: "start", id: 5, lane: true },
 		{ op: "chat", id: 5, file: files.T5, title: "Wait for the deploy" },
-		{ op: "wait", id: 5, what: "the deploy", check: "true", everyMs: 120_000, until: Date.now() + 86_400_000 },
+		// The check never passes (exit 1: still waiting): with the queue running, a wait that ended would wake #5's chat.
+		{ op: "wait", id: 5, what: "the deploy", check: "false", everyMs: 120_000, until: Date.now() + 86_400_000 },
 		{ op: "hold", id: 7, why: "pressed Pause in the Queue panel", by: "panel" },
+		// Running, so the head shows Stop; two lanes, both in use (#2 working, #3 waiting for an answer): nothing
+		// new starts and no task wakes, so the fixture stays as seeded and no model is called.
+		{ op: "lanes", n: 2 },
+		{ op: "autonomy", queueId, setting: "autoApprove", value: true },
+		{ op: "autonomy", queueId, setting: "autoStart", value: true },
+		{ op: "run", queueId },
 	]);
 	const assigned = (id, title) => ({
 		op: "assigned",
@@ -245,7 +242,7 @@ function seed({ agentDir, workdir: wd }) {
 	]);
 	write(files.T5, "Wait for the deploy", [
 		assigned(5, "Wait for the deploy"),
-		{ op: "wait", id: 5, what: "the deploy", check: "true", everyMs: 120_000, until: Date.now() + 86_400_000 },
+		{ op: "wait", id: 5, what: "the deploy", check: "false", everyMs: 120_000, until: Date.now() + 86_400_000 },
 	]);
 }
 
@@ -350,7 +347,8 @@ const allThere = (f) =>
 	/^After #7/.test(f.after8) &&
 	f.resume8 === "Can't start until you resume #7" &&
 	f.hints >= 1 &&
-	f.ids === 8 &&
+	// Seven open tasks and five of the six done ones.
+	f.ids === 12 &&
 	f.controls >= 3 &&
 	f.clear === 1 &&
 	f.headings >= 3 &&
@@ -432,57 +430,62 @@ async function contrastNodes(page, root) {
 	}, root);
 }
 
-/** The glyph-only controls (the move and remove arrows, ↑ ↓ ✕) that axe leaves out ("nonBmp"): their colour and
- *  the background they sit on, composited from their ancestors (rgb() or color(srgb ...) with alpha). */
-const glyphControls = (page, root) =>
-	page.evaluate((r) => {
-		const rgba = (c) => {
-			let m = /^rgba?\(([^)]+)\)$/.exec(c);
-			if (m) {
-				const p = m[1]
-					.split(/[\s,/]+/)
-					.filter(Boolean)
-					.map(Number);
-				return [p[0], p[1], p[2], p[3] ?? 1];
-			}
-			m = /^color\(srgb ([^)]+)\)$/.exec(c);
-			if (m) {
-				const p = m[1]
-					.split(/[\s/]+/)
-					.filter(Boolean)
-					.map(Number);
-				return [p[0] * 255, p[1] * 255, p[2] * 255, p[3] ?? 1];
-			}
-			return null;
-		};
-		const background = (el) => {
-			const layers = [];
-			for (let e = el; e; e = e.parentElement) {
-				const c = rgba(getComputedStyle(e).backgroundColor);
-				if (c && c[3] > 0) {
-					layers.push(c);
-					if (c[3] >= 1) break;
+/** The elements matching `sel` in the panel: their text colour and the background they sit on, composited from
+ *  their ancestors (rgb() or color(srgb ...) with alpha). */
+const measured = (page, root, sel) =>
+	page.evaluate(
+		({ r, sel }) => {
+			const rgba = (c) => {
+				let m = /^rgba?\(([^)]+)\)$/.exec(c);
+				if (m) {
+					const p = m[1]
+						.split(/[\s,/]+/)
+						.filter(Boolean)
+						.map(Number);
+					return [p[0], p[1], p[2], p[3] ?? 1];
 				}
-			}
-			let out = [255, 255, 255];
-			for (const [lr, lg, lb, la] of layers.reverse())
-				out = [lr * la + out[0] * (1 - la), lg * la + out[1] * (1 - la), lb * la + out[2] * (1 - la)];
-			return out;
-		};
-		return [...document.querySelectorAll(`${r} .task-queue-controls button:not(:disabled)`)].map((b) => {
-			const cs = getComputedStyle(b);
-			const [fr, fg, fb, fa] = rgba(cs.color) ?? [0, 0, 0, 1];
-			const bg = background(b);
-			const a = fa * Number(cs.opacity);
-			return {
-				task: b.closest("li.task-queue-task")?.getAttribute("data-task-id"),
-				glyph: b.textContent.trim(),
-				label: b.getAttribute("aria-label"),
-				fg: [fr * a + bg[0] * (1 - a), fg * a + bg[1] * (1 - a), fb * a + bg[2] * (1 - a)],
-				bg,
+				m = /^color\(srgb ([^)]+)\)$/.exec(c);
+				if (m) {
+					const p = m[1]
+						.split(/[\s/]+/)
+						.filter(Boolean)
+						.map(Number);
+					return [p[0] * 255, p[1] * 255, p[2] * 255, p[3] ?? 1];
+				}
+				return null;
 			};
-		});
-	}, root);
+			const background = (el) => {
+				const layers = [];
+				for (let e = el; e; e = e.parentElement) {
+					const c = rgba(getComputedStyle(e).backgroundColor);
+					if (c && c[3] > 0) {
+						layers.push(c);
+						if (c[3] >= 1) break;
+					}
+				}
+				let out = [255, 255, 255];
+				for (const [lr, lg, lb, la] of layers.reverse())
+					out = [lr * la + out[0] * (1 - la), lg * la + out[1] * (1 - la), lb * la + out[2] * (1 - la)];
+				return out;
+			};
+			return [...document.querySelectorAll(`${r} ${sel}`)].map((b) => {
+				const cs = getComputedStyle(b);
+				const [fr, fg, fb, fa] = rgba(cs.color) ?? [0, 0, 0, 1];
+				const bg = background(b);
+				const a = fa * Number(cs.opacity);
+				return {
+					task: b.closest("li.task-queue-task")?.getAttribute("data-task-id"),
+					glyph: b.textContent.trim().replace(/\s+/g, " "),
+					label: b.getAttribute("aria-label"),
+					fg: [fr * a + bg[0] * (1 - a), fg * a + bg[1] * (1 - a), fb * a + bg[2] * (1 - a)],
+					bg,
+				};
+			});
+		},
+		{ r: root, sel },
+	);
+/** The glyph-only controls (the move and remove arrows, ↑ ↓ ✕) that axe leaves out ("nonBmp"). */
+const glyphControls = (page, root) => measured(page, root, ".task-queue-controls button:not(:disabled)");
 
 /** The theme's --text-faint and --text-dim as the page resolves them. */
 const tokens = (page) =>
@@ -523,23 +526,35 @@ async function look(theme, phone) {
 		faintHits.length === 0,
 		`${faintHits.length} faint hit(s)`,
 	);
-	const pins = PINNED[theme] ?? [];
-	const unexpected = hits.filter((h) => !pins.some((p) => isPinned(p, h)));
+	const others = hits.filter((h) => !faintHits.includes(h));
 	check(
-		`${tag}: nor anything else, apart from the ${pins.length} pinned non-faint hits that wait on Design`,
-		unexpected.length === 0,
-		`${unexpected.length} new hit(s)`,
-	);
-	const missing = pins.filter((p) => !hits.some((h) => isPinned(p, h)));
-	check(
-		`${tag}: each pinned hit still shows (one that passes now comes off PINNED)`,
-		missing.length === 0,
-		missing.map((p) => p.what).join("; "),
+		`${tag}: nor anything else (the violet and amber text included: nothing is pinned)`,
+		others.length === 0,
+		`${others.length} other hit(s)`,
 	);
 	for (const h of hits)
-		console.log(
-			`      ${unexpected.includes(h) ? "hit" : "pinned"} ${h.ratio}:1 ${h.fg} on ${h.bg} ${h.size} ${h.weight} ${h.target} "${h.text}"`,
+		console.log(`      hit ${h.ratio}:1 ${h.fg} on ${h.bg} ${h.size} ${h.weight} ${h.target} "${h.text}"`);
+	// The violet controls a live queue shows: Stop, the Auto switches when on, "Show all done".
+	const controls = [];
+	for (const c of ACCENT_CONTROLS) {
+		const found = (await measured(page, root, c.sel))
+			.filter((m) => c.text.test(m.glyph))
+			.map((m) => ({
+				what: c.what,
+				text: m.glyph,
+				fg: toHex(m.fg),
+				bg: toHex(m.bg),
+				ratio: Number(ratio(m.fg, m.bg).toFixed(2)),
+			}));
+		controls.push(...found);
+		const weak = found.filter((m) => m.ratio < AA);
+		check(
+			`${tag}: ${c.what} (${c.count}) on screen at ${AA}:1 or more`,
+			found.length === c.count && weak.length === 0,
+			found.map((m) => `"${m.text}" ${m.fg} on ${m.bg} ${m.ratio}:1`).join("; ") || "not found",
 		);
+	}
+	console.log(`    ${controls.map((m) => `"${m.text}" ${m.fg} on ${m.bg} ${m.ratio}:1`).join("; ")}`);
 	// The arrows axe can't read: measured here, held to the text bar too (they are characters, and faint).
 	const glyphs = (await glyphControls(page, root)).map((g) => ({
 		...g,
@@ -588,9 +603,8 @@ async function look(theme, phone) {
 		faintOn: fainter,
 		hits,
 		faintHits: faintHits.length,
-		pinned: hits.length - unexpected.length,
-		unexpected: unexpected.length,
-		missing: missing.map((p) => p.what),
+		otherHits: others.length,
+		controls,
 		unsure,
 		glyphs,
 		nodes,

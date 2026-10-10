@@ -89,12 +89,24 @@
 	--text-faint: #8a91a3;
 	--text-disabled: #6b7284;
 	--accent: #8b5cf6;
+	/* accent-contrast (Design rm-2c447ce9): the violet used AS TEXT, and the fill under white text, get tokens of
+	   their own, so every place reaches WCAG AA 4.5:1 (--accent was 3.4-4.6:1 as text, white on it 4.23:1).
+	   --accent stays for what isn't text: focus rings, borders, switch tracks, bars (3:1 is enough there).
+	   --accent-text: the link violet, 5.23:1 on the Queue tab's amber row (the lowest), 7.09 on --bg.
+	   --accent-fill / -hover: white text on them 5.70 / 7.10:1 (hover darkens, so it never drops below). Themes
+	   set all three; one with its own accent keeps today's look (text and fill = its accent). */
+	--accent-text: #a78bfa;
+	--accent-fill: #7c3aed;
+	--accent-fill-hover: #6d28d9;
 	--accent-soft: rgba(139, 92, 246, 0.14);
 	--green: #34d399;
 	--green-soft: rgba(52, 211, 153, 0.12);
 	--red: #f87171;
 	--red-soft: rgba(248, 113, 113, 0.12);
 	--amber: #fbbf24;
+	/* accent-contrast: amber used as text. Dark's amber already passes (11.56:1 on --bg); White sets #92400e. Not
+	   --amber-text, which is a lighter amber for notices (dark #fcd34d). */
+	--amber-fg: var(--amber);
 	--blue: #3b82f6;
 	--blue-soft: rgba(59, 130, 246, 0.12);
 	/* Terminal ANSI palette (xterm canvas reads these via web/src/theme.ts
@@ -496,7 +508,7 @@ body.panel-resizing {
 }
 .panel-rail:hover {
 	background: var(--chip-bg, var(--bg-elev2));
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .panel-rail:hover svg {
 	border-color: var(--accent);
@@ -560,7 +572,7 @@ body.panel-resizing {
 	z-index: 2;
 }
 .panel-fab:hover {
-	color: var(--accent);
+	color: var(--accent-text);
 	border-color: var(--accent);
 	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
@@ -834,7 +846,7 @@ body.rp-resizing .rp-sash.dragging::after {
 	white-space: nowrap;
 }
 .lp-limit-current {
-	color: var(--accent);
+	color: var(--accent-text);
 	font-size: 9px;
 	line-height: 1;
 }
@@ -1071,7 +1083,7 @@ body.rp-resizing .rp-sash.dragging::after {
 
 /* Huge directories get their list cut at the platform cap — surface it. */
 .files-truncated {
-	color: var(--amber);
+	color: var(--amber-fg);
 	border-top: 1px dashed var(--border);
 	margin-top: 8px;
 	padding-top: 12px;
@@ -1157,7 +1169,7 @@ button.session-item.elsewhere-item.confirm {
 	padding: 0;
 	border-radius: 50%;
 	border: 1px solid var(--accent);
-	color: var(--accent);
+	color: var(--accent-text);
 	background: color-mix(in srgb, var(--accent) 8%, transparent);
 	font-size: 11px;
 	line-height: 1;
@@ -1177,11 +1189,11 @@ button.session-item.elsewhere-item.confirm {
 	color: var(--text-faint);
 }
 .session-item.active .session-icon {
-	color: var(--accent);
+	color: var(--accent-text);
 }
 /* switch-loading：正在打开的目标行 —— 高亮已经落在它上（.active），图标位置换成转圈。 */
 .session-item.opening .session-sub {
-	color: var(--accent);
+	color: var(--accent-text);
 }
 
 .session-info {
@@ -1206,7 +1218,7 @@ button.session-item.elsewhere-item.confirm {
 	padding: 0 5px;
 	border-radius: 999px;
 	border: 1px solid var(--border);
-	color: var(--accent);
+	color: var(--accent-text);
 	background: color-mix(in srgb, var(--accent) 8%, transparent);
 	white-space: nowrap;
 	flex-shrink: 0;
@@ -1429,7 +1441,7 @@ button.session-item.elsewhere-item.confirm {
 	outline-offset: -2px;
 }
 .lp-row:has(.queue-fold-toggle:hover) .queue-fold-icon {
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .queue-fold-count {
 	display: inline-block;
@@ -1447,11 +1459,11 @@ button.session-item.elsewhere-item.confirm {
 }
 .queue-fold-count.running {
 	border-color: var(--amber);
-	color: var(--amber);
+	color: var(--amber-fg);
 }
 .queue-fold-count.needs-you {
 	border-color: var(--accent);
-	color: var(--accent);
+	color: var(--accent-text);
 	background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 @media (max-width: 768px) {
@@ -1503,7 +1515,7 @@ button.session-item.elsewhere-item.confirm {
 	right: 32px;
 }
 .lp-row .lp-del.lp-rename:hover {
-	color: var(--amber);
+	color: var(--amber-fg);
 	background: color-mix(in srgb, var(--amber) 12%, transparent);
 }
 /* inline session rename field replaces the title row while editing */
@@ -1590,7 +1602,7 @@ button.session-item.elsewhere-item.confirm {
 	background: var(--bg-elev2);
 }
 .crumb.active {
-	color: var(--accent);
+	color: var(--accent-text);
 }
 
 .crumb-seg {
@@ -1657,7 +1669,7 @@ button.session-item.elsewhere-item.confirm {
 	color: var(--text);
 }
 .root-picker-item.active {
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .root-picker-path {
 	max-width: 100%;
@@ -1753,7 +1765,7 @@ button.session-item.elsewhere-item.confirm {
 	color: var(--text-faint);
 }
 .file-item.dir .file-icon {
-	color: var(--amber);
+	color: var(--amber-fg);
 }
 
 .file-name {
@@ -1774,7 +1786,7 @@ button.session-item.elsewhere-item.confirm {
 	cursor: pointer;
 }
 .file-name:hover {
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .file-name.no-preview {
 	cursor: default;
@@ -1967,7 +1979,7 @@ button.session-item.elsewhere-item.confirm {
 /* link icon : reference path only */
 .file-attach.ref {
 	background: rgba(251, 191, 36, 0.12);
-	color: var(--amber);
+	color: var(--amber-fg);
 }
 .file-attach.ref:hover {
 	background: var(--amber);
@@ -2152,7 +2164,7 @@ button.session-item.elsewhere-item.confirm {
 	border-color: rgba(139, 92, 246, 0.35);
 }
 .attachcard-mode.conversation {
-	color: var(--accent);
+	color: var(--accent-text);
 	border-color: rgba(139, 92, 246, 0.4);
 }
 .attachcard-link {
@@ -2185,7 +2197,7 @@ button.session-item.elsewhere-item.confirm {
 	border-color: rgba(52, 211, 153, 0.35);
 }
 .attachcard-mode.ref {
-	color: var(--amber);
+	color: var(--amber-fg);
 	border-color: rgba(251, 191, 36, 0.4);
 }
 .attachcard-mode.page {
@@ -2193,13 +2205,13 @@ button.session-item.elsewhere-item.confirm {
 	border-color: rgba(56, 189, 248, 0.4);
 }
 .attachcard-mode.lines {
-	color: var(--accent);
+	color: var(--accent-text);
 	border-color: rgba(139, 92, 246, 0.4);
 }
 
 /* ---- attachcard mode: vision-bridge transcript -------------------------- */
 .attachcard-mode.bridged {
-	color: var(--accent);
+	color: var(--accent-text);
 	border-color: rgba(139, 92, 246, 0.4);
 }
 .attachcard-bridgenote {
@@ -2374,7 +2386,7 @@ button.session-item.elsewhere-item.confirm {
 	flex: none;
 	width: 13px;
 	height: 13px;
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .rolemsg-row-from {
 	flex: none;
@@ -2789,7 +2801,7 @@ button.rolemsg-fold:focus-visible {
 	padding: 0 5px;
 	border: 1px solid var(--amber);
 	border-radius: 3px;
-	color: var(--amber);
+	color: var(--amber-fg);
 	font-size: 11px;
 	font-weight: 600;
 	line-height: 16px;
@@ -2806,7 +2818,7 @@ button.rolemsg-fold:focus-visible {
 	padding: 2px 0;
 	border: none;
 	background: none;
-	color: var(--accent);
+	color: var(--accent-text);
 	font-size: 12px;
 	cursor: pointer;
 }
@@ -2823,7 +2835,7 @@ button.rolemsg-fold:focus-visible {
 	padding: 2px 0;
 	border: none;
 	background: none;
-	color: var(--accent);
+	color: var(--accent-text);
 	font-size: 12px;
 	cursor: pointer;
 }
@@ -3003,7 +3015,7 @@ button.rolemsg-fold:focus-visible {
 }
 .task-queue-switch[aria-checked="true"] {
 	border-color: var(--accent);
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .task-queue-switch:focus-visible {
 	outline: 2px solid var(--accent);
@@ -3045,26 +3057,34 @@ button.rolemsg-fold:focus-visible {
 	color: var(--text);
 }
 .task-queue-status.needs-you {
-	color: var(--amber);
+	color: var(--amber-fg);
 	font-weight: 600;
 }
 .task-queue-toggle {
 	flex: 0 0 auto;
 	padding: 3px 12px;
-	border: 1px solid var(--accent);
+	border: 1px solid var(--accent-fill);
 	border-radius: 6px;
-	background: var(--accent);
+	background: var(--accent-fill);
 	color: #fff;
 	font-size: 12px;
 	font-weight: 600;
 	cursor: pointer;
 }
 .task-queue-toggle:hover:not(:disabled) {
-	filter: brightness(1.12);
+	background: var(--accent-fill-hover);
+	border-color: var(--accent-fill-hover);
 }
 .task-queue-toggle.stop {
 	background: none;
-	color: var(--accent);
+	border-color: var(--accent);
+	color: var(--accent-text);
+}
+/* Stop is outlined: its hover brightens as before (no fill under the text). */
+.task-queue-toggle.stop:hover:not(:disabled) {
+	background: none;
+	border-color: var(--accent);
+	filter: brightness(1.12);
 }
 .task-queue-toggle:disabled {
 	opacity: 0.5;
@@ -3090,7 +3110,7 @@ button.rolemsg-fold:focus-visible {
 .task-queue-pause.resume,
 .task-queue-pause-queue.resume {
 	border-color: var(--accent);
-	color: var(--accent);
+	color: var(--accent-text);
 	font-weight: 600;
 }
 .task-queue-pause:hover:not(:disabled),
@@ -3293,7 +3313,7 @@ button.rolemsg-fold:focus-visible {
 	line-height: 16px;
 }
 .task-queue-ref.needs-you .task-queue-ref-state {
-	color: var(--amber);
+	color: var(--amber-fg);
 }
 .task-queue-ref-link {
 	padding: 0;
@@ -3319,7 +3339,7 @@ button.rolemsg-fold:focus-visible {
 	padding: 0 5px;
 	border: 1px solid var(--amber);
 	border-radius: 3px;
-	color: var(--amber);
+	color: var(--amber-fg);
 	font-size: 11px;
 	font-weight: 600;
 	line-height: 16px;
@@ -3416,7 +3436,7 @@ button.rolemsg-fold:focus-visible {
 	border: 1px solid var(--border);
 	border-radius: 3px;
 	background: none;
-	color: var(--accent);
+	color: var(--accent-text);
 	font-size: 11px;
 	line-height: 18px;
 	cursor: pointer;
@@ -3470,7 +3490,7 @@ button.rolemsg-fold:focus-visible {
 	font-size: 12.5px;
 }
 .task-queue-wait.failed .task-queue-wait-text {
-	color: var(--amber);
+	color: var(--amber-fg);
 }
 .task-queue-check {
 	padding: 0 3px;
@@ -3514,7 +3534,7 @@ button.rolemsg-fold:focus-visible {
 	padding: 2px 0;
 	border: none;
 	background: none;
-	color: var(--accent);
+	color: var(--accent-text);
 	font-size: 12px;
 	cursor: pointer;
 }
@@ -3536,7 +3556,7 @@ button.rolemsg-fold:focus-visible {
 	cursor: pointer;
 }
 .task-queue-clear:hover:not(:disabled) {
-	color: var(--accent);
+	color: var(--accent-text);
 	text-decoration: underline;
 }
 .task-queue-clear:disabled {
@@ -3556,7 +3576,7 @@ button.rolemsg-fold:focus-visible {
 	padding: 0;
 }
 .status-action:hover {
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .status-badge {
 	margin-left: 4px;
@@ -3597,7 +3617,7 @@ select.status-select {
 }
 .inputbox .btn.composer-plugin-action:hover {
 	background: var(--accent-soft);
-	color: var(--accent);
+	color: var(--accent-text);
 }
 /* 插件下拉（kind="select"）：输入框动作区与上传按钮同高，胶囊形。 */
 .inputbox select.composer-plugin-select {
@@ -3953,7 +3973,7 @@ select.plugin-topbar-item.plugin-topbar-select {
 	color: var(--text);
 }
 .pm-pin.on {
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .pm-pin svg {
 	width: 17px;
@@ -4157,11 +4177,11 @@ select.plugin-topbar-item.plugin-topbar-select {
 	border: none;
 	border-radius: 6px;
 	background: var(--accent-soft);
-	color: var(--accent);
+	color: var(--accent-text);
 	cursor: pointer;
 }
 .cmd-run:hover {
-	background: var(--accent);
+	background: var(--accent-fill);
 	color: #fff;
 }
 
@@ -4364,7 +4384,7 @@ select.plugin-topbar-item.plugin-topbar-select {
 }
 /* terminal tab rename pencil: grey idle, amber hover, left of the close X */
 .term-tab-rename:hover {
-	color: var(--amber);
+	color: var(--amber-fg);
 	background: color-mix(in srgb, var(--amber) 12%, transparent);
 }
 /* inline terminal rename field replaces the title while editing */
@@ -4466,7 +4486,7 @@ select.plugin-topbar-item.plugin-topbar-select {
 	color: var(--text-faint);
 }
 .scm-title svg {
-	color: var(--accent);
+	color: var(--accent-text);
 }
 
 .scm-view-tabs {
@@ -4493,7 +4513,7 @@ select.plugin-topbar-item.plugin-topbar-select {
 }
 .scm-view-tabs button.active {
 	background: var(--accent-soft);
-	color: var(--accent);
+	color: var(--accent-text);
 	font-weight: 600;
 }
 
@@ -4527,7 +4547,7 @@ select.plugin-topbar-item.plugin-topbar-select {
 	overflow: hidden;
 }
 .scm-branch-current svg {
-	color: var(--accent);
+	color: var(--accent-text);
 	flex-shrink: 0;
 }
 .scm-upstream {
@@ -4690,7 +4710,7 @@ body.panel-resizing .scm-divider::after {
 	font-family: var(--mono);
 	font-size: 12px;
 	line-height: 1.35;
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .scm-commit-info {
 	min-width: 0;
@@ -4783,7 +4803,7 @@ body.panel-resizing .scm-divider::after {
 	color: var(--red);
 }
 .scm-file-xy.q {
-	color: var(--amber);
+	color: var(--amber-fg);
 }
 
 .scm-file-path {
@@ -4878,7 +4898,7 @@ body.panel-resizing .scm-divider::after {
 	color: var(--text-faint);
 }
 .scm-diff-line.hunk {
-	color: var(--accent);
+	color: var(--accent-text);
 	background: var(--accent-soft);
 }
 .scm-diff-line.add {
@@ -4941,7 +4961,7 @@ body.panel-resizing .scm-divider::after {
 	cursor: pointer;
 }
 .scm-goto-term:hover {
-	color: var(--accent);
+	color: var(--accent-text);
 	border-color: var(--accent);
 }
 
@@ -5078,7 +5098,7 @@ body.panel-resizing .scm-divider::after {
 	color: var(--green);
 }
 .cache-pct.mid {
-	color: var(--amber);
+	color: var(--amber-fg);
 }
 .cache-pct.warn {
 	color: var(--red);
@@ -5091,7 +5111,7 @@ body.panel-resizing .scm-divider::after {
 
 /* 实时生成速率 (tokens/sec) */
 .status-rate {
-	color: var(--accent);
+	color: var(--accent-text);
 	font-variant-numeric: tabular-nums;
 }
 
@@ -5101,7 +5121,7 @@ body.panel-resizing .scm-divider::after {
 }
 
 .status-item.working {
-	color: var(--accent);
+	color: var(--accent-text);
 }
 
 /* 引擎徽标（DSH 引擎时显示；pi 引擎隐藏，不占空间） */
@@ -5237,7 +5257,7 @@ body.panel-resizing .scm-divider::after {
 }
 .cwd-picker-title svg {
 	flex-shrink: 0;
-	color: var(--amber);
+	color: var(--amber-fg);
 }
 .cwd-picker-title span {
 	overflow: hidden;
@@ -5313,7 +5333,7 @@ body.panel-resizing .scm-divider::after {
 }
 .cwd-choose-btn.primary {
 	border-color: var(--accent);
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .cwd-choose-btn.primary:hover {
 	background: var(--accent-soft);
@@ -5363,11 +5383,11 @@ body.panel-resizing .scm-divider::after {
 	overflow: hidden;
 }
 .cwd-enter:hover {
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .cwd-enter svg {
 	flex-shrink: 0;
-	color: var(--amber);
+	color: var(--amber-fg);
 }
 .cwd-name {
 	overflow: hidden;
@@ -5391,7 +5411,7 @@ body.panel-resizing .scm-divider::after {
 	cursor: pointer;
 }
 .cwd-newbtn:hover {
-	color: var(--accent);
+	color: var(--accent-text);
 	border-color: var(--accent);
 }
 
@@ -5414,7 +5434,7 @@ body.panel-resizing .scm-divider::after {
 }
 
 .status-queue {
-	color: var(--amber);
+	color: var(--amber-fg);
 }
 
 @keyframes spin {
@@ -5609,7 +5629,7 @@ body.panel-resizing .scm-divider::after {
 }
 .tb-tab.active {
 	background: var(--accent-soft);
-	color: var(--accent);
+	color: var(--accent-text);
 }
 
 /* Background-task chip + badge — AI-started servers. The chip is a plain
@@ -5687,7 +5707,7 @@ body.panel-resizing .scm-divider::after {
 	font-style: normal;
 	font-size: 11px;
 	font-weight: 700;
-	color: var(--amber);
+	color: var(--amber-fg);
 	background: rgba(255, 193, 7, 0.12);
 	border-radius: 9px;
 	padding: 1px 7px;
@@ -5751,7 +5771,7 @@ body.panel-resizing .scm-divider::after {
 .bg-task-port {
 	font-family: var(--mono, ui-monospace, monospace);
 	font-weight: 700;
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .bg-task-name {
 	font-size: 11.5px;
@@ -5772,7 +5792,7 @@ body.panel-resizing .scm-divider::after {
 }
 /* 插件任务状态文案（轮询间隔等）——琥珀色弱化显示 */
 .bg-task-status {
-	color: var(--amber, #fbbf24);
+	color: var(--amber-fg, #fbbf24);
 }
 /* 插件声明式设置表单（manifest settings schema）——单列行式布局：
  * 标签固定左列（flex:0 0 auto，永不被压缩）+ 控件撑满右列，行间细分隔线。
@@ -6045,7 +6065,7 @@ body.panel-resizing .scm-divider::after {
 	background: none;
 	border: none;
 	padding: 0;
-	color: var(--accent);
+	color: var(--accent-text);
 	font-size: 12px;
 	cursor: pointer;
 }
@@ -6175,7 +6195,7 @@ body.panel-resizing .scm-divider::after {
 .gs-section-head em {
 	font-style: normal;
 	font-weight: 600;
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .gs-item {
 	display: flex;
@@ -6253,7 +6273,7 @@ body.panel-resizing .scm-divider::after {
 .gs-truncated {
 	padding: 5px 10px;
 	font-size: 11.5px;
-	color: var(--amber, #e6b450);
+	color: var(--amber-fg, #e6b450);
 }
 .gs-foot {
 	display: flex;
@@ -6308,7 +6328,7 @@ body.panel-resizing .scm-divider::after {
 }
 
 .chip-vision {
-	color: var(--accent);
+	color: var(--accent-text);
 	font-size: 11px;
 	line-height: 1;
 }
@@ -6326,7 +6346,7 @@ body.panel-resizing .scm-divider::after {
 }
 
 .chip.newchat {
-	color: var(--accent);
+	color: var(--accent-text);
 	border-color: rgba(139, 92, 246, 0.4);
 }
 .chip.newchat:hover {
@@ -6516,7 +6536,7 @@ body.panel-resizing .scm-divider::after {
 }
 .dd-provider-item.active {
 	background: var(--accent-soft);
-	color: var(--accent);
+	color: var(--accent-text);
 	font-weight: 600;
 }
 .dd-provider-name {
@@ -6559,7 +6579,7 @@ body.panel-resizing .scm-divider::after {
 	white-space: nowrap;
 }
 .dd-model-key.active {
-	color: var(--accent);
+	color: var(--accent-text);
 	border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 
@@ -6733,7 +6753,7 @@ body.panel-resizing .scm-divider::after {
 }
 .dd-item.active::after {
 	content: "✓";
-	color: var(--accent);
+	color: var(--accent-text);
 	font-size: 12px;
 }
 
@@ -6787,7 +6807,7 @@ body.panel-resizing .scm-divider::after {
 .dd-model-usage {
 	font-size: 10.5px;
 	line-height: 1.5;
-	color: var(--accent);
+	color: var(--accent-text);
 	background: var(--accent-soft);
 	border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
 	border-radius: 4px;
@@ -6807,7 +6827,7 @@ body.panel-resizing .scm-divider::after {
 	cursor: pointer;
 }
 .dd-refresh:hover {
-	color: var(--accent);
+	color: var(--accent-text);
 }
 
 /* GitHub link row inside the mobile "⋯" panel. */
@@ -6864,7 +6884,7 @@ body.panel-resizing .scm-divider::after {
 	border-color: rgba(52, 211, 153, 0.3);
 }
 .dd-note.warn {
-	color: var(--amber);
+	color: var(--amber-fg);
 	border-color: rgba(245, 158, 11, 0.35);
 }
 .dd-note.err {
@@ -6890,11 +6910,11 @@ body.panel-resizing .scm-divider::after {
 	cursor: default;
 }
 .dd-refresh.accent {
-	color: var(--accent);
+	color: var(--accent-text);
 	border-color: rgba(139, 92, 246, 0.4);
 }
 .dd-refresh.accent.armed {
-	color: var(--amber);
+	color: var(--amber-fg);
 	border-color: rgba(245, 158, 11, 0.5);
 }
 
@@ -6911,7 +6931,7 @@ body.panel-resizing .scm-divider::after {
 	border-radius: 8px;
 	background: rgba(245, 158, 11, 0.12);
 	border: 1px solid var(--amber);
-	color: var(--amber);
+	color: var(--amber-fg);
 	font-size: 12px;
 	white-space: nowrap;
 }
@@ -7072,7 +7092,7 @@ body.panel-resizing .scm-divider::after {
 	background: var(--notice-warn-bg);
 }
 .notice-warning .notice-icon {
-	color: var(--amber);
+	color: var(--amber-fg);
 }
 .notice-info {
 	border-color: rgba(96, 165, 250, 0.45);
@@ -7163,14 +7183,14 @@ body.panel-resizing .scm-divider::after {
 	border-left-color: var(--accent);
 }
 .banner-icon-info {
-	color: var(--accent);
+	color: var(--accent-text);
 }
 
 .banner-type-warning {
 	border-left-color: var(--amber);
 }
 .banner-icon-warning {
-	color: var(--amber);
+	color: var(--amber-fg);
 }
 
 .banner-type-error {
@@ -7366,13 +7386,13 @@ body:not(.has-wallpaper)::after {
 
 .msg-model {
 	font-size: 11px;
-	color: var(--accent);
+	color: var(--accent-text);
 	font-family: var(--mono);
 }
 
 .msg-customtype {
 	font-size: 11px;
-	color: var(--amber);
+	color: var(--amber-fg);
 }
 
 .msg-time {
@@ -7575,7 +7595,7 @@ body:not(.has-wallpaper)::after {
 /* 朗读中：这条消息的「停止朗读」按钮保持可见 + 高亮（即使用户鼠标已移开）。 */
 .msg-action.msg-action-speaking {
 	opacity: 1;
-	color: var(--accent);
+	color: var(--accent-text);
 	background: var(--bg-elev2);
 }
 
@@ -7662,7 +7682,7 @@ body:not(.has-wallpaper)::after {
 
 .msg-copy-menu-item:hover {
 	background: var(--bg-elev);
-	color: var(--accent);
+	color: var(--accent-text);
 }
 
 .msg-copy-menu-item svg {
@@ -7671,7 +7691,7 @@ body:not(.has-wallpaper)::after {
 }
 
 .msg-copy-menu-item:hover svg {
-	color: var(--accent);
+	color: var(--accent-text);
 }
 
 /* ------------------------------------------------------- plugin slot entries */
@@ -7700,12 +7720,12 @@ body:not(.has-wallpaper)::after {
 .slot-btn:hover,
 .lp-slot-btn:hover,
 .notice-actions .btn-slot:hover {
-	color: var(--accent);
+	color: var(--accent-text);
 	background: var(--bg-elev2);
 }
 .slot-btn.on,
 .lp-slot-btn.on {
-	color: var(--accent);
+	color: var(--accent-text);
 	border-color: var(--accent);
 }
 /* 插件下拉（kind="select"）：与同组按钮同字号，宽度封顶。 */
@@ -7724,7 +7744,7 @@ select.notice-select {
 select.slot-select:hover,
 select.lp-slot-select:hover,
 select.notice-select:hover {
-	color: var(--accent);
+	color: var(--accent-text);
 	background: var(--bg-elev2);
 }
 .slot-badge,
@@ -7854,7 +7874,7 @@ select.notice-select:hover {
 /* 编辑重问里的瞬时提示（文件过大/读取失败） */
 .msg-editor-notice {
 	font-size: 11px;
-	color: var(--amber, #f59e0b);
+	color: var(--amber-fg, #f59e0b);
 	padding: 2px 2px 4px;
 }
 /* 拖拽悬停时整个编辑器高亮 */
@@ -7914,7 +7934,7 @@ span.msg-editor-hint svg {
 .chip.primary {
 	border-color: var(--accent);
 	background: var(--accent-soft);
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .chip.primary:disabled {
 	opacity: 0.45;
@@ -7979,14 +7999,14 @@ span.msg-editor-hint svg {
 	min-width: 52px;
 }
 .msg-collapsed-role.role-user {
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .msg-collapsed-role.role-assistant {
 	color: var(--green);
 }
 .msg-collapsed-role.role-bashExecution,
 .msg-collapsed-role.role-toolResult {
-	color: var(--amber);
+	color: var(--amber-fg);
 }
 
 .msg-collapsed-body {
@@ -8049,7 +8069,7 @@ span.msg-editor-hint svg {
 	transform: rotate(-45deg);
 }
 .msg-collapsed:hover .msg-collapsed-action {
-	color: var(--accent);
+	color: var(--accent-text);
 }
 
 .msg-collapse-btn {
@@ -8066,7 +8086,7 @@ span.msg-editor-hint svg {
 	border-radius: 5px;
 }
 .msg-collapse-btn:hover {
-	color: var(--accent);
+	color: var(--accent-text);
 	background: var(--bg-elev2);
 }
 .msg-text {
@@ -8298,7 +8318,7 @@ span.msg-editor-hint svg {
 }
 
 .thinking-icon {
-	color: var(--accent);
+	color: var(--accent-text);
 }
 
 /* 思考 / 工具 head 的图标占同尺寸盒子，箭头 / 图标 / 标题位置完全对齐。 */
@@ -8436,7 +8456,7 @@ span.msg-editor-hint svg {
 	margin-left: -4px;
 }
 .toolcall.run .toolcall-status {
-	color: var(--amber);
+	color: var(--amber-fg);
 }
 .toolcall.run .toolcall-status > svg {
 	animation: toolcall-spin 1s linear infinite;
@@ -8980,7 +9000,7 @@ div.chead[role="button"]:focus-visible,
 	white-space: nowrap;
 	font-family: var(--mono);
 	font-size: 11px;
-	color: var(--accent);
+	color: var(--accent-text);
 }
 /* 跳到子代理对话（派单卡头；ghost 按钮，与复制键同高 28px） */
 .toolcall-open {
@@ -9218,7 +9238,7 @@ div.chead[role="button"]:focus-visible,
 	font-weight: 600;
 }
 .queued-tag.steer {
-	color: var(--amber);
+	color: var(--amber-fg);
 	background: rgba(251, 191, 36, 0.14);
 }
 .queued-tag.follow {
@@ -9251,7 +9271,7 @@ div.chead[role="button"]:focus-visible,
 .msg-queued-recall:hover,
 .msg-queued-recall:focus-visible {
 	opacity: 1;
-	color: var(--accent);
+	color: var(--accent-text);
 	background: var(--accent-soft);
 }
 .msg-queued-remove {
@@ -9331,7 +9351,7 @@ div.chead[role="button"]:focus-visible,
 }
 .msg-pending-retry:hover,
 .msg-pending-retry:focus-visible {
-	color: var(--accent);
+	color: var(--accent-text);
 	background: var(--accent-soft);
 	border-color: var(--accent);
 }
@@ -10068,7 +10088,7 @@ div.chead[role="button"]:focus-visible,
 	font-family: var(--mono);
 }
 .qn-list-item.active .qn-list-idx {
-	background: var(--accent);
+	background: var(--accent-fill);
 	color: #fff;
 }
 
@@ -10128,7 +10148,7 @@ div.chead[role="button"]:focus-visible,
 }
 .qn-tag.active {
 	border-color: color-mix(in srgb, var(--accent) 55%, transparent);
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .qn-tag.active .qn-tag-bar {
 	background: var(--accent);
@@ -10210,7 +10230,7 @@ div.chead[role="button"]:focus-visible,
 	padding: 0 5px;
 	border-radius: 999px;
 	border: 1px solid var(--border);
-	color: var(--accent);
+	color: var(--accent-text);
 	background: color-mix(in srgb, var(--accent) 8%, transparent);
 	white-space: nowrap;
 }
@@ -10250,7 +10270,7 @@ div.chead[role="button"]:focus-visible,
 	padding: 0 5px;
 	border-radius: 999px;
 	border: 1px solid var(--border);
-	color: var(--accent);
+	color: var(--accent-text);
 	background: color-mix(in srgb, var(--accent) 8%, transparent);
 	white-space: nowrap;
 	flex-shrink: 0;
@@ -10277,7 +10297,7 @@ div.chead[role="button"]:focus-visible,
 }
 
 .goalbar-icon {
-	color: var(--amber);
+	color: var(--amber-fg);
 	display: inline-flex;
 	align-items: center;
 	font-size: 15px;
@@ -10318,7 +10338,7 @@ div.chead[role="button"]:focus-visible,
 	gap: 5px;
 	line-height: 1.4;
 	white-space: nowrap;
-	background: var(--accent);
+	background: var(--accent-fill);
 	color: #fff;
 	border: none;
 	border-radius: 8px;
@@ -10547,7 +10567,7 @@ div.chead[role="button"]:focus-visible,
 }
 
 .goalbar-hint svg {
-	color: var(--amber);
+	color: var(--amber-fg);
 }
 
 .goalbar-hint:hover {
@@ -10586,7 +10606,7 @@ div.chead[role="button"]:focus-visible,
 	display: flex;
 	gap: 14px;
 	font-size: 12px;
-	color: var(--amber);
+	color: var(--amber-fg);
 }
 
 .inputbox {
@@ -10769,7 +10789,7 @@ div.chead[role="button"]:focus-visible,
 	padding-left: 8px;
 }
 .speed-menu a {
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .speed-menu :focus-visible,
 .fast-chip:focus-visible {
@@ -10951,7 +10971,7 @@ div.chead[role="button"]:focus-visible,
 }
 .inputbox .btn.attach-img:hover:not(:disabled) {
 	background: var(--accent-soft);
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .inputbox .btn.attach-img:disabled {
 	color: var(--text-disabled);
@@ -11125,7 +11145,7 @@ div.chead[role="button"]:focus-visible,
 .slash-name {
 	font-family: var(--mono);
 	font-size: 12.5px;
-	color: var(--accent);
+	color: var(--accent-text);
 	white-space: nowrap;
 }
 .slash-desc {
@@ -11157,11 +11177,11 @@ div.chead[role="button"]:focus-visible,
 	border-color: color-mix(in srgb, var(--green) 45%, transparent);
 }
 .slash-source.extension {
-	color: var(--amber);
+	color: var(--amber-fg);
 	border-color: color-mix(in srgb, var(--amber) 45%, transparent);
 }
 .slash-source.prompt {
-	color: var(--accent);
+	color: var(--accent-text);
 	border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 .slash-source.skill {
@@ -11213,7 +11233,7 @@ div.chead[role="button"]:focus-visible,
 .slash-help-cmd {
 	font-family: var(--mono);
 	font-size: 12.5px;
-	color: var(--accent);
+	color: var(--accent-text);
 	white-space: nowrap;
 }
 .slash-help-desc {
@@ -11305,7 +11325,7 @@ div.chead[role="button"]:focus-visible,
 	flex-shrink: 0;
 	font-size: 11px;
 	font-weight: 700;
-	color: var(--accent);
+	color: var(--accent-text);
 	border: 1px solid var(--accent);
 	border-radius: 999px;
 	padding: 1px 8px;
@@ -11492,8 +11512,8 @@ div.chead[role="button"]:focus-visible,
 .dialog-submit {
 	padding: 6px 14px;
 	border-radius: 8px;
-	border: 1px solid var(--accent);
-	background: var(--accent);
+	border: 1px solid var(--accent-fill);
+	background: var(--accent-fill);
 	color: #fff;
 	cursor: pointer;
 	font-size: 13px;
@@ -11615,7 +11635,7 @@ div.chead[role="button"]:focus-visible,
 	display: inline-block;
 	flex: none;
 	width: 1.5em;
-	color: var(--accent);
+	color: var(--accent-text);
 	font-size: 12px;
 	line-height: 1.5;
 	user-select: none;
@@ -11743,7 +11763,7 @@ div.chead[role="button"]:focus-visible,
 	margin-bottom: 6px;
 	font-size: 11px;
 	font-weight: 700;
-	color: var(--accent);
+	color: var(--accent-text);
 	letter-spacing: 0.06em;
 }
 .question-preview-body {
@@ -11757,12 +11777,13 @@ div.chead[role="button"]:focus-visible,
 }
 
 .btn.primary {
-	background: var(--accent);
-	border-color: var(--accent);
+	background: var(--accent-fill);
+	border-color: var(--accent-fill);
 	color: #fff;
 }
 .btn.primary:hover:not(:disabled) {
-	filter: brightness(1.12);
+	background: var(--accent-fill-hover);
+	border-color: var(--accent-fill-hover);
 }
 
 /* ------------------------------------------------------------ setup / model modals */
@@ -12242,7 +12263,7 @@ div.chead[role="button"]:focus-visible,
 }
 .settings-tab.active {
 	background: var(--accent-soft);
-	color: var(--accent);
+	color: var(--accent-text);
 	font-weight: 600;
 }
 /* 左栏图标：macOS 偏好设置式的彩色圆角底（色相由各分组 data-tab 指定，插件页回落灰） */
@@ -12255,7 +12276,7 @@ div.chead[role="button"]:focus-visible,
 	height: 26px;
 	border-radius: 8px;
 	font-size: 13px;
-	color: var(--tile, var(--accent));
+	color: var(--tile, var(--accent-text));
 	background: var(--accent-soft);
 	background: color-mix(in srgb, var(--tile, var(--accent)) 16%, transparent);
 }
@@ -12341,7 +12362,7 @@ div.chead[role="button"]:focus-visible,
 .set-subtab.active {
 	background: var(--accent-soft);
 	border-color: var(--accent);
-	color: var(--accent);
+	color: var(--accent-text);
 	font-weight: 600;
 }
 .set-subtab .set-count {
@@ -12572,7 +12593,7 @@ div.chead[role="button"]:focus-visible,
 }
 
 .set-section-icon {
-	color: var(--accent);
+	color: var(--accent-text);
 	font-size: 14px;
 }
 
@@ -12729,7 +12750,7 @@ div.chead[role="button"]:focus-visible,
 }
 .token-chip:hover {
 	border-color: var(--accent);
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .override-row {
 	border: 1px solid var(--border, #3a3f45);
@@ -12747,7 +12768,7 @@ div.chead[role="button"]:focus-visible,
 .override-token {
 	font-family: var(--mono, ui-monospace, monospace);
 	font-size: 12px;
-	color: var(--accent);
+	color: var(--accent-text);
 	white-space: nowrap;
 }
 .override-input {
@@ -12765,7 +12786,7 @@ div.chead[role="button"]:focus-visible,
 }
 .set-btn:hover:not(:disabled) {
 	border-color: var(--accent);
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .set-btn:disabled {
 	opacity: 0.45;
@@ -12783,7 +12804,7 @@ div.chead[role="button"]:focus-visible,
 }
 .set-btn-mini:hover {
 	border-color: var(--accent);
-	color: var(--accent);
+	color: var(--accent-text);
 }
 
 /* 各来源默认（自动）内容预览：来源未覆盖时行内展示，点击进入覆盖编辑 */
@@ -12828,7 +12849,7 @@ div.chead[role="button"]:focus-visible,
 .source-default-toggle {
 	cursor: pointer;
 	font-size: 11px;
-	color: var(--accent);
+	color: var(--accent-text);
 	align-self: flex-end;
 	padding: 1px 4px;
 	border-radius: 4px;
@@ -12874,7 +12895,7 @@ button.source-default-toggle {
 	align-self: flex-start;
 	background: none;
 	border: 1px dashed var(--border, #3a3f45);
-	color: var(--accent);
+	color: var(--accent-text);
 	border-radius: 6px;
 	font-size: 11px;
 	padding: 2px 8px;
@@ -12897,7 +12918,7 @@ button.source-default-toggle {
 	align-self: flex-start;
 	background: none;
 	border: none;
-	color: var(--accent);
+	color: var(--accent-text);
 	font-size: 12px;
 	padding: 2px 0;
 	cursor: pointer;
@@ -13246,13 +13267,13 @@ button.source-default-toggle {
 	font-weight: 600;
 }
 .set-uninstall.accent {
-	color: var(--accent);
+	color: var(--accent-text);
 	border-color: var(--accent);
 	background: rgb(139 92 246 / 0.1);
 	font-weight: 600;
 }
 .set-uninstall.accent:hover {
-	color: var(--accent);
+	color: var(--accent-text);
 	border-color: var(--accent);
 	filter: brightness(1.1);
 }
@@ -13375,7 +13396,7 @@ button.source-default-toggle {
 	color: var(--text-dim);
 }
 .set-log-level.lv-warn {
-	color: var(--amber);
+	color: var(--amber-fg);
 }
 .set-log-level.lv-error {
 	color: var(--red);
@@ -13445,7 +13466,7 @@ button.source-default-toggle {
 	border: 1px solid rgba(139, 92, 246, 0.4);
 	border-radius: 8px;
 	background: transparent;
-	color: var(--accent);
+	color: var(--accent-text);
 	font-size: 13px;
 	cursor: pointer;
 	white-space: nowrap;
@@ -13538,7 +13559,7 @@ button.source-default-toggle {
 }
 .set-ui-diag > summary {
 	cursor: pointer;
-	color: var(--amber);
+	color: var(--amber-fg);
 	font-weight: 600;
 }
 .set-ui-diag-list {
@@ -13706,7 +13727,7 @@ button.source-default-toggle {
 .set-catalog-update-badge {
 	font-size: 11px;
 	font-weight: 500;
-	color: var(--amber);
+	color: var(--amber-fg);
 	border: 1px solid rgb(251 191 36 / 0.45);
 	background: rgb(251 191 36 / 0.12);
 	border-radius: 999px;
@@ -13718,7 +13739,7 @@ button.source-default-toggle {
 .set-catalog-custom {
 	font-size: 11px;
 	font-weight: 500;
-	color: var(--accent);
+	color: var(--accent-text);
 	border: 1px solid rgb(139 92 246 / 0.45);
 	border-radius: 999px;
 	padding: 1px 8px;
@@ -13806,7 +13827,7 @@ button.source-default-toggle {
 	vertical-align: 1px;
 }
 .tpl-badge.default {
-	color: var(--accent);
+	color: var(--accent-text);
 	border-color: var(--accent);
 	background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
@@ -13832,7 +13853,7 @@ button.source-default-toggle {
 	vertical-align: 1px;
 }
 .rule-badge.ask {
-	color: var(--amber);
+	color: var(--amber-fg);
 	border: 1px solid color-mix(in srgb, var(--amber) 40%, transparent);
 	background: color-mix(in srgb, var(--amber) 12%, transparent);
 }
@@ -13977,7 +13998,7 @@ button.source-default-toggle {
 	cursor: pointer;
 }
 .set-ui-align select:hover {
-	color: var(--accent);
+	color: var(--accent-text);
 	background: var(--bg-elev2);
 }
 
@@ -14014,7 +14035,7 @@ button.source-default-toggle {
 	gap: 10px;
 }
 .modal-head-icon {
-	color: var(--accent);
+	color: var(--accent-text);
 	font-size: 18px;
 }
 .modal-head h2 {
@@ -14287,7 +14308,7 @@ button.source-default-toggle {
 }
 .provider-oauth-event a,
 .provider-oauth-device a {
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .provider-oauth-device code {
 	padding: 5px 8px;
@@ -14335,7 +14356,7 @@ button.source-default-toggle {
 }
 .provider-key-item .provider-key-dot {
 	font-size: 10px;
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .provider-key-item .provider-key-label {
 	flex: 1;
@@ -14515,7 +14536,7 @@ button.source-default-toggle {
 }
 
 .sound-icon {
-	color: var(--accent);
+	color: var(--accent-text);
 	flex-shrink: 0;
 }
 
@@ -14765,8 +14786,8 @@ button.source-default-toggle {
 .fp-attach.zoom-out:hover,
 .fp-attach.full:hover,
 .fp-attach.full.on {
-	background: var(--accent);
-	border-color: var(--accent);
+	background: var(--accent-fill);
+	border-color: var(--accent-fill);
 	color: #fff;
 }
 .fp-attach:disabled {
@@ -14849,7 +14870,7 @@ button.source-default-toggle {
 .fp-notice {
 	padding: 7px 14px;
 	font-size: 11.5px;
-	color: var(--amber);
+	color: var(--amber-fg);
 	background: rgba(251, 191, 36, 0.08);
 	border-bottom: 1px solid var(--border-soft);
 	flex-shrink: 0;
@@ -15064,7 +15085,7 @@ button.source-default-toggle {
 	padding-left: 0.2em;
 }
 .fp-markdown li::marker {
-	color: var(--accent);
+	color: var(--accent-text);
 	font-weight: 700;
 }
 .fp-markdown li > p {
@@ -15544,7 +15565,7 @@ button.source-default-toggle {
 	}
 	.panel-toggle:active {
 		background: var(--accent-soft);
-		color: var(--accent);
+		color: var(--accent-text);
 	}
 
 	/* ---- side panels become sliding drawers ---- */
@@ -15629,7 +15650,7 @@ button.source-default-toggle {
 	}
 	.term-side-toggle:active {
 		background: var(--accent-soft);
-		color: var(--accent);
+		color: var(--accent-text);
 	}
 	/* Make room for the floating toggle so it doesn't cover the prompt:
 	   padding moved to .term-main (see base rule — FitAddon measures the
@@ -15903,7 +15924,7 @@ button.source-default-toggle {
 }
 .dd-all-item.warn {
 	background: rgba(245, 158, 11, 0.08);
-	color: var(--amber);
+	color: var(--amber-fg);
 	flex-wrap: wrap;
 }
 /* Outdated row: the button is first in DOM, so the name never gets squeezed
@@ -15981,7 +16002,7 @@ button.source-default-toggle {
 	border: 1px solid rgba(245, 158, 11, 0.4);
 	border-radius: 6px;
 	background: rgba(245, 158, 11, 0.1);
-	color: var(--amber);
+	color: var(--amber-fg);
 	font-size: 10.5px;
 	font-weight: 600;
 	line-height: 1.6;
@@ -16418,7 +16439,7 @@ button.source-default-toggle {
 	border-radius: 6px;
 	background: var(--bg-elev2);
 	border: 1px solid var(--border);
-	color: var(--accent, #60a5fa);
+	color: var(--accent-text, #60a5fa);
 	font-family: var(--mono, ui-monospace, monospace);
 	font-size: 0.88em;
 	font-weight: 500;
@@ -16436,7 +16457,7 @@ button.source-default-toggle {
 .file-pill:hover {
 	background: var(--bg-elev3);
 	border-color: var(--accent, #60a5fa);
-	color: var(--accent, #93c5fd);
+	color: var(--accent-text, #93c5fd);
 	transform: translateY(-1px);
 }
 
@@ -16859,7 +16880,7 @@ button.source-default-toggle {
 	border-color: var(--text-faint);
 }
 .identity-btn.on {
-	color: var(--accent);
+	color: var(--accent-text);
 	border-color: var(--accent);
 	background: var(--accent-soft);
 }
@@ -17103,7 +17124,7 @@ button.source-default-toggle {
 	padding: 1px 8px;
 	border-radius: 999px;
 	background: var(--accent-soft);
-	color: var(--accent);
+	color: var(--accent-text);
 	font-size: 11px;
 	font-weight: 500;
 	white-space: nowrap;
@@ -17255,7 +17276,7 @@ button.source-default-toggle {
 	padding: 2px 4px;
 	border: none;
 	background: none;
-	color: var(--accent);
+	color: var(--accent-text);
 	font: inherit;
 	font-size: 12px;
 	cursor: pointer;

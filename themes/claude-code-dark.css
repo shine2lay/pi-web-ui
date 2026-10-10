@@ -13,6 +13,10 @@
 	--text-faint: #7e7a6e;
 	--text-disabled: #7e7a6e;
 	--accent: #cc785c;
+	/* accent-contrast: keeps today's look (text and fills = the accent, hover = the old brightness(1.12)) */
+	--accent-text: #cc785c;
+	--accent-fill: #cc785c;
+	--accent-fill-hover: #e48667;
 	--accent-soft: rgba(204, 120, 92, 0.14);
 	--green: #82b573;
 	--green-soft: rgba(130, 181, 115, 0.12);

@@ -61,7 +61,7 @@
 	font-weight: 600;
 }
 .xfold-working .xfold-status {
-	color: var(--accent);
+	color: var(--accent-text);
 }
 .xfold-error .xfold-status {
 	color: var(--red);

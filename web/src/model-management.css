@@ -67,7 +67,7 @@
 .quick-chip.active {
 	background: var(--accent-soft);
 	border-color: var(--accent);
-	color: var(--accent);
+	color: var(--accent-text);
 }
 
 .quick-chip-icon {
@@ -371,7 +371,7 @@
 }
 
 .spec-badge.pricing {
-	color: var(--amber);
+	color: var(--amber-fg);
 	border-color: rgba(251, 191, 36, 0.25);
 	background: rgba(251, 191, 36, 0.08);
 	font-family: var(--mono);
@@ -384,7 +384,7 @@
 }
 
 .spec-badge.reasoning {
-	color: var(--accent);
+	color: var(--accent-text);
 	border-color: rgba(139, 92, 246, 0.25);
 	background: var(--accent-soft);
 }
@@ -460,7 +460,7 @@
 }
 
 .capsule-segment.active {
-	color: var(--accent);
+	color: var(--accent-text);
 }
 
 .capsule-divider {
@@ -548,7 +548,7 @@
 }
 
 .metric-card.highlight .metric-card-value {
-	color: var(--accent);
+	color: var(--accent-text);
 }
 
 /* 7d / 30d 统计柱状图 */
@@ -751,7 +751,7 @@
 .param-pill.active {
 	background: var(--accent-soft);
 	border-color: var(--accent);
-	color: var(--accent);
+	color: var(--accent-text);
 	font-weight: 600;
 }
 
@@ -761,7 +761,7 @@
 }
 
 .param-pill.custom-toggle.active {
-	color: var(--amber);
+	color: var(--amber-fg);
 	border-color: var(--amber);
 	background: rgba(251, 191, 36, 0.1);
 }
@@ -846,7 +846,7 @@
 	height: 28px;
 	border-radius: 8px;
 	background: var(--accent-soft);
-	color: var(--accent);
+	color: var(--accent-text);
 	font-size: 15px;
 	flex-shrink: 0;
 }
@@ -1254,7 +1254,7 @@
 
 .matrix-toggle-tag.active.reasoning {
 	background: var(--accent-soft);
-	color: var(--accent);
+	color: var(--accent-text);
 	border-color: rgba(139, 92, 246, 0.35);
 }
 
@@ -1296,13 +1296,13 @@
 }
 
 .matrix-star-btn:hover {
-	color: var(--amber);
+	color: var(--amber-fg);
 	border-color: rgba(251, 191, 36, 0.4);
 	background: rgba(251, 191, 36, 0.08);
 }
 
 .matrix-star-btn.active {
-	color: var(--amber);
+	color: var(--amber-fg);
 	border-color: rgba(251, 191, 36, 0.5);
 	background: rgba(251, 191, 36, 0.12);
 	font-weight: 600;
@@ -1385,7 +1385,7 @@
 }
 
 .dd-default-banner-star {
-	color: var(--amber);
+	color: var(--amber-fg);
 	font-size: 12px;
 	flex-shrink: 0;
 }
@@ -1413,7 +1413,7 @@
 	border-radius: 4px;
 	border: 1px solid rgba(251, 191, 36, 0.3);
 	background: transparent;
-	color: var(--amber);
+	color: var(--amber-fg);
 	font-size: 10.5px;
 	cursor: pointer;
 	flex-shrink: 0;

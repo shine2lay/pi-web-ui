@@ -104,7 +104,7 @@ export function ToolApprovalDialog({ approval }: ToolApprovalDialogProps) {
 				onClick={(e) => e.stopPropagation()}
 			>
 				<div className="tool-info-head">
-					<span className="tool-info-title" style={{ color: "var(--amber, #f59e0b)" }}>
+					<span className="tool-info-title" style={{ color: "var(--amber-fg, var(--amber, #f59e0b))" }}>
 						<FiAlertTriangle />
 						{t("toolApprovalTitle")}
 					</span>
@@ -127,7 +127,7 @@ export function ToolApprovalDialog({ approval }: ToolApprovalDialogProps) {
 								backgroundColor: "rgba(245, 158, 11, 0.12)",
 								border: "1px solid rgba(245, 158, 11, 0.3)",
 								marginBottom: 16,
-								color: "var(--amber, #f59e0b)",
+								color: "var(--amber-fg, var(--amber, #f59e0b))",
 								fontSize: 13,
 								lineHeight: 1.5,
 								fontWeight: 500,

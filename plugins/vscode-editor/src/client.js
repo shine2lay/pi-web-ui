@@ -218,7 +218,7 @@ export default {
 		.vsc-row.drop-target { outline: 1px dashed var(--accent, #7c5cff); outline-offset: -2px;
 			background: color-mix(in srgb, var(--accent, #7c5cff) 16%, transparent); }
 		.vsc-tree.drop-root, .vsc-sshtree.drop-root { outline: 2px dashed var(--accent, #7c5cff); outline-offset: -2px; }
-		.vsc-status .vsc-up { color: var(--amber, #fbbf24); }
+		.vsc-status .vsc-up { color: var(--amber-fg, var(--amber, #fbbf24)); }
 		.vsc-row .caret { width: 12px; text-align: center; opacity: .55; font-size: 9px; flex-shrink: 0; }
 		.vsc-row .nm { overflow: hidden; text-overflow: ellipsis; }
 		.vsc-sect { display: flex; align-items: center; gap: 4px; padding: 8px 8px 3px;
@@ -237,7 +237,7 @@ export default {
 		.vsc-hrow .ops button:hover { opacity: 1; background: var(--bg-elev3, #2a2a38); }
 		.vsc-deps { padding: 4px 10px; }
 		.vsc-deps button { all: unset; display: block; width: 100%; box-sizing: border-box; cursor: pointer;
-			padding: 4px 8px; border-radius: 5px; font-size: 11.5px; color: var(--amber, #fbbf24); }
+			padding: 4px 8px; border-radius: 5px; font-size: 11.5px; color: var(--amber-fg, var(--amber, #fbbf24)); }
 		.vsc-deps button:hover { background: var(--bg-elev2, #20202b); }
 		/* ---- 右侧主区 ---- */
 		.vsc-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
@@ -249,7 +249,7 @@ export default {
 		.vsc-tab.active { background: var(--bg, #101016); color: var(--text, #e6e6ef);
 			box-shadow: inset 0 2px 0 var(--accent, #7c5cff); }
 		.vsc-tab .tn { overflow: hidden; text-overflow: ellipsis; }
-		.vsc-tab .dot { color: var(--amber, #fbbf24); }
+		.vsc-tab .dot { color: var(--amber-fg, var(--amber, #fbbf24)); }
 		.vsc-tab .x { all: unset; cursor: pointer; padding: 0 3px; border-radius: 4px; opacity: .55; }
 		.vsc-tab .x:hover { opacity: 1; background: var(--bg-elev2, #20202b); }
 		.vsc-edwrap { flex: 1; min-height: 0; position: relative; }
@@ -285,7 +285,7 @@ export default {
 			border-top: 1px solid var(--border, #333); background: var(--bg-elev, #16161d);
 			font-size: 11.5px; color: var(--text-dim, #9a9ab0); }
 		.vsc-status .grow { flex: 1; }
-		.vsc-status .dirty { color: var(--amber, #fbbf24); }
+		.vsc-status .dirty { color: var(--amber-fg, var(--amber, #fbbf24)); }
 		.vsc-status .remote { color: var(--green, #4ade80); }
 		.vsc-err { color: var(--red, #f87171); }
 		/* 快速打开弹层 */

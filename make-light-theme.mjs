@@ -50,7 +50,29 @@ for (const line of rootBlock[0].split("\n")) {
 
 /** faint-contrast: a palette with its own --text-faint and no --text-disabled keeps disabled controls on its
  *  faint (as before the token existed), not on the default's old grey. */
-const ownValue = (overrides, k) => overrides[k] ?? (k === "--text-disabled" ? overrides["--text-faint"] : undefined);
+/** accent-contrast: the brightness(1.12) filter the filled buttons' hover used before --accent-fill-hover existed,
+ *  as Chrome applies it (each sRGB channel times 1.12, clamped), so a palette's hover looks exactly as before. */
+const brighten = (hex) =>
+	"#" +
+	[1, 3, 5]
+		.map((i) =>
+			Math.min(255, Math.round(Number.parseInt(hex.slice(i, i + 2), 16) * 1.12))
+				.toString(16)
+				.padStart(2, "0"),
+		)
+		.join("");
+/** accent-contrast: a palette with its own --accent keeps today's look unless it sets the new tokens itself: violet
+ *  text and fills = its accent, the hover = its accent brightened. Only the default violet (and Purple Haze, which
+ *  has no accent of its own) gets Design's readable violet. --amber-fg defaults to var(--amber) everywhere. */
+const ACCENT_IDENTITY = {
+	"--accent-text": (a) => a,
+	"--accent-fill": (a) => a,
+	"--accent-fill-hover": (a) => brighten(a),
+};
+const ownValue = (overrides, k) =>
+	overrides[k] ??
+	(k === "--text-disabled" ? overrides["--text-faint"] : undefined) ??
+	(ACCENT_IDENTITY[k] && overrides["--accent"] ? ACCENT_IDENTITY[k](overrides["--accent"]) : undefined);
 
 /** Emit a theme file: full :root (defaults + overrides) + optional tail. */
 const emitTheme = (name, overrides = {}, tail = "", nameEn = "", group = "") => {
@@ -152,6 +174,8 @@ const WHITE = {
 	"--red": "#dc2626",
 	"--red-soft": "rgba(220, 38, 38, 0.1)",
 	"--amber": "#d97706",
+	// accent-contrast (Design rm-2c447ce9): amber as text; #d97706 is 3.19:1 on white, 2.79 on the needs-you row.
+	"--amber-fg": "#92400e",
 	"--term-bg": "#ffffff",
 	"--term-fg": "#1f2328",
 	"--term-cursor": "#0969da",

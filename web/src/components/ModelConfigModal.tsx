@@ -948,7 +948,7 @@ export function ModelConfigModal({
 									background: "rgba(251, 191, 36, 0.08)",
 									border: "1px solid rgba(251, 191, 36, 0.3)",
 									fontSize: 11.5,
-									color: "var(--amber)",
+									color: "var(--amber-fg)",
 								}}
 								title={`Global default model: ${defaultModel}`}
 							>
@@ -969,7 +969,7 @@ export function ModelConfigModal({
 									style={{
 										background: "transparent",
 										border: "none",
-										color: "var(--amber)",
+										color: "var(--amber-fg)",
 										cursor: "pointer",
 										fontSize: 10,
 										padding: "0 2px",

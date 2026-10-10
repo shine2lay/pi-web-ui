@@ -59,7 +59,7 @@ export function RollbackDialog() {
 				style={{ maxWidth: 520 }}
 			>
 				<div className="tool-info-head">
-					<span className="tool-info-title" style={{ color: "var(--amber, #f59e0b)" }}>
+					<span className="tool-info-title" style={{ color: "var(--amber-fg, var(--amber, #f59e0b))" }}>
 						<FiAlertTriangle />
 						{t("rollbackSession")}
 					</span>

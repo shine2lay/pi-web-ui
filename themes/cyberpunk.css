@@ -12,12 +12,16 @@
 	--text-faint: #6a6a8e;
 	--text-disabled: #6a6a8e;
 	--accent: #00d4ff;
+	--accent-text: #00d4ff;
+	--accent-fill: #00d4ff;
+	--accent-fill-hover: #00edff;
 	--accent-soft: rgba(0, 212, 255, 0.14);
 	--green: #00ff41;
 	--green-soft: rgba(0, 255, 65, 0.12);
 	--red: #ff006e;
 	--red-soft: rgba(255, 0, 110, 0.12);
 	--amber: #ffd700;
+	--amber-fg: var(--amber);
 	--blue: #3b82f6;
 	--blue-soft: rgba(59, 130, 246, 0.12);
 	--term-bg: #0a0a0f;
