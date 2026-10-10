@@ -37,6 +37,8 @@ class World {
 	versions = new Map<string, number>();
 	commands: [string, string][] = [];
 	watchSaved: string[] = [];
+	/** queue-why: what the check keeps across restarts (client state in the app). */
+	heldSeen: Record<string, string[]> = {};
 	changes = 0;
 	logs: string[] = [];
 	titles: [string, string][] = [];
@@ -64,6 +66,10 @@ class World {
 			loadWatch: () => [],
 			saveWatch: (f) => {
 				this.watchSaved = f;
+			},
+			loadHeldSeen: () => structuredClone(this.heldSeen),
+			saveHeldSeen: (s) => {
+				this.heldSeen = structuredClone(s);
 			},
 			changed: () => {
 				this.changes++;
@@ -360,6 +366,173 @@ describe("QueueBlocks: paused by you", () => {
 			needsYou: 1,
 		});
 		expect(blockVerdict(b, () => ({ status: "asking", held: true }))).toEqual({ kind: "wait", needsYou: 0 });
+	});
+});
+
+/**
+ * queue-why: a task in another queue that a waiting task here comes after, newly paused by the owner or newly
+ * needing the user, makes this queue look once ("/queue blocks"), so pi-queue can tell its chat (its note).
+ */
+describe("QueueBlocks: an outside after that only the owner can move on", () => {
+	const hold = (id?: number) => ({
+		op: "hold",
+		...(id !== undefined ? { id } : {}),
+		why: "owner: not now",
+		by: "panel",
+	});
+	const release = (id?: number) => ({ op: "release", ...(id !== undefined ? { id } : {}) });
+	/** world() plus A #3, which comes after temper (B) #2. */
+	const waiting = () => {
+		const r = world();
+		r.w.ops(A, { op: "add", id: 3, plan: plan("After temper"), outside: [onB(2)] });
+		r.blocks.watchQueue(A);
+		return r;
+	};
+	const ticks = async (w: World, blocks: QueueBlocks, n: number) => {
+		for (let i = 0; i < n; i++) {
+			w.now += MIN;
+			await blocks.tick();
+		}
+	};
+
+	it("paused by the owner: the waiting queue looks once, not again while it stays paused, again for a new pause", async () => {
+		const { w, blocks } = waiting();
+		await ticks(w, blocks, 3);
+		expect(w.commands).toEqual([]);
+		w.ops(B, hold(2));
+		await blocks.tick();
+		expect(w.commands).toEqual([[A, "/queue blocks"]]);
+		expect(w.logs.at(-1)).toMatch(/held:\/s\/b\.jsonl#2\/paused\//);
+		// Hours later, still the same pause: nothing more (the old checks would nudge again after 5 min).
+		await ticks(w, blocks, 120);
+		expect(w.commands).toHaveLength(1);
+		// The owner resumes it: nothing to tell. He pauses it again later: that's a new pause.
+		w.ops(B, release(2));
+		await ticks(w, blocks, 2);
+		expect(w.commands).toHaveLength(1);
+		w.ops(B, hold(2));
+		await blocks.tick();
+		expect(w.commands).toHaveLength(2);
+	});
+
+	it("the whole other queue paused counts too, and once only, across a restart of the app", async () => {
+		const { w, blocks } = waiting();
+		w.ops(B, hold());
+		await blocks.tick();
+		expect(w.commands).toEqual([[A, "/queue blocks"]]);
+		expect(Object.keys(w.heldSeen)).toEqual([A]);
+		// The app restarts: a new check reads what was looked at, so it doesn't look again.
+		const again = new QueueBlocks(w.host());
+		again.watchQueue(A);
+		await ticks(w, again, 30);
+		expect(w.commands).toHaveLength(1);
+	});
+
+	it("a queue it can't read for a while after a restart: what it looked at stands, no second look", async () => {
+		const { w, blocks } = waiting();
+		w.ops(B, hold(2));
+		await blocks.tick();
+		expect(w.commands).toHaveLength(1);
+		let readable = false;
+		const host = w.host();
+		const again = new QueueBlocks({
+			...host,
+			readQueue: async (f) => {
+				if (f === B && !readable) throw new Error("EIO");
+				return host.readQueue(f);
+			},
+		});
+		again.watchQueue(A);
+		await ticks(w, again, 3);
+		expect(Object.values(w.heldSeen).flat()).toHaveLength(1);
+		readable = true;
+		await ticks(w, again, 3);
+		expect(w.commands).toHaveLength(1);
+	});
+
+	it("needing the user: once per question; the same question again isn't new, another one is", async () => {
+		const { w, blocks } = waiting();
+		w.ops(B, { op: "start", id: 2, lane: true }, { op: "stuck", id: 2, question: "Which port?", choices: ["a", "b"] });
+		await blocks.tick();
+		expect(w.commands).toEqual([[A, "/queue blocks"]]);
+		expect(w.logs.at(-1)).toMatch(/held:\/s\/b\.jsonl#2\/user\//);
+		w.now += MIN;
+		w.ops(B, { op: "stuck", id: 2, question: "Which port?", choices: ["a", "b"] });
+		await ticks(w, blocks, 30);
+		expect(w.commands).toHaveLength(1);
+		// Answered, then a new question.
+		w.ops(B, { op: "resume", id: 2 });
+		await ticks(w, blocks, 1);
+		w.ops(B, { op: "stuck", id: 2, question: "Which host?", choices: ["a", "b"] });
+		await blocks.tick();
+		expect(w.commands).toHaveLength(2);
+		// Working, on hold or blocked: someone else ends those, no look.
+		w.ops(
+			B,
+			{ op: "resume", id: 2 },
+			{ op: "wait", id: 2, what: "CI", check: "false", everyMs: MIN, until: w.now + 60 * MIN },
+		);
+		await ticks(w, blocks, 5);
+		expect(w.commands).toHaveLength(2);
+	});
+
+	it("not for a waiting task the owner paused, or one in a paused queue; once that ends, it looks", async () => {
+		const { w, blocks } = waiting();
+		w.ops(A, hold(3));
+		w.ops(B, hold(2));
+		await ticks(w, blocks, 10);
+		expect(w.commands).toEqual([]);
+		w.ops(A, release(3), hold());
+		await ticks(w, blocks, 10);
+		expect(w.commands).toEqual([]);
+		w.ops(A, release());
+		await blocks.tick();
+		expect(w.commands).toEqual([[A, "/queue blocks"]]);
+	});
+
+	it("each task once: a second paused one makes it look again; a chat it can't reach is tried again in 5 min", async () => {
+		const { w, blocks } = waiting();
+		w.ops(B, { op: "add", id: 4, plan: plan("Four") });
+		w.ops(A, { op: "update", id: 3, plan: plan("After temper"), after: [], outside: [onB(2), onB(4)] });
+		w.ops(B, hold(2));
+		await blocks.tick();
+		expect(w.commands).toHaveLength(1);
+		const host = w.host();
+		let reach = false;
+		const off = new QueueBlocks({
+			...host,
+			runCommand: async (f, line) => {
+				w.commands.push([f, line]);
+				return reach;
+			},
+		});
+		off.watchQueue(A);
+		w.ops(B, hold(4));
+		await off.tick();
+		expect(w.commands).toHaveLength(2);
+		await ticks(w, off, 4);
+		expect(w.commands).toHaveLength(2);
+		reach = true;
+		w.now += RENUDGE_MS;
+		await off.tick();
+		expect(w.commands).toHaveLength(3);
+		await ticks(w, off, 30);
+		expect(w.commands).toHaveLength(3);
+	});
+
+	it("the panel shows how an outside after stands, paused ones too", async () => {
+		const { w, blocks } = waiting();
+		w.ops(B, hold(2));
+		await blocks.tick();
+		const q = panelOf(w.files.get(A)!);
+		blocks.enrich(A, q);
+		expect(q.tasks.find((t) => t.id === 3)?.outside?.[0]).toMatchObject({
+			name: "temper",
+			id: 2,
+			status: "ready",
+			title: "Docs",
+			held: true,
+		});
 	});
 });
 

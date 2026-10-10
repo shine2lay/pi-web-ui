@@ -342,6 +342,9 @@ export interface UiTaskQueueTask {
 	after?: number[];
 	/** queue-side-by-side: of those, the ones still open (not done or removed), in queue order; only on open tasks. */
 	waitingFor?: number[];
+	/** queue-why: the same tasks with how each stands (status, title, its chat, `held` when the owner paused it or
+	 *  its whole queue), like the Blocked line's refs: name "" and file "" (this queue). Not in a task's own chat. */
+	waitingForRefs?: UiTaskQueueRef[];
 	/** queue-paused: the owner paused this task itself (only open tasks). A pause of the whole queue is
 	 *  UiTaskQueue.hold; a task is paused when either is set. It keeps its status, so Resume carries on there. */
 	hold?: UiTaskQueueHold;
@@ -356,6 +359,7 @@ export interface UiTaskQueueHold {
 
 /** queue-blocked: a task in a queue, maybe another one (that queue's chat file and the task's number). */
 export interface UiTaskQueueRef {
+	/** queue-why: "" in waitingForRefs (this queue, whatever its file). */
 	file: string;
 	/** "" = the task's own queue ("#12"), else a role id or the queue chat's title ("temper #38"). */
 	name: string;

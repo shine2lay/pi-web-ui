@@ -73,4 +73,7 @@
 // 45: board - the roles' shared board: the Roles snapshot carries board (posts) and each role's open
 //     boardOrders; board_post / board_close and their board_result. An old page has no Board view; an old
 //     server never answers board_post.
-export const PROTOCOL_VERSION = 45;
+// 46: queue-why - a waiting task's open afters in its own queue carry how each stands (waitingForRefs:
+//     status, held). Additive: an old page ignores it (and shows the plain after line); an old server
+//     never sends it (the new page shows the states it has: other queues' refs).
+export const PROTOCOL_VERSION = 46;

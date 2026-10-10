@@ -45,6 +45,10 @@
  * waiting, blocked, stuck or asking, so Resume carries on there; it is paused when it or its queue is held.
  * Resuming the queue leaves a task paused on its own paused. The clocks stop while paused: on release a
  * wait gives up as much later, and an unpoked block's pokes count from the release.
+ *
+ * queue-why: a waiting task's open afters come with how each stands (`waitingForRefs`: working, not
+ * started, on hold, blocked, needing the user, paused by the owner), so the panel can say why it can't
+ * start. The mirror keeps pi-queue's `stuckAt` (when a task started needing the user) for queue-blocks.ts.
  */
 
 import { readFileSync, statSync } from "node:fs";
@@ -86,6 +90,8 @@ interface Task extends Omit<UiTaskQueueTask, "status"> {
 	launchPrepared?: boolean;
 	/** queue-paused: since when it has been paused (by itself or its queue), for the clock shift on release. */
 	heldFrom?: number;
+	/** queue-why: pi-queue's stuckAt: when it started needing the user (the same question again keeps it). */
+	stuckAt?: number;
 }
 
 interface State {
@@ -514,8 +520,12 @@ function apply(s: State, raw: unknown): void {
 		case "stuck": {
 			const cur = current(s);
 			if (!task.lane && cur && cur !== task) return;
+			const question = str(op.question, NOTE_MAX);
+			// queue-why: as pi-queue keeps it (the background check tells each question apart by it).
+			if (task.status !== "stuck" || task.question !== question || task.stuckAt === undefined)
+				task.stuckAt = num(op.ts);
 			task.status = "stuck";
-			task.question = str(op.question, NOTE_MAX);
+			task.question = question;
 			const choices = normChoices(op.choices);
 			if (choices.length) task.choices = choices;
 			else delete task.choices;
@@ -662,8 +672,21 @@ export function taskQueueFromEntries(
 	// (pi-queue's openDeps: not done or removed yet, in queue order).
 	for (const t of s.tasks) {
 		if (!t.after || !OPEN.has(t.status)) continue;
-		const open = s.tasks.filter((d) => t.after?.includes(d.id) && OPEN.has(d.status)).map((d) => d.id);
-		if (open.length) t.waitingFor = open;
+		const open = s.tasks.filter((d) => t.after?.includes(d.id) && OPEN.has(d.status));
+		if (!open.length) continue;
+		t.waitingFor = open.map((d) => d.id);
+		// queue-why: and how each of them stands, like a block's refs below: a paused one (itself or the whole
+		// queue) is `held`. Only in the queue's own chat (a task's chat has only its task).
+		if (!s.from)
+			t.waitingForRefs = open.map((d): UiTaskQueueRef => ({
+				file: "",
+				name: "",
+				id: d.id,
+				status: d.status,
+				title: d.plan.title,
+				...(d.chat ? { chat: d.chat } : {}),
+				...(heldBy(s, d) ? { held: true } : {}),
+			}));
 	}
 	// queue-blocked: a block's own-queue refs ("#12") show how those tasks stand here (in the queue's
 	// own chat; a task's chat has only its task). queue-blocks.ts fills in the others.
@@ -680,7 +703,7 @@ export function taskQueueFromEntries(
 	}
 	const tasks = s.tasks
 		.filter((t): t is Task & UiTaskQueueTask => t.status !== "removed" && !dropped.has(t))
-		.map(({ heldFrom: _heldFrom, ...t }): UiTaskQueueTask => t);
+		.map(({ heldFrom: _heldFrom, stuckAt: _stuckAt, ...t }): UiTaskQueueTask => t);
 	// queue-lanes: only a queue with tasks that run in chats of their own shows lanes (a task's own chat never).
 	const lanes = s.from ? [] : lanesOf(s.tasks, taskQueueShareableOf(shareable));
 	return {
@@ -702,7 +725,11 @@ export function taskQueueFromEntries(
 }
 
 /** queue-blocked: a task as replayed, removed ones too. */
-export type TaskQueueTaskAny = Omit<UiTaskQueueTask, "status"> & { status: Status };
+export type TaskQueueTaskAny = Omit<UiTaskQueueTask, "status"> & {
+	status: Status;
+	/** queue-why: when it started needing the user (pi-queue's stuckAt); kept after, read it only while stuck. */
+	stuckAt?: number;
+};
 
 /**
  * queue-blocked: every task in a queue as replayed (removed ones and every done one too), and in a

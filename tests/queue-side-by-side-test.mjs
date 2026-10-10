@@ -12,7 +12,8 @@
  *  - the approval dialogs: #2 gets a lane of its own though it shares the repo and the installer with
  *    #1; #4 shares a lane with #3 (the memory files) and says it comes after #3;
  *  - the loop is refused without a dialog, and #3 stays as it was;
- *  - the Queue tab: lanes 1, 2, 3 and 3 (#4 with #3), "After #3, still waiting for #3" on #4 only;
+ *  - the Queue tab: lanes 1, 2, 3 and 3 (#4 with #3), "After #3 · still waiting for #3 (not started)" on #4
+ *    only;
  *  - with 3 lanes at once, Start starts #1, #2 and #3 together, each in a chat of its own; #4 waits;
  *  - #3 done: #4 starts (its first message says #3 is done, with its summary) and finishes;
  *  - everything ends done, no page errors, and the mock saw no message it had no script for.
@@ -266,7 +267,7 @@ try {
 	);
 	check(
 		"#4 says it comes after #3 and still waits for it; no other task has an after line",
-		same(a.after, { 4: "After #3, still waiting for #3" }),
+		same(a.after, { 4: "After #3 \u00b7 still waiting for #3 (not started)" }),
 		JSON.stringify(a.after),
 	);
 	await shot(A, "lanes");

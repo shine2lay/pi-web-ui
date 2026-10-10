@@ -17,7 +17,7 @@
  * 新的队列（或 5 秒后）再放开，防连点。
  */
 
-import { memo, type ReactNode, useEffect, useRef, useState } from "react";
+import { memo, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import type {
 	UiTaskQueue,
 	UiTaskQueueBlock,
@@ -180,42 +180,138 @@ function outsideOpen(r: UiTaskQueueRef): boolean {
 	return !r.over && r.status !== "done" && r.status !== "removed" && r.status !== "gone";
 }
 
-/** queue-blocked: the after line's lists: this queue's numbers, then other queues' tasks ("temper #38"). */
-export function afterLists(task: Pick<UiTaskQueueTask, "after" | "waitingFor" | "outside">): {
-	list: string;
-	open: string;
-} {
+/**
+ * queue-blocked: the after line's parts: every task it comes after (this queue's numbers, then other queues'
+ * tasks, "temper #38"), and the ones still open. queue-why: the open ones with how each stands (this queue's
+ * from the server's waitingForRefs; an older server sends only their numbers), and the ones only the owner can
+ * move on: paused by him (`resume`). Those count only while it hasn't started (after only holds back a start),
+ * and not for a task in this queue paused only with the whole queue (the queue's banner says that).
+ */
+export function afterParts(
+	task: Pick<UiTaskQueueTask, "status" | "after" | "waitingFor" | "waitingForRefs" | "outside">,
+	queue: Pick<UiTaskQueue, "hold" | "tasks">,
+): { list: string; open: UiTaskQueueRef[]; resume: UiTaskQueueRef[] } {
 	const list = [...(task.after ?? []).map((n) => `#${n}`), ...(task.outside ?? []).map(refLabel)].join(", ");
-	const open = [
-		...(task.waitingFor ?? []).map((n) => `#${n}`),
-		...(task.outside ?? []).filter(outsideOpen).map(refLabel),
-	].join(", ");
-	return { list, open };
+	const here: UiTaskQueueRef[] =
+		task.waitingForRefs ?? (task.waitingFor ?? []).map((id): UiTaskQueueRef => ({ file: "", name: "", id }));
+	const open = [...here, ...(task.outside ?? []).filter(outsideOpen)];
+	const ownPause = (id: number) => !!queue.tasks.find((x) => x.id === id)?.hold;
+	const resume =
+		task.status === "ready" ? open.filter((r) => r.held && (r.file !== "" || !queue.hold || ownPause(r.id))) : [];
+	return { list, open, resume };
 }
 
-/** queue-blocked: how a task a blocked task waits on stands, in a word or two. */
+/** queue-blocked: how a task a blocked task waits on stands, in a word or two (queue-why: the after line's too). */
 function refStateKey(status: UiTaskQueueRef["status"]): TKey | undefined {
 	switch (status) {
 		case "working":
 			return "taskQueueRefWorking";
 		case "asking":
-			return "taskQueueAskingMain";
+			return "taskQueueRefAsking";
 		case "stuck":
-			return "taskQueueNeedsYou";
+			return "taskQueueRefNeedsYou";
 		case "waiting":
 			return "taskQueueRefOnHold";
 		case "blocked":
-			return "taskQueueBlocked";
+			return "taskQueueRefBlocked";
 		case "ready":
 			return "taskQueueRefNotStarted";
 		case "done":
-			return "taskQueueDone";
+			return "taskQueueRefDone";
 		case "removed":
 		case "gone":
 			return "taskQueueRefRemoved";
 		default:
 			return undefined;
 	}
+}
+
+/**
+ * queue-blocked: a task another one waits on, "temper #38 (working)": a link when it has somewhere to go (its
+ * chat, or queue-why: the task in this panel) and how it stands. One its owner paused shows as "paused by you"
+ * and doesn't need him while paused.
+ */
+function RefItem({ r, first, onOpen }: { r: UiTaskQueueRef; first: boolean; onOpen?: () => void }) {
+	const t = useT();
+	const key = r.held ? "taskQueueRefPaused" : refStateKey(r.status);
+	const needsYou = r.status === "stuck" && !r.held;
+	return (
+		<span className={`task-queue-ref${needsYou ? " needs-you" : ""}`} data-ref={refLabel(r)}>
+			{!first && ", "}
+			{onOpen ? (
+				<button type="button" className="task-queue-ref-link" title={r.title ?? r.chat?.title} onClick={onOpen}>
+					{refLabel(r)}
+				</button>
+			) : (
+				<span title={r.title}>{refLabel(r)}</span>
+			)}
+			{key && <span className="task-queue-ref-state"> ({t(key)})</span>}
+		</span>
+	);
+}
+
+const SLOT = "\u0000";
+/** queue-why: a text with SLOT in it, the slot filled with nodes (so each language keeps its own word order). */
+function withSlot(text: string, node: ReactNode): ReactNode {
+	const at = text.indexOf(SLOT);
+	if (at < 0) return text;
+	return (
+		<>
+			{text.slice(0, at)}
+			{node}
+			{text.slice(at + SLOT.length)}
+		</>
+	);
+}
+
+/**
+ * queue-why: "After #12, #45 \u00b7 still waiting for #45 (paused by you)": every open one with how it stands; one
+ * in this queue shows it in the panel, one in another queue opens its chat. Below it, muted: "Can't start until
+ * you resume #45" when the owner's pause holds it back (his own choice, so not a needs-you).
+ */
+function AfterLine({
+	task,
+	queue,
+	onOpenChat,
+	onShowTask,
+}: {
+	task: UiTaskQueueTask;
+	queue: UiTaskQueue;
+	onOpenChat?: (file: string) => void;
+	onShowTask: (id: number) => void;
+}) {
+	const t = useT();
+	const { list, open, resume } = afterParts(task, queue);
+	// Another queue's task: its own chat once it has one, else that queue's chat (where it can be resumed).
+	const openOf = (r: UiTaskQueueRef) => {
+		if (r.file === "") return () => onShowTask(r.id);
+		const file = r.chat?.file ?? r.file;
+		return onOpenChat ? () => onOpenChat(file) : undefined;
+	};
+	return (
+		<>
+			<div
+				className={`task-queue-after${open.length ? " waiting" : ""}`}
+				data-after={[...(task.after ?? []).map(String), ...(task.outside ?? []).map(refLabel)].join(",")}
+			>
+				{t("taskQueueAfter", { list })}
+				{open.length > 0 && (
+					<>
+						{" \u00b7 "}
+						{withSlot(
+							t("taskQueueAfterStill", { refs: SLOT }),
+							open.map((r, i) => <RefItem key={`${r.file}#${r.id}`} r={r} first={i === 0} onOpen={openOf(r)} />),
+						)}
+					</>
+				)}
+			</div>
+			{resume.length > 0 && (
+				<div className="task-queue-resume-first" data-resume={resume.map(refLabel).join(",")}>
+					{t("taskQueueResumeFirst", { refs: resume.map(refLabel).join(", ") })}
+				</div>
+			)}
+		</>
+	);
 }
 
 /** queue-blocked: the Blocked line: "on temper #38 (working)", or the need, plus when it's poked next. One line. */
@@ -235,30 +331,14 @@ function BlockedLine({ block, onOpenChat }: { block: UiTaskQueueBlock; onOpenCha
 					<>
 						{t("taskQueueBlockedOn")}{" "}
 						{refs.map((r, i) => {
-							// queue-paused: a task the owner paused doesn't need him while paused.
-							const key = r.held ? "taskQueueRefPaused" : refStateKey(r.status);
-							const needsYou = r.status === "stuck" && !r.held;
+							const chat = r.chat;
 							return (
-								<span
+								<RefItem
 									key={`${r.file}#${r.id}`}
-									className={`task-queue-ref${needsYou ? " needs-you" : ""}`}
-									data-ref={refLabel(r)}
-								>
-									{i > 0 && ", "}
-									{r.chat && onOpenChat ? (
-										<button
-											type="button"
-											className="task-queue-ref-link"
-											title={r.title ?? r.chat.title}
-											onClick={() => r.chat && onOpenChat(r.chat.file)}
-										>
-											{refLabel(r)}
-										</button>
-									) : (
-										<span title={r.title}>{refLabel(r)}</span>
-									)}
-									{key && <span className="task-queue-ref-state"> ({t(key)})</span>}
-								</span>
+									r={r}
+									first={i === 0}
+									onOpen={chat && onOpenChat ? () => onOpenChat(chat.file) : undefined}
+								/>
 							);
 						})}
 					</>
@@ -379,6 +459,19 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 		const el = rootRef.current?.querySelector(`[data-task-id="${flash}"]`);
 		if (el instanceof HTMLElement) el.scrollIntoView?.({ block: "nearest" });
 	}, [flash, allDone]);
+	// queue-why: a task named on an after line, shown the same way (and its title focused, for the keyboard).
+	const showTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	useEffect(() => () => clearTimeout(showTimer.current), []);
+	const showTask = useCallback((id: number) => {
+		const el = rootRef.current?.querySelector(`[data-task-id="${id}"]`);
+		if (el instanceof HTMLElement) {
+			el.scrollIntoView?.({ block: "nearest" });
+			el.querySelector<HTMLElement>(".task-queue-title")?.focus({ preventScroll: true });
+		}
+		setFlash(id);
+		clearTimeout(showTimer.current);
+		showTimer.current = setTimeout(() => setFlash(null), FOCUS_FLASH_MS);
+	}, []);
 	const [pendingSetting, setPendingSetting] = useState<{
 		key: "autoApprove" | "autoStart";
 		value: boolean;
@@ -611,20 +704,10 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 						{task.touches.length > 0 ? `${t("taskQueueTouches")}: ${task.touches.join(", ")}` : t("taskQueueRunsAlone")}
 					</div>
 				)}
-				{kind !== "done" &&
-					(!!task.after?.length || !!task.outside?.length) &&
-					(() => {
-						// queue-blocked: tasks in other queues ("temper #38") after this queue's numbers.
-						const { list, open } = afterLists(task);
-						return (
-							<div
-								className={`task-queue-after${open ? " waiting" : ""}`}
-								data-after={[...(task.after ?? []).map(String), ...(task.outside ?? []).map(refLabel)].join(",")}
-							>
-								{open ? t("taskQueueAfterWaiting", { list, open }) : t("taskQueueAfter", { list })}
-							</div>
-						);
-					})()}
+				{kind !== "done" && (!!task.after?.length || !!task.outside?.length) && (
+					// queue-blocked: tasks in other queues ("temper #38") after this queue's numbers.
+					<AfterLine task={task} queue={queue} onOpenChat={onOpenChat} onShowTask={showTask} />
+				)}
 				{wait &&
 					(wait.failed ? (
 						<div className="task-queue-wait failed">

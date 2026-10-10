@@ -109,11 +109,11 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | identity-notes               | `local` | `server/identity-notes.ts` (new, pi-identity's `notes.ts` copied byte for byte), `identity-memory.ts` (new), `identity-config.ts` (recopied), `identities.ts`, `notebook-watch.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (35), `web/src/notebook-state.ts`, `components/NotebookPanel.tsx`, `use-chat.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/identity-notebook-test.mjs`, `tests/unit/identity-notebook.test.ts`, `identity-config.test.ts`, `identities.test.ts`                           |
 | about-drafts                 | `local` | `server/identity-roles.ts` (about.md in a draft; accept writes and archives the about page), `identities.ts`, `index.ts`, `protocol.ts`, `protocol-version.ts` (40), `web/src/line-diff.ts` (new), `identity-state.ts`, `components/IdentitiesSettings.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/unit/identity-config.test.ts`, `tests/unit/line-diff.test.ts` (new), `tests/identity-config-test.mjs`                                                                                                    |
 | queue-main-chat              | `local` | `server/task-queue.ts`, `stuck-asks.ts`, `agent-service.ts` (`askingChats`, `emitConversations`), `queue-groups.ts`, `protocol.ts`, `protocol-version.ts` (41), `web/src/components/TaskQueuePanel.tsx`, `done-watch.ts`, `App.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/queue-main-chat-test.mjs` (new), `tests/queue-lanes-test.mjs`, `queue-panel-test.mjs`, `stall-watch-test.mjs`, `telegram-answers-test.mjs`, `tests/unit/`; the answer line in blue (#62): `server/tldr-lines.ts`, `TldrPanel.tsx`, `LeftPanel.tsx`; paired with pi-queue |
-| queue-blocked                | `local` | `server/queue-blocks.ts` (new), `task-queue.ts`, `queue-host.ts`, `client-state.ts` (`queueWatch`), `agent-service.ts`, `queue-groups.ts`, `stuck-asks.ts`, `tldr-lines.ts`, `protocol.ts`, `protocol-version.ts` (42), `web/src/components/TaskQueuePanel.tsx`, `TldrPanel.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/queue-blocked-test.mjs` (new), `tests/unit/queue-blocks.test.ts` (new), `tests/unit/task-queue.test.ts`; paired with pi-queue |
+| queue-blocked                | `local` | `server/queue-blocks.ts` (new), `task-queue.ts`, `queue-host.ts`, `client-state.ts` (`queueWatch`, `queueHeldSeen`), `agent-service.ts`, `queue-groups.ts`, `stuck-asks.ts`, `tldr-lines.ts`, `protocol.ts`, `protocol-version.ts` (42, 46), `web/src/components/TaskQueuePanel.tsx`, `TldrPanel.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `tests/queue-blocked-test.mjs` (new), `tests/queue-why-test.mjs` (new, #91), `tests/queue-side-by-side-test.mjs`, `tests/unit/queue-blocks.test.ts` (new), `tests/unit/task-queue.test.ts`, `task-queue-panel.test.ts`; paired with pi-queue |
 | roles-overview               | `local` | `server/roles-overview.ts` (new), `role-rules.ts` (new), `role-messages.ts`, `identities.ts`, `identity-roles.ts`, `identity-config.ts` (pi-identity copy), `agent-service.ts`, `index.ts`, `tabs.ts`, `protocol.ts`, `protocol-version.ts` (43), `web/src/components/RolesView.tsx` (new), `roles-view-model.ts` (new), `roles-state.ts` (new), `roles-view.css` (new), `chat-focus.ts` (new), `owner-fields.ts` (new), `IdentitiesSettings.tsx`, `TopBar.tsx`, `ui-slots.ts`, `topbar-fit.ts`, `App.tsx`, `RightPanel.tsx`, `TaskQueuePanel.tsx`, `TldrPanel.tsx`, `i18n.tsx`, `locales/*.json`, `docs/roles-overview.md` (new); paired with pi-identity |
 | role-message-fold            | `local` | `web/src/role-message-text.ts` (new), `components/RoleMessageRow.tsx` (new), `Message.tsx`, `ToolCallBlock.tsx`, `CollapsedMessage.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `docs/roles-overview.md`, `tests/role-message-fold-test.mjs` (new), `tests/unit/role-message-text.test.ts` (new) |
 | telegram-coo                 | `local` | `server/role-replies.ts` (new), `roles-overview-tool.ts` (new), `agent-service.ts` (turn records, `sendToRole`), `index.ts`, `plugins.ts` (`host.roles`), `plugin-manifest-validate.ts`, `plugin-api-catalog.ts`, `tool-manager.ts`, `plugin-sdk/`, `plugins/telegram/` (0.2.0), `docs/architecture-plugins.md`, `docs/roles-overview.md`, `tests/telegram-coo-test.mjs` (new), `tests/unit/` |
-| queue-paused                 | `local` | `server/task-queue.ts`, `queue-blocks.ts`, `role-messages.ts`, `agent-service.ts` (`noteToPausedTaskChat`, carry-on, plugin notes), `index.ts` (scheduler), `roles-overview.ts`, `roles-overview-tool.ts`, `protocol.ts`, `protocol-version.ts` (44), `web/src/components/TaskQueuePanel.tsx`, `RolesView.tsx`, `Message.tsx`, `roles-view-model.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `roles-view.css`, `docs/roles-overview.md`, `tests/queue-paused-test.mjs` (new), `tests/unit/`; paired with pi-queue |
+| queue-paused                 | `local` | `server/task-queue.ts`, `queue-blocks.ts`, `role-messages.ts`, `agent-service.ts` (`noteToPausedTaskChat`, carry-on, plugin notes), `index.ts` (scheduler), `roles-overview.ts`, `roles-overview-tool.ts`, `protocol.ts`, `protocol-version.ts` (44), `web/src/components/TaskQueuePanel.tsx`, `RolesView.tsx`, `Message.tsx`, `roles-view-model.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `roles-view.css`, `docs/roles-overview.md`, `tests/queue-paused-test.mjs` (new), `tests/queue-why-test.mjs` (#91), `tests/unit/`; paired with pi-queue |
 | role-board                   | `local` | `server/role-board.ts` (new), `board-tool.ts` (new), `agent-service.ts` (turn-start note, steer, direct turn), `index.ts`, `role-messages.ts`, `role-message-tool.ts`, `roles-overview.ts`, `roles-overview-tool.ts`, `identity-config.ts`, `tool-manager.ts`, `protocol.ts`, `protocol-version.ts` (45), `web/src/components/RolesView.tsx`, `RoleMessageRow.tsx`, `Message.tsx`, `roles-view-model.ts`, `roles-state.ts`, `role-message-text.ts`, `exchange-fold.ts`, `use-chat.ts`, `roles-view.css`, `i18n.tsx`, `locales/*.json`, `docs/board.md` (new), `docs/roles-overview.md`, `tests/board-test.mjs` (new), `tests/unit/role-board.test.ts` (new), `tests/unit/`; paired with pi-identity |
 | decision-records             | `local` | `server/decision-records.ts` (new), `agent-service.ts` (hooks, scanner, backfill), `role-messages.ts`, `role-board.ts`, `role-message-tool.ts`, `board-tool.ts`, `asks.ts`, `control-socket.ts`, `protocol.ts`, `bin/pi-web-ui.mjs` (`decisions`), `web/src/components/RolesView.tsx`, `IdentitiesSettings.tsx`, `ToolCallBlock.tsx`, `role-message-text.ts`, `i18n.tsx`, `locales/*.json`, `tests/unit/decision-records.test.ts` (new) |
 
@@ -5009,6 +5009,30 @@ and writes the pokes itself (`/queue blocks`), reading the blockers' queues from
    links that task's chat), or the need, and "next poke HH:MM" for a need. An outside `after` shows as
    "after temper #2". pi-queue's TL;DR line for a block carries `kind: "blocked"`, shown in the same
    cyan.
+6. **Why a task can't start: the after line** (task #91, Design's ask rm-15737479, owner ~17:00
+   2026-10-09: he found a frozen chain only by asking; `task-queue.ts`, `protocol.ts`,
+   `protocol-version.ts` (46), `TaskQueuePanel.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`): a
+   waiting task's open `after`s in its own queue come with how each stands, `waitingForRefs` (the
+   Blocked line's `UiTaskQueueRef` shape, name and file "": status, title, chat, `held`; only in the
+   queue's own chat). Additive: an old page ignores it. The line reads "After #12, temper #45 · still
+   waiting for #12 (working), temper #45 (paused by you)" (was queue-side-by-side's "After #3, still
+   waiting for #3"): working, not started, on hold, blocked, needs you, asking the main chat, paused by
+   you, for other queues' tasks too (`outside`). The same lowercase words on the Blocked line (were the
+   badges' capitalised ones). One that needs you is amber (`needs-you`); one you paused isn't (your own
+   choice). A task in this queue is a link that shows it in the panel (scrolls, flashes, focuses its
+   title); another queue's opens its chat (that queue's chat until it has one). No lane-hold reason here:
+   it would need the lane rules on the web side; pi-queue's list and note carry it (#90). An older
+   server: the numbers without states.
+7. **An outside `after` only the owner can move on** (`queue-blocks.ts` `heldKey`, `client-state.ts`
+   `queueHeldSeen`, `agent-service.ts`, `task-queue.ts`): a task in another queue that a ready task here
+   comes after, newly paused by the owner or newly needing the user, makes this queue run `/queue blocks`
+   once, within one round of the check, so pi-queue (its held note, #90) can tell the queue's chat;
+   pi-queue decides whether a note goes out. Once per pause (its `at`) and per question (pi-queue's
+   `stuckAt`, which the mirror now keeps internally, same rule: the same question again isn't new), per
+   watched queue, kept across restarts; a lifted pause or an answered question is forgotten, so the next
+   one counts again; a queue it can't read for a while keeps what it saw; a chat it can't reach is tried
+   again after 5 minutes. Not for a waiter that is paused itself or in a paused queue, and not for block
+   refs (pi-queue has no such note for a blocked task; its Blocked line shows how the blocker stands).
 
 ### How it was checked
 
@@ -5025,12 +5049,27 @@ and writes the pokes itself (`/queue blocks`), reading the blockers' queues from
   the screenshots). It also reports (not a check) whether On hold waits are still checked after a
   restart in a fully idle queue: they are.
 - check.sh, the build, the sealed queue tests; live after the install.
+- Items 6-7 (task #91): unit `task-queue.test.ts` ("taskQueueFromEntries (queue-why)": each state, held
+  through the task's own pause and through its whole queue's, `stuckAt` like pi-queue's, nothing in a
+  task's own chat), `queue-blocks.test.ts` ("an outside after that only the owner can move on", a fake
+  clock: once per pause and per question, again for a new one, the whole other queue paused, across a
+  restart, an unreadable queue, a paused waiter or queue, an unreachable chat),
+  `task-queue-panel.test.ts` ("why a task can't start": the line, the links, the resume line, an older
+  server). `tests/queue-why-test.mjs` (sealed: the real pi-queue with #90, the mock model, the check every
+  second, a real browser): two queues; the lines and links on a desktop (dark and white) and a phone, no
+  needs-you, axe, the keyboard; a click pauses the other queue's task: the waiting queue's chat gets
+  pi-queue's note once within seconds, none for the resume, one more for a new pause, no model call
+  (`QW_SHOT_DIR` keeps screenshots). The new tests fail on the code before this change (13 unit tests;
+  with only the panel part, the E2E gets no note).
 
 ### When syncing
 
 - pi-queue's ops are the contract: if it changes `block`, `poke`, `after_over`, `outside` or
   `blockVerdict`, change `task-queue.ts` and `queue-blocks.ts` with it (the unit tests replay its ops
   and compare the verdicts).
+- `heldKey` follows pi-queue's held-note keys (`/paused/<hold at>`, `/user/<stuckAt>`) and the mirror's
+  `stuckAt` its `case "stuck"`: if pi-queue changes when a pause or a question counts as new, change them
+  with it.
 
 ## role-reports
 
@@ -5509,6 +5548,12 @@ queue doesn't lift a task's own pause. Stop, Auto start and Auto approve keep th
    "Queue paused by you"; a paused task's question isn't an ask, its TL;DR lines lose needs-you, a
    paused working task doesn't make the role busy unless its chat is at work, and the role's status is
    Paused.
+6. **Only your resume lets it start** (task #91, with queue-blocked items 6-7): a waiting task whose
+   open `after` is a task you paused (in this queue or another) says "(paused by you)" on its after line
+   and, muted below, "Can't start until you resume #45" (`taskQueueResumeFirst`; not a needs-you badge or
+   colour: the pause is your own choice). Only while it hasn't started; not for a task held only by this
+   whole queue's pause (the banner says that). A waiting queue hears at once when a task in another
+   queue it comes after is paused (queue-blocked item 7); paused tasks are still never poked or asked.
 
 ### How it was checked
 
@@ -5518,6 +5563,8 @@ queue doesn't lift a task's own pause. Stop, Auto start and Auto approve keep th
   needs-you), `role-messages.test.ts` (a reply to a paused task's chat goes in without a turn, also
   under a queue pause; delivered normally after resume), `roles-overview.test.ts`,
   `roles-overview-tool.test.ts`, `task-queue-panel.test.ts`, `roles-view.test.ts`.
+- Item 6: `task-queue-panel.test.ts` ("why a task can't start") and `tests/queue-why-test.mjs` (see
+  queue-blocked).
 - `tests/queue-paused-test.mjs` (sealed: the real pi-queue and pi-identity, the mock model, fast
   queue clocks, a real browser): a working task paused by a click finishes its step, gets one note and
   stops; a role reply, a scheduled wake-up and the watchdog then start no turn there; a blocked task

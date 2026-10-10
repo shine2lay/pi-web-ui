@@ -3279,6 +3279,13 @@ button.rolemsg-fold:focus-visible {
 	text-decoration: underline;
 	cursor: pointer;
 }
+/* queue-why: the after line's links are reached with Tab too: a ring you can see. */
+.task-queue-ref-link:focus-visible,
+.task-queue-title:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
+	border-radius: 2px;
+}
 .task-queue-blocked-next {
 	color: var(--text-faint);
 }
@@ -3368,6 +3375,14 @@ button.rolemsg-fold:focus-visible {
 }
 .task-queue-after.waiting {
 	color: var(--text-dim);
+}
+/* queue-why: only the owner can end the wait (his own pause): said plainly, muted, not a needs-you. */
+.task-queue-resume-first {
+	margin-top: 1px;
+	color: var(--text-dim);
+	font-size: 11px;
+	font-style: italic;
+	overflow-wrap: anywhere;
 }
 .task-queue-open-chat,
 .tldr-open-chat {

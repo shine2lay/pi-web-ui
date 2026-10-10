@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import {
+	afterParts,
 	TASK_QUEUE_DONE_SHOWN,
 	TASK_QUEUE_PLAN_PARTS,
 	TaskQueuePanel,
@@ -429,6 +430,98 @@ describe("TaskQueuePanel (paused by you)", () => {
 		const b = render(q([blocked], { running: true }), { onCommand: noop });
 		expect(b).toContain("paused by you");
 		expect(b).not.toContain("needs-you");
+	});
+});
+
+/** queue-why: the after line names each task it still waits for and how it stands, and when only you can end it. */
+describe("TaskQueuePanel (why a task can't start)", () => {
+	const hold = { at: Date.parse("2026-10-09T19:10:00Z"), why: "pressed Pause in the Queue panel" };
+	const here = (id: number, status: UiTaskQueueTask["status"], held = false) => ({
+		file: "",
+		name: "",
+		id,
+		status,
+		title: `Task ${id}`,
+		...(held ? { held: true } : {}),
+	});
+	/** The text of a task's after line and of its "resume" line, tags stripped. */
+	const lines = (html: string, id: number) => {
+		const li = html.match(new RegExp(`data-task-id="${id}"[^]*?</li>`))?.[0] ?? "";
+		const text = (cls: string) =>
+			li
+				.match(new RegExp(`<div class="${cls}[^"]*"[^>]*>([^]*?)</div>`))?.[1]
+				?.replace(/<[^>]+>/g, "")
+				.replace(/&#x27;/g, "'");
+		return { after: text("task-queue-after"), resume: text("task-queue-resume-first") };
+	};
+
+	it("names each open one with how it stands: working, not started, on hold, blocked, needs you, paused by you", () => {
+		const waiter = task(9, "ready", {
+			after: [1, 2, 3, 4, 5, 6, 7],
+			waitingFor: [1, 2, 3, 4, 5, 6],
+			waitingForRefs: [
+				here(1, "working"),
+				here(2, "ready"),
+				here(3, "waiting"),
+				here(4, "blocked"),
+				here(5, "stuck"),
+				here(6, "asking", true),
+			],
+		});
+		const html = render(q([waiter]), { onCommand: noop });
+		expect(lines(html, 9).after).toBe(
+			"After #1, #2, #3, #4, #5, #6, #7 \u00b7 still waiting for #1 (working), #2 (not started), #3 (on hold), " +
+				"#4 (blocked), #5 (needs you), #6 (paused by you)",
+		);
+		// Only the one that needs you is marked so; the paused one isn't (his own choice).
+		expect([...html.matchAll(/class="task-queue-ref needs-you" data-ref="([^"]+)"/g)].map((m) => m[1])).toEqual(["#5"]);
+		// Each one in this queue is a link that shows it in the panel.
+		expect([...html.matchAll(/<button type="button" class="task-queue-ref-link" title="Task (\d)"/g)]).toHaveLength(6);
+		expect(lines(html, 9).resume).toBe("Can't start until you resume #6");
+		expect(html).not.toContain('class="task-queue-badge"');
+	});
+
+	it("another queue's tasks too, each a link to its chat (that queue's before it has one); a paused one says so", () => {
+		const outside = [
+			{ file: "/b.jsonl", name: "temper", id: 45, status: "ready" as const, held: true },
+			{ file: "/b.jsonl", name: "temper", id: 46, status: "stuck" as const, chat: { file: "/b46.jsonl" } },
+			{ file: "/b.jsonl", name: "temper", id: 47, status: "done" as const },
+		];
+		const waiter = task(9, "ready", { after: [12], waitingFor: [12], waitingForRefs: [here(12, "working")], outside });
+		const html = render(q([waiter]), { onCommand: noop, onOpenChat: noop });
+		expect(lines(html, 9).after).toBe(
+			"After #12, temper #45, temper #46, temper #47 \u00b7 still waiting for #12 (working), temper #45 (paused by you), " +
+				"temper #46 (needs you)",
+		);
+		expect(lines(html, 9).resume).toBe("Can't start until you resume temper #45");
+		expect([...html.matchAll(/class="task-queue-ref-link"/g)]).toHaveLength(3);
+		// Without a way to open chats, another queue's tasks are plain text; this queue's still link.
+		const plain = render(q([waiter]), { onCommand: noop });
+		expect([...plain.matchAll(/class="task-queue-ref-link"/g)]).toHaveLength(1);
+	});
+
+	it("the resume line: only while it hasn't started, and not for a task paused only with this whole queue", () => {
+		const refs = [here(1, "ready", true)];
+		const waiting = (status: UiTaskQueueTask["status"]) =>
+			task(9, status, { after: [1], waitingFor: [1], waitingForRefs: refs });
+		const one = task(1, "ready", { hold });
+		expect(lines(render(q([one, waiting("ready")])), 9).resume).toBe("Can't start until you resume #1");
+		// Already at work (it started before the after was added): the after doesn't hold it back.
+		expect(lines(render(q([one, waiting("working")])), 9).resume).toBeUndefined();
+		// The whole queue paused, #1 not on its own: the queue's banner says it all.
+		expect(lines(render(q([task(1, "ready"), waiting("ready")], { hold })), 9).resume).toBeUndefined();
+		// The whole queue paused and #1 on its own too: resuming the queue isn't enough.
+		expect(lines(render(q([one, waiting("ready")], { hold })), 9).resume).toBe("Can't start until you resume #1");
+		const parts = afterParts(waiting("ready"), { hold, tasks: [one] });
+		expect(parts.resume.map((r) => r.id)).toEqual([1]);
+	});
+
+	it("an older server (numbers only): the numbers, no states; nothing open: just the list", () => {
+		const old = task(9, "ready", { after: [1, 2], waitingFor: [2] });
+		expect(lines(render(q([old])), 9).after).toBe("After #1, #2 \u00b7 still waiting for #2");
+		const over = task(9, "ready", { after: [1, 2] });
+		expect(lines(render(q([over])), 9)).toEqual({ after: "After #1, #2", resume: undefined });
+		expect(render(q([over]))).not.toContain("task-queue-after waiting");
 	});
 });
 

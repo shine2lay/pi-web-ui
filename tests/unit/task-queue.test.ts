@@ -15,6 +15,7 @@ import {
 	TASK_QUEUE_DEFAULT_SHAREABLE,
 	TASK_QUEUE_ENTRY_TYPE,
 	TASK_QUEUE_MAX_DONE,
+	taskQueueAll,
 	taskQueueCommandLine,
 	taskQueueFromEntries,
 	taskQueueShareableFrom,
@@ -1062,6 +1063,152 @@ describe("taskQueueFromEntries (queue-paused)", () => {
 			const what = JSON.stringify(ops.slice(laneBase.length));
 			expect(mine.tasks.map(shape), what).toEqual(theirs.map(shape));
 			expect(holdOf(mine.hold), what).toEqual(holdOf(s.hold));
+		}
+	});
+});
+
+/** queue-why: a waiting task's open afters, with how each stands, so the panel can say why it can't start. */
+describe("taskQueueFromEntries (queue-why)", () => {
+	const byId = (q: ReturnType<typeof replay>, id: number) => q.tasks.find((t) => t.id === id);
+	const chat = (id: number) => ({ op: "chat", id, file: `/chats/${id}.jsonl`, title: `Queue #${id}` });
+	/** #1-#7 in every state there is, and #9 after all of them. */
+	const states = [
+		{ op: "add", id: 1, plan: plan("Working"), touches: ["a"] },
+		{ op: "add", id: 2, plan: plan("Not started"), touches: ["b"] },
+		{ op: "add", id: 3, plan: plan("On hold"), touches: ["c"] },
+		{ op: "add", id: 4, plan: plan("Blocked"), touches: ["d"] },
+		{ op: "add", id: 5, plan: plan("Needs you"), touches: ["e"] },
+		{ op: "add", id: 6, plan: plan("Asking"), touches: ["f"] },
+		{ op: "add", id: 7, plan: plan("Done"), touches: ["g"] },
+		{ op: "add", id: 9, plan: plan("Waits"), touches: ["h"], after: [1, 2, 3, 4, 5, 6, 7] },
+		{ op: "run" },
+		...[1, 3, 4, 5, 6, 7].flatMap((id) => [{ op: "start", id, lane: true }, chat(id)]),
+		{ op: "wait", id: 3, what: "CI", check: "false", everyMs: 60_000, until: 9e12 },
+		{ op: "block", id: 4, need: "the staging login", start: 0, tries: 0 },
+		{ op: "stuck", id: 5, question: "Which port?", choices: ["8080", "9090"] },
+		{ op: "ask", id: 6, n: 1, question: "Which branch?" },
+		{ op: "done", id: 7, summary: "ok" },
+	];
+	const hold = (id?: number) => ({
+		op: "hold",
+		...(id !== undefined ? { id } : {}),
+		why: "owner: not now",
+		by: "panel",
+	});
+	const release = (id?: number) => ({ op: "release", ...(id !== undefined ? { id } : {}) });
+
+	it("a waiting task's open afters come with how each stands (status, title, chat), in queue order", () => {
+		const q = replay(entries(states));
+		const nine = byId(q, 9);
+		expect(nine?.waitingFor).toEqual([1, 2, 3, 4, 5, 6]);
+		expect(nine?.waitingForRefs).toEqual([
+			{
+				file: "",
+				name: "",
+				id: 1,
+				status: "working",
+				title: "Working",
+				chat: { file: "/chats/1.jsonl", title: "Queue #1" },
+			},
+			{ file: "", name: "", id: 2, status: "ready", title: "Not started" },
+			{
+				file: "",
+				name: "",
+				id: 3,
+				status: "waiting",
+				title: "On hold",
+				chat: { file: "/chats/3.jsonl", title: "Queue #3" },
+			},
+			{
+				file: "",
+				name: "",
+				id: 4,
+				status: "blocked",
+				title: "Blocked",
+				chat: { file: "/chats/4.jsonl", title: "Queue #4" },
+			},
+			{
+				file: "",
+				name: "",
+				id: 5,
+				status: "stuck",
+				title: "Needs you",
+				chat: { file: "/chats/5.jsonl", title: "Queue #5" },
+			},
+			{
+				file: "",
+				name: "",
+				id: 6,
+				status: "asking",
+				title: "Asking",
+				chat: { file: "/chats/6.jsonl", title: "Queue #6" },
+			},
+		]);
+		// None of them is paused, and the tasks that wait on nothing have none.
+		expect(nine?.waitingForRefs?.some((r) => r.held)).toBe(false);
+		for (const t of q.tasks) if (t.id !== 9) expect(t.waitingForRefs, `#${t.id}`).toBeUndefined();
+		// Once they're all over, nothing is left to wait for.
+		const over = replay(entries([...states, ...[1, 2, 3, 4, 5, 6].map((id) => ({ op: "remove", id }))]));
+		expect(byId(over, 9)?.waitingFor).toBeUndefined();
+		expect(byId(over, 9)?.waitingForRefs).toBeUndefined();
+	});
+
+	it("paused by the owner: through the task's own pause, and through the whole queue's", () => {
+		const own = byId(replay(entries([...states, hold(5), hold(2)])), 9)?.waitingForRefs;
+		expect(own?.filter((r) => r.held).map((r) => [r.id, r.status])).toEqual([
+			[2, "ready"],
+			[5, "stuck"],
+		]);
+		const whole = byId(replay(entries([...states, hold()])), 9)?.waitingForRefs;
+		expect(whole?.every((r) => r.held === true)).toBe(true);
+		// Resumed: no longer paused.
+		const back = byId(replay(entries([...states, hold(), hold(2), release(), release(2)])), 9)?.waitingForRefs;
+		expect(back?.some((r) => r.held)).toBe(false);
+		// The queue's resume leaves #2's own pause.
+		const still = byId(replay(entries([...states, hold(), hold(2), release()])), 9)?.waitingForRefs;
+		expect(still?.filter((r) => r.held).map((r) => r.id)).toEqual([2]);
+	});
+
+	it("not in a task's own chat (it has only its task)", () => {
+		const own = replay(
+			entries([
+				{ op: "assigned", id: 5, plan: plan("Five"), touches: ["a"], after: [3], from: { file: "/s/q.jsonl" } },
+			]),
+		);
+		expect(own.tasks[0].after).toEqual([3]);
+		expect(own.tasks[0].waitingForRefs).toBeUndefined();
+	});
+
+	it("keeps when a task started needing the user, as pi-queue does, without showing it", async () => {
+		const base = [
+			{ op: "add", id: 1, plan: plan("One"), touches: ["a"] },
+			{ op: "run" },
+			{ op: "start", id: 1, lane: true },
+		];
+		const stuck = (question: string, ts: number) => ({ op: "stuck", id: 1, question, choices: ["a", "b"], ts });
+		const stuckAt = (ops: Array<Record<string, unknown>>) => taskQueueAll(entries(ops)).tasks[0].stuckAt;
+		expect(stuckAt([...base, stuck("Which port?", 5_000)])).toBe(5_000);
+		// The same question again: since the first time. Another question, or after an answer: anew.
+		expect(stuckAt([...base, stuck("Which port?", 5_000), stuck("Which port?", 9_000)])).toBe(5_000);
+		expect(stuckAt([...base, stuck("Which port?", 5_000), stuck("Which host?", 9_000)])).toBe(9_000);
+		const answered = [...base, stuck("Which port?", 5_000), { op: "resume", id: 1, ts: 7_000 }];
+		expect(stuckAt([...answered, stuck("Which port?", 9_000)])).toBe(9_000);
+		expect(replay(entries([...base, stuck("Which port?", 5_000)])).tasks[0]).not.toHaveProperty("stuckAt");
+		const pkg = process.env.PI_QUEUE_PKG ?? join(userInfo().homedir, "projects", "pi-queue");
+		const file = join(pkg, "queue.ts");
+		if (!existsSync(file)) throw new Error(`pi-queue not found at ${pkg} (set PI_QUEUE_PKG)`);
+		const pq = await import(/* @vite-ignore */ pathToFileURL(file).href);
+		const scenarios = [
+			[...base, stuck("Which port?", 5_000)],
+			[...base, stuck("Which port?", 5_000), stuck("Which port?", 9_000)],
+			[...base, stuck("Which port?", 5_000), stuck("Which host?", 9_000)],
+			[...answered, stuck("Which port?", 9_000)],
+			[...answered, { op: "wait", id: 1, what: "CI", check: "false", everyMs: 60_000, until: 9e12, ts: 8_000 }],
+		];
+		for (const ops of scenarios) {
+			const e = entries(ops);
+			const theirs = (pq.replay(e) as { tasks: Array<{ stuckAt?: number }> }).tasks[0].stuckAt;
+			expect(taskQueueAll(e).tasks[0].stuckAt, JSON.stringify(ops.slice(base.length))).toEqual(theirs);
 		}
 	});
 });

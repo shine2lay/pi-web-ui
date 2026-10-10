@@ -296,6 +296,11 @@ export const en = {
 	taskQueueRefOnHold: "on hold",
 	taskQueueRefNotStarted: "not started",
 	taskQueueRefRemoved: "removed",
+	// queue-why: the same words inside a line ("#45 (needs you)").
+	taskQueueRefNeedsYou: "needs you",
+	taskQueueRefBlocked: "blocked",
+	taskQueueRefAsking: "asking the main chat",
+	taskQueueRefDone: "done",
 	// queue-paused: the owner's pause on a task or on the whole queue.
 	taskQueueRefPaused: "paused by you",
 	taskQueuePause: "Pause",
@@ -328,7 +333,9 @@ export const en = {
 	taskQueueTouches: "Touches",
 	taskQueueRunsAlone: "Nothing declared: runs alone",
 	taskQueueAfter: "After {list}",
-	taskQueueAfterWaiting: "After {list}, still waiting for {open}",
+	// queue-why: after "After {list} \u00b7 ", each open one with how it stands.
+	taskQueueAfterStill: "still waiting for {refs}",
+	taskQueueResumeFirst: "Can't start until you resume {refs}",
 	taskQueueOpenChat: "Open its chat",
 	taskQueueOpenQueue: "Open the queue",
 	taskQueueFrom: 'This chat works on a queued task (the queue is in "{title}").',

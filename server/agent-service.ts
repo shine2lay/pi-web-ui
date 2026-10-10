@@ -15909,6 +15909,8 @@ export class AgentService {
 			sameFile: (a, b) => samePath(a, b),
 			loadWatch: () => this.stateStore.getQueueWatch(),
 			saveWatch: (files) => this.stateStore.setQueueWatch(files),
+			loadHeldSeen: () => this.stateStore.getQueueHeldSeen(),
+			saveHeldSeen: (seen) => this.stateStore.setQueueHeldSeen(seen),
 			changed: () => ClientSession.refreshQueuePanels(),
 			log: (line) => console.log(line),
 		});

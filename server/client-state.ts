@@ -495,6 +495,10 @@ export interface ClientState {
 	/** queue-blocked: queue chats (transcript paths) the background check for blocked tasks looks at
 	 *  (server/queue-blocks.ts), kept across restarts. Also global. */
 	queueWatch?: string[];
+	/** queue-why: per watched queue chat, the outside afters it has looked at for being paused by the owner or
+	 *  needing the user, each with which pause or question (queue-blocks.ts heldKey), so each makes it look
+	 *  only once, across restarts. Also global. */
+	queueHeldSeen?: Record<string, string[]>;
 	/** Browser UI locale code as reported by hello/set_locale (e.g. "zh",
 	 *  "en", "ja"). Server resolves it via resolveServerLang (non-zh →
 	 *  English default, issue #91) for tool return values / AI prompts.
@@ -731,6 +735,30 @@ export class ClientStateStore {
 		const state = (all[ClientStateStore.GLOBAL_SETTINGS_KEY] ??= { projects: [] });
 		if (files.length > 0) state.queueWatch = [...files].slice(0, 500);
 		else delete state.queueWatch;
+		this.save();
+	}
+
+	/** queue-why: what the background check has looked at, per watched queue chat. */
+	getQueueHeldSeen(): Record<string, string[]> {
+		const raw = this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY]?.queueHeldSeen;
+		const out: Record<string, string[]> = {};
+		if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+		for (const [file, keys] of Object.entries(raw)) {
+			if (Array.isArray(keys)) out[file] = keys.filter((k): k is string => typeof k === "string");
+		}
+		return out;
+	}
+
+	/** queue-why: keep this instead (empty = the key goes); at most 500 queues, 200 keys each. */
+	setQueueHeldSeen(seen: Record<string, string[]>): void {
+		const all = this.load();
+		const state = (all[ClientStateStore.GLOBAL_SETTINGS_KEY] ??= { projects: [] });
+		const entries = Object.entries(seen)
+			.filter(([, keys]) => keys.length > 0)
+			.slice(0, 500)
+			.map(([file, keys]): [string, string[]] => [file, keys.slice(0, 200)]);
+		if (entries.length > 0) state.queueHeldSeen = Object.fromEntries(entries);
+		else delete state.queueHeldSeen;
 		this.save();
 	}
 

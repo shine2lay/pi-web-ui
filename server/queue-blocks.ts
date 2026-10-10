@@ -23,6 +23,12 @@
  * ask); its queue stays watched, so it carries on once the pause is lifted. A paused task another task
  * waits on shows as paused (`held`) and doesn't count as needs-you.
  *
+ * queue-why: a task in another queue that a ready task here comes after (an outside `after`), newly paused
+ * by the owner or newly needing the user: the queue looks once too ("/queue blocks"), so pi-queue can tell
+ * that queue's chat its task can't start until then (its note, once; pi-queue decides). Once per pause and
+ * per question (`heldSeen`, kept across restarts); not for a waiter that is paused itself, or in a paused
+ * queue. Block refs don't count: pi-queue has no such note for a blocked task (its Blocked line shows it).
+ *
  * resolveRefs: what pi-queue asks when a task names tasks ("#12", "temper #38", "<queue chat title> #4"):
  * a role id means that role's home chat's queue, anything else a queue chat's title. Unknown refs, the
  * task itself and loops (through blocks and afters, in any queue) are refused.
@@ -76,6 +82,21 @@ export interface RefLook {
 	/** queue-paused: the owner paused it (or its whole queue): a task blocked on it waits quietly, and it
 	 *  doesn't count as needs-you. */
 	held?: boolean;
+	/** queue-why: since when that pause (its own, else its queue's), when held. */
+	heldAt?: number;
+	/** queue-why: when it started needing the user, while it does (stuck). */
+	stuckAt?: number;
+}
+
+/**
+ * queue-why: which pause or question a task in another queue stands under, when only the owner or the user
+ * can move it on (pi-queue's ownerOnly: paused by the owner, or needing the user). undefined otherwise.
+ */
+export function heldKey(r: { file: string; id: number }, l: RefLook | undefined): string | undefined {
+	if (!l || l.status === "gone" || l.status === "done" || l.status === "removed") return undefined;
+	if (l.held) return `${r.file}#${r.id}/paused/${l.heldAt ?? 0}`;
+	if (l.status === "stuck") return `${r.file}#${r.id}/user/${l.stuckAt ?? 0}`;
+	return undefined;
 }
 /** undefined: can't tell right now (unreadable). */
 export type LookRef = (r: { file: string; id: number }) => RefLook | undefined;
@@ -121,6 +142,9 @@ export interface QueueBlocksHost {
 	sameFile(a: string, b: string): boolean;
 	loadWatch(): string[];
 	saveWatch(files: string[]): void;
+	/** queue-why: per watched queue, the paused / needing-the-user outside afters it has looked at (heldKey). */
+	loadHeldSeen(): Record<string, string[]>;
+	saveHeldSeen(seen: Record<string, string[]>): void;
 	/** Something the panels show changed (how a blocker stands): windows get their queue again. */
 	changed(): void;
 	log(line: string): void;
@@ -135,6 +159,8 @@ interface Cached {
 export class QueueBlocks {
 	private readonly cache = new Map<string, Cached>();
 	private readonly watch: Set<string>;
+	/** queue-why: per watched queue, the outside afters' pauses and questions it has looked at (heldKey). */
+	private readonly heldSeen: Map<string, Set<string>>;
 	/** Nudges sent: key -> when (file, task, what it was about). */
 	private readonly nudged = new Map<string, number>();
 	private timer: ReturnType<typeof setInterval> | null = null;
@@ -145,6 +171,7 @@ export class QueueBlocks {
 
 	constructor(private readonly host: QueueBlocksHost) {
 		this.watch = new Set(host.loadWatch());
+		this.heldSeen = new Map(Object.entries(host.loadHeldSeen()).map(([f, keys]) => [f, new Set(keys)]));
 	}
 
 	start(everyMs = queueBlocksEveryMs()): void {
@@ -197,12 +224,14 @@ export class QueueBlocks {
 		if (!c.all || c.all.from) return { status: "gone" };
 		const t = c.all.tasks.find((x) => x.id === r.id);
 		if (!t) return { status: "gone" };
+		const hold = taskQueueHeld(t, c.all);
 		return {
 			status: t.status,
 			title: t.plan.title,
 			...(t.summary ? { summary: t.summary } : {}),
 			...(t.chat ? { chat: t.chat } : {}),
-			...(taskQueueHeld(t, c.all) ? { held: true } : {}),
+			...(hold ? { held: true, heldAt: hold.at } : {}),
+			...(t.status === "stuck" && t.stuckAt !== undefined ? { stuckAt: t.stuckAt } : {}),
 		};
 	}
 
@@ -266,16 +295,43 @@ export class QueueBlocks {
 				if (over.length && !taskQueueHeld(t, q))
 					due ??= `#${t.id}:after:${over.map((o) => `${o.file}#${o.id}`).join(",")}`;
 			}
-			if (!due) continue;
-			const key = `${file}\u0001${due}`;
-			const was = this.nudged.get(key);
-			if (was !== undefined && now - was < RENUDGE_MS) continue;
-			this.nudged.set(key, now);
-			const ok = await this.host.runCommand(file, "/queue blocks");
-			this.host.log(`[queue-blocks] ${ok ? "nudged" : "couldn't reach"} ${file} (${due})`);
+			// queue-why: tasks in other queues that ready tasks here come after, paused by the owner or needing the
+			// user. One that's new makes this queue look once (pi-queue's note); a paused waiter doesn't count.
+			const seen = this.heldSeen.get(file);
+			const heldNow = new Set<string>();
+			for (const t of outside) {
+				if (taskQueueHeld(t, q)) continue;
+				for (const o of t.outside ?? []) {
+					if (o.over || this.host.sameFile(o.file, file)) continue;
+					const l = look(o);
+					// Can't tell right now (unreadable): what it was looked at for still stands.
+					if (l === undefined) for (const k of seen ?? []) if (k.startsWith(`${o.file}#${o.id}/`)) heldNow.add(k);
+					const k = heldKey(o, l);
+					if (k) heldNow.add(k);
+				}
+			}
+			const fresh = [...heldNow].filter((k) => !seen?.has(k)).sort();
+			// Only what still stands is kept: a lifted pause or an answered question is forgotten.
+			const keep = new Set([...(seen ?? [])].filter((k) => heldNow.has(k)));
+			if (fresh.length) due = `${due ? `${due}; ` : ""}held:${fresh.join(",")}`;
+			if (due) {
+				const key = `${file}\u0001${due}`;
+				const was = this.nudged.get(key);
+				if (was === undefined || now - was >= RENUDGE_MS) {
+					this.nudged.set(key, now);
+					const ok = await this.host.runCommand(file, "/queue blocks");
+					this.host.log(`[queue-blocks] ${ok ? "nudged" : "couldn't reach"} ${file} (${due})`);
+					// Looked at once it got there; else again after RENUDGE_MS.
+					if (ok) for (const k of fresh) keep.add(k);
+				}
+			}
+			this.setHeldSeen(file, keep);
 		}
 		if (drop.length) {
-			for (const f of drop) this.watch.delete(f);
+			for (const f of drop) {
+				this.watch.delete(f);
+				this.setHeldSeen(f, new Set());
+			}
 			this.host.saveWatch([...this.watch]);
 		}
 		for (const [k, at] of this.nudged) if (now - at > 24 * 3600_000) this.nudged.delete(k);
@@ -285,6 +341,15 @@ export class QueueBlocks {
 			this.stamp++;
 			this.host.changed();
 		}
+	}
+
+	/** queue-why: keep these keys for this queue (none = it goes); saved only when they change. */
+	private setHeldSeen(file: string, keys: Set<string>): void {
+		const was = this.heldSeen.get(file);
+		if ((was?.size ?? 0) === keys.size && [...keys].every((k) => was?.has(k))) return;
+		if (keys.size) this.heldSeen.set(file, keys);
+		else this.heldSeen.delete(file);
+		this.host.saveHeldSeen(Object.fromEntries([...this.heldSeen].map(([f, ks]) => [f, [...ks].sort()])));
 	}
 
 	/**
