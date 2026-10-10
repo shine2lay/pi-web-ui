@@ -116,6 +116,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | queue-paused                 | `local` | `server/task-queue.ts`, `queue-blocks.ts`, `role-messages.ts`, `agent-service.ts` (`noteToPausedTaskChat`, carry-on, plugin notes), `index.ts` (scheduler), `roles-overview.ts`, `roles-overview-tool.ts`, `protocol.ts`, `protocol-version.ts` (44), `web/src/components/TaskQueuePanel.tsx`, `RolesView.tsx`, `Message.tsx`, `roles-view-model.ts`, `i18n.tsx`, `locales/*.json`, `styles.css`, `roles-view.css`, `docs/roles-overview.md`, `tests/queue-paused-test.mjs` (new), `tests/queue-why-test.mjs` (#91), `tests/unit/`; paired with pi-queue |
 | role-board                   | `local` | `server/role-board.ts` (new), `board-tool.ts` (new), `agent-service.ts` (turn-start note, steer, direct turn), `index.ts`, `role-messages.ts`, `role-message-tool.ts`, `roles-overview.ts`, `roles-overview-tool.ts`, `identity-config.ts`, `tool-manager.ts`, `protocol.ts`, `protocol-version.ts` (45), `web/src/components/RolesView.tsx`, `RoleMessageRow.tsx`, `Message.tsx`, `roles-view-model.ts`, `roles-state.ts`, `role-message-text.ts`, `exchange-fold.ts`, `use-chat.ts`, `roles-view.css`, `i18n.tsx`, `locales/*.json`, `docs/board.md` (new), `docs/roles-overview.md`, `tests/board-test.mjs` (new), `tests/unit/role-board.test.ts` (new), `tests/unit/`; paired with pi-identity |
 | decision-records             | `local` | `server/decision-records.ts` (new), `agent-service.ts` (hooks, scanner, backfill), `role-messages.ts`, `role-board.ts`, `role-message-tool.ts`, `board-tool.ts`, `asks.ts`, `control-socket.ts`, `protocol.ts`, `bin/pi-web-ui.mjs` (`decisions`), `web/src/components/RolesView.tsx`, `IdentitiesSettings.tsx`, `ToolCallBlock.tsx`, `role-message-text.ts`, `i18n.tsx`, `locales/*.json`, `tests/unit/decision-records.test.ts` (new) |
+| faint-contrast               | `local` | `web/src/styles.css` (`:root` `--text-faint`, new `--text-disabled`, five `:disabled` rules), `make-light-theme.mjs` (White palette, `--text-disabled` fallback, `CLASSIC_LIGHT_NOTICE`), `themes/*.css` (regenerated; Translucent / Transparent and the six hand-made themes by hand), `tests/faint-contrast-test.mjs` (new), `tests/unit/faint-contrast.test.ts` (new) |
 
 ---
 
@@ -5750,3 +5751,84 @@ This part only collects; the page comes later. No model calls.
 - If pi-queue's queue entry (`customType "queue"`, `data.op/id/plan/approval/initiative/summary`) or the
   role message header (`roleMessageHeader`) change, change `planRecord` / `parseDeliveredRoleMessage`.
 - If `ask_user_question` stops passing its toolCallId to `askUser`, answers get a dialog-style ref.
+
+## faint-contrast
+
+**Status**: `local`
+**Baseline**: v0.96.1 (on top of `queue-blocked`, `queue-paused`: the Queue tab lines it measures)
+
+**Why** (queue task #93, owner-approved plan; Design request rm-947a15e3 after Ops #91's finding
+rm-04c8efaf): faint text carries information (task ids, started and done times, Touches, after lines,
+"Can't start until you resume #n", hints, Lane and Pause), but `--text-faint` failed WCAG 2.2 AA 1.4.3:
+3.86:1 on the Queue panel in the default dark theme, 3.45:1 in White, and about 3:1 on the tinted needs-you
+row. The token itself is raised, not the Queue tab's rules: about 179 text rules use it across the app
+(`styles.css`, `model-management.css`, `ModelConfigModal.tsx`) and they are mostly information too.
+Moving the Queue tab to `--text-dim` instead would have fixed one tab and flattened faint into dim there.
+
+### Changes
+
+1. **Default dark** (`:root` in `web/src/styles.css`): `--text-faint` `#6b7284` -> `#8a91a3`. The plan's
+   first value (`#7f8698`, 5.10:1 on the panel) failed on the Queue tab's tinted rows (needs-you amber
+   `#2e2719`, blocked blue `#132229`: 3.9-4.5:1), so it took the smallest further step along the line from
+   the old faint to `--text-dim` that reaches 4.5:1 there (65% of the way): 6.12:1 on `--bg`, 5.73 on
+   `--bg-elev`, 5.34 on `--bg-elev2`, 5.89 on the panel, 4.52 on the needs-you row (the lowest), 4.99 on
+   the blocked row. `--text-dim` is 7.47 / 7.00 / 6.52 / 7.19, so faint stays fainter.
+2. **White** (`make-light-theme.mjs` palette, regenerated): `#818b98` -> `#646e7a` (71% of the way to dim):
+   5.18:1 on white, 4.87 on `--bg-elev2`, 4.54 on the needs-you row, 4.64 on the blocked row; dim 6.11.
+   Purple Haze (`themes/md-preview.css`) is generated from the default palette, so it moves with it.
+3. **Translucent and Transparent** copy the default palette by hand: same `#8a91a3`. Their real contrast
+   depends on the wallpaper behind them, so it isn't tested.
+4. **`--text-disabled`** (new): a disabled control is exempt from 1.4.3 and keeps the old grey (Design's
+   ask): `.tldr-unfold:disabled`, `.task-queue-controls button:disabled`, `.msg-action:disabled` and two new
+   rules, `.task-queue-clear:disabled` and `.inputbox .btn.attach-img:disabled`. The default and White carry
+   their old faint; Translucent / Transparent the default's old; every other theme gets its own faint
+   (generated: a palette's own `--text-faint` when it sets no `--text-disabled`; the six hand-made themes
+   by hand), so nothing changes for disabled controls anywhere.
+5. **The other 24 named themes keep their colours** (not restyled here; 22 are under 4.5:1 somewhere, listed
+   for Design in Ops' reply to rm-947a15e3).
+6. **Generator drift fixed**: upstream c6e8498 (#296) set the nine classic light themes' notice colours
+   (`--notice-*-bg` / `-border`: `color-mix` with `--red` / `--amber` / `--info-blue`) in the generated files
+   by hand, so running `node make-light-theme.mjs` put the dark defaults back. `CLASSIC_LIGHT_NOTICE` now
+   holds them in the generator. Regenerating changes only `--text-faint` (white, md-preview) and adds one
+   `--text-disabled` line per theme.
+7. No opacity or font-size changes. Non-text uses shift slightly: the waiting task's left border, the
+   terminal tab's exit dot, the thinking dots, two hover borders.
+
+### Not met yet: 8 non-faint hits on the Queue tab wait on Design
+
+axe's color-contrast rule also finds colours that are not `--text-faint` on the Queue tab. They are
+Design's colours across the whole app, so changing them on one tab is Design's call (main chat's decision
+on #93, 2026-10-10). `tests/faint-contrast-test.mjs` pins them (`PINNED`): a new hit fails, and so does a
+pinned one that stops showing, so the list is trimmed when Design's fix lands.
+
+- Dark, `--accent` `#8b5cf6`: "Start" (`.task-queue-toggle`, white on violet, 4.23:1); "Open its chat"
+  (`.task-queue-open-chat`) on #2 and #5 (4.38:1 on the panel, 4.27 on the phone drawer), on the
+  needs-you row #3 (3.49 / 3.36) and the blocked row #4 (3.84 / 3.71); "Resume" on a paused task
+  (`.task-queue-pause.resume`, 4.38 / 4.27).
+- White, `--amber` `#d97706`: the queue status "Waiting for your answer on #3" (`.task-queue-status`,
+  3.18:1) and the "Needs you" badge (`.task-queue-badge`, 2.78:1 on the needs-you row).
+
+### How it was checked
+
+- `tests/faint-contrast-test.mjs` (new, sealed, real pi-queue, no model call): one queue with a done task,
+  a working one, a needs-you one, a blocked one, one on hold, one after a done task, a paused one and one
+  after it ("Can't start until you resume #7"), #6's plan open; default dark and White at 1440x900 and
+  390x844; axe's color-contrast rule over the whole panel, scrolled through. Per look: no faint hit,
+  nothing beyond the pinned hits, every pinned hit still there, the move/remove arrows axe skips (glyphs)
+  composited and measured at 4.5:1, the measured faint text at 4.5:1, dim at least 1.15 times faint's
+  ratio on each background, no page errors. On the old colours it fails 16 checks (34 faint hits per
+  look, lowest 2.96:1); on the new ones it passes.
+- `tests/unit/faint-contrast.test.ts` (new): the default and White palettes as shipped reach 4.5:1 on
+  `--bg`, `--bg-elev`, `--bg-elev2`, stay fainter than dim, keep the old grey on `--text-disabled`, and
+  Translucent / Transparent copy the default; with `#6b7284` or `#818b98` back it fails.
+- `git diff themes/`: only the `--text-faint` lines (4 files) and one `--text-disabled` line per theme.
+- Before and after screenshots of the Queue tab (both themes, both widths, top and end of the panel) and the
+  Roles page: faint still reads fainter than dim; the Roles page's hierarchy is unchanged.
+
+### When syncing
+
+- Upstream changes to `--text-faint` in `:root` or the White palette: keep ours (re-measure with the unit
+  test). New generated themes get `--text-disabled` from the generator; a new hand-made one needs the line
+  by hand (without it, its disabled controls take the default dark's old grey `#6b7284`).
+- If upstream fixes the notice colours in `make-light-theme.mjs` itself, drop `CLASSIC_LIGHT_NOTICE`.
+- When Design's fix for the pinned hits lands, trim `PINNED` in `tests/faint-contrast-test.mjs`.

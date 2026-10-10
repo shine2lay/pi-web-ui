@@ -11,6 +11,7 @@
 	--text-strong: #3c9185; /* 深色主题下，用主题色使粗体更明显 */
 	--text-dim: #a8a8b3;
 	--text-faint: #6e6e7a;
+	--text-disabled: #6e6e7a;
 	--accent: #31ac9d;
 	--accent-soft: #3A8C8A26;
 	--green: #2dd4bf; 

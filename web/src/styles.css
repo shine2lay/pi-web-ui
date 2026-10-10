@@ -82,7 +82,12 @@
 	--border-soft: #1e2230;
 	--text: #e6e8ef;
 	--text-dim: #9aa1b4;
-	--text-faint: #6b7284;
+	/* faint-contrast (Design rm-947a15e3): faint text carries information (ids, times, Touches, after lines),
+	   so it reaches WCAG AA 4.5:1 (was #6b7284, 3.5-4.0:1): 6.12 on --bg, 5.73 on --bg-elev, 5.34 on --bg-elev2,
+	   4.52 on the Queue tab's amber "needs you" row (the lowest). 65% of the way from the old grey to --text-dim,
+	   so still fainter than it. Disabled controls are exempt and keep the old grey on --text-disabled. */
+	--text-faint: #8a91a3;
+	--text-disabled: #6b7284;
 	--accent: #8b5cf6;
 	--accent-soft: rgba(139, 92, 246, 0.14);
 	--green: #34d399;
@@ -2860,7 +2865,9 @@ button.rolemsg-fold:focus-visible {
 .tldr-unfold:hover:not(:disabled) {
 	color: var(--text);
 }
+/* faint-contrast: a disabled control keeps the old faint grey (its own token; WCAG exempts inactive controls). */
 .tldr-unfold:disabled {
+	color: var(--text-disabled);
 	cursor: default;
 }
 
@@ -3205,6 +3212,7 @@ button.rolemsg-fold:focus-visible {
 	background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 .task-queue-controls button:disabled {
+	color: var(--text-disabled);
 	opacity: 0.3;
 	cursor: default;
 }
@@ -3513,6 +3521,9 @@ button.rolemsg-fold:focus-visible {
 .task-queue-clear:hover:not(:disabled) {
 	color: var(--accent);
 	text-decoration: underline;
+}
+.task-queue-clear:disabled {
+	color: var(--text-disabled);
 }
 
 /* 插件在底栏 / 输入框动作区贡献的条目（issue #146）。 */
@@ -9469,6 +9480,7 @@ div.chead[role="button"]:focus-visible,
 	gap: 6px;
 }
 .msg-action:disabled {
+	color: var(--text-disabled);
 	cursor: not-allowed;
 }
 .msg:hover .msg-action:disabled {
@@ -10923,6 +10935,9 @@ div.chead[role="button"]:focus-visible,
 .inputbox .btn.attach-img:hover:not(:disabled) {
 	background: var(--accent-soft);
 	color: var(--accent);
+}
+.inputbox .btn.attach-img:disabled {
+	color: var(--text-disabled);
 }
 
 /* Send: solid blue circle with a white up-arrow. */

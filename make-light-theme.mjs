@@ -48,6 +48,10 @@ for (const line of rootBlock[0].split("\n")) {
 	if (m) defaults.set(m[1], m[2]);
 }
 
+/** faint-contrast: a palette with its own --text-faint and no --text-disabled keeps disabled controls on its
+ *  faint (as before the token existed), not on the default's old grey. */
+const ownValue = (overrides, k) => overrides[k] ?? (k === "--text-disabled" ? overrides["--text-faint"] : undefined);
+
 /** Emit a theme file: full :root (defaults + overrides) + optional tail. */
 const emitTheme = (name, overrides = {}, tail = "", nameEn = "", group = "") => {
 	const lines = ["/* theme-name: " + name + " */"];
@@ -57,7 +61,7 @@ const emitTheme = (name, overrides = {}, tail = "", nameEn = "", group = "") => 
 	// color-scheme: themes default to light unless told otherwise.
 	lines.push("\tcolor-scheme: " + (overrides["color-scheme"] ?? "light") + ";");
 	for (const [k, v] of defaults) {
-		lines.push(`\t${k}: ${overrides[k] ?? v};`);
+		lines.push(`\t${k}: ${ownValue(overrides, k) ?? v};`);
 	}
 	lines.push("}", "");
 	return lines.join("\n") + tail;
@@ -116,6 +120,17 @@ const LIGHT_DERIVED = {
 	"--glow-38": "rgba(0, 0, 0, 0.25)",
 };
 
+// The classic light palettes' notice colours: upstream c6e8498 (#296) set these in the generated files by
+// hand, so running this script put the dark defaults back. Kept here, the script reproduces them (faint-contrast).
+const CLASSIC_LIGHT_NOTICE = {
+	"--notice-err-bg": "color-mix(in srgb, var(--bg-elev) 90%, var(--red))",
+	"--notice-warn-bg": "color-mix(in srgb, var(--bg-elev) 90%, var(--amber))",
+	"--notice-info-bg": "color-mix(in srgb, var(--bg) 95%, var(--info-blue))",
+	"--notice-err-border": "var(--red)",
+	"--notice-warn-border": "var(--amber)",
+	"--notice-info-border": "var(--info-blue)",
+};
+
 // 「白色」— pure white page, GitHub-blue accents (vs. violet in LIGHT).
 const WHITE = {
 	"color-scheme": "light",
@@ -126,7 +141,10 @@ const WHITE = {
 	"--border-soft": "#d8dee4",
 	"--text": "#1f2328",
 	"--text-dim": "#59636e",
-	"--text-faint": "#818b98",
+	// faint-contrast (Design rm-947a15e3): 5.18:1 on white, 4.87 on --bg-elev2, 4.54 on the Queue tab's amber
+	// "needs you" row (was #818b98, 3.45 / 3.24 / 3.02); disabled controls keep the old grey.
+	"--text-faint": "#646e7a",
+	"--text-disabled": "#818b98",
 	"--accent": "#0969da",
 	"--accent-soft": "rgba(9, 105, 218, 0.1)",
 	"--green": "#059669",
@@ -1161,6 +1179,7 @@ const CATPPUCCIN_LATTE = {
 	"--chip-bg": "#dce0e8",
 	"--msgs-bg": "#eff1f5",
 	"--inputbox-bg": "#dce0e8",
+	...CLASSIC_LIGHT_NOTICE,
 };
 
 const hljsCatppuccinLatte = `
@@ -1369,6 +1388,7 @@ const SOLARIZED_LIGHT = {
 	"--chip-bg": "#e0d8be",
 	"--msgs-bg": "#fdf6e3",
 	"--inputbox-bg": "#e0d8be",
+	...CLASSIC_LIGHT_NOTICE,
 };
 
 const hljsSolarized = `
@@ -1573,6 +1593,7 @@ const CODEX_PURE = {
 	"--chip-bg": "#f4f4f5",
 	"--msgs-bg": "#ffffff",
 	"--inputbox-bg": "#f4f4f5",
+	...CLASSIC_LIGHT_NOTICE,
 };
 
 const hljsCodex = `
@@ -1678,6 +1699,7 @@ const GEIST_LIGHT = {
 	"--chip-bg": "#f4f4f5",
 	"--msgs-bg": "#ffffff",
 	"--inputbox-bg": "#f4f4f5",
+	...CLASSIC_LIGHT_NOTICE,
 };
 
 const hljsGeist = `
@@ -1781,6 +1803,7 @@ const ROSE_PINE_DAWN = {
 	"--chip-bg": "#f2e9e1",
 	"--msgs-bg": "#faf4ed",
 	"--inputbox-bg": "#f2e9e1",
+	...CLASSIC_LIGHT_NOTICE,
 };
 
 const hljsRosePineDawn = `
@@ -1884,6 +1907,7 @@ const GRUVBOX_LIGHT = {
 	"--chip-bg": "#d5c4a1",
 	"--msgs-bg": "#fbf1c7",
 	"--inputbox-bg": "#d5c4a1",
+	...CLASSIC_LIGHT_NOTICE,
 };
 
 const hljsGruvboxLight = `
@@ -1987,6 +2011,7 @@ const EVERFOREST_LIGHT = {
 	"--chip-bg": "#efebd4",
 	"--msgs-bg": "#fdf6e3",
 	"--inputbox-bg": "#efebd4",
+	...CLASSIC_LIGHT_NOTICE,
 };
 
 const hljsEverforest = `
@@ -2090,6 +2115,7 @@ const KANAGAWA_LOTUS = {
 	"--chip-bg": "#dcd5ac",
 	"--msgs-bg": "#f2ecbc",
 	"--inputbox-bg": "#dcd5ac",
+	...CLASSIC_LIGHT_NOTICE,
 };
 
 const hljsKanagawaLotus = `
@@ -2193,6 +2219,7 @@ const AYU_LIGHT = {
 	"--chip-bg": "#f0f1f3",
 	"--msgs-bg": "#fcfcfc",
 	"--inputbox-bg": "#f0f1f3",
+	...CLASSIC_LIGHT_NOTICE,
 };
 
 const hljsAyu = `
