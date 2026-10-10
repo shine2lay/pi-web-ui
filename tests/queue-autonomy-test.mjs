@@ -45,10 +45,12 @@ export default function(pi) {
     done_when: "The fixture page fits a phone screen", decided: "Only the isolated sample page; no real tasks",
     steps: "1. Inspect the sample\\n2. Check the narrow layout\\n3. Report the result",
     verify: "Check the fixture layout at both sizes", must_not: "Change any real queue or call a model", touches: [] };
+  // Each update changes the goal: a plan change that changes nothing saves nothing (pi-queue #92), so it asks nothing.
+  let updates = 0;
   pi.registerCommand("fixture", { description: "Isolated queue fixture", handler: async (line, ctx) => {
     const [action, number] = line.trim().split(/\\s+/);
     if (action === "add" || action === "update" || action === "incomplete") {
-      const p = { ...plan, ...(action === "update" ? { id: Number(number) } : {}), ...(action === "incomplete" ? { goal: "TBD" } : {}) };
+      const p = { ...plan, ...(action === "update" ? { id: Number(number), goal: plan.goal + " (change " + (++updates) + ")" } : {}), ...(action === "incomplete" ? { goal: "TBD" } : {}) };
       try { await tools.get("queue_add").execute("fixture", p, undefined, undefined, ctx); }
       catch { pi.appendEntry("fixture-result", { refused: true }); }
     } else if (action === "finish") {

@@ -151,8 +151,10 @@ read-only rendering; pi-queue's autonomy tests cover plan checks, confirmation r
 forks/task chats, scheduling, errors, startup guards and Stop. `tests/queue-autonomy-test.mjs` runs the
 real extension through a command fixture in an isolated server (no model calls, no real task chats),
 checks desktop/phone controls, owner fences, approval on/off, scheduling and restart persistence, and
-removes its temporary sessions. It also checks the compact row, absent explanatory copy, 44px targets
-and overflow at desktop, 390px and 320px widths. `QUEUE_AUTONOMY_SHOTS=<directory>` saves four panel screenshots;
+removes its temporary sessions. Its `/fixture update` changes the goal on every call, because since
+pi-queue #92 a plan change that changes nothing saves nothing and opens no dialog. It also checks the
+compact row, absent explanatory copy, 44px targets and overflow at desktop, 390px and 320px widths.
+`QUEUE_AUTONOMY_SHOTS=<directory>` saves four panel screenshots;
 `PI_TEST_APP_REPO=<installed app>` can smoke-check the installed build in that same isolated fixture.
 
 **Sync:** keep both replay implementations, pi-queue's owner-host contract, protocol types/versions and
