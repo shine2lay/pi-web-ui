@@ -28,6 +28,10 @@ import { DshQuestionDialog } from "./components/DshQuestionDialog";
 const TerminalPanel = lazy(() => import("./components/TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
 // roles-overview: the Roles page loads with its first opening and stays mounted after it.
 const RolesView = lazy(() => import("./components/RolesView").then((m) => ({ default: m.RolesView })));
+// initiatives-page: the Initiatives tab, the same way (loads with its first opening, stays mounted).
+const InitiativesView = lazy(() =>
+	import("./components/InitiativesView").then((m) => ({ default: m.InitiativesView })),
+);
 import { ScmPanel } from "./components/SCMPanel";
 import { PluginView } from "./components/PluginView";
 import { PluginViewFallback } from "./components/PluginViewFallback";
@@ -273,7 +277,7 @@ function PanelRail({ side, onClick }: { side: PanelSide; onClick: () => void }) 
 }
 
 /** 顶栏视图：内置三个 + 每个已装插件一个 `plugin:<id>`。 roles-overview: plus the Roles page. */
-type ViewName = "chat" | "terminal" | "git" | "roles" | `plugin:${string}`;
+type ViewName = "chat" | "terminal" | "git" | "roles" | "initiatives" | `plugin:${string}`;
 
 /**
  * 插件项目会话的目录授权（issue #146）：插件经 host.openSession 打开一个新目录的会话前，
@@ -413,12 +417,16 @@ export function App() {
 	useEffect(() => {
 		const link = takeViewLink();
 		if (!link) return;
-		setView("roles");
-		if (link.role) setRolesFocus({ id: link.role, seq: 1 });
+		setView(link.view);
+		if (link.view === "roles" && link.role) setRolesFocus({ id: link.role, seq: 1 });
 	}, []);
 	const [rolesLoaded, setRolesLoaded] = useState(false);
 	useEffect(() => {
 		if (view === "roles") setRolesLoaded(true);
+	}, [view]);
+	const [initiativesLoaded, setInitiativesLoaded] = useState(false);
+	useEffect(() => {
+		if (view === "initiatives") setInitiativesLoaded(true);
 	}, [view]);
 	// 已安装且未在设置面板禁用的插件（决定 tab 与视图加载）。
 	const enabledPlugins = useMemo(
@@ -2360,6 +2368,14 @@ export function App() {
 								onOpen={openFromRoles}
 								onAbout={aboutFromRoles}
 							/>
+						</Suspense>
+					)}
+				</div>
+				{/* initiatives-page: each initiative's decisions, who really made them, what they cost the owner. */}
+				<div className={`view-pane initiatives-pane ${view === "initiatives" ? "" : "hidden"}`}>
+					{(initiativesLoaded || view === "initiatives") && (
+						<Suspense fallback={null}>
+							<InitiativesView active={view === "initiatives"} phone={isMobile} onOpen={openFromRoles} />
 						</Suspense>
 					)}
 				</div>

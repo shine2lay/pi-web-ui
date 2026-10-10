@@ -17,7 +17,9 @@
  *   → {"cmd":"role_reports","date":"YYYY-MM-DD"}  ← {"ok":true,"receipts":[...]} (no text)
  *   → {"cmd":"decisions_backfill","date":"YYYY-MM-DD"}  ← {"ok":true,"decisions":{...}} (starts it in the
  *     background; decision-records, task #83)
- *   → {"cmd":"decisions_status"}  ← {"ok":true,"decisions":{file, backfill, counts}}
+ *   → {"cmd":"decisions_status"}  ← {"ok":true,"decisions":{file, backfill, counts, reader, decisions}}
+ *   → {"cmd":"decisions_read","maxBatches":N}  ← {"ok":true,"decisions":{started}} (the decision reader reads
+ *     now, in the background, within its settings and daily cap; initiatives-page, task #84)
  *   → anything else           ← {"ok":false,"error":"..."}
  *
  * Idle connections are closed after a short timeout so a stuck CLI never
@@ -60,7 +62,12 @@ type ControlService = Pick<AgentService, "serviceStatus" | "quiesce" | "unquiesc
 	Partial<
 		Pick<
 			AgentService,
-			"requestRoleReport" | "roleReportReceipts" | "noteRoleReportRefused" | "decisionsBackfill" | "decisionsStatus"
+			| "requestRoleReport"
+			| "roleReportReceipts"
+			| "noteRoleReportRefused"
+			| "decisionsBackfill"
+			| "decisionsStatus"
+			| "decisionsRead"
 		>
 	>;
 
@@ -76,7 +83,17 @@ export function controlPath(dataDir: string, port: number): string {
 }
 
 export interface ControlCommand {
-	cmd: "status" | "quiesce" | "unquiesce" | "role_report" | "role_reports" | "decisions_backfill" | "decisions_status";
+	cmd:
+		| "status"
+		| "quiesce"
+		| "unquiesce"
+		| "role_report"
+		| "role_reports"
+		| "decisions_backfill"
+		| "decisions_status"
+		| "decisions_read";
+	/** decisions_read: at most this many calls. */
+	maxBatches?: unknown;
 	/** role-reports: role_report's app token, role, day and what the job found; role_reports' day. */
 	token?: unknown;
 	role?: unknown;
@@ -231,6 +248,15 @@ export function startControlServer(opts: {
 						}
 						const res = service.decisionsBackfill(req.date);
 						resp = res.ok ? { ok: true, decisions: res.progress } : { ok: false, error: res.error };
+						break;
+					}
+					case "decisions_read": {
+						if (!service.decisionsRead) {
+							resp = { ok: false, error: "this engine has no decision reader" };
+							break;
+						}
+						const res = service.decisionsRead(req.maxBatches);
+						resp = res.ok ? { ok: true, decisions: { started: res.started } } : { ok: false, error: res.error };
 						break;
 					}
 					case "decisions_status":

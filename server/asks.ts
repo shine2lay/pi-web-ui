@@ -27,6 +27,8 @@ export interface AskOption {
 	value: string;
 	label: string;
 	description?: string;
+	/** ask_user_question's preview for the option (kept for the decision records, task #84). */
+	preview?: string;
 }
 
 /** One question of an ask. Most asks have exactly one. */
@@ -206,6 +208,7 @@ const optionOf = (o: UiQuestionOption): AskOption => ({
 	value: o.label,
 	label: o.label,
 	...(o.description ? { description: o.description } : {}),
+	...(typeof o.preview === "string" && o.preview ? { preview: o.preview } : {}),
 });
 
 /** ask_user_question: one field per question; the answer values are the option labels (as the page sends them). */

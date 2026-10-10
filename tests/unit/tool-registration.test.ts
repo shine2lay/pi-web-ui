@@ -23,6 +23,7 @@ import {
 	CLAIM_FILES_TOOL_NAME,
 	COMPACT_CONTEXT_TOOL_NAME,
 	CONVERSATION_READ_TOOL_NAME,
+	DECISION_LOG_TOOL_NAME,
 	DELEGATE_TASK_TOOL_NAME,
 	EDIT_SOFT_TOOL_NAME,
 	EVAL_TOOL_NAME,
@@ -48,7 +49,7 @@ const INTRINSIC = new Set(["bash", "read"]);
 
 /** role-messages: tools for chats with a role only. Not a catalog row: pi-identity offers them only in role
  *  chats (ROLE_ONLY_TOOLS there), and the owner's switch is Settings -> Identities -> Role messages (pause). */
-const ROLE_ONLY = new Set([MESSAGE_ROLE_TOOL_NAME, BOARD_TOOL_NAME]);
+const ROLE_ONLY = new Set([MESSAGE_ROLE_TOOL_NAME, BOARD_TOOL_NAME, DECISION_LOG_TOOL_NAME]);
 
 /** telegram-coo: read-only tools every chat always has. Not a catalog row: roles_overview only reads the
  *  Roles page's data, so there is nothing to switch off; the owner limits a role's tools in identity.json. */
@@ -71,6 +72,8 @@ const FACTORY_TOOLS: Record<string, string[]> = {
 	makeClaimFilesTool: [CLAIM_FILES_TOOL_NAME],
 	makeMessageRoleTool: [MESSAGE_ROLE_TOOL_NAME],
 	makeBoardTool: [BOARD_TOOL_NAME],
+	// initiatives-page: roles correct the Initiatives page's decisions; the tool refuses a chat without a role.
+	makeDecisionLogTool: [DECISION_LOG_TOOL_NAME],
 	makeRolesOverviewTool: [ROLES_OVERVIEW_TOOL_NAME],
 	makePresentFilesTool: [PRESENT_FILES_TOOL_NAME],
 	makeSkillTool: [SKILL_TOOL_NAME],

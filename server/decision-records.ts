@@ -61,7 +61,8 @@ export interface AnswerQuestion {
 	header?: string;
 	question: string;
 	detail?: string;
-	options: { label: string; description?: string }[];
+	/** preview: the option's preview text (task #84; older records get it from their chat line). */
+	options: { label: string; description?: string; preview?: string }[];
 	/** The choices picked (their labels). */
 	picked: string[];
 	/** What was typed instead of (or as well as) a choice. */
@@ -352,7 +353,11 @@ export function answerRecord(
 			...(f.header ? { header: f.header } : {}),
 			question: f.text,
 			...(f.detail ? { detail: f.detail } : {}),
-			options: f.options.map((o) => ({ label: o.label, ...(o.description ? { description: o.description } : {}) })),
+			options: f.options.map((o) => ({
+				label: o.label,
+				...(o.description ? { description: o.description } : {}),
+				...(o.preview ? { preview: o.preview } : {}),
+			})),
 			picked,
 			...(typed ? { typed } : {}),
 		};
@@ -929,6 +934,7 @@ export function questionRecordFromTranscript(
 			options: (Array.isArray(q?.options) ? q.options : []).map((o: any) => ({
 				label: String(o?.label ?? ""),
 				...(typeof o?.description === "string" && o.description ? { description: o.description } : {}),
+				...(typeof o?.preview === "string" && o.preview ? { preview: o.preview } : {}),
 			})),
 			picked: Array.isArray(a?.selected) ? a.selected.map(String) : [],
 			...(typeof typed === "string" ? { typed } : {}),

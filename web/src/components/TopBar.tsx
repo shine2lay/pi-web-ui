@@ -14,6 +14,7 @@ import {
 	FiLayers,
 	FiTerminal,
 	FiUsers,
+	FiFlag,
 	FiVolume2,
 	FiX,
 } from "react-icons/fi";
@@ -156,8 +157,8 @@ interface TopBarProps {
 		}) => void;
 		restart: (id: string) => void;
 	};
-	view: "chat" | "terminal" | "git" | "roles" | `plugin:${string}`;
-	onViewChange: (view: "chat" | "terminal" | "git" | "roles" | `plugin:${string}`) => void;
+	view: "chat" | "terminal" | "git" | "roles" | "initiatives" | `plugin:${string}`;
+	onViewChange: (view: "chat" | "terminal" | "git" | "roles" | "initiatives" | `plugin:${string}`) => void;
 	/** Installed optional plugins (<dataDir>/plugins) — one view tab each
 	 *  (view:false renderer-only plugins are filtered out by the caller). */
 	plugins: {
@@ -298,6 +299,7 @@ export function TopBar({
 		"host:terminal",
 		"host:git",
 		"host:roles",
+		"host:initiatives",
 		"host:plugins",
 		"host:search",
 		"host:browser",
@@ -1064,6 +1066,20 @@ export function TopBar({
 						{rolesAsks > 99 ? "99+" : rolesAsks}
 					</span>
 				)}
+			</button>
+		) : null,
+		// initiatives-page: each initiative's decisions, who really made them, and what they cost the owner.
+		"host:initiatives": tabOn("initiatives") ? (
+			<button
+				type="button"
+				role="tab"
+				aria-selected={view === "initiatives"}
+				className={`tb-tab initiatives-tab${view === "initiatives" ? " active" : ""}`}
+				data-tip={t("initiativesTabTip")}
+				onClick={() => onViewChange("initiatives")}
+			>
+				<FiFlag />
+				<span>{t("initiativesTab")}</span>
 			</button>
 		) : null,
 		// 插件面板入口（Chrome 扩展图标那个位置）：列出全部已装插件，每行带「钉到顶栏」

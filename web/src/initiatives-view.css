@@ -1,0 +1,492 @@
+/*
+ * initiatives-page (task #84): the Initiatives tab (components/InitiativesView.tsx). The Roles page's
+ * look: theme tokens only (dark default and White), 4/8 px spacing, a flag is always an icon plus words.
+ * Every class is prefixed iv- and scoped to .initiatives-view (the source dialog is inside it too).
+ */
+.initiatives-view {
+	--iv-fs1: 17px;
+	--iv-lh1: 24px;
+	--iv-fs2: 15px;
+	--iv-lh2: 22px;
+	--iv-fs3: 13px;
+	--iv-lh3: 18px;
+	--iv-pad: 32px;
+	--iv-amber-tint: color-mix(in srgb, var(--amber) 10%, transparent);
+	--iv-amber-line: color-mix(in srgb, var(--amber) 55%, transparent);
+	--iv-green-tint: color-mix(in srgb, var(--green) 12%, transparent);
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	height: 100%;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	background: var(--bg);
+	color: var(--text);
+	font-size: var(--iv-fs2);
+	line-height: var(--iv-lh2);
+}
+.initiatives-view.iv-phone {
+	--iv-pad: 16px;
+}
+.initiatives-view *,
+.initiatives-view *::before,
+.initiatives-view *::after {
+	box-sizing: border-box;
+}
+:where(.initiatives-view button) {
+	font: inherit;
+	color: inherit;
+	background: none;
+	border: 0;
+	padding: 0;
+	margin: 0;
+	cursor: pointer;
+	text-align: left;
+}
+:where(.initiatives-view) :where(h1, h2, h3, h4, p, ul, ol, dl, dd) {
+	margin: 0;
+}
+:where(.initiatives-view) :where(ul, ol) {
+	padding: 0;
+	list-style: none;
+}
+.initiatives-view a:focus-visible,
+.initiatives-view button:focus-visible,
+.initiatives-view summary:focus-visible {
+	outline: none;
+	box-shadow:
+		0 0 0 2px var(--bg),
+		0 0 0 4px var(--accent);
+	border-radius: 6px;
+}
+.initiatives-view svg {
+	width: 1em;
+	height: 1em;
+	flex: none;
+	vertical-align: -2px;
+}
+.iv-sr {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0 0 0 0);
+	white-space: nowrap;
+	border: 0;
+}
+
+.iv-page {
+	max-width: 1180px;
+	margin: 0 auto;
+	padding: 24px var(--iv-pad) 48px;
+}
+.iv-phead {
+	display: grid;
+	gap: 8px;
+	margin-bottom: 24px;
+}
+.iv-phead h1 {
+	font-size: 22px;
+	line-height: 28px;
+	font-weight: 650;
+}
+.iv-intro,
+.iv-reader,
+.iv-meta,
+.iv-note,
+.iv-lead,
+.iv-foot {
+	color: var(--text-dim);
+}
+.iv-meta,
+.iv-foot,
+.iv-rmeta,
+.iv-by {
+	font-size: var(--iv-fs3);
+	line-height: var(--iv-lh3);
+}
+.iv-reader {
+	display: grid;
+	gap: 4px;
+	font-size: var(--iv-fs3);
+	line-height: var(--iv-lh3);
+}
+.iv-warn {
+	color: var(--amber-text);
+}
+.iv-errbox {
+	display: grid;
+	gap: 12px;
+	justify-items: start;
+	padding: 16px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--bg-elev);
+}
+.iv-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 36px;
+	padding: 6px 14px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg-elev);
+	font-weight: 550;
+}
+.iv-btn:hover {
+	background: var(--bg-elev2);
+}
+.iv-btn.iv-primary {
+	border-color: var(--accent);
+	color: var(--link);
+}
+.iv-perday summary {
+	cursor: pointer;
+	width: fit-content;
+	line-height: 28px;
+}
+.iv-perday table {
+	margin-top: 8px;
+	border-collapse: collapse;
+	font-variant-numeric: tabular-nums;
+}
+.iv-perday th,
+.iv-perday td {
+	padding: 2px 16px 2px 0;
+	text-align: right;
+	font-weight: 400;
+}
+.iv-perday th[scope="row"],
+.iv-perday thead th:first-child {
+	text-align: left;
+}
+
+/* The initiative list beside the decisions (above them on a phone). */
+.iv-layout {
+	display: grid;
+	grid-template-columns: 260px minmax(0, 1fr);
+	gap: 24px;
+	align-items: start;
+}
+.iv-phone .iv-layout {
+	grid-template-columns: minmax(0, 1fr);
+	gap: 16px;
+}
+.iv-list ul {
+	display: grid;
+	gap: 8px;
+}
+.iv-row {
+	display: grid;
+	gap: 2px;
+	width: 100%;
+	padding: 10px 12px;
+	border: 1px solid var(--border-soft);
+	border-radius: 10px;
+	background: var(--bg-elev);
+}
+.iv-row:hover {
+	background: var(--bg-elev2);
+}
+.iv-row.iv-current {
+	border-color: var(--accent);
+	box-shadow: inset 3px 0 0 var(--accent);
+}
+.iv-rname {
+	font-weight: 600;
+}
+.iv-rmeta {
+	color: var(--text-dim);
+}
+.iv-rflag {
+	font-size: var(--iv-fs3);
+	line-height: var(--iv-lh3);
+	color: var(--amber-text);
+}
+
+.iv-main {
+	display: grid;
+	gap: 16px;
+	min-width: 0;
+}
+.iv-iname {
+	font-size: 20px;
+	line-height: 26px;
+	font-weight: 650;
+}
+.iv-decisions {
+	display: grid;
+	gap: 12px;
+}
+.iv-decisions h3 {
+	font-size: var(--iv-fs1);
+	line-height: var(--iv-lh1);
+	font-weight: 600;
+}
+.iv-count {
+	color: var(--text-dim);
+	font-weight: 400;
+}
+.iv-cards {
+	display: grid;
+	gap: 12px;
+}
+.iv-card {
+	display: grid;
+	gap: 10px;
+	padding: 16px;
+	border: 1px solid var(--border-soft);
+	border-radius: 12px;
+	background: var(--bg-elev);
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.iv-card.iv-flagged {
+	border-color: var(--iv-amber-line);
+}
+.iv-dtitle {
+	font-size: var(--iv-fs1);
+	line-height: var(--iv-lh1);
+	font-weight: 600;
+}
+.iv-who {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	align-items: center;
+}
+.iv-chip,
+.iv-type,
+.iv-you {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 1px 8px;
+	border-radius: 999px;
+	font-size: var(--iv-fs3);
+	line-height: var(--iv-lh3);
+}
+.iv-chip {
+	border: 1px solid var(--border);
+	background: var(--bg-elev2);
+}
+.iv-writer {
+	font-weight: 600;
+}
+.iv-you {
+	border: 1px solid color-mix(in srgb, var(--green) 50%, transparent);
+	background: var(--iv-green-tint);
+}
+.iv-type {
+	border: 1px solid var(--accent);
+	color: var(--link);
+	font-weight: 600;
+}
+.iv-flags {
+	display: grid;
+	gap: 4px;
+}
+.iv-flag {
+	padding: 6px 10px;
+	border: 1px solid var(--iv-amber-line);
+	border-radius: 8px;
+	background: var(--iv-amber-tint);
+	color: var(--amber-text);
+	font-size: var(--iv-fs3);
+	line-height: var(--iv-lh3);
+}
+.iv-order {
+	display: grid;
+	gap: 8px;
+}
+.iv-part {
+	padding: 8px 12px;
+	border-left: 3px solid var(--border);
+	background: var(--bg-elev2);
+	border-radius: 0 8px 8px 0;
+}
+.iv-part-owner {
+	border-left-color: var(--green);
+}
+.iv-plabel,
+.iv-slabel {
+	font-size: var(--iv-fs3);
+	line-height: var(--iv-lh3);
+	font-weight: 600;
+	color: var(--text-dim);
+}
+.iv-ptext {
+	white-space: pre-wrap;
+}
+.iv-fields {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 8px 16px;
+}
+.iv-phone .iv-fields {
+	grid-template-columns: minmax(0, 1fr);
+}
+.iv-field dt {
+	font-size: var(--iv-fs3);
+	line-height: var(--iv-lh3);
+	color: var(--text-dim);
+}
+.iv-ng {
+	color: var(--text-dim);
+	font-style: italic;
+}
+.iv-changes {
+	display: grid;
+	gap: 6px;
+}
+.iv-changes > ol {
+	display: grid;
+	gap: 8px;
+}
+.iv-change {
+	display: grid;
+	gap: 6px;
+	padding: 10px 12px;
+	border: 1px solid var(--border-soft);
+	border-radius: 10px;
+	background: var(--bg);
+}
+.iv-change.iv-flagged {
+	border-color: var(--iv-amber-line);
+}
+.iv-sources {
+	display: grid;
+	gap: 4px;
+}
+.iv-sources ul {
+	display: grid;
+	gap: 2px;
+}
+.iv-sources summary {
+	cursor: pointer;
+	width: fit-content;
+	line-height: 28px;
+	color: var(--link);
+	font-size: var(--iv-fs3);
+}
+/* Phone: every tap target at least 44 px tall. */
+.iv-phone .iv-src {
+	min-height: 44px;
+}
+.iv-phone .iv-perday summary,
+.iv-phone .iv-sources summary {
+	line-height: 44px;
+}
+.iv-src {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-height: 28px;
+	color: var(--link);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+.iv-srclabel {
+	overflow-wrap: anywhere;
+}
+.iv-more {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+	align-items: center;
+	color: var(--text-dim);
+}
+
+/* The source dialog. */
+.iv-dialog {
+	width: min(760px, calc(100vw - 32px));
+	max-height: calc(100vh - 48px);
+	padding: 20px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--bg-elev);
+	color: var(--text);
+	overflow-y: auto;
+	overflow-wrap: anywhere;
+}
+.iv-dialog::backdrop {
+	background: rgba(0, 0, 0, 0.55);
+}
+.iv-dialog > * + * {
+	margin-top: 12px;
+}
+.iv-dhead {
+	display: flex;
+	gap: 12px;
+	align-items: start;
+	justify-content: space-between;
+}
+.iv-dhead h2 {
+	font-size: var(--iv-fs1);
+	line-height: var(--iv-lh1);
+	font-weight: 600;
+}
+.iv-x {
+	display: inline-grid;
+	place-items: center;
+	width: 36px;
+	height: 36px;
+	border-radius: 8px;
+	flex: none;
+}
+.iv-x:hover {
+	background: var(--bg-elev2);
+}
+.iv-quotes {
+	display: grid;
+	gap: 4px;
+	padding-left: 12px;
+	border-left: 3px solid var(--accent);
+}
+.iv-record {
+	display: grid;
+	gap: 10px;
+}
+.iv-rtitle,
+.iv-qtext,
+.iv-olabel {
+	font-weight: 600;
+}
+.iv-q ul {
+	display: grid;
+	gap: 8px;
+	margin-top: 8px;
+}
+.iv-q li {
+	padding: 8px 12px;
+	border: 1px solid var(--border-soft);
+	border-radius: 8px;
+}
+.iv-q li.iv-picked {
+	border-color: var(--green);
+}
+.iv-q li .iv-you {
+	margin-left: 8px;
+}
+.iv-preview {
+	margin: 6px 0 0;
+	padding: 8px;
+	border-radius: 6px;
+	background: var(--bg);
+	white-space: pre-wrap;
+	font-size: var(--iv-fs3);
+	line-height: var(--iv-lh3);
+}
+.iv-a {
+	color: var(--link);
+	text-decoration: underline;
+}
+.iv-dfoot {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	justify-content: flex-end;
+}

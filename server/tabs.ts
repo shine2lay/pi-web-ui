@@ -20,7 +20,17 @@
  */
 
 /** Every tab that can be listed. `chat` is always on and is listed for symmetry. */
-export const ALL_TABS = ["chat", "terminal", "git", "search", "tasks", "settings", "plugins", "roles"] as const;
+export const ALL_TABS = [
+	"chat",
+	"terminal",
+	"git",
+	"search",
+	"tasks",
+	"settings",
+	"plugins",
+	"roles",
+	"initiatives",
+] as const;
 
 export type Tab = (typeof ALL_TABS)[number];
 
@@ -42,6 +52,8 @@ const OWNED: Partial<Record<Tab, readonly string[]>> = {
 	search: ["search_files", "search_sessions"],
 	// roles-overview: the Roles page (every role's TL;DR, queue and 6 am report) and its top bar count.
 	roles: ["roles_watch"],
+	// initiatives-page: the Initiatives tab (decisions per initiative) and a card's source record.
+	initiatives: ["initiatives_watch", "decision_record"],
 };
 
 /**

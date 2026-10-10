@@ -3393,16 +3393,20 @@ async function serverCmd(argv) {
 /**
  * decision-records (task #83): `decisions backfill [--from YYYY-MM-DD]` fills the running server's decision
  * records (<dataDir>/decisions/records.jsonl) from that day on (default 2026-10-03; safe to run again) and waits
- * for it; `decisions status` shows the records per day and source.
+ * for it; `decisions status` shows the records per day and source, and the decision reader's state (task #84);
+ * `decisions read [--max N]` has the reader read now, in the background, within its daily cap.
  */
 async function decisionsCmd(argv) {
 	const action = argv[0];
 	let from;
+	let maxArg;
 	const rest = [];
 	for (let i = 1; i < argv.length; i++) {
 		const a = argv[i];
 		if (a === "--from") from = argv[++i];
 		else if (a.startsWith("--from=")) from = a.slice("--from=".length);
+		else if (a === "--max") maxArg = argv[++i];
+		else if (a.startsWith("--max=")) maxArg = a.slice("--max=".length);
 		else rest.push(a);
 	}
 	const { opts } = parseFlags(rest);
@@ -3426,6 +3430,21 @@ async function decisionsCmd(argv) {
 		const total = sources.reduce((n, s) => n + sum[s], 0);
 		console.log(["total     ", ...sources.map((s) => String(sum[s]).padStart(8)), String(total).padStart(8)].join(" "));
 	};
+	// initiatives-page (task #84): the decision reader's state, in plain words.
+	const showReader = (d) => {
+		const r = d.reader;
+		if (!r) return;
+		const cap = r.dailyTokenCap.toLocaleString("en-US");
+		console.log(
+			`Reader: ${r.enabled ? "on" : "off"}${r.readingNow ? ", reading now" : ""}; model ${r.model}${r.lastModel ? ` (last used ${r.lastModel})` : ""}; ${d.decisions} decisions kept; ${r.unread} records not read yet.`,
+		);
+		console.log(
+			`Tokens today: ${r.tokensToday.toLocaleString("en-US")} of ${cap} a day${r.capHit ? " (stopped at the cap; it reads again tomorrow, or raise dailyTokenCap)" : ""}.`,
+		);
+		for (const [day, n] of Object.entries(r.tokensByDay || {}).sort())
+			console.log(`  ${day}: ${Number(n).toLocaleString("en-US")} tokens`);
+		if (r.lastError) console.log(`Last error (${new Date(r.lastError.at).toLocaleString()}): ${r.lastError.error}`);
+	};
 	if (action === "status") {
 		const st = await controlCommand(opts, "decisions_status");
 		if (!st) unreachable();
@@ -3436,6 +3455,19 @@ async function decisionsCmd(argv) {
 				`Backfill from ${b.from}: ${b.running ? "running" : "done"}, ${b.filesDone}/${b.filesTotal} chat files, added ${JSON.stringify(b.added)}${b.error ? `, error: ${b.error}` : ""}`,
 			);
 		showCounts(st.decisions);
+		showReader(st.decisions);
+		return;
+	}
+	if (action === "read") {
+		const max = maxArg !== undefined ? Number(maxArg) : undefined;
+		const st = await controlCommand(opts, "decisions_read", Number.isFinite(max) && max > 0 ? { maxBatches: max } : {});
+		if (!st) unreachable();
+		if (!st.ok) fail(st.error);
+		console.log(
+			st.decisions.started
+				? "The reader started reading now, in the background (within its daily cap). Follow it with: pi-web-ui decisions status"
+				: "The reader is reading already. Follow it with: pi-web-ui decisions status",
+		);
 		return;
 	}
 	if (action === "backfill") {
@@ -3461,7 +3493,9 @@ async function decisionsCmd(argv) {
 			return;
 		}
 	}
-	fail("Usage: pi-web-ui decisions backfill [--from YYYY-MM-DD] [--data-dir DIR] | pi-web-ui decisions status");
+	fail(
+		"Usage: pi-web-ui decisions backfill [--from YYYY-MM-DD] [--data-dir DIR] | pi-web-ui decisions status | pi-web-ui decisions read [--max N]",
+	);
 }
 
 async function main() {

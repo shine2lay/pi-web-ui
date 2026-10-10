@@ -336,6 +336,18 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		group: "views",
 		align: "start",
 	},
+	// initiatives-page: the Initiatives tab, next to Roles (each initiative's decisions and who made them).
+	{
+		id: "host:initiatives",
+		slot: "topbar.primary",
+		labelKey: "initiativesTab",
+		icon: "list",
+		kind: "view",
+		view: "initiatives",
+		order: 22.6,
+		group: "views",
+		align: "start",
+	},
 	// 插件面板（Chrome 扩展图标那个位置）：一个 🧩 入口列出全部已装插件，每行带「钉到顶栏」
 	// 开关。插件视图 tab 默认不钉（合成条目 hidden，见 withPluginViewItems），钉住的才回到
 	// 这里当 tab（order 23，紧跟本条目之前）。图标用 emoji 而不是词表名：词表名会被布局页
@@ -1751,7 +1763,7 @@ function placeTopbarPluginViews(entries: WorkingEntry[]): WorkingEntry[] {
 	if (views.length === 0) return entries;
 	const rest = entries.filter((entry) => !isPluginViewItem(entry));
 	const anchor =
-		["host:roles", "host:git", "host:terminal", "host:chat"]
+		["host:initiatives", "host:roles", "host:git", "host:terminal", "host:chat"]
 			.map((id) => rest.findIndex((entry) => entry.id === id))
 			.find((index) => index >= 0) ?? -1;
 	const panel = rest.findIndex((entry) => entry.id === "host:plugins");

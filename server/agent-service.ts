@@ -20,6 +20,7 @@ import { createRequire } from "node:module";
 import {
 	appendFileSync,
 	existsSync,
+	readdirSync,
 	readFileSync,
 	realpathSync,
 	renameSync,
@@ -91,7 +92,7 @@ import { messageCountOf } from "./message-count.js";
 import { carryOverToNewChat, freshChatModel } from "./new-chat-model.js";
 import { chatModelChoice, latestChatModelChoice, inModelChangeLane, type ModelChoice } from "./model-all-chats.js";
 import { defaultThinking, prepareLaunch, profileChoices, QueueLaunchRefused } from "./queue-profile.js";
-import type { UiTaskLaunch } from "./protocol.js";
+import type { UiDecisionRecordView, UiDecisionsPage, UiTaskLaunch } from "./protocol.js";
 import {
 	checkAll as checkAllUpdates,
 	collectTargets,
@@ -281,6 +282,12 @@ import { ClaimStore, matchClaims, mergeTouchSidecar, readTouchSidecar, removeTou
 import { makeClaimFilesTool, type ClaimFilesHost } from "./claim-files-tool.js";
 import { makeMessageRoleTool, type MessageRoleHost } from "./role-message-tool.js";
 import { makeBoardTool } from "./board-tool.js";
+import { type DecisionLogHost, makeDecisionLogTool } from "./decision-log-tool.js";
+import { isolatedDecisionModel } from "./decision-model.js";
+import { AnswerPreviews } from "./decision-previews.js";
+import { DecisionReader, readerStatus, type ReadResult } from "./decision-reader.js";
+import { DecisionStore } from "./decision-store.js";
+import { buildDecisionsPage, recordView } from "./decision-view.js";
 import {
 	BOARD_CUSTOM_TYPE,
 	boardChatState,
@@ -452,6 +459,7 @@ import {
 	boardRecord,
 	dayStart,
 	DECISIONS_DIR,
+	type DecisionRecord,
 	DecisionRecords,
 	messageRecord,
 	type NewDecisionRecord,
@@ -1952,6 +1960,8 @@ let roleBoardService: RoleBoard | null = null;
 let roleTurnSettled: ((file: string, rec: RoleTurnRecord) => void) | null = null;
 /** telegram-coo: the Roles page's snapshot for the roles_overview tool (AgentService.readRolesOverview). */
 let rolesOverviewSource: (() => Promise<UiRolesOverview>) | null = null;
+/** initiatives-page: the decisions store and the kept records, for the decision_log tool (AgentService sets it). */
+let decisionsService: Omit<DecisionLogHost, "sender"> | null = null;
 
 /** role-messages: the first text of a user message. */
 function firstUserText(m: AgentMessage): string | undefined {
@@ -3885,6 +3895,17 @@ export class ClientSession {
 
 	/** role-messages: message_role's host. The sender is this runtime's chat as the server knows it (its
 	 *  role, which chat, the depth of the role message it is handling), never what the model says. */
+	/** initiatives-page: decision_log's host: this chat's role (as message_role knows it), the store and records. */
+	private decisionLogHost(ownerId?: string): DecisionLogHost {
+		return {
+			sender: () => this.roleMessageHost(ownerId).sender(),
+			store: () => decisionsService?.store(),
+			record: (idOrRef) => decisionsService?.record(idOrRef),
+			records: (ids) => decisionsService?.records(ids) ?? new Map(),
+			changed: () => decisionsService?.changed(),
+		};
+	}
+
 	private roleMessageHost(ownerId?: string): MessageRoleHost {
 		const target = (): Conversation | undefined => {
 			try {
@@ -4912,6 +4933,9 @@ export class ClientSession {
 						service: () => roleBoardService ?? undefined,
 						sender: () => this.roleMessageHost(ownerId).sender(),
 					}),
+					// initiatives-page (task #84): roles list, add and correct the Initiatives page's decisions.
+					// Registered everywhere; it refuses chats without a role, as message_role does.
+					makeDecisionLogTool(this.decisionLogHost(ownerId)),
 					// telegram-coo: every role's state in one call, read-only (the Roles page's snapshot as text).
 					makeRolesOverviewTool({
 						read: () =>
@@ -15331,6 +15355,9 @@ export class AgentService {
 		this.decisions = new DecisionRecords(join(this.stateStore.dataDir, DECISIONS_DIR), {
 			log: (line) => console.log(line),
 		});
+		// initiatives-page (task #84): the decisions found in the records, the initiatives and the reader's state.
+		this.decisionStore = new DecisionStore(this.decisions.dir);
+		decisionsService = this.decisionLogService();
 		this.queueScanner = new QueueScanner(this.decisions, {
 			root: () => decisionsSessionsRoot(),
 			statePath: join(this.decisions.dir, SCAN_STATE_FILE),
@@ -15430,6 +15457,137 @@ export class AgentService {
 				);
 		});
 		this.queueScanner.start();
+		this.startDecisionReader();
+	}
+
+	// -----------------------------------------------------------------------
+	// initiatives-page (task #84): the decision reader (a small model reads new records in batches) and
+	// the Initiatives tab's data (decision-reader.ts, decision-who.ts, decision-view.ts)
+	// -----------------------------------------------------------------------
+
+	private readonly decisionStore: DecisionStore;
+	private decisionReader: DecisionReader | null = null;
+	private decisionReadNow: Promise<ReadResult> | null = null;
+	private decisionRecordsIndex: {
+		key: string;
+		byId: Map<string, DecisionRecord>;
+		byRef: Map<string, DecisionRecord>;
+	} | null = null;
+	/** index.ts: the Initiatives page changed (decisions, the reader's state). */
+	onDecisionsChanged: (() => void) | null = null;
+
+	/** The reader reads on its own timer (settings.json in the decisions folder: model, interval, daily cap). */
+	private startDecisionReader(): void {
+		if (this.decisionReader) return;
+		const previews = new AnswerPreviews(this.decisions.dir, decisionsSessionsRoot());
+		this.decisionReader = new DecisionReader({
+			records: this.decisions,
+			store: this.decisionStore,
+			model: isolatedDecisionModel({
+				cwd: this.decisions.dir,
+				agentDir: process.env.PI_CODING_AGENT_DIR ?? getAgentDir(),
+			}),
+			withPreviews: (rec) => previews.withPreviews(rec),
+			log: (line) => console.log(line),
+			onChange: () => this.onDecisionsChanged?.(),
+		});
+		this.decisionReader.start();
+	}
+
+	/** The kept records by id and by ref, read again only when the file changed. */
+	private keptRecords(): { byId: Map<string, DecisionRecord>; byRef: Map<string, DecisionRecord> } {
+		let key = "none";
+		try {
+			const st = statSync(this.decisions.file);
+			key = `${st.size}:${st.mtimeMs}`;
+		} catch {
+			/* nothing kept yet */
+		}
+		if (this.decisionRecordsIndex?.key === key) return this.decisionRecordsIndex;
+		const list = this.decisions.list();
+		const byId = new Map(list.map((r) => [r.id, r] as const));
+		const byRef = new Map<string, DecisionRecord>();
+		for (const r of list) if (!byRef.has(r.ref)) byRef.set(r.ref, r);
+		this.decisionRecordsIndex = { key, byId, byRef };
+		return this.decisionRecordsIndex;
+	}
+
+	private keptRecord(idOrRef: string): DecisionRecord | undefined {
+		const { byId, byRef } = this.keptRecords();
+		return byId.get(idOrRef) ?? byRef.get(idOrRef);
+	}
+
+	/** The Initiatives tab: the initiatives with their counts, the reader's state, and one initiative's
+	 *  decisions ("" = Unfiled; left out = the first initiative), newest first, at most limit. */
+	initiativesPage(initiative?: string, limit = 200): UiDecisionsPage {
+		const store = this.decisionStore;
+		const sel = initiative ?? store.initiatives()[0]?.id ?? "";
+		const { byId } = this.keptRecords();
+		const reader = readerStatus(store, undefined);
+		// Unread from the cached records (the reader's own count reads the whole file).
+		const from = dayStart(store.settings().readFrom) ?? 0;
+		const read = store.readerState().read;
+		let unread = 0;
+		for (const r of byId.values()) if (r.at >= from && !read[r.id]) unread++;
+		reader.unread = unread;
+		return buildDecisionsPage(store, byId, reader, { initiative: sel, limit: Math.max(1, Math.min(limit, 2000)) });
+	}
+
+	/** One kept record a card cites, with the chat to open when its file still exists. */
+	decisionRecordView(idOrRef: string): UiDecisionRecordView | undefined {
+		const rec = this.keptRecord(idOrRef);
+		if (!rec) return undefined;
+		const path = rec.file ? this.decisionChatPath(rec.file) : undefined;
+		return recordView(rec, { path, title: path ? this.decisionChatTitles.get(path) : undefined });
+	}
+
+	/** A chat file's full path by its name (records keep the name only). */
+	private decisionChatPath(file: string): string | undefined {
+		if (!/^[\w.-]+\.jsonl$/.test(file)) return undefined;
+		const root = decisionsSessionsRoot();
+		try {
+			for (const dir of readdirSync(root)) {
+				const p = join(root, dir, file);
+				if (existsSync(p)) return p;
+			}
+		} catch {
+			/* no chats folder */
+		}
+		return undefined;
+	}
+
+	/** decision_log's view of the store and the kept records (the tool lives in each chat's ClientSession). */
+	private decisionLogService(): Omit<DecisionLogHost, "sender"> {
+		return {
+			store: () => this.decisionStore,
+			record: (idOrRef) => this.keptRecord(idOrRef),
+			records: (ids) => {
+				const { byId } = this.keptRecords();
+				const out = new Map<string, DecisionRecord>();
+				for (const id of ids) {
+					const r = byId.get(id);
+					if (r) out.set(id, r);
+				}
+				return out;
+			},
+			changed: () => this.onDecisionsChanged?.(),
+		};
+	}
+
+	/** Control socket decisions_read: read now, in the background (at most maxBatches calls), within the
+	 *  settings (the daily cap holds); decisions_status shows how it goes. */
+	decisionsRead(maxBatches?: unknown): { ok: true; started: boolean } | { ok: false; error: string } {
+		if (!this.decisionReader) return { ok: false, error: "the reader hasn't started yet" };
+		if (this.decisionReadNow) return { ok: true, started: false };
+		const n = typeof maxBatches === "number" && maxBatches > 0 ? Math.floor(maxBatches) : undefined;
+		this.decisionReadNow = this.decisionReader.readAll(n ? { maxBatches: n } : {});
+		void this.decisionReadNow
+			.then((r) => console.log(`[decisions] read now: ${JSON.stringify(r)}`))
+			.catch((err) => console.error("[decisions] read now failed:", (err as Error).message))
+			.finally(() => {
+				this.decisionReadNow = null;
+			});
+		return { ok: true, started: true };
 	}
 
 	/** Each chat file's role (pi-identity), and the chats' titles for the records. */
@@ -15491,8 +15649,17 @@ export class AgentService {
 		file: string;
 		backfill: BackfillProgress | null;
 		counts: Record<string, Partial<Record<string, number>>>;
+		reader: ReturnType<typeof readerStatus> & { readingNow: boolean };
+		decisions: number;
 	} {
-		return { file: this.decisions.file, backfill: this.decisionBackfill, counts: this.decisions.counts() };
+		const reader = readerStatus(this.decisionStore, this.decisionReader ?? undefined);
+		return {
+			file: this.decisions.file,
+			backfill: this.decisionBackfill,
+			counts: this.decisions.counts(),
+			reader: { ...reader, readingNow: !!this.decisionReadNow },
+			decisions: this.decisionStore.decisions().length,
+		};
 	}
 
 	// -----------------------------------------------------------------------
@@ -17280,6 +17447,8 @@ export class AgentService {
 		this.roleBoard.stop();
 		if (roleBoardService === this.roleBoard) roleBoardService = null;
 		this.queueScanner.stop();
+		this.decisionReader?.stop();
+		decisionsService = null;
 		this.stopDecisionAnswers?.();
 		this.stopDecisionAnswers = null;
 		this.participants.dispose();

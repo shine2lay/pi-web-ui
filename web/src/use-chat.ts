@@ -76,6 +76,7 @@ import {
 } from "./notebook-state";
 import { receiveSubsLimits, requestSubsLimits } from "./subs-limits-state";
 import { receiveBoardResult, receiveRoles, resendRolesWatch } from "./roles-state";
+import { receiveDecisionRecord, receiveInitiatives, resendInitiativesWatch } from "./initiatives-state";
 import { emitPluginData } from "./plugin-loader";
 import { ingestPluginLogsData } from "./plugin-logs";
 import { resolveCatalogSyncResult } from "./plugin-host";
@@ -1764,6 +1765,8 @@ export function useChat() {
 					resendNotebookWatch();
 					// roles-overview: the Roles page / top bar count watch is per socket too.
 					resendRolesWatch();
+					// initiatives-page: so is the Initiatives tab's.
+					resendInitiativesWatch();
 					// subs-limits-box: the Limits box needs the readings (and whether a check runs) again.
 					requestSubsLimits();
 					// optimistic-send: ask what became of the sends still shown as "Sending" (after the
@@ -2073,6 +2076,14 @@ export function useChat() {
 				case "board_result":
 					// board: the answer to the Board view's post or close (roles-state.ts).
 					receiveBoardResult(msg);
+					break;
+				case "initiatives":
+					// initiatives-page: the Initiatives tab's page (initiatives-state.ts).
+					receiveInitiatives(msg);
+					break;
+				case "decision_record":
+					// initiatives-page: a card's source record.
+					receiveDecisionRecord(msg);
 					break;
 				case "identity_file":
 					receiveIdentityFile(msg);

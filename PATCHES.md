@@ -119,6 +119,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | faint-contrast               | `local` | `web/src/styles.css` (`:root` `--text-faint`, new `--text-disabled`, five `:disabled` rules), `make-light-theme.mjs` (White palette, `--text-disabled` fallback, `CLASSIC_LIGHT_NOTICE`), `themes/*.css` (regenerated; Translucent / Transparent and the six hand-made themes by hand), `tests/faint-contrast-test.mjs` (new), `tests/unit/faint-contrast.test.ts` (new) |
 | quiet-turns                  | `local` | `server/quiet-turns.ts` (new), `agent-service.ts`, `role-messages.ts`, `role-board.ts`, `protocol.ts`, `client-state.ts`, `settings-service.ts`, `index.ts`, `web/src/quiet-turns.ts` (new), `MessageList.tsx`, `RoleMessageRow.tsx`, `SettingsModal.tsx`, `App.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `docs/roles-overview.md`, `tests/quiet-turns-test.mjs` (new), `tests/unit/quiet-turns.test.ts` (new) |
 | accent-contrast              | `local` | `web/src/styles.css` (`:root` `--accent-text`, `--accent-fill`, `--accent-fill-hover`, `--amber-fg`; 148 text rules, the accent fills under white text), `model-management.css`, `exchange-fold.css`, `ToolApprovalDialog.tsx`, `RollbackDialog.tsx`, `ModelConfigModal.tsx`, `plugins/db-client`, `plugins/vscode-editor`, `make-light-theme.mjs` (identity tokens, White `--amber-fg`), `themes/*.css`, `tests/faint-contrast-test.mjs` (pins gone, live-queue fixture), `tests/accent-contrast-test.mjs` (new), `tests/unit/accent-contrast.test.ts` (new) |
+| initiatives-page             | `local` | `server/decision-reader.ts`, `decision-model.ts`, `decision-who.ts`, `decision-store.ts`, `decision-view.ts`, `decision-log-tool.ts`, `decision-previews.ts`, `initiatives-watch.ts` (all new), `agent-service.ts`, `index.ts`, `control-socket.ts`, `protocol.ts`, `protocol-version.ts`, `tabs.ts`, `tool-manager.ts`, `asks.ts`, `decision-records.ts`, `bin/pi-web-ui.mjs` (`decisions read`), `web/src/components/InitiativesView.tsx`, `initiatives-state.ts`, `initiatives-view-model.ts`, `initiatives-view.css` (new), `App.tsx`, `TopBar.tsx`, `ui-slots.ts`, `use-chat.ts`, `open-chat-link.ts`, `i18n.tsx`, `locales/*.json`, `tests/unit/decision-reader.test.ts`, `decision-who.test.ts`, `initiatives-view.test.ts`, `tests/initiatives-page-test.mjs` (new), `tests/unit/ui-slots.test.ts`, `tool-registration.test.ts`, `docs/initiatives-page.md` (new) |
 
 ---
 
@@ -5990,3 +5991,80 @@ Display and hint text only: no transcript line changes, Telegram, caps and routi
   "[Queue]" done notice of pi-queue or the scheduler's "[Scheduled task" prefix change, change
   `starterOf` in `server/quiet-turns.ts` (its unit tests build the texts with the server's functions).
 - Keep the quiet plan pure (types only from `protocol.ts`): the page bundles it.
+
+## initiatives-page
+
+**Status**: `local`
+**Baseline**: v0.96.1 (on top of `decision-records`, `roles-overview`, `role-board`, `asks`)
+
+**Why** (queue task #84, owner-approved plan; Data rm-541b44a1, rm-3bbf8e94; the owner picked "A small model
+reads each record"): the owner approved things without seeing their impact. One page, per initiative, shows
+every design decision and its later changes, who really decided (as two facts, never a merged "who"), and
+what it costs him. Task #85 adds the lead's Progress section above Decisions.
+
+### Changes
+
+1. **The reader** (`server/decision-reader.ts` new): reads #83's records (`records.jsonl`) in batches (12
+   records / 12,000 characters) every few minutes. Each batch is one isolated call with no tools
+   (`decision-model.ts`, like plugin-llm), on the cheapest Claude model of the chat pool (`model: "auto"`)
+   with medium thinking. Per record: not a decision, a new decision (initiative, title, what, quotes for
+   impact / options / until when), a change of a known one (reversed, widened, limit raised or moved,
+   re-recorded as the owner's, end condition added, changed or dropped), or the same one said again; plus
+   verbatim quotes per point, whether the wording claims the owner decided, and for a dialog answer whether
+   the point is the option's main choice or a rider. JSON checked against a schema; a quote not found word
+   for word is flagged. Filing: the record's tag, then the initiatives' markers, then the model's guess;
+   else Unfiled (nothing dropped). A plan change whose last version was read is shown as the lines changed
+   (only when shorter); a done note written to two chat files is read once. A rate-limit refusal rests that
+   account for an hour and the batch moves to the next pool member (all resting = stops, says so). Daily
+   token cap (default 2,000,000); at the cap it stops and the page says so; tokens per day kept. Nothing
+   sent to the model is logged: counts, sizes, the model and errors only.
+2. **Off until switched on**: `settings.json` `enabled` defaults to false, so an install never starts
+   reading days of records by itself; the owner chooses when (task #84).
+3. **Who decided** (`server/decision-who.ts` new; Data's conditions 1-3), from metadata only: writer (the
+   chat's role for plans and dialogs, the sender, the poster; the owner only for his dialog pick / typed
+   text and an order's ownerWords) and approval kind (auto-approved plan, plan approved in a dialog, pick
+   in a dialog, order, message, Board news, task done note, a role's question, a role's entry). "You" only
+   when an owner record holds the point's quote word for word (the picked option's label, description or
+   preview, what he typed, ownerWords) or a plan he approved in a dialog ("<role> proposed, you
+   approved"). Flags: a rider inside the option he picked ("<role>'s choice, inside the option you
+   picked"), a role's wording saying he decided with no owner record behind it, an order point only in the
+   relayer's text, a quote not found. The model can take "you" away, never grant it.
+4. **Store** (`server/decision-store.ts` new): `<dataDir>/decisions/decisions.json` (decisions, changes,
+   sources, owner fields, who added each), `initiatives.json` (id, name, markers, lead = null for #85;
+   seeded with team-in-temper from Data's METHOD.md markers), `settings.json`, `reader-state.json`.
+5. **Option previews** (`asks.ts`, `decision-records.ts`, `decision-previews.ts` new): answer records keep
+   each option's preview from now on; older ones get it from the dialog's own chat line the record cites
+   (live chat files only, read-only, cached in `previews.json`).
+6. **`decision_log` tool** (`decision-log-tool.ts` new, registered for every chat, refused without a
+   role): list, add (a decision or change that lived only in files, notes or code, with a link), fill
+   (impact, options + cost, until when), refile, not_decision (and restore), add_initiative. Entries show
+   who added them; a role's entry can point to an owner record, which the who rules then check, and never
+   shows "you" on its own say-so.
+7. **The page**: top-bar tab "Initiatives" next to Roles (`?view=initiatives`). Initiative list with
+   counts, entries without impact, entries with a credit flag; per initiative a Decisions section of cards,
+   newest first: the what, writer and approval chips, flags in plain words, an order's "Your words" and
+   "<relayer>'s text", the three owner fields or "not given", changes in time order with a type chip and
+   their own who chips, sources that open the record (and its chat) in a dialog. Reader status line,
+   tokens per day. Protocol 47: `initiatives_watch` / `initiatives_unwatch` / `decision_record` and the
+   `initiatives` page push (`server/initiatives-watch.ts`). i18n in all locales.
+8. **CLI / control socket**: `pi-web-ui decisions status` shows the reader too; `pi-web-ui decisions read
+   [--max N]` (control socket `decisions_read`) has it read now, within its cap and only when switched on.
+
+### How it was checked
+
+- Unit: `tests/unit/decision-reader.test.ts` (fake model: batching, schema, quotes, cap, retries, limit
+  hop, plan deltas, copies, off by default), `decision-who.test.ts` (the 7 credit-conflict record shapes
+  E01 E02 E03 E07 E20 E21 E60, "proposed, you approved", an order point only in the relayer's text, a
+  role's claim, a quote not word for word; each fails without its rule), `initiatives-view.test.ts`.
+- Stage test with the real model (AGENTS.md rule 16), outside the repo:
+  `~/company-lab/shared/decisions-page-replay-2026-10-10/STAGE-TEST.md` (30 fixed records, answers'
+  sha256 noted before run 1, 14 rounds; round 14 met the bar).
+- E2E `tests/initiatives-page-test.mjs` (sealed): desktop + phone, dark + white, keyboard, axe, contrast,
+  targets, source dialog, opening the chat without changing its bytes.
+
+### When syncing
+
+- If `ask_user_question`'s option shape or `askUser`'s answered event change, change `answerRecord` and
+  `decision-previews.ts`.
+- If pi-multi-pass's pool file (`multi-pass.json`) changes shape, change `claudePoolMembers`.
+- If plugin-llm's isolated session call changes, change `decision-model.ts` the same way.

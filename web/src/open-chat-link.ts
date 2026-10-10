@@ -10,7 +10,9 @@ let pending: string | null = null;
 /** roles-overview: `&focus=tldr:<id>|task:<n>|question:<id>|report:<day>` with `?chat=`: the item to show. */
 let pendingFocus: string | null = null;
 /** roles-overview: `?view=roles` (and `#r-<role id>`): open the Roles page (at that role). */
-let pendingView: { view: "roles"; role?: string } | null = null;
+let pendingView: ViewLink | null = null;
+/** initiatives-page: `?view=initiatives` opens the Initiatives tab. */
+export type ViewLink = { view: "roles"; role?: string } | { view: "initiatives" };
 
 /** Take `?chat=` (and `&focus=`) and `?view=roles` off the address bar and remember them. Call once at startup. */
 export function initChatLink(): void {
@@ -28,7 +30,7 @@ export function initChatLink(): void {
 				const m = /^#r-([a-z0-9][a-z0-9-]{0,63})$/i.exec(url.hash);
 				pendingView = { view: "roles", ...(m ? { role: m[1].toLowerCase() } : {}) };
 				if (m) url.hash = "";
-			}
+			} else if (view.trim().toLowerCase() === "initiatives") pendingView = { view: "initiatives" };
 		}
 		window.history.replaceState(window.history.state, "", url.toString());
 		if (value !== null) {
@@ -55,7 +57,7 @@ export function takeChatFocusLink(): string | null {
 }
 
 /** roles-overview: the page a link asked for (`?view=roles`, maybe at `#r-<id>`), once. */
-export function takeViewLink(): { view: "roles"; role?: string } | null {
+export function takeViewLink(): ViewLink | null {
 	const v = pendingView;
 	pendingView = null;
 	return v;

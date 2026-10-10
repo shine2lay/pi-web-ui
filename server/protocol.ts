@@ -1643,6 +1643,13 @@ export type ClientMessage =
 	 *  the top bar (count); roles_unwatch stops them. */
 	| { type: "roles_watch"; full: boolean }
 	| { type: "roles_unwatch" }
+	/** initiatives-page: the Initiatives tab wants its page and its updates: the initiatives with their
+	 *  counts, the reader's state, and one initiative's decisions ("" = Unfiled; left out = the first
+	 *  initiative), newest first, at most limit; initiatives_unwatch stops them. */
+	| { type: "initiatives_watch"; initiative?: string; limit?: number }
+	| { type: "initiatives_unwatch" }
+	/** initiatives-page: one kept record a card cites, in full (answered with decision_record). */
+	| { type: "decision_record"; record: string }
 	/** Read an identity's about.md / notebook.md (answered with `identity_file`). */
 	| { type: "identity_file_get"; id: string; file: IdentityFileName }
 	/** Save a whole about.md / notebook.md (answered with `identity_file_saved`). baseHash = the hash from
@@ -1959,6 +1966,207 @@ export interface UiRoleBoardOrder {
 	at: number;
 	from: string;
 	via?: string;
+}
+
+// ---------------------------------------------------------------------------------------------
+// initiatives-page (task #84): per initiative, the decisions in the records and their changes, who
+// decided (the writing role and the approval kind, two facts), and what they cost the owner
+// ---------------------------------------------------------------------------------------------
+
+/** How a point reached the records: an auto-approved plan, a plan he approved in a dialog, his pick in a
+ *  dialog, a role's question he didn't pick from, his order, a message, Board news, a task's done note,
+ *  an entry a role added with decision_log. */
+export type UiApprovalKind =
+	| "auto-plan"
+	| "dialog-plan"
+	| "dialog-pick"
+	| "dialog-question"
+	| "order"
+	| "message"
+	| "board-news"
+	| "task-report"
+	| "role-entry";
+
+/** A credit flag: a rider inside the option he picked; a role's wording says he decided while no record of
+ *  his backs it; the quote isn't in the record word for word. */
+export type UiWhoFlag = "rider" | "claims-owner" | "quote-not-found";
+
+export type UiDecisionChangeType =
+	| "reversed"
+	| "widened"
+	| "limit-raised"
+	| "limit-moved"
+	| "re-recorded"
+	| "end-added"
+	| "end-changed"
+	| "end-dropped"
+	| "other";
+
+/** One record (or a role's entry) a decision or change came from, with who decided by its metadata. */
+export interface UiDecisionSource {
+	/** The kept record's id (dr-…); absent for a role's entry with only a link. */
+	record?: string;
+	ref?: string;
+	link?: string;
+	at: number;
+	kind: "message" | "board" | "answer" | "plan" | "role";
+	/** The role that wrote it, or "owner" for his own words. */
+	writer: string;
+	approval: UiApprovalKind;
+	/** The role that proposed what he approved, or asked the question. */
+	role?: string;
+	/** An order's relaying role. */
+	relayer?: string;
+	/** Backed by his own record (his pick, what he typed, an order's own words, a plan he approved). */
+	you: boolean;
+	flags: UiWhoFlag[];
+	quotes: string[];
+	/** Who filed it: "reader" (the model), "seed", or a role's id (decision_log). */
+	by: string;
+	/** It only says the decision again. */
+	same?: boolean;
+	/** The chat file it came from (basename). */
+	file?: string;
+	/** An order: his own words and the relayer's text, two labelled parts. */
+	order?: { ownerWords: string; relayerText: string; title?: string };
+	/** One line naming the record. */
+	label?: string;
+}
+
+/** impact, other options and their cost, until when: given (by the reader from the record, or a role). */
+export interface UiOwnerField {
+	text: string;
+	by: string;
+}
+
+export interface UiDecisionChange {
+	id: string;
+	type: UiDecisionChangeType;
+	what: string;
+	at: number;
+	until?: UiOwnerField;
+	impact?: UiOwnerField;
+	sources: UiDecisionSource[];
+	/** The source whose labels head the change (index into sources). */
+	head: number;
+	you: boolean;
+	flags: UiWhoFlag[];
+	by: string;
+	notDecision?: boolean;
+}
+
+export interface UiDecision {
+	id: string;
+	initiative: string | null;
+	/** How it was filed: "tag", "marker", "reader", a role's id, or "" (unfiled). */
+	filedBy: string;
+	/** Other initiatives whose records changed or restated it; it is listed under them too. */
+	alsoIn?: string[];
+	title: string;
+	what: string;
+	at: number;
+	/** Its newest change, or itself. */
+	lastAt: number;
+	impact?: UiOwnerField;
+	options?: UiOwnerField;
+	until?: UiOwnerField;
+	sources: UiDecisionSource[];
+	head: number;
+	you: boolean;
+	flags: UiWhoFlag[];
+	/** Its changes, oldest first. */
+	changes: UiDecisionChange[];
+	by: string;
+	notDecision?: boolean;
+}
+
+export interface UiInitiativeRow {
+	/** "" = Unfiled. */
+	id: string;
+	name: string;
+	/** The lead role (task #85 sets it). */
+	lead: string | null;
+	decisions: number;
+	changes: number;
+	/** Entries (decisions and changes) without an impact for the owner. */
+	noImpact: number;
+	/** Entries carrying a credit flag (a role says he decided, or a rider in his pick). */
+	credit: number;
+	lastAt: number;
+}
+
+export interface UiReaderStatus {
+	enabled: boolean;
+	/** The setting ("auto" = the cheapest Claude model of the chat pool). */
+	model: string;
+	/** The model the last call used. */
+	lastModel: string | null;
+	dailyTokenCap: number;
+	tokensToday: number;
+	/** It stopped at the cap today. */
+	capHit: boolean;
+	/** Tokens per local day. */
+	tokensByDay: Record<string, number>;
+	/** Records it hasn't read yet. */
+	unread: number;
+	lastRun: number | null;
+	lastError: { at: number; error: string } | null;
+}
+
+export interface UiDecisionsPage {
+	initiatives: UiInitiativeRow[];
+	unfiled: UiInitiativeRow;
+	/** Whose decisions `decisions` holds: an initiative's id, "" = Unfiled, absent = all. */
+	selected?: string;
+	/** The selected decisions, newest first (at most the watch's limit of total). */
+	decisions: UiDecision[];
+	total: number;
+	reader: UiReaderStatus;
+	/** Entries per local day (decisions + changes). */
+	perDay: Record<string, number>;
+}
+
+/** One kept record as a card's source dialog shows it. */
+export interface UiDecisionRecordView {
+	id: string;
+	source: "message" | "board" | "answer" | "plan";
+	at: number;
+	from: string;
+	to?: string;
+	ref: string;
+	/** A message's or a post's kind (request, fyi, order, news, …). */
+	kind?: string;
+	title?: string;
+	text?: string;
+	ownerWords?: string;
+	via?: string;
+	/** The role of the chat it came from. */
+	chat?: string;
+	task?: number;
+	op?: string;
+	approval?: string;
+	plan?: {
+		title?: string;
+		goal?: string;
+		doneWhen?: string;
+		decided?: string;
+		steps?: string;
+		verify?: string;
+		mustNot?: string;
+	};
+	summary?: string;
+	questions?: {
+		id: string;
+		header?: string;
+		question: string;
+		detail?: string;
+		options: { label: string; description?: string; preview?: string }[];
+		picked: string[];
+		typed?: string;
+	}[];
+	/** The chat to open (full path), when its file still exists. */
+	chatPath?: string;
+	chatTitle?: string;
 }
 
 /** roles-overview: the Roles page's snapshot. */
@@ -4126,6 +4334,11 @@ export type ServerMessage =
 	/** roles-overview: the snapshot (full watchers), or just the open asks' count (count watchers);
 	 *  error: it couldn't be made (the page keeps what it had). */
 	| { type: "roles"; overview?: UiRolesOverview; asks: number; error?: string; checkedAt?: number }
+	/** initiatives-page: the Initiatives tab's page (watchers get it again when it changes); error: it
+	 *  couldn't be made (the page keeps what it had). */
+	| { type: "initiatives"; page?: UiDecisionsPage; error?: string }
+	/** initiatives-page: one record a card cites; error when it isn't kept. */
+	| { type: "decision_record"; record: string; view?: UiDecisionRecordView; error?: string }
 	/** board: what a board_post / board_close did. ok false: error says why (nothing changed). For a post:
 	 *  id, the roles it reached directly (direct) and the ones that read it at their next turn (later). */
 	| {

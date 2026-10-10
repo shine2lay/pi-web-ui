@@ -99,6 +99,7 @@ import {
 } from "./identity-roles.js";
 import { NotebookWatch } from "./notebook-watch.js";
 import { RolesWatch } from "./roles-overview.js";
+import { InitiativesWatch } from "./initiatives-watch.js";
 import { SubsLimitsHub, limitsFilePath } from "./subs-limits.js";
 import { initHttpProxy } from "./http-proxy.js";
 import { globalLspPool } from "./lsp-tool.js";
@@ -114,6 +115,8 @@ import type {
 	ServerMessage,
 	UiRoleMessageRow,
 	UiRolesOverview,
+	UiDecisionsPage,
+	UiDecisionRecordView,
 	UiServiceInfo,
 	UiSubagentTemplate,
 } from "./protocol.js";
@@ -1420,6 +1423,12 @@ export interface EngineService {
 	boardClose?(id: unknown, note: unknown): BoardChangeResult;
 	/** board (pi engine): set by index.ts; the board changed. */
 	onBoardChanged?: (() => void) | null;
+	/** initiatives-page (pi engine): the Initiatives tab's page, for one initiative ("" = Unfiled). */
+	initiativesPage?(initiative?: string, limit?: number): UiDecisionsPage;
+	/** initiatives-page (pi engine): one kept record a card cites. */
+	decisionRecordView?(idOrRef: string): UiDecisionRecordView | undefined;
+	/** initiatives-page (pi engine): set by index.ts; the decisions or the reader changed. */
+	onDecisionsChanged?: (() => void) | null;
 	noteSocketOpen(): void;
 	noteSocketClose(): void;
 	isQuiesced(): boolean;
@@ -1989,6 +1998,15 @@ const subsLimits = new SubsLimitsHub({
 		}
 	},
 });
+
+/** initiatives-page: the Initiatives tab, per window (each with its own pick of initiative). */
+const initiativesWatch = new InitiativesWatch<object>(
+	(initiative, limit) => {
+		if (!service.initiativesPage) throw new Error("this engine has no Initiatives page");
+		return service.initiativesPage(initiative, limit);
+	},
+	{ log: (line) => console.log(line) },
+);
 
 /** roles-overview: the Roles page (everything) and every top bar (the count of asks), per window. */
 const rolesWatch = new RolesWatch<object>(
@@ -2574,6 +2592,24 @@ wss.on("connection", (ws) => {
 			case "roles_unwatch":
 				rolesWatch.drop(ws);
 				break;
+			case "initiatives_watch":
+				// initiatives-page: the Initiatives tab opened, or picked another initiative.
+				initiativesWatch.watch(ws, { initiative: msg.initiative, limit: msg.limit }, send);
+				break;
+			case "initiatives_unwatch":
+				initiativesWatch.drop(ws);
+				break;
+			case "decision_record": {
+				// initiatives-page: a card's source, in full (read-only).
+				const id = typeof msg.record === "string" ? msg.record.slice(0, 400) : "";
+				const view = id ? service.decisionRecordView?.(id) : undefined;
+				send(
+					view
+						? { type: "decision_record", record: id, view }
+						: { type: "decision_record", record: id, error: "That record isn't kept here." },
+				);
+				break;
+			}
 			case "board_post": {
 				// board: the owner posts from the Roles page's Board view (this socket is his, like every owner
 				// action here). Every Roles page follows the board through the change hook.
@@ -3997,6 +4033,7 @@ wss.on("connection", (ws) => {
 		removePluginSender();
 		notebookWatch.drop(ws);
 		rolesWatch.drop(ws);
+		initiativesWatch.drop(ws);
 		if (snapshotRetryTimer) {
 			clearTimeout(snapshotRetryTimer);
 			snapshotRetryTimer = null;
@@ -4045,6 +4082,8 @@ service.onRoleMessagesChanged = () => {
 };
 // board: the Roles page's Board view (and each role's open orders) follows the board.
 service.onBoardChanged = () => rolesWatch.poke();
+// initiatives-page: the Initiatives tab follows the decisions and the reader.
+service.onDecisionsChanged = () => initiativesWatch.poke();
 // subs-limits-box: the channel pi-multi-pass joins when a chat loads it (and the file, until then).
 subsLimits.start();
 

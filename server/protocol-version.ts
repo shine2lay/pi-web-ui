@@ -76,4 +76,7 @@
 // 46: queue-why - a waiting task's open afters in its own queue carry how each stands (waitingForRefs:
 //     status, held). Additive: an old page ignores it (and shows the plain after line); an old server
 //     never sends it (the new page shows the states it has: other queues' refs).
-export const PROTOCOL_VERSION = 46;
+// 47: initiatives-page - the Initiatives tab: initiatives_watch / initiatives_unwatch and the initiatives
+//     page (decisions, who decided, reader status), decision_record for a card's source. An old page has no
+//     Initiatives tab; an old server never answers initiatives_watch.
+export const PROTOCOL_VERSION = 47;

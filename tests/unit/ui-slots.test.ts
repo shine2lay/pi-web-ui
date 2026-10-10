@@ -120,6 +120,7 @@ describe("BUILTIN_UI_ITEMS（宿主默认）", () => {
 				"host:terminal",
 				"host:git",
 				"host:roles",
+				"host:initiatives",
 				"host:search",
 				"host:browser",
 				"host:tasks",
@@ -157,6 +158,7 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:terminal",
 			"host:git",
 			"host:roles",
+			"host:initiatives",
 			"host:plugins",
 			"host:search",
 			"host:browser",
@@ -220,7 +222,7 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 	 *  塞进 uiOverflow → 菜单里能点；topbar-crowding：声音/语言/主题/版本在菜单里是一行入口，
 	 *  点开右侧抽屉，功能不少）。
 	 *  这条断言是「顶栏默认长什么样」的唯一入口 —— 想改默认口径就改这里与 BUILTIN_UI_ITEMS。 */
-	it("缺省收进「⋯」的 6 条 + 常驻的 11 条", () => {
+	it("缺省收进「⋯」的 6 条 + 常驻的 12 条", () => {
 		const slots = build([]);
 		const top = slots["topbar.primary"];
 		// topbar-crowding：后台任务与设置也缺省收进「⋯」
@@ -241,6 +243,7 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:terminal",
 			"host:git",
 			"host:roles",
+			"host:initiatives",
 			"host:plugins",
 			"host:search",
 			"host:new-chat",
@@ -257,7 +260,7 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 	it("按角色分位置：视图三连 + 🧩 靠左，搜索与新建对话靠右", () => {
 		const top = build([])["topbar.primary"];
 		const alignOf = (id: string) => top.find((e) => e.id === id)?.align;
-		for (const id of ["host:chat", "host:terminal", "host:git", "host:roles", "host:plugins"])
+		for (const id of ["host:chat", "host:terminal", "host:git", "host:roles", "host:initiatives", "host:plugins"])
 			expect(alignOf(id)).toBe("start");
 		for (const id of ["host:search", "host:new-chat"]) expect(alignOf(id)).toBe("end");
 	});
