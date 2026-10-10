@@ -2,7 +2,7 @@
  * decision-records (task #83): the store (server/decision-records.ts), each live hook (role message sent,
  * Board post, the owner's answer, the queue scanner), the initiative tag, and the backfill on fixtures.
  */
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -704,5 +704,13 @@ describe("backfill", () => {
 			text: "Carries.",
 		});
 		expect(parseDeliveredRoleMessage("hello")).toBeUndefined();
+	});
+});
+
+describe("the decisions command line", () => {
+	// The global pi-web-ui links to this file; git rewrites it with its recorded mode on every change.
+	it("bin/pi-web-ui.mjs can be run (mode 100755 in git)", () => {
+		const bin = new URL("../../bin/pi-web-ui.mjs", import.meta.url);
+		expect(statSync(bin).mode & 0o111).toBe(0o111);
 	});
 });

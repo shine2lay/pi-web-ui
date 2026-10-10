@@ -5729,6 +5729,10 @@ This part only collects; the page comes later. No model calls.
    `role-board.json`, and every transcript: queue entries, `ask_user_question` calls with their answers,
    `message_role` calls with their results (messages older than the 1,000), and delivered copies of
    messages (a turn's prompt or an fyi note, `custom_message` "role-message"), earliest copy wins.
+5. **`bin/pi-web-ui.mjs` is mode 100755 in git.** The global `pi-web-ui` links to this clone's file, and git
+   rewrites a changed file with its recorded mode: upstream records 100644, so the first change to the file
+   since `npm link` (this patch's `decisions` command, 2026-10-10) left `pi-web-ui` failing with
+   "Permission denied". The service runs it through `node`, so only the command line was hit.
 
 ### How it was checked
 
@@ -5736,7 +5740,8 @@ This part only collects; the page comes later. No model calls.
   counts); each hook (a sent message, a reply taking the initiative, a refused tag; a news post and a
   relayed order; an answered question, dialog and stuck question, approvals skipped; the scanner's
   offsets across a restart, a half line); the tools' `initiative` param; the backfill on fixture files
-  (each source, a second run adds nothing). Without each hook its test fails (no record).
+  (each source, a second run adds nothing). Without each hook its test fails (no record). It also checks
+  that `bin/pi-web-ui.mjs` can be run.
 - A dry run of the backfill against the real data from 2026-10-03 (read only, into a scratch store): 2,759
   records in 6.4 s; every caught S1-S4 ref in Data's events.csv was in it (18 + 10 + 14 + 31).
 
