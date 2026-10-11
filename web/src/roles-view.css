@@ -478,8 +478,9 @@
 	min-width: 0;
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
-	padding: 10px 14px;
+	/* Make room for the spend line without losing the first-screen card density. */
+	gap: 1px;
+	padding: 6px 14px;
 	border: 1px solid var(--border);
 	border-left: 4px solid var(--border);
 	border-radius: 10px;
@@ -487,8 +488,8 @@
 	transition: background-color 0.12s;
 }
 .rv-phone .rv-tbtn {
-	gap: 4px;
-	padding: 10px 10px 10px 12px;
+	gap: 1px;
+	padding: 6px 10px 6px 12px;
 }
 .rv-tbtn:hover {
 	background: var(--bg-elev2);
@@ -522,8 +523,34 @@
 	color: var(--text);
 }
 .rv-phone .rv-ttext {
+	/* Like desktop, preview two lines; the details panel keeps the full text. */
+	-webkit-line-clamp: 2;
 	font-size: 14px;
 	line-height: 20px;
+}
+.rv-spend {
+	display: block;
+	font-size: var(--rv-fs3);
+	line-height: var(--rv-lh3);
+	color: var(--text-dim);
+	overflow-wrap: anywhere;
+}
+.rv-spend.ok,
+.rv-spend.stale {
+	color: var(--text);
+}
+.rv-spend.over {
+	color: var(--amber-fg);
+}
+.rv-spend.stale .rv-spend-age {
+	color: var(--text-faint);
+}
+.rv-spend-initiatives {
+	margin: 0;
+	padding-left: 20px;
+	font-size: var(--rv-fs3);
+	line-height: var(--rv-lh3);
+	overflow-wrap: anywhere;
 }
 .rv-tfoot {
 	margin-top: auto;

@@ -52,6 +52,7 @@ import { Markdown } from "./Markdown";
 import {
 	ageOf,
 	agoOf,
+	spendTextOf,
 	askWhere,
 	BOARD_CLOSE_NOTE_MAX,
 	BOARD_ROLES_SHOWN,
@@ -757,6 +758,18 @@ function tileQueue(t: Translate, role: UiRoleOverview): { head: string; counts: 
 	return counts ? { head: `${head} ·`, counts } : { head, counts: "" };
 }
 
+function SpendLine({ role }: { role: UiRoleOverview }) {
+	const t = useT();
+	const { text, age } = spendTextOf(t, role);
+	const state = role.spend?.state ?? "none";
+	return (
+		<span className={`rv-spend ${state}`} data-spend-state={state}>
+			{text}
+			{age && <span className="rv-spend-age">{` · ${age}`}</span>}
+		</span>
+	);
+}
+
 const Tile = memo(function Tile({
 	role,
 	now,
@@ -780,6 +793,7 @@ const Tile = memo(function Tile({
 					<StatusWord status={role.status} />
 				</span>
 				<span className={body.dim || quiet ? "rv-ttext rv-dim" : "rv-ttext"}>{body.text}</span>
+				<SpendLine role={role} />
 				{/* one item, so every tile keeps one footer line: the queue when it has work, else when */}
 				{(queue || when) && (
 					<span className="rv-tfoot">
@@ -899,6 +913,7 @@ function RoleDetails({
 						{role.lastActivity ? <span className="rv-meta">{agoOf(role.lastActivity, now)}</span> : null}
 						{gl && <span className="rv-meta">{gl}</span>}
 					</div>
+					<SpendLine role={role} />
 					<div className="rv-acts">
 						{role.homeChat ? (
 							<ChatLink nav={inner} target={{ file: role.homeChat.file }} className="rv-act">
@@ -915,6 +930,18 @@ function RoleDetails({
 					</div>
 				</header>
 				<div className="rv-dbody">
+					{role.spend && "byInitiative" in role.spend && role.spend.byInitiative?.length ? (
+						<section className="rv-sec">
+							<h3 className="rv-sech">{t("rolesSpendInitiatives")}</h3>
+							<ul className="rv-spend-initiatives">
+								{role.spend.byInitiative.map((i) => (
+									<li key={i.id}>
+										{i.id}: {i.amount}
+									</li>
+								))}
+							</ul>
+						</section>
+					) : null}
 					{role.conflict && (
 						<p className="rv-note rv-in">
 							<FiInfo className="rv-ic" aria-hidden="true" />

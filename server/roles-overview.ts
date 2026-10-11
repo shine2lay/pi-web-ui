@@ -47,6 +47,7 @@ import {
 	type RoleReportReply,
 } from "./role-messages.js";
 import { rulesGoals, rulesWorkMode } from "./role-rules.js";
+import { readRoleSpend } from "./roles-spend.js";
 import {
 	TASK_QUEUE_ENTRY_TYPE,
 	taskQueueFromEntries,
@@ -908,6 +909,7 @@ export class RolesOverviewReader {
 			...(queue ? { queue } : {}),
 			requests: { open: requests.open, ...(requests.newest ? { newest: requests.newest } : {}) },
 			report,
+			spend: await readRoleSpend(def.dir, now),
 			...(boardOrders.length ? { boardOrders } : {}),
 			...(problems.length ? { problems } : {}),
 		};

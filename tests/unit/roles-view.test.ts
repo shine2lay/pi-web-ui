@@ -58,6 +58,7 @@ import {
 	reportReason,
 	reportRoles,
 	rolesSummary,
+	spendTextOf,
 	saveStripOpen,
 	taskLook,
 	taskWord,
@@ -520,6 +521,41 @@ describe("the page", () => {
 		resetRolesState();
 		setAppSend(null);
 		vi.useRealTimers();
+	});
+
+	it("spend: cards have all seven states in words, amber only for over; older snapshots still render", () => {
+		const o = fourteen();
+		const current = {
+			spent: "$412",
+			budget: "$2,000",
+			age: "3 h ago",
+			line: "Own work this week: $412 of $2,000 · updated 3 h ago",
+		};
+		o.roles[0].spend = { ...current, state: "ok" };
+		o.roles[1].spend = { ...current, state: "over", line: "Budget used up: own work stopped until Mon" };
+		o.roles[2].spend = {
+			...current,
+			state: "stale",
+			age: "2 d ago",
+			line: "Own work this week: $412 of $2,000 · updated 2 d ago",
+		};
+		o.roles[3].spend = { state: "old-week", line: "No figure for this week yet" };
+		o.roles[4].spend = { state: "none", line: "No own-work budget" };
+		o.roles[5].spend = { state: "unreadable", line: "Spend figure unreadable" };
+		// Seventh case: no own budget (old snapshots omit spend entirely).
+		for (const r of o.roles.slice(0, 6)) {
+			const words = spendTextOf(t, r);
+			expect(`${words.text}${words.age ? ` · ${words.age}` : ""}`).toBe(r.spend!.line);
+		}
+		expect(spendTextOf(t, o.roles[6]).text).toBe("No own-work budget");
+		receiveRoles({ type: "roles", overview: o, asks: 2, checkedAt: NOW });
+		for (const phone of [false, true]) {
+			const html = render(phone);
+			for (const state of ["ok", "over", "stale", "old-week", "none", "unreadable"])
+				expect(html).toContain(`class="rv-spend ${state}" data-spend-state="${state}"`);
+			expect(html).toContain('class="rv-spend-age"> · updated 2 d ago');
+			expect([...html.matchAll(/data-spend-state=/g)]).toHaveLength(14);
+		}
 	});
 
 	// queue-paused: a paused task or queue reads "Paused by you" and doesn't wait on the owner.

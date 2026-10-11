@@ -183,6 +183,36 @@ const ask = (o: Partial<Ask> & { id: string; sessionFile: string; createdAt: num
 
 // ---------------------------------------------------------------------------------------------------------
 describe("the roles, from disk", () => {
+	it("spend: own files reach each snapshot; broken stays local, refresh reads new values without writing", async () => {
+		now = Date.parse("2026-10-11T12:00:00-07:00");
+		const design = role("design");
+		const bad = role("bad");
+		const none = role("none");
+		for (const r of [design, bad, none]) mkdirSync(r.dir, { recursive: true });
+		const file = join(design.dir, "spend.json");
+		const v = {
+			v: 1,
+			budgetUsd: 2000,
+			budgetFrom: "department-weekly",
+			weekStart: "2026-10-10",
+			weekEnd: "2026-10-18",
+			spentUsd: 412,
+			updatedAt: "2026-10-11T09:00:00-07:00",
+			stopped: false,
+		};
+		writeFileSync(file, JSON.stringify(v));
+		writeFileSync(join(bad.dir, "spend.json"), "{");
+		const f = fake([design, bad, none]);
+		const reader = new RolesOverviewReader(f.host);
+		const o = await reader.read();
+		expect(byId(o, "design").spend?.line).toBe("Own work this week: $412 of $2,000 · updated 3 h ago");
+		expect(byId(o, "bad").spend?.line).toBe("Spend figure unreadable");
+		expect(byId(o, "none").spend?.line).toBe("No own-work budget");
+		expect(byId(o, "bad").problems).toBeUndefined();
+		expect(readFileSync(file, "utf8")).toBe(JSON.stringify(v));
+		writeFileSync(file, JSON.stringify({ ...v, spentUsd: 2000 }));
+		expect(byId(await reader.read(), "design").spend?.line).toBe("Budget used up: own work stopped until Mon");
+	});
 	it("lists every role alphabetically, with no chat loaded, and keeps what a closed chat showed", async () => {
 		const z = transcript("zeta", [tldr("Zeta did a thing", T0 + MIN)]);
 		const a = transcript("alpha", [tldr("Alpha started", T0 + 2 * MIN), tldr("Alpha checked it", T0 + 3 * MIN)]);

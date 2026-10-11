@@ -91,6 +91,30 @@ const busy = role("temper", {
 });
 
 describe("formatRolesOverview", () => {
+	it("spend: all roles and one role carry the same exact words; initiatives only when present", () => {
+		const s = {
+			state: "ok" as const,
+			spent: "$412",
+			budget: "$2,000",
+			age: "3 h ago",
+			line: "Own work this week: $412 of $2,000 · updated 3 h ago",
+			byInitiative: [{ id: "a-first", amount: "$412" }],
+		};
+		const o = view([
+			role("design", { spend: s }),
+			role("qa", { spend: { state: "unreadable", line: "Spend figure unreadable" } }),
+			role("docs"),
+		]);
+		const all = formatRolesOverview(o, { now: NOW });
+		const one = formatRolesOverview(o, { role: "design", now: NOW });
+		for (const words of [all, one]) {
+			expect(words).toContain(s.line);
+			expect(words).toContain("By initiative: a-first: $412");
+		}
+		expect(all).toContain("Spend figure unreadable");
+		expect(all).toContain("No own-work budget");
+		expect(formatRolesOverview(view([role("docs")]), { now: NOW })).not.toContain("By initiative");
+	});
 	it("all roles in short: header, counts, each role's state, and how to see one in full", () => {
 		const text = formatRolesOverview(view([busy, role("qa")]), { now: NOW });
 		expect(text).toContain("Roles overview at 2026-10-06 08:00 (just now), times in America/Los_Angeles.");

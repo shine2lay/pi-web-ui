@@ -2200,6 +2200,13 @@ export const en = {
 	rolesBlockedLine: "Blocked",
 	rolesNoActiveTask: "No active task",
 	rolesQueueStopped: "Queue stopped",
+	rolesSpendOk: "Own work this week: {spent} of {budget}",
+	rolesSpendOver: "Budget used up: own work stopped until Mon",
+	rolesSpendOldWeek: "No figure for this week yet",
+	rolesSpendNone: "No own-work budget",
+	rolesSpendUnreadable: "Spend figure unreadable",
+	rolesSpendUpdated: "updated {age}",
+	rolesSpendInitiatives: "By initiative",
 	// queue-paused: the owner's pause on a task or the whole queue.
 	rolesQueuePausedByYou: "Queue paused by you",
 	rolesQueuePausedSince: "Queue paused by you since {time}: {why}",

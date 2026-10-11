@@ -5221,6 +5221,18 @@ owner, each role's TL;DR, queue and 6 am report, and to open the right chat. It 
 answers, queue controls and edits stay in the chats and Settings. Details:
 [docs/roles-overview.md](docs/roles-overview.md).
 
+**Own-work spend (#100, owner 2026-10-10)**: "each count its own have write it somewhere and roles
+page shows it". `server/roles-spend.ts` reads each role's own `spend.json` under the fixed v1
+`~/.pi/agent/spend-format.md` contract. `UiRoleSpend` carries its checked line to both card and
+panel and to `roles_overview` (all/one). Pacific inclusive weeks/DST, the initial Oct 10–18 week,
+stale ages, empty/missing/bad figures and at/over/stopped have plain words; only over/stopped uses
+existing `--amber-fg`. Optional non-empty initiative amounts appear in the panel/tool. Regular,
+non-linked files only, 64 KiB maximum, errors local to the role; no ledger writes, central meter,
+counting, automatic stop, queue control, model call or format change. Seven-case-plus-stopped
+reader/tool/view/browser fixtures, refresh/hash checks, dark/White phone/desktop contrast and axe
+live in `tests/unit/roles-spend.test.ts`, the existing Roles unit tests and `tests/roles-page-test.mjs`.
+Undo is a revert and redeploy, leaving every tally intact.
+
 ### Changes
 
 1. **The reader** (`server/roles-overview.ts`, new): `RolesOverviewReader.read()` builds

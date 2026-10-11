@@ -142,6 +142,12 @@ export function roleText(r: UiRoleOverview, tz: string, now: number, lim: Limits
 			? `Home chat: ${r.homeChat.file}${r.homeChat.title ? ` ("${clip(r.homeChat.title, 80)}")` : ""}`
 			: "Home chat: none",
 	);
+	out.push(r.spend?.line ?? "No own-work budget");
+	if (r.spend && "byInitiative" in r.spend && r.spend.byInitiative?.length) {
+		out.push(
+			`By initiative: ${clip(r.spend.byInitiative.map((i) => `${i.id}: ${i.amount}`).join(" · "), lim.sectionMax)}`,
+		);
+	}
 	if (r.lastActivity) out.push(`Last activity: ${whenText(r.lastActivity, tz, now)}`);
 	if (r.tldr.length) {
 		out.push("TL;DR, newest first:");

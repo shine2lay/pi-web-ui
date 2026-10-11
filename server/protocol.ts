@@ -1887,6 +1887,21 @@ export interface UiRoleReport {
 	error?: string;
 }
 
+/** roles-overview: a department's own tally, read only; never a meter or a stop control. */
+export type UiRoleSpend =
+	| { state: "none" | "unreadable" | "old-week"; line: string }
+	| {
+			state: "ok" | "over" | "stale";
+			line: string;
+			/** Validated amounts formatted as USD for display, not used to control work. */
+			spent: string;
+			budget: string;
+			/** "updated 3 h ago" uses this age; stale means strictly older than 24 h. */
+			age?: string;
+			/** Present only when non-empty, sorted by initiative id. */
+			byInitiative?: { id: string; amount: string }[];
+	  };
+
 /** roles-overview: one role on the Roles page. */
 export interface UiRoleOverview {
 	id: string;
@@ -1913,6 +1928,8 @@ export interface UiRoleOverview {
 	queue?: UiRoleQueue;
 	requests: { open: number; newest?: UiRoleRequest };
 	report: UiRoleReport;
+	/** Own-work spend.json; optional for older app snapshots. */
+	spend?: UiRoleSpend;
 	/** board: open orders to it that it hasn't marked done, oldest first. */
 	boardOrders?: UiRoleBoardOrder[];
 	/** What couldn't be read ("queue", "tldr", "report", "home chat"): the rest is shown. */

@@ -9,6 +9,44 @@ Design: `~/design-lab/roles-page/SPEC.md` for what the page says; the layout is 
 2026-10-05 call ("show less, tap for more"): tiles instead of SPEC's board, which read as a flat
 table. Patch: `roles-overview` in [PATCHES.md](../PATCHES.md).
 
+## Each department's own-work spend
+
+Owner, 2026-10-10: "each count its own have write it somewhere and roles page shows it".
+This is a display of the department's own tally, **not a central meter or an automatic stop**.
+No spending is counted by the app and it never writes a tally or changes any queue.
+
+Each role's tile and details show one line read from
+`~/.pi/agent/memory/identities/<id>/spend.json`; `roles_overview` carries the same line, both
+for all roles and for a single role. The role writes its own file under the separate Ops107
+validated-write exception. The contract is v1 in `~/.pi/agent/spend-format.md`: `v`, `budgetUsd`,
+`budgetFrom`, `weekStart`, `weekEnd`, `spentUsd`, `updatedAt`, `stopped`, optional `byInitiative`.
+Budgets are positive finite USD amounts, spending non-negative finite USD, the dates real calendar
+dates, and `updatedAt` an ISO timestamp with a numeric offset. Normal weeks are Monday–Sunday;
+the first approved week is Oct 10–18, 2026. Unknown fields or a bad field make the figure unreadable.
+
+- Current and under budget: "Own work this week: $412 of $2,000 · updated 3 h ago".
+- At/over budget or `stopped`: "Budget used up: own work stopped until Mon", in the existing
+  AA amber foreground. This reports the tally; it does not stop anything itself.
+- Strictly more than 24 hours since the update: still show the amounts, with the age in muted text.
+- End date before today (or a future week): "No figure for this week yet". Bounds are inclusive
+  **America/Los_Angeles** calendar dates and work across daylight saving, not the server's UTC day.
+- No file/no own-work budget: "No own-work budget", muted.
+- Bad JSON, validation failure, excessive size (over 64 KiB), links or non-regular files:
+  "Spend figure unreadable", muted. A bad figure never breaks another role or the page.
+
+`byInitiative` appears in the details and tool only when non-empty. Each refresh re-reads the tally;
+no separate watcher, model call, billing request, enforcement hook or hold is added. Older page
+snapshots without `spend` remain readable. Undo: revert the spend-display commit and redeploy;
+the files then stay untouched and are simply ignored.
+
+Checks: `tests/unit/roles-spend.test.ts`, the Roles reader/tool/view tests and
+`tests/roles-page-test.mjs` cover the seven cases plus stopped, Pacific/DST bounds, stale threshold,
+invalid data and refusing links. The browser checks cards and panels, non-empty initiatives,
+refresh, unchanged fixture hashes, contrast and axe in dark/White at desktop/phone widths.
+Compact card spacing and two-line TL;DR previews keep the existing first-screen density bars;
+the details panel retains the full text. `ROLES_LAYOUT_ONLY=1` isolates those layout checks
+on the same fixtures without repeating the full Roles stage.
+
 ## What it shows
 
 - **Waiting on you**: every distinct open ask from the owner, oldest first, each with its role, where

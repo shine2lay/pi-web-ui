@@ -43,6 +43,7 @@ import {
 	mkdirSync,
 	readdirSync,
 	readFileSync,
+	rmSync,
 	statSync,
 	symlinkSync,
 	utimesSync,
@@ -928,6 +929,48 @@ async function visualChecks(page, tag, { phone }) {
 	return m;
 }
 
+// Isolate a layout regression on the same known seed before repeating the full Roles stage.
+if (process.env.ROLES_LAYOUT_ONLY === "1") {
+	const looks = [];
+	for (const theme of [null, "white"]) {
+		for (const phone of [false, true]) {
+			const look = await openPage({
+				width: phone ? 390 : 1440,
+				height: phone ? 844 : 900,
+				phone,
+				theme,
+			});
+			looks.push({ ...look, phone, theme });
+			const tag = `layout ${theme ?? "dark"} ${phone ? 390 : 1440}`;
+			const m = await visualChecks(look.page, tag, { phone });
+			check(`${tag}: first-screen density`, m.fullRows >= (phone ? 6 : 14), `${m.fullRows} (${m.layout})`);
+			await shot(look.page, `layout-${theme ?? "dark"}-${phone ? 390 : 1440}`);
+		}
+	}
+	for (const id of EXTRA) {
+		mkdirSync(join(idDir, id), { recursive: true });
+		writeFileSync(join(idDir, id, "identity.json"), `${JSON.stringify({ id, title: `Zeta ${id.slice(5)}` })}\n`);
+		writeFileSync(join(idDir, id, "about.md"), "# Zeta\n\n**Focus:** extra role.\n");
+	}
+	const desk = looks.find((l) => !l.phone && !l.theme);
+	const twenty = await waitFor(
+		() => desk.page.evaluate(() => document.querySelectorAll(".roles-view .rv-tile").length === 20),
+		20_000,
+	);
+	check("layout: twenty-role seed appeared", !!twenty);
+	const m = await visualChecks(desk.page, "layout 20 roles desktop", { phone: false });
+	check("layout: 20 roles desktop density", m.fullRows >= 14, `${m.fullRows} (${m.layout})`);
+	check("layout: model was never called", modelCalls === 0, `${modelCalls}`);
+	check(
+		"layout: no fixture chat changed",
+		Object.entries(watched).every(([k, h]) => sha(files[k]) === h),
+	);
+	await browser.close();
+	await srv.stop();
+	console.log(failures ? `\n${failures} layout check(s) failed` : "\nall isolated layout checks passed");
+	process.exit(failures ? 1 : 0);
+}
+
 // =========================================================================================================
 // 1. Desktop, dark
 // =========================================================================================================
@@ -1700,6 +1743,113 @@ for (const [w, h, isPhone] of [
 	}
 	await shot(light.page, `${isPhone ? "phone" : "desktop"}-white`);
 	await light.context.close();
+}
+
+// =========================================================================================================
+// Own-work spend: seven cases plus stopped, temp fixtures only; both themes and widths.
+// =========================================================================================================
+{
+	const now = Date.now();
+	const today = new Intl.DateTimeFormat("en-CA", {
+		timeZone: "America/Los_Angeles",
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+	}).format(now);
+	const monday = new Date(`${today}T00:00:00Z`);
+	monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+	const day = (n) => new Date(monday.getTime() + n * 86_400_000).toISOString().slice(0, 10);
+	const first = today >= "2026-10-10" && today <= "2026-10-18";
+	const stamp = (ms) => new Date(ms).toISOString().replace("Z", "+00:00");
+	const base = {
+		v: 1,
+		budgetUsd: 2000,
+		budgetFrom: "department-weekly",
+		weekStart: first ? "2026-10-10" : day(0),
+		weekEnd: first ? "2026-10-18" : day(6),
+		spentUsd: 412,
+		updatedAt: stamp(now - 3 * 3_600_000),
+		stopped: false,
+	};
+	const writeSpend = (id, delta) => writeFileSync(join(idDir, id, "spend.json"), JSON.stringify({ ...base, ...delta }));
+	writeSpend("design", { byInitiative: { "a-first": 412 } });
+	writeSpend("product", { spentUsd: 2000 });
+	writeSpend("data", { updatedAt: stamp(now - 2 * 86_400_000) });
+	writeSpend("backend", { weekStart: day(-7), weekEnd: day(-1), stopped: true });
+	writeFileSync(join(idDir, "frontend", "spend.json"), "{");
+	writeSpend("architecture", { stopped: true });
+	// docs: missing, qa: no own-work budget (neither has a spend file).
+	const cases = [
+		["design", "ok", "Own work this week: $412 of $2,000 · updated 3 h ago"],
+		["product", "over", "Budget used up: own work stopped until Mon"],
+		["data", "stale", "Own work this week: $412 of $2,000 · updated 2 d ago"],
+		["backend", "old-week", "No figure for this week yet"],
+		["docs", "none", "No own-work budget"],
+		["frontend", "unreadable", "Spend figure unreadable"],
+		["qa", "none", "No own-work budget"],
+		["architecture", "over", "Budget used up: own work stopped until Mon"],
+	];
+	const hashes = Object.fromEntries(
+		cases.filter(([id]) => !["docs", "qa"].includes(id)).map(([id]) => [id, sha(join(idDir, id, "spend.json"))]),
+	);
+	for (const theme of [null, "white"]) {
+		for (const [width, height, phone] of [
+			[1440, 900, false],
+			[390, 844, true],
+		]) {
+			const p = await openPage({ width, height, phone, theme });
+			const tag = `spend ${theme ?? "dark"} ${width}`;
+			for (const [id, state, words] of cases) {
+				const node = p.page.locator(`[data-role-id="${id}"] .rv-spend`);
+				check(
+					`${tag}: ${id} card has honest words and state`,
+					(await node.textContent()) === words && (await node.getAttribute("data-spend-state")) === state,
+				);
+				await openPanel(p.page, id);
+				check(
+					`${tag}: ${id} details match its card`,
+					(await p.page.locator("dialog.rv-drawer .rv-spend").textContent()) === words,
+				);
+				if (id === "design")
+					check(
+						`${tag}: initiatives appear only when non-empty`,
+						(await p.page.locator(".rv-spend-initiatives").textContent()) === "a-first: $412",
+					);
+				else
+					check(
+						`${tag}: ${id} has no invented initiative list`,
+						(await p.page.locator(".rv-spend-initiatives").count()) === 0,
+					);
+				if (["design", "product", "data"].includes(id)) {
+					const ax = await runAxe(p.page);
+					check(
+						`${tag}: ${id} details axe has no serious/critical hits`,
+						!ax.error && ax.bad.length === 0,
+						ax.error ?? ax.bad.join("; "),
+					);
+				}
+				await closePanel(p.page);
+			}
+			await visualChecks(p.page, tag, { phone });
+			await shot(p.page, `spend-${theme ?? "dark"}-${width}`);
+			await p.context.close();
+		}
+	}
+	check(
+		"spend: looking changed no tally file",
+		Object.entries(hashes).every(([id, h]) => sha(join(idDir, id, "spend.json")) === h),
+	);
+	writeSpend("design", { spentUsd: 413 });
+	const changed = await waitFor(
+		() =>
+			desk.page
+				.locator('[data-role-id="design"] .rv-spend')
+				.textContent()
+				.then((s) => s?.includes("$413")),
+		15_000,
+	);
+	check("spend: own-role update reaches the already-open page within one refresh", !!changed);
+	for (const id of Object.keys(hashes)) rmSync(join(idDir, id, "spend.json"), { force: true });
 }
 
 // =========================================================================================================

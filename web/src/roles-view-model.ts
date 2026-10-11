@@ -42,6 +42,22 @@ export const STALE_MS = 75_000;
 
 export type RolesLayout = "phone" | "desktop";
 
+/** Own-work words use the reader's checked values/age, so page and tool agree at each refresh. */
+export function spendTextOf(t: Translate, role: UiRoleOverview): { text: string; age?: string } {
+	const s = role.spend;
+	if (!s || s.state === "none") return { text: t("rolesSpendNone") };
+	if (s.state === "unreadable") return { text: t("rolesSpendUnreadable") };
+	if (s.state === "old-week") return { text: t("rolesSpendOldWeek") };
+	if (s.state === "over") return { text: t("rolesSpendOver") };
+	if (s.state === "ok" || s.state === "stale") {
+		return {
+			text: t("rolesSpendOk", { spent: s.spent, budget: s.budget }),
+			...(s.age ? { age: t("rolesSpendUpdated", { age: s.age }) } : {}),
+		};
+	}
+	return { text: t("rolesSpendUnreadable") };
+}
+
 /** The two groups, alphabetical inside each. */
 export function groupRoles(roles: readonly UiRoleOverview[]): {
 	selfStart: UiRoleOverview[];
