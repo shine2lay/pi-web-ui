@@ -285,7 +285,7 @@ import { makeBoardTool } from "./board-tool.js";
 import { type DecisionLogHost, makeDecisionLogTool } from "./decision-log-tool.js";
 import { isolatedDecisionModel } from "./decision-model.js";
 import { AnswerPreviews } from "./decision-previews.js";
-import { DecisionReader, readerStatus, type ReadResult } from "./decision-reader.js";
+import { DecisionReader, readerStatus, type ReadResult, unreadOf } from "./decision-reader.js";
 import { DecisionStore } from "./decision-store.js";
 import { buildDecisionsPage, recordView } from "./decision-view.js";
 import {
@@ -15524,12 +15524,9 @@ export class AgentService {
 		const sel = initiative ?? store.initiatives()[0]?.id ?? "";
 		const { byId } = this.keptRecords();
 		const reader = readerStatus(store, undefined);
-		// Unread from the cached records (the reader's own count reads the whole file).
-		const from = dayStart(store.settings().readFrom) ?? 0;
-		const read = store.readerState().read;
-		let unread = 0;
-		for (const r of byId.values()) if (r.at >= from && !read[r.id]) unread++;
-		reader.unread = unread;
+		// Unread from the cached records (the reader's own count reads the whole file): only those filed to an
+		// initiative it reads (task #98).
+		reader.unread = unreadOf(store, byId.values());
 		return buildDecisionsPage(store, byId, reader, { initiative: sel, limit: Math.max(1, Math.min(limit, 2000)) });
 	}
 

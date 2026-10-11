@@ -12,7 +12,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DecisionRecord } from "./decision-records.js";
-import { localDay } from "./decision-records.js";
+import { INITIATIVE_ID, INITIATIVE_MAX, localDay } from "./decision-records.js";
 import { planText, recordText } from "./decision-who.js";
 
 export const DECISIONS_FILE = "decisions.json";
@@ -135,6 +135,9 @@ export interface ReaderSettings {
 	dailyTokenCap: number;
 	/** First local day read (YYYY-MM-DD). */
 	readFrom: string;
+	/** The initiatives whose records it reads: a record filed to one of them by its tag or markers (no model).
+	 *  Other records stay unread, so listing an initiative later reads its records then. None = nothing. */
+	initiatives: string[];
 }
 
 export const DEFAULT_SETTINGS: ReaderSettings = {
@@ -159,6 +162,9 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
 	callTimeoutSeconds: 420,
 	dailyTokenCap: 2_000_000,
 	readFrom: "2026-10-03",
+	// None listed = nothing read, so an install never starts reading by itself (owner, 2026-10-10 17:50, via
+	// COO rm-8fcaa366: "only enable it for teams in temper"; task #98).
+	initiatives: [],
 };
 
 export interface DayTokens {
@@ -253,6 +259,17 @@ export function parseSettings(raw: unknown): ReaderSettings {
 		dailyTokenCap: Math.round(num(o.dailyTokenCap, DEFAULT_SETTINGS.dailyTokenCap, 0, 1e9)),
 		readFrom:
 			typeof o.readFrom === "string" && /^\d{4}-\d{2}-\d{2}$/.test(o.readFrom) ? o.readFrom : DEFAULT_SETTINGS.readFrom,
+		// Short ids by the initiative tag's rule; anything else is left out.
+		initiatives: Array.isArray(o.initiatives)
+			? [
+					...new Set(
+						o.initiatives
+							.filter((v): v is string => typeof v === "string")
+							.map((v) => v.trim())
+							.filter((v) => v.length <= INITIATIVE_MAX && INITIATIVE_ID.test(v)),
+					),
+				]
+			: [...DEFAULT_SETTINGS.initiatives],
 	};
 }
 
@@ -300,6 +317,8 @@ export function fileRecord(
 export class DecisionStore {
 	readonly dir: string;
 	private doc: DecisionsDoc | undefined;
+	/** fileRecord's initiative per record id, for one initiatives list (a record never changes; the list can). */
+	private filed = { key: "", by: new Map<string, string | null>() };
 
 	constructor(
 		dir: string,
@@ -398,6 +417,23 @@ export class DecisionStore {
 	saveInitiatives(list: Initiative[]): void {
 		mkdirSync(this.dir, { recursive: true });
 		writeJson(this.file(INITIATIVES_FILE), { initiatives: list });
+	}
+
+	/** The records filed (by tag, then markers: fileRecord) to one of these initiative ids, in their order. */
+	inInitiatives(recs: DecisionRecord[], ids: string[], initiatives?: Initiative[]): DecisionRecord[] {
+		if (!ids.length || !recs.length) return [];
+		const list = initiatives ?? this.initiatives();
+		const key = JSON.stringify(list);
+		if (key !== this.filed.key) this.filed = { key, by: new Map() };
+		const want = new Set(ids);
+		return recs.filter((r) => {
+			let to = this.filed.by.get(r.id);
+			if (to === undefined) {
+				to = fileRecord(r, list)?.initiative ?? null;
+				this.filed.by.set(r.id, to);
+			}
+			return to !== null && want.has(to);
+		});
 	}
 
 	// settings and state --------------------------------------------------------

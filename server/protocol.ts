@@ -2109,6 +2109,8 @@ export interface UiReaderStatus {
 	tokensByDay: Record<string, number>;
 	/** Records it hasn't read yet. */
 	unread: number;
+	/** The initiatives whose records it reads (ids); the others' records stay unread. */
+	reads: string[];
 	lastRun: number | null;
 	lastError: { at: number; error: string } | null;
 }

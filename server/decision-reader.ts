@@ -573,6 +573,10 @@ export interface ReaderOptions {
 	/** A plan change's previous version (default: planVersions over the records store; the stage test
 	 *  looks in the live store, read-only). */
 	previousPlan?: (rec: DecisionRecord) => DecisionRecord | undefined;
+	/** Read every record since readFrom, filed or not, whatever settings.initiatives lists: the stage test and
+	 *  Data's bar check read their fixed sets whole, and so do the unit tests of the reading itself. The live
+	 *  server leaves it off. */
+	allRecords?: boolean;
 }
 
 export interface BatchResult {
@@ -625,13 +629,21 @@ export class DecisionReader {
 	/** Exact copies among the records since readFrom (copy id -> the record read in its place). */
 	private copies = new Map<string, string>();
 
+	/** The records it reads: those filed (tag or markers) to an initiative settings.initiatives lists. The
+	 *  others stay unread and unmarked, so listing their initiative later reads them then (task #98). */
+	private mine(recs: DecisionRecord[], settings: ReaderSettings): DecisionRecord[] {
+		return this.o.allRecords ? recs : this.o.store.inInitiatives(recs, settings.initiatives);
+	}
+
 	/** Records not read yet, oldest first. An exact copy of an earlier record isn't read again. */
 	unread(settings = this.settings(), state = this.o.store.readerState()): DecisionRecord[] {
 		const from = dayStart(settings.readFrom) ?? 0;
 		const all = this.o.records.list({ since: from });
 		for (const r of all) this.seen.set(r.id, r);
-		this.copies = copiesIn(all);
-		return all.filter((r) => !state.read[r.id] && !this.copies.has(r.id));
+		const mine = this.mine(all, settings);
+		// Copies among the records it reads: a copy of a record it doesn't read is read itself.
+		this.copies = copiesIn(mine);
+		return mine.filter((r) => !state.read[r.id] && !this.copies.has(r.id));
 	}
 
 	/** A copy takes the reading of the record read in its place, once that one is read. */
@@ -658,7 +670,8 @@ export class DecisionReader {
 		const read = this.o.store.readerState().read;
 		return (rec) => {
 			const was = lookup(rec);
-			if (!was || (!read[was.id] && was.at < from)) return undefined;
+			// A version it doesn't read (before readFrom, or not filed to a listed initiative) isn't known.
+			if (!was || (!read[was.id] && (was.at < from || !this.mine([was], settings).length))) return undefined;
 			const inFull = renderRecord(rec, "R0", undefined, Number.POSITIVE_INFINITY).length;
 			return renderRecord(rec, "R0", undefined, Number.POSITIVE_INFINITY, was).length < inFull ? was : undefined;
 		};
@@ -1073,6 +1086,16 @@ function mergeResults(base: BatchResult, ...rest: BatchResult[]): BatchResult {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** How many records since readFrom it still has to read (filed to an initiative it reads, not read yet),
+ *  from records already in memory: the page's count (the reader's own unread() reads the whole file). */
+export function unreadOf(store: DecisionStore, recs: Iterable<DecisionRecord>, settings = store.settings()): number {
+	const from = dayStart(settings.readFrom) ?? 0;
+	const read = store.readerState().read;
+	const waiting: DecisionRecord[] = [];
+	for (const r of recs) if (r.at >= from && !read[r.id]) waiting.push(r);
+	return store.inInitiatives(waiting, settings.initiatives).length;
+}
+
 /** Status for the page: tokens per day, the cap, unread count, last error. */
 export function readerStatus(store: DecisionStore, reader: DecisionReader | undefined, now = Date.now()) {
 	const settings = store.settings();
@@ -1088,6 +1111,8 @@ export function readerStatus(store: DecisionStore, reader: DecisionReader | unde
 		capHit: state.capHit === today,
 		tokensByDay: Object.fromEntries(Object.entries(state.tokens).map(([d, v]) => [d, v.input + v.output])),
 		unread: reader ? reader.unread(settings, state).length : 0,
+		/** The initiatives whose records it reads (settings.initiatives). */
+		reads: settings.initiatives,
 		lastRun: state.lastRun ?? null,
 		lastError: state.lastError ?? null,
 		/** Pool accounts resting after a limit refusal -> until when (ms). */

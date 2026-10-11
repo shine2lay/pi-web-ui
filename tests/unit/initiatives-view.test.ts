@@ -88,6 +88,7 @@ const READER: UiReaderStatus = {
 	capHit: false,
 	tokensByDay: { "2026-10-09": 900_000, "2026-10-10": 123_456 },
 	unread: 4,
+	reads: ["team-in-temper"],
 	lastRun: AT,
 	lastError: null,
 };
@@ -244,6 +245,24 @@ describe("initiatives-page: the page", () => {
 			// The reader's tokens today, against the cap.
 			expect(html).toContain("4 records not read yet · 123,456 tokens today of 2,000,000");
 		}
+	});
+
+	it("says which initiatives the reader reads, and which are off (task #98)", () => {
+		setAppSend(() => true);
+		const p = page();
+		p.initiatives = [row({}), row({ id: "decisions-page", name: "Decisions page" })];
+		receiveInitiatives({ type: "initiatives", page: p });
+		let html = render(false);
+		expect(html).toContain("Reads: Team in Temper");
+		expect(html).toContain("off: Decisions page");
+		receiveInitiatives({ type: "initiatives", page: { ...p, reader: { ...READER, reads: [] } } });
+		html = render(false);
+		expect(html).toContain("Reads: no initiative, so nothing is read");
+		// Switched off: it says so, and no reads line.
+		receiveInitiatives({ type: "initiatives", page: { ...p, reader: { ...READER, enabled: false } } });
+		html = render(false);
+		expect(html).toContain("The reader is switched off");
+		expect(html).not.toContain("Reads:");
 	});
 
 	it("shows no 'You decided' on a card that only a role's words credit to him", () => {

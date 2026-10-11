@@ -101,7 +101,9 @@ export function InitiativesView({ active, phone, onOpen }: InitiativesViewProps)
 				<header className="iv-phead">
 					<h1>{t("ivTitle")}</h1>
 					<p className="iv-intro">{t("ivIntro")}</p>
-					{page && <ReaderLine t={t} reader={page.reader} perDay={page.perDay} now={now} />}
+					{page && (
+						<ReaderLine t={t} reader={page.reader} initiatives={page.initiatives} perDay={page.perDay} now={now} />
+					)}
 				</header>
 				{!page && s.status !== "error" && (
 					<p className="iv-note" role="status">
@@ -136,15 +138,21 @@ export function InitiativesView({ active, phone, onOpen }: InitiativesViewProps)
 function ReaderLine({
 	t,
 	reader,
+	initiatives,
 	perDay,
 	now,
 }: {
 	t: Translate;
 	reader: UiReaderStatus;
+	initiatives: UiInitiativeRow[];
 	perDay: Record<string, number>;
 	now: number;
 }) {
 	const rows = perDayRows(reader.tokensByDay, perDay);
+	// Which initiatives' records it reads; the others' records wait unread (task #98).
+	const listed = new Set(reader.reads ?? []);
+	const reads = initiatives.filter((i) => listed.has(i.id)).map((i) => i.name);
+	const off = initiatives.filter((i) => !listed.has(i.id)).map((i) => i.name);
 	return (
 		<div className="iv-reader">
 			<p>
@@ -157,6 +165,12 @@ function ReaderLine({
 					: t("ivReaderOff")}
 				{reader.lastRun ? <> · {t("ivReaderLast", { time: clockOf(reader.lastRun, now) })}</> : null}
 			</p>
+			{reader.enabled && (
+				<p className="iv-reads">
+					{reads.length ? t("ivReaderReads", { list: reads.join(", ") }) : t("ivReaderReadsNone")}
+					{off.length > 0 && <> · {t("ivReaderReadsOff", { list: off.join(", ") })}</>}
+				</p>
+			)}
 			{reader.capHit && (
 				<p className="iv-warn">
 					<FiAlertTriangle aria-hidden="true" /> {t("ivReaderCap")}

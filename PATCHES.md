@@ -6019,7 +6019,14 @@ what it costs him. Task #85 adds the lead's Progress section above Decisions.
    token cap (default 2,000,000); at the cap it stops and the page says so; tokens per day kept. Nothing
    sent to the model is logged: counts, sizes, the model and errors only.
 2. **Off until switched on**: `settings.json` `enabled` defaults to false, so an install never starts
-   reading days of records by itself; the owner chooses when (task #84).
+   reading days of records by itself; the owner chooses when (task #84). **Only the listed initiatives**
+   (task #98; the owner 2026-10-10 17:50 via COO rm-8fcaa366: "only enable it for teams in temper"):
+   `settings.json` `initiatives` (ids, the initiative tag's rule; none = nothing read) picks the records it
+   reads: those `fileRecord` files to a listed initiative by tag or markers (`DecisionStore.inInitiatives`,
+   cached per record). The others stay unread and unmarked, so listing an initiative later reads them then;
+   a copy of a record it doesn't read is read itself; a plan change whose last version it doesn't read is
+   read in full. The page's reader line says "Reads: ..." and which are off; its unread count is
+   `unreadOf`. The stage test and Data's bar check read their fixed sets whole (`allRecords`).
 3. **Who decided** (`server/decision-who.ts` new; Data's conditions 1-3), from metadata only: writer (the
    chat's role for plans and dialogs, the sender, the poster; the owner only for his dialog pick / typed
    text and an order's ownerWords) and approval kind (auto-approved plan, plan approved in a dialog, pick

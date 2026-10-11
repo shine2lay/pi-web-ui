@@ -26,9 +26,10 @@ import {
 	READER_SYSTEM,
 	readerStatus,
 	renderRecord,
+	unreadOf,
 } from "../../server/decision-reader.js";
 import { DecisionRecords, type DecisionRecord, type NewDecisionRecord } from "../../server/decision-records.js";
-import { DecisionStore, fileRecord, TEAM_IN_TEMPER } from "../../server/decision-store.js";
+import { DecisionStore, fileRecord, parseSettings, TEAM_IN_TEMPER } from "../../server/decision-store.js";
 import { buildDecisionsPage, citedRecords } from "../../server/decision-view.js";
 import type { RoleMessageSender } from "../../server/role-messages.js";
 
@@ -76,8 +77,10 @@ function fakeModel(answers: (string | ((c: ModelCall) => string) | Error)[]): De
 	return fn;
 }
 
+// The reading itself is tested on every record, filed or not (allRecords); "which records it reads" (task #98)
+// tests the live way, allRecords off.
 const reader = (model: DecisionModel, extra: Partial<ConstructorParameters<typeof DecisionReader>[0]> = {}) =>
-	new DecisionReader({ records, store, model, now: () => clock, retryWaitMs: [0], ...extra });
+	new DecisionReader({ records, store, model, now: () => clock, retryWaitMs: [0], allRecords: true, ...extra });
 
 const answer = (records: { r: string; initiative?: string | null; items: unknown[] }[]) => JSON.stringify({ records });
 
@@ -1041,6 +1044,116 @@ describe("the reader", () => {
 		writeFileSync(join(dir, "settings.json"), JSON.stringify({ readFrom: "2026-10-01" }));
 		expect(await reader(model).readAll()).toMatchObject({ stopped: "disabled" });
 		expect(model.calls).toHaveLength(0);
+	});
+
+	describe("which records it reads (task #98: only the initiatives its settings list)", () => {
+		const id = (ref: string) => records.list().find((r) => r.ref === ref)!.id;
+		const settings = (initiatives?: string[]) =>
+			writeFileSync(
+				join(dir, "settings.json"),
+				JSON.stringify({
+					enabled: true,
+					readFrom: "2026-10-01",
+					batchRecords: 4,
+					...(initiatives ? { initiatives } : {}),
+				}),
+			);
+		const nothing = (n: number) => answer(Array.from({ length: n }, (_, i) => ({ r: `R${i + 1}`, items: [] })));
+
+		it("takes short ids only, and none when left out", () => {
+			expect(parseSettings({}).initiatives).toEqual([]);
+			expect(parseSettings({ initiatives: "team-in-temper" }).initiatives).toEqual([]);
+			expect(
+				parseSettings({
+					initiatives: [" team-in-temper ", "team-in-temper", "Team In Temper", 7, "x".repeat(61), "decisions-page"],
+				}).initiatives,
+			).toEqual(["team-in-temper", "decisions-page"]);
+		});
+
+		it("reads nothing while no initiative is listed, even switched on, and marks nothing", async () => {
+			settings();
+			records.append(msg("rm-tag", "Decided: X.", { initiative: "team-in-temper" }));
+			records.append(msg("rm-none", "Decided: Z."));
+			const model = fakeModel([nothing(2)]);
+			const r = reader(model, { allRecords: false });
+			expect(r.unread()).toEqual([]);
+			expect(await r.readAll()).toMatchObject({ read: 0, stopped: "done" });
+			expect(model.calls).toHaveLength(0);
+			expect(store.readerState().read).toEqual({});
+			expect(readerStatus(store, r, clock)).toMatchObject({ enabled: true, unread: 0, reads: [] });
+			expect(unreadOf(store, records.list())).toBe(0);
+		});
+
+		it("reads only records filed to a listed initiative (tag or markers); the rest wait unmarked until theirs is listed", async () => {
+			store.saveInitiatives([
+				TEAM_IN_TEMPER,
+				{ id: "decisions-page", name: "Decisions page", markers: ["Initiatives tab"], lead: null },
+			]);
+			settings(["team-in-temper"]);
+			records.append(msg("rm-tag", "Decided: X.", { initiative: "team-in-temper" }));
+			records.append(msg("rm-mark", "Decided for the first trial: Y."));
+			records.append(msg("rm-none", "Decided: Z."));
+			records.append(msg("rm-other", "Decided: the Initiatives tab lists decisions."));
+			const model = fakeModel([nothing(2), nothing(1)]);
+			const r = reader(model, { allRecords: false });
+			expect(r.unread().map((x) => x.ref)).toEqual(["rm-tag", "rm-mark"]);
+			expect(unreadOf(store, records.list())).toBe(2);
+			expect(await r.readAll()).toMatchObject({ read: 2, stopped: "done" });
+			expect(model.calls).toHaveLength(1);
+			expect(store.readerState().read).toEqual({ [id("rm-tag")]: "n", [id("rm-mark")]: "n" });
+			expect(readerStatus(store, r, clock)).toMatchObject({ unread: 0, reads: ["team-in-temper"] });
+			// The other initiative switched on later: its record is read then; the unfiled one still waits.
+			settings(["team-in-temper", "decisions-page"]);
+			expect(r.unread().map((x) => x.ref)).toEqual(["rm-other"]);
+			expect(await r.readAll()).toMatchObject({ read: 1, stopped: "done" });
+			expect(Object.keys(store.readerState().read).sort()).toEqual(
+				[id("rm-tag"), id("rm-mark"), id("rm-other")].sort(),
+			);
+			expect(unreadOf(store, records.list())).toBe(0);
+		});
+
+		it("reads a copy itself when the record it copies isn't read, and leaves that one unmarked", async () => {
+			settings(["team-in-temper"]);
+			// Same content; only the copy's ref (an order id) files it to Team in Temper.
+			const at = (clock += 60_000);
+			records.append(msg("rm-plain", "Decided: Z.", { at }));
+			records.append(msg("bp-3e3475b8", "Decided: Z.", { at }));
+			const model = fakeModel([nothing(1)]);
+			const r = reader(model, { allRecords: false });
+			expect(r.unread().map((x) => x.ref)).toEqual(["bp-3e3475b8"]);
+			await r.readAll();
+			expect(store.readerState().read).toEqual({ [id("bp-3e3475b8")]: "n" });
+		});
+
+		it("reads a plan change in full when its last version is one it doesn't read", async () => {
+			settings(["team-in-temper"]);
+			const plan = (ref: string, op: "add" | "update", decided: string): NewDecisionRecord => ({
+				source: "plan",
+				at: (clock += 60_000),
+				from: "frontend",
+				ref,
+				file: ref.split(":")[0],
+				task: 9,
+				op,
+				approval: "auto",
+				plan: {
+					title: "Status page",
+					decided,
+					steps: "1. Build the status page and check it on a phone and a laptop.",
+				},
+			});
+			// The first version is filed nowhere; the change mentions the Team page, so it is Team in Temper's.
+			records.append(plan("chat-a.jsonl:10", "add", "Colours follow the theme."));
+			records.append(plan("chat-a.jsonl:20", "update", "Colours follow the theme.\nIt links to the Team page."));
+			const model = fakeModel([nothing(1)]);
+			await reader(model, { allRecords: false }).readAll();
+			// (A plan whose Decided part shows nothing gets a second look, alone: so two calls.)
+			const prompts = model.calls.map((c) => c.prompt).join("\n");
+			// Booleans only: a failure must not print the reader's prompt.
+			expect(prompts.includes("Unchanged since the task's last version")).toBe(false);
+			expect(prompts.includes("Build the status page and check it on a phone")).toBe(true);
+			expect(store.readerState().read).toEqual({ [id("chat-a.jsonl:20")]: "n" });
+		});
 	});
 
 	it("shows the reader a dialog's picks and previews, and an order's two parts", () => {

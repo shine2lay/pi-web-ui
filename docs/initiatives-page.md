@@ -34,8 +34,14 @@ pool, one isolated call per batch with no tools. It is **off until switched on**
 `~/.pi-web-ui/decisions/settings.json`:
 
 ```json
-{ "enabled": true, "dailyTokenCap": 2000000, "readFrom": "2026-10-03" }
+{ "enabled": true, "initiatives": ["team-in-temper"], "dailyTokenCap": 2000000, "readFrom": "2026-10-03" }
 ```
+
+`initiatives` lists the initiatives whose records it reads: a record filed to one of them by its tag or
+markers (plain code, no model). The other records stay unread and aren't marked read, so listing an
+initiative later reads its records then. With no list, nothing is read, whatever `enabled` says (task #98;
+the owner, 2026-10-10: "only enable it for teams in temper"). The page says which it reads ("Reads: Team in
+Temper") and which are off.
 
 Other settings: `model` ("auto" or provider/id), `thinking` (medium), `readEveryMinutes` (5),
 `batchRecords` (12), `batchChars` (12000), `callTimeoutSeconds` (420). At the daily cap it stops until
