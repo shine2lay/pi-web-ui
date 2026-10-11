@@ -28,7 +28,16 @@ import {
 	type ReaderSettings,
 	type ReaderState,
 } from "./decision-store.js";
-import { pickedLabel, quoteFound, recordClaimsOwner, recordText, whoOf } from "./decision-who.js";
+import { askRiders, needsRiderCheck, partFromLabels, type RiderPart, riderPassagesOf } from "./decision-rider.js";
+import {
+	pickedLabel,
+	quoteFound,
+	quoteTexts,
+	recordClaimsOwner,
+	recordText,
+	snapQuote,
+	whoOf,
+} from "./decision-who.js";
 
 // ---------------------------------------------------------------------------
 // The prompt
@@ -39,7 +48,7 @@ export const READER_SYSTEM = `You read records from the chats of a small softwar
 Your job: find the design decisions in each record, so the owner can see every decision about his initiatives, who really made it and what it costs him.
 
 A decision is a choice about how something is built, run, limited, sequenced, shown or scoped: one way chosen over another, something put in or out of scope, a rule, an order of work, what a page or view shows, a condition or date for when it ends. Limits are decisions wherever they appear, even inside a status note: caps, ceilings, budgets, counts, rates, timeouts (for example "ceiling 120/h" or "6 model calls per turn"). Count a decision when the record makes it, records it or relays it.
-Not decisions: progress or status reports, test results, deploys and restarts, questions still open, proposals nobody has picked yet, a role's own next step in its own work (waiting, retrying or not, asking someone for a fix, what the next part of the same task must keep), a report that a condition was met which ends an earlier wait or hold (an end condition reached, not one added or changed), unless it sets a rule for later, how finished work was done (what a test or proof covered or left out), one-time requests about the case at hand (please don't retry this, send me that), acknowledgements, thanks, and plans that only list steps without choosing between ways of doing something.
+Not decisions: progress or status reports, test results, deploys and restarts, questions still open, proposals nobody has picked yet, a role's own next step in its own work (waiting, retrying or not, asking someone for a fix, what the next part of the same task must keep) and a report that a condition was met which ends an earlier wait or hold (an end condition reached, not one added or changed), unless either sets a rule for later or the same record also chooses something new (a new limit, rule, date or next step), which is still a decision, how finished work was done (what a test or proof covered or left out), one-time requests about the case at hand (please don't retry this, send me that), acknowledgements, thanks, and plans that only list steps without choosing between ways of doing something.
 
 First compare each point with KNOWN DECISIONS and with the new items earlier in this batch (N<n>). Then:
 - it says a known decision again, unchanged: "same", with of. Only when it adds nothing to it: a further choice inside a known decision's area (who holds which copy, what a number is, what happens in a given case) is its own new item, or a change when it alters what the known decision says;
@@ -56,7 +65,7 @@ Plan changes: a queue plan change shows only what changed since the task's last 
 Dialog answers: the owner's pick is his decision (part "main"). Also read the picked option's description and preview: a further choice bundled inside the option he picked, that is not what the option's label says, is a separate item with part "rider".
 
 For every item:
-- point: "rule" when it sets how something is built, run, limited, shown or scoped from now on (a design, a rule, a scope, a limit, a number or date, who does what); "go" when someone allows, orders, holds, pauses or stops a step; "own-step" when it is only about the work at hand: what the writer did or how (what a finished test or proof covered or left out), is doing or will do next, what the next part of the same task must keep, what it waits for, whether it retries, a one-time request to someone about this case (please don't retry this, send me that), or a report that a condition was met which ends an earlier wait or hold (the wait's own end condition reached: not a "go").
+- point: "rule" when it sets how something is built, run, limited, shown or scoped from now on (a design, a rule, a scope, a limit, a number or date, who does what); "go" when someone allows, orders, holds, pauses or stops a step; "own-step" when it is only about the work at hand: what the writer did or how (what a finished test or proof covered or left out), is doing or will do next, what the next part of the same task must keep, what it waits for, whether it retries, a one-time request to someone about this case (please don't retry this, send me that), or a report that a condition was met which ends an earlier wait or hold (the wait's own end condition reached: not a "go"); none of these when the same record also chooses something new (a new limit, rule, date or next step), which is still a decision.
 - quotes: 1 to 3 short quotes copied character for character from the record, stating the point itself. Never reword, never join pieces. For a dialog answer quote the point's own words in the option he picked (its label, description or preview) or in what he typed. The code adds the picked option's label to each item, so quote the label only for a point the label itself states; one quote serves one point, so two items never share the same quotes.
 - claimsOwner: true or false, see Credit.
 - part: "main" or "rider" for dialog answers, else null.
@@ -888,6 +897,39 @@ export class DecisionReader {
 		}
 		result.problems = parsed.problems;
 
+		// Quotes in the record's own words: one the model got a word or two wrong snaps to them (Data's second
+		// ruling, Ops #98: a quote can't miss). Then the riders in the dialogs he answered: their own check labels
+		// the passages of the options he picked, record by record, and code gives each point its part from them
+		// (the reader's own rider mark judged the same words differently from run to run). Done before the state
+		// is read below, because the check's calls count their tokens in it.
+		const riders = new Map<number, Map<string, RiderPart> | "wait">();
+		let riderStop: string | undefined;
+		let riderChecks = 0;
+		for (const [i, rec] of full.entries()) {
+			const items = parsed.records.get(labels[i]);
+			if (!items?.length) continue;
+			const texts = quoteTexts(rec, was[i]);
+			for (const item of items) item.quotes = item.quotes.map((q) => snapQuote(q, texts) ?? q);
+			if (
+				!needsRiderCheck(
+					rec,
+					items.map((it) => it.quotes),
+				)
+			)
+				continue;
+			if (riderStop !== undefined) {
+				riders.set(i, "wait");
+				continue;
+			}
+			riderChecks++;
+			const got = await this.riderLabels(rec, settings, result);
+			if (got instanceof Map) riders.set(i, got);
+			else {
+				riderStop = got.error;
+				riders.set(i, "wait");
+			}
+		}
+
 		// Apply, record by record, in order.
 		const batchIds = new Map<string, DecisionEntry>();
 		const state = store.readerState();
@@ -895,6 +937,10 @@ export class DecisionReader {
 		for (const [i, rec] of full.entries()) {
 			const items = parsed.records.get(labels[i]);
 			if (!items) continue; // left out: read again next time
+			const rider = riders.get(i);
+			if (rider === "wait") continue; // its rider check waits for an account: read again next time
+			if (rec.source === "answer")
+				for (const item of items) item.part = (rider && partFromLabels(rec, item.quotes, rider)) ?? "main";
 			// A plan's Decided part is where a role writes its choices down. Said to hold nothing: one more
 			// read, alone; what that read says stands.
 			if (!secondLook && !items.length && rec.source === "plan" && rec.plan?.decided?.trim()) {
@@ -936,17 +982,69 @@ export class DecisionReader {
 			result.read++;
 		}
 		state.lastRun = this.now();
-		delete state.lastError;
+		if (riderStop !== undefined) {
+			state.lastError = { at: this.now(), error: riderStop };
+			result.error = riderStop;
+			result.limited = true;
+		} else delete state.lastError;
 		store.save();
 		store.saveReaderState(state);
 		this.log(
-			`read ${result.read} records: ${result.decisions} decisions, ${result.changes} changes, ${result.same} repeats, ${result.skipped ? `${result.skipped} own steps left out, ` : ""}${result.tokens} tokens${parsed.problems.length ? `; ${parsed.problems.length} problems: ${parsed.problems.slice(0, 3).join("; ")}` : ""}${again.length ? `; ${again.length} plan${again.length === 1 ? "" : "s"} with nothing found read again alone` : ""}`,
+			`read ${result.read} records: ${result.decisions} decisions, ${result.changes} changes, ${result.same} repeats, ${result.skipped ? `${result.skipped} own steps left out, ` : ""}${riderChecks ? `${riderChecks} rider check${riderChecks === 1 ? "" : "s"}, ` : ""}${result.tokens} tokens${parsed.problems.length ? `; ${parsed.problems.length} problems: ${parsed.problems.slice(0, 3).join("; ")}` : ""}${again.length ? `; ${again.length} plan${again.length === 1 ? "" : "s"} with nothing found read again alone` : ""}`,
 		);
 		this.o.onChange?.();
 		if (!again.length) return result;
 		const more: BatchResult[] = [];
 		for (const rec of again) more.push(await this.readBatch([rec], settings, true));
 		return mergeResults(result, ...more);
+	}
+
+	/**
+	 * The rider check's labels for a dialog he answered (decision-rider.ts), with the batch call's tries and
+	 * limit hops. A check that keeps failing gives every passage the safer label, rider, because over-credit is
+	 * the worse error (Data rm-8cb70820); with no account left, the caller leaves the record for the next read.
+	 */
+	private async riderLabels(
+		rec: DecisionRecord,
+		settings: ReaderSettings,
+		result: BatchResult,
+	): Promise<Map<string, RiderPart> | { limited: true; error: string }> {
+		const auto = !settings.model || settings.model === "auto";
+		const waits = this.o.retryWaitMs ?? DEFAULT_RETRY_WAIT;
+		let hops = 0;
+		let error = "";
+		for (let attempt = 0; attempt < MAX_TRIES; attempt++) {
+			const { labels, reply } = await askRiders(this.o.model, rec, {
+				model: settings.model,
+				thinking: settings.thinking,
+				timeoutMs: settings.callTimeoutSeconds * 1000,
+				...(auto ? { avoid: this.resting() } : {}),
+			});
+			result.tokens += reply.usage ? reply.usage.input + reply.usage.output : 0;
+			this.countTokens(reply.usage, reply.model);
+			if (labels) return labels;
+			if (!reply.ok && reply.limited) {
+				error = reply.error;
+				if (auto && reply.account && hops < 8) {
+					const state = this.o.store.readerState();
+					state.resting = { ...(state.resting ?? {}), [reply.account]: this.now() + LIMIT_REST_MS };
+					this.o.store.saveReaderState(state);
+					this.log(
+						`account ${reply.account} refused for its limit; it rests ${LIMIT_REST_MS / 60_000} min, asking the next one`,
+					);
+					hops++;
+					attempt--;
+					continue;
+				}
+				this.log(`rider check of ${rec.id}: ${reply.error}; the reader waits`);
+				return { limited: true, error };
+			}
+			error = reply.ok ? "the answer didn't parse" : reply.error;
+			this.log(`rider check of ${rec.id}: ${error}, try ${attempt + 1}/${MAX_TRIES}`);
+			if (!reply.ok && attempt < MAX_TRIES - 1) await sleep(waits[Math.min(attempt, waits.length - 1)] ?? 0);
+		}
+		result.problems.push(`${rec.id}: the rider check failed (${error}); its passages count as riders`);
+		return new Map(riderPassagesOf(rec).map((p) => [p.id, "rider" as const]));
 	}
 
 	private countTokens(usage: { input: number; output: number } | undefined, model?: string): void {

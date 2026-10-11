@@ -66,6 +66,28 @@ function riderRole(src: UiDecisionSource | undefined): string {
 	return roleName(src.role ?? (src.writer === "owner" ? undefined : src.writer));
 }
 
+/**
+ * Whose words a source line is: the page's credit for a point (Data's ruling R2 on Ops #98), shown next to
+ * the line's words. "you" only where the server found his own record behind it (not a rider, not a role
+ * saying he decided); an entry's "You decided" header needs such a line.
+ */
+export type CreditKind = "you" | "rider" | "claims" | "role";
+
+export function creditKind(src: Pick<UiDecisionSource, "you" | "flags">): CreditKind {
+	if (src.you) return "you";
+	if (src.flags.includes("rider")) return "rider";
+	if (src.flags.includes("claims-owner")) return "claims";
+	return "role";
+}
+
+export function creditLabel(t: Translate, src: UiDecisionSource): string {
+	const kind = creditKind(src);
+	if (kind === "you") return youLabel(t, src) ?? t("ivYouOther");
+	if (kind === "rider") return t("ivFlagRider", { role: riderRole(src) });
+	const role = roleName(src.writer === "owner" ? src.role : src.writer);
+	return kind === "claims" ? t("ivCreditClaims", { role }) : t("ivCreditRole", { role });
+}
+
 /** A credit flag in plain words. */
 export function flagText(t: Translate, flag: UiWhoFlag, src: UiDecisionSource | undefined): string {
 	if (flag === "rider") return t("ivFlagRider", { role: riderRole(src) });

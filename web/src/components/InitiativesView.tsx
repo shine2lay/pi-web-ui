@@ -23,6 +23,8 @@ import {
 	approvalLabel,
 	changeLabel,
 	count,
+	creditKind,
+	creditLabel,
 	entryFlags,
 	filedText,
 	headSource,
@@ -59,6 +61,8 @@ export interface InitiativesViewProps {
 
 /** Sources shown on a card before "N more". */
 const SOURCES_SHOWN = 3;
+/** A source line's quotes shown next to its credit. */
+const QUOTES_SHOWN = 2;
 
 function useNow(active: boolean): number {
 	const [now, setNow] = useState(() => Date.now());
@@ -375,6 +379,7 @@ function Sources({
 	const sorted = [...sources].sort((a, b) => a.at - b.at);
 	const item = (src: UiDecisionSource, i: number): ReactNode => {
 		const label = sourceLabel(t, src);
+		const quotes = src.quotes.filter((q) => q.trim()).slice(0, QUOTES_SHOWN);
 		return (
 			<li key={`${src.record ?? src.link ?? ""}-${i}`}>
 				<button
@@ -389,6 +394,18 @@ function Sources({
 					<When at={src.at} now={now} />
 					{src.same ? ` · ${t("ivSaysAgain")}` : ""}
 				</span>
+				{/* Whose words they are, next to the words (Data's ruling R2 on Ops #98). */}
+				<p className="iv-scredit">
+					<span className={`iv-chip iv-credit iv-credit-${creditKind(src)}`}>
+						<span className="iv-sr">{t("ivWhoseWords")}: </span>
+						{creditLabel(t, src)}
+					</span>
+					{quotes.map((q, k) => (
+						<q key={k} className="iv-squote">
+							{q}
+						</q>
+					))}
+				</p>
 			</li>
 		);
 	};

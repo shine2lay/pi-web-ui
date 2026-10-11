@@ -373,6 +373,179 @@ function locate(quotes: string[], fields: Field[]): ({ field: Field; quote: stri
 	});
 }
 
+// ---------------------------------------------------------------------------
+// Riders (Data's second ruling on Ops #98, rm-bee5a1ab)
+// ---------------------------------------------------------------------------
+
+/**
+ * The words of a point that the rider check judges: those in the description or preview of an option he
+ * picked, which a role wrote. His label and what he typed are his choice itself, and words from the question
+ * or an option he didn't pick aren't his anyway, so none of those is judged. A point that quotes his label
+ * and a rider passage beside it still has that passage: the rider check judges the passage, not the point.
+ */
+export function riderPassages(rec: DecisionRecord, quotes: string[]): string[] {
+	if (rec.source !== "answer") return [];
+	const located = locate(quotes, answerFields(rec));
+	return located
+		.filter((l) => l && (l.field.place === "description" || l.field.place === "preview"))
+		.map((l) => l!.quote);
+}
+
+/** Share of a passage's content words that must be in what he was asked for it to restate the question. */
+export const RESTATE_SHARE = 0.6;
+
+/**
+ * The passage restates what he was asked: at least 60% of its content words (3 or more of them) are in the
+ * question whose picked option holds it (header, question, detail) or the dialog's own title and text. He
+ * read it there before he picked, so it is his choice, not a rider (a measured check; rule 17).
+ */
+export function restatesQuestion(rec: DecisionRecord, passage: string): boolean {
+	const words = contentWords(passage);
+	if (words.size < 3) return false;
+	for (const q of rec.questions ?? []) {
+		const picked = new Set(q.picked ?? []);
+		const holds = (q.options ?? []).some((o) => {
+			if (!picked.has(o.label)) return false;
+			const preview = (o as { preview?: string }).preview;
+			const texts = [o.description, preview];
+			if (o.description)
+				for (const sep of [": ", " - ", " \u2014 ", ". "]) texts.push(`${o.label}${sep}${o.description}`);
+			return texts.some((t) => t && quoteIn(passage, t));
+		});
+		if (!holds) continue;
+		const asked = contentWords([q.header, q.question, q.detail, rec.title, rec.body].filter(Boolean).join("\n"));
+		let n = 0;
+		for (const w of words) if (asked.has(w)) n++;
+		return n / words.size >= RESTATE_SHARE;
+	}
+	return false;
+}
+
+/** The passages of a point that only the rider check can call main or rider (the rest are main by code). */
+export function riderQuestions(rec: DecisionRecord, quotes: string[]): string[] {
+	return riderPassages(rec, quotes).filter((p) => !restatesQuestion(rec, p));
+}
+
+// ---------------------------------------------------------------------------
+// Quotes snapped to the record's own words (Data's second ruling: a quote can't miss)
+// ---------------------------------------------------------------------------
+
+/** The texts of a record a quote is taken from, each on its own (a quote never runs across two). */
+export function quoteTexts(rec: DecisionRecord, was?: DecisionRecord): string[] {
+	if (rec.source === "answer") return answerFields(rec).map((f) => f.text);
+	const out: (string | undefined)[] = [rec.title, rec.text, rec.ownerWords, rec.body, rec.summary];
+	for (const r of [rec, was]) {
+		const p = r?.source === "plan" ? r.plan : undefined;
+		if (p) out.push(p.title, p.goal, p.doneWhen, p.decided, p.steps, p.verify, p.mustNot);
+	}
+	return out.filter((s): s is string => typeof s === "string" && s.trim().length > 0);
+}
+
+export interface Tok {
+	w: string;
+	start: number;
+	end: number;
+}
+
+/** A text's words, each normalised as normText does, with where it stands in the text. */
+export function toks(text: string): Tok[] {
+	const out: Tok[] = [];
+	for (const m of text.matchAll(/[\p{L}\p{N}]+(?:['\u2019][\p{L}\p{N}]+)*/gu)) {
+		out.push({ w: normText(m[0]), start: m.index, end: m.index + m[0].length });
+	}
+	return out;
+}
+
+/** Share of a quote's words that must be found, in order, for it to snap to the record's words. */
+export const SNAP_SHARE = 0.8;
+const SNAP_MAX_CELLS = 4_000_000;
+
+/**
+ * The closest stretch of a text to a quote's words (local alignment: a word in the same place +2, a word
+ * missing, added or changed -1): its first and last word, and how many of the quote's words it matched.
+ */
+function closest(q: string[], t: Tok[], from: number): { a: number; b: number; matched: number } | undefined {
+	const m = q.length;
+	const n = t.length - from;
+	if (m < 3 || n < 1 || (m + 1) * (n + 1) > SNAP_MAX_CELLS) return undefined;
+	const H = new Int16Array((m + 1) * (n + 1));
+	const at = (i: number, j: number) => i * (n + 1) + j;
+	let best = 0;
+	let bi = 0;
+	let bj = 0;
+	for (let i = 1; i <= m; i++) {
+		for (let j = 1; j <= n; j++) {
+			const diag = H[at(i - 1, j - 1)] + (q[i - 1] === t[from + j - 1].w ? 2 : -1);
+			const h = Math.max(0, diag, H[at(i - 1, j)] - 1, H[at(i, j - 1)] - 1);
+			H[at(i, j)] = h;
+			if (h > best) {
+				best = h;
+				bi = i;
+				bj = j;
+			}
+		}
+	}
+	if (!best) return undefined;
+	// Back from the best cell to where the stretch starts.
+	let i = bi;
+	let j = bj;
+	let matched = 0;
+	let first = bj;
+	while (i > 0 && j > 0 && H[at(i, j)] > 0) {
+		const same = q[i - 1] === t[from + j - 1].w;
+		if (same && H[at(i, j)] === H[at(i - 1, j - 1)] + 2) {
+			matched++;
+			first = j;
+			i--;
+			j--;
+		} else if (!same && H[at(i, j)] === H[at(i - 1, j - 1)] - 1) {
+			i--;
+			j--;
+		} else if (H[at(i, j)] === H[at(i - 1, j)] - 1) i--;
+		else j--;
+	}
+	return { a: from + first - 1, b: from + bj - 1, matched };
+}
+
+/**
+ * A quote in the record's own words. Already word for word: as it is. Else the closest stretch of one of the
+ * record's texts, when it holds at least 80% of the quote's words in the same order and is not much longer
+ * (the model dropped, added or changed a word or two); else undefined, and the quote stays not found.
+ * "..." in a quote skips words: each part snaps on its own, in order, in the same text.
+ */
+export function snapQuote(quote: string, texts: readonly string[]): string | undefined {
+	if (texts.some((t) => quoteIn(quote, t))) return quote;
+	const parts = String(quote ?? "")
+		.split(/\s*(?:\.\.\.|\u2026)\s*/)
+		.map((p) => toks(p).map((x) => x.w))
+		.filter((p) => p.length);
+	if (!parts.length) return undefined;
+	let best: { text: string; matched: number } | undefined;
+	for (const text of texts) {
+		const t = toks(text);
+		const got: string[] = [];
+		let from = 0;
+		let matched = 0;
+		for (const q of parts) {
+			const span = closest(q, t, from);
+			const len = span ? span.b - span.a + 1 : 0;
+			if (
+				!span ||
+				span.matched < Math.ceil(SNAP_SHARE * q.length) ||
+				len > q.length + Math.max(2, Math.ceil(q.length / 4))
+			)
+				break;
+			got.push(text.slice(t[span.a].start, t[span.b].end));
+			matched += span.matched;
+			from = span.b + 1;
+		}
+		if (got.length !== parts.length) continue;
+		const snapped = got.join(" ... ");
+		if (quoteIn(snapped, text) && (!best || matched > best.matched)) best = { text: snapped, matched };
+	}
+	return best?.text;
+}
+
 function plain(
 	writer: string,
 	approval: ApprovalKind,
@@ -448,7 +621,12 @@ function whoOfAnswer(rec: DecisionRecord, src: WhoSource): Who {
 		return { writer: role, approval: "dialog-question", you: false, flags, places };
 	}
 	const own = located.filter((l) => l!.field.owner && enough(l!.quote, l!.field.text));
-	const unpicked = located.some((l) => l!.field.place === "unpicked");
+	// Words from an option he didn't pick make it the role's, unless the point also quotes his own label or what
+	// he typed: then it is his pick, and the other option's words say what he picked it over (Ops #98: a point
+	// quoting his label beside the other option's words was "not you" in one run and "you" in the other).
+	const unpicked =
+		located.some((l) => l!.field.place === "unpicked") &&
+		!own.some((l) => l!.field.place === "label" || l!.field.place === "typed");
 	// He picked "Go ahead" (or the like) on a question that proposes it: "<role> proposed, you approved".
 	// Every point of the proposal is in what he approved, so the reader's rider mark (which is about a
 	// choice riding inside the option he picked) doesn't apply here.
@@ -459,7 +637,9 @@ function whoOfAnswer(rec: DecisionRecord, src: WhoSource): Who {
 		if (src.claimsOwner) flags.push("claims-owner");
 		return { writer: role, approval: "dialog-question", you: false, flags, places };
 	}
-	if (src.part === "rider") {
+	// The reader's rider mark counts only for words a role wrote into the option he picked that don't restate
+	// what he was asked (his label, what he typed and a restatement of the question are his choice).
+	if (src.part === "rider" && riderQuestions(rec, src.quotes).length) {
 		flags.push("rider");
 		return { writer: role, approval: "dialog-pick", role, you: false, flags, places };
 	}

@@ -22,6 +22,8 @@ import {
 	alsoInText,
 	approvalLabel,
 	changeLabel,
+	creditKind,
+	creditLabel,
 	entryFlags,
 	perDayRows,
 	roleName,
@@ -119,6 +121,18 @@ describe("initiatives-page: who decided, in plain words", () => {
 			"Temper's choice, inside the option you picked",
 			"A role says you decided; not in your words",
 		]);
+	});
+
+	it("gives each source line its own credit (Data's ruling R2, Ops #98)", () => {
+		const mine = src({ you: true, writer: "owner", approval: "dialog-pick", kind: "answer" });
+		const rider = src({ writer: "owner", approval: "dialog-pick", role: "temper", kind: "answer", flags: ["rider"] });
+		const claim = src({ writer: "coo", approval: "message", kind: "message", flags: ["claims-owner"] });
+		const role = src({});
+		expect([mine, rider, claim, role].map(creditKind)).toEqual(["you", "rider", "claims", "role"]);
+		expect(creditLabel(t, mine)).toBe("You decided: your pick");
+		expect(creditLabel(t, rider)).toBe("Temper's choice, inside the option you picked");
+		expect(creditLabel(t, claim)).toBe("COO's words, saying you decided");
+		expect(creditLabel(t, role)).toBe("Architecture's words");
 	});
 
 	it("labels changes and lists tokens and entries per day, newest first", () => {
@@ -263,6 +277,42 @@ describe("initiatives-page: the page", () => {
 		html = render(false);
 		expect(html).toContain("The reader is switched off");
 		expect(html).not.toContain("Reads:");
+	});
+
+	it("shows whose words each source line is, next to its words; 'You decided' only with a line that is his", () => {
+		setAppSend(() => true);
+		const p = page();
+		const mine = src({
+			record: "dr-2",
+			writer: "owner",
+			approval: "dialog-pick",
+			kind: "answer",
+			you: true,
+			quotes: ["Two tasks (recommended)", "A: messages and inboxes."],
+		});
+		const rider = src({
+			writer: "owner",
+			approval: "dialog-pick",
+			role: "temper",
+			kind: "answer",
+			flags: ["rider"],
+			quotes: ["Members take turns one at a time at first."],
+		});
+		p.decisions = [decision({ id: "d-mix", sources: [rider, mine], head: 1, you: true, flags: ["rider"] })];
+		p.total = 1;
+		receiveInitiatives({ type: "initiatives", page: p });
+		const html = render(false);
+		expect(html).toContain(
+			'<span class="iv-chip iv-credit iv-credit-rider"><span class="iv-sr">Whose words: </span>Temper&#x27;s choice, inside the option you picked</span><q class="iv-squote">Members take turns one at a time at first.</q>',
+		);
+		expect(html).toContain(
+			'<span class="iv-chip iv-credit iv-credit-you"><span class="iv-sr">Whose words: </span>You decided: your pick</span><q class="iv-squote">Two tasks (recommended)</q><q class="iv-squote">A: messages and inboxes.</q>',
+		);
+		expect(html).toContain("You decided");
+		// Only the rider line: no "You decided" anywhere on the card.
+		p.decisions = [decision({ id: "d-rider", sources: [rider], head: 0, you: false, flags: ["rider"] })];
+		receiveInitiatives({ type: "initiatives", page: p });
+		expect(render(false)).not.toContain("You decided");
 	});
 
 	it("shows no 'You decided' on a card that only a role's words credit to him", () => {

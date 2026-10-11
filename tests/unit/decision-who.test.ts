@@ -6,7 +6,17 @@
  */
 import { describe, expect, it } from "vitest";
 import type { DecisionRecord } from "../../server/decision-records.js";
-import { entryWho, quoteIn, textClaimsOwner, whoOf, wordingClaimsOwner } from "../../server/decision-who.js";
+import {
+	entryWho,
+	quoteIn,
+	quoteTexts,
+	restatesQuestion,
+	riderQuestions,
+	snapQuote,
+	textClaimsOwner,
+	whoOf,
+	wordingClaimsOwner,
+} from "../../server/decision-who.js";
 
 const base = { v: 1 as const, at: Date.parse("2026-10-03T22:40:00-07:00"), how: "live" as const, seen: 0 };
 
@@ -415,5 +425,76 @@ describe("an entry with several sources", () => {
 				{ who: rider, at: 2 },
 			]),
 		).toEqual({ head: 1, you: false, flags: ["rider", "claims-owner"] });
+	});
+});
+
+// Ops #98 (Data's second ruling rm-8cb70820): the same words get the same credit in every run.
+describe("credit that doesn't change from run to run", () => {
+	it("his label beside the other option's words is his pick, not the role's (Ops #98 bar runs)", () => {
+		// One run quoted his label alone, the other his label and what he picked it over.
+		const both = whoOf(slices, { quotes: ["Two tasks (recommended)", "Same work as a single queue task"] });
+		expect(both).toMatchObject({ writer: "owner", approval: "dialog-pick", you: true });
+		expect(both.places).toEqual(["label", "unpicked"]);
+		// The other option's words alone stay the role's.
+		expect(whoOf(slices, { quotes: ["Same work as a single queue task"] }).you).toBe(false);
+	});
+
+	it("the rider mark counts only for a role's own words in his pick, not for words restating his question", () => {
+		const ask: DecisionRecord = {
+			...slices,
+			questions: [
+				{
+					id: "who",
+					question: "Who reviews the first slice before it lands?",
+					options: [
+						{
+							label: "Architecture (recommended)",
+							description: "Architecture reviews the first slice before it lands. Members take turns one at a time.",
+						},
+						{ label: "QA", description: "QA reviews it." },
+					],
+					picked: ["Architecture (recommended)"],
+				},
+			],
+		};
+		const restating = "Architecture reviews the first slice before it lands";
+		expect(restatesQuestion(ask, restating)).toBe(true);
+		expect(riderQuestions(ask, [restating])).toEqual([]);
+		expect(whoOf(ask, { quotes: [restating], part: "rider" })).toMatchObject({ you: true, flags: [] });
+		// His label: his choice whatever the mark says.
+		expect(whoOf(ask, { quotes: ["Architecture (recommended)"], part: "rider" }).you).toBe(true);
+		// The role's own words in his pick: the mark makes them a rider.
+		expect(restatesQuestion(ask, "Members take turns one at a time")).toBe(false);
+		expect(whoOf(ask, { quotes: ["Members take turns one at a time"], part: "rider" })).toMatchObject({
+			you: false,
+			flags: ["rider"],
+			role: "temper",
+		});
+	});
+
+	it("a quote with a word or two wrong snaps to the record's own words; one too far off doesn't", () => {
+		const texts = quoteTexts(slices);
+		// Word for word: as it is.
+		expect(snapQuote("Members take turns one at a time", texts)).toBe("Members take turns one at a time");
+		// One word changed, one dropped: the record's words, which are then found word for word.
+		const snapped = snapQuote("members take their turns one at a time at the first", texts);
+		expect(snapped).toBe("Members take turns one at a time at first");
+		expect(whoOf(slices, { quotes: [snapped!], part: "main" }).flags).not.toContain("quote-not-found");
+		// "..." parts snap on their own, in order, in the same text.
+		expect(snapQuote("the leader asks for review ... the others give a view", texts)).toBe(
+			"The leader asks for a review ... the others each give a view",
+		);
+		// Too far off (under 80% of its words), words from two different texts, or too short to tell: not snapped.
+		expect(snapQuote("members always take long turns two at a time", texts)).toBeUndefined();
+		expect(snapQuote("Same work as a single queue task. How should the first slice be built", texts)).toBeUndefined();
+		expect(snapQuote("nine tasks", texts)).toBeUndefined();
+	});
+
+	it("takes a quote from one text of the record at a time: an answer's fields, a plan's and its last version's", () => {
+		expect(quoteTexts(slices)).toContain("Two tasks (recommended)");
+		expect(quoteTexts(slices).some((t) => t.includes("Same work as a single queue task."))).toBe(true);
+		const p = plan({ plan: { title: "First trial", goal: "One watched team." } });
+		const before = plan({ id: "dr-plan-0", plan: { title: "First trial", goal: "Two teams." } });
+		expect(quoteTexts(p, before)).toEqual(expect.arrayContaining(["One watched team.", "Two teams."]));
 	});
 });

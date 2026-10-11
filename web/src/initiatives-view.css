@@ -392,6 +392,30 @@
 .iv-srclabel {
 	overflow-wrap: anywhere;
 }
+/* Whose words a source line is, next to its words (Data's ruling R2 on Ops #98). */
+.iv-scredit {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 8px;
+	align-items: baseline;
+	margin: 2px 0 6px;
+	font-size: var(--iv-fs3);
+	line-height: var(--iv-lh3);
+}
+.iv-credit-you {
+	border-color: color-mix(in srgb, var(--green) 50%, transparent);
+	background: var(--iv-green-tint);
+}
+.iv-credit-rider,
+.iv-credit-claims {
+	border-color: var(--iv-amber-line);
+	background: var(--iv-amber-tint);
+	color: var(--amber-text);
+}
+.iv-squote {
+	color: var(--text-dim);
+	overflow-wrap: anywhere;
+}
 .iv-more {
 	display: flex;
 	flex-wrap: wrap;

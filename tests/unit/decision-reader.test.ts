@@ -29,6 +29,7 @@ import {
 	unreadOf,
 } from "../../server/decision-reader.js";
 import { DecisionRecords, type DecisionRecord, type NewDecisionRecord } from "../../server/decision-records.js";
+import { RIDER_SYSTEM } from "../../server/decision-rider.js";
 import { DecisionStore, fileRecord, parseSettings, TEAM_IN_TEMPER } from "../../server/decision-store.js";
 import { buildDecisionsPage, citedRecords } from "../../server/decision-view.js";
 import type { RoleMessageSender } from "../../server/role-messages.js";
@@ -1246,11 +1247,155 @@ describe("the reader", () => {
 					],
 				},
 			]),
+			// The rider check (Ops #98): P1-P2 the description's sentences, P3 the preview.
+			JSON.stringify({ labels: { P1: "main", P2: "main", P3: "rider" } }),
 		]);
 		await reader(model).readAll();
 		const [pick, rider] = store.decisions();
 		expect(pick.sources[0].quotes).toEqual(["Review rounds (recommended)", "The leader asks for a review."]);
 		expect(rider.sources[0].quotes).toEqual(["Members take turns one at a time at first."]);
+		expect(rider.sources[0].part).toBe("rider");
+	});
+
+	// Ops #98 (Data's second ruling rm-8cb70820): the reader's own rider mark judged the same words differently
+	// from run to run; a check of its own labels the picked options' passages, and code gives each point its part.
+	describe("the rider check", () => {
+		const dialog = (ref = "ask:r") =>
+			records.append({
+				source: "answer",
+				at: (clock += 60_000),
+				from: "owner",
+				to: "temper",
+				ref,
+				ask: "question",
+				questions: [
+					{
+						id: "q",
+						question: "How should the first slice be built?",
+						options: [
+							{
+								label: "Two tasks (recommended)",
+								description: "A: messages and inboxes. Members take turns one at a time at first.",
+							},
+							{ label: "One task", description: "Same work as a single queue task." },
+						],
+						picked: ["Two tasks (recommended)"],
+					},
+				],
+			});
+		const items = (partA: string, partB: string, quoteB = "Members take turns one at a time at first.") =>
+			answer([
+				{
+					r: "R1",
+					items: [
+						{
+							kind: "new",
+							id: "N1",
+							title: "Two tasks",
+							what: "Two tasks.",
+							quotes: ["A: messages and inboxes."],
+							part: partA,
+						},
+						{ kind: "new", id: "N2", title: "Turns", what: "One at a time.", quotes: [quoteB], part: partB },
+					],
+				},
+			]);
+		const parts = () => Object.fromEntries(store.decisions().map((d) => [d.title, d.sources[0].part ?? "main"]));
+
+		it("its labels give each point its part, whatever the reader marked", async () => {
+			dialog();
+			// The reader marks it the wrong way round; the check's labels win.
+			const model = fakeModel([items("rider", "main"), JSON.stringify({ labels: { P1: "main", P2: "rider" } })]);
+			await reader(model).readAll();
+			expect(model.calls).toHaveLength(2);
+			expect(model.calls[1].system).toBe(RIDER_SYSTEM);
+			expect(model.calls[1].prompt).toContain("[P2] Members take turns one at a time at first.");
+			expect(model.calls[1].thinking).toBe("medium");
+			expect(parts()).toEqual({ "Two tasks": "main", Turns: "rider" });
+			// Its tokens count with the batch's.
+			expect(store.readerState().tokens["2026-10-05"]).toEqual({ input: 2000, output: 400, calls: 2 });
+		});
+
+		it("isn't asked when no point quotes a picked option's own text", async () => {
+			dialog();
+			const model = fakeModel([
+				answer([
+					{
+						r: "R1",
+						items: [
+							{
+								kind: "new",
+								id: "N1",
+								title: "Two tasks",
+								what: "Two.",
+								quotes: ["Two tasks (recommended)"],
+								part: "rider",
+							},
+						],
+					},
+				]),
+			]);
+			await reader(model).readAll();
+			expect(model.calls).toHaveLength(1);
+			// His label is his pick, whatever the reader marked.
+			expect(parts()).toEqual({ "Two tasks": "main" });
+		});
+
+		it("snaps a quote with a word wrong to the record's own words before judging it", async () => {
+			dialog();
+			const model = fakeModel([
+				items("main", "main", "Members take their turns one at a time at first"),
+				JSON.stringify({ labels: { P1: "main", P2: "rider" } }),
+			]);
+			await reader(model).readAll();
+			const turns = store.decisions().find((d) => d.title === "Turns")!;
+			expect(turns.sources[0].quotes).toEqual(["Members take turns one at a time at first"]);
+			expect(turns.sources[0].part).toBe("rider");
+		});
+
+		it("a check that keeps failing makes its passages riders, and says so", async () => {
+			dialog();
+			const model = fakeModel([items("main", "main"), "not an answer"]);
+			const logs: string[] = [];
+			const res = await new DecisionReader({
+				records,
+				store,
+				model,
+				now: () => clock,
+				retryWaitMs: [0],
+				allRecords: true,
+				log: (s: string) => logs.push(s),
+			}).readAll();
+			expect(res).toMatchObject({ stopped: "done", read: 1 });
+			expect(model.calls.length).toBeGreaterThan(2);
+			expect(parts()).toEqual({ "Two tasks": "rider", Turns: "rider" });
+			expect(logs.some((l) => l.includes("the rider check failed"))).toBe(true);
+		});
+
+		it("with no account left for it, the record stays unread and the reader waits", async () => {
+			dialog();
+			records.append(msg("rm-b", "Two."));
+			const calls: ModelCall[] = [];
+			const model: DecisionModel = async (c) => {
+				calls.push(c);
+				if (c.system === RIDER_SYSTEM)
+					return { ok: false, limited: true, error: "every Claude account of the chat pool (anthropic) is resting" };
+				return {
+					ok: true,
+					text: items("main", "main").replace('"records":[', '"records":[{"r":"R2","items":[]},'),
+					model: "anthropic/claude-haiku-5-5",
+					usage: { input: 10, output: 5 },
+				};
+			};
+			const res = await reader(model).readAll();
+			expect(res).toMatchObject({ stopped: "quota" });
+			expect(res.error).toContain("resting");
+			// The message beside it is read; the dialog waits for the next read, with nothing filed from it.
+			const read = Object.keys(store.readerState().read ?? {});
+			expect(read).toHaveLength(1);
+			expect(store.decisions()).toEqual([]);
+			expect(store.readerState().lastError?.error).toContain("resting");
+		});
 	});
 
 	it("always shows the known decisions most like each record (rare shared words first), however many there are", async () => {
