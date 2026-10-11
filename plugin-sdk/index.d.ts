@@ -91,6 +91,12 @@ export interface PluginRoleReply {
 	error?: string;
 	/** The text was longer and was cut at 20,000 characters. */
 	cut?: boolean;
+	/** Server-derived visibility: this role callback answers the owner's question. */
+	forOwner?: boolean;
+	answeredBy?: string[];
+	ownerIds?: string[];
+	/** Internal accepted-input provenance, not a roles.send/message_role argument. */
+	ownerChannel?: "browser" | "telegram" | null;
 }
 
 export interface WsEntry {

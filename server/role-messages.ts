@@ -48,7 +48,7 @@ import { StringDecoder } from "node:string_decoder";
 import { checkInitiative } from "./decision-records.js";
 import { samePath, type IdentityDef } from "./identities.js";
 import type { UiRoleMessage, UiRoleMessageKind, UiRoleMessageRow, UiRoleMessageState } from "./protocol.js";
-import { OWNER_IDS_MAX } from "./role-replies.js";
+import { ownerChannelOf, type OwnerChannel, type RoleOwnerAnswer, OWNER_IDS_MAX } from "./role-replies.js";
 import { CARRY_ON_PREFIX } from "./running-chats.js";
 import { TASK_QUEUE_ENTRY_TYPE, taskQueueFromEntries, taskQueueHeld, type TaskQueueEntryLike } from "./task-queue.js";
 
@@ -165,6 +165,8 @@ export interface RoleMessageRecord {
 	forOwner?: boolean;
 	/** forOwner: the host.roles.send ids of the owner's messages behind it (the plugin threads under them). */
 	ownerIds?: string[];
+	/** Server-derived owner transport, independent of forOwner visibility. */
+	ownerChannel?: OwnerChannel | null;
 	/** decision-records: the initiative it is part of (a short id; a reply without one takes its original's). */
 	initiative?: string;
 }
@@ -256,7 +258,7 @@ export interface RoleMessageSender {
 	handling: number;
 	/** telegram-coo: the chat is a role's home chat and its running turn is the owner's (role-replies.ts
 	 *  ownerTurnOf): a question or request it sends is marked forOwner, with these send ids. */
-	forOwner?: { ownerIds: string[] };
+	forOwner?: { ownerIds: string[]; ownerChannel?: OwnerChannel };
 }
 
 export interface RoleMessageSendInput {
@@ -817,12 +819,40 @@ export class RoleMessages {
 	 * asked for the owner (forOwner): who answered, and the owner's send ids behind the question. The turn
 	 * it starts is the owner's (role-replies.ts). Anything else: null.
 	 */
-	ownerAnswerOf(id: string | undefined): { answeredBy: string; ownerIds: string[] } | null {
+	private questionOwnerOf(r: RoleMessageRecord | undefined): RoleOwnerAnswer | null {
+		if (!r || r.forOwner !== true || (r.kind !== "question" && r.kind !== "request")) return null;
+		const ownerIds = Array.isArray(r.ownerIds)
+			? [...new Set(r.ownerIds.filter((id): id is string => typeof id === "string"))].slice(0, OWNER_IDS_MAX)
+			: [];
+		let ownerChannel = ownerChannelOf(r.ownerChannel);
+		// Before ownerChannel, only Telegram created forOwner questions. Keep only explicitly stamped
+		// legacy sends from a known home and real server send-id shape; malformed/unknown fields fail closed.
+		const from = this.host.roles().find((role) => role.id === r.from?.role);
+		if (
+			!("ownerChannel" in r) &&
+			from?.homeChat &&
+			samePath(from.homeChat, r.from.file) &&
+			ownerIds.length &&
+			ownerIds.every((id) => /^rs-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(id))
+		) {
+			ownerChannel = "telegram";
+		}
+		return { answeredBy: [], ownerIds, ...(ownerChannel ? { ownerChannel } : {}) };
+	}
+
+	ownerAnswerOf(id: string | undefined): RoleOwnerAnswer | null {
 		const r = id ? this.byId(id) : undefined;
 		if (!r || r.kind !== "reply" || !r.replyTo) return null;
 		const original = this.byId(r.replyTo);
-		if (!original?.forOwner) return null;
-		return { answeredBy: r.from.role, ownerIds: [...(original.ownerIds ?? [])] };
+		if (original?.to.role !== r.from?.role || original.from.role !== r.to.role) return null;
+		const owner = this.questionOwnerOf(original);
+		return owner ? { ...owner, answeredBy: [r.from.role] } : null;
+	}
+
+	/** Trusted delivered question context permits nested questions; only replies get the visible stamp. */
+	ownerContextFor(file: string, text: string): RoleOwnerAnswer | null {
+		const r = this.verified(file, text);
+		return r ? (this.ownerAnswerOf(r.id) ?? this.questionOwnerOf(r)) : null;
 	}
 
 	/** The depth of the role message a chat is handling, from its last user message (0 = none). */
@@ -1133,7 +1163,7 @@ export class RoleMessages {
 				error: `Not sent: ${sender.role} has sent ${lastHour} role messages in the last hour (the limit is ${ROLE_MESSAGES_PER_HOUR}). Ask the owner before sending more.`,
 			};
 		}
-		// telegram-coo: asked for the owner, so the reply's turn goes to his Telegram.
+		// Owner visibility and transport are separate; only server-derived sender context is accepted.
 		const forOwner = (kind === "question" || kind === "request") && sender.forOwner ? sender.forOwner : undefined;
 		// decision-records: given, else (a reply) its original's; "" = none on purpose.
 		const initiative =
@@ -1155,7 +1185,11 @@ export class RoleMessages {
 			sends: 0,
 			attempts: 0,
 			...(forOwner
-				? { forOwner: true, ownerIds: [...new Set(forOwner.ownerIds.map(String))].slice(0, OWNER_IDS_MAX) }
+				? {
+						forOwner: true,
+						ownerIds: [...new Set(forOwner.ownerIds.map(String))].slice(0, OWNER_IDS_MAX),
+						ownerChannel: ownerChannelOf(forOwner.ownerChannel) ?? null,
+					}
 				: {}),
 			...(initiative ? { initiative } : {}),
 		};

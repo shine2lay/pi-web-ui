@@ -2062,7 +2062,7 @@ describe('telegram plugin: answers to his own questions (owner 2026-10-06: "Yes,
 		expect(c.logs.join("\n")).not.toContain("all good");
 	});
 
-	it("names every role that answered; unthreaded when his message isn't known; a failed or empty turn says so", async () => {
+	it("unknown owner transport cannot broadcast, including failed and empty turns", async () => {
 		const c = chatSetup();
 		await c.reply({
 			text: "Both agree.",
@@ -2071,14 +2071,27 @@ describe('telegram plugin: answers to his own questions (owner 2026-10-06: "Yes,
 			answeredBy: ["temper", "qa"],
 			ownerIds: ["gone"],
 		});
-		await c.reply({ error: "model overloaded", cause: "role", forOwner: true, answeredBy: ["temper"], ownerIds: [] });
+		await c.reply({ error: "failed", cause: "role", forOwner: true, answeredBy: ["temper"], ownerIds: [] });
 		await c.reply({ text: " ", cause: "role", forOwner: true, answeredBy: [] });
-		const out = c.sends().map((m) => [m.params.reply_parameters?.message_id, m.params.text]);
-		expect(out[0]).toEqual([undefined, "<i>The COO, after the temper role and the QA answered:</i>\n\nBoth agree."]);
-		expect(out[1][0]).toBeUndefined();
-		expect(out[1][1]).toMatch(/^The COO couldn't finish after the temper role answered: model overloaded\./);
-		expect(out[2][1]).toMatch(/^The COO finished without writing an answer after another role answered\./);
-		expect(out).toHaveLength(3);
+		expect(c.sends()).toHaveLength(0);
+	});
+
+	it("browser, mixed and invalid provenance cannot reuse a known Telegram thread; trusted Telegram still can", async () => {
+		const c = chatSetup();
+		const mid = await c.send(say("Synthetic owner input"));
+		for (const ownerChannel of ["browser", null, "invalid"]) {
+			await c.reply({ text: "Synthetic callback", cause: "role", forOwner: true, ownerChannel, ownerIds: ["s1"] });
+		}
+		expect(c.sends()).toHaveLength(0);
+		await c.reply({
+			text: "Synthetic callback",
+			cause: "role",
+			forOwner: true,
+			ownerChannel: "telegram",
+			ownerIds: ["s1"],
+		});
+		expect(c.sends()).toHaveLength(1);
+		expect(c.sends()[0].params.reply_parameters?.message_id).toBe(mid);
 	});
 
 	it("forOwner counts only on a role turn, and only when true", async () => {
@@ -2110,7 +2123,6 @@ describe('telegram plugin: answers to his own questions (owner 2026-10-06: "Yes,
 		await c.reply({ text: "Old one.", cause: "role", forOwner: true, answeredBy: ["temper"], ownerIds: ["s6"] });
 		await c.reply({ text: "Recent one.", cause: "role", forOwner: true, answeredBy: ["temper"], ownerIds: ["s5"] });
 		expect(c.sends().map((m) => [m.params.reply_parameters?.message_id, m.params.text])).toEqual([
-			[undefined, `${LEAD}Old one.`],
 			[55, `${LEAD}Recent one.`],
 		]);
 		expect(Object.keys((c.storage.get("chat") as Any).asked)).toEqual(["s5"]);

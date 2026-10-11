@@ -10,9 +10,10 @@
 // reply started when that reply answers a question the role's chat asked for the owner (forOwner);
 // the turns the owner starts in the browser stay there.
 // forOwner (owner, 2026-10-06: "Yes, answers to my questions"): a question or request a role's home
-// chat sends with message_role while its turn is the owner's (his Telegram message started it, or a
-// reply to an earlier such question did) is marked forOwner in role-messages.json; the turn its reply
-// starts is the owner's again, so chains of questions keep it.
+// chat sends with message_role while its turn is the owner's (accepted browser/Telegram input, or a
+// verified question/reply to an earlier such question) is marked forOwner in role-messages.json.
+// Internal ownerChannel provenance, independent of visibility, keeps browser chains in chat and
+// Telegram chains on their accepted transport; unknown/mixed provenance cannot cross-post.
 // ---------------------------------------------------------------------------
 
 import { existsSync } from "node:fs";
@@ -25,6 +26,20 @@ export const ROLE_TURN_CAUSES: readonly RoleTurnCause[] = ["telegram", "plugin",
 
 /** host.roles.send's `via`: whom the plugin sends for (it becomes the turn's cause). */
 export type RoleSendVia = "telegram" | "plugin";
+
+/** Internal, trusted transport provenance; never a message_role argument. */
+export type OwnerChannel = "browser" | "telegram";
+export function ownerChannelOf(value: unknown): OwnerChannel | undefined {
+	return value === "browser" || value === "telegram" ? value : undefined;
+}
+
+/** Called only after WS origin/auth admission. A helper/pseudo-client cannot speak for the owner. */
+export function browserRoleInput(
+	acceptedBrowser: boolean,
+	pseudoClient: boolean,
+): { cause: "browser"; ownerChannel?: "browser" } {
+	return { cause: "browser", ...(acceptedBrowser && !pseudoClient ? { ownerChannel: "browser" as const } : {}) };
+}
 
 export interface RoleSendOptions {
 	via?: RoleSendVia;
@@ -58,6 +73,8 @@ export interface RoleReply {
 	answeredBy?: string[];
 	/** forOwner: the host.roles.send ids of the owner's messages behind the question (to thread under). */
 	ownerIds?: string[];
+	/** Ownership is not permission to cross-post: null/ambiguous provenance stays off Telegram. */
+	ownerChannel?: OwnerChannel | null;
 }
 
 /** The most send ids a forOwner question keeps. */
@@ -81,12 +98,37 @@ export interface RoleTurnRecord {
 	/** A reply to a question asked for the owner started it (or joined it): who answered, and the owner's
 	 *  send ids behind the question. */
 	forOwner?: RoleOwnerAnswer;
+	/** Trusted accepted owner input, independent of the run's cause. */
+	owner?: RoleOwnerAnswer;
 }
 
 /** forOwner: who answered, and the owner's send ids behind the question. */
 export interface RoleOwnerAnswer {
 	answeredBy: string[];
 	ownerIds: string[];
+	ownerChannel?: OwnerChannel;
+}
+
+/** Server-only accepted-input metadata, not parsed from words or caller tool arguments. */
+export interface RoleTurnInput {
+	cause?: RoleTurnCause;
+	sendId?: string;
+	ownerChannel?: OwnerChannel;
+	forOwner?: RoleOwnerAnswer;
+}
+
+/** Shared by prompt admission (pending and joined turns) and metadata-only boundary tests. */
+export function collectRoleInput(rec: RoleTurnRecord, input: RoleTurnInput): void {
+	rec.causes.add(input.cause ?? "other");
+	if (input.sendId) rec.ids.push(input.sendId);
+	if (input.forOwner) rec.forOwner = mergeOwnerAnswer(rec.forOwner, input.forOwner);
+	const channel = ownerChannelOf(input.ownerChannel);
+	if (channel) {
+		rec.owner = mergeOwnerAnswer(rec.owner, {
+			ownerIds: channel === "telegram" && input.sendId ? [input.sendId] : [],
+			ownerChannel: channel,
+		});
+	}
 }
 
 export function newTurnRecord(): RoleTurnRecord {
@@ -96,23 +138,24 @@ export function newTurnRecord(): RoleTurnRecord {
 /** Adds `more` to `into` (each name and id once, ownerIds at most OWNER_IDS_MAX); returns the result. */
 export function mergeOwnerAnswer(
 	into: RoleOwnerAnswer | undefined,
-	more: { answeredBy?: readonly string[]; ownerIds?: readonly string[] },
+	more: { answeredBy?: readonly string[]; ownerIds?: readonly string[]; ownerChannel?: OwnerChannel },
 ): RoleOwnerAnswer {
 	const answeredBy = [...new Set([...(into?.answeredBy ?? []), ...(more.answeredBy ?? [])])];
 	const ownerIds = [...new Set([...(into?.ownerIds ?? []), ...(more.ownerIds ?? [])])].slice(0, OWNER_IDS_MAX);
-	return { answeredBy, ownerIds };
+	// Unknown or mixed channels cannot acquire Telegram authority by joining a known turn.
+	const channel = ownerChannelOf(more.ownerChannel);
+	const ownerChannel = !into || into.ownerChannel === channel ? channel : undefined;
+	return { answeredBy, ownerIds, ...(ownerChannel ? { ownerChannel } : {}) };
 }
 
 /**
  * forOwner: whether a run that is going now is the owner's, so a question or request its chat sends is
- * marked forOwner: his Telegram message started it (or joined it), or a reply to an earlier forOwner
- * question did. Returns the owner's send ids behind it (for threading), else null.
+ * marked forOwner: accepted browser/Telegram input or verified inherited owner context started it
+ * (or joined it). Returns visibility ownership and transport provenance, else null.
  */
-export function ownerTurnOf(rec: RoleTurnRecord | undefined): { ownerIds: string[] } | null {
-	if (!rec) return null;
-	const telegram = rec.causes.has("telegram");
-	if (!telegram && !rec.forOwner) return null;
-	return mergeOwnerAnswer(rec.forOwner, { ownerIds: telegram ? rec.ids : [] });
+export function ownerTurnOf(rec: RoleTurnRecord | undefined): RoleOwnerAnswer | null {
+	if (!rec?.owner && !rec?.forOwner) return null;
+	return rec.owner ? mergeOwnerAnswer(rec.forOwner, rec.owner) : mergeOwnerAnswer(undefined, rec.forOwner!);
 }
 
 /** The cause that decides where the answer goes. */
@@ -153,6 +196,7 @@ export function roleReplyOf(
 		...(rec.forOwner
 			? { forOwner: true, answeredBy: [...rec.forOwner.answeredBy], ownerIds: [...rec.forOwner.ownerIds] }
 			: {}),
+		...(ownerTurnOf(rec) ? { ownerChannel: ownerTurnOf(rec)!.ownerChannel ?? null } : {}),
 	};
 }
 

@@ -50,7 +50,8 @@ afterEach(() => {
 
 describe("host.roles.send", () => {
 	it('with "roles": hands the text to the server with who it is for', async () => {
-		makePlugin("tg", { apiVersion: 2, permissions: ["roles"] });
+		makePlugin("telegram", { apiVersion: 2, permissions: ["roles"] });
+		makePlugin("helper", { apiVersion: 2, permissions: ["roles"] });
 		await mgr.ensureLoaded();
 		const got: Array<{ role: string; text: string; via: string; queued: boolean }> = [];
 		mgr.roleSender = async (role, text, opts) => {
@@ -59,16 +60,18 @@ describe("host.roles.send", () => {
 			return { ok: true, id: "rs-9" };
 		};
 		let queued = 0;
-		const h = hosts().tg!;
+		const h = hosts().telegram!;
 		expect(await h.roles.send("coo", "\ud83d\udcf1 hi", { via: "telegram", onQueued: () => queued++ })).toEqual({
 			ok: true,
 			id: "rs-9",
 		});
-		// Anything but "telegram" is the plugin itself.
+		// A raw via label from another plugin cannot create owner authority.
 		expect(await h.roles.send("coo", "brief please")).toEqual({ ok: true, id: "rs-9" });
+		expect(await hosts().helper!.roles.send("coo", "internal", { via: "telegram" })).toEqual({ ok: true, id: "rs-9" });
 		expect(got).toEqual([
 			{ role: "coo", text: "\ud83d\udcf1 hi", via: "telegram", queued: true },
 			{ role: "coo", text: "brief please", via: "plugin", queued: false },
+			{ role: "coo", text: "internal", via: "plugin", queued: false },
 		]);
 		expect(queued).toBe(1);
 	});

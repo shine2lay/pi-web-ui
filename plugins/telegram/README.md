@@ -140,7 +140,12 @@ role's home chat, and its answer comes back here:
   read agent to agent messages at all", then, asked whether the COO's answers to his own questions
   should still come: "Yes, answers to my questions" ("Only COO's answer to something you asked it
   comes through. Everything else between roles stays off your Telegram."). Turns you start in the
-  browser stay there too.
+  browser stay there too, including their delegated answers and nested callbacks. Visibility is
+  separate from transport: the server derives internal `ownerChannel` metadata from accepted browser
+  or Telegram input, never from message wording or tool arguments. Only the Telegram plugin can
+  label its accepted inputs Telegram. A known Telegram input receipt is required before sending;
+  unknown, malformed or mixed transport stays in chat. Legacy owner answers require a retained
+  trusted Telegram receipt; missing provenance never permits broadcasting.
 - Answers still work as before: tap a button, reply to a question's message, or send your answer
   right after tapping **Type an answer**. `/start` says what the bot does. (With two questions
   waiting for a typed answer at once, reply to the question's message.)

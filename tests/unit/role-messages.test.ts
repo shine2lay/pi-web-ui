@@ -733,7 +733,7 @@ describe('telegram-coo: forOwner (owner 2026-10-06: "Yes, answers to my question
 		const answer2 = s.send(beta, { to: "alpha", kind: "reply", replyTo: other.record.id, text: "there" });
 		const note = s.send(beta, { to: "alpha", kind: "fyi", text: "note" });
 		if (!answer.ok || !answer2.ok || !note.ok) throw new Error("not sent");
-		expect(s.ownerAnswerOf(answer.record.id)).toEqual({ answeredBy: "beta", ownerIds: ["s7"] });
+		expect(s.ownerAnswerOf(answer.record.id)).toEqual({ answeredBy: ["beta"], ownerIds: ["s7"] });
 		// The reply itself isn't marked (it asks nothing).
 		expect(answer.record.forOwner).toBeUndefined();
 		expect(s.ownerAnswerOf(answer2.record.id)).toBeNull();

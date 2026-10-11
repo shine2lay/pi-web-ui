@@ -4413,7 +4413,7 @@ export class PluginManager {
 					const onQueued = typeof opts?.onQueued === "function" ? opts.onQueued : undefined;
 					try {
 						return await sender(String(role ?? ""), String(text ?? ""), {
-							via: opts?.via === "telegram" ? "telegram" : "plugin",
+							via: info.id === "telegram" && opts?.via === "telegram" ? "telegram" : "plugin",
 							...(onQueued
 								? {
 										onQueued: () => {

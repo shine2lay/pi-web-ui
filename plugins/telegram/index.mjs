@@ -1781,6 +1781,15 @@ const ASKED_MAX = 300;
 /** Tests: a forced start time (ISO); the clock runs on from there. */
 export const NOW_ENV = "PI_WEB_TELEGRAM_NOW";
 
+/** Normal pre-send decision. Visibility alone never authorises Telegram delivery. */
+export function replyMayGoToTelegram(r, { brief = false, knownOwner = false } = {}) {
+	if (r?.cause === "plugin") return brief;
+	if (r?.ownerChannel === "browser" || ("ownerChannel" in (r ?? {}) && r.ownerChannel !== "telegram")) return false;
+	if (!knownOwner) return false; // no recipient/thread from an accepted Telegram input
+	if (r?.cause === "telegram") return true;
+	return r?.cause === "role" && r.forOwner === true;
+}
+
 /** The role's name in a sentence: "the COO" for a short id, else "the <id> role". */
 export function roleName(id) {
 	const s = String(id ?? "").trim();
@@ -2191,13 +2200,22 @@ export function createChat({
 		// want to read agent to agent messages at all"), unless it is that role's reply to a question the
 		// role asked for him (forOwner; owner, 2026-10-06: "Yes, answers to my questions").
 		const forOwner = r.cause === "role" && r.forOwner === true;
+		const ownerIds = forOwner ? (Array.isArray(r.ownerIds) ? r.ownerIds : []) : ids;
+		const knownOwner = ownerIds.some((id) => {
+			const a = store.asked[String(id)] ?? store.pending[String(id)];
+			return a && Number(a.to) > 0 && Number(a.at) > now() - ASKED_MAX_MS;
+		});
+		if (!replyMayGoToTelegram(r, { brief, knownOwner })) {
+			if (r.cause === "role") log("info", `telegram: ${role} answered another role's message (not sent, ${text.length} characters)`);
+			return;
+		}
 		if (r.cause === "role" && !forOwner) {
 			log("info", `telegram: ${role} answered another role's message (not sent, ${text.length} characters)`);
 			return;
 		}
 		// A plugin's turn only when it's our brief (another plugin's sends get their own answers); the
 		// turns started in the browser, or by the app itself, stay in the chat.
-		if (r.cause === "plugin" ? !brief : r.cause !== "telegram" && !forOwner) return;
+		// replyMayGoToTelegram above checked channel provenance and our own accepted-send receipts.
 		let to = 0;
 		for (const id of ids) {
 			const p = store.pending[id];

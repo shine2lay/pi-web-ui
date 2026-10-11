@@ -10,6 +10,12 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## owner-answer-routing: preserve owner visibility without crossing browser and Telegram
+
+- `local`: trusted accepted browser-owner questions keep their ownership through delegated and nested role questions/replies, so callback answers remain full in chat. `forOwner` remains system-derived visibility; separate internal `ownerChannel` controls transport, never model-settable message_role arguments or parsed wording.
+- Browser origin/auth admission excludes internal/pseudo-clients. Only the actual Telegram plugin can label accepted role input Telegram. Stored delivery target/hash and question/reply participants are verified before inheritance; ordinary peer callbacks still fold. Optional legacy Telegram ownership is recognised only with known-home/server-send metadata, and the normal pre-send path also requires a retained Telegram input receipt. Unknown, malformed and mixed channels fail closed; reports, dialogs and the morning brief retain their existing exceptions.
+- No history migration, backfill or retransmission; no settings, recipient, SDK or messaging-policy change. Model-free proof: staged cases and the sealed full-chain integration in `tests/unit/owner-answer-routing.test.ts`, plus role/store/plugin/quiet regressions. Transport is fake; no real chat, model or Telegram send.
+
 ## pi-1-0: upgrade the bundled SDK and preserve prompt receipts and remote models
 
 - `local`: pin `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent` to **1.0.1** (all bundled `@earendil-works` packages in the lockfile are 1.0.1). No upstream web-app merge; command-line pi must be the same version. New codemode, tool_search and virtual-model features remain off; keep pi-mcp-adapter and the existing openai-codex accounts.

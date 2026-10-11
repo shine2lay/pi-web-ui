@@ -53,6 +53,7 @@ import { parseTabs, tabsRefusal } from "./tabs.js";
 import { promptIds } from "./prompt-ack.js";
 import { recordUnknownWsType } from "./ws-unknown-types.js";
 import { validateClientId } from "./ws-client-id.js";
+import { browserRoleInput } from "./role-replies.js";
 import { PendingCommandQueue } from "./ws-pending-queue.js";
 import {
 	installPack,
@@ -1138,7 +1139,7 @@ export interface DispatchSession {
 		attachments?: PromptAttachment[],
 		queue?: boolean,
 		id?: string,
-		opts?: { cause?: "browser" },
+		opts?: { cause?: "browser"; ownerChannel?: "browser" },
 	): Promise<void>;
 	/** chat-open-speed: the pi session of the chat this window is on ("" when none). Used to refuse
 	 *  a message written into a chat that was still opening if the window ended up elsewhere.
@@ -2315,7 +2316,9 @@ function serializeShared(msg: ServerMessage): string {
 	return s;
 }
 
-wss.on("connection", (ws) => {
+wss.on("connection", (ws, req) => {
+	// Origin/auth admission already passed. Non-browser sockets and internal clients stay unowned.
+	const acceptedBrowser = typeof req.headers.origin === "string" && originAllowed(req);
 	// Count attached sockets (the control socket reports REAL sockets, not
 	// cached client-session objects).
 	service.noteSocketOpen();
@@ -2491,7 +2494,7 @@ wss.on("connection", (ws) => {
 					break;
 				}
 				void cs.prompt(msg.text, msg.attachments, msg.queue, typeof msg.id === "string" ? msg.id : undefined, {
-					cause: "browser", // telegram-coo: a turn the owner starts in the browser stays there
+					...browserRoleInput(acceptedBrowser, AgentService.isPseudoClientId(clientId ?? "")),
 				});
 				break;
 			}

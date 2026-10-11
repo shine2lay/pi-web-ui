@@ -168,7 +168,11 @@ passed on with queue_reply). A quiet turn plays no "done" sound, sends no browse
 unread mark. Three switches in Settings → Display (server settings, so phone and laptop agree; all
 off by default) fold more kinds the same way: a finished queue task waking its main chat ("[Queue] Task
 #N … is done in its chat"), stall-check pokes (a role message starting "[Stall check] ") and scheduled
-wake-ups. The hint line under each delivered role message and Board order tells the role to write
+wake-ups. Trusted browser-owner questions retain `forOwner` through delegated and nested callbacks,
+so their answers remain full here. Internal `ownerChannel` provenance is separate: browser answers
+stay in chat; Telegram answers require the accepted Telegram input receipt. Unknown or mixed
+provenance cannot cross-post. Neither marker is a model-settable `message_role` argument; no old
+callbacks are rewritten or retransmitted. The hint line under each delivered role message and Board order tells the role to write
 nothing for the owner and to answer the sender with message_role only if it needs an answer.
 
 ## Tests
@@ -186,3 +190,5 @@ nothing for the owner and to answer the sender with message_role only if it need
 - `tests/unit/quiet-turns.test.ts`, `tests/quiet-turns-test.mjs`: which turns are quiet, the row's
   words, the hint lines, the switches, no sound or unread mark (both themes, phone and desktop, axe).
 - `tests/unit/role-board.test.ts`, `tests/board-test.mjs`: the board (see [board.md](board.md)).
+- `tests/unit/owner-answer-routing.test.ts`: fixed source, store, nested callback, visibility and
+  Telegram-decision stages, followed by a metadata-only full-chain test with fake transport.

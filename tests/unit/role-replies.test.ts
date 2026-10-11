@@ -9,6 +9,7 @@ import { join } from "node:path";
 import type { IdentityDef } from "../../server/identities.js";
 import {
 	mergeOwnerAnswer,
+	collectRoleInput,
 	newTurnRecord,
 	oneLineOf,
 	OWNER_IDS_MAX,
@@ -101,6 +102,7 @@ describe("roleReplyOf", () => {
 			forOwner: true,
 			answeredBy: ["temper"],
 			ownerIds: ["rs-1"],
+			ownerChannel: null,
 		});
 		rec.forOwner.answeredBy.push("qa");
 		expect(r.answeredBy).toEqual(["temper"]);
@@ -114,12 +116,11 @@ describe("roleReplyOf", () => {
 describe("forOwner: ownerTurnOf and mergeOwnerAnswer", () => {
 	it("a run his Telegram message started (or joined) is his, with its send ids", () => {
 		const rec = newTurnRecord();
-		rec.causes.add("telegram");
-		rec.ids.push("rs-1");
-		expect(ownerTurnOf(rec)).toEqual({ answeredBy: [], ownerIds: ["rs-1"] });
-		rec.causes.add("browser");
-		rec.ids.push("rs-2");
-		expect(ownerTurnOf(rec)?.ownerIds).toEqual(["rs-1", "rs-2"]);
+		collectRoleInput(rec, { cause: "telegram", ownerChannel: "telegram", sendId: "rs-1" });
+		expect(ownerTurnOf(rec)).toEqual({ answeredBy: [], ownerIds: ["rs-1"], ownerChannel: "telegram" });
+		collectRoleInput(rec, { cause: "browser", ownerChannel: "browser" });
+		expect(ownerTurnOf(rec)?.ownerIds).toEqual(["rs-1"]);
+		expect(ownerTurnOf(rec)?.ownerChannel).toBeUndefined();
 	});
 
 	it("a run a reply to a question asked for him started is his too (chains keep it)", () => {

@@ -321,6 +321,9 @@ import {
 	newTurnRecord,
 	oneLineOf,
 	ownerTurnOf,
+	collectRoleInput,
+	ownerChannelOf,
+	type OwnerChannel,
 	roleHomeChat,
 	roleReplyOf,
 	sendWhenFree,
@@ -2185,7 +2188,7 @@ export interface Conversation {
 	 *  steer/内部续跑无暂存时为空，由插件回退为「继续执行」）。 */
 	pendingTask?: string;
 	/** telegram-coo: what the next run was started by (texts pi took before it starts; agent_start takes them). */
-	turnPending?: { causes: RoleTurnCause[]; ids: string[]; forOwner?: RoleOwnerAnswer };
+	turnPending?: RoleTurnRecord;
 	/** telegram-coo: the running run's causes, send ids, last text and error (handed over when it settles). */
 	turnRecord?: RoleTurnRecord;
 	/** quiet-turns: its last run was one another agent began (no "done" cue, no green light). */
@@ -2292,7 +2295,8 @@ function atomicWriteFileSync(file: string, data: string): void {
 interface RoleDeliveryHow {
 	cause?: RoleTurnCause;
 	sendId?: string;
-	forOwner?: { answeredBy: string; ownerIds: string[] };
+	forOwner?: RoleOwnerAnswer;
+	ownerChannel?: OwnerChannel;
 }
 
 /** optimistic-send: how far one prompt() got, for its final answer (see ClientSession.prompt). */
@@ -2307,7 +2311,8 @@ interface PromptFlow {
 	sendId?: string;
 	/** telegram-coo: a role's reply to a question asked for the owner (role-replies.ts forOwner): who
 	 *  answered and the owner's send ids; the run it starts or joins is the owner's. */
-	forOwner?: { answeredBy: string; ownerIds: string[] };
+	forOwner?: RoleOwnerAnswer;
+	ownerChannel?: OwnerChannel;
 	/** pi put the text off until the previous run has settled: its preflight callback answers later. */
 	deferred: boolean;
 	/** pi took the text (its preflight said yes). */
@@ -2319,20 +2324,8 @@ interface PromptFlow {
 /** telegram-coo: pi took a text: the run it starts (pending until agent_start) or the running run it
  *  joined (queued) remembers who sent it and the host.roles.send id. */
 function noteTurnCause(conv: Conversation, flow: PromptFlow, joined: boolean): void {
-	const cause = flow.cause ?? "other";
-	const owner = flow.forOwner
-		? { answeredBy: [flow.forOwner.answeredBy], ownerIds: flow.forOwner.ownerIds }
-		: undefined;
-	if (joined && conv.turnRecord) {
-		conv.turnRecord.causes.add(cause);
-		if (flow.sendId) conv.turnRecord.ids.push(flow.sendId);
-		if (owner) conv.turnRecord.forOwner = mergeOwnerAnswer(conv.turnRecord.forOwner, owner);
-		return;
-	}
-	const p = (conv.turnPending ??= { causes: [], ids: [] });
-	p.causes.push(cause);
-	if (flow.sendId) p.ids.push(flow.sendId);
-	if (owner) p.forOwner = mergeOwnerAnswer(p.forOwner, owner);
+	const rec = joined && conv.turnRecord ? conv.turnRecord : (conv.turnPending ??= newTurnRecord());
+	collectRoleInput(rec, flow);
 }
 
 /** optimistic-send: prompt_ack reasons (English, shown under a "Not sent" message). */
@@ -5114,6 +5107,7 @@ export class ClientSession {
 			cause: how.cause ?? "role",
 			...(how.sendId ? { sendId: how.sendId } : {}),
 			...(how.forOwner ? { forOwner: how.forOwner } : {}),
+			...(how.ownerChannel ? { ownerChannel: how.ownerChannel } : {}),
 		}).catch(() => {});
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const answer = await Promise.race([
@@ -5137,6 +5131,7 @@ export class ClientSession {
 		for (const c of p.causes) rec.causes.add(c);
 		rec.ids.push(...p.ids);
 		if (p.forOwner) rec.forOwner = mergeOwnerAnswer(rec.forOwner, p.forOwner);
+		if (p.owner) rec.owner = mergeOwnerAnswer(rec.owner, p.owner);
 	}
 
 	/** telegram-coo: an assistant message ended: the run's last text with words in it, and whether it failed. */
@@ -10180,7 +10175,8 @@ export class ClientSession {
 			source?: "extension";
 			cause?: RoleTurnCause;
 			sendId?: string;
-			forOwner?: { answeredBy: string; ownerIds: string[] };
+			forOwner?: RoleOwnerAnswer;
+			ownerChannel?: OwnerChannel;
 		},
 	): Promise<void> {
 		let conv: Conversation;
@@ -10202,6 +10198,7 @@ export class ClientSession {
 			cause: opts?.cause ?? "other",
 			...(opts?.sendId ? { sendId: opts.sendId } : {}),
 			...(opts?.forOwner ? { forOwner: opts.forOwner } : {}),
+			...(ownerChannelOf(opts?.ownerChannel) ? { ownerChannel: opts!.ownerChannel } : {}),
 			deferred: false,
 			handedOver: false,
 			admission: takePromptAdmission(conv),
@@ -15370,7 +15367,7 @@ export class AgentService {
 		this.roleMessages = new RoleMessages(join(this.stateStore.dataDir, "role-messages.json"), {
 			roles: () => identityRegistry().identities,
 			chatState: (file) => this.queueChatState(file).state,
-			deliver: (file, text) => this.sendRoleMessage(file, text, this.roleMessageHow(text)),
+			deliver: (file, text) => this.sendRoleMessage(file, text, this.roleMessageHow(file, text)),
 			note: (file, text) => this.noteRoleMessage(file, text),
 			changed: () => this.onRoleMessagesChanged?.(),
 			sent: (record) => this.keepDecision(messageRecord(record)),
@@ -15760,8 +15757,8 @@ export class AgentService {
 
 	/** telegram-coo: how a role message goes in: its cause, and when it is a reply to a question asked for
 	 *  the owner, who answered and his send ids (the turn it starts is his, role-replies.ts forOwner). */
-	private roleMessageHow(text: string): RoleDeliveryHow {
-		const owner = this.roleMessages.ownerAnswerOf(roleMessageIdOf(text) ?? undefined);
+	private roleMessageHow(file: string, text: string): RoleDeliveryHow {
+		const owner = this.roleMessages.ownerContextFor(file, text);
 		return { cause: this.roleMessageCause(text), ...(owner ? { forOwner: owner } : {}) };
 	}
 
@@ -15784,10 +15781,18 @@ export class AgentService {
 		if (!home.ok) return home;
 		const sendId = `rs-${randomUUID()}`;
 		const cause: RoleTurnCause = opts.via === "telegram" ? "telegram" : "plugin";
-		const res = await sendWhenFree(() => this.sendRoleMessage(home.file, body, { cause, sendId }), {
-			...(opts.onQueued ? { onQueued: opts.onQueued } : {}),
-			stopped: () => this.quiesced,
-		});
+		const res = await sendWhenFree(
+			() =>
+				this.sendRoleMessage(home.file, body, {
+					cause,
+					sendId,
+					...(cause === "telegram" ? { ownerChannel: "telegram" as const } : {}),
+				}),
+			{
+				...(opts.onQueued ? { onQueued: opts.onQueued } : {}),
+				stopped: () => this.quiesced,
+			},
+		);
 		return res.ok ? { ok: true, id: sendId } : res;
 	}
 
