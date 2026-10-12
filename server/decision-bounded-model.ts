@@ -204,11 +204,14 @@ export function boundedDecisionModel(
 ): DecisionModel {
 	return async (call) => {
 		const usedModel = `${BATCH_PROVIDER}/${BATCH_MODEL}`;
+		const fence = control.captureFence();
+		let local = control.localCallMetadata();
+		const mark = (row: LifecycleRow) => trace({ ...row, ...(local ? { localCall: local } : {}) });
 		let reason = control.preflight();
 		if (call.model !== "auto" || call.thinking !== "medium" || call.avoid?.includes(BATCH_PROVIDER))
 			reason = "reader call differs from authorised model/account";
 		if (reason) {
-			control.pause(reason);
+			control.pause(reason, false, fence);
 			return { ok: false, limited: true, error: reason, model: usedModel };
 		}
 		let driver: BoundDriver | undefined;
@@ -241,14 +244,17 @@ export function boundedDecisionModel(
 				beforePrompt: (identity) => {
 					const blocked = control.preflight(identity) ?? sessionBlock(driver!.info());
 					if (blocked) return blocked;
-					return control.reserve(
+					const block = control.reserve(
 						Buffer.byteLength(call.system, "utf8") + Buffer.byteLength(call.prompt, "utf8") + REQUEST_FRAMING,
 						driver!.info().maxTokens,
 						identity,
+						fence,
 					);
+					local = control.localCallMetadata();
+					return block;
 				},
 				timeoutMs: call.timeoutMs ?? 420_000,
-				trace,
+				trace: mark,
 			});
 			if (
 				outcome.status !== "settled" ||
@@ -270,17 +276,17 @@ export function boundedDecisionModel(
 						"usage guard unavailable",
 						"reader disabled",
 					].includes(why);
-				control.pause(why, !transient);
+				control.pause(why, !transient, fence);
 				return { ok: false, limited: true, error: why, model: usedModel };
 			}
-			control.settle(snapshot.usage);
+			control.settle(snapshot.usage, fence);
 			if (!snapshot.text.trim()) {
-				control.pause("no usable model answer", true);
+				control.pause("no usable model answer", true, fence);
 				return { ok: false, limited: true, error: "no usable model answer", model: usedModel, usage: snapshot.usage };
 			}
 			return { ok: true, text: snapshot.text, model: usedModel, usage: snapshot.usage };
 		} catch {
-			control.pause("reader call failed; unresolved allowance retained", true);
+			control.pause("reader call failed; unresolved allowance retained", true, fence);
 			return { ok: false, limited: true, error: "reader call failed; unresolved allowance retained", model: usedModel };
 		}
 	};

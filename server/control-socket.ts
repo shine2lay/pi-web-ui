@@ -32,6 +32,7 @@ import type { AgentService } from "./agent-service.js";
 import { isAppToken } from "./app-token.js";
 import type { UiServiceInfo } from "./protocol.js";
 import type { RoleReportReceipt } from "./role-messages.js";
+import { parseRecoveryCommand } from "./decision-recovery.js";
 
 /** 探测既有 socket 的超时：活实例对 connect 的响应是内核级的，300ms 足够。 */
 const CONTROL_PROBE_TIMEOUT_MS = 300;
@@ -68,6 +69,7 @@ type ControlService = Pick<AgentService, "serviceStatus" | "quiesce" | "unquiesc
 			| "decisionsBackfill"
 			| "decisionsStatus"
 			| "decisionsRead"
+			| "decisionsRecoverCall"
 		>
 	>;
 
@@ -91,7 +93,10 @@ export interface ControlCommand {
 		| "role_reports"
 		| "decisions_backfill"
 		| "decisions_status"
-		| "decisions_read";
+		| "decisions_read"
+		| "decisions_recover_call";
+	/** decisions_recover_call: fixed operation metadata, never supplied proof/approval. */
+	recovery?: unknown;
 	/** decisions_read: at most this many calls. */
 	maxBatches?: unknown;
 	/** role-reports: role_report's app token, role, day and what the job found; role_reports' day. */
@@ -257,6 +262,20 @@ export function startControlServer(opts: {
 						}
 						const res = service.decisionsRead(req.maxBatches);
 						resp = res.ok ? { ok: true, decisions: { started: res.started } } : { ok: false, error: res.error };
+						break;
+					}
+					case "decisions_recover_call": {
+						const command = parseRecoveryCommand(req.recovery);
+						if (!command || Object.keys(req).some((key) => !["cmd", "recovery"].includes(key))) {
+							resp = { ok: false, error: "invalid recovery operation binding" };
+							break;
+						}
+						if (!service.decisionsRecoverCall) {
+							resp = { ok: false, error: "decision reader control unavailable" };
+							break;
+						}
+						const result = service.decisionsRecoverCall(command);
+						resp = result.ok ? { ok: true, decisions: result } : { ok: false, error: result.error };
 						break;
 					}
 					case "decisions_status":

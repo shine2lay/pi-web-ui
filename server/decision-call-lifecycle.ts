@@ -1,4 +1,5 @@
 // Payload-free, bounded single-call lifecycle. Ported from Ops #98's qualified transport.
+import type { LocalCall } from "./decision-batch-budget.js";
 export interface ReaderIdentity {
 	provider: string;
 	id: string;
@@ -16,6 +17,7 @@ export interface LifecycleRow {
 	at: number;
 	elapsedMs: number;
 	block?: string;
+	localCall?: LocalCall;
 }
 export interface CallClock {
 	now(): number;

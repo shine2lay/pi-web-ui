@@ -285,6 +285,7 @@ import { makeBoardTool } from "./board-tool.js";
 import { type DecisionLogHost, makeDecisionLogTool } from "./decision-log-tool.js";
 import { DecisionBatchControl } from "./decision-batches.js";
 import { boundedDecisionModel } from "./decision-bounded-model.js";
+import { parseRecoveryCommand } from "./decision-recovery.js";
 import { AnswerPreviews } from "./decision-previews.js";
 import { DecisionReader, readerStatus, type ReadResult, unreadOf } from "./decision-reader.js";
 import { DecisionStore } from "./decision-store.js";
@@ -15596,6 +15597,18 @@ export class AgentService {
 				this.decisionReadNow = null;
 			});
 		return { ok: true, started: true };
+	}
+
+	/** Admin-only metadata operation. Synchronous exclusion prevents timer/manual interleaving. */
+	decisionsRecoverCall(value: unknown) {
+		const command = parseRecoveryCommand(value);
+		if (!command) return { ok: false, error: "invalid recovery operation binding" };
+		if (!this.decisionBatchControl || !this.decisionReader)
+			return { ok: false, error: "decision reader control unavailable" };
+		// Read the existing reader's own running flag; missing/changed representation denies.
+		// No reader semantic, timer, retry or prompt change is necessary for this metadata proof.
+		const quiescent = !this.decisionReadNow && Reflect.get(this.decisionReader, "running") === false;
+		return this.decisionBatchControl.recover(command, quiescent);
 	}
 
 	/** Each chat file's role (pi-identity), and the chats' titles for the records. */

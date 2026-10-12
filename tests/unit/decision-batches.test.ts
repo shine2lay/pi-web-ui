@@ -107,6 +107,47 @@ function info(): ReaderDriverInfo {
 		cacheWarming: "off",
 	};
 }
+describe("reservation identity and origin-day metadata", () => {
+	it("settles a call spanning midnight against its reserved day, not the callback day", () => {
+		const f = fixture();
+		let at = new Date(2026, 9, 12, 23, 59, 59).getTime();
+		jwrite(f.ctl.guardFile, {
+			provider: BATCH_PROVIDER,
+			guardExpiresAt: at / 1000 + 3600,
+			stopped: false,
+			lastReading: { at: at / 1000, week: 10, five: 20 },
+		});
+		const ctl = new DecisionBatchControl(f.store, { now: () => at, guardActive: () => true });
+		ctl.prepare([record()]);
+		const fence = ctl.captureFence()!;
+		expect(ctl.reserve(20000, 128000, identity, fence)).toBeUndefined();
+		const day = localDay(at);
+		expect(ctl.localCallMetadata()?.day).toBe(day);
+		at += 2000;
+		expect(localDay(at)).not.toBe(day);
+		ctl.settle({ input: 10, output: 10 }, fence);
+		const ledger = JSON.parse(readFileSync(ctl.ledgerFile, "utf8"));
+		expect(ledger.newTokensByDay).toEqual({ [day]: 20 });
+	});
+	it("wrong call references and late terminal callbacks cannot mutate a newer generation", () => {
+		const f = fixture();
+		const fence = f.ctl.captureFence()!;
+		expect(f.ctl.reserve(20000, 128000, identity, fence)).toBeUndefined();
+		const late = { ...fence };
+		expect(() => f.ctl.settle({ input: 1, output: 1 }, { ...fence, callRef: "wrong" })).toThrow();
+		f.ctl.settle({ input: 1, output: 1 }, fence);
+		const before = readFileSync(f.ctl.ledgerFile, "utf8");
+		expect(() => f.ctl.pause("late error", true, late)).toThrow();
+		expect(readFileSync(f.ctl.ledgerFile, "utf8")).toBe(before);
+	});
+	it("two cold controllers do not refresh each other's ledger or duplicate a reservation", () => {
+		const f = fixture();
+		const second = new DecisionBatchControl(f.store, { now: () => now, guardActive: () => true });
+		second.prepare([record()]);
+		expect(f.ctl.reserve(20000, 128000, identity)).toBeUndefined();
+		expect(second.reserve(20000, 128000, identity)).toBe("batch configuration unavailable or changed");
+	});
+});
 describe("hard numeric stage", () => {
 	it("reserves the maximum BEFORE usage and settles only authoritative counts", () => {
 		const b = newTokenBudget();
