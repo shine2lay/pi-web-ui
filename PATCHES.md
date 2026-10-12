@@ -126,6 +126,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | quiet-turns                  | `local` | `server/quiet-turns.ts` (new), `agent-service.ts`, `role-messages.ts`, `role-board.ts`, `protocol.ts`, `client-state.ts`, `settings-service.ts`, `index.ts`, `web/src/quiet-turns.ts` (new), `MessageList.tsx`, `RoleMessageRow.tsx`, `SettingsModal.tsx`, `App.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `docs/roles-overview.md`, `tests/quiet-turns-test.mjs` (new), `tests/unit/quiet-turns.test.ts` (new) |
 | accent-contrast              | `local` | `web/src/styles.css` (`:root` `--accent-text`, `--accent-fill`, `--accent-fill-hover`, `--amber-fg`; 148 text rules, the accent fills under white text), `model-management.css`, `exchange-fold.css`, `ToolApprovalDialog.tsx`, `RollbackDialog.tsx`, `ModelConfigModal.tsx`, `plugins/db-client`, `plugins/vscode-editor`, `make-light-theme.mjs` (identity tokens, White `--amber-fg`), `themes/*.css`, `tests/faint-contrast-test.mjs` (pins gone, live-queue fixture), `tests/accent-contrast-test.mjs` (new), `tests/unit/accent-contrast.test.ts` (new) |
 | initiatives-page             | `local` | `server/decision-reader.ts`, `decision-model.ts`, `decision-who.ts`, `decision-store.ts`, `decision-view.ts`, `decision-log-tool.ts`, `decision-previews.ts`, `initiatives-watch.ts` (all new), `agent-service.ts`, `index.ts`, `control-socket.ts`, `protocol.ts`, `protocol-version.ts`, `tabs.ts`, `tool-manager.ts`, `asks.ts`, `decision-records.ts`, `bin/pi-web-ui.mjs` (`decisions read`), `web/src/components/InitiativesView.tsx`, `initiatives-state.ts`, `initiatives-view-model.ts`, `initiatives-view.css` (new), `App.tsx`, `TopBar.tsx`, `ui-slots.ts`, `use-chat.ts`, `open-chat-link.ts`, `i18n.tsx`, `locales/*.json`, `tests/unit/decision-reader.test.ts`, `decision-who.test.ts`, `initiatives-view.test.ts`, `tests/initiatives-page-test.mjs` (new), `tests/unit/ui-slots.test.ts`, `tool-registration.test.ts`, `docs/initiatives-page.md` (new) |
+| decision-reader-batches      | `local` | `server/decision-batch-budget.ts`, `decision-batches.ts`, `decision-bounded-model.ts`, `decision-call-lifecycle.ts` (new), `server/agent-service.ts`, `tests/unit/decision-batches.test.ts` (new) |
 
 ---
 
@@ -6009,6 +6010,54 @@ Display and hint text only: no transcript line changes, Telegram, caps and routi
   "[Queue]" done notice of pi-queue or the scheduler's "[Scheduled task" prefix change, change
   `starterOf` in `server/quiet-turns.ts` (its unit tests build the texts with the server's functions).
 - Keep the quiet plan pure (types only from `protocol.ts`): the page bundles it.
+
+## decision-reader-batches
+
+**Status**: `local`
+**Baseline**: v0.96.1, on top of `initiatives-page` and its Team in Temper scope filter.
+
+**Why** (Ops queue #98; owner, 2026-10-11): after the token estimate exceeded the original
+forecast, the owner chose capped batches and ordered: "keep going thru all batches one by one".
+The reader's existing daily estimate is not a hard per-call spending limit. Continue automatically
+only within measured, persistent allowances; an unknown call must never be retried for free.
+
+### Changes
+
+- `server/decision-batch-budget.ts`: reserve input-byte upper bound plus the model's full output
+  allowance before prompting. Settle authoritative input/cache/output counts; keep uncertain cost
+  reserved. A chunk never allocates more than 500,000 additional tokens.
+- `server/decision-batches.ts`: app-owned sequential chunks, at most 20 unique records selected by
+  the unchanged reader. Keep old known usage and its old timeout hold in an immutable initial
+  accounting baseline. Include both in the 6,000,000-token daily bound. No separate canonical-store
+  writer. Missing/changed configuration, corrupt ledger, foreign initiative, stale/unavailable/dead
+  guard, identity mismatch, unresolved call or a reader give-up blocks further calls.
+- `server/decision-call-lifecycle.ts` and `server/decision-bounded-model.ts`: one disposable native
+  SDK session and at most one prompt per call; explicit setup/prompt deadlines, refusal abort and
+  late-session disposal. Session-local retry/provider-retry, compaction and warming fences; cloned
+  multi-pass provider hooks only, auth retained. No global settings changes. Working account
+  `anthropic-4/claude-haiku-5-5`, medium thinking, matched to the guard's observed account; no
+  stronger-model or account fallback. Missing usage is not zero.
+- `server/agent-service.ts`: use those controls through the existing reader's `onBatch`/`onChange`
+  hooks, so normal accepted writes notify the page. Do not alter classification/rider prompts,
+  schemas, attribution, markers, batching parameters or existing stored decisions. Successful
+  accounted chunks continue without asking the owner again. Each boundary logs scalar metadata
+  only; no prompts, responses, tool results or source contents.
+- Operator-owned files under `<dataDir>/decisions`: `reader-batch-settings.json` (approval and
+  immutable baseline), `reader-batches.json` (reservations, settled days, boundaries), and
+  `reader-batch-guard.json` (same-account fresh quota). The guard unit is
+  `decisions-batch-guard.service`; the reader blocks at 60% weekly / 75% five-hour, stale readings
+  or guard expiry. The API guard checks at most every 30 minutes.
+
+### Checks and undo
+
+`tests/unit/decision-batches.test.ts` uses numeric fixtures and metadata-only fake drivers: settled
+and pending cost, restarts, exact limits, old hold, missing/corrupt config, scope, identity, guard
+failure, semantic give-up, lifecycle/refusal/timeout, session extras and app wiring. No real model or
+chat is used. Stage proof and results are recorded outside the repo in
+`~/company-lab/shared/decisions-page-replay-2026-10-10/BOUNDED-SAMPLE.md` (H-batches-6).
+
+Undo: disable the live reader first, preserve all canonical progress and accounting files, then
+revert this control patch through `wt` and `pi-web-deploy`. Do not delete/refund an unknown hold.
 
 ## initiatives-page
 

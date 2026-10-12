@@ -283,7 +283,8 @@ import { makeClaimFilesTool, type ClaimFilesHost } from "./claim-files-tool.js";
 import { makeMessageRoleTool, type MessageRoleHost } from "./role-message-tool.js";
 import { makeBoardTool } from "./board-tool.js";
 import { type DecisionLogHost, makeDecisionLogTool } from "./decision-log-tool.js";
-import { isolatedDecisionModel } from "./decision-model.js";
+import { DecisionBatchControl } from "./decision-batches.js";
+import { boundedDecisionModel } from "./decision-bounded-model.js";
 import { AnswerPreviews } from "./decision-previews.js";
 import { DecisionReader, readerStatus, type ReadResult, unreadOf } from "./decision-reader.js";
 import { DecisionStore } from "./decision-store.js";
@@ -15464,6 +15465,7 @@ export class AgentService {
 
 	private readonly decisionStore: DecisionStore;
 	private decisionReader: DecisionReader | null = null;
+	private decisionBatchControl: DecisionBatchControl | null = null;
 	private decisionReadNow: Promise<ReadResult> | null = null;
 	private decisionRecordsIndex: {
 		key: string;
@@ -15477,16 +15479,28 @@ export class AgentService {
 	private startDecisionReader(): void {
 		if (this.decisionReader) return;
 		const previews = new AnswerPreviews(this.decisions.dir, decisionsSessionsRoot());
+		const control = new DecisionBatchControl(this.decisionStore, {
+			log: (row) => console.log(`[decisions-batch] ${JSON.stringify(row)}`),
+		});
+		this.decisionBatchControl = control;
 		this.decisionReader = new DecisionReader({
 			records: this.decisions,
 			store: this.decisionStore,
-			model: isolatedDecisionModel({
-				cwd: this.decisions.dir,
-				agentDir: process.env.PI_CODING_AGENT_DIR ?? getAgentDir(),
-			}),
+			model: boundedDecisionModel(
+				{
+					cwd: this.decisions.dir,
+					agentDir: process.env.PI_CODING_AGENT_DIR ?? getAgentDir(),
+				},
+				control,
+				(row) => console.log(`[decisions-call] ${JSON.stringify(row)}`),
+			),
 			withPreviews: (rec) => previews.withPreviews(rec),
 			log: (line) => console.log(line),
-			onChange: () => this.onDecisionsChanged?.(),
+			onBatch: (records) => control.prepare(records),
+			onChange: () => {
+				control.progress();
+				this.onDecisionsChanged?.();
+			},
 		});
 		this.decisionReader.start();
 	}
@@ -15645,6 +15659,7 @@ export class AgentService {
 		counts: Record<string, Partial<Record<string, number>>>;
 		reader: ReturnType<typeof readerStatus> & { readingNow: boolean };
 		decisions: number;
+		batches?: ReturnType<DecisionBatchControl["status"]>;
 	} {
 		const reader = readerStatus(this.decisionStore, this.decisionReader ?? undefined);
 		return {
@@ -15653,6 +15668,7 @@ export class AgentService {
 			counts: this.decisions.counts(),
 			reader: { ...reader, readingNow: !!this.decisionReadNow },
 			decisions: this.decisionStore.decisions().length,
+			batches: this.decisionBatchControl?.status(),
 		};
 	}
 
