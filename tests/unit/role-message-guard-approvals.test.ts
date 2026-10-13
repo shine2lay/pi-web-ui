@@ -25,6 +25,7 @@ import type {
 	GuardVerifiedSnapshot,
 } from "../../server/role-message-guard-contract.js";
 import { checkAnswers } from "../../server/asks.js";
+import { guardCommandFingerprint } from "../../server/role-message-guard-core.js";
 const policy: GuardPolicyV1 = {
 	version: "role-message-guard/v1",
 	depth: { unapprovedThrough: 6, lowerThrough: 11, ownerFrom: 12 },
@@ -652,17 +653,31 @@ describe("actual Owner event references, not prose or copied IDs", () => {
 	});
 });
 describe("bounded controls use original root, E and ordinary allowance", () => {
-	it("initial Owner control is committed before native presentation, no business body", async () => {
+	// #122: E refuses every initial control for an Owner-tier phase, so the Owner question is question-only:
+	// shown natively with no agent message (no control_send) and no charge.
+	it("initial Owner phase is question-only: native question, no control_send, no charge", async () => {
 		const f = fixture(12);
 		await f.create();
+		const before = f.commands.length;
 		expect((await f.adapter.agent.notify(invocation, "request-1", "request-g1", "initial")).state).toBe("confirmed");
-		const c = f.commands.at(-1);
-		expect(c?.kind).toBe("control_send");
-		expect(c).not.toHaveProperty("text");
-		if (c?.kind !== "control_send") throw new Error("fixture");
-		expect(c.snapshot.causal).toMatchObject({ rootId: "business-root" });
-		expect(c.identity.actor).toEqual(requester);
+		expect(f.commands).toHaveLength(before);
+		expect(f.ports.native.control).not.toHaveBeenCalled();
 		expect(f.ports.native.present).toHaveBeenCalledOnce();
+		expect(vi.mocked(f.ports.native.present).mock.calls[0]?.[2]).toBeNull();
+	});
+	it("only the requester asks for its own Owner question", async () => {
+		const f = fixture(12);
+		await f.create();
+		expect((await f.adapter.agent.notify(lowerInvocation, "request-1", "request-g1", "initial")).state).toBe("invalid");
+		expect(f.ports.native.present).not.toHaveBeenCalled();
+	});
+	it("every A command carries E's exact command fingerprint", async () => {
+		const f = fixture();
+		await f.create();
+		await f.adapter.agent.notify(invocation, "request-1", "request-g1", "initial");
+		await f.decide("deny");
+		expect(f.commands.length).toBeGreaterThanOrEqual(3);
+		for (const c of f.commands) expect(c.identity.fingerprint).toBe(guardCommandFingerprint(c));
 	});
 	it("lower control never creates an Owner ask", async () => {
 		const f = fixture();
@@ -673,7 +688,7 @@ describe("bounded controls use original root, E and ordinary allowance", () => {
 	it.each(["ordinary_hourly", "held", "duplicate_slot"] as const)(
 		"%s prevents native question delivery and any automatic retry",
 		async (reason) => {
-			const f = fixture(12);
+			const f = fixture();
 			await f.create();
 			vi.mocked(f.ports.core.execute).mockResolvedValue(f.blocked(reason));
 			expect((await f.adapter.agent.notify(invocation, "request-1", "request-g1", "initial")).state).toBe("blocked");
@@ -682,7 +697,7 @@ describe("bounded controls use original root, E and ordinary allowance", () => {
 		},
 	);
 	it("unknown core result never triggers another channel", async () => {
-		const f = fixture(12);
+		const f = fixture();
 		await f.create();
 		vi.mocked(f.ports.core.execute).mockResolvedValue({
 			state: "unknown",
@@ -696,7 +711,7 @@ describe("bounded controls use original root, E and ordinary allowance", () => {
 		expect(f.ports.native.present).not.toHaveBeenCalled();
 	});
 	it("control cannot rebase business root", async () => {
-		const f = fixture(12);
+		const f = fixture();
 		await f.create();
 		const control = vi.mocked(f.ports.native.control).getMockImplementation()!;
 		vi.mocked(f.ports.native.control).mockImplementation(async (...args) => {

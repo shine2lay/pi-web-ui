@@ -4,11 +4,13 @@
  */
 import { createHash } from "node:crypto";
 import type { Ask } from "./asks.js";
+import { guardCommandFingerprint } from "./role-message-guard-core.js";
 import type {
 	GuardActor,
 	GuardApprovalBinding,
 	GuardApprovalContext,
 	GuardChoice,
+	GuardCommand,
 	GuardConsumerBinding,
 	GuardCoordinator,
 	GuardHostVerified,
@@ -52,10 +54,13 @@ export interface GuardApprovalNativePort {
 	 * Same-key question/wake dedup, first-answer arbitration and reconnect recovery are mandatory.
 	 * Never falls back from an unauthorised Telegram plugin to another channel.
 	 */
+	/* #122: committedControl is null on the question-only Owner path (direct Owner tier or an escalated phase):
+	 * E refuses every initial control for an Owner-tier phase, so the native question is shown with no agent
+	 * message and no charge. */
 	present(
 		question: GuardOwnerQuestion,
 		ask: Ask,
-		committedControl: Extract<GuardResult, { state: "accepted" }>,
+		committedControl: Extract<GuardResult, { state: "accepted" }> | null,
 	): Promise<GuardTransportResult>;
 }
 
@@ -178,18 +183,25 @@ function trustedTime(t: GuardTime): boolean {
 		t.nowMs >= t.lastObservedMs
 	);
 }
-function identity(
+/* #122 fix: E accepts a command only when identity.fingerprint === guardCommandFingerprint(command), so the
+ * fingerprint is computed from the exact command body (A's earlier private digest never matched; every A command
+ * was refused invalid_input by the real core). operationId stays A's replay key. */
+type GuardCommandBody = GuardCommand extends infer C ? (C extends GuardCommand ? Omit<C, "identity"> : never) : never;
+function withIdentity(
 	actor: GuardActor,
 	action: string,
 	key: unknown,
 	invocation: GuardInvocationReference | GuardOwnerAnswerReference,
-): GuardOperationIdentity {
-	return {
+	body: GuardCommandBody,
+): GuardCommand {
+	const identity: GuardOperationIdentity = {
 		version: "role-message-guard/v1",
 		actor,
 		operationId: approvalDigest({ action, key, invocation }),
-		fingerprint: approvalDigest({ action, key, actor }),
+		fingerprint: "",
 	};
+	const command = { ...body, identity } as GuardCommand;
+	return { ...command, identity: { ...identity, fingerprint: guardCommandFingerprint(command) } } as GuardCommand;
 }
 function questionDigest(request: GuardRequest): string {
 	return approvalDigest({ binding: request.binding, detail: request.context, choices });
@@ -358,12 +370,9 @@ export function createGuardApprovalAdapters(ports: GuardApprovalPorts) {
 			firstDecision: null,
 			grantId: null,
 		};
-		return core.execute({
-			kind: "request_record",
-			actor,
-			identity: identity(actor, "request", record, ref),
-			request: record,
-		});
+		return core.execute(
+			withIdentity(actor, "request", record, ref, { kind: "request_record", actor, request: record }),
+		);
 	}
 	async function roleDecision(
 		ref: GuardInvocationReference,
@@ -398,7 +407,7 @@ export function createGuardApprovalAdapters(ports: GuardApprovalPorts) {
 			!same(d.authority.selection, r.selectedApprover)
 		)
 			return invalid("Verified decision binding/selected authority mismatch");
-		return core.execute({ kind: "decision_record", identity: identity(actor, "role_decision", d, ref), decision: d });
+		return core.execute(withIdentity(actor, "role_decision", d, ref, { kind: "decision_record", decision: d }));
 	}
 	/** HOST-ONLY callback, never a GuardUntrustedInput/tool. Native event reference alone is not proof. */
 	async function nativeOwnerAnswer(ref: GuardOwnerAnswerReference): Promise<GuardAdapterOutcome> {
@@ -445,11 +454,9 @@ export function createGuardApprovalAdapters(ports: GuardApprovalPorts) {
 			(d.authority.source.kind === "authorised_owner_telegram" && !text(d.authority.source.pluginId))
 		)
 			return invalid("Actual native authenticated Owner event required");
-		return core.execute({
-			kind: "decision_record",
-			identity: identity(r.binding.requester, "owner_decision", d, ref),
-			decision: d,
-		});
+		return core.execute(
+			withIdentity(r.binding.requester, "owner_decision", d, ref, { kind: "decision_record", decision: d }),
+		);
 	}
 	/** An explicit control attempt, not a business send. Core owns dedup, 20/hour and all holds. */
 	async function notify(
@@ -469,6 +476,12 @@ export function createGuardApprovalAdapters(ports: GuardApprovalPorts) {
 			return invalid("Control phase does not match current request");
 		const actor = await actorOf(ref);
 		if ("state" in actor) return actor;
+		// #122 question-only path: an Owner-tier phase has no initial agent message (E refuses it); the bound native
+		// Owner question is shown instead, with no agent message and no charge.
+		if (phase === "initial" && r.binding.tier === "owner") {
+			if (!same(actor, r.binding.requester)) return invalid("Only the requester asks for its own Owner decision");
+			return presentOwnerQuestion(r);
+		}
 		const control = await native.control(actor, r, phase);
 		if (control.state !== "verified") return failure(control);
 		if (
@@ -477,29 +490,26 @@ export function createGuardApprovalAdapters(ports: GuardApprovalPorts) {
 			!text(control.value.to)
 		)
 			return invalid("Control must preserve native actor and original business causality");
-		const result = await core.execute({
-			kind: "control_send",
-			identity: identity(actor, "control", [r.binding, phase], ref),
-			snapshot: control.value.snapshot,
-			requestId,
-			generation,
-			phase,
-			to: control.value.to,
-		});
-		if (
-			phase !== "initial" ||
-			r.binding.tier !== "owner" ||
-			result.state !== "accepted" ||
-			!["dispatched", "handled"].includes(result.delivery)
-		)
-			return result;
-		if (
-			result.receipt.class !== "control" ||
-			!same(result.receipt.causal, r.binding.causal) ||
-			result.receipt.usage.ordinaryOrigin !== 1 ||
-			result.receipt.usage.grantBusinessUse !== 0
-		)
-			return unavailable("Committed ordinary control receipt required");
+		return core.execute(
+			withIdentity(actor, "control", [r.binding, phase], ref, {
+				kind: "control_send",
+				snapshot: control.value.snapshot,
+				requestId,
+				generation,
+				phase,
+				to: control.value.to,
+			}),
+		);
+	}
+	/** HOST-ONLY (#122): show the one bound native Owner question for a current Owner-tier phase (direct Owner tier
+	 * or E's escalated phase). No agent message, no charge; E still owns first-answer arbitration. The caller passes
+	 * the request exactly as read from E's own state, never caller-supplied fields. */
+	async function presentOwnerQuestion(r: GuardRequest): Promise<GuardAdapterOutcome | GuardTransportResult> {
+		if (!compatible) return unavailable("Frozen contract/policy pin mismatch");
+		if (r.binding.tier !== "owner" || r.selectedApprover.tier !== "owner" || r.state !== "awaiting_owner")
+			return invalid("Current awaiting Owner-tier request required");
+		if (!completeApprovalContext(r.context, ports.maximumContextBytes))
+			return { state: "context_needed", reason: "Complete bounded context required; no truncation" };
 		const question = await native.question(r, questionDigest(r));
 		if (question.state !== "verified") return failure(question);
 		const q = question.value;
@@ -512,7 +522,10 @@ export function createGuardApprovalAdapters(ports: GuardApprovalPorts) {
 			!text(q.generation)
 		)
 			return invalid("Exact native Owner question required");
-		return native.present(q, ownerApprovalAsk(q, r.createdAt), result);
+		return native.present(q, ownerApprovalAsk(q, r.createdAt), null);
 	}
-	return { agent: { request, status: read, roleDecision, notify }, native: { ownerAnswer: nativeOwnerAnswer } };
+	return {
+		agent: { request, status: read, roleDecision, notify },
+		native: { ownerAnswer: nativeOwnerAnswer, presentOwnerQuestion },
+	};
 }

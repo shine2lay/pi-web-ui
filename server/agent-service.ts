@@ -316,6 +316,7 @@ import {
 	type RoleReportReceipt,
 	type RoleReportResult,
 } from "./role-messages.js";
+import { RoleMessageGuardHost } from "./role-message-guard-host.js";
 import { RolesOverviewReader } from "./roles-overview.js";
 import { makeRolesOverviewTool } from "./roles-overview-tool.js";
 import {
@@ -374,6 +375,7 @@ import type {
 	UiMessage,
 	UiPluginUpdateInfo,
 	UiQuestion,
+	UiRoleGuardQuestion,
 	UiRoleMessageRow,
 	UiRolesOverview,
 	UiServiceInfo,
@@ -1967,6 +1969,8 @@ function quietLeadAt(conv: Conversation, idx: ChatIndex, start: number): UiQuiet
 
 /** role-messages: the server's role message service (AgentService sets it; null in other engines). */
 let roleMessageService: RoleMessages | null = null;
+/** role-message-ladder: the approval ladder over message_role (AgentService sets it; null in other engines). */
+let roleGuardService: RoleMessageGuardHost | null = null;
 /** board: the roles' shared board (AgentService sets it; null in other engines). */
 let roleBoardService: RoleBoard | null = null;
 /** telegram-coo: AgentService hears each run that settles in a chat (role-replies.ts); null until it is made. */
@@ -3954,6 +3958,7 @@ export class ClientSession {
 		};
 		return {
 			service: () => roleMessageService ?? undefined,
+			guard: () => roleGuardService ?? undefined,
 			sender: (): RoleMessageSender | string => {
 				const conv = target();
 				if (!conv) return "This chat isn't open any more.";
@@ -3962,9 +3967,12 @@ export class ClientSession {
 				if (!identity) return "Only a chat with a role can message other roles, and this chat has none.";
 				let file: string | undefined;
 				let taskId: number | undefined;
+				let queueChat: string | undefined;
 				try {
 					file = conv.session.sessionFile ?? undefined;
-					taskId = ownTaskOf(conv.session.sessionManager.getBranch())?.id;
+					const own = ownTaskOf(conv.session.sessionManager.getBranch());
+					taskId = own?.id;
+					queueChat = own?.queueChat;
 				} catch {
 					// the session is being replaced
 				}
@@ -3973,13 +3981,21 @@ export class ClientSession {
 				const isHome = !!def?.homeChat && samePath(def.homeChat, file);
 				// telegram-coo: a home chat whose running turn is the owner's asks for him (forOwner).
 				const owner = isHome ? ownerTurnOf(conv.turnRecord) : null;
+				const lastUserText = lastUserTextOf(conv) ?? "";
 				return {
 					role: identity.id,
 					title: identity.title,
 					file,
 					chat: chatLabel({ taskId, isHome, title: conv.title }),
-					handling: roleMessageService?.handlingDepth(file, lastUserTextOf(conv)) ?? 0,
+					handling: roleMessageService?.handlingDepth(file, lastUserText) ?? 0,
 					...(owner ? { forOwner: owner } : {}),
+					// role-message-ladder: the server's own binding of this chat (never the model's words).
+					guard: {
+						bindingId: file,
+						isHome,
+						...(taskId !== undefined && !isHome ? { task: { queueId: queueChat ?? "", taskId } } : {}),
+						lastUserText,
+					},
 				};
 			},
 		};
@@ -15438,6 +15454,17 @@ export class AgentService {
 			log: (line) => console.log(line),
 		});
 		roleMessageService = this.roleMessages;
+		// role-message-ladder (#122): the approval ladder; it starts with startRoleMessages. Until it is ready (or if it
+		// can't start) message_role keeps the native 6-message rule.
+		this.roleGuard = new RoleMessageGuardHost({
+			dir: join(this.stateStore.dataDir, "role-message-guard"),
+			roleMessages: () => this.roleMessages,
+			identities: () => identityRegistry().identities,
+			askHub,
+			questionsChanged: () => this.onRoleGuardChanged?.(),
+			log: (line) => console.log(line),
+		});
+		roleGuardService = this.roleGuard;
 		// board (task #76): the roles' shared board. Posting wakes nobody by itself; an order goes directly
 		// to the listed roles that have something waiting (the owner's rule, role-board.ts). Its direct turns
 		// go the way role requests do; they start with startRoleMessages.
@@ -15467,9 +15494,29 @@ export class AgentService {
 	/** index.ts: the list in Settings -> Identities changed (it is pushed to every window). */
 	onRoleMessagesChanged: (() => void) | null = null;
 
+	/** role-message-ladder (#122): hops 7-11 need the COO's grant, 12+ the owner's (role-message-guard-host.ts). */
+	private readonly roleGuard: RoleMessageGuardHost;
+	/** index.ts: the open Owner questions changed (pushed to every window). */
+	onRoleGuardChanged: (() => void) | null = null;
+
+	/** role-message-ladder: the open Owner questions, for A's approval dialog. */
+	roleGuardQuestions(): Promise<UiRoleGuardQuestion[]> {
+		return this.roleGuard.openQuestions();
+	}
+
+	/** role-message-ladder: the owner's answer from this app's authenticated page (role_guard_owner_answer). */
+	roleGuardOwnerAnswer(
+		questionId: string,
+		generation: string,
+		choice: string,
+	): Promise<{ ok: boolean; error?: string }> {
+		return this.roleGuard.ownerAnswer(questionId, generation, choice, "browser");
+	}
+
 	/** role-messages: start delivering (index.ts, once the chats a restart cut off are carried on). The
 	 *  board's direct turns start with them. */
 	startRoleMessages(): void {
+		void this.roleGuard.start().then(() => this.onRoleGuardChanged?.());
 		this.roleMessages.start();
 		this.roleBoard.start();
 		this.startDecisionRecords();
@@ -17536,6 +17583,8 @@ export class AgentService {
 	async disposeAll(): Promise<void> {
 		this.roleMessages.stop();
 		if (roleMessageService === this.roleMessages) roleMessageService = null;
+		this.roleGuard.stop();
+		if (roleGuardService === this.roleGuard) roleGuardService = null;
 		this.roleBoard.stop();
 		if (roleBoardService === this.roleBoard) roleBoardService = null;
 		this.queueScanner.stop();

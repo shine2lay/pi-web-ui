@@ -118,6 +118,16 @@ export interface UiRoleMessage {
 	text: string;
 }
 
+/** role-message-ladder: one open Owner question (message 12 and above, or the COO asking for itself, or the
+ *  COO's one escalation). Shown with A's approval dialog; answered with role_guard_owner_answer. */
+export interface UiRoleGuardQuestion {
+	questionId: string;
+	generation: string;
+	requesterRole: string;
+	request: import("./role-message-guard-contract.js").GuardRequest;
+	ownerQuestion: import("./role-message-guard-contract.js").GuardOwnerQuestion;
+}
+
 /** role-messages: one row of Settings -> Identities -> Role messages (newest first). */
 export interface UiRoleMessageRow {
 	id: string;
@@ -1625,6 +1635,10 @@ export type ClientMessage =
 	| { type: "identities_get" }
 	/** role-messages: the last messages between roles and the pause switch (Settings -> Identities). */
 	| { type: "role_messages_get" }
+	/** role-message-ladder: the open Owner questions (sent again whenever they change). */
+	| { type: "role_guard_get" }
+	/** role-message-ladder: the owner's answer in the app (this authenticated page is the browser source). */
+	| { type: "role_guard_owner_answer"; questionId: string; generation: string; choice: string }
 	/** role-messages: the owner pauses (held, not dropped) or resumes delivery. */
 	| { type: "role_messages_pause"; paused: boolean }
 	/** board: the owner posts on the roles' board from the Roles page (answered with board_result). to =
@@ -4364,6 +4378,12 @@ export type ServerMessage =
 	/** role-messages: the last messages between roles (newest first) and whether delivery is paused.
 	 *  enabled false = this server has no role messages (another engine). */
 	| { type: "role_messages"; enabled: boolean; paused: boolean; messages: UiRoleMessageRow[] }
+	/** role-message-ladder: the open Owner questions; result = the answer to this page's role_guard_owner_answer. */
+	| {
+			type: "role_guard_questions";
+			questions: UiRoleGuardQuestion[];
+			result?: { questionId: string; ok: boolean; error?: string };
+	  }
 	/** roles-overview: the snapshot (full watchers), or just the open asks' count (count watchers);
 	 *  error: it couldn't be made (the page keeps what it had). */
 	| { type: "roles"; overview?: UiRolesOverview; asks: number; error?: string; checkedAt?: number }

@@ -75,6 +75,7 @@ import {
 	resendNotebookWatch,
 } from "./notebook-state";
 import { receiveSubsLimits, requestSubsLimits } from "./subs-limits-state";
+import { receiveRoleGuard, requestRoleGuard } from "./role-guard-state";
 import { receiveBoardResult, receiveRoles, resendRolesWatch } from "./roles-state";
 import { receiveDecisionRecord, receiveInitiatives, resendInitiativesWatch } from "./initiatives-state";
 import { emitPluginData } from "./plugin-loader";
@@ -1775,6 +1776,8 @@ export function useChat() {
 					resendInitiativesWatch();
 					// subs-limits-box: the Limits box needs the readings (and whether a check runs) again.
 					requestSubsLimits();
+					// role-message-ladder: the owner's open approval questions.
+					requestRoleGuard();
 					// optimistic-send: ask what became of the sends still shown as "Sending" (after the
 					// snapshot, which may show them already). Same list the "ready" reducer case keeps.
 					const unanswered = idsToCheck(onReconnect(chatApi.current.chat.pendingSends));
@@ -2075,6 +2078,10 @@ export function useChat() {
 				case "role_messages":
 					// role-messages: Settings -> Identities -> Role messages.
 					receiveRoleMessages(msg);
+					break;
+				case "role_guard_questions":
+					// role-message-ladder: the owner's open approval questions (role-guard-state.ts).
+					receiveRoleGuard(msg);
 					break;
 				case "roles":
 					// roles-overview: the Roles page and the top bar's count (roles-state.ts).

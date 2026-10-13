@@ -169,7 +169,28 @@ export interface RoleMessageRecord {
 	ownerChannel?: OwnerChannel | null;
 	/** decision-records: the initiative it is part of (a short id; a reply without one takes its original's). */
 	initiative?: string;
+	/** role-message-ladder (#122): the chain's root id ("root-…"), or "legacy-<id>" for a chain that began before
+	 *  the ladder (anchored on that record; never reset to hop 1). Absent on records from before the ladder. */
+	root?: string;
+	/** role-message-ladder: the role message the sender was handling when it sent this one (absent = fresh root). */
+	parent?: string;
+	/** role-message-ladder: a typed approval control (not business words): the request it belongs to. Handling it
+	 *  keeps the business chain's hop (no +1). */
+	guard?: RoleMessageGuardTag;
 }
+
+/** role-message-ladder: what a control record is for. */
+export interface RoleMessageGuardTag {
+	requestId: string;
+	generation: string;
+	phase: "initial" | "decision";
+}
+
+/** role-message-ladder: a chat's position in a role-message chain, from its last user message. */
+export type RoleMessageCausality =
+	| { kind: "none" }
+	| { kind: "unknown"; reason: "missing" | "contradictory" }
+	| { kind: "record"; record: RoleMessageRecord; exactTarget: boolean };
 
 /** role-reports: what the app's job found that day (counts only). */
 export interface RoleReportActivity {
@@ -259,6 +280,30 @@ export interface RoleMessageSender {
 	/** telegram-coo: the chat is a role's home chat and its running turn is the owner's (role-replies.ts
 	 *  ownerTurnOf): a question or request it sends is marked forOwner, with these send ids. */
 	forOwner?: { ownerIds: string[]; ownerChannel?: OwnerChannel };
+	/** role-message-ladder: the server's own binding of the sending chat (never the model's). */
+	guard?: RoleMessageSenderBinding;
+}
+
+/** role-message-ladder: the sending chat as the server binds it. */
+export interface RoleMessageSenderBinding {
+	/** The runtime conversation id (the tool's invocation binding). */
+	bindingId: string;
+	/** It is the role's current home chat. */
+	isHome: boolean;
+	/** Its queued task, when it is a task's own chat. */
+	task?: { queueId: string; taskId: number };
+	/** Its last user message (the role message it is handling, if any). */
+	lastUserText: string;
+}
+
+/** role-message-ladder: a checked message, before the chain/hourly rules and before it is stored. */
+export interface RoleMessageDraft {
+	kind: RoleMessageKind;
+	text: string;
+	to: { role: string; title: string };
+	replyTo: string | null;
+	forOwner?: { ownerIds: string[]; ownerChannel?: OwnerChannel };
+	initiative: string;
 }
 
 export interface RoleMessageSendInput {
@@ -276,6 +321,12 @@ export type RoleMessageSendResult =
 // ---------------------------------------------------------------------------
 // Pure helpers
 // ---------------------------------------------------------------------------
+
+/** An FYI starts no turn. role-message-ladder: except the requester's notice of an Owner decision (a typed
+ *  control, kind fyi under E), which resumes the requesting chat so it can use (or stop on) the decision. */
+export function noTurn(r: Pick<RoleMessageRecord, "kind" | "guard">): boolean {
+	return r.kind === "fyi" && r.guard?.phase !== "decision";
+}
 
 export function sha1(text: string): string {
 	return createHash("sha1").update(text, "utf8").digest("hex");
@@ -782,6 +833,19 @@ export class RoleMessages {
 		return this.data.messages.find((m) => m.id === id);
 	}
 
+	/** role-message-ladder: the record at `hop` on the parent line of `id` (itself when it is at that hop);
+	 *  undefined when the line is broken (pruned) or never passes that hop. A grant binds to that line, so a
+	 *  branch made before the grant's anchor can't use it. */
+	ancestorAt(id: string, hop: number): string | undefined {
+		let r = this.byId(id);
+		for (let steps = 0; r && steps < 64; steps++) {
+			if (r.chain === hop) return r.id;
+			if (r.chain < hop || !r.parent) return undefined;
+			r = this.byId(r.parent);
+		}
+		return undefined;
+	}
+
 	get paused(): boolean {
 		return this.data.paused;
 	}
@@ -1078,8 +1142,146 @@ export class RoleMessages {
 		this.log(`refused ${who} -> ${short(to)} · ${short(kind)}: ${why.slice(0, 200)}`);
 	}
 
-	/** message_role: check and store a message (the sender is the server's, never the model's). */
+	/** role-message-ladder: messages a role sent in the last hour (the 20-per-hour rule; report requests aside). */
+	/** role-message-ladder: the records accepted after `since` (the guard's hourly carry-over and rollback check). */
+	recent(since: number): RoleMessageRecord[] {
+		return this.data.messages.filter((m) => m.at > since);
+	}
+
+	hourlyCount(role: string, now = this.now()): number {
+		return this.data.messages.filter((m) => m.kind !== "report" && m.from.role === role && now - m.at < HOUR_MS).length;
+	}
+
+	/** message_role: check and store a message (the sender is the server's, never the model's). The native
+	 *  depth-only rule (hard 6) that the approval ladder replaces; kept for rollback and an unavailable guard. */
 	send(sender: RoleMessageSender, input: RoleMessageSendInput): RoleMessageSendResult {
+		const prepared = this.prepare(sender, input);
+		if (!prepared.ok) return prepared;
+		const chain = sender.handling > 0 ? sender.handling + 1 : 1;
+		if (chain > ROLE_MESSAGE_CHAIN_MAX) {
+			return {
+				ok: false,
+				error: `Not sent: this would be message ${chain} in one chain of role messages (the limit is ${ROLE_MESSAGE_CHAIN_MAX}). Stop the back-and-forth and ask the owner how to go on.`,
+			};
+		}
+		const now = this.now();
+		const lastHour = this.hourlyCount(sender.role, now);
+		if (lastHour >= ROLE_MESSAGES_PER_HOUR) {
+			return {
+				ok: false,
+				error: `Not sent: ${sender.role} has sent ${lastHour} role messages in the last hour (the limit is ${ROLE_MESSAGES_PER_HOUR}). Ask the owner before sending more.`,
+			};
+		}
+		const record = this.recordOf(
+			sender,
+			prepared.draft,
+			newRoleMessageId((id) => !!this.byId(id)),
+			now,
+			chain,
+		);
+		return this.admit(record);
+	}
+
+	/** role-message-ladder: the native record for a checked draft (no store change). */
+	recordOf(
+		sender: RoleMessageSender,
+		draft: RoleMessageDraft,
+		id: string,
+		at: number,
+		chain: number,
+		extra: { root?: string; parent?: string; target?: string; guard?: RoleMessageGuardTag } = {},
+	): RoleMessageRecord {
+		const { kind, replyTo, forOwner, initiative } = draft;
+		return {
+			id,
+			at,
+			from: { role: sender.role, title: sender.title, chat: sender.chat, file: sender.file },
+			to: { role: draft.to.role, title: draft.to.title },
+			kind,
+			...(replyTo ? { replyTo } : {}),
+			chain,
+			text: draft.text,
+			state: "waiting",
+			sends: 0,
+			attempts: 0,
+			...(forOwner
+				? {
+						forOwner: true,
+						ownerIds: [...new Set(forOwner.ownerIds.map(String))].slice(0, OWNER_IDS_MAX),
+						ownerChannel: ownerChannelOf(forOwner.ownerChannel) ?? null,
+					}
+				: {}),
+			...(initiative ? { initiative } : {}),
+			...(extra.target ? { target: extra.target } : {}),
+			...(extra.root ? { root: extra.root } : {}),
+			...(extra.parent ? { parent: extra.parent } : {}),
+			...(extra.guard ? { guard: { ...extra.guard } } : {}),
+		};
+	}
+
+	/** role-message-ladder: store an admitted record and start its delivery. Idempotent by id: a record already
+	 *  here is confirmed, never stored twice. A preset target (a reply to the asking session) gets its delivery
+	 *  check fields here, so the receiving chat can prove it. */
+	admit(input: RoleMessageRecord): { ok: true; record: RoleMessageRecord; paused: boolean; targetChat: string } {
+		const existing = this.byId(input.id);
+		const targetChatOf = (r: RoleMessageRecord) =>
+			r.kind === "reply" && r.replyTo
+				? `the chat that asked (${this.byId(r.replyTo)?.from.chat ?? "?"}), else its home chat`
+				: "its home chat";
+		if (existing) return { ok: true, record: existing, paused: this.data.paused, targetChat: targetChatOf(existing) };
+		const record: RoleMessageRecord = structuredClone(input);
+		const original = record.kind === "reply" && record.replyTo ? this.byId(record.replyTo) : undefined;
+		if (record.target && !record.hash) {
+			let size = 0;
+			try {
+				size = existsSync(record.target) ? statSync(record.target).size : 0;
+			} catch {
+				size = 0;
+			}
+			record.scanFrom = size;
+			record.targetChat = record.targetChat ?? "the requesting chat";
+		}
+		this.data.messages.push(record);
+		// The words the receiving chat will see (as step() hashes them), so it can prove the message.
+		if (record.target && !record.hash)
+			record.hash = sha1(roleMessageText(record, { ownerAnswer: !!this.ownerAnswerOf(record.id) }));
+		if (original) {
+			original.replyId = record.id;
+			// A delivered message is answered now; one not yet seen in its chat becomes "replied" once it is
+			// (step), so it is still delivered and gets its time.
+			if (original.state === "delivered") original.state = "replied";
+		}
+		this.save();
+		this.log(
+			`${record.id} ${record.from.role} (${record.from.chat}) -> ${record.to.role} · ${record.kind}${record.replyTo ? ` to ${record.replyTo}` : ""}, chain ${record.chain}${record.forOwner ? ", for the owner" : ""}${record.guard ? `, approval ${record.guard.phase}` : ""}`,
+		);
+		this.kick();
+		try {
+			this.host.sent?.(record);
+		} catch (err) {
+			this.log(`${record.id}: couldn't keep its decision record (${(err as Error).message})`);
+		}
+		return { ok: true, record, paused: this.data.paused, targetChat: targetChatOf(record) };
+	}
+
+	/** role-message-ladder: where a chat stands in a role-message chain, from its last user message. A header whose
+	 *  record is gone (pruned, forged) or whose words differ is unknown, never a fresh start. A branch copy of the
+	 *  exact delivered words keeps its place (exactTarget false). */
+	causalityOf(sessionFile: string | undefined, lastUserText: string | undefined): RoleMessageCausality {
+		const text = lastUserText ?? "";
+		const id = roleMessageIdOf(text);
+		if (!id) return { kind: "none" };
+		const r = this.byId(id);
+		if (!r?.hash) return { kind: "unknown", reason: "missing" };
+		if (sha1(text) !== r.hash) return { kind: "unknown", reason: "contradictory" };
+		return { kind: "record", record: r, exactTarget: !!sessionFile && !!r.target && samePath(r.target, sessionFile) };
+	}
+
+	/** role-message-ladder: check a message without the chain and hourly rules (the guard applies those). */
+	prepare(
+		sender: RoleMessageSender,
+		input: RoleMessageSendInput,
+	): { ok: true; draft: RoleMessageDraft } | { ok: false; error: string } {
 		const kind = typeof input.kind === "string" ? (input.kind.trim().toLowerCase() as RoleMessageKind) : undefined;
 		if (!kind || !ROLE_MESSAGE_KINDS.includes(kind)) {
 			return { ok: false, error: `kind must be one of: ${ROLE_MESSAGE_KINDS.join(", ")}.` };
@@ -1146,23 +1348,6 @@ export class RoleMessages {
 				return { ok: false, error: `This chat is ${to.id}'s home chat: that's you.` };
 			}
 		}
-		const chain = sender.handling > 0 ? sender.handling + 1 : 1;
-		if (chain > ROLE_MESSAGE_CHAIN_MAX) {
-			return {
-				ok: false,
-				error: `Not sent: this would be message ${chain} in one chain of role messages (the limit is ${ROLE_MESSAGE_CHAIN_MAX}). Stop the back-and-forth and ask the owner how to go on.`,
-			};
-		}
-		const now = this.now();
-		const lastHour = this.data.messages.filter(
-			(m) => m.kind !== "report" && m.from.role === sender.role && now - m.at < HOUR_MS,
-		).length;
-		if (lastHour >= ROLE_MESSAGES_PER_HOUR) {
-			return {
-				ok: false,
-				error: `Not sent: ${sender.role} has sent ${lastHour} role messages in the last hour (the limit is ${ROLE_MESSAGES_PER_HOUR}). Ask the owner before sending more.`,
-			};
-		}
 		// Owner visibility and transport are separate; only server-derived sender context is accepted.
 		const forOwner = (kind === "question" || kind === "request") && sender.forOwner ? sender.forOwner : undefined;
 		// decision-records: given, else (a reply) its original's; "" = none on purpose.
@@ -1172,49 +1357,17 @@ export class RoleMessages {
 				: original
 					? (original.initiative ?? this.host.initiativeOf?.(original.id) ?? "")
 					: "";
-		const record: RoleMessageRecord = {
-			id: newRoleMessageId((id) => !!this.byId(id)),
-			at: now,
-			from: { role: sender.role, title: sender.title, chat: sender.chat, file: sender.file },
-			to: { role: to.id, title: to.title },
-			kind,
-			...(kind === "reply" ? { replyTo } : {}),
-			chain,
-			text,
-			state: "waiting",
-			sends: 0,
-			attempts: 0,
-			...(forOwner
-				? {
-						forOwner: true,
-						ownerIds: [...new Set(forOwner.ownerIds.map(String))].slice(0, OWNER_IDS_MAX),
-						ownerChannel: ownerChannelOf(forOwner.ownerChannel) ?? null,
-					}
-				: {}),
-			...(initiative ? { initiative } : {}),
+		return {
+			ok: true,
+			draft: {
+				kind,
+				text,
+				to: { role: to.id, title: to.title },
+				replyTo: kind === "reply" ? replyTo : null,
+				...(forOwner ? { forOwner } : {}),
+				initiative,
+			},
 		};
-		this.data.messages.push(record);
-		if (original) {
-			original.replyId = record.id;
-			// A delivered message is answered now; one not yet seen in its chat becomes "replied" once it is
-			// (step), so it is still delivered and gets its time.
-			if (original.state === "delivered") original.state = "replied";
-		}
-		this.save();
-		this.log(
-			`${record.id} ${sender.role} (${sender.chat}) -> ${to.id} · ${kind}${replyTo ? ` to ${replyTo}` : ""}, chain ${chain}${forOwner ? ", for the owner" : ""}`,
-		);
-		this.kick();
-		try {
-			this.host.sent?.(record);
-		} catch (err) {
-			this.log(`${record.id}: couldn't keep its decision record (${(err as Error).message})`);
-		}
-		const targetChat =
-			kind === "reply" && original
-				? `the chat that asked (${original.from.chat}), else its home chat`
-				: "its home chat";
-		return { ok: true, record, paused: this.data.paused, targetChat };
 	}
 
 	/** Look at every waiting message once, one at a time. A call while that goes on makes it look once
@@ -1361,7 +1514,7 @@ export class RoleMessages {
 			this.inFlight.delete(r.id);
 			this.save();
 			this.log(
-				`${r.id} delivered to ${r.to.role} (${r.targetChat ?? "?"})${r.kind === "fyi" ? ", added without a turn" : ""}`,
+				`${r.id} delivered to ${r.to.role} (${r.targetChat ?? "?"})${noTurn(r) ? ", added without a turn" : ""}`,
 			);
 			return;
 		}
@@ -1385,14 +1538,14 @@ export class RoleMessages {
 		}
 		// An FYI starts no turn: it is added to the chat and read with its next message. queue-paused: so is
 		// anything for a task's chat the owner paused; the chat reads it once the pause is lifted.
-		const paused = r.kind !== "fyi" && (await taskChatPaused(target));
+		const paused = !noTurn(r) && (await taskChatPaused(target));
 		// quiet-turns: a message routed before an update changed its hint line goes in with the new text; the
 		// store's hash follows what is sent, so the page still gets its stamp.
 		if (r.hash !== sha1(text)) {
 			r.hash = sha1(text);
 			this.save();
 		}
-		const res = r.kind === "fyi" || paused ? await this.host.note(target, text) : await this.host.deliver(target, text);
+		const res = noTurn(r) || paused ? await this.host.note(target, text) : await this.host.deliver(target, text);
 		if (res.ok && paused)
 			this.log(`${r.id} added to ${r.targetChat ?? "?"} without a turn: its task is paused by the owner`);
 		if (res.ok) {

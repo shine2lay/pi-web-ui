@@ -24,6 +24,7 @@ import { FiRefreshCw } from "react-icons/fi";
 import { FooterBar } from "./components/FooterBar";
 import { Dialog } from "./components/Dialog";
 import { DshQuestionDialog } from "./components/DshQuestionDialog";
+import { RoleGuardOwnerQuestions } from "./components/RoleGuardOwnerQuestions";
 // 终端视图懒加载：xterm.js 体积大且只在切到终端时才需要，拆出主包
 const TerminalPanel = lazy(() => import("./components/TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
 // roles-overview: the Roles page loads with its first opening and stays mounted after it.
@@ -2481,6 +2482,8 @@ export function App() {
 			<RollbackDialog />
 			{/* 人机协同拦截与「改写执行」审批弹窗 */}
 			<ToolApprovalDialog approval={chat.approval} />
+			{/* role-message-ladder: the owner's approval for role messages 12+ (or escalated by the COO). */}
+			<RoleGuardOwnerQuestions connected={chat.ready} language={locale.startsWith("zh") ? "zh" : "en"} />
 			{/* 插件弹窗（modal.dialog 槽位）：action 点即分发 + 关弹窗，view 挂插件视图。 */}
 			{openModalEntry && (
 				<PluginModal

@@ -114,6 +114,7 @@ import type {
 	CommandDef,
 	PromptAttachment,
 	ServerMessage,
+	UiRoleGuardQuestion,
 	UiRoleMessageRow,
 	UiRolesOverview,
 	UiDecisionsPage,
@@ -1416,6 +1417,16 @@ export interface EngineService {
 	noteRoleReportRefused?(role: unknown, date: unknown, why: string): void;
 	/** role-messages (pi engine): set by index.ts; the list changed. */
 	onRoleMessagesChanged?: (() => void) | null;
+	/** role-message-ladder (pi engine): the open Owner questions (messages 12+, or escalated). */
+	roleGuardQuestions?(): Promise<UiRoleGuardQuestion[]>;
+	/** role-message-ladder (pi engine): the owner's answer from this authenticated page. */
+	roleGuardOwnerAnswer?(
+		questionId: string,
+		generation: string,
+		choice: string,
+	): Promise<{ ok: boolean; error?: string }>;
+	/** role-message-ladder (pi engine): set by index.ts; the open Owner questions changed. */
+	onRoleGuardChanged?: (() => void) | null;
 	/** roles-overview (pi engine): every role's state for the Roles page. */
 	readRolesOverview?(): Promise<UiRolesOverview>;
 	/** board (pi engine): the owner posts on the roles' board from the Roles page. */
@@ -1965,6 +1976,32 @@ function pushIdentities(): void {
 function roleMessagesMessage(): ServerMessage {
 	const view = service.roleMessagesView?.() ?? { enabled: false, paused: false, messages: [] };
 	return { type: "role_messages", ...view };
+}
+
+/** role-message-ladder: the open Owner questions (A's approval dialog), with this page's answer result. */
+async function roleGuardMessage(result?: { questionId: string; ok: boolean; error?: string }): Promise<ServerMessage> {
+	let questions: UiRoleGuardQuestion[] = [];
+	try {
+		questions = (await service.roleGuardQuestions?.()) ?? [];
+	} catch {
+		/* none shown: the ladder holds them */
+	}
+	return { type: "role_guard_questions", questions, ...(result ? { result } : {}) };
+}
+
+/** role-message-ladder: the open Owner questions changed: every window gets them. */
+function pushRoleGuard(): void {
+	void roleGuardMessage().then((m) => {
+		const payload = JSON.stringify(m);
+		for (const client of wss.clients) {
+			if (client.readyState !== WebSocket.OPEN) continue;
+			try {
+				client.send(payload);
+			} catch {
+				/* a dead socket: cleaned up elsewhere */
+			}
+		}
+	});
 }
 
 /** role-messages: the list changed: every window gets it. */
@@ -2583,6 +2620,35 @@ wss.on("connection", (ws, req) => {
 				// role-messages: Settings -> Identities -> Role messages opened.
 				send(roleMessagesMessage());
 				break;
+			case "role_guard_get":
+				// role-message-ladder: a page asks for the open Owner questions.
+				void roleGuardMessage().then((m) => {
+					if (!closed) send(m);
+				});
+				break;
+			case "role_guard_owner_answer": {
+				// role-message-ladder: the owner answers in the app. This socket passed the app's own sign-in, which is the
+				// browser source; nothing a model writes reaches here.
+				const { questionId, generation, choice } = msg;
+				if (typeof questionId !== "string" || typeof generation !== "string" || typeof choice !== "string") break;
+				if (!acceptedBrowser) {
+					// Only a browser page (allowed Origin) answers for the owner; scripts and internal sockets never do.
+					void roleGuardMessage({ questionId, ok: false, error: "only the app's page can answer" }).then((m) => {
+						if (!closed) send(m);
+					});
+					break;
+				}
+				void (
+					service.roleGuardOwnerAnswer?.(questionId, generation, choice) ??
+					Promise.resolve({ ok: false, error: "not available" })
+				)
+					.catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }))
+					.then((r) => roleGuardMessage({ questionId, ...r }))
+					.then((m) => {
+						if (!closed) send(m);
+					});
+				break;
+			}
 			case "role_messages_pause":
 				// role-messages: the owner's switch (every window gets the new state through the change hook).
 				if (typeof msg.paused === "boolean") service.setRoleMessagesPaused?.(msg.paused);
@@ -4085,6 +4151,8 @@ service.onRoleMessagesChanged = () => {
 };
 // board: the Roles page's Board view (and each role's open orders) follows the board.
 service.onBoardChanged = () => rolesWatch.poke();
+// role-message-ladder: every window shows the open Owner questions.
+service.onRoleGuardChanged = () => pushRoleGuard();
 // initiatives-page: the Initiatives tab follows the decisions and the reader.
 service.onDecisionsChanged = () => initiativesWatch.poke();
 // subs-limits-box: the channel pi-multi-pass joins when a chat loads it (and the file, until then).

@@ -1,0 +1,84 @@
+# Role-message approval ladder (Ops #122)
+
+Roles message each other with `message_role`. A message started by another role's message is one
+**hop** further down the same chain. Until #122 the server refused every message past hop 6
+("Not sent: this would be message 7 …"), which stranded useful completion notices (FE32, H7).
+#122 replaces that hard stop with an approval ladder. The Owner chose "Ship now, urgent later"
+(native record dr-c512c42648d0): there is **no urgent exception** in this delivery.
+
+## What a role sees
+
+| Hop     | What happens                                                                                           |
+| ------- | ------------------------------------------------------------------------------------------------------ |
+| 1–6     | Sent as before.                                                                                        |
+| 7–11    | Needs a grant from the responsible lead, or the COO by default. The tool says so and how to ask.       |
+| 12–16   | Needs a grant from the Owner (hop 12 included). A grant covers at most hops 12–16.                     |
+| 17+     | Fresh Owner consent for each further 12–16-sized step; nothing renews by itself.                       |
+
+- Ask: `message_role` with `approval: { action: "request", recipients, context }`. The context is the
+  Owner's dialog package (goal, progress, prior decisions, why needed, questions, options, cost/time/risk,
+  exact authority, safety and holds).
+- Decide (the approver only): `approval: { action: "decide", requestId, generation, choice, reason }` with
+  `deny`, `one_send`, `requested_quantity` or `escalate_owner` (the lower approver may pass it to the
+  Owner once). Status: `action: "status"`.
+- A grant: at most **5 accepted business sends** in total across its named roles and branches, an upper
+  hop (lower tier never above 11), **60 minutes**, bound to one chain line (its root and the record it was
+  asked at), the named roles (requester included) and the requester's task. No automatic grants or
+  renewal, no progress judge, no self-approval; a COO asking for itself without a distinct lead goes to
+  the Owner.
+- Owner-tier and escalated requests are **questions only**: they appear in the Owner's browser dialog
+  ("Message continuation: Owner decision") and on Telegram through the authorised plugin, bound to
+  the request generation. They send no agent message and charge nothing. Queue Auto approve is not
+  Owner authority.
+- Approval controls are typed: they skip only the business depth check and still count in the unchanged
+  **20 accepted per role per rolling hour**. Pauses, holds, scope, budgets and consents are unchanged.
+
+## Chain identity
+
+A message's root and parent are recorded with it. The chain survives an omitted `replyTo`, an FYI, a
+control message, a restart and branching. A chat whose place cannot be proved (forged header, missing,
+pruned or edited parent) is `unknown`: it is never reset to hop 1, and it needs the Owner. Legacy
+records without root/parent are anchored explicitly (partial provenance), never reset.
+
+## How it is built
+
+- `server/role-message-guard-host.ts` (new): the single admission authority. It wires component E
+  (`role-message-guard-core.ts`, `role-message-guard-store.ts`) to the native ports: sender binding to the
+  current home chat, approver selection (trusted lead binding, COO default, Owner), decision
+  re-verification, transport through `RoleMessages.admit`, the browser/Telegram Owner question, startup,
+  rotation and rollback detection. One re-entrant in-process lease covers E's store, rotation, decision
+  records and every admit; a pid lock file guards the directory.
+- Component A (`role-message-guard-approvals.ts`) presents requests and decisions; #122 fixed its command
+  fingerprint (it now uses E's `guardCommandFingerprint`) and added the question-only path.
+- `server/role-messages.ts` keeps all native rules and gains `prepare` / `admit` / `causalityOf` /
+  `hourlyCount` / `ancestorAt`; records carry `root`, `parent` and `guard`. With the host absent or
+  degraded, the native depth-6 refusal applies unchanged.
+- State: `~/.pi-web-ui/role-message-guard/` (E's store, decisions, Owner questions, lock). Caps
+  (`GUARD_RETENTION`, `GUARD_FILE_MAX_BYTES` 16 MiB, rotation at 1 MiB / 300 accepted messages / 3000
+  tombstones) were sized from measured volume (≤365 role messages a day, ≤20 per role-hour) and proposed
+  to Ops (rm-1fe61704).
+
+## Rollback
+
+The previous reader (git-pinned in `tests/role-message-guard-acceptance/previous-reader.mjs`) opens the
+new `role-messages.json` unchanged: every id, word, state and hop is kept, its hard 6 applies, approval
+controls count in its 20/hour, and its save keeps the ladder fields. Reinstalling the ladder continues
+each chain where it was. Roll back with `pi-web-deploy rollback`; never restore an older backup over
+live role-message state.
+
+## Not in this delivery (future work)
+
+- Urgent notices: no protected types (`safety_action_notice`, `critical_risk_notice`,
+  `safety_action_result`), producer adapters, incident state or depth exemption. Messages that claim
+  urgency are ordinary. #125 found no qualified native urgent source; #130 found no safe small design:
+  a C124 origin cannot be represented, because such notices are born resolved and written by same-UID
+  writers. A future urgent path needs a trustworthy origin first.
+
+## Proof
+
+- Stage cases: `tests/unit/role-message-guard-host.test.ts` (real RoleMessages, E and A; fake chats and
+  clock), including the FE32/H7 7th-hop counterfactual (old code refuses, the ladder asks).
+- Acceptance: V's harness (`tests/role-message-guard-acceptance/`) through
+  `tests/role-message-guard-binding-122.mjs` on the registered build; urgent cases are NOT RUN
+  (not delivered, fail closed), never green.
+- Rollback: `tests/role-message-guard-previous-reader-122.mjs`.

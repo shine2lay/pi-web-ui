@@ -1,5 +1,11 @@
 # Role-message guard contract v1
 
+> **Delivered by #122 (ladder only).** L1–L5, L7 and L8 are wired live through
+> `server/role-message-guard-host.ts` (see `docs/role-message-ladder.md`). L6 (protected scope) and the
+> urgent option B are **not** delivered: the Owner chose "Ship now, urgent later" (dr-c512c42648d0)
+> after #125 found no qualified native urgent source and #130 found no safe small design (C124 origin
+> unrepresentable). Urgent-looking messages are ordinary; protected cases stay NOT DELIVERED.
+
 Component C of Ops #122's approved split. **Type-only, inactive, not a released guard.**
 `server/role-message-guard-contract.ts` emits an empty module. It exports no factory,
 policy value, native verifier, store, dispatcher, registration or default instance.

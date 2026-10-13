@@ -17,6 +17,7 @@ import {
 	type RoleMessageSender,
 } from "./role-messages.js";
 import { BOARD_ROUTING_RULE } from "./board-tool.js";
+import type { RoleMessageGuardHost } from "./role-message-guard-host.js";
 
 /** board (task #76): what message_role's result adds when the same text went to several roles. */
 export function sameTextHint(roles: readonly string[]): string {
@@ -32,6 +33,8 @@ export interface MessageRoleHost {
 	sender(): RoleMessageSender | string;
 	/** The server's role message service (absent: not wired). */
 	service(): RoleMessages | undefined;
+	/** role-message-ladder: the approval ladder (absent: native depth-6 rule). */
+	guard?(): RoleMessageGuardHost | undefined;
 }
 
 export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
@@ -44,17 +47,25 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 			"A question, request or reply starts a turn there; an fyi doesn't (it is read with that chat's next message). " +
 			"Answers come later as new messages. No secrets. " +
 			`${BOARD_ROUTING_RULE} ` +
-			"So direct messages go here; to tell several roles the same general info, post it on the board.",
+			"So direct messages go here; to tell several roles the same general info, post it on the board. " +
+			"Messages 1 to 6 in one chain go freely; 7 to 11 need the COO's grant and 12 or more the owner's " +
+			"(the tool says so and how to ask, with the approval parameter).",
 		promptSnippet: "message another role's chat (question / request / fyi / reply); answers come later as new messages",
 		parameters: Type.Object({
-			to: Type.String({ description: "The receiving role's id (from the roles list in your role section)." }),
-			kind: Type.String({
-				description:
-					'"question" (you need an answer), "request" (you ask it to do work in its area), "fyi" (no answer needed) or "reply" (your one answer to a question or request you got).',
-			}),
-			text: Type.String({
-				description: `The message, self-contained: what you need or what changed, with paths and ids; at most ${ROLE_MESSAGE_TEXT_MAX} characters. No secrets.`,
-			}),
+			to: Type.Optional(
+				Type.String({ description: "The receiving role's id (from the roles list in your role section)." }),
+			),
+			kind: Type.Optional(
+				Type.String({
+					description:
+						'"question" (you need an answer), "request" (you ask it to do work in its area), "fyi" (no answer needed) or "reply" (your one answer to a question or request you got).',
+				}),
+			),
+			text: Type.Optional(
+				Type.String({
+					description: `The message, self-contained: what you need or what changed, with paths and ids; at most ${ROLE_MESSAGE_TEXT_MAX} characters. No secrets.`,
+				}),
+			),
 			replyTo: Type.Optional(
 				Type.String({
 					description: 'kind "reply" only: the id of the message you answer (rm-…, from its first line).',
@@ -66,6 +77,52 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 						'Optional: the initiative it belongs to, a short id (lowercase letters, digits, dashes; at most 60; like "team-in-temper"). A reply without one keeps its original\'s.',
 				}),
 			),
+			grant: Type.Optional(
+				Type.String({
+					description:
+						"Only when the tool asks for it: the grant id to use (a single matching grant is used by itself).",
+				}),
+			),
+			approval: Type.Optional(
+				Type.Object(
+					{
+						action: Type.String({
+							description: '"request" (ask for a grant), "status" (one request) or "decide" (you are the approver).',
+						}),
+						requestId: Type.Optional(Type.String({ description: "status/decide: the request id (cr-…)." })),
+						generation: Type.Optional(Type.String({ description: 'status/decide: its generation (default "1").' })),
+						choice: Type.Optional(
+							Type.String({
+								description:
+									'decide: "deny", "one_send", "requested_quantity", or "escalate_owner" (pass it to the owner, once).',
+							}),
+						),
+						reason: Type.Optional(Type.String({ description: "decide: why, in one sentence." })),
+						recipients: Type.Optional(
+							Type.Array(Type.String(), { description: "request: the role ids you need to message." }),
+						),
+						participants: Type.Optional(
+							Type.Array(Type.String(), {
+								description: "request: other roles that may send in this chain under the grant.",
+							}),
+						),
+						quantity: Type.Optional(
+							Type.Number({ description: "request: sends needed, 1 to 5 (capped at message 11 for the COO)." }),
+						),
+						context: Type.Optional(
+							Type.Object(
+								{},
+								{
+									additionalProperties: true,
+									description:
+										"request: goal, progressAndChanges, whyNeeded, nextStepAndOutcome, timeCostRisk, exactCommunicationAuthority (strings); priorDecisions, declaredClaims (lists); outstandingQuestions (1+), optionsAndTradeoffs (2+), safetyScopeAndHolds (1+) (lists). All needed; at most 16 KB.",
+								},
+							),
+						),
+					},
+					{ description: "Approvals for messages 7 and above in one chain. With it, to/kind/text aren't needed." },
+				),
+			),
 		}),
 		execute: async (_id, p, _signal, _onUpdate, _ctx) => {
 			const service = host.service();
@@ -75,15 +132,29 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 				service.noteRefused(undefined, p.to, p.kind, sender);
 				throw new Error(sender);
 			}
-			const res = service.send(sender, {
-				to: p.to,
-				kind: p.kind,
-				text: p.text,
-				replyTo: p.replyTo,
-				initiative: p.initiative,
-			});
+			const guard = host.guard?.();
+			if (p.approval) {
+				if (!guard || guard.state.status !== "ready") {
+					const why =
+						"Approvals are unavailable right now (the ladder is off); messages 7 and above can't be sent. Ask the owner how to go on.";
+					service.noteRefused(sender, p.to, "approval", why);
+					throw new Error(why);
+				}
+				const out = await guard.approval(sender, p.approval, _id);
+				if (!out.ok) {
+					service.noteRefused(sender, p.to, "approval", out.text);
+					throw new Error(out.text);
+				}
+				return { content: [{ type: "text", text: out.text }], details: out.details ?? {} };
+			}
+			const input = { to: p.to, kind: p.kind, text: p.text, replyTo: p.replyTo, initiative: p.initiative };
+			const res = guard ? await guard.send(sender, { ...input, grant: p.grant }, _id) : service.send(sender, input);
 			if (!res.ok) {
 				service.noteRefused(sender, p.to, p.kind, res.error);
+				const need = (res as { approvalRequired?: { hop: number; tier: "lower" | "owner"; approver: string } })
+					.approvalRequired;
+				if (need)
+					return { content: [{ type: "text", text: res.error }], details: { state: "approval_required", ...need } };
 				throw new Error(res.error);
 			}
 			const r = res.record;
