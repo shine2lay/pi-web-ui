@@ -2,10 +2,17 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ClientSession } from "../../server/agent-service.js";
+import { ClientSession, queueTaskRows } from "../../server/agent-service.js";
 import { ClientStateStore } from "../../server/client-state.js";
-import type { ConversationSummary, ServerMessage, SessionSummary, UiTaskQueue } from "../../server/protocol.js";
+import type {
+	ConversationSummary,
+	ElsewhereRunning,
+	ServerMessage,
+	SessionSummary,
+	UiTaskQueue,
+} from "../../server/protocol.js";
 import {
+	applyElsewhereQueueHomes,
 	applyQueueHomes,
 	type LoadedQueue,
 	QUEUE_HOMES_MAX,
@@ -13,6 +20,7 @@ import {
 	queueHomesFrom,
 	queueHomesToOpen,
 	queueLinksSig,
+	unlistedQueueTasks,
 } from "../../server/queue-groups.js";
 
 /**
@@ -214,12 +222,101 @@ describe("applyQueueHomes: rows only", () => {
 			]),
 		);
 		expect(rows.map((r) => r.queueHomeId)).toEqual([undefined, "c1", undefined, undefined]);
+		// lead-bar: every task row knows its queue chat's transcript, whether that chat is listed or not.
+		expect(rows.map((r) => r.queueHomeFile)).toEqual([undefined, HOME, HOME2, undefined]);
 	});
 
 	it("subagents and rows without a transcript are left alone", () => {
 		const rows = [row("c1", HOME), row("k", TASK, { isSubagent: true, parentId: "c1" }), row("mem")];
 		applyQueueHomes(rows, new Map([[TASK, HOME]]));
 		expect(rows.map((r) => r.queueHomeId)).toEqual([undefined, undefined, undefined]);
+		expect(rows.map((r) => r.queueHomeFile)).toEqual([undefined, undefined, undefined]);
+	});
+
+	it("lead-bar: a transcript written another way still finds its link; a chat is never its own home", () => {
+		const rows = [row("c2", TASK.replace("/sessions/", "/sessions//")), row("c1", HOME)];
+		applyQueueHomes(
+			rows,
+			new Map([
+				[TASK, HOME],
+				[HOME, HOME],
+			]),
+		);
+		expect(rows.map((r) => [r.queueHomeId, r.queueHomeFile])).toEqual([
+			["c1", HOME],
+			[undefined, undefined],
+		]);
+	});
+});
+
+describe("lead-bar: links for chats running elsewhere and task chats that aren't rows", () => {
+	const away = (sessionFile?: string): ElsewhereRunning => ({
+		title: `away ${sessionFile}`,
+		cwd: CWD,
+		isStreaming: true,
+		...(sessionFile ? { sessionFile } : {}),
+	});
+
+	it("an open task's chat running elsewhere gets its queue chat's transcript; others are left alone", () => {
+		const list = [away(TASK), away(USER), away(), away(HOME)];
+		applyElsewhereQueueHomes(
+			list,
+			new Map([
+				[TASK, HOME],
+				[HOME, HOME],
+			]),
+		);
+		expect(list.map((w) => w.queueHomeFile)).toEqual([HOME, undefined, undefined, undefined]);
+		const none = [away(TASK)];
+		applyElsewhereQueueHomes(none, new Map());
+		expect(none[0]?.queueHomeFile).toBeUndefined();
+	});
+
+	it("lists the open tasks' chats that aren't rows, each with its queue chat, in link order", () => {
+		const rows: ConversationSummary[] = [
+			{ id: "c1", title: "home", cwd: CWD, messageCount: 1, isStreaming: false, isSubagent: false, sessionPath: HOME },
+			{ id: "c2", title: "t", cwd: CWD, messageCount: 1, isStreaming: false, isSubagent: false, sessionPath: TASK },
+		];
+		const homes = new Map([
+			[TASK, HOME],
+			[TASK2, HOME2],
+			[USER, HOME],
+			[HOME2, HOME2],
+		]);
+		expect(unlistedQueueTasks(rows, homes)).toEqual([
+			{ file: TASK2, home: HOME2 },
+			{ file: USER, home: HOME },
+		]);
+		expect(unlistedQueueTasks(rows, new Map())).toEqual([]);
+	});
+
+	it("turns them into saved rows from the listing of saved chats, leaving out chats it doesn't know yet", () => {
+		const known = new Map([[TASK2, { ...summary(TASK2, 5_000), name: "Queue #35: fix it" }]]);
+		const out = queueTaskRows(
+			[
+				{ file: TASK2, home: HOME2 },
+				{ file: USER, home: HOME },
+			],
+			(file) => known.get(file),
+			new Set([TASK2]),
+			CWD,
+		);
+		expect(out).toEqual([
+			{
+				id: `recent:${TASK2}`,
+				title: "Queue #35: fix it",
+				cwd: CWD,
+				messageCount: 2,
+				isStreaming: false,
+				isSubagent: false,
+				sessionPath: TASK2,
+				live: false,
+				waiting: true,
+				sortAt: 5_000,
+				createdAt: Date.parse("2026-10-01T00:00:03.000Z"),
+				queueHomeFile: HOME2,
+			},
+		]);
 	});
 });
 
@@ -502,6 +599,39 @@ describe("queue-grouping: the server's chat list", () => {
 		expect(homeIdOf(rows(win("c3", [TASK, HOME])), TASK)).toBe(`recent:${HOME}`);
 		fsSpy.on = false;
 		expect(fsSpy.touched.some((t) => t.startsWith("readFileSync") && t.endsWith("client-state.json"))).toBe(true);
+	});
+
+	it("lead-bar: the list tells each open task chat's queue chat by file, and sends the ones that aren't rows", () => {
+		// The queue chat is open in another window's list only; its tasks: 34 (a Recent chats row here),
+		// 35 (saved, not a row: too old for Recent chats) and 36 (not saved yet).
+		const NEW = "/sessions/2026-10-01T00-00-05-000Z_task-36.jsonl";
+		conv("c1", HOME, homeQueue([34, "waiting", TASK], [35, "stuck", TASK2], [36, "working", NEW]));
+		conv("c3", USER);
+		statics.refreshQueueHomes();
+		const w = win("c3", [TASK]);
+		(w as unknown as { sessionsByFile: Map<string, SessionSummary> }).sessionsByFile = new Map([
+			[TASK, summary(TASK, 9)],
+			[TASK2, summary(TASK2, 8)],
+		]);
+		const list = rows(w);
+		expect(rowFor(list, TASK)?.queueHomeFile).toBe(HOME);
+		expect(rowFor(list, TASK2)).toBeUndefined();
+		const last = [...w.emitted].reverse().find((m) => m.type === "conversations") as Extract<
+			ServerMessage,
+			{ type: "conversations" }
+		>;
+		expect(last.queueTasks?.map((r) => [r.id, r.queueHomeFile, r.live])).toEqual([[`recent:${TASK2}`, HOME, false]]);
+		// Nothing to send: no field at all.
+		statics.sharedConvs.clear();
+		restart();
+		conv("c3", USER);
+		const w2 = win("c3");
+		rows(w2);
+		const none = [...w2.emitted].reverse().find((m) => m.type === "conversations") as Extract<
+			ServerMessage,
+			{ type: "conversations" }
+		>;
+		expect("queueTasks" in none).toBe(false);
 	});
 
 	it("taskQueueOfConv's cache feeds the links: a chat's queue worked out anew brings its link in", () => {

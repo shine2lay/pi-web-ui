@@ -40,8 +40,9 @@ export interface QueueGroup {
 	needsYou: boolean;
 }
 
-/** queue-grouping: whether a task chat's row asks for the user (the same marks its own row shows). */
-const needsUser = (c: ConversationSummary): boolean =>
+/** queue-grouping: whether a task chat's row asks for the user (the same marks its own row shows).
+ *  lead-bar: the leads view's fold count uses it too. */
+export const needsUser = (c: ConversationSummary): boolean =>
 	Boolean(c.hasQuestion || c.dialogId !== undefined || c.tldr?.needsYou);
 
 /**

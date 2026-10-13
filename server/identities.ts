@@ -483,6 +483,8 @@ export function identityInfos(
 			title: d.title,
 			...(d.folder ? { folder: d.folder } : {}),
 			...(d.homeChat ? { homeChat: d.homeChat } : {}),
+			// lead-bar: a home chat whose file is gone shows greyed out in the left bar, not as a dead row.
+			...(d.homeChat && !existsSync(d.homeChat) ? { homeChatMissing: true as const } : {}),
 			aboutSize: sizeOf(identityFilePath(d, "about")),
 			notebookSize: sizeOf(identityFilePath(d, "notebook")),
 			notebookCap: notebookCapOf(d, settings),

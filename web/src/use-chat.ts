@@ -230,6 +230,9 @@ export interface ChatState {
 	conversations: ConversationSummary[];
 	/** issue #145 遗留字段：server-owned-chats 之后服务端恒发空数组（对话本来就共享）。 */
 	elsewhere: ElsewhereRunning[];
+	/** lead-bar: open queued tasks' own chats that aren't in `conversations` (saved rows, queueHomeFile set),
+	 *  for the left bar's leads view only. */
+	queueTasks: ConversationSummary[];
 	/** Id of the conversation the current snapshot belongs to. */
 	activeConversationId: string;
 	/** Recent workspaces this client opened (left panel project picker). */
@@ -511,6 +514,7 @@ type Action =
 			conversations: ConversationSummary[];
 			activeId: string;
 			elsewhere?: ElsewhereRunning[];
+			queueTasks?: ConversationSummary[];
 	  }
 	| { type: "projects"; projects: ProjectSummary[] }
 	| { type: "files"; files: FileListing }
@@ -1035,6 +1039,7 @@ function reducer(state: ChatState, action: Action): ChatState {
 				...state,
 				conversations: action.conversations,
 				elsewhere: action.elsewhere ?? [],
+				queueTasks: action.queueTasks ?? [],
 				activeConversationId: action.activeId,
 			};
 		case "projects":
@@ -1311,6 +1316,7 @@ export function useChat() {
 		sessions: [],
 		conversations: [],
 		elsewhere: [],
+		queueTasks: [],
 		activeConversationId: "",
 		projects: [],
 		files: null,
@@ -1901,6 +1907,7 @@ export function useChat() {
 						conversations: msg.conversations,
 						activeId: msg.activeId,
 						elsewhere: msg.elsewhere,
+						queueTasks: msg.queueTasks,
 					});
 					break;
 				case "projects":

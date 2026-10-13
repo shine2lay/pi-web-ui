@@ -1,7 +1,8 @@
-import { memo, useEffect, useState, useCallback, useRef } from "react";
+import { memo, useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
 	FiCheck,
 	FiChevronDown,
+	FiChevronLeft,
 	FiChevronRight,
 	FiChevronUp,
 	FiChevronsLeft,
@@ -17,7 +18,16 @@ import { isSwitchTargetRow } from "../switch-pending";
 import { useT } from "../i18n";
 import { useAppField, useIsDsh } from "../app-globals";
 import { applySashDrag, parseWeights } from "../panel-sash";
-import { orderConversations } from "../conv-groups";
+import { orderConversations, type ConvRow } from "../conv-groups";
+import {
+	buildLeadBar,
+	hasLeads,
+	normPath,
+	type LeadBar,
+	type LeadEntry,
+	type LeadTask,
+	type OpenNow,
+} from "../lead-bar";
 import { LS_QUEUE_FOLDED, parseQueueFolds, queueFoldKey, toggledQueueFolds } from "../queue-folds";
 // 宿主 UI 扩展点（issue #146）：会话行的右键菜单走「slot 条目」这一条通道。
 import { CONV_IDENTITY_ENTRY_ID, LP_IDENTITY_ENTRY_ID, LP_SECTION_ENTRY_IDS, type UiSlotEntry } from "../ui-slots";
@@ -42,6 +52,9 @@ interface LeftPanelProps {
 	/** issue #145：其他客户端正在跑的对话（只读，不可点）。 */
 	elsewhere: ElsewhereRunning[];
 	sessions: SessionSummary[];
+	/** lead-bar: open task chats that aren't rows of `conversations` (saved, not in Recent chats), for the
+	 *  leads view. */
+	queueTasks?: ConversationSummary[];
 	activeConversationId: string;
 	/** switch-loading：正在打开的目标。非空时高亮立刻落到目标行（而不是等快照到了才动），
 	 *  行上的图标换成转圈。缺省 null = 没有进行中的切换。 */
@@ -119,6 +132,8 @@ function isEditableTarget(el: EventTarget | null): boolean {
 const LS_COLLAPSE_CONVS = "pi-web-ui:lp-collapse-convs";
 const LS_COLLAPSE_SESSIONS = "pi-web-ui:lp-collapse-sessions";
 const LS_COLLAPSE_LIMITS = "pi-web-ui:lp-collapse-limits";
+/** lead-bar: no task chats outside the list (one array, so the leads view's memo holds). */
+const NO_TASKS: ConversationSummary[] = [];
 
 function useCollapsed(key: string, defaultCollapsed = false): [boolean, () => void] {
 	const [collapsed, setCollapsed] = useState(() => {
@@ -186,6 +201,7 @@ export const LeftPanel = memo(function LeftPanel({
 	conversations,
 	elsewhere,
 	sessions,
+	queueTasks = NO_TASKS,
 	activeConversationId,
 	pendingSwitch = null,
 	panelSend,
@@ -219,6 +235,44 @@ export const LeftPanel = memo(function LeftPanel({
 	const [collapseSessions, toggleSessions] = useCollapsed(LS_COLLAPSE_SESSIONS, false);
 	const [collapseLimits, toggleLimits] = useCollapsed(LS_COLLAPSE_LIMITS, false);
 	const [queueFolds, toggleQueueFold] = useQueueFolds();
+	// lead-bar (docs/lead-bar.md): with role leads (identities with a home chat) the bar shows only them, each
+	// with its open task chats, plus the chat on screen when it's neither; "All chats" swaps in the old lists
+	// (Recent chats + History) with a Back button. The bar opens on the leads: picking a chat, or the phone
+	// drawer closing, brings them back.
+	const [view, setView] = useState<"leads" | "all">("leads");
+	useEffect(() => {
+		setView("leads");
+	}, [activeConversationId]);
+	useEffect(() => {
+		if (!active) setView("leads");
+	}, [active]);
+	const leadsOn = !isDsh && hasLeads(identityList.identities);
+	const leadBar = useMemo(() => {
+		if (!leadsOn) return null;
+		const folds = new Set([...queueFolds].map(normPath));
+		return buildLeadBar(
+			{
+				identities: identityList.identities,
+				conversations,
+				elsewhere,
+				queueTasks,
+				sessions,
+				activeConversationId,
+				sessionFile,
+			},
+			(key) => folds.has(key),
+		);
+	}, [
+		leadsOn,
+		identityList.identities,
+		conversations,
+		elsewhere,
+		queueTasks,
+		sessions,
+		activeConversationId,
+		sessionFile,
+		queueFolds,
+	]);
 	/** 会话右键菜单（`contextmenu.session` 槽位）：见下面的 showSessionMenu / openSessionMenu /
 	 *  dispatchHostSessionEntry。宿主自己的两条（关闭已结束子代理 / 强行关闭对话）也在这个槽位里，
 	 *  与插件贡献的条目同排 —— 插件条目由 App 分发给插件，host 条目由本组件分派。 */
@@ -604,22 +658,22 @@ export const LeftPanel = memo(function LeftPanel({
 		} catch {}
 	}, [weights]);
 
+	/** A chat running in another tab or device as a row of the running list (lead-bar: the leads view
+	 *  draws it too). */
+	const elsewhereRow = (w: ElsewhereRunning, i: number): RowConv => ({
+		id: `elsewhere:${w.cwd}:${w.title}:${i}`,
+		title: w.title,
+		cwd: w.cwd,
+		messageCount: 0,
+		isStreaming: w.isStreaming,
+		isSubagent: false as const,
+		elsewhere: true as const,
+		// 过户目标定位（无则沿用旧行为：只读行，无过户入口）。
+		...(w.owner && w.convId ? { owner: w.owner, convId: w.convId } : {}),
+		...(w.hasQuestion ? { hasQuestion: true as const } : {}),
+	});
 	/** issue #145：运行的对话 = 本客户端会话 + 其他标签页/设备的运行（后者只读行）。 */
-	const runningAll: RowConv[] = [
-		...conversations,
-		...elsewhere.map((w, i) => ({
-			id: `elsewhere:${w.cwd}:${w.title}:${i}`,
-			title: w.title,
-			cwd: w.cwd,
-			messageCount: 0,
-			isStreaming: w.isStreaming,
-			isSubagent: false as const,
-			elsewhere: true as const,
-			// 过户目标定位（无则沿用旧行为：只读行，无过户入口）。
-			...(w.owner && w.convId ? { owner: w.owner, convId: w.convId } : {}),
-			...(w.hasQuestion ? { hasQuestion: true as const } : {}),
-		})),
-	];
+	const runningAll: RowConv[] = [...conversations, ...elsewhere.map(elsewhereRow)];
 	const createSashHandler = useCallback(
 		(aboveKey: keyof LpWeights, belowKey: keyof LpWeights) => (e: React.PointerEvent<HTMLDivElement>) => {
 			e.preventDefault();
@@ -736,6 +790,592 @@ export const LeftPanel = memo(function LeftPanel({
 		return (w / totalWeightForFlex) * expandedForFlex.length;
 	};
 
+	// One row of the running list (Recent chats): a chat of this window, or one running elsewhere
+	// (RowConv.elsewhere). lead-bar: the leads view draws its rows with it too (`inLeads`).
+	const renderConvRow = ({
+		conv: c,
+		depth,
+		queueTask,
+		queueGroup,
+		inLeads,
+	}: ConvRow & { inLeads?: boolean }): React.ReactNode => {
+		if ((c as RowConv).elsewhere) {
+			const elseOwner = (c as RowConv).owner;
+			const elseConvId = (c as RowConv).convId;
+			// issue #290：可过户（有 owner + convId）时本行可点击，两段确认。
+			const canTakeover = Boolean(elseOwner && elseConvId);
+			const confirming = confirmTakeover === c.id;
+			return (
+				<div
+					className={`lp-row${depth > 0 ? " lp-sub lp-queue-task" : ""}`}
+					key={c.id}
+					style={depth > 0 ? { marginLeft: depth * 18 } : undefined}
+					onMouseLeave={() => setConfirmTakeover((k) => (k === c.id ? null : k))}
+					// 「另一处」行右键：过户到本页（含等答复的问卷）。
+					onContextMenu={(e) =>
+						openSessionMenu(e, {
+							id: elseConvId ?? c.id,
+							kind: "elsewhere",
+							label: c.title,
+							...(elseOwner ? { owner: elseOwner } : {}),
+						})
+					}
+				>
+					{/* 「另一处」行本体：可过户时当按钮用（第一次点 = 确认，第二次点 = 过户）。
+    不可过户（旧条目无 owner/convId）时保持只读，无 onClick。 */}
+					<button
+						type="button"
+						className={`session-item elsewhere-item${canTakeover ? "" : " elsewhere-static"}${confirming ? " confirm" : ""}`}
+						title={confirming ? t("takeoverConfirm") : `${t("elsewhereTip")}\n${c.cwd}`}
+						tabIndex={canTakeover ? 0 : -1}
+						onClick={
+							canTakeover
+								? () => {
+										if (!confirming) {
+											setConfirmTakeover(c.id);
+											return;
+										}
+										setConfirmTakeover(null);
+										panelSend({
+											type: "take_over_conversation",
+											owner: elseOwner as string,
+											id: elseConvId as string,
+										});
+									}
+								: undefined
+						}
+					>
+						<FiMessageSquare className="session-icon" />
+						<span className="session-info">
+							<span className="session-title">
+								<span className="elsewhere-badge">{t("elsewhereBadge")}</span>
+								{c.hasQuestion && elseOwner && elseConvId && (
+									<span
+										className="question-badge clickable"
+										title={t("takeoverHasQuestion")}
+										onClick={(e) => {
+											e.stopPropagation();
+											// 点 `?` 直接把问卷拉到本页作答（不搬迁对话）。
+											panelSend({
+												type: "peek_elsewhere_question",
+												owner: elseOwner,
+												id: elseConvId,
+											});
+										}}
+									>
+										?
+									</span>
+								)}
+								{confirming ? t("takeoverConfirm") : c.title}
+							</span>
+						</span>
+						{c.isStreaming && <span className="conv-streaming" title={t("streaming")} />}
+					</button>
+					{/* 触屏没有右键（contextmenu 不可靠）：给「另一处」行一个可见的操作钮，点开与右键同一个会话菜单
+															（过户 / 抢答问卷 / 复制 id）；槽位暂无可显示条目时不渲染（同右键路径的让路口径）。 */}
+					{sessionMenuAvailable && (
+						<button
+							type="button"
+							className="lp-del lp-elsewhere-act"
+							title={t("elsewhereActions")}
+							onClick={(e) => {
+								e.stopPropagation();
+								forceArmedRef.current = null;
+								// 坐标按按钮矩形锚定（触屏 click 的 clientX/Y 不可靠），clampMenuPosition 会自行钳进视口。
+								const r = e.currentTarget.getBoundingClientRect();
+								showSessionMenu(r.left, r.bottom + 4, {
+									id: elseConvId ?? c.id,
+									kind: "elsewhere",
+									label: c.title,
+									...(elseOwner ? { owner: elseOwner } : {}),
+								});
+							}}
+						>
+							<FiMoreVertical />
+						</button>
+					)}
+				</div>
+			);
+		}
+		// switch-loading：有进行中的切换时，高亮跟着目标走（乐观选中），而不是还留在
+		// 旧对话上等快照。失败后 pendingSwitch 清空，高亮自然回到真正的当前行。
+		const opening = isSwitchTargetRow(pendingSwitch, c);
+		const active = pendingSwitch ? opening : activeConversationId === c.id;
+		const foldTip = queueGroup ? t(queueGroup.folded ? "queueFoldShow" : "queueFoldHide", { n: queueGroup.count }) : "";
+		return (
+			<div
+				className={`lp-row${depth > 0 ? " lp-sub" : ""}${queueTask ? " lp-queue-task" : ""}${queueGroup ? " lp-queue-home" : ""}`}
+				key={c.id}
+				style={depth > 0 ? { marginLeft: depth * 18 } : undefined}
+				onMouseLeave={() => setConfirmDel((k) => (k === `conv:${c.id}` ? null : k))}
+				onContextMenu={(e) => openSessionMenu(e, { id: c.id, kind: "running", label: c.title })}
+			>
+				{/* queue-grouping: the fold toggle lies over the row's left end, where its chevron
+											    is (a big enough target on phones); the rest of the row opens the chat. */}
+				{queueGroup && (
+					<button
+						type="button"
+						className="queue-fold-toggle"
+						aria-expanded={!queueGroup.folded}
+						aria-label={foldTip}
+						title={foldTip}
+						onClick={(e) => {
+							e.stopPropagation();
+							toggleQueueFold(queueFoldKey(c));
+						}}
+					/>
+				)}
+				<button
+					type="button"
+					className={`session-item ${active ? "active" : ""}${opening ? " opening" : ""}`}
+					data-opening={opening ? "1" : undefined}
+					// 列表里只显标题；文件夹只在悬停里给 —— 同名对话（几个「temper」）靠这个分。
+					title={`${c.title} — ${c.cwd}`}
+					onClick={() => {
+						if (active) return;
+						// 常驻行（运行时已释放）走历史打开；活着的行才能按 id 切。
+						if (c.live === false) {
+							if (c.sessionPath) panelSend({ type: "switch_session", path: c.sessionPath });
+							return;
+						}
+						panelSend({ type: "switch_conversation", id: c.id });
+					}}
+				>
+					{opening ? (
+						<span className="session-icon switch-spinner" aria-hidden />
+					) : queueGroup ? (
+						queueGroup.folded ? (
+							<FiChevronRight className="session-icon queue-fold-icon" aria-hidden />
+						) : (
+							<FiChevronDown className="session-icon queue-fold-icon" aria-hidden />
+						)
+					) : (
+						<FiMessageSquare className="session-icon" />
+					)}
+					<span className="session-info">
+						{renaming === `conv:${c.id}` ? (
+							<input
+								autoFocus
+								className="session-rename-input"
+								value={renameDraft}
+								placeholder={t("renameSessionPlaceholder")}
+								onClick={(e) => e.stopPropagation()}
+								onChange={(e) => setRenameDraft(e.target.value)}
+								onKeyDown={(e) => {
+									e.stopPropagation();
+									if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+										const name = renameDraft.trim();
+										if (name) panelSend({ type: "rename_conversation", id: c.id, name });
+										setRenaming(null);
+									} else if (e.key === "Escape") {
+										setRenaming(null);
+									}
+								}}
+								onBlur={() => setRenaming(null)}
+							/>
+						) : (
+							<span className="session-title">
+								{/* per-chat-dialogs：问卷或扩展弹窗在等你 →「?」。放在标题前面：放后面会被长标题的省略号吃掉。 */}
+								{(c.hasQuestion || c.dialogId !== undefined) && (
+									<span
+										className="question-badge"
+										title={t(c.hasQuestion ? "waitingQuestionBadge" : "waitingDialogBadge")}
+									>
+										?
+									</span>
+								)}
+								{c.isSubagent && <span className="subagent-badge">{t("subagentBadge")}</span>}
+								{c.isEphemeral && <span className="ephemeral-badge">{t("ephemeralBadge")}</span>}
+								{c.forkFrom && (
+									<span
+										className="preset-badge fork-badge"
+										title={`${t("forkBadgeTip")}: ${c.forkFrom.title ?? c.forkFrom.conversationId}`}
+									>
+										🌿 {t("forkBadge")}
+									</span>
+								)}
+								{c.agentPreset && (
+									<span className="preset-badge" title={c.agentPreset}>
+										{presetNames?.[c.agentPreset] ?? c.agentPreset}
+									</span>
+								)}
+								{showIdentityTags && c.identity && <IdentityTag identity={c.identity} />}
+								{/* queue-grouping: folded away: how many task chats; marked when one is working or
+															    waits for you. Before the title, so a long title's ellipsis doesn't eat it. */}
+								{queueGroup?.folded && (
+									<span
+										className={`queue-fold-count${queueGroup.needsYou ? " needs-you" : ""}${queueGroup.streaming ? " running" : ""}`}
+										title={t(queueGroup.needsYou ? "queueFoldCountNeedsYou" : "queueFoldCount", {
+											n: queueGroup.count,
+										})}
+									>
+										{queueGroup.count}
+									</span>
+								)}
+								{c.title}
+								{c.error && <span className="conv-error-badge" title={t("convErrorBadge", { error: c.error })} />}
+							</span>
+						)}
+						{renaming === `conv:${c.id}` ? null : c.tldr && !opening && !active ? (
+							// tldr-sidebar：最新一行没看过的 TL;DR 代替「N 条消息」（一行，悬停看全文）；
+							// 正在打开 / 当前对话照旧。需要你的行用 TL;DR tab 的同一种高亮。
+							<span className={tldrSubClass(c.tldr)} title={c.tldr.text}>
+								{c.tldr.text}
+							</span>
+						) : (
+							<span className="session-sub">
+								{opening ? t("switchOpeningShort") : active ? t("current") : t("messageCount", { n: c.messageCount })}
+							</span>
+						)}
+					</span>
+					{/* 状态灯（recent-chats 补丁）：跑着 = 黄灯闪烁；跑完没看 = 绿灯常亮。 */}
+					{c.isStreaming ? (
+						<span className="conv-dot conv-running" title={t("streaming")} />
+					) : c.waiting ? (
+						<span className="conv-dot conv-waiting" title={t("waitingForYou")} />
+					) : null}
+				</button>
+				<button
+					type="button"
+					className="lp-del lp-rename"
+					title={t("renameSession")}
+					onClick={(e) => {
+						e.stopPropagation();
+						setConfirmDel(null);
+						setRenameDraft(c.title);
+						setRenaming(`conv:${c.id}`);
+					}}
+				>
+					<FiEdit2 />
+				</button>
+				{(() => {
+					const key = `conv:${c.id}`;
+					const armed = confirmDel === key;
+					// 常驻行（运行时已释放）：✕ = 只从「最近对话」移出，转录原样保留
+					// （下面的 History 里照样能找到并重新打开）。
+					// lead-bar: not in the leads view, which shows these rows whatever Recent chats holds.
+					if (c.live === false && inLeads) return null;
+					if (c.live === false) {
+						return delButton(
+							key,
+							t("removeFromRecent"),
+							t("removeFromRecentConfirm"),
+							() => {
+								if (c.sessionPath) panelSend({ type: "remove_recent_chat", path: c.sessionPath });
+							},
+							<FiX />,
+						);
+					}
+					const nFinished = finishedSubagentCount(conversations, c.id);
+					const nRunning = countRunningSubagentDescendants(conversations, c.id);
+					const nAll = countScopeSubagents(conversations, c.id);
+					// 无子代理 + 空闲：两段确认直接移出（active 也可，后端自动让出）。
+					if (nAll === 0 && !c.isStreaming) {
+						return delButton(
+							key,
+							t("dismissConversation"),
+							t("dismissConversationConfirm"),
+							() => panelSend({ type: "dismiss_conversation", id: c.id }),
+							<FiX />,
+						);
+					}
+					// 无子代理 + 运行中：两段确认强行关闭（中止本轮）。
+					if (nAll === 0) {
+						return delButton(
+							key,
+							t("dismissConversation"),
+							t("dismissStreamingConfirm"),
+							() => panelSend({ type: "dismiss_conversation", id: c.id, force: true }),
+							<FiX />,
+						);
+					}
+					// 有子代理后代：点 X 展开两个选项（只关已结束 / 强行全关）。
+					if (!armed) {
+						return (
+							<button
+								type="button"
+								className="lp-del"
+								title={t("dismissConversation")}
+								onClick={(e) => {
+									e.stopPropagation();
+									setConfirmDel(key);
+								}}
+							>
+								<FiX />
+							</button>
+						);
+					}
+					return (
+						<span className="lp-del-group">
+							{nFinished > 0 && (
+								<button
+									type="button"
+									className="lp-del-opt"
+									title={t("dismissFinishedSubagentsScoped", { n: nFinished })}
+									onClick={(e) => {
+										e.stopPropagation();
+										setConfirmDel(null);
+										panelSend({ type: "dismiss_finished_subagents", parentId: c.id });
+									}}
+								>
+									{t("dismissFinishedOnly", { n: nFinished })}
+								</button>
+							)}
+							<button
+								type="button"
+								className="lp-del-opt danger"
+								title={t("forceDismissTitle", { n: nAll, m: nRunning })}
+								onClick={(e) => {
+									e.stopPropagation();
+									setConfirmDel(null);
+									panelSend({ type: "dismiss_conversation", id: c.id, force: true });
+								}}
+							>
+								{t("dismissForceAll", { n: nAll })}
+							</button>
+						</span>
+					);
+				})()}
+				{renderLeftSessions()}
+				{c.isStreaming && (
+					<span
+						className="lp-row-stalled"
+						title={t("streaming")}
+						style={{ position: "absolute", right: 28, top: "50%", transform: "translateY(-50%)" }}
+					/>
+				)}
+			</div>
+		);
+	};
+	/** queue-grouping: whether a queue chat's task chats are folded away (Recent chats). */
+	const isFoldedConv = (home: ConversationSummary) => queueFolds.has(queueFoldKey(home));
+
+	// lead-bar (docs/lead-bar.md): the leads view. A lead's chat is drawn as its running-list row when this
+	// window has it open (lights, marks, menu) or it runs elsewhere; else as an idle row that opens the saved
+	// chat (no rename or remove: a lead's home chat isn't changed from here); greyed when its file is gone.
+	const leadFoldToggle = (entry: LeadEntry): React.ReactNode => {
+		const g = entry.group;
+		if (!g) return null;
+		const tip = t(g.folded ? "queueFoldShow" : "queueFoldHide", { n: g.count });
+		return (
+			<button
+				type="button"
+				className="queue-fold-toggle"
+				aria-expanded={!g.folded}
+				aria-label={tip}
+				title={tip}
+				onClick={(e) => {
+					e.stopPropagation();
+					toggleQueueFold([...queueFolds].find((k) => normPath(k) === entry.file) ?? entry.file);
+				}}
+			/>
+		);
+	};
+	const leadIcon = (entry: LeadEntry, opening: boolean): React.ReactNode =>
+		opening ? (
+			<span className="session-icon switch-spinner" aria-hidden />
+		) : entry.group ? (
+			entry.group.folded ? (
+				<FiChevronRight className="session-icon queue-fold-icon" aria-hidden />
+			) : (
+				<FiChevronDown className="session-icon queue-fold-icon" aria-hidden />
+			)
+		) : (
+			<FiMessageSquare className="session-icon" />
+		);
+	const leadFoldCount = (entry: LeadEntry): React.ReactNode => {
+		const g = entry.group;
+		if (!g?.folded) return null;
+		return (
+			<span
+				className={`queue-fold-count${g.needsYou ? " needs-you" : ""}${g.streaming ? " running" : ""}`}
+				title={t(g.needsYou ? "queueFoldCountNeedsYou" : "queueFoldCount", { n: g.count })}
+			>
+				{g.count}
+			</span>
+		);
+	};
+	const renderIdleLead = (entry: LeadEntry, session?: SessionSummary, row?: ConversationSummary): React.ReactNode => {
+		const opening = isSwitchTargetRow(pendingSwitch, { path: entry.homeChat });
+		const title = session ? displayName(session) : (row?.title ?? entry.identity.title);
+		const count = session?.messageCount ?? row?.messageCount;
+		// Its menu's Rename (a History row's menu) renames the saved chat here, as on a History row.
+		const renamingThis = renaming === entry.homeChat;
+		return (
+			<div
+				className={`lp-row lp-lead-idle${entry.group ? " lp-queue-home" : ""}`}
+				onContextMenu={(e) => openSessionMenu(e, { id: entry.homeChat, kind: "history", label: title })}
+			>
+				{leadFoldToggle(entry)}
+				<button
+					type="button"
+					className={`session-item${opening ? " opening" : ""}`}
+					data-opening={opening ? "1" : undefined}
+					title={entry.homeChat}
+					onClick={() => {
+						if (renaming) return;
+						if (!opening) panelSend({ type: "switch_session", path: entry.homeChat });
+					}}
+				>
+					{leadIcon(entry, opening)}
+					<span className="session-info">
+						{renamingThis ? (
+							<input
+								autoFocus
+								className="session-rename-input"
+								value={renameDraft}
+								placeholder={t("renameSessionPlaceholder")}
+								onClick={(e) => e.stopPropagation()}
+								onChange={(e) => setRenameDraft(e.target.value)}
+								onKeyDown={(e) => {
+									e.stopPropagation();
+									if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+										const name = renameDraft.trim();
+										if (name) panelSend({ type: "rename_session", path: entry.homeChat, name });
+										setRenaming(null);
+									} else if (e.key === "Escape") {
+										setRenaming(null);
+									}
+								}}
+								onBlur={() => setRenaming(null)}
+							/>
+						) : (
+							<span className="session-title">
+								{showIdentityTags && <IdentityTag identity={entry.identity} />}
+								{leadFoldCount(entry)}
+								{title}
+							</span>
+						)}
+						{renamingThis ? null : (
+							<span className="session-sub">
+								{opening
+									? t("switchOpeningShort")
+									: count !== undefined
+										? t("messageCount", { n: count })
+										: t("leadSaved")}
+							</span>
+						)}
+					</span>
+					{row?.waiting ? <span className="conv-dot conv-waiting" title={t("waitingForYou")} /> : null}
+				</button>
+				{renderLeftSessions()}
+			</div>
+		);
+	};
+	const renderMissingLead = (entry: LeadEntry): React.ReactNode => (
+		<div className="lp-row lp-lead-missing" title={t("leadHomeMissingTip", { path: entry.homeChat })}>
+			{leadFoldToggle(entry)}
+			<button type="button" className="session-item" disabled>
+				<FiMessageSquare className="session-icon" />
+				<span className="session-info">
+					<span className="session-title">
+						{showIdentityTags && <IdentityTag identity={entry.identity} />}
+						{entry.identity.title}
+					</span>
+					<span className="session-sub">{t("leadHomeMissing")}</span>
+				</span>
+			</button>
+		</div>
+	);
+	const renderLeadRow = (entry: LeadEntry): React.ReactNode => {
+		const chat = entry.chat;
+		if (chat.kind === "conv")
+			return renderConvRow({
+				conv: chat.conv,
+				depth: 0,
+				...(entry.group ? { queueGroup: entry.group } : {}),
+				inLeads: true,
+			});
+		if (chat.kind === "elsewhere")
+			return renderConvRow({ conv: elsewhereRow(chat.entry, chat.index), depth: 0, inLeads: true });
+		if (chat.kind === "saved") return renderIdleLead(entry, chat.session, chat.row);
+		return renderMissingLead(entry);
+	};
+	const renderLeadTask = (task: LeadTask): React.ReactNode =>
+		renderConvRow({
+			conv: task.kind === "conv" ? task.conv : elsewhereRow(task.entry, task.index),
+			depth: 1,
+			queueTask: true,
+			inLeads: true,
+		});
+	const renderOpenNow = (open: OpenNow): React.ReactNode => {
+		if (open.kind === "conv") return renderConvRow({ conv: open.conv, depth: 0, inLeads: true });
+		const title = open.kind === "saved" ? displayName(open.session) : t("newChat");
+		const identity = open.kind === "saved" ? open.session.identity : undefined;
+		return (
+			<div className="lp-row">
+				<button type="button" className="session-item active" title={open.kind === "saved" ? open.file : title}>
+					<FiMessageSquare className="session-icon" />
+					<span className="session-info">
+						<span className="session-title">
+							{showIdentityTags && identity && <IdentityTag identity={identity} />}
+							{title}
+						</span>
+						<span className="session-sub">{t("current")}</span>
+					</span>
+				</button>
+			</div>
+		);
+	};
+	const renderLeadsView = (bar: LeadBar): React.ReactNode => (
+		<>
+			<div className="lp-section lp-section-leads">
+				<div className="lp-section-header">
+					<span className="lp-section-title panel-section-title lp-leads-title">
+						<span className="lp-section-title-text">{t("leadsTitle")}</span>
+					</span>
+					<div className="lp-section-actions">
+						<button
+							type="button"
+							className="lp-section-action lp-new-chat-action"
+							title={t("newChatTip")}
+							aria-label={t("newChat")}
+							onClick={() => {
+								panelSend({ type: "new_chat" });
+								focusComposer();
+							}}
+						>
+							<FiPlus />
+						</button>
+					</div>
+				</div>
+				<div className="lp-section-body lp-leads-body">
+					{bar.openNow && (
+						<div className="lp-open-now" data-open-now={bar.openNow.kind}>
+							<div className="lp-open-now-label">{t("openNow")}</div>
+							{renderOpenNow(bar.openNow)}
+						</div>
+					)}
+					{bar.leads.map((entry) => (
+						<div
+							className="lp-lead-group"
+							key={entry.identity.id}
+							data-lead={entry.identity.id}
+							data-lead-chat={entry.chat.kind}
+						>
+							{renderLeadRow(entry)}
+							{entry.tasks.map(renderLeadTask)}
+						</div>
+					))}
+				</div>
+			</div>
+			<button type="button" className="lp-all-chats" title={t("allChatsTip")} onClick={() => setView("all")}>
+				<span className="lp-all-chats-text">{t("allChats")}</span>
+				{/* The spaces between the parts aren't drawn (flex items; the gap spaces them) but keep the
+				    button's name readable: "All chats · 2 running". */}
+				{bar.others.running > 0 && " "}
+				{bar.others.running > 0 && (
+					<span className="lp-all-chats-count running">· {t("allChatsRunning", { n: bar.others.running })}</span>
+				)}
+				{bar.others.asking > 0 && " "}
+				{bar.others.asking > 0 && (
+					<span className="lp-all-chats-count needs-you">· {t("allChatsAsking", { n: bar.others.asking })}</span>
+				)}
+				<FiChevronRight className="lp-all-chats-icon" aria-hidden />
+			</button>
+		</>
+	);
+
 	return (
 		<aside ref={panelRef as React.RefObject<HTMLDivElement>} className="panel panel-left lp-panel">
 			{collapsible && onToggleCollapse && (
@@ -743,180 +1383,109 @@ export const LeftPanel = memo(function LeftPanel({
 					<FiChevronsLeft />
 				</button>
 			)}
-			{/* Running conversations — collapsible, flex share. Hidden when empty to keep old layout expectations. */}
-			{runningAll.length > 0 && (
-				<div
-					className={`lp-section lp-section-convs panel-convs ${collapseConvs ? "collapsed" : ""}`}
-					style={!collapseConvs ? { flex: `${effFlex("convs")} 1 0px` } : undefined}
-					onContextMenu={(e) => openSessionMenu(e, { id: "", kind: "section", label: t("runningConversations") })}
-				>
-					{/* recent-chats：这一列不再只是「运行中」—— 计数仍用上游的 runningAll（含「另一处」行）。 */}
-					{sectionHeader(t("recentChats"), collapseConvs, toggleConvs, runningAll.length)}
-					{!collapseConvs && (
-						<div className="lp-section-body convs-scroll">
-							{/* flat-recent-chats：一条扁平列表 —— 无项目分组、无组标题，按创建
-							    时间倒序（不变量），收消息/点开/切项目都不会让行换位置。 */}
-							{(() => {
-								// queue-grouping: open queued tasks' chats hang under the queue chat they came from; a queue
-								// chat's toggle folds them away (remembered per queue chat in this browser).
-								const isFolded = (home: ConversationSummary) => queueFolds.has(queueFoldKey(home));
-								return orderConversations(runningAll, isFolded).map(({ conv: c, depth, queueTask, queueGroup }) => {
-									if ((c as RowConv).elsewhere) {
-										const elseOwner = (c as RowConv).owner;
-										const elseConvId = (c as RowConv).convId;
-										// issue #290：可过户（有 owner + convId）时本行可点击，两段确认。
-										const canTakeover = Boolean(elseOwner && elseConvId);
-										const confirming = confirmTakeover === c.id;
-										return (
-											<div
-												className="lp-row"
-												key={c.id}
-												onMouseLeave={() => setConfirmTakeover((k) => (k === c.id ? null : k))}
-												// 「另一处」行右键：过户到本页（含等答复的问卷）。
-												onContextMenu={(e) =>
-													openSessionMenu(e, {
-														id: elseConvId ?? c.id,
-														kind: "elsewhere",
-														label: c.title,
-														...(elseOwner ? { owner: elseOwner } : {}),
-													})
-												}
-											>
-												{/* 「另一处」行本体：可过户时当按钮用（第一次点 = 确认，第二次点 = 过户）。
-    不可过户（旧条目无 owner/convId）时保持只读，无 onClick。 */}
-												<button
-													type="button"
-													className={`session-item elsewhere-item${canTakeover ? "" : " elsewhere-static"}${confirming ? " confirm" : ""}`}
-													title={confirming ? t("takeoverConfirm") : `${t("elsewhereTip")}\n${c.cwd}`}
-													tabIndex={canTakeover ? 0 : -1}
-													onClick={
-														canTakeover
-															? () => {
-																	if (!confirming) {
-																		setConfirmTakeover(c.id);
-																		return;
-																	}
-																	setConfirmTakeover(null);
-																	panelSend({
-																		type: "take_over_conversation",
-																		owner: elseOwner as string,
-																		id: elseConvId as string,
-																	});
-																}
-															: undefined
-													}
-												>
-													<FiMessageSquare className="session-icon" />
-													<span className="session-info">
-														<span className="session-title">
-															<span className="elsewhere-badge">{t("elsewhereBadge")}</span>
-															{c.hasQuestion && elseOwner && elseConvId && (
-																<span
-																	className="question-badge clickable"
-																	title={t("takeoverHasQuestion")}
-																	onClick={(e) => {
-																		e.stopPropagation();
-																		// 点 `?` 直接把问卷拉到本页作答（不搬迁对话）。
-																		panelSend({
-																			type: "peek_elsewhere_question",
-																			owner: elseOwner,
-																			id: elseConvId,
-																		});
-																	}}
-																>
-																	?
-																</span>
-															)}
-															{confirming ? t("takeoverConfirm") : c.title}
-														</span>
-													</span>
-													{c.isStreaming && <span className="conv-streaming" title={t("streaming")} />}
-												</button>
-												{/* 触屏没有右键（contextmenu 不可靠）：给「另一处」行一个可见的操作钮，点开与右键同一个会话菜单
-															（过户 / 抢答问卷 / 复制 id）；槽位暂无可显示条目时不渲染（同右键路径的让路口径）。 */}
-												{sessionMenuAvailable && (
-													<button
-														type="button"
-														className="lp-del lp-elsewhere-act"
-														title={t("elsewhereActions")}
-														onClick={(e) => {
-															e.stopPropagation();
-															forceArmedRef.current = null;
-															// 坐标按按钮矩形锚定（触屏 click 的 clientX/Y 不可靠），clampMenuPosition 会自行钳进视口。
-															const r = e.currentTarget.getBoundingClientRect();
-															showSessionMenu(r.left, r.bottom + 4, {
-																id: elseConvId ?? c.id,
-																kind: "elsewhere",
-																label: c.title,
-																...(elseOwner ? { owner: elseOwner } : {}),
-															});
-														}}
-													>
-														<FiMoreVertical />
-													</button>
-												)}
-											</div>
-										);
-									}
-									// switch-loading：有进行中的切换时，高亮跟着目标走（乐观选中），而不是还留在
-									// 旧对话上等快照。失败后 pendingSwitch 清空，高亮自然回到真正的当前行。
-									const opening = isSwitchTargetRow(pendingSwitch, c);
-									const active = pendingSwitch ? opening : activeConversationId === c.id;
-									const foldTip = queueGroup
-										? t(queueGroup.folded ? "queueFoldShow" : "queueFoldHide", { n: queueGroup.count })
-										: "";
+			{leadBar && view === "leads" ? (
+				renderLeadsView(leadBar)
+			) : (
+				<>
+					{/* lead-bar: All chats (the lists the bar showed before), with the way back to the leads. */}
+					{leadBar && (
+						<div className="lp-allchats-head">
+							<button
+								type="button"
+								className="lp-allchats-back"
+								title={t("allChatsBackTip")}
+								onClick={() => setView("leads")}
+							>
+								<FiChevronLeft aria-hidden />
+								<span>{t("allChatsBack")}</span>
+							</button>
+							<span className="lp-allchats-title">{t("allChats")}</span>
+						</div>
+					)}
+					{/* Running conversations — collapsible, flex share. Hidden when empty to keep old layout expectations. */}
+					{runningAll.length > 0 && (
+						<div
+							className={`lp-section lp-section-convs panel-convs ${collapseConvs ? "collapsed" : ""}`}
+							style={!collapseConvs ? { flex: `${effFlex("convs")} 1 0px` } : undefined}
+							onContextMenu={(e) => openSessionMenu(e, { id: "", kind: "section", label: t("runningConversations") })}
+						>
+							{/* recent-chats：这一列不再只是「运行中」—— 计数仍用上游的 runningAll（含「另一处」行）。 */}
+							{sectionHeader(t("recentChats"), collapseConvs, toggleConvs, runningAll.length)}
+							{!collapseConvs && (
+								<div className="lp-section-body convs-scroll">
+									{/* flat-recent-chats：一条扁平列表 —— 无项目分组、无组标题，按创建
+							    时间倒序（不变量），收消息/点开/切项目都不会让行换位置。
+							    queue-grouping: open queued tasks' chats hang under the queue chat they came from; a
+							    queue chat's toggle folds them away (remembered per queue chat in this browser). */}
+									{orderConversations(runningAll, isFoldedConv).map(renderConvRow)}
+								</div>
+							)}
+						</div>
+					)}
+					{/* sash: convs ↔ sessions */}
+					{runningAll.length > 0 && !collapseConvs && !collapseSessions && (
+						<div
+							className="lp-sash"
+							onPointerDown={createSashHandler("convs", "sessions")}
+							onDoubleClick={() => setWeights({ ...DEFAULT_LP_WEIGHTS })}
+							title={t("dragToResize")}
+						/>
+					)}
+
+					{/* History sessions — collapsible, flex share, takes remaining */}
+					<div
+						className={`lp-section lp-section-sessions panel-sessions ${collapseSessions ? "collapsed" : ""}`}
+						style={!collapseSessions ? { flex: `${effFlex("sessions")} 1 0px` } : undefined}
+					>
+						{sectionHeader(
+							t("historySessions"),
+							collapseSessions,
+							toggleSessions,
+							sessions.length,
+							<button
+								type="button"
+								className="lp-section-action lp-new-chat-action"
+								title={t("newChatTip")}
+								aria-label={t("newChat")}
+								onClick={() => {
+									panelSend({ type: "new_chat" });
+									focusComposer();
+								}}
+							>
+								<FiPlus />
+							</button>,
+						)}
+						{!collapseSessions && (
+							<div className="lp-section-body sessions-scroll">
+								{sessions.length === 0 && <div className="panel-empty">{t("noHistory")}</div>}
+								{sessions.map((s) => {
+									// switch-loading：同上 —— 历史行按转录路径认目标。
+									const opening = isSwitchTargetRow(pendingSwitch, s);
+									const active = pendingSwitch ? opening : currentFile === s.path;
 									return (
 										<div
-											className={`lp-row${depth > 0 ? " lp-sub" : ""}${queueTask ? " lp-queue-task" : ""}${queueGroup ? " lp-queue-home" : ""}`}
-											key={c.id}
-											style={depth > 0 ? { marginLeft: depth * 18 } : undefined}
-											onMouseLeave={() => setConfirmDel((k) => (k === `conv:${c.id}` ? null : k))}
-											onContextMenu={(e) => openSessionMenu(e, { id: c.id, kind: "running", label: c.title })}
+											className="lp-row"
+											key={s.path}
+											onMouseLeave={() => setConfirmDel((k) => (k === `sess:${s.path}` ? null : k))}
+											onContextMenu={(e) => openSessionMenu(e, { id: s.path, kind: "history", label: displayName(s) })}
 										>
-											{/* queue-grouping: the fold toggle lies over the row's left end, where its chevron
-											    is (a big enough target on phones); the rest of the row opens the chat. */}
-											{queueGroup && (
-												<button
-													type="button"
-													className="queue-fold-toggle"
-													aria-expanded={!queueGroup.folded}
-													aria-label={foldTip}
-													title={foldTip}
-													onClick={(e) => {
-														e.stopPropagation();
-														toggleQueueFold(queueFoldKey(c));
-													}}
-												/>
-											)}
 											<button
 												type="button"
 												className={`session-item ${active ? "active" : ""}${opening ? " opening" : ""}`}
 												data-opening={opening ? "1" : undefined}
-												// 列表里只显标题；文件夹只在悬停里给 —— 同名对话（几个「temper」）靠这个分。
-												title={`${c.title} — ${c.cwd}`}
+												title={s.path}
 												onClick={() => {
-													if (active) return;
-													// 常驻行（运行时已释放）走历史打开；活着的行才能按 id 切。
-													if (c.live === false) {
-														if (c.sessionPath) panelSend({ type: "switch_session", path: c.sessionPath });
-														return;
-													}
-													panelSend({ type: "switch_conversation", id: c.id });
+													if (renaming) return;
+													if (!active) panelSend({ type: "switch_session", path: s.path });
 												}}
 											>
 												{opening ? (
 													<span className="session-icon switch-spinner" aria-hidden />
-												) : queueGroup ? (
-													queueGroup.folded ? (
-														<FiChevronRight className="session-icon queue-fold-icon" aria-hidden />
-													) : (
-														<FiChevronDown className="session-icon queue-fold-icon" aria-hidden />
-													)
 												) : (
 													<FiMessageSquare className="session-icon" />
 												)}
 												<span className="session-info">
-													{renaming === `conv:${c.id}` ? (
+													{renaming === s.path ? (
 														<input
 															autoFocus
 															className="session-rename-input"
@@ -928,7 +1497,7 @@ export const LeftPanel = memo(function LeftPanel({
 																e.stopPropagation();
 																if (e.key === "Enter" && !e.nativeEvent.isComposing) {
 																	const name = renameDraft.trim();
-																	if (name) panelSend({ type: "rename_conversation", id: c.id, name });
+																	if (name) panelSend({ type: "rename_session", path: s.path, name });
 																	setRenaming(null);
 																} else if (e.key === "Escape") {
 																	setRenaming(null);
@@ -938,71 +1507,34 @@ export const LeftPanel = memo(function LeftPanel({
 														/>
 													) : (
 														<span className="session-title">
-															{/* per-chat-dialogs：问卷或扩展弹窗在等你 →「?」。放在标题前面：放后面会被长标题的省略号吃掉。 */}
-															{(c.hasQuestion || c.dialogId !== undefined) && (
-																<span
-																	className="question-badge"
-																	title={t(c.hasQuestion ? "waitingQuestionBadge" : "waitingDialogBadge")}
-																>
-																	?
-																</span>
-															)}
-															{c.isSubagent && <span className="subagent-badge">{t("subagentBadge")}</span>}
-															{c.isEphemeral && <span className="ephemeral-badge">{t("ephemeralBadge")}</span>}
-															{c.forkFrom && (
-																<span
-																	className="preset-badge fork-badge"
-																	title={`${t("forkBadgeTip")}: ${c.forkFrom.title ?? c.forkFrom.conversationId}`}
-																>
-																	🌿 {t("forkBadge")}
-																</span>
-															)}
-															{c.agentPreset && (
-																<span className="preset-badge" title={c.agentPreset}>
-																	{presetNames?.[c.agentPreset] ?? c.agentPreset}
-																</span>
-															)}
-															{showIdentityTags && c.identity && <IdentityTag identity={c.identity} />}
-															{/* queue-grouping: folded away: how many task chats; marked when one is working or
-															    waits for you. Before the title, so a long title's ellipsis doesn't eat it. */}
-															{queueGroup?.folded && (
-																<span
-																	className={`queue-fold-count${queueGroup.needsYou ? " needs-you" : ""}${queueGroup.streaming ? " running" : ""}`}
-																	title={t(queueGroup.needsYou ? "queueFoldCountNeedsYou" : "queueFoldCount", {
-																		n: queueGroup.count,
-																	})}
-																>
-																	{queueGroup.count}
-																</span>
-															)}
-															{c.title}
-															{c.error && (
-																<span className="conv-error-badge" title={t("convErrorBadge", { error: c.error })} />
-															)}
+															{showIdentityTags && s.identity && <IdentityTag identity={s.identity} />}
+															{displayName(s)}
 														</span>
 													)}
-													{renaming === `conv:${c.id}` ? null : c.tldr && !opening && !active ? (
-														// tldr-sidebar：最新一行没看过的 TL;DR 代替「N 条消息」（一行，悬停看全文）；
-														// 正在打开 / 当前对话照旧。需要你的行用 TL;DR tab 的同一种高亮。
-														<span className={tldrSubClass(c.tldr)} title={c.tldr.text}>
-															{c.tldr.text}
-														</span>
-													) : (
+													{renaming === s.path ? null : (
 														<span className="session-sub">
 															{opening
 																? t("switchOpeningShort")
 																: active
 																	? t("current")
-																	: t("messageCount", { n: c.messageCount })}
+																	: t("messageCount", { n: s.messageCount })}
+															{s.source === "tui" && (
+																<span className="session-src" title={t("tuiTip")}>
+																	TUI
+																</span>
+															)}
+															{/* History 跨文件夹（服务端 historyScope="all"）：不属于当前工作
+													    目录的对话标上文件夹名（悬停看全路径）。服务端不发 cwd
+													    时自动不显示。 */}
+															{s.cwd && s.cwd !== currentCwd && (
+																<span className="session-src session-cwd" title={s.cwd}>
+																	{projectName(s.cwd)}
+																</span>
+															)}
 														</span>
 													)}
 												</span>
-												{/* 状态灯（recent-chats 补丁）：跑着 = 黄灯闪烁；跑完没看 = 绿灯常亮。 */}
-												{c.isStreaming ? (
-													<span className="conv-dot conv-running" title={t("streaming")} />
-												) : c.waiting ? (
-													<span className="conv-dot conv-waiting" title={t("waitingForYou")} />
-												) : null}
+												<span className="session-time">{formatModified(s.modified)}</span>
 											</button>
 											<button
 												type="button"
@@ -1011,251 +1543,24 @@ export const LeftPanel = memo(function LeftPanel({
 												onClick={(e) => {
 													e.stopPropagation();
 													setConfirmDel(null);
-													setRenameDraft(c.title);
-													setRenaming(`conv:${c.id}`);
+													setRenameDraft(s.name ?? "");
+													setRenaming(s.path);
 												}}
 											>
 												<FiEdit2 />
 											</button>
-											{(() => {
-												const key = `conv:${c.id}`;
-												const armed = confirmDel === key;
-												// 常驻行（运行时已释放）：✕ = 只从「最近对话」移出，转录原样保留
-												// （下面的 History 里照样能找到并重新打开）。
-												if (c.live === false) {
-													return delButton(
-														key,
-														t("removeFromRecent"),
-														t("removeFromRecentConfirm"),
-														() => {
-															if (c.sessionPath) panelSend({ type: "remove_recent_chat", path: c.sessionPath });
-														},
-														<FiX />,
-													);
-												}
-												const nFinished = finishedSubagentCount(conversations, c.id);
-												const nRunning = countRunningSubagentDescendants(conversations, c.id);
-												const nAll = countScopeSubagents(conversations, c.id);
-												// 无子代理 + 空闲：两段确认直接移出（active 也可，后端自动让出）。
-												if (nAll === 0 && !c.isStreaming) {
-													return delButton(
-														key,
-														t("dismissConversation"),
-														t("dismissConversationConfirm"),
-														() => panelSend({ type: "dismiss_conversation", id: c.id }),
-														<FiX />,
-													);
-												}
-												// 无子代理 + 运行中：两段确认强行关闭（中止本轮）。
-												if (nAll === 0) {
-													return delButton(
-														key,
-														t("dismissConversation"),
-														t("dismissStreamingConfirm"),
-														() => panelSend({ type: "dismiss_conversation", id: c.id, force: true }),
-														<FiX />,
-													);
-												}
-												// 有子代理后代：点 X 展开两个选项（只关已结束 / 强行全关）。
-												if (!armed) {
-													return (
-														<button
-															type="button"
-															className="lp-del"
-															title={t("dismissConversation")}
-															onClick={(e) => {
-																e.stopPropagation();
-																setConfirmDel(key);
-															}}
-														>
-															<FiX />
-														</button>
-													);
-												}
-												return (
-													<span className="lp-del-group">
-														{nFinished > 0 && (
-															<button
-																type="button"
-																className="lp-del-opt"
-																title={t("dismissFinishedSubagentsScoped", { n: nFinished })}
-																onClick={(e) => {
-																	e.stopPropagation();
-																	setConfirmDel(null);
-																	panelSend({ type: "dismiss_finished_subagents", parentId: c.id });
-																}}
-															>
-																{t("dismissFinishedOnly", { n: nFinished })}
-															</button>
-														)}
-														<button
-															type="button"
-															className="lp-del-opt danger"
-															title={t("forceDismissTitle", { n: nAll, m: nRunning })}
-															onClick={(e) => {
-																e.stopPropagation();
-																setConfirmDel(null);
-																panelSend({ type: "dismiss_conversation", id: c.id, force: true });
-															}}
-														>
-															{t("dismissForceAll", { n: nAll })}
-														</button>
-													</span>
-												);
-											})()}
-											{renderLeftSessions()}
-											{c.isStreaming && (
-												<span
-													className="lp-row-stalled"
-													title={t("streaming")}
-													style={{ position: "absolute", right: 28, top: "50%", transform: "translateY(-50%)" }}
-												/>
+											{delButton(`sess:${s.path}`, t("deleteSession"), t("deleteSessionConfirm"), () =>
+												panelSend({ type: "delete_session", path: s.path }),
 											)}
+											{renderLeftSessions()}
 										</div>
 									);
-								});
-							})()}
-						</div>
-					)}
-				</div>
-			)}
-			{/* sash: convs ↔ sessions */}
-			{runningAll.length > 0 && !collapseConvs && !collapseSessions && (
-				<div
-					className="lp-sash"
-					onPointerDown={createSashHandler("convs", "sessions")}
-					onDoubleClick={() => setWeights({ ...DEFAULT_LP_WEIGHTS })}
-					title={t("dragToResize")}
-				/>
-			)}
-
-			{/* History sessions — collapsible, flex share, takes remaining */}
-			<div
-				className={`lp-section lp-section-sessions panel-sessions ${collapseSessions ? "collapsed" : ""}`}
-				style={!collapseSessions ? { flex: `${effFlex("sessions")} 1 0px` } : undefined}
-			>
-				{sectionHeader(
-					t("historySessions"),
-					collapseSessions,
-					toggleSessions,
-					sessions.length,
-					<button
-						type="button"
-						className="lp-section-action lp-new-chat-action"
-						title={t("newChatTip")}
-						aria-label={t("newChat")}
-						onClick={() => {
-							panelSend({ type: "new_chat" });
-							focusComposer();
-						}}
-					>
-						<FiPlus />
-					</button>,
-				)}
-				{!collapseSessions && (
-					<div className="lp-section-body sessions-scroll">
-						{sessions.length === 0 && <div className="panel-empty">{t("noHistory")}</div>}
-						{sessions.map((s) => {
-							// switch-loading：同上 —— 历史行按转录路径认目标。
-							const opening = isSwitchTargetRow(pendingSwitch, s);
-							const active = pendingSwitch ? opening : currentFile === s.path;
-							return (
-								<div
-									className="lp-row"
-									key={s.path}
-									onMouseLeave={() => setConfirmDel((k) => (k === `sess:${s.path}` ? null : k))}
-									onContextMenu={(e) => openSessionMenu(e, { id: s.path, kind: "history", label: displayName(s) })}
-								>
-									<button
-										type="button"
-										className={`session-item ${active ? "active" : ""}${opening ? " opening" : ""}`}
-										data-opening={opening ? "1" : undefined}
-										title={s.path}
-										onClick={() => {
-											if (renaming) return;
-											if (!active) panelSend({ type: "switch_session", path: s.path });
-										}}
-									>
-										{opening ? (
-											<span className="session-icon switch-spinner" aria-hidden />
-										) : (
-											<FiMessageSquare className="session-icon" />
-										)}
-										<span className="session-info">
-											{renaming === s.path ? (
-												<input
-													autoFocus
-													className="session-rename-input"
-													value={renameDraft}
-													placeholder={t("renameSessionPlaceholder")}
-													onClick={(e) => e.stopPropagation()}
-													onChange={(e) => setRenameDraft(e.target.value)}
-													onKeyDown={(e) => {
-														e.stopPropagation();
-														if (e.key === "Enter" && !e.nativeEvent.isComposing) {
-															const name = renameDraft.trim();
-															if (name) panelSend({ type: "rename_session", path: s.path, name });
-															setRenaming(null);
-														} else if (e.key === "Escape") {
-															setRenaming(null);
-														}
-													}}
-													onBlur={() => setRenaming(null)}
-												/>
-											) : (
-												<span className="session-title">
-													{showIdentityTags && s.identity && <IdentityTag identity={s.identity} />}
-													{displayName(s)}
-												</span>
-											)}
-											{renaming === s.path ? null : (
-												<span className="session-sub">
-													{opening
-														? t("switchOpeningShort")
-														: active
-															? t("current")
-															: t("messageCount", { n: s.messageCount })}
-													{s.source === "tui" && (
-														<span className="session-src" title={t("tuiTip")}>
-															TUI
-														</span>
-													)}
-													{/* History 跨文件夹（服务端 historyScope="all"）：不属于当前工作
-													    目录的对话标上文件夹名（悬停看全路径）。服务端不发 cwd
-													    时自动不显示。 */}
-													{s.cwd && s.cwd !== currentCwd && (
-														<span className="session-src session-cwd" title={s.cwd}>
-															{projectName(s.cwd)}
-														</span>
-													)}
-												</span>
-											)}
-										</span>
-										<span className="session-time">{formatModified(s.modified)}</span>
-									</button>
-									<button
-										type="button"
-										className="lp-del lp-rename"
-										title={t("renameSession")}
-										onClick={(e) => {
-											e.stopPropagation();
-											setConfirmDel(null);
-											setRenameDraft(s.name ?? "");
-											setRenaming(s.path);
-										}}
-									>
-										<FiEdit2 />
-									</button>
-									{delButton(`sess:${s.path}`, t("deleteSession"), t("deleteSessionConfirm"), () =>
-										panelSend({ type: "delete_session", path: s.path }),
-									)}
-									{renderLeftSessions()}
-								</div>
-							);
-						})}
+								})}
+							</div>
+						)}
 					</div>
-				)}
-			</div>
+				</>
+			)}
 			{/* subs-limits-box: every subscription's limits, under History (pi-multi-pass is pi's). */}
 			{!isDsh && (
 				<LimitsSection

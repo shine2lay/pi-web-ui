@@ -12,10 +12,14 @@
  * Links outlive the chats being open (and restarts: client-state.json), so a task chat that is only a
  * Recent chats row stays under its home chat while neither chat is open.
  *
+ * lead-bar: the same links also tell the left bar's leads view which lead each open task chat belongs
+ * to, by file (queueHomeFile), whether or not the lead's chat is a row: applyQueueHomes,
+ * applyElsewhereQueueHomes and unlistedQueueTasks (open task chats that aren't rows at all).
+ *
  * Pure functions + unit tests: tests/unit/queue-groups.test.ts.
  */
 import { resolve } from "node:path";
-import type { ConversationSummary, UiTaskQueue } from "./protocol.js";
+import type { ConversationSummary, ElsewhereRunning, UiTaskQueue } from "./protocol.js";
 
 /** pi-queue's open task states (task-queue.ts OPEN): not done and not removed. */
 const OPEN: ReadonlySet<string> = new Set(["ready", "working", "asking", "stuck", "waiting", "blocked"]);
@@ -105,6 +109,7 @@ export function queueHomesToOpen(homes: ReadonlyMap<string, string>, exists: (fi
 /**
  * Gives each row whose chat is an open task of a queue chat in the same list that row's id
  * (`queueHomeId`). Rows only, no reads. A task chat whose queue chat isn't listed stays a normal row.
+ * lead-bar: every open task chat's row also gets its queue chat's transcript (`queueHomeFile`), listed or not.
  */
 export function applyQueueHomes(rows: ConversationSummary[], homes: ReadonlyMap<string, string>): void {
 	if (homes.size === 0) return;
@@ -118,7 +123,36 @@ export function applyQueueHomes(rows: ConversationSummary[], homes: ReadonlyMap<
 	}
 	for (const [r, key] of keyed) {
 		const home = homes.get(key);
+		if (home !== undefined && home !== key) r.queueHomeFile = home;
 		const homeId = home === undefined ? undefined : idOf.get(home);
 		if (homeId !== undefined && homeId !== r.id) r.queueHomeId = homeId;
 	}
+}
+
+/** lead-bar: an entry running elsewhere that is an open task's chat gets its queue chat's transcript. */
+export function applyElsewhereQueueHomes(list: ElsewhereRunning[], homes: ReadonlyMap<string, string>): void {
+	if (homes.size === 0) return;
+	for (const w of list) {
+		if (!w.sessionFile) continue;
+		const key = resolve(w.sessionFile);
+		const home = homes.get(key);
+		if (home !== undefined && home !== key) w.queueHomeFile = home;
+	}
+}
+
+/**
+ * lead-bar: the open tasks' own chats that aren't rows of the list (neither open nor a Recent chats row),
+ * each with the queue chat it came from, in link order. The server turns them into saved rows for the
+ * leads view (conversations.queueTasks); nothing else shows them. Links only, no reads.
+ */
+export function unlistedQueueTasks(
+	rows: readonly ConversationSummary[],
+	homes: ReadonlyMap<string, string>,
+): Array<{ file: string; home: string }> {
+	if (homes.size === 0) return [];
+	const listed = new Set<string>();
+	for (const r of rows) if (r.sessionPath) listed.add(resolve(r.sessionPath));
+	const out: Array<{ file: string; home: string }> = [];
+	for (const [file, home] of homes) if (file !== home && !listed.has(file)) out.push({ file, home });
+	return out;
 }

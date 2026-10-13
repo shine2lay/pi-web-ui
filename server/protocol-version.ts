@@ -79,4 +79,8 @@
 // 47: initiatives-page - the Initiatives tab: initiatives_watch / initiatives_unwatch and the initiatives
 //     page (decisions, who decided, reader status), decision_record for a card's source. An old page has no
 //     Initiatives tab; an old server never answers initiatives_watch.
-export const PROTOCOL_VERSION = 47;
+// 48: lead-bar - the left bar shows the role leads and their task chats: open task chat rows and elsewhere
+//     entries carry queueHomeFile, conversations carries queueTasks (open task chats not in the list),
+//     identity rows carry homeChatMissing. An old page would show queueTasks nowhere and keep the old
+//     bar; an old server sends none of them (the leads view would miss tasks whose lead isn't listed).
+export const PROTOCOL_VERSION = 48;

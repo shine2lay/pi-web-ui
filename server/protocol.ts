@@ -1732,6 +1732,9 @@ export interface UiIdentityInfo {
 	folder?: string;
 	/** 家对话的会话文件（绝对路径）；页面点它打开那条对话。 */
 	homeChat?: string;
+	/** lead-bar: the home chat's file isn't there: the left bar shows the lead greyed out ("home chat not
+	 *  found") instead of a row that opens nothing. */
+	homeChatMissing?: true;
 	/** about.md / notebook.md 的字节数（没有文件 = 0）。 */
 	aboutSize: number;
 	notebookSize: number;
@@ -3323,6 +3326,10 @@ export interface ConversationSummary {
 	 *  chat) is a row of the same list: that row's id. The left panel shows the task under it, the way a
 	 *  subagent sits under its parent (server/queue-groups.ts). */
 	queueHomeId?: string;
+	/** lead-bar: this is an open queued task's own chat: the transcript of the queue chat it came from
+	 *  (resolved), whether or not that chat is a row too. The left bar's leads view puts the task under the
+	 *  lead whose home chat this is (server/queue-groups.ts, web/src/lead-bar.ts). */
+	queueHomeFile?: string;
 	/** 落盘会话文件（persisted conversation 才有；inMemory 子代理缺省）。
 	 *  右键「复制会话文件路径」与 AI 按 path 读历史时用。 */
 	sessionFile?: string;
@@ -3405,6 +3412,9 @@ export interface ElsewhereRunning {
 	hasQuestion?: boolean;
 	/** 等答复问卷的简短标题/题目，供横幅与列表展示。 */
 	questionTitle?: string;
+	/** lead-bar: an open queued task's own chat: the transcript of the queue chat it came from (see
+	 *  ConversationSummary.queueHomeFile). */
+	queueHomeFile?: string;
 }
 
 /** DSH Agent 预设名录行（字段以运行时树为准；broken = 名录可见但不可挂载）。 */
@@ -3751,6 +3761,10 @@ export type ServerMessage =
 			/** issue #145：在其他客户端（标签页/设备）上正在跑的对话（只读感知，
 			 *  不可点）。为空时缺省（老快照字节一致）。Only set when non-empty. */
 			elsewhere?: ElsewhereRunning[];
+			/** lead-bar: open queued tasks' own chats that aren't in `conversations` (not open, and not a Recent
+			 *  chats row): saved-only rows (live: false, queueHomeFile set), for the leads view alone. Only set
+			 *  when non-empty. */
+			queueTasks?: ConversationSummary[];
 	  }
 	| {
 			type: "tool_delta";

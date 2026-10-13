@@ -1936,6 +1936,7 @@ export function App() {
 							currentProvider={chat.state?.model?.provider}
 							conversations={chat.conversations}
 							elsewhere={chat.elsewhere}
+							queueTasks={chat.queueTasks}
 							sessions={chat.sessions}
 							activeConversationId={chat.activeConversationId}
 							pendingSwitch={chat.pendingSwitch?.target ?? null}

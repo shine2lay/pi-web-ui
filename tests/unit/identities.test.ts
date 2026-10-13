@@ -140,6 +140,8 @@ describe("the identity list", () => {
 	});
 
 	it("Settings gets each identity's home chat and its notebook size against the cap", () => {
+		// lead-bar: temper's home chat is there; rollcall's isn't (homeChatMissing, below).
+		writeFileSync(join(sessions, "temper-home.jsonl"), "");
 		const infos = identityInfos(identityRegistry(true).identities);
 		expect(infos.map((i) => i.id)).toEqual(["ops", "rollcall", "temper"]);
 		expect(infos.find((i) => i.id === "temper")).toEqual({
@@ -164,6 +166,15 @@ describe("the identity list", () => {
 		const ops = infos.find((i) => i.id === "ops");
 		expect(ops).toMatchObject({ aboutSize: 0, notebookSize: 0, notebookCap: RULES_CAP });
 		expect(ops?.homeChat).toBeUndefined();
+		expect(ops && "homeChatMissing" in ops).toBe(false);
+		// lead-bar: a home chat whose file is gone says so (the left bar greys that lead out).
+		expect(infos.find((i) => i.id === "rollcall")).toMatchObject({
+			homeChat: join(sessions, "rollcall-home.jsonl"),
+			homeChatMissing: true,
+		});
+		writeFileSync(join(sessions, "rollcall-home.jsonl"), "");
+		const again = identityInfos(identityRegistry(true).identities).find((i) => i.id === "rollcall");
+		expect(again && "homeChatMissing" in again).toBe(false);
 	});
 });
 

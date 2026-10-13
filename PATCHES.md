@@ -10,6 +10,13 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## lead-bar: the left bar shows only the role leads and their task chats
+
+- `local` (owner via COO rm-788e4038, 2026-10-12, Ops queue #132: "make the recent chats, to only the lead + the tasks they are working on, no other items in the left hand bar"). With role leads (identities with a home chat) the left bar shows one row per lead in the Roles page's order (self-start first, then the rest, each by id; found by identity and file, never by title; rows never move), each with the chats of its queue's open, started tasks under it (newest first, their marks kept, the lead's fold toggle and count), plus one "Open now" row for the chat on screen when it's neither. A lead's row is its chat's row as today: open (its live row), running elsewhere (the take-over row), saved only (an idle row that opens it, a History row's menu, no hover delete) or its file gone (greyed, "Home chat not found"). Nothing else is a row.
+- New chat (+) moves into the bar's header. "All chats" at the bottom swaps in the old Recent chats + History lists, unchanged, with Back, and counts the chats outside the bar that run or ask ("All chats · 2 running · 1 asking"). Search is unchanged. The bar opens on the leads again after every switch, on reload, and when the phone drawer or the collapsed panel hides it. Phone: the same view in the drawer, 44 px targets. No leads (DSH, no home chats): today's bar unchanged. The subscription limits box stays.
+- Server: `queueHomeFile` on open task chat rows and elsewhere entries (`applyQueueHomes`, `applyElsewhereQueueHomes`); `conversations.queueTasks`, saved rows for open task chats that aren't rows (`unlistedQueueTasks`, `queueTaskRows`, from the listing of all saved chats); `UiIdentityInfo.homeChatMissing` (`identityInfos`); protocol 48. Client: `web/src/lead-bar.ts` (pure `buildLeadBar`), `LeftPanel.tsx` (leads view, Open now, All chats view), `use-chat.ts` + `App.tsx` (queueTasks), `conv-groups.ts` (`needsUser` exported), i18n + `locales/`, `styles.css` (the left bar's identity tag mixed toward the text colour: White's was 3.77:1, now about 6.7:1). Display only: no chat, queue, title or identity changes.
+- Tests: `tests/unit/lead-bar.test.ts` (fixed cases: order, lead kinds, task chats by status, folds, Open now, counts), `tests/unit/queue-groups.test.ts` (links by file, elsewhere entries, queueTasks), sealed `tests/lead-bar-test.mjs` (1440/390 px, dark and White, axe, 44 px, clicks, rename, All chats/Back, search) and `tests/identities-test.mjs` (its phone check finds RollCall's lead row). Details: [docs/lead-bar.md](docs/lead-bar.md).
+
 ## owner-answer-routing: preserve owner visibility without crossing browser and Telegram
 
 - `local`: trusted accepted browser-owner questions keep their ownership through delegated and nested role questions/replies, so callback answers remain full in chat. `forOwner` remains system-derived visibility; separate internal `ownerChannel` controls transport, never model-settable message_role arguments or parsed wording.
@@ -1019,6 +1026,10 @@ clientId 建 ClientSession，同 id = 同一个会话。上游把 clientId 从 l
 
 **状态**：`local`（可上游成设置项：左栏排序 = 最近活动 / 创建时间；分组 = 按项目 / 不分）
 **基线**：v0.96.1
+
+> **lead-bar (2026-10-12)**: with role leads the left bar shows the leads view instead; this flat list is
+> what its "All chats" view shows. The leads view's rows don't move either: leads in the Roles page's
+> order, task chats by creation time.
 
 **同步 v0.96.1（2026-09-26）**：上游重写了左栏的按项目分组；本补丁照旧用 `orderConversations` 排成一条扁平
 列表，替掉上游的分组渲染。
@@ -2038,6 +2049,9 @@ billion-context-pi（ACP）每轮用自己的「核心」重建发给模型的�
 
 **状态**：`local`
 **基线**：v0.96.1
+
+> **lead-bar (2026-10-12)**: the leads view draws lead and task chat rows with the same row code, so they
+> keep the TL;DR line, the lights and the needs-you marks.
 
 **诉求**（用户 2026-09-25）：不点进对话也能跟上所有 agent：左栏每条对话标题下面显示它最新的一行 TL;DR，
 需要你的行要醒目。用户的选择：
@@ -3285,6 +3299,9 @@ them one tab shallower, without the wrapper.
 **Status**: `local`
 **Baseline**: v0.96.1
 
+> **lead-bar (2026-10-12)**: with role leads the panel starts with the leads view (New chat in its header);
+> Recent chats + History, with their sizing and collapsing, move into its "All chats" view.
+
 **Why** (owner, 2026-09-28): the owner never uses the "Open project" button or the "Recent projects"
 section. The workspace folder can still be switched with the footer's folder field or with "Open as
 project" on a folder in the file tree, and chats opened from history keep their own folder
@@ -3843,6 +3860,9 @@ of it. If upstream also bumps `PROTOCOL_VERSION`, use one more than the higher o
 **Status**: `local`
 **Baseline**: v0.96.1
 
+> **lead-bar (2026-10-12)**: the left bar finds role leads by `homeChat` in the identity list (never by
+> title), and `UiIdentityInfo.homeChatMissing` says a home chat's file is gone (a greyed lead row).
+
 **Why** (owner, 2026-09-30): pi-identity (`~/projects/pi-identity`, queued task #28) gives a chat an
 identity (temper, RollCall, ops/tooling) whose about page and notebook load into the chat. pi-web-ui
 showed none of it: you couldn't start a chat as one, see which chat had which, or read and edit the about
@@ -4269,6 +4289,11 @@ N characters, M removed or changed lines archived` (never the text). `identity_f
 
 **Status**: `local`
 **Baseline**: v0.96.1 (on top of `queue-done-hidden`)
+
+> **lead-bar (2026-10-12)**: the links also give each open task chat (row or elsewhere entry) its queue
+> chat's transcript (`queueHomeFile`, listed or not), and the open task chats that aren't rows come as
+> `conversations.queueTasks`, so the leads view finds a task's lead even when the lead's chat isn't
+> listed. A lead's fold uses its home chat file, the same key its row has here.
 
 **Why** (owner, 2026-09-30, queue task #34: "okay, lets do grouping instead then"): every open queued
 task runs in a chat of its own (`Queue #n: <title>`), and with three home chats queuing work (tooling,

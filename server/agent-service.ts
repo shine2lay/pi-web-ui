@@ -420,7 +420,15 @@ import {
 	waitUntil,
 	wakeRefusal,
 } from "./queue-host.js";
-import { applyQueueHomes, type LoadedQueue, queueHomesFrom, queueHomesToOpen, queueLinksSig } from "./queue-groups.js";
+import {
+	applyElsewhereQueueHomes,
+	applyQueueHomes,
+	type LoadedQueue,
+	queueHomesFrom,
+	queueHomesToOpen,
+	queueLinksSig,
+	unlistedQueueTasks,
+} from "./queue-groups.js";
 import { idsHash } from "./window-hash.js";
 import {
 	isTldrReply,
@@ -2784,6 +2792,41 @@ export function recentChatLimit(): number {
 	const raw = Number.parseInt(process.env.PI_WEB_UI_RECENT_LIMIT ?? "", 10);
 	if (Number.isFinite(raw) && raw >= 0) return Math.min(raw, 200);
 	return 15;
+}
+
+/**
+ * lead-bar: saved rows for the open tasks' own chats that aren't in the list (neither open nor a Recent
+ * chats row), for the leads view (conversations.queueTasks). `sessionOf`: the last listing of saved chats
+ * (all of them, not only the newest 200); a chat it doesn't know yet is left out until it does. Rows
+ * only, no reads.
+ */
+export function queueTaskRows(
+	tasks: ReadonlyArray<{ file: string; home: string }>,
+	sessionOf: (file: string) => SessionSummary | undefined,
+	waiting: ReadonlySet<string>,
+	cwd: string,
+): ConversationSummary[] {
+	const out: ConversationSummary[] = [];
+	for (const { file, home } of tasks) {
+		const s = sessionOf(file);
+		if (!s) continue;
+		out.push({
+			id: `recent:${s.path}`,
+			title: s.name || s.firstMessage || DEFAULT_CONV_TITLE,
+			cwd: s.cwd ?? cwd,
+			messageCount: s.messageCount,
+			isStreaming: false,
+			isSubagent: false,
+			sessionPath: s.path,
+			live: false,
+			waiting: waiting.has(file),
+			sortAt: s.modified,
+			createdAt: sessionCreatedAt(s.path) ?? s.modified,
+			queueHomeFile: home,
+			...(s.identity ? { identity: s.identity } : {}),
+		});
+	}
+	return out;
 }
 
 /**
@@ -12433,11 +12476,24 @@ export class ClientSession {
 		for (const recent of this.recentHistoryRows(livePaths, waiting)) conversations.push(recent);
 		// queue-grouping: an open task's chat goes under the queue chat it came from when both are listed. The
 		// links come from the open chats' cached queues (refreshQueueHomes); here they're only looked up.
-		applyQueueHomes(conversations, ClientSession.knownQueueHomes());
+		// lead-bar: the same links name each open task chat's lead by file (queueHomeFile), and the open task
+		// chats that aren't rows at all go along as queueTasks, for the left bar's leads view only.
+		const homes = ClientSession.knownQueueHomes();
+		applyQueueHomes(conversations, homes);
+		applyElsewhereQueueHomes(elsewhere, homes);
+		// (Optional chaining: stand-in windows in the unit tests don't list saved chats.)
+		const byFile = this.sessionsByFile as ReadonlyMap<string, SessionSummary> | undefined;
+		const queueTasks = queueTaskRows(
+			unlistedQueueTasks(conversations, homes),
+			(file) => byFile?.get(file) ?? this.recentSessions.find((r) => resolve(r.path) === file),
+			waiting,
+			this.cwd,
+		);
 		this.emit({
 			type: "conversations",
 			conversations,
 			activeId: this.activeId,
+			...(queueTasks.length > 0 ? { queueTasks } : {}),
 			// 为空时缺省（老快照字节一致）
 			...(elsewhere.length > 0 ? { elsewhere } : {}),
 		});
@@ -12549,6 +12605,9 @@ export class ClientSession {
 	/** 最近一次推给客户端的会话列表（newest first）——「最近对话」常驻行的数据源，
 	 *  由 pushSessions() 刷新。客户端没请求过会话列表时为空。 */
 	private recentSessions: SessionSummary[] = [];
+	/** lead-bar: every saved chat of the last listing by resolved transcript (not only the newest 200), so an
+	 *  open task's chat that has been quiet for days still has its title in the leads view (queueTaskRows). */
+	private sessionsByFile: ReadonlyMap<string, SessionSummary> = new Map();
 
 	private sessionInfosCache: { cwd: string; infos: SessionInfo[]; at: number } | null = null;
 	private static readonly SESSION_INFO_CACHE_TTL = 3000;
@@ -12660,6 +12719,8 @@ export class ClientSession {
 					cwd: s.cwd,
 				});
 			}
+			// lead-bar: all of them by resolved file, for open task chats beyond the newest 200 (queueTaskRows).
+			this.sessionsByFile = new Map([...sessions.values()].map((s) => [resolve(s.path), s]));
 			const sorted = [...sessions.values()].sort((a, b) => b.modified - a.modified).slice(0, 200); // newest first — the panel shows recent history
 			// identities: each row's identity label, before the list goes out (or right after it, when the
 			// first read of big transcripts takes a while; a newer list wins).

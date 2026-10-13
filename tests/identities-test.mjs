@@ -264,6 +264,8 @@ async function send(page, text) {
 const TITLE = { T: /Tidy up the task queue|Tidy the task queue/, R: /Plan the roll call|Monday roll call/ };
 const runningRow = (page, k) => page.locator(".lp-section-convs .lp-row", { hasText: TITLE[k] }).first();
 const historyRow = (page, k) => page.locator(".lp-section-sessions .lp-row", { hasText: TITLE[k] }).first();
+/** lead-bar: once a role has a home chat, the left bar shows only the leads (and their task chats). */
+const leadRow = (page, k) => page.locator(".lp-section-leads .lp-lead-group > .lp-row", { hasText: TITLE[k] }).first();
 /** The identity a row's tag shows: its id (data-identity) and text; null = no tag. Read in one go: a tag
  *  that goes away between two reads would make the second one wait for it. */
 async function rowTag(row) {
@@ -594,10 +596,11 @@ try {
 	);
 	await shot(P, "phone-label");
 	await P.locator('button.panel-toggle[aria-label="History"]').first().tap();
+	// RollCall has a home chat now, so the bar shows the leads view (lead-bar): its chat is RollCall's lead row.
 	check(
 		"the chat list shows the tags on a phone too",
-		await waitFor(async () => (await rowTag(runningRow(P, "R")))?.id === "rollcall", 10000),
-		JSON.stringify(await rowTag(runningRow(P, "R"))),
+		await waitFor(async () => (await rowTag(leadRow(P, "R")))?.id === "rollcall", 10000),
+		JSON.stringify(await rowTag(leadRow(P, "R"))),
 	);
 	await shot(P, "phone-list");
 	// Close the drawer: its backdrop, off to the right of the panel (the panel's resize edge sits over the rest).
