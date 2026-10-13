@@ -28,9 +28,13 @@ import { AgentService } from "../../server/agent-service.js";
 import { controlPath, startControlServer } from "../../server/control-socket.js";
 import {
 	canonical,
+	collectLegacyProof,
 	H7,
 	H7_NONCE,
 	isDecisionServiceProcess,
+	liveCollectorEnv,
+	runReadOnly,
+	type CollectorEnv,
 	newLocalCall,
 	parseRecoveryCommand,
 	persistLedger,
@@ -262,12 +266,19 @@ describe("H7 exact join and approval stages", () => {
 			"./dist/server/index.js",
 			"server/index.ts",
 			"server/index.js",
+			// How the live unit starts it (H7-FIX-1-MEASURE.json serviceArgv), and the launcher it links to.
+			"/home/shinelay/.nvm/versions/node/v22.22.0/bin/pi-web-ui",
+			"/home/shinelay/projects/pi-web-ui/bin/pi-web-ui.mjs",
+			"bin/pi-web-ui",
 		])
 			expect(isDecisionServiceProcess(["node", script])).toBe(true);
 		for (const args of [
 			["node", "tools/check.mjs"],
 			["node", "-e", "console.log('hello')"],
 			["python", "server/index.py"],
+			["grep", "pi-web-ui"],
+			["bash", "/home/shinelay/.local/bin/pi-web-deploy", "status"],
+			["node", "/home/shinelay/projects/pi-web-ui/bin/pi-web-ui.mjs.bak"],
 		])
 			expect(isDecisionServiceProcess(args)).toBe(false);
 	});
@@ -778,5 +789,245 @@ console.log(JSON.stringify({missing,blocked,status,unchanged:before===readFileSy
 		expect(r.unchanged).toBe(true);
 		expect(f.raw()).toBe(before);
 		expect(existsSync(f.ctl.ledgerFile)).toBe(true);
+	});
+});
+
+// H7-FIX-1: the collector itself, on fixtures shaped like the live machine (H7-FIX-1-MEASURE.json, 2026-10-13):
+// one journald counter for system and user entries (full view 0 gaps, --user view 2996 gaps), verify 27 s,
+// the unit launched as bin/pi-web-ui. Each case fails on the 113d0f5 collector, which ignored this env.
+describe("H7-FIX-1 collector on live-shaped fixtures", () => {
+	const S = "e2ee25b096694b7885dfface12521863";
+	const B = "aacd6a9988284bc59b382613ba089dfa";
+	const bootId = "aacd6a99-8828-4bc5-9b38-2613ba089dfa";
+	const promptSeq = 0x838b61;
+	const promptUsec = Number.parseInt("65d9ccac553bf", 16);
+	const promptMono = Number.parseInt("115d66befa3", 16);
+	const servicePid = 2909433;
+	const serviceInvocation = "7abf3cbf99674974b881c2184a31cba6";
+	const bin = "/home/shinelay/.nvm/versions/node/v22.22.0/bin/pi-web-ui";
+	const modulePath = "/fixture/pi-web-ui/dist/server/decision-recovery.js";
+	const legacySource = "// legacy decision-batches.ts at 9fe5b68\n";
+	type Row = Record<string, string>;
+	interface Shape {
+		fullViewReadable?: boolean;
+		secondStream?: boolean;
+		journaldMessages?: string[];
+		extraProcesses?: { pid: number; args: string[] }[];
+		systemdPid?: number;
+		module?: { path: string; hash: string } | undefined;
+		moduleBytes?: string;
+		legacyPidAlive?: boolean;
+		terminal?: boolean;
+	}
+	function machine(shape: Shape = {}) {
+		const calls: string[][] = [];
+		// [realtime usec, monotonic usec, user journal?, fields]; seqnums follow this order with no holes.
+		const plan: [number, number, boolean, Row][] = [
+			[promptUsec - 90e6, promptMono - 90e6, false, {}],
+			[promptUsec - 60e6, promptMono - 60e6, true, { _PID: String(H7.legacyPid), MESSAGE: "listening" }],
+			[promptUsec - 30e6, promptMono - 30e6, false, {}],
+			[
+				promptUsec,
+				promptMono,
+				true,
+				{
+					_PID: String(H7.legacyPid),
+					MESSAGE: `[decisions-call] ${JSON.stringify({ phase: "prompt_started", at: H7.at })}`,
+				},
+			],
+			[promptUsec + 1e6, promptMono + 1e6, false, {}],
+			[promptUsec + 2e6, promptMono + 2e6, false, {}],
+			...(shape.terminal
+				? [
+						[
+							promptUsec + 3e6,
+							promptMono + 3e6,
+							true,
+							{
+								_PID: String(H7.legacyPid),
+								MESSAGE: `[decisions-call] ${JSON.stringify({ phase: "prompt_settled", at: H7.at + 3000 })}`,
+							},
+						] as [number, number, boolean, Row],
+					]
+				: []),
+			[
+				Number(H7.stoppedUsec),
+				promptMono + 66e6,
+				true,
+				{ USER_UNIT: "pi-web-ui.service", MESSAGE: "Stopped pi-web-ui.service - pi web ui." },
+			],
+			[
+				Number(H7.replacementStartedUsec),
+				promptMono + 66.1e6,
+				true,
+				{ USER_UNIT: "pi-web-ui.service", MESSAGE: "Started pi-web-ui.service - pi web ui." },
+			],
+			[Number(H7.stoppedUsec) + 5e6, promptMono + 71e6, false, {}],
+			[Number(H7.stoppedUsec) + 9e6, promptMono + 75e6, true, { _PID: String(servicePid), MESSAGE: "listening" }],
+		];
+		const at = plan.findIndex(([usec]) => usec === promptUsec);
+		const entries = plan.map(([usec, mono, user, fields], index) => {
+			const seq = promptSeq - at + index;
+			const row: Row = {
+				__CURSOR:
+					index === at
+						? H7.legacyCursor
+						: `s=${S};i=${seq.toString(16)};b=${B};m=${mono.toString(16)};t=${usec.toString(16)};x=${seq.toString(16).padStart(16, "0")}`,
+				__REALTIME_TIMESTAMP: String(usec),
+				__MONOTONIC_TIMESTAMP: String(mono),
+				_BOOT_ID: B,
+				...fields,
+			};
+			if (fields._PID === String(H7.legacyPid)) row._SYSTEMD_INVOCATION_ID = H7.legacyInvocation;
+			if (fields._PID === String(servicePid)) row._SYSTEMD_INVOCATION_ID = serviceInvocation;
+			return { row, user };
+		});
+		const jsonl = (rows: Row[]) => Buffer.from(rows.map((r) => `${JSON.stringify(r)}\n`).join(""));
+		// A second counter (e.g. journald restarted with a new sequence id) holds one entry: no gap inside it.
+		const other = {
+			__CURSOR: `s=${"0".repeat(32)};i=1;b=${B};m=1;t=${(promptUsec + 4e6).toString(16)};x=1`,
+			_BOOT_ID: B,
+		};
+		const cursors = (user: boolean) =>
+			jsonl([
+				...entries
+					.filter((e) => !user || e.user)
+					.map(({ row }) => ({
+						__CURSOR: row.__CURSOR,
+						__REALTIME_TIMESTAMP: row.__REALTIME_TIMESTAMP,
+						_BOOT_ID: row._BOOT_ID,
+					})),
+				...(shape.secondStream ? [{ ...other, __REALTIME_TIMESTAMP: String(promptUsec + 4e6) }] : []),
+			]);
+		const moduleBytes = "compiled collector bytes";
+		const env: CollectorEnv = {
+			run(command, args, cwd) {
+				calls.push([command, ...args]);
+				if (command === "systemctl")
+					return Buffer.from(`MainPID=${shape.systemdPid ?? servicePid}\nInvocationID=${serviceInvocation}\n`);
+				if (
+					command === "git" &&
+					cwd === "/home/shinelay/projects/pi-web-ui" &&
+					args[1] === `${H7.legacyHead}:server/decision-batches.ts`
+				)
+					return Buffer.from(legacySource);
+				if (command === "journalctl") {
+					// The live verify takes 27 s against the 10 s limit: an old-style call fails here as it does there.
+					if (args.includes("--verify")) throw new Error("legacy evidence query unavailable: journalctl");
+					if (args.includes("-u")) return jsonl(entries.filter((e) => e.user).map((e) => e.row));
+					if (args.includes("-t")) return jsonl((shape.journaldMessages ?? []).map((MESSAGE) => ({ MESSAGE })));
+					if (args.some((a) => a.startsWith("--output-fields=__CURSOR")))
+						return cursors(args.includes("--user") || shape.fullViewReadable === false);
+				}
+				throw new Error(`unexpected command ${command}`);
+			},
+			processes: () => [
+				{ pid: servicePid, args: ["/home/shinelay/.nvm/versions/node/v22.22.0/bin/node", bin, "--no-browser"] },
+				{ pid: 4100, args: ["grep", "pi-web-ui"] },
+				{ pid: 4101, args: ["bash", "/home/shinelay/.local/bin/pi-web-deploy", "status"] },
+				...(shape.extraProcesses ?? []),
+			],
+			pidAlive: (pid) => (pid === H7.legacyPid ? (shape.legacyPidAlive ?? false) : true),
+			self: { invocation: serviceInvocation, pid: servicePid, start: "123456789", boot: bootId },
+			module: "module" in shape ? shape.module : { path: modulePath, hash: sha256(moduleBytes) },
+			read(file) {
+				if (file === modulePath) return Buffer.from(shape.moduleBytes ?? moduleBytes);
+				if (file.endsWith("/H7-RECOVERY-EVIDENCE.json"))
+					return Buffer.from(
+						JSON.stringify({
+							sourceSha256: { "/home/shinelay/projects/pi-web-ui/server/decision-batches.ts": sha256(legacySource) },
+						}),
+					);
+				throw new Error("unexpected read");
+			},
+		};
+		return { env, calls };
+	}
+	const denied = (proof: LegacyProof) => () => verifyLegacyProof(proof, Date.now());
+
+	it("passes on the clean live-shaped journal, without --verify and from the full view", () => {
+		const { env, calls } = machine();
+		const proof = collectLegacyProof(true, env);
+		expect(denied(proof)).not.toThrow();
+		expect(proof.gapped).toBe(false);
+		expect(proof.sequenceGaps).toBe(0);
+		expect(proof.suppressed).toBe(false);
+		expect(proof.duplicates).toEqual([]);
+		expect(proof.starts.map((s) => s.cursor)).toEqual([H7.legacyCursor]);
+		expect(proof.current.pid).toBe(servicePid);
+		expect(calls.some((c) => c.includes("--verify"))).toBe(false);
+		const coverage = calls.filter((c) => c.some((a) => a.startsWith("--output-fields=__CURSOR")));
+		expect(coverage).toHaveLength(1);
+		expect(coverage[0]).not.toContain("--user");
+	});
+	it("the --user view alone is always gapped (one shared counter) and denies", () => {
+		const proof = collectLegacyProof(true, machine({ fullViewReadable: false }).env);
+		expect(proof.gapped).toBe(true);
+		expect(proof.sequenceGaps).toBeGreaterThan(0);
+		expect(denied(proof)).toThrow(/legacy local-death proof/);
+	});
+	it("a second sequence stream denies even with no gap inside each stream", () => {
+		const proof = collectLegacyProof(true, machine({ secondStream: true }).env);
+		expect(proof.sequenceGaps).toBe(0);
+		expect(proof.gapped).toBe(true);
+		expect(denied(proof)).toThrow(/legacy local-death proof/);
+	});
+	it("journald suppression or corruption notices deny", () => {
+		for (const message of [
+			"Suppressed 12 messages from pi-web-ui.service",
+			"Journal file /var/log/journal/x/user-1000.journal corrupted or uncleanly shut down, renaming and replacing.",
+		]) {
+			const proof = collectLegacyProof(true, machine({ journaldMessages: [message] }).env);
+			expect(proof.suppressed).toBe(true);
+			expect(denied(proof)).toThrow(/legacy local-death proof/);
+		}
+		const clean = collectLegacyProof(
+			true,
+			machine({ journaldMessages: ["Time spent on flushing to /var is 2ms"] }).env,
+		);
+		expect(denied(clean)).not.toThrow();
+	});
+	it("a second server launched the normal way (bin/pi-web-ui) is a duplicate writer", () => {
+		const proof = collectLegacyProof(
+			true,
+			machine({
+				extraProcesses: [
+					{ pid: 4242, args: ["/home/shinelay/.nvm/versions/node/v22.22.0/bin/node", bin, "--no-browser"] },
+				],
+			}).env,
+		);
+		expect(proof.duplicates).toEqual([4242]);
+		expect(denied(proof)).toThrow(/legacy local-death proof/);
+	});
+	it("a legacy terminal event, a live legacy pid or an unquiescent reader deny", () => {
+		for (const [shape, quiescent] of [
+			[{ terminal: true }, true],
+			[{ legacyPidAlive: true }, true],
+			[{}, false],
+		] as [Shape, boolean][])
+			expect(denied(collectLegacyProof(quiescent, machine(shape).env))).toThrow(/legacy local-death proof/);
+	});
+	it("loaded-code identity comes from the collector's own file and fails closed", () => {
+		expect(() => collectLegacyProof(true, machine({ module: undefined }).env)).toThrow(
+			/installed source identity unavailable/,
+		);
+		expect(() => collectLegacyProof(true, machine({ moduleBytes: "swapped after startup" }).env)).toThrow(
+			/installed source changed after startup/,
+		);
+		const live = liveCollectorEnv();
+		expect(live.module?.path).toMatch(/\/server\/decision-recovery\.ts$/);
+		expect(live.module?.hash).toBe(sha256(readFileSync(live.module!.path)));
+		expect(live.self.pid).toBe(process.pid);
+	});
+	it("the service identity must be systemd's main process", () => {
+		expect(() => collectLegacyProof(true, machine({ systemdPid: 1 }).env)).toThrow(/current service identity mismatch/);
+	});
+	it("read-only queries fail closed on stderr, a non-zero exit or a missing command", () => {
+		expect(runReadOnly("sh", ["-c", "printf ok"]).toString("utf8")).toBe("ok");
+		expect(() => runReadOnly("sh", ["-c", "printf ok; printf warn >&2"])).toThrow(
+			/legacy evidence query unavailable: sh/,
+		);
+		expect(() => runReadOnly("sh", ["-c", "exit 3"])).toThrow(/legacy evidence query unavailable: sh/);
+		expect(() => runReadOnly("/nonexistent/h7-fix-command", [])).toThrow(/legacy evidence query unavailable/);
 	});
 });

@@ -14,8 +14,9 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { localDay } from "./decision-records.js";
 import { safeCount, validLocalCall, type LocalCall, type Reservation } from "./decision-batch-budget.js";
 
@@ -48,9 +49,15 @@ export const H7 = Object.freeze({
 export const H7_NONCE = `${H7.operation}:${H7.task}:${H7.chunk}:${H7.at}`;
 const PLAN_DIR = "/home/shinelay/company-lab/shared/decisions-page-replay-2026-10-10";
 const REPO = "/home/shinelay/projects/pi-web-ui";
-const loadedScript =
-	process.argv[1] && /\/dist\/server\/index\.js$/.test(process.argv[1]) ? resolve(process.argv[1]) : undefined;
-const loadedSourceHash = loadedScript ? sha256(readFileSync(loadedScript)) : undefined;
+/** The collector's own loaded file. The service starts via bin/pi-web-ui, so argv[1] never names the server code. */
+const loadedModule = (() => {
+	try {
+		const path = fileURLToPath(import.meta.url);
+		return { path, hash: sha256(readFileSync(path)) };
+	} catch {
+		return undefined;
+	}
+})();
 export function sha256(value: string | Buffer): string {
 	return createHash("sha256").update(value).digest("hex");
 }
@@ -67,12 +74,15 @@ export function canonical(value: unknown): string {
 	}
 	throw new Error("non-canonical recovery metadata");
 }
-export function localProcess(): Omit<LocalCall, "ref" | "day"> {
-	const stat = readFileSync(`/proc/${process.pid}/stat`, "utf8");
+export function localProcess(
+	pid = process.pid,
+	invocation = process.env.INVOCATION_ID ?? "foreground",
+): Omit<LocalCall, "ref" | "day"> {
+	const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
 	const start = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
 	return {
-		invocation: process.env.INVOCATION_ID ?? "foreground",
-		pid: process.pid,
+		invocation,
+		pid,
 		start,
 		boot: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(),
 	};
@@ -357,45 +367,95 @@ export function parseRecoveryCommand(value: unknown): RecoveryCommand | undefine
 	return r as unknown as RecoveryCommand;
 }
 export function isDecisionServiceProcess(args: string[]): boolean {
-	return args.some((arg) => /(?:^|\/)(?:dist\/server\/index\.js|server\/index\.(?:ts|js))$/.test(arg));
+	// The unit starts the server through the bin launcher (bin/pi-web-ui -> bin/pi-web-ui.mjs): count every launch shape.
+	return args.some((arg) =>
+		/(?:^|\/)(?:bin\/pi-web-ui(?:\.mjs)?|dist\/server\/index\.js|server\/index\.(?:ts|js))$/.test(arg),
+	);
+}
+
+/** Everything the collector reads from the machine. Injectable only so fixed fixtures run the same code. */
+export interface CollectorEnv {
+	/** Read-only command; throws unless it exits 0 with empty stderr. */
+	run(command: string, args: string[], cwd?: string): Buffer;
+	/** Same-UID processes with their argv. */
+	processes(): { pid: number; args: string[] }[];
+	pidAlive(pid: number): boolean;
+	/** The service process doing the recovery. */
+	self: Omit<LocalCall, "ref" | "day">;
+	/** The collector's own loaded file and its hash at module load. */
+	module: { path: string; hash: string } | undefined;
+	read(file: string): Buffer;
+}
+/** No shell, 10 s per query; any stderr (journal truncation/corruption notices included) fails closed. */
+export function runReadOnly(command: string, args: string[], cwd?: string): Buffer {
+	const r = spawnSync(command, args, {
+		cwd,
+		timeout: 10_000,
+		maxBuffer: 128 * 1024 * 1024,
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	if (r.error || r.status !== 0 || r.signal || r.stderr.length !== 0)
+		throw new Error(`legacy evidence query unavailable: ${command}`);
+	return r.stdout;
+}
+function liveProcesses(): { pid: number; args: string[] }[] {
+	const found: { pid: number; args: string[] }[] = [];
+	for (const name of readdirSync("/proc")) {
+		if (!/^\d+$/.test(name)) continue;
+		try {
+			if (process.getuid && lstatSync(`/proc/${name}`).uid !== process.getuid()) continue;
+			found.push({ pid: Number(name), args: readFileSync(`/proc/${name}/cmdline`, "utf8").split("\0") });
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code !== "ENOENT" && code !== "ESRCH") throw new Error("process census incomplete");
+		}
+	}
+	return found;
+}
+export function liveCollectorEnv(self = localProcess()): CollectorEnv {
+	return {
+		run: runReadOnly,
+		processes: liveProcesses,
+		pidAlive: (pid) => existsSync(`/proc/${pid}`),
+		self,
+		module: loadedModule,
+		read: trustedFile,
+	};
 }
 
 /** Production metadata collector: called INSIDE exclusion, never caller-supplied evidence. */
-export function collectLegacyProof(quiescent: boolean): LegacyProof {
+export function collectLegacyProof(quiescent: boolean, env: CollectorEnv = liveCollectorEnv()): LegacyProof {
 	const at = Date.now();
-	const current = localProcess();
-	const systemd = execFileSync(
-		"systemctl",
-		["--user", "show", "pi-web-ui.service", "-p", "MainPID", "-p", "InvocationID"],
-		{ encoding: "utf8", timeout: 5_000 },
-	);
-	if (!systemd.includes(`MainPID=${process.pid}\n`) || !systemd.includes(`InvocationID=${current.invocation}\n`))
+	const current = env.self;
+	const text = (command: string, args: string[], cwd?: string) => env.run(command, args, cwd).toString("utf8");
+	const jsonLines = (raw: string) =>
+		raw
+			.trim()
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line) as Record<string, string>);
+	const systemd = text("systemctl", ["--user", "show", "pi-web-ui.service", "-p", "MainPID", "-p", "InvocationID"]);
+	if (!systemd.includes(`MainPID=${current.pid}\n`) || !systemd.includes(`InvocationID=${current.invocation}\n`))
 		throw new Error("current service identity mismatch");
-	// Verify journal storage, then retain payload-free rows only. Any suppression is a denial.
-	execFileSync("journalctl", ["--user", "--verify", "--quiet"], { timeout: 10_000, stdio: "pipe" });
-	const raw = execFileSync(
-		"journalctl",
-		[
+	const until = `@${Math.floor(at / 1000)}`;
+	// Payload-free use only: rows are reduced to ids, times and lifecycle phases below.
+	const rows = jsonLines(
+		text("journalctl", [
 			"--user",
 			"-u",
 			"pi-web-ui.service",
 			"--since",
 			"2026-10-11 00:00:00 UTC",
 			"--until",
-			`@${Math.floor(at / 1000)}`,
+			until,
 			"--no-pager",
 			"-o",
 			"json",
-		],
-		{ encoding: "utf8", timeout: 10_000, maxBuffer: 128 * 1024 * 1024 },
+		]),
 	);
-	const rows = raw
-		.trim()
-		.split("\n")
-		.filter(Boolean)
-		.map((line) => JSON.parse(line) as Record<string, string>);
 	const old = rows.filter((r) => r._SYSTEMD_INVOCATION_ID === H7.legacyInvocation && Number(r._PID) === H7.legacyPid);
 	if (!old.length) throw new Error("legacy invocation startup missing");
+	const since = `@${Math.floor(Number(old[0].__REALTIME_TIMESTAMP) / 1_000_000) - 1}`;
 	const bootUUID = (hex: string) => hex.replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, "$1-$2-$3-$4-$5");
 	const meta = (r: Record<string, string>, stamp?: number): JournalStart => ({
 		at: stamp ?? Math.floor(Number(r.__REALTIME_TIMESTAMP) / 1000),
@@ -405,27 +465,38 @@ export function collectLegacyProof(quiescent: boolean): LegacyProof {
 		boot: bootUUID(r._BOOT_ID),
 		monotonic: r.__MONOTONIC_TIMESTAMP,
 	});
-	// Unfiltered cursor-only rows prove coverage; no messages/model bodies are requested here.
-	const coverageRaw = execFileSync(
-		"journalctl",
-		[
-			"--user",
+	// Coverage comes from the FULL readable journal: journald numbers system and user entries from one shared
+	// counter, so the --user view always has gaps. No --verify (27 s here, and synchronous in the server): one
+	// sequence stream with zero gaps, empty stderr and no journald suppression/corruption notice stand in for it.
+	const coverage = jsonLines(
+		text("journalctl", [
 			"--since",
-			`@${Math.floor(Number(old[0].__REALTIME_TIMESTAMP) / 1_000_000) - 1}`,
+			since,
 			"--until",
-			`@${Math.floor(at / 1000)}`,
+			until,
 			"--no-pager",
 			"-o",
 			"json",
 			"--output-fields=__CURSOR,__REALTIME_TIMESTAMP,_BOOT_ID",
-		],
-		{ encoding: "utf8", timeout: 10_000, maxBuffer: 128 * 1024 * 1024 },
+		]),
+	).map((r) => r.__CURSOR);
+	const journaldNotices = jsonLines(
+		text("journalctl", [
+			"-t",
+			"systemd-journald",
+			"--since",
+			since,
+			"--until",
+			until,
+			"--no-pager",
+			"-o",
+			"json",
+			"--output-fields=MESSAGE",
+		]),
 	);
-	const coverage = coverageRaw
-		.trim()
-		.split("\n")
-		.filter(Boolean)
-		.map((line) => JSON.parse(line).__CURSOR as string);
+	let suppressed = journaldNotices.some(
+		(r) => typeof r.MESSAGE === "string" && /suppressed \d+ messages|corrupt/i.test(r.MESSAGE),
+	);
 	const streams = new Map<string, bigint[]>();
 	for (const cursor of coverage) {
 		const match = /^s=([a-f0-9]+);i=([a-f0-9]+);/.exec(cursor);
@@ -444,7 +515,6 @@ export function collectLegacyProof(quiescent: boolean): LegacyProof {
 	const relevant = rows.filter((r) => Number(r.__REALTIME_TIMESTAMP) >= Number(old[0].__REALTIME_TIMESTAMP));
 	const starts: JournalStart[] = [];
 	let terminals = 0,
-		suppressed = false,
 		stoppedUsec = "",
 		started = false;
 	const selected: unknown[] = [];
@@ -471,37 +541,29 @@ export function collectLegacyProof(quiescent: boolean): LegacyProof {
 		)
 			terminals++;
 	}
-	const duplicates: number[] = [];
-	for (const name of readdirSync("/proc")) {
-		if (!/^\d+$/.test(name) || Number(name) === process.pid) continue;
-		try {
-			if (process.getuid && lstatSync(`/proc/${name}`).uid !== process.getuid()) continue;
-			const args = readFileSync(`/proc/${name}/cmdline`, "utf8").split("\0");
-			if (isDecisionServiceProcess(args)) duplicates.push(Number(name));
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT" && (error as NodeJS.ErrnoException).code !== "ESRCH")
-				throw new Error("process census incomplete");
-		}
-	}
-	const evidence = JSON.parse(trustedFile(join(PLAN_DIR, "H7-RECOVERY-EVIDENCE.json")).toString("utf8"));
+	const duplicates = env
+		.processes()
+		.filter((p) => p.pid !== current.pid && isDecisionServiceProcess(p.args))
+		.map((p) => p.pid);
+	const evidence = JSON.parse(env.read(join(PLAN_DIR, "H7-RECOVERY-EVIDENCE.json")).toString("utf8"));
 	let legacySourceVerified = true;
 	for (const [path, hash] of Object.entries(evidence.sourceSha256) as [string, string][]) {
 		const relative = path.slice(`${REPO}/`.length);
 		if (resolve(REPO, relative) !== path || (!relative.startsWith("server/") && !relative.startsWith("tests/unit/")))
 			throw new Error("legacy source path mismatch");
-		const source = execFileSync("git", ["show", `${H7.legacyHead}:${relative}`], { cwd: REPO, timeout: 5_000 });
+		const source = env.run("git", ["show", `${H7.legacyHead}:${relative}`], REPO);
 		if (sha256(source) !== hash) legacySourceVerified = false;
 	}
-	if (!loadedScript || !loadedSourceHash) throw new Error("installed source identity unavailable");
-	const runtimeHash = sha256(trustedFile(loadedScript));
-	if (runtimeHash !== loadedSourceHash) throw new Error("installed source changed after startup");
+	if (!env.module) throw new Error("installed source identity unavailable");
+	const runtimeHash = sha256(env.read(env.module.path));
+	if (runtimeHash !== env.module.hash) throw new Error("installed source changed after startup");
 	return {
 		at,
 		current,
 		oldInvocation: H7.legacyInvocation,
 		oldPid: H7.legacyPid,
 		oldStart: meta(old[0]),
-		oldPidAbsent: !existsSync(`/proc/${H7.legacyPid}`),
+		oldPidAbsent: !env.pidAlive(H7.legacyPid),
 		duplicates,
 		quiescent,
 		complete:
@@ -509,7 +571,7 @@ export function collectLegacyProof(quiescent: boolean): LegacyProof {
 			started &&
 			old.some((r) => Number(r.__REALTIME_TIMESTAMP) < H7.at * 1000) &&
 			relevant.every((r) => cursorSet.has(r.__CURSOR)),
-		gapped: coverage.length === 0 || sequenceGaps !== 0,
+		gapped: coverage.length === 0 || streams.size !== 1 || sequenceGaps !== 0,
 		suppressed,
 		starts,
 		terminals,
