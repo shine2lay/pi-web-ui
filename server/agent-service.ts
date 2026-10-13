@@ -421,6 +421,7 @@ import {
 	previewExistingQueueLaunch,
 	makeChain,
 	type QueueChatStart,
+	queueCoordinator,
 	waitUntil,
 	wakeRefusal,
 } from "./queue-host.js";
@@ -6006,7 +6007,17 @@ export class ClientSession {
 			const askId = `stuck-${++ClientSession.stuckSeq}`;
 			ClientSession.stuckAsks.set(key, { askId, sig: stuckSig(w), target: w.target });
 			askHub.add(
-				stuckAsk(askId, { taskId: w.taskId, taskTitle: w.taskTitle, question: w.question, choices: w.choices }, w.meta),
+				stuckAsk(
+					askId,
+					{
+						taskId: w.taskId,
+						taskTitle: w.taskTitle,
+						question: w.question,
+						choices: w.choices,
+						...(w.detail ? { detail: w.detail } : {}),
+					},
+					w.meta,
+				),
 				(answers, from) => ClientSession.answerStuck(askId, w.target, stuckTextFrom(answers), from),
 			);
 		}
@@ -16372,6 +16383,12 @@ export class AgentService {
 			closeChat: (file) => this.queueCloseChat(file),
 			chatState: async (file) => this.queueChatState(file),
 			wakeChat: (file, note) => this.queueWakeChat(file, note),
+			// task-question decisions (rule 21): Ops's home chat, from the roles' identity.json (owner-only).
+			// "none" only when there's no Ops role and no identities/ops folder at all (rule 21 can't apply).
+			coordinator: () => {
+				const reg = identityRegistry();
+				return queueCoordinator(reg.identities, existsSync, existsSync(join(reg.dir, "ops")));
+			},
 		});
 	}
 

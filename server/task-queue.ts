@@ -78,6 +78,18 @@ export const TASK_QUEUE_MAX_DONE = 20;
 const PART_MAX = 4000;
 /** 问题 / 总结的字数上限（pi-queue 自己把「停了两次」的问题截在 400）。 */
 const NOTE_MAX = 2000;
+/** task-question decisions (rule 21): pi-queue's OWNER_DETAIL_MAX; it refuses a longer owner package. */
+export const DETAIL_MAX = 12_000;
+
+/** A stuck question's package (rule 21): whole, or, past DETAIL_MAX, a notice instead (never clipped). */
+export function detailOf(raw: unknown): string | undefined {
+	if (typeof raw !== "string" || !raw.trim()) return undefined;
+	if (raw.length <= DETAIL_MAX) return raw;
+	return (
+		`This question came with ${raw.length} characters of context, more than the ${DETAIL_MAX} that can be shown, ` +
+		"so none of it is shown here (it is never cut short). Ask Ops for the whole picture before you answer."
+	);
+}
 
 type PauseReason = NonNullable<UiTaskQueue["pausedReason"]>;
 const PAUSE_REASONS = new Set<PauseReason>(["user", "stopped", "error", "restart", "finished"]);
@@ -485,6 +497,8 @@ function apply(s: State, raw: unknown): void {
 			task.lane = undefined;
 			task.question = undefined;
 			task.choices = undefined;
+			task.detail = undefined;
+			task.askOps = undefined;
 			task.mainAnswered = undefined;
 			task.wait = undefined;
 			task.block = undefined;
@@ -510,6 +524,8 @@ function apply(s: State, raw: unknown): void {
 			task.status = "working";
 			task.question = undefined;
 			task.choices = undefined;
+			task.detail = undefined;
+			task.askOps = undefined;
 			task.wait = undefined;
 			task.block = undefined;
 			// queue-main-chat: back at work with its main chat's answer (pi-queue's resume `answered`).
@@ -529,6 +545,11 @@ function apply(s: State, raw: unknown): void {
 			const choices = normChoices(op.choices);
 			if (choices.length) task.choices = choices;
 			else delete task.choices;
+			// task-question decisions: the package Ops (or an in-chat task) gave the owner with it.
+			const detail = detailOf(op.detail);
+			if (detail) task.detail = detail;
+			else delete task.detail;
+			task.askOps = undefined;
 			task.mainAnswered = undefined;
 			task.wait = undefined;
 			task.block = undefined;
@@ -543,6 +564,9 @@ function apply(s: State, raw: unknown): void {
 			if (task.status === "ready" || n < 1 || num(op.ts) <= 0) return;
 			task.status = "asking";
 			task.question = str(op.question, NOTE_MAX);
+			task.detail = undefined;
+			// task-question decisions (rule 21): asked Ops, not its main chat.
+			task.askOps = op.to === "ops" ? true : undefined;
 			const choices = normChoices(op.choices);
 			if (choices.length) task.choices = choices;
 			else delete task.choices;
@@ -565,6 +589,8 @@ function apply(s: State, raw: unknown): void {
 			task.status = "waiting";
 			task.question = undefined;
 			task.choices = undefined;
+			task.detail = undefined;
+			task.askOps = undefined;
 			task.mainAnswered = undefined;
 			task.wait = wait;
 			task.startedAt ??= since;
@@ -587,11 +613,17 @@ function apply(s: State, raw: unknown): void {
 			task.status = "blocked";
 			task.question = undefined;
 			task.choices = undefined;
+			task.detail = undefined;
+			task.askOps = undefined;
 			task.mainAnswered = undefined;
 			task.wait = undefined;
 			task.block = block;
 			return;
 		}
+		case "route":
+			// task-question decisions: an open question from before rule 21's routing went to Ops after all.
+			if (task.status === "asking") task.askOps = true;
+			return;
 		case "poke":
 			if (task.status !== "blocked" || !task.block || task.block.since !== op.since || task.block.poke) return;
 			task.block.poke = { at: num(op.ts), ...(op.ask === true ? { ask: true } : {}) };
@@ -611,6 +643,8 @@ function apply(s: State, raw: unknown): void {
 			task.status = "done";
 			task.question = undefined;
 			task.choices = undefined;
+			task.detail = undefined;
+			task.askOps = undefined;
 			task.mainAnswered = undefined;
 			task.wait = undefined;
 			task.block = undefined;

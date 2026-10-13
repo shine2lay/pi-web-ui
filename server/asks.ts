@@ -419,9 +419,11 @@ export interface StuckAskInput {
 	taskTitle: string;
 	question: string;
 	choices?: string[];
+	/** task-question decisions (rule 21): the whole package the question came with (Markdown). */
+	detail?: string;
 }
 
-/** A queued task that needs you: its question, its choices, and always a typed answer. */
+/** A queued task that needs you: its question, its choices, its package (rule 21), and always a typed answer. */
 export function stuckAsk(id: string, s: StuckAskInput, meta: AskMeta, now = Date.now()): Ask {
 	const choices = (s.choices ?? []).filter((c) => typeof c === "string" && c.trim());
 	return {
@@ -435,6 +437,7 @@ export function stuckAsk(id: string, s: StuckAskInput, meta: AskMeta, now = Date
 			{
 				id: "answer",
 				text: s.question,
+				...(typeof s.detail === "string" && s.detail.trim() ? { detail: s.detail } : {}),
 				options: choices.map((c) => ({ value: c, label: c })),
 				multi: false,
 				allowText: true,

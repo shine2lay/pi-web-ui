@@ -9,6 +9,8 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+	DETAIL_MAX,
+	detailOf,
 	normAfter,
 	normChoices,
 	normTouches,
@@ -1249,5 +1251,62 @@ describe("taskQueueCommandLine", () => {
 		expect(taskQueueCommandLine("up", -1)).toBeNull();
 		expect(taskQueueCommandLine("list", undefined)).toBeNull();
 		expect(taskQueueCommandLine("start now", undefined)).toBeNull();
+	});
+});
+
+/** task-question decisions (rule 21): questions to Ops, and the owner's package. */
+describe("taskQueueFromEntries (task-question decisions)", () => {
+	const byId = (q: ReturnType<typeof replay>, id: number) => q.tasks.find((t) => t.id === id);
+	const base = [
+		{ op: "add", id: 1, plan: plan("One") },
+		{ op: "run" },
+		{ op: "start", id: 1, lane: true },
+		{ op: "chat", id: 1, file: "/chats/one.jsonl", title: "Queue #1: One" },
+	];
+	const toOps = { op: "ask", id: 1, question: "Which port?", choices: ["8080", "9090"], n: 1, to: "ops" };
+	const pkg = "## Goal\nFaster page\n\n## Why the owner\nIt spends money.";
+
+	it("an ask to Ops is marked; one to the main chat (no `to`) isn't", () => {
+		expect(byId(replay(entries([...base, toOps])), 1)).toMatchObject({ status: "asking", askOps: true });
+		const { to: _, ...toMain } = toOps;
+		expect(byId(replay(entries([...base, toMain])), 1)?.askOps).toBeUndefined();
+		expect(byId(replay(entries([...base, { ...toOps, to: "owner" }])), 1)?.askOps).toBeUndefined();
+	});
+
+	it("a route sends an open question from before to Ops; it means nothing for a task not asking", () => {
+		const { to: _, ...old } = toOps;
+		expect(byId(replay(entries([...base, old, { op: "route", id: 1 }])), 1)?.askOps).toBe(true);
+		expect(byId(replay(entries([...base, { op: "route", id: 1 }])), 1)).toMatchObject({ status: "working" });
+		expect(byId(replay(entries([...base, { op: "route", id: 1 }])), 1)?.askOps).toBeUndefined();
+	});
+
+	it("a stuck question keeps its whole package as detail; past the limit a notice replaces it, never a clipped part", () => {
+		const stuck = {
+			op: "stuck",
+			id: 1,
+			question: "Approve $40?",
+			choices: ["Approve $40", "Don't spend"],
+			detail: pkg,
+		};
+		const q = byId(replay(entries([...base, toOps, stuck])), 1);
+		expect(q).toMatchObject({ status: "stuck", detail: pkg });
+		expect(q?.askOps).toBeUndefined();
+		const big = "x".repeat(DETAIL_MAX + 1);
+		const shown = byId(replay(entries([...base, { ...stuck, detail: big }])), 1)?.detail ?? "";
+		expect(shown).toMatch(/^This question came with 12001 characters of context, more than the 12000/);
+		expect(shown).not.toContain("xxx");
+		expect(detailOf("x".repeat(DETAIL_MAX))).toHaveLength(DETAIL_MAX);
+		for (const bad of [undefined, "", "  ", 7, { text: pkg }]) expect(detailOf(bad)).toBeUndefined();
+		// A later stuck without a package, a new ask, an answer or done: the package goes. (A stuck task can't
+		// go on hold straight away; it is answered first, which already drops the package.)
+		for (const next of [
+			{ op: "stuck", id: 1, question: "Port?" },
+			{ ...toOps, n: 2 },
+			{ op: "resume", id: 1 },
+			{ op: "done", id: 1, summary: "ok" },
+		]) {
+			const t = byId(replay(entries([...base, stuck, next])), 1);
+			expect(t?.detail, next.op).toBeUndefined();
+		}
 	});
 });

@@ -373,6 +373,12 @@ export interface UiTaskQueueTask {
 	question?: string;
 	/** telegram-answers: stuck: answers the user can pick with one tap (they can always type their own). */
 	choices?: string[];
+	/** task-question decisions (rule 21): stuck: the whole package the question came with (Markdown: goal,
+	 *  progress, decided, why only the owner can decide, every related open question, what each answer
+	 *  authorizes, the recommendation), never clipped; a notice instead when it can't be shown whole. */
+	detail?: string;
+	/** task-question decisions (rule 21): asking: the question is with Ops (its coordinator chat), not the main chat. */
+	askOps?: boolean;
 	/** queue-main-chat: working again with its main chat's answer to its last question (a Telegram ask for
 	 *  that question then goes away saying so). */
 	mainAnswered?: boolean;
@@ -1850,6 +1856,8 @@ export interface UiRoleTask {
 	chat?: { file: string; title?: string };
 	/** On hold: what it waits on; blocked: what it is blocked on. */
 	waitsOn?: string;
+	/** task-question decisions (rule 21): asking: its question is with Ops, not its main chat. */
+	askOps?: boolean;
 	/** Its chat is working now. */
 	busy?: boolean;
 	/** The newest TL;DR line of its own chat. */

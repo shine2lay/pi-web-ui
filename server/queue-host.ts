@@ -26,11 +26,20 @@
  *    "<queue chat title> #4") for the queue whose chat is `file` and its task `self`: {refs} with how each
  *    stands, or {problem} (unknown, the task itself, a loop). queue-blocks.ts.
  *  - watchQueue(file) (queue-blocked): the background check looks at that queue from now on.
+ *  - coordinator() (task-question decisions, AGENTS.md rule 21): the chat that decides queued tasks'
+ *    questions: the Ops role's home chat, {id: "ops", file, title}, read from the roles' identity.json
+ *    files (owner-only), never from a model's words; undefined while the Ops role has no usable home chat
+ *    (none set, or its transcript isn't on disk) or the lookup failed: pi-queue routes every task question
+ *    to it and parks the question (nothing goes to the owner by itself) while it is undefined. "none" when
+ *    this machine has no Ops role at all (no role "ops" and no identities/ops folder): rule 21 can't apply,
+ *    and pi-queue keeps its older flow (the main chat, then the owner), as on the command line.
+ *    queueCoordinator().
  *
  * This file is the glue: it checks what the extension hands in and serializes the work. The chats
  * themselves are opened by AgentService / ClientSession (agent-service.ts).
  */
 
+import { existsSync } from "node:fs";
 import { consumeOwnerSetting } from "./queue-owner.js";
 import { checkPatch, normLaunch, QueueLaunchRefused } from "./queue-profile.js";
 import type { ChatSpeed, UiTaskLaunch } from "./protocol.js";
@@ -72,6 +81,38 @@ export interface QueueHostImpl {
 	/** queue-blocked: see the header. */
 	queueRefs?(req: QueueRefsRequest): Promise<QueueRefsResult>;
 	watchQueue?(file: string): void;
+	/** task-question decisions: see the header (queueCoordinator). */
+	coordinator?(): QueueCoordinator | "none" | undefined;
+}
+
+/** task-question decisions (rule 21): the chat that decides queued tasks' questions. */
+export interface QueueCoordinator {
+	id: "ops";
+	/** Its transcript (absolute path). */
+	file: string;
+	title?: string;
+}
+
+/** The role whose home chat decides queued tasks' questions (AGENTS.md rule 21: "ask the ops"). */
+export const COORDINATOR_ROLE = "ops";
+
+/**
+ * task-question decisions: the coordinator, from the roles as identity.json gives them (owner-only
+ * files): role "ops" with a home chat whose transcript is on disk. "none" when there is no Ops role at all
+ * (none loaded and `opsFolder` false: no identities/ops folder); undefined otherwise (an Ops role, or its
+ * folder, without a usable home chat: its questions wait).
+ */
+export function queueCoordinator(
+	identities: ReadonlyArray<{ id: string; title?: string; homeChat: string | null }>,
+	exists: (file: string) => boolean = existsSync,
+	opsFolder = true,
+): QueueCoordinator | "none" | undefined {
+	const ops = identities.find((i) => i.id === COORDINATOR_ROLE);
+	if (!ops && !opsFolder) return "none";
+	const file = ops?.homeChat;
+	if (!ops || !file || !file.startsWith("/") || file.length > 1000 || !exists(file)) return undefined;
+	const title = typeof ops.title === "string" ? ops.title.trim().slice(0, 200) : "";
+	return { id: "ops", file, ...(title ? { title } : {}) };
 }
 
 /** queue-blocked: what queueRefs gets, checked. */
@@ -270,6 +311,22 @@ export function installQueueHost(impl: QueueHostImpl): () => void {
 							}));
 						} catch (err) {
 							return Promise.resolve({ problem: `couldn't look the tasks up (${asError(err).message})` });
+						}
+					},
+				}
+			: {}),
+		...(impl.coordinator
+			? {
+					// A fresh, frozen copy each time: the extension can't change what the next caller gets.
+					coordinator: (): QueueCoordinator | "none" | undefined => {
+						try {
+							const c = impl.coordinator!();
+							if (c === "none") return "none";
+							if (!c || c.id !== COORDINATOR_ROLE || typeof c.file !== "string" || !c.file.startsWith("/"))
+								return undefined;
+							return Object.freeze({ id: "ops" as const, file: c.file, ...(c.title ? { title: c.title } : {}) });
+						} catch {
+							return undefined;
 						}
 					},
 				}

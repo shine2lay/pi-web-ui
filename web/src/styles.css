@@ -3384,6 +3384,35 @@ button.rolemsg-fold:focus-visible {
 .task-queue-asking {
 	margin-top: 2px;
 }
+/* task-question decisions (rule 21): the whole package a question for the owner came with: open, readable,
+   scrolling on its own (keyboard-focusable) so a long one doesn't push the answer off a phone screen. */
+.task-queue-question-detail {
+	border-left: 2px solid var(--amber-fg);
+	padding-left: 6px;
+	font-size: 12px;
+}
+.task-queue-question-detail > summary {
+	cursor: pointer;
+	color: var(--text-dim);
+	font-size: 11px;
+}
+.task-queue-question-detail-body {
+	max-height: min(50vh, 420px);
+	overflow-y: auto;
+	overflow-wrap: anywhere;
+}
+/* The package's own headings stay small in the narrow panel: bold, a little larger than its text. */
+.task-queue-question-detail-body :is(h1, h2, h3, h4) {
+	font-size: 13px;
+	margin: 8px 0 2px;
+}
+.task-queue-question-detail-body :is(p, ul, ol) {
+	margin: 2px 0 6px;
+}
+.task-queue-question-detail-body:focus-visible {
+	outline: 2px solid var(--accent, var(--amber-fg));
+	outline-offset: 1px;
+}
 /* queue-blocked: a blocked task: the theme's cyan edge and badge (not Needs you's amber, not the blue of the
    main chat's answers), and one line saying what it waits on. */
 .task-queue-task.blocked {

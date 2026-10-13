@@ -109,6 +109,28 @@ describe("TaskQueuePanel", () => {
 		expect(render(q(stuck.tasks, { available: false }), { onAnswer: noop })).not.toContain("task-queue-answer");
 	});
 
+	// task-question decisions (rule 21): a question Ops passed on shows its whole package with it.
+	it("shows a stuck question's package open beside it, as Markdown in a labelled region reachable by keyboard; raw HTML stays text", () => {
+		const detail = "## Goal\nFaster page\n\n- **Approve $40**: a paid load test\n\n<script>alert(1)</script>";
+		const html = render(
+			q([task(1, "stuck", { question: "Approve $40?", choices: ["Approve $40", "Don't spend"], detail })]),
+			{ onAnswer: noop },
+		);
+		expect(html).toContain('<details class="task-queue-question-detail" open="">');
+		expect(html).toContain("<summary>The whole picture, to decide from</summary>");
+		expect(html).toMatch(
+			/class="task-queue-question-detail-body" tabindex="0" role="region" aria-label="The whole picture, to decide from"/,
+		);
+		expect(html).toContain("<strong>Approve $40</strong>");
+		expect(html).not.toContain("<script>");
+		// The question and the answer box are still there, below it.
+		expect(html.indexOf("task-queue-question-detail")).toBeLessThan(html.indexOf("task-queue-answer"));
+		// No package: no box.
+		expect(render(q([task(1, "stuck", { question: "Q?" })]), { onAnswer: noop })).not.toContain(
+			"task-queue-question-detail",
+		);
+	});
+
 	it("gives waiting tasks up, down and remove, with the ends disabled", () => {
 		const html = render(q([task(1, "ready"), task(2, "ready"), task(3, "ready")]), { onCommand: noop });
 		// Whole <button> tags, so the order of the attributes doesn't matter.
@@ -291,6 +313,16 @@ describe("TaskQueuePanel (lanes)", () => {
 		expect(own).toContain("Asking the main chat");
 		expect(own).not.toContain("needs-you");
 		expect(own).not.toContain("task-queue-answer");
+		// task-question decisions (rule 21): asking Ops says so, and still nothing for the user to answer.
+		const ops = render(q([{ ...asking, askOps: true }], { running: true }), {
+			onCommand: noop,
+			onOpenChat: noop,
+			onAnswer: noop,
+		});
+		expect(ops).toContain("Asking Ops");
+		expect(ops).not.toContain("Asking the main chat");
+		expect(ops).not.toContain("needs-you");
+		expect(ops).not.toContain("task-queue-answer");
 	});
 
 	it("shows the lanes-at-once setting, with buttons only for the queue's own controls", () => {

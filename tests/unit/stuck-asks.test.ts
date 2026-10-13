@@ -154,3 +154,38 @@ describe("wantedStuckAsks: a task asking its main chat", () => {
 		expect([...main.mainAnswered]).toEqual(["/t4.jsonl#4"]);
 	});
 });
+
+/** task-question decisions (rule 21): a question Ops passes on comes with its whole package. */
+describe("wantedStuckAsks / stuckSig: the owner package", () => {
+	it("the package rides along as detail, and a changed package is a new ask; without one the signature is as before", () => {
+		const stuck = task(4, {
+			status: "stuck",
+			question: "Approve $40?",
+			choices: ["Approve $40", "Don't spend"],
+			detail: "## Goal\nFaster page",
+		});
+		const { wanted } = wantedStuckAsks([src("/q.jsonl", [stuck])]);
+		expect(wanted.get("/q.jsonl#4")).toMatchObject({ question: "Approve $40?", detail: "## Goal\nFaster page" });
+		const bare = wantedStuckAsks([src("/q.jsonl", [{ ...stuck, detail: undefined }])]);
+		expect("detail" in bare.wanted.get("/q.jsonl#4")!).toBe(false);
+		// Old asks (no package) keep their signature, so an install doesn't re-ask every open question.
+		expect(stuckSig({ question: "Q", choices: ["A"] })).toBe(JSON.stringify(["Q", ["A"]]));
+		const a = stuckSig({ question: "Q", choices: ["A"], detail: "one" });
+		expect(a).not.toBe(stuckSig({ question: "Q", choices: ["A"] }));
+		expect(stuckSig({ question: "Q", choices: ["A"], detail: "two" })).not.toBe(a);
+		expect(stuckSig({ question: "Q", choices: ["A"], detail: "one" })).toBe(a);
+	});
+
+	it("a task asking Ops is no ask for the owner: its chat is listed as asking", () => {
+		const t = task(4, {
+			lane: true,
+			status: "asking",
+			askOps: true,
+			question: "Which port?",
+			chat: { file: "/t4.jsonl" },
+		});
+		const r = wantedStuckAsks([src("/q.jsonl", [t])]);
+		expect(r.wanted.size).toBe(0);
+		expect([...r.asking]).toEqual(["/t4.jsonl"]);
+	});
+});

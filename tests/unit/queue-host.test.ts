@@ -13,6 +13,7 @@ import {
 	makeChain,
 	parseQueueChatStart,
 	QUEUE_HOST_KEY,
+	queueCoordinator,
 	type QueueHost,
 	type QueueHostImpl,
 	WAKE_NOTE_MAX,
@@ -259,6 +260,33 @@ describe("installQueueHost", () => {
 		expect(i.closeChat).not.toHaveBeenCalled();
 	});
 
+	it("task-question decisions: hands pi-queue the coordinator as a fresh frozen copy; a bad or throwing one is none; no impl, no function", () => {
+		uninstall = installQueueHost(impl());
+		expect("coordinator" in (hostOnGlobal() as object)).toBe(false);
+		uninstall();
+		const coord = vi.fn(() => ({ id: "ops" as const, file: "/s/ops.jsonl", title: "Ops lead" }));
+		uninstall = installQueueHost({ ...impl(), coordinator: coord });
+		const host = hostOnGlobal() as QueueHost & { coordinator(): unknown };
+		const a = host.coordinator();
+		expect(a).toEqual({ id: "ops", file: "/s/ops.jsonl", title: "Ops lead" });
+		expect(Object.isFrozen(a)).toBe(true);
+		expect(host.coordinator()).not.toBe(a);
+		coord.mockReturnValueOnce({ id: "qa", file: "/s/qa.jsonl" } as never);
+		expect(host.coordinator()).toBeUndefined();
+		coord.mockReturnValueOnce({ id: "ops", file: "relative.jsonl" } as never);
+		expect(host.coordinator()).toBeUndefined();
+		coord.mockReturnValueOnce(undefined as never);
+		expect(host.coordinator()).toBeUndefined();
+		coord.mockImplementationOnce(() => {
+			throw new Error("registry gone");
+		});
+		expect(host.coordinator()).toBeUndefined();
+		expect(host.coordinator()).toEqual({ id: "ops", file: "/s/ops.jsonl", title: "Ops lead" });
+		// No Ops role on this machine at all: said so, for pi-queue's older flow.
+		coord.mockReturnValueOnce("none" as never);
+		expect(host.coordinator()).toBe("none");
+	});
+
 	it("takes down only its own host", () => {
 		const first = installQueueHost(impl());
 		const second = installQueueHost(impl());
@@ -267,5 +295,34 @@ describe("installQueueHost", () => {
 		expect(hostOnGlobal()).toBe(current);
 		second();
 		expect(hostOnGlobal()).toBeUndefined();
+	});
+});
+
+describe("queueCoordinator (rule 21: who decides queued tasks' questions)", () => {
+	const on = (f: string) => f.startsWith("/home/");
+	const ops = { id: "ops", title: " Ops lead ", homeChat: "/home/u/.pi/sessions/ops.jsonl" };
+	it("is the role ops's home chat from the identity files, only when its transcript is on disk", () => {
+		expect(queueCoordinator([{ id: "qa", homeChat: "/home/u/qa.jsonl" }, ops], on)).toEqual({
+			id: "ops",
+			file: "/home/u/.pi/sessions/ops.jsonl",
+			title: "Ops lead",
+		});
+		expect(queueCoordinator([{ ...ops, title: undefined }], on)).toEqual({ id: "ops", file: ops.homeChat });
+	});
+	it("is none without role ops, without a home chat, with a relative, too long or missing transcript", () => {
+		// Only the role id "ops" counts: a role titled Ops, or another role's home, never does.
+		expect(queueCoordinator([{ id: "qa", title: "Ops", homeChat: "/home/u/qa.jsonl" }], on)).toBeUndefined();
+		expect(queueCoordinator([{ ...ops, homeChat: null }], on)).toBeUndefined();
+		expect(queueCoordinator([{ ...ops, homeChat: "ops.jsonl" }], on)).toBeUndefined();
+		expect(queueCoordinator([{ ...ops, homeChat: `/home/${"x".repeat(1000)}` }], on)).toBeUndefined();
+		expect(queueCoordinator([{ ...ops, homeChat: "/gone/ops.jsonl" }], on)).toBeUndefined();
+		expect(queueCoordinator([], on)).toBeUndefined();
+	});
+	it('is "none" only with no Ops role and no identities/ops folder; a folder whose role didn\'t load still waits', () => {
+		expect(queueCoordinator([{ id: "qa", homeChat: "/home/u/qa.jsonl" }], on, false)).toBe("none");
+		expect(queueCoordinator([], on, false)).toBe("none");
+		expect(queueCoordinator([], on, true)).toBeUndefined();
+		expect(queueCoordinator([{ ...ops, homeChat: null }], on, false)).toBeUndefined();
+		expect(queueCoordinator([ops], on, false)).toMatchObject({ id: "ops" });
 	});
 });

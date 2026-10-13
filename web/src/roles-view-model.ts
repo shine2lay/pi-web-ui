@@ -172,7 +172,8 @@ export function taskWord(t: Translate, task: UiRoleTask, short = false): string 
 		case "working":
 			return t("rolesTaskWorking");
 		case "asking":
-			return t("rolesTaskAsking");
+			// task-question decisions (rule 21): the question is with Ops, not its main chat.
+			return t(task.askOps ? "rolesTaskAskingOps" : "rolesTaskAsking");
 		case "waiting":
 			return waitsOn ? t("rolesTaskOnHoldOn", { what: waitsOn }) : t("rolesTaskOnHold");
 		case "blocked":

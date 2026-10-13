@@ -998,6 +998,7 @@ function taskOf(t: UiTaskQueueTask, held?: UiTaskQueueHold): UiRoleTask {
 		title: t.plan.title,
 		...(t.chat ? { chat: { file: t.chat.file, ...(t.chat.title ? { title: t.chat.title } : {}) } } : {}),
 		...(waitsOn ? { waitsOn } : {}),
+		...(t.status === "asking" && t.askOps ? { askOps: true } : {}),
 		...(held ? { paused: { at: held.at, why: held.why } } : {}),
 	};
 }

@@ -11,6 +11,9 @@
  * queue-main-chat: a task asking its main chat ("asking") isn't an ask: the main chat has the question,
  * and only a question it passes on (or one that goes on by itself) makes the task stuck. An ask whose
  * question the main chat answered after all goes away saying so.
+ *
+ * task-question decisions (rule 21): a question Ops passes on to the owner comes with its whole package
+ * (`detail`); it is the question field's detail, and a changed package is a new ask.
  */
 import type { AskMeta } from "./asks.js";
 import type { UiTaskQueue, UiTaskQueueTask } from "./protocol.js";
@@ -32,6 +35,8 @@ export interface StuckWanted {
 	taskTitle: string;
 	question: string;
 	choices: string[];
+	/** task-question decisions: the package the question came with (task-queue.ts detailOf). */
+	detail?: string;
 	meta: AskMeta;
 }
 
@@ -42,9 +47,9 @@ export function stuckTarget(sourceFile: string, task: UiTaskQueueTask): string |
 	return task.lane ? task.chat?.file : sourceFile;
 }
 
-/** The same question with the same choices (a new question or new choices make a new ask). */
-export const stuckSig = (w: Pick<StuckWanted, "question" | "choices">): string =>
-	JSON.stringify([w.question, w.choices]);
+/** The same question with the same choices and package (a new question, choices or package make a new ask). */
+export const stuckSig = (w: Pick<StuckWanted, "question" | "choices" | "detail">): string =>
+	w.detail ? JSON.stringify([w.question, w.choices, w.detail]) : JSON.stringify([w.question, w.choices]);
 
 /**
  * The stuck tasks across these open chats (`wanted`, by key), and every task's status as its
@@ -92,6 +97,7 @@ export function wantedStuckAsks(sources: StuckSource[]): {
 				taskTitle: t.plan.title,
 				question: t.question ?? "",
 				choices: t.choices ?? [],
+				...(t.detail ? { detail: t.detail } : {}),
 				meta,
 			});
 		}

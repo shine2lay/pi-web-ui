@@ -681,7 +681,8 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 				{held && kind !== "done" && <PausedLine hold={held} whole={!task.hold} />}
 				{task.status === "asking" && (
 					<div className="task-queue-asking" title={task.question}>
-						<span className="task-queue-hint">{t("taskQueueAskingMain")}</span>
+						{/* task-question decisions (rule 21): the question is with Ops, not the main chat. */}
+						<span className="task-queue-hint">{t(task.askOps ? "taskQueueAskingOps" : "taskQueueAskingMain")}</span>
 					</div>
 				)}
 				{task.status === "blocked" && task.block && <BlockedLine block={task.block} onOpenChat={onOpenChat} />}
@@ -690,6 +691,21 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 						{/* queue-paused: a paused task doesn't need you while paused: resume it to answer. */}
 						{!held && <span className="task-queue-badge">{t("taskQueueNeedsYou")}</span>}
 						{task.question && <span className="task-queue-question-text">{task.question}</span>}
+						{task.detail && (
+							// task-question decisions (rule 21): the whole package, shown with the question (Markdown, no raw HTML).
+							<details className="task-queue-question-detail" open>
+								<summary>{t("taskQueueOwnerContext")}</summary>
+								<div
+									className="task-queue-question-detail-body"
+									// A region that scrolls on its own is reachable from the keyboard.
+									tabIndex={0}
+									role="region"
+									aria-label={t("taskQueueOwnerContext")}
+								>
+									<Markdown text={task.detail} />
+								</div>
+							</details>
+						)}
 						{held ? (
 							<span className="task-queue-hint">{t("taskQueuePausedAnswerLater")}</span>
 						) : onAnswer && queue.available ? (

@@ -266,4 +266,22 @@ describe("stuck queued tasks", () => {
 		expect(stuckTextFrom([{ id: "answer", selected: ["dev"] }])).toBe("dev");
 		expect(stuckTextFrom([{ id: "answer", selected: [], text: " my own " }])).toBe("my own");
 	});
+
+	it("rule 21: the package Ops passed on is the question's own detail, whole; none when there is none", () => {
+		const pkg = "## Goal\nShip it\n\n## Options\n- main: ...";
+		const ask = stuckAsk(
+			"stuck:/s/t.jsonl#3",
+			{ taskId: 3, taskTitle: "Ship it", question: "Which branch?", choices: ["main"], detail: pkg },
+			meta,
+		);
+		expect(ask.fields[0]?.detail).toBe(pkg);
+		for (const detail of [undefined, "", "  "]) {
+			const bare = stuckAsk(
+				"stuck:/s/t.jsonl#3",
+				{ taskId: 3, taskTitle: "Ship it", question: "Which branch?", detail },
+				meta,
+			);
+			expect("detail" in (bare.fields[0] ?? {})).toBe(false);
+		}
+	});
 });

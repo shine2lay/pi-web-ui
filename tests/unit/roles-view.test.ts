@@ -203,6 +203,8 @@ describe("what a row shows", () => {
 		expect(taskWord(t, task(1, "waiting", { waitsOn: "CI" }), true)).toBe("On hold");
 		expect(taskWord(t, task(1, "blocked", { waitsOn: "temper #38" }), true)).toBe("Blocked");
 		expect(taskWord(t, task(1, "asking"))).toBe("Asking its main chat");
+		// task-question decisions (rule 21): the question is with Ops.
+		expect(taskWord(t, task(1, "asking", { askOps: true }))).toBe("Asking Ops");
 		expect(taskWord(t, task(1, "stuck"))).toBe("Needs you");
 		expect(taskLook(task(1, "stuck"))).toBe("needs");
 		expect(taskLook(task(1, "ready", { busy: true }))).toBe("working");
