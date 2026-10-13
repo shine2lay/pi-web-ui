@@ -1,12 +1,20 @@
 // role-message-ladder (#122): the approval ladder wired over the native role messages, stage by stage on fixed
 // cases (rule 16). Real RoleMessages + real E core/store + real A adapters; only the chats and the clock are fake.
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AskHub } from "../../server/asks.js";
 import type { IdentityDef } from "../../server/identities.js";
-import { chooseGrant, RoleMessageGuardHost } from "../../server/role-message-guard-host.js";
+import {
+	chooseGrant,
+	GUARD_FILE_MAX_BYTES,
+	GUARD_RETENTION,
+	RoleMessageGuardHost,
+	type GuardHistoryLine,
+	type RoleMessageGuardHostOptions,
+} from "../../server/role-message-guard-host.js";
+import type { GuardStoreState } from "../../server/role-message-guard-contract.js";
 import {
 	ROLE_MESSAGE_CHAIN_MAX,
 	RoleMessages,
@@ -61,7 +69,7 @@ let C = "";
 let G = "";
 let data = "";
 
-async function world(prev?: World): Promise<World> {
+async function world(prev?: World, extra: Partial<RoleMessageGuardHostOptions> = {}): Promise<World> {
 	const w: World = prev
 		? { ...prev, changed: 0 }
 		: ({
@@ -100,6 +108,7 @@ async function world(prev?: World): Promise<World> {
 		},
 		log: (l) => w.logs.push(l),
 		now: clock,
+		...extra,
 	});
 	made.push(w.rm, w.host);
 	await w.host.start();
@@ -602,5 +611,178 @@ describe("ladder: unchanged limits", () => {
 		expect(r).toMatchObject({ ok: false });
 		expect("approvalRequired" in r).toBe(false);
 		expect((await other.approval(who(w, at.from, at.file), { action: "request" }, tc())).ok).toBe(false);
+	});
+});
+
+// Ops cap decision rm-efd6df89, fixed cases (a)-(f) (hypothesis H-ROLE-LADDER-CAPS-1).
+describe("ladder: storage caps", () => {
+	const stateOf = (w: World) =>
+		(w.host as unknown as { state_(): Promise<GuardStoreState | null> }).state_().then((s) => s!);
+
+	// Measured (H-ROLE-LADDER-CAPS-1, a miss): each business send keeps 5 transactions, 5 audit receipts, 1 outbox
+	// entry and ~15 KB of journal for a day, so the peak day (365) alone fills 91% of the 2000-transaction cap and
+	// peak day + one role at 20/h (845) would need 211%. H-ROLE-LADDER-CAPS-2: rotating at 40% keeps every store
+	// under half. Tested at a tenth of the caps so a day's volume overruns them several times over.
+	it("(a) a send's footprint is as measured, and rotation keeps a day of traffic under half of every cap", async () => {
+		const tenth = {
+			...GUARD_RETENTION,
+			maximumTransactions: GUARD_RETENTION.maximumTransactions / 10,
+			maximumAuditReceipts: GUARD_RETENTION.maximumAuditReceipts / 10,
+			maximumOutboxEntries: GUARD_RETENTION.maximumOutboxEntries / 10,
+		};
+		const w = await world(undefined, { retention: tenth });
+		const senders = ["alpha", "beta", "gamma"];
+		const N = 80; // 400 transactions without rotation: 200% of this run's cap
+		let worst = { ratio: 0, store: "" };
+		for (let i = 0; i < N; i++) {
+			const from = senders[i % 3];
+			const to = senders[(i + 1) % 3];
+			expect(await send(w, from, homes()[from], to, {}, ""), `send ${i + 1}`).toMatchObject({ ok: true });
+			const s = await stateOf(w);
+			if (i === 9) {
+				const f = Object.fromEntries(w.host.fills(s).map((x) => [x.name, x.used]));
+				expect(f.transactions / 10).toBeLessThanOrEqual(5);
+				expect(f["audit receipts"] / 10).toBeLessThanOrEqual(5);
+				expect(f["guard store file (bytes)"] / 10).toBeLessThanOrEqual(20_000);
+			}
+			for (const f of w.host.fills(s))
+				if (f.used / f.max > worst.ratio) worst = { ratio: f.used / f.max, store: `${f.name} after send ${i + 1}` };
+			now += 18 * 60_000; // 80 sends over 24 hours
+		}
+		expect(worst.ratio, worst.store).toBeLessThanOrEqual(0.5);
+		expect(w.logs.filter((l) => l.includes("guard store generation")).length).toBeGreaterThanOrEqual(4);
+		// With the live caps the same 40% trigger sits under half too.
+		expect(0.4).toBeLessThan(0.5);
+	}, 120_000);
+
+	it("(b) 15 roles with 20 open requests each fit the open-request cap at half", () => {
+		// E refuses a 21st open request per role (request_capacity); the store cap counts only open ones.
+		expect(15 * 20).toBeLessThanOrEqual(GUARD_RETENTION.maximumRequests / 2);
+		expect(15 * 20).toBeLessThanOrEqual(GUARD_RETENTION.maximumGrants / 2);
+		expect(GUARD_FILE_MAX_BYTES).toBe(16 * 1024 * 1024);
+	});
+
+	it("(c) usage older than an hour is pruned (never kept past 65 minutes)", async () => {
+		const w = await world();
+		for (let i = 0; i < 3; i++) expect(await send(w, "alpha", A, "beta", {}, "")).toMatchObject({ ok: true });
+		expect((await stateOf(w)).usage.length).toBeGreaterThanOrEqual(3);
+		now += 65 * 60_000;
+		expect(await send(w, "beta", B, "alpha", {}, "")).toMatchObject({ ok: true });
+		const usage = (await stateOf(w)).usage;
+		expect(usage.every((u) => now - u.committedAt < 65 * 60_000)).toBe(true);
+		expect(usage.length).toBeLessThan(3);
+	});
+
+	it("(d) a full store refuses with the store's name, counts nothing, and warns once at 80%", async () => {
+		// An open approval request stops rotation (it waits for quiescence), so the store can fill.
+		const w = await world(undefined, { retention: { ...GUARD_RETENTION, maximumTransactions: 60 } });
+		const at = await chainTo(w, 7);
+		expect(await ask(w, at.from, at.file, [at.to])).toMatchObject({ ok: true });
+		let full: Awaited<ReturnType<typeof send>> | null = null;
+		let before = { records: 0, hour: 0 };
+		let from = "";
+		for (let i = 0; i < 30 && !full; i++) {
+			from = i % 2 ? "gamma" : "beta";
+			before = { records: w.rm.recent(0).length, hour: w.rm.hourlyCount(from) };
+			const r = await send(w, from, homes()[from], "coo", {}, "");
+			if (!r.ok) full = r;
+		}
+		expect(full).toMatchObject({ ok: false, reason: "retention_capacity" });
+		const error = (full as { error: string }).error;
+		expect(error).toMatch(/storage is full \(transactions: \d+ of 60\)/);
+		expect(error).toContain("Tell Ops");
+		expect({ records: w.rm.recent(0).length, hour: w.rm.hourlyCount(from) }).toEqual(before);
+		const warnings = w.logs.filter((l) => l.includes("WARNING: transactions"));
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toMatch(/at (8\d|9\d|100)% \(\d+ of 60\)/);
+	});
+
+	it("(e) a context over 16 KB is refused whole with its size; 16 KB passes the size check", async () => {
+		const w = await world();
+		const at = await chainTo(w, 7);
+		const sized = (bytes: number) => {
+			const c = { ...context, goal: "" };
+			c.goal = "g".repeat(bytes - Buffer.byteLength(JSON.stringify(c)));
+			expect(Buffer.byteLength(JSON.stringify(c))).toBe(bytes);
+			return c;
+		};
+		const over = await w.host.approval(
+			who(w, at.from, at.file),
+			{ action: "request", recipients: [at.to], context: sized(16385) },
+			tc(),
+		);
+		expect(over).toMatchObject({ ok: false, details: { reason: "context_too_large", bytes: 16385 } });
+		expect(over.text).toContain("16385 bytes; at most 16384");
+		expect((await stateOf(w)).requests).toHaveLength(0);
+		const edge = await w.host.approval(
+			who(w, at.from, at.file),
+			{ action: "request", recipients: [at.to], context: sized(16384) },
+			tc(),
+		);
+		expect(edge.details?.reason).not.toBe("context_too_large");
+	});
+
+	it("(f) a reply to a message the store has pruned keeps its hop (and a restart keeps it)", async () => {
+		const w = await world();
+		await chainTo(w, 4); // alpha 1 -> beta 2 -> alpha 3 -> beta; beta's next is hop 4
+		const real = w.rm.recent(0).map((m) => m.id);
+		expect(real).toHaveLength(3);
+		const betaLast = lastIn(w, B);
+		w.rm.stop();
+		const file = join(data, "role-messages.json");
+		const stored = JSON.parse(readFileSync(file, "utf8")) as { messages: Array<Record<string, unknown>> };
+		const m0 = stored.messages[0];
+		for (let i = 0; i < 1000; i++)
+			stored.messages.push({
+				...m0,
+				id: `rm-f${i.toString(16).padStart(7, "0")}`,
+				from: { ...(m0.from as object), role: "filler" },
+				to: "filler",
+				at: now - 2 * 86_400_000,
+				state: "delivered",
+			});
+		writeFileSync(file, JSON.stringify(stored));
+		const w2 = await world(w);
+		// An unrelated send saves the store, which drops the oldest records: the whole real chain.
+		expect(await send(w2, "gamma", G, "coo", {}, "")).toMatchObject({ ok: true });
+		for (const id of real) expect(w2.rm.byId(id), id).toBeUndefined();
+		for (const id of real) expect(w2.rm.chainFact(id), id).toBeDefined();
+		expect(existsSync(join(data, "role-messages-chains.jsonl"))).toBe(true);
+		// Before the chain memory this was "can't be proved" (the native code even reset it to hop 0).
+		expect(await send(w2, "beta", B, "alpha", {}, betaLast)).toMatchObject({ ok: true }); // hop 4
+		expect(w2.rm.handlingDepth(B, betaLast)).toBe(3);
+		const w3 = await world(w2); // a restart reads the chain memory back
+		for (const id of real) expect(w3.rm.chainFact(id), id).toBeDefined();
+		let from = "alpha";
+		let to = "beta";
+		for (let h = 5; h <= 6; h++) {
+			expect(await send(w3, from, homes()[from], to), `hop ${h}`).toMatchObject({ ok: true });
+			[from, to] = [to, from];
+		}
+		expect(await send(w3, from, homes()[from], to)).toMatchObject({
+			ok: false,
+			approvalRequired: { hop: 7, tier: "lower" },
+		});
+	});
+
+	it("approval history: metadata only, one line per change, and a write failure never blocks", async () => {
+		const w = await world();
+		const at = await chainTo(w, 7);
+		const req = await ask(w, at.from, at.file, [at.to]);
+		await cooDecides(w, (req.details as { requestId: string }).requestId, "requested_quantity");
+		expect(await send(w, at.from, at.file, at.to)).toMatchObject({ ok: true });
+		const path = join(data, "role-message-guard", "history.jsonl");
+		const raw = readFileSync(path, "utf8");
+		const events = raw
+			.trim()
+			.split("\n")
+			.map((l) => (JSON.parse(l) as GuardHistoryLine).event);
+		expect(events).toEqual(["request", "decision", "grant", "grant_use"]);
+		expect(raw).not.toContain(context.goal);
+		// The history file can't be written (a folder in its place): sends and approvals go on.
+		rmSync(path);
+		mkdirSync(path);
+		expect(await send(w, at.to, homes()[at.to], at.from)).toMatchObject({ ok: true });
+		expect(w.logs.some((l) => l.includes("history not written"))).toBe(true);
 	});
 });

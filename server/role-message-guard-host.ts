@@ -127,10 +127,11 @@ export const GUARD_POLICY: GuardPolicyV1 = {
 	rollback: { depthThrough: 6, acceptedPerOrigin: 20, preserveAccepted: true },
 };
 
-/** Storage caps proposed to Ops (rm-1fe61704, measured live volume: ≤365 messages a day, ≤20 per role-hour). */
+/** Storage caps proposed to Ops (rm-1fe61704, measured live volume: ≤365 messages a day, ≤20 per role-hour) and
+ *  approved with changes (rm-efd6df89): requests and grants count only open requests and live grants, 600 each. */
 export const GUARD_RETENTION: GuardRetention = {
-	maximumRequests: 300,
-	maximumGrants: 300,
+	maximumRequests: 600,
+	maximumGrants: 600,
 	maximumTransactions: 2000,
 	maximumAuditReceipts: 2000,
 	maximumOutboxEntries: 2000,
@@ -142,10 +143,32 @@ export const GUARD_RETENTION: GuardRetention = {
 };
 /** Each guard file at most this many bytes (E fails closed past it). */
 export const GUARD_FILE_MAX_BYTES = 16 * 1024 * 1024;
+/** Approval history (Ops rm-efd6df89): metadata only, kept 30 days, at most 16 MiB plus one archive; never blocks. */
+export const GUARD_HISTORY_MAX_BYTES = 16 * 1024 * 1024;
+export const GUARD_HISTORY_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
+/** One log warning per store once it is this full; armed again once it falls below GUARD_WARN_REARM. */
+export const GUARD_WARN_AT = 0.8;
+export const GUARD_WARN_REARM = 0.7;
+const OPEN_REQUEST_STATES: readonly string[] = [
+	"context_needed",
+	"awaiting_approver",
+	"awaiting_owner",
+	"rate_limited",
+	"held",
+];
 /** Start a fresh generation once the accepted-message copy passes this (only when nothing is open). */
 export const GUARD_ROTATE_BYTES = 1024 * 1024;
 export const GUARD_ROTATE_MESSAGES = 300;
 export const GUARD_ROTATE_TOMBSTONES = 3000;
+/** Rotate once a store that only settled records fill reaches this share of its cap. */
+export const GUARD_ROTATE_AT = 0.4;
+const ROTATE_ON: readonly string[] = [
+	"transactions",
+	"audit receipts",
+	"outbox entries",
+	"tombstones",
+	"guard store file (bytes)",
+];
 
 const NO_HOLDS: GuardHolds = {
 	ownerPaused: false,
@@ -328,6 +351,28 @@ export interface RoleMessageGuardHostOptions {
 	now?: () => number;
 	/** Tests: smaller rotation thresholds. */
 	rotateBytes?: number;
+	/** Tests: a smaller history file before it rotates. */
+	historyMaxBytes?: number;
+	/** Tests: smaller storage caps (the live app uses GUARD_RETENTION). */
+	retention?: GuardRetention;
+}
+
+/** One line of the approval history (history.jsonl): metadata only, never the context's words. */
+export interface GuardHistoryLine {
+	at: number;
+	event: "request" | "escalation" | "decision" | "grant" | "grant_use" | "grant_end" | "revoked_all";
+	requestId?: string;
+	generation?: string;
+	requester?: string;
+	tier?: string;
+	state?: string;
+	quantity?: number;
+	fromHop?: number;
+	upperHop?: number;
+	grantId?: string;
+	uses?: number;
+	maximumUses?: number;
+	expiresAt?: number;
 }
 
 /** Per-call context for E's materialize (who the native record is from, and its chain ids). */
@@ -384,9 +429,17 @@ export class RoleMessageGuardHost {
 	private decisions: GuardDecisionEvent[] = [];
 	private questions: GuardQuestionRecord[] = [];
 	private lockPath = "";
+	/** history.jsonl: what each request and grant looked like at the last check (null until seeded at start). */
+	private historySeen: Map<string, string> | null = null;
+	/** Stores already warned about (80% full); cleared once below 70%. */
+	private readonly warned = new Set<string>();
 
 	constructor(private readonly o: RoleMessageGuardHostOptions) {
 		this.now = o.now ?? Date.now;
+	}
+
+	private get retention(): GuardRetention {
+		return this.o.retention ?? GUARD_RETENTION;
 	}
 
 	get state(): { status: "starting" | "ready" | "degraded"; reason: string } {
@@ -433,6 +486,8 @@ export class RoleMessageGuardHost {
 			await this.reconcileOutbox();
 			await this.representQuestions();
 			await this.maybeRotate();
+			this.tidyHistory();
+			await this.afterChange();
 			this.o.log("approval ladder: on (hops 1-6 free; 7-11 COO grant; 12+ owner grant)");
 		} catch (err) {
 			this.degrade((err as Error).message);
@@ -517,7 +572,7 @@ export class RoleMessageGuardHost {
 		this.core = new RoleMessageGuardCore({
 			binding: GUARD_CONSUMER_BINDING,
 			policy: GUARD_POLICY,
-			retention: GUARD_RETENTION,
+			retention: this.retention,
 			store,
 			verifier: this.verifier(),
 			transport: {
@@ -643,7 +698,12 @@ export class RoleMessageGuardHost {
 		const big =
 			bytes > (this.o.rotateBytes ?? GUARD_ROTATE_BYTES) ||
 			(legacy?.messages?.length ?? 0) > GUARD_ROTATE_MESSAGES ||
-			read.value.tombstones.length > GUARD_ROTATE_TOMBSTONES;
+			read.value.tombstones.length > GUARD_ROTATE_TOMBSTONES ||
+			// #122 (H-ROLE-LADDER-CAPS-2): each send keeps about 5 transactions, 5 audit receipts and 15 KB of journal
+			// for a day, so a peak day alone would fill 91% of the transaction cap. Rotate (when quiescent) once any of
+			// those stores reaches GUARD_ROTATE_AT, keeping them under half. Not usage (the hourly window) and not open
+			// requests or live grants (rotation waits for those to be zero anyway).
+			this.fills(read.value).some((f) => ROTATE_ON.includes(f.name) && f.used >= GUARD_ROTATE_AT * f.max);
 		if (big && this.quiescent(read.value, this.now())) await this.rotate(false);
 	}
 
@@ -664,6 +724,8 @@ export class RoleMessageGuardHost {
 			this.writeCurrent(gen);
 			this.useStore(store, dir);
 			this.cleanGenerations(gen);
+			this.historySeen = new Map();
+			if (force) this.writeHistory([{ at: this.now(), event: "revoked_all" }]);
 			this.o.log(`approval ladder: guard store generation ${gen}${force ? " (revoked open approvals)" : ""}`);
 		});
 	}
@@ -883,6 +945,189 @@ export class RoleMessageGuardHost {
 	private async state_(): Promise<GuardStoreState | null> {
 		const r = await this.store?.read();
 		return r?.state === "ready" ? r.value : null;
+	}
+
+	// -------------------------------------------------------------------------
+	// Storage: approval history and fill warnings (Ops rm-efd6df89)
+	// -------------------------------------------------------------------------
+
+	/** How full each of E's capped stores is (counted the way E counts them). */
+	fills(s: GuardStoreState): { name: string; used: number; max: number }[] {
+		const R = this.retention;
+		let bytes = 0;
+		try {
+			bytes = statSync(join(this.storeDir, "journal.json")).size;
+		} catch {
+			/* not written yet */
+		}
+		return [
+			{
+				name: "open approval requests",
+				used: s.requests.filter((r) => OPEN_REQUEST_STATES.includes(r.state)).length,
+				max: R.maximumRequests,
+			},
+			{ name: "live grants", used: s.grants.filter((g) => g.state === "approved").length, max: R.maximumGrants },
+			{ name: "usage events (last hour)", used: s.usage.length, max: R.maximumUsageEvents },
+			{ name: "transactions", used: s.transactions.length, max: R.maximumTransactions },
+			{ name: "audit receipts", used: s.audits.length, max: R.maximumAuditReceipts },
+			{ name: "outbox entries", used: s.outbox.length, max: R.maximumOutboxEntries },
+			{ name: "tombstones", used: s.tombstones.length, max: R.maximumTombstones },
+			{ name: "guard store file (bytes)", used: bytes, max: GUARD_FILE_MAX_BYTES },
+		];
+	}
+
+	/** The refusal text for retention_capacity: which store is full and what to do. */
+	private async capacityText(): Promise<string> {
+		const s = await this.state_();
+		const full = s ? this.fills(s).sort((a, b) => b.used / b.max - a.used / a.max)[0] : undefined;
+		const which = full ? ` (${full.name}: ${full.used} of ${full.max})` : "";
+		return `the ladder's storage is full${which}; nothing was recorded or counted. Tell Ops; it frees up as old records age out.`;
+	}
+
+	/** After every ladder action: history lines for what changed, and the 80% warnings. Never throws. */
+	async afterChange(): Promise<void> {
+		try {
+			const s = await this.state_();
+			if (!s) return;
+			for (const f of this.fills(s)) {
+				const ratio = f.used / f.max;
+				if (ratio >= GUARD_WARN_AT && !this.warned.has(f.name)) {
+					this.warned.add(f.name);
+					this.o.log(
+						`approval ladder WARNING: ${f.name} at ${Math.round(ratio * 100)}% (${f.used} of ${f.max}); at 100% new approvals and sends past message 6 are refused. Tell Ops.`,
+					);
+				} else if (ratio < GUARD_WARN_REARM) this.warned.delete(f.name);
+			}
+			this.recordHistory(s);
+		} catch (err) {
+			this.o.log(`approval ladder: history not written (${(err as Error).message})`);
+		}
+	}
+
+	private recordHistory(s: GuardStoreState): void {
+		const seed = this.historySeen === null;
+		const seen = (this.historySeen ??= new Map());
+		const lines: GuardHistoryLine[] = [];
+		const at = this.now();
+		for (const r of s.requests) {
+			const b = r.binding;
+			const key = `r:${b.requestId}/${b.generation}`;
+			const before = seen.get(key);
+			if (before === r.state) continue;
+			seen.set(key, r.state);
+			if (seed) continue;
+			const base = {
+				at,
+				requestId: b.requestId,
+				generation: b.generation,
+				requester: b.requester.role,
+				tier: b.tier,
+				state: r.state,
+			};
+			if (before === undefined)
+				lines.push({
+					...base,
+					event: b.generation.startsWith("owner-escalation-") ? "escalation" : "request",
+					quantity: b.quantity,
+					fromHop: b.causal.nextHop,
+					upperHop: b.upperHop,
+				});
+			else lines.push({ ...base, event: "decision" });
+		}
+		for (const g of s.grants) {
+			const key = `g:${g.id}`;
+			const now = `${g.state}/${g.acceptedUses}`;
+			const before = seen.get(key);
+			if (before === now) continue;
+			seen.set(key, now);
+			if (seed) continue;
+			const base = {
+				at,
+				grantId: g.id,
+				requestId: g.binding.requestId,
+				generation: g.binding.generation,
+				requester: g.binding.requester.role,
+				tier: g.binding.tier,
+				state: g.state,
+				uses: g.acceptedUses,
+				maximumUses: g.maximumUses,
+			};
+			const [beforeState, beforeUses] = (before ?? "/").split("/");
+			if (before === undefined)
+				lines.push({
+					...base,
+					event: "grant",
+					fromHop: g.binding.causal.nextHop,
+					upperHop: g.binding.upperHop,
+					expiresAt: g.expiresAt,
+				});
+			if (before !== undefined && Number(beforeUses) !== g.acceptedUses) lines.push({ ...base, event: "grant_use" });
+			if (before !== undefined && beforeState !== g.state) lines.push({ ...base, event: "grant_end" });
+		}
+		// Settled records leave E's store after a day; forget them here too.
+		if (seen.size > 4 * (GUARD_RETENTION.maximumRequests + GUARD_RETENTION.maximumGrants)) {
+			const live = new Set([
+				...s.requests.map((r) => `r:${r.binding.requestId}/${r.binding.generation}`),
+				...s.grants.map((g) => `g:${g.id}`),
+			]);
+			for (const k of seen.keys()) if (!live.has(k)) seen.delete(k);
+		}
+		this.writeHistory(lines);
+	}
+
+	private get historyPath(): string {
+		return join(this.o.dir, "history.jsonl");
+	}
+
+	/** Append; past the size cap the file becomes the one archive (history.1.jsonl). Errors are logged, never thrown. */
+	private writeHistory(lines: GuardHistoryLine[]): void {
+		if (lines.length === 0) return;
+		try {
+			const text = lines.map((l) => `${JSON.stringify(l)}\n`).join("");
+			let size = 0;
+			try {
+				size = statSync(this.historyPath).size;
+			} catch {
+				/* new file */
+			}
+			if (size > 0 && size + Buffer.byteLength(text) > (this.o.historyMaxBytes ?? GUARD_HISTORY_MAX_BYTES))
+				renameSync(this.historyPath, join(this.o.dir, "history.1.jsonl"));
+			appendFileSync(this.historyPath, text);
+		} catch (err) {
+			this.o.log(`approval ladder: history not written (${(err as Error).message})`);
+		}
+	}
+
+	/** At start: drop history lines older than 30 days, and the archive once all of it is. */
+	private tidyHistory(): void {
+		const cutoff = this.now() - GUARD_HISTORY_KEEP_MS;
+		const keep = (path: string): string[] | null => {
+			let raw: string;
+			try {
+				raw = readFileSync(path, "utf8");
+			} catch {
+				return null;
+			}
+			const all = raw.split("\n").filter((l) => l.trim());
+			const kept = all.filter((l) => {
+				try {
+					return (JSON.parse(l) as GuardHistoryLine).at >= cutoff;
+				} catch {
+					return false;
+				}
+			});
+			return kept.length === all.length ? null : kept;
+		};
+		try {
+			const archive = join(this.o.dir, "history.1.jsonl");
+			const a = keep(archive);
+			if (a && a.length === 0) rmSync(archive, { force: true });
+			else if (a) writeDurable(archive, a.map((l) => `${l}\n`).join(""));
+			const h = keep(this.historyPath);
+			if (h) writeDurable(this.historyPath, h.map((l) => `${l}\n`).join(""));
+		} catch (err) {
+			this.o.log(`approval ladder: history not tidied (${(err as Error).message})`);
+		}
 	}
 
 	private appendDecision(e: GuardDecisionEvent): void {
@@ -1154,6 +1399,19 @@ export class RoleMessageGuardHost {
 		picked: string,
 		source: "browser" | "telegram",
 	): Promise<{ ok: boolean; error?: string }> {
+		try {
+			return await this.ownerAnswerNow(questionId, generation, picked, source);
+		} finally {
+			await this.afterChange();
+		}
+	}
+
+	private async ownerAnswerNow(
+		questionId: string,
+		generation: string,
+		picked: string,
+		source: "browser" | "telegram",
+	): Promise<{ ok: boolean; error?: string }> {
 		if (this.status_ !== "ready" || !this.adapters) return { ok: false, error: "Approvals are unavailable right now." };
 		const q = this.questions.find((x) => x.questionId === questionId && x.generation === generation);
 		if (!q) return { ok: false, error: "This question is no longer open." };
@@ -1308,6 +1566,18 @@ export class RoleMessageGuardHost {
 		input: RoleMessageSendInput & { grant?: unknown },
 		toolCallId: string,
 	): Promise<RoleMessageGuardSendResult> {
+		try {
+			return await this.sendNow(sender, input, toolCallId);
+		} finally {
+			if (this.status_ === "ready") await this.afterChange();
+		}
+	}
+
+	private async sendNow(
+		sender: RoleMessageSender,
+		input: RoleMessageSendInput & { grant?: unknown },
+		toolCallId: string,
+	): Promise<RoleMessageGuardSendResult> {
 		const rm = this.o.roleMessages();
 		if (!rm) return { ok: false, error: "Role messages aren't available in this app." };
 		if (this.status_ !== "ready" || !this.core) return rm.send(sender, input);
@@ -1416,6 +1686,8 @@ export class RoleMessageGuardHost {
 				reason: "approval_required",
 			};
 		}
+		if (res.state === "blocked" && res.reason === "retention_capacity")
+			return { ok: false, error: `Not sent: ${await this.capacityText()}`, reason: res.reason };
 		if (res.state === "blocked")
 			return { ok: false, error: `Not sent: ${blockedText(res.reason)}`, reason: res.reason };
 		if (res.state === "unknown")
@@ -1429,6 +1701,18 @@ export class RoleMessageGuardHost {
 
 	/** message_role approval {action request|status|decide}. */
 	async approval(
+		sender: RoleMessageSender,
+		input: RoleMessageApprovalInput,
+		toolCallId: string,
+	): Promise<{ ok: boolean; text: string; details?: Record<string, unknown> }> {
+		try {
+			return await this.approvalNow(sender, input, toolCallId);
+		} finally {
+			if (this.status_ === "ready") await this.afterChange();
+		}
+	}
+
+	private async approvalNow(
 		sender: RoleMessageSender,
 		input: RoleMessageApprovalInput,
 		toolCallId: string,
@@ -1528,6 +1812,14 @@ export class RoleMessageGuardHost {
 		const quantity = quantityOf(input.quantity === undefined ? max : (input.quantity as number));
 		const requestId = `cr-${short({ file: sender.file, toolCallId }).slice(0, 8)}`;
 		const c = (input.context && typeof input.context === "object" ? input.context : {}) as Record<string, unknown>;
+		// Ops rm-efd6df89: an oversized context is refused whole, with its size (never cut down to fit).
+		const contextBytes = Buffer.byteLength(JSON.stringify(c));
+		if (contextBytes > GUARD_RETENTION.maximumContextBytes)
+			return {
+				ok: false,
+				text: `Not asked: the context is ${contextBytes} bytes; at most ${GUARD_RETENTION.maximumContextBytes} (16 KB). Shorten it and ask again; nothing was recorded.`,
+				details: { reason: "context_too_large", bytes: contextBytes, maximum: GUARD_RETENTION.maximumContextBytes },
+			};
 		const proof: GuardProofReference[] = causal.incomingRecordId
 			? [
 					{
@@ -1570,6 +1862,8 @@ export class RoleMessageGuardHost {
 			context,
 			quantity,
 		});
+		if ((res as { reason?: string }).reason === "retention_capacity")
+			return { ok: false, text: `Not asked: ${await this.capacityText()}`, details: { reason: "retention_capacity" } };
 		if (!("state" in res) || res.state !== "recorded") return { ok: false, text: `Not asked: ${outcomeText(res)}` };
 		const r = res.request;
 		const notice = await this.ctx.run(

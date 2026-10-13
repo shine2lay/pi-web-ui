@@ -522,9 +522,11 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 		const reserved = state.incidents.filter(
 			(i) => i.state === "live" && i.resultStorageReserved && !i.resultTransactionId,
 		).length;
+		// #122 (Ops rm-efd6df89): only open requests and live grants count; settled ones never block a send. They
+		// still leave on settledRetentionMs, and the file's byte cap stays the backstop.
 		return (
-			state.requests.length <= r.maximumRequests &&
-			state.grants.length <= r.maximumGrants &&
+			state.requests.filter(openRequest).length <= r.maximumRequests &&
+			state.grants.filter((g) => g.state === "approved").length <= r.maximumGrants &&
 			state.transactions.length + reserved <= r.maximumTransactions &&
 			state.audits.length + reserved <= r.maximumAuditReceipts &&
 			state.outbox.length + reserved <= r.maximumOutboxEntries &&

@@ -36,9 +36,15 @@ Roles message each other with `message_role`. A message started by another role'
 ## Chain identity
 
 A message's root and parent are recorded with it. The chain survives an omitted `replyTo`, an FYI, a
-control message, a restart and branching. A chat whose place cannot be proved (forged header, missing,
-pruned or edited parent) is `unknown`: it is never reset to hop 1, and it needs the Owner. Legacy
-records without root/parent are anchored explicitly (partial provenance), never reset.
+control message, a restart and branching. A chat whose place cannot be proved (forged header, missing or
+edited parent, or a parent dropped more than 30 days ago) is `unknown`: it is never reset to hop 1, and
+it needs the Owner. Legacy records without root/parent are anchored explicitly (partial provenance),
+never reset.
+
+`role-messages.json` keeps only its newest 1000 records. A chain's place never depends on that rotating
+copy: when a record is dropped, its chain facts (id, hash, target, root, parent, hop, guard tag) go to
+`role-messages-chains.jsonl` beside it and are kept 30 days, so a reply to a pruned message keeps its hop
+(before, it became `unknown`, and the native code even counted it as hop 0).
 
 ## How it is built
 
@@ -53,10 +59,31 @@ records without root/parent are anchored explicitly (partial provenance), never 
 - `server/role-messages.ts` keeps all native rules and gains `prepare` / `admit` / `causalityOf` /
   `hourlyCount` / `ancestorAt`; records carry `root`, `parent` and `guard`. With the host absent or
   degraded, the native depth-6 refusal applies unchanged.
-- State: `~/.pi-web-ui/role-message-guard/` (E's store, decisions, Owner questions, lock). Caps
-  (`GUARD_RETENTION`, `GUARD_FILE_MAX_BYTES` 16 MiB, rotation at 1 MiB / 300 accepted messages / 3000
-  tombstones) were sized from measured volume (≤365 role messages a day, ≤20 per role-hour) and proposed
-  to Ops (rm-1fe61704).
+- State: `~/.pi-web-ui/role-message-guard/` (E's store in `gen-N/`, decisions, Owner questions, lock,
+  `history.jsonl`).
+
+## Storage caps (Ops rm-efd6df89)
+
+Measured live volume (metadata only): at most 365 role messages a day and 20 per role-hour. Proposed to
+Ops (rm-1fe61704) and approved with changes (rm-efd6df89):
+
+- Each guard file at most 16 MiB (`GUARD_FILE_MAX_BYTES`); E fails closed past a cap and the refusal
+  names the store.
+- Requests and grants: 600 each, counting only open requests and live grants. Settled ones never block a
+  send; they leave after a day.
+- Usage (the rolling hour) is pruned after 60 minutes. Transactions, audit receipts and outbox 2000 each,
+  tombstones 6000.
+- An approval context over 16 KB (16384 bytes as JSON) is refused whole, with its size; never cut down.
+- `history.jsonl`: one metadata line per request, escalation, decision, grant, grant use and grant end (no
+  context words); kept 30 days; past 16 MiB it becomes the one archive `history.1.jsonl`. A write
+  failure is logged and never blocks a send or an approval.
+- One log line `approval ladder WARNING: <store> at N%` when a store reaches 80%; armed again below 70%.
+
+Measured footprint: a business send keeps about 5 transactions, 5 audit receipts, 1 outbox entry and
+15 KB of journal for a day. A peak day alone would fill 91% of the transaction cap, so the guard store
+also starts a fresh generation (only when nothing is open) once transactions, audit receipts, outbox,
+tombstones or the journal reach 40% of their cap (`GUARD_ROTATE_AT`), besides the older triggers (1 MiB
+or 300 accepted messages, 3000 tombstones). Under steady traffic every store stays under half.
 
 ## Rollback
 

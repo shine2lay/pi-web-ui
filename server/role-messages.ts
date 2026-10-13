@@ -41,7 +41,7 @@
 // ---------------------------------------------------------------------------
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
 import { dirname } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -190,7 +190,16 @@ export interface RoleMessageGuardTag {
 export type RoleMessageCausality =
 	| { kind: "none" }
 	| { kind: "unknown"; reason: "missing" | "contradictory" }
-	| { kind: "record"; record: RoleMessageRecord; exactTarget: boolean };
+	| { kind: "record"; record: RoleMessageChainFact; exactTarget: boolean };
+
+/** role-message-ladder: what the chain needs of a record (all of it while the store keeps the record, then from the
+ *  chain memory, role-messages-chains.jsonl, for ROLE_MESSAGE_CHAIN_MEMORY_MS). */
+export type RoleMessageChainFact = Pick<
+	RoleMessageRecord,
+	"id" | "chain" | "hash" | "target" | "root" | "parent" | "guard"
+>;
+/** role-message-ladder (Ops rm-efd6df89): how long a pruned record's chain facts are kept. */
+export const ROLE_MESSAGE_CHAIN_MEMORY_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** role-reports: what the app's job found that day (counts only). */
 export interface RoleReportActivity {
@@ -745,6 +754,8 @@ export class RoleMessages {
 	private again = false;
 	private stopped = false;
 	private changeTimer: ReturnType<typeof setTimeout> | null = null;
+	/** role-message-ladder: chain facts of records the store has dropped (see RoleMessageChainFact). */
+	private readonly chainMemory = new Map<string, RoleMessageChainFact & { at: number }>();
 
 	constructor(
 		private readonly file: string,
@@ -752,6 +763,69 @@ export class RoleMessages {
 		private readonly now: () => number = Date.now,
 	) {
 		this.load();
+		this.loadChainMemory();
+	}
+
+	private get chainMemoryFile(): string {
+		return this.file.replace(/\.json$/, "") + "-chains.jsonl";
+	}
+
+	/** role-message-ladder: read the chain memory, dropping facts older than ROLE_MESSAGE_CHAIN_MEMORY_MS. */
+	private loadChainMemory(): void {
+		let raw: string;
+		try {
+			raw = readFileSync(this.chainMemoryFile, "utf8");
+		} catch {
+			return; // none yet
+		}
+		let old = 0;
+		for (const line of raw.split("\n")) {
+			if (!line.trim()) continue;
+			try {
+				const f = JSON.parse(line) as RoleMessageChainFact & { at: number };
+				if (typeof f.id !== "string" || typeof f.chain !== "number" || typeof f.at !== "number") continue;
+				if (this.now() - f.at >= ROLE_MESSAGE_CHAIN_MEMORY_MS) old++;
+				else this.chainMemory.set(f.id, f);
+			} catch {
+				// a torn last line (crash mid-append): the rest still counts
+			}
+		}
+		if (old === 0) return;
+		try {
+			const tmp = `${this.chainMemoryFile}.${process.pid}.tmp`;
+			writeFileSync(tmp, [...this.chainMemory.values()].map((f) => `${JSON.stringify(f)}\n`).join(""));
+			renameSync(tmp, this.chainMemoryFile);
+		} catch (err) {
+			this.log(`couldn't tidy the chain memory (${(err as Error).message})`);
+		}
+	}
+
+	/** role-message-ladder: keep the chain facts of records the store is about to drop. */
+	private rememberChains(dropped: RoleMessageRecord[]): void {
+		if (dropped.length === 0) return;
+		const at = this.now();
+		const facts = dropped.map((m) => ({
+			id: m.id,
+			chain: m.chain,
+			...(m.hash ? { hash: m.hash } : {}),
+			...(m.target ? { target: m.target } : {}),
+			...(m.root ? { root: m.root } : {}),
+			...(m.parent ? { parent: m.parent } : {}),
+			...(m.guard ? { guard: m.guard } : {}),
+			at,
+		}));
+		for (const f of facts) this.chainMemory.set(f.id, f);
+		try {
+			mkdirSync(dirname(this.file), { recursive: true });
+			appendFileSync(this.chainMemoryFile, facts.map((f) => `${JSON.stringify(f)}\n`).join(""));
+		} catch (err) {
+			this.log(`couldn't keep the chain memory (${(err as Error).message}); it holds until the next restart`);
+		}
+	}
+
+	/** role-message-ladder: a record's chain facts, from the store or (once it was dropped) the chain memory. */
+	chainFact(id: string): RoleMessageChainFact | undefined {
+		return this.byId(id) ?? this.chainMemory.get(id);
 	}
 
 	private log(line: string): void {
@@ -795,15 +869,19 @@ export class RoleMessages {
 			const extra = keep.length - ROLE_MESSAGES_KEEP;
 			let dropped = 0;
 			const now = this.now();
+			const gone: RoleMessageRecord[] = [];
 			this.data.messages = keep.filter((m) => {
 				// role-reports: a recent report request stays: it is the proof that the day was asked for.
 				const proof = m.kind === "report" && now - m.at < REPORT_KEEP_MS;
 				if (dropped < extra && m.state !== "waiting" && !proof) {
 					dropped++;
+					gone.push(m);
 					return false;
 				}
 				return true;
 			});
+			// role-message-ladder (Ops rm-efd6df89): a chain's place never depends on this rotating copy.
+			this.rememberChains(gone);
 		}
 		try {
 			mkdirSync(dirname(this.file), { recursive: true });
@@ -837,11 +915,11 @@ export class RoleMessages {
 	 *  undefined when the line is broken (pruned) or never passes that hop. A grant binds to that line, so a
 	 *  branch made before the grant's anchor can't use it. */
 	ancestorAt(id: string, hop: number): string | undefined {
-		let r = this.byId(id);
+		let r = this.chainFact(id);
 		for (let steps = 0; r && steps < 64; steps++) {
 			if (r.chain === hop) return r.id;
 			if (r.chain < hop || !r.parent) return undefined;
-			r = this.byId(r.parent);
+			r = this.chainFact(r.parent);
 		}
 		return undefined;
 	}
@@ -921,8 +999,12 @@ export class RoleMessages {
 
 	/** The depth of the role message a chat is handling, from its last user message (0 = none). */
 	handlingDepth(sessionFile: string | undefined, lastUserText: string | undefined): number {
-		const r = this.verified(sessionFile, lastUserText ?? "");
-		return r ? r.chain : 0;
+		// role-message-ladder: from the chain memory too, so a dropped record no longer resets the depth to 0.
+		const text = lastUserText ?? "";
+		const id = roleMessageIdOf(text);
+		const r = id && sessionFile ? this.chainFact(id) : undefined;
+		if (!r?.hash || !r.target || !samePath(r.target, sessionFile!)) return 0;
+		return sha1(text) === r.hash ? r.chain : 0;
 	}
 
 	/** The record a user message in this chat is, when the store confirms it (same chat, same text). */
@@ -1271,7 +1353,7 @@ export class RoleMessages {
 		const text = lastUserText ?? "";
 		const id = roleMessageIdOf(text);
 		if (!id) return { kind: "none" };
-		const r = this.byId(id);
+		const r = this.chainFact(id);
 		if (!r?.hash) return { kind: "unknown", reason: "missing" };
 		if (sha1(text) !== r.hash) return { kind: "unknown", reason: "contradictory" };
 		return { kind: "record", record: r, exactTarget: !!sessionFile && !!r.target && samePath(r.target, sessionFile) };

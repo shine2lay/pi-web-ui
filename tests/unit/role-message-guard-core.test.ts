@@ -1036,6 +1036,20 @@ describe("E outbox, holds, recovery, clocks, retention and rollback", () => {
 		expect((await t.state()).usage).toHaveLength(1);
 		expect(JSON.parse(readFileSync(t.storeOptions.legacyPath, "utf8")).messages).toHaveLength(1);
 	});
+	it("#122 caps (Ops rm-efd6df89): only open requests and live grants count; settled ones never block", async () => {
+		const t = await fixture({ maximumRequests: 1, maximumGrants: 1 });
+		await t.grant(7, 1); // its request is settled (approved); its grant is live: 0 of 1 open, 1 of 1 live
+		const second = await t.recordRequest(t.proposal("second", 8, 1));
+		expect(second.state).toBe("recorded"); // counted every stored request before: 2 > 1 refused it
+		const third = t.proposal("third", 9, 1);
+		const elsewhere = { ...third, binding: { ...third.binding, causal: causal(9, "another-root") } };
+		expect(reason(await t.recordRequest(elsewhere))).toBe("retention_capacity"); // 2 open > 1
+		if (second.state !== "recorded") throw new Error("synthetic request failed");
+		expect(reason(await t.recordDecision(t.decision(second.request, "requested_quantity", "second-answer")))).toBe(
+			"retention_capacity",
+		); // 2 live > 1
+		expect((await t.state()).grants).toHaveLength(1);
+	});
 	it("settled pruning retains a replay tombstone and legacy words", async () => {
 		const t = await fixture();
 		const c = t.identified({ ...t.business("settled-old"), businessKind: "fyi" as const });
