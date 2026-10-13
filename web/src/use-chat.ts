@@ -77,7 +77,13 @@ import {
 import { receiveSubsLimits, requestSubsLimits } from "./subs-limits-state";
 import { receiveRoleGuard, requestRoleGuard } from "./role-guard-state";
 import { receiveBoardResult, receiveRoles, resendRolesWatch } from "./roles-state";
-import { receiveDecisionRecord, receiveInitiatives, resendInitiativesWatch } from "./initiatives-state";
+import {
+	receiveDecisionRecord,
+	receiveInitiativeResult,
+	receiveInitiatives,
+	receiveUpdateLinks,
+	resendInitiativesWatch,
+} from "./initiatives-state";
 import { emitPluginData } from "./plugin-loader";
 import { ingestPluginLogsData } from "./plugin-logs";
 import { resolveCatalogSyncResult } from "./plugin-host";
@@ -2098,6 +2104,14 @@ export function useChat() {
 				case "decision_record":
 					// initiatives-page: a card's source record.
 					receiveDecisionRecord(msg);
+					break;
+				case "initiative_result":
+					// progress-feed (task #85): a lead change or an "Ask for an update" answered.
+					receiveInitiativeResult(msg);
+					break;
+				case "initiative_update_links":
+					// progress-feed: everything one update links.
+					receiveUpdateLinks(msg);
 					break;
 				case "identity_file":
 					receiveIdentityFile(msg);

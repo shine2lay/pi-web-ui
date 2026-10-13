@@ -514,3 +514,171 @@
 	gap: 8px;
 	justify-content: flex-end;
 }
+
+/* progress-feed (task #85): the list's feed badges, the lead picker and the Progress section. */
+.iv-rfeed {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 8px;
+	align-items: center;
+}
+.iv-badge {
+	display: inline-flex;
+	align-items: center;
+	padding: 0 8px;
+	border-radius: 999px;
+	font-size: var(--iv-fs3);
+	line-height: var(--iv-lh3);
+	font-weight: 600;
+}
+.iv-badge-needs {
+	border: 1px solid var(--iv-amber-line);
+	background: var(--iv-amber-tint);
+	color: var(--amber-text);
+}
+.iv-dot {
+	display: inline-block;
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	background: var(--accent);
+}
+.iv-leadbox {
+	display: grid;
+	gap: 8px;
+}
+.iv-leadform {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: center;
+}
+.iv-leadform label {
+	color: var(--text-dim);
+	font-size: var(--iv-fs3);
+	line-height: var(--iv-lh3);
+}
+.iv-leadform select {
+	min-height: 36px;
+	padding: 6px 10px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg-elev);
+	color: var(--text);
+	font: inherit;
+}
+.iv-leadform select:focus-visible,
+.initiatives-view .iv-leadform button:focus-visible {
+	outline: none;
+	box-shadow:
+		0 0 0 2px var(--bg),
+		0 0 0 4px var(--accent);
+}
+.iv-btn:disabled {
+	cursor: default;
+	/* Still AA-readable in both themes (0.6 gave 4.25:1 in White). */
+	opacity: 0.75;
+}
+.iv-phone .iv-btn,
+.iv-phone .iv-leadform select {
+	min-height: 44px;
+}
+.iv-progress {
+	display: grid;
+	gap: 12px;
+}
+.iv-progress h3 {
+	font-size: var(--iv-fs1);
+	line-height: var(--iv-lh1);
+	font-weight: 600;
+}
+.iv-progress.iv-off {
+	padding: 12px 16px;
+	border: 1px dashed var(--border);
+	border-radius: 12px;
+}
+.iv-pstatus {
+	display: grid;
+	gap: 6px;
+	justify-items: start;
+}
+.iv-unlinked {
+	color: var(--amber-text);
+}
+.iv-updates,
+.iv-roleupdates {
+	display: grid;
+	gap: 12px;
+}
+.iv-uhead {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	align-items: center;
+	font-size: var(--iv-fs2);
+	line-height: var(--iv-lh2);
+	font-weight: 600;
+}
+.iv-check {
+	display: flex;
+	gap: 6px;
+	align-items: baseline;
+}
+.iv-ufields {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 8px 16px;
+}
+.iv-ufields .iv-f-changed,
+.iv-ufields .iv-f-next,
+.iv-ufields .iv-f-needsYou {
+	grid-column: 1 / -1;
+}
+.iv-phone .iv-ufields {
+	grid-template-columns: minmax(0, 1fr);
+}
+.iv-uflags,
+.iv-ulinked {
+	display: grid;
+	gap: 6px;
+}
+.iv-uflags > ul,
+.iv-ulinked > ul {
+	display: grid;
+	gap: 6px;
+}
+.iv-flag ul {
+	display: grid;
+	gap: 2px;
+	margin-top: 4px;
+	padding-left: 18px;
+	list-style: disc;
+}
+.iv-why {
+	color: var(--text);
+}
+.iv-ldec {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 6px;
+	align-items: center;
+}
+.iv-ldtitle {
+	font-weight: 550;
+}
+.iv-nolead {
+	display: grid;
+	gap: 8px;
+}
+.iv-nolead h4 {
+	font-weight: 600;
+}
+.iv-roleupdates > li {
+	display: grid;
+	gap: 4px;
+	padding: 10px 12px;
+	border: 1px solid var(--border-soft);
+	border-radius: 10px;
+	background: var(--bg-elev);
+	overflow-wrap: anywhere;
+}

@@ -3,7 +3,8 @@
 **Initiatives** is a top-bar view next to Roles (`?view=initiatives`). Per initiative it shows every
 design decision found in the roles' records, its later changes, who really decided, and what it means
 for the owner: impact, other options and their cost, and until when. It only shows and links; roles
-correct it with the `decision_log` tool. Task #85 adds the lead's Progress section above Decisions.
+correct it with the `decision_log` tool. Task #85 adds the lead's Progress section above Decisions:
+see [progress-feed.md](progress-feed.md).
 Patch: `initiatives-page` in [PATCHES.md](../PATCHES.md); the records come from `decision-records`.
 
 ## What it shows
@@ -56,8 +57,9 @@ the next day and the page says so. A rate-limit refusal rests that Claude accoun
 | --- | --- |
 | `records.jsonl` | #83's records (messages, Board posts, answers, queue plans) |
 | `decisions.json` | decisions, changes, sources, owner fields, who added each |
-| `initiatives.json` | `[{ id, name, markers, lead }]` (lead: task #85) |
-| `settings.json` | the reader's settings (above) |
+| `initiatives.json` | `[{ id, name, markers, lead, leadSet }]` (lead: task #85) |
+| `settings.json` | the reader's settings (above) and the feed's (`feedInitiatives`, ...) |
+| `feed-state.json` | the progress feed's asks, triggers and update checks (task #85) |
 | `reader-state.json` | records read, tokens per day, the cap, accounts resting, the last error |
 | `previews.json` | option previews of older answers, read from their chat line |
 

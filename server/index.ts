@@ -119,6 +119,8 @@ import type {
 	UiRolesOverview,
 	UiDecisionsPage,
 	UiDecisionRecordView,
+	UiUpdateDecision,
+	UiUpdateLink,
 	UiServiceInfo,
 	UiSubagentTemplate,
 } from "./protocol.js";
@@ -1439,6 +1441,14 @@ export interface EngineService {
 	initiativesPage?(initiative?: string, limit?: number): UiDecisionsPage;
 	/** initiatives-page (pi engine): one kept record a card cites. */
 	decisionRecordView?(idOrRef: string): UiDecisionRecordView | undefined;
+	/** progress-feed (pi engine, task #85): the owner sets or clears an initiative's lead (the page only). */
+	setInitiativeLead?(initiative: unknown, lead: unknown): { ok: true } | { ok: false; error: string };
+	/** progress-feed: the owner's "Ask for an update" button. */
+	askInitiativeUpdate?(initiative: unknown): { ok: true; id: string; at: number } | { ok: false; error: string };
+	/** progress-feed: the owner looked at an initiative's Progress. */
+	initiativeSeen?(initiative: unknown): void;
+	/** progress-feed: everything one update links. */
+	initiativeUpdateLinks?(update: unknown): { links: UiUpdateLink[]; decisions: UiUpdateDecision[] } | undefined;
 	/** initiatives-page (pi engine): set by index.ts; the decisions or the reader changed. */
 	onDecisionsChanged?: (() => void) | null;
 	noteSocketOpen(): void;
@@ -2676,6 +2686,57 @@ wss.on("connection", (ws, req) => {
 					view
 						? { type: "decision_record", record: id, view }
 						: { type: "decision_record", record: id, error: "That record isn't kept here." },
+				);
+				break;
+			}
+			case "initiative_lead": {
+				// progress-feed (task #85): the owner sets an initiative's lead on the page (this socket is his, like
+				// every owner action here); roles have no way to set one.
+				const reqId = typeof msg.reqId === "string" ? msg.reqId : undefined;
+				const initiative = typeof msg.initiative === "string" ? msg.initiative.slice(0, 80) : "";
+				const res = service.setInitiativeLead
+					? service.setInitiativeLead(initiative, msg.lead ?? null)
+					: { ok: false as const, error: "this engine has no Initiatives page" };
+				send({
+					type: "initiative_result",
+					reqId,
+					op: "lead",
+					initiative,
+					ok: res.ok,
+					...(res.ok ? {} : { error: res.error }),
+				});
+				if (res.ok) initiativesWatch.poke();
+				break;
+			}
+			case "initiative_poke": {
+				// progress-feed: the owner's "Ask for an update" button.
+				const reqId = typeof msg.reqId === "string" ? msg.reqId : undefined;
+				const initiative = typeof msg.initiative === "string" ? msg.initiative.slice(0, 80) : "";
+				const res = service.askInitiativeUpdate
+					? service.askInitiativeUpdate(initiative)
+					: { ok: false as const, error: "this engine has no Initiatives page" };
+				send({
+					type: "initiative_result",
+					reqId,
+					op: "poke",
+					initiative,
+					ok: res.ok,
+					...(res.ok ? { at: res.at } : { error: res.error }),
+				});
+				if (res.ok) initiativesWatch.poke();
+				break;
+			}
+			case "initiative_seen": {
+				if (typeof msg.initiative === "string") service.initiativeSeen?.(msg.initiative.slice(0, 80));
+				break;
+			}
+			case "initiative_update_links": {
+				const id = typeof msg.update === "string" ? msg.update.slice(0, 80) : "";
+				const res = id ? service.initiativeUpdateLinks?.(id) : undefined;
+				send(
+					res
+						? { type: "initiative_update_links", update: id, links: res.links, decisions: res.decisions }
+						: { type: "initiative_update_links", update: id, error: "That update isn't kept here." },
 				);
 				break;
 			}

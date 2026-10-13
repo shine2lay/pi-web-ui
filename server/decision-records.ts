@@ -10,6 +10,9 @@
  *   - answer:  the owner's answer to a question, a pop-up or a queued task that needed him (asks.ts);
  *   - plan:    a queue plan added, changed or done (pi-queue's "queue" entries in the chats' transcripts,
  *              read incrementally about once a minute; offsets in <dataDir>/decisions/scan-state.json).
+ *   - tldr:    a chat's TL;DR line (pi-tldr's "tldr" entries, read by the same scan; task #85), kept only
+ *              when it files to an initiative the progress feed covers.
+ *   - update:  an initiative lead's progress update (the initiative_update tool; task #85).
  * A backfill reads the same things from what is kept (role-messages.json, role-board.json and the
  * transcripts) from a day on. Transcripts are only ever read here.
  */
@@ -54,7 +57,18 @@ export function checkInitiative(raw: unknown): { ok: true; value?: string } | { 
 // Records
 // ---------------------------------------------------------------------------
 
-export type DecisionSource = "message" | "board" | "answer" | "plan";
+export type DecisionSource = "message" | "board" | "answer" | "plan" | "tldr" | "update";
+
+/** An initiative lead's progress update (task #85): the three parts the owner reads, then the optional
+ *  fields a decision needs ("not given" on the page when missing). */
+export interface UpdateFields {
+	changed: string;
+	next: string;
+	needsYou: string;
+	impact?: string;
+	options?: string;
+	until?: string;
+}
 
 export interface AnswerQuestion {
 	id: string;
@@ -131,6 +145,14 @@ export interface DecisionRecord {
 	summary?: string;
 	/** plan: the queue entry's id. */
 	entry?: string;
+
+	// tldr (task #85): `text` is the line; set when it asked for the owner.
+	needsYou?: boolean;
+
+	// update (task #85)
+	update?: UpdateFields;
+	/** The record (dr-…), decision (d…) and change (c…) ids it links. */
+	sources?: string[];
 }
 
 export type NewDecisionRecord = Omit<DecisionRecord, "v" | "id" | "seen" | "how"> & { how?: DecisionRecord["how"] };
@@ -452,6 +474,118 @@ export function planRecord(
 }
 
 // ---------------------------------------------------------------------------
+// TL;DR lines (task #85)
+// ---------------------------------------------------------------------------
+
+/** pi-tldr's entry type (server/tldr-lines.ts reads the same). */
+const TLDR_MARK = '"customType":"tldr"';
+const ASSIGNED_MARK = '"op":"assigned"';
+
+/** A queued task's chat: its task and the queue chat holding it (pi-queue's first "assigned" entry). */
+export interface TaskLink {
+	id: number;
+	/** The queue chat's transcript (full path). */
+	from: string;
+	/** The task's initiative when it started (the queue chat's add/update ops win over it). */
+	initiative?: string;
+}
+
+/** A queue "assigned" entry's data -> the task it links, or undefined. */
+export function taskLinkOf(d: Record<string, any> | undefined): TaskLink | undefined {
+	if (!d || d.op !== "assigned") return undefined;
+	const id = typeof d.id === "number" ? d.id : Number(d.id);
+	const from = typeof d.from?.file === "string" ? d.from.file : "";
+	if (!Number.isFinite(id) || !from) return undefined;
+	const ini = typeof d.initiative === "string" ? d.initiative.trim() : "";
+	return { id, from, ...(ini ? { initiative: ini } : {}) };
+}
+
+/** A pi-tldr entry ({ type: "custom", customType: "tldr", data: { text, needsYou, ts, initiative? } }) -> a
+ *  tldr record, with only its own initiative (the caller adds the task's). */
+export function tldrRecord(
+	entry: { timestamp?: unknown; data?: Record<string, any> },
+	ctx: { file: string; line: number; role?: string | null; chat?: string },
+	how: DecisionRecord["how"] = "live",
+): NewDecisionRecord | undefined {
+	const d = entry.data ?? {};
+	const text = typeof d.text === "string" ? d.text.trim() : "";
+	if (!text) return undefined;
+	const at =
+		typeof d.ts === "number"
+			? d.ts
+			: typeof entry.timestamp === "string"
+				? Date.parse(entry.timestamp)
+				: Number(entry.timestamp);
+	const file = basename(ctx.file);
+	const own = checkInitiative(d.initiative);
+	return {
+		source: "tldr",
+		at: Number.isFinite(at) ? at : 0,
+		from: ctx.role || "unknown",
+		ref: `${file}:${ctx.line}`,
+		how,
+		file,
+		...(ctx.chat ? { chat: ctx.chat } : {}),
+		text,
+		...(d.needsYou === true ? { needsYou: true } : {}),
+		...(own.ok && own.value ? { initiative: own.value } : {}),
+	};
+}
+
+/**
+ * A TL;DR line's initiative, in order (task #85): its own field; else the initiative of the queued task
+ * whose chat it is in (the queue chat's add/update ops, or the task's own when that chat isn't known);
+ * else none (the page files it by markers, as #84 files every record).
+ */
+export function withTaskInitiative(
+	rec: NewDecisionRecord,
+	task: TaskLink | null | undefined,
+	initsOf: (queueFile: string) => TaskInitiatives | undefined,
+): NewDecisionRecord {
+	if (rec.initiative || !task) return rec;
+	const inits = initsOf(task.from);
+	const ini = inits ? inits[String(task.id)] : task.initiative;
+	return ini ? { ...rec, initiative: ini } : rec;
+}
+
+/** The "assigned" entry near the top of a task chat's transcript (read from its first 256 KB only). */
+export async function assignedOf(file: string): Promise<TaskLink | null> {
+	let fh;
+	try {
+		fh = await open(file, "r");
+		const buf = Buffer.alloc(256 * 1024);
+		const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+		const text = buf.subarray(0, bytesRead).toString("utf8");
+		for (const line of text.split("\n")) {
+			if (!line.includes(ASSIGNED_MARK) || !line.includes(QUEUE_MARK)) continue;
+			const e = parseEntry(line);
+			const link = e?.type === "custom" && e.customType === "queue" ? taskLinkOf(e.data) : undefined;
+			if (link) return link;
+		}
+		return null;
+	} catch {
+		return null;
+	} finally {
+		await fh?.close().catch(() => undefined);
+	}
+}
+
+/** Each task's initiative in a queue chat, from its queue entries (for a chat the pass didn't read). */
+export async function taskInitiativesOf(file: string): Promise<TaskInitiatives | undefined> {
+	if (!existsSync(file)) return undefined;
+	const inits: TaskInitiatives = {};
+	try {
+		await readLinesFrom(file, 0, 0, [QUEUE_MARK], (text, lineNo) => {
+			const e = parseEntry(text);
+			if (e?.type === "custom" && e.customType === "queue") planRecord(e, { file, line: lineNo, inits });
+		});
+	} catch {
+		return undefined;
+	}
+	return inits;
+}
+
+// ---------------------------------------------------------------------------
 // Reading transcripts (read only, from an offset)
 // ---------------------------------------------------------------------------
 
@@ -548,6 +682,8 @@ interface FileScan {
 	offset: number;
 	line: number;
 	inits: TaskInitiatives;
+	/** A queued task's chat: its task (null = not one; absent = not looked yet, task #85). */
+	task?: TaskLink | null;
 }
 
 interface ScanState {
@@ -576,6 +712,8 @@ export class QueueScanner {
 			statePath: string;
 			now?: () => number;
 			log?: (line: string) => void;
+			/** TL;DR lines (task #85): the record to keep (filed), or undefined to leave it. Absent = none kept. */
+			keepTldr?: (rec: NewDecisionRecord) => NewDecisionRecord | undefined;
 		},
 	) {}
 
@@ -646,16 +784,40 @@ export class QueueScanner {
 		}
 		if (!work.length) return 0;
 		const roles = await this.opts.roleOf(work.map((w) => w.file)).catch(() => new Map<string, string | null>());
+		const keepTldr = this.opts.keepTldr;
+		const marks = keepTldr ? [QUEUE_MARK, TLDR_MARK] : [QUEUE_MARK];
 		let added = 0;
 		for (const w of work) {
 			const fresh = !w.prev || w.prev.ino !== w.ino || w.prev.offset > w.size;
 			const fs: FileScan = fresh
 				? { ino: w.ino, offset: 0, line: 0, inits: {} }
 				: { ...w.prev!, inits: { ...w.prev!.inits } };
+			const midFile = fs.offset > 0;
 			try {
-				const next = await readLinesFrom(w.file, fs.offset, fs.line, [QUEUE_MARK], (text, lineNo) => {
+				const next = await readLinesFrom(w.file, fs.offset, fs.line, marks, async (text, lineNo) => {
 					const e = parseEntry(text);
-					if (!e || e.type !== "custom" || e.customType !== "queue") return;
+					if (!e || e.type !== "custom") return;
+					if (e.customType === "tldr") {
+						if (!keepTldr) return;
+						const rec = tldrRecord(e, {
+							file: w.file,
+							line: lineNo,
+							role: roles.get(w.file),
+							chat: this.opts.chatOf?.(w.file),
+						});
+						if (!rec) return;
+						// A chat read before TL;DR lines were kept: look for its task once.
+						if (fs.task === undefined) fs.task = midFile ? await assignedOf(w.file) : null;
+						const kept = keepTldr(withTaskInitiative(rec, fs.task, (q) => state.files[q]?.inits));
+						if (kept && kept.at >= state.floor && this.store.append(kept)) added++;
+						return;
+					}
+					if (e.customType !== "queue") return;
+					if (e.data?.op === "assigned") {
+						// The first one; a chat scanned before pi-queue wrote it was marked "no task" (null) until now.
+						if (!fs.task) fs.task = taskLinkOf(e.data) ?? null;
+						return;
+					}
 					const rec = planRecord(
 						e,
 						{ file: w.file, line: lineNo, role: roles.get(w.file), chat: this.opts.chatOf?.(w.file), inits: fs.inits },
@@ -665,13 +827,15 @@ export class QueueScanner {
 				});
 				fs.offset = next.offset;
 				fs.line = next.line;
+				// Read from its top: no "assigned" entry means it isn't a queued task's chat.
+				if (!midFile && fs.task === undefined && keepTldr) fs.task = null;
 				state.files[w.file] = fs;
 			} catch (err) {
 				this.opts.log?.(`[decisions] couldn't read ${basename(w.file)}: ${(err as Error).message}`);
 			}
 		}
 		this.saveState();
-		if (added) this.opts.log?.(`[decisions] ${added} queue plan record(s) kept`);
+		if (added) this.opts.log?.(`[decisions] ${added} queue plan or TL;DR record(s) kept`);
 		return added;
 	}
 }
@@ -697,6 +861,8 @@ export interface BackfillCounts {
 	board: number;
 	answer: number;
 	plan: number;
+	/** TL;DR lines (task #85; only with keepTldr). */
+	tldr?: number;
 	files: number;
 }
 
@@ -754,6 +920,8 @@ export interface BackfillSources extends ChatLookup {
 	roleMessagesFile: string;
 	roleBoardFile: string;
 	onProgress?(p: BackfillProgress): void;
+	/** TL;DR lines (task #85): the record to keep (filed), or undefined to leave it. Absent = none kept. */
+	keepTldr?: (rec: NewDecisionRecord) => NewDecisionRecord | undefined;
 }
 
 const BACKFILL_MARKS = [
@@ -763,6 +931,7 @@ const BACKFILL_MARKS = [
 	'"name":"ask_user_question"',
 	'"toolName":"ask_user_question"',
 	"[Role message rm-",
+	TLDR_MARK,
 ];
 
 /**
@@ -786,8 +955,12 @@ export async function backfill(
 		added: { message: 0, board: 0, answer: 0, plan: 0, files: 0 },
 	};
 	const add = (rec: NewDecisionRecord | undefined): void => {
-		if (rec && rec.at >= from && store.append({ ...rec, how: "backfill" })) p.added[rec.source]++;
+		if (rec && rec.at >= from && store.append({ ...rec, how: "backfill" }))
+			p.added[rec.source as keyof BackfillCounts] = (p.added[rec.source as keyof BackfillCounts] ?? 0) + 1;
 	};
+	/** TL;DR lines with their chat's task, filed once every chat's queue entries are read. */
+	const tldrs: { rec: NewDecisionRecord; task: TaskLink | null }[] = [];
+	const initsByFile = new Map<string, TaskInitiatives>();
 	try {
 		for (const r of readJson<{ messages?: RoleMessageRecord[] }>(src.roleMessagesFile)?.messages ?? []) {
 			if (r && r.kind !== "report" && typeof r.id === "string") add(messageRecord(r, "backfill"));
@@ -814,13 +987,21 @@ export async function backfill(
 			const base = basename(file);
 			const chat = src.chatOf?.(file);
 			const inits: TaskInitiatives = {};
+			initsByFile.set(file, inits);
+			let task: TaskLink | null = null;
 			const calls = new Map<string, { name: string; args: any; line: number }>();
 			try {
 				await readLinesFrom(file, 0, 0, BACKFILL_MARKS, (text, lineNo) => {
 					const e = parseEntry(text);
 					if (!e) return;
 					if (e.type === "custom" && e.customType === "queue") {
-						add(planRecord(e, { file, line: lineNo, role, chat, inits }, "backfill"));
+						if (e.data?.op === "assigned") task ??= taskLinkOf(e.data) ?? null;
+						else add(planRecord(e, { file, line: lineNo, role, chat, inits }, "backfill"));
+						return;
+					}
+					if (e.type === "custom" && e.customType === "tldr") {
+						const rec = src.keepTldr ? tldrRecord(e, { file, line: lineNo, role, chat }, "backfill") : undefined;
+						if (rec && rec.at >= from) tldrs.push({ rec, task });
 						return;
 					}
 					const m = e.message;
@@ -883,6 +1064,14 @@ export async function backfill(
 		// A message whose sender's side wasn't found: its delivered copy (the earliest one).
 		delivered.sort((a, b) => a.at - b.at);
 		for (const d of delivered) add(d);
+		// TL;DR lines: their task's initiative from its queue chat (read now when this pass skipped it).
+		for (const q of new Set(tldrs.map((x) => x.task?.from).filter((f): f is string => !!f))) {
+			if (!initsByFile.has(q)) {
+				const inits = await taskInitiativesOf(q);
+				if (inits) initsByFile.set(q, inits);
+			}
+		}
+		for (const x of tldrs) add(src.keepTldr?.(withTaskInitiative(x.rec, x.task, (q) => initsByFile.get(q))));
 	} catch (err) {
 		p.error = (err as Error).message;
 	}

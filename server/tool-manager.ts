@@ -85,6 +85,10 @@ export const BOARD_TOOL_NAME = "board";
 /** decision-log (task #84): roles add and correct the Initiatives page's decisions (definition in
  *  decision-log-tool.ts). Not in the catalog: always registered; the tool refuses a chat without a role. */
 export const DECISION_LOG_TOOL_NAME = "decision_log";
+/** progress-feed (task #85): an initiative's lead reads what's new and posts progress updates (definition in
+ *  initiative-update-tool.ts). Not in the catalog: always registered; the tool refuses a chat without a role,
+ *  and only the initiative's lead may post. */
+export const INITIATIVE_UPDATE_TOOL_NAME = "initiative_update";
 /** telegram-coo: every role's state in one call (definition in roles-overview-tool.ts). Not in the catalog:
  *  read-only and small, it is always registered (any chat may look at the Roles page's data; the owner
  *  limits a role's tools in its identity.json). */

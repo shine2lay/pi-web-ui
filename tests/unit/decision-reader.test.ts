@@ -1506,11 +1506,13 @@ describe("the store and the decision_log tool", () => {
 		now: () => clock,
 	});
 
-	it("seeds initiatives.json with Team in Temper (lead not set), and files by its markers", () => {
+	// progress-feed (task #85): Team in Temper is seeded with the owner's own pick, Architecture.
+	it("seeds initiatives.json with Team in Temper (lead: the owner's pick), and files by its markers", () => {
 		expect(store.initiatives()).toEqual([TEAM_IN_TEMPER]);
 		expect(JSON.parse(readFileSync(join(dir, "initiatives.json"), "utf8")).initiatives[0]).toMatchObject({
 			id: "team-in-temper",
-			lead: null,
+			lead: "architecture",
+			leadSet: { by: "owner" },
 		});
 		const rec = (text: string, over = {}) =>
 			({

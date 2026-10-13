@@ -10,10 +10,30 @@
  */
 import { useEffect, useSyncExternalStore } from "react";
 import { appSend } from "./app-globals";
-import type { ServerMessage, UiDecisionRecordView, UiDecisionsPage } from "./types";
+import type { ServerMessage, UiDecisionRecordView, UiDecisionsPage, UiUpdateDecision, UiUpdateLink } from "./types";
 
 export type InitiativesPayload = Extract<ServerMessage, { type: "initiatives" }>;
 export type DecisionRecordPayload = Extract<ServerMessage, { type: "decision_record" }>;
+export type InitiativeResultPayload = Extract<ServerMessage, { type: "initiative_result" }>;
+export type UpdateLinksPayload = Extract<ServerMessage, { type: "initiative_update_links" }>;
+
+/** progress-feed (task #85): a lead change or an "Ask for an update" on its way, or how it ended. */
+export interface FeedAction {
+	op: "lead" | "poke";
+	initiative: string;
+	status: "sending" | "done" | "error";
+	error?: string;
+	/** This window's clock when it was sent (a stale "sending" turns into an error). */
+	sentAt: number;
+}
+
+/** progress-feed: everything one update links, asked for on demand. */
+export interface UpdateLinksState {
+	status: "loading" | "ready" | "error";
+	links?: UiUpdateLink[];
+	decisions?: UiUpdateDecision[];
+	error?: string;
+}
 
 /** How many decisions the tab asks for at first, and how many more each "Show more" adds. */
 export const INITIATIVES_PAGE_SIZE = 100;
@@ -45,7 +65,10 @@ let state: InitiativesState = { page: null, status: "idle", limit: INITIATIVES_P
 let watchers = 0;
 let watching = false;
 const records = new Map<string, RecordState>();
+const updateLinks = new Map<string, UpdateLinksState>();
+const actions = new Map<string, FeedAction>();
 const listeners = new Set<() => void>();
+let reqSeq = 0;
 
 function notify(): void {
 	for (const l of listeners) l();
@@ -194,11 +217,97 @@ export function useDecisionRecord(id: string | null): RecordState | undefined {
 	return id ? records.get(id) : undefined;
 }
 
+// progress-feed (task #85) ---------------------------------------------------
+
+const actionKey = (op: "lead" | "poke", initiative: string): string => `${op}:${initiative}`;
+
+function sendAction(op: "lead" | "poke", initiative: string, msg: Record<string, unknown>): void {
+	const reqId = `ini-${Date.now().toString(36)}-${++reqSeq}`;
+	actions.set(actionKey(op, initiative), { op, initiative, status: "sending", sentAt: Date.now() });
+	if (!appSend({ ...msg, reqId } as Parameters<typeof appSend>[0])) {
+		actions.set(actionKey(op, initiative), {
+			op,
+			initiative,
+			status: "error",
+			error: "Not connected to the server.",
+			sentAt: Date.now(),
+		});
+	}
+	state = { ...state };
+	notify();
+}
+
+/** The owner sets (or clears, null) an initiative's lead. */
+export function setInitiativeLead(initiative: string, lead: string | null): void {
+	sendAction("lead", initiative, { type: "initiative_lead", initiative, lead });
+}
+
+/** The owner's "Ask for an update". */
+export function askForUpdate(initiative: string): void {
+	sendAction("poke", initiative, { type: "initiative_poke", initiative });
+}
+
+/** The owner looked at an initiative's Progress. */
+export function markInitiativeSeen(initiative: string): void {
+	appSend({ type: "initiative_seen", initiative });
+}
+
+/** `initiative_result` from the server. */
+export function receiveInitiativeResult(payload: InitiativeResultPayload): void {
+	if (!payload.initiative || (payload.op !== "lead" && payload.op !== "poke")) return;
+	actions.set(actionKey(payload.op, payload.initiative), {
+		op: payload.op,
+		initiative: payload.initiative,
+		status: payload.ok ? "done" : "error",
+		...(payload.ok ? {} : { error: payload.error || "It didn't go through." }),
+		sentAt: Date.now(),
+	});
+	state = { ...state };
+	notify();
+}
+
+export function feedAction(op: "lead" | "poke", initiative: string): FeedAction | undefined {
+	return actions.get(actionKey(op, initiative));
+}
+
+/** Everything one update links: ask once (again after an error). */
+export function requestUpdateLinks(id: string): void {
+	const have = updateLinks.get(id);
+	if (have && have.status !== "error") return;
+	updateLinks.set(id, { status: "loading" });
+	state = { ...state };
+	notify();
+	if (!appSend({ type: "initiative_update_links", update: id })) {
+		updateLinks.set(id, { status: "error", error: "Not connected to the server." });
+		state = { ...state };
+		notify();
+	}
+}
+
+/** `initiative_update_links` from the server. */
+export function receiveUpdateLinks(payload: UpdateLinksPayload): void {
+	if (!payload.update) return;
+	updateLinks.set(
+		payload.update,
+		payload.links
+			? { status: "ready", links: payload.links, decisions: payload.decisions ?? [] }
+			: { status: "error", error: payload.error || "That update isn't kept here." },
+	);
+	state = { ...state };
+	notify();
+}
+
+export function updateLinksState(id: string): UpdateLinksState | undefined {
+	return updateLinks.get(id);
+}
+
 /** Tests: forget everything. */
 export function resetInitiativesState(): void {
 	state = { page: null, status: "idle", limit: INITIATIVES_PAGE_SIZE };
 	watchers = 0;
 	watching = false;
 	records.clear();
+	updateLinks.clear();
+	actions.clear();
 	notify();
 }

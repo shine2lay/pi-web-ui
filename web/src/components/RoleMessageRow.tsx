@@ -67,6 +67,7 @@ export function useFocusAfterToggle(msgId: string, ref: { current: HTMLElement |
 
 /** The row's "From ..." label. */
 export function roleMessageFrom(m: RoleMessageView, t: Translate): string {
+	if (m.kind === "report" && m.poke) return t("roleMessageFoldPage");
 	if (m.kind === "report") return t("roleMessageFoldApp");
 	// board (task #76): the turn-start note comes from the board; an order from its poster.
 	if (m.kind === "board") return t("roleMessageFoldBoard");
@@ -76,6 +77,7 @@ export function roleMessageFrom(m: RoleMessageView, t: Translate): string {
 
 /** The row's kind word. */
 export function roleMessageKindWord(m: RoleMessageView, t: Translate): string {
+	if (m.kind === "report" && m.poke) return t("roleMessageFoldPoke", { name: m.poke.name });
 	if (m.kind === "report") return t("roleMessageFoldReport", { date: m.reportDate ?? "?" });
 	if (m.kind === "board") return m.what ?? "";
 	if (m.kind === "board-order") return t("roleMessageFoldBoardOrder");

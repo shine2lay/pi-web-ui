@@ -30,6 +30,8 @@ export interface ParsedRoleMessage {
 	replyTo?: string;
 	/** For the 6 am report request: the day it asks about. */
 	reportDate?: string;
+	/** progress-feed (task #85): the Initiatives page's ask for a progress update: the initiative's name. */
+	poke?: { name: string };
 	/** What the sender wrote (header and hint lines removed). */
 	body: string;
 	/** The hint line for the model, when there is one. */
@@ -38,12 +40,17 @@ export interface ParsedRoleMessage {
 
 const ID = "rm-[0-9a-f]{8}";
 const REPORT_RE = new RegExp(`^\\[Role message (${ID}) from the app \\u00b7 6 am report \\u00b7 ([^\\]]+)\\]$`);
+/** progress-feed (task #85): server/role-messages.ts roleMessageHeader for a poke. */
+const POKE_RE = new RegExp(
+	`^\\[Role message (${ID}) from the Initiatives page \\u00b7 progress update \\u00b7 ([^\\]]+)\\]$`,
+);
 const ROLE_RE = new RegExp(
 	`^\\[Role message (${ID}) from ([a-z0-9][a-z0-9._-]*) \\((.*)\\), sent from its (.*) \\u00b7 (question|request|fyi|reply to (${ID})|reply)\\]$`,
 );
 /** The hint lines the server adds (roleMessageHint); anything else stays part of the body. */
 const HINT_STARTS = [
 	"(The app's 6 am report request:",
+	"(The Initiatives page asks you,",
 	"(An FYI from another role,",
 	"(The answer to your message",
 	"(Answer it once, with message_role",
@@ -107,8 +114,11 @@ export function parseRoleMessageText(text: string): ParsedRoleMessage | null {
 	let rest = nl === -1 ? "" : text.slice(nl + 1);
 	let parsed: Omit<ParsedRoleMessage, "body" | "hint">;
 	const report = REPORT_RE.exec(head);
+	const poke = report ? null : POKE_RE.exec(head);
 	if (report) {
 		parsed = { id: report[1], kind: "report", reportDate: report[2] };
+	} else if (poke) {
+		parsed = { id: poke[1], kind: "report", poke: { name: poke[2] } };
 	} else {
 		const m = ROLE_RE.exec(head);
 		if (!m) return null;
@@ -137,6 +147,8 @@ export interface RoleMessageView {
 	fromChat: string;
 	replyTo?: string;
 	reportDate?: string;
+	/** progress-feed (task #85): kind report from the Initiatives page: an ask for a progress update. */
+	poke?: { name: string; initiative?: string };
 	/** board: an order the owner gave through a role (COO): that role. */
 	via?: string;
 	/** board: a note's head ("2 new posts"), an order's time. */
@@ -178,6 +190,7 @@ export function roleMessageViewOf(message: ChatMessageLike, text: string): RoleM
 		fromChat: p.chat ?? "",
 		...(p.replyTo ? { replyTo: p.replyTo } : {}),
 		...(p.reportDate ? { reportDate: p.reportDate } : {}),
+		...(p.poke ? { poke: p.poke } : {}),
 		text: p.body,
 		stamped: false,
 	};

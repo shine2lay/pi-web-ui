@@ -261,6 +261,21 @@ export function recordView(rec: DecisionRecord, chat?: { path?: string; title?: 
 					})),
 				}
 			: {}),
+		...(rec.needsYou === true ? { needsYou: true } : {}),
+		...(rec.update
+			? {
+					update: {
+						changed: rec.update.changed,
+						next: rec.update.next,
+						needsYou: rec.update.needsYou,
+						...(rec.update.impact ? { impact: rec.update.impact } : {}),
+						...(rec.update.options ? { options: rec.update.options } : {}),
+						...(rec.update.until ? { until: rec.update.until } : {}),
+					},
+				}
+			: {}),
+		...(rec.sources?.length ? { sources: [...rec.sources] } : {}),
+		...(str(rec.initiative) ? { initiative: str(rec.initiative) } : {}),
 		...(chat?.path ? { chatPath: chat.path } : {}),
 		...(chat?.title ? { chatTitle: chat.title } : {}),
 	};

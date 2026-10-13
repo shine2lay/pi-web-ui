@@ -109,6 +109,8 @@ export interface UiRoleMessage {
 	replyTo?: string;
 	/** role-reports: kind report: the day the report is about (YYYY-MM-DD, Pacific). */
 	reportDate?: string;
+	/** progress-feed (task #85): kind report sent by the Initiatives page: an ask for a progress update. */
+	poke?: { initiative: string; name: string };
 	/** decision-records: the initiative it is part of (a short id). */
 	initiative?: string;
 	/** quiet-turns: a reply that answers a question asked for the owner: the turn it starts is his to
@@ -1670,6 +1672,15 @@ export type ClientMessage =
 	| { type: "initiatives_unwatch" }
 	/** initiatives-page: one kept record a card cites, in full (answered with decision_record). */
 	| { type: "decision_record"; record: string }
+	/** progress-feed (task #85): the owner sets or clears an initiative's lead (null = none); answered with
+	 *  initiative_result. Only the owner's page sends it: roles have no tool for it. */
+	| { type: "initiative_lead"; initiative: string; lead: string | null; reqId?: string }
+	/** progress-feed: the owner's "Ask for an update" button; answered with initiative_result. */
+	| { type: "initiative_poke"; initiative: string; reqId?: string }
+	/** progress-feed: the owner looked at an initiative's Progress (its "new since you looked" dot clears). */
+	| { type: "initiative_seen"; initiative: string }
+	/** progress-feed: everything one update links (answered with initiative_update_links). */
+	| { type: "initiative_update_links"; update: string }
 	/** Read an identity's about.md / notebook.md (answered with `identity_file`). */
 	| { type: "identity_file_get"; id: string; file: IdentityFileName }
 	/** Save a whole about.md / notebook.md (answered with `identity_file_saved`). baseHash = the hash from
@@ -2051,7 +2062,7 @@ export interface UiDecisionSource {
 	ref?: string;
 	link?: string;
 	at: number;
-	kind: "message" | "board" | "answer" | "plan" | "role";
+	kind: "message" | "board" | "answer" | "plan" | "tldr" | "update" | "role";
 	/** The role that wrote it, or "owner" for his own words. */
 	writer: string;
 	approval: UiApprovalKind;
@@ -2128,6 +2139,10 @@ export interface UiInitiativeRow {
 	name: string;
 	/** The lead role (task #85 sets it). */
 	lead: string | null;
+	/** progress-feed (task #85): who set the lead, when and from what (only the owner sets one). */
+	leadSet?: UiLeadSet;
+	/** progress-feed: the initiative's progress feed, at a glance (absent for Unfiled). */
+	feed?: UiFeedRow;
 	decisions: number;
 	changes: number;
 	/** Entries (decisions and changes) without an impact for the owner. */
@@ -2168,12 +2183,147 @@ export interface UiDecisionsPage {
 	reader: UiReaderStatus;
 	/** Entries per local day (decisions + changes). */
 	perDay: Record<string, number>;
+	/** progress-feed (task #85): the selected initiative's Progress section (absent for Unfiled and all). */
+	progress?: UiProgress;
+}
+
+/** progress-feed (task #85): who set an initiative's lead. Only the owner sets one. */
+export interface UiLeadSet {
+	by: "owner";
+	at: number;
+	/** "page" (set on the Initiatives page) or the record of his answer (dr-…). */
+	source: string;
+}
+
+/** progress-feed: an initiative's feed in the list. */
+export interface UiFeedRow {
+	/** Off: the feed doesn't cover it (settings: decisions feedInitiatives). */
+	on: boolean;
+	lastUpdateAt?: number;
+	/** Items in the latest update's Needs you. */
+	needsYou: number;
+	/** An update came after the owner last looked at the initiative. */
+	newSinceSeen: boolean;
+	/** An ask for an update that hasn't been answered yet: when it was sent. */
+	askedAt?: number;
+}
+
+/** progress-feed: a lead's progress update's fields ("" when the lead left one empty). */
+export interface UiUpdateFields {
+	changed: string;
+	next: string;
+	needsYou: string;
+	impact?: string;
+	options?: string;
+	until?: string;
+}
+
+/** progress-feed: a claim in an update that its linked records don't hold (the second-hand check). */
+export interface UiUpdateFlag {
+	/** owner: says or implies you decided; the rest: a claim its sources don't hold. */
+	kind: "owner" | "impact" | "cost" | "option" | "date" | "number";
+	/** code: a script found it; reader: the reader found it (and code checked its quotes). */
+	by: "code" | "reader";
+	claim: string;
+	why: string;
+}
+
+export interface UiUpdateSentence {
+	field: keyof UiUpdateFields;
+	text: string;
+	flags: UiUpdateFlag[];
+}
+
+/** progress-feed: a decision or change an update links (directly, or through a record it links). */
+export interface UiUpdateDecision {
+	id: string;
+	kind: "decision" | "change";
+	title: string;
+	at: number;
+	writer: string;
+	approval: UiApprovalKind;
+	you: boolean;
+	flags: UiWhoFlag[];
+}
+
+/** progress-feed: one record or entry an update links. */
+export interface UiUpdateLink {
+	/** A record (dr-…) or an entry (d…, c…). */
+	id: string;
+	kind: "record" | "decision" | "change" | "missing";
+	/** A record: its source view, for the source dialog; an entry: its head record's. */
+	source?: UiDecisionSource;
+	/** An entry's title, a record's short label. */
+	title?: string;
+}
+
+export interface UiProgressUpdate {
+	/** The update's record (dr-…). */
+	id: string;
+	at: number;
+	/** The lead who posted it. */
+	by: string;
+	byName: string;
+	fields: UiUpdateFields;
+	/** What it links, in its order (the first ones; linksTotal counts all). */
+	links: UiUpdateLink[];
+	linksTotal: number;
+	/** The decisions and changes it links, with their writer and approval labels (the first ones). */
+	decisions: UiUpdateDecision[];
+	decisionsTotal: number;
+	/** The second-hand check: each sentence and its flags ("checking" while the reader works). */
+	check: { state: "checking" | "done" | "off"; sentences: UiUpdateSentence[]; flagged: number; readerError?: string };
+	/** The lead posted a later update (one that can correct this one's flags). */
+	later?: boolean;
+}
+
+/** progress-feed: what roles filed under an initiative with no lead (unsummarized, newest first). */
+export interface UiRoleUpdate {
+	id: string;
+	at: number;
+	kind: "tldr" | "plan";
+	role: string;
+	roleName: string;
+	text: string;
+	needsYou?: boolean;
+	source: UiDecisionSource;
+}
+
+export interface UiProgress {
+	initiative: string;
+	/** Off: the feed doesn't cover this initiative: nothing is collected, asked or read for it. */
+	on: boolean;
+	lead: string | null;
+	leadName?: string;
+	leadSet?: UiLeadSet;
+	/** Roles the owner can pick as lead. */
+	roles: { id: string; name: string }[];
+	/** The lead's updates, newest first (the first ones; updatesTotal counts all). */
+	updates: UiProgressUpdate[];
+	updatesTotal: number;
+	/** No lead: the roles' own updates. */
+	roleUpdates?: UiRoleUpdate[];
+	/** An ask for an update not answered yet. */
+	asked?: { at: number; delivered: boolean; by: "auto" | "owner" | "catch-up" };
+	/** Decisions and changes no update links yet. */
+	unlinked: { decisions: number; changes: number };
+	/** Decisions without an impact, options or until. */
+	missing: number;
+	catchUp?: { from: string; done: boolean; stalled: boolean };
 }
 
 /** One kept record as a card's source dialog shows it. */
 export interface UiDecisionRecordView {
 	id: string;
-	source: "message" | "board" | "answer" | "plan";
+	/** progress-feed (task #85): "tldr" a role's TL;DR line; "update" a lead's progress update. */
+	source: "message" | "board" | "answer" | "plan" | "tldr" | "update";
+	/** progress-feed: a TL;DR line marked as needing the owner. */
+	needsYou?: boolean;
+	/** progress-feed: a lead's progress update: its fields and the records it links. */
+	update?: UiUpdateFields;
+	sources?: string[];
+	/** The initiative it is filed under, when the record says. */
+	initiative?: string;
 	at: number;
 	from: string;
 	to?: string;
@@ -4400,6 +4550,24 @@ export type ServerMessage =
 	| { type: "initiatives"; page?: UiDecisionsPage; error?: string }
 	/** initiatives-page: one record a card cites; error when it isn't kept. */
 	| { type: "decision_record"; record: string; view?: UiDecisionRecordView; error?: string }
+	/** progress-feed: what an initiative_lead / initiative_poke did (ok false: error says why; nothing changed). */
+	| {
+			type: "initiative_result";
+			reqId?: string;
+			op: "lead" | "poke";
+			initiative: string;
+			ok: boolean;
+			error?: string;
+			at?: number;
+	  }
+	/** progress-feed: everything one update links; error when there's no such update. */
+	| {
+			type: "initiative_update_links";
+			update: string;
+			links?: UiUpdateLink[];
+			decisions?: UiUpdateDecision[];
+			error?: string;
+	  }
 	/** board: what a board_post / board_close did. ok false: error says why (nothing changed). For a post:
 	 *  id, the roles it reached directly (direct) and the ones that read it at their next turn (later). */
 	| {

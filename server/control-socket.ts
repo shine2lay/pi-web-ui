@@ -20,6 +20,9 @@
  *   → {"cmd":"decisions_status"}  ← {"ok":true,"decisions":{file, backfill, counts, reader, decisions}}
  *   → {"cmd":"decisions_read","maxBatches":N}  ← {"ok":true,"decisions":{started}} (the decision reader reads
  *     now, in the background, within its settings and daily cap; initiatives-page, task #84)
+ *   → {"cmd":"feed_status"}  ← {"ok":true,"feed":{settings, <initiative>: {lead, updates, unlinked, open, ...}}}
+ *   → {"cmd":"feed_catch_up","initiative":"team-in-temper","date":"YYYY-MM-DD"}  ← {"ok":true,"feed":{id,unlinked}}
+ *     (progress-feed, task #85: the one-time catch-up ask to the initiative's lead, from that day on)
  *   → anything else           ← {"ok":false,"error":"..."}
  *
  * Idle connections are closed after a short timeout so a stuck CLI never
@@ -70,6 +73,8 @@ type ControlService = Pick<AgentService, "serviceStatus" | "quiesce" | "unquiesc
 			| "decisionsStatus"
 			| "decisionsRead"
 			| "decisionsRecoverCall"
+			| "feedStatus"
+			| "feedCatchUp"
 		>
 	>;
 
@@ -94,7 +99,11 @@ export interface ControlCommand {
 		| "decisions_backfill"
 		| "decisions_status"
 		| "decisions_read"
-		| "decisions_recover_call";
+		| "decisions_recover_call"
+		| "feed_status"
+		| "feed_catch_up";
+	/** feed_catch_up: the initiative (date = the day it covers from). */
+	initiative?: unknown;
 	/** decisions_recover_call: fixed operation metadata, never supplied proof/approval. */
 	recovery?: unknown;
 	/** decisions_read: at most this many calls. */
@@ -128,6 +137,8 @@ export interface ControlStatus {
 	receipts?: RoleReportReceipt[];
 	/** decision-records: decisions_backfill's progress, or decisions_status. */
 	decisions?: unknown;
+	/** progress-feed: feed_status, or what feed_catch_up sent. */
+	feed?: unknown;
 }
 
 /** Start the control socket; returns a stop function. */
@@ -283,6 +294,22 @@ export function startControlServer(opts: {
 							? { ok: true, decisions: service.decisionsStatus() }
 							: { ok: false, error: "decision records aren't kept here" };
 						break;
+					case "feed_status":
+						resp = service.feedStatus
+							? { ok: true, feed: service.feedStatus() }
+							: { ok: false, error: "this engine has no progress feed" };
+						break;
+					case "feed_catch_up": {
+						if (!service.feedCatchUp) {
+							resp = { ok: false, error: "this engine has no progress feed" };
+							break;
+						}
+						const res = service.feedCatchUp(req.initiative, req.date);
+						resp = res.ok
+							? { ok: true, feed: { id: res.id, unlinked: res.unlinked } }
+							: { ok: false, error: res.error };
+						break;
+					}
 					default:
 						resp = { ok: false, error: `unknown cmd: ${String((req as { cmd?: unknown }).cmd)}` };
 						break;

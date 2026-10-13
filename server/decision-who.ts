@@ -174,7 +174,7 @@ const STOP = new Set(
 );
 
 /** The content words of a text, lower case, a plural's "s" dropped ("A round:" -> round). */
-function contentWords(s: string): Set<string> {
+export function contentWords(s: string): Set<string> {
 	const out = new Set<string>();
 	for (const w of normText(s).match(/[a-z][a-z0-9-]{2,}/g) ?? []) {
 		if (STOP.has(w)) continue;
@@ -283,7 +283,7 @@ function askingRole(rec: DecisionRecord): string {
 	return rec.chat ?? "";
 }
 
-interface Field {
+export interface Field {
 	place: QuotePlace;
 	text: string;
 	owner: boolean;
@@ -295,7 +295,7 @@ interface Field {
 const APPROVAL_PICK =
 	/^\W*(?:go ahead|yes|approve[ds]?|accept(?:ed)?|agree[ds]?|ok(?:ay)?|proceed|do it|confirm(?:ed)?|take (?:[\w'\u2019-]+ ){0,3}(?:advice|recommendation|plan|proposal))\b/i;
 
-function answerFields(rec: DecisionRecord): Field[] {
+export function answerFields(rec: DecisionRecord): Field[] {
 	const out: Field[] = [];
 	let anyApproval = false;
 	for (const q of rec.questions ?? []) {

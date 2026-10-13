@@ -290,7 +290,7 @@ import { boundedDecisionModel } from "./decision-bounded-model.js";
 import { parseRecoveryCommand } from "./decision-recovery.js";
 import { AnswerPreviews } from "./decision-previews.js";
 import { DecisionReader, readerStatus, type ReadResult, unreadOf } from "./decision-reader.js";
-import { DecisionStore } from "./decision-store.js";
+import { DecisionStore, fileRecord } from "./decision-store.js";
 import { buildDecisionsPage, recordView } from "./decision-view.js";
 import {
 	BOARD_CUSTOM_TYPE,
@@ -482,8 +482,12 @@ import {
 	messageRecord,
 	type NewDecisionRecord,
 	QueueScanner,
+	recordId,
 	SCAN_STATE_FILE,
 } from "./decision-records.js";
+import { type DecisionModel, isolatedDecisionModel } from "./decision-model.js";
+import { makeInitiativeUpdateTool } from "./initiative-update-tool.js";
+import { ProgressFeed } from "./progress-feed.js";
 import { launchOrigin, toServiceInfo } from "./launch-origin.js";
 import { imageIfVersion, type ChatImage } from "./chat-image.js";
 import {
@@ -1912,7 +1916,7 @@ function quietRunsOf(conv: Conversation, idx: ChatIndex): QuietRun[] {
 	}
 	const stampOf = (m: unknown) => {
 		const s = roleMessageService?.stampForMessage(file, m as AgentMessage);
-		return s ? { kind: s.kind, ...(s.forOwner ? { forOwner: true } : {}) } : null;
+		return s ? { kind: s.kind, ...(s.forOwner ? { forOwner: true } : {}), ...(s.poke ? { poke: true } : {}) } : null;
 	};
 	const msgs = idx.raw.map((m) => {
 		let q = quietMsgCache.get(m);
@@ -1982,6 +1986,8 @@ let roleTurnSettled: ((file: string, rec: RoleTurnRecord) => void) | null = null
 let rolesOverviewSource: (() => Promise<UiRolesOverview>) | null = null;
 /** initiatives-page: the decisions store and the kept records, for the decision_log tool (AgentService sets it). */
 let decisionsService: Omit<DecisionLogHost, "sender"> | null = null;
+/** progress-feed (task #85): the initiatives' progress feeds, for the initiative_update tool (AgentService sets it). */
+let progressFeedService: ProgressFeed | null = null;
 
 /** role-messages: the first text of a user message. */
 function firstUserText(m: AgentMessage): string | undefined {
@@ -4993,6 +4999,12 @@ export class ClientSession {
 					// initiatives-page (task #84): roles list, add and correct the Initiatives page's decisions.
 					// Registered everywhere; it refuses chats without a role, as message_role does.
 					makeDecisionLogTool(this.decisionLogHost(ownerId)),
+					// progress-feed (task #85): an initiative's lead reads what's new and posts progress updates.
+					// Registered everywhere; it refuses chats without a role, and only the initiative's lead may post.
+					makeInitiativeUpdateTool({
+						sender: () => this.roleMessageHost(ownerId).sender(),
+						feed: () => progressFeedService ?? undefined,
+					}),
 					// telegram-coo: every role's state in one call, read-only (the Roles page's snapshot as text).
 					makeRolesOverviewTool({
 						read: () =>
@@ -15452,6 +15464,8 @@ export class AgentService {
 			statePath: join(this.decisions.dir, SCAN_STATE_FILE),
 			roleOf: (files) => this.decisionChatRoles(files),
 			chatOf: (file) => this.decisionChatTitles.get(file),
+			// progress-feed (task #85): TL;DR lines, only those filed under an initiative with a Progress feed.
+			keepTldr: (rec) => this.keepTldr(rec),
 			log: (line) => console.log(line),
 		});
 		// role-messages: the store is read now (message_role works at once); delivery starts with
@@ -15492,6 +15506,31 @@ export class AgentService {
 			log: (line) => console.log(line),
 		});
 		roleBoardService = this.roleBoard;
+		// progress-feed (task #85): one running progress feed per initiative, written by its lead from the roles'
+		// records and linked to them (progress-feed.ts). Its asks go the way role requests do, as the Initiatives
+		// page's (outside the role message caps); its timer starts with startRoleMessages.
+		this.progressFeed = new ProgressFeed(
+			{
+				store: () => this.decisionStore,
+				records: () => this.keptRecords().list,
+				append: (rec) => this.decisions.append(rec),
+				roles: () => identityRegistry().identities.map((i) => ({ id: i.id, name: i.title || i.id })),
+				poke: (input) => {
+					const r = this.roleMessages.requestPoke(input);
+					return r.ok ? { ok: true, id: r.record.id } : r;
+				},
+				pokeState: (id) => this.roleMessages.byId(id)?.state,
+				leadBusy: (role) => {
+					const home = identityRegistry().identities.find((i) => i.id === role)?.homeChat;
+					return !!home && this.queueChatState(home).state === "working";
+				},
+				model: () => this.feedModel(),
+				changed: () => this.onDecisionsChanged?.(),
+				log: (line) => console.log(line),
+			},
+			this.decisions.dir,
+		);
+		progressFeedService = this.progressFeed;
 		// telegram-coo: a role home chat's replies go to the plugins; roles_overview reads the Roles page.
 		roleTurnSettled = (file, rec) => this.roleTurnSettled(file, rec);
 		rolesOverviewSource = () => this.readRolesOverview();
@@ -15533,6 +15572,7 @@ export class AgentService {
 		this.roleMessages.start();
 		this.roleBoard.start();
 		this.startDecisionRecords();
+		this.progressFeed.start();
 	}
 
 	// -----------------------------------------------------------------------
@@ -15591,6 +15631,7 @@ export class AgentService {
 	private decisionReadNow: Promise<ReadResult> | null = null;
 	private decisionRecordsIndex: {
 		key: string;
+		list: DecisionRecord[];
 		byId: Map<string, DecisionRecord>;
 		byRef: Map<string, DecisionRecord>;
 	} | null = null;
@@ -15627,8 +15668,12 @@ export class AgentService {
 		this.decisionReader.start();
 	}
 
-	/** The kept records by id and by ref, read again only when the file changed. */
-	private keptRecords(): { byId: Map<string, DecisionRecord>; byRef: Map<string, DecisionRecord> } {
+	/** The kept records (oldest first), by id and by ref, read again only when the file changed. */
+	private keptRecords(): {
+		list: DecisionRecord[];
+		byId: Map<string, DecisionRecord>;
+		byRef: Map<string, DecisionRecord>;
+	} {
 		let key = "none";
 		try {
 			const st = statSync(this.decisions.file);
@@ -15641,7 +15686,7 @@ export class AgentService {
 		const byId = new Map(list.map((r) => [r.id, r] as const));
 		const byRef = new Map<string, DecisionRecord>();
 		for (const r of list) if (!byRef.has(r.ref)) byRef.set(r.ref, r);
-		this.decisionRecordsIndex = { key, byId, byRef };
+		this.decisionRecordsIndex = { key, list, byId, byRef };
 		return this.decisionRecordsIndex;
 	}
 
@@ -15655,12 +15700,96 @@ export class AgentService {
 	initiativesPage(initiative?: string, limit = 200): UiDecisionsPage {
 		const store = this.decisionStore;
 		const sel = initiative ?? store.initiatives()[0]?.id ?? "";
-		const { byId } = this.keptRecords();
+		const { list, byId } = this.keptRecords();
 		const reader = readerStatus(store, undefined);
 		// Unread from the cached records (the reader's own count reads the whole file): only those filed to an
 		// initiative it reads (task #98).
 		reader.unread = unreadOf(store, byId.values());
-		return buildDecisionsPage(store, byId, reader, { initiative: sel, limit: Math.max(1, Math.min(limit, 2000)) });
+		const page = buildDecisionsPage(store, byId, reader, {
+			initiative: sel,
+			limit: Math.max(1, Math.min(limit, 2000)),
+		});
+		// progress-feed (task #85): each initiative's lead (who set it) and feed badges; the selected one's Progress.
+		const inis = new Map(store.initiatives().map((i) => [i.id, i] as const));
+		for (const row of page.initiatives) {
+			const ini = inis.get(row.id);
+			if (ini?.leadSet) row.leadSet = { ...ini.leadSet };
+			if (ini) row.feed = this.progressFeed.row(row.id, list);
+		}
+		if (sel && inis.has(sel)) page.progress = this.progressFeed.view(sel, list);
+		return page;
+	}
+
+	// -----------------------------------------------------------------------
+	// progress-feed (task #85): one running progress feed per initiative (progress-feed.ts)
+	// -----------------------------------------------------------------------
+
+	private readonly progressFeed: ProgressFeed;
+	private feedModelFn: DecisionModel | undefined;
+
+	/** The second-hand check's reader: one isolated call per update (the cheapest Claude model, "auto"). */
+	private feedModel(): DecisionModel {
+		if (!this.feedModelFn)
+			this.feedModelFn = isolatedDecisionModel({
+				cwd: this.decisions.dir,
+				agentDir: process.env.PI_CODING_AGENT_DIR ?? getAgentDir(),
+			});
+		return this.feedModelFn;
+	}
+
+	/**
+	 * A TL;DR line is kept only when it is filed under an initiative with a Progress feed (the owner: only
+	 * Team in Temper). Its initiative: its own field, else its queued task's (the scanner set both on
+	 * rec.initiative, in that order), else the reader's filing by markers.
+	 */
+	private keepTldr(rec: NewDecisionRecord): NewDecisionRecord | undefined {
+		const on = this.decisionStore.feedSettings().initiatives;
+		if (!on.length) return undefined;
+		const probe: DecisionRecord = {
+			...rec,
+			v: 1,
+			id: recordId(rec.source, rec.ref),
+			seen: rec.at,
+			how: rec.how ?? "live",
+		};
+		const to = fileRecord(probe, this.decisionStore.initiatives())?.initiative;
+		if (!to || !on.includes(to)) return undefined;
+		return { ...rec, initiative: to };
+	}
+
+	/** The page: the owner sets or clears an initiative's lead (never a role). */
+	setInitiativeLead(initiative: unknown, lead: unknown): { ok: true } | { ok: false; error: string } {
+		if (typeof initiative !== "string" || !initiative.trim()) return { ok: false, error: "which initiative?" };
+		if (lead !== null && typeof lead !== "string") return { ok: false, error: "lead must be a role id or none" };
+		return this.progressFeed.setLead(initiative.trim().toLowerCase(), lead);
+	}
+
+	/** The page's "Ask for an update" button. */
+	askInitiativeUpdate(initiative: unknown): { ok: true; id: string; at: number } | { ok: false; error: string } {
+		if (typeof initiative !== "string" || !initiative.trim()) return { ok: false, error: "which initiative?" };
+		return this.progressFeed.ask(initiative.trim().toLowerCase());
+	}
+
+	/** The owner looked at an initiative's Progress (its "new since you looked" dot clears). */
+	initiativeSeen(initiative: unknown): void {
+		if (typeof initiative === "string" && initiative.trim()) this.progressFeed.seen(initiative.trim().toLowerCase());
+	}
+
+	/** Everything one update links (the page's "show all"). */
+	initiativeUpdateLinks(update: unknown): ReturnType<ProgressFeed["updateLinks"]> {
+		return typeof update === "string" ? this.progressFeed.updateLinks(update.trim().toLowerCase()) : undefined;
+	}
+
+	/** Control socket feed_catch_up: the one-time catch-up ask (live use of the feed, the owner's request). */
+	feedCatchUp(initiative: unknown, from: unknown): ReturnType<ProgressFeed["catchUp"]> {
+		if (typeof initiative !== "string" || typeof from !== "string")
+			return { ok: false, error: "give initiative and from (YYYY-MM-DD)" };
+		return this.progressFeed.catchUp(initiative.trim().toLowerCase(), from.trim());
+	}
+
+	/** Control socket feed_status: each feed initiative's lead, updates, unlinked count, open ask and flags. */
+	feedStatus(): Record<string, unknown> {
+		return this.progressFeed.status();
 	}
 
 	/** One kept record a card cites, with the chat to open when its file still exists. */
@@ -15772,6 +15901,8 @@ export class AgentService {
 				roleBoardFile: join(dataDir, "role-board.json"),
 				roleOf: (files) => this.decisionChatRoles(files),
 				chatOf: (file) => this.decisionChatTitles.get(file),
+				// progress-feed (task #85): TL;DR lines filed under a feed initiative.
+				keepTldr: (rec) => this.keepTldr(rec),
 				onProgress: (p) => {
 					this.decisionBackfill = { ...p, added: { ...p.added } };
 				},
@@ -17608,6 +17739,8 @@ export class AgentService {
 		if (roleBoardService === this.roleBoard) roleBoardService = null;
 		this.queueScanner.stop();
 		this.decisionReader?.stop();
+		this.progressFeed.stop();
+		if (progressFeedService === this.progressFeed) progressFeedService = null;
 		decisionsService = null;
 		this.stopDecisionAnswers?.();
 		this.stopDecisionAnswers = null;

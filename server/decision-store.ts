@@ -113,10 +113,29 @@ export interface Initiative {
 	markers: string[];
 	/** The initiative's lead role (task #85 sets it). */
 	lead: string | null;
+	/** Who set the lead, when and from what (task #85: only the owner, on the page or by his own answer). */
+	leadSet?: LeadSet;
 	/** What it covers, in plain words: the reader files records without a marker by it. */
 	about?: string;
 	addedBy?: string;
 }
+
+/** The owner set (or cleared) an initiative's lead: on the page ("page") or by his answer (its record id). */
+export interface LeadSet {
+	by: "owner";
+	at: number;
+	source: string;
+}
+
+/**
+ * Team in Temper's lead, the owner's own pick: Ops asked him in a dialog ("Lead for Team in Temper", tool call
+ * toolu_01Mo8T1C7wqTodzeMJg4fq3X) and he picked "Architecture" on 2026-10-09 at 15:46 PDT, record
+ * dr-2941468511bb (task #85; COO rm-2e69cd88: he names each lead).
+ */
+export const TEAM_IN_TEMPER_LEAD: { lead: string; leadSet: LeadSet } = {
+	lead: "architecture",
+	leadSet: { by: "owner", at: Date.parse("2026-10-09T22:46:46.922Z"), source: "dr-2941468511bb" },
+};
 
 export const READER_THINKING = ["off", "minimal", "low", "medium", "high"] as const;
 export type ReaderThinking = (typeof READER_THINKING)[number];
@@ -220,7 +239,7 @@ export const TEAM_IN_TEMPER: Initiative = {
 		"task:security #2",
 		"task:design #55",
 	],
-	lead: null,
+	...TEAM_IN_TEMPER_LEAD,
 	about:
 		"AI roles (Pi members) working as a team inside Temper: team runs, trials and Projects, member boxes and their turns, the leader and reviews, the login/host helper temper-pi-host and its limits, switch-on and its checklist, the Team/Projects page that shows the runs. Not the chat app's own role messages, Board, queues or role chats.",
 };
@@ -270,6 +289,59 @@ export function parseSettings(raw: unknown): ReaderSettings {
 					),
 				]
 			: [...DEFAULT_SETTINGS.initiatives],
+	};
+}
+
+function leadSetOf(raw: unknown): LeadSet | undefined {
+	const o = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : undefined;
+	if (!o || o.by !== "owner" || typeof o.at !== "number" || typeof o.source !== "string") return undefined;
+	return { by: "owner", at: o.at, source: o.source };
+}
+
+/** The progress feed (task #85): which initiatives it covers and how often it asks their leads. */
+export interface FeedSettings {
+	/** The initiatives with a Progress feed: their TL;DR lines are kept, their leads asked and their updates
+	 *  checked. Others show "Progress: off". None listed = off everywhere (an install never starts asking). */
+	initiatives: string[];
+	/** At most one automatic ask per initiative this often. */
+	pokeEveryHours: number;
+	/** The daily ask, local time ("HH:MM"), when anything is new. */
+	dailyAt: string;
+	/** Whether the reader's labels (paraphrased claims) count on the page, beside code's own checks. */
+	readerCheck: boolean;
+}
+
+export const DEFAULT_FEED_SETTINGS: FeedSettings = {
+	// Owner, 2026-10-10 ~17:50 via COO rm-8fcaa366: "only enable it for teams in temper" -> listed by hand in
+	// settings.json, like the reader's initiatives.
+	initiatives: [],
+	pokeEveryHours: 3,
+	dailyAt: "17:00",
+	readerCheck: true,
+};
+
+export function parseFeedSettings(raw: unknown): FeedSettings {
+	const o = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+	const ids = Array.isArray(o.feedInitiatives)
+		? [
+				...new Set(
+					o.feedInitiatives
+						.filter((v): v is string => typeof v === "string")
+						.map((v) => v.trim())
+						.filter((v) => v.length <= INITIATIVE_MAX && INITIATIVE_ID.test(v)),
+				),
+			]
+		: [...DEFAULT_FEED_SETTINGS.initiatives];
+	const at = typeof o.dailyAt === "string" ? /^(\d{1,2}):(\d{2})$/.exec(o.dailyAt.trim()) : null;
+	const dailyAt =
+		at && Number(at[1]) < 24 && Number(at[2]) < 60
+			? `${at[1]!.padStart(2, "0")}:${at[2]}`
+			: DEFAULT_FEED_SETTINGS.dailyAt;
+	return {
+		initiatives: ids,
+		pokeEveryHours: num(o.pokeEveryHours, DEFAULT_FEED_SETTINGS.pokeEveryHours, 0.25, 168),
+		dailyAt,
+		readerCheck: o.feedReaderCheck === undefined ? DEFAULT_FEED_SETTINGS.readerCheck : o.feedReaderCheck !== false,
 	};
 }
 
@@ -398,16 +470,25 @@ export class DecisionStore {
 		const raw = readJson<{ initiatives?: Initiative[] } | Initiative[]>(this.file(INITIATIVES_FILE));
 		const list = Array.isArray(raw) ? raw : raw?.initiatives;
 		if (Array.isArray(list)) {
-			return list
+			const out: Initiative[] = list
 				.filter((i) => i && typeof i.id === "string")
 				.map((i) => ({
 					id: i.id,
 					name: typeof i.name === "string" && i.name ? i.name : i.id,
 					markers: Array.isArray(i.markers) ? i.markers.filter((m) => typeof m === "string") : [],
 					lead: typeof i.lead === "string" && i.lead ? i.lead : null,
+					...(leadSetOf(i.leadSet) ? { leadSet: leadSetOf(i.leadSet) } : {}),
 					...(typeof i.about === "string" && i.about.trim() ? { about: i.about.trim() } : {}),
 					...(i.addedBy ? { addedBy: i.addedBy } : {}),
 				}));
+			// Task #85: Team in Temper gets the owner's own pick once. A lead he set or cleared since (leadSet)
+			// is never replaced.
+			const tit = out.find((i) => i.id === TEAM_IN_TEMPER.id);
+			if (tit && !tit.lead && !tit.leadSet) {
+				Object.assign(tit, TEAM_IN_TEMPER_LEAD);
+				this.saveInitiatives(out);
+			}
+			return out;
 		}
 		const seeded = [TEAM_IN_TEMPER];
 		this.saveInitiatives(seeded);
@@ -417,6 +498,20 @@ export class DecisionStore {
 	saveInitiatives(list: Initiative[]): void {
 		mkdirSync(this.dir, { recursive: true });
 		writeJson(this.file(INITIATIVES_FILE), { initiatives: list });
+	}
+
+	/**
+	 * Set or clear an initiative's lead: the owner only (task #85), on the page (source "page") or by his own
+	 * answer (its record id). The caller checks the role exists. Returns the initiative, or an error.
+	 */
+	setLead(id: string, lead: string | null, source: string, at = this.now()): Initiative | string {
+		const list = this.initiatives();
+		const ini = list.find((i) => i.id === id);
+		if (!ini) return `no initiative "${id}"`;
+		ini.lead = lead && lead.trim() ? lead.trim() : null;
+		ini.leadSet = { by: "owner", at, source };
+		this.saveInitiatives(list);
+		return ini;
 	}
 
 	/** The records filed (by tag, then markers: fileRecord) to one of these initiative ids, in their order. */
@@ -440,6 +535,11 @@ export class DecisionStore {
 
 	settings(): ReaderSettings {
 		return parseSettings(readJson(this.file(SETTINGS_FILE)));
+	}
+
+	/** The progress feed's settings (task #85), from the same settings.json. */
+	feedSettings(): FeedSettings {
+		return parseFeedSettings(readJson(this.file(SETTINGS_FILE)));
 	}
 
 	readerState(): ReaderState {

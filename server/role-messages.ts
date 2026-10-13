@@ -100,6 +100,13 @@ export const ROLE_REPORT_HEADINGS_BEFORE = [
 export const ROLE_REPORT_MAX_AGE_DAYS = 7;
 /** role-reports: who a report request is from (not a role: the app). */
 export const ROLE_REPORT_SENDER = { role: "app", title: "the app", chat: "6 am report job", file: "" } as const;
+/** progress-feed (task #85): who asks a lead for a progress update (not a role: the Initiatives page). */
+export const ROLE_POKE_SENDER = {
+	role: "app",
+	title: "the Initiatives page",
+	chat: "Initiatives page",
+	file: "",
+} as const;
 /** role-reports: an answer without the four headings counts as final once the chat has been idle this long. */
 const REPORT_SETTLE_MS = 2 * 60_000;
 /** role-reports: no answer this long after delivery: recorded as none. */
@@ -159,6 +166,9 @@ export interface RoleMessageRecord {
 	error?: string;
 	/** role-reports: kind report: the day it is about, what the job found, and the answer's check. */
 	report?: RoleReportInfo;
+	/** progress-feed (task #85): kind report sent by the Initiatives page to an initiative's lead (no `report`):
+	 *  outside the role message caps and guards like the 6 am report, a chain of its own. */
+	poke?: RolePokeInfo;
 	/** telegram-coo: a question or request a role's home chat sent while its turn was the owner's (his
 	 *  Telegram message started it, or a reply to an earlier one of these did): the turn its reply starts
 	 *  goes to his Telegram (role-replies.ts forOwner). */
@@ -245,6 +255,17 @@ export interface RoleReportReceipt {
 
 export type RoleReportResult =
 	{ ok: true; record: RoleMessageRecord; existing: boolean; paused: boolean } | { ok: false; error: string };
+
+/** progress-feed (task #85): an ask for a progress update: which initiative, and why it was sent. */
+export interface RolePokeInfo {
+	initiative: string;
+	/** The initiative's name, for the message header. */
+	name: string;
+	/** What set it off: task-done, decision, daily, button, flag, catch-up. */
+	why: string[];
+}
+
+export type RolePokeResult = { ok: true; record: RoleMessageRecord } | { ok: false; error: string };
 
 interface StoreFile {
 	v: number;
@@ -358,9 +379,15 @@ export function chatLabel(o: { taskId?: number; isHome: boolean; title?: string 
 	return t ? `chat "${t}"` : "a chat";
 }
 
-type HeaderParts = Pick<RoleMessageRecord, "id" | "from" | "kind" | "replyTo" | "report">;
+type HeaderParts = Pick<RoleMessageRecord, "id" | "from" | "kind" | "replyTo" | "report" | "poke">;
+
+/** progress-feed (task #85): what an ask for a progress update tells the lead to do with it. */
+export const POKE_HINT =
+	"(The Initiatives page asks you, its lead, for a progress update, on the owner's request. Post it with initiative_update, not message_role. The owner reads it on the page, not here: write nothing for him in this chat.)";
 
 export function roleMessageHeader(r: HeaderParts): string {
+	if (r.kind === "report" && r.poke)
+		return `[Role message ${r.id} from the Initiatives page \u00b7 progress update \u00b7 ${oneLine(r.poke.name, 60).replace(/[\]\n]/g, " ")}]`;
 	if (r.kind === "report")
 		return `[Role message ${r.id} from the app \u00b7 6 am report \u00b7 ${r.report?.date ?? "?"}]`;
 	const what = r.kind === "reply" && r.replyTo ? `reply to ${r.replyTo}` : r.kind;
@@ -381,6 +408,7 @@ export function roleMessageHint(r: HeaderParts, opts: { ownerAnswer?: boolean } 
 	const reply = `message_role with to "${r.from.role}", kind "reply", replyTo "${r.id}"`;
 	switch (r.kind) {
 		case "report":
+			if (r.poke) return POKE_HINT;
 			return "(The app's 6 am report request: your answer in this chat is the report the owner reads. No message_role, no new work, no tasks started.)";
 		case "fyi":
 			// No turn of its own: it is read with the chat's next message, which may be the owner's.
@@ -1028,6 +1056,7 @@ export class RoleMessages {
 			kind: r.kind,
 			...(r.replyTo ? { replyTo: r.replyTo } : {}),
 			...(r.kind === "report" && r.report ? { reportDate: r.report.date } : {}),
+			...(r.poke ? { poke: { initiative: r.poke.initiative, name: r.poke.name } } : {}),
 			...(r.initiative ? { initiative: r.initiative } : {}),
 			// quiet-turns: a reply answering a question asked for the owner starts his turn, never folded.
 			...(this.ownerAnswerOf(r.id) ? { forOwner: true } : {}),
@@ -1211,6 +1240,39 @@ export class RoleMessages {
 		return { ok: true, record, existing: false, paused: this.data.paused };
 	}
 
+	/**
+	 * progress-feed (task #85): the Initiatives page asks an initiative's lead for a progress update. Sent like
+	 * a role request (after any running turn, starts a turn, retries), but as the page's, not a role's: outside
+	 * the role message caps and guards (kind report, like the 6 am report), a chain of its own.
+	 */
+	requestPoke(input: { role: string; initiative: string; name: string; text: string; why: string[] }): RolePokeResult {
+		const roleId = input.role.trim().toLowerCase();
+		const role = this.host.roles().find((r) => r.id === roleId);
+		if (!role) return { ok: false, error: `there's no role "${oneLine(roleId, 40)}"` };
+		if (!role.homeChat) return { ok: false, error: `${role.id} has no home chat` };
+		const record: RoleMessageRecord = {
+			id: newRoleMessageId((id) => !!this.byId(id)),
+			at: this.now(),
+			from: { ...ROLE_POKE_SENDER },
+			to: { role: role.id, title: role.title },
+			kind: "report",
+			chain: 1,
+			text: input.text,
+			state: "waiting",
+			sends: 0,
+			attempts: 0,
+			initiative: input.initiative,
+			poke: { initiative: input.initiative, name: input.name, why: [...input.why] },
+		};
+		this.data.messages.push(record);
+		this.save();
+		this.log(
+			`${record.id} Initiatives page -> ${role.id} \u00b7 progress update ${input.initiative} (${input.why.join(", ")})`,
+		);
+		this.kick();
+		return { ok: true, record };
+	}
+
 	/** role-reports: a refused report request, in the server log (never the token). */
 	noteReportRefused(role: unknown, date: unknown, why: string): void {
 		const short = (v: unknown) => oneLine(String(v ?? "?"), 40);
@@ -1391,6 +1453,12 @@ export class RoleMessages {
 			if (!replyTo) return { ok: false, error: "kind reply needs replyTo: the id of the message you answer (rm-…)." };
 			original = this.byId(replyTo);
 			if (!original) return { ok: false, error: `There's no message ${replyTo} to reply to.` };
+			if (original.kind === "report" && original.poke) {
+				return {
+					ok: false,
+					error: `${replyTo} is the Initiatives page's ask for a progress update: post the update with initiative_update, not message_role.`,
+				};
+			}
 			if (original.kind === "report") {
 				return {
 					ok: false,

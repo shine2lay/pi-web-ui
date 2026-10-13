@@ -4,7 +4,8 @@
  * credit flags in plain words, and the three things the owner needs (impact for him, other options and
  * their cost, until when), each shown or marked "not given". Each source opens in a dialog, with its chat.
  *
- * Task #85 adds the lead's Progress section above Decisions (see the marked place below).
+ * progress-feed (task #85): the lead's Progress section above Decisions, the owner's lead picker, and the
+ * list's feed badges (lead, last update's age, Needs-you count, "new since you looked"); see ProgressSection.
  * Theme tokens only (dark default and White); every class is prefixed iv- and scoped to .initiatives-view.
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -38,6 +39,7 @@ import {
 	youLabel,
 } from "../initiatives-view-model";
 import { clockOf } from "../roles-view-model";
+import { FeedBadges, LeadPicker, ProgressSection } from "./ProgressSection";
 import type {
 	UiDecision,
 	UiDecisionChange,
@@ -129,8 +131,8 @@ export function InitiativesView({ active, phone, onOpen }: InitiativesViewProps)
 				)}
 				{page && (
 					<div className="iv-layout">
-						<InitiativeList t={t} page={page} />
-						<Initiative t={t} page={page} names={names} now={now} onSource={openSource} />
+						<InitiativeList t={t} page={page} now={now} />
+						<Initiative t={t} page={page} names={names} now={now} active={active} onSource={openSource} />
 					</div>
 				)}
 			</div>
@@ -213,7 +215,7 @@ function ReaderLine({
 	);
 }
 
-function InitiativeList({ t, page }: { t: Translate; page: UiDecisionsPage }) {
+function InitiativeList({ t, page, now }: { t: Translate; page: UiDecisionsPage; now: number }) {
 	const rows: UiInitiativeRow[] = [...page.initiatives, page.unfiled];
 	return (
 		<nav className="iv-list" aria-label={t("ivListLabel")}>
@@ -229,6 +231,7 @@ function InitiativeList({ t, page }: { t: Translate; page: UiDecisionsPage }) {
 								onClick={() => selectInitiative(row.id)}
 							>
 								<span className="iv-rname">{row.id ? row.name : t("ivUnfiled")}</span>
+								{row.id && <FeedBadges t={t} lead={row.lead} feed={row.feed} now={now} />}
 								<span className="iv-rmeta">{rowCounts(t, row)}</span>
 								{row.noImpact > 0 && <span className="iv-rmeta">{t("ivNoImpact", { n: row.noImpact })}</span>}
 								{row.credit > 0 && (
@@ -250,21 +253,31 @@ function Initiative({
 	page,
 	names,
 	now,
+	active,
 	onSource,
 }: {
 	t: Translate;
 	page: UiDecisionsPage;
 	names: ReadonlyMap<string, string>;
 	now: number;
+	active: boolean;
 	onSource: (src: UiDecisionSource, from: HTMLElement) => void;
 }) {
 	const row = page.selected ? page.initiatives.find((i) => i.id === page.selected) : page.unfiled;
 	const name = page.selected ? (row?.name ?? page.selected) : t("ivUnfiled");
+	// The selected initiative's feed (the unfiled pile has none).
+	const progress = page.selected && page.progress?.initiative === page.selected ? page.progress : undefined;
 	return (
 		<div className="iv-main">
 			<h2 className="iv-iname">{name}</h2>
-			{row?.lead && <p className="iv-lead">{t("ivLead", { role: roleName(row.lead) })}</p>}
-			{/* Task #85: the lead's Progress section goes here, above Decisions. */}
+			{progress ? (
+				<>
+					<LeadPicker t={t} progress={progress} />
+					<ProgressSection t={t} progress={progress} active={active} now={now} onSource={onSource} />
+				</>
+			) : (
+				row?.lead && <p className="iv-lead">{t("ivLead", { role: roleName(row.lead) })}</p>
+			)}
 			<section className="iv-decisions" aria-labelledby="iv-decisions-h">
 				<h3 id="iv-decisions-h">
 					{t("ivDecisions")} <span className="iv-count">({count(page.total)})</span>

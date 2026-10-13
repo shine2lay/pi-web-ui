@@ -166,8 +166,56 @@ export function sourceLabel(t: Translate, src: UiDecisionSource): string {
 		answer: "ivKindAnswer",
 		plan: "ivKindPlan",
 		role: "ivKindRole",
+		// progress-feed (task #85)
+		tldr: "ivKindTldr",
+		update: "ivKindUpdate",
 	};
 	return t(kind[src.kind] ?? "ivKindMessage");
+}
+
+// progress-feed (task #85) ------------------------------------------------------
+
+/** "Set by you, Oct 9": who set the lead and when (only the owner sets one). */
+export function leadSetText(t: Translate, set: { at: number } | undefined): string | null {
+	if (!set) return null;
+	const date = new Date(set.at).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+	return t("ivLeadSetByYou", { date });
+}
+
+/** The check's line for one update. */
+export function checkLine(
+	t: Translate,
+	check: { state: "checking" | "done" | "off"; flagged: number },
+): { text: string; warn: boolean } {
+	if (check.state === "checking") return { text: t("ivChecking"), warn: false };
+	if (check.state === "off") return { text: t("ivCheckOff"), warn: false };
+	if (!check.flagged) return { text: t("ivCheckClean"), warn: false };
+	return {
+		text: check.flagged === 1 ? t("ivCheckFlaggedOne") : t("ivCheckFlagged", { n: check.flagged }),
+		warn: true,
+	};
+}
+
+const FLAG_KIND: Record<"owner" | "impact" | "cost" | "option" | "date" | "number", Key> = {
+	owner: "ivFlagOwner",
+	impact: "ivFlagImpact",
+	cost: "ivFlagCost",
+	option: "ivFlagOption",
+	date: "ivFlagDate",
+	number: "ivFlagNumber",
+};
+
+/** A flag's kind in plain words. */
+export function flagKindText(t: Translate, kind: keyof typeof FLAG_KIND): string {
+	return t(FLAG_KIND[kind] ?? "ivFlagImpact");
+}
+
+/** "Not in any update yet: 3 decisions, 1 change" (null when every one is linked). */
+export function unlinkedText(t: Translate, u: { decisions: number; changes: number }): string | null {
+	if (!u.decisions && !u.changes) return null;
+	const d = u.decisions === 1 ? t("ivDecisionOne") : t("ivDecisionMany", { n: count(u.decisions) });
+	const c = u.changes === 1 ? t("ivChangeOne") : t("ivChangeMany", { n: count(u.changes) });
+	return t("ivUnlinked", { d, c });
 }
 
 /** The initiative row's counts line. */

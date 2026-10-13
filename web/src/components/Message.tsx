@@ -1517,6 +1517,7 @@ function CompactionCard({
 
 /** role-messages: the chat's label for a role message, e.g. "from ops (Queue #58) \u00b7 fyi". */
 export function roleMessageLabel(m: RoleMessageView, t: Translate): string {
+	if (m.kind === "report" && m.poke) return t("rolePokeLabel", { name: m.poke.name });
 	if (m.kind === "report") return t("roleReportLabel", { date: m.reportDate ?? "?" });
 	// board (task #76): the turn-start note and an order sent directly.
 	if (m.kind === "board") return t("boardNoteLabel", { what: m.what ?? "" });
@@ -1569,6 +1570,14 @@ function RoleMessageCard({
 							: m.via
 								? t("boardOrderCardFromVia", { from: m.from, via: m.via, when: m.what ?? "" })
 								: t("boardOrderCardFrom", { from: m.from, when: m.what ?? "" })}
+					</span>
+				</>
+			) : m.kind === "report" && m.poke ? (
+				// progress-feed (task #85): the Initiatives page asks the lead for a progress update.
+				<>
+					<span className="chead-title rolemsg-title">{t("rolePokeCardTitle", { name: m.poke.name })}</span>
+					<span className="rolemsg-from">
+						{m.stamped ? t("rolePokeCardFrom", { id: m.id }) : t("rolePokeCardFromText", { id: m.id })}
 					</span>
 				</>
 			) : m.kind === "report" ? (

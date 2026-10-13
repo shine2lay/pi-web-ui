@@ -83,4 +83,8 @@
 //     entries carry queueHomeFile, conversations carries queueTasks (open task chats not in the list),
 //     identity rows carry homeChatMissing. An old page would show queueTasks nowhere and keep the old
 //     bar; an old server sends none of them (the leads view would miss tasks whose lead isn't listed).
-export const PROTOCOL_VERSION = 48;
+// 49: progress-feed - the Initiatives page's Progress section: rows carry leadSet and feed, the page carries
+//     progress; initiative_lead / initiative_poke / initiative_seen / initiative_update_links and their
+//     initiative_result / initiative_update_links answers. An old page shows no Progress and no lead
+//     picker; an old server never answers initiative_lead or initiative_poke.
+export const PROTOCOL_VERSION = 49;

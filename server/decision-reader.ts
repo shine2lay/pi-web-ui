@@ -83,6 +83,8 @@ List every record R1..Rn once, in order.`;
 
 const MAX_FIELD = 6_000;
 const MAX_KNOWN = 60;
+/** progress-feed (task #85): records kept for the Progress feed only, never read for decisions. */
+const FEED_ONLY: ReadonlySet<string> = new Set(["tldr", "update"]);
 /** Known decisions named in each record's header as most like it (relatedDecisions). */
 const RELATED_PER_RECORD = 4;
 
@@ -641,7 +643,10 @@ export class DecisionReader {
 	/** The records it reads: those filed (tag or markers) to an initiative settings.initiatives lists. The
 	 *  others stay unread and unmarked, so listing their initiative later reads them then (task #98). */
 	private mine(recs: DecisionRecord[], settings: ReaderSettings): DecisionRecord[] {
-		return this.o.allRecords ? recs : this.o.store.inInitiatives(recs, settings.initiatives);
+		// progress-feed (task #85): TL;DR lines and the leads' updates are kept for the Progress feed, not read for
+		// decisions (an update only summarizes records the reader reads itself).
+		const kept = recs.filter((r) => !FEED_ONLY.has(r.source));
+		return this.o.allRecords ? kept : this.o.store.inInitiatives(kept, settings.initiatives);
 	}
 
 	/** Records not read yet, oldest first. An exact copy of an earlier record isn't read again. */
@@ -1190,7 +1195,7 @@ export function unreadOf(store: DecisionStore, recs: Iterable<DecisionRecord>, s
 	const from = dayStart(settings.readFrom) ?? 0;
 	const read = store.readerState().read;
 	const waiting: DecisionRecord[] = [];
-	for (const r of recs) if (r.at >= from && !read[r.id]) waiting.push(r);
+	for (const r of recs) if (r.at >= from && !read[r.id] && !FEED_ONLY.has(r.source)) waiting.push(r);
 	return store.inInitiatives(waiting, settings.initiatives).length;
 }
 
