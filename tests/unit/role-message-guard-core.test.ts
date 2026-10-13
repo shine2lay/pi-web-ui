@@ -32,6 +32,7 @@ import type {
 import {
 	RoleMessageGuardCore,
 	guardCommandFingerprint,
+	guardEscalationGeneration,
 	type GuardCoreOptions,
 } from "../../server/role-message-guard-core.js";
 import { GuardFileStore, guardDigest, type GuardFileBoundary } from "../../server/role-message-guard-store.js";
@@ -166,6 +167,10 @@ async function fixture(caps: Partial<GuardRetention> = {}, initial?: GuardStoreS
 		statusAvailable: true,
 		rollbackAllowed: true,
 		hold: false,
+		decisionDrift: false,
+		wrongTarget: false,
+		selectExplicit: false,
+		calls: [] as GuardFileBoundary[],
 		fail: null as GuardFileBoundary | null,
 		dispatches: 0,
 		wakes: 0,
@@ -222,6 +227,7 @@ async function fixture(caps: Partial<GuardRetention> = {}, initial?: GuardStoreS
 		maximumBytes: 32 * 1024 * 1024,
 		withExclusive,
 		boundary: (point: GuardFileBoundary) => {
+			f.calls.push(point);
 			if (point === f.fail) throw new Error(`synthetic fault ${point}`);
 		},
 	};
@@ -236,7 +242,11 @@ async function fixture(caps: Partial<GuardRetention> = {}, initial?: GuardStoreS
 						b.tier === "owner"
 							? {
 									tier: "owner" as const,
-									reason: b.causal.nextHop >= 12 ? ("hop_12_plus" as const) : ("no_distinct_lower_approver" as const),
+									reason: f.selectExplicit
+										? ("explicit_escalation" as const)
+										: b.causal.nextHop >= 12
+											? ("hop_12_plus" as const)
+											: ("no_distinct_lower_approver" as const),
 								}
 							: { tier: "lower" as const, role: "coo", route: "coo" as const, home: actor("coo"), proof: proof() },
 					)
@@ -259,7 +269,7 @@ async function fixture(caps: Partial<GuardRetention> = {}, initial?: GuardStoreS
 		requestSnapshot: async (a, r) => verified(snapshot(a, r.binding.causal)),
 		reverifyDecision: async (d) =>
 			f.decisionAvailable
-				? verified(d)
+				? verified(f.decisionDrift ? { ...d, reason: "Synthetic drifted native record" } : d)
 				: { state: "unavailable", reason: "synthetic first answer/native source unavailable" },
 		verifyGrantLineage: async (_g, s) =>
 			f.lineageAvailable ? verified(s) : { state: "invalid", reason: "synthetic ancestry contradicts" },
@@ -280,6 +290,7 @@ async function fixture(caps: Partial<GuardRetention> = {}, initial?: GuardStoreS
 			text: i.text,
 			chain: i.chain,
 			...(i.replyTo ? { replyTo: i.replyTo } : {}),
+			...(i.target ? { target: f.wrongTarget ? "/synthetic/elsewhere.jsonl" : i.target } : {}),
 			state: "waiting",
 			sends: 0,
 			attempts: 0,
@@ -432,14 +443,24 @@ async function fixture(caps: Partial<GuardRetention> = {}, initial?: GuardStoreS
 						proof: proof(event),
 					},
 	});
+	const decisionCommand = (d: GuardVerifiedDecision, id = `decision:${d.firstAnswerEventId}`) =>
+		identified<Extract<GuardCommand, { kind: "decision_record" }>>({
+			kind: "decision_record",
+			identity: identity(id, d.authority.tier === "lower" ? d.authority.selection.home : d.binding.requester),
+			decision: fakeVerified(d),
+		});
 	const recordDecision = (d: GuardVerifiedDecision, id = `decision:${d.firstAnswerEventId}`) =>
-		core.execute(
-			identified({
-				kind: "decision_record",
-				identity: identity(id, d.authority.tier === "lower" ? d.authority.selection.home : d.binding.requester),
-				decision: fakeVerified(d),
-			}),
-		);
+		core.execute(decisionCommand(d, id));
+	const control = (id: string, request: GuardRequest, phase: "initial" | "decision", to: string, who = actor()) =>
+		identified<Extract<GuardCommand, { kind: "control_send" }>>({
+			kind: "control_send",
+			identity: identity(id, who),
+			snapshot: snapshot(who, request.binding.causal),
+			requestId: request.binding.requestId,
+			generation: request.binding.generation,
+			phase,
+			to,
+		});
 	async function grant(hop = 7, quantity: 1 | 2 | 3 | 4 | 5 = 1) {
 		const requested = await recordRequest(proposal(`req-${hop}-${quantity}`, hop, quantity));
 		expect(requested.state).toBe("recorded");
@@ -521,7 +542,9 @@ async function fixture(caps: Partial<GuardRetention> = {}, initial?: GuardStoreS
 		proposal,
 		recordRequest,
 		decision,
+		decisionCommand,
 		recordDecision,
+		control,
 		grant,
 		incident,
 		notice,
@@ -530,6 +553,16 @@ async function fixture(caps: Partial<GuardRetention> = {}, initial?: GuardStoreS
 }
 function reason(result: GuardResult): string {
 	return result.state === "blocked" ? result.reason : result.state;
+}
+type Fixture = Awaited<ReturnType<typeof fixture>>;
+async function escalated(t: Fixture, id = "esc", hop = 9, quantity: 1 | 2 | 3 | 4 | 5 = 3) {
+	const requested = await t.recordRequest(t.proposal(id, hop, quantity));
+	if (requested.state !== "recorded") throw new Error(`synthetic lower request failed: ${reason(requested)}`);
+	const lower = requested.request;
+	const escalation = t.decision(lower, "escalate_owner", `${id}-lower-escalates`);
+	const r = await t.recordDecision(escalation);
+	if (r.state !== "recorded") throw new Error(`synthetic escalation failed: ${reason(r)}`);
+	return { lower, escalation, phase: r.request };
 }
 
 describe("E admission: frozen policy and real-host boundary requirements", () => {
@@ -1050,3 +1083,370 @@ describe("E outbox, holds, recovery, clocks, retention and rollback", () => {
 		expect((await t.core.execute(t.business("alternate-use", 7, g.id, g.authority))).state).toBe("unknown");
 	});
 });
+
+describe("E one explicit Owner escalation (Ops rm-1bb3c77b)", () => {
+	it("a winning first escalate_owner keeps the lower decision and opens one Owner phase with the original bounds", async () => {
+		const t = await fixture();
+		const { lower, escalation, phase } = await escalated(t);
+		expect(phase.binding).toEqual({
+			...lower.binding,
+			generation: guardEscalationGeneration(lower.binding),
+			tier: "owner",
+		});
+		expect(phase.binding.generation.startsWith("owner-escalation-")).toBe(true);
+		expect(phase.selectedApprover).toEqual({ tier: "owner", reason: "explicit_escalation" });
+		expect(phase).toMatchObject({
+			createdAt: t.f.now,
+			expiresAt: lower.expiresAt,
+			state: "awaiting_owner",
+			upwardEscalations: 1,
+			initialNotificationKey: lower.initialNotificationKey,
+			decisionNotificationKey: lower.decisionNotificationKey,
+			firstDecision: null,
+			grantId: null,
+		});
+		expect(phase.context.priorDecisions).toHaveLength(1);
+		expect(phase.context.priorDecisions[0]).toContain("explicitly escalated");
+		expect(phase.context.priorDecisions[0]).toContain("not a grant or a final approval");
+		expect({ ...phase.context, priorDecisions: [] }).toEqual(lower.context);
+		const s = await t.state();
+		expect(s.requests).toHaveLength(2);
+		expect(s.requests[0]).toEqual({ ...lower, firstDecision: escalation, state: "revoked" });
+		expect(s.requests[1]).toEqual(phase);
+		expect(s.grants).toHaveLength(0);
+		expect(s.usage).toHaveLength(0);
+		expect(s.outbox).toHaveLength(0);
+		expect(s.audits.filter((a) => a.event === "decided")).toHaveLength(1);
+	});
+	it("duplicate escalation returns the same phase; stale lower or old-generation answers change nothing", async () => {
+		const t = await fixture();
+		const { lower, escalation, phase } = await escalated(t);
+		const again = await t.recordDecision(escalation, "decision:retry-same-answer");
+		expect(again.state === "recorded" && again.request).toEqual(phase);
+		for (const choice of ["deny", "requested_quantity"] as const) {
+			const late = await t.recordDecision(t.decision(lower, choice, `late-lower-${choice}`));
+			expect(late.state === "recorded" && late.request.firstDecision).toEqual(escalation);
+		}
+		expect(
+			reason(await t.recordDecision({ ...t.decision(lower, "deny", "lower-on-owner-phase"), binding: phase.binding })),
+		).toBe("authority_unavailable");
+		const ownerAnswer = t.decision(phase, "requested_quantity", "owner-on-old-generation");
+		if (ownerAnswer.authority.tier !== "owner") throw new Error("fixture");
+		expect(reason(await t.recordDecision({ ...ownerAnswer, binding: lower.binding }))).toBe("authority_unavailable");
+		expect(
+			reason(
+				await t.recordDecision(
+					{ ...ownerAnswer, authority: { ...ownerAnswer.authority, questionGeneration: lower.binding.generation } },
+					"decision:owner-old-question-generation",
+				),
+			),
+		).toBe("authority_unavailable");
+		const s = await t.state();
+		expect(s.requests).toHaveLength(2);
+		expect(s.requests[0].firstDecision).toEqual(escalation);
+		expect(s.requests[1]).toEqual(phase);
+		expect(s.grants).toHaveLength(0);
+		expect(s.audits.filter((a) => a.event === "decided")).toHaveLength(1);
+	});
+	it("escalation-versus-denial race: exactly the first answer wins, either way round", async () => {
+		for (const order of [
+			["escalate_owner", "deny"],
+			["deny", "escalate_owner"],
+		] as const) {
+			const t = await fixture();
+			const p = await t.recordRequest(t.proposal("race"));
+			if (p.state !== "recorded") throw new Error("fixture");
+			const results = await Promise.all(
+				order.map((choice) => t.recordDecision(t.decision(p.request, choice, `race-${choice}`))),
+			);
+			expect(results.every((r) => r.state === "recorded")).toBe(true);
+			const s = await t.state();
+			expect(s.requests[0].firstDecision?.choice).toBe(order[0]);
+			expect(s.requests).toHaveLength(order[0] === "escalate_owner" ? 2 : 1);
+			expect(s.requests[0].state).toBe(order[0] === "escalate_owner" ? "revoked" : "denied");
+			expect(s.audits.filter((a) => a.event === "decided")).toHaveLength(1);
+			expect(s.grants).toHaveLength(0);
+		}
+	});
+	it("no escalation after a winning approval or denial, after expiry, by the Owner, or a second time", async () => {
+		for (const first of ["requested_quantity", "deny"] as const) {
+			const t = await fixture();
+			const p = await t.recordRequest(t.proposal(`after-${first}`));
+			if (p.state !== "recorded") throw new Error("fixture");
+			expect((await t.recordDecision(t.decision(p.request, first, `${first}-wins`))).state).toBe("recorded");
+			const late = await t.recordDecision(t.decision(p.request, "escalate_owner", `late-escalation-${first}`));
+			expect(late.state === "recorded" && late.request.firstDecision?.choice).toBe(first);
+			expect((await t.state()).requests).toHaveLength(1);
+		}
+		const expired = await fixture();
+		const p = await expired.recordRequest(expired.proposal("expires"));
+		if (p.state !== "recorded") throw new Error("fixture");
+		expired.f.now = p.request.expiresAt;
+		expect(reason(await expired.recordDecision(expired.decision(p.request, "escalate_owner", "too-late")))).toBe(
+			"grant_expired",
+		);
+		expect((await expired.state()).requests).toHaveLength(1);
+		const direct = await fixture();
+		const o = await direct.recordRequest(direct.proposal("owner-direct", 12));
+		if (o.state !== "recorded") throw new Error("fixture");
+		expect(reason(await direct.recordDecision(direct.decision(o.request, "escalate_owner", "owner-escalates")))).toBe(
+			"authority_unavailable",
+		);
+		const twice = await fixture();
+		const { phase } = await escalated(twice);
+		expect(reason(await twice.recordDecision(twice.decision(phase, "escalate_owner", "owner-phase-escalates")))).toBe(
+			"authority_unavailable",
+		);
+		expect((await twice.state()).requests).toHaveLength(2);
+	});
+	it("only E's transition creates an Owner phase: reserved generation and explicit selection are refused", async () => {
+		const t = await fixture();
+		const p = t.proposal("forged-phase", 12);
+		expect(
+			reason(await t.recordRequest({ ...p, binding: { ...p.binding, generation: "owner-escalation-forged" } })),
+		).toBe("invalid_input");
+		t.f.selectExplicit = true;
+		expect(reason(await t.recordRequest(t.proposal("explicit-selected", 12)))).toBe("authority_unavailable");
+		expect((await t.state()).requests).toHaveLength(0);
+	});
+	it("the Owner's finite answer on the new phase keeps the original quantity, hop bound and expiry", async () => {
+		const t = await fixture();
+		const { phase } = await escalated(t, "bounded", 9, 3);
+		expect((await t.recordDecision(t.decision(phase, "requested_quantity", "owner-approves"))).state).toBe("recorded");
+		const g = (await t.state()).grants[0];
+		expect(g.binding).toEqual({ ...phase.binding, quantity: 3, upperHop: 11 });
+		expect(g.authority.tier).toBe("owner");
+		expect(g.maximumUses).toBe(3);
+		expect(g.expiresAt).toBe(t.f.now + 3600000);
+		for (const hop of [9, 10])
+			expect((await t.core.execute(t.business(`bounded-${hop}`, hop, g.id, g.authority))).state).toBe("accepted");
+		expect(reason(await t.core.execute(t.business("bounded-hop12", 12, g.id, g.authority)))).toBe("scope_mismatch");
+		expect((await t.core.execute(t.business("bounded-11", 11, g.id, g.authority))).state).toBe("accepted");
+		expect(reason(await t.core.execute(t.business("bounded-fourth", 11, g.id, g.authority)))).toBe("grant_exhausted");
+		expect((await t.state()).grants[0].acceptedUses).toBe(3);
+		const late = await fixture();
+		const e = await escalated(late, "late-owner");
+		late.f.now = e.lower.expiresAt;
+		expect(reason(await late.recordDecision(late.decision(e.phase, "one_send", "owner-too-late")))).toBe(
+			"grant_expired",
+		);
+		expect((await late.state()).grants).toHaveLength(0);
+	});
+	it("no second initial or terminal agent notice across the lineage", async () => {
+		const t = await fixture();
+		const p = await t.recordRequest(t.proposal("notices", 9, 3));
+		if (p.state !== "recorded") throw new Error("fixture");
+		const lower = p.request;
+		expect((await t.core.execute(t.control("initial-to-coo", lower, "initial", "coo"))).state).toBe("accepted");
+		const r = await t.recordDecision(t.decision(lower, "escalate_owner", "notices-escalate"));
+		if (r.state !== "recorded") throw new Error("fixture");
+		const phase = r.request;
+		expect(reason(await t.core.execute(t.control("second-initial", phase, "initial", "coo")))).toBe("duplicate_slot");
+		expect(reason(await t.core.execute(t.control("lower-initial-again", lower, "initial", "coo")))).toBe(
+			"duplicate_slot",
+		);
+		expect(
+			reason(await t.core.execute(t.control("escalation-as-terminal", lower, "decision", "alpha", actor("coo")))),
+		).toBe("authority_unavailable");
+		const s = await t.state();
+		expect(s.outbox).toHaveLength(1);
+		expect(s.usage).toHaveLength(1);
+	});
+	it("one optional requester notice of the verified Owner decision: own binding, own session, own quota, deduped", async () => {
+		const t = await fixture();
+		const { phase } = await escalated(t, "notice");
+		expect(reason(await t.core.execute(t.control("before-owner", phase, "decision", "alpha")))).toBe(
+			"authority_unavailable",
+		);
+		expect((await t.recordDecision(t.decision(phase, "one_send", "owner-one-send"))).state).toBe("recorded");
+		const sent = await t.core.execute(t.control("owner-notice", phase, "decision", "alpha"));
+		if (sent.state !== "accepted") throw new Error(reason(sent));
+		expect(sent.receipt.class).toBe("control");
+		expect(sent.receipt.usage).toMatchObject({ ordinaryOrigin: 1, grantBusinessUse: 0, protectedOrigin: 0 });
+		const s = await t.state();
+		const m = s.outbox[0].message;
+		expect(m).toMatchObject({
+			kind: "fyi",
+			from: { role: "alpha", file: actor().sessionFile },
+			to: { role: "alpha" },
+			target: actor().sessionFile,
+		});
+		expect(m.replyTo).toBeUndefined();
+		expect(m.text).toContain("Requester notice of a verified Owner decision");
+		expect(m.text).toContain("not Owner speech");
+		expect(m.text).not.toContain("Synthetic communication-only decision");
+		expect(s.usage.filter((u) => u.origin === "alpha")).toHaveLength(1);
+		expect(reason(await t.core.execute(t.control("owner-notice-again", phase, "decision", "alpha")))).toBe(
+			"duplicate_slot",
+		);
+		expect(reason(await t.core.execute(t.control("owner-initial", phase, "initial", "coo")))).toBe(
+			"authority_unavailable",
+		);
+		expect((await t.state()).outbox).toHaveLength(1);
+	});
+	it("the requester notice honours its ordinary 20/hour and holds; a blocked notice leaves the decision inspectable", async () => {
+		const t = await fixture();
+		const { phase } = await escalated(t, "quota");
+		expect((await t.recordDecision(t.decision(phase, "deny", "owner-denies"))).state).toBe("recorded");
+		for (let n = 0; n < 20; n++)
+			expect((await t.core.execute(t.business(`fill-${n}`, 1, null, null, actor(), "fill-root"))).state).toBe(
+				"accepted",
+			);
+		expect(reason(await t.core.execute(t.control("over-quota", phase, "decision", "alpha")))).toBe("ordinary_hourly");
+		t.f.now += 3600000;
+		t.f.hold = true;
+		expect(reason(await t.core.execute(t.control("while-held", phase, "decision", "alpha")))).toBe("held");
+		t.f.hold = false;
+		const view = await t.core.status(fakeVerified(actor()), phase.binding.requestId, phase.binding.generation);
+		expect(view.state === "found" && view.request.firstDecision?.choice).toBe("deny");
+		expect(view.state === "found" && view.request.state).toBe("denied");
+		expect((await t.state()).outbox.filter((o) => o.message.kind === "fyi")).toHaveLength(0);
+		expect((await t.core.execute(t.control("after-hold", phase, "decision", "alpha"))).state).toBe("accepted");
+	});
+	it("forged Owner notices are blocked without a charge", async () => {
+		const t = await fixture();
+		const { phase } = await escalated(t, "forged");
+		expect(reason(await t.core.execute(t.control("initial-on-phase", phase, "initial", "coo")))).toBe(
+			"authority_unavailable",
+		);
+		expect((await t.recordDecision(t.decision(phase, "requested_quantity", "owner-approves"))).state).toBe("recorded");
+		const stale: GuardActor = { ...actor(), runtimeIncarnation: "synthetic-old-process" };
+		for (const forged of [
+			t.control("as-approver", phase, "decision", "alpha", actor("coo")),
+			t.control("as-participant", phase, "decision", "alpha", actor("gamma")),
+			t.control("stale-incarnation", phase, "decision", "alpha", stale),
+			t.control("to-other-role", phase, "decision", "beta"),
+		])
+			expect(reason(await t.core.execute(forged))).toBe("authority_unavailable");
+		t.f.decisionAvailable = false;
+		expect(reason(await t.core.execute(t.control("unverifiable", phase, "decision", "alpha")))).toBe(
+			"authority_unavailable",
+		);
+		t.f.decisionAvailable = true;
+		t.f.decisionDrift = true;
+		expect(reason(await t.core.execute(t.control("drifted", phase, "decision", "alpha")))).toBe(
+			"authority_unavailable",
+		);
+		t.f.decisionDrift = false;
+		t.f.wrongTarget = true;
+		expect(reason(await t.core.execute(t.control("rerouted", phase, "decision", "alpha")))).toBe(
+			"persistence_unavailable",
+		);
+		t.f.wrongTarget = false;
+		const before = await t.state();
+		expect(before.outbox).toHaveLength(0);
+		expect(before.usage).toHaveLength(0);
+		expect((await t.core.execute(t.control("genuine", phase, "decision", "alpha"))).state).toBe("accepted");
+		expect((await t.state()).outbox).toHaveLength(1);
+	});
+	it("a crash at any store boundary of the transition leaves all of it, none of it, or an unknown hold", async () => {
+		const probe = await fixture();
+		const pp = await probe.recordRequest(probe.proposal("crash"));
+		if (pp.state !== "recorded") throw new Error("fixture");
+		probe.f.calls = [];
+		expect((await probe.recordDecision(probe.decision(pp.request, "escalate_owner", "crash-escalates"))).state).toBe(
+			"recorded",
+		);
+		const points = [...new Set(probe.f.calls)];
+		expect(points.length).toBeGreaterThan(3);
+		const outcomes = new Set<string>();
+		for (const point of points) {
+			const t = await fixture();
+			const p = await t.recordRequest(t.proposal("crash"));
+			if (p.state !== "recorded") throw new Error("fixture");
+			const command = t.decisionCommand(t.decision(p.request, "escalate_owner", "crash-escalates"));
+			t.f.fail = point;
+			expect((await t.core.execute(command)).state).toBe("unknown");
+			t.f.fail = null;
+			const restart = new GuardFileStore({ ...t.storeOptions, boundary: null });
+			const recovered = await restart.recover();
+			const core = new RoleMessageGuardCore({ ...t.options, store: restart });
+			if (recovered.state !== "ready") {
+				outcomes.add("unknown");
+				expect((await restart.read()).state).toBe("unknown");
+				expect((await core.execute(command)).state).toBe("unknown");
+				continue;
+			}
+			const s = recovered.value;
+			const none = s.requests.length === 1 && s.requests[0].firstDecision === null;
+			const all =
+				s.requests.length === 2 &&
+				s.requests[0].state === "revoked" &&
+				equalJson(s.requests[0].firstDecision, command.decision) &&
+				s.requests[1].binding.generation === guardEscalationGeneration(p.request.binding);
+			expect(none !== all).toBe(true);
+			outcomes.add(all ? "all" : "none");
+			const replay = await core.execute(command);
+			expect(replay.state).toBe("recorded");
+			const after = await restart.read();
+			if (after.state !== "ready") throw new Error("fixture");
+			expect(after.value.requests).toHaveLength(2);
+			expect(after.value.requests[0].firstDecision).toEqual(command.decision);
+			expect(after.value.audits.filter((a) => a.event === "decided")).toHaveLength(1);
+		}
+		expect([...outcomes].sort()).toEqual(["all", "none", "unknown"]);
+	});
+	it("pruning removes an escalation lineage only as a whole and never revives an old generation", async () => {
+		const t = await fixture();
+		const { lower, escalation, phase } = await escalated(t, "prune");
+		t.f.now += 3600000;
+		const next = t.proposal("prune", 9, 3);
+		expect(
+			(
+				await t.recordRequest(
+					{ ...next, binding: { ...next.binding, generation: "synthetic-generation-2" } },
+					"request:prune-generation-2",
+				)
+			).state,
+		).toBe("recorded");
+		t.f.now = lower.expiresAt + retention.settledRetentionMs;
+		const trigger = (id: string) => t.core.execute(t.business(id, 1, null, null, actor(), "unrelated-root"));
+		expect((await trigger("prune-trigger-1")).state).toBe("accepted");
+		expect((await t.state()).requests).toHaveLength(3);
+		t.f.now += 3600000;
+		expect((await trigger("prune-trigger-2")).state).toBe("accepted");
+		const s = await t.state();
+		expect(s.requests).toHaveLength(0);
+		for (const generation of [lower.binding.generation, phase.binding.generation, "synthetic-generation-2"])
+			expect(
+				s.tombstones.some(
+					(x) => x.kind === "request" && x.identityDigest === guardDigest({ requestId: "prune", generation }),
+				),
+			).toBe(true);
+		expect(reason(await t.recordDecision(escalation, "decision:after-prune"))).toBe("authority_unavailable");
+		expect(reason(await t.recordRequest(t.proposal("prune", 9, 3), "request:after-prune"))).toBe(
+			"authority_unavailable",
+		);
+	});
+	it("an escalation that would exceed the context cap is blocked, never clipped, and records nothing", async () => {
+		const t = await fixture({ maximumContextBytes: Buffer.byteLength(JSON.stringify(context), "utf8") + 64 });
+		const p = await t.recordRequest(t.proposal("cap"));
+		if (p.state !== "recorded") throw new Error(reason(p));
+		expect(reason(await t.recordDecision(t.decision(p.request, "escalate_owner", "cap-escalates")))).toBe(
+			"retention_capacity",
+		);
+		const s = await t.state();
+		expect(s.requests).toHaveLength(1);
+		expect(s.requests[0].firstDecision).toBeNull();
+		expect(s.requests[0].context).toEqual(context);
+	});
+	it("status: the approver reads its escalated history, only the requester reads the Owner phase", async () => {
+		const t = await fixture();
+		const { lower, phase } = await escalated(t, "status");
+		const approverView = await t.core.status(
+			fakeVerified(actor("coo")),
+			lower.binding.requestId,
+			lower.binding.generation,
+		);
+		expect(approverView.state === "found" && approverView.request.firstDecision?.choice).toBe("escalate_owner");
+		expect(approverView.state === "found" && approverView.request.state).toBe("revoked");
+		const requesterView = await t.core.status(fakeVerified(actor()), phase.binding.requestId, phase.binding.generation);
+		expect(requesterView.state === "found" && requesterView.request).toEqual(phase);
+		expect(
+			(await t.core.status(fakeVerified(actor("coo")), phase.binding.requestId, phase.binding.generation)).state,
+		).toBe("unavailable");
+	});
+});
+function equalJson(a: unknown, b: unknown): boolean {
+	return guardDigest(a) === guardDigest(b);
+}

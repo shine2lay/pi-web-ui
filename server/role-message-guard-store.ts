@@ -545,6 +545,31 @@ export class GuardFileStore implements GuardStorePort {
 					)
 						throw new Error("grant use/refusal cannot be reset");
 				}
+				// Request history is immutable at the single writer (Ops rm-1bb3c77b item 3): creation fields never change,
+				// a recorded first answer (and its grant) is never reset or rewritten, and a request only leaves with its
+				// replay tombstone. Only state, a still-null first decision and its grantId may move.
+				for (const request of current.state.requests) {
+					const requestId = request.binding.requestId;
+					const generation = request.binding.generation;
+					const kept = mutation.next.requests.find(
+						(r) => r.binding.requestId === requestId && r.binding.generation === generation,
+					);
+					const replayKey = guardDigest({ requestId, generation });
+					if (!kept) {
+						if (!mutation.next.tombstones.some((t) => t.kind === "request" && t.identityDigest === replayKey))
+							throw new Error("request history cannot leave without its tombstone");
+						continue;
+					}
+					const { state: _s, firstDecision: _f, grantId: _g, ...created } = request;
+					const { state: _ks, firstDecision: _kf, grantId: _kg, ...keptCreated } = kept;
+					if (
+						guardDigest(created) !== guardDigest(keptCreated) ||
+						(request.firstDecision !== null &&
+							(guardDigest(kept.firstDecision) !== guardDigest(request.firstDecision) ||
+								kept.grantId !== request.grantId))
+					)
+						throw new Error("request history cannot be rewritten");
+				}
 				for (const usage of current.state.usage)
 					if (
 						mutation.next.lastTrustedTime - usage.committedAt < 3600000 &&

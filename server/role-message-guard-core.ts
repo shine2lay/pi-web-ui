@@ -5,6 +5,7 @@
 import type {
 	GuardAcceptedReceipt,
 	GuardActor,
+	GuardApprovalBinding,
 	GuardApprovalContext,
 	GuardAtomicMutation,
 	GuardAuditReceipt,
@@ -73,6 +74,12 @@ const contractCommit = "04fe491fb3afc3b42462ad782b2099c7971c7008";
 const contractSha256 = "79a5a1e1a704ecfbb36a70fc1b210ee6e27575013843122cf202a84592b4c7af";
 const policyDocumentSha256 = "5d8433fd0a8f9a82103009e43491182caf14b80ad2a20b874709c5b3762724a9";
 const version = "role-message-guard/v1" as const;
+/** Generations with this prefix belong to E's one explicit lower-to-Owner transition; request_record may not use them. */
+export const guardEscalationGenerationPrefix = "owner-escalation-";
+/** Deterministic Owner-phase generation for a lower phase's winning escalate_owner (one per lower binding). */
+export function guardEscalationGeneration(lower: GuardApprovalBinding): string {
+	return `${guardEscalationGenerationPrefix}${guardDigest({ version, transition: "explicit_escalation", lower })}`;
+}
 type FinalResult = Exclude<GuardResult, { readonly state: "unknown" }>;
 interface MutableState extends Omit<
 	GuardStoreState,
@@ -96,6 +103,8 @@ export interface GuardMessageIntent {
 	readonly text: string;
 	readonly chain: number;
 	readonly replyTo: string | null;
+	/** Exact legacy delivery target (bound requesting session) E requires, or null for the host's existing routing. */
+	readonly target: string | null;
 }
 export interface GuardCoreOptions {
 	readonly binding: GuardConsumerBinding;
@@ -104,27 +113,48 @@ export interface GuardCoreOptions {
 	readonly store: GuardStorePort;
 	readonly verifier: GuardHostVerifier;
 	readonly transport: GuardTransportPort;
+	/** Trusted host time; E rejects untrusted, backwards or pre-state time under its writer. */
 	readonly clock: () => Promise<GuardTime>;
-	/** Required additional call-site/restoration boundaries; not native implementations supplied by E. */
+	/*
+	 * Required construction ports (Ops rm-1bb3c77b item 1). E supplies no default, never treats a cast or a
+	 * successful type check as authentication, and does no hidden live lookup. Every port answers with C's
+	 * GuardVerification: anything but "verified" blocks, and E compares each verified value exactly with what it
+	 * already holds (a mismatch blocks too). E calls them under its single writer and, where noted, again before
+	 * dispatch. A host that cannot verify natively answers "unavailable".
+	 */
+	/** Native snapshot of the requester for a recorded request (actor, original causality, holds, time). */
 	readonly requestSnapshot: (
 		actor: GuardHostVerified<GuardActor>,
 		request: GuardRequest,
 	) => Promise<GuardVerification<GuardVerifiedSnapshot>>;
+	/**
+	 * Rehydrates a decision (a fresh command, or one restored from E's own state) through its native first-answer
+	 * event and source, and returns it exactly as natively recorded. Matching fields alone are not proof.
+	 */
 	readonly reverifyDecision: (
-		decision: GuardHostVerified<GuardVerifiedDecision>,
+		decision: GuardVerifiedDecision,
 		request: GuardRequest,
 	) => Promise<GuardVerification<GuardVerifiedDecision>>;
+	/** Native ancestry/scope/recipient check of one grant use; called under the writer before any use is counted. */
 	readonly verifyGrantLineage: (
 		grant: GuardGrant,
 		snapshot: GuardHostVerified<GuardVerifiedSnapshot>,
 		scope: GuardScope,
 		to: string,
 	) => Promise<GuardVerification<GuardVerifiedSnapshot>>;
+	/** Rehydrates an accepted entry's native snapshot after a restart; E revalidates it again before dispatch/wake. */
 	readonly restoreSnapshot: (entry: GuardOutboxEntry) => Promise<GuardVerification<GuardVerifiedSnapshot>>;
+	/** Native current identity of a status reader (requester or selected current-home approver). */
 	readonly verifyStatusActor: (actor: GuardHostVerified<GuardActor>) => Promise<GuardVerification<GuardActor>>;
-	/** Stamps/preserves native routing, Owner and initiative metadata, with no send/wake/save effects. */
+	/**
+	 * Deterministically builds the legacy record for an intent E already admitted: stamps/preserves native routing,
+	 * Owner and initiative metadata, with no send/wake/save effects. It never chooses authority, grants, quantities
+	 * or remaining uses; E checks id/time/actor/recipient/kind/words/chain/reply/target and blocks on any mismatch.
+	 */
 	readonly materialize: (intent: GuardMessageIntent) => Promise<GuardLegacyAcceptedMessage>;
+	/** Deterministic host identity for E's own outbox/rollback maintenance commits. */
 	readonly maintenanceIdentity: (purpose: "rollback" | "outbox", key: string) => GuardOperationIdentity;
+	/** Native Owner authorisation for rollback to depth-only; false blocks. */
 	readonly authoriseRollback: () => Promise<boolean>;
 }
 function num(n: unknown): n is number {
@@ -244,6 +274,22 @@ function contextValid(c: GuardApprovalContext, maximumBytes: number, now: number
 }
 function openRequest(r: GuardRequest): boolean {
 	return ["context_needed", "awaiting_approver", "awaiting_owner", "rate_limited", "held"].includes(r.state);
+}
+/** The Owner-phase binding E derives from a lower phase; only quantity bounds, root, scope and requester carry over. */
+function escalatedBinding(lower: GuardApprovalBinding): GuardApprovalBinding {
+	return { ...lower, generation: guardEscalationGeneration(lower), tier: "owner" };
+}
+/** True only for the single Owner phase E's escalation transition creates from this lower phase. */
+function escalatedPhaseOf(candidate: GuardRequest, lower: GuardRequest): boolean {
+	return (
+		equal(candidate.binding, escalatedBinding(lower.binding)) &&
+		candidate.selectedApprover.tier === "owner" &&
+		candidate.selectedApprover.reason === "explicit_escalation" &&
+		candidate.upwardEscalations === 1 &&
+		candidate.expiresAt === lower.expiresAt &&
+		candidate.initialNotificationKey === lower.initialNotificationKey &&
+		candidate.decisionNotificationKey === lower.decisionNotificationKey
+	);
 }
 function incidentKey(i: GuardIncidentIdentity): string {
 	// Wording, receipt id, process incarnation, origin and destination cannot mint another episode slot.
@@ -418,8 +464,14 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 					o.state !== "handled" &&
 					!(o.state === "dispatched" && o.message.kind === "fyi"),
 			);
+		const removable = (r: GuardRequest) =>
+			!openRequest(r) && now - r.expiresAt >= settledAge && !pendingRoot(r.binding.causal);
+		// An escalation lineage (lower phase + Owner phase share requestId) leaves only as a whole, so the preserved
+		// lower decision can never be dropped while its Owner phase, grant or audits could still be reused.
 		const removedRequests = state.requests.filter(
-			(r) => !openRequest(r) && now - r.expiresAt >= settledAge && !pendingRoot(r.binding.causal),
+			(r) =>
+				removable(r) &&
+				state.requests.every((other) => other.binding.requestId !== r.binding.requestId || removable(other)),
 		);
 		for (const r of removedRequests)
 			state.tombstones.push({
@@ -608,6 +660,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 			b.version !== version ||
 			!text(b.requestId) ||
 			!text(b.generation) ||
+			b.generation.startsWith(guardEscalationGenerationPrefix) ||
 			!scopeValid(b.scope) ||
 			!causalValid(b.causal) ||
 			!b.scope.participants.includes(command.actor.role) ||
@@ -670,7 +723,12 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 		)
 			return blocked("authority_unavailable");
 		const selected = await this.options.verifier.selectApprover(b);
-		if (selected.state !== "verified" || selected.value.tier !== b.tier) return blocked("authority_unavailable");
+		if (
+			selected.state !== "verified" ||
+			selected.value.tier !== b.tier ||
+			(selected.value.tier === "owner" && selected.value.reason === "explicit_escalation")
+		)
+			return blocked("authority_unavailable");
 		if (
 			selected.value.tier === "lower" &&
 			(selected.value.role === command.actor.role ||
@@ -745,15 +803,23 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 				!["authenticated_browser", "authorised_owner_telegram"].includes(input.authority.source.kind))
 		)
 			return blocked("authority_unavailable", request);
-		if (request.firstDecision)
-			return {
-				state: "recorded",
-				transactionId: guardTransactionId(command.identity),
-				request,
-				communicationAccepted: false,
-			};
+		const recorded = (r: GuardRequest): FinalResult => ({
+			state: "recorded",
+			transactionId: guardTransactionId(command.identity),
+			request: r,
+			communicationAccepted: false,
+		});
+		if (request.firstDecision) {
+			// First answer wins. A replay of the winning escalation returns the same Owner phase; any other later
+			// lower answer is stale: it changes nothing and can never answer the Owner phase (other binding).
+			if (request.firstDecision.choice === "escalate_owner" && equal(request.firstDecision, input)) {
+				const phase = state.requests.find((r) => escalatedPhaseOf(r, request));
+				return phase ? recorded(phase) : blocked("authority_unavailable", request); // unprovable lineage: fail closed
+			}
+			return recorded(request);
+		}
 		if (!openRequest(request) || now >= request.expiresAt) return blocked("grant_expired", request);
-		if (input.choice === "escalate_owner") return blocked("authority_unavailable", request); // Ops disposition required; no guessed generation semantics.
+		if (input.choice === "escalate_owner") return this.escalate(state, command, index, now);
 		if (!["deny", "one_send", "requested_quantity"].includes(input.choice)) return blocked("invalid_input", request);
 		let updated: GuardRequest;
 		if (input.choice === "deny") updated = { ...request, firstDecision: input, state: "denied" };
@@ -777,10 +843,80 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 		}
 		state.requests[index] = updated;
 		this.audit(state, command.identity, "decided", request.binding.requestId, now, input.authority.proof);
+		return recorded(updated);
+	}
+	/**
+	 * Ops rm-1bb3c77b: ONE explicit Owner escalation, only as the selected lower approver's winning first decision.
+	 * One transaction keeps the lower phase with its complete first decision and binding (closed, never reset) and
+	 * adds the Owner phase: deterministic new generation, same root/requester/scope/bounds/expiry/notification keys,
+	 * no grant, no refund, no fresh TTL, no second initial or terminal notice. Owner context is never clipped.
+	 */
+	private escalate(
+		state: MutableState,
+		command: Extract<GuardCommand, { kind: "decision_record" }>,
+		index: number,
+		now: number,
+	): FinalResult {
+		const input = command.decision;
+		const request = state.requests[index];
+		const lower = request.selectedApprover;
+		if (
+			input.authority.tier !== "lower" ||
+			request.binding.tier !== "lower" ||
+			lower.tier !== "lower" ||
+			request.upwardEscalations !== 0 ||
+			request.firstDecision !== null
+		)
+			return blocked("authority_unavailable", request);
+		const binding = escalatedBinding(request.binding);
+		if (
+			state.requests.some(
+				(r) => r.binding.requestId === binding.requestId && r.binding.generation === binding.generation,
+			) ||
+			state.tombstones.some(
+				(t) =>
+					t.kind === "request" &&
+					t.identityDigest === guardDigest({ requestId: binding.requestId, generation: binding.generation }),
+			)
+		)
+			return blocked("identity_conflict", request);
+		const context: GuardApprovalContext = {
+			...request.context,
+			priorDecisions: [
+				...request.context.priorDecisions,
+				`Lower approver ${lower.role} (${lower.route}) explicitly escalated request ${binding.requestId} ` +
+					`generation ${request.binding.generation} to the Owner at ${input.answeredAt}. Its recorded reason: ` +
+					`${JSON.stringify(input.reason)}. The escalation is not a grant or a final approval.`,
+			],
+		};
+		if (!contextValid(context, this.options.retention.maximumContextBytes, now))
+			return blocked(
+				Buffer.byteLength(JSON.stringify(context), "utf8") > this.options.retention.maximumContextBytes
+					? "retention_capacity"
+					: "authority_unavailable",
+				request,
+			);
+		const phase: GuardRequest = {
+			binding,
+			context,
+			selectedApprover: { tier: "owner", reason: "explicit_escalation" },
+			createdAt: now,
+			expiresAt: request.expiresAt,
+			state: request.state === "held" ? "held" : "awaiting_owner",
+			upwardEscalations: 1,
+			initialNotificationKey: request.initialNotificationKey,
+			decisionNotificationKey: request.decisionNotificationKey,
+			firstDecision: null,
+			grantId: null,
+		};
+		// Preserve first: the lower phase keeps its complete winning decision and binding, closed to every later use.
+		state.requests[index] = { ...request, firstDecision: input, state: "revoked" };
+		state.requests.push(phase);
+		this.audit(state, command.identity, "decided", request.binding.requestId, now, input.authority.proof);
 		return {
 			state: "recorded",
 			transactionId: guardTransactionId(command.identity),
-			request: updated,
+			request: phase,
 			communicationAccepted: false,
 		};
 	}
@@ -796,6 +932,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 		replyTo: string | null,
 		usage: GuardUsageReceipt,
 		messageId?: string,
+		target: string | null = null,
 	): Promise<{ result: FinalResult; legacyAccepted: readonly GuardLegacyAcceptedMessage[] }> {
 		const transactionId = guardTransactionId(command.identity);
 		const id = messageId ?? `rm-${guardDigest(command.identity).slice(0, 8)}`;
@@ -810,8 +947,10 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 			text: body,
 			chain: snapshot.causal.nextHop,
 			replyTo,
+			target,
 		});
 		if (
+			(target !== null && message.target !== target) ||
 			message.id !== id ||
 			message.at !== now ||
 			message.from.role !== snapshot.actor.role ||
@@ -942,18 +1081,71 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 			return deny("authority_unavailable");
 		const key = command.phase === "initial" ? request.initialNotificationKey : request.decisionNotificationKey;
 		if (state.outbox.some((o) => o.message.id === `rm-${guardDigest(key).slice(0, 8)}`)) return deny("duplicate_slot");
-		if (request.selectedApprover.tier !== "lower") return deny("authority_unavailable"); // Owner question is the native A UI, not a fabricated role.
 		const initial = command.phase === "initial";
+		const decided = request.firstDecision;
+		const usage: GuardUsageReceipt = {
+			ordinaryOrigin: 1,
+			grantBusinessUse: 0,
+			protectedOrigin: 0,
+			protectedDestination: 0,
+			protectedSystem: 0,
+			newIncidentOrigin: 0,
+		};
+		if (request.selectedApprover.tier !== "lower") {
+			// The Owner question is native A UI, never an agent message: no initial control for an Owner phase. Only the
+			// OPTIONAL requester notice of a recorded, verified Owner decision, under the exact original requester binding,
+			// to that requester's own bound session, charged to its ordinary quota and deduped on the lineage's one key.
+			if (
+				initial ||
+				!decided ||
+				decided.authority.tier !== "owner" ||
+				!["deny", "one_send", "requested_quantity"].includes(decided.choice) ||
+				!equal(decided.binding, request.binding) ||
+				!equal(snapshot.actor, request.binding.requester) ||
+				command.to !== request.binding.requester.role
+			)
+				return deny("authority_unavailable");
+			// The stored Owner decision is rehydrated natively under the writer; a restored copy is not proof.
+			const fresh = await this.options.reverifyDecision(decided, request);
+			if (fresh.state !== "verified" || !equal(fresh.value, decided)) return deny("authority_unavailable");
+			const notice =
+				`Requester notice of a verified Owner decision. Sent under the requester's own binding; it is not Owner speech.\n` +
+				`Continuation request ${request.binding.requestId}/${request.binding.generation}: the recorded Owner decision is ${decided.choice}. ` +
+				`The decision and its reason stay inspectable through status.\n` +
+				`No business communication was sent. Business retry must use the recorded finite grant and original scope; nothing is replayed automatically.`;
+			if (Buffer.byteLength(notice, "utf8") > this.options.retention.maximumContextBytes)
+				return deny("retention_capacity");
+			return this.accepted(
+				state,
+				command,
+				snapshot,
+				now,
+				"control",
+				command.to,
+				"fyi",
+				notice,
+				null,
+				usage,
+				`rm-${guardDigest(key).slice(0, 8)}`,
+				request.binding.requester.sessionFile,
+			);
+		}
 		if (
 			initial
 				? !equal(snapshot.actor, request.binding.requester) ||
 					command.to !== request.selectedApprover.role ||
 					!openRequest(request)
-				: !request.firstDecision ||
+				: !decided ||
+					decided.choice === "escalate_owner" || // an escalation is not terminal: the lineage's one notice stays unused
 					!equal(snapshot.actor, request.selectedApprover.home) ||
 					command.to !== request.binding.requester.role
 		)
 			return deny("authority_unavailable");
+		if (decided && !initial) {
+			// Every decision notice rehydrates its stored decision natively under the writer first.
+			const fresh = await this.options.reverifyDecision(decided, request);
+			if (fresh.state !== "verified" || !equal(fresh.value, decided)) return deny("authority_unavailable");
+		}
 		const body = initial
 			? `Continuation approval request ${request.binding.requestId}/${request.binding.generation}\n${JSON.stringify({ binding: request.binding, detail: request.context })}`
 			: `Continuation decision ${request.binding.requestId}/${request.binding.generation}: ${request.firstDecision!.choice}. ${request.firstDecision!.reason}\nNo business communication was sent. Business retry must use the recorded finite grant and original scope.`;
@@ -968,14 +1160,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 			initial ? "question" : "reply",
 			body,
 			initial ? null : `rm-${guardDigest(request.initialNotificationKey).slice(0, 8)}`,
-			{
-				ordinaryOrigin: 1,
-				grantBusinessUse: 0,
-				protectedOrigin: 0,
-				protectedDestination: 0,
-				protectedSystem: 0,
-				newIncidentOrigin: 0,
-			},
+			usage,
 			`rm-${guardDigest(key).slice(0, 8)}`,
 		);
 	}

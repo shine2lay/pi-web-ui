@@ -7,9 +7,14 @@ import type { IdentityDef } from "../../server/identities.js";
 import { RoleMessages, type RoleMessageHost, type RoleMessageRecord } from "../../server/role-messages.js";
 import type {
 	GuardAcceptedReceipt,
+	GuardApprovalBinding,
+	GuardApprovalContext,
 	GuardAtomicMutation,
 	GuardOperationIdentity,
+	GuardProofReference,
+	GuardRequest,
 	GuardStoreState,
+	GuardVerifiedDecision,
 } from "../../server/role-message-guard-contract.js";
 import {
 	GuardFileStore,
@@ -331,6 +336,209 @@ describe("E durable prepare/commit/publication boundary", () => {
 		const old = message("rm-00000001");
 		expect((await t.store.initialize(initial(), { ...legacy(), messages: [old] })).state).toBe("unknown");
 		expect(existsSync(t.options.journalPath)).toBe(false);
+	});
+});
+
+describe("E request history is immutable at the single writer (Ops rm-1bb3c77b item 3)", () => {
+	const proof: GuardProofReference = {
+		sourceId: "synthetic-source",
+		sourceVersion: "synthetic-v1",
+		sourceIncarnation: "synthetic-incarnation",
+		eventId: "synthetic-event",
+		revision: "synthetic-revision",
+		digest: "synthetic-digest",
+		observedAt: now,
+	};
+	const approver = { ...identity("coo").actor, role: "coo", sessionFile: "/synthetic/coo.jsonl" };
+	const lowerBinding: GuardApprovalBinding = {
+		version: "role-message-guard/v1",
+		requestId: "synthetic-request",
+		generation: "synthetic-generation-1",
+		requester: identity("requester").actor,
+		causal: {
+			kind: "legacy_boundary",
+			anchorId: "synthetic-boundary",
+			incomingRecordId: "synthetic-incoming",
+			incomingHash: "synthetic-hash",
+			nextHop: 9,
+			historicalRoot: "unknown",
+		},
+		scope: {
+			scopeId: "synthetic-scope",
+			operation: "synthetic-operation",
+			participants: ["alpha", "beta"],
+			recipients: ["beta"],
+			task: { kind: "home" },
+		},
+		tier: "lower",
+		quantity: 3,
+		upperHop: 11,
+	};
+	const ownerBinding: GuardApprovalBinding = {
+		...lowerBinding,
+		generation: "owner-escalation-synthetic",
+		tier: "owner",
+	};
+	const context: GuardApprovalContext = {
+		goal: "Synthetic goal",
+		progressAndChanges: "Synthetic progress",
+		priorDecisions: ["Synthetic lower escalation, not a grant or a final approval."],
+		whyNeeded: "Synthetic reason",
+		nextStepAndOutcome: "Synthetic next step",
+		outstandingQuestions: ["Synthetic question"],
+		optionsAndTradeoffs: ["Synthetic option"],
+		timeCostRisk: "Synthetic cost",
+		exactCommunicationAuthority: "Synthetic communication-only authority",
+		nativeFacts: [proof],
+		declaredClaims: [],
+		safetyScopeAndHolds: ["Synthetic holds"],
+	};
+	const selection = { tier: "lower" as const, role: "coo", route: "coo" as const, home: approver, proof };
+	const escalation: GuardVerifiedDecision = {
+		binding: lowerBinding,
+		choice: "escalate_owner",
+		reason: "Synthetic: the Owner should decide",
+		authority: { tier: "lower", selection, decisionId: "synthetic-lower-decision", proof },
+		answeredAt: now,
+		firstAnswerEventId: "synthetic-lower-answer",
+	};
+	const ownerDenial: GuardVerifiedDecision = {
+		binding: ownerBinding,
+		choice: "deny",
+		reason: "Synthetic Owner denial",
+		authority: {
+			tier: "owner",
+			questionId: "synthetic-question",
+			questionGeneration: ownerBinding.generation,
+			choicesDigest: "synthetic-choices",
+			decisionId: "synthetic-owner-decision",
+			source: { kind: "authenticated_browser", authenticatedOwnerBindingId: "synthetic-owner-binding" },
+			proof,
+		},
+		answeredAt: now,
+		firstAnswerEventId: "synthetic-owner-answer",
+	};
+	const lower: GuardRequest = {
+		binding: lowerBinding,
+		context: { ...context, priorDecisions: [] },
+		selectedApprover: selection,
+		createdAt: now,
+		expiresAt: now + 86400000,
+		state: "revoked",
+		upwardEscalations: 0,
+		initialNotificationKey: "synthetic-initial-key",
+		decisionNotificationKey: "synthetic-decision-key",
+		firstDecision: escalation,
+		grantId: null,
+	};
+	const phase: GuardRequest = {
+		...lower,
+		binding: ownerBinding,
+		context,
+		selectedApprover: { tier: "owner", reason: "explicit_escalation" },
+		state: "awaiting_owner",
+		upwardEscalations: 1,
+		firstDecision: null,
+	};
+	const tombstone = (b: GuardApprovalBinding) => ({
+		kind: "request" as const,
+		identityDigest: guardDigest({ requestId: b.requestId, generation: b.generation }),
+		invalidThrough: "source_horizon_unknown" as const,
+		lastTransactionId: null,
+	});
+	function rewrite(
+		state: GuardStoreState,
+		id: GuardOperationIdentity,
+		requests: GuardRequest[],
+		tombstones: GuardStoreState["tombstones"] = state.tombstones,
+	): GuardAtomicMutation {
+		const transactionId = guardTransactionId(id);
+		const result = {
+			state: "recorded" as const,
+			transactionId,
+			request: requests[0] ?? phase,
+			communicationAccepted: false as const,
+		};
+		return {
+			next: {
+				...state,
+				revision: `synthetic-revision-${id.operationId}`,
+				requests,
+				tombstones,
+				transactions: [...state.transactions, { state: "committed", identity: id, transactionId, result }],
+			},
+			legacyAccepted: [],
+			result,
+		};
+	}
+	async function seeded() {
+		const t = await fixture(undefined, false);
+		expect((await t.store.initialize({ ...initial(), requests: [lower, phase] }, legacy())).state).toBe("ready");
+		return t;
+	}
+	const forgeries: [string, GuardRequest[], GuardStoreState["tombstones"] | undefined][] = [
+		["reset the lower first answer", [{ ...lower, firstDecision: null, state: "awaiting_approver" }, phase], undefined],
+		[
+			"rewrite the lower first answer",
+			[{ ...lower, firstDecision: { ...escalation, choice: "deny" } }, phase],
+			undefined,
+		],
+		["attach a grant to the escalated lower phase", [{ ...lower, grantId: "grant-synthetic" }, phase], undefined],
+		[
+			"widen the Owner phase's bounds",
+			[lower, { ...phase, binding: { ...ownerBinding, quantity: 5, upperHop: 13 } }],
+			undefined,
+		],
+		["give the Owner phase a fresh request lifetime", [lower, { ...phase, expiresAt: now + 2 * 86400000 }], undefined],
+		["reset the escalation count", [lower, { ...phase, upwardEscalations: 0 }], undefined],
+		["clip the Owner context", [lower, { ...phase, context: { ...context, priorDecisions: [] } }], undefined],
+		["move the notification keys", [lower, { ...phase, decisionNotificationKey: "synthetic-fresh-key" }], undefined],
+		["drop the lower phase without its tombstone", [phase], undefined],
+		["drop the lower phase under another request's tombstone", [phase], [tombstone(ownerBinding)]],
+	];
+	it.each(forgeries)("refuses to %s before prepare, with the files unchanged", async (_name, requests, tombstones) => {
+		const t = await seeded();
+		const journal = readFileSync(t.options.journalPath, "utf8");
+		const words = readFileSync(t.options.legacyPath, "utf8");
+		const id = identity("forged-history");
+		const r = await t.store.transact(id, async (s) => rewrite(s, id, requests, tombstones));
+		expect(r.state === "not_committed" && r.reason).toMatch(
+			/^request history cannot (be rewritten|leave without its tombstone)$/,
+		);
+		expect(readFileSync(t.options.journalPath, "utf8")).toBe(journal);
+		expect(readFileSync(t.options.legacyPath, "utf8")).toBe(words);
+		const read = await t.store.read();
+		if (read.state !== "ready") throw new Error("store fenced by a refused mutation");
+		expect(read.value.requests).toEqual([lower, phase]);
+	});
+	it("still commits the legitimate moves: first Owner answer, expiry, and whole-lineage pruning with tombstones", async () => {
+		const t = await seeded();
+		const decided = { ...phase, firstDecision: ownerDenial, state: "denied" as const };
+		const first = identity("owner-denies");
+		expect((await t.store.transact(first, async (s) => rewrite(s, first, [lower, decided]))).state).toBe("committed");
+		const expire = identity("expire");
+		const expired = [
+			{ ...lower, state: "expired" as const },
+			{ ...decided, state: "expired" as const },
+		];
+		expect((await t.store.transact(expire, async (s) => rewrite(s, expire, expired))).state).toBe("committed");
+		const later = identity("later-owner-answer");
+		const rewritten = await t.store.transact(later, async (s) =>
+			rewrite(s, later, [expired[0], { ...expired[1], firstDecision: { ...ownerDenial, choice: "one_send" } }]),
+		);
+		expect(rewritten.state === "not_committed" && rewritten.reason).toBe("request history cannot be rewritten");
+		const prune = identity("prune-lineage");
+		expect(
+			(
+				await t.store.transact(prune, async (s) =>
+					rewrite(s, prune, [], [...s.tombstones, tombstone(lowerBinding), tombstone(ownerBinding)]),
+				)
+			).state,
+		).toBe("committed");
+		const read = await t.store.read();
+		if (read.state !== "ready") throw new Error("fixture");
+		expect(read.value.requests).toHaveLength(0);
+		expect(read.value.tombstones).toHaveLength(2);
 	});
 });
 
