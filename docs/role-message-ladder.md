@@ -8,12 +8,12 @@ Roles message each other with `message_role`. A message started by another role'
 
 ## What a role sees
 
-| Hop     | What happens                                                                                           |
-| ------- | ------------------------------------------------------------------------------------------------------ |
-| 1–6     | Sent as before.                                                                                        |
-| 7–11    | Needs a grant from the responsible lead, or the COO by default. The tool says so and how to ask.       |
-| 12–16   | Needs a grant from the Owner (hop 12 included). A grant covers at most hops 12–16.                     |
-| 17+     | Fresh Owner consent for each further 12–16-sized step; nothing renews by itself.                       |
+| Hop   | What happens                                                                                     |
+| ----- | ------------------------------------------------------------------------------------------------ |
+| 1–6   | Sent as before.                                                                                  |
+| 7–11  | Needs a grant from the responsible lead, or the COO by default. The tool says so and how to ask. |
+| 12–16 | Needs a grant from the Owner (hop 12 included). A grant covers at most hops 12–16.               |
+| 17+   | Fresh Owner consent for each further 12–16-sized step; nothing renews by itself.                 |
 
 - Ask: `message_role` with `approval: { action: "request", recipients, context }`. The context is the
   Owner's dialog package (goal, progress, prior decisions, why needed, questions, options, cost/time/risk,
@@ -70,20 +70,34 @@ Ops (rm-1fe61704) and approved with changes (rm-efd6df89):
 - Each guard file at most 16 MiB (`GUARD_FILE_MAX_BYTES`); E fails closed past a cap and the refusal
   names the store.
 - Requests and grants: 600 each, counting only open requests and live grants. Settled ones never block a
-  send; they leave after a day.
-- Usage (the rolling hour) is pruned after 60 minutes. Transactions, audit receipts and outbox 2000 each,
-  tombstones 6000.
+  send; they leave 5 hours after they settle (a request after its 24 h expiry).
+- Usage (the rolling hour) is pruned after 60 minutes. Transactions and audit receipts 3000 each, outbox
+  2000, tombstones 6000.
+- Retention (Ops rm-fc4b9788, option C): settled transactions, audit receipts and delivery entries leave
+  5 hours after they settle, whatever is still open elsewhere; a send's delivery steps (each its own
+  transaction) leave with it. Each tombstone (E's replay memory) ends 5 hours after it is made. Open
+  requests, live grants and undelivered entries are never pruned. A decision or grant use that names a
+  settled, pruned or unknown request or grant is refused and creates nothing.
 - An approval context over 16 KB (16384 bytes as JSON) is refused whole, with its size; never cut down.
 - `history.jsonl`: one metadata line per request, escalation, decision, grant, grant use and grant end (no
   context words); kept 30 days; past 16 MiB it becomes the one archive `history.1.jsonl`. A write
   failure is logged and never blocks a send or an approval.
 - One log line `approval ladder WARNING: <store> at N%` when a store reaches 80%; armed again below 70%.
 
-Measured footprint: a business send keeps about 5 transactions, 5 audit receipts, 1 outbox entry and
-15 KB of journal for a day. A peak day alone would fill 91% of the transaction cap, so the guard store
-also starts a fresh generation (only when nothing is open) once transactions, audit receipts, outbox,
-tombstones or the journal reach 40% of their cap (`GUARD_ROTATE_AT`), besides the older triggers (1 MiB
-or 300 accepted messages, 3000 tombstones). Under steady traffic every store stays under half.
+Measured footprint: a business send keeps about 4 transactions, as many audit receipts, 1 outbox entry
+and 4.5 KB of journal for 5 hours. Worst case tested: the busiest real 5 hours (165 sends, 2026-10-09)
+played twice plus 100 runaway sends, with an approval request open throughout: peak 1188 transactions and
+audit receipts (40% of 3000), 256 outbox entries, 724 tombstones, a 5.1 MB guard file (31% of 16 MiB).
+The guard store still starts a fresh generation only when nothing is open, on the older triggers (1 MiB or
+300 accepted messages, 3000 tombstones).
+
+Known limits:
+
+- The accepted copy inside the guard file only shrinks at that rotation. If something stays open for days
+  on end, it grows about 2 KB per send; at real volume the file would pass half after about a week, and
+  the 80% warning fires before any refusal.
+- Cost: every guard transaction rewrites and fsyncs the whole guard file. At the worst case above that
+  is about 80 ms of server CPU per transaction (about 4 per send), plus disk waits that don't block.
 
 ## Rollback
 

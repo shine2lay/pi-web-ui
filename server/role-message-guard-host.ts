@@ -128,18 +128,22 @@ export const GUARD_POLICY: GuardPolicyV1 = {
 };
 
 /** Storage caps proposed to Ops (rm-1fe61704, measured live volume: ≤365 messages a day, ≤20 per role-hour) and
- *  approved with changes (rm-efd6df89): requests and grants count only open requests and live grants, 600 each. */
+ *  approved with changes (rm-efd6df89): requests and grants count only open requests and live grants, 600 each.
+ *  Ops rm-fc4b9788 (option C): a store over half on the measured worst case gets a higher cap. The worst real 5 hours
+ *  twice plus 100 runaway sends peak at 1188 transactions and as many audit receipts, so those caps are 3000 (40%). */
 export const GUARD_RETENTION: GuardRetention = {
 	maximumRequests: 600,
 	maximumGrants: 600,
-	maximumTransactions: 2000,
-	maximumAuditReceipts: 2000,
+	maximumTransactions: 3000,
+	maximumAuditReceipts: 3000,
 	maximumOutboxEntries: 2000,
 	maximumUsageEvents: 600,
 	maximumTombstones: 6000,
 	maximumContextBytes: 16384,
-	settledRetentionMs: 86400000,
-	sourceReplayHorizonMs: 86400000,
+	// Ops rm-fc4b9788 (option C): settled transactions, audit receipts and delivery entries leave 5 h after they
+	// settle, and each tombstone (E's replay memory) 5 h after it is made, whatever is still open elsewhere.
+	settledRetentionMs: 5 * 60 * 60 * 1000,
+	sourceReplayHorizonMs: 5 * 60 * 60 * 1000,
 };
 /** Each guard file at most this many bytes (E fails closed past it). */
 export const GUARD_FILE_MAX_BYTES = 16 * 1024 * 1024;
@@ -160,15 +164,6 @@ const OPEN_REQUEST_STATES: readonly string[] = [
 export const GUARD_ROTATE_BYTES = 1024 * 1024;
 export const GUARD_ROTATE_MESSAGES = 300;
 export const GUARD_ROTATE_TOMBSTONES = 3000;
-/** Rotate once a store that only settled records fill reaches this share of its cap. */
-export const GUARD_ROTATE_AT = 0.4;
-const ROTATE_ON: readonly string[] = [
-	"transactions",
-	"audit receipts",
-	"outbox entries",
-	"tombstones",
-	"guard store file (bytes)",
-];
 
 const NO_HOLDS: GuardHolds = {
 	ownerPaused: false,
@@ -698,12 +693,7 @@ export class RoleMessageGuardHost {
 		const big =
 			bytes > (this.o.rotateBytes ?? GUARD_ROTATE_BYTES) ||
 			(legacy?.messages?.length ?? 0) > GUARD_ROTATE_MESSAGES ||
-			read.value.tombstones.length > GUARD_ROTATE_TOMBSTONES ||
-			// #122 (H-ROLE-LADDER-CAPS-2): each send keeps about 5 transactions, 5 audit receipts and 15 KB of journal
-			// for a day, so a peak day alone would fill 91% of the transaction cap. Rotate (when quiescent) once any of
-			// those stores reaches GUARD_ROTATE_AT, keeping them under half. Not usage (the hourly window) and not open
-			// requests or live grants (rotation waits for those to be zero anyway).
-			this.fills(read.value).some((f) => ROTATE_ON.includes(f.name) && f.used >= GUARD_ROTATE_AT * f.max);
+			read.value.tombstones.length > GUARD_ROTATE_TOMBSTONES;
 		if (big && this.quiescent(read.value, this.now())) await this.rotate(false);
 	}
 
@@ -954,12 +944,14 @@ export class RoleMessageGuardHost {
 	/** How full each of E's capped stores is (counted the way E counts them). */
 	fills(s: GuardStoreState): { name: string; used: number; max: number }[] {
 		const R = this.retention;
-		let bytes = 0;
-		try {
-			bytes = statSync(join(this.storeDir, "journal.json")).size;
-		} catch {
-			/* not written yet */
-		}
+		const size = (name: string) => {
+			try {
+				return statSync(join(this.storeDir, name)).size;
+			} catch {
+				return 0; // not written yet
+			}
+		};
+		const bytes = size("journal.json");
 		return [
 			{
 				name: "open approval requests",
@@ -973,6 +965,8 @@ export class RoleMessageGuardHost {
 			{ name: "outbox entries", used: s.outbox.length, max: R.maximumOutboxEntries },
 			{ name: "tombstones", used: s.tombstones.length, max: R.maximumTombstones },
 			{ name: "guard store file (bytes)", used: bytes, max: GUARD_FILE_MAX_BYTES },
+			// The accepted-message copy leaves only by rotation, which waits until nothing is open.
+			{ name: "accepted copy file (bytes)", used: size("accepted.json"), max: GUARD_FILE_MAX_BYTES },
 		];
 	}
 

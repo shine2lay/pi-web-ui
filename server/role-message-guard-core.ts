@@ -337,11 +337,14 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 		const r = options.retention;
 		if (!Object.entries(r).every(([k, v]) => (k === "sourceReplayHorizonMs" && v === "unknown") || (num(v) && v >= 1)))
 			throw new Error("explicit finite retention caps required");
+		// #122 (Ops rm-fc4b9788): settled entries may leave after a few hours, never before the 1 h usage window or the
+		// verified replay horizon. Open requests, live grants and undelivered entries never leave while open, and a
+		// request record stays until its expiry plus this time, so a later decision on it is refused, never new.
 		if (
-			r.settledRetentionMs < policyV1.request.lifetimeMs ||
+			r.settledRetentionMs < policyV1.ordinary.rollingWindowMs ||
 			(r.sourceReplayHorizonMs !== "unknown" && r.settledRetentionMs < r.sourceReplayHorizonMs)
 		)
-			throw new Error("retention cannot precede request or verified replay horizon");
+			throw new Error("retention cannot precede the usage window or verified replay horizon");
 		for (const key of [
 			"clock",
 			"requestSnapshot",
@@ -400,9 +403,19 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 			return "held";
 		return null;
 	}
+	/** #122 (Ops rm-fc4b9788): with a verified replay horizon a new operation, request or grant tombstone ends that
+	 *  long after it is made (E's replay memory); an unknown horizon keeps it for good. Incident tombstones always stay. */
+	private tombstoneEnd(now: number): number | "source_horizon_unknown" {
+		const horizon = this.options.retention.sourceReplayHorizonMs;
+		return horizon === "unknown" ? "source_horizon_unknown" : now + horizon;
+	}
 	private prune(state: MutableState, now: number): void {
 		// No pruning ever clears unknown reservations, unknown source horizons or legacy accepted words.
 		if (state.transactions.some((t) => t.state !== "committed")) return;
+		// A tombstone whose verified end has passed leaves; one with an unknown end never does.
+		state.tombstones = state.tombstones.filter(
+			(t) => t.invalidThrough === "source_horizon_unknown" || t.invalidThrough > now,
+		);
 		const terminal = new Set(
 			state.outbox
 				.filter(
@@ -421,10 +434,12 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 				)
 				.map((o) => o.receipt.transactionId),
 		);
+		// #122 H-ROLE-LADDER-PRUNE-1: an outbox step is its own maintenance transaction whose receipt names the original
+		// send, so it leaves with that send's terminal entry (for the send itself the receipt names its own id).
 		const old = state.transactions.filter(
 			(t) =>
 				t.state === "committed" &&
-				(t.result.state !== "accepted" || terminal.has(t.transactionId)) &&
+				(t.result.state !== "accepted" || terminal.has(t.result.receipt.transactionId)) &&
 				now - (state.audits.find((a) => a.transactionId === t.transactionId)?.at ?? now) >=
 					this.options.retention.settledRetentionMs,
 		);
@@ -437,7 +452,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 				state.tombstones.push({
 					kind: "operation",
 					identityDigest: guardOperationKey(t.identity),
-					invalidThrough: "source_horizon_unknown",
+					invalidThrough: this.tombstoneEnd(now),
 					lastTransactionId: t.transactionId,
 				});
 		const pruned = new Set(old.map((t) => t.transactionId));
@@ -477,7 +492,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 			state.tombstones.push({
 				kind: "request",
 				identityDigest: guardDigest({ requestId: r.binding.requestId, generation: r.binding.generation }),
-				invalidThrough: "source_horizon_unknown",
+				invalidThrough: this.tombstoneEnd(now),
 				lastTransactionId: null,
 			});
 		state.requests = state.requests.filter((r) => !removedRequests.includes(r));
@@ -492,7 +507,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 			state.tombstones.push({
 				kind: "grant",
 				identityDigest: guardDigest(g.id),
-				invalidThrough: "source_horizon_unknown",
+				invalidThrough: this.tombstoneEnd(now),
 				lastTransactionId: g.useTransactionIds.at(-1) ?? null,
 			});
 		state.grants = state.grants.filter((g) => !removedGrants.includes(g));

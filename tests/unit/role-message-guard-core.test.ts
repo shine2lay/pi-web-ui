@@ -1061,6 +1061,110 @@ describe("E outbox, holds, recovery, clocks, retention and rollback", () => {
 		expect((await t.state()).tombstones.some((stone) => stone.invalidThrough === "source_horizon_unknown")).toBe(true);
 		expect(JSON.parse(readFileSync(t.storeOptions.legacyPath, "utf8")).messages[0].text).toBe(c.text);
 	});
+	it("#122 caps C (Ops rm-fc4b9788): settled entries leave after 5 h whatever is open; their tombstones end 5 h later", async () => {
+		const H5 = 5 * 3600000;
+		const t = await fixture({ settledRetentionMs: H5, sourceReplayHorizonMs: H5 });
+		const trigger = (id: string) => t.core.execute(t.business(id, 1, null, null, actor(), `root-${id}`));
+		// An open request on another root stays open the whole time and never stops the pruning.
+		const opening = t.proposal("still-open", 7, 1);
+		const open = await t.recordRequest({ ...opening, binding: { ...opening.binding, causal: causal(7, "open-root") } });
+		expect(open.state).toBe("recorded");
+		const c = t.identified({
+			...t.business("settled-c", 1, null, null, actor(), "root-c"),
+			businessKind: "fyi" as const,
+		});
+		await t.core.execute(c);
+		await t.core.reconcile(c.identity);
+		const g = await t.grant(7, 1); // settled request, then an expired grant
+		t.f.now += H5 + 1;
+		expect((await trigger("prune-1")).state).toBe("accepted");
+		let s = await t.state();
+		expect(s.transactions.some((x) => x.identity.operationId === c.identity.operationId)).toBe(false);
+		const stone = s.tombstones.find((x) => x.kind === "operation" && x.lastTransactionId !== null);
+		expect(stone?.invalidThrough).toBe(t.f.now + H5);
+		expect(s.requests.some((r) => r.binding.requestId === "still-open" && r.state === "awaiting_approver")).toBe(true);
+		// The approved request lives to its 24 h expiry plus 5 h; then it and its grant leave with tombstones.
+		t.f.now = g.request.expiresAt + H5;
+		expect((await trigger("prune-2")).state).toBe("accepted");
+		s = await t.state();
+		expect(s.requests.some((r) => r.binding.requestId === g.request.binding.requestId)).toBe(false);
+		expect(s.grants.some((x) => x.id === g.id)).toBe(false);
+		expect(s.tombstones.filter((x) => x.kind === "request" || x.kind === "grant").length).toBeGreaterThanOrEqual(2);
+		const refusedEverywhere = async (label: string) => {
+			const before = await t.state();
+			// A decision on the pruned request, a decision on one that never was, and a send naming the pruned grant.
+			expect(reason(await t.recordDecision(t.decision(g.request, "requested_quantity", `late-${label}`))), label).toBe(
+				"authority_unavailable",
+			);
+			const ghost = t.proposal("never-recorded", 7, 1);
+			expect(reason(await t.recordDecision(t.decision(ghost, "one_send", `ghost-${label}`))), label).toBe(
+				"authority_unavailable",
+			);
+			const use = await t.core.execute(t.business(`use-${label}`, 7, g.id, g.authority));
+			expect(use.state, label).not.toBe("accepted");
+			expect(reason(use), label).toBe("grant_revoked");
+			const after = await t.state();
+			expect(after.requests.length, label).toBe(before.requests.length);
+			expect(after.grants.length, label).toBe(before.grants.length);
+		};
+		await refusedEverywhere("tombstoned");
+		// 5 h on, the tombstones themselves leave; the same uses are still refused and still create nothing.
+		t.f.now += H5 + 1;
+		expect((await trigger("prune-3")).state).toBe("accepted");
+		s = await t.state();
+		expect(s.tombstones.every((x) => x.invalidThrough === "source_horizon_unknown" || x.invalidThrough > t.f.now)).toBe(
+			true,
+		);
+		expect(s.tombstones.some((x) => x.kind === "request" || x.kind === "grant")).toBe(false);
+		await refusedEverywhere("forgotten");
+		expect(
+			JSON.parse(readFileSync(t.storeOptions.legacyPath, "utf8")).messages.some(
+				(m: { text: string }) => m.text === c.text,
+			),
+		).toBe(true);
+	});
+	it("#122 H-ROLE-LADDER-PRUNE-1: a settled send's outbox steps leave with it after 5 h, never before", async () => {
+		const H5 = 5 * 3600000;
+		const t = await fixture({ settledRetentionMs: H5, sourceReplayHorizonMs: H5 });
+		const trigger = (id: string) => t.core.execute(t.business(id, 1, null, null, actor(), `root-${id}`));
+		const c = t.identified({
+			...t.business("steps", 1, null, null, actor(), "root-steps"),
+			businessKind: "fyi" as const,
+		});
+		const sent = await t.core.execute(c);
+		if (sent.state !== "accepted") throw new Error("synthetic send failed");
+		await t.core.reconcile(c.identity);
+		const id = sent.receipt.transactionId;
+		const namesSend = (s: GuardStoreState) =>
+			s.transactions.filter(
+				(x) => x.state === "committed" && x.result.state === "accepted" && x.result.receipt.transactionId === id,
+			);
+		const steps = namesSend(await t.state()).filter((x) => x.transactionId !== id);
+		expect(steps.length).toBeGreaterThanOrEqual(1); // the dispatch is its own maintenance transaction
+		const stepIds = new Set(steps.map((x) => x.transactionId));
+		// Under 5 h: the send and every step stay.
+		t.f.now += H5 - 60_000;
+		expect((await trigger("young")).state).toBe("accepted");
+		expect(namesSend(await t.state()).length).toBe(steps.length + 1);
+		// Past 5 h settled: the send, its steps, their audits and the outbox entry all leave.
+		t.f.now += 120_000;
+		expect((await trigger("old")).state).toBe("accepted");
+		const s = await t.state();
+		expect(namesSend(s)).toHaveLength(0);
+		expect(s.audits.some((a) => a.transactionId === id || stepIds.has(a.transactionId))).toBe(false);
+		expect(s.outbox.some((o) => o.receipt.transactionId === id)).toBe(false);
+	});
+	it("#122 caps C: settled time may not undercut the usage hour or a verified replay horizon", async () => {
+		await expect(fixture({ settledRetentionMs: 3600000 - 1, sourceReplayHorizonMs: "unknown" })).rejects.toThrow(
+			/usage window or verified replay horizon/,
+		);
+		await expect(fixture({ settledRetentionMs: 3600000, sourceReplayHorizonMs: 5 * 3600000 })).rejects.toThrow(
+			/usage window or verified replay horizon/,
+		);
+		await expect(
+			fixture({ settledRetentionMs: 5 * 3600000, sourceReplayHorizonMs: 5 * 3600000 }),
+		).resolves.toBeTruthy();
+	});
 	it("rollback preserves accepted words/ordinary charges/audit, revokes grants, disables protection", async () => {
 		const t = await fixture();
 		const g = await t.grant();

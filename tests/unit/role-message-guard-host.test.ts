@@ -619,41 +619,52 @@ describe("ladder: storage caps", () => {
 	const stateOf = (w: World) =>
 		(w.host as unknown as { state_(): Promise<GuardStoreState | null> }).state_().then((s) => s!);
 
-	// Measured (H-ROLE-LADDER-CAPS-1, a miss): each business send keeps 5 transactions, 5 audit receipts, 1 outbox
-	// entry and ~15 KB of journal for a day, so the peak day (365) alone fills 91% of the 2000-transaction cap and
-	// peak day + one role at 20/h (845) would need 211%. H-ROLE-LADDER-CAPS-2: rotating at 40% keeps every store
-	// under half. Tested at a tenth of the caps so a day's volume overruns them several times over.
-	it("(a) a send's footprint is as measured, and rotation keeps a day of traffic under half of every cap", async () => {
-		const tenth = {
-			...GUARD_RETENTION,
-			maximumTransactions: GUARD_RETENTION.maximumTransactions / 10,
-			maximumAuditReceipts: GUARD_RETENTION.maximumAuditReceipts / 10,
-			maximumOutboxEntries: GUARD_RETENTION.maximumOutboxEntries / 10,
-		};
-		const w = await world(undefined, { retention: tenth });
-		const senders = ["alpha", "beta", "gamma"];
-		const N = 80; // 400 transactions without rotation: 200% of this run's cap
-		let worst = { ratio: 0, store: "" };
-		for (let i = 0; i < N; i++) {
-			const from = senders[i % 3];
-			const to = senders[(i + 1) % 3];
-			expect(await send(w, from, homes()[from], to, {}, ""), `send ${i + 1}`).toMatchObject({ ok: true });
-			const s = await stateOf(w);
-			if (i === 9) {
-				const f = Object.fromEntries(w.host.fills(s).map((x) => [x.name, x.used]));
-				expect(f.transactions / 10).toBeLessThanOrEqual(5);
-				expect(f["audit receipts"] / 10).toBeLessThanOrEqual(5);
-				expect(f["guard store file (bytes)"] / 10).toBeLessThanOrEqual(20_000);
-			}
-			for (const f of w.host.fills(s))
-				if (f.used / f.max > worst.ratio) worst = { ratio: f.used / f.max, store: `${f.name} after send ${i + 1}` };
-			now += 18 * 60_000; // 80 sends over 24 hours
+	// Ops rm-fc4b9788 (option C): settled entries leave after 5 h whatever is open, so a store holds about 5 hours of
+	// sends (about 4 transactions each, PRUNE-1). Measured peak: 1188 transactions and audit receipts (caps 3000),
+	// 256 outbox entries, 724 tombstones, a 5.1 MB guard file (half of 16 MiB is the bar).
+	it("(a) Ops rm-fc4b9788: the worst real 5 hours twice plus 100 runaway sends, with a request open throughout, stay under half", async () => {
+		// tests/fixtures/role-message-worst-window.json: the busiest 5 hours of live role messages (metadata only).
+		const fixture = JSON.parse(
+			readFileSync(new URL("../fixtures/role-message-worst-window.json", import.meta.url), "utf8"),
+		) as { rows: [number, number, number, string, number][] };
+		const w = await world();
+		const names = [...Array.from({ length: 10 }, (_, i) => `r${i}`), "runaway"];
+		const home: Record<string, string> = {};
+		for (const name of names) {
+			home[name] = chat(name);
+			w.roles.push(role(name, home[name]));
 		}
-		expect(worst.ratio, worst.store).toBeLessThanOrEqual(0.5);
-		expect(w.logs.filter((l) => l.includes("guard store generation")).length).toBeGreaterThanOrEqual(4);
-		// With the live caps the same 40% trigger sits under half too.
-		expect(0.4).toBeLessThan(0.5);
-	}, 120_000);
+		// One approval request stays open the whole time (no rotation can run): only the 5 h retention bounds the stores.
+		const at = await chainTo(w, 7);
+		expect(await ask(w, at.from, at.file, [at.to])).toMatchObject({ ok: true });
+		const start = now;
+		const second = 6 * 3_600_000; // the second copy starts an hour after the first ends (keeps every role within 20 an hour)
+		const events: { at: number; from: string; to: string; kind: string; bytes: number }[] = [];
+		for (const offset of [0, second])
+			for (const [t, from, to, kind, bytes] of fixture.rows)
+				if (from !== to) events.push({ at: offset + t, from: `r${from}`, to: `r${to}`, kind, bytes });
+		for (let k = 0; k < 100; k++)
+			events.push({ at: second + k * 180_000, from: "runaway", to: "r4", kind: "request", bytes: 4000 });
+		events.sort((a, b) => a.at - b.at);
+		const worst: Record<string, number> = {};
+		let sent = 0;
+		for (const e of events) {
+			now = Math.max(now, start + e.at);
+			// A reply wakes the asker like a request does; the words are as long as the real ones.
+			const kind = e.kind === "reply" ? "request" : e.kind;
+			const text = `${e.from} to ${e.to}, send ${sent + 1}: `.padEnd(Math.min(e.bytes, 4000), "x");
+			const r = await send(w, e.from, home[e.from], e.to, { kind, text }, "");
+			expect(r, `send ${sent + 1} (${e.from} at +${Math.round(e.at / 60_000)} min)`).toMatchObject({ ok: true });
+			sent++;
+			for (const f of w.host.fills(await stateOf(w))) worst[f.name] = Math.max(worst[f.name] ?? 0, f.used / f.max);
+		}
+		console.log(`(a) ${sent} sends; worst fill per store: ${JSON.stringify(worst)}`);
+		expect(sent).toBe(2 * 164 + 100);
+		const s = await stateOf(w);
+		expect(s.requests.some((r) => r.state === "awaiting_approver")).toBe(true); // still open at the end
+		for (const [name, ratio] of Object.entries(worst)) expect(ratio, name).toBeLessThanOrEqual(0.5);
+		expect(w.logs.filter((l) => l.includes("guard store generation"))).toHaveLength(0);
+	}, 3_600_000);
 
 	it("(b) 15 roles with 20 open requests each fit the open-request cap at half", () => {
 		// E refuses a 21st open request per role (request_capacity); the store cap counts only open ones.

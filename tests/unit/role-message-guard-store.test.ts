@@ -1,4 +1,5 @@
 // Real filesystem on sealed, throwaway synthetic data. No native messages, Owner approvals or producer events.
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -181,6 +182,148 @@ const boundaries: GuardFileBoundary[] = [
 	"legacy:rename",
 	"legacy:directory_flush",
 ];
+
+describe("#122 H-ROLE-LADDER-PERF-1: same digests, cached reads only for identical text", () => {
+	// The digest before PERF-1, kept verbatim as the reference.
+	function referenceDigest(value: unknown): string {
+		function sort(v: unknown): unknown {
+			if (Array.isArray(v)) return v.map(sort);
+			if (v && typeof v === "object") {
+				return Object.fromEntries(
+					Object.entries(v)
+						.filter(([, x]) => x !== undefined)
+						.sort(([a], [b]) => a.localeCompare(b))
+						.map(([k, x]) => [k, sort(x)]),
+				);
+			}
+			return v;
+		}
+		return createHash("sha256")
+			.update(JSON.stringify(sort(value)))
+			.digest("hex");
+	}
+	it("guardDigest equals the old sort-then-stringify digest on fixed and random values", () => {
+		const fixed: unknown[] = [
+			null,
+			0,
+			-1.5,
+			NaN,
+			Infinity,
+			"",
+			'\u2028\ud800 "quote"',
+			true,
+			[],
+			{},
+			[undefined, () => 1, Symbol("s"), null],
+			{
+				b: 1,
+				a: undefined,
+				c: () => 1,
+				d: Symbol("x"),
+				"10": 1,
+				"2": 2,
+				"02": 3,
+				"-1": 4,
+				"4294967295": 5,
+				"4294967294": 6,
+			},
+			{ "\u00e9": 1, é: 2, E: 3, e: 4, _: 5, "": 6, Z: 7, a1: 8, a10: 9, a2: 10 },
+			JSON.parse('{"__proto__":{"x":1},"y":[1,{"b":2,"a":[{}]}]}'),
+			new Date(0),
+			// eslint-disable-next-line no-sparse-arrays
+			[1, , 3],
+		];
+		let seed = 122;
+		const rand = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+		const keys = ["a", "B", "b", "0", "1", "10", "01", "\u00e9", "z", "id", "Id", "_x", "x y", "\u4e2d"];
+		const gen = (depth: number): unknown => {
+			const r = rand();
+			if (depth > 4 || r < 0.35) {
+				const p = rand();
+				if (p < 0.2) return Math.floor(rand() * 1e6);
+				if (p < 0.4) return keys[Math.floor(rand() * keys.length)] + '\n\t"';
+				if (p < 0.55) return rand() < 0.5;
+				if (p < 0.7) return null;
+				if (p < 0.8) return undefined;
+				return rand() * 1e3;
+			}
+			if (r < 0.6) return Array.from({ length: Math.floor(rand() * 4) }, () => gen(depth + 1));
+			const o: Record<string, unknown> = {};
+			for (let i = Math.floor(rand() * 6); i > 0; i--) o[keys[Math.floor(rand() * keys.length)]] = gen(depth + 1);
+			return o;
+		};
+		const values = [...fixed, ...Array.from({ length: 2000 }, () => gen(0))];
+		for (const [i, value] of values.entries())
+			if (value !== undefined) expect(guardDigest(value), `value ${i}`).toBe(referenceDigest(value));
+		expect(() => guardDigest(undefined)).toThrow();
+	});
+	it("a journal changed on disk after a cached read is decoded again, never served from the cache", async () => {
+		const t = await fixture();
+		const first = await t.store.read();
+		if (first.state !== "ready") throw new Error("store not ready");
+		// Same length, one byte different: the checksum no longer matches, so the store must refuse it.
+		const raw = readFileSync(t.options.journalPath, "utf8");
+		const at = raw.indexOf('"revision":') + '"revision":'.length;
+		const digit = raw[at];
+		writeFileSync(
+			t.options.journalPath,
+			raw.slice(0, at) + (digit === "9" ? "8" : String(Number(digit) + 1)) + raw.slice(at + 1),
+		);
+		const second = await t.store.read();
+		expect(second.state).toBe("unknown");
+		// The original text again: the store reads it as before.
+		writeFileSync(t.options.journalPath, raw);
+		expect(await t.store.read()).toEqual(first);
+		// What a read hands out is a copy: changing it changes nothing stored.
+		const copy = await t.store.read();
+		if (copy.state !== "ready") throw new Error("store not ready");
+		(copy.value as unknown as { revision: string }).revision += "-changed";
+		expect(await t.store.read()).toEqual(first);
+		// After a commit (whose own text the store remembers), a changed journal is again refused.
+		const id = identity("perf-cache");
+		expect((await t.store.transact(id, async (s) => mutation(s, id))).state).toBe("committed");
+		const after = await t.store.read();
+		expect(after.state).toBe("ready");
+		const written = readFileSync(t.options.journalPath, "utf8");
+		writeFileSync(t.options.journalPath, written.replace('"stage":"committed"', '"stage":"prepared"'));
+		expect((await t.store.read()).state).toBe("unknown");
+		writeFileSync(t.options.journalPath, written);
+		expect(await t.store.read()).toEqual(after);
+	});
+	it("PERF-2: the files a commit writes are the sorted JSON of their own content, and a fresh store reads them in full", async () => {
+		const t = await fixture();
+		for (const name of ["perf-2-a", "perf-2-b"]) {
+			const id = identity(name);
+			expect((await t.store.transact(id, async (s) => mutation(s, id))).state).toBe("committed");
+		}
+		const after = await t.store.read();
+		expect(after.state).toBe("ready");
+		const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+		const journal = readFileSync(t.options.journalPath, "utf8");
+		const legacyText = readFileSync(t.options.legacyPath, "utf8");
+		const parsed = JSON.parse(journal) as { checksum: string; stage: string; legacy: unknown };
+		expect(sha(journal)).toBe(guardDigest(parsed));
+		expect(sha(legacyText)).toBe(guardDigest(JSON.parse(legacyText)));
+		const { checksum, ...body } = parsed;
+		expect(checksum).toBe(guardDigest(body));
+		expect(parsed.stage).toBe("committed");
+		expect(guardDigest(parsed.legacy)).toBe(sha(legacyText));
+		// No cache: a second store decodes and re-digests both files in full.
+		const fresh = new GuardFileStore(t.options);
+		expect((await fresh.recover()).state).toBe("ready");
+		expect(await fresh.read()).toEqual(after);
+		expect(readFileSync(t.options.journalPath, "utf8")).toBe(journal);
+	});
+	it("an accepted copy changed on disk after a cached read makes the store not ready", async () => {
+		const t = await fixture();
+		expect((await t.store.read()).state).toBe("ready");
+		const legacy = JSON.parse(readFileSync(t.options.legacyPath, "utf8"));
+		writeFileSync(t.options.legacyPath, JSON.stringify({ ...legacy, paused: !legacy.paused }));
+		expect((await t.store.read()).state).toBe("unknown");
+		writeFileSync(t.options.legacyPath, JSON.stringify(legacy));
+		expect((await t.store.read()).state).toBe("ready");
+	});
+});
 
 describe("E durable prepare/commit/publication boundary", () => {
 	it("does not touch paths on construction and never creates an empty history on read", async () => {
@@ -510,6 +653,36 @@ describe("E request history is immutable at the single writer (Ops rm-1bb3c77b i
 		const read = await t.store.read();
 		if (read.state !== "ready") throw new Error("store fenced by a refused mutation");
 		expect(read.value.requests).toEqual([lower, phase]);
+	});
+	it("#122 caps C: only a tombstone whose verified end has passed may leave; unknown or future ends never", async () => {
+		const stone = (name: string, end: number | "source_horizon_unknown") => ({
+			kind: "operation" as const,
+			identityDigest: guardDigest({ name }),
+			invalidThrough: end,
+			lastTransactionId: null,
+		});
+		const unknownEnd = stone("unknown-end", "source_horizon_unknown");
+		const passed = stone("passed", now);
+		const future = stone("future", now + 1);
+		const t = await fixture(undefined, false);
+		expect((await t.store.initialize({ ...initial(), tombstones: [unknownEnd, passed, future] }, legacy())).state).toBe(
+			"ready",
+		);
+		for (const [label, kept] of [
+			["drop an unknown end", [passed, future]],
+			["drop a future end", [unknownEnd, passed]],
+		] as const) {
+			const id = identity(`forget-${label}`);
+			const r = await t.store.transact(id, async (s) => rewrite(s, id, [...s.requests], [...kept]));
+			expect(r.state === "not_committed" && r.reason, label).toBe("replay tombstone cannot be reset");
+		}
+		const id = identity("forget-passed");
+		expect((await t.store.transact(id, async (s) => rewrite(s, id, [...s.requests], [unknownEnd, future]))).state).toBe(
+			"committed",
+		);
+		const read = await t.store.read();
+		if (read.state !== "ready") throw new Error("store not ready");
+		expect(read.value.tombstones).toEqual([unknownEnd, future]);
 	});
 	it("still commits the legitimate moves: first Owner answer, expiry, and whole-lineage pruning with tombstones", async () => {
 		const t = await seeded();
