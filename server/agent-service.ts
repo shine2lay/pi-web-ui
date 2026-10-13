@@ -14,6 +14,8 @@
 // provider so built-in model lists follow the official pi.dev catalog
 // wholesale (no union merge / no stale built-in leftovers).
 import "./patch-remote-catalog.js";
+// Logs whatever holds pi's sign-in lock (auth.json) for 60 s or more; logging only (#134).
+import "./auth-lock-trace.js";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
