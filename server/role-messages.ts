@@ -781,6 +781,8 @@ export class RoleMessages {
 	private running: Promise<void> | null = null;
 	private again = false;
 	private stopped = false;
+	/** Startup handoff owns delivery until the normal start; this is not the Owner's store pause. */
+	private deferredUntilStart = false;
 	private changeTimer: ReturnType<typeof setTimeout> | null = null;
 	/** role-message-ladder: chain facts of records the store has dropped (see RoleMessageChainFact). */
 	private readonly chainMemory = new Map<string, RoleMessageChainFact & { at: number }>();
@@ -965,8 +967,28 @@ export class RoleMessages {
 		if (!paused) this.kick();
 	}
 
+	/** Server startup only: sends can be recorded, but must not race carry-on's per-chat handoff. */
+	deferUntilStart(): void {
+		if (!this.timer && !this.running) this.deferredUntilStart = true;
+	}
+
+	/** Hand only this reopened chat's waiting mail through the normal policy/proof/retry checks. */
+	async beforeResume(file: string, delivery: Pick<RoleMessageHost, "deliver" | "note">): Promise<void> {
+		if (!this.deferredUntilStart || this.data.paused || this.stopped) return;
+		for (const record of this.data.messages.filter((m) => m.state === "waiting").sort((a, b) => a.at - b.at)) {
+			if (this.data.paused || this.stopped) break;
+			try {
+				const route = record.target && existsSync(record.target) ? { file: record.target } : await this.route(record);
+				if ("file" in route && samePath(route.file, file)) await this.step(record, delivery, file);
+			} catch (error) {
+				this.log(`${record.id}: ${(error as Error).message}`);
+			}
+		}
+	}
+
 	start(): void {
 		if (this.timer || this.stopped) return;
+		this.deferredUntilStart = false;
 		this.timer = setInterval(() => void this.tick(), TICK_MS);
 		this.timer.unref?.();
 		this.kick();
@@ -1523,6 +1545,7 @@ export class RoleMessages {
 	/** Look at every waiting message once, one at a time. A call while that goes on makes it look once
 	 *  more after it, and resolves when it is all done. */
 	tick(): Promise<void> {
+		if (this.deferredUntilStart) return Promise.resolve();
 		if (this.running) {
 			this.again = true;
 			return this.running;
@@ -1627,7 +1650,11 @@ export class RoleMessages {
 		return { file: role.homeChat, label: "home chat" };
 	}
 
-	private async step(r: RoleMessageRecord): Promise<void> {
+	private async step(
+		r: RoleMessageRecord,
+		delivery: Pick<RoleMessageHost, "deliver" | "note"> = this.host,
+		resumeFile?: string,
+	): Promise<void> {
 		const now = this.now();
 		// Held while paused doesn't count: a held message gets a fresh day from the resume.
 		if (now - Math.max(r.at, this.data.resumedAt ?? 0) > GIVE_UP_MS) {
@@ -1656,6 +1683,7 @@ export class RoleMessages {
 			this.save();
 		}
 		const target = r.target;
+		if (resumeFile && !samePath(target, resumeFile)) return; // a route changed while reopening
 		if (await transcriptHasRoleMessage(target, r.scanFrom ?? 0, r.id)) {
 			// Answered while on its way (the chat took it and replied before this look): "replied".
 			r.state = r.replyId ? "replied" : "delivered";
@@ -1696,7 +1724,7 @@ export class RoleMessages {
 			r.hash = sha1(text);
 			this.save();
 		}
-		const res = noTurn(r) || paused ? await this.host.note(target, text) : await this.host.deliver(target, text);
+		const res = noTurn(r) || paused ? await delivery.note(target, text) : await delivery.deliver(target, text);
 		if (res.ok && paused)
 			this.log(`${r.id} added to ${r.targetChat ?? "?"} without a turn: its task is paused by the owner`);
 		if (res.ok) {

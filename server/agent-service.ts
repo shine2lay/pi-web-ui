@@ -319,7 +319,7 @@ import {
 	type RoleReportResult,
 } from "./role-messages.js";
 import { RoleMessageGuardHost } from "./role-message-guard-host.js";
-import { installRoleMailBoundary, noteAtRoleMailBoundary } from "./role-mail-boundary.js";
+import { admitRoleMailAtResume, installRoleMailBoundary, noteAtRoleMailBoundary } from "./role-mail-boundary.js";
 import { RolesOverviewReader } from "./roles-overview.js";
 import { makeRolesOverviewTool } from "./roles-overview-tool.js";
 import {
@@ -5141,23 +5141,43 @@ export class ClientSession {
 	 * disposing this one: a running chat is kept (and listed) when it is switched away from.
 	 * false = it couldn't be opened or the note didn't get in.
 	 */
-	async carryOn(sessionFile: string, note: string): Promise<boolean> {
+	async carryOn(sessionFile: string, note: string, beforeResume?: () => Promise<void>): Promise<boolean> {
 		await this.switchSession(sessionFile);
 		const id = this.conversationIdBySessionFile(sessionFile);
 		if (!id) return false;
 		const conv = this.convs.get(id);
 		if (!conv) return false;
-		const before = conv.session.messages.length;
-		void this.promptResumedConversation(sessionFile, note).catch(() => {});
-		const deadline = Date.now() + 20_000;
-		while (Date.now() < deadline) {
-			if (conv.session.isStreaming || conv.session.messages.length > before) break;
-			await new Promise((r) => setTimeout(r, 100));
+		const cleanup = beforeResume ? await admitRoleMailAtResume(conv.session, beforeResume) : () => {};
+		try {
+			const before = conv.session.messages.length;
+			void this.promptResumedConversation(sessionFile, note).catch(() => {});
+			const deadline = Date.now() + 20_000;
+			while (Date.now() < deadline) {
+				if (conv.session.isStreaming || conv.session.messages.length > before) break;
+				await new Promise((r) => setTimeout(r, 100));
+			}
+			const started = conv.session.isStreaming || conv.session.messages.length > before;
+			// In the running list of every window, and kept open when switched away from.
+			if (started) conv.listed = true;
+			return started;
+		} finally {
+			cleanup();
 		}
-		const started = conv.session.isStreaming || conv.session.messages.length > before;
-		// In the running list of every window, and kept open when switched away from.
-		if (started) conv.listed = true;
-		return started;
+	}
+
+	/** Startup's already-open target: native follow-up admission, no separate idle prompt/run. */
+	async queueRoleMailForResume(
+		file: string,
+		text: string,
+		how: RoleDeliveryHow = {},
+	): Promise<{ ok: true } | { ok: false; error: string }> {
+		const id = this.conversationIdBySessionFile(file);
+		const conv = id ? this.convs.get(id) : undefined;
+		if (!conv || id !== this.activeId) return { ok: false, error: "couldn't open the chat" };
+		const disposition = await conv.session.followUp(text, undefined, { source: "extension" });
+		if (disposition !== "handled")
+			collectRoleInput((conv.turnPending ??= newTurnRecord()), { ...how, cause: how.cause ?? "role" });
+		return { ok: true };
 	}
 
 	/**
@@ -15479,6 +15499,7 @@ export class AgentService {
 			initiativeOf: (id) => this.decisions.messageInitiativeOf(id),
 			log: (line) => console.log(line),
 		});
+		this.roleMessages.deferUntilStart();
 		roleMessageService = this.roleMessages;
 		// role-message-ladder (#122): the approval ladder; it starts with startRoleMessages. Until it is ready (or if it
 		// can't start) message_role keeps the native 6-message rule.
@@ -17538,7 +17559,14 @@ export class AgentService {
 				}
 				let ok = false;
 				try {
-					ok = existsSync(file) && (await cs.carryOn(file, item.note));
+					ok =
+						existsSync(file) &&
+						(await cs.carryOn(file, item.note, () =>
+							this.roleMessages.beforeResume(file, {
+								deliver: (target, text) => cs.queueRoleMailForResume(target, text, this.roleMessageHow(target, text)),
+								note: (target, text) => cs.noteRoleMessage(target, text),
+							}),
+						));
 				} catch (err) {
 					console.error(`[carry-on] "${item.chat.title}": ${(err as Error).message}`);
 				}

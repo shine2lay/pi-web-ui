@@ -9,7 +9,10 @@ import { roleMessageIdOf } from "./role-messages.js";
 type Session = Pick<AgentSession, "agent" | "subscribe" | "sendCustomMessage">;
 type Note = Parameters<AgentSession["sendCustomMessage"]>[0];
 type Pending = { id: string; message: AgentMessage; note?: Note };
-const installed = new WeakMap<Session, { note: (message: Note) => Promise<void> }>();
+const installed = new WeakMap<
+	Session,
+	{ note: (message: Note) => Promise<void>; beforeResume: (admit: () => Promise<void>) => Promise<() => void> }
+>();
 
 function idOf(message: AgentMessage): string | undefined {
 	if (message.role !== "user" && message.role !== "custom") return undefined;
@@ -32,6 +35,7 @@ export function installRoleMailBoundary(session: Session): void {
 	const agent = session.agent;
 	let pending: Pending[] = [];
 	let ready = false;
+	let resuming = false;
 	const followUp = agent.followUp.bind(agent);
 	const clear = agent.clearFollowUpQueue.bind(agent);
 	const finish = agent.finishTurn;
@@ -97,10 +101,48 @@ export function installRoleMailBoundary(session: Session): void {
 		return { ...update, messages: [...(update?.messages ?? []), ...batch.map((p) => p.message)] };
 	};
 	installed.set(session, {
+		// Restart only: the chat has reopened but its carry-on prompt has not begun.
+		// Reuse the exact boundary FIFO, letting the SDK persist it with that prompt.
+		beforeResume: async (admit) => {
+			if (agent.state.isStreaming) {
+				await admit(); // still only buffered for the ordinary completed-run boundary
+				return () => {};
+			}
+			const original = agent.prompt;
+			const prompt = original.bind(agent);
+			resuming = true;
+			let armed = true;
+			const restore = (): void => {
+				if (!armed) return;
+				armed = false;
+				resuming = false;
+				if (agent.prompt === atResume) agent.prompt = original;
+			};
+			const atResume: typeof agent.prompt = (
+				input: AgentMessage | AgentMessage[] | string,
+				images?: Parameters<AgentSession["followUp"]>[1],
+			) => {
+				restore(); // one-shot; ordinary prompts and follow-ups remain untouched
+				if (agent.state.isStreaming || !Array.isArray(input) || !pending.length)
+					return typeof input === "string" ? prompt(input, images) : prompt(input);
+				const batch = pending;
+				pending = [];
+				ready = false;
+				return prompt([...batch.map((row) => row.message), ...input]);
+			};
+			agent.prompt = atResume;
+			try {
+				await admit();
+				return restore;
+			} catch (error) {
+				restore();
+				throw error;
+			}
+		},
 		note: async (note) => {
 			const message: AgentMessage = { role: "custom", ...note, timestamp: Date.now() };
 			const id = idOf(message);
-			if (!id || (!agent.state.isStreaming && !pending.some((p) => !p.note))) {
+			if (!id || (!resuming && !agent.state.isStreaming && !pending.some((p) => !p.note))) {
 				// An idle retry after an aborted run consumes its buffered note copy.
 				if (id) pending = pending.filter((p) => p.id !== id);
 				await session.sendCustomMessage(note, { triggerTurn: false });
@@ -109,6 +151,12 @@ export function installRoleMailBoundary(session: Session): void {
 			add({ id, message, note });
 		},
 	});
+}
+
+/** Arm only the imminent restart resume, and return its cleanup for failed/deferred prompts. */
+export async function admitRoleMailAtResume(session: Session, admit: () => Promise<void>): Promise<() => void> {
+	installRoleMailBoundary(session);
+	return installed.get(session)!.beforeResume(admit);
 }
 
 export async function noteAtRoleMailBoundary(session: Session, note: Note): Promise<void> {
