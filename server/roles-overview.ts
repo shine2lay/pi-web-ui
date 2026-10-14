@@ -155,16 +155,19 @@ export interface TranscriptScan {
 	offset: number;
 	tldr: TldrEntryLike[];
 	queue: TaskQueueEntryLike[];
+	/** Native session-header queue ID; never inferred from a path or role home name. */
+	sessionId?: string;
 	/** Task id -> the time of its latest "stuck" entry (when it started waiting on the owner). */
 	stuckAt: Map<number, number>;
 	/** A needs-you line came after the last kept reply (only then is a reply worth keeping). */
 	waiting: boolean;
 }
 
-type LineKind = "tldr" | "queue" | "user" | "replyTool";
+type LineKind = "session" | "tldr" | "queue" | "user" | "replyTool";
 
 /** What a transcript line is, from its first bytes (null: nothing the page needs). */
 export function lineKind(head: string): LineKind | null {
+	if (head.startsWith('{"type":"session"')) return "session";
 	if (head.includes('"type":"custom"')) {
 		if (head.includes(`"customType":"${TLDR_ENTRY_TYPE}"`)) return "tldr";
 		if (head.includes(`"customType":"${TASK_QUEUE_ENTRY_TYPE}"`)) return "queue";
@@ -321,6 +324,10 @@ export class TranscriptScans {
 			return;
 		}
 		if (!e || typeof e !== "object") return;
+		if (kind === "session") {
+			if (s.offset === 0 && e.type === "session" && typeof e.id === "string" && e.id.length > 0) s.sessionId = e.id;
+			return;
+		}
 		if (kind === "tldr") {
 			if (e.type !== "custom" || e.customType !== TLDR_ENTRY_TYPE || typeof e.id !== "string") return;
 			const entry: TldrEntryLike = {
@@ -688,7 +695,7 @@ export class RolesOverviewReader {
 				keep.add(home);
 				lastActivity = Math.round(s.mtimeMs);
 				homeLines = tldrLinesFromEntries(s.tldr, TLDR_MAX_LINES);
-				const q = taskQueueFromEntries(s.queue, true, Number.MAX_SAFE_INTEGER);
+				const q = taskQueueFromEntries(s.queue, true, Number.MAX_SAFE_INTEGER, undefined, s.sessionId);
 				tasks = q.tasks;
 				running = q.running;
 				pausedReason = q.pausedReason;

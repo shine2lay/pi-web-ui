@@ -18,6 +18,7 @@ import type { IdentityDef } from "../../server/identities.js";
 import type { RoleGoal, WorkMode } from "../../server/identity-config.js";
 import type { UiRolesOverview } from "../../server/protocol.js";
 import { RoleMessages } from "../../server/role-messages.js";
+import { makeRolesOverviewTool } from "../../server/roles-overview-tool.js";
 import { RULES_GOALS, rulesGoals, rulesWorkMode } from "../../server/role-rules.js";
 import {
 	ChatPaths,
@@ -182,6 +183,77 @@ const ask = (o: Partial<Ask> & { id: string; sessionFile: string; createdAt: num
 	({ kind: "question", title: "A question", fields: [], ...o }) as Ask;
 
 // ---------------------------------------------------------------------------------------------------------
+describe("Q0 bound queue caller regression", () => {
+	it("nested session metadata never steals an existing line kind", () => {
+		const nested = { type: "session", id: "not-a-header" };
+		const cases = [
+			[{ type: "session", id: "native-id" }, "session"],
+			[{ type: "custom", customType: "queue", data: { nested } }, "queue"],
+			[{ type: "custom", customType: "tldr", data: { nested } }, "tldr"],
+			[{ type: "message", message: { role: "user", nested } }, "user"],
+			[{ type: "message", message: { role: "toolResult", toolName: "queue_add", nested } }, "replyTool"],
+		] as const;
+		for (const [entry, expected] of cases) {
+			expect(lineKind(JSON.stringify(entry).slice(0, 512))).toBe(expected);
+		}
+	});
+	it("bound run after finished is running in both the real reader and roles_overview caller", async () => {
+		const file = transcript("native-session", [
+			queue({ op: "add", id: 7, plan: plan("Fixed case") }),
+			queue({ op: "pause", reason: "finished" }),
+			queue({ op: "run", queueId: "native-session" }),
+		]);
+		const f = fake([role("ops", file)]);
+		const before = readFileSync(file, "utf8");
+		const reader = new RolesOverviewReader(f.host);
+		const tool = makeRolesOverviewTool({ read: () => reader.read() });
+		const run = tool.execute as unknown as (...args: unknown[]) => Promise<{ content: { text: string }[] }>;
+		const answer = await run("fixed", { role: "ops" }, undefined, undefined, undefined);
+		// Boolean assertions never dump even synthetic tool-result bodies into the test log.
+		expect(answer.content[0].text.includes("Queue: running;")).toBe(true);
+		expect(answer.content[0].text.includes("stopped (finished)")).toBe(false);
+		expect(byId(await reader.read(), "ops").queue?.running).toBe(true);
+		expect(byId(await read(f), "ops").queue?.running).toBe(true); // restart
+		expect(readFileSync(file, "utf8")).toBe(before);
+	});
+	it("uses the header ID, not the home filename; ignores a foreign fork's bound run", async () => {
+		const file = transcript("file-alias", [
+			queue({ op: "add", id: 7, plan: plan("Fixed case") }),
+			queue({ op: "pause", reason: "finished" }),
+			queue({ op: "run", queueId: "native-id" }),
+		]);
+		writeFileSync(file, readFileSync(file, "utf8").replace('"id":"file-alias"', '"id":"native-id"'));
+		const f = fake([role("ops", file)]);
+		expect(byId(await read(f), "ops").queue?.running).toBe(true);
+		writeFileSync(file, readFileSync(file, "utf8").replace('"id":"native-id"', '"id":"fork-id"'));
+		expect(byId(await read(f), "ops").queue).toMatchObject({ running: false, pausedReason: "finished" });
+	});
+	it("headerless legacy keeps unbound compatibility, but cannot accept a bound run", async () => {
+		const file = transcript("legacy", [
+			queue({ op: "add", id: 7, plan: plan("Fixed case") }),
+			queue({ op: "pause", reason: "finished" }),
+			queue({ op: "run", queueId: "legacy" }),
+		]);
+		const lines = readFileSync(file, "utf8").split("\n");
+		writeFileSync(file, lines.slice(1).join("\n"));
+		const f = fake([role("ops", file)]);
+		expect(byId(await read(f), "ops").queue?.running).toBe(false);
+		append(file, [queue({ op: "run" })]);
+		expect(byId(await read(f), "ops").queue?.running).toBe(true);
+	});
+	it("header ID survives incremental reads and changes only on native file reset", async () => {
+		const file = transcript("epoch-old", []);
+		const scans = new TranscriptScans();
+		expect((await scans.read(file)).sessionId).toBe("epoch-old");
+		append(file, [queue({ op: "run", queueId: "epoch-old" })]);
+		expect((await scans.read(file)).sessionId).toBe("epoch-old");
+		append(file, [{ type: "session", id: "not-a-header" }]);
+		expect((await scans.read(file)).sessionId).toBe("epoch-old");
+		writeFileSync(file, `${JSON.stringify({ type: "session", version: 3, id: "epoch-new" })}\n`);
+		expect((await scans.read(file)).sessionId).toBe("epoch-new");
+	});
+});
+
 describe("the roles, from disk", () => {
 	it("spend: own files reach each snapshot; broken stays local, refresh reads new values without writing", async () => {
 		now = Date.parse("2026-10-11T12:00:00-07:00");
