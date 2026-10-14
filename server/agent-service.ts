@@ -14397,8 +14397,8 @@ export class ClientSession {
 	}
 
 	/** List a workspace directory (relative to the configured cwd). */
-	async listFiles(relPath?: string): Promise<void> {
-		return this.files.listFiles(relPath);
+	async listFiles(relPath?: string, requestId?: string): Promise<void> {
+		return this.files.listFiles(relPath, requestId);
 	}
 
 	/** 全局搜索：递归文件名匹配（结果经 search_files_result 回推，reqId 匹配）。 */

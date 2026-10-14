@@ -1234,7 +1234,7 @@ export interface DispatchSession {
 	/** have：switch-cache，客户端缓存里这条对话的窗口；没实现的引擎（DSH）忽略，照常发整份快照。 */
 	switchSession(path: string, have?: CachedWindow): Promise<void>;
 	switchConversation(id: string, have?: CachedWindow): Promise<void>;
-	listFiles(path?: string): Promise<void>;
+	listFiles(path?: string, requestId?: string): Promise<void>;
 	searchFiles(query: string, reqId: number): Promise<void>;
 	searchSessions(query: string, reqId: number): Promise<void>;
 	scmQuery(
@@ -3177,7 +3177,7 @@ wss.on("connection", (ws, req) => {
 				}
 				break;
 			case "list_files":
-				void cs.listFiles(msg.path);
+				void cs.listFiles(msg.path, msg.requestId);
 				break;
 			case "search_files":
 				void cs.searchFiles(msg.query, msg.reqId);

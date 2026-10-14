@@ -1144,7 +1144,7 @@ export type ClientMessage =
 	 *  回答仍经 question_answer（带 owner）回去，不搬迁对话. */
 	| { type: "peek_elsewhere_question"; owner: string; id: string }
 	| { type: "list_projects" }
-	| { type: "list_files"; path?: string }
+	| { type: "list_files"; path?: string; requestId?: string }
 	/** 列目录：path 省略 = 工作区根；也接受工作区外绝对路径（Windows "C:/…"、
 	 *  posix "/…"）与机器根 "@root"（盘符列表，见 files-service.ts MACHINE_ROOT）。
 	 *  机器浏览时返回的 entry.path 为绝对 wire 路径，可直接再用于列目录/预览/附件。 */
@@ -4114,6 +4114,8 @@ export type ServerMessage =
 	| { type: "projects"; projects: ProjectSummary[] }
 	| {
 			type: "files";
+			/** Optional opaque caller token (<=64 characters), echoed only when supplied. */
+			requestId?: string;
 			path: string;
 			parent: string | null;
 			entries: FileEntry[];

@@ -18,6 +18,13 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: `tests/unit/display-preview.test.ts`, `tests/unit/history-preview.test.ts`, `tests/unit/plugin-host.test.ts`; immutable-old-source negative control, synthetic long200 raw-JSON >=90% reduction, ten sealed latency pairs (median <=10%, p95 <=20% regression), cold/warm/fresh/late-identity/two-window/fork/full-search parity. Execution/install receipts remain in task #159's WORKING.md; no check or install is implied by this entry alone.
 - Undo: revert only this labelled commit in a fresh worktree and use normal landing/deploy gates. Full authoritative text never changed and needs no restoration.
 
+## file-list-correlation: reject stale directory replies by request and folder
+
+- `local` (Ops #160, H-LAZY-P2-CORRELATION). Path alone cannot distinguish an old cwd's root reply or A→B→A navigation. The built-in Files panel sends an opaque per-window request token and keeps only the reply matching its current token, cwd and folder; unrelated replies cannot replace accepted rows.
+- Optional `requestId` (string, at most 64 characters) is echoed unchanged through routing, both engine delegates and FilesService's three listing branches. Untagged reply bytes stay unchanged. No token persistence/logging, server cwd state, watcher ownership/lifetime or general/explicit caller API change. Explicit panel refresh/navigation use the same correlated request path.
+- Proof: `tests/unit/files-list-correlation.test.ts` (all branches, boundary/invalid inputs, exact serialized untagged compatibility, delegate/routing source binding) and `tests/unit/files-panel-correlation.test.ts` (old-cwd root, A→B→A, cross-window and different-path/unsolicited replies). On the unchanged base all nine correlation cases fail and the untagged control passes.
+- Undo: revert this labelled patch through a new worktree and normal gate/land/install. No saved-state migration or data rollback. The separately labelled visibility patch is independent; without correlation, its freshness guarantee is limited to path matching.
+
 ## role-mail-lease: delivered chats acquire their own message guard lease
 
 - `local` (Ops #175, H-LEASE-1). A zero-delay delivery timer created by `RoleMessages.admit` inherited `GuardLease`'s AsyncLocalStorage re-entry mark. The chat it woke could bypass a different writer's lock: refuse during publication, or overwrite an accepted message, charge and outbox entry with a stale snapshot.

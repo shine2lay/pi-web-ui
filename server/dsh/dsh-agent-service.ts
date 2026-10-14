@@ -2618,8 +2618,8 @@ export class DshClientSession {
 		await this.pushProjects();
 	}
 
-	async listFiles(relPath?: string): Promise<void> {
-		await this.files.listFiles(relPath);
+	async listFiles(relPath?: string, requestId?: string): Promise<void> {
+		await this.files.listFiles(relPath, requestId);
 	}
 
 	async searchFiles(query: string, reqId: number): Promise<void> {

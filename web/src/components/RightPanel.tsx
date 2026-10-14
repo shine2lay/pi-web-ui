@@ -165,7 +165,7 @@ interface RightPanelProps {
 }
 
 export const RightPanel = memo(function RightPanel({
-	files,
+	files: incomingFiles,
 	fileChanged,
 	widgets,
 	statuses,
@@ -225,6 +225,24 @@ export const RightPanel = memo(function RightPanel({
 	// 点击放大的 widget（居中浮层展示完整宽度输出）。
 	const [expandedWidget, setExpandedWidget] = useState<string | null>(null);
 	const [loading, setLoading] = useState(false);
+	// file-list-correlation: keep the last accepted listing, not an unrelated
+	// explicit caller's reply or a late reply for the same wire path in an old cwd.
+	const [listed, setListed] = useState<{ cwd: string; files: FileListing } | null>(null);
+	const files = listed?.cwd === cwd ? listed.files : null;
+	const [fileWindowId] = useState(() => crypto.randomUUID());
+	const reqSeq = useRef(0);
+	const listingRequest = useRef<{ requestId: string; cwd: string; path: string } | null>(null);
+	const request = useCallback(
+		(path: string, opts?: { silent?: boolean }) => {
+			const requestId = `${fileWindowId}:${++reqSeq.current}`;
+			listingRequest.current = { requestId, cwd, path };
+			setCurrentPath(path);
+			if (!opts?.silent) setLoading(true);
+			const ok = panelSend({ type: "list_files", path: path === "" ? undefined : path, requestId });
+			if (!ok && listingRequest.current?.requestId === requestId) setLoading(false);
+		},
+		[cwd, fileWindowId, panelSend],
+	);
 
 	// ---- 文件区 ↔ widgets 的纵向分割（与左栏 VSCode 风格分割同款：拖动改权重、双击复位） ----
 	const panelRef = useRef<HTMLElement>(null);
@@ -538,8 +556,8 @@ export const RightPanel = memo(function RightPanel({
 
 	/** 菜单「刷新列表」→ 静默重拉当前目录（不闪 loading 占位）。 */
 	const refreshList = useCallback(() => {
-		panelSend({ type: "list_files", path: currentPath === "" ? undefined : currentPath });
-	}, [panelSend, currentPath]);
+		request(currentPath, { silent: true });
+	}, [request, currentPath]);
 
 	// ---- 额外工作区根（宿主侧多根，见 server/protocol.ts 的 set_workspace_roots） ----
 	/** 根选择器弹层开合（无根时不渲染，所以也不必持久化）。 */
@@ -863,31 +881,8 @@ export const RightPanel = memo(function RightPanel({
 	/** How often to silently re-poll the current directory (ms). */
 	const AUTO_REFRESH_MS = 10_000;
 
-	// Monotonic request id — responses are only trusted if they match the latest
-	// requested path (guards against out-of-order responses when navigating fast).
-	const reqSeq = useRef(0);
-
 	// Last cwd we listed — when the workspace switches, jump back to its root.
 	const lastCwd = useRef<string | undefined>(undefined);
-
-	const request = useCallback(
-		(path: string, opts?: { silent?: boolean }) => {
-			const seq = ++reqSeq.current;
-			setCurrentPath(path);
-			// Silent refreshes (polling / cwd switch) keep the current listing on
-			// screen instead of flashing the loading placeholder.
-			if (!opts?.silent) setLoading(true);
-			const ok = panelSend({
-				type: "list_files",
-				path: path === "" ? undefined : path,
-			});
-			if (!ok) {
-				// Not connected — nothing will arrive; back off the spinner.
-				if (reqSeq.current === seq) setLoading(false);
-			}
-		},
-		[panelSend],
-	);
 
 	/** 去掉一个根。 */
 	const removeWorkspaceRoot = useCallback(
@@ -900,12 +895,22 @@ export const RightPanel = memo(function RightPanel({
 		[workspaceRoots, setRoots, currentPath, request],
 	);
 
-	// The server response arrives via chat.files; only treat it as the answer to
-	// the current navigation if its path matches (stale/out-of-order responses
-	// for other directories keep the spinner up).
+	// Validate both opaque identity and folder/cwd binding. In particular an old
+	// cwd's root also has path "", and A→B→A cannot be guarded by path alone.
 	useEffect(() => {
-		if (files && files.path === currentPath) setLoading(false);
-	}, [files, currentPath]);
+		const binding = listingRequest.current;
+		if (
+			incomingFiles &&
+			binding &&
+			binding.cwd === cwd &&
+			binding.path === currentPath &&
+			incomingFiles.requestId === binding.requestId &&
+			incomingFiles.path === binding.path
+		) {
+			setListed({ cwd, files: incomingFiles });
+			setLoading(false);
+		}
+	}, [incomingFiles, cwd, currentPath]);
 
 	// Auto-refresh: when the cwd changes (project switch / set_cwd) re-list its
 	// root; otherwise poll the current directory silently so the tree stays fresh

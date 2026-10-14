@@ -19,6 +19,8 @@ export type { FileEntry };
 // ---------------------------------------------------------------------------
 
 export interface FileListing {
+	/** file-list-correlation: absent for existing explicit/unsolicited callers. */
+	requestId?: string;
 	path: string;
 	parent: string | null;
 	entries: FileEntry[];

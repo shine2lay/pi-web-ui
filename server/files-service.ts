@@ -348,7 +348,19 @@ export class FilesService {
 		});
 	}
 
-	async listFiles(relPath?: string): Promise<void> {
+	async listFiles(relPath?: string, requestId?: string): Promise<void> {
+		// file-list-correlation: opaque, request-local echo only. Untagged callers
+		// keep the exact old reply shape; no watcher or server cwd state is added.
+		if (requestId !== undefined && (typeof requestId !== "string" || requestId.length > 64)) {
+			this.host.emit({
+				type: "notice",
+				level: "error",
+				text: "Invalid file listing request token.",
+				textEn: "Invalid file listing request token.",
+			});
+			return;
+		}
+		const correlation = requestId === undefined ? {} : { requestId };
 		const { resolve, sep, relative } = await import("node:path");
 		const root = resolve(this.host.getCwd());
 		let raw = relPath ?? "";
@@ -369,6 +381,7 @@ export class FilesService {
 				entries,
 				truncated: false,
 				absolute: true,
+				...correlation,
 			});
 			return;
 		}
@@ -386,6 +399,7 @@ export class FilesService {
 				entries,
 				truncated,
 				absolute: true,
+				...correlation,
 			});
 			if (error) this.emitListError(wire, error, errorCode);
 			return;
@@ -422,6 +436,7 @@ export class FilesService {
 			parent: rel === "" ? absoluteParent(rootWire) : rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "",
 			entries,
 			truncated,
+			...correlation,
 		});
 	}
 
