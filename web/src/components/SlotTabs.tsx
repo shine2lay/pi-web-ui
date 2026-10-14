@@ -16,7 +16,7 @@
  * 子项缺省 id 记忆：`localStorage["pi-web-ui:<storageKey>:tab"]`。隐私模式/被禁用时
  * 读写静默失败 → 退化成「当前会话内存态」，功能不降级（只是下次打开回到第一个可用 tab）。
  */
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { JSX } from "react";
 import { PluginIcon } from "../plugin-icon";
 import { PluginPage } from "./PluginPage";
@@ -50,6 +50,8 @@ export interface SlotTabsProps {
 	className?: string;
 	/** roles-overview: select this tab (once per seq; the owner's own choice afterwards stays). */
 	select?: { id: string; seq: number } | null;
+	/** lazy-files-visibility: report the resolved tab, including saved/fallback/programmatic selection. */
+	onActiveChange?: (id: string | null) => void;
 }
 
 /** 持久化 key：与其它前端偏好同前缀（`pi-web-ui:`），便于一次性清理。 */
@@ -108,6 +110,7 @@ export function SlotTabs({
 	extra,
 	className,
 	select,
+	onActiveChange,
 }: SlotTabsProps): JSX.Element | null {
 	// aria 关联用的 DOM id 前缀：useId 保证多实例（右栏 + 设置面板同时开着）不撞车。
 	// 插件 id 可能含怪字符，所以 id 里只放**索引**，不放业务 id。
@@ -121,6 +124,10 @@ export function SlotTabs({
 	// 选中项不存在时**渲染期就**回落第一个（而不是等 effect），避免空内容闪一帧。
 	const active = index >= 0 ? tabs[index] : tabs[0];
 	const activeIndex = active ? tabs.indexOf(active) : -1;
+
+	useLayoutEffect(() => {
+		onActiveChange?.(active?.id ?? null);
+	}, [active?.id, onActiveChange]);
 
 	useEffect(() => {
 		if (!active) return;

@@ -1,17 +1,26 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { setAppGlobals } from "../../web/src/app-globals.js";
 import { cleanupFilesPanels, listing, mountFilesPanel, prepareFilesPanel } from "./files-panel-harness.js";
 
-beforeEach(prepareFilesPanel);
+beforeEach(() => {
+	prepareFilesPanel();
+	vi.useFakeTimers();
+});
 afterEach(cleanupFilesPanels);
+function mountReadyFilesPanel() {
+	const panel = mountFilesPanel();
+	act(() => vi.advanceTimersByTime(0));
+	return panel;
+}
 
 describe("file-list-correlation: current token AND folder binding", () => {
 	it("rejects an old cwd's root reply although both wire paths are empty", () => {
-		const panel = mountFilesPanel();
+		const panel = mountReadyFilesPanel();
 		const old = panel.lists().at(-1)!;
 		act(() => setAppGlobals({ cwd: "/workspace/b" }));
+		act(() => vi.advanceTimersByTime(0));
 		const current = panel.lists().at(-1)!;
 		panel.render({ files: listing(current, "current-root") });
 		expect(panel.container.textContent).toContain("current-root");
@@ -21,7 +30,7 @@ describe("file-list-correlation: current token AND folder binding", () => {
 	});
 
 	it("rejects A→B→A's late first A reply", () => {
-		const panel = mountFilesPanel();
+		const panel = mountReadyFilesPanel();
 		panel.clickCrumb("🏠");
 		const oldA = panel.lists().at(-1)!;
 		panel.clickCrumb("🖥️");
@@ -34,8 +43,8 @@ describe("file-list-correlation: current token AND folder binding", () => {
 	});
 
 	it("rejects another window's same-folder reply", () => {
-		const first = mountFilesPanel();
-		const second = mountFilesPanel();
+		const first = mountReadyFilesPanel();
+		const second = mountReadyFilesPanel();
 		second.render({ files: listing(second.lists().at(-1)!, "own-window") });
 		second.render({ files: listing(first.lists().at(-1)!, "other-window") });
 		expect(second.container.textContent).toContain("own-window");
@@ -43,7 +52,7 @@ describe("file-list-correlation: current token AND folder binding", () => {
 	});
 
 	it("rejects an old different-folder reply and an untagged unsolicited listing", () => {
-		const panel = mountFilesPanel();
+		const panel = mountReadyFilesPanel();
 		const oldRoot = panel.lists().at(-1)!;
 		panel.clickCrumb("🏠");
 		const home = panel.lists().at(-1)!;

@@ -50,14 +50,21 @@ export function mountFilesPanel(overrides: Partial<ComponentProps<typeof RightPa
 	document.body.appendChild(container);
 	const root = createRoot(container);
 	roots.push(root);
-	const sent: ClientMessage[] = [];
+	// Deliberately retain listing metadata only, never arbitrary outgoing bodies.
+	const sent: ListRequest[] = [];
+	const listTimes: number[] = [];
+	const operations: ClientMessage["type"][] = [];
 	let props: ComponentProps<typeof RightPanel> = {
 		files: null,
 		fileChanged: null,
 		widgets: [],
 		statuses: [],
 		panelSend: (msg) => {
-			sent.push(msg);
+			operations.push(msg.type);
+			if (msg.type === "list_files") {
+				sent.push({ type: msg.type, path: msg.path, requestId: msg.requestId });
+				listTimes.push(Date.now());
+			}
 			return true;
 		},
 		onAttach: vi.fn(),
@@ -73,8 +80,17 @@ export function mountFilesPanel(overrides: Partial<ComponentProps<typeof RightPa
 	return {
 		container,
 		sent,
+		listTimes,
+		operations,
 		render,
 		lists: () => sent.filter((msg): msg is ListRequest => msg.type === "list_files"),
+		clickTab: (text: string) => {
+			const tab = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
+				(b) => b.textContent?.trim() === text,
+			);
+			if (!tab) throw new Error(`Missing tab ${text}`);
+			act(() => tab.click());
+		},
 		clickCrumb: (text: string) => {
 			const button = [...container.querySelectorAll<HTMLButtonElement>(".panel-crumbs .crumb")].find(
 				(b) => b.textContent?.trim() === text,

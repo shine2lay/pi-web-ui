@@ -117,6 +117,10 @@ function isAbsoluteWire(p: string): boolean {
  *  stable while tokens stream in, so the shallow-compared memo() below skips
  *  re-reconciling the file tree on every delta. */
 interface RightPanelProps {
+	/** lazy-files-visibility: app view + desktop collapse/mobile drawer, per window. */
+	visible?: boolean;
+	/** New socket's authoritative snapshot has arrived (general ready comes earlier). */
+	filesReady?: boolean;
 	files: FileListing | null;
 	/** Last dir-changed push (path = listed directory) — triggers a refresh. */
 	fileChanged: { path: string } | null;
@@ -165,6 +169,8 @@ interface RightPanelProps {
 }
 
 export const RightPanel = memo(function RightPanel({
+	visible = true,
+	filesReady = true,
 	files: incomingFiles,
 	fileChanged,
 	widgets,
@@ -215,6 +221,18 @@ export const RightPanel = memo(function RightPanel({
 	const pluginList = plugins ?? EMPTY_PLUGINS;
 	// 当前工作目录：走全局（web/src/app-globals.ts），不再从 App 传。
 	const cwd = useAppField("cwd");
+	const ready = useAppField("ready");
+	const status = useAppField("status");
+	const connected = filesReady && ready && status === "open";
+	const [selectedTabId, setSelectedTabId] = useState<string | null>(null);
+	const [documentVisible, setDocumentVisible] = useState(() => document.visibilityState === "visible");
+	const filesTabHidden = (uiRightPanelTabs ?? []).some((e) => e.id === "host:right-files" && e.hidden);
+	const filesVisible = visible && documentVisible && !filesTabHidden && selectedTabId === FILES_TAB_ID;
+	useEffect(() => {
+		const update = () => setDocumentVisible(document.visibilityState === "visible");
+		document.addEventListener("visibilitychange", update);
+		return () => document.removeEventListener("visibilitychange", update);
+	}, []);
 	// 额外工作区根（宿主侧多根，见 server/protocol.ts 的 set_workspace_roots）：
 	// 也是快照里的值（use-chat 镜像进 app-globals），空数组 = 单根。
 	const workspaceRoots = useAppField("workspaceRoots");
@@ -225,6 +243,7 @@ export const RightPanel = memo(function RightPanel({
 	// 点击放大的 widget（居中浮层展示完整宽度输出）。
 	const [expandedWidget, setExpandedWidget] = useState<string | null>(null);
 	const [loading, setLoading] = useState(false);
+	const autoDirty = useRef(true);
 	// file-list-correlation: keep the last accepted listing, not an unrelated
 	// explicit caller's reply or a late reply for the same wire path in an old cwd.
 	const [listed, setListed] = useState<{ cwd: string; files: FileListing } | null>(null);
@@ -239,6 +258,7 @@ export const RightPanel = memo(function RightPanel({
 			setCurrentPath(path);
 			if (!opts?.silent) setLoading(true);
 			const ok = panelSend({ type: "list_files", path: path === "" ? undefined : path, requestId });
+			if (ok) autoDirty.current = false;
 			if (!ok && listingRequest.current?.requestId === requestId) setLoading(false);
 		},
 		[cwd, fileWindowId, panelSend],
@@ -912,27 +932,57 @@ export const RightPanel = memo(function RightPanel({
 		}
 	}, [incomingFiles, cwd, currentPath]);
 
-	// Auto-refresh: when the cwd changes (project switch / set_cwd) re-list its
-	// root; otherwise poll the current directory silently so the tree stays fresh
-	// without a manual refresh button.
+	// lazy-files-visibility: only automatic work is deferred. Explicit request()
+	// callers (navigation, refresh, transfers) still send immediately. A zero-delay
+	// job coalesces reveal/cwd/reconnect; watch bursts share one <=40ms job.
+	const autoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const wasEligible = useRef(false);
+	const eligible = filesVisible && connected && cwd !== "";
+	const scheduleAutoRefresh = useCallback(
+		(delay = 0) => {
+			autoDirty.current = true;
+			if (!eligible || document.visibilityState !== "visible" || autoTimer.current !== null) return;
+			autoTimer.current = setTimeout(() => {
+				autoTimer.current = null;
+				// Check the live document too: visibilitychange can precede React's commit.
+				if (document.visibilityState !== "visible") return;
+				request(currentPath, { silent: true });
+			}, delay);
+		},
+		[eligible, currentPath, request],
+	);
+
 	useEffect(() => {
-		if (cwd !== lastCwd.current) {
+		const revealed = eligible && !wasEligible.current;
+		wasEligible.current = eligible;
+		const cwdChanged = cwd !== lastCwd.current;
+		const resetPath = cwdChanged && currentPath !== "";
+		if (cwdChanged) {
 			lastCwd.current = cwd;
-			request("", { silent: true });
-			return;
+			autoDirty.current = true;
+			if (resetPath) setCurrentPath("");
 		}
-		const timer = setInterval(() => {
-			if (document.visibilityState === "hidden") return;
-			request(currentPath, { silent: true });
-		}, AUTO_REFRESH_MS);
-		return () => clearInterval(timer);
-	}, [cwd, currentPath, request]);
-	// The server fs.watches the listed directory and pushes `file_changed` on any
-	// change — refresh right away instead of waiting for the 10s poll. The path
-	// guard drops events for a directory the user has already navigated away from.
+		let poll: ReturnType<typeof setInterval> | undefined;
+		if (!eligible) autoDirty.current = true;
+		else if (!resetPath) {
+			if (autoDirty.current || revealed) scheduleAutoRefresh();
+			poll = setInterval(() => scheduleAutoRefresh(), AUTO_REFRESH_MS);
+		}
+		return () => {
+			clearInterval(poll);
+			if (autoTimer.current !== null) clearTimeout(autoTimer.current);
+			autoTimer.current = null;
+		};
+	}, [cwd, currentPath, eligible, scheduleAutoRefresh]);
+
+	// Only a new push for the bound folder dirties it. Retained old events must
+	// not cause a second listing after explicit navigation or a later reveal.
+	const seenFileChange = useRef<typeof fileChanged>(null);
 	useEffect(() => {
-		if (fileChanged && fileChanged.path === currentPath) request(currentPath, { silent: true });
-	}, [fileChanged, currentPath, request]);
+		if (fileChanged === seenFileChange.current) return;
+		seenFileChange.current = fileChanged;
+		if (fileChanged?.path === currentPath) scheduleAutoRefresh(40);
+	}, [fileChanged, currentPath, scheduleAutoRefresh]);
 
 	// Enter a directory.
 	const openDir = (path: string) => request(path);
@@ -983,7 +1033,6 @@ export const RightPanel = memo(function RightPanel({
 	 *  取消勾选，插件也能经 arrange 把它藏起来）—— 否则布局页那个勾选框就是个摆设，
 	 *  「设置里看到的 == 界面上看到的」这条 #146 的核心不变量当场破产。
 	 *  全藏光时右栏就是空的：那是用户/插件的明确意愿，布局页的「恢复」一键可退回。 */
-	const filesTabHidden = (uiRightPanelTabs ?? []).some((e) => e.id === "host:right-files" && e.hidden);
 	const tldrTabHidden = (uiRightPanelTabs ?? []).some((e) => e.id === "host:right-tldr" && e.hidden);
 	/** TL;DR tab 里折叠 / 重新展开几行（tldr-collapse）：服务端记进会话，所有窗口一致。 */
 	const onTldrCollapse = useCallback(
@@ -1055,6 +1104,7 @@ export const RightPanel = memo(function RightPanel({
 				{/* 内置「文件」tab 的位置同样走 slot 顺序（orderTabs），不再固定第一；隐藏逻辑见 filesTabHidden。
  插件 tab 的内容交给 PluginPage 渲染（只挂当前选中项，切走即 cleanup）。全被隐藏时 SlotTabs 自己返回 null。 */}
 				<SlotTabs
+					onActiveChange={setSelectedTabId}
 					storageKey="rightpanel"
 					select={tabSelect}
 					epoch={pluginsEpoch ?? 0}

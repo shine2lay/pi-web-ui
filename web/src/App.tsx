@@ -13,6 +13,7 @@ import {
 import { TopBar } from "./components/TopBar";
 import { LeftPanel } from "./components/LeftPanel";
 import { RightPanel } from "./components/RightPanel";
+import { filesPanelVisible } from "./files-visibility";
 import { MessageList } from "./components/MessageList";
 import { SwitchOverlay } from "./components/SwitchOverlay";
 import { switchTargetTitle } from "./switch-pending";
@@ -333,8 +334,18 @@ function addPluginPathGrant(path: string, pluginId?: string): void {
 export function App() {
 	const t = useT();
 	const { locale } = useI18n();
-	const { chat, send, retrySend, removeSend, dismissNotice, pushNotice, terminal, switchHide, switchDismissError } =
-		useChat();
+	const {
+		chat,
+		filesReady,
+		send,
+		retrySend,
+		removeSend,
+		dismissNotice,
+		pushNotice,
+		terminal,
+		switchHide,
+		switchDismissError,
+	} = useChat();
 	// telegram-answers: a link with ?chat=<saved chat file> (Telegram puts one under every question)
 	// opens that chat as soon as the page is connected, once.
 	// roles-overview: `&focus=` with it opens the chat at that item (a TL;DR line, a task, a question, a report).
@@ -2283,6 +2294,8 @@ export function App() {
 						}`}
 					>
 						<RightPanel
+							visible={filesPanelVisible(view, isMobile, drawer, rightCollapsed)}
+							filesReady={filesReady}
 							collapsible={!isMobile}
 							onToggleCollapse={toggleRight}
 							panelSend={panelSend}

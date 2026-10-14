@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { randomUuid } from "./uuid";
 import { withToken } from "./auth-token";
 import { appUrl } from "./base-url";
@@ -1407,6 +1407,10 @@ export function useChat() {
 		// optimistic-send: sends from before a reload come back and are asked about again.
 		pendingSends: loadPendingSends(),
 	});
+	// lazy-files-visibility: general ready precedes the authoritative snapshot.
+	// Keep this Files-only gate outside chat/history/delta state so reconnect
+	// cannot list a retained old cwd before the new socket's snapshot arrives.
+	const [filesReady, setFilesReady] = useState(false);
 	const wsRef = useRef<WebSocket | null>(null);
 	/** Terminal output bridge (writers keyed by terminalId). */
 	const bridgeRef = useRef(makeTerminalBridge());
@@ -1687,6 +1691,7 @@ export function useChat() {
 	/** Stable across renders — the reconnect loop lives entirely inside this closure. */
 	const connect = useCallback(() => {
 		if (!aliveRef.current) return;
+		setFilesReady(false);
 		dispatch({ type: "status", status: "connecting" });
 		const ws = new WebSocket(wsUrl());
 		wsRef.current = ws;
@@ -1762,6 +1767,7 @@ export function useChat() {
 					return;
 				}
 				case "ready": {
+					setFilesReady(false);
 					// Stale-build self-reload: the server reports the entry-chunk hash
 					// of the index.html it serves now; ours is the hash in the entry
 					// <script> of the index.html this page was served. Mismatch =
@@ -1846,7 +1852,8 @@ export function useChat() {
 					// when it is actually shown — listing scans every session file
 					// on disk (listAll scans ALL projects), too heavy for the
 					// connect critical path.
-					ws.send(JSON.stringify({ type: "list_files" } satisfies ClientMessage));
+					// lazy-files-visibility: the mounted Files panel lists on effective
+					// reveal/readiness; explicit list_files callers keep the general API.
 					ws.send(JSON.stringify({ type: "list_models" } satisfies ClientMessage));
 					ws.send(JSON.stringify({ type: "list_commands" } satisfies ClientMessage));
 					ws.send(JSON.stringify({ type: "get_commands" } satisfies ClientMessage));
@@ -1879,6 +1886,7 @@ export function useChat() {
 					// Snapshot is authoritative — delta sequence tracking restarts.
 					lastDeltaSeqRef.current = new Map();
 					dispatch({ type: "snapshot", state });
+					setFilesReady(true);
 					// 重连/刷新后从这里把待答问卷恢复出来（见 syncPendingQuestion）。
 					syncPendingQuestion(state.pendingQuestion, state.conversationId);
 					break;
@@ -2521,6 +2529,7 @@ export function useChat() {
 			// this socket's close) — do not spawn a third connection that would
 			// shadow the live one and drop its incoming messages.
 			if (wsRef.current && wsRef.current !== ws) return;
+			setFilesReady(false);
 			dispatch({ type: "status", status: "closed" });
 			if (hadOpenRef.current && !catchUpRef.current) catchUpRef.current = Date.now();
 			traceRef.current?.noteCause({ reason: "close", closeCode: ev.code });
@@ -2805,6 +2814,7 @@ export function useChat() {
 
 	const chatApi = useRef({
 		chat,
+		filesReady,
 		send,
 		retrySend,
 		removeSend,
@@ -2822,6 +2832,7 @@ export function useChat() {
 	});
 	chatApi.current = {
 		chat,
+		filesReady,
 		send,
 		retrySend,
 		removeSend,
