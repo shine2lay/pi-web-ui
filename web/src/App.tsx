@@ -43,6 +43,7 @@ import {
 	emitPluginHostView,
 	emitPluginHostModel,
 	installPluginHostApi,
+	listPluginHostSessions,
 	triggerPluginUiAction,
 } from "./plugin-host";
 import {
@@ -583,22 +584,7 @@ export function App() {
 				// 历史会话的 cwd 就是当前 cwd（服务端的 session 列表是按 cwd 扫的，见 sessions 快照）。
 				listSessions: () => {
 					const c = chatRefForPlugins.current;
-					const cwd = c.state?.cwd ?? "";
-					return [
-						...c.conversations.map((x) => ({
-							id: x.id,
-							title: x.title,
-							cwd: x.cwd || cwd,
-							kind: "running" as const,
-							isStreaming: x.isStreaming,
-						})),
-						...c.sessions.map((s) => ({
-							id: s.path,
-							title: s.name || s.firstMessage || s.path,
-							cwd,
-							kind: "history" as const,
-						})),
-					];
+					return listPluginHostSessions(c.conversations, c.sessions, c.state?.cwd ?? "");
 				},
 				getConversationId: () => chatRefForPlugins.current.state?.conversationId ?? null,
 				isConversationBlank: () => (chatRefForPlugins.current.state?.messages.length ?? 0) === 0,

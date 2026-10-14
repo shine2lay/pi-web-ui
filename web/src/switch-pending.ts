@@ -11,6 +11,7 @@
  * 快照没有 sessionFile，按路径根本对不上）；快照对上是保险 —— 万一某条服务端路径
  * 漏发回执，只要要的那条对话已经显示出来了，就没理由还盖着「正在打开」。
  */
+import { displayPreview } from "../../server/display-preview.js";
 import type { SwitchTarget } from "./types";
 
 export interface PendingSwitch {
@@ -77,14 +78,17 @@ export function switchTargetTitle(
 	conversations: readonly { id: string; title: string; sessionPath?: string }[],
 ): string {
 	if (target.kind === "conversation") {
-		return conversations.find((c) => c.id === target.id)?.title ?? target.id;
+		return conversations.find((c) => c.id === target.id)?.title ?? displayPreview(target.id);
 	}
 	const s = sessions.find((x) => sameSessionPath(x.path, target.path));
-	const fromSession = (s?.name ?? "").trim() || (s?.firstMessage ?? "").trim();
-	if (fromSession) return fromSession.length > 60 ? `${fromSession.slice(0, 60)}…` : fromSession;
+	const name = (s?.name ?? "").trim();
+	// Preserve the existing explicit-name rendering budget; do not change stored/plugin names.
+	if (name) return name.length > 60 ? `${name.slice(0, 60)}…` : name;
+	const firstMessage = (s?.firstMessage ?? "").trim();
+	if (firstMessage) return displayPreview(firstMessage, 60);
 	const live = conversations.find((c) => sameSessionPath(c.sessionPath, target.path));
 	if (live) return live.title;
-	return target.path.replace(/\\/g, "/").split("/").pop() || target.path;
+	return displayPreview(target.path.replace(/\\/g, "/").split("/").pop() || target.path);
 }
 
 /** 快照到达：结束对得上的 pending / error。返回 null 表示什么都不用改。 */

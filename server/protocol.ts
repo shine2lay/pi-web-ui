@@ -1787,6 +1787,8 @@ export type ClientMessage =
 export interface SessionSummary {
 	path: string;
 	name?: string;
+	/** Automatic History display prefix (<=300 Unicode scalars plus ellipsis), not indexed/model text.
+	 *  Explicit search/read/open APIs retain their full text independently. */
 	firstMessage: string;
 	messageCount: number;
 	modified: number;

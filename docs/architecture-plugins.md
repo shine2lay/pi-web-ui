@@ -770,8 +770,15 @@ const res = await host.openSession({ roots: ["/repo/a", "/repo/b"], prompt: "先
 
 | 方法       | 行为                                                                                                                                                                                                                                                          |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list()`   | `{ id, title, cwd, kind, isStreaming? }` 数组：**本客户端运行中的对话**（`kind:"running"`，id = conversationId，cwd 各自带）＋ **当前项目的历史会话**（`kind:"history"`，id = session 文件路径，cwd = 当前 cwd —— 服务端的历史会话列表就是按 cwd 扫的）       |
+| `list()`   | 同步返回 `{ id, title, cwd, kind, isStreaming? }`：本客户端运行中的对话＋宿主的 History 行；顺序、id、cwd、kind 不变。`title` 只是显示标签：显式名称保留完整，未命名 History 使用与 History 相同的最多 300 个 Unicode scalar＋省略号预览，不是完整正文或身份；区分/打开会话请用稳定 `id`。历史 id = 完整 session 文件路径，cwd = 当前 cwd。 |
 | `open(id)` | 跨项目先切 cwd（同一套目录授权；不切就找不到目标文件）→ `running` 用 `switch_conversation`、`history` 用 `switch_session` → 等 activeId 变化；返回 `{ ok: true, sessionId }` 或 `{ ok: false, error }`（未连接 / 找不到 id / 切换超时都走这条回执，不抛异常） |
+
+The browser `host.sessions.list()` remains synchronous and metadata-only. Automatic History titles
+are bounded display previews; explicitly named titles are not truncated. Two conversations may share
+a preview, so plugins must use `id` (not `title`) to distinguish or open them. No additional full-title
+frame, full-transcript read, async list API or new field is introduced. Full indexed text, explicit
+search, opened history and model context are unaffected; the separate server plugin conversation API
+keeps its existing behavior.
 
 ## 注册面目录（机器可读，P2-7）
 

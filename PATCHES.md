@@ -10,6 +10,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## history-display-preview: bound automatic labels without truncating chat text
+
+- `local` (Ops #159, H-LAZY-P1). Automatic History shipped full indexed first-message text to every window; the same rows fed unnamed Recent and saved queue-task labels. A pure scalar-safe display formatter visits only the bounded prefix (300 scalars plus ellipsis), while existing smaller live-label budgets remain smaller. Shared attach-cache, fresh/cached lists and late identity resends all use the projected rows.
+- Keep authoritative index/search/read/open/model text, explicit names, ids/paths/order/counts/fork filtering, identity and metadata-only lifecycle unchanged. No new hydration, duplicate eager full-title frame, index migration or SDK/queue/wake change; this is an avoidable-payload cut, not a heap-cause finding.
+- Browser `host.sessions.list().title` is explicitly documented as a display label: unnamed History uses the same bounded preview, full explicit names remain intact, and stable `id` distinguishes/open equal previews. List shape, synchrony, order, cwd/kind and `open()` remain unchanged. The separate server plugin API is untouched. Ops resolved the compatibility checkpoint as this documented scope decision, not owner consent or a claim that old full-title output is equal.
+- Checks: `tests/unit/display-preview.test.ts`, `tests/unit/history-preview.test.ts`, `tests/unit/plugin-host.test.ts`; immutable-old-source negative control, synthetic long200 raw-JSON >=90% reduction, ten sealed latency pairs (median <=10%, p95 <=20% regression), cold/warm/fresh/late-identity/two-window/fork/full-search parity. Execution/install receipts remain in task #159's WORKING.md; no check or install is implied by this entry alone.
+- Undo: revert only this labelled commit in a fresh worktree and use normal landing/deploy gates. Full authoritative text never changed and needs no restoration.
+
 ## role-mail-lease: delivered chats acquire their own message guard lease
 
 - `local` (Ops #175, H-LEASE-1). A zero-delay delivery timer created by `RoleMessages.admit` inherited `GuardLease`'s AsyncLocalStorage re-entry mark. The chat it woke could bypass a different writer's lock: refuse during publication, or overwrite an accepted message, charge and outbox entry with a stale snapshot.

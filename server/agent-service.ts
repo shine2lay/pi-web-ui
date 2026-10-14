@@ -57,6 +57,7 @@ import {
 import { Type } from "typebox";
 import { BgServerTracker } from "./bg-servers.js";
 import { MAX_OPEN_CONVERSATIONS } from "./conversation-limits.js";
+import { displayPreview } from "./display-preview.js";
 import {
 	ASK_USER_NO_CLIENT_ERROR,
 	ASK_USER_NO_CLIENT_GRACE_MS,
@@ -2467,7 +2468,7 @@ function conversationTitle(session: AgentSession): string {
 			}
 			const trimmed = text.trim().replace(/\s+/g, " ");
 			if (trimmed.length > 0) {
-				return trimmed.length > 30 ? `${trimmed.slice(0, 30)}…` : trimmed;
+				return displayPreview(trimmed, 30);
 			}
 		}
 	} catch {
@@ -2826,7 +2827,7 @@ export function queueTaskRows(
 		if (!s) continue;
 		out.push({
 			id: `recent:${s.path}`,
-			title: s.name || s.firstMessage || DEFAULT_CONV_TITLE,
+			title: s.name || displayPreview(s.firstMessage || DEFAULT_CONV_TITLE),
 			cwd: s.cwd ?? cwd,
 			messageCount: s.messageCount,
 			isStreaming: false,
@@ -10671,7 +10672,7 @@ export class ClientSession {
 			// re-derives it from the persisted transcript when needed.
 			if (isUntitledTitle(conv.title) && text.trim() && !conv.session.sessionName?.trim()) {
 				const trimmed = text.trim().replace(/\s+/g, " ");
-				conv.title = trimmed.length > 30 ? `${trimmed.slice(0, 30)}…` : trimmed;
+				conv.title = displayPreview(trimmed, 30);
 				// 同时也是 #140 的入列时刻：这条对话从此有内容了，左栏「运行的对话」
 				// 立刻要有它（此刻还在流式输出，不能等 agent_end 的防抖刷新）。
 				this.emitConversations();
@@ -12580,7 +12581,7 @@ export class ClientSession {
 				// 合成 id：从不回传给服务端（这些行只能 switch_session /
 				// remove_recent_chat），只用作 React key 与「非活动行」判定。
 				id: `recent:${s.path}`,
-				title: s.name || s.firstMessage || DEFAULT_CONV_TITLE,
+				title: s.name || displayPreview(s.firstMessage || DEFAULT_CONV_TITLE),
 				cwd: s.cwd ?? this.cwd,
 				messageCount: s.messageCount,
 				isStreaming: false,
@@ -12772,7 +12773,8 @@ export class ClientSession {
 				sessions.set(s.path, {
 					path: s.path,
 					name: s.name,
-					firstMessage: s.firstMessage,
+					// Display projection only: the index and explicit full-text consumers keep s untouched.
+					firstMessage: displayPreview(s.firstMessage),
 					messageCount: s.messageCount,
 					modified: s.modified.getTime(),
 					source: "web",

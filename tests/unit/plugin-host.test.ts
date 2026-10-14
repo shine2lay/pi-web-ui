@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	createPluginHostApi,
+	listPluginHostSessions,
 	emitPluginHostModel,
 	PLUGIN_HOST_API_VERSION,
 	type PluginHostSessionInfo,
@@ -275,6 +276,71 @@ describe("createPluginHostApi.sessions（会话 API，宿主 API v6）", () => {
 		const r = await h.api.sessions.open("/b/.pi/sessions/s2.jsonl");
 		expect(r.ok).toBe(true);
 		expect(types(h.sent)).toEqual(["set_cwd", "switch_session"]);
+	});
+});
+
+describe("browser plugin display-title projection", () => {
+	const cwd = "/fixture/workspace";
+	const prefix = "🧪".repeat(300);
+	const named = "n".repeat(701);
+	const history = [
+		{ path: "/fixture/a.jsonl", firstMessage: prefix + "a".repeat(8000) },
+		{ path: "/fixture/b.jsonl", firstMessage: prefix + "b".repeat(8000) },
+		{ path: "/fixture/named.jsonl", name: named, firstMessage: "f".repeat(8000) },
+		{ path: "/fixture/short.jsonl", firstMessage: "short" },
+		{ path: "/fixture/empty.jsonl", firstMessage: "" },
+	];
+	const running = [{ id: "fixture-running", title: "running", cwd: "", isStreaming: true }];
+
+	it("returns synchronous bounded unnamed titles, exact names, ids, cwd, kind and order", () => {
+		const before = JSON.stringify({ history, running });
+		const rows = listPluginHostSessions(running, history, cwd);
+		const h = harnessWith({ cwd, sessions: rows });
+		expect(Array.isArray(h.api.sessions.list())).toBe(true);
+		expect(h.api.sessions.list() === rows).toBe(true);
+		const expected = [
+			{ id: running[0].id, cwd, kind: "running", isStreaming: true },
+			...history.map((s) => ({ id: s.path, cwd, kind: "history" })),
+		];
+		expect(JSON.stringify(rows.map(({ title, ...rest }) => rest)) === JSON.stringify(expected)).toBe(true);
+		for (const row of rows.slice(1, 3)) {
+			expect(Array.from(row.title).length).toBe(301);
+			expect(row.title === prefix + "…").toBe(true);
+		}
+		expect(rows[3].title === named).toBe(true);
+		expect(rows[4].title === history[3].firstMessage).toBe(true);
+		expect(rows[5].title === history[4].path).toBe(true);
+		expect(JSON.stringify({ history, running }) === before).toBe(true);
+		expect(h.sent.length).toBe(0);
+	});
+
+	it("equal previews remain distinct and open by their complete stable ids", async () => {
+		const rows = listPluginHostSessions([], history.slice(0, 2), cwd);
+		expect(rows[0].title === rows[1].title).toBe(true);
+		expect(rows[0].id === rows[1].id).toBe(false);
+		for (const row of rows) {
+			const h = harnessWith({ cwd, sessions: rows });
+			const result = await h.api.sessions.open(row.id);
+			expect(result.ok).toBe(true);
+			expect(JSON.stringify(h.sent) === JSON.stringify([{ type: "switch_session", path: row.id }])).toBe(true);
+		}
+	});
+
+	it("bounds unnamed path labels without shortening their identity or touching named/running titles", () => {
+		const path = "/fixture/" + "p".repeat(400) + ".jsonl";
+		const explicit = "🧪".repeat(701);
+		const rows = listPluginHostSessions(
+			[{ id: "r", title: explicit, cwd: "/other", isStreaming: false }],
+			[
+				{ path, firstMessage: "" },
+				{ path: "/named", name: explicit, firstMessage: "" },
+			],
+			cwd,
+		);
+		expect(Array.from(rows[1].title).length).toBe(301);
+		expect(rows[1].id === path).toBe(true);
+		expect(rows[0].title === explicit && rows[2].title === explicit).toBe(true);
+		expect(rows[0].cwd).toBe("/other");
 	});
 });
 

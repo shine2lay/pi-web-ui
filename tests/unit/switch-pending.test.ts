@@ -108,4 +108,19 @@ describe("switch-pending", () => {
 		const long = "x".repeat(200);
 		expect(switchTargetTitle({ kind: "session", path: P }, [{ path: P, firstMessage: long }], []).length).toBe(61);
 	});
+
+	it("unnamed switch labels share the scalar formatter; explicit-name rendering and identity stay unchanged", () => {
+		const firstMessage = "🧪".repeat(200);
+		const target = { kind: "session" as const, path: P };
+		const title = switchTargetTitle(target, [{ path: P, firstMessage }], []);
+		expect(title === "🧪".repeat(60) + "…").toBe(true);
+		expect(Array.from(title).length).toBe(61);
+		const name = "n".repeat(701);
+		expect(switchTargetTitle(target, [{ path: P, name, firstMessage }], []) === name.slice(0, 60) + "…").toBe(true);
+		expect(target.path === P && firstMessage.length === 400 && name.length === 701).toBe(true);
+		const path = "/fixture/" + "p".repeat(400);
+		expect(Array.from(switchTargetTitle({ kind: "session", path }, [], [])).length).toBe(301);
+		const id = "i".repeat(400);
+		expect(Array.from(switchTargetTitle({ kind: "conversation", id }, [], [])).length).toBe(301);
+	});
 });

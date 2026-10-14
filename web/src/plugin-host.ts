@@ -44,10 +44,11 @@
  * 注入实现（setView/chat 快照）的**跨边界动作**，两者都不吃快照流。
  */
 
+import { displayPreview } from "../../server/display-preview.js";
 import type { AppSend } from "./app-globals";
 import { composeToComposer, isComposerReady, type ComposerPayload } from "./composer-bridge";
 import { isDesktopShell } from "./desktop";
-import type { UiPluginCatalogEntry } from "./types";
+import type { ConversationSummary, SessionSummary, UiPluginCatalogEntry } from "./types";
 import { randomUuid } from "./uuid";
 import { newPromptId } from "./pending-sends";
 
@@ -125,6 +126,8 @@ export interface PluginHostOpenSessionOptions {
 export interface PluginHostSessionInfo {
 	/** 稳定 id：运行中的对话是 conversationId；历史会话是 session 文件路径。 */
 	id: string;
+	/** Display label, not transcript text or identity. Explicit names stay full; unnamed History
+	 *  uses the same <=300-Unicode-scalar preview plus ellipsis as History. Use id to distinguish/open. */
 	title: string;
 	/** 该会话所属的工作目录（绝对路径）。 */
 	cwd: string;
@@ -133,6 +136,29 @@ export interface PluginHostSessionInfo {
 	kind: "running" | "history";
 	/** 是否正在跑（运行中的对话才有意义）。 */
 	isStreaming?: boolean;
+}
+
+/** Browser display-only adapter: synchronous metadata, no additional reads or full-title channel. */
+export function listPluginHostSessions(
+	conversations: readonly Pick<ConversationSummary, "id" | "title" | "cwd" | "isStreaming">[],
+	sessions: readonly Pick<SessionSummary, "path" | "name" | "firstMessage">[],
+	cwd: string,
+): PluginHostSessionInfo[] {
+	return [
+		...conversations.map((x) => ({
+			id: x.id,
+			title: x.title,
+			cwd: x.cwd || cwd,
+			kind: "running" as const,
+			isStreaming: x.isStreaming,
+		})),
+		...sessions.map((s) => ({
+			id: s.path,
+			title: s.name || displayPreview(s.firstMessage || s.path),
+			cwd,
+			kind: "history" as const,
+		})),
+	];
 }
 
 /** 会话 API（host.sessions，宿主 API v2）：列表 + 打开。 */
