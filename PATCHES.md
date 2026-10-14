@@ -10,6 +10,13 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## roles-requested-spend: add an inert role-reported I-PUB reader
+
+- `local` (Ops #144 R10 D0/P0, Data rm-fc9b056e). Separate closed candidate-2 requested-spend sidecar and display-only fixture adapter; common RTPI roots and own-work spend.json v1 implementation/tests stay unchanged. Labels are role-reported list-price; individual amounts only, no aggregate arithmetic or ledger/pricing fan-in.
+- Production entry takes no caller options. T04/T05 are absent: unavailable without publication I/O. No production importer, native helper, fallback, timer, registry, capture, publication write, budget/self-stop/format change or activation. Real sources/each role's opt-in remain package-B gated.
+- Proof: `tests/unit/roles-requested.test.ts` canonical/closed schema, exact mapping and revisions, capability forgery, all descriptor refusal types, strict >24h asOf/last-known, missing/incomplete-zero and DST, static importer guard and own-v1 byte controls. Descriptor and in-memory CAS fixtures are explicitly NOT native-kernel/durable proof. Publisher's exact arithmetic/oracles are in pi-identity's paired inert module. Details: `docs/roles-requested.md`.
+- Undo: revert this one additive unit through normal worktree/gates. No stored records/settings were changed; no install/restart is authorized or performed.
+
 ## history-display-preview: bound automatic labels without truncating chat text
 
 - `local` (Ops #159, H-LAZY-P1). Automatic History shipped full indexed first-message text to every window; the same rows fed unnamed Recent and saved queue-task labels. A pure scalar-safe display formatter visits only the bounded prefix (300 scalars plus ellipsis), while existing smaller live-label budgets remain smaller. Shared attach-cache, fresh/cached lists and late identity resends all use the projected rows.
