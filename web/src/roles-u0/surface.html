@@ -1,0 +1,439 @@
+<style>
+body{margin:0}
+[data-noscrollbar]{scrollbar-width:none;-ms-overflow-style:none}
+[data-noscrollbar]::-webkit-scrollbar{display:none;width:0;height:0}
+</style>
+<div data-noscrollbar="1" style="height: 100vh; overflow-y: auto; overflow-x: hidden; background: #0E0F11; color: #ECEDEE; font-family: 'Geist', ui-sans-serif, system-ui, sans-serif; font-size: 14px; line-height: 1.45; position: relative">
+<div style="margin: 0 auto; padding: 16px clamp(12px, 1.6vw, 24px) 16px; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px">
+
+<!-- HEADER -->
+<header style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px">
+<div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px">
+<h1 style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.015em">Roles</h1>
+<span style="color: #A9AEB6; font-size: 14px">{{headingSummary}}</span>
+</div>
+<div role="status" style="display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid {{fresh.bd}}; color: {{fresh.fg}}; font-size: 13px; font-weight: 550">
+<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="currentColor"></circle></svg>
+<span>{{fresh.text}}</span>
+</div>
+</header>
+
+
+<!-- PROTOTYPE CONTROLS -->
+
+<!-- FRESHNESS BANNER -->
+<sc-if value="{{banner.show}}" hint-placeholder-val="{{false}}">
+<div role="alert" style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 14px 16px; border-radius: 10px; background: {{banner.bg}}; border: 1px solid {{banner.bd}}">
+<div style="display: flex; flex-direction: column; gap: 2px; flex: 999 1 320px; min-width: 0">
+<p style="margin: 0; font-size: 15px; font-weight: 650; color: {{banner.fg}}">{{banner.title}}</p>
+<p style="margin: 0; font-size: 13.5px; color: #D6D9DD">{{banner.body}}</p>
+</div>
+<sc-if value="{{banner.hasAction}}" hint-placeholder-val="{{true}}">
+<button type="button" style="min-height: 44px; padding: 0 16px; border-radius: 8px; border: 1px solid #ECEDEE; background: #ECEDEE; color: #0E0F11; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer">{{banner.action}}</button>
+</sc-if>
+</div>
+</sc-if>
+
+<!-- AT A GLANCE -->
+<sc-if value="{{isGlance}}" hint-placeholder-val="{{true}}">
+<section aria-label="At a glance" style="display: flex; flex-direction: column; gap: 10px">
+
+<sc-if value="{{loading}}" hint-placeholder-val="{{false}}">
+<div aria-hidden="true" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(min(180px, 100%), 1fr)); gap: 10px">
+<div style="height: 104px; border-radius: 12px; background: #16181B; border: 1px solid #22262B"></div>
+<div style="height: 104px; border-radius: 12px; background: #16181B; border: 1px solid #22262B"></div>
+<div style="height: 104px; border-radius: 12px; background: #16181B; border: 1px solid #22262B"></div>
+<div style="height: 104px; border-radius: 12px; background: #16181B; border: 1px solid #22262B"></div>
+<div style="height: 104px; border-radius: 12px; background: #16181B; border: 1px solid #22262B"></div>
+<div style="height: 104px; border-radius: 12px; background: #16181B; border: 1px solid #22262B"></div>
+</div>
+</sc-if>
+
+<sc-if value="{{ready}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: 12.5px; color: #A9AEB6">
+<span style="display: inline-flex; align-items: center; gap: 6px"><span style="flex: none; display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; background: #F0B95A; color: #17130A; font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; white-space: nowrap">ON YOU</span>the next step is yours</span>
+<span>Hover a label to read messages · click a node to open it</span>
+<button type="button" onClick="{{toggleLegend}}" aria-expanded="{{legendOpenStr}}" style="min-height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid #2F343A; background: transparent; color: #C9CDD2; font: inherit; font-size: 12.5px; cursor: pointer">{{legendLabel}}</button>
+<sc-if value="{{legendOpen}}" hint-placeholder-val="{{false}}">
+<span style="flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px">
+<span style="display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px 10px">Task lanes:
+<span style="display: inline-flex; align-items: center; gap: 4px"><span style="width: 14px; height: 7px; border-radius: 999px; background: #7DB8FF"></span>working</span>
+<span style="display: inline-flex; align-items: center; gap: 4px"><span style="width: 14px; height: 7px; box-sizing: border-box; border-radius: 999px; background: rgba(240,185,90,0.35); border: 1px solid #F0B95A"></span>blocked</span>
+<span style="display: inline-flex; align-items: center; gap: 4px"><span style="width: 14px; height: 7px; box-sizing: border-box; border-radius: 999px; background: rgba(175,196,226,0.22); border: 1px solid #AFC4E2"></span>queued</span>
+<span style="display: inline-flex; align-items: center; gap: 4px"><span style="width: 14px; height: 7px; box-sizing: border-box; border-radius: 999px; background: rgba(143,199,192,0.28); border: 1px solid #8FC7C0"></span>on hold</span>
+<span style="display: inline-flex; align-items: center; gap: 4px"><span style="width: 14px; height: 7px; box-sizing: border-box; border-radius: 999px; background: #4A4F57; border: 1px solid #6B7079"></span>paused by you</span>
+<span style="display: inline-flex; align-items: center; gap: 4px"><span style="width: 14px; height: 7px; box-sizing: border-box; border-radius: 999px; background: #FF8A80"></span>failed</span>
+<span style="display: inline-flex; align-items: center; gap: 4px"><span style="width: 14px; height: 7px; box-sizing: border-box; border-radius: 999px; border: 1px dashed #C7B8FF"></span>unknown</span>
+<span style="display: inline-flex; align-items: center; gap: 4px"><span style="width: 14px; height: 7px; box-sizing: border-box; border-radius: 999px; border: 1px solid #4A4F57"></span>free</span>
+</span>
+<span style="display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px 10px">{{arrowMeaning}}
+<span style="display: inline-flex; align-items: center; gap: 4px"><svg width="22" height="8" viewBox="0 0 22 8" aria-hidden="true"><path d="M1 4h20" stroke="#3D6FA8" stroke-width="2"></path></svg>between departments</span>
+<span style="display: inline-flex; align-items: center; gap: 4px"><svg width="22" height="8" viewBox="0 0 22 8" aria-hidden="true"><path d="M1 4h20" stroke="#5E646C" stroke-width="2"></path></svg>from you</span>
+<span style="display: inline-flex; align-items: center; gap: 4px"><svg width="22" height="8" viewBox="0 0 22 8" aria-hidden="true"><path d="M1 4h20" stroke="#8C6A2A" stroke-width="2"></path></svg>waiting on you</span>
+<span style="display: inline-flex; align-items: center; gap: 4px"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5" fill="#9CC7FF" fill-opacity="0.25"></circle><circle cx="6" cy="6" r="2.5" fill="#9CC7FF"></circle></svg>message being sent</span>
+</span>
+</span>
+</sc-if>
+</div>
+</sc-if>
+
+<div data-noscrollbar="1" style="overflow-x: auto; overflow-y: hidden">
+<div data-boxgrid="1" ref="{{setGraphEl}}" style="position: relative; width: 100%; height: calc(100vh - 128px); min-width: 1000px; min-height: 620px; min-height: {{exMinH}}; border-radius: 14px; background: #0B0C0E; border: 1px solid #1C1F23; transition: min-height 340ms cubic-bezier(0.2, 0.8, 0.2, 1)">
+<svg viewBox="0 0 {{gw}} {{gh}}" preserveAspectRatio="none" aria-hidden="true" style="position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible">
+<sc-for list="{{graph.edges}}" as="e" hint-placeholder-count="8">
+<g opacity="{{e.op}}" style="transition: opacity 600ms ease">
+<path d="{{e.d}}" fill="none" stroke="{{e.stroke}}" stroke-width="{{e.sw}}" stroke-linecap="round"></path>
+<path d="{{e.arrow}}" fill="{{e.stroke}}"></path>
+</g>
+</sc-for>
+<sc-for list="{{graph.flights}}" as="f" hint-placeholder-count="0">
+<circle cx="{{f.x}}" cy="{{f.y}}" r="15" fill="{{f.c}}" fill-opacity="0.2"></circle>
+<circle cx="{{f.x}}" cy="{{f.y}}" r="6" fill="{{f.c}}"></circle>
+</sc-for>
+</svg>
+<sc-for list="{{graph.edges}}" as="e" hint-placeholder-count="8">
+<button type="button" onMouseEnter="{{e.tipOn}}" onMouseLeave="{{tipOff}}" onFocus="{{e.tipOn}}" onBlur="{{tipOff}}" onClick="{{e.chipClick}}" aria-label="{{e.aria}}" style="position: absolute; z-index: 3; left: {{e.lxp}}; top: {{e.lyp}}; transform: translate(-50%, -50%); display: inline-flex; align-items: center; min-height: 26px; padding: 0 9px; border-radius: 999px; background: #0E0F11; border: 1px solid {{e.chipBd}}; box-shadow: {{e.glow}}; color: {{e.chipFg}}; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; font-weight: 600; white-space: nowrap; cursor: default; opacity: {{e.op}}; transition: opacity 600ms ease, border-color 200ms ease, box-shadow 200ms ease">{{e.chip}}</button>
+</sc-for>
+<sc-if value="{{graph.tipOpen}}" hint-placeholder-val="{{false}}">
+<div role="tooltip" style="position: absolute; z-index: 6; left: {{graph.tip.x}}; top: {{graph.tip.y}}; transform: {{graph.tip.tf}}; width: 300px; box-sizing: border-box; padding: 12px 14px; border-radius: 10px; background: #16181B; border: 1px solid #3A3F46; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; gap: 10px; pointer-events: none">
+<span style="font-size: 12px; font-weight: 650; color: #A9AEB6">{{graph.tip.title}}</span>
+<sc-for list="{{graph.tip.msgs}}" as="m" hint-placeholder-count="2">
+<div style="display: flex; flex-direction: column; gap: 2px">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: {{m.fg}}">{{m.at}} · {{m.dir}}</span>
+<span style="font-size: 13px; line-height: 1.4; color: #E2E4E7">{{m.text}}</span>
+</div>
+</sc-for>
+<span style="font-size: 11.5px; color: #A9AEB6; border-top: 1px solid #2A2E34; padding-top: 8px">{{graph.tip.hint}}</span>
+</div>
+</sc-if>
+<button type="button" onClick="{{youExpand}}" onMouseEnter="{{youHoverOn}}" onMouseLeave="{{hoverOff}}" onFocus="{{youHoverOn}}" onBlur="{{hoverOff}}" aria-label="You: open your decisions, questions and spending" style="position: absolute; z-index: 2; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 22px; border-radius: 999px; background: #1C170D; border: 1px solid {{youBd}}; box-shadow: 0 0 0 6px rgba(240, 185, 90, 0.06); color: #ECEDEE; font: inherit; cursor: pointer; opacity: {{youOp}}; transition: opacity 160ms ease">
+<span style="font-size: 16px; font-weight: 700">You</span>
+<span style="font-size: 11.5px; font-weight: 600; color: #F0B95A; white-space: nowrap">{{youText}}</span>
+</button>
+<sc-if value="{{channelShown}}" hint-placeholder-val="{{true}}"><div title="{{contactChannelTitle}}" style="position: absolute; z-index: 3; left: {{tgX}}; top: {{tgY}}; transform: translate(-50%, -50%); display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border-radius: 999px; background: #0E0F11; border: 1px dashed #5E646C; color: #C9CDD2; font-size: 11px; font-weight: 650; white-space: nowrap; opacity: {{tgOp}}; transition: opacity 160ms ease">
+<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 2 1.5 7.2l4.6 1.7L12 4.6 7.6 10l5 3.8z"></path></svg>{{contactChannelText}}
+</div></sc-if>
+<sc-for list="{{glance.boxes}}" as="d" hint-placeholder-count="15">
+<div style="position: absolute; z-index: 2; left: {{d.px}}; top: {{d.py}}; width: {{nodeW}}; transform: translate(-50%, -50%)">
+<button type="button" onClick="{{d.expand}}" onMouseEnter="{{d.hoverOn}}" onMouseLeave="{{hoverOff}}" onFocus="{{d.hoverOn}}" onBlur="{{hoverOff}}" aria-haspopup="dialog" style="width: 100%; box-sizing: border-box; text-align: left; display: flex; flex-direction: column; gap: 7px; min-height: 92px; padding: 10px 12px; border-radius: 12px; background: #16181B; border: 1px solid {{d.bdNow}}; color: #ECEDEE; font: inherit; cursor: pointer; opacity: {{d.op}}; transition: opacity 160ms ease, border-color 160ms ease">
+<span style="display: flex; align-items: center; gap: 6px; width: 100%">
+<span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 650">{{d.name}}</span>
+<span style="flex: 1 1 auto"></span>
+<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#A9AEB6" stroke-width="1.7" aria-hidden="true" style="flex: none"><path d="M9.5 2.5h4v4M13.5 2.5 9 7M6.5 13.5h-4v-4M2.5 13.5 7 9"></path></svg>
+</span>
+<dc-import name="StateChip" kind="{{d.state}}" last-known="{{lastKnown}}" hint-size="120px,24px"></dc-import>
+<span role="img" aria-label="{{d.lanesLabel}}" style="display: flex; flex-wrap: wrap; align-items: center; gap: 4px">
+<sc-for list="{{d.lanes}}" as="ln" hint-placeholder-count="3"><span style="width: 18px; height: 8px; box-sizing: border-box; border-radius: 999px; background: {{ln.bg}}; border: 1px {{ln.bs}} {{ln.bd}}"></span></sc-for>
+<span style="margin-left: 4px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #B9BEC5">{{d.lanesText}}</span>
+</span>
+<sc-if value="{{d.ownPaused}}" hint-placeholder-val="{{false}}">
+<span style="display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; color: #C3C8CF; white-space: nowrap"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M5.5 3.5v9M10.5 3.5v9"></path></svg>Own work paused</span>
+</sc-if>
+<sc-if value="{{d.hasRel}}" hint-placeholder-val="{{false}}">
+<span style="display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 650; color: #9CC7FF"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M2.5 8h10M9 4.5 12.5 8 9 11.5"></path></svg>{{d.relText}}</span>
+</sc-if>
+</button>
+<sc-if value="{{d.onYou}}" hint-placeholder-val="{{false}}"><span style="position: absolute; top: -9px; right: 12px; display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; background: #F0B95A; color: #17130A; font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; white-space: nowrap; pointer-events: none; opacity: {{d.op}}">ON YOU</span></sc-if>
+</div>
+</sc-for>
+
+<!-- DEPARTMENT VIEW: grows from its box to the full width of this section -->
+<sc-if value="{{exOpen}}" hint-placeholder-val="{{false}}">
+<div role="region" aria-label="{{exLabel}}" data-noscrollbar="1" style="position: absolute; z-index: 5; top: {{exPos.t}}; left: {{exPos.l}}; width: {{exPos.w}}; height: {{exPos.h}}; border-radius: 12px; overflow-x: hidden; overflow-y: {{exPos.ov}}; box-sizing: border-box; background: #121417; border: 1px solid #4A505A; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45); transition: top 340ms cubic-bezier(0.2, 0.8, 0.2, 1), left 340ms cubic-bezier(0.2, 0.8, 0.2, 1), width 340ms cubic-bezier(0.2, 0.8, 0.2, 1), height 340ms cubic-bezier(0.2, 0.8, 0.2, 1)">
+<div style="padding: 18px clamp(14px, 2.4vw, 24px) 22px; box-sizing: border-box; display: flex; flex-direction: column; gap: 18px; opacity: {{exPos.o}}; transform: translateY({{exPos.y}}); transition: opacity 220ms ease {{exPos.d}}, transform 260ms ease {{exPos.d}}">
+
+<!-- YOU VIEW -->
+<sc-if value="{{exIsYou}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-direction: column; gap: 18px">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px">
+<h2 style="margin: 0; font-size: clamp(22px, 2.4vw, 28px); font-weight: 700; letter-spacing: -0.015em">You</h2>
+<span style="font-size: 13px; font-weight: 600; color: #F0B95A">{{youText}}</span>
+<span style="margin-left: auto"></span>
+<button type="button" onClick="{{closeEx}}" aria-label="Close and return to all departments" style="flex: none; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; border: 1px solid #3A3F46; background: transparent; color: #ECEDEE; cursor: pointer"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6.5 2.5h-4v4M2.5 2.5 7 7M9.5 13.5h4v-4M13.5 13.5 9 9"></path></svg></button>
+</div>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr)); gap: 14px; align-items: start">
+<section style="padding: 14px 16px; border-radius: 12px; background: #16181B; border: 1px solid #2A2E34; display: flex; flex-direction: column; gap: 14px; min-width: 0">
+<h3 style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #F0B95A">Needs your decision</h3>
+<sc-if value="{{inboxEmpty}}" hint-placeholder-val="{{false}}"><p style="margin: 0; font-size: 13.5px; color: #C9CDD2">{{emptyInboxText}}</p></sc-if>
+<sc-for list="{{inbox}}" as="it" hint-placeholder-count="3">
+<div style="display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid #24282D">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12.5px">
+<span style="padding: 3px 8px; border-radius: 5px; font-size: 11px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: {{it.kindFg}}; background: {{it.kindBg}}">{{it.kind}}</span>
+<span style="font-weight: 600; color: #D6D9DD">{{it.role}}</span>
+<span style="margin-left: auto; color: #A9AEB6">Waiting on you · {{it.age}}</span>
+</div>
+<p style="margin: 0; font-size: 15.5px; font-weight: 650; line-height: 1.3">{{it.title}}</p>
+<p style="margin: 0; font-size: 13.5px; color: #B9BEC5">{{it.context}}</p>
+<sc-if value="{{it.isOpen}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px">
+<sc-for list="{{it.choices}}" as="c" hint-placeholder-count="2">
+<div style="display: flex; flex-direction: column; gap: 3px">
+<button type="button" disabled="{{offline}}" onClick="{{c.pick}}" style="min-height: 44px; padding: 0 14px; border-radius: 8px; border: 1px solid {{c.bd}}; background: {{c.bg}}; color: {{c.fg}}; font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; opacity: {{c.op}}">{{c.label}}</button>
+<sc-if value="{{c.hasHint}}" hint-placeholder-val="{{false}}"><span style="font-size: 11.5px; color: #A9AEB6">{{c.hint}}</span></sc-if>
+</div>
+</sc-for>
+</div>
+</sc-if>
+<sc-if value="{{it.isResolved}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; background: #121614; border: 1px solid #2F4A3C; font-size: 13.5px; color: #D6EEE0"><span>{{it.resolvedText}}</span><button type="button" onClick="{{it.undo}}" style="margin-left: auto; min-height: 36px; padding: 0 12px; border-radius: 8px; border: 1px solid #3A3F46; background: transparent; color: #ECEDEE; font: inherit; font-size: 13px; cursor: pointer">Undo</button></div>
+</sc-if>
+</div>
+</sc-for>
+</section>
+<div style="display: flex; flex-direction: column; gap: 14px; min-width: 0">
+<section style="padding: 14px 16px; border-radius: 12px; background: #16181B; border: 1px solid #2A2E34; display: flex; flex-direction: column; gap: 12px">
+<h3 style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">{{contactsHeading}}</h3>
+<sc-if value="{{qsEmpty}}" hint-placeholder-val="{{false}}"><p style="margin: 0; font-size: 13.5px; color: #C9CDD2">{{emptyContactsText}}</p></sc-if>
+<sc-for list="{{qs}}" as="q" hint-placeholder-count="3">
+<div style="display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid #24282D">
+<div style="display: flex; flex-wrap: wrap; gap: 6px 10px; font-size: 12.5px; color: #A9AEB6"><span style="font-weight: 650; color: #D6D9DD">To {{q.to}}</span><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px">asked {{q.askedAt}}</span></div>
+<p style="margin: 0; font-size: 14.5px; font-weight: 600">“{{q.text}}”</p>
+<p style="margin: 0; font-size: 13px; color: {{q.statusFg}}">{{q.status}}</p>
+<div style="display: flex; flex-wrap: wrap; gap: 8px">
+<sc-if value="{{q.canRead}}" hint-placeholder-val="{{true}}"><button type="button" onClick="{{q.toggle}}" aria-expanded="{{q.expanded}}" style="min-height: 40px; padding: 0 14px; border-radius: 8px; border: 1px solid #ECEDEE; background: #ECEDEE; color: #0E0F11; font: inherit; font-size: 13.5px; font-weight: 650; cursor: pointer">{{q.readLabel}}</button></sc-if>
+<sc-if value="{{q.canReadElsewhere}}" hint-placeholder-val="{{false}}"><button type="button" onClick="{{q.toggle}}" aria-expanded="{{q.expanded}}" style="min-height: 40px; padding: 0 14px; border-radius: 8px; border: 1px solid #F0B95A; background: #F0B95A; color: #17130A; font: inherit; font-size: 13.5px; font-weight: 650; cursor: pointer">{{q.readLabel}}</button></sc-if>
+</div>
+<sc-if value="{{q.isOpen}}" hint-placeholder-val="{{false}}"><blockquote style="margin: 0; padding: 10px 12px; background: #101214; border: 1px solid #2A2E34; border-radius: 8px; font-size: 13.5px; color: #E2E4E7">{{q.answer}} <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #A9AEB6">— {{q.to}}, {{q.repliedAt}}</span></blockquote></sc-if>
+</div>
+</sc-for>
+</section>
+<section style="padding: 14px 16px; border-radius: 12px; background: #16181B; border: 1px solid #2A2E34; display: flex; flex-direction: column; gap: 8px">
+<h3 style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">{{spendPeriodText}}</h3>
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; font-size: 14px"><span style="font-weight: 600">{{spendRoleText}}</span><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px">{{spendAmountText}} <span style="color: #A9AEB6">{{spendBudgetText}}</span></span></div>
+<div role="img" aria-label="{{spendAria}}" style="height: 8px; border-radius: 4px; background: #262A30; overflow: hidden"><div style="width: {{spendBarWidth}}; height: 100%; background: {{spendBarColor}}"></div></div>
+<p style="margin: 0; font-size: 12.5px; color: #B9BEC5">{{spendNoteText}}</p>
+</section>
+</div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{exIsDept}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; flex-direction: column; gap: 18px">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px">
+<h2 style="margin: 0; font-size: clamp(22px, 2.4vw, 28px); font-weight: 700; letter-spacing: -0.015em">{{ex.name}}</h2>
+<dc-import name="StateChip" kind="{{ex.state}}" last-known="{{lastKnown}}" hint-size="120px,24px"></dc-import>
+<sc-if value="{{ex.onYou}}" hint-placeholder-val="{{false}}"><span style="flex: none; display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; background: #F0B95A; color: #17130A; font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; white-space: nowrap">ON YOU</span></sc-if>
+<span style="margin-left: auto; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #A9AEB6">{{ex.mix}} · updated {{ex.updated}}</span>
+<button type="button" onClick="{{closeEx}}" aria-label="Close and return to all departments" style="flex: none; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; border: 1px solid #3A3F46; background: transparent; color: #ECEDEE; cursor: pointer"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6.5 2.5h-4v4M2.5 2.5 7 7M9.5 13.5h4v-4M13.5 13.5 9 9"></path></svg></button>
+</div>
+<p style="margin: -8px 0 0; font-size: 15px; color: #D6D9DD">{{ex.glance}} <span style="color: #A9AEB6">· {{ex.modeLabel}}</span></p>
+<sc-if value="{{ex.hasBlocker}}" hint-placeholder-val="{{false}}">
+<div style="padding: 12px 14px; border-radius: 10px; background: {{ex.boxBg}}; border: 1px solid {{ex.boxBd}}; display: flex; flex-direction: column; gap: 5px; font-size: 14px">
+<span style="font-size: 11.5px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: {{ex.boxFg}}">{{ex.boxTitle}}</span>
+<span>{{ex.blocker.waitingFor}}</span>
+<span style="color: #D6D9DD"><span style="color: #A9AEB6">Who can resolve:</span> <strong style="font-weight: 650">{{ex.blocker.resolver}}</strong></span>
+<span style="color: #D6D9DD"><span style="color: #A9AEB6">Next check:</span> {{ex.blocker.check}}</span>
+</div>
+</sc-if>
+<sc-if value="{{ex.hasDecisions}}" hint-placeholder-val="{{false}}">
+<section style="padding: 14px 16px; border-radius: 12px; background: #1B1912; border: 1px solid #4D3F1F; display: flex; flex-direction: column; gap: 12px">
+<h3 style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #F0B95A">Needs your decision</h3>
+<sc-for list="{{ex.decisions}}" as="it" hint-placeholder-count="1">
+<div style="display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12.5px">
+<span style="padding: 3px 8px; border-radius: 5px; font-size: 11px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: {{it.kindFg}}; background: {{it.kindBg}}">{{it.kind}}</span>
+<span style="margin-left: auto; color: #A9AEB6">Waiting on you · {{it.age}}</span>
+</div>
+<p style="margin: 0; font-size: 16px; font-weight: 650; line-height: 1.3">{{it.title}}</p>
+<p style="margin: 0; font-size: 13.5px; color: #C9CDD2">{{it.context}}</p>
+<sc-if value="{{it.hasEvidence}}" hint-placeholder-val="{{false}}">
+<ol aria-label="Completion evidence" style="list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px">
+<sc-for list="{{it.ev}}" as="ev" hint-placeholder-count="5"><li style="display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 10px; border-radius: 6px; font-size: 12px; color: {{ev.fg}}; background: {{ev.bg}}; border: 1px {{ev.bs}} {{ev.bd}}"><span style="font-weight: 650">{{ev.label}}</span><span>{{ev.at}}</span></li></sc-for>
+</ol>
+</sc-if>
+<sc-if value="{{it.isOpen}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px">
+<sc-for list="{{it.choices}}" as="c" hint-placeholder-count="2">
+<div style="display: flex; flex-direction: column; gap: 3px">
+<button type="button" disabled="{{offline}}" onClick="{{c.pick}}" style="min-height: 44px; padding: 0 14px; border-radius: 8px; border: 1px solid {{c.bd}}; background: {{c.bg}}; color: {{c.fg}}; font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; opacity: {{c.op}}">{{c.label}}</button>
+<sc-if value="{{c.hasHint}}" hint-placeholder-val="{{false}}"><span style="font-size: 11.5px; color: #A9AEB6">{{c.hint}}</span></sc-if>
+</div>
+</sc-for>
+</div>
+</sc-if>
+<sc-if value="{{it.isResolved}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; background: #121614; border: 1px solid #2F4A3C; font-size: 13.5px; color: #D6EEE0"><span>{{it.resolvedText}}</span><button type="button" onClick="{{it.undo}}" style="margin-left: auto; min-height: 36px; padding: 0 12px; border-radius: 8px; border: 1px solid #3A3F46; background: transparent; color: #ECEDEE; font: inherit; font-size: 13px; cursor: pointer">Undo</button></div>
+</sc-if>
+</div>
+</sc-for>
+</section>
+</sc-if>
+<sc-if value="{{ex.hasQuestions}}" hint-placeholder-val="{{false}}">
+<section style="padding: 14px 16px; border-radius: 12px; background: #16181B; border: 1px solid #2A2E34; display: flex; flex-direction: column; gap: 10px">
+<h3 style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">{{roleContactsHeading}} {{ex.name}}</h3>
+<sc-for list="{{ex.questions}}" as="q" hint-placeholder-count="1">
+<div style="display: flex; flex-direction: column; gap: 8px">
+<p style="margin: 0; font-size: 14.5px; font-weight: 600">“{{q.text}}” <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; font-weight: 400; color: #A9AEB6">asked {{q.askedAt}}</span></p>
+<ol aria-label="Delivery progress" style="list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px">
+<sc-for list="{{q.steps}}" as="s" hint-placeholder-count="4"><li style="display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: {{s.fg}}"><span style="height: 4px; border-radius: 2px; background: {{s.bar}}"></span><span style="font-weight: 650">{{s.label}}</span><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; color: #A9AEB6">{{s.sub}}</span></li></sc-for>
+</ol>
+<p style="margin: 0; font-size: 13px; color: {{q.statusFg}}">{{q.status}}</p>
+<div style="display: flex; flex-wrap: wrap; gap: 8px">
+<sc-if value="{{q.canRead}}" hint-placeholder-val="{{true}}"><button type="button" onClick="{{q.toggle}}" aria-expanded="{{q.expanded}}" style="min-height: 40px; padding: 0 14px; border-radius: 8px; border: 1px solid #ECEDEE; background: #ECEDEE; color: #0E0F11; font: inherit; font-size: 13.5px; font-weight: 650; cursor: pointer">{{q.readLabel}}</button></sc-if>
+<sc-if value="{{q.canReadElsewhere}}" hint-placeholder-val="{{false}}"><button type="button" onClick="{{q.toggle}}" aria-expanded="{{q.expanded}}" style="min-height: 40px; padding: 0 14px; border-radius: 8px; border: 1px solid #F0B95A; background: #F0B95A; color: #17130A; font: inherit; font-size: 13.5px; font-weight: 650; cursor: pointer">{{q.readLabel}}</button></sc-if>
+</div>
+<sc-if value="{{q.isOpen}}" hint-placeholder-val="{{false}}"><blockquote style="margin: 0; padding: 10px 12px; background: #101214; border: 1px solid #2A2E34; border-radius: 8px; font-size: 13.5px; color: #E2E4E7">{{q.answer}} <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #A9AEB6">— {{q.to}}, {{q.repliedAt}}</span></blockquote></sc-if>
+</div>
+</sc-for>
+</section>
+</sc-if>
+<sc-if value="{{ex.rep.has}}" hint-placeholder-val="{{true}}">
+<div style="border-radius: 10px; background: #16181B; border: 1px solid #2A2E34">
+<button type="button" onClick="{{toggleRep}}" aria-expanded="{{repOpenStr}}" style="width: 100%; box-sizing: border-box; display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 14px; border: 0; border-radius: 10px; background: transparent; color: #ECEDEE; font: inherit; text-align: left; cursor: pointer">
+<span style="flex: none; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">6 am report</span>
+<span style="flex: none; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #A9AEB6">06:00 PT</span>
+<span style="flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; color: #D6D9DD">{{ex.rep.summary}}</span>
+<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#A9AEB6" stroke-width="1.8" aria-hidden="true" style="flex: none; transform: {{repChev}}; transition: transform 160ms ease"><path d="M4 6l4 4 4-4"></path></svg>
+</button>
+<sc-if value="{{repOpen}}" hint-placeholder-val="{{false}}">
+<div style="padding: 2px 14px 14px; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 12px 20px">
+<sc-for list="{{ex.rep.sections}}" as="rs" hint-placeholder-count="2">
+<div style="display: flex; flex-direction: column; gap: 4px">
+<span style="font-size: 12px; font-weight: 650; color: {{rs.fg}}">{{rs.label}}</span>
+<ul style="margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; font-size: 13.5px; line-height: 1.4; color: #D6D9DD">
+<sc-for list="{{rs.items}}" as="it" hint-placeholder-count="2"><li>{{it.t}}</li></sc-for>
+</ul>
+</div>
+</sc-for>
+</div>
+</sc-if>
+</div>
+</sc-if>
+<sc-if value="{{ex.rep.missing}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-height: 44px; box-sizing: border-box; padding: 8px 14px; border-radius: 10px; border: 1px dashed #4A4F57; font-size: 13px">
+<span style="font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">6 am report</span>
+<span style="font-weight: 650; color: #ECEDEE">Not received today.</span>
+<span style="color: #C9CDD2">{{ex.rep.reason}}</span>
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #A9AEB6">Last: {{ex.rep.last}}</span>
+</div>
+</sc-if>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr)); gap: 14px; align-items: start">
+<div style="display: flex; flex-direction: column; gap: 14px; min-width: 0">
+<section style="padding: 14px 16px; border-radius: 12px; background: #16181B; border: 1px solid #2A2E34; display: flex; flex-direction: column; gap: 10px">
+<h3 style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Now</h3>
+<dl style="margin: 0; display: grid; grid-template-columns: minmax(100px, max-content) minmax(0, 1fr); gap: 9px 14px; font-size: 14px">
+<dt style="color: #A9AEB6">Current task</dt><dd style="margin: 0"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; color: #B9BEC5">{{ex.taskId}}</span> {{ex.taskTitle}} <span style="font-size: 12px; font-weight: 600; color: #9CC7FF">{{ex.taskSrc}}</span></dd>
+<dt style="color: #A9AEB6">Latest progress</dt><dd style="margin: 0">{{ex.progressText}} <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #A9AEB6">· {{ex.progressAt}}</span></dd>
+<dt style="color: #A9AEB6">Next action</dt><dd style="margin: 0">{{ex.nextShort}}</dd>
+<dt style="color: #A9AEB6">Task lanes</dt><dd style="margin: 0">{{ex.lanesLabel}}</dd>
+</dl>
+<sc-if value="{{ex.hasEvidence}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<span style="font-size: 12px; color: #A9AEB6">Completion evidence</span>
+<ol style="list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px">
+<sc-for list="{{ex.ev}}" as="ev" hint-placeholder-count="5"><li style="display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 10px; border-radius: 6px; font-size: 12px; color: {{ev.fg}}; background: {{ev.bg}}; border: 1px {{ev.bs}} {{ev.bd}}"><span style="font-weight: 650">{{ev.label}}</span><span>{{ev.at}}</span></li></sc-for>
+</ol>
+</div>
+</sc-if>
+</section>
+<section style="padding: 14px 16px; border-radius: 12px; background: #16181B; border: 1px solid #2A2E34; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px">
+<h3 style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Task queue</h3>
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #A9AEB6">{{ex.queueText}}</span>
+</div>
+<sc-for list="{{ex.taskGroups}}" as="tg" hint-placeholder-count="2">
+<div style="display: flex; flex-direction: column; gap: 4px">
+<span style="font-size: 12.5px; font-weight: 650; color: {{tg.fg}}">{{tg.label}}</span>
+<ul style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px">
+<sc-for list="{{tg.items}}" as="t" hint-placeholder-count="2">
+<li style="display: flex; flex-wrap: wrap; gap: 2px 10px; padding: 8px 10px; border-radius: 6px; background: #1B1D21; font-size: 13.5px">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #A9AEB6; padding-top: 1px">{{t.id}}</span>
+<span style="flex: 1 1 180px; min-width: 0">{{t.title}}</span>
+<span style="font-size: 12px; font-weight: 600; color: #9CC7FF">{{t.srcText}}</span>
+<sc-if value="{{t.hasDep}}" hint-placeholder-val="{{false}}"><span style="flex-basis: 100%; font-size: 12px; color: #F0B95A">Depends on: {{t.dep}}</span></sc-if>
+</li>
+</sc-for>
+</ul>
+</div>
+</sc-for>
+</section>
+</div>
+<div style="display: flex; flex-direction: column; gap: 14px; min-width: 0">
+<section style="padding: 14px 16px; border-radius: 12px; background: #16181B; border: 1px solid #2A2E34; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px">
+<h3 style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Own initiatives</h3>
+<span style="font-size: 12px; color: #A9AEB6">{{ex.initCount}}</span>
+</div>
+<sc-if value="{{ex.ownPaused}}" hint-placeholder-val="{{false}}">
+<p style="margin: 0; padding: 8px 10px; border-radius: 8px; background: #1B1D21; font-size: 13px; color: #C9CDD2">Paused by you to save tokens. Requests from other departments still run.</p>
+</sc-if>
+<sc-if value="{{ex.initEmpty}}" hint-placeholder-val="{{false}}">
+<p style="margin: 0; padding: 10px 12px; border-radius: 8px; border: 1px dashed #4A4F57; font-size: 13.5px; color: #C9CDD2">No own initiative yet. It’s waiting for you to pick one.</p>
+</sc-if>
+<sc-for list="{{ex.inits}}" as="in" hint-placeholder-count="1">
+<div style="padding: 12px; border-radius: 10px; background: #1B1D21; border: 1px solid #2A2E34; display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px">
+<span style="font-size: 15px; font-weight: 650">{{in.name}}</span>
+<span style="padding: 1px 7px; border-radius: 4px; border: 1px solid currentColor; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; color: {{in.fg}}">{{in.status}}</span>
+</div>
+<span style="font-size: 13.5px; line-height: 1.4; color: #C9CDD2">{{in.goal}}</span>
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #A9AEB6">{{in.tasksText}}</span>
+</div>
+</sc-for>
+</section>
+<section style="padding: 14px 16px; border-radius: 12px; background: #16181B; border: 1px solid #2A2E34; display: flex; flex-direction: column; gap: 10px">
+<h3 style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Requests</h3>
+<dl style="margin: 0; display: grid; grid-template-columns: minmax(100px, max-content) minmax(0, 1fr); gap: 9px 14px; font-size: 14px">
+<dt style="color: #A9AEB6">Requests in</dt><dd style="margin: 0">{{ex.reqInText}}</dd>
+<dt style="color: #A9AEB6">Asked of others</dt><dd style="margin: 0">{{ex.outText}}</dd>
+</dl>
+</section>
+<section style="padding: 14px 16px; border-radius: 12px; background: #16181B; border: 1px solid #2A2E34; display: flex; flex-direction: column; gap: 8px">
+<h3 style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Spending this week</h3>
+<dl style="margin: 0; display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 6px 12px; font-size: 13.5px">
+<dt style="color: #B9BEC5">Own-initiative work</dt><dd style="margin: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px">{{ex.spend.own}}</dd>
+<dt style="color: #B9BEC5">Requested work (exempt)</dt><dd style="margin: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px">{{ex.spend.req}}</dd>
+</dl>
+<sc-if value="{{ex.hasBudgetNote}}" hint-placeholder-val="{{false}}"><p style="margin: 0; font-size: 12.5px; color: #B9BEC5">{{ex.budgetNote}}</p></sc-if>
+</section>
+<section style="padding: 14px 16px; border-radius: 12px; background: #16181B; border: 1px solid #2A2E34; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px">
+<h3 style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Recent activity</h3>
+<div role="group" aria-label="Activity type" style="display: flex; gap: 6px">
+<sc-for list="{{drTabs}}" as="t" hint-placeholder-count="2">
+<button type="button" aria-pressed="{{t.pressed}}" onClick="{{t.pick}}" style="min-height: 36px; padding: 0 10px; border-radius: 8px; border: 1px solid {{t.bd}}; background: {{t.bg}}; color: {{t.fg}}; font: inherit; font-size: 12.5px; font-weight: 550; cursor: pointer">{{t.label}}</button>
+</sc-for>
+</div>
+</div>
+<ul style="list-style: none; margin: 0; padding: 0">
+<sc-for list="{{ex.acts}}" as="a" hint-placeholder-count="3">
+<li style="display: flex; gap: 12px; padding: 8px 0; border-top: 1px solid #1F2226; font-size: 13.5px"><span style="flex: 0 0 72px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #A9AEB6; padding-top: 1px">{{a.at}}</span><span style="color: #D6D9DD">{{a.text}}</span></li>
+</sc-for>
+</ul>
+<sc-if value="{{ex.actsEmpty}}" hint-placeholder-val="{{false}}"><p style="margin: 0; font-size: 13px; color: #A9AEB6">Nothing recorded this week.</p></sc-if>
+</section>
+<section style="padding: 14px 16px; border-radius: 12px; background: #16181B; border: 1px solid #2A2E34; display: flex; flex-direction: column; gap: 8px">
+<h3 style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">About</h3>
+<p style="margin: 0; font-size: 13.5px; color: #D6D9DD">{{ex.purpose}}</p>
+<ul style="margin: 0; padding-left: 18px; font-size: 13.5px; color: #B9BEC5; display: flex; flex-direction: column; gap: 2px">
+<sc-for list="{{ex.respList}}" as="rs" hint-placeholder-count="2"><li>{{rs.t}}</li></sc-for>
+</ul>
+<p style="margin: 0; display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: {{ex.instrFg}}"><span style="flex: none; padding: 1px 7px; border-radius: 4px; border: 1px solid currentColor; font-size: 11px; font-weight: 700; letter-spacing: 0.04em">{{ex.instrLabel}}</span><span style="color: #D6D9DD">Instructions: {{ex.instr.text}}</span></p>
+<p style="margin: 0; font-size: 13px; color: #A9AEB6">Model: <span style="color: #D6D9DD">{{ex.model}}</span></p>
+</section>
+</div>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 8px">
+<a href="{{ex.chatHref}}" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 18px; border-radius: 8px; background: #ECEDEE; color: #0E0F11; font-size: 14px; font-weight: 650; text-decoration: none">Open home chat</a>
+<a href="{{ex.queueHref}}" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; border-radius: 8px; border: 1px solid #3A3F46; color: #ECEDEE; font-size: 14px; font-weight: 550; text-decoration: none">Open full queue</a>
+</div>
+</div>
+</sc-if>
+</div>
+</div>
+</sc-if>
+</div>
+
+</div>
+</section>
+</sc-if>
+
+<footer style="display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12px; color: #A9AEB6; font-family: 'Geist Mono', ui-monospace, monospace">
+<span>{{footerText}}</span>
+<span>{{provenanceText}}</span>
+</footer>
+</div>
+
+</div>
+

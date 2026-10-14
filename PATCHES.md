@@ -189,6 +189,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | initiatives-page             | `local` | `server/decision-reader.ts`, `decision-model.ts`, `decision-who.ts`, `decision-store.ts`, `decision-view.ts`, `decision-log-tool.ts`, `decision-previews.ts`, `initiatives-watch.ts` (all new), `agent-service.ts`, `index.ts`, `control-socket.ts`, `protocol.ts`, `protocol-version.ts`, `tabs.ts`, `tool-manager.ts`, `asks.ts`, `decision-records.ts`, `bin/pi-web-ui.mjs` (`decisions read`), `web/src/components/InitiativesView.tsx`, `initiatives-state.ts`, `initiatives-view-model.ts`, `initiatives-view.css` (new), `App.tsx`, `TopBar.tsx`, `ui-slots.ts`, `use-chat.ts`, `open-chat-link.ts`, `i18n.tsx`, `locales/*.json`, `tests/unit/decision-reader.test.ts`, `decision-who.test.ts`, `initiatives-view.test.ts`, `tests/initiatives-page-test.mjs` (new), `tests/unit/ui-slots.test.ts`, `tool-registration.test.ts`, `docs/initiatives-page.md` (new) |
 | progress-feed                | `local` | `server/progress-feed.ts`, `feed-check.ts`, `initiative-update-tool.ts` (all new), `decision-store.ts`, `decision-records.ts`, `decision-reader.ts`, `decision-view.ts`, `decision-who.ts`, `role-messages.ts`, `quiet-turns.ts`, `agent-service.ts`, `index.ts`, `control-socket.ts`, `protocol.ts`, `protocol-version.ts` (49), `tool-manager.ts`, `bin/pi-web-ui.mjs` (`decisions feed`, `decisions catch-up`), `scripts/feed-check.mts` (new), `web/src/components/ProgressSection.tsx` (new), `InitiativesView.tsx`, `Message.tsx`, `RoleMessageRow.tsx`, `initiatives-state.ts`, `initiatives-view-model.ts`, `initiatives-view.css`, `role-message-text.ts`, `use-chat.ts`, `protocol-version.ts`, `i18n.tsx`, `locales/*.json`, `tests/unit/progress-feed.test.ts`, `tests/progress-feed-test.mjs` (new), `docs/progress-feed.md` (new), `docs/initiatives-page.md` |
 | reconnect-trace              | `local` | `server/conn-events.ts` (new), `index.ts`, `plugins.ts` (`host.connNotices`), `plugin-api-catalog.ts`, `protocol.ts`, `plugin-sdk/`, `plugins/telegram/` (0.2.3), `web/src/conn-trace.ts` (new), `use-chat.ts`, `tests/reconnect-trace-test.mjs` (new), `tests/lib/own-server.mjs`, `tests/unit/conn-events.test.ts` (new), `conn-trace.test.ts` (new), `plugin-telegram.test.ts`, `plugin-api-catalog.test.ts`
+| roles-u0-renderer            | `local` | inert, no importer: `web/src/roles-u0/` (new: `surface.html`, `state-chip.html`, `surface.ts`, `layout.ts`, `fields.ts`, `native.ts`, `mount.ts`, `types.ts`), `tests/roles-u0/` (new), `tests/unit/roles-u0.test.ts`, `roles-u0-rgba.test.ts` (new), `.prettierignore`
 | decision-reader-batches      | `local` | `server/decision-batch-budget.ts`, `decision-batches.ts`, `decision-bounded-model.ts`, `decision-call-lifecycle.ts` (new), `server/agent-service.ts`, `tests/unit/decision-batches.test.ts` (new)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 ---
@@ -6292,3 +6293,45 @@ Metadata only: no chat text, prompts, tool results, credentials, cookies, URLs, 
 - If `conn-health.ts` gains a new way to put the note up, give it a cause in `ConnTraceReason`
   (`protocol.ts`), `REASONS` and the plugin's `checkConnNotice`/`renderConnNotice` words.
 - Keep `conn-trace.ts` pure (the page bundles it; times are passed in).
+
+## roles-u0-renderer
+
+**Status**: `local`, inert (nothing in the app imports it; X0 switches it on later)
+**Baseline**: v0.96.1, beside `roles-overview` (unchanged) and the inert RTPI core (#136)
+
+**Why** (Ops queue #138, owner-requested Roles build, COO rm-7e877414; owner package A, record
+dr-c3c6453fa63b: "Ops recommendation: 1A 2A 3A 4A 5A"): the Roles page is to become an exact copy of
+the owner's uploaded design. This patch builds that renderer and its proofs without switching the live
+page. Missing native data reads "Not recorded" or "Not reported", never a guess.
+
+### Changes
+
+- `web/src/roles-u0/surface.html`, `state-chip.html`: the design's own template, byte-exact (in
+  `.prettierignore`, because its whitespace is rendered). `surface.ts` binds it with a small
+  interpreter that changes the DOM only when a value changes; `layout.ts` is the design's ring layout,
+  number for number.
+- `fields.ts`: the 64 native field rows (C0 schemas, #136) as typed, closed values; missing is a
+  value, and fixture or simulation keys are refused. `native.ts` maps the native read model to the
+  template: state never comes from the legacy status, "Processed in a settled turn" and "Your
+  contacts" are the neutral labels (C02), spend shows individual figures only (C10), and links call
+  the host's routes (home, queue, board, report, spend, about stay as they are).
+- `mount.ts`: renders into its own same-origin frame, so app themes and global CSS can't reach it
+  (owner 5A, C07). Focus rings show on keyboard focus only (Ops D2; no at-rest pixel change). Font
+  bytes come from the host: production use of the supplied fonts and SVG waits for the owner's rights
+  records (4A), so the patch bundles none.
+
+### How it was checked
+
+- `tests/unit/roles-u0.test.ts` (64 rows, closed snapshot, no fiction leak into the native view,
+  long labels, partial and disconnected states, routes, ring numbers) and `roles-u0-rgba.test.ts`
+  (the RGBA comparator's known cases: identical, one pixel off by 1, re-encoded PNG, size mismatch,
+  RGB vs RGBA).
+- Pixel, accessibility and theme proofs run outside the repo, sealed and anonymous, against the
+  closed reference contract (#135): `~/company-lab/shared/roles-renderer-u0-2026-10-13/` (RESULT.md,
+  DEVIATION-REGISTER.md, JUDGE-*/GATES-* runs, each with a same-session control).
+
+### Undo and syncing
+
+- Undo: revert this commit through `wt`; nothing at runtime uses it.
+- If the C0 field rows (#136 INTERFACE.md) change, change `fields.ts` and the 64-row test.
+- Switching it on (X0) is a separate, owner-approved change; it must keep the routes and themes above.
