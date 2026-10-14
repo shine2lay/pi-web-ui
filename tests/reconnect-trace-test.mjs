@@ -10,8 +10,8 @@
  *  2. A stalled server (SIGSTOP for 7 s, then SIGCONT: like a main thread busy for 7 s, the socket
  *     stays open): "Reconnecting…" shows; once the page is back, the log holds its record of it (a
  *     silence cause), placed on the server's clock over the stall, with a measured event-loop delay of
- *     at least 6 s; the socket the page dropped is logged closed with its close code; the owner notice
- *     is tried and, with no transport here, not sent; the stall watcher writes the stall whole.
+ *     at least 6 s; the socket the page dropped is logged closed with its close code; with no explicit
+ *     notice opt-in it stays silent; the stall watcher writes the stall whole.
  *     (The 7 s SIGSTOP is also covered by the event-loop histogram, so it can't show the histogram's
  *     hole; tests/unit/conn-events.test.ts "real timers" does, with its control.)
  *  3. A server restart (the socket is closed under the page): the page's record has the close code,
@@ -19,6 +19,8 @@
  *  4. Metadata only: every string in every line is a fixed kind, an id, a hash or a cause.
  *  5. The off switch (<data>/conn-trace.json {"enabled": false}): another stall (13 s, past the
  *     page's doubled patience) shows the note but leaves nothing in the log.
+ *  6. Runtime master-off -> silent capture sends a flag to the existing socket (no reconnect),
+ *     resumes bounded sampling and still never submits a notice.
  * On code without the capture (the control), checks 1-3 fail: no log is written.
  *
  * Usage: npm run build && scripts/sealed.sh node tests/reconnect-trace-test.mjs
@@ -83,6 +85,19 @@ async function stall(page, ms) {
 const browser = await chromium.launch({ executablePath: CHROME_PATH, headless: true });
 try {
 	const page = await (await browser.newContext()).newPage();
+	const captureFlags = [];
+	let socketCount = 0;
+	page.on("websocket", (socket) => {
+		socketCount++;
+		socket.on("framereceived", ({ payload }) => {
+			try {
+				const msg = JSON.parse(String(payload));
+				if (msg.type === "conn_trace_config" && typeof msg.on === "boolean") captureFlags.push(msg.on);
+			} catch {
+				/* only this boolean-only metadata frame is retained */
+			}
+		});
+	});
 	await page.goto(srv.http);
 
 	// 1. The page's own connect, and the loop samples.
@@ -137,11 +152,10 @@ try {
 			!!dropped && Number.isInteger(dropped.code),
 			dropped ? `code ${dropped.code}, lived ${dropped.livedMs} ms` : `no close line for ${b.conn}`,
 		);
-		const notice = await until(() => lines().find((l) => l.kind === "notice"), 10_000);
 		check(
-			"the owner notice is tried, and with no transport it is not sent",
-			!!notice && notice.sent === false && !lines().some((l) => l.kind === "notice" && l.sent),
-			notice ? `notice ${notice.id} (${notice.notice})` : "no notice line",
+			"missing notice opt-in is silent while the real episode is captured",
+			!lines().some((l) => l.kind === "notice"),
+			"no notice submission",
 		);
 	}
 
@@ -187,6 +201,7 @@ try {
 	await until(async () => !(await reconnectingShown(page)), 15_000);
 	writeFileSync(join(srv.dataDir, "conn-trace.json"), JSON.stringify({ enabled: false }));
 	await sleep(11_000); // the switch is read every 3 s, the sampler looks every 10 s
+	check("master-off reaches the existing page as a capture-only flag", captureFlags.at(-1) === false);
 	const before = lines().length;
 	// 13 s: the first stall doubled the page's patience (conn-health: 10 s of silence allowed now).
 	const s2 = await stall(page, 13_000);
@@ -197,6 +212,22 @@ try {
 		"switched off, another stall leaves nothing (no record, no socket or loop lines)",
 		s2.shown && after === before,
 		`note shown ${s2.shown}, lines ${before} -> ${after}`,
+	);
+
+	// 6. Restore tracking silently, on the socket that connected while master-off.
+	const socketsBeforeRestore = socketCount;
+	const loopsBeforeRestore = lines().filter((l) => l.kind === "loop").length;
+	writeFileSync(join(srv.dataDir, "conn-trace.json"), JSON.stringify({ enabled: true, notices: false }));
+	await until(() => captureFlags.at(-1) === true, 10_000);
+	await until(() => lines().filter((l) => l.kind === "loop").length > loopsBeforeRestore, 25_000);
+	check(
+		"silent capture flag reaches the same socket without a reconnect",
+		captureFlags.at(-1) === true && socketCount === socketsBeforeRestore,
+		`flag ${captureFlags.at(-1)}, sockets ${socketsBeforeRestore} -> ${socketCount}`,
+	);
+	check(
+		"silent runtime capture resumes sampling without notice submissions",
+		lines().filter((l) => l.kind === "loop").length > loopsBeforeRestore && !lines().some((l) => l.kind === "notice"),
 	);
 } catch (err) {
 	console.log(`FAIL the test broke: ${err?.stack ?? err}`);

@@ -1754,6 +1754,13 @@ export function useChat() {
 				refreshNote();
 			}
 			switch (msg.type) {
+				case "conn_trace_config": {
+					// Restoring silent capture must work on this socket, even if ready said master-off.
+					traceOnRef.current = msg.on === true;
+					if (!msg.on) traceRef.current?.discard(Date.now());
+					else if (traceRef.current && !traceRef.current.showing) sendTrace(ws, traceRef.current, Date.now());
+					return;
+				}
 				case "ready": {
 					// Stale-build self-reload: the server reports the entry-chunk hash
 					// of the index.html it serves now; ours is the hash in the entry

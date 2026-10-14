@@ -34,6 +34,8 @@ let dir = "";
 let made: ConnEvents[] = [];
 beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "conn-events-"));
+	// These notice/rate-limit fixtures explicitly opt in; production defaults to silent (#157).
+	writeFileSync(join(dir, CONFIG_FILE), JSON.stringify({ enabled: true, notices: true }));
 });
 afterEach(() => {
 	for (const c of made) c.stop();
@@ -427,8 +429,8 @@ describe("conn-events: the hub hands notices to the transport", () => {
 
 describe("conn-events: one switch turns it all off", () => {
 	it('{"enabled": false} stops the log, the samples, the pages\' records and the notices; removing it turns it back on', async () => {
-		const { ce, clock, hist, sent } = setup();
 		writeFileSync(join(dir, CONFIG_FILE), JSON.stringify({ enabled: false }));
+		const { ce, clock, hist, sent } = setup();
 		expect(ce.enabled()).toBe(false);
 		ce.sample();
 		clock.now += 10_000;
@@ -451,8 +453,8 @@ describe("conn-events: one switch turns it all off", () => {
 	});
 
 	it("an unreadable switch file counts as off", () => {
-		const { ce } = setup();
 		writeFileSync(join(dir, CONFIG_FILE), "{ enabled: nope");
+		const { ce } = setup();
 		expect(ce.enabled()).toBe(false);
 	});
 });

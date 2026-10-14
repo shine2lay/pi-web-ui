@@ -3882,6 +3882,8 @@ export interface UiSettingsState {
 	subagentDefaultTemplates: string[];
 }
 export type ServerMessage =
+	/** reconnect-trace: runtime capture flag only; separate from heartbeat/connection health. */
+	| { type: "conn_trace_config"; on: boolean }
 	| {
 			/** 子代理同行直接交接协同通知（Peer-to-Peer Handoff Event） */
 			type: "subagent_handoff";

@@ -15,8 +15,9 @@
  *   - notice: whether the owner was told (one Telegram line at most every 10 minutes, later ones summed).
  * Never: chat text, prompts, tool results, credentials, cookies, URLs, IPs, user agents or bodies.
  *
- * One switch: <dataDir>/conn-trace.json {"enabled": false} stops the log, the loop sampling, the pages'
- * reports and the notices (read again within a few seconds; no restart).
+ * <dataDir>/conn-trace.json: {"enabled": false} is master-off. {"enabled": true,"notices": false}
+ * keeps capture but stays silent. Notices require explicit true; missing notices is silent. A mute or
+ * changed opt-in discards queued notices, never replaying muted backlog (Ops #157, rm-2917f21e).
  * Files roll over each UTC day to conn-events-YYYY-MM-DD.jsonl and are kept 7 days.
  */
 import { createHash, randomBytes } from "node:crypto";
@@ -97,7 +98,7 @@ export interface ConnNotice {
 	restart: boolean;
 }
 
-export type ConnNoticeDeliver = (n: ConnNotice) => Promise<boolean>;
+export type ConnNoticeDeliver = (n: ConnNotice, permitted?: () => boolean) => Promise<boolean>;
 
 /** Hub the plugin host hangs notice transports on (server/plugins.ts host.connNotices). */
 export function createConnNoticeHub() {
@@ -113,8 +114,10 @@ export function createConnNoticeHub() {
 			return handlers.size;
 		},
 		/** True once one transport says it sent it. No transport, or all refuse/fail: false. */
-		async deliver(n: ConnNotice): Promise<boolean> {
+		async deliver(n: ConnNotice, permitted: () => boolean = () => true): Promise<boolean> {
 			for (const h of [...handlers]) {
+				// A slow/refused transport must not submit to another after notice permission changed.
+				if (!permitted()) return false;
 				let timer: ReturnType<typeof setTimeout> | undefined;
 				try {
 					const r = await Promise.race([
@@ -250,6 +253,9 @@ interface Pending {
 }
 
 interface NotifyState {
+	/** A config incarnation and its opt-in start: old/delayed episodes cannot cross a mute/re-enable.
+	 * A missing legacy fence drops legacy backlog, even if the current file explicitly opts in. */
+	noticePolicy: { key: string; since: number | null };
 	/** When a notice last went out, or was last tried. */
 	lastSentAt: number;
 	sentIds: string[];
@@ -307,7 +313,9 @@ export class ConnEvents {
 	private timer: ReturnType<typeof setInterval> | null = null;
 	private flushTimer: ReturnType<typeof setTimeout> | null = null;
 	private ring: LoopSample[] = [];
-	private cfg = { at: -Infinity, mtime: -1, on: true };
+	private cfg = { at: -Infinity, key: "", on: true, notices: false };
+	/** In-memory fence for an async send: changing permission invalidates its completion/retry. */
+	private noticeEpoch = 0;
 	private day = "";
 	private dayBytes = 0;
 	private state: NotifyState;
@@ -333,7 +341,7 @@ export class ConnEvents {
 	constructor(opts: ConnEventsOptions) {
 		this.dataDir = opts.dataDir;
 		this.now = opts.now ?? Date.now;
-		this.deliver = opts.deliver ?? ((n) => connNoticeHub.deliver(n));
+		this.deliver = opts.deliver ?? ((n, permitted) => connNoticeHub.deliver(n, permitted));
 		this.sampleMs = opts.sampleMs ?? LOOP_SAMPLE_MS;
 		this.gapMs = opts.noticeGapMs ?? NOTICE_GAP_MS;
 		this.makeHistogram = opts.histogram ?? (() => monitorEventLoopDelay({ resolution: 20 }));
@@ -341,35 +349,73 @@ export class ConnEvents {
 		this.watchStalls = opts.stallWatch ?? true;
 		this.startedAt = opts.startedAt ?? this.now();
 		this.state = this.loadState();
+		this.switches(); // establish a fence and discard muted/legacy backlog before resume or timers
 		if (opts.sampler) this.startSampler();
 	}
 
 	// -- the switch -----------------------------------------------------------
 
-	/** On unless <dataDir>/conn-trace.json says {"enabled": false}. */
+	/** Capture is on unless explicitly master-off; an unreadable/invalid config fails closed. */
 	enabled(): boolean {
+		return this.switches().on;
+	}
+
+	/** Notices are silent by default. Recheck before every submission/enqueue/retry, not just at
+	 * the capture cache boundary: revoking notice permission must not wait behind that cache. */
+	noticesEnabled(): boolean {
+		const cfg = this.switches(true);
+		return cfg.on && cfg.notices;
+	}
+
+	private switches(force = false): typeof this.cfg {
 		const t = this.now();
-		if (t - this.cfg.at < CONFIG_TTL_MS) return this.cfg.on;
-		this.cfg.at = t;
+		if (!force && t - this.cfg.at < CONFIG_TTL_MS) return this.cfg;
 		const file = join(this.dataDir, CONFIG_FILE);
-		let mtime = 0;
+		let key = "absent";
+		let on = true;
+		let notices = false;
 		try {
-			mtime = statSync(file).mtimeMs;
-		} catch {
-			this.cfg.mtime = 0;
-			this.cfg.on = true;
-			return true;
-		}
-		if (mtime !== this.cfg.mtime) {
-			this.cfg.mtime = mtime;
-			try {
-				this.cfg.on = (JSON.parse(readFileSync(file, "utf8")) as { enabled?: unknown })?.enabled !== false;
-			} catch {
-				// An unreadable switch file: off (someone meant to change it).
-				this.cfg.on = false;
+			const st = statSync(file);
+			if (!st.isFile()) throw new Error("invalid switch");
+			// ctime catches permission changes and off/on rewrites even with a restored mtime.
+			key = `${st.ino}:${st.mtimeMs}:${st.ctimeMs}:${st.size}`;
+			if (key === this.cfg.key) {
+				on = this.cfg.on;
+				notices = this.cfg.notices;
+			} else {
+				const raw: unknown = JSON.parse(readFileSync(file, "utf8"));
+				if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("invalid switch");
+				const c = raw as { enabled?: unknown; notices?: unknown };
+				if (c.enabled !== undefined && typeof c.enabled !== "boolean") throw new Error("invalid switch");
+				on = c.enabled !== false;
+				notices = c.notices === true;
 			}
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+				key = "unreadable";
+				on = false;
+			}
+			notices = false;
 		}
-		return this.cfg.on;
+		this.cfg = { at: t, key, on, notices };
+		const active = on && notices;
+		const p = this.state.noticePolicy;
+		if (p.key !== key || active !== (p.since !== null)) {
+			this.noticeEpoch++;
+			this.state.noticePolicy = { key, since: active ? t : null };
+			this.state.pending = null;
+			this.state.inflight = null;
+			if (this.flushTimer) clearTimeout(this.flushTimer);
+			this.flushTimer = null;
+			this.saveState();
+		}
+		return this.cfg;
+	}
+
+	private noticeAllowed(at: number, epoch?: number): boolean {
+		if (!this.noticesEnabled()) return false;
+		const since = this.state.noticePolicy.since;
+		return (epoch === undefined || epoch === this.noticeEpoch) && since !== null && at >= since;
 	}
 
 	// -- event-loop sampling ----------------------------------------------------
@@ -646,6 +692,7 @@ export class ConnEvents {
 	// -- owner notices --------------------------------------------------------------
 
 	private noteEpisode(e: Omit<ConnNotice, "id" | "kind" | "more">): void {
+		if (!this.noticeAllowed(e.at)) return;
 		const t = this.now();
 		if (!this.sending && t - this.state.lastSentAt >= this.gapMs) {
 			// The held-back sum travels with it (and comes back if it doesn't go).
@@ -659,6 +706,7 @@ export class ConnEvents {
 	}
 
 	private hold(e: Pick<ConnNotice, "at" | "durMs" | "reason" | "maxLoopMs">): void {
+		if (!this.noticeAllowed(e.at)) return;
 		const p = this.state.pending ?? { count: 0, totalMs: 0, worstLoopMs: null, since: e.at, reasons: {} };
 		p.count++;
 		p.totalMs = Math.min(p.totalMs + e.durMs, MAX_MS * 7);
@@ -674,7 +722,7 @@ export class ConnEvents {
 	}
 
 	private scheduleFlush(): void {
-		if (this.flushTimer || !this.state.pending) return;
+		if (!this.noticesEnabled() || this.flushTimer || !this.state.pending) return;
 		const wait = Math.max(1_000, this.state.lastSentAt + this.gapMs - this.now());
 		this.flushTimer = setTimeout(() => {
 			this.flushTimer = null;
@@ -685,8 +733,14 @@ export class ConnEvents {
 
 	/** Held-back episodes, once the gap is over: one summary line. */
 	async flush(): Promise<void> {
+		if (!this.noticesEnabled() || this.sending) return;
 		const p = this.state.pending;
-		if (!p || this.sending || !this.enabled()) return;
+		if (!p) return;
+		if (!this.noticeAllowed(p.since)) {
+			this.state.pending = null;
+			this.saveState();
+			return;
+		}
 		if (this.now() - this.state.lastSentAt < this.gapMs) {
 			this.scheduleFlush();
 			return;
@@ -712,26 +766,29 @@ export class ConnEvents {
 
 	/** Hand one notice to the transport. `carried`: the held-back sum it carries, put back if it doesn't go. */
 	private async send(n: ConnNotice, carried: Pending | null): Promise<void> {
-		if (!this.enabled()) {
-			if (carried) this.state.pending = mergePending(carried, this.state.pending);
+		if (!this.noticeAllowed(n.at) || (n.more && !this.noticeAllowed(n.more.since))) {
+			this.saveState();
 			return;
 		}
+		const epoch = this.noticeEpoch;
+		const permitted = () => this.noticeAllowed(n.at, epoch);
 		this.sending = true;
 		this.state.inflight = n;
 		this.saveState();
 		let sent = false;
 		try {
-			sent = await this.deliver(n);
+			sent = await this.deliver(n, permitted);
 		} catch {
 			sent = false;
 		}
+		const current = permitted(); // may clear old backlog; a late completion cannot put it back
 		this.sending = false;
-		this.state.inflight = null;
+		if (this.state.inflight?.id === n.id) this.state.inflight = null;
 		const t = this.now();
 		if (sent) {
 			this.state.lastSentAt = t;
 			this.state.sentIds = [...this.state.sentIds, n.id].slice(-100);
-		} else {
+		} else if (current) {
 			// Not told: fold it (and what it carried) back into the sum. lastSentAt is the last try, so
 			// the next one waits a full gap and a missing or broken transport isn't hammered.
 			if (carried) this.state.pending = mergePending(carried, this.state.pending);
@@ -745,6 +802,7 @@ export class ConnEvents {
 			id: n.id,
 			notice: n.kind,
 			sent,
+			muted: !current,
 			held: n.more?.count ?? 0,
 		});
 		this.scheduleFlush();
@@ -771,7 +829,12 @@ export class ConnEvents {
 			const s = JSON.parse(readFileSync(join(this.dataDir, STATE_FILE), "utf8")) as Partial<NotifyState>;
 			const inflight =
 				s.inflight && typeof s.inflight === "object" && typeof s.inflight.id === "string" ? s.inflight : null;
+			const p = s.noticePolicy;
 			return {
+				noticePolicy:
+					p && typeof p.key === "string" && (p.since === null || (Number.isFinite(p.since) && p.since >= 0))
+						? p
+						: { key: "", since: null },
 				lastSentAt: typeof s.lastSentAt === "number" && Number.isFinite(s.lastSentAt) ? s.lastSentAt : 0,
 				sentIds: Array.isArray(s.sentIds) ? s.sentIds.filter((x) => typeof x === "string").slice(-100) : [],
 				pending: s.pending && typeof s.pending === "object" ? s.pending : null,
@@ -779,7 +842,14 @@ export class ConnEvents {
 				eps: Array.isArray(s.eps) ? s.eps.filter((x) => typeof x === "string").slice(-500) : [],
 			};
 		} catch {
-			return { lastSentAt: 0, sentIds: [], pending: null, inflight: null, eps: [] };
+			return {
+				noticePolicy: { key: "", since: null },
+				lastSentAt: 0,
+				sentIds: [],
+				pending: null,
+				inflight: null,
+				eps: [],
+			};
 		}
 	}
 
@@ -794,10 +864,14 @@ export class ConnEvents {
 	/** After a restart: a notice cut off mid-send is tried again with its own id (the transport skips
 	 *  it if it went), and held-back episodes still get their summary. */
 	resume(): void {
-		if (!this.enabled()) return;
+		if (!this.noticesEnabled()) return;
 		const n = this.state.inflight;
 		if (n && !this.sending) {
 			this.state.inflight = null;
+			if (!this.noticeAllowed(n.at) || (n.more && !this.noticeAllowed(n.more.since))) {
+				this.saveState();
+				return;
+			}
 			void this.send(n, n.more ? this.pendingOf(n) : null);
 			return;
 		}

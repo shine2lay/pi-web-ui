@@ -174,7 +174,7 @@ try {
 	console.warn(`[data] cannot create the data folder ${DATA_DIR}: ${(err as Error).message}`);
 }
 // reconnect-trace: metadata-only connection log + event-loop delay (server/conn-events.ts);
-// <dataDir>/conn-trace.json {"enabled": false} switches it and the owner notices off.
+// <dataDir>/conn-trace.json: enabled:false is master-off; notices must explicitly be true.
 const connEvents = new ConnEvents({ dataDir: DATA_DIR, sampler: true });
 connEvents.resume();
 // issue #295：工作区直接就是家目录时，SDK 初始化期的同步目录扫描会落在 $HOME 上
@@ -1075,6 +1075,20 @@ httpServer.on("upgrade", (req, socket, head) => {
 		wss.emit("connection", ws, req);
 	});
 });
+
+// Reconnect capture's runtime flag on existing authenticated sockets. This is a separate,
+// change-only metadata frame: never a new heartbeat, socket reconnect or chat state update.
+let traceCaptureOn = connEvents.enabled();
+const traceConfigTimer = setInterval(() => {
+	const on = connEvents.enabled();
+	if (on === traceCaptureOn) return;
+	traceCaptureOn = on;
+	const payload = JSON.stringify({ type: "conn_trace_config", on } satisfies ServerMessage);
+	for (const ws of wss.clients) {
+		if (ws.readyState === WebSocket.OPEN) ws.send(payload);
+	}
+}, 3_000);
+traceConfigTimer.unref?.();
 
 // Heartbeat: lets clients detect half-open connections (server killed without
 // closing sockets, sleep/wake, network partitions). Also broadcasts lightweight
@@ -4404,6 +4418,7 @@ async function shutdown(signal: "SIGINT" | "SIGTERM" = "SIGINT"): Promise<void> 
 	let code = 0;
 	try {
 		clearInterval(heartbeatTimer);
+		clearInterval(traceConfigTimer);
 		stopControl();
 		scheduler.stop();
 		pluginMgr.dispose();

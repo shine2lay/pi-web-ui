@@ -177,7 +177,8 @@ normal behaviour.
 
 ## Reconnect notices
 
-You asked to be told each time the app shows "Reconnecting…" (Ops task #157). The server records
+Reconnect notices are now silent by default (Owner rm-2917f21e, Ops task #157): keep tracking,
+stop notices. Only a new explicit Owner request may resume them. If opted in, the server records
 each episode in its connection log and hands the plugin a fixed set of facts: when, for how long,
 the cause (no frames from the server, the connection closed, no answer after coming back, catching
 up), the close code, and the longest stall the server measured meanwhile. The plugin sends you one
@@ -188,8 +189,11 @@ line, for example:
 At most one line every 10 minutes; what happens meanwhile is summed up in the next line
 ("+2 more since 19:37:10 …"). Each line goes once, also across a restart, and only to the
 Telegram id in the settings. The line is built here from those facts alone: no chat text and
-nothing a page wrote. `{"enabled": false}` in `~/.pi-web-ui/conn-trace.json` turns the log and
-these lines off.
+nothing a page wrote. In `~/.pi-web-ui/conn-trace.json`, `{"enabled": true,"notices": false}`
+keeps tracking silently. `{"enabled": false}` is master-off. Missing `notices` is silent; only
+explicit `true` allows notice submissions. Muting discards pending summaries/retries and old
+inflight backlog across restarts and later enabling; already-submitted delivery cannot be unsent.
+Rollback to old code must keep master-off: the old recorder ignores `notices:false`.
 
 ## Not included
 

@@ -6274,8 +6274,11 @@ during server main-thread stalls, not a lost socket. This patch only records; it
    itself ("🔌 Reconnecting at 19:42:10 for 7.2 s · no frames from the server · server stalled up to
    6.4 s"); sends it only to the configured owner id with the existing bot; remembers the last 50
    sent ids in its storage, so a replay after a restart isn't sent twice. Ask/reply routing unchanged.
-5. **One switch**: `<dataDir>/conn-trace.json` `{"enabled": false}` stops the log, the sampling, the
-   pages' records and the notices within 3 s, no restart; an unreadable file counts as off.
+5. **Capture and notice switches**: `<dataDir>/conn-trace.json` `{"enabled": false}` is master-off
+   (within 3 s). `{"enabled": true,"notices": false}` keeps tracking silently (Owner rm-2917f21e,
+   Ops #157 redirect). Notices require explicit `notices:true`; a missing field/file stays silent,
+   an unreadable/invalid file fails closed. A change-only `conn_trace_config` frame updates the
+   existing page's capture flag without changing heartbeat/indicator timing or reconnecting it.
 6. **Stall watcher** (follow-up commit, H-RECONNECT-STALL in the WORKING.md above): the first real
    events showed the histogram losing stalls. When a stall spans a 10 s sample, Node can run the late
    `sample()` before the histogram's own timer, and its `reset()` then throws the stall's delta away
@@ -6285,11 +6288,21 @@ during server main-thread stalls, not a lost socket. This patch only records; it
    `stallMaxMs`; a `banner`'s `loopMaxMs` (and the notice's stall) is the worst of the histogram and
    the stalls over the episode, with `stallMaxMs` beside it. The watcher resets nothing, so each stall
    is measured whole, to within one tick, whichever timer runs first. Off with the same switch.
+7. **No muted notice replay**: permission is checked before enqueue, send, transport fallback,
+   summary, retry and restart. A persisted config-incarnation/opt-in fence drops legacy or muted
+   backlog, delayed pre-opt-in episodes and old inflight failures, even after later enabling.
+   Already submitted delivery cannot be unsent; its late result never requeues old work. The
+   existing Telegram plugin and unrelated alarms are unchanged. Undo to old code: master-off first,
+   because old code ignores `notices:false`.
 
 Metadata only: no chat text, prompts, tool results, credentials, cookies, URLs, IPs or user agents.
 
 ### How it was checked
 
+- `tests/unit/conn-notices.test.ts`: full enabled/notices matrix, missing-field silence, unreadable
+  config (including permissions), immediate notice revocation across the capture cache, pending
+  summary/timer, delayed and inflight completion, retries, restart and fallback using fake transport;
+  old code fails the identical capture-on/notices-off case.
 - `tests/unit/conn-trace.test.ts` (new): every cause gives the right record; page stalls; cut by a
   reload; kept while no socket takes them.
 - `tests/unit/conn-events.test.ts` (new): loop windows; placing an episode over a 6.2 s stall; before
@@ -6301,9 +6314,10 @@ Metadata only: no chat text, prompts, tool results, credentials, cookies, URLs, 
   set up and stopping on unload. No real Telegram.
 - `tests/reconnect-trace-test.mjs` (new, sealed, own server, headless Chrome, no plugins): the page's
   connect is logged; a 7 s SIGSTOP of the server shows the note and leaves a `silence` record over the
-  stall with a measured loop delay of at least 6 s, plus the dropped socket's close code; the notice is
-  tried and not sent; a restart's close is recorded with its code; metadata only; switched off,
-  another stall leaves nothing. On mine without this patch it fails at its first check. Since the
+  stall with a measured loop delay of at least 6 s, plus the dropped socket's close code; missing
+  notice opt-in is silent; a restart's close is recorded with its code; metadata only; switched off,
+  another stall leaves nothing; silent runtime restoration flags the same socket and resumes samples
+  without a notice submission. On mine without this patch it fails at its first check. Since the
   stall watcher it also wants a `stall` line of at least 6 s over the stop.
 - Stall watcher, `tests/unit/conn-events.test.ts`: fake-clock ticks (a stall written with its start,
   in the window's line; the 21:49 shape placed at 20.6 s with the histogram at 0.5 s; off writes
