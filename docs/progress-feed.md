@@ -102,6 +102,26 @@ code first (AGENTS.md rule 17):
   lists the claims a script can't see, each with a quote from a linked record; code checks every quote, and a
   label counts only when no quote holds it. `feedReaderCheck: false` keeps only code's checks.
 
+What the check reads: each linked record together with the decisions and changes filed from it (their
+title, what, and the impact, options and until filled in with `decision_log`), and each linked decision or
+change with the records it cites; linking a record covers its decisions, so it also brings their fields. The
+reader gets the linked decisions and changes first (up to half its room, most relevant first), then the
+records. "Other decisions: not known." counts as not given. (Live catch-up, 2026-10-13: 12 of 13 reader flags
+on the first updates were false because the reader never saw the decision fields the sentences copied.)
+
+The reader asks the pool's first account that isn't resting and isn't signed out (pi-multi-pass's
+`multi-pass-quota/signin-failed.json`, read only, by its own rule). A reader call that fails is tried again 10
+minutes later, 3 tries in all; an update checked while the reader was off is read once it is on. A re-read only
+adds the reader's flags; it never removes one.
+
+Each reader label carries the reader's version (`READER_VERSION`, now 2) and when it was raised. Only the
+current version's labels count, on the page, in `initiative_update read`, in asks and in the open count; an
+older version's labels stay saved in `feed-state.json` but count nowhere, and their update is read again. A
+flag goes back to the lead once: in the next ask after it is raised, even when that update's other flags went
+back earlier. A newer reader's label is a new verdict: it goes back even where an older reader raised the same one,
+which may never have gone back (live: u3's old labels were saved while the reader was off at its ask). (Version
+1's labels were the false ones above.)
+
 Stand-alone: `node --import tsx scripts/feed-check.mts --update <file.json> --dir <decisions dir>` prints each
 sentence with its flags and why (`--id <update>` for a kept one, `--reader` to ask the model, `--claims
 <saved check>` to replay a saved reader answer). Stage tests (rule 16) and their planted sets:

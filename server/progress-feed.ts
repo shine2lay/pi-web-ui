@@ -41,16 +41,23 @@ import type {
 import { decisionView, sourceView } from "./decision-view.js";
 import { entryWho } from "./decision-who.js";
 import {
+	type CheckFlag,
 	type CheckedSentence,
 	type MaterialLookup,
+	READER_VERSION,
 	type UpdateCheck,
 	buildMaterial,
 	checkUpdate,
 	codeCheck,
 	isNotGiven,
 	materialLookup,
+	readerPass,
 	splitSentences,
 } from "./feed-check.js";
+
+/** Reader calls that failed for one update are tried again at most this many times in all, this far apart. */
+export const READER_TRIES = 3;
+export const READER_RETRY_MS = 10 * 60_000;
 import type {
 	UiDecisionSource,
 	UiFeedRow,
@@ -238,6 +245,15 @@ function minutesOf(hhmm: string): number {
 }
 
 const ENTRY_NUM = /^[dc](\d+)$/;
+
+/**
+ * Whether a flag counts: code's always; the reader's while its labels count (settings readerCheck), and only the
+ * current reader's. An older reader's labels stay saved but count nowhere: page, asks, open count (H-READER-VERSION).
+ */
+export function flagCounts(f: CheckFlag, settings: Pick<FeedSettings, "readerCheck">): boolean {
+	if (f.by === "code") return true;
+	return settings.readerCheck && (f.v ?? 1) === READER_VERSION;
+}
 
 function linkedBy(id: string, sources: readonly DecisionSourceRef[], linked: ReadonlySet<string>): boolean {
 	if (linked.has(id)) return true;
@@ -913,16 +929,71 @@ export class ProgressFeed {
 		return p;
 	}
 
+	/**
+	 * An update whose reader part is still owed: its reader call failed (fewer than READER_TRIES times, the last one
+	 * READER_RETRY_MS ago or more), or it was checked while the reader was off or had no model. Only while the reader
+	 * is on and a model is there. (Live catch-up, 2026-10-13: three reader calls failed on a signed-out account, and
+	 * those updates were never read again.)
+	 */
+	needsReread(id: string, settings: FeedSettings, now: number): boolean {
+		const r = this.state.checks[id]?.reader;
+		if (!r || !settings.readerCheck || !this.host.model?.()) return false;
+		if (r.skipped === "off" || r.skipped === "no model") return true;
+		// Read by an older reader, whose labels no longer count (H-READER-VERSION).
+		if (!r.error && !r.skipped) return (r.v ?? 1) < READER_VERSION;
+		if (!r.error) return false;
+		return (r.failed ?? 1) < READER_TRIES && now - r.at >= READER_RETRY_MS;
+	}
+
+	/**
+	 * Read a checked update again with the reader (code's part stays as saved). It only adds the reader's flags to
+	 * the saved sentences, never removes one: only a new update from the lead clears a flag.
+	 */
+	reread(rec: DecisionRecord): Promise<UpdateCheck> {
+		const running = this.checking.get(rec.id);
+		if (running) return running;
+		const saved = this.state.checks[rec.id];
+		if (!saved) return this.runCheck(rec);
+		const settings = this.settings();
+		const material = buildMaterial(rec.sources ?? [], this.lookup());
+		const sentences = saved.sentences.map((s) => ({ ...s, flags: s.flags.map((f) => ({ ...f })) }));
+		const failedBefore = saved.reader?.error ? (saved.reader.failed ?? 1) : 0;
+		// The reader's labels from this pass are new as of now, even where an older reader raised the same one: an
+		// older label counts nowhere, and it may never have gone back (live: u3's were raised while the reader was off
+		// at its ask), so treating the new one as already sent would hide it.
+		const p = readerPass(sentences, material, {
+			model: this.host.model?.(),
+			reader: settings.readerCheck,
+			now: () => this.now(),
+		})
+			.catch((err): NonNullable<UpdateCheck["reader"]> => ({ at: this.now(), error: (err as Error).message }))
+			.then((reader) => {
+				const check: UpdateCheck = reader.error
+					? { ...saved, reader: { ...reader, failed: failedBefore + 1 } }
+					: { at: saved.at, sentences, reader };
+				this.state.checks[rec.id] = check;
+				this.save();
+				const n = this.countedFlags(check, settings).length;
+				this.log(`${rec.id} read again: ${n} flagged${reader.error ? ` (reader: ${short(reader.error, 80)})` : ""}`);
+				this.host.changed?.();
+				return check;
+			})
+			.finally(() => this.checking.delete(rec.id));
+		this.checking.set(rec.id, p);
+		return p;
+	}
+
 	/** The flags that count: code's always; the reader's while its labels count (settings readerCheck). */
 	private countedFlags(
 		check: UpdateCheck | undefined,
 		settings: FeedSettings,
-	): { field: string; text: string; kind: string; by: string; claim: string; why: string }[] {
-		const out: { field: string; text: string; kind: string; by: string; claim: string; why: string }[] = [];
+	): { field: string; text: string; kind: string; by: string; claim: string; why: string; at: number }[] {
+		const out: { field: string; text: string; kind: string; by: string; claim: string; why: string; at: number }[] = [];
 		for (const s of check?.sentences ?? []) {
 			for (const f of s.flags) {
-				if (f.by === "reader" && !settings.readerCheck) continue;
+				if (!flagCounts(f, settings)) continue;
 				out.push({
+					at: f.at ?? check?.at ?? 0,
 					field: s.field === "needsYou" ? "needs you" : s.field,
 					text: s.text,
 					kind: f.kind,
@@ -935,25 +1006,34 @@ export class ProgressFeed {
 		return out;
 	}
 
-	/** Every checked update whose flags have not gone back yet, not just the last one in a turn. */
-	private flagsDue(c: Ctx, s: InitiativeFeedState): PokeTextInput["flags"] {
-		return [...c.updates]
-			.reverse()
-			.flatMap((u) =>
-				s.flagsSent?.[u.id] !== undefined || s.flagAsked === u.id
-					? []
-					: this.countedFlags(this.state.checks[u.id], c.settings).map((f) => ({ ...f, update: u.id })),
-			);
+	/** When an update's flags last went back to the lead (none: not yet). */
+	private sentAt(s: InitiativeFeedState, u: DecisionRecord): number | undefined {
+		return s.flagsSent?.[u.id] ?? (s.flagAsked === u.id ? (s.lastPoke ?? Number.POSITIVE_INFINITY) : undefined);
 	}
 
-	/** A sent flag awaits a new lead update; a clean update posted before its ask does not clear it. */
+	/**
+	 * Every flag that has not gone back to the lead yet, on every checked update, not just the last one in a turn;
+	 * that includes one a later read raised after the update's other flags went back.
+	 */
+	private flagsDue(c: Ctx, s: InitiativeFeedState): PokeTextInput["flags"] {
+		return [...c.updates].reverse().flatMap((u) => {
+			const sent = this.sentAt(s, u);
+			return this.countedFlags(this.state.checks[u.id], c.settings)
+				.filter((f) => sent === undefined || f.at > sent)
+				.map(({ at: _at, ...f }) => ({ ...f, update: u.id }));
+		});
+	}
+
+	/** A flag is open until it went back and a new lead update followed; a clean update posted before its ask does not clear it. */
 	private openFlagCount(c: Ctx, s: InitiativeFeedState): number {
 		const lastAt = this.lastUpdate(c)?.at ?? 0;
 		return c.updates.reduce((n, u) => {
-			const sentAt = s.flagsSent?.[u.id] ?? (s.flagAsked === u.id ? s.lastPoke : undefined);
+			const sent = this.sentAt(s, u);
 			return (
 				n +
-				(sentAt === undefined || lastAt <= sentAt ? this.countedFlags(this.state.checks[u.id], c.settings).length : 0)
+				this.countedFlags(this.state.checks[u.id], c.settings).filter(
+					(f) => sent === undefined || f.at > sent || lastAt <= sent,
+				).length
 			);
 		}, 0);
 	}
@@ -1145,6 +1225,11 @@ export class ProgressFeed {
 				// Updates not checked yet (a restart cut a check off), one at a time.
 				const unchecked = c.updates.find((u) => !this.state.checks[u.id] && !this.checking.has(u.id));
 				if (unchecked && this.checking.size === 0) void this.runCheck(unchecked);
+				else if (!unchecked && this.checking.size === 0) {
+					// Then updates whose reader part is still owed, oldest first, one at a time.
+					const owed = [...c.updates].sort((a, b) => a.at - b.at).find((u) => this.needsReread(u.id, settings, now));
+					if (owed) void this.reread(owed);
+				}
 			}
 			if (dirty) {
 				this.save();
@@ -1351,7 +1436,7 @@ export class ProgressFeed {
 		const sentences: UiUpdateSentence[] = (check?.sentences ?? []).map((s: CheckedSentence) => ({
 			field: s.field,
 			text: s.text,
-			flags: s.flags.filter((fl) => fl.by === "code" || c.settings.readerCheck).map((fl) => ({ ...fl })),
+			flags: s.flags.filter((fl) => flagCounts(fl, c.settings)).map(({ v: _v, at: _at, ...fl }) => ({ ...fl })),
 		}));
 		const name = this.host.roles().find((r) => r.id === u.from)?.name ?? u.from;
 		return {

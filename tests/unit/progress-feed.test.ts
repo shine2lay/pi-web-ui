@@ -3,7 +3,7 @@
  * their own or their task's initiative, initiative_update (lead-only post, the unlinked list), the asks'
  * triggers and throttle on a fake clock, the ask's delivery, and code's part of the second-hand check.
  */
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -21,16 +21,24 @@ import {
 	checkUpdate,
 	codeCheck,
 	isNotGiven,
+	materialLookup,
 	readerFlags,
+	readerMaterial,
+	READER_TOTAL_MAX,
+	READER_VERSION,
+	type MaterialItem,
 	type MaterialLookup,
 } from "../../server/feed-check.js";
 import type { DecisionModel } from "../../server/decision-model.js";
 import type { IdentityDef } from "../../server/identities.js";
 import {
+	FEED_STATE_FILE,
 	needsYouCount,
 	OWNER_REQUEST,
 	pokeTextOf,
 	ProgressFeed,
+	READER_RETRY_MS,
+	READER_TRIES,
 	type FeedHost,
 	type PokeWhy,
 } from "../../server/progress-feed.js";
@@ -958,5 +966,323 @@ describe("the second-hand check (code)", () => {
 		expect(calls).toBe(2);
 		expect(check.reader?.error).toBeUndefined();
 		expect(check.sentences[0]!.flags.map((f) => `${f.kind}:${f.by}`)).toEqual(["option:reader"]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// The check's material and the reader's re-reads (live catch-up, 2026-10-13)
+// ---------------------------------------------------------------------------
+
+describe("the check's material and re-reads (live catch-up, 2026-10-13)", () => {
+	function linked() {
+		const records = new DecisionRecords(join(dir, "lm"), { now: () => now });
+		records.append(message("m1", local(9, 10), "Temper will keep the trial on temper-dev."));
+		const rec = records.list()[0]!;
+		const src = { record: rec.id, at: rec.at, quotes: [], by: "reader" };
+		const d = {
+			id: "d7",
+			initiative: TIT,
+			title: "Trial on temper-dev",
+			what: "Keep the trial on temper-dev.",
+			at: rec.at,
+			sources: [src],
+			impact: { text: "It saves 30% of the tokens a run.", by: "role:architecture", at: rec.at },
+			changes: [
+				{
+					id: "c3",
+					what: "Moved the trial to account 4.",
+					at: rec.at,
+					sources: [src],
+					until: { text: "Until Oct 20.", by: "role:architecture", at: rec.at },
+				},
+			],
+		} as unknown as DecisionEntry;
+		return { rec: rec.id, look: materialLookup(records.list(), [d]) };
+	}
+
+	it("a linked record brings the decisions and changes filed from it, with their filled-in fields", () => {
+		const { rec, look } = linked();
+		expect(buildMaterial([rec], look).map((m) => `${m.kind}:${m.id}:${m.via ?? ""}`)).toEqual([
+			`record:${rec}:`,
+			`decision:d7:${rec}`,
+			`change:c3:${rec}`,
+		]);
+		// u1 linked only records and copied their decisions' filled-in fields word for word.
+		const flags = (changed: string) =>
+			codeCheck({ changed, next: "", needsYou: "" }, buildMaterial([rec], look)).flatMap((s) =>
+				s.flags.map((f) => `${f.kind}:${f.claim}`),
+			);
+		expect(flags("It saves 30% of the tokens a run.")).toEqual([]);
+		expect(flags("The trial runs until Oct 20.")).toEqual([]);
+		expect(flags("It saves 50% of the tokens a run.")).toEqual([expect.stringMatching(/^impact:50%/)]);
+	});
+
+	it("the reader sees the linked decisions first, then the records, within its room", () => {
+		const words = "keep trial temper dev saves tokens run account ";
+		const records: MaterialItem[] = Array.from({ length: 20 }, (_, i) => ({
+			id: `dr-${i}`,
+			kind: "record",
+			text: words.repeat(600).slice(0, 4000),
+			ats: [],
+			owner: [],
+		}));
+		const decisions: MaterialItem[] = ["d1", "d2", "d3"].map((id) => ({
+			id,
+			kind: "decision",
+			text: "Trial on temper-dev. Saves tokens.",
+			ats: [],
+			owner: [],
+		}));
+		const got = readerMaterial(
+			[{ text: "Keep the trial on temper-dev; it saves 30% of the tokens a run on account 4." }],
+			[...records, ...decisions],
+		);
+		for (const d of decisions) expect(got).toContain(d);
+		expect(got.filter((m) => m.kind === "record").length).toBeGreaterThan(10);
+		expect(got.reduce((n, m) => n + Math.min(m.text.length, 4000), 0)).toBeLessThanOrEqual(READER_TOTAL_MAX);
+	});
+
+	it("reads 'Other decisions: not known.' as not given", () => {
+		expect(isNotGiven("Other decisions: not known.")).toBe(true);
+		expect(isNotGiven("The rest: not known.")).toBe(true);
+		expect(isNotGiven("Other options: a second account.")).toBe(false);
+	});
+
+	const flush = () => new Promise((resolve) => setTimeout(resolve, 20));
+	const claimReply = JSON.stringify({
+		sentences: [1, 2, 3].map((n) => ({
+			n,
+			claims: [{ kind: "option", claim: "move Team runs to account 3", evidence: [] }],
+		})),
+	});
+	const replyOf = (ok: boolean) =>
+		ok
+			? { ok: true as const, text: claimReply, model: "fake/model", usage: { input: 1, output: 1 } }
+			: { ok: false as const, error: "the model call ran out of time (no answer)" };
+	async function postOne(fx: Fx) {
+		const r = decide(fx, message("m1", now, "Temper will keep the trial on temper-dev."), "Trial on temper-dev");
+		const posted = await fx.feed.post(
+			lead,
+			{
+				initiative: TIT,
+				changed: "You decided to keep the trial on temper-dev.",
+				options: "The other option was to move Team runs to account 3.",
+				sources: [r.rec],
+			},
+			0,
+		);
+		if (!posted.ok) throw new Error(posted.error);
+		// the post starts its check
+		await flush();
+		return fx.records.list().find((x) => x.id === posted.id)!;
+	}
+	const flagsOf = (fx: Fx, id: string) =>
+		fx.feed.snapshot().checks[id]!.sentences.flatMap((s) => s.flags.map((f) => `${s.field}:${f.kind}:${f.by}`));
+
+	it("reads again an update whose reader call failed, 10 minutes apart and 3 tries in all, adding flags only", async () => {
+		const answers = [false, false, true];
+		let calls = 0;
+		const fx = fixture({ model: async () => replyOf(answers[calls++] ?? true) });
+		const rec = await postOne(fx);
+		expect(calls).toBe(1);
+		expect(fx.feed.snapshot().checks[rec.id]!.reader?.error).toBeTruthy();
+		const codeFlags = flagsOf(fx, rec.id);
+		expect(codeFlags).toEqual(["changed:owner:code"]);
+		const settings = fx.feed.settings();
+		expect(fx.feed.needsReread(rec.id, settings, now + READER_RETRY_MS - 1)).toBe(false);
+		now += READER_RETRY_MS - 60_000;
+		await fx.feed.tick();
+		await flush();
+		expect(calls).toBe(1);
+		now += 60_000;
+		await fx.feed.tick();
+		await flush();
+		expect(calls).toBe(2);
+		expect(fx.feed.snapshot().checks[rec.id]!.reader?.failed).toBe(2);
+		expect(flagsOf(fx, rec.id)).toEqual(codeFlags);
+		now += READER_RETRY_MS;
+		await fx.feed.tick();
+		await flush();
+		expect(calls).toBe(3);
+		const check = fx.feed.snapshot().checks[rec.id]!;
+		expect(check.reader?.error).toBeUndefined();
+		// code's flag stays; the reader's are added
+		expect(flagsOf(fx, rec.id)).toEqual(expect.arrayContaining(["changed:owner:code", "options:option:reader"]));
+		now += READER_RETRY_MS;
+		await fx.feed.tick();
+		await flush();
+		expect(calls).toBe(3);
+	});
+
+	it(`stops after ${READER_TRIES} failed reader calls`, async () => {
+		let calls = 0;
+		const fx = fixture({
+			model: async () => {
+				calls++;
+				return replyOf(false);
+			},
+		});
+		const rec = await postOne(fx);
+		for (let i = 0; i < 4; i++) {
+			now += READER_RETRY_MS;
+			await fx.feed.tick();
+			await flush();
+		}
+		expect(calls).toBe(READER_TRIES);
+		expect(fx.feed.snapshot().checks[rec.id]!.reader?.failed).toBe(READER_TRIES);
+	});
+
+	it("reads an update checked while the reader was off once it is on", async () => {
+		let offCalls = 0;
+		const fx2 = fixture({
+			model: async () => {
+				offCalls++;
+				return replyOf(true);
+			},
+		});
+		const settingsFile = join(fx2.ddir, SETTINGS_FILE);
+		writeFileSync(settingsFile, JSON.stringify({ enabled: false, feedInitiatives: [TIT], feedReaderCheck: false }));
+		const rec2 = await postOne(fx2);
+		expect(offCalls).toBe(0);
+		expect(fx2.feed.snapshot().checks[rec2.id]!.reader?.skipped).toBe("off");
+		await fx2.feed.tick();
+		await flush();
+		expect(offCalls).toBe(0);
+		writeFileSync(settingsFile, JSON.stringify({ enabled: false, feedInitiatives: [TIT], feedReaderCheck: true }));
+		await fx2.feed.tick();
+		await flush();
+		expect(offCalls).toBe(1);
+		expect(flagsOf(fx2, rec2.id)).toEqual(expect.arrayContaining(["changed:owner:code", "options:option:reader"]));
+	});
+
+	// H-READER-VERSION: the first reader's labels were shown wrong live; they stay saved but count nowhere, and the
+	// update is read again by the current reader.
+	it("an older reader's labels don't count, and the update is read again", async () => {
+		let calls = 0;
+		const model: DecisionModel = async () => {
+			calls++;
+			return replyOf(true);
+		};
+		const fx = fixture({ model });
+		const rec = await postOne(fx);
+		expect(calls).toBe(1);
+		expect(fx.feed.snapshot().checks[rec.id]!.reader?.v).toBe(READER_VERSION);
+		// Make the saved check look like the first reader's (no version on its labels or its answer).
+		fx.feed.stop();
+		const file = join(fx.ddir, FEED_STATE_FILE);
+		const state = JSON.parse(readFileSync(file, "utf8"));
+		const check = state.checks[rec.id];
+		delete check.reader.v;
+		for (const s of check.sentences)
+			for (const f of s.flags) {
+				delete f.v;
+				delete f.at;
+				if (f.by === "reader") f.kind = "date"; // a label the current reader won't give again
+			}
+		writeFileSync(file, JSON.stringify(state));
+		const fx2 = fixture({ model });
+		const shown = () =>
+			fx2.feed
+				.view(TIT)
+				?.updates.find((u) => u.id === rec.id)
+				?.check.sentences.flatMap((s) => s.flags.map((f) => `${s.field}:${f.kind}:${f.by}`));
+		// Saved, but not counted: not on the page, not in the read, not in an ask.
+		expect(flagsOf(fx2, rec.id)).toEqual(expect.arrayContaining(["options:date:reader"]));
+		expect(shown()).toEqual(["changed:owner:code"]);
+		const read = fx2.feed.read(TIT, rec.id);
+		expect(read.ok && read.text).toContain("check: 1 flagged");
+		fx2.feed.ask(TIT);
+		expect(fx2.pokes[0]!.text).toContain("You decided to keep the trial on temper-dev.");
+		expect(fx2.pokes[0]!.text).not.toContain("The other option was to move Team runs to account 3.");
+		// Read again by the current reader: its label counts; the old one stays saved.
+		expect(fx2.feed.needsReread(rec.id, fx2.feed.settings(), now)).toBe(true);
+		fx2.states.set(fx2.pokes[0]!.id, "delivered");
+		await fx2.feed.tick();
+		await flush();
+		expect(calls).toBe(2);
+		expect(fx2.feed.snapshot().checks[rec.id]!.reader?.v).toBe(READER_VERSION);
+		expect(flagsOf(fx2, rec.id)).toEqual(
+			expect.arrayContaining(["changed:owner:code", "options:date:reader", "options:option:reader"]),
+		);
+		expect(shown()).toEqual(["changed:owner:code", "changed:option:reader", "options:option:reader"]);
+		expect(fx2.feed.needsReread(rec.id, fx2.feed.settings(), now + READER_RETRY_MS)).toBe(false);
+	});
+
+	it("a flag a later read raises goes back to the lead in the next ask, once, even after the update's flags went back", async () => {
+		const answers = [false, true];
+		let calls = 0;
+		const fx = fixture({ model: async () => replyOf(answers[calls++] ?? true) });
+		const rec = await postOne(fx);
+		// Code's owner flag goes back first (the reader failed).
+		now += 60_000;
+		fx.feed.ask(TIT);
+		expect(fx.pokes).toHaveLength(1);
+		expect(fx.pokes[0]!.text).toContain("Your updates have 1 flagged sentence not sent back yet");
+		expect(fx.pokes[0]!.text).toContain("You decided to keep the trial on temper-dev.");
+		expect(fx.pokes[0]!.text).not.toContain("The other option was to move Team runs to account 3.");
+		fx.states.set(fx.pokes[0]!.id, "delivered");
+		// Read again 10 minutes later: the reader's option flag is new.
+		now += READER_RETRY_MS;
+		await fx.feed.tick();
+		await flush();
+		expect(calls).toBe(2);
+		// code's sent flag (no lead update since) + the reader's two new ones
+		expect(fx.feed.status()[TIT]).toMatchObject({ openFlags: 3 });
+		now += 60_000;
+		fx.feed.ask(TIT);
+		expect(fx.pokes).toHaveLength(2);
+		// only the reader's two: code's flag went back already
+		expect(fx.pokes[1]!.text).toContain("Your updates have 2 flagged sentences not sent back yet");
+		expect(fx.pokes[1]!.text).toContain("The other option was to move Team runs to account 3.");
+		fx.states.set(fx.pokes[1]!.id, "delivered");
+		now += 60_000;
+		fx.feed.ask(TIT);
+		expect(fx.pokes).toHaveLength(3);
+		expect(fx.pokes[2]!.text).not.toContain("flagged sentence");
+		expect(fx.pokes[2]!.text).not.toContain("The other option was to move Team runs to account 3.");
+	});
+
+	// Live u3: the old reader's label was saved, but the update's flags went back while it didn't count, so only
+	// code's flag went. The new reader raises the same label: it is new and goes back, once; it must not look sent.
+	it("the new reader's label goes back even where an older reader raised the same one", async () => {
+		let calls = 0;
+		const model: DecisionModel = async () => {
+			calls++;
+			return replyOf(true);
+		};
+		const fx = fixture({ model });
+		const rec = await postOne(fx);
+		expect(calls).toBe(1);
+		// Make the saved check the first reader's, before any ask.
+		fx.feed.stop();
+		const file = join(fx.ddir, FEED_STATE_FILE);
+		const state = JSON.parse(readFileSync(file, "utf8"));
+		delete state.checks[rec.id].reader.v;
+		for (const s of state.checks[rec.id].sentences) for (const f of s.flags) delete f.v;
+		writeFileSync(file, JSON.stringify(state));
+		const fx2 = fixture({ model });
+		now += 60_000;
+		fx2.feed.ask(TIT);
+		expect(fx2.pokes[0]!.text).toContain("Your updates have 1 flagged sentence not sent back yet");
+		expect(fx2.pokes[0]!.text).toContain("You decided to keep the trial on temper-dev.");
+		expect(fx2.pokes[0]!.text).not.toContain("The other option was to move Team runs to account 3.");
+		fx2.states.set(fx2.pokes[0]!.id, "delivered");
+		// Read again by the current reader: the same option label, now counted, and not sent yet.
+		now += 60_000;
+		await fx2.feed.tick();
+		await flush();
+		expect(calls).toBe(2);
+		expect(flagsOf(fx2, rec.id).filter((f) => f === "options:option:reader")).toHaveLength(2);
+		now += 60_000;
+		fx2.feed.ask(TIT);
+		expect(fx2.pokes).toHaveLength(2);
+		// the reader's two labels (changed and options); code's flag went back already
+		expect(fx2.pokes[1]!.text).toContain("Your updates have 2 flagged sentences not sent back yet");
+		expect(fx2.pokes[1]!.text).toContain("The other option was to move Team runs to account 3.");
+		fx2.states.set(fx2.pokes[1]!.id, "delivered");
+		now += 60_000;
+		fx2.feed.ask(TIT);
+		expect(fx2.pokes[2]!.text).not.toContain("flagged sentence");
+		expect(fx2.pokes[2]!.text).not.toContain("The other option was to move Team runs to account 3.");
 	});
 });

@@ -140,6 +140,49 @@ export function pickAccount(members: readonly string[], avoid: readonly string[]
 	return members.find((m) => !avoid.includes(m));
 }
 
+/** How long pi-multi-pass skips an account whose sign-in server couldn't be reached (its UNREACHABLE_PAUSE_MS). */
+const SIGN_IN_UNREACHABLE_MS = 2 * 60_000;
+
+/**
+ * Pool accounts whose sign-in pi-multi-pass has marked as failed, by the same rule it skips them with
+ * (extensions/mine/signin-failover.ts SignInFailures.current): the mark in multi-pass-quota/signin-failed.json holds
+ * while the stored login's type and expiry are unchanged, and an "unreachable" mark only for 2 minutes. Read only:
+ * this never clears a mark and never reads a token. (Live, 2026-10-13: "auto" kept asking an account signed out
+ * since 02:51, and each reader call hung until its 180 s timeout.)
+ */
+export function signedOutAccounts(agentDir: string, now = Date.now()): string[] {
+	let marks: Record<string, { at?: unknown; kind?: unknown; stamp?: unknown }>;
+	let logins: Record<string, { type?: unknown; expires?: unknown }> = {};
+	try {
+		const file = JSON.parse(readFileSync(join(agentDir, "multi-pass-quota", "signin-failed.json"), "utf8")) as {
+			version?: number;
+			accounts?: typeof marks;
+		};
+		if (file?.version !== 1 || !file.accounts || typeof file.accounts !== "object") return [];
+		marks = file.accounts;
+	} catch {
+		return [];
+	}
+	try {
+		logins = JSON.parse(readFileSync(join(agentDir, "auth.json"), "utf8")) as typeof logins;
+	} catch {
+		/* no stored logins: every stamp is null */
+	}
+	const stampOf = (provider: string): string | null => {
+		const c = logins?.[provider];
+		if (!c || typeof c !== "object") return null;
+		return `${typeof c.type === "string" ? c.type : "?"}:${typeof c.expires === "number" ? c.expires : "?"}`;
+	};
+	const out: string[] = [];
+	for (const [provider, mark] of Object.entries(marks)) {
+		if (!mark || typeof mark.at !== "number") continue;
+		if ((mark.stamp ?? null) !== stampOf(provider)) continue;
+		if (mark.kind !== "refused" && now - mark.at >= SIGN_IN_UNREACHABLE_MS) continue;
+		out.push(provider);
+	}
+	return out;
+}
+
 /** A provider error that means the account hit its limit (HTTP 429, rate or usage limit), not a passing fault. */
 export function isLimitRefusal(error: string | undefined): boolean {
 	return (
@@ -220,12 +263,16 @@ export function isolatedDecisionModel(env: DecisionModelEnv): DecisionModel {
 				let id: string;
 				if (!call.model || call.model === "auto") {
 					const members = claudePoolMembers(env.agentDir);
-					const picked = pickAccount(members, call.avoid);
+					const signedOut = signedOutAccounts(env.agentDir);
+					const picked = pickAccount(members, [...(call.avoid ?? []), ...signedOut]);
 					if (!picked) {
+						const out = members.filter((m) => signedOut.includes(m));
 						return {
 							ok: false,
 							limited: true,
-							error: `every Claude account of the chat pool (${members.join(", ")}) is resting after a limit refusal`,
+							error: `every Claude account of the chat pool (${members.join(", ")}) is resting after a limit refusal${
+								out.length ? ` or signed out (${out.join(", ")})` : ""
+							}`,
 						};
 					}
 					provider = picked;

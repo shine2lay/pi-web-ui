@@ -51,7 +51,18 @@ export interface CheckFlag {
 	claim: string;
 	/** Why, in plain words. */
 	why: string;
+	/** The reader's: which version of the reader raised it (none = version 1). Only READER_VERSION's count. */
+	v?: number;
+	/** When it was raised, when that differs from the check's time (a later read). */
+	at?: number;
 }
+
+/**
+ * The reader's version. Version 1's labels were shown wrong by the live catch-up (2026-10-13: 12 of 13 false,
+ * because it never saw the decision fields the sentences copied); version 2 reads a linked record's decisions first.
+ * Labels of an older version are kept but no longer count, and the update is read again.
+ */
+export const READER_VERSION = 2;
 
 export interface CheckedSentence {
 	n: number;
@@ -67,7 +78,17 @@ export interface UpdateCheck {
 	 * The reader's part: which model read it, or why it couldn't (then only code's flags stand). claims: what it
 	 * answered, by sentence number, so a check can be replayed without the model (scripts/feed-check.mts --claims).
 	 */
-	reader?: { at: number; model?: string; error?: string; skipped?: string; claims?: Record<string, ReaderClaim[]> };
+	reader?: {
+		at: number;
+		model?: string;
+		error?: string;
+		skipped?: string;
+		/** The reader's version that answered (none = version 1). */
+		v?: number;
+		claims?: Record<string, ReaderClaim[]>;
+		/** How many reader calls failed for this update (the feed tries again a few times). */
+		failed?: number;
+	};
 }
 
 /** The owner's own words one linked item holds (an owner record behind it), and the words around them. */
@@ -87,15 +108,17 @@ export interface MaterialItem {
 	/** When it happened (a record's time; an entry's time and its sources'). */
 	ats: number[];
 	owner: OwnerBacking[];
-	/** A record reached through a linked decision or change: which one. */
+	/** Reached through a linked item: a record a linked decision or change cites, or an entry filed from a linked record. */
 	via?: string;
 }
 
-/** The entries (decisions and changes) that cite a record, for its owner backing. */
+/** The entries (decisions and changes) that cite a record, for its owner backing and the material it brings. */
 export interface EntryOnRecord {
 	src: DecisionSourceRef;
 	title: string;
 	what: string;
+	/** The entry's id (d123, c45). */
+	id?: string;
 }
 
 export interface MaterialLookup {
@@ -150,7 +173,8 @@ const NOT_GIVEN_FILLER = new Set(
 	(
 		"for and or the a an of in on as here feed linked record records recorded decision decisions entry entries its their " +
 		"impact impacts option options until date dates cost costs field fields have has had is are was were any yet all each " +
-		"these those them it this that none not no known given shown stated unknown recorded listed filled n a so far"
+		"these those them it this that none not no known given shown stated unknown recorded listed filled n a so far " +
+		"other others rest remaining else"
 	).split(" "),
 );
 const NOT_GIVEN_PHRASE =
@@ -261,10 +285,10 @@ export function materialLookup(
 	};
 	for (const d of decisions) {
 		decisionById.set(d.id, d);
-		for (const s of d.sources) if (s.record) push(s.record, { src: s, title: d.title, what: d.what });
+		for (const s of d.sources) if (s.record) push(s.record, { src: s, title: d.title, what: d.what, id: d.id });
 		for (const ch of d.changes) {
 			changeById.set(ch.id, { decision: d, change: ch });
-			for (const s of ch.sources) if (s.record) push(s.record, { src: s, title: d.title, what: ch.what });
+			for (const s of ch.sources) if (s.record) push(s.record, { src: s, title: d.title, what: ch.what, id: ch.id });
 		}
 	}
 	return {
@@ -275,10 +299,16 @@ export function materialLookup(
 	};
 }
 
-/** What an update's sources hold: each linked record, decision and change, and the records those cite. */
+/**
+ * What an update's sources hold: each linked record with the decisions and changes filed from it (their title, what
+ * and filled-in impact, options and until: linking a record links them, as coverage counts), and each linked
+ * decision and change with the records it cites. (Live catch-up, 2026-10-13: an update that linked only records was
+ * flagged for copying those decisions' filled-in fields word for word.)
+ */
 export function buildMaterial(sourceIds: readonly string[], look: MaterialLookup): MaterialItem[] {
 	const out: MaterialItem[] = [];
 	const seen = new Set<string>();
+	const expanded = new Set<string>();
 	const addRecord = (id: string, via?: string): void => {
 		if (seen.has(id)) return;
 		const rec = look.record(id);
@@ -293,40 +323,57 @@ export function buildMaterial(sourceIds: readonly string[], look: MaterialLookup
 			...(via ? { via } : {}),
 		});
 	};
+	const addDecision = (id: string, via?: string): DecisionEntry | undefined => {
+		const d = look.decision(id);
+		if (!d || seen.has(id)) return undefined;
+		seen.add(id);
+		out.push({
+			id,
+			kind: "decision",
+			text: entryText(d),
+			ats: [d.at, ...d.sources.map((s) => s.at)],
+			owner: entryBacking(id, d.sources, `${d.title}\n${d.what}`, look),
+			...(via ? { via } : {}),
+		});
+		return d;
+	};
+	const addChange = (id: string, via?: string): DecisionChange | undefined => {
+		const hit = look.change(id);
+		if (!hit || seen.has(id)) return undefined;
+		seen.add(id);
+		const { decision: d, change: c } = hit;
+		out.push({
+			id,
+			kind: "change",
+			text: changeText(d, c),
+			ats: [c.at, ...c.sources.map((s) => s.at)],
+			owner: entryBacking(id, c.sources, `${c.what}\n${d.title}`, look),
+			...(via ? { via } : {}),
+		});
+		return c;
+	};
 	for (const raw of sourceIds) {
 		const id = raw.trim().toLowerCase();
 		if (id.startsWith("dr-")) {
 			addRecord(id);
+			if (expanded.has(id) || !look.record(id)) continue;
+			expanded.add(id);
+			for (const e of look.entriesOn(id)) {
+				const eid = e.id?.trim().toLowerCase();
+				if (!eid) continue;
+				if (/^d\d+$/.test(eid)) addDecision(eid, id);
+				else if (/^c\d+$/.test(eid)) addChange(eid, id);
+			}
 			continue;
 		}
 		if (/^d\d+$/.test(id)) {
-			const d = look.decision(id);
-			if (!d || seen.has(id)) continue;
-			seen.add(id);
-			const ctx = `${d.title}\n${d.what}`;
-			out.push({
-				id,
-				kind: "decision",
-				text: entryText(d),
-				ats: [d.at, ...d.sources.map((s) => s.at)],
-				owner: entryBacking(id, d.sources, ctx, look),
-			});
-			for (const s of d.sources) if (s.record) addRecord(s.record, id);
+			const d = addDecision(id);
+			if (d) for (const s of d.sources) if (s.record) addRecord(s.record, id);
 			continue;
 		}
 		if (/^c\d+$/.test(id)) {
-			const hit = look.change(id);
-			if (!hit || seen.has(id)) continue;
-			seen.add(id);
-			const { decision: d, change: c } = hit;
-			out.push({
-				id,
-				kind: "change",
-				text: changeText(d, c),
-				ats: [c.at, ...c.sources.map((s) => s.at)],
-				owner: entryBacking(id, c.sources, `${c.what}\n${d.title}`, look),
-			});
-			for (const s of c.sources) if (s.record) addRecord(s.record, id);
+			const c = addChange(id);
+			if (c) for (const s of c.sources) if (s.record) addRecord(s.record, id);
 		}
 	}
 	return out;
@@ -772,9 +819,12 @@ export const READER_ITEM_MAX = 4000;
 export const READER_TOTAL_MAX = 60_000;
 
 /**
- * The sources the reader sees, most relevant first, within READER_TOTAL_MAX characters: an update can link
- * hundreds of entries, and quotes only count from a source that shares words with the claim anyway. Items
- * sharing no word with any sentence are left out; the rest keep their linked order among equals.
+ * The sources the reader sees, within READER_TOTAL_MAX characters: an update can link hundreds of entries, and
+ * quotes only count from a source that shares words with the claim anyway. Items sharing no word with any sentence
+ * are left out. Decisions and changes come first, most relevant first, up to half the room: they are short and hold
+ * the filled-in impact, options and until a lead copies (live catch-up, 2026-10-13: ranked with the records by
+ * shared words, long records filled the room and every linked decision was left out). Then the records, most
+ * relevant first; then any entries left over, while there is room. Equals keep their linked order.
  */
 export function readerMaterial(
 	sentences: readonly { text: string }[],
@@ -782,19 +832,27 @@ export function readerMaterial(
 ): MaterialItem[] {
 	const want = new Set<string>();
 	for (const s of sentences) for (const w of wordsOf(s.text, true)) want.add(w);
-	const scored = material.map((m, i) => {
-		let hits = 0;
-		for (const w of wordsOf(m.text.slice(0, READER_ITEM_MAX), true)) if (want.has(w)) hits++;
-		return { m, i, hits };
-	});
+	const ranked = material
+		.map((m, i) => {
+			let hits = 0;
+			for (const w of wordsOf(m.text.slice(0, READER_ITEM_MAX), true)) if (want.has(w)) hits++;
+			return { m, i, hits, taken: false };
+		})
+		.filter((x) => x.hits > 0)
+		.sort((a, b) => b.hits - a.hits || a.i - b.i);
 	const out: MaterialItem[] = [];
 	let total = 0;
-	for (const s of scored.filter((x) => x.hits > 0).sort((a, b) => b.hits - a.hits || a.i - b.i)) {
-		const len = Math.min(s.m.text.length, READER_ITEM_MAX);
-		if (total + len > READER_TOTAL_MAX) continue;
+	const take = (x: (typeof ranked)[number], room: number): void => {
+		if (x.taken) return;
+		const len = Math.min(x.m.text.length, READER_ITEM_MAX);
+		if (total + len > room) return;
 		total += len;
-		out.push(s.m);
-	}
+		x.taken = true;
+		out.push(x.m);
+	};
+	for (const x of ranked) if (x.m.kind !== "record") take(x, READER_TOTAL_MAX / 2);
+	for (const x of ranked) if (x.m.kind === "record") take(x, READER_TOTAL_MAX);
+	for (const x of ranked) if (x.m.kind !== "record") take(x, READER_TOTAL_MAX);
 	return out;
 }
 
@@ -937,6 +995,7 @@ export function readerFlags(
 	s: { field: UpdateFieldName; text: string },
 	claims: readonly ReaderClaim[] | undefined,
 	material: readonly MaterialItem[],
+	at?: number,
 ): CheckFlag[] {
 	if (isNotGiven(s.text)) return [];
 	const list = [...(claims ?? [])];
@@ -955,6 +1014,8 @@ export function readerFlags(
 			by: "reader",
 			claim: c.claim || s.text.slice(0, 200),
 			why: named ? "The words it cites aren't in that linked record." : "No linked record says this.",
+			v: READER_VERSION,
+			...(at !== undefined ? { at } : {}),
 		});
 	}
 	return out;
@@ -978,11 +1039,23 @@ export async function checkUpdate(
 ): Promise<UpdateCheck> {
 	const now = opts.now ?? Date.now;
 	const sentences = codeCheck(update, material);
+	const reader = await readerPass(sentences, material, opts);
+	return { at: now(), sentences, reader };
+}
+
+/**
+ * The reader's part of a check, on code's checked sentences: adds its flags to them (never removes one) and says
+ * what it did. Also used to read an update again whose reader call failed or was off (ProgressFeed.reread).
+ */
+export async function readerPass(
+	sentences: CheckedSentence[],
+	material: readonly MaterialItem[],
+	opts: CheckOptions,
+): Promise<NonNullable<UpdateCheck["reader"]>> {
+	const now = opts.now ?? Date.now;
 	const toRead = sentences.filter((s) => !isNotGiven(s.text));
-	if (!opts.reader || !opts.model) {
-		return { at: now(), sentences, reader: { at: now(), skipped: opts.reader ? "no model" : "off" } };
-	}
-	if (!toRead.length) return { at: now(), sentences, reader: { at: now(), skipped: "nothing to read" } };
+	if (!opts.reader || !opts.model) return { at: now(), skipped: opts.reader ? "no model" : "off" };
+	if (!toRead.length) return { at: now(), skipped: "nothing to read", v: READER_VERSION };
 	const model = opts.model;
 	const prompt = readerPrompt(toRead, material);
 	let avoid = [...(opts.avoid ?? [])];
@@ -1001,7 +1074,7 @@ export async function checkUpdate(
 		avoid = [...avoid, reply.account];
 		reply = await ask();
 	}
-	if (!reply.ok) return { at: now(), sentences, reader: { at: now(), model: reply.model, error: reply.error } };
+	if (!reply.ok) return { at: now(), model: reply.model, error: reply.error };
 	let claims = parseReader(reply.text);
 	// An answer that isn't JSON is a slip (stage test, run 11): ask once more before giving up.
 	if (!claims) {
@@ -1011,14 +1084,10 @@ export async function checkUpdate(
 			claims = parseReader(again.text);
 		}
 	}
-	if (!claims)
-		return {
-			at: now(),
-			sentences,
-			reader: { at: now(), model: reply.model, error: "the reader's answer wasn't JSON" },
-		};
-	withReaderClaims(sentences, claims, material);
-	return { at: now(), sentences, reader: { at: now(), model: reply.model, claims: Object.fromEntries(claims) } };
+	if (!claims) return { at: now(), model: reply.model, error: "the reader's answer wasn't JSON" };
+	const at = now();
+	withReaderClaims(sentences, claims, material, at);
+	return { at, model: reply.model, v: READER_VERSION, claims: Object.fromEntries(claims) };
 }
 
 /** Add the reader's flags to code's sentences from its claims (checkUpdate, and a replay of a saved check). */
@@ -1026,10 +1095,11 @@ export function withReaderClaims(
 	sentences: CheckedSentence[],
 	claims: ReadonlyMap<number, ReaderClaim[]> | Readonly<Record<string, ReaderClaim[]>>,
 	material: readonly MaterialItem[],
+	at?: number,
 ): CheckedSentence[] {
 	const of = (n: number): ReaderClaim[] | undefined =>
 		claims instanceof Map ? claims.get(n) : (claims as Readonly<Record<string, ReaderClaim[]>>)[String(n)];
-	for (const s of sentences) s.flags.push(...readerFlags(s, of(s.n), material));
+	for (const s of sentences) s.flags.push(...readerFlags(s, of(s.n), material, at));
 	return sentences;
 }
 

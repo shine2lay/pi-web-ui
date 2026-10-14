@@ -13,6 +13,7 @@ import {
 	isLimitRefusal,
 	lastError,
 	pickAccount,
+	signedOutAccounts,
 	timeoutNote,
 	type DecisionModel,
 	type DecisionModelCall as ModelCall,
@@ -1026,6 +1027,42 @@ describe("the reader", () => {
 			}),
 		);
 		expect(claudePoolMembers(agentDir)).toEqual(["anthropic", "anthropic-3"]);
+	});
+
+	it("skips accounts pi-multi-pass marked signed out, by its own rule, and never changes the mark (live, 2026-10-13)", () => {
+		const agentDir = join(dir, "agent-signin");
+		mkdirSync(join(agentDir, "multi-pass-quota"), { recursive: true });
+		const t = 1_800_000_000_000;
+		expect(signedOutAccounts(agentDir, t)).toEqual([]);
+		writeFileSync(
+			join(agentDir, "auth.json"),
+			JSON.stringify({
+				anthropic: { type: "oauth", expires: 111 },
+				"anthropic-2": { type: "oauth", expires: 999 },
+				"anthropic-3": { type: "oauth", expires: 333 },
+			}),
+		);
+		const marks = JSON.stringify({
+			version: 1,
+			accounts: {
+				// refused, same login: still signed out, however old
+				anthropic: { at: t - 86_400_000, kind: "refused", stamp: "oauth:111" },
+				// refused, but signed in again since (the expiry changed): usable
+				"anthropic-2": { at: t - 60_000, kind: "refused", stamp: "oauth:222" },
+				// unreachable a minute ago: skipped for now
+				"anthropic-3": { at: t - 60_000, kind: "unreachable", stamp: "oauth:333" },
+			},
+		});
+		const file = join(agentDir, "multi-pass-quota", "signin-failed.json");
+		writeFileSync(file, marks);
+		expect(signedOutAccounts(agentDir, t)).toEqual(["anthropic", "anthropic-3"]);
+		// an unreachable mark lifts after 2 minutes
+		expect(signedOutAccounts(agentDir, t + 2 * 60_000)).toEqual(["anthropic"]);
+		expect(readFileSync(file, "utf8")).toBe(marks);
+		// what "auto" then asks
+		expect(pickAccount(["anthropic", "anthropic-2"], signedOutAccounts(agentDir, t))).toBe("anthropic-2");
+		writeFileSync(file, "not json");
+		expect(signedOutAccounts(agentDir, t)).toEqual([]);
 	});
 
 	it("does nothing when switched off", async () => {
