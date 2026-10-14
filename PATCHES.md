@@ -6268,6 +6268,15 @@ during server main-thread stalls, not a lost socket. This patch only records; it
    sent ids in its storage, so a replay after a restart isn't sent twice. Ask/reply routing unchanged.
 5. **One switch**: `<dataDir>/conn-trace.json` `{"enabled": false}` stops the log, the sampling, the
    pages' records and the notices within 3 s, no restart; an unreadable file counts as off.
+6. **Stall watcher** (follow-up commit, H-RECONNECT-STALL in the WORKING.md above): the first real
+   events showed the histogram losing stalls. When a stall spans a 10 s sample, Node can run the late
+   `sample()` before the histogram's own timer, and its `reset()` then throws the stall's delta away
+   (live 2026-10-13 21:49: a stall of 20 s or more read 0.5 s, and the owner's line said "up to 1.7 s";
+   4 of 30 late windows lost one). A 250 ms timer now measures its own gap; a gap at least 1 s over it
+   is written at once as a `stall` line (`ms`, `from`, `t` = end); the last 500 are kept. `loop` lines gain
+   `stallMaxMs`; a `banner`'s `loopMaxMs` (and the notice's stall) is the worst of the histogram and
+   the stalls over the episode, with `stallMaxMs` beside it. The watcher resets nothing, so each stall
+   is measured whole, to within one tick, whichever timer runs first. Off with the same switch.
 
 Metadata only: no chat text, prompts, tool results, credentials, cookies, URLs, IPs or user agents.
 
@@ -6286,7 +6295,15 @@ Metadata only: no chat text, prompts, tool results, credentials, cookies, URLs, 
   connect is logged; a 7 s SIGSTOP of the server shows the note and leaves a `silence` record over the
   stall with a measured loop delay of at least 6 s, plus the dropped socket's close code; the notice is
   tried and not sent; a restart's close is recorded with its code; metadata only; switched off,
-  another stall leaves nothing. On mine without this patch it fails at its first check.
+  another stall leaves nothing. On mine without this patch it fails at its first check. Since the
+  stall watcher it also wants a `stall` line of at least 6 s over the stop.
+- Stall watcher, `tests/unit/conn-events.test.ts`: fake-clock ticks (a stall written with its start,
+  in the window's line; the 21:49 shape placed at 20.6 s with the histogram at 0.5 s; off writes
+  nothing and turning it back on counts no stall) and real timers (a 1 s sampler and a 2.5 s stall of
+  the test process). Control, watcher off: the stall right after a sample is lost (histogram under 2 s
+  though the sampler ran 2.4 s or more late). Watcher on, after a sample and with a short timer due
+  (Node runs the late sampler first): the stall is written at 2.25-4.5 s and an episode gets it. The
+  real-timer tests passed 4 runs of 4.
 
 ### When syncing
 

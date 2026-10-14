@@ -59,6 +59,11 @@ const DELIVER_TIMEOUT_MS = 30_000;
 /** GC pauses at least this long are kept one by one (2 h at most) to place against an episode. */
 const LONG_GC_MS = 50;
 const LONG_GC_KEEP = 500;
+/** The stall watcher: a timer this often; a gap at least STALL_MIN_MS over it is a main-thread stall,
+ *  written as its own line at once, and the last 500 kept to place against an episode. */
+export const STALL_TICK_MS = 250;
+export const STALL_MIN_MS = 1_000;
+const STALL_KEEP = 500;
 
 export const REASONS: readonly ConnTraceReason[] = [
 	"close",
@@ -282,6 +287,8 @@ export interface ConnEventsOptions {
 	noticeGapMs?: number;
 	/** Watch GC pauses passively while sampling (default true). */
 	gc?: boolean;
+	/** Watch for main-thread stalls with a 250 ms timer while sampling (default true). */
+	stallWatch?: boolean;
 	/** When this server process started (default: now). */
 	startedAt?: number;
 	/** Test hook: the histogram source (default perf_hooks.monitorEventLoopDelay). */
@@ -314,6 +321,14 @@ export class ConnEvents {
 	private longGc: { t: number; ms: number }[] = [];
 	private cpuPrev: NodeJS.CpuUsage | null = null;
 	private readonly watchGc: boolean;
+	private readonly watchStalls: boolean;
+	private stallTimer: ReturnType<typeof setInterval> | null = null;
+	/** The watcher's last tick (0: none yet). */
+	private stallLast = 0;
+	/** The worst stall seen since the last sample. */
+	private stallWin = 0;
+	/** Stalls: start (server clock) and length. */
+	private stalls: { t: number; ms: number }[] = [];
 
 	constructor(opts: ConnEventsOptions) {
 		this.dataDir = opts.dataDir;
@@ -323,6 +338,7 @@ export class ConnEvents {
 		this.gapMs = opts.noticeGapMs ?? NOTICE_GAP_MS;
 		this.makeHistogram = opts.histogram ?? (() => monitorEventLoopDelay({ resolution: 20 }));
 		this.watchGc = opts.gc ?? true;
+		this.watchStalls = opts.stallWatch ?? true;
 		this.startedAt = opts.startedAt ?? this.now();
 		this.state = this.loadState();
 		if (opts.sampler) this.startSampler();
@@ -362,12 +378,19 @@ export class ConnEvents {
 		if (this.timer) return;
 		this.timer = setInterval(() => this.sample(), this.sampleMs);
 		this.timer.unref?.();
+		if (this.watchStalls) {
+			this.stallLast = 0;
+			this.stallTimer = setInterval(() => this.watchTick(), STALL_TICK_MS);
+			this.stallTimer.unref?.();
+		}
 		this.sample();
 	}
 
 	stop(): void {
 		if (this.timer) clearInterval(this.timer);
 		this.timer = null;
+		if (this.stallTimer) clearInterval(this.stallTimer);
+		this.stallTimer = null;
 		if (this.flushTimer) clearTimeout(this.flushTimer);
 		this.flushTimer = null;
 		this.stopMeasuring();
@@ -406,6 +429,33 @@ export class ConnEvents {
 		}
 	}
 
+	/**
+	 * One stall-watcher tick: a gap well over the tick is a main-thread stall. The histogram alone
+	 * misses a stall that spans a sample: after it, Node can run sample() before the histogram's own
+	 * timer, and reset() then throws the stall's delta away (Ops #157, H-RECONNECT-STALL; 21:49 a
+	 * stall of 20 s or more read 0.5 s). The watcher resets nothing, so it measures each stall whole
+	 * (to within one tick) whichever timer runs first.
+	 */
+	watchTick(): void {
+		const t = this.now();
+		const last = this.stallLast;
+		this.stallLast = t;
+		if (!last || !this.enabled()) return;
+		const stall = t - last - STALL_TICK_MS;
+		if (stall >= STALL_MIN_MS) this.noteStall(t - stall, stall);
+	}
+
+	/** One main-thread stall (start on the server clock, length): written at once and kept. */
+	noteStall(start: number, stallMs: number): void {
+		if (!Number.isFinite(start) || !Number.isFinite(stallMs) || stallMs < 0) return;
+		const from = Math.round(start);
+		const len = Math.round(stallMs);
+		this.stallWin = Math.max(this.stallWin, len);
+		this.stalls.push({ t: from, ms: len });
+		if (this.stalls.length > STALL_KEEP) this.stalls.splice(0, this.stalls.length - STALL_KEEP);
+		this.write({ t: from + len, kind: "stall", ms: len, from });
+	}
+
 	/** Close one sample window: write it and keep it for placing episodes. */
 	sample(): void {
 		const t = this.now();
@@ -419,6 +469,7 @@ export class ConnEvents {
 			this.histSince = t;
 			this.startGcWatch();
 			this.gcWin = { n: 0, ms: 0, max: 0 };
+			this.stallWin = 0;
 			this.cpuPrev = process.cpuUsage();
 			return;
 		}
@@ -441,6 +492,8 @@ export class ConnEvents {
 		}
 		const gc = this.gcWin;
 		this.gcWin = { n: 0, ms: 0, max: 0 };
+		const stallMaxMs = this.stallWin;
+		this.stallWin = 0;
 		this.ring.push(s);
 		if (this.ring.length > RING_SAMPLES) this.ring.splice(0, this.ring.length - RING_SAMPLES);
 		let heapMb = 0;
@@ -457,6 +510,7 @@ export class ConnEvents {
 			windowMs: s.windowMs,
 			p99Ms: s.p99,
 			maxMs: s.max,
+			stallMaxMs,
 			cpuMs,
 			gcN: gc.n,
 			gcMs: round1(gc.ms),
@@ -467,8 +521,12 @@ export class ConnEvents {
 		});
 	}
 
-	/** Worst loop delay measured over [from, to] (server clock), including the open window. */
-	worstLoop(from: number, to: number): { maxMs: number | null; p99Ms: number | null; samples: number } {
+	/** Worst loop delay measured over [from, to] (server clock), including the open window: the worst of
+	 *  the histogram's samples and the watcher's stalls that overlap it (stallMaxMs: the stalls alone). */
+	worstLoop(
+		from: number,
+		to: number,
+	): { maxMs: number | null; p99Ms: number | null; samples: number; stallMaxMs: number | null } {
 		let max: number | null = null;
 		let p99: number | null = null;
 		let n = 0;
@@ -484,7 +542,13 @@ export class ConnEvents {
 			max = Math.max(max ?? 0, round1(h.max / 1e6));
 			p99 = Math.max(p99 ?? 0, round1(h.percentile(99) / 1e6));
 		}
-		return { maxMs: max, p99Ms: p99, samples: n };
+		let stallMax: number | null = null;
+		for (const s of this.stalls) {
+			if (s.t > to || s.t + s.ms < from) continue;
+			stallMax = Math.max(stallMax ?? 0, s.ms);
+		}
+		if (stallMax !== null) max = Math.max(max ?? 0, stallMax);
+		return { maxMs: max, p99Ms: p99, samples: n, stallMaxMs: stallMax };
 	}
 
 	/** Long GC pauses that overlap [from, to]: how many, their sum and the longest. */
@@ -532,6 +596,8 @@ export class ConnEvents {
 	/** A page's records (ClientMessage conn_trace). Returns how many were taken. */
 	banner(records: unknown, from: { conn: string; clientId: string | null }): number {
 		if (!this.enabled() || !Array.isArray(records)) return 0;
+		// A stall that just ended may not have had its watcher tick yet: take it now.
+		if (this.stallTimer) this.watchTick();
 		let taken = 0;
 		for (const raw of records.slice(0, MAX_RECORDS_PER_MESSAGE)) {
 			const r = sanitizeRecord(raw);
@@ -558,6 +624,7 @@ export class ConnEvents {
 				loopMaxMs: loop.maxMs,
 				loopP99Ms: loop.p99Ms,
 				loopSamples: loop.samples,
+				stallMaxMs: loop.stallMaxMs,
 				longGcN: gc.n,
 				longGcMs: gc.ms,
 				longGcMaxMs: gc.maxMs,

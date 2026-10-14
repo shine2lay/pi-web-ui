@@ -11,7 +11,9 @@
  *     stays open): "Reconnecting…" shows; once the page is back, the log holds its record of it (a
  *     silence cause), placed on the server's clock over the stall, with a measured event-loop delay of
  *     at least 6 s; the socket the page dropped is logged closed with its close code; the owner notice
- *     is tried and, with no transport here, not sent.
+ *     is tried and, with no transport here, not sent; the stall watcher writes the stall whole.
+ *     (The 7 s SIGSTOP is also covered by the event-loop histogram, so it can't show the histogram's
+ *     hole; tests/unit/conn-events.test.ts "real timers" does, with its control.)
  *  3. A server restart (the socket is closed under the page): the page's record has the close code,
  *     and the new server marks the episode as begun before it started.
  *  4. Metadata only: every string in every line is a fixed kind, an id, a hash or a cause.
@@ -123,6 +125,12 @@ try {
 			typeof b.loopMaxMs === "number" && b.loopMaxMs >= 6_000,
 			`loopMaxMs ${b.loopMaxMs}, from ${b.loopSamples} sample(s)`,
 		);
+		const st = lines().find((l) => l.kind === "stall" && l.ms >= 6_000 && l.from <= s.t1 && l.t >= s.t0);
+		check(
+			"the stall watcher wrote the stall whole (at least 6 s, over the stop), and the record carries it",
+			!!st && typeof b.stallMaxMs === "number" && b.stallMaxMs >= 6_000,
+			st ? `stall ${st.ms} ms from ${st.from} to ${st.t}; record stallMaxMs ${b.stallMaxMs}` : "no stall line over it",
+		);
 		const dropped = await until(() => lines().find((l) => l.kind === "close" && l.conn === b.conn), 10_000);
 		check(
 			"the socket the page dropped is logged closed, with its close code",
@@ -152,7 +160,7 @@ try {
 
 	// 4. Metadata only.
 	const allowed = {
-		kind: /^(loop|open|close|banner|notice)$/,
+		kind: /^(loop|open|close|banner|notice|stall)$/,
 		conn: /^[a-f0-9]{12}$/,
 		via: /^[a-f0-9]{12}$/,
 		client: /^[a-f0-9]{12}$/,

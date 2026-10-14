@@ -8,6 +8,7 @@
 import { mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	CONFIG_FILE,
@@ -16,6 +17,7 @@ import {
 	LOG_FILE,
 	MAX_RECORDS_PER_MESSAGE,
 	NOTICE_GAP_MS,
+	STALL_TICK_MS,
 	type ConnNotice,
 	createConnNoticeHub,
 	hashClient,
@@ -484,6 +486,9 @@ describe("conn-events: metadata only", () => {
 		hist.maxNs = 7_000e6;
 		ce.sample();
 		ce.opened("0f0f0f0f0f0f", "client-with-a-name", true, 3);
+		ce.watchTick();
+		clock.now += 2_000;
+		ce.watchTick();
 		clock.now += 5_000;
 		ce.banner([rec({ endAgoMs: 0, closeCode: 1006, reason: "close", then: "connect_timeout" })], {
 			conn: "0f0f0f0f0f0f",
@@ -492,7 +497,7 @@ describe("conn-events: metadata only", () => {
 		ce.closed("0f0f0f0f0f0f", "client-with-a-name", true, 1006, 5_000);
 		await tick();
 		const allowed: Record<string, RegExp> = {
-			kind: /^(loop|open|close|banner|notice)$/,
+			kind: /^(loop|open|close|banner|notice|stall)$/,
 			conn: /^[a-f0-9]{12}$/,
 			via: /^[a-f0-9]{12}$/,
 			client: /^[a-f0-9]{12}$/,
@@ -503,7 +508,7 @@ describe("conn-events: metadata only", () => {
 			notice: /^(event|summary)$/,
 		};
 		const all = lines();
-		expect(all.map((l) => l.kind).sort()).toEqual(["banner", "close", "loop", "notice", "open"]);
+		expect(all.map((l) => l.kind).sort()).toEqual(["banner", "close", "loop", "notice", "open", "stall"]);
 		for (const l of all)
 			for (const [k, v] of Object.entries(l)) {
 				if (typeof v !== "string") {
@@ -514,4 +519,145 @@ describe("conn-events: metadata only", () => {
 				expect(v).toMatch(allowed[k]);
 			}
 	});
+});
+
+describe("conn-events: the stall watcher (H-RECONNECT-STALL)", () => {
+	it("a gap of 1 s or more over its tick is a stall: written at once with its start, and in the window's line", () => {
+		const { ce, clock } = setup();
+		ce.sample(); // starts measuring
+		ce.watchTick(); // the first tick has nothing to compare with
+		clock.now += STALL_TICK_MS;
+		ce.watchTick();
+		clock.now += 1_200; // 950 ms over the tick: not a stall
+		ce.watchTick();
+		clock.now += 3_000; // 2750 ms over: a stall
+		ce.watchTick();
+		expect(lines().filter((l) => l.kind === "stall")).toEqual([
+			{ t: clock.now, kind: "stall", ms: 2_750, from: clock.now - 2_750 },
+		]);
+		clock.now = T0 + 10_000;
+		ce.sample();
+		clock.now += 10_000;
+		ce.sample();
+		const loop = lines().filter((l) => l.kind === "loop");
+		expect(loop.map((l) => l.stallMaxMs)).toEqual([2_750, 0]);
+	});
+
+	it("an episode over a stall the histogram lost gets the stall's length (the 21:49 case)", async () => {
+		const { ce, clock, hist, sent } = setup();
+		ce.sample();
+		ce.watchTick();
+		clock.now += STALL_TICK_MS;
+		ce.watchTick();
+		// A 20.6 s stall across a sample: the sampler runs 20.6 s late and the histogram reads 0.5 s.
+		clock.now += 20_850;
+		ce.watchTick();
+		hist.n = 100;
+		hist.maxNs = 456e6;
+		hist.p99Ns = 300e6;
+		ce.sample();
+		clock.now += 2_000;
+		ce.banner([rec({ durMs: 21_000, endAgoMs: 1_000, sinceFrameMs: 5_000 })], {
+			conn: "0f0f0f0f0f0f",
+			clientId: null,
+		});
+		const b = lines().find((l) => l.kind === "banner") as Line;
+		expect(b).toMatchObject({ loopMaxMs: 20_600, stallMaxMs: 20_600, loopP99Ms: 300 });
+		await tick();
+		expect(sent[0]).toMatchObject({ maxLoopMs: 20_600 });
+		// An episode with nothing measured over it (no window, no stall) gets null for both, not a guess.
+		clock.now += 60_000;
+		ce.banner([rec({ ep: "0123456789abcdee", durMs: 6_000, endAgoMs: 500, sinceFrameMs: 5_000 })], {
+			conn: "0f0f0f0f0f0f",
+			clientId: null,
+		});
+		const b2 = lines().filter((l) => l.kind === "banner")[1] as Line;
+		expect(b2).toMatchObject({ loopMaxMs: null, stallMaxMs: null });
+	});
+
+	it("switched off it writes nothing, and turning it back on doesn't count the time off as a stall", () => {
+		const { ce, clock } = setup();
+		writeFileSync(join(dir, CONFIG_FILE), JSON.stringify({ enabled: false }));
+		ce.watchTick();
+		for (let i = 0; i < 20; i++) {
+			clock.now += STALL_TICK_MS;
+			ce.watchTick();
+		}
+		clock.now += 5_000; // a stall while off
+		ce.watchTick();
+		expect(lines()).toHaveLength(0);
+		rmSync(join(dir, CONFIG_FILE));
+		for (let i = 0; i < 20; i++) {
+			clock.now += STALL_TICK_MS;
+			ce.watchTick();
+		}
+		expect(lines()).toHaveLength(0);
+		clock.now += 2_250;
+		ce.watchTick();
+		expect(
+			lines()
+				.filter((l) => l.kind === "stall")
+				.map((l) => l.ms),
+		).toEqual([2_000]);
+	});
+});
+
+describe("conn-events: real timers, a 2.5 s stall of this process", () => {
+	const block = (msLong: number) => {
+		const t = Date.now();
+		while (Date.now() - t < msLong) {
+			/* the main thread is stuck */
+		}
+	};
+	/** A 1 s sampler; then a 2.5 s stall, started right after a sample (afterSample) or with a short
+	 *  timer due when it starts (a busy app: Node then runs the late sampler before the histogram). */
+	const run = async (stallWatch: boolean, how: "afterSample" | "busyApp") => {
+		const ce = new ConnEvents({
+			dataDir: dir,
+			gc: false,
+			sampler: true,
+			sampleMs: 1_000,
+			stallWatch,
+			deliver: async () => false,
+			startedAt: Date.now() - 60_000,
+		});
+		made.push(ce);
+		await sleep(1_300);
+		const t0 = Date.now();
+		await new Promise<void>((done) =>
+			setTimeout(() => {
+				if (how === "afterSample") ce.sample();
+				else setTimeout(() => {}, 1);
+				block(2_500);
+				done();
+			}, 0),
+		);
+		const t1 = Date.now();
+		await sleep(1_500);
+		ce.stop();
+		const all = lines();
+		return {
+			loops: all.filter((l) => l.kind === "loop"),
+			stalls: all.filter((l) => l.kind === "stall"),
+			placed: ce.worstLoop(t0, t1),
+		};
+	};
+
+	it("control, the old measure alone (watcher off): a stall right after a sample is lost, though the sampler ran late", async () => {
+		const r = await run(false, "afterSample");
+		expect(Math.max(...r.loops.map((l) => l.windowMs))).toBeGreaterThanOrEqual(2_400);
+		expect(Math.max(...r.loops.map((l) => l.maxMs))).toBeLessThan(2_000);
+		expect(r.stalls).toHaveLength(0);
+		expect(r.placed.maxMs ?? 0).toBeLessThan(2_000);
+	}, 20_000);
+
+	for (const how of ["afterSample", "busyApp"] as const)
+		it(`watcher on (${how}): the stall is written whole, and an episode over it gets its length`, async () => {
+			const r = await run(true, how);
+			const worst = Math.max(0, ...r.stalls.map((s) => s.ms));
+			expect(worst).toBeGreaterThanOrEqual(2_250);
+			expect(worst).toBeLessThan(4_500);
+			expect(r.placed.maxMs ?? 0).toBeGreaterThanOrEqual(2_250);
+			expect(Math.max(...r.loops.map((l) => l.stallMaxMs))).toBeGreaterThanOrEqual(2_250);
+		}, 20_000);
 });
