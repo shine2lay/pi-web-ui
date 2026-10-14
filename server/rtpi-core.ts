@@ -13,7 +13,19 @@
  * be later than the native server clock when one is supplied (#110 V01).
  */
 import { createHash } from "node:crypto";
-import { RTPI_SCHEMA, type RtpiSchemaNode } from "./rtpi-schema.js";
+import {
+	RTPI_SCHEMA,
+	INITIATIVES_SCHEMA,
+	INITIATIVES_ROOTS,
+	INITIATIVES_REF_KINDS,
+	INITIATIVES_REQUIRED_STAGES,
+	INITIATIVES_ISSUER_ID,
+	INITIATIVES_ISSUER_REVISION,
+	INITIATIVES_SOURCE_ID,
+	type InitiativesRootSchema,
+	type InitiativesOutcomeKind,
+	type RtpiSchemaNode,
+} from "./rtpi-schema.js";
 
 export const RTPI_CONTRACT = Object.freeze({
 	wire: "rtpi/1",
@@ -25,7 +37,7 @@ export const RTPI_CONTRACT = Object.freeze({
 	acceptances: Object.freeze(["architecture rm-3b46a7c8", "data rm-d852a5ed", "security rm-b79f71e9"]),
 });
 
-export type RtpiRootSchema =
+export type RtpiC0RootSchema =
 	| "rtpi/event/1"
 	| "rtpi/design/1"
 	| "rtpi/publication/1"
@@ -34,7 +46,9 @@ export type RtpiRootSchema =
 	| "rtpi/gate-contract/1"
 	| "rtpi/aggregate/1";
 
-const ROOT_BYTES: Readonly<Record<RtpiRootSchema, number>> = Object.freeze({
+export type RtpiRootSchema = RtpiC0RootSchema | InitiativesRootSchema;
+
+const ROOT_BYTES: Readonly<Record<RtpiC0RootSchema, number>> = Object.freeze({
 	"rtpi/event/1": 8192,
 	"rtpi/lineage/1": 8192,
 	"rtpi/gate-contract/1": 8192,
@@ -488,20 +502,25 @@ function sameScalar(a: unknown, b: unknown): boolean {
 	return typeof a === typeof b && a === b;
 }
 
-function schemaValidate(v: unknown, s: RtpiSchemaNode, chain: readonly string[]): void {
+function schemaValidate(
+	v: unknown,
+	s: RtpiSchemaNode,
+	chain: readonly string[],
+	defs: Readonly<Record<string, RtpiSchemaNode>> = DEFS,
+): void {
 	if (s.$ref !== undefined) {
 		need(s.$ref.startsWith("#/$defs/"), "nonlocal-schema-reference");
 		const name = s.$ref.slice("#/$defs/".length);
 		need(!chain.includes(name) && chain.length < RTPI_LIMITS.schemaIndirections, "schema-resolution-work-bound");
-		const def = DEFS[name];
+		const def = defs[name];
 		need(def !== undefined, "nonlocal-schema-reference");
-		schemaValidate(v, def, [...chain, name]);
+		schemaValidate(v, def, [...chain, name], defs);
 		return;
 	}
 	if (s.anyOf !== undefined) {
 		for (const sub of s.anyOf) {
 			try {
-				schemaValidate(v, sub, chain);
+				schemaValidate(v, sub, chain, defs);
 				return;
 			} catch (e) {
 				if (!(e instanceof RtpiReject)) throw e;
@@ -524,7 +543,7 @@ function schemaValidate(v: unknown, s: RtpiSchemaNode, chain: readonly string[])
 			for (const k of Object.keys(v)) {
 				const sub = props[k];
 				need(sub !== undefined, "schema-unknown-field");
-				schemaValidate(v[k], sub, chain);
+				schemaValidate(v[k], sub, chain, defs);
 			}
 			return;
 		}
@@ -534,7 +553,7 @@ function schemaValidate(v: unknown, s: RtpiSchemaNode, chain: readonly string[])
 			if (s.uniqueItems) need(new Set(v.map((x) => rtpiCanonical(x))).size === v.length, "schema-array-duplicate");
 			const items = s.items;
 			need(items !== undefined, "unsupported-schema-type");
-			for (const x of v) schemaValidate(x, items, chain);
+			for (const x of v) schemaValidate(x, items, chain, defs);
 			return;
 		}
 		case "string": {
@@ -833,9 +852,112 @@ function gateGraph(required: RtpiJson[]): void {
 	}
 }
 
+// Closed compile-time dispatch only. This branch does not change the C0 root table, validators or hashes.
+function structureInitiatives(value: Obj, schema: InitiativesRootSchema): Structure {
+	const text = canonicalBounded(value, RTPI_LIMITS.maxRootBytes);
+	const bytes = rtpiByteLength(text);
+	need(bytes <= 8192, "canonical-root-byte-bound");
+	const m = metrics(value);
+	need(m.refs.length <= 64, "total-nested-reference-bound");
+	schemaValidate(value, INITIATIVES_ROOTS[schema], [], INITIATIVES_SCHEMA.$defs);
+	const namespace = m.refs[0]?.namespace;
+	need(namespace !== undefined && m.refs.every((r) => r.namespace === namespace), "mixed-reference-namespace");
+	const checkPath = (node: RtpiJson, path: readonly string[], kinds: readonly string[]): void => {
+		if (node === null) return; // nullable fields are unknown, never authority
+		if (path.length === 0) {
+			need(kinds.includes(obj(node).kind as string), "initiatives-reference-kind");
+			return;
+		}
+		const [key, ...rest] = path;
+		if (key === "*") for (const item of list(node)) checkPath(item, rest, kinds);
+		else checkPath(obj(node)[key as string], rest, kinds);
+	};
+	for (const [path, kinds] of Object.entries(INITIATIVES_REF_KINDS[schema])) checkPath(value, path.split("."), kinds);
+	need(obj(value.initiative).id === "team-in-temper", "initiatives-scope-off");
+	need(obj(value.subject).id === obj(value.initiative).id, "initiatives-subject-mismatch");
+	need(
+		obj(value.issuer).id === INITIATIVES_ISSUER_ID &&
+			obj(value.issuer).revision === INITIATIVES_ISSUER_REVISION &&
+			obj(value.source).id === INITIATIVES_SOURCE_ID &&
+			obj(value.source).revision === INITIATIVES_ISSUER_REVISION,
+		"initiatives-issuer-unqualified",
+	);
+	need(
+		value.publicationRevision === value.revision && value.revision === (value.expectedRevision as number) + 1,
+		"initiatives-publication-revision",
+	);
+	if (schema === "rtpi/initiative-execution/1") {
+		need(value.objectId === obj(value.initiative).id, "initiatives-registry-identity");
+		const goal = obj(value.goal);
+		need((goal.text === null) === (goal.authority === null), "initiatives-goal-authority");
+		const members = list(value.members).map(obj);
+		need(new Set(members.map((x) => obj(x.role).id)).size === members.length, "initiatives-duplicate-member");
+		const contributions = list(value.contributions).map(obj);
+		need(new Set(contributions.map((x) => x.id)).size === contributions.length, "initiatives-duplicate-contribution");
+		for (const cause of list(value.causes).map(obj)) {
+			const kind = cause.kind as string;
+			const subjectKind =
+				kind === "request-unanswered"
+					? "request"
+					: kind === "chat-stopped-by-account-fault"
+						? "session"
+						: kind === "no-activity-for-n-hours" || kind === "stall-check-silent"
+							? "initiative"
+							: "operation";
+			need(obj(cause.subject).kind === subjectKind, "initiatives-cause-subject");
+			const timed = kind === "no-activity-for-n-hours" || kind === "stall-check-silent";
+			need(
+				timed ? cause.since !== null && cause.thresholdHours !== null : cause.thresholdHours === null,
+				"initiatives-cause-threshold",
+			);
+			need(
+				kind !== "blocked-only-on-done-tasks" || list(cause.relatedRefs).length > 0,
+				"initiatives-cause-dependencies",
+			);
+		}
+	} else {
+		need(refEqual(value.acceptedBy, value.issuer), "initiatives-required-contract-issuer");
+		need(obj(value.artifactRef).id === rtpiSha256(rtpiCanonical(value.artifact)), "initiatives-artifact-key-hash");
+		const required = list(value.required).map(obj);
+		const policy = INITIATIVES_REQUIRED_STAGES[value.kind as InitiativesOutcomeKind];
+		need(
+			required.length === policy.length && required.every((g, i) => g.stage === policy[i]),
+			"initiatives-required-set",
+		);
+		for (const [i, g] of required.entries()) {
+			need(
+				obj(g.rule).revision !== "latest" && obj(g.rule).revision !== "current",
+				"initiatives-mutable-acceptance-rule",
+			);
+			need(
+				rtpiCanonical(g.dependsOn) === rtpiCanonical(i === 0 ? [] : [policy[i - 1]]),
+				"initiatives-gate-dependencies",
+			);
+			if (g.stage === "checked") {
+				need(
+					value.responsibleActor !== null &&
+						refEqual(g.independentOf, value.responsibleActor) &&
+						!refEqual(g.verifierActor, value.responsibleActor),
+					"required-check-independence",
+				);
+			} else need(g.independentOf === null, "initiatives-unbound-independence");
+			if (g.stage === "owner-confirmed") need(obj(g.verifierActor).kind === "owner", "initiatives-owner-verifier");
+		}
+	}
+	return { schema, namespace, root: value, text, bytes, refs: m.refs.length, nodes: m.nodes, depth: m.depth };
+}
+
+/** Stable across publication, source/subject revision, incarnation and lineage rebind. Only the two I1 roots use it. */
+export function rtpiInitiativesPublicationKey(record: RtpiAccepted): string | null {
+	if (!hasOwn(INITIATIVES_ROOTS, record.schema)) return null;
+	return rtpiCanonical([record.schema, record.namespace, obj(record.root.initiative).id, record.root.objectId]);
+}
+
 function structure(value: unknown): Structure {
+	if (isObject(value) && typeof value.schema === "string" && hasOwn(INITIATIVES_ROOTS, value.schema))
+		return structureInitiatives(value, value.schema as InitiativesRootSchema);
 	need(isObject(value) && typeof value.schema === "string" && hasOwn(ROOT_BYTES, value.schema), "unknown-root-schema");
-	const schema = value.schema as RtpiRootSchema;
+	const schema = value.schema as RtpiC0RootSchema;
 	const text = canonicalBounded(value, RTPI_LIMITS.maxRootBytes);
 	const bytes = rtpiByteLength(text);
 	need(bytes <= ROOT_BYTES[schema], "canonical-root-byte-bound");
@@ -992,7 +1114,7 @@ export function createRtpiFixtureCapability(spec: RtpiCapabilitySpec): RtpiCapab
 		need(r.namespace === "rtpi-fixture" && r.kind === kind, "capability-reference-" + kind);
 	}
 	need(
-		spec.roots.every((r) => hasOwn(ROOT_BYTES, r)),
+		spec.roots.every((r) => hasOwn(ROOT_BYTES, r) || hasOwn(INITIATIVES_ROOTS, r)),
 		"capability-root-scope",
 	);
 	need(
@@ -1046,6 +1168,9 @@ export interface RtpiQualification {
 	readonly rolesGateIssuer?: RtpiRef | null;
 	/** I1's accepted native per-kind required-contract issuer; Initiatives C7 only, absent for Roles. */
 	readonly initiativesPerKindIssuer?: RtpiRef | null;
+	/** I1-only native source/binding readback; never a caller/model flag. No native adapter exists in IB1. */
+	readonly initiativesRegistryQualified?: boolean;
+	readonly initiativesBindingDigest?: string;
 	readonly independentVerifier?: boolean;
 	readonly resourceIncorporated?: boolean;
 	readonly designBindingValid?: boolean;
@@ -1092,6 +1217,7 @@ const UNKNOWN_REASONS: ReadonlySet<string> = new Set([
 	"server-clock-unknown",
 	"witness-unknown",
 	"current-subject-unknown",
+	"initiatives-source-binding-unknown",
 ]);
 /** Stage disabled: no native registry/seam, unaccepted policy/contract/sidecar, unknown version, out of C0 scope. */
 const UNAVAILABLE_REASONS: ReadonlySet<string> = new Set([
@@ -1153,6 +1279,21 @@ function qualify(s: Structure, cap: RtpiCapability, q: RtpiQualification): void 
 		need(v.incarnation === q.incarnation, "incarnation-mismatch");
 	}
 	switch (s.schema) {
+		case "rtpi/initiative-execution/1":
+		case "rtpi/outcome-contract/1":
+			need(cap.seams.issuerRegistry, "native-issuer-registry-missing");
+			need(
+				q.initiativesRegistryQualified === true && q.initiativesBindingDigest === rtpiSha256(s.text),
+				"initiatives-source-binding-unknown",
+			);
+			sameRef(
+				v.issuer,
+				q.initiativesPerKindIssuer,
+				"initiatives-per-kind-issuer-unqualified",
+				"initiatives-issuer-unqualified",
+			);
+			if (s.schema === "rtpi/outcome-contract/1") need(q.gateContractAccepted === true, "required-contract-unaccepted");
+			break;
 		case "rtpi/event/1":
 			qualifyEvent(v, cap, q);
 			break;

@@ -22,6 +22,7 @@ import {
 	rtpiDedupDecision,
 	rtpiEncodeFrame,
 	rtpiLiveReferenceLost,
+	rtpiInitiativesPublicationKey,
 	rtpiParseCanonical,
 	rtpiRecoverSegment,
 	rtpiStructural,
@@ -91,6 +92,8 @@ export type RtpiJournalRecovery =
 export function rtpiRecoverJournal(segments: readonly string[], checkpoint: RtpiAccepted | null): RtpiJournalRecovery {
 	const frames: RtpiRecoveredFrame[] = [];
 	const index = new Map<string, RtpiDedupEntry>();
+	// I1-only publication heads; reconstructed before accepting further CAS writes. No C0 root uses this map.
+	const publicationRevisions = new Map<string, number>();
 	let last = 0;
 	let bytes = 0;
 	let lastSegmentBytes = 0;
@@ -103,6 +106,13 @@ export function rtpiRecoverJournal(segments: readonly string[], checkpoint: Rtpi
 			const prior = index.get(f.record.dedupKey);
 			if (prior !== undefined)
 				return quarantine(prior.digest === f.record.digest ? "frame-dedup-replay" : "frame-dedup-conflict");
+			const publicationKey = rtpiInitiativesPublicationKey(f.record);
+			if (publicationKey !== null) {
+				const revision = publicationRevisions.get(publicationKey) ?? 0;
+				if (f.record.root.expectedRevision !== revision || f.record.root.publicationRevision !== revision + 1)
+					return quarantine("initiatives-publication-cas-recovery");
+				publicationRevisions.set(publicationKey, revision + 1);
+			}
 			index.set(
 				f.record.dedupKey,
 				Object.freeze({ key: f.record.dedupKey, digest: f.record.digest, sequence: f.sequence }),
@@ -221,6 +231,7 @@ export class RtpiJournal {
 	private frames: RtpiRecoveredFrame[] = [];
 	private index = new Map<string, RtpiDedupEntry>();
 	private latest: RtpiAccepted | null = null;
+	private publicationRevisions = new Map<string, number>();
 	private chain: Promise<unknown> = Promise.resolve();
 
 	private constructor(
@@ -272,6 +283,7 @@ export class RtpiJournal {
 		this.frames = [];
 		this.index = new Map();
 		this.latest = null;
+		this.publicationRevisions = new Map();
 	}
 
 	private serial<T>(fn: () => Promise<T>): Promise<T> {
@@ -337,6 +349,11 @@ export class RtpiJournal {
 			throw new JournalStop("quarantine", r.reason);
 		}
 		this.frames = [...r.frames];
+		this.publicationRevisions = new Map();
+		for (const f of r.frames) {
+			const key = rtpiInitiativesPublicationKey(f.record);
+			if (key !== null) this.publicationRevisions.set(key, f.record.root.publicationRevision as number);
+		}
 		this.index = new Map(r.index);
 		this.lastSequence = r.lastSequence;
 		this.segment = numbers.length;
@@ -357,6 +374,12 @@ export class RtpiJournal {
 			if (d.decision === "duplicate") return { status: "duplicate", sequence: d.prior.sequence };
 			if (d.decision === "conflict")
 				return { status: "conflict", sequence: d.prior.sequence, reason: "dedup-key-conflict" };
+			const publicationKey = rtpiInitiativesPublicationKey(record);
+			if (publicationKey !== null) {
+				const revision = this.publicationRevisions.get(publicationKey) ?? 0;
+				if (record.root.expectedRevision !== revision || record.root.publicationRevision !== revision + 1)
+					return { status: "rejected", reason: "initiatives-publication-cas" };
+			}
 			const sequence = this.lastSequence + 1;
 			const line = Buffer.from(rtpiEncodeFrame(sequence, record), "utf8");
 			if (this.bytes + line.length > RTPI_LIMITS.activeReadBytes) {
@@ -386,6 +409,8 @@ export class RtpiJournal {
 				this.stop("quarantine", e instanceof JournalStop ? e.reason : "journal-append-failed");
 				return { status: "quarantine", reason: this.reason };
 			}
+			if (publicationKey !== null)
+				this.publicationRevisions.set(publicationKey, record.root.publicationRevision as number);
 			this.lastSequence = sequence;
 			this.segment = segment;
 			this.segmentBytes = expected + line.length;

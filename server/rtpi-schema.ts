@@ -714,3 +714,206 @@ export const RTPI_SCHEMA: RtpiSchemaDocument = deepFreeze({
 		},
 	},
 });
+
+// IB1 is a separate, closed extension document. NEVER mutate the seven accepted C0 definitions above.
+export const INITIATIVES_ENABLED = false;
+export const INITIATIVES_ISSUER_ID = "initiatives-required-contract-issuer";
+export const INITIATIVES_ISSUER_REVISION = "i1-v1";
+export const INITIATIVES_SOURCE_ID = "initiatives-registry";
+export const INITIATIVES_ROOTS = deepFreeze({
+	"rtpi/initiative-execution/1": { $ref: "#/$defs/initiativeExecution" },
+	"rtpi/outcome-contract/1": { $ref: "#/$defs/outcomeContract" },
+});
+export type InitiativesRootSchema = keyof typeof INITIATIVES_ROOTS;
+export const INITIATIVES_P03_CAUSE_KINDS = Object.freeze([
+	"finished-task-not-acted-on",
+	"blocked-only-on-done-tasks",
+	"no-activity-for-n-hours",
+	"request-unanswered",
+	"chat-stopped-by-account-fault",
+	"pause-reason-passed",
+	"only-owner-can-unblock",
+	"stall-check-silent",
+] as const);
+export type InitiativesCauseKind = (typeof INITIATIVES_P03_CAUSE_KINDS)[number];
+
+/** I1's closed per-kind required set. This is Initiatives C7 only; Roles has no dependency on it. */
+export const INITIATIVES_REQUIRED_STAGES = deepFreeze({
+	"software-delivery": ["built", "checked", "installed", "live"],
+	"artifact-acceptance": ["checked"],
+	"owner-confirmation": ["owner-confirmed"],
+} as const);
+export type InitiativesOutcomeKind = keyof typeof INITIATIVES_REQUIRED_STAGES;
+export type InitiativesStage = (typeof INITIATIVES_REQUIRED_STAGES)[InitiativesOutcomeKind][number];
+
+/** All positions are semantic, not merely JSON-shape eligible. '*' means each array element; null is unknown,
+ * not a wildcard. A whole root must use one namespace. Evidence refs cannot carry authority. */
+const initiativeCommonKinds = {
+	source: ["source"],
+	issuer: ["issuer"],
+	subject: ["subject"],
+	lineage: ["lineage"],
+	initiative: ["initiative"],
+	"refs.*": ["operation", "receipt", "run", "artifact", "contract", "origin"],
+};
+export const INITIATIVES_REF_KINDS = deepFreeze({
+	"rtpi/initiative-execution/1": {
+		...initiativeCommonKinds,
+		registryRecord: ["operation"],
+		"goal.authority": ["operation"],
+		"lead.role": ["role"],
+		"lead.assignment": ["operation"],
+		"lead.ownerReceipt": ["receipt"],
+		"members.*.role": ["role"],
+		"members.*.association": ["operation"],
+		"members.*.origin": ["origin"],
+		"contributions.*.role": ["role"],
+		"contributions.*.work": ["operation", "run"],
+		"contributions.*.assignment": ["operation"],
+		"contributions.*.origin": ["origin"],
+		"contributions.*.outcomes.*": ["contract"],
+		"started.receipt": ["receipt"],
+		"finishTarget.issuer": ["issuer"],
+		"finishTarget.commit": ["operation"],
+		"outcomes.*": ["contract"],
+		"causes.*.subject": ["operation", "request", "session", "initiative"],
+		"causes.*.evidence": ["receipt"],
+		"causes.*.relatedRefs.*": ["operation"],
+	},
+	"rtpi/outcome-contract/1": {
+		...initiativeCommonKinds,
+		authority: ["operation"],
+		acceptedBy: ["issuer"],
+		responsibleActor: ["role", "owner"],
+		recipient: ["role", "owner"],
+		artifactRef: ["artifact"],
+		"contributions.*": ["operation"],
+		"handoffs.*": ["handoff"],
+		"required.*.rule": ["contract"],
+		"required.*.verifier": ["issuer"],
+		"required.*.verifierActor": ["role", "owner"],
+		"required.*.independentOf": ["role", "owner"],
+	},
+});
+
+const ir = (name: string): RtpiSchemaNode => ({ $ref: `#/$defs/${name}` });
+const ia = (items: RtpiSchemaNode, maxItems = 64, minItems = 0): RtpiSchemaNode => ({
+	type: "array",
+	items,
+	maxItems,
+	minItems,
+});
+const io = (properties: Readonly<Record<string, RtpiSchemaNode>>): RtpiSchemaNode => ({
+	type: "object",
+	properties,
+	required: Object.keys(properties),
+	additionalProperties: false,
+});
+const nullable = (node: RtpiSchemaNode): RtpiSchemaNode => ({ anyOf: [node, { type: "null" }] });
+const initiativeEnvelope = {
+	objectId: ir("id"),
+	source: ir("ref"),
+	issuer: ir("ref"),
+	subject: ir("ref"),
+	lineage: ir("ref"),
+	incarnation: ir("id"),
+	revision: ir("positive"),
+	expectedRevision: ir("nonnegative"),
+	publicationRevision: ir("positive"),
+	publishedAt: ir("nonnegative"),
+	initiative: ir("ref"),
+	refs: ir("refs"),
+};
+
+export const INITIATIVES_SCHEMA: RtpiSchemaDocument = deepFreeze({
+	$schema: "https://json-schema.org/draft/2020-12/schema",
+	$id: "urn:rtpi:initiatives:1",
+	description: "IB1 inert closed extension: InitiativeExecutionV1 and OutcomeContractV1; original RTPI/1 unchanged.",
+	anyOf: Object.values(INITIATIVES_ROOTS),
+	$defs: {
+		...RTPI_SCHEMA.$defs,
+		initiativeMember: io({
+			role: ir("ref"),
+			part: nullable({ type: "string", maxLength: 256 }),
+			association: ir("ref"),
+			origin: ir("ref"),
+			activeFrom: ir("nullableInt"),
+			endedAt: ir("nullableInt"),
+		}),
+		initiativeContribution: io({
+			id: ir("id"),
+			role: ir("ref"),
+			work: ir("ref"),
+			assignment: ir("ref"),
+			origin: ir("ref"),
+			outcomes: ir("refs"),
+			coverage: { enum: ["complete", "partial", "unknown"] },
+		}),
+		initiativeCause: io({
+			kind: { enum: INITIATIVES_P03_CAUSE_KINDS },
+			subject: ir("ref"),
+			evidence: ir("ref"),
+			relatedRefs: ir("refs"),
+			since: ir("nullableInt"),
+			thresholdHours: nullable(ir("positive")),
+		}),
+		initiativeExecution: io({
+			...initiativeEnvelope,
+			schema: { const: "rtpi/initiative-execution/1" },
+			registryRecord: ir("ref"),
+			name: { type: "string", minLength: 1, maxLength: 128 },
+			markers: ia({ type: "string", minLength: 1, maxLength: 128 }, 16),
+			goal: io({ text: nullable({ type: "string", minLength: 1, maxLength: 6144 }), authority: ir("maybeRef") }),
+			lead: nullable(
+				io({ role: ir("ref"), assignment: ir("ref"), ownerReceipt: ir("ref"), assignedAt: ir("nonnegative") }),
+			),
+			members: ia(ir("initiativeMember")),
+			contributions: ia(ir("initiativeContribution")),
+			started: nullable(io({ receipt: ir("ref"), at: ir("nonnegative") })),
+			finishTarget: nullable(
+				io({
+					at: ir("nonnegative"),
+					timezone: { const: "America/Los_Angeles" },
+					issuer: ir("ref"),
+					commit: ir("ref"),
+				}),
+			),
+			outcomes: ir("refs"),
+			causes: ia(ir("initiativeCause"), 8),
+			completeness: io({
+				membership: { enum: ["complete", "partial", "unknown"] },
+				contributions: { enum: ["complete", "partial", "unknown"] },
+				outcomes: { enum: ["complete", "partial", "unknown"] },
+			}),
+		}),
+		initiativeRequiredGate: io({
+			stage: { enum: ["built", "checked", "installed", "live", "owner-confirmed"] },
+			required: { const: true },
+			applicable: { const: true },
+			rule: ir("ref"),
+			verifier: ir("ref"),
+			verifierActor: ir("ref"),
+			independentOf: ir("maybeRef"),
+			dependsOn: {
+				...ia({ enum: ["built", "checked", "installed", "live", "owner-confirmed"] }, 5),
+				uniqueItems: true,
+			},
+		}),
+		outcomeContract: io({
+			...initiativeEnvelope,
+			schema: { const: "rtpi/outcome-contract/1" },
+			title: { type: "string", minLength: 1, maxLength: 256 },
+			order: ir("positive"),
+			responsibleActor: ir("maybeRef"),
+			recipient: ir("ref"),
+			authority: ir("ref"),
+			kind: { enum: Object.keys(INITIATIVES_REQUIRED_STAGES) },
+			acceptedBy: ir("ref"),
+			artifactRef: ir("ref"),
+			artifact: RTPI_SCHEMA.$defs.gateContract.properties?.artifact ?? {},
+			contributions: ir("refs"),
+			handoffs: ir("refs"),
+			required: ia(ir("initiativeRequiredGate"), 5, 1),
+		}),
+	},
+});

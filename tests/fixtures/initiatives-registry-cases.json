@@ -1,0 +1,54 @@
+{
+	"schema": "initiatives-registry-fixed-cases/1",
+	"namespace": "rtpi-fixture",
+	"conditions": [
+		"ARCH-A01",
+		"ARCH-A02",
+		"ARCH-A04",
+		"ARCH-A05",
+		"INIT-C01",
+		"INIT-C07",
+		"R05-1",
+		"R05-2",
+		"R05-3",
+		"R07-4",
+		"SEC-S01"
+	],
+	"revisionReject": [0, -1, 1.5, "1", 9007199254740992],
+	"schemaReject": [
+		{ "id": "unknown-field", "path": "madeUp", "value": true },
+		{ "id": "wrong-initiative-kind", "path": "initiative.kind", "value": "role" },
+		{ "id": "second-issuer", "path": "issuer.id", "value": "another-issuer" },
+		{ "id": "wrong-issuer-version", "path": "issuer.revision", "value": "latest" },
+		{ "id": "other-initiative", "path": "initiative.id", "value": "another-initiative" },
+		{ "id": "mixed-namespace", "path": "lineage.namespace", "value": "rtpi-native" },
+		{ "id": "newline-token", "path": "lineage.id", "value": "l\n" },
+		{ "id": "wrong-source", "path": "source.id", "value": "design-publisher" },
+		{ "id": "fractional-time", "path": "publishedAt", "value": 1.5 }
+	],
+	"causeKinds": [
+		"finished-task-not-acted-on",
+		"blocked-only-on-done-tasks",
+		"no-activity-for-n-hours",
+		"request-unanswered",
+		"chat-stopped-by-account-fault",
+		"pause-reason-passed",
+		"only-owner-can-unblock",
+		"stall-check-silent"
+	],
+	"boundaries": { "bytesAccept": 8192, "bytesReject": 8193, "refsAccept": 64, "refsReject": 65 },
+	"gateKnownAnswers": {
+		"all-current-required": "done",
+		"empty": "unknown",
+		"optional-only": "unknown",
+		"all-not-applicable": "unknown",
+		"changed-contract": "unknown",
+		"changed-recipient": "unknown",
+		"changed-rule": "unknown",
+		"changed-artifact": "unknown",
+		"lead-member-only-change": "done",
+		"expired": "unknown",
+		"conflict": "unknown",
+		"failed-required": "incomplete"
+	}
+}
