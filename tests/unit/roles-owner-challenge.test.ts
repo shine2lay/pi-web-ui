@@ -18,7 +18,21 @@ const native = vi.hoisted(() => ({
 	admit: null as null | ((c: OwnerHostConnection) => OwnerPrincipalAdmission),
 	wall: 1_000_000,
 	mono: 5_000,
+	draws: [] as { size: number; bytes: Buffer }[],
 }));
+// randomBytes is observed, never replaced: the real bytes pass through, so the B4a test can see which draw became
+// the value and which became the id.
+vi.mock("node:crypto", async (importOriginal) => {
+	const real = await importOriginal<typeof import("node:crypto")>();
+	return {
+		...real,
+		randomBytes: (size: number) => {
+			const bytes = real.randomBytes(size);
+			native.draws.push({ size, bytes: Buffer.from(bytes) });
+			return bytes;
+		},
+	};
+});
 vi.mock("../../server/roles-owner-native.js", async (importOriginal) => {
 	const real = await importOriginal<typeof import("../../server/roles-owner-native.js")>();
 	return {
@@ -212,8 +226,15 @@ describe("O0 owner challenge handler: value, time and single use (B4, B5)", () =
 	it("issues a 256-bit server-held value with an id drawn independently of it, bound for exactly 60000 ms", () => {
 		admitFixture();
 		const { handler } = setup();
+		native.draws.length = 0;
 		const a = issued(handler.issue(conn(), target()));
+		// Two separate draws per issue: 32 bytes become the value, then 16 fresh bytes become the id. An id derived
+		// from the value (re-encoded, sliced or hashed) is not the second draw.
+		expect(native.draws.map((d) => d.size)).toEqual([OWNER_CHALLENGE_LIMITS.bytes, OWNER_CHALLENGE_LIMITS.idBytes]);
+		expect(native.draws[0]?.bytes.toString("base64url")).toBe(a.value);
+		expect("oc-" + native.draws[1]?.bytes.toString("hex")).toBe(a.challengeId);
 		const b = issued(handler.issue(conn(), target({ action: "open" })));
+		expect(native.draws).toHaveLength(4);
 		expect(a.value).toMatch(/^[A-Za-z0-9_-]{43}$/);
 		expect(Buffer.from(a.value, "base64url").length).toBe(OWNER_CHALLENGE_LIMITS.bytes);
 		expect(a.challengeId).toMatch(/^oc-[0-9a-f]{32}$/);
