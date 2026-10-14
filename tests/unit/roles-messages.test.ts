@@ -491,3 +491,122 @@ describe("old-code counterfactuals (each old rule fails a case the new code pass
 		);
 	});
 });
+
+// H-ROLES-M0-2: each case fails on afdf36af (the first M0 land) and passes after the review fix.
+describe("H-ROLES-M0-2 review: no answer by record order, repeat or missing registry entry", () => {
+	const arrowsOf = (build: (rec: ReturnType<typeof recorder>) => void, ms: RolesMessageMeta[] = [home]) => {
+		const rec = recorder();
+		build(rec);
+		return rolesMessageArrows(index(ms), rec.out, settleCap);
+	};
+
+	it("(a) a failed delivery and a successful one, in either order: delivered and still pending", () => {
+		for (const order of [
+			[false, true],
+			[true, false],
+		]) {
+			const r = arrowsOf((rec) => order.forEach((ok) => rec.deliver(home, ok)));
+			expect(viewOf(r, home.id), String(order)).toMatchObject({
+				delivered: "yes",
+				processed: "unknown",
+				pending: true,
+			});
+			expect(r.arrows[0].pendingTotal).toBe(1);
+		}
+		// Failures only: still failed and not pending.
+		const f = arrowsOf((rec) => (rec.deliver(home, false), rec.deliver(home, false)));
+		expect(viewOf(f, home.id)).toMatchObject({ delivered: "failed", pending: false });
+	});
+
+	it("(b) settlements of the included attempt that disagree: unknown receipt-conflict, whichever comes first", () => {
+		const orders: ("success" | "error")[][] = [
+			["success", "error"],
+			["error", "success"],
+		];
+		for (const order of orders) {
+			const r = arrowsOf((rec) => {
+				rec.include(home, A("T1", "A1"));
+				for (const o of order) rec.settle(HOME, A("T1", "A1"), o);
+			});
+			expect(viewOf(r, home.id), order.join()).toMatchObject({ processed: "unknown", reason: "receipt-conflict" });
+			expect(r.conflicts).toEqual([home.id]);
+		}
+	});
+
+	it("(b) a settlement rebuilt with other bytes under the same key is a conflict; the same bytes again are not", () => {
+		const rec = recorder();
+		rec.include(home, A("T1", "A1")); // revision 1
+		const s = rec.settle(HOME, A("T1", "A1"), "success"); // revision 2
+		const w = rolesWitness("rtpi-fixture", HOME, A("T1", "A1"));
+		const other = rolesMessageInputSettlement(
+			{
+				fact: "message-settled",
+				settlement: { recipient: "ops", target: HOME, attempt: A("T1", "A1"), outcome: "success" },
+			},
+			env(settleCap, 2, 1500),
+			opts(settleCap, 2, w, true),
+		).verdict!;
+		if (s.status !== "accepted" || other.status !== "accepted") throw new Error("not accepted");
+		expect(other.dedupKey).toBe(s.dedupKey);
+		expect(other.digest).not.toBe(s.digest);
+		const same = rolesMessageArrows(index([home]), [...rec.out, s], settleCap);
+		expect(viewOf(same, home.id).processed).toBe("processed");
+		expect(same.conflicts).toEqual([]);
+		const r = rolesMessageArrows(index([home]), [...rec.out, other], settleCap);
+		expect(viewOf(r, home.id)).toMatchObject({ processed: "unknown", reason: "receipt-conflict" });
+		expect(r.conflicts).toEqual([home.id]);
+	});
+
+	it("(b) a conflict on another attempt leaves a message processed on its own clean attempt", () => {
+		const r = arrowsOf((rec) => {
+			rec.include(home, A("T1", "A1"));
+			rec.settle(HOME, A("T1", "A1"), "success");
+			rec.settle(HOME, A("T2", "A9"), "success");
+			rec.settle(HOME, A("T2", "A9"), "error");
+		});
+		expect(viewOf(r, home.id)).toMatchObject({ processed: "processed" });
+		expect(r.conflicts).toEqual([]);
+	});
+
+	it("(c) stale is null without the role's own current home in the registry", () => {
+		const homes: Record<string, number>[] = [{}, { security: 1 }, { ops: 0 }];
+		for (const currentHome of homes)
+			expect(rolesMessageArrows(index([home], { currentHome }), [], settleCap).arrows[0].stale).toBeNull();
+		for (const role of ["constructor", "__proto__", "toString"]) {
+			const m = meta({ id: "rm-proto001", to: { role, homeRevision: 3 } });
+			const r = rolesMessageArrows(index([m], { currentHome: { ops: 3 } }), [], settleCap);
+			expect(r.arrows[0].stale, role).toBeNull();
+		}
+		expect(rolesMessageArrows(index([home]), [], settleCap).arrows[0].stale).toBe(false);
+		expect(rolesMessageArrows(index([home], { currentHome: { ops: 4 } }), [], settleCap).arrows[0].stale).toBe(true);
+	});
+
+	it("(d) an id listed twice: shown once, index not complete, still processed on its exact receipts", () => {
+		const r = arrowsOf(
+			(rec) => (rec.include(home, A("T1", "A1")), rec.settle(HOME, A("T1", "A1"), "success")),
+			[home, home],
+		);
+		expect(r).toMatchObject({ complete: false, total: null, shown: 1 });
+		expect(r.arrows).toHaveLength(1);
+		expect(r.arrows[0].messages.map((m) => m.id)).toEqual([home.id]);
+		expect(r.arrows[0].byClass.home).toEqual({ shown: 1, processed: 1 });
+		expect(r.arrows[0].pendingTotal).toBeNull();
+		expect(viewOf(r, home.id).processed).toBe("processed");
+	});
+
+	it("(d) two index entries for one id that disagree: one arrow, unknown index-conflict", () => {
+		const moved = meta({
+			id: home.id,
+			to: { role: "security", homeRevision: 1 },
+			target: { sessionId: "S-sec-home", sessionEpoch: "E1", branchId: "B1", homeRevision: 1 },
+		});
+		const r = arrowsOf(
+			(rec) => (rec.include(home, A("T1", "A1")), rec.settle(HOME, A("T1", "A1"), "success")),
+			[home, moved],
+		);
+		expect(r).toMatchObject({ complete: false, total: null, shown: 1 });
+		expect(r.arrows).toHaveLength(1);
+		expect(viewOf(r, home.id)).toMatchObject({ processed: "unknown", reason: "index-conflict" });
+		expect(r.conflicts).toEqual([home.id]);
+	});
+});

@@ -26,6 +26,19 @@
 
 **What would prove it wrong.** Any negative case coming out processed; any processed without T01 declared; a truncated index reported complete or with a total; a task or FYI message processed from a home-only settlement; body, path or hash bytes in a record; or any change to an existing file's behaviour.
 
+Result: **HIT** (32/32 on the first run; landed inert as `afdf36af`).
+
+## H-ROLES-M0-2 (review of the landed M0, written before the fix, 2026-10-13 ~20:45 PDT)
+
+A read-through of `rolesMessageArrows` after landing found four places where it still guesses. Each gets one change and one fixed case that fails on `afdf36af`.
+
+- **(a) Pending after a redelivery.** Wrong: `pending` is `!failed`, and `failed` is true when _any_ delivery failed. A message whose first delivery failed and whose redelivery got in (or the other way round) shows `delivered: "yes"` but drops out of the pending list and the pending total. Change: `failed` only when no delivery succeeded, so pending follows the final delivery state. Expect: both orders give `delivered: "yes"`, `pending: true`, pending total 1. Wrong if: either order leaves it out of pending, or a failure-only message becomes pending.
+- **(b) Settlements of one attempt that disagree.** Wrong: a same-key conflict is only marked through `context.action`, and a settlement has none, so the first settlement seen wins silently. Two settlements of one attempt under different keys (success and error) make the result depend on record order. Change: a witness whose settlements conflict (same key with other bytes, or different outcomes) is a conflict; every message included in that attempt shows `unknown` (`receipt-conflict`) and is listed in `conflicts`. Expect: success-then-error and error-then-success both give unknown; an exact duplicate (same bytes) still gives processed; a conflict on another attempt leaves this message processed. Wrong if: either order still gives a processed or not-processed answer, or a byte-identical duplicate is called a conflict.
+- **(c) Stale without a known current home.** Wrong: `stale` is `currentHome[role] !== homeRevision`, so a role missing from the registry, or a role id such as `constructor` or `__proto__` read through the object prototype, is called stale without evidence. Change: `stale` is `null` unless the registry has its own positive current home for that role. Expect: missing, zero and prototype-named roles give `null`; a matching home gives `false`; an older one still gives `true`. Wrong if: any of them gives `true` or `false` without a registry entry.
+- **(d) One id listed twice in the index.** Wrong: a repeated id is counted twice in `shown`, the class counts and the pending total, and an index whose total counts the repeat is still called complete; two entries that disagree put one message in two arrows. Change: one entry per id; a repeated id makes the index not complete; entries that disagree make that message `unknown` (`index-conflict`, listed in `conflicts`). Expect: `[home, home]` with total 2 gives `complete: false`, `total: null`, `shown: 1`, one arrow, and the message still processed on its exact receipts; disagreeing entries give one arrow and unknown. Wrong if: a repeat is counted twice or the index is still complete.
+
+Measured by the stage test (fixed synthetic metadata only) before and after the change; then the land gate.
+
 ## What this module is
 
 `server/roles-messages.ts` (unit M0, I-MESSAGE/1). **Inert (D-INERT)**: no production file imports it; no instance, timer, registration, journal or I/O; nothing is appended. Every adapter is off unless called with `enabled: true`, and an explicit disable writes nothing. PATCHES.md gets no row until a consumer imports it (as with C0 and Q0).
@@ -53,11 +66,16 @@ Each record carries the message as `context.action` (kind `operation`, id = mess
 - `processed` only for an inclusion record of this exact message whose witness has a successful settlement of the same witness. Another attempt's settlement is `unknown` (`settled-different-attempt`); a same-attempt error or abort is `not-processed` and the message stays pending.
 - `badge.ready` is true only when the capability declares the T01 seam; otherwise `blocked: "input-hook-unsupported"`.
 - Totals come from the native index only when it says `complete`; otherwise totals are null and `complete: false`. Pending shows at most 200 (`rtpiPendingWindow`) with the full total.
+- Pending follows the final delivery state: a message counts as failed only when no delivery of it got in.
+- Conflicts are never resolved by order: a message whose receipts conflict, or that was included in an attempt whose settlements conflict, shows `unknown` (`receipt-conflict`). One index entry per id; a repeated id makes the index not complete, and entries that disagree show `unknown` (`index-conflict`).
+- `stale` is `null` unless the registry has its own current home for the recipient role.
 - Legacy records with no receipts stay unknown; nothing is cleared, upgraded or rewritten.
 
 ## Missing native seam (D-MISSING) and the proposal
 
-T01 (exact final-input hook with native run/attempt identity) does not exist in pi SDK 1.0.1, so the input-settlement adapter stays off and the badge's ready claim is blocked. No SDK instrumentation, payload reading or helper was added. The bounded proposal goes to Ops with queue_stuck (see RESULT in the #139 receipts folder).
+T01 (exact final-input hook with native run/attempt identity) does not exist in pi SDK 1.0.1, so the input-settlement adapter stays off and the badge's ready claim is blocked. No SDK instrumentation, payload reading or helper was added. The bounded proposal went to Ops with queue_stuck (`T01-PROPOSAL.md` in the #139 receipts folder).
+
+Ops decided (rule 21, 2026-10-13 ~20:30 PDT; Ops's technical decision, not an owner approval): keep processed unknown and record T01 as a missing seam. T01 joins T02-T05 in one bundled package that goes to the owner before any switch-on, alongside J0 (#145). There is no spec-only T01 task and no contract revision now. This authorises no SDK change or upgrade, upstream request, payload reading, producer, hook or store change, install, restart or switch-on.
 
 ## Stages and undo
 

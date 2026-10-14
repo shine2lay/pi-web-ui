@@ -325,8 +325,9 @@ export interface RolesArrow {
 	readonly from: string;
 	readonly to: string;
 	readonly toHomeRevision: number;
-	/** A message bound to an older home revision stays in its own domain, never the new home's arrow. */
-	readonly stale: boolean;
+	/** A message bound to an older home revision stays in its own domain, never the new home's arrow. Null when the
+	 * registry has no current home of its own for the recipient role: never called stale or current without it. */
+	readonly stale: boolean | null;
 	readonly byClass: Readonly<Record<RolesMessageClass, { readonly shown: number; readonly processed: number }>>;
 	readonly pending: readonly RolesMessageView[];
 	readonly pendingTotal: number | null;
@@ -338,7 +339,9 @@ export interface RolesArrows {
 	readonly total: number | null;
 	readonly shown: number;
 	readonly badge: { readonly ready: boolean; readonly blocked: string | null };
-	/** Messages whose records conflict (same dedup key, different bytes): shown unknown, never resolved. */
+	/** Messages shown unknown because something conflicts, never resolved by order: their own receipts (same dedup key,
+	 * other bytes), the settlements of an attempt that included them (other bytes, or outcomes that disagree), or
+	 * their index entries (one id listed with different metadata). */
 	readonly conflicts: readonly string[];
 }
 
@@ -353,6 +356,25 @@ function ctxOf(v: RtpiAccepted): Ctx {
 const same = (a: unknown, b: unknown): boolean =>
 	a !== null && b !== null && a !== undefined && b !== undefined && rtpiCanonical(a) === rtpiCanonical(b);
 const WITNESS_KEYS = ["session", "epoch", "turn", "run", "attempt"] as const;
+const witnessKey = (c: Ctx): string => rtpiCanonical(WITNESS_KEYS.map((k) => c[k] ?? null));
+/** The validated metadata of an index entry, to tell a repeated entry from a conflicting one. */
+function metaKey(m: RolesMessageMeta): string {
+	const t = m.target!;
+	return rtpiCanonical([
+		m.kind,
+		m.route,
+		m.from.role,
+		m.from.homeRevision,
+		m.to.role,
+		m.to.homeRevision,
+		t.sessionId,
+		t.sessionEpoch,
+		t.branchId,
+		t.homeRevision,
+		m.task ? [m.task.queueId, m.task.taskId, m.task.planRevision] : null,
+		m.replyTo,
+	]);
+}
 
 const RANK: Readonly<Record<RtpiProcessedState, number>> = { unknown: 0, "not-processed": 1, processed: 2 };
 
@@ -364,9 +386,11 @@ export function rolesMessageArrows(
 ): RolesArrows {
 	const hook = isRtpiCapability(capability) && capability.seams.inputHook;
 	const accepted = records.filter((r): r is Rec => isRtpiAccepted(r) && r.qualified && r.schema === "rtpi/event/1");
-	// V04: same dedup key with other bytes is a conflict; every message it touches stays unknown.
+	// V04: same dedup key with other bytes is a conflict; every message it touches stays unknown. A settlement has no
+	// message of its own: its conflict marks the attempt, and through it every message that attempt included.
 	const byKey = new Map<string, Rec>();
 	const conflicted = new Set<string>();
+	const conflictedWitness = new Set<string>();
 	const kept: Rec[] = [];
 	for (const r of accepted) {
 		const prior = byKey.get(r.dedupKey);
@@ -377,12 +401,33 @@ export function rolesMessageArrows(
 			for (const x of [prior, r]) {
 				const a = ctxOf(x).action as RtpiRef | null;
 				if (a) conflicted.add(a.id);
+				else if (factOf(x) === "message-settled") conflictedWitness.add(witnessKey(ctxOf(x)));
 			}
 		}
 	}
 	const settled = kept.filter((r) => factOf(r) === "message-settled");
+	// Settlements of one attempt under different keys that disagree on the outcome: a conflict, never first-come wins.
+	const outcomeOf = new Map<string, string>();
+	for (const s of settled) {
+		const k = witnessKey(ctxOf(s));
+		const body = s.root.body as Ctx;
+		const o = rtpiCanonical([body.success ?? null, body.errorCode ?? null]);
+		const prior = outcomeOf.get(k);
+		if (prior === undefined) outcomeOf.set(k, o);
+		else if (prior !== o) conflictedWitness.add(k);
+	}
+	// One entry per message id: a repeat is counted once (and makes the index not complete); entries that disagree
+	// are an index conflict.
+	const firstOf = new Map<string, RolesMessageMeta>();
+	const indexConflict = new Set<string>();
+	for (const m of index.messages.filter(metaOk)) {
+		const prior = firstOf.get(m.id);
+		if (prior === undefined) firstOf.set(m.id, m);
+		else if (metaKey(prior) !== metaKey(m)) indexConflict.add(m.id);
+	}
+	const conflictIds = new Set(conflicted);
 	const views = new Map<string, RolesMessageView>();
-	const valid = index.messages.filter(metaOk);
+	const valid = [...firstOf.values()];
 	for (const m of valid) {
 		const target = m.target!;
 		const mine = (fact: string) =>
@@ -421,18 +466,26 @@ export function rolesMessageArrows(
 				reason = p.reason;
 			}
 		}
-		if (conflicted.has(m.id)) {
+		if (conflicted.has(m.id) || included.some((inc) => conflictedWitness.has(witnessKey(ctxOf(inc))))) {
 			processed = "unknown";
 			reason = "receipt-conflict";
+			conflictIds.add(m.id);
 		}
-		const failed = delivery.some((r) => (r.root.body as Ctx).success === false);
+		if (indexConflict.has(m.id)) {
+			processed = "unknown";
+			reason = "index-conflict";
+			conflictIds.add(m.id);
+		}
+		// Pending follows the final delivery state: failed only when no delivery of it got in.
+		const got = delivery.some((r) => (r.root.body as Ctx).success === true);
+		const failed = !got && delivery.some((r) => (r.root.body as Ctx).success === false);
 		const view: RolesMessageView = {
 			id: m.id,
 			kind: m.kind,
 			receiptClass: rolesMessageClass(m),
 			taskId: m.task ? m.task.taskId : null,
 			admitted: mine("message-admitted").length > 0,
-			delivered: delivery.some((r) => (r.root.body as Ctx).success === true) ? "yes" : failed ? "failed" : "unknown",
+			delivered: got ? "yes" : failed ? "failed" : "unknown",
 			inputBound: included.length > 0,
 			replies,
 			processed,
@@ -462,12 +515,14 @@ export function rolesMessageArrows(
 			if (x.processed === "processed") byClass[x.receiptClass].processed++;
 		}
 		const pend = v.filter((x) => x.pending);
-		const current = index.currentHome[m.to.role];
+		const current = Object.prototype.hasOwnProperty.call(index.currentHome, m.to.role)
+			? index.currentHome[m.to.role]
+			: undefined;
 		arrows.push({
 			from: m.from.role,
 			to: m.to.role,
 			toHomeRevision: m.to.homeRevision,
-			stale: current !== m.to.homeRevision,
+			stale: positive(current) ? current !== m.to.homeRevision : null,
 			byClass,
 			pending: rtpiPendingWindow(pend, pend.length).shown,
 			pendingTotal: complete ? pend.length : null,
@@ -480,6 +535,6 @@ export function rolesMessageArrows(
 		total: complete ? index.total : null,
 		shown: valid.length,
 		badge: hook ? { ready: true, blocked: null } : { ready: false, blocked: "input-hook-unsupported" },
-		conflicts: [...conflicted],
+		conflicts: [...conflictIds],
 	};
 }
