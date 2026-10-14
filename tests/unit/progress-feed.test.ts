@@ -59,6 +59,8 @@ interface Fx {
 	pokes: { id: string; role: string; text: string; why: PokeWhy[] }[];
 	states: Map<string, "waiting" | "delivered" | "replied" | "failed">;
 	busy: Set<string>;
+	/** Chats (transcript file names) in a turn: a queued task answering an ask. */
+	busyChats: Set<string>;
 }
 
 function fixture(opts: { feed?: string[]; initiatives?: unknown } = {}): Fx {
@@ -68,7 +70,15 @@ function fixture(opts: { feed?: string[]; initiatives?: unknown } = {}): Fx {
 	if (opts.initiatives) writeFileSync(join(ddir, INITIATIVES_FILE), JSON.stringify(opts.initiatives));
 	const store = new DecisionStore(ddir, { now: () => now });
 	const records = new DecisionRecords(ddir, { now: () => now });
-	const fx = { ddir, store, records, pokes: [], states: new Map(), busy: new Set() } as unknown as Fx;
+	const fx = {
+		ddir,
+		store,
+		records,
+		pokes: [],
+		states: new Map(),
+		busy: new Set(),
+		busyChats: new Set(),
+	} as unknown as Fx;
 	const host: FeedHost = {
 		store: () => store,
 		records: () => records.list(),
@@ -85,6 +95,7 @@ function fixture(opts: { feed?: string[]; initiatives?: unknown } = {}): Fx {
 		},
 		pokeState: (id) => fx.states.get(id),
 		leadBusy: (role) => fx.busy.has(role),
+		chatBusy: (file) => fx.busyChats.has(file),
 		now: () => now,
 	};
 	fx.feed = new ProgressFeed(host, ddir);
@@ -552,6 +563,38 @@ describe("asks to the lead (fake clock)", () => {
 		expect(fx.feed.snapshot().initiatives[TIT]!.open).toBeUndefined();
 		expect(fx.feed.ask(TIT)).toMatchObject({ ok: true });
 		expect(fx.pokes).toHaveLength(2);
+	});
+
+	it("a catch-up answered from a queued task: no next round while that task's chat is still posting", async () => {
+		const fx = fixture();
+		const r1 = decide(fx, answer("a1", local(4, 10), "One"), "One");
+		const r2 = decide(fx, message("m2", local(5, 10), "Temper keeps the trial on temper-dev."), "Trial");
+		decide(fx, message("m3", local(6, 10), "Temper adds a second lane."), "Second lane");
+		expect(fx.feed.catchUp(TIT, "2026-10-03")).toMatchObject({ ok: true, unlinked: 3 });
+		expect(fx.pokes.map((p) => p.why)).toEqual([["catch-up"]]);
+		fx.states.set(fx.pokes[0]!.id, "delivered");
+		// The home chat put the work in a queued task (Board order bp-94c7e08b) and its turn ended.
+		fx.feed.stepNow(TIT);
+		const task: RoleMessageSender = { ...lead, chat: "Task #76: catch-up", file: "/x/arch-task.jsonl" };
+		fx.busyChats.add("arch-task.jsonl");
+		now += 60_000;
+		expect((await post(fx, [r1.rec], "Linked the first answer.", task)).ok).toBe(true);
+		now += 60_000;
+		fx.feed.stepNow(TIT);
+		now += 60_000;
+		expect((await post(fx, [r2.rec], "Linked the trial message.", task)).ok).toBe(true);
+		now += 60_000;
+		fx.feed.stepNow(TIT);
+		// Still the first round's ask: the task is still posting.
+		expect(fx.pokes).toHaveLength(1);
+		expect(fx.feed.snapshot().initiatives[TIT]!.open?.id).toBe(fx.pokes[0]!.id);
+		// The task's turn ended with one decision left: the next round goes to the home chat now.
+		fx.busyChats.clear();
+		now += 60_000;
+		fx.feed.stepNow(TIT);
+		expect(fx.pokes).toHaveLength(2);
+		expect(fx.pokes[1]!.why).toEqual(["catch-up"]);
+		expect(fx.pokes[1]!.text).toContain("Catch-up (round 2)");
 	});
 
 	it("flags on the lead's last update ask it to correct them, quoting each flagged sentence", async () => {

@@ -158,6 +158,8 @@ export interface FeedHost {
 	pokeState(id: string): PokeState | undefined;
 	/** The role's home chat is in a turn. */
 	leadBusy(role: string): boolean;
+	/** The chat an update came from (its transcript's file name) is in a turn: a queued task answering an ask. */
+	chatBusy?(file: string): boolean;
 	/** The reader's model (the cheapest Claude model), when there is one. */
 	model?(): DecisionModel | undefined;
 	changed?(): void;
@@ -546,6 +548,15 @@ export class ProgressFeed {
 		}
 		for (const g of groups.values()) g.entries.sort((a, b) => a.at - b.at);
 		return [...groups.values()].sort((a, b) => a.at - b.at);
+	}
+
+	/**
+	 * The chat the update came from is still in its turn. A lead may answer an ask from a queued task (work
+	 * bigger than a quick answer goes to a task: Board order bp-94c7e08b): its first update doesn't answer
+	 * the ask while that task is still posting, or a catch-up's next round would reach the home chat mid-task.
+	 */
+	private postingChatBusy(update: DecisionRecord): boolean {
+		return !!update.file && !!this.host.chatBusy?.(update.file);
 	}
 
 	private lastUpdate(c: Ctx): DecisionRecord | undefined {
@@ -1124,7 +1135,8 @@ export class ProgressFeed {
 			const st = this.host.pokeState(open.id);
 			let how: "answered" | "expired" | "failed" | undefined;
 			if (!st || st === "failed") how = "failed";
-			else if (last && last.at > open.at && !this.host.leadBusy(open.to)) how = "answered";
+			else if (last && last.at > open.at && !this.host.leadBusy(open.to) && !this.postingChatBusy(last))
+				how = "answered";
 			else if (now - open.at > POKE_OPEN_MS) how = "expired";
 			if (how) {
 				this.closePoke(s, how, now);

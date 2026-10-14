@@ -75,8 +75,10 @@ records hold; fill impact/options/until with decision_log where known, else say 
 Triggers: a queued task filed under it is done; a new decision or change is filed under it; daily at
 `dailyAt` if anything is new; a flag on its last update; the owner's button. Throttle: at most one automatic
 ask per initiative per `pokeEveryHours`, none when nothing is new, none while one is unanswered (an ask closes
-once an update came after it and the lead's turn is over, or after 24 h). The button skips the throttle but
-not an ask still on its way.
+once an update came after it and the lead's turn is over, or after 24 h). The lead may answer from a queued
+task (Board order bp-94c7e08b): its updates close the ask only once that task's chat is out of its turn too,
+so a catch-up's next round doesn't reach the home chat while the task is still posting. The button skips the
+throttle but not an ask still on its way.
 
 **Catch-up**: `pi-web-ui decisions catch-up --initiative team-in-temper --from 2026-10-03` asks the lead to
 cover everything since that day, round after round, until no decision or change is unlinked; it stops (and

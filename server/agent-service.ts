@@ -15524,6 +15524,10 @@ export class AgentService {
 					const home = identityRegistry().identities.find((i) => i.id === role)?.homeChat;
 					return !!home && this.queueChatState(home).state === "working";
 				},
+				chatBusy: (file) => {
+					const path = this.decisionChatPath(file);
+					return !!path && this.queueChatState(path).state === "working";
+				},
 				model: () => this.feedModel(),
 				changed: () => this.onDecisionsChanged?.(),
 				log: (line) => console.log(line),
