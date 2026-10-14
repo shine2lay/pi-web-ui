@@ -10,6 +10,13 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## role-mail-lease: delivered chats acquire their own message guard lease
+
+- `local` (Ops #175, H-LEASE-1). A zero-delay delivery timer created by `RoleMessages.admit` inherited `GuardLease`'s AsyncLocalStorage re-entry mark. The chat it woke could bypass a different writer's lock: refuse during publication, or overwrite an accepted message, charge and outbox entry with a stale snapshot.
+- `GuardLease.detach` uses `AsyncLocalStorage.exit`; dispatch supplies it only around admission's timer creation (the existing 0 ms kick and 300 ms page-list debounce). Synchronous `host.sent` and genuinely nested store/decision/question/rotation calls remain re-entrant. No caps, grants, policy, retention, sender wording or delivery/after-turn timing change; no state migration or repair.
+- Proof: `tests/unit/role-message-guard-lease.test.ts`, real lease/store/host/native timers with synthetic chats and deterministic promise barriers: publication-gap refusal, stale-snapshot lost update, deferred-list callback, nested saves/rotation and ordinary working-chat delivery. Old source fails all three race cases and keeps the two controls green. Existing guard/approval and #156 boundary suites retained. Details: `docs/role-message-ladder.md`.
+- Undo: revert this labelled patch and install normally; never roll back or hand-edit guard/message files. The old build restores the race, not a safer persistence policy.
+
 ## roles-queue-id: retain the native queue ID in the Roles reader
 
 - `local`: Ops #137 / Q0, H-ROLES-Q0-1. The Roles scanner omitted the native session ID when it called queue replay. Bound `run` and `autonomy` operations were therefore ignored: a running queue whose old pause reason was `finished` looked stopped in the badge and `roles_overview`.

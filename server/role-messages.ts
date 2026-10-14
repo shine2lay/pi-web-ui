@@ -275,6 +275,10 @@ interface StoreFile {
 	messages: RoleMessageRecord[];
 }
 
+/** Only timer creation leaves the guard lease; synchronous admission callbacks stay re-entrant. */
+type RoleMessageSchedule = (schedule: () => void) => void;
+const inSchedulingContext: RoleMessageSchedule = (schedule) => schedule();
+
 /** What the server does for the delivery (AgentService). */
 export interface RoleMessageHost {
 	/** The roles now (pi-identity's identity list). */
@@ -893,7 +897,7 @@ export class RoleMessages {
 		}
 	}
 
-	private save(): void {
+	private save(schedule: RoleMessageSchedule = inSchedulingContext): void {
 		const keep = this.data.messages;
 		if (keep.length > ROLE_MESSAGES_KEEP) {
 			const extra = keep.length - ROLE_MESSAGES_KEEP;
@@ -921,20 +925,22 @@ export class RoleMessages {
 		} catch (err) {
 			this.log(`couldn't save the store: ${(err as Error).message}`);
 		}
-		this.notify();
+		this.notify(schedule);
 	}
 
-	private notify(): void {
+	private notify(schedule: RoleMessageSchedule): void {
 		if (!this.host.changed || this.changeTimer) return;
-		this.changeTimer = setTimeout(() => {
-			this.changeTimer = null;
-			try {
-				this.host.changed?.();
-			} catch {
-				// the page's list only
-			}
-		}, 300);
-		this.changeTimer.unref?.();
+		schedule(() => {
+			this.changeTimer = setTimeout(() => {
+				this.changeTimer = null;
+				try {
+					this.host.changed?.();
+				} catch {
+					// the page's list only
+				}
+			}, 300);
+			this.changeTimer.unref?.();
+		});
 	}
 
 	byId(id: string): RoleMessageRecord | undefined {
@@ -1002,8 +1008,10 @@ export class RoleMessages {
 		this.changeTimer = null;
 	}
 
-	kick(): void {
-		setTimeout(() => void this.tick(), 0).unref?.();
+	kick(schedule: RoleMessageSchedule = inSchedulingContext): void {
+		schedule(() => {
+			setTimeout(() => void this.tick(), 0).unref?.();
+		});
 	}
 
 	/**
@@ -1388,7 +1396,10 @@ export class RoleMessages {
 	/** role-message-ladder: store an admitted record and start its delivery. Idempotent by id: a record already
 	 *  here is confirmed, never stored twice. A preset target (a reply to the asking session) gets its delivery
 	 *  check fields here, so the receiving chat can prove it. */
-	admit(input: RoleMessageRecord): { ok: true; record: RoleMessageRecord; paused: boolean; targetChat: string } {
+	admit(
+		input: RoleMessageRecord,
+		schedule: RoleMessageSchedule = inSchedulingContext,
+	): { ok: true; record: RoleMessageRecord; paused: boolean; targetChat: string } {
 		const existing = this.byId(input.id);
 		const targetChatOf = (r: RoleMessageRecord) =>
 			r.kind === "reply" && r.replyTo
@@ -1417,11 +1428,11 @@ export class RoleMessages {
 			// (step), so it is still delivered and gets its time.
 			if (original.state === "delivered") original.state = "replied";
 		}
-		this.save();
+		this.save(schedule);
 		this.log(
 			`${record.id} ${record.from.role} (${record.from.chat}) -> ${record.to.role} · ${record.kind}${record.replyTo ? ` to ${record.replyTo}` : ""}, chain ${record.chain}${record.forOwner ? ", for the owner" : ""}${record.guard ? `, approval ${record.guard.phase}` : ""}`,
 		);
-		this.kick();
+		this.kick(schedule);
 		try {
 			this.host.sent?.(record);
 		} catch (err) {

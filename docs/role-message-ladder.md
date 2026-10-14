@@ -53,7 +53,11 @@ copy: when a record is dropped, its chain facts (id, hash, target, root, parent,
   current home chat, approver selection (trusted lead binding, COO default, Owner), decision
   re-verification, transport through `RoleMessages.admit`, the browser/Telegram Owner question, startup,
   rotation and rollback detection. One re-entrant in-process lease covers E's store, rotation, decision
-  records and every admit; a pid lock file guards the directory.
+  records and every admit; a pid lock file guards the directory. Admission's deferred delivery and page
+  notification timers are created through `GuardLease.detach` (`AsyncLocalStorage.exit`), so the callbacks
+  and the chat turns they start cannot inherit lock ownership (#175, H-LEASE-1). Only scheduling is
+  detached: synchronous `host.sent` and awaited nested guard work retain re-entry. The existing 0 ms kick,
+  300 ms notification debounce, 3000 ms periodic tick and #156 after-turn boundary are unchanged.
 - Component A (`role-message-guard-approvals.ts`) presents requests and decisions; #122 fixed its command
   fingerprint (it now uses E's `guardCommandFingerprint`) and added the question-only path.
 - `server/role-messages.ts` keeps all native rules and gains `prepare` / `admit` / `causalityOf` /
@@ -119,6 +123,12 @@ live role-message state.
 
 - Stage cases: `tests/unit/role-message-guard-host.test.ts` (real RoleMessages, E and A; fake chats and
   clock), including the FE32/H7 7th-hop counterfactual (old code refuses, the ladder asks).
+- Lease races: `tests/unit/role-message-guard-lease.test.ts` uses real Node timers and the store's boundary
+  hook with promise barriers. A send from an admit-created delivery waits across journal publication;
+  both writers keep their messages, charges and outbox even if the old code could have passed ready
+  twice. The page-notification callback is detached too; synchronous nested saves/rotation remain ordered.
+  Run on the pre-patch source: all three race cases fail (including a lost accepted record), the two
+  nesting/timing controls pass. No real chat, message send or model call is used.
 - Acceptance: V's harness (`tests/role-message-guard-acceptance/`) through
   `tests/role-message-guard-binding-122.mjs` on the registered build; urgent cases are NOT RUN
   (not delivered, fail closed), never green.

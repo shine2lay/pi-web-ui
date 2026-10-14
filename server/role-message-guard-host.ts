@@ -296,6 +296,10 @@ export class GuardLease {
 		this.tail = next.catch(() => undefined);
 		return next;
 	}
+	/** Scheduling may outlive this owner: its timers/turns must acquire their own lease. */
+	detach<T>(schedule: () => T): T {
+		return this.held.exit(schedule);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1476,7 +1480,9 @@ export class RoleMessageGuardHost {
 		const rm = this.o.roleMessages();
 		if (!rm) return { state: "unknown", reason: "role messages not running" };
 		return this.lease.run(async () => {
-			const res = rm.admit(structuredClone(entry.message) as unknown as RoleMessageRecord);
+			const res = rm.admit(structuredClone(entry.message) as unknown as RoleMessageRecord, (schedule) =>
+				this.lease.detach(schedule),
+			);
 			return res.ok ? this.confirmed(entry, entry.receipt.dispatchKey) : { state: "failed", reason: "not stored" };
 		});
 	}
