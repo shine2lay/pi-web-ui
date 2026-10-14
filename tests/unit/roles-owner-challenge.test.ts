@@ -210,15 +210,19 @@ describe("O0 owner challenge handler: principal and scope (B1, B3)", () => {
 		expect(handler.answer(conn(), target(), { challengeId: i.challengeId, value: i.value }).status).toBe("rejected");
 	});
 
-	it("only render and open: acknowledge, confirm or approve cannot be challenged", () => {
+	it("acknowledge/approve remain forbidden; confirm without G0 binding cannot be challenged", () => {
 		admitFixture();
 		const { handler } = setup();
-		for (const action of ["acknowledge", "confirm", "approve"]) {
+		for (const action of ["acknowledge", "approve"]) {
 			expect(handler.issue(conn(), target({ action: action as "render" }))).toEqual({
 				status: "rejected",
 				reason: "action-not-in-o0",
 			});
 		}
+		expect(handler.issue(conn(), target({ action: "confirm" }))).toEqual({
+			status: "rejected",
+			reason: "confirm-gate-binding-required",
+		});
 	});
 });
 
@@ -446,7 +450,7 @@ describe("O0 owner challenge handler: value, time and single use (B4, B5)", () =
 	});
 
 	it("has no production importer, route, key, file, timer, env read or fixture admitter", () => {
-		// Every production source file, not a chosen few: only the three O0 modules may name each other.
+		// Every production source, not a chosen few: only the named inert O0+G0 component may name itself.
 		const sources = (dir: string): string[] =>
 			existsSync(dir)
 				? readdirSync(dir, { withFileTypes: true }).flatMap((d) =>
@@ -459,13 +463,20 @@ describe("O0 owner challenge handler: value, time and single use (B4, B5)", () =
 								: [],
 					)
 				: [];
-		const o0 = new Set(["server/roles-contact.ts", "server/roles-owner-challenge.ts", "server/roles-owner-native.ts"]);
+		const inert = new Set([
+			"server/roles-contact.ts",
+			"server/roles-owner-challenge.ts",
+			"server/roles-owner-native.ts",
+			"server/roles-artifact.ts",
+			"server/roles-gates.ts",
+			"server/roles-gates-native.ts",
+		]);
 		const files = ["server", "web/src", "plugins", "extensions", "bin", "desktop"].flatMap(sources);
 		expect(files).toContain("server/index.ts");
 		const importers = files.filter(
 			(p) =>
-				!o0.has(p) &&
-				/(from\s+|import\(\s*|require\(\s*)["'][^"']*roles-(owner-challenge|owner-native|contact)\b/.test(
+				!inert.has(p) &&
+				/(from\s+|import\(\s*|require\(\s*)["'][^"']*roles-(owner-challenge|owner-native|contact|artifact|gates|gates-native)\b/.test(
 					readFileSync(p, "utf8"),
 				),
 		);

@@ -14,11 +14,22 @@
  *   never decoded. Wrong answer or changed binding invalidates it; nothing is reissued automatically. One pending
  *   challenge per binding (a new issue replaces it), a global cap, refused when full. The same accepted action again
  *   returns the original receipt; anything else on that challenge is a conflict.
- * - Only render and open: an accepted action is a receipt that the matching client rendered or the owner opened,
- *   never human sight, consent, acknowledgement or confirmation.
+ * - Render/open never confirm. G0 (#143) adds a separate explicit confirm action bound to a closed current
+ *   artifact/task/plan/run/attempt. It uses the same missing T03 admitter, not a new authentication route.
  */
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { RTPI_LIMITS, rtpiCanonical, type RtpiRef } from "./rtpi-core.js";
+import {
+	g0ArtifactRef,
+	g0Binding,
+	g0Closed,
+	g0ConfirmationSnapshot,
+	g0Copy,
+	g0Equal,
+	type RolesConfirmationSnapshot,
+	type RolesGateBinding,
+} from "./roles-artifact.js";
+import { rolesCurrentConfirmationSnapshot } from "./roles-gates.js";
 import { admitNativeOwnerPrincipal, serverMonotonicNow, serverWallNow } from "./roles-owner-native.js";
 
 export type OwnerPrincipalBasis =
@@ -47,7 +58,7 @@ export interface OwnerHostConnection {
 	readonly client: { readonly id: string; readonly incarnation: string; readonly build: string };
 }
 
-export type OwnerAction = "render" | "open";
+export type OwnerAction = "render" | "open" | "confirm";
 
 /** The current subject the action is about, rehydrated by the host at issue and again at answer time. */
 export interface OwnerActionTarget {
@@ -56,6 +67,10 @@ export interface OwnerActionTarget {
 	readonly projection: RtpiRef;
 	readonly coverage: RtpiRef;
 	readonly policy: RtpiRef;
+	/** G0 confirm only; from the task's OWN current native exact-artifact link. */
+	readonly gateBinding?: RolesGateBinding;
+	/** Current four measured roots + link/whole contract/target install; re-read, not pass flags. */
+	readonly gateSnapshot?: RolesConfirmationSnapshot;
 }
 
 export interface OwnerActionReceipt {
@@ -72,6 +87,9 @@ export interface OwnerActionReceipt {
 	readonly issuedAt: number;
 	readonly expiresAt: number;
 	readonly serverNow: number;
+	/** Present only for explicit confirm; immutable exact artifact/whole queue/task/plan/run/attempt. */
+	readonly gateBinding?: RolesGateBinding;
+	readonly gateSnapshot?: RolesConfirmationSnapshot;
 }
 
 export type OwnerChallengeRefusal = {
@@ -153,6 +171,8 @@ function bindingOf(principal: RtpiRef, c: OwnerHostConnection, t: OwnerActionTar
 		client: { id: c.client.id, incarnation: c.client.incarnation, build: c.client.build },
 		channel: c.channel,
 		action: t.action,
+		gateBinding: t.gateBinding ?? null,
+		gateSnapshot: t.gateSnapshot ?? null,
 		artifact: t.artifact,
 		projection: t.projection,
 		coverage: t.coverage,
@@ -186,13 +206,37 @@ export function createOwnerChallengeHandler(options: OwnerChallengeHandlerOption
 		if (c.scope !== "owner-client") return refuse("rejected", "observer-no-challenge");
 		if (c.pseudoClient) return refuse("rejected", "pseudo-client");
 		if (c.channel !== "browser") return refuse("rejected", "channel-not-browser");
-		if (t.action !== "render" && t.action !== "open") return refuse("rejected", "action-not-in-o0");
+		if (t.action !== "render" && t.action !== "open" && t.action !== "confirm")
+			return refuse("rejected", "action-not-in-o0");
+		if (t.action === "confirm") {
+			if (!g0Binding(t.gateBinding)) return refuse("rejected", "confirm-gate-binding-required");
+			if (
+				!g0Closed(t, ["action", "artifact", "projection", "coverage", "policy", "gateBinding", "gateSnapshot"]) ||
+				!g0ConfirmationSnapshot(t.gateSnapshot)
+			)
+				return refuse("rejected", "confirm-snapshot-closed-schema");
+			if (!g0Equal(t.artifact, g0ArtifactRef(t.gateBinding.artifact, t.gateBinding.run.namespace)))
+				return refuse("rejected", "confirm-artifact-binding-mismatch");
+		} else if (t.gateBinding !== undefined || t.gateSnapshot !== undefined)
+			return refuse("rejected", "gate-binding-confirm-only");
 		if (![c.session, c.window, t.artifact, t.projection, t.coverage, t.policy].every(isRef))
 			return refuse("unknown", "current-subject-unknown");
 		if (c.client.build !== currentBuild) return refuse("rejected", "prior-build-client");
 		if (currentIncarnation(c.client.id) !== c.client.incarnation)
 			return refuse("rejected", "stale-client-fresh-challenge-required");
 		if (c.principalBasis !== "t03-native") return refuse("rejected", "origin-admission-not-owner-auth");
+		if (t.action === "confirm") {
+			const current = rolesCurrentConfirmationSnapshot();
+			if (current === null) return refuse("unknown", "confirm-current-passing-roots-required");
+			if (
+				!g0Equal(t.gateSnapshot, current) ||
+				!g0Equal(t.gateBinding, current.binding) ||
+				!g0Equal(t.projection, current.projection) ||
+				!g0Equal(t.coverage, current.coverage) ||
+				!g0Equal(t.policy, current.policy)
+			)
+				return refuse("rejected", "confirm-current-subject-mismatch");
+		}
 		return null;
 	}
 	function principalOf(c: OwnerHostConnection): RtpiRef | OwnerChallengeRefusal {
@@ -252,9 +296,28 @@ export function createOwnerChallengeHandler(options: OwnerChallengeHandlerOption
 		},
 
 		answer(c, t, reply) {
-			const g = gate(c, t);
-			if (g) return g;
 			const id = typeof reply?.challengeId === "string" ? reply.challengeId : "";
+			const g = gate(c, t);
+			if (g) {
+				// A real subject change invalidates its owner's pending action; an observer
+				// cannot consume somebody else's challenge merely by sending its id.
+				const p = pending.get(id);
+				if (
+					t.action === "confirm" &&
+					g.reason.startsWith("confirm-") &&
+					p &&
+					p.clientId === c.client.id &&
+					c.scope === "owner-client" &&
+					!c.pseudoClient &&
+					c.principalBasis === "t03-native"
+				) {
+					const a = admitNativeOwnerPrincipal(c);
+					if (a.admitted && g0Equal(a.principal, p.principal)) drop(id);
+				}
+				return g;
+			}
+			if (t.action === "confirm" && !g0Closed(reply, ["challengeId", "value"]))
+				return refuse("rejected", "confirm-answer-closed-schema");
 			const value = typeof reply?.value === "string" ? reply.value : "";
 			const principal = principalOf(c);
 			if ("status" in principal) return principal;
@@ -297,6 +360,9 @@ export function createOwnerChallengeHandler(options: OwnerChallengeHandlerOption
 				projection: frozenRef(t.projection),
 				coverage: frozenRef(t.coverage),
 				policy: frozenRef(t.policy),
+				...(t.gateBinding === undefined
+					? {}
+					: { gateBinding: g0Copy(t.gateBinding), gateSnapshot: g0Copy(t.gateSnapshot) }),
 				issuedAt: p.issuedAt,
 				expiresAt: p.expiresAt,
 				serverNow: now.wall,

@@ -6374,3 +6374,50 @@ page. Missing native data reads "Not recorded" or "Not reported", never a guess.
 - Undo: revert this commit through `wt`; nothing at runtime uses it.
 - If the C0 field rows (#136 INTERFACE.md) change, change `fields.ts` and the 64-row test.
 - Switching it on (X0) is a separate, owner-approved change; it must keep the routes and themes above.
+
+## `roles-artifact-gates-g0` — exact artifact lifecycle adapters, inert (#143)
+
+**Why:** C0 coverage has no native run/attempt filter or specified six-field ArtifactKey join.
+Old pass receipts must not make a retry or a different install look green. Render/open is not confirmation.
+
+**Changes:** Add `server/roles-artifact.ts`, `server/roles-gates.ts` and `server/roles-gates-native.ts`.
+C04 has exactly two kinds, pi-web-ui and agent-tools, each with a fixed lifecycle issuer/revision and
+kind-specific measured profiles and distinct fixed whole-ref check/client issuers. Five non-empty
+applicable required gates: built, independent checked, installed, live, and owner-confirmed.
+Coverage joins kind + exact six-field key + whole contract; each stage keeps its OWN canonical
+producer queue/task/plan/run/attempt, never the requesting task's stamp. Task/confirmation binding
+comes only from the task's own current native receipt and unique FULL-key resolution. Within the
+complete current qualified CAS lineage, latest stage result wins; old failures remain historical.
+Latest target install/rollback retires old live; reinstalling the SAME key with a new receipt requires
+new live and confirmation. No wall-clock sorting across lineages or containment pass. Artifact join
+uses domain-separated SHA-256 plus manifest revision, never an id/title/optional/NA join.
+
+Extend #140's one challenge handler with explicit `confirm`, requiring the whole G0 binding and exact
+current passing built/checked/installed/live snapshot at issue AND answer. Recheck task link, gate roots,
+target install, contract, projection and coverage at read time. Render/open stay unchanged and cannot
+confirm. Only a handler-minted current-owner/current-client receipt can reach
+artifact-confirmed, then only via the separate client-native issuer/capability and its own canonical
+outbox/lineage state. Lifecycle adapter capabilities and commits cannot substitute for a client source.
+
+**Off / no installation:** No production importer, instance, registration, I/O, timer, migration,
+client button or scheduler added. Defaults are off; forced enable stays unavailable because native
+T02/T03/T05 and producer conditions P3/P4/P5 remain missing. Fixture verdicts are synthetic and never
+report native/live/ownerConfirmed. Same-UID source/index metadata remains forgeable local display,
+never authority, permission, consent or verified proof. Measured live time is not continuous liveness.
+C0 wire, schema, oracle and canonical task.done are unchanged. Agent-tools counterparts are additive,
+disabled and not imported by pi-web-deploy or wt, whose source and existing regressions are unchanged.
+
+**Checks:** V08/V15/V18/S03/S08/F14 in `tests/unit/roles-gates.test.ts` (per-stage fixed passes/refusals,
+H3-01..15: whole key/queue/task/plan/run/attempt, current CAS/index/link, pass->fail and fail->pass,
+rollback, same-key reinstall, skewed clocks, no dry-run/HTTP-only/prose/task.done or partial key,
+current live-first challenge and separate source/issuer); `roles-gates-native.test.ts` tests the actual unmocked
+production off/unavailable state. Existing O0 tests remain, updated for confirm-without-binding
+refusal and a strengthened recursive no-first-importer proof of the whole O0+G0 inert component. Golden artifact join is pinned on both repos. Normal worktree gate only; no production check.
+
+**Contract / undo:** `/home/shinelay/company-lab/shared/roles-gate-g0-2026-10-13/CONTRACT.md`
+candidate4 sha256 `19fc16d345d948c2a5234be42be4eb3d517dc53828677ae878d78443973eafe7`.
+Architecture/Data/Security document readbacks accepted; not code/native/activation clearance.
+`BASELINE.md` records measured candidate3 wrong-greens and preserved negative controls before rewrite.
+Revert this additive commit to undo; no state to migrate. Security code verdict plus the separately
+approved native-seam/owner activation package is required before J0 wiring. Nothing here grants
+permission, confirmation, a native seam, install, restart or hold lift.
