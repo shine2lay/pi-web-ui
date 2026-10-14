@@ -24,6 +24,7 @@ import {
 	readerFlags,
 	type MaterialLookup,
 } from "../../server/feed-check.js";
+import type { DecisionModel } from "../../server/decision-model.js";
 import type { IdentityDef } from "../../server/identities.js";
 import {
 	needsYouCount,
@@ -63,7 +64,7 @@ interface Fx {
 	busyChats: Set<string>;
 }
 
-function fixture(opts: { feed?: string[]; initiatives?: unknown } = {}): Fx {
+function fixture(opts: { feed?: string[]; initiatives?: unknown; model?: DecisionModel } = {}): Fx {
 	const ddir = join(dir, "decisions");
 	mkdirSync(ddir, { recursive: true });
 	writeFileSync(join(ddir, SETTINGS_FILE), JSON.stringify({ enabled: false, feedInitiatives: opts.feed ?? [TIT] }));
@@ -96,6 +97,7 @@ function fixture(opts: { feed?: string[]; initiatives?: unknown } = {}): Fx {
 		pokeState: (id) => fx.states.get(id),
 		leadBusy: (role) => fx.busy.has(role),
 		chatBusy: (file) => fx.busyChats.has(file),
+		model: () => opts.model,
 		now: () => now,
 	};
 	fx.feed = new ProgressFeed(host, ddir);
@@ -616,6 +618,82 @@ describe("asks to the lead (fake clock)", () => {
 		fx.feed.stepNow(TIT);
 		fx.feed.stepNow(TIT);
 		expect(fx.pokes.filter((p) => p.why.includes("flag"))).toHaveLength(1);
+	});
+
+	it("a flagged first update followed by a clean one in the same turn still goes back, once", async () => {
+		const fx = fixture();
+		const r = decide(fx, message("m1", now, "Temper will keep the trial on temper-dev."), "Trial on temper-dev");
+		fx.feed.stepNow(TIT);
+		fx.feed.ask(TIT);
+		fx.states.set(fx.pokes[0]!.id, "delivered");
+		fx.busy.add("architecture");
+		now = local(12, 10);
+		const flagged = await post(fx, [r.rec], "You decided to keep the trial on temper-dev.");
+		if (!flagged.ok) throw new Error(flagged.error);
+		now = local(12, 10, 1);
+		expect((await post(fx, [r.rec], "Temper will keep the trial on temper-dev.")).ok).toBe(true);
+		fx.feed.stepNow(TIT);
+		expect(fx.pokes).toHaveLength(1);
+		fx.busy.clear();
+		now = local(12, 10, 2);
+		fx.feed.stepNow(TIT);
+		expect(fx.pokes).toHaveLength(2);
+		expect(fx.pokes[1]!.why).toEqual(["flag"]);
+		expect(fx.pokes[1]!.text).toContain(`Update ${flagged.id}:`);
+		expect(fx.pokes[1]!.text).toContain('changed: "You decided to keep the trial on temper-dev."');
+		expect(fx.feed.snapshot().initiatives[TIT]!.flagsSent?.[flagged.id]).toBe(now);
+		// The clean second update came before the flag ask, so it didn't answer that ask.
+		expect(fx.feed.status()[TIT]).toMatchObject({ openFlags: 1 });
+		fx.states.set(fx.pokes[1]!.id, "delivered");
+		now = local(12, 10, 3);
+		expect((await post(fx, [r.rec], "Temper will keep the trial on temper-dev.")).ok).toBe(true);
+		fx.feed.stepNow(TIT);
+		expect(fx.feed.status()[TIT]).toMatchObject({ openFlags: 0 });
+		// The old flag remains visible; only the new lead update answers it. It is never sent twice.
+		expect(
+			fx.feed
+				.view(TIT)
+				?.updates.find((u) => u.id === flagged.id)
+				?.check.sentences.some((s) => s.flags.length),
+		).toBe(true);
+		now = local(12, 14);
+		fx.feed.stepNow(TIT);
+		expect(fx.pokes.filter((p) => p.why.includes("flag"))).toHaveLength(1);
+	});
+
+	it("a check finishing after an ask still sends its flags in the next allowed ask", async () => {
+		let release!: () => void;
+		const wait = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const fx = fixture({
+			model: async () => {
+				await wait;
+				return { ok: false, error: "sealed late-check fixture" };
+			},
+		});
+		const r = decide(fx, message("m1", now, "Temper will keep the trial on temper-dev."), "Trial on temper-dev");
+		fx.feed.stepNow(TIT);
+		now = local(12, 10);
+		const posted = await fx.feed.post(
+			lead,
+			{ initiative: TIT, changed: "You decided to keep the trial on temper-dev.", sources: [r.rec] },
+			0,
+		);
+		if (!posted.ok) throw new Error(posted.error);
+		expect(fx.feed.snapshot().checks[posted.id]).toBeUndefined();
+		now = local(12, 10, 1);
+		fx.feed.ask(TIT);
+		expect(fx.feed.snapshot().initiatives[TIT]!.flagsSent?.[posted.id]).toBeUndefined();
+		release();
+		await fx.feed.runCheck(fx.records.list().find((r) => r.id === posted.id)!);
+		fx.states.set(fx.pokes[0]!.id, "failed");
+		now = local(12, 10, 2);
+		fx.feed.stepNow(TIT);
+		expect(fx.pokes).toHaveLength(2);
+		expect(fx.pokes[1]!.why).toEqual(["flag"]);
+		expect(fx.pokes[1]!.text).toContain(`Update ${posted.id}:`);
+		expect(fx.pokes[1]!.text).toContain("Says you decided");
 	});
 
 	it("nothing is collected, asked or read for an initiative without Progress", async () => {

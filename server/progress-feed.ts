@@ -14,7 +14,7 @@
  *
  * The lead is asked for an update (a "poke": a role request from the Initiatives page, outside the role
  * message caps, a chain of its own) when a queued task filed under the initiative is done, when a decision
- * or change is filed under it, daily at dailyAt when anything is new, when its last update was flagged, and
+ * or change is filed under it, daily at dailyAt when anything is new, when an update has unsent flags, and
  * when the owner presses "Ask for an update". Automatic asks: at most one per pokeEveryHours, none when
  * nothing is new, none while one is unanswered. A one-time catch-up (control socket) asks it to cover the
  * past from a date until no decision or change is left unlinked.
@@ -127,7 +127,9 @@ export interface InitiativeFeedState {
 	seen?: number;
 	/** What the last tick saw: the store's next entry number and the time. */
 	marks?: { next: number; scan: number };
-	/** The update whose flags the lead was last asked to correct. */
+	/** When each update's flags were sent back. Do not drop receipts: that would ask about them twice. */
+	flagsSent?: Record<string, number>;
+	/** Old state: only this one update's flags were sent. Read for compatibility, never write it. */
 	flagAsked?: string;
 	catchUp?: CatchUp;
 	closed?: { id: string; at: number; how: "answered" | "expired" | "failed" | "replaced" }[];
@@ -334,7 +336,7 @@ const WHY_WORDS: Record<PokeWhy, string> = {
 	decision: "a decision or change was filed under it",
 	daily: "it's the daily ask",
 	button: "the owner pressed Ask for an update",
-	flag: "your last update has flagged sentences",
+	flag: "an update of yours has flagged sentences",
 	"catch-up": "the one-time catch-up",
 };
 
@@ -350,7 +352,7 @@ export interface PokeTextInput {
 	missing: number;
 	decisionsAll: number;
 	lines: string[];
-	flags: { field: string; text: string; why: string }[];
+	flags: { update?: string; field: string; text: string; why: string }[];
 	dailyAt: string;
 }
 
@@ -385,9 +387,16 @@ export function pokeTextOf(p: PokeTextInput): string {
 	if (p.flags.length) {
 		out.push(
 			"",
-			`Your last update has ${p.flags.length} flagged sentence${p.flags.length === 1 ? "" : "s"}; correct them in a new update:`,
+			`Your updates have ${p.flags.length} flagged sentence${p.flags.length === 1 ? "" : "s"} not sent back yet; correct them in a new update:`,
 		);
-		for (const f of p.flags.slice(0, 8)) out.push(`- ${f.field}: "${short(f.text, 160)}": ${f.why}`);
+		let update: string | undefined;
+		for (const f of p.flags.slice(0, 8)) {
+			if (f.update && f.update !== update) {
+				update = f.update;
+				out.push(`Update ${update}:`);
+			}
+			out.push(`- ${f.field}: "${short(f.text, 160)}": ${f.why}`);
+		}
 		if (p.flags.length > 8) out.push(`- and ${p.flags.length - 8} more (initiative_update read).`);
 	}
 	out.push(
@@ -926,6 +935,29 @@ export class ProgressFeed {
 		return out;
 	}
 
+	/** Every checked update whose flags have not gone back yet, not just the last one in a turn. */
+	private flagsDue(c: Ctx, s: InitiativeFeedState): PokeTextInput["flags"] {
+		return [...c.updates]
+			.reverse()
+			.flatMap((u) =>
+				s.flagsSent?.[u.id] !== undefined || s.flagAsked === u.id
+					? []
+					: this.countedFlags(this.state.checks[u.id], c.settings).map((f) => ({ ...f, update: u.id })),
+			);
+	}
+
+	/** A sent flag awaits a new lead update; a clean update posted before its ask does not clear it. */
+	private openFlagCount(c: Ctx, s: InitiativeFeedState): number {
+		const lastAt = this.lastUpdate(c)?.at ?? 0;
+		return c.updates.reduce((n, u) => {
+			const sentAt = s.flagsSent?.[u.id] ?? (s.flagAsked === u.id ? s.lastPoke : undefined);
+			return (
+				n +
+				(sentAt === undefined || lastAt <= sentAt ? this.countedFlags(this.state.checks[u.id], c.settings).length : 0)
+			);
+		}, 0);
+	}
+
 	// asks ----------------------------------------------------------------------
 
 	private sendPoke(
@@ -936,6 +968,7 @@ export class ProgressFeed {
 	): { ok: true; id: string } | { ok: false; error: string } {
 		const lead = c.ini.lead;
 		if (!lead) return { ok: false, error: `${c.ini.name} has no lead yet.` };
+		const due = this.flagsDue(c, s);
 		const text = this.pokeText(c, s, why);
 		const res = this.host.poke({ role: lead, initiative: c.ini.id, name: c.ini.name, text, why });
 		if (!res.ok) {
@@ -947,9 +980,10 @@ export class ProgressFeed {
 		s.open = { id: res.id, at: now, why, by, to: lead };
 		s.lastPoke = now;
 		if (by === "auto") s.lastAuto = now;
-		if (why.includes("flag")) {
-			const last = this.lastUpdate(c);
-			if (last) s.flagAsked = last.id;
+		// Only completed checks contribute flags. A check finishing after this ask remains due.
+		if (due.length) {
+			s.flagsSent ??= {};
+			for (const f of due) if (f.update) s.flagsSent[f.update] = now;
 		}
 		this.log(`asked ${lead} for ${c.ini.id} (${by}: ${why.join(", ")}) as ${res.id}`);
 		this.save();
@@ -983,7 +1017,7 @@ export class ProgressFeed {
 			}
 		}
 		const last = this.lastUpdate(c);
-		const flags = last ? this.countedFlags(this.state.checks[last.id], c.settings) : [];
+		const flags = this.flagsDue(c, s);
 		return pokeTextOf({
 			name: c.ini.name,
 			initiative: c.ini.id,
@@ -996,18 +1030,17 @@ export class ProgressFeed {
 			missing: c.decisions.filter((d) => missingOf(d).length).length,
 			decisionsAll: c.decisions.length,
 			lines,
-			flags: flags.map((f) => ({ field: f.field, text: f.text, why: f.why })),
+			flags,
 			dailyAt: c.settings.dailyAt,
 		});
 	}
 
-	/** Anything for the lead to do: new records, unlinked entries, or open flags on its last update. */
+	/** Anything new for the lead to do: new records, unlinked entries, or flags not sent back yet. */
 	private somethingNew(c: Ctx, s: InitiativeFeedState): boolean {
 		if (this.freshOf(c, s).list.length) return true;
 		const un = this.unlinkedOf(c);
 		if (un.decisions.length || un.changes.length) return true;
-		const last = this.lastUpdate(c);
-		return !!last && this.countedFlags(this.state.checks[last.id], c.settings).length > 0;
+		return this.flagsDue(c, s).length > 0;
 	}
 
 	/** The owner's "Ask for an update" button. */
@@ -1176,8 +1209,7 @@ export class ProgressFeed {
 			return !!m && Number(m[1]) >= s.marks!.next;
 		};
 		if (c.decisions.some((d) => fresh(d.id)) || c.changes.some((x) => fresh(x.change.id))) pending.add("decision");
-		if (last && s.flagAsked !== last.id && this.countedFlags(this.state.checks[last.id], settings).length)
-			pending.add("flag");
+		if (this.flagsDue(c, s).length) pending.add("flag");
 		const today = localDay(now);
 		const d = new Date(now);
 		if (s.daily !== today && d.getHours() * 60 + d.getMinutes() >= minutesOf(settings.dailyAt)) {
@@ -1445,7 +1477,7 @@ export class ProgressFeed {
 				updates: c.updates.length,
 				lastUpdate: last ? { id: last.id, at: last.at } : null,
 				unlinked: { decisions: un.decisions.length, changes: un.changes.length },
-				openFlags: last ? this.countedFlags(this.state.checks[last.id], settings).length : 0,
+				openFlags: this.openFlagCount(c, s),
 				unchecked: c.updates.filter((u) => !this.state.checks[u.id]).length,
 				open: s.open ?? null,
 				pending: s.pending ?? [],
