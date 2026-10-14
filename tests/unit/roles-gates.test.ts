@@ -871,12 +871,14 @@ describe("G0 F14 explicit authenticated, current-gates owner action only", () =>
 
 it("S03/S08 no first production importer, registry, instance, timer, env fixture enable or wire/schema edits", () => {
 	const component = new Set([
-		"roles-artifact.ts",
-		"roles-gates.ts",
-		"roles-gates-native.ts",
-		"roles-owner-challenge.ts",
-		"roles-owner-native.ts",
-		"roles-contact.ts",
+		"server/roles-artifact.ts",
+		"server/roles-gates.ts",
+		"server/roles-gates-native.ts",
+		"server/roles-owner-challenge.ts",
+		"server/roles-owner-native.ts",
+		"server/roles-contact.ts",
+		// IB3 is another inert consumer, not a production entrypoint (Ops #167 H5).
+		"server/initiatives-adapters.ts",
 	]);
 	const importers: string[] = [];
 	function walk(dir: string) {
@@ -886,7 +888,7 @@ it("S03/S08 no first production importer, registry, instance, timer, env fixture
 			else if (e.name.endsWith(".ts")) {
 				const t = readFileSync(p, "utf8");
 				if (
-					!component.has(e.name) &&
+					!component.has(p) &&
 					/(?:from|import\s*\()\s*["'][^"']*roles-(?:artifact|gates(?:-native)?|owner-challenge|owner-native|contact)\.js["']/.test(
 						t,
 					)
