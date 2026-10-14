@@ -828,12 +828,62 @@ export interface PromptAttachment {
 	size?: number;
 }
 
+/** reconnect-trace: what first put the "Reconnecting…" note up (web/src/conn-trace.ts).
+ *  close: the socket closed by itself (closeCode); silence: no frames for the allowed quiet while the
+ *  page was visible and online; silence_explained: the same, but the page was hidden, offline or had
+ *  just come back; probe: no answer to the ping sent when the page came back; connect_timeout: a
+ *  connection attempt hung; doubt: that answer was late (socket kept); unknown: none of these. */
+export type ConnTraceReason =
+	"close" | "silence" | "silence_explained" | "probe" | "connect_timeout" | "doubt" | "unknown";
+
+/** reconnect-trace: one "Reconnecting…" episode, metadata only (no chat text, no network bodies).
+ *  Times are durations in ms; the server places the episode on its own clock with endAgoMs. */
+export interface ConnTraceRecord {
+	/** Random episode id (dedupe). */
+	ep: string;
+	reason: ConnTraceReason;
+	/** reason "close": the socket's close code. */
+	closeCode?: number;
+	/** reason "silence"/"silence_explained"/"probe": how long nothing had come, and the allowance then. */
+	quietMs?: number;
+	allowedMs?: number;
+	/** How long the note showed. */
+	durMs: number;
+	/** How long ago (page clock) the note went, when the record was sent. */
+	endAgoMs: number;
+	/** Age of the socket, and time since its last frame, when the note came up. */
+	sockAgeMs: number;
+	sinceFrameMs: number;
+	/** Page visible / browser online when the note came up, and visible when it went. */
+	visible: boolean;
+	online: boolean;
+	endVisible: boolean;
+	/** The silence patience multiplier then (1, 2, 4, 8). */
+	patience: number;
+	/** Sockets opened while the note showed, and further drops after the first cause. */
+	sockets: number;
+	drops: number;
+	/** The last later cause while the note showed (e.g. a doubt that became a drop). */
+	then?: ConnTraceReason;
+	/** From the last socket opening to the note going (catching up the chat's content). */
+	catchUpMs?: number;
+	/** The server's id for the socket the note came up on (ready.connTrace.conn). */
+	conn?: string;
+	/** The page's own timers were held up this long (frozen, throttled or busy) in the 30 s before the
+	 *  note or while it showed. */
+	pageStallMs?: number;
+	/** The tab reloaded or went while the note showed: durMs runs to the last moment it was seen. */
+	cut?: boolean;
+}
+
 export type ClientMessage =
 	/** frameHints (mobile-fixes): announce every big message first with `frame_hint`. */
 	| { type: "hello"; clientId: string; protocolVersion?: number; locale?: string; frameHints?: boolean }
 	/** mobile-fixes: "are you there?", answered at once with `pong` carrying the same id (the page came
 	 *  back, the network changed). */
 	| { type: "ping"; id?: number }
+	/** reconnect-trace: finished "Reconnecting…" episodes (sent only when ready.connTrace.on). */
+	| { type: "conn_trace"; records: ConnTraceRecord[] }
 	/** Browser UI language changed (or first report after hello) — server
 	 *  persists it per client and uses it for tool return values / AI-facing
 	 *  prompts. "zh" (zh-CN/…) → Chinese; anything else → English
@@ -3872,6 +3922,9 @@ export type ServerMessage =
 			 *  foreground/dev/Docker: no supervisor, so the client hides the
 			 *  "restart service" action and the server refuses restart_service. */
 			service?: UiServiceInfo;
+			/** reconnect-trace: whether the page should report "Reconnecting…" episodes, and this
+			 *  socket's id in the server's connection log (~/.pi-web-ui/conn-events.jsonl). */
+			connTrace?: { on: boolean; conn: string };
 	  }
 	| {
 			type: "snapshot";

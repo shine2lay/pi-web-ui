@@ -15,7 +15,11 @@ import telegramPlugin, {
 	chatLink,
 	clockFrom,
 	codeBlock,
+	checkConnNotice,
+	CONN_SENT_KEEP,
 	createBridge,
+	createConnNotifier,
+	renderConnNotice,
 	createChat,
 	parseClock,
 	roleName,
@@ -2325,5 +2329,177 @@ describe("telegram plugin: chat helpers", () => {
 		const capped = splitReply("x".repeat(TEXT_BUDGET * 5), { maxParts: 3 });
 		expect(capped.parts).toHaveLength(3);
 		expect(capped.more).toBe(true);
+	});
+});
+
+describe("telegram plugin: reconnect notices (reconnect-trace, Ops #157)", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	/** 19:42:10 PDT on 2026-10-13. */
+	const AT = Date.UTC(2026, 9, 14, 2, 42, 10);
+	const notice = (over: Record<string, unknown> = {}): Any => ({
+		id: "cn-0123456789abcdef",
+		kind: "event",
+		at: AT,
+		durMs: 7_200,
+		reason: "silence",
+		closeCode: null,
+		maxLoopMs: 6_400,
+		hidden: false,
+		more: null,
+		restart: false,
+		...over,
+	});
+	const memStore = () => {
+		const m = new Map<string, unknown>();
+		return { get: (k: string) => m.get(k), set: (k: string, v: unknown) => void m.set(k, v) };
+	};
+
+	it("checks every field and refuses anything malformed, extra or hostile", () => {
+		expect(checkConnNotice(notice())).toEqual(notice());
+		const summary = notice({
+			kind: "summary",
+			more: { count: 3, totalMs: 20_000, worstLoopMs: null, since: AT - 60_000 },
+		});
+		expect(checkConnNotice(summary)).toEqual(summary);
+		const bad: unknown[] = [
+			null,
+			[],
+			"x",
+			notice({ text: "hello" }),
+			notice({ chat_id: STRANGER }),
+			notice({ html: "<b>x</b>" }),
+			notice({ id: "<b>x</b>" }),
+			notice({ id: "cn-XYZ" }),
+			notice({ kind: "alert" }),
+			notice({ reason: "<i>owned</i>" }),
+			notice({ reason: "toString" }),
+			notice({ at: 0 }),
+			notice({ at: Number.NaN }),
+			notice({ durMs: -1 }),
+			notice({ durMs: Number.POSITIVE_INFINITY }),
+			notice({ durMs: "7200" }),
+			notice({ maxLoopMs: -5 }),
+			notice({ hidden: "no" }),
+			notice({ restart: 1 }),
+			notice({ closeCode: 999 }),
+			notice({ closeCode: 1006.5 }),
+			notice({ kind: "summary" }),
+			notice({ more: { count: 1, totalMs: 1, worstLoopMs: null, since: AT, extra: "x" } }),
+			notice({ more: { count: -1, totalMs: 1, worstLoopMs: null, since: AT } }),
+			notice({ more: { count: 1, totalMs: 1, worstLoopMs: null, since: "yesterday" } }),
+		];
+		for (const n of bad) expect(checkConnNotice(n), JSON.stringify(n)).toBeNull();
+	});
+
+	it("says when, for how long, why and how long the server stalled; held ones are summed", () => {
+		const line = (over: Record<string, unknown>, tz = "UTC") => renderConnNotice(checkConnNotice(notice(over)), tz);
+		expect(line({}, "America/Los_Angeles")).toBe(
+			"\u{1F50C} Reconnecting at 19:42:10 for 7.2 s \u00B7 no frames from the server \u00B7 server stalled up to 6.4 s",
+		);
+		expect(line({ reason: "close", closeCode: 1006, maxLoopMs: null, hidden: true })).toBe(
+			"\u{1F50C} Reconnecting at 02:42:10 for 7.2 s \u00B7 the connection closed (code 1006) \u00B7 server stall not measured \u00B7 page was in the background",
+		);
+		expect(line({ restart: true })).toContain("\u00B7 the app restarted meanwhile");
+		expect(line({ more: { count: 2, totalMs: 9_000, worstLoopMs: 12_300, since: AT - 300_000 } })).toBe(
+			"\u{1F50C} Reconnecting at 02:42:10 for 7.2 s \u00B7 no frames from the server \u00B7 server stalled up to 6.4 s\n+2 more since 02:37:10 (9.0 s in all, worst stall 12.3 s)",
+		);
+		expect(
+			line({ kind: "summary", reason: "close", more: { count: 1, totalMs: 180_000, worstLoopMs: null, since: AT } }),
+		).toBe(
+			"\u{1F50C} Reconnecting showed 1 more time since 02:42:10 (3 min in all) \u00B7 mostly: the connection closed \u00B7 server stall not measured",
+		);
+	});
+
+	it("sends one line to the owner only, once per notice id (a replay after a restart too)", async () => {
+		const tg = fakeTelegram();
+		const storage = memStore();
+		const tell = createConnNotifier({ api: tg.api, ownerId: OWNER, storage });
+		expect(await tell(notice())).toBe(true);
+		expect(tg.of("sendMessage")).toHaveLength(1);
+		const p = tg.last("sendMessage")?.params;
+		expect(p).toMatchObject({ chat_id: OWNER, parse_mode: "HTML", link_preview_options: { is_disabled: true } });
+		expect(p.text).toContain("Reconnecting at ");
+		const afterRestart = createConnNotifier({ api: tg.api, ownerId: OWNER, storage });
+		expect(await afterRestart(notice())).toBe(true);
+		expect(tg.of("sendMessage")).toHaveLength(1);
+		expect(storage.get("connSent")).toEqual(["cn-0123456789abcdef"]);
+	});
+
+	it("a refused or failed send, a malformed notice or no owner id = not told, nothing remembered", async () => {
+		const tg = fakeTelegram();
+		const storage = memStore();
+		const logs: string[] = [];
+		const tell = createConnNotifier({
+			api: tg.api,
+			ownerId: OWNER,
+			storage,
+			log: (_level: string, m: string) => logs.push(m),
+		});
+		tg.failNext("sendMessage", errResponse(403, "Forbidden: bot was blocked by the user"));
+		expect(await tell(notice())).toBe(false);
+		tg.failNext("sendMessage", new Error("network down"));
+		expect(await tell(notice())).toBe(false);
+		expect(storage.get("connSent")).toBeUndefined();
+		expect(await tell(notice({ text: "<b>hi</b>" }))).toBe(false);
+		expect(tg.of("sendMessage")).toHaveLength(2);
+		expect(logs.some((m) => m.includes("malformed"))).toBe(true);
+		expect(logs.join("\n")).not.toContain(TOKEN);
+		for (const ownerId of ["", null, "@someone", "123; drop"]) {
+			const other = createConnNotifier({ api: tg.api, ownerId, storage });
+			expect(await other(notice())).toBe(false);
+		}
+		expect(tg.of("sendMessage")).toHaveLength(2);
+		expect(await tell(notice())).toBe(true);
+		expect(tg.of("sendMessage")).toHaveLength(3);
+	});
+
+	it(`remembers the last ${CONN_SENT_KEEP} sent ids`, async () => {
+		const tg = fakeTelegram();
+		const storage = memStore();
+		const tell = createConnNotifier({ api: tg.api, ownerId: OWNER, storage });
+		const id = (i: number) => `cn-${i.toString(16).padStart(16, "0")}`;
+		for (let i = 0; i < CONN_SENT_KEEP + 3; i++) expect(await tell(notice({ id: id(i) }))).toBe(true);
+		const kept = storage.get("connSent") as string[];
+		expect(kept).toHaveLength(CONN_SENT_KEEP);
+		expect(kept[0]).toBe(id(3));
+	});
+
+	it("listens only once set up, tells through its own bot, and stops when unloaded", async () => {
+		const sent: Any[] = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn((url: string, init: Any) => {
+				if (String(url).endsWith("/sendMessage")) {
+					sent.push(JSON.parse(init.body));
+					return Promise.resolve(okResponse({ message_id: 1, chat: { id: Number(OWNER), type: "private" } }));
+				}
+				return new Promise((_resolve, reject) =>
+					init.signal?.addEventListener("abort", () => reject(new Error("aborted"))),
+				);
+			}),
+		);
+		const hostWith = (settings: Record<string, unknown>) =>
+			createMockHost({
+				settings,
+				asks: { list: () => [], answer: async () => ({ ok: false, error: "none" }) },
+				registerBackgroundTask: () => ({ update: () => {}, unregister: () => {} }),
+			}) as Any;
+		const idle = hostWith({ botToken: "", ownerId: OWNER });
+		const offIdle = telegramPlugin.activate(idle);
+		expect(idle.mock.handlers["connNotices.on"] ?? []).toHaveLength(0);
+		offIdle?.();
+
+		const live = hostWith({ botToken: TOKEN, ownerId: OWNER, routeTo: "" });
+		const off = telegramPlugin.activate(live);
+		expect(live.mock.handlers["connNotices.on"]).toHaveLength(1);
+		expect(await live.mock.handlers["connNotices.on"][0](notice())).toBe(true);
+		expect(sent).toHaveLength(1);
+		expect(sent[0].chat_id).toBe(OWNER);
+		expect(sent[0].text).toContain("Reconnecting at ");
+		off?.();
+		expect(live.mock.handlers["connNotices.on"]).toHaveLength(0);
 	});
 });

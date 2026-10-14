@@ -188,6 +188,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | accent-contrast              | `local` | `web/src/styles.css` (`:root` `--accent-text`, `--accent-fill`, `--accent-fill-hover`, `--amber-fg`; 148 text rules, the accent fills under white text), `model-management.css`, `exchange-fold.css`, `ToolApprovalDialog.tsx`, `RollbackDialog.tsx`, `ModelConfigModal.tsx`, `plugins/db-client`, `plugins/vscode-editor`, `make-light-theme.mjs` (identity tokens, White `--amber-fg`), `themes/*.css`, `tests/faint-contrast-test.mjs` (pins gone, live-queue fixture), `tests/accent-contrast-test.mjs` (new), `tests/unit/accent-contrast.test.ts` (new)                                                                                                                                                                                                                                                                                                             |
 | initiatives-page             | `local` | `server/decision-reader.ts`, `decision-model.ts`, `decision-who.ts`, `decision-store.ts`, `decision-view.ts`, `decision-log-tool.ts`, `decision-previews.ts`, `initiatives-watch.ts` (all new), `agent-service.ts`, `index.ts`, `control-socket.ts`, `protocol.ts`, `protocol-version.ts`, `tabs.ts`, `tool-manager.ts`, `asks.ts`, `decision-records.ts`, `bin/pi-web-ui.mjs` (`decisions read`), `web/src/components/InitiativesView.tsx`, `initiatives-state.ts`, `initiatives-view-model.ts`, `initiatives-view.css` (new), `App.tsx`, `TopBar.tsx`, `ui-slots.ts`, `use-chat.ts`, `open-chat-link.ts`, `i18n.tsx`, `locales/*.json`, `tests/unit/decision-reader.test.ts`, `decision-who.test.ts`, `initiatives-view.test.ts`, `tests/initiatives-page-test.mjs` (new), `tests/unit/ui-slots.test.ts`, `tool-registration.test.ts`, `docs/initiatives-page.md` (new) |
 | progress-feed                | `local` | `server/progress-feed.ts`, `feed-check.ts`, `initiative-update-tool.ts` (all new), `decision-store.ts`, `decision-records.ts`, `decision-reader.ts`, `decision-view.ts`, `decision-who.ts`, `role-messages.ts`, `quiet-turns.ts`, `agent-service.ts`, `index.ts`, `control-socket.ts`, `protocol.ts`, `protocol-version.ts` (49), `tool-manager.ts`, `bin/pi-web-ui.mjs` (`decisions feed`, `decisions catch-up`), `scripts/feed-check.mts` (new), `web/src/components/ProgressSection.tsx` (new), `InitiativesView.tsx`, `Message.tsx`, `RoleMessageRow.tsx`, `initiatives-state.ts`, `initiatives-view-model.ts`, `initiatives-view.css`, `role-message-text.ts`, `use-chat.ts`, `protocol-version.ts`, `i18n.tsx`, `locales/*.json`, `tests/unit/progress-feed.test.ts`, `tests/progress-feed-test.mjs` (new), `docs/progress-feed.md` (new), `docs/initiatives-page.md` |
+| reconnect-trace              | `local` | `server/conn-events.ts` (new), `index.ts`, `plugins.ts` (`host.connNotices`), `plugin-api-catalog.ts`, `protocol.ts`, `plugin-sdk/`, `plugins/telegram/` (0.2.3), `web/src/conn-trace.ts` (new), `use-chat.ts`, `tests/reconnect-trace-test.mjs` (new), `tests/lib/own-server.mjs`, `tests/unit/conn-events.test.ts` (new), `conn-trace.test.ts` (new), `plugin-telegram.test.ts`, `plugin-api-catalog.test.ts`
 | decision-reader-batches      | `local` | `server/decision-batch-budget.ts`, `decision-batches.ts`, `decision-bounded-model.ts`, `decision-call-lifecycle.ts` (new), `server/agent-service.ts`, `tests/unit/decision-batches.test.ts` (new)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 ---
@@ -6222,3 +6223,72 @@ what it costs him. Task #85 adds the lead's Progress section above Decisions.
   `decision-previews.ts`.
 - If pi-multi-pass's pool file (`multi-pass.json`) changes shape, change `claudePoolMembers`.
 - If plugin-llm's isolated session call changes, change `decision-model.ts` the same way.
+
+## reconnect-trace
+
+**Status**: `local`
+**Baseline**: v0.96.1, on top of `conn-health` (the page's "Reconnecting" watchdog) and `telegram-coo`.
+
+**Why** (Ops queue task #157; the owner via COO rm-c414bffa, 2026-10-13 ~18:22 PDT: "i am getting
+reconnecting every 5 sec, this is a big issue, lets try to diagnose and fix this first", then rm-37bf4212:
+"steady now, but tell me when reconnecting shows up and trace the issue that wy"). The page decides on
+its own when to show "Reconnecting" (`web/src/conn-health.ts`); nothing recorded why, and the server kept
+no connection log, so an episode couldn't be traced afterwards. Hypothesis H-RECONNECT-1 (written first,
+`~/kept-from-tmp/2026-10-13/reconnect-trace/WORKING.md`): the note is the no-frames watchdog firing
+during server main-thread stalls, not a lost socket. This patch only records; it changes no timing.
+
+### Changes
+
+1. **The page's record** (`web/src/conn-trace.ts` new, pure; `use-chat.ts`): what first put the note up
+   (`close` with its close code, `silence`, `silence_explained` (hidden, offline or just back),
+   `probe`, `connect_timeout`, `doubt`, `unknown`), when it came and went, how long the page itself was
+   stalled meanwhile, visibility and online state at both ends, socket age, time since the last frame,
+   the watchdog's patience, sockets opened and drops. Kept per tab in sessionStorage until a socket is
+   open and the server says it wants them (`ready.connTrace.on`), then sent as `conn_trace`; a reload
+   mid-episode records it with `cut: true`.
+2. **The server's log** (`server/conn-events.ts` new; `index.ts`): `<dataDir>/conn-events.jsonl`, one
+   JSON line per event: `loop` every 10 s (event-loop delay p99/max from `monitorEventLoopDelay`,
+   process CPU, passive GC totals from a `PerformanceObserver`, load, heap, RSS), `open`/`close` per
+   socket (socket id, hashed client id, close code, lifetime; never the close reason text), `banner`
+   (the page's record, checked field by field, placed on the server's clock with the worst loop delay
+   and long GC pauses over it; marked when it began before this process started), `notice`. Daily
+   files `conn-events-YYYY-MM-DD.jsonl`, 7 days kept, 32 MB a day cap for loop/socket lines. At most
+   20 records per message and 50 per socket; each episode taken once (its id).
+3. **Owner notices** (`connNoticeHub` in `conn-events.ts`; `plugins.ts` `host.connNotices.on`, under
+   the existing `asks` permission; `plugin-sdk/`, `plugin-api-catalog.ts`): one notice per episode, at
+   most one per 10 minutes, the rest summed into the next; one that isn't sent (no transport, refused,
+   failed, 30 s without an answer) is summed into the next try a gap later; one cut off by a restart is
+   tried again with the same id (`conn-notify-state.json`). Fixed fields only: id, time, duration,
+   cause, close code, worst loop delay, hidden, restart, the sum.
+4. **Telegram plugin 0.2.3** (`plugins/telegram/`; Ops decision on #157, m00220 of its chat): listens
+   only once set up; checks every field and refuses anything extra or malformed; builds the one line
+   itself ("🔌 Reconnecting at 19:42:10 for 7.2 s · no frames from the server · server stalled up to
+   6.4 s"); sends it only to the configured owner id with the existing bot; remembers the last 50
+   sent ids in its storage, so a replay after a restart isn't sent twice. Ask/reply routing unchanged.
+5. **One switch**: `<dataDir>/conn-trace.json` `{"enabled": false}` stops the log, the sampling, the
+   pages' records and the notices within 3 s, no restart; an unreadable file counts as off.
+
+Metadata only: no chat text, prompts, tool results, credentials, cookies, URLs, IPs or user agents.
+
+### How it was checked
+
+- `tests/unit/conn-trace.test.ts` (new): every cause gives the right record; page stalls; cut by a
+  reload; kept while no socket takes them.
+- `tests/unit/conn-events.test.ts` (new): loop windows; placing an episode over a 6.2 s stall; before
+  the process started; once per episode across a restart; socket lines hash the client id; hostile and
+  malformed records refused whole; the 10-minute limit and its sum; failed sends; replay after a
+  restart; the hub; the switch; rotation; every string field is a fixed kind, id, hash or cause.
+- `tests/unit/plugin-telegram.test.ts` (+6): field check with hostile input, the line's wording, once
+  per id across a restart, refused/failed sends and bad owner ids, the kept-id cap, listening only when
+  set up and stopping on unload. No real Telegram.
+- `tests/reconnect-trace-test.mjs` (new, sealed, own server, headless Chrome, no plugins): the page's
+  connect is logged; a 7 s SIGSTOP of the server shows the note and leaves a `silence` record over the
+  stall with a measured loop delay of at least 6 s, plus the dropped socket's close code; the notice is
+  tried and not sent; a restart's close is recorded with its code; metadata only; switched off,
+  another stall leaves nothing. On mine without this patch it fails at its first check.
+
+### When syncing
+
+- If `conn-health.ts` gains a new way to put the note up, give it a cause in `ConnTraceReason`
+  (`protocol.ts`), `REASONS` and the plugin's `checkConnNotice`/`renderConnNotice` words.
+- Keep `conn-trace.ts` pure (the page bundles it; times are passed in).

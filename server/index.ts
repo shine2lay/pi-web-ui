@@ -103,6 +103,7 @@ import { RolesWatch } from "./roles-overview.js";
 import { InitiativesWatch } from "./initiatives-watch.js";
 import { SubsLimitsHub, limitsFilePath } from "./subs-limits.js";
 import { initHttpProxy } from "./http-proxy.js";
+import { ConnEvents, MAX_RECORDS_PER_SOCKET } from "./conn-events.js";
 import { globalLspPool } from "./lsp-tool.js";
 import { buildPiWebTokenCookie, decodeCookieToken, isTlsRequest } from "./auth-cookie.js";
 import type {
@@ -172,6 +173,10 @@ try {
 } catch (err) {
 	console.warn(`[data] cannot create the data folder ${DATA_DIR}: ${(err as Error).message}`);
 }
+// reconnect-trace: metadata-only connection log + event-loop delay (server/conn-events.ts);
+// <dataDir>/conn-trace.json {"enabled": false} switches it and the owner notices off.
+const connEvents = new ConnEvents({ dataDir: DATA_DIR, sampler: true });
+connEvents.resume();
 // issue #295：工作区直接就是家目录时，SDK 初始化期的同步目录扫描会落在 $HOME 上
 // （iCloud 占位符/外部卷坏挂载 → scandir/open 内核挂起 → 事件循环假死，hello 后无
 // ready）。新装服务默认已是 ~/pi-web-ui（见 bin/pi-web-ui.mjs serviceOptions）；
@@ -2371,6 +2376,10 @@ wss.on("connection", (ws, req) => {
 	service.noteSocketOpen();
 	let clientId: string | null = null;
 	let closed = false;
+	/** reconnect-trace: this socket in the connection log, when it opened, records taken from it. */
+	const connId = connEvents.newConnId();
+	const connOpenedAt = Date.now();
+	let connTraceTaken = 0;
 	/** 最近一份全量 snapshot 的估算字节数（UTF-16 ×2），供背压相对阈值用（issue #11）。 */
 	let lastSnapshotBytes = 0;
 	/** switch-loading：最近一份真正发出去的全量 snapshot 属于哪条对话（打开另一条对话的快照不丢，见 send）。 */
@@ -3981,6 +3990,7 @@ wss.on("connection", (ws, req) => {
 	const readyMsg = (cid: string): ServerMessage => ({
 		type: "ready",
 		clientId: cid,
+		connTrace: { on: connEvents.enabled(), conn: connId },
 		serverVersion: VERSION,
 		protocolVersion: PROTOCOL_VERSION,
 		engine: ENGINE,
@@ -4008,6 +4018,14 @@ wss.on("connection", (ws, req) => {
 			return;
 		}
 
+		// reconnect-trace: the page's own record of a "Reconnecting" episode (metadata only).
+		if (msg.type === "conn_trace") {
+			const left = MAX_RECORDS_PER_SOCKET - connTraceTaken;
+			if (left > 0 && Array.isArray(msg.records))
+				connTraceTaken += connEvents.banner(msg.records.slice(0, left), { conn: connId, clientId });
+			return;
+		}
+
 		if (msg.type === "hello") {
 			if (!clientId) frameHints = msg.frameHints === true;
 			// 重放守卫：一条连接只允许 attach 一次。clientId 已赋值说明 hello 处理过
@@ -4023,6 +4041,7 @@ wss.on("connection", (ws, req) => {
 			// saveUpload 的两条路径都从这里来，入口统一拦一次即可）。
 			const cid = validateClientId(msg.clientId) ?? randomUUID();
 			clientId = cid;
+			connEvents.opened(connId, cid, acceptedBrowser, Date.now() - connOpenedAt);
 			// issue #295：ready 先行 —— 传输握手不等待会话初始化。attach 会进 SDK 的
 			// resourceLoader.reload 等同步目录扫描，坏挂载/家目录下可能阻塞数十秒；
 			// ready 在握手里先发，前端立刻离开「正在连接」（快照随后到）。
@@ -4156,7 +4175,9 @@ wss.on("connection", (ws, req) => {
 		dispatch(msg);
 	});
 
-	ws.on("close", () => {
+	ws.on("close", (code: number) => {
+		// reconnect-trace: the close code only (never the reason text).
+		connEvents.closed(connId, clientId, acceptedBrowser, code, Date.now() - connOpenedAt);
 		service.noteSocketClose();
 		closed = true;
 		pending.clear();

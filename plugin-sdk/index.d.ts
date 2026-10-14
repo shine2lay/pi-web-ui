@@ -67,6 +67,21 @@ export interface PluginAskFieldAnswer {
 	text?: string;
 }
 
+/** host.connNotices: a "Reconnecting" episode the owner asked to be told about (metadata only). */
+export interface PluginConnNotice {
+	id: string;
+	kind: "event" | "summary";
+	at: number;
+	durMs: number;
+	reason: "close" | "silence" | "silence_explained" | "probe" | "connect_timeout" | "doubt" | "unknown";
+	closeCode: number | null;
+	maxLoopMs: number | null;
+	hidden: boolean;
+	more: { count: number; totalMs: number; worstLoopMs: number | null; since: number } | null;
+	/** The server process started while the note showed (an install or a crash). */
+	restart: boolean;
+}
+
 export type PluginAskEvent =
 	| { type: "appeared"; ask: PluginAsk }
 	| { type: "answered"; ask: PluginAsk; summary: string; from: string }
@@ -398,6 +413,11 @@ export interface PluginHost {
 			opts?: { via?: "telegram" | "plugin"; onQueued?: () => void },
 		): Promise<{ ok: true; id: string } | { ok: false; error: string }>;
 		onReply(handler: (reply: PluginRoleReply) => void): () => void;
+	};
+	/** "Reconnecting" episodes for the owner (needs "asks"; at most one per 10 minutes). The handler
+	 *  returns true once it told him; anything else = not sent (summed into the next). */
+	connNotices: {
+		on(handler: (n: PluginConnNotice) => boolean | Promise<boolean>): () => void;
 	};
 	/** 只读 git 查询（失败回 {ok:false,error} 对象而非抛错）。 */
 	scm: {

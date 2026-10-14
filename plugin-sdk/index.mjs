@@ -441,6 +441,10 @@ export function createMockHost(overrides) {
 			send: async () => okFalse("roles"),
 			onReply: sub("roles.onReply"),
 		},
+		// connNotices: drive a plugin with host.mock.handlers["connNotices.on"][0](notice).
+		connNotices: {
+			on: sub("connNotices.on"),
+		},
 		log: logImpl,
 		// effect 栈：mock 里只记调用 + 返回可撤函数（真实宿主在反激活时逆序回卷）。
 		// 单测里测试 dispose 真跑的写法：拿到 off() 后调它，或断言 host.calls 里有 effect。

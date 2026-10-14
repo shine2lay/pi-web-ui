@@ -8,6 +8,7 @@
  *   srv.dataDir, srv.agentDir, srv.workdir, srv.root
  *   await srv.restart();   // same folders, same port (a server restart)
  *   await srv.stop();
+ *   srv.pid();             // the running server's process id (e.g. to SIGSTOP it: a stalled server)
  *
  * Options: name (temp folder prefix), port, model ("fastfail" default: a model that can't be reached,
  * so a prompt only saves the user message; "none": no model at all; or a function(agentDir) that
@@ -127,5 +128,6 @@ export async function ownServer(opts = {}) {
 		},
 		stderr: () => stderr,
 		stdout: () => stdout,
+		pid: () => proc?.pid ?? null,
 	};
 }

@@ -1753,6 +1753,141 @@ export function createPoller({
 }
 
 // ---------------------------------------------------------------------------
+// Reconnect notices (reconnect-trace, Ops #157): the owner asked to be told each time a page shows
+// "Reconnecting". The host hands over fixed metadata (server/conn-events.ts, at most one per 10
+// minutes); the line is built here from those fields only: no free text, and only to the owner.
+// ---------------------------------------------------------------------------
+
+/** What each cause is called in the line. */
+export const CONN_REASONS = {
+	close: "the connection closed",
+	silence: "no frames from the server",
+	silence_explained: "no frames (page hidden, offline or just back)",
+	probe: "no answer after the page came back",
+	connect_timeout: "a connection attempt hung",
+	doubt: "a slow answer from the server",
+	unknown: "cause not recorded",
+};
+const CONN_ID_RE = /^cn-[a-f0-9]{8,32}$/;
+const CONN_MAX_MS = 7 * 86_400_000;
+/** How many sent notice ids are remembered (a replay of one of them isn't sent again). */
+export const CONN_SENT_KEEP = 50;
+
+const connMs = (v, nullable) =>
+	nullable && v === null ? null : typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= CONN_MAX_MS ? v : undefined;
+
+/** The notice, field by field; anything malformed or extra: null (not sent). */
+export function checkConnNotice(n) {
+	if (!n || typeof n !== "object" || Array.isArray(n)) return null;
+	const keys = ["id", "kind", "at", "durMs", "reason", "closeCode", "maxLoopMs", "hidden", "more", "restart"];
+	if (Object.keys(n).some((k) => !keys.includes(k))) return null;
+	if (typeof n.id !== "string" || !CONN_ID_RE.test(n.id)) return null;
+	if (n.kind !== "event" && n.kind !== "summary") return null;
+	if (typeof n.at !== "number" || !Number.isFinite(n.at) || n.at <= 0) return null;
+	if (!Object.hasOwn(CONN_REASONS, n.reason)) return null;
+	const durMs = connMs(n.durMs, false);
+	const maxLoopMs = connMs(n.maxLoopMs, true);
+	if (durMs === undefined || maxLoopMs === undefined || typeof n.hidden !== "boolean") return null;
+	if (typeof n.restart !== "boolean") return null;
+	if (n.closeCode !== null && !(Number.isInteger(n.closeCode) && n.closeCode >= 1000 && n.closeCode <= 4999))
+		return null;
+	let more = null;
+	if (n.more !== null) {
+		const m = n.more;
+		if (!m || typeof m !== "object" || Object.keys(m).some((k) => !["count", "totalMs", "worstLoopMs", "since"].includes(k)))
+			return null;
+		const totalMs = connMs(m.totalMs, false);
+		const worstLoopMs = connMs(m.worstLoopMs, true);
+		if (!Number.isInteger(m.count) || m.count < 0 || m.count > 100_000) return null;
+		if (totalMs === undefined || worstLoopMs === undefined) return null;
+		if (typeof m.since !== "number" || !Number.isFinite(m.since) || m.since <= 0) return null;
+		more = { count: m.count, totalMs, worstLoopMs, since: m.since };
+	}
+	if (n.kind === "summary" && !more) return null;
+	return {
+		id: n.id,
+		kind: n.kind,
+		at: n.at,
+		durMs,
+		reason: n.reason,
+		closeCode: n.closeCode,
+		maxLoopMs,
+		hidden: n.hidden,
+		more,
+		restart: n.restart,
+	};
+}
+
+/** "7.2 s", "3 min". */
+export function connSpan(ms) {
+	return ms >= 120_000 ? `${Math.round(ms / 60_000)} min` : `${(ms / 1000).toFixed(1)} s`;
+}
+
+/** "19:42:10" in the owner's time zone. */
+export function connClock(ms, tz = BRIEF_ZONE) {
+	return new Intl.DateTimeFormat("en-US", {
+		timeZone: tz,
+		hour: "2-digit",
+		minute: "2-digit",
+		second: "2-digit",
+		hourCycle: "h23",
+	}).format(new Date(ms));
+}
+
+/** The one line (HTML) for a checked notice. */
+export function renderConnNotice(n, tz = BRIEF_ZONE) {
+	const cause = `${CONN_REASONS[n.reason]}${n.closeCode !== null ? ` (code ${n.closeCode})` : ""}`;
+	const stall = (v) =>
+		n.restart ? "the app restarted meanwhile" : v === null ? "server stall not measured" : `server stalled up to ${connSpan(v)}`;
+	if (n.kind === "summary") {
+		const m = n.more;
+		return escapeHtml(
+			`\u{1F50C} Reconnecting showed ${m.count} more time${m.count === 1 ? "" : "s"} since ${connClock(m.since, tz)} ` +
+				`(${connSpan(m.totalMs)} in all) \u00B7 mostly: ${CONN_REASONS[n.reason]} \u00B7 ${stall(m.worstLoopMs)}`,
+		);
+	}
+	let line =
+		`\u{1F50C} Reconnecting at ${connClock(n.at, tz)} for ${connSpan(n.durMs)} \u00B7 ${cause} \u00B7 ${stall(n.maxLoopMs)}` +
+		(n.hidden ? " \u00B7 page was in the background" : "");
+	if (n.more && n.more.count > 0)
+		line +=
+			`\n+${n.more.count} more since ${connClock(n.more.since, tz)} (${connSpan(n.more.totalMs)} in all, ` +
+			`${n.more.worstLoopMs === null ? "stall not measured" : `worst stall ${connSpan(n.more.worstLoopMs)}`})`;
+	return escapeHtml(line);
+}
+
+/**
+ * The handler for host.connNotices.on: check, skip one already sent (storage "connSent"), send one
+ * line to the owner's private chat, and say whether it went. Never throws.
+ * @param {{ api: any, ownerId: any, storage: any, log?: (level: string, message: string) => void }} deps
+ */
+export function createConnNotifier({ api, ownerId, storage, log = (_level, _message) => {} }) {
+	return async (raw) => {
+		const n = checkConnNotice(raw);
+		if (!n) {
+			log("warn", "telegram: a reconnect notice with malformed fields was refused");
+			return false;
+		}
+		if (!/^\d+$/.test(String(ownerId ?? ""))) return false;
+		const sent = Array.isArray(storage.get("connSent")) ? storage.get("connSent") : [];
+		if (sent.includes(n.id)) return true;
+		try {
+			await api.call("sendMessage", {
+				chat_id: ownerId,
+				text: renderConnNotice(n),
+				parse_mode: "HTML",
+				link_preview_options: { is_disabled: true },
+			});
+		} catch (err) {
+			log("warn", `telegram: a reconnect notice wasn't sent (${cut(String(err?.description ?? err?.message ?? err), 160)})`);
+			return false;
+		}
+		storage.set("connSent", [...sent, n.id].slice(-CONN_SENT_KEEP));
+		return true;
+	};
+}
+
+// ---------------------------------------------------------------------------
 // Chatting with a role (telegram-coo): the owner's messages go to a role's home chat (the COO's),
 // its answers come back here, and each morning it sends a short brief.
 // ---------------------------------------------------------------------------
@@ -2374,6 +2509,11 @@ export default {
 			} catch {
 				/* ignore */
 			}
+			try {
+				c.offConn?.();
+			} catch {
+				/* ignore */
+			}
 			clearInterval(c.timer);
 			c.poller?.stop();
 			c.bridge?.close();
@@ -2450,6 +2590,8 @@ export default {
 			if (chat.on) c.offReplies = host.roles.onReply((r) => chat.onReply(r));
 			// While we listen, a chat with no browser open waits for an answer instead of refusing.
 			c.offAsks = host.asks.on((ev) => bridge.onAskEvent(ev));
+			// reconnect-trace: the "Reconnecting" episodes the owner asked to hear about (Ops #157).
+			c.offConn = host.connNotices?.on?.(createConnNotifier({ api, ownerId, storage: host.storage, log })) ?? null;
 			c.poller = createPoller({
 				api,
 				storage: host.storage,

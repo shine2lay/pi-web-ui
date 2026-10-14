@@ -326,6 +326,13 @@ export const HOST_METHODS: ReadonlyArray<CatalogHostMethod> = [
 		example: `host.roles.onReply((r) => { if (r.cause === "telegram") forward(r.text); })`,
 	},
 	{
+		name: "connNotices.on",
+		needs: "asks",
+		summary:
+			'Hear each "Reconnecting" episode the owner asked to be told about (fixed metadata, at most one per 10 min); return true once told',
+		example: `host.connNotices.on(async (n) => { await tell(n.reason, n.durMs); return true; })`,
+	},
+	{
 		name: "net.fetch",
 		needs: "net",
 		summary: "Outbound network (allowed only on allow-list hits; failures return {ok:false} instead of throwing)",

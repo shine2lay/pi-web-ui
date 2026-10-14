@@ -175,6 +175,22 @@ messages and taps are ignored without a reply, and so are group chats.
 If the token is refused, the plugin stops and says so in its status, and chats go back to the
 normal behaviour.
 
+## Reconnect notices
+
+You asked to be told each time the app shows "Reconnecting…" (Ops task #157). The server records
+each episode in its connection log and hands the plugin a fixed set of facts: when, for how long,
+the cause (no frames from the server, the connection closed, no answer after coming back, catching
+up), the close code, and the longest stall the server measured meanwhile. The plugin sends you one
+line, for example:
+
+    🔌 Reconnecting at 19:42:10 for 7.2 s · no frames from the server · server stalled up to 6.4 s
+
+At most one line every 10 minutes; what happens meanwhile is summed up in the next line
+("+2 more since 19:37:10 …"). Each line goes once, also across a restart, and only to the
+Telegram id in the settings. The line is built here from those facts alone: no chat text and
+nothing a page wrote. `{"enabled": false}` in `~/.pi-web-ui/conn-trace.json` turns the log and
+these lines off.
+
 ## Not included
 
 - Notices when a chat finishes or fails.

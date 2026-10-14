@@ -90,6 +90,8 @@ import { resolveCatalogSyncResult } from "./plugin-host";
 import { PROTOCOL_VERSION } from "./protocol-version";
 // mobile-fixes: a quiet socket is found dead within seconds and replaced at once (see conn-health.ts).
 import { ConnHealth, setReconnectingNote } from "./conn-health";
+// reconnect-trace (Ops #157): a record of each "Reconnecting…" episode, sent to the server's log.
+import { BannerTrace, sessionTraceStore, type TraceCause } from "./conn-trace";
 import {
 	applyPromptAck,
 	failPending,
@@ -1311,6 +1313,17 @@ function wsUrl(): string {
 	return withToken(`${proto}//${location.host}${appUrl("/ws")}`);
 }
 
+/** reconnect-trace (Ops #157): hand this tab's finished "Reconnecting" episodes to the server's log. */
+function sendTrace(ws: WebSocket | null, trace: BannerTrace, now: number): void {
+	if (!ws || ws.readyState !== WebSocket.OPEN || trace.waiting === 0) return;
+	const records = trace.take(now);
+	try {
+		ws.send(JSON.stringify({ type: "conn_trace", records } satisfies ClientMessage));
+	} catch {
+		/* the socket went meanwhile: these are not recorded */
+	}
+}
+
 export function useChat() {
 	const [chat, dispatch] = useReducer(reducer, {
 		status: "connecting",
@@ -1416,6 +1429,11 @@ export function useChat() {
 	const catchUpRef = useRef(0);
 	/** mobile-fixes: the open socket is in doubt (no answer yet after coming back / quiet for a while). */
 	const doubtRef = useRef(false);
+	/** reconnect-trace: the episodes of this tab, whether this socket's server wants them, its id there. */
+	const traceRef = useRef<BannerTrace | null>(null);
+	traceRef.current ??= new BannerTrace(undefined, sessionTraceStore());
+	const traceOnRef = useRef(false);
+	const traceConnRef = useRef<string | null>(null);
 	const noticeId = useRef(0);
 	/** Last delta seq seen per conversation (message_delta + tool_delta share
 	 *  one per-conversation sequence) — a gap on the ACTIVE conversation
@@ -1646,7 +1664,24 @@ export function useChat() {
 	const refreshNote = useCallback(() => {
 		const ws = wsRef.current;
 		const open = !!ws && ws.readyState === WebSocket.OPEN;
-		setReconnectingNote(hadOpenRef.current && (!open || catchUpRef.current > 0 || doubtRef.current));
+		const on = hadOpenRef.current && (!open || catchUpRef.current > 0 || doubtRef.current);
+		// reconnect-trace: the episode starts or ends with the note; a finished one goes out at once.
+		const trace = traceRef.current;
+		if (trace) {
+			const h = healthRef.current;
+			const now = Date.now();
+			trace.bannerChanged(on, {
+				now,
+				visible: document.visibilityState === "visible",
+				online: navigator.onLine !== false,
+				openedAt: h.openedAt,
+				lastHeardAt: h.lastHeardAt,
+				patience: h.patience,
+				conn: traceConnRef.current,
+			});
+			if (!on && open && traceOnRef.current && trace.waiting > 0) sendTrace(ws, trace, now);
+		}
+		setReconnectingNote(on);
 	}, []);
 
 	/** Stable across renders — the reconnect loop lives entirely inside this closure. */
@@ -1665,6 +1700,10 @@ export function useChat() {
 			healthRef.current.opened(Date.now());
 			hadOpenRef.current = true;
 			doubtRef.current = false;
+			// reconnect-trace: until this socket's ready says otherwise, no reports and no id.
+			traceRef.current?.socketOpened(Date.now());
+			traceOnRef.current = false;
+			traceConnRef.current = null;
 			ws.send(
 				JSON.stringify({
 					type: "hello",
@@ -1745,6 +1784,13 @@ export function useChat() {
 							return;
 						}
 					}
+					// reconnect-trace: this socket's id in the server's log, and whether it wants the
+					// episodes; switched off there: forget them (an older server says nothing: keep them).
+					traceConnRef.current = msg.connTrace?.conn ?? null;
+					traceOnRef.current = msg.connTrace?.on === true;
+					if (msg.connTrace && !msg.connTrace.on) traceRef.current?.discard(Date.now());
+					else if (traceOnRef.current && traceRef.current && !traceRef.current.showing)
+						sendTrace(ws, traceRef.current, Date.now());
 					// 全局运行态（engine / managed / tabs / 版本号）在这里落一次：
 					// 同步于 dispatch 之前，等 React 因为新状态重渲染时，读全局的组件
 					// 已经拿到正确值（不会闪一帧 pi）。详见 web/src/app-globals.ts。
@@ -2456,7 +2502,7 @@ export function useChat() {
 			}
 		};
 
-		ws.onclose = () => {
+		ws.onclose = (ev: CloseEvent) => {
 			if (wsRef.current === ws) wsRef.current = null;
 			// chat-open-speed: messages still waiting for a chat to open never left this window.
 			failHeldSends("The connection dropped before it was sent.");
@@ -2470,6 +2516,7 @@ export function useChat() {
 			if (wsRef.current && wsRef.current !== ws) return;
 			dispatch({ type: "status", status: "closed" });
 			if (hadOpenRef.current && !catchUpRef.current) catchUpRef.current = Date.now();
+			traceRef.current?.noteCause({ reason: "close", closeCode: ev.code });
 			refreshNote();
 			// Reconnect with exponential backoff (1s → 2s → 4s → … capped at 10s).
 			// mobile-fixes: the page coming back or the network returning skips the wait (see below).
@@ -2504,7 +2551,8 @@ export function useChat() {
 		let lastCheckAt = Date.now();
 		/** When the page was last hidden or frozen (a phone may cut a background tab's network). */
 		let hiddenAt = document.visibilityState === "visible" ? 0 : Date.now();
-		const replace = (ws: WebSocket, retryNow: boolean) => {
+		const replace = (ws: WebSocket, retryNow: boolean, cause: TraceCause) => {
+			traceRef.current?.noteCause(cause);
 			ws.onopen = null;
 			ws.onmessage = null;
 			ws.onerror = null;
@@ -2541,12 +2589,16 @@ export function useChat() {
 		const check = () => {
 			if (!aliveRef.current) return;
 			const now = Date.now();
-			const stalled = now - lastCheckAt > 4 * CHECK_EVERY_MS;
+			const gap = now - lastCheckAt;
+			const stalled = gap > 4 * CHECK_EVERY_MS;
 			lastCheckAt = now;
+			// reconnect-trace: the page's own timers held up; keep a showing episode's saved copy fresh.
+			if (stalled) traceRef.current?.notePageStall(gap, now);
+			traceRef.current?.touch(now);
 			const ws = wsRef.current;
 			if (!ws) return;
 			if (ws.readyState === WebSocket.CONNECTING) {
-				if (now - connectAtRef.current > CONNECT_GIVE_UP_MS) replace(ws, false);
+				if (now - connectAtRef.current > CONNECT_GIVE_UP_MS) replace(ws, false, { reason: "connect_timeout" });
 				return;
 			}
 			if (ws.readyState !== WebSocket.OPEN) return;
@@ -2567,14 +2619,23 @@ export function useChat() {
 					navigator.onLine === false ||
 					document.visibilityState !== "visible" ||
 					hiddenAt >= h.lastHeardAt;
+				// reconnect-trace: which rule dropped it, measured before the patience changes.
+				const cause: TraceCause = h.checking
+					? { reason: "probe", quietMs: now - h.lastHeardAt }
+					: {
+							reason: explained ? "silence_explained" : "silence",
+							quietMs: now - h.lastHeardAt,
+							allowedMs: h.allowedQuietMs(),
+						};
 				if (!explained) h.droppedForSilence();
-				replace(ws, true);
+				replace(ws, true, cause);
 				return;
 			}
 			const doubt = verdict === "doubt";
 			const caughtUpAnyway = catchUpRef.current > 0 && now - healthRef.current.openedAt > CATCH_UP_GIVE_UP_MS;
 			if (caughtUpAnyway) catchUpRef.current = 0;
 			if (doubt !== doubtRef.current || caughtUpAnyway) {
+				if (doubt && !doubtRef.current) traceRef.current?.noteCause({ reason: "doubt" });
 				doubtRef.current = doubt;
 				refreshNote();
 			}
@@ -2595,7 +2656,7 @@ export function useChat() {
 				}
 			} else if (ws && ws.readyState === WebSocket.CONNECTING) {
 				// An attempt from before (maybe made with no network) may never finish.
-				if (now - connectAtRef.current > 1_500) replace(ws, true);
+				if (now - connectAtRef.current > 1_500) replace(ws, true, { reason: "connect_timeout" });
 			} else if (timerRef.current) {
 				// Waiting to retry after a lost connection: retry now.
 				clearTimeout(timerRef.current);

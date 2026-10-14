@@ -56,6 +56,7 @@ import { PluginDomConsent, declarationWantsDom } from "./plugin-dom.js";
 import { validatePluginManifest, formatManifestIssue, isKnownPermission } from "./plugin-manifest-validate.js";
 import { buildPluginApiCatalog } from "./plugin-api-catalog.js";
 import { askHub, type Ask, type AskEvent, type AskFieldAnswer, type AskResult } from "./asks.js";
+import { connNoticeHub, type ConnNotice } from "./conn-events.js";
 import type { RoleReply, RoleSendOptions, RoleSendResult, RoleSendVia } from "./role-replies.js";
 import { AGENT_TOOL_CATALOG } from "./tool-manager.js";
 
@@ -619,6 +620,14 @@ export interface PluginHost {
 	roles: {
 		send(role: string, text: string, opts?: RoleSendOptions): Promise<RoleSendResult>;
 		onReply(handler: (reply: RoleReply) => void): () => void;
+	};
+	/** reconnect-trace (Ops #157): a "Reconnecting" episode the owner asked to be told about
+	 *  (server/conn-events.ts), as fixed metadata fields only, at most one per 10 minutes. Needs
+	 *  permission "asks" (the owner-facing one). The handler returns (or resolves) true once it told
+	 *  the owner; anything else counts as not sent, and the episode goes into the next one's sum.
+	 *  Returns the way to stop; unloading the plugin stops it too. */
+	connNotices: {
+		on(handler: (n: ConnNotice) => boolean | Promise<boolean>): () => void;
 	};
 	/** 插件间事件总线：emit 回填 from=本插件 id，payload 经 JSON 往返（超 4KB
 	 *  截断字符串化）；on 返回取消函数；反激活时清理本插件全部订阅。 */
@@ -4448,6 +4457,20 @@ export class PluginManager {
 					return effects.add("roles.onReply", () => {
 						self.roleReplyHandlers.delete(h);
 					});
+				},
+			},
+			connNotices: {
+				on: (handler) => {
+					if (!can("asks") || typeof handler !== "function") return () => {};
+					const off = connNoticeHub.on(async (n) => {
+						try {
+							return (await handler(n)) === true;
+						} catch (err) {
+							console.error(`[plugin:${info.id}] connNotices handler failed:`, err);
+							return false;
+						}
+					});
+					return effects.add("connNotices.on", off);
 				},
 			},
 			events: {

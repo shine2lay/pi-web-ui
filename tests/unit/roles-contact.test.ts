@@ -499,8 +499,11 @@ describe("O0 observer, undo and Ops108 baseline (S04, V18)", () => {
 	it("Ops108 routing bytes are unchanged and nothing in production imports O0", () => {
 		const sha = (p: string) => createHash("sha256").update(readFileSync(p)).digest("hex");
 		expect(sha("server/role-replies.ts")).toBe("4df90a6f48be5599ed50c6a5fa0380dfc31a43ef6d74a268348bf40f70a41ad6");
-		expect(sha("server/plugins.ts")).toBe("b3f0f42f182104555fc5abeb94bf0340da9f577b7fa0a098942c45682bf3b17a");
-		expect(sha("plugins/telegram/index.mjs")).toBe("9bd0faeb8e469c27afb9ef7005f5a3d626db01444c4f7b9a0f4c8cc1a7b1eeff");
+		// Re-pinned by reconnect-trace (Ops #157, Ops decision on its plugin route): it only adds
+		// host.connNotices (plugins.ts) and the reconnect-notice handler (telegram); no Ops108 routing line
+		// changed (its diff removes none). Was b3f0f42f… and 9bd0faeb….
+		expect(sha("server/plugins.ts")).toBe("946635298701612893eada20e25a7f23ffd0fc6b98434d2ac3d28bffb43d06f2");
+		expect(sha("plugins/telegram/index.mjs")).toBe("7e7deac66b5e98849df38c839ad91b7992571b6e4cb11fcc0bbfa33c47d37c3a");
 		for (const path of [
 			"server/index.ts",
 			"server/agent-service.ts",
