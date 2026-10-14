@@ -283,8 +283,11 @@ describe("delivery", () => {
 		});
 		if (!sent.ok) throw new Error(sent.error);
 		f.state.set(B, "working");
+		f.lands = false;
 		await s.tick();
-		expect(f.sent).toHaveLength(0);
+		expect(f.sent).toHaveLength(1); // accepted, not yet committed at the boundary
+		expect(s.byId(sent.record.id)?.state).toBe("waiting");
+		landNote(B, f.sent[0].text);
 		f.state.set(B, "idle");
 		await s.tick();
 		expect(f.sent).toHaveLength(1);
@@ -603,17 +606,19 @@ describe("delivery", () => {
 		expect(s.handlingDepth(B, "hello")).toBe(0);
 	});
 
-	it("an FYI waits while its chat works, and isn't sent again once its custom entry is there", async () => {
+	it("an FYI is admitted while its chat works, but only its boundary entry proves delivery", async () => {
 		const f = fake([role("alpha", "Alpha", A), role("beta", "Beta", B)]);
 		f.state.set(B, "working");
+		f.lands = false;
 		const s = new RoleMessages(store, f.host, clock);
 		const fyi = s.send(sender({ role: "alpha", file: A }), { to: "beta", kind: "fyi", text: "wait for it" });
 		if (!fyi.ok) throw new Error(fyi.error);
 		await s.tick();
 		now += 60_000;
 		await s.tick();
-		expect(f.sent).toHaveLength(0);
+		expect(f.sent).toHaveLength(1);
 		expect(s.byId(fyi.record.id)?.state).toBe("waiting");
+		landNote(B, f.sent[0].text);
 		f.state.set(B, "idle");
 		await s.tick();
 		expect(f.sent.map((x) => x.via)).toEqual(["note"]);
@@ -778,11 +783,14 @@ describe('telegram-coo: forOwner (owner 2026-10-06: "Yes, answers to my question
 	it("quiet-turns: a message routed before an update changed its hint goes in with the new text and keeps its card", async () => {
 		const f = fake([role("alpha", "Alpha", A), role("beta", "Beta", B)]);
 		f.state.set(B, "working");
+		const deliver = f.host.deliver;
+		f.host.deliver = async () => ({ ok: false, busy: true, error: "admission is busy" });
 		const s = new RoleMessages(store, f.host, clock);
 		const q = s.send(sender({ role: "alpha", file: A }), { to: "beta", kind: "question", text: "why?" });
 		if (!q.ok) throw new Error("not sent");
 		await s.tick();
 		expect(f.sent).toHaveLength(0);
+		f.host.deliver = deliver;
 		// What an older build stored: the hash of the text before this change.
 		const rec = s.byId(q.record.id);
 		if (!rec) throw new Error("no record");

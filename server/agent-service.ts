@@ -319,6 +319,7 @@ import {
 	type RoleReportResult,
 } from "./role-messages.js";
 import { RoleMessageGuardHost } from "./role-message-guard-host.js";
+import { installRoleMailBoundary, noteAtRoleMailBoundary } from "./role-mail-boundary.js";
 import { RolesOverviewReader } from "./roles-overview.js";
 import { makeRolesOverviewTool } from "./roles-overview-tool.js";
 import {
@@ -5082,6 +5083,7 @@ export class ClientSession {
 
 	/** Wrap a fresh runtime as a new conversation record. */
 	private makeConversation(runtime: AgentSessionRuntime, id: string, terminals: TerminalManager): Conversation {
+		installRoleMailBoundary(runtime.session);
 		const conv: Conversation = {
 			id,
 			title: conversationTitle(runtime.session),
@@ -5259,13 +5261,9 @@ export class ClientSession {
 		const id = this.conversationIdBySessionFile(file);
 		const conv = id ? this.convs.get(id) : undefined;
 		if (!id || !conv || id !== this.activeId) return { ok: false, error: "couldn't open the chat" };
-		// A turn started meanwhile: after it (triggerTurn false never starts one, nor steers into one).
-		if (conv.session.isStreaming || (conv.sendsInFlight ?? 0) > 0)
-			return { ok: false, busy: true, error: "the chat is working" };
-		await conv.session.sendCustomMessage(
-			{ customType, content: [{ type: "text", text }], display: true },
-			{ triggerTurn: false },
-		);
+		// Busy notes join the same ordered boundary batch as role follow-ups.
+		// Notes alone never request a response (nor inject between tool calls/results).
+		await noteAtRoleMailBoundary(conv.session, { customType, content: [{ type: "text", text }], display: true });
 		return { ok: true };
 	}
 
@@ -6125,6 +6123,7 @@ export class ClientSession {
 	private async bindSession(conv: Conversation = this.conv): Promise<void> {
 		conv.unsubscribe?.();
 		conv.session = conv.runtime.session;
+		installRoleMailBoundary(conv.session);
 		// per-chat-dialogs：换了会话（/new、/resume、强制重建）→ 旧会话问的弹窗作废。
 		conv.dialogs.cancelExcept(conv.session);
 		await conv.session.bindExtensions({
@@ -16084,8 +16083,8 @@ export class AgentService {
 	/**
 	 * role-messages: send a role message into the chat with this transcript as a queued user message
 	 * marked as sent by an extension. A closed chat is opened in the background for it (the way a
-	 * scheduled wake-up reopens one); a working chat gets nothing now (busy: the service tries again
-	 * after its turn). One at a time.
+	 * scheduled wake-up reopens one); a working chat accepts a follow-up at its next completed-run
+	 * boundary, never steering. Admissions are serialized, not delayed until an idle poll.
 	 */
 	private sendRoleMessage(
 		file: string,
@@ -16098,7 +16097,6 @@ export class AgentService {
 			if (this.carryOnGate) await this.carryOnGate.catch(() => {});
 			if (this.quiesced) return { ok: false, error: "the server is restarting" };
 			if (!existsSync(file)) return { ok: false, error: "the chat's transcript is gone" };
-			if (this.queueChatState(file).state === "working") return { ok: false, busy: true, error: "the chat is working" };
 			const ackId = `rm:${randomUUID()}`;
 			let answer: (a: { ok: boolean; reason?: string }) => void = () => {};
 			const receipt = new Promise<{ ok: boolean; reason?: string }>((r) => {
@@ -16126,7 +16124,7 @@ export class AgentService {
 	 * role-messages: add an FYI to the chat with this transcript without starting a turn: it is in the
 	 * chat's history at once (shown as the role message card) and the model reads it with the chat's next
 	 * turn. A closed chat is opened in the background only to add it (not listed as running); a working
-	 * chat gets nothing now (busy: the service tries again after its turn). One at a time, in line with
+	 * chat accepts it as a no-turn note in the ordered boundary batch. Admissions stay in line with
 	 * the deliveries.
 	 */
 	private noteRoleMessage(
@@ -16138,7 +16136,6 @@ export class AgentService {
 			if (this.carryOnGate) await this.carryOnGate.catch(() => {});
 			if (this.quiesced) return { ok: false, error: "the server is restarting" };
 			if (!existsSync(file)) return { ok: false, error: "the chat's transcript is gone" };
-			if (this.queueChatState(file).state === "working") return { ok: false, busy: true, error: "the chat is working" };
 			const sink = (_msg: ServerMessage): void => {};
 			try {
 				const cs = await this.attach(ROLE_MESSAGES_CLIENT_ID, sink);

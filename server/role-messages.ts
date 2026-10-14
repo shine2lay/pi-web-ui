@@ -1535,7 +1535,7 @@ export class RoleMessages {
 				do {
 					this.again = false;
 					if (this.data.paused || this.stopped) break;
-					for (const r of this.data.messages.filter((m) => m.state === "waiting")) {
+					for (const r of this.data.messages.filter((m) => m.state === "waiting").sort((a, b) => a.at - b.at)) {
 						if (this.data.paused || this.stopped) break;
 						try {
 							await this.step(r);
@@ -1681,7 +1681,8 @@ export class RoleMessages {
 			this.inFlight.delete(r.id); // the chat went idle without it: send it again
 			this.log(`${r.id} got in but never landed; sending again`);
 		}
-		if (state === "working") return; // after its turn
+		// Working chats accept follow-ups/notes now; the host lands them only at a safe boundary.
+		// Keep the inFlight + transcript proof above: an admission is not a delivery.
 		if (r.sends >= MAX_SENDS) {
 			this.fail(r, `sent ${r.sends} times but it never landed in the chat`);
 			return;

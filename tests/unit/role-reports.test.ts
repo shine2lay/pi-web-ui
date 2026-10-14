@@ -238,17 +238,22 @@ describe("delivery", () => {
 		expect(f.sent).toHaveLength(1);
 	});
 
-	it("a busy chat: the request waits for the running turn to end (never steered in)", async () => {
+	it("a busy chat: a report is admitted once and committed after the running turn (never steered in)", async () => {
 		const f = fake([role("beta", "Beta", B)]);
 		f.state.set(B, "working");
+		f.host.deliver = async (file, text) => {
+			f.sent.push({ file, text });
+			return { ok: true };
+		};
 		const s = new RoleMessages(store, f.host, clock);
 		const r = s.requestReport({ role: "beta", date: "2026-10-03" });
 		if (!r.ok) throw new Error(r.error);
 		await s.tick();
 		now += 10 * MIN;
 		await s.tick();
-		expect(f.sent).toHaveLength(0);
+		expect(f.sent).toHaveLength(1);
 		expect(s.byId(r.record.id)?.state).toBe("waiting");
+		say(B, "user", f.sent[0].text); // the host's turn-boundary commit
 		f.state.set(B, "idle");
 		await s.tick();
 		expect(f.sent).toHaveLength(1);
