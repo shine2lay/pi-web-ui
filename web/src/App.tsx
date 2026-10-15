@@ -29,7 +29,9 @@ import { RoleGuardOwnerQuestions } from "./components/RoleGuardOwnerQuestions";
 // 终端视图懒加载：xterm.js 体积大且只在切到终端时才需要，拆出主包
 const TerminalPanel = lazy(() => import("./components/TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
 // roles-overview: the Roles page loads with its first opening and stays mounted after it.
-const RolesView = lazy(() => import("./components/RolesView").then((m) => ({ default: m.RolesView })));
+const RolesUsefulView = lazy(() =>
+	import("./components/RolesUsefulView").then((m) => ({ default: m.RolesUsefulView })),
+);
 // initiatives-page: the Initiatives tab, the same way (loads with its first opening, stays mounted).
 const InitiativesView = lazy(() =>
 	import("./components/InitiativesView").then((m) => ({ default: m.InitiativesView })),
@@ -424,14 +426,12 @@ export function App() {
 	const tabOn = (tab: string) => !chat.tabs || tab === "chat" || chat.tabs.includes(tab);
 	const viewTab = viewChosen.startsWith("plugin:") ? "plugins" : viewChosen;
 	const view: ViewName = tabOn(viewTab) ? viewChosen : "chat";
-	// roles-overview: `?view=roles` (maybe `#r-<id>`) opens the Roles page (at that role), once. The page
-	// mounts with its first opening and stays mounted, like the terminal.
-	const [rolesFocus, setRolesFocus] = useState<{ id: string; seq: number } | null>(null);
+	// Existing role/report links still open Roles; the reduced view has no detail/deep-link control.
+	// Mount with its first opening and stay mounted, like the terminal.
 	useEffect(() => {
 		const link = takeViewLink();
 		if (!link) return;
 		setView(link.view);
-		if (link.view === "roles" && link.role) setRolesFocus({ id: link.role, seq: 1 });
 	}, []);
 	const [rolesLoaded, setRolesLoaded] = useState(false);
 	useEffect(() => {
@@ -866,11 +866,6 @@ export function App() {
 	);
 	// roles-overview: "About & rules": Settings -> Identities at that role.
 	const [settingsRole, setSettingsRole] = useState<{ id: string; seq: number } | null>(null);
-	const aboutFromRoles = useCallback((roleId: string) => {
-		setSettingsRole((prev) => ({ id: roleId, seq: (prev?.seq ?? 0) + 1 }));
-		setSettingsInitialSection("identities");
-		setSettingsOpen(true);
-	}, []);
 
 	// 插件视图桥：插件无 chat 上下文，通过窗口事件请求在可见终端执行命令
 	// （与 SCM 面板同款：已有同名 tab 原地重跑，否则新建并自动切到终端视图）。
@@ -2362,13 +2357,7 @@ export function App() {
 				<div className={`view-pane roles-pane ${view === "roles" ? "" : "hidden"}`}>
 					{(rolesLoaded || view === "roles") && (
 						<Suspense fallback={null}>
-							<RolesView
-								active={view === "roles"}
-								phone={isMobile}
-								focusRole={rolesFocus}
-								onOpen={openFromRoles}
-								onAbout={aboutFromRoles}
-							/>
+							<RolesUsefulView active={view === "roles"} phone={isMobile} />
 						</Suspense>
 					)}
 				</div>

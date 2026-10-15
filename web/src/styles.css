@@ -17602,3 +17602,84 @@ button.source-default-toggle {
 		min-height: 36px;
 	}
 }
+
+/* Reduced Roles: plain, read-only reported facts; no custom fonts, icons or status authority. */
+.roles-useful {
+	box-sizing: border-box;
+	width: 100%;
+	height: 100%;
+	min-width: 0;
+	overflow: auto;
+	padding: 32px;
+	font-family:
+		system-ui,
+		-apple-system,
+		BlinkMacSystemFont,
+		"Segoe UI",
+		sans-serif;
+	font-size: 15px;
+	line-height: 1.5;
+	color: var(--text);
+	background: var(--bg);
+	overflow-wrap: anywhere;
+}
+.roles-useful * {
+	box-sizing: border-box;
+	font-family: inherit;
+}
+.roles-useful h1 {
+	margin: 0 0 12px;
+	font-size: 20px;
+}
+.roles-useful h2 {
+	margin: 0;
+	font-size: 17px;
+}
+.roles-useful h3 {
+	margin: 16px 0 8px;
+	font-size: 15px;
+}
+.roles-useful p {
+	margin: 8px 0;
+}
+.roles-useful .roles-useful-note {
+	font-size: 13px;
+	color: var(--text-dim);
+}
+.roles-useful-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 16px;
+	margin-top: 24px;
+}
+.roles-useful-card {
+	min-width: 0;
+	padding: 16px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg-elev);
+}
+.roles-useful dl {
+	display: grid;
+	grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+	gap: 4px 12px;
+	margin: 16px 0 8px;
+}
+.roles-useful dd {
+	margin: 0;
+}
+.roles-useful ul {
+	margin: 8px 0;
+	padding-left: 20px;
+}
+.roles-useful li + li {
+	margin-top: 8px;
+}
+@media (max-width: 768px) {
+	.roles-useful {
+		padding: 16px;
+	}
+	.roles-useful-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
