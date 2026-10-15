@@ -95,7 +95,24 @@ function seed({ root, dataDir, agentDir, workdir }) {
 	sessions = join(agentDir, "sessions", `--${workdir.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`);
 	mkdirSync(sessions, { recursive: true });
 	home = join(sessions, "2026-10-15T12-00-00-000Z_01a0f000-0000-7000-8000-000000000001.jsonl");
-	const records = [line({ op: "run" })];
+	// The unchanged shell opens its initial saved chat. Seed its existing SDK metadata so
+	// this read-only journey can keep byte-exact transcript assertions, not ignore writes.
+	const records = [
+		{
+			type: "model_change",
+			id: "fixture-model",
+			timestamp: new Date(NOW).toISOString(),
+			provider: "mock",
+			modelId: "mock-model",
+		},
+		{
+			type: "thinking_level_change",
+			id: "fixture-thinking",
+			timestamp: new Date(NOW).toISOString(),
+			thinkingLevel: "off",
+		},
+		line({ op: "run" }),
+	];
 	for (let id = 1; id <= 21; id++) {
 		records.push(line({ op: "add", id, plan }), line({ op: "start", id, lane: true }));
 	}
@@ -157,6 +174,25 @@ function seed({ root, dataDir, agentDir, workdir }) {
 	identity("security", "Security", linked);
 	// Existing non-content path safeguards: unnormalised '..' must remain refused too.
 	identity("systems", "Systems", `${sessions}/sub/../${home.slice(sessions.length + 1)}`);
+	// Preserve the previous harness's future report-job fixture: no catch-up report/model turn.
+	mkdirSync(join(root, ".pi-scheduler"), { recursive: true });
+	const jobs = join(root, ".pi-scheduler", "jobs.json");
+	writeFileSync(
+		jobs,
+		JSON.stringify({
+			jobs: [
+				{
+					id: "j1",
+					name: "6 am reports",
+					type: "command",
+					target: "role-reports run",
+					enabled: true,
+					nextRunAt: NOW + 20 * 3_600_000,
+				},
+			],
+		}),
+	);
+	files.push(jobs);
 	store = join(dataDir, "role-messages.json");
 	writeFileSync(store, JSON.stringify({ v: 1, paused: false, messages: [] }));
 	files.push(store);
@@ -299,12 +335,22 @@ try {
 		[...originals].every(([file, hash]) => sha(file) === hash),
 	);
 
+	const scrollRegion = page.getByRole("region", { name: "Roles", exact: true });
+	await scrollRegion.focus();
+	await page.keyboard.press("PageDown");
+	check(
+		"read-only text region is keyboard reachable and scrollable",
+		await until(() => scrollRegion.evaluate((node) => document.activeElement === node && node.scrollTop > 0)),
+	);
+	await scrollRegion.evaluate((node) => {
+		node.scrollTop = 0;
+	});
 	await page.addScriptTag({ path: AXE });
 	for (const theme of ["dark", "white"]) {
 		// Existing theme event/storage semantics, no production settings mutation.
 		if (theme === "white") {
 			await context.addInitScript(() => localStorage.setItem("pi-web-ui:theme", "white"));
-			await page.reload();
+			await page.goto(`${srv.http}/?view=roles`);
 			await page.locator(".roles-useful-card").first().waitFor();
 			await page.addScriptTag({ path: AXE });
 		}
@@ -349,9 +395,12 @@ try {
 				const result = await window.axe.run(document.querySelector(".roles-useful"), {
 					runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"] },
 				});
-				return result.violations.filter((value) => value.impact === "serious" || value.impact === "critical").length;
+				return result.violations
+					.filter((value) => value.impact === "serious" || value.impact === "critical")
+					.map((value) => value.id);
 			});
-			check(`${theme}/${width}: no serious/critical axe findings`, serious === 0);
+			check(`${theme}/${width}: no serious/critical axe findings`, serious.length === 0);
+			if (serious.length) console.log(`AXE rule IDs only: ${serious.join(",")}`);
 			if (SHOTS && width !== 320) {
 				mkdirSync(SHOTS, { recursive: true });
 				await page.screenshot({ path: join(SHOTS, `roles-${theme}-${width}.png`) });
@@ -398,7 +447,7 @@ try {
 	check("existing reader suppresses thinking/tool/prompt/notebook/outside content", !readerPrivacyLeak);
 	check("no raw transcript entries sent by existing reader", !readerRawEntriesLeak);
 	check(
-		"no chat opened/created by looking",
+		"no session file created by looking",
 		readdirSync(sessions).filter((name) => name.endsWith(".jsonl")).length === 2,
 	);
 	const busy = await fetch(`${srv.http}/api/busy`).then((response) => response.json());

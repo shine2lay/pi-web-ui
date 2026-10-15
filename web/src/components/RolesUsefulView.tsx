@@ -55,7 +55,7 @@ export function RolesUsefulView({ active, phone }: { active: boolean; phone: boo
 export function RolesUsefulContent({ model, phone }: { model: UsefulRoles; phone: boolean }) {
 	const t = useT();
 	return (
-		<section className={`roles-useful${phone ? " roles-useful-phone" : ""}`}>
+		<section className={`roles-useful${phone ? " roles-useful-phone" : ""}`} tabIndex={0} aria-label={t("rolesTitle")}>
 			<header>
 				<h1>{t("rolesTitle")}</h1>
 				<p>{t(SOURCE_KEYS[model.source])}</p>
