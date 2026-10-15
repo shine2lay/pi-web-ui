@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // Fixed projection + actual store/mounted consumer contract. Real reader/wire integration: roles-page-test.mjs.
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -402,9 +403,9 @@ describe("actual Roles store and mounted reduced consumer", () => {
 		expect(container.textContent).toContain("Configured label truncated to 120 code points");
 	});
 	it("source route has exactly the existing hooks, no old rich page/actions or side effect APIs", () => {
-		const source = readFileSync(new URL("../../web/src/components/RolesUsefulView.tsx", import.meta.url), "utf8");
-		const model = readFileSync(new URL("../../web/src/roles-useful-model.ts", import.meta.url), "utf8");
-		const app = readFileSync(new URL("../../web/src/App.tsx", import.meta.url), "utf8");
+		const source = readFileSync(resolve(process.cwd(), "web/src/components/RolesUsefulView.tsx"), "utf8");
+		const model = readFileSync(resolve(process.cwd(), "web/src/roles-useful-model.ts"), "utf8");
+		const app = readFileSync(resolve(process.cwd(), "web/src/App.tsx"), "utf8");
 		expect(source.match(/useRoles\(active \? "full" : "off"\)/g)).toHaveLength(1);
 		expect(source.match(/useAppField\("status"\)/g)).toHaveLength(1);
 		expect(app).toContain('import("./components/RolesUsefulView")');
@@ -417,7 +418,7 @@ describe("actual Roles store and mounted reduced consumer", () => {
 	it("all eight locale packs carry the exact new English-only fork copy", () => {
 		const newKeys = Object.keys(en).filter((key) => /^ru[A-Z]/.test(key)) as (keyof typeof en)[];
 		for (const lang of ["de", "es", "fr", "it", "ja", "ko", "pt", "ru"]) {
-			const pack = JSON.parse(readFileSync(new URL(`../../locales/${lang}.json`, import.meta.url), "utf8"));
+			const pack = JSON.parse(readFileSync(resolve(process.cwd(), `locales/${lang}.json`), "utf8"));
 			for (const key of newKeys) expect(pack.strings[key]).toBe(en[key]);
 		}
 	});
