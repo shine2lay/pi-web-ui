@@ -17659,15 +17659,6 @@ button.source-default-toggle {
 	border-radius: 8px;
 	background: var(--bg-elev);
 }
-.roles-useful dl {
-	display: grid;
-	grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-	gap: 4px 12px;
-	margin: 16px 0 8px;
-}
-.roles-useful dd {
-	margin: 0;
-}
 .roles-useful ul {
 	margin: 8px 0;
 	padding-left: 20px;
@@ -17675,11 +17666,108 @@ button.source-default-toggle {
 .roles-useful li + li {
 	margin-top: 8px;
 }
+/* roles-needs-you: "Needs you" on top, task rows with Open buttons (in-app navigation only). */
+.roles-useful-needs {
+	margin-top: 16px;
+	padding: 16px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg-elev);
+}
+.roles-useful-needs-some {
+	border-color: var(--amber);
+}
+.roles-useful .roles-useful-asks,
+.roles-useful .roles-useful-tasks {
+	list-style: none;
+	margin: 8px 0;
+	padding: 0;
+}
+.roles-useful .roles-useful-ask,
+.roles-useful .roles-useful-task {
+	display: flex;
+	align-items: flex-start;
+	gap: 12px;
+	margin: 0;
+	padding: 8px 0;
+	border-top: 1px solid var(--border-soft);
+}
+.roles-useful .roles-useful-ask:first-child,
+.roles-useful .roles-useful-task:first-child {
+	border-top: 0;
+}
+.roles-useful-body {
+	flex: 1;
+	min-width: 0;
+}
+.roles-useful .roles-useful-body p {
+	margin: 0;
+}
+.roles-useful .roles-useful-meta {
+	font-size: 13px;
+	color: var(--text-dim);
+}
+.roles-useful-task-name {
+	font-weight: 600;
+}
+.roles-useful-queue {
+	color: var(--text-dim);
+}
+/* Can't tell / last received: the page isn't current; marked, never styled as an all-clear. */
+.roles-useful .roles-useful-cant,
+.roles-useful .roles-useful-stale {
+	padding-left: 8px;
+	border-left: 3px solid var(--amber);
+}
+.roles-useful-open {
+	flex: none;
+	min-height: 32px;
+	padding: 4px 12px;
+	border: 1px solid var(--control-border);
+	border-radius: 6px;
+	background: var(--control-bg);
+	color: var(--control-fg);
+	font-size: 14px;
+	line-height: 1.3;
+	cursor: pointer;
+}
+.roles-useful-open:hover {
+	border-color: var(--accent);
+}
+.roles-useful-open:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+.roles-useful-sr {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
+}
+.roles-useful-phone {
+	padding: 16px;
+}
+.roles-useful-phone .roles-useful-grid {
+	grid-template-columns: minmax(0, 1fr);
+}
+.roles-useful-phone .roles-useful-open {
+	min-height: 44px;
+	min-width: 44px;
+}
 @media (max-width: 768px) {
 	.roles-useful {
 		padding: 16px;
 	}
 	.roles-useful-grid {
 		grid-template-columns: minmax(0, 1fr);
+	}
+	.roles-useful-open {
+		min-height: 44px;
+		min-width: 44px;
 	}
 }

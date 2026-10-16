@@ -52,6 +52,7 @@ import {
 	type PendingSwitch,
 	type SwitchError,
 } from "./switch-pending";
+import { isRolesOpen, ROLES_OPEN_FAILED } from "./roles-open-guard";
 import { setAppGlobals, setAppSend } from "./app-globals";
 // 工具定义说明弹窗（工具卡右键 → 「显示工具详细信息」）：应答直接回模块级 store，
 // 不进 ChatState（弹窗挂在 App 上，消息列表里几十张卡片不必为此各拿一份数据）。
@@ -1964,7 +1965,11 @@ export function useChat() {
 						dispatch({ type: "switch_failed", target: msg.target, error: msg.error, errorEn: msg.errorEn });
 					} else {
 						const id = ++noticeId.current;
-						dispatch({ type: "notice", notice: { id, level: "error", text: msg.error, textEn: msg.errorEn } });
+						// roles-needs-you: a chat the Roles page opened gets fixed words, never the server's reason
+						// (it can quote the chat's path).
+						const text = isRolesOpen(msg.target) ? ROLES_OPEN_FAILED : msg.error;
+						const textEn = isRolesOpen(msg.target) ? ROLES_OPEN_FAILED : msg.errorEn;
+						dispatch({ type: "notice", notice: { id, level: "error", text, textEn } });
 					}
 					break;
 				}

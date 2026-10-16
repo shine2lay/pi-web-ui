@@ -76,6 +76,8 @@ export function switchTargetTitle(
 	target: SwitchTarget,
 	sessions: readonly { path: string; name?: string; firstMessage?: string }[],
 	conversations: readonly { id: string; title: string; sessionPath?: string }[],
+	/** roles-needs-you: words instead of the file's name, for a chat the Roles page opened. */
+	fallback?: string,
 ): string {
 	if (target.kind === "conversation") {
 		return conversations.find((c) => c.id === target.id)?.title ?? displayPreview(target.id);
@@ -88,6 +90,7 @@ export function switchTargetTitle(
 	if (firstMessage) return displayPreview(firstMessage, 60);
 	const live = conversations.find((c) => sameSessionPath(c.sessionPath, target.path));
 	if (live) return live.title;
+	if (fallback !== undefined) return fallback;
 	return displayPreview(target.path.replace(/\\/g, "/").split("/").pop() || target.path);
 }
 

@@ -37,6 +37,11 @@ export interface RolesState {
 	checkedAt?: number;
 	/** When this window last heard from the server (this clock, ms). */
 	heardAt?: number;
+	/** roles-needs-you: when this window last heard that the server looked again since its latest full
+	 *  watch (this clock, ms): a full update or a heartbeat whose server checkedAt is strictly newer
+	 *  than the first full update's since that watch, which may be a replay of an old look. Cleared by
+	 *  every full watch, every error and every full update that isn't newer; counts never set it. */
+	appliedAt?: number;
 	/** When the last look failed (this clock, ms). */
 	failedAt?: number;
 }
@@ -47,6 +52,10 @@ let fullWatchers = 0;
 let countWatchers = 0;
 /** What this window asked the server for last ("off": nothing). */
 let asked: "off" | "count" | "full" = "off";
+/** roles-needs-you (Security R1): the server's checkedAt on the first full update since the latest
+ *  full watch; null until it comes. On a watch the server first replays what it had, with that old
+ *  look's checkedAt, and looks again only later, so that first update says nothing about now. */
+let firstCheckedAt: number | null = null;
 
 const listeners = new Set<() => void>();
 
@@ -72,8 +81,23 @@ function sync(force = false): void {
 		appSend({ type: "roles_unwatch" });
 		return;
 	}
-	if (want === "full" && state.status !== "ready") set({ ...state, status: "loading" });
+	if (want === "full") {
+		firstCheckedAt = null;
+		set({ ...state, appliedAt: undefined, ...(state.status !== "ready" ? { status: "loading" as const } : {}) });
+	}
 	appSend({ type: "roles_watch", full: want === "full" });
+}
+
+/** Whether a payload shows the server looked again since the latest full watch: its checkedAt (a
+ *  safe integer, at least 0) is strictly newer than the first full update's. The first full update
+ *  only marks where that is; a heartbeat ahead of it marks nothing. */
+function lookedAgain(value: unknown, overview: boolean): boolean {
+	if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) return false;
+	if (firstCheckedAt === null) {
+		if (overview) firstCheckedAt = value;
+		return false;
+	}
+	return value > firstCheckedAt;
 }
 
 /** A part of the window starts (full: the page) or stops wanting the roles. Returns its undo. */
@@ -112,12 +136,14 @@ export function receiveRoles(payload: RolesPayload): void {
 	const now = Date.now();
 	const asks = typeof payload.asks === "number" && payload.asks >= 0 ? payload.asks : state.asks;
 	if (payload.overview) {
+		const checkedAt = payload.checkedAt ?? payload.overview.at;
 		set({
 			overview: payload.overview,
 			asks: payload.overview.asks.length,
 			status: "ready",
-			checkedAt: payload.checkedAt ?? payload.overview.at,
+			checkedAt,
 			heardAt: now,
+			appliedAt: lookedAgain(checkedAt, true) ? now : undefined,
 		});
 		return;
 	}
@@ -129,6 +155,7 @@ export function receiveRoles(payload: RolesPayload): void {
 			error: payload.error,
 			failedAt: now,
 			heardAt: now,
+			appliedAt: undefined,
 		});
 		return;
 	}
@@ -137,6 +164,7 @@ export function receiveRoles(payload: RolesPayload): void {
 		...state,
 		asks,
 		...(typeof payload.checkedAt === "number" ? { checkedAt: payload.checkedAt, error: undefined } : {}),
+		...(lookedAgain(payload.checkedAt, false) ? { appliedAt: now } : {}),
 		heardAt: now,
 	});
 }
@@ -209,5 +237,6 @@ export function resetRolesState(): void {
 	fullWatchers = 0;
 	countWatchers = 0;
 	asked = "off";
+	firstCheckedAt = null;
 	notify();
 }

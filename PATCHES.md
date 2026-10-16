@@ -6467,3 +6467,87 @@ Architecture/Data/Security document readbacks accepted; not code/native/activati
 Revert this additive commit to undo; no state to migrate. Security code verdict plus the separately
 approved native-seam/owner activation package is required before J0 wiring. Nothing here grants
 permission, confirmation, a native seam, install, restart or hold lift.
+
+## roles-needs-you
+
+**Status**: `local`
+**Baseline**: v0.96.1, on `roles-overview` (feed unchanged) and the reduced Roles page of Ops #190
+(f984cec2, c050c19c), which had no entry of its own; this entry covers that page as it now stands.
+
+**Why** (owner-requested, Ops queue #200; owner's dialog 2026-10-16 ~10:55, "Tasks and what needs you";
+Ops lead, Security reviews): the live Roles page showed only "Task #N", a status and counts, so it
+couldn't say who does what, what blocks them, or what waits on the owner. The feed already carries all
+of it (`roles_overview` shows it); the page's closed projection was the limit. This widens Security's
+minimal contract (`~/security-lab/roles-existing-feed-2026-10-15/REVIEW.md` §5, sha256 `33c5e2a4…`)
+as agreed in its addendum (`ADDENDUM-OPS200.md` there, sha256 `eb315ad1…`, Security rm-6e0dba3b).
+
+### Changes
+
+- `web/src/roles-useful-model.ts`: the pure closed projection, fresh per snapshot; raw objects are
+  never forwarded.
+  - Tasks: "#N name"; state from closed fields only (ready, waits on, working, question with Ops /
+    with its main chat, needs a decision, on hold, blocked, done, unknown); "working" when its chat
+    runs; "paused" or "pause unclear"; the newest line for working tasks; an Open target: its chat
+    once started, else its queue in the home chat with the task focused.
+  - Agent text (names, waits, newest line, ask text) is checked whole before clipping: any
+    `\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}` or U+2028/2029 -> fallback ("Task #N", status words only,
+    omitted, "Open item"); clipped by code points (160 for names and waits, 300 for lines and asks).
+  - Needs you: every `overview.asks` item in feed order (oldest first); 50 shown, "N more" counts
+    the rest; unknown role -> "Unknown role"; a missing or future time -> "time unknown".
+  - "None reported to you \u2026 last update received HH:MM. This can miss items." only when connected,
+    heard within 2 min, no feed error, the server heard looking again since the latest watch
+    (`appliedAt` in `roles-state.ts`: set only by a full update or heartbeat whose checkedAt is
+    strictly newer than the first full update's since that watch, because on a watch the server
+    first replays its last look with that look's old time; cleared on every full watch, every error
+    and every full update that isn't newer), roster non-empty, no role omitted or with problems, at most
+    8 started chats per role (the server reads 8), asks a list, and each stuck task not paused or
+    held has its question listed. Otherwise "Can't tell right now" with a closed reason, shown counts
+    are marked last received, and the heading shows its count only when something is listed or the
+    page can tell (never "(0)" beside can't tell). Cost: after each opening the page can't tell for
+    up to about 35 s (the server's 30 s heartbeat plus one 3 s look) unless something changes.
+  - Counts: the reported number, 0 included, only when the queue was read cleanly (a safe integer
+    of at least 0, active = rows, queued >= rows, no role problems); otherwise "couldn't read".
+  - Links: a chat ref passes only if absolute, `.jsonl`, at most 4096 characters, no control
+    characters and no empty, "." or ".." segments; focus only through `parseFocus`. Paths stay in
+    JS memory: never in the DOM, aria, data attributes, URL, storage or logs.
+- `web/src/components/RolesUsefulView.tsx`: "Needs you (N)" on top with its coverage line, then the
+  role cards. Agent text only as `<q class="roles-useful-agent">` text nodes, apart from the app's
+  status words. Fixed-text Open buttons call App's `openFromRoles` (the Initiatives page's path);
+  the server's `isInsideSessionsDir` check on switch stays authoritative. No answer, approve or
+  other action controls.
+- `web/src/App.tsx` passes `openFromRolesPage`: it remembers the chat in `web/src/roles-open-guard.ts`
+  (JS memory, the last 32), then calls `openFromRoles`. For those chats the switch overlay says
+  "this chat" where it would show the file's name (`switchTargetTitle`'s new `fallback`), and a
+  failure shows fixed words in the overlay and in `use-chat.ts`'s toast, never the server's reason,
+  which can quote the path (`EACCES: … open '<path>'`). Other switches are unchanged.
+- `web/src/styles.css`: task rows, Open buttons (>= 24px), an amber edge for can't tell and last
+  received; same system font and type scale, one column on phones. `web/src/i18n.tsx` and the 8
+  locale packs: the new `ru*` keys (English in every pack).
+
+### How it was checked
+
+- `tests/unit/roles-useful.test.ts`: every state, ready but waiting, asking Ops vs the main chat,
+  stuck, paused task and queue, empty while current, cached, failed, partial or awaiting, 25 queued
+  (caps), long, Unicode, bidi, control and zero-width text, HTML-looking text, bad chat refs, role
+  problems, zero counts with and without problems. `tests/unit/roles-useful-asks.test.ts`: the real
+  `RolesOverviewReader` on fixture chats (a needs-you line cleared by a typed reply and by a dialog
+  answer, a live dialog, a stuck task and then its queue paused). Security's R1 and R2 on 94bcb212:
+  a replayed update, a heartbeat ahead of the first update, an older update, and error -> rewatch ->
+  replay never let it tell; a newer heartbeat or update does; no "(0)" beside can't tell (all three
+  fail on the old code). `tests/unit/roles-open-guard.test.ts`:
+  which chats count as opened from Roles, the cap, and the overlay title fallback. Run twice, identical.
+- `tests/roles-page-test.mjs` (sealed): names and needs-you; each Open opens the right chat (the next
+  snapshot's chat and the focused line or task); an unreadable chat -> fixed failure words with no
+  part of its path, then Retry opens it; disconnect -> can't tell, last received marked;
+  restart -> the same items once each; refused home chats -> can't tell; the 64-role cap; long
+  labels; privacy canaries; axe at 320/390/1440 px in dark and white; no new network destination
+  and no model calls; every opened chat byte-for-byte unchanged (the fixture task chat holds a
+  message, because the SDK writes model and thinking level into a chat without one on every open).
+- Gates: `npm run build`, `TZ=UTC scripts/check.sh`, `node tests/run-sealed.mjs --jobs=4 roles-page-test`.
+
+### Undo and syncing
+
+- Undo: `pi-web-deploy rollback`, or revert this one commit with `wt`. Nothing to migrate.
+- No server, feed, watch, source, access or retention change. A true "nothing waiting on you" needs
+  feed-side signals (addendum item 7) and is a separate plan.
+- If `UiRoleTask`, `UiRoleAsk` or `ROLES_TASK_CHATS_MAX` (8) change, update the projection and tests.

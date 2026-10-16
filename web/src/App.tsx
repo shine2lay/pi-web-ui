@@ -17,6 +17,7 @@ import { filesPanelVisible } from "./files-visibility";
 import { MessageList } from "./components/MessageList";
 import { SwitchOverlay } from "./components/SwitchOverlay";
 import { switchTargetTitle } from "./switch-pending";
+import { isRolesOpen, markRolesOpen, ROLES_OPEN_FAILED } from "./roles-open-guard";
 import { nextListKey, type ListKey } from "./chat-cache";
 import { ChatInput } from "./components/ChatInput";
 import { GoalBar } from "./components/GoalBar";
@@ -863,6 +864,15 @@ export function App() {
 			void send({ type: "switch_session", path: target.file });
 		},
 		[send],
+	);
+	// roles-needs-you: the Roles page's Open buttons. The chat is remembered (JS memory only), so the
+	// overlay never names it by its file and a failure shows fixed words (Security, ADDENDUM-OPS200 "6").
+	const openFromRolesPage = useCallback(
+		(target: RolesOpenTarget) => {
+			markRolesOpen(target.file);
+			openFromRoles(target);
+		},
+		[openFromRoles],
 	);
 	// roles-overview: "About & rules": Settings -> Identities at that role.
 	const [settingsRole, setSettingsRole] = useState<{ id: string; seq: number } | null>(null);
@@ -1954,9 +1964,18 @@ export function App() {
 						{switchTarget && (
 							<SwitchOverlay
 								pending={chat.pendingSwitch}
-								error={chat.switchError}
+								error={
+									chat.switchError && isRolesOpen(chat.switchError.target)
+										? { ...chat.switchError, error: ROLES_OPEN_FAILED, errorEn: ROLES_OPEN_FAILED }
+										: chat.switchError
+								}
 								preview={chat.preview !== null}
-								title={switchTargetTitle(switchTarget, chat.sessions, chat.conversations)}
+								title={switchTargetTitle(
+									switchTarget,
+									chat.sessions,
+									chat.conversations,
+									isRolesOpen(switchTarget) ? t("ruThisChat") : undefined,
+								)}
 								onHide={switchHide}
 								onDismissError={switchDismissError}
 								onRetry={() => {
@@ -2357,7 +2376,7 @@ export function App() {
 				<div className={`view-pane roles-pane ${view === "roles" ? "" : "hidden"}`}>
 					{(rolesLoaded || view === "roles") && (
 						<Suspense fallback={null}>
-							<RolesUsefulView active={view === "roles"} phone={isMobile} />
+							<RolesUsefulView active={view === "roles"} phone={isMobile} onOpen={openFromRolesPage} />
 						</Suspense>
 					)}
 				</div>
