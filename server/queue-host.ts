@@ -34,6 +34,15 @@
  *    this machine has no Ops role at all (no role "ops" and no identities/ops folder): rule 21 can't apply,
  *    and pi-queue keeps its older flow (the main chat, then the owner), as on the command line.
  *    queueCoordinator().
+ *  - leadChat(role) (queue-lead-reminders, AGENTS.md rule 24): the home chat of the role whose id is `role`,
+ *    {id, file}, from the roles' identity.json files (owner-only); undefined when there's no such role or it
+ *    has no home chat. pi-queue checks a block's lead with it, and a lead's chat checks with it that it is
+ *    the one a reminder names.
+ *  - remindLead({lead, queue, id, since, n}) (queue-lead-reminders): reminder n about task id's block (saved
+ *    at `since`) in the queue whose chat is `queue` goes to the lead's home chat ("/queue lead " there),
+ *    checked against that queue's own record, the owner's pause on role messages and the lead's daily cap:
+ *    {sent, at, to}, {held} (not now) or {missed} (it can't go at all). Once per block and n.
+ *    QueueBlocks.remindLead (queue-blocks.ts).
  *
  * This file is the glue: it checks what the extension hands in and serializes the work. The chats
  * themselves are opened by AgentService / ClientSession (agent-service.ts).
@@ -83,6 +92,44 @@ export interface QueueHostImpl {
 	watchQueue?(file: string): void;
 	/** task-question decisions: see the header (queueCoordinator). */
 	coordinator?(): QueueCoordinator | "none" | undefined;
+	/** queue-lead-reminders: see the header. */
+	leadChat?(role: string): QueueLeadChat | undefined;
+	remindLead?(req: QueueLeadRemind): Promise<QueueLeadRemindResult>;
+}
+
+/** queue-lead-reminders: a role's home chat (leadChat). */
+export interface QueueLeadChat {
+	id: string;
+	/** Its transcript (absolute path). */
+	file: string;
+}
+
+/** queue-lead-reminders: what remindLead gets, checked. */
+export interface QueueLeadRemind {
+	lead: string;
+	queue: string;
+	id: number;
+	since: number;
+	n: number;
+}
+
+export type QueueLeadRemindResult = { sent: true; at: number; to: string } | { held: string } | { missed: string };
+
+/** queue-lead-reminders: a role id as pi-queue writes it (lowercase letters, digits, dashes). */
+const ROLE_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
+/** queue-lead-reminders: remindLead's request as pi-queue handed it in: cleaned, or the reason it can't be used. */
+export function parseLeadRemind(raw: unknown): QueueLeadRemind | string {
+	if (!raw || typeof raw !== "object") return "no request";
+	const o = raw as Record<string, unknown>;
+	const lead = typeof o.lead === "string" ? o.lead.trim().toLowerCase() : "";
+	if (!ROLE_ID_RE.test(lead)) return "no lead given";
+	if (typeof o.queue !== "string" || !o.queue.startsWith("/") || o.queue.length > 1000) return "no queue chat given";
+	const pos = (x: unknown) => typeof x === "number" && Number.isInteger(x) && x > 0;
+	if (!pos(o.id)) return "no task number given";
+	if (!pos(o.since)) return "no block given";
+	if (o.n !== 1 && o.n !== 2) return "no reminder number given";
+	return { lead, queue: o.queue, id: o.id as number, since: o.since as number, n: o.n };
 }
 
 /** task-question decisions (rule 21): the chat that decides queued tasks' questions. */
@@ -327,6 +374,38 @@ export function installQueueHost(impl: QueueHostImpl): () => void {
 							return Object.freeze({ id: "ops" as const, file: c.file, ...(c.title ? { title: c.title } : {}) });
 						} catch {
 							return undefined;
+						}
+					},
+				}
+			: {}),
+		...(impl.leadChat
+			? {
+					// A fresh, frozen copy each time, from identity.json (owner-only), never from a model's words.
+					leadChat: (role: string): QueueLeadChat | undefined => {
+						const id = typeof role === "string" ? role.trim().toLowerCase() : "";
+						if (!ROLE_ID_RE.test(id)) return undefined;
+						try {
+							const c = impl.leadChat!(id);
+							if (!c || typeof c.file !== "string" || !c.file.startsWith("/") || typeof c.id !== "string")
+								return undefined;
+							return Object.freeze({ id: c.id, file: c.file });
+						} catch {
+							return undefined;
+						}
+					},
+				}
+			: {}),
+		...(impl.remindLead
+			? {
+					remindLead: (raw: QueueLeadRemind): Promise<QueueLeadRemindResult> => {
+						const req = parseLeadRemind(raw);
+						// A request pi-queue can't make: recorded as missed there, so the task's round still goes on.
+						if (typeof req === "string") return Promise.resolve({ missed: req });
+						const failed = (err: unknown) => ({ held: `couldn't send it (${asError(err).message})` });
+						try {
+							return impl.remindLead!(req).catch(failed);
+						} catch (err) {
+							return Promise.resolve(failed(err));
 						}
 					},
 				}

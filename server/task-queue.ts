@@ -49,6 +49,11 @@
  * queue-why: a waiting task's open afters come with how each stands (`waitingForRefs`: working, not
  * started, on hold, blocked, needing the user, paused by the owner), so the panel can say why it can't
  * start. The mirror keeps pi-queue's `stuckAt` (when a task started needing the user) for queue-blocks.ts.
+ *
+ * queue-lead-reminders (AGENTS.md rule 24): a block may name the role whose lead owes the result (`lead`,
+ * what it `owes`, its `checkpoint`). pi-queue's "remind" op records a reminder that went to that lead's
+ * home chat (never to the task); its "lead" op records the lead's reply: an answer lets the task go (a
+ * poke with `lead`), a new checkpoint only moves the clock. queue-blocks.ts sends the reminders.
  */
 
 import { readFileSync, statSync } from "node:fs";
@@ -175,6 +180,40 @@ function needOf(raw: unknown): string | undefined {
 	if (typeof raw !== "string") return undefined;
 	const t = raw.replace(/\s+/g, " ").trim();
 	return t ? t.slice(0, NEED_MAX) : undefined;
+}
+
+/** queue-lead-reminders: pi-queue's OWES_MAX, ROLE_ID and LEAD_REMINDERS. */
+const OWES_MAX = 200;
+const ROLE_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
+export const LEAD_REMINDERS = 2;
+
+/** queue-lead-reminders: pi-queue's normLead: a role id, lowercased; undefined when it isn't one. */
+function leadOf(raw: unknown): string | undefined {
+	if (typeof raw !== "string") return undefined;
+	const id = raw.trim().toLowerCase();
+	return ROLE_ID.test(id) ? id : undefined;
+}
+
+/** queue-lead-reminders: pi-queue's normOwes. */
+function owesOf(raw: unknown): string | undefined {
+	if (typeof raw !== "string") return undefined;
+	const t = raw.replace(/\s+/g, " ").trim();
+	return t ? t.slice(0, OWES_MAX) : undefined;
+}
+
+/** queue-lead-reminders: a time as saved (ms), or undefined. */
+const timeOf = (x: unknown): number | undefined =>
+	typeof x === "number" && Number.isFinite(x) && x > 0 ? Math.round(x) : undefined;
+
+/** queue-lead-reminders: pi-queue's normReminders: sorted, at most LEAD_REMINDERS; undefined when none. */
+function remindersOf(raw: unknown): number[] | undefined {
+	if (!Array.isArray(raw)) return undefined;
+	const out = raw
+		.map(timeOf)
+		.filter((x): x is number => x !== undefined)
+		.sort((a, b) => a - b)
+		.slice(0, LEAD_REMINDERS);
+	return out.length ? out : undefined;
 }
 
 /** queue-blocked: pi-queue's outsideOf: a saved outside list, keeping what was recorded over already. */
@@ -601,11 +640,24 @@ function apply(s: State, raw: unknown): void {
 			if (task.status !== "working" || !(task.lane || s.from)) return;
 			const on = normTaskRefs(op.on);
 			const need = needOf(op.need);
-			if (!on && !need) return;
+			// queue-lead-reminders: a lead and what it owes, its checkpoint, and what the block it left carried over.
+			const lead = leadOf(op.lead);
+			if (!on && !need && !lead) return;
 			const since = num(op.ts);
+			const owes = lead ? owesOf(op.owes) : undefined;
+			const checkpoint = lead ? timeOf(op.checkpoint) : undefined;
+			const leadAt = lead && checkpoint !== undefined ? timeOf(op.leadAt) : undefined;
+			const reminders = lead ? remindersOf(op.reminders) : undefined;
+			const answeredAt = lead ? timeOf(op.answeredAt) : undefined;
 			const block: UiTaskQueueBlock = {
 				...(on ? { on } : {}),
 				...(need ? { need } : {}),
+				...(lead ? { lead } : {}),
+				...(owes ? { owes } : {}),
+				...(checkpoint !== undefined ? { checkpoint } : {}),
+				...(reminders ? { reminders } : {}),
+				...(leadAt !== undefined ? { leadAt } : {}),
+				...(answeredAt !== undefined ? { answeredAt } : {}),
 				since,
 				start: Math.min(numOr(op.start, since), since),
 				tries: Math.max(0, Math.round(numOr(op.tries, 0))),
@@ -628,6 +680,29 @@ function apply(s: State, raw: unknown): void {
 			if (task.status !== "blocked" || !task.block || task.block.since !== op.since || task.block.poke) return;
 			task.block.poke = { at: num(op.ts), ...(op.ask === true ? { ask: true } : {}) };
 			return;
+		case "remind": {
+			// queue-lead-reminders: one reminder per step, in order, for the block it names; it never wakes the task.
+			const b = task.block;
+			if (task.status !== "blocked" || !b?.lead || b.since !== op.since || b.poke) return;
+			const sent = b.reminders ?? [];
+			if (op.n !== sent.length + 1 || sent.length >= LEAD_REMINDERS) return;
+			b.reminders = [...sent, num(op.ts)];
+			return;
+		}
+		case "lead": {
+			// queue-lead-reminders: the block's lead replied. The first answer lets the task go; a checkpoint moves the clock.
+			const b = task.block;
+			if (task.status !== "blocked" || !b?.lead || b.since !== op.since || b.poke || op.by !== b.lead) return;
+			if (typeof op.answer === "string" && op.answer.trim()) {
+				b.poke = { at: num(op.ts), lead: b.lead };
+				return;
+			}
+			const cp = timeOf(op.checkpoint);
+			if (cp === undefined) return;
+			b.checkpoint = cp;
+			b.leadAt = num(op.ts);
+			return;
+		}
 		case "after_over": {
 			const o = task.outside?.find((x) => x.file === op.file && x.id === op.n);
 			if (!o || o.over) return;
@@ -774,12 +849,19 @@ export function taskQueueAll(entries: Iterable<TaskQueueEntryLike>): {
 	from?: UiTaskQueueChat;
 	/** queue-paused: the owner paused the whole queue. */
 	hold?: UiTaskQueueHold;
+	/** queue-lead-reminders: the queue runs (started and not stopped). */
+	running: boolean;
 } {
 	const s: State = { tasks: [], running: false, lanes: TASK_QUEUE_DEFAULT_LANES, autoApprove: false, autoStart: false };
 	for (const e of entries) {
 		if (e.type === "custom" && e.customType === TASK_QUEUE_ENTRY_TYPE) apply(s, e.data);
 	}
-	return { tasks: s.tasks, ...(s.from ? { from: s.from } : {}), ...(s.hold ? { hold: s.hold } : {}) };
+	return {
+		tasks: s.tasks,
+		...(s.from ? { from: s.from } : {}),
+		...(s.hold ? { hold: s.hold } : {}),
+		running: s.running,
+	};
 }
 
 /** queue-paused: the pause an open task is under (its own, else its whole queue's); undefined when it isn't paused. */

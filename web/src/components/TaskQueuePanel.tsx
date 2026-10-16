@@ -320,9 +320,11 @@ function BlockedLine({ block, onOpenChat }: { block: UiTaskQueueBlock; onOpenCha
 	const refs = block.on ?? [];
 	const next = block.poke
 		? t("taskQueueBlockedPoked", { time: lineTime(block.poke.at) })
-		: block.nextPokeAt !== undefined
-			? t(block.nextIsAsk ? "taskQueueBlockedAsk" : "taskQueueBlockedNext", { time: lineTime(block.nextPokeAt) })
-			: "";
+		: block.nextRemindAt !== undefined && block.lead
+			? t("taskQueueBlockedRemind", { lead: block.lead, time: lineTime(block.nextRemindAt) })
+			: block.nextPokeAt !== undefined
+				? t(block.nextIsAsk ? "taskQueueBlockedAsk" : "taskQueueBlockedNext", { time: lineTime(block.nextPokeAt) })
+				: "";
 	return (
 		<div className="task-queue-blocked">
 			<span className="task-queue-blocked-badge">{t("taskQueueBlocked")}</span>
@@ -347,6 +349,13 @@ function BlockedLine({ block, onOpenChat }: { block: UiTaskQueueBlock; onOpenCha
 					<span className="task-queue-blocked-need">
 						{refs.length > 0 && "; "}
 						{t("taskQueueBlockedNeed", { need: block.need })}
+					</span>
+				)}
+				{block.lead && (
+					<span className="task-queue-blocked-lead" data-lead={block.lead}>
+						{(refs.length > 0 || block.need) && "; "}
+						{t("taskQueueBlockedLead", { lead: block.lead })}
+						{block.owes ? `: ${block.owes}` : ""}
 					</span>
 				)}
 				{next && <span className="task-queue-blocked-next">{` \u00b7 ${next}`}</span>}

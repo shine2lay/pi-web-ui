@@ -495,6 +495,8 @@
 		"taskQueueBlockedNext": "다음 재촉 {time}",
 		"taskQueueBlockedAsk": "{time}에 메인 채팅에 물음",
 		"taskQueueBlockedPoked": "{time}에 재촉함, 다음에 재개",
+		"taskQueueBlockedLead": "{lead} 기다리는 중",
+		"taskQueueBlockedRemind": "{time}에 {lead}에게 알림",
 		"taskQueueRefWorking": "진행 중",
 		"taskQueueRefOnHold": "보류 중",
 		"taskQueueRefNotStarted": "시작 전",

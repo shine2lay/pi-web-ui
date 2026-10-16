@@ -495,6 +495,8 @@
 		"taskQueueBlockedNext": "следующее напоминание {time}",
 		"taskQueueBlockedAsk": "спросит главный чат {time}",
 		"taskQueueBlockedPoked": "напомнили {time}, вернётся следующей",
+		"taskQueueBlockedLead": "ждёт {lead}",
+		"taskQueueBlockedRemind": "напомнит {lead} {time}",
 		"taskQueueRefWorking": "в работе",
 		"taskQueueRefOnHold": "на паузе",
 		"taskQueueRefNotStarted": "не начата",

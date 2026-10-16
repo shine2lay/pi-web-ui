@@ -304,7 +304,7 @@ import {
 	type BoardPostResult,
 	type BoardRoleState,
 } from "./role-board.js";
-import { QueueBlocks } from "./queue-blocks.js";
+import { LEAD_REMINDERS_FILE, leadReminderOf, type LeadReminderRecord, QueueBlocks } from "./queue-blocks.js";
 import {
 	chatLabel,
 	ownTaskOf,
@@ -16522,6 +16522,25 @@ export class AgentService {
 			saveWatch: (files) => this.stateStore.setQueueWatch(files),
 			loadHeldSeen: () => this.stateStore.getQueueHeldSeen(),
 			saveHeldSeen: (seen) => this.stateStore.setQueueHeldSeen(seen),
+			// queue-lead-reminders: the owner's pause on role messages also holds reminders to leads; every reminder
+			// sent is a line in queue-lead-reminders.jsonl (dedup and the daily cap, kept across restarts).
+			rolePaused: () => this.roleMessages.paused,
+			loadReminders: () => {
+				const file = join(this.stateStore.dataDir, LEAD_REMINDERS_FILE);
+				if (!existsSync(file)) return [];
+				const out: LeadReminderRecord[] = [];
+				for (const line of readFileSync(file, "utf8").split("\n")) {
+					if (!line.trim()) continue;
+					try {
+						const r = leadReminderOf(JSON.parse(line));
+						if (r) out.push(r);
+					} catch {
+						// a half-written line: skip it
+					}
+				}
+				return out;
+			},
+			saveReminder: (r) => appendFileSync(join(this.stateStore.dataDir, LEAD_REMINDERS_FILE), `${JSON.stringify(r)}\n`),
 			changed: () => ClientSession.refreshQueuePanels(),
 			log: (line) => console.log(line),
 		});
@@ -16530,6 +16549,9 @@ export class AgentService {
 		this.uninstallQueueHost = installQueueHost({
 			queueRefs: (req) => blocks.resolveRefs(req),
 			watchQueue: (file) => blocks.watchQueue(file),
+			// queue-lead-reminders (rule 24): a role's home chat, and a reminder to it (queue-blocks.ts).
+			leadChat: (role) => blocks.leadChat(role),
+			remindLead: (req) => blocks.remindLead(req),
 			previewLaunch: (request, cwd, sourceSessionId) =>
 				previewExistingQueueLaunch(request, cwd, sourceSessionId, this.clients.values()),
 			startChat: (o) =>

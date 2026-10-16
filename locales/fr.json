@@ -495,6 +495,8 @@
 		"taskQueueBlockedNext": "prochain rappel {time}",
 		"taskQueueBlockedAsk": "demande au chat principal {time}",
 		"taskQueueBlockedPoked": "relancée {time}, reprend ensuite",
+		"taskQueueBlockedLead": "attend {lead}",
+		"taskQueueBlockedRemind": "relance {lead} {time}",
 		"taskQueueRefWorking": "en cours",
 		"taskQueueRefOnHold": "en attente",
 		"taskQueueRefNotStarted": "pas commencée",

@@ -443,12 +443,29 @@ export interface UiTaskQueueBlock {
 	/** The 10/30/60 min clock runs from here (same block again goes on with it). */
 	start: number;
 	tries: number;
-	/** The queue poked it: it comes back to work first once a slot is free (ask: to ask its main chat). */
-	poke?: { at: number; ask?: boolean };
+	/** The queue poked it: it comes back to work first once a slot is free (ask: to ask its main chat;
+	 *  lead: the block's lead answered it, rule 24). */
+	poke?: { at: number; ask?: boolean; lead?: string };
 	/** Filled in by the server: when it's poked next (a need, or a poked task that blocked again). */
 	nextPokeAt?: number;
 	/** Filled in by the server: the next step is asking its main chat instead of a poke. */
 	nextIsAsk?: boolean;
+	/** queue-lead-reminders (rule 24): the role whose lead owes the result; the task itself is never poked
+	 *  about it: the lead's home chat is reminded at the checkpoint and once more two hours later. */
+	lead?: string;
+	/** queue-lead-reminders: what the lead owes, in plain words. */
+	owes?: string;
+	/** queue-lead-reminders: when it's due (the task's, or the lead's own when it moved it). */
+	checkpoint?: number;
+	/** queue-lead-reminders: when the lead's home chat was reminded (oldest first). */
+	reminders?: number[];
+	/** queue-lead-reminders: when the lead last moved the checkpoint. */
+	leadAt?: number;
+	/** queue-lead-reminders: the lead's last answer about the same thing (a new round counts from it). */
+	answeredAt?: number;
+	/** Filled in by the server, queue-lead-reminders: when the lead is reminded next, and which reminder. */
+	nextRemindAt?: number;
+	nextRemindN?: number;
 }
 
 /** queue-lanes: a chat a task runs in, or the queue a task chat came from. */

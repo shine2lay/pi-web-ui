@@ -495,6 +495,8 @@
 		"taskQueueBlockedNext": "nächster Anstoß {time}",
 		"taskQueueBlockedAsk": "fragt den Hauptchat {time}",
 		"taskQueueBlockedPoked": "angestoßen {time}, kommt als Nächstes dran",
+		"taskQueueBlockedLead": "wartet auf {lead}",
+		"taskQueueBlockedRemind": "erinnert {lead} {time}",
 		"taskQueueRefWorking": "in Arbeit",
 		"taskQueueRefOnHold": "wartet",
 		"taskQueueRefNotStarted": "nicht begonnen",
