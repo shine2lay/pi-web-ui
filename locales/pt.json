@@ -524,6 +524,7 @@
 		"taskQueueBlockedNeed": "precisa de {need}",
 		"taskQueueBlockedNext": "próximo aviso {time}",
 		"taskQueueBlockedAsk": "pergunta ao chat principal {time}",
+		"taskQueueBlockedOwner": "pergunta a você {time}",
 		"taskQueueBlockedPoked": "avisada {time}, volta em seguida",
 		"taskQueueBlockedLead": "aguarda {lead}",
 		"taskQueueBlockedRemind": "lembra {lead} {time}",

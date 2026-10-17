@@ -444,8 +444,9 @@ export interface UiTaskQueueBlock {
 	start: number;
 	tries: number;
 	/** The queue poked it: it comes back to work first once a slot is free (ask: to ask its main chat;
-	 *  lead: the block's lead answered it, rule 24). */
-	poke?: { at: number; ask?: boolean; lead?: string };
+	 *  owner: with ask, every lead it waited on stayed silent, so its question goes to the owner;
+	 *  lead: the lead that answered it, rule 24). */
+	poke?: { at: number; ask?: boolean; owner?: boolean; lead?: string };
 	/** Filled in by the server: when it's poked next (a need, or a poked task that blocked again). */
 	nextPokeAt?: number;
 	/** Filled in by the server: the next step is asking its main chat instead of a poke. */
@@ -457,15 +458,23 @@ export interface UiTaskQueueBlock {
 	owes?: string;
 	/** queue-lead-reminders: when it's due (the task's, or the lead's own when it moved it). */
 	checkpoint?: number;
-	/** queue-lead-reminders: when the lead's home chat was reminded (oldest first). */
+	/** queue-lead-reminders: when a lead's home chat was reminded (oldest first): the first two went to
+	 *  `lead`, the rest to `chain`, one each. */
 	reminders?: number[];
+	/** queue-escalation (owner 2026-10-16): the leads reminded after `lead` stayed silent, in order (the lead
+	 *  of the task's project, then of its initiative); after them its question goes to the owner. */
+	chain?: string[];
 	/** queue-lead-reminders: when the lead last moved the checkpoint. */
 	leadAt?: number;
 	/** queue-lead-reminders: the lead's last answer about the same thing (a new round counts from it). */
 	answeredAt?: number;
-	/** Filled in by the server, queue-lead-reminders: when the lead is reminded next, and which reminder. */
+	/** Filled in by the server, queue-lead-reminders: when a lead is reminded next, which reminder, and
+	 *  which lead gets it (the block's own, or one above it). */
 	nextRemindAt?: number;
 	nextRemindN?: number;
+	nextRemindLead?: string;
+	/** Filled in by the server, queue-escalation: with nextIsAsk, the question goes to the owner. */
+	nextIsOwner?: boolean;
 }
 
 /** queue-lanes: a chat a task runs in, or the queue a task chat came from. */

@@ -305,6 +305,7 @@ export const en = {
 	taskQueueBlockedNeed: "needs {need}",
 	taskQueueBlockedNext: "next poke {time}",
 	taskQueueBlockedAsk: "asks the main chat {time}",
+	taskQueueBlockedOwner: "asks you {time}",
 	taskQueueBlockedPoked: "poked {time}, back next",
 	taskQueueBlockedLead: "waits on {lead}",
 	taskQueueBlockedRemind: "reminds {lead} {time}",

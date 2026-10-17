@@ -524,6 +524,7 @@
 		"taskQueueBlockedNeed": "必要: {need}",
 		"taskQueueBlockedNext": "次の催促 {time}",
 		"taskQueueBlockedAsk": "{time} にメインチャットへ確認",
+		"taskQueueBlockedOwner": "{time} にあなたへ確認",
 		"taskQueueBlockedPoked": "{time} に催促済み、次に再開",
 		"taskQueueBlockedLead": "{lead} を待っています",
 		"taskQueueBlockedRemind": "{time} に {lead} へリマインド",

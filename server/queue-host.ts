@@ -128,7 +128,9 @@ export function parseLeadRemind(raw: unknown): QueueLeadRemind | string {
 	const pos = (x: unknown) => typeof x === "number" && Number.isInteger(x) && x > 0;
 	if (!pos(o.id)) return "no task number given";
 	if (!pos(o.since)) return "no block given";
-	if (o.n !== 1 && o.n !== 2) return "no reminder number given";
+	// Reminders 1-2 go to the block's lead; queue-escalation: 3-4 to the leads above it (task-queue.ts's
+	// LEAD_REMINDERS + LEAD_CHAIN_MAX).
+	if (typeof o.n !== "number" || !Number.isInteger(o.n) || o.n < 1 || o.n > 4) return "no reminder number given";
 	return { lead, queue: o.queue, id: o.id as number, since: o.since as number, n: o.n };
 }
 

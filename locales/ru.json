@@ -524,6 +524,7 @@
 		"taskQueueBlockedNeed": "нужно: {need}",
 		"taskQueueBlockedNext": "следующее напоминание {time}",
 		"taskQueueBlockedAsk": "спросит главный чат {time}",
+		"taskQueueBlockedOwner": "спросит тебя {time}",
 		"taskQueueBlockedPoked": "напомнили {time}, вернётся следующей",
 		"taskQueueBlockedLead": "ждёт {lead}",
 		"taskQueueBlockedRemind": "напомнит {lead} {time}",

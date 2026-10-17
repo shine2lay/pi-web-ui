@@ -321,9 +321,16 @@ function BlockedLine({ block, onOpenChat }: { block: UiTaskQueueBlock; onOpenCha
 	const next = block.poke
 		? t("taskQueueBlockedPoked", { time: lineTime(block.poke.at) })
 		: block.nextRemindAt !== undefined && block.lead
-			? t("taskQueueBlockedRemind", { lead: block.lead, time: lineTime(block.nextRemindAt) })
+			? t("taskQueueBlockedRemind", { lead: block.nextRemindLead || block.lead, time: lineTime(block.nextRemindAt) })
 			: block.nextPokeAt !== undefined
-				? t(block.nextIsAsk ? "taskQueueBlockedAsk" : "taskQueueBlockedNext", { time: lineTime(block.nextPokeAt) })
+				? t(
+						block.nextIsOwner
+							? "taskQueueBlockedOwner"
+							: block.nextIsAsk
+								? "taskQueueBlockedAsk"
+								: "taskQueueBlockedNext",
+						{ time: lineTime(block.nextPokeAt) },
+					)
 				: "";
 	return (
 		<div className="task-queue-blocked">

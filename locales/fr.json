@@ -524,6 +524,7 @@
 		"taskQueueBlockedNeed": "a besoin de {need}",
 		"taskQueueBlockedNext": "prochain rappel {time}",
 		"taskQueueBlockedAsk": "demande au chat principal {time}",
+		"taskQueueBlockedOwner": "te demande {time}",
 		"taskQueueBlockedPoked": "relancée {time}, reprend ensuite",
 		"taskQueueBlockedLead": "attend {lead}",
 		"taskQueueBlockedRemind": "relance {lead} {time}",

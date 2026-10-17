@@ -44,11 +44,18 @@
  * wakes are off. Once per block and reminder (the ledger, kept across restarts); reminders are queue cards,
  * not role messages, so they don't count against message chains. Nothing here approves, completes,
  * removes, restarts or unpauses a task, or ever goes to the owner.
+ *
+ * queue-escalation (owner 2026-10-16): a block whose chain pi-queue recorded (the lead of the task's project,
+ * then of its initiative) gets one more reminder for each of them, two hours apart, after its lead's two;
+ * two hours after the last one the task's chat puts its question to the owner (pi-queue does that; this
+ * check only says it's due, as for the ask).
  */
 
 import type { UiTaskQueue, UiTaskQueueRef } from "./protocol.js";
 import {
-	LEAD_REMINDERS,
+	leadOfReminder,
+	leadRounds,
+	leadsOf,
 	type TaskQueueEntryLike,
 	type TaskQueueTaskAny,
 	taskQueueAll,
@@ -142,8 +149,8 @@ export type LookRef = (r: { file: string; id: number }) => RefLook | undefined;
 
 export type BlockVerdict =
 	| { kind: "wait"; needsYou: number }
-	| { kind: "due"; at: number; why: "over" | "need" | "ask" }
-	/** queue-lead-reminders: reminder n goes to the lead's home chat (never to the task). */
+	| { kind: "due"; at: number; why: "over" | "need" | "ask"; owner?: boolean }
+	/** queue-lead-reminders: reminder n goes to that lead's home chat (never to the task). */
 	| { kind: "due"; at: number; why: "remind"; n: number; lead: string };
 
 /** What blockVerdict reads of a block. */
@@ -156,6 +163,7 @@ export interface BlockLike {
 	lead?: string;
 	checkpoint?: number;
 	reminders?: number[];
+	chain?: string[];
 	answeredAt?: number;
 }
 
@@ -187,15 +195,18 @@ export function blockVerdict(
 /**
  * queue-lead-reminders: pi-queue's leadVerdict: reminder 1 at the checkpoint (the one given, else an hour
  * after the block started or after the lead's last answer), reminder 2 two hours after it (or at a later
- * checkpoint the lead set), then two hours on the task asks its main chat.
+ * checkpoint the lead set); queue-escalation: then one to each lead of its chain, two hours apart; two hours
+ * after the last one its question goes to the owner (owner: true), or, with no chain recorded, the task asks
+ * its main chat.
  */
 export function leadVerdict(b: BlockLike, times: LeadTimes = LEAD_TIMES): BlockVerdict {
 	const cp = b.checkpoint ?? (b.answeredAt ?? b.start) + times.checkpointMs;
 	const sent = b.reminders ?? [];
 	const last = sent.length ? sent[sent.length - 1] + times.gapMs : cp;
 	const at = Math.max(b.since, cp, last);
-	if (sent.length < LEAD_REMINDERS) return { kind: "due", at, why: "remind", n: sent.length + 1, lead: b.lead ?? "" };
-	return { kind: "due", at, why: "ask" };
+	if (sent.length < leadRounds(b))
+		return { kind: "due", at, why: "remind", n: sent.length + 1, lead: leadOfReminder(b, sent.length + 1) };
+	return { kind: "due", at, why: "ask", ...(b.chain ? { owner: true } : {}) };
 }
 
 /** queue-lead-reminders: a reminder that went to a lead's home chat (one line of the ledger). */
@@ -551,13 +562,15 @@ export class QueueBlocks {
 			if (!q || q.from) return { held: "its queue can't be read" };
 			const t = q.tasks.find((x) => x.id === req.id);
 			const b = t?.block;
-			if (t?.status !== "blocked" || !b || b.since !== req.since || b.poke || b.lead !== req.lead)
+			if (t?.status !== "blocked" || !b || b.since !== req.since || b.poke || !leadsOf(b).includes(req.lead))
 				return { held: "the task doesn't wait on that lead any more" };
 			if (taskQueueHeld(t, q)) return { held: "the owner paused the task or its queue" };
 			if (!q.running) return { held: "the queue is stopped" };
 			const now = this.host.now();
 			const v = blockVerdict(b, (r) => this.lookCached(r), blockPokesMs(), leadTimesMs());
 			if (v.kind !== "due" || v.why !== "remind" || v.n !== req.n || v.at > now) return { held: "it isn't due" };
+			// queue-escalation: reminder n goes to one lead only (the block's own, or the one above it in turn).
+			if (v.lead !== req.lead) return { held: `reminder ${req.n} goes to ${v.lead || "no lead"}, not ${req.lead}` };
 			const held = this.leadHeld(req, now);
 			if (held) return { held };
 			const role = this.host.roles().find((r) => r.id.toLowerCase() === req.lead);
@@ -639,9 +652,11 @@ export class QueueBlocks {
 						if (v.kind === "due" && v.why === "remind") {
 							t.block.nextRemindAt = v.at;
 							t.block.nextRemindN = v.n;
+							t.block.nextRemindLead = v.lead;
 						} else if (v.kind === "due") {
 							t.block.nextPokeAt = v.at;
 							t.block.nextIsAsk = true;
+							if (v.why === "ask" && v.owner) t.block.nextIsOwner = true;
 						}
 					}
 				} else if (!t.block.on?.length && !t.block.poke && !taskQueueHeld(t, queue)) {

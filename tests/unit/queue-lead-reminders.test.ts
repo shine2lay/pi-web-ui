@@ -149,18 +149,25 @@ async function queueChatLooks(w: World, blocks: QueueBlocks, file = A) {
 		const v = leadVerdict(b);
 		if (v.kind !== "due" || v.at > w.now) continue;
 		if (v.why === "ask") {
-			w.ops(file, { op: "poke", id: t.id, since: b.since, note: "ask", ask: true });
+			w.ops(file, {
+				op: "poke",
+				id: t.id,
+				since: b.since,
+				note: "ask",
+				ask: true,
+				...(v.owner ? { owner: true } : {}),
+			});
 			continue;
 		}
 		if (v.why !== "remind") continue;
-		const r = await blocks.remindLead({ lead: b.lead, queue: file, id: t.id, since: b.since, n: v.n });
+		const r = await blocks.remindLead({ lead: v.lead, queue: file, id: t.id, since: b.since, n: v.n });
 		if ("held" in r) continue;
 		w.ops(file, {
 			op: "remind",
 			id: t.id,
 			since: b.since,
 			n: v.n,
-			to: b.lead,
+			to: v.lead,
 			...("missed" in r ? { missed: r.missed } : {}),
 		});
 	}
@@ -515,6 +522,116 @@ describe("QueueBlocks: reminding the lead", () => {
 	});
 });
 
+describe("queue-escalation: up the chain, then the owner (owner 2026-10-16)", () => {
+	const b = { since: 100, start: 100, tries: 0, lead: "ops" };
+	const two = [100 + HOUR, 100 + 3 * HOUR];
+	it("after the lead's two reminders, one to each lead of the chain two hours apart, then the owner", () => {
+		const chain = ["temper", "design"];
+		expect(leadVerdict({ ...b, chain, reminders: two })).toEqual({
+			kind: "due",
+			at: 100 + 5 * HOUR,
+			why: "remind",
+			n: 3,
+			lead: "temper",
+		});
+		expect(leadVerdict({ ...b, chain, reminders: [...two, 100 + 5 * HOUR] })).toMatchObject({ n: 4, lead: "design" });
+		expect(leadVerdict({ ...b, chain, reminders: [...two, 100 + 5 * HOUR, 100 + 7 * HOUR] })).toEqual({
+			kind: "due",
+			at: 100 + 9 * HOUR,
+			why: "ask",
+			owner: true,
+		});
+		// A recorded chain with nobody above: straight to the owner after the lead's two.
+		expect(leadVerdict({ ...b, chain: [], reminders: two })).toEqual({
+			kind: "due",
+			at: 100 + 5 * HOUR,
+			why: "ask",
+			owner: true,
+		});
+		// No chain recorded (an older pi-queue): its main chat, as before.
+		expect(leadVerdict({ ...b, reminders: two })).toEqual({ kind: "due", at: 100 + 5 * HOUR, why: "ask" });
+	});
+
+	it("the copy records the chain once, reminders up to four in order, and answers from a chain lead", () => {
+		const { w } = world();
+		w.ops(A, leadBlock(w));
+		const since = sinceOf(w);
+		w.ops(A, { op: "chain", id: 1, since: since + 1, chain: ["temper"] });
+		expect(panelOf(w).tasks[0].block!.chain).toBeUndefined();
+		w.ops(A, { op: "chain", id: 1, since, chain: ["Temper", "ops", "owner", "temper", "design", "qa"] });
+		expect(panelOf(w).tasks[0].block!.chain).toEqual(["temper", "design"]);
+		w.ops(A, { op: "chain", id: 1, since, chain: ["qa"] });
+		expect(panelOf(w).tasks[0].block!.chain).toEqual(["temper", "design"]);
+		for (const n of [1, 2, 3, 4, 5]) w.ops(A, { op: "remind", id: 1, since, n, to: "x" });
+		expect(panelOf(w).tasks[0].block!.reminders).toHaveLength(4);
+		// Someone outside the chain: not taken. A lead of the chain: it answers for the task.
+		w.ops(A, { op: "lead", id: 1, since, by: "qa", answer: "go" });
+		expect(panelOf(w).tasks[0].block!.poke).toBeUndefined();
+		w.ops(A, { op: "lead", id: 1, since, by: "design", answer: "go" });
+		expect(panelOf(w).tasks[0].block!.poke).toMatchObject({ lead: "design" });
+
+		const o = world().w;
+		o.ops(A, leadBlock(o));
+		o.ops(A, { op: "poke", id: 1, since: sinceOf(o), note: "q", ask: true, owner: true });
+		expect(panelOf(o).tasks[0].block!.poke).toMatchObject({ ask: true, owner: true });
+		const p = world().w;
+		p.ops(A, leadBlock(p));
+		p.ops(A, { op: "poke", id: 1, since: sinceOf(p), note: "q", owner: true });
+		expect(panelOf(p).tasks[0].block!.poke!.owner).toBeUndefined();
+	});
+
+	it("ops twice, then temper (its project's lead), then the owner; nothing to the task", async () => {
+		const { w, blocks } = world();
+		w.ops(A, leadBlock(w));
+		const since = sinceOf(w);
+		w.ops(A, { op: "chain", id: 1, since, chain: ["temper"] });
+		blocks.watchQueue(A);
+		await run(w, blocks, 7 * 60 + 1);
+		const lead = (n: number) => leadCommand(1, since, n, A);
+		expect(w.to(O)).toEqual([lead(1), lead(2)]);
+		expect(w.to(B)).toEqual([lead(3)]);
+		expect(w.to(T)).toEqual([]);
+		expect(w.ledger.map((r) => [r.n, r.lead, r.to])).toEqual([
+			[1, "ops", O],
+			[2, "ops", O],
+			[3, "temper", B],
+		]);
+		expect(panelOf(w).tasks[0].block!.poke).toMatchObject({ ask: true, owner: true, at: since + 7 * HOUR });
+	});
+
+	it("reminder 3 goes to the chain's lead only; the panel says who is next, then that it asks you", async () => {
+		const { w, blocks } = world();
+		w.ops(A, leadBlock(w));
+		const since = sinceOf(w);
+		w.ops(
+			A,
+			{ op: "chain", id: 1, since, chain: ["temper"] },
+			{ op: "remind", id: 1, since, n: 1, to: "ops" },
+			{ op: "remind", id: 1, since, n: 2, to: "ops" },
+		);
+		w.now += 3 * HOUR;
+		expect(await blocks.remindLead({ lead: "ops", queue: A, id: 1, since, n: 3 })).toEqual({
+			held: "reminder 3 goes to temper, not ops",
+		});
+		expect(await blocks.remindLead({ lead: "design", queue: A, id: 1, since, n: 3 })).toEqual({
+			held: "the task doesn't wait on that lead any more",
+		});
+		let q = panelOf(w);
+		blocks.enrich(A, q);
+		expect(q.tasks[0].block).toMatchObject({ nextRemindN: 3, nextRemindLead: "temper" });
+		expect(await blocks.remindLead({ lead: "temper", queue: A, id: 1, since, n: 3 })).toMatchObject({
+			sent: true,
+			to: B,
+		});
+		w.ops(A, { op: "remind", id: 1, since, n: 3, to: "temper" });
+		q = panelOf(w);
+		blocks.enrich(A, q);
+		expect(q.tasks[0].block!.nextRemindAt).toBeUndefined();
+		expect(q.tasks[0].block).toMatchObject({ nextPokeAt: w.now + 2 * HOUR, nextIsAsk: true, nextIsOwner: true });
+		expect(w.commands).toEqual([[B, leadCommand(1, since, 3, A)]]);
+	});
+});
+
 describe("the queue's copy of pi-queue's lead ops", () => {
 	it("reads lead, owes and checkpoint off the block; reminders only in order; old blocks unchanged", () => {
 		const { w } = world();
@@ -546,7 +663,9 @@ describe("the queue host's remindLead and leadChat", () => {
 		expect(parseLeadRemind({ ...ok, queue: "rel.jsonl" })).toBe("no queue chat given");
 		expect(parseLeadRemind({ ...ok, id: 0 })).toBe("no task number given");
 		expect(parseLeadRemind({ ...ok, since: "5" })).toBe("no block given");
-		expect(parseLeadRemind({ ...ok, n: 3 })).toBe("no reminder number given");
+		expect(parseLeadRemind({ ...ok, n: 4 })).toEqual({ lead: "ops", queue: A, id: 1, since: 5, n: 4 });
+		expect(parseLeadRemind({ ...ok, n: 5 })).toBe("no reminder number given");
+		expect(parseLeadRemind({ ...ok, n: 1.5 })).toBe("no reminder number given");
 		expect(parseLeadRemind(null)).toBe("no request");
 	});
 

@@ -54,6 +54,11 @@
  * what it `owes`, its `checkpoint`). pi-queue's "remind" op records a reminder that went to that lead's
  * home chat (never to the task); its "lead" op records the lead's reply: an answer lets the task go (a
  * poke with `lead`), a new checkpoint only moves the clock. queue-blocks.ts sends the reminders.
+ *
+ * queue-escalation (owner 2026-10-16): pi-queue's "chain" op records once who comes after a block's lead
+ * (the lead of the task's project, then of its initiative, from its work registry). After the lead's two
+ * reminders, each of them gets one; any of them may answer. After the last, the question goes to the owner
+ * (a poke with `owner`, then the task's "stuck" with its whole package).
  */
 
 import { readFileSync, statSync } from "node:fs";
@@ -186,6 +191,8 @@ function needOf(raw: unknown): string | undefined {
 const OWES_MAX = 200;
 const ROLE_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
 export const LEAD_REMINDERS = 2;
+/** queue-escalation: pi-queue's LEAD_CHAIN_MAX: at most this many leads above a block's own lead. */
+export const LEAD_CHAIN_MAX = 2;
 
 /** queue-lead-reminders: pi-queue's normLead: a role id, lowercased; undefined when it isn't one. */
 function leadOf(raw: unknown): string | undefined {
@@ -205,15 +212,44 @@ function owesOf(raw: unknown): string | undefined {
 const timeOf = (x: unknown): number | undefined =>
 	typeof x === "number" && Number.isFinite(x) && x > 0 ? Math.round(x) : undefined;
 
-/** queue-lead-reminders: pi-queue's normReminders: sorted, at most LEAD_REMINDERS; undefined when none. */
+/** queue-lead-reminders: pi-queue's normReminders: sorted, at most LEAD_REMINDERS + LEAD_CHAIN_MAX; undefined when none. */
 function remindersOf(raw: unknown): number[] | undefined {
 	if (!Array.isArray(raw)) return undefined;
 	const out = raw
 		.map(timeOf)
 		.filter((x): x is number => x !== undefined)
 		.sort((a, b) => a - b)
-		.slice(0, LEAD_REMINDERS);
+		.slice(0, LEAD_REMINDERS + LEAD_CHAIN_MAX);
 	return out.length ? out : undefined;
+}
+
+/**
+ * queue-escalation: pi-queue's normChain: role ids in order, without the block's own lead, the owner or
+ * repeats, at most LEAD_CHAIN_MAX. undefined when it isn't a list.
+ */
+function chainOf(raw: unknown, lead: string | undefined): string[] | undefined {
+	if (!Array.isArray(raw)) return undefined;
+	const out: string[] = [];
+	for (const x of raw) {
+		const id = leadOf(x);
+		if (id && id !== lead && id !== "owner" && !out.includes(id)) out.push(id);
+	}
+	return out.slice(0, LEAD_CHAIN_MAX);
+}
+
+/** queue-escalation: pi-queue's leadRounds: the reminders a lead block gets in all. */
+export function leadRounds(b: { chain?: string[] }): number {
+	return LEAD_REMINDERS + (b.chain?.length ?? 0);
+}
+
+/** queue-escalation: pi-queue's leadOf: who reminder n (from 1) goes to: the block's lead twice, then its chain. */
+export function leadOfReminder(b: { lead?: string; chain?: string[] }, n: number): string {
+	return n <= LEAD_REMINDERS ? (b.lead ?? "") : (b.chain?.[n - LEAD_REMINDERS - 1] ?? "");
+}
+
+/** queue-escalation: pi-queue's leadsOf: the leads that may answer a lead block. */
+export function leadsOf(b: { lead?: string; chain?: string[] }): string[] {
+	return b.lead ? [b.lead, ...(b.chain ?? [])] : [];
 }
 
 /** queue-blocked: pi-queue's outsideOf: a saved outside list, keeping what was recorded over already. */
@@ -678,23 +714,37 @@ function apply(s: State, raw: unknown): void {
 			return;
 		case "poke":
 			if (task.status !== "blocked" || !task.block || task.block.since !== op.since || task.block.poke) return;
-			task.block.poke = { at: num(op.ts), ...(op.ask === true ? { ask: true } : {}) };
+			task.block.poke = {
+				at: num(op.ts),
+				...(op.ask === true ? { ask: true } : {}),
+				...(op.ask === true && op.owner === true ? { owner: true } : {}),
+			};
 			return;
 		case "remind": {
 			// queue-lead-reminders: one reminder per step, in order, for the block it names; it never wakes the task.
 			const b = task.block;
 			if (task.status !== "blocked" || !b?.lead || b.since !== op.since || b.poke) return;
 			const sent = b.reminders ?? [];
-			if (op.n !== sent.length + 1 || sent.length >= LEAD_REMINDERS) return;
+			if (op.n !== sent.length + 1 || sent.length >= leadRounds(b)) return;
 			b.reminders = [...sent, num(op.ts)];
 			return;
 		}
-		case "lead": {
-			// queue-lead-reminders: the block's lead replied. The first answer lets the task go; a checkpoint moves the clock.
+		case "chain": {
+			// queue-escalation: who comes after the block's lead, recorded once per block.
 			const b = task.block;
-			if (task.status !== "blocked" || !b?.lead || b.since !== op.since || b.poke || op.by !== b.lead) return;
+			if (task.status !== "blocked" || !b?.lead || b.since !== op.since || b.poke || b.chain) return;
+			const chain = chainOf(op.chain, b.lead);
+			if (chain) b.chain = chain;
+			return;
+		}
+		case "lead": {
+			// queue-lead-reminders: the block's lead (or one above it, queue-escalation) replied. The first answer
+			// lets the task go; a checkpoint moves the clock.
+			const b = task.block;
+			const by = typeof op.by === "string" ? op.by : "";
+			if (task.status !== "blocked" || !b?.lead || b.since !== op.since || b.poke || !leadsOf(b).includes(by)) return;
 			if (typeof op.answer === "string" && op.answer.trim()) {
-				b.poke = { at: num(op.ts), lead: b.lead };
+				b.poke = { at: num(op.ts), lead: by };
 				return;
 			}
 			const cp = timeOf(op.checkpoint);
