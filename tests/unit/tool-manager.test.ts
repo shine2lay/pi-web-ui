@@ -202,6 +202,60 @@ describe("tool_manage 出入口", () => {
 		expect(windows.peek()).toContain("powershell");
 		expect(windows.peek()).toContain("bash");
 	});
+
+	/** A session whose registry carries Pi tool exposures; `active` is the loadout before gating
+	 *  (for a resumed chat, the one Pi restored from its transcript). */
+	function fakeExposureSet(tools: Array<{ name: string; exposure?: string }>, active: string[]) {
+		let names = [...active];
+		return {
+			getActiveToolNames: () => [...names],
+			getAllTools: () => tools.map((t) => ({ ...t })),
+			setActiveToolsByName: (next: string[]) => {
+				names = [...next];
+			},
+			peek: () => names,
+		};
+	}
+
+	const exposureTools = [
+		{ name: "bash" },
+		{ name: "read", exposure: "direct" },
+		{ name: "gh_issues", exposure: "deferred" },
+		{ name: "gh_commits", exposure: "deferred" },
+		{ name: "code_only", exposure: "codemode" },
+	];
+
+	it("never switches on tools that wait for a search (deferred) or are only called from code (codemode)", () => {
+		const s = fakeExposureSet(exposureTools, ["bash"]);
+		applyAgentToolsGating(s, [], undefined, "linux");
+		expect(s.peek()).toContain("bash");
+		expect(s.peek()).toContain("read");
+		expect(s.peek()).not.toContain("gh_issues");
+		expect(s.peek()).not.toContain("gh_commits");
+		expect(s.peek()).not.toContain("code_only");
+	});
+
+	it("drops on-demand tools a resumed transcript restored, on the first pass", () => {
+		// Older passes switched every on-demand tool on, and Pi restores that loadout on resume.
+		const s = fakeExposureSet(exposureTools, ["bash", "read", "gh_issues", "gh_commits", "code_only"]);
+		applyAgentToolsGating(s, [], undefined, "linux");
+		expect(s.peek()).toEqual(expect.arrayContaining(["bash", "read"]));
+		for (const name of ["gh_issues", "gh_commits", "code_only"]) expect(s.peek()).not.toContain(name);
+	});
+
+	it("keeps an on-demand tool a search switched on after the first pass", () => {
+		const s = fakeExposureSet(exposureTools, ["bash"]);
+		applyAgentToolsGating(s, [], undefined, "linux");
+		// The MCP adapter's search activates a match additively.
+		s.setActiveToolsByName([...s.peek(), "gh_issues"]);
+		applyAgentToolsGating(s, [], undefined, "linux");
+		expect(s.peek()).toContain("gh_issues");
+		expect(s.peek()).not.toContain("gh_commits");
+		expect(s.peek()).not.toContain("code_only");
+		// A later pass keeps it too.
+		applyAgentToolsGating(s, [], undefined, "linux");
+		expect(s.peek()).toContain("gh_issues");
+	});
 });
 
 describe("预设语义总表（见 tool-manager.ts 语义注释）", () => {

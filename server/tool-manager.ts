@@ -289,6 +289,27 @@ export const AGENT_TOOL_CATALOG: AgentToolEntry[] = [
  *  and would ride along in every request (owner, 2026-10-17: "Turn off PowerShell tool"). */
 export const WINDOWS_ONLY_TOOL_NAMES = ["powershell"] as const;
 
+/** Pi tool exposures that wait for their owner to switch them on. Pi declares a "deferred" tool to
+ *  the model only once a search activates it (Pi's tool search, or the MCP adapter's search mode:
+ *  `directTools: "search"`), and a "codemode" tool is only called from other tools. Naming such a
+ *  tool in setActiveToolsByName declares it anyway (Pi's loadout drops only "hidden"), so the gating
+ *  never switches them on itself. Before this it named every registered tool, which put the MCP
+ *  adapter's 56 search-mode GitHub tools (about 15,000 tokens of descriptions) in every chat's
+ *  requests (owner, 2026-10-17: "Fix it"). */
+export const ON_DEMAND_TOOL_EXPOSURES = ["deferred", "codemode"] as const;
+
+export function isOnDemandToolExposure(exposure: unknown): boolean {
+	return (ON_DEMAND_TOOL_EXPOSURES as readonly unknown[]).includes(exposure);
+}
+
+/** Sessions the gating has passed over once in this process. On a session's first pass the on-demand
+ *  tools already active came from its transcript (Pi restores the last recorded loadout on resume),
+ *  which older passes filled with every on-demand tool, so the first pass drops them. On later
+ *  passes an active on-demand tool was switched on since by its owner (a search), so it stays.
+ *  Known gap: a tree navigation (Pi's navigateTree) restores that point's loadout again; on-demand
+ *  tools it brings back stay until the next restart. */
+const gatedSessions = new WeakSet<object>();
+
 /** SDK 核心内置工具名（可被门控显式禁用或被预设白名单过滤）。 */
 export const CORE_BUILTIN_TOOL_NAMES = ["bash", "read", "edit", "write"] as const;
 
@@ -336,7 +357,7 @@ export interface ActiveToolSet {
 	setActiveToolsByName(names: string[]): void;
 	/** 全量工具基线（含被禁用的）。SDK 会话自带；没有它就无法区分「从未有过」
 	 *  与「被禁用」，门控复原会失真，因此必选。 */
-	getAllTools(): Array<{ name: string }>;
+	getAllTools(): Array<{ name: string; exposure?: string }>;
 }
 
 /**
@@ -380,6 +401,8 @@ export function setAgentToolsEnabled(session: ActiveToolSet, names: readonly str
  * 基线之外的工具（插件工具等）原样不动。
  * 支持传入 preset（预设 id），按预设白名单做二次过滤。
  * 复原基线取 session.getAllTools()（全集，含被禁用的）——基线里没有的工具不会凭空发明。
+ * On-demand tools (ON_DEMAND_TOOL_EXPOSURES) are left to their owner: never switched on here, and
+ * kept only when switched on after this session's first pass (see gatedSessions).
  * Session 未就绪时静默跳过（下次创建/reload 会再应用）。
  */
 export function applyAgentToolsGating(
@@ -390,8 +413,13 @@ export function applyAgentToolsGating(
 ): void {
 	try {
 		const off = new Set(disabled);
-		const allNames = session.getAllTools().map((t) => t.name);
-		const names = new Set(allNames);
+		const allTools = session.getAllTools();
+		const allNames = allTools.map((t) => t.name);
+		const onDemand = new Set(allTools.filter((t) => isOnDemandToolExposure(t.exposure)).map((t) => t.name));
+		const names = new Set(allNames.filter((name) => !onDemand.has(name)));
+		if (gatedSessions.has(session)) {
+			for (const name of session.getActiveToolNames()) if (onDemand.has(name)) names.add(name);
+		}
 		for (const t of AGENT_TOOL_CATALOG) {
 			if (off.has(t.name)) names.delete(t.name);
 			else names.add(t.name);
@@ -403,6 +431,7 @@ export function applyAgentToolsGating(
 		if (platform !== "win32") for (const name of WINDOWS_ONLY_TOOL_NAMES) names.delete(name);
 		const filtered = filterToolsByPreset(names, preset);
 		session.setActiveToolsByName(filtered);
+		gatedSessions.add(session);
 	} catch {
 		// Session 未就绪——下次创建/reload 会再应用。
 	}
