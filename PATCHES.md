@@ -10,6 +10,15 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## question-lead: say which department's lead has a task's question, not always Ops
+
+- `local` (owner 2026-10-17, dialog answers "The role whose queue holds it" and "Up the chain, then you"; built directly with the owner). pi-work-management (pi-queue) now sends a task's question to the home chat of the role whose queue holds the task, then up the work registry's chain, then to the owner; Ops only when that role has no home chat. The Queue tab still said "Asking Ops" and the Roles page "question with Ops" for every such question, which is no longer true.
+- Server: `task-queue.ts` replays the lead an `ask` or `route` op names (`askLead`, a role id other than `ops`; cleared once the task isn't asking Ops's route any more); `roles-overview.ts` sends it with `askOps`. New optional field only, no protocol bump.
+- Web: the Queue tab says "Asking <role>'s lead", the Roles page's rows and role panel "question with <role>'s lead" (`asking-lead`); Ops, a bad id or no lead read as before. Two new strings in all nine language packs (`taskQueueAskingLead` translated, `ruRowAskingLead` English copies like the other Roles words).
+- Nothing new reads chat text, writes or calls a model; who decides is pi-queue's, this only shows it.
+- Tests: `tests/unit/task-queue.test.ts` ("question-lead": ask and route name the lead, Ops/the owner/bad ids/main chat name none, answered or stuck clears it), `task-queue-panel.test.ts`, `roles-useful.test.ts`, `roles-overview.test.ts`, `roles-panel.test.ts`.
+- Undo: revert this commit and install with pi-web-deploy; the words say Ops again (pi-queue's routing is unaffected).
+
 ## roles-panel-fixes: read the Roles feed's files safely, and three panel display fixes
 
 - `local` (owner 2026-10-17, dialog "Two small follow-up fixes": "Fix both here after install"; the display faults are from the role panel's live look at 10:20). Hypothesis in `docs/roles-overview.md`, "Follow-up round".
@@ -279,6 +288,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | roles-u0-renderer            | `local` | inert, no importer: `web/src/roles-u0/` (new: `surface.html`, `state-chip.html`, `surface.ts`, `layout.ts`, `fields.ts`, `native.ts`, `mount.ts`, `types.ts`), `tests/roles-u0/` (new), `tests/unit/roles-u0.test.ts`, `roles-u0-rgba.test.ts` (new), `.prettierignore`
 | queue-lead-reminders         | `local` | `server/queue-blocks.ts`, `queue-host.ts`, `task-queue.ts`, `protocol.ts`, `agent-service.ts`, `web/src/components/TaskQueuePanel.tsx`, `i18n.tsx`, `locales/*.json`, `tests/unit/queue-lead-reminders.test.ts` (new), `tests/queue-lead-reminders-test.mjs` (new); paired with pi-queue |
 | queue-escalation             | `local` | `server/queue-blocks.ts`, `queue-host.ts`, `task-queue.ts`, `protocol.ts`, `web/src/components/TaskQueuePanel.tsx`, `i18n.tsx`, `locales/*.json`, `tests/unit/queue-lead-reminders.test.ts`; paired with pi-queue (pi-work-management) |
+| question-lead                | `local` | `server/task-queue.ts` (`askLead`), `roles-overview.ts`, `protocol.ts`, `web/src/roles-useful-model.ts`, `roles-panel-model.ts`, `components/TaskQueuePanel.tsx`, `RolesUsefulView.tsx`, `RolePanel.tsx`, `i18n.tsx`, `locales/*.json`, `tests/unit/`; paired with pi-queue (pi-work-management) |
 | decision-reader-batches      | `local` | `server/decision-batch-budget.ts`, `decision-batches.ts`, `decision-bounded-model.ts`, `decision-call-lifecycle.ts` (new), `server/agent-service.ts`, `tests/unit/decision-batches.test.ts` (new)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 ---

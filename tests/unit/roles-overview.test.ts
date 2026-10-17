@@ -924,6 +924,30 @@ describe("pushing it", () => {
 });
 
 // roles-panel: each task's place (its own queue entry), a lead block's who/what/when, and the work registry.
+describe("who has a task's question (question-lead)", () => {
+	it("an asking task says its question is with Ops or with a department's lead, by id; nothing for other tasks", async () => {
+		const home = transcript("ops-home", [
+			queue({ op: "add", id: 1, plan: plan("One"), touches: ["a"] }),
+			queue({ op: "add", id: 2, plan: plan("Two"), touches: ["b"] }),
+			queue({ op: "add", id: 3, plan: plan("Three"), touches: ["c"] }),
+			queue({ op: "run" }),
+			queue({ op: "start", id: 1, lane: true }),
+			queue({ op: "start", id: 2, lane: true }),
+			queue({ op: "start", id: 3, lane: true }),
+			queue({ op: "ask", id: 1, question: "Which port?", n: 1, to: "ops", lead: "temper", step: 0 }, T0 + MIN),
+			queue({ op: "ask", id: 2, question: "Which name?", n: 1, to: "ops" }, T0 + MIN),
+			queue({ op: "ask", id: 3, question: "Which day?", n: 1 }, T0 + MIN),
+		]);
+		const o = await read(fake([role("ops", home)]));
+		const t = (id: number) => byId(o, "ops").queue?.active.find((x) => x.id === id);
+		expect(t(1)).toMatchObject({ status: "asking", askOps: true, askLead: "temper" });
+		expect(t(2)).toMatchObject({ status: "asking", askOps: true });
+		expect(t(2)?.askLead).toBeUndefined();
+		expect(t(3)?.askOps).toBeUndefined();
+		expect(t(3)?.askLead).toBeUndefined();
+	});
+});
+
 describe("where tasks belong (roles-panel)", () => {
 	const workLog = (events: Record<string, unknown>[]) => {
 		const file = join(dir, "work", "events.jsonl");

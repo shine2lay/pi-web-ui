@@ -236,6 +236,12 @@ export const LEAD_REMINDERS = 2;
 /** queue-escalation: pi-queue's LEAD_CHAIN_MAX: at most this many leads above a block's own lead. */
 export const LEAD_CHAIN_MAX = 2;
 
+/** question-lead: the department lead a task's question is with, when it isn't Ops (a role id; never the owner). */
+function askLeadOf(raw: unknown): string | undefined {
+	const lead = leadOf(raw);
+	return lead && lead !== "ops" && lead !== "owner" ? lead : undefined;
+}
+
 /** queue-lead-reminders: pi-queue's normLead: a role id, lowercased; undefined when it isn't one. */
 function leadOf(raw: unknown): string | undefined {
 	if (typeof raw !== "string") return undefined;
@@ -693,6 +699,8 @@ function apply(s: State, raw: unknown): void {
 			task.detail = undefined;
 			// task-question decisions (rule 21): asked Ops, not its main chat.
 			task.askOps = op.to === "ops" ? true : undefined;
+			// question-lead (owner 2026-10-17): asked its queue's department's lead (not Ops) when it names one.
+			task.askLead = op.to === "ops" ? askLeadOf(op.lead) : undefined;
 			const choices = normChoices(op.choices);
 			if (choices.length) task.choices = choices;
 			else delete task.choices;
@@ -761,7 +769,11 @@ function apply(s: State, raw: unknown): void {
 		}
 		case "route":
 			// task-question decisions: an open question from before rule 21's routing went to Ops after all.
-			if (task.status === "asking") task.askOps = true;
+			// question-lead: or to its department's lead, or up the chain to a project's or initiative's lead.
+			if (task.status === "asking") {
+				task.askOps = true;
+				task.askLead = askLeadOf(op.lead);
+			}
 			return;
 		case "poke":
 			if (task.status !== "blocked" || !task.block || task.block.since !== op.since || task.block.poke) return;
@@ -876,6 +888,8 @@ export function taskQueueFromEntries(
 	for (const e of entries) {
 		if (e.type === "custom" && e.customType === TASK_QUEUE_ENTRY_TYPE) apply(s, e.data);
 	}
+	// question-lead: which department has the question goes only with a question that is with a lead now.
+	for (const t of s.tasks) if (t.status !== "asking" || !t.askOps) delete t.askLead;
 	const done = s.tasks.filter((t) => t.status === "done").sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0));
 	const dropped = new Set(done.slice(maxDone));
 	// queue-side-by-side: an open task that comes after others shows which of them are still open

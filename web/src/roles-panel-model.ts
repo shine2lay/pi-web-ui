@@ -88,6 +88,8 @@ export interface PanelTask {
 	taskId: number;
 	name: string | null;
 	state: RowState;
+	/** asking-lead: the role whose lead has its question. */
+	askLead: string | null;
 	waitsOn: string | null;
 	owing: PanelOwing | null;
 	pause: PauseMarker;
@@ -404,6 +406,7 @@ export function projectRolePanel(state: unknown, id: string): RolePanel | null {
 			taskId: base.taskId,
 			name: base.name,
 			state: base.state,
+			askLead: base.askLead,
 			waitsOn: base.waitsOn,
 			owing: base.state === "blocked" ? owingOf(t, labels) : null,
 			pause: base.pause,

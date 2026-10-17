@@ -51,6 +51,7 @@ const ROW_KEYS = {
 	"ready-after": "ruRowWaitsOn",
 	working: "ruRowWorking",
 	"asking-ops": "ruRowAskingOps",
+	"asking-lead": "ruRowAskingLead",
 	"asking-main": "ruRowAskingMain",
 	asking: "ruRowAsking",
 	"needs-decision": "ruRowNeedsDecision",
@@ -366,7 +367,9 @@ function TaskRow({ record, onOpen }: { record: UsefulRecord; onOpen: OpenChat })
 					)}
 				</p>
 				<p className="roles-useful-task-state">
-					<span className="roles-useful-status">{t(ROW_KEYS[record.state])}</span>
+					<span className="roles-useful-status">
+						{record.askLead === null ? t(ROW_KEYS[record.state]) : t("ruRowAskingLead", { lead: record.askLead })}
+					</span>
 					{record.state === "ready-after" &&
 						(record.waitsOn === null ? (
 							<span> {t("ruOtherTasks")}</span>

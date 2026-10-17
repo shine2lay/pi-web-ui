@@ -323,6 +323,16 @@ describe("TaskQueuePanel (lanes)", () => {
 		expect(ops).not.toContain("Asking the main chat");
 		expect(ops).not.toContain("needs-you");
 		expect(ops).not.toContain("task-queue-answer");
+		// question-lead (owner 2026-10-17): with its department's lead, it names that department.
+		const lead = render(q([{ ...asking, askOps: true, askLead: "temper" }], { running: true }), {
+			onCommand: noop,
+			onOpenChat: noop,
+			onAnswer: noop,
+		});
+		expect(lead).toContain("Asking temper&#x27;s lead");
+		expect(lead).not.toContain("Asking Ops");
+		expect(lead).not.toContain("Asking the main chat");
+		expect(lead).not.toContain("needs-you");
 	});
 
 	it("shows the lanes-at-once setting, with buttons only for the queue's own controls", () => {

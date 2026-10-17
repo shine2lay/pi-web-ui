@@ -47,6 +47,7 @@ const ROW_KEYS = {
 	"ready-after": "ruRowWaitsOn",
 	working: "ruRowWorking",
 	"asking-ops": "ruRowAskingOps",
+	"asking-lead": "ruRowAskingLead",
 	"asking-main": "ruRowAskingMain",
 	asking: "ruRowAsking",
 	"needs-decision": "ruRowNeedsDecision",
@@ -375,7 +376,9 @@ function TaskItem({ task, now, go }: { task: PanelTask; now: number; go: (target
 					{task.name === null ? t("rpUnnamed") : <q className="roles-useful-agent">{task.name}</q>}
 				</p>
 				<p className="roles-useful-task-state">
-					<span className="roles-useful-status">{t(ROW_KEYS[task.state])}</span>
+					<span className="roles-useful-status">
+						{task.askLead === null ? t(ROW_KEYS[task.state]) : t("ruRowAskingLead", { lead: task.askLead })}
+					</span>
 					{/* "Waits on" is the state word itself here: what it waits on follows it, as on the card. */}
 					{task.state === "ready-after" &&
 						(task.waitsOn === null ? (

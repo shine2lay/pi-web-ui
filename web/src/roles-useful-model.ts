@@ -59,6 +59,7 @@ export type RowState =
 	| "ready-after"
 	| "working"
 	| "asking-ops"
+	| "asking-lead"
 	| "asking-main"
 	| "asking"
 	| "needs-decision"
@@ -81,6 +82,8 @@ export interface UsefulRecord {
 	/** null: absent or unsafe; the row says "Task #N" only. */
 	name: string | null;
 	state: RowState;
+	/** asking-lead (owner 2026-10-17): the role whose lead has its question (its department, or one up the chain). */
+	askLead: string | null;
 	waitsOn: string | null;
 	busy: boolean;
 	/** The newest line of its own chat; working tasks only. */
@@ -247,7 +250,8 @@ function rowState(row: Fields, reported: ReportedStatus | null): RowState {
 		case "working":
 			return "working";
 		case "asking":
-			return row.askOps === true ? "asking-ops" : row.askOps === undefined ? "asking-main" : "asking";
+			if (row.askOps === true) return roleId(row.askLead) && row.askLead !== "ops" ? "asking-lead" : "asking-ops";
+			return row.askOps === undefined ? "asking-main" : "asking";
 		case "stuck":
 			// Task questions go to Ops or the task's lead first (rule 21): "needs you" is for asks only.
 			return "needs-decision";
@@ -279,6 +283,7 @@ export function record(row: Fields, id: number, home: string | null): UsefulReco
 		taskId: id,
 		name: plain(row.title, NAME_LIMIT)?.text ?? null,
 		state,
+		askLead: state === "asking-lead" && roleId(row.askLead) ? row.askLead : null,
 		waitsOn: plain(row.waitsOn, NAME_LIMIT)?.text ?? null,
 		busy: row.busy === true,
 		latest: latest ? latest.text : null,

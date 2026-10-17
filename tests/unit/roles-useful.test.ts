@@ -108,7 +108,7 @@ function closed(model: UsefulRoles) {
 		for (const list of [r.active, r.queued]) {
 			keys(list, ["available", "omitted", "notAllShown", "records"]);
 			for (const rec of list.records) {
-				keys(rec, ["taskId", "name", "state", "waitsOn", "busy", "latest", "pause", "link"]);
+				keys(rec, ["taskId", "name", "state", "askLead", "waitsOn", "busy", "latest", "pause", "link"]);
 				if (rec.link) linkShape(rec.link);
 			}
 		}
@@ -195,12 +195,23 @@ describe("task rows: names, plain-word status, blockers", () => {
 			started(6, "waiting"),
 			started(7, "blocked"),
 			started(8, "done"),
+			started(9, "asking", { askOps: true, askLead: "temper" }),
+			started(10, "asking", { askOps: true, askLead: "ops" }),
+			started(14, "asking", { askOps: true, askLead: "Bad Id!" }),
+			started(15, "asking", { askLead: "temper" }),
 		];
 		const queued = [task(11, "ready"), task(12, "mystery"), task(13, 42)];
 		const model = project([
-			role("frontend", { queue: queue({ active: rows, queued, counts: { active: 8, queued: 3, done: 0 } }) }),
+			role("frontend", { queue: queue({ active: rows, queued, counts: { active: 12, queued: 3, done: 0 } }) }),
 		]);
 		closed(model);
+		// question-lead: a department's lead by its id; Ops, a bad id or no Ops route stay as before.
+		expect([9, 10, 14, 15].map((id) => [byId(model, id).state, byId(model, id).askLead])).toEqual([
+			["asking-lead", "temper"],
+			["asking-ops", null],
+			["asking-ops", null],
+			["asking-main", null],
+		]);
 		const states = [1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 13].map((id) => byId(model, id).state);
 		expect(states).toEqual([
 			"working",
@@ -242,9 +253,10 @@ describe("task rows: names, plain-word status, blockers", () => {
 						started(1, "blocked", { waitsOn: "temper #38" }),
 						started(2, "asking", { askOps: true }),
 						started(3, "asking"),
+						started(4, "asking", { askOps: true, askLead: "temper" }),
 					],
 					queued: [],
-					counts: { active: 3, queued: 0, done: 0 },
+					counts: { active: 4, queued: 0, done: 0 },
 				}),
 			}),
 		]);
@@ -252,6 +264,8 @@ describe("task rows: names, plain-word status, blockers", () => {
 		expect(rows[0]).toContain("blocked · waits on temper #38");
 		expect(rows[1]).toContain("question with Ops");
 		expect(rows[2]).toContain("question with its main chat");
+		expect(rows[3]).toContain("question with temper's lead");
+		expect(rows[3]).not.toContain("Ops");
 	});
 	it("working reads 'working'; a running chat adds 'working' to other statuses; only working tasks show their newest line", () => {
 		const model = project([

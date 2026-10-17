@@ -1037,7 +1037,7 @@ function taskOf(t: UiTaskQueueTask, held?: UiTaskQueueHold): UiRoleTask {
 		title: t.plan.title,
 		...(t.chat ? { chat: { file: t.chat.file, ...(t.chat.title ? { title: t.chat.title } : {}) } } : {}),
 		...(waitsOn ? { waitsOn } : {}),
-		...(t.status === "asking" && t.askOps ? { askOps: true } : {}),
+		...(t.status === "asking" && t.askOps ? { askOps: true, ...(t.askLead ? { askLead: t.askLead } : {}) } : {}),
 		...(held ? { paused: { at: held.at, why: held.why } } : {}),
 		// roles-panel: where it belongs (its queue entry), and a lead block's who, what, when and reminders.
 		...(t.parent ? { parent: { ...t.parent } } : {}),

@@ -126,6 +126,23 @@ const allTasks = (p: RolePanel) => [
 ];
 
 describe("the role panel's projection", () => {
+	it("question-lead: an asking task names the department whose lead has its question", () => {
+		const queue = ops().queue;
+		const p = panelOf(
+			roster({
+				queue: {
+					...queue,
+					active: [started(8, "asking", { askOps: true, askLead: "temper" }), started(9, "asking", { askOps: true })],
+					queued: [],
+					counts: { active: 2, queued: 0, done: 0 },
+				},
+			}),
+		);
+		const byTask = (id: number) => allTasks(p).find((t) => t.taskId === id);
+		expect(byTask(8)).toMatchObject({ state: "asking-lead", askLead: "temper" });
+		expect(byTask(9)).toMatchObject({ state: "asking-ops", askLead: null });
+	});
+
 	it("groups open tasks by initiative and project as each task's queue entry names its parent", () => {
 		const p = panelOf();
 		expect(p.work).toBe("ok");

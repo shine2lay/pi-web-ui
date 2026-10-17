@@ -1280,6 +1280,36 @@ describe("taskQueueFromEntries (task-question decisions)", () => {
 		expect(byId(replay(entries([...base, { op: "route", id: 1 }])), 1)?.askOps).toBeUndefined();
 	});
 
+	it("question-lead: names the department whose lead has the question, and who has it after each step up", () => {
+		const toTemper = { ...toOps, lead: "temper", step: 0, routedAt: 1 };
+		expect(byId(replay(entries([...base, toTemper])), 1)).toMatchObject({
+			status: "asking",
+			askOps: true,
+			askLead: "temper",
+		});
+		// Ops itself, the owner (never a department lead), a bad id, or none: Ops has it, as before.
+		for (const lead of ["ops", "owner", "OWNER ", "Bad Id!", 7, undefined])
+			expect(byId(replay(entries([...base, { ...toOps, lead }])), 1)?.askLead).toBeUndefined();
+		// Asked the main chat: no lead, whatever the op says.
+		const { to: _, ...toMain } = toTemper;
+		expect(byId(replay(entries([...base, toMain])), 1)?.askLead).toBeUndefined();
+		// One step up the chain, then Ops (a coordinator route names none).
+		const up = { op: "route", id: 1, n: 1, at: 1, lead: "design", step: 1, chain: ["architecture"], routedAt: 2 };
+		expect(byId(replay(entries([...base, toTemper, up])), 1)?.askLead).toBe("design");
+		expect(
+			byId(replay(entries([...base, toTemper, up, { op: "route", id: 1, n: 1, at: 1 }])), 1)?.askLead,
+		).toBeUndefined();
+		// Answered, or gone on to the owner: nobody's lead has it now.
+		const answered = byId(
+			replay(entries([...base, toTemper, { op: "resume", id: 1, by: "ops", decider: "temper" }])),
+			1,
+		);
+		expect(answered?.status).toBe("working");
+		expect(answered?.askLead).toBeUndefined();
+		const stuck = { op: "stuck", id: 1, question: "Approve?", choices: ["Yes", "No"], detail: pkg };
+		expect(byId(replay(entries([...base, toTemper, stuck])), 1)?.askLead).toBeUndefined();
+	});
+
 	it("a stuck question keeps its whole package as detail; past the limit a notice replaces it, never a clipped part", () => {
 		const stuck = {
 			op: "stuck",

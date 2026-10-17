@@ -381,6 +381,9 @@ export interface UiTaskQueueTask {
 	detail?: string;
 	/** task-question decisions (rule 21): asking: the question is with Ops (its coordinator chat), not the main chat. */
 	askOps?: boolean;
+	/** question-lead (owner 2026-10-17): with askOps, the role whose lead has it when that isn't Ops: its queue's
+	 *  department, or a project's or initiative's lead once nobody below answered in time. */
+	askLead?: string;
 	/** queue-main-chat: working again with its main chat's answer to its last question (a Telegram ask for
 	 *  that question then goes away saying so). */
 	mainAnswered?: boolean;
@@ -1953,6 +1956,8 @@ export interface UiRoleTask {
 	waitsOn?: string;
 	/** task-question decisions (rule 21): asking: its question is with Ops, not its main chat. */
 	askOps?: boolean;
+	/** question-lead: with askOps, the role whose lead has it when that isn't Ops. */
+	askLead?: string;
 	/** Its chat is working now. */
 	busy?: boolean;
 	/** The newest TL;DR line of its own chat. */

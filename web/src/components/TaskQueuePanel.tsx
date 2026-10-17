@@ -697,8 +697,14 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 				{held && kind !== "done" && <PausedLine hold={held} whole={!task.hold} />}
 				{task.status === "asking" && (
 					<div className="task-queue-asking" title={task.question}>
-						{/* task-question decisions (rule 21): the question is with Ops, not the main chat. */}
-						<span className="task-queue-hint">{t(task.askOps ? "taskQueueAskingOps" : "taskQueueAskingMain")}</span>
+						{/* task-question decisions (rule 21): the question is with Ops or its department's lead, not the main chat. */}
+						<span className="task-queue-hint">
+							{!task.askOps
+								? t("taskQueueAskingMain")
+								: task.askLead
+									? t("taskQueueAskingLead", { lead: task.askLead })
+									: t("taskQueueAskingOps")}
+						</span>
 					</div>
 				)}
 				{task.status === "blocked" && task.block && <BlockedLine block={task.block} onOpenChat={onOpenChat} />}
