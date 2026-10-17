@@ -16047,6 +16047,12 @@ export class AgentService {
 				reportRunsFile: () =>
 					join(process.env.XDG_STATE_HOME || join(home, ".local", "state"), "role-reports", "runs.json"),
 				schedulerJobsFile: () => join(home, ".pi-scheduler", "jobs.json"),
+				// roles-panel: pi-work-management's workDir(): PI_WORK_DIR, or "work" in pi's agent folder.
+				workFile: () =>
+					join(
+						process.env.PI_WORK_DIR || join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "work"),
+						"events.jsonl",
+					),
 			});
 		}
 		return this.rolesReader.read();

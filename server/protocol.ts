@@ -408,7 +408,13 @@ export interface UiTaskQueueTask {
 	/** queue-paused: the owner paused this task itself (only open tasks). A pause of the whole queue is
 	 *  UiTaskQueue.hold; a task is paused when either is set. It keeps its status, so Resume carries on there. */
 	hold?: UiTaskQueueHold;
+	/** roles-panel: where it belongs, as its own queue entry says (pi-work-management); absent: not recorded. */
+	parent?: UiTaskParent;
 }
+
+/** roles-panel: where a task belongs: a project (its initiative comes through the project), an initiative
+ *  directly, or deliberately nowhere. */
+export type UiTaskParent = { project: string } | { initiative: string } | { standalone: true };
 
 /** queue-paused: the owner's pause on a task or a whole queue (pi-queue's hold): since when, and why
  *  (the owner's words and where they came from; the Queue panel stores "pressed Pause in the Queue panel"). */
@@ -1954,6 +1960,41 @@ export interface UiRoleTask {
 	/** queue-paused: paused by the owner (the task itself or its whole queue): since when and why.
 	 *  A paused task never counts as needing the owner. */
 	paused?: UiTaskQueueHold;
+	/** roles-panel: where it belongs, from its queue entry (absent: not recorded). */
+	parent?: UiTaskParent;
+	/** roles-panel: blocked on a lead (rule 24): who owes it, what, when it is due, the reminders sent so far
+	 *  and the leads reminded next if that lead stays silent (then the owner). */
+	owing?: UiRoleTaskOwing;
+}
+
+/** roles-panel: a blocked task's lead block, as its queue records it. */
+export interface UiRoleTaskOwing {
+	lead: string;
+	owes?: string;
+	due?: number;
+	reminders: number;
+	chain?: string[];
+}
+
+/** roles-panel: an initiative or project of the work registry (pi-work-management), as the Roles page shows it. */
+export interface UiWorkRecord {
+	id: string;
+	name: string;
+	lead: string;
+	status: "active" | "done" | "dropped";
+	/** Projects: the initiative it serves, or null (deliberately standalone). */
+	initiative?: string | null;
+	/** Its done-when items, and how many are marked met. */
+	items: number;
+	met: number;
+}
+
+/** roles-panel: the work registry's records (read only). */
+export interface UiWorkRecords {
+	initiatives: UiWorkRecord[];
+	projects: UiWorkRecord[];
+	/** It couldn't be read (the rest of the page still shows), or a change this app doesn't know was skipped. */
+	problem?: "unreadable" | "too-big" | "unknown-change";
 }
 
 /** roles-overview: a role's home queue in short. */
@@ -2454,6 +2495,8 @@ export interface UiRolesOverview {
 	reportTz: string;
 	/** board: the roles' shared board (absent: this server has none). */
 	board?: UiBoard;
+	/** roles-panel: the work registry's initiatives and projects (absent: this server reads none). */
+	work?: UiWorkRecords;
 }
 
 /** identity-notes: a role's two-layer memory as its chats get it (pi-identity): the rules (notebook.md)

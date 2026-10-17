@@ -1310,3 +1310,49 @@ describe("taskQueueFromEntries (task-question decisions)", () => {
 		}
 	});
 });
+
+// roles-panel: where a task belongs, as pi-work-management's queue saves it (its tests/work.test.ts parent cases).
+describe("taskQueueFromEntries (where a task belongs)", () => {
+	const parentOf = (ops: Array<Record<string, unknown>>, id = 1) =>
+		replay(entries(ops)).tasks.find((t) => t.id === id)?.parent;
+
+	it("add and assigned keep a project, an initiative or standalone; a project wins over the rest", () => {
+		expect(parentOf([{ op: "add", id: 1, plan: plan("One"), project: "roles-page" }])).toEqual({
+			project: "roles-page",
+		});
+		expect(parentOf([{ op: "add", id: 1, plan: plan("One"), initiative: "team-in-temper" }])).toEqual({
+			initiative: "team-in-temper",
+		});
+		expect(parentOf([{ op: "add", id: 1, plan: plan("One"), standalone: true }])).toEqual({ standalone: true });
+		expect(
+			parentOf([{ op: "add", id: 1, plan: plan("One"), project: "p", initiative: "i", standalone: true }]),
+		).toEqual({ project: "p" });
+		expect(
+			parentOf([{ op: "assigned", id: 1, plan: plan("One"), project: " p ", from: { file: "/s/q.jsonl" } }]),
+		).toEqual({ project: "p" });
+	});
+
+	it("nothing given, or an id that isn't one, records nothing", () => {
+		expect(parentOf([{ op: "add", id: 1, plan: plan("One") }])).toBeUndefined();
+		for (const bad of ["Roles Page", "a--b", "x".repeat(61), "", 7, "<b>"]) {
+			expect(parentOf([{ op: "add", id: 1, plan: plan("One"), project: bad }]), String(bad)).toBeUndefined();
+		}
+		expect(parentOf([{ op: "add", id: 1, plan: plan("One"), standalone: "yes" }])).toBeUndefined();
+	});
+
+	it("update replaces what it gives, clears with an empty id or standalone false, keeps it otherwise", () => {
+		const add = { op: "add", id: 1, plan: plan("One"), project: "p" };
+		const upd = (extra: Record<string, unknown>) => ({ op: "update", id: 1, plan: plan("One"), ...extra });
+		expect(parentOf([add, upd({})])).toEqual({ project: "p" });
+		expect(parentOf([add, upd({ initiative: "i" })])).toEqual({ initiative: "i" });
+		expect(parentOf([add, upd({ project: "" })])).toBeUndefined();
+		// An empty initiative clears only an initiative: the project stays.
+		expect(parentOf([add, upd({ initiative: "" })])).toEqual({ project: "p" });
+		// A text that isn't an id is ignored, not a clear.
+		expect(parentOf([add, upd({ project: "Not An Id" })])).toEqual({ project: "p" });
+		const solo = { op: "add", id: 1, plan: plan("One"), standalone: true };
+		expect(parentOf([solo, upd({ standalone: false })])).toBeUndefined();
+		expect(parentOf([solo, upd({ project: "" })])).toEqual({ standalone: true });
+		expect(parentOf([solo, upd({ project: "p" })])).toEqual({ project: "p" });
+	});
+});

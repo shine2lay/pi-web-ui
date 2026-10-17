@@ -34,6 +34,7 @@ import type {
 	UiRolesOverview,
 	UiRoleStatus,
 	UiRoleTask,
+	UiRoleTaskOwing,
 	UiRoleTldrLine,
 	UiTaskQueueHold,
 	UiTaskQueueTask,
@@ -55,6 +56,7 @@ import {
 	taskRefLabel,
 	type TaskQueueEntryLike,
 } from "./task-queue.js";
+import { WorkRecordsFile } from "./work-records.js";
 import {
 	isTldrReply,
 	TLDR_ENTRY_TYPE,
@@ -608,6 +610,8 @@ export interface RolesOverviewHost {
 	/** role-reports' runs.json and the scheduler's jobs.json. */
 	reportRunsFile(): string;
 	schedulerJobsFile(): string;
+	/** roles-panel: the work registry's log (pi-work-management's events.jsonl); absent: none is read. */
+	workFile?(): string;
 	now?(): number;
 }
 
@@ -624,6 +628,8 @@ export class RolesOverviewReader {
 	private readonly paths: ChatPaths;
 	private readonly runs: JsonFile<ReportRun[]>;
 	private readonly job: JsonFile<{ nextRunAt?: number } | null>;
+	/** roles-panel: the work registry's initiatives and projects. */
+	private readonly work: WorkRecordsFile | null;
 	/** Report texts by request id and check time (a report doesn't change once checked). */
 	private readonly reportTexts = new Map<string, { text: string; at?: number; file: string }>();
 
@@ -634,6 +640,8 @@ export class RolesOverviewReader {
 		);
 		this.runs = new JsonFile(() => host.reportRunsFile(), reportRunsOf, []);
 		this.job = new JsonFile(() => host.schedulerJobsFile(), reportJobOf, null);
+		const workFile = host.workFile?.bind(host);
+		this.work = workFile ? new WorkRecordsFile(workFile) : null;
 	}
 
 	private now(): number {
@@ -652,6 +660,7 @@ export class RolesOverviewReader {
 			roles.push(await this.role(def, at, asks, runs, job, keep));
 		}
 		this.scans.retain(keep);
+		const work = this.work ? await this.work.get() : undefined;
 		const all = roles.flatMap((r) => r.asks);
 		let board: UiBoard | undefined;
 		try {
@@ -666,6 +675,7 @@ export class RolesOverviewReader {
 			paused: this.host.rolePaused(),
 			reportTz: REPORT_TZ,
 			...(board ? { board } : {}),
+			...(work ? { work } : {}),
 		};
 	}
 
@@ -1007,6 +1017,21 @@ function taskOf(t: UiTaskQueueTask, held?: UiTaskQueueHold): UiRoleTask {
 		...(waitsOn ? { waitsOn } : {}),
 		...(t.status === "asking" && t.askOps ? { askOps: true } : {}),
 		...(held ? { paused: { at: held.at, why: held.why } } : {}),
+		// roles-panel: where it belongs (its queue entry), and a lead block's who, what, when and reminders.
+		...(t.parent ? { parent: { ...t.parent } } : {}),
+		...(t.status === "blocked" && t.block?.lead ? { owing: owingOf(t.block, t.block.lead) } : {}),
+	};
+}
+
+/** roles-panel: a blocked task's lead block as the Roles page shows it. */
+function owingOf(b: NonNullable<UiTaskQueueTask["block"]>, lead: string): UiRoleTaskOwing {
+	return {
+		lead,
+		...(b.owes ? { owes: b.owes } : {}),
+		...(b.checkpoint ? { due: b.checkpoint } : {}),
+		reminders: b.reminders?.length ?? 0,
+		// Recorded ([] too: then the owner is next); absent until the queue's chat records it.
+		...(b.chain ? { chain: [...b.chain] } : {}),
 	};
 }
 

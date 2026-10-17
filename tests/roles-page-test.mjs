@@ -75,6 +75,7 @@ const planFor = (id) => ({
 	title: id === 101 ? HTML_TITLE : id === 102 ? BIDI_TITLE : `Fixture task ${id}`,
 });
 const NEEDS_LINE = "Need you: approve the fixture plan";
+const OWES = "a fixture review";
 const QUESTION = "Pick option A or B?";
 const LATEST = "Ran the fixture checks";
 let identities;
@@ -132,8 +133,10 @@ function seed({ root, dataDir, agentDir, workdir }) {
 	const records = [...metadata(), line({ op: "run" })];
 	// Task 1 works in a chat of its own; task 2 waits on a decision; 3-22 work; 101-121 wait to start.
 	taskChat = join(sessions, "2026-10-15T12-00-01-000Z_01a0f000-0000-7000-8000-000000000002.jsonl");
+	// roles-panel: task 1 is in a project, 3 in none on purpose (and blocked on Ops), 101 straight under an
+	// initiative; the rest don't say where they belong.
 	records.push(
-		line({ op: "add", id: 1, plan: planFor(1) }),
+		line({ op: "add", id: 1, plan: planFor(1), project: "fixture-project" }),
 		line({ op: "start", id: 1, lane: true }),
 		line({ op: "chat", id: 1, file: taskChat, title: "Queue #1" }),
 		line({ op: "add", id: 2, plan: planFor(2) }),
@@ -141,9 +144,19 @@ function seed({ root, dataDir, agentDir, workdir }) {
 		line({ op: "stuck", id: 2, question: QUESTION }),
 	);
 	for (let id = 3; id <= 22; id++) {
-		records.push(line({ op: "add", id, plan: planFor(id) }), line({ op: "start", id, lane: true }));
+		records.push(
+			line({ op: "add", id, plan: planFor(id), ...(id === 3 ? { standalone: true } : {}) }),
+			line({ op: "start", id, lane: true }),
+		);
 	}
-	for (let id = 101; id <= 121; id++) records.push(line({ op: "add", id, plan: planFor(id) }));
+	// Due a week from the real now, so the app's own lead reminders (rule 24) don't fire during the test.
+	records.push(
+		line({ op: "block", id: 3, lead: "ops", owes: OWES, checkpoint: Date.now() + 7 * 86_400_000, start: 0, tries: 0 }),
+	);
+	for (let id = 101; id <= 121; id++)
+		records.push(
+			line({ op: "add", id, plan: planFor(id), ...(id === 101 ? { initiative: "fixture-initiative" } : {}) }),
+		);
 	records.push({
 		type: "custom",
 		customType: "tldr",
@@ -246,6 +259,35 @@ function seed({ root, dataDir, agentDir, workdir }) {
 	store = join(dataDir, "role-messages.json");
 	writeFileSync(store, JSON.stringify({ v: 1, paused: false, messages: [] }));
 	files.push(store);
+	// roles-panel: the work registry (pi-work-management's log): one initiative led by Ops, one project in it
+	// led by Frontend with one of its two finish lines met.
+	mkdirSync(join(agentDir, "work"), { recursive: true });
+	const work = join(agentDir, "work", "events.jsonl");
+	const event = (seq, e) => JSON.stringify({ v: 1, seq, ts: NOW, by: "ops", ...e });
+	writeFileSync(
+		work,
+		[
+			event(1, {
+				op: "initiative.create",
+				id: "fixture-initiative",
+				name: "Fixture initiative",
+				outcome: "CANARY-OUTCOME",
+				doneWhen: ["It works"],
+				lead: "ops",
+			}),
+			event(2, {
+				op: "project.create",
+				id: "fixture-project",
+				name: "Fixture project",
+				outcome: "CANARY-OUTCOME",
+				doneWhen: ["One", "Two"],
+				lead: "frontend",
+				initiative: "fixture-initiative",
+			}),
+			event(3, { op: "project.met", id: "fixture-project", item: "one", proof: "CANARY-PROOF" }),
+		].join("\n") + "\n",
+	);
+	files.push(work);
 	for (const file of files) originals.set(file, sha(file));
 }
 
@@ -269,6 +311,10 @@ const srv = await ownServer({
 		},
 		get PI_MEMORY_DIR() {
 			return join(identities, "..", "memory");
+		},
+		// roles-panel: the work registry the seed wrote (agentDir/work), never one from the environment.
+		get PI_WORK_DIR() {
+			return join(identities, "..", "agent", "work");
 		},
 		PI_IDENTITY_REINDEX: "0",
 	},
@@ -416,7 +462,7 @@ try {
 			.count()) === 1 && !(await page.locator(".roles-useful").evaluate((node) => node.outerHTML)).includes("\u202e"),
 	);
 	check(
-		"controls: Open buttons only; no links, fields, images, titles, data attributes or dialogs",
+		"controls: Open buttons and each card's Details only; no links, fields, images, titles, data attributes or dialogs",
 		(await page
 			.locator(
 				".roles-useful a, .roles-useful [href], .roles-useful input, .roles-useful select, .roles-useful textarea, .roles-useful svg, .roles-useful img, .roles-useful [title], .roles-useful [data-role-id], .roles-useful [role=dialog]",
@@ -428,8 +474,14 @@ try {
 					(buttons) =>
 						buttons.length > 0 &&
 						buttons.every(
-							(b) => b.className === "roles-useful-open" && b.type === "button" && /^Open\b/.test(b.textContent ?? ""),
-						),
+							(b) =>
+								b.type === "button" &&
+								((b.className === "roles-useful-open" && /^Open\b/.test(b.textContent ?? "")) ||
+									(b.className === "roles-useful-open roles-useful-details" &&
+										/^Details of /.test(b.textContent ?? ""))),
+						) &&
+						buttons.filter((b) => b.classList.contains("roles-useful-details")).length ===
+							document.querySelectorAll(".roles-useful-card").length,
 				)),
 	);
 	check(
@@ -463,10 +515,23 @@ try {
 		"happy path: return restores exactly one full watch",
 		(await until(() => watches.at(-1) === "full")) && watches.filter((value) => value === "full").length === 2,
 	);
-	check(
-		"happy path: read-only journey leaves all fixture chats/identities/store unchanged",
-		[...originals].every(([file, hash]) => sha(file) === hash),
-	);
+	const changed = () => [...originals].filter(([file, hash]) => sha(file) !== hash).map(([file]) => file);
+	check("happy path: read-only journey leaves all fixture chats/identities/store unchanged", changed().length === 0);
+	// Fixture file names and entry kinds only, never their contents.
+	const kinds = (file) =>
+		readFileSync(file, "utf8")
+			.split("\n")
+			.filter(Boolean)
+			.map((l) => {
+				try {
+					const e = JSON.parse(l);
+					return [e.type, e.customType, e.data?.op].filter((x) => typeof x === "string").join(":");
+				} catch {
+					return "?";
+				}
+			})
+			.join(",");
+	for (const file of changed()) console.log(`changed fixture file: ${basename(file)} entries: ${kinds(file)}`);
 	// Links: each Open goes through openFromRoles to an existing chat; the next snapshot names it.
 	// Every open below switches away from the chat that is open, so a fresh snapshot must come.
 	const openFrom = async (button, file) => {
@@ -557,6 +622,193 @@ try {
 	await backToRoles();
 	check(
 		"links: opening chats changed none of them and started no model turn",
+		[...originals].every(([file, hash]) => sha(file) === hash) && providerCalls === 0,
+	);
+
+	// roles-panel: a role's own panel. Its tasks grouped as their queue entries name their place, under the
+	// registry's names and leads; a blocked task's lead and what it owes; its updates; read-only.
+	const details = frontend.getByRole("button", { name: /^Details of Frontend engineering$/ });
+	const panelBox = page.locator("dialog.roles-panel");
+	const panelTask = (id) =>
+		panelBox.locator(".roles-useful-task").filter({
+			has: page.locator(".roles-useful-task-name").filter({ hasText: new RegExp(`^#${id}\\b`) }),
+		});
+	await details.click();
+	check(
+		"panel: Details opens one modal role panel, titled with the role, focus inside it",
+		(await until(async () => (await panelBox.count()) === 1)) &&
+			(await textOf(panelBox.locator("#roles-panel-title"))) === "Frontend engineering" &&
+			(await panelBox.evaluate((node) => node.open && node.matches(":modal") && node.contains(document.activeElement))),
+	);
+	const projectBox = panelBox.locator(".roles-panel-project").filter({ hasText: "Fixture project" });
+	const initiativeBox = panelBox.locator(".roles-panel-group").filter({ hasText: "Fixture initiative" });
+	check(
+		"panel: a task in a project shows under it, with the registry's name, lead and finish lines met",
+		(await projectBox.count()) === 1 &&
+			(await projectBox.locator(".roles-useful-task").count()) === 1 &&
+			(await projectBox.locator(".roles-useful-task").filter({ hasText: "Fixture task 1" }).count()) === 1 &&
+			(await textOf(projectBox)).includes("Frontend engineering") &&
+			(await textOf(projectBox)).includes("1 of 2 finish lines met") &&
+			(await initiativeBox.count()) === 1 &&
+			(await textOf(initiativeBox)).includes("Ops/tooling"),
+	);
+	// Task 101's name looks like HTML: shown as text here too.
+	const grouped = {
+		initiative: await initiativeBox
+			.locator(".roles-panel-project")
+			.filter({ hasText: "In no project" })
+			.locator(".roles-useful-task-name")
+			.allTextContents(),
+		standalone: await panelBox
+			.locator(".roles-panel-group")
+			.filter({ hasText: "In no project, on purpose" })
+			.locator(".roles-useful-task-name")
+			.allTextContents(),
+		unrecorded: await panelBox
+			.locator(".roles-panel-group")
+			.filter({ hasText: "Where it belongs isn't recorded" })
+			.locator(".roles-useful-task")
+			.count(),
+	};
+	check(
+		"panel: a task straight under an initiative, one in no project on purpose, and the unrecorded rest",
+		grouped.initiative.length === 1 &&
+			grouped.initiative[0] === `#101 ${HTML_TITLE}` &&
+			grouped.standalone.length === 1 &&
+			grouped.standalone[0] === "#3 Fixture task 3" &&
+			grouped.unrecorded === 39,
+	);
+	// Counts only.
+	console.log(
+		`panel groups: initiative ${grouped.initiative.length}, standalone ${grouped.standalone.length}, unrecorded ${grouped.unrecorded}`,
+	);
+	const shownIds = (await panelBox.locator(".roles-useful-task-name").allTextContents()).map(
+		(name) => /^#(\d+)/.exec(name)?.[1],
+	);
+	check(
+		"panel: every task the server sent shows exactly once (22 started + 20 waiting), and says not all waiting are shown",
+		shownIds.length === 42 &&
+			new Set(shownIds).size === 42 &&
+			(await textOf(panelBox)).includes("Not every waiting task is shown."),
+	);
+	const owingLine = panelTask(3).locator(".roles-panel-owing");
+	check(
+		"panel: a blocked task says who it waits on, for what, when it was due and the reminders; no chain yet",
+		(await owingLine.count()) === 1 &&
+			(await textOf(owingLine)).startsWith(`Waits on Ops/tooling for ${OWES}`) &&
+			/ · (was )?due /.test(await textOf(owingLine)) &&
+			(await textOf(owingLine)).includes("reminders sent: 0") &&
+			!(await textOf(owingLine)).includes("then you"),
+	);
+	check(
+		"panel: its updates show, the needs-you one marked; a link-looking line is plain text",
+		(await panelBox
+			.locator(".roles-panel-line")
+			.filter({ hasText: NEEDS_LINE })
+			.locator(".roles-panel-mark")
+			.count()) === 1 &&
+			(await panelBox.locator(".roles-panel-line").filter({ hasText: "https://private.invalid/path" }).count()) === 1,
+	);
+	check(
+		"panel: no chat path, plan, outcome, proof or excluded canary; no links, fields, images or titles",
+		await panelBox.evaluate(
+			(node, parts) =>
+				parts.every((part) => !node.outerHTML.includes(part)) &&
+				!/CANARY-(THINKING|TOOL|RESULT|PROMPT|NOTEBOOK|OUTSIDE|GOAL|DONE|PLAN|STEPS|VERIFY|LIMIT|OUTCOME|PROOF)/.test(
+					node.outerHTML,
+				) &&
+				node.querySelectorAll("a, [href], input, select, textarea, img, svg, [title], [data-role-id]").length === 0,
+			[home, taskChat, basename(home), basename(taskChat), sessions, "jsonl"],
+		),
+	);
+	check(
+		"panel: agent text only as plain text in quote elements",
+		await panelBox.evaluate((node) => {
+			const quotes = [...node.querySelectorAll("q")];
+			return (
+				quotes.length > 0 &&
+				quotes.every(
+					(q) => q.className === "roles-useful-agent" && q.children.length === 0 && q.attributes.length === 1,
+				)
+			);
+		}),
+	);
+	await page.addScriptTag({ path: AXE });
+	const panelAxe = () =>
+		page.evaluate(async () => {
+			const result = await window.axe.run(document.querySelector("dialog.roles-panel"), {
+				runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"] },
+			});
+			return result.violations
+				.filter((value) => value.impact === "serious" || value.impact === "critical")
+				.map((value) => value.id);
+		});
+	const axeWide = await panelAxe();
+	check("panel 1440: no serious/critical axe findings", axeWide.length === 0);
+	if (axeWide.length) console.log(`AXE rule IDs only: ${axeWide.join(",")}`);
+	if (SHOTS) {
+		mkdirSync(SHOTS, { recursive: true });
+		await page.screenshot({ path: join(SHOTS, "roles-panel-1440.png") });
+	}
+	await page.keyboard.press("Escape");
+	check(
+		"panel: Escape closes it and focus goes back to the card's Details button",
+		(await until(async () => (await panelBox.count()) === 0)) &&
+			(await until(() => details.evaluate((node) => document.activeElement === node))),
+	);
+	await page.setViewportSize({ width: 390, height: 900 });
+	// A narrow screen may open the chat list drawer over the page: close it by its backdrop first.
+	const backdrop = page.locator(".drawer-backdrop");
+	if (await until(async () => (await backdrop.count()) > 0, 1_500))
+		await backdrop.click({ position: { x: 380, y: 450 } });
+	await until(async () => (await backdrop.count()) === 0, 3_000);
+	await details.click();
+	await panelBox.waitFor();
+	const phoneBox = await panelBox.evaluate((node) => {
+		const box = node.getBoundingClientRect();
+		const close = node.querySelector(".roles-panel-close").getBoundingClientRect();
+		return {
+			fits: box.left >= 0 && box.right <= innerWidth + 1 && node.scrollWidth <= node.clientWidth + 1,
+			close: close.width >= 44 && close.height >= 44,
+		};
+	});
+	check(
+		"panel 390: fills the screen without sideways scrolling; Close is at least 44px",
+		phoneBox.fits && phoneBox.close,
+	);
+	const axePhone = await panelAxe();
+	check("panel 390: no serious/critical axe findings", axePhone.length === 0);
+	if (axePhone.length) console.log(`AXE rule IDs only: ${axePhone.join(",")}`);
+	if (SHOTS) await page.screenshot({ path: join(SHOTS, "roles-panel-390.png") });
+	await panelBox.getByRole("button", { name: "Close", exact: true }).click();
+	await page.setViewportSize({ width: 1440, height: 900 });
+	// The home chat is the one open now: open the task's chat first, so opening home is a real switch.
+	check("panel: (setup) the task's chat opens first", await openTaskChat());
+	await backToRoles();
+	await details.click();
+	check(
+		"panel: Open its home chat closes the panel and opens the role's home chat",
+		(await openFrom(panelBox.getByRole("button", { name: "Open its home chat", exact: true }), home)) &&
+			(await panelBox.count()) === 0,
+	);
+	// Which app modals are open, by class name only (no content).
+	const modals = await page.locator(".modal-backdrop > *").evaluateAll((nodes) => nodes.map((n) => n.className));
+	if (modals.length) console.log(`open modals: ${modals.join(",")}`);
+	await backToRoles();
+	await details.click();
+	await panelBox.getByRole("button", { name: "About & rules", exact: true }).click();
+	const settings = page.locator(".settings-modal");
+	check(
+		"panel: About & rules closes the panel and opens Settings at the role",
+		(await until(async () => (await settings.count()) === 1)) &&
+			(await panelBox.count()) === 0 &&
+			(await until(async () => (await textOf(settings)).includes("Frontend engineering"))),
+	);
+	await settings.locator(".modal-close").click();
+	await until(async () => (await settings.count()) === 0);
+	await backToRoles();
+	check(
+		"panel: looking and opening changed no chat, identity or registry file and started no model turn",
 		[...originals].every(([file, hash]) => sha(file) === hash) && providerCalls === 0,
 	);
 

@@ -126,7 +126,11 @@ function mount(active = true) {
 	act(() => {
 		root ??= createRoot(container);
 		root.render(
-			createElement(LanguageProvider, null, createElement(RolesUsefulView, { active, phone: false, onOpen })),
+			createElement(
+				LanguageProvider,
+				null,
+				createElement(RolesUsefulView, { active, phone: false, onOpen, onAbout: () => undefined }),
+			),
 		);
 	});
 }
@@ -741,11 +745,12 @@ describe("closed boundary and the actual store", () => {
 		type Fiber = { type?: { name?: string }; memoizedProps?: Record<string, unknown>; child?: Fiber; sibling?: Fiber };
 		const internal = root as unknown as { _internalRoot: { current: Fiber } };
 		const allowed: Record<string, string[]> = {
-			RolesUsefulView: ["active", "phone", "onOpen"],
-			RolesUsefulContent: ["model", "phone", "now", "onOpen"],
+			// roles-panel: onAbout and onDetails are callbacks (open Settings at a role; open a role's panel).
+			RolesUsefulView: ["active", "phone", "onOpen", "onAbout"],
+			RolesUsefulContent: ["model", "phone", "now", "onOpen", "onDetails"],
 			NeedsYouSection: ["needs", "now", "onOpen"],
 			AskRow: ["item", "now", "onOpen"],
-			RoleCard: ["role", "onOpen"],
+			RoleCard: ["role", "onOpen", "onDetails"],
 			RecordList: ["heading", "list", "count", "onOpen"],
 			TaskRow: ["record", "onOpen"],
 		};
@@ -917,11 +922,16 @@ describe("closed boundary and the actual store", () => {
 		expect(source.match(/useAppField\("status"\)/g)).toHaveLength(1);
 		expect(app).toContain('import("./components/RolesUsefulView")');
 		expect(app).not.toContain('import("./components/RolesView")');
-		expect(app).toContain('<RolesUsefulView active={view === "roles"} phone={isMobile} onOpen={openFromRolesPage} />');
+		// roles-panel: About & rules opens Settings at the role, the way the old panel did.
+		expect(app).toMatch(
+			/<RolesUsefulView\s+active=\{view === "roles"\}\s+phone=\{isMobile\}\s+onOpen=\{openFromRolesPage\}\s+onAbout=\{aboutFromRoles\}\s+\/>/,
+		);
 		// The page's opens are remembered first (fixed words on failure), then go the existing way.
 		expect(app).toMatch(/markRolesOpen\(target\.file\);\s*openFromRoles\(target\);/);
-		expect(source.match(/onClick=/g)).toHaveLength(2);
+		// Two opens through onOpen, and each card's Details (roles-panel), which only opens the panel.
+		expect(source.match(/onClick=/g)).toHaveLength(3);
 		expect(source.match(/onClick=\{\(\) => onOpen\(link\)\}/g)).toHaveLength(2);
+		expect(source.match(/onClick=\{\(e\) => onDetails\(role\.roleId, e\.currentTarget\)\}/g)).toHaveLength(1);
 		expect(source + model).not.toMatch(
 			/localStorage|sessionStorage|fetch\(|WebSocket|setTimeout|appSend|reloadRoles|boardRequest|dangerouslySetInnerHTML|innerHTML|href|Markdown|react-icons|TaskLink|QueuedList|window\.open/,
 		);

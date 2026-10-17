@@ -36,7 +36,7 @@ const STOP_REASONS = ["user", "stopped", "error", "restart", "finished"] as cons
  *  the soft hyphen, tag characters), lone surrogates, private-use and unassigned code points, and
  *  line/paragraph separators. In agent text, tab, CR and LF read as one space first: visible
  *  whitespace a text node shows as a space anyway (multi-line task questions). Paths get no such pass. */
-const UNSAFE = /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\u2028\u2029]/u;
+export const UNSAFE = /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\u2028\u2029]/u;
 
 export type ReportedStatus = (typeof STATUSES)[number];
 export type StopReason = (typeof STOP_REASONS)[number];
@@ -73,6 +73,8 @@ export type TellState = "can-tell" | "not-live" | "feed-error" | "awaiting" | "p
 export interface UsefulOpenTarget {
 	file: string;
 	focus?: { kind: "tldr" | "task" | "question"; id: string };
+	/** roles-panel: a message in that chat to jump to (its time), like a 6 am report's answer. */
+	jumpAt?: number;
 }
 export interface UsefulRecord {
 	taskId: number;
@@ -135,19 +137,20 @@ export interface UsefulRoles {
 	needsYou: NeedsYou;
 }
 
-type Fields = Record<string, unknown>;
+export type Fields = Record<string, unknown>;
 type Bounded = { text: string; clipped: boolean };
-function object(value: unknown): Fields | null {
+/* roles-panel: the role panel (roles-panel-model.ts) projects through the same checks; they are exported for it. */
+export function object(value: unknown): Fields | null {
 	return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Fields) : null;
 }
-function roleId(value: unknown): value is string {
+export function roleId(value: unknown): value is string {
 	// Require the entire matched value, not a prefix match.
 	return typeof value === "string" && /^[a-z][a-z0-9-]{0,31}$/.exec(value)?.[0] === value;
 }
-function taskId(value: unknown): value is number {
+export function taskId(value: unknown): value is number {
 	return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
-function time(value: unknown): number | null {
+export function time(value: unknown): number | null {
 	return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 function status(value: unknown): ReportedStatus | null {
@@ -156,7 +159,7 @@ function status(value: unknown): ReportedStatus | null {
 function stop(value: unknown): StopReason | null {
 	return STOP_REASONS.find((candidate) => candidate === value) ?? null;
 }
-function marker(record: Fields | null, key: string): PauseMarker {
+export function marker(record: Fields | null, key: string): PauseMarker {
 	if (!record) return "unknown";
 	if (!Object.hasOwn(record, key)) return "not-reported";
 	const value = object(record[key]);
@@ -190,7 +193,7 @@ function sinceOf(value: unknown, now: number | undefined): number | null {
 }
 /** Agent-written text -> bounded plain text, or null when absent or unsafe. Never partly shown:
  *  an unsafe character anywhere rejects all of it. */
-function plain(value: unknown, limit: number): Bounded | null {
+export function plain(value: unknown, limit: number): Bounded | null {
 	if (typeof value !== "string") return null;
 	const text = value.replace(/[\t\n\r]+/g, " ").trim();
 	if (!text || UNSAFE.test(text)) return null;
@@ -205,7 +208,7 @@ function label(value: unknown, id: string): { text: string; truncated: boolean }
 }
 /** A transcript path as the feed gives it: absolute, .jsonl, no empty, "." or ".." segment, no unsafe
  *  character. The server checks it again (inside the sessions folder) when it is opened. */
-function chatFile(value: unknown): string | null {
+export function chatFile(value: unknown): string | null {
 	if (typeof value !== "string" || value.length > PATH_LIMIT || UNSAFE.test(value) || !value.endsWith(".jsonl"))
 		return null;
 	const root = /^(\/|[A-Za-z]:[\\/])/.exec(value)?.[0];
@@ -217,7 +220,7 @@ function chatFile(value: unknown): string | null {
 		? value
 		: null;
 }
-function focusOf(value: unknown): UsefulOpenTarget["focus"] | null {
+export function focusOf(value: unknown): UsefulOpenTarget["focus"] | null {
 	if (typeof value !== "string" || value !== value.trim()) return null;
 	const focus = parseFocus(value);
 	if (!focus) return null;
@@ -225,7 +228,7 @@ function focusOf(value: unknown): UsefulOpenTarget["focus"] | null {
 		? { kind: focus.kind, id: focus.id }
 		: null;
 }
-function idFrequencies(
+export function idFrequencies(
 	rows: unknown[],
 	getId: (value: unknown) => string | number | null,
 ): Map<string | number, number> {
@@ -267,7 +270,7 @@ function taskLink(row: Fields, id: number, home: string | null): UsefulOpenTarge
 	const focus = focusOf(`task:${id}`);
 	return home && focus ? { file: home, focus } : null;
 }
-function record(row: Fields, id: number, home: string | null): UsefulRecord {
+export function record(row: Fields, id: number, home: string | null): UsefulRecord {
 	const reported = status(row.status);
 	const pause = marker(row, "paused");
 	const state = rowState(row, reported);

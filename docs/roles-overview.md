@@ -9,6 +9,35 @@ Design: `~/design-lab/roles-page/SPEC.md` for what the page says; the layout is 
 2026-10-05 call ("show less, tap for more"): tiles instead of SPEC's board, which read as a flat
 table. Patch: `roles-overview` in [PATCHES.md](../PATCHES.md).
 
+## The role panel (owner, 2026-10-16)
+
+The owner asked what the full Roles page needs (dialog, about 23:00) and picked the role panel as its first
+piece, built in his chat with Ops, with Security checking the new data shown before install.
+
+Hypothesis (rule 20):
+
+- **What is wrong.** The live page (Ops #190, #200) shows what waits on the owner and each role's task rows, but
+  not a role's own picture: its recent updates, its 6 am report, its goals, which project and initiative its
+  tasks serve, and who a blocked task waits on. Evidence: the feed already carries the TL;DR lines, the report
+  and the goals, and the work registry (pi-work-management) holds each task's project and initiative with their
+  leads, but the page's closed projection shows none of them; the old rich panel (`RolesView.tsx`) is unmounted.
+- **The change.** A panel per role, opened from its card: status, focus, work mode, goals, its home chat and
+  "About & rules" (Settings), its TL;DR lines, its latest 6 am report, and its open tasks grouped by initiative
+  and project, a blocked task with the lead it waits on, what that lead owes, when it is due and how many
+  reminders went. The server adds two read-only things to the feed: each task's parent from its own queue
+  entry, and the work registry's initiatives and projects (name, lead, status, done-when items met). All of it
+  goes through the same closed projection as the cards: whole-text rejection of unsafe text, clipping, chat
+  paths only in memory.
+- **Expected result, and how it is measured.** Every role's panel shows the same lines, report and goals as
+  `roles_overview` for that role; every open task appears exactly once, under the project and initiative its
+  queue entry names ("Not in a project" when it names none); a blocked task's lead, what it owes, due time and
+  reminders match its queue. Measured by the unit and sealed page tests on fixtures, and after install by a
+  look-only comparison of every role's panel against `roles_overview` and `work_project`/`work_initiative`
+  show on real data.
+- **What would prove it wrong.** A task under a different parent than its queue entry, shown twice or missing;
+  a panel line, report or goal differing from `roles_overview`; any unsafe text shown in part; a chat path in
+  the page's DOM, attributes or URL; or a registry problem breaking the rest of the page.
+
 ## Each department's own-work spend
 
 Owner, 2026-10-10: "each count its own have write it somewhere and roles page shows it".

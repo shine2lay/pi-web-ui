@@ -75,6 +75,7 @@ import type {
 	UiTaskQueuePlan,
 	UiTaskQueueTask,
 	UiTaskQueueWait,
+	UiTaskParent,
 	UiTaskProfile,
 } from "./protocol.js";
 
@@ -139,6 +140,47 @@ const cap = (s: string, max: number) => (s.length > max ? `${s.slice(0, max)}…
 const str = (x: unknown, max: number) => (typeof x === "string" ? cap(x, max) : "");
 const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : 0);
 const isId = (x: unknown): x is number => typeof x === "number" && Number.isInteger(x) && x > 0;
+
+/** roles-panel: pi-queue's normInitiative: a saved project or initiative id, checked (INITIATIVE_MAX, INITIATIVE_ID). */
+function parentId(raw: unknown): string | undefined {
+	if (typeof raw !== "string") return undefined;
+	const id = raw.trim();
+	return id.length <= 60 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id) ? id : undefined;
+}
+
+/** roles-panel: pi-queue's nextParent: a project, initiative or standalone given replaces the parent; an empty
+ *  project or initiative, or standalone false, clears it only when that is what it had; nothing given keeps it. */
+function nextParent(
+	cur: UiTaskParent | undefined,
+	given: { project?: string; initiative?: string; standalone?: boolean },
+): UiTaskParent | undefined {
+	const project = parentId(given.project);
+	if (project) return { project };
+	const initiative = parentId(given.initiative);
+	if (initiative) return { initiative };
+	if (given.standalone === true) return { standalone: true };
+	if (cur && "project" in cur && given.project !== undefined) return undefined;
+	if (cur && "initiative" in cur && given.initiative !== undefined) return undefined;
+	if (cur && "standalone" in cur && given.standalone === false) return undefined;
+	return cur;
+}
+
+/** roles-panel: an update's parent fields as pi-queue reads them (a text that isn't a short id or "" is ignored). */
+function parentGiven(op: Record<string, unknown>): { project?: string; initiative?: string; standalone?: boolean } {
+	const text = (x: unknown) => (typeof x === "string" && (!x.trim() || parentId(x)) ? x.trim() : undefined);
+	const project = text(op.project);
+	const initiative = text(op.initiative);
+	return {
+		...(project !== undefined ? { project } : {}),
+		...(initiative !== undefined ? { initiative } : {}),
+		...(typeof op.standalone === "boolean" ? { standalone: op.standalone } : {}),
+	};
+}
+
+function setParent(task: Task, parent: UiTaskParent | undefined): void {
+	if (parent) task.parent = parent;
+	else delete task.parent;
+}
 
 function planOf(raw: unknown): UiTaskQueuePlan {
 	const p = (raw ?? {}) as Record<string, unknown>;
@@ -494,6 +536,14 @@ function apply(s: State, raw: unknown): void {
 		if (s.tasks.some((t) => t.id === op.id)) return;
 		const task: Task = { id: op.id, plan: planOf(op.plan), status: "ready", addedAt: num(op.ts) };
 		if (op.op === "add" && (op.approval === "dialog" || op.approval === "auto")) task.approval = op.approval;
+		setParent(
+			task,
+			nextParent(undefined, {
+				...(typeof op.project === "string" ? { project: op.project } : {}),
+				...(typeof op.initiative === "string" ? { initiative: op.initiative } : {}),
+				standalone: op.standalone === true,
+			}),
+		);
 		const touches = normTouches(op.touches);
 		if (touches) task.touches = touches;
 		const after = normAfter(op.after, op.id);
@@ -526,6 +576,7 @@ function apply(s: State, raw: unknown): void {
 		case "update": {
 			task.plan = planOf(op.plan);
 			task.approval = op.approval === "dialog" || op.approval === "auto" ? op.approval : undefined;
+			setParent(task, nextParent(task.parent, parentGiven(op)));
 			const touches = normTouches(op.touches);
 			if (touches) task.touches = touches;
 			// queue-side-by-side: after is replaced when given ([] clears it), kept when not.

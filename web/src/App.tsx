@@ -876,6 +876,12 @@ export function App() {
 	);
 	// roles-overview: "About & rules": Settings -> Identities at that role.
 	const [settingsRole, setSettingsRole] = useState<{ id: string; seq: number } | null>(null);
+	// roles-panel: a role panel's "About & rules" opens it again.
+	const aboutFromRoles = useCallback((roleId: string) => {
+		setSettingsRole((prev) => ({ id: roleId, seq: (prev?.seq ?? 0) + 1 }));
+		setSettingsInitialSection("identities");
+		setSettingsOpen(true);
+	}, []);
 
 	// 插件视图桥：插件无 chat 上下文，通过窗口事件请求在可见终端执行命令
 	// （与 SCM 面板同款：已有同名 tab 原地重跑，否则新建并自动切到终端视图）。
@@ -2376,7 +2382,12 @@ export function App() {
 				<div className={`view-pane roles-pane ${view === "roles" ? "" : "hidden"}`}>
 					{(rolesLoaded || view === "roles") && (
 						<Suspense fallback={null}>
-							<RolesUsefulView active={view === "roles"} phone={isMobile} onOpen={openFromRolesPage} />
+							<RolesUsefulView
+								active={view === "roles"}
+								phone={isMobile}
+								onOpen={openFromRolesPage}
+								onAbout={aboutFromRoles}
+							/>
 						</Suspense>
 					)}
 				</div>

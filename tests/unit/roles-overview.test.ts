@@ -923,6 +923,116 @@ describe("pushing it", () => {
 	});
 });
 
+// roles-panel: each task's place (its own queue entry), a lead block's who/what/when, and the work registry.
+describe("where tasks belong (roles-panel)", () => {
+	const workLog = (events: Record<string, unknown>[]) => {
+		const file = join(dir, "work", "events.jsonl");
+		mkdirSync(join(dir, "work"), { recursive: true });
+		writeFileSync(
+			file,
+			events.map((e, i) => JSON.stringify({ v: 1, seq: i + 1, ts: T0, by: "ops", ...e })).join("\n") + "\n",
+		);
+		return file;
+	};
+	it("each task carries the parent its queue entry names; a lead block carries its lead, owes, due, reminders, chain", async () => {
+		const home = transcript("ops-home", [
+			queue({ op: "add", id: 1, plan: plan("One"), project: "roles-page", touches: ["a"] }),
+			queue({ op: "add", id: 2, plan: plan("Two"), initiative: "team-in-temper", touches: ["b"] }),
+			queue({ op: "add", id: 3, plan: plan("Three"), standalone: true, touches: ["c"] }),
+			queue({ op: "add", id: 4, plan: plan("Four"), touches: ["d"] }),
+			queue({ op: "run" }),
+			queue({ op: "start", id: 1, lane: true }),
+			queue(
+				{
+					op: "block",
+					id: 1,
+					lead: "security",
+					owes: "a review of the new panel",
+					checkpoint: T0 + 90 * MIN,
+					start: 0,
+					tries: 0,
+				},
+				T0 + 10 * MIN,
+			),
+			queue({ op: "remind", id: 1, since: T0 + 10 * MIN, n: 1 }, T0 + 90 * MIN),
+			queue({ op: "chain", id: 1, since: T0 + 10 * MIN, chain: ["architecture"] }, T0 + 90 * MIN),
+		]);
+		const f = fake([role("ops", home)]);
+		const o = await read(f);
+		const q = byId(o, "ops").queue;
+		const all = [...(q?.active ?? []), ...(q?.queued ?? [])];
+		const t = (id: number) => all.find((x) => x.id === id);
+		expect(t(1)?.parent).toEqual({ project: "roles-page" });
+		expect(t(1)?.owing).toEqual({
+			lead: "security",
+			owes: "a review of the new panel",
+			due: T0 + 90 * MIN,
+			reminders: 1,
+			chain: ["architecture"],
+		});
+		expect(t(2)?.parent).toEqual({ initiative: "team-in-temper" });
+		expect(t(3)?.parent).toEqual({ standalone: true });
+		expect(t(4)?.parent).toBeUndefined();
+		// Only a blocked task with a lead says who it waits on.
+		for (const id of [2, 3, 4]) expect(t(id)?.owing).toBeUndefined();
+		// No registry file set: no work records at all.
+		expect(o.work).toBeUndefined();
+	});
+	it("a block whose chain isn't recorded yet has no chain; its lead's id comes as written", async () => {
+		const home = transcript("ops-home", [
+			queue({ op: "add", id: 1, plan: plan("One") }),
+			queue({ op: "run" }),
+			queue({ op: "start", id: 1, lane: true }),
+			queue({ op: "block", id: 1, lead: "temper", start: 0, tries: 0 }, T0 + 10 * MIN),
+		]);
+		const o = await read(fake([role("ops", home)]));
+		expect(byId(o, "ops").queue?.active[0]?.owing).toEqual({ lead: "temper", reminders: 0 });
+	});
+	it("reads the registry's initiatives and projects when the host names its log; none yet is empty", async () => {
+		const f = fake([role("ops")]);
+		const file = join(dir, "work", "events.jsonl");
+		f.host.workFile = () => file;
+		expect((await read(f)).work).toEqual({ initiatives: [], projects: [] });
+		workLog([
+			{
+				op: "initiative.create",
+				id: "team-in-temper",
+				name: "Team in Temper",
+				outcome: "o",
+				doneWhen: ["It runs"],
+				lead: "architecture",
+			},
+			{
+				op: "project.create",
+				id: "roles-page",
+				name: "Roles page",
+				outcome: "o",
+				doneWhen: ["Panel", "Map"],
+				lead: "ops",
+				initiative: "team-in-temper",
+			},
+			{ op: "project.met", id: "roles-page", item: "panel", proof: "commit" },
+		]);
+		const o = await new RolesOverviewReader(f.host).read();
+		expect(o.work).toEqual({
+			initiatives: [
+				{ id: "team-in-temper", name: "Team in Temper", lead: "architecture", status: "active", items: 1, met: 0 },
+			],
+			projects: [
+				{
+					id: "roles-page",
+					name: "Roles page",
+					lead: "ops",
+					status: "active",
+					initiative: "team-in-temper",
+					items: 2,
+					met: 1,
+				},
+			],
+		});
+	});
+});
+
 describe("nothing is changed", () => {
 	it("leaves every transcript and the job's files exactly as they were", async () => {
 		const home = transcript("still", [needs("Pick", T0), queue({ op: "add", id: 1, plan: plan("One") })]);

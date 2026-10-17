@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAppField } from "../app-globals";
 import { useT, type Translate } from "../i18n";
+import { projectRolePanel } from "../roles-panel-model";
 import { useRoles } from "../roles-state";
 import {
 	projectUsefulRoles,
@@ -18,10 +19,13 @@ import {
 	type UsefulRole,
 	type UsefulRoles,
 } from "../roles-useful-model";
+import { RolePanelDialog } from "./RolePanel";
 
 type Key = Parameters<Translate>[0];
 /** Opens an existing chat (App's openFromRoles: switch_session + maybe one item). */
 export type OpenChat = (target: UsefulOpenTarget) => void;
+/** roles-panel: opens a role's panel; `from` gets the focus back when it closes by itself. */
+export type OpenDetails = (roleId: string, from: HTMLElement) => void;
 
 const SOURCE_KEYS = {
 	awaiting: "ruAwaiting",
@@ -79,13 +83,50 @@ function useNow(active: boolean): number {
 	return now;
 }
 
-/** The sole store boundary. No raw DTO reaches any of the presentation children. */
-export function RolesUsefulView({ active, phone, onOpen }: { active: boolean; phone: boolean; onOpen: OpenChat }) {
+/** The sole store boundary. No raw DTO reaches any of the presentation children (the role panel too gets
+ *  only its closed projection). */
+export function RolesUsefulView({
+	active,
+	phone,
+	onOpen,
+	onAbout,
+}: {
+	active: boolean;
+	phone: boolean;
+	onOpen: OpenChat;
+	/** roles-panel: Settings, Identities, at this role (its About page and rules). */
+	onAbout: (roleId: string) => void;
+}) {
 	const state = useRoles(active ? "full" : "off");
 	const connection = useAppField("status");
 	const now = useNow(active);
+	const [open, setOpen] = useState<{ id: string; from: HTMLElement } | null>(null);
+	const onDetails = useCallback<OpenDetails>((id, from) => setOpen({ id, from }), []);
+	const close = useCallback(
+		(back: boolean) => {
+			const from = open?.from;
+			setOpen(null);
+			if (back && from) requestAnimationFrame(() => from.focus());
+		},
+		[open],
+	);
+	// A role that left the snapshot (or a page you left) has no panel; it stays closed if the role comes back.
+	const panel = active && open ? projectRolePanel(state, open.id) : null;
+	const gone = open !== null && panel === null;
+	useEffect(() => {
+		if (gone) setOpen(null);
+	}, [gone]);
 	return (
-		<RolesUsefulContent model={projectUsefulRoles(state, connection, now)} phone={phone} now={now} onOpen={onOpen} />
+		<>
+			<RolesUsefulContent
+				model={projectUsefulRoles(state, connection, now)}
+				phone={phone}
+				now={now}
+				onOpen={onOpen}
+				onDetails={onDetails}
+			/>
+			{panel && <RolePanelDialog panel={panel} now={now} onOpen={onOpen} onAbout={onAbout} onClose={close} />}
+		</>
 	);
 }
 
@@ -94,11 +135,13 @@ export function RolesUsefulContent({
 	phone,
 	now,
 	onOpen,
+	onDetails,
 }: {
 	model: UsefulRoles;
 	phone: boolean;
 	now: number;
 	onOpen: OpenChat;
+	onDetails?: OpenDetails;
 }) {
 	const t = useT();
 	return (
@@ -114,7 +157,7 @@ export function RolesUsefulContent({
 			{model.lastReceived && <p className="roles-useful-stale">{t("ruLastReceived")}</p>}
 			<div className="roles-useful-grid">
 				{model.roles.map((role) => (
-					<RoleCard key={role.roleId} role={role} onOpen={onOpen} />
+					<RoleCard key={role.roleId} role={role} onOpen={onOpen} onDetails={onDetails} />
 				))}
 			</div>
 		</section>
@@ -215,12 +258,27 @@ function queueText(role: UsefulRole, t: Translate): string {
 		? t("ruQueueStopped")
 		: t("ruQueueStoppedWhy", { why: t(STOP_KEYS[role.stopReason]) });
 }
-function RoleCard({ role, onOpen }: { role: UsefulRole; onOpen: OpenChat }) {
+function RoleCard({ role, onOpen, onDetails }: { role: UsefulRole; onOpen: OpenChat; onDetails?: OpenDetails }) {
 	const t = useT();
 	const noQueue = role.counts.done === "no-queue";
 	return (
 		<article className="roles-useful-card">
-			<h2>{role.roleLabel}</h2>
+			<div className="roles-useful-card-head">
+				<h2>{role.roleLabel}</h2>
+				{onDetails && (
+					<button
+						type="button"
+						className="roles-useful-open roles-useful-details"
+						onClick={(e) => onDetails(role.roleId, e.currentTarget)}
+					>
+						{t("rpDetails")}
+						<span className="roles-useful-sr">
+							{" "}
+							{t("rpOfRole")} {role.roleLabel}
+						</span>
+					</button>
+				)}
+			</div>
 			{role.labelTruncated && <p className="roles-useful-note">{t("ruLabelClipped")}</p>}
 			{role.partial && <p className="roles-useful-note">{t("ruPartialRole")}</p>}
 			<p className="roles-useful-queue">
