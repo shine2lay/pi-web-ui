@@ -470,8 +470,6 @@ describe("O0 owner challenge handler: value, time and single use (B4, B5)", () =
 			"server/roles-artifact.ts",
 			"server/roles-gates.ts",
 			"server/roles-gates-native.ts",
-			// IB3 remains unreachable from production; its own all-roots guard enforces this.
-			"server/initiatives-adapters.ts",
 		]);
 		const files = ["server", "web/src", "plugins", "extensions", "bin", "desktop"].flatMap(sources);
 		expect(files).toContain("server/index.ts");

@@ -877,8 +877,6 @@ it("S03/S08 no first production importer, registry, instance, timer, env fixture
 		"server/roles-owner-challenge.ts",
 		"server/roles-owner-native.ts",
 		"server/roles-contact.ts",
-		// IB3 is another inert consumer, not a production entrypoint (Ops #167 H5).
-		"server/initiatives-adapters.ts",
 	]);
 	const importers: string[] = [];
 	function walk(dir: string) {
