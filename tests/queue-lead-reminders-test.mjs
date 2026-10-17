@@ -8,7 +8,10 @@
  * (PI_WEB_QUEUE_BLOCKS_MS), the first reminder 12 s after a block starts and the next 60 s later
  * (PI_QUEUE_TEST_LEAD_MS), need pokes at 5, 6 and 7 s (PI_QUEUE_TEST_BLOCK_POKES_MS), so a task chat poking
  * itself about a lead block would show; the unit tests check the real hour and two hours on fake clocks.
- *  1. The owner pauses role messages. #1 blocks on ops (queue_blocked lead + owes): its checkpoint passes
+ * S's queue runs by Auto start, as the role queues do live: its "run" is bound to S's own chat, and the
+ * server's check has to count that queue as running (Ops #199 H-LEAD-3: it didn't, so no reminder went out).
+ *  1. The owner pauses role messages; Auto start starts S's queue when S opens. #1 blocks on ops
+ *     (queue_blocked lead + owes): its checkpoint passes
  *     and nothing goes anywhere: no card in O, no line in the server's ledger, no remind op, no poke in
  *     #1's own chat.
  *  2. O is busy in a long turn; the owner resumes role messages. The reminder goes out within seconds (the
@@ -85,6 +88,8 @@ const plan = (title) => ({
 	verify: "Open the page and run the existing checks",
 	mustNot: "Touch anything else on the page",
 });
+/** S's session id (its file name): Auto start's run carries it. */
+const S_ID = "01a0f000-0000-7000-8000-0000000000e1";
 const T1 = "Wait for admission";
 const T2 = "Wait for review";
 const OWES = { [T1]: "admission for the fresh diagnosis", [T2]: "a review of the patch" };
@@ -104,7 +109,7 @@ function seed({ root, agentDir, workdir: wd }) {
 	writeFileSync(join(agentDir, "pi-queue.json"), JSON.stringify({ stalledAfterMinutes: 0 }));
 	const dir = join(agentDir, "sessions", `--${wd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`);
 	mkdirSync(dir, { recursive: true });
-	files.S = join(dir, "2026-10-01T10-01-00-000Z_01a0f000-0000-7000-8000-0000000000e1.jsonl");
+	files.S = join(dir, `2026-10-01T10-01-00-000Z_${S_ID}.jsonl`);
 	files.O = join(dir, "2026-10-01T10-02-00-000Z_01a0f000-0000-7000-8000-0000000000e2.jsonl");
 	const usage = {
 		input: 1,
@@ -173,6 +178,8 @@ function seed({ root, agentDir, workdir: wd }) {
 		{ queue: { op: "lanes", n: 2 } },
 		{ queue: { op: "add", id: 1, plan: plan(T1), touches: ["s1 repo"] } },
 		{ queue: { op: "add", id: 2, plan: plan(T2), touches: ["s2 repo"], after: [1] } },
+		// Auto start on (the owner's switch), so the queue starts itself with a run bound to this chat.
+		{ queue: { op: "autonomy", queueId: S_ID, setting: "autoStart", value: true } },
 	]);
 	write(files.O, [{ identity: "ops" }, { name: "ops home" }, { user: "ops home starts" }, { assistant: "ok" }]);
 	idDir = join(root, "identities");
@@ -445,11 +452,20 @@ async function openPage(clientId, file) {
 let W = null;
 let W2 = null;
 try {
-	// 1. The owner pauses role messages; task #1 blocks on ops; its checkpoint passes; nothing goes anywhere.
+	// 1. The owner pauses role messages; Auto start starts S's queue; task #1 blocks on ops; its checkpoint
+	// passes; nothing goes anywhere.
 	W = await connect("lr-s");
-	await W.open(files.S);
 	check("the owner pauses role messages", await W.pause(true));
-	await W.prompt("/queue start");
+	await W.open(files.S);
+	const runs = await waitFor(() => {
+		const r = opsIn(files.S).filter((o) => o.op === "run");
+		return r.length ? r : null;
+	}, 30_000);
+	check(
+		"Auto start starts S's queue with a run bound to S's own chat (as the live role queues run)",
+		!!runs && runs.every((o) => o.queueId === S_ID),
+		JSON.stringify(runs?.map((o) => ({ bound: o.queueId === S_ID, any: !!o.queueId })) ?? null),
+	);
 	const blocked1 = await waitFor(() => statusIn(files.S, 1) === "blocked" && seen.blockResults.has(T1), 60_000);
 	if (
 		!check(

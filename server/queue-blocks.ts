@@ -281,7 +281,10 @@ export function localDay(ms: number): string {
 /** What the check needs from the server. */
 export interface QueueBlocksHost {
 	now(): number;
-	/** A chat's queue entries; null when its transcript is gone. Throws when it can't be read. */
+	/**
+	 * A chat's queue entries, its session header first (it binds Auto start's run: taskQueueAll); null when its
+	 * transcript is gone. Throws when it can't be read.
+	 */
 	readQueue(file: string): Promise<TaskQueueEntryLike[] | null>;
 	/** Its transcript's size and last change (cache key); undefined when it's gone. */
 	stamp(file: string): { size: number; mtimeMs: number } | undefined;

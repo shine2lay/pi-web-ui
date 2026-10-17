@@ -715,12 +715,38 @@ export async function reportReplyText(
 	};
 }
 
-/** pi-queue's entries in a transcript (file order). */
-export async function queueEntriesOf(file: string): Promise<TaskQueueEntryLike[]> {
+/**
+ * pi-queue's entries in a transcript (file order).
+ * queue-lead-reminders: `withHeader`: the chat's session header first, when the file starts with one (the SDK's
+ * rule: the first line that parses to a value), as `{ type: "session", id }`; taskQueueAll binds the queue to it.
+ */
+export async function queueEntriesOf(file: string, withHeader = false): Promise<TaskQueueEntryLike[]> {
 	const out: TaskQueueEntryLike[] = [];
-	await eachLineWith(file, 0, `"${TASK_QUEUE_ENTRY_TYPE}"`, (entry) => {
-		const e = entry as TaskQueueEntryLike;
-		if (e?.type === "custom" && e.customType === TASK_QUEUE_ENTRY_TYPE) out.push(e);
+	const needle = `"${TASK_QUEUE_ENTRY_TYPE}"`;
+	let header = withHeader;
+	await eachLine(file, 0, (line) => {
+		if (header && line.trim()) {
+			let h: { type?: unknown; id?: unknown } | undefined;
+			try {
+				h = JSON.parse(line) as typeof h;
+			} catch {
+				h = undefined; // unparsable: keep looking, as the SDK does
+			}
+			if (h) {
+				header = false;
+				if (h.type === "session" && typeof h.id === "string") {
+					out.push({ type: "session", id: h.id });
+					return false;
+				}
+			}
+		}
+		if (!line.includes(needle)) return false;
+		try {
+			const e = JSON.parse(line) as TaskQueueEntryLike;
+			if (e?.type === "custom" && e.customType === TASK_QUEUE_ENTRY_TYPE) out.push(e);
+		} catch {
+			// a half-written last line: skip it
+		}
 		return false;
 	});
 	return out;

@@ -16511,7 +16511,7 @@ export class AgentService {
 		// queue-blocked: the background check for blocked tasks and outside afters (queue-blocks.ts).
 		const blocks = new QueueBlocks({
 			now: () => Date.now(),
-			readQueue: async (file) => (existsSync(file) ? await queueEntriesOf(file) : null),
+			readQueue: async (file) => (existsSync(file) ? await queueEntriesOf(file, true) : null),
 			stamp: (file) => {
 				try {
 					const st = statSync(file);

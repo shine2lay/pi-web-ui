@@ -5,6 +5,9 @@
  * pi-queue saves them), the clock is fake; the chats themselves are covered by
  * tests/queue-lead-reminders-test.mjs (sealed E2E).
  */
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { installQueueHost, parseLeadRemind, QUEUE_HOST_KEY, type QueueHost } from "../../server/queue-host.js";
 import {
@@ -21,7 +24,8 @@ import {
 	RENUDGE_MS,
 } from "../../server/queue-blocks.js";
 import type { UiTaskQueue } from "../../server/protocol.js";
-import { taskQueueFromEntries } from "../../server/task-queue.js";
+import { queueEntriesOf } from "../../server/role-messages.js";
+import { taskQueueAll, taskQueueFromEntries } from "../../server/task-queue.js";
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -55,6 +59,8 @@ class World {
 	/** Oct 15, 23:03 machine time: when Systems #15 blocked on Ops's admission. */
 	now = new Date(2026, 9, 15, 23, 3).getTime();
 	files = new Map<string, Record<string, unknown>[]>();
+	/** A chat file's session id (its header line), when the test gives it one. */
+	headers = new Map<string, string>();
 	versions = new Map<string, number>();
 	commands: [string, string][] = [];
 	logs: string[] = [];
@@ -79,7 +85,12 @@ class World {
 		return {
 			now: () => this.now,
 			readQueue: async (f) =>
-				this.files.has(f) ? this.files.get(f)!.map((data) => ({ type: "custom", customType: "queue", data })) : null,
+				this.files.has(f)
+					? [
+							...(this.headers.has(f) ? [{ type: "session", id: this.headers.get(f) }] : []),
+							...this.files.get(f)!.map((data) => ({ type: "custom", customType: "queue", data })),
+						]
+					: null,
 			stamp: (f) =>
 				this.files.has(f) ? { size: this.files.get(f)!.length, mtimeMs: this.versions.get(f)! } : undefined,
 			runCommand: async (f, line) => {
@@ -519,6 +530,97 @@ describe("QueueBlocks: reminding the lead", () => {
 		blocks.enrich(A, q);
 		expect(q.tasks[0].block!.nextRemindAt).toBeUndefined();
 		expect(q.tasks[0].block).toMatchObject({ nextPokeAt: w.now + 2 * HOUR, nextIsAsk: true });
+	});
+});
+
+/**
+ * The live miss of 2026-10-16: Ops's queue runs by Auto start, whose "run" carries the chat's session id. The
+ * background check read the queue without that id, took it as stopped and reminded nobody (Ops #201, #188 and
+ * #169 passed their checkpoints unanswered). It reads the chat's header now, as pi-queue and the panel do.
+ */
+describe("Auto start's run, bound to the queue's chat", () => {
+	/** Queue A as Auto start runs it; `header`: the session id its file starts with (none: no header). */
+	function autoStarted(header: string | undefined) {
+		const w = new World();
+		if (header) w.headers.set(A, header);
+		w.ops(
+			A,
+			{ op: "add", id: 1, plan: plan("Ops #201") },
+			{ op: "run", queueId: "q-ops" },
+			{ op: "start", id: 1, lane: true },
+			{ op: "chat", id: 1, file: T, title: "Queue #1" },
+		);
+		return { w, blocks: new QueueBlocks(w.host()) };
+	}
+
+	it("taskQueueAll: a run bound to the chat's own session counts, one bound to another chat doesn't", () => {
+		const entries = (header: string | undefined, run: Record<string, unknown>) => [
+			...(header ? [{ type: "session", id: header }] : []),
+			{ type: "custom", customType: "queue", data: { v: 1, op: "add", id: 1, plan: plan("x"), ts: 1 } },
+			{ type: "custom", customType: "queue", data: { v: 1, ...run, ts: 2 } },
+		];
+		expect(taskQueueAll(entries("q-ops", { op: "run", queueId: "q-ops" })).running).toBe(true);
+		// A copy or fork of the chat (another session id), or a read without the header: not started here.
+		expect(taskQueueAll(entries("q-copy", { op: "run", queueId: "q-ops" })).running).toBe(false);
+		expect(taskQueueAll(entries(undefined, { op: "run", queueId: "q-ops" })).running).toBe(false);
+		// Start (/queue start) writes a run bound to no chat: it counts, header or not (unchanged).
+		expect(taskQueueAll(entries(undefined, { op: "run" })).running).toBe(true);
+		expect(taskQueueAll(entries("q-ops", { op: "run" })).running).toBe(true);
+		// Only the first entry is the header.
+		const late = entries(undefined, { op: "run", queueId: "q-ops" });
+		expect(taskQueueAll([...late, { type: "session", id: "q-ops" }]).running).toBe(false);
+	});
+
+	it("Ops #201's shape: blocked on Ops at 15:09:30, checkpoint 16:00, Ops is reminded within a minute of it", async () => {
+		const { w, blocks } = autoStarted("q-ops");
+		w.now = new Date(2026, 9, 16, 15, 9, 30).getTime();
+		const checkpoint = new Date(2026, 9, 16, 16, 0).getTime();
+		w.ops(A, leadBlock(w, "ops", { checkpoint }));
+		const since = sinceOf(w);
+		blocks.watchQueue(A);
+		await run(w, blocks, 60);
+		expect(w.to(O)).toEqual([leadCommand(1, since, 1, A)]);
+		expect(w.ledger).toHaveLength(1);
+		expect(w.ledger[0].at - checkpoint).toBeGreaterThanOrEqual(0);
+		expect(w.ledger[0].at - checkpoint).toBeLessThan(MIN);
+		expect(w.to(T)).toEqual([]);
+	});
+
+	it("a copy of that chat (another session id) doesn't run: nothing goes to the lead", async () => {
+		const { w, blocks } = autoStarted("q-copy");
+		w.ops(A, leadBlock(w));
+		const since = sinceOf(w);
+		blocks.watchQueue(A);
+		await run(w, blocks, 3 * 60);
+		expect(w.to(O)).toEqual([]);
+		expect(w.ledger).toEqual([]);
+		expect(await blocks.remindLead({ lead: "ops", queue: A, id: 1, since, n: 1 })).toEqual({
+			held: "the queue is stopped",
+		});
+	});
+
+	it("queueEntriesOf with the header: the session header first, then only the queue's entries", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "queue-entries-"));
+		try {
+			const f = join(dir, "chat.jsonl");
+			const run = { type: "custom", customType: "queue", data: { v: 1, op: "run", queueId: "q-ops", ts: 1 } };
+			const header = { type: "session", version: 3, id: "q-ops", timestamp: "t", cwd: "/" };
+			const lines = [
+				"",
+				JSON.stringify(header),
+				JSON.stringify({ type: "message", message: { role: "user", content: '"queue"' } }),
+				JSON.stringify(run),
+				'{"type":"custom","customType":"queue"',
+			];
+			writeFileSync(f, lines.join("\n"));
+			expect(await queueEntriesOf(f, true)).toEqual([{ type: "session", id: "q-ops" }, run]);
+			expect(await queueEntriesOf(f)).toEqual([run]);
+			// A file that doesn't start with a session header has none.
+			writeFileSync(f, [JSON.stringify(run), JSON.stringify({ type: "session", id: "late" })].join("\n"));
+			expect(await queueEntriesOf(f, true)).toEqual([run]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
 

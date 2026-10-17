@@ -862,6 +862,8 @@ export interface TaskQueueEntryLike {
 	type: string;
 	customType?: string;
 	data?: unknown;
+	/** queue-lead-reminders: a session header's id (type "session"; see taskQueueAll). */
+	id?: unknown;
 }
 
 /**
@@ -958,6 +960,11 @@ export type TaskQueueTaskAny = Omit<UiTaskQueueTask, "status"> & {
 /**
  * queue-blocked: every task in a queue as replayed (removed ones and every done one too), and in a
  * task's own chat the queue it came from. For looking up tasks other tasks wait on (queue-blocks.ts).
+ *
+ * queue-lead-reminders: `entries` as the chat's file holds them, its session header first when it has one
+ * (queueEntriesOf with the header). The header binds the queue to that chat, as pi-queue's own replay and the
+ * Queue panel do: Auto start's "run" carries the chat's session id, so a queue Auto start runs counts as
+ * running here too, and a copy or fork of the chat (another session id) doesn't.
  */
 export function taskQueueAll(entries: Iterable<TaskQueueEntryLike>): {
 	tasks: TaskQueueTaskAny[];
@@ -968,7 +975,10 @@ export function taskQueueAll(entries: Iterable<TaskQueueEntryLike>): {
 	running: boolean;
 } {
 	const s: State = { tasks: [], running: false, lanes: TASK_QUEUE_DEFAULT_LANES, autoApprove: false, autoStart: false };
+	let first = true;
 	for (const e of entries) {
+		if (first && e.type === "session" && typeof e.id === "string" && e.id) s.queueId = e.id;
+		first = false;
 		if (e.type === "custom" && e.customType === TASK_QUEUE_ENTRY_TYPE) apply(s, e.data);
 	}
 	return {
