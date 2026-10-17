@@ -283,6 +283,12 @@ export const AGENT_TOOL_CATALOG: AgentToolEntry[] = [
 	},
 ];
 
+/** Pi built-in tools that only run on Windows. Pi's powershell tool refuses every call elsewhere
+ *  (pi-coding-agent utils/shell.js getPowerShellConfig: "The powershell tool is only available on
+ *  Windows."), so off Windows the gating never puts it in a chat's active tools: it could only fail
+ *  and would ride along in every request (owner, 2026-10-17: "Turn off PowerShell tool"). */
+export const WINDOWS_ONLY_TOOL_NAMES = ["powershell"] as const;
+
 /** SDK 核心内置工具名（可被门控显式禁用或被预设白名单过滤）。 */
 export const CORE_BUILTIN_TOOL_NAMES = ["bash", "read", "edit", "write"] as const;
 
@@ -376,7 +382,12 @@ export function setAgentToolsEnabled(session: ActiveToolSet, names: readonly str
  * 复原基线取 session.getAllTools()（全集，含被禁用的）——基线里没有的工具不会凭空发明。
  * Session 未就绪时静默跳过（下次创建/reload 会再应用）。
  */
-export function applyAgentToolsGating(session: ActiveToolSet, disabled: readonly string[], preset?: string): void {
+export function applyAgentToolsGating(
+	session: ActiveToolSet,
+	disabled: readonly string[],
+	preset?: string,
+	platform: NodeJS.Platform = process.platform,
+): void {
 	try {
 		const off = new Set(disabled);
 		const allNames = session.getAllTools().map((t) => t.name);
@@ -389,6 +400,7 @@ export function applyAgentToolsGating(session: ActiveToolSet, disabled: readonly
 			if (off.has(core)) names.delete(core);
 			else if (allNames.includes(core)) names.add(core);
 		}
+		if (platform !== "win32") for (const name of WINDOWS_ONLY_TOOL_NAMES) names.delete(name);
 		const filtered = filterToolsByPreset(names, preset);
 		session.setActiveToolsByName(filtered);
 	} catch {

@@ -190,6 +190,18 @@ describe("tool_manage 出入口", () => {
 		);
 		expect(s2.peek()).toEqual(["bash"]);
 	});
+
+	it("powershell stays out of the active tools off Windows (Pi's tool only runs on Windows)", () => {
+		const linux = fakeSet(["bash", "read", "powershell"]);
+		applyAgentToolsGating(linux, [], undefined, "linux");
+		expect(linux.peek()).not.toContain("powershell");
+		expect(linux.peek()).toContain("bash");
+		expect(linux.peek()).toContain("read");
+		const windows = fakeSet(["bash", "powershell"]);
+		applyAgentToolsGating(windows, [], undefined, "win32");
+		expect(windows.peek()).toContain("powershell");
+		expect(windows.peek()).toContain("bash");
+	});
 });
 
 describe("预设语义总表（见 tool-manager.ts 语义注释）", () => {
