@@ -468,6 +468,7 @@ import {
 	runAt,
 	runInfo,
 } from "./quiet-turns.js";
+import { continueRecentRegular, recentRegularFile } from "./recent-session.js";
 import { sessionIndex } from "./session-index.js";
 import { ParticipantLifecycle, type ParticipantTarget, type ParticipantLease } from "./participant-lifecycle.js";
 import { identityIdOnBranch } from "./identities.js";
@@ -4544,15 +4545,17 @@ export class ClientSession {
 		// reload-adopt: opts.blank = 跳过磁盘恢复（调用方要接管共享表里已开的那条）。
 		// issue #235：坏转录（重复压缩标记成环）修一次再试，否则整项目首屏
 		// "Failed to initialize session"。
+		// recent-chat-pick: never through a link in the sessions folder (see recent-session.ts); #235's repair
+		// targets that same file.
 		const opened = await cs.openManagerAndRuntime(
-			() => (opts?.blank ? SessionManager.create(cwd) : SessionManager.continueRecent(cwd)),
+			() => (opts?.blank ? SessionManager.create(cwd) : continueRecentRegular(cwd)),
 			(m) =>
 				createAgentSessionRuntime(cs.makeRuntimeFactory(terminals, undefined, conversationId), {
 					cwd,
 					agentDir,
 					sessionManager: m,
 				}),
-			async () => (await sessionIndex.listProject(cwd))[0]?.path,
+			async () => recentRegularFile(cwd),
 		);
 		const runtime = opened.runtime;
 		if (opened.repair) {
@@ -14740,8 +14743,9 @@ export class ClientSession {
 				// 别处无可见行时不扫目录（首访切项目的常见情形零开销）。
 				if ((this.listExternalRunning?.() ?? []).length > 0) {
 					try {
-						const infos = await sessionIndex.listProject(abs, piSessionsRoot());
-						const recent = infos[0]?.path ? resolve(infos[0].path) : undefined;
+						// recent-chat-pick: the file continueRecentRegular below would reopen.
+						const file = recentRegularFile(abs);
+						const recent = file ? resolve(file) : undefined;
 						const owner = recent ? this.findSessionOwner?.(recent) : null;
 						if (owner && (owner.connected || owner.isStreaming)) {
 							resumeSkipped = owner;
@@ -14755,15 +14759,14 @@ export class ClientSession {
 				// #235：manager＋runtime 一起建，转录链损坏时修最近文件后重试一次
 				// （见 openManagerAndRuntime）。blank（别处在跑）是全新空会话，不会坏。
 				const opened = await this.openManagerAndRuntime(
-					() =>
-						resumeSkipped || (pseudo && openHere) ? SessionManager.create(abs) : SessionManager.continueRecent(abs),
+					() => (resumeSkipped || (pseudo && openHere) ? SessionManager.create(abs) : continueRecentRegular(abs)),
 					(m) =>
 						createAgentSessionRuntime(this.makeRuntimeFactory(terminals, undefined, conversationId), {
 							cwd: abs,
 							agentDir: this.agentDir,
 							sessionManager: m,
 						}),
-					async () => (await sessionIndex.listProject(abs))[0]?.path,
+					async () => recentRegularFile(abs),
 				);
 				const newRuntime = opened.runtime;
 				if (opened.repair) {

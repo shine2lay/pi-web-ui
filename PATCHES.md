@@ -10,6 +10,13 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## recent-chat-pick: reopen the project's newest regular chat file, never through a link
+
+- `local` (owner 2026-10-17, dialog "Two small follow-up fixes": "Fix both here after install"; Security traced the cause in source, rm-885a66f3). A new connection reopened the project's newest chat through the SDK's `SessionManager.continueRecent`, whose `findMostRecentSession` `stat`s each `.jsonl` following links. A link in the sessions folder to a file elsewhere could win, and the shell then wrote its model and thinking-level entries into that file. The sealed Roles page test's outside canary (`outside/private.jsonl`, linked as `sessions/linked.jsonl`) changed in 1 of 4 runs. The live sessions folders had no links (checked 2026-10-17 00:30). Hypothesis in `docs/roles-overview.md`, "Follow-up round" (added by roles-panel-fixes).
+- `server/recent-session.ts` (new): `newestSessionFile(dir)` takes only regular files directly in the folder (`lstat`), newest modification time first, the first whose header reads by the SDK's rule (first truthy JSON line within 1 MiB, type `session` with a string id; opened non-blocking, `O_NOFOLLOW`, `O_NOCTTY`). `continueRecentRegular(cwd)` opens that file as `continueRecent` would (`SessionManager.open(file, dir, cwd)`), else a new chat in the project's folder. `agent-service.ts`'s two openings (a new connection, switching project) use it, and #235's repair fallback and the "open elsewhere" check take the same file (`recentRegularFile`).
+- Tests: `tests/unit/recent-session.test.ts` (a newer link to an outside file never wins; FIFO, folder and folder links skipped; header rule; the reopened chat writes nothing through the link; a new chat when there is none). One test pins the SDK's own behaviour (`continueRecent` follows the link): when it fails after an SDK update, this patch may be dropped.
+- Undo: revert this commit and install with pi-web-deploy; chats reopen through the SDK's pick again.
+
 ## roles-panel: open a role to see its work, updates, 6 am report, and its tasks by initiative and project
 
 - `local` (owner 2026-10-16, dialog answers "Role panel" and "You and me, here"; built directly with the owner). The live Roles page (#190/#200) showed each role's tasks but not the role's own picture, although the feed and the work registry hold it; the old rich panel (`RolesView.tsx`) has been unmounted since f984cec2. Hypothesis and measures in `docs/roles-overview.md` ("The role panel").
