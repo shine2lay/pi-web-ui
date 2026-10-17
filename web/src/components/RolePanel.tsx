@@ -69,6 +69,21 @@ const REPORT_KEYS = {
 function pad2(n: number): string {
 	return String(n).padStart(2, "0");
 }
+/** A goal's day, "2026-10-04" or "2026-10-04T22:20" (the time left out), as "Oct 4" ("Oct 4, 2025" in
+ *  another year), in this browser's language; as written when it isn't a real day. */
+export function dayText(value: string, now: number): string {
+	const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+	if (!m) return value;
+	const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+	const date = new Date(y, mo - 1, d);
+	if (date.getFullYear() !== y || date.getMonth() !== mo - 1 || date.getDate() !== d) return value;
+	const sameYear = y === new Date(now).getFullYear();
+	return date.toLocaleDateString(
+		undefined,
+		sameYear ? { month: "short", day: "numeric" } : { month: "short", day: "numeric", year: "numeric" },
+	);
+}
+
 /** "14:05" today, else "Oct 3, 14:05" (this browser's clock). */
 function clockText(ms: number, now: number): string {
 	const d = new Date(ms);
@@ -127,8 +142,11 @@ export function RolePanelDialog({
 			}}
 		>
 			<header className="roles-panel-head">
-				<h2 id="roles-panel-title">{panel.roleLabel}</h2>
-				<p className="roles-panel-status">{t(STATUS_KEYS[panel.status])}</p>
+				{/* Status under the name, so a long name never squeezes it into broken words on a phone. */}
+				<div className="roles-panel-title">
+					<h2 id="roles-panel-title">{panel.roleLabel}</h2>
+					<p className="roles-panel-status">{t(STATUS_KEYS[panel.status])}</p>
+				</div>
 				<button ref={closeRef} type="button" className="roles-panel-close" onClick={() => onClose(true)}>
 					{t("rpClose")}
 				</button>
@@ -153,7 +171,7 @@ export function RolePanelDialog({
 						{t("rpAbout")}
 					</button>
 				</div>
-				<AboutSection panel={panel} />
+				<AboutSection panel={panel} now={now} />
 				<WorkSection panel={panel} now={now} go={go} />
 				<UpdatesSection lines={panel.lines} now={now} go={go} />
 				<ReportSection report={panel.report} now={now} go={go} />
@@ -163,7 +181,7 @@ export function RolePanelDialog({
 	);
 }
 
-function AboutSection({ panel }: { panel: RolePanel }) {
+function AboutSection({ panel, now }: { panel: RolePanel; now: number }) {
 	const t = useT();
 	return (
 		<section className="roles-panel-section" aria-labelledby="roles-panel-about">
@@ -205,8 +223,8 @@ function AboutSection({ panel }: { panel: RolePanel }) {
 							)}
 							{(g.approvedAt !== null || g.endsAt !== null) && (
 								<span className="roles-panel-from">
-									{g.approvedAt !== null && ` · ${t("rpApproved", { day: g.approvedAt })}`}
-									{g.endsAt !== null && ` · ${t("rpEnds", { day: g.endsAt })}`}
+									{g.approvedAt !== null && ` · ${t("rpApproved", { day: dayText(g.approvedAt, now) })}`}
+									{g.endsAt !== null && ` · ${t("rpEnds", { day: dayText(g.endsAt, now) })}`}
 								</span>
 							)}
 						</li>
@@ -358,7 +376,17 @@ function TaskItem({ task, now, go }: { task: PanelTask; now: number; go: (target
 				</p>
 				<p className="roles-useful-task-state">
 					<span className="roles-useful-status">{t(ROW_KEYS[task.state])}</span>
-					{task.waitsOn !== null && !owing && (
+					{/* "Waits on" is the state word itself here: what it waits on follows it, as on the card. */}
+					{task.state === "ready-after" &&
+						(task.waitsOn === null ? (
+							<span> {t("ruOtherTasks")}</span>
+						) : (
+							<>
+								{" "}
+								<q className="roles-useful-agent">{task.waitsOn}</q>
+							</>
+						))}
+					{task.state !== "ready-after" && task.waitsOn !== null && !owing && (
 						<>
 							{" · "}
 							<span className="roles-useful-status">{t("ruWaitsOn")}</span>{" "}

@@ -8,6 +8,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetAppGlobals, setAppGlobals, setAppSend } from "../../web/src/app-globals.js";
+import { dayText } from "../../web/src/components/RolePanel.js";
 import { RolesUsefulView } from "../../web/src/components/RolesUsefulView.js";
 import { en, LanguageProvider } from "../../web/src/i18n.js";
 import { plainBlock, projectRolePanel, type PanelTask, type RolePanel } from "../../web/src/roles-panel-model.js";
@@ -364,6 +365,20 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
+describe("dayText", () => {
+	const now = new Date(2026, 9, 17, 12).getTime();
+	it("a day or a day and time reads as the day; another year adds the year", () => {
+		expect(dayText("2026-10-04T22:20", now)).toBe("Oct 4");
+		expect(dayText("2026-10-04", now)).toBe("Oct 4");
+		expect(dayText("2025-12-31", now)).toBe("Dec 31, 2025");
+	});
+	it("anything that isn't a real day stays as written", () => {
+		expect(dayText("2026-02-30", now)).toBe("2026-02-30");
+		expect(dayText("2026-13-01", now)).toBe("2026-13-01");
+		expect(dayText("soon", now)).toBe("soon");
+	});
+});
+
 describe("the mounted role panel", () => {
 	it("a failed report shows fixed words, never its error text", () => {
 		mount();
@@ -457,6 +472,42 @@ describe("the mounted role panel", () => {
 		expect(dialog()).toBeNull();
 		feed();
 		expect(dialog()).toBeNull();
+	});
+
+	// Follow-up round (2026-10-17): the three display faults the live look found.
+	it("a task waiting on other tasks says what it waits on once, as its card does", () => {
+		mount();
+		const queue = {
+			running: true,
+			active: [],
+			queued: [task(8, "ready", { waitsOn: "#2 and #3" }), task(9, "ready", { waitsOn: "#4\u0007" })],
+			counts: { active: 0, queued: 2, done: 0 },
+		};
+		feed(roster({ queue }));
+		click("Details");
+		const stateOf = (id: number) =>
+			[...(dialog()?.querySelectorAll("li.roles-useful-task") ?? [])]
+				.find((li) => li.querySelector(".roles-useful-task-name")?.textContent?.startsWith(`#${id}`))
+				?.querySelector(".roles-useful-task-state")?.textContent;
+		expect(stateOf(8)).toBe("waits on #2 and #3");
+		// Unsafe text is dropped whole: it waits on tasks the panel doesn't name.
+		expect(stateOf(9)).toBe("waits on other tasks");
+	});
+
+	it("the status sits under the name; goal days read as days, not raw timestamps", () => {
+		mount();
+		feed(roster({ goals: [{ name: "Fewer stalls", approvedAt: "2026-10-04T22:20", endsAt: "2026-10-31" }] }));
+		click("Details");
+		const d = dialog() as Element;
+		expect(d.querySelector(".roles-panel-head > .roles-panel-title > h2")?.textContent).toBe("Ops / tooling");
+		expect(d.querySelector(".roles-panel-head > .roles-panel-title > .roles-panel-status")?.textContent).toBe(
+			"Working",
+		);
+		const text = d.textContent ?? "";
+		expect(text).toContain("approved Oct 4");
+		expect(text).toContain("ends Oct 31");
+		expect(text).not.toContain("2026-10-04");
+		expect(text).not.toContain("T22:20");
 	});
 
 	it("source route: agent text only as text nodes, no side-effect APIs; every new string in all eight packs", () => {

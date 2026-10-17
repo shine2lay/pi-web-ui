@@ -10,6 +10,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## roles-panel-fixes: read the Roles feed's files safely, and three panel display fixes
+
+- `local` (owner 2026-10-17, dialog "Two small follow-up fixes": "Fix both here after install"; the display faults are from the role panel's live look at 10:20). Hypothesis in `docs/roles-overview.md`, "Follow-up round".
+- `server/state-file-read.ts` (new): `STATE_READ_FLAGS` (read-only, non-blocking, `O_NOCTTY`) and `readUpTo(fh, max, chunk)`, which stops once a file passes its cap even while it grows. `work-records.ts` uses both, so it gains `O_NOCTTY` (Security's nit on 25db5d49). `roles-overview.ts`'s `JsonFile` (the 6 am report's runs, the scheduler's jobs) now opens the same way, `fstat`s the handle, takes only a regular file of at most 8 MiB (`JSON_FILE_MAX`) and closes the handle on every path. A FIFO, device or folder in its place reads as empty at once instead of stalling the Roles feed.
+- `RolePanel.tsx`: a task that waits on other tasks says "waits on #2 and #3" once, as its card row does (it showed "waits on" twice); the status word sits under the role's name, so it no longer breaks mid-word beside a long name at 390 px; goal days read "Oct 4" (`dayText`; a value that isn't a real day stays as written).
+- Tests: `tests/unit/roles-json-file.test.ts` (a FIFO and a link to `/dev/zero` read as empty at once; over 8 MiB; cached by modification time; a link to a regular file still read); `tests/unit/roles-panel.test.ts` (the waits-on line, the status under the name, goal days, `dayText`).
+- Undo: revert this commit and install with pi-web-deploy; the readers and the panel go back to 25db5d49's.
+
 ## recent-chat-pick: reopen the project's newest regular chat file, never through a link
 
 - `local` (owner 2026-10-17, dialog "Two small follow-up fixes": "Fix both here after install"; Security traced the cause in source, rm-885a66f3). A new connection reopened the project's newest chat through the SDK's `SessionManager.continueRecent`, whose `findMostRecentSession` `stat`s each `.jsonl` following links. A link in the sessions folder to a file elsewhere could win, and the shell then wrote its model and thinking-level entries into that file. The sealed Roles page test's outside canary (`outside/private.jsonl`, linked as `sessions/linked.jsonl`) changed in 1 of 4 runs. The live sessions folders had no links (checked 2026-10-17 00:30). Hypothesis in `docs/roles-overview.md`, "Follow-up round" (added by roles-panel-fixes).

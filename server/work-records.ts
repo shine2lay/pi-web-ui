@@ -13,8 +13,8 @@
  * the file again only when it changed, at most WORK_LOG_MAX bytes of it.
  */
 
-import { constants } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
+import { readUpTo, STATE_READ_FLAGS } from "./state-file-read.js";
 import type { UiWorkRecord, UiWorkRecords } from "./protocol.js";
 
 /** A log bigger than this isn't read (the page says so and shows the rest). */
@@ -200,7 +200,7 @@ export class WorkRecordsFile {
 		let fh: FileHandle;
 		try {
 			// Non-blocking, so a FIFO in the log's place can't stall the Roles look: it is refused below.
-			fh = await open(p, constants.O_RDONLY | constants.O_NONBLOCK);
+			fh = await open(p, STATE_READ_FLAGS);
 		} catch (err) {
 			this.seen = null;
 			// No log yet: nothing was ever recorded.
@@ -219,21 +219,13 @@ export class WorkRecordsFile {
 				return tooBig();
 			}
 			if (this.seen && this.seen.mtimeMs === st.mtimeMs && this.seen.size === st.size) return this.seen.value;
-			const chunks: Buffer[] = [];
-			let total = 0;
-			for (;;) {
-				const chunk = Buffer.alloc(READ_CHUNK);
-				const { bytesRead } = await fh.read(chunk, 0, READ_CHUNK, total);
-				if (bytesRead === 0) break;
-				total += bytesRead;
-				// It grew past the limit while being read.
-				if (total > WORK_LOG_MAX) {
-					this.seen = null;
-					return tooBig();
-				}
-				chunks.push(chunk.subarray(0, bytesRead));
+			const bytes = await readUpTo(fh, WORK_LOG_MAX, READ_CHUNK);
+			// It grew past the limit while being read.
+			if (bytes === null) {
+				this.seen = null;
+				return tooBig();
 			}
-			const value = workRecordsFrom(Buffer.concat(chunks, total).toString("utf8"));
+			const value = workRecordsFrom(bytes.toString("utf8"));
 			this.seen = { mtimeMs: st.mtimeMs, size: st.size, value };
 			return value;
 		} catch {

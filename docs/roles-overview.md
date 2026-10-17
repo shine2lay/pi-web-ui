@@ -38,6 +38,41 @@ Hypothesis (rule 20):
   a panel line, report or goal differing from `roles_overview`; any unsafe text shown in part; a chat path in
   the page's DOM, attributes or URL; or a registry problem breaking the rest of the page.
 
+Result (live look 2026-10-17 10:20, all 15 panels against `roles_overview` and the work registry): hit, with
+one part not seen live (no lead block existed then) and three display faults, fixed in the round below.
+
+### Follow-up round (owner, 2026-10-17)
+
+The owner picked "fix both here after install" for Security's two findings (dialog, about 00:35), and the three
+display faults the live look found go in the same round: one Security check, one restart.
+
+Hypothesis (rule 20):
+
+- **What is wrong, and the evidence.**
+  1. A new connection reopens the project's newest chat through the SDK's `continueRecent`, whose
+     `findMostRecentSession` stats each `.jsonl` following links. A link in the sessions folder to a file
+     elsewhere can win, and the shell then writes into that file. The sealed page test's outside canary
+     (`outside/private.jsonl`, linked as `sessions/linked.jsonl`) changed in 1 of 4 runs. Security traced
+     this cause in source (rm-885a66f3); the test now logs the kinds of entries written, not yet seen again.
+  2. The Roles reader's small JSON files (`JsonFile`) are read with `stat` + `readFile`. A FIFO in a file's
+     place would stall the Roles feed, and neither reader passes `O_NOCTTY` (Security's nit on 25db5d49).
+  3. On the live panel: a task waiting on other tasks reads "waits on · waits on …"; at 390 px the status
+     word breaks mid-word beside a long title ("Workin/g"); goal dates show raw ("2026-10-04T22:20").
+- **The change.** (1) pi-web-ui picks the newest chat itself: only regular files directly in the sessions
+  folder (`lstat`, so never a link or anything else), newest by modification time, header readable as before;
+  then opens it as `continueRecent` would. The repair fallback (#235) targets the same file. (2) `JsonFile`
+  reads like the registry reader: open non-blocking, `fstat` the handle, regular files only, 8 MiB cap
+  checked while reading; both readers add `O_NOCTTY`. (3) The panel's task line handles "waits on other
+  tasks" as the card row does; the status sits under the title; goal dates read "Oct 4".
+- **Expected result, and how it is measured.** The outside canary never changes: the sealed page test run
+  4 times in a row with no canary failure (it failed 1 in 4 before), and a unit test where a link to an
+  outside file is the newest entry and a regular file is picked. A FIFO in a Roles JSON file's place returns
+  the empty value at once (unit test that hangs without the fix). The three display faults are gone in unit
+  tests and in a look-only live check after install.
+- **What would prove it wrong.** The canary changes again in any run; a new connection no longer reopens the
+  newest regular chat (a unit test, and the live reconnect after install); the FIFO test still stalls; or
+  any of the three faults is still visible live.
+
 ## Each department's own-work spend
 
 Owner, 2026-10-10: "each count its own have write it somewhere and roles page shows it".

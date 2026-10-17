@@ -15,11 +15,12 @@
  * (no "..", no symlinks).
  */
 
-import { lstat, open, readFile, realpath, stat } from "node:fs/promises";
+import { lstat, open, realpath, stat, type FileHandle } from "node:fs/promises";
 import { isAbsolute, resolve, sep } from "node:path";
 import type { Ask } from "./asks.js";
 import { goalEnded, type RoleGoal, type WorkMode } from "./identity-config.js";
 import { samePath, type IdentityDef } from "./identities.js";
+import { readUpTo, STATE_READ_FLAGS } from "./state-file-read.js";
 import type {
 	ServerMessage,
 	UiBoard,
@@ -467,8 +468,13 @@ export function reportJobOf(raw: unknown): { nextRunAt?: number } | null {
 	return null;
 }
 
-/** A small JSON file read again only when it changed. */
-class JsonFile<T> {
+/** The most a small JSON file (the report runs, the scheduler's jobs) may hold before it reads as empty. */
+export const JSON_FILE_MAX = 8 << 20;
+
+/** A small JSON file read again only when it changed. Read as the registry's log is (state-file-read.ts): a
+ *  FIFO, device or folder in its place, or one bigger than 8 MiB (also when it grows while read), reads as
+ *  empty at once. */
+export class JsonFile<T> {
 	private seen: { mtimeMs: number; size: number; value: T } | null = null;
 	constructor(
 		private readonly path: () => string,
@@ -476,17 +482,33 @@ class JsonFile<T> {
 		private readonly empty: T,
 	) {}
 	async get(): Promise<T> {
-		const p = this.path();
+		let fh: FileHandle;
 		try {
-			const st = await stat(p);
-			if (st.size > 8 << 20) return this.empty;
+			fh = await open(this.path(), STATE_READ_FLAGS);
+		} catch {
+			this.seen = null;
+			return this.empty;
+		}
+		try {
+			const st = await fh.stat();
+			if (!st.isFile() || st.size > JSON_FILE_MAX) {
+				this.seen = null;
+				return this.empty;
+			}
 			if (this.seen && this.seen.mtimeMs === st.mtimeMs && this.seen.size === st.size) return this.seen.value;
-			const value = this.parse(JSON.parse(await readFile(p, "utf8")));
+			const bytes = await readUpTo(fh, JSON_FILE_MAX, 1 << 20);
+			if (bytes === null) {
+				this.seen = null;
+				return this.empty;
+			}
+			const value = this.parse(JSON.parse(bytes.toString("utf8")));
 			this.seen = { mtimeMs: st.mtimeMs, size: st.size, value };
 			return value;
 		} catch {
 			this.seen = null;
 			return this.empty;
+		} finally {
+			await fh.close().catch(() => undefined);
 		}
 	}
 }
