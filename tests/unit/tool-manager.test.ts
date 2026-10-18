@@ -29,6 +29,7 @@ import {
 	presetAllowsPluginTools,
 	presetHasQuestionnaire,
 	presetShowsSkillCatalog,
+	removeTaskChatTools,
 	setAgentToolEnabled,
 	setAgentToolsEnabled,
 	SUBAGENT_TOOL_NAMES,
@@ -234,6 +235,27 @@ describe("tool_manage 出入口", () => {
 		const lead = fakeSet(all);
 		applyAgentToolsGating(lead, [], undefined, "linux");
 		for (const name of all) expect(lead.peek()).toContain(name);
+	});
+
+	it("turning a chat into a task's own chat removes only the off list and keeps an add-on's mask", () => {
+		// pi-control-chrome hides its browser tools at session start, after the first gating.
+		const all = ["bash", "read", "browser_tabs", "browser_click", "browser_snapshot", "tldr", "queue_reply"];
+		const task = fakeSet(all);
+		applyAgentToolsGating(task, [], undefined, "linux");
+		task.setActiveToolsByName(task.peek().filter((n) => n !== "browser_click" && n !== "browser_snapshot"));
+		const before = [...task.peek()];
+		const off = new Set<string>(TASK_CHAT_OFF_TOOL_NAMES);
+		expect(removeTaskChatTools(task)).toBe(true);
+		// Exactly the off list leaves; everything else (the gating also turns on the catalog tools) stays.
+		expect(task.peek()).toEqual(before.filter((n) => !off.has(n)));
+		for (const name of ["bash", "read", "browser_tabs"]) expect(task.peek()).toContain(name);
+		for (const name of ["browser_click", "browser_snapshot", "tldr", "queue_reply"])
+			expect(task.peek()).not.toContain(name);
+		// Nothing left to take out: the set is not touched again.
+		let calls = 0;
+		const quiet = { getActiveToolNames: () => ["bash", "read"], setActiveToolsByName: () => void calls++ };
+		expect(removeTaskChatTools(quiet)).toBe(false);
+		expect(calls).toBe(0);
 	});
 
 	/** A session whose registry carries Pi tool exposures; `active` is the loadout before gating

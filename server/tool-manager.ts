@@ -467,6 +467,28 @@ export function applyAgentToolsGating(
 	}
 }
 
+/** Takes TASK_CHAT_OFF_TOOL_NAMES out of the session's CURRENT active tools and changes nothing else.
+ *  For the moment a chat becomes a queued task's own chat (its "assigned" entry is appended after the
+ *  session started). A full re-gate there named every registered tool again, which undid add-ons' own
+ *  masks set at session start: pi-control-chrome hides its 41 browser tools until its skill loads, and
+ *  task chats carried them all (about 40 KB of tool descriptions per request, Oct 17-18). Returns
+ *  whether it changed the active set. */
+export function removeTaskChatTools(
+	session: Pick<ActiveToolSet, "getActiveToolNames" | "setActiveToolsByName">,
+): boolean {
+	try {
+		const off = new Set<string>(TASK_CHAT_OFF_TOOL_NAMES);
+		const active = session.getActiveToolNames();
+		const kept = active.filter((name) => !off.has(name));
+		if (kept.length === active.length) return false;
+		session.setActiveToolsByName(kept);
+		return true;
+	} catch {
+		// Session not ready: the next full gating leaves the off list out anyway (taskChat).
+		return false;
+	}
+}
+
 /** pi 引擎内置 Agent 预设名录（对齐 DSH 预设体系，会话级工具白名单）。 */
 export const PI_AGENT_PRESETS: UiAgentPreset[] = [
 	{

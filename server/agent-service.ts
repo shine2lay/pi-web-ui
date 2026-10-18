@@ -226,6 +226,7 @@ import {
 	presetAllowsPluginTools,
 	presetHasQuestionnaire,
 	presetShowsSkillCatalog,
+	removeTaskChatTools,
 } from "./tool-manager.js";
 import { WebUIContext } from "./webui-context.js";
 import { ChatDialogs, chatUiContext, type DialogWatcher } from "./chat-dialogs.js";
@@ -5462,9 +5463,16 @@ export class ClientSession {
 						: e.data;
 				session.sessionManager.appendCustomEntry(e.customType, data);
 			}
-			// The "assigned" entry just made this a queued task's own chat: gate again, so the tools a task's
-			// chat doesn't get (TASK_CHAT_OFF_TOOL_NAMES) are out before its first prompt.
-			this.applyToolGating(session, conv.agentPreset);
+			// The "assigned" entry just made this a queued task's own chat: take the tools a task's chat
+			// doesn't get (TASK_CHAT_OFF_TOOL_NAMES) out before its first prompt. Only those: a full re-gate
+			// here named every tool again and undid masks add-ons set at session start (pi-control-chrome's
+			// 41 browser tools, hidden until its skill loads).
+			if (removeTaskChatTools(session)) {
+				this.sessionStatsCache.delete(session);
+				this.cachedBaseTokens = null;
+				const shown = this.convs.get(this.activeId);
+				if (shown && shown.session === session) this.flushSnapshot();
+			}
 		} catch (err) {
 			// No prompt was sent. A refused launch must not leave a running/disposable task chat behind.
 			conv.listed = false;
