@@ -261,7 +261,8 @@ describe("formatRolesOverview", () => {
 
 	it("stays under the cap however many roles there are", () => {
 		const long = "word ".repeat(400);
-		const roles = Array.from({ length: 80 }, (_, i) =>
+		// Retiring report text makes 80 roles fit; keep this fixture large enough to exercise truncation.
+		const roles = Array.from({ length: 200 }, (_, i) =>
 			role(`r${i}`, {
 				tldr: tldr(3).map((l) => ({ ...l, text: long })),
 				report: { state: "report", date: "2026-10-06", text: long },
