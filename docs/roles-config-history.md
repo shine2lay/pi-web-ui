@@ -26,4 +26,10 @@ Ops #209, one of the owner's Roles tasks ("create those tasks and queue them", 2
 
 **Undo.** `pi-web-deploy rollback`, or revert the commit and deploy. The two files are inert; deleting both starts a new baseline.
 
-**Result:** pending (live check after install).
+**Result: HIT** (2026-10-18 14:53 PDT, installed ea0f4a18 at 12:23; pi-web-deploy checks all passed).
+
+- Baseline: the first run wrote `roles-config-snapshot.json` (0600) for all 15 roles at 12:24:57, with no history file. A look-only check at 12:27 (`~/kept-from-tmp/2026-10-18/roles-config-history-live/look.mjs`, own carry-on clients; the Roles page sent only hello and roles_watch) showed "No changes recorded since Oct 18." in every role's Configuration tab, on desktop dark, desktop light and phone. The baseline wasn't listed as changes.
+- A real change: at 14:43:11, 14:43:14 and 14:43:15 the COO, QA and Security home chats moved from account #4 to #2 (their newest model change entries: anthropic-4 → anthropic-2, claude-opus-5-5). Nobody made them for this test. The 14:48:04 run recorded exactly three lines, one per role: `model` "Claude Opus 5.5 (#4)" → "Claude Opus 5.5 (#2)". That is 4 min 49 s to 4 min 53 s after the change; the run before, at 14:43:04, came 7 s too early.
+- The COO Configuration tab showed "14:48 · Home chat model: Claude Opus 5.5 (#4) → Claude Opus 5.5 (#2)", then "Who changed it isn't recorded.", on desktop dark, desktop light and phone. No page errors.
+- No false lines: Data, Docs, RollCall and Systems stayed on #4 and the other eight roles on #2, and none got a line. Four pi-web-ui restarts between the baseline and the change (13:19, 13:34, 14:05, 14:16) added no line either, and the "since" date stayed 12:24:57.
+- Not seen live: a change to lanes, a switch, work mode, goals or the home chat itself. They go through the same compare as the model, which the unit tests cover.
