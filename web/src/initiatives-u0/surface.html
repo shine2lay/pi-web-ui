@@ -1,0 +1,510 @@
+<style>
+body{margin:0;background:#0E0F11}
+a{color:#B9A7FF}a:hover{color:#D6CCFF}
+</style>
+<div style="background: #0E0F11; color: #ECEDEE; font-family: 'Geist', ui-sans-serif, system-ui, sans-serif; font-size: 14px; line-height: 1.45; min-height: 100%" data-canvas-width="1440" data-canvas-height="1900" data-document-role="page" data-label="Desktop · initiatives (interactive)">
+<div style="max-width: 1440px; margin: 0 auto; padding: 20px clamp(12px, 1.8vw, 28px) 48px; box-sizing: border-box; display: flex; flex-direction: column; gap: 18px">
+
+<!-- HEADER -->
+<header style="display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 20px">
+<div style="display: flex; flex-direction: column; gap: 4px; flex: 999 1 420px; min-width: 0">
+<div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px">
+<h1 style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.015em">Initiatives</h1>
+<span style="color: #A9AEB6; font-size: 14px">{{ds.countLine}}</span>
+</div>
+<p style="margin: 0; color: #B9BEC5; font-size: 14px; max-width: 720px">Work that several roles do together toward one goal. Each has a lead role that plans it, hands tasks to the others and reports to you.</p>
+</div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px">
+<span role="status" style="display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid {{ds.chipBd}}; color: {{ds.chipFg}}; font-size: 13px; font-weight: 550"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="currentColor"></circle></svg>{{ds.chipText}}</span>
+<sc-if value="{{ds.showNew}}" hint-placeholder-val="{{true}}"><button type="button" onClick="{{newInitiative}}" style="min-height: 44px; padding: 0 16px; border-radius: 8px; border: 1px solid #ECEDEE; background: #ECEDEE; color: #0E0F11; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 8px"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"></path></svg>New initiative</button></sc-if>
+</div>
+</header>
+
+<!-- DRAWN (task #76): out-of-date banner -->
+<sc-if value="{{ds.stale}}" hint-placeholder-val="{{false}}">
+<div role="status" style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 14px 16px; border-radius: 10px; background: rgba(240,185,90,0.06); border: 1px solid rgba(240,185,90,0.35)">
+<svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="#F0B95A" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 2 14.5 13.5h-13z"></path><path d="M8 6.5v3.2"></path><circle cx="8" cy="11.7" r="0.7" fill="#F0B95A" stroke="none"></circle></svg>
+<p style="margin: 0; flex: 999 1 320px; min-width: 0; font-size: 13.5px; color: #D6D9DD">{{ds.staleText}}</p>
+<button type="button" onClick="{{retry}}" style="min-height: 44px; padding: 0 16px; border-radius: 8px; border: 1px solid #4A4F57; background: transparent; color: #ECEDEE; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer">Try again</button>
+</div>
+</sc-if>
+
+<!-- ON YOU SUMMARY -->
+<sc-if value="{{ds.showOnYou}}" hint-placeholder-val="{{true}}"><div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 12px 14px; border-radius: 10px; background: #15171A; border: 1px solid #22262B; font-size: 13.5px; color: #C9CDD2">
+<span style="flex: none; display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 4px; background: #F0B95A; color: #17130A; font-size: 11px; font-weight: 700; letter-spacing: 0.05em">ON YOU</span>
+<span>{{summary}}</span>
+</div></sc-if>
+
+<div style="display: flex; flex-wrap: wrap; align-items: flex-start; gap: 20px">
+
+<!-- LIST -->
+<sc-if value="{{ds.showNav}}" hint-placeholder-val="{{true}}"><nav aria-label="Initiatives" style="flex: 1 1 290px; max-width: 360px; min-width: 0; display: flex; flex-direction: column; gap: 10px">
+<div role="group" aria-label="Filter initiatives" style="display: flex; flex-wrap: wrap; gap: 6px">
+<sc-for list="{{filters}}" as="f" hint-placeholder-count="4">
+<button type="button" onClick="{{f.pick}}" aria-pressed="{{f.pressed}}" style="min-height: 32px; padding: 0 10px; border-radius: 999px; border: 1px solid {{f.bd}}; background: {{f.bg}}; color: {{f.fg}}; font: inherit; font-size: 12.5px; font-weight: 550; cursor: pointer">{{f.label}} <span style="color: {{f.countFg}}; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px">{{f.count}}</span></button>
+</sc-for>
+</div>
+
+<sc-for list="{{list}}" as="i" hint-placeholder-count="4">
+<button type="button" onClick="{{i.pick}}" aria-current="{{i.current}}" style="position: relative; text-align: left; display: flex; flex-direction: column; gap: 8px; width: 100%; padding: 14px; box-sizing: border-box; border-radius: 12px; border: 1px solid {{i.bd}}; background: {{i.bg}}; color: #ECEDEE; font: inherit; cursor: pointer">
+<sc-if value="{{i.hasOnYou}}" hint-placeholder-val="{{false}}"><span style="position: absolute; top: -9px; right: 12px; display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; background: #F0B95A; color: #17130A; font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em">{{i.onYouText}}</span></sc-if>
+<span style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px">
+<span style="font-size: 15.5px; font-weight: 650">{{i.name}}</span>
+<span style="flex: none; font-size: 12px; font-weight: 600; color: {{i.sFg}}">{{i.sText}}</span>
+</span>
+<span style="font-size: 12.5px; color: #A9AEB6">{{i.statusNote}}</span>
+<span style="display: flex; align-items: center; justify-content: space-between; gap: 8px">
+<span style="display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: #C9CDD2">
+<span style="display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 999px; background: #241F38; border: 1.5px solid #B9A7FF; color: #DCD3FF; font-size: 9.5px; font-weight: 700">{{i.leadMono}}</span>Lead · {{i.leadName}}</span>
+<span style="display: inline-flex; align-items: center">
+<sc-for list="{{i.members}}" as="m" hint-placeholder-count="3"><span style="display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-left: -4px; border-radius: 999px; background: #22262B; border: 1.5px solid {{i.bg}}; color: #C9CDD2; font-size: 8.5px; font-weight: 700">{{m.mono}}</span></sc-for>
+</span>
+</span>
+<span style="display: flex; flex-direction: column; gap: 5px">
+<span style="display: flex; gap: 3px" aria-hidden="true">
+<sc-for list="{{i.segs}}" as="g" hint-placeholder-count="4"><span style="flex: 1; height: 5px; border-radius: 999px; background: {{g.bg}}; border: 1px {{g.bs}} {{g.bd}}; box-sizing: border-box"></span></sc-for>
+</span>
+<span style="font-size: 12px; color: #A9AEB6">{{i.doneText}}</span>
+</span>
+</button>
+</sc-for>
+
+<sc-if value="{{listEmpty}}" hint-placeholder-val="{{false}}">
+<p style="margin: 0; padding: 12px; border-radius: 10px; border: 1px dashed #3A3F46; color: #A9AEB6; font-size: 13px">{{ds.listEmptyText}}</p>
+</sc-if>
+
+<!-- Roles in no initiative -->
+<sc-if value="{{ds.showRoles}}" hint-placeholder-val="{{true}}"><section aria-labelledby="noinit" style="margin-top: 6px; padding: 14px; border-radius: 12px; border: 1px dashed #3A3F46; display: flex; flex-direction: column; gap: 8px">
+<h2 id="noinit" style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">{{loose.heading}}</h2>
+<sc-for list="{{loose.items}}" as="lo" hint-placeholder-count="1">
+<div style="display: flex; align-items: center; gap: 8px">
+<span style="display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 999px; background: #22262B; color: #C9CDD2; font-size: 9.5px; font-weight: 700">{{lo.mono}}</span>
+<span style="font-weight: 600">{{lo.name}}</span>
+<sc-if value="{{lo.hasOnYou}}" hint-placeholder-val="{{true}}"><span style="margin-left: auto; display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; background: #F0B95A; color: #17130A; font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em">ON YOU</span></sc-if>
+</div>
+<sc-if value="{{lo.hasNote}}" hint-placeholder-val="{{true}}"><p style="margin: 0; font-size: 13px; color: #B9BEC5">{{lo.note}}</p></sc-if>
+<sc-if value="{{lo.open}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; flex-wrap: wrap; gap: 6px">
+<sc-for list="{{lo.choices}}" as="c" hint-placeholder-count="3">
+<button type="button" onClick="{{c.pick}}" style="min-height: 36px; padding: 0 10px; border-radius: 8px; border: 1px solid #3A3F46; background: transparent; color: #ECEDEE; font: inherit; font-size: 13px; cursor: pointer">{{c.label}}</button>
+</sc-for>
+</div>
+</sc-if>
+<sc-if value="{{lo.sent}}" hint-placeholder-val="{{false}}">
+<p style="margin: 0; font-size: 13px; color: #9CC7FF">Sent to {{lo.name}}: “{{lo.answer}}”. Not read yet.</p>
+</sc-if>
+</sc-for>
+</section></sc-if>
+</nav></sc-if>
+
+<!-- DETAIL -->
+<sc-if value="{{ds.showDetail}}" hint-placeholder-val="{{true}}"><main style="flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+
+<!-- Title block -->
+<section aria-labelledby="ititle" style="display: flex; flex-direction: column; gap: 12px; padding: 20px; border-radius: 14px; background: #131518; border: 1px solid #22262B">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px">
+<h2 id="ititle" style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.01em">{{sel.name}}</h2>
+<span style="display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 999px; font-size: 12px; font-weight: 600; color: {{sel.sFg}}; background: {{sel.sBg}}; border: 1px solid {{sel.sBd}}"><svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true"><circle cx="4" cy="4" r="3.5" fill="currentColor"></circle></svg>{{sel.sText}}</span>
+<span style="color: #A9AEB6; font-size: 13px">{{sel.statusNote}}</span>
+</div>
+<p style="margin: 0; font-size: 16px; color: #DADDE1; max-width: 820px"><span style="color: #A9AEB6">Goal · </span>{{sel.goal}}</p>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<h3 style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Outcomes · {{sel.doneText}}</h3>
+<div style="position: relative">
+<span aria-hidden="true" style="position: absolute; left: 23px; top: 22px; bottom: 22px; width: 2px; background: #2A2E34"></span>
+<ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px">
+<sc-for list="{{sel.goals}}" as="gl" hint-placeholder-count="4">
+<li style="position: relative; display: flex; flex-direction: column; border-radius: 10px; background: {{gl.bg}}; border: 1px {{gl.bs}} {{gl.bd}}">
+<button type="button" onClick="{{gl.toggle}}" aria-expanded="{{gl.openStr}}" style="display: flex; align-items: flex-start; gap: 10px; width: 100%; min-height: 44px; padding: 10px 12px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer">
+<span style="flex: none; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 999px; border: 1.5px solid {{gl.fg}}; background: {{gl.dotBg}}; color: {{gl.numFg}}; font-size: 11px; font-weight: 700">{{gl.num}}</span>
+<span style="flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0">
+<span style="font-size: 13.5px; font-weight: 600; color: {{gl.titleFg}}">{{gl.title}}</span>
+<span style="font-size: 12px; color: {{gl.fg}}">{{gl.state}}</span>
+</span>
+<svg style="flex: none; margin-top: 4px; transform: {{gl.rot}}; transition: transform 160ms ease" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#8D939B" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 2.5 7.5 6 4 9.5"></path></svg>
+</button>
+<sc-if value="{{gl.open}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-wrap: wrap; gap: 14px 28px; padding: 4px 14px 14px 44px; font-size: 13px">
+<div style="flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 6px">
+<span style="font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #8D939B">Steps</span>
+<ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 5px">
+<sc-for list="{{gl.steps}}" as="gs" hint-placeholder-count="3">
+<li style="display: flex; align-items: center; gap: 8px">
+<span style="flex: none; width: 9px; height: 9px; border-radius: 999px; background: {{gs.dot}}; border: 1.5px {{gs.bs}} {{gs.fg}}; box-sizing: border-box"></span>
+<span style="color: {{gs.labelFg}}">{{gs.label}}</span>
+<span style="color: {{gs.fg}}; font-size: 12px">{{gs.at}}</span>
+</li>
+</sc-for>
+</ol>
+</div>
+<div style="flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 6px">
+<span style="font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #8D939B">Owner</span>
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; color: #C9CDD2">{{gl.owner}}</span>
+<span style="margin-top: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #8D939B">Roles on it</span>
+<sc-for list="{{gl.roles}}" as="gr" hint-placeholder-count="1">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px">
+<span style="font-weight: 600">{{gr.name}}</span>
+<dc-import name="StateChip" kind="{{gr.kind}}" hint-size="120px,24px"></dc-import>
+<span style="flex-basis: 100%; font-size: 12.5px; color: #A9AEB6">{{gr.now}}</span>
+</div>
+</sc-for>
+<sc-if value="{{gl.noRoles}}" hint-placeholder-val="{{false}}"><span style="color: #C7B8FF">No role recorded</span></sc-if>
+</div>
+<sc-if value="{{gl.hasHand}}" hint-placeholder-val="{{false}}">
+<div style="flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 6px">
+<span style="font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #8D939B">Hand-offs</span>
+<sc-for list="{{gl.hand}}" as="gh" hint-placeholder-count="1">
+<span><span style="font-weight: 600">{{gh.from}} → {{gh.to}}</span> <span style="color: #C9CDD2">{{gh.what}}</span><br><span style="font-size: 12.5px; color: {{gh.c}}">{{gh.s}}</span></span>
+</sc-for>
+</div>
+</sc-if>
+</div>
+</sc-if>
+</li>
+</sc-for>
+</ol>
+</div>
+</div>
+<dl style="margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 20px; font-size: 13px">
+<div style="display: flex; flex-direction: column; gap: 2px"><dt style="color: #A9AEB6">Lead</dt><dd style="margin: 0; display: inline-flex; align-items: center; gap: 6px; font-weight: 600"><span style="display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 999px; background: #241F38; border: 1.5px solid #B9A7FF; color: #DCD3FF; font-size: 9.5px; font-weight: 700">{{sel.leadMono}}</span>{{sel.leadName}}</dd></div>
+<div style="display: flex; flex-direction: column; gap: 2px"><dt style="color: #A9AEB6">Roles</dt><dd style="margin: 0">{{sel.roleCount}}</dd></div>
+<div style="display: flex; flex-direction: column; gap: 2px"><dt style="color: #A9AEB6">Started</dt><dd style="margin: 0">{{sel.started}}</dd></div>
+<div style="display: flex; flex-direction: column; gap: 2px"><dt style="color: #A9AEB6">Finish</dt><dd style="margin: 0; color: {{sel.finishFg}}">{{sel.finish}}</dd></div>
+<div style="display: flex; flex-direction: column; gap: 2px"><dt style="color: #A9AEB6">Spend this week</dt><dd style="margin: 0"><span style="font-family: 'Geist Mono', ui-monospace, monospace">{{sel.spendTotal}}</span> <span style="color: #A9AEB6">{{sel.spendNote}}</span></dd></div>
+</dl>
+<div style="display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid #22262B">
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px">
+<h3 style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Latest updates</h3>
+<button type="button" onClick="{{showActivity}}" style="min-height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid #2F343A; background: transparent; color: #C9CDD2; font: inherit; font-size: 12.5px; cursor: pointer">All activity · {{sel.activityCount}}</button>
+</div>
+<ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px">
+<sc-for list="{{sel.latest}}" as="u" hint-placeholder-count="3">
+<li style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; font-size: 13.5px">
+<span style="flex: 0 0 84px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; color: #8D939B">{{u.at}}</span>
+<span style="flex: 0 0 92px; font-weight: 600; color: {{u.roleFg}}">{{u.role}}</span>
+<span style="flex: 1 1 260px; min-width: 0; color: #DADDE1">{{u.text}}</span>
+</li>
+</sc-for>
+</ol>
+</div>
+</section>
+
+<!-- DRAWN (task #76): old data banner -->
+<sc-if value="{{ds.oldData}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 14px 16px; border-radius: 10px; background: rgba(199,184,255,0.08); border: 1px dashed rgba(199,184,255,0.5)">
+<svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="#C7B8FF" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><path d="M6.3 6.3a1.8 1.8 0 1 1 2.5 1.7c-.5.2-.8.6-.8 1.1v.4"></path><circle cx="8" cy="11.5" r="0.7" fill="#C7B8FF" stroke="none"></circle></svg>
+<p style="margin: 0; flex: 999 1 320px; min-width: 0; font-size: 13.5px; color: #D6D9DD">{{ds.oldText}}</p>
+</div>
+</sc-if>
+
+<!-- Paused banner -->
+<sc-if value="{{sel.isPaused}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 14px 16px; border-radius: 10px; background: rgba(195,200,207,0.06); border: 1px solid rgba(195,200,207,0.3)">
+<svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="#C3C8CF" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M5.5 3.5v9M10.5 3.5v9"></path></svg>
+<p style="margin: 0; flex: 999 1 320px; min-width: 0; font-size: 13.5px; color: #D6D9DD">{{sel.pausedText}}</p>
+<sc-if value="{{sel.canResume}}" hint-placeholder-val="{{true}}"><button type="button" onClick="{{sel.resume}}" style="min-height: 44px; padding: 0 16px; border-radius: 8px; border: 1px solid #4A4F57; background: transparent; color: #ECEDEE; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer">Resume own work</button></sc-if>
+</div>
+</sc-if>
+
+<!-- On you -->
+<sc-if value="{{sel.hasOnYou}}" hint-placeholder-val="{{true}}">
+<section aria-labelledby="onyou" style="display: flex; flex-direction: column; gap: 10px">
+<h3 id="onyou" style="margin: 0; display: flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #F0B95A">Waiting on you · {{sel.onYouCount}}</h3>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 10px">
+<sc-for list="{{sel.onYou}}" as="o" hint-placeholder-count="2">
+<article style="display: flex; flex-direction: column; gap: 8px; padding: 14px; border-radius: 12px; background: rgba(240,185,90,0.06); border: 1px solid rgba(240,185,90,0.35)">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12px; color: #C9CDD2"><span style="font-weight: 700; color: #F0B95A; letter-spacing: 0.04em; text-transform: uppercase; font-size: 11px">{{o.kind}}</span><span>from {{o.from}}</span><span style="color: #8D939B">· waiting {{o.age}}</span></div>
+<p style="margin: 0; font-size: 15px; font-weight: 650">{{o.title}}</p>
+<p style="margin: 0; font-size: 13px; color: #B9BEC5">{{o.context}}</p>
+<sc-if value="{{o.open}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; flex-wrap: wrap; gap: 8px">
+<sc-for list="{{o.choices}}" as="c" hint-placeholder-count="2">
+<button type="button" onClick="{{c.pick}}" style="min-height: 44px; padding: 0 14px; border-radius: 8px; border: 1px solid {{c.bd}}; background: {{c.bg}}; color: {{c.fg}}; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer">{{c.label}}</button>
+</sc-for>
+</div>
+</sc-if>
+<sc-if value="{{o.sent}}" hint-placeholder-val="{{false}}">
+<p style="margin: 0; font-size: 13px; color: #9CC7FF">You answered “{{o.answer}}”. Sent to {{o.from}}, not read yet.</p>
+</sc-if>
+</article>
+</sc-for>
+</div>
+</section>
+</sc-if>
+
+<!-- Tabs -->
+<div role="tablist" aria-label="Initiative views" style="display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid #22262B">
+<sc-for list="{{tabs}}" as="t" hint-placeholder-count="3">
+<button type="button" role="tab" aria-selected="{{t.sel}}" onClick="{{t.pick}}" style="min-height: 44px; padding: 0 14px; margin-bottom: -1px; border: 0; border-bottom: 2px solid {{t.bd}}; background: transparent; color: {{t.fg}}; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer">{{t.label}} <span style="color: #8D939B; font-weight: 500">{{t.count}}</span></button>
+</sc-for>
+</div>
+
+<!-- OVERVIEW -->
+<sc-if value="{{isOverview}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px">
+
+<div style="flex: 999 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+
+<!-- Who's doing what -->
+<section aria-labelledby="who" style="display: flex; flex-direction: column; gap: 8px">
+<h3 id="who" style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Who’s doing what</h3>
+<div style="display: flex; flex-direction: column; border-radius: 12px; border: 1px solid #22262B; overflow: hidden">
+<sc-for list="{{sel.roles}}" as="r" hint-placeholder-count="4">
+<div style="display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 16px; padding: {{r.pad}}; background: {{r.bg}}; border-top: 1px solid {{r.topBd}}">
+<div style="flex: 1 1 220px; min-width: 0; display: flex; gap: 10px">
+<span style="flex: none; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 999px; background: {{r.monoBg}}; border: 1.5px solid {{r.monoBd}}; color: {{r.monoFg}}; font-size: 11px; font-weight: 700">{{r.mono}}</span>
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+<span style="display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px"><span style="font-weight: 650; font-size: 14.5px">{{r.name}}</span><sc-if value="{{r.lead}}" hint-placeholder-val="{{false}}"><span style="display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; background: rgba(185,167,255,0.16); color: #D3C8FF; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em">LEAD</span></sc-if></span>
+<span style="font-size: 12.5px; color: #A9AEB6">{{r.part}}</span>
+</div>
+</div>
+<div style="flex: 2 1 240px; min-width: 0; display: flex; flex-direction: column; gap: 2px">
+<span style="font-size: 13.5px"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; color: #A9AEB6">{{r.task}}</span> {{r.taskTitle}}</span>
+<span style="font-size: 12.5px; color: #8D939B">{{r.note}}</span>
+</div>
+<div style="flex: 1 1 170px; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px">
+<dc-import name="StateChip" kind="{{r.kind}}" last-known="{{r.lastKnown}}" hint-size="140px,24px"></dc-import>
+<sc-if value="{{r.hasWait}}" hint-placeholder-val="{{false}}"><span style="font-size: 12px; color: #F0B95A">Waits on {{r.wait}}</span></sc-if>
+<sc-if value="{{r.hasUnblocks}}" hint-placeholder-val="{{false}}"><span style="font-size: 12px; color: #9CC7FF">Unblocks {{r.unblocks}}</span></sc-if>
+<span style="font-size: 11.5px; color: #7F858D">updated {{r.at}}</span>
+</div>
+</div>
+</sc-for>
+</div>
+</section>
+
+<!-- Done when -->
+<section aria-labelledby="done" style="display: flex; flex-direction: column; gap: 8px">
+<h3 id="done" style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Done when · {{sel.doneText}}</h3>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<sc-for list="{{sel.openOutcomes}}" as="oc" hint-placeholder-count="3">
+<article style="display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 12px; background: #131518; border: 1px solid #22262B">
+<div style="display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px">
+<span style="font-size: 14.5px; font-weight: 650">{{oc.title}}</span>
+<span style="font-size: 12.5px; color: #A9AEB6; font-family: 'Geist Mono', ui-monospace, monospace">{{oc.owner}}</span>
+</div>
+<ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px">
+<sc-for list="{{oc.steps}}" as="s" hint-placeholder-count="4">
+<li style="display: inline-flex; align-items: center; gap: 6px">
+<sc-if value="{{s.notFirst}}" hint-placeholder-val="{{true}}"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="#4A4F57" stroke-width="1.5" aria-hidden="true"><path d="M3 1.5 6.5 5 3 8.5"></path></svg></sc-if>
+<span style="display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 2px 9px; border-radius: 999px; border: 1px {{s.bs}} {{s.bd}}; background: {{s.bg}}; color: {{s.fg}}; font-size: 12px; font-weight: 600">
+<sc-if value="{{s.isDone}}" hint-placeholder-val="{{false}}"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"></path></svg></sc-if>
+<sc-if value="{{s.isActive}}" hint-placeholder-val="{{true}}"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><circle cx="8" cy="8" r="2.6" fill="currentColor" stroke="none"></circle></svg></sc-if>
+<sc-if value="{{s.isWait}}" hint-placeholder-val="{{false}}"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4.5 2h7M4.5 14h7"></path><path d="M5.2 2c0 3.2 5.6 3 5.6 6s-5.6 2.8-5.6 6M10.8 2c0 3.2-5.6 3-5.6 6s5.6 2.8 5.6 6"></path></svg></sc-if>
+<sc-if value="{{s.isFailed}}" hint-placeholder-val="{{false}}"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 2 14.5 13.5h-13z"></path><path d="M8 6.5v3.2"></path></svg></sc-if>
+<sc-if value="{{s.isPaused}}" hint-placeholder-val="{{false}}"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M5.5 3.5v9M10.5 3.5v9"></path></svg></sc-if><sc-if value="{{s.isUnknown}}" hint-placeholder-val="{{false}}"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><path d="M6.3 6.3a1.8 1.8 0 1 1 2.5 1.7c-.5.2-.8.6-.8 1.1v.4"></path><circle cx="8" cy="11.5" r="0.7" fill="currentColor" stroke="none"></circle></svg></sc-if>
+{{s.label}}<sc-if value="{{s.hasAt}}" hint-placeholder-val="{{true}}"><span style="font-weight: 500; color: {{s.atFg}}">· {{s.at}}</span></sc-if>
+</span>
+</li>
+</sc-for>
+</ol>
+</article>
+</sc-for>
+</div>
+<sc-if value="{{sel.hasDone}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; flex-direction: column; border-radius: 12px; border: 1px solid #22262B; background: #111316">
+<button type="button" onClick="{{toggleDone}}" aria-expanded="{{doneOpenStr}}" style="display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 0 14px; border: 0; background: transparent; color: #C9CDD2; font: inherit; font-size: 13.5px; font-weight: 600; text-align: left; cursor: pointer">
+<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true" style="transform: {{doneRot}}; transition: transform 160ms ease"><path d="M4 2.5 7.5 6 4 9.5"></path></svg>
+<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#9FD8B8" stroke-width="2" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"></path></svg>
+<span>Done · {{sel.doneCount}}</span>
+<span style="margin-left: auto; font-weight: 500; font-size: 12.5px; color: #8D939B">{{sel.doneLatest}}</span>
+</button>
+<sc-if value="{{doneOpen}}" hint-placeholder-val="{{false}}">
+<ul style="margin: 0; padding: 0 14px 10px; list-style: none; display: flex; flex-direction: column">
+<sc-for list="{{sel.doneOutcomes}}" as="dn" hint-placeholder-count="2">
+<li style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; padding: 10px 0; border-top: 1px solid #22262B; font-size: 13.5px">
+<span style="flex: 1 1 260px; min-width: 0; color: #DADDE1">{{dn.title}}</span>
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #A9AEB6">{{dn.owner}}</span>
+<span style="font-size: 12.5px; color: #9FD8B8">done {{dn.finished}}</span>
+</li>
+</sc-for>
+</ul>
+</sc-if>
+</div>
+</sc-if>
+</section>
+
+<!-- Hand-offs -->
+<section aria-labelledby="hand" style="display: flex; flex-direction: column; gap: 8px">
+<h3 id="hand" style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Hand-offs between roles</h3>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<sc-for list="{{sel.handoffs}}" as="h" hint-placeholder-count="2">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 14px; border-radius: 10px; border: 1px solid #22262B; background: #111316">
+<span style="display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600">
+<span>{{h.from}} <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #A9AEB6">{{h.fromT}}</span></span>
+<svg width="28" height="10" viewBox="0 0 28 10" fill="none" aria-hidden="true"><path d="M1 5h24" stroke="{{h.c}}" stroke-width="2"></path><path d="M21 1l5 4-5 4" stroke="{{h.c}}" stroke-width="2" fill="none"></path></svg>
+<span>{{h.to}} <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #A9AEB6">{{h.toT}}</span></span>
+</span>
+<span style="font-size: 13px; color: #C9CDD2">{{h.what}}</span>
+<span style="margin-left: auto; font-size: 12.5px; color: {{h.c}}">{{h.s}}</span>
+</div>
+</sc-for>
+</div>
+</section>
+</div>
+
+<!-- Side column -->
+<aside style="flex: 1 1 280px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+
+<section aria-labelledby="leadh" style="display: flex; flex-direction: column; gap: 10px; padding: 16px; border-radius: 12px; background: #15131E; border: 1px solid rgba(185,167,255,0.3)">
+<div style="display: flex; align-items: center; gap: 10px">
+<span style="display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 999px; background: #241F38; border: 1.5px solid #B9A7FF; color: #DCD3FF; font-size: 12px; font-weight: 700">{{sel.leadMono}}</span>
+<div style="display: flex; flex-direction: column">
+<h3 id="leadh" style="margin: 0; font-size: 15px; font-weight: 650">{{sel.leadName}} leads this</h3>
+<span style="font-size: 12px; color: #A9AEB6">Plans it · hands out tasks · owns gaps · reports to you</span>
+</div>
+</div>
+<dl style="margin: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13px">
+<div><dt style="color: #A9AEB6">Lead’s next step</dt><dd style="margin: 0">{{sel.leadNext}}</dd></div>
+<div><dt style="color: #A9AEB6">Last report · {{sel.leadReportAt}}</dt><dd style="margin: 0; color: #C9CDD2">{{sel.leadReport}}</dd></div>
+</dl>
+<sc-if value="{{sel.hasLeadActions}}" hint-placeholder-val="{{true}}"><div style="display: flex; flex-wrap: wrap; gap: 8px">
+<sc-if value="{{sel.canMessage}}" hint-placeholder-val="{{true}}"><button type="button" onClick="{{sel.messageLead}}" style="min-height: 40px; padding: 0 12px; border-radius: 8px; border: 1px solid #4A4F57; background: transparent; color: #ECEDEE; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer">Message {{sel.leadName}}</button></sc-if>
+<sc-if value="{{sel.canChangeLead}}" hint-placeholder-val="{{true}}"><button type="button" onClick="{{sel.changeLead}}" style="min-height: 40px; padding: 0 12px; border-radius: 8px; border: 1px solid #2F343A; background: transparent; color: #B9BEC5; font: inherit; font-size: 13px; cursor: pointer">Change lead</button></sc-if>
+</div></sc-if>
+</section>
+
+<section aria-labelledby="gaps" style="display: flex; flex-direction: column; gap: 8px; padding: 16px; border-radius: 12px; background: #131518; border: 1px solid #22262B">
+<h3 id="gaps" style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Gaps the lead hasn’t covered · {{sel.gapCount}}</h3>
+<ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px">
+<sc-for list="{{sel.gaps}}" as="g" hint-placeholder-count="2">
+<li style="display: flex; gap: 8px; font-size: 13px; color: #D6D9DD"><svg style="flex: none; margin-top: 2px" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#F0B95A" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 2 14.5 13.5h-13z"></path><path d="M8 6.5v3.2"></path><circle cx="8" cy="11.7" r="0.7" fill="#F0B95A" stroke="none"></circle></svg><span>{{g.t}}</span></li>
+</sc-for>
+</ul>
+</section>
+
+<section aria-labelledby="spend" style="display: flex; flex-direction: column; gap: 8px; padding: 16px; border-radius: 12px; background: #131518; border: 1px solid #22262B">
+<h3 id="spend" style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Spend on this initiative · this week</h3>
+<dl style="margin: 0; display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; font-size: 13px">
+<sc-for list="{{sel.spend}}" as="sp" hint-placeholder-count="3">
+<dt style="color: #B9BEC5">{{sp.role}}</dt><dd style="margin: 0; text-align: right; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; color: {{sp.fg}}">{{sp.v}}</dd>
+</sc-for>
+</dl>
+<p style="margin: 0; padding-top: 8px; border-top: 1px solid #22262B; display: flex; justify-content: space-between; gap: 8px; font-size: 13px"><span style="color: #A9AEB6">Total reported</span><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-weight: 600">{{sel.spendTotal}}</span></p>
+</section>
+</aside>
+</div>
+</sc-if>
+
+<!-- CURRENT DESIGN -->
+<sc-if value="{{isDesign}}" hint-placeholder-val="{{false}}">
+<section aria-label="Current design" style="display: flex; flex-direction: column; gap: 14px">
+<sc-if value="{{dz.has}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px">
+<div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px">
+<h3 style="margin: 0; font-size: 18px; font-weight: 650">How it works now</h3>
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; color: #A9AEB6">{{dz.version}}</span>
+<span style="font-size: 13px; color: #A9AEB6">Kept up to date by {{dz.by}} · updated {{dz.updatedAt}}</span>
+</div>
+<span style="font-size: 13px; color: #A9AEB6">You last looked: {{dz.lastSeen}}</span>
+</div>
+
+<sc-if value="{{dz.hasChanges}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; flex-direction: column; gap: 10px; padding: 16px; border-radius: 12px; background: rgba(125,184,255,0.06); border: 1px solid rgba(125,184,255,0.35)">
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px">
+<h4 style="margin: 0; font-size: 14px; font-weight: 650; color: #9CC7FF">What changed since you last looked · {{dz.changeCount}}</h4>
+<sc-if value="{{dz.canMark}}" hint-placeholder-val="{{true}}"><button type="button" onClick="{{dz.markSeen}}" style="min-height: 40px; padding: 0 14px; border-radius: 8px; border: 1px solid #ECEDEE; background: #ECEDEE; color: #0E0F11; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer">Mark as read</button></sc-if>
+</div>
+<ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px">
+<sc-for list="{{dz.changes}}" as="c" hint-placeholder-count="3">
+<li style="display: flex; gap: 10px; font-size: 14px">
+<span style="flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: 64px; height: 22px; padding: 0 6px; border-radius: 4px; background: {{c.bg}}; color: {{c.fg}}; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase">{{c.label}}</span>
+<span style="display: flex; flex-direction: column; gap: 3px; min-width: 0">
+<span style="color: #ECEDEE">{{c.text}}</span>
+<sc-if value="{{c.hasDiff}}" hint-placeholder-val="{{false}}">
+<span style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 13px">
+<del style="color: #FF8A80; text-decoration-color: rgba(255,138,128,0.7)">{{c.before}}</del>
+<span aria-hidden="true" style="color: #8D939B">→</span>
+<ins style="color: #9FD8B8; text-decoration: none">{{c.after}}</ins>
+</span>
+</sc-if>
+<span style="font-size: 12.5px; color: #8D939B">{{c.why}}</span>
+</span>
+</li>
+</sc-for>
+</ul>
+</div>
+</sc-if>
+<sc-if value="{{dz.noChanges}}" hint-placeholder-val="{{false}}">
+<p style="margin: 0; padding: 12px 14px; border-radius: 10px; border: 1px solid #22262B; color: #B9BEC5; font-size: 13.5px">No changes since you last looked.</p>
+</sc-if>
+
+<div style="display: flex; flex-direction: column; border-radius: 12px; border: 1px solid #22262B; background: #131518">
+<sc-for list="{{dz.sections}}" as="s" hint-placeholder-count="4">
+<div style="display: flex; flex-direction: column; gap: 6px; padding: 16px 18px; border-top: 1px solid {{s.topBd}}; background: {{s.bg}}">
+<h4 style="margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 14.5px; font-weight: 650">{{s.h}}<sc-if value="{{s.hasMark}}" hint-placeholder-val="{{false}}"><span style="display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; background: rgba(125,184,255,0.16); color: #9CC7FF; font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase">{{s.mark}}</span></sc-if></h4>
+<p style="margin: 0; font-size: 14.5px; line-height: 1.6; color: #DADDE1; max-width: 760px">{{s.body}}</p>
+</div>
+</sc-for>
+</div>
+</sc-if>
+<sc-if value="{{dz.none}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 16px; border-radius: 12px; border: 1px dashed #3A3F46">
+<p style="margin: 0; flex: 999 1 320px; color: #B9BEC5; font-size: 14px">No current design written yet. The lead ({{sel.leadName}}) keeps this section; nothing has been recorded.</p>
+<sc-if value="{{dz.canAsk}}" hint-placeholder-val="{{true}}"><button type="button" onClick="{{dz.ask}}" style="min-height: 44px; padding: 0 14px; border-radius: 8px; border: 1px solid #4A4F57; background: transparent; color: #ECEDEE; font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer">Ask {{sel.leadName}} to write it</button></sc-if>
+</div>
+<sc-if value="{{ds.failed}}" hint-placeholder-val="{{false}}"><p role="alert" style="margin: 0; display: flex; gap: 8px; font-size: 13px; color: #FF8A80"><svg style="flex: none; margin-top: 2px" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#FF8A80" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 2 14.5 13.5h-13z"></path><path d="M8 6.5v3.2"></path><circle cx="8" cy="11.7" r="0.7" fill="#FF8A80" stroke="none"></circle></svg><span>{{ds.failText}}</span></p></sc-if>
+</sc-if>
+</section>
+</sc-if>
+
+<!-- DECISIONS -->
+<sc-if value="{{isDecisions}}" hint-placeholder-val="{{false}}">
+<section aria-label="Decisions" style="display: flex; flex-direction: column; gap: 10px">
+<p style="margin: 0; font-size: 13px; color: #A9AEB6">{{sel.decNote}}</p>
+<sc-for list="{{sel.decisions}}" as="d" hint-placeholder-count="2">
+<article style="display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; border-radius: 12px; background: #131518; border: 1px solid #22262B">
+<h3 style="margin: 0; font-size: 16px; font-weight: 650">{{d.title}}</h3>
+<p style="margin: 0; font-size: 14px; color: #DADDE1">{{d.body}} <span style="color: #8D939B; font-size: 12.5px">· {{d.at}}</span></p>
+<div style="display: flex; flex-wrap: wrap; gap: 6px">
+<span style="display: inline-flex; align-items: center; height: 24px; padding: 0 9px; border-radius: 999px; background: #1C1F23; font-size: 12px; font-weight: 600">{{d.who}}</span>
+<span style="display: inline-flex; align-items: center; height: 24px; padding: 0 9px; border-radius: 999px; background: #1C1F23; color: #C9CDD2; font-size: 12px">{{d.how}}</span>
+<span style="display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 999px; border: 1px solid {{d.vBd}}; color: {{d.vFg}}; font-size: 12px; font-weight: 600"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"></path></svg>{{d.verdict}}</span>
+</div>
+<dl style="margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px 20px; font-size: 13px">
+<div><dt style="color: #A9AEB6">Impact for you</dt><dd style="margin: 0">{{d.impact}}</dd></div>
+<div><dt style="color: #A9AEB6">Other options and their cost</dt><dd style="margin: 0; color: {{d.optFg}}; font-style: {{d.optStyle}}">{{d.options}}</dd></div>
+<div><dt style="color: #A9AEB6">Until when</dt><dd style="margin: 0; color: {{d.untilFg}}; font-style: {{d.untilStyle}}">{{d.until}}</dd></div>
+</dl>
+<p style="margin: 0; font-size: 12.5px; color: #8D939B">Source · <a href="#" onClick="{{d.openSource}}">{{d.source}}</a></p>
+<sc-if value="{{d.hasQuote}}" hint-placeholder-val="{{false}}"><p style="margin: 0; font-size: 13px; color: #C9CDD2">{{d.quote}}</p></sc-if>
+<sc-if value="{{d.hasFiled}}" hint-placeholder-val="{{false}}"><p style="margin: 0; font-size: 12px; color: #7F858D">{{d.filed}}</p></sc-if>
+</article>
+</sc-for>
+</section>
+</sc-if>
+
+<!-- ACTIVITY -->
+<sc-if value="{{isActivity}}" hint-placeholder-val="{{false}}">
+<section aria-label="Activity" style="display: flex; flex-direction: column; border-radius: 12px; border: 1px solid #22262B; overflow: hidden">
+<sc-for list="{{sel.activity}}" as="a" hint-placeholder-count="5">
+<div style="display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 11px 14px; border-top: 1px solid {{a.topBd}}; font-size: 13.5px">
+<span style="flex: 0 0 76px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; color: #8D939B">{{a.at}}</span>
+<span style="flex: 0 0 96px; font-weight: 600; color: {{a.roleFg}}">{{a.role}}</span>
+<span style="flex: 1 1 260px; min-width: 0; color: #D6D9DD">{{a.text}}</span>
+</div>
+</sc-for>
+</section>
+</sc-if>
+
+</main></sc-if>
+<!-- DRAWN (task #76): page-level states: empty, loading, server error, no access -->
+<sc-if value="{{ds.showPanel}}" hint-placeholder-val="{{false}}">
+<main style="flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+<section aria-labelledby="dstitle" style="display: flex; flex-direction: column; gap: 12px; padding: 20px; border-radius: 14px; background: #131518; border: 1px solid #22262B">
+<h2 id="dstitle" style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.01em">{{ds.title}}</h2>
+<sc-if value="{{ds.isError}}" hint-placeholder-val="{{false}}">
+<div role="alert" style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 14px 16px; border-radius: 10px; background: rgba(255,138,128,0.1); border: 1px solid rgba(255,138,128,0.45)">
+<svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="#FF8A80" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 2 14.5 13.5h-13z"></path><path d="M8 6.5v3.2"></path><circle cx="8" cy="11.7" r="0.7" fill="#FF8A80" stroke="none"></circle></svg>
+<p style="margin: 0; flex: 999 1 320px; min-width: 0; font-size: 13.5px; color: #D6D9DD">{{ds.alert}}</p>
+<button type="button" onClick="{{retry}}" style="min-height: 44px; padding: 0 16px; border-radius: 8px; border: 1px solid #4A4F57; background: transparent; color: #ECEDEE; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer">Try again</button>
+</div>
+</sc-if>
+<sc-if value="{{ds.hasBody}}" hint-placeholder-val="{{true}}"><p style="margin: 0; max-width: 720px; color: #B9BEC5; font-size: 14px">{{ds.body}}</p></sc-if>
+<sc-if value="{{ds.hasBody2}}" hint-placeholder-val="{{false}}"><p style="margin: 0; max-width: 720px; color: #B9BEC5; font-size: 14px">{{ds.body2}}</p></sc-if>
+</section>
+</main>
+</sc-if>
+</div>
+</div>
+</div>

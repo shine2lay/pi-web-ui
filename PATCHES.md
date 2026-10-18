@@ -26,6 +26,18 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: the file's 19 tests; the measure loop (the file 40 times, 6 at once, sealed, `TZ=UTC`): runs with the error 1 of 120 before, 0 of 120 after; traced runs writing to the console after the last test 40 of 40 before, 0 of 40 after. Then the landing gate.
 - Undo: revert this commit.
 
+## initiatives-exact: the supplied Initiatives design as an inert, data-driven view
+
+- `local` (owner 2026-10-18, Ops home chat: "now lets plan for initiatives page to show all the planning work"; dialog answer "Your design, 1:1"; Ops #224, project initiatives-page). Hypothesis H-INITIATIVES-EXACT-1 and result: `docs/initiatives-exact.md`.
+- Inert: nothing mounts it yet and the current Initiatives page is unchanged. The wiring task fills it with real data and ships it.
+- The owner's design (Design #76's extended copy with the 8 accepted states; both design files' sha256 are checked) becomes the template `web/src/initiatives-u0/surface.html`, written by `scripts/extract-initiatives-template.mjs` (`--check` reruns it against the file). In the design's own markup: the "in no initiative" box takes its heading and items from input; a "Who's doing what" row can carry child task rows, indented 16 px; a control whose callback is absent isn't shown.
+- One binder: Roles' binder moves to `web/src/exact-surface.ts` as `bindSurface(doc, template, read, opts)`; `bindRolesSurface` is a thin wrapper, so what Roles renders is unchanged.
+- `web/src/initiatives-exact-view.ts` ports the design component's own state logic (selection, tabs, filter pills with counts, open outcomes) and reads only `InitiativesExactInput` (`web/src/initiatives-exact-model.ts`): every field optional, no sample data. The 8 drawn states come from input.
+- `web/src/components/InitiativesExactView.tsx` mounts it in a script-free frame (`sandbox="allow-same-origin"`), fixed dark look, host-side timers, cleanup on unmount; fonts are checked by sha256 before use.
+- Fonts: the design's 11 embedded woff2 files, pinned by sha256 and size (`web/src/initiatives-u0/font-pins.ts`) and declared as its 32 @font-face rules. `web/initiatives-design-assets.ts` (Vite plugin; `PI_INITIATIVES_DESIGN_ASSETS` relocates them) fails every build when one is missing or changed.
+- Checks: `tests/unit/initiatives-exact.test.ts` (fixture from the design's 4 sample initiatives, test-only: key strings, selection, tabs and filters, child rows, the empty state and the other drawn states, hidden controls, no sample text in shipped files, the font check) with the Roles exact tests unchanged; one sealed look, `scripts/initiatives-exact-shot.mjs`; then the landing gate.
+- Undo: revert this commit (nothing is installed or mounted by it).
+
 ## patches-union: two changes that each add an entry here merge with both entries whole, and a check catches a bad merge
 
 - `local` (owner 2026-10-18, "Early warning + fewer conflicts", Ops #219). Hypotheses H-PATCHES-UNION-1 (MISS) and H-PATCHES-UNION-2, with results: `docs/patches-union.md`.

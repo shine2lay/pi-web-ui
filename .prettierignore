@@ -16,3 +16,5 @@ server/identity-config.ts
 server/identity-notes.ts
 # roles-u0: the owner's Roles design template, byte-exact (whitespace is rendered; pixel proofs pin these bytes)
 web/src/roles-u0/*.html
+# initiatives-exact: the owner's Initiatives design template as scripts/extract-initiatives-template.mjs writes it (whitespace is rendered)
+web/src/initiatives-u0/*.html
