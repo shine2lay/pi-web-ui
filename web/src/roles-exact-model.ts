@@ -23,6 +23,34 @@ export interface ExactSpend {
 	note: string;
 }
 
+/** roles-instructions (Ops #208): what its home chat loaded, against the files now; names and times only. */
+export interface ExactInstructions {
+	state: "current" | "outdated" | "none";
+	loadedAt: number | null;
+	changed: string[];
+}
+
+const INSTRUCTION_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/** Anything not exactly as the server sends it reads as not recorded; never a guessed state. */
+export function projectInstructions(value: unknown, now: number): ExactInstructions {
+	const none: ExactInstructions = { state: "none", loadedAt: null, changed: [] };
+	const input = object(value);
+	if (input?.state !== "current" && input?.state !== "outdated") return none;
+	const at = time(input.loadedAt);
+	if (at === null || !Number.isSafeInteger(at) || at <= 0 || at > now + CLOCK_SKEW_MS) return none;
+	if (input.state === "current") return { state: "current", loadedAt: at, changed: [] };
+	const changed = input.changed;
+	if (
+		!Array.isArray(changed) ||
+		!changed.length ||
+		changed.length > 8 ||
+		changed.some((n) => typeof n !== "string" || !INSTRUCTION_NAME.test(n))
+	)
+		return none;
+	return { state: "outdated", loadedAt: at, changed: [...new Set(changed as string[])] };
+}
+
 /** Read only the existing own-work tally. Never infer a total or a zero from missing data. */
 function projectSpend(value: unknown): ExactSpend {
 	const input = object(value);
@@ -125,6 +153,7 @@ export interface ExactRole {
 	row: UsefulRole;
 	panel: RolePanel | null;
 	spend: ExactSpend;
+	instructions: ExactInstructions;
 }
 export interface ExactRoles {
 	roles: ExactRole[];
@@ -152,6 +181,7 @@ export function projectExactRoles(state: unknown, connection: unknown, now: numb
 			row,
 			panel: projectRolePanel(state, row.roleId),
 			spend: projectSpend(object(rows.find((raw) => object(raw)?.id === row.roleId))?.spend),
+			instructions: projectInstructions(object(rows.find((raw) => object(raw)?.id === row.roleId))?.instructions, now),
 		})),
 		hasOverview: overview !== null,
 		contacts: overview !== null ? projectContacts(overview.contacts) : null,

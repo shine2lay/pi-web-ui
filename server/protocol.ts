@@ -2199,6 +2199,16 @@ export type UiRoleSpend =
 			byInitiative?: { id: string; amount: string }[];
 	  };
 
+/**
+ * roles-instructions (Ops #208): what its home chat loaded (pi-identity's loaded.json) against the files now.
+ * current: all unchanged; outdated: the names of those changed since (or gone); none: no record. Names and
+ * times only, never instruction text.
+ */
+export type UiRoleInstructions =
+	| { state: "none" }
+	| { state: "current"; loadedAt: number }
+	| { state: "outdated"; loadedAt: number; changed: string[] };
+
 /** roles-overview: one role on the Roles page. */
 export interface UiRoleOverview {
 	id: string;
@@ -2229,6 +2239,8 @@ export interface UiRoleOverview {
 	report: UiRoleReport;
 	/** Own-work spend.json; optional for older app snapshots. */
 	spend?: UiRoleSpend;
+	/** roles-instructions: optional for older app snapshots. */
+	instructions?: UiRoleInstructions;
 	/** board: open orders to it that it hasn't marked done, oldest first. */
 	boardOrders?: UiRoleBoardOrder[];
 	/** What couldn't be read ("queue", "tldr", "report", "home chat"): the rest is shown. */

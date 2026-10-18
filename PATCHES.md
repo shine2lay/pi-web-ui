@@ -18,6 +18,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: the "roles-model" cases in `tests/unit/roles-overview.test.ts` (open chat wins, newest change wins, a change added later, none/unknown/older host absent, line kind) and `tests/unit/roles-exact.test.ts` (panel text), then the landing gate.
 - Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
 
+## roles-instructions: show which instructions each role's home chat loaded
+
+- `local` (owner 2026-10-18, "create those tasks and queue them", Ops #208). Hypothesis H-ROLES-INSTR-1 and result: `docs/roles-instructions.md`. Needs pi-identity's `loaded.json` (its `docs/loaded-record.md`, landed first).
+- The panel's Instructions line said "Loaded instructions are not recorded". `server/roles-instructions.ts` reads `<role dir>/loaded.json` (bounded, plain file), takes the home chat's entry, hashes the files it lists as they are now (only the every-chat `AGENTS.md` from the host's `agentsFile()`, or `.md` files directly in the role's folder; plain bounded files) and compares: `current`, `outdated` with the changed names (a file gone since counts), else `none`. `roles-overview.ts` sends it as an optional `UiRoleOverview.instructions`; no protocol bump. Names, hashes and times only: no instruction text is kept or sent; nothing is written.
+- The page (`projectInstructions` in `roles-exact-model.ts`, `instructionsOf` in `roles-exact-view.ts`) shows "Current" (green) with "Loaded <time> · up to date", "Outdated" (amber) with "Loaded <time> · <names> changed since", or "Not recorded" (violet) for none, an older server or anything malformed; colours from the supplied design's INSTR map.
+- Checks: `tests/unit/roles-instructions.test.ts` (current, outdated with names, no record, a missing file, a path outside refused; the three display states), then the landing gate.
+- Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
+
 ## roles-lanes: show each role's task lanes on its card
 
 - `local` (owner 2026-10-18, first of the "Finish Roles' easy gaps" tasks, Ops #203). Hypothesis H-ROLES-LANES-1 and result: `docs/roles-lanes.md`.

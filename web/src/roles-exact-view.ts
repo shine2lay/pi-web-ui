@@ -7,6 +7,7 @@ import {
 	exactClock,
 	exactWhen,
 	type ExactContact,
+	type ExactInstructions,
 	type ExactRole,
 	type ExactRoles,
 } from "./roles-exact-model";
@@ -35,6 +36,28 @@ export function exactLanes(lanes: { atOnce: number; inUse: number } | null | und
 		lanesText: text,
 		lanesLabel: text,
 	};
+}
+/**
+ * roles-instructions (Ops #208): the panel's Instructions line, in the supplied design's label colours (its
+ * INSTR map: active green, saved-not-confirmed amber, not reported violet).
+ */
+export function instructionsOf(
+	instr: ExactInstructions,
+	now: number,
+): { instrLabel: string; instrFg: string; instr: { text: string } } {
+	if (instr.state === "current")
+		return {
+			instrLabel: "Current",
+			instrFg: "#9FD8B8",
+			instr: { text: `Loaded ${exactWhen(instr.loadedAt, now)} · up to date` },
+		};
+	if (instr.state === "outdated")
+		return {
+			instrLabel: "Outdated",
+			instrFg: "#F0B95A",
+			instr: { text: `Loaded ${exactWhen(instr.loadedAt, now)} · ${instr.changed.join(", ")} changed since` },
+		};
+	return { instrLabel: NR, instrFg: "#C7B8FF", instr: { text: "what its home chat loaded is not recorded" } };
 }
 const ROLE_STATE: Record<PanelRoleStatus, string> = {
 	"needs-you": "waiting",
@@ -523,9 +546,7 @@ export function createExactRolesView(
 			taskOmission,
 			chatHref: "#exact-route:home",
 			queueHref: "#exact-route:queue",
-			instrLabel: MISSING,
-			instrFg: "#C7B8FF",
-			instr: { text: "Loaded instructions are not recorded" },
+			...instructionsOf(role.instructions, model.now),
 			// roles-model: the home chat's model as its header names it.
 			model: row.model ?? NR,
 			purpose: panel?.focus ?? NR,

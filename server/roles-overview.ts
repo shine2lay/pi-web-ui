@@ -52,6 +52,7 @@ import {
 } from "./role-messages.js";
 import { rulesGoals, rulesWorkMode } from "./role-rules.js";
 import { readRoleSpend } from "./roles-spend.js";
+import { readRoleInstructions } from "./roles-instructions.js";
 import { roleAnswerKindAllowed } from "./roles-asks.js";
 import { roleTaskNext } from "./roles-task-next.js";
 import { requesterOf } from "./queue-requester.js";
@@ -675,6 +676,8 @@ export interface RolesOverviewHost {
 	chatModel?(file: string): string | null | undefined;
 	/** roles-model: a model's name in the app's model list (as a chat's header shows it), when known. */
 	modelName?(provider: string, modelId: string): string | undefined;
+	/** roles-instructions: the every-chat rules file pi loads (AGENTS.md); absent: no instructions state. */
+	agentsFile?(): string;
 	now?(): number;
 }
 
@@ -1027,6 +1030,9 @@ export class RolesOverviewReader {
 			requests: { open: requests.open, ...(requests.newest ? { newest: requests.newest } : {}) },
 			report,
 			spend: await readRoleSpend(def.dir, now),
+			...(this.host.agentsFile
+				? { instructions: await readRoleInstructions(def.dir, home, this.host.agentsFile()) }
+				: {}),
 			...(boardOrders.length ? { boardOrders } : {}),
 			...(problems.length ? { problems } : {}),
 		};

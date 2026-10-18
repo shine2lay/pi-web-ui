@@ -16150,6 +16150,8 @@ export class AgentService {
 				// roles-model: the open chat's live model, else a name from the app's model list (loads nothing).
 				chatModel: (file) => ClientSession.chatModelName(file),
 				modelName: (provider, modelId) => ClientSession.modelNameOf(provider, modelId),
+				// roles-instructions: pi reads the every-chat rules from its agent folder at each chat's start.
+				agentsFile: () => join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "AGENTS.md"),
 				rolePaused: () => this.roleMessages.paused,
 				sessionRoots: () =>
 					[process.env.PI_CODING_AGENT_SESSION_DIR, join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "sessions")]
