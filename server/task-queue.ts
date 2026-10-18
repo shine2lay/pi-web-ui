@@ -64,6 +64,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { type FileHandle, open } from "node:fs/promises";
 import { StringDecoder } from "node:string_decoder";
+import { requesterOf } from "./queue-requester.js";
 import { checkPatch, normProfile, normLaunch, patchProfile } from "./queue-profile.js";
 import type {
 	UiTaskQueue,
@@ -549,6 +550,10 @@ function apply(s: State, raw: unknown): void {
 	if (op.op === "add" || op.op === "assigned") {
 		if (s.tasks.some((t) => t.id === op.id)) return;
 		const task: Task = { id: op.id, plan: planOf(op.plan), status: "ready", addedAt: num(op.ts) };
+		if (op.op === "add") {
+			const origin = requesterOf(op.origin);
+			if (origin) task.origin = origin;
+		}
 		if (op.op === "add" && (op.approval === "dialog" || op.approval === "auto")) task.approval = op.approval;
 		setParent(
 			task,

@@ -10,6 +10,15 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## roles-requester: preserve accepted proposal input sources
+
+- `local` (owner 2026-10-17: connect task requesters after the supplied layout and next-action display). Hypothesis and scope: `docs/roles-requester.md`.
+- The host exposes an optional bounded copy of the current turn's admitted input origins. `pi-queue` snapshots this before plan approval and records it only on a new ordinary add. No tool parameter can set it, and editing a task does not replace its original snapshot.
+- The Roles projection renders plain source labels in the existing requester fields. Merged inputs retain every source including unknown; overflow, old tasks, restarts and missing host support remain unrecorded. This is provenance, not a claim that each input requested or approved the task.
+- No new action, routing, permission, budget or own-work decision; the old origin-policy integration remains inert. No message text is copied into the record.
+- Checks: the queue's real add/replay fixture and UI's `queue-requester.test.ts` cover admitted/pseudo inputs, merge/overflow, optional hosts, original-record preservation and safe display. Build and mandatory landing checks remain required.
+- Undo: revert the paired queue/UI changes and deploy the earlier build; optional saved origins may remain and cannot change queue behavior.
+
 ## roles-floating-header: title and status over the canvas
 
 - `local` (owner 2026-10-17: make the header and status float over the main component, not occupy a separate row). Hypothesis and results: `docs/roles-floating-header.md`.

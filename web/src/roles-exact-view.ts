@@ -384,8 +384,11 @@ export function createExactRolesView(
 		const ownTask = lead ? panelTasks.find((t) => t.taskId === lead.taskId) : undefined;
 		const queueEvent = ownTask?.queueEvent;
 		const rowDetail = (task: UsefulRecord) => {
-			const next = nextText(panelTasks.find((t) => t.taskId === task.taskId));
+			const detail = panelTasks.find((t) => t.taskId === task.taskId);
+			const next = nextText(detail);
 			return {
+				srcText: detail?.requester ? `From ${detail.requester}` : NR,
+				srcFg: detail?.requester ? "#9CC7FF" : "#A9AEB6",
 				hasDep: next === NR && !!task.waitsOn,
 				dep: task.waitsOn ?? "",
 				hasNext: next !== NR,
@@ -440,8 +443,8 @@ export function createExactRolesView(
 						: "Work mode unknown",
 			taskId: lead ? `#${lead.taskId}` : "",
 			taskTitle: taskTitle(lead),
-			taskSrc: "· requester not recorded",
-			taskSrcFg: "#A9AEB6",
+			taskSrc: ownTask?.requester ? `· From ${ownTask.requester}` : "· requester not recorded",
+			taskSrcFg: ownTask?.requester ? "#9CC7FF" : "#A9AEB6",
 			progressText: lead ? (lead.latest ?? (queueEvent ? QUEUE_EVENT[queueEvent.kind] : NR)) : (lines[0]?.text ?? NR),
 			progressAt: lead ? (lead.latest ? NR : exactClock(queueEvent?.at ?? null)) : exactClock(lines[0]?.ts ?? null),
 			nextShort: nextText(ownTask),
@@ -488,7 +491,6 @@ export function createExactRolesView(
 							id: `#${t.taskId}`,
 							title: taskTitle(t),
 							...rowDetail(t),
-							srcText: NR,
 						})),
 				})),
 				{
@@ -500,12 +502,9 @@ export function createExactRolesView(
 							id: `#${t.taskId}`,
 							title: taskTitle(t),
 							...rowDetail(t),
-							srcText: NR,
 						})),
 				},
-			]
-				.filter((g) => g.items.length > 0)
-				.map((g) => ({ ...g, items: g.items.map((t) => ({ ...t, srcFg: "#A9AEB6" })) })),
+			].filter((g) => g.items.length > 0),
 			acts: acts.length
 				? acts
 				: [

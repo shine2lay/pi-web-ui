@@ -9,6 +9,7 @@
  * and project, as each task's own queue entry names its parent and the work registry (pi-work-management)
  * names the project's initiative, with a blocked task's lead, what it owes, when it is due and the reminders.
  */
+import { requesterText } from "../../server/queue-requester";
 import {
 	chatFile,
 	focusOf,
@@ -99,6 +100,8 @@ export interface PanelTaskEvent {
 	at: number | null;
 }
 export interface PanelTask {
+	/** Plain text of recorded proposal inputs; missing stays unknown. */
+	requester?: string;
 	taskId: number;
 	next?: PanelTaskNext;
 	queueEvent?: PanelTaskEvent;
@@ -512,8 +515,10 @@ export function projectRolePanel(state: unknown, id: string): RolePanel | null {
 		const base = record(t, t.id, home);
 		const next = nextOf(t, base, labels, id);
 		const queueEvent = queueEventOf(t, next);
+		const requester = requesterText(t.requester, (role) => labels.get(role) ?? role);
 		const task: PanelTask = {
 			taskId: base.taskId,
+			...(requester ? { requester } : {}),
 			...(next ? { next } : {}),
 			...(queueEvent ? { queueEvent } : {}),
 			name: base.name,

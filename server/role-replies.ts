@@ -19,6 +19,8 @@
 import { existsSync } from "node:fs";
 import { homeChatOf, type IdentityDef } from "./identities.js";
 import { stripMarkers } from "./markers/marker.js";
+import { collectRequesterInput, type RequesterTurn } from "./queue-requester.js";
+import type { UiTaskRequesterInput } from "./protocol.js";
 
 /** What started a turn in a role's home chat. When several did, the first in this order wins. */
 export type RoleTurnCause = "telegram" | "plugin" | "role" | "browser" | "other";
@@ -88,7 +90,7 @@ export const ROLE_SEND_RETRY_MS = 3_000;
 export const ROLE_SEND_WAIT_MAX_MS = 6 * 60 * 60_000;
 
 /** What a run collects while it goes (per chat, see ClientSession's agent_start / message_end / agent_settled). */
-export interface RoleTurnRecord {
+export interface RoleTurnRecord extends RequesterTurn {
 	causes: Set<RoleTurnCause>;
 	ids: string[];
 	/** The last assistant text that has words in it. */
@@ -111,6 +113,8 @@ export interface RoleOwnerAnswer {
 
 /** Server-only accepted-input metadata, not parsed from words or caller tool arguments. */
 export interface RoleTurnInput {
+	/** Display-only, host-derived input origin; never a requester's claimed identity. */
+	requester?: UiTaskRequesterInput;
 	cause?: RoleTurnCause;
 	sendId?: string;
 	ownerChannel?: OwnerChannel;
@@ -119,6 +123,7 @@ export interface RoleTurnInput {
 
 /** Shared by prompt admission (pending and joined turns) and metadata-only boundary tests. */
 export function collectRoleInput(rec: RoleTurnRecord, input: RoleTurnInput): void {
+	collectRequesterInput(rec, input.requester);
 	rec.causes.add(input.cause ?? "other");
 	if (input.sendId) rec.ids.push(input.sendId);
 	if (input.forOwner) rec.forOwner = mergeOwnerAnswer(rec.forOwner, input.forOwner);

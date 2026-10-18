@@ -52,6 +52,7 @@ import { rulesGoals, rulesWorkMode } from "./role-rules.js";
 import { readRoleSpend } from "./roles-spend.js";
 import { roleAnswerKindAllowed } from "./roles-asks.js";
 import { roleTaskNext } from "./roles-task-next.js";
+import { requesterOf } from "./queue-requester.js";
 import {
 	TASK_QUEUE_ENTRY_TYPE,
 	taskQueueFromEntries,
@@ -1051,6 +1052,7 @@ function newestWaiting(lines: UiTldrLine[]): UiTldrLine | undefined {
 
 function taskOf(t: UiTaskQueueTask, department: string, held?: UiTaskQueueHold): UiRoleTask {
 	const display = roleTaskNext(t, department, held);
+	const requester = requesterOf(t.origin);
 	const queued = t.status === "ready" ? roleTaskNext(t, department).next : undefined;
 	let waitsOn: string | undefined;
 	if (t.status === "waiting" && t.wait?.what) waitsOn = t.wait.what;
@@ -1063,6 +1065,7 @@ function taskOf(t: UiTaskQueueTask, department: string, held?: UiTaskQueueHold):
 		status: t.status,
 		title: t.plan.title,
 		...display,
+		...(requester ? { requester } : {}),
 		...(t.chat ? { chat: { file: t.chat.file, ...(t.chat.title ? { title: t.chat.title } : {}) } } : {}),
 		...(t.status === "dropped" && t.dropped ? { dropped: { why: t.dropped.why, at: t.dropped.at } } : {}),
 		...(waitsOn ? { waitsOn } : {}),

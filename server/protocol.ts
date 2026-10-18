@@ -356,7 +356,26 @@ export interface UiTaskLaunch extends UiTaskProfile {
 	from: Record<keyof UiTaskProfile, "task" | "queue" | "app">;
 }
 
+/** Accepted inputs of the proposal's turn, not proof of plan consent or work authority. */
+export type UiTaskRequesterInput =
+	| { kind: "owner"; channel: "browser" | "telegram"; id: string }
+	| {
+			kind: "role";
+			role: string;
+			id: string;
+			message: "question" | "request" | "reply";
+			forOwner?: true;
+			ownerIds?: string[];
+	  }
+	| { kind: "unknown" };
+export interface UiTaskRequester {
+	v: 1;
+	inputs: UiTaskRequesterInput[];
+}
+
 export interface UiTaskQueueTask {
+	/** Optional original proposal provenance; never used for permissions. */
+	origin?: UiTaskRequester;
 	/** queue-autonomy: attribution for the latest plan, absent for old records. */
 	approval?: "dialog" | "auto";
 	/** pi-queue 的任务编号（#n），一条对话里从 1 往上数。 */
@@ -2029,6 +2048,8 @@ export interface UiRoleTaskEvent {
 
 /** roles-overview: a task of a role's home queue. */
 export interface UiRoleTask {
+	/** Original proposal inputs, separate from plan approval. */
+	requester?: UiTaskRequester;
 	id: number;
 	status: "ready" | "working" | "asking" | "stuck" | "waiting" | "blocked" | "done" | "dropped";
 	title: string;

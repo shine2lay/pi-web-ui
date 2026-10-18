@@ -16,6 +16,8 @@
 import "./patch-remote-catalog.js";
 // Logs whatever holds pi's sign-in lock (auth.json) for 60 s or more; logging only (#134).
 import "./auth-lock-trace.js";
+import { mergeRequesterTurn, requesterForAdmission, requesterInputOf, requesterOfTurn } from "./queue-requester.js";
+import type { UiTaskRequester, UiTaskRequesterInput } from "./protocol.js";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
@@ -2322,6 +2324,7 @@ function atomicWriteFileSync(file: string, data: string): void {
  *  the host.roles.send id, and, for a reply to a question asked for the owner, who answered and his
  *  send ids (role-replies.ts forOwner). */
 interface RoleDeliveryHow {
+	requester?: UiTaskRequesterInput;
 	cause?: RoleTurnCause;
 	sendId?: string;
 	forOwner?: RoleOwnerAnswer;
@@ -2330,6 +2333,7 @@ interface RoleDeliveryHow {
 
 /** optimistic-send: how far one prompt() got, for its final answer (see ClientSession.prompt). */
 interface PromptFlow {
+	requester?: UiTaskRequesterInput;
 	/** role-messages: "extension" = the server sends it for someone else (a role message), not the
 	 *  owner typing: pi's input hooks see that source (pi-queue doesn't take it for the owner's answer),
 	 *  and the owner's draft, last prompt and seen marks stay as they are. */
@@ -5172,6 +5176,14 @@ export class ClientSession {
 		}
 	}
 
+	/** Read only the currently running turn's accepted-input metadata, never transcript text. */
+	queueTurnOrigin(file: string): UiTaskRequester | undefined {
+		const id = this.conversationIdBySessionFile(file);
+		const conv = id ? this.convs.get(id) : undefined;
+		if (!conv?.session.isStreaming || conv.isSubagent || conv.isEphemeral) return;
+		return requesterOfTurn(conv.turnRecord);
+	}
+
 	/** Startup's already-open target: native follow-up admission, no separate idle prompt/run. */
 	async queueRoleMailForResume(
 		file: string,
@@ -5182,8 +5194,11 @@ export class ClientSession {
 		const conv = id ? this.convs.get(id) : undefined;
 		if (!conv || id !== this.activeId) return { ok: false, error: "couldn't open the chat" };
 		const disposition = await conv.session.followUp(text, undefined, { source: "extension" });
-		if (disposition !== "handled")
-			collectRoleInput((conv.turnPending ??= newTurnRecord()), { ...how, cause: how.cause ?? "role" });
+		if (disposition !== "handled") {
+			const cause = how.cause ?? "role";
+			const requester = requesterForAdmission({ ...how, cause, source: "extension", inputId: `ri-${randomUUID()}` });
+			collectRoleInput((conv.turnPending ??= newTurnRecord()), { ...how, cause, requester });
+		}
 		return { ok: true };
 	}
 
@@ -5213,6 +5228,7 @@ export class ClientSession {
 			...(how.sendId ? { sendId: how.sendId } : {}),
 			...(how.forOwner ? { forOwner: how.forOwner } : {}),
 			...(how.ownerChannel ? { ownerChannel: how.ownerChannel } : {}),
+			...(how.requester ? { requester: how.requester } : {}),
 		}).catch(() => {});
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const answer = await Promise.race([
@@ -5233,6 +5249,7 @@ export class ClientSession {
 		const p = conv.turnPending;
 		conv.turnPending = undefined;
 		if (!p) return;
+		mergeRequesterTurn(rec, p);
 		for (const c of p.causes) rec.causes.add(c);
 		rec.ids.push(...p.ids);
 		if (p.forOwner) rec.forOwner = mergeOwnerAnswer(rec.forOwner, p.forOwner);
@@ -10293,6 +10310,7 @@ export class ClientSession {
 		 *  telegram-coo: cause = who sent it, sendId = the host.roles.send it is (see PromptFlow.cause),
 		 *  forOwner = a reply to a question asked for the owner (see PromptFlow.forOwner). */
 		opts?: {
+			requester?: UiTaskRequesterInput;
 			source?: "extension";
 			cause?: RoleTurnCause;
 			sendId?: string;
@@ -10315,6 +10333,7 @@ export class ClientSession {
 		// optimistic-send: this message's place in the chat's line, taken before any await so the
 		// places follow the order the messages came in (see takePromptAdmission).
 		const flow: PromptFlow = {
+			requester: requesterForAdmission({ ...opts, inputId: `ri-${randomUUID()}` }),
 			...(opts?.source ? { source: opts.source } : {}),
 			cause: opts?.cause ?? "other",
 			...(opts?.sendId ? { sendId: opts.sendId } : {}),
@@ -16125,7 +16144,24 @@ export class AgentService {
 	 *  the owner, who answered and his send ids (the turn it starts is his, role-replies.ts forOwner). */
 	private roleMessageHow(file: string, text: string): RoleDeliveryHow {
 		const owner = this.roleMessages.ownerContextFor(file, text);
-		return { cause: this.roleMessageCause(text), ...(owner ? { forOwner: owner } : {}) };
+		const cause = this.roleMessages.causalityOf(file, text);
+		const record = cause.kind === "record" && cause.exactTarget ? this.roleMessages.byId(cause.record.id) : undefined;
+		const requester = record
+			? requesterInputOf({
+					kind: "role",
+					role: record.from.role,
+					id: record.id,
+					message: record.kind,
+					...(record.forOwner === true
+						? { forOwner: true, ...(record.ownerIds ? { ownerIds: record.ownerIds } : {}) }
+						: {}),
+				})
+			: undefined;
+		return {
+			cause: this.roleMessageCause(text),
+			...(owner ? { forOwner: owner } : {}),
+			...(requester ? { requester } : {}),
+		};
 	}
 
 	/** telegram-coo: a run settled in the chat with this transcript: a role's home chat hands its reply on. */
@@ -16606,6 +16642,16 @@ export class AgentService {
 		ClientSession.queueBlocks = blocks;
 		blocks.start();
 		this.uninstallQueueHost = installQueueHost({
+			turnOrigin: (file) => {
+				let found: UiTaskRequester | undefined;
+				for (const client of this.clients.values()) {
+					const current = client.queueTurnOrigin(file);
+					if (!current) continue;
+					if (found && JSON.stringify(found) !== JSON.stringify(current)) return undefined;
+					found = current;
+				}
+				return found;
+			},
 			queueRefs: (req) => blocks.resolveRefs(req),
 			watchQueue: (file) => blocks.watchQueue(file),
 			// queue-lead-reminders (rule 24): a role's home chat, and a reminder to it (queue-blocks.ts).

@@ -50,8 +50,9 @@
 
 import { existsSync } from "node:fs";
 import { consumeOwnerSetting } from "./queue-owner.js";
+import { requesterOf } from "./queue-requester.js";
 import { checkPatch, normLaunch, QueueLaunchRefused } from "./queue-profile.js";
-import type { ChatSpeed, UiTaskLaunch } from "./protocol.js";
+import type { ChatSpeed, UiTaskLaunch, UiTaskRequester } from "./protocol.js";
 
 export const QUEUE_HOST_KEY = Symbol.for("pi-web-ui.queue-host");
 
@@ -80,6 +81,8 @@ export interface ChatState {
 }
 
 export interface QueueHostImpl {
+	/** Display-only accepted inputs, absent when no live turn is known. */
+	turnOrigin?(sessionFile: string): UiTaskRequester | undefined;
 	startChat(opts: QueueChatStart): Promise<{ sessionFile: string; conversationId?: string }>;
 	runCommand(sessionFile: string, line: string): Promise<boolean>;
 	closeChat(sessionFile: string): Promise<boolean>;
@@ -348,6 +351,18 @@ export function installQueueHost(impl: QueueHostImpl): () => void {
 		v: 1 as const,
 		profiles: 1 as const,
 		consumeOwnerSetting,
+		...(impl.turnOrigin
+			? {
+					turnOrigin: (file: string): UiTaskRequester | undefined => {
+						if (typeof file !== "string" || !file.startsWith("/") || file.length > 1000) return;
+						try {
+							return requesterOf(impl.turnOrigin!(file));
+						} catch {
+							return;
+						}
+					},
+				}
+			: {}),
 		...(impl.previewLaunch ? { previewLaunch: impl.previewLaunch } : {}),
 		...(impl.queueRefs
 			? {
