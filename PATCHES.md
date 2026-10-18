@@ -10,6 +10,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## roles-model: show each role's model in its panel
+
+- `local` (owner 2026-10-18, second of the "Finish Roles' easy gaps" tasks, Ops #204). Hypothesis H-ROLES-MODEL-1 and result: `docs/roles-model.md`.
+- The panel's Model line was hard-coded "Not connected yet" although the app knows each chat's model. `roles-overview.ts` now sends an optional `UiRoleOverview.model`: an open home chat's live model name (`ClientSession.chatModelName`, the value its header shows), else the newest `model_change` line its `TranscriptScans` already reads, named from an open chat's model list (`ClientSession.modelNameOf`). No new file read, no chat loading, no model call, no writes, no message text; no protocol bump.
+- The page takes it as plain bounded text (`roles-useful-model.ts`); `box()` in `roles-exact-view.ts` shows it, or "Not recorded" when absent (no home chat, no recorded change, a model the app doesn't know, an older server).
+- Checks: the "roles-model" cases in `tests/unit/roles-overview.test.ts` (open chat wins, newest change wins, a change added later, none/unknown/older host absent, line kind) and `tests/unit/roles-exact.test.ts` (panel text), then the landing gate.
+- Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
+
 ## roles-lanes: show each role's task lanes on its card
 
 - `local` (owner 2026-10-18, first of the "Finish Roles' easy gaps" tasks, Ops #203). Hypothesis H-ROLES-LANES-1 and result: `docs/roles-lanes.md`.

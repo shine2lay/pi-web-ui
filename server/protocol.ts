@@ -2205,6 +2205,8 @@ export interface UiRoleOverview {
 	title: string;
 	focus?: string;
 	homeChat?: { file: string; title?: string };
+	/** roles-model: the model its home chat runs, as that chat's header names it (absent: not recorded). */
+	model?: string;
 	workMode: UiRoleWorkMode;
 	/** owner: identity.json says it; rules: the every-chat rules' default (read-only). */
 	workModeFrom: "owner" | "rules";

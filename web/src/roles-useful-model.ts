@@ -155,6 +155,8 @@ export interface UsefulRole {
 	spend?: UsefulSpend | null;
 	/** roles-lanes: lanes it may run at once and how many are in use; null (or absent) = not recorded. */
 	lanes?: { atOnce: number; inUse: number } | null;
+	/** roles-model: the model its home chat runs, as that chat's header names it; absent = not recorded. */
+	model?: string;
 }
 export interface NeedsYouItem {
 	/** Validated roster id, for associating the ask with one role's panel, never its display name. */
@@ -470,6 +472,9 @@ function projectRole(row: Fields, id: string): ProjectedRole {
 	};
 	// roles-lanes: only when recorded, so a role without them reads exactly as before.
 	if (lanes) projected.lanes = lanes;
+	// roles-model: plain bounded text only; anything else reads as not recorded.
+	const model = plain(row.model, LABEL_LIMIT);
+	if (model) projected.model = model.text;
 	return {
 		role: projected,
 		asksSeen: startedChats <= TASK_CHATS_READ,

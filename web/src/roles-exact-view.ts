@@ -526,7 +526,8 @@ export function createExactRolesView(
 			instrLabel: MISSING,
 			instrFg: "#C7B8FF",
 			instr: { text: "Loaded instructions are not recorded" },
-			model: MISSING,
+			// roles-model: the home chat's model as its header names it.
+			model: row.model ?? NR,
 			purpose: panel?.focus ?? NR,
 			respList: (panel?.goals ?? []).map((g) => ({ t: `Goal: ${g.name ?? NR}${g.scope ? ` — ${g.scope}` : ""}` })),
 			hasBudgetNote: true,

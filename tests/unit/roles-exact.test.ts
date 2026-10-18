@@ -191,6 +191,19 @@ describe("the supplied Roles design with the existing feed", () => {
 		expect(document.querySelector('[role="region"]')?.textContent).toContain("Task lanes2 of 3 lanes in use");
 	});
 
+	it("roles-model: the panel's Model line names the home chat's model, else Not recorded", () => {
+		const named = fixture(projectExactRoles(state([role({ model: "Claude Opus 4.5" })]), "open", NOW), true);
+		named.view.openRole("ops", document.body);
+		vi.runAllTimers();
+		expect(object(named.view.values().ex).model).toBe("Claude Opus 4.5");
+		expect(document.querySelector('[role="region"]')?.textContent).toContain("Model: Claude Opus 4.5");
+		for (const bad of [undefined, "", "a\u0007b", 42]) {
+			const { view } = fixture(projectExactRoles(state([role({ model: bad })]), "open", NOW));
+			view.openRole("ops");
+			expect(object(view.values().ex).model).toBe("Not recorded");
+		}
+	});
+
 	it("mounts the actual supplied template and opens the complete department panel", () => {
 		const { view } = fixture(undefined, true);
 		expect(document.querySelector("h1")?.textContent).toBe("Roles");

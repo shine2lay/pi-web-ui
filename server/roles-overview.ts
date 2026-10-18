@@ -3,14 +3,15 @@
  * already keeps:
  *   - the roles (identity.json: home chat, the owner's work mode and approved goals, the Focus line);
  *   - each role's home chat and its started task chats on disk: TL;DR lines and pi-queue entries, read
- *     once and then only the bytes added since (an unchanged file costs one stat);
+ *     once and then only the bytes added since (an unchanged file costs one stat); of a home chat also its
+ *     newest model change (provider and model id, never message text);
  *   - the chats' runtime state (working or not) and the questions waiting now;
  *   - the whole role-message store (open requests, 6 am report requests), not just its last 100 rows;
  *   - the 6 am report job's runs (role-reports runs.json) and its scheduler job.
  *
  * It only reads: it loads no chat, starts no worker, calls no model and writes nothing.
  * What leaves it is display text only: TL;DR lines, task titles and questions, request first lines and
- * the report a role wrote for the owner. Never raw entries, thinking, tool calls or results, prompts,
+ * the report a role wrote for the owner, and its home chat's model name. Never raw entries, thinking, tool calls or results, prompts,
  * rules or notebooks. Every transcript it opens must be a plain .jsonl file inside the session folders
  * (no "..", no symlinks).
  */
@@ -171,13 +172,17 @@ export interface TranscriptScan {
 	stuckAt: Map<number, number>;
 	/** A needs-you line came after the last kept reply (only then is a reply worth keeping). */
 	waiting: boolean;
+	/** roles-model: the newest model change written to it (provider and model id only). */
+	model?: { provider: string; modelId: string };
 }
 
-type LineKind = "session" | "tldr" | "queue" | "user" | "replyTool";
+type LineKind = "session" | "tldr" | "queue" | "user" | "replyTool" | "model";
 
 /** What a transcript line is, from its first bytes (null: nothing the page needs). */
 export function lineKind(head: string): LineKind | null {
 	if (head.startsWith('{"type":"session"')) return "session";
+	// roles-model: the SDK's model change entry (no message text in it).
+	if (head.startsWith('{"type":"model_change"')) return "model";
 	if (head.includes('"type":"custom"')) {
 		if (head.includes(`"customType":"${TLDR_ENTRY_TYPE}"`)) return "tldr";
 		if (head.includes(`"customType":"${TASK_QUEUE_ENTRY_TYPE}"`)) return "queue";
@@ -338,6 +343,13 @@ export class TranscriptScans {
 			if (s.offset === 0 && e.type === "session" && typeof e.id === "string" && e.id.length > 0) s.sessionId = e.id;
 			return;
 		}
+		if (kind === "model") {
+			// roles-model: a later change replaces an earlier one (lines are read in file order).
+			if (e.type === "model_change" && modelPart(e.provider) && modelPart(e.modelId)) {
+				s.model = { provider: e.provider, modelId: e.modelId };
+			}
+			return;
+		}
 		if (kind === "tldr") {
 			if (e.type !== "custom" || e.customType !== TLDR_ENTRY_TYPE || typeof e.id !== "string") return;
 			const entry: TldrEntryLike = {
@@ -369,6 +381,21 @@ export class TranscriptScans {
 		s.tldr.push(REPLY);
 		s.waiting = false;
 	}
+}
+
+/** roles-model: a provider or model id as the SDK writes it: short, no control characters. */
+function modelPart(value: unknown): value is string {
+	return typeof value === "string" && value.length > 0 && value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+/** roles-model: the most the page gets of a model's name. */
+export const ROLE_MODEL_MAX = 120;
+
+/** roles-model: a model name fit for the page (trimmed, short, no control characters), else undefined. */
+export function roleModelLabel(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const text = value.trim();
+	return text && text.length <= ROLE_MODEL_MAX && !/[\u0000-\u001f\u007f]/.test(text) ? text : undefined;
 }
 
 /** A file's first 256 bytes (as text), "" when empty or unreadable. */
@@ -643,6 +670,11 @@ export interface RolesOverviewHost {
 	workFile?(): string;
 	/** owner-contacts (Roles D3): the owner's messages to role home chats, newest first; absent: none. */
 	ownerContacts?(): UiOwnerContact[];
+	/** roles-model: the model name the open chat with this transcript shows in its header (its live state).
+	 *  undefined: it isn't open; null: it is open without a model. Loads nothing. */
+	chatModel?(file: string): string | null | undefined;
+	/** roles-model: a model's name in the app's model list (as a chat's header shows it), when known. */
+	modelName?(provider: string, modelId: string): string | undefined;
 	now?(): number;
 }
 
@@ -743,11 +775,14 @@ export class RolesOverviewReader {
 		let laneUse: UiRoleQueue["lanes"];
 		let stuckAt = new Map<number, number>();
 		let lastActivity: number | undefined;
+		// roles-model: the home chat's newest recorded model change (used when the chat isn't open).
+		let recordedModel: TranscriptScan["model"];
 		if (home) {
 			try {
 				const s = await this.scans.read(home);
 				keep.add(home);
 				lastActivity = Math.round(s.mtimeMs);
+				recordedModel = s.model;
 				homeLines = tldrLinesFromEntries(s.tldr, TLDR_MAX_LINES);
 				const q = taskQueueFromEntries(s.queue, true, Number.MAX_SAFE_INTEGER, undefined, s.sessionId);
 				tasks = q.tasks;
@@ -962,6 +997,7 @@ export class RolesOverviewReader {
 			problems.push("board");
 		}
 		const homeBusy = home ? this.host.chatState(home) === "working" : false;
+		const model = home ? this.modelOf(home, recordedModel) : undefined;
 		const sortedAsks = sortAsks(asks);
 		const status = statusOf({
 			asks: sortedAsks.length,
@@ -980,6 +1016,7 @@ export class RolesOverviewReader {
 			id: def.id,
 			title: def.title,
 			...(home ? { homeChat: { file: home } } : {}),
+			...(model ? { model } : {}),
 			...mode,
 			status,
 			...(lastActivity ? { lastActivity } : {}),
@@ -993,6 +1030,18 @@ export class RolesOverviewReader {
 			...(boardOrders.length ? { boardOrders } : {}),
 			...(problems.length ? { problems } : {}),
 		};
+	}
+
+	/** roles-model: the home chat's model as its header shows it: the open chat's live model, else the newest
+	 *  model change in its file named from the app's model list. Unknown: undefined ("Not recorded"). */
+	private modelOf(home: string, recorded: TranscriptScan["model"]): string | undefined {
+		try {
+			const live = this.host.chatModel?.(home);
+			if (live !== undefined) return roleModelLabel(live);
+			return recorded ? roleModelLabel(this.host.modelName?.(recorded.provider, recorded.modelId)) : undefined;
+		} catch {
+			return undefined;
+		}
 	}
 
 	/** A role's latest 6 am report, or why there is none. */

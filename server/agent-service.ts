@@ -5552,6 +5552,44 @@ export class ClientSession {
 	}
 
 	/**
+	 * roles-model: the model name the open chat with this transcript shows in its header (the same live state,
+	 * agent.state.model). undefined = it isn't open; null = it is open without a model. Opens nothing.
+	 */
+	static chatModelName(file: string): string | null | undefined {
+		let abs: string;
+		try {
+			abs = resolve(file);
+		} catch {
+			return undefined;
+		}
+		for (const c of ClientSession.sharedConvs.values()) {
+			if (c.isSubagent) continue;
+			try {
+				const f = c.session.sessionFile;
+				if (!f || resolve(f) !== abs) continue;
+				return c.session.agent.state.model?.name ?? null;
+			} catch {
+				// a chat whose runtime is being replaced right now can't be matched: skipped
+			}
+		}
+		return undefined;
+	}
+
+	/** roles-model: a model's name in an open chat's model list (what a header shows for it); undefined when
+	 *  no open chat knows it. A lookup only: it loads no chat and calls no model. */
+	static modelNameOf(provider: string, modelId: string): string | undefined {
+		for (const c of ClientSession.sharedConvs.values()) {
+			try {
+				const name = c.runtime.services.modelRuntime.getModel(provider, modelId)?.name;
+				if (name) return name;
+			} catch {
+				// a runtime being replaced right now: try the next chat
+			}
+		}
+		return undefined;
+	}
+
+	/**
 	 * queue-lanes: a task chat whose task is done leaves the running list. It is freed right away,
 	 * or, when it is this client's active chat or a window is looking at it, as soon as that moves on.
 	 * It stays in the history (queue-done-hidden: but not in Recent chats, see queueCloseChat).
@@ -16109,6 +16147,9 @@ export class AgentService {
 				board: () => this.roleBoard.view(),
 				boardOrdersOf: (role) => this.roleBoard.openOrdersOf(role),
 				ownerContacts: () => this.ownerContactList(),
+				// roles-model: the open chat's live model, else a name from the app's model list (loads nothing).
+				chatModel: (file) => ClientSession.chatModelName(file),
+				modelName: (provider, modelId) => ClientSession.modelNameOf(provider, modelId),
 				rolePaused: () => this.roleMessages.paused,
 				sessionRoots: () =>
 					[process.env.PI_CODING_AGENT_SESSION_DIR, join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "sessions")]

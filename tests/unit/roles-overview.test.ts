@@ -411,6 +411,78 @@ describe("roles-lanes: lanes at once and in use", () => {
 	});
 });
 
+describe("roles-model: each role's home chat model", () => {
+	const change = (provider: string, modelId: string, ts: number): Line => ({
+		type: "model_change",
+		id: id8(),
+		parentId: null,
+		timestamp: iso(ts),
+		provider,
+		modelId,
+	});
+	const NAMES: Record<string, string> = {
+		"anthropic/claude-opus-4-5": "Claude Opus 4.5",
+		"openai-codex/gpt-5": "GPT-5",
+		"anthropic/claude-sonnet-4-5": "Claude Sonnet 4.5",
+	};
+	function withModels(f: Fake, open: Map<string, string | null>): Fake {
+		f.host.chatModel = (file) => open.get(file);
+		f.host.modelName = (provider, modelId) => NAMES[`${provider}/${modelId}`];
+		return f;
+	}
+
+	it("an open chat: its live model, the one its header shows, over what its file recorded", async () => {
+		const home = transcript("model-open", [change("anthropic", "claude-opus-4-5", T0 + MIN)]);
+		const bare = transcript("model-open-none", [change("anthropic", "claude-opus-4-5", T0 + MIN)]);
+		const f = withModels(
+			fake([role("ops", home), role("qa", bare)]),
+			new Map<string, string | null>([
+				[home, "GPT-5"],
+				[bare, null],
+			]),
+		);
+		const o = await read(f);
+		expect(byId(o, "ops").model).toBe("GPT-5");
+		// open without a model: not recorded, not the file's older one
+		expect(byId(o, "qa").model).toBeUndefined();
+	});
+
+	it("a chat that isn't open: the newest model change in its file, also one added later", async () => {
+		const home = transcript("model-idle", [
+			change("anthropic", "claude-opus-4-5", T0 + MIN),
+			assistant("done", T0 + 2 * MIN),
+			change("openai-codex", "gpt-5", T0 + 3 * MIN),
+			tldr("Working on it", T0 + 4 * MIN),
+		]);
+		const f = withModels(fake([role("ops", home)]), new Map());
+		const reader = new RolesOverviewReader(f.host);
+		expect(byId(await reader.read(), "ops").model).toBe("GPT-5");
+		// the model changes again: the same reader shows the new one (read from the added bytes)
+		append(home, [change("anthropic", "claude-sonnet-4-5", T0 + 5 * MIN)]);
+		expect(byId(await reader.read(), "ops").model).toBe("Claude Sonnet 4.5");
+	});
+
+	it("no home chat, no recorded change or a model the app doesn't know: absent (Not recorded)", async () => {
+		const empty = transcript("model-none", [tldr("Hello", T0 + MIN)]);
+		const unknown = transcript("model-unknown", [change("gone", "old-model", T0 + MIN)]);
+		const f = withModels(fake([role("coo"), role("docs", empty), role("qa", unknown)]), new Map());
+		const o = await read(f);
+		expect(byId(o, "coo").model).toBeUndefined();
+		expect(byId(o, "docs").model).toBeUndefined();
+		expect(byId(o, "qa").model).toBeUndefined();
+		// a host without the model hooks (an older app) sends none either
+		const g = fake([role("ops", transcript("model-old-host", [change("anthropic", "claude-opus-4-5", T0)]))]);
+		expect(byId(await read(g), "ops").model).toBeUndefined();
+	});
+
+	it("reads only the model change line kind, never a message that quotes one", () => {
+		expect(lineKind('{"type":"model_change","id":"1","provider":"a","modelId":"b"}')).toBe("model");
+		expect(lineKind('{"type":"message","message":{"role":"user","content":"{\\"type\\":\\"model_change\\""}}')).toBe(
+			"user",
+		);
+	});
+});
+
 describe("what waits on the owner", () => {
 	it("lists every distinct ask oldest first with its real start, folds copies and leaves out tasks asking their main chat", async () => {
 		// Task 5's chat got stuck (the owner has to answer); task 6 asks its main chat (not the owner).
