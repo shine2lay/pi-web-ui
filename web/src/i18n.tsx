@@ -2340,6 +2340,9 @@ export const en = {
 	/* roles-answer: the complete ask, answered through the existing browser path */
 	raAnswer: "Answer",
 	raTitle: "Answer this question",
+	raKindPlan: "Plan to approve",
+	raKindQuestion: "Question",
+	raKindStuck: "Stuck task",
 	raBody: "Full question and answer choices",
 	raLoading: "Checking what is waiting…",
 	raSending: "Sending your answer…",

@@ -1,5 +1,5 @@
 /** roles-answer: a closed, complete plain-text form. No truncation and no arbitrary DTO reaches the dialog. */
-import { object, UNSAFE } from "./roles-useful-model";
+import { object, UNSAFE, type NeedsYou, type NeedsYouItem } from "./roles-useful-model";
 import type { UiRoleAskAnswer, UiRoleAskField, UiRoleAskOption, UiRoleAskView } from "./types";
 
 const CHAT_PATH = /(?:\/|[a-z]:\\)[^\n\r]*?\.jsonl\b/i;
@@ -160,6 +160,28 @@ export function roleAnswerForm(view: UiRoleAskView, drafts: RoleAnswerDrafts) {
 		shown.push({ field, index, options: choices, answer });
 	});
 	return { shown, answers, complete: complete && shown.length > 0 };
+}
+
+/** roles-small-fixes N3: the dialog names what kind of ask it is. */
+export function roleAnswerKindKey(kind: UiRoleAskView["kind"]) {
+	if (kind === "dialog") return "raKindPlan" as const;
+	if (kind === "stuck") return "raKindStuck" as const;
+	return "raKindQuestion" as const;
+}
+
+/** roles-small-fixes N3: close an open dialog once its ask has left the list the server reported.
+ * Only when the list is live and whole (no "N more" cut), and never while an answer is on its way or
+ * just sent, so the sent receipt stays readable.
+ */
+export function roleAnswerGone(
+	needs: Pick<NeedsYou, "tell" | "more" | "items">,
+	item: Pick<NeedsYouItem, "answer">,
+	stage: "loading" | "ready" | "sending" | "sent" | "error",
+): boolean {
+	const target = item.answer;
+	if (!target || stage === "sending" || stage === "sent") return false;
+	if ((needs.tell !== "can-tell" && needs.tell !== "decision") || needs.more > 0) return false;
+	return !needs.items.some((i) => i.answer?.key === target.key && i.answer.id === target.id);
 }
 
 /** Server errors are never shown verbatim (they may contain paths or agent-controlled values). */

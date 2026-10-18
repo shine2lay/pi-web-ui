@@ -198,6 +198,7 @@ export function RolesExactView({
 			{active && answer && (
 				<RoleAnswerDialog
 					item={answer.item}
+					needs={model.needs}
 					connected={connection === "open"}
 					onOpen={onOpen}
 					onClose={(back) => {

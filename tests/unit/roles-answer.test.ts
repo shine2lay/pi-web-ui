@@ -1,11 +1,18 @@
 // roles-answer: complete consent forms, conditional answers, and the real service's membership checks.
 // Fixed synthetic asks only. No chat, provider, or live state is read.
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentService } from "../../server/agent-service.js";
 import { askHub, type Ask, type AskField, type AskFieldAnswer } from "../../server/asks.js";
 import type { UiRoleAsk, UiRolesOverview } from "../../server/protocol.js";
 import { answersFromPage, askViewOf, roleAnswerKindAllowed } from "../../server/roles-asks.js";
-import { projectRoleAsk, roleAnswerError, roleAnswerForm } from "../../web/src/roles-answer-model.js";
+import {
+	projectRoleAsk,
+	roleAnswerError,
+	roleAnswerForm,
+	roleAnswerGone,
+	roleAnswerKindKey,
+} from "../../web/src/roles-answer-model.js";
 
 const field = (over: Partial<AskField> = {}): AskField => ({
 	id: "pick",
@@ -233,6 +240,39 @@ describe("generic dialog policy", () => {
 	});
 	it("does not coerce a malformed dialog title", () => {
 		expect(roleAnswerKindAllowed(fixture({ kind: "dialog", title: null as unknown as string }))).toBe(false);
+	});
+});
+
+// roles-small-fixes N3: the dialog names the ask's kind and closes once its item leaves the list.
+describe("answer dialog kind and departure", () => {
+	const target = { answer: { key: "ops:question:a", id: "a" } };
+	const listed = (over: Partial<{ tell: string; more: number; items: { answer?: { key: string; id: string } }[] }>) =>
+		({ tell: "can-tell", more: 0, items: [target], ...over }) as Parameters<typeof roleAnswerGone>[0];
+	it("names each kind the page can answer", () => {
+		expect(roleAnswerKindKey("dialog")).toBe("raKindPlan");
+		expect(roleAnswerKindKey("question")).toBe("raKindQuestion");
+		expect(roleAnswerKindKey("stuck")).toBe("raKindStuck");
+		const dialog = readFileSync(new URL("../../web/src/components/RoleAnswerDialog.tsx", import.meta.url), "utf8");
+		expect(dialog).toContain("t(roleAnswerKindKey(view.kind))");
+	});
+	it("closes when the ask leaves a live, whole list", () => {
+		expect(roleAnswerGone(listed({}), target, "ready")).toBe(false);
+		for (const stage of ["loading", "ready", "error"] as const) {
+			expect(roleAnswerGone(listed({ items: [] }), target, stage)).toBe(true);
+			expect(roleAnswerGone(listed({ tell: "decision", items: [] }), target, stage)).toBe(true);
+		}
+		// Same key, another ask: the one opened is gone.
+		expect(roleAnswerGone(listed({ items: [{ answer: { key: "ops:question:a", id: "b" } }] }), target, "ready")).toBe(
+			true,
+		);
+	});
+	it("stays open while sending, after sending, and when the list can't say", () => {
+		expect(roleAnswerGone(listed({ items: [] }), target, "sending")).toBe(false);
+		expect(roleAnswerGone(listed({ items: [] }), target, "sent")).toBe(false);
+		for (const tell of ["not-live", "feed-error", "awaiting", "partial", "unknown"])
+			expect(roleAnswerGone(listed({ tell, items: [] }), target, "ready")).toBe(false);
+		expect(roleAnswerGone(listed({ more: 3, items: [] }), target, "ready")).toBe(false);
+		expect(roleAnswerGone(listed({ items: [] }), {}, "ready")).toBe(false);
 	});
 });
 

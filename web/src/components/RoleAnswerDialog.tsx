@@ -1,20 +1,30 @@
 /** Owner-only answer surface, using the same AskHub path as the original chat. */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useT } from "../i18n";
-import { projectRoleAsk, roleAnswerError, roleAnswerForm, type RoleAnswerDrafts } from "../roles-answer-model";
+import {
+	projectRoleAsk,
+	roleAnswerError,
+	roleAnswerForm,
+	roleAnswerGone,
+	roleAnswerKindKey,
+	type RoleAnswerDrafts,
+} from "../roles-answer-model";
 import { answerRoleAsk, openRoleAsk } from "../roles-answer-state";
-import type { NeedsYouItem, UsefulOpenTarget } from "../roles-useful-model";
+import type { NeedsYou, NeedsYouItem, UsefulOpenTarget } from "../roles-useful-model";
 import type { UiRoleAskView } from "../types";
 
 type Stage = "loading" | "ready" | "sending" | "sent" | "error";
 type ErrorKey = ReturnType<typeof roleAnswerError>;
 export function RoleAnswerDialog({
 	item,
+	needs,
 	connected,
 	onClose,
 	onOpen,
 }: {
 	item: NeedsYouItem;
+	/** The current list: the dialog closes once its ask has left it (roles-small-fixes N3). */
+	needs?: NeedsYou;
 	connected: boolean;
 	onClose: (back: boolean) => void;
 	onOpen: (target: UsefulOpenTarget) => void;
@@ -74,6 +84,10 @@ export function RoleAnswerDialog({
 			move("error");
 		}
 	}, [connected]);
+	const gone = needs ? roleAnswerGone(needs, item, stage) : false;
+	useEffect(() => {
+		if (gone) onClose(true);
+	}, [gone]);
 	const form = view ? roleAnswerForm(view, drafts) : null;
 	const change = (id: string, selected: string[], text: string) => {
 		if (!view || stageRef.current !== "ready") return;
@@ -111,7 +125,10 @@ export function RoleAnswerDialog({
 			<header className="roles-panel-head">
 				<div className="roles-panel-title">
 					<h2 id="roles-answer-title">{t("raTitle")}</h2>
-					<p>{item.roleLabel ?? t("ruUnknownRole")}</p>
+					<p>
+						{item.roleLabel ?? t("ruUnknownRole")}
+						{view && <span className="roles-answer-kind">{` · ${t(roleAnswerKindKey(view.kind))}`}</span>}
+					</p>
 				</div>
 				<button ref={close} type="button" className="roles-panel-close" onClick={() => onClose(true)}>
 					{t("rpClose")}
