@@ -6941,6 +6941,10 @@ runner's order only: no server, web or storage code changes. Hypothesis, profile
 - The full unit suite, sealed: the same 6165 tests, Duration and the slowest files in
   `docs/test-speed.md`.
 - Gates: `scripts/check.sh --fast` (land checks).
+- Result (landed 103c6c1): H-TEST-SPEED-1 missed its 60 s bar. Everything besides test (a) went from a
+  median 93 s of the unit step to 5-6 s, but test (a) alone still takes 294-309 s (the guard store's own
+  work per send), so a land went from about 400 s to 341-355 s. Making the store fast is a separate Ops
+  task, with Security review.
 
 ### Undo and syncing
 

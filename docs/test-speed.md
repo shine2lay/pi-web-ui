@@ -61,17 +61,37 @@ Measured before changing test (a). Receipts in `~/.cache/pi/receipts/test-speed/
 - Slowest 10 files: `-worst-window` 388.5 s, `-hops` 49.3 s, `-approvers` 43.7 s, `role-message-guard-core` 32.1 s, `-caps` 25.1 s, `-limits` 20.5 s, `-chain` 16.8 s, `conn-events` 16.4 s, `sealed-fence` 12.9 s, `plugin-telegram` 10.1 s.
 - Duration minus the slowest file: 6 s. Before, the slowest file also held the other 31 guard tests, 82-87 s under land load; those now run beside test (a).
 
+### The land (request 28-8bc0b2, 2026-10-18)
+
+- Landed 103c6c1 on mine at 16:01 and pushed it to origin/mine.
+- 2.5 minutes in line, then 708 s (11 min 48 s) from start to end, because its checks ran twice. It first went in a batch with 29-3c4e9f (initiatives-exact), and the combined checks failed: `tests/unit/systemd-install.test.ts`, because a batch folder has no `dist/` (the known batch fall-back), and `tests/unit/roles-origin.test.ts`, which passed in this change's own run. Then wt checked this change on its own. Each of the two check runs took about 355 s.
+- The next land, 29-3c4e9f, ran on its own on top of this change: 341 s from start to end (23:01:40-23:07:21 UTC).
+- Tests in the land's own run: 6173 (6167 passed, 6 skipped), the same as the last land with the old file (initiatives-plan-data-result, 22:22 UTC: 6173, 6167 passed, 6 skipped). The 8 more than the 6165 above are in `tests/unit/work-page.test.ts` (aad34732), which landed in between.
+
+### Before and after, from the land checks
+
+|                         | Before: 19 land runs on 2026-10-18, old file  | After: 3 land runs, split                    |
+| ----------------------- | --------------------------------------------- | -------------------------------------------- |
+| vitest Duration         | 318-397 s, median 344 s (one 589 s)           | 299, 306, 314 s                              |
+| test (a)                | 230-300 s, median 253 s (one 479 s)           | 294, 299, 309 s                              |
+| Duration minus test (a) | 88-112 s, median 93 s                         | 5.0-6.4 s                                    |
+| a land, start to end    | 382-441 s, median about 400 s (one check run) | 341 s (29-3c4e9f); about 355 s per check run |
+
+The 589 s and 479 s run shared the machine with the profile runs of test (a). Before: `~/.cache/pi/receipts/*/land*.log`, `~/.cache/pi/left-task-status/*land*.log`, `~/.cache/pi/task-210/land*.log`. After: `~/.cache/pi/receipts/test-speed/land1/land.log` (two runs) and `~/.cache/pi/receipts/initiatives-exact/land2/land.log`.
+
 ### H-TEST-SPEED-1: MISS (the 60 s bar)
 
-- The bar: MISS. The unit step now lasts as long as test (a) alone: 230-300 s under a land's usual load (390 s in this run, beside another land's tests), not 60 s. The 60 s bar and a 2-minute land need test (a) itself to get faster, which means the store (production code), which this task may not change. Expected for a land: about 5-5.5 minutes instead of 6.5-7.
-- Cause 1, one file's tests run one after another in one worker: HIT. The other 31 guard tests used to add 82-87 s after test (a) in the same worker. Now they run beside it, and everything besides test (a)'s file adds about 6 s to the Duration. About 85 s saved per land, with the same 6165 tests and the same assertions.
+- The bar: MISS. The unit step now lasts as long as test (a): 299-314 s in the land checks, not 60 s, and a land takes about 5.7-6 minutes, not 2. The bar needs test (a) itself to get faster, which means the store (production code), outside this task.
+- Cause 1, one file's tests run one after another in one worker: HIT. Everything besides test (a) went from a median 93 s of the Duration to 5-6 s: the other 31 guard tests now run beside test (a). Same 6173 tests, same assertions.
+- But in all three runs after the split, test (a) itself took 294-309 s, against a median 253 s before. So the measured saving is about 40-60 s per land (Duration median 344 s -> 306 s; a land about 400 s -> 341-355 s), not the 87 s the split took off the rest. Why test (a) is slower was not measured. Candidates: it now starts cold, in a fresh worker that shares the processors with the other 429 files during the first minute, where before it began about a minute in, after the other guard tests had warmed the same worker, with the other files already done; or the machine's load (the last old-file land, at 22:35 UTC, also had test (a) at 285 s). The store task (H-TEST-SPEED-2) makes this moot if it brings test (a) near 60 s; if not, test the cold start on its own (rule 16) before changing anything.
+- Lesson: test (a)'s time moves with the machine's load (230-479 s in the lands, 517-614 s alone beside other runs), so compare the Duration minus test (a), not one land's Duration against another's.
 - Cause 2, `fsync` of the guard files on ext4: MISS. `/dev/shm` saved only about 7% (614 s against 569 s), and the durable writes, `fsync` included, are 3.7% of the profile. The time is CPU in `server/role-message-guard-store.ts`: per send, a canonical sorted JSON and a sha256 of the whole state, a `structuredClone` on every read, a full decode and verify, then garbage collection; about 0.5 s per send at about 5 MB, times 428 sends. Profile receipts: `~/.cache/pi/receipts/test-speed/` (`a-ext4.log`, `a-shm.log`, `prof-a/`).
 
 ### H-TEST-SPEED-2 (a starting point for the separate store task; not tested here)
 
 - Wrong, and the evidence: every guard store operation costs time in proportion to the whole state, not to the change (profile above: sorted JSON 18.5%, `structuredClone` 16%, the digest 14%, decode and verify 11%), so each send costs about 0.5 s at about 5 MB, in test (a) and in the live server.
 - The change: make the per-send work scale with the change, for example no deep copy when reading a frozen state, and cached digests of parts that didn't change; the same stored bytes and the same verdicts. The store task confirms this with its own profile first, and Security reviews it.
-- Expected, and how it's measured: test (a) alone in 60 s or less (569-614 s now), the unit step's Duration 60 s or less, a land in about 2 minutes; the same stored files and the same test results.
+- Expected, and how it's measured: test (a) in 60 s or less (294-309 s in the land checks now, 569-614 s alone beside other runs), the unit step's Duration 60 s or less, a land in about 2 minutes; the same stored files and the same test results.
 - What would prove it wrong: test (a) still over 120 s, or any stored byte or verdict changes.
 
 ## Undo
