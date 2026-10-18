@@ -2,7 +2,7 @@
 
 Owner, Oct 18 (Ops home chat): "now lets plan for initiatives page to show all the planning work"; dialog answer "Your design, 1:1". Ops #224, project initiatives-page. Accountable lead: Ops. This change lands inert: nothing mounts it. The wiring task fills it with real data and ships it.
 
-## H-INITIATIVES-EXACT-1: pending
+## H-INITIATIVES-EXACT-1: hit (see Results below)
 
 **Wrong, and the evidence.**
 - The owner's Initiatives design exists only as a design-tool bundle. Its page is drawn by its own component script, with four sample initiatives written into that script (`data()`).
@@ -38,4 +38,23 @@ Beyond the unit tests:
 
 ## Results
 
-To be recorded after the checks.
+**H-INITIATIVES-EXACT-1: HIT** (2026-10-18). Landed on mine as `bced3635` (wt land request 29-3c4e9f), inert: nothing mounts it.
+
+- Design files: both sha256 matched before extraction. `node scripts/extract-initiatives-template.mjs --check` confirms `surface.html` is what the script writes.
+- Focused tests, 22:13 UTC (`TZ=UTC scripts/sealed.sh npx vitest run tests/unit/initiatives-exact.test.ts tests/unit/roles-exact.test.ts tests/unit/roles-exact-assets.test.ts tests/unit/roles-u0.test.ts tests/unit/roles-u0-rgba.test.ts`): 5 files, 122 tests passed.
+  - `initiatives-exact.test.ts`, 14 of 14: the sample's key strings, selection, tabs and filters, child rows indented 16 px, the empty state, the 7 other drawn states, hidden controls, no sample text in shipped files, and a missing or changed font failing the build.
+  - The Roles exact tests, 108 of 108 (roles-exact 87, roles-u0 15, roles-exact-assets 3, roles-u0-rgba 3), passed unchanged. The commit changes no Roles test and no Roles template.
+  - Two earlier tries of this run failed in the new test file itself: jsdom gives `import.meta.url` no file URL, and one matcher expected spaces the binder doesn't keep. Only the test file changed for them.
+- Typecheck (server, web, tests) clean; oxlint found nothing in the new files; prettier clean.
+- Roles unchanged: `bindSurface` is Roles' old binder, moved. The only differences are the options each page passes (its name in error messages, its template, chip and frame style), and `bindRolesSurface` passes Roles' own.
+- Look (`scripts/initiatives-exact-shot.mjs`, sealed, fixture input): `~/kept-from-tmp/2026-10-18/initiatives-exact/desktop.png` (1440 × 1900), `phone.png` (390 × 844) and `phone-full.png` (390 wide, the whole 4209-px page).
+  - By eye, `desktop.png` is the design's `desktop-initial.png` and `phone.png` its `narrow-390x844.png` (both in `~/company-lab/shared/initiatives-reference-audit-2026-10-11/`). For the record, not a gate: 0 of 2,736,000 and 0 of 329,160 pixels differ.
+  - The frame has `sandbox="allow-same-origin"`, no scripts, and the design's 32 font faces; Geist 600 and Geist Mono 500 load.
+- Landing gate (`scripts/check.sh --fast`): the second land passed, 431 files, 6181 tests passed, 6 skipped.
+  - The first land (26-5d10c0, 15:42) failed on one Roles test, "omits the helper row through updates without hiding real ON YOU markers or panels". It ran past vitest's 5-second limit (5848 ms) while the machine was busy: 5-minute load average near 16 on 20 cores, with another full run of the suite beside it. None of its checks failed.
+  - The same test took 939 to 1072 ms in four other gates that day without this change, 586 ms run alone on this branch, and 859 ms in the second land. So it was load, not a Roles change.
+
+Findings for the wiring task:
+- Chrome logs "Blocked script execution in '…' because the document's frame is sandboxed and the 'allow-scripts' permission is not set." once for each event attribute in the template (17) when the binder parses the template inside the frame. Nothing runs: the binder attaches its own listeners from the host. The live Roles page already logs the same line 29 times, through the same code. Left as is, because the binder is shared and Roles must not change. The fix would be to parse the template in an inert document outside the frame. The look script expects exactly 17 and fails on any other console error.
+- One step differs from the plan: `InitiativesExactView.tsx` has no ResizeObserver. Nothing in this design depends on the frame's size: its narrow layout is the design's own CSS, and the 390-px look matches. Roles needs one for its ring.
+- Every build needs the 11 fonts in `~/company-lab/shared/initiatives-reference-audit-2026-10-11/embedded-fonts/`, or wherever `PI_INITIATIVES_DESIGN_ASSETS` points.
