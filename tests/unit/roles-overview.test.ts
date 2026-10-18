@@ -999,6 +999,10 @@ describe("who has a task's question (question-lead)", () => {
 		expect(t(2)?.askLead).toBeUndefined();
 		expect(t(3)?.askOps).toBeUndefined();
 		expect(t(3)?.askLead).toBeUndefined();
+		expect(t(1)?.next).toEqual({ kind: "answer", who: "temper" });
+		expect(t(2)?.next).toEqual({ kind: "answer", who: "ops" });
+		expect(t(3)?.next).toEqual({ kind: "answer", who: "ops" });
+		expect(t(1)?.queueEvent).toEqual({ kind: "answer" });
 	});
 });
 
@@ -1041,6 +1045,15 @@ describe("where tasks belong (roles-panel)", () => {
 		const all = [...(q?.active ?? []), ...(q?.queued ?? [])];
 		const t = (id: number) => all.find((x) => x.id === id);
 		expect(t(1)?.parent).toEqual({ project: "roles-page" });
+		expect(t(1)?.next).toEqual({
+			kind: "blocked",
+			who: "security",
+			what: "a review of the new panel",
+			until: T0 + 90 * MIN,
+		});
+		expect(t(1)?.queueEvent).toEqual({ kind: "blocked", at: T0 + 10 * MIN });
+		expect(t(4)?.next).toEqual({ kind: "queue" });
+		expect(t(4)?.queueEvent).toEqual({ kind: "added", at: T0 });
 		expect(t(1)?.owing).toEqual({
 			lead: "security",
 			owes: "a review of the new panel",

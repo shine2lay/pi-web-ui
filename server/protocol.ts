@@ -2008,6 +2008,25 @@ export interface UiRoleTldrLine {
 	chat: UiRoleChatRef;
 }
 
+/** roles-next-action: existing queue facts only; display, never authority or a command. */
+export interface UiRoleTaskNext {
+	kind: "queue" | "check" | "blocked" | "answer" | "resume" | "unrecorded" | "none";
+	/** A recorded role id, or owner. */
+	who?: string;
+	/** The queue's own wait/need wording, not a generated next step. */
+	what?: string;
+	after?: string[];
+	until?: number;
+	everyMs?: number;
+}
+
+/** A recorded queue milestone, not a claim about work quality or the latest arbitrary edit. */
+export interface UiRoleTaskEvent {
+	kind: "added" | "started" | "waiting" | "blocked" | "answer" | "paused" | "done" | "dropped";
+	/** Absent when the existing projection does not retain the milestone's time. */
+	at?: number;
+}
+
 /** roles-overview: a task of a role's home queue. */
 export interface UiRoleTask {
 	id: number;
@@ -2027,6 +2046,9 @@ export interface UiRoleTask {
 	busy?: boolean;
 	/** The newest TL;DR line of its own chat. */
 	latest?: UiRoleTldrLine;
+	/** roles-next-action: optional for older servers; no queue or permission change. */
+	next?: UiRoleTaskNext;
+	queueEvent?: UiRoleTaskEvent;
 	/** queue-paused: paused by the owner (the task itself or its whole queue): since when and why.
 	 *  A paused task never counts as needing the owner. */
 	paused?: UiTaskQueueHold;

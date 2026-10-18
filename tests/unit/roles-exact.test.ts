@@ -581,6 +581,75 @@ describe("the supplied Roles design with the existing feed", () => {
 		expect(list(object(view.values().glance).boxes).map((b) => object(b).op)).toEqual(["1", "1"]);
 	});
 
+	it("shows recorded next actions and queue milestones, never unrelated home progress", () => {
+		const r = role({
+			queue: {
+				active: [
+					task(7, {
+						status: "waiting",
+						chat: { file: TASK },
+						next: { kind: "check", what: "staging check", everyMs: 30000, until: NOW + 60000 },
+						queueEvent: { kind: "waiting", at: NOW - 60000 },
+					}),
+				],
+				queued: [task(8, { status: "ready", waitsOn: "#7", next: { kind: "queue", after: ["#7"] } })],
+				counts: { active: 1, queued: 1, done: 0 },
+			},
+		});
+		const { view, actions } = fixture(projectExactRoles(state([r]), "open", NOW), true);
+		view.openRole("ops");
+		vi.runAllTimers();
+		const current = object(view.values().ex);
+		expect(current.nextShort).toContain("Recorded wait: staging check");
+		expect(current.nextShort).toContain("checked every 0.5 min");
+		expect(current.progressText).toBe("Queue recorded: waiting for a check");
+		expect(current.progressText).not.toContain("Building the supplied design");
+		expect(current.progressAt).not.toBe("Not recorded");
+		expect(document.body.textContent).toContain("Next: Waiting for tasks: #7");
+		expect(document.body.textContent).toContain("Next: Recorded wait: staging check");
+		expect(document.body.textContent).not.toContain("Depends on:");
+		expect(actions.open).not.toHaveBeenCalled();
+		expect(actions.answer).not.toHaveBeenCalled();
+		expect(actions.reload).not.toHaveBeenCalled();
+	});
+
+	it("old task records keep dependency labels without borrowing progress or inventing a next step", () => {
+		const r = role({
+			queue: {
+				active: [task(7, { status: "blocked", waitsOn: "#12" })],
+				queued: [],
+				counts: { active: 1, queued: 0, done: 0 },
+			},
+		});
+		const { view } = fixture(projectExactRoles(state([r]), "open", NOW), true);
+		view.openRole("ops");
+		vi.runAllTimers();
+		expect(object(view.values().ex).progressText).toBe("Not recorded");
+		expect(object(view.values().ex).nextShort).toBe("Not recorded");
+		expect(document.body.textContent).toContain("Depends on: #12");
+		expect(document.body.textContent).not.toContain("Next:");
+	});
+
+	it("a recorded wait is plain text, not injected HTML", () => {
+		const r = role({
+			queue: {
+				active: [
+					task(7, {
+						status: "blocked",
+						next: { kind: "blocked", what: "<img src=x onerror=evil()>" },
+					}),
+				],
+				queued: [],
+				counts: { active: 1, queued: 0, done: 0 },
+			},
+		});
+		const { view } = fixture(projectExactRoles(state([r]), "open", NOW), true);
+		view.openRole("ops");
+		vi.runAllTimers();
+		expect(document.body.textContent).toContain("<img src=x onerror=evil()>");
+		expect(document.querySelector("img[onerror]")).toBeNull();
+	});
+
 	it("Retry is read-only and the supplied banner button invokes it", () => {
 		const { actions } = fixture(projectExactRoles(state([], [], { status: "error" }), "open", NOW), true);
 		const button = Array.from(document.querySelectorAll("button")).find((b) => b.textContent === "Retry now");

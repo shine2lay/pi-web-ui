@@ -51,6 +51,7 @@ import {
 import { rulesGoals, rulesWorkMode } from "./role-rules.js";
 import { readRoleSpend } from "./roles-spend.js";
 import { roleAnswerKindAllowed } from "./roles-asks.js";
+import { roleTaskNext } from "./roles-task-next.js";
 import {
 	TASK_QUEUE_ENTRY_TYPE,
 	taskQueueFromEntries,
@@ -904,14 +905,14 @@ export class RolesOverviewReader {
 				const held = heldOf(t);
 				if (t.status === "ready") {
 					ready++;
-					if (queued.length < ROLES_QUEUED_MAX) queued.push(taskOf(t, held));
+					if (queued.length < ROLES_QUEUED_MAX) queued.push(taskOf(t, def.id, held));
 					continue;
 				}
 				const info = infos.find((i) => i.task === t);
 				const busy = info?.file ? this.host.chatState(info.file) === "working" : false;
 				const latest = info?.lines.length ? info.lines[info.lines.length - 1] : undefined;
 				active.push({
-					...taskOf(t, held),
+					...taskOf(t, def.id, held),
 					...(busy ? { busy: true } : {}),
 					...(latest ? { latest: lineOf(latest, taskRef(t), !!held) } : {}),
 				});
@@ -922,7 +923,7 @@ export class RolesOverviewReader {
 				...(queueHold ? { hold: queueHold } : {}),
 				active,
 				queued,
-				...(dropped.length ? { dropped: dropped.slice(0, ROLES_DROPPED_MAX).map((t) => taskOf(t)) } : {}),
+				...(dropped.length ? { dropped: dropped.slice(0, ROLES_DROPPED_MAX).map((t) => taskOf(t, def.id)) } : {}),
 				// dropped only when it has some, so a queue with none reads exactly as before.
 				counts: { active: active.length, queued: ready, done, ...(dropped.length ? { dropped: dropped.length } : {}) },
 			};
@@ -1048,17 +1049,20 @@ function newestWaiting(lines: UiTldrLine[]): UiTldrLine | undefined {
 	return best;
 }
 
-function taskOf(t: UiTaskQueueTask, held?: UiTaskQueueHold): UiRoleTask {
+function taskOf(t: UiTaskQueueTask, department: string, held?: UiTaskQueueHold): UiRoleTask {
+	const display = roleTaskNext(t, department, held);
+	const queued = t.status === "ready" ? roleTaskNext(t, department).next : undefined;
 	let waitsOn: string | undefined;
 	if (t.status === "waiting" && t.wait?.what) waitsOn = t.wait.what;
 	else if (t.status === "blocked" && t.block) {
 		const on = (t.block.on ?? []).map((r) => taskRefLabel(r)).join(", ");
 		waitsOn = [on, t.block.need].filter(Boolean).join("; ") || undefined;
-	} else if (t.status === "ready" && t.waitingFor?.length) waitsOn = t.waitingFor.map((n) => `#${n}`).join(", ");
+	} else if (queued?.after?.length) waitsOn = queued.after.join(", ");
 	return {
 		id: t.id,
 		status: t.status,
 		title: t.plan.title,
+		...display,
 		...(t.chat ? { chat: { file: t.chat.file, ...(t.chat.title ? { title: t.chat.title } : {}) } } : {}),
 		...(t.status === "dropped" && t.dropped ? { dropped: { why: t.dropped.why, at: t.dropped.at } } : {}),
 		...(waitsOn ? { waitsOn } : {}),

@@ -104,6 +104,20 @@ function deliver(mode = "ready") {
 			counts: { active: 1, queued: 1, done: 3 },
 		},
 	}));
+	if (mode === "next-action") {
+		Object.assign(roles[8].queue.active[0], {
+			status: "waiting",
+			busy: false,
+			latest: undefined,
+			next: { kind: "check", what: "staging check", everyMs: 30000, until: at + 60000 },
+			queueEvent: { kind: "waiting", at: at - 60000 },
+		});
+		Object.assign(roles[8].queue.queued[0], {
+			waitsOn: "#1",
+			next: { kind: "queue", after: ["#1"] },
+			queueEvent: { kind: "added", at: at - 120000 },
+		});
+	}
 	let asks = ["ops", "frontend"].map((id) => ({
 		key: `${id}:tldr:question`,
 		role: id,

@@ -3,7 +3,7 @@
  */
 import { EXACT_SOURCE, exactAge, exactClock, type ExactRole, type ExactRoles } from "./roles-exact-model";
 import type { NeedsYouItem } from "./roles-useful-model";
-import type { PanelRoleStatus, RolePanel } from "./roles-panel-model";
+import type { PanelRoleStatus, PanelTask, PanelTaskEvent, RolePanel } from "./roles-panel-model";
 import { ringAnchor, ringLayout } from "./roles-u0/layout";
 import type { SurfaceValues } from "./roles-u0/types";
 import type { RowState, UsefulOpenTarget, UsefulRecord } from "./roles-useful-model";
@@ -46,6 +46,48 @@ function count(n: number | string): string {
 function taskTitle(task: UsefulRecord | undefined): string {
 	return task ? (task.name ?? `Task #${task.taskId}`) : NR;
 }
+/** Fixed language around checked queue fields; no inferred plan steps or imperative actions. */
+function nextText(task: PanelTask | undefined): string {
+	const next = task?.next;
+	if (!next) return NR;
+	const actor =
+		next.who?.kind === "owner"
+			? "you"
+			: next.who?.kind === "role"
+				? next.who.label
+				: next.who?.kind === "other"
+					? next.who.id
+					: null;
+	const due = next.until === null ? "" : ` · checkpoint ${new Date(next.until).toLocaleString("en-US")}`;
+	switch (next.kind) {
+		case "queue":
+			return next.after.length
+				? `Waiting for tasks: ${next.after.join(", ")}`
+				: "Queued; starts when the queue can run it";
+		case "check":
+			return `${next.what ? `Recorded wait: ${next.what}` : "Waiting for its recorded check"}${next.everyMs === null ? "" : ` · checked every ${next.everyMs / 60_000} min`}${next.until === null ? "" : ` · until ${new Date(next.until).toLocaleString("en-US")}`}`;
+		case "blocked":
+			return `${actor ? `Waiting for ${actor}` : "Waiting on a recorded blocker"}${next.what ? ` — ${next.what}` : ""}${next.after.length ? ` · tasks ${next.after.join(", ")}` : ""}${due}`;
+		case "answer":
+			return actor === "you" ? "Awaiting your answer" : `Awaiting ${actor ?? "the recorded lead"} to answer`;
+		case "resume":
+			return "Paused by you; awaits your resume";
+		case "unrecorded":
+			return "Next step not recorded";
+		case "none":
+			return "No next action: task ended";
+	}
+}
+const QUEUE_EVENT: Record<PanelTaskEvent["kind"], string> = {
+	added: "Queue recorded: task added",
+	started: "Queue recorded: task started",
+	waiting: "Queue recorded: waiting for a check",
+	blocked: "Queue recorded: blocked",
+	answer: "Queue status: awaiting an answer",
+	paused: "Queue recorded: paused by you",
+	done: "Queue recorded: task completed",
+	dropped: "Queue recorded: task dropped",
+};
 function reportItems(text: string) {
 	const lines = text.split("\n").filter(Boolean);
 	const items = lines.slice(0, 200).map((t) => ({ t }));
@@ -339,6 +381,17 @@ export function createExactRolesView(
 					...panel.unrecorded,
 				]
 			: [];
+		const ownTask = lead ? panelTasks.find((t) => t.taskId === lead.taskId) : undefined;
+		const queueEvent = ownTask?.queueEvent;
+		const rowDetail = (task: UsefulRecord) => {
+			const next = nextText(panelTasks.find((t) => t.taskId === task.taskId));
+			return {
+				hasDep: next === NR && !!task.waitsOn,
+				dep: task.waitsOn ?? "",
+				hasNext: next !== NR,
+				nextText: next === NR ? "" : next,
+			};
+		};
 		const owing = blocked ? panelTasks.find((t) => t.taskId === blocked.taskId)?.owing : null;
 		const resolver =
 			owing?.lead?.kind === "role"
@@ -389,9 +442,9 @@ export function createExactRolesView(
 			taskTitle: taskTitle(lead),
 			taskSrc: "· requester not recorded",
 			taskSrcFg: "#A9AEB6",
-			progressText: lead?.latest ?? lines[0]?.text ?? NR,
-			progressAt: lead?.latest ? NR : exactClock(lines[0]?.ts ?? null),
-			nextShort: NR,
+			progressText: lead ? (lead.latest ?? (queueEvent ? QUEUE_EVENT[queueEvent.kind] : NR)) : (lines[0]?.text ?? NR),
+			progressAt: lead ? (lead.latest ? NR : exactClock(queueEvent?.at ?? null)) : exactClock(lines[0]?.ts ?? null),
+			nextShort: nextText(ownTask),
 			mix: "Reported status",
 			updated: exactClock(lines[0]?.ts ?? null),
 			outText: MISSING,
@@ -434,8 +487,7 @@ export function createExactRolesView(
 						.map((t) => ({
 							id: `#${t.taskId}`,
 							title: taskTitle(t),
-							hasDep: !!t.waitsOn,
-							dep: t.waitsOn ?? "",
+							...rowDetail(t),
 							srcText: NR,
 						})),
 				})),
@@ -447,8 +499,7 @@ export function createExactRolesView(
 						.map((t) => ({
 							id: `#${t.taskId}`,
 							title: taskTitle(t),
-							hasDep: !!t.waitsOn,
-							dep: t.waitsOn ?? "",
+							...rowDetail(t),
 							srcText: NR,
 						})),
 				},

@@ -254,6 +254,21 @@ try {
 			true,
 		);
 		record("mouse close restores role focus without leaving other cards dimmed");
+		await page.evaluate(() => window.rolesExactTest.deliver("next-action"));
+		await frame.getByRole("button", { name: /^Ops / }).click();
+		await settled();
+		assert.equal(await panel.getByText("Queue recorded: waiting for a check", { exact: true }).count(), 1);
+		const nextPanel = await panel.innerText();
+		assert.ok(nextPanel.includes("Next: Recorded wait: staging check"));
+		assert.ok(nextPanel.includes("Next: Waiting for tasks: #1"));
+		assert.ok(!nextPanel.includes("Depends on:"));
+		await page.screenshot({ path: join(output, "next-action.png") });
+		await panel.getByRole("button", { name: "Close and return to all departments" }).click();
+		await panel.waitFor({ state: "hidden" });
+		await page.evaluate(() => window.rolesExactTest.deliver());
+		await page.mouse.move(5, 5);
+		await baselineContrast(1);
+		record("recorded next actions and queue milestones render without inferred progress or task actions");
 		await frame.getByRole("button", { name: "You: open your decisions, questions and spending" }).click();
 		await panel.getByText("A recorded question for ops", { exact: true }).waitFor();
 		await settled();

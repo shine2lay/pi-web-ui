@@ -86,8 +86,22 @@ export interface PanelOwing {
 	/** The leads reminded next if that lead stays silent, in order, then the owner; null: not recorded yet. */
 	next: PanelLead[] | null;
 }
+export interface PanelTaskNext {
+	kind: "queue" | "check" | "blocked" | "answer" | "resume" | "unrecorded" | "none";
+	who: PanelLead | null;
+	what: string | null;
+	after: string[];
+	until: number | null;
+	everyMs: number | null;
+}
+export interface PanelTaskEvent {
+	kind: "added" | "started" | "waiting" | "blocked" | "answer" | "paused" | "done" | "dropped";
+	at: number | null;
+}
 export interface PanelTask {
 	taskId: number;
+	next?: PanelTaskNext;
+	queueEvent?: PanelTaskEvent;
 	name: string | null;
 	state: RowState;
 	/** asking-lead: the role whose lead has its question. */
@@ -305,6 +319,89 @@ function owingOf(row: Fields, labels: Map<string, string>): PanelOwing | null {
 	};
 }
 
+/** A next-action payload must agree with the task state; it cannot turn a pause into a command. */
+function nextOf(
+	row: Fields,
+	base: ReturnType<typeof record>,
+	labels: Map<string, string>,
+	department: string,
+): PanelTaskNext | undefined {
+	if (base.pause === "unknown") return undefined;
+	const expected: Partial<Record<RowState, PanelTaskNext["kind"]>> = {
+		ready: "queue",
+		"ready-after": "queue",
+		working: "unrecorded",
+		"on-hold": "check",
+		blocked: "blocked",
+		asking: "answer",
+		"asking-main": "answer",
+		"asking-ops": "answer",
+		"asking-lead": "answer",
+		"needs-decision": "answer",
+		done: "none",
+		dropped: "none",
+	};
+	const kind = base.pause === "reported-paused" ? "resume" : expected[base.state];
+	const raw = object(row.next);
+	if (!raw || !kind || raw.kind !== kind) return undefined;
+	if (kind === "resume" && raw.who !== "owner") return undefined;
+	if (kind === "answer") {
+		const expectedWho =
+			base.state === "needs-decision"
+				? "owner"
+				: base.state === "asking-ops"
+					? "ops"
+					: base.state === "asking-lead"
+						? base.askLead
+						: base.state === "asking-main"
+							? department
+							: null;
+		if (!expectedWho || raw.who !== expectedWho) return undefined;
+	}
+	const who = raw.who === undefined ? null : leadOf(raw.who, labels);
+	if (raw.who !== undefined && !who) return undefined;
+	const what = raw.what === undefined ? null : plain(raw.what, LINE_LIMIT);
+	if (raw.what !== undefined && (!what || what.clipped)) return undefined;
+	const after: string[] = [];
+	if (raw.after !== undefined) {
+		if (!Array.isArray(raw.after) || raw.after.length > 40) return undefined;
+		for (const value of raw.after) {
+			const text = plain(value, LINE_LIMIT);
+			if (!text || text.clipped) return undefined;
+			after.push(text.text);
+		}
+	}
+	const until = displayTime(raw.until);
+	const everyMs = count(raw.everyMs, 3_600_000);
+	if ((raw.until !== undefined && until === null) || (raw.everyMs !== undefined && (everyMs === null || everyMs < 1)))
+		return undefined;
+	return { kind, who, what: what?.text ?? null, after, until, everyMs };
+}
+
+function queueEventOf(row: Fields, next: PanelTaskNext | undefined): PanelTaskEvent | undefined {
+	if (!next) return undefined;
+	const expected: Record<PanelTaskNext["kind"], PanelTaskEvent["kind"][]> = {
+		queue: ["added"],
+		check: ["waiting"],
+		blocked: ["blocked"],
+		answer: ["answer"],
+		resume: ["paused"],
+		unrecorded: ["started"],
+		none: ["done", "dropped"],
+	};
+	const raw = object(row.queueEvent);
+	const kind = oneOf(expected[next.kind], raw?.kind);
+	if (!raw || !kind) return undefined;
+	const at = displayTime(raw.at);
+	if (raw.at !== undefined && at === null) return undefined;
+	return { kind, at };
+}
+
+function displayTime(value: unknown): number | null {
+	const at = time(value);
+	return at !== null && Number.isSafeInteger(at) && Number.isFinite(new Date(at).getTime()) ? at : null;
+}
+
 function unknownWork(id: string): WorkView {
 	return { id, name: null, lead: null, status: null, items: null, met: null };
 }
@@ -413,8 +510,12 @@ export function projectRolePanel(state: unknown, id: string): RolePanel | null {
 		}
 		shown++;
 		const base = record(t, t.id, home);
+		const next = nextOf(t, base, labels, id);
+		const queueEvent = queueEventOf(t, next);
 		const task: PanelTask = {
 			taskId: base.taskId,
+			...(next ? { next } : {}),
+			...(queueEvent ? { queueEvent } : {}),
 			name: base.name,
 			state: base.state,
 			askLead: base.askLead,

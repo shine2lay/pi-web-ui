@@ -353,6 +353,7 @@ body{margin:0}
 <span style="flex: 1 1 180px; min-width: 0">{{t.title}}</span>
 <span style="font-size: 12px; font-weight: 600; color: #9CC7FF; color: {{t.srcFg}}">{{t.srcText}}</span>
 <sc-if value="{{t.hasDep}}" hint-placeholder-val="{{false}}"><span style="flex-basis: 100%; font-size: 12px; color: #F0B95A">Depends on: {{t.dep}}</span></sc-if>
+<sc-if value="{{t.hasNext}}" hint-placeholder-val="{{false}}"><span style="flex-basis: 100%; font-size: 12px; color: #F0B95A">Next: {{t.nextText}}</span></sc-if>
 </li>
 </sc-for>
 </ul>

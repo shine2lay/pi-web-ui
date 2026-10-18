@@ -25,6 +25,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: mounted unit coverage across feed updates plus desktop/phone actual-component proof; the historical reference scenes keep their original baseline.
 - Undo: revert this presentation-only patch and install through `pi-web-deploy`.
 
+## roles-next-action: show the queue's recorded next action
+
+- `local` (owner 2026-10-17: after the display fixes, connect task requester/next-action data, then contact tracking). D1 only, with hypothesis and limits in `docs/roles-next-action.md`; requester and contact recording are separate.
+- `server/roles-task-next.ts` projects existing dependencies, waits, named blockers, answer routing and owner pauses into optional Roles display fields. No queue mutation, new producer, plan parsing, model call or permission/routing change. Existing queue milestones supply a labelled fallback when a task has no TL;DR; an unrelated home-chat line is no longer presented as that task's progress.
+- The closed panel projection requires the new payload to agree with the task's status, pause and answer recipient. Unsafe or incomplete values stay unrecorded; text remains text. A conditional text row uses “Next:” for the validated action; the original “Depends on:” row remains only as the old-record fallback, with unchanged layout styles.
+- Checks: `roles-task-next.test.ts`, actual reader assertions in `roles-overview.test.ts`, mounted template assertions in `roles-exact.test.ts`, and the sealed actual-component next-action case. Older records keep working with unknown next steps.
+- Undo: revert this patch and install through `pi-web-deploy`; no data migration or new stored records.
+
 ## roles-exact: implement the supplied Roles design before new data producers
 
 - `local` (owner 2026-10-17: implement the supplied design 1:1 as the actual page, not another preview; subsequent dialog authorises building and shipping its exact assets). Hypothesis, constraints and result: `docs/roles-exact.md`.
