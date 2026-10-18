@@ -2,7 +2,7 @@
 
 Owner, Oct 18 (Ops #210): "Stack the cards myself", with no new drawing first; Design looks it over afterwards. Accountable lead: Ops.
 
-## H-ROLES-PHONE-1: result in "Results" below
+## H-ROLES-PHONE-1: HIT (sealed check and live look below)
 
 **Wrong, and the evidence.** The ring sits on a fixed canvas (`min-width: 1000px`, `web/src/roles-u0/surface.html`). The sealed check was run at 390 px on the commit before this change (0e7b99c3), with the same check file:
 - the canvas scrolls 636 px sideways inside its own box;
@@ -59,7 +59,45 @@ Live look: see "Live" below.
 
 ## Live
 
-To be filled in after the install.
+Installed at 13:34 on Oct 18 as 8f451d85 (`pi-web-deploy --landed 13-60d2e5`). Its own checks all passed: server, page, reply, big-chat copy and log.
+
+Look-only check at 13:41 on live data (`~/kept-from-tmp/2026-10-18/roles-phone-live/look.mjs`). It used its own carry-on client and only GET/HEAD requests, and its socket sent only hello and roles_watch.
+
+| 390 × 844 (phone, touch) | measured |
+| --- | --- |
+| sideways scroll: page / frame / root / canvas | 0 / 0 / 0 / 0 |
+| order | You first, then 15 cards for the 15 roles the feed sent, each below the one before |
+| items outside the screen | 0 of 16 |
+| smallest gap between items | 16.36 px |
+| header clearance | 17.48 px settled, and the smallest in 240 painted frames over 4 s (the header shrank from 106 to 91 px while loading) |
+| cards | 340 px wide, nothing cut off inside any card |
+| arrows | none (0 lines, 0 labels) |
+| tapped Ops card | fixed sheet at 0,0, 390 × 746 (the frame's whole screen), nothing cut off sideways and no text past the right edge; heading 22 px, smallest text 11 px over 259 text elements; closing it leaves no card dimmed |
+
+| wider | measured |
+| --- | --- |
+| 1440 × 1000 | the ring as before: not stacked, canvas min-width 1000 px, 12 arrow lines, header clearance 16.27 px (also the smallest in 240 frames) |
+| 1024 × 900 | ring: not stacked, 1000 px canvas, arrows drawn |
+| 1023 × 900 | column: stacked, no arrows, nothing outside the screen |
+
+Screenshots, sent to Design as an FYI (rm-7a9188ed), in `~/kept-from-tmp/2026-10-18/roles-phone-live/out/`:
+- `phone-390.png`: the top of the column;
+- `phone-390-column.png`: the whole column at 390 px;
+- `desktop-1440.png`: the unchanged ring.
+
+The sheet's screenshot was deleted without being viewed, because its first section quotes the owner's messages.
+
+The look's first run timed out tapping "Ops". The live card is named "ops/tooling", not the fixture's "Ops …". After the script was fixed, the second run had no problems.
+
+At 1440 px the ring's canvas box scrolls 2 px sideways. This patch leaves the wide styles alone (its new CSS applies only under `data-roles-stacked="true"`), so that was there before and stays as it is.
+
+**Verdict: H-ROLES-PHONE-1 is a HIT.** Every expected measurement held, both in the sealed check and live:
+- at 390 px, no sideways scroll and every card inside the width;
+- header clearance at least 8 px (17.48);
+- You first, and the cards in order;
+- the 1440 px card centres identical to before (sealed check), with the ring unchanged live at 1440 and 1024 px.
+
+One done-when line is met in code only. The key's "show on wider screens" sentence isn't visible live, because the key row has been off at every width since 10-17 (see "The key" above).
 
 ## Undo
 
