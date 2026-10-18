@@ -2254,6 +2254,24 @@ export type UiRoleInstructions =
 	| { state: "current"; loadedAt: number }
 	| { state: "outdated"; loadedAt: number; changed: string[] };
 
+/** roles-config-history (Ops #209): one change to a role's settings, as the recorder saw it between two runs. */
+export interface UiRoleConfigChange {
+	at: number;
+	/** Which setting (roles-config-history.ts ROLE_CONFIG_FIELDS: "lanesAtOnce", "model", ...). */
+	field: string;
+	/** Its values before and after, as text (at most 200 characters). */
+	from: string;
+	to: string;
+}
+
+/** roles-config-history: a role's recorded settings changes. Who made a change isn't recorded. */
+export interface UiRoleConfigHistory {
+	/** When the recorder took this role's first snapshot (its baseline, never listed as changes). */
+	since: number;
+	/** Newest first, at most 20. */
+	changes: UiRoleConfigChange[];
+}
+
 /** roles-overview: one role on the Roles page. */
 export interface UiRoleOverview {
 	id: string;
@@ -2288,6 +2306,8 @@ export interface UiRoleOverview {
 	spend?: UiRoleSpend;
 	/** roles-instructions: optional for older app snapshots. */
 	instructions?: UiRoleInstructions;
+	/** roles-config-history: absent before the recorder's first snapshot of it (and from an older server). */
+	configHistory?: UiRoleConfigHistory;
 	/** board: open orders to it that it hasn't marked done, oldest first. */
 	boardOrders?: UiRoleBoardOrder[];
 	/** What couldn't be read ("queue", "tldr", "report", "home chat"): the rest is shown. */

@@ -405,7 +405,7 @@ describe("the supplied Roles design with the existing feed", () => {
 		expect(v.toggleRep).toBeUndefined();
 		invoke(object(list(v.drTabs)[1]).pick);
 		v = view.values();
-		expect(object(list(object(v.ex).acts)[0]).text).toBe("Configuration history is not connected yet.");
+		expect(object(list(object(v.ex).acts)[0]).text).toBe("Settings history is not recorded yet.");
 	});
 
 	it.each([

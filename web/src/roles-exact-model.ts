@@ -2,6 +2,7 @@
  * No RTPI records are made here: a reported status is not an execution receipt.
  * Raw feed values and chat targets never become template attributes or HTML.
  */
+import { projectConfigHistory, type ExactConfigHistory } from "./roles-config-history";
 import { projectRolePanel, type RolePanel } from "./roles-panel-model";
 import {
 	CLOCK_SKEW_MS,
@@ -186,6 +187,8 @@ export interface ExactRole {
 	panel: RolePanel | null;
 	spend: ExactSpend;
 	instructions: ExactInstructions;
+	/** roles-config-history (Ops #209): its recorded settings changes; null: none sent. */
+	configHistory: ExactConfigHistory | null;
 }
 export interface ExactRoles {
 	roles: ExactRole[];
@@ -216,6 +219,10 @@ export function projectExactRoles(state: unknown, connection: unknown, now: numb
 			panel: projectRolePanel(state, row.roleId),
 			spend: projectSpend(object(rows.find((raw) => object(raw)?.id === row.roleId))?.spend),
 			instructions: projectInstructions(object(rows.find((raw) => object(raw)?.id === row.roleId))?.instructions, now),
+			configHistory: projectConfigHistory(
+				object(rows.find((raw) => object(raw)?.id === row.roleId))?.configHistory,
+				now,
+			),
 		})),
 		hasOverview: overview !== null,
 		contacts: overview !== null ? projectContacts(overview.contacts) : null,

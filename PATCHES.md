@@ -10,6 +10,15 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## roles-config-history: record each role's settings changes and list them in its Config tab
+
+- `local` (owner 2026-10-18, "create those tasks and queue them", Ops #209). Hypothesis H-ROLES-CONFIG-1 and result: `docs/roles-config-history.md`.
+- The Config tab said "Configuration history is not connected yet": nothing recorded settings over time. `server/roles-config-history.ts` is a small recorder, separate from the overview (which stays read-only): AgentService runs it after the restart's carry-on and every 5 minutes (unref'd timer). Each run takes every role's settings from `RolesOverviewReader.configSettings()` (title, Focus line, work mode, goals by name and scope, home chat file name; its queue's lanes, Auto approve, Auto start, default model/thinking/speed and pause; its home chat's model from roles-model), compares them with `<dataDir>/roles-config-snapshot.json` and appends one line per changed setting to `<dataDir>/roles-config-history.jsonl` (`{v:1, at, role, field, from, to}`). A role's first snapshot is its baseline (the "since" date, never changes); a setting that can't be read in a run keeps its last value. 0600 files, atomic snapshot, 90 days kept, values cut at 200 characters. Setting values only, no message text or prompts; who changed a setting isn't known, so nothing guesses it.
+- `roles-overview.ts` sends the recorder's newest 20 changes per role as an optional `UiRoleOverview.configHistory`; no protocol bump. A run that records changes pokes the Roles watch.
+- The page (`web/src/roles-config-history.ts`, the Config tab's acts in `roles-exact-view.ts`) lists "<time> · <setting>: <old> → <new>" newest first, then "Who changed it isn't recorded."; with none, "No changes recorded since <date>."; with no record (before the first run, an older server) "Settings history is not recorded yet.".
+- Checks: `tests/unit/roles-config-history.test.ts` (baseline only, one changed setting, unchanged or unreadable gives no line, value cap, 90-day retention, the tab's text), then the landing gate.
+- Undo: `pi-web-deploy rollback`, or revert this commit and deploy. The two files are inert; deleting both starts a new baseline.
+
 ## queue-wait-frees-lane: a task on hold holds no lane, and only tasks at work count as lanes in use
 
 - `local` (owner 2026-10-18: "we cant and shouldn't take up a task slot for something that is waiting for a day", Ops #214). Pairs with pi-queue's waitFrees (pi-queue 1733fe9, landed first); hypothesis H-QUEUE-WAIT-FREE-1 and result in pi-queue's `docs/wait-frees-lane.md`.

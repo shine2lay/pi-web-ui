@@ -1427,6 +1427,10 @@ export interface EngineService {
 	reopenQueueHomes?(): Promise<void>;
 	/** role-messages (pi engine): start delivering messages between role chats (after the carry-on). */
 	startRoleMessages?(): void;
+	/** roles-config-history (pi engine, Ops #209): start recording the roles' settings changes (after the carry-on). */
+	startRolesConfigHistory?(): void;
+	/** roles-config-history (pi engine): set by index.ts; a run recorded changes. */
+	onRolesConfigChanged?: (() => void) | null;
 	/** role-messages (pi engine): the last messages between roles and the pause switch. */
 	roleMessagesView?(): { enabled: boolean; paused: boolean; messages: UiRoleMessageRow[] };
 	/** role-messages (pi engine): the owner pauses (held, not dropped) or resumes delivery. */
@@ -4311,6 +4315,8 @@ service.onRoleMessagesChanged = () => {
 };
 // board: the Roles page's Board view (and each role's open orders) follows the board.
 service.onBoardChanged = () => rolesWatch.poke();
+// roles-config-history: each role's Config tab follows the recorded settings changes.
+service.onRolesConfigChanged = () => rolesWatch.poke();
 // role-message-ladder: every window shows the open Owner questions.
 service.onRoleGuardChanged = () => pushRoleGuard();
 // initiatives-page: the Initiatives tab follows the decisions and the reader.
@@ -4332,6 +4338,8 @@ httpServer.listen(PORT, HOST, () => {
 				});
 				// role-messages: then the messages between role chats that are still waiting.
 				service.startRoleMessages?.();
+				// roles-config-history: then the recorder of the roles' settings changes (a run now, then every 5 min).
+				service.startRolesConfigHistory?.();
 			})(),
 		1500,
 	);

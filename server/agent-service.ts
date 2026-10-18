@@ -328,6 +328,7 @@ import {
 import { RoleMessageGuardHost } from "./role-message-guard-host.js";
 import { admitRoleMailAtResume, installRoleMailBoundary, noteAtRoleMailBoundary } from "./role-mail-boundary.js";
 import { RolesOverviewReader } from "./roles-overview.js";
+import { ROLES_CONFIG_EVERY_MS, RolesConfigHistory } from "./roles-config-history.js";
 import { makeRolesOverviewTool } from "./roles-overview-tool.js";
 import {
 	mergeOwnerAnswer,
@@ -16178,6 +16179,8 @@ export class AgentService {
 				// roles-model: the open chat's live model, else a name from the app's model list (loads nothing).
 				chatModel: (file) => ClientSession.chatModelName(file),
 				modelName: (provider, modelId) => ClientSession.modelNameOf(provider, modelId),
+				// roles-config-history (Ops #209): the recorder's changes (none until it has run).
+				configHistory: (role) => this.rolesConfig?.view(role),
 				// roles-instructions: pi reads the every-chat rules from its agent folder at each chat's start.
 				agentsFile: () => join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "AGENTS.md"),
 				rolePaused: () => this.roleMessages.paused,
@@ -16205,6 +16208,35 @@ export class AgentService {
 			});
 		}
 		return this.rolesReader.read();
+	}
+
+	/** roles-config-history (Ops #209): records changes to the roles' settings (started by startRolesConfigHistory). */
+	private rolesConfig: RolesConfigHistory | null = null;
+	/** index.ts: a run recorded changes (the Roles page follows them). */
+	onRolesConfigChanged: (() => void) | null = null;
+
+	/** roles-config-history: index.ts starts it after the restart's carry-on; a run now, then every 5 minutes. */
+	startRolesConfigHistory(): void {
+		if (this.rolesConfig) return;
+		const recorder = new RolesConfigHistory(this.stateStore.dataDir);
+		this.rolesConfig = recorder;
+		let busy = false;
+		const run = async () => {
+			if (busy) return;
+			busy = true;
+			try {
+				if (!this.rolesReader) await this.readRolesOverview();
+				const reader = this.rolesReader;
+				if (!reader) return;
+				if (recorder.record(await reader.configSettings(), Date.now()).length) this.onRolesConfigChanged?.();
+			} catch (err) {
+				console.error(`[roles-config-history] ${(err as Error).message}`);
+			} finally {
+				busy = false;
+			}
+		};
+		void run();
+		setInterval(() => void run(), ROLES_CONFIG_EVERY_MS).unref();
 	}
 
 	/** roles-answer: the live ask behind a Needs-you item, looked up afresh: only an item that is in the list

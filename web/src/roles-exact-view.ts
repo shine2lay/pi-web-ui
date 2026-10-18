@@ -13,6 +13,7 @@ import {
 	type ExactRoles,
 } from "./roles-exact-model";
 import type { NeedsYouItem } from "./roles-useful-model";
+import { CONFIG_NOT_RECORDED, configHistoryActs } from "./roles-config-history";
 import type { PanelRoleStatus, PanelTask, PanelTaskEvent, RolePanel } from "./roles-panel-model";
 import { ringAnchor, ringLayout } from "./roles-u0/layout";
 import type { SurfaceValues } from "./roles-u0/types";
@@ -621,7 +622,11 @@ export function createExactRolesView(
 						? owing.lead.id
 						: NR;
 		const lines = panel?.lines ?? [];
-		const acts = tab === "work" ? lines.map((l) => ({ at: exactClock(l.ts), text: l.text })) : [];
+		// roles-config-history (Ops #209): Config lists the recorded settings changes, newest first.
+		const acts =
+			tab === "work"
+				? lines.map((l) => ({ at: exactClock(l.ts), text: l.text }))
+				: configHistoryActs(role.configHistory, (at) => exactWhen(at, model.now));
 		const omittedTasks =
 			typeof row.counts.active === "number" && typeof row.counts.queued === "number"
 				? Math.max(0, row.counts.active + row.counts.queued - tasks.length)
@@ -717,10 +722,7 @@ export function createExactRolesView(
 				: [
 						{
 							at: "",
-							text:
-								tab === "config"
-									? "Configuration history is not connected yet."
-									: "No progress text is available in this snapshot.",
+							text: tab === "config" ? CONFIG_NOT_RECORDED : "No progress text is available in this snapshot.",
 						},
 					],
 			actsEmpty: false,

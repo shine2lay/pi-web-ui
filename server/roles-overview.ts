@@ -20,7 +20,7 @@ import { lstat, open, realpath, stat, type FileHandle } from "node:fs/promises";
 import { isAbsolute, resolve, sep } from "node:path";
 import type { Ask } from "./asks.js";
 import { goalEnded, type RoleGoal, type WorkMode } from "./identity-config.js";
-import { samePath, type IdentityDef } from "./identities.js";
+import { focusPart, identityFilePath, samePath, type IdentityDef } from "./identities.js";
 import { readUpTo, STATE_READ_FLAGS } from "./state-file-read.js";
 import type {
 	ServerMessage,
@@ -28,6 +28,7 @@ import type {
 	UiRoleAsk,
 	UiRoleBoardOrder,
 	UiRoleChatRef,
+	UiRoleConfigHistory,
 	UiRoleGoal,
 	UiRoleOverview,
 	UiRoleQueue,
@@ -41,6 +42,7 @@ import type {
 	UiRoleTask,
 	UiRoleTaskOwing,
 	UiRoleTldrLine,
+	UiTaskQueue,
 	UiTaskQueueHold,
 	UiTaskQueueTask,
 	UiTldrLine,
@@ -55,6 +57,7 @@ import {
 import { rulesGoals, rulesWorkMode } from "./role-rules.js";
 import { readRoleSpend } from "./roles-spend.js";
 import { readRoleInstructions } from "./roles-instructions.js";
+import { roleSettingsOf, type RoleSettings } from "./roles-config-history.js";
 import { roleAnswerKindAllowed } from "./roles-asks.js";
 import { roleTaskNext } from "./roles-task-next.js";
 import { requesterOf } from "./queue-requester.js";
@@ -687,6 +690,8 @@ export interface RolesOverviewHost {
 	agentsFile?(): string;
 	/** roles-evidence (task #207): wt's records and pi-web-deploy's folders; absent: no evidence is read. */
 	evidencePaths?(): RolesEvidencePaths;
+	/** roles-config-history (Ops #209): a role's recorded settings changes; absent or undefined: none recorded. */
+	configHistory?(role: string): UiRoleConfigHistory | undefined;
 	now?(): number;
 }
 
@@ -755,7 +760,14 @@ export class RolesOverviewReader {
 			} catch {
 				sent = undefined;
 			}
-			roles.push(sent ? { ...row, sent } : row);
+			// roles-config-history: what changed in its settings (the recorder's record; this only reads it).
+			let configHistory: UiRoleConfigHistory | undefined;
+			try {
+				configHistory = this.host.configHistory?.(def.id);
+			} catch {
+				configHistory = undefined;
+			}
+			roles.push({ ...row, ...(sent ? { sent } : {}), ...(configHistory ? { configHistory } : {}) });
 		}
 		let openPairs: UiRoleOpenPair[] | undefined;
 		try {
@@ -1096,6 +1108,41 @@ export class RolesOverviewReader {
 		} catch {
 			return undefined;
 		}
+	}
+
+	/** roles-config-history (Ops #209): every role's settings as the page shows them, for the recorder
+	 *  (roles-config-history.ts). Reads like read() (cached) and writes nothing; a part it can't read now is left
+	 *  out, so the recorder keeps that part's last value. */
+	async configSettings(): Promise<Map<string, RoleSettings>> {
+		const out = new Map<string, RoleSettings>();
+		const now = this.now();
+		for (const def of this.host.identities()) {
+			let queue: UiTaskQueue | undefined;
+			let model: string | undefined;
+			const home = def.homeChat ? await this.paths.check(def.homeChat) : null;
+			if (home) {
+				try {
+					const s = await this.scans.read(home);
+					queue = taskQueueFromEntries(s.queue, true, Number.MAX_SAFE_INTEGER, undefined, s.sessionId);
+					model = this.modelOf(home, s.model);
+				} catch {
+					queue = undefined;
+				}
+			}
+			out.set(
+				def.id,
+				roleSettingsOf({
+					title: def.title,
+					focus: focusPart(identityFilePath(def, "about")).focus,
+					workMode: roleWorkMode(def.id, def.role.config, now).workMode,
+					goals: def.role.config.goals ?? rulesGoals(def.id),
+					homeChat: def.homeChat,
+					queue,
+					model,
+				}),
+			);
+		}
+		return out;
 	}
 
 	/** A role's latest 6 am report, or why there is none. */
