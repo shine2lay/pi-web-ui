@@ -149,9 +149,9 @@ export function createExactRolesView(
 	let selected: Selection = null;
 	let hover: string | null = null;
 	let graph: Element | null = null;
+	let chrome: Element | null = null;
 	let grown = false;
 	let settled = false;
-	let wrapHeight = 600;
 	let from = { top: 0, left: 0, width: 0, height: 0 };
 	let legend = false;
 	let reportOpen = false;
@@ -200,7 +200,6 @@ export function createExactRolesView(
 			width: rect?.width ?? 0,
 			height: rect?.height ?? 0,
 		};
-		wrapHeight = wr?.height || 600;
 		selected = next;
 		hover = null;
 		grown = false;
@@ -506,11 +505,19 @@ export function createExactRolesView(
 		}
 		const source = EXACT_SOURCE[model.source];
 		const loading = model.source === "awaiting" && model.roster === "unavailable";
-		const layout = ringLayout(
+		// The header floats inside the canvas. Keep every node and expanded panel below it.
+		const measured = chrome?.getBoundingClientRect().height || 48;
+		const topInset = Math.ceil(Math.min(600, Math.max(0, measured))) + 24;
+		const inner = ringLayout(
 			model.roles.map((r) => ({ id: r.row.roleId, name: r.row.roleLabel })),
 			width || graph?.clientWidth,
-			height || graph?.clientHeight,
+			Math.max(620, (height || graph?.clientHeight || 780) - topInset),
 		);
+		const layout = {
+			...inner,
+			height: inner.height + topInset,
+			pos: new Map([...inner.pos].map(([id, [x, y]]) => [id, [x, y + topInset] as const])),
+		};
 		const boxes: SurfaceValues[] = model.roles.map((r) => ({ ...box(r, model), ...ringAnchor(layout, r.row.roleId) }));
 		const selectedId = selected?.kind === "role" ? selected.id : null;
 		const ex = selectedId ? boxes.find((b) => b.id === selectedId) : undefined;
@@ -561,6 +568,9 @@ export function createExactRolesView(
 			// In the reference template this gates only the introductory helper/legend row.
 			// The owner removed that row; data readiness and the graph are separate below.
 			ready: false,
+			floatingHeader: "true",
+			headerSpace: `${topInset}px`,
+			youTop: ringAnchor(layout, "you")?.py ?? "50%",
 			loading,
 			offline: model.source === "disconnected",
 			lastKnown: model.lastReceived,
@@ -593,6 +603,12 @@ export function createExactRolesView(
 			setGraphEl: (el: Event | Element) => {
 				if ("getBoundingClientRect" in el && graph !== el) {
 					graph = el;
+					changed();
+				}
+			},
+			setChromeEl: (el: Event | Element) => {
+				if ("getBoundingClientRect" in el && chrome !== el) {
+					chrome = el;
 					changed();
 				}
 			},
@@ -668,10 +684,10 @@ export function createExactRolesView(
 			exLabel: exIsYou ? "Your decisions, questions and spending" : `${ex?.name ?? "Role"} details`,
 			exPos: grown
 				? {
-						t: "0px",
+						t: `${topInset}px`,
 						l: "0px",
 						w: "100%",
-						h: `${wrapHeight}px`,
+						h: `${layout.height - topInset}px`,
 						o: "1",
 						y: "0px",
 						d: "150ms",
@@ -722,6 +738,7 @@ export function createExactRolesView(
 			clearAnimation();
 			selected = null;
 			graph = null;
+			chrome = null;
 			origin = null;
 		},
 	};

@@ -10,6 +10,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## roles-floating-header: title and status over the canvas
+
+- `local` (owner 2026-10-17: make the header and status float over the main component, not occupy a separate row). Hypothesis and results: `docs/roles-floating-header.md`.
+- Only the live adapter enables the floating chrome. Its measured height reserves space inside the graph for nodes and panels; the graph uses the released vertical space. The source's reference view stays in its original layout. Status wording, warning colours, actions, data and permissions are unchanged.
+- The host observes overlay-size changes and disconnects the observer on unmount. All added style values are closed layout numbers, never feed text.
+- Checks: `roles-exact.test.ts`, the sealed `roles-exact-test.mjs` geometry and interaction checks at desktop/laptop/phone widths, then the normal gate. No real questions are used as tests.
+- Undo: revert this patch and use `pi-web-deploy`; the earlier helper-row removal and direct answers stay installed.
+
 ## roles-no-helper: remove the introductory helper and Legend row
 
 - `local` (owner 2026-10-17: remove the “ON YOU / the next step is yours”, hover/click and Legend line). Hypothesis: `docs/roles-help-row.md`.

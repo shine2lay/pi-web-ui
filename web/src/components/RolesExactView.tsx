@@ -158,6 +158,10 @@ export function RolesExactView({
 					first.focus();
 				}
 			};
+			// Host-owned observation also catches a warning appearing or a status line wrapping.
+			const chrome = doc.querySelector("[data-roles-chrome]");
+			const chromeObserver = chrome && typeof ResizeObserver !== "undefined" ? new ResizeObserver(update) : null;
+			if (chrome) chromeObserver?.observe(chrome);
 			doc.addEventListener("click", click);
 			doc.addEventListener("keydown", key);
 			win.addEventListener("resize", update);
@@ -167,6 +171,7 @@ export function RolesExactView({
 				if (queued !== null) window.cancelAnimationFrame(queued);
 				redraw.current = null;
 				hide.current = null;
+				chromeObserver?.disconnect();
 				doc.removeEventListener("click", click);
 				doc.removeEventListener("keydown", key);
 				win.removeEventListener("resize", update);

@@ -109,11 +109,17 @@ describe("the supplied Roles design with the existing feed", () => {
 		const values = view.values(1400, 780);
 		const boxes = list(object(values.glance).boxes);
 		expect(boxes).toHaveLength(1);
+		const base = ringLayout([{ id: "ops", name: "Ops" }], 1400, 708);
+		const floating = {
+			...base,
+			height: 780,
+			pos: new Map([...base.pos].map(([id, [x, y]]) => [id, [x, y + 72] as const])),
+		};
 		expect(object(boxes[0])).toMatchObject({
 			id: "ops",
 			name: "Ops",
 			state: "working",
-			...ringAnchor(ringLayout([{ id: "ops", name: "Ops" }], 1400, 780), "ops"),
+			...ringAnchor(floating, "ops"),
 		});
 		expect(object(values.fresh).text).toBe("Live · updated 12:00");
 		expect(values.headingSummary).toBe("1 departments · Oct 17");
@@ -121,6 +127,26 @@ describe("the supplied Roles design with the existing feed", () => {
 		expect(object(boxes[0]).lanes).toEqual([]);
 		expect(values.spendAmountText).toBe("Not recorded");
 		expect(values).not.toHaveProperty("namespace");
+	});
+
+	it.each([48, 122, 205])("keeps nodes, You and panels below a %ipx floating header", (headerHeight) => {
+		const { view } = fixture();
+		const chrome = document.createElement("div");
+		chrome.getBoundingClientRect = () => ({ height: headerHeight }) as DOMRect;
+		invoke(view.values().setChromeEl, chrome);
+		const values = view.values(1400, 900);
+		const inset = headerHeight + 24;
+		expect(values.floatingHeader).toBe("true");
+		expect(values.headerSpace).toBe(`${inset}px`);
+		const base = ringLayout([{ id: "ops", name: "Ops" }], 1400, 900 - inset);
+		const you = base.pos.get("you")!;
+		expect(Number.parseFloat(String(values.youTop))).toBeCloseTo(((you[1] + inset) / 900) * 100);
+		for (const item of list(object(values.glance).boxes)) {
+			expect((Number.parseFloat(String(object(item).py)) / 100) * 900).toBeGreaterThan(inset);
+		}
+		view.openRole("ops");
+		vi.runAllTimers();
+		expect(object(view.values(1400, 900).exPos)).toMatchObject({ t: `${inset}px`, h: `${900 - inset}px` });
 	});
 
 	it("omits the helper row through updates without hiding real ON YOU markers or panels", () => {

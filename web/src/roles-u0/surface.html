@@ -2,13 +2,22 @@
 body{margin:0}
 [data-noscrollbar]{scrollbar-width:none;-ms-overflow-style:none}
 [data-noscrollbar]::-webkit-scrollbar{display:none;width:0;height:0}
+[data-roles-floating="true"] [data-roles-chrome]{display:flex!important;position:absolute;top:32px;left:calc(clamp(12px,1.6vw,24px) + 16px);right:calc(clamp(12px,1.6vw,24px) + 16px);z-index:4;flex-direction:column;gap:12px;pointer-events:none}
+[data-roles-floating="true"] [data-roles-chrome] header{align-items:flex-start!important;gap:10px 16px!important}
+[data-roles-floating="true"] [data-roles-title]{padding:4px 10px;border-radius:10px;background:#0B0C0EF2;max-width:100%;box-sizing:border-box}
+[data-roles-floating="true"] [data-roles-chrome] [role="status"]{background:#0B0C0EF2;max-width:100%;box-sizing:border-box;padding-top:4px!important;padding-bottom:4px!important}
+[data-roles-floating="true"] [data-roles-chrome] [role="alert"]{pointer-events:auto}
+[data-roles-floating="true"] [data-boxgrid]{height:calc(100vh - 76px)!important;min-height:calc(620px + var(--roles-header-space))!important}
+[data-roles-floating="true"] [data-roles-you]{top:var(--roles-you-top)!important}
+[data-roles-floating="true"] [data-roles-loading]{position:absolute;top:calc(var(--roles-header-space) + 48px);left:32px;right:32px;z-index:1;pointer-events:none}
 </style>
-<div data-noscrollbar="1" style="height: 100vh; overflow-y: auto; overflow-x: hidden; background: #0E0F11; color: #ECEDEE; font-family: 'Geist', ui-sans-serif, system-ui, sans-serif; font-size: 14px; line-height: 1.45; position: relative">
+<div data-noscrollbar="1" data-roles-floating="{{floatingHeader}}" style="--roles-header-space: {{headerSpace}}; --roles-you-top: {{youTop}}; height: 100vh; overflow-y: auto; overflow-x: hidden; background: #0E0F11; color: #ECEDEE; font-family: 'Geist', ui-sans-serif, system-ui, sans-serif; font-size: 14px; line-height: 1.45; position: relative">
 <div style="margin: 0 auto; padding: 16px clamp(12px, 1.6vw, 24px) 16px; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px">
 
 <!-- HEADER -->
+<div data-roles-chrome="1" ref="{{setChromeEl}}" style="display: contents">
 <header style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px">
-<div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px">
+<div data-roles-title="1" style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px">
 <h1 style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.015em">Roles</h1>
 <span style="color: #A9AEB6; font-size: 14px">{{headingSummary}}</span>
 </div>
@@ -33,13 +42,14 @@ body{margin:0}
 </sc-if>
 </div>
 </sc-if>
+</div>
 
 <!-- AT A GLANCE -->
 <sc-if value="{{isGlance}}" hint-placeholder-val="{{true}}">
 <section aria-label="At a glance" style="display: flex; flex-direction: column; gap: 10px">
 
 <sc-if value="{{loading}}" hint-placeholder-val="{{false}}">
-<div aria-hidden="true" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(min(180px, 100%), 1fr)); gap: 10px">
+<div data-roles-loading="1" aria-hidden="true" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(min(180px, 100%), 1fr)); gap: 10px">
 <div style="height: 104px; border-radius: 12px; background: #16181B; border: 1px solid #22262B"></div>
 <div style="height: 104px; border-radius: 12px; background: #16181B; border: 1px solid #22262B"></div>
 <div style="height: 104px; border-radius: 12px; background: #16181B; border: 1px solid #22262B"></div>
@@ -106,7 +116,7 @@ body{margin:0}
 <span style="font-size: 11.5px; color: #A9AEB6; border-top: 1px solid #2A2E34; padding-top: 8px">{{graph.tip.hint}}</span>
 </div>
 </sc-if>
-<button type="button" onClick="{{youExpand}}" onMouseEnter="{{youHoverOn}}" onMouseLeave="{{hoverOff}}" onFocus="{{youHoverOn}}" onBlur="{{hoverOff}}" aria-label="You: open your decisions, questions and spending" style="position: absolute; z-index: 2; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 22px; border-radius: 999px; background: #1C170D; border: 1px solid {{youBd}}; box-shadow: 0 0 0 6px rgba(240, 185, 90, 0.06); color: #ECEDEE; font: inherit; cursor: pointer; opacity: {{youOp}}; transition: opacity 160ms ease">
+<button data-roles-you="1" type="button" onClick="{{youExpand}}" onMouseEnter="{{youHoverOn}}" onMouseLeave="{{hoverOff}}" onFocus="{{youHoverOn}}" onBlur="{{hoverOff}}" aria-label="You: open your decisions, questions and spending" style="position: absolute; z-index: 2; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 22px; border-radius: 999px; background: #1C170D; border: 1px solid {{youBd}}; box-shadow: 0 0 0 6px rgba(240, 185, 90, 0.06); color: #ECEDEE; font: inherit; cursor: pointer; opacity: {{youOp}}; transition: opacity 160ms ease">
 <span style="font-size: 16px; font-weight: 700">You</span>
 <span style="font-size: 11.5px; font-weight: 600; color: #F0B95A; white-space: nowrap">{{youText}}</span>
 </button>

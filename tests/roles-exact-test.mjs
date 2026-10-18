@@ -68,7 +68,7 @@ const browser = await chromium.launch({
 	headless: true,
 	args: ["--no-sandbox", "--disable-dev-shm-usage"],
 });
-const results = { component: [], reference: [], errors: [] };
+const results = { component: [], reference: [], floating: [], errors: [] };
 const deadline = setTimeout(() => {
 	results.errors.push("Isolated browser check exceeded its 180-second deadline");
 	void browser.close();
@@ -106,7 +106,49 @@ try {
 			assert.ok(!text.includes("Hover a label to read messages"));
 			assert.equal(await where.getByRole("button", { name: /^(Hide )?Legend$/i }).count(), 0);
 		};
+		const checkFloating = async (owner, label) => {
+			await owner.waitForFunction(
+				() => {
+					const doc = document.querySelector('iframe[title="Roles"]')?.contentDocument;
+					const chrome = doc?.querySelector("[data-roles-chrome]")?.getBoundingClientRect();
+					const first = doc?.querySelector('button[aria-haspopup="dialog"]')?.getBoundingClientRect();
+					return chrome && (!first || first.top >= chrome.bottom + 4);
+				},
+				undefined,
+				{ timeout: 3000 },
+			);
+			const geometry = await owner.evaluate(() => {
+				const doc = document.querySelector('iframe[title="Roles"]').contentDocument;
+				const root = doc.querySelector('[data-roles-floating="true"]');
+				const chrome = doc.querySelector("[data-roles-chrome]");
+				const graph = doc.querySelector("[data-boxgrid]");
+				const r = root.getBoundingClientRect(),
+					c = chrome.getBoundingClientRect(),
+					g = graph.getBoundingClientRect();
+				const boxes = [
+					...doc.querySelectorAll('button[aria-haspopup="dialog"], [data-roles-you], [role="region"]'),
+				].map((el) => el.getBoundingClientRect());
+				return {
+					position: doc.defaultView.getComputedStyle(chrome).position,
+					graphTop: Math.round(g.top - r.top + root.scrollTop),
+					inGraph: c.top >= g.top && c.bottom < g.bottom,
+					inViewport: c.left >= r.left && c.right <= r.right + 1,
+					clear: boxes.every((b) => b.top >= c.bottom + 4),
+					outerOverflow: root.scrollWidth > root.clientWidth + 1,
+					chromeHeight: Math.round(c.height),
+					canvasHeight: Math.round(g.height),
+				};
+			});
+			results.floating.push({ label, ...geometry });
+			assert.equal(geometry.position, "absolute", label);
+			assert.equal(geometry.graphTop, 16, label);
+			assert.ok(
+				geometry.inGraph && geometry.inViewport && geometry.clear && !geometry.outerOverflow,
+				JSON.stringify({ label, ...geometry }),
+			);
+		};
 		await noHelper(frame);
+		await checkFloating(page, "desktop");
 		assert.ok((await frame.getByRole("button", { name: /^Ops / }).locator("..").innerText()).includes("ON YOU"));
 		await page.screenshot({ path: join(output, "desktop.png") });
 		record("real component renders all 15 departments and real ON YOU markers without the helper row");
@@ -144,6 +186,7 @@ try {
 			);
 			throw error;
 		}
+		await checkFloating(page, "department panel");
 		await panel.getByRole("link", { name: /full queue/i }).click();
 		let state = await page.evaluate(() => window.rolesExactTest.getState());
 		assert.deepEqual(state.lastOpen, { file: "/tmp/roles-exact-fixture/ops.jsonl", focus: { kind: "task", id: "1" } });
@@ -258,6 +301,7 @@ try {
 				await page.mouse.move(5, 5);
 				await baselineContrast(0.8);
 				assert.ok((await frame.getByRole("button", { name: /^Ops / }).innerText()).includes("Last known"));
+				await checkFloating(page, mode);
 				await page.screenshot({ path: join(output, `${mode}.png`) });
 			}
 			await page.evaluate(() => window.rolesExactTest.deliver());
@@ -302,7 +346,11 @@ try {
 		results.accessibility = accessibility;
 		assert.deepEqual(accessibility, []);
 		record("no serious or critical structural accessibility violations");
+		await page.setViewportSize({ width: 1050, height: 900 });
+		await checkFloating(page, "laptop");
+		await page.screenshot({ path: join(output, "laptop.png") });
 		await page.setViewportSize({ width: 390, height: 844 });
+		await checkFloating(page, "phone");
 		await frame.locator("[data-boxgrid]").waitFor();
 		const pan = await frame.locator("[data-boxgrid]").evaluate((el) => {
 			let p = el.parentElement;
