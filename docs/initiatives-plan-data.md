@@ -27,7 +27,13 @@ Owner 2026-10-18, "now lets plan for initiatives page to show all the planning w
 
 ## Results
 
-Pending: the focused tests and the landing gate.
+**H-INITIATIVES-DATA-1: HIT** (2026-10-18).
+
+- Focused tests (`scripts/sealed.sh npx vitest run`, TZ=UTC), one run: `tests/unit/work-page.test.ts` 8 of 8 passed, the fixture page equal to the hand-written one in full; `tests/unit/work-records.test.ts` 17 of 17 and `tests/unit/roles-overview.test.ts` 42 of 42 passed unchanged. Typecheck clean; oxlint found nothing in the new code.
+- Roles unchanged: the commit touches neither `server/work-records.ts` nor `server/roles-overview.ts`.
+- Landing gate: `wt land` request 22-a15dac succeeded at 15:03 PDT, rebased onto mine 5f3cfb5f and checked by `scripts/check.sh --fast` (protocol sync, PATCHES.md check, typecheck, oxlint 0 errors, prettier, 424 test files: 6167 passed, 6 skipped). On mine and origin/mine as aad34732.
+- Not measured here: the live feed. Nothing asks for it until the wiring task, which installs it and looks at it on the real registry.
+- Plan differences: the server has no queue change signal to subscribe to (the Roles page polls too), so the 5 s look covers the log and the queues both; `poke()` (500 ms debounce) is ready for one. A task number linked twice in one queue gets its queue facts only when the projection's add time says which one is meant.
 
 ## Undo
 
