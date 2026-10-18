@@ -426,6 +426,7 @@ import {
 import {
 	type ChatState,
 	chatStateFrom,
+	turnSinceFrom,
 	installQueueHost,
 	previewExistingQueueLaunch,
 	makeChain,
@@ -16820,8 +16821,15 @@ export class AgentService {
 		} catch {
 			lastActiveAt = undefined; // no transcript (any more)
 		}
-		const state = chatStateFrom(ClientSession.chatBusy(abs), runningChats?.get(abs));
-		return lastActiveAt === undefined ? { state } : { state, lastActiveAt };
+		const listed = runningChats?.get(abs);
+		const state = chatStateFrom(ClientSession.chatBusy(abs), listed);
+		// queue-turn-since (pi-queue #211): when its turn started, for the watchdog's long-turn note.
+		const turnSince = turnSinceFrom(state, listed);
+		return {
+			state,
+			...(lastActiveAt === undefined ? {} : { lastActiveAt }),
+			...(turnSince === undefined ? {} : { turnSince }),
+		};
 	}
 
 	/**

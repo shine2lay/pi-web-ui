@@ -16,6 +16,7 @@ import {
 	queueCoordinator,
 	type QueueHost,
 	type QueueHostImpl,
+	turnSinceFrom,
 	WAKE_NOTE_MAX,
 	waitUntil,
 	wakeRefusal,
@@ -154,6 +155,30 @@ describe("stall-watch: a chat's state, and when it may be woken", () => {
 		expect(cleanChatState({ state: "idle", lastActiveAt: -1 })).toEqual({ state: "idle" });
 		expect(cleanChatState({ state: "idle", lastActiveAt: "5" })).toEqual({ state: "idle" });
 		expect(cleanChatState(null)).toEqual({ state: "closed" });
+	});
+
+	it("queue-turn-since: a working chat's turn start, only from a turn that runs, and checked on the way out", () => {
+		// A turn runs: its running-list entry's start.
+		expect(turnSinceFrom("working", { startedAt: 1000.4 })).toBe(1000);
+		// A restart's carry-over whose turn hasn't started, a compaction alone (not listed), or not working: none.
+		expect(turnSinceFrom("working", { startedAt: 1000, awaiting: true })).toBeUndefined();
+		expect(turnSinceFrom("working", undefined)).toBeUndefined();
+		expect(turnSinceFrom("idle", { startedAt: 1000 })).toBeUndefined();
+		expect(turnSinceFrom("closed", { startedAt: 1000 })).toBeUndefined();
+		expect(turnSinceFrom("working", { startedAt: Number.NaN })).toBeUndefined();
+		expect(turnSinceFrom("working", { startedAt: 0 })).toBeUndefined();
+		// pi-queue gets it only with a working chat, as a time.
+		expect(cleanChatState({ state: "working", lastActiveAt: 7, turnSince: 5.6 })).toEqual({
+			state: "working",
+			lastActiveAt: 7,
+			turnSince: 6,
+		});
+		expect(cleanChatState({ state: "idle", lastActiveAt: 7, turnSince: 5 })).toEqual({
+			state: "idle",
+			lastActiveAt: 7,
+		});
+		expect(cleanChatState({ state: "working", turnSince: "5" })).toEqual({ state: "working" });
+		expect(cleanChatState({ state: "working", turnSince: -1 })).toEqual({ state: "working" });
 	});
 
 	it("a wake note is some text of a few lines", () => {

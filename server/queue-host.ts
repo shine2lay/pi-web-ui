@@ -78,6 +78,11 @@ export interface ChatState {
 	state: ChatStateName;
 	/** When it last did something: its transcript's last write (ms). Missing when that can't be read. */
 	lastActiveAt?: number;
+	/**
+	 * queue-turn-since (pi-queue #211): working, when its current turn started (ms), from its running-list entry.
+	 * Missing when no turn is known to run (a carry-over whose turn hasn't started, a compaction alone).
+	 */
+	turnSince?: number;
 }
 
 export interface QueueHostImpl {
@@ -295,6 +300,19 @@ export function chatStateFrom(busy: boolean | undefined, listed: { awaiting?: bo
 }
 
 /**
+ * queue-turn-since (pi-queue #211): when a working chat's current turn started: its running-list entry's start,
+ * unless that entry is a restart's carry-over whose turn hasn't started yet (`awaiting`). Undefined otherwise.
+ */
+export function turnSinceFrom(
+	state: ChatStateName,
+	listed: { startedAt?: number; awaiting?: boolean } | undefined,
+): number | undefined {
+	if (state !== "working" || !listed || listed.awaiting) return undefined;
+	const at = listed.startedAt;
+	return typeof at === "number" && Number.isFinite(at) && at > 0 ? Math.round(at) : undefined;
+}
+
+/**
  * Why wakeChat won't wake a chat that looks like this, or undefined when it may: never one that is
  * working, and never one the carry-on left alone at this start (`leftAloneAt`: when; cut off by too many
  * crashes or planned restarts without finishing a turn), unless it has done something since. Waking it
@@ -307,12 +325,17 @@ export function wakeRefusal(look: ChatState, leftAloneAt?: number): string | und
 	return undefined;
 }
 
-/** What chatState hands back, checked: a known state, and a time only when it is one. */
+/** What chatState hands back, checked: a known state, and a time only when it is one (a turn's start only while working). */
 export function cleanChatState(raw: unknown): ChatState {
 	const r = (raw ?? {}) as Record<string, unknown>;
 	const state = typeof r.state === "string" && CHAT_STATES.has(r.state) ? (r.state as ChatStateName) : "closed";
 	const at = r.lastActiveAt;
-	return typeof at === "number" && Number.isFinite(at) && at > 0 ? { state, lastActiveAt: Math.round(at) } : { state };
+	const out: ChatState =
+		typeof at === "number" && Number.isFinite(at) && at > 0 ? { state, lastActiveAt: Math.round(at) } : { state };
+	const since = r.turnSince;
+	if (state === "working" && typeof since === "number" && Number.isFinite(since) && since > 0)
+		out.turnSince = Math.round(since);
+	return out;
 }
 
 /** Runs async jobs one at a time, in the order they were handed in. A failing job doesn't stop the next. */

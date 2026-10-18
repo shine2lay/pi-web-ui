@@ -3087,6 +3087,12 @@ watchdog (pi-queue README, "Watchdog"); pi-web-ui gives it two more calls on the
   between attempts, or a restart's carry-on about to start one). `idle`: it is open with no turn running.
   `closed`: it isn't loaded. `lastActiveAt` is the transcript's last write. (`AgentService.queueChatState`,
   `ClientSession.chatBusy`, `chatStateFrom`.)
+  - queue-turn-since (2026-10-18, pi-queue #211): a working chat's look also has `turnSince`, when its current
+    turn started (its running-list entry's `startedAt`; none for a carry-over whose turn hasn't started, or a
+    compaction alone: `turnSinceFrom`). pi-queue's watchdog tells the task's lead once when a turn runs past
+    the task's expected time + 2 h; an older pi-web-ui gives no `turnSince`, so there's no such look. A turn
+    cut off by a restart starts afresh with its carry-on. Test: `tests/unit/queue-host.test.ts`
+    ("queue-turn-since").
 - `wakeChat(sessionFile, note)` opens the chat if it isn't open and sends the note as a user message, the
   way the carry-on does (`wakeClosedChat` with `unlessWorking`, which looks again inside its chain). It
   refuses (false) a working chat, and one the carry-on left alone at this start until it has done
