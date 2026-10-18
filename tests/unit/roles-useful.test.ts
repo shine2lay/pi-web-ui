@@ -89,7 +89,7 @@ function closed(model: UsefulRoles) {
 	keys(model, ["source", "roster", "omitted", "lastReceived", "roles", "needsYou"]);
 	keys(model.needsYou, ["tell", "asOf", "total", "items", "more"]);
 	for (const item of model.needsYou.items) {
-		keys(item, ["key", "roleLabel", "text", "since", "link"]);
+		keys(item, ["key", "roleId", "roleLabel", "text", "since", "link"]);
 		if (item.link) linkShape(item.link);
 	}
 	for (const r of model.roles) {
@@ -414,6 +414,7 @@ describe("Needs you", () => {
 			{
 				// Keys are places in the feed, never agent text; a role missing from the roster is unknown.
 				key: "0",
+				roleId: null,
 				roleLabel: null,
 				text: "Pick a port",
 				since: NOW - 3 * 3_600_000,
@@ -421,6 +422,7 @@ describe("Needs you", () => {
 			},
 			{
 				key: "1",
+				roleId: "frontend",
 				roleLabel: "Frontend",
 				text: "Which option?",
 				since: NOW - 10 * 60_000,
@@ -428,6 +430,7 @@ describe("Needs you", () => {
 			},
 			{
 				key: "2",
+				roleId: "frontend",
 				roleLabel: "Frontend",
 				text: "Approve the plan?",
 				since: null,
@@ -435,6 +438,7 @@ describe("Needs you", () => {
 			},
 			{
 				key: "3",
+				roleId: "frontend",
 				roleLabel: "Frontend",
 				text: "Text of frontend:tldr:bad",
 				since: NOW - 60_000,
@@ -1002,11 +1006,13 @@ describe("closed boundary and the actual store", () => {
 		const app = readFileSync(resolve(process.cwd(), "web/src/App.tsx"), "utf8");
 		expect(source.match(/useRoles\(active \? "full" : "off"\)/g)).toHaveLength(1);
 		expect(source.match(/useAppField\("status"\)/g)).toHaveLength(1);
-		expect(app).toContain('import("./components/RolesUsefulView")');
+		// roles-exact: the supplied design now uses this same closed model; the useful
+		// list remains a tested rollback surface, not the app's mounted page.
+		expect(app).toContain('import("./components/RolesExactView")');
 		expect(app).not.toContain('import("./components/RolesView")');
 		// roles-panel: About & rules opens Settings at the role, the way the old panel did.
 		expect(app).toMatch(
-			/<RolesUsefulView\s+active=\{view === "roles"\}\s+phone=\{isMobile\}\s+onOpen=\{openFromRolesPage\}\s+onAbout=\{aboutFromRoles\}\s+\/>/,
+			/<RolesExactView\s+active=\{view === "roles"\}\s+onOpen=\{openFromRolesPage\}\s+onAbout=\{aboutFromRoles\}\s+\/>/,
 		);
 		// The page's opens are remembered first (fixed words on failure), then go the existing way.
 		expect(app).toMatch(/markRolesOpen\(target\.file\);\s*openFromRoles\(target\);/);

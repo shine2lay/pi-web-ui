@@ -120,6 +120,7 @@ describe("Needs you follows the real reader", () => {
 		expect(before.items).toEqual([
 			{
 				key: "0",
+				roleId: "ops",
 				roleLabel: "Ops role",
 				text: "Your call: pick a port",
 				since: T0 + 1000,
@@ -162,6 +163,7 @@ describe("Needs you follows the real reader", () => {
 		expect(open.items).toEqual([
 			{
 				key: "0",
+				roleId: "design",
 				roleLabel: "Design role",
 				text: "Need you: pick a layout",
 				since: T0 + 1000,
@@ -186,6 +188,7 @@ describe("Needs you follows the real reader", () => {
 		expect(stuck.items).toEqual([
 			{
 				key: "0",
+				roleId: "ops",
 				roleLabel: "Ops role",
 				text: "Which port?",
 				since: T0 + 400,

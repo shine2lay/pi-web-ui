@@ -30,9 +30,7 @@ import { RoleGuardOwnerQuestions } from "./components/RoleGuardOwnerQuestions";
 // 终端视图懒加载：xterm.js 体积大且只在切到终端时才需要，拆出主包
 const TerminalPanel = lazy(() => import("./components/TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
 // roles-overview: the Roles page loads with its first opening and stays mounted after it.
-const RolesUsefulView = lazy(() =>
-	import("./components/RolesUsefulView").then((m) => ({ default: m.RolesUsefulView })),
-);
+const RolesExactView = lazy(() => import("./components/RolesExactView").then((m) => ({ default: m.RolesExactView })));
 // initiatives-page: the Initiatives tab, the same way (loads with its first opening, stays mounted).
 const InitiativesView = lazy(() =>
 	import("./components/InitiativesView").then((m) => ({ default: m.InitiativesView })),
@@ -2382,12 +2380,7 @@ export function App() {
 				<div className={`view-pane roles-pane ${view === "roles" ? "" : "hidden"}`}>
 					{(rolesLoaded || view === "roles") && (
 						<Suspense fallback={null}>
-							<RolesUsefulView
-								active={view === "roles"}
-								phone={isMobile}
-								onOpen={openFromRolesPage}
-								onAbout={aboutFromRoles}
-							/>
+							<RolesExactView active={view === "roles"} onOpen={openFromRolesPage} onAbout={aboutFromRoles} />
 						</Suspense>
 					)}
 				</div>

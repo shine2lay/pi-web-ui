@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { rolesDesignAssets } from "./roles-design-assets";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -11,7 +12,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // collides with a globally-installed pi-web-ui running on the default :8787.
 export default defineConfig({
 	root: __dirname,
-	plugins: [react()],
+	plugins: [react(), rolesDesignAssets()],
 	define: {
 		// Build id baked into the bundle: the server compares it against the
 		// on-disk build on every WS (re)connect and tells stale pages to

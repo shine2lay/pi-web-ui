@@ -115,6 +115,8 @@ export interface UsefulRole {
 	dropped: UsefulRecords;
 }
 export interface NeedsYouItem {
+	/** Validated roster id, for associating the ask with one role's panel, never its display name. */
+	roleId: string | null;
 	/** Its place in the feed; React only, never rendered. */
 	key: string;
 	/** null: an unknown or invalid role; the row says "Unknown role". */
@@ -434,6 +436,7 @@ function needsYou(
 		if (index >= ASK_LIMIT) return;
 		items.push({
 			key: String(index),
+			roleId: roleId(ask.role) && labels.has(ask.role) ? ask.role : null,
 			roleLabel: roleId(ask.role) ? (labels.get(ask.role) ?? null) : null,
 			text: plain(ask.text, TEXT_LIMIT)?.text ?? null,
 			since: sinceOf(ask.since, now),

@@ -10,6 +10,15 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## roles-exact: implement the supplied Roles design before new data producers
+
+- `local` (owner 2026-10-17: implement the supplied design 1:1 as the actual page, not another preview; subsequent dialog authorises building and shipping its exact assets). Hypothesis, constraints and result: `docs/roles-exact.md`.
+- `RolesExactView` replaces the useful-list mount with the supplied graph and expanding department/owner panels. It reuses the inert `roles-u0` static template and non-evaluating binder, not the old tracking entry point. `roles-exact-model` and `roles-exact-view` use the existing checked feed/panel projections; unknown data is labelled, not filled with the design's mock records. A validated role id on each existing ask keeps it in the correct department panel even when display names match.
+- Only existing chat, queue and settings navigation; no inline answers, queue changes, message sending, model calls or new backend/tracking producer. The sandboxed frame has no scripts; agent text stays text and chat paths remain in callback state. Timers, listeners, focus and the feed subscription are released or stopped when hidden/unmounted.
+- The lazy bundle includes only two hash-pinned, already-extracted original fonts, through `web/roles-design-assets.ts`. Builds fail clearly if those private immutable inputs are missing or changed; `PI_ROLES_DESIGN_ASSETS` can relocate them. Runtime does not read the design directory or run its HTML/JavaScript.
+- Checks: `tests/unit/roles-exact.test.ts`, `roles-exact-assets.test.ts`, the existing useful-model tests, and `scripts/sealed.sh node --import tsx tests/roles-exact-test.mjs` (fixed-input actual component, desktop/phone screenshots, then supplied-reference comparisons). No live chats in tests. Results and any remaining deviations are recorded in the hypothesis document, not inferred from this patch entry.
+- Undo: revert this patch and install with `pi-web-deploy`; the useful-list implementation remains in source. The separate, uninstalled answer/spend candidate is not included.
+
 ## question-lead: say which department's lead has a task's question, not always Ops
 
 - `local` (owner 2026-10-17, dialog answers "The role whose queue holds it" and "Up the chain, then you"; built directly with the owner). pi-work-management (pi-queue) now sends a task's question to the home chat of the role whose queue holds the task, then up the work registry's chain, then to the owner; Ops only when that role has no home chat. The Queue tab still said "Asking Ops" and the Roles page "question with Ops" for every such question, which is no longer true.
