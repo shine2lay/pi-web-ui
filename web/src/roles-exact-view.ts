@@ -624,8 +624,9 @@ export function createExactRolesView(
 			typeof row.counts.active === "number" && typeof row.counts.queued === "number"
 				? Math.max(0, row.counts.active + row.counts.queued - tasks.length)
 				: null;
+		// roles-small-fixes N3: counts both cuts (20 active, 20 queued), in plain words for one task too.
 		const taskOmission = omittedTasks
-			? `${omittedTasks} more tasks not shown here. Open the full queue.`
+			? `${omittedTasks} more ${omittedTasks === 1 ? "task" : "tasks"} not shown here. Open the full queue.`
 			: row.active.notAllShown || row.queued.notAllShown
 				? "Some tasks could not be shown. Open the full queue."
 				: "";

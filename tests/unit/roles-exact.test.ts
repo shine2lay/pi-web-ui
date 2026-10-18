@@ -656,6 +656,25 @@ describe("the supplied Roles design with the existing feed", () => {
 		expect(r.report.sections?.[0].text).toContain("ARCHIVED_DAILY_REPORT");
 	});
 
+	// roles-small-fixes N3: the active list is cut at 20 too (the server sends them all); both cuts add up.
+	it.each([
+		[21, 0, "1 more task not shown here"],
+		[25, 22, "7 more tasks not shown here"],
+	])("says how many of %i active and %i queued tasks aren't shown", (activeN, queuedN, line) => {
+		const r = role({
+			queue: {
+				active: Array.from({ length: activeN }, (_, i) => task(i + 1)),
+				queued: Array.from({ length: Math.min(queuedN, 20) }, (_, i) => task(i + 101, { status: "ready" })),
+				counts: { active: activeN, queued: queuedN, done: 0 },
+			},
+		});
+		const { view } = fixture(projectExactRoles(state([r]), "open", NOW), true);
+		view.openRole("ops");
+		vi.runAllTimers();
+		expect(document.body.textContent).toContain(`${line}. Open the full queue.`);
+		expect(document.body.textContent).not.toContain("1 more tasks");
+	});
+
 	it("counts omitted tasks and mutes missing requester labels", () => {
 		const r = role({
 			queue: {
