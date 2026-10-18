@@ -19,6 +19,17 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: `tests/unit/roles-evidence.test.ts` (the join, a newer install containing the commit, failed installs skipped, not yet, another repo, no records, another task's commit never shown, the row's words and styles, the terminal env prefix), then the landing gate.
 - Undo: `pi-web-deploy rollback`, or revert this commit and deploy. The wt records are inert files.
 
+## roles-small-fixes: small known issues from the Roles reviews and the floating-header check
+
+- `local` (owner 2026-10-18, "create those tasks and queue them", Ops #206). One commit per item; hypotheses H-SMALL-1 to H-SMALL-6 and results: `docs/roles-small-fixes.md`. Sources: Security's `REVIEW-5f2cddad-filter.md` (N1, N3) and `REVIEW-f0a35666.md` (N1, N2, N3), and the floating-header live check. Narrows only: nothing new becomes answerable, no new reads or writes.
+- `roles-small-fixes N1`: a plan title is answerable on the page only in pi-queue's own confirm shape (exactly one Yes/No field `value` with yes/no options, no typed answer, a body starting "### Task #"); an MCP form elicitation can build the same title but never that shape. One check (`roleAnswerKindAllowed`, `server/roles-asks.ts`) serves both the overview and the answer path. Tests: `tests/unit/roles-answer.test.ts`, `tests/unit/roles-overview.test.ts`.
+- `roles-small-fixes N3` (dialog): the answer dialog names the ask's kind (Plan to approve / Question / Stuck task) and closes itself when a live, whole list no longer holds its ask, never while sending or after sending, nor on a list that can't tell (`roleAnswerGone`, `web/src/roles-answer-model.ts`; locale keys in all packs). Tests: `tests/unit/roles-answer.test.ts`.
+- `roles-small-fixes N2`: when the feed is connected but asks can't be confirmed, the amber label and banner give the reason ("Asks unconfirmed: still checking / some roles not read / a stuck task's question is missing") instead of the generic wording (`ASKS_UNCONFIRMED`, `web/src/roles-exact-view.ts`). Test: `tests/unit/roles-exact.test.ts`.
+- `roles-small-fixes N3` ("N more"): the existing `taskOmission` line already counted both cuts (20 active, 20 queued); one hidden task now reads "1 more task". Test: `tests/unit/roles-exact.test.ts`.
+- `roles-small-fixes N1` (report cap): nothing to cap, because the six-am removal took the report sections off the page; the sealed check now asserts a report of over 1,000 lines shows no section and breaks nothing (`tests/roles-exact-test.mjs`).
+- `roles-small-fixes header`: the 4.76 px phone gap came from the graph being off its planned height (the min-height transition while the header grew; a stale plan after it shrank), not from the reserved space (30-39 px at rest). The floating layout drops the transition, and the view's `refit()` makes the host plan again in the same frame when the header or graph changed size (`web/src/roles-exact-view.ts`, `RolesExactView.tsx`, `web/src/roles-u0/surface.html`). Test: the sealed geometry check (`tests/roles-exact-test.mjs`) at 1440, 1050 and 390 px demands 8 px (was 4) and the graph at its plan's height, also after the header grows and shrinks back.
+- Undo: `pi-web-deploy rollback`, or revert these commits and deploy.
+
 ## roles-model: show each role's model in its panel
 
 - `local` (owner 2026-10-18, second of the "Finish Roles' easy gaps" tasks, Ops #204). Hypothesis H-ROLES-MODEL-1 and result: `docs/roles-model.md`.
