@@ -455,6 +455,28 @@ describe("the supplied Roles design with the existing feed", () => {
 		expect(view.values().emptyInboxText).toContain("could not be confirmed");
 	});
 
+	// roles-small-fixes N2: connected, but the asks can't be confirmed: an amber label naming the reason.
+	it.each([
+		["awaiting", state([role()], [], { appliedAt: null }), "still checking"],
+		["partial", { ...state(), overview: { ...state().overview, asks: undefined } }, "some roles not read"],
+		[
+			"decision",
+			state([
+				role({ queue: { ...role().queue, active: [task(7, { status: "stuck", chat: { file: TASK, where: 7 } })] } }),
+			]),
+			"a stuck task\u2019s question is missing",
+		],
+	] as const)("says why %s asks can't be confirmed, never a green label", (tell, input, reason) => {
+		const model = projectExactRoles(input, "open", NOW);
+		expect(model.source).toBe("connected-source-unverified");
+		expect(model.needs.tell).toBe(tell);
+		const v = fixture(model).view.values();
+		expect(object(v.fresh).text).toBe(`Asks unconfirmed: ${reason} \u00b7 last received 12:00`);
+		expect(object(v.fresh)).toMatchObject({ fg: "#F0B95A", bd: "#4D3F1F" });
+		expect(object(v.banner)).toMatchObject({ show: true, title: "Some owner asks could not be confirmed" });
+		expect(String(object(v.banner).body)).not.toContain("may be incomplete");
+	});
+
 	it("draws only known current owner-ask lines and does not invent message kinds", () => {
 		const rows = [role(), role({ id: "design", title: "Design" })];
 		const { view, update } = fixture(projectExactRoles(state(rows, [ask(1)]), "open", NOW));

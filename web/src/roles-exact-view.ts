@@ -16,7 +16,7 @@ import type { NeedsYouItem } from "./roles-useful-model";
 import type { PanelRoleStatus, PanelTask, PanelTaskEvent, RolePanel } from "./roles-panel-model";
 import { ringAnchor, ringLayout } from "./roles-u0/layout";
 import type { SurfaceValues } from "./roles-u0/types";
-import type { RowState, UsefulOpenTarget, UsefulRecord } from "./roles-useful-model";
+import type { RowState, TellState, UsefulOpenTarget, UsefulRecord } from "./roles-useful-model";
 import { EVIDENCE_STEPS, type UsefulEvidence } from "./roles-useful-model";
 
 const NR = "Not recorded";
@@ -42,6 +42,21 @@ export function exactEvidence(
 		return { label, at: NR, ...EV_MISSING };
 	});
 }
+/** roles-small-fixes N2: why a connected feed's owner asks can't be confirmed (fixed words only). */
+const ASKS_UNCONFIRMED: Partial<Record<TellState, { label: string; body: string }>> = {
+	partial: {
+		label: "Asks unconfirmed: some roles not read",
+		body: "Not every role\u2019s open asks were read, so this list may be missing some. Open the original chats for anything not shown here.",
+	},
+	decision: {
+		label: "Asks unconfirmed: a stuck task\u2019s question is missing",
+		body: "A stuck task is waiting on you, but its question isn\u2019t in this list. Open that role\u2019s chat to answer it.",
+	},
+	awaiting: {
+		label: "Asks unconfirmed: still checking",
+		body: "The server hasn\u2019t confirmed the current asks since this page connected. The list below is the last one received.",
+	},
+};
 /** roles-lanes: the supplied design's lane pills (its LS map): a lane in use is "working", a free one "free". */
 const LANE_BUSY = { bg: "#7DB8FF", bd: "#7DB8FF", bs: "solid" };
 const LANE_IDLE = { bg: "transparent", bd: "#4A4F57", bs: "solid" };
@@ -795,8 +810,10 @@ export function createExactRolesView(
 				: model.hasOverview
 					? "receipt time unknown"
 					: "nothing loaded yet";
+		// roles-small-fixes N2: a connected feed whose asks can't be confirmed says why, in amber.
+		const asksWhy = model.source === "connected-source-unverified" ? ASKS_UNCONFIRMED[needs.tell] : undefined;
 		const freshText = unavailable
-			? `${model.source === "connected-source-unverified" ? "Incomplete status" : source.label} · ${receipt}`
+			? `${model.source === "connected-source-unverified" ? (asksWhy?.label ?? "Incomplete status") : source.label} · ${receipt}`
 			: `Live · ${model.receivedAt !== null ? `updated ${exactClock(model.receivedAt)}` : receipt}`;
 		const date = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(model.now);
 		const spending = model.roles.filter((r) => r.spend.reported);
@@ -822,7 +839,9 @@ export function createExactRolesView(
 				show: unavailable,
 				title: source.title || "Some owner asks could not be confirmed",
 				body:
-					source.body || "The received list may be incomplete. Open the original chats for anything not shown here.",
+					source.body ||
+					asksWhy?.body ||
+					"The received list may be incomplete. Open the original chats for anything not shown here.",
 				...palette,
 				hasAction: unavailable && !loading,
 				action: stale ? "Refresh now" : "Retry now",
