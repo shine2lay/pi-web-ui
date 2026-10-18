@@ -21,4 +21,16 @@ Ops #205, third of the owner's "Finish Roles' easy gaps" tasks (2026-10-18). Acc
 
 **Limits.** No sending, answering, closing or marking from the page; only a message's first line. No new reads beyond the store the overview already holds in memory, no writes, chat loading or model calls. Minimal checks (owner, Oct 17: "build ship it, only test minimally").
 
-**Result:** (pending the live check)
+**Result: HIT.** Look-only live check 2026-10-18 10:41 PDT on live build 92f7c21d, which carries ca613762 (`~/kept-from-tmp/2026-10-18/roles-sent-live/look.mjs`, `out-1/result.json`, `out-1/roles-graph.png`).
+
+- Store at that moment: 1,000 messages, 7 open requests or questions in 6 sender → receiver pairs (ops → architecture 1; temper → coo 1, frontend 1, ops 2, qa 1, security 1). Left out: 298 answered, 0 failed, 694 fyi or reply, 1 to itself, 0 off the page. A second look found the same pairs.
+- The feed's `openPairs` equal the store's. The graph draws 6 role-to-role arrows, one per pair, each head at the receiver, each label naming the same two roles and the same count.
+- All 15 "Asked of others" lines match the store: Ops "1 open · newest to System architecture, 4 days ago: …" (first line equal to the store's), temper 6 open, the other 13 "0 open". Cards: Ops "Waiting on System architecture", temper "Waiting on 5 roles", no line on the other 13.
+- Owner-ask arrows: `ownerEdges` is the same code before and after, drawn on top of the new arrows. None showed in this look because the asks list couldn't be confirmed then, and by the existing rule the page draws none in that state.
+- 0 page errors; the page sent only `hello` and `roles_watch`.
+- Install: ca613762's own install (09:59) had the big-chat check time out (that check is flaky and doesn't touch the Roles page); the next two installs carrying it, 5e41baa6 (10:13) and 92f7c21d (10:22), passed all five checks, and `pi-web-deploy result ca613762` gives 0.
+
+Known, not fixed here:
+
+- The key's text is updated, but the page doesn't show the key: the owner removed the Legend row on 2026-10-17 (d9cc7e41, `ready: false`). Each arrow's label still says what it means to screen readers.
+- When the page shows last-received data, the arrows dim to 0.55, as in the supplied design (its edge code: `lastKnown ? '0.55' : '0.95'`). Then the "N open" label is 4.0:1 against its background (4.5:1 needed) and the line 2.2:1 (3:1 needed); at full strength they are 10.0:1 and 4.4:1. Dimming them like the cards (0.8) would give 7.3:1 and 3.5:1: a candidate for another pass. axe can't run in the Roles frame, so contrast was computed from the colours.
