@@ -40,8 +40,8 @@ function projectSpend(value: unknown): ExactSpend {
 	if (!input || typeof input.state !== "string" || !["ok", "stale", "over"].includes(input.state))
 		return absent("Own-work spending is unavailable.");
 	const dollars = (v: unknown): number | null => {
-		if (typeof v !== "string" || v.length > 24 || !/^\$(?:0|[1-9]\d{0,2}(?:,\d{3})*|[1-9]\d*)(?:\.\d{2})?$/.test(v))
-			return null;
+		if (typeof v !== "string" || v.length > 24) return null;
+		if (/^\$(?:0|[1-9]\d{0,2}(?:,\d{3})*|[1-9]\d*)(?:\.\d{2})?$/.exec(v)?.[0] !== v) return null;
 		const n = Number(v.slice(1).replaceAll(",", ""));
 		return Number.isFinite(n) && n >= 0 && n <= Number.MAX_SAFE_INTEGER / 100 ? n : null;
 	};
@@ -50,7 +50,9 @@ function projectSpend(value: unknown): ExactSpend {
 	if (spent === null || budget === null || budget <= 0 || (input.state !== "over" && spent >= budget))
 		return absent("Own-work spending is unreadable.");
 	const age =
-		typeof input.age === "string" && /^(?:just now|\d{1,6} (?:min|h|d) ago)$/.test(input.age) ? input.age : null;
+		typeof input.age === "string" && /^(?:just now|\d{1,6} (?:min|h|d) ago)$/.exec(input.age)?.[0] === input.age
+			? input.age
+			: null;
 	return {
 		reported: true,
 		amount: String(input.spent),

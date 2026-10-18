@@ -331,12 +331,21 @@ describe("the supplied Roles design with the existing feed", () => {
 		{ state: "ok", spent: "$0", budget: "$0" },
 		{ state: "ok", spent: "USD 2", budget: "$20" },
 		{ state: "ok", spent: "$2\u202e", budget: "$20" },
+		{ state: "ok", spent: "$2\n", budget: "$20" },
+		{ state: "ok", spent: "$2", budget: "$20\n" },
 		{ state: "ok", spent: "$20", budget: "$20" },
 		{ state: { toString: "invalid" }, spent: "$2", budget: "$20" },
 	])("never treats an absent or invalid tally as zero (%j)", (spend) => {
 		const { view } = fixture(projectExactRoles(state([role({ spend })]), "open", NOW));
 		expect(view.values().spendAmountText).toBe("Not recorded");
 		expect(view.values().spendBarColor).toBe("transparent");
+	});
+
+	it("does not admit a final newline in a tally age", () => {
+		const spend = { state: "ok", spent: "$2", budget: "$20", age: "just now\n" };
+		const { view } = fixture(projectExactRoles(state([role({ spend })]), "open", NOW));
+		expect(view.values().spendAmountText).toBe("$2");
+		expect(view.values().spendNoteText).not.toContain("updated just now");
 	});
 
 	it("does not add multiple role budgets together, and marks stale/over-budget tallies", () => {
@@ -383,7 +392,9 @@ describe("the supplied Roles design with the existing feed", () => {
 		const queue = [...document.querySelectorAll("section")].find(
 			(el) => el.querySelector("h3")?.textContent === "Task queue",
 		);
-		const labels = [...(queue?.querySelectorAll("li > span") ?? [])].filter((el) => el.textContent === "Not recorded");
+		const labels = [...(queue?.querySelectorAll<HTMLSpanElement>("li > span") ?? [])].filter(
+			(el) => el.textContent === "Not recorded",
+		);
 		expect(labels).toHaveLength(20);
 		expect(labels.every((el) => el.style.color === "rgb(169, 174, 182)")).toBe(true);
 	});
