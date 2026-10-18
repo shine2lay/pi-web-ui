@@ -31,4 +31,12 @@ The server already keeps every open chat's queue (taskQueueOfConv's cache). A pu
 - No protocol version bump: the new field is optional, so an old page with the new server (or the other way round) just shows no label.
 - The tooltip gives the whole text, since when (and how long), and for a wait how often it is checked and when it gives up.
 
-**Result:** (pending)
+**Result:** HIT (2026-10-18 11:15-11:20, d5989391 installed 11:11; pi-web-deploy's checks server, page, reply, big chat and log all passed).
+
+- Unit tests: tests/unit/queue-chat-status.test.ts maps every status to its label and passes in the sealed gate.
+- Live, look only (headless Chrome as its own client `carry-on:ops-live-look-213`, nothing clicked but the left bar's "All chats" view; script and shots in ~/kept-from-tmp/2026-10-18/left-task-status-live/):
+  - #199's row reads "Waiting: the reminder fix's install, then a look-only day of real le…" (cut with "…"); its tooltip reads "Waiting on “the reminder fix's install, then a look-only day of real lead reminders (ends early on a fault or once 3 are measured)” / Since Sat 15:42 (19h) / Checked every 10 min; gives up Oct 19 07:42".
+  - Leads view: 20 task rows. The 8 parked Ops tasks read "Waiting: …", the other roles' 9 paused tasks read "Paused" (temper #68, #70 and marketing #3 are blocked and paused: paused comes first), the 3 working chats (#206, #213, #216) keep their running dot and no label.
+  - Recent chats: the same 8 "Waiting: …" rows, the 3 working task chats without a label; no label on any non-task row or any History row (#199's History entry has none).
+  - axe on all 17 labels, dark and light: no serious or critical issue.
+- No task was blocked (and not paused) or waiting on the owner at the time, so "Blocked on …" and "Needs decision" were seen only in the unit tests, not live.
