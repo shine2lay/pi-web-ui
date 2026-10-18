@@ -10,6 +10,15 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## patches-union: two changes that each add an entry here merge with both entries whole, and a check catches a bad merge
+
+- `local` (owner 2026-10-18, "Early warning + fewer conflicts", Ops #219). Hypotheses H-PATCHES-UNION-1 (MISS) and H-PATCHES-UNION-2, with results: `docs/patches-union.md`.
+- New entries go under this file's title, so two changes landing at about the same time conflicted there on rebase (11 of the 26 commits on `mine` on Oct 18 touched this file). `.gitattributes`: `PATCHES.md merge=patches-union`, for this file only. The driver is Git's own union merge in diff3 mode, which keeps each side's new lines as one whole block (the entry already on the base first, then the rebased one). Git's plain `merge=union` was tried first and dropped: it splits entries that share lines, such as the Undo line.
+- The driver is one setting in the repo's git config, which all worktrees share, set once on Oct 18: `git config merge.patches-union.name "PATCHES.md whole-entry union"` and `git config merge.patches-union.driver "git merge-file --union --diff3 -q %A %O %B"`. Run the same two commands once in a new clone. Without them this file conflicts as before; it is never merged garbled.
+- `scripts/check-patches-md.mjs`, run by `scripts/check.sh` in both modes (so wt land's checks too), fails on a "## " heading that appears twice or has no blank line before it, and names it.
+- Checks: `tests/unit/check-patches-md.test.ts` (this file passes; a twice-used and a glued heading fail, named) and `tests/unit/patches-union.test.ts` (scratch repo: no attribute, a conflict; attribute and driver, both entries whole; attribute without the driver, a normal conflict), then the landing gate. No app code, nothing to install.
+- Undo: revert this commit, then `git config --remove-section merge.patches-union`.
+
 ## roles-config-history: record each role's settings changes and list them in its Config tab
 
 - `local` (owner 2026-10-18, "create those tasks and queue them", Ops #209). Hypothesis H-ROLES-CONFIG-1 and result: `docs/roles-config-history.md`.

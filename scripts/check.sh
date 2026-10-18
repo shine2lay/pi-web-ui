@@ -19,6 +19,8 @@ fast=false
 
 echo "== 协议单源同步检查"
 npm run check:protocol
+echo "== PATCHES.md: no heading twice, each after a blank line (it merges by union, docs/patches-union.md)"
+node scripts/check-patches-md.mjs
 echo "== typecheck（双端 + tests + desktop + 扩展）"
 npm run typecheck
 echo "== lint"

@@ -1,0 +1,2 @@
+# Two changes that each add an entry under PATCHES.md's title merge with both entries whole instead of conflicting; the driver is one git config line, see docs/patches-union.md.
+PATCHES.md merge=patches-union
