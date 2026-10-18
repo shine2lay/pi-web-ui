@@ -6893,3 +6893,45 @@ every fold:
   comes after the newest fold (the fold's card, then the newest messages).
 - If pi's compaction events or `buildSessionProjection` change, or billion-context-pi's summary prefix
   "[ACP fold " changes, update `server/acp-fold.ts` and `isFoldCard`.
+
+## test-speed
+
+**Status**: `local`
+**Baseline**: v0.96.1 (`mine` at 5f3cfb5f).
+
+**Why** (owner 2026-10-18, m57369: "can we improve the speed of tests?"; Ops #230, project
+faster-landing): every pi-web-ui land waited about 6.5-7 minutes for its checks, and 5.5-6.5 of those
+minutes were one test file, `tests/unit/role-message-guard-host.test.ts`: vitest runs one file's 32
+tests one after another in one worker while the other workers sit idle. Test files and the test
+runner's order only: no server, web or storage code changes. Hypothesis, profile and times:
+`docs/test-speed.md` (H-TEST-SPEED-1).
+
+### Changes
+
+- `tests/unit/role-message-guard-host.test.ts` is split by its describe blocks into seven files that
+  vitest runs side by side: `-hops` (ordinary hops and the 7th), `-grants` (which grant a send uses),
+  `-approvers` (who approves), `-chain` (chain identity), `-limits` (unchanged limits), `-caps`
+  (storage caps (b)-(f) and the approval history) and `-worst-window` (storage cap (a), the worst real
+  5 hours replayed through the real store).
+- Their shared world is `tests/unit/role-message-guard-host-harness.ts`: the old file's helpers
+  unchanged, plus `setNow()` (a test file can read an imported `now` but not assign it) and
+  `useGuardWorld()` (the old file's 60 s timeout, `beforeEach` and `afterEach`).
+- Every describe title, test name and assertion is unchanged. The only edits inside tests are the three
+  clock moves (`now += …` and `now = …` became `setNow(…)`).
+- `vitest.config.ts`: a sequencer that starts the slowest file (`-worst-window`) first. Without it, a
+  fresh copy (no timings from an earlier run) starts larger files first, and the small slow file waited
+  about 10-15 s.
+
+### How it was checked
+
+- A script compared every describe block with the old file's: all statements are byte-identical apart
+  from the three clock moves (and `stateOf`, which both storage-caps files keep).
+- The full unit suite, sealed: the same 6165 tests, Duration and the slowest files in
+  `docs/test-speed.md`.
+- Gates: `scripts/check.sh --fast` (land checks).
+
+### Undo and syncing
+
+- Revert this commit with `wt`. Nothing is installed or restarted.
+- A new guard host test goes into the file of its describe block. Another slow file can be added to
+  `SLOWEST_FIRST` in `vitest.config.ts`.
