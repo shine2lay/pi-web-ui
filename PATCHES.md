@@ -10,6 +10,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## initiatives-plan-data: one read-only feed of the whole work registry for the Initiatives page
+
+- `local` (owner 2026-10-18, "now lets plan for initiatives page to show all the planning work", Ops #223). Hypothesis H-INITIATIVES-DATA-1 and result: `docs/initiatives-plan-data.md`.
+- `server/work-page.ts` replays pi-work-management's whole log (`events.jsonl`, the Roles reader's path) by the store's own rules: every initiative and project with outcome, lead, status, times and done-when items with their met marks (proof, by, at), every linked task with its recorded status and block, and the newest 1000 changes. A line the store could never have written is skipped and flagged `unknown-change`; a half-written last line is left out; not JSON -> `unreadable`; over 32 MiB, 500 records or 2000 tasks -> `too-big`. Each task is joined with the Roles overview's projection of its queue (chat, next action, requester, owner pause, open owner ask); missing pieces stay absent.
+- Socket: `work_page_watch` / `work_page_unwatch`, answered with `work_page { page | error }` at once and on change (5 s look while watched); protocol 51. Owned by the Initiatives tab (`server/tabs.ts`). Read only; `work-records.ts`, `roles-overview.ts` and what the Roles page gets are unchanged. Nothing in the app asks for it yet (the wiring task does).
+- Checks: `tests/unit/work-page.test.ts` (fixture replay against the exact expected page, problems, limits, facts from an overview, file reader, watch), with `tests/unit/work-records.test.ts` and `tests/unit/roles-overview.test.ts` unchanged, then the landing gate.
+- Undo: revert this commit.
+
 ## patches-union: two changes that each add an entry here merge with both entries whole, and a check catches a bad merge
 
 - `local` (owner 2026-10-18, "Early warning + fewer conflicts", Ops #219). Hypotheses H-PATCHES-UNION-1 (MISS) and H-PATCHES-UNION-2, with results: `docs/patches-union.md`.

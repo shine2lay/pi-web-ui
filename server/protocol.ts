@@ -1826,6 +1826,10 @@ export type ClientMessage =
 	 *  initiative), newest first, at most limit; initiatives_unwatch stops them. */
 	| { type: "initiatives_watch"; initiative?: string; limit?: number }
 	| { type: "initiatives_unwatch" }
+	/** initiatives-plan-data (Ops #223): the Initiatives page wants the whole work registry (work_page) and its
+	 *  updates; work_page_unwatch stops them. */
+	| { type: "work_page_watch" }
+	| { type: "work_page_unwatch" }
 	/** initiatives-page: one kept record a card cites, in full (answered with decision_record). */
 	| { type: "decision_record"; record: string }
 	/** progress-feed (task #85): the owner sets or clears an initiative's lead (null = none); answered with
@@ -2166,6 +2170,132 @@ export interface UiWorkRecords {
 	initiatives: UiWorkRecord[];
 	projects: UiWorkRecord[];
 	/** It couldn't be read (the rest of the page still shows), or a change this app doesn't know was skipped. */
+	problem?: "unreadable" | "too-big" | "unknown-change";
+}
+
+/** initiatives-plan-data (Ops #223): one done-when item of an initiative or project, in its list order. */
+export interface UiWorkDoneItem {
+	item: string;
+	/** Marked met: the proof as recorded (at most 500 characters), who marked it and when (ms). */
+	met?: { proof: string; by: string; at: number };
+}
+
+/** initiatives-plan-data: an initiative or project of the work registry in full, as the Initiatives page shows it. */
+export interface UiWorkPageRecord {
+	id: string;
+	name: string;
+	outcome: string;
+	lead: string;
+	status: "active" | "done" | "dropped";
+	/** When it was made (ms) and by whom (a role id, or owner). */
+	createdAt: number;
+	createdBy: string;
+	/** Its last recorded change (ms). */
+	updatedAt: number;
+	doneWhen: UiWorkDoneItem[];
+	/** Projects only: the initiative it serves, or null (in no initiative). */
+	initiative?: string | null;
+}
+
+/** initiatives-plan-data: a task's status as its queue last recorded it in the registry (pi-queue's TaskState). */
+export type UiWorkTaskState =
+	"ready" | "working" | "asking" | "stuck" | "waiting" | "blocked" | "done" | "dropped" | "removed";
+
+/** initiatives-plan-data: what a blocked task waits on, as its queue recorded it (rule 24). */
+export interface UiWorkTaskBlock {
+	/** Tasks it waits on ("#12", "temper #38"). */
+	on?: string[];
+	need?: string;
+	/** The role whose lead owes the result, what it owes and when that is due (ms). */
+	lead?: string;
+	owes?: string;
+	due?: number;
+	/** When it first blocked on this (ms). */
+	since: number;
+}
+
+/** initiatives-plan-data: which queue task a registry entry is about. */
+export interface UiWorkTaskRef {
+	/** Its queue chat's transcript file, as the registry records it. */
+	queue: string;
+	/** How people call that queue: the role id whose chat it is, or the chat's title. */
+	queueName?: string;
+	task: number;
+	/** When it was added (ms): with queue and task, it tells the task apart from a later one with the same number. */
+	added: number;
+}
+
+/** initiatives-plan-data: a task linked in the registry, with what its live queue says about it. */
+export interface UiWorkPageTask extends UiWorkTaskRef {
+	title: string;
+	parent: UiTaskParent;
+	/** Its status as its queue last recorded it, and when (absent: none recorded yet). */
+	state?: UiWorkTaskState;
+	stateAt?: number;
+	/** While blocked: what it waits on. */
+	block?: UiWorkTaskBlock;
+	/** From its live queue (absent when the app doesn't know it): its own chat's file, once started. */
+	chat?: string;
+	/** roles-next-action: the queue's own next step for it (display only). */
+	nextAction?: UiRoleTaskNext;
+	/** Who asked for it, in plain words. */
+	requester?: string;
+	/** Paused by the owner (the task or its whole queue): since when and why. */
+	paused?: UiTaskQueueHold;
+	/** Its question is in the owner's Needs-you list: what it says and since when (ms). */
+	needsYou?: { text: string; since?: number };
+}
+
+/** initiatives-plan-data: a kind of registry change (pi-queue's work log ops). */
+export type UiWorkActivityOp =
+	| "initiative.create"
+	| "initiative.change"
+	| "initiative.met"
+	| "initiative.unmet"
+	| "project.create"
+	| "project.change"
+	| "project.met"
+	| "project.unmet"
+	| "task.link"
+	| "task.state";
+
+/** initiatives-plan-data: one recorded registry change, as written (texts only as recorded). */
+export interface UiWorkActivity {
+	at: number;
+	/** The role (or owner) whose chat made it. */
+	by: string;
+	op: UiWorkActivityOp;
+	/** initiative.* and project.*: the record's id. */
+	id?: string;
+	/** task.*: the task. */
+	task?: UiWorkTaskRef;
+	/** *.met and *.unmet: the done-when item, as listed. */
+	item?: string;
+	/** *.met: the proof; *.unmet: why the mark was taken back. */
+	proof?: string;
+	reason?: string;
+	/** *.change: the status it set; task.state: the task's status. */
+	status?: string;
+	/** *.change: the fields it changed (name, outcome, doneWhen, lead, status, initiative). */
+	changed?: string[];
+	/** task.link: where it was put. */
+	parent?: UiTaskParent;
+}
+
+/**
+ * initiatives-plan-data (Ops #223): the whole work registry for the Initiatives page, read only. Initiatives
+ * and projects in the order they were made (at most 500 together, initiatives first), their tasks (at most
+ * 2000) and the newest registry changes (at most 1000, newest first).
+ */
+export interface UiWorkPage {
+	/** When this snapshot was made (ms). */
+	at: number;
+	initiatives: UiWorkPageRecord[];
+	projects: UiWorkPageRecord[];
+	tasks: UiWorkPageTask[];
+	activity: UiWorkActivity[];
+	/** The log couldn't be read (unreadable), is or holds more than is sent (too-big), or a change this app
+	 *  doesn't know, or one the registry could never have written, was skipped (unknown-change). */
 	problem?: "unreadable" | "too-big" | "unknown-change";
 }
 
@@ -4957,6 +5087,9 @@ export type ServerMessage =
 	/** initiatives-page: the Initiatives tab's page (watchers get it again when it changes); error: it
 	 *  couldn't be made (the page keeps what it had). */
 	| { type: "initiatives"; page?: UiDecisionsPage; error?: string }
+	/** initiatives-plan-data (Ops #223): the work registry for the Initiatives page, at once and on change;
+	 *  error: it couldn't be made (the page keeps what it had). */
+	| { type: "work_page"; page?: UiWorkPage; error?: string }
 	/** initiatives-page: one record a card cites; error when it isn't kept. */
 	| { type: "decision_record"; record: string; view?: UiDecisionRecordView; error?: string }
 	/** progress-feed: what an initiative_lead / initiative_poke did (ok false: error says why; nothing changed). */

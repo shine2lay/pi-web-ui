@@ -90,4 +90,7 @@
 // 50: roles-answer - the Roles page answers what needs the owner: the roles feed's asks carry askId, and
 //     roles_ask_open / roles_ask_answer with their roles_ask / roles_ask_result answers. An old page shows no
 //     Answer button; an old server never answers roles_ask_open.
-export const PROTOCOL_VERSION = 50;
+// 51: initiatives-plan-data - work_page_watch / work_page_unwatch and their work_page answer: the whole work
+//     registry (initiatives, projects, done-when marks, linked tasks, activity) for the Initiatives page. An old
+//     server never answers work_page_watch.
+export const PROTOCOL_VERSION = 51;

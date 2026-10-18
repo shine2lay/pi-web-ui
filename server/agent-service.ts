@@ -329,6 +329,7 @@ import {
 import { RoleMessageGuardHost } from "./role-message-guard-host.js";
 import { admitRoleMailAtResume, installRoleMailBoundary, noteAtRoleMailBoundary } from "./role-mail-boundary.js";
 import { RolesOverviewReader } from "./roles-overview.js";
+import { WorkPageFile, workFactsFromOverview, type WorkQueueFacts } from "./work-page.js";
 import { ROLES_CONFIG_EVERY_MS, RolesConfigHistory } from "./roles-config-history.js";
 import { makeRolesOverviewTool } from "./roles-overview-tool.js";
 import {
@@ -391,6 +392,7 @@ import type {
 	UiRoleGuardQuestion,
 	UiRoleMessageRow,
 	UiRolesOverview,
+	UiWorkPage,
 	UiRoleAskView,
 	UiServiceInfo,
 	UiState,
@@ -15998,6 +16000,33 @@ export class AgentService {
 		}
 		if (sel && inis.has(sel)) page.progress = this.progressFeed.view(sel, list);
 		return page;
+	}
+
+	/** initiatives-plan-data (Ops #223): the work registry's reader for the Initiatives page (made on first use). */
+	private workPageFile: WorkPageFile | null = null;
+	private workFactsError: string | null = null;
+
+	/**
+	 * initiatives-plan-data: the whole work registry for the Initiatives page (read only, see work-page.ts),
+	 * each task joined with what the Roles overview's projection of its queue says. Without that projection
+	 * the registry still shows, only the queues' details are missing.
+	 */
+	async readWorkPage(): Promise<UiWorkPage> {
+		let facts: WorkQueueFacts[] = [];
+		try {
+			facts = workFactsFromOverview(await this.readRolesOverview());
+			this.workFactsError = null;
+		} catch (err) {
+			const error = (err as Error)?.message || String(err);
+			// Said once, not on every look.
+			if (error !== this.workFactsError) console.warn(`[work-page] no queue facts: ${error}`);
+			this.workFactsError = error;
+		}
+		// pi-work-management's workDir(), as the Roles reader finds it: PI_WORK_DIR, or "work" in pi's agent folder.
+		this.workPageFile ??= new WorkPageFile(() =>
+			join(process.env.PI_WORK_DIR || join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "work"), "events.jsonl"),
+		);
+		return this.workPageFile.get(facts);
 	}
 
 	// -----------------------------------------------------------------------

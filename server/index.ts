@@ -101,6 +101,7 @@ import {
 import { NotebookWatch } from "./notebook-watch.js";
 import { RolesWatch } from "./roles-overview.js";
 import { InitiativesWatch } from "./initiatives-watch.js";
+import { WorkPageWatch } from "./work-page.js";
 import { SubsLimitsHub, limitsFilePath } from "./subs-limits.js";
 import { initHttpProxy } from "./http-proxy.js";
 import { ConnEvents, MAX_RECORDS_PER_SOCKET } from "./conn-events.js";
@@ -120,6 +121,7 @@ import type {
 	UiRolesOverview,
 	UiRoleAskView,
 	UiDecisionsPage,
+	UiWorkPage,
 	UiDecisionRecordView,
 	UiUpdateDecision,
 	UiUpdateLink,
@@ -1458,6 +1460,8 @@ export interface EngineService {
 	onRoleGuardChanged?: (() => void) | null;
 	/** roles-overview (pi engine): every role's state for the Roles page. */
 	readRolesOverview?(): Promise<UiRolesOverview>;
+	/** initiatives-plan-data (pi engine): the whole work registry for the Initiatives page (read only). */
+	readWorkPage?(): Promise<UiWorkPage>;
 	/** roles-answer (pi engine): the whole ask behind a Needs-you item, for the Roles page's Answer dialog. */
 	rolesAskOpen?(key: unknown): Promise<{ ok: true; ask: UiRoleAskView } | { ok: false; error: string }>;
 	/** roles-answer (pi engine): the owner's answer from the Roles page, through the list of asks. */
@@ -2092,6 +2096,15 @@ const initiativesWatch = new InitiativesWatch<object>(
 	{ log: (line) => console.log(line) },
 );
 
+/** initiatives-plan-data (Ops #223): the work registry for the Initiatives page, per window (keyed by its socket). */
+const workPageWatch = new WorkPageWatch<object>(
+	async () => {
+		if (!service.readWorkPage) throw new Error("this engine has no work registry");
+		return service.readWorkPage();
+	},
+	{ log: (line) => console.log(line) },
+);
+
 /** roles-overview: the Roles page (everything) and every top bar (the count of asks), per window. */
 const rolesWatch = new RolesWatch<object>(
 	async () => {
@@ -2722,6 +2735,13 @@ wss.on("connection", (ws, req) => {
 				break;
 			case "initiatives_unwatch":
 				initiativesWatch.drop(ws);
+				break;
+			case "work_page_watch":
+				// initiatives-plan-data: the Initiatives page wants the whole work registry, and its changes.
+				void workPageWatch.watch(ws, send);
+				break;
+			case "work_page_unwatch":
+				workPageWatch.drop(ws);
 				break;
 			case "decision_record": {
 				// initiatives-page: a card's source, in full (read-only).
@@ -4274,6 +4294,7 @@ wss.on("connection", (ws, req) => {
 		notebookWatch.drop(ws);
 		rolesWatch.drop(ws);
 		initiativesWatch.drop(ws);
+		workPageWatch.drop(ws);
 		if (snapshotRetryTimer) {
 			clearTimeout(snapshotRetryTimer);
 			snapshotRetryTimer = null;

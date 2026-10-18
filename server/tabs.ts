@@ -52,8 +52,9 @@ const OWNED: Partial<Record<Tab, readonly string[]>> = {
 	search: ["search_files", "search_sessions"],
 	// roles-overview: the Roles page (every role's TL;DR, queue and 6 am report) and its top bar count.
 	roles: ["roles_watch"],
-	// initiatives-page: the Initiatives tab (decisions per initiative) and a card's source record.
-	initiatives: ["initiatives_watch", "decision_record"],
+	// initiatives-page: the Initiatives tab (decisions per initiative) and a card's source record;
+	// initiatives-plan-data: the whole work registry it shows.
+	initiatives: ["initiatives_watch", "decision_record", "work_page_watch"],
 };
 
 /**
