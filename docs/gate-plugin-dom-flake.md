@@ -59,6 +59,14 @@ One normal run of the file afterwards (sealed, `TZ=UTC`, verbose): 19 of 19 pass
 
 Files in `/home/shinelay/kept-from-tmp/2026-10-18/gate-plugin-dom/`: `loop.sh` (the measure loop), `baseline-1..3/` and `after-1..3/` (each run's output, `summary.txt`), `tracer/` (the tracer, its config and `analyze.mjs`), `tracer-before/` and `tracer-after/` (runs and `analysis.txt`), `traces-before/` and `traces-after/` (one trace file per run), `normal-run.log`.
 
-## Result
+## Result: HIT (2026-10-18 15:35)
 
-Pending the landing gate (the plan's third check).
+All three of the plan's checks are met:
+
+- **Error count.** The baseline showed the teardown error: 1 of 120 measure runs and 1 of 40 traced runs. After the fix, the same loops showed 0 of 120 and 0 of 40. The late console writes that the error needs went from 40 of 40 runs to 0 of 40.
+- **Tests.** All 19 of the file's tests passed in every run: 160 before, 160 after, and the normal run.
+- **Landing gate.** Land request 25-c1defe passed and landed the fix as e0b7a625 on mine at 15:34 (a238ccdf rebased onto 93121bbf). `scripts/check.sh --fast`: 424 test files passed, 6167 tests passed, 6 skipped, and no "Errors" line. `tests/unit/plugin-dom.test.ts`: 19 passed. Log: `/home/shinelay/kept-from-tmp/2026-10-18/gate-plugin-dom/land1/land.log`.
+
+The fix also went through a second whole-suite run with no teardown error: the land batch it first joined (24-453c16, combined result 7aab414). That batch fell back because two tests in other files fail in the batch's folder: it has no build (`tests/unit/systemd-install.test.ts`) and no `../pi-queue` beside it (`tests/unit/roles-origin.test.ts`); Ops note n202. `plugin-dom.test.ts` passed there: `~/.cache/pi/receipts/initiatives-plan-data/land2/land.log:948`.
+
+**What would reopen it.** In a single-file run the error was rare (1 in 120), so the loops alone prove little. The strong evidence is that the late writes it needs are gone. If any pi-web-ui land again shows "Closing rpc while "onUserConsoleLog" was pending" from this file, reopen it with a new hypothesis. The same error from another file is a new case.
