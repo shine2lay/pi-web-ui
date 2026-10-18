@@ -203,6 +203,17 @@ describe("tool_manage 出入口", () => {
 		expect(windows.peek()).toContain("bash");
 	});
 
+	it("tldr stays out of a queued task's own chat, and stays in every other chat", () => {
+		const task = fakeSet(["bash", "read", "tldr"]);
+		applyAgentToolsGating(task, [], undefined, "linux", true);
+		expect(task.peek()).not.toContain("tldr");
+		expect(task.peek()).toContain("bash");
+		expect(task.peek()).toContain("read");
+		const lead = fakeSet(["bash", "read", "tldr"]);
+		applyAgentToolsGating(lead, [], undefined, "linux");
+		expect(lead.peek()).toContain("tldr");
+	});
+
 	/** A session whose registry carries Pi tool exposures; `active` is the loadout before gating
 	 *  (for a resumed chat, the one Pi restored from its transcript). */
 	function fakeExposureSet(tools: Array<{ name: string; exposure?: string }>, active: string[]) {

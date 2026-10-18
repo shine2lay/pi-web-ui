@@ -5419,6 +5419,9 @@ export class ClientSession {
 						: e.data;
 				session.sessionManager.appendCustomEntry(e.customType, data);
 			}
+			// The "assigned" entry just made this a queued task's own chat: gate again, so the tools a task's
+			// chat doesn't get (TASK_CHAT_OFF_TOOL_NAMES) are out before its first prompt.
+			this.applyToolGating(session, conv.agentPreset);
 		} catch (err) {
 			// No prompt was sent. A refused launch must not leave a running/disposable task chat behind.
 			conv.listed = false;
@@ -9793,7 +9796,13 @@ export class ClientSession {
 	private applyToolGating(session: AgentSession, preset?: string): void {
 		const targetPreset =
 			preset ?? this.presetOfSession(session) ?? this.settingsSvc.current.defaultAgentPreset ?? "standard";
-		applyAgentToolsGating(session, effectiveDisabledAgentTools(this.settingsSvc.current), targetPreset);
+		applyAgentToolsGating(
+			session,
+			effectiveDisabledAgentTools(this.settingsSvc.current),
+			targetPreset,
+			process.platform,
+			isQueueTaskChatEntries(session.sessionManager.getEntries()),
+		);
 		this.syncPluginTools(session, targetPreset);
 		this.sessionStatsCache.delete(session);
 		this.cachedBaseTokens = null;

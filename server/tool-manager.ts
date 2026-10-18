@@ -289,6 +289,11 @@ export const AGENT_TOOL_CATALOG: AgentToolEntry[] = [
  *  and would ride along in every request (owner, 2026-10-17: "Turn off PowerShell tool"). */
 export const WINDOWS_ONLY_TOOL_NAMES = ["powershell"] as const;
 
+/** Tools a queued task's own chat doesn't get. pi-tldr's "tldr": a task reports through its status, its
+ *  questions and its done summary, and its lines cost a model step each (owner, 2026-10-17: TL;DR
+ *  "Off in task chats"; leads keep theirs). pi-tldr sends no nudges where its tool isn't active. */
+export const TASK_CHAT_OFF_TOOL_NAMES = ["tldr"] as const;
+
 /** Pi tool exposures that wait for their owner to switch them on. Pi declares a "deferred" tool to
  *  the model only once a search activates it (Pi's tool search, or the MCP adapter's search mode:
  *  `directTools: "search"`), and a "codemode" tool is only called from other tools. Naming such a
@@ -403,6 +408,8 @@ export function setAgentToolsEnabled(session: ActiveToolSet, names: readonly str
  * 复原基线取 session.getAllTools()（全集，含被禁用的）——基线里没有的工具不会凭空发明。
  * On-demand tools (ON_DEMAND_TOOL_EXPOSURES) are left to their owner: never switched on here, and
  * kept only when switched on after this session's first pass (see gatedSessions).
+ * taskChat: the session is a queued task's own chat (pi-queue's "assigned" entry), which leaves out
+ * TASK_CHAT_OFF_TOOL_NAMES.
  * Session 未就绪时静默跳过（下次创建/reload 会再应用）。
  */
 export function applyAgentToolsGating(
@@ -410,6 +417,7 @@ export function applyAgentToolsGating(
 	disabled: readonly string[],
 	preset?: string,
 	platform: NodeJS.Platform = process.platform,
+	taskChat = false,
 ): void {
 	try {
 		const off = new Set(disabled);
@@ -429,6 +437,7 @@ export function applyAgentToolsGating(
 			else if (allNames.includes(core)) names.add(core);
 		}
 		if (platform !== "win32") for (const name of WINDOWS_ONLY_TOOL_NAMES) names.delete(name);
+		if (taskChat) for (const name of TASK_CHAT_OFF_TOOL_NAMES) names.delete(name);
 		const filtered = filterToolsByPreset(names, preset);
 		session.setActiveToolsByName(filtered);
 		gatedSessions.add(session);
