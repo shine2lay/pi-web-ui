@@ -7,7 +7,7 @@
  * minute this server looks at every queue it watches, open or not, straight from the transcripts on
  * disk, and decides as pi-queue's blockVerdict does:
  *  - a task it waits on is still open: nothing (the panel shows how that task stands, "needs you" too);
- *  - all of them are done, or one was removed without finishing: due now;
+ *  - all of them are done, or one was dropped or removed without finishing: due now;
  *  - a need in plain words (or blocked again on the same thing after a poke): due at start + 10, 30
  *    and 60 min, then it asks its main chat (pi-queue's ask path, queue-main-chat).
  * Due -> "/queue blocks" in the queue's chat (opened if it isn't): pi-queue looks again itself, records
@@ -124,6 +124,8 @@ export interface RefLook {
 	status: RefStatus;
 	title?: string;
 	summary?: string;
+	/** queue-drop: why its lead dropped it (dropped, or removed later by clearing it). */
+	dropped?: string;
 	chat?: { file: string; title?: string };
 	/** queue-paused: the owner paused it (or its whole queue): a task blocked on it waits quietly, and it
 	 *  doesn't count as needs-you. */
@@ -139,7 +141,8 @@ export interface RefLook {
  * can move it on (pi-queue's ownerOnly: paused by the owner, or needing the user). undefined otherwise.
  */
 export function heldKey(r: { file: string; id: number }, l: RefLook | undefined): string | undefined {
-	if (!l || l.status === "gone" || l.status === "done" || l.status === "removed") return undefined;
+	if (!l || l.status === "gone" || l.status === "done" || l.status === "dropped" || l.status === "removed")
+		return undefined;
 	if (l.held) return `${r.file}#${r.id}/paused/${l.heldAt ?? 0}`;
 	if (l.status === "stuck") return `${r.file}#${r.id}/user/${l.stuckAt ?? 0}`;
 	return undefined;
@@ -177,8 +180,10 @@ export function blockVerdict(
 	if (b.on?.length) {
 		const looks = b.on.map((r) => look(r));
 		const over = (l: RefLook | undefined) =>
-			!!l && (l.status === "done" || l.status === "removed" || l.status === "gone");
-		const gone = (l: RefLook | undefined) => !!l && (l.status === "removed" || l.status === "gone");
+			!!l && (l.status === "done" || l.status === "dropped" || l.status === "removed" || l.status === "gone");
+		// queue-drop: one dropped by its lead ends without finishing, as a removed one does: due now.
+		const gone = (l: RefLook | undefined) =>
+			!!l && (l.status === "dropped" || l.status === "removed" || l.status === "gone");
 		if (looks.some(gone) || looks.every(over)) return { kind: "due", at: b.since, why: "over" };
 		// queue-paused: a paused task waiting for an answer doesn't count as needs-you.
 		if (!b.lead)
@@ -392,6 +397,7 @@ export class QueueBlocks {
 			status: t.status,
 			title: t.plan.title,
 			...(t.summary ? { summary: t.summary } : {}),
+			...((t.status === "dropped" || t.status === "removed") && t.dropped ? { dropped: t.dropped.why } : {}),
 			...(t.chat ? { chat: t.chat } : {}),
 			...(hold ? { held: true, heldAt: hold.at } : {}),
 			...(t.status === "stuck" && t.stuckAt !== undefined ? { stuckAt: t.stuckAt } : {}),
@@ -462,7 +468,9 @@ export class QueueBlocks {
 				const over = (t.outside ?? []).filter((o) => {
 					if (o.over) return false;
 					const l = look(o);
-					return !!l && (l.status === "done" || l.status === "removed" || l.status === "gone");
+					return (
+						!!l && (l.status === "done" || l.status === "dropped" || l.status === "removed" || l.status === "gone")
+					);
 				});
 				for (const o of t.outside ?? []) sig.push(refSig(o));
 				if (over.length && !taskQueueHeld(t, q))
@@ -642,6 +650,8 @@ export class QueueBlocks {
 			if (l.title) r.title = l.title;
 			if (l.chat) r.chat = l.chat;
 			if (l.held) r.held = true;
+			// queue-drop: why its lead dropped it, for the line's tooltip.
+			if (l.dropped) r.dropped = l.dropped;
 		};
 		for (const t of queue.tasks) {
 			if (t.status === "blocked" && t.block) {
@@ -752,6 +762,8 @@ export class QueueBlocks {
 				status: t.status,
 				title: t.plan.title,
 				...(t.summary ? { summary: t.summary } : {}),
+				// queue-drop: pi-queue's ResolvedRef.dropped (its queue_blocked says why that task ended).
+				...((t.status === "dropped" || t.status === "removed") && t.dropped ? { dropped: t.dropped.why } : {}),
 				...(t.chat ? { chat: t.chat } : {}),
 			});
 		}
@@ -773,7 +785,7 @@ export class QueueBlocks {
 				seen.add(key);
 				const q = await this.read(cur.file);
 				const t = q && !q.from ? q.tasks.find((x) => x.id === cur.id) : undefined;
-				if (!t || t.status === "done" || t.status === "removed") continue;
+				if (!t || t.status === "done" || t.status === "dropped" || t.status === "removed") continue;
 				if (t.status === "blocked") for (const r of t.block?.on ?? []) stack.push({ file: r.file, id: r.id });
 				if (t.status === "ready") {
 					for (const o of t.outside ?? []) if (!o.over) stack.push({ file: o.file, id: o.id });

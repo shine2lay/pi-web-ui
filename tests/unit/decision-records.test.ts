@@ -437,6 +437,9 @@ describe("hook: queue plans (scanner)", () => {
 		expect(await scanner.scan()).toBe(2);
 		queue(file, { op: "update", id: 2, initiative: "" });
 		queue(file, { op: "done", id: 2, summary: "kept" });
+		// queue-drop: a task its lead dropped is a plan record too, its reason as the summary.
+		queue(file, { op: "add", id: 3, plan: PLAN, approval: "auto" });
+		queue(file, { op: "drop", id: 3, why: "Superseded by #2" });
 		// a restart: a new scanner reads the saved offsets
 		const again = new QueueScanner(store, {
 			root: () => root,
@@ -444,7 +447,7 @@ describe("hook: queue plans (scanner)", () => {
 			roleOf: async (files) => new Map(files.map((f) => [f, "ops"])),
 			now: clock,
 		});
-		expect(await again.scan()).toBe(2);
+		expect(await again.scan()).toBe(4);
 		expect(await again.scan()).toBe(0);
 		const plans = store.list({ source: "plan" });
 		expect(plans.map((p) => [p.ref, p.op, p.approval, p.initiative])).toEqual([
@@ -452,9 +455,13 @@ describe("hook: queue plans (scanner)", () => {
 			["main.jsonl:5", "update", "dialog", "decisions-page"],
 			["main.jsonl:6", "update", undefined, undefined],
 			["main.jsonl:7", "done", undefined, undefined],
+			["main.jsonl:8", "add", "auto", undefined],
+			["main.jsonl:9", "drop", undefined, undefined],
 		]);
 		expect(plans[0]).toMatchObject({ from: "ops", task: 2, chat: "Build the Roles page", plan: PLAN });
 		expect(plans[3]).toMatchObject({ summary: "kept" });
+		expect(plans[5]).toMatchObject({ task: 3, summary: "Superseded by #2" });
+		expect(plans[5].plan).toBeUndefined();
 	});
 
 	it("reads a file again from the start when it was replaced, and keeps a half-written line for later", async () => {

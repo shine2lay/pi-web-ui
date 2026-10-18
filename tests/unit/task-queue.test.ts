@@ -15,6 +15,7 @@ import {
 	normChoices,
 	normTouches,
 	TASK_QUEUE_DEFAULT_SHAREABLE,
+	TASK_QUEUE_DROP_WHY_MAX,
 	TASK_QUEUE_ENTRY_TYPE,
 	TASK_QUEUE_MAX_DONE,
 	taskQueueAll,
@@ -1384,5 +1385,88 @@ describe("taskQueueFromEntries (where a task belongs)", () => {
 		expect(parentOf([solo, upd({ standalone: false })])).toBeUndefined();
 		expect(parentOf([solo, upd({ project: "" })])).toEqual({ standalone: true });
 		expect(parentOf([solo, upd({ project: "p" })])).toEqual({ project: "p" });
+	});
+});
+
+// queue-drop (owner 2026-10-17): the queue's main chat (its lead) drops an open task with a reason, without the
+// owner's dialog; the replay must read pi-queue's "drop" op the way its applyOp does.
+describe("taskQueueFromEntries (queue-drop)", () => {
+	const byId = (q: ReturnType<typeof replay>, id: number) => q.tasks.find((t) => t.id === id);
+	const base = [
+		{ op: "add", id: 1, plan: plan("One"), touches: ["a"] },
+		{ op: "add", id: 2, plan: plan("Two"), touches: ["b"], after: [1] },
+		{ op: "add", id: 3, plan: plan("Three"), touches: ["c"] },
+		{ op: "run" },
+		{ op: "start", id: 1, lane: true },
+		{ op: "chat", id: 1, file: "/chats/one.jsonl", title: "Queue #1: One" },
+	];
+	const drop = (id: number, why: unknown, ts = 30_000) => ({ op: "drop", id, why, ts });
+
+	it("a drop ends an open task with its reason and keeps it on the list; tasks after it stop waiting for it", () => {
+		expect(byId(replay(entries(base)), 2)?.waitingFor).toEqual([1]);
+		const q = replay(entries([...base, drop(1, "  superseded   by #3 \n")]));
+		expect(byId(q, 1)).toMatchObject({ status: "dropped", dropped: { why: "superseded by #3", at: 30_000 } });
+		expect(byId(q, 1)?.chat?.file).toBe("/chats/one.jsonl");
+		expect(byId(q, 2)?.waitingFor).toBeUndefined();
+		expect(q.lanes?.flatMap((l) => l.taskIds)).not.toContain(1);
+		// A task that never started drops the same way.
+		expect(byId(replay(entries([...base, drop(3, "not needed")])), 3)).toMatchObject({ status: "dropped" });
+	});
+
+	it("a drop clears the question or wait the task had", () => {
+		const ask = { op: "stuck", id: 1, question: "Which port?", choices: ["8080", "9090"] };
+		const stuck = byId(replay(entries([...base, ask, drop(1, "no longer needed")])), 1);
+		expect(stuck?.status).toBe("dropped");
+		expect(stuck?.question).toBeUndefined();
+		expect(stuck?.choices).toBeUndefined();
+		const wait = { op: "wait", id: 1, what: "CI", check: "false", everyMs: 60_000, until: 50_000, ts: 10_000 };
+		const waited = byId(replay(entries([...base, wait, drop(1, "no longer needed")])), 1);
+		expect(waited?.status).toBe("dropped");
+		expect(waited?.wait).toBeUndefined();
+	});
+
+	it("only an open task drops; a blank reason reads 'no reason given' and a long one is cut", () => {
+		const done = byId(replay(entries([...base, { op: "done", id: 1, summary: "Shipped it" }, drop(1, "late")])), 1);
+		expect(done).toMatchObject({ status: "done", summary: "Shipped it" });
+		expect(done?.dropped).toBeUndefined();
+		const twice = byId(replay(entries([...base, drop(3, "first", 30_000), drop(3, "second", 40_000)])), 3);
+		expect(twice?.dropped).toEqual({ why: "first", at: 30_000 });
+		expect(byId(replay(entries([...base, { op: "remove", id: 3 }, drop(3, "x")])), 3)).toBeUndefined();
+		expect(byId(replay(entries([...base, drop(3, "   ")])), 3)?.dropped?.why).toBe("no reason given");
+		expect(byId(replay(entries([...base, drop(3, 42)])), 3)?.dropped?.why).toBe("no reason given");
+		const long = byId(replay(entries([...base, drop(3, "x".repeat(400))])), 3);
+		expect(long?.dropped?.why).toHaveLength(TASK_QUEUE_DROP_WHY_MAX);
+	});
+
+	it("clear takes dropped tasks off the list with the done ones; only the newest dropped ones are kept", () => {
+		const q = replay(entries([...base, { op: "done", id: 1, summary: "ok" }, drop(3, "x"), { op: "clear" }]));
+		expect(ids(q.tasks)).toEqual([2]);
+		const n = TASK_QUEUE_MAX_DONE + 2;
+		const adds = Array.from({ length: n }, (_, i) => ({ op: "add", id: i + 1, plan: plan(`T${i + 1}`) }));
+		const drops = adds.map((a) => drop(a.id, `why ${a.id}`, 10_000 + a.id));
+		const shown = replay(entries([...adds, ...drops])).tasks.filter((t) => t.status === "dropped");
+		expect(shown).toHaveLength(TASK_QUEUE_MAX_DONE);
+		expect(shown.some((t) => t.id === 1 || t.id === 2)).toBe(false);
+	});
+
+	it("a block's ref to a dropped task here, and an outside after dropped there, carry the reason", () => {
+		const own = { file: "/chats/queue.jsonl", name: "", id: 1 };
+		const lane3 = [
+			{ op: "start", id: 3, lane: true },
+			{ op: "chat", id: 3, file: "/chats/three.jsonl", title: "Queue #3: Three" },
+			{ op: "block", id: 3, on: [own], need: "", start: 0, tries: 0 },
+		];
+		const q = replay(entries([...base, ...lane3, drop(1, "superseded")]));
+		expect(byId(q, 3)?.block?.on?.[0]).toMatchObject({ id: 1, status: "dropped", dropped: "superseded" });
+		const ref = { file: "/chats/temper.jsonl", name: "temper", id: 38 };
+		const add = { op: "add", id: 4, plan: plan("Four"), outside: [ref] };
+		const over = { op: "after_over", id: 4, file: ref.file, n: 38, removed: true, dropped: "  not   needed " };
+		expect(byId(replay(entries([add, over])), 4)?.outside?.[0].over).toMatchObject({
+			removed: true,
+			dropped: "not needed",
+		});
+		// A record with only the reason still reads as over without being done.
+		const bare = { op: "after_over", id: 4, file: ref.file, n: 38, dropped: "x" };
+		expect(byId(replay(entries([add, bare])), 4)?.outside?.[0].over).toMatchObject({ removed: true, dropped: "x" });
 	});
 });

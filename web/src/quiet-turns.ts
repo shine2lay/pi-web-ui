@@ -130,6 +130,8 @@ function sentWords(s: UiQuietSent, t: Translate): string {
 			return t("quietSentPassed", { n: s.n });
 		case "done":
 			return t("quietSentDone");
+		case "dropped":
+			return t("quietSentDropped", { n: s.n });
 	}
 }
 

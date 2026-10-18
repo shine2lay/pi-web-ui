@@ -76,7 +76,8 @@ const project = (roles: unknown[] = [role()], asks: unknown[] = [], extra: Row =
 	projectUsefulRoles(state(roles, asks, extra), connection, NOW);
 const byId = (model: UsefulRoles, id: number): UsefulRecord => {
 	for (const r of model.roles)
-		for (const rec of [...r.active.records, ...r.queued.records]) if (rec.taskId === id) return rec;
+		for (const rec of [...r.active.records, ...r.queued.records, ...r.dropped.records])
+			if (rec.taskId === id) return rec;
 	throw new Error(`no task ${id}`);
 };
 const keys = (value: object, expected: string[]) => expect(Object.keys(value).sort()).toEqual(expected.sort());
@@ -103,12 +104,13 @@ function closed(model: UsefulRoles) {
 			"counts",
 			"active",
 			"queued",
+			"dropped",
 		]);
-		keys(r.counts, ["active", "queued", "done"]);
-		for (const list of [r.active, r.queued]) {
+		keys(r.counts, ["active", "queued", "done", "dropped"]);
+		for (const list of [r.active, r.queued, r.dropped]) {
 			keys(list, ["available", "omitted", "notAllShown", "records"]);
 			for (const rec of list.records) {
-				keys(rec, ["taskId", "name", "state", "askLead", "waitsOn", "busy", "latest", "pause", "link"]);
+				keys(rec, ["taskId", "name", "state", "askLead", "waitsOn", "busy", "latest", "dropped", "pause", "link"]);
 				if (rec.link) linkShape(rec.link);
 			}
 		}
@@ -569,28 +571,60 @@ describe("counts, caps and problems", () => {
 	it("zero counts show 0 when the queue was read cleanly, 'couldn't read' when it wasn't", () => {
 		const empty = queue({ active: [], queued: [], counts: { active: 0, queued: 0, done: 0 } });
 		const clean = project([role("frontend", { queue: empty })]);
-		expect(clean.roles[0].counts).toEqual({ active: 0, queued: 0, done: 0 });
+		// queue-drop: no dropped count and no dropped list from the server means none dropped.
+		expect(clean.roles[0].counts).toEqual({ active: 0, queued: 0, done: 0, dropped: 0 });
 		const broken = project([role("frontend", { queue: empty, problems: ["home chat"] })]);
-		expect(broken.roles[0].counts).toEqual({ active: "unavailable", queued: "unavailable", done: "unavailable" });
+		expect(broken.roles[0].counts).toEqual({
+			active: "unavailable",
+			queued: "unavailable",
+			done: "unavailable",
+			dropped: "unavailable",
+		});
 		expect(broken.roles[0].partial).toBe(true);
 		// Any reported problem: no number is shown for that role, zero or not.
 		const safe = project([role("frontend", { queue: empty, problems: ["report", "task #4 chat"] })]);
-		expect(safe.roles[0].counts).toEqual({ active: "unavailable", queued: "unavailable", done: "unavailable" });
+		expect(safe.roles[0].counts).toEqual({
+			active: "unavailable",
+			queued: "unavailable",
+			done: "unavailable",
+			dropped: "unavailable",
+		});
 		expect(safe.roles[0].partial).toBe(true);
 		// No defaults and no numbers that disagree with the rows received (queued rows may be capped).
 		const odd = (counts: unknown, extra: Row = {}) =>
 			project([role("frontend", { queue: queue({ counts, ...extra }) })]).roles[0].counts;
 		expect(odd({ active: 2, queued: 1, done: 0 })).toMatchObject({ active: "unavailable", queued: 1, done: 0 });
-		expect(odd({ active: 1, queued: 0, done: -1 })).toEqual({ active: 1, queued: "unavailable", done: "unavailable" });
-		expect(odd({ active: 1, queued: 30, done: 1.5 })).toEqual({ active: 1, queued: 30, done: "unavailable" });
+		expect(odd({ active: 1, queued: 0, done: -1 })).toEqual({
+			active: 1,
+			queued: "unavailable",
+			done: "unavailable",
+			dropped: 0,
+		});
+		expect(odd({ active: 1, queued: 30, done: 1.5 })).toEqual({
+			active: 1,
+			queued: 30,
+			done: "unavailable",
+			dropped: 0,
+		});
 		expect(odd({ active: "1", queued: null })).toEqual({
 			active: "unavailable",
 			queued: "unavailable",
 			done: "unavailable",
+			dropped: 0,
 		});
-		expect(odd(undefined)).toEqual({ active: "unavailable", queued: "unavailable", done: "unavailable" });
+		expect(odd(undefined)).toEqual({
+			active: "unavailable",
+			queued: "unavailable",
+			done: "unavailable",
+			dropped: "unavailable",
+		});
 		const none = project([role("frontend", { queue: undefined })]);
-		expect(none.roles[0].counts).toEqual({ active: "no-queue", queued: "no-queue", done: "no-queue" });
+		expect(none.roles[0].counts).toEqual({
+			active: "no-queue",
+			queued: "no-queue",
+			done: "no-queue",
+			dropped: "no-queue",
+		});
 		mount();
 		feed([
 			role("frontend", { queue: empty }),
@@ -604,6 +638,40 @@ describe("counts, caps and problems", () => {
 		expect(back).toContain("Started (couldn't read)");
 		expect(back).toContain("Done, still in the queue: couldn't read");
 		expect(back).toContain("Some of this role's data couldn't be read.");
+	});
+	it("queue-drop: tasks its lead dropped are listed apart, each with why, and counted", () => {
+		const gone = (id: number, why: unknown, extra: Row = {}) =>
+			task(id, "dropped", { dropped: { why, at: NOW - 5_000 }, ...extra });
+		const dropped = [gone(7, "Superseded by #9", { chat: { file: chatOf(7), where: 7 } }), gone(8, "\u202Espoof")];
+		const model = project([
+			role("frontend", { queue: queue({ dropped, counts: { active: 1, queued: 1, done: 2, dropped: 6 } }) }),
+		]);
+		const r = model.roles[0];
+		expect(r.counts.dropped).toBe(6);
+		expect(r.dropped.records.map((x) => [x.taskId, x.state, x.dropped])).toEqual([
+			[7, "dropped", "Superseded by #9"],
+			[8, "dropped", null],
+		]);
+		expect(byId(model, 7).link?.file).toBe(chatOf(7));
+		expect(r.dropped.notAllShown).toBe(true);
+		expect(byId(model, 1).dropped).toBeNull();
+		closed(model);
+		// A list without its count, or a count the rows don't fit, shows no number.
+		const odd = (counts: Row) =>
+			project([role("frontend", { queue: queue({ dropped: [gone(7, "x")], counts }) })]).roles[0].counts.dropped;
+		expect(odd({ active: 1, queued: 1, done: 2 })).toBe("unavailable");
+		expect(odd({ active: 1, queued: 1, done: 2, dropped: 0 })).toBe("unavailable");
+		mount();
+		feed([
+			role("frontend", {
+				queue: queue({ dropped: [gone(7, "Superseded by #9")], counts: { active: 1, queued: 1, done: 2, dropped: 1 } }),
+			}),
+			role("backend", { title: "Backend" }),
+		]);
+		const [front, back] = [...container.querySelectorAll(".roles-useful-card")].map((c) => c.textContent);
+		expect(front).toContain("Dropped by the lead (1)");
+		expect(front).toContain("dropped by the lead: Superseded by #9");
+		expect(back).not.toContain("Dropped by the lead");
 	});
 	it("a malformed list is 'couldn't read'; duplicate ids are dropped with a note", () => {
 		const model = project([

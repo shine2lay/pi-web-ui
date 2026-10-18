@@ -319,6 +319,32 @@ describe("the role panel's projection", () => {
 		expect(projectRolePanel(snapshot(), "../ops")).toBeNull();
 		expect(projectRolePanel(null, "ops")).toBeNull();
 	});
+
+	// queue-drop (owner 2026-10-17): tasks the queue's lead dropped are listed apart, with why.
+	it("lists the tasks its lead dropped apart from the open ones, each with why", () => {
+		const queue = ops().queue;
+		const gone = (id: number, why: unknown) => task(id, "dropped", { dropped: { why, at: NOW - 60_000 } });
+		const p = panelOf(
+			roster({
+				queue: {
+					...queue,
+					dropped: [gone(11, "Superseded by #4"), gone(12, 7)],
+					counts: { ...queue.counts, dropped: 3 },
+				},
+			}),
+		);
+		expect(p.dropped.map((t) => [t.taskId, t.state, t.dropped])).toEqual([
+			[11, "dropped", "Superseded by #4"],
+			[12, "dropped", null],
+		]);
+		expect(p.droppedCount).toBe(3);
+		expect(ids(allTasks(p))).not.toContain(11);
+		expect(allTasks(p).every((t) => t.dropped === null)).toBe(true);
+		// A queue with none: nothing listed, no count.
+		const none = panelOf();
+		expect(none.dropped).toEqual([]);
+		expect(none.droppedCount).toBeNull();
+	});
 });
 
 // ---- the mounted panel ------------------------------------------------------------------------------------

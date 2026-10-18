@@ -155,7 +155,7 @@ const refLine = (ref: string | undefined): number => Number(/:(\d+)$/.exec(ref ?
 export function planVersions(all: DecisionRecord[]): (rec: DecisionRecord) => DecisionRecord | undefined {
 	const byTask = new Map<string, DecisionRecord[]>();
 	for (const r of all) {
-		if (r.source !== "plan" || r.op === "done" || !r.file || r.task === undefined) continue;
+		if (r.source !== "plan" || r.op === "done" || r.op === "drop" || !r.file || r.task === undefined) continue;
 		const k = `${r.file}\0${r.task}`;
 		const list = byTask.get(k) ?? [];
 		list.push(r);
@@ -251,6 +251,10 @@ export function renderRecord(
 			if (rec.op === "done") {
 				head.push("queued task done note", stamp(rec.at), task);
 				body.push(clip(rec.summary, MAX_FIELD));
+			} else if (rec.op === "drop") {
+				// queue-drop: the queue's lead ended the task without it being done (no owner dialog).
+				head.push("queued task dropped by its lead", stamp(rec.at), task);
+				body.push(`Why: ${clip(rec.summary, MAX_FIELD)}`);
 			} else {
 				const appr =
 					rec.approval === "dialog" ? "approved by the owner in a dialog" : "auto-approved (the owner didn't see it)";

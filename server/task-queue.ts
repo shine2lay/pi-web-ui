@@ -91,6 +91,13 @@ const PART_MAX = 4000;
 const NOTE_MAX = 2000;
 /** task-question decisions (rule 21): pi-queue's OWNER_DETAIL_MAX; it refuses a longer owner package. */
 export const DETAIL_MAX = 12_000;
+/** queue-drop: pi-queue's DROP_WHY_MAX, the longest reason a lead gives for dropping a task. */
+export const TASK_QUEUE_DROP_WHY_MAX = 300;
+
+/** queue-drop: a reason as pi-queue keeps it: one line, at most `max` characters ("" when it isn't text). */
+function oneLine(x: unknown, max: number): string {
+	return typeof x === "string" ? x.replace(/\s+/g, " ").trim().slice(0, max) : "";
+}
 
 /** A stuck question's package (rule 21): whole, or, past DETAIL_MAX, a notice instead (never clipped). */
 export function detailOf(raw: unknown): string | undefined {
@@ -525,7 +532,8 @@ function apply(s: State, raw: unknown): void {
 		return;
 	}
 	if (op.op === "clear") {
-		for (const t of s.tasks) if (t.status === "done") t.status = "removed";
+		// queue-drop: clear takes the finished tasks off the list, done and dropped ones (pi-queue's finishedTasks).
+		for (const t of s.tasks) if (t.status === "done" || t.status === "dropped") t.status = "removed";
 		return;
 	}
 	if (op.op === "lanes") {
@@ -819,7 +827,13 @@ function apply(s: State, raw: unknown): void {
 		case "after_over": {
 			const o = task.outside?.find((x) => x.file === op.file && x.id === op.n);
 			if (!o || o.over) return;
-			o.over = { at: num(op.ts), ...(op.removed === true ? { removed: true } : {}) };
+			// queue-drop: dropped there by its lead, with its reason (removed is set too: it wasn't done).
+			const why = typeof op.dropped === "string" ? oneLine(op.dropped, TASK_QUEUE_DROP_WHY_MAX) : "";
+			o.over = {
+				at: num(op.ts),
+				...(op.removed === true || why ? { removed: true } : {}),
+				...(why ? { dropped: why } : {}),
+			};
 			return;
 		}
 		case "wait_over":
@@ -838,6 +852,20 @@ function apply(s: State, raw: unknown): void {
 			task.block = undefined;
 			task.summary = str(op.summary, NOTE_MAX);
 			task.doneAt = num(op.ts);
+			endHold(task);
+			return;
+		case "drop":
+			// queue-drop (owner 2026-10-17): the queue's main chat (its lead) ended an open task without it being
+			// done, with a reason (pi-queue's queue_control drop). It stays in the list, dropped, until cleared.
+			task.status = "dropped";
+			task.question = undefined;
+			task.choices = undefined;
+			task.detail = undefined;
+			task.askOps = undefined;
+			task.mainAnswered = undefined;
+			task.wait = undefined;
+			task.block = undefined;
+			task.dropped = { why: oneLine(op.why, TASK_QUEUE_DROP_WHY_MAX) || "no reason given", at: num(op.ts) };
 			endHold(task);
 			return;
 		case "remove":
@@ -893,7 +921,11 @@ export function taskQueueFromEntries(
 	// question-lead: which department has the question goes only with a question that is with a lead now.
 	for (const t of s.tasks) if (t.status !== "asking" || !t.askOps) delete t.askLead;
 	const done = s.tasks.filter((t) => t.status === "done").sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0));
-	const dropped = new Set(done.slice(maxDone));
+	// queue-drop: dropped tasks are kept the same way (the newest `maxDone` of them), next to the done ones.
+	const dropped = s.tasks
+		.filter((t) => t.status === "dropped")
+		.sort((a, b) => (b.dropped?.at ?? 0) - (a.dropped?.at ?? 0));
+	const hidden = new Set([...done.slice(maxDone), ...dropped.slice(maxDone)]);
 	// queue-side-by-side: an open task that comes after others shows which of them are still open
 	// (pi-queue's openDeps: not done or removed yet, in queue order).
 	for (const t of s.tasks) {
@@ -923,12 +955,14 @@ export function taskQueueFromEntries(
 			r.status = d ? d.status : "gone";
 			if (d) r.title = d.plan.title;
 			if (d?.chat) r.chat = d.chat;
+			// queue-drop: why its lead dropped it (dropped, or cleared since).
+			if (d?.dropped && (d.status === "dropped" || d.status === "removed")) r.dropped = d.dropped.why;
 			// queue-paused: the task it waits on is paused (it keeps waiting quietly).
 			if (d && heldBy(s, d)) r.held = true;
 		}
 	}
 	const tasks = s.tasks
-		.filter((t): t is Task & UiTaskQueueTask => t.status !== "removed" && !dropped.has(t))
+		.filter((t): t is Task & UiTaskQueueTask => t.status !== "removed" && !hidden.has(t))
 		.map(({ heldFrom: _heldFrom, stuckAt: _stuckAt, ...t }): UiTaskQueueTask => t);
 	// queue-lanes: only a queue with tasks that run in chats of their own shows lanes (a task's own chat never).
 	const lanes = s.from ? [] : lanesOf(s.tasks, taskQueueShareableOf(shareable));

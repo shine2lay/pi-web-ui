@@ -124,6 +124,8 @@ export function stuckGoneReason(
 			return { answered: true, reason: "answered in the chat" };
 		case "done":
 			return { answered: false, reason: "the task is done" };
+		case "dropped":
+			return { answered: false, reason: "its lead dropped the task" };
 		case "stuck":
 		case "asking":
 			return { answered: false, reason: "it asks something else now" };

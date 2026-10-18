@@ -43,6 +43,7 @@ const APPROVAL: Record<UiApprovalKind, Key> = {
 	message: "ivApMessage",
 	"board-news": "ivApBoardNews",
 	"task-report": "ivApTaskReport",
+	"task-drop": "ivApTaskDrop",
 	"role-entry": "ivApRoleEntry",
 };
 

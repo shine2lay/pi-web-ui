@@ -766,7 +766,8 @@ export function ownTaskOf(
 	const own = q.tasks[0];
 	return {
 		id: own?.id,
-		done: !own || own.status === "done",
+		// queue-drop: a task its lead dropped is over too.
+		done: !own || own.status === "done" || own.status === "dropped",
 		queueChat: q.from.file,
 		held: !!own && !!taskQueueHeld(own, q),
 	};
@@ -790,7 +791,7 @@ export async function taskChatPaused(file: string): Promise<boolean> {
 	}
 }
 
-/** A queued task's chat whose task is done or removed (here or in its queue). Other chats: false. */
+/** A queued task's chat whose task is done, dropped or removed (here or in its queue). Other chats: false. */
 export async function taskChatFinished(file: string): Promise<boolean> {
 	const own = ownTaskOf(await queueEntriesOf(file));
 	if (!own) return false;
@@ -798,7 +799,7 @@ export async function taskChatFinished(file: string): Promise<boolean> {
 	if (!own.queueChat || !existsSync(own.queueChat)) return false;
 	const q = taskQueueFromEntries(await queueEntriesOf(own.queueChat), true, Number.POSITIVE_INFINITY);
 	const t = q.tasks.find((x) => x.id === own.id);
-	return !t || t.status === "done";
+	return !t || t.status === "done" || t.status === "dropped";
 }
 
 // ---------------------------------------------------------------------------

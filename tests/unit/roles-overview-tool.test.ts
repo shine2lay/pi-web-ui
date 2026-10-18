@@ -146,6 +146,26 @@ describe("formatRolesOverview", () => {
 		expect(text).not.toContain("By status");
 	});
 
+	// queue-drop: tasks the queue's lead dropped, counted in short and listed with why in full.
+	it("counts the tasks its lead dropped, and lists them with why in full", () => {
+		const q = busy.queue;
+		if (!q) throw new Error("no queue");
+		const gone = {
+			id: 4,
+			status: "dropped" as const,
+			title: "Old work",
+			dropped: { why: "Superseded by #9", at: NOW - MIN },
+		};
+		const lead = role("temper", { queue: { ...q, dropped: [gone], counts: { ...q.counts, dropped: 1 } } });
+		const short = formatRolesOverview(view([lead]), { now: NOW });
+		expect(short).toContain("Queue: running; 2 active, 1 waiting to start, 40 done, 1 dropped by the lead");
+		expect(short).not.toContain("Old work");
+		const full = formatRolesOverview(view([lead]), { role: "temper", now: NOW });
+		expect(full).toContain("- #4 dropped by the lead: Old work; why: Superseded by #9");
+		// None dropped: the line reads as before.
+		expect(formatRolesOverview(view([busy]), { now: NOW })).toContain("1 waiting to start, 40 done\n");
+	});
+
 	// queue-paused: the owner's pause on a task or a whole queue.
 	it("says 'Paused by you' with since when and why, for a task and for the whole queue", () => {
 		const paused = role("frontend", {

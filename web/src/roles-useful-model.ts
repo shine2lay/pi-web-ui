@@ -30,7 +30,7 @@ export const CLOCK_SKEW_MS = 300_000;
 export const TASK_CHATS_READ = 8;
 const KEY_LIMIT = 300;
 
-const STATUSES = ["ready", "working", "asking", "stuck", "waiting", "blocked", "done"] as const;
+const STATUSES = ["ready", "working", "asking", "stuck", "waiting", "blocked", "done", "dropped"] as const;
 const STOP_REASONS = ["user", "stopped", "error", "restart", "finished"] as const;
 /** Rejects the whole text: controls, format characters (every bidi control, zero-width characters,
  *  the soft hyphen, tag characters), lone surrogates, private-use and unassigned code points, and
@@ -66,6 +66,7 @@ export type RowState =
 	| "on-hold"
 	| "blocked"
 	| "done"
+	| "dropped"
 	| "unknown";
 /** Whether the "Needs you" list is the current one (only then may an empty list read "none reported"). */
 export type TellState = "can-tell" | "not-live" | "feed-error" | "awaiting" | "partial" | "decision" | "unknown";
@@ -88,6 +89,8 @@ export interface UsefulRecord {
 	busy: boolean;
 	/** The newest line of its own chat; working tasks only. */
 	latest: string | null;
+	/** queue-drop: why its lead dropped it; dropped tasks only (null: absent or unsafe). */
+	dropped: string | null;
 	pause: PauseMarker;
 	link: UsefulOpenTarget | null;
 }
@@ -105,9 +108,11 @@ export interface UsefulRole {
 	queueEnabled: boolean | null;
 	stopReason: StopReason | null;
 	hold: PauseMarker;
-	counts: { active: ReplayCount; queued: ReplayCount; done: ReplayCount };
+	counts: { active: ReplayCount; queued: ReplayCount; done: ReplayCount; dropped: ReplayCount };
 	active: UsefulRecords;
 	queued: UsefulRecords;
+	/** queue-drop: the tasks its lead dropped, newest first (the server sends at most ROLES_DROPPED_MAX). */
+	dropped: UsefulRecords;
 }
 export interface NeedsYouItem {
 	/** Its place in the feed; React only, never rendered. */
@@ -261,6 +266,8 @@ function rowState(row: Fields, reported: ReportedStatus | null): RowState {
 			return "blocked";
 		case "done":
 			return "done";
+		case "dropped":
+			return "dropped";
 		default:
 			return "unknown";
 	}
@@ -287,6 +294,7 @@ export function record(row: Fields, id: number, home: string | null): UsefulReco
 		waitsOn: plain(row.waitsOn, NAME_LIMIT)?.text ?? null,
 		busy: row.busy === true,
 		latest: latest ? latest.text : null,
+		dropped: state === "dropped" ? (plain(object(row.dropped)?.why, TEXT_LIMIT)?.text ?? null) : null,
 		pause,
 		link: taskLink(row, id, home),
 	};
@@ -337,27 +345,37 @@ function projectRole(row: Fields, id: string): ProjectedRole {
 	const rawCounts = object(queue?.counts);
 	const activeRows = Array.isArray(queue?.active) ? queue.active.length : null;
 	const queuedRows = Array.isArray(queue?.queued) ? queue.queued.length : null;
+	// queue-drop: the server sends the dropped list (capped) and its count only when there are some.
+	const droppedRows = Array.isArray(queue?.dropped) ? queue.dropped.length : null;
 	// Zero is shown like any other number, under the same guards (Security addendum, item 8). Active
 	// rows aren't capped, so they must match; queued rows are capped, so the count may be larger.
 	const readable = queue !== null && !problems;
 	const counts: UsefulRole["counts"] =
 		!queuePresent && !problems
-			? { active: "no-queue", queued: "no-queue", done: "no-queue" }
+			? { active: "no-queue", queued: "no-queue", done: "no-queue", dropped: "no-queue" }
 			: {
 					active: count(rawCounts?.active, readable, (n) => n === activeRows),
 					queued: count(rawCounts?.queued, readable, (n) => queuedRows !== null && n >= queuedRows),
 					done: count(rawCounts?.done, readable),
+					// Counts read, with neither the dropped count nor the list: none dropped (0).
+					dropped: count(
+						rawCounts && rawCounts.dropped === undefined && droppedRows === null ? 0 : rawCounts?.dropped,
+						readable,
+						(n) => (droppedRows === null ? n === 0 : n >= droppedRows),
+					),
 				};
 	// Ambiguity is role-local and spans both received lists, even beyond the display cap.
 	const taskRows: unknown[] = [];
 	if (Array.isArray(queue?.active)) for (const task of queue.active) taskRows.push(task);
 	if (Array.isArray(queue?.queued)) for (const task of queue.queued) taskRows.push(task);
+	if (Array.isArray(queue?.dropped)) for (const task of queue.dropped) taskRows.push(task);
 	const seen = idFrequencies(taskRows, (raw) => {
 		const candidate = object(raw)?.id;
 		return taskId(candidate) ? candidate : null;
 	});
 	const active = records(queue?.active, seen, counts.active, home);
 	const queued = records(queue?.queued, seen, counts.queued, home);
+	const dropped = records(queue?.dropped, seen, counts.dropped, home);
 	let startedChats = 0;
 	if (Array.isArray(queue?.active)) for (const task of queue.active) if (object(task)?.chat) startedChats++;
 	// The server lists every stuck task's question unless the task, or else its queue, is paused
@@ -382,6 +400,7 @@ function projectRole(row: Fields, id: string): ProjectedRole {
 			counts,
 			active,
 			queued,
+			dropped,
 		},
 		asksSeen: startedChats <= TASK_CHATS_READ,
 		decisionKeys,

@@ -26,6 +26,7 @@ export type ApprovalKind =
 	| "message"
 	| "board-news"
 	| "task-report"
+	| "task-drop"
 	| "role-entry";
 
 /** rider: a role's choice inside the option he picked; claims-owner: a role says he decided, not in his
@@ -590,6 +591,8 @@ export function whoOf(rec: DecisionRecord | undefined, src: WhoSource): Who {
 		case "plan": {
 			const role = rec.from || rec.chat || "";
 			if (rec.op === "done") return plain(role, "task-report", rec, s, recordText(rec), "plan");
+			// queue-drop: the queue's lead dropped the task itself; no owner dialog backs it.
+			if (rec.op === "drop") return plain(role, "task-drop", rec, s, recordText(rec), "plan");
 			// A change may take words out of the plan: those are found in the version before it.
 			const planWords = s.was?.source === "plan" ? `${recordText(rec)}\n${planText(s.was)}` : recordText(rec);
 			if (rec.approval === "dialog") {

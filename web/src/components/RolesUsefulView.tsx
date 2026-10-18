@@ -58,6 +58,7 @@ const ROW_KEYS = {
 	"on-hold": "ruRowOnHold",
 	blocked: "ruRowBlocked",
 	done: "ruRowDone",
+	dropped: "ruRowDropped",
 	unknown: "ruRowUnknown",
 } as const satisfies Record<RowState, Key>;
 const STOP_KEYS = {
@@ -302,6 +303,16 @@ function RoleCard({ role, onOpen, onDetails }: { role: UsefulRole; onOpen: OpenC
 						count={role.counts.queued}
 						onOpen={onOpen}
 					/>
+					{/* queue-drop: tasks its lead dropped, with why; only when it has some. */}
+					{(role.dropped.records.length > 0 ||
+						(typeof role.counts.dropped === "number" && role.counts.dropped > 0)) && (
+						<RecordList
+							heading={t("ruDroppedByLead", { n: countText(role.counts.dropped, t) })}
+							list={role.dropped}
+							count={role.counts.dropped}
+							onOpen={onOpen}
+						/>
+					)}
 					<p className="roles-useful-note">{t("ruDoneCount", { n: countText(role.counts.done, t) })}</p>
 				</>
 			)}
@@ -370,6 +381,13 @@ function TaskRow({ record, onOpen }: { record: UsefulRecord; onOpen: OpenChat })
 					<span className="roles-useful-status">
 						{record.askLead === null ? t(ROW_KEYS[record.state]) : t("ruRowAskingLead", { lead: record.askLead })}
 					</span>
+					{/* queue-drop: "Dropped by the lead: <why>", its reason quoted as agent text. */}
+					{record.state === "dropped" && record.dropped !== null && (
+						<>
+							{": "}
+							<q className="roles-useful-agent">{record.dropped}</q>
+						</>
+					)}
 					{record.state === "ready-after" &&
 						(record.waitsOn === null ? (
 							<span> {t("ruOtherTasks")}</span>

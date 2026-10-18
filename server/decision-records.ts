@@ -139,9 +139,11 @@ export interface DecisionRecord {
 
 	// plan
 	task?: number;
-	op?: "add" | "update" | "done";
+	/** queue-drop: "drop": the queue's lead dropped the task (owner 2026-10-17), with `summary` its reason. */
+	op?: "add" | "update" | "done" | "drop";
 	plan?: PlanFields;
 	approval?: string;
+	/** done: the task's summary; drop: why its lead dropped it. */
 	summary?: string;
 	/** plan: the queue entry's id. */
 	entry?: string;
@@ -423,12 +425,14 @@ export interface QueueEntryData {
 	approval?: unknown;
 	initiative?: unknown;
 	summary?: unknown;
+	/** queue-drop: a drop's reason. */
+	why?: unknown;
 }
 
 /** Per chat file: each task's initiative so far (an add sets it, an update changes or clears it). */
 export type TaskInitiatives = Record<string, string>;
 
-/** A queue entry -> a plan record (add, update, done only; others: undefined). Updates `inits`. */
+/** A queue entry -> a plan record (add, update, done, drop only; others: undefined). Updates `inits`. */
 export function planRecord(
 	entry: { id?: unknown; timestamp?: unknown; data?: QueueEntryData },
 	ctx: { file: string; line: number; role?: string | null; chat?: string; inits: TaskInitiatives },
@@ -436,7 +440,7 @@ export function planRecord(
 ): NewDecisionRecord | undefined {
 	const d = entry.data ?? {};
 	const op = d.op;
-	if (op !== "add" && op !== "update" && op !== "done") return undefined;
+	if (op !== "add" && op !== "update" && op !== "done" && op !== "drop") return undefined;
 	const task = typeof d.id === "number" ? d.id : Number(d.id);
 	if (!Number.isFinite(task)) return undefined;
 	const key = String(task);
@@ -453,7 +457,7 @@ export function planRecord(
 			: typeof entry.timestamp === "string"
 				? Date.parse(entry.timestamp)
 				: Number(entry.timestamp);
-	const plan = op === "done" ? undefined : planFields(d.plan);
+	const plan = op === "done" || op === "drop" ? undefined : planFields(d.plan);
 	const file = basename(ctx.file);
 	return {
 		source: "plan",
@@ -466,9 +470,10 @@ export function planRecord(
 		task,
 		op,
 		...(plan ? { plan } : {}),
-		...(op !== "done" && typeof d.approval === "string" ? { approval: d.approval } : {}),
+		...((op === "add" || op === "update") && typeof d.approval === "string" ? { approval: d.approval } : {}),
 		...(ctx.inits[key] ? { initiative: ctx.inits[key] } : {}),
 		...(op === "done" && typeof d.summary === "string" ? { summary: d.summary } : {}),
+		...(op === "drop" && typeof d.why === "string" ? { summary: d.why } : {}),
 		...(typeof entry.id === "string" ? { entry: entry.id } : {}),
 	};
 }

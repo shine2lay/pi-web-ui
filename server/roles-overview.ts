@@ -70,6 +70,8 @@ import {
 export const ROLES_TLDR_MAX = 20;
 /** Queued (not started) tasks listed per role. */
 export const ROLES_QUEUED_MAX = 20;
+/** queue-drop: how many of a role's dropped tasks the Roles page gets (newest first). */
+export const ROLES_DROPPED_MAX = 5;
 /** A report longer than this is cut (the rest is in the chat). */
 export const ROLES_REPORT_MAX = 12_000;
 /** Started task chats read per role (a queue runs at most 8 lanes). */
@@ -742,7 +744,7 @@ export class RolesOverviewReader {
 		const infos: RoleTaskInfo[] = [];
 		let chats = 0;
 		for (const task of tasks) {
-			if (task.status === "done") continue;
+			if (task.status === "done" || task.status === "dropped") continue;
 			const info: RoleTaskInfo = { task, lines: [] };
 			infos.push(info);
 			if (!task.chat?.file || !ACTIVE.has(task.status) || chats >= ROLES_TASK_CHATS_MAX) continue;
@@ -874,11 +876,16 @@ export class RolesOverviewReader {
 			const queued: UiRoleTask[] = [];
 			let ready = 0;
 			let done = 0;
+			// queue-drop: the tasks its lead dropped, with why (newest first).
+			const dropped = tasks
+				.filter((t) => t.status === "dropped")
+				.sort((a, b) => (b.dropped?.at ?? 0) - (a.dropped?.at ?? 0));
 			for (const t of tasks) {
 				if (t.status === "done") {
 					done++;
 					continue;
 				}
+				if (t.status === "dropped") continue;
 				const held = heldOf(t);
 				if (t.status === "ready") {
 					ready++;
@@ -900,7 +907,9 @@ export class RolesOverviewReader {
 				...(queueHold ? { hold: queueHold } : {}),
 				active,
 				queued,
-				counts: { active: active.length, queued: ready, done },
+				...(dropped.length ? { dropped: dropped.slice(0, ROLES_DROPPED_MAX).map((t) => taskOf(t)) } : {}),
+				// dropped only when it has some, so a queue with none reads exactly as before.
+				counts: { active: active.length, queued: ready, done, ...(dropped.length ? { dropped: dropped.length } : {}) },
 			};
 		}
 
@@ -1036,6 +1045,7 @@ function taskOf(t: UiTaskQueueTask, held?: UiTaskQueueHold): UiRoleTask {
 		status: t.status,
 		title: t.plan.title,
 		...(t.chat ? { chat: { file: t.chat.file, ...(t.chat.title ? { title: t.chat.title } : {}) } } : {}),
+		...(t.status === "dropped" && t.dropped ? { dropped: { why: t.dropped.why, at: t.dropped.at } } : {}),
 		...(waitsOn ? { waitsOn } : {}),
 		...(t.status === "asking" && t.askOps ? { askOps: true, ...(t.askLead ? { askLead: t.askLead } : {}) } : {}),
 		...(held ? { paused: { at: held.at, why: held.why } } : {}),

@@ -281,6 +281,15 @@ describe("plans", () => {
 			you: false,
 		});
 	});
+
+	it("queue-drop: a task its lead dropped is the role's own act, never the owner's", () => {
+		const rec = plan({ op: "drop", summary: "Superseded by #14; nothing left to do.", plan: undefined });
+		expect(whoOf(rec, { quotes: ["Superseded by #14"] })).toMatchObject({
+			writer: "temper",
+			approval: "task-drop",
+			you: false,
+		});
+	});
 });
 
 describe("Board orders: his words and the relayer's text", () => {

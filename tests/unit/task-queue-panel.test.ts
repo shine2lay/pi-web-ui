@@ -10,6 +10,7 @@ import {
 	TASK_QUEUE_DONE_SHOWN,
 	TASK_QUEUE_PLAN_PARTS,
 	TaskQueuePanel,
+	taskQueueHeldOf,
 	taskQueueSections,
 	taskQueueStatusKey,
 } from "../../web/src/components/TaskQueuePanel.js";
@@ -604,5 +605,59 @@ describe("taskQueueStatusKey", () => {
 		expect(key(q([task(1, "done", { doneAt: 1 }), task(2, "ready")], { pausedReason: "finished" }))).toBe(
 			"taskQueueStatusIdle",
 		);
+		// queue-drop: a dropped task is over, like a done one.
+		const gone = task(1, "dropped", { lane: true, dropped: { why: "x", at: 1 } });
+		expect(key(q([gone], { pausedReason: "finished" }))).toBe("taskQueueStatusFinished");
+	});
+});
+
+// queue-drop (owner 2026-10-17): tasks the queue's lead dropped show apart, each with why, and are over like done ones.
+describe("TaskQueuePanel (dropped by the lead)", () => {
+	const at = Date.parse("2026-10-17T19:00:00Z");
+	const gone = (id: number, why: string, when: number, extra: Partial<UiTaskQueueTask> = {}) =>
+		task(id, "dropped", { dropped: { why, at: when }, ...extra });
+	const itemOf = (html: string, id: number) => html.match(new RegExp(`data-task-id="${id}"[^]*?</li>`))?.[0] ?? "";
+
+	it("lists them in a section of their own, newest first, each with why, without a task's open-only lines", () => {
+		const lane = { lane: true, touches: ["a"], after: [1], chat: { file: "/t2.jsonl" }, startedAt: at - 120_000 };
+		const queue = q([
+			gone(1, "Superseded by #3", at - 60_000),
+			gone(2, "Not needed any more", at, lane),
+			task(3, "ready"),
+		]);
+		const s = taskQueueSections(queue);
+		expect(s.dropped.map((t) => t.id)).toEqual([2, 1]);
+		expect(s.inChats).toEqual([]);
+		expect(s.done).toEqual([]);
+		const html = render(queue, { onCommand: noop, onOpenChat: noop });
+		expect(taskIds(html, "dropped")).toEqual([2, 1]);
+		expect(taskIds(html, "ready")).toEqual([3]);
+		const two = itemOf(html, 2);
+		expect(two).toContain('<div class="task-queue-dropped">Dropped by the lead: Not needed any more</div>');
+		expect(itemOf(html, 1)).toContain("Dropped by the lead: Superseded by #3");
+		for (const cls of ["task-queue-touches", "task-queue-after", "task-queue-lane", "task-queue-pause"]) {
+			expect(two).not.toContain(cls);
+		}
+		// Clear sits on the dropped list when there's no done one, and stays single when there is.
+		expect(html.match(/class="task-queue-clear"/g)).toHaveLength(1);
+		const both = render(q([...queue.tasks, task(4, "done", { doneAt: at })]), { onCommand: noop });
+		expect(both.match(/class="task-queue-clear"/g)).toHaveLength(1);
+		expect(render(queue)).not.toContain("task-queue-clear");
+	});
+
+	it("the owner's pause no longer applies to one; a ref to one says dropped, with why on hover", () => {
+		const hold = { at, why: "pressed Pause" };
+		expect(taskQueueHeldOf({ hold }, gone(1, "x", at))).toBeUndefined();
+		expect(taskQueueHeldOf({ hold }, task(2, "ready"))).toEqual(hold);
+		const ref = {
+			file: "/main.jsonl",
+			name: "this queue",
+			id: 1,
+			status: "dropped" as const,
+			dropped: "Superseded by #3",
+		};
+		const blocked = task(2, "blocked", { lane: true, block: { on: [ref], since: 1, start: 1, tries: 0 } });
+		const html = render(q([blocked, gone(1, "Superseded by #3", at)], { running: true }), { onCommand: noop });
+		expect(html).toContain('<span class="task-queue-ref-state" title="Superseded by #3"> (dropped)</span>');
 	});
 });

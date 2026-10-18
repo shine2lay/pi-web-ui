@@ -788,6 +788,31 @@ describe("twenty roles, many tasks", () => {
 	});
 });
 
+// queue-drop (owner 2026-10-17): a task the queue's lead dropped shows apart, with why, until cleared.
+describe("tasks its lead dropped", () => {
+	it("lists the newest dropped tasks with why and counts them; a queue with none reads as before", async () => {
+		const lines: Line[] = [queue({ op: "run" })];
+		for (let i = 1; i <= 9; i++) lines.push(queue({ op: "add", id: i, plan: plan(`Task ${i}`) }));
+		lines.push(queue({ op: "start", id: 1, lane: true }), queue({ op: "done", id: 1, summary: "ok" }));
+		for (let i = 2; i <= 8; i++) lines.push(queue({ op: "drop", id: i, why: `why ${i}` }, T0 + i * 1000));
+		const f = fake([role("lead", transcript("lead", lines)), role("plain", transcript("plain", lines.slice(0, 12)))]);
+		const o = await read(f);
+		const q = byId(o, "lead").queue;
+		expect(q?.counts).toEqual({ active: 0, queued: 1, done: 1, dropped: 7 });
+		expect(q?.queued.map((t) => t.id)).toEqual([9]);
+		expect(q?.dropped?.map((t) => [t.id, t.status, t.dropped?.why])).toEqual([
+			[8, "dropped", "why 8"],
+			[7, "dropped", "why 7"],
+			[6, "dropped", "why 6"],
+			[5, "dropped", "why 5"],
+			[4, "dropped", "why 4"],
+		]);
+		const none = byId(o, "plain").queue;
+		expect(none?.counts).toEqual({ active: 0, queued: 8, done: 1 });
+		expect(none && "dropped" in none).toBe(false);
+	});
+});
+
 describe("open requests and reports come from the whole store", () => {
 	it("counts a request older than the last 100 messages until it is answered", () => {
 		const file = join(dir, "data", "role-messages.json");

@@ -54,6 +54,7 @@ const ROW_KEYS = {
 	"on-hold": "ruRowOnHold",
 	blocked: "ruRowBlocked",
 	done: "ruRowDone",
+	dropped: "ruRowDropped",
 	unknown: "ruRowUnknown",
 } as const satisfies Record<PanelTask["state"], Key>;
 const REPORT_KEYS = {
@@ -326,6 +327,18 @@ function WorkSection({ panel, now, go }: { panel: RolePanel; now: number; go: (t
 			)}
 			{panel.tasksOmitted && <p className="roles-useful-note">{t("rpTasksOmitted")}</p>}
 			{panel.queuedNotAllShown && <p className="roles-useful-note">{t("rpQueuedNotAll")}</p>}
+			{/* queue-drop: the newest tasks its lead dropped, with why. */}
+			{panel.dropped.length > 0 && (
+				<section className="roles-panel-group">
+					<h4>{t("ruDroppedByLead", { n: panel.droppedCount ?? panel.dropped.length })}</h4>
+					<Tasks tasks={panel.dropped} now={now} go={go} />
+					{panel.droppedCount !== null && panel.droppedCount > panel.dropped.length && (
+						<p className="roles-useful-note">
+							{t("ruShownOf", { shown: panel.dropped.length, total: panel.droppedCount })}
+						</p>
+					)}
+				</section>
+			)}
 			{panel.done !== null && <p className="roles-useful-note">{t("ruDoneCount", { n: panel.done })}</p>}
 		</section>
 	);
@@ -379,6 +392,13 @@ function TaskItem({ task, now, go }: { task: PanelTask; now: number; go: (target
 					<span className="roles-useful-status">
 						{task.askLead === null ? t(ROW_KEYS[task.state]) : t("ruRowAskingLead", { lead: task.askLead })}
 					</span>
+					{/* queue-drop: "Dropped by the lead: <why>", its reason quoted as agent text. */}
+					{task.state === "dropped" && task.dropped !== null && (
+						<>
+							{": "}
+							<q className="roles-useful-agent">{task.dropped}</q>
+						</>
+					)}
 					{/* "Waits on" is the state word itself here: what it waits on follows it, as on the card. */}
 					{task.state === "ready-after" &&
 						(task.waitsOn === null ? (

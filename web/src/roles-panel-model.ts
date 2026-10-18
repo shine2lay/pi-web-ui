@@ -95,6 +95,8 @@ export interface PanelTask {
 	pause: PauseMarker;
 	link: UsefulOpenTarget | null;
 	started: boolean;
+	/** queue-drop: why its lead dropped it; dropped tasks only. */
+	dropped: string | null;
 }
 export interface ProjectGroup {
 	project: WorkView;
@@ -162,6 +164,10 @@ export interface RolePanel {
 	/** Waiting tasks beyond what the server sends (it sends at most 20). */
 	queuedNotAllShown: boolean;
 	done: number | null;
+	/** queue-drop: the tasks its lead dropped, newest first (the server sends the newest few), and how many
+	 *  its queue lists (null: not reported). */
+	dropped: PanelTask[];
+	droppedCount: number | null;
 	work: WorkSource;
 	/** Something of this role couldn't be read (the rest is shown). */
 	partial: boolean;
@@ -373,7 +379,9 @@ export function projectRolePanel(state: unknown, id: string): RolePanel | null {
 	const active = Array.isArray(queue?.active) ? queue.active : null;
 	const queued = Array.isArray(queue?.queued) ? queue.queued : null;
 	const taskRows: unknown[] = [...(active ?? []), ...(queued ?? [])];
-	const ids = idFrequencies(taskRows, (raw) => {
+	// queue-drop: dropped tasks are listed apart; an id seen in two lists is shown in neither.
+	const droppedRows: unknown[] = Array.isArray(queue?.dropped) ? queue.dropped : [];
+	const ids = idFrequencies([...taskRows, ...droppedRows], (raw) => {
 		const candidate = object(raw)?.id;
 		return taskId(candidate) ? candidate : null;
 	});
@@ -412,6 +420,7 @@ export function projectRolePanel(state: unknown, id: string): RolePanel | null {
 			pause: base.pause,
 			link: base.link,
 			started: t.chat !== undefined,
+			dropped: null,
 		};
 		const parent = parentOf(t);
 		if (!parent) {
@@ -429,6 +438,27 @@ export function projectRolePanel(state: unknown, id: string): RolePanel | null {
 			}
 			pg.tasks.push(task);
 		}
+	}
+	const dropped: PanelTask[] = [];
+	for (const raw of droppedRows) {
+		const t = object(raw);
+		if (!t || !taskId(t.id) || ids.get(t.id) !== 1 || dropped.length >= PANEL_TASKS_MAX) {
+			tasksOmitted = true;
+			continue;
+		}
+		const base = record(t, t.id, home);
+		dropped.push({
+			taskId: base.taskId,
+			name: base.name,
+			state: base.state,
+			askLead: null,
+			waitsOn: null,
+			owing: null,
+			pause: "not-reported",
+			link: base.link,
+			started: t.chat !== undefined,
+			dropped: base.dropped,
+		});
 	}
 	// Registry order first, then initiatives it doesn't have (by id), then the projects under none.
 	const known = reg.order.filter((i) => groups.has(i)).map((i) => groups.get(i) as InitiativeGroup);
@@ -500,6 +530,8 @@ export function projectRolePanel(state: unknown, id: string): RolePanel | null {
 		tasksOmitted,
 		queuedNotAllShown: queuedCount !== null && queued !== null && queuedCount > queued.length,
 		done: count(counts?.done),
+		dropped,
+		droppedCount: count(counts?.dropped),
 		work: reg.source,
 		partial: Array.isArray(row.problems) ? row.problems.length > 0 : row.problems !== undefined,
 	};

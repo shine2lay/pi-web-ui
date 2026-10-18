@@ -90,10 +90,13 @@ const pausedText = (h: { at: number; why: string }, tz: string, now: number): st
 	`Paused by you (since ${whenText(h.at, tz, now)}: ${clip(h.why, 160)})`;
 
 function taskLine(t: UiRoleTask, tz: string, now: number, lim: Limits): string {
-	const bits = [`#${t.id} ${t.status}${t.busy ? " (working now)" : ""}: ${clip(t.title, 120)}`];
+	// queue-drop: a dropped task says who ended it, then why.
+	const status = t.status === "dropped" ? "dropped by the lead" : t.status;
+	const bits = [`#${t.id} ${status}${t.busy ? " (working now)" : ""}: ${clip(t.title, 120)}`];
 	// queue-paused: the owner paused it (or its whole queue): it doesn't need him while paused.
 	if (t.paused) bits.push(pausedText(t.paused, tz, now));
 	if (t.waitsOn) bits.push(`waits on: ${clip(t.waitsOn, 160)}`);
+	if (t.dropped) bits.push(`why: ${clip(t.dropped.why, 300)}`);
 	if (t.latest) bits.push(`latest: ${clip(t.latest.text, lim.lineMax)}`);
 	return `- ${bits.join("; ")}`;
 }
@@ -173,11 +176,15 @@ export function roleText(r: UiRoleOverview, tz: string, now: number, lim: Limits
 		// queue-paused: the owner paused the whole queue.
 		const held = q.hold ? `, the whole queue ${pausedText(q.hold, tz, now).replace(/^P/, "p")}` : "";
 		out.push(
-			`Queue: ${state}${held}; ${q.counts.active} active, ${q.counts.queued} waiting to start, ${q.counts.done} done`,
+			`Queue: ${state}${held}; ${q.counts.active} active, ${q.counts.queued} waiting to start, ${q.counts.done} done${
+				q.counts.dropped ? `, ${q.counts.dropped} dropped by the lead` : ""
+			}`,
 		);
 		for (const t of q.active.slice(0, lim.tasks)) out.push(taskLine(t, tz, now, lim));
 		if (q.active.length > lim.tasks) out.push(`- (${q.active.length - lim.tasks} more active)`);
 		for (const t of q.queued.slice(0, lim.queued)) out.push(taskLine(t, tz, now, lim));
+		// queue-drop: the newest tasks its lead dropped, with why (full view only).
+		for (const t of (q.dropped ?? []).slice(0, lim.queued)) out.push(taskLine(t, tz, now, lim));
 	}
 	if (r.requests.open) {
 		const n = r.requests.newest;

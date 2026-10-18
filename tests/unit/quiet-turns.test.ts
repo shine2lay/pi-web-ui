@@ -333,6 +333,11 @@ describe("quiet-turns: tool call arguments as the page has them (JSON text, mayb
 		});
 		expect(sentOf({ id: "1", name: "board", args: '{"action":"post","kind":"news"}' }, {})).toEqual({ t: "post" });
 		expect(sentOf({ id: "1", name: "queue_done", args: "{}" }, {})).toEqual({ t: "done" });
+		// queue-drop: a lead dropping a task shows; the queue's other actions don't.
+		const control = (args: string) => sentOf({ id: "1", name: "queue_control", args }, {});
+		expect(control('{"action":"drop","id":12,"why":"superseded by #14"}')).toEqual({ t: "dropped", n: 12 });
+		expect(control('{"action":"drop","why":"no id"}')).toBeNull();
+		expect(control('{"action":"remove","id":12}')).toBeNull();
 		expect(sentOf({ id: "1", name: "bash", args: "{}" }, {})).toBeNull();
 		expect(ownerFacing({ id: "1", name: "tldr", args: '{"text":"x","needs_you":true}' })).toBe(true);
 		expect(ownerFacing({ id: "1", name: "tldr", args: '{"text":"x"}' })).toBe(false);

@@ -54,6 +54,7 @@ export const APPROVAL_WORDS: Record<ApprovalKind, string> = {
 	message: "message",
 	"board-news": "Board news",
 	"task-report": "a queued task's done note",
+	"task-drop": "a queued task its lead dropped",
 	"role-entry": "added by a role",
 };
 

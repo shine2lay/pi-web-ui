@@ -370,6 +370,11 @@ export function sentOf(call: QuietCall, result: Pick<QuietMsg, "details">): Quie
 		}
 		case "queue_done":
 			return { t: "done" };
+		case "queue_control": {
+			// queue-drop: a lead dropping a task is something the turn did to its queue, like marking one done.
+			const n = num(a.id);
+			return str(a.action) === "drop" && n !== undefined ? { t: "dropped", n } : null;
+		}
 		default:
 			return null;
 	}

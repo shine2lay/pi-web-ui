@@ -85,6 +85,8 @@ export interface TaskQueueSections {
 	ready: UiTaskQueueTask[];
 	/** 做完的，最近做完的在前。 */
 	done: UiTaskQueueTask[];
+	/** queue-drop: the ones its lead dropped (not done), newest first. */
+	dropped: UiTaskQueueTask[];
 }
 
 export function taskQueueSections(q: UiTaskQueue | undefined): TaskQueueSections {
@@ -101,6 +103,7 @@ export function taskQueueSections(q: UiTaskQueue | undefined): TaskQueueSections
 		waiting: tasks.filter((t) => !t.lane && t.status === "waiting"),
 		ready: tasks.filter((t) => t.status === "ready"),
 		done: tasks.filter((t) => t.status === "done").sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0)),
+		dropped: tasks.filter((t) => t.status === "dropped").sort((a, b) => (b.dropped?.at ?? 0) - (a.dropped?.at ?? 0)),
 	};
 }
 
@@ -135,7 +138,7 @@ export function taskQueueStatusKey(q: UiTaskQueue, s: TaskQueueSections): TKey {
 
 /** queue-paused: the owner's pause an open task is under: its own, else its whole queue's. */
 export function taskQueueHeldOf(q: Pick<UiTaskQueue, "hold">, task: UiTaskQueueTask): UiTaskQueueHold | undefined {
-	return task.status === "done" ? undefined : (task.hold ?? q.hold);
+	return task.status === "done" || task.status === "dropped" ? undefined : (task.hold ?? q.hold);
 }
 
 /** queue-paused: "Paused by you \u00b7 since 12:10 \u00b7 why" ("with the whole queue" when it's the queue's pause). */
@@ -177,7 +180,7 @@ export function refLabel(r: Pick<UiTaskQueueRef, "name" | "id">): string {
 
 /** queue-blocked: an outside `after` its queue hasn't recorded over, and that isn't over there either. */
 function outsideOpen(r: UiTaskQueueRef): boolean {
-	return !r.over && r.status !== "done" && r.status !== "removed" && r.status !== "gone";
+	return !r.over && r.status !== "done" && r.status !== "dropped" && r.status !== "removed" && r.status !== "gone";
 }
 
 /**
@@ -218,6 +221,8 @@ function refStateKey(status: UiTaskQueueRef["status"]): TKey | undefined {
 			return "taskQueueRefNotStarted";
 		case "done":
 			return "taskQueueRefDone";
+		case "dropped":
+			return "taskQueueRefDropped";
 		case "removed":
 		case "gone":
 			return "taskQueueRefRemoved";
@@ -245,7 +250,10 @@ function RefItem({ r, first, onOpen }: { r: UiTaskQueueRef; first: boolean; onOp
 			) : (
 				<span title={r.title}>{refLabel(r)}</span>
 			)}
-			{key && <span className="task-queue-ref-state"> ({t(key)})</span>}
+			{key && (
+				// queue-drop: why its lead dropped it, on hover.
+				<span className="task-queue-ref-state" title={r.dropped}>{` (${t(key)})`}</span>
+			)}
 		</span>
 	);
 }
@@ -574,12 +582,18 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 		!queue.from &&
 		(!!queue.lanes ||
 			queue.lanesAtOnce !== undefined ||
-			queue.tasks.some((x) => x.touches !== undefined && x.status !== "done"));
+			queue.tasks.some((x) => x.touches !== undefined && x.status !== "done" && x.status !== "dropped"));
 	const stuckInChat = s.inChats.find((x) => x.status === "stuck" && !taskQueueHeldOf(queue, x));
 	const currentNeedsYou = s.current?.status === "stuck" && !taskQueueHeldOf(queue, s.current);
 
-	const row = (task: UiTaskQueueTask, kind: "current" | "lane" | "waiting" | "ready" | "done", index = 0) => {
+	const row = (
+		task: UiTaskQueueTask,
+		kind: "current" | "lane" | "waiting" | "ready" | "done" | "dropped",
+		index = 0,
+	) => {
 		const expanded = open.has(task.id);
+		// queue-drop: a dropped task is over, like a done one: no lane, controls, pause or after lines.
+		const over = kind === "done" || kind === "dropped";
 		const wait = kind === "waiting" ? task.wait : undefined;
 		// queue-paused: the owner's pause on it (its own, or its whole queue's).
 		const held = taskQueueHeldOf(queue, task);
@@ -598,9 +612,11 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 		const when =
 			kind === "done" && task.doneAt
 				? t("taskQueueFinishedAt", { time: lineTime(task.doneAt) })
-				: (kind === "current" || kind === "lane" || kind === "waiting") && task.startedAt
-					? t("taskQueueStarted", { time: lineTime(task.startedAt) })
-					: "";
+				: kind === "dropped" && task.dropped
+					? t("taskQueueDroppedAt", { time: lineTime(task.dropped.at) })
+					: (kind === "current" || kind === "lane" || kind === "waiting") && task.startedAt
+						? t("taskQueueStarted", { time: lineTime(task.startedAt) })
+						: "";
 		return (
 			<li key={task.id} className={flash === task.id ? `${cls} task-queue-focus` : cls} data-task-id={task.id}>
 				<div className="task-queue-task-head">
@@ -614,7 +630,7 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 						<span className="task-queue-id">#{task.id}</span>
 						<span className="task-queue-title-text">{task.plan.title}</span>
 					</button>
-					{kind !== "done" && laneNo.has(task.id) && (
+					{!over && laneNo.has(task.id) && (
 						<span className="task-queue-lane" data-lane={laneNo.get(task.id)}>
 							{t("taskQueueLane", { n: laneNo.get(task.id) ?? "" })}
 						</span>
@@ -629,7 +645,7 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 							{t("taskQueueOpenChat")}
 						</button>
 					)}
-					{kind !== "done" && controls && (
+					{!over && controls && (
 						// queue-paused: the owner's Pause / Resume on this task (Resume lifts only its own pause).
 						<button
 							type="button"
@@ -694,7 +710,10 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 							</span>
 						))}
 				</div>
-				{held && kind !== "done" && <PausedLine hold={held} whole={!task.hold} />}
+				{held && !over && <PausedLine hold={held} whole={!task.hold} />}
+				{kind === "dropped" && (
+					<div className="task-queue-dropped">{t("taskQueueDroppedBy", { why: task.dropped?.why ?? "" })}</div>
+				)}
 				{task.status === "asking" && (
 					<div className="task-queue-asking" title={task.question}>
 						{/* task-question decisions (rule 21): the question is with Ops or its department's lead, not the main chat. */}
@@ -737,12 +756,12 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 						)}
 					</div>
 				)}
-				{kind !== "done" && task.touches !== undefined && (
+				{!over && task.touches !== undefined && (
 					<div className="task-queue-touches">
 						{task.touches.length > 0 ? `${t("taskQueueTouches")}: ${task.touches.join(", ")}` : t("taskQueueRunsAlone")}
 					</div>
 				)}
-				{kind !== "done" && (!!task.after?.length || !!task.outside?.length) && (
+				{!over && (!!task.after?.length || !!task.outside?.length) && (
 					// queue-blocked: tasks in other queues ("temper #38") after this queue's numbers.
 					<AfterLine task={task} queue={queue} onOpenChat={onOpenChat} onShowTask={showTask} />
 				)}
@@ -997,6 +1016,26 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 							{allDone ? t("taskQueueShowFewer") : t("taskQueueShowAllDone", { n: s.done.length })}
 						</button>
 					)}
+				</section>
+			)}
+			{s.dropped.length > 0 && (
+				// queue-drop: tasks its lead dropped, with why (Clear takes them off with the done ones).
+				<section className="task-queue-section">
+					<div className="task-queue-heading-row">
+						<h4 className="task-queue-heading">{t("taskQueueDropped")}</h4>
+						{controls && s.done.length === 0 && (
+							<button
+								type="button"
+								className="task-queue-clear"
+								title={t("taskQueueClearDoneHint")}
+								disabled={busy}
+								onClick={() => run("clear")}
+							>
+								{t("taskQueueClearDone")}
+							</button>
+						)}
+					</div>
+					<ul className="task-queue-list">{s.dropped.map((task) => row(task, "dropped"))}</ul>
 				</section>
 			)}
 		</div>

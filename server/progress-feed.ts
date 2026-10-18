@@ -289,6 +289,8 @@ export function recordKind(r: DecisionRecord): string {
 			return `role message${r.kind ? ` (${r.kind})` : ""}`;
 		case "plan":
 			if (r.op === "done") return `done note${typeof r.task === "number" ? ` (task #${r.task})` : ""}`;
+			// queue-drop: a task its queue's lead dropped, with why.
+			if (r.op === "drop") return `task dropped by its lead${typeof r.task === "number" ? ` (task #${r.task})` : ""}`;
 			return `queue plan${typeof r.task === "number" ? ` (task #${r.task}${r.op ? `, ${r.op}` : ""})` : ""}`;
 		case "update":
 			return "progress update";
@@ -312,6 +314,7 @@ export function recordGist(r: DecisionRecord): string {
 			return `${r.title ?? ""}${r.ownerWords ? ` (the owner's words: "${r.ownerWords}")` : ""}`;
 		case "plan":
 			if (r.op === "done") return r.summary || r.plan?.title || "";
+			if (r.op === "drop") return r.summary ? `dropped: ${r.summary}` : "dropped";
 			return [r.plan?.title, r.plan?.goal].filter(Boolean).join(": ");
 		case "update":
 			return r.update?.changed || r.update?.next || "";
@@ -1512,7 +1515,7 @@ export class ProgressFeed {
 			const list: UiRoleUpdate[] = [];
 			for (let i = c.filed.length - 1; i >= 0 && list.length < ROLE_UPDATES; i--) {
 				const r = c.filed[i];
-				if (r.source !== "tldr" && !(r.source === "plan" && r.op === "done")) continue;
+				if (r.source !== "tldr" && !(r.source === "plan" && (r.op === "done" || r.op === "drop"))) continue;
 				list.push({
 					id: r.id,
 					at: r.at,

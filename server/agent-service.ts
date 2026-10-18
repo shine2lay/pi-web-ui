@@ -5465,9 +5465,9 @@ export class ClientSession {
 		let keep = false;
 		try {
 			const q = taskQueueFromEntries(conv.session.sessionManager.getBranch(), true);
-			keep = q.from
-				? q.tasks.some((t) => t.status !== "done")
-				: q.tasks.some((t) => t.lane === true && !!t.chat && t.status !== "done");
+			// queue-drop: a task its lead dropped is over, like a done one.
+			const over = (t: { status: string }) => t.status === "done" || t.status === "dropped";
+			keep = q.from ? q.tasks.some((t) => !over(t)) : q.tasks.some((t) => t.lane === true && !!t.chat && !over(t));
 		} catch {
 			// unreadable: treat it as a plain chat
 		}

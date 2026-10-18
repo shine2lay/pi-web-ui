@@ -3287,6 +3287,19 @@ button.rolemsg-fold:focus-visible {
 .task-queue-task.done {
 	color: var(--text-faint);
 }
+/* queue-drop: a task its lead dropped: faint like a done one, its title struck through, with why below. */
+.task-queue-task.dropped {
+	color: var(--text-faint);
+}
+.task-queue-task.dropped .task-queue-title-text {
+	text-decoration: line-through;
+}
+.task-queue-dropped {
+	margin-top: 2px;
+	color: var(--text-dim);
+	font-size: 12.5px;
+	overflow-wrap: anywhere;
+}
 /* On hold (pi-queue queue_wait): dashed edge; amber once the wait gave up. */
 .task-queue-task.waiting {
 	border-left-style: dashed;

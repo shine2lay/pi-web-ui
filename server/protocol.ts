@@ -224,7 +224,9 @@ export type UiQuietSent =
 	| { t: "plan"; n: number }
 	| { t: "answered"; n: number }
 	| { t: "passed"; n: number }
-	| { t: "done" };
+	| { t: "done" }
+	/** queue-drop: queue_control drop, the lead taking task #n out with a reason. */
+	| { t: "dropped"; n: number };
 
 /** quiet-turns: a turn another agent began, as the server sees it in the whole transcript (for the parts of
  *  it the page hasn't loaded: UiExchangeDigest.quiet, UiState.quietLead). */
@@ -360,8 +362,10 @@ export interface UiTaskQueueTask {
 	/** pi-queue 的任务编号（#n），一条对话里从 1 往上数。 */
 	id: number;
 	/** queue-main-chat: asking = a task in a chat of its own asked its main chat (the chat whose queue holds
-	 *  it); the main chat answers it or passes it on (stuck). Nothing says the user is needed meanwhile. */
-	status: "ready" | "working" | "asking" | "stuck" | "waiting" | "blocked" | "done";
+	 *  it); the main chat answers it or passes it on (stuck). Nothing says the user is needed meanwhile.
+	 *  queue-drop (owner 2026-10-17): dropped = the queue's main chat (its lead) ended it without it being done,
+	 *  with a reason (`dropped`); not the owner's removal, which takes it off the list. */
+	status: "ready" | "working" | "asking" | "stuck" | "waiting" | "blocked" | "done" | "dropped";
 	plan: UiTaskQueuePlan;
 	/** queue-blocked: blocked: what it waits on (tasks in any queue and/or a need) and when it's poked. */
 	block?: UiTaskQueueBlock;
@@ -391,6 +395,8 @@ export interface UiTaskQueueTask {
 	wait?: UiTaskQueueWait;
 	/** done：做了什么（agent 的总结）。 */
 	summary?: string;
+	/** queue-drop: dropped: why and when its lead dropped it (pi-queue's QueueTask.dropped). */
+	dropped?: { why: string; at: number };
 	addedAt: number;
 	startedAt?: number;
 	doneAt?: number;
@@ -438,8 +444,11 @@ export interface UiTaskQueueRef {
 	title?: string;
 	/** Its own chat, to open from the line. */
 	chat?: UiTaskQueueChat;
-	/** outside after: its queue recorded it over (done, or removed when `removed`). */
-	over?: { at: number; removed?: boolean };
+	/** outside after: its queue recorded it over (done, or removed when `removed`; `dropped`: its lead dropped it
+	 *  there, with this reason, and `removed` is set too). */
+	over?: { at: number; removed?: boolean; dropped?: string };
+	/** queue-drop: that task was dropped by its lead, with this reason (status dropped, or removed later). */
+	dropped?: string;
 	/** queue-paused: that task is paused by the owner (itself or its whole queue). */
 	held?: boolean;
 }
@@ -1948,8 +1957,10 @@ export interface UiRoleTldrLine {
 /** roles-overview: a task of a role's home queue. */
 export interface UiRoleTask {
 	id: number;
-	status: "ready" | "working" | "asking" | "stuck" | "waiting" | "blocked" | "done";
+	status: "ready" | "working" | "asking" | "stuck" | "waiting" | "blocked" | "done" | "dropped";
 	title: string;
+	/** queue-drop: dropped: why and when its lead dropped it (UiRoleQueue.dropped). */
+	dropped?: { why: string; at: number };
 	/** Its own chat, once started. */
 	chat?: { file: string; title?: string };
 	/** On hold: what it waits on; blocked: what it is blocked on. */
@@ -2013,7 +2024,10 @@ export interface UiRoleQueue {
 	active: UiRoleTask[];
 	/** Tasks not started yet (queue order, at most ROLES_QUEUED_MAX). */
 	queued: UiRoleTask[];
-	counts: { active: number; queued: number; done: number };
+	/** queue-drop: tasks its lead dropped, with why (newest first, at most ROLES_DROPPED_MAX), until cleared. */
+	dropped?: UiRoleTask[];
+	/** dropped: how many dropped tasks its queue lists; absent when none (and from an older server). */
+	counts: { active: number; queued: number; done: number; dropped?: number };
 }
 
 /** roles-overview: a request or question to a role that has no reply yet (the whole role-message store). */
@@ -2151,8 +2165,8 @@ export interface UiRoleBoardOrder {
 // ---------------------------------------------------------------------------------------------
 
 /** How a point reached the records: an auto-approved plan, a plan he approved in a dialog, his pick in a
- *  dialog, a role's question he didn't pick from, his order, a message, Board news, a task's done note,
- *  an entry a role added with decision_log. */
+ *  dialog, a role's question he didn't pick from, his order, a message, Board news, a task's done note, a
+ *  task its lead dropped (queue-drop), an entry a role added with decision_log. */
 export type UiApprovalKind =
 	| "auto-plan"
 	| "dialog-plan"
@@ -2162,6 +2176,7 @@ export type UiApprovalKind =
 	| "message"
 	| "board-news"
 	| "task-report"
+	| "task-drop"
 	| "role-entry";
 
 /** A credit flag: a rider inside the option he picked; a role's wording says he decided while no record of
