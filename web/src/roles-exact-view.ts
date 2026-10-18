@@ -821,6 +821,15 @@ export function createExactRolesView(
 		const freshText = unavailable
 			? `${model.source === "connected-source-unverified" ? (asksWhy?.label ?? "Incomplete status") : source.label} · ${receipt}`
 			: `Live · ${model.receivedAt !== null ? `updated ${exactClock(model.receivedAt)}` : receipt}`;
+		// roles-retry-pill (owner 2026-10-18): the freshness banner never shows. Its reason moves into the
+		// status pill's tooltip, and the pill does the banner's old Retry now / Refresh now in every state.
+		const why = {
+			title: source.title || "Some owner asks could not be confirmed",
+			body:
+				source.body ||
+				asksWhy?.body ||
+				"The received list may be incomplete. Open the original chats for anything not shown here.",
+		};
 		const date = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(model.now);
 		const spending = model.roles.filter((r) => r.spend.reported);
 		const budgetRole = spending.length === 1 ? spending[0] : null;
@@ -840,21 +849,18 @@ export function createExactRolesView(
 				model.roster === "reported"
 					? `${model.roles.length} departments${model.omitted ? " shown · some unavailable" : ""} · ${date}`
 					: "Department list unavailable",
-			fresh: { text: freshText, fg: unavailable ? palette.fg : "#9FD8B8", bd: unavailable ? palette.bd : "#2F4A3C" },
-			banner: {
-				show: unavailable,
-				title: source.title || "Some owner asks could not be confirmed",
-				body:
-					source.body ||
-					asksWhy?.body ||
-					"The received list may be incomplete. Open the original chats for anything not shown here.",
-				...palette,
-				hasAction: unavailable && !loading,
-				action: stale ? "Refresh now" : "Retry now",
+			fresh: {
+				text: freshText,
+				fg: unavailable ? palette.fg : "#9FD8B8",
+				bd: unavailable ? palette.bd : "#2F4A3C",
+				tip: unavailable ? `${why.title}\n${why.body}\nClick to retry` : "Click to refresh",
+				label: `${freshText}. ${unavailable ? "Retry now" : "Refresh now"}`,
 				retry: () => {
 					if (!disposed) actions.reload();
 				},
 			},
+			// The supplied template keeps its banner markup, unused (the same hidden shape the reference fixture sends).
+			banner: { show: false, bg: "", bd: "", fg: "", title: "", body: "", hasAction: false, action: "" },
 			footerText: model.lastReceived
 				? "Last received data · current state unconfirmed"
 				: "Existing Roles feed · reported information",

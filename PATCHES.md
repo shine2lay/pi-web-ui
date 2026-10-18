@@ -19,6 +19,15 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: `tests/unit/check-patches-md.test.ts` (this file passes; a twice-used and a glued heading fail, named) and `tests/unit/patches-union.test.ts` (scratch repo: no attribute, a conflict; attribute and driver, both entries whole; attribute without the driver, a normal conflict), then the landing gate. No app code, nothing to install.
 - Undo: revert this commit, then `git config --remove-section merge.patches-union`.
 
+## roles-retry-pill: the Roles status pill retries; no freshness banner
+
+- `local` (owner 2026-10-18, "lets also remove this … from roles page, make the status on the top right clickable for retry instead", Ops #215). Hypothesis H-ROLES-RETRY-PILL-1 and result: `docs/roles-retry-pill.md`.
+- The full-width "Some owner asks could not be confirmed / The received list may be incomplete…" banner is gone in every state: the live adapter (`roles-exact-view.ts`) sends `banner.show` false, the way the helper row went. The supplied template keeps its banner markup, unused.
+- The status pill at the top right (`roles-u0/surface.html`) holds a native button inside its `role="status"` div: a click, Enter or Space runs the banner's old Retry now / Refresh now (`actions.reload()`, a fresh `roles_watch`), in every state. Its tooltip gives the banner's old reason (with #206's `ASKS_UNCONFIRMED` reasons, whose "Asks unconfirmed: …" pill wording stays) and "Click to retry", or "Click to refresh" when live; its name is the pill's text plus "Retry now" or "Refresh now". Styled to look as before (no background, border or padding; inherited colour and font; pointer cursor); a stretched `::before` makes the whole pill the target and carries the focus ring.
+- The inbox's own empty text ("Current owner asks could not be confirmed.") stays.
+- Checks: `tests/unit/roles-exact.test.ts` (no banner in any source state, the tooltip and name, one reload per click in a mounted page) and `tests/roles-exact-test.mjs` (no alert row, the pill's colours, Enter and Space; #206's phone header step now changes the header through the pill's text, since the banner that made it tall is gone), then the landing gate.
+- Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
+
 ## roles-config-history: record each role's settings changes and list them in its Config tab
 
 - `local` (owner 2026-10-18, "create those tasks and queue them", Ops #209). Hypothesis H-ROLES-CONFIG-1 and result: `docs/roles-config-history.md`.

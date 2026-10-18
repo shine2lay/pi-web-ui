@@ -322,11 +322,32 @@ try {
 				await page.screenshot({ path: join(output, "unavailable.png") });
 			}
 			if (["disconnected", "stale"].includes(mode)) {
-				const colour = await frame.getByRole("alert").evaluate((el) => getComputedStyle(el).backgroundColor);
-				assert.equal(colour, mode === "stale" ? "rgb(29, 26, 18)" : "rgb(34, 20, 21)");
-				await frame
-					.getByRole("button", { name: mode === "stale" ? "Refresh now" : "Retry now", exact: true })
-					.waitFor();
+				// roles-retry-pill: no banner; the status pill says it in its colour and tooltip, and retries.
+				assert.equal(await frame.getByRole("alert").count(), 0);
+				const pill = frame.locator('header [role="status"] > button');
+				const look = await pill.evaluate((el) => ({
+					colour: getComputedStyle(el).color,
+					cursor: getComputedStyle(el).cursor,
+					background: getComputedStyle(el).backgroundColor,
+				}));
+				assert.deepEqual(look, {
+					colour: mode === "stale" ? "rgb(240, 185, 90)" : "rgb(255, 138, 128)",
+					cursor: "pointer",
+					background: "rgba(0, 0, 0, 0)",
+				});
+				assert.equal(await pill.getAttribute("aria-label"), `${await pill.innerText()}. Retry now`);
+				const reason = mode === "stale" ? "Role status may be out of date" : "Disconnected from the Roles service";
+				assert.match(await pill.getAttribute("title"), new RegExp(`^${reason}\\n.+\\nClick to retry$`));
+				if (mode === "stale") {
+					const watches = async () =>
+						(await page.evaluate(() => window.rolesExactTest.getState())).sent.filter((t) => t === "roles_watch")
+							.length;
+					const before = await watches();
+					await pill.click();
+					await pill.press("Enter");
+					await pill.press("Space");
+					assert.equal(await watches(), before + 3);
+				}
 				await page.mouse.move(5, 5);
 				await baselineContrast(0.8);
 				assert.ok((await frame.getByRole("button", { name: /^Ops / }).innerText()).includes("Last known"));
@@ -381,15 +402,19 @@ try {
 		await page.screenshot({ path: join(output, "laptop.png") });
 		await page.setViewportSize({ width: 390, height: 844 });
 		await checkFloating(page, "phone");
-		// roles-small-fixes: the live overlap came with a tall wrapped header on a phone; the stale banner makes one.
+		// roles-small-fixes: the live overlap came with a tall wrapped header on a phone (then made by the stale
+		// banner). roles-retry-pill took the banner away, so the header now changes only through the status pill's
+		// text; the cards must still clear it and the graph keep its planned height (chromeHeight is recorded).
+		const pill = (text) => frame.locator('header [role="status"] > button', { hasText: text });
 		await page.evaluate(() => window.rolesExactTest.deliver("stale"));
-		await frame.getByRole("alert").waitFor();
-		await checkFloating(page, "phone, tall header");
-		await page.screenshot({ path: join(output, "phone-tall-header.png") });
+		await pill(/^Stale \u00b7 /).waitFor();
+		assert.equal(await frame.getByRole("alert").count(), 0);
+		await checkFloating(page, "phone, stale header");
+		await page.screenshot({ path: join(output, "phone-stale-header.png") });
 		await page.evaluate(() => window.rolesExactTest.deliver());
 		await frame.getByText("2 waiting on you", { exact: true }).waitFor();
-		await frame.getByRole("alert").waitFor({ state: "hidden" });
-		await checkFloating(page, "phone, header shrinks back");
+		await pill(/^Live \u00b7 /).waitFor();
+		await checkFloating(page, "phone, header back to live");
 		await frame.locator("[data-boxgrid]").waitFor();
 		const pan = await frame.locator("[data-boxgrid]").evaluate((el) => {
 			let p = el.parentElement;

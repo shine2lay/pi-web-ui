@@ -3,7 +3,7 @@
 // The real design's presentation-only adapter: fixed data, no chats, model requests,
 // tracking producers or production fonts. Pixel checks use the separate reference recipe.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { projectExactRoles, type ExactRoles } from "../../web/src/roles-exact-model.js";
+import { EXACT_SOURCE, projectExactRoles, type ExactRoles } from "../../web/src/roles-exact-model.js";
 import { createExactRolesView } from "../../web/src/roles-exact-view.js";
 import { ringAnchor, ringLayout } from "../../web/src/roles-u0/layout.js";
 import { bindRolesSurface } from "../../web/src/roles-u0/surface.js";
@@ -256,7 +256,9 @@ describe("the supplied Roles design with the existing feed", () => {
 	] as const)("does not show a current all-clear for %s", (_label, connection, extra) => {
 		const { view } = fixture(projectExactRoles(state([role()], [], extra), connection, NOW));
 		const v = view.values();
-		expect(object(v.banner).show).toBe(true);
+		expect(object(v.banner).show).toBe(false);
+		expect(String(object(v.fresh).text)).not.toMatch(/^Live/);
+		expect(object(v.fresh).tip).toMatch(/\nClick to retry$/);
 		expect(v.emptyInboxText).toContain("could not be confirmed");
 		expect(v.youText).toBe("Current asks unknown");
 		expect(v.lastKnown).toBe(true);
@@ -409,18 +411,52 @@ describe("the supplied Roles design with the existing feed", () => {
 	});
 
 	it.each([
-		["error", "open", { status: "error" }, "#FF8A80", "Retry now"],
-		["disconnected", "closed", {}, "#FF8A80", "Retry now"],
-		["stale", "open", { heardAt: NOW - 180_000 }, "#F0B95A", "Refresh now"],
-	] as const)("preserves the %s warning palette, receipt time and action", (_name, connection, extra, fg, action) => {
-		const { view, actions } = fixture(projectExactRoles(state([role()], [], extra), connection, NOW));
-		const v = view.values();
-		expect(object(v.banner)).toMatchObject({ show: true, fg, hasAction: true, action });
-		expect(object(v.fresh)).toMatchObject({ fg });
-		expect(object(v.fresh).text).toContain("last received");
-		invoke(object(v.banner).retry);
-		expect(actions.reload).toHaveBeenCalledTimes(1);
-	});
+		["error", "open", { status: "error" }, "#FF8A80"],
+		["disconnected", "closed", {}, "#FF8A80"],
+		["stale", "open", { heardAt: NOW - 180_000 }, "#F0B95A"],
+	] as const)(
+		"keeps the %s warning palette and receipt time; the status pill retries",
+		(_name, connection, extra, fg) => {
+			const { view, actions } = fixture(projectExactRoles(state([role()], [], extra), connection, NOW));
+			const v = view.values();
+			expect(object(v.banner).show).toBe(false);
+			expect(object(v.fresh)).toMatchObject({ fg });
+			const text = String(object(v.fresh).text);
+			expect(text).toContain("last received");
+			expect(object(v.fresh).label).toBe(`${text}. Retry now`);
+			invoke(object(v.fresh).retry);
+			expect(actions.reload).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it.each([
+		["connected-source-unverified", "open", {}],
+		["awaiting", "open", { status: "loading", overview: null }],
+		["error", "open", { status: "error", overview: null }],
+		["cached-error", "open", { status: "error" }],
+		["disconnected", "closed", { overview: null }],
+		["cached", "closed", {}],
+		["stale", "open", { heardAt: NOW - 180_000 }],
+		["partial", "open", { overview: { at: NOW, roles: [], asks: [], work: { initiatives: [], projects: [] } } }],
+		["unknown", "open", { overview: null }],
+	] as const)(
+		"roles-retry-pill: no banner when the source is %s; the pill's tooltip says why",
+		(source, connection, extra) => {
+			const model = projectExactRoles(state([role()], [], extra), connection, NOW);
+			expect(model.source).toBe(source);
+			const v = fixture(model).view.values();
+			expect(object(v.banner).show).toBe(false);
+			const fresh = object(v.fresh);
+			if (source === "connected-source-unverified") {
+				expect(fresh.tip).toBe("Click to refresh");
+				expect(fresh.label).toBe("Live \u00b7 updated 12:00. Refresh now");
+			} else {
+				const why = EXACT_SOURCE[source];
+				expect(fresh.tip).toBe(`${why.title}\n${why.body}\nClick to retry`);
+				expect(fresh.label).toBe(`${String(fresh.text)}. Retry now`);
+			}
+		},
+	);
 
 	it("uses the displayed overview's receipt rather than a later transport or server timestamp", () => {
 		const { view } = fixture(
@@ -448,9 +484,13 @@ describe("the supplied Roles design with the existing feed", () => {
 		},
 	);
 
-	it("gives an explicit uncertainty reason rather than a green connected banner", () => {
+	it("gives an explicit uncertainty reason in the status pill's tooltip rather than a green status", () => {
 		const { view } = fixture(projectExactRoles(state([role()], [], { appliedAt: null }), "open", NOW));
-		expect(object(view.values().banner)).toMatchObject({ show: true, title: "Some owner asks could not be confirmed" });
+		expect(object(view.values().banner).show).toBe(false);
+		// roles-small-fixes N2's reason (still checking) is what the tooltip gives, not the generic one.
+		expect(object(view.values().fresh).tip).toBe(
+			"Some owner asks could not be confirmed\nThe server hasn\u2019t confirmed the current asks since this page connected. The list below is the last one received.\nClick to retry",
+		);
 		expect(object(view.values().fresh).fg).toBe("#F0B95A");
 		expect(view.values().emptyInboxText).toContain("could not be confirmed");
 	});
@@ -473,8 +513,12 @@ describe("the supplied Roles design with the existing feed", () => {
 		const v = fixture(model).view.values();
 		expect(object(v.fresh).text).toBe(`Asks unconfirmed: ${reason} \u00b7 last received 12:00`);
 		expect(object(v.fresh)).toMatchObject({ fg: "#F0B95A", bd: "#4D3F1F" });
-		expect(object(v.banner)).toMatchObject({ show: true, title: "Some owner asks could not be confirmed" });
-		expect(String(object(v.banner).body)).not.toContain("may be incomplete");
+		// roles-retry-pill: no banner; the pill's tooltip carries the reason and the retry.
+		expect(object(v.banner).show).toBe(false);
+		const tip = String(object(v.fresh).tip);
+		expect(tip).toMatch(/^Some owner asks could not be confirmed\n.+\nClick to retry$/);
+		expect(tip).not.toContain("may be incomplete");
+		expect(object(v.fresh).label).toBe(`Asks unconfirmed: ${reason} \u00b7 last received 12:00. Retry now`);
 	});
 
 	it("draws only known current owner-ask lines and does not invent message kinds", () => {
@@ -818,12 +862,31 @@ describe("the supplied Roles design with the existing feed", () => {
 		expect(document.querySelector("img[onerror]")).toBeNull();
 	});
 
-	it("Retry is read-only and the supplied banner button invokes it", () => {
-		const { actions } = fixture(projectExactRoles(state([], [], { status: "error" }), "open", NOW), true);
-		const button = Array.from(document.querySelectorAll("button")).find((b) => b.textContent === "Retry now");
-		expect(button).toBeDefined();
-		button?.click();
+	it("roles-retry-pill: the status pill is a native button that retries in every state; no banner is drawn", () => {
+		const { actions, update } = fixture(projectExactRoles(state([], [], { status: "error" }), "open", NOW), true);
+		expect(document.querySelector('[role="alert"]')).toBeNull();
+		const names = Array.from(document.querySelectorAll("button"), (b) => b.textContent);
+		expect(names).not.toContain("Retry now");
+		expect(names).not.toContain("Refresh now");
+		const pill = document.querySelector('header [role="status"] > button');
+		if (!(pill instanceof HTMLButtonElement)) throw new Error("expected the status pill's button");
+		expect(pill.type).toBe("button");
+		expect(pill.textContent).toBe(document.querySelector('header [role="status"]')?.textContent);
+		const why = EXACT_SOURCE["cached-error"];
+		expect(pill.title).toBe(`${why.title}\n${why.body}\nClick to retry`);
+		expect(pill.getAttribute("aria-label")).toBe(`${pill.textContent}. Retry now`);
+		expect(pill.style.cursor).toBe("pointer");
+		pill.click();
 		expect(actions.reload).toHaveBeenCalledTimes(1);
+		update(projectExactRoles(state(), "open", NOW));
+		vi.runAllTimers();
+		const live = document.querySelector('header [role="status"] > button');
+		if (!(live instanceof HTMLButtonElement)) throw new Error("expected the status pill's button");
+		expect(live.textContent).toBe("Live \u00b7 updated 12:00");
+		expect(live.title).toBe("Click to refresh");
+		expect(live.getAttribute("aria-label")).toBe("Live \u00b7 updated 12:00. Refresh now");
+		live.click();
+		expect(actions.reload).toHaveBeenCalledTimes(2);
 		expect(actions.open).not.toHaveBeenCalled();
 	});
 });

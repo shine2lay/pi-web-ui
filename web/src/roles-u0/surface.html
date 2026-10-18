@@ -7,6 +7,8 @@ body{margin:0}
 [data-roles-floating="true"] [data-roles-title]{padding:4px 10px;border-radius:10px;background:#0B0C0EF2;max-width:100%;box-sizing:border-box}
 [data-roles-floating="true"] [data-roles-chrome] [role="status"]{background:#0B0C0EF2;max-width:100%;box-sizing:border-box;padding-top:4px!important;padding-bottom:4px!important}
 [data-roles-floating="true"] [data-roles-chrome] [role="alert"]{pointer-events:auto}
+[data-roles-retry]::before{content:"";position:absolute;inset:-1px;border-radius:999px}
+[data-roles-retry]:focus-visible::before{outline:2px solid currentColor;outline-offset:2px}
 [data-roles-floating="true"] [data-boxgrid]{height:calc(100vh - 76px)!important;min-height:calc(620px + var(--roles-header-space))!important;transition:none!important}
 [data-roles-floating="true"] [data-roles-you]{top:var(--roles-you-top)!important}
 [data-roles-floating="true"] [data-roles-loading]{position:absolute;top:calc(var(--roles-header-space) + 48px);left:32px;right:32px;z-index:1;pointer-events:none}
@@ -21,9 +23,11 @@ body{margin:0}
 <h1 style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.015em">Roles</h1>
 <span style="color: #A9AEB6; font-size: 14px">{{headingSummary}}</span>
 </div>
-<div role="status" style="display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid {{fresh.bd}}; color: {{fresh.fg}}; font-size: 13px; font-weight: 550">
+<div role="status" style="display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid {{fresh.bd}}; color: {{fresh.fg}}; font-size: 13px; font-weight: 550; position: relative">
+<button type="button" data-roles-retry="1" onClick="{{fresh.retry}}" title="{{fresh.tip}}" aria-label="{{fresh.label}}" style="all: unset; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; pointer-events: auto">
 <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="currentColor"></circle></svg>
 <span>{{fresh.text}}</span>
+</button>
 </div>
 </header>
 
