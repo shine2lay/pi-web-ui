@@ -146,6 +146,8 @@ describe("optional queue provenance wire and display", () => {
 			startChat: async () => ({ sessionFile: "/fixture" }),
 			runCommand: async () => true,
 			closeChat: async () => true,
+			chatState: async () => ({ state: "idle" }),
+			wakeChat: async () => true,
 		};
 		let calls = 0;
 		const uninstall = installQueueHost({
