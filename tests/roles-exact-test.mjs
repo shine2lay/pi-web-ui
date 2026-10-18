@@ -326,11 +326,12 @@ try {
 		await page.evaluate(() => window.rolesExactTest.deliver("long-report"));
 		await frame.getByRole("button", { name: /^Ops / }).click();
 		await settled();
-		await panel.getByRole("button", { name: /6 am report/i }).click();
-		await panel.getByText(/900 more lines not shown here/).waitFor();
+		// roles-small-fixes: the six-am removal took report sections off the page, so a long report never reaches the binder.
+		assert.equal(await panel.getByRole("button", { name: /6 am report/i }).count(), 0);
+		assert.equal(await panel.getByText(/more lines not shown here/).count(), 0);
 		await panel.getByRole("button", { name: "Close and return to all departments" }).click();
 		await panel.waitFor({ state: "hidden" });
-		record("a report over 1000 lines stays available with an explicit omission");
+		record("report sections are off the page, so a report over 1000 lines can't reach the binder");
 		await page.evaluate(() => window.rolesExactTest.deliver("crowded"));
 		await frame.getByText("55 waiting on you", { exact: true }).waitFor();
 		await frame.getByRole("button", { name: "You: open your decisions, questions and spending" }).click();
