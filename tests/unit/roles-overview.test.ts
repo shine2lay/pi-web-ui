@@ -187,18 +187,38 @@ describe("Roles answer target policy", () => {
 	it("keeps every original-chat route but exposes only question and native-plan targets", async () => {
 		const home = transcript("answer-policy");
 		const f = fake([role("ops", home)]);
-		const cases: [Ask["kind"], string, boolean][] = [
+		// pi-queue's plan pop-up shape (roles-small-fixes N1); the elicitation case has the title but not the shape.
+		const confirm: Partial<Ask> = {
+			body: "### Task #12: Fixture plan",
+			fields: [
+				{
+					id: "value",
+					text: "plan",
+					options: [
+						{ value: "yes", label: "Yes" },
+						{ value: "no", label: "No" },
+					],
+					multi: false,
+					allowText: false,
+				},
+			],
+		};
+		const elicitation: Partial<Ask> = {
+			fields: [{ id: "value", text: "Add to the queue?", options: [], multi: false, allowText: true }],
+		};
+		const cases: [Ask["kind"], string, boolean, Partial<Ask>?][] = [
 			["question", "Which option?", true],
-			["dialog", "Add to the queue?", true],
-			["dialog", "Change task #12?", true],
-			["dialog", "Grant subagent spawn budget?", false],
-			["dialog", "Discard preserved subagent worktrees?", false],
-			["dialog", "MCP tool approval", false],
-			["dialog", "Add to the queue?\n", false],
-			["approval", "Add to the queue?", false],
+			["dialog", "Add to the queue?", true, confirm],
+			["dialog", "Change task #12?", true, confirm],
+			["dialog", "Add to the queue?", false, elicitation],
+			["dialog", "Grant subagent spawn budget?", false, confirm],
+			["dialog", "Discard preserved subagent worktrees?", false, confirm],
+			["dialog", "MCP tool approval", false, confirm],
+			["dialog", "Add to the queue?\n", false, confirm],
+			["approval", "Add to the queue?", false, confirm],
 		];
-		for (const [i, [kind, title]] of cases.entries()) {
-			f.asks.push(ask({ id: `policy-${i}`, kind, title, sessionFile: home, createdAt: T0 + i }));
+		for (const [i, [kind, title, , over]] of cases.entries()) {
+			f.asks.push(ask({ id: `policy-${i}`, kind, title, sessionFile: home, createdAt: T0 + i, ...over }));
 		}
 		const before = readFileSync(home, "utf8");
 		const overview = await read(f);

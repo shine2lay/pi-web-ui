@@ -30,15 +30,37 @@ function optional(value: unknown, max: number): boolean {
 	return value === undefined || text(value, max);
 }
 
-/** Kind/title policy only; membership and complete-form checks still apply.
- * Generic dialogs carry no producer tag, so only the native queue-plan titles are allowed.
+/** Kind/shape policy only; membership and complete-form checks still apply.
+ * Generic dialogs carry no producer tag, so only the native queue-plan titles are allowed, and only in
+ * pi-queue's confirm shape (roles-small-fixes N1): one Yes/No field, no typed answer, a body starting
+ * "### Task #". An MCP form elicitation can build the same title, but only as a select or input pop-up,
+ * which has no body and other options, so it stays Open chat.
  */
 export function roleAnswerKindAllowed(
-	ask: Pick<Ask, "kind" | "title">,
+	ask: Pick<Ask, "kind" | "title"> & Partial<Pick<Ask, "body" | "fields">>,
 ): ask is Pick<Ask, "kind" | "title"> & { kind: UiRoleAskView["kind"] } {
 	if (ask.kind === "question" || ask.kind === "stuck") return true;
 	if (ask.kind !== "dialog" || typeof ask.title !== "string" || ask.title.length > 500) return false;
-	return ask.title === "Add to the queue?" || /^Change task #[1-9]\d*\?$/.exec(ask.title)?.[0] === ask.title;
+	const planTitle = ask.title === "Add to the queue?" || /^Change task #[1-9]\d*\?$/.exec(ask.title)?.[0] === ask.title;
+	return planTitle && planConfirmShape(ask);
+}
+
+/** pi-queue's plan pop-up is ctx.ui.confirm(title, "### Task #..."): exactly the native Yes/No field. */
+function planConfirmShape(ask: Partial<Pick<Ask, "body" | "fields">>): boolean {
+	if (typeof ask.body !== "string" || !ask.body.startsWith("### Task #")) return false;
+	if (!Array.isArray(ask.fields) || ask.fields.length !== 1) return false;
+	const f = ask.fields[0];
+	if (!f || f.id !== "value" || f.allowText !== false || f.multi !== false || f.dependsOn || f.optionsMap) return false;
+	const o = f.options;
+	return (
+		Array.isArray(o) &&
+		o.length === 2 &&
+		o[0]?.value === "yes" &&
+		o[0]?.label === "Yes" &&
+		o[1]?.value === "no" &&
+		o[1]?.label === "No" &&
+		o.every((x) => x.description === undefined && x.preview === undefined)
+	);
 }
 
 /** null means use the original chat: no other dialogs, built-in approvals or unsafe partial forms. */

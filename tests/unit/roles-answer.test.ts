@@ -132,11 +132,74 @@ describe("a complete bounded ask", () => {
 	});
 });
 
+// pi-queue's plan pop-up: ctx.ui.confirm(title, "### Task #...") as dialogAsk builds it.
+const plan = (title: string, over: Partial<Ask> = {}): Ask =>
+	fixture({
+		kind: "dialog",
+		title,
+		body: "### Task #12: Fixture plan\n\nGoal and limits.",
+		fields: [
+			field({
+				id: "value",
+				text: title,
+				options: [
+					{ value: "yes", label: "Yes" },
+					{ value: "no", label: "No" },
+				],
+				allowText: false,
+			}),
+		],
+		...over,
+	});
+
 describe("generic dialog policy", () => {
 	it.each(["Add to the queue?", "Change task #1?", "Change task #12345?"])("keeps native plan %s", (title) => {
-		const ask = fixture({ kind: "dialog", title });
+		const ask = plan(title);
 		expect(roleAnswerKindAllowed(ask)).toBe(true);
 		expect(askViewOf(ask)?.title).toBe(title);
+	});
+	// roles-small-fixes N1: an MCP form elicitation can build a plan title, but never pi-queue's confirm shape.
+	it.each([
+		["an elicitation select", { body: undefined, fields: [field({ id: "value", allowText: false })] }],
+		["an elicitation input", { body: undefined, fields: [field({ id: "value", options: [], allowText: true })] }],
+		["a body not from the queue", { body: "Pick a value" }],
+		["no body", { body: undefined }],
+		[
+			"a typed answer",
+			{
+				fields: [
+					field({
+						id: "value",
+						options: [
+							{ value: "yes", label: "Yes" },
+							{ value: "no", label: "No" },
+						],
+					}),
+				],
+			},
+		],
+		[
+			"select-style yes/no labels",
+			{
+				fields: [
+					field({
+						id: "value",
+						options: [
+							{ value: "yes", label: "yes" },
+							{ value: "no", label: "no" },
+						],
+						allowText: false,
+					}),
+				],
+			},
+		],
+		["two fields", { fields: [...plan("x").fields, field({ id: "more", allowText: false })] }],
+	] as [string, Partial<Ask>][])("keeps a plan title with %s in the original chat", (_, over) => {
+		for (const title of ["Add to the queue?", "Change task #3?"]) {
+			const ask = plan(title, over);
+			expect(roleAnswerKindAllowed(ask)).toBe(false);
+			expect(askViewOf(ask)).toBeNull();
+		}
 	});
 	it.each([
 		"MCP tool approval",
@@ -159,7 +222,7 @@ describe("generic dialog policy", () => {
 		"Change task #-1?",
 		"Change task #١?",
 	])("keeps %j in the original chat", (title) => {
-		const ask = fixture({ kind: "dialog", title });
+		const ask = plan(title);
 		expect(roleAnswerKindAllowed(ask)).toBe(false);
 		expect(askViewOf(ask)).toBeNull();
 	});
@@ -263,7 +326,7 @@ describe("real service lookup and delivery", () => {
 		expect(deliver).not.toHaveBeenCalled();
 	});
 	it("refuses an already-open plan after it becomes a forbidden dialog", async () => {
-		const ask = fixture({ kind: "dialog", title: "Add to the queue?" });
+		const ask = plan("Add to the queue?");
 		const { svc, item, deliver } = service(ask);
 		const opened = await svc.rolesAskOpen(item.key);
 		expect(opened.ok).toBe(true);
