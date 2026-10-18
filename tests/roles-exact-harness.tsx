@@ -69,6 +69,8 @@ function deliver(mode = "ready") {
 		focus: `The ${title} department's current scope.`,
 		workMode: "request-only",
 		workModeFrom: "rules",
+		spend:
+			id === "design" ? { state: "ok", spent: "$1,240.50", budget: "$2,000", age: "2 min ago" } : { state: "none" },
 		homeChat: { file: home(id), where: "home" },
 		goals: [],
 		requests: { open: i % 3 },
@@ -76,7 +78,15 @@ function deliver(mode = "ready") {
 		report: {
 			state: "report",
 			date: "2026-10-17",
-			sections: [{ heading: "Done", text: "Checked the received request.\nRecorded the next step." }],
+			sections: [
+				{
+					heading: "Done",
+					text:
+						mode === "long-report"
+							? Array(1100).fill("line").join("\n")
+							: "Checked the received request.\nRecorded the next step.",
+				},
+			],
 		},
 		queue: {
 			running: true,
@@ -124,8 +134,14 @@ function deliver(mode = "ready") {
 			roles[8].queue.active[0].title = "BAD\u202eTITLE";
 		}
 		if (mode === "partial") (roles[7].queue as unknown as Record<string, unknown>).active = "unreadable";
-		receiveRoles({ type: "roles", overview, checkedAt: at } as unknown as RolesPayload);
-		receiveRoles({ type: "roles", asks: asks.length, checkedAt: at + 1 } as RolesPayload);
+		const clock = Date.now;
+		try {
+			if (mode === "stale") Date.now = () => clock() - 180_000;
+			receiveRoles({ type: "roles", overview, checkedAt: at } as unknown as RolesPayload);
+			receiveRoles({ type: "roles", asks: asks.length, checkedAt: at + 1 } as RolesPayload);
+		} finally {
+			Date.now = clock;
+		}
 		if (mode === "disconnected") setAppGlobals({ status: "closed" });
 	});
 }

@@ -97,6 +97,7 @@ function fixture(initial: ExactRoles = projectExactRoles(state(), "open", NOW), 
 afterEach(() => {
 	for (const clean of cleanups.splice(0)) clean();
 	vi.useRealTimers();
+	vi.unstubAllGlobals();
 	document.body.replaceChildren();
 });
 
@@ -113,10 +114,11 @@ describe("the supplied Roles design with the existing feed", () => {
 			state: "working",
 			...ringAnchor(ringLayout([{ id: "ops", name: "Ops" }], 1400, 780), "ops"),
 		});
-		expect(object(values.fresh).text).toBe("Reported status");
+		expect(object(values.fresh).text).toBe("Live · updated 12:00");
+		expect(values.headingSummary).toBe("1 departments · Oct 17");
 		expect(object(values.graph).edges).toEqual([]);
 		expect(object(boxes[0]).lanes).toEqual([]);
-		expect(values.spendAmountText).toBe("Not connected yet");
+		expect(values.spendAmountText).toBe("Not recorded");
 		expect(values).not.toHaveProperty("namespace");
 	});
 
@@ -141,7 +143,7 @@ describe("the supplied Roles design with the existing feed", () => {
 			expect(panel?.textContent).toContain(title);
 		expect(panel?.textContent).toContain("Goal: Fewer stalls");
 		expect(panel?.textContent).toContain("Wiring the page");
-		expect(object(object(view.values().ex).spend)).toEqual({ own: "Not connected yet", req: "Not connected yet" });
+		expect(object(object(view.values().ex).spend)).toEqual({ own: "Not recorded", req: "Not recorded" });
 	});
 
 	it("does not expose chat paths or unprojected data in text, attributes or markup", () => {
@@ -187,7 +189,7 @@ describe("the supplied Roles design with the existing feed", () => {
 		const asks = Array.from({ length: 53 }, (_, n) => ask(n, n === 1 ? { text: "unsafe\u202etext" } : {}));
 		const { view, actions } = fixture(projectExactRoles(state([role()], asks), "open", NOW));
 		const v = view.values();
-		expect(v.youText).toBe("53 reported asks");
+		expect(v.youText).toBe("53 waiting on you");
 		const inbox = list(v.inbox).map(object);
 		expect(inbox).toHaveLength(51);
 		expect(inbox.at(-1)?.title).toBe("3 more reported asks are not shown here");
@@ -274,9 +276,130 @@ describe("the supplied Roles design with the existing feed", () => {
 		expect(object(list(object(v.ex).acts)[0]).text).toBe("Configuration history is not connected yet.");
 	});
 
+	it.each([
+		["error", "open", { status: "error" }, "#FF8A80", "Retry now"],
+		["disconnected", "closed", {}, "#FF8A80", "Retry now"],
+		["stale", "open", { heardAt: NOW - 180_000 }, "#F0B95A", "Refresh now"],
+	] as const)("preserves the %s warning palette, receipt time and action", (_name, connection, extra, fg, action) => {
+		const { view, actions } = fixture(projectExactRoles(state([role()], [], extra), connection, NOW));
+		const v = view.values();
+		expect(object(v.banner)).toMatchObject({ show: true, fg, hasAction: true, action });
+		expect(object(v.fresh)).toMatchObject({ fg });
+		expect(object(v.fresh).text).toContain("last received");
+		invoke(object(v.banner).retry);
+		expect(actions.reload).toHaveBeenCalledTimes(1);
+	});
+
+	it("gives an explicit uncertainty reason rather than a green connected banner", () => {
+		const { view } = fixture(projectExactRoles(state([role()], [], { appliedAt: null }), "open", NOW));
+		expect(object(view.values().banner)).toMatchObject({ show: true, title: "Some owner asks could not be confirmed" });
+		expect(object(view.values().fresh).fg).toBe("#F0B95A");
+		expect(view.values().emptyInboxText).toContain("could not be confirmed");
+	});
+
+	it("draws only known current owner-ask lines and does not invent message kinds", () => {
+		const rows = [role(), role({ id: "design", title: "Design" })];
+		const { view, update } = fixture(projectExactRoles(state(rows, [ask(1)]), "open", NOW));
+		const edges = list(object(view.values().graph).edges).map(object);
+		expect(edges).toHaveLength(1);
+		expect(edges[0]).toMatchObject({ chip: "Waiting on you", aria: "Ops: waiting on you", stroke: "#B08433" });
+		expect(edges[0].d).toMatch(/^M[\d. -]+ Q[\d. -]+$/);
+		invoke(edges[0].chipClick);
+		expect(view.values().exIsYou).toBe(true);
+		update(projectExactRoles(state(rows, [ask(1)]), "closed", NOW));
+		expect(list(object(view.values().graph).edges)).toHaveLength(0);
+	});
+
+	it("shows a role's validated own tally, not a system-wide total or requested spend", () => {
+		const spend = { state: "ok", spent: "$1,240.50", budget: "$2,000", age: "2 min ago" };
+		const { view } = fixture(projectExactRoles(state([role({ spend })]), "open", NOW), true);
+		view.openRole("ops");
+		vi.runAllTimers();
+		expect(object(object(view.values().ex).spend)).toEqual({ own: "$1,240.50 of $2,000", req: "Not recorded" });
+		expect(view.values().spendRoleText).toBe("Ops");
+		expect(view.values().spendAmountText).toBe("$1,240.50");
+		expect(view.values().spendBarWidth).toBe("62.025%");
+		expect(view.values().spendNoteText).toContain("Role’s own tally");
+		expect(document.body.textContent).not.toContain("$0");
+	});
+
+	it.each([
+		undefined,
+		{ state: "none" },
+		{ state: "unreadable" },
+		{ state: "old-week" },
+		{ state: "ok", spent: "$0", budget: "$0" },
+		{ state: "ok", spent: "USD 2", budget: "$20" },
+		{ state: "ok", spent: "$2\u202e", budget: "$20" },
+		{ state: "ok", spent: "$20", budget: "$20" },
+		{ state: { toString: "invalid" }, spent: "$2", budget: "$20" },
+	])("never treats an absent or invalid tally as zero (%j)", (spend) => {
+		const { view } = fixture(projectExactRoles(state([role({ spend })]), "open", NOW));
+		expect(view.values().spendAmountText).toBe("Not recorded");
+		expect(view.values().spendBarColor).toBe("transparent");
+	});
+
+	it("does not add multiple role budgets together, and marks stale/over-budget tallies", () => {
+		const spend = { state: "stale", spent: "$5", budget: "$20" };
+		const { view, update } = fixture(projectExactRoles(state([role({ spend })]), "open", NOW));
+		expect(view.values().spendBarColor).toBe("#F0B95A");
+		expect(view.values().spendNoteText).toContain("stale");
+		update(projectExactRoles(state([role({ spend: { ...spend, state: "over", spent: "$25" } })]), "open", NOW));
+		expect(view.values().spendBarWidth).toBe("100%");
+		expect(view.values().spendBarColor).toBe("#FF8A80");
+		update(projectExactRoles(state([role({ spend }), role({ id: "design", spend })]), "open", NOW));
+		expect(view.values().spendAmountText).toBe("Not recorded");
+		expect(view.values().spendRoleText).toBe("2 departments · see each role");
+	});
+
+	it("caps report lines with an omission row instead of breaking the whole page", () => {
+		const r = role({
+			report: {
+				state: "report",
+				date: "2026-10-17",
+				sections: [{ heading: "Done", text: Array(1100).fill("line").join("\n") }],
+			},
+		});
+		const { view } = fixture(projectExactRoles(state([r]), "open", NOW), true);
+		view.openRole("ops");
+		vi.runAllTimers();
+		expect(() => invoke(view.values().toggleRep)).not.toThrow();
+		expect(document.body.textContent).toContain("900 more lines not shown here");
+		expect(document.querySelector('[role="region"]')).not.toBeNull();
+	});
+
+	it("counts omitted tasks and mutes missing requester labels", () => {
+		const r = role({
+			queue: {
+				active: [],
+				queued: Array.from({ length: 23 }, (_, i) => task(i + 1, { status: "ready" })),
+				counts: { active: 0, queued: 23, done: 0 },
+			},
+		});
+		const { view } = fixture(projectExactRoles(state([r]), "open", NOW), true);
+		view.openRole("ops");
+		vi.runAllTimers();
+		expect(document.body.textContent).toContain("3 more tasks not shown here");
+		const queue = [...document.querySelectorAll("section")].find(
+			(el) => el.querySelector("h3")?.textContent === "Task queue",
+		);
+		const labels = [...(queue?.querySelectorAll("li > span") ?? [])].filter((el) => el.textContent === "Not recorded");
+		expect(labels).toHaveLength(20);
+		expect(labels.every((el) => el.style.color === "rgb(169, 174, 182)")).toBe(true);
+	});
+
+	it("does not keep hover dimming from a touch device after opening and closing a card", () => {
+		vi.stubGlobal("matchMedia", () => ({ matches: false }));
+		const { view } = fixture(projectExactRoles(state([role(), role({ id: "design" })]), "open", NOW));
+		invoke(object(list(object(view.values().glance).boxes)[0]).hoverOn);
+		view.openRole("ops");
+		view.close(true);
+		expect(list(object(view.values().glance).boxes).map((b) => object(b).op)).toEqual(["1", "1"]);
+	});
+
 	it("Retry is read-only and the supplied banner button invokes it", () => {
 		const { actions } = fixture(projectExactRoles(state([], [], { status: "error" }), "open", NOW), true);
-		const button = Array.from(document.querySelectorAll("button")).find((b) => b.textContent === "Retry");
+		const button = Array.from(document.querySelectorAll("button")).find((b) => b.textContent === "Retry now");
 		expect(button).toBeDefined();
 		button?.click();
 		expect(actions.reload).toHaveBeenCalledTimes(1);

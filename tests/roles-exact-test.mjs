@@ -58,7 +58,7 @@ const server = createServer((req, res) => {
 	res.setHeader("Content-Type", source ? "text/javascript" : "text/html");
 	res.end(
 		source ??
-			'<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Isolated Roles check</title></head><body><script src="/app.js"></script></body></html>',
+			'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Isolated Roles check</title></head><body><script src="/app.js"></script></body></html>',
 	);
 });
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
@@ -79,7 +79,11 @@ const record = (name) => {
 };
 try {
 	if (phase !== "reference") {
-		const context = await browser.newContext({ viewport: { width: 1440, height: 1300 }, deviceScaleFactor: 1 });
+		const context = await browser.newContext({
+			viewport: { width: 1440, height: 1300 },
+			deviceScaleFactor: 1,
+			reducedMotion: "reduce",
+		});
 		await context.route("**/*", (route) =>
 			route.request().url().startsWith(origin) ? route.continue() : route.abort(),
 		);
@@ -102,8 +106,8 @@ try {
 		const panel = frame.locator('[role="region"]');
 		// A script-disabled child also blocks Playwright's child-window retry timer.
 		// Observe the real CSS transition from the host; never force-click or enable scripts.
-		const settled = () =>
-			page.waitForFunction(
+		const settled = (ownerPage = page) =>
+			ownerPage.waitForFunction(
 				() => {
 					const region = document
 						.querySelector('iframe[title="Roles"]')
@@ -161,17 +165,33 @@ try {
 		await panel.getByRole("button", { name: "Close and return to all departments" }).click();
 		await panel.waitFor({ state: "hidden" });
 		record("owner inbox has existing safe Open chat actions, no inline consent");
-		for (const mode of ["error", "disconnected", "first-error", "loading", "partial"]) {
+		for (const mode of ["error", "disconnected", "stale", "first-error", "loading", "partial"]) {
 			await page.evaluate((mode) => window.rolesExactTest.deliver(mode), mode);
 			await frame.getByText(/current (?:total|asks).*unknown/i).waitFor();
 			assert.ok(!(await frame.locator("body").innerText()).includes("CANARY-PATH"));
 			if (mode === "first-error") await page.screenshot({ path: join(output, "unavailable.png") });
+			if (["disconnected", "stale"].includes(mode)) {
+				const colour = await frame.getByRole("alert").evaluate((el) => getComputedStyle(el).backgroundColor);
+				assert.equal(colour, mode === "stale" ? "rgb(29, 26, 18)" : "rgb(34, 20, 21)");
+				await frame
+					.getByRole("button", { name: mode === "stale" ? "Refresh now" : "Retry now", exact: true })
+					.waitFor();
+				await page.screenshot({ path: join(output, `${mode}.png`) });
+			}
 			await page.evaluate(() => window.rolesExactTest.deliver());
-			await frame.getByText("2 reported asks", { exact: true }).waitFor();
+			await frame.getByText("2 waiting on you", { exact: true }).waitFor();
 		}
-		record("failed, disconnected, loading and partial states never claim an all-clear");
+		record("failed, disconnected, stale, loading and partial states never claim an all-clear");
+		await page.evaluate(() => window.rolesExactTest.deliver("long-report"));
+		await frame.getByRole("button", { name: /^Ops / }).click();
+		await settled();
+		await panel.getByRole("button", { name: /6 am report/i }).click();
+		await panel.getByText(/900 more lines not shown here/).waitFor();
+		await panel.getByRole("button", { name: "Close and return to all departments" }).click();
+		await panel.waitFor({ state: "hidden" });
+		record("a report over 1000 lines stays available with an explicit omission");
 		await page.evaluate(() => window.rolesExactTest.deliver("crowded"));
-		await frame.getByText("55 reported asks", { exact: true }).waitFor();
+		await frame.getByText("55 waiting on you", { exact: true }).waitFor();
 		await frame.getByRole("button", { name: "You: open your decisions, questions and spending" }).click();
 		await panel.getByText("5 more reported asks are not shown here", { exact: true }).waitFor();
 		await settled();
@@ -212,6 +232,46 @@ try {
 		assert.equal(pan, true);
 		await page.screenshot({ path: join(output, "phone.png") });
 		record("the supplied wide phone canvas can be panned");
+		const touchContext = await browser.newContext({
+			viewport: { width: 390, height: 844 },
+			deviceScaleFactor: 1,
+			isMobile: true,
+			hasTouch: true,
+			reducedMotion: "reduce",
+		});
+		await touchContext.route("**/*", (route) =>
+			route.request().url().startsWith(origin) ? route.continue() : route.abort(),
+		);
+		const phone = await touchContext.newPage();
+		phone.on("pageerror", (e) => pageErrors.push(e.message));
+		await phone.goto(origin);
+		await phone.waitForFunction(() => !!window.rolesExactTest);
+		await phone.evaluate(() => window.rolesExactTest.deliver());
+		const phoneFrame = phone.frameLocator('iframe[title="Roles"]');
+		await phoneFrame.getByRole("button", { name: "Legend", exact: true }).tap();
+		await phone.screenshot({ path: join(output, "phone-legend.png") });
+		await phoneFrame.getByRole("button", { name: "Hide legend", exact: true }).tap();
+		for (const [label, file] of [
+			[/^Ops /, "phone-ops.png"],
+			["You: open your decisions, questions and spending", "phone-you.png"],
+		]) {
+			await phoneFrame.getByRole("button", { name: label }).tap();
+			await settled(phone);
+			const region = phoneFrame.locator('[role="region"]');
+			await region.evaluate((el) => {
+				el.scrollTop = 0;
+				el.parentElement.parentElement.scrollLeft = 0;
+			});
+			await phone.screenshot({ path: join(output, file) });
+			await region.getByRole("button", { name: "Close and return to all departments" }).tap();
+			await region.waitFor({ state: "hidden" });
+			const dimmed = await phoneFrame
+				.locator('button[aria-haspopup="dialog"]')
+				.evaluateAll((cards) => cards.some((el) => el.style.opacity === "0.38"));
+			assert.equal(dimmed, false);
+		}
+		await touchContext.close();
+		record("phone legend and Ops/You panels work with touch; closing leaves no sticky hover dimming");
 		assert.deepEqual(pageErrors, []);
 		state = await page.evaluate(() => window.rolesExactTest.getState());
 		assert.ok(state.sent.every((type) => ["roles_watch", "roles_unwatch"].includes(type)));

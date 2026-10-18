@@ -38,10 +38,35 @@ Owner direction, 2026-10-17: implement the supplied Roles design 1:1 as the actu
 
 **Result: HIT.** After correcting the input, the empty-inbox pair differs by zero pixels. Across the seven supplied original frames, five match exactly. The two remaining differences are the same 26-pixel disconnected and 20-pixel stale border-corner differences documented in `roles-renderer-u0-2026-10-13/DEVIATION-REGISTER.md` as R-P1. The owner previously chose to keep those pictures and accept the mismatch. The strict reference command still exits 1; this is not reported as a seven-frame pixel pass.
 
+## H-ROLES-EXACT-4 — preserve the design’s status and existing-data details
+
+**Wrong / evidence.** Design’s source review confirms the layout is complete, but failed/disconnected/stale states all use a neutral banner and lilac chip, disconnected lacks Retry, and timestamps/date are absent. Existing owner asks and role spending are also omitted from the graph and spending rows. These are existing-data presentation gaps, not missing producers.
+
+**One change / reason.** Complete the presentation mapping: the source’s red failure/disconnection and amber stale palettes, read-only Retry/Refresh actions, honest last-received times and date, owner-ask lines only where a current ask is known, the source’s labels, and bounded validated own-work spending. Keep inter-role traffic and unrecorded fields absent. Show a fixed uncertainty reason when asks cannot be confirmed.
+
+**Expected / measurement.** Fixed-input tests cover every status palette/action and time, safe existing-spend values and missing cases, current versus stale ask lines, copy and task omission counts. Browser checks include phone Ops/You/legend and real touch: opening/closing a card must not leave hover dimming behind. No inline answers or new data producers.
+
+**Falsifier.** Failure/staleness still looks healthy, any new content overstates confirmation or fabricates data, a route changes, or touch leaves unrelated cards dimmed.
+
+**Check in progress.** `check-8` passes all 11 real-component browser checks, including red disconnected/amber stale states, original-chat navigation, and actual touch Ops/You/legend checks. The seven reference pairs are unchanged (five exact, two accepted R-P1 corners). One new unit assertion selected every “Not recorded” span, including unrelated lane labels. Scoping to queue rows then counted 40 nodes: the 20 styled labels plus the renderer’s 20 nested `sc-interp` text spans (`surface.ts` preserves these from the source). The correction selects only direct queue-row spans and must verify all 20 requester labels are grey. Both failed runs are retained; this is an assertion correction, not a production change. The corrected focused unit set passes 35/35, including all 20 direct requester labels. H-ROLES-EXACT-4 is a presentation HIT on these fixed cases; the final gate and review remain separate. The supplied fixed-width phone layout still pans; the new phone screenshots make this visible rather than implying responsive panels.
+
+## H-ROLES-EXACT-5 — bounded report lines keep the page available
+
+**Wrong / evidence.** Security’s source-only GO notes that an otherwise valid 12,000-character report can contain over 1,000 lines, exceeding the renderer’s list bound and replacing the whole page with its failure state.
+
+**One change / reason.** Bound displayed report lines before binding and include an explicit omitted-lines row. Preserve the renderer’s existing limit and plain-text handling.
+
+**Expected / measurement.** A fixed report with more than 1,000 lines can be expanded without throwing, and its omission is visible. Ordinary reports remain unchanged.
+
+**Falsifier.** The report still breaks binding, hides the omission, or changes normal report content.
+
+**Result: HIT.** The unit case and actual script-disabled component both expand a 1,100-line report without failing; the first 200 lines and an explicit “900 more lines” row are shown. Ordinary reports retain their prior content.
+
 ## Check receipts
 
-- Initial full gate: protocol, all type checks, lint and formatting passed; 408 test files passed, one failed (3 assertions missing the newly explicit `roleId` field). After correcting those expectations, the targeted four-file set passed 51/51. The completed integration still requires a final full gate.
-- Real component: 9/9 isolated browser checks passed, with fictional inputs and no real chats. Evidence: `/home/shinelay/kept-from-tmp/2026-10-17/roles-exact/check-7/`.
+- Original candidate `ede451df`: final `TZ=UTC scripts/check.sh` passed (409 files, 5,871 tests, 6 skipped, build and 74 terminal checks). Evidence: `/home/shinelay/kept-from-tmp/2026-10-17/roles-exact/checks/final-check.log`. The first three stale `roleId` expectations and their correction are retained in the earlier receipts.
+- Review corrections: the new full gate and requester-assertion correction are pending. Evidence: `/home/shinelay/kept-from-tmp/2026-10-17/roles-exact/checks/review-check.log`.
+- Real component: 11/11 isolated browser checks pass after review corrections, with fictional inputs and no real chats. Evidence: `/home/shinelay/kept-from-tmp/2026-10-17/roles-exact/check-8/`, including phone Ops/You/legend, stale and disconnected images. Prior candidate evidence remains in `check-7/`.
 - Corrected reference comparison: five of seven exact matches, with the two accepted R-P1 mismatches retained. Evidence: `/home/shinelay/kept-from-tmp/2026-10-17/roles-exact/reference-2/`. No replacement golden images or pixel tolerance.
 - H-ROLES-EXACT-1 remains qualified: functional evidence is positive, but the strict pixel bar is a MISS at those two known corners. The 31 additional states are the design's coverage reference, not 31 claimed pixel passes. Full integration/design review and live look-only checks remain outstanding.
 
@@ -59,4 +84,4 @@ Owner direction, 2026-10-17: implement the supplied Roles design 1:1 as the actu
 
 ## Missing-data follow-up, not a dependency for the layout
 
-Record gaps explicitly: task-lane occupancy, message directions and send/receive/processed receipts, task requester, completion stages, contacts/replies, loaded model/resources, configuration history, and requested-work spending. Existing reported role status, tasks, blockers, owner asks, reports, goals and progress may be displayed through their current checked projections; none is stronger evidence merely because the new design displays it.
+Record gaps explicitly: task-lane occupancy, message directions and send/receive/processed receipts, task requester, completion stages, contacts/replies, loaded model/resources, configuration history, and requested-work spending. Existing reported role status, tasks, blockers, owner asks, reports, goals, progress and each department’s own-work tally may be displayed through their current checked projections; none is stronger evidence merely because the new design displays it.

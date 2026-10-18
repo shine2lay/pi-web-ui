@@ -314,7 +314,7 @@ body{margin:0}
 <section style="padding: 14px 16px; border-radius: 12px; background: #16181B; border: 1px solid #2A2E34; display: flex; flex-direction: column; gap: 10px">
 <h3 style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Now</h3>
 <dl style="margin: 0; display: grid; grid-template-columns: minmax(100px, max-content) minmax(0, 1fr); gap: 9px 14px; font-size: 14px">
-<dt style="color: #A9AEB6">Current task</dt><dd style="margin: 0"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; color: #B9BEC5">{{ex.taskId}}</span> {{ex.taskTitle}} <span style="font-size: 12px; font-weight: 600; color: #9CC7FF">{{ex.taskSrc}}</span></dd>
+<dt style="color: #A9AEB6">Current task</dt><dd style="margin: 0"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; color: #B9BEC5">{{ex.taskId}}</span> {{ex.taskTitle}} <span style="font-size: 12px; font-weight: 600; color: #9CC7FF; color: {{ex.taskSrcFg}}">{{ex.taskSrc}}</span></dd>
 <dt style="color: #A9AEB6">Latest progress</dt><dd style="margin: 0">{{ex.progressText}} <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #A9AEB6">· {{ex.progressAt}}</span></dd>
 <dt style="color: #A9AEB6">Next action</dt><dd style="margin: 0">{{ex.nextShort}}</dd>
 <dt style="color: #A9AEB6">Task lanes</dt><dd style="margin: 0">{{ex.lanesLabel}}</dd>
@@ -341,13 +341,14 @@ body{margin:0}
 <li style="display: flex; flex-wrap: wrap; gap: 2px 10px; padding: 8px 10px; border-radius: 6px; background: #1B1D21; font-size: 13.5px">
 <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #A9AEB6; padding-top: 1px">{{t.id}}</span>
 <span style="flex: 1 1 180px; min-width: 0">{{t.title}}</span>
-<span style="font-size: 12px; font-weight: 600; color: #9CC7FF">{{t.srcText}}</span>
+<span style="font-size: 12px; font-weight: 600; color: #9CC7FF; color: {{t.srcFg}}">{{t.srcText}}</span>
 <sc-if value="{{t.hasDep}}" hint-placeholder-val="{{false}}"><span style="flex-basis: 100%; font-size: 12px; color: #F0B95A">Depends on: {{t.dep}}</span></sc-if>
 </li>
 </sc-for>
 </ul>
 </div>
 </sc-for>
+<sc-if value="{{ex.hasTaskOmission}}" hint-placeholder-val="{{false}}"><p style="margin: 0; color: #A9AEB6; font-size: 12.5px">{{ex.taskOmission}}</p></sc-if>
 </section>
 </div>
 <div style="display: flex; flex-direction: column; gap: 14px; min-width: 0">

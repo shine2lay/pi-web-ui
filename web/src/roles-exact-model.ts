@@ -3,11 +3,69 @@
  * Raw feed values and chat targets never become template attributes or HTML.
  */
 import { projectRolePanel, type RolePanel } from "./roles-panel-model";
-import { projectUsefulRoles, type NeedsYou, type SourceState, type UsefulRole } from "./roles-useful-model";
+import {
+	CLOCK_SKEW_MS,
+	object,
+	projectUsefulRoles,
+	time,
+	type NeedsYou,
+	type SourceState,
+	type UsefulRole,
+} from "./roles-useful-model";
+
+export interface ExactSpend {
+	reported: boolean;
+	amount: string | null;
+	budget: string | null;
+	ratio: number | null;
+	stale: boolean;
+	over: boolean;
+	note: string;
+}
+
+/** Read only the existing own-work tally. Never infer a total or a zero from missing data. */
+function projectSpend(value: unknown): ExactSpend {
+	const input = object(value);
+	const absent = (note: string): ExactSpend => ({
+		reported: false,
+		amount: null,
+		budget: null,
+		ratio: null,
+		stale: false,
+		over: false,
+		note,
+	});
+	if (input?.state === "none") return absent("No own-work budget recorded. This does not mean no spending.");
+	if (input?.state === "old-week") return absent("No own-work tally for this week yet.");
+	if (!input || typeof input.state !== "string" || !["ok", "stale", "over"].includes(input.state))
+		return absent("Own-work spending is unavailable.");
+	const dollars = (v: unknown): number | null => {
+		if (typeof v !== "string" || v.length > 24 || !/^\$(?:0|[1-9]\d{0,2}(?:,\d{3})*|[1-9]\d*)(?:\.\d{2})?$/.test(v))
+			return null;
+		const n = Number(v.slice(1).replaceAll(",", ""));
+		return Number.isFinite(n) && n >= 0 && n <= Number.MAX_SAFE_INTEGER / 100 ? n : null;
+	};
+	const spent = dollars(input.spent),
+		budget = dollars(input.budget);
+	if (spent === null || budget === null || budget <= 0 || (input.state !== "over" && spent >= budget))
+		return absent("Own-work spending is unreadable.");
+	const age =
+		typeof input.age === "string" && /^(?:just now|\d{1,6} (?:min|h|d) ago)$/.test(input.age) ? input.age : null;
+	return {
+		reported: true,
+		amount: String(input.spent),
+		budget: String(input.budget),
+		ratio: Math.min(1, spent / budget),
+		stale: input.state === "stale",
+		over: input.state === "over",
+		note: `Role’s own tally${input.state === "stale" ? " · stale" : ""}${input.state === "over" ? " · budget used or own work stopped" : ""}${age ? ` · updated ${age}` : ""}. Requested work is not included.`,
+	};
+}
 
 export interface ExactRole {
 	row: UsefulRole;
 	panel: RolePanel | null;
+	spend: ExactSpend;
 }
 export interface ExactRoles {
 	roles: ExactRole[];
@@ -17,12 +75,23 @@ export interface ExactRoles {
 	lastReceived: boolean;
 	omitted: boolean;
 	now: number;
+	receivedAt: number | null;
 }
 
 export function projectExactRoles(state: unknown, connection: unknown, now: number): ExactRoles {
 	const model = projectUsefulRoles(state, connection, now);
+	const input = object(state);
+	const rawRoles = object(input?.overview)?.roles;
+	const rows: unknown[] = Array.isArray(rawRoles) ? rawRoles : [];
+	const heard = time(input?.heardAt);
 	return {
-		roles: model.roles.map((row) => ({ row, panel: projectRolePanel(state, row.roleId) })),
+		roles: model.roles.map((row) => ({
+			row,
+			panel: projectRolePanel(state, row.roleId),
+			spend: projectSpend(object(rows.find((raw) => object(raw)?.id === row.roleId))?.spend),
+		})),
+		receivedAt:
+			heard !== null && heard <= now + CLOCK_SKEW_MS && Number.isFinite(new Date(heard).getTime()) ? heard : null,
 		needs: model.needsYou,
 		source: model.source,
 		roster: model.roster,
@@ -55,14 +124,14 @@ export const EXACT_SOURCE: Record<SourceState, { title: string; body: string; la
 		label: "Disconnected",
 	},
 	cached: {
-		title: "Waiting for a fresh check",
-		body: "Last received information is shown, but a current check is unavailable.",
-		label: "Last received",
+		title: "Disconnected from the Roles service",
+		body: "Connection is unavailable. Last received information is shown, not a current confirmation.",
+		label: "Disconnected",
 	},
 	stale: {
 		title: "Role status may be out of date",
 		body: "No recent update has arrived. Everything below is the last received state.",
-		label: "Out of date",
+		label: "Stale",
 	},
 	partial: {
 		title: "Some role information is unavailable",
@@ -77,7 +146,7 @@ export const EXACT_SOURCE: Record<SourceState, { title: string; body: string; la
 	"connected-source-unverified": {
 		title: "",
 		body: "",
-		label: "Reported status",
+		label: "Live",
 	},
 };
 
