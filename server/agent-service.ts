@@ -70,6 +70,7 @@ import type { PendingQuestionEntry } from "./ask-delivery.js";
 import {
 	approvalAsk,
 	approvalFrom,
+	type Ask,
 	askHub,
 	type AskMeta,
 	dialogAnswersOf,
@@ -87,6 +88,7 @@ import {
 	summarizeQuestionAnswers,
 } from "./asks.js";
 import { stuckGoneReason, stuckKey, stuckSig, stuckTarget, type StuckSource, wantedStuckAsks } from "./stuck-asks.js";
+import { answersFromPage, askViewOf, ROLE_ASK_KEY_MAX } from "./roles-asks.js";
 import { type AdoptCandidate, pickAdoptTarget } from "./attach-adopt.js";
 import { describeError, errorMessage, planForLostActive } from "./crash-guard.js";
 // list-freeze: message counts without getSessionStats() (which re-projects the whole context).
@@ -382,6 +384,7 @@ import type {
 	UiRoleGuardQuestion,
 	UiRoleMessageRow,
 	UiRolesOverview,
+	UiRoleAskView,
 	UiServiceInfo,
 	UiState,
 	UiSubagentTemplate,
@@ -16068,6 +16071,44 @@ export class AgentService {
 			});
 		}
 		return this.rolesReader.read();
+	}
+
+	/** roles-answer: the live ask behind a Needs-you item, looked up afresh: only an item that is in the list
+	 *  right now, with an ask the page may answer, counts. */
+	private async rolesAskOf(key: unknown): Promise<{ ask: Ask } | { error: string }> {
+		if (typeof key !== "string" || !key || key.length > ROLE_ASK_KEY_MAX) return { error: "not a Needs-you item" };
+		const overview = await this.readRolesOverview();
+		const matches = overview.asks.filter((a) => a.key === key);
+		if (matches.length !== 1) return { error: NOT_WAITING };
+		const item = matches[0];
+		if (!item.askId) return { error: "it can only be answered in its chat" };
+		const ask = askHub.get(item.askId);
+		if (!ask) return { error: NOT_WAITING };
+		if (!askViewOf(ask)) return { error: "open this question in its chat" };
+		return { ask };
+	}
+
+	/** roles-answer: the whole ask behind a Needs-you item, for the Roles page's Answer dialog (it only reads). */
+	async rolesAskOpen(key: unknown): Promise<{ ok: true; ask: UiRoleAskView } | { ok: false; error: string }> {
+		const found = await this.rolesAskOf(key);
+		if ("error" in found) return { ok: false, error: found.error };
+		const view = askViewOf(found.ask);
+		return view ? { ok: true, ask: view } : { ok: false, error: NOT_WAITING };
+	}
+
+	/** roles-answer: the owner's answer from the Roles page. It goes through the list of asks as answered in the
+	 *  browser (the Queue tab's way), so the ask's owner delivers, settles and records it as if given in the chat.
+	 *  Refused, with nothing sent, when the item left the list or its ask isn't the one he opened. */
+	async rolesAskAnswer(key: unknown, askId: unknown, revision: unknown, answers: unknown): Promise<AskResult> {
+		const found = await this.rolesAskOf(key);
+		if ("error" in found) return { ok: false, error: found.error };
+		const view = askViewOf(found.ask);
+		if (typeof askId !== "string" || found.ask.id !== askId || !view || view.revision !== revision) {
+			return { ok: false, error: "it changed since you opened it: open it again" };
+		}
+		const clean = answersFromPage(answers, view);
+		if ("error" in clean) return { ok: false, error: clean.error };
+		return askHub.answer(askId, clean.answers, FROM_BROWSER);
 	}
 
 	/** telegram-coo: index.ts hands each role reply to the plugins (PluginManager.emitRoleReply). */

@@ -118,6 +118,7 @@ import type {
 	UiRoleGuardQuestion,
 	UiRoleMessageRow,
 	UiRolesOverview,
+	UiRoleAskView,
 	UiDecisionsPage,
 	UiDecisionRecordView,
 	UiUpdateDecision,
@@ -1450,6 +1451,15 @@ export interface EngineService {
 	onRoleGuardChanged?: (() => void) | null;
 	/** roles-overview (pi engine): every role's state for the Roles page. */
 	readRolesOverview?(): Promise<UiRolesOverview>;
+	/** roles-answer (pi engine): the whole ask behind a Needs-you item, for the Roles page's Answer dialog. */
+	rolesAskOpen?(key: unknown): Promise<{ ok: true; ask: UiRoleAskView } | { ok: false; error: string }>;
+	/** roles-answer (pi engine): the owner's answer from the Roles page, through the list of asks. */
+	rolesAskAnswer?(
+		key: unknown,
+		askId: unknown,
+		revision: unknown,
+		answers: unknown,
+	): Promise<{ ok: boolean; error?: string }>;
 	/** board (pi engine): the owner posts on the roles' board from the Roles page. */
 	boardPost?(input: BoardPostInput): Promise<BoardPostResult>;
 	/** board (pi engine): the owner closes a post. */
@@ -2792,6 +2802,59 @@ wss.on("connection", (ws, req) => {
 							op: "post",
 							ok: false,
 							error: (err as Error).message,
+						}),
+					)
+					.then((reply) => {
+						if (!closed) send(reply);
+					});
+				break;
+			}
+			case "roles_ask_open": {
+				// roles-answer: the Roles page opens a Needs-you item's ask (this socket is the owner's, like every
+				// owner action here); the service checks the item is in the list right now.
+				const reqId = typeof msg.reqId === "string" ? msg.reqId.slice(0, 120) : "";
+				if (!service.rolesAskOpen) {
+					send({ type: "roles_ask", reqId, ok: false, error: "this engine has no roles" });
+					break;
+				}
+				void service
+					.rolesAskOpen(msg.key)
+					.then(
+						(res): ServerMessage =>
+							res.ok
+								? { type: "roles_ask", reqId, ok: true, ask: res.ask }
+								: { type: "roles_ask", reqId, ok: false, error: res.error },
+						(): ServerMessage => ({
+							type: "roles_ask",
+							reqId,
+							ok: false,
+							error: "unavailable",
+						}),
+					)
+					.then((reply) => {
+						if (!closed) send(reply);
+					});
+				break;
+			}
+			case "roles_ask_answer": {
+				// roles-answer: the owner's answer from the Roles page.
+				const reqId = typeof msg.reqId === "string" ? msg.reqId.slice(0, 120) : "";
+				if (!service.rolesAskAnswer) {
+					send({ type: "roles_ask_result", reqId, ok: false, error: "this engine has no roles" });
+					break;
+				}
+				void service
+					.rolesAskAnswer(msg.key, msg.askId, msg.revision, msg.answers)
+					.then(
+						(res): ServerMessage =>
+							res.ok
+								? { type: "roles_ask_result", reqId, ok: true }
+								: { type: "roles_ask_result", reqId, ok: false, error: res.error ?? "not answered" },
+						(): ServerMessage => ({
+							type: "roles_ask_result",
+							reqId,
+							ok: false,
+							error: "uncertain",
 						}),
 					)
 					.then((reply) => {

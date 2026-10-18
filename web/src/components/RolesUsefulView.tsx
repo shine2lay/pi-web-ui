@@ -20,12 +20,15 @@ import {
 	type UsefulRoles,
 } from "../roles-useful-model";
 import { RolePanelDialog } from "./RolePanel";
+import { RoleAnswerDialog } from "./RoleAnswerDialog";
+import { RoleSpend } from "./RoleSpend";
 
 type Key = Parameters<Translate>[0];
 /** Opens an existing chat (App's openFromRoles: switch_session + maybe one item). */
 export type OpenChat = (target: UsefulOpenTarget) => void;
 /** roles-panel: opens a role's panel; `from` gets the focus back when it closes by itself. */
 export type OpenDetails = (roleId: string, from: HTMLElement) => void;
+export type OpenAnswer = (item: NeedsYouItem, from: HTMLElement) => void;
 
 const SOURCE_KEYS = {
 	awaiting: "ruAwaiting",
@@ -103,7 +106,23 @@ export function RolesUsefulView({
 	const connection = useAppField("status");
 	const now = useNow(active);
 	const [open, setOpen] = useState<{ id: string; from: HTMLElement } | null>(null);
-	const onDetails = useCallback<OpenDetails>((id, from) => setOpen({ id, from }), []);
+	const [answer, setAnswer] = useState<{ item: NeedsYouItem; from: HTMLElement } | null>(null);
+	const onDetails = useCallback<OpenDetails>((id, from) => {
+		setAnswer(null);
+		setOpen({ id, from });
+	}, []);
+	const onAnswer = useCallback<OpenAnswer>((item, from) => {
+		setOpen(null);
+		setAnswer({ item, from });
+	}, []);
+	const closeAnswer = (back: boolean) => {
+		const from = answer?.from;
+		setAnswer(null);
+		if (back && from?.isConnected) requestAnimationFrame(() => from.focus());
+	};
+	useEffect(() => {
+		if (!active) setAnswer(null);
+	}, [active]);
 	const close = useCallback(
 		(back: boolean) => {
 			const from = open?.from;
@@ -126,7 +145,11 @@ export function RolesUsefulView({
 				now={now}
 				onOpen={onOpen}
 				onDetails={onDetails}
+				onAnswer={connection === "open" ? onAnswer : undefined}
 			/>
+			{active && answer && (
+				<RoleAnswerDialog item={answer.item} connected={connection === "open"} onClose={closeAnswer} onOpen={onOpen} />
+			)}
 			{panel && <RolePanelDialog panel={panel} now={now} onOpen={onOpen} onAbout={onAbout} onClose={close} />}
 		</>
 	);
@@ -138,12 +161,14 @@ export function RolesUsefulContent({
 	now,
 	onOpen,
 	onDetails,
+	onAnswer,
 }: {
 	model: UsefulRoles;
 	phone: boolean;
 	now: number;
 	onOpen: OpenChat;
 	onDetails?: OpenDetails;
+	onAnswer?: OpenAnswer;
 }) {
 	const t = useT();
 	return (
@@ -152,7 +177,7 @@ export function RolesUsefulContent({
 				<h1>{t("rolesTitle")}</h1>
 				<p>{t(SOURCE_KEYS[model.source])}</p>
 			</header>
-			<NeedsYouSection needs={model.needsYou} now={now} onOpen={onOpen} />
+			<NeedsYouSection needs={model.needsYou} now={now} onOpen={onOpen} onAnswer={onAnswer} />
 			<p className="roles-useful-note">{t("ruQualification")}</p>
 			{model.roster === "unavailable" && <p>{t("ruRosterUnavailable")}</p>}
 			{model.omitted && <p className="roles-useful-note">{t("ruRolesOmitted")}</p>}
@@ -185,7 +210,17 @@ function ageText(since: number, now: number, t: Translate): string {
 }
 
 /** "None reported" only while the list is the current one and the feed lists no ask at all. */
-function NeedsYouSection({ needs, now, onOpen }: { needs: NeedsYou; now: number; onOpen: OpenChat }) {
+function NeedsYouSection({
+	needs,
+	now,
+	onOpen,
+	onAnswer,
+}: {
+	needs: NeedsYou;
+	now: number;
+	onOpen: OpenChat;
+	onAnswer?: OpenAnswer;
+}) {
 	const t = useT();
 	const total = needs.total;
 	return (
@@ -210,7 +245,7 @@ function NeedsYouSection({ needs, now, onOpen }: { needs: NeedsYou; now: number;
 			{needs.items.length > 0 && (
 				<ol className="roles-useful-asks">
 					{needs.items.map((item) => (
-						<AskRow key={item.key} item={item} now={now} onOpen={onOpen} />
+						<AskRow key={item.key} item={item} now={now} onOpen={onOpen} onAnswer={onAnswer} />
 					))}
 				</ol>
 			)}
@@ -220,7 +255,17 @@ function NeedsYouSection({ needs, now, onOpen }: { needs: NeedsYou; now: number;
 	);
 }
 
-function AskRow({ item, now, onOpen }: { item: NeedsYouItem; now: number; onOpen: OpenChat }) {
+function AskRow({
+	item,
+	now,
+	onOpen,
+	onAnswer,
+}: {
+	item: NeedsYouItem;
+	now: number;
+	onOpen: OpenChat;
+	onAnswer?: OpenAnswer;
+}) {
 	const t = useT();
 	const link = item.link;
 	const role = item.roleLabel ?? t("ruUnknownRole");
@@ -236,6 +281,15 @@ function AskRow({ item, now, onOpen }: { item: NeedsYouItem; now: number; onOpen
 					{item.since === null ? t("ruTimeUnknown") : t("ruWaiting", { age: ageText(item.since, now, t) })}
 				</p>
 			</div>
+			{item.answer && onAnswer && (
+				<button type="button" className="roles-useful-open" onClick={(e) => onAnswer(item, e.currentTarget)}>
+					{t("raAnswer")}
+					<span className="roles-useful-sr">
+						{" "}
+						{t("ruFrom")} {role}
+					</span>
+				</button>
+			)}
 			{link && (
 				<button type="button" className="roles-useful-open" onClick={() => onOpen(link)}>
 					{t("ruOpen")}
@@ -283,6 +337,7 @@ function RoleCard({ role, onOpen, onDetails }: { role: UsefulRole; onOpen: OpenC
 			</div>
 			{role.labelTruncated && <p className="roles-useful-note">{t("ruLabelClipped")}</p>}
 			{role.partial && <p className="roles-useful-note">{t("ruPartialRole")}</p>}
+			<RoleSpend spend={role.spend} />
 			<p className="roles-useful-queue">
 				{queueText(role, t)}
 				{role.hold !== "not-reported" &&

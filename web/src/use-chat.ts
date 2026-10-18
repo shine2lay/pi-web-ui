@@ -78,6 +78,7 @@ import {
 import { receiveSubsLimits, requestSubsLimits } from "./subs-limits-state";
 import { receiveRoleGuard, requestRoleGuard } from "./role-guard-state";
 import { receiveBoardResult, receiveRoles, resendRolesWatch } from "./roles-state";
+import { disconnectRoleAnswers, receiveRoleAnswer } from "./roles-answer-state";
 import {
 	receiveDecisionRecord,
 	receiveInitiativeResult,
@@ -2159,6 +2160,10 @@ export function useChat() {
 					// roles-overview: the Roles page and the top bar's count (roles-state.ts).
 					receiveRoles(msg);
 					break;
+				case "roles_ask":
+				case "roles_ask_result":
+					receiveRoleAnswer(msg);
+					break;
 				case "board_result":
 					// board: the answer to the Board view's post or close (roles-state.ts).
 					receiveBoardResult(msg);
@@ -2534,6 +2539,7 @@ export function useChat() {
 			// this socket's close) — do not spawn a third connection that would
 			// shadow the live one and drop its incoming messages.
 			if (wsRef.current && wsRef.current !== ws) return;
+			disconnectRoleAnswers();
 			setFilesReady(false);
 			dispatch({ type: "status", status: "closed" });
 			if (hadOpenRef.current && !catchUpRef.current) catchUpRef.current = Date.now();
@@ -2585,6 +2591,7 @@ export function useChat() {
 				/* already closing */
 			}
 			// What onclose would have done for this socket.
+			disconnectRoleAnswers();
 			failHeldSends("The connection dropped before it was sent.");
 			bridgeRef.current.clear();
 			if (hadOpenRef.current && !catchUpRef.current) catchUpRef.current = Date.now();

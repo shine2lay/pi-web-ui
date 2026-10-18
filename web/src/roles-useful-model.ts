@@ -100,6 +100,45 @@ export interface UsefulRecords {
 	notAllShown: boolean;
 	records: UsefulRecord[];
 }
+export interface UsefulSpend {
+	state: "ok" | "over" | "stale" | "none" | "old-week" | "unreadable";
+	line: string;
+	amounts: string | null;
+	initiatives: { id: string; amount: string }[];
+}
+/** The existing tally is reported, not independently measured or enforced by this view. */
+export function projectSpend(value: unknown): UsefulSpend | null {
+	const s = object(value);
+	const state = s?.state;
+	if (
+		state !== "ok" &&
+		state !== "over" &&
+		state !== "stale" &&
+		state !== "none" &&
+		state !== "old-week" &&
+		state !== "unreadable"
+	)
+		return null;
+	const line = plain(s?.line, 420);
+	if (!line || line.clipped || /(?:\/|[a-z]:\\)[^\n\r]*?\.jsonl\b/i.test(line.text)) return null;
+	const money = (v: unknown): v is string =>
+		typeof v === "string" && v.length <= 40 && /^\$(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d{2})?$/.test(v);
+	const amounts = money(s?.spent) && money(s?.budget) ? `${s.spent} / ${s.budget}` : null;
+	if ((state === "ok" || state === "stale" || state === "over") && amounts === null) return null;
+	const initiatives: UsefulSpend["initiatives"] = [];
+	if (Array.isArray(s?.byInitiative))
+		for (const raw of s.byInitiative.slice(0, 20)) {
+			const row = object(raw);
+			if (
+				typeof row?.id === "string" &&
+				row.id.length <= 60 &&
+				/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(row.id) &&
+				money(row.amount)
+			)
+				initiatives.push({ id: row.id, amount: row.amount });
+		}
+	return { state, line: line.text, amounts, initiatives };
+}
 export interface UsefulRole {
 	roleId: string;
 	roleLabel: string;
@@ -113,12 +152,15 @@ export interface UsefulRole {
 	queued: UsefulRecords;
 	/** queue-drop: the tasks its lead dropped, newest first (the server sends at most ROLES_DROPPED_MAX). */
 	dropped: UsefulRecords;
+	spend?: UsefulSpend | null;
 }
 export interface NeedsYouItem {
 	/** Validated roster id, for associating the ask with one role's panel, never its display name. */
 	roleId: string | null;
 	/** Its place in the feed; React only, never rendered. */
 	key: string;
+	/** Opaque AskHub target, kept only in memory. No URL or DOM data attribute. */
+	answer?: { key: string; id: string };
 	/** null: an unknown or invalid role; the row says "Unknown role". */
 	roleLabel: string | null;
 	/** null: absent or unsafe; the row says "Open item". */
@@ -403,6 +445,7 @@ function projectRole(row: Fields, id: string): ProjectedRole {
 			active,
 			queued,
 			dropped,
+			spend: projectSpend(row.spend),
 		},
 		asksSeen: startedChats <= TASK_CHATS_READ,
 		decisionKeys,
@@ -417,6 +460,23 @@ function askLink(ask: Fields): UsefulOpenTarget | null {
 function askKey(value: unknown): value is string {
 	return typeof value === "string" && value.length > 0 && value.length <= KEY_LIMIT;
 }
+function answerTarget(ask: Fields, unique: boolean): NeedsYouItem["answer"] {
+	if (
+		!unique ||
+		!roleId(ask.role) ||
+		(ask.kind !== "question" && ask.kind !== "task") ||
+		!askKey(ask.key) ||
+		UNSAFE.test(ask.key) ||
+		typeof ask.askId !== "string" ||
+		!ask.askId ||
+		ask.askId.length > 200 ||
+		UNSAFE.test(ask.askId)
+	)
+		return undefined;
+	const focus = focusOf(ask.focus);
+	if (!focus || focus.kind !== ask.kind || ask.key !== `${ask.role}:${ask.kind}:${focus.id}`) return undefined;
+	return { key: ask.key, id: ask.askId };
+}
 function needsYou(
 	overview: Fields | null,
 	labels: Map<string, string>,
@@ -429,6 +489,10 @@ function needsYou(
 	const raw: unknown[] = Array.isArray(overview?.asks) ? overview.asks : [];
 	const items: NeedsYouItem[] = [];
 	const keys = new Set<string>();
+	const counts = idFrequencies(raw, (value) => {
+		const key = object(value)?.key;
+		return askKey(key) ? key : null;
+	});
 	// Feed order (oldest first). Every entry counts; one that can't be read still shows, as "Open item".
 	raw.forEach((value, index) => {
 		const ask = object(value) ?? {};
@@ -437,6 +501,7 @@ function needsYou(
 		items.push({
 			key: String(index),
 			roleId: roleId(ask.role) && labels.has(ask.role) ? ask.role : null,
+			answer: answerTarget(ask, counts.get(String(ask.key)) === 1),
 			roleLabel: roleId(ask.role) ? (labels.get(ask.role) ?? null) : null,
 			text: plain(ask.text, TEXT_LIMIT)?.text ?? null,
 			since: sinceOf(ask.since, now),

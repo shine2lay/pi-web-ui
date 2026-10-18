@@ -166,12 +166,39 @@ describe("Needs you follows the real reader", () => {
 				roleId: "design",
 				roleLabel: "Design role",
 				text: "Need you: pick a layout",
+				answer: { key: "design:question:q1", id: "q1" },
 				since: T0 + 1000,
 				link: { file: home, focus: { kind: "question", id: "q1" } },
 			},
 		]);
 		liveAsks = [];
 		append(home, [dialogAnswer(T0 + 3000)]);
+		expect(page(await r.read()).items).toEqual([]);
+	});
+	it("answer targets match the task's exact delivery chat and remain unavailable when ambiguous or paused", async () => {
+		const chat = transcript("task-answer", []);
+		const home = transcript("home-answer", [
+			q({ op: "add", id: 1, plan: { title: "Task" } }, T0),
+			q({ op: "start", id: 1, lane: true }, T0 + 1),
+			q({ op: "chat", id: 1, file: chat, title: "Task chat" }, T0 + 2),
+			q({ op: "stuck", id: 1, question: "Which?" }, T0 + 3),
+		]);
+		const r = reader([role("ops", home)]);
+		const ask = (id: string, sessionFile: string): Ask => ({
+			id,
+			kind: "stuck",
+			title: "Task",
+			fields: [],
+			createdAt: T0,
+			task: { id: 1, title: "Task" },
+			sessionFile,
+		});
+		liveAsks = [ask("wrong-home", home), ask("right-task", chat)];
+		expect(page(await r.read()).items[0].answer).toEqual({ key: "ops:task:1", id: "right-task" });
+		liveAsks.push(ask("duplicate", chat));
+		expect(page(await r.read()).items[0].answer).toBeUndefined();
+		liveAsks = [ask("right-task", chat)];
+		append(home, [q({ op: "hold", why: "Fixture owner pause" }, T0 + 100)]);
 		expect(page(await r.read()).items).toEqual([]);
 	});
 	it("a stuck task's question shows; once its queue is paused the server lists none and the page can still tell", async () => {

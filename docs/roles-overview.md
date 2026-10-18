@@ -2,8 +2,9 @@
 
 **Roles** is a top-bar view next to Chat, Terminal and Git. It shows every role from
 Settings -> Identities on one page: what each one is doing, what is waiting on the owner, its newest
-TL;DR line, its queue, its goals and its 6 am report. It only shows and links. Answers, queue
-controls and edits stay in the chats and in Settings, and nothing on the page starts or stops work.
+TL;DR line, its queue, its goals and its 6 am report. Live asks can be answered from the page through
+its guarded answer dialog, using the existing browser answer path. Queue controls and edits stay
+in the chats and in Settings; answering an approval can let its existing task continue.
 
 Design: `~/design-lab/roles-page/SPEC.md` for what the page says; the layout is the owner's
 2026-10-05 call ("show less, tap for more"): tiles instead of SPEC's board, which read as a flat
@@ -72,6 +73,82 @@ Hypothesis (rule 20):
 - **What would prove it wrong.** The canary changes again in any run; a new connection no longer reopens the
   newest regular chat (a unit test, and the live reconnect after install); the FIFO test still stalls; or
   any of the three faults is still visible live.
+
+## Answering from the page (owner, 2026-10-17)
+
+The owner picked "Answer from the page" as the Roles page's next piece (dialog "Next Roles piece",
+2026-10-17), built directly with him in Ops's home chat.
+
+Release update: after the full supplied design was installed, the owner requested “release it first
+then fix the issue” with the extension-permission issue explained. This first release includes eligible
+extension permission, budget and deletion dialogs, but not pi-web-ui's built-in tool approvals. Every
+answer still requires the owner's explicit submission of the complete form. The narrower extension
+filter follows as a separate change. `docs/roles-answer-release.md` records this scope and its checks.
+The existing dialog is now opened from the exact design's You or department panel; it does not restore
+the old useful-list layout or add another spending implementation to the live design.
+
+- **What is wrong, and the evidence.** "Needs you" lists what waits on the owner, but every item only
+  opens a chat or a queue, so he has to go there to answer. Items wait for hours: on 2026-10-17 at 10:20
+  the list held two, one of them Temper's task #96, stuck with him since 20:06 the day before. The same
+  asks can already be answered on Telegram through the server's list of asks (`server/asks.ts`), so a
+  safe answer path exists; the page just doesn't use it. The role's own-work spend reaches the page too
+  (`spend` in the feed; rule 14 says the Roles page shows it), but nothing on the page draws it since the
+  old view was retired.
+- **The change.** Each Needs-you item backed by a live ask (a task's question, a chat's question, an
+  extension's pop-up such as a plan approval) gets an Answer button. It opens the whole ask as the server
+  holds it: its title, its body (a plan, an owner package), each question with its detail and choices, and
+  a typed answer where the ask accepts one. The answer goes through that same list of asks as answered
+  "in the browser", the way the Queue tab already answers a stuck task, so it lands, settles and is
+  recorded exactly as an answer given in the chat. The server only opens or answers an ask that is in the
+  Needs-you list right now, under the same item, and refuses an ask that changed since it was opened.
+  Each card and role panel also shows the role's own-work spend line. The answer dialog never trims a
+  consent package: if the complete text cannot be shown safely within its bounds, it offers only Open chat.
+  A revision binds the answer to the exact question and package opened in this server lifetime (stuck-ask
+  ids are counters that can repeat after a restart). Closing the dialog sends nothing; losing the connection
+  never retries an answer. All text is plain text, including details and option previews.
+- **Expected result, and how it is measured.** A sealed page test: a role's chat question, a task's
+  question and a plan pop-up each show an Answer button; the dialog shows the same title, body and
+  choices the server holds; an answer from the page reaches the chat (the tool gets the answer, the task
+  carries on with the words, the plan is approved), settles the ask as answered in the browser, and
+  writes a decision record whose `answeredIn` is "browser", which pi-queue's owner-record check accepts;
+  the item leaves Needs you. A late or second answer says it was already answered and changes nothing.
+  Live, look only: the Answer buttons appear on the live items and the dialog matches the server's ask;
+  the owner gives the first real answer himself.
+- **What would prove it wrong.** An answer from the page that doesn't settle its ask, or reaches a
+  different ask (a new question or a changed package); a record pi-queue refuses or that says anything
+  but "browser"; an ask outside the roles' chats that can be opened or answered; a second answer taken;
+  agent text shown as markup; or a chat file path anywhere in the page.
+
+### First check and contract completion
+
+The first full check failed 7 assertions (5 in the previous closed-presentation contract, 2 in
+locale parity); 5,883 passed. The new answer-target and spend projections are intentionally
+added by this feature, but the old exact-key and three-click-handler assertions still describe
+the read-only page. The new `ra*` strings were also absent from the eight locale packs.
+
+Hypothesis: explicitly extend that closed contract for only the bounded answer target and spend
+projection, assert that the new click only opens the guarded dialog, and add the same English
+fork copy to all eight packs. The check should then pass without loosening the bans on storage,
+network calls, markup, or private data in the card view. A new unexpected key, action, leaked
+canary, or locale mismatch disproves this. The focused check passed all 97 tests after the exact
+callback-prop assertions were updated too; the final whole-suite gate remains required.
+
+### Sealed task fixture correction
+
+The first sealed browser proof passed 13 of 14 checks: question delivery, native owner receipts,
+late-answer refusal, complete plan approval, desktop/phone accessibility and overflow. Its parent
+queue did not show the task done. The fixture created the child with `add` and `start`, unlike a
+real task chat's `assigned` entry: it had no `from` queue, so `queue_done` could not report back.
+
+Hypothesis: give only the fixture its real `assigned` entry and assert that the native replay binds
+it to its parent. First run the stuck-task stage alone, then the whole proof. Both the child and
+parent must become done; another failure disproves this explanation. No production change is
+proposed for this fixture defect.
+
+Result: hit. The corrected stuck-task stage passed 4/4 checks; then the complete sealed browser
+proof passed 15/15, including both queues reaching done, native owner-receipt acceptance, and
+zero accessibility violations or horizontal overflow at 1440 px and 390 px. The fixture was
+removed after each run. These are test-data results, not a live owner-answer receipt.
 
 ## Each department's own-work spend
 

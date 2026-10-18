@@ -35,6 +35,7 @@ export interface ExactViewClock {
 export interface ExactViewActions {
 	open(target: UsefulOpenTarget): void;
 	about(roleId: string): void;
+	answer?(item: NeedsYouItem, from: HTMLElement): void;
 	reload(): void;
 }
 type Selection = { kind: "you" } | { kind: "role"; id: string } | null;
@@ -266,31 +267,51 @@ export function createExactRolesView(
 		return true;
 	}
 	function question(item: NeedsYouItem, model: ExactRoles): SurfaceValues {
+		const canAnswer = !!item.answer && !!actions.answer && model.needs.tell === "can-tell";
+		const choices: SurfaceValues[] = [];
+		if (canAnswer)
+			choices.push({
+				label: "Answer",
+				bg: "#ECEDEE",
+				fg: "#0E0F11",
+				bd: "#ECEDEE",
+				op: "1",
+				hasHint: false,
+				pick: (source: Event | Element) => {
+					const current = read();
+					if (disposed || !item.answer || current.needs.tell !== "can-tell") return;
+					const latest = current.needs.items.find(
+						(candidate) => candidate.answer?.key === item.answer?.key && candidate.answer?.id === item.answer?.id,
+					);
+					const from = "currentTarget" in source ? source.currentTarget : source;
+					if (latest && from && "focus" in from) actions.answer?.(latest, from as HTMLElement);
+				},
+			});
+		if (item.link)
+			choices.push({
+				label: "Open chat",
+				bg: canAnswer ? "transparent" : "#ECEDEE",
+				fg: canAnswer ? "#ECEDEE" : "#0E0F11",
+				bd: canAnswer ? "#3A3F46" : "#ECEDEE",
+				op: "1",
+				hasHint: false,
+				pick: () => {
+					if (!disposed && item.link) actions.open(item.link);
+				},
+			});
 		return {
-			kind: "Open item",
+			kind: canAnswer ? "Needs your answer" : "Open item",
 			kindFg: "#F0B95A",
 			kindBg: "#2A2416",
 			role: item.roleLabel ?? "Unknown role",
 			age: exactAge(item.since, model.now),
 			title: item.text ?? "Open the original item to read it",
-			context: "Read the full question and answer in its original chat.",
-			isOpen: !!item.link,
+			context: canAnswer
+				? "Open the full prompt and answer here."
+				: "Read the full question and answer in its original chat.",
+			isOpen: choices.length > 0,
 			isResolved: false,
-			choices: item.link
-				? [
-						{
-							label: "Open chat",
-							bg: "#ECEDEE",
-							fg: "#0E0F11",
-							bd: "#ECEDEE",
-							op: "1",
-							hasHint: false,
-							pick: () => {
-								if (!disposed && item.link) actions.open(item.link);
-							},
-						},
-					]
-				: [],
+			choices,
 		};
 	}
 	function box(role: ExactRole, model: ExactRoles): SurfaceValues {

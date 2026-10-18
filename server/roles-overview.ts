@@ -675,13 +675,16 @@ export class RolesOverviewReader {
 	async read(): Promise<UiRolesOverview> {
 		const at = this.now();
 		const defs = [...this.host.identities()].sort((a, b) => a.id.localeCompare(b.id));
-		const asks = this.host.asks().filter((a) => a.kind !== "stuck");
+		const live = this.host.asks();
+		const asks = live.filter((a) => a.kind !== "stuck");
+		// roles-answer: a stuck task's ask, so the page can answer it there (its id rides on the task's item).
+		const stuck = live.filter((a) => a.kind === "stuck");
 		const runs = await this.runs.get();
 		const job = await this.job.get();
 		const keep = new Set<string>();
 		const roles: UiRoleOverview[] = [];
 		for (const def of defs) {
-			roles.push(await this.role(def, at, asks, runs, job, keep));
+			roles.push(await this.role(def, at, asks, runs, job, keep, stuck));
 		}
 		this.scans.retain(keep);
 		const work = this.work ? await this.work.get() : undefined;
@@ -710,6 +713,7 @@ export class RolesOverviewReader {
 		runs: ReportRun[],
 		job: { nextRunAt?: number } | null,
 		keep: Set<string>,
+		stuckAsks: Ask[] = [],
 	): Promise<UiRoleOverview> {
 		const problems: string[] = [];
 		const mode = roleWorkMode(def.id, def.role.config, now);
@@ -823,6 +827,13 @@ export class RolesOverviewReader {
 				...info.lines,
 				...homeLines.filter((l) => t.chat?.file && samePath(l.chat?.file, t.chat.file)),
 			]);
+			// roles-answer: its ask is the one about this task number in the chat its answer goes into (the
+			// queue's chat, or a lane task's own chat).
+			const target = t.lane ? t.chat?.file : home;
+			const matches = stuckAsks.filter(
+				(a) => a.task?.id === t.id && !!target && !!a.sessionFile && samePath(a.sessionFile, target),
+			);
+			const live = matches.length === 1 ? matches[0] : undefined;
 			asks.push({
 				key: keyOf(`task:${t.id}`),
 				role: def.id,
@@ -832,6 +843,7 @@ export class RolesOverviewReader {
 				// Answered in the queue's chat (its Queue tab), not the task's own chat.
 				chat: { file: homeRef.file, where: t.id },
 				focus: `task:${t.id}`,
+				...(live ? { askId: live.id } : {}),
 			});
 		}
 		for (const a of liveAsks) {
@@ -866,6 +878,9 @@ export class RolesOverviewReader {
 				...(since > 0 ? { since } : {}),
 				chat: ref,
 				focus: `question:${a.id}`,
+				// roles-answer: questions and extension dialogs can be answered here; built-in approvals cannot.
+				// The owner requested shipping this scope before the narrower extension-permission filter.
+				...(a.kind === "question" || a.kind === "dialog" ? { askId: a.id } : {}),
 			});
 		}
 

@@ -1755,6 +1755,18 @@ export type ClientMessage =
 	  }
 	/** board: the owner closes a post (answered with board_result). */
 	| { type: "board_close"; id: string; note?: string; reqId?: string }
+	/** roles-answer: the Roles page opens a Needs-you item's ask (answered with roles_ask). key = its UiRoleAsk.key. */
+	| { type: "roles_ask_open"; reqId: string; key: string }
+	/** roles-answer: the owner's answer from the Roles page (answered with roles_ask_result). askId = the ask he
+	 *  opened under that key; a changed ask is refused. */
+	| {
+			type: "roles_ask_answer";
+			reqId: string;
+			key: string;
+			askId: string;
+			revision: string;
+			answers: UiRoleAskAnswer[];
+	  }
 	/** roles-overview: the Roles page wants the snapshot and its updates (full) or just the ask count for
 	 *  the top bar (count); roles_unwatch stops them. */
 	| { type: "roles_watch"; full: boolean }
@@ -1938,6 +1950,48 @@ export interface UiRoleAsk {
 	chat: UiRoleChatRef;
 	/** The item in that chat: "tldr:<id>", "task:<n>" or "question:<id>". */
 	focus: string;
+	/** roles-answer: the live ask behind it (the server's list of asks), when the page can answer it there. */
+	askId?: string;
+}
+
+/** roles-answer: one choice of an ask's question, as the Roles page shows it. */
+export interface UiRoleAskOption {
+	value: string;
+	label: string;
+	description?: string;
+	preview?: string;
+}
+
+/** roles-answer: one question of an ask (asks.ts AskField, bounded). */
+export interface UiRoleAskField {
+	id: string;
+	header?: string;
+	text: string;
+	detail?: string;
+	options: UiRoleAskOption[];
+	multi: boolean;
+	allowText: boolean;
+	dependsOn?: { questionId: string; value?: string | string[] };
+	optionsMap?: Record<string, UiRoleAskOption[]>;
+}
+
+/** roles-answer: the complete ask; unsafe or oversized asks are refused, never partly displayed. */
+export interface UiRoleAskView {
+	id: string;
+	/** Binds the complete form and its target to this server lifetime. */
+	revision: string;
+	kind: "question" | "dialog" | "stuck";
+	title: string;
+	body?: string;
+	fields: UiRoleAskField[];
+	task?: { id: number; title: string };
+}
+
+/** roles-answer: the answer to one question: the chosen values and/or typed words. */
+export interface UiRoleAskAnswer {
+	id: string;
+	selected: string[];
+	text?: string;
 }
 
 /** roles-overview: a TL;DR line of a role's home chat or one of its task chats. */
@@ -4728,6 +4782,10 @@ export type ServerMessage =
 			direct?: string[];
 			later?: string[];
 	  }
+	/** roles-answer: the ask a roles_ask_open asked for (ok false: error says why, e.g. it is no longer waiting). */
+	| { type: "roles_ask"; reqId: string; ok: boolean; ask?: UiRoleAskView; error?: string }
+	/** roles-answer: what a roles_ask_answer did (ok: the ask took the answer; false: refused or uncertain, never retry automatically). */
+	| { type: "roles_ask_result"; reqId: string; ok: boolean; error?: string }
 	/** One identity file's text. hash goes back with identity_file_save; error = couldn't read it. */
 	| {
 			type: "identity_file";

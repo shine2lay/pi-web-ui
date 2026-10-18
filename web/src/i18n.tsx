@@ -2265,7 +2265,7 @@ export const en = {
 	ruUnknownSource: "Feed state unclear",
 	ruConnected: "Connected",
 	ruQualification:
-		"What the roles' chats and queues report; it doesn't check the work itself. Quoted text is as the roles wrote it. Answer in each chat's own dialog or card.",
+		"What the roles' chats and queues report; it doesn't check the work itself. Quoted text is as the roles wrote it. Use Answer where offered, otherwise open the chat.",
 	ruNeedsYou: "Needs you ({n})",
 	ruNeedsYouTitle: "Needs you",
 	ruAllClear: "None reported to you in role chats and queues — last update received {time}. This can miss items.",
@@ -2337,6 +2337,29 @@ export const en = {
 	ruOpenQueue: "Open queue",
 	ruForTask: "for task #{id}",
 	ruThisChat: "this chat",
+	/* roles-answer: the complete ask, answered through the existing browser path */
+	raAnswer: "Answer",
+	raTitle: "Answer this question",
+	raBody: "Full question and answer choices",
+	raLoading: "Checking what is waiting…",
+	raSending: "Sending your answer…",
+	raSent: "Answer sent. The list will update shortly.",
+	raYourAnswer: "Or write your answer",
+	raOpenChat: "Open chat",
+	raSend: "Send answer",
+	raReceipt: "This counts as answering in the chat. Closing this window sends nothing.",
+	raGone: "This is no longer waiting for an answer.",
+	raChanged: "The question changed. Close this window and open it again to read the new question.",
+	raOpenInChat: "The complete question cannot be shown safely here. Open its chat to read and answer it.",
+	raOffline: "You are not connected. Reconnect, then open the question again.",
+	raUncertain:
+		"Delivery could not be confirmed. Your answer may have arrived. Open the chat to check before trying again.",
+	raCheckAnswers: "An answer does not fit this question. Open its chat to check it.",
+	raUnavailable: "The question could not be checked. Open its chat instead.",
+	raSpend: "Own-work spend",
+	raSpendUnknown: "No readable spend figure was sent.",
+	raSpendReported:
+		"The role's own tally, not an independent meter or an automatic stop. Only its own-initiative work counts.",
 	// roles-panel: one role's panel on the Roles page.
 	rpDetails: "Details",
 	rpOfRole: "of",

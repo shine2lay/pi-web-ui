@@ -89,7 +89,8 @@ function closed(model: UsefulRoles) {
 	keys(model, ["source", "roster", "omitted", "lastReceived", "roles", "needsYou"]);
 	keys(model.needsYou, ["tell", "asOf", "total", "items", "more"]);
 	for (const item of model.needsYou.items) {
-		keys(item, ["key", "roleId", "roleLabel", "text", "since", "link"]);
+		keys(item, ["key", "roleId", "answer", "roleLabel", "text", "since", "link"]);
+		if (item.answer) keys(item.answer, ["key", "id"]);
 		if (item.link) linkShape(item.link);
 	}
 	for (const r of model.roles) {
@@ -105,7 +106,12 @@ function closed(model: UsefulRoles) {
 			"active",
 			"queued",
 			"dropped",
+			"spend",
 		]);
+		if (r.spend) {
+			keys(r.spend, ["state", "line", "amounts", "initiatives"]);
+			for (const item of r.spend.initiatives) keys(item, ["id", "amount"]);
+		}
 		keys(r.counts, ["active", "queued", "done", "dropped"]);
 		for (const list of [r.active, r.queued, r.dropped]) {
 			keys(list, ["available", "omitted", "notAllShown", "records"]);
@@ -831,12 +837,13 @@ describe("closed boundary and the actual store", () => {
 		type Fiber = { type?: { name?: string }; memoizedProps?: Record<string, unknown>; child?: Fiber; sibling?: Fiber };
 		const internal = root as unknown as { _internalRoot: { current: Fiber } };
 		const allowed: Record<string, string[]> = {
-			// roles-panel: onAbout and onDetails are callbacks (open Settings at a role; open a role's panel).
+			// Only callbacks and the explicitly projected view cross component boundaries.
 			RolesUsefulView: ["active", "phone", "onOpen", "onAbout"],
-			RolesUsefulContent: ["model", "phone", "now", "onOpen", "onDetails"],
-			NeedsYouSection: ["needs", "now", "onOpen"],
-			AskRow: ["item", "now", "onOpen"],
+			RolesUsefulContent: ["model", "phone", "now", "onOpen", "onDetails", "onAnswer"],
+			NeedsYouSection: ["needs", "now", "onOpen", "onAnswer"],
+			AskRow: ["item", "now", "onOpen", "onAnswer"],
 			RoleCard: ["role", "onOpen", "onDetails"],
+			RoleSpend: ["spend"],
 			RecordList: ["heading", "list", "count", "onOpen"],
 			TaskRow: ["record", "onOpen"],
 		};
@@ -1000,7 +1007,7 @@ describe("closed boundary and the actual store", () => {
 		expect(text()).toContain("Can't tell right now: this page isn't getting live updates.");
 		expect(text()).not.toMatch(/\(0\)/);
 	});
-	it("source route: existing hooks only, links only through onOpen, no rich content or side-effect APIs", () => {
+	it("source route: links only through onOpen, answers through the guarded dialog, no rich content or side-effect APIs", () => {
 		const source = readFileSync(resolve(process.cwd(), "web/src/components/RolesUsefulView.tsx"), "utf8");
 		const model = readFileSync(resolve(process.cwd(), "web/src/roles-useful-model.ts"), "utf8");
 		const app = readFileSync(resolve(process.cwd(), "web/src/App.tsx"), "utf8");
@@ -1016,8 +1023,10 @@ describe("closed boundary and the actual store", () => {
 		);
 		// The page's opens are remembered first (fixed words on failure), then go the existing way.
 		expect(app).toMatch(/markRolesOpen\(target\.file\);\s*openFromRoles\(target\);/);
-		// Two opens through onOpen, and each card's Details (roles-panel), which only opens the panel.
-		expect(source.match(/onClick=/g)).toHaveLength(3);
+		// Two chat links, Details opens the panel, Answer opens only the guarded dialog.
+		expect(source.match(/onClick=/g)).toHaveLength(4);
+		expect(source.match(/onClick=\{\(e\) => onAnswer\(item, e\.currentTarget\)\}/g)).toHaveLength(1);
+		expect(source).toContain('<RoleAnswerDialog item={answer.item} connected={connection === "open"}');
 		expect(source.match(/onClick=\{\(\) => onOpen\(link\)\}/g)).toHaveLength(2);
 		expect(source.match(/onClick=\{\(e\) => onDetails\(role\.roleId, e\.currentTarget\)\}/g)).toHaveLength(1);
 		expect(source + model).not.toMatch(
@@ -1026,7 +1035,7 @@ describe("closed boundary and the actual store", () => {
 		expect(source + model).not.toMatch(/\.\.\./);
 	});
 	it("all eight locale packs carry the exact English fork copy", () => {
-		const newKeys = Object.keys(en).filter((key) => /^ru[A-Z]/.test(key)) as (keyof typeof en)[];
+		const newKeys = Object.keys(en).filter((key) => /^(?:ru|ra)[A-Z]/.test(key)) as (keyof typeof en)[];
 		expect(newKeys.length).toBeGreaterThan(60);
 		for (const lang of ["de", "es", "fr", "it", "ja", "ko", "pt", "ru"]) {
 			const pack = JSON.parse(readFileSync(resolve(process.cwd(), `locales/${lang}.json`), "utf8"));

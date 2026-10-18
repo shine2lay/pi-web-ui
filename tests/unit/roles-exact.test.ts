@@ -68,7 +68,7 @@ function fixture(initial: ExactRoles = projectExactRoles(state(), "open", NOW), 
 	vi.useFakeTimers();
 	let model = initial;
 	let surface: ReturnType<typeof bindRolesSurface> | null = null;
-	const actions = { open: vi.fn(), about: vi.fn(), reload: vi.fn() };
+	const actions = { open: vi.fn(), about: vi.fn(), answer: vi.fn(), reload: vi.fn() };
 	const view = createExactRolesView(
 		() => model,
 		actions,
@@ -198,6 +198,57 @@ describe("the supplied Roles design with the existing feed", () => {
 		expect(choice.label).toBe("Open chat");
 		invoke(choice.pick);
 		expect(actions.open).toHaveBeenCalledWith(expect.objectContaining({ file: HOME }));
+	});
+
+	it("offers Answer in the exact design without replacing Open chat or exposing the target", () => {
+		const entry = ask(1, {
+			key: "ops:question:q1",
+			kind: "question",
+			focus: "question:q1",
+			askId: "ask-1",
+		});
+		const { view, actions } = fixture(projectExactRoles(state([role()], [entry]), "open", NOW), true);
+		invoke(view.values().youExpand);
+		vi.runAllTimers();
+		const choices = list(object(list(view.values().inbox)[0]).choices).map(object);
+		expect(choices.map((c) => c.label)).toEqual(["Answer", "Open chat"]);
+		expect(actions.answer).not.toHaveBeenCalled();
+		invoke(choices[0].pick);
+		expect(actions.answer).toHaveBeenCalledWith(
+			expect.objectContaining({ answer: { key: entry.key, id: "ask-1" } }),
+			document.body,
+		);
+		for (const hidden of [entry.key, "ask-1", HOME]) expect(document.documentElement.outerHTML).not.toContain(hidden);
+		invoke(choices[1].pick);
+		expect(actions.open).toHaveBeenCalledWith(expect.objectContaining({ file: HOME }));
+	});
+
+	it.each(["closed", "changed", "unconfirmed"])("a retained Answer callback refuses a %s item", (mode) => {
+		const entry = ask(1, {
+			key: "ops:question:q1",
+			kind: "question",
+			focus: "question:q1",
+			askId: "ask-1",
+		});
+		const { view, actions, update } = fixture(projectExactRoles(state([role()], [entry]), "open", NOW));
+		const choices = list(object(list(view.values().inbox)[0]).choices).map(object);
+		expect(choices.map((c) => c.label)).toEqual(["Answer", "Open chat"]);
+		const pick = choices[0].pick;
+		update(
+			projectExactRoles(
+				state(
+					[role()],
+					[{ ...entry, askId: mode === "changed" ? "ask-2" : "ask-1" }],
+					mode === "unconfirmed" ? { appliedAt: null } : {},
+				),
+				mode === "closed" ? "closed" : "open",
+				NOW,
+			),
+		);
+		invoke(pick);
+		expect(actions.answer).not.toHaveBeenCalled();
+		if (mode !== "changed")
+			expect(list(object(list(view.values().inbox)[0]).choices).map((c) => object(c).label)).toEqual(["Open chat"]);
 	});
 
 	it("associates panel questions by validated role id, not identical display names", () => {

@@ -87,4 +87,7 @@
 //     progress; initiative_lead / initiative_poke / initiative_seen / initiative_update_links and their
 //     initiative_result / initiative_update_links answers. An old page shows no Progress and no lead
 //     picker; an old server never answers initiative_lead or initiative_poke.
-export const PROTOCOL_VERSION = 49;
+// 50: roles-answer - the Roles page answers what needs the owner: the roles feed's asks carry askId, and
+//     roles_ask_open / roles_ask_answer with their roles_ask / roles_ask_result answers. An old page shows no
+//     Answer button; an old server never answers roles_ask_open.
+export const PROTOCOL_VERSION = 50;

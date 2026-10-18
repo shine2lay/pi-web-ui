@@ -5,7 +5,8 @@ import { projectExactRoles } from "../roles-exact-model";
 import { createExactRolesView } from "../roles-exact-view";
 import { reloadRoles, useRoles } from "../roles-state";
 import { bindRolesSurface, prepareRolesDocument, type FontBytes } from "../roles-u0/surface";
-import type { UsefulOpenTarget } from "../roles-useful-model";
+import type { NeedsYouItem, UsefulOpenTarget } from "../roles-useful-model";
+import { RoleAnswerDialog } from "./RoleAnswerDialog";
 
 /** The actual Roles surface, not a preview. The supplied template is isolated from app themes;
  * data comes from the existing safe projections, never the design's fictional example records.
@@ -26,6 +27,7 @@ export function RolesExactView({
 	const connection = useAppField("status");
 	const [now, setNow] = useState(() => Date.now());
 	const [failed, setFailed] = useState(false);
+	const [answer, setAnswer] = useState<{ item: NeedsYouItem; from: HTMLElement } | null>(null);
 	const host = useRef<HTMLDivElement>(null);
 	const model = useMemo(() => projectExactRoles(state, connection, now), [state, connection, now]);
 	const current = useRef({ model, onOpen, onAbout });
@@ -42,7 +44,10 @@ export function RolesExactView({
 		redraw.current?.();
 	}, [model]);
 	useEffect(() => {
-		if (!active) hide.current?.();
+		if (!active) {
+			hide.current?.();
+			setAnswer(null);
+		}
 	}, [active]);
 	useEffect(() => {
 		const container = host.current;
@@ -61,6 +66,7 @@ export function RolesExactView({
 			release?.();
 			release = null;
 			frame.remove();
+			setAnswer(null);
 			setFailed(true);
 		};
 		async function mount() {
@@ -101,6 +107,7 @@ export function RolesExactView({
 				{
 					open: (target) => current.current.onOpen(target),
 					about: (id) => current.current.onAbout(id),
+					answer: (item, from) => setAnswer({ item, from }),
 					reload: reloadRoles,
 				},
 				{
@@ -175,12 +182,29 @@ export function RolesExactView({
 		};
 	}, [fonts]);
 	return (
-		<div ref={host} style={{ width: "100%", height: "100%", minHeight: 0 }}>
-			{failed && (
-				<p role="alert">
-					The exact Roles surface could not be loaded. No fallback design or sample data has been substituted.
-				</p>
+		<>
+			<div ref={host} style={{ width: "100%", height: "100%", minHeight: 0 }}>
+				{failed && (
+					<p role="alert">
+						The exact Roles surface could not be loaded. No fallback design or sample data has been substituted.
+					</p>
+				)}
+			</div>
+			{active && answer && (
+				<RoleAnswerDialog
+					item={answer.item}
+					connected={connection === "open"}
+					onOpen={onOpen}
+					onClose={(back) => {
+						const from = answer.from;
+						setAnswer(null);
+						if (back && from.isConnected)
+							requestAnimationFrame(() => {
+								if (from.isConnected) from.focus();
+							});
+					}}
+				/>
 			)}
-		</div>
+		</>
 	);
 }

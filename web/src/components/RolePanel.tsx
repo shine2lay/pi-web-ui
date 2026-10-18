@@ -19,6 +19,7 @@ import type {
 	WorkView,
 } from "../roles-panel-model";
 import type { UsefulOpenTarget } from "../roles-useful-model";
+import { RoleSpend } from "./RoleSpend";
 
 type Key = Parameters<Translate>[0];
 
@@ -173,6 +174,7 @@ export function RolePanelDialog({
 						{t("rpAbout")}
 					</button>
 				</div>
+				<RoleSpend spend={panel.spend} details />
 				<AboutSection panel={panel} now={now} />
 				<WorkSection panel={panel} now={now} go={go} />
 				<UpdatesSection lines={panel.lines} now={now} go={go} />

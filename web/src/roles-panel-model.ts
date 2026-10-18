@@ -16,6 +16,7 @@ import {
 	marker,
 	object,
 	plain,
+	projectSpend,
 	record,
 	roleId,
 	taskId,
@@ -25,6 +26,7 @@ import {
 	type PauseMarker,
 	type RowState,
 	type UsefulOpenTarget,
+	type UsefulSpend,
 } from "./roles-useful-model";
 
 export const LINE_LIMIT = 300;
@@ -138,6 +140,7 @@ export interface PanelReport {
 	link: UsefulOpenTarget | null;
 }
 export interface RolePanel {
+	spend?: UsefulSpend | null;
 	roleId: string;
 	roleLabel: string;
 	status: PanelRoleStatus;
@@ -502,6 +505,7 @@ export function projectRolePanel(state: unknown, id: string): RolePanel | null {
 	return {
 		roleId: id,
 		roleLabel: labels.get(id) ?? id,
+		spend: projectSpend(row.spend),
 		status: oneOf(ROLE_STATUSES, row.status) ?? "unknown",
 		focus: plain(row.focus, FOCUS_LIMIT)?.text ?? null,
 		workMode: oneOf(["self-start", "request-only"] as const, row.workMode),
