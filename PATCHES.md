@@ -18,6 +18,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: `tests/unit/work-page.test.ts` (fixture replay against the exact expected page, problems, limits, facts from an overview, file reader, watch), with `tests/unit/work-records.test.ts` and `tests/unit/roles-overview.test.ts` unchanged, then the landing gate.
 - Undo: revert this commit.
 
+## gate-plugin-dom: the plugin-dom test waits for its background rescans before teardown
+
+- `local` (Ops #229, project faster-landing, 2026-10-18; essential maintenance: the flake refused every role's pi-web-ui lands). Hypothesis H-GATE-PLUGIN-DOM-1, the tracer's finding, the before and after counts and the result: `docs/gate-plugin-dom-flake.md`.
+- `tests/unit/plugin-dom.test.ts` (upstream's file; our 839ebcc2 added its `console.log` spy): the integration fixture's `afterEach` now waits for every rescan the plugin manager started without waiting (`setDomConsent` calls `pushToAll`; a spy keeps its promise) before it disposes the manager and deletes the temp folder. Before, the last test's rescan found the folder gone and logged `console.error("[plugin:<id>] manifest.json missing or unparsable …")` after the file's last test, in every run; vitest refused the whole run ("EnvironmentTeardownError: [vitest-worker]: Closing rpc while "onUserConsoleLog" was pending", 0 failed tests) whenever that log was still in flight when the worker closed.
+- Test-only: no app code changed, nothing to install. The gate is not weakened: no error filter, console silencing or retry.
+- Checks: the file's 19 tests; the measure loop (the file 40 times, 6 at once, sealed, `TZ=UTC`): runs with the error 1 of 120 before, 0 of 120 after; traced runs writing to the console after the last test 40 of 40 before, 0 of 40 after. Then the landing gate.
+- Undo: revert this commit.
+
 ## patches-union: two changes that each add an entry here merge with both entries whole, and a check catches a bad merge
 
 - `local` (owner 2026-10-18, "Early warning + fewer conflicts", Ops #219). Hypotheses H-PATCHES-UNION-1 (MISS) and H-PATCHES-UNION-2, with results: `docs/patches-union.md`.
