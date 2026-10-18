@@ -1386,6 +1386,41 @@ button.session-item.elsewhere-item.confirm {
 	background: color-mix(in srgb, var(--term-cyan) 12%, transparent);
 	color: var(--text);
 }
+/* left-task-status: a parked queued task's label at the start of its chat's second line, its TL;DR after it.
+   One line with "\2026" (the label stays inline so the ellipsis can cut it). Colours as in the Queue panel and
+   the TL;DR lines: waiting and asking blue, blocked cyan, needs a decision amber, paused grey and dotted. */
+.session-sub.lp-task-status-line {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.lp-task-status {
+	padding: 0 5px;
+	border-radius: 3px;
+	font-weight: 600;
+	color: var(--text);
+}
+.lp-task-status.waiting,
+.lp-task-status.asking {
+	background: color-mix(in srgb, var(--blue) 14%, transparent);
+	box-shadow: inset 2px 0 0 var(--blue);
+}
+.lp-task-status.blocked {
+	background: color-mix(in srgb, var(--term-cyan) 14%, transparent);
+	box-shadow: inset 2px 0 0 var(--term-cyan);
+}
+.lp-task-status.stuck {
+	background: color-mix(in srgb, var(--amber) 14%, transparent);
+	box-shadow: inset 2px 0 0 var(--amber);
+}
+.lp-task-status.paused {
+	color: var(--text-dim);
+	outline: 1px dotted var(--text-dim);
+	outline-offset: -1px;
+}
+.lp-task-status-tldr {
+	margin-left: 6px;
+}
 
 .session-src {
 	margin-left: 6px;

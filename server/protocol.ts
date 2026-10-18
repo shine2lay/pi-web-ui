@@ -3830,6 +3830,9 @@ export interface ConversationSummary {
 	 *  (resolved), whether or not that chat is a row too. The left bar's leads view puts the task under the
 	 *  lead whose home chat this is (server/queue-groups.ts, web/src/lead-bar.ts). */
 	queueHomeFile?: string;
+	/** left-task-status: an open queued task's own chat that is parked: how its task stands, for a short label
+	 *  on its row (server/queue-chat-status.ts). Not there: working, not a task chat, or not known. */
+	queueStatus?: UiQueueChatStatus;
 	/** 落盘会话文件（persisted conversation 才有；inMemory 子代理缺省）。
 	 *  右键「复制会话文件路径」与 AI 按 path 读历史时用。 */
 	sessionFile?: string;
@@ -3915,6 +3918,33 @@ export interface ElsewhereRunning {
 	/** lead-bar: an open queued task's own chat: the transcript of the queue chat it came from (see
 	 *  ConversationSummary.queueHomeFile). */
 	queueHomeFile?: string;
+	/** left-task-status: see ConversationSummary.queueStatus. */
+	queueStatus?: UiQueueChatStatus;
+}
+
+/** left-task-status: how a parked queued task stands, for its chat's row in the left panel. The page words it:
+ *  "Waiting: <text>", "Blocked on <text>" (`on`), "Blocked: <text>", "Needs decision" (stuck: the owner's),
+ *  "Asking its lead" (asking), "Paused" (the owner paused it or its whole queue). */
+export interface UiQueueChatStatus {
+	kind: "waiting" | "blocked" | "stuck" | "asking" | "paused";
+	/** The label's own words, cut short with "…": waiting: what it waits on; blocked: its tasks ("#12, temper #38")
+	 *  when `on`, else its need, else its lead and what the lead owes. "" for stuck, asking and paused. */
+	text: string;
+	/** blocked: `text` names what it is blocked on (its tasks, or the lead that owes the result). */
+	on?: boolean;
+	/** blocked, whole, for the tooltip: the tasks it waits on ("#12, temper #38"), its need, and the lead that owes
+	 *  the result and what. asking: `lead` is the role whose lead has the question (not there: its main chat). */
+	refs?: string;
+	need?: string;
+	lead?: string;
+	owes?: string;
+	/** Whole, for the tooltip: waiting: what it waits on; stuck and asking: the question; paused: the owner's words. */
+	detail?: string;
+	/** Since when it has stood like this (ms); not known for stuck and asking. */
+	since?: number;
+	/** waiting: how often its check runs (ms) and when it gives up (ms). */
+	everyMs?: number;
+	giveUpAt?: number;
 }
 
 /** DSH Agent 预设名录行（字段以运行时树为准；broken = 名录可见但不可挂载）。 */

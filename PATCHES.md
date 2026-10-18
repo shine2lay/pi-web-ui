@@ -145,6 +145,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Tests: `roles-exact.test.ts`, `roles-receipt.test.ts`, and the actual sandboxed component in `tests/roles-exact-test.mjs` (mouse close, keyboard focus, warning-card contrast and content receipt after errors/heartbeats). Fixed inputs only; no live answers.
 - Undo: revert this patch and install with `pi-web-deploy`; no data migration.
 
+## left-task-status: the left panel shows each task chat's waiting or blocked status
+
+- `local` (owner 2026-10-18, Ops #213). Hypothesis H-LEFT-STATUS-1 and result: `docs/left-task-status.md`.
+- A queued task's chat that waited or was blocked looked idle in the left panel. `server/queue-chat-status.ts` turns each open task into an optional `queueStatus` (waiting, blocked, stuck, asking, paused; the owner's pause first; working, ready, done and dropped none) from the queue state the server already caches: the task chat's own record over its queue chat's copy, the queue chat's record for the pause. `reconcileStuckAsks` keeps the map and sends every window its list again when it changes; `emitConversations` puts it on open task chats' rows, the leads view's saved task rows and chats running elsewhere (`ConversationSummary.queueStatus`, `ElsewhereRunning.queueStatus`). No new reads, no queue change.
+- `LeftPanel.tsx` draws it on the row's second line ("Waiting: …", "Blocked on #12", "Blocked: …", "Needs decision", the Queue panel's "Asking Ops" / "Asking <role>'s lead" / "Asking the main chat", "Paused"), cut short with "…", the tooltip with the whole text, since when, and a wait's check interval and give-up time (`web/src/queue-chat-status.ts`). None while the chat runs, nor a question label when the "?" badge shows. Its 18 strings are in `web/src/i18n.tsx` and all 8 `locales/*.json` packs.
+- Checks: `tests/unit/queue-chat-status.test.ts`, then the landing gate.
+- Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
+
 ## question-lead: say which department's lead has a task's question, not always Ops
 
 - `local` (owner 2026-10-17, dialog answers "The role whose queue holds it" and "Up the chain, then you"; built directly with the owner). pi-work-management (pi-queue) now sends a task's question to the home chat of the role whose queue holds the task, then up the work registry's chain, then to the owner; Ops only when that role has no home chat. The Queue tab still said "Asking Ops" and the Roles page "question with Ops" for every such question, which is no longer true.

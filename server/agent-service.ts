@@ -385,6 +385,7 @@ import type {
 	UiMessage,
 	UiPluginUpdateInfo,
 	UiQuestion,
+	UiQueueChatStatus,
 	UiRoleGuardQuestion,
 	UiRoleMessageRow,
 	UiRolesOverview,
@@ -444,6 +445,7 @@ import {
 	queueLinksSig,
 	unlistedQueueTasks,
 } from "./queue-groups.js";
+import { applyQueueChatStatuses, queueChatStatuses, queueChatStatusesSig } from "./queue-chat-status.js";
 import { idsHash } from "./window-hash.js";
 import {
 	isTldrReply,
@@ -5996,6 +5998,10 @@ export class ClientSession {
 	/** queue-main-chat: the transcripts of task chats whose task asks its main chat now (as the open chats'
 	 *  queues say): nothing says the user is needed there (no green light, no "done" cue). */
 	private static askingChats: Set<string> = new Set();
+	/** left-task-status: each open task chat's status while its task is parked (transcript, resolved -> status), as
+	 *  the open chats' queues say (queue-chat-status.ts); kept by reconcileStuckAsks, put on rows by emitConversations. */
+	private static queueStatuses: ReadonlyMap<string, UiQueueChatStatus> = new Map();
+	private static queueStatusesSig = "[]";
 	/** telegram-answers: sends a stuck task's answer into the chat with this transcript, as the user's
 	 *  reply (AgentService sets it: the wake-up client opens the chat, or switches to it, and sends). */
 	static stuckAnswerSender: ((file: string, text: string) => Promise<AskResult>) | null = null;
@@ -6099,6 +6105,14 @@ export class ClientSession {
 			if (queue.tasks.length === 0) continue;
 			const meta = ClientSession.askMetaOf(conv);
 			if (meta.sessionFile) sources.push({ file: meta.sessionFile, queue, meta });
+		}
+		// left-task-status: the open task chats' statuses changed: every window's list shows them again.
+		const statuses = queueChatStatuses(sources);
+		const statusesSig = queueChatStatusesSig(statuses);
+		if (statusesSig !== ClientSession.queueStatusesSig) {
+			ClientSession.queueStatuses = statuses;
+			ClientSession.queueStatusesSig = statusesSig;
+			ClientSession.emitConversationsToAll();
 		}
 		const { wanted, seen, mainAnswered, asking } = wantedStuckAsks(sources);
 		// queue-main-chat: the chats whose task asks its main chat changed: every window's list drops (or
@@ -12652,6 +12666,8 @@ export class ClientSession {
 		const homes = ClientSession.knownQueueHomes();
 		applyQueueHomes(conversations, homes);
 		applyElsewhereQueueHomes(elsewhere, homes);
+		// left-task-status: an open task chat that is parked says how its task stands (from the cached queues).
+		applyQueueChatStatuses(conversations, elsewhere, ClientSession.queueStatuses);
 		// (Optional chaining: stand-in windows in the unit tests don't list saved chats.)
 		const byFile = this.sessionsByFile as ReadonlyMap<string, SessionSummary> | undefined;
 		const queueTasks = queueTaskRows(
@@ -12660,6 +12676,7 @@ export class ClientSession {
 			waiting,
 			this.cwd,
 		);
+		applyQueueChatStatuses(queueTasks, [], ClientSession.queueStatuses);
 		this.emit({
 			type: "conversations",
 			conversations,

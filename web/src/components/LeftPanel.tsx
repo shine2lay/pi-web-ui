@@ -13,7 +13,7 @@ import {
 	FiTrash2,
 	FiX,
 } from "react-icons/fi";
-import type { ConversationSummary, ElsewhereRunning, SessionSummary, SwitchTarget } from "../types";
+import type { ConversationSummary, ElsewhereRunning, SessionSummary, SwitchTarget, UiQueueChatStatus } from "../types";
 import { isSwitchTargetRow } from "../switch-pending";
 import { useT } from "../i18n";
 import { useAppField, useIsDsh } from "../app-globals";
@@ -29,6 +29,7 @@ import {
 	type OpenNow,
 } from "../lead-bar";
 import { LS_QUEUE_FOLDED, parseQueueFolds, queueFoldKey, toggledQueueFolds } from "../queue-folds";
+import { queueStatusView, shownQueueStatus } from "../queue-chat-status";
 // 宿主 UI 扩展点（issue #146）：会话行的右键菜单走「slot 条目」这一条通道。
 import { CONV_IDENTITY_ENTRY_ID, LP_IDENTITY_ENTRY_ID, LP_SECTION_ENTRY_IDS, type UiSlotEntry } from "../ui-slots";
 import { useIdentityList } from "../identity-state";
@@ -671,7 +672,19 @@ export const LeftPanel = memo(function LeftPanel({
 		// 过户目标定位（无则沿用旧行为：只读行，无过户入口）。
 		...(w.owner && w.convId ? { owner: w.owner, convId: w.convId } : {}),
 		...(w.hasQuestion ? { hasQuestion: true as const } : {}),
+		// left-task-status: a parked queued task's chat says how its task stands.
+		...(w.queueStatus ? { queueStatus: w.queueStatus } : {}),
 	});
+	/** left-task-status: a parked queued task's label on its chat's row ("Waiting: …", "Blocked on #12", "Paused"); the
+	 *  tooltip has the whole text, since when, and a wait's check interval and give-up time. */
+	const taskStatusChip = (s: UiQueueChatStatus): React.ReactNode => {
+		const v = queueStatusView(t, s, Date.now());
+		return (
+			<span className={`lp-task-status ${v.kind}`} title={v.tip}>
+				{v.label}
+			</span>
+		);
+	};
 	/** issue #145：运行的对话 = 本客户端会话 + 其他标签页/设备的运行（后者只读行）。 */
 	const runningAll: RowConv[] = [...conversations, ...elsewhere.map(elsewhereRow)];
 	const createSashHandler = useCallback(
@@ -805,6 +818,7 @@ export const LeftPanel = memo(function LeftPanel({
 			// issue #290：可过户（有 owner + convId）时本行可点击，两段确认。
 			const canTakeover = Boolean(elseOwner && elseConvId);
 			const confirming = confirmTakeover === c.id;
+			const elseStatus = confirming ? undefined : shownQueueStatus(c as RowConv);
 			return (
 				<div
 					className={`lp-row${depth > 0 ? " lp-sub lp-queue-task" : ""}`}
@@ -868,6 +882,7 @@ export const LeftPanel = memo(function LeftPanel({
 								)}
 								{confirming ? t("takeoverConfirm") : c.title}
 							</span>
+							{elseStatus && <span className="session-sub lp-task-status-line">{taskStatusChip(elseStatus)}</span>}
 						</span>
 						{c.isStreaming && <span className="conv-streaming" title={t("streaming")} />}
 					</button>
@@ -901,6 +916,8 @@ export const LeftPanel = memo(function LeftPanel({
 		// 旧对话上等快照。失败后 pendingSwitch 清空，高亮自然回到真正的当前行。
 		const opening = isSwitchTargetRow(pendingSwitch, c);
 		const active = pendingSwitch ? opening : activeConversationId === c.id;
+		// left-task-status: like the TL;DR, not on the chat being opened or looked at.
+		const taskStatus = opening || active ? undefined : shownQueueStatus(c);
 		const foldTip = queueGroup ? t(queueGroup.folded ? "queueFoldShow" : "queueFoldHide", { n: queueGroup.count }) : "";
 		return (
 			<div
@@ -1016,7 +1033,17 @@ export const LeftPanel = memo(function LeftPanel({
 								{c.error && <span className="conv-error-badge" title={t("convErrorBadge", { error: c.error })} />}
 							</span>
 						)}
-						{renaming === `conv:${c.id}` ? null : c.tldr && !opening && !active ? (
+						{renaming === `conv:${c.id}` ? null : taskStatus ? (
+							// left-task-status: a parked queued task's label takes the line's start; its TL;DR follows.
+							<span className="session-sub lp-task-status-line">
+								{taskStatusChip(taskStatus)}
+								{c.tldr && (
+									<span className="lp-task-status-tldr" title={c.tldr.text}>
+										{c.tldr.text}
+									</span>
+								)}
+							</span>
+						) : c.tldr && !opening && !active ? (
 							// tldr-sidebar：最新一行没看过的 TL;DR 代替「N 条消息」（一行，悬停看全文）；
 							// 正在打开 / 当前对话照旧。需要你的行用 TL;DR tab 的同一种高亮。
 							<span className={tldrSubClass(c.tldr)} title={c.tldr.text}>
