@@ -558,7 +558,9 @@ export function createExactRolesView(
 		const budgetRole = spending.length === 1 ? spending[0] : null;
 		const budget = budgetRole?.spend;
 		return {
-			ready: !loading,
+			// In the reference template this gates only the introductory helper/legend row.
+			// The owner removed that row; data readiness and the graph are separate below.
+			ready: false,
 			loading,
 			offline: model.source === "disconnected",
 			lastKnown: model.lastReceived,

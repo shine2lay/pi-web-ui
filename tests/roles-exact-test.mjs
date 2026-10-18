@@ -100,8 +100,16 @@ try {
 		const frame = page.frameLocator('iframe[title="Roles"]');
 		await frame.locator('button[aria-haspopup="dialog"]').first().waitFor();
 		assert.equal(await frame.locator('button[aria-haspopup="dialog"]').count(), 15);
+		const noHelper = async (where) => {
+			const text = await where.locator("body").innerText();
+			assert.ok(!text.includes("the next step is yours"));
+			assert.ok(!text.includes("Hover a label to read messages"));
+			assert.equal(await where.getByRole("button", { name: /^(Hide )?Legend$/i }).count(), 0);
+		};
+		await noHelper(frame);
+		assert.ok((await frame.getByRole("button", { name: /^Ops / }).locator("..").innerText()).includes("ON YOU"));
 		await page.screenshot({ path: join(output, "desktop.png") });
-		record("real component renders all 15 departments with the supplied graph");
+		record("real component renders all 15 departments and real ON YOU markers without the helper row");
 		await frame.getByRole("button", { name: /^Ops / }).click();
 		const panel = frame.locator('[role="region"]');
 		// A script-disabled child also blocks Playwright's child-window retry timer.
@@ -322,9 +330,8 @@ try {
 		await phone.waitForFunction(() => !!window.rolesExactTest);
 		await phone.evaluate(() => window.rolesExactTest.deliver());
 		const phoneFrame = phone.frameLocator('iframe[title="Roles"]');
-		await phoneFrame.getByRole("button", { name: "Legend", exact: true }).tap();
-		await phone.screenshot({ path: join(output, "phone-legend.png") });
-		await phoneFrame.getByRole("button", { name: "Hide legend", exact: true }).tap();
+		await noHelper(phoneFrame);
+		await phone.screenshot({ path: join(output, "phone-no-helper.png") });
 		for (const [label, file] of [
 			[/^Ops /, "phone-ops.png"],
 			["You: open your decisions, questions and spending", "phone-you.png"],
@@ -345,7 +352,7 @@ try {
 			assert.equal(dimmed, false);
 		}
 		await touchContext.close();
-		record("phone legend and Ops/You panels work with touch; closing leaves no sticky hover dimming");
+		record("phone has no helper row; Ops/You panels work with touch and closing leaves no sticky hover dimming");
 		assert.deepEqual(pageErrors, []);
 		state = await page.evaluate(() => window.rolesExactTest.getState());
 		assert.ok(state.sent.every((type) => ["roles_watch", "roles_unwatch"].includes(type)));

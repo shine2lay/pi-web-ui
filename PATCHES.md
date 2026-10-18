@@ -10,6 +10,13 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## roles-no-helper: remove the introductory helper and Legend row
+
+- `local` (owner 2026-10-17: remove the “ON YOU / the next step is yours”, hover/click and Legend line). Hypothesis: `docs/roles-help-row.md`.
+- The actual Roles adapter leaves the supplied template's helper-only `ready` gate off. This removes the row from the rendered DOM, while preserving the historical reference template, graph, warning banners, real ON YOU markers and all panels and answer controls. No data-readiness or permission change.
+- Checks: mounted unit coverage across feed updates plus desktop/phone actual-component proof; the historical reference scenes keep their original baseline.
+- Undo: revert this presentation-only patch and install through `pi-web-deploy`.
+
 ## roles-exact: implement the supplied Roles design before new data producers
 
 - `local` (owner 2026-10-17: implement the supplied design 1:1 as the actual page, not another preview; subsequent dialog authorises building and shipping its exact assets). Hypothesis, constraints and result: `docs/roles-exact.md`.

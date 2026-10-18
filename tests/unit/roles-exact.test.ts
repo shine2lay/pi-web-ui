@@ -123,6 +123,32 @@ describe("the supplied Roles design with the existing feed", () => {
 		expect(values).not.toHaveProperty("namespace");
 	});
 
+	it("omits the helper row through updates without hiding real ON YOU markers or panels", () => {
+		const input = state([role()], [ask(1)]);
+		const { view, update } = fixture(projectExactRoles(input, "open", NOW), true);
+		const noHelper = () => {
+			expect(document.body.textContent).not.toContain("the next step is yours");
+			expect(document.body.textContent).not.toContain("Hover a label to read messages");
+			expect(
+				[...document.querySelectorAll("button")].some((el) => /^(Hide )?Legend$/i.test(el.textContent ?? "")),
+			).toBe(false);
+			expect(document.querySelector("[data-boxgrid]")).not.toBeNull();
+		};
+		noHelper();
+		const ops = [...document.querySelectorAll('button[aria-haspopup="dialog"]')].find((button) =>
+			button.textContent?.trim().startsWith("Ops"),
+		);
+		expect(ops).toBeDefined();
+		expect(ops?.parentElement?.textContent).toContain("ON YOU");
+		update(projectExactRoles(input, "closed", NOW));
+		noHelper();
+		update(projectExactRoles(input, "open", NOW));
+		noHelper();
+		view.openRole("ops", document.body);
+		vi.runAllTimers();
+		expect(document.querySelector('[role="region"]')?.textContent).toContain("Task 7");
+	});
+
 	it("mounts the actual supplied template and opens the complete department panel", () => {
 		const { view } = fixture(undefined, true);
 		expect(document.querySelector("h1")?.textContent).toBe("Roles");
