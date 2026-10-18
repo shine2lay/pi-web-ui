@@ -15,7 +15,7 @@ import {
 import type { NeedsYouItem } from "./roles-useful-model";
 import { CONFIG_NOT_RECORDED, configHistoryActs } from "./roles-config-history";
 import type { PanelRoleStatus, PanelTask, PanelTaskEvent, RolePanel } from "./roles-panel-model";
-import { ringAnchor, ringLayout } from "./roles-u0/layout";
+import { ringAnchor, ringLayout, stackLayout } from "./roles-u0/layout";
 import type { SurfaceValues } from "./roles-u0/types";
 import type { RowState, TellState, UsefulOpenTarget, UsefulRecord } from "./roles-useful-model";
 import { EVIDENCE_STEPS, type UsefulEvidence } from "./roles-useful-model";
@@ -322,11 +322,18 @@ export function roleEdges(
 		];
 	});
 }
+/** roles-phone: the same items at the same heights, within a pixel. */
+function sameHeights(a: readonly number[], b: readonly number[]): boolean {
+	return a.length === b.length && a.every((h, i) => Math.abs(h - b[i]) <= 1);
+}
+
 export function createExactRolesView(
 	read: () => ExactRoles,
 	actions: ExactViewActions,
 	clock: ExactViewClock,
 	invalidate: () => void,
+	/** roles-phone: true below 1024 px (the host's viewport); one column replaces the ring. */
+	narrow: () => boolean = () => false,
 ) {
 	let selected: Selection = null;
 	let hover: string | null = null;
@@ -343,8 +350,24 @@ export function createExactRolesView(
 	let quietFocusRestore = false;
 	/** owner-contacts: the message whose reply is open. */
 	let openContact: string | null = null;
-	/** roles-small-fixes: the header height and graph height the last plan was made for. */
-	let planned: { chrome: number; height: number } | null = null;
+	/** roles-small-fixes: the header height and graph height the last plan was made for.
+	 * roles-phone: in a column, also the width and item heights it was made for. */
+	let planned: {
+		chrome: number;
+		height: number;
+		stack: { width: number; heights: number[] } | null;
+	} | null = null;
+	/** roles-phone: the last values were a column; panels then open as full-width sheets. */
+	let stacked = false;
+	/** roles-phone: the rendered height of the You pill and each card, in the template's (the model's) order. */
+	function measureStack(): number[] {
+		if (!graph) return [];
+		const items = [
+			graph.querySelector(":scope > [data-roles-you]"),
+			...graph.querySelectorAll(":scope > div > button[aria-haspopup]"),
+		];
+		return items.map((el) => Math.ceil(el?.getBoundingClientRect().height ?? 0));
+	}
 	const rafs = new Set<unknown>();
 	const timers = new Set<unknown>();
 	const changed = () => {
@@ -377,7 +400,8 @@ export function createExactRolesView(
 		const el = source && "currentTarget" in source ? (source.currentTarget as Element | null) : source;
 		const rect = el && "getBoundingClientRect" in el ? el.getBoundingClientRect() : graph?.getBoundingClientRect();
 		const wrapper = el && "closest" in el ? el.closest("[data-boxgrid]") : graph;
-		const wr = wrapper?.getBoundingClientRect();
+		// roles-phone: a sheet is fixed to the viewport, so it grows from the card's viewport box.
+		const wr = stacked ? undefined : wrapper?.getBoundingClientRect();
 		origin = el && "focus" in el ? (el as HTMLElement) : null;
 		from = {
 			top: (rect?.top ?? 0) - (wr?.top ?? 0),
@@ -766,17 +790,35 @@ export function createExactRolesView(
 		// The header floats inside the canvas. Keep every node and expanded panel below it.
 		const measured = chrome?.getBoundingClientRect().height || 48;
 		const topInset = Math.ceil(Math.min(600, Math.max(0, measured))) + 24;
+		// roles-phone: below 1024 px one column replaces the ring, as tall as its items.
+		stacked = narrow();
+		const stackWidth = width || graph?.clientWidth || 360;
+		const stackHeights = stacked ? measureStack() : [];
 		const inner = ringLayout(
 			model.roles.map((r) => ({ id: r.row.roleId, name: r.row.roleLabel })),
 			width || graph?.clientWidth,
 			Math.max(620, (height || graph?.clientHeight || 780) - topInset),
 		);
-		const layout = {
-			...inner,
-			height: inner.height + topInset,
-			pos: new Map([...inner.pos].map(([id, [x, y]]) => [id, [x, y + topInset] as const])),
-		};
-		planned = chrome && graph && !height ? { chrome: measured, height: layout.height } : null;
+		const layout = stacked
+			? stackLayout(
+					model.roles.map((r) => r.row.roleId),
+					stackWidth,
+					stackHeights,
+					topInset,
+				)
+			: {
+					...inner,
+					height: inner.height + topInset,
+					pos: new Map([...inner.pos].map(([id, [x, y]]) => [id, [x, y + topInset] as const])),
+				};
+		planned =
+			chrome && graph && !height
+				? {
+						chrome: measured,
+						height: layout.height,
+						stack: stacked ? { width: stackWidth, heights: stackHeights } : null,
+					}
+				: null;
 		const boxes: SurfaceValues[] = model.roles.map((r) => ({ ...box(r, model), ...ringAnchor(layout, r.row.roleId) }));
 		const selectedId = selected?.kind === "role" ? selected.id : null;
 		const ex = selectedId ? boxes.find((b) => b.id === selectedId) : undefined;
@@ -840,6 +882,8 @@ export function createExactRolesView(
 			ready: false,
 			floatingHeader: "true",
 			headerSpace: `${topInset}px`,
+			stacked: String(stacked),
+			stackHeight: `${layout.height}px`,
 			youTop: ringAnchor(layout, "you")?.py ?? "50%",
 			loading,
 			offline: model.source === "disconnected",
@@ -884,11 +928,12 @@ export function createExactRolesView(
 			graph: {
 				edges: [
 					// roles-sent: drawn first, so the owner-ask arrows and their labels stay on top.
-					...roleEdges(model, layout, hover).map(({ edge, pair }) => ({
+					// roles-phone: a column draws no arrows; they show on wider screens.
+					...(stacked ? [] : roleEdges(model, layout, hover)).map(({ edge, pair }) => ({
 						...edge,
 						chipClick: (e: Event | Element) => openRole(pair.from, e),
 					})),
-					...ownerEdges(model, layout, hover).map((edge) => ({
+					...(stacked ? [] : ownerEdges(model, layout, hover)).map((edge) => ({
 						...edge,
 						chipClick: (e: Event | Element) => expand({ kind: "you" }, e),
 					})),
@@ -910,6 +955,7 @@ export function createExactRolesView(
 				changed();
 			},
 			arrowMeaning:
+				(stacked ? "Arrows are hidden on narrow screens and show on wider screens. " : "") +
 				"Arrows point from a department to whoever it is waiting on: its open requests and questions to another department, until answered, and its asks waiting on you. Messages from you and messages being sent are not drawn. Key:",
 			channelShown: false,
 			contactChannelTitle: MISSING,
@@ -964,10 +1010,11 @@ export function createExactRolesView(
 			exLabel: exIsYou ? "Your decisions, questions and spending" : `${ex?.name ?? "Role"} details`,
 			exPos: grown
 				? {
-						t: `${topInset}px`,
+						// roles-phone: in a column the panel is a full-width sheet over the viewport.
+						t: stacked ? "0px" : `${topInset}px`,
 						l: "0px",
 						w: "100%",
-						h: `${layout.height - topInset}px`,
+						h: stacked ? "100%" : `${layout.height - topInset}px`,
 						o: "1",
 						y: "0px",
 						d: "150ms",
@@ -1013,7 +1060,11 @@ export function createExactRolesView(
 			!!chrome &&
 			!!graph &&
 			(Math.abs((chrome.getBoundingClientRect().height || 48) - planned.chrome) > 0.5 ||
-				Math.abs(graph.clientHeight - planned.height) > 1),
+				Math.abs(graph.clientHeight - planned.height) > 1 ||
+				// roles-phone: the column took another width, or an item another height, than the plan used.
+				(planned.stack !== null &&
+					(Math.abs(graph.clientWidth - planned.stack.width) > 0.5 ||
+						!sameHeights(measureStack(), planned.stack.heights)))),
 		dispose: () => {
 			disposed = true;
 			clearAnimation();

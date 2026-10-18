@@ -80,6 +80,8 @@ export function RolesExactView({
 			if (disposed) return;
 			let queued: number | null = null;
 			let wasOpen = false;
+			// roles-phone: below 1024 px of the app's viewport the cards stack in one column.
+			const narrow = typeof window.matchMedia === "function" ? window.matchMedia("(max-width: 1023.98px)") : null;
 			let binding: ReturnType<typeof bindRolesSurface> | null = null;
 			const update = () => {
 				if (disposed || queued !== null) return;
@@ -120,6 +122,7 @@ export function RolesExactView({
 					clearTimeout: (id) => window.clearTimeout(id as number),
 				},
 				update,
+				() => narrow?.matches === true,
 			);
 			try {
 				binding = bindRolesSurface(doc, () => view.values());
@@ -167,6 +170,7 @@ export function RolesExactView({
 			doc.addEventListener("click", click);
 			doc.addEventListener("keydown", key);
 			win.addEventListener("resize", update);
+			narrow?.addEventListener("change", update);
 			redraw.current = update;
 			hide.current = () => view.close(true);
 			release = () => {
@@ -177,6 +181,7 @@ export function RolesExactView({
 				doc.removeEventListener("click", click);
 				doc.removeEventListener("keydown", key);
 				win.removeEventListener("resize", update);
+				narrow?.removeEventListener("change", update);
 				view.dispose();
 				binding?.dispose();
 			};

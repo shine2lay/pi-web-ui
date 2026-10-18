@@ -12,8 +12,10 @@ body{margin:0}
 [data-roles-floating="true"] [data-boxgrid]{height:calc(100vh - 76px)!important;min-height:calc(620px + var(--roles-header-space))!important;transition:none!important}
 [data-roles-floating="true"] [data-roles-you]{top:var(--roles-you-top)!important}
 [data-roles-floating="true"] [data-roles-loading]{position:absolute;top:calc(var(--roles-header-space) + 48px);left:32px;right:32px;z-index:1;pointer-events:none}
+[data-roles-stacked="true"] [data-boxgrid]{width:auto!important;min-width:0!important;height:var(--roles-stack-height)!important;min-height:0!important}
+[data-roles-stacked="true"] [data-boxgrid]>[role="region"]{position:fixed!important}
 </style>
-<div data-noscrollbar="1" data-roles-floating="{{floatingHeader}}" style="--roles-header-space: {{headerSpace}}; --roles-you-top: {{youTop}}; height: 100vh; overflow-y: auto; overflow-x: hidden; background: #0E0F11; color: #ECEDEE; font-family: 'Geist', ui-sans-serif, system-ui, sans-serif; font-size: 14px; line-height: 1.45; position: relative">
+<div data-noscrollbar="1" data-roles-floating="{{floatingHeader}}" data-roles-stacked="{{stacked}}" style="--roles-header-space: {{headerSpace}}; --roles-you-top: {{youTop}}; --roles-stack-height: {{stackHeight}}; height: 100vh; overflow-y: auto; overflow-x: hidden; background: #0E0F11; color: #ECEDEE; font-family: 'Geist', ui-sans-serif, system-ui, sans-serif; font-size: 14px; line-height: 1.45; position: relative">
 <div style="margin: 0 auto; padding: 16px clamp(12px, 1.6vw, 24px) 16px; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px">
 
 <!-- HEADER -->

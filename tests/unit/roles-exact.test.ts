@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EXACT_SOURCE, projectExactRoles, type ExactRoles } from "../../web/src/roles-exact-model.js";
 import { createExactRolesView } from "../../web/src/roles-exact-view.js";
-import { ringAnchor, ringLayout } from "../../web/src/roles-u0/layout.js";
+import { ringAnchor, ringLayout, stackLayout } from "../../web/src/roles-u0/layout.js";
 import { bindRolesSurface } from "../../web/src/roles-u0/surface.js";
 import type { SurfaceValue, SurfaceValues } from "../../web/src/roles-u0/types.js";
 
@@ -65,7 +65,7 @@ function invoke(value: SurfaceValue, source: Event | Element = document.body) {
 	value(source);
 }
 const cleanups: (() => void)[] = [];
-function fixture(initial: ExactRoles = projectExactRoles(state(), "open", NOW), mounted = false) {
+function fixture(initial: ExactRoles = projectExactRoles(state(), "open", NOW), mounted = false, narrow = false) {
 	vi.useFakeTimers();
 	let model = initial;
 	let surface: ReturnType<typeof bindRolesSurface> | null = null;
@@ -80,6 +80,7 @@ function fixture(initial: ExactRoles = projectExactRoles(state(), "open", NOW), 
 			clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
 		},
 		() => surface?.update(),
+		() => narrow,
 	);
 	if (mounted) surface = bindRolesSurface(document, () => view.values(1400, 780));
 	cleanups.push(() => {
@@ -888,5 +889,50 @@ describe("the supplied Roles design with the existing feed", () => {
 		live.click();
 		expect(actions.reload).toHaveBeenCalledTimes(2);
 		expect(actions.open).not.toHaveBeenCalled();
+	});
+});
+
+describe("roles-phone: one column below 1024 px", () => {
+	it("stacks You first, then the departments in the order given, at their measured heights", () => {
+		const lay = stackLayout(["temper", "coo", "ops"], 364, [66, 104, 120, 92], 72);
+		expect(lay).toMatchObject({ width: 364, height: 526, nodeW: 340 });
+		expect([...lay.pos]).toEqual([
+			["you", [182, 113]],
+			["temper", [182, 214]],
+			["coo", [182, 342]],
+			["ops", [182, 464]],
+		]);
+	});
+
+	it("uses the You pill's and the loading card's heights before a first measurement", () => {
+		const lay = stackLayout(["ops", "coo"], 300, [0]);
+		expect([...lay.pos.values()].map(([, y]) => y)).toEqual([41, 142, 262]);
+		expect(lay.height).toBe(330);
+	});
+
+	it("in narrow mode keeps roster order, draws no arrows and opens panels as full-width sheets", () => {
+		const rows = [role({ id: "temper", title: "Temper" }), role({ id: "coo", title: "COO" }), role()];
+		const model = projectExactRoles(state(rows, [ask(1)]), "open", NOW);
+		// The same feed draws its owner-ask arrow on a wide screen.
+		const wide = fixture(model).view.values(1400, 780);
+		expect(wide.stacked).toBe("false");
+		expect(list(object(wide.graph).edges)).toHaveLength(1);
+		const { view } = fixture(model, false, true);
+		const v = view.values(364, 844);
+		expect(v.stacked).toBe("true");
+		expect(list(object(v.graph).edges)).toEqual([]);
+		const boxes = list(object(v.glance).boxes).map(object);
+		expect(boxes.map((b) => b.id)).toEqual(["temper", "coo", "ops"]);
+		// No header measured yet: the 48 px fallback plus 24.
+		const lay = stackLayout(["temper", "coo", "ops"], 364, [], 72);
+		for (const b of boxes) expect(b).toMatchObject(ringAnchor(lay, String(b.id)) ?? {});
+		expect(v.youTop).toBe(ringAnchor(lay, "you")?.py);
+		expect(v).toMatchObject({ nodeW: "340px", gw: 364, gh: lay.height, stackHeight: `${lay.height}px` });
+		expect(String(v.arrowMeaning)).toMatch(
+			/^Arrows are hidden on narrow screens and show on wider screens\. Arrows point from a department/,
+		);
+		view.openRole("ops");
+		vi.runAllTimers();
+		expect(object(view.values(364, 844).exPos)).toMatchObject({ t: "0px", l: "0px", w: "100%", h: "100%" });
 	});
 });

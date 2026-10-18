@@ -68,7 +68,7 @@ const browser = await chromium.launch({
 	headless: true,
 	args: ["--no-sandbox", "--disable-dev-shm-usage"],
 });
-const results = { component: [], reference: [], floating: [], errors: [] };
+const results = { component: [], reference: [], floating: [], wide: [], stacked: [], sheets: [], errors: [] };
 const deadline = setTimeout(() => {
 	results.errors.push("Isolated browser check exceeded its 180-second deadline");
 	void browser.close();
@@ -161,8 +161,88 @@ try {
 				JSON.stringify({ label, ...geometry }),
 			);
 		};
+		// roles-phone: at 1024 px and wider the ring stays as it was: the fixed canvas, its arrows, no column.
+		const checkWide = async (label) => {
+			const wide = await page.evaluate(() => {
+				const doc = document.querySelector('iframe[title="Roles"]').contentDocument;
+				const graph = doc.querySelector("[data-boxgrid]");
+				const g = graph.getBoundingClientRect();
+				return {
+					stacked: doc.querySelector("[data-roles-floating]").getAttribute("data-roles-stacked"),
+					minWidth: doc.defaultView.getComputedStyle(graph).minWidth,
+					// The arrows' own drawing layer, not the cards' icons.
+					arrows: graph.querySelector('svg[preserveAspectRatio="none"]')?.querySelectorAll("path").length ?? 0,
+					centres: [...doc.querySelectorAll('button[aria-haspopup="dialog"]')].map((el) => {
+						const b = el.getBoundingClientRect();
+						return [Math.round(b.x + b.width / 2 - g.x), Math.round(b.y + b.height / 2 - g.y)];
+					}),
+				};
+			});
+			results.wide.push({ label, ...wide });
+			assert.ok(
+				wide.stacked !== "true" && wide.minWidth === "1000px" && wide.arrows > 0,
+				JSON.stringify({ label, ...wide }),
+			);
+		};
+		// roles-phone (H-ROLES-PHONE-1): below 1024 px one column. Nothing scrolls sideways (page, frame, canvas),
+		// every card lies inside the screen's width, and You comes first, then each card below the one before.
+		const checkStacked = async (label) => {
+			// Settle wait only; a timeout falls through to the assertions below, which report what was measured.
+			await page
+				.waitForFunction(
+					() => {
+						const doc = document.querySelector('iframe[title="Roles"]')?.contentDocument;
+						const graph = doc?.querySelector('[data-roles-stacked="true"] [data-boxgrid]');
+						const planned = graph?.querySelector("svg[viewBox]")?.viewBox.baseVal.height;
+						return !!planned && Math.abs(graph.clientHeight - planned) <= 1;
+					},
+					undefined,
+					{ timeout: 3000 },
+				)
+				.catch(() => {});
+			const stack = await page.evaluate(() => {
+				const doc = document.querySelector('iframe[title="Roles"]').contentDocument;
+				const win = doc.defaultView;
+				const root = doc.querySelector("[data-roles-floating]");
+				const graph = doc.querySelector("[data-boxgrid]");
+				const c = doc.querySelector("[data-roles-chrome]").getBoundingClientRect();
+				const items = [
+					doc.querySelector("[data-roles-you]"),
+					...doc.querySelectorAll('button[aria-haspopup="dialog"]'),
+				].map((el) => el.getBoundingClientRect());
+				const round = (n) => Math.round(n * 100) / 100;
+				return {
+					stacked: root.getAttribute("data-roles-stacked"),
+					pageOverflow: document.documentElement.scrollWidth - window.innerWidth,
+					frameOverflow: doc.documentElement.scrollWidth - win.innerWidth,
+					rootOverflow: root.scrollWidth - root.clientWidth,
+					canvasOverflow: graph.parentElement.scrollWidth - graph.parentElement.clientWidth,
+					outside: items.filter((b) => b.left < 0 || b.right > win.innerWidth).length,
+					minGap: round(Math.min(...items.slice(1).map((b, i) => b.top - items[i].bottom))),
+					clearance: round(Math.min(...items.map((b) => b.top)) - c.bottom),
+					cards: items.length - 1,
+					cardWidth: round(items[1]?.width ?? 0),
+					arrows: graph.querySelector('svg[preserveAspectRatio="none"]')?.querySelectorAll("path").length ?? 0,
+				};
+			});
+			results.stacked.push({ label, ...stack });
+			assert.ok(
+				stack.stacked === "true" &&
+					stack.pageOverflow <= 0 &&
+					stack.frameOverflow <= 0 &&
+					stack.rootOverflow <= 1 &&
+					stack.canvasOverflow <= 1 &&
+					stack.outside === 0 &&
+					stack.minGap >= 10 &&
+					stack.clearance >= 8 &&
+					stack.cards === 15 &&
+					stack.arrows === 0,
+				JSON.stringify({ label, ...stack }),
+			);
+		};
 		await noHelper(frame);
 		await checkFloating(page, "desktop");
+		await checkWide("desktop");
 		assert.ok((await frame.getByRole("button", { name: /^Ops / }).locator("..").innerText()).includes("ON YOU"));
 		await page.screenshot({ path: join(output, "desktop.png") });
 		record("real component renders all 15 departments and real ON YOU markers without the helper row");
@@ -399,8 +479,10 @@ try {
 		record("no serious or critical structural accessibility violations");
 		await page.setViewportSize({ width: 1050, height: 900 });
 		await checkFloating(page, "laptop");
+		await checkWide("laptop");
 		await page.screenshot({ path: join(output, "laptop.png") });
 		await page.setViewportSize({ width: 390, height: 844 });
+		await checkStacked("phone");
 		await checkFloating(page, "phone");
 		// roles-small-fixes: the live overlap came with a tall wrapped header on a phone (then made by the stale
 		// banner). roles-retry-pill took the banner away, so the header now changes only through the status pill's
@@ -409,23 +491,19 @@ try {
 		await page.evaluate(() => window.rolesExactTest.deliver("stale"));
 		await pill(/^Stale \u00b7 /).waitFor();
 		assert.equal(await frame.getByRole("alert").count(), 0);
+		await checkStacked("phone, stale header");
 		await checkFloating(page, "phone, stale header");
 		await page.screenshot({ path: join(output, "phone-stale-header.png") });
 		await page.evaluate(() => window.rolesExactTest.deliver());
 		await frame.getByText("2 waiting on you", { exact: true }).waitFor();
 		await pill(/^Live \u00b7 /).waitFor();
+		await checkStacked("phone, header back to live");
 		await checkFloating(page, "phone, header back to live");
-		await frame.locator("[data-boxgrid]").waitFor();
-		const pan = await frame.locator("[data-boxgrid]").evaluate((el) => {
-			let p = el.parentElement;
-			while (p && p.scrollWidth <= p.clientWidth) p = p.parentElement;
-			if (!p) return false;
-			p.scrollLeft = 120;
-			return p.scrollLeft > 0;
-		});
-		assert.equal(pan, true);
 		await page.screenshot({ path: join(output, "phone.png") });
-		record("the supplied wide phone canvas can be panned");
+		await page.screenshot({ path: join(output, "phone-full.png"), fullPage: true });
+		record(
+			"roles-phone: at 390 px one column, You first, then every card in order inside the screen, no sideways scroll",
+		);
 		const touchContext = await browser.newContext({
 			viewport: { width: 390, height: 844 },
 			deviceScaleFactor: 1,
@@ -455,6 +533,23 @@ try {
 				el.scrollTop = 0;
 				el.parentElement.parentElement.scrollLeft = 0;
 			});
+			// roles-phone: a tapped card opens its panel as a sheet over the whole screen, nothing cut off sideways.
+			const sheet = await region.evaluate((el) => {
+				const r = el.getBoundingClientRect();
+				const win = el.ownerDocument.defaultView;
+				return {
+					position: win.getComputedStyle(el).position,
+					box: [r.left, r.top, r.width, r.height].map(Math.round),
+					viewport: [win.innerWidth, win.innerHeight],
+					clipped: el.scrollWidth - el.clientWidth,
+					heading: win.getComputedStyle(el.querySelector("h2")).fontSize,
+				};
+			});
+			results.sheets.push({ label: String(label), ...sheet });
+			assert.ok(
+				sheet.position === "fixed" && sheet.box.join() === `0,0,${sheet.viewport.join()}` && sheet.clipped <= 0,
+				JSON.stringify(sheet),
+			);
 			await phone.screenshot({ path: join(output, file) });
 			await region.getByRole("button", { name: "Close and return to all departments" }).tap();
 			await region.waitFor({ state: "hidden" });

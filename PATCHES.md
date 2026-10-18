@@ -28,6 +28,21 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: `tests/unit/roles-exact.test.ts` (no banner in any source state, the tooltip and name, one reload per click in a mounted page) and `tests/roles-exact-test.mjs` (no alert row, the pill's colours, Enter and Space; #206's phone header step now changes the header through the pill's text, since the banner that made it tall is gone), then the landing gate.
 - Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
 
+## roles-phone: one column of cards below 1024 px instead of the sideways-scrolling ring
+
+- `local` (owner 2026-10-18, "Stack the cards myself", Ops #210). Hypothesis H-ROLES-PHONE-1 and result: `docs/roles-phone.md`.
+- Below 1024 px the ring's fixed 1000 px canvas scrolled sideways, and cards overlapped and ran off the screen. Now `RolesExactView.tsx` watches `matchMedia("(max-width: 1023.98px)")` and passes `narrow()` to `createExactRolesView` (`web/src/roles-exact-view.ts`). When narrow:
+  - `stackLayout` (`web/src/roles-u0/layout.ts`) puts You first, then the departments in roster order, in one column at their measured heights (16 px apart, 12 px side margins; `refit()` re-plans when a height or the width changes);
+  - no arrows are drawn, and the key's text says they show on wider screens (the key row itself stays off, H-ROLES-HELP-1);
+  - a tapped card's panel opens as a sheet over the whole screen;
+  - `surface.html` drops the graph's 1000 px minimum width under `[data-roles-stacked="true"]`.
+- Same template, cards, colours and fonts. At 1024 px and wider nothing changes (`narrow()` false; same ring path).
+- Checks:
+  - `tests/unit/roles-exact.test.ts`: the column's positions, its defaults, and narrow mode (order, no arrows, sheets) against wide mode;
+  - the sealed geometry check `tests/roles-exact-test.mjs`: at 390 px, no sideways scroll, every card inside the screen, gaps, header clearance ≥ 8 px and full-screen sheets; at 1440 and 1050 px, not stacked, 1000 px canvas and arrows. The card centres there match the commit before.
+  - then the landing gate.
+- Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
+
 ## roles-config-history: record each role's settings changes and list them in its Config tab
 
 - `local` (owner 2026-10-18, "create those tasks and queue them", Ops #209). Hypothesis H-ROLES-CONFIG-1 and result: `docs/roles-config-history.md`.
