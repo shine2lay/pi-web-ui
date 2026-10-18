@@ -423,17 +423,19 @@ describe("dayText", () => {
 });
 
 describe("the mounted role panel", () => {
-	it("a failed report shows fixed words, never its error text", () => {
+	it("does not show the retired report section or its failure reminder", () => {
 		mount();
 		feed(roster({ report: { state: "failed", error: "ENOENT: open '/home/u/.pi/agent/sessions/x.jsonl'" } }));
 		click("Details");
 		const text = dialog()?.textContent ?? "";
-		expect(text).toContain("Couldn't be asked for.");
+		expect(text).not.toContain("Couldn't be asked for.");
+		expect(text).not.toContain("6 am");
+		expect(dialog()?.querySelector("#roles-panel-report")).toBeNull();
 		expect(text).not.toContain("/home/u");
 		expect(text).not.toContain(".jsonl");
 	});
 
-	it("Details opens the role's panel with its work grouped, its updates and its report", () => {
+	it("Details opens the role's work and updates without the retired report", () => {
 		mount();
 		feed();
 		expect(dialog()).toBeNull();
@@ -464,12 +466,13 @@ describe("the mounted role panel", () => {
 			"Built the role panel",
 			"Need your pick on the panel",
 			"from task #7",
-			"Line one",
 			"Open: 2",
 			"Can you check?",
 		]) {
 			expect(text, part).toContain(part);
 		}
+		expect(text).not.toContain("Line one");
+		expect(text).not.toContain("6 am");
 		// No chat path anywhere in the page: links stay in memory.
 		expect(container.innerHTML).not.toContain(DIR);
 		expect(container.innerHTML).not.toContain(".jsonl");
@@ -482,9 +485,6 @@ describe("the mounted role panel", () => {
 		click("Open its home chat", dialog() as Element);
 		expect(dialog()).toBeNull();
 		expect(opened).toEqual([{ file: HOME }]);
-		click("Details");
-		click("Report in chat", dialog() as Element);
-		expect(opened.at(-1)).toEqual({ file: HOME, jumpAt: NOW - 3_600_000 });
 		click("Details");
 		click("About & rules", dialog() as Element);
 		expect(dialog()).toBeNull();

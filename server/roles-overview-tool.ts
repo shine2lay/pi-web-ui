@@ -3,7 +3,8 @@
 // ---------------------------------------------------------------------------
 // The Roles page's snapshot (roles-overview.ts) as plain text for a chat, e.g. the COO's: each role's
 // title, home chat, status, last activity, newest TL;DR lines, what waits on the owner, its queue,
-// open requests to it and its latest 6 am report. Read-only: nothing is loaded or written.
+// open requests to it. Automatic 6 am reports are retired (owner, 2026-10-17).
+// Read-only: nothing is loaded or written.
 // All roles come in short (a few lines each); `role` gives one role in full.
 // ---------------------------------------------------------------------------
 
@@ -13,7 +14,6 @@ import type {
 	UiRoleAsk,
 	UiRoleChatRef,
 	UiRoleOverview,
-	UiRoleReport,
 	UiRolesOverview,
 	UiRoleStatus,
 	UiRoleTask,
@@ -51,7 +51,7 @@ const clip = (s: unknown, max: number): string => {
 	return t.length > max ? `${t.slice(0, max - 1)}\u2026` : t;
 };
 
-/** A moment in the report job's time zone ("2026-10-06 07:10"), with how long ago. */
+/** A moment in the overview's time zone ("2026-10-06 07:10"), with how long ago. */
 export function whenText(ms: number | undefined, tz: string, now: number): string {
 	if (!ms || !Number.isFinite(ms)) return "unknown";
 	let stamp: string;
@@ -104,35 +104,6 @@ function taskLine(t: UiRoleTask, tz: string, now: number, lim: Limits): string {
 function askLine(a: UiRoleAsk, tz: string, now: number, lim: Limits): string {
 	const since = a.since ? `, since ${whenText(a.since, tz, now)}` : "";
 	return `- ${a.kind} in ${whereText(a.chat)}${since}: ${clip(a.text, lim.lineMax)}`;
-}
-
-function reportLines(r: UiRoleReport, tz: string, now: number, lim: Limits): string[] {
-	const day = r.date ? ` (${r.date})` : "";
-	switch (r.state) {
-		case "report": {
-			const out = [`6 am report${day}:`];
-			if (r.sections?.length) for (const s of r.sections) out.push(`  ${s.heading}: ${clip(s.text, lim.sectionMax)}`);
-			else if (r.text) out.push(`  ${clip(r.text, lim.sectionMax * 4)}`);
-			if (r.cut) out.push("  (the report was cut)");
-			return out;
-		}
-		case "pending":
-			return [`6 am report${day}: asked${r.askedAt ? ` at ${whenText(r.askedAt, tz, now)}` : ""}, no answer yet`];
-		case "failed":
-			return [`6 am report${day}: failed${r.error ? `: ${clip(r.error, 160)}` : ""}`];
-		case "no-answer":
-			return [`6 am report${day}: no answer`];
-		case "unavailable":
-			return [`6 am report: unavailable${r.error ? ` (${clip(r.error, 160)})` : ""}`];
-		case "first":
-			return [`6 am report: none yet${r.next ? `; first one ${whenText(r.next, tz, now)}` : ""}`];
-		case "not-active":
-			return ["6 am report: not asked (no activity that day)"];
-		case "not-in-job":
-			return ["6 am report: not in the 6 am job"];
-		default:
-			return [];
-	}
 }
 
 /** One role's lines. */
@@ -203,7 +174,6 @@ export function roleText(r: UiRoleOverview, tz: string, now: number, lim: Limits
 		}
 		if (r.boardOrders.length > lim.asks) out.push(`- (${r.boardOrders.length - lim.asks} more)`);
 	}
-	out.push(...reportLines(r.report, tz, now, lim));
 	if (r.problems?.length) out.push(`Couldn't read: ${r.problems.join(", ")}`);
 	return out.join("\n");
 }
@@ -288,9 +258,9 @@ export function makeRolesOverviewTool(host: RolesOverviewToolHost): ToolDefiniti
 		name: ROLES_OVERVIEW_TOOL_NAME,
 		label: "Roles overview",
 		description:
-			"Every role's state in one call, as the Roles page shows it: status, home chat, last activity, newest TL;DR lines, what waits on the owner, its queue (active tasks and counts), open requests to it, the board orders it hasn't marked done and its latest 6 am report; with all roles, the board's open orders and who hasn't done each. " +
+			"Every role's state in one call, as the Roles page shows it: status, home chat, last activity, newest TL;DR lines, what waits on the owner, its queue (active tasks and counts), open requests to it and the board orders it hasn't marked done; with all roles, the board's open orders and who hasn't done each. " +
 			"Read-only. Without role: all roles in short. With role (an id): that role in full.",
-		promptSnippet: "every role's state at once (status, TL;DR, asks, queue, 6 am report); role: one role in full",
+		promptSnippet: "every role's state at once (status, TL;DR, asks, queue); role: one role in full",
 		parameters: Type.Object({
 			role: Type.Optional(
 				Type.String({ description: "A role id, for that role alone in full. Leave it out for all roles in short." }),

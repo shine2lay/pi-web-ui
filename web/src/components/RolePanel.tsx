@@ -1,7 +1,7 @@
 /**
  * roles-panel (owner, 2026-10-16): one role's panel on the Roles page, a modal window over the cards.
  * It shows only the closed projection of roles-panel-model.ts. Status words come from closed keys; agent text
- * (focus, goals, task names, what a task waits on, TL;DR lines, the 6 am report, a request's first line, a
+ * (focus, goals, task names, what a task waits on, TL;DR lines, a request's first line, a
  * project's or initiative's name) is a quoted text node of its own, never an i18n variable or attribute.
  * Chat targets stay in memory and only reach the app's existing open path (onOpen), after the panel closes.
  */
@@ -11,9 +11,7 @@ import type {
 	InitiativeGroup,
 	PanelLead,
 	PanelLine,
-	PanelReport,
 	PanelTask,
-	ReportState,
 	RolePanel,
 	WorkSource,
 	WorkView,
@@ -58,16 +56,6 @@ const ROW_KEYS = {
 	dropped: "ruRowDropped",
 	unknown: "ruRowUnknown",
 } as const satisfies Record<PanelTask["state"], Key>;
-const REPORT_KEYS = {
-	pending: "rpReportPending",
-	failed: "rpReportFailed",
-	"no-answer": "rpReportNoAnswer",
-	unavailable: "rpReportUnavailable",
-	first: "rpReportFirst",
-	"not-active": "rpReportNotActive",
-	"not-in-job": "rpReportNotInJob",
-	unknown: "rpReportUnknown",
-} as const satisfies Record<Exclude<ReportState, "report">, Key>;
 
 function pad2(n: number): string {
 	return String(n).padStart(2, "0");
@@ -178,7 +166,6 @@ export function RolePanelDialog({
 				<AboutSection panel={panel} now={now} />
 				<WorkSection panel={panel} now={now} go={go} />
 				<UpdatesSection lines={panel.lines} now={now} go={go} />
-				<ReportSection report={panel.report} now={now} go={go} />
 				<RequestsSection panel={panel} now={now} />
 			</div>
 		</dialog>
@@ -502,59 +489,6 @@ function UpdatesSection({
 						</li>
 					))}
 				</ol>
-			)}
-		</section>
-	);
-}
-
-function ReportSection({
-	report,
-	now,
-	go,
-}: {
-	report: PanelReport;
-	now: number;
-	go: (target: UsefulOpenTarget) => void;
-}) {
-	const t = useT();
-	const link = report.link;
-	return (
-		<section className="roles-panel-section" aria-labelledby="roles-panel-report">
-			<h3 id="roles-panel-report">
-				{t("rpReport")}
-				{report.date !== null && ` · ${t("rpReportFor", { day: report.date })}`}
-			</h3>
-			{report.state !== "report" ? (
-				<p>
-					{report.state === "pending" && report.askedAt !== null
-						? t("rpReportPendingAt", { time: clockText(report.askedAt, now) })
-						: report.state === "first" && report.next !== null
-							? t("rpReportFirstAt", { time: clockText(report.next, now) })
-							: t(REPORT_KEYS[report.state])}
-				</p>
-			) : (
-				<>
-					{report.sections.map((s, i) => (
-						<section key={String(i)} className="roles-panel-report-part">
-							<h4>
-								<q className="roles-useful-agent">{s.heading}</q>
-							</h4>
-							{s.text !== null && <p className="roles-panel-report-text">{s.text}</p>}
-						</section>
-					))}
-					{report.sections.length === 0 &&
-						(report.text === null ? (
-							<p>{t("rpReportUnreadable")}</p>
-						) : (
-							<p className="roles-panel-report-text">{report.text}</p>
-						))}
-					{report.cut && <p className="roles-useful-note">{t("rpReportCut")}</p>}
-					{link && (
-						<button type="button" className="roles-useful-open" onClick={() => go(link)}>
-							{t("rpReportInChat")}
-						</button>
-					)}
-				</>
 			)}
 		</section>
 	);

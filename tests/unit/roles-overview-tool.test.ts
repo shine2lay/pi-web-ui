@@ -131,9 +131,9 @@ describe("formatRolesOverview", () => {
 		expect(text).toContain("- #7 asking (working now): Deploy the thing; waits on: the owner's pick");
 		expect(text).not.toContain("Later work");
 		expect(text).toContain("Open requests to it: 2 (newest: request from qa,");
-		expect(text).toContain("6 am report (2026-10-06):\n  Done: Landed #50.\n  Next: Rehearsal.");
+		expect(text).not.toContain("6 am report");
+		expect(text).not.toContain("Landed #50.");
 		expect(text).toContain("## qa (QA): idle");
-		expect(text).toContain("6 am report: none yet");
 		expect(text).toContain(`call ${ROLES_OVERVIEW_TOOL_NAME} with role "<id>"`);
 	});
 
@@ -210,7 +210,7 @@ describe("formatRolesOverview", () => {
 		);
 	});
 
-	it("says when role messages are paused, and each report state in words", () => {
+	it("keeps role-message pauses but omits every retired report state", () => {
 		const roles = [
 			role("a", { report: { state: "pending", date: "2026-10-06", askedAt: NOW - 60 * MIN } }),
 			role("b", { report: { state: "failed", date: "2026-10-06", error: "the chat is gone" } }),
@@ -220,11 +220,9 @@ describe("formatRolesOverview", () => {
 		];
 		const text = formatRolesOverview(view(roles, { paused: true }), { now: NOW });
 		expect(text).toContain("Role messages are paused by the owner.");
-		expect(text).toContain("6 am report (2026-10-06): asked at 2026-10-06 07:00 (1 h ago), no answer yet");
-		expect(text).toContain("6 am report (2026-10-06): failed: the chat is gone");
-		expect(text).toContain("6 am report (2026-10-05): no answer");
-		expect(text).toContain("6 am report: not asked (no activity that day)");
-		expect(text).toContain("6 am report: not in the 6 am job");
+		expect(text).not.toContain("6 am report");
+		expect(text).not.toContain("the chat is gone");
+		expect(roles[0].report.state).toBe("pending");
 		expect(text).toContain("Home chat: none");
 	});
 
@@ -256,7 +254,8 @@ describe("formatRolesOverview", () => {
 		);
 		const text = formatRolesOverview(view(roles), { now: NOW });
 		for (const r of roles) expect(text).toContain(`## ${r.id} (`);
-		expect(text.match(/6 am report \(2026-10-06\)/g)).toHaveLength(15);
+		expect(text).not.toContain("6 am report");
+		expect(roles[0].report.state).toBe("report");
 		expect(text.length).toBeLessThanOrEqual(ROLES_OVERVIEW_TEXT_MAX);
 	});
 

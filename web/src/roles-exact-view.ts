@@ -3,7 +3,7 @@
  */
 import { EXACT_SOURCE, exactAge, exactClock, type ExactRole, type ExactRoles } from "./roles-exact-model";
 import type { NeedsYouItem } from "./roles-useful-model";
-import type { PanelRoleStatus, PanelTask, PanelTaskEvent, RolePanel } from "./roles-panel-model";
+import type { PanelRoleStatus, PanelTask, PanelTaskEvent } from "./roles-panel-model";
 import { ringAnchor, ringLayout } from "./roles-u0/layout";
 import type { SurfaceValues } from "./roles-u0/types";
 import type { RowState, UsefulOpenTarget, UsefulRecord } from "./roles-useful-model";
@@ -88,13 +88,6 @@ const QUEUE_EVENT: Record<PanelTaskEvent["kind"], string> = {
 	done: "Queue recorded: task completed",
 	dropped: "Queue recorded: task dropped",
 };
-function reportItems(text: string) {
-	const lines = text.split("\n").filter(Boolean);
-	const items = lines.slice(0, 200).map((t) => ({ t }));
-	if (lines.length > 200)
-		items.push({ t: `${lines.length - 200} more lines not shown here. Open the full report in the role’s chat.` });
-	return items;
-}
 function acceptsHover(source: Event | Element): boolean {
 	const el = "currentTarget" in source ? (source.currentTarget as Element | null) : source;
 	if (!el) return false;
@@ -148,40 +141,6 @@ function ownerEdges(model: ExactRoles, layout: ReturnType<typeof ringLayout>, ho
 			];
 		});
 }
-function report(panel: RolePanel | null): SurfaceValues {
-	const r = panel?.report;
-	const sections = r?.sections.length
-		? r.sections.map((s) => ({
-				label: s.heading,
-				fg: "#9CC7FF",
-				items: reportItems(s.text ?? "Report text unavailable"),
-			}))
-		: r?.text
-			? [
-					{
-						label: "Report",
-						fg: "#9CC7FF",
-						items: reportItems(r.text),
-					},
-				]
-			: [];
-	const available = r?.state === "report" && sections.length > 0;
-	return {
-		has: available,
-		missing: !available,
-		when: r?.date ?? NR,
-		summary: r?.date ?? "Report date unknown",
-		sections,
-		reason:
-			r?.state === "failed" || r?.state === "unavailable"
-				? "The report could not be read."
-				: r?.state === "not-active" || r?.state === "not-in-job"
-					? "This role is not part of the current report job."
-					: "No report is available in this snapshot.",
-		last: r?.date ?? NR,
-	};
-}
-
 export function createExactRolesView(
 	read: () => ExactRoles,
 	actions: ExactViewActions,
@@ -196,7 +155,6 @@ export function createExactRolesView(
 	let settled = false;
 	let from = { top: 0, left: 0, width: 0, height: 0 };
 	let legend = false;
-	let reportOpen = false;
 	let tab: "work" | "config" = "work";
 	let disposed = false;
 	let generation = 0;
@@ -246,7 +204,6 @@ export function createExactRolesView(
 		hover = null;
 		grown = false;
 		settled = false;
-		reportOpen = false;
 		tab = "work";
 		changed();
 		raf(() =>
@@ -517,7 +474,6 @@ export function createExactRolesView(
 						},
 					],
 			actsEmpty: false,
-			rep: report(panel),
 			inits: (panel?.leads.initiatives ?? []).map((i) => ({
 				name: i.name ?? i.id,
 				status: i.status ?? "Unknown",
@@ -756,13 +712,6 @@ export function createExactRolesView(
 			exMinH: "0px",
 			closeEx: (e: Event | Element) =>
 				close(false, "type" in e && e.type === "click" && "detail" in e && e.detail === 0),
-			repOpen: reportOpen,
-			repOpenStr: String(reportOpen),
-			repChev: reportOpen ? "rotate(180deg)" : "none",
-			toggleRep: () => {
-				reportOpen = !reportOpen;
-				changed();
-			},
 			drTabs: (["work", "config"] as const).map((value) => ({
 				label: value === "work" ? "Work progress" : "Configuration",
 				pressed: String(tab === value),

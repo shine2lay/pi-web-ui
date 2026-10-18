@@ -183,8 +183,8 @@ describe("the supplied Roles design with the existing feed", () => {
 		vi.runAllTimers();
 		const panel = document.querySelector('[role="region"]');
 		expect(panel?.textContent).toContain("Task 7");
+		expect(panel?.textContent).not.toContain("6 am report");
 		for (const title of [
-			"6 am report",
 			"Now",
 			"Task queue",
 			"Own initiatives",
@@ -368,13 +368,12 @@ describe("the supplied Roles design with the existing feed", () => {
 		expect(actions.open).not.toHaveBeenCalled();
 	});
 
-	it("uses the same report and activity data while switching only local presentation", () => {
+	it("switches activity presentation without exposing the retired daily report", () => {
 		const { view } = fixture();
 		view.openRole("ops");
 		let v = view.values();
-		expect(object(object(v.ex).rep).has).toBe(true);
-		invoke(v.toggleRep);
-		expect(view.values().repOpen).toBe(true);
+		expect(object(v.ex).rep).toBeUndefined();
+		expect(v.toggleRep).toBeUndefined();
 		invoke(object(list(v.drTabs)[1]).pick);
 		v = view.values();
 		expect(object(list(object(v.ex).acts)[0]).text).toBe("Configuration history is not connected yet.");
@@ -491,20 +490,22 @@ describe("the supplied Roles design with the existing feed", () => {
 		expect(view.values().spendRoleText).toBe("2 departments · see each role");
 	});
 
-	it("caps report lines with an omission row instead of breaking the whole page", () => {
+	it("does not render archived report content or a report reminder", () => {
 		const r = role({
 			report: {
 				state: "report",
 				date: "2026-10-17",
-				sections: [{ heading: "Done", text: Array(1100).fill("line").join("\n") }],
+				sections: [{ heading: "Done", text: Array(1100).fill("ARCHIVED_DAILY_REPORT").join("\n") }],
 			},
 		});
 		const { view } = fixture(projectExactRoles(state([r]), "open", NOW), true);
 		view.openRole("ops");
 		vi.runAllTimers();
-		expect(() => invoke(view.values().toggleRep)).not.toThrow();
-		expect(document.body.textContent).toContain("900 more lines not shown here");
+		expect(document.body.textContent).not.toContain("ARCHIVED_DAILY_REPORT");
+		expect(document.body.textContent).not.toContain("6 am report");
+		expect(document.body.textContent).not.toContain("Not received today");
 		expect(document.querySelector('[role="region"]')).not.toBeNull();
+		expect(r.report.sections?.[0].text).toContain("ARCHIVED_DAILY_REPORT");
 	});
 
 	it("counts omitted tasks and mutes missing requester labels", () => {

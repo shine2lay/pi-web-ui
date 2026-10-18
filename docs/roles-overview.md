@@ -2,13 +2,25 @@
 
 **Roles** is a top-bar view next to Chat, Terminal and Git. It shows every role from
 Settings -> Identities on one page: what each one is doing, what is waiting on the owner, its newest
-TL;DR line, its queue, its goals and its 6 am report. Live asks can be answered from the page through
+TL;DR line, its queue and its goals. Live asks can be answered from the page through
 its guarded answer dialog, using the existing browser answer path. Queue controls and edits stay
 in the chats and in Settings; answering an approval can let its existing task continue.
 
 Design: `~/design-lab/roles-page/SPEC.md` for what the page says; the layout is the owner's
 2026-10-05 call ("show less, tap for more"): tiles instead of SPEC's board, which read as a flat
 table. Patch: `roles-overview` in [PATCHES.md](../PATCHES.md).
+
+## Automatic 6 am reports retired (owner, 2026-10-17)
+
+The owner stopped automatic 6 am updates for every role. The shared scheduler job is disabled; the older
+Design 06:05 job stays disabled and its runner uses the shared report source, so its catch-up does not
+generate reports either. Unrelated schedules and progress notifications stay on.
+
+The current Roles template, the fallback role panel and `roles_overview` no longer display reports,
+pending-report reminders or report links. Existing report records and protocol fields are retained for
+historical compatibility; this does not erase the reports from old chats. Global agent rules prohibit
+recreating these jobs or answering late automatic report requests. Explicit requested updates, initiative
+feeds and TL;DR are unchanged. The older report sections below describe the historical implementation.
 
 ## The role panel (owner, 2026-10-16)
 
@@ -228,13 +240,13 @@ on the same fixtures without repeating the full Roles stage.
 
 Status, strongest first:
 
-| Status      | When                                                                                   |
-| ----------- | -------------------------------------------------------------------------------------- |
-| Needs you   | the role has an open owner ask                                                         |
-| Busy        | its home chat or a task chat is working, or a queued task is being worked              |
+| Status      | When                                                                                                                                                                                 |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Needs you   | the role has an open owner ask                                                                                                                                                       |
+| Busy        | its home chat or a task chat is working, or a queued task is being worked                                                                                                            |
 | Paused      | its home chat's queue was stopped (by the owner or after a stop) with tasks still in it, or the owner paused its queue or one of its open tasks (a paused task is never "needs you") |
-| Idle        | it has a home chat and has done something                                              |
-| Nothing yet | no home chat that can be read, or no TL;DR line or task in it yet                      |
+| Idle        | it has a home chat and has done something                                                                                                                                            |
+| Nothing yet | no home chat that can be read, or no TL;DR line or task in it yet                                                                                                                    |
 
 ## Where the data comes from
 
@@ -251,9 +263,9 @@ Everything is read; nothing is written, opened or started.
   - unanswered needs-you TL;DR lines;
   - stuck tasks, with the time the task got stuck (the queue's own record);
   - question, dialog and approval cards open in a role's loaded chats.
-  A task's question that was also copied into the home chat appears once. A task asking its main chat
-  is not an owner ask. Different asks are never merged. An ask with no known start time sorts last
-  rather than getting a made-up age.
+    A task's question that was also copied into the home chat appears once. A task asking its main chat
+    is not an owner ask. Different asks are never merged. An ask with no known start time sorts last
+    rather than getting a made-up age.
 - **Requests**: the whole role-message store (not only the newest 100 rows Settings lists).
 - **6 am reports**: role-reports' run record (`$XDG_STATE_HOME` or `~/.local/state`,
   `role-reports/runs.json`), the store's report requests, and the reply in the home chat, read with
