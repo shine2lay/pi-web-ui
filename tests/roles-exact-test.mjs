@@ -106,17 +106,21 @@ try {
 			assert.ok(!text.includes("Hover a label to read messages"));
 			assert.equal(await where.getByRole("button", { name: /^(Hide )?Legend$/i }).count(), 0);
 		};
+		// roles-small-fixes: every card stays at least 8 px below the floating header (was 4), and the gap is recorded.
 		const checkFloating = async (owner, label) => {
-			await owner.waitForFunction(
-				() => {
-					const doc = document.querySelector('iframe[title="Roles"]')?.contentDocument;
-					const chrome = doc?.querySelector("[data-roles-chrome]")?.getBoundingClientRect();
-					const first = doc?.querySelector('button[aria-haspopup="dialog"]')?.getBoundingClientRect();
-					return chrome && (!first || first.top >= chrome.bottom + 4);
-				},
-				undefined,
-				{ timeout: 3000 },
-			);
+			// Settle wait only; a timeout falls through to the assertion below, which reports the measured gap.
+			await owner
+				.waitForFunction(
+					() => {
+						const doc = document.querySelector('iframe[title="Roles"]')?.contentDocument;
+						const chrome = doc?.querySelector("[data-roles-chrome]")?.getBoundingClientRect();
+						const cards = [...(doc?.querySelectorAll('button[aria-haspopup="dialog"]') ?? [])];
+						return chrome && cards.every((card) => card.getBoundingClientRect().top >= chrome.bottom + 8);
+					},
+					undefined,
+					{ timeout: 3000 },
+				)
+				.catch(() => {});
 			const geometry = await owner.evaluate(() => {
 				const doc = document.querySelector('iframe[title="Roles"]').contentDocument;
 				const root = doc.querySelector('[data-roles-floating="true"]');
@@ -133,15 +137,25 @@ try {
 					graphTop: Math.round(g.top - r.top + root.scrollTop),
 					inGraph: c.top >= g.top && c.bottom < g.bottom,
 					inViewport: c.left >= r.left && c.right <= r.right + 1,
-					clear: boxes.every((b) => b.top >= c.bottom + 4),
+					clear: boxes.every((b) => b.top >= c.bottom + 8),
+					gap: Math.round((Math.min(...boxes.map((b) => b.top)) - c.bottom) * 100) / 100,
 					outerOverflow: root.scrollWidth > root.clientWidth + 1,
 					chromeHeight: Math.round(c.height),
 					canvasHeight: Math.round(g.height),
+					headerSpace: root.style.getPropertyValue("--roles-header-space"),
+					minHeight: doc.defaultView.getComputedStyle(graph).minHeight,
+					graphHeight: graph.clientHeight,
+					plannedHeight: graph.querySelector("svg[viewBox]")?.viewBox.baseVal.height ?? null,
 				};
 			});
 			results.floating.push({ label, ...geometry });
 			assert.equal(geometry.position, "absolute", label);
 			assert.equal(geometry.graphTop, 16, label);
+			// The graph is as tall as the plan the cards were placed on, right after a header change.
+			assert.ok(
+				geometry.plannedHeight !== null && Math.abs(geometry.graphHeight - geometry.plannedHeight) <= 1,
+				JSON.stringify({ label, ...geometry }),
+			);
 			assert.ok(
 				geometry.inGraph && geometry.inViewport && geometry.clear && !geometry.outerOverflow,
 				JSON.stringify({ label, ...geometry }),
@@ -367,6 +381,15 @@ try {
 		await page.screenshot({ path: join(output, "laptop.png") });
 		await page.setViewportSize({ width: 390, height: 844 });
 		await checkFloating(page, "phone");
+		// roles-small-fixes: the live overlap came with a tall wrapped header on a phone; the stale banner makes one.
+		await page.evaluate(() => window.rolesExactTest.deliver("stale"));
+		await frame.getByRole("alert").waitFor();
+		await checkFloating(page, "phone, tall header");
+		await page.screenshot({ path: join(output, "phone-tall-header.png") });
+		await page.evaluate(() => window.rolesExactTest.deliver());
+		await frame.getByText("2 waiting on you", { exact: true }).waitFor();
+		await frame.getByRole("alert").waitFor({ state: "hidden" });
+		await checkFloating(page, "phone, header shrinks back");
 		await frame.locator("[data-boxgrid]").waitFor();
 		const pan = await frame.locator("[data-boxgrid]").evaluate((el) => {
 			let p = el.parentElement;

@@ -88,6 +88,8 @@ export function RolesExactView({
 					if (disposed) return;
 					try {
 						binding?.update();
+						// roles-small-fixes: the header or graph changed size while the values were applied; plan again before paint.
+						for (let pass = 0; pass < 3 && view.refit(); pass++) binding?.update();
 						for (const link of doc.querySelectorAll<HTMLAnchorElement>('a[href^="#exact-route:"]')) {
 							const enabled = view.canNavigate((link.getAttribute("href") ?? "").slice("#exact-route:".length));
 							link.setAttribute("aria-disabled", String(!enabled));

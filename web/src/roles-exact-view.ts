@@ -342,6 +342,8 @@ export function createExactRolesView(
 	let quietFocusRestore = false;
 	/** owner-contacts: the message whose reply is open. */
 	let openContact: string | null = null;
+	/** roles-small-fixes: the header height and graph height the last plan was made for. */
+	let planned: { chrome: number; height: number } | null = null;
 	const rafs = new Set<unknown>();
 	const timers = new Set<unknown>();
 	const changed = () => {
@@ -772,6 +774,7 @@ export function createExactRolesView(
 			height: inner.height + topInset,
 			pos: new Map([...inner.pos].map(([id, [x, y]]) => [id, [x, y + topInset] as const])),
 		};
+		planned = chrome && graph && !height ? { chrome: measured, height: layout.height } : null;
 		const boxes: SurfaceValues[] = model.roles.map((r) => ({ ...box(r, model), ...ringAnchor(layout, r.row.roleId) }));
 		const selectedId = selected?.kind === "role" ? selected.id : null;
 		const ex = selectedId ? boxes.find((b) => b.id === selectedId) : undefined;
@@ -995,10 +998,19 @@ export function createExactRolesView(
 		canNavigate,
 		close,
 		isOpen: () => selected !== null,
+		/** roles-small-fixes: true when the last plan no longer fits the page (the header changed size while the
+		 * values were applied, or the graph took another height), so the host plans again before paint. */
+		refit: () =>
+			!!planned &&
+			!!chrome &&
+			!!graph &&
+			(Math.abs((chrome.getBoundingClientRect().height || 48) - planned.chrome) > 0.5 ||
+				Math.abs(graph.clientHeight - planned.height) > 1),
 		dispose: () => {
 			disposed = true;
 			clearAnimation();
 			selected = null;
+			planned = null;
 			graph = null;
 			chrome = null;
 			origin = null;
