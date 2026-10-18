@@ -6850,8 +6850,9 @@ every fold:
   - at the top of a folded chat, a "↑ Show older messages" button loads the folded messages page by
     page;
   - they show read-only above the card.
-- `web/src/components/Message.tsx`: the fold card's own title and hint. `web/src/i18n.tsx`:
-  `foldCardTitle`, `foldCardHint`, `loadFolded`, `loadFoldedFirst` (English).
+- `web/src/components/Message.tsx`: the fold card's own title and hint. `web/src/i18n.tsx` and the 8
+  locale packs (`locales/*.json`, English text in each): `foldCardTitle`, `foldCardHint`, `loadFolded`,
+  `loadFoldedFirst`.
 
 ### How it was checked
 
