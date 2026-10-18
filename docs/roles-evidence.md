@@ -36,6 +36,22 @@ Ops #207 (owner, 2026-10-18: "create those tasks and queue them"). Accountable l
 - On the page, the Ops and Backend rows (dark, light, phone) equal their current tasks' evidence; contrast 9.93. Both current tasks were older ("Not recorded"), so no row on the page showed times yet.
 - One miss: Ops #214 and #215 said "Not recorded" though their chats had made branches. See H-ROLES-EVIDENCE-2.
 
+**Result, second live look (Oct 18 11:06, 570f5259 installed; same method):**
+
+- Another chat's pi-web-ui task landed after this change matches to the millisecond: Ops #211 (c4b8cf40), Built 10:42:41 (the commit), Checked 10:49:18 (`lands.jsonl`), Installed 10:51:38 (the end of c4b8cf40's install in `history.jsonl`), Live 10:54:22 (that install's checks). So does #207's fix 570f5259: Built 10:49:34, Checked 10:55:51, Installed 10:58:54 (`pi-web-deploy result 570f5259`: "10:58 deploy of 570f5259: live, and the checks all passed"), Live 11:02:03. #212 (pi-worktree) is unchanged: Built and Checked, Installed and Live "Not tracked for pi-worktree".
+- Each task with a commit shows one its own chat's branch landed; no task showed another task's commit.
+- On the page, the Ops rows (dark, light, phone) and the Backend row equal their current tasks' evidence ("Not recorded": both branches were made before the records existed); contrast 9.93, no page errors, nothing sent but hello and roles_watch.
+- The row shows only the role's current task: the first open task whose chat is mid-turn, among the first 8 started (`busy` in `server/roles-overview.ts`), else the first open one. Ops #206 was mid-turn in both looks, so no row on the page had drawn times yet.
+
+**Result, third live look (Oct 18 11:22, right after Ops #206's turn ended, so #207 was Ops's current task; same method):**
+
+- The Ops row on the page draws Built 10:49, Checked 10:55, Installed 10:58, Live 11:02, Confirmed "not yet" (dark, light and phone), equal to the feed and to the records to the millisecond: `lands.jsonl` 10:55:51, the end of 570f5259's install 10:58:54. Done steps solid green (contrast 9.35), Confirmed dashed grey (7.98). No page errors, nothing sent but hello and roles_watch.
+- In the same feed, Ops #213 (another chat's pi-web-ui task, landed after this change, d5989391): Built 11:02:45, Checked 11:09:01 (`lands.jsonl`), Installed 11:11:22 (`pi-web-deploy result d5989391`: "11:11 deploy of d5989391: live, and the checks all passed"), Live 11:14:19 (that install's checks). Ops #214's pi-queue land (1733fe94): Built 11:00:07, Checked 11:09:47, Installed and Live "Not tracked for pi-queue".
+
+**Result: HIT.** For the pi-web-ui tasks landed after this change (#207's fix, #211, #213), Checked equals the land's time in `lands.jsonl` and Installed equals the install pi-web-deploy reports, to the millisecond, and the page's row draws them for the role's current task. Tasks in other repos (pi-worktree, pi-queue) show Built and Checked, with Installed and Live "Not tracked for <repo>"; older tasks say "Not recorded". No task showed another task's commit.
+
+**Limit found: Confirmed never shows a time.** The row follows the role's current task, which is always an open one, and a task leaves the open list the moment it is marked done; so Confirmed reads "not yet" (or "Not recorded") on every row. Showing it would need the row to keep the last finished task for a while, a separate change.
+
 ## H-ROLES-EVIDENCE-2
 
 **Wrong, and the evidence.** In that look, Ops tasks #214 and #215 said "Not recorded" although `branches.jsonl` held branches their chats made (two and one), while #213, made the same way, said "not yet". The overview resolves a task's chat file only for a role's first `ROLES_TASK_CHATS_MAX` (8) started tasks, the chats whose TL;DR lines it reads, and the evidence took the file from there. Ops had 10 open tasks; #214 and #215 were the 9th and 10th.
@@ -46,4 +62,4 @@ Ops #207 (owner, 2026-10-18: "create those tasks and queue them"). Accountable l
 
 **What would prove it wrong.** After the install, a started task whose chat made a branch still says "Not recorded", or a task shows a branch another chat made.
 
-**Result:**
+**Result: HIT** (second live look, Oct 18 11:06, 570f5259 installed). Ops #214 and #215, the 9th and 10th started tasks, now say "not yet", as `branches.jsonl` holds branches their chats made and none has landed; #216, the 11th, says "not yet" with Installed and Live "Not tracked for agent-tools", its branch being in agent-tools. No task showed a branch another chat made.
