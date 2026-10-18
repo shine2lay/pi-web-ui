@@ -14,7 +14,7 @@ Sources: `/home/shinelay/security-lab/roles-answer/REVIEW-5f2cddad-filter.md` (N
 
 **What would prove it wrong.** An elicitation-shaped ask with the plan title gets an Answer button, or pi-queue's own plan confirm loses it.
 
-**Result:** unit tests hit. Live: pending.
+**Result:** unit tests hit. Live: no owner asks were open during the look (2026-10-18 11:10), so there was nothing to answer or to show as Open chat, and the page showed no Answer button. Hit, proven by the unit tests only.
 
 ## H-SMALL-2: answer dialog kind and departure (REVIEW-5f2cddad-filter N3)
 
@@ -26,7 +26,7 @@ Sources: `/home/shinelay/security-lab/roles-answer/REVIEW-5f2cddad-filter.md` (N
 
 **What would prove it wrong.** A dialog stays open over a stale ask on a live list, or one closes while its answer is on its way.
 
-**Result:** unit tests hit. Live: pending.
+**Result:** unit tests hit. Live: no owner asks were open during the look, so there was no dialog to open. Hit, proven by the unit tests only.
 
 ## H-SMALL-3: why asks can't be confirmed (REVIEW-f0a35666 N2)
 
@@ -38,7 +38,7 @@ Sources: `/home/shinelay/security-lab/roles-answer/REVIEW-5f2cddad-filter.md` (N
 
 **What would prove it wrong.** Any of the three shows a green label or the generic wording.
 
-**Result:** unit test hit. Live: pending (only visible when asks can't be confirmed).
+**Result:** unit test hit. Live hit: the page shows the amber "Asks unconfirmed: some roles not read · last received 11:10" (#F0B95A) with its banner, where it showed a green "Reported status" before. The reason is real: Ops had 11 started task chats, and the page reads asks from at most 8 per role (`TASK_CHATS_READ`), so an ask in a later chat could be missing.
 
 ## H-SMALL-4: "N more" tasks (REVIEW-f0a35666 N3)
 
@@ -50,7 +50,7 @@ Sources: `/home/shinelay/security-lab/roles-answer/REVIEW-5f2cddad-filter.md` (N
 
 **What would prove it wrong.** A cut list without the line, a wrong count, or "1 more tasks".
 
-**Result:** unit test hit. Live: pending (only visible on a role with more than 20 active or queued tasks).
+**Result:** unit test hit. Live hit: Design's panel reads "11 more tasks not shown here. Open the full queue.", the 11 queued tasks the feed holds back.
 
 ## H-SMALL-5: report sections over 1,000 lines (REVIEW-f0a35666 N1)
 
@@ -62,7 +62,7 @@ Sources: `/home/shinelay/security-lab/roles-answer/REVIEW-5f2cddad-filter.md` (N
 
 **What would prove it wrong.** A report section shows on the page again.
 
-**Result:** hit by removal (sealed check passes).
+**Result:** hit by removal (sealed check passes). Live: the panel has no report section.
 
 ## H-SMALL-6: phone header covering a card
 
@@ -81,4 +81,8 @@ Sources: `/home/shinelay/security-lab/roles-answer/REVIEW-5f2cddad-filter.md` (N
 
 **What would prove it wrong.** Any case under 8 px or with the graph off its plan, or a changed desktop layout.
 
-**Result:** sealed check hit (14 of 14). Phone: 30.41 px settled, 29.7 px with a tall header (graph 896 px = plan), 30.41 px after it shrinks back (was 6.35 px, graph 768 px against a 896 px plan). Desktop gaps unchanged: 39.38 px (1440), 37.13 px (with a banner), 32.16 px (1050), 9.41 px (department panel). Without the fix the same check fails (min-height 852.85 px against 896 px; 6.35 px after the shrink). Live: pending.
+**Result:** sealed check hit (14 of 14). Phone: 30.41 px settled, 29.7 px with a tall header (graph 896 px = plan), 30.41 px after it shrinks back (was 6.35 px, graph 768 px against a 896 px plan). Desktop gaps unchanged: 39.38 px (1440), 37.13 px (with a banner), 32.16 px (1050), 9.41 px (department panel). Without the fix the same check fails (min-height 852.85 px against 896 px; 6.35 px after the shrink). Live hit: the smallest gap between the floating header and any card was 15.41 px on desktop (1400 px, dark and light) and 15.36 px at 390 px, in every frame for 4 s from the first card (221, 222 and 241 frames; none under 8 px, none off the plan), with the graph at its planned height (840 and 953 px). Before: 4.76 px and one overlap. The header's height didn't change during the look; the sealed check covers one that grows and shrinks.
+
+## Live look
+
+Look-only, 2026-10-18 11:10, on 570f5259 and d5989391 (both contain 9f6b878f): own carry-on clients, GET only, the socket limited to hello and roles_watch. Desktop 1400 px dark and light and phone 390 px dark: no page errors, no serious or critical axe findings on the header, no sideways scroll. Scripts and receipts: `~/kept-from-tmp/2026-10-18/roles-small-fixes-live/` (`look.mjs`, `panel.mjs`, `out/`, `out-panel/`).
