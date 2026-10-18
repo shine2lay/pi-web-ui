@@ -15,7 +15,13 @@ import {
 	starterOf,
 } from "../../server/quiet-turns.js";
 import { type BoardPostRecord, boardOrderText } from "../../server/role-board.js";
-import { FOR_OWNER_TURN_HINT, QUIET_TURN_HINT, roleMessageHint, roleMessageText } from "../../server/role-messages.js";
+import {
+	FOR_OWNER_TURN_HINT,
+	QUIET_REPLY_HINT,
+	QUIET_TURN_HINT,
+	roleMessageHint,
+	roleMessageText,
+} from "../../server/role-messages.js";
 
 // quiet-turns (task #96). The owner, 2026-10-10 (relayed by COO in rm-37872561): "in alot of chat, i see
 // response to agent's message, like i see an actual output to me in chat, i dont need anything to see, the
@@ -374,15 +380,22 @@ describe("quiet-turns: transcript messages (the server's view)", () => {
 describe("quiet-turns: the hint lines tell a role to write nothing for the owner", () => {
 	const base = { id: "rm-0123abcd", from, text: "x" } as const;
 	it("question, request, reply and fyi say the owner doesn't read the turn; request keeps its reply-once rule", () => {
-		for (const kind of ["question", "request", "reply"] as const) {
-			expect(roleMessageHint({ ...base, kind, replyTo: "rm-89abcdef" } as Parts)).toContain(QUIET_TURN_HINT);
+		for (const kind of ["question", "request"] as const) {
+			expect(roleMessageHint({ ...base, kind } as Parts)).toContain(QUIET_TURN_HINT);
 		}
+		// An answer the role got takes no reply: its hint never invites one (the tool refuses a reply to a reply).
+		const reply = roleMessageHint({ ...base, kind: "reply", replyTo: "rm-89abcdef" } as Parts);
+		expect(reply).toBe(`(The answer to your message rm-89abcdef: no need to answer it. ${QUIET_REPLY_HINT})`);
+		expect(reply).not.toContain("send it with message_role");
+		expect(QUIET_REPLY_HINT).toBe(
+			"The owner doesn't read this turn: write nothing for him. If you need more from the sender, send it a new question or request; otherwise end the turn without a summary.",
+		);
 		expect(roleMessageHint({ ...base, kind: "request" } as Parts)).toContain("then reply once, with message_role");
 		expect(roleMessageHint({ ...base, kind: "question" } as Parts)).toMatch(
 			/^\(Answer it once, with message_role .*\)$/,
 		);
 		expect(roleMessageHint({ ...base, kind: "fyi" } as Parts)).toBe(
-			"(An FYI from another role, added without a turn of its own: no reply needed. Write nothing for the owner about it; if the sender needs an answer, send it with message_role.)",
+			"(An FYI from another role, added without a turn of its own: no reply needed. Write nothing for the owner about it; if you need something from the sender, send it a new question or request (an FYI takes no reply).)",
 		);
 		expect(QUIET_TURN_HINT).toBe(
 			"The owner doesn't read this turn: write nothing for him. If the sender needs an answer, send it with message_role; otherwise end the turn without a summary.",

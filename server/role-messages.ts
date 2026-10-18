@@ -403,6 +403,10 @@ export function roleMessageHeader(r: HeaderParts): string {
  *  at all"). The page folds such a turn into one row; this tells the role not to write for him. */
 export const QUIET_TURN_HINT =
 	"The owner doesn't read this turn: write nothing for him. If the sender needs an answer, send it with message_role; otherwise end the turn without a summary.";
+/** quiet-turns, for an answer the role got: it takes no reply (a second message is a new question or
+ *  request), so this doesn't say "send it with message_role" (read as kind "reply", which the tool refuses). */
+export const QUIET_REPLY_HINT =
+	"The owner doesn't read this turn: write nothing for him. If you need more from the sender, send it a new question or request; otherwise end the turn without a summary.";
 /** quiet-turns: a reply that answers a question asked for the owner starts a turn that is his to read. */
 export const FOR_OWNER_TURN_HINT =
 	"This answers a question you asked for the owner: your answer in this turn goes to him in full.";
@@ -416,11 +420,11 @@ export function roleMessageHint(r: HeaderParts, opts: { ownerAnswer?: boolean } 
 			return "(The app's 6 am report request: your answer in this chat is the report the owner reads. No message_role, no new work, no tasks started.)";
 		case "fyi":
 			// No turn of its own: it is read with the chat's next message, which may be the owner's.
-			return "(An FYI from another role, added without a turn of its own: no reply needed. Write nothing for the owner about it; if the sender needs an answer, send it with message_role.)";
+			return "(An FYI from another role, added without a turn of its own: no reply needed. Write nothing for the owner about it; if you need something from the sender, send it a new question or request (an FYI takes no reply).)";
 		case "reply":
 			return opts.ownerAnswer
 				? `(The answer to your message ${r.replyTo ?? ""}: no need to answer it. ${FOR_OWNER_TURN_HINT})`
-				: `(The answer to your message ${r.replyTo ?? ""}: no need to answer it. ${QUIET_TURN_HINT})`;
+				: `(The answer to your message ${r.replyTo ?? ""}: no need to answer it. ${QUIET_REPLY_HINT})`;
 		case "question":
 			return `(Answer it once, with ${reply}. ${QUIET_TURN_HINT})`;
 		default:

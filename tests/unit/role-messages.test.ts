@@ -7,6 +7,7 @@ import type { IdentityDef } from "../../server/identities.js";
 import { serializeMessage } from "../../server/serialize.js";
 import {
 	FOR_OWNER_TURN_HINT,
+	QUIET_REPLY_HINT,
 	QUIET_TURN_HINT,
 	ROLE_MESSAGE_CHAIN_MAX,
 	ROLE_MESSAGE_CUSTOM_TYPE,
@@ -600,7 +601,7 @@ describe("delivery", () => {
 		expect(via("FYI-1")).toHaveLength(1);
 		const text = f.sent.find((x) => x.via === "note")?.text ?? "";
 		expect(text.split("\n").at(-1)).toBe(
-			"(An FYI from another role, added without a turn of its own: no reply needed. Write nothing for the owner about it; if the sender needs an answer, send it with message_role.)",
+			"(An FYI from another role, added without a turn of its own: no reply needed. Write nothing for the owner about it; if you need something from the sender, send it a new question or request (an FYI takes no reply).)",
 		);
 		// An FYI never deepens a chain: the chat's last user message is still not a role message.
 		expect(s.handlingDepth(B, "hello")).toBe(0);
@@ -770,7 +771,7 @@ describe('telegram-coo: forOwner (owner 2026-10-06: "Yes, answers to my question
 		expect(
 			forHim.endsWith(`(The answer to your message ${q.record.id}: no need to answer it. ${FOR_OWNER_TURN_HINT})`),
 		).toBe(true);
-		expect(plain).toContain(QUIET_TURN_HINT);
+		expect(plain).toContain(QUIET_REPLY_HINT);
 		expect(plain).not.toContain(FOR_OWNER_TURN_HINT);
 		// The page's card: forOwner on the answer to his question only (never on the question itself).
 		expect(s.stampFor(A, forHim)).toMatchObject({ id: answer.record.id, kind: "reply", forOwner: true });

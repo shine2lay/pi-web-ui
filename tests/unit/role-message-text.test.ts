@@ -37,7 +37,7 @@ describe("role-message-fold: parseRoleMessageText", () => {
 		const r = parseRoleMessageText(text({ kind: "reply", replyTo: "rm-89abcdef" }));
 		expect(r).toMatchObject({ kind: "reply", replyTo: "rm-89abcdef", from: "temper" });
 		expect(r?.hint).toBe(
-			"(The answer to your message rm-89abcdef: no need to answer it. The owner doesn't read this turn: write nothing for him. If the sender needs an answer, send it with message_role; otherwise end the turn without a summary.)",
+			"(The answer to your message rm-89abcdef: no need to answer it. The owner doesn't read this turn: write nothing for him. If you need more from the sender, send it a new question or request; otherwise end the turn without a summary.)",
 		);
 		// quiet-turns: the hint of an answer to a question asked for the owner is a hint too
 		const forHim = roleMessageText(
