@@ -20,4 +20,9 @@ Ops #204, second of the owner's "Finish Roles' easy gaps" tasks (2026-10-18). Ac
 
 **Limits.** The overview loads no chat, calls no model and writes nothing; it reads only model change entries, never message contents. No chat's model is changed. A chat that isn't open shows the newest change in its file; if an "all chats" model press reaches it only when it is next opened, the panel follows once it is open. Minimal checks (owner, Oct 17: "build ship it, only test minimally").
 
-**Result:**
+**Result: HIT** (2026-10-18 09:41 PDT, installed d0e58939; pi-web-deploy checks server, page, reply, bigchat and log all passed).
+
+- Look-only live check (`~/kept-from-tmp/2026-10-18/roles-model-live/look.mjs`, own carry-on clients; the Roles page sent only hello and roles_watch). The Ops panel's Model line said "Model: Claude Opus 5.5 (#4)" in readings taken before and after opening the Ops chat, and the Ops chat's own model label (its input bar's model chip) said "Claude Opus 5.5 (#4)": the same.
+- The Ops home chat's newest recorded model change is anthropic-4/claude-opus-5-5 (91 recorded), which the app names "Claude Opus 5.5 (#4)". The "(#4)" is the account slot; it shows because the app's own model name includes it.
+- All 15 roles have a home chat with a known model right now, and all show "Claude Opus 5.5 (#4)". So "Not recorded" (no home chat, no recorded change, a model the app doesn't know) could not be seen live; the unit tests cover it, and a chat whose model changes later (the newest change wins, read from the added bytes).
+- No page errors.
