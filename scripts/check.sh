@@ -3,6 +3,8 @@
 #
 #   scripts/check.sh            # 全量（含构建）
 #   scripts/check.sh --fast     # 跳过构建与真 PTY 冒烟（改前端时够用）
+#   scripts/check.sh --notes    # only the checks that read notes (docs/**/*.md, PATCHES.md): what wt land
+#                               # runs for a change that touches nothing else (agent-tools docs/wt-notes-check.md)
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -16,6 +18,24 @@ fi
 
 fast=false
 [ "${1:-}" = "--fast" ] && fast=true
+
+# --notes (Ops #235, PATCHES.md "notes-check"): wt land runs this instead of --fast when a change
+# touches only notes (wt.yaml notes_paths: docs/**/*.md and PATCHES.md). It runs the PATCHES.md check
+# and the unit test files that read a note, nothing else: no other step reads a note. A unit test that
+# names a note in its code must be on this list or on the reviewed "names it but doesn't read it" list
+# in tests/unit/notes-check-list.test.ts, which fails otherwise (it also reads this block).
+notes_tests=(
+	tests/unit/check-patches-md.test.ts
+	tests/unit/patches-union.test.ts
+	tests/unit/role-message-guard-contract.test.ts
+)
+if [ "${1:-}" = "--notes" ]; then
+	echo "== notes only: the PATCHES.md check and the ${#notes_tests[@]} unit test files that read notes"
+	node scripts/check-patches-md.mjs
+	npm test -- "${notes_tests[@]}"
+	echo "--notes: the checks that read notes passed (any other change runs the full check)"
+	exit 0
+fi
 
 # The quick steps run beside the unit tests (gate-side-by-side, docs/gate-side-by-side.md). Each one
 # starts in the background with its output in a file of its own, printed after the tests in this

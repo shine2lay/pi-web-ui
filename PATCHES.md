@@ -10,6 +10,15 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## notes-check: a change to notes only runs only the checks that read notes
+
+- `local` (owner 2026-10-18, "Notes skip the tests", Ops #235, project faster-landing). Hypothesis H-WT-NOTES-1 and result: agent-tools `docs/wt-notes-check.md`.
+- 14 of the 31 lands on Oct 18 changed only a task's result note and still ran the whole 6-7 minute check (107 of 219 check minutes); two of them failed on tests that had nothing to do with notes. `scripts/check.sh --notes` runs only `node scripts/check-patches-md.mjs` and the unit test files on its `notes_tests` list, the ones that read a note (`check-patches-md`, `patches-union`, `role-message-guard-contract`), sealed and with `TZ=UTC` as before: about 3 s. `--fast` and the full check are unchanged.
+- wt land runs it instead of `--fast` only when every changed file matches pi-web-ui's `notes_paths` in agent-tools' wt.yaml (`docs/**/*.md`, `PATCHES.md`). Any other file, including a deleted or renamed one, gets the full check as before.
+- `tests/unit/notes-check-list.test.ts` (in the full check) fails when a unit test file names a note in its code (comments don't count) but is on neither `notes_tests` nor its reviewed names-only list, when an entry on either list is stale, or when the `--notes` branch stops running either step.
+- Checks: `scripts/check.sh --notes` passed, and failed on a duplicated PATCHES.md heading; the guard failed with `patches-union.test.ts` left off the list; then the landing gate.
+- Undo: revert this commit, and take `notes_paths` and `notes_check` out of pi-web-ui's entry in agent-tools' wt.yaml. Reverting only this commit is safe: check.sh then ignores `--notes` and runs its full check.
+
 ## initiatives-plan-data: one read-only feed of the whole work registry for the Initiatives page
 
 - `local` (owner 2026-10-18, "now lets plan for initiatives page to show all the planning work", Ops #223). Hypothesis H-INITIATIVES-DATA-1 and result: `docs/initiatives-plan-data.md`.
