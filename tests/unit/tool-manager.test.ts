@@ -25,6 +25,7 @@ import {
 	legacyToDisabled,
 	normalizeDisabledAgentTools,
 	filterToolsByPreset,
+	TASK_CHAT_OFF_TOOL_NAMES,
 	presetAllowsPluginTools,
 	presetHasQuestionnaire,
 	presetShowsSkillCatalog,
@@ -212,6 +213,27 @@ describe("tool_manage 出入口", () => {
 		const lead = fakeSet(["bash", "read", "tldr"]);
 		applyAgentToolsGating(lead, [], undefined, "linux");
 		expect(lead.peek()).toContain("tldr");
+	});
+
+	it("a queued task's own chat leaves out every tool on the task-chat off list, and keeps the rest", () => {
+		const kept = [
+			"bash",
+			"read",
+			"queue_stuck",
+			"queue_done",
+			"message_role",
+			"web_search",
+			"fetch_content",
+			"acp_status",
+		];
+		const all = [...kept, ...TASK_CHAT_OFF_TOOL_NAMES];
+		const task = fakeSet(all);
+		applyAgentToolsGating(task, [], undefined, "linux", true);
+		for (const name of TASK_CHAT_OFF_TOOL_NAMES) expect(task.peek()).not.toContain(name);
+		for (const name of kept) expect(task.peek()).toContain(name);
+		const lead = fakeSet(all);
+		applyAgentToolsGating(lead, [], undefined, "linux");
+		for (const name of all) expect(lead.peek()).toContain(name);
 	});
 
 	/** A session whose registry carries Pi tool exposures; `active` is the loadout before gating
