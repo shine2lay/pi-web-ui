@@ -883,6 +883,11 @@ export const en = {
 	compactingReasonThreshold: "Auto-triggered by context threshold",
 	compactingReasonOverflow: "Auto-triggered by context overflow",
 	compactionFrom: "Compacted from {tokens} tokens",
+	foldCardTitle: "Older messages left the working list",
+	foldCardHint:
+		'The agent still works from the whole chat; the messages before this card stay in the chat file. "Show older messages" above shows them.',
+	loadFolded: "\u2191 Show older messages ({n} more)",
+	loadFoldedFirst: "\u2191 Show older messages",
 	compactionKeptHint: "Earlier history is folded into this summary; only recent messages stay in context",
 	backToBottom: "Back to bottom",
 	loadOlder: "↑ Load earlier messages ({n} above)",

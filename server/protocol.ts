@@ -1177,6 +1177,14 @@ export type ClientMessage =
 			count?: number;
 	  }
 	| {
+			/** acp-fold: the messages a billion-context-pi fold took out of the chat's working list (they
+			 *  stay in the chat file), shown read-only above the fold's card. beforeIndex = the start of the
+			 *  ones the window holds (none yet: leave it out, the newest come back). Answered by folded_messages. */
+			type: "load_folded";
+			beforeIndex?: number;
+			count?: number;
+	  }
+	| {
 			/** 往前再取几轮的摘要（exchange-digest）。beforeIndex = 客户端最老一份摘要的下标
 			 *  （没有摘要时 = 窗口起点）。默认取它之前最近的 count 轮；给了 fromIndex 就取开头落在
 			 *  [fromIndex, beforeIndex) 里的每一轮（点导轨上很老的提问）。应答 older_exchanges。 */
@@ -4282,6 +4290,17 @@ export type ServerMessage =
 			straddle?: UiExchangeDigest;
 			/** quiet-turns: the turn the new window start falls inside (UiState.quietLead for the new start). */
 			quietLead?: UiQuietRun;
+	  }
+	| {
+			/** acp-fold: load_folded's answer, [start, start+messages.length) of the `total` messages before
+			 *  the chat's newest fold (foldId = its entry). total 0: the chat has no fold. A window that holds
+			 *  another foldId's messages starts over with these. */
+			type: "folded_messages";
+			conversationId: string;
+			foldId: string;
+			total: number;
+			start: number;
+			messages: UiMessage[];
 	  }
 	| {
 			/** load_exchanges 的回执：beforeIndex 之前的几轮摘要（升序，最后一份接到 beforeIndex）。

@@ -6805,3 +6805,74 @@ as agreed in its addendum (`ADDENDUM-OPS200.md` there, sha256 `eb315ad1…`, Sec
 - No server, feed, watch, source, access or retention change. A true "nothing waiting on you" needs
   feed-side signals (addendum item 7) and is a separate plan.
 - If `UiRoleTask`, `UiRoleAsk` or `ROLES_TASK_CHATS_MAX` (8) change, update the projection and tests.
+
+## acp-fold
+
+**Status**: `local`
+**Baseline**: v0.96.1 (`mine` at 0e7b99c3).
+
+**Why** (owner, Architecture lead chat 2026-10-18: "Yes, build it"; window choice "Add a 'show older'
+button"): billion-context-pi (our fork, LOCAL-PATCHES.md patch 3 "Fold", 2ff41db) folds a big, quiet
+chat. It answers a compaction of its own (`details.acp`, no model call), so pi's working list keeps
+only about the newest 1,500 messages. That cuts the step freezes of big chats (Ops held 49K messages).
+What reaches the model is unchanged. Without this patch the window would do four wrong things around
+every fold:
+
+- say "Context compacted" and jump to the new card;
+- write and then rewrite the whole chat file (1-2 s on 130-170 MB chats);
+- show the folded list's token count in the footer;
+- lose everything before the fold.
+
+### Changes
+
+- `server/acp-fold.ts`:
+  - `isAcpFoldEntry` and `isAcpFoldResult` recognize a fold by `details.acp`;
+  - `foldedMessagesOf(branch)` returns the messages before the newest fold's first kept entry. It reads
+    the branch as if it had never been folded (folds left out, their children joined to their parents),
+    with pi's own `buildSessionProjection`.
+- `server/agent-service.ts`:
+  - Every compaction now waits `FOLD_QUIET_MS` (1.5 s) before it writes its pending marker and sends
+    the progress-bar snapshot. `compaction_end` skips the whole-file rewrite when no marker was
+    written. A model compaction (tens of seconds) still gets its marker.
+  - A fold's `compaction_end` gives no "Context compacted" notice, and the footer keeps `tokensBefore`.
+  - `load_folded` answers with `folded_messages`: pages (`MESSAGE_WINDOW`) of the folded messages,
+    newest first, serialized like live ones (same ids and image links), cached per newest fold.
+  - `promptInLine` waits up to 30 s while a compaction runs, instead of failing with pi's "Cannot submit
+    a prompt while compaction is in progress".
+- `server/protocol.ts` and `server/index.ts`:
+  - client message `load_folded {beforeIndex?, count?}`;
+  - server message `folded_messages {conversationId, foldId, total, start, messages}`;
+  - `PROTOCOL_VERSION` is unchanged, because old pages never send `load_folded`.
+- `web/src/message-window.ts`: `isFoldCard` (the summary starts with "[ACP fold "), `FoldedView`,
+  `mergeFolded`. `web/src/use-chat.ts` and `web/src/App.tsx`: `chat.folded` and `onLoadFolded`.
+- `web/src/components/MessageList.tsx`:
+  - fold cards don't auto-expand or jump;
+  - at the top of a folded chat, a "↑ Show older messages" button loads the folded messages page by
+    page;
+  - they show read-only above the card.
+- `web/src/components/Message.tsx`: the fold card's own title and hint. `web/src/i18n.tsx`:
+  `foldCardTitle`, `foldCardHint`, `loadFolded`, `loadFoldedFirst` (English).
+
+### How it was checked
+
+- `tests/unit/acp-fold.test.ts`:
+  - the folded messages plus the live ones after the card equal the unfolded chat, with pi's own
+    compaction and with two folds;
+  - a first kept entry that is gone;
+  - a fold told apart from a model compaction.
+- `tests/unit/message-window.test.ts`: `isFoldCard`, `mergeFolded` (pages joining, holes, other chats,
+  a newer fold, bad ranges).
+- The fold itself was replayed on copies of the Ops, Temper and Architecture chats with pi 1.0.1: every
+  request was byte-identical before and after (billion-context-pi's LOCAL-PATCHES.md, patch 3).
+- Gates: `scripts/check.sh` (land checks).
+
+### Undo and syncing
+
+- Nothing changes until billion-context-pi's fold is switched on (`"fold"` in `~/.pi/acp.json`), apart
+  from the 1.5 s marker delay and the prompt wait.
+- Undo: switch the fold off there, or revert this commit with `wt`. Folded chats stay readable either
+  way, because a fold is a normal pi compaction.
+- Known limit: `conversation_read` of a running chat reads pi's working list, so it sees only what
+  comes after the newest fold (the fold's card, then the newest messages).
+- If pi's compaction events or `buildSessionProjection` change, or billion-context-pi's summary prefix
+  "[ACP fold " changes, update `server/acp-fold.ts` and `isFoldCard`.

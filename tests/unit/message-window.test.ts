@@ -9,7 +9,10 @@
 import { describe, expect, it } from "vitest";
 import {
 	chainDigests,
+	type FoldedView,
+	isFoldCard,
 	keepLoadedHistory,
+	mergeFolded,
 	paginationAfterDelta,
 	prependOlderExchanges,
 	prependOlderMessages,
@@ -325,5 +328,71 @@ describe("keepLoadedHistory", () => {
 	it("快照窗口为空：原样采用快照", () => {
 		const next = snap({ messages: [], messagesStart: 0 });
 		expect(keepLoadedHistory(loaded(), next)).toBe(next);
+	});
+});
+
+// acp-fold: billion-context-pi's fold leaves a card at the top of the chat; "Show older messages" above
+// it loads what the fold took out of pi's working list, page by page, newest page first.
+describe("isFoldCard", () => {
+	const card = (text: string, role = "compactionSummary") =>
+		({ id: "cs-1", role, content: [{ type: "text", text }] }) as UiMessage;
+
+	it("knows a fold's card by its first words", () => {
+		expect(isFoldCard(card("[ACP fold 2026-10-18T12:00:00.000Z] 48709 older messages left..."))).toBe(true);
+	});
+
+	it("a compaction the model wrote, another role or no message is not a fold's card", () => {
+		expect(isFoldCard(card("The user asked for..."))).toBe(false);
+		expect(isFoldCard(card("[ACP fold 2026-10-18T12:00:00.000Z]", "user"))).toBe(false);
+		expect(isFoldCard(undefined)).toBe(false);
+	});
+});
+
+describe("mergeFolded", () => {
+	const page = (start: number, ids: string[], over: Partial<FoldedView> = {}): FoldedView => ({
+		conversationId: "c1",
+		foldId: "f1",
+		total: 300,
+		start,
+		messages: ids.map(msg),
+		...over,
+	});
+
+	it("the first page is the newest part", () => {
+		const first = page(298, ["m298", "m299"]);
+		expect(mergeFolded(null, "c1", first)).toEqual(first);
+	});
+
+	it("an older page joins in front of what is held", () => {
+		const held = page(298, ["m298", "m299"]);
+		const got = mergeFolded(held, "c1", page(296, ["m296", "m297"]));
+		expect(got?.start).toBe(296);
+		expect(got?.messages.map((m) => m.id)).toEqual(["m296", "m297", "m298", "m299"]);
+	});
+
+	it("a page that leaves a hole is dropped", () => {
+		const held = page(298, ["m298", "m299"]);
+		expect(mergeFolded(held, "c1", page(290, ["m290", "m291"]))).toBeNull();
+	});
+
+	it("another chat's page is dropped", () => {
+		expect(mergeFolded(null, "c2", page(298, ["m298", "m299"]))).toBeNull();
+		expect(mergeFolded(null, undefined, page(298, ["m298", "m299"]))).toBeNull();
+	});
+
+	it("after a newer fold the newest page starts over", () => {
+		const held = page(296, ["m296", "m297", "m298", "m299"]);
+		const newer = page(498, ["n498", "n499"], { foldId: "f2", total: 500 });
+		expect(mergeFolded(held, "c1", newer)).toEqual(newer);
+	});
+
+	it("a page that runs past the end, or starts before 0, is dropped", () => {
+		expect(mergeFolded(null, "c1", page(299, ["m299", "m300"]))).toBeNull();
+		expect(mergeFolded(null, "c1", page(-1, ["m"]))).toBeNull();
+	});
+
+	it("an empty first page of an empty fold is held (nothing left to show)", () => {
+		const empty = page(0, [], { total: 0 });
+		expect(mergeFolded(null, "c1", empty)).toEqual(empty);
 	});
 });

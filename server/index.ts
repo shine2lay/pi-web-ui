@@ -1197,6 +1197,9 @@ export interface DispatchSession {
 	 *  可选：不分页的引擎（DSH）不实现——它们的快照本来就是整段，
 	 *  不发 messagesStart，前端也就不会出「载入更早」按钮。 */
 	loadOlder?(beforeIndex: number, count?: number): void;
+	/** acp-fold: sends folded_messages, the messages before the chat's newest billion-context-pi fold
+	 *  that come before beforeIndex (all of them when it is left out), at most count. */
+	loadFolded?(beforeIndex?: number, count?: number): void;
 	/** 发回 beforeIndex 之前几轮的摘要（exchange-digest）。可选：不发摘要的引擎不实现——
 	 *  快照里没有 exchanges，前端也就不会请求。 */
 	loadExchanges?(beforeIndex: number, count?: number, fromIndex?: number): void;
@@ -2645,6 +2648,10 @@ wss.on("connection", (ws, req) => {
 			case "load_older":
 				// 用户往上翻/点了导轨上一条还没加载的提问（chat-window-pagination）。
 				cs.loadOlder?.(msg.beforeIndex, msg.count);
+				break;
+			case "load_folded":
+				// acp-fold: the window's "Show older messages" above a fold's card.
+				cs.loadFolded?.(msg.beforeIndex, msg.count);
 				break;
 			case "tldr_collapse":
 				// TL;DR tab 里点了折叠 / 「全部折叠」/ 「N 行已读」（tldr-collapse）。

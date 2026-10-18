@@ -162,3 +162,47 @@ export function paginationAfterDelta(
 		exchanges: ui.exchanges,
 	};
 }
+
+/** acp-fold: the start of a fold card's text (billion-context-pi's fold summary). */
+const FOLD_CARD_PREFIX = "[ACP fold ";
+
+/** acp-fold: a card billion-context-pi left where it folded the chat (a compaction of its own, no model
+ *  call): older messages left pi's working list but stay in the chat file. */
+export function isFoldCard(m: UiMessage | undefined): boolean {
+	if (!m || m.role !== "compactionSummary") return false;
+	const text = (m.content.find((b) => b.type === "text") as { text?: unknown } | undefined)?.text;
+	return typeof text === "string" && text.startsWith(FOLD_CARD_PREFIX);
+}
+
+/** acp-fold: what the window holds of the messages before a chat's newest fold ("Show older messages"):
+ *  [start, total) of `total`, oldest first. */
+export interface FoldedView {
+	conversationId: string;
+	foldId: string;
+	total: number;
+	start: number;
+	messages: UiMessage[];
+}
+
+/** acp-fold: folded_messages's answer merged into what the window holds. null = drop it (another
+ *  chat, or a page that doesn't join what is held). A newer fold (other foldId) starts over. */
+export function mergeFolded(
+	cur: FoldedView | null,
+	conversationId: string | undefined,
+	m: FoldedView,
+): FoldedView | null {
+	if (!conversationId || m.conversationId !== conversationId) return null;
+	if (m.start < 0 || m.start + m.messages.length > m.total) return null;
+	if (
+		cur &&
+		cur.conversationId === m.conversationId &&
+		cur.foldId === m.foldId &&
+		m.messages.length > 0 &&
+		m.start + m.messages.length === cur.start
+	) {
+		return { ...cur, start: m.start, messages: [...m.messages, ...cur.messages] };
+	}
+	// Anything else that is the newest part starts over (a first click, a newer fold, the chat opened again).
+	if (m.start + m.messages.length !== m.total) return null;
+	return { conversationId: m.conversationId, foldId: m.foldId, total: m.total, start: m.start, messages: m.messages };
+}

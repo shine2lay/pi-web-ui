@@ -2046,6 +2046,8 @@ export function App() {
 									jumpTarget={chat.preview ? null : searchJump}
 									onJumpDone={() => setSearchJump(null)}
 									onLoadOlder={(beforeIndex, count) => send({ type: "load_older", beforeIndex, count })}
+									folded={chat.folded}
+									onLoadFolded={(beforeIndex) => send({ type: "load_folded", beforeIndex })}
 									onLoadExchanges={(beforeIndex, count, fromIndex) =>
 										send({ type: "load_exchanges", beforeIndex, count, fromIndex })
 									}

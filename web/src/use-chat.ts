@@ -42,7 +42,14 @@ import type {
 } from "./types";
 
 import { applyMessageDelta, type MessageDeltaMsg } from "./message-delta";
-import { keepLoadedHistory, paginationAfterDelta, prependOlderExchanges, prependOlderMessages } from "./message-window";
+import {
+	type FoldedView,
+	keepLoadedHistory,
+	mergeFolded,
+	paginationAfterDelta,
+	prependOlderExchanges,
+	prependOlderMessages,
+} from "./message-window";
 import { applyReuse, cachedWindow, ChatCache, windowKey } from "./chat-cache";
 import { resolvePendingQuestion, type QuestionSource } from "./pending-question";
 import {
@@ -477,6 +484,9 @@ export interface ChatState {
 	 *  切换结束或被隐藏就清）。只给消息列表用，其余界面仍是服务端当前对话的状态；
 	 *  输入区被透明遮罩挡着，发不出东西。 */
 	preview: UiState | null;
+	/** acp-fold: messages a billion-context-pi fold took out of the chat's working list, fetched with
+	 *  "Show older messages" (load_folded) and shown read-only above the fold's card. */
+	folded: FoldedView | null;
 	/** rewind-to-here：回到一条用户消息后要放回输入框的文字（seq 递增，App 并进撤回草稿的同一条路）。 */
 	rewindDraft: { text: string; seq: number } | null;
 	/** optimistic-send: messages this window sent that the server hasn't confirmed yet (every chat;
@@ -502,6 +512,7 @@ type Action =
 	| { type: "snapshot_delta"; msg: Extract<ServerMessage, { type: "snapshot_delta" }> }
 	| { type: "older_messages"; msg: Extract<ServerMessage, { type: "older_messages" }> }
 	| { type: "older_exchanges"; msg: Extract<ServerMessage, { type: "older_exchanges" }> }
+	| { type: "folded_messages"; msg: Extract<ServerMessage, { type: "folded_messages" }> }
 	| { type: "protocol_mismatch" }
 	| { type: "tool_delta"; toolCallId: string; toolName: string; delta: string }
 	| { type: "message_delta"; msg: MessageDeltaMsg }
@@ -912,6 +923,10 @@ function reducer(state: ChatState, action: Action): ChatState {
 			if (!ui) return state;
 			const next = prependOlderMessages(ui, action.msg);
 			return next ? { ...state, state: next } : state;
+		}
+		case "folded_messages": {
+			const folded = mergeFolded(state.folded, state.state?.conversationId, action.msg);
+			return folded ? { ...state, folded } : state;
 		}
 		case "older_exchanges": {
 			// 往前拼几轮摘要（exchange-digest）；作废的回执原状返回。
@@ -1405,6 +1420,7 @@ export function useChat() {
 		pendingSwitch: null,
 		switchError: null,
 		preview: null,
+		folded: null,
 		rewindDraft: null,
 		// optimistic-send: sends from before a reload come back and are asked about again.
 		pendingSends: loadPendingSends(),
@@ -1903,6 +1919,10 @@ export function useChat() {
 					syncPendingQuestion(msg.state.pendingQuestion, msg.conversationId);
 					break;
 				}
+				case "folded_messages":
+					// acp-fold: the answer to "Show older messages" above a fold's card.
+					dispatch({ type: "folded_messages", msg });
+					break;
 				case "older_messages":
 					// 历史消息回执（chat-window-pagination）：不涉及 rev 链，不触发 resync。
 					dispatch({ type: "older_messages", msg });

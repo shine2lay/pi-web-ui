@@ -40,6 +40,7 @@ import { roleMessageViewOf, type RoleMessageView } from "../role-message-text";
 import { ChatImage } from "./ChatImage";
 import { imageSrc, isShownImage } from "../chat-image";
 import { useT, type Translate } from "../i18n";
+import { isFoldCard } from "../message-window";
 import { parseSkillBlock, type SkillBlock } from "../skill-block";
 import { isRasterImage, fileToProcessedImage } from "../image-paste";
 import { contextMenuItems, openContextMenu } from "../context-menu-state";
@@ -1458,6 +1459,8 @@ function CompactionCard({
 		.filter(Boolean)
 		.join("\n");
 	const tokens = typeof message.tokensBefore === "number" ? message.tokensBefore.toLocaleString() : null;
+	// acp-fold: billion-context-pi's fold card says what happened instead of a compaction's size.
+	const fold = isFoldCard(message);
 	return (
 		<div className="msg msg-compactionSummary" data-role={message.role} data-msg-id={message.id}>
 			<div className="msg-meta">
@@ -1485,7 +1488,7 @@ function CompactionCard({
 						<FiArchive />
 					</span>
 					<span className="chead-title compaction-title">
-						{tokens ? t("compactionFrom", { tokens }) : t("role.compaction")}
+						{fold ? t("foldCardTitle") : tokens ? t("compactionFrom", { tokens }) : t("role.compaction")}
 					</span>
 					{text && (
 						<button
@@ -1507,7 +1510,7 @@ function CompactionCard({
 				{shown && (
 					<div className="compaction-body">
 						<Markdown text={text} />
-						<div className="compaction-hint">{t("compactionKeptHint")}</div>
+						<div className="compaction-hint">{t(fold ? "foldCardHint" : "compactionKeptHint")}</div>
 					</div>
 				)}
 			</div>

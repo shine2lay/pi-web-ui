@@ -57,6 +57,7 @@ import {
 	type SessionInfo,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { FOLD_QUIET_MS, foldedMessagesOf, isAcpFoldEntry, isAcpFoldResult } from "./acp-fold.js";
 import { Type } from "typebox";
 import { BgServerTracker } from "./bg-servers.js";
 import { MAX_OPEN_CONVERSATIONS } from "./conversation-limits.js";
@@ -1889,7 +1890,7 @@ function chatImageUrl(conv: Conversation): ImageUrlFor {
 }
 
 /** Display form of shown message i, built on first use and cached per chat. */
-function fullAt(conv: Conversation, idx: ChatIndex, i: number): UiMessage {
+function fullAt(conv: Conversation, idx: Pick<ChatIndex, "raw" | "keys" | "ids" | "seqs">, i: number): UiMessage {
 	const key = idx.keys[i];
 	const hit = conv.uiMessageCache.get(key);
 	if (hit) return hit;
@@ -2039,12 +2040,58 @@ function fullRangeOf(conv: Conversation, idx: ChatIndex, from: number, to: numbe
 	return out;
 }
 
+/** acp-fold: the shown messages before the chat's newest fold, as the window showed them before any fold
+ *  (folds took them out of pi's working list; the chat file keeps them). Same fields as ChatIndex, so
+ *  fullAt builds their display form and the picture endpoint finds their pictures. */
+interface FoldedHistory {
+	foldId: string;
+	raw: AgentMessage[];
+	keys: string[];
+	ids: string[];
+	seqs: number[];
+}
+
+/** acp-fold: the chat's FoldedHistory (null: no fold), rebuilt only after a newer fold. */
+function foldedHistoryOf(conv: Conversation): FoldedHistory | null {
+	const branch = conv.session.sessionManager.getBranch();
+	let newestId: string | undefined;
+	for (let i = branch.length - 1; i >= 0 && newestId === undefined; i--) {
+		if (isAcpFoldEntry(branch[i])) newestId = branch[i].id;
+	}
+	if (newestId === undefined) return null;
+	if (conv.foldedHistory?.foldId === newestId) return conv.foldedHistory;
+	const folded = foldedMessagesOf(branch);
+	if (!folded) return null;
+	const h: FoldedHistory = { foldId: folded.foldId, raw: [], keys: [], ids: [], seqs: [] };
+	const userSeq = new Map<number, number>();
+	for (const m of folded.messages) {
+		// Same numbering as chatIndexOf: hidden messages get a number too, user messages count the user
+		// messages sharing their timestamp.
+		const k = uiMessageKeyOf(conv, m);
+		if (!isShownMessage(m)) continue;
+		let seq = k.n;
+		if (m.role === "user") {
+			const ts = m.timestamp ?? 0;
+			seq = (userSeq.get(ts) ?? 0) + 1;
+			userSeq.set(ts, seq);
+		}
+		h.raw.push(m);
+		h.keys.push(k.cacheKey);
+		h.ids.push(uiMessageId(m, seq));
+		h.seqs.push(seq);
+	}
+	return h;
+}
+
 /** Bytes of picture n of the message with UI id msgId, if its fingerprint is v; null otherwise. */
 function chatImageIn(conv: Conversation, msgId: string, n: number, v: string): ChatImage | null {
 	const idx = chatIndexOf(conv);
 	const i = idx.ids.indexOf(msgId);
-	if (i < 0) return null;
-	return imageIfVersion(imageBlocksOf(idx.raw[i])[n], v);
+	if (i >= 0) return imageIfVersion(imageBlocksOf(idx.raw[i])[n], v);
+	// acp-fold: a message shown above a fold's card ("Show older messages").
+	const f = conv.foldedHistory;
+	const j = f ? f.ids.indexOf(msgId) : -1;
+	return f && j >= 0 ? imageIfVersion(imageBlocksOf(f.raw[j])[n], v) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -2227,6 +2274,15 @@ export interface Conversation {
 	 *  压缩后 SDK getContextUsage() 故意报 null（压缩前的 usage 不可信），
 	 *  下轮模型响应前快照用此值回填；开始下一次压缩时清掉。 */
 	lastCompactionTokens?: number | null;
+	/** acp-fold: the compaction now running started without the window being told yet; the progress bar
+	 *  and the pending marker come after FOLD_QUIET_MS, so a billion-context-pi fold (well under a second)
+	 *  shows nothing and writes nothing. */
+	compactionShowTimer?: ReturnType<typeof setTimeout> | null;
+	/** acp-fold: the pending marker of the running compaction was written (clearCompactionPending has a
+	 *  line to close). */
+	compactionMarked?: boolean;
+	/** acp-fold: the messages before the newest fold, for the window's "Show older messages". */
+	foldedHistory?: FoldedHistory | null;
 	/** 下一轮 agent_start 消费的用户任务文本（prompt() 暂存，轨迹插件的 run_start 用；
 	 *  steer/内部续跑无暂存时为空，由插件回退为「继续执行」）。 */
 	pendingTask?: string;
@@ -6920,29 +6976,48 @@ export class ClientSession {
 			case "compaction_start": {
 				conv.compactionState = { reason: event.reason, startedAt: Date.now() };
 				conv.lastCompactionTokens = null;
-				this.markCompactionPending(conv);
-				// 进度条只有正看着这条对话的窗口看得到（见 onEvent 末尾）。
-				this.checkpointViewers(conv.id, true);
-				// crash-guard: compare ids, not `this.conv` — that getter throws when this window's chat was
-				// closed elsewhere, and a throw here lands inside the SDK's event loop.
-				if (conv.id === this.activeId) this.flushSnapshot();
+				conv.compactionMarked = false;
+				if (conv.compactionShowTimer) clearTimeout(conv.compactionShowTimer);
+				// acp-fold: the progress bar and the pending marker wait FOLD_QUIET_MS. A billion-context-pi
+				// fold (no model call, well under a second) is over by then and shows nothing; a compaction that
+				// calls the model shows its bar a moment later than before.
+				conv.compactionShowTimer = setTimeout(() => {
+					conv.compactionShowTimer = null;
+					if (!conv.compactionState) return;
+					this.markCompactionPending(conv);
+					if (this.disposed) return;
+					// 进度条只有正看着这条对话的窗口看得到（见 onEvent 末尾）。
+					this.checkpointViewers(conv.id, true);
+					// crash-guard: compare ids, not `this.conv` — that getter throws when this window's chat was
+					// closed elsewhere, and a throw here lands inside the SDK's event loop.
+					if (conv.id === this.activeId) this.flushSnapshot();
+				}, FOLD_QUIET_MS);
+				conv.compactionShowTimer.unref?.();
 				break;
 			}
 			case "compaction_end": {
-				this.clearCompactionPending(
-					conv,
-					event.errorMessage
-						? { status: "failed", error: event.errorMessage }
-						: event.aborted
-							? { status: "cancelled" }
-							: event.result
-								? {
-										status: "completed",
-										tokensBefore: event.result.tokensBefore,
-										tokensAfter: event.result.estimatedTokensAfter ?? event.result.tokensBefore,
-									}
-								: undefined,
-				);
+				if (conv.compactionShowTimer) {
+					clearTimeout(conv.compactionShowTimer);
+					conv.compactionShowTimer = null;
+				}
+				const fold = isAcpFoldResult(event.result);
+				if (conv.compactionMarked) {
+					conv.compactionMarked = false;
+					this.clearCompactionPending(
+						conv,
+						event.errorMessage
+							? { status: "failed", error: event.errorMessage }
+							: event.aborted
+								? { status: "cancelled" }
+								: event.result
+									? {
+											status: "completed",
+											tokensBefore: event.result.tokensBefore,
+											tokensAfter: event.result.estimatedTokensAfter ?? event.result.tokensBefore,
+										}
+									: undefined,
+					);
+				}
 				conv.compactionState = null;
 				if (event.errorMessage) {
 					this.emit({
@@ -6958,6 +7033,12 @@ export class ClientSession {
 						text: "Context compaction cancelled",
 						textEn: "Context compaction cancelled",
 					});
+				} else if (event.result && fold) {
+					// acp-fold: billion-context-pi took old messages out of pi's working list; what it sends to
+					// the model is unchanged, so the footer keeps the size it had and there is nothing to announce
+					// (the fold's card shows in the chat).
+					conv.lastCompactionTokens = event.result.tokensBefore;
+					conv.foldedHistory = null;
 				} else if (event.result) {
 					const { tokensBefore, estimatedTokensAfter } = event.result;
 					const after = estimatedTokensAfter ?? tokensBefore;
@@ -7922,6 +8003,38 @@ export class ClientSession {
 			...(straddle ? { straddle } : {}),
 			// quiet-turns: the turn the new window start falls inside, when another agent began it.
 			...withLead(quietLeadAt(conv, idx, start)),
+		});
+	}
+
+	/** acp-fold: serves load_folded, the window's "Show older messages" above a fold's card: the messages
+	 *  before the chat's newest fold that come before beforeIndex (from the newest when it is left out),
+	 *  at most count. Answers total 0 when the chat has no fold. */
+	loadFolded(beforeIndex?: number, count?: number): void {
+		if (this.disposed) return;
+		const conv = this.conv;
+		let h: FoldedHistory | null = null;
+		try {
+			h = foldedHistoryOf(conv);
+		} catch (err) {
+			console.warn("[acp-fold] could not read the folded messages:", (err as Error)?.message ?? err);
+		}
+		conv.foldedHistory = h;
+		const total = h?.raw.length ?? 0;
+		const end =
+			typeof beforeIndex === "number" && Number.isFinite(beforeIndex)
+				? Math.min(Math.max(0, Math.floor(beforeIndex)), total)
+				: total;
+		const take = Math.max(1, Math.floor(typeof count === "number" && Number.isFinite(count) ? count : MESSAGE_WINDOW));
+		const start = Math.max(0, end - take);
+		const messages: UiMessage[] = [];
+		if (h) for (let i = start; i < end; i++) messages.push(fullAt(conv, h, i));
+		this.emit({
+			type: "folded_messages",
+			conversationId: this.activeId,
+			foldId: h?.foldId ?? "",
+			total,
+			start,
+			messages,
 		});
 	}
 
@@ -10509,6 +10622,11 @@ export class ClientSession {
 		await flow.admission.ready;
 		// A switch already admitted finishes before this new reply starts.
 		await conv.modelChangeTail;
+		// acp-fold: billion-context-pi folds a quiet chat with a compaction of its own (well under a second),
+		// and pi refuses a prompt while a compaction runs: a message sent just then waits for it.
+		if (!conv.session.isStreaming && conv.session.isCompacting) {
+			await waitUntil(() => !conv.session.isCompacting, 30_000, 50);
+		}
 		const promptAc = new AbortController();
 		conv.activePromptAc = promptAc;
 		try {
@@ -11653,6 +11771,7 @@ export class ClientSession {
 				},
 			};
 			appendFileSync(file, `${JSON.stringify(marker)}\n`);
+			conv.compactionMarked = true;
 		} catch {
 			// Marker is best-effort: compaction still runs without it, only the
 			// restart-detection below is lost.

@@ -8,6 +8,7 @@ import { Message, asText } from "./Message";
 import { Markdown } from "./Markdown";
 
 import { collectQuestionAttachments } from "../question-attachments";
+import { isFoldCard, type FoldedView } from "../message-window";
 
 import { parseSkillBlock } from "../skill-block";
 import { CollapsedMessage } from "./CollapsedMessage";
@@ -448,6 +449,11 @@ interface MessageListProps {
 	/** 往前再取几轮摘要（exchange-digest）。beforeIndex = 最老一份摘要的下标（没有时 = 窗口起点）；
 	 *  fromIndex = 一直取到这一轮（点导轨上很老的提问）。缺省 = 不取，按钮不出现。 */
 	onLoadExchanges?: (beforeIndex: number, count?: number, fromIndex?: number) => void;
+	/** acp-fold: the messages before the chat's newest fold the window holds ("Show older messages"). */
+	folded?: FoldedView | null;
+	/** acp-fold: fetch messages before the newest fold, before beforeIndex (the newest when left out).
+	 *  Left out = no button. */
+	onLoadFolded?: (beforeIndex?: number) => void;
 	/** optimistic-send: this chat's messages the server hasn't confirmed yet, oldest first (drawn at the end). */
 	pendingSends?: readonly PendingSend[];
 	/** optimistic-send: Retry on a "Not sent" message. */
@@ -480,6 +486,8 @@ export function MessageList({
 	onJumpDone,
 	onLoadOlder,
 	onLoadExchanges,
+	folded,
+	onLoadFolded,
 	uiMessageActions,
 	uiContextMessage,
 	uiContextToolCall,
@@ -536,6 +544,17 @@ export function MessageList({
 	 * question-attachments.ts (unit-tested).
 	 */
 	const questionAttachments = useMemo(() => collectQuestionAttachments(state.messages), [state.messages]);
+	/** acp-fold: the fold card "Show older messages" was last clicked above; what is held shows only above
+	 *  that card (a newer fold, or the chat opened again, starts over). */
+	const foldCardRef = useRef<string | null>(null);
+	const foldedMessages = folded?.messages;
+	const foldedResults = useMemo(() => {
+		const m = new Map<string, UiMessage>();
+		for (const msg of foldedMessages ?? []) {
+			if (msg.role === "toolResult" && msg.toolCallId) m.set(msg.toolCallId, msg);
+		}
+		return m;
+	}, [foldedMessages]);
 	// system 消息不进渲染(见 serialize.ts)：去掉后再取末尾，否则空 SYSTEM 占住 isLast。
 	const lastVisible = [...messages].reverse().find((m) => m.role !== "system");
 	const lastId = lastVisible ? lastVisible.id : null;
@@ -1086,6 +1105,8 @@ export function MessageList({
 		for (const m of state.messages) {
 			if (m.role === "compactionSummary" && !cur.ids.has(m.id)) {
 				cur.ids.add(m.id);
+				// acp-fold: a fold happens on its own in a quiet chat; nothing to open or jump to.
+				if (isFoldCard(m)) continue;
 				setFreshCompactionId(m.id);
 				break;
 			}
@@ -1537,6 +1558,18 @@ export function MessageList({
 	const quietLive = !!quietPlan.lastClosed && listStreaming;
 	const streamOwner = quietLive && sm ? ownerOnly(sm) : null;
 	const streamShown = !quietLive ? streamFold : streamOwner && streamOwner.content.length > 0 ? streamOwner : null;
+	// acp-fold: once the window reaches the chat's start and that start is a fold's card, the messages the
+	// fold took out of pi's working list can be shown above it, read-only.
+	const topMessage = state.messages.find((m) => m.role !== "system");
+	const foldTop =
+		!!onLoadFolded &&
+		(state.messagesStart ?? 0) === 0 &&
+		!(state.exchanges && olderQuestions > 0) &&
+		isFoldCard(topMessage);
+	const heldFolded =
+		foldTop && folded && folded.conversationId === state.conversationId && foldCardRef.current === topMessage?.id
+			? folded
+			: null;
 	const tailShown =
 		foldPlan.tailRow && !(quietPlan.lastClosed && quietPlan.place.has(foldPlan.tailRow.key)) ? foldPlan.tailRow : null;
 
@@ -1566,6 +1599,40 @@ export function MessageList({
 					if (e.key === "PageUp" || e.key === "ArrowUp" || e.key === "Home") userUpAtRef.current = Date.now();
 				}}
 			>
+				{foldTop && (!heldFolded || heldFolded.start > 0) && (
+					<div className="load-older">
+						<button
+							type="button"
+							onClick={() => {
+								foldCardRef.current = topMessage?.id ?? null;
+								onLoadFolded?.(heldFolded ? heldFolded.start : undefined);
+							}}
+						>
+							{heldFolded ? t("loadFolded", { n: heldFolded.start }) : t("loadFoldedFirst")}
+						</button>
+					</div>
+				)}
+				{heldFolded && heldFolded.messages.length > 0 && (
+					<div className="folded-history">
+						{heldFolded.messages.map((m) =>
+							m.role === "system" || m.role === "toolResult" ? null : (
+								<Message
+									key={`folded:${m.id}`}
+									message={m}
+									toolResults={foldedResults}
+									liveOutputs={EMPTY_LIVE}
+									toolStatuses={toolStatuses}
+									streaming={false}
+									isLast={false}
+									thinkingWrap={thinkingWrap}
+									toolsWrap={toolsWrap}
+									toolImages={toolImages}
+									searchActive={searchOpen}
+								/>
+							),
+						)}
+					</div>
+				)}
 				{state.exchanges
 					? olderQuestions > 0 && (
 							// exchange-digest：往前再取几轮摘要（提问 + 回答），不是一截原始消息。
