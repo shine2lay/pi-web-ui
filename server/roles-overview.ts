@@ -1001,10 +1001,13 @@ export class RolesOverviewReader {
 				const info = infos.find((i) => i.task === t);
 				const busy = info?.file ? this.host.chatState(info.file) === "working" : false;
 				const latest = info?.lines.length ? info.lines[info.lines.length - 1] : undefined;
-				// roles-evidence: its own chat's records only (a task with no chat yet has none).
+				// roles-evidence: its own chat's records only (a task with no chat yet has none). Past the
+				// ROLES_TASK_CHATS_MAX chats read for TL;DR lines, its queue record still names its chat: only the
+				// name is compared, no chat is read.
 				let ev: UiRoleTask["evidence"];
 				try {
-					ev = evidence ? await evidence.of({ file: info?.file, status: t.status, doneAt: t.doneAt }) : undefined;
+					const file = info?.file ?? t.chat?.file;
+					ev = evidence ? await evidence.of({ file, status: t.status, doneAt: t.doneAt }) : undefined;
 				} catch {
 					ev = undefined;
 				}

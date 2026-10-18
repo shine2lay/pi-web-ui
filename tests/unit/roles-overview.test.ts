@@ -27,6 +27,7 @@ import {
 	reportRunsOf,
 	reportSections,
 	ROLES_REPORT_MAX,
+	ROLES_TASK_CHATS_MAX,
 	RolesOverviewReader,
 	type RolesOverviewHost,
 	RolesWatch,
@@ -1342,5 +1343,42 @@ describe("nothing is changed", () => {
 		await read(f);
 		await read(f);
 		expect([home, f.jobs].map((p) => [readFileSync(p, "utf8"), statSync(p).mtimeMs])).toEqual(before);
+	});
+});
+
+describe("roles-evidence: every open task's own chat", () => {
+	it("finds the records of a task past the chats read for TL;DR lines", async () => {
+		const n = ROLES_TASK_CHATS_MAX + 1;
+		const chatId = (i: number) => `capchat-${i}`;
+		const chats = Array.from({ length: n }, (_, i) => transcript(`2026-10-18T09-00-00-000Z_${chatId(i + 1)}`));
+		const ops: Line[] = [queue({ op: "lanes", n })];
+		for (let i = 1; i <= n; i++) ops.push(queue({ op: "add", id: i, plan: plan(`T${i}`), touches: [`r${i}`] }));
+		ops.push(queue({ op: "run" }));
+		for (let i = 1; i <= n; i++) {
+			ops.push(queue({ op: "start", id: i, lane: true }));
+			ops.push(queue({ op: "chat", id: i, file: chats[i - 1], title: `Task ${i}` }));
+		}
+		const home = transcript("evidence-cap-home", ops);
+		const wtState = join(dir, "wt-evidence-cap");
+		mkdirSync(wtState, { recursive: true });
+		const made = (i: number) =>
+			JSON.stringify({
+				v: 1,
+				at: iso(T0),
+				repo: "/r/other",
+				branch: `b${i}`,
+				worktree: `/r/other-b${i}`,
+				chat: chatId(i),
+			});
+		writeFileSync(join(wtState, "branches.jsonl"), `${made(1)}\n${made(n)}\n`);
+		const f = fake([role("ops", home)]);
+		f.host.evidencePaths = () => ({ wtState, deployLive: "/r/live", deployStage: join(dir, "stage-evidence-cap") });
+		const active = byId(await read(f), "ops").queue?.active ?? [];
+		expect(active).toHaveLength(n);
+		const ev = (id: number) => active.find((t) => t.id === id)?.evidence;
+		expect(ev(1)?.built).toEqual({ not: "yet" });
+		// the ninth: its chat isn't read, but its queue record names it
+		expect(ev(n)).toMatchObject({ repo: "other", built: { not: "yet" }, installed: { not: "tracked" } });
+		expect(ev(2)?.built).toEqual({ not: "recorded" });
 	});
 });

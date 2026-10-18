@@ -29,4 +29,21 @@ Ops #207 (owner, 2026-10-18: "create those tasks and queue them"). Accountable l
 
 **Undo.** `pi-web-deploy rollback`, or revert this commit and deploy; revert agent-tools 3e2e2bc to stop the records (the files are inert).
 
+**Result, first live look (Oct 18 10:34, 92f7c21d installed; the page's own feed, read by a look-only pseudo client, compared with the record files):**
+
+- The times match to the millisecond. Task #207 (this change, pi-web-ui): Built 10:12:51 (the commit), Checked 10:19:57 (`lands.jsonl`), Installed 10:22:00 (the install's end in `history.jsonl`; `pi-web-deploy result 92f7c21d` reported "10:22 deploy of 92f7c21d: live, and the checks all passed"), Live 10:25:01 (that install's checks). Task #212 (pi-worktree): Built 09:40:07 and Checked 09:41:20, Installed and Live "Not tracked for pi-worktree".
+- Tasks with a branch but no land say "not yet"; older tasks say "Not recorded". No task showed a commit its own chat didn't land.
+- On the page, the Ops and Backend rows (dark, light, phone) equal their current tasks' evidence; contrast 9.93. Both current tasks were older ("Not recorded"), so no row on the page showed times yet.
+- One miss: Ops #214 and #215 said "Not recorded" though their chats had made branches. See H-ROLES-EVIDENCE-2.
+
+## H-ROLES-EVIDENCE-2
+
+**Wrong, and the evidence.** In that look, Ops tasks #214 and #215 said "Not recorded" although `branches.jsonl` held branches their chats made (two and one), while #213, made the same way, said "not yet". The overview resolves a task's chat file only for a role's first `ROLES_TASK_CHATS_MAX` (8) started tasks, the chats whose TL;DR lines it reads, and the evidence took the file from there. Ops had 10 open tasks; #214 and #215 were the 9th and 10th.
+
+**One change, and why it should fix it.** When that capped scan didn't resolve a task's chat file, the evidence takes it from the task's own queue record (`info?.file ?? t.chat?.file` in `server/roles-overview.ts`). The evidence only compares file names, so this still reads no chat.
+
+**Expected result, and how it is measured.** A unit test with nine started tasks: the ninth one's chat made a branch, so its row says "not yet", not "Not recorded" (the test fails without the change). Live: open tasks past the 8th, like #214 and #215, say "not yet" or show times.
+
+**What would prove it wrong.** After the install, a started task whose chat made a branch still says "Not recorded", or a task shows a branch another chat made.
+
 **Result:**
