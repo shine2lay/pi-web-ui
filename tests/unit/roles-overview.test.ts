@@ -26,6 +26,7 @@ import {
 	reportJobOf,
 	reportRunsOf,
 	reportSections,
+	ROLES_QUEUED_MAX,
 	ROLES_REPORT_MAX,
 	ROLES_TASK_CHATS_MAX,
 	RolesOverviewReader,
@@ -429,6 +430,55 @@ describe("roles-lanes: lanes at once and in use", () => {
 		expect(byId(o, "busy").queue?.lanes).toEqual({ atOnce: 3, inUse: 1 });
 		expect(byId(o, "plain").queue?.lanes).toEqual({ atOnce: 2, inUse: 0 });
 		// no queue that could be read: nothing to show
+		expect(byId(o, "none").queue).toBeUndefined();
+	});
+});
+
+describe("roles-links: open tasks by where they belong", () => {
+	it("counts every open task once by its queue entry's parent, past the listed ones; not done, dropped or removed", async () => {
+		const lines: Line[] = [
+			queue({ op: "add", id: 1, plan: plan("One"), project: "roles-page", touches: ["a"] }),
+			queue({ op: "add", id: 2, plan: plan("Two"), initiative: "team-in-temper", touches: ["b"] }),
+			queue({ op: "add", id: 3, plan: plan("Three"), standalone: true }),
+			queue({ op: "add", id: 4, plan: plan("Four") }),
+			queue({ op: "add", id: 5, plan: plan("Five") }),
+			queue({ op: "add", id: 6, plan: plan("Six"), project: "roles-page", touches: ["c"] }),
+			queue({ op: "add", id: 7, plan: plan("Seven") }),
+			queue({ op: "add", id: 8, plan: plan("Eight"), project: "roles-page" }),
+			// Given a project later: counted where its row says it belongs now.
+			queue({ op: "update", id: 5, plan: plan("Five"), project: "work-hierarchy-in-use" }),
+			queue({ op: "run" }),
+			queue({ op: "start", id: 1, lane: true }),
+			queue({ op: "start", id: 2, lane: true }),
+			queue({ op: "block", id: 2, need: "an answer" }),
+			queue({ op: "start", id: 6, lane: true }),
+			queue({ op: "done", id: 6, summary: "ok" }),
+			queue({ op: "drop", id: 7, why: "not needed" }),
+			queue({ op: "remove", id: 8 }),
+		];
+		// More waiting tasks than the overview lists (ROLES_QUEUED_MAX): all of them count.
+		for (let id = 9; id < 9 + ROLES_QUEUED_MAX; id++)
+			lines.push(queue({ op: "add", id, plan: plan(`Task ${id}`), project: "work-hierarchy-in-use" }));
+		const f = fake([role("ops", transcript("links-home", lines))]);
+		const q = byId(await read(f), "ops").queue;
+		expect(q?.queued).toHaveLength(ROLES_QUEUED_MAX);
+		expect(q?.counts).toEqual({ active: 2, queued: 3 + ROLES_QUEUED_MAX, done: 1, dropped: 1 });
+		expect(q?.links).toEqual({ project: 2 + ROLES_QUEUED_MAX, initiative: 1, standalone: 1, unrecorded: 1 });
+		// Each open task once: the four add up to the open counts.
+		const l = q?.links ?? { project: 0, initiative: 0, standalone: 0, unrecorded: 0 };
+		expect(l.project + l.initiative + l.standalone + l.unrecorded).toBe(
+			(q?.counts.active ?? 0) + (q?.counts.queued ?? 0),
+		);
+	});
+	it("a queue with nothing open sends all zeros; no readable queue sends none", async () => {
+		const home = transcript("links-done", [
+			queue({ op: "add", id: 1, plan: plan("One") }),
+			queue({ op: "run" }),
+			queue({ op: "start", id: 1, lane: true }),
+			queue({ op: "done", id: 1, summary: "ok" }),
+		]);
+		const o = await read(fake([role("finished", home), role("none")]));
+		expect(byId(o, "finished").queue?.links).toEqual({ project: 0, initiative: 0, standalone: 0, unrecorded: 0 });
 		expect(byId(o, "none").queue).toBeUndefined();
 	});
 });

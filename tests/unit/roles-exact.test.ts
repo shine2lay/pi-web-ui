@@ -192,6 +192,43 @@ describe("the supplied Roles design with the existing feed", () => {
 		expect(document.querySelector('[role="region"]')?.textContent).toContain("Task lanes2 of 3 lanes in use");
 	});
 
+	it("roles-links: the panel's Linked work line counts open tasks by parent, else No open tasks or Not recorded", () => {
+		const withLinks = (links: unknown, extra: Row = {}) =>
+			role({ queue: { ...(role().queue as Row), links }, ...extra });
+		const mounted = fixture(
+			projectExactRoles(state([withLinks({ project: 5, initiative: 1, standalone: 2, unrecorded: 3 })]), "open", NOW),
+			true,
+		);
+		mounted.view.openRole("ops", document.body);
+		vi.runAllTimers();
+		expect(object(mounted.view.values().ex).linksText).toBe(
+			"5 in projects \u00b7 1 under an initiative \u00b7 2 standalone \u00b7 3 not recorded",
+		);
+		// In the panel, right after Task lanes.
+		const panel = document.querySelector('[role="region"]')?.textContent ?? "";
+		expect(panel).toContain(
+			"Task lanesTask-lane occupancy is not recordedLinked work5 in projects \u00b7 1 under an initiative \u00b7 2 standalone",
+		);
+		const cases: [unknown, Row, string][] = [
+			// Zero parts left out; one task reads in the singular.
+			[{ project: 1, initiative: 0, standalone: 0, unrecorded: 2 }, {}, "1 in a project \u00b7 2 not recorded"],
+			[{ project: 0, initiative: 2, standalone: 0, unrecorded: 0 }, {}, "2 under initiatives"],
+			[{ project: 0, initiative: 0, standalone: 0, unrecorded: 0 }, {}, "No open tasks"],
+			// An older server sends none; a queue that couldn't be read, or a malformed count, isn't trusted.
+			[undefined, {}, "Not recorded"],
+			[{ project: 1, initiative: 0, standalone: 0, unrecorded: 0 }, { problems: ["home chat"] }, "Not recorded"],
+			[{ project: -1, initiative: 0, standalone: 0, unrecorded: 0 }, {}, "Not recorded"],
+			[{ project: 1.5, initiative: 0, standalone: 0, unrecorded: 0 }, {}, "Not recorded"],
+			[{ project: "3", initiative: 0, standalone: 0, unrecorded: 0 }, {}, "Not recorded"],
+			[{ project: 3, initiative: 0, standalone: 0 }, {}, "Not recorded"],
+		];
+		for (const [links, extra, text] of cases) {
+			const { view } = fixture(projectExactRoles(state([withLinks(links, extra)]), "open", NOW));
+			view.openRole("ops");
+			expect(object(view.values().ex).linksText).toBe(text);
+		}
+	});
+
 	it("roles-model: the panel's Model line names the home chat's model, else Not recorded", () => {
 		const named = fixture(projectExactRoles(state([role({ model: "Claude Opus 4.5" })]), "open", NOW), true);
 		named.view.openRole("ops", document.body);

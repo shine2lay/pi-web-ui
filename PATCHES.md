@@ -43,6 +43,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
   - then the landing gate.
 - Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
 
+## roles-links: show how many of each role's open tasks are in a project, under an initiative, standalone or not recorded
+
+- `local` (owner 2026-10-18, "Put it to use first", Ops #222, project work-hierarchy-in-use). Hypothesis H-ROLES-LINKS-1 and result: `docs/roles-links.md`.
+- `server/roles-overview.ts` counts every open task in a role's queue (not done, removed or dropped; also the waiting ones past `ROLES_QUEUED_MAX`) by the parent its queue entry names, as its row shows it, and sends the four counts as the optional `UiRoleQueue.links` (`server/protocol.ts`; no protocol bump).
+- The page (`web/src/roles-useful-model.ts`) takes them only from a readable queue, as whole numbers of 0 or more. The role panel's Now section gets a "Linked work" row right after "Task lanes" (`web/src/roles-u0/surface.html`, `exactLinks` in `web/src/roles-exact-view.ts`): "5 in projects · 1 under an initiative · 2 standalone · 3 not recorded" with zero parts left out, "No open tasks", or "Not recorded" (older server, unread queue, no queue). The cards are unchanged.
+- Checks: `tests/unit/roles-overview.test.ts` (each kind of parent, a re-parented task, done/dropped/removed not counted, tasks past the list cap counted, the four add up to the open counts), `tests/unit/roles-exact.test.ts` (the row's text and place, "No open tasks", "Not recorded" cases), then the landing gate.
+- Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
+
 ## roles-config-history: record each role's settings changes and list them in its Config tab
 
 - `local` (owner 2026-10-18, "create those tasks and queue them", Ops #209). Hypothesis H-ROLES-CONFIG-1 and result: `docs/roles-config-history.md`.

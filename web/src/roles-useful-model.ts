@@ -187,8 +187,18 @@ export interface UsefulRole {
 	spend?: UsefulSpend | null;
 	/** roles-lanes: lanes it may run at once and how many are in use; null (or absent) = not recorded. */
 	lanes?: { atOnce: number; inUse: number } | null;
+	/** roles-links (Ops #222): its open tasks by where each belongs (in a project, under an initiative,
+	 *  standalone, not recorded); null (or absent) = not recorded. */
+	links?: UsefulLinks | null;
 	/** roles-model: the model its home chat runs, as that chat's header names it; absent = not recorded. */
 	model?: string;
+}
+/** roles-links (Ops #222): open tasks by parent, as the server counts them (UiRoleQueue.links). */
+export interface UsefulLinks {
+	project: number;
+	initiative: number;
+	standalone: number;
+	unrecorded: number;
 }
 export interface NeedsYouItem {
 	/** Validated roster id, for associating the ask with one role's panel, never its display name. */
@@ -279,6 +289,18 @@ function laneUse(value: unknown, readable: boolean): { atOnce: number; inUse: nu
 		inUse <= atOnce
 		? { atOnce, inUse }
 		: null;
+}
+/** roles-links (Ops #222): a readable queue's open tasks by parent, only when all four are whole numbers >= 0. */
+function linkCounts(value: unknown, readable: boolean): UsefulLinks | null {
+	const v = object(value);
+	if (!readable || !v) return null;
+	const links: UsefulLinks = { project: 0, initiative: 0, standalone: 0, unrecorded: 0 };
+	for (const key of ["project", "initiative", "standalone", "unrecorded"] as const) {
+		const n = v[key];
+		if (typeof n !== "number" || !Number.isSafeInteger(n) || n < 0) return null;
+		links[key] = n;
+	}
+	return links;
 }
 function count(value: unknown, readable: boolean, fits: (n: number) => boolean = () => true): ReplayCount {
 	return readable && typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && fits(value)
@@ -484,6 +506,7 @@ function projectRole(row: Fields, id: string): ProjectedRole {
 	// (taskQueueHeld). Only a well-formed pause excuses a missing question.
 	const hold = queuePresent ? marker(queue, "hold") : "not-reported";
 	const lanes = laneUse(queue?.lanes, readable);
+	const links = linkCounts(queue?.links, readable);
 	const decisionKeys: string[] = [];
 	for (const raw of taskRows) {
 		const task = object(raw);
@@ -507,6 +530,8 @@ function projectRole(row: Fields, id: string): ProjectedRole {
 	};
 	// roles-lanes: only when recorded, so a role without them reads exactly as before.
 	if (lanes) projected.lanes = lanes;
+	// roles-links: the same, so a role without them reads exactly as before.
+	if (links) projected.links = links;
 	// roles-model: plain bounded text only; anything else reads as not recorded.
 	const model = plain(row.model, LABEL_LIMIT);
 	if (model) projected.model = model.text;

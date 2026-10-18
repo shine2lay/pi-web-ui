@@ -17,7 +17,7 @@ import { CONFIG_NOT_RECORDED, configHistoryActs } from "./roles-config-history";
 import type { PanelRoleStatus, PanelTask, PanelTaskEvent, RolePanel } from "./roles-panel-model";
 import { ringAnchor, ringLayout, stackLayout } from "./roles-u0/layout";
 import type { SurfaceValues } from "./roles-u0/types";
-import type { RowState, TellState, UsefulOpenTarget, UsefulRecord } from "./roles-useful-model";
+import type { RowState, TellState, UsefulLinks, UsefulOpenTarget, UsefulRecord } from "./roles-useful-model";
 import { EVIDENCE_STEPS, type UsefulEvidence } from "./roles-useful-model";
 
 const NR = "Not recorded";
@@ -62,6 +62,20 @@ const ASKS_UNCONFIRMED: Partial<Record<TellState, { label: string; body: string 
 const LANE_BUSY = { bg: "#7DB8FF", bd: "#7DB8FF", bs: "solid" };
 const LANE_IDLE = { bg: "transparent", bd: "#4A4F57", bs: "solid" };
 
+/** roles-links (Ops #222): the panel's Linked work line, like "5 in projects · 1 under an initiative · 2 standalone
+ *  · 3 not recorded" with zero parts left out; "No open tasks" when there are none; not recorded without a
+ *  readable queue's counts (an older server, or a queue that couldn't be read). */
+export function exactLinks(links: UsefulLinks | null | undefined): string {
+	if (!links) return NR;
+	const parts: [number, string][] = [
+		[links.project, links.project === 1 ? "1 in a project" : `${links.project} in projects`],
+		[links.initiative, links.initiative === 1 ? "1 under an initiative" : `${links.initiative} under initiatives`],
+		[links.standalone, `${links.standalone} standalone`],
+		[links.unrecorded, `${links.unrecorded} not recorded`],
+	];
+	const shown = parts.filter(([n]) => n > 0).map(([, text]) => text);
+	return shown.length ? shown.join(" · ") : "No open tasks";
+}
 /** roles-lanes: a card's lane pills and sentence; not recorded without a readable queue's lanes. */
 export function exactLanes(lanes: { atOnce: number; inUse: number } | null | undefined): {
 	lanes: { bg: string; bd: string; bs: string }[];
@@ -670,6 +684,8 @@ export function createExactRolesView(
 			hasRel: relText !== "",
 			relText,
 			...exactLanes(row.lanes),
+			// roles-links: the panel's Linked work line only; the cards stay as designed.
+			linksText: exactLinks(row.links),
 			op: hover && hover !== row.roleId && !linked ? "0.38" : model.lastReceived ? "0.8" : "1",
 			bdNow: hover === row.roleId ? "#9CC7FF" : linked ? "#3D5A80" : onYou ? "#6B5426" : "#2A2E34",
 			hoverOn: (e: Event | Element) => {

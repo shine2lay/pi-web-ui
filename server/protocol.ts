@@ -2180,6 +2180,10 @@ export interface UiRoleQueue {
 	 *  as pi-queue counts them (taskQueueLaneUse; queue-wait-frees-lane: not on hold, blocked or paused;
 	 *  inUse <= atOnce). Absent from an older server: the page says not recorded. */
 	lanes?: { atOnce: number; inUse: number };
+	/** roles-links (Ops #222): its open tasks (every one not done, removed or dropped, not only the ones listed)
+	 *  by where each belongs, as its queue entry says (UiRoleTask.parent): in a project, under an initiative
+	 *  directly, deliberately standalone, or not recorded. Absent from an older server: the page says not recorded. */
+	links?: { project: number; initiative: number; standalone: number; unrecorded: number };
 }
 
 /** roles-overview: a request or question to a role that has no reply yet (the whole role-message store). */

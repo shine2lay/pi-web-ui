@@ -45,6 +45,7 @@ import type {
 	UiTaskQueue,
 	UiTaskQueueHold,
 	UiTaskQueueTask,
+	UiTaskParent,
 	UiTldrLine,
 } from "./protocol.js";
 import {
@@ -994,6 +995,8 @@ export class RolesOverviewReader {
 			const queued: UiRoleTask[] = [];
 			let ready = 0;
 			let done = 0;
+			// roles-links (Ops #222): every open task by where it belongs, the listed ones and the rest alike.
+			const links: NonNullable<UiRoleQueue["links"]> = { project: 0, initiative: 0, standalone: 0, unrecorded: 0 };
 			// queue-drop: the tasks its lead dropped, with why (newest first).
 			const dropped = tasks
 				.filter((t) => t.status === "dropped")
@@ -1004,6 +1007,7 @@ export class RolesOverviewReader {
 					continue;
 				}
 				if (t.status === "dropped") continue;
+				links[linkOf(t.parent)]++;
 				const held = heldOf(t);
 				if (t.status === "ready") {
 					ready++;
@@ -1040,6 +1044,7 @@ export class RolesOverviewReader {
 				// dropped only when it has some, so a queue with none reads exactly as before.
 				counts: { active: active.length, queued: ready, done, ...(dropped.length ? { dropped: dropped.length } : {}) },
 				...(laneUse ? { lanes: laneUse } : {}),
+				links,
 			};
 		}
 
@@ -1213,6 +1218,15 @@ function newestWaiting(lines: UiTldrLine[]): UiTldrLine | undefined {
 	let best: UiTldrLine | undefined;
 	for (const l of lines) if (l.needsYou && !l.answered && (!best || l.ts >= best.ts)) best = l;
 	return best;
+}
+
+/** roles-links (Ops #222): which count an open task goes into: the parent its queue entry names, as its row
+ *  shows it (taskOf's parent); none recorded = unrecorded. */
+function linkOf(parent: UiTaskParent | undefined): keyof NonNullable<UiRoleQueue["links"]> {
+	if (!parent) return "unrecorded";
+	if ("project" in parent) return "project";
+	if ("initiative" in parent) return "initiative";
+	return "standalone";
 }
 
 function taskOf(t: UiTaskQueueTask, department: string, held?: UiTaskQueueHold): UiRoleTask {
