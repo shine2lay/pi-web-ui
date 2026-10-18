@@ -522,6 +522,12 @@ function backoffMs(attempts: number): number {
 	return Math.min(5 * 60_000, 15_000 * 2 ** Math.max(0, attempts - 1));
 }
 
+/** roles-overview / roles-sent: a request or question with no reply yet; a failed one isn't open. */
+function openRequest(m: RoleMessageRecord): boolean {
+	if (m.kind !== "request" && m.kind !== "question") return false;
+	return !m.replyId && m.state !== "replied" && m.state !== "failed";
+}
+
 function firstLine(text: string, max = 120): string {
 	const line =
 		text
@@ -1195,8 +1201,7 @@ export class RoleMessages {
 		let open = 0;
 		let newest: RoleMessageRecord | undefined;
 		for (const m of this.data.messages) {
-			if (m.to.role !== role || (m.kind !== "request" && m.kind !== "question")) continue;
-			if (m.replyId || m.state === "replied" || m.state === "failed") continue;
+			if (m.to.role !== role || !openRequest(m)) continue;
 			open++;
 			if (!newest || m.at >= newest.at) newest = m;
 		}
@@ -1211,6 +1216,56 @@ export class RoleMessages {
 				at: newest.at,
 			},
 		};
+	}
+
+	/**
+	 * roles-sent: the requests and questions a role sent that have no reply yet, by the same rules as
+	 * openRequestsTo: how many, and the newest. `keep` says which receivers count (the roles on the page);
+	 * one to itself never does.
+	 */
+	openRequestsFrom(
+		role: string,
+		keep: (to: string) => boolean = () => true,
+	): {
+		open: number;
+		newest?: { id: string; to: string; kind: "question" | "request"; firstLine: string; at: number };
+	} {
+		let open = 0;
+		let newest: RoleMessageRecord | undefined;
+		for (const m of this.data.messages) {
+			if (m.from.role !== role || m.to.role === role || !keep(m.to.role) || !openRequest(m)) continue;
+			open++;
+			if (!newest || m.at >= newest.at) newest = m;
+		}
+		if (!newest) return { open };
+		return {
+			open,
+			newest: {
+				id: newest.id,
+				to: newest.to.role,
+				kind: newest.kind as "question" | "request",
+				firstLine: firstLine(newest.text),
+				at: newest.at,
+			},
+		};
+	}
+
+	/**
+	 * roles-sent: each sender → receiver pair with open requests or questions (openRequestsTo's rules): how
+	 * many and the newest one's time, ordered by sender then receiver. A role to itself is left out.
+	 */
+	openPairs(): { from: string; to: string; count: number; at: number }[] {
+		const pairs = new Map<string, { from: string; to: string; count: number; at: number }>();
+		for (const m of this.data.messages) {
+			if (m.from.role === m.to.role || !openRequest(m)) continue;
+			const key = `${m.from.role}\n${m.to.role}`;
+			const p = pairs.get(key);
+			if (p) {
+				p.count++;
+				if (m.at > p.at) p.at = m.at;
+			} else pairs.set(key, { from: m.from.role, to: m.to.role, count: 1, at: m.at });
+		}
+		return [...pairs.values()].sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
 	}
 
 	/** roles-overview: a role's newest 6 am report request (by its day), where to find the answer; no text. */

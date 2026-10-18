@@ -31,8 +31,10 @@ import type {
 	UiRoleGoal,
 	UiRoleOverview,
 	UiRoleQueue,
+	UiRoleOpenPair,
 	UiRoleReport,
 	UiRoleRequest,
+	UiRoleSent,
 	UiRolesOverview,
 	UiOwnerContact,
 	UiRoleStatus,
@@ -645,6 +647,10 @@ export interface RolesOverviewHost {
 	/** The questions, dialogs and approvals waiting now. */
 	asks(): Ask[];
 	openRequestsTo(role: string): { open: number; newest?: UiRoleRequest };
+	/** roles-sent: a role's open requests and questions to the receivers `keep` lets through (absent: none read). */
+	openRequestsFrom?(role: string, keep: (to: string) => boolean): UiRoleSent;
+	/** roles-sent: every sender → receiver pair with open requests or questions (absent: none read). */
+	openPairs?(): UiRoleOpenPair[];
 	latestReportTo(role: string):
 		| {
 				id: string;
@@ -725,8 +731,24 @@ export class RolesOverviewReader {
 		const job = await this.job.get();
 		const keep = new Set<string>();
 		const roles: UiRoleOverview[] = [];
+		// roles-sent: only roles on the page count, as senders and as receivers.
+		const onPage = new Set(defs.map((d) => d.id));
+		const listed = (id: string) => onPage.has(id);
 		for (const def of defs) {
-			roles.push(await this.role(def, at, asks, runs, job, keep, stuck));
+			const row = await this.role(def, at, asks, runs, job, keep, stuck);
+			let sent: UiRoleSent | undefined;
+			try {
+				sent = this.host.openRequestsFrom?.(def.id, listed);
+			} catch {
+				sent = undefined;
+			}
+			roles.push(sent ? { ...row, sent } : row);
+		}
+		let openPairs: UiRoleOpenPair[] | undefined;
+		try {
+			openPairs = this.host.openPairs?.().filter((p) => p.from !== p.to && listed(p.from) && listed(p.to));
+		} catch {
+			openPairs = undefined;
 		}
 		this.scans.retain(keep);
 		const work = this.work ? await this.work.get() : undefined;
@@ -752,6 +774,7 @@ export class RolesOverviewReader {
 			...(board ? { board } : {}),
 			...(work ? { work } : {}),
 			...(contacts ? { contacts } : {}),
+			...(openPairs ? { openPairs } : {}),
 		};
 	}
 

@@ -26,6 +26,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: `tests/unit/roles-instructions.test.ts` (current, outdated with names, no record, a missing file, a path outside refused; the three display states), then the landing gate.
 - Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
 
+## roles-sent: show each role's open sent requests and draw arrows between departments
+
+- `local` (owner 2026-10-18, third of the "Finish Roles' easy gaps" tasks, Ops #205). Hypothesis H-ROLES-SENT-1 and result: `docs/roles-sent.md`.
+- The panel's "Asked of others" line said "Missing", cards never said who a role waits on, and the arrow key said between-department tracking wasn't connected, although the role-message store holds every open request's sender and receiver. `server/role-messages.ts` adds `openRequestsFrom(role, keep)` (count + newest) and `openPairs()` (from, to, count, newest time), both by `openRequestsTo`'s rules through one `openRequest` check: kind request or question, no reply, not failed; a role to itself never counts. `roles-overview.ts` sends `UiRoleOverview.sent` and `UiRolesOverview.openPairs` (both optional, no protocol bump), only for roles on the page; no new files read, no writes.
+- The page (`roles-exact-model.ts`, `roles-panel-model.ts`) takes pairs only between two shown roles, with a whole count ≥ 1, once each. `roles-exact-view.ts`: `exactSentText` writes "N open · newest to Temper, 3 h ago: <first line>"; `roleEdges` draws one arrow per pair in the design's between-department style (`#4A82C0`, curved toward the centre, split when both directions are open, head at the receiver, "N open" label that opens the sender's panel), under the owner-ask arrows, which are unchanged; hover dims unrelated arrows and cards. Cards say "Waiting on Temper" or "Waiting on N roles"; the key explains the arrows. An older server still shows "Not recorded" and no role arrows.
+- Checks: the store and reader cases in `tests/unit/roles-overview.test.ts` (answered, failed, fyi and self excluded, count and newest, pairs per direction, unknown roles skipped), the mounted view cases in `tests/unit/roles-exact.test.ts` (arrow count and direction, owner arrow unchanged, hover, card and panel text, older server), then the landing gate.
+- Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
+
 ## roles-lanes: show each role's task lanes on its card
 
 - `local` (owner 2026-10-18, first of the "Finish Roles' easy gaps" tasks, Ops #203). Hypothesis H-ROLES-LANES-1 and result: `docs/roles-lanes.md`.

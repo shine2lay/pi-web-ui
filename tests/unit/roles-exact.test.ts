@@ -468,6 +468,103 @@ describe("the supplied Roles design with the existing feed", () => {
 		expect(list(object(view.values().graph).edges)).toHaveLength(0);
 	});
 
+	it("roles-sent: one arrow per open pair, pointing at the receiver, with the sent line and who it waits on", () => {
+		const H = 3 * 60 * 60_000;
+		const sent = {
+			open: 3,
+			newest: { id: "rm-9", to: "temper", kind: "request", firstLine: "Check the gate", at: NOW - H },
+		};
+		const rows = [
+			role({ sent }),
+			role({ id: "design", title: "Design", sent: { open: 0 } }),
+			role({ id: "temper", title: "Temper", sent: { open: 1 } }),
+		];
+		const openPairs = [
+			{ from: "ops", to: "design", count: 1, at: NOW - 2 * H },
+			{ from: "ops", to: "temper", count: 2, at: NOW - H },
+			{ from: "temper", to: "ops", count: 1, at: NOW - 60_000 },
+			// dropped: to itself, a role not shown, a repeat, no count
+			{ from: "ops", to: "ops", count: 1, at: NOW },
+			{ from: "ops", to: "ghost", count: 1, at: NOW },
+			{ from: "ops", to: "temper", count: 9, at: NOW },
+			{ from: "design", to: "temper", count: 0, at: NOW },
+		];
+		const withPairs = (o: Row) => ({ ...o, overview: { ...(o.overview as Row), openPairs } });
+		const before = fixture(projectExactRoles(state(rows, [ask(1)]), "open", NOW));
+		const ownerBefore = JSON.stringify(list(object(before.view.values(1400, 780).graph).edges));
+		const { view } = fixture(projectExactRoles(withPairs(state(rows, [ask(1)])), "open", NOW));
+		const values = view.values(1400, 780);
+		const edges = list(object(values.graph).edges).map(object);
+		expect(edges).toHaveLength(4);
+		// the owner-ask arrow is unchanged and stays last (on top)
+		expect(JSON.stringify([edges[3]])).toBe(ownerBefore);
+		const dept = edges.slice(0, 3);
+		expect(dept.map((e) => e.aria)).toEqual([
+			"Ops waiting on Design: 1 open request or question, newest 6 h ago",
+			"Ops waiting on Temper: 2 open requests or questions, newest 3 h ago",
+			"Temper waiting on Ops: 1 open request or question, newest 1 min ago",
+		]);
+		expect(dept.map((e) => e.chip)).toEqual(["1 open", "2 open", "1 open"]);
+		for (const e of dept) {
+			expect(e).toMatchObject({ stroke: "#4A82C0", chipFg: "#9CC7FF", op: "0.95", sw: "1.6" });
+			// the head points from sender to receiver
+			const [x1, y1, , , x2, y2] = String(e.d)
+				.match(/-?[\d.]+/g)!
+				.map(Number);
+			const [tx, ty, ax, ay, bx, by] = String(e.arrow)
+				.match(/-?[\d.]+/g)!
+				.map(Number);
+			const dir = (tx - (ax + bx) / 2) * (x2 - x1) + (ty - (ay + by) / 2) * (y2 - y1);
+			expect(dir).toBeGreaterThan(0);
+		}
+		// both directions open: the two curves split apart
+		expect(String(dept[1].d).split("Q")[1]).not.toBe(String(dept[2].d).split("Q")[1]);
+
+		const boxes = new Map(list(object(values.glance).boxes).map((b) => [object(b).id, object(b)]));
+		expect(boxes.get("ops")).toMatchObject({ hasRel: true, relText: "Waiting on 2 roles" });
+		expect(boxes.get("temper")).toMatchObject({ hasRel: true, relText: "Waiting on Ops" });
+		expect(boxes.get("design")).toMatchObject({ hasRel: false, relText: "" });
+		expect(values.arrowMeaning).toContain("from a department to whoever it is waiting on");
+		expect(values.arrowMeaning).not.toContain("not connected");
+
+		// hovering Design: its arrow and the role it is linked to stay bright, the rest dims
+		invoke(boxes.get("design")!.hoverOn);
+		const hovered = view.values(1400, 780);
+		const hEdges = list(object(hovered.graph).edges).map(object);
+		expect(hEdges.slice(0, 3).map((e) => [e.op, e.sw])).toEqual([
+			["0.95", "2.5"],
+			["0.08", "1.6"],
+			["0.08", "1.6"],
+		]);
+		const hBoxes = new Map(list(object(hovered.glance).boxes).map((b) => [object(b).id, object(b)]));
+		expect(hBoxes.get("ops")).toMatchObject({ op: "1", bdNow: "#3D5A80" });
+		expect(hBoxes.get("temper")?.op).toBe("0.38");
+
+		// its label opens the sender's panel, whose sent line names the newest
+		invoke(dept[1].chipClick);
+		vi.runAllTimers();
+		expect(object(view.values().ex)).toMatchObject({
+			id: "ops",
+			outText: "3 open \u00b7 newest to Temper, 3 h ago: Check the gate",
+			reqInText: "2 open",
+		});
+		view.openRole("design", document.body);
+		vi.runAllTimers();
+		expect(object(view.values().ex).outText).toBe("0 open");
+	});
+
+	it("roles-sent: an older server without sent requests or pairs draws no role arrows", () => {
+		const rows = [role(), role({ id: "design", title: "Design" })];
+		const model = projectExactRoles(state(rows), "open", NOW);
+		expect(model.pairs).toBeNull();
+		const { view } = fixture(model);
+		expect(list(object(view.values(1400, 780).graph).edges)).toEqual([]);
+		expect(object(list(object(view.values().glance).boxes)[0]).hasRel).toBe(false);
+		view.openRole("ops", document.body);
+		vi.runAllTimers();
+		expect(object(view.values().ex).outText).toBe("Not recorded");
+	});
+
 	it("shows a role's validated own tally, not a system-wide total or requested spend", () => {
 		const spend = { state: "ok", spent: "$1,240.50", budget: "$2,000", age: "2 min ago" };
 		const { view } = fixture(projectExactRoles(state([role({ spend })]), "open", NOW), true);

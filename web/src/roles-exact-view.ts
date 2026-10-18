@@ -8,11 +8,12 @@ import {
 	exactWhen,
 	type ExactContact,
 	type ExactInstructions,
+	type ExactPair,
 	type ExactRole,
 	type ExactRoles,
 } from "./roles-exact-model";
 import type { NeedsYouItem } from "./roles-useful-model";
-import type { PanelRoleStatus, PanelTask, PanelTaskEvent } from "./roles-panel-model";
+import type { PanelRoleStatus, PanelTask, PanelTaskEvent, RolePanel } from "./roles-panel-model";
 import { ringAnchor, ringLayout } from "./roles-u0/layout";
 import type { SurfaceValues } from "./roles-u0/types";
 import type { RowState, UsefulOpenTarget, UsefulRecord } from "./roles-useful-model";
@@ -189,6 +190,99 @@ function ownerEdges(model: ExactRoles, layout: ReturnType<typeof ringLayout>, ho
 				},
 			];
 		});
+}
+/** roles-sent: a role's label on the page (its id when it isn't shown). */
+function roleName(model: ExactRoles, id: string): string {
+	return model.roles.find((r) => r.row.roleId === id)?.row.roleLabel ?? id;
+}
+/** roles-sent: the panel's "Asked of others" line, written like "Requests in"; not recorded from an older server. */
+export function exactSentText(sent: RolePanel["sent"] | undefined, now: number): string {
+	if (!sent || sent.open === null) return NR;
+	const n = sent.newest;
+	if (sent.open === 0 || !n) return `${sent.open} open`;
+	const age = n.at === null ? "" : `, ${exactAge(n.at, now)} ago`;
+	return `${sent.open} open · newest to ${n.to ?? NR}${age}: ${n.text ?? NR}`;
+}
+/** roles-sent: the card's line saying who the role is waiting on ("Waiting on Temper", "Waiting on 2 roles"). */
+export function exactWaitingOn(model: ExactRoles, id: string): string {
+	const to = (model.pairs ?? []).filter((p) => p.from === id);
+	if (to.length === 0) return "";
+	return to.length === 1 ? `Waiting on ${roleName(model, to[0].to)}` : `Waiting on ${to.length} roles`;
+}
+const LABEL_AT = [0.5, 0.42, 0.58, 0.35, 0.65, 0.3, 0.7, 0.25, 0.75];
+/**
+ * roles-sent: the design's between-department edges (its "dept" kind), one per sender → receiver pair with
+ * open requests or questions: curved toward the centre, split apart when both directions are open, the head
+ * pointing at the receiver. Same hover rules as the owner edges.
+ */
+export function roleEdges(
+	model: ExactRoles,
+	layout: ReturnType<typeof ringLayout>,
+	hover: string | null,
+): { edge: SurfaceValues; pair: ExactPair }[] {
+	const pairs = model.pairs ?? [];
+	const centre = layout.pos.get("you");
+	if (!pairs.length || !centre) return [];
+	const obstacles = [...layout.pos].map(([id, p]) => ({
+		p,
+		x: id === "you" ? 82 : layout.nodeW / 2 + 10,
+		y: id === "you" ? 42 : 60,
+	}));
+	const clear = (p: number[]) =>
+		obstacles.every((o) => Math.abs(p[0] - o.p[0]) > o.x + 70 || Math.abs(p[1] - o.p[1]) > o.y + 14);
+	const open = new Set(pairs.map((p) => `${p.from}>${p.to}`));
+	return pairs.flatMap((pair) => {
+		const p1 = layout.pos.get(pair.from),
+			p2 = layout.pos.get(pair.to);
+		if (!p1 || !p2) return [];
+		const mx = (p1[0] + p2[0]) / 2,
+			my = (p1[1] + p2[1]) / 2;
+		let c = [mx + (centre[0] - mx) * 0.38, my + (centre[1] - my) * 0.38];
+		if (open.has(`${pair.to}>${pair.from}`)) {
+			const dx = p2[0] - p1[0],
+				dy = p2[1] - p1[1],
+				L = Math.hypot(dx, dy) || 1;
+			c = [c[0] - (dy / L) * 30, c[1] + (dx / L) * 30];
+		}
+		const at = (t: number) => {
+			const u = 1 - t;
+			return [u * u * p1[0] + 2 * u * t * c[0] + t * t * p2[0], u * u * p1[1] + 2 * u * t * c[1] + t * t * p2[1]];
+		};
+		const lt = LABEL_AT.find((t) => clear(at(t))) ?? 0.5;
+		const aT = lt <= 0.5 ? Math.min(0.88, lt + 0.16) : Math.max(0.12, lt - 0.16);
+		const ah = at(aT);
+		const tv = [
+			2 * (1 - aT) * (c[0] - p1[0]) + 2 * aT * (p2[0] - c[0]),
+			2 * (1 - aT) * (c[1] - p1[1]) + 2 * aT * (p2[1] - c[1]),
+		];
+		const tl = Math.hypot(tv[0], tv[1]) || 1,
+			ux = tv[0] / tl,
+			uy = tv[1] / tl;
+		const lp0 = at(lt);
+		const lp = clear(lp0) ? lp0 : [lp0[0] - uy * 28, lp0[1] + ux * 28];
+		const connected = !hover || hover === pair.from || hover === pair.to;
+		const what = `${pair.count} open ${pair.count === 1 ? "request or question" : "requests or questions"}`;
+		const newest = pair.at === null ? "" : `, newest ${exactAge(pair.at, model.now)} ago`;
+		return [
+			{
+				pair,
+				edge: {
+					d: `M${p1[0]} ${p1[1]} Q${c[0]} ${c[1]} ${p2[0]} ${p2[1]}`,
+					arrow: `M${ah[0] + ux * 8} ${ah[1] + uy * 8} L${ah[0] - ux * 6 - uy * 6} ${ah[1] - uy * 6 + ux * 6} L${ah[0] - ux * 6 + uy * 6} ${ah[1] - uy * 6 - ux * 6} Z`,
+					stroke: "#4A82C0",
+					sw: hover && connected ? "2.5" : "1.6",
+					op: connected ? (model.lastReceived ? "0.55" : "0.95") : "0.08",
+					lxp: `${(lp[0] / layout.width) * 100}%`,
+					lyp: `${(lp[1] / layout.height) * 100}%`,
+					chip: `${pair.count} open`,
+					chipFg: "#9CC7FF",
+					chipBd: "#2F343A",
+					glow: "none",
+					aria: `${roleName(model, pair.from)} waiting on ${roleName(model, pair.to)}: ${what}${newest}`,
+				},
+			},
+		];
+	});
 }
 export function createExactRolesView(
 	read: () => ExactRoles,
@@ -448,6 +542,14 @@ export function createExactRolesView(
 		const questions = model.needs.items.filter((item) => item.roleId === row.roleId);
 		const roleContacts = (model.contacts ?? []).filter((c) => c.role === row.roleId);
 		const onYou = model.needs.tell === "can-tell" && (panel?.status === "needs-you" || questions.length > 0);
+		// roles-sent: who it waits on, and (the design's hover) a card linked to the hovered one by an open pair.
+		const relText = exactWaitingOn(model, row.roleId);
+		const linked =
+			!!hover &&
+			hover !== row.roleId &&
+			(model.pairs ?? []).some(
+				(p) => (p.from === hover && p.to === row.roleId) || (p.from === row.roleId && p.to === hover),
+			);
 		const blocked = tasks.find((t) => t.waitsOn !== null);
 		const panelTasks = panel
 			? [
@@ -496,11 +598,11 @@ export function createExactRolesView(
 			state,
 			onYou,
 			ownPaused: false,
-			hasRel: false,
-			relText: "",
+			hasRel: relText !== "",
+			relText,
 			...exactLanes(row.lanes),
-			op: hover && hover !== row.roleId ? "0.38" : model.lastReceived ? "0.8" : "1",
-			bdNow: hover === row.roleId ? "#9CC7FF" : onYou ? "#6B5426" : "#2A2E34",
+			op: hover && hover !== row.roleId && !linked ? "0.38" : model.lastReceived ? "0.8" : "1",
+			bdNow: hover === row.roleId ? "#9CC7FF" : linked ? "#3D5A80" : onYou ? "#6B5426" : "#2A2E34",
 			hoverOn: (e: Event | Element) => {
 				if (quietFocusRestore || !acceptsHover(e)) return;
 				hover = row.roleId;
@@ -523,7 +625,7 @@ export function createExactRolesView(
 			nextShort: nextText(ownTask),
 			mix: "Reported status",
 			updated: exactClock(lines[0]?.ts ?? null),
-			outText: MISSING,
+			outText: exactSentText(panel?.sent, model.now),
 			reqInText:
 				panel?.requests.open === null || panel?.requests.open === undefined ? NR : `${panel.requests.open} open`,
 			hasBlocker: !!blocked,
@@ -734,10 +836,17 @@ export function createExactRolesView(
 				}
 			},
 			graph: {
-				edges: ownerEdges(model, layout, hover).map((edge) => ({
-					...edge,
-					chipClick: (e: Event | Element) => expand({ kind: "you" }, e),
-				})),
+				edges: [
+					// roles-sent: drawn first, so the owner-ask arrows and their labels stay on top.
+					...roleEdges(model, layout, hover).map(({ edge, pair }) => ({
+						...edge,
+						chipClick: (e: Event | Element) => openRole(pair.from, e),
+					})),
+					...ownerEdges(model, layout, hover).map((edge) => ({
+						...edge,
+						chipClick: (e: Event | Element) => expand({ kind: "you" }, e),
+					})),
+				],
 				flights: [],
 				tipOpen: false,
 				tip: { x: "0%", y: "0%", tf: "none", title: "", hint: "", msgs: [] },
@@ -754,7 +863,8 @@ export function createExactRolesView(
 				legend = !legend;
 				changed();
 			},
-			arrowMeaning: "Owner asks are shown. Between-department message tracking is not connected yet. The design’s key:",
+			arrowMeaning:
+				"Arrows point from a department to whoever it is waiting on: its open requests and questions to another department, until answered, and its asks waiting on you. Messages from you and messages being sent are not drawn. Key:",
 			channelShown: false,
 			contactChannelTitle: MISSING,
 			contactChannelText: MISSING,

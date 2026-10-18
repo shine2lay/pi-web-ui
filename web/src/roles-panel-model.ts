@@ -171,6 +171,8 @@ export interface RolePanel {
 	lines: PanelLine[];
 	report: PanelReport;
 	requests: { open: number | null; newest: { from: string | null; text: string | null; at: number | null } | null };
+	/** roles-sent: its open requests and questions to other roles; open null = not recorded (older server). */
+	sent: { open: number | null; newest: { to: string | null; text: string | null; at: number | null } | null };
 	/** The initiatives and projects it leads. */
 	leads: { initiatives: WorkView[]; projects: WorkView[] };
 	groups: InitiativeGroup[];
@@ -598,6 +600,9 @@ export function projectRolePanel(state: unknown, id: string): RolePanel | null {
 
 	const requests = object(row.requests);
 	const newest = object(requests?.newest);
+	const sent = object(row.sent);
+	const sentOpen = count(sent?.open);
+	const sentNewest = sentOpen ? object(sent?.newest) : null;
 
 	const leads = {
 		initiatives: [...reg.initiatives.values()].filter((w) => w.lead?.kind === "role" && w.lead.id === id),
@@ -629,6 +634,16 @@ export function projectRolePanel(state: unknown, id: string): RolePanel | null {
 						from: roleId(newest.from) ? (labels.get(newest.from) ?? newest.from) : null,
 						text: plain(newest.firstLine, LINE_LIMIT)?.text ?? null,
 						at: time(newest.at),
+					}
+				: null,
+		},
+		sent: {
+			open: sentOpen,
+			newest: sentNewest
+				? {
+						to: roleId(sentNewest.to) ? (labels.get(sentNewest.to) ?? sentNewest.to) : null,
+						text: plain(sentNewest.firstLine, LINE_LIMIT)?.text ?? null,
+						at: time(sentNewest.at),
 					}
 				: null,
 		},

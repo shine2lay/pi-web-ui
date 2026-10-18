@@ -16143,6 +16143,8 @@ export class AgentService {
 				chatState: (file) => this.queueChatState(file).state,
 				asks: () => askHub.list(),
 				openRequestsTo: (role) => this.roleMessages.openRequestsTo(role),
+				openRequestsFrom: (role, keep) => this.roleMessages.openRequestsFrom(role, keep),
+				openPairs: () => this.roleMessages.openPairs(),
 				latestReportTo: (role) => this.roleMessages.latestReportTo(role),
 				board: () => this.roleBoard.view(),
 				boardOrdersOf: (role) => this.roleBoard.openOrdersOf(role),

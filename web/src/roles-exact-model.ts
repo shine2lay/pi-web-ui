@@ -7,6 +7,7 @@ import {
 	CLOCK_SKEW_MS,
 	object,
 	projectUsefulRoles,
+	roleId,
 	time,
 	type NeedsYou,
 	type SourceState,
@@ -149,6 +150,37 @@ export function projectContacts(raw: unknown): ExactContact[] | null {
 	return out;
 }
 
+/** roles-sent: one sender → receiver pair of roles on the page with open requests or questions. */
+export interface ExactPair {
+	from: string;
+	to: string;
+	count: number;
+	/** The newest one's time; null = not recorded. */
+	at: number | null;
+}
+const PAIRS_MAX = 200;
+
+/**
+ * The server's open pairs, field by field: both ends must be roles shown, never the same one; a bad or
+ * repeated pair is dropped. Not an array: not connected (null).
+ */
+export function projectPairs(raw: unknown, shown: ReadonlySet<string>): ExactPair[] | null {
+	if (!Array.isArray(raw)) return null;
+	const out: ExactPair[] = [];
+	const seen = new Set<string>();
+	for (const item of raw.slice(0, PAIRS_MAX)) {
+		const p = object(item);
+		if (!p || !roleId(p.from) || !roleId(p.to) || p.from === p.to) continue;
+		if (!shown.has(p.from) || !shown.has(p.to)) continue;
+		if (typeof p.count !== "number" || !Number.isSafeInteger(p.count) || p.count < 1) continue;
+		const key = `${p.from}>${p.to}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		out.push({ from: p.from, to: p.to, count: p.count, at: time(p.at) });
+	}
+	return out;
+}
+
 export interface ExactRole {
 	row: UsefulRole;
 	panel: RolePanel | null;
@@ -167,6 +199,8 @@ export interface ExactRoles {
 	receivedAt: number | null;
 	/** owner-contacts: null = this server doesn't report them (not connected). */
 	contacts: ExactContact[] | null;
+	/** roles-sent: open sender → receiver pairs; null = this server doesn't report them. */
+	pairs: ExactPair[] | null;
 }
 
 export function projectExactRoles(state: unknown, connection: unknown, now: number): ExactRoles {
@@ -185,6 +219,7 @@ export function projectExactRoles(state: unknown, connection: unknown, now: numb
 		})),
 		hasOverview: overview !== null,
 		contacts: overview !== null ? projectContacts(overview.contacts) : null,
+		pairs: overview !== null ? projectPairs(overview.openPairs, new Set(model.roles.map((r) => r.roleId))) : null,
 		receivedAt:
 			overview !== null &&
 			received !== null &&

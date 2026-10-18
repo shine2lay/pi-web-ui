@@ -2162,6 +2162,22 @@ export interface UiRoleRequest {
 	at: number;
 }
 
+/** roles-sent: the requests and questions a role sent to another role on the page that have no reply yet. */
+export interface UiRoleSent {
+	open: number;
+	/** The newest one; `to` is the receiving role's id. */
+	newest?: { id: string; to: string; kind: "question" | "request"; firstLine: string; at: number };
+}
+
+/** roles-sent: one sender → receiver pair of roles on the page with open requests or questions. */
+export interface UiRoleOpenPair {
+	from: string;
+	to: string;
+	count: number;
+	/** The newest one's time (ms). */
+	at: number;
+}
+
 /** roles-overview: a role's latest 6 am report, or why there is none. */
 export interface UiRoleReport {
 	state: "report" | "pending" | "failed" | "no-answer" | "unavailable" | "first" | "not-active" | "not-in-job";
@@ -2236,6 +2252,8 @@ export interface UiRoleOverview {
 	tldr: UiRoleTldrLine[];
 	queue?: UiRoleQueue;
 	requests: { open: number; newest?: UiRoleRequest };
+	/** roles-sent: what it asked of other roles that has no reply yet (absent from an older server). */
+	sent?: UiRoleSent;
 	report: UiRoleReport;
 	/** Own-work spend.json; optional for older app snapshots. */
 	spend?: UiRoleSpend;
@@ -2656,6 +2674,8 @@ export interface UiRolesOverview {
 	work?: UiWorkRecords;
 	/** owner-contacts (Roles D3): the owner's own messages to role home chats, newest first (absent: none read). */
 	contacts?: UiOwnerContact[];
+	/** roles-sent: sender → receiver pairs with open requests or questions (absent: this server reads none). */
+	openPairs?: UiRoleOpenPair[];
 }
 
 /** identity-notes: a role's two-layer memory as its chats get it (pi-identity): the rules (notebook.md)

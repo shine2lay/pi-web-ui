@@ -997,6 +997,96 @@ describe("open requests and reports come from the whole store", () => {
 	});
 });
 
+describe("roles-sent: open requests by sender and by pair", () => {
+	const msg = (i: number, from: string, to: string, extra: Record<string, unknown> = {}) => ({
+		id: `rm-${i.toString(16).padStart(8, "0")}`,
+		at: T0 + i * 1000,
+		from: { role: from, title: from.toUpperCase(), chat: "home chat", file: "/x.jsonl" },
+		to: { role: to, title: to.toUpperCase() },
+		kind: "request",
+		chain: 1,
+		text: `message ${i}`,
+		state: "delivered",
+		sends: 1,
+		attempts: 1,
+		...extra,
+	});
+	it("the store counts only unanswered, unfailed requests and questions, per sender and per direction", () => {
+		const file = join(dir, "data", "role-messages.json");
+		mkdirSync(join(dir, "data"), { recursive: true });
+		const messages = [
+			msg(1, "ops", "temper", { text: "First\nmore" }),
+			msg(5, "ops", "temper", { kind: "question", text: "Second\nmore" }),
+			msg(6, "ops", "temper", { replyId: "rm-000000ff", state: "replied" }),
+			msg(7, "ops", "design", { state: "failed", error: "no chat" }),
+			msg(8, "ops", "design", { kind: "fyi" }),
+			msg(9, "ops", "ghost"),
+			msg(3, "temper", "ops"),
+			msg(10, "ops", "ops"),
+			msg(11, "design", "ops", { state: "replied" }),
+			msg(12, "design", "ops", { kind: "reply", replyTo: "rm-00000003" }),
+		];
+		writeFileSync(file, JSON.stringify({ v: 1, paused: false, messages }));
+		const host = {
+			roles: () => [],
+			chatState: () => "closed" as const,
+			deliver: async () => ({ ok: true as const }),
+			note: async () => ({ ok: true as const }),
+			log: () => {},
+		};
+		const store = new RoleMessages(file, host);
+		try {
+			const shown = (id: string) => ["ops", "temper", "design"].includes(id);
+			expect(store.openRequestsFrom("ops", shown)).toEqual({
+				open: 2,
+				newest: { id: "rm-00000005", to: "temper", kind: "question", firstLine: "Second", at: T0 + 5000 },
+			});
+			// unknown receivers count only when the caller lets them through
+			expect(store.openRequestsFrom("ops").open).toBe(3);
+			expect(store.openRequestsFrom("design", shown)).toEqual({ open: 0 });
+			expect(store.openRequestsFrom("temper", shown)).toMatchObject({ open: 1, newest: { to: "ops" } });
+			expect(store.openPairs()).toEqual([
+				{ from: "ops", to: "ghost", count: 1, at: T0 + 9000 },
+				{ from: "ops", to: "temper", count: 2, at: T0 + 5000 },
+				{ from: "temper", to: "ops", count: 1, at: T0 + 3000 },
+			]);
+			// same rules as the incoming count
+			expect(store.openRequestsTo("temper").open).toBe(2);
+		} finally {
+			store.stop();
+		}
+	});
+
+	it("the overview carries them for roles on the page only, and leaves them out when the host has none", async () => {
+		const f = fake([role("ops"), role("temper")]);
+		const asked: string[] = [];
+		f.host.openRequestsFrom = (r, keep) => {
+			asked.push(`${r}:${keep("temper")}:${keep("ops")}:${keep("ghost")}`);
+			return r === "ops"
+				? { open: 1, newest: { id: "rm-1", to: "temper", kind: "request", firstLine: "Check it", at: T0 } }
+				: { open: 0 };
+		};
+		f.host.openPairs = () => [
+			{ from: "ops", to: "temper", count: 1, at: T0 },
+			{ from: "ops", to: "ghost", count: 4, at: T0 },
+			{ from: "ghost", to: "ops", count: 1, at: T0 },
+			{ from: "ops", to: "ops", count: 1, at: T0 },
+		];
+		const o = await read(f);
+		expect(asked).toEqual(["ops:true:true:false", "temper:true:true:false"]);
+		expect(byId(o, "ops").sent).toEqual({
+			open: 1,
+			newest: { id: "rm-1", to: "temper", kind: "request", firstLine: "Check it", at: T0 },
+		});
+		expect(byId(o, "temper").sent).toEqual({ open: 0 });
+		expect(o.openPairs).toEqual([{ from: "ops", to: "temper", count: 1, at: T0 }]);
+
+		const old = await read(fake([role("ops")]));
+		expect("sent" in byId(old, "ops")).toBe(false);
+		expect("openPairs" in old).toBe(false);
+	});
+});
+
 describe("pushing it", () => {
 	const overview = (asks: number, text = "x"): UiRolesOverview => ({
 		at: now,
