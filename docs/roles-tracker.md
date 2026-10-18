@@ -22,4 +22,6 @@
 
 ## Result
 
-Pending the landing gate and the live smoke.
+Landed as 8f617039 (landing gate 415 files, 6,044 tests passed, 6 skipped) and live since 2026-10-18 01:25 PDT; all install checks passed. Look-only smoke at 01:37: the overview carries an empty contacts list and "Your messages" shows "No messages from you to a role in the last 90 days." instead of "not connected yet"; no page errors. The scheduler's own prompt (a pseudo client) recorded nothing, as intended. Display wiring: HIT. The live stage sequence waits on the owner's first message to a role after the install.
+
+Follow-up (H-ROLES-TRACKER-1a): the page footer still said "lane and message tracking are not connected yet", which is now false for messages. One change: the footer says only "Missing data is marked as not recorded." Expected: no footer text claims a connected feed is missing. Wrong if any remaining footer text names message tracking as not connected.

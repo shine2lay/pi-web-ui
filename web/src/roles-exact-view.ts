@@ -678,7 +678,7 @@ export function createExactRolesView(
 			footerText: model.lastReceived
 				? "Last received data · current state unconfirmed"
 				: "Existing Roles feed · reported information",
-			provenanceText: "Missing data is marked; lane and message tracking are not connected yet.",
+			provenanceText: "Missing data is marked as not recorded.",
 			glance: { boxes },
 			nodeW: `${layout.nodeW}px`,
 			gw: layout.width,
