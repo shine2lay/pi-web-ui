@@ -55,7 +55,10 @@ function reportItems(text: string) {
 }
 function acceptsHover(source: Event | Element): boolean {
 	const el = "currentTarget" in source ? (source.currentTarget as Element | null) : source;
-	return el?.ownerDocument?.defaultView?.matchMedia?.("(hover: hover)").matches !== false;
+	if (!el) return false;
+	// Restored mouse focus is not a hover. Keep the spotlight for visible keyboard focus.
+	if ("type" in source && (source.type === "focus" || source.type === "focusin")) return el.matches(":focus-visible");
+	return el.ownerDocument?.defaultView?.matchMedia?.("(hover: hover)").matches !== false;
 }
 /** The source's owner-edge geometry, without message history, animations or invented kinds. */
 function ownerEdges(model: ExactRoles, layout: ReturnType<typeof ringLayout>, hover: string | null): SurfaceValues[] {
@@ -156,6 +159,7 @@ export function createExactRolesView(
 	let disposed = false;
 	let generation = 0;
 	let origin: HTMLElement | null = null;
+	let quietFocusRestore = false;
 	const rafs = new Set<unknown>();
 	const timers = new Set<unknown>();
 	const changed = () => {
@@ -215,7 +219,7 @@ export function createExactRolesView(
 			}),
 		);
 	}
-	function close(immediate = false) {
+	function close(immediate = false, keyboard = false) {
 		clearAnimation();
 		hover = null;
 		grown = false;
@@ -223,8 +227,15 @@ export function createExactRolesView(
 		const finish = () => {
 			selected = null;
 			changed();
-			if (origin?.isConnected) origin.focus();
-			origin = null;
+			// Browsers can retain :focus-visible after a mouse click on an already focused node.
+			// Keep the focus return, but do not let it restart the spotlight for a pointer close.
+			quietFocusRestore = !keyboard;
+			try {
+				if (origin?.isConnected) origin.focus();
+			} finally {
+				quietFocusRestore = false;
+				origin = null;
+			}
 		};
 		if (immediate) finish();
 		else {
@@ -363,7 +374,7 @@ export function createExactRolesView(
 			op: hover && hover !== row.roleId ? "0.38" : model.lastReceived ? "0.8" : "1",
 			bdNow: hover === row.roleId ? "#9CC7FF" : onYou ? "#6B5426" : "#2A2E34",
 			hoverOn: (e: Event | Element) => {
-				if (!acceptsHover(e)) return;
+				if (quietFocusRestore || !acceptsHover(e)) return;
 				hover = row.roleId;
 				changed();
 			},
@@ -533,9 +544,15 @@ export function createExactRolesView(
 			: stale || (unavailable && !loading)
 				? { bg: "#1D1A12", bd: "#4D3F1F", fg: "#F0B95A" }
 				: { bg: "#16181B", bd: "#2A2E34", fg: "#ECEDEE" };
+		const receipt =
+			model.receivedAt !== null
+				? `last received ${exactClock(model.receivedAt)}${stale ? ` (${exactAge(model.receivedAt, model.now)} ago)` : ""}`
+				: model.hasOverview
+					? "receipt time unknown"
+					: "nothing loaded yet";
 		const freshText = unavailable
-			? `${model.source === "connected-source-unverified" ? "Incomplete status" : source.label}${model.receivedAt !== null ? ` · last received ${exactClock(model.receivedAt)}${stale ? ` (${exactAge(model.receivedAt, model.now)} ago)` : ""}` : ""}`
-			: `Live · updated ${exactClock(model.receivedAt)}`;
+			? `${model.source === "connected-source-unverified" ? "Incomplete status" : source.label} · ${receipt}`
+			: `Live · ${model.receivedAt !== null ? `updated ${exactClock(model.receivedAt)}` : receipt}`;
 		const date = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(model.now);
 		const spending = model.roles.filter((r) => r.spend.reported);
 		const budgetRole = spending.length === 1 ? spending[0] : null;
@@ -606,7 +623,7 @@ export function createExactRolesView(
 			youBd: hover === "you" ? "#F0B95A" : "#6B5426",
 			youOp: hover && hover !== "you" ? "0.38" : "1",
 			youHoverOn: (e: Event | Element) => {
-				if (!acceptsHover(e)) return;
+				if (quietFocusRestore || !acceptsHover(e)) return;
 				hover = "you";
 				changed();
 			},
@@ -669,7 +686,8 @@ export function createExactRolesView(
 						ov: "hidden",
 					},
 			exMinH: "0px",
-			closeEx: () => close(),
+			closeEx: (e: Event | Element) =>
+				close(false, "type" in e && e.type === "click" && "detail" in e && e.detail === 0),
 			repOpen: reportOpen,
 			repOpenStr: String(reportOpen),
 			repChev: reportOpen ? "rotate(180deg)" : "none",

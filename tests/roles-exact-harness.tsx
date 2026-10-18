@@ -149,6 +149,22 @@ render();
 Object.assign(window, {
 	rolesExactTest: {
 		deliver,
+		transport: (kind: "error" | "count" | "heartbeat") => {
+			const clock = Date.now;
+			try {
+				Date.now = () => clock() + 180_000;
+				flushSync(() =>
+					receiveRoles({
+						type: "roles",
+						asks: 2,
+						...(kind === "error" ? { error: "Fixed transport failure" } : {}),
+						...(kind === "heartbeat" ? { checkedAt: stamp + 1 } : {}),
+					}),
+				);
+			} finally {
+				Date.now = clock;
+			}
+		},
 		getState: () => ({ sent: [...sent], lastOpen, about }),
 		active: (value: boolean) => {
 			active = value;

@@ -137,7 +137,7 @@ export function RolesExactView({
 				if (!view.isOpen()) return;
 				if (event.key === "Escape") {
 					event.preventDefault();
-					view.close();
+					view.close(false, true);
 					return;
 				}
 				if (event.key !== "Tab") return;

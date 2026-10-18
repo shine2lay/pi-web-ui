@@ -39,6 +39,7 @@ const state = (roles: unknown[] = [role()], asks: unknown[] = [], extra: Row = {
 	overview: { at: NOW, roles, asks, work: { initiatives: [], projects: [] } },
 	checkedAt: NOW,
 	heardAt: NOW,
+	overviewReceivedAt: NOW,
 	appliedAt: NOW,
 	...extra,
 });
@@ -59,9 +60,9 @@ function list(value: SurfaceValue): SurfaceValue[] {
 	if (!Array.isArray(value)) throw new Error("expected list");
 	return value;
 }
-function invoke(value: SurfaceValue) {
+function invoke(value: SurfaceValue, source: Event | Element = document.body) {
 	if (typeof value !== "function") throw new Error("expected callback");
-	value(document.body);
+	value(source);
 }
 const cleanups: (() => void)[] = [];
 function fixture(initial: ExactRoles = projectExactRoles(state(), "open", NOW), mounted = false) {
@@ -341,6 +342,32 @@ describe("the supplied Roles design with the existing feed", () => {
 		expect(actions.reload).toHaveBeenCalledTimes(1);
 	});
 
+	it("uses the displayed overview's receipt rather than a later transport or server timestamp", () => {
+		const { view } = fixture(
+			projectExactRoles(state([role()], [], { overviewReceivedAt: NOW - 300_000 }), "closed", NOW),
+		);
+		expect(object(view.values().fresh).text).toBe("Disconnected · last received 11:55");
+	});
+
+	it("says nothing loaded yet on the first failure even if a transport timestamp exists", () => {
+		const model = projectExactRoles(state([], [], { status: "error", overview: null }), "open", NOW);
+		expect(model.hasOverview).toBe(false);
+		expect(model.receivedAt).toBeNull();
+		const { view } = fixture(model);
+		expect(object(view.values().fresh).text).toBe("Unavailable · nothing loaded yet");
+	});
+
+	it.each([undefined, null, "now", NaN, Infinity, -1, 1.5, NOW + 1_000_000])(
+		"does not invent an overview receipt for a missing or invalid value (%s)",
+		(overviewReceivedAt) => {
+			const model = projectExactRoles(state([role()], [], { overviewReceivedAt }), "closed", NOW);
+			expect(model.hasOverview).toBe(true);
+			expect(model.receivedAt).toBeNull();
+			const { view } = fixture(model);
+			expect(object(view.values().fresh).text).toBe("Disconnected · receipt time unknown");
+		},
+	);
+
 	it("gives an explicit uncertainty reason rather than a green connected banner", () => {
 		const { view } = fixture(projectExactRoles(state([role()], [], { appliedAt: null }), "open", NOW));
 		expect(object(view.values().banner)).toMatchObject({ show: true, title: "Some owner asks could not be confirmed" });
@@ -448,6 +475,49 @@ describe("the supplied Roles design with the existing feed", () => {
 		);
 		expect(labels).toHaveLength(20);
 		expect(labels.every((el) => el.style.color === "rgb(169, 174, 182)")).toBe(true);
+	});
+
+	it.each(["role", "you"])("spotlights %s focus only when it is keyboard-visible", (which) => {
+		vi.stubGlobal("matchMedia", () => ({ matches: true }));
+		const { view } = fixture(projectExactRoles(state([role(), role({ id: "design" })]), "open", NOW));
+		const values = view.values();
+		const highlight = which === "role" ? object(list(object(values.glance).boxes)[0]).hoverOn : values.youHoverOn;
+		const opener = document.createElement("button");
+		const visible = vi.spyOn(opener, "matches").mockReturnValue(false);
+		const focus = new FocusEvent("focus");
+		Object.defineProperty(focus, "currentTarget", { value: opener });
+		const opacity = () => list(object(view.values().glance).boxes).map((b) => object(b).op);
+		invoke(highlight, focus);
+		expect(opacity()).toEqual(["1", "1"]);
+		expect(visible).toHaveBeenCalledWith(":focus-visible");
+		visible.mockReturnValue(true);
+		invoke(highlight, focus);
+		expect(opacity()).toEqual(which === "role" ? ["1", "0.38"] : ["0.38", "0.38"]);
+		invoke(values.hoverOff);
+		invoke(highlight, opener);
+		expect(opacity()).toEqual(which === "role" ? ["1", "0.38"] : ["0.38", "0.38"]);
+	});
+
+	it.each([
+		["role", false],
+		["you", false],
+		["role", true],
+		["you", true],
+	] as const)("restores %s focus without pointer-close spotlight (keyboard=%s)", (which, keyboard) => {
+		const { view } = fixture(projectExactRoles(state([role(), role({ id: "design" })]), "open", NOW));
+		const values = view.values();
+		const box = object(list(object(values.glance).boxes)[0]);
+		const opener = document.createElement("button");
+		document.body.append(opener);
+		vi.spyOn(opener, "matches").mockReturnValue(true);
+		opener.addEventListener("focus", (event) => invoke(which === "role" ? box.hoverOn : values.youHoverOn, event));
+		invoke(which === "role" ? box.expand : values.youExpand, opener);
+		invoke(view.values().closeEx, new MouseEvent("click", { detail: keyboard ? 0 : 1 }));
+		vi.runAllTimers();
+		expect(document.activeElement).toBe(opener);
+		expect(list(object(view.values().glance).boxes).map((b) => object(b).op)).toEqual(
+			keyboard ? (which === "role" ? ["1", "0.38"] : ["0.38", "0.38"]) : ["1", "1"],
+		);
 	});
 
 	it("does not keep hover dimming from a touch device after opening and closing a card", () => {

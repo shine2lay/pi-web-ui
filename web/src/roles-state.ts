@@ -37,6 +37,8 @@ export interface RolesState {
 	checkedAt?: number;
 	/** When this window last heard from the server (this clock, ms). */
 	heardAt?: number;
+	/** When the displayed full overview arrived (this clock, ms); not a heartbeat or an error. */
+	overviewReceivedAt?: number;
 	/** roles-needs-you: when this window last heard that the server looked again since its latest full
 	 *  watch (this clock, ms): a full update or a heartbeat whose server checkedAt is strictly newer
 	 *  than the first full update's since that watch, which may be a replay of an old look. Cleared by
@@ -143,6 +145,7 @@ export function receiveRoles(payload: RolesPayload): void {
 			status: "ready",
 			checkedAt,
 			heardAt: now,
+			overviewReceivedAt: now,
 			appliedAt: lookedAgain(checkedAt, true) ? now : undefined,
 		});
 		return;

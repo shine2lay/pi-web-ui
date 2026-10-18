@@ -36,6 +36,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Tests: fixed accepted/denied titles, malformed input, actual overview route preservation, forged/stale direct service requests in `roles-answer.test.ts` and `roles-overview.test.ts`; existing sealed native question/task/plan browser proof.
 - Undo: revert this patch and install with `pi-web-deploy`; this restores the owner's first-release scope, not automatic approval.
 
+## roles-display-fixes: restore normal contrast and use the displayed overview's receipt
+
+- `local` (owner 2026-10-17: fix the two known display bugs, then connect missing task and question data). Hypotheses and results: `docs/roles-display-fixes.md`.
+- `roles-exact-view.ts` starts focus-driven spotlighting only for `:focus-visible` and suppresses spotlight activation during pointer/programmatic focus restoration. Mouse-close still restores focus without dimming unrelated cards, even when the browser retains keyboard-style focus; keyboard closure, pointer hover and touch behavior remain available.
+- `roles-state.ts` records a local `overviewReceivedAt` only for full overviews, separate from transport `heardAt` and server `checkedAt`. Errors/counts/heartbeats retain the content's receipt. The exact projection ignores unusable receipts and distinguishes no overview from an unknown receipt time. No change to freshness, answer admission, subscriptions, server or persisted data.
+- Tests: `roles-exact.test.ts`, `roles-receipt.test.ts`, and the actual sandboxed component in `tests/roles-exact-test.mjs` (mouse close, keyboard focus, warning-card contrast and content receipt after errors/heartbeats). Fixed inputs only; no live answers.
+- Undo: revert this patch and install with `pi-web-deploy`; no data migration.
+
 ## question-lead: say which department's lead has a task's question, not always Ops
 
 - `local` (owner 2026-10-17, dialog answers "The role whose queue holds it" and "Up the chain, then you"; built directly with the owner). pi-work-management (pi-queue) now sends a task's question to the home chat of the role whose queue holds the task, then up the work registry's chain, then to the owner; Ops only when that role has no home chat. The Queue tab still said "Asking Ops" and the Roles page "question with Ops" for every such question, which is no longer true.

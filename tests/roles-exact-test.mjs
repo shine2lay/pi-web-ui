@@ -151,7 +151,58 @@ try {
 		assert.equal(await panel.evaluate((el) => el.contains(el.ownerDocument.activeElement)), true);
 		await page.keyboard.press("Escape");
 		await panel.waitFor({ state: "hidden" });
-		record("keyboard stays within an open panel and Escape closes it");
+		await page.waitForFunction(() => {
+			const doc = document.querySelector('iframe[title="Roles"]')?.contentDocument;
+			return doc?.activeElement?.matches(":focus-visible") && doc.activeElement.textContent.includes("Ops");
+		});
+		record("keyboard stays within an open panel and Escape restores visible focus");
+		const baselineContrast = async (opacity) => {
+			try {
+				await page.waitForFunction(
+					(expected) => {
+						const doc = document.querySelector('iframe[title="Roles"]')?.contentDocument;
+						const cards = [...(doc?.querySelectorAll('button[aria-haspopup="dialog"]') ?? [])];
+						return (
+							cards.length === 15 &&
+							cards.every((card) => Math.abs(Number(doc.defaultView.getComputedStyle(card).opacity) - expected) < 0.01)
+						);
+					},
+					opacity,
+					{ timeout: 3000 },
+				);
+			} catch (error) {
+				console.log(
+					"CONTRAST DIAGNOSTIC",
+					JSON.stringify(
+						await page.evaluate(() => {
+							const doc = document.querySelector('iframe[title="Roles"]').contentDocument;
+							return {
+								status: doc.querySelector('header [role="status"]').textContent,
+								cards: [...doc.querySelectorAll('button[aria-haspopup="dialog"]')].map((el) => ({
+									name: el.querySelector("span span")?.textContent,
+									opacity: doc.defaultView.getComputedStyle(el).opacity,
+									active: doc.activeElement === el,
+									focusVisible: el.matches(":focus-visible"),
+									hover: el.matches(":hover"),
+								})),
+							};
+						}),
+					),
+				);
+				throw error;
+			}
+		};
+		await frame.getByRole("button", { name: /^Ops / }).click();
+		await settled();
+		await panel.getByRole("button", { name: "Close and return to all departments" }).click();
+		await panel.waitFor({ state: "hidden" });
+		await page.mouse.move(5, 5);
+		await baselineContrast(1);
+		assert.equal(
+			await frame.getByRole("button", { name: /^Ops / }).evaluate((el) => el === el.ownerDocument.activeElement),
+			true,
+		);
+		record("mouse close restores role focus without leaving other cards dimmed");
 		await frame.getByRole("button", { name: "You: open your decisions, questions and spending" }).click();
 		await panel.getByText("A recorded question for ops", { exact: true }).waitFor();
 		await settled();
@@ -164,18 +215,41 @@ try {
 		await page.screenshot({ path: join(output, "owner-inbox.png") });
 		await panel.getByRole("button", { name: "Close and return to all departments" }).click();
 		await panel.waitFor({ state: "hidden" });
-		record("owner inbox has existing safe Open chat actions, no inline consent");
+		await page.mouse.move(5, 5);
+		await baselineContrast(1);
+		record("owner inbox keeps safe Open chat actions and mouse-close contrast");
+		const receipt = (await frame.locator('header [role="status"]').innerText()).match(/\d{2}:\d{2}/)?.[0];
+		assert.ok(receipt);
+		for (const kind of ["error", "count", "heartbeat"]) {
+			await page.evaluate((kind) => window.rolesExactTest.transport(kind), kind);
+			const expected = kind === "heartbeat" ? `Live · updated ${receipt}` : `Update failed · last received ${receipt}`;
+			await page.waitForFunction(
+				(expected) =>
+					document.querySelector('iframe[title="Roles"]')?.contentDocument?.querySelector('header [role="status"]')
+						?.textContent === expected,
+				expected,
+			);
+			assert.equal(await frame.locator('header [role="status"]').innerText(), expected);
+		}
+		await page.evaluate(() => window.rolesExactTest.deliver());
+		record("later errors, count-only messages and heartbeats do not replace the overview receipt");
 		for (const mode of ["error", "disconnected", "stale", "first-error", "loading", "partial"]) {
 			await page.evaluate((mode) => window.rolesExactTest.deliver(mode), mode);
 			await frame.getByText(/current (?:total|asks).*unknown/i).waitFor();
 			assert.ok(!(await frame.locator("body").innerText()).includes("CANARY-PATH"));
-			if (mode === "first-error") await page.screenshot({ path: join(output, "unavailable.png") });
+			if (mode === "first-error") {
+				assert.equal(await frame.locator('header [role="status"]').innerText(), "Unavailable · nothing loaded yet");
+				await page.screenshot({ path: join(output, "unavailable.png") });
+			}
 			if (["disconnected", "stale"].includes(mode)) {
 				const colour = await frame.getByRole("alert").evaluate((el) => getComputedStyle(el).backgroundColor);
 				assert.equal(colour, mode === "stale" ? "rgb(29, 26, 18)" : "rgb(34, 20, 21)");
 				await frame
 					.getByRole("button", { name: mode === "stale" ? "Refresh now" : "Retry now", exact: true })
 					.waitFor();
+				await page.mouse.move(5, 5);
+				await baselineContrast(0.8);
+				assert.ok((await frame.getByRole("button", { name: /^Ops / }).innerText()).includes("Last known"));
 				await page.screenshot({ path: join(output, `${mode}.png`) });
 			}
 			await page.evaluate(() => window.rolesExactTest.deliver());

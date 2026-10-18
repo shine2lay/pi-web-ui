@@ -77,23 +77,32 @@ export interface ExactRoles {
 	lastReceived: boolean;
 	omitted: boolean;
 	now: number;
+	hasOverview: boolean;
 	receivedAt: number | null;
 }
 
 export function projectExactRoles(state: unknown, connection: unknown, now: number): ExactRoles {
 	const model = projectUsefulRoles(state, connection, now);
 	const input = object(state);
-	const rawRoles = object(input?.overview)?.roles;
+	const overview = object(input?.overview);
+	const rawRoles = overview?.roles;
 	const rows: unknown[] = Array.isArray(rawRoles) ? rawRoles : [];
-	const heard = time(input?.heardAt);
+	const received = time(input?.overviewReceivedAt);
 	return {
 		roles: model.roles.map((row) => ({
 			row,
 			panel: projectRolePanel(state, row.roleId),
 			spend: projectSpend(object(rows.find((raw) => object(raw)?.id === row.roleId))?.spend),
 		})),
+		hasOverview: overview !== null,
 		receivedAt:
-			heard !== null && heard <= now + CLOCK_SKEW_MS && Number.isFinite(new Date(heard).getTime()) ? heard : null,
+			overview !== null &&
+			received !== null &&
+			Number.isSafeInteger(received) &&
+			received <= now + CLOCK_SKEW_MS &&
+			Number.isFinite(new Date(received).getTime())
+				? received
+				: null,
 		needs: model.needsYou,
 		source: model.source,
 		roster: model.roster,
