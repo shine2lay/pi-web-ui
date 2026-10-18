@@ -373,6 +373,29 @@ export interface UiTaskRequester {
 	inputs: UiTaskRequesterInput[];
 }
 
+/** owner-contacts (Roles D3): one of the owner's messages to a role's home chat and how far it got. Display
+ *  only. A missing time means that stage wasn't recorded, never that it didn't happen. */
+export interface UiOwnerContact {
+	/** The input id (ri-… browser, rs-… Telegram send). */
+	id: string;
+	role: string;
+	channel: "browser" | "telegram";
+	/** The app admitted it (ms). */
+	askedAt: number;
+	/** A short excerpt of his message. */
+	text?: string;
+	/** pi took it into a turn of the role's chat. */
+	takenAt?: number;
+	/** That turn settled: with text, with no text, or failed. */
+	settledAt?: number;
+	outcome?: "text" | "noText" | "error";
+	/** A short excerpt of the reply (outcome text). */
+	reply?: string;
+	/** Telegram: the reply went to his Telegram (the plugin's send result), or the send failed. */
+	sentAt?: number;
+	sendFailedAt?: number;
+}
+
 export interface UiTaskQueueTask {
 	/** Optional original proposal provenance; never used for permissions. */
 	origin?: UiTaskRequester;
@@ -2614,6 +2637,8 @@ export interface UiRolesOverview {
 	board?: UiBoard;
 	/** roles-panel: the work registry's initiatives and projects (absent: this server reads none). */
 	work?: UiWorkRecords;
+	/** owner-contacts (Roles D3): the owner's own messages to role home chats, newest first (absent: none read). */
+	contacts?: UiOwnerContact[];
 }
 
 /** identity-notes: a role's two-layer memory as its chats get it (pi-identity): the rules (notebook.md)

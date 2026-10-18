@@ -505,8 +505,11 @@ describe("O0 observer, undo and Ops108 baseline (S04, V18)", () => {
 		// Re-pinned by reconnect-trace (Ops #157, Ops decision on its plugin route): it only adds
 		// host.connNotices (plugins.ts) and the reconnect-notice handler (telegram); no Ops108 routing line
 		// changed (its diff removes none). Was b3f0f42f… and 9bd0faeb….
-		expect(sha("server/plugins.ts")).toBe("946635298701612893eada20e25a7f23ffd0fc6b98434d2ac3d28bffb43d06f2");
-		expect(sha("plugins/telegram/index.mjs")).toBe("7e7deac66b5e98849df38c839ad91b7992571b6e4cb11fcc0bbfa33c47d37c3a");
+		// Re-pinned by roles-tracker (owner 2026-10-17, Roles D3): it only adds the display-only send result
+		// host.roles.noteSent (plugins.ts) and its call after a reply's send (telegram); no Ops108 routing line
+		// changed (its diff removes none). Was 94663529… and 7e7deac6….
+		expect(sha("server/plugins.ts")).toBe("553e809deb9cc8ddc6136c35d8c5e4b11dd21a2167a526f21fad27a3249fc173");
+		expect(sha("plugins/telegram/index.mjs")).toBe("8875cff0264f23d747797e8e07ec4b3a28db61533918a6cdc29bbf44b2e9b343");
 		for (const path of [
 			"server/index.ts",
 			"server/agent-service.ts",

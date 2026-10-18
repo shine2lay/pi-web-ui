@@ -17,7 +17,8 @@ import "./patch-remote-catalog.js";
 // Logs whatever holds pi's sign-in lock (auth.json) for 60 s or more; logging only (#134).
 import "./auth-lock-trace.js";
 import { mergeRequesterTurn, requesterForAdmission, requesterInputOf, requesterOfTurn } from "./queue-requester.js";
-import type { UiTaskRequester, UiTaskRequesterInput } from "./protocol.js";
+import { OwnerContacts, ownerInputIds, type OwnerContactOutcome } from "./owner-contacts.js";
+import type { UiOwnerContact, UiTaskRequester, UiTaskRequesterInput } from "./protocol.js";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
@@ -476,7 +477,7 @@ import {
 import { continueRecentRegular, recentRegularFile } from "./recent-session.js";
 import { sessionIndex } from "./session-index.js";
 import { ParticipantLifecycle, type ParticipantTarget, type ParticipantLease } from "./participant-lifecycle.js";
-import { identityIdOnBranch } from "./identities.js";
+import { homeChatOf, identityIdOnBranch } from "./identities.js";
 import {
 	answerRecord,
 	backfill,
@@ -1990,6 +1991,12 @@ let roleGuardService: RoleMessageGuardHost | null = null;
 let roleBoardService: RoleBoard | null = null;
 /** telegram-coo: AgentService hears each run that settles in a chat (role-replies.ts); null until it is made. */
 let roleTurnSettled: ((file: string, rec: RoleTurnRecord) => void) | null = null;
+/** owner-contacts (Roles D3): AgentService records the owner's messages to role home chats and their
+ *  stages (asked, taken into a turn, settled); null until it is made. Display only. */
+let ownerContacts: {
+	asked(file: string | undefined, requester: UiTaskRequesterInput | undefined, text: string): void;
+	stage(ids: string[], ev: { e: "taken" } | { e: "settled"; outcome: OwnerContactOutcome; reply?: string }): void;
+} | null = null;
 /** telegram-coo: the Roles page's snapshot for the roles_overview tool (AgentService.readRolesOverview). */
 let rolesOverviewSource: (() => Promise<UiRolesOverview>) | null = null;
 /** initiatives-page: the decisions store and the kept records, for the decision_log tool (AgentService sets it). */
@@ -2359,6 +2366,8 @@ interface PromptFlow {
 function noteTurnCause(conv: Conversation, flow: PromptFlow, joined: boolean): void {
 	const rec = joined && conv.turnRecord ? conv.turnRecord : (conv.turnPending ??= newTurnRecord());
 	collectRoleInput(rec, flow);
+	// owner-contacts: pi took the owner's message into this chat's turn.
+	if (flow.requester?.kind === "owner") ownerContacts?.stage([flow.requester.id], { e: "taken" });
 }
 
 /** optimistic-send: prompt_ack reasons (English, shown under a "Not sent" message). */
@@ -5198,6 +5207,9 @@ export class ClientSession {
 			const cause = how.cause ?? "role";
 			const requester = requesterForAdmission({ ...how, cause, source: "extension", inputId: `ri-${randomUUID()}` });
 			collectRoleInput((conv.turnPending ??= newTurnRecord()), { ...how, cause, requester });
+			// owner-contacts: admitted and taken in one step here.
+			ownerContacts?.asked(file, requester, text);
+			if (requester.kind === "owner") ownerContacts?.stage([requester.id], { e: "taken" });
 		}
 		return { ok: true };
 	}
@@ -5274,7 +5286,18 @@ export class ClientSession {
 	private settleTurnRecord(conv: Conversation): void {
 		const rec = conv.turnRecord;
 		conv.turnRecord = undefined;
-		if (!rec || !roleTurnSettled || conv.isSubagent || conv.isEphemeral) return;
+		if (!rec || conv.isSubagent || conv.isEphemeral) return;
+		// owner-contacts: the turn that took the owner's message settled.
+		const owners = ownerInputIds(rec);
+		if (owners.length) {
+			const text = rec.error ? "" : rec.text.trim();
+			ownerContacts?.stage(owners, {
+				e: "settled",
+				outcome: rec.error ? "error" : text ? "text" : "noText",
+				...(text ? { reply: text } : {}),
+			});
+		}
+		if (!roleTurnSettled) return;
 		let file: string | undefined;
 		try {
 			file = conv.session.sessionFile ?? undefined;
@@ -10343,6 +10366,12 @@ export class ClientSession {
 			handedOver: false,
 			admission: takePromptAdmission(conv),
 		};
+		// owner-contacts: the owner's message to a role's home chat was admitted.
+		try {
+			ownerContacts?.asked(conv.session.sessionFile ?? undefined, flow.requester, text);
+		} catch {
+			// no file yet: not a role's home chat
+		}
 		try {
 			await this.promptInLine(conv, receipt, flow, text, attachments, queue);
 		} finally {
@@ -15593,6 +15622,13 @@ export class AgentService {
 		progressFeedService = this.progressFeed;
 		// telegram-coo: a role home chat's replies go to the plugins; roles_overview reads the Roles page.
 		roleTurnSettled = (file, rec) => this.roleTurnSettled(file, rec);
+		ownerContacts = {
+			asked: (file, requester, text) => this.noteOwnerAsked(file, requester, text),
+			stage: (ids, ev) => {
+				const at = Date.now();
+				for (const id of ids) this.ownerContactStore.note({ ...ev, id, at });
+			},
+		};
 		rolesOverviewSource = () => this.readRolesOverview();
 	}
 
@@ -16072,6 +16108,7 @@ export class AgentService {
 				latestReportTo: (role) => this.roleMessages.latestReportTo(role),
 				board: () => this.roleBoard.view(),
 				boardOrdersOf: (role) => this.roleBoard.openOrdersOf(role),
+				ownerContacts: () => this.ownerContactList(),
 				rolePaused: () => this.roleMessages.paused,
 				sessionRoots: () =>
 					[process.env.PI_CODING_AGENT_SESSION_DIR, join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "sessions")]
@@ -16162,6 +16199,41 @@ export class AgentService {
 			...(owner ? { forOwner: owner } : {}),
 			...(requester ? { requester } : {}),
 		};
+	}
+
+	/** owner-contacts (Roles D3): the store, in the data folder (made on first use). */
+	private ownerContactsFile?: OwnerContacts;
+	private get ownerContactStore(): OwnerContacts {
+		return (this.ownerContactsFile ??= new OwnerContacts(join(this.stateStore.dataDir, "owner-contacts.jsonl")));
+	}
+
+	/** owner-contacts: the owner's own message (browser or his Telegram) admitted into a role's home chat. */
+	private noteOwnerAsked(file: string | undefined, requester: UiTaskRequesterInput | undefined, text: string): void {
+		if (requester?.kind !== "owner") return;
+		const role = homeChatOf(file, identityRegistry().identities);
+		if (!role) return;
+		this.ownerContactStore.note({
+			e: "contact",
+			id: requester.id,
+			at: Date.now(),
+			role: role.id,
+			channel: requester.channel,
+			text,
+		});
+	}
+
+	/** owner-contacts: the Telegram plugin's result of sending a role's reply to the owner (host.roles.noteSent). */
+	noteOwnerTransport(ids: unknown, ok: unknown): void {
+		if (!Array.isArray(ids)) return;
+		const at = Date.now();
+		for (const id of ids.slice(0, 10)) {
+			if (typeof id === "string") this.ownerContactStore.note({ e: "transport", id, at, ok: ok === true });
+		}
+	}
+
+	/** owner-contacts: the Roles page's list (newest first). */
+	ownerContactList(): UiOwnerContact[] {
+		return this.ownerContactStore.list();
 	}
 
 	/** telegram-coo: a run settled in the chat with this transcript: a role's home chat hands its reply on. */

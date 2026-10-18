@@ -620,6 +620,9 @@ export interface PluginHost {
 	roles: {
 		send(role: string, text: string, opts?: RoleSendOptions): Promise<RoleSendResult>;
 		onReply(handler: (reply: RoleReply) => void): () => void;
+		/** owner-contacts (Roles D3), the Telegram plugin only: whether a reply to the owner's messages with
+		 *  these send ids reached his Telegram. Display only on the Roles page; other plugins: no-op. */
+		noteSent?(ids: string[], ok: boolean): void;
 	};
 	/** reconnect-trace (Ops #157): a "Reconnecting" episode the owner asked to be told about
 	 *  (server/conn-events.ts), as fixed metadata fields only, at most one per 10 minutes. Needs
@@ -2264,6 +2267,8 @@ export class PluginManager {
 		| undefined = undefined;
 	/** telegram-coo: host.roles.onReply listeners (emitRoleReply fans out to them, errors kept apart). */
 	readonly roleReplyHandlers = new Set<(reply: RoleReply) => void>();
+	/** owner-contacts: wired by index.ts to AgentService.noteOwnerTransport (host.roles.noteSent). */
+	roleTransportNoted: ((ids: string[], ok: boolean) => void) | undefined = undefined;
 	/** 插件能力动态授权表（host.requestPermission 的底层，见 server/plugin-permissions.ts）。 */
 	readonly permGrants: PluginPermissionStore;
 	/** 由 index.ts 注入：向浏览器请求能力授权的用户确认（{ok, remember}）。
@@ -4457,6 +4462,14 @@ export class PluginManager {
 					return effects.add("roles.onReply", () => {
 						self.roleReplyHandlers.delete(h);
 					});
+				},
+				noteSent: (ids, ok) => {
+					if (!can("roles") || info.id !== "telegram" || !Array.isArray(ids)) return;
+					try {
+						self.roleTransportNoted?.(ids.slice(0, 10).map(String), ok === true);
+					} catch (err) {
+						console.error(`[plugin:${info.id}] roles.noteSent failed:`, err);
+					}
 				},
 			},
 			connNotices: {

@@ -2314,6 +2314,7 @@ if ("schedulerStore" in service) {
 			}
 		};
 		svc.onRoleReply = (reply) => pluginMgr.emitRoleReply(reply);
+		pluginMgr.roleTransportNoted = (ids, ok) => svc.noteOwnerTransport(ids, ok);
 	}
 }
 // 插件宿主工作区实时跟随当前项目：任意客户端 set_cwd 成功后同步给

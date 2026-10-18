@@ -64,6 +64,63 @@ function projectSpend(value: unknown): ExactSpend {
 	};
 }
 
+/** owner-contacts (Roles D3): one of the owner's messages to a role's home chat. null = not recorded. */
+export interface ExactContact {
+	id: string;
+	role: string;
+	channel: "browser" | "telegram";
+	askedAt: number;
+	text: string | null;
+	takenAt: number | null;
+	settledAt: number | null;
+	outcome: "text" | "noText" | "error" | null;
+	reply: string | null;
+	sentAt: number | null;
+	sendFailedAt: number | null;
+}
+
+const CONTACT_ID = /^(?:ri|rs)-[a-f0-9-]{8,64}$/u;
+const CONTACT_ROLE = /^[a-z0-9][a-z0-9-]{0,39}$/u;
+const CONTACTS_MAX = 200;
+const contactTime = (v: unknown): number | null =>
+	typeof v === "number" && Number.isSafeInteger(v) && v > 0 ? v : null;
+const contactText = (v: unknown, max: number): string | null =>
+	typeof v === "string" && v.trim() !== "" && Array.from(v).length <= max ? v : null;
+
+/** The server's contact list, field by field; a bad item is dropped. Not an array: not connected (null). */
+export function projectContacts(raw: unknown): ExactContact[] | null {
+	if (!Array.isArray(raw)) return null;
+	const out: ExactContact[] = [];
+	for (const item of raw.slice(0, CONTACTS_MAX)) {
+		const c = object(item);
+		if (!c || typeof c.id !== "string" || !CONTACT_ID.test(c.id)) continue;
+		if (typeof c.role !== "string" || !CONTACT_ROLE.test(c.role)) continue;
+		if (c.channel !== "browser" && c.channel !== "telegram") continue;
+		const askedAt = contactTime(c.askedAt);
+		if (askedAt === null) continue;
+		const settledAt = contactTime(c.settledAt);
+		const outcome =
+			settledAt !== null && (c.outcome === "text" || c.outcome === "noText" || c.outcome === "error")
+				? c.outcome
+				: null;
+		const telegram = c.channel === "telegram";
+		out.push({
+			id: c.id,
+			role: c.role,
+			channel: c.channel,
+			askedAt,
+			text: contactText(c.text, 280),
+			takenAt: contactTime(c.takenAt),
+			settledAt: outcome ? settledAt : null,
+			outcome,
+			reply: outcome === "text" ? contactText(c.reply, 1_200) : null,
+			sentAt: telegram ? contactTime(c.sentAt) : null,
+			sendFailedAt: telegram ? contactTime(c.sendFailedAt) : null,
+		});
+	}
+	return out;
+}
+
 export interface ExactRole {
 	row: UsefulRole;
 	panel: RolePanel | null;
@@ -79,6 +136,8 @@ export interface ExactRoles {
 	now: number;
 	hasOverview: boolean;
 	receivedAt: number | null;
+	/** owner-contacts: null = this server doesn't report them (not connected). */
+	contacts: ExactContact[] | null;
 }
 
 export function projectExactRoles(state: unknown, connection: unknown, now: number): ExactRoles {
@@ -95,6 +154,7 @@ export function projectExactRoles(state: unknown, connection: unknown, now: numb
 			spend: projectSpend(object(rows.find((raw) => object(raw)?.id === row.roleId))?.spend),
 		})),
 		hasOverview: overview !== null,
+		contacts: overview !== null ? projectContacts(overview.contacts) : null,
 		receivedAt:
 			overview !== null &&
 			received !== null &&
@@ -168,6 +228,16 @@ export function exactAge(since: number | null, now: number): string {
 	if (minutes < 60) return `${minutes} min`;
 	const hours = Math.floor(minutes / 60);
 	return hours < 48 ? `${hours} h` : `${Math.floor(hours / 24)} days`;
+}
+
+/** A time with its day when it isn't today: "21:04" or "Oct 17, 21:04". */
+export function exactWhen(at: number | null, now: number): string {
+	if (at === null) return "Not recorded";
+	const d = new Date(at);
+	const day = d.toDateString() === new Date(now).toDateString();
+	return day
+		? exactClock(at)
+		: `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })}, ${exactClock(at)}`;
 }
 
 export function exactClock(at: number | null): string {

@@ -2170,6 +2170,14 @@ export function createChat({
 	}
 	/** One plain line from us (not the role), in order with the rest. */
 	const line = (text, to = 0, linkHtml = "") => enqueue(() => sendHtml(`${escapeHtml(text)}${linkHtml}`, to));
+	/** owner-contacts (Roles D3): tell the app whether a reply to these send ids reached his Telegram. */
+	const noteSent = (ids, ok) => {
+		try {
+			if (ids.length) roles?.noteSent?.(ids.map(String), ok);
+		} catch {
+			// display only: never in the way of a reply
+		}
+	};
 	const openLink = () => {
 		const link = chatLink(webAppAddress, store.file);
 		return link ? ` <a href="${escapeHtml(link)}">Open the chat</a>` : "";
@@ -2390,6 +2398,8 @@ export function createChat({
 		}
 		// forOwner: one short line in front saying who answered.
 		const lead = forOwner ? `<i>${escapeHtml(`${Name}, after ${who} answered:`)}</i>\n\n` : "";
+		// owner-contacts: set once every part went out (a failed send leaves it false).
+		let sent = false;
 		enqueue(async () => {
 			const { parts, more: splitMore } = splitReply(text, lead ? { budget: TEXT_BUDGET - lead.length } : {});
 			const more = splitMore || r.cut;
@@ -2401,7 +2411,10 @@ export function createChat({
 						: "";
 				await sendHtml((i === 0 ? lead : "") + parts[i] + rest, i === 0 ? to : 0);
 			}
+			sent = true;
 		});
+		// owner-contacts: the queue runs in order, so this runs after the send above, failed or not.
+		enqueue(async () => noteSent(ownerIds, sent));
 	}
 
 	let briefTimer = null;

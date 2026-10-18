@@ -27,6 +27,15 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: mounted exact-template and fallback-panel tests, overview-tool omission tests, retained historical-projection tests, then the normal gate. No model or Team run is needed. See `docs/roles-overview.md`.
 - Undo: revert this presentation patch and use `pi-web-deploy`; do not re-enable report jobs or remove the owner's global stop without his instruction.
 
+## roles-tracker: how far the owner's messages to roles got
+
+- `local` (owner 2026-10-17: after the next action and requester, the question → contacted → reply → delivered tracker). Hypothesis and scope: `docs/roles-tracker.md`.
+- `server/owner-contacts.ts` keeps display-only events of the owner's own messages to a role's home chat in `<dataDir>/owner-contacts.jsonl` (append-only, 0600, 90 days): asked, taken into a turn, settled (text, no text, failed) and, for Telegram, the plugin's send result through the new optional `host.roles.noteSent`. The Roles overview carries the newest 200; the page lists them in the existing "Your messages" areas with fixed stage words.
+- A missing stage shows "not recorded"; "failed" only with a failure record; a browser reply claims no delivery. Owner inputs come from the same admitted-input record as the requester display, so other roles, plugins, schedules and carry-ons never count as his. Nothing here grants, routes or counts anything.
+- `server/plugins.ts` and `plugins/telegram/index.mjs` change by additions only; the Ops108 routing pins are re-pinned with that reason.
+- Checks: `owner-contacts.test.ts` (fields, stage folding, window, file mode, restart, page projection), the re-pinned `roles-contact.test.ts`, `roles-exact.test.ts`, the build and the landing gate. Minimal checks at the owner's request.
+- Undo: revert and deploy the earlier build; the file may remain and has no effect.
+
 ## roles-floating-header: title and status over the canvas
 
 - `local` (owner 2026-10-17: make the header and status float over the main component, not occupy a separate row). Hypothesis and results: `docs/roles-floating-header.md`.

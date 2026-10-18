@@ -33,6 +33,7 @@ import type {
 	UiRoleReport,
 	UiRoleRequest,
 	UiRolesOverview,
+	UiOwnerContact,
 	UiRoleStatus,
 	UiRoleTask,
 	UiRoleTaskOwing,
@@ -639,6 +640,8 @@ export interface RolesOverviewHost {
 	schedulerJobsFile(): string;
 	/** roles-panel: the work registry's log (pi-work-management's events.jsonl); absent: none is read. */
 	workFile?(): string;
+	/** owner-contacts (Roles D3): the owner's messages to role home chats, newest first; absent: none. */
+	ownerContacts?(): UiOwnerContact[];
 	now?(): number;
 }
 
@@ -698,6 +701,12 @@ export class RolesOverviewReader {
 		} catch {
 			board = undefined;
 		}
+		let contacts: UiOwnerContact[] | undefined;
+		try {
+			contacts = this.host.ownerContacts?.();
+		} catch {
+			contacts = undefined;
+		}
 		return {
 			at,
 			roles,
@@ -706,6 +715,7 @@ export class RolesOverviewReader {
 			reportTz: REPORT_TZ,
 			...(board ? { board } : {}),
 			...(work ? { work } : {}),
+			...(contacts ? { contacts } : {}),
 		};
 	}
 
