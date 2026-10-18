@@ -1962,6 +1962,29 @@ export function applyHeadTail(text: string, head?: number, tail?: number, _lang:
 	return parts.join("\n");
 }
 
+/**
+ * roles-evidence: the chat's id and transcript for a terminal-mode bash command, as the native bash
+ * gives them (PI_SESSION_ID, PI_SESSION_FILE), so `wt new` can record which chat made a branch. A
+ * shell prefix for the command line; an absent value is unset, so a persistent terminal never keeps
+ * an earlier chat's. Empty when there's no session to say.
+ */
+export function terminalSessionEnvPrefix(ctx: unknown): string {
+	const sm = (ctx as { sessionManager?: { getSessionId?: () => unknown; getSessionFile?: () => unknown } } | undefined)
+		?.sessionManager;
+	if (!sm) return "";
+	const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+	const part = (name: string, get: (() => unknown) | undefined) => {
+		let v: unknown;
+		try {
+			v = get?.call(sm);
+		} catch {
+			v = undefined;
+		}
+		return typeof v === "string" && v && !/[\0\n\r]/.test(v) ? `export ${name}=${q(v)}; ` : `unset ${name}; `;
+	};
+	return part("PI_SESSION_ID", sm.getSessionId) + part("PI_SESSION_FILE", sm.getSessionFile);
+}
+
 export function makeTerminalBashTool(
 	terminals: TerminalManager,
 	opts: {
@@ -2020,7 +2043,7 @@ export function makeTerminalBashTool(
 				}),
 			),
 		}),
-		execute: async (_id, p, signal) => {
+		execute: async (_id, p, signal, _onUpdate, ctx) => {
 			const lang: ServerLang = opts.lang?.() ?? "en";
 			const persist = p.persist ?? opts.defaultPersist();
 			// create() 对已存活的同名终端原样返回、对已退出的原地重启。
@@ -2090,8 +2113,10 @@ export function makeTerminalBashTool(
 				// Run from a script file: a typed line longer than the tty's canonical-mode
 				// buffer (1024 bytes on macOS) is silently truncated and hangs the call until
 				// its timeout. Fall back to the typed form only if the file cannot be written.
+				// roles-evidence: the session's id and transcript go in front, out of the banner and the checks.
+				const envPrefix = terminalSessionEnvPrefix(ctx);
 				try {
-					script = writeTerminalBashScript(runCommand, tailFile);
+					script = writeTerminalBashScript(envPrefix + runCommand, tailFile);
 				} catch {
 					script = null;
 				}
@@ -2108,7 +2133,7 @@ export function makeTerminalBashTool(
 				// 标记「有哨兵命令在跑」：terminal_wait 据此区分等待与空闲。
 				// 无哨兵命令没有可等待的哨兵，标记反而误导 terminal_wait。
 				if (!sentinelUnsafe) terminals.setSentinelPending(termId, true);
-				const typed = script ? script.line : buildTerminalBashLine(runCommand, tailFile);
+				const typed = script ? script.line : buildTerminalBashLine(envPrefix + runCommand, tailFile);
 				const inputErr = terminals.inputChecked(termId, typed + "\r");
 				if (inputErr) throw new Error(inputErr);
 				for (;;) {

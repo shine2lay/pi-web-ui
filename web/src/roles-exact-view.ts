@@ -17,9 +17,31 @@ import type { PanelRoleStatus, PanelTask, PanelTaskEvent, RolePanel } from "./ro
 import { ringAnchor, ringLayout } from "./roles-u0/layout";
 import type { SurfaceValues } from "./roles-u0/types";
 import type { RowState, UsefulOpenTarget, UsefulRecord } from "./roles-useful-model";
+import { EVIDENCE_STEPS, type UsefulEvidence } from "./roles-useful-model";
 
 const NR = "Not recorded";
 const MISSING = "Not connected yet";
+/** roles-evidence: the supplied design's evidence styles (its EV map): done, not yet; plus the page's
+ *  missing-data style for a step with no record or not tracked for the repo. */
+const EV_DONE = { fg: "#9FD8B8", bg: "rgba(159,216,184,0.08)", bd: "#2F4A3C", bs: "solid" };
+const EV_PENDING = { fg: "#A9AEB6", bg: "transparent", bd: "#3A3F46", bs: "dashed" };
+const EV_MISSING = { fg: "#C7B8FF", bg: "transparent", bd: "rgba(199,184,255,0.5)", bs: "dashed" };
+
+/** roles-evidence (task #207): the Completion evidence row for a task: each step's time, "not yet", "Not
+ *  recorded" (no record links it to a branch, or no task), or "Not tracked for <repo>". */
+export function exactEvidence(
+	evidence: UsefulEvidence | undefined,
+	now: number,
+): { label: string; at: string; fg: string; bg: string; bd: string; bs: string }[] {
+	return EVIDENCE_STEPS.map((label, i) => {
+		const step = evidence?.steps[i];
+		if (step && "at" in step) return { label, at: exactWhen(step.at, now), ...EV_DONE };
+		if (step?.not === "yet") return { label, at: "not yet", ...EV_PENDING };
+		if (step?.not === "tracked")
+			return { label, at: evidence?.repo ? `Not tracked for ${evidence.repo}` : "Not tracked", ...EV_MISSING };
+		return { label, at: NR, ...EV_MISSING };
+	});
+}
 /** roles-lanes: the supplied design's lane pills (its LS map): a lane in use is "working", a free one "free". */
 const LANE_BUSY = { bg: "#7DB8FF", bd: "#7DB8FF", bs: "solid" };
 const LANE_IDLE = { bg: "transparent", bd: "#4A4F57", bs: "solid" };
@@ -635,14 +657,7 @@ export function createExactRolesView(
 			boxFg: "#F0B95A",
 			boxTitle: "What it’s waiting on",
 			hasEvidence: true,
-			ev: ["Built", "Checked", "Installed", "Live", "Confirmed"].map((label) => ({
-				label,
-				at: "Not connected",
-				fg: "#C7B8FF",
-				bg: "transparent",
-				bd: "rgba(199,184,255,0.5)",
-				bs: "dashed",
-			})),
+			ev: exactEvidence(lead?.evidence, model.now),
 			queueText: `${count(row.counts.active)} active · ${count(row.counts.queued)} queued · ${count(row.counts.done)} done`,
 			hasTaskOmission: !!taskOmission,
 			taskOmission,

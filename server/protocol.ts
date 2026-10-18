@@ -2101,6 +2101,34 @@ export interface UiRoleTask {
 	/** roles-panel: blocked on a lead (rule 24): who owes it, what, when it is due, the reminders sent so far
 	 *  and the leads reminded next if that lead stays silent (then the owner). */
 	owing?: UiRoleTaskOwing;
+	/** roles-evidence (task #207): how far its change has got (working tasks only; absent: an older server). */
+	evidence?: UiTaskEvidence;
+}
+
+/**
+ * roles-evidence (task #207): one step of a task's Completion evidence. at: when it happened. not:
+ * "yet" = the task has a record but hasn't got this far; "recorded" = no record links the task to a
+ * branch (older tasks; nothing is guessed); "tracked" = this step isn't followed for the task's repo
+ * (installs are only followed for pi-web-ui, through pi-web-deploy).
+ */
+export type UiTaskEvidenceStep = { at: number } | { not: "yet" | "recorded" | "tracked" };
+
+/** roles-evidence: a task's Completion evidence, from wt's records and pi-web-deploy's (docs/roles-evidence.md). */
+export interface UiTaskEvidence {
+	/** The repo's main folder name, once a record names it. */
+	repo?: string;
+	/** The commit it landed (short), once it landed. */
+	commit?: string;
+	/** The landed commit's commit time. */
+	built: UiTaskEvidenceStep;
+	/** wt land put it on the base branch (its checks passed). */
+	checked: UiTaskEvidenceStep;
+	/** pi-web-deploy's first install that went in with it and passed its checks (when that job ended). */
+	installed: UiTaskEvidenceStep;
+	/** The live build contains it now (since that install's checks). */
+	live: UiTaskEvidenceStep;
+	/** Its queue task was marked done after that. */
+	confirmed: UiTaskEvidenceStep;
 }
 
 /** roles-panel: a blocked task's lead block, as its queue records it. */

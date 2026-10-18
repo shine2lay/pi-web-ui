@@ -10,6 +10,15 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## roles-evidence: show how far each role's current task has got (built, checked, installed, live, confirmed)
+
+- `local` (owner 2026-10-18, "create those tasks and queue them", Ops #207). Hypothesis H-ROLES-EVIDENCE-1 and result: `docs/roles-evidence.md`. Needs agent-tools' wt records (`branches.jsonl`, `lands.jsonl`; agent-tools 3e2e2bc, landed first).
+- The panel's Completion evidence row was hard-coded "Not connected". `server/roles-evidence.ts` reads wt's `branches.jsonl` and `lands.jsonl`, pi-web-deploy's `history.jsonl` and the live build's `dist/.pi-web-deploy.json` (bounded plain files, re-read only when changed) and asks git whether an install contains a landed commit (once per pair). It joins a task's own chat → the branches that chat made → their newest land → the first install that went in with it and passed its checks → the live build. `roles-overview.ts` sends it as an optional `UiRoleTask.evidence`; no protocol bump. Ids, paths and times only: no chat loading, no model call, no writes.
+- `server/terminals.ts`: the terminal-mode bash exports `PI_SESSION_ID` and `PI_SESSION_FILE` like the plain bash (`terminalSessionEnvPrefix`), so `wt new` records the chat in either mode.
+- The page (`evidenceOf` in `roles-useful-model.ts`, `exactEvidence` in `roles-exact-view.ts`) shows each step's time in the design's done style, "not yet" in its pending style, "Not tracked for <repo>" (Installed and Live outside pi-web-ui) or "Not recorded" (no record: older tasks, nothing guessed; an older server).
+- Checks: `tests/unit/roles-evidence.test.ts` (the join, a newer install containing the commit, failed installs skipped, not yet, another repo, no records, another task's commit never shown, the row's words and styles, the terminal env prefix), then the landing gate.
+- Undo: `pi-web-deploy rollback`, or revert this commit and deploy. The wt records are inert files.
+
 ## roles-model: show each role's model in its panel
 
 - `local` (owner 2026-10-18, second of the "Finish Roles' easy gaps" tasks, Ops #204). Hypothesis H-ROLES-MODEL-1 and result: `docs/roles-model.md`.

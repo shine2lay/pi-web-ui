@@ -67,6 +67,7 @@ import {
 	type TaskQueueEntryLike,
 } from "./task-queue.js";
 import { WorkRecordsFile } from "./work-records.js";
+import { RolesEvidence, type EvidenceView, type RolesEvidencePaths } from "./roles-evidence.js";
 import {
 	isTldrReply,
 	TLDR_ENTRY_TYPE,
@@ -684,6 +685,8 @@ export interface RolesOverviewHost {
 	modelName?(provider: string, modelId: string): string | undefined;
 	/** roles-instructions: the every-chat rules file pi loads (AGENTS.md); absent: no instructions state. */
 	agentsFile?(): string;
+	/** roles-evidence (task #207): wt's records and pi-web-deploy's folders; absent: no evidence is read. */
+	evidencePaths?(): RolesEvidencePaths;
 	now?(): number;
 }
 
@@ -704,6 +707,8 @@ export class RolesOverviewReader {
 	private readonly work: WorkRecordsFile | null;
 	/** Report texts by request id and check time (a report doesn't change once checked). */
 	private readonly reportTexts = new Map<string, { text: string; at?: number; file: string }>();
+	/** roles-evidence: wt's and pi-web-deploy's records, for the working tasks' Completion evidence. */
+	private readonly evidence: RolesEvidence | null;
 
 	constructor(private readonly host: RolesOverviewHost) {
 		this.paths = new ChatPaths(
@@ -714,6 +719,8 @@ export class RolesOverviewReader {
 		this.job = new JsonFile(() => host.schedulerJobsFile(), reportJobOf, null);
 		const workFile = host.workFile?.bind(host);
 		this.work = workFile ? new WorkRecordsFile(workFile) : null;
+		const evidencePaths = host.evidencePaths?.bind(host);
+		this.evidence = evidencePaths ? new RolesEvidence(evidencePaths) : null;
 	}
 
 	private now(): number {
@@ -731,11 +738,17 @@ export class RolesOverviewReader {
 		const job = await this.job.get();
 		const keep = new Set<string>();
 		const roles: UiRoleOverview[] = [];
+		let evidence: EvidenceView | undefined;
+		try {
+			evidence = this.evidence ? await this.evidence.load() : undefined;
+		} catch {
+			evidence = undefined;
+		}
 		// roles-sent: only roles on the page count, as senders and as receivers.
 		const onPage = new Set(defs.map((d) => d.id));
 		const listed = (id: string) => onPage.has(id);
 		for (const def of defs) {
-			const row = await this.role(def, at, asks, runs, job, keep, stuck);
+			const row = await this.role(def, at, asks, runs, job, keep, stuck, evidence);
 			let sent: UiRoleSent | undefined;
 			try {
 				sent = this.host.openRequestsFrom?.(def.id, listed);
@@ -786,6 +799,7 @@ export class RolesOverviewReader {
 		job: { nextRunAt?: number } | null,
 		keep: Set<string>,
 		stuckAsks: Ask[] = [],
+		evidence?: EvidenceView,
 	): Promise<UiRoleOverview> {
 		const problems: string[] = [];
 		const mode = roleWorkMode(def.id, def.role.config, now);
@@ -987,10 +1001,18 @@ export class RolesOverviewReader {
 				const info = infos.find((i) => i.task === t);
 				const busy = info?.file ? this.host.chatState(info.file) === "working" : false;
 				const latest = info?.lines.length ? info.lines[info.lines.length - 1] : undefined;
+				// roles-evidence: its own chat's records only (a task with no chat yet has none).
+				let ev: UiRoleTask["evidence"];
+				try {
+					ev = evidence ? await evidence.of({ file: info?.file, status: t.status, doneAt: t.doneAt }) : undefined;
+				} catch {
+					ev = undefined;
+				}
 				active.push({
 					...taskOf(t, def.id, held),
 					...(busy ? { busy: true } : {}),
 					...(latest ? { latest: lineOf(latest, taskRef(t), !!held) } : {}),
+					...(ev ? { evidence: ev } : {}),
 				});
 			}
 			queue = {

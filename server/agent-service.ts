@@ -16177,6 +16177,13 @@ export class AgentService {
 						process.env.PI_WORK_DIR || join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "work"),
 						"events.jsonl",
 					),
+				// roles-evidence (task #207): wt's state folder (agent-tools lib/wt.mjs stateDir) and pi-web-deploy's
+				// live clone and stage folder (its defaultConfig).
+				evidencePaths: () => ({
+					wtState: process.env.WT_STATE || join(home, ".local", "state", "wt"),
+					deployLive: join(home, "projects", "pi-web-ui"),
+					deployStage: join(home, "projects", ".pi-web-ui-stage"),
+				}),
 			});
 		}
 		return this.rolesReader.read();

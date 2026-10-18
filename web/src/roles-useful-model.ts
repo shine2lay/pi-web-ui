@@ -93,6 +93,38 @@ export interface UsefulRecord {
 	dropped: string | null;
 	pause: PauseMarker;
 	link: UsefulOpenTarget | null;
+	/** roles-evidence (task #207): how far its change has got; working tasks from a server that says it. */
+	evidence?: UsefulEvidence;
+}
+/** roles-evidence: one step: when it happened, or why there's no time (not yet, not recorded, not tracked). */
+export type UsefulEvidenceStep = { at: number } | { not: "yet" | "recorded" | "tracked" };
+export const EVIDENCE_STEPS = ["Built", "Checked", "Installed", "Live", "Confirmed"] as const;
+export interface UsefulEvidence {
+	/** The repo's folder name (null: not said, or unsafe). */
+	repo: string | null;
+	/** The landed commit, short (null: not landed, or unsafe). */
+	commit: string | null;
+	/** In EVIDENCE_STEPS order. */
+	steps: UsefulEvidenceStep[];
+}
+function evidenceStep(value: unknown): UsefulEvidenceStep | null {
+	const o = object(value);
+	if (!o) return null;
+	if (typeof o.at === "number" && Number.isFinite(o.at) && o.at > 0) return { at: o.at };
+	if (o.not === "yet" || o.not === "recorded" || o.not === "tracked") return { not: o.not };
+	return null;
+}
+/** A task's evidence as the server sent it, or undefined when any step is missing or malformed. */
+export function evidenceOf(value: unknown): UsefulEvidence | undefined {
+	const o = object(value);
+	if (!o) return undefined;
+	const steps = [o.built, o.checked, o.installed, o.live, o.confirmed].map(evidenceStep);
+	if (steps.some((s) => s === null)) return undefined;
+	return {
+		repo: typeof o.repo === "string" && /^[\w.-]{1,80}$/.test(o.repo) ? o.repo : null,
+		commit: typeof o.commit === "string" && /^[0-9a-f]{7,40}$/.test(o.commit) ? o.commit : null,
+		steps: steps as UsefulEvidenceStep[],
+	};
 }
 export interface UsefulRecords {
 	available: boolean;
@@ -353,7 +385,8 @@ export function record(row: Fields, id: number, home: string | null): UsefulReco
 	const pause = marker(row, "paused");
 	const state = rowState(row, reported);
 	const latest = state === "working" ? plain(object(row.latest)?.text, TEXT_LIMIT) : null;
-	return {
+	const evidence = evidenceOf(row.evidence);
+	const result: UsefulRecord = {
 		taskId: id,
 		name: plain(row.title, NAME_LIMIT)?.text ?? null,
 		state,
@@ -365,6 +398,8 @@ export function record(row: Fields, id: number, home: string | null): UsefulReco
 		pause,
 		link: taskLink(row, id, home),
 	};
+	if (evidence) result.evidence = evidence;
+	return result;
 }
 function records(
 	value: unknown,
