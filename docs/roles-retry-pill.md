@@ -24,4 +24,15 @@ Ops #215 (owner, 2026-10-18: "lets also remove this … from roles page, make th
 
 **Limits.** No change to the Roles data, other sections, the inbox's own empty text ("Current owner asks could not be confirmed.") or the answer flow. The replay-then-heartbeat timing above is unchanged: right after a page open or a click, the pill can say "Asks unconfirmed: still checking" in amber for up to 30 s. Minimal checks (owner m55390). Undo: revert this commit, then `pi-web-deploy`.
 
-**Result:** unit tests hit (83 of 83 in `tests/unit/roles-exact.test.ts`, after the rebase on #206 and #207). Sealed browser check: all 14 component checks pass (a click, Enter and Space send three `roles_watch`; no alert row in the error, disconnected and stale states). Reference frames: the pill's own crop (`state-chip`) 0 different pixels, and desktop, phone, loading and empty-inbox 0. phone-stale (20 px) and phone-disconnected (26 px) differ only at y 275-369, rounded card edges well below the header, in the same pixels with and without this change (Oct 18 10:28 and 10:31 runs; phone-disconnected is intermittent, 0 in one of them): an older mismatch this change leaves alone. Live: pending.
+**Result:** unit tests hit (83 of 83 in `tests/unit/roles-exact.test.ts`, after the rebase on #206 and #207). Sealed browser check: all 14 component checks pass (a click, Enter and Space send three `roles_watch`; no alert row in the error, disconnected and stale states). Reference frames: the pill's own crop (`state-chip`) 0 different pixels, and desktop, phone, loading and empty-inbox 0. phone-stale (20 px) and phone-disconnected (26 px) differ only at y 275-369, rounded card edges well below the header, in the same pixels with and without this change (Oct 18 10:28 and 10:31 runs; phone-disconnected is intermittent, 0 in one of them): an older mismatch this change leaves alone.
+
+Live (look only, 2026-10-18 13:28-13:29 PDT, 6901c168 installed 13:19, pi-web-deploy's checks all passed, `pi-web-deploy result` 0; own clients, desktop dark and light):
+
+- No banner: no alert row and none of the banner's words, in either theme and after the click.
+- The status was "Asks unconfirmed: some roles not read · last received 13:28" (amber). The pill is one native button inside the `role="status"` div. Its tooltip is the banner's old title and body, then "Click to retry". Its name is the pill's text plus "Retry now". The native tooltip shows under the real pointer (headful Chromium on its own X display; crop kept).
+- It looks as before: the button has no background, border or padding; its colour, font (550 13px) and family are the pill's own; pointer cursor. The pill is 421×32 with a 1px border and 999px radius. The header before (#206's look at 11:10) and after match apart from the time.
+- One click sent exactly one `roles_watch`; a fresh overview came 1.5 s later, and the pill's time changed from 13:28 to 13:29.
+- axe on the pill: no serious or critical findings; text contrast 10.77:1; no page errors.
+- Not seen live: the live status's "Click to refresh" (the asks weren't all confirmed during the look) and Enter and Space. The unit tests and the sealed browser check cover those.
+
+**Hit.** Screenshots and numbers: `~/kept-from-tmp/2026-10-18/roles-retry-pill-live/out1/`.
