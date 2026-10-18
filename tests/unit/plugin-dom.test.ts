@@ -6,7 +6,7 @@
  * - isDomBundleBlocked：wantsDom && !granted 才拦；未知插件（未声明）永远放行。
  * - PluginDomConsent：授权/撤销返回值、落盘与重读、坏 JSON 当空表、空 id 拒绝。
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -75,6 +75,7 @@ describe("PluginDomConsent", () => {
 describe("PluginManager 集成：scan 标记 + 门禁 + 授权", () => {
 	let pdir = "";
 	let mgr: PluginManager;
+	let activationLog: ReturnType<typeof vi.spyOn>;
 
 	function makePlugin(id: string, manifest: Record<string, unknown>): void {
 		mkdirSync(join(pdir, "plugins", id, "client"), { recursive: true });
@@ -84,6 +85,9 @@ describe("PluginManager 集成：scan 标记 + 门禁 + 授权", () => {
 	}
 
 	beforeEach(() => {
+		// Incidental activation logs must not leave console RPC pending at worker teardown.
+		// Warnings/errors and all permission assertions remain unchanged.
+		activationLog = vi.spyOn(console, "log").mockImplementation(() => {});
 		pdir = mkdtempSync(join(tmpdir(), "pi-dom-int-"));
 		mkdirSync(join(pdir, "plugins"), { recursive: true });
 		// pluginsDir = <dataDir>/plugins，consent 落 <dataDir>/plugin-dom.json。
@@ -91,8 +95,12 @@ describe("PluginManager 集成：scan 标记 + 门禁 + 授权", () => {
 	});
 
 	afterEach(() => {
-		mgr.dispose();
-		rmSync(pdir, { recursive: true, force: true });
+		try {
+			mgr.dispose();
+			rmSync(pdir, { recursive: true, force: true });
+		} finally {
+			activationLog.mockRestore();
+		}
 	});
 
 	it("未授权：scan 标 wantsDom + 置灰 error，门禁拦 bundle", async () => {

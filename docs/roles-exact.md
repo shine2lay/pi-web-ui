@@ -64,6 +64,16 @@ Owner direction, 2026-10-17: implement the supplied Roles design 1:1 as the actu
 
 **Result: HIT.** The unit case and actual script-disabled component both expand a 1,100-line report without failing; the first 200 lines and an explicit “900 more lines” row are shown. Ordinary reports retain their prior content.
 
+## H-ROLES-EXACT-6 — isolate incidental fixture logging from worker shutdown
+
+**Wrong / evidence.** Landing on `307db63d` passed all 409 files and 5,906 tests but failed with `EnvironmentTeardownError: [vitest-worker]: Closing rpc while "onUserConsoleLog" was pending`, attributed to `tests/unit/plugin-dom.test.ts`. That fixture awaits plugin loading but emits incidental activation logs. The existing global silent/onConsoleLog settings hide output only after it has crossed the worker RPC.
+
+**One change / reason.** Capture only `console.log` inside that fixture's integration tests, restore it after disposal, and leave warning/error output and all permission/activation assertions intact. These tests do not assert logging. Preventing this incidental output at its source avoids a pending console RPC without suppressing test failures or changing production code.
+
+**Expected / measurement.** The unchanged normal landing gate passes with all assertions and no unhandled teardown error. Keep the failed log as evidence.
+
+**Falsifier.** The same error persists, other assertions fail, or warnings/errors are hidden. Result pending the normal gate.
+
 ## Check receipts
 
 - Original candidate `ede451df`: final `TZ=UTC scripts/check.sh` passed (409 files, 5,871 tests, 6 skipped, build and 74 terminal checks). Evidence: `/home/shinelay/kept-from-tmp/2026-10-17/roles-exact/checks/final-check.log`. The first three stale `roleId` expectations and their correction are retained in the earlier receipts.
