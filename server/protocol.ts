@@ -2176,7 +2176,8 @@ export interface UiRoleQueue {
 	dropped?: UiRoleTask[];
 	/** dropped: how many dropped tasks its queue lists; absent when none (and from an older server). */
 	counts: { active: number; queued: number; done: number; dropped?: number };
-	/** roles-lanes: lanes it may run at once and how many its started tasks hold now (taskQueueLaneUse;
+	/** roles-lanes: lanes it may run at once and how many are in use now: its tasks at work in chats of their own,
+	 *  as pi-queue counts them (taskQueueLaneUse; queue-wait-frees-lane: not on hold, blocked or paused;
 	 *  inUse <= atOnce). Absent from an older server: the page says not recorded. */
 	lanes?: { atOnce: number; inUse: number };
 }

@@ -10,6 +10,7 @@ Ops #203, first of the owner's "Finish Roles' easy gaps" tasks (2026-10-18). Acc
 
 - M = the queue's lanesAtOnce, 2 when it was never set (`server/protocol.ts`, `UiTaskQueue.lanesAtOnce`).
 - N = the lanes held by started open tasks in chats of their own: working, asking, stuck, waiting or blocked, the Queue panel's "Working in their own chats". Parked tasks keep their lane (Ops note n189), owner-paused ones too. Two started tasks in one lane hold one lane. A task worked on in the queue's own chat has no lane and doesn't count. N never exceeds M.
+- Changed 2026-10-18 by queue-wait-frees-lane (Ops #214, owner: a task waiting for a day shouldn't take a slot): N = the tasks at work in chats of their own (working, asking, stuck, not paused), as pi-queue counts its lanes at once. Tasks on hold, blocked or paused count as none.
 - Sent as an optional `UiRoleQueue.lanes: { atOnce, inUse }`; the page takes it only from a readable queue with whole numbers 0 ≤ N ≤ M ≤ 8.
 - The card draws M pills, the first N in the supplied design's "working" style (`#7DB8FF`) and the rest in its "free" style (`#4A4F57` outline), with "N of M lanes in use"; the role panel's Task lanes line says the same sentence.
 

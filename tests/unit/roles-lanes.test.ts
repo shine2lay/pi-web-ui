@@ -30,7 +30,8 @@ describe("taskQueueLaneUse: lanes at once and in use", () => {
 		expect(use([op({ op: "lanes", n: 4 }), add(1, ["a"])])).toEqual({ atOnce: 4, inUse: 0 });
 	});
 
-	it("counts a started task's lane while it works, asks, waits or is blocked (parked keeps its lane)", () => {
+	// queue-wait-frees-lane (owner 2026-10-18): only tasks at work count, the way pi-queue counts its lanes at once.
+	it("counts tasks at work (working, asking, stuck); on hold, blocked or paused by the owner, a task uses none", () => {
 		const q = [
 			op({ op: "lanes", n: 4 }),
 			add(1, ["a"]),
@@ -51,31 +52,46 @@ describe("taskQueueLaneUse: lanes at once and in use", () => {
 			[3, "blocked"],
 			[4, "ready"],
 		]);
-		expect(taskQueueLaneUse(queue)).toEqual({ atOnce: 4, inUse: 3 });
-		// The same task paused by the owner still holds its lane.
+		expect(taskQueueLaneUse(queue)).toEqual({ atOnce: 4, inUse: 1 });
+		// Asking its main chat or stuck, a task is still at work.
+		const asking = [...startInChat(4), op({ op: "ask", id: 4, question: "Which port?", choices: ["a", "b"], n: 1 })];
+		expect(use([...q, ...asking])).toEqual({ atOnce: 4, inUse: 2 });
+		expect(use([...q, ...startInChat(4), op({ op: "stuck", id: 4, question: "How?" })])).toEqual({
+			atOnce: 4,
+			inUse: 2,
+		});
+		// Its wait over, a task counts again only once it is back at work (pi-queue brings it back).
+		expect(use([...q, op({ op: "wait_over", id: 2 })])).toEqual({ atOnce: 4, inUse: 1 });
+		// Paused by the owner, a task at work uses none (pi-queue starts no other task in its lane meanwhile).
 		const paused = taskQueueFromEntries([...q, op({ op: "hold", id: 1, why: "owner" })], true);
 		expect(paused.tasks[0]?.hold?.why).toBe("owner");
-		expect(taskQueueLaneUse(paused)).toEqual({ atOnce: 4, inUse: 3 });
-		// Done or dropped frees it.
-		expect(use([...q, op({ op: "done", id: 1, summary: "ok" })])).toEqual({ atOnce: 4, inUse: 2 });
+		expect(taskQueueLaneUse(paused)).toEqual({ atOnce: 4, inUse: 0 });
+		// Done frees it.
+		expect(use([...q, op({ op: "done", id: 1, summary: "ok" })])).toEqual({ atOnce: 4, inUse: 0 });
 	});
 
-	it("counts lanes, not tasks: two started tasks in one lane hold one lane", () => {
-		expect(use([add(1, ["x"]), add(2, ["x"]), op({ op: "run" }), ...startInChat(1), ...startInChat(2)])).toEqual({
-			atOnce: 2,
-			inUse: 1,
-		});
+	it("counts tasks, as pi-queue does: two at work in lanes a newer task joined use two", () => {
+		const q = [
+			add(1, ["x"]),
+			add(2, ["y"]),
+			op({ op: "run" }),
+			...startInChat(1),
+			...startInChat(2),
+			add(3, ["x", "y"]),
+		];
+		const queue = taskQueueFromEntries(q, true);
+		expect(queue.lanes?.map((l) => l.taskIds)).toEqual([[1, 2, 3]]);
+		expect(taskQueueLaneUse(queue)).toEqual({ atOnce: 2, inUse: 2 });
 	});
 
 	it("never says more lanes in use than at once", () => {
 		const q = [
-			op({ op: "lanes", n: 1 }),
 			add(1, ["a"]),
 			add(2, ["b"]),
 			op({ op: "run" }),
 			...startInChat(1),
 			...startInChat(2),
-			op({ op: "block", id: 1, need: "an answer" }),
+			op({ op: "lanes", n: 1 }),
 		];
 		expect(use(q)).toEqual({ atOnce: 1, inUse: 1 });
 	});

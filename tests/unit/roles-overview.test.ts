@@ -425,7 +425,8 @@ describe("roles-lanes: lanes at once and in use", () => {
 		const plain = transcript("lanes-plain", [queue({ op: "add", id: 1, plan: plan("One") })]);
 		const f = fake([role("busy", home), role("plain", plain), role("none")]);
 		const o = await read(f);
-		expect(byId(o, "busy").queue?.lanes).toEqual({ atOnce: 3, inUse: 2 });
+		// queue-wait-frees-lane: only the task at work counts; the blocked one keeps its lane but uses no slot.
+		expect(byId(o, "busy").queue?.lanes).toEqual({ atOnce: 3, inUse: 1 });
 		expect(byId(o, "plain").queue?.lanes).toEqual({ atOnce: 2, inUse: 0 });
 		// no queue that could be read: nothing to show
 		expect(byId(o, "none").queue).toBeUndefined();

@@ -611,6 +611,58 @@ describe("taskQueueStatusKey", () => {
 	});
 });
 
+// queue-wait-frees-lane (owner 2026-10-18): a task on hold in a chat of its own holds no lane while it waits.
+describe("TaskQueuePanel (a task on hold holds no lane)", () => {
+	const wait = { what: "the install", check: "true", everyMs: 60_000, since: 1, until: 9e12 };
+	const lane = (id: number, status: UiTaskQueueTask["status"], extra: Partial<UiTaskQueueTask> = {}) =>
+		task(id, status, { lane: true, touches: ["a"], chat: { file: `/t${id}.jsonl` }, startedAt: 50, ...extra });
+	const itemOf = (html: string, id: number) => html.match(new RegExp(`data-task-id="${id}"[^]*?</li>`))?.[0] ?? "";
+
+	it("lists it under On hold until its wait is over; back from it, paused by the owner, or blocked, a task keeps its lane", () => {
+		const s = taskQueueSections(
+			q([
+				lane(1, "waiting", { wait }),
+				lane(2, "waiting", { wait: { ...wait, overAt: 70 } }),
+				lane(3, "waiting", { wait, hold: { at: 60, why: "pressed Pause in the Queue panel" } }),
+				lane(4, "blocked", { block: { need: "a login", since: 1, start: 1, tries: 0 } }),
+				task(5, "waiting", { wait }),
+			]),
+		);
+		expect(s.waiting.map((t) => t.id)).toEqual([1, 5]);
+		expect(s.inChats.map((t) => t.id)).toEqual([2, 3, 4]);
+		expect(s.atWork).toEqual([]);
+	});
+
+	it("counts only tasks at work in the status line, as pi-queue counts its lanes at once", () => {
+		const key = (tasks: UiTaskQueueTask[]) =>
+			taskQueueStatusKey(q(tasks, { running: true }), taskQueueSections(q(tasks)));
+		expect(key([lane(1, "waiting", { wait }), lane(2, "working")])).toBe("taskQueueStatusLane");
+		expect(key([lane(1, "working"), lane(2, "asking")])).toBe("taskQueueStatusLanes");
+		expect(key([lane(1, "waiting", { wait })])).toBe("taskQueueStatusOnHold");
+		expect(key([lane(1, "blocked", { block: { need: "a login", since: 1, start: 1, tries: 0 } })])).toBe(
+			"taskQueueStatusRunning",
+		);
+		const pausedAtWork = lane(2, "working", { hold: { at: 60, why: "pressed Pause in the Queue panel" } });
+		expect(taskQueueSections(q([lane(1, "working"), pausedAtWork])).atWork.map((t) => t.id)).toEqual([1]);
+	});
+
+	it("shows it under On hold with what it waits on, without a lane badge, and names the task at work", () => {
+		const queue = q([lane(1, "waiting", { wait }), lane(2, "working"), task(3, "ready", { touches: ["a"] })], {
+			running: true,
+			lanes: [{ n: 1, touches: ["a"], alone: false, taskIds: [2, 3] }],
+		});
+		const html = render(queue, { onCommand: noop, onOpenChat: noop });
+		expect(taskIds(html, "waiting")).toEqual([1]);
+		expect(taskIds(html, "lane")).toEqual([2]);
+		expect(html).toContain("#2 is working in its own chat");
+		const one = itemOf(html, 1);
+		expect(one).toContain('class="task-queue-wait"');
+		expect(one).toContain('class="task-queue-open-chat"');
+		expect(one).not.toContain('class="task-queue-lane"');
+		expect(itemOf(html, 2)).toContain('class="task-queue-lane" data-lane="1"');
+	});
+});
+
 // queue-drop (owner 2026-10-17): tasks the queue's lead dropped show apart, each with why, and are over like done ones.
 describe("TaskQueuePanel (dropped by the lead)", () => {
 	const at = Date.parse("2026-10-17T19:00:00Z");

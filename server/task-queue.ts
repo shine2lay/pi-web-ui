@@ -1037,28 +1037,33 @@ export function taskQueueHeld(
 	return t.hold ?? queue.hold;
 }
 
-/** roles-lanes: a started task in a chat of its own holds its lane (the Queue panel's "Working in their own chats"). */
-const LANE_HELD: ReadonlySet<Status> = new Set(["working", "asking", "stuck", "waiting", "blocked"]);
+/** queue-wait-frees-lane: a task in a chat of its own at work there: worked on, asking its main chat, or stuck. */
+const LANE_AT_WORK: ReadonlySet<Status> = new Set(["working", "asking", "stuck"]);
 
 /**
  * roles-lanes: how many lanes a queue may run at once (`atOnce`: its lanesAtOnce, 2 when not set) and how
- * many its started tasks hold now (`inUse`): the lanes (as the Queue panel numbers them) of its open tasks
- * that run in chats of their own, parked ones (waiting, blocked, paused) too. Never more than `atOnce`.
+ * many are in use now (`inUse`), never more than `atOnce`. queue-wait-frees-lane (owner 2026-10-18): counted
+ * the way pi-queue counts them against its lanes at once (isActive): its tasks at work in chats of their own,
+ * not paused by the owner. A task on hold or blocked uses none (a blocked one keeps its lane for later; one on
+ * hold, not even that).
  */
-export function taskQueueLaneUse(q: Pick<UiTaskQueue, "tasks" | "lanes" | "lanesAtOnce">): {
+export function taskQueueLaneUse(q: Pick<UiTaskQueue, "tasks" | "lanesAtOnce">): {
 	atOnce: number;
 	inUse: number;
 } {
 	const atOnce = q.lanesAtOnce ?? TASK_QUEUE_DEFAULT_LANES;
-	const laneNo = new Map<number, number>();
-	for (const lane of q.lanes ?? []) for (const id of lane.taskIds) laneNo.set(id, lane.n);
-	const held = new Set<string>();
-	for (const t of q.tasks) {
-		if (!t.lane || !LANE_HELD.has(t.status as Status)) continue;
-		const n = laneNo.get(t.id);
-		held.add(n === undefined ? `task ${t.id}` : `lane ${n}`);
-	}
-	return { atOnce, inUse: Math.min(held.size, atOnce) };
+	const inUse = q.tasks.filter((t) => t.lane && LANE_AT_WORK.has(t.status as Status) && !t.hold).length;
+	return { atOnce, inUse: Math.min(inUse, atOnce) };
+}
+
+/**
+ * queue-wait-frees-lane: pi-queue's waitFrees. A task on hold (queue_wait) whose wait isn't over yet holds
+ * nothing (owner 2026-10-18: "we cant and shouldn't take up a task slot for something that is waiting for a
+ * day"): it is in no lane, so tasks that share a touch with it may run meanwhile. Back from its wait, it is in
+ * its lane again, first in line. A task the owner paused keeps its lane, on hold or not.
+ */
+export function taskQueueWaitFrees(t: Pick<TaskQueueTaskAny, "status" | "wait" | "hold">): boolean {
+	return t.status === "waiting" && !t.wait?.overAt && !t.hold;
 }
 
 /**
@@ -1067,9 +1072,10 @@ export function taskQueueLaneUse(q: Pick<UiTaskQueue, "tasks" | "lanes" | "lanes
  * alone (nothing declared, or added before lanes existed: it runs in the queue's own chat) is a lane
  * of its own. Lanes are numbered in queue order of their first open task.
  * queue-side-by-side: shareable touches don't join lanes (a task with only those still has its own).
+ * queue-wait-frees-lane: a task on hold whose wait isn't over is in no lane (taskQueueWaitFrees).
  */
 function lanesOf(all: Task[], shareable: (touch: string) => boolean): (UiTaskQueueLane & { inChat: boolean })[] {
-	const open = all.filter((t) => OPEN.has(t.status));
+	const open = all.filter((t) => OPEN.has(t.status) && !taskQueueWaitFrees(t));
 	const inChat = (t: Task) => !t.lane && t.touches === undefined;
 	const alone = (t: Task) => inChat(t) || !t.touches || t.touches.length === 0;
 	const parent = open.map((_, i) => i);

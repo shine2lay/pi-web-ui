@@ -10,6 +10,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## queue-wait-frees-lane: a task on hold holds no lane, and only tasks at work count as lanes in use
+
+- `local` (owner 2026-10-18: "we cant and shouldn't take up a task slot for something that is waiting for a day", Ops #214). Pairs with pi-queue's waitFrees (pi-queue 1733fe9, landed first); hypothesis H-QUEUE-WAIT-FREE-1 and result in pi-queue's `docs/wait-frees-lane.md`.
+- `server/task-queue.ts`: `lanesOf` leaves out a task on hold whose wait isn't over and that the owner didn't pause (`taskQueueWaitFrees`, pi-queue's waitFrees), so the Queue panel's lanes match pi-queue's. Back from its wait it is in its lane again. `taskQueueLaneUse` (roles-lanes) now counts what pi-queue counts against its lanes at once (isActive): tasks in chats of their own that are working, asking or stuck, and not paused. On hold, blocked or paused, a task counts as none; two at work in lanes a newer task joined count as two.
+- Queue panel (`TaskQueuePanel.tsx`): a task on hold in its own chat is listed under On hold, without a lane badge, with what it waits on and its chat link, until its wait is over. `taskQueueSections` gets `atWork`; the status line counts and names only tasks at work. Blocked and paused tasks stay under "Working in their own chats" with their lane.
+- Checks: `tests/unit/roles-lanes.test.ts` (at work only, asking/stuck count, wait over, paused, merged lanes, cap), `tests/unit/task-queue.test.ts` (lanes while on hold, back, paused; the pi-queue parity test gets an on-hold scenario), `tests/unit/task-queue-panel.test.ts` (sections, status line, row), then the landing gate.
+- Undo: `pi-web-deploy rollback`, or revert this commit (and pi-queue's) and deploy.
+
 ## roles-evidence: show how far each role's current task has got (built, checked, installed, live, confirmed)
 
 - `local` (owner 2026-10-18, "create those tasks and queue them", Ops #207). Hypothesis H-ROLES-EVIDENCE-1 and result: `docs/roles-evidence.md`. Needs agent-tools' wt records (`branches.jsonl`, `lands.jsonl`; agent-tools 3e2e2bc, landed first).
@@ -57,7 +65,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 ## roles-lanes: show each role's task lanes on its card
 
 - `local` (owner 2026-10-18, first of the "Finish Roles' easy gaps" tasks, Ops #203). Hypothesis H-ROLES-LANES-1 and result: `docs/roles-lanes.md`.
-- Cards said "Not recorded" for task lanes although the queue state the overview already reads holds them. `taskQueueLaneUse` in `server/task-queue.ts` counts from the Queue panel's own data: `atOnce` = the queue's lanesAtOnce (2 when not set), `inUse` = the lanes (as the Queue panel numbers them) of started tasks in chats of their own, parked ones (waiting, blocked, paused) too, never more than `atOnce`. `roles-overview.ts` sends it as an optional `UiRoleQueue.lanes`; no protocol bump, no new reads or writes, no queue behaviour change.
+- Cards said "Not recorded" for task lanes although the queue state the overview already reads holds them. `taskQueueLaneUse` in `server/task-queue.ts` counts from the Queue panel's own data: `atOnce` = the queue's lanesAtOnce (2 when not set), `inUse` = the lanes (as the Queue panel numbers them) of started tasks in chats of their own, parked ones (waiting, blocked, paused) too, never more than `atOnce`. Since queue-wait-frees-lane: `inUse` = the tasks at work in chats of their own (working, asking, stuck, not paused), as pi-queue counts them. `roles-overview.ts` sends it as an optional `UiRoleQueue.lanes`; no protocol bump, no new reads or writes, no queue behaviour change.
 - The page takes it only from a readable queue with whole numbers 0 ≤ inUse ≤ atOnce ≤ 8 (`roles-useful-model.ts`); the card draws M pills (the design's "working" style for the first N, "free" for the rest) and "N of M lanes in use", also in the panel's Task lanes line. No queue, an older server or bad numbers still say "Not recorded".
 - Checks: `tests/unit/roles-lanes.test.ts` (default 2, parked and paused tasks count, lanes not tasks, cap, in-chat tasks left out, page checks and words), the reader case in `roles-overview.test.ts`, the mounted card and panel case in `roles-exact.test.ts`, then the landing gate.
 - Undo: `pi-web-deploy rollback`, or revert this commit and deploy.

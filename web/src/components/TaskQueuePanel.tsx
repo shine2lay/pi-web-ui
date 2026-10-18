@@ -74,12 +74,17 @@ export const TASK_QUEUE_PLAN_PARTS: readonly (readonly [Exclude<keyof UiTaskQueu
 ];
 
 export interface TaskQueueSections {
-	/** queue-lanes: tasks working in chats of their own (working, asking their main chat, stuck or on hold
-	 *  there), in queue order. */
+	/** queue-lanes: tasks working in chats of their own (working, asking their main chat, stuck, blocked, or
+	 *  back from a wait there), in queue order. queue-wait-frees-lane: one on hold whose wait isn't over is in
+	 *  no lane: it's listed under On hold (`waiting`), unless the owner paused it. */
 	inChats: UiTaskQueueTask[];
+	/** queue-wait-frees-lane: the tasks of `inChats` that use one of the lanes at once, as pi-queue counts them
+	 *  (isActive): working, asking their main chat or stuck, and not paused. The status line counts these. */
+	atWork: UiTaskQueueTask[];
 	/** 正在做或卡住等用户的那个（最多一个）。 */
 	current?: UiTaskQueueTask;
-	/** 搁着等外面的事的，按队列顺序（等到了、没等到的也在这，直到它们接着做）。 */
+	/** 搁着等外面的事的，按队列顺序（等到了、没等到的也在这，直到它们接着做）。queue-wait-frees-lane: tasks on hold
+	 *  in chats of their own too, while their wait isn't over (they hold no lane meanwhile). */
 	waiting: UiTaskQueueTask[];
 	/** 排着的，按要做的顺序。 */
 	ready: UiTaskQueueTask[];
@@ -97,10 +102,16 @@ export function taskQueueSections(q: UiTaskQueue | undefined): TaskQueueSections
 		t.status === "stuck" ||
 		t.status === "waiting" ||
 		t.status === "blocked";
+	const atWork = (t: UiTaskQueueTask) => t.status === "working" || t.status === "asking" || t.status === "stuck";
+	// queue-wait-frees-lane: pi-queue's waitFrees (the server's taskQueueWaitFrees): on hold, its wait not over,
+	// not paused by the owner. Such a task is in no lane.
+	const freed = (t: UiTaskQueueTask) => t.status === "waiting" && !t.wait?.overAt && !t.hold;
+	const inChats = tasks.filter((t) => t.lane && open(t) && !freed(t));
 	return {
-		inChats: tasks.filter((t) => t.lane && open(t)),
-		current: tasks.find((t) => !t.lane && (t.status === "working" || t.status === "asking" || t.status === "stuck")),
-		waiting: tasks.filter((t) => !t.lane && t.status === "waiting"),
+		inChats,
+		atWork: inChats.filter((t) => atWork(t) && !t.hold),
+		current: tasks.find((t) => !t.lane && atWork(t)),
+		waiting: tasks.filter((t) => t.status === "waiting" && (!t.lane || freed(t))),
 		ready: tasks.filter((t) => t.status === "ready"),
 		done: tasks.filter((t) => t.status === "done").sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0)),
 		dropped: tasks.filter((t) => t.status === "dropped").sort((a, b) => (b.dropped?.at ?? 0) - (a.dropped?.at ?? 0)),
@@ -115,8 +126,9 @@ export function taskQueueStatusKey(q: UiTaskQueue, s: TaskQueueSections): TKey {
 	if (needsYou(s.current) || s.inChats.some(needsYou)) return "taskQueueStatusStuck";
 	if (q.running) {
 		if (s.current) return "taskQueueStatusWorking";
-		if (s.inChats.length === 1) return "taskQueueStatusLane";
-		if (s.inChats.length > 1) return "taskQueueStatusLanes";
+		// queue-wait-frees-lane: only tasks at work count, as pi-queue counts its lanes at once.
+		if (s.atWork.length === 1) return "taskQueueStatusLane";
+		if (s.atWork.length > 1) return "taskQueueStatusLanes";
 		return s.waiting.length > 0 ? "taskQueueStatusOnHold" : "taskQueueStatusRunning";
 	}
 	if (!s.current && s.ready.length === 0 && s.waiting.length === 0 && s.inChats.length === 0) {
@@ -860,8 +872,8 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 					data-paused={queue.hold ? "true" : undefined}
 				>
 					{t(statusKey, {
-						id: s.current?.id ?? stuckInChat?.id ?? s.inChats[0]?.id ?? s.waiting[0]?.id ?? "",
-						n: s.inChats.length,
+						id: s.current?.id ?? stuckInChat?.id ?? s.atWork[0]?.id ?? s.waiting[0]?.id ?? "",
+						n: s.atWork.length,
 					})}
 				</span>
 				{controls &&

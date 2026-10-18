@@ -338,6 +338,36 @@ describe("taskQueueFromEntries (defensive parts)", () => {
 describe("taskQueueFromEntries (lanes)", () => {
 	const byId = (q: ReturnType<typeof replay>, id: number) => q.tasks.find((t) => t.id === id);
 
+	// queue-wait-frees-lane (owner 2026-10-18): a task on hold holds no lane while it waits.
+	it("leaves a task on hold out of the lanes until its wait is over; paused by the owner, it keeps its lane", () => {
+		const base = [
+			{ op: "add", id: 1, plan: plan("One"), touches: ["a"] },
+			{ op: "add", id: 2, plan: plan("Two"), touches: ["a"] },
+			{ op: "add", id: 3, plan: plan("Three"), touches: ["b"] },
+			{ op: "run" },
+			{ op: "start", id: 1, lane: true },
+			{ op: "chat", id: 1, file: "/chats/one.jsonl", title: "Queue #1: One" },
+			{ op: "wait", id: 1, what: "the install", check: "false", everyMs: 60_000, until: 9e12 },
+		];
+		const lanes = (q: ReturnType<typeof replay>) => q.lanes?.map((l) => [l.n, l.taskIds]);
+		const waiting = replay(entries(base));
+		expect(byId(waiting, 1)?.status).toBe("waiting");
+		expect(lanes(waiting)).toEqual([
+			[1, [2]],
+			[2, [3]],
+		]);
+		expect(lanes(replay(entries([...base, { op: "wait_over", id: 1 }])))).toEqual([
+			[1, [1, 2]],
+			[2, [3]],
+		]);
+		const paused = replay(entries([...base, { op: "hold", id: 1, why: "Owner in the Queue panel", by: "panel" }]));
+		expect(byId(paused, 1)?.hold).toBeDefined();
+		expect(lanes(paused)).toEqual([
+			[1, [1, 2]],
+			[2, [3]],
+		]);
+	});
+
 	it("groups open tasks that share a touch into one lane; unrelated ones get lanes of their own", () => {
 		const q = replay(
 			entries([
@@ -638,6 +668,24 @@ describe("taskQueueFromEntries (queue-side-by-side)", () => {
 				{ op: "start", id: 6, lane: true },
 				{ op: "wait", id: 6, what: "CI", check: "false", everyMs: 60_000, until: 9e12 },
 				{ op: "update", id: 7, plan: plan("U2"), after: [] },
+			],
+			// queue-wait-frees-lane: on hold (in no lane), back from a wait, and on hold but paused by the owner.
+			[
+				...["a", "a", "b", "b", "c", "c"].map((touch, i) => ({
+					op: "add",
+					id: i + 1,
+					plan: plan(`W${i + 1}`),
+					touches: [touch],
+				})),
+				{ op: "run" },
+				{ op: "start", id: 1, lane: true },
+				{ op: "wait", id: 1, what: "CI", check: "false", everyMs: 60_000, until: 9e12 },
+				{ op: "start", id: 3, lane: true },
+				{ op: "wait", id: 3, what: "CI", check: "false", everyMs: 60_000, until: 9e12 },
+				{ op: "wait_over", id: 3 },
+				{ op: "start", id: 5, lane: true },
+				{ op: "wait", id: 5, what: "CI", check: "false", everyMs: 60_000, until: 9e12 },
+				{ op: "hold", id: 5, why: "Owner in the Queue panel", by: "panel" },
 			],
 		];
 		for (const ops of scenarios) {
