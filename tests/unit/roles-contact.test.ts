@@ -498,7 +498,10 @@ describe("O0 observer, undo and Ops108 baseline (S04, V18)", () => {
 
 	it("Ops108 routing bytes are unchanged and nothing in production imports O0", () => {
 		const sha = (p: string) => createHash("sha256").update(readFileSync(p)).digest("hex");
-		expect(sha("server/role-replies.ts")).toBe("4df90a6f48be5599ed50c6a5fa0380dfc31a43ef6d74a268348bf40f70a41ad6");
+		// Re-pinned by roles-requester (owner 2026-10-17, Roles D2): it only adds display-only requester
+		// collection (collectRequesterInput, RoleTurnRecord extends RequesterTurn); no Ops108 routing line
+		// changed (its diff removes none). Was 4df90a6f….
+		expect(sha("server/role-replies.ts")).toBe("db3c7c90e4a2358058274723bc0bf81ed953c8c6c3debff653806f8e52fe379f");
 		// Re-pinned by reconnect-trace (Ops #157, Ops decision on its plugin route): it only adds
 		// host.connNotices (plugins.ts) and the reconnect-notice handler (telegram); no Ops108 routing line
 		// changed (its diff removes none). Was b3f0f42f… and 9bd0faeb….
