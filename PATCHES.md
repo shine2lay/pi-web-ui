@@ -38,6 +38,13 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: `tests/unit/initiatives-exact.test.ts` (fixture from the design's 4 sample initiatives, test-only: key strings, selection, tabs and filters, child rows, the empty state and the other drawn states, hidden controls, no sample text in shipped files, the font check) with the Roles exact tests unchanged; one sealed look, `scripts/initiatives-exact-shot.mjs`; then the landing gate.
 - Undo: revert this commit (nothing is installed or mounted by it).
 
+## gate-side-by-side: quick checks run beside the unit tests
+
+- `local` (owner 2026-10-18, "Quick checks side by side", Ops #231, project faster-landing). Hypothesis H-GATE-SIDE-BY-SIDE-1 and result: `docs/gate-side-by-side.md`.
+- `scripts/check.sh` ran every step one after another, so the unit tests (5-6 min) started only after 30-40 s of the protocol, PATCHES.md, typecheck, lint and prettier steps. Now those five start together in the background while `npm test` runs. Each one's output goes to its own temp file and is printed after the tests, in the usual order under its usual "== " heading, then one line with each step's time. The script waits for all of them and fails if any step failed (the unit tests too), naming each failed step with its exit code. Same commands and options, same sealed temp home; the full mode's build and real-PTY steps still run after, one after another, unchanged.
+- Checks: a temporary lint error made `check.sh --fast` exit non-zero, show lint's output and name lint; a sealed timed run beside one of the old order (times in the doc); then the landing gate, which runs this script.
+- Undo: revert this commit. Nothing to install: wt land runs the script of the tree it lands.
+
 ## patches-union: two changes that each add an entry here merge with both entries whole, and a check catches a bad merge
 
 - `local` (owner 2026-10-18, "Early warning + fewer conflicts", Ops #219). Hypotheses H-PATCHES-UNION-1 (MISS) and H-PATCHES-UNION-2, with results: `docs/patches-union.md`.
