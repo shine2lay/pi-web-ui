@@ -10,6 +10,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## roles-lanes: show each role's task lanes on its card
+
+- `local` (owner 2026-10-18, first of the "Finish Roles' easy gaps" tasks, Ops #203). Hypothesis H-ROLES-LANES-1 and result: `docs/roles-lanes.md`.
+- Cards said "Not recorded" for task lanes although the queue state the overview already reads holds them. `taskQueueLaneUse` in `server/task-queue.ts` counts from the Queue panel's own data: `atOnce` = the queue's lanesAtOnce (2 when not set), `inUse` = the lanes (as the Queue panel numbers them) of started tasks in chats of their own, parked ones (waiting, blocked, paused) too, never more than `atOnce`. `roles-overview.ts` sends it as an optional `UiRoleQueue.lanes`; no protocol bump, no new reads or writes, no queue behaviour change.
+- The page takes it only from a readable queue with whole numbers 0 ≤ inUse ≤ atOnce ≤ 8 (`roles-useful-model.ts`); the card draws M pills (the design's "working" style for the first N, "free" for the rest) and "N of M lanes in use", also in the panel's Task lanes line. No queue, an older server or bad numbers still say "Not recorded".
+- Checks: `tests/unit/roles-lanes.test.ts` (default 2, parked and paused tasks count, lanes not tasks, cap, in-chat tasks left out, page checks and words), the reader case in `roles-overview.test.ts`, the mounted card and panel case in `roles-exact.test.ts`, then the landing gate.
+- Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
+
 ## roles-requester: preserve accepted proposal input sources
 
 - `local` (owner 2026-10-17: connect task requesters after the supplied layout and next-action display). Hypothesis and scope: `docs/roles-requester.md`.

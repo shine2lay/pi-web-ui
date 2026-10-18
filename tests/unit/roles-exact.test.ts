@@ -175,6 +175,22 @@ describe("the supplied Roles design with the existing feed", () => {
 		expect(document.querySelector('[role="region"]')?.textContent).toContain("Task 7");
 	});
 
+	it("roles-lanes: draws the queue's lanes on the card and in the panel", () => {
+		const input = role({
+			queue: { ...(role().queue as Row), lanes: { atOnce: 3, inUse: 2 } },
+		});
+		const { view } = fixture(projectExactRoles(state([input]), "open", NOW), true);
+		const box = object(list(object(view.values(1400, 780).glance).boxes)[0]);
+		expect(list(box.lanes).map((l) => object(l).bg)).toEqual(["#7DB8FF", "#7DB8FF", "transparent"]);
+		expect(box.lanesText).toBe("2 of 3 lanes in use");
+		const pills = document.querySelector('[role="img"][aria-label="2 of 3 lanes in use"]');
+		expect(pills?.textContent).toContain("2 of 3 lanes in use");
+		view.openRole("ops", document.body);
+		vi.runAllTimers();
+		expect(object(view.values().ex).lanesLabel).toBe("2 of 3 lanes in use");
+		expect(document.querySelector('[role="region"]')?.textContent).toContain("Task lanes2 of 3 lanes in use");
+	});
+
 	it("mounts the actual supplied template and opens the complete department panel", () => {
 		const { view } = fixture(undefined, true);
 		expect(document.querySelector("h1")?.textContent).toBe("Roles");

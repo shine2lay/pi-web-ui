@@ -1037,6 +1037,30 @@ export function taskQueueHeld(
 	return t.hold ?? queue.hold;
 }
 
+/** roles-lanes: a started task in a chat of its own holds its lane (the Queue panel's "Working in their own chats"). */
+const LANE_HELD: ReadonlySet<Status> = new Set(["working", "asking", "stuck", "waiting", "blocked"]);
+
+/**
+ * roles-lanes: how many lanes a queue may run at once (`atOnce`: its lanesAtOnce, 2 when not set) and how
+ * many its started tasks hold now (`inUse`): the lanes (as the Queue panel numbers them) of its open tasks
+ * that run in chats of their own, parked ones (waiting, blocked, paused) too. Never more than `atOnce`.
+ */
+export function taskQueueLaneUse(q: Pick<UiTaskQueue, "tasks" | "lanes" | "lanesAtOnce">): {
+	atOnce: number;
+	inUse: number;
+} {
+	const atOnce = q.lanesAtOnce ?? TASK_QUEUE_DEFAULT_LANES;
+	const laneNo = new Map<number, number>();
+	for (const lane of q.lanes ?? []) for (const id of lane.taskIds) laneNo.set(id, lane.n);
+	const held = new Set<string>();
+	for (const t of q.tasks) {
+		if (!t.lane || !LANE_HELD.has(t.status as Status)) continue;
+		const n = laneNo.get(t.id);
+		held.add(n === undefined ? `task ${t.id}` : `lane ${n}`);
+	}
+	return { atOnce, inUse: Math.min(held.size, atOnce) };
+}
+
 /**
  * queue-lanes: the open tasks grouped into lanes (pi-queue's lanesOf, with pi-web-ui as the host):
  * tasks that share a touch, directly or through other open tasks, are one lane. A task that runs

@@ -2148,6 +2148,9 @@ export interface UiRoleQueue {
 	dropped?: UiRoleTask[];
 	/** dropped: how many dropped tasks its queue lists; absent when none (and from an older server). */
 	counts: { active: number; queued: number; done: number; dropped?: number };
+	/** roles-lanes: lanes it may run at once and how many its started tasks hold now (taskQueueLaneUse;
+	 *  inUse <= atOnce). Absent from an older server: the page says not recorded. */
+	lanes?: { atOnce: number; inUse: number };
 }
 
 /** roles-overview: a request or question to a role that has no reply yet (the whole role-message store). */

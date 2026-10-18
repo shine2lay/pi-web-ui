@@ -385,6 +385,32 @@ describe("the roles, from disk", () => {
 	});
 });
 
+describe("roles-lanes: lanes at once and in use", () => {
+	it("sends them with a read queue only, as the queue's own lanes count them", async () => {
+		const t1 = transcript("lanes-task1", [tldr("Task 1 started", T0 + MIN)]);
+		const t2 = transcript("lanes-task2", [tldr("Task 2 started", T0 + MIN)]);
+		const home = transcript("lanes-home", [
+			queue({ op: "lanes", n: 3 }),
+			queue({ op: "add", id: 1, plan: plan("One"), touches: ["a"] }),
+			queue({ op: "add", id: 2, plan: plan("Two"), touches: ["b"] }),
+			queue({ op: "add", id: 3, plan: plan("Three"), touches: ["c"] }),
+			queue({ op: "run" }),
+			queue({ op: "start", id: 1, lane: true }),
+			queue({ op: "chat", id: 1, file: t1, title: "Task 1" }),
+			queue({ op: "start", id: 2, lane: true }),
+			queue({ op: "chat", id: 2, file: t2, title: "Task 2" }),
+			queue({ op: "block", id: 2, need: "an answer" }),
+		]);
+		const plain = transcript("lanes-plain", [queue({ op: "add", id: 1, plan: plan("One") })]);
+		const f = fake([role("busy", home), role("plain", plain), role("none")]);
+		const o = await read(f);
+		expect(byId(o, "busy").queue?.lanes).toEqual({ atOnce: 3, inUse: 2 });
+		expect(byId(o, "plain").queue?.lanes).toEqual({ atOnce: 2, inUse: 0 });
+		// no queue that could be read: nothing to show
+		expect(byId(o, "none").queue).toBeUndefined();
+	});
+});
+
 describe("what waits on the owner", () => {
 	it("lists every distinct ask oldest first with its real start, folds copies and leaves out tasks asking their main chat", async () => {
 		// Task 5's chat got stuck (the owner has to answer); task 6 asks its main chat (not the owner).

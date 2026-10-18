@@ -58,6 +58,7 @@ import {
 	TASK_QUEUE_ENTRY_TYPE,
 	taskQueueFromEntries,
 	taskQueueHeld,
+	taskQueueLaneUse,
 	taskRefLabel,
 	type TaskQueueEntryLike,
 } from "./task-queue.js";
@@ -738,6 +739,8 @@ export class RolesOverviewReader {
 		let pausedReason: string | undefined;
 		// queue-paused: the owner's pause on the whole queue.
 		let queueHold: UiTaskQueueHold | undefined;
+		// roles-lanes: lanes at once and in use, as the Queue panel counts them (only when the queue was read).
+		let laneUse: UiRoleQueue["lanes"];
 		let stuckAt = new Map<number, number>();
 		let lastActivity: number | undefined;
 		if (home) {
@@ -751,6 +754,7 @@ export class RolesOverviewReader {
 				running = q.running;
 				pausedReason = q.pausedReason;
 				queueHold = q.hold;
+				laneUse = taskQueueLaneUse(q);
 				stuckAt = s.stuckAt;
 			} catch {
 				problems.push("home chat");
@@ -937,6 +941,7 @@ export class RolesOverviewReader {
 				...(dropped.length ? { dropped: dropped.slice(0, ROLES_DROPPED_MAX).map((t) => taskOf(t, def.id)) } : {}),
 				// dropped only when it has some, so a queue with none reads exactly as before.
 				counts: { active: active.length, queued: ready, done, ...(dropped.length ? { dropped: dropped.length } : {}) },
+				...(laneUse ? { lanes: laneUse } : {}),
 			};
 		}
 

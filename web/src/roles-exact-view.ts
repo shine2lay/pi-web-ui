@@ -18,6 +18,24 @@ import type { RowState, UsefulOpenTarget, UsefulRecord } from "./roles-useful-mo
 
 const NR = "Not recorded";
 const MISSING = "Not connected yet";
+/** roles-lanes: the supplied design's lane pills (its LS map): a lane in use is "working", a free one "free". */
+const LANE_BUSY = { bg: "#7DB8FF", bd: "#7DB8FF", bs: "solid" };
+const LANE_IDLE = { bg: "transparent", bd: "#4A4F57", bs: "solid" };
+
+/** roles-lanes: a card's lane pills and sentence; not recorded without a readable queue's lanes. */
+export function exactLanes(lanes: { atOnce: number; inUse: number } | null | undefined): {
+	lanes: { bg: string; bd: string; bs: string }[];
+	lanesText: string;
+	lanesLabel: string;
+} {
+	if (!lanes) return { lanes: [], lanesText: NR, lanesLabel: "Task-lane occupancy is not recorded" };
+	const text = `${lanes.inUse} of ${lanes.atOnce} ${lanes.atOnce === 1 ? "lane" : "lanes"} in use`;
+	return {
+		lanes: Array.from({ length: lanes.atOnce }, (_, i) => (i < lanes.inUse ? LANE_BUSY : LANE_IDLE)),
+		lanesText: text,
+		lanesLabel: text,
+	};
+}
 const ROLE_STATE: Record<PanelRoleStatus, string> = {
 	"needs-you": "waiting",
 	busy: "working",
@@ -457,9 +475,7 @@ export function createExactRolesView(
 			ownPaused: false,
 			hasRel: false,
 			relText: "",
-			lanes: [],
-			lanesText: NR,
-			lanesLabel: "Task-lane occupancy is not recorded",
+			...exactLanes(row.lanes),
 			op: hover && hover !== row.roleId ? "0.38" : model.lastReceived ? "0.8" : "1",
 			bdNow: hover === row.roleId ? "#9CC7FF" : onYou ? "#6B5426" : "#2A2E34",
 			hoverOn: (e: Event | Element) => {

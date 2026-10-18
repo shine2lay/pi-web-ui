@@ -153,6 +153,8 @@ export interface UsefulRole {
 	/** queue-drop: the tasks its lead dropped, newest first (the server sends at most ROLES_DROPPED_MAX). */
 	dropped: UsefulRecords;
 	spend?: UsefulSpend | null;
+	/** roles-lanes: lanes it may run at once and how many are in use; null (or absent) = not recorded. */
+	lanes?: { atOnce: number; inUse: number } | null;
 }
 export interface NeedsYouItem {
 	/** Validated roster id, for associating the ask with one role's panel, never its display name. */
@@ -225,6 +227,25 @@ export function marker(record: Fields | null, key: string): PauseMarker {
 }
 /** A reported number, 0 included, only when the role's queue was read without problems, the field is
  *  a safe integer >= 0 (no defaults) and it fits the rows received. Otherwise "couldn't read". */
+/** roles-lanes: pi-queue's MAX_LANES. */
+const LANES_MAX = 8;
+/** roles-lanes: a readable queue's lanes, only when both numbers are whole and 0 <= inUse <= atOnce <= 8. */
+function laneUse(value: unknown, readable: boolean): { atOnce: number; inUse: number } | null {
+	const v = object(value);
+	const atOnce = v?.atOnce;
+	const inUse = v?.inUse;
+	return readable &&
+		typeof atOnce === "number" &&
+		typeof inUse === "number" &&
+		Number.isSafeInteger(atOnce) &&
+		Number.isSafeInteger(inUse) &&
+		atOnce >= 1 &&
+		atOnce <= LANES_MAX &&
+		inUse >= 0 &&
+		inUse <= atOnce
+		? { atOnce, inUse }
+		: null;
+}
 function count(value: unknown, readable: boolean, fits: (n: number) => boolean = () => true): ReplayCount {
 	return readable && typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && fits(value)
 		? value
@@ -425,6 +446,7 @@ function projectRole(row: Fields, id: string): ProjectedRole {
 	// The server lists every stuck task's question unless the task, or else its queue, is paused
 	// (taskQueueHeld). Only a well-formed pause excuses a missing question.
 	const hold = queuePresent ? marker(queue, "hold") : "not-reported";
+	const lanes = laneUse(queue?.lanes, readable);
 	const decisionKeys: string[] = [];
 	for (const raw of taskRows) {
 		const task = object(raw);
@@ -432,21 +454,24 @@ function projectRole(row: Fields, id: string): ProjectedRole {
 		if (marker(task, "paused") === "reported-paused" || hold === "reported-paused") continue;
 		decisionKeys.push(`${id}:task:${task.id}`);
 	}
+	const projected: UsefulRole = {
+		roleId: id,
+		roleLabel: name.text,
+		labelTruncated: name.truncated,
+		partial: problems || (queuePresent && (!queue || !active.available || !queued.available)),
+		queueEnabled: typeof queue?.running === "boolean" ? queue.running : null,
+		stopReason: stop(queue?.pausedReason),
+		hold,
+		counts,
+		active,
+		queued,
+		dropped,
+		spend: projectSpend(row.spend),
+	};
+	// roles-lanes: only when recorded, so a role without them reads exactly as before.
+	if (lanes) projected.lanes = lanes;
 	return {
-		role: {
-			roleId: id,
-			roleLabel: name.text,
-			labelTruncated: name.truncated,
-			partial: problems || (queuePresent && (!queue || !active.available || !queued.available)),
-			queueEnabled: typeof queue?.running === "boolean" ? queue.running : null,
-			stopReason: stop(queue?.pausedReason),
-			hold,
-			counts,
-			active,
-			queued,
-			dropped,
-			spend: projectSpend(row.spend),
-		},
+		role: projected,
 		asksSeen: startedChats <= TASK_CHATS_READ,
 		decisionKeys,
 	};
