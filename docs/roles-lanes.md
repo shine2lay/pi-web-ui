@@ -19,4 +19,9 @@ Ops #203, first of the owner's "Finish Roles' easy gaps" tasks (2026-10-18). Acc
 
 **Limits.** No new reads, writes, chat loading or model calls in the overview; no change to how the queue runs lanes or to any queue setting. Minimal checks (owner, Oct 17: "build ship it, only test minimally").
 
-**Result:**
+**Result: HIT** (2026-10-18 09:05 PDT, installed a64522a5; pi-web-deploy checks server, page, reply, bigchat and log all passed).
+
+- Look-only live check (`~/kept-from-tmp/2026-10-18/roles-lanes-live/look.mjs`, own carry-on clients). The Ops Queue panel showed Lanes at once 8, with two tasks working in their own chats (#199 and #203), both in Lane 1. The Ops card said "1 of 8 lanes in use" with 8 pills and 1 busy, the same in readings taken before and after the panel.
+- All 13 roles with a readable queue showed pills and the sentence: architecture 0/5, backend 1/4, data 0/3, design 3/3, frontend 1/3, marketing 1/2, ops 1/8, product 1/3, qa 0/2, rollcall 0/2, security 0/4, systems 0/3, temper 2/4. COO and Docs have no queue and still said "Not recorded". N never exceeded M.
+- Note: two started tasks that share a lane count as one lane in use, as the Queue panel numbers them (Ops shows 1 lane in use with 2 tasks in their own chats).
+- Cosmetic, left as is: on the narrow card the sentence wraps "in use" onto a second line.
