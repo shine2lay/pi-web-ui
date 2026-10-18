@@ -30,12 +30,20 @@ function optional(value: unknown, max: number): boolean {
 	return value === undefined || text(value, max);
 }
 
-/** null means use the original chat: no built-in approvals, clipped packages or unsafe partial strings.
- * Owner-requested first release includes eligible extension permission/budget/deletion dialogs;
- * the narrower generic-dialog filter follows separately (docs/roles-answer-release.md).
+/** Kind/title policy only; membership and complete-form checks still apply.
+ * Generic dialogs carry no producer tag, so only the native queue-plan titles are allowed.
  */
+export function roleAnswerKindAllowed(
+	ask: Pick<Ask, "kind" | "title">,
+): ask is Pick<Ask, "kind" | "title"> & { kind: UiRoleAskView["kind"] } {
+	if (ask.kind === "question" || ask.kind === "stuck") return true;
+	if (ask.kind !== "dialog" || typeof ask.title !== "string" || ask.title.length > 500) return false;
+	return ask.title === "Add to the queue?" || /^Change task #[1-9]\d*\?$/.exec(ask.title)?.[0] === ask.title;
+}
+
+/** null means use the original chat: no other dialogs, built-in approvals or unsafe partial forms. */
 export function askViewOf(ask: Ask): UiRoleAskView | null {
-	if (ask.kind !== "question" && ask.kind !== "dialog" && ask.kind !== "stuck") return null;
+	if (!roleAnswerKindAllowed(ask)) return null;
 	if (!text(ask.id, ID_MAX) || !ask.id || !text(ask.title, 500) || !optional(ask.body, 64_000)) return null;
 	if (!Array.isArray(ask.fields) || !ask.fields.length || ask.fields.length > ROLE_ASK_FIELDS_MAX) return null;
 	let valid = true;

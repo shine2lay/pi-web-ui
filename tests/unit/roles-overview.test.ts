@@ -183,6 +183,35 @@ const ask = (o: Partial<Ask> & { id: string; sessionFile: string; createdAt: num
 	({ kind: "question", title: "A question", fields: [], ...o }) as Ask;
 
 // ---------------------------------------------------------------------------------------------------------
+describe("Roles answer target policy", () => {
+	it("keeps every original-chat route but exposes only question and native-plan targets", async () => {
+		const home = transcript("answer-policy");
+		const f = fake([role("ops", home)]);
+		const cases: [Ask["kind"], string, boolean][] = [
+			["question", "Which option?", true],
+			["dialog", "Add to the queue?", true],
+			["dialog", "Change task #12?", true],
+			["dialog", "Grant subagent spawn budget?", false],
+			["dialog", "Discard preserved subagent worktrees?", false],
+			["dialog", "MCP tool approval", false],
+			["dialog", "Add to the queue?\n", false],
+			["approval", "Add to the queue?", false],
+		];
+		for (const [i, [kind, title]] of cases.entries()) {
+			f.asks.push(ask({ id: `policy-${i}`, kind, title, sessionFile: home, createdAt: T0 + i }));
+		}
+		const before = readFileSync(home, "utf8");
+		const overview = await read(f);
+		expect(overview.asks).toHaveLength(cases.length);
+		for (const [i, [, , allowed]] of cases.entries()) {
+			const item = overview.asks.find((a) => a.focus === `question:policy-${i}`);
+			expect(item?.chat).toEqual({ file: home, where: "home" });
+			expect(item?.askId).toBe(allowed ? `policy-${i}` : undefined);
+		}
+		expect(readFileSync(home, "utf8")).toBe(before);
+	});
+});
+
 describe("Q0 bound queue caller regression", () => {
 	it("nested session metadata never steals an existing line kind", () => {
 		const nested = { type: "session", id: "not-a-header" };

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentService } from "../../server/agent-service.js";
 import { askHub, type Ask, type AskField, type AskFieldAnswer } from "../../server/asks.js";
 import type { UiRoleAsk, UiRolesOverview } from "../../server/protocol.js";
-import { answersFromPage, askViewOf } from "../../server/roles-asks.js";
+import { answersFromPage, askViewOf, roleAnswerKindAllowed } from "../../server/roles-asks.js";
 import { projectRoleAsk, roleAnswerError, roleAnswerForm } from "../../web/src/roles-answer-model.js";
 
 const field = (over: Partial<AskField> = {}): AskField => ({
@@ -132,6 +132,47 @@ describe("a complete bounded ask", () => {
 	});
 });
 
+describe("generic dialog policy", () => {
+	it.each(["Add to the queue?", "Change task #1?", "Change task #12345?"])("keeps native plan %s", (title) => {
+		const ask = fixture({ kind: "dialog", title });
+		expect(roleAnswerKindAllowed(ask)).toBe(true);
+		expect(askViewOf(ask)?.title).toBe(title);
+	});
+	it.each([
+		"MCP tool approval",
+		"Trust project MCP servers?",
+		"MCP sampling request",
+		"MCP elicitation",
+		"Authorize subagent spawn?",
+		"Grant subagent spawn budget?",
+		"Discard preserved subagent worktrees?",
+		"Unrecognised dialog",
+		"",
+		"Add to the queue?\n",
+		"Add to the queue? ",
+		"Prefix Add to the queue?",
+		"Change task #1?\n",
+		"Change task #1?\r\n",
+		"Change task #1? extra",
+		"Change task #0?",
+		"Change task #01?",
+		"Change task #-1?",
+		"Change task #١?",
+	])("keeps %j in the original chat", (title) => {
+		const ask = fixture({ kind: "dialog", title });
+		expect(roleAnswerKindAllowed(ask)).toBe(false);
+		expect(askViewOf(ask)).toBeNull();
+	});
+	it.each(["question", "stuck"] as const)("does not restrict ordinary %s titles", (kind) => {
+		const ask = fixture({ kind, title: "Which option should we use?" });
+		expect(roleAnswerKindAllowed(ask)).toBe(true);
+		expect(askViewOf(ask)).not.toBeNull();
+	});
+	it("does not coerce a malformed dialog title", () => {
+		expect(roleAnswerKindAllowed(fixture({ kind: "dialog", title: null as unknown as string }))).toBe(false);
+	});
+});
+
 describe("complete conditional answers, never defaults", () => {
 	it("has no initial selection and accepts a picked or typed answer", () => {
 		const view = askViewOf(fixture())!;
@@ -214,6 +255,24 @@ function service(ask: Ask = fixture()) {
 	};
 }
 describe("real service lookup and delivery", () => {
+	it("refuses a forbidden dialog even with a forged current overview target", async () => {
+		const ask = fixture({ kind: "dialog", title: "Grant subagent spawn budget?" });
+		const { svc, item, deliver } = service(ask);
+		expect((await svc.rolesAskOpen(item.key)).ok).toBe(false);
+		expect((await svc.rolesAskAnswer(item.key, ask.id, "0".repeat(64), alpha)).ok).toBe(false);
+		expect(deliver).not.toHaveBeenCalled();
+	});
+	it("refuses an already-open plan after it becomes a forbidden dialog", async () => {
+		const ask = fixture({ kind: "dialog", title: "Add to the queue?" });
+		const { svc, item, deliver } = service(ask);
+		const opened = await svc.rolesAskOpen(item.key);
+		expect(opened.ok).toBe(true);
+		if (!opened.ok) throw new Error("fixture did not open");
+		ask.title = "Discard preserved subagent worktrees?";
+		expect((await svc.rolesAskOpen(item.key)).ok).toBe(false);
+		expect((await svc.rolesAskAnswer(item.key, opened.ask.id, opened.ask.revision, alpha)).ok).toBe(false);
+		expect(deliver).not.toHaveBeenCalled();
+	});
 	it("opens without answering, delivers via the existing hub as browser exactly once", async () => {
 		const { svc, item, deliver } = service();
 		const opened = await svc.rolesAskOpen(item.key);

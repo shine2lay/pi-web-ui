@@ -79,11 +79,16 @@ Hypothesis (rule 20):
 The owner picked "Answer from the page" as the Roles page's next piece (dialog "Next Roles piece",
 2026-10-17), built directly with him in Ops's home chat.
 
-Release update: after the full supplied design was installed, the owner requested “release it first
-then fix the issue” with the extension-permission issue explained. This first release includes eligible
-extension permission, budget and deletion dialogs, but not pi-web-ui's built-in tool approvals. Every
-answer still requires the owner's explicit submission of the complete form. The narrower extension
-filter follows as a separate change. `docs/roles-answer-release.md` records this scope and its checks.
+Release history: after the full supplied design was installed, the owner requested “release it first
+then fix the issue” with the extension-permission issue explained. The first release (`ecf28ad4`, live
+at 21:21 PDT on 2026-10-17) included eligible extension permission, budget and deletion dialogs,
+but not built-in tool approvals. `docs/roles-answer-release.md` records that temporary scope.
+
+The separate follow-up now permits generic dialogs only with the exact native queue-plan titles
+`Add to the queue?` or `Change task #N?` (positive decimal task number, no extra characters). Other
+generic dialogs remain listed with Open chat only. Questions and eligible owner-stuck tasks keep
+working. Every answer still requires explicit owner submission and all existing form and target
+checks. This title allow-list is not producer authentication; see `docs/roles-answer-filter.md`.
 The existing dialog is now opened from the exact design's You or department panel; it does not restore
 the old useful-list layout or add another spending implementation to the live design.
 
@@ -95,7 +100,7 @@ the old useful-list layout or add another spending implementation to the live de
   (`spend` in the feed; rule 14 says the Roles page shows it), but nothing on the page draws it since the
   old view was retired.
 - **The change.** Each Needs-you item backed by a live ask (a task's question, a chat's question, an
-  extension's pop-up such as a plan approval) gets an Answer button. It opens the whole ask as the server
+  allowed queue-plan pop-up) gets an Answer button. It opens the whole ask as the server
   holds it: its title, its body (a plan, an owner package), each question with its detail and choices, and
   a typed answer where the ask accepts one. The answer goes through that same list of asks as answered
   "in the browser", the way the Queue tab already answers a stuck task, so it lands, settles and is

@@ -50,6 +50,7 @@ import {
 } from "./role-messages.js";
 import { rulesGoals, rulesWorkMode } from "./role-rules.js";
 import { readRoleSpend } from "./roles-spend.js";
+import { roleAnswerKindAllowed } from "./roles-asks.js";
 import {
 	TASK_QUEUE_ENTRY_TYPE,
 	taskQueueFromEntries,
@@ -878,9 +879,8 @@ export class RolesOverviewReader {
 				...(since > 0 ? { since } : {}),
 				chat: ref,
 				focus: `question:${a.id}`,
-				// roles-answer: questions and extension dialogs can be answered here; built-in approvals cannot.
-				// The owner requested shipping this scope before the narrower extension-permission filter.
-				...(a.kind === "question" || a.kind === "dialog" ? { askId: a.id } : {}),
+				// Keep unrecognised dialogs visible through Open chat, without a page-answer target.
+				...(roleAnswerKindAllowed(a) ? { askId: a.id } : {}),
 			});
 		}
 
