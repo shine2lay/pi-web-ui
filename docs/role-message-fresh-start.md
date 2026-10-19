@@ -102,6 +102,29 @@ S1-S2), so the record can't be wiped or misread at start-up.
   the restart.
 - **Wrong if**: any of those tests sees a guard file change or disappear; a first start doesn't begin gen 1;
   an existing rotation test has to change to pass; the live start isn't "on" on gen-2.
+- **Result: HIT** (2026-10-18, live). The N3 tests failed before the fix. The focused sealed run passed: 15
+  files, 427 tests, 1 skipped (a screenshot check that is off by default). Every case where the ladder
+  turns off left each guard file (lock included) with the same sha256 and mtime, and the rotation tests
+  pass unchanged. Security gave GO on ec50fdcb (rm-de8874f8) and Architecture on 96c7160e (rm-223982b5),
+  each after its own sealed run, with the same counts. `wt land` 74-202fbb landed the 7 commits as 03fb3da3
+  at 23:35 with the full check. `pi-web-deploy` installed it at 23:37, and all five checks passed. At
+  23:38:17 the log said "approval ladder: on (hops 1-6 free; 7-11 COO grant; 12+ owner grant)", with no
+  UNAVAILABLE line since. `current.json` is still `{"gen":2}` (unchanged since 21:56:07), and the only folders
+  are archive-gen-1, gen-1 and gen-2: no gen-3. The real role messages sent after the restart (rm-e4f57028
+  at 23:39:17, rm-44b32fb1 and rm-c30e571c at 23:42:32) were each committed once in gen-2. Each appears once
+  in `role-messages.json` (1,000 messages, no duplicate ids). None of the "wrong if" results happened.
+- **Follow-ups the reviews left, not in this patch** (for one Ops task, A1 first):
+  - A1 (Architecture), caused by this patch: on an install that has never started, a crash after gen-1 is
+    made but before the first `current.json` is written now leaves the ladder off ("current.json is
+    missing"), where it used to heal itself. It fails safe and the alarm shows it; the live folder can't hit
+    it. Fix: write `current.json` first on that path, or make gen-1 under a temporary name and rename it.
+  - O2 (Security, older path): if a rotation throws in `maybeRotate()` after a send was accepted, the chat
+    gets an error for a message that went, so a retry could send it twice. Fix: catch and log it there.
+  - A2: flush the folder after `writeCurrent()`'s rename. A3: one shared "prepared" test in the store.
+    A4: an atomic lock (`openSync` "wx" or `flock`). All three predate this patch.
+  - Known, no change asked (Security): a stale but valid `current.json` (for example `{"gen":1}`) still
+    lets the start remove newer generations, the same as any same-user delete. Hence "never write a smaller
+    N" below.
 
 ## How to use it
 
