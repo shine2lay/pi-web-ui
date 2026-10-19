@@ -35,4 +35,14 @@ The view takes optional fields for them (`opens` on a row and a box item, `detai
 
 ## Results
 
-Not yet tested.
+**HIT** (Oct 18, 20:01). Every item, mark, proof, goal and start day on the live page matched the registry at that moment.
+
+- Focused tests, run once sealed (TZ=UTC): the 7 Initiatives test files, 113 tests. The new file failed 2 at first because of two mistakes in the tests themselves: the registry's replay leaves out a last line with no newline, and an item button's text has no spaces between its number, title and state. Both tests fixed; the file passes 7 of 7. Typecheck, formatting and the extraction check pass. Sealed look at the fixture at 1440 and 390 px: pass, nothing scrolls sideways (`~/kept-from-tmp/2026-10-18/initiatives-steps/2/fixture/`).
+- Land: request 48-47138d, rebased onto step 4 (fd4bc4e3); one test-file conflict, resolved keeping both steps' code; the gate passed. Commit 90995a22.
+- Install: `pi-web-deploy --landed 48-47138d`, 19:49; all 5 checks passed (server, page, reply, big chat, log), result 0. Rollback: fd4bc4e3.
+- Live look, look only (`~/kept-from-tmp/2026-10-18/initiatives-steps/2/live/look.mjs`, run `out1`): 49 of 49 checks; the registry didn't change during it.
+  - 1440 px, every record. Team in Temper: its goal, Started Fri Oct 16, "Outcomes · 0 of 11 done", its 11 items in the registry's order, each "Not started: No project yet" with Architecture (lead) as owner, no proof. The 5 projects in no initiative, each opened from the box: their goals, Started Sun Oct 18, 26 items. The 16 met ones read "Done · Sun Oct 18" and, opened, show their proof, day and "Marked by Ops"; the 10 open ones show no proof, "In progress: <project> · x of y done" and Ops (lead).
+  - 390 px: Team in Temper and Faster landing, every item opened: the same, and nothing scrolls sideways.
+  - The page sent only hello and its read-only watches; its own feed held 1 initiative and 5 projects.
+- Screenshots: `~/kept-from-tmp/2026-10-18/initiatives-steps/2/` desktop-1440, desktop-1440-initiative-items, desktop-1440-project, desktop-1440-project-items, desktop-1440-project-done-when, phone-390, phone-390-full (cut at 12,000 px high), phone-390-project-full (.png).
+- Seen, not misses (for the lead): every item's "Roles on it" reads "No role recorded" (the design's own field, which the registry doesn't fill); next to a long proof, the day wraps onto three lines; the page's first load took 19.3 s on desktop and 8.5 s on the phone (known from step 1: it waits for the Roles overview).
