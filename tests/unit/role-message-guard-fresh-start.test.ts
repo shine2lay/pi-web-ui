@@ -21,7 +21,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	GUARD_APPROVALS_SWITCH,
 	GUARD_FRESH_START_FILE,
@@ -480,6 +480,35 @@ describe("a journal holding a prepared send, or one that can't be parsed, is nev
 			expect.stringMatching(/^approval ladder: fresh start refused \(the journal can't be parsed \(.+\)\)$/),
 		]);
 		expect(snapshot()).toEqual(before);
+	});
+});
+
+describe("one way to begin a generation (Ops #248, Architecture S2)", () => {
+	it("the fresh start and a rotation both begin theirs with beginGeneration, leaving the same files", async () => {
+		const begin = vi.spyOn(
+			RoleMessageGuardHost.prototype as unknown as Record<"beginGeneration", (...a: unknown[]) => Promise<unknown>>,
+			"beginGeneration",
+		);
+		try {
+			const files = (gen: number) =>
+				readdirSync(join(guard(), `gen-${gen}`))
+					.sort()
+					.map((n) => `${n} 0${(statSync(join(guard(), `gen-${gen}`, n)).mode & 0o777).toString(8)}`);
+			const w = await diverged();
+			writeRequest();
+			const { host } = await startHost(w);
+			expect(host.state.status).toBe("ready");
+			const fresh = files(2);
+			await rotate(host, true);
+			expect(current()).toBe(3);
+			expect(begin.mock.calls.map((c) => c.slice(0, 2))).toEqual([
+				[2, "fresh start"],
+				[3, "rotation"],
+			]);
+			expect(files(3)).toEqual(fresh);
+		} finally {
+			begin.mockRestore();
+		}
 	});
 });
 

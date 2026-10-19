@@ -634,9 +634,10 @@ export class RoleMessageGuardHost {
 	// Ops #241 (docs/role-message-fresh-start.md): the operator's one-shot fresh start of an unreadable record.
 
 	/** recover() failed on generation `gen`. With the operator's request for exactly these files, keep a byte-identical
-	 *  copy in archive-gen-<gen> and begin the next generation as rotate() does (gen-<gen> stays in place too); open
-	 *  approvals of the old record end. No request, or one that doesn't match: null, and nothing is written. Runs under
-	 *  the lease. A crash before current.json switches leaves the request, and the next start does it again. */
+	 *  copy in archive-gen-<gen> and begin the next generation with beginGeneration(), as rotate() does (gen-<gen>
+	 *  stays in place too); open approvals of the old record end. No request, or one that doesn't match: null, and
+	 *  nothing is written. Runs under the lease. A crash before current.json switches leaves the request, and the next
+	 *  start does it again. */
 	private async freshStart(gen: number): Promise<{ store: GuardFileStore; dir: string } | null> {
 		const request = this.freshStartRequest(gen);
 		if (request === null) return null;
@@ -658,19 +659,11 @@ export class RoleMessageGuardHost {
 				throw new Error(`fresh start: the archive copy of ${name} differs`);
 		}
 		fsyncDir(archive);
-		const next = gen + 1;
-		const dir = join(this.o.dir, `gen-${next}`);
-		rmSync(dir, { recursive: true, force: true });
-		mkdirSync(dir, { recursive: true });
-		const store = this.newStore(dir);
-		const r = await store.initialize(this.freshState(), { v: 1, paused: false, messages: [] });
-		if (r.state !== "ready") throw new Error(`fresh start: ${r.reason}`);
-		this.writeCurrent(next);
-		this.cleanGenerations(next);
+		const begun = await this.beginGeneration(gen + 1, "fresh start"); // start() adopts it
 		this.writeHistory([{ at: this.now(), event: "revoked_all" }]);
 		this.markFreshStartDone();
 		this.o.log(`approval ladder: fresh start from generation ${gen} (old record kept in archive-gen-${gen})`);
-		return { store, dir };
+		return begun;
 	}
 
 	/** The request for generation `gen`: null when there is none, why it can't be acted on, or the request when it is
@@ -953,19 +946,33 @@ export class RoleMessageGuardHost {
 			const at = this.currentGeneration();
 			if (typeof at === "string") throw new Error(`rotation: current.json ${at}`); // Ops #248 (N3): never guess
 			const gen = at + 1;
-			const dir = join(this.o.dir, `gen-${gen}`);
-			rmSync(dir, { recursive: true, force: true });
-			mkdirSync(dir, { recursive: true });
-			const store = this.newStore(dir);
-			const r = await store.initialize(this.freshState(), { v: 1, paused: false, messages: [] });
-			if (r.state !== "ready") throw new Error(`rotation: ${r.reason}`);
-			this.writeCurrent(gen);
-			this.useStore(store, dir);
-			this.cleanGenerations(gen);
+			await this.beginGeneration(gen, "rotation", (store, dir) => this.useStore(store, dir));
 			this.historySeen = new Map();
 			if (force) this.writeHistory([{ at: this.now(), event: "revoked_all" }]);
 			this.o.log(`approval ladder: guard store generation ${gen}${force ? " (revoked open approvals)" : ""}`);
 		});
+	}
+
+	/** Ops #248 (Architecture S2): the one way a generation begins, for rotate() and the fresh start, so the two can't
+	 *  drift. Removes a half-made gen-<gen>, initialises it with a fresh state (the store flushes its files), switches
+	 *  current.json to it (flushed), hands the store to `adopt` when given, then removes generations older than the one
+	 *  before it. A crash before the switch leaves the old generation current. `what` names the caller in an error.
+	 *  Runs under the lease. */
+	private async beginGeneration(
+		gen: number,
+		what: string,
+		adopt?: (store: GuardFileStore, dir: string) => void,
+	): Promise<{ store: GuardFileStore; dir: string }> {
+		const dir = join(this.o.dir, `gen-${gen}`);
+		rmSync(dir, { recursive: true, force: true });
+		mkdirSync(dir, { recursive: true });
+		const store = this.newStore(dir);
+		const r = await store.initialize(this.freshState(), { v: 1, paused: false, messages: [] });
+		if (r.state !== "ready") throw new Error(`${what}: ${r.reason}`);
+		this.writeCurrent(gen);
+		adopt?.(store, dir);
+		this.cleanGenerations(gen);
+		return { store, dir };
 	}
 
 	/** After a restart: finish what E accepted before it (same identity only; no blind resend). */
