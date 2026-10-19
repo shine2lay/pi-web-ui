@@ -7173,11 +7173,38 @@ each; hypothesis H-LADDER-SAFE-START-1 in `docs/role-message-fresh-start.md`.
 - S2: `beginGeneration()` begins a generation for both `rotate()` and the fresh start (same files, order
   and flushes); the existing rotation tests are unchanged.
 
+### Review follow-ups (Ops #253, branch ladder-followups)
+
+What the #248 reviews left (Architecture `ops248-ladder-safe-start.md` suggestions 1-4, Security
+`REVIEW-ec50fdcb` O2), one commit each; hypothesis H-LADDER-FOLLOWUPS-1 in
+`docs/role-message-fresh-start.md`.
+
+- A1: a first start (no generation folder yet) writes `current.json` (`{"gen":1}`) before it makes gen-1,
+  so a crash before its store is ready no longer leaves a generation without `current.json` (N3 turns that
+  off). N3 itself is unchanged.
+- O2: `maybeRotate()` never throws. A rotation that fails stays on the open store while `current.json`
+  still names it (`approval ladder: rotation failed (<why>); staying on generation N`, once per reason),
+  else turns the ladder off (`rotation: <why>`). A send that was accepted always comes back as accepted; a
+  start whose rotation turned the ladder off doesn't log "on".
+- A2: `writeCurrent()` flushes the guard folder after its rename.
+- A3: `holdsPrepared()` (store) is the one test of a prepared send, for `guardJournalRefusal()`,
+  `recover()` and the two lookups; messages unchanged.
+- A4: `takeLock()` writes and flushes the pid to `lock.tmp-<pid>`, then links it to `lock` (fails when
+  `lock` exists). A live other server's lock turns the ladder off as before; a gone server's, an
+  unreadable one or this process's own is moved aside to `lock.stale-<pid>`, given back if it turns out
+  to be a live server's, else removed, and the link is tried once more; a second failure turns the ladder
+  off (`another server (pid N) took the guard as this one started`). The lock file is now mode 0600.
+  `stop()` unchanged.
+
 ### How it was checked
 
 - The new test file and the role-message-guard host tests, sealed; then the land gate.
 - Ops #248: each degrade case compares every guard file's sha256 and mtime before and after; N3's tests
   failed before its fix.
+- Ops #253: the A1, O2, A2 and A4 tests failed before their fix (A4: two servers starting at once both
+  came up holding the guard); A3's test checks the fresh start's refusal and `recover()` agree at all 12
+  points where a send can stop. New file `tests/unit/role-message-guard-host-files.test.ts`; no existing
+  test changed.
 
 ### Undo and syncing
 
