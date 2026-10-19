@@ -187,6 +187,26 @@ A2, A3, A4.
   covers host 0ab89fd0, store 41aaae5b and script ca463111: a change to those needs its delta look again, tests
   or docs alone an FYI. Architecture rm-8e4d9e40 (`/home/shinelay/architecture-dept/reviews/ops253-ladder-followups.md`)
   at 5039dc92 found A4's two details sound for two servers.
+- **Result: HIT** (2026-10-19, live).
+  - Tests: the A1, O2, A2 and A4 tests failed before their fix. A1: the next start was off, "current.json is
+    missing". O2: the rotation's error was thrown into the send, and the start turned off. A2: no flush after the
+    four renames of `current.json`. A4: two servers starting at once both came up holding the guard. A4's
+    take-over test passes on the old code too, by its nature. The focused sealed run of the guard tests passed (16
+    files, 448 tests, 1 skipped, the skip already in the view tests). No existing test changed, and no case that
+    turns the ladder off wrote a guard file (after a send, only that send's own gen-2 files changed).
+  - Land and install: `wt land` 78-3f986f landed the 8 commits on mine as 7a6bc2fb at 01:52 with the full check
+    (444 files, 6370 tests, 6 skipped). It came after a clean rebase onto c83fdee3: the range-diff is identical,
+    and the host, store and script are the ones both reviews covered. `pi-web-deploy` installed it at 01:55:
+    result 0, all five checks passed.
+  - Live: at 01:56:21 the log said "approval ladder: on (hops 1-6 free; 7-11 COO grant; 12+ owner grant)", with
+    no other ladder line by 01:59. `current.json` is still `{"gen":2}` (unchanged since 2026-10-18 21:56:07), and
+    the only folders are archive-gen-1, gen-1 and gen-2: no gen-3. `lock` names the new server (pid 738269) with
+    mode 0600, so the new code took it, and no `lock.tmp-*` or `lock.stale-*` is left (Security's check). The
+    first real role messages after the restart, rm-c6d11cae and rm-d149774a at 01:59:48, were each committed
+    once in gen-2 (journal and accepted copy) and appear once in `role-messages.json` (1,000 messages, no
+    duplicate ids; gen-2 has 82, no duplicates). None of the "wrong if" results happened.
+  - Not seen live, by design: a failed rotation, a first start, a crash or two servers starting at once. The
+    tests above cover those.
 - **Follow-ups the reviews left, not in this patch** (none blocks the install):
   - B1 (Architecture), what A4 leaves open: between moving a stale lock aside and giving it back there is no
     `lock`. A third server starting in that moment, or a later start after the mover dies there, makes the
