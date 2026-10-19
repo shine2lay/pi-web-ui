@@ -89,7 +89,7 @@ S1-S2), so the record can't be wiped or misread at start-up.
   - N2: the tests run the script with `PI_WEB_DATA_DIR` set to the test's temporary data dir, and check that
     it is one.
   - S1: the fresh start acts only on a journal the store reads as committed. A prepared transaction (named
-    by its message id) or a journal the store can't parse: "fresh start refused (<why>)", the ladder off, and
+    by its operation id) or a journal the store can't parse: "fresh start refused (<why>)", the ladder off, and
     nothing cleaned or rewritten. The script refuses both too.
   - S2: one helper begins a generation for `rotate()` and the fresh start: remove a half-made folder, make
     it, write a fresh state, switch `current.json`. Same files, same order, same flushes.
@@ -124,24 +124,44 @@ Only when the start log says `approval ladder UNAVAILABLE (recover: ...)`. Run f
 If the log says `approval ladder: fresh start refused (<why>)`, nothing was written and the request stays
 where it is so the reason can be seen. Fix the cause, or make a new request, and restart again.
 
+## If the log says UNAVAILABLE (current.json ...)
+
+Ops #248 (Security N3): once a generation folder exists, the start trusts `current.json` only when it can
+read it, understands it, and the `gen-N` folder it names is there. Otherwise the log says
+`approval ladder UNAVAILABLE (current.json <why>)` and the ladder stays off before the lock: no guard file is
+written or removed. The fresh start doesn't apply here, and the script refuses. To bring the ladder back:
+
+1. Look in `~/.pi-web-ui/role-message-guard/` for the newest `gen-N` folder that holds the record
+   (`journal.json` and `accepted.json`): the highest N. An `archive-gen-N` folder is a copy, never the answer.
+2. Write `{"gen":N}` and a newline to `role-message-guard/current.json`, then `pi-web-deploy restart`. The
+   start logs `approval ladder: on (...)` on gen-N.
+
+Never write a smaller N than the newest: each start keeps only gen-N and gen-(N-1) and removes every other
+`gen-` folder, newer ones included. Never delete, move or rename a `gen-` folder by hand. If no `gen-N`
+folder is left, leave the ladder off and ask Ops; don't rebuild one by hand.
+
 ## What the next start checks and does
 
 It looks at a request only after `recover()` failed on the current generation N, under the guard's lease
-and lock. It acts only when all of these hold; otherwise it stays off and logs why:
+and lock (N is the one `current.json` names; when that isn't understood the start stops earlier, see above).
+It acts only when all of these hold; otherwise it stays off and logs why:
 
-- the request is a plain file of this user, not writable by group or others, in the format above;
+- the request, opened once without following a link, is a plain file of this user with mode 0600 and at
+  most 4 KiB, in the format above (Ops #248, N1);
 - `gen` is the current generation;
 - it isn't dated in the future, is good for at most 24 h, and hasn't expired;
-- both files of gen-N are untouched for at least 2 h and their sha256s are the request's.
+- both files of gen-N are untouched for at least 2 h and their sha256s are the request's;
+- gen-N's journal holds a finished (committed) transaction the store can read. One holding a prepared send,
+  or one it can't parse, is never started over (Ops #248, S1).
 
 Then, in this order:
 
 1. Copy gen-N's two files into `role-message-guard/archive-gen-N/` (flushed, then their sha256 checked
    again). That name is outside the generations clean-up, so the copy stays. gen-N itself stays in place
    too, as the one older generation kept; it goes with the next rotation.
-2. Start gen-(N+1) the way a rotation does: remove a half-made gen-(N+1), write a fresh state (the native
-   record's last-hour sends still count toward the 20 an hour; no open requests, grants or outbox), switch
-   `current.json` to N+1.
+2. Start gen-(N+1) with the helper a rotation uses (`beginGeneration()`, Ops #248 S2): remove a half-made
+   gen-(N+1), write a fresh state (the native record's last-hour sends still count toward the 20 an hour; no
+   open requests, grants or outbox), switch `current.json` to N+1.
 3. Write `revoked_all` to `history.jsonl`, rename the request `fresh-start.done-<ms>.json`, log
    "approval ladder: fresh start from generation N (old record kept in archive-gen-N)".
 
@@ -211,4 +231,14 @@ unreadable as the live one was):
   done;
 - the off switch: off at once, no guard file read or written, sends the native way; another value leaves
   approvals on;
-- the script refuses a readable record and files changed within 2 h.
+- the script refuses a readable record and files changed within 2 h;
+- Ops #248, on gen-2: `current.json` missing, garbled or naming a missing generation: off with the reason,
+  every guard file (lock included) the same sha256 and mtime, nothing cleaned; a rotation with a garbled
+  `current.json` throws and removes nothing (N3);
+- a request that is a link or a pipe (the start isn't held up), over 4 KiB, or not mode 0600: refused and
+  left in place (N1);
+- a journal holding a prepared send, or one that can't be parsed: refused, off, every guard file as it was
+  (S1);
+- the fresh start and a rotation begin their generation with one helper and leave the same files (S2);
+- the script runs with `PI_WEB_DATA_DIR` on the test's temp folder (N2); it also refuses a request over
+  4 KiB, a prepared or unparseable journal, and a missing `current.json` while a generation exists.
