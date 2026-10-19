@@ -544,6 +544,8 @@ export class RoleMessageGuardHost {
 	private decisions: GuardDecisionEvent[] = [];
 	private questions: GuardQuestionRecord[] = [];
 	private lockPath = "";
+	/** Ops #257 (B1): the lock file this server linked (its device and inode), null while it holds none. */
+	private lockHeld: { dev: number; ino: number } | null = null;
 	/** history.jsonl: what each request and grant looked like at the last check (null until seeded at start). */
 	private historySeen: Map<string, string> | null = null;
 	/** Stores already warned about (80% full); cleared once below 70%. */
@@ -587,7 +589,7 @@ export class RoleMessageGuardHost {
 			if (held) return this.degrade(held);
 			this.decisions = this.readJsonl<GuardDecisionEvent>(join(this.o.dir, "decisions.jsonl"));
 			this.questions = this.readJson<GuardQuestionRecord[]>(join(this.o.dir, "questions.json")) ?? [];
-			await this.lease.run(async () => {
+			await this.exclusive(async () => {
 				this.cleanGenerations(gen);
 				let dir = join(this.o.dir, `gen-${gen}`);
 				// Ops #253 (Architecture A1): a first start names its generation before it makes it. A crash before the store
@@ -626,6 +628,8 @@ export class RoleMessageGuardHost {
 			if (this.state.status !== "ready") return; // Ops #253 (O2): the rotation turned approvals off (logged)
 			this.tidyHistory();
 			await this.afterChange();
+			const lost = this.lockLost(); // Ops #257 (B1): still this server's lock before it says "on"
+			if (lost) return this.degrade(lost);
 			this.o.log("approval ladder: on (hops 1-6 free; 7-11 COO grant; 12+ owner grant)");
 		} catch (err) {
 			this.degrade((err as Error).message);
@@ -633,12 +637,27 @@ export class RoleMessageGuardHost {
 	}
 
 	stop(): void {
-		if (!this.lockPath) return; // never started (off, or start() not called)
+		if (!this.lockHeld) return; // never held it (off, another server's, or start() not called)
 		try {
-			if (this.readLock() === process.pid) rmSync(this.lockPath, { force: true });
+			// Ops #257 (B1): only the file this server linked, never a lock another server took since.
+			if (!this.lockLost()) rmSync(this.lockPath, { force: true });
 		} catch {
 			/* best effort */
 		}
+		this.lockHeld = null;
+	}
+
+	/** Ops #257 (B1): the lease, entered only while `lock` is still the file this server linked. Every guard write
+	 *  runs under the lease, so once another server holds the lock, approvals turn off here and the work doesn't run. */
+	private exclusive<T>(work: () => Promise<T>): Promise<T> {
+		return this.lease.run(async () => {
+			const lost = this.lockLost();
+			if (lost) {
+				if (this.status_ === "ready") this.degrade(lost);
+				throw new Error(lost);
+			}
+			return work();
+		});
 	}
 
 	private degrade(reason: string): void {
@@ -744,13 +763,29 @@ export class RoleMessageGuardHost {
 	private readLock(): number | null {
 		return readPid(this.lockPath);
 	}
+	/** Ops #257 (B1): why `lock` is no longer the file this server linked (same device and inode), or null while it is. */
+	private lockLost(): string | null {
+		const held = this.lockHeld;
+		if (!held) return "this server holds no lock on the guard";
+		let st: ReturnType<typeof lstatSync> | undefined;
+		try {
+			st = lstatSync(this.lockPath);
+		} catch {
+			return "the guard's lock is gone";
+		}
+		if (st && st.dev === held.dev && st.ino === held.ino) return null;
+		return `another server (pid ${(st?.isFile() ? this.readLock() : null) ?? "unknown"}) took the guard's lock`;
+	}
 	/** Ops #253 (Architecture A4): take the lock in one step that fails when it is there, so two servers starting at
 	 *  once can't both hold it. The pid is written and flushed to a file of this process's own, then linked to `lock`: a
 	 *  link fails when `lock` exists, as openSync "wx" does, and the lock is never seen empty. A lock that is there: a
 	 *  live other server's turns the ladder off, as before. A gone server's (dead pid), an unreadable one or this
-	 *  process's own is moved aside (a rename takes the file that is there, never one made after the look), given back
-	 *  if it is a live server's after all, else removed, and the take is tried once more; a second failure turns the
-	 *  ladder off. Returns why it can't, or null once held. Leaves no file of its own behind either way. */
+	 *  process's own is moved aside, and the take is tried once more; a second failure turns the ladder off. The rename
+	 *  takes whatever `lock` is by then, which can be a live server's lock made after the look (Ops #257, B1): its pid is
+	 *  read again, and a live server's lock is given back. When a third server linked its own in that moment, the give
+	 *  back fails and the moved lock is removed; the server it was taken from then finds `lock` isn't its file at its
+	 *  next check (lockLost()) and turns off. Returns why it can't, or null once held (the linked file's inode kept in
+	 *  lockHeld). Leaves no file of its own behind either way. */
 	private takeLock(): string | null {
 		const mine = `${this.lockPath}.tmp-${process.pid}`;
 		const aside = `${this.lockPath}.stale-${process.pid}`;
@@ -758,12 +793,15 @@ export class RoleMessageGuardHost {
 			rmSync(mine, { force: true });
 			writeFileSync(mine, `${process.pid}\n`, { mode: 0o600 });
 			const fd = openSync(mine, "r");
+			let made: { dev: number; ino: number };
 			try {
 				fsyncSync(fd);
+				const st = fstatSync(fd);
+				made = { dev: st.dev, ino: st.ino };
 			} finally {
 				closeSync(fd);
 			}
-			if (this.linkLock(mine)) return null;
+			if (this.linkLock(mine, made)) return null;
 			const other = this.readLock();
 			if (other && other !== process.pid && pidAlive(other)) return `another server (pid ${other}) holds the guard`;
 			let moved = false;
@@ -783,21 +821,23 @@ export class RoleMessageGuardHost {
 				}
 				return `another server (pid ${was}) holds the guard`;
 			}
-			if (this.linkLock(mine)) return null;
+			if (this.linkLock(mine, made)) return null;
 			return `another server (pid ${this.readLock() ?? "unknown"}) took the guard as this one started`;
 		} finally {
 			rmSync(mine, { force: true });
 			rmSync(aside, { force: true });
 		}
 	}
-	/** Link this process's flushed lock file to `lock`: true once held (the folder flushed), false when one is there. */
-	private linkLock(mine: string): boolean {
+	/** Link this process's flushed lock file to `lock`: true once held (the folder flushed, the file's inode kept),
+	 *  false when one is there. */
+	private linkLock(mine: string, made: { dev: number; ino: number }): boolean {
 		try {
 			linkSync(mine, this.lockPath);
 		} catch (err) {
 			if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
 			throw err;
 		}
+		this.lockHeld = made;
 		fsyncDir(this.o.dir);
 		return true;
 	}
@@ -870,7 +910,7 @@ export class RoleMessageGuardHost {
 			journalPath: join(dir, "journal.json"),
 			legacyPath: join(dir, "accepted.json"),
 			maximumBytes: GUARD_FILE_MAX_BYTES,
-			withExclusive: (work) => this.lease.run(work),
+			withExclusive: (work) => this.exclusive(work),
 			boundary: null,
 		});
 	}
@@ -1038,7 +1078,7 @@ export class RoleMessageGuardHost {
 	/** New generation dir, initialised with a fresh state; current.json switches atomically; the old dir stays as the
 	 *  one archive. A crash before the switch leaves the old generation current. force: revoke what is open. */
 	private async rotate(force: boolean): Promise<void> {
-		await this.lease.run(async () => {
+		await this.exclusive(async () => {
 			const read = await this.store?.read();
 			if (!read || read.state !== "ready") throw new Error("rotation: store not ready");
 			if (!force && !this.quiescent(read.value, this.now())) return;
@@ -1534,7 +1574,7 @@ export class RoleMessageGuardHost {
 				answeredAt: this.clock().nowMs,
 				approver: v.actor,
 			};
-			await this.lease.run(async () => this.appendDecision(event!));
+			await this.exclusive(async () => this.appendDecision(event!));
 		}
 		return this.roleDecision(event, request);
 	}
@@ -1657,7 +1697,7 @@ export class RoleMessageGuardHost {
 				state: "pending",
 			};
 			this.questions.push(q);
-			await this.lease.run(async () => this.saveQuestions());
+			await this.exclusive(async () => this.saveQuestions());
 		}
 		return verified(this.questionOf(r, q));
 	}
@@ -1778,11 +1818,11 @@ export class RoleMessageGuardHost {
 			generation,
 			source,
 		};
-		await this.lease.run(async () => this.appendDecision(event));
+		await this.exclusive(async () => this.appendDecision(event));
 		const res = await this.adapters.native.ownerAnswer({ nativeAnswerEventId: event.eventId, questionId, generation });
 		const ok = res.state === "recorded" || res.state === "accepted";
 		q.state = "answered";
-		await this.lease.run(async () => this.saveQuestions());
+		await this.exclusive(async () => this.saveQuestions());
 		this.o.askHub?.settle(questionId, { how: "answered", summary: choice, from: source });
 		this.o.questionsChanged?.();
 		if (!ok) {
@@ -1829,7 +1869,7 @@ export class RoleMessageGuardHost {
 	private async dispatch(entry: GuardOutboxEntry): Promise<GuardTransportResult> {
 		const rm = this.o.roleMessages();
 		if (!rm) return { state: "unknown", reason: "role messages not running" };
-		return this.lease.run(async () => {
+		return this.exclusive(async () => {
 			const res = rm.admit(structuredClone(entry.message) as unknown as RoleMessageRecord, (schedule) =>
 				this.lease.detach(schedule),
 			);
@@ -1942,7 +1982,19 @@ export class RoleMessageGuardHost {
 				error: `Not sent: ${sender.role} has sent ${lastHour} role messages in the last hour (the limit is ${ROLE_MESSAGES_PER_HOUR}). Ask the owner before sending more.`,
 				reason: "ordinary_hourly",
 			};
-		const state = await this.state_();
+		let state: GuardStoreState | null;
+		try {
+			state = await this.state_();
+		} catch (err) {
+			// Ops #257 (B1): approvals turned off as this send began (another server took the lock); nothing was recorded.
+			const why = (err as Error).message;
+			return this.status_ === "ready"
+				? { ok: false, error: `Not sent: the approval ladder couldn't read its record (${why}).` }
+				: {
+						ok: false,
+						error: `Not sent: approvals turned off (${why}). Nothing was recorded; send it again and it goes by the native rule (messages 7 and above can't be sent).`,
+					};
+		}
 		const causal = this.causalOf(sender.file, sender.guard?.lastUserText ?? "", state ?? undefined);
 		if (causal.kind === "unknown")
 			return {

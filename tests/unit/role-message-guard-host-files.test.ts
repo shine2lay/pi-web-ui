@@ -160,6 +160,55 @@ describe("one server holds the guard (Ops #253, Architecture A4)", () => {
 		expect(readdirSync(dir)).toEqual(["lock"]); // nothing else written
 	});
 
+	it("three servers over a gone server's lock: the one whose lock was moved aside turns off; one holds the guard (Ops #257, B1)", async () => {
+		// Architecture's repro (review of Ops #253): a guard folder with a record (gen-1) whose server is gone.
+		const w = await world();
+		const dir = join(data, "guard-three");
+		const lock = join(dir, "lock");
+		const first = newHost(w, dir);
+		await first.start();
+		first.stop();
+		writeFileSync(lock, `${2 ** 22 + 1}\n`);
+		const [a, b, c] = [newHost(w, dir), newHost(w, dir), newHost(w, dir)];
+		const THIRD = 1; // init: alive to pidAlive() (kill(1, 0) gives EPERM)
+		const aAside = `${lock}.stale-${process.pid}`;
+		let bStarted: Promise<void> | null = null;
+		let cStarted: Promise<void> | null = null;
+		fsx.hook = (when, op, from, to) => {
+			if (op !== "rename" || from !== lock || to !== aAside) return;
+			// B does the whole take-over between A's look and A's move; C starts while A holds B's live lock aside.
+			if (when === "before" && !bStarted) bStarted = asPid(OTHER, () => b.start());
+			else if (when === "after" && !cStarted) cStarted = asPid(THIRD, () => c.start());
+		};
+		await a.start();
+		await bStarted;
+		await cStarted;
+		fsx.hook = null;
+		expect(a.state).toEqual({ status: "degraded", reason: `another server (pid ${OTHER}) holds the guard` });
+		expect(b.state).toEqual({ status: "degraded", reason: `another server (pid ${THIRD}) took the guard's lock` });
+		expect(c.state).toEqual({ status: "ready", reason: "" });
+		expect(readFileSync(lock, "utf8")).toBe(`${THIRD}\n`);
+		expect(lockFiles(dir)).toEqual(["lock"]);
+		b.stop(); // B no longer holds the lock: its stop leaves C's
+		expect(readFileSync(lock, "utf8")).toBe(`${THIRD}\n`);
+		c.stop();
+		expect(existsSync(lock)).toBe(false);
+	});
+
+	it("a running server whose lock another server took turns off before its next guard write (Ops #257, B1)", async () => {
+		const w = await world();
+		const lock = join(guard(), "lock");
+		const journal = join(guard(), "gen-1", "journal.json");
+		const before = readFileSync(journal, "utf8");
+		rmSync(lock);
+		writeFileSync(lock, `${OTHER}\n`); // another server's lock: a new file
+		expect(await send(w, "alpha", A, "beta", { kind: "fyi" }, "")).toMatchObject({ ok: false });
+		expect(w.host.state).toEqual({ status: "degraded", reason: `another server (pid ${OTHER}) took the guard's lock` });
+		expect(readFileSync(journal, "utf8")).toBe(before);
+		w.host.stop();
+		expect(readFileSync(lock, "utf8")).toBe(`${OTHER}\n`); // its stop leaves the other server's lock
+	});
+
 	it("a server that takes the lock between the move and the second try wins it; this one turns off", async () => {
 		const w = await world();
 		const dir = staleLock("guard-second-try");
