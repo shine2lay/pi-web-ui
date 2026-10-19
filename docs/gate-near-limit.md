@@ -126,4 +126,43 @@ Sum of the case times per file, median of the 3 runs, before to after: initiativ
 
 ## Result
 
-(Recorded after the land gates.)
+**H-GATE-NEAR-LIMIT-1: HIT** on both land gates the plan named: this change's own and the next pi-web-ui one (recorded 2026-10-19 01:55 PDT). No listed case timed out in either, and no split case took over 2 s (the slowest: 759 ms).
+
+- Alone (above): 14 of the 15 new cases had a median under 300 ms. "stale: failing after a page was read" had 348 ms, over that bar: one mount of the whole page, which can't be split further.
+- Its own land gate, wt land request 77-c56aee (00:10-00:13 PDT, `scripts/check.sh --fast`): passed, 443 files, 6,349 tests passed and 6 skipped, with no timeout. Unit tests took 166 s, prettier 113 s beside them, typecheck 17 s. It landed as c83fdee on mine.
+- The next pi-web-ui land gate, wt land request 78-3f986f (Ops #253's ladder-followups, 01:49-01:52 PDT, `scripts/check.sh --fast`, built on c83fdee, so with this change): passed, 444 files, 6,370 tests passed and 6 skipped, with no timeout. Unit tests took 183 s, prettier 106 s beside them, typecheck 17 s. It landed as 7a6bc2f on mine.
+
+The listed cases' own times in the land gates' logs, in ms. Vitest's default reporter lists a test's own time only when it is over 300 ms, so "not listed" means under 300 ms.
+
+| Case | Limit | 77-c56aee (this change) | 78-3f986f (next gate, Ops #253) |
+| --- | --- | --- | --- |
+| Telegram texts 1 to 500 | 5 s | 423 | 759 |
+| Telegram texts 501 to 1000 | 5 s | not listed | 352 |
+| Telegram texts 1001 to 1500 | 5 s | not listed | not listed |
+| Telegram texts 1501 to 2000 | 5 s | not listed | not listed |
+| Telegram texts 2001 to 2500 | 5 s | 321 | not listed |
+| Telegram texts 2501 to 3000 | 5 s | not listed | not listed |
+| Telegram whole messages, each of the 4 pieces | 5 s | not listed | not listed |
+| model "never says": loading | 5 s | 341 | 561 |
+| model "never says": failing before any page was read | 5 s | 364 | not listed |
+| model "never says": stale: failing after a page was read | 5 s | 358 | 404 |
+| model "never says": not read whole | 5 s | 425 | 357 |
+| model "never says": not read whole: says its data is old | 5 s | 362 | 407 |
+| initiatives-page-tasks chip case | 20 s | 2285 | 1365 |
+| initiatives-exact "renders the design's sample" | 15 s | 1627 | 1429 |
+| initiatives-page-gaps "draws the gap count" | 15 s | 2980 | 2201 |
+| initiatives-page-plan "shows through the design" | 15 s | 1778 | 1214 |
+| guard-store-golden G2d | 15 s | 1901 | 1894 |
+| guard-fresh-start "another journal" | 15 s | 437 | 965 |
+| guard-fresh-start, its slowest row | 15 s | 2569 ("a request that is a link") | 1613 ("a request that is a link") |
+
+What it shows:
+
+- The split pieces stay light under gate load: the slowest Telegram piece took 423 and 759 ms in the two gates, and the slowest model piece 425 and 561 ms. As whole cases they took 1.1-5.9 s and 1.2-4.9 s in the 9 gates before, and the Telegram case timed out twice.
+- The cases with their own limit did the same work as before: at most 3.0 s in the first gate and 2.2 s in the second, no slower than in the 9 gates before (their slowest there: 3.4-6.0 s) and far under their 15-20 s. Some were over 2 s: three in the first gate (the chip case 2285 ms, gaps 2980 ms, fresh-start's "a request that is a link" 2569 ms) and one in the second (gaps 2201 ms). The plan's first wording ("none of the listed cases over 2 s") would count those against it. A limit stops the timeout but doesn't make a case faster, which is why this doc's bar for them, written before the change, is no timeout.
+- The cold start holds in the gates too: the chip case took 2285 and 1365 ms against 334-750 ms for its file's later one-mount cases, and "draws the gap count" 2980 and 2201 ms against 693 and 836 ms for its file's next case.
+
+Next:
+
+- Left for a later pass, each on the default limit (Ops note n219): the 5 cases past the cap (above), and three fresh-start cases #248 landed at 23:35, under 2500 ms in the 16 logs but over 2 s in a gate since. Their slowest so far: "the fresh start and a rotation both begin theirs with beginGeneration, leaving the same files" 2231 ms, "a request over 4 KiB: nothing written (N1)" 2467 ms, "a journal that can't be parsed: refused, off with the reason, every guard file as it was" 2110 ms. Of the 5, roles-exact "omits the helper row…" took 3593 ms in the second gate, more than its 3057 in the 16 logs, and fresh-start "ignores a request for its own generation…" 2385 and 2505 ms: those two first.
+- The Initiatives first-mount cost (about 1-1.3 s alone, 1.2-3.0 s in these two gates) can only shrink in the app's code: the view's cold start. If a first-mount case comes near its limit, that's the fix, not a bigger limit.
