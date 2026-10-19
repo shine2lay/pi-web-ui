@@ -125,6 +125,12 @@ try {
 				1,
 				`current.json ${currentWhy}, so the next start keeps the ladder off without touching the record and would never read a request. Nothing written.`,
 			);
+	} else if (gen !== null && gen >= 2) {
+		// Ops #257 (Architecture B4): with no generation folder left, only generation 1 is a first start.
+		stop(
+			1,
+			`current.json points at gen-${gen}, which doesn't exist, so the next start keeps the ladder off without touching the record and would never read a request. Nothing written.`,
+		);
 	} else gen ??= 1;
 	say(`current generation: ${gen}`);
 

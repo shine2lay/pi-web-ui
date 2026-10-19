@@ -465,6 +465,25 @@ describe("current.json not understood: off, and nothing cleaned (Ops #248, Secur
 	});
 });
 
+describe("current.json naming gen 2 or more, with no generation folder left (Ops #257, Architecture B4)", () => {
+	it("stays off and writes nothing; the script refuses the same way", async () => {
+		const w = await world();
+		w.host.stop();
+		for (const n of readdirSync(guard()))
+			if (/^(archive-)?gen-\d+$/.test(n)) rmSync(join(guard(), n), { recursive: true, force: true });
+		writeFileSync(join(guard(), "current.json"), '{"gen":2}\n');
+		const before = snapshot(true);
+		const { host, logs } = await startHost(w);
+		const why = "current.json points at gen-2, which doesn't exist";
+		expect(host.state).toEqual({ status: "degraded", reason: why });
+		expect(logs).toEqual([`approval ladder UNAVAILABLE (${why}): sends use the native depth-6 rule; no approvals`]);
+		expect(snapshot(true)).toEqual(before); // no gen-2 made, no lock taken
+		const r = script("--dry-run");
+		expect(r.code, r.out).toBe(1);
+		expect(r.out).toContain(`${why}, so the next start keeps the ladder off`);
+	});
+});
+
 describe("a first start that stops before it ends (Ops #253, Architecture A1)", () => {
 	it("the next start begins generation 1 as usual", async () => {
 		const w = await world(); // the native record and the chats; its own guard folder isn't used here

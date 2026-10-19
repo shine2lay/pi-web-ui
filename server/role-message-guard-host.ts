@@ -939,7 +939,8 @@ export class RoleMessageGuardHost {
 	}
 	/** The generation current.json names; a first start (no gen-N or archive-gen-N folder yet) begins generation 1.
 	 *  Ops #248 (Security N3): once a generation exists, a current.json that is missing, unreadable, not understood or
-	 *  names a folder that isn't there gives why instead, and the caller stops without writing anything. */
+	 *  names a folder that isn't there gives why instead, and the caller stops without writing anything. Ops #257
+	 *  (Architecture B4): so does one naming gen 2 or more when no generation folder is left (the record is gone). */
 	private currentGeneration(): number | string {
 		let gen: number | null = null;
 		let why = "is not understood";
@@ -951,7 +952,11 @@ export class RoleMessageGuardHost {
 			if (code === "ENOENT") why = "is missing";
 			else if (code) why = `can't be read (${code})`;
 		}
-		if (!this.hasGeneration()) return gen ?? 1;
+		if (!this.hasGeneration()) {
+			// Only generation 1 can be named before its folder exists (a first start names it first: Ops #253, A1).
+			if (gen === null || gen === 1) return 1;
+			return `points at gen-${gen}, which doesn't exist`;
+		}
 		if (gen === null) return why;
 		let there = false;
 		try {
