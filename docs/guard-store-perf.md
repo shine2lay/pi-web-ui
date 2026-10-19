@@ -211,6 +211,23 @@ Both numbers missed after changes 1-3; the files stayed byte-identical.
 - The guard-core test "a crash at any store boundary of the transition ...", which hit vitest's 5 s timeout in four
   lands that day, took 2.9 s in this land (1.3 s alone; 2.4-2.6 s alone before).
 
+### Live
+
+- **Installed** 2026-10-18 19:28 (6ea7f58a; the next two installs, fd4bc4e3 and 90995a22 at 19:49, carry it). Every
+  pi-web-deploy check passed each time: server, page, reply, the 40 MB chat copy and the log.
+- **The new store hasn't served live traffic yet.** The approval ladder has been off on the live server since
+  2026-10-14 06:43. At every start, `store.recover()` refuses with "legacy writer divergence; refusing stale snapshot
+  overwrite", left by the role-mail wedge of 2026-10-14 02:59 (the #175 race, fixed since; Ops note n147), and the
+  host falls back to the native depth-6 rule with no approvals. The guard files haven't changed since 02:59 that day.
+  The refusal is the same line before and after this install, and the golden test's crash-and-recovery cases match
+  the old store.
+- **The log, 32 minutes after the install** (the store's error strings only, never message text): none of the
+  store's errors and none of the ladder's other failure lines; only that start line, once for each of the 3 server
+  starts.
+- So the live effect, no stall of about 0.5 s per role message, starts only once the ladder is restored. That is its
+  own task: a fresh-generation recovery designed with Architecture, with the owner's plan approval and Security's
+  review.
+
 What was learned, for the next hypothesis:
 
 - **The 50 ms bar is at the floor the kept file format sets.** Each transaction must hash its whole prepared and
