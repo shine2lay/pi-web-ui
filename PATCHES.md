@@ -7408,6 +7408,13 @@ scan and the result: `docs/prompt-start-race.md`.
 
 - The repro on today's code with the guard a no-op (fails; the canary shows all three failures on the SDK
   alone), then with the guard (12/12, three runs), then the sealed land gate.
+- Result, H-PROMPT-RACE-1 **HIT**: installed 2026-10-19 10:44 PDT, `pi-web-deploy result 3e00e005` 0. Two
+  hours live, look only: 0 "already processing" lines in the server log, and 0 notes between a tool call and
+  its result in the 35 sessions written; no queue message reached a busy chat in that window (wakes found
+  their chats idle). Side effect: pi-web-ui's own terminal notices (`notifyTerminalBashDone`,
+  `notifyTerminalIdle`), sent with no `deliverAs` and dropped under SDK 1.0.1 whenever the chat was busy,
+  now arrive as follow-ups: 0 in the 48 h before, 16 in the 2.2 h after, 7 short extra turns. Details:
+  `docs/prompt-start-race.md`.
 
 ### Undo and syncing
 
@@ -7416,3 +7423,6 @@ scan and the result: `docs/prompt-start-race.md`.
   #10739 counts the session busy from the start of a run); the canary test failing after the upgrade is the
   signal. It leans on SDK 1.0.1 internals (`_runAgentPrompt`, `_isAgentRunActive`,
   `_isEmittingAgentSettled`); a test fails loudly if they go.
+- When the guard goes, give `notifyTerminalBashDone` and `notifyTerminalIdle` (`server/agent-service.ts`) a
+  `deliverAs`, or their notices are dropped again while a chat is busy (1.2.0 and 1.3.0 still refuse
+  `sendUserMessage` without one during a run).

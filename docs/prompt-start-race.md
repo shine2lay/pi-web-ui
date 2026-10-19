@@ -94,4 +94,48 @@ to the model, `isStreaming` false mid-run, the note before the tool result. The 
 
 ## Result
 
-Pending the live check (2 h after install).
+**H-PROMPT-RACE-1: HIT.** The repro failed on the old code in all three ways and passes with the
+guard (12 of 12, three runs; see Test). The sealed land gate passed (land request 83-766e86, commit
+3e00e005). Installed 2026-10-19 10:44:26 PDT with `pi-web-deploy --landed 83-766e86`; `pi-web-deploy
+result 3e00e005` is 0 (server, page, reply, big chat and log checks passed); no restart since. None of the
+disproof conditions happened.
+
+Live, look only, 10:44:26 to 12:51 PDT (2 h 07 min), structure only
+(`~/.cache/pi/receipts/prompt-race-live-check.py <install>`):
+
+- Server log: 0 lines "Agent is already processing a prompt" (1,697 lines since the install).
+- 35 session files written since the install: 0 notes between a tool call and its later result, and 0
+  beside a tool call still running.
+- pi-queue wrote 34 `resume` ops. The 17 in task chats (wakes) all found the chat idle and started a new
+  turn 0.02 to 1.6 s later. The other 17 are the queues' own records in their main chats; 2 of those were
+  written while that main chat was in a run, and their wakes went to idle task chats. Wakes into main chats
+  went out once the chat's turn had ended. So in the 2 h no queue message (answer, wake or card) reached a
+  busy chat as a follow-up; the live window didn't exercise that path for queue messages, and the repro is
+  the proof for it.
+- Follow-ups from other senders into busy chats arrived in order after the run's last reply. Example: in a
+  rollcall main chat at 18:51:56 UTC, a role message made at 18:41:05 and a terminal notice made at
+  18:41:13 were both added 11 ms after the run's last reply, in that order.
+
+### Side effect: pi-web-ui's own terminal notices now arrive
+
+- `server/agent-service.ts` sends two notices with `session.sendUserMessage(text)` and no `deliverAs` while
+  a chat is busy: `notifyTerminalBashDone` (a command moved to the background has finished) and
+  `notifyTerminalIdle` (a terminal has had no new output). Under SDK 1.0.1 that throws "Agent is already
+  processing. Specify streamingBehavior ..." and the server's `.catch(() => {})` dropped the notice without
+  a trace. The guard turns them into follow-ups: the "extension send without `deliverAs` during a run"
+  difference under Upstream.
+- Count (`~/.cache/pi/receipts/prompt-race-notices.py <install> 48`; the notices' fixed openings are
+  matched, never printed): 0 in the 48 h before the install; 16 in the 2.2 h after (14 bash-done, 2 idle
+  reminders), in 7 batches, all in rollcall chats.
+- Each batch started one extra turn after the run's last reply
+  (`~/.cache/pi/receipts/prompt-race-extra-turns.py <install>`): 6 in task chats right after the task's own
+  `queue_wait` (5) or `queue_done` (1), 5 to 33 s each, using no tool (3), `terminal_read` (1), `bash` (1),
+  or `search_context`, `decompress` and `bash` (the `queue_done` one), and writing no queue op; the 7th came
+  together with a role message in a main chat.
+- Not a breakage, and within the change (a start that finds a run going follows that run), but new: about
+  3 extra model turns an hour at today's rate. Whether a notice to a task chat that has just called
+  `queue_wait` or `queue_done` should start a turn, or wait as a context note, is a separate decision; it is
+  left to the Ops lead and not changed here.
+- At the SDK upgrade that drops this guard, these notices go back to being dropped while a chat is busy
+  (1.2.0 and 1.3.0 still refuse `sendUserMessage` without `deliverAs` during a run), unless they pass
+  `deliverAs` by then.
