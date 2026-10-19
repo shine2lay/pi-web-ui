@@ -7093,3 +7093,52 @@ ladder (#122). Hypothesis, invariants and numbers: `docs/guard-store-perf.md` (H
   way, so the old store reads what the new one wrote and the other way round.
 - When the store's behaviour is meant to change, change `role-message-guard-store-reference.ts` the
   same way, or the golden test fails. Drop the reference copy and the golden test with this patch.
+
+## ladder-fresh-start
+
+**Status**: `local`
+**Baseline**: v0.96.1 (`mine` at 23ec64d2).
+
+A one-shot fresh start of an unreadable approval record, asked for with a request file bound to its exact
+bytes, and an off switch for the ladder. No pi-web-ui route or tool reads or writes the request, but any
+process of the same user can (a chat's shell included), so the binding is what limits it; its only effect
+equals deleting the generation's `journal.json` (open approvals end, the ladder starts empty), plus an
+archive copy.
+
+**Why** (owner 2026-10-18, dialog "Message approvals off since Oct 14": "Fresh start + alarm"; Ops #241,
+project message-approvals): since 2026-10-14 06:43 every start logs "approval ladder UNAVAILABLE (recover:
+legacy writer divergence; refusing stale snapshot overwrite)", so chains between roles stop at message 6
+and no approval can be asked for. The 02:59 race that caused it is fixed (6689a5f4), but nothing could
+open the record again, and the only undo of the ladder was a build from before it. Hypothesis, use and
+undo: `docs/role-message-fresh-start.md` (H-LADDER-FRESH-START-1).
+
+### Changes
+
+- `server/role-message-guard-host.ts`:
+  - `start()` first reads `PI_WEB_UI_MESSAGE_APPROVALS`: `off` keeps the ladder off before the lock or
+    any guard file (native 6-message rule); another value is logged and changes nothing.
+  - When `recover()` fails, `freshStart()` looks for `role-message-guard/fresh-start.json`. Only a
+    request bound to the current generation's exact files (both sha256s, both untouched 2 h, at most
+    24 h old, a plain 0600-style file of this user) is acted on: a byte-identical copy in
+    `archive-gen-N/`, then gen-(N+1) as a rotation makes it (`freshState()`, `current.json`,
+    `revoked_all`), then the request is renamed `fresh-start.done-<ms>.json`. Anything else: refused
+    with the reason logged, nothing written. A record that opens marks a leftover request for an older
+    generation done and ignores any other.
+  - `stop()` doesn't touch the lock when `start()` never took it.
+- `scripts/role-guard-fresh-start.mjs` (new; node, no dependencies): reads the record, prints sizes,
+  sha256s and the old record's open items (counts and ids only), and writes the request (mode 0600);
+  `--dry-run` writes nothing. It refuses a readable record and files changed within 2 h.
+- `docs/role-message-fresh-start.md` (new); `docs/role-message-ladder.md` points to it under Rollback.
+- `tests/unit/role-message-guard-fresh-start.test.ts` (new); no existing test changed.
+
+### How it was checked
+
+- The new test file and the role-message-guard host tests, sealed; then the land gate.
+
+### Undo and syncing
+
+- Turn approvals off without a rollback: the off switch in `docs/role-message-fresh-start.md`.
+- Revert this commit with `wt`, then install with `pi-web-deploy`. A build without it opens the newer
+  generation as usual; the old record stays in `archive-gen-N/` and is never changed.
+- On an upstream sync this patch only touches `start()`/`stop()` in the guard host: keep the off switch
+  ahead of the lock, and the fresh start only on the failed-recover branch.

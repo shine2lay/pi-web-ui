@@ -111,6 +111,9 @@ controls count in its 20/hour, and its save keeps the ladder fields. Reinstallin
 each chain where it was. Roll back with `pi-web-deploy rollback`; never restore an older backup over
 live role-message state.
 
+To turn approvals off without a rollback, set `PI_WEB_UI_MESSAGE_APPROVALS=off` (Ops #241); an unreadable
+record gets a one-shot fresh start: `docs/role-message-fresh-start.md`.
+
 ## Not in this delivery (future work)
 
 - Urgent notices: no protected types (`safety_action_notice`, `critical_risk_notice`,

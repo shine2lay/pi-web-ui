@@ -17,12 +17,13 @@
 // ---------------------------------------------------------------------------
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
 	appendFileSync,
 	closeSync,
 	existsSync,
 	fsyncSync,
+	lstatSync,
 	mkdirSync,
 	openSync,
 	readdirSync,
@@ -164,6 +165,14 @@ const OPEN_REQUEST_STATES: readonly string[] = [
 export const GUARD_ROTATE_BYTES = 1024 * 1024;
 export const GUARD_ROTATE_MESSAGES = 300;
 export const GUARD_ROTATE_TOMBSTONES = 3000;
+/** Ops #241 (docs/role-message-fresh-start.md): the operator's one-shot request for a fresh start, in the guard dir. */
+export const GUARD_FRESH_START_FILE = "fresh-start.json";
+/** The request is acted on only when both files of its generation have been untouched this long. */
+export const GUARD_FRESH_START_QUIET_MS = 2 * 60 * 60 * 1000;
+/** A request is good for at most this long after it was made. */
+export const GUARD_FRESH_START_LIFETIME_MS = 24 * 60 * 60 * 1000;
+/** The off switch: this environment variable set to "off" keeps the ladder off (native 6-message rule). */
+export const GUARD_APPROVALS_SWITCH = "PI_WEB_UI_MESSAGE_APPROVALS";
 
 const NO_HOLDS: GuardHolds = {
 	ownerPaused: false,
@@ -276,6 +285,61 @@ function writeDurable(path: string, text: string): void {
 		closeSync(fd);
 	}
 	renameSync(tmp, path);
+}
+/** Ops #241: the operator's request (scripts/role-guard-fresh-start.mjs writes it). */
+interface GuardFreshStartRequest {
+	v: 1;
+	gen: number;
+	journalSha256: string;
+	acceptedSha256: string;
+	at: number;
+	expiresAt: number;
+	reason: string;
+}
+function parseFreshStartRequest(text: string): GuardFreshStartRequest | null {
+	let value: unknown;
+	try {
+		value = JSON.parse(text);
+	} catch {
+		return null;
+	}
+	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+	const r = value as Record<string, unknown>;
+	const hex = (x: unknown) => typeof x === "string" && /^[0-9a-f]{64}$/.test(x);
+	const whole = (x: unknown) => typeof x === "number" && Number.isSafeInteger(x) && x >= 1;
+	const ok =
+		r.v === 1 &&
+		whole(r.gen) &&
+		hex(r.journalSha256) &&
+		hex(r.acceptedSha256) &&
+		whole(r.at) &&
+		whole(r.expiresAt) &&
+		typeof r.reason === "string";
+	return ok ? (r as unknown as GuardFreshStartRequest) : null;
+}
+function sha256Of(bytes: Buffer): string {
+	return createHash("sha256").update(bytes).digest("hex");
+}
+/** A byte-exact copy, flushed before it is renamed into place; 0600 like the store's own files. */
+function writeDurableBytes(path: string, bytes: Buffer): void {
+	const tmp = `${path}.tmp-${process.pid}`;
+	rmSync(tmp, { force: true });
+	writeFileSync(tmp, bytes, { mode: 0o600 });
+	const fd = openSync(tmp, "r");
+	try {
+		fsyncSync(fd);
+	} finally {
+		closeSync(fd);
+	}
+	renameSync(tmp, path);
+}
+function fsyncDir(path: string): void {
+	const fd = openSync(path, "r");
+	try {
+		fsyncSync(fd);
+	} finally {
+		closeSync(fd);
+	}
 }
 function pidAlive(pid: number): boolean {
 	try {
@@ -450,6 +514,13 @@ export class RoleMessageGuardHost {
 	// -------------------------------------------------------------------------
 
 	async start(): Promise<void> {
+		// Ops #241: the off switch comes first, before the lock or any guard file: nothing is read or written.
+		const switched = process.env[GUARD_APPROVALS_SWITCH]?.trim().toLowerCase();
+		if (switched === "off") return this.degrade(`turned off (${GUARD_APPROVALS_SWITCH}=off)`);
+		if (switched && switched !== "on")
+			this.o.log(
+				`approval ladder: ${GUARD_APPROVALS_SWITCH}=${JSON.stringify(switched.slice(0, 40))} is not understood (only "off" turns approvals off); they stay on`,
+			);
 		try {
 			mkdirSync(this.o.dir, { recursive: true });
 			this.lockPath = join(this.o.dir, "lock");
@@ -462,17 +533,24 @@ export class RoleMessageGuardHost {
 			await this.lease.run(async () => {
 				const gen = this.currentGeneration();
 				this.cleanGenerations(gen);
-				const dir = join(this.o.dir, `gen-${gen}`);
+				let dir = join(this.o.dir, `gen-${gen}`);
 				mkdirSync(dir, { recursive: true });
-				const store = this.newStore(dir);
+				let store = this.newStore(dir);
 				if (!existsSync(join(dir, "journal.json"))) {
 					const r = await store.initialize(this.freshState(), { v: 1, paused: false, messages: [] });
 					if (r.state !== "ready") throw new Error(`bootstrap: ${r.reason}`);
 					this.writeCurrent(gen);
 					this.o.log(`approval ladder: new guard store (generation ${gen})`);
+					this.settleFreshStartRequest(gen);
 				} else {
 					const r = await store.recover();
-					if (r.state !== "ready") throw new Error(`recover: ${r.reason}`);
+					if (r.state === "ready") this.settleFreshStartRequest(gen);
+					else {
+						// Ops #241: only the operator's request for exactly these files starts a new generation.
+						const fresh = await this.freshStart(gen);
+						if (!fresh) throw new Error(`recover: ${r.reason}`);
+						({ store, dir } = fresh);
+					}
 				}
 				this.useStore(store, dir);
 			});
@@ -494,6 +572,7 @@ export class RoleMessageGuardHost {
 	}
 
 	stop(): void {
+		if (!this.lockPath) return; // never started (off, or start() not called)
 		try {
 			if (this.readLock() === process.pid) rmSync(this.lockPath, { force: true });
 		} catch {
@@ -507,6 +586,114 @@ export class RoleMessageGuardHost {
 		this.core = null;
 		this.adapters = null;
 		this.o.log(`approval ladder UNAVAILABLE (${reason}): sends use the native depth-6 rule; no approvals`);
+	}
+
+	// Ops #241 (docs/role-message-fresh-start.md): the operator's one-shot fresh start of an unreadable record.
+
+	/** recover() failed on generation `gen`. With the operator's request for exactly these files, keep a byte-identical
+	 *  copy in archive-gen-<gen> and begin the next generation as rotate() does (gen-<gen> stays in place too); open
+	 *  approvals of the old record end. No request, or one that doesn't match: null, and nothing is written. Runs under
+	 *  the lease. A crash before current.json switches leaves the request, and the next start does it again. */
+	private async freshStart(gen: number): Promise<{ store: GuardFileStore; dir: string } | null> {
+		const request = this.freshStartRequest(gen);
+		if (request === null) return null;
+		if (typeof request === "string") {
+			this.o.log(`approval ladder: fresh start refused (${request})`);
+			return null;
+		}
+		const from = join(this.o.dir, `gen-${gen}`);
+		const archive = join(this.o.dir, `archive-gen-${gen}`);
+		mkdirSync(archive, { recursive: true });
+		for (const [name, digest] of [
+			["journal.json", request.journalSha256],
+			["accepted.json", request.acceptedSha256],
+		] as const) {
+			const bytes = readFileSync(join(from, name));
+			if (sha256Of(bytes) !== digest) throw new Error(`fresh start: ${name} changed while it was copied`);
+			writeDurableBytes(join(archive, name), bytes);
+			if (sha256Of(readFileSync(join(archive, name))) !== digest)
+				throw new Error(`fresh start: the archive copy of ${name} differs`);
+		}
+		fsyncDir(archive);
+		const next = gen + 1;
+		const dir = join(this.o.dir, `gen-${next}`);
+		rmSync(dir, { recursive: true, force: true });
+		mkdirSync(dir, { recursive: true });
+		const store = this.newStore(dir);
+		const r = await store.initialize(this.freshState(), { v: 1, paused: false, messages: [] });
+		if (r.state !== "ready") throw new Error(`fresh start: ${r.reason}`);
+		this.writeCurrent(next);
+		this.cleanGenerations(next);
+		this.writeHistory([{ at: this.now(), event: "revoked_all" }]);
+		this.markFreshStartDone();
+		this.o.log(`approval ladder: fresh start from generation ${gen} (old record kept in archive-gen-${gen})`);
+		return { store, dir };
+	}
+
+	/** The request for generation `gen`: null when there is none, why it can't be acted on, or the request when it is
+	 *  bound to exactly these files, both untouched for 2 h, and still good. */
+	private freshStartRequest(gen: number): GuardFreshStartRequest | string | null {
+		const path = join(this.o.dir, GUARD_FRESH_START_FILE);
+		let text: string;
+		try {
+			const st = lstatSync(path);
+			if (!st.isFile()) return "the request is not a plain file";
+			if (typeof process.getuid === "function" && st.uid !== process.getuid())
+				return "the request belongs to another user";
+			if (st.mode & 0o022) return "other users can write the request";
+			text = readFileSync(path, "utf8");
+		} catch (err) {
+			return (err as NodeJS.ErrnoException).code === "ENOENT" ? null : "the request can't be read";
+		}
+		const request = parseFreshStartRequest(text);
+		if (!request) return "the request's format is not understood";
+		if (request.gen !== gen) return `the request is for generation ${request.gen}, the current one is ${gen}`;
+		const now = this.now();
+		if (request.at > now) return "the request is dated in the future";
+		if (request.expiresAt - request.at > GUARD_FRESH_START_LIFETIME_MS) return "the request is good for over 24 h";
+		if (now >= request.expiresAt) return `the request expired at ${new Date(request.expiresAt).toISOString()}`;
+		for (const [name, digest] of [
+			["journal.json", request.journalSha256],
+			["accepted.json", request.acceptedSha256],
+		] as const) {
+			const file = join(this.o.dir, `gen-${gen}`, name);
+			try {
+				if (now - statSync(file).mtimeMs < GUARD_FRESH_START_QUIET_MS) return `${name} changed less than 2 h ago`;
+				if (sha256Of(readFileSync(file)) !== digest)
+					return `${name} is not the file the request was made for (sha256 differs)`;
+			} catch {
+				return `${name} can't be read`;
+			}
+		}
+		return request;
+	}
+
+	/** The record opened as usual, so a request is never acted on. One for an older generation is a fresh start that
+	 *  finished before its request was marked done: mark it done now. Any other stays where it is, ignored. */
+	private settleFreshStartRequest(gen: number): void {
+		const path = join(this.o.dir, GUARD_FRESH_START_FILE);
+		if (!existsSync(path)) return;
+		let text = "";
+		try {
+			text = readFileSync(path, "utf8");
+		} catch {
+			/* unreadable: ignored below */
+		}
+		const request = parseFreshStartRequest(text);
+		if (request && request.gen < gen) {
+			this.markFreshStartDone();
+			this.o.log(
+				`approval ladder: fresh start request for generation ${request.gen} marked done (already on generation ${gen})`,
+			);
+		} else this.o.log(`approval ladder: fresh start request ignored (generation ${gen} opened as usual)`);
+	}
+
+	private markFreshStartDone(): void {
+		try {
+			renameSync(join(this.o.dir, GUARD_FRESH_START_FILE), join(this.o.dir, `fresh-start.done-${this.now()}.json`));
+		} catch (err) {
+			this.o.log(`approval ladder: fresh start request not marked done (${(err as Error).message})`);
+		}
 	}
 
 	private readLock(): number | null {
