@@ -20,6 +20,7 @@ import type {
 import {
 	GuardFileStore,
 	guardDigest,
+	guardJournalRefusal,
 	guardTransactionId,
 	type GuardFileBoundary,
 	type GuardFileStoreOptions,
@@ -395,6 +396,23 @@ describe("E durable prepare/commit/publication boundary", () => {
 					).state,
 				).toBe("committed");
 			}
+		},
+	);
+	// Ops #253 (Architecture A3): one test of "the journal holds a prepared send" for the fresh start and recover().
+	it.each(boundaries)(
+		"stopped at %s: the fresh start's check and recover() agree on a prepared send",
+		async (boundary) => {
+			const t = await fixture();
+			const id = identity(`stop-${boundary}`);
+			t.f.fault = boundary;
+			expect((await t.store.transact(id, async (s) => mutation(s, id))).state).toBe("unknown");
+			const prepared = JSON.parse(readFileSync(t.options.journalPath, "utf8")).stage === "prepared";
+			const refusal = guardJournalRefusal(readFileSync(t.options.journalPath, "utf8"));
+			const recovered = await new GuardFileStore({ ...t.options, boundary: null }).recover();
+			expect(refusal).toBe(prepared ? `the journal holds a prepared send (operation ${id.operationId})` : null);
+			expect(recovered.state === "unknown" ? recovered.reason : "ready").toBe(
+				prepared ? "prepared reservation held; no speculative commit/refund/retry" : "ready",
+			);
 		},
 	);
 	it("two instances sharing the host lease never admit the same operation twice", async () => {

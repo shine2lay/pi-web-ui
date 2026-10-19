@@ -365,6 +365,11 @@ function verify(value: unknown, knownBodyDigest?: string): Bundle {
 	}
 	return bundle;
 }
+/** Ops #253 (Architecture A3): the journal holds a prepared transaction (a send stopped between its prepare and its
+ * commit). The one test for it, so the fresh start's refusal, recover() and the lookups can't come to disagree. */
+function holdsPrepared(bundle: Bundle): boolean {
+	return bundle.stage === "prepared";
+}
 /** Ops #248 (Architecture S1): why the operator's fresh start (docs/role-message-fresh-start.md) must not start over
  * from this journal text, or null for a committed journal that decodes. One holding a prepared send names its
  * operation; text that doesn't decode gives decode's reason. Reads and writes nothing. */
@@ -375,7 +380,7 @@ export function guardJournalRefusal(raw: string): string | null {
 	} catch (e) {
 		return `the journal can't be parsed (${errorText(e)})`;
 	}
-	return bundle.stage === "prepared"
+	return holdsPrepared(bundle)
 		? `the journal holds a prepared send (operation ${bundle.identity?.operationId ?? "unknown"})`
 		: null;
 }
@@ -829,7 +834,7 @@ export class GuardFileStore implements GuardStorePort {
 		return this.options.withExclusive(async () => {
 			try {
 				const bundle = await this.load();
-				if (bundle.stage === "prepared")
+				if (holdsPrepared(bundle))
 					return { state: "unknown", reason: "prepared reservation held; no speculative commit/refund/retry" };
 				const canonical = await this.canonicalDigest();
 				if (canonical !== this.legacyDigest(bundle.legacy) && canonical !== bundle.beforeLegacyDigest)
@@ -847,7 +852,7 @@ export class GuardFileStore implements GuardStorePort {
 		});
 	}
 	private lookupIn(bundle: Bundle, identity: GuardOperationIdentity): GuardLookupResult {
-		if (bundle.identity && bundle.identity.operationId === identity.operationId && bundle.stage === "prepared") {
+		if (bundle.identity && bundle.identity.operationId === identity.operationId && holdsPrepared(bundle)) {
 			return {
 				state: "found",
 				result: {
@@ -889,7 +894,7 @@ export class GuardFileStore implements GuardStorePort {
 			)
 		)
 			return { state: "unknown", reason: "pruned operation is not authoritatively absent" };
-		if (bundle.stage === "prepared") return { state: "unknown", reason: "store quarantined by prepared reservation" };
+		if (holdsPrepared(bundle)) return { state: "unknown", reason: "store quarantined by prepared reservation" };
 		return { state: "absent", authoritative: true };
 	}
 	async lookup(identity: GuardOperationIdentity): Promise<GuardLookupResult> {
