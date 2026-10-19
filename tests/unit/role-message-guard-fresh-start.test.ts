@@ -18,6 +18,7 @@ import {
 	utimesSync,
 	writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -140,10 +141,15 @@ async function onGen2(): Promise<World> {
 	w.rm.stop();
 	return w;
 }
+/** The script on the test's data dir. Ops #248 (Security N2): PI_WEB_DATA_DIR is the temp `data` too, so a call
+ *  without --data-dir can never reach the live ~/.pi-web-ui. */
 function script(...args: string[]): { code: number | null; out: string } {
-	const r = spawnSync(process.execPath, [SCRIPT, "--data-dir", data, ...args], {
+	return run("--data-dir", data, ...args);
+}
+function run(...args: string[]): { code: number | null; out: string } {
+	const r = spawnSync(process.execPath, [SCRIPT, ...args], {
 		encoding: "utf8",
-		env: { ...process.env, PI_WEB_DATA_DIR: "" },
+		env: { ...process.env, PI_WEB_DATA_DIR: data },
 	});
 	return { code: r.status, out: `${r.stdout}${r.stderr}` };
 }
@@ -420,6 +426,19 @@ describe("current.json not understood: off, and nothing cleaned (Ops #248, Secur
 		const before = snapshot(true);
 		await expect(rotate(w.host, true)).rejects.toThrow("rotation: current.json is not understood");
 		expect(snapshot(true)).toEqual(before); // the live gen-2 is still there
+	});
+});
+
+describe("the script stays in the test's folder (Ops #248, Security N2)", () => {
+	it("without --data-dir it reads PI_WEB_DATA_DIR, the test's own folder", async () => {
+		expect(data.startsWith(join(tmpdir(), "rmguard-host-"))).toBe(true); // the temp folder, never ~/.pi-web-ui
+		setNow(Date.now());
+		await diverged();
+		const r = run("--dry-run");
+		expect(r.code, r.out).toBe(0);
+		expect(r.out).toContain(`guard dir: ${guard()}\n`);
+		expect(r.out).toContain("the record is unreadable");
+		expect(existsSync(requestPath())).toBe(false);
 	});
 });
 
