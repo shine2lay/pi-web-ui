@@ -7376,3 +7376,43 @@ heartbeat. Evidence, numbers and result: `docs/pages-live.md`.
   without `view`/`shownMs` stay valid.
 - On an upstream sync: the grace lives in page-live.ts and the Roles models; use-chat's `refreshNote` and
   the return reconnect are the only connection-path edits.
+
+## prompt-start-race
+
+**Status**: `local`
+**Baseline**: v0.96.1 (`mine` at ca9cf82f).
+
+A second message that arrives while a chat's run is still starting no longer breaks that run. Before, SDK
+1.0.1 let both starts through its `isStreaming` check; the second was refused ("Agent is already processing
+ a prompt") and its cleanup marked the first run as ended while it went on, so later queue messages were
+ lost and a no-turn note could land between a tool call and its result (every later request refused).
+
+**Why** (Temper rm-49f5fbd2, Ops #261): Temper #106's chat failed every call with a 400 from 2026-10-19
+09:30 PDT; 3 lead answers to it were lost. H-PROMPT-RACE-1, the evidence, the #106 timeline, the 30-day
+scan and the result: `docs/prompt-start-race.md`.
+
+### Changes
+
+- `server/prompt-start-guard.ts` (new): `installPromptStartGuard(session)` wraps the session's own
+  `prompt` and `sendCustomMessage` (so UI prompts, extension `sendUserMessage` and `triggerTurn` messages):
+  one start at a time; a start that arrives while another is under way, or with a run going and no
+  `deliverAs`/`streamingBehavior`, follows that run. Backstop: a start that still reaches `_runAgentPrompt`
+  while a run is active is queued as a follow-up, so a refused start never clears the running flag or emits
+  `agent_settled` early. Idle prompts, UI steer/followUp, Stop, nextTurn asides and no-turn notes pass
+  through unchanged.
+- `server/agent-service.ts`: installed next to `installRoleMailBoundary` (new conversation, bindSession)
+  and on a reopened conversation's runtime.
+- Tests: `tests/unit/prompt-start-race.test.ts` (new; real SDK session, faux model).
+
+### How it was checked
+
+- The repro on today's code with the guard a no-op (fails; the canary shows all three failures on the SDK
+  alone), then with the guard (12/12, three runs), then the sealed land gate.
+
+### Undo and syncing
+
+- Revert this commit with `wt`, then install with `pi-web-deploy`. Nothing stored changes.
+- Drop this patch when the SDK goes to `@earendil-works/pi-coding-agent` 1.2.0 or later (upstream PR
+  #10739 counts the session busy from the start of a run); the canary test failing after the upgrade is the
+  signal. It leans on SDK 1.0.1 internals (`_runAgentPrompt`, `_isAgentRunActive`,
+  `_isEmittingAgentSettled`); a test fails loudly if they go.

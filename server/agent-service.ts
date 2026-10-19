@@ -337,6 +337,7 @@ import {
 } from "./role-messages.js";
 import { RoleMessageGuardHost } from "./role-message-guard-host.js";
 import { admitRoleMailAtResume, installRoleMailBoundary, noteAtRoleMailBoundary } from "./role-mail-boundary.js";
+import { installPromptStartGuard } from "./prompt-start-guard.js";
 import { RolesOverviewReader } from "./roles-overview.js";
 import { WorkPageFile, workFactsFromOverview, type WorkQueueFacts } from "./work-page.js";
 import { ROLES_CONFIG_EVERY_MS, RolesConfigHistory } from "./roles-config-history.js";
@@ -5199,6 +5200,8 @@ export class ClientSession {
 	/** Wrap a fresh runtime as a new conversation record. */
 	private makeConversation(runtime: AgentSessionRuntime, id: string, terminals: TerminalManager): Conversation {
 		installRoleMailBoundary(runtime.session);
+		// prompt-start-race (Ops #261): one prompt start at a time; a racing start follows the run.
+		installPromptStartGuard(runtime.session);
 		const conv: Conversation = {
 			id,
 			title: conversationTitle(runtime.session),
@@ -6361,6 +6364,7 @@ export class ClientSession {
 		conv.unsubscribe?.();
 		conv.session = conv.runtime.session;
 		installRoleMailBoundary(conv.session);
+		installPromptStartGuard(conv.session);
 		// per-chat-dialogs：换了会话（/new、/resume、强制重建）→ 旧会话问的弹窗作废。
 		conv.dialogs.cancelExcept(conv.session);
 		await conv.session.bindExtensions({
@@ -11539,6 +11543,7 @@ export class ClientSession {
 			}
 			conv.runtime = runtime;
 			conv.session = runtime.session;
+			installPromptStartGuard(conv.session);
 			if (healedCount > 0) {
 				this.emit({
 					type: "notice",
