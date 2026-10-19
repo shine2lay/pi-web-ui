@@ -14,6 +14,7 @@ import {
 	renameSync,
 	rmSync,
 	statSync,
+	symlinkSync,
 	utimesSync,
 	writeFileSync,
 } from "node:fs";
@@ -108,15 +109,18 @@ function writeRequest(over: Record<string, unknown> = {}, mode = 0o600): void {
 	writeFileSync(requestPath(), JSON.stringify(body), { mode });
 	chmodSync(requestPath(), mode);
 }
-/** Every file under the guard dir: its sha256, and for the generation folders its mtime too (a rewrite shows). */
+/** Every file under the guard dir: its sha256, and for the generation folders its mtime too (a rewrite shows). A
+ *  pipe is noted, not read. */
 function snapshot(withLock = false): Record<string, string> {
 	const out: Record<string, string> = {};
 	const walk = (d: string, rel: string) => {
 		for (const name of readdirSync(d)) {
 			const path = join(d, name);
 			const r = rel ? `${rel}/${name}` : name;
-			if (statSync(path).isDirectory()) walk(path, r);
-			else if (withLock || r !== "lock") out[r] = rel ? `${sha(path)}@${statSync(path).mtimeMs}` : sha(path);
+			const st = statSync(path);
+			if (st.isDirectory()) walk(path, r);
+			else if (!st.isFile()) out[r] = "not a plain file";
+			else if (withLock || r !== "lock") out[r] = rel ? `${sha(path)}@${st.mtimeMs}` : sha(path);
 		}
 	};
 	walk(guard(), "");
@@ -283,6 +287,19 @@ describe("fresh start: no request, or one that doesn't match, changes nothing", 
 			() => writeFileSync(requestPath(), "{not json", { mode: 0o600 }),
 			"the request's format is not understood",
 		],
+		// Ops #248 (Security N1): one open that follows no link and waits on no pipe; mode 0600; at most 4 KiB.
+		["a request others can read", () => writeRequest({}, 0o644), "the request's mode is 0644, not 0600"],
+		["a request over 4 KiB", () => writeRequest({ reason: "x".repeat(5000) }), "the request is over 4 KiB"],
+		[
+			"a request that is a link",
+			() => {
+				writeRequest();
+				renameSync(requestPath(), join(data, "elsewhere.json"));
+				symlinkSync(join(data, "elsewhere.json"), requestPath());
+			},
+			"the request is not a plain file",
+		],
+		["a request that is a pipe", () => mkfifo(requestPath()), "the request is not a plain file"],
 	];
 	it.each(cases)("%s", async (_name, make, why) => {
 		const w = await diverged();
@@ -296,7 +313,24 @@ describe("fresh start: no request, or one that doesn't match, changes nothing", 
 	});
 });
 
+function mkfifo(path: string): void {
+	const r = spawnSync("mkfifo", ["-m", "600", path], { encoding: "utf8" });
+	expect(r.status, r.stderr).toBe(0);
+}
+
 describe("fresh start: a readable record", () => {
+	it("a pipe where the request goes doesn't hold up the start (Ops #248, N1)", async () => {
+		const w = await world();
+		w.host.stop();
+		w.rm.stop();
+		mkfifo(requestPath());
+		const w2 = await world(w);
+		expect(freshLines(w2.logs)).toEqual([
+			"approval ladder: fresh start request ignored (the request is not a plain file; generation 1 opened as usual)",
+		]);
+		expect(statSync(requestPath()).isFIFO()).toBe(true);
+	});
+
 	it("ignores a request for its own generation; one for an older generation is marked done", async () => {
 		const w = await world();
 		expect(await send(w, "alpha", A, "beta", {}, "")).toMatchObject({ ok: true });
@@ -406,6 +440,15 @@ describe("the script refuses when the next start would", () => {
 		const recent = script();
 		expect(recent.code, recent.out).toBe(1);
 		expect(recent.out).toContain("accepted.json changed less than 2 h ago");
+		expect(existsSync(requestPath())).toBe(false);
+	});
+
+	it("a request over 4 KiB: nothing written (N1)", async () => {
+		setNow(Date.now());
+		await diverged();
+		const r = script("--reason", "x".repeat(5000));
+		expect(r.code, r.out).toBe(1);
+		expect(r.out).toContain("over the 4 KiB the server reads");
 		expect(existsSync(requestPath())).toBe(false);
 	});
 

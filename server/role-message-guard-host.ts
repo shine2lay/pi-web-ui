@@ -21,13 +21,16 @@ import { createHash, randomUUID } from "node:crypto";
 import {
 	appendFileSync,
 	closeSync,
+	constants,
 	existsSync,
+	fstatSync,
 	fsyncSync,
 	lstatSync,
 	mkdirSync,
 	openSync,
 	readdirSync,
 	readFileSync,
+	readSync,
 	renameSync,
 	rmSync,
 	statSync,
@@ -171,6 +174,8 @@ export const GUARD_FRESH_START_FILE = "fresh-start.json";
 export const GUARD_FRESH_START_QUIET_MS = 2 * 60 * 60 * 1000;
 /** A request is good for at most this long after it was made. */
 export const GUARD_FRESH_START_LIFETIME_MS = 24 * 60 * 60 * 1000;
+/** Ops #248 (Security N1): a request is a few hundred bytes; a bigger file is refused unread. */
+export const GUARD_FRESH_START_MAX_BYTES = 4096;
 /** The off switch: this environment variable set to "off" keeps the ladder off (native 6-message rule). */
 export const GUARD_APPROVALS_SWITCH = "PI_WEB_UI_MESSAGE_APPROVALS";
 
@@ -316,6 +321,41 @@ function parseFreshStartRequest(text: string): GuardFreshStartRequest | null {
 		whole(r.expiresAt) &&
 		typeof r.reason === "string";
 	return ok ? (r as unknown as GuardFreshStartRequest) : null;
+}
+/** Ops #248 (Security N1): the request's text, from one open that doesn't follow a link or wait on a pipe, checked
+ *  on that open file (a plain file of this user, mode 0600, at most 4 KiB) and read from it, capped. null when there
+ *  is none; otherwise why it isn't read. */
+function readFreshStartFile(path: string): { text: string } | string | null {
+	let fd: number;
+	try {
+		fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+	} catch (err) {
+		const code = (err as NodeJS.ErrnoException).code;
+		if (code === "ENOENT") return null;
+		return code === "ELOOP" ? "the request is not a plain file" : "the request can't be read";
+	}
+	try {
+		const st = fstatSync(fd);
+		if (!st.isFile()) return "the request is not a plain file";
+		if (typeof process.getuid === "function" && st.uid !== process.getuid())
+			return "the request belongs to another user";
+		if (st.mode & 0o022) return "other users can write the request";
+		if ((st.mode & 0o777) !== 0o600) return `the request's mode is 0${(st.mode & 0o777).toString(8)}, not 0600`;
+		if (st.size > GUARD_FRESH_START_MAX_BYTES) return "the request is over 4 KiB";
+		const buf = Buffer.alloc(GUARD_FRESH_START_MAX_BYTES + 1);
+		let n = 0;
+		while (n < buf.length) {
+			const got = readSync(fd, buf, n, buf.length - n, null);
+			if (got === 0) break;
+			n += got;
+		}
+		if (n > GUARD_FRESH_START_MAX_BYTES) return "the request is over 4 KiB";
+		return { text: buf.subarray(0, n).toString("utf8") };
+	} catch {
+		return "the request can't be read";
+	} finally {
+		closeSync(fd);
+	}
 }
 function sha256Of(bytes: Buffer): string {
 	return createHash("sha256").update(bytes).digest("hex");
@@ -636,19 +676,9 @@ export class RoleMessageGuardHost {
 	/** The request for generation `gen`: null when there is none, why it can't be acted on, or the request when it is
 	 *  bound to exactly these files, both untouched for 2 h, and still good. */
 	private freshStartRequest(gen: number): GuardFreshStartRequest | string | null {
-		const path = join(this.o.dir, GUARD_FRESH_START_FILE);
-		let text: string;
-		try {
-			const st = lstatSync(path);
-			if (!st.isFile()) return "the request is not a plain file";
-			if (typeof process.getuid === "function" && st.uid !== process.getuid())
-				return "the request belongs to another user";
-			if (st.mode & 0o022) return "other users can write the request";
-			text = readFileSync(path, "utf8");
-		} catch (err) {
-			return (err as NodeJS.ErrnoException).code === "ENOENT" ? null : "the request can't be read";
-		}
-		const request = parseFreshStartRequest(text);
+		const read = readFreshStartFile(join(this.o.dir, GUARD_FRESH_START_FILE));
+		if (read === null || typeof read === "string") return read;
+		const request = parseFreshStartRequest(read.text);
 		if (!request) return "the request's format is not understood";
 		if (request.gen !== gen) return `the request is for generation ${request.gen}, the current one is ${gen}`;
 		const now = this.now();
@@ -674,21 +704,18 @@ export class RoleMessageGuardHost {
 	/** The record opened as usual, so a request is never acted on. One for an older generation is a fresh start that
 	 *  finished before its request was marked done: mark it done now. Any other stays where it is, ignored. */
 	private settleFreshStartRequest(gen: number): void {
-		const path = join(this.o.dir, GUARD_FRESH_START_FILE);
-		if (!existsSync(path)) return;
-		let text = "";
-		try {
-			text = readFileSync(path, "utf8");
-		} catch {
-			/* unreadable: ignored below */
-		}
-		const request = parseFreshStartRequest(text);
+		const read = readFreshStartFile(join(this.o.dir, GUARD_FRESH_START_FILE)); // Ops #248 (N1): same reader
+		if (read === null) return;
+		const request = typeof read === "string" ? null : parseFreshStartRequest(read.text);
 		if (request && request.gen < gen) {
 			this.markFreshStartDone();
 			this.o.log(
 				`approval ladder: fresh start request for generation ${request.gen} marked done (already on generation ${gen})`,
 			);
-		} else this.o.log(`approval ladder: fresh start request ignored (generation ${gen} opened as usual)`);
+		} else
+			this.o.log(
+				`approval ladder: fresh start request ignored (${typeof read === "string" ? `${read}; ` : ""}generation ${gen} opened as usual)`,
+			);
 	}
 
 	private markFreshStartDone(): void {

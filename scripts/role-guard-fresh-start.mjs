@@ -28,6 +28,7 @@ import { join, resolve } from "node:path";
 const HOUR = 60 * 60 * 1000;
 const QUIET_MS = 2 * HOUR; // GUARD_FRESH_START_QUIET_MS in server/role-message-guard-host.ts
 const LIFETIME_MS = 24 * HOUR; // GUARD_FRESH_START_LIFETIME_MS
+const MAX_BYTES = 4096; // GUARD_FRESH_START_MAX_BYTES (Ops #248)
 const OPEN_REQUEST_STATES = ["context_needed", "awaiting_approver", "awaiting_owner", "rate_limited", "held"];
 const FILES = ["journal.json", "accepted.json"];
 
@@ -242,6 +243,12 @@ try {
 		expiresAt: now + LIFETIME_MS,
 		reason,
 	};
+	const text = `${JSON.stringify(request, null, 2)}\n`;
+	if (Buffer.byteLength(text, "utf8") > MAX_BYTES)
+		stop(
+			1,
+			`the request would be ${Buffer.byteLength(text, "utf8")} bytes, over the 4 KiB the server reads; use a shorter --reason. Nothing written.`,
+		);
 	if (dryRun)
 		say(
 			`dry run: nothing written. Without --dry-run it writes ${path} (mode 0600), good until ${iso(request.expiresAt)}.`,
@@ -249,7 +256,7 @@ try {
 	else {
 		const tmp = `${path}.tmp-${process.pid}`;
 		rmSync(tmp, { force: true });
-		writeFileSync(tmp, `${JSON.stringify(request, null, 2)}\n`, { mode: 0o600 });
+		writeFileSync(tmp, text, { mode: 0o600 });
 		fsyncPath(tmp);
 		renameSync(tmp, path);
 		fsyncPath(guard);
