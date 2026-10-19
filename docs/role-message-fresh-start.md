@@ -182,6 +182,43 @@ A2, A3, A4.
   message is committed once in gen-2.
 - **Wrong if**: an existing guard test has to change to pass; a case that turns the ladder off leaves a guard
   file changed; the live start isn't "on" on gen-2; a real role message shows up twice in `role-messages.json`.
+- **Reviews**: GO from both, no must-fix, each after its own sealed run of the guard tests (16 files, 448
+  passed, 1 skipped). Security rm-706b8154 (`/home/shinelay/security-lab/ladder-followups-253/REVIEW-5039dc92.md`)
+  covers host 0ab89fd0, store 41aaae5b and script ca463111: a change to those needs its delta look again, tests
+  or docs alone an FYI. Architecture rm-8e4d9e40 (`/home/shinelay/architecture-dept/reviews/ops253-ladder-followups.md`)
+  at 5039dc92 found A4's two details sound for two servers.
+- **Follow-ups the reviews left, not in this patch** (none blocks the install):
+  - B1 (Architecture), what A4 leaves open: between moving a stale lock aside and giving it back there is no
+    `lock`. A third server starting in that moment, or a later start after the mover dies there, makes the
+    give-back fail quietly, and the moved live lock is then removed: two servers end up holding the guard.
+    Reproduced in `/home/shinelay/architecture-dept/work/ops253-review/repro/tests/unit/arch-ops253-three-servers.test.ts`;
+    Security lists the same three-server case as a residual. Fix: keep the inode of the linked lock, check that
+    `lock` still has it before "on" and before each guard write (else off), and let `stop()` remove only that
+    inode. Also correct `takeLock()`'s docstring: the rename can take a lock made after the look (which is why
+    the moved lock's pid is read again).
+  - B2 (Architecture): a `beginGeneration()` that fails before the switch leaves a half-made gen-(N+1) until the
+    next try or start. Remove it there, or make the steps under "If the log says UNAVAILABLE (current.json ...)"
+    pick the folder that holds the record rather than the highest N.
+  - B3 (Architecture): a directory at `lock` turns the start off but leaves `lock` naming this pid and the
+    directory at `lock.stale-<pid>`. Fix: `lstat` `lock` first; anything but a plain file turns the start off
+    and is left where it is; the `finally`'s removals best effort. The same `lstat` keeps a FIFO at `lock` from
+    holding up the start (older).
+  - B4 (Architecture, older): a `current.json` naming gen 2 or more when no `gen-` or `archive-gen-` folder is
+    left starts an empty gen-N and turns on, where this doc says to stay off.
+  - B5 (Architecture): sweep `lock.tmp-*` and `lock.stale-*` that a gone pid left (a crash inside `takeLock()`);
+    when the clean-up after a switch fails, log "rotated to N+1; cleanup failed".
+  - N1 (Security, hygiene): `takeLock()`'s `writeFileSync` with `flag: "wx"`, so it never follows a link
+    planted at `lock.tmp-<pid>` or keeps an old file's mode. Same user only.
+  - N2 (Security): O2 brings the first turn-off while the server runs. Approval decide and request read
+    `this.adapters` again after their awaits (`presentOwnerQuestion`, the notice after the state change, the
+    request), so a turn-off from another chat's send in between gives a raw "Cannot read properties of null",
+    and a decision may be recorded while its notice isn't sent. It fails closed. Fix: after each await, check
+    the status and adapters again and answer that the ladder is off.
+  - Known, no change asked (Security): three servers starting at once against a stale lock can leave two
+    holding it (B1); an execute in flight on the old store during the rare "switched but not flushed" turn-off
+    may stay unreconciled.
+  - Older, not caused by #253 (Architecture): a gone server's pid reused by another process keeps starts off
+    (fix: keep the pid with its start time); `stop()` removes the lock by name (B1's inode check covers it).
 
 ## How to use it
 
@@ -203,6 +240,19 @@ Only when the start log says `approval ladder UNAVAILABLE (recover: ...)`. Run f
 
 If the log says `approval ladder: fresh start refused (<why>)`, nothing was written and the request stays
 where it is so the reason can be seen. Fix the cause, or make a new request, and restart again.
+
+## If the log says rotation failed, or another server (Ops #253)
+
+- `approval ladder: rotation failed (<why>); staying on generation N`: a size rotation couldn't make
+  gen-(N+1). Approvals stay on in gen-N, and the next send that finds the record due tries again; the line
+  comes once per reason while the server runs. Fix what it names (often a guard folder that can't be written
+  or a full disk); nothing else is needed.
+- `approval ladder UNAVAILABLE (rotation: <why>): ...`: a rotation failed and `current.json` no longer names
+  the open generation, or can't be read, so approvals are off and sends go the native way. Restart with
+  `pi-web-deploy restart`; if the start then says `UNAVAILABLE (current.json ...)`, follow the next section.
+- `approval ladder UNAVAILABLE (another server (pid N) holds the guard): ...`, or
+  `... took the guard as this one started`: another pi-web-ui server runs on the same data folder. Stop the
+  extra one, then `pi-web-deploy restart`. A lock left by a server that is gone is taken over by itself.
 
 ## If the log says UNAVAILABLE (current.json ...)
 
@@ -322,3 +372,14 @@ unreadable as the live one was):
 - the fresh start and a rotation begin their generation with one helper and leave the same files (S2);
 - the script runs with `PI_WEB_DATA_DIR` on the test's temp folder (N2); it also refuses a request over
   4 KiB, a prepared or unparseable journal, and a missing `current.json` while a generation exists.
+- Ops #253: a first start whose store fails once after gen-1 is made: the next start is on, in gen 1 (A1); a
+  rotation after a send, in a folder it can't write: each send comes back as sent and is there once,
+  approvals stay on, the log says why once; with `current.json` no longer naming the store: the send comes back
+  as sent, approvals turn off, and only that send's own gen-2 files changed; at start, a rotation that fails
+  stays on, and one that finds `current.json` changed turns off without saying "on" (O2).
+- Ops #253, `tests/unit/role-message-guard-host-files.test.ts`: each rename of `current.json` is followed at
+  once by a flush of the guard folder (A2); two servers starting at once on one folder: exactly one holds the
+  guard and the other turns off, leaving nothing; a gone server's, an unreadable or empty, and this process's
+  own lock are taken over; the give-back and second-try cases (A4).
+- Ops #253, `tests/unit/role-message-guard-store.test.ts`: the fresh start's check and `recover()` agree on a
+  prepared send at all 12 points where a send can stop (A3).
