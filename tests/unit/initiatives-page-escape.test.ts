@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * initiatives-page-exact, H-INITIATIVES-PAGE-2 (docs/initiatives-page-exact.md): Escape closes the Initiatives
+ * initiatives-page-exact, H-INITIATIVES-ESCAPE-1 (docs/initiatives-page-exact.md): Escape closes the Initiatives
  * page's own dialogs first. The app hands Escape to the newest handler on its stack (web/src/shortcut-stack.ts);
  * the chat pane's question dialog is on it even while the pane is hidden behind the tab. Without the page's own
  * handler, Escape kept the Change lead dialog open and cancelled that chat's waiting question (live look, Oct 18).

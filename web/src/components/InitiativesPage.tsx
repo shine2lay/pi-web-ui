@@ -52,7 +52,7 @@ export function InitiativesPage({ active, onOpen }: InitiativesPageProps) {
 	const [source, setSource] = useState<UiDecisionSource | null>(null);
 	const [leadFor, setLeadFor] = useState<string | null>(null);
 
-	// Escape closes the page's own dialog first (H-INITIATIVES-PAGE-2). The app hands Escape to the newest
+	// Escape closes the page's own dialog first (H-INITIATIVES-ESCAPE-1). The app hands Escape to the newest
 	// handler on its stack (shortcut-stack.ts), and the chat pane's question dialog is on it even behind this
 	// tab: without this, Escape would cancel that chat's waiting question and leave the dialog open.
 	useEscapeKey(

@@ -62,7 +62,9 @@ Additions to the design's markup (written by `scripts/extract-initiatives-templa
 
 With the Change lead dialog open, Escape left it open (`dialog[open]` still there 400 ms later), and at that moment the page tried to send one `question_answer` (held by the look, never sent): the cancel of the question waiting in the Ops lead chat, whose notice showed top right. The cause is in the app's Escape order (`web/src/shortcut-stack.ts`): one capture listener on the document hands Escape to the newest handler on its stack and stops it there (`preventDefault`). The question dialog in the chat pane (`DshQuestionDialog`, mounted while the chat pane is hidden behind the Initiatives tab) is on that stack and cancels its question; the page's dialogs aren't on it, so the native dialog never gets its Escape.
 
-## H-INITIATIVES-PAGE-2: Escape closes the page's own dialogs first
+## H-INITIATIVES-ESCAPE-1: Escape closes the page's own dialogs first
+
+Called H-INITIATIVES-PAGE-2 in the commits that landed it (774e5a71, 44b29280); renamed so that steps 2, 3 and 4 keep the ids their plans give them (H-INITIATIVES-PAGE-2, -3 and -4).
 
 **Wrong, and the evidence.** The live look above: Escape with the Change lead dialog open kept it open and tried to cancel the Ops lead chat's waiting question. The source dialog the page opens from a decision is built the same way, so it has the same problem.
 
@@ -76,7 +78,7 @@ With the Change lead dialog open, Escape left it open (`dialog[open]` still ther
 
 Not this change: the question dialog keeps its Escape while the chat pane is hidden, so Escape on another tab, with focus outside a page's own frame or dialog, still cancels a waiting question the owner can't see. That is the question dialog's behaviour across the app, a follow-up of its own.
 
-### H-INITIATIVES-PAGE-2: hit (Oct 18)
+### H-INITIATIVES-ESCAPE-1: hit (Oct 18)
 
 - `tests/unit/initiatives-page-escape.test.ts` failed without the change (2 failed: the dialog stayed open and the cancel was sent) and passed with it (3 of 3).
 - Landed as `9b6c4e73`, with the doc `774e5a71`, through `wt land` request `38-c6a823` (gate: 434 files, 6198 tests passed, 6 skipped). The first try (`36-43bc8b`) failed on one test this change doesn't touch: `tests/unit/role-message-guard-core.test.ts` went past vitest's 5 s limit (5134 ms) while its file took 64 s instead of the usual 33 to 38 s, with load average 28.6 and another landing beside it; the second try ran unchanged.
