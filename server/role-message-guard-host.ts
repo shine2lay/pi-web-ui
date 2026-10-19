@@ -374,14 +374,46 @@ function writeDurableBytes(path: string, bytes: Buffer): void {
 	}
 	renameSync(tmp, path);
 }
-/** The pid a lock file names, or null when it is missing or names none. */
+/** The pid a lock file names, or null when it is missing, names none or isn't a plain file. Ops #257 (B3): one open
+ *  that doesn't follow a link or wait on a pipe, checked on that open file, as readFreshStartFile() does. */
 function readPid(path: string): number | null {
+	let fd: number;
 	try {
-		const n = Number.parseInt(readFileSync(path, "utf8"), 10);
-		return Number.isSafeInteger(n) ? n : null;
+		fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
 	} catch {
 		return null;
 	}
+	try {
+		if (!fstatSync(fd).isFile()) return null;
+		const buf = Buffer.alloc(32);
+		const n = Number.parseInt(buf.toString("utf8", 0, readSync(fd, buf, 0, buf.length, 0)), 10);
+		return Number.isSafeInteger(n) ? n : null;
+	} catch {
+		return null;
+	} finally {
+		closeSync(fd);
+	}
+}
+/** Ops #257 (B3): why the guard's lock can't be taken as it is: it is there and isn't a plain file (a folder, a pipe,
+ *  a link), looked at with lstat, never opened or followed. null when it is a plain file or isn't there. */
+function lockNotFile(path: string): string | null {
+	let st: ReturnType<typeof lstatSync> | undefined;
+	try {
+		st = lstatSync(path);
+	} catch {
+		return null; // not there: the link that takes it decides
+	}
+	if (!st || st.isFile()) return null;
+	const kind = st.isSymbolicLink()
+		? "a link"
+		: st.isDirectory()
+			? "a folder"
+			: st.isFIFO()
+				? "a pipe"
+				: st.isSocket()
+					? "a socket"
+					: "a device";
+	return `the guard's lock is ${kind}, not a plain file; it was left in place`;
 }
 function fsyncDir(path: string): void {
 	const fd = openSync(path, "r");
@@ -578,6 +610,9 @@ export class RoleMessageGuardHost {
 		try {
 			mkdirSync(this.o.dir, { recursive: true });
 			this.lockPath = join(this.o.dir, "lock");
+			// Ops #257 (B3): anything but a plain file at `lock` turns the start off and stays as it is.
+			const notFile = lockNotFile(this.lockPath);
+			if (notFile) return this.degrade(notFile);
 			const other = this.readLock();
 			if (other && other !== process.pid && pidAlive(other))
 				return this.degrade(`another server (pid ${other}) holds the guard`);
@@ -802,6 +837,9 @@ export class RoleMessageGuardHost {
 				closeSync(fd);
 			}
 			if (this.linkLock(mine, made)) return null;
+			// Ops #257 (B3): looked at again here, as one can appear after the start's first look; never moved.
+			const notFile = lockNotFile(this.lockPath);
+			if (notFile) return notFile;
 			const other = this.readLock();
 			if (other && other !== process.pid && pidAlive(other)) return `another server (pid ${other}) holds the guard`;
 			let moved = false;
@@ -824,8 +862,14 @@ export class RoleMessageGuardHost {
 			if (this.linkLock(mine, made)) return null;
 			return `another server (pid ${this.readLock() ?? "unknown"}) took the guard as this one started`;
 		} finally {
-			rmSync(mine, { force: true });
-			rmSync(aside, { force: true });
+			// Ops #257 (B3): best effort, so a removal that fails can't hide the outcome above.
+			for (const left of [mine, aside]) {
+				try {
+					rmSync(left, { force: true });
+				} catch {
+					/* left behind */
+				}
+			}
 		}
 	}
 	/** Link this process's flushed lock file to `lock`: true once held (the folder flushed, the file's inode kept),

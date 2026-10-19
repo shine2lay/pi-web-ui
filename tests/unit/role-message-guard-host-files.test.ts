@@ -1,7 +1,17 @@
 // Ops #253: the guard folder's own files: current.json's switch reaches the disk (Architecture A2), and one server
 // holds the lock (A4). Real host, store and native record (role-message-guard-host-harness.ts); node:fs passes
 // through, noting the renames and flushes a test looks at, and running a test's hook where another server could step in.
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RoleMessageGuardHost } from "../../server/role-message-guard-host.js";
@@ -207,6 +217,56 @@ describe("one server holds the guard (Ops #253, Architecture A4)", () => {
 		expect(readFileSync(journal, "utf8")).toBe(before);
 		w.host.stop();
 		expect(readFileSync(lock, "utf8")).toBe(`${OTHER}\n`); // its stop leaves the other server's lock
+	});
+
+	// Ops #257 (B3): `lock` is looked at with lstat first; anything but a plain file turns the start off, left as it is.
+	const odd = (kind: string) => `the guard's lock is ${kind}, not a plain file; it was left in place`;
+	it("a folder or a link at lock turns the start off and is left as it is (Ops #257, B3)", async () => {
+		const w = await world();
+		const cases: Array<[string, (lock: string) => void, (lock: string) => boolean]> = [
+			[
+				"a folder",
+				(l) => {
+					mkdirSync(l);
+					writeFileSync(join(l, "keep"), "x");
+				},
+				(l) => lstatSync(l).isDirectory() && existsSync(join(l, "keep")),
+			],
+			[
+				"a link", // to a gone server's lock: never followed, never moved
+				(l) => {
+					writeFileSync(`${l}-target`, `${2 ** 22 + 1}\n`);
+					symlinkSync(`${l}-target`, l);
+				},
+				(l) => lstatSync(l).isSymbolicLink() && readFileSync(`${l}-target`, "utf8") === `${2 ** 22 + 1}\n`,
+			],
+		];
+		for (const [kind, make, still] of cases) {
+			const dir = join(data, `guard-${kind.replace(" ", "-")}`);
+			mkdirSync(dir, { recursive: true });
+			const lock = join(dir, "lock");
+			make(lock);
+			const host = newHost(w, dir);
+			await host.start();
+			expect(host.state, kind).toEqual({ status: "degraded", reason: odd(kind) });
+			expect(still(lock), kind).toBe(true);
+			expect(lockFiles(dir).sort(), kind).toEqual(kind === "a link" ? ["lock", "lock-target"] : ["lock"]);
+			host.stop();
+			expect(still(lock), kind).toBe(true);
+		}
+	});
+
+	it("a pipe at lock turns the start off at once, never opened (Ops #257, B3)", async () => {
+		const w = await world();
+		const dir = join(data, "guard-pipe");
+		mkdirSync(dir, { recursive: true });
+		const lock = join(dir, "lock");
+		execFileSync("mkfifo", [lock]);
+		const host = newHost(w, dir);
+		await host.start(); // before: opening the pipe to read it waited for a writer, so the start never finished
+		expect(host.state).toEqual({ status: "degraded", reason: odd("a pipe") });
+		expect(lstatSync(lock).isFIFO()).toBe(true);
+		expect(lockFiles(dir)).toEqual(["lock"]);
 	});
 
 	it("a server that takes the lock between the move and the second try wins it; this one turns off", async () => {
