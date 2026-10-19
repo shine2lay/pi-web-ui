@@ -309,6 +309,7 @@ import { DecisionReader, readerStatus, type ReadResult, unreadOf } from "./decis
 import { DecisionStore, fileRecord } from "./decision-store.js";
 import { buildDecisionsPage, recordView } from "./decision-view.js";
 import { WhoCache } from "./who-cache.js";
+import { WhoFiller } from "./who-fill.js";
 import {
 	BOARD_CUSTOM_TYPE,
 	boardChatState,
@@ -15989,6 +15990,13 @@ export class AgentService {
 	/** Architecture #99 (H-INIT-WHO-CACHE): who decided, kept between Initiatives page builds (who-cache.ts);
 	 *  keptRecords tells it about every new read of the records file. */
 	private readonly whoCache = new WhoCache();
+	/** Architecture #115 (H-INIT-WHO-FILL): fills whoCache in the background, in slices, through the page's own
+	 *  path (who-fill.ts), one fill at a time. */
+	private readonly whoFiller = new WhoFiller(
+		this.whoCache,
+		() => ({ decisions: this.decisionStore.decisions(), recs: this.keptRecords().byId }),
+		{ log: (line) => console.log(line) },
+	);
 	/** index.ts: the Initiatives page changed (decisions, the reader's state). */
 	onDecisionsChanged: (() => void) | null = null;
 
@@ -16040,14 +16048,30 @@ export class AgentService {
 			/* nothing kept yet */
 		}
 		if (this.decisionRecordsIndex?.key === key) return this.decisionRecordsIndex;
-		// The kept who-decided answers stay right while the file only grows; a replaced or shrunk one drops them.
-		this.whoCache.sawFile(ino, size);
+		// The kept who-decided answers stay right while the file only grows; a replaced or shrunk one drops them,
+		// and they are filled again in the background (#115).
+		if (this.whoCache.sawFile(ino, size)) this.startWhoFill();
 		const list = this.decisions.list();
 		const byId = new Map(list.map((r) => [r.id, r] as const));
 		const byRef = new Map<string, DecisionRecord>();
 		for (const r of list) if (!byRef.has(r.ref)) byRef.set(r.ref, r);
 		this.decisionRecordsIndex = { key, list, byId, byRef };
 		return this.decisionRecordsIndex;
+	}
+
+	/**
+	 * Architecture #115 (H-INIT-WHO-FILL): fill the who-cache in the background, in slices, through the page's
+	 * own path (who-fill.ts), so the first Initiatives page after a start isn't a cold build. index.ts starts
+	 * it when the server listens; keptRecords starts it again after the records file was replaced or shrank.
+	 * One at a time: asked while one runs, another follows it. A failure is logged, and pages build as before.
+	 */
+	startWhoFill(): void {
+		this.whoFiller.start();
+	}
+
+	/** #115: the background fill an Initiatives page should wait for, or nothing when none is running. */
+	whoFillPending(): Promise<void> | undefined {
+		return this.whoFiller.pending();
 	}
 
 	private keptRecord(idOrRef: string): DecisionRecord | undefined {

@@ -10,6 +10,19 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## initiatives-who-fill: the who-cache filled in the background after each start
+
+- `local` (Architecture #115, 2026-10-19; the owner's freeze work, bp-41b2f05f puts freeze fixes first). Hypothesis H-INIT-WHO-FILL: section 8 of `~/architecture-dept/debug/reconnect-2026-10-16/day-census-2026-10-19/RESULT.md`; proof and live check: `~/architecture-dept/work/who-fill/RESULT.md`.
+- Why: the who-cache (`initiatives-who-cache`, #99) lives in memory only, so the first Initiatives page build after every restart worked out who decided for every source on the main thread, 7.5-9.5 s with every chat frozen (9.5 s at 11:40:00 on Oct 19). Restarts are frequent with continuous deploys.
+- `server/who-fill.ts` (new): `fillWhoCache(decisions, recs, cache, opts)` walks every source of the decisions a page build walks (each decision's, then each change's) through the same `sourceView` that `decisionView` and `changeView` call, with the same record, was record and cache (the same keys; the views are thrown away), after one `newBuild()`, in slices: a slice stops once about 25 ms of work is done and the next waits for `setImmediate`. Source by source, not decision by decision, because on the live store ten decisions took over 50 ms each alone (up to 194 ms, one citing 81 sources) (offline, a per-decision fill's longest slice was 178-869 ms; per source, the longest slice's own CPU time was 35-41 ms). A fill whose cache was cleared meanwhile stops at the next slice (resolves null). `WhoFiller`: one fill at a time; `start()` during a fill asks for another after it; `pending()` is the running fill (never rejects); one log line per fill (`[who-fill] decisions= sources= answers= computed= slices= longest_ms= total_ms=`), or `[who-fill] failed: …` and pages build as before.
+- `server/who-cache.ts`: `epoch` (counts `clear()`), which the fill watches.
+- `server/agent-service.ts`: a `WhoFiller` on the page's cache, reading `decisionStore.decisions()` and `keptRecords().byId`; `startWhoFill()` and `whoFillPending()`. `keptRecords()` starts a fill when `sawFile` dropped the answers (file replaced or shrunk).
+- `server/initiatives-watch.ts`: optional `ready` hook. While it returns a fill, a page waits for it, then builds once: a watcher asked again meanwhile doesn't build twice, a dropped or replaced watcher gets nothing, a fill started during the wait is waited for too. One log line per page that waited (`[initiatives] page waited N ms for the who-fill`). Without a fill the page builds at once, as before.
+- `server/index.ts`: the watch's `ready` is `service.whoFillPending`; the fill starts when the server listens (`service.startWhoFill`). Engine interface: both optional.
+- Unchanged: `whoOf`, its answers, and its callers that don't use the cache (decision reader, decision_log tool, feed check, progress feed). Nothing is stored on disk.
+- Checks: `tests/unit/who-fill.test.ts` (11: slices yield, setImmediate between slices, a page after the fill equals a cold page with no whoOf call left, a clear stops the fill, a watch during a fill waits and sends once, a dropped/replaced watcher gets nothing, a fill started during the wait, a refill after a drop, a drop mid-fill restarts, a failed fill, the log line); the offline proof on a copy of the live store; the landing gate; the live check after install.
+- Undo: revert this commit and install with `pi-web-deploy`; the first page after a restart is a cold build again.
+
 ## gate-near-limit: the gate's cases near the 5 s test limit split, or given their own limit
 
 - `local` (Ops #252, project faster-landing, 2026-10-19). Hypothesis H-GATE-NEAR-LIMIT-1, how the cases were picked (every case on the default limit over 2.5 s in the newest 16 land logs, at most 8), the before and after times and the result: `docs/gate-near-limit.md`.

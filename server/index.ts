@@ -1479,6 +1479,10 @@ export interface EngineService {
 	onBoardChanged?: (() => void) | null;
 	/** initiatives-page (pi engine): the Initiatives tab's page, for one initiative ("" = Unfiled). */
 	initiativesPage?(initiative?: string, limit?: number): UiDecisionsPage;
+	/** who-fill (pi engine, Architecture #115): fill the Initiatives page's who-cache in the background. */
+	startWhoFill?(): void;
+	/** who-fill: the fill running now, which an Initiatives page waits for. */
+	whoFillPending?(): Promise<void> | undefined;
 	/** initiatives-page (pi engine): one kept record a card cites. */
 	decisionRecordView?(idOrRef: string): UiDecisionRecordView | undefined;
 	/** progress-feed (pi engine, task #85): the owner sets or clears an initiative's lead (the page only). */
@@ -2093,7 +2097,8 @@ const initiativesWatch = new InitiativesWatch<object>(
 		if (!service.initiativesPage) throw new Error("this engine has no Initiatives page");
 		return service.initiativesPage(initiative, limit);
 	},
-	{ log: (line) => console.log(line) },
+	// who-fill (#115): a page asked for while the who-cache is filled after a start waits for the fill.
+	{ log: (line) => console.log(line), ready: () => service.whoFillPending?.() },
 );
 
 /** initiatives-plan-data (Ops #223): the work registry for the Initiatives page, per window (keyed by its socket). */
@@ -4355,6 +4360,8 @@ subsLimits.start();
 httpServer.listen(PORT, HOST, () => {
 	// session-index: History and Recent chats are ready for the windows that reconnect.
 	service.warmSessionIndex?.();
+	// who-fill (#115): the Initiatives page's who-cache, filled in slices so the first page isn't a cold build.
+	service.startWhoFill?.();
 	// carry-on: give plugins and MCP servers a moment to come up, then reopen the cut-off chats;
 	// stall-watch: then the queue chats, whose watchdog looks after their tasks' chats.
 	setTimeout(

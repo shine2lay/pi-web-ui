@@ -56,6 +56,7 @@ export class WhoCache {
 	private build = 0;
 	private computed = 0;
 	private file: { ino: number; size: number } | undefined;
+	private cleared = 0;
 
 	/** Who decided: whoOf(rec, { ...src, was }), worked out once per record, was record and source fields. */
 	get(rec: DecisionRecord | undefined, src: WhoPoint, was?: DecisionRecord): Who {
@@ -79,6 +80,12 @@ export class WhoCache {
 
 	clear(): void {
 		this.entries.clear();
+		this.cleared++;
+	}
+
+	/** Times the answers were dropped (clear): a background fill (who-fill.ts) that sees it change stops. */
+	get epoch(): number {
+		return this.cleared;
 	}
 
 	/**
