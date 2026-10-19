@@ -11,6 +11,12 @@ interface DialogProps {
 		title: string;
 		args: unknown[];
 	};
+	/**
+	 * escape-hidden-question: whether Escape cancels this ask (default true). App passes "the chat view is showing":
+	 * the chat pane stays mounted behind the other tabs, and Escape there must not cancel an ask the owner can't see.
+	 * While false the handler passes Escape on but keeps its place on the stack, so the chat view's order stays.
+	 */
+	escapeEnabled?: boolean;
 }
 
 /**
@@ -18,7 +24,7 @@ interface DialogProps {
  * rendered above the chat input (non-modal — the conversation stays visible).
  * Resolves via dialog_response; cancel/Esc resolves with null.
  */
-export function Dialog({ dialog }: DialogProps) {
+export function Dialog({ dialog, escapeEnabled = true }: DialogProps) {
 	const t = useT();
 	const [inputValue, setInputValue] = useState("");
 	const [sel, setSel] = useState(0);
@@ -33,7 +39,10 @@ export function Dialog({ dialog }: DialogProps) {
 	}, [dialog.id]);
 	// 审查 #12：Esc 改走 shortcut-stack 分层栈 —— 裸 document 监听会抢走
 	// 叠在上面的模态弹窗的 Esc（与 Modal.tsx 同一调度，内层优先）。
-	useEscapeKey(() => respond(null));
+	useEscapeKey(() => {
+		if (!escapeEnabled) return false;
+		respond(null);
+	});
 
 	const options = Array.isArray(dialog.args[0]) ? (dialog.args[0] as string[]) : [];
 	const message = typeof dialog.args[0] === "string" ? (dialog.args[0] as string) : "";

@@ -2071,7 +2071,9 @@ export function App() {
 						{/* 扩展问卷：非模态内联面板，插在输入框上方，对话内容保持可见 */}
 						{/* 通用右键菜单（contextmenu.* 槽位）：各处的 onContextMenu 打开它。 */}
 						<ContextMenu onAction={(entry, target, value) => onUiAction(entry, value, target)} />
-						{dialog && <Dialog dialog={dialog} />}
+						{/* escape-hidden-question: this pane stays mounted behind the other tabs, so its asks (this dialog and
+						    the question dialogs below) take Escape only while the chat view is showing. */}
+						{dialog && <Dialog dialog={dialog} escapeEnabled={view === "chat"} />}
 						{/* 本地插件对话框（host.dialogs.*）：复用 .dialog-inline 样式，按钮 resolve 后清态 */}
 						{pluginDialog && (
 							<div className="dialog-inline" data-dialog-kind={pluginDialog.kind}>
@@ -2255,6 +2257,7 @@ export function App() {
 						{chat.question && (
 							<DshQuestionDialog
 								question={chat.question}
+								escapeEnabled={view === "chat"}
 								conversationTitle={
 									chat.question.conversationTitle ||
 									chat.conversations.find((c) => c.id === (chat.question?.conversationId || activeConvId))?.title
@@ -2266,6 +2269,7 @@ export function App() {
 							<DshQuestionDialog
 								question={chat.remoteQuestion}
 								owner={chat.remoteQuestion.owner}
+								escapeEnabled={view === "chat"}
 								conversationTitle={
 									chat.remoteQuestion.conversationTitle ||
 									chat.conversations.find((c) => c.id === chat.remoteQuestion?.convId)?.title

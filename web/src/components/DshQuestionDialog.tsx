@@ -35,6 +35,13 @@ interface DshQuestionDialogProps {
 	owner?: string;
 	/** 备用对话标题（当 question 中未携带时兜底使用）。 */
 	conversationTitle?: string;
+	/**
+	 * escape-hidden-question: whether Escape cancels this question (default true). App passes "the chat view is
+	 * showing": the chat pane stays mounted behind the other tabs, and Escape there must not cancel a question the
+	 * owner can't see. While false the handler passes Escape on but keeps its place on the stack, so the chat view's
+	 * order stays.
+	 */
+	escapeEnabled?: boolean;
 }
 
 /**
@@ -50,7 +57,12 @@ interface DshQuestionDialogProps {
  * 文本渲染：question/detail/description/preview 统一走 Markdown（rawHtml），
  * 模型可自由写 markdown 或 HTML —— 由模型自选、信任模型。
  */
-export function DshQuestionDialog({ question, owner, conversationTitle }: DshQuestionDialogProps) {
+export function DshQuestionDialog({
+	question,
+	owner,
+	conversationTitle,
+	escapeEnabled = true,
+}: DshQuestionDialogProps) {
 	const t = useT();
 	const convTitle = question.conversationTitle || conversationTitle;
 	const [selections, setSelections] = useState<Record<string, string[]>>({});
@@ -112,6 +124,7 @@ export function DshQuestionDialog({ question, owner, conversationTitle }: DshQue
 	// 审查 #12：Esc 改走 shortcut-stack 分层栈（与 Modal 同一调度）——
 	// 多层弹窗叠开时内层优先消费，不再裸 document 监听抢 Esc。
 	useEscapeKey(() => {
+		if (!escapeEnabled) return false;
 		cancel();
 	});
 

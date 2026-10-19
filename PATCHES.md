@@ -19,6 +19,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: `tests/unit/carry-on-requester.test.ts` (round trip, bad records dropped, a seeded turn's owner ids and requester, unknown without a record, never the owner's id for a non-owner input), `role-mail-restart.test.ts` (with nothing saved the carry-on call is the same as before), then the landing gate. `roles-contact.test.ts` re-pins the Ops108 bytes of `server/role-replies.ts`: the diff changes only its requester import and requester line, no routing line. Minimal checks at the owner's request.
 - Undo: revert this commit and deploy the earlier build with `pi-web-deploy`; the extra field in `running-chats.json` is then ignored.
 
+## escape-hidden-question: Escape answers a chat's ask only while the chat is on screen
+
+- `local` (Ops #239, found by #225's live look on Oct 18; the owner's standing ask to fix breakages along the way, m55423). Hypothesis H-ESCAPE-HIDDEN-QUESTION-1 and result: `docs/escape-hidden-question.md`.
+- The chat pane stays mounted behind Roles, Initiatives, Schedules and the other tabs, and its asks kept their Escape handlers on the app's stack (`web/src/shortcut-stack.ts`) there: Escape on a covering tab cancelled a question or an extension's ask the owner couldn't see, and the chat carried on with "cancelled".
+- `Dialog` and `DshQuestionDialog` take an optional `escapeEnabled` (default true); `App.tsx` passes `view === "chat"` to the extension dialog and both question dialogs (the chat's own and another chat's). While false the handler returns false: Escape goes on to the page, and the handler keeps its place on the stack, so in the chat view Escape goes where it went before (not `useEscapeKey`'s `enabled` flag, which would put it back on top of a modal opened on another tab).
+- Checks: `tests/unit/hidden-question-escape.test.ts` (each ask on Roles, Initiatives with no page dialog open, Schedules and Terminal; the chat view; back to the chat; a modal opened on another tab; App's wiring), `tests/unit/initiatives-page-escape.test.ts` unchanged, then the landing gate and pi-web-deploy's checks.
+- Undo: revert this commit.
+
 ## notes-check: a change to notes only runs only the checks that read notes
 
 - `local` (owner 2026-10-18, "Notes skip the tests", Ops #235, project faster-landing). Hypothesis H-WT-NOTES-1 and result: agent-tools `docs/wt-notes-check.md`.
