@@ -26,6 +26,8 @@ export type InitiativesExactTab = "overview" | "design" | "decisions" | "activit
 /** One "Who's doing what" row. `tasks` are its child task rows: the same row, indented 16 px. */
 export interface InitiativesExactRole {
 	name?: string;
+	/** initiatives-page: the id of a detail frame (in the input's `details`) the row's name opens. */
+	opens?: string;
 	lead?: boolean;
 	/** The role's part in the initiative. */
 	part?: string;
@@ -215,6 +217,8 @@ export interface InitiativesExactLooseItem {
 	onYou?: boolean;
 	choices?: readonly string[];
 	answer?: string;
+	/** initiatives-page: the id of a detail frame (in `details`) the item's name opens. */
+	opens?: string;
 }
 export interface InitiativesExactLoose {
 	/** Absent: the design's "Roles in no initiative · N". */
@@ -229,6 +233,9 @@ export interface InitiativesExactInput {
 	page?: InitiativesExactPage;
 	initiatives?: readonly InitiativesExactInitiative[];
 	loose?: InitiativesExactLoose;
+	/** initiatives-page: more detail frames, without a card of their own (a project's own detail). A row or a
+	 *  box item opens one by its `opens`; their ids must not be an initiative's or the box's. */
+	details?: readonly InitiativesExactInitiative[];
 	/** A sentence after the count of things waiting on you, in the page's summary line. */
 	summaryNote?: string;
 	/** initiatives-page: the whole summary line while the page is live, out of date or empty, in place of

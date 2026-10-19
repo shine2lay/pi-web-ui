@@ -41,3 +41,9 @@ export function partIds(page: UiWorkPage): string[] {
 	const loose = page.projects.some((p) => !p.initiative || !ids.has(p.initiative));
 	return [...ids, ...(loose ? [NO_INITIATIVE] : [])];
 }
+
+/** A project's own detail (initiatives-page-plan): its id among the view's `details`. Registry ids are slugs, so
+ *  it is never an initiative's id or NO_INITIATIVE. A section module fills it by this id, like an initiative. */
+export function projectFrameId(projectId: string): string {
+	return "~project:" + projectId;
+}

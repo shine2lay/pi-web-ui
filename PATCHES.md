@@ -10,6 +10,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## initiatives-page-plan: goals, done-when items and projects on the Initiatives page
+
+- `local` (owner 2026-10-18, Ops home chat: design first, then features; "Side by side" for steps 2-4; Ops #226, project initiatives-page). Hypothesis H-INITIATIVES-PAGE-2 and result: `docs/initiatives-page-plan.md`.
+- `web/src/initiatives-page/plan.ts` fills Goal (the record's outcome), Started (the day it was created), Outcomes and Done when for every initiative and project, from the `work_page` feed: each done-when item in the registry's order. A met item reads "Done · <day marked>" with "Proof: <proof>" as its step and "Marked by <role>" (or "you") as its owner; an open item lists the initiative's open projects with "x of y done", or "No project yet", never a done step, so only met items count as done. The "in no initiative" box says each project has its own.
+- Hook, the smallest the core needed: a project opens in the detail panel. `model.ts` builds one frame per project (`projectFrameId` in `types.ts`), which the parts fill like an initiative's; the input's new `details` list carries them, and a project row's or box item's `opens` names its frame. The view opens a frame from `details` like a card. Template additions 7-8 (`scripts/extract-initiatives-template.mjs`): a row's name and a box item's name are a button when they open something. Absent fields keep step 1's behaviour. What an initiative keeps (the lead's updates, decisions, hand-offs, gaps, activity) says where it shows.
+- Checks: `tests/unit/initiatives-page-plan.test.ts` (on `tests/unit/initiatives-page-fixture.ts`) with the core model, gaps and design tests, one sealed look at 1440 px, then the landing gate and a look-only live check against the live registry.
+- Undo: revert this commit (Goal, Started and Outcomes say "Not connected yet" again, and projects don't open).
+
 ## restart-requester: a chat carried on after a restart still answers the same messages
 
 - `local` (owner 2026-10-18, picked "The three bugs"; Ops #236). Hypothesis H-ROLES-TRACKER-2 and result: `docs/roles-tracker.md`.

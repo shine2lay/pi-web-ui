@@ -123,6 +123,7 @@ function normalize(i: InitiativesExactInitiative) {
 	const old = typeof i.oldSince === "string" && i.oldSince !== "";
 	const role = (r: InitiativesExactRole, parent?: string) => ({
 		name: r.name ?? parent ?? NOT_RECORDED,
+		opens: r.opens ?? "",
 		lead: !!r.lead && parent === undefined,
 		part: r.part ?? "",
 		task: r.task ?? "",
@@ -246,6 +247,12 @@ export function createInitiativesExactView(
 		if (!disposed && typeof f === "function") f(...args);
 	};
 	const has = (name: keyof InitiativesExactActions) => typeof actions()[name] === "function";
+	// Opens a card's detail, the box's, or (initiatives-page) a frame in the input's `details`.
+	const pickId = (id: string) => {
+		if (st.sel === id) return;
+		setState({ sel: id });
+		call("select", id);
+	};
 
 	function values(): SurfaceValues {
 		const input = read();
@@ -253,14 +260,10 @@ export function createInitiativesExactView(
 		const pageState = page.state ?? "live";
 		const all = (input.initiatives ?? []).map(normalize);
 		const looseDetail = input.loose?.detail ? normalize(input.loose.detail) : undefined;
+		const details = (input.details ?? []).map(normalize);
 		const tab: InitiativesExactTab = st.tabPicked ? st.tab : (input.tab ?? "overview");
 		const filter = st.filter;
 		const filtersNote = input.filtersNote;
-		const pickId = (id: string) => {
-			if (st.sel === id) return;
-			setState({ sel: id });
-			call("select", id);
-		};
 		const openOnYou = (i: Initiative) => i.onYou.filter((o) => o.answer === undefined);
 		const looseItems = input.loose?.items ?? [];
 		const looseAsks = looseItems.filter((l) => l.onYou && l.answer === undefined).length;
@@ -295,6 +298,7 @@ export function createInitiativesExactView(
 
 		const selId = st.sel ?? input.selected ?? all[0]?.id;
 		const looseOpen = !!looseDetail && selId === looseDetail.id;
+		const frame = looseOpen ? undefined : details.find((d) => d.id === selId);
 		const seg = (d: boolean, p: boolean) => ({
 			bg: d ? "#9FD8B8" : p ? "transparent" : "rgba(125,184,255,0.18)",
 			bd: d ? "#9FD8B8" : p ? "#4A4F57" : "rgba(125,184,255,0.45)",
@@ -336,7 +340,7 @@ export function createInitiativesExactView(
 			};
 		});
 
-		const I = (looseOpen ? looseDetail : all.find((i) => i.id === selId)) ?? all[0];
+		const I = (looseOpen ? looseDetail : (all.find((i) => i.id === selId) ?? frame)) ?? all[0];
 		const sel = I ? detail(I, tab, openOnYou(I).length) : {};
 		const dz = I
 			? designValues(I)
@@ -453,7 +457,7 @@ export function createInitiativesExactView(
 			ds.showRoles = false;
 			filters = [];
 			summary = "";
-		} else if (all.length === 0 && !looseOpen) {
+		} else if (all.length === 0 && !looseOpen && !frame) {
 			panel(
 				"No initiatives yet",
 				"The list was checked" + (at ? " at " + at : "") + " and is empty. This isn’t a loading or connection problem.",
@@ -517,6 +521,14 @@ export function createInitiativesExactView(
 				heading: input.loose?.heading ?? "Roles in no initiative · " + looseItems.length,
 				items: looseItems.map((l) => ({
 					name: l.name ?? NOT_RECORDED,
+					nameOpens: !!l.opens,
+					nameStill: !l.opens,
+					nameCurrent: !!l.opens && l.opens === selId ? "true" : "false",
+					pickName: (e: Event | Element) => {
+						// The item sits in the box, whose own click opens the box.
+						if ("stopPropagation" in e) e.stopPropagation();
+						if (l.opens) pickId(l.opens);
+					},
 					mono: l.mono ?? mono(l.name),
 					note: l.note ?? "",
 					hasNote: !!l.note,
@@ -542,6 +554,10 @@ export function createInitiativesExactView(
 		I.roles.forEach((r) => {
 			const row = (x: Omit<typeof r, "tasks">, child: boolean) => ({
 				name: x.name,
+				nameOpens: x.opens !== "",
+				nameStill: x.opens === "",
+				nameCurrent: x.opens !== "" && x.opens === I.id ? "true" : "false",
+				pickName: x.opens ? () => pickId(x.opens) : undefined,
 				lead: x.lead,
 				part: x.part,
 				task: x.task,

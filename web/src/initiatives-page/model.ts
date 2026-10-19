@@ -26,7 +26,7 @@ import type { UiDecision, UiDecisionSource, UiDecisionsPage, UiWorkPage, UiWorkP
 import { gapsPart } from "./gaps";
 import { planPart } from "./plan";
 import { statusOf, tasksPart } from "./tasks";
-import { NO_INITIATIVE, type InitiativesPageOpen, type InitiativesPagePart } from "./types";
+import { NO_INITIATIVE, projectFrameId, type InitiativesPageOpen, type InitiativesPagePart } from "./types";
 
 /** The work registry feed as the page holds it (work-page-state.ts). */
 export interface WorkPageFeed {
@@ -101,6 +101,7 @@ function projectRow(p: UiWorkPageRecord, now: number): InitiativesExactRole {
 	const c = doneCount(p);
 	return {
 		name: p.name,
+		opens: projectFrameId(p.id),
 		part: "Lead · " + roleName(p.lead),
 		taskTitle: c.total ? `${c.done} of ${c.total} done` : "No done-when items yet",
 		statusLabel: STATUS_WORD[p.status] ?? p.status,
@@ -125,9 +126,11 @@ export function buildInitiativesPage(args: InitiativesPageArgs): InitiativesPage
 	const initiatives = byStatus(page.initiatives);
 	const loose = looseProjects(page);
 	const ids = new Set(initiatives.map((i) => i.id));
+	// initiatives-page-plan: a project's own detail (its frame in the view's `details`) can be open too.
+	const frames = new Set(page.projects.map((p) => projectFrameId(p.id)));
 	const pick = args.selected;
 	const selected =
-		pick !== undefined && (ids.has(pick) || (pick === NO_INITIATIVE && loose.length > 0))
+		pick !== undefined && (ids.has(pick) || frames.has(pick) || (pick === NO_INITIATIVE && loose.length > 0))
 			? pick
 			: (initiatives[0]?.id ?? (loose.length ? NO_INITIATIVE : undefined));
 
@@ -219,6 +222,37 @@ export function buildInitiativesPage(args: InitiativesPageArgs): InitiativesPage
 		};
 	};
 
+	// initiatives-page-plan: a project's own detail, opened from its row or its item in the box. Its row is its
+	// own; what an initiative keeps (the lead's updates, decisions, hand-offs, gaps, activity) says where it shows.
+	const project = (p: UiWorkPageRecord): InitiativesExactInitiative => {
+		const home = initiatives.find((i) => i.id === p.initiative);
+		const on = (what: string) =>
+			what + " on " + (home ? `its initiative, ${home.name}.` : "\u201cProjects in no initiative\u201d.");
+		return {
+			id: projectFrameId(p.id),
+			name: p.name,
+			statusLabel: STATUS_WORD[p.status] ?? p.status,
+			statusNote: home ? `Project in ${home.name}` : "Project in no initiative",
+			lead: roleName(p.lead),
+			outcomeCount: doneCount(p),
+			rolesLine: "1 role",
+			members: [],
+			roles: rows([p]),
+			leadNext: on("The lead\u2019s next step shows"),
+			leadReport: on("The lead\u2019s reports show"),
+			latestNote: on("Updates show"),
+			decisions: [],
+			decisionsTotal: 0,
+			decisionsNote: on("Decisions show"),
+			handoffsNote: on("Hand-offs show"),
+			gapsNote: on("Gaps show"),
+			activityNote: on("Activity shows"),
+			canMessageLead: false,
+			canChangeLead: false,
+			oldSince: old,
+		};
+	};
+
 	const looseCount = loose.reduce(
 		(n, p) => {
 			const c = doneCount(p);
@@ -239,6 +273,7 @@ export function buildInitiativesPage(args: InitiativesPageArgs): InitiativesPage
 						return {
 							id: p.id,
 							name: p.name,
+							opens: projectFrameId(p.id),
 							note: `Lead · ${roleName(p.lead)} · ${c.done} of ${c.total} done · ${STATUS_WORD[p.status] ?? p.status}`,
 						};
 					}),
@@ -262,6 +297,7 @@ export function buildInitiativesPage(args: InitiativesPageArgs): InitiativesPage
 					}),
 				}
 			: undefined,
+		details: page.projects.map((p) => lay(project(p))),
 	};
 	for (const part of parts) Object.assign(input, part.page);
 	return { input, selected, leadChats, changeLead, sources };

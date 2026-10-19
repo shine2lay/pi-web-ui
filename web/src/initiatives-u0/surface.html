@@ -79,7 +79,7 @@ a{color:#B9A7FF}a:hover{color:#D6CCFF}
 <sc-for list="{{loose.items}}" as="lo" hint-placeholder-count="1">
 <div style="display: flex; align-items: center; gap: 8px">
 <span style="display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 999px; background: #22262B; color: #C9CDD2; font-size: 9.5px; font-weight: 700">{{lo.mono}}</span>
-<span style="font-weight: 600">{{lo.name}}</span>
+<sc-if value="{{lo.nameOpens}}" hint-placeholder-val="{{false}}"><button type="button" onClick="{{lo.pickName}}" aria-current="{{lo.nameCurrent}}" style="min-height: 24px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 600; text-align: left; text-decoration: underline; text-decoration-color: #5A6069; text-underline-offset: 3px; cursor: pointer">{{lo.name}}</button></sc-if><sc-if value="{{lo.nameStill}}" hint-placeholder-val="{{true}}"><span style="font-weight: 600">{{lo.name}}</span></sc-if>
 <sc-if value="{{lo.hasOnYou}}" hint-placeholder-val="{{true}}"><span style="margin-left: auto; display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; background: #F0B95A; color: #17130A; font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em">ON YOU</span></sc-if>
 </div>
 <sc-if value="{{lo.hasNote}}" hint-placeholder-val="{{true}}"><p style="margin: 0; font-size: 13px; color: #B9BEC5">{{lo.note}}</p></sc-if>
@@ -257,7 +257,7 @@ a{color:#B9A7FF}a:hover{color:#D6CCFF}
 <div style="flex: 1 1 220px; min-width: 0; display: flex; gap: 10px">
 <span style="flex: none; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 999px; background: {{r.monoBg}}; border: 1.5px solid {{r.monoBd}}; color: {{r.monoFg}}; font-size: 11px; font-weight: 700">{{r.mono}}</span>
 <div style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
-<span style="display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px"><span style="font-weight: 650; font-size: 14.5px">{{r.name}}</span><sc-if value="{{r.lead}}" hint-placeholder-val="{{false}}"><span style="display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; background: rgba(185,167,255,0.16); color: #D3C8FF; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em">LEAD</span></sc-if></span>
+<span style="display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px"><sc-if value="{{r.nameOpens}}" hint-placeholder-val="{{false}}"><button type="button" onClick="{{r.pickName}}" aria-current="{{r.nameCurrent}}" style="min-height: 24px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 650; font-size: 14.5px; text-align: left; text-decoration: underline; text-decoration-color: #5A6069; text-underline-offset: 3px; cursor: pointer">{{r.name}}</button></sc-if><sc-if value="{{r.nameStill}}" hint-placeholder-val="{{true}}"><span style="font-weight: 650; font-size: 14.5px">{{r.name}}</span></sc-if><sc-if value="{{r.lead}}" hint-placeholder-val="{{false}}"><span style="display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; background: rgba(185,167,255,0.16); color: #D3C8FF; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em">LEAD</span></sc-if></span>
 <span style="font-size: 12.5px; color: #A9AEB6">{{r.part}}</span>
 </div>
 </div>

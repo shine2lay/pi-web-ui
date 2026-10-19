@@ -196,6 +196,19 @@ const EDITS = [
 		'overflow: hidden">\n<sc-for list="{{sel.activity}}"',
 		'overflow: hidden">\n' + rowNote("sel.activityNote", "11px 14px") + '<sc-for list="{{sel.activity}}"',
 	],
+	// initiatives-page-plan (docs/initiatives-page-plan.md): a "Who's doing what" row's name, and an item's name in
+	// the "in no initiative" box, can be a button that opens the project's own detail: the name, underlined.
+	// Without one, the design's own markup shows.
+	[
+		"Row name (opens a project)",
+		'<span style="font-weight: 650; font-size: 14.5px">{{r.name}}</span>',
+		'<sc-if value="{{r.nameOpens}}" hint-placeholder-val="{{false}}"><button type="button" onClick="{{r.pickName}}" aria-current="{{r.nameCurrent}}" style="min-height: 24px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 650; font-size: 14.5px; text-align: left; text-decoration: underline; text-decoration-color: #5A6069; text-underline-offset: 3px; cursor: pointer">{{r.name}}</button></sc-if><sc-if value="{{r.nameStill}}" hint-placeholder-val="{{true}}"><span style="font-weight: 650; font-size: 14.5px">{{r.name}}</span></sc-if>',
+	],
+	[
+		"Box item name (opens a project)",
+		'<span style="font-weight: 600">{{lo.name}}</span>',
+		'<sc-if value="{{lo.nameOpens}}" hint-placeholder-val="{{false}}"><button type="button" onClick="{{lo.pickName}}" aria-current="{{lo.nameCurrent}}" style="min-height: 24px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 600; text-align: left; text-decoration: underline; text-decoration-color: #5A6069; text-underline-offset: 3px; cursor: pointer">{{lo.name}}</button></sc-if><sc-if value="{{lo.nameStill}}" hint-placeholder-val="{{true}}"><span style="font-weight: 600">{{lo.name}}</span></sc-if>',
+	],
 	// initiatives-page addition 6: a row can show a plain status chip (the registry's status) instead of
 	// the role state chip, in the state chip's own shape.
 	[
