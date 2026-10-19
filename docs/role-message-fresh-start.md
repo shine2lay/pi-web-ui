@@ -56,6 +56,53 @@ alarm is a separate task. This is simpler than Architecture's 2026-10-14 recover
   wasn't confirmed), as in gen-1 (174 of 192 entries); each such message was delivered once in the native
   record.
 
+## Hypothesis H-LADDER-SAFE-START-1 (Ops #248)
+
+The follow-ups the reviews of Ops #241 left (Security
+`/home/shinelay/security-lab/ladder-fresh-start-241/REVIEW-18466679.md` N1-N3, Architecture rm-55121021
+S1-S2), so the record can't be wiped or misread at start-up.
+
+- **Wrong, and the evidence**:
+  - N3: `currentGeneration()` takes generation 1 when `current.json` is missing or not understood, and
+    `start()` runs `cleanGenerations(1)` before `recover()`, which removes every gen-K but gen-1 and gen-0.
+    Live has been on gen-2 since the fresh start, so a lost or garbled `current.json` would remove the live
+    record (only the archive would survive). A `current.json` naming a folder that isn't there begins an
+    empty generation there and cleans the others. `rotate()` has the same root: it takes
+    `currentGeneration() + 1` and removes that folder first, so on gen-2 without `current.json` it would
+    remove gen-2 itself.
+  - N1: the request is read by path after `lstat` (check, then use) and has no size cap.
+  - N2: the test's `script()` sets `PI_WEB_DATA_DIR` to "", so a call that forgets `--data-dir` would fall
+    through to the live `~/.pi-web-ui`.
+  - S1: the script writes a request, and the server acts on it, when the journal holds a prepared
+    transaction or can't be parsed, so a fresh start could drop an unfinished send unseen.
+  - S2: `freshStart()` repeats `rotate()`'s begin-a-generation steps; two copies can drift apart.
+- **The changes, one per note, one commit each**:
+  - N3: once any gen-N or archive-gen-N folder exists, a `current.json` that is missing, unreadable, not
+    understood or names a folder that isn't there turns the ladder off at start
+    (`approval ladder UNAVAILABLE (current.json <why>)`) before the lock or any guard file is written, and
+    nothing is cleaned. A rotation refuses the same way. A first start (no generation folder yet) still
+    begins gen 1. The script says so too, instead of "the server opens generation 1".
+  - N1: the request is opened once without following a link (and without waiting on a pipe), checked on
+    that open file (a plain file of this user, mode 0600, at most 4 KiB) and read from it, capped.
+    Otherwise "fresh start refused (<why>)", and it stays where it is. The start that only settles a
+    leftover request reads it the same way. The script won't write a request over 4 KiB.
+  - N2: the tests run the script with `PI_WEB_DATA_DIR` set to the test's temporary data dir, and check that
+    it is one.
+  - S1: the fresh start acts only on a journal the store reads as committed. A prepared transaction (named
+    by its message id) or a journal the store can't parse: "fresh start refused (<why>)", the ladder off, and
+    nothing cleaned or rewritten. The script refuses both too.
+  - S2: one helper begins a generation for `rotate()` and the fresh start: remove a half-made folder, make
+    it, write a fresh state, switch `current.json`. Same files, same order, same flushes.
+- **Expected, and how it's measured**: in the focused sealed run, starts on a record that is on gen-2 with
+  `current.json` missing, garbled or naming a missing generation end UNAVAILABLE with that reason, and every
+  guard file (lock included) has the same sha256 and mtime before and after; a rotation with a garbled
+  `current.json` throws and changes nothing; the N1 and S1 refusals change nothing; the existing rotation
+  tests pass unchanged. Live, after the install: the start log says "approval ladder: on (...)",
+  `current.json` stays `{"gen":2}`, there is no gen-3, and a real role message is committed in gen-2 after
+  the restart.
+- **Wrong if**: any of those tests sees a guard file change or disappear; a first start doesn't begin gen 1;
+  an existing rotation test has to change to pass; the live start isn't "on" on gen-2.
+
 ## How to use it
 
 Only when the start log says `approval ladder UNAVAILABLE (recover: ...)`. Run from the pi-web-ui checkout:

@@ -527,11 +527,14 @@ export class RoleMessageGuardHost {
 			const other = this.readLock();
 			if (other && other !== process.pid && pidAlive(other))
 				return this.degrade(`another server (pid ${other}) holds the guard`);
+			// Ops #248 (Security N3): a current.json that isn't understood turns the ladder off here, before the lock
+			// or any guard file is written: guessing a generation could clean away the live one.
+			const gen = this.currentGeneration();
+			if (typeof gen === "string") return this.degrade(`current.json ${gen}`);
 			writeDurable(this.lockPath, `${process.pid}\n`);
 			this.decisions = this.readJsonl<GuardDecisionEvent>(join(this.o.dir, "decisions.jsonl"));
 			this.questions = this.readJson<GuardQuestionRecord[]>(join(this.o.dir, "questions.json")) ?? [];
 			await this.lease.run(async () => {
-				const gen = this.currentGeneration();
 				this.cleanGenerations(gen);
 				let dir = join(this.o.dir, `gen-${gen}`);
 				mkdirSync(dir, { recursive: true });
@@ -727,9 +730,30 @@ export class RoleMessageGuardHost {
 			return [];
 		}
 	}
-	private currentGeneration(): number {
-		const c = this.readJson<{ gen?: unknown }>(join(this.o.dir, "current.json"));
-		return typeof c?.gen === "number" && Number.isSafeInteger(c.gen) && c.gen >= 1 ? c.gen : 1;
+	/** The generation current.json names; a first start (no gen-N or archive-gen-N folder yet) begins generation 1.
+	 *  Ops #248 (Security N3): once a generation exists, a current.json that is missing, unreadable, not understood or
+	 *  names a folder that isn't there gives why instead, and the caller stops without writing anything. */
+	private currentGeneration(): number | string {
+		let gen: number | null = null;
+		let why = "is not understood";
+		try {
+			const c = JSON.parse(readFileSync(join(this.o.dir, "current.json"), "utf8")) as { gen?: unknown } | null;
+			if (typeof c?.gen === "number" && Number.isSafeInteger(c.gen) && c.gen >= 1) gen = c.gen;
+		} catch (err) {
+			const code = (err as NodeJS.ErrnoException).code;
+			if (code === "ENOENT") why = "is missing";
+			else if (code) why = `can't be read (${code})`;
+		}
+		const names = readdirSync(this.o.dir);
+		if (!names.some((n) => /^(archive-)?gen-\d+$/.test(n))) return gen ?? 1;
+		if (gen === null) return why;
+		let there = false;
+		try {
+			there = lstatSync(join(this.o.dir, `gen-${gen}`)).isDirectory();
+		} catch {
+			there = false;
+		}
+		return there ? gen : `points at gen-${gen}, which doesn't exist`;
 	}
 	private writeCurrent(gen: number): void {
 		writeDurable(join(this.o.dir, "current.json"), `${JSON.stringify({ gen })}\n`);
@@ -895,7 +919,9 @@ export class RoleMessageGuardHost {
 			const read = await this.store?.read();
 			if (!read || read.state !== "ready") throw new Error("rotation: store not ready");
 			if (!force && !this.quiescent(read.value, this.now())) return;
-			const gen = this.currentGeneration() + 1;
+			const at = this.currentGeneration();
+			if (typeof at === "string") throw new Error(`rotation: current.json ${at}`); // Ops #248 (N3): never guess
+			const gen = at + 1;
 			const dir = join(this.o.dir, `gen-${gen}`);
 			rmSync(dir, { recursive: true, force: true });
 			mkdirSync(dir, { recursive: true });

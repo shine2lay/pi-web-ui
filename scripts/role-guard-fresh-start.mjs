@@ -13,7 +13,9 @@ import {
 	closeSync,
 	existsSync,
 	fsyncSync,
+	lstatSync,
 	openSync,
+	readdirSync,
 	readFileSync,
 	renameSync,
 	rmSync,
@@ -97,15 +99,32 @@ try {
 	say(`guard dir: ${guard}`);
 	if (!existsSync(guard)) stop(1, "nothing to start over from: the guard dir doesn't exist. Nothing written.");
 
-	// The generation the server opens (currentGeneration in role-message-guard-host.ts).
-	let gen = 1;
+	// The generation the server opens (currentGeneration in role-message-guard-host.ts). Ops #248 (Security N3): once a
+	// generation exists, a current.json that is missing, unreadable, not understood or names a folder that isn't there
+	// keeps the server off without touching anything, so a request would never be read.
+	let gen = null;
+	let currentWhy = "is not understood";
 	try {
 		const c = JSON.parse(readFileSync(join(guard, "current.json"), "utf8"));
 		if (typeof c?.gen === "number" && Number.isSafeInteger(c.gen) && c.gen >= 1) gen = c.gen;
-		else say("current.json: not understood; the server opens generation 1");
-	} catch {
-		say("current.json: missing or unreadable; the server opens generation 1");
+	} catch (err) {
+		if (err?.code === "ENOENT") currentWhy = "is missing";
+		else if (err?.code) currentWhy = `can't be read (${err.code})`;
 	}
+	if (readdirSync(guard).some((n) => /^(archive-)?gen-\d+$/.test(n))) {
+		let there = false;
+		try {
+			there = gen !== null && lstatSync(join(guard, `gen-${gen}`)).isDirectory();
+		} catch {
+			there = false;
+		}
+		if (gen !== null && !there) currentWhy = `points at gen-${gen}, which doesn't exist`;
+		if (!there)
+			stop(
+				1,
+				`current.json ${currentWhy}, so the next start keeps the ladder off without touching the record and would never read a request. Nothing written.`,
+			);
+	} else gen ??= 1;
 	say(`current generation: ${gen}`);
 
 	try {

@@ -12,6 +12,7 @@ import {
 	readdirSync,
 	readFileSync,
 	renameSync,
+	rmSync,
 	statSync,
 	utimesSync,
 	writeFileSync,
@@ -120,6 +121,20 @@ function snapshot(withLock = false): Record<string, string> {
 	};
 	walk(guard(), "");
 	return out;
+}
+/** rotate() is private; reached the way role-message-guard-lease.test.ts does. */
+const rotate = (h: RoleMessageGuardHost, force: boolean) =>
+	(h as unknown as { rotate(force: boolean): Promise<void> }).rotate(force);
+/** A record that rotated to gen-2 with a send in each generation (as live since the fresh start), server stopped. */
+async function onGen2(): Promise<World> {
+	const w = await world();
+	expect(await send(w, "alpha", A, "beta", {}, "")).toMatchObject({ ok: true });
+	await rotate(w.host, true);
+	expect(current()).toBe(2);
+	expect(await send(w, "alpha", A, "gamma", {}, "")).toMatchObject({ ok: true });
+	w.host.stop();
+	w.rm.stop();
+	return w;
 }
 function script(...args: string[]): { code: number | null; out: string } {
 	const r = spawnSync(process.execPath, [SCRIPT, "--data-dir", data, ...args], {
@@ -342,6 +357,38 @@ describe(`the off switch (${GUARD_APPROVALS_SWITCH}=off)`, () => {
 	});
 });
 
+describe("current.json not understood: off, and nothing cleaned (Ops #248, Security N3)", () => {
+	const cases: Array<[string, () => void, string]> = [
+		["missing", () => rmSync(join(guard(), "current.json")), "current.json is missing"],
+		["garbled", () => writeFileSync(join(guard(), "current.json"), '{"gen":'), "current.json is not understood"],
+		[
+			"naming a generation that isn't there",
+			() => writeFileSync(join(guard(), "current.json"), '{"gen":3}\n'),
+			"current.json points at gen-3, which doesn't exist",
+		],
+	];
+	it.each(cases)("%s", async (_name, make, why) => {
+		const w = await onGen2();
+		make();
+		const before = snapshot(true);
+		const { host, logs } = await startHost(w);
+		expect(host.state).toEqual({ status: "degraded", reason: why });
+		expect(logs).toEqual([`approval ladder UNAVAILABLE (${why}): sends use the native depth-6 rule; no approvals`]);
+		expect(snapshot(true)).toEqual(before); // gen-1 and gen-2 byte for byte, no lock taken, nothing cleaned
+	});
+
+	it("a rotation refuses too, and removes nothing", async () => {
+		const w = await world();
+		expect(await send(w, "alpha", A, "beta", {}, "")).toMatchObject({ ok: true });
+		await rotate(w.host, true);
+		expect(current()).toBe(2);
+		writeFileSync(join(guard(), "current.json"), "garbled");
+		const before = snapshot(true);
+		await expect(rotate(w.host, true)).rejects.toThrow("rotation: current.json is not understood");
+		expect(snapshot(true)).toEqual(before); // the live gen-2 is still there
+	});
+});
+
 describe("the script refuses when the next start would", () => {
 	it("a readable record, or files touched less than 2 h ago: nothing written", async () => {
 		setNow(Date.now());
@@ -359,6 +406,15 @@ describe("the script refuses when the next start would", () => {
 		const recent = script();
 		expect(recent.code, recent.out).toBe(1);
 		expect(recent.out).toContain("accepted.json changed less than 2 h ago");
+		expect(existsSync(requestPath())).toBe(false);
+	});
+
+	it("current.json missing while a generation exists: the next start stays off, so nothing written (N3)", async () => {
+		await onGen2();
+		rmSync(join(guard(), "current.json"));
+		const r = script();
+		expect(r.code, r.out).toBe(1);
+		expect(r.out).toContain("current.json is missing");
 		expect(existsSync(requestPath())).toBe(false);
 	});
 });
