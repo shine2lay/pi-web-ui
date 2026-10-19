@@ -113,6 +113,10 @@ describe("the status rules, in order", () => {
 		expect(ruleOf("active", [{ ...asks, state: "done" }])).toEqual({ label: "No open tasks" });
 	});
 
+	// Ops #252 (docs/gate-near-limit.md): its own limit, 3x its slowest land-gate time (6043 ms, a timeout) rounded up
+	// to whole 5 s. It mounts the view once, but it is this file's first mount, and most of its time is the view's and
+	// jsdom's cold start: later one-mount cases here take a fraction of it. Splitting can't take that away (only
+	// production code could), so it isn't split.
 	it("puts every initiative's chip, the projects in no initiative and the filter counts on those rules", () => {
 		const { input } = build();
 		const i = byId(input);
@@ -144,7 +148,7 @@ describe("the status rules, in order", () => {
 		expect(page.cards()).toEqual(["Epsilon pause"]);
 		page.click(/^Needs you \d/);
 		expect(page.cards()).toEqual(["Alpha launch"]);
-	});
+	}, 20_000);
 
 	it("says Paused by you only when the owner paused every open task, and names them", () => {
 		const { input } = build({ selected: "epsilon" });

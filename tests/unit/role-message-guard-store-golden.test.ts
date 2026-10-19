@@ -549,6 +549,9 @@ describe("H-GUARD-STORE-PERF-1 golden: awkward values, refusals, crashes and cha
 		expect(r.calls.transact).toBe(4);
 	});
 
+	// Ops #252 (docs/gate-near-limit.md): its own limit, 3x its slowest land-gate time (4927 ms) rounded up to whole
+	// 5 s. A sequential scenario and Security's review evidence, so it isn't split; the guard store's work is
+	// CPU-bound and 2-4x slower under gate load.
 	it("G2d: a crash at each file boundary, then recovery by a fresh store, the same in both", async () => {
 		const boundaries: GuardFileBoundary[] = [
 			"prepare:write",
@@ -584,7 +587,7 @@ describe("H-GUARD-STORE-PERF-1 golden: awkward values, refusals, crashes and cha
 			await fresh.transact(next, async (c) => accepted(c, next, message("rm-after")));
 			expect(r.mismatches, at).toEqual([]);
 		}
-	});
+	}, 15_000);
 
 	it("G2e: files changed on disk are refused the same way", async () => {
 		const r = report();

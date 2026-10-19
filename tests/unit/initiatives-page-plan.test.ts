@@ -193,6 +193,9 @@ describe("a project's own detail", () => {
 		expect(login?.outcomes?.[1]?.steps).toEqual([{ label: "Login form", kind: "active", at: "1 of 2 done" }]);
 	});
 
+	// Ops #252 (docs/gate-near-limit.md): its own limit, 3x its slowest land-gate time (3397 ms) rounded up to whole
+	// 5 s. One long sequential scenario (one mount, then five clicks, each checked from where the last left it), and
+	// this file's only mount, so it carries the view's and jsdom's cold start too. It can't be split.
 	it("shows through the design: goal, start day, items, then the proof and marker when an item opens", () => {
 		const page = mount(build().input);
 		expect(page.text()).toContain("Goal · Alpha launch is done right");
@@ -224,5 +227,5 @@ describe("a project's own detail", () => {
 		page.click("Projects in no initiative · 2");
 		expect(page.text()).toContain("Goal · Each project here has its own goal: open one to see it.");
 		expect(page.text()).toContain("Outcomes · 1 of 4 done");
-	});
+	}, 15_000);
 });

@@ -10,6 +10,19 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## gate-near-limit: the gate's cases near the 5 s test limit split, or given their own limit
+
+- `local` (Ops #252, project faster-landing, 2026-10-19). Hypothesis H-GATE-NEAR-LIMIT-1, how the cases were picked (every case on the default limit over 2.5 s in the newest 16 land logs, at most 8), the before and after times and the result: `docs/gate-near-limit.md`.
+- Split, with the same inputs and checks:
+  - `tests/unit/plugin-telegram.test.ts`: the seeded fuzz case "no input makes tags Telegram can't take, unbalanced ones, or a bare < > &" (timed out in two land gates) is a `describe` of that name. It makes the same 3000 texts and 400 whole messages, with each message's final-word texts, once, in the order the one case made them (seed 20260917), then checks them in 10 cases: the texts in 6 of 500 and the messages in 4 of 100, each with its own list of problems and `expect(bad).toEqual([])`. A one-off script recorded every call into the code under test, old case against new: both made the same 13,600 calls, with the same sha256 (in the doc).
+  - `tests/unit/initiatives-page-model.test.ts`: "never says nothing is waiting, loading, failing, stale or not read whole" mounted the view 5 times in one case. It is a `describe` of that name with one case per state, each mounting once, and one for the old-data mount.
+- Their own limit, 3x their slowest gate time rounded up to whole 5 s, with the reason in a comment, because splitting them can't make them lighter:
+  - `tests/unit/initiatives-page-tasks.test.ts` "puts every initiative's chip, the projects in no initiative and the filter counts on those rules" (20 s; it timed out once), `tests/unit/initiatives-exact.test.ts` "renders the design's sample…" (15 s) and `tests/unit/initiatives-page-gaps.test.ts` "draws the gap count…" (15 s) mount the view once each, but each is its file's first mount, and most of its time is the view's and jsdom's cold start, which a split case would still carry; only app code could take it away. `tests/unit/initiatives-page-plan.test.ts` "shows through the design…" (15 s) is one long sequential scenario.
+  - `tests/unit/role-message-guard-store-golden.test.ts` G2d (15 s) and the `it.each(cases)` rows of "fresh start: no request, or one that doesn't match, changes nothing" in `tests/unit/role-message-guard-fresh-start.test.ts` (15 s each): sequential scenarios and Security's review evidence, left whole; the guard store's work is CPU-bound and 2-4x slower under gate load.
+- No assertion loosened or input cut; no case removed; vitest's global testTimeout and hookTimeout unchanged; no retry. Tests only: no app code changed, nothing to install.
+- Checks: the timing runs (3 before, 3 after, sealed), the input hash, then the landing gate.
+- Undo: revert this commit.
+
 ## gate-light-tests: two tests that timed out under gate load made lighter
 
 - `local` (Ops #251, project faster-landing, 2026-10-18; requested by Ops #244, rm-5024a008). Hypothesis H-GATE-LIGHT-TESTS-1, the timeouts seen, the before and after times and the result: `docs/gate-light-tests.md`.

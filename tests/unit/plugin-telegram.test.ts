@@ -1250,7 +1250,10 @@ describe("telegram plugin: a chat's text as Telegram HTML", () => {
 		);
 	});
 
-	it("no input makes tags Telegram can't take, unbalanced ones, or a bare < > &", () => {
+	// Ops #252 (docs/gate-near-limit.md): the same seeded inputs, made once here in the order the one case made
+	// them, then checked in 10 cases (the texts in 6 of 500, the whole messages in 4 of 100). As one case it ran
+	// past vitest's 5 s test timeout under land-gate load.
+	describe("no input makes tags Telegram can't take, unbalanced ones, or a bare < > &", () => {
 		const pieces = [
 			"**",
 			"*",
@@ -1380,25 +1383,23 @@ describe("telegram plugin: a chat's text as Telegram HTML", () => {
 			Array.from({ length: 1 + Math.floor(rand() * max) }, () => pieces[Math.floor(rand() * pieces.length)]).join(
 				rand() < 0.5 ? "" : " ",
 			);
-		const bad: Any[] = [];
-		const expectFine = (what: string, input: Any, html: string, outer: string[] = []) => {
-			const problem = htmlProblem(html, outer);
-			if (problem && bad.length < 5) bad.push({ what, problem, input, html });
+		// Each case keeps its own list of what went wrong, as the one case kept one.
+		const checker = () => {
+			const bad: Any[] = [];
+			const expectFine = (what: string, input: Any, html: string, outer: string[] = []) => {
+				const problem = htmlProblem(html, outer);
+				if (problem && bad.length < 5) bad.push({ what, problem, input, html });
+			};
+			return { bad, expectFine };
 		};
 		// The characters the converter marks formatting with never get out (a text's own are dropped).
 		const marks = /[\uE000-\uF8FF]/;
-		for (let n = 0; n < 3000; n++) {
-			const src = gen(30);
-			const html = toTelegramHtml(src);
-			expectFine("text", src, html);
-			expectFine("in italics", src, toTelegramHtml(src, { outer: ["i"] }), ["i"]);
-			expectFine("in bold", src, toTelegramHtml(src, { outer: ["b"] }), ["b"]);
-			const plain = plainText(src);
-			if (marks.test(html) || marks.test(plain) || plain.includes("\n")) bad.push({ what: "marks", input: src });
-		}
+		// The inputs, in the order the one case made them: the 3000 texts, then each whole message followed by
+		// its final words.
+		const texts = Array.from({ length: 3000 }, () => gen(30));
 		// Whole messages made of such texts: fine, and within the length Telegram takes.
 		const kinds = ["question", "dialog", "approval", "stuck"];
-		for (let n = 0; n < 400; n++) {
+		const messages = Array.from({ length: 400 }, (_, n) => {
 			const kind = kinds[n % kinds.length];
 			const ask = {
 				id: `r${n}`,
@@ -1423,19 +1424,52 @@ describe("telegram plugin: a chat's text as Telegram HTML", () => {
 					allowText: n % 2 === 0,
 				})),
 			};
-			const { text, reply_markup } = renderAsk(ask, { ref: 1, step: 0, answers: {}, ticks: [], link: LINK });
-			expectFine(`${kind} message`, ask, text);
-			if (visibleLength(text) > TEXT_BUDGET) bad.push({ what: "too long", input: ask, length: visibleLength(text) });
-			for (const row of reply_markup.inline_keyboard) {
-				if (!row[0].text.trim() || Buffer.byteLength(row[0].callback_data) > 64) bad.push({ what: "button", row });
+			// The final words' own texts, made after the message's as before.
+			const answered = gen(10);
+			const gone = gen(5);
+			return { kind, ask, answered, gone };
+		});
+		it.each([
+			[1, 500],
+			[501, 1000],
+			[1001, 1500],
+			[1501, 2000],
+			[2001, 2500],
+			[2501, 3000],
+		])("texts %i to %i", (from, to) => {
+			const { bad, expectFine } = checker();
+			for (const src of texts.slice(from - 1, to)) {
+				const html = toTelegramHtml(src);
+				expectFine("text", src, html);
+				expectFine("in italics", src, toTelegramHtml(src, { outer: ["i"] }), ["i"]);
+				expectFine("in bold", src, toTelegramHtml(src, { outer: ["b"] }), ["b"]);
+				const plain = plainText(src);
+				if (marks.test(html) || marks.test(plain) || plain.includes("\n")) bad.push({ what: "marks", input: src });
 			}
-			const line = renderLine(ask, LINK);
-			for (const final of [renderAnswered(line, gen(10), "telegram"), renderGone(line, gen(5))]) {
-				expectFine(`${kind} final words`, ask, final);
-				if (final.includes("\n")) bad.push({ what: "final words on more than one line", final });
+			expect(bad).toEqual([]);
+		});
+		it.each([
+			[1, 100],
+			[101, 200],
+			[201, 300],
+			[301, 400],
+		])("whole messages %i to %i", (from, to) => {
+			const { bad, expectFine } = checker();
+			for (const { kind, ask, answered, gone } of messages.slice(from - 1, to)) {
+				const { text, reply_markup } = renderAsk(ask, { ref: 1, step: 0, answers: {}, ticks: [], link: LINK });
+				expectFine(`${kind} message`, ask, text);
+				if (visibleLength(text) > TEXT_BUDGET) bad.push({ what: "too long", input: ask, length: visibleLength(text) });
+				for (const row of reply_markup.inline_keyboard) {
+					if (!row[0].text.trim() || Buffer.byteLength(row[0].callback_data) > 64) bad.push({ what: "button", row });
+				}
+				const line = renderLine(ask, LINK);
+				for (const final of [renderAnswered(line, answered, "telegram"), renderGone(line, gone)]) {
+					expectFine(`${kind} final words`, ask, final);
+					if (final.includes("\n")) bad.push({ what: "final words on more than one line", final });
+				}
 			}
-		}
-		expect(bad).toEqual([]);
+			expect(bad).toEqual([]);
+		});
 	});
 });
 

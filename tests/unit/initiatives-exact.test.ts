@@ -77,6 +77,10 @@ const everyCallback = (): Required<InitiativesExactActions> => ({
 });
 
 describe("the supplied Initiatives design, bound to typed input", () => {
+	// Ops #252 (docs/gate-near-limit.md): its own limit, 3x its slowest land-gate time (4626 ms) rounded up to whole
+	// 5 s. One mount and its checks, and it is this file's first mount: most of its time is the view's and jsdom's
+	// cold start (the drawn-state cases below mount once in a fraction of it). It can't be split, and only
+	// production code could make it faster.
 	it("renders the design's sample (converted, test-only) with its names, counts, pills, chips and tabs", () => {
 		const page = mount(DESIGN_FIXTURE, everyCallback());
 		const text = page.text();
@@ -99,7 +103,7 @@ describe("the supplied Initiatives design, bound to typed input", () => {
 		expect(page.button("Message Temper")).toBeTruthy();
 		expect(page.button("Change lead")).toBeTruthy();
 		expect(page.button("New initiative")).toBeTruthy();
-	});
+	}, 15_000);
 
 	it("selects, switches tabs and filters the way the design does", () => {
 		const page = mount(DESIGN_FIXTURE, everyCallback());

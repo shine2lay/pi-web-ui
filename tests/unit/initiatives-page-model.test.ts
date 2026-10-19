@@ -203,22 +203,25 @@ describe("the core model through the supplied design", () => {
 	});
 
 	// initiatives-page-tasks: a loaded, live, empty registry truly has nothing waiting, so it is no longer listed.
-	it("never says nothing is waiting, loading, failing, stale or not read whole", () => {
-		const states: InitiativesPageArgs["work"][] = [
-			{ page: null, status: "loading" },
-			{ page: null, status: "error", error: "x", failedAt: AT },
-			{ page: PAGE, status: "error", error: "x", failedAt: NOW },
-			{ page: { ...PAGE, problem: "too-big" }, status: "ready" },
+	// Ops #252 (docs/gate-near-limit.md): one case per state, each mounting the view once, then one for the old-data
+	// mount, with the same inputs and checks. As one case that mounted it 5 times, it came within 0.1 s of vitest's
+	// 5 s test timeout under land-gate load.
+	describe("never says nothing is waiting, loading, failing, stale or not read whole", () => {
+		const states: [string, InitiativesPageArgs["work"]][] = [
+			["loading", { page: null, status: "loading" }],
+			["failing before any page was read", { page: null, status: "error", error: "x", failedAt: AT }],
+			["stale: failing after a page was read", { page: PAGE, status: "error", error: "x", failedAt: NOW }],
+			["not read whole", { page: { ...PAGE, problem: "too-big" }, status: "ready" }],
 		];
-		for (const work of states) {
+		it.each(states)("%s", (_name, work) => {
 			const page = mount(build({ work }).input);
 			expect(page.values().summary).not.toMatch(/^Nothing is waiting/);
 			expect(page.text()).not.toMatch(/Nothing is waiting on you\./);
-			cleanups.splice(0).forEach((c) => c());
-			document.body.replaceChildren();
-		}
-		const old = mount(build({ work: { page: { ...PAGE, problem: "too-big" }, status: "ready" } }).input);
-		expect(old.text()).toContain("Old data, not confirmed.");
+		});
+		it("not read whole: says its data is old", () => {
+			const old = mount(build({ work: { page: { ...PAGE, problem: "too-big" }, status: "ready" } }).input);
+			expect(old.text()).toContain("Old data, not confirmed.");
+		});
 	});
 });
 

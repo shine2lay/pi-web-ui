@@ -255,6 +255,10 @@ describe("through the core model and the supplied design", () => {
 		expect(box.latestNote).toBe("No lead, so no updates.");
 	});
 
+	// Ops #252 (docs/gate-near-limit.md): its own limit, 3x its slowest land-gate time (4288 ms) rounded up to whole
+	// 5 s. One mount, its checks and one click, and it is this file's first mount: most of its time is the view's and
+	// jsdom's cold start (the next case mounts once in a fraction of it). Splitting can't take that away (only
+	// production code could), so it isn't split.
 	it("draws the gap count, gaps, hand-offs and activity count, and the activity tab newest first", () => {
 		const page = mount(buildInitiativesPage(pageArgs()).input);
 		const gaps = page.sectionText('section[aria-labelledby="gaps"]');
@@ -274,7 +278,7 @@ describe("through the core model and the supplied design", () => {
 			Array.from(row.querySelectorAll(":scope > span")).map((s) => norm(s.textContent)),
 		);
 		expect(rows).toEqual(ALPHA_ACTIVITY);
-	});
+	}, 15_000);
 
 	it("draws the box's gaps, its Not recorded hand-offs and its activity", () => {
 		const page = mount(buildInitiativesPage(pageArgs({ selected: NO_INITIATIVE })).input);
