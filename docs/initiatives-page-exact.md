@@ -55,7 +55,7 @@ Additions to the design's markup (written by `scripts/extract-initiatives-templa
   - Buttons: Message Architecture and Change lead; Message Architecture asked for Architecture's home chat (held) and left the tab for the chat; the Change lead dialog says "This changes who writes this initiative's progress updates."
   - 390 px: nothing scrolls sideways (page, frame and its body all 390 wide, nothing past the edge), on the first screen and the full page.
   - By eye, the 1440 shot has the design's layout (`company-lab/shared/initiatives-reference-audit-2026-10-11/desktop-initial.png`): header, ON YOU bar, pills, cards and box on the left, detail frame, tabs, Who's doing what, Done when, Hand-offs, the lead box and Gaps on the right.
-- Shots: `~/kept-from-tmp/2026-10-18/initiatives-steps/1/desktop-1440.png`, `desktop-box-1440.png`, `desktop-change-lead.png`, `phone-390.png`, `phone-390-full.png`.
+- Shots: `~/kept-from-tmp/2026-10-18/initiatives-steps/1/desktop-1440.png`, `desktop-box-1440.png`, `desktop-change-lead.png`, `phone-390.png`, `phone-390-full.png` (since replaced by the 18:30 look's, below; the 17:47 ones stay in `live/out3/`).
 - Seen, not this hypothesis's measure: the first load waited 6.7 s at 1440 and 14.6 s at 390 px for the feed (36 s and over 40 s in two earlier looks that evening under load). `readWorkPage` in `server/agent-service.ts` waits for the Roles overview's queue facts before it answers, so "Loading" lasts as long as that read. A follow-up for the feed (#223's code): answer with the registry first, the facts after.
 
 ### Found in the live look: Escape doesn't close the Change lead dialog, and would cancel a hidden question
@@ -75,3 +75,12 @@ With the Change lead dialog open, Escape left it open (`dialog[open]` still ther
 **What would prove it wrong.** The dialog stays open on Escape, or any `question_answer` is tried while a page dialog is open.
 
 Not this change: the question dialog keeps its Escape while the chat pane is hidden, so Escape on another tab, with focus outside a page's own frame or dialog, still cancels a waiting question the owner can't see. That is the question dialog's behaviour across the app, a follow-up of its own.
+
+### H-INITIATIVES-PAGE-2: hit (Oct 18)
+
+- `tests/unit/initiatives-page-escape.test.ts` failed without the change (2 failed: the dialog stayed open and the cancel was sent) and passed with it (3 of 3).
+- Landed as `9b6c4e73`, with the doc `774e5a71`, through `wt land` request `38-c6a823` (gate: 434 files, 6198 tests passed, 6 skipped). The first try (`36-43bc8b`) failed on one test this change doesn't touch: `tests/unit/role-message-guard-core.test.ts` went past vitest's 5 s limit (5134 ms) while its file took 64 s instead of the usual 33 to 38 s, with load average 28.6 and another landing beside it; the second try ran unchanged.
+- Installed with `pi-web-deploy --landed 38-c6a823` at 18:22; `pi-web-deploy result 9b6c4e73` returned 0 with every check passed (server, page, reply, big chat, log).
+- The same live look, look only, 18:30: 44 of 44 checks passed. Escape closed the Change lead dialog, and the page tried no `question_answer`. Everything step 1 measured held against the registry read at 18:28: "1 initiative · Sun Oct 18", Team in Temper "Lead · Architecture" and "0 of 11 outcomes done", "Projects in no initiative · 5" with the registry's figures, every section steps 2-4 fill says "Not connected yet", no all-clear, no design sample names, nothing scrolls sideways at 390 px, and nothing written.
+- Shots: `~/kept-from-tmp/2026-10-18/initiatives-steps/1/desktop-1440.png`, `desktop-box-1440.png`, `desktop-change-lead.png`, `phone-390.png`, `phone-390-full.png`; the look's own files in `live/out4/`.
+- Seen again, not this measure: the feed's first load took 66 s at 1440 and 12.4 s at 390 px; the same follow-up as in step 1's result.
