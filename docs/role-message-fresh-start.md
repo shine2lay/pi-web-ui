@@ -240,6 +240,41 @@ A2, A3, A4.
   - Older, not caused by #253 (Architecture): a gone server's pid reused by another process keeps starts off
     (fix: keep the pid with its start time); `stop()` removes the lock by name (B1's inode check covers it).
 
+## Hypothesis H-LADDER-LAST-1 (Ops #257)
+
+The last round: the seven follow-ups listed just above, one commit each with a test that fails before its fix, in
+the order B1, N2, B3, B5, N1, B2, B4. New non-blocking notes from this round's reviews are recorded, not fixed
+here. An item that turns out bigger than a test and a small fix is recorded with why and skipped.
+
+- **Wrong, and the evidence**: the items above, as the reviews found them. B1 is reproduced by Architecture's
+  three-server test (`/home/shinelay/architecture-dept/work/ops253-review/repro/tests/unit/arch-ops253-three-servers.test.ts`):
+  a gone server's lock and three servers starting at once leave two of them "on" over one guard folder.
+- **The changes**:
+  - B1: the server keeps the inode of the lock it linked. Before "on", and at the start of each piece of work
+    under the lease (every guard write runs under it), it checks that `lock` is still that inode; if not,
+    approvals turn off and nothing more is written. `stop()` removes `lock` only while it is still that inode.
+    `takeLock()`'s docstring says that the rename can take a lock made after the look.
+  - N2: approval decide and request check the status again after each wait (the state read, the request, the
+    owner's dialog, the notice). Off: the answer says plainly what was recorded and that approvals turned off,
+    never a raw error, and never that a notice went when it didn't.
+  - B3: `lock` is looked at with `lstat` first. Anything but a plain file (a directory, a pipe, a link) turns
+    the start off and is left where it is, never opened or moved. The `finally`'s removals are best effort.
+  - B5: once a start holds the lock, it removes the `lock.tmp-<pid>` and `lock.stale-<pid>` files of pids that
+    are gone. A clean-up that fails after the switch to N+1 logs "rotated to generation N+1; cleanup failed
+    (<why>)" and the rotation counts as done.
+  - N1: `takeLock()` makes `lock.tmp-<pid>` new (`"wx"`, mode 0600), so it never writes through a link put in
+    its place.
+  - B2: a `beginGeneration()` that fails before the switch removes its half-made gen-(N+1).
+  - B4: a `current.json` naming gen 2 or more, with no `gen-` or `archive-gen-` folder left, keeps the ladder
+    off ("current.json points at gen-N, which doesn't exist"), as the steps below say.
+- **Expected, and how it's measured**: each new test fails before its fix and passes after it (B1's is
+  Architecture's repro, now expecting one server on). One focused sealed run of the guard test files passes,
+  with no existing test changed. Live, after the install: the start log says "approval ladder: on (...)",
+  `current.json` is unchanged, `lock` names the new server with mode 0600, and the first real role messages are
+  committed once, with no duplicate ids in `role-messages.json`.
+- **Wrong if**: approvals are off after the install; a send shows up twice; an existing test has to change to
+  pass.
+
 ## How to use it
 
 Only when the start log says `approval ladder UNAVAILABLE (recover: ...)`. Run from the pi-web-ui checkout:
