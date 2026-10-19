@@ -72,6 +72,7 @@ digests, the answers, or the verdicts on what is read from disk.
   wall time; event-loop busy time (the stall: the server can do nothing else meanwhile) and idle time (waiting on the
   disk), from `performance.eventLoopUtilization`; process CPU; store calls; file sizes. Bands: journal 0.75-1.25 MB,
   4.5-5.5 MB, and the grown ~15 MB phase.
+
 - **Test (a) alone**, pinned to the fast cores:
   `taskset -c 5-9,15-19 scripts/sealed.sh env TZ=UTC npx vitest run tests/unit/role-message-guard-host-worst-window.test.ts`.
 
@@ -84,13 +85,14 @@ Receipts: `~/.cache/pi/receipts/guard-store-perf/`.
 - Test (a) alone: 316 s (receipt `before-a`, load average 10-18 from other chats' test runs).
 - Benchmark (receipt `bench-before`), median per send:
 
-  | Journal | Event-loop busy | Idle (disk) | Wall | CPU |
-  | --- | --- | --- | --- | --- |
-  | ~1 MB (31 sends) | 156 ms | 143 ms | 288 ms | 199 ms |
-  | ~5 MB (47 sends) | 857 ms | 218 ms | 1,073 ms | 1,105 ms |
-  | ~14.4 MB (30 sends) | 1,867 ms | 475 ms | 2,327 ms | 2,555 ms |
+  | Journal             | Event-loop busy | Idle (disk) | Wall     | CPU      |
+  | ------------------- | --------------- | ----------- | -------- | -------- |
+  | ~1 MB (31 sends)    | 156 ms          | 143 ms      | 288 ms   | 199 ms   |
+  | ~5 MB (47 sends)    | 857 ms          | 218 ms      | 1,073 ms | 1,105 ms |
+  | ~14.4 MB (30 sends) | 1,867 ms        | 475 ms      | 2,327 ms | 2,555 ms |
 
   Every send is 5 store transactions and 6 reads. Test (a)'s 428 sends: 267 s wall, 198 s busy, 70 s idle.
+
 - **The disk floor.** Idle time grows with the files (143 ms per send at 1 MB, 224 ms at 5-6 MB): every transaction
   writes and flushes three whole files (prepare, commit, canonical), so a send makes 15 flushed writes. Those 70 s of
   test (a) are disk waits that no CPU saving removes, so test (a) at 60 s or less is out of reach on `/tmp` (ext4)
@@ -105,11 +107,11 @@ Receipts: `~/.cache/pi/receipts/guard-store-perf/`.
   runs only with `GUARD_UI_PROOF_DIR`, skipped before too).
 - Benchmark (receipt `bench-c1`), median per send:
 
-  | Journal | Event-loop busy | Idle (disk) | Wall | CPU |
-  | --- | --- | --- | --- | --- |
-  | ~1 MB | 111 ms (was 156) | 125 ms | 236 ms | 137 ms |
-  | ~5 MB | 600 ms (was 857) | 219 ms | 827 ms | 774 ms |
-  | ~14.4 MB | 2,072 ms (was 1,867) | 451 ms | 2,531 ms | 2,806 ms |
+  | Journal  | Event-loop busy      | Idle (disk) | Wall     | CPU      |
+  | -------- | -------------------- | ----------- | -------- | -------- |
+  | ~1 MB    | 111 ms (was 156)     | 125 ms      | 236 ms   | 137 ms   |
+  | ~5 MB    | 600 ms (was 857)     | 219 ms      | 827 ms   | 774 ms   |
+  | ~14.4 MB | 2,072 ms (was 1,867) | 451 ms      | 2,531 ms | 2,806 ms |
 
   Test (a)'s sends: 210 s wall (was 267), 142 s busy (was 198). The 15 MB band ran while the load average rose from
   1 to 12 (other chats' tests), so its numbers are noisy (p90 4.6 s). Miss on the bar so far, as expected: change 2
@@ -142,24 +144,25 @@ Receipts: `~/.cache/pi/receipts/guard-store-perf/`.
 - Store-only, side by side with the old store at the same time (5 MB copy; new store on cores 5-9, old on 15-19;
   load average 4.5; receipts `micro-c3-5mb.log`, `micro-c3-ref-5mb.log`), median busy time per call:
 
-  | Call | Change 3 | Old store |
-  | --- | --- | --- |
-  | read | 1.7 ms | 28.1 ms |
-  | lookup | 2.0 ms | 12.4 ms |
-  | transaction (+1 audit) | 21.9 ms | 146.3 ms |
-  | big `JSON.parse` calls in the run | 2 (the first load) | 17 |
+  | Call                              | Change 3           | Old store |
+  | --------------------------------- | ------------------ | --------- |
+  | read                              | 1.7 ms             | 28.1 ms   |
+  | lookup                            | 2.0 ms             | 12.4 ms   |
+  | transaction (+1 audit)            | 21.9 ms            | 146.3 ms  |
+  | big `JSON.parse` calls in the run | 2 (the first load) | 17        |
 
 - The whole host, side by side with the old store at the same time (receipts `bench-c3`, `bench-ref2`; load average
   0.5 rising to 26 from another chat's land, so absolute numbers are inflated; the ratio is the fair part), median
   per send:
 
-  | Journal | Busy, change 3 | Busy, old store | Wall, change 3 | Wall, old store |
-  | --- | --- | --- | --- | --- |
-  | ~1 MB | 69 ms | 181 ms | 202 ms | 321 ms |
-  | ~5 MB | 403 ms | 830 ms | 683 ms | 1,024 ms |
-  | ~14.4 MB | 833 ms | 2,344 ms | 1,298 ms | 2,802 ms |
+  | Journal  | Busy, change 3 | Busy, old store | Wall, change 3 | Wall, old store |
+  | -------- | -------------- | --------------- | -------------- | --------------- |
+  | ~1 MB    | 69 ms          | 181 ms          | 202 ms         | 321 ms          |
+  | ~5 MB    | 403 ms         | 830 ms          | 683 ms         | 1,024 ms        |
+  | ~14.4 MB | 833 ms         | 2,344 ms        | 1,298 ms       | 2,802 ms        |
 
   Test (a)'s 428 sends: 198 s wall against 365 s, 109 s busy against 284 s.
+
 - Golden test and the store, core and contract tests: 226 passed (receipt `c3-quick.log`).
 - **Why the whole host gains only 2-3x while the store gains 7x.** A CPU profile of the whole benchmark with
   change 3 (receipt `prof-bench-c3/`, 78 s busy): building and hashing the files 25% (the hashing alone is a floor:
@@ -174,19 +177,39 @@ Receipts: `~/.cache/pi/receipts/guard-store-perf/`.
 
 Both numbers missed after changes 1-3; the files stayed byte-identical.
 
-| Measure | Bar | Old store | Changes 1-3 |
-| --- | --- | --- | --- |
-| Busy per send, ~5 MB fill (whole host) | about 50 ms | 830-857 ms | 330-400 ms |
-| Busy per store transaction, 5 MB (store only) | | 146 ms | 22 ms |
-| Test (a)'s 428 sends, benchmark wall | | 267-365 s | 160-241 s |
-| Test (a) alone, side by side | 60 s in a land | 262 s | 131 s |
-| Test (a) inside the full suite | | 294-366 s (lands) | 179 s |
-| Files and digests | identical | | identical (golden test) |
+| Measure                                       | Bar         | Old store                         | Changes 1-3             |
+| --------------------------------------------- | ----------- | --------------------------------- | ----------------------- |
+| Busy per send, ~5 MB fill (whole host)        | about 50 ms | 830-857 ms                        | 330-400 ms              |
+| Busy per store transaction, 5 MB (store only) |             | 146 ms                            | 22 ms                   |
+| Test (a)'s 428 sends, benchmark wall          |             | 267-365 s                         | 160-241 s               |
+| Test (a) alone, side by side                  |             | 262 s                             | 131 s                   |
+| Test (a) inside the full suite                |             | 294-366 s (lands)                 | 179 s                   |
+| Test (a) in a land                            | 60 s        | 313-586 s (5 lands, median 339 s) | 175 s (1 land)          |
+| The land's unit tests (vitest Duration)       |             | 324-600 s (median 350 s)          | 182 s                   |
+| Files and digests                             | identical   |                                   | identical (golden test) |
 
 - Test (a) alone, side by side at the same time (receipts `alone-new` on cores 5-9 with changes 1-3, `alone-old` on
   cores 15-19 with the store of 2efa5834, load average 1-6): 131.2 s against 261.7 s.
 - The full sealed unit suite after `npm run build` (receipt `suite`): 432 files, 6187 passed and 6 skipped (the tests
   of 2efa5834 plus the 6 golden ones; no existing test file changed), Duration 189 s, test (a) 179 s inside it.
+
+### In the land
+
+- **Security:** GO at source level for exactly cd0d124e, no must-fix (rm-c22487a8; report
+  `/home/shinelay/security-lab/guard-store-perf-233/REVIEW-cd0d124e.md`). Two optional points, not done in this
+  change: N1, the plain-data check counts an array's keys, so a hole plus one extra own key passes it (not a security
+  gap: the bytes written and the value verified still come from one text); N2, a test that a nested write on
+  `read().value` or on the update's input throws and leaves both files unchanged.
+- **Landed although it missed the bars**, on the Ops lead's decision (rule 21; a department decision within the plan,
+  not the owner's consent): the plan's "then don't land" guards against a file difference, and there is none.
+- **The land** (request 45-7c3e2b, 2026-10-18 19:23-19:26; cd0d124e rebased onto e8affb4f as 6ea7f58a, same
+  patch-id 6c7aebe8): 437 files, 6231 tests passed and 6 skipped; vitest Duration 181.9 s; test (a) 174.9 s; the
+  golden test 89.5 s beside it. Beside the unit tests: typecheck 17 s, prettier 98 s. The whole land, build included,
+  took 190 s (#230's lands: 341-463 s). The five lands before it that day with the same check (receipts
+  `notes-check/land.log`, `225/land*.log`) took 324-600 s of unit tests and 313-586 s of test (a); the slowest ran
+  at load averages of 16-34. One land is one sample: load moves these times a lot.
+- The guard-core test "a crash at any store boundary of the transition ...", which hit vitest's 5 s timeout in four
+  lands that day, took 2.9 s in this land (1.3 s alone; 2.4-2.6 s alone before).
 
 What was learned, for the next hypothesis:
 
@@ -199,6 +222,8 @@ What was learned, for the next hypothesis:
   70-76 s waiting on them on `/tmp` (ext4) with any store code.
 - **The rest of each send is outside the store:** garbage collection about 16%, the core's `finish` and `prune`, and
   the host's own work.
+- **Next try**, its own task and hypothesis, planned by the Ops lead: test (a)'s folder on tmpfs in the land check,
+  which removes the disk waits; then hashing off the event loop.
 
 ## H-GUARD-STORE-PERF-2 (proposed after change 3; outside the approved plan, measured as an experiment only)
 
