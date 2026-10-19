@@ -9,8 +9,10 @@
 // fixture instead, with the callbacks the Initiatives tab gives.
 // --gaps (initiatives-page-gaps, docs/initiatives-page-gaps.md): the same, on step 4's fixture (gaps, all activity
 // and hand-offs: tests/unit/initiatives-page-gaps-fixture.ts).
+// --tasks (initiatives-page-tasks, docs/initiatives-page-tasks.md): the same, on step 3's fixture (open tasks
+// under their projects, what waits on you, one initiative per status chip: tests/unit/initiatives-page-tasks-fixture.ts).
 // All looks fail when the page scrolls sideways.
-// Run: scripts/sealed.sh node --import tsx scripts/initiatives-exact-shot.mjs [--page|--gaps] [output-directory]
+// Run: scripts/sealed.sh node --import tsx scripts/initiatives-exact-shot.mjs [--page|--gaps|--tasks] [output-directory]
 import { createServer } from "node:http";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -22,14 +24,19 @@ import { readInitiativeFonts } from "../web/initiatives-design-assets.ts";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const gapsLook = process.argv.includes("--gaps");
-const pageLook = gapsLook || process.argv.includes("--page");
-const pageFixture = gapsLook ? "initiatives-page-gaps-fixture" : "initiatives-page-fixture";
+const tasksLook = process.argv.includes("--tasks");
+const pageLook = gapsLook || tasksLook || process.argv.includes("--page");
+const pageFixture = gapsLook
+	? "initiatives-page-gaps-fixture"
+	: tasksLook
+		? "initiatives-page-tasks-fixture"
+		: "initiatives-page-fixture";
 const output = resolve(
 	process.argv.slice(2).find((a) => !a.startsWith("--")) ??
 		join(
 			root,
 			pageLook
-				? `.test-results/${gapsLook ? "initiatives-page-gaps" : "initiatives-page"}`
+				? `.test-results/${gapsLook ? "initiatives-page-gaps" : tasksLook ? "initiatives-page-tasks" : "initiatives-page"}`
 				: ".test-results/initiatives-exact",
 		),
 );

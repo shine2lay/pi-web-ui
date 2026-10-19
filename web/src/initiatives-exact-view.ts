@@ -50,6 +50,8 @@ const STAT: Record<InitiativesExactStatus, readonly [string, string, string, str
 	attention: ["Needs attention", "#FF8A80", "rgba(255,138,128,0.1)", "rgba(255,138,128,0.45)"],
 	paused: ["Paused by you", "#C3C8CF", "rgba(195,200,207,0.08)", "rgba(195,200,207,0.3)"],
 	unknown: ["Unknown", "#C7B8FF", "rgba(199,184,255,0.08)", "rgba(199,184,255,0.5)"],
+	// initiatives-page-tasks: an open task's question waits on the owner (the ON YOU amber).
+	you: ["Needs you", "#F0B95A", "rgba(240,185,90,0.12)", "rgba(240,185,90,0.45)"],
 };
 const STEP: Record<InitiativesExactStepKind, readonly [string, string, string, string]> = {
 	done: ["#9FD8B8", "rgba(159,216,184,0.1)", "rgba(159,216,184,0.4)", "solid"],
@@ -87,6 +89,13 @@ const VERDICT_UNKNOWN = ["#A9AEB6", "#3A3F46"] as const;
 const NEUTRAL = ["#A9AEB6", "transparent", "#3A3F46"] as const;
 /** The state chip's Done colours. */
 const DONE_CHIP = ["#9FD8B8", "rgba(159,216,184,0.1)", "rgba(159,216,184,0.4)"] as const;
+/** A plain chip's colours by its tone: Done, an initiative status's (initiatives-page-tasks), else neutral. */
+const toneColours = (tone: InitiativesExactRole["statusTone"]): readonly [string, string, string] =>
+	tone === "done"
+		? DONE_CHIP
+		: tone !== undefined && tone !== "neutral" && Object.hasOwn(STAT, tone)
+			? [STAT[tone][1], STAT[tone][2], STAT[tone][3]]
+			: NEUTRAL;
 const CK = {
 	changed: ["Changed", "#9CC7FF", "rgba(125,184,255,0.16)"],
 	added: ["Added", "#9FD8B8", "rgba(159,216,184,0.14)"],
@@ -135,7 +144,8 @@ function normalize(i: InitiativesExactInitiative) {
 		unblocks: r.unblocks ?? "",
 		at: r.at ?? "",
 		plain: r.statusLabel ?? "",
-		plainDone: r.statusTone === "done",
+		tone: toneColours(r.statusTone),
+		open: r.open,
 	});
 	const act = (a: InitiativesExactActivity) => [a.at ?? "", a.role ?? NOT_RECORDED, a.text ?? NOT_RECORDED] as const;
 	const status = old ? ("unknown" as InitiativesExactStatus) : kindOf(i.status, STAT, "unknown");
@@ -196,6 +206,7 @@ function normalize(i: InitiativesExactInitiative) {
 			context: o.context ?? "",
 			choices: o.choices ?? [],
 			answer: o.answer,
+			open: o.open,
 		})),
 		design: i.design,
 		askFailedAt: i.askFailedAt,
@@ -579,9 +590,15 @@ export function createInitiativesExactView(
 				unblocks: x.unblocks,
 				chip: !x.plain,
 				plain: x.plain,
-				plainFg: x.plainDone ? DONE_CHIP[0] : NEUTRAL[0],
-				plainBg: x.plainDone ? DONE_CHIP[1] : NEUTRAL[1],
-				plainBd: x.plainDone ? DONE_CHIP[2] : NEUTRAL[2],
+				plainFg: x.tone[0],
+				plainBg: x.tone[1],
+				plainBd: x.tone[2],
+				// initiatives-page-tasks: "#N title" opens the task's chat (template addition 9).
+				canOpen: !!x.open,
+				noOpen: !x.open,
+				openTask: () => {
+					if (!disposed) x.open?.();
+				},
 			});
 			rows.push(row(r, false));
 			for (const t of r.tasks) rows.push(row(t, true));
@@ -767,6 +784,12 @@ export function createInitiativesExactView(
 					age: o.age,
 					title: o.title,
 					context: o.context,
+					// initiatives-page-tasks: the question opens the chat it was asked in (template addition 10).
+					canOpen: !!o.open,
+					noOpen: !o.open,
+					openChat: () => {
+						if (!disposed) o.open?.();
+					},
 					open: !sent && canAnswer && o.choices.length > 0,
 					sent,
 					answer: o.answer ?? "",

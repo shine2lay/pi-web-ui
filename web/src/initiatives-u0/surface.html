@@ -216,7 +216,7 @@ a{color:#B9A7FF}a:hover{color:#D6CCFF}
 <sc-for list="{{sel.onYou}}" as="o" hint-placeholder-count="2">
 <article style="display: flex; flex-direction: column; gap: 8px; padding: 14px; border-radius: 12px; background: rgba(240,185,90,0.06); border: 1px solid rgba(240,185,90,0.35)">
 <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12px; color: #C9CDD2"><span style="font-weight: 700; color: #F0B95A; letter-spacing: 0.04em; text-transform: uppercase; font-size: 11px">{{o.kind}}</span><span>from {{o.from}}</span><span style="color: #8D939B">· waiting {{o.age}}</span></div>
-<p style="margin: 0; font-size: 15px; font-weight: 650">{{o.title}}</p>
+<sc-if value="{{o.canOpen}}" hint-placeholder-val="{{false}}"><p style="margin: 0"><button type="button" onClick="{{o.openChat}}" style="min-height: 24px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-size: 15px; font-weight: 650; text-align: left; text-decoration: underline; text-decoration-color: #5A6069; text-underline-offset: 3px; cursor: pointer">{{o.title}}</button></p></sc-if><sc-if value="{{o.noOpen}}" hint-placeholder-val="{{true}}"><p style="margin: 0; font-size: 15px; font-weight: 650">{{o.title}}</p></sc-if>
 <p style="margin: 0; font-size: 13px; color: #B9BEC5">{{o.context}}</p>
 <sc-if value="{{o.open}}" hint-placeholder-val="{{true}}">
 <div style="display: flex; flex-wrap: wrap; gap: 8px">
@@ -262,7 +262,7 @@ a{color:#B9A7FF}a:hover{color:#D6CCFF}
 </div>
 </div>
 <div style="flex: 2 1 240px; min-width: 0; display: flex; flex-direction: column; gap: 2px">
-<span style="font-size: 13.5px"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; color: #A9AEB6">{{r.task}}</span> {{r.taskTitle}}</span>
+<sc-if value="{{r.canOpen}}" hint-placeholder-val="{{false}}"><button type="button" onClick="{{r.openTask}}" style="min-height: 24px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-size: 13.5px; text-align: left; text-decoration: underline; text-decoration-color: #5A6069; text-underline-offset: 3px; cursor: pointer"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; color: #A9AEB6">{{r.task}}</span> {{r.taskTitle}}</button></sc-if><sc-if value="{{r.noOpen}}" hint-placeholder-val="{{true}}"><span style="font-size: 13.5px"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; color: #A9AEB6">{{r.task}}</span> {{r.taskTitle}}</span></sc-if>
 <span style="font-size: 12.5px; color: #8D939B">{{r.note}}</span>
 </div>
 <div style="flex: 1 1 170px; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px">

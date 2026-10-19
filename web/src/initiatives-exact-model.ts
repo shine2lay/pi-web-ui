@@ -12,7 +12,8 @@ export interface InitiativesExactPage {
 	date?: string;
 }
 
-export type InitiativesExactStatus = "moving" | "attention" | "paused" | "unknown";
+/** initiatives-page-tasks: "you" is the Needs you chip (an open task's question waits on the owner). */
+export type InitiativesExactStatus = "moving" | "attention" | "paused" | "unknown" | "you";
 /** The design's state chip kinds ("Working now", "Waiting", … "Done"). */
 export type InitiativesExactRoleKind =
 	"working" | "waiting" | "blocked" | "onhold" | "queued" | "paused" | "idle" | "error" | "unknown" | "done";
@@ -46,9 +47,12 @@ export interface InitiativesExactRole {
 	/** Child task rows; their name defaults to this row's. */
 	tasks?: readonly InitiativesExactRole[];
 	/** initiatives-page: a plain status chip with this text (a project's registry status) instead of the
-	 *  role state chip; `statusTone` "done" draws it in the state chip's Done colours, else a neutral grey. */
+	 *  role state chip; `statusTone` "done" draws it in the state chip's Done colours, else a neutral grey.
+	 *  initiatives-page-tasks: a status tone draws it in that initiative chip's colours. */
 	statusLabel?: string;
-	statusTone?: "done" | "neutral";
+	statusTone?: "done" | "neutral" | InitiativesExactStatus;
+	/** initiatives-page-tasks: its "#N title" is a button that opens the task's chat. */
+	open?: () => void;
 }
 
 export interface InitiativesExactStep {
@@ -87,6 +91,8 @@ export interface InitiativesExactAsk {
 	context?: string;
 	choices?: readonly string[];
 	answer?: string;
+	/** initiatives-page-tasks: its title is a button that opens the chat it was asked in. */
+	open?: () => void;
 }
 
 export interface InitiativesExactDesignChange {

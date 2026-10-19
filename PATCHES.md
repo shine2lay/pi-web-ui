@@ -10,6 +10,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## initiatives-page-tasks: tasks, waiting on you and status on the Initiatives page
+
+- `local` (owner 2026-10-18, Ops home chat: design first, then features; "Side by side" for steps 2-4; Ops #227, project initiatives-page). Hypothesis H-INITIATIVES-PAGE-3 and result: `docs/initiatives-page-tasks.md`.
+- `web/src/initiatives-page/tasks.ts` fills "Who's doing what", Waiting on you, the ON YOU bar and every status chip from the `work_page` feed's task facts, by script. Under each project row go its open tasks (not done, dropped or removed): "#N title", the department, a state chip, the next action or what it waits on, and "updated <time>"; tasks linked straight to an initiative go in a row "Directly under this initiative". Clicking "#N title" opens the task's own chat, or its queue's chat while that isn't known. Waiting on you lists the open linked tasks' Needs-you questions ("from <department> · waiting <age>"; a click opens that chat), and the ON YOU bar counts them; it says nothing is waiting only when the registry was read whole and live and none are. `statusOf()` and the chips follow fixed rules in order: Done or Dropped (the registry's), Needs you, Needs attention (stuck or blocked), Paused by you (every open task paused by the owner), Moving (ready, working, asking or waiting), else a grey "No tasks yet" or "No open tasks"; projects and the projects-in-no-initiative box get theirs by the same rules, and the filter pills count and filter by them. No write actions: clicks only open chats.
+- Hooks, the smallest the core needed: a "Needs you" chip and status colours for a row's plain chip in the view; template additions 9-10 (`scripts/extract-initiatives-template.mjs`): a row's "#N title" and a waiting item's question are a button when they open a chat; `InitiativesPagePart.rows` (rows after the project rows) and `InitiativesPagePart.loose` (a box item's fields) in `model.ts`. Plan, gap and core fields are untouched.
+- Checks: `tests/unit/initiatives-page-tasks.test.ts` (fixture `tests/unit/initiatives-page-tasks-fixture.ts`) with the core model tests (step 1's "not connected yet" cases now expect the real rules) and the design's, one sealed look at 1440 px, then the landing gate and a look-only live check against the live registry and queues.
+- Undo: revert this commit (task rows, Waiting on you and the ON YOU bar say "Not connected yet" again, and chips show the registry's status).
+
 ## initiatives-page-plan: goals, done-when items and projects on the Initiatives page
 
 - `local` (owner 2026-10-18, Ops home chat: design first, then features; "Side by side" for steps 2-4; Ops #226, project initiatives-page). Hypothesis H-INITIATIVES-PAGE-2 and result: `docs/initiatives-page-plan.md`.

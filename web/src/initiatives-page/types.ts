@@ -5,6 +5,7 @@
 import type {
 	InitiativesExactInitiative,
 	InitiativesExactInput,
+	InitiativesExactLooseItem,
 	InitiativesExactRole,
 } from "../initiatives-exact-model";
 import type { UiWorkPage } from "../types";
@@ -21,6 +22,10 @@ export interface InitiativesPagePart {
 	initiatives?: Readonly<Record<string, Partial<InitiativesExactInitiative>>>;
 	/** Fields of a project's row in "Who's doing what", by project id. */
 	projects?: Readonly<Record<string, Partial<InitiativesExactRole>>>;
+	/** initiatives-page-tasks: rows after an initiative's project rows in "Who's doing what", by initiative id. */
+	rows?: Readonly<Record<string, readonly InitiativesExactRole[]>>;
+	/** initiatives-page-tasks: fields of an item in the "in no initiative" box, by project id. */
+	loose?: Readonly<Record<string, Partial<InitiativesExactLooseItem>>>;
 	/** Page-wide fields. */
 	page?: Partial<Pick<InitiativesExactInput, "summary" | "summaryNote" | "filtersNote">>;
 }

@@ -70,7 +70,8 @@ describe("the Initiatives page's core model, on a fixed registry page", () => {
 	it("lists active initiatives first, then done, then dropped, each with its lead and done-when count", () => {
 		const { input, selected } = build();
 		expect(input.initiatives?.map((i) => i.name)).toEqual(["Alpha launch", "Beta cleanup", "Gamma archive"]);
-		expect(input.initiatives?.map((i) => i.statusLabel)).toEqual(["Active", "Done", "Dropped"]);
+		// initiatives-page-tasks: an active initiative with no task linked says so in its grey chip.
+		expect(input.initiatives?.map((i) => i.statusLabel)).toEqual(["No tasks yet", "Done", "Dropped"]);
 		expect(input.initiatives?.map((i) => i.lead)).toEqual(["Architecture", "QA", "Ops"]);
 		expect(input.initiatives?.map((i) => i.outcomeCount)).toEqual([
 			{ done: 1, total: 3 },
@@ -81,10 +82,10 @@ describe("the Initiatives page's core model, on a fixed registry page", () => {
 		expect(input.page).toEqual({ state: "live", at: "09:40", date: "Sun Oct 18" });
 	});
 
-	it("shows an initiative's projects as rows with their lead, count and registry status", () => {
+	it("shows an initiative's projects as rows with their lead, count and status", () => {
 		const alpha = build().input.initiatives?.[0];
 		expect(alpha?.roles?.map((r) => [r.name, r.part, r.taskTitle, r.statusLabel, r.statusTone])).toEqual([
-			["Login form", "Lead · Frontend", "1 of 2 done", "Active", "neutral"],
+			["Login form", "Lead · Frontend", "1 of 2 done", "No tasks yet", "neutral"],
 			["Search box", "Lead · Backend", "1 of 1 done", "Done", "neutral"],
 		]);
 		expect(alpha?.rolesLine).toBe("3 roles · lead + 2");
@@ -108,14 +109,16 @@ describe("the Initiatives page's core model, on a fixed registry page", () => {
 		expect(build({ selected: "gone" }).selected).toBe("alpha");
 	});
 
-	it("marks every section step 3 fills as not connected yet, and statusOf gives nothing yet", () => {
+	// initiatives-page-tasks (step 3) connected the tasks: with none linked, no status, rows or asks come from them.
+	it("with no task linked, gives no task status, rows or asks, and leaves the all-clear to the view", () => {
 		const { input } = build();
 		for (const i of [...(input.initiatives ?? []), input.loose!.detail!]) {
 			expect(i.status).toBeUndefined();
-			for (const r of i.roles ?? []) expect(r.note).toBe("Tasks: not connected yet");
+			expect(i.onYou).toEqual([]);
+			for (const r of i.roles ?? []) expect([r.note, r.tasks]).toEqual([undefined, undefined]);
 		}
-		expect(input.summary).toBe("Not connected yet: what's waiting on you will show here.");
-		expect(input.filtersNote).toMatch(/^Not connected yet/);
+		expect(input.summary).toBeUndefined();
+		expect(input.filtersNote).toBeUndefined();
 		expect(statusOf(PAGE, "alpha")).toBeUndefined();
 	});
 
@@ -167,21 +170,21 @@ describe("the Initiatives page's core model, on a fixed registry page", () => {
 });
 
 describe("the core model through the supplied design", () => {
-	it("draws the header, cards, box and detail, with only All counted and no all-clear", () => {
+	it("draws the header, cards, box and detail, with the filters counted", () => {
 		const page = mount(build().input);
 		const text = page.text();
 		expect(text).toContain("3 initiatives · Sun Oct 18");
 		expect(text).toContain("Live · updated 09:40");
 		expect(text).toContain("1 of 3 outcomes done");
 		expect(text).toContain("Projects in no initiative · 2");
-		expect(text).not.toMatch(/Nothing is waiting on you/);
 		const v = page.values();
-		expect(v.summary).toBe("Not connected yet: what's waiting on you will show here.");
+		// initiatives-page-tasks: loaded whole and live, with no task waiting on the owner: a true all-clear.
+		expect(v.summary).toBe("Nothing is waiting on you.");
 		expect(v.filters.map((f) => [f.label, f.count])).toEqual([
 			["All", "3"],
-			["Needs you", "—"],
-			["Needs attention", "—"],
-			["Paused by you", "—"],
+			["Needs you", "0"],
+			["Needs attention", "0"],
+			["Paused by you", "0"],
 		]);
 		expect(page.buttons()).toContain("Message Architecture");
 		expect(page.buttons()).toContain("Change lead");
@@ -199,12 +202,12 @@ describe("the core model through the supplied design", () => {
 		expect(page.text()).toContain("No one leads this");
 	});
 
-	it("never says nothing is waiting, loading, failing, stale or empty", () => {
+	// initiatives-page-tasks: a loaded, live, empty registry truly has nothing waiting, so it is no longer listed.
+	it("never says nothing is waiting, loading, failing, stale or not read whole", () => {
 		const states: InitiativesPageArgs["work"][] = [
 			{ page: null, status: "loading" },
 			{ page: null, status: "error", error: "x", failedAt: AT },
 			{ page: PAGE, status: "error", error: "x", failedAt: NOW },
-			{ page: { ...PAGE, initiatives: [], projects: [] }, status: "ready" },
 			{ page: { ...PAGE, problem: "too-big" }, status: "ready" },
 		];
 		for (const work of states) {

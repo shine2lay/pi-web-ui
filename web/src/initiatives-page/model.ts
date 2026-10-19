@@ -9,6 +9,7 @@ import type {
 	InitiativesExactDecision,
 	InitiativesExactInitiative,
 	InitiativesExactInput,
+	InitiativesExactLooseItem,
 	InitiativesExactRole,
 } from "../initiatives-exact-model";
 import {
@@ -138,7 +139,7 @@ export function buildInitiativesPage(args: InitiativesPageArgs): InitiativesPage
 	const logRows = new Map((dec?.initiatives ?? []).map((r) => [r.id, r]));
 	const parts: InitiativesPagePart[] = [
 		planPart(page, selected, args.open),
-		tasksPart(page, selected, args.open),
+		tasksPart(page, selected, args.open, { now, stale: work.status === "error" }),
 		gapsPart(page, selected, args.open, { progress: dec?.progress, now }),
 	];
 	const leadChats: Record<string, string> = {};
@@ -198,7 +199,8 @@ export function buildInitiativesPage(args: InitiativesPageArgs): InitiativesPage
 			outcomeCount: doneCount(i),
 			rolesLine: rolesLine(1 + others.length),
 			members: others.map(roleName),
-			roles: rows(projects),
+			// initiatives-page-tasks: a section's own rows after the project rows (tasks linked to the initiative itself).
+			roles: [...rows(projects), ...parts.flatMap((part) => part.rows?.[i.id] ?? [])],
 			rowsNote: projects.length ? undefined : "No projects in this initiative yet.",
 			latest: updates
 				.slice(0, 3)
@@ -270,12 +272,15 @@ export function buildInitiativesPage(args: InitiativesPageArgs): InitiativesPage
 					heading: "Projects in no initiative · " + loose.length,
 					items: loose.map((p) => {
 						const c = doneCount(p);
-						return {
+						let item: InitiativesExactLooseItem = {
 							id: p.id,
 							name: p.name,
 							opens: projectFrameId(p.id),
 							note: `Lead · ${roleName(p.lead)} · ${c.done} of ${c.total} done · ${STATUS_WORD[p.status] ?? p.status}`,
 						};
+						// initiatives-page-tasks: a section's fields for the item (ON YOU when one of its tasks asks).
+						for (const part of parts) item = { ...item, ...part.loose?.[p.id] };
+						return item;
 					}),
 					detail: lay({
 						id: NO_INITIATIVE,

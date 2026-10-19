@@ -216,6 +216,19 @@ const EDITS = [
 		'<dc-import name="StateChip" kind="{{r.kind}}" last-known="{{r.lastKnown}}" hint-size="140px,24px"></dc-import>',
 		'<sc-if value="{{r.chip}}" hint-placeholder-val="{{true}}"><dc-import name="StateChip" kind="{{r.kind}}" last-known="{{r.lastKnown}}" hint-size="140px,24px"></dc-import></sc-if><sc-if value="{{r.plain}}" hint-placeholder-val="{{false}}"><span style="display: inline-flex; align-items: center; height: 24px; padding: 0 9px; box-sizing: border-box; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; color: {{r.plainFg}}; background: {{r.plainBg}}; border: 1px solid {{r.plainBd}}">{{r.plain}}</span></sc-if>',
 	],
+	// initiatives-page-tasks additions 9-10 (docs/initiatives-page-tasks.md): a task row's "#N title" and a
+	// Waiting-on-you question's title can be a button that opens the task's chat: the same text, underlined like
+	// step 2's project names. Without one, the design's own markup shows.
+	[
+		"Row task (opens its chat)",
+		`<span style="font-size: 13.5px"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; color: #A9AEB6">{{r.task}}</span> {{r.taskTitle}}</span>`,
+		`<sc-if value="{{r.canOpen}}" hint-placeholder-val="{{false}}"><button type="button" onClick="{{r.openTask}}" style="min-height: 24px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-size: 13.5px; text-align: left; text-decoration: underline; text-decoration-color: #5A6069; text-underline-offset: 3px; cursor: pointer"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; color: #A9AEB6">{{r.task}}</span> {{r.taskTitle}}</button></sc-if><sc-if value="{{r.noOpen}}" hint-placeholder-val="{{true}}"><span style="font-size: 13.5px"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; color: #A9AEB6">{{r.task}}</span> {{r.taskTitle}}</span></sc-if>`,
+	],
+	[
+		"Waiting-on-you title (opens its chat)",
+		'<p style="margin: 0; font-size: 15px; font-weight: 650">{{o.title}}</p>',
+		'<sc-if value="{{o.canOpen}}" hint-placeholder-val="{{false}}"><p style="margin: 0"><button type="button" onClick="{{o.openChat}}" style="min-height: 24px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-size: 15px; font-weight: 650; text-align: left; text-decoration: underline; text-decoration-color: #5A6069; text-underline-offset: 3px; cursor: pointer">{{o.title}}</button></p></sc-if><sc-if value="{{o.noOpen}}" hint-placeholder-val="{{true}}"><p style="margin: 0; font-size: 15px; font-weight: 650">{{o.title}}</p></sc-if>',
+	],
 ];
 for (const [why, from, to] of EDITS) {
 	const found = markup.split(from).length - 1;
