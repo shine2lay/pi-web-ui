@@ -275,6 +275,56 @@ here. An item that turns out bigger than a test and a small fix is recorded with
 - **Wrong if**: approvals are off after the install; a send shows up twice; an existing test has to change to
   pass.
 
+## Hypothesis H-LADDER-LAST-2 (Ops #257, Security B1-R)
+
+Security's review of 37df21ec (NO-GO, one blocker) found the B1 change unsound, so H-LADDER-LAST-1's B1 part is a
+**MISS**: its tests passed only on tmpfs.
+
+- **Wrong, and the evidence**: `lockLost()` takes `lock` as this server's while it has the same device and inode.
+  On ext4 (`/tmp` and `~/.pi-web-ui` on this machine) a freed inode number is given out again at once (Security:
+  rm and create in `/tmp` gave the same inode 20 times out of 20). So a lock another server made since can have
+  this server's inode and go unnoticed, and two servers write one record, the case B1 is meant to close. B1's two
+  rm-then-write tests (host-files "a running server whose lock another server took ...", host-approvers "another
+  server takes the lock before a decision") fail on an ext4 TMPDIR (59 of 61 passed) and pass on tmpfs, where
+  the sealed run puts its temp folder (`/dev/shm`).
+- **The change**: `lockLost()` also requires `lock` to name the pid this server wrote into it (its own pid,
+  kept with the inode). Another server's lock always names that server's pid, written and flushed before the
+  link. The check before "on", the lease and `stop()` all use `lockLost()`.
+- **Expected, and how it's measured**: a new test rewrites `lock` in place with another server's pid (the same
+  inode on any file system); it fails before the change and passes after. The three changed test files pass on
+  an ext4 TMPDIR (`PI_SEALED_TMP_PARENT=/tmp`) as well as in the focused sealed run; no existing test changes.
+- **Wrong if**: a lock test fails on ext4 or on tmpfs after the change, or an existing test has to change.
+- **Result: MISS on one count.** The fix does what it should: the new test failed before it on tmpfs (the send
+  went through) and, with Security's two, on ext4 (3 failed, 59 passed); after it the three changed files pass on
+  ext4 (62 of 62). But one existing test had to change: limits' "an unavailable ladder falls back to the native
+  depth-6 rule (fail closed)" failed at hop 1 (`ok: false`); it dates from the original ladder (ed55fbcb).
+
+## Hypothesis H-LADDER-LAST-3 (Ops #257)
+
+- **Wrong, and the evidence**: that test stands in for another live server by rewriting the running server's
+  `lock` in place with the parent's pid, and only then builds its chain to hop 7 through the running server. A
+  lock in this server's inode naming another pid is exactly what B1-R now catches, so the running server turns
+  off and hop 1 fails. The test relied on the hole. Nothing else rewrites `lock` in place: no other guard test
+  failed, and no test outside `tests/unit/role-message-guard-*` touches `lock`.
+- **The change**: in that test only, build the chain first, then write the other server's lock and start the
+  second host. What it checks is unchanged: a host that finds a live server's lock is off, refuses hop 7 by the
+  native depth-6 rule and refuses an approval request.
+- **Expected, and how it's measured**: the focused sealed run of the 16 guard test files passes with no other
+  test changed, and the four test files that touch `lock` (host-files, host-approvers, fresh-start, limits) pass
+  on an ext4 TMPDIR.
+- **Wrong if**: another existing test fails, or the reordered test no longer reaches a refused hop 7.
+- **Result: HIT.** The focused sealed run passed (16 files, 464 tests, the one older skip), the reordered test
+  among them, still refusing hop 7 and the approval request. The four files passed on an ext4 TMPDIR (66 tests).
+  No other test changed.
+- **Follow-ups this round's reviews left, not in this patch** (for a later Ops task; none blocks the install):
+  - R1 (Security): the lock is checked when the lease is entered, not throughout. An operation already inside
+    still finishes, including a rotation's removal of gen-(N+1) and `writeCurrent`; checking again just before
+    those would narrow it.
+  - R2 (Security): `takeLock()` opens `lock.tmp-<pid>` again by path for its flush and `fstat`; one descriptor
+    for the write, the flush and the `fstat` would be cleaner. Same user only.
+  - R3 (Security): run the guard's lock tests on ext4 too, not only in the sealed run's tmpfs (`/dev/shm`); this
+    round did it by hand (`PI_SEALED_TMP_PARENT=/tmp scripts/sealed.sh npx vitest run ...`).
+
 ## How to use it
 
 Only when the start log says `approval ladder UNAVAILABLE (recover: ...)`. Run from the pi-web-ui checkout:
@@ -452,7 +502,8 @@ unreadable as the live one was):
   prepared send at all 12 points where a send can stop (A3).
 - Ops #257, `tests/unit/role-message-guard-host-files.test.ts`: three servers over a gone server's lock
   (Architecture's repro): exactly one holds the guard, and a stop leaves another server's lock; a running
-  server whose lock another server took turns off before its next guard write (B1); a folder, a link or a pipe
+  server whose lock another server took turns off before its next guard write (B1), also when that lock has
+  this server's inode, as ext4 gives a freed inode number out again at once (Security B1-R); a folder, a link or a pipe
   at `lock` turns the start off and is left as it is (B3); a gone server's `lock.tmp-` and `lock.stale-`
   files are removed, a live one's and a folder stay (B5); a link put at `lock.tmp-<pid>` is never written
   through (N1).

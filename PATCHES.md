@@ -7201,8 +7201,10 @@ What the #248 reviews left (Architecture `ops248-ladder-safe-start.md` suggestio
 What the #253 reviews left (Architecture B1-B5, Security N1-N2), one commit each in the order B1, N2,
 B3, B5, N1, B2, B4; hypothesis H-LADDER-LAST-1 in `docs/role-message-fresh-start.md`.
 
-- B1: the server keeps the device and inode of the lock it linked. Before "on", and on entering the
-  lease (every guard write runs under it), `lockLost()` checks that `lock` is still that file; if not, the
+- B1: the server keeps the device and inode of the lock it linked, and the pid it wrote into it. Before "on",
+  and on entering the lease (every guard write runs under it), `lockLost()` checks that `lock` is still that
+  file and still names that pid (Security B1-R: on ext4 a freed inode number is given out again at once, so
+  the inode alone can be another server's new lock); if not, the
   ladder turns off (`another server (pid N) took the guard's lock`, or `the guard's lock is gone`) and the
   work doesn't run. `stop()` removes `lock` only while it is still that file. Architecture's three-server
   repro is now a test: exactly one server holds the guard.
@@ -7236,10 +7238,14 @@ B3, B5, N1, B2, B4; hypothesis H-LADDER-LAST-1 in `docs/role-message-fresh-start
   points where a send can stop. New file `tests/unit/role-message-guard-host-files.test.ts`; no existing
   test changed.
 - Ops #257: each item's new test failed before its fix and passed after it (B1: two of three servers came
-  up holding the guard; N2: the raw `Cannot read properties of null`; N1: the link's target was
-  overwritten with the pid; B4: an empty gen-2 was started and turned on). One focused sealed run of the
-  16 `role-message-guard` test files passed (463 tests). No existing test changed; the files test's
-  `node:fs` mock gained an `rm` hook.
+  up holding the guard; B1-R: another server's lock in this server's inode went unnoticed, rewritten in
+  place on any file system, and after rm and create on ext4; N2: the raw `Cannot read properties of null`;
+  N1: the link's target was overwritten with the pid; B4: an empty gen-2 was started and turned on). The
+  four test files that touch `lock` passed on an ext4 TMPDIR (66 tests), and one focused sealed run of the
+  16 `role-message-guard` test files passed (464 tests). One existing test changed: limits' "an unavailable
+  ladder falls back to the native depth-6 rule" builds its chain before it writes another server's lock,
+  as its old order relied on the hole B1-R closes (H-LADDER-LAST-3). The files test's `node:fs` mock
+  gained an `rm` hook.
 
 ### Undo and syncing
 
