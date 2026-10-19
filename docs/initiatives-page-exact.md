@@ -41,4 +41,37 @@ Additions to the design's markup (written by `scripts/extract-initiatives-templa
 
 ## Results
 
-Pending.
+### H-INITIATIVES-PAGE-1: hit (Oct 18)
+
+- Focused tests, run once (sealed, `TZ=UTC`): 13 files, 332 of 332 passed (`initiatives-page-model` 11, `initiatives-exact` 14, the old Initiatives tests and the Roles exact tests unchanged).
+- Sealed look at the fixture: 1440 and 390 px, fonts loaded, only the template's own blocked handler lines in the console, nothing scrolls sideways (390 of 390). Shots: `~/kept-from-tmp/2026-10-18/initiatives-steps/1/fixture/`.
+- Landed as `af0ab88b` through `wt land` (gate: 433 files, 6195 tests passed, 6 skipped). Installed with `pi-web-deploy --landed 35-238909` at 17:30; `pi-web-deploy result af0ab88b` returned 0 with every check passed (server, page, reply, big chat, log).
+- Live look, look only (own blank client; every socket message but hello, ping, frame acks and the read-only watches held and counted, never sent), 17:47, against the registry read through `server/work-page.ts` at the same time: 42 of 43 checks passed, the one miss below.
+  - Header "1 initiative · Sun Oct 18", chip "Live · updated 17:47"; the page's own feed held 1 initiative and 5 projects, no problem, the same as the registry.
+  - One card, Team in Temper, "Lead · Architecture", "0 of 11 outcomes done" (registry: 0 of 11 met). Pills: All 1, the others "—".
+  - "Projects in no initiative · 5" with all 5 (Faster landing 4 of 7, Parallel queue work 2 of 5, Initiatives page 0 of 4, Roles page 6 of 6, Work hierarchy in use 4 of 4, the registry's figures); opened, it shows "Outcomes · 16 of 26 done", "No one leads this" and no buttons.
+  - Goal, Started, Outcomes, Done when, Hand-offs, Gaps and Activity say "Not connected yet"; the ON YOU bar says "Not connected yet: what's waiting on you will show here."; no all-clear anywhere; no design sample names.
+  - Finish "Not set by the lead", Spend "Not reported", Latest updates and Lead's next step from the progress feed, Decisions 3990 (the decision log's own count for it).
+  - Buttons: Message Architecture and Change lead; Message Architecture asked for Architecture's home chat (held) and left the tab for the chat; the Change lead dialog says "This changes who writes this initiative's progress updates."
+  - 390 px: nothing scrolls sideways (page, frame and its body all 390 wide, nothing past the edge), on the first screen and the full page.
+  - By eye, the 1440 shot has the design's layout (`company-lab/shared/initiatives-reference-audit-2026-10-11/desktop-initial.png`): header, ON YOU bar, pills, cards and box on the left, detail frame, tabs, Who's doing what, Done when, Hand-offs, the lead box and Gaps on the right.
+- Shots: `~/kept-from-tmp/2026-10-18/initiatives-steps/1/desktop-1440.png`, `desktop-box-1440.png`, `desktop-change-lead.png`, `phone-390.png`, `phone-390-full.png`.
+- Seen, not this hypothesis's measure: the first load waited 6.7 s at 1440 and 14.6 s at 390 px for the feed (36 s and over 40 s in two earlier looks that evening under load). `readWorkPage` in `server/agent-service.ts` waits for the Roles overview's queue facts before it answers, so "Loading" lasts as long as that read. A follow-up for the feed (#223's code): answer with the registry first, the facts after.
+
+### Found in the live look: Escape doesn't close the Change lead dialog, and would cancel a hidden question
+
+With the Change lead dialog open, Escape left it open (`dialog[open]` still there 400 ms later), and at that moment the page tried to send one `question_answer` (held by the look, never sent): the cancel of the question waiting in the Ops lead chat, whose notice showed top right. The cause is in the app's Escape order (`web/src/shortcut-stack.ts`): one capture listener on the document hands Escape to the newest handler on its stack and stops it there (`preventDefault`). The question dialog in the chat pane (`DshQuestionDialog`, mounted while the chat pane is hidden behind the Initiatives tab) is on that stack and cancels its question; the page's dialogs aren't on it, so the native dialog never gets its Escape.
+
+## H-INITIATIVES-PAGE-2: Escape closes the page's own dialogs first
+
+**Wrong, and the evidence.** The live look above: Escape with the Change lead dialog open kept it open and tried to cancel the Ops lead chat's waiting question. The source dialog the page opens from a decision is built the same way, so it has the same problem.
+
+**One change.** While one of its dialogs is open, the Initiatives page puts its own Escape handler on the app's stack (`useEscapeKey`), which closes that dialog. It is the newest handler while the dialog is open, so Escape goes to it and stops there.
+
+**Expected, and how it's measured.**
+- `tests/unit/initiatives-page-escape.test.ts`: the real question dialog is open first (its sends captured), then the page opens Change lead (or a decision's source); Escape closes the page's dialog and sends no `question_answer`; with no page dialog open, Escape still reaches the question dialog. Without the change, the test fails on the first two (the dialog stays, the cancel is sent).
+- Live, after the install, the same look: Escape closes the Change lead dialog and the page tries no `question_answer`.
+
+**What would prove it wrong.** The dialog stays open on Escape, or any `question_answer` is tried while a page dialog is open.
+
+Not this change: the question dialog keeps its Escape while the chat pane is hidden, so Escape on another tab, with focus outside a page's own frame or dialog, still cancels a waiting question the owner can't see. That is the question dialog's behaviour across the app, a follow-up of its own.
