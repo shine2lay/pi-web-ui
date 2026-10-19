@@ -274,6 +274,12 @@ here. An item that turns out bigger than a test and a small fix is recorded with
   committed once, with no duplicate ids in `role-messages.json`.
 - **Wrong if**: approvals are off after the install; a send shows up twice; an existing test has to change to
   pass.
+- **Reviews**: both gave NO-GO on 37df21ec for one blocker, B1-R (H-LADDER-LAST-2 below), and found the rest
+  sound. Both gave GO on 08effcdc, no must-fix, each after its own runs on ext4 as well as tmpfs. Security
+  rm-67868d6f (`/home/shinelay/security-lab/ladder-last-fixes-257/DELTA-08effcdc.md`, after
+  `REVIEW-37df21ec.md`) covers host 8cc8af2b, store 41aaae5b and script 100e213f: a change to those needs its
+  delta look again. Architecture rm-462cf70b (`/home/shinelay/architecture-dept/reviews/ops257-ladder-last-fixes.md`)
+  ran the 16 guard files on both file systems (464 passed, 1 skipped, each).
 
 ## Hypothesis H-LADDER-LAST-2 (Ops #257, Security B1-R)
 
@@ -319,11 +325,19 @@ Security's review of 37df21ec (NO-GO, one blocker) found the B1 change unsound, 
 - **Follow-ups this round's reviews left, not in this patch** (for a later Ops task; none blocks the install):
   - R1 (Security): the lock is checked when the lease is entered, not throughout. An operation already inside
     still finishes, including a rotation's removal of gen-(N+1) and `writeCurrent`; checking again just before
-    those would narrow it.
+    those would narrow it. `stop()`'s check, then removal by path, is the same kind of window. Keeping an fd
+    to the lock open, or `flock`, would close both, and B1-R with them (Architecture d).
   - R2 (Security): `takeLock()` opens `lock.tmp-<pid>` again by path for its flush and `fstat`; one descriptor
     for the write, the flush and the `fstat` would be cleaner. Same user only.
-  - R3 (Security): run the guard's lock tests on ext4 too, not only in the sealed run's tmpfs (`/dev/shm`); this
-    round did it by hand (`PI_SEALED_TMP_PARENT=/tmp scripts/sealed.sh npx vitest run ...`).
+  - R3 (Security, Architecture a): make an ext4 run of the four lock test files (host-files, host-approvers,
+    fresh-start, limits) part of the check; the sealed run's tmpfs (`/dev/shm`) hid B1-R. This round did it by
+    hand (`PI_SEALED_TMP_PARENT=/tmp scripts/sealed.sh npx vitest run ...`).
+  - P1 (Security): the pid checks (the lock's and the stale lock's) assume one pid namespace; a container
+    sharing the data folder could have the same number. One line in this doc's assumptions.
+  - Architecture b: B3's pipe test hangs instead of failing if that fix regresses; it could run in a child
+    process with a timeout.
+  - Architecture c: this doc could name Ops' own recovery step for a `current.json` naming gen-N when no
+    generation folder is left (B4 keeps it off).
 
 ## How to use it
 
