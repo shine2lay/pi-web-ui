@@ -1136,6 +1136,7 @@ export class RoleMessageGuardHost {
 		for (const q of this.questions.filter((x) => x.state === "pending")) {
 			const r = read.value.requests.find((x) => guardDigest(x.binding) === q.bindingDigest);
 			if (!r || r.state !== "awaiting_owner" || now >= r.expiresAt) continue;
+			if (!this.adapters) return; // Ops #257 (N2): approvals turned off during the last one
 			await this.adapters.native.presentOwnerQuestion(r);
 		}
 	}
@@ -1327,8 +1328,29 @@ export class RoleMessageGuardHost {
 	}
 
 	private async state_(): Promise<GuardStoreState | null> {
-		const r = await this.store?.read();
-		return r?.state === "ready" ? r.value : null;
+		// Ops #257 (N2): a read that finds the lock taken by another server (B1) turns approvals off and throws; it gives
+		// nothing then, as a record that can't be read does, and the caller sees approvals off.
+		try {
+			const r = await this.store?.read();
+			return r?.state === "ready" ? r.value : null;
+		} catch {
+			return null;
+		}
+	}
+
+	/** Ops #257 (N2): approvals turned off during one of a call's awaits (another call failed, another server took the
+	 *  lock). The call then answers plainly instead of reading the gone adapters, and says only what is known. */
+	private offNow(): boolean {
+		return this.status_ !== "ready" || !this.adapters || !this.core;
+	}
+	private offText(done: string): string {
+		return `Approvals turned off meanwhile (${this.degradedReason || "the ladder is off"}). ${done}`;
+	}
+	private offAnswer(done: string): { ok: false; text: string } {
+		return {
+			ok: false,
+			text: this.offText(`${done} Messages 7 and above can't be sent now; ask the owner how to go on.`),
+		};
 	}
 
 	// -------------------------------------------------------------------------
@@ -1789,6 +1811,10 @@ export class RoleMessageGuardHost {
 	): Promise<{ ok: boolean; error?: string }> {
 		try {
 			return await this.ownerAnswerNow(questionId, generation, picked, source);
+		} catch (err) {
+			// Ops #257 (N2): approvals turned off while it ran, and a step threw for it: the plain answer, not the raw error.
+			if (this.offNow()) return { ok: false, error: this.offText("Your answer may not have been applied; ask Ops.") };
+			throw err;
 		} finally {
 			await this.afterChange();
 		}
@@ -1819,6 +1845,7 @@ export class RoleMessageGuardHost {
 			source,
 		};
 		await this.exclusive(async () => this.appendDecision(event));
+		if (this.offNow()) return { ok: false, error: this.offText("Your answer was saved but not applied; ask Ops.") };
 		const res = await this.adapters.native.ownerAnswer({ nativeAnswerEventId: event.eventId, questionId, generation });
 		const ok = res.state === "recorded" || res.state === "accepted";
 		q.state = "answered";
@@ -1982,19 +2009,13 @@ export class RoleMessageGuardHost {
 				error: `Not sent: ${sender.role} has sent ${lastHour} role messages in the last hour (the limit is ${ROLE_MESSAGES_PER_HOUR}). Ask the owner before sending more.`,
 				reason: "ordinary_hourly",
 			};
-		let state: GuardStoreState | null;
-		try {
-			state = await this.state_();
-		} catch (err) {
-			// Ops #257 (B1): approvals turned off as this send began (another server took the lock); nothing was recorded.
-			const why = (err as Error).message;
-			return this.status_ === "ready"
-				? { ok: false, error: `Not sent: the approval ladder couldn't read its record (${why}).` }
-				: {
-						ok: false,
-						error: `Not sent: approvals turned off (${why}). Nothing was recorded; send it again and it goes by the native rule (messages 7 and above can't be sent).`,
-					};
-		}
+		const state = await this.state_();
+		// Ops #257 (B1, N2): approvals turned off during the read (another server took the lock, another call failed).
+		if (this.offNow())
+			return {
+				ok: false,
+				error: `Not sent: ${this.offText("Nothing was recorded; send it again and it goes by the native rule (messages 7 and above can't be sent).")}`,
+			};
 		const causal = this.causalOf(sender.file, sender.guard?.lastUserText ?? "", state ?? undefined);
 		if (causal.kind === "unknown")
 			return {
@@ -2109,6 +2130,10 @@ export class RoleMessageGuardHost {
 	): Promise<{ ok: boolean; text: string; details?: Record<string, unknown> }> {
 		try {
 			return await this.approvalNow(sender, input, toolCallId);
+		} catch (err) {
+			// Ops #257 (N2): approvals turned off while it ran, and a step threw for it: the plain answer, not the raw error.
+			if (this.offNow()) return this.offAnswer("It may not have finished.");
+			throw err;
 		} finally {
 			if (this.status_ === "ready") await this.afterChange();
 		}
@@ -2155,29 +2180,38 @@ export class RoleMessageGuardHost {
 				}),
 			);
 			if (!("state" in res) || (res.state !== "recorded" && res.state !== "accepted"))
-				return { ok: false, text: `Not recorded: ${outcomeText(res)}` };
+				return this.offNow()
+					? this.offAnswer(`Your answer to ${requestId} may not have been recorded; the requester wasn't told.`)
+					: { ok: false, text: `Not recorded: ${outcomeText(res)}` };
+			// Ops #257 (N2): approvals can turn off during each await below; never a raw error, and never that the
+			// owner's dialog or the requester's notice went when that isn't known.
+			const done = `Your ${choice} for ${requestId} was recorded, but`;
+			const state = await this.state_();
 			if (choice === "escalate_owner") {
-				const state = await this.state_();
 				const esc = state?.requests.find(
 					(x) => x.binding.requestId === requestId && x.binding.generation.startsWith("owner-escalation-"),
 				);
-				if (esc) await this.adapters.native.presentOwnerQuestion(esc);
+				if (this.offNow()) return this.offAnswer(`${done} the owner wasn't shown his dialog.`);
+				if (esc) await this.adapters!.native.presentOwnerQuestion(esc);
+				if (this.offNow()) return this.offAnswer(`${done} the owner may not have been shown his dialog.`);
 				return {
 					ok: true,
 					text: `Passed ${requestId} to the owner: he gets a dialog; the requester hears his answer.`,
 				};
 			}
-			const state = await this.state_();
 			const r = state?.requests.find((x) => x.binding.requestId === requestId && x.binding.generation === generation);
+			if (this.offNow()) return this.offAnswer(`${done} the requester wasn't told.`);
 			const notice = await this.ctx.run(
 				{ sender, causal: r?.binding.causal, guard: { requestId, generation, phase: "decision" } },
 				() => this.adapters!.agent.notify(ref, requestId, generation, "decision"),
 			);
+			if (this.offNow()) return this.offAnswer(`${done} the requester may not have been told.`);
 			await this.afterAccepted(notice);
 			return { ok: true, text: `Recorded: ${choice} for ${requestId}. The requester gets your answer as a reply.` };
 		}
 		if (action !== "request") return { ok: false, text: 'approval.action must be "request", "status" or "decide".' };
 		const state = await this.state_();
+		if (this.offNow()) return this.offAnswer("Nothing was asked or recorded."); // Ops #257 (N2)
 		const causal = this.causalOf(sender.file, sender.guard?.lastUserText ?? "", state ?? undefined);
 		if (causal.kind === "unknown")
 			return {
@@ -2259,19 +2293,27 @@ export class RoleMessageGuardHost {
 			recipients: participants,
 			task: actor.task,
 		};
-		const res = await this.adapters.agent.request(ref, {
+		const res = await this.adapters!.agent.request(ref, {
 			binding: { requestId, generation: "1", scope },
 			context,
 			quantity,
 		});
 		if ((res as { reason?: string }).reason === "retention_capacity")
 			return { ok: false, text: `Not asked: ${await this.capacityText()}`, details: { reason: "retention_capacity" } };
-		if (!("state" in res) || res.state !== "recorded") return { ok: false, text: `Not asked: ${outcomeText(res)}` };
+		if (!("state" in res) || res.state !== "recorded")
+			return this.offNow()
+				? this.offAnswer("Nothing was asked.")
+				: { ok: false, text: `Not asked: ${outcomeText(res)}` };
 		const r = res.request;
+		// Ops #257 (N2): never that the approver was asked when that isn't known.
+		const approver = r.binding.tier === "owner" ? "the owner" : "the COO";
+		if (this.offNow()) return this.offAnswer(`Request ${requestId} was recorded, but ${approver} wasn't asked.`);
 		const notice = await this.ctx.run(
 			{ sender, causal: r.binding.causal, guard: { requestId, generation: "1", phase: "initial" } },
 			() => this.adapters!.agent.notify(ref, requestId, "1", "initial"),
 		);
+		if (this.offNow())
+			return this.offAnswer(`Request ${requestId} was recorded, but ${approver} may not have been asked.`);
 		await this.afterAccepted(notice);
 		const who =
 			r.binding.tier === "owner" ? "the owner (a dialog in the app and on Telegram)" : `the COO (${outcomeId(notice)})`;

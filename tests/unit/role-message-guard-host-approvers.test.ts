@@ -1,18 +1,22 @@
 // role-message-ladder (#122): the approval ladder wired over the native role messages, stage by stage on fixed
 // cases (rule 16): who approves. Shared world: role-message-guard-host-harness.ts (Ops #230 split the one host test
 // file so vitest runs its parts side by side; docs/test-speed.md).
+import { rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	ask,
 	C,
 	chainTo,
 	cooDecides,
+	data,
 	homes,
 	lastIn,
 	send,
 	tc,
 	useGuardWorld,
 	who,
+	type World,
 	world,
 } from "./role-message-guard-host-harness.js";
 
@@ -119,5 +123,108 @@ describe("ladder: who approves", () => {
 		expect(await w.host.ownerAnswer(qs[0].questionId, qs[0].generation, "one_send", "browser")).toEqual({ ok: true });
 		await w.rm.tick();
 		expect(await send(w, at.from, at.file, at.to, {}, lastIn(w, at.file))).toMatchObject({ ok: true });
+	});
+});
+
+// Ops #257 (N2): approvals can turn off while a call awaits (another call failed, another server took the lock).
+// The call then answers plainly that they are off, never with a raw error, and never says a notice or dialog went.
+describe("ladder: approvals turning off during an approval call (Ops #257, N2)", () => {
+	const OFF = "another call turned approvals off";
+	type Calls = Record<string, (...a: unknown[]) => Promise<unknown>>;
+	/** Approvals turn off, as when another call fails meanwhile, once the host's next `name` call has finished. */
+	function offAfter(w: World, of: "agent" | "native" | "host", name: string): void {
+		const h = w.host as unknown as Calls & { adapters: Record<"agent" | "native", Calls>; degrade(r: string): void };
+		const target: Calls = of === "host" ? h : h.adapters[of];
+		const orig = target[name];
+		target[name] = async function (this: unknown, ...a: unknown[]) {
+			target[name] = orig;
+			const r = await orig.apply(this, a);
+			h.degrade(OFF);
+			return r;
+		};
+	}
+	const offText = (r: { ok: boolean; text: string }, reason = OFF) => {
+		expect(r.ok).toBe(false);
+		expect(r.text).toContain(`Approvals turned off meanwhile (${reason}).`);
+		expect(r.text).not.toMatch(/Cannot read|gets a dialog|gets your answer|Asked the/);
+		return r.text;
+	};
+	async function asked(w: World) {
+		const at = await chainTo(w, 7);
+		const req = await ask(w, at.from, at.file, [at.to]);
+		expect(req).toMatchObject({ ok: true, details: { tier: "lower" } });
+		return { at, id: (req.details as { requestId: string }).requestId };
+	}
+	const turnsIn = (w: World, file: string) => w.got.filter((g) => g.file === file && g.via === "deliver").length;
+
+	it("during a decision: recorded, and the requester isn't said to be told", async () => {
+		const w = await world();
+		const { at, id } = await asked(w);
+		const turns = turnsIn(w, at.file);
+		offAfter(w, "agent", "roleDecision");
+		expect(offText(await cooDecides(w, id, "requested_quantity"))).toContain(
+			`Your requested_quantity for ${id} was recorded, but the requester wasn't told.`,
+		);
+		expect(turnsIn(w, at.file)).toBe(turns);
+		expect(w.host.state).toEqual({ status: "degraded", reason: OFF });
+	});
+
+	it("during a pass to the owner: recorded, and no dialog is said to be shown", async () => {
+		const w = await world();
+		const { id } = await asked(w);
+		offAfter(w, "agent", "roleDecision");
+		expect(offText(await cooDecides(w, id, "escalate_owner"))).toContain(
+			`Your escalate_owner for ${id} was recorded, but the owner wasn't shown his dialog.`,
+		);
+	});
+
+	it("during a request's first read: nothing asked or recorded", async () => {
+		const w = await world();
+		const at = await chainTo(w, 7);
+		const cooTurns = turnsIn(w, C);
+		offAfter(w, "host", "state_");
+		expect(offText(await ask(w, at.from, at.file, [at.to]))).toContain("Nothing was asked or recorded.");
+		expect(turnsIn(w, C)).toBe(cooTurns);
+	});
+
+	it("during a request: recorded, and the COO isn't said to be asked", async () => {
+		const w = await world();
+		const at = await chainTo(w, 7);
+		const cooTurns = turnsIn(w, C);
+		offAfter(w, "agent", "request");
+		expect(offText(await ask(w, at.from, at.file, [at.to]))).toMatch(
+			/Request cr-\w+ was recorded, but the COO wasn't asked\./,
+		);
+		expect(turnsIn(w, C)).toBe(cooTurns);
+	});
+
+	it("another server takes the lock before a decision: a plain answer, not the raw error", async () => {
+		const w = await world();
+		const { id } = await asked(w);
+		const lock = join(data, "role-message-guard", "lock");
+		rmSync(lock);
+		writeFileSync(lock, `${process.ppid}\n`);
+		offText(
+			await cooDecides(w, id, "requested_quantity"),
+			`another server (pid ${process.ppid}) took the guard's lock`,
+		);
+	});
+
+	it("during the owner's answer: a plain error, not the raw one", async () => {
+		const w = await world();
+		let from = "coo";
+		let to = "beta";
+		for (let h = 1; h < 7; h++) {
+			expect(await send(w, from, homes()[from], to)).toMatchObject({ ok: true });
+			[from, to] = [to, from];
+		}
+		expect(await ask(w, "coo", C, ["beta"])).toMatchObject({ ok: true, details: { tier: "owner" } });
+		const [q] = await w.host.openQuestions();
+		offAfter(w, "host", "exclusive");
+		const r = await w.host.ownerAnswer(q.questionId, q.generation, "one_send", "browser");
+		expect(r).toEqual({
+			ok: false,
+			error: `Approvals turned off meanwhile (${OFF}). Your answer was saved but not applied; ask Ops.`,
+		});
 	});
 });
