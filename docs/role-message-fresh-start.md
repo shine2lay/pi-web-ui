@@ -308,6 +308,18 @@ where it is so the reason can be seen. Fix the cause, or make a new request, and
 - `approval ladder UNAVAILABLE (another server (pid N) holds the guard): ...`, or
   `... took the guard as this one started`: another pi-web-ui server runs on the same data folder. Stop the
   extra one, then `pi-web-deploy restart`. A lock left by a server that is gone is taken over by itself.
+- `approval ladder UNAVAILABLE (another server (pid N) took the guard's lock): ...`, or
+  `(the guard's lock is gone)` (Ops #257, B1): while this server ran, `lock` stopped being the file it
+  linked, so it turned off before its next guard write. The same steps: stop the extra server, then
+  `pi-web-deploy restart`.
+- `approval ladder UNAVAILABLE (the guard's lock is a folder, not a plain file; it was left in place)` (or a
+  link, a pipe; Ops #257, B3): something that isn't a lock file sits at `role-message-guard/lock`. Look at
+  what it is and remove it by hand (only that one name), then `pi-web-deploy restart`.
+- `approval ladder: rotated to generation N; cleanup failed (<why>)` (Ops #257, B5): the rotation is done
+  and approvals are on in gen-N; only an older `gen-` folder couldn't be removed. Fix what it names; the
+  next rotation or start removes it.
+- `approval ladder: removed lock.tmp-<pid>, ... (left by a server that is gone)` (Ops #257, B5): files a
+  crashed start left; nothing to do.
 
 ## If the log says UNAVAILABLE (current.json ...)
 
@@ -438,3 +450,15 @@ unreadable as the live one was):
   own lock are taken over; the give-back and second-try cases (A4).
 - Ops #253, `tests/unit/role-message-guard-store.test.ts`: the fresh start's check and `recover()` agree on a
   prepared send at all 12 points where a send can stop (A3).
+- Ops #257, `tests/unit/role-message-guard-host-files.test.ts`: three servers over a gone server's lock
+  (Architecture's repro): exactly one holds the guard, and a stop leaves another server's lock; a running
+  server whose lock another server took turns off before its next guard write (B1); a folder, a link or a pipe
+  at `lock` turns the start off and is left as it is (B3); a gone server's `lock.tmp-` and `lock.stale-`
+  files are removed, a live one's and a folder stay (B5); a link put at `lock.tmp-<pid>` is never written
+  through (N1).
+- Ops #257, `tests/unit/role-message-guard-host-approvers.test.ts`: approvals turning off during a decision,
+  a pass to the owner, a request or the owner's answer give a plain answer that says only what is known (N2).
+- Ops #257, `tests/unit/role-message-guard-fresh-start.test.ts`: a rotation whose store fails after part of
+  gen-3 is made leaves no gen-3 (B2); a clean-up that fails after the switch: on in gen-3, the log says so
+  (B5); `current.json` naming gen-2 with no generation folder left: off, nothing written, the script refuses
+  (B4).

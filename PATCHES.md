@@ -7196,6 +7196,36 @@ What the #248 reviews left (Architecture `ops248-ladder-safe-start.md` suggestio
   off (`another server (pid N) took the guard as this one started`). The lock file is now mode 0600.
   `stop()` unchanged.
 
+### Last review fixes (Ops #257, branch ladder-last-fixes)
+
+What the #253 reviews left (Architecture B1-B5, Security N1-N2), one commit each in the order B1, N2,
+B3, B5, N1, B2, B4; hypothesis H-LADDER-LAST-1 in `docs/role-message-fresh-start.md`.
+
+- B1: the server keeps the device and inode of the lock it linked. Before "on", and on entering the
+  lease (every guard write runs under it), `lockLost()` checks that `lock` is still that file; if not, the
+  ladder turns off (`another server (pid N) took the guard's lock`, or `the guard's lock is gone`) and the
+  work doesn't run. `stop()` removes `lock` only while it is still that file. Architecture's three-server
+  repro is now a test: exactly one server holds the guard.
+- N2: approval decide, request and the owner's answer check again after each await (`offNow()`). When
+  approvals turned off meanwhile, the answer says so (`Approvals turned off meanwhile (<why>). ...`) and
+  only what is known: never the raw `Cannot read properties of null`, never that a notice or dialog went
+  when it didn't. A store read that finds the lock taken gives nothing.
+- B3: `lock` is looked at with `lstat` first (`lockNotFile()`). A folder, a pipe, a link or any other
+  non-file turns the start off (`the guard's lock is <kind>, not a plain file; it was left in place`)
+  and is never opened, followed or moved; `readPid()` reads a lock from one `O_NOFOLLOW | O_NONBLOCK`
+  open. `takeLock()`'s clean-up is best effort.
+- B5: once a start holds the lock, `sweepLockLeftovers()` removes the `lock.tmp-<pid>` and
+  `lock.stale-<pid>` plain files of pids that are gone, and logs what it removed; a live server's stay. A
+  clean-up that fails after `beginGeneration()` switched `current.json` logs
+  `approval ladder: rotated to generation N; cleanup failed (<why>)`, and the rotation counts as done.
+- N1: `takeLock()` writes `lock.tmp-<pid>` with flag `"wx"` (mode 0600): always a new file, never
+  written through a link put there; anything there turns the start off.
+- B2: a `beginGeneration()` whose folder or store fails before the switch removes its half-made
+  `gen-(N+1)` at once.
+- B4: a `current.json` naming gen 2 or more, with no `gen-` or `archive-gen-` folder left, keeps the
+  ladder off (`current.json points at gen-N, which doesn't exist`) and writes nothing; the script refuses
+  the same way. Gen 1 with no folder is still a first start (A1).
+
 ### How it was checked
 
 - The new test file and the role-message-guard host tests, sealed; then the land gate.
@@ -7205,13 +7235,19 @@ What the #248 reviews left (Architecture `ops248-ladder-safe-start.md` suggestio
   came up holding the guard); A3's test checks the fresh start's refusal and `recover()` agree at all 12
   points where a send can stop. New file `tests/unit/role-message-guard-host-files.test.ts`; no existing
   test changed.
+- Ops #257: each item's new test failed before its fix and passed after it (B1: two of three servers came
+  up holding the guard; N2: the raw `Cannot read properties of null`; N1: the link's target was
+  overwritten with the pid; B4: an empty gen-2 was started and turned on). One focused sealed run of the
+  16 `role-message-guard` test files passed (463 tests). No existing test changed; the files test's
+  `node:fs` mock gained an `rm` hook.
 
 ### Undo and syncing
 
 - Turn approvals off without a rollback: the off switch in `docs/role-message-fresh-start.md`.
 - Revert this commit with `wt`, then install with `pi-web-deploy`. A build without it opens the newer
   generation as usual; the old record stays in `archive-gen-N/` and is never changed.
-- On an upstream sync this patch only touches `start()`/`stop()` in the guard host: keep the off switch
+- On an upstream sync this patch touches the guard host's `start()`/`stop()`, the lock (`takeLock()`,
+  `lockLost()`), `beginGeneration()` and the approval calls' checks after each await: keep the off switch
   ahead of the lock, and the fresh start only on the failed-recover branch.
 
 ## initiatives-who-cache
