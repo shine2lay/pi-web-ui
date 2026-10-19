@@ -39,7 +39,22 @@ alarm is a separate task. This is simpler than Architecture's 2026-10-14 recover
 - **Wrong if**: the ladder is still UNAVAILABLE with a matching request; any byte of gen-1 changes; a later
   start makes gen-3; a non-matching request (wrong digest, files touched within 2 h, request older than
   24 h, a record that opens) changes anything; a role message is lost or delivered twice.
-- **Result**: pending (filled in after the live check).
+- **Result: HIT** (2026-10-18, live). The request was written at 21:54:31 PDT (gen 1, sha256s `e3c99b7f…`
+  journal and `d0842a80…` accepted). `pi-web-deploy` installed 033cd1d8 and restarted at 21:55:20. At 21:56:07
+  the log said "approval ladder: fresh start from generation 1 (old record kept in archive-gen-1)" and then
+  "approval ladder: on (hops 1-6 free; 7-11 COO grant; 12+ owner grant)". `current.json` became
+  `{"gen":2}`. Both files in `archive-gen-1/` match gen-1 and the request byte for byte (sha256 and `cmp`),
+  and gen-1 still dates from 2026-10-14 02:59:46. The request became `fresh-start.done-1792385767201.json`,
+  and `history.jsonl` holds one `revoked_all`. gen-2 began empty (0 requests, grants, outbox entries,
+  incidents and tombstones) with 11 sends carried over from the native last hour. The first real role
+  messages were committed in gen-2 at 21:58:28, 2.5 minutes after the start. The next restart (22:01:12,
+  564392e8, which contains this patch) logged "approval ladder: on" again and stayed on gen-2, with no
+  gen-3. By 22:05, 8 role messages had gone through gen-2 (37 transactions, all committed). Each is once
+  in `role-messages.json` (1,000 messages, no duplicate ids). None of the "wrong if" results happened live;
+  the non-matching-request cases are covered by `tests/unit/role-message-guard-fresh-start.test.ts`.
+  Seen but not changed here: most question/request/reply entries end in outbox state `unknown` (the wake-up
+  wasn't confirmed), as in gen-1 (174 of 192 entries); each such message was delivered once in the native
+  record.
 
 ## How to use it
 
