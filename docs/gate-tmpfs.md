@@ -100,4 +100,52 @@ Receipts: `~/.cache/pi/receipts/gate-tmpfs/pair/` (`disk.log`, `memory.log`, `*.
   with the note.
 - No test or script compares the temp folder with `/tmp` (searched `tests/unit`, `tests/lib`, `server`, `scripts`).
 
-**The land.** Filled in after it.
+**The land** (request 54-85f8d4, Oct 18 21:01:41-21:04:21 PDT; rebased onto `a482b2e`, landed as `dfaccd0`;
+machine quiet at the start: load average 0.9, no other test run). `scripts/check.sh` runs itself through
+`scripts/sealed.sh` (its line 16) and no `PI_SEALED_TMP_PARENT` was set, so the whole check ran in `/dev/shm`. 440
+files, 6,265 tests passed, 6 skipped. Against #233's land, the same check on disk; two lands at different times, so
+this comparison is only a rough guide and the pair above is the fair measure:
+
+| Step                                            | Land 45-7c3e2b (on disk) | Land 54-85f8d4 (in memory) | Change  |
+| ----------------------------------------------- | ------------------------ | -------------------------- | ------- |
+| Test (a)                                        | 174.9 s                  | 145.9 s                    | -29.0 s |
+| `role-message-guard-store-golden.test.ts`       | 89.5 s                   | 74.2 s                     | -15.2 s |
+| `role-message-guard-host-hops.test.ts`          | 37.0 s                   | 23.3 s                     | -13.7 s |
+| `sealed-fence.test.ts`                          | 14.7 s (16 tests)        | 36.1 s (20 tests)          | +21.3 s |
+| vitest Duration                                 | 181.9 s                  | 155.3 s                    | -26.5 s |
+| Unit tests step                                 | 182 s                    | 156 s                      | -26 s   |
+| Prettier, beside the tests                      | 98 s                     | 106 s                      | +8 s    |
+| Whole land (`wt land-status`, started to ended) | 185.9 s                  | 159.6 s                    | -26.3 s |
+
+- The check took 156 s, not the expected 120-130 s; the whole land 160 s (14% less). Test (a) is still the
+  longest step: 146 s, twice its 71 s alone in memory.
+- `sealed-fence.test.ts` grew 21 s: the four new cases took 4.9-6.0 s each in the land (0.7 s each alone), like the
+  two older sealed.sh cases beside them (4.8 and 6.0 s), since each starts a whole sealed run on the land's busy
+  cores. That file runs in its own worker beside test (a), so it doesn't lengthen the check.
+- Nothing left in `/dev/shm` after the land: no `pi-sealed-*` folder.
+
+Receipt: `~/.cache/pi/receipts/gate-tmpfs/land.log`.
+
+## Verdict: MISS on size, not proved wrong
+
+- Not proved wrong: the pair saved 46.6 s (the line was 30 s), every test passed in memory (the pair and the land's
+  6,265), and nothing was left in `/dev/shm`.
+- Missed what it expected: 46.6 s instead of at least 50 s in the pair, and a 156 s check instead of 120-130 s in the
+  land. Two estimates were wrong. The flush waits are about 47 s of test (a), not 70-76 s. And in the land the saving
+  shrinks to 29 s. Likely reason (not measured): test (a) shares the cores with the rest of the suite, so while it
+  waited on disk, other tests used its core, and part of the wait was hidden behind work the check does anyway.
+- The change stays on mine: it takes about 26 s off every land and costs nothing measured. Undo:
+  `PI_SEALED_TMP_PARENT=/tmp` for one run, or revert `dfaccd0`.
+
+**Next hypothesis (H-GATE-PIN-1, not started; Ops' home chat picks item 6's next step).**
+
+- Wrong, and the evidence: in the land test (a) takes 146 s, against 71 s alone on a fast core. The land spreads 440
+  files, prettier and typecheck over all 20 cores, and half of them are slow ones (cores 0-4 and 10-14 top out at
+  2.8 GHz, against 3.9 GHz for cores 5-9 and 15-19), so test (a) shares a core and may run on a slow one.
+- One change: the check runs test (a) in its own vitest run pinned to one fast cluster (`taskset -c 5-9`), and the
+  rest of the unit tests beside it on the other 15 cores.
+- Expected: test (a) about 75-90 s in the land, and the unit tests step about 100-120 s, read from the land's log.
+- Wrong if: test (a) still takes more than 110 s in the land, or the step saves less than 20 s.
+- Then prettier is the next floor: it took 98-106 s beside the tests in both lands.
+- The other open try from #233 remains: hashing off the event loop (cuts test (a)'s own work, but changes
+  production code and needs Security's review).
