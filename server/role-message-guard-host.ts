@@ -827,7 +827,9 @@ export class RoleMessageGuardHost {
 		const aside = `${this.lockPath}.stale-${process.pid}`;
 		try {
 			rmSync(mine, { force: true });
-			writeFileSync(mine, `${process.pid}\n`, { mode: 0o600 });
+			// Ops #257 (Security N1): made new ("wx"), so a link put here since the line above is never written through and
+			// the file always gets mode 0600; anything there turns the start off.
+			writeFileSync(mine, `${process.pid}\n`, { mode: 0o600, flag: "wx" });
 			const fd = openSync(mine, "r");
 			let made: { dev: number; ino: number };
 			try {

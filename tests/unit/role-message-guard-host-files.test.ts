@@ -17,7 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { RoleMessageGuardHost } from "../../server/role-message-guard-host.js";
 import { A, clock, data, send, useGuardWorld, type World, world } from "./role-message-guard-host-harness.js";
 
-type Hook = (when: "before" | "after", op: "rename" | "link", from: string, to: string) => void;
+type Hook = (when: "before" | "after", op: "rename" | "link" | "rm", from: string, to: string) => void;
 /** What node:fs was asked to do while `on`: "rename <to>" and "fsync <the path the fd was opened on>". */
 const fsx = vi.hoisted(() => ({
 	on: false,
@@ -47,6 +47,10 @@ vi.mock("node:fs", async (importOriginal) => {
 			fsx.hook?.("before", "link", String(args[0]), String(args[1]));
 			real.linkSync(...args);
 			fsx.hook?.("after", "link", String(args[0]), String(args[1]));
+		},
+		rmSync: (...args: Parameters<typeof real.rmSync>) => {
+			real.rmSync(...args);
+			fsx.hook?.("after", "rm", String(args[0]), "");
 		},
 	};
 	return { ...real, ...wrapped, default: { ...real, ...wrapped } };
@@ -284,6 +288,28 @@ describe("one server holds the guard (Ops #253, Architecture A4)", () => {
 		expect(lockFiles(dir).sort()).toEqual(
 			["lock", `lock.stale-${GONE + 1}`, `lock.stale-${OTHER}`, `lock.tmp-${OTHER}`].sort(),
 		);
+	});
+
+	it("a link put at lock.tmp-<pid> just before it is written is never written through; the start turns off (Ops #257, N1)", async () => {
+		const w = await world();
+		const dir = join(data, "guard-n1");
+		mkdirSync(dir, { recursive: true });
+		const mine = join(dir, `lock.tmp-${process.pid}`);
+		const victim = join(data, "n1-victim");
+		writeFileSync(victim, "untouched\n");
+		fsx.hook = (when, op, from) => {
+			// Another same-user process puts a link where this server's lock file is about to be made.
+			if (when === "after" && op === "rm" && from === mine) {
+				fsx.hook = null;
+				symlinkSync(victim, mine);
+			}
+		};
+		const host = newHost(w, dir);
+		await host.start();
+		expect(readFileSync(victim, "utf8")).toBe("untouched\n");
+		expect(host.state.status).toBe("degraded");
+		expect(host.state.reason).toMatch(/^EEXIST: file already exists, open '.+lock\.tmp-\d+'$/);
+		expect(lockFiles(dir)).toEqual([]); // no lock taken; the link went with this server's own files
 	});
 
 	it("a server that takes the lock between the move and the second try wins it; this one turns off", async () => {
