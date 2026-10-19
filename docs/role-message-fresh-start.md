@@ -280,6 +280,33 @@ here. An item that turns out bigger than a test and a small fix is recorded with
   `REVIEW-37df21ec.md`) covers host 8cc8af2b, store 41aaae5b and script 100e213f: a change to those needs its
   delta look again. Architecture rm-462cf70b (`/home/shinelay/architecture-dept/reviews/ops257-ladder-last-fixes.md`)
   ran the 16 guard files on both file systems (464 passed, 1 skipped, each).
+- **Result: MISS on B1, HIT on the rest** (2026-10-19, live).
+  - B1 as first built passed its tests only on tmpfs; Security's review found it unsound on ext4
+    (H-LADDER-LAST-2), and its fix made one existing test change (H-LADDER-LAST-3), so "no existing test
+    changed" did not hold. N2, B3, B5, N1, B2 and B4 went as expected.
+  - Tests: each new test failed before its fix and passed after it (logs `*-before.log` and `*-after.log` in
+    `~/.cache/pi/receipts/ladder-last-fixes/`). The focused sealed run passed (16 files, 464 tests, 1 skipped).
+  - Land and install: `wt land` 81-b81519 landed the 12 commits on mine as 9fc27bd8 at 09:30, with no rebase
+    and the full check (444 files, 6386 tests, 6 skipped). `pi-web-deploy --landed 81-b81519` installed it at
+    09:33, result 0: server, page, reply and log passed, but the big-chat check timed out after 300 s while the
+    15 chats the restart cut off started again (that check never rolls back). `pi-web-deploy check` at 09:42
+    passed all five (the 40 MB copy opened in 39 s). In the app only the guard host and the fresh-start script
+    changed, nothing on the chat page's path, so the time-out was load at start-up, not this change.
+  - Live: at 09:34:14 the log said "approval ladder: on (hops 1-6 free; 7-11 COO grant; 12+ owner grant)", with
+    no other ladder line (no "cleanup failed", "rotated", UNAVAILABLE or "another server") by 09:48.
+    `current.json` is still `{"gen":2}` (unchanged since 2026-10-18 21:56:07), and the folders are archive-gen-1,
+    gen-1 and gen-2: no gen-3. `lock` names the new server (pid 3652127, written 09:34:00) with mode 0600, and no
+    `lock.tmp-*` or `lock.stale-*` is left. The first real role messages after the restart, rm-49f5fbd2
+    (09:40:02), rm-70772feb, rm-94ecea0b and rm-dcd39564 (09:41:00), each have one committed send in gen-2 and
+    appear once in `role-messages.json` (1,000 messages, no duplicate ids; gen-2 has 526 transactions, 159 of
+    them sends, with no duplicate transaction ids or send operations). rm-7de1cf93, written at 09:31:44 under
+    the old server, was delivered once, by the new one at 09:34:00. None of the "wrong if" results happened live.
+  - How "committed once" is counted: a message's send is the one gen-2 transaction whose operation id starts with
+    `send-` and whose receipt names it; the outbox's own upkeep transactions (dispatching, delivered) name it too
+    and are not sends. Read-only script, ids and counts only:
+    `node ~/.cache/pi/receipts/ladder-last-fixes/live-sends.mjs <since ISO> <how many>`.
+  - Not seen live, by design: three servers starting at once, a lock that isn't a plain file, a failed clean-up
+    after a rotation, a half-made generation or a missing generation folder. The tests cover those.
 
 ## Hypothesis H-LADDER-LAST-2 (Ops #257, Security B1-R)
 
