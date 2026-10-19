@@ -126,6 +126,63 @@ S1-S2), so the record can't be wiped or misread at start-up.
     lets the start remove newer generations, the same as any same-user delete. Hence "never write a smaller
     N" below.
 
+## Hypothesis H-LADDER-FOLLOWUPS-1 (Ops #253)
+
+The five follow-ups the reviews of Ops #248 left (Architecture
+`/home/shinelay/architecture-dept/reviews/ops248-ladder-safe-start.md` suggestions 1-4, Security
+`/home/shinelay/security-lab/ladder-safe-start-248/REVIEW-ec50fdcb.md` O2), one commit each, in the order A1, O2,
+A2, A3, A4.
+
+- **Wrong, and the evidence**:
+  - A1 (caused by #248): a first start makes gen-1 and writes `current.json` only once the new store is ready
+    (host ~579-585). A crash in between leaves gen-1 without `current.json`, and since N3 every later start
+    turns the ladder off ("current.json is missing"). Before #248 the next start healed it.
+  - O2: `maybeRotate()` runs in `afterAccepted()` after a send was accepted and delivered, outside the send's
+    `try`. When the rotation throws (a folder it can't write, a `current.json` garbled while the server runs, a
+    new store that won't open), the chat gets an error for a message that went. A retry has a new tool-call id,
+    so it would go twice. At start the same throw turns the ladder off.
+  - A2: `writeCurrent()` renames `current.json` into place but doesn't flush the folder, so after a power loss
+    the switch to N+1 may not be on disk; the next start would read N and remove gen-(N+1).
+  - A3: the store tests "the journal holds a prepared transaction" (`bundle.stage === "prepared"`) in four
+    places: `guardJournalRefusal()` (the fresh start's check), `recover()` and twice in the lookups. If one
+    changes, the fresh start and `recover()` could disagree.
+  - A4: the lock is read, then written (`readLock()`, later `writeDurable()`), so two servers starting on one
+    folder at once can both pass the look and both hold the guard.
+- **The changes, one per item, one commit each**:
+  - A1: a first start (no gen-N or archive-gen-N folder) writes `current.json` (`{"gen":1}`) through
+    `writeCurrent()` before it makes gen-1. A crash after that leaves `current.json` naming a generation that is
+    there or not made yet, and the next start begins gen 1 as usual. N3 is unchanged: once a generation exists, a
+    missing or odd `current.json` still turns approvals off.
+  - O2: `maybeRotate()` never throws. When a rotation fails it reads `current.json` again. Still naming the
+    store's own generation: approvals stay on, and the log says "approval ladder: rotation failed (<reason>);
+    staying on generation N", once per reason while the server runs (the next send that finds the store due
+    tries again). Otherwise, or when it can't be read: off, "rotation: <reason>" (never guess, as N3). A start
+    whose rotation turns approvals off stops there and doesn't log "on". A send that was accepted always comes
+    back to its chat as accepted.
+  - A2: `writeCurrent()` flushes the guard folder after the rename (`fsyncDir`, which the fresh start's archive
+    already uses).
+  - A3: one store helper, `holdsPrepared()`, for all four; messages and behaviour stay byte for byte.
+  - A4: the lock is made in one step that fails when it is there. The pid is written and flushed to
+    `lock.tmp-<pid>`, then linked to `lock` (a link fails when `lock` exists, as `openSync` "wx" does). When a
+    lock is there: a live other server's turns the ladder off, "another server (pid N) holds the guard", as
+    today. A gone server's (dead pid), an unreadable one or this process's own is moved aside to
+    `lock.stale-<pid>`, then removed, and the take is tried once more. If what was moved is a live server's lock
+    after all (it took the lock just before), it is put back and this start turns off. A second failure turns it
+    off (another server won). `stop()` is unchanged. Ops (the task's lead) chose two details beyond the plan's
+    `openSync(lock, "wx")` and "remove the stale lock": a "wx" lock is empty until its pid is written, and an
+    empty lock reads as unreadable, which the take-over removes; and removing by name could remove a lock
+    another server made a moment after this one judged the old one gone. Either way two servers starting at
+    once could still both hold it, the case A4 is for.
+- **Expected, and how it's measured**: one focused sealed run of the guard test files. The A1, O2 and A4
+  tests fail before their fix and pass after it. A2's test sees the guard folder flushed right after every
+  `current.json` rename; A3's test sees `recover()` and the fresh start's check agree at every point where a send
+  can stop. The existing guard tests (rotation, fresh start, N1-N3, S1, S2) pass unchanged, and every case that
+  turns the ladder off leaves the guard files as they were. Live, after the install: the start log says
+  "approval ladder: on (...)", `current.json` is still `{"gen":2}`, there is no gen-3, and the next real role
+  message is committed once in gen-2.
+- **Wrong if**: an existing guard test has to change to pass; a case that turns the ladder off leaves a guard
+  file changed; the live start isn't "on" on gen-2; a real role message shows up twice in `role-messages.json`.
+
 ## How to use it
 
 Only when the start log says `approval ladder UNAVAILABLE (recover: ...)`. Run from the pi-web-ui checkout:
