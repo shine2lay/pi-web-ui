@@ -26,6 +26,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: four cases in `tests/unit/sealed-fence.test.ts` (`/dev/shm` with room; less than 8 GB free; the override; an unwritable override), the registered pair (test (a) on disk and in memory at the same time), then the landing gate.
 - Undo: revert this commit; for one run, `PI_SEALED_TMP_PARENT=/tmp scripts/sealed.sh …`.
 
+## ladder-alarm: the Roles header says when message approvals are off
+
+- `local` (owner 2026-10-18, picked "Fresh start + alarm"; Ops #242, project message-approvals). The approval step for long role-message chains was off from 10-14 06:43 to 10-18 with one log line per start and nothing on any page. Hypothesis H-LADDER-ALARM-1 and result: `docs/message-approvals-alarm.md`.
+- Server, only reading the step's own state (`RoleMessageGuardHost.state`; `server/role-message-guard-host.ts` unchanged): `UiRolesOverview.approvals?: { on, reason?, since? }` (`server/protocol.ts`). `server/roles-overview.ts`: host method `messageApprovals?()` and `approvalsOf()`: "ready" -> `{ on: true }`, "degraded" -> `{ on: false, reason, since }` (reason one line, at most 300 characters), "starting" or nothing -> no field. `server/agent-service.ts` wires it with the server's start time (`SERVER_STARTED_AT`).
+- Web: `web/src/roles-exact-model.ts` `projectApprovalsOff()` (only an explicit `on: false`; reason through `plain()`); `web/src/roles-exact-view.ts` `approvalsOff`/`approvals` values and `approvalsTip()`; `web/src/roles-u0/surface.html`: an amber chip "Message approvals off" (the stale pill's colours) right before the status pill, its tooltip "Chains between roles stop at 6 messages and nobody can approve more. Reason: <reason>. Off since this server started at <time>." No banner, no row, no role on the chip; the pill is unchanged.
+- Checks: `tests/unit/roles-overview.test.ts` (degraded, ready, starting, absent, a throw, clipping) and `tests/unit/roles-exact.test.ts` (projection, chip shown and gone, tooltip, pill unchanged), then the landing gate and a look-only live check. Minimal checks at the owner's request. The deploy-output note is agent-tools' part (`lib/pi-web-check.mjs`).
+- Undo: revert this commit and deploy with `pi-web-deploy`; the page then shows nothing about approvals, as before.
+
 ## initiatives-page-plan: goals, done-when items and projects on the Initiatives page
 
 - `local` (owner 2026-10-18, Ops home chat: design first, then features; "Side by side" for steps 2-4; Ops #226, project initiatives-page). Hypothesis H-INITIATIVES-PAGE-2 and result: `docs/initiatives-page-plan.md`.

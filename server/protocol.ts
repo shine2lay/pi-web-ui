@@ -2908,6 +2908,19 @@ export interface UiRolesOverview {
 	contacts?: UiOwnerContact[];
 	/** roles-sent: sender → receiver pairs with open requests or questions (absent: this server reads none). */
 	openPairs?: UiRoleOpenPair[];
+	/** ladder-alarm: the approval step for long role-message chains (messages 7+). on false = it's off this run
+	 *  (chains stop at 6, nobody can approve more), with the reason its start logged and since = when this
+	 *  server started. Absent: not known yet (still starting) or this server has no such step. */
+	approvals?: UiMessageApprovals;
+}
+
+/** ladder-alarm: the approval step's state as the Roles page shows it. */
+export interface UiMessageApprovals {
+	on: boolean;
+	/** Only when off: why, as its start logged it. */
+	reason?: string;
+	/** Only when off: when this server started (ms); it has been off since then. */
+	since?: number;
 }
 
 /** identity-notes: a role's two-layer memory as its chats get it (pi-identity): the rules (notebook.md)

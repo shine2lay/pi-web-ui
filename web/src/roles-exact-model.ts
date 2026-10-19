@@ -7,8 +7,10 @@ import { projectRolePanel, type RolePanel } from "./roles-panel-model";
 import {
 	CLOCK_SKEW_MS,
 	object,
+	plain,
 	projectUsefulRoles,
 	roleId,
+	TEXT_LIMIT,
 	time,
 	type NeedsYou,
 	type SourceState,
@@ -182,6 +184,29 @@ export function projectPairs(raw: unknown, shown: ReadonlySet<string>): ExactPai
 	return out;
 }
 
+/** ladder-alarm: the approval step for long role-message chains is off this run. */
+export interface ExactApprovalsOff {
+	/** Why, as its start logged it; null = not recorded, or unsafe. */
+	reason: string | null;
+	/** When this server started (ms); null = not recorded. */
+	since: number | null;
+}
+
+/** The server's approvals field: only an explicit on: false is "off"; on, absent or anything else -> null
+ *  (nothing shown). The reason is plain bounded text (an unsafe character drops all of it). */
+export function projectApprovalsOff(raw: unknown, now: number): ExactApprovalsOff | null {
+	const a = object(raw);
+	if (!a || a.on !== false) return null;
+	const since = a.since;
+	return {
+		reason: plain(a.reason, TEXT_LIMIT)?.text ?? null,
+		since:
+			typeof since === "number" && Number.isSafeInteger(since) && since > 0 && since <= now + CLOCK_SKEW_MS
+				? since
+				: null,
+	};
+}
+
 export interface ExactRole {
 	row: UsefulRole;
 	panel: RolePanel | null;
@@ -204,6 +229,8 @@ export interface ExactRoles {
 	contacts: ExactContact[] | null;
 	/** roles-sent: open sender → receiver pairs; null = this server doesn't report them. */
 	pairs: ExactPair[] | null;
+	/** ladder-alarm: set only while the approval step is off; null = on, starting or not reported. */
+	approvalsOff: ExactApprovalsOff | null;
 }
 
 export function projectExactRoles(state: unknown, connection: unknown, now: number): ExactRoles {
@@ -227,6 +254,7 @@ export function projectExactRoles(state: unknown, connection: unknown, now: numb
 		hasOverview: overview !== null,
 		contacts: overview !== null ? projectContacts(overview.contacts) : null,
 		pairs: overview !== null ? projectPairs(overview.openPairs, new Set(model.roles.map((r) => r.roleId))) : null,
+		approvalsOff: overview !== null ? projectApprovalsOff(overview.approvals, now) : null,
 		receivedAt:
 			overview !== null &&
 			received !== null &&

@@ -37,6 +37,7 @@ import type {
 	UiRoleRequest,
 	UiRoleSent,
 	UiRolesOverview,
+	UiMessageApprovals,
 	UiOwnerContact,
 	UiRoleStatus,
 	UiRoleTask,
@@ -641,6 +642,33 @@ export function roleWorkMode(
 }
 
 // ---------------------------------------------------------------------------
+// ladder-alarm: the approval step for long role-message chains
+// ---------------------------------------------------------------------------
+
+/** The approval step's own state (RoleMessageGuardHost.state) plus when this server started, as the host
+ *  hands it over. Only read, never changed. */
+export interface RolesApprovalsState {
+	status: string;
+	reason?: string;
+	since?: number;
+}
+
+const APPROVALS_REASON_MAX = 300;
+
+/** What the Roles page gets: "ready" -> on; "degraded" -> off, with its reason (one line, clipped) and the
+ *  server's start; "starting", anything else or nothing -> nothing, so nothing shows. */
+export function approvalsOf(state: RolesApprovalsState | null | undefined): UiMessageApprovals | undefined {
+	if (!state || typeof state !== "object") return undefined;
+	if (state.status === "ready") return { on: true };
+	if (state.status !== "degraded") return undefined;
+	let reason = typeof state.reason === "string" ? state.reason.replace(/\s+/g, " ").trim() : "";
+	if (reason.length > APPROVALS_REASON_MAX) reason = `${reason.slice(0, APPROVALS_REASON_MAX - 1)}\u2026`;
+	const since = state.since;
+	const sinceOk = typeof since === "number" && Number.isSafeInteger(since) && since > 0;
+	return { on: false, ...(reason ? { reason } : {}), ...(sinceOk ? { since } : {}) };
+}
+
+// ---------------------------------------------------------------------------
 // The snapshot
 // ---------------------------------------------------------------------------
 
@@ -693,6 +721,8 @@ export interface RolesOverviewHost {
 	evidencePaths?(): RolesEvidencePaths;
 	/** roles-config-history (Ops #209): a role's recorded settings changes; absent or undefined: none recorded. */
 	configHistory?(role: string): UiRoleConfigHistory | undefined;
+	/** ladder-alarm: the approval step's state and this server's start; absent or undefined: nothing shown. */
+	messageApprovals?(): RolesApprovalsState | undefined;
 	now?(): number;
 }
 
@@ -791,6 +821,12 @@ export class RolesOverviewReader {
 		} catch {
 			contacts = undefined;
 		}
+		let approvals: UiMessageApprovals | undefined;
+		try {
+			approvals = approvalsOf(this.host.messageApprovals?.());
+		} catch {
+			approvals = undefined;
+		}
 		return {
 			at,
 			roles,
@@ -801,6 +837,7 @@ export class RolesOverviewReader {
 			...(work ? { work } : {}),
 			...(contacts ? { contacts } : {}),
 			...(openPairs ? { openPairs } : {}),
+			...(approvals ? { approvals } : {}),
 		};
 	}
 

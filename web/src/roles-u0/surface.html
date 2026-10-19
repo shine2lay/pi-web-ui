@@ -25,6 +25,10 @@ body{margin:0}
 <h1 style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.015em">Roles</h1>
 <span style="color: #A9AEB6; font-size: 14px">{{headingSummary}}</span>
 </div>
+<sc-if value="{{approvalsOff}}" hint-placeholder-val="{{false}}"><span data-roles-approvals="1" tabindex="0" title="{{approvals.tip}}" style="display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 12px; margin-left: auto; box-sizing: border-box; max-width: 100%; border-radius: 999px; background: #1D1A12; border: 1px solid #4D3F1F; color: #F0B95A; font-size: 13px; font-weight: 550; white-space: nowrap; pointer-events: auto">
+<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="currentColor"></circle></svg>
+<span>{{approvals.text}}</span>
+</span></sc-if>
 <div role="status" style="display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid {{fresh.bd}}; color: {{fresh.fg}}; font-size: 13px; font-weight: 550; position: relative">
 <button type="button" data-roles-retry="1" onClick="{{fresh.retry}}" title="{{fresh.tip}}" aria-label="{{fresh.label}}" style="all: unset; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; pointer-events: auto">
 <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="currentColor"></circle></svg>

@@ -3,8 +3,8 @@
 // The real design's presentation-only adapter: fixed data, no chats, model requests,
 // tracking producers or production fonts. Pixel checks use the separate reference recipe.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EXACT_SOURCE, projectExactRoles, type ExactRoles } from "../../web/src/roles-exact-model.js";
-import { createExactRolesView } from "../../web/src/roles-exact-view.js";
+import { EXACT_SOURCE, exactWhen, projectExactRoles, type ExactRoles } from "../../web/src/roles-exact-model.js";
+import { approvalsTip, createExactRolesView } from "../../web/src/roles-exact-view.js";
 import { ringAnchor, ringLayout, stackLayout } from "../../web/src/roles-u0/layout.js";
 import { bindRolesSurface } from "../../web/src/roles-u0/surface.js";
 import type { SurfaceValue, SurfaceValues } from "../../web/src/roles-u0/types.js";
@@ -926,6 +926,67 @@ describe("the supplied Roles design with the existing feed", () => {
 		live.click();
 		expect(actions.reload).toHaveBeenCalledTimes(2);
 		expect(actions.open).not.toHaveBeenCalled();
+	});
+});
+
+describe("ladder-alarm: an amber chip while message approvals are off", () => {
+	const REASON = "recover: legacy writer divergence; refusing stale snapshot overwrite";
+	const SINCE = NOW - 2 * 3_600_000;
+	const withApprovals = (approvals: unknown) => {
+		const s = state();
+		return projectExactRoles({ ...s, overview: { ...s.overview, approvals } }, "open", NOW);
+	};
+	const chip = () => document.querySelector("[data-roles-approvals]");
+
+	it("projects only an explicit off; on, not reported or a bad value is nothing", () => {
+		expect(withApprovals({ on: false, reason: REASON, since: SINCE }).approvalsOff).toEqual({
+			reason: REASON,
+			since: SINCE,
+		});
+		expect(withApprovals({ on: true }).approvalsOff).toBeNull();
+		expect(withApprovals(undefined).approvalsOff).toBeNull();
+		expect(withApprovals({ on: "false" }).approvalsOff).toBeNull();
+		expect(projectExactRoles(state(), "open", NOW).approvalsOff).toBeNull();
+		// An unsafe reason is dropped whole; a start ahead of this clock isn't recorded.
+		expect(withApprovals({ on: false, reason: "BAD\u202eREASON", since: NOW + 3_600_000 }).approvalsOff).toEqual({
+			reason: null,
+			since: null,
+		});
+	});
+
+	it("off: the chip sits beside the pill, its tooltip gives the reason and the start; the pill is unchanged", () => {
+		const { update } = fixture(withApprovals({ on: false, reason: REASON, since: SINCE }), true);
+		vi.runAllTimers();
+		const el = chip();
+		if (!(el instanceof HTMLElement)) throw new Error("expected the approvals chip");
+		expect(el.textContent?.trim()).toBe("Message approvals off");
+		expect(el.title).toBe(
+			`Chains between roles stop at 6 messages and nobody can approve more. Reason: ${REASON}. Off since this server started at ${exactWhen(SINCE, NOW)}.`,
+		);
+		expect(el.closest("header")).not.toBeNull();
+		expect(el.getAttribute("role")).toBeNull();
+		expect(el.tabIndex).toBe(0);
+		expect(el.nextElementSibling?.getAttribute("role")).toBe("status");
+		expect(document.querySelectorAll('header [role="status"]')).toHaveLength(1);
+		expect(document.querySelector('[role="alert"]')).toBeNull();
+		const pill = document.querySelector('header [role="status"] > button');
+		if (!(pill instanceof HTMLButtonElement)) throw new Error("expected the status pill's button");
+		expect(pill.title).toBe("Click to refresh");
+		// Turned on: the chip goes; the pill stays as it was.
+		update(withApprovals({ on: true }));
+		vi.runAllTimers();
+		expect(chip()).toBeNull();
+		expect(document.querySelectorAll('header [role="status"]')).toHaveLength(1);
+	});
+
+	it("on: no chip; a reason or start that isn't recorded is said plainly", () => {
+		fixture(withApprovals({ on: true }), true);
+		vi.runAllTimers();
+		expect(chip()).toBeNull();
+		expect(approvalsTip({ reason: null, since: null }, NOW)).toBe(
+			"Chains between roles stop at 6 messages and nobody can approve more. Reason: not recorded. Off since this server started.",
+		);
+		expect(approvalsTip({ reason: "turned off.", since: SINCE }, NOW)).toContain("Reason: turned off. Off since");
 	});
 });
 

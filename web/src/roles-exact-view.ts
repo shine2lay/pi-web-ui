@@ -6,6 +6,7 @@ import {
 	exactAge,
 	exactClock,
 	exactWhen,
+	type ExactApprovalsOff,
 	type ExactContact,
 	type ExactInstructions,
 	type ExactPair,
@@ -22,6 +23,15 @@ import { EVIDENCE_STEPS, type UsefulEvidence } from "./roles-useful-model";
 
 const NR = "Not recorded";
 const MISSING = "Not connected yet";
+
+/** ladder-alarm: the amber chip's words, and its tooltip: fixed words around the start's own reason (projected
+ *  plain text) and when this server started. */
+export const APPROVALS_OFF_TEXT = "Message approvals off";
+export function approvalsTip(off: ExactApprovalsOff, now: number): string {
+	const reason = off.reason?.replace(/[.\s]+$/u, "") || "not recorded";
+	const since = off.since !== null ? ` at ${exactWhen(off.since, now)}` : "";
+	return `Chains between roles stop at 6 messages and nobody can approve more. Reason: ${reason}. Off since this server started${since}.`;
+}
 /** roles-evidence: the supplied design's evidence styles (its EV map): done, not yet; plus the page's
  *  missing-data style for a step with no record or not tracked for the repo. */
 const EV_DONE = { fg: "#9FD8B8", bg: "rgba(159,216,184,0.08)", bd: "#2F4A3C", bs: "solid" };
@@ -918,6 +928,12 @@ export function createExactRolesView(
 				retry: () => {
 					if (!disposed) actions.reload();
 				},
+			},
+			// ladder-alarm: an amber chip beside the pill only while the approval step is off; no banner, no row.
+			approvalsOff: model.approvalsOff !== null,
+			approvals: {
+				text: APPROVALS_OFF_TEXT,
+				tip: model.approvalsOff !== null ? approvalsTip(model.approvalsOff, model.now) : "",
 			},
 			// The supplied template keeps its banner markup, unused (the same hidden shape the reference fixture sends).
 			banner: { show: false, bg: "", bd: "", fg: "", title: "", body: "", hasAction: false, action: "" },

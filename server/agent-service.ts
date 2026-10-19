@@ -2003,6 +2003,9 @@ function quietLeadAt(conv: Conversation, idx: ChatIndex, start: number): UiQuiet
 let roleMessageService: RoleMessages | null = null;
 /** role-message-ladder: the approval ladder over message_role (AgentService sets it; null in other engines). */
 let roleGuardService: RoleMessageGuardHost | null = null;
+/** ladder-alarm: when this server's process started (ms); the approval step is set up once, at start, so when
+ *  it's off it has been off since then (the Roles page says so). */
+const SERVER_STARTED_AT = Math.round(performance.timeOrigin);
 /** board: the roles' shared board (AgentService sets it; null in other engines). */
 let roleBoardService: RoleBoard | null = null;
 /** telegram-coo: AgentService hears each run that settles in a chat (role-replies.ts); null until it is made. */
@@ -16378,6 +16381,8 @@ export class AgentService {
 				modelName: (provider, modelId) => ClientSession.modelNameOf(provider, modelId),
 				// roles-config-history (Ops #209): the recorder's changes (none until it has run).
 				configHistory: (role) => this.rolesConfig?.view(role),
+				// ladder-alarm: the approval step's own state, only read (role-message-guard-host.ts), and this server's start.
+				messageApprovals: () => ({ ...this.roleGuard.state, since: SERVER_STARTED_AT }),
 				// roles-instructions: pi reads the every-chat rules from its agent folder at each chat's start.
 				agentsFile: () => join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "AGENTS.md"),
 				rolePaused: () => this.roleMessages.paused,

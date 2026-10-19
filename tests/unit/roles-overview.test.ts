@@ -21,6 +21,7 @@ import { RoleMessages } from "../../server/role-messages.js";
 import { makeRolesOverviewTool } from "../../server/roles-overview-tool.js";
 import { RULES_GOALS, rulesGoals, rulesWorkMode } from "../../server/role-rules.js";
 import {
+	approvalsOf,
 	ChatPaths,
 	lineKind,
 	reportJobOf,
@@ -1431,5 +1432,46 @@ describe("roles-evidence: every open task's own chat", () => {
 		// the ninth: its chat isn't read, but its queue record names it
 		expect(ev(n)).toMatchObject({ repo: "other", built: { not: "yet" }, installed: { not: "tracked" } });
 		expect(ev(2)?.built).toEqual({ not: "recorded" });
+	});
+});
+
+describe("ladder-alarm: the approval step's state, only read", () => {
+	const REASON = "recover: legacy writer divergence; refusing stale snapshot overwrite";
+	it("off (degraded): on false, its reason on one line, and the server's start", async () => {
+		const f = fake([role("ops")]);
+		f.host.messageApprovals = () => ({
+			status: "degraded",
+			reason: "recover: legacy writer divergence;\n  refusing stale snapshot overwrite",
+			since: T0,
+		});
+		expect((await read(f)).approvals).toEqual({ on: false, reason: REASON, since: T0 });
+	});
+
+	it("on (ready): on true and nothing else", async () => {
+		const f = fake([role("ops")]);
+		f.host.messageApprovals = () => ({ status: "ready", reason: "", since: T0 });
+		expect((await read(f)).approvals).toEqual({ on: true });
+	});
+
+	it("not known (starting, no host method, nothing, a throw): no field at all", async () => {
+		const f = fake([role("ops")]);
+		expect(await read(f)).not.toHaveProperty("approvals");
+		f.host.messageApprovals = () => ({ status: "starting", reason: "", since: T0 });
+		expect(await read(f)).not.toHaveProperty("approvals");
+		f.host.messageApprovals = () => undefined;
+		expect(await read(f)).not.toHaveProperty("approvals");
+		f.host.messageApprovals = () => {
+			throw new Error("no guard");
+		};
+		expect(await read(f)).not.toHaveProperty("approvals");
+	});
+
+	it("clips a long reason and leaves out a bad start time or an empty reason", () => {
+		const off = approvalsOf({ status: "degraded", reason: "x".repeat(500), since: -1 });
+		expect(off?.on).toBe(false);
+		expect(off?.reason).toHaveLength(300);
+		expect(off?.reason?.endsWith("\u2026")).toBe(true);
+		expect(off).not.toHaveProperty("since");
+		expect(approvalsOf({ status: "degraded", reason: "  ", since: T0 })).toEqual({ on: false, since: T0 });
 	});
 });
