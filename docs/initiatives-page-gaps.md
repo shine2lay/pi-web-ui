@@ -56,3 +56,14 @@ Yes. `RoleMessageRecord.initiative` (`server/role-messages.ts`, added by decisio
 - Cost: the initiatives page message grows by the brief texts (about 60 KB now: 101 updates averaging 588 characters of "changed"), and only while a window shows the Initiatives tab.
 
 **What would prove it wrong.** The live Activity count or rows still differ from registry changes + `updatesTotal`; an update is missing or listed twice; the Progress section's cards change; a pi-web-deploy check fails.
+
+**H-INITIATIVES-PAGE-4b: hit (Oct 18, 20:26).** Tests: 58 passed (`tests/unit/progress-feed.test.ts` 34, `tests/unit/initiatives-page-model.test.ts` 11, `tests/unit/initiatives-page-gaps.test.ts` 13), with tsc (server, web, tests) and check:protocol passing (log `~/kept-from-tmp/2026-10-18/initiatives-steps/4/fix-checks.log`). Landed as 3535e235 (land request 51-bfe545, gate passed); installed 20:22 (`pi-web-deploy 3535e235`; `result` = 0, "live, and the checks all passed"). The same look-only live check, run `out4` (`LOOK_CHANGE=3535e235`): 20 checks, 0 failed.
+- Activity: hit. Team in Temper's tab and rows say 282 = 160 registry changes + 122 lead updates (`updatesTotal` 122: 20 sent in full + 102 in brief, as many as the records hold). The box: 247 = 247 registry changes.
+- Progress section: the feed still sends the same newest 20 updates in full (`updates` 20, as in run `out3`); only Activity reads the brief ones.
+- Gaps: hit. 12 = 12 at 1440 and at 390 px (Temper #99 blocked, with what it waits on; 11 unmet done-when items, since none of its projects is active). The box: 0 = 0.
+- Hand-offs: hit. 7 rows = the role-message store's 7 open questions and requests carrying the initiative; the box says why none are recorded.
+- No "Not connected yet" in the three sections (the one Activity row quoting those words inside a lead update's recorded text is counted apart, as before).
+- Nothing scrolls sideways at 390 px; the page sent nothing but its start-up reads.
+- Shots: `~/kept-from-tmp/2026-10-18/initiatives-steps/4/live/out4/` (desktop-1440 at full height, desktop-gaps-1440, desktop-activity-1440, desktop-box-1440, phone-390, phone-390-full).
+
+Step 4 is done: the live Initiatives page shows the gaps the lead hasn't covered, all activity and the hand-offs.
