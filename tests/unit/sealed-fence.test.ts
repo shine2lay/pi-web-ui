@@ -1,5 +1,15 @@
 import { type SpawnSyncReturns, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	accessSync,
+	constants,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	statfsSync,
+	writeFileSync,
+} from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -433,5 +443,76 @@ describe("scripts/sealed.sh", { timeout: 60_000 }, () => {
 		});
 		expect(r.status).toBe(0);
 		expect(JSON.parse(r.stdout.trim().split("\n")[0])).toEqual([]);
+	});
+
+	// Where the temp root goes (docs/gate-tmpfs.md): in memory, /dev/shm, when it is a writable folder with at
+	// least 8 GB free, else under TMPDIR; PI_SEALED_TMP_PARENT picks the folder, and one it can't use falls back.
+	describe("its temp root's folder", { timeout: 60_000 }, () => {
+		let scratch: string;
+		let tmp: string;
+		beforeAll(() => {
+			scratch = mkdtempSync(join(tmpdir(), "sealed-parent-test-"));
+			tmp = join(scratch, "tmp");
+			mkdirSync(tmp);
+		});
+		afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+
+		const rootOf = (env: Record<string, string>) => {
+			const r = spawnSync("bash", [join(repo, "scripts", "sealed.sh"), "bash", "-c", 'echo "$PI_SEALED_ROOT"'], {
+				cwd: repo,
+				env: { PATH: process.env.PATH ?? "", PI_SEALED: "", TMPDIR: tmp, ...env },
+				encoding: "utf8",
+				timeout: 60_000,
+			});
+			expect(r.status).toBe(0);
+			const root = r.stdout.trim().split("\n")[0] ?? "";
+			expect(root).toMatch(/\/pi-sealed-[^/]+$/);
+			expect(existsSync(root)).toBe(false); // removed afterwards
+			return { parent: dirname(root), stderr: r.stderr };
+		};
+		// Worked out here with statfs, not df as the script does.
+		const shmHasRoom = (): boolean => {
+			try {
+				accessSync("/dev/shm", constants.W_OK);
+				const mounts = readFileSync("/proc/mounts", "utf8").split("\n");
+				const options = mounts.map((l) => l.split(" ")).filter((f) => f[1] === "/dev/shm");
+				if (options.some((f) => (f[3] ?? "").split(",").includes("noexec"))) return false;
+				const s = statfsSync("/dev/shm");
+				return s.bavail * s.bsize >= 8 * 2 ** 30;
+			} catch {
+				return false;
+			}
+		};
+
+		it("is /dev/shm when it has room, with no override", () => {
+			const { parent, stderr } = rootOf({});
+			expect(parent).toBe(shmHasRoom() ? "/dev/shm" : tmp);
+			expect(stderr).not.toContain("can't make the temp home");
+		});
+
+		it("is TMPDIR when /dev/shm has less than 8 GB free", () => {
+			const bin = join(scratch, "bin");
+			mkdirSync(bin, { recursive: true });
+			writeFileSync(join(bin, "df"), "#!/bin/sh\nprintf 'Avail\\n 8191\\n'\n", { mode: 0o755 }); // MiB
+			const { parent, stderr } = rootOf({ PATH: `${bin}:${process.env.PATH ?? ""}` });
+			expect(parent).toBe(tmp);
+			expect(stderr).not.toContain("can't make the temp home");
+		});
+
+		it("is PI_SEALED_TMP_PARENT when set: /tmp puts it on disk, as before", () => {
+			expect(rootOf({ PI_SEALED_TMP_PARENT: "/tmp" }).parent).toBe("/tmp");
+		});
+
+		// As root every folder is writable, so this case can't be made there.
+		it.skipIf(process.getuid?.() === 0)(
+			"falls back to TMPDIR, with a note, when PI_SEALED_TMP_PARENT is unwritable",
+			() => {
+				const locked = join(scratch, "locked");
+				mkdirSync(locked, { mode: 0o500 });
+				const { parent, stderr } = rootOf({ PI_SEALED_TMP_PARENT: locked });
+				expect(parent).toBe(tmp);
+				expect(stderr).toContain(`can't make the temp home in ${locked}`);
+			},
+		);
 	});
 });

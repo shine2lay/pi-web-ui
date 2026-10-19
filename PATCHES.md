@@ -18,6 +18,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: `tests/unit/initiatives-page-tasks.test.ts` (fixture `tests/unit/initiatives-page-tasks-fixture.ts`) with the core model tests (step 1's "not connected yet" cases now expect the real rules) and the design's, one sealed look at 1440 px, then the landing gate and a look-only live check against the live registry and queues.
 - Undo: revert this commit (task rows, Waiting on you and the ON YOU bar say "Not connected yet" again, and chips show the registry's status).
 
+## gate-tmpfs: sealed test folders in memory
+
+- `local` (Ops #243, project faster-landing, item 6; the owner's "can we improve the speed of tests?"). Hypothesis H-GATE-TMPFS-1 and result: `docs/gate-tmpfs.md`.
+- `scripts/sealed.sh` makes its temp root (HOME, TMPDIR, the pi and web data folders) in `/dev/shm` when that is a writable folder, not mounted noexec, with at least 8 GB free; otherwise under `${TMPDIR:-/tmp}`, as before. On disk, test (a) (`tests/unit/role-message-guard-host-worst-window.test.ts`) waited 70-76 s on the guard store's flushed writes; on tmpfs a flush costs nothing. `PI_SEALED_TMP_PARENT=<folder>` picks the folder (`/tmp`: on disk, as before); one it can't use falls back with a note. Removal on exit is unchanged.
+- Test tooling only: no app code changed, nothing to install. wt land runs the sealed.sh of the tree it lands.
+- Checks: four cases in `tests/unit/sealed-fence.test.ts` (`/dev/shm` with room; less than 8 GB free; the override; an unwritable override), the registered pair (test (a) on disk and in memory at the same time), then the landing gate.
+- Undo: revert this commit; for one run, `PI_SEALED_TMP_PARENT=/tmp scripts/sealed.sh …`.
+
 ## initiatives-page-plan: goals, done-when items and projects on the Initiatives page
 
 - `local` (owner 2026-10-18, Ops home chat: design first, then features; "Side by side" for steps 2-4; Ops #226, project initiatives-page). Hypothesis H-INITIATIVES-PAGE-2 and result: `docs/initiatives-page-plan.md`.

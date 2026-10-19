@@ -8,6 +8,8 @@
 #
 # "Sealed" here (this machine can't use bwrap/unshare, so it is environment + a node fence):
 #   - a fresh temp HOME, PI_CODING_AGENT_DIR, PI_WEB_DATA_DIR and TMPDIR, removed afterwards;
+#     made in memory (/dev/shm) when it has 8 GB free, else under ${TMPDIR:-/tmp};
+#     PI_SEALED_TMP_PARENT=<folder> picks the folder instead (PI_SEALED_TMP_PARENT=/tmp: on disk, as before);
 #   - a clean environment: only PATH, locale and terminal variables survive. No model keys or
 #     tokens, and none of the live server's PI_WEB_PORT / PI_WEB_DATA_DIR (a chat's shell has them);
 #   - the temp pi folder gets a stand-in model that can't be reached (provider "fastfail" at
@@ -52,7 +54,28 @@ real_sessions="$real_home/.pi/agent/sessions"
 live_ports="${PI_SEALED_LIVE_PORTS:-${PI_WEB_PORT:-8787}}"
 report_file="${PI_SEALED_REPORT_FILE:-}"
 
-root="$(mktemp -d "${TMPDIR:-/tmp}/pi-sealed-XXXXXX")" || exit 2
+# Where the temp root goes (docs/gate-tmpfs.md). On disk, a test that flushes its files waits on every
+# flush: the guard store's 15 flushed whole-file writes per send cost test (a) 70-76 s. So in memory,
+# /dev/shm, when that is a writable folder, not mounted noexec (tests run programs they write into
+# their temp folders), with at least 8 GB free (df in MiB: -B1G would round up), so programs that use
+# /dev/shm themselves (Chrome) keep their room. Otherwise under ${TMPDIR:-/tmp}, as before.
+# PI_SEALED_TMP_PARENT=<folder> picks the folder instead (PI_SEALED_TMP_PARENT=/tmp: on disk, as
+# before); one it can't make the root in falls back to ${TMPDIR:-/tmp}, with a note.
+shm_has_room() {
+	[ -d /dev/shm ] && [ -w /dev/shm ] || return 1
+	awk '$2 == "/dev/shm" && $4 ~ /(^|,)noexec(,|$)/ { found = 1 } END { exit !found }' /proc/mounts 2>/dev/null &&
+		return 1
+	[ "$(df --output=avail -B1M /dev/shm 2>/dev/null | awk 'NR == 2 { print $1 }')" -ge 8192 ] 2>/dev/null
+}
+parent="${PI_SEALED_TMP_PARENT:-}"
+case "$parent" in "" | /*) ;; *) parent="$PWD/$parent" ;; esac
+[ -z "$parent" ] && shm_has_room && parent=/dev/shm
+root=""
+[ -n "$parent" ] && root="$(mktemp -d "$parent/pi-sealed-XXXXXX" 2>/dev/null)"
+if [ -z "$root" ]; then
+	[ -n "$parent" ] && echo "[sealed] can't make the temp home in $parent; it goes under ${TMPDIR:-/tmp}" >&2
+	root="$(mktemp -d "${TMPDIR:-/tmp}/pi-sealed-XXXXXX")" || exit 2
+fi
 home="$root/home"
 mkdir -p "$home/.pi/agent" "$home/.pi-web-ui" "$root/tmp"
 printf '[user]\n\tname = Sealed Test\n\temail = sealed-test@localhost\n' >"$home/.gitconfig"
