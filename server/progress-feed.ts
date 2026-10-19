@@ -1496,10 +1496,24 @@ export class ProgressFeed {
 		const s = this.state.initiatives[c.ini.id] ?? {};
 		const newest = [...c.updates].reverse();
 		const un = this.unlinkedOf(c);
+		const shown = Math.max(1, limit);
 		const out: UiProgress = {
 			...base,
-			updates: newest.slice(0, Math.max(1, limit)).map((u, i) => this.updateView(c, u, i > 0)),
+			updates: newest.slice(0, shown).map((u, i) => this.updateView(c, u, i > 0)),
 			updatesTotal: newest.length,
+			// initiatives-page-gaps (H-INITIATIVES-PAGE-4b): the rest in brief, so the Initiatives page's Activity lists
+			// every update, not only the ones sent in full.
+			...(newest.length > shown
+				? {
+						older: newest.slice(shown).map((u) => ({
+							id: u.id,
+							at: u.at,
+							by: u.from,
+							byName: roles.find((r) => r.id === u.from)?.name ?? u.from,
+							changed: (u.update as UpdateFields).changed,
+						})),
+					}
+				: {}),
 			unlinked: { decisions: un.decisions.length, changes: un.changes.length },
 			missing: c.decisions.filter((d) => missingOf(d).length).length,
 		};

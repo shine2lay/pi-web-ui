@@ -33,3 +33,26 @@ Yes. `RoleMessageRecord.initiative` (`server/role-messages.ts`, added by decisio
 **What would prove it wrong.** A gap the script doesn't find, or one it finds that the page misses; an activity count that differs from the events; a missing or extra hand-off; "Not connected yet" left in these sections; a pi-web-deploy check fails.
 
 ## Results
+
+**H-INITIATIVES-PAGE-4: miss on Activity (Oct 18, 20:08).** Landed as fd4bc4e3 (land request 47-5ea2d7, gate passed); live since #226's install of 90995a22 at 19:49, which holds it (`pi-web-deploy result fd4bc4e3` = 0, every check passed). The look-only live check (`~/kept-from-tmp/2026-10-18/initiatives-steps/4/live/look.mjs`, run `out3`) works out the expected side by its own replay of the registry log, the queues' records and the role-message store. 20 checks, 1 failed:
+- Gaps: hit. Team in Temper's header and list say 12, the same 12 the script finds (Temper #98 blocked; 11 unmet done-when items, since none of its projects is active), at 1440 and at 390 px. The box: 0 = 0.
+- Hand-offs: hit. 5 rows, the role-message store's 5 open questions and requests carrying the initiative (same ids, all delivered); the box says why none are recorded.
+- No "Not connected yet" in the three sections: hit. One Activity row quotes those words inside a lead update's recorded text, which is proof as recorded, not a placeholder; the look counts such rows apart.
+- Activity: **miss**. Team in Temper's tab and rows say 175; the records hold 155 registry changes + 121 lead updates = 276. The box: 245 = 245.
+- Nothing scrolls sideways at 390 px; the page sent nothing but its start-up reads.
+- Shots: `~/kept-from-tmp/2026-10-18/initiatives-steps/4/live/out3/` (desktop-1440, desktop-gaps-1440, desktop-activity-1440, desktop-box-1440, phone-390, phone-390-full).
+
+## H-INITIATIVES-PAGE-4b: Activity lists every lead update
+
+**Wrong, and the evidence.** Team in Temper's Activity shows only 20 of its 121 lead updates (run `out3` above: 175 rows, 276 recorded). The progress feed's `view()` sends at most `VIEW_UPDATES` = 20 updates, in full, with their links, decisions and check (`server/progress-feed.ts`), and counts the rest only in `updatesTotal`. `activityOf()` can list only what is sent.
+
+**One change.** `view()` also sends the updates after the first 20, in brief and newest first: id, time, who posted it, and what changed as recorded (`UiProgress.older`, optional and additive, so the Progress section and older pages ignore it). `activityOf()` lists them with the full ones, sorted by time like every other row.
+
+**Why it should fix it.** Every update then reaches the page, the newest 20 in full and the rest in brief, so Activity = registry changes + `updatesTotal`.
+
+**Expected, and how it's measured.**
+- Tests: `view()` on a fixed feed of 3 updates with a limit of 2 sends 2 in full and 1 in brief, newest first, none lost or repeated, and no brief list when all fit (`tests/unit/progress-feed.test.ts`); `activityOf()` lists the brief ones too, in time order among the other rows (`tests/unit/initiatives-page-gaps.test.ts`). Run once with the core model tests.
+- Live, look only, with the same script: Team in Temper's Activity tab and rows = registry changes + `updatesTotal` at that moment, and the other checks stay as in run `out3`.
+- Cost: the initiatives page message grows by the brief texts (about 60 KB now: 101 updates averaging 588 characters of "changed"), and only while a window shows the Initiatives tab.
+
+**What would prove it wrong.** The live Activity count or rows still differ from registry changes + `updatesTotal`; an update is missing or listed twice; the Progress section's cards change; a pi-web-deploy check fails.

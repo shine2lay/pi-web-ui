@@ -214,14 +214,18 @@ export function activityOf(
 			},
 		});
 	}
+	// The feed sends its newest updates in full and the rest in brief (H-INITIATIVES-PAGE-4b): list them all.
 	if (progress?.initiative === id)
-		for (const u of progress.updates)
+		for (const u of [
+			...progress.updates.map((f) => ({ at: f.at, by: f.by, byName: f.byName, changed: f.fields.changed })),
+			...(progress.older ?? []),
+		])
 			lines.push({
 				ms: u.at,
 				line: {
 					at: clockOf(u.at, now),
 					role: u.byName || roleName(u.by),
-					text: `Progress update: ${u.fields.changed}`,
+					text: `Progress update: ${u.changed}`,
 				},
 			});
 	// Stable: equal times keep the registry's newest-first order, then the updates'.

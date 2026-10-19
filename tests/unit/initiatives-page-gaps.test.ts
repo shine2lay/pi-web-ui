@@ -14,7 +14,7 @@ import { BOX_HANDOFFS, NO_HANDOFFS, NOT_RECORDED, gapsPart } from "../../web/src
 import { buildInitiativesPage } from "../../web/src/initiatives-page/model";
 import { NO_INITIATIVE } from "../../web/src/initiatives-page/types";
 import { bindInitiativesSurface } from "../../web/src/initiatives-u0/surface";
-import type { UiWorkPage } from "../../web/src/types";
+import type { UiProgress, UiWorkPage } from "../../web/src/types";
 import { AT, GAPS_PAGE, GAPS_PROGRESS, NOW, pageArgs } from "./initiatives-page-gaps-fixture";
 
 const norm = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
@@ -128,6 +128,23 @@ describe("all activity", () => {
 		}).initiatives;
 		expect(beta?.alpha?.activity?.length).toBe(10);
 		expect(beta?.beta?.activity?.length).toBe(3);
+	});
+
+	it("lists the updates the feed sends in brief too, in time order among the rest (H-INITIATIVES-PAGE-4b)", () => {
+		const progress: UiProgress = {
+			...GAPS_PROGRESS,
+			updatesTotal: 4,
+			older: [
+				{ id: "u0", at: AT - 200 * MIN, by: "architecture", byName: "Architecture", changed: "Plan agreed." },
+				{ id: "u-1", at: AT - 295 * MIN, by: "architecture", byName: "", changed: "Started." },
+			],
+		};
+		const p = gapsPart(GAPS_PAGE, undefined, vi.fn(), { progress, now: NOW }).initiatives ?? {};
+		const rows = [...ALPHA_ACTIVITY];
+		rows.splice(5, 0, ["06:20", "Architecture", "Progress update: Plan agreed."]);
+		rows.splice(12, 0, ["04:45", "Architecture", "Progress update: Started."]);
+		expect(p.alpha?.activity?.map((a) => [a.at, a.role, a.text])).toEqual(rows);
+		expect(p.alpha?.activity?.filter((a) => a.text?.startsWith("Progress update"))).toHaveLength(4);
 	});
 });
 

@@ -2788,6 +2788,18 @@ export interface UiProgressUpdate {
 	later?: boolean;
 }
 
+/** initiatives-page-gaps: one of the lead's older updates, in brief: what the Initiatives page's Activity shows. */
+export interface UiProgressUpdateBrief {
+	/** The update's record (dr-…). */
+	id: string;
+	at: number;
+	/** The lead who posted it. */
+	by: string;
+	byName: string;
+	/** What changed, as recorded. */
+	changed: string;
+}
+
 /** progress-feed: what roles filed under an initiative with no lead (unsummarized, newest first). */
 export interface UiRoleUpdate {
 	id: string;
@@ -2812,6 +2824,9 @@ export interface UiProgress {
 	/** The lead's updates, newest first (the first ones; updatesTotal counts all). */
 	updates: UiProgressUpdate[];
 	updatesTotal: number;
+	/** initiatives-page-gaps (H-INITIATIVES-PAGE-4b): the updates after the first ones, in brief, newest first, so
+	 * the Initiatives page's Activity lists every update. Absent when all fit, and from an older server. */
+	older?: UiProgressUpdateBrief[];
 	/** No lead: the roles' own updates. */
 	roleUpdates?: UiRoleUpdate[];
 	/** An ask for an update not answered yet. */

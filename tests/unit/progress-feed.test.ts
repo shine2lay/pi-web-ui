@@ -467,6 +467,30 @@ describe("initiative_update", () => {
 			text: expect.stringContaining("Nothing new and nothing unlinked."),
 		});
 	});
+
+	it("view sends the newest updates in full and the rest in brief, newest first, each once", async () => {
+		// initiatives-page-gaps (H-INITIATIVES-PAGE-4b): the Initiatives page's Activity lists every update.
+		const fx = fixture();
+		const ids: string[] = [];
+		for (const [i, changed] of ["First.", "Second.", "Third."].entries()) {
+			now += 60_000;
+			const { rec } = decide(fx, answer(`a${i}`, now, "Go"), `Go ${i}`);
+			expect((await post(fx, [rec], changed)).ok).toBe(true);
+			ids.push(fx.records.list({ source: "update" }).at(-1)!.id);
+		}
+		const v = fx.feed.view(TIT, undefined, 2);
+		expect(v?.updatesTotal).toBe(3);
+		expect(v?.updates.map((u) => [u.id, u.fields.changed])).toEqual([
+			[ids[2], "Third."],
+			[ids[1], "Second."],
+		]);
+		expect(v?.older).toEqual([
+			{ id: ids[0], at: now - 120_000, by: "architecture", byName: "Architecture", changed: "First." },
+		]);
+		// All fit: no brief list.
+		expect(fx.feed.view(TIT)?.updates).toHaveLength(3);
+		expect(fx.feed.view(TIT)).not.toHaveProperty("older");
+	});
 });
 
 // ---------------------------------------------------------------------------
