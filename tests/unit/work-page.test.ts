@@ -455,6 +455,38 @@ describe("WorkPageFile", () => {
 		expect((await reader.get([], 5)).projects.map((p) => p.id)).toEqual(["page-data"]);
 		expect(await new WorkPageFile(() => file, 100).get([], 5)).toEqual({ ...none, problem: "too-big" });
 	});
+
+	it("leaves out the links whose queue file is gone, like a deleted throwaway copy's (H-INITIATIVES-PAGE-3c)", async () => {
+		dir = mkdtempSync(join(tmpdir(), "work-page-"));
+		const file = join(dir, "events.jsonl");
+		const home = join(dir, "ops-home.jsonl");
+		writeFileSync(home, "");
+		// Never written: like pi-web-deploy's big-chat copy, deleted after its check.
+		const copy = join(dir, "check-copy", "pi-web-check-copy.jsonl");
+		const link = (ts: number, queue: string, status: string) => [
+			L(ts, {
+				op: "task.link",
+				queue,
+				queueName: "ops",
+				task: 7,
+				added: 500,
+				title: "Build the feed",
+				parent: { project: "page-data" },
+			}),
+			L(ts + 1, { op: "task.state", queue, task: 7, added: 500, status }),
+		];
+		const log =
+			[...FIXTURE.split("\n").slice(0, 2), ...link(10, home, "waiting"), ...link(20, copy, "blocked")].join("\n") +
+			"\n";
+		writeFileSync(file, log);
+		const page = await new WorkPageFile(() => file).get([], 5);
+		expect(page.tasks.map((t) => [t.queue, t.task, t.state])).toEqual([[home, 7, "waiting"]]);
+		// The pure builder doesn't look at the disk: it keeps both.
+		expect(workPageFrom(log, [], 5).tasks.map((t) => [t.queue, t.state])).toEqual([
+			[home, "waiting"],
+			[copy, "blocked"],
+		]);
+	});
 });
 
 describe("WorkPageWatch", () => {

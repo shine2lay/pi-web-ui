@@ -114,12 +114,15 @@ registry log and reads the roles' queues just before, compares every row, chip, 
 with what the rules give, and holds every message that could open or change anything in its own headless
 browser. Run 1 at 21:10 (`live/run1/`) and run 2 at 21:22 (`live/run2/`):
 
-- Passed both times: every project's open tasks match the queues exactly (numbers, departments, chips,
-  recorded waits, "updated" times). Temper #99 sits in "Directly under this initiative". Each initiative
-  card's chip follows the rule order: Team in Temper Moving, Design department in Temper No tasks yet. The
-  box heading counts 6 projects. Nothing waits on the owner (the Roles overview said 0 at 21:10), and the ON
-  YOU bar says so only once the page is live. Nothing scrolls sideways at 390 px. The page's own feed has the
-  registry's records and links.
+- Passed both times: Temper #99 sits in "Directly under this initiative". Each initiative card's chip
+  follows the rule order: Team in Temper Moving, Design department in Temper No tasks yet. The box heading
+  counts 6 projects. Nothing waits on the owner (the Roles overview said 0 at 21:10), and the ON YOU bar says
+  so only once the page is live. Nothing scrolls sideways at 390 px. The page's own feed has the registry's
+  records and links. In run 1, every project's open tasks matched the queues exactly (numbers, departments,
+  chips, recorded waits, "updated" times).
+- Corrected after run 3: run 2's "rows match" was a false pass. From the 21:18 install on, the box listed
+  every open Ops task twice (#199, #211, #212, #227, #234, #241, #242). The look matched rows by task key,
+  so a twin with the same chip slipped through. See H-INITIATIVES-PAGE-3c.
 - Not the page: in run 1 the task click sent nothing and the filter counts read wrong. Both were faults in
   the look itself. The look holds the page's own state requests, so the app's silence watchdog replaces its
   connection once, about 6.6 s after load (the app drops a send while it reconnects), and run 1 clicked in
@@ -152,3 +155,43 @@ moment's registry, and every other check passes as in run 2, 16 of 16.
 
 **What would prove it wrong.** The box still saying "No initiative" while a rule applies, a rules chip on a
 box with nothing open, the filter counts or cards changing, or any other check that passed in run 2 failing.
+
+### Result
+
+**HIT on the chip; the live check still misses, on twins (H-INITIATIVES-PAGE-3c).** Commit 0c94f7a4 landed
+as 026080c6 (land request 59-caaa34, not batched; the gate passed) and went live at 21:36 with every deploy
+check passing; `pi-web-deploy result 026080c6` returned 0. Unit test: the fixture's box says Needs you, a
+box with every task closed keeps "No initiative", and the filter counts stay 8, 1, 1, 1 (21 of 21 with the
+core model tests). Live run 3 at 21:41 (`live/run3/`, look only; the look now also asks for "No initiative"
+when nothing in the box is open): the box's chip is the rules' on the desktop and the phone, and 14 of 16
+checks pass. The 2 that fail are the box's rows, desktop and phone: Ops #241 shows twice, once Blocked where
+its queue says Waiting, and a done Ops #242 shows as Working.
+
+## H-INITIATIVES-PAGE-3c
+
+**What is wrong, and the evidence.** Since the 21:18 install the box lists every open Ops task twice
+(runs 2 and 3: #199, #211, #212, #227, #234, #241, #242). Run 3 caught it only because two twins differ
+from their queue: #241 Blocked against Waiting, and #242 Working although it is done. The registry
+(pi-work-management's `events.jsonl`) holds a second link for each. Its queue is
+`~/.pi/agent/sessions/--home-shinelay-.cache-pi-web-check-copy-cwd--/pi-web-check-copy.jsonl`, the copy of
+the Ops lead chat that pi-web-deploy's big-chat check opens. The queue inside that copy wrote its tasks into
+the registry under the copy's path, in bulk, during the checks at 10:15:15 (13 links), 10:52:28 (4 state
+changes) and 21:19:16 (10 links, 20 state changes). The copy is deleted after each check, so the twins never
+change again. Of the registry's 9 queue files, that one alone is gone (21 links). The feed hands the page
+every link, and the page lists every open one.
+
+**The one change.** The `work_page` feed leaves out links whose queue file no longer exists.
+`WorkPageFile.get` looks up each queue file once per read: only whether it exists, never what's in it, and
+a file it can't look up stays in. `workPageOf` then drops those links: a deleted chat's or a throwaway
+copy's tasks are no one's open work. Callers of the pure builder that pass nothing see no change. The
+registry itself isn't touched. Stopping the copy from writing into it is a separate fix, in pi-queue or
+pi-web-deploy.
+
+**Expected result, and how it's measured.** Unit test: one task number linked from a queue file that
+exists and from one that doesn't gives one task through `WorkPageFile`, and two through the pure builder.
+Live run 4 after the install, with the look now also failing any task shown twice in a row: each open task
+appears once and matches its queue, and all 16 checks pass. Projects' "N of M done" can't move, because they
+count done-when items, not tasks.
+
+**What would prove it wrong.** A twin or an extra task still on the page, a task whose queue file exists
+going missing, or any other check failing.

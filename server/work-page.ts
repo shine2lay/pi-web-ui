@@ -18,7 +18,7 @@
  * look, of a regular file only, and the file again only when it changed, at most WORK_LOG_MAX bytes of it.
  */
 
-import { open, type FileHandle } from "node:fs/promises";
+import { open, stat, type FileHandle } from "node:fs/promises";
 import { samePath } from "./identities.js";
 import type {
 	ServerMessage,
@@ -516,12 +516,19 @@ function taskOut(l: Link, f: WorkTaskFacts | undefined): UiWorkPageTask {
 	};
 }
 
-/** The page from a replayed log and the queues' facts: each task gets its own queue's facts, or none. */
-export function workPageOf(r: WorkReplay, facts: readonly WorkQueueFacts[] = [], at = Date.now()): UiWorkPage {
+/** The page from a replayed log and the queues' facts: each task gets its own queue's facts, or none. A link
+ *  whose queue file is `gone` is left out (initiatives-page-tasks, H-INITIATIVES-PAGE-3c): a deleted chat's, or
+ *  a throwaway copy's, like the one pi-web-deploy's big-chat check opens, whose queue wrote into the registry. */
+export function workPageOf(
+	r: WorkReplay,
+	facts: readonly WorkQueueFacts[] = [],
+	at = Date.now(),
+	gone: ReadonlySet<string> = new Set(),
+): UiWorkPage {
 	if (r.problem) return { at, initiatives: [], projects: [], tasks: [], activity: [], problem: r.problem };
 	const initiatives = [...r.initiatives.values()];
 	const projects = [...r.projects.values()];
-	const links = [...r.links.values()];
+	const links = [...r.links.values()].filter((l) => !gone.has(l.queue));
 	// A bloated log never enlarges every look past these.
 	const tooMany = initiatives.length + projects.length > WORK_PAGE_RECORDS_MAX || links.length > WORK_PAGE_TASKS_MAX;
 	const sentInitiatives = initiatives.slice(0, WORK_PAGE_RECORDS_MAX);
@@ -597,6 +604,24 @@ export function workFactsFromOverview(overview: UiRolesOverview): WorkQueueFacts
 	return out;
 }
 
+/** The links' queue files that no longer exist, each looked up once (whether it's there, never what's in it).
+ *  Only a missing file or folder counts: one it can't look up stays in. */
+async function goneQueues(r: WorkReplay): Promise<Set<string>> {
+	const gone = new Set<string>();
+	const files = new Set([...r.links.values()].map((l) => l.queue));
+	await Promise.all(
+		[...files].map(async (file) => {
+			try {
+				await stat(file);
+			} catch (err) {
+				const code = (err as NodeJS.ErrnoException)?.code;
+				if (code === "ENOENT" || code === "ENOTDIR") gone.add(file);
+			}
+		}),
+	);
+	return gone;
+}
+
 /** The registry for the page: the log replayed again only when it changed, joined with the queues' facts. */
 export class WorkPageFile {
 	private seen: { mtimeMs: number; size: number; replay: WorkReplay } | null = null;
@@ -607,7 +632,8 @@ export class WorkPageFile {
 	) {}
 
 	async get(facts: readonly WorkQueueFacts[] = [], at = Date.now()): Promise<UiWorkPage> {
-		return workPageOf(await this.replay(), facts, at);
+		const r = await this.replay();
+		return workPageOf(r, facts, at, await goneQueues(r));
 	}
 
 	private async replay(): Promise<WorkReplay> {
