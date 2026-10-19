@@ -791,6 +791,7 @@ export class RoleMessageGuardHost {
 	}
 	private writeCurrent(gen: number): void {
 		writeDurable(join(this.o.dir, "current.json"), `${JSON.stringify({ gen })}\n`);
+		fsyncDir(this.o.dir); // Ops #253 (Architecture A2): the rename itself reaches the disk, so a power loss can't undo it
 	}
 	/** Keep the current generation and the one before it (the one archive). */
 	private cleanGenerations(current: number): void {
