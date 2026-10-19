@@ -125,6 +125,7 @@ import { diffStreamingCues } from "./streaming-cues";
 import { DoneCues } from "./done-settle";
 import { useTheme } from "./theme";
 import { useWallpaperEffect } from "./wallpaper";
+import { setPageView } from "./page-live";
 
 /** optimistic-send: an attachment as it was sent, back in the composer's form (× on "Not sent"). */
 function composerAttachment(a: PromptAttachment, i: number): PendingAttachment {
@@ -436,6 +437,8 @@ export function App() {
 	const [rolesLoaded, setRolesLoaded] = useState(false);
 	useEffect(() => {
 		if (view === "roles") setRolesLoaded(true);
+		// pages-live (Ops #244): the connection note and its trace know which view is shown.
+		setPageView(view === "roles" || view === "initiatives" || view === "chat" ? view : "other");
 	}, [view]);
 	const [initiativesLoaded, setInitiativesLoaded] = useState(false);
 	useEffect(() => {

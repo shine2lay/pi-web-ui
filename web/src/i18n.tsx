@@ -22,6 +22,8 @@ export const en = {
 	connected: "Connected",
 	connecting: "Connecting…",
 	reconnecting: "Reconnecting…",
+	/** pages-live: the footer on Roles or Initiatives while their data comes back (up to 8 s). */
+	connUpdating: "Updating…",
 	language: "Language",
 	langZh: "Chinese",
 	langEn: "English",
@@ -2285,6 +2287,7 @@ export const en = {
 	ruDisconnected: "Not connected — nothing to show",
 	ruCached: "Not connected — showing the last update received",
 	ruStale: "No update for over 2 minutes — showing the last one received",
+	ruUpdating: "Updating — showing the last update received",
 	ruPartial: "Connected, but some of it couldn't be read",
 	ruUnknownSource: "Feed state unclear",
 	ruConnected: "Connected",

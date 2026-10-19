@@ -13,6 +13,7 @@
  * and zero counts only under the same guards as any other number.
  */
 import { parseFocus } from "./chat-focus";
+import { graceLeft } from "./page-live";
 
 export const ROLE_LIMIT = 64;
 export const RECORD_LIMIT = 20;
@@ -50,6 +51,8 @@ export type SourceState =
 	| "disconnected"
 	| "cached"
 	| "stale"
+	/** pages-live: the last data, while the page waits up to LIVE_GRACE_MS of visible time for a new check. */
+	| "updating"
 	| "partial"
 	| "unknown"
 	| "connected-source-unverified";
@@ -233,6 +236,9 @@ export interface UsefulRoles {
 	lastReceived: boolean;
 	roles: UsefulRole[];
 	needsYou: NeedsYou;
+	/** pages-live: while an alarm waits for fresh data, when that wait ends (this clock, ms), so the page
+	 *  can look again then; missing when nothing waits or the tab is hidden. */
+	graceUntil?: number;
 }
 
 export type Fields = Record<string, unknown>;
@@ -601,7 +607,7 @@ function needsYou(
 	let tell: TellState;
 	if (source === "disconnected" || source === "cached" || source === "stale") tell = "not-live";
 	else if (source === "error" || source === "cached-error") tell = "feed-error";
-	else if (source === "awaiting") tell = "awaiting";
+	else if (source === "awaiting" || source === "updating") tell = "awaiting";
 	else if (source === "partial" || !roles.asksSeen || (overview !== null && !listed)) tell = "partial";
 	else if (source !== "connected-source-unverified") tell = "unknown";
 	// Withdrawn on every new watch and every error until the server is heard looking again (roles-state appliedAt).
@@ -618,9 +624,27 @@ function needsYou(
 	};
 }
 
+/** pages-live (Ops #244): when the page's wait for a new check began: the store's waitingSince (a lost
+ *  connection, a pending full watch, a failed look) or the moment a silent feed turned stale, whichever
+ *  came first. null: no wait this page knows the start of. */
+function waitStart(input: Fields | null, heard: number | null, stale: boolean): number | null {
+	const since = time(input?.waitingSince);
+	const staleAt = stale && heard !== null ? heard + STALE_MS : null;
+	if (since === null) return staleAt;
+	return staleAt === null ? since : Math.min(since, staleAt);
+}
+
 /** Input deliberately unknown: validate at the actual store/consumer boundary, not only by DTO types.
- *  `now` (this browser's clock) turns a silent feed into "stale"; without it nothing is aged. */
-export function projectUsefulRoles(state: unknown, connection: unknown, now?: number): UsefulRoles {
+ *  `now` (this browser's clock) turns a silent feed into "stale"; without it nothing is aged.
+ *  `live` (pages-live): when the tab last became visible (null: hidden). With it, a wait for a new check
+ *  shows as "updating" (the last data, or "awaiting" with none) for up to LIVE_GRACE_MS of visible time
+ *  before it turns into its alarm; without it every alarm shows at once. */
+export function projectUsefulRoles(
+	state: unknown,
+	connection: unknown,
+	now?: number,
+	live?: { visibleAt: number | null },
+): UsefulRoles {
 	const input = object(state);
 	const overview = object(input?.overview);
 	const rows = Array.isArray(overview?.roles) ? overview.roles : [];
@@ -657,8 +681,25 @@ export function projectUsefulRoles(state: unknown, connection: unknown, now?: nu
 	else if (stale) source = "stale";
 	else if (!roles.length || omitted || roles.some((row) => row.partial)) source = "partial";
 	else source = "connected-source-unverified";
+	let graceUntil: number | undefined;
+	// pages-live: an alarm (or a pending watch) waits for the page's own fresh data, never past the grace.
+	if (live && typeof now === "number") {
+		const waiting =
+			source === "cached" ||
+			source === "cached-error" ||
+			source === "stale" ||
+			source === "disconnected" ||
+			source === "error" ||
+			(source === "connected-source-unverified" && time(input?.appliedAt) === null);
+		const start = waiting ? waitStart(input, heard, stale) : null;
+		const left = start !== null ? graceLeft(start, now, time(live.visibleAt)) : 0;
+		if (left > 0) {
+			source = cached ? "updating" : "awaiting";
+			if (time(live.visibleAt) !== null) graceUntil = now + left;
+		}
+	}
 	const needs = needsYou(overview, labels, source, coverage, time(input?.appliedAt), now);
-	return {
+	const model: UsefulRoles = {
 		source,
 		roster: roles.length ? "reported" : "unavailable",
 		omitted,
@@ -667,4 +708,6 @@ export function projectUsefulRoles(state: unknown, connection: unknown, now?: nu
 		roles,
 		needsYou: needs,
 	};
+	if (graceUntil !== undefined) model.graceUntil = graceUntil;
+	return model;
 }

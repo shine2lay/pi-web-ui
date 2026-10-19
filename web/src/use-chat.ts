@@ -84,7 +84,8 @@ import {
 } from "./notebook-state";
 import { receiveSubsLimits, requestSubsLimits } from "./subs-limits-state";
 import { receiveRoleGuard, requestRoleGuard } from "./role-guard-state";
-import { receiveBoardResult, receiveRoles, resendRolesWatch } from "./roles-state";
+import { receiveBoardResult, receiveRoles, resendRolesWatch, rolesConnectionLost } from "./roles-state";
+import { graceLeft, graceView, liveVisibleAt, pageView, subscribePageLive, viewFresh } from "./page-live";
 import { disconnectRoleAnswers, receiveRoleAnswer } from "./roles-answer-state";
 import {
 	receiveDecisionRecord,
@@ -99,7 +100,7 @@ import { ingestPluginLogsData } from "./plugin-logs";
 import { resolveCatalogSyncResult } from "./plugin-host";
 import { PROTOCOL_VERSION } from "./protocol-version";
 // mobile-fixes: a quiet socket is found dead within seconds and replaced at once (see conn-health.ts).
-import { ConnHealth, setReconnectingNote } from "./conn-health";
+import { ConnHealth, setLiveGrace, setReconnectingNote } from "./conn-health";
 // reconnect-trace (Ops #157): a record of each "Reconnecting…" episode, sent to the server's log.
 import { BannerTrace, sessionTraceStore, type TraceCause } from "./conn-trace";
 import {
@@ -1452,6 +1453,13 @@ export function useChat() {
 	const catchUpRef = useRef(0);
 	/** mobile-fixes: the open socket is in doubt (no answer yet after coming back / quiet for a while). */
 	const doubtRef = useRef(false);
+	/** pages-live (Ops #244): since when the connection has been in trouble (ms; 0 = not), and the timer
+	 *  that shows the note once Roles or Initiatives has waited LIVE_GRACE_MS of visible time. */
+	const troubleSinceRef = useRef(0);
+	/** pages-live: a connection was lost since (ms; 0 = not) and a view with its own data signal (Roles)
+	 *  hasn't had fresh data since; unlike catchUpRef, the chat's content coming in doesn't end it. */
+	const lostSinceRef = useRef(0);
+	const graceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	/** reconnect-trace: the episodes of this tab, whether this socket's server wants them, its id there. */
 	const traceRef = useRef<BannerTrace | null>(null);
 	traceRef.current ??= new BannerTrace(undefined, sessionTraceStore());
@@ -1683,17 +1691,40 @@ export function useChat() {
 	setAppSend(send);
 
 	/** mobile-fixes: the "Reconnecting…" note: a connection was lost (or is in doubt) and the chat
-	 *  hasn't caught up yet. Refs only, so it is stable. */
+	 *  hasn't caught up yet. Refs only, so it is stable.
+	 *  pages-live (Ops #244): on the Roles view the trouble ends with Roles' own fresh data, not the chat's
+	 *  (the chat isn't shown there), and on Roles or Initiatives the note waits LIVE_GRACE_MS of visible
+	 *  time first. The trace still records the whole trouble, shown or not, so real returns can be measured. */
 	const refreshNote = useCallback(() => {
 		const ws = wsRef.current;
 		const open = !!ws && ws.readyState === WebSocket.OPEN;
-		const on = hadOpenRef.current && (!open || catchUpRef.current > 0 || doubtRef.current);
-		// reconnect-trace: the episode starts or ends with the note; a finished one goes out at once.
+		const view = pageView();
+		const own = graceView(view) ? viewFresh(view) : null;
+		if (own === true || (own === null && catchUpRef.current === 0)) lostSinceRef.current = 0;
+		const behind = own === null ? catchUpRef.current > 0 : lostSinceRef.current > 0;
+		const trouble = hadOpenRef.current && (!open || behind || doubtRef.current);
+		const now = Date.now();
+		if (!trouble) troubleSinceRef.current = 0;
+		else if (!troubleSinceRef.current) troubleSinceRef.current = now;
+		if (graceTimerRef.current) {
+			clearTimeout(graceTimerRef.current);
+			graceTimerRef.current = null;
+		}
+		let on = trouble;
+		if (trouble && graceView(view)) {
+			const visibleAt = liveVisibleAt();
+			const left = graceLeft(troubleSinceRef.current, now, visibleAt);
+			if (left > 0) {
+				on = false;
+				// Hidden: nothing is used up; the tab coming back calls this again (page-live).
+				if (visibleAt !== null) graceTimerRef.current = setTimeout(refreshNote, left + 20);
+			}
+		}
+		// reconnect-trace: the episode starts or ends with the trouble; a finished one goes out at once.
 		const trace = traceRef.current;
 		if (trace) {
 			const h = healthRef.current;
-			const now = Date.now();
-			trace.bannerChanged(on, {
+			trace.bannerChanged(trouble, {
 				now,
 				visible: document.visibilityState === "visible",
 				online: navigator.onLine !== false,
@@ -1701,9 +1732,12 @@ export function useChat() {
 				lastHeardAt: h.lastHeardAt,
 				patience: h.patience,
 				conn: traceConnRef.current,
+				view,
+				visibleAt: liveVisibleAt(),
 			});
-			if (!on && open && traceOnRef.current && trace.waiting > 0) sendTrace(ws, trace, now);
+			if (!trouble && open && traceOnRef.current && trace.waiting > 0) sendTrace(ws, trace, now);
 		}
+		setLiveGrace(trouble && !on);
 		setReconnectingNote(on);
 	}, []);
 
@@ -2570,11 +2604,20 @@ export function useChat() {
 			setFilesReady(false);
 			dispatch({ type: "status", status: "closed" });
 			if (hadOpenRef.current && !catchUpRef.current) catchUpRef.current = Date.now();
+			if (hadOpenRef.current && !lostSinceRef.current) lostSinceRef.current = Date.now();
+			// reconnect-trace: the cause first. rolesConnectionLost() wakes the note through page-live, and the
+			// episode it starts must already know why (pages-live).
 			traceRef.current?.noteCause({ reason: "close", closeCode: ev.code });
+			rolesConnectionLost();
 			refreshNote();
+			// pages-live: a socket from before the tab last came back, closing now that it is visible: the
+			// owner is looking, so retry at once (the next socket is newer, so this can't loop).
+			const backAt = liveVisibleAt();
+			const retryNow = backAt !== null && connectAtRef.current < backAt;
+			if (retryNow) retryRef.current = 0;
 			// Reconnect with exponential backoff (1s → 2s → 4s → … capped at 10s).
 			// mobile-fixes: the page coming back or the network returning skips the wait (see below).
-			const delay = Math.min(1000 * 2 ** retryRef.current, 10_000);
+			const delay = retryNow ? 0 : Math.min(1000 * 2 ** retryRef.current, 10_000);
 			retryRef.current += 1;
 			timerRef.current = setTimeout(() => {
 				timerRef.current = null;
@@ -2622,6 +2665,8 @@ export function useChat() {
 			failHeldSends("The connection dropped before it was sent.");
 			bridgeRef.current.clear();
 			if (hadOpenRef.current && !catchUpRef.current) catchUpRef.current = Date.now();
+			if (hadOpenRef.current && !lostSinceRef.current) lostSinceRef.current = Date.now();
+			rolesConnectionLost();
 			doubtRef.current = false;
 			dispatch({ type: "status", status: "closed" });
 			if (timerRef.current) {
@@ -2687,8 +2732,12 @@ export function useChat() {
 				return;
 			}
 			const doubt = verdict === "doubt";
-			const caughtUpAnyway = catchUpRef.current > 0 && now - healthRef.current.openedAt > CATCH_UP_GIVE_UP_MS;
-			if (caughtUpAnyway) catchUpRef.current = 0;
+			const caughtUpAnyway =
+				(catchUpRef.current > 0 || lostSinceRef.current > 0) && now - healthRef.current.openedAt > CATCH_UP_GIVE_UP_MS;
+			if (caughtUpAnyway) {
+				catchUpRef.current = 0;
+				lostSinceRef.current = 0;
+			}
 			if (doubt !== doubtRef.current || caughtUpAnyway) {
 				if (doubt && !doubtRef.current) traceRef.current?.noteCause({ reason: "doubt" });
 				doubtRef.current = doubt;
@@ -2712,6 +2761,10 @@ export function useChat() {
 			} else if (ws && ws.readyState === WebSocket.CONNECTING) {
 				// An attempt from before (maybe made with no network) may never finish.
 				if (now - connectAtRef.current > 1_500) replace(ws, true, { reason: "connect_timeout" });
+			} else if (ws) {
+				// pages-live: closed or closing, but its close event hasn't come yet (a tab coming back gets it
+				// late, and then waited out the backoff): a new socket now.
+				replace(ws, true, { reason: "close" });
 			} else if (timerRef.current) {
 				// Waiting to retry after a lost connection: retry now.
 				clearTimeout(timerRef.current);
@@ -2721,6 +2774,8 @@ export function useChat() {
 			}
 		};
 		const watchdog = setInterval(check, CHECK_EVERY_MS);
+		// pages-live: the view shown, the tab's visibility and Roles' own freshness decide the note too.
+		const stopLive = subscribePageLive(refreshNote);
 		const onVisible = () => {
 			if (document.visibilityState === "visible") cameBack();
 			else hiddenAt = Date.now();
@@ -2748,6 +2803,12 @@ export function useChat() {
 			window.removeEventListener("pageshow", onPageShow);
 			window.removeEventListener("online", cameBack);
 			netInfo?.removeEventListener?.("change", cameBack);
+			stopLive();
+			if (graceTimerRef.current) {
+				clearTimeout(graceTimerRef.current);
+				graceTimerRef.current = null;
+			}
+			setLiveGrace(false);
 			setReconnectingNote(false);
 			if (timerRef.current) {
 				clearTimeout(timerRef.current);

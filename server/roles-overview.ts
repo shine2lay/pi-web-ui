@@ -1338,9 +1338,23 @@ export interface RolesWatchOptions {
 	log?: (line: string) => void;
 }
 
+/**
+ * One window's watch. A full watcher's first overview may be the last one built (sent at once on watch); the window
+ * counts its data as current only once a later check reaches it (pages-live, Ops #244), so the first look that
+ * finishes after the watch confirms it even when nothing changed, instead of leaving it to the heartbeat.
+ */
+interface RolesWatcher {
+	full: boolean;
+	send: (msg: ServerMessage) => void;
+	/** checkedAt of the first overview this window got; null until it got one. */
+	firstAt: number | null;
+	/** A newer check reached it after its first overview. */
+	confirmed: boolean;
+}
+
 /** The windows watching the roles, keyed by their socket: looks again on a timer and on pokes. */
 export class RolesWatch<K> {
-	private readonly watchers = new Map<K, { full: boolean; send: (msg: ServerMessage) => void }>();
+	private readonly watchers = new Map<K, RolesWatcher>();
 	private timer: ReturnType<typeof setTimeout> | null = null;
 	private running: Promise<void> | null = null;
 	private again = false;
@@ -1364,13 +1378,15 @@ export class RolesWatch<K> {
 
 	/** This window wants everything (full) or just the count; it gets what is known at once. */
 	watch(key: K, full: boolean, send: (msg: ServerMessage) => void): void {
-		this.watchers.set(key, { full, send });
+		const watcher: RolesWatcher = { full, send, firstAt: null, confirmed: false };
+		this.watchers.set(key, watcher);
 		const last = this.last;
 		if (last) {
 			const asks = last.overview.asks.length;
 			send(
 				full ? { type: "roles", overview: last.overview, asks, checkedAt: last.checkedAt } : { type: "roles", asks },
 			);
+			if (full) watcher.firstAt = last.checkedAt;
 		}
 		this.schedule(last ? this.o.debounceMs : 0);
 	}
@@ -1455,17 +1471,25 @@ export class RolesWatch<K> {
 		const now = overview.at;
 		if (prev && prev.json === json) {
 			prev.checkedAt = now;
-			if (now - prev.heard >= this.o.heartbeatMs) {
-				prev.heard = now;
-				for (const w of this.watchers.values()) if (w.full) w.send({ type: "roles", asks, checkedAt: now });
+			const beat = now - prev.heard >= this.o.heartbeatMs;
+			if (beat) prev.heard = now;
+			for (const w of this.watchers.values()) {
+				if (!w.full) continue;
+				const confirms = !w.confirmed && w.firstAt !== null && now > w.firstAt;
+				if (!beat && !confirms) continue;
+				w.send({ type: "roles", asks, checkedAt: now });
+				if (confirms) w.confirmed = true;
 			}
 			return;
 		}
 		const countChanged = !prev || prev.overview.asks.length !== asks;
 		this.last = { overview, json, checkedAt: now, heard: now };
 		for (const w of this.watchers.values()) {
-			if (w.full) w.send({ type: "roles", overview, asks, checkedAt: now });
-			else if (countChanged) w.send({ type: "roles", asks });
+			if (w.full) {
+				w.send({ type: "roles", overview, asks, checkedAt: now });
+				if (w.firstAt === null) w.firstAt = now;
+				else if (now > w.firstAt) w.confirmed = true;
+			} else if (countChanged) w.send({ type: "roles", asks });
 		}
 	}
 }

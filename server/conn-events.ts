@@ -163,7 +163,11 @@ const RECORD_KEYS = new Set([
 	"conn",
 	"pageStallMs",
 	"cut",
+	"view",
+	"shownMs",
 ]);
+/** pages-live (Ops #244): the views a record may name. */
+const VIEWS: readonly NonNullable<ConnTraceRecord["view"]>[] = ["roles", "initiatives", "chat", "other"];
 
 const ms = (v: unknown): number | null =>
 	typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.min(Math.round(v), MAX_MS) : null;
@@ -210,7 +214,11 @@ export function sanitizeRecord(raw: unknown): ConnTraceRecord | null {
 		if (typeof r.cut !== "boolean") return null;
 		if (r.cut) out.cut = true;
 	}
-	for (const k of ["quietMs", "allowedMs", "catchUpMs", "pageStallMs"] as const) {
+	if (r.view !== undefined) {
+		if (typeof r.view !== "string" || !VIEWS.includes(r.view as NonNullable<ConnTraceRecord["view"]>)) return null;
+		out.view = r.view as NonNullable<ConnTraceRecord["view"]>;
+	}
+	for (const k of ["quietMs", "allowedMs", "catchUpMs", "pageStallMs", "shownMs"] as const) {
 		if (r[k] === undefined) continue;
 		const v = ms(r[k]);
 		if (v === null) return null;

@@ -1,7 +1,8 @@
-import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { FiFolder, FiX } from "react-icons/fi";
 import type { ChatState } from "../use-chat";
 import { useT } from "../i18n";
+import { liveGrace, subscribeReconnectingNote } from "../conn-health";
 import { appSend, useAppField, useAppGlobals } from "../app-globals";
 import { cacheMetrics, estimateStreamTokens, streamRate, trimRateSamples, type RateSample } from "../cache-stats";
 import type { UiSlotEntry } from "../ui-slots";
@@ -126,6 +127,10 @@ export function FooterBar({ chat, bottombarItems, onUiAction }: FooterBarProps) 
 		samplesRef.current = trimRateSamples([...prev, { t: now, out: streamEst }], now);
 	}, [streamingNow, streamEst]);
 
+	// pages-live (Ops #244): on Roles or Initiatives the red "Reconnecting" waits up to 8 s, like the note, while the
+	// page's own data comes back; meanwhile a calm "Updating". Chat views unchanged. (A hook: above the early return.)
+	const grace = useSyncExternalStore(subscribeReconnectingNote, liveGrace, liveGrace);
+
 	if (!state) return null;
 	const s = state.stats;
 
@@ -135,8 +140,14 @@ export function FooterBar({ chat, bottombarItems, onUiAction }: FooterBarProps) 
 	const hitText = cache.totalInput > 0 ? `${hitPct.toFixed(1)}%` : "—";
 	const rate = streamingNow ? streamRate(samplesRef.current) : 0;
 
-	const connClass = chat.ready ? "ok" : chat.status === "closed" ? "error" : "busy";
-	const connLabel = chat.ready ? t("connected") : chat.status === "closed" ? t("reconnecting") : t("connecting");
+	const connClass = chat.ready ? "ok" : grace ? "busy" : chat.status === "closed" ? "error" : "busy";
+	const connLabel = chat.ready
+		? t("connected")
+		: grace
+			? t("connUpdating")
+			: chat.status === "closed"
+				? t("reconnecting")
+				: t("connecting");
 
 	const context = s.contextUsage;
 	// 压缩软上限（issue #229 / #245）：设置了有效软上限时，底栏进度条与数字显示以该上限为满格刻度

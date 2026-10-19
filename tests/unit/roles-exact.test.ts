@@ -1034,3 +1034,75 @@ describe("roles-phone: one column below 1024 px", () => {
 		expect(object(view.values(364, 844).exPos)).toMatchObject({ t: "0px", l: "0px", w: "100%", h: "100%" });
 	});
 });
+
+// pages-live (Ops #244): an alarm waits up to LIVE_GRACE_MS of visible time for fresh data, showing the last data
+// calmly with its time; never past it, and never an all-clear from it.
+describe("pages-live: Updating instead of an alarm, for up to 8 s", () => {
+	const waiting = (extra: Row = {}) =>
+		state([role()], [], { appliedAt: undefined, waitingSince: NOW - 2_000, ...extra });
+	const long = { visibleAt: NOW - 3_600_000 };
+
+	it("a lost connection shows Updating with the last data's time, calm, then Disconnected after 8 s", () => {
+		const model = projectExactRoles(waiting(), "closed", NOW, long);
+		expect(model.source).toBe("updating");
+		expect(model.needs.tell).toBe("awaiting");
+		expect(model.lastReceived).toBe(true);
+		expect(model.graceUntil).toBe(NOW + 6_000);
+		const { view, update } = fixture(model);
+		const fresh = object(view.values().fresh);
+		expect(fresh.text).toBe("Updating\u2026 \u00b7 last received 12:00");
+		expect(fresh.fg).toBe("#ECEDEE");
+		expect(object(view.values().banner).show).toBe(false);
+		const later = projectExactRoles(waiting(), "closed", NOW + 6_000, long);
+		expect(later.source).toBe("cached");
+		expect(later.graceUntil).toBeNull();
+		update(later);
+		expect(object(view.values().fresh).text).toBe("Disconnected \u00b7 last received 12:00");
+		expect(object(view.values().fresh).fg).toBe("#FF8A80");
+	});
+
+	it("counts from the tab coming back; nothing is used up while hidden", () => {
+		const old = waiting({ waitingSince: NOW - 600_000 });
+		expect(projectExactRoles(old, "closed", NOW, long).source).toBe("cached");
+		const hidden = projectExactRoles(old, "closed", NOW, { visibleAt: null });
+		expect(hidden.source).toBe("updating");
+		expect(hidden.graceUntil).toBeNull();
+		const back = projectExactRoles(old, "closed", NOW, { visibleAt: NOW - 1_000 });
+		expect(back.source).toBe("updating");
+		expect(back.graceUntil).toBe(NOW + 7_000);
+		expect(projectExactRoles(old, "closed", NOW + 7_000, { visibleAt: NOW - 1_000 }).source).toBe("cached");
+	});
+
+	it("a pending watch, a failed look and a silent feed wait too; fresh data ends the wait at once", () => {
+		expect(projectExactRoles(waiting(), "open", NOW, long).source).toBe("updating");
+		expect(projectExactRoles(waiting(), "open", NOW + 6_000, long)).toMatchObject({
+			source: "connected-source-unverified",
+			needs: { tell: "awaiting" },
+		});
+		expect(projectExactRoles(waiting({ error: "boom" }), "open", NOW, long).source).toBe("updating");
+		expect(projectExactRoles(waiting({ error: "boom" }), "open", NOW + 6_000, long).source).toBe("cached-error");
+		// silent for 2 min 5 s with no wait recorded: it turned stale 5 s ago
+		const quiet = state([role()], [], { heardAt: NOW - 125_000 });
+		expect(projectExactRoles(quiet, "open", NOW, long).source).toBe("updating");
+		expect(projectExactRoles(quiet, "open", NOW + 3_000, long).source).toBe("stale");
+		// fresh: the server was heard looking again (appliedAt), no wait
+		const fresh = projectExactRoles(state(), "open", NOW, long);
+		expect(fresh.source).toBe("connected-source-unverified");
+		expect(fresh.needs.tell).toBe("can-tell");
+		expect(fresh.graceUntil).toBeNull();
+	});
+
+	it("with nothing loaded it says Loading, not Disconnected or Unavailable, until the 8 s are up", () => {
+		const none = waiting({ overview: null, status: "loading", overviewReceivedAt: undefined });
+		expect(projectExactRoles(none, "closed", NOW, long).source).toBe("awaiting");
+		expect(projectExactRoles(none, "closed", NOW + 6_000, long).source).toBe("disconnected");
+		const failed = waiting({ overview: null, status: "error", error: "boom" });
+		expect(projectExactRoles(failed, "open", NOW, long).source).toBe("awaiting");
+		expect(projectExactRoles(failed, "open", NOW + 6_000, long).source).toBe("error");
+	});
+
+	it("without the tab's visibility (old callers) every alarm shows at once, as before", () => {
+		expect(projectExactRoles(waiting(), "closed", NOW).source).toBe("cached");
+		expect(projectExactRoles(waiting(), "open", NOW).source).toBe("connected-source-unverified");
+	});
+});

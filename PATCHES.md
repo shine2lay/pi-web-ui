@@ -7208,3 +7208,58 @@ decision-recovery rewrites the file through a temp file and a rename (a new inod
 - On an upstream sync: the decisions page is this fork's own; keep `whoCache` optional so the other
   callers work unchanged. If `whoOf` ever reads more than its arguments, or records start changing in
   place, the key must grow with it or the cache must go.
+
+## pages-live
+
+**Status**: `local`
+**Baseline**: v0.96.1 (`mine` at 033cd1d8).
+
+The Roles page stays calm and current when the owner comes back to its tab: for up to 8 s of visible time
+it keeps the last data with "Updating" and the last data's time ("last received HH:MM") instead of a red or
+amber alarm, and the app's "Reconnecting" note waits the same 8 s on Roles and Initiatives. After 8 s without fresh data the
+alarms show as before; the all-clear is never shown from old data.
+
+**Why** (owner 2026-10-18, m58098: "make it so that roles and initiatives are always connected when i am on
+page, i hate that it says reconnecting for along time when i change tabs"; Ops #244). H-PAGES-LIVE-1 (the
+server is slow to answer a new watch) was disproved by the baseline before any code: the first full answer
+comes in 0.36 s p90. H-PAGES-LIVE-2: the alarms on Roles wait for the chat's catch-up (about 6 s p90, up to
+13.5 s) and fire at the first gap, and an unchanged overview was confirmed to a new watcher only by the 30 s
+heartbeat. Evidence, numbers and result: `docs/pages-live.md`.
+
+### Changes
+
+- `server/roles-overview.ts`: each full watcher remembers the checkedAt of its first overview; the first look
+  that finishes after it sends that watcher a heartbeat with the newer checkedAt even when nothing changed
+  (before: only every 30 s). Overview sends, count-only watchers and the replay on watch are unchanged.
+- `web/src/page-live.ts` (new, shared with the Initiatives task): `LIVE_GRACE_MS` (8 s), the shown view,
+  when the tab last became visible, and each view's own freshness; `graceLeft()` counts visible time only.
+- `web/src/roles-state.ts`: `waitingSince` from a full watch, a lost connection (`rolesConnectionLost`) or a
+  failed look until a newer look arrives; Roles' freshness goes to page-live.
+- `web/src/roles-exact-model.ts`, `roles-exact-view.ts`, `components/RolesExactView.tsx`,
+  `roles-useful-model.ts`, `components/RolesUsefulView.tsx`: source `updating` (calm pill, last data's time)
+  while the grace runs, then today's `cached`/`stale`/`cached-error`/`disconnected`; with nothing loaded it
+  says Loading until then. The all-clear still needs a fresh check.
+- `web/src/use-chat.ts`: on Roles the trouble ends with Roles' own fresh data, not the chat's catch-up; on
+  Roles or Initiatives the note waits the grace (visible time; nothing used up while hidden). On a tab
+  return a socket that is closed or closing, or from before the return, is replaced at once instead of
+  waiting out the backoff. Chat views unchanged.
+- `web/src/conn-health.ts`, `components/FooterBar.tsx`, `i18n.tsx`, `locales/*.json`: during the grace the
+  footer says "Updating" (busy colour) instead of a red "Reconnecting" (`connUpdating`).
+- `web/src/conn-trace.ts`, `server/conn-events.ts`, `server/protocol.ts`: each connection record gains
+  `view` ("roles" | "initiatives" | "chat" | "other") and `shownMs` (tab visible to the episode's end);
+  metadata only, checked field by field on the server.
+- Tests: `tests/unit/page-live.test.ts` (new), additions in `roles-exact`, `roles-overview`, `conn-trace`,
+  `conn-events`, `footerbar-status`; `tests/pages-live-test.mjs` (new, sealed browser: 10 returns after 60 s
+  hidden with the socket cut).
+
+### How it was checked
+
+- Focused vitest (TZ=UTC), the sealed browser return test on this code and on the code before it (the
+  control), then the land gate; live first-answer timing before and after (`docs/pages-live.md`).
+
+### Undo and syncing
+
+- Revert this commit with `wt`, then install with `pi-web-deploy`. Nothing stored changes; old records
+  without `view`/`shownMs` stay valid.
+- On an upstream sync: the grace lives in page-live.ts and the Roles models; use-chat's `refreshNote` and
+  the return reconnect are the only connection-path edits.

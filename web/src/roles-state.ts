@@ -12,6 +12,7 @@
  */
 import { useEffect, useSyncExternalStore } from "react";
 import { appSend } from "./app-globals";
+import { setViewFresh } from "./page-live";
 import type { ClientMessage, ServerMessage, UiRolesOverview } from "./types";
 
 export type RolesPayload = Extract<ServerMessage, { type: "roles" }>;
@@ -46,6 +47,11 @@ export interface RolesState {
 	appliedAt?: number;
 	/** When the last look failed (this clock, ms). */
 	failedAt?: number;
+	/** pages-live (Ops #244): since when (this clock, ms) the page has waited to hear the server looking
+	 *  again: set by a full watch, a lost connection or a failed look, kept through later ones (the
+	 *  earliest counts), cleared with appliedAt set and when the page stops watching. The page's alarms
+	 *  wait LIVE_GRACE_MS of visible time from it (page-live.ts). */
+	waitingSince?: number;
 }
 
 let state: RolesState = { overview: null, asks: 0, status: "idle" };
@@ -67,6 +73,8 @@ function notify(): void {
 
 function set(next: RolesState): void {
 	state = next;
+	// pages-live: the app's "Reconnecting…" note on the Roles view ends with Roles' own fresh data.
+	setViewFresh("roles", fullWatchers > 0 && state.appliedAt !== undefined);
 	notify();
 }
 
@@ -79,13 +87,19 @@ function sync(force = false): void {
 	const want = wanted();
 	if (!force && want === asked) return;
 	asked = want;
+	if (want !== "full" && state.waitingSince !== undefined) set({ ...state, waitingSince: undefined });
 	if (want === "off") {
 		appSend({ type: "roles_unwatch" });
 		return;
 	}
 	if (want === "full") {
 		firstCheckedAt = null;
-		set({ ...state, appliedAt: undefined, ...(state.status !== "ready" ? { status: "loading" as const } : {}) });
+		set({
+			...state,
+			appliedAt: undefined,
+			waitingSince: state.waitingSince ?? Date.now(),
+			...(state.status !== "ready" ? { status: "loading" as const } : {}),
+		});
 	}
 	appSend({ type: "roles_watch", full: want === "full" });
 }
@@ -124,6 +138,15 @@ export function reloadRoles(): void {
 	sync(true);
 }
 
+/** pages-live: the socket was lost (onclose, or dropped by the watchdog). The data on screen is no
+ *  longer known to be current: the wait for the server to look again starts now (unless it already
+ *  had), and `ready` on the next socket asks again. */
+export function rolesConnectionLost(): void {
+	if (wanted() !== "full") return;
+	if (state.appliedAt === undefined && state.waitingSince !== undefined) return;
+	set({ ...state, appliedAt: undefined, waitingSince: state.waitingSince ?? Date.now() });
+}
+
 /** A new socket (`ready`): the server has forgotten this window's watch, so ask again. */
 export function resendRolesWatch(): void {
 	if (wanted() === "off") {
@@ -139,6 +162,7 @@ export function receiveRoles(payload: RolesPayload): void {
 	const asks = typeof payload.asks === "number" && payload.asks >= 0 ? payload.asks : state.asks;
 	if (payload.overview) {
 		const checkedAt = payload.checkedAt ?? payload.overview.at;
+		const applied = lookedAgain(checkedAt, true);
 		set({
 			overview: payload.overview,
 			asks: payload.overview.asks.length,
@@ -146,7 +170,8 @@ export function receiveRoles(payload: RolesPayload): void {
 			checkedAt,
 			heardAt: now,
 			overviewReceivedAt: now,
-			appliedAt: lookedAgain(checkedAt, true) ? now : undefined,
+			appliedAt: applied ? now : undefined,
+			...(applied || wanted() !== "full" ? {} : { waitingSince: state.waitingSince ?? now }),
 		});
 		return;
 	}
@@ -159,15 +184,17 @@ export function receiveRoles(payload: RolesPayload): void {
 			failedAt: now,
 			heardAt: now,
 			appliedAt: undefined,
+			...(wanted() === "full" ? { waitingSince: state.waitingSince ?? now } : {}),
 		});
 		return;
 	}
 	// The count only (top bar), or "still the same, checked at" (the page).
+	const applied = lookedAgain(payload.checkedAt, false);
 	set({
 		...state,
 		asks,
 		...(typeof payload.checkedAt === "number" ? { checkedAt: payload.checkedAt, error: undefined } : {}),
-		...(lookedAgain(payload.checkedAt, false) ? { appliedAt: now } : {}),
+		...(applied ? { appliedAt: now, waitingSince: undefined } : {}),
 		heardAt: now,
 	});
 }
@@ -180,6 +207,9 @@ function subscribe(fn: () => void): () => void {
 function snapshot(): RolesState {
 	return state;
 }
+
+/** The roles' state now, outside React (tests). */
+export const rolesSnapshot = snapshot;
 
 /** The roles' state; `watch`: "full" (the page), "count" (the top bar) or "off" (just read). */
 export function useRoles(watch: "full" | "count" | "off" = "off"): RolesState {
@@ -241,5 +271,6 @@ export function resetRolesState(): void {
 	countWatchers = 0;
 	asked = "off";
 	firstCheckedAt = null;
+	setViewFresh("roles", null);
 	notify();
 }

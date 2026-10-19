@@ -225,6 +225,8 @@ export interface ExactRoles {
 	now: number;
 	hasOverview: boolean;
 	receivedAt: number | null;
+	/** pages-live: when the "Updating" wait ends, so the page renders again then; null when nothing waits. */
+	graceUntil: number | null;
 	/** owner-contacts: null = this server doesn't report them (not connected). */
 	contacts: ExactContact[] | null;
 	/** roles-sent: open sender → receiver pairs; null = this server doesn't report them. */
@@ -233,8 +235,14 @@ export interface ExactRoles {
 	approvalsOff: ExactApprovalsOff | null;
 }
 
-export function projectExactRoles(state: unknown, connection: unknown, now: number): ExactRoles {
-	const model = projectUsefulRoles(state, connection, now);
+/** `live` (pages-live): when the tab last became visible (null: hidden); see projectUsefulRoles. */
+export function projectExactRoles(
+	state: unknown,
+	connection: unknown,
+	now: number,
+	live?: { visibleAt: number | null },
+): ExactRoles {
+	const model = projectUsefulRoles(state, connection, now, live);
 	const input = object(state);
 	const overview = object(input?.overview);
 	const rawRoles = overview?.roles;
@@ -264,6 +272,7 @@ export function projectExactRoles(state: unknown, connection: unknown, now: numb
 				? received
 				: null,
 		needs: model.needsYou,
+		graceUntil: model.graceUntil ?? null,
 		source: model.source,
 		roster: model.roster,
 		lastReceived: model.lastReceived,
@@ -303,6 +312,11 @@ export const EXACT_SOURCE: Record<SourceState, { title: string; body: string; la
 		title: "Role status may be out of date",
 		body: "No recent update has arrived. Everything below is the last received state.",
 		label: "Stale",
+	},
+	updating: {
+		title: "Updating role status",
+		body: "Checking for the current state. Everything below is the last received state until the check arrives.",
+		label: "Updating…",
 	},
 	partial: {
 		title: "Some role information is unavailable",

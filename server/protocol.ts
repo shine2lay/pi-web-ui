@@ -960,6 +960,11 @@ export interface ConnTraceRecord {
 	pageStallMs?: number;
 	/** The tab reloaded or went while the note showed: durMs runs to the last moment it was seen. */
 	cut?: boolean;
+	/** pages-live (Ops #244): the view shown when the episode ended. On Roles and Initiatives the note
+	 *  waits LIVE_GRACE_MS of visible time, so there durMs is the whole trouble, shown or not. */
+	view?: "roles" | "initiatives" | "chat" | "other";
+	/** pages-live: from the tab last becoming visible to the episode's end (only when it ended visible). */
+	shownMs?: number;
 }
 
 export type ClientMessage =

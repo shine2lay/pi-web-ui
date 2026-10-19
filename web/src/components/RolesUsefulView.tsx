@@ -37,6 +37,7 @@ const SOURCE_KEYS = {
 	disconnected: "ruDisconnected",
 	cached: "ruCached",
 	stale: "ruStale",
+	updating: "ruUpdating",
 	partial: "ruPartial",
 	unknown: "ruUnknownSource",
 	"connected-source-unverified": "ruConnected",

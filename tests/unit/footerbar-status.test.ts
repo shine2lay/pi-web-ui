@@ -6,6 +6,7 @@ import { FooterBar } from "../../web/src/components/FooterBar.js";
 import { LanguageProvider } from "../../web/src/i18n.js";
 import type { ChatState } from "../../web/src/use-chat.js";
 import { resetAppGlobals, setAppGlobals } from "../../web/src/app-globals.js";
+import { setLiveGrace } from "../../web/src/conn-health.js";
 
 let root: Root | null = null;
 
@@ -101,6 +102,18 @@ describe("FooterBar 连接状态", () => {
 		const connWrapper = container.querySelector(".status-conn");
 		expect(connWrapper).toBeTruthy();
 		expect(connWrapper?.textContent).toContain("Reconnecting…");
+	});
+
+	it("pages-live: during the Roles/Initiatives grace a closed socket reads Updating, calm, then Reconnecting again", () => {
+		setAppGlobals({ ready: false, status: "closed" });
+		setLiveGrace(true);
+		const { container } = mountFooter(makeChatState({ ready: false, status: "closed" }));
+		const conn = () => container.querySelector(".status-conn");
+		expect(conn()?.textContent).toContain("Updating");
+		expect(conn()?.textContent).not.toContain("Reconnecting");
+		expect(container.querySelector(".status-conn .error, .status-conn.error")).toBeNull();
+		act(() => setLiveGrace(false));
+		expect(conn()?.textContent).toContain("Reconnecting");
 	});
 
 	it("无 softCap 时底栏 Context 显示物理上限并按物理上限计算百分比", () => {

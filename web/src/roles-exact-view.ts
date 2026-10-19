@@ -873,9 +873,11 @@ export function createExactRolesView(
 		const unavailable = model.source !== "connected-source-unverified" || needs.tell !== "can-tell";
 		const failed = ["error", "cached-error", "disconnected", "cached"].includes(model.source);
 		const stale = model.source === "stale";
+		// pages-live: "Updating" is calm (neutral) for up to LIVE_GRACE_MS; the red or amber state follows if no check comes.
+		const updating = model.source === "updating";
 		const palette = failed
 			? { bg: "#221415", bd: "#5A2A2C", fg: "#FF8A80" }
-			: stale || (unavailable && !loading)
+			: stale || (unavailable && !loading && !updating)
 				? { bg: "#1D1A12", bd: "#4D3F1F", fg: "#F0B95A" }
 				: { bg: "#16181B", bd: "#2A2E34", fg: "#ECEDEE" };
 		const receipt =

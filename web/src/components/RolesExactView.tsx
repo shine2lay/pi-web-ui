@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useAppField } from "../app-globals";
+import { liveVisibleAt, subscribePageLive } from "../page-live";
 import { exactRolesFonts } from "../roles-exact-fonts";
 import { projectExactRoles } from "../roles-exact-model";
 import { createExactRolesView } from "../roles-exact-view";
@@ -29,7 +30,12 @@ export function RolesExactView({
 	const [failed, setFailed] = useState(false);
 	const [answer, setAnswer] = useState<{ item: NeedsYouItem; from: HTMLElement } | null>(null);
 	const host = useRef<HTMLDivElement>(null);
-	const model = useMemo(() => projectExactRoles(state, connection, now), [state, connection, now]);
+	// pages-live: an alarm waits for fresh data, counted in visible time from when the tab came back.
+	const visibleAt = useSyncExternalStore(subscribePageLive, liveVisibleAt, liveVisibleAt);
+	const model = useMemo(
+		() => projectExactRoles(state, connection, now, { visibleAt }),
+		[state, connection, now, visibleAt],
+	);
 	const current = useRef({ model, onOpen, onAbout });
 	current.current = { model, onOpen, onAbout };
 	const redraw = useRef<(() => void) | null>(null);
@@ -39,7 +45,14 @@ export function RolesExactView({
 		setNow(Date.now());
 		const timer = setInterval(() => setNow(Date.now()), 30_000);
 		return () => clearInterval(timer);
-	}, [active]);
+	}, [active, visibleAt]);
+	// pages-live: look again the moment the "Updating" wait ends (its alarm shows then if no check came).
+	const graceUntil = model.graceUntil;
+	useEffect(() => {
+		if (!active || graceUntil === null) return;
+		const timer = setTimeout(() => setNow(Date.now()), Math.max(0, graceUntil - Date.now()) + 20);
+		return () => clearTimeout(timer);
+	}, [active, graceUntil]);
 	useEffect(() => {
 		redraw.current?.();
 	}, [model]);

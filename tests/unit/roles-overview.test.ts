@@ -1219,6 +1219,53 @@ describe("pushing it", () => {
 		watch.stop();
 	});
 
+	it("confirms a new page with the next look even when nothing changed, once (pages-live)", async () => {
+		let next = overview(1);
+		const watch = new RolesWatch<string>(async () => ({ ...next, at: now }));
+		const a: unknown[] = [];
+		watch.watch("a", true, (m) => a.push(m));
+		await watch.look();
+		const t0 = now;
+		expect(a).toEqual([expect.objectContaining({ overview: expect.anything(), checkedAt: t0 })]);
+		// the next look finds nothing new: the page still hears it was checked again, well before the heartbeat
+		now += 3_000;
+		await watch.look();
+		expect(a).toHaveLength(2);
+		expect(a[1]).toEqual({ type: "roles", asks: 1, checkedAt: now });
+		// only once: later unchanged looks send nothing until the heartbeat
+		now += 3_000;
+		await watch.look();
+		expect(a).toHaveLength(2);
+		// a window that comes back gets the last overview at once, then the next look confirms it; the first page hears nothing
+		const b: unknown[] = [];
+		watch.watch("b", true, (m) => b.push(m));
+		expect(b).toEqual([expect.objectContaining({ overview: expect.anything(), checkedAt: now })]);
+		await watch.look();
+		expect(b).toHaveLength(1);
+		now += 3_000;
+		await watch.look();
+		expect(b.at(-1)).toEqual({ type: "roles", asks: 1, checkedAt: now });
+		expect(a).toHaveLength(2);
+		// a change confirms by itself: no extra "checked" after it
+		const c: unknown[] = [];
+		watch.watch("c", true, (m) => c.push(m));
+		now += 3_000;
+		next = overview(1, "changed");
+		await watch.look();
+		expect(c).toHaveLength(2);
+		expect(c[1]).toMatchObject({ overview: { asks: [{ text: "changed" }] }, checkedAt: now });
+		now += 3_000;
+		await watch.look();
+		expect(c).toHaveLength(2);
+		// a count-only window never gets these
+		const bar: unknown[] = [];
+		watch.watch("bar", false, (m) => bar.push(m));
+		now += 3_000;
+		await watch.look();
+		expect(bar).toEqual([{ type: "roles", asks: 1 }]);
+		watch.stop();
+	});
+
 	it("tells an open page why it couldn't look, and keeps the count", async () => {
 		let fail = false;
 		const watch = new RolesWatch<string>(

@@ -71,6 +71,30 @@ describe("conn-trace: one record per episode, with its cause", () => {
 		expect(t.waiting).toBe(0);
 	});
 
+	it("pages-live: records the view at the end and how long the tab had been visible then (not when it ended hidden)", () => {
+		const t = new BannerTrace(ids());
+		// came up while hidden on Roles; the tab came back at T0 + 60 s; fresh data 1.8 s later
+		t.noteCause({ reason: "close", closeCode: 1006 });
+		t.bannerChanged(true, ctx(T0, { visible: false, view: "roles", visibleAt: null }));
+		t.bannerChanged(false, ctx(T0 + 61_800, { view: "roles", visibleAt: T0 + 60_000 }));
+		// a chat-view episode that ended while hidden: a view, no shownMs
+		t.noteCause({ reason: "close", closeCode: 1006 });
+		t.bannerChanged(true, ctx(T0 + 70_000, { view: "chat", visibleAt: T0 + 60_000 }));
+		t.bannerChanged(false, ctx(T0 + 75_000, { visible: false, view: "chat", visibleAt: null }));
+		// an old caller without the new fields: neither
+		t.noteCause({ reason: "doubt" });
+		t.bannerChanged(true, ctx(T0 + 80_000));
+		t.bannerChanged(false, ctx(T0 + 81_000));
+		const [a, b, c] = t.take(T0 + 90_000);
+		expect(a).toMatchObject({ durMs: 61_800, visible: false, endVisible: true, view: "roles", shownMs: 1_800 });
+		expect(b).toMatchObject({ view: "chat", endVisible: false });
+		expect(b).not.toHaveProperty("shownMs");
+		expect(c).not.toHaveProperty("view");
+		expect(c).not.toHaveProperty("shownMs");
+		// what the server keeps
+		for (const r of [a, b, c]) expect(sanitizeRecord(r)).toEqual(r);
+	});
+
 	it("silence (unexplained and explained), probe, connect_timeout and doubt keep their reason and numbers", () => {
 		const cases = [
 			{ cause: { reason: "silence", quietMs: 5_100, allowedMs: 5_000 } },

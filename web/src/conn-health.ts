@@ -155,6 +155,21 @@ export function reconnectingNote(): boolean {
 	return noteOn;
 }
 
+/** pages-live (Ops #244): the connection is in trouble, but Roles or Initiatives is shown and the note is held
+ *  back for up to LIVE_GRACE_MS while that page's own data comes back. The footer then says "Updating…" instead
+ *  of "Reconnecting…". Same listeners as the note. */
+let graceOn = false;
+
+export function setLiveGrace(on: boolean): void {
+	if (graceOn === on) return;
+	graceOn = on;
+	for (const l of listeners) l();
+}
+
+export function liveGrace(): boolean {
+	return graceOn;
+}
+
 export function subscribeReconnectingNote(l: () => void): () => void {
 	listeners.add(l);
 	return () => listeners.delete(l);

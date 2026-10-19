@@ -12,6 +12,7 @@
  * Metadata only: a fixed cause, durations, visibility/online flags, socket ids. Never chat text, URLs
  * or anything a message carried. Pure logic, no timers: times are passed in (ms, Date.now()).
  */
+import type { PageView } from "./page-live";
 import type { ConnTraceReason, ConnTraceRecord } from "./types";
 
 /** Finished episodes kept while no socket can take them (oldest dropped first). */
@@ -53,6 +54,9 @@ export interface TraceContext {
 	patience: number;
 	/** The server's id for that socket (ready.connTrace.conn), when it gave one. */
 	conn: string | null;
+	/** pages-live (Ops #244): the view shown, and when the tab last became visible (null: hidden). */
+	view?: PageView;
+	visibleAt?: number | null;
 }
 
 /** Where a tab keeps its episodes across a reload (sessionStorage in the page; a fake in tests). */
@@ -196,7 +200,7 @@ export class BannerTrace {
 		if (!on && this.episode) {
 			const e = this.episode;
 			this.episode = null;
-			this.finish(e, ctx.now, ctx.visible, false);
+			this.finish(e, ctx.now, ctx.visible, false, ctx);
 			this.save(ctx.now);
 		}
 	}
@@ -230,7 +234,7 @@ export class BannerTrace {
 		this.save(now);
 	}
 
-	private finish(e: Episode, endAt: number, endVisible: boolean, cut: boolean): void {
+	private finish(e: Episode, endAt: number, endVisible: boolean, cut: boolean, end?: TraceContext): void {
 		const rec: Omit<ConnTraceRecord, "endAgoMs"> = {
 			ep: e.ep,
 			reason: e.cause.reason,
@@ -253,6 +257,10 @@ export class BannerTrace {
 		if (e.conn) rec.conn = e.conn;
 		if (e.pageStallMs > 0) rec.pageStallMs = e.pageStallMs;
 		if (cut) rec.cut = true;
+		// pages-live: where the owner was, and how long he had been looking when it ended.
+		if (end?.view) rec.view = end.view;
+		const back = end?.visibleAt;
+		if (endVisible && isNum(back)) rec.shownMs = nonNeg(endAt - back);
 		this.done.push({ rec, endAt });
 		if (this.done.length > MAX_KEPT) {
 			this.dropped += this.done.length - MAX_KEPT;
