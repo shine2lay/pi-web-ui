@@ -276,7 +276,9 @@ describe("waiting on you and the ON YOU bar", () => {
 		expect(open).toHaveBeenLastCalledWith("/chats/design-3.jsonl");
 	});
 
-	it("says nothing is waiting only when the registry is loaded whole, live, and nothing is", () => {
+	// Ops #251 (docs/gate-light-tests.md): one case per registry state, each mounting the view once. As one case that
+	// mounted it 8 times, it ran past vitest's 5 s test timeout under land-gate load.
+	describe("says nothing is waiting only when the registry is loaded whole, live, and nothing is", () => {
 		const said = (work: InitiativesPageArgs["work"]) => {
 			const page = mount(build({ work }).input);
 			const out = [
@@ -291,23 +293,39 @@ describe("waiting on you and the ON YOU bar", () => {
 			return out;
 		};
 		const quiet = { ...TASKS_PAGE, tasks: TASKS.filter((t) => !t.needsYou) };
-		expect(said({ page: null, status: "loading" })[0]).not.toMatch(/Nothing/);
-		expect(said({ page: null, status: "error", error: "x", failedAt: AT })[0]).not.toMatch(/^Nothing|: Nothing/);
-		expect(said({ page: TASKS_PAGE, status: "error", error: "x", failedAt: NOW })[0]).toBe(
-			"As of 09:40: 2 things are waiting on you across initiatives.",
-		);
-		expect(said({ page: quiet, status: "error", error: "x", failedAt: NOW })[0]).toBe(
-			"As of 09:40: Nothing was waiting on you then; that may have changed since.",
-		);
-		expect(said({ page: { ...TASKS_PAGE, problem: "too-big" }, status: "ready" })).toEqual([
-			"At least 2 things are waiting on you; the registry couldn\u2019t be read whole, so there may be more.",
-			"8 \u2014 \u2014 \u2014",
-		]);
-		expect(said({ page: { ...quiet, problem: "unknown-change" }, status: "ready" })[0]).toBe(
-			"What\u2019s waiting on you isn\u2019t fully known: the registry couldn\u2019t be read whole.",
-		);
-		// Without Design #3's question, Alpha launch's blocked QA #4 makes it Needs attention too.
-		expect(said({ page: quiet, status: "ready" })).toEqual(["Nothing is waiting on you.", "8 0 2 1"]);
-		expect(said({ page: PAGE, status: "ready" })).toEqual(["Nothing is waiting on you.", "3 0 0 0"]);
+		it("loading", () => {
+			expect(said({ page: null, status: "loading" })[0]).not.toMatch(/Nothing/);
+		});
+		it("failed before any page was read", () => {
+			expect(said({ page: null, status: "error", error: "x", failedAt: AT })[0]).not.toMatch(/^Nothing|: Nothing/);
+		});
+		it("failed after a page with questions", () => {
+			expect(said({ page: TASKS_PAGE, status: "error", error: "x", failedAt: NOW })[0]).toBe(
+				"As of 09:40: 2 things are waiting on you across initiatives.",
+			);
+		});
+		it("failed after a page with no questions", () => {
+			expect(said({ page: quiet, status: "error", error: "x", failedAt: NOW })[0]).toBe(
+				"As of 09:40: Nothing was waiting on you then; that may have changed since.",
+			);
+		});
+		it("loaded, but too big to read whole", () => {
+			expect(said({ page: { ...TASKS_PAGE, problem: "too-big" }, status: "ready" })).toEqual([
+				"At least 2 things are waiting on you; the registry couldn\u2019t be read whole, so there may be more.",
+				"8 \u2014 \u2014 \u2014",
+			]);
+		});
+		it("loaded, but with a change it couldn't read", () => {
+			expect(said({ page: { ...quiet, problem: "unknown-change" }, status: "ready" })[0]).toBe(
+				"What\u2019s waiting on you isn\u2019t fully known: the registry couldn\u2019t be read whole.",
+			);
+		});
+		it("loaded whole and live, with no questions", () => {
+			// Without Design #3's question, Alpha launch's blocked QA #4 makes it Needs attention too.
+			expect(said({ page: quiet, status: "ready" })).toEqual(["Nothing is waiting on you.", "8 0 2 1"]);
+		});
+		it("loaded whole and live, with no tasks", () => {
+			expect(said({ page: PAGE, status: "ready" })).toEqual(["Nothing is waiting on you.", "3 0 0 0"]);
+		});
 	});
 });

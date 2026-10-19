@@ -13,9 +13,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * 这是**刻意接受**的代价（对话仍在服务端跑着，左栏「最近对话」点回去即可）。
  */
 
+// Ops #251 (docs/gate-light-tests.md): the small module itself; use-chat.ts re-exports it. Importing use-chat here
+// loaded its whole graph on each fresh load, and the first case ran past the 5 s timeout under land-gate load.
 const load = async () => {
 	vi.resetModules();
-	return (await import("../../web/src/use-chat")).getClientId;
+	return (await import("../../web/src/client-id")).getClientId;
 };
 
 let storageWrites: string[] = [];

@@ -10,6 +10,15 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## gate-light-tests: two tests that timed out under gate load made lighter
+
+- `local` (Ops #251, project faster-landing, 2026-10-18; requested by Ops #244, rm-5024a008). Hypothesis H-GATE-LIGHT-TESTS-1, the timeouts seen, the before and after times and the result: `docs/gate-light-tests.md`.
+- `tests/unit/initiatives-page-tasks.test.ts`: "says nothing is waiting only when the registry is loaded whole, live, and nothing is" mounted the whole Initiatives design view 8 times in one case. It is now a `describe` of that name with one case per registry state, each mounting once, with the same inputs, strings and counts. No other test in the file changed.
+- `web/src/client-id.ts` (new): `getClientId` and `cachedClientId`, moved unchanged from `web/src/use-chat.ts`; it imports only `./uuid`. `use-chat.ts` imports it for its own calls and re-exports it, so `file-transfer.ts`, `components/FilePreview.tsx` and `download.ts` are unchanged. `tests/unit/client-id.test.ts` imports `web/src/client-id` instead of use-chat (same four cases, still a fresh module per page load); before, each case transformed and loaded use-chat's whole graph.
+- No assertion loosened; vitest's global testTimeout and hookTimeout unchanged; no retry. The app behaves the same: one client id per page load.
+- Checks: the timing runs (3 before, 3 after, sealed), then the landing gate.
+- Undo: revert this commit.
+
 ## initiatives-page-tasks: tasks, waiting on you and status on the Initiatives page
 
 - `local` (owner 2026-10-18, Ops home chat: design first, then features; "Side by side" for steps 2-4; Ops #227, project initiatives-page). Hypotheses H-INITIATIVES-PAGE-3, -3b and -3c and their results: `docs/initiatives-page-tasks.md`.
