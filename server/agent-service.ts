@@ -308,6 +308,7 @@ import { AnswerPreviews } from "./decision-previews.js";
 import { DecisionReader, readerStatus, type ReadResult, unreadOf } from "./decision-reader.js";
 import { DecisionStore, fileRecord } from "./decision-store.js";
 import { buildDecisionsPage, recordView } from "./decision-view.js";
+import { WhoCache } from "./who-cache.js";
 import {
 	BOARD_CUSTOM_TYPE,
 	boardChatState,
@@ -15966,6 +15967,9 @@ export class AgentService {
 		byId: Map<string, DecisionRecord>;
 		byRef: Map<string, DecisionRecord>;
 	} | null = null;
+	/** Architecture #99 (H-INIT-WHO-CACHE): who decided, kept between Initiatives page builds (who-cache.ts);
+	 *  keptRecords tells it about every new read of the records file. */
+	private readonly whoCache = new WhoCache();
 	/** index.ts: the Initiatives page changed (decisions, the reader's state). */
 	onDecisionsChanged: (() => void) | null = null;
 
@@ -16006,13 +16010,19 @@ export class AgentService {
 		byRef: Map<string, DecisionRecord>;
 	} {
 		let key = "none";
+		let ino = -1;
+		let size = 0;
 		try {
 			const st = statSync(this.decisions.file);
-			key = `${st.size}:${st.mtimeMs}`;
+			ino = st.ino;
+			size = st.size;
+			key = `${st.ino}:${st.size}:${st.mtimeMs}`;
 		} catch {
 			/* nothing kept yet */
 		}
 		if (this.decisionRecordsIndex?.key === key) return this.decisionRecordsIndex;
+		// The kept who-decided answers stay right while the file only grows; a replaced or shrunk one drops them.
+		this.whoCache.sawFile(ino, size);
 		const list = this.decisions.list();
 		const byId = new Map(list.map((r) => [r.id, r] as const));
 		const byRef = new Map<string, DecisionRecord>();
@@ -16039,6 +16049,7 @@ export class AgentService {
 		const page = buildDecisionsPage(store, byId, reader, {
 			initiative: sel,
 			limit: Math.max(1, Math.min(limit, 2000)),
+			whoCache: this.whoCache,
 		});
 		// progress-feed (task #85): each initiative's lead (who set it) and feed badges; the selected one's Progress.
 		const inis = new Map(store.initiatives().map((i) => [i.id, i] as const));

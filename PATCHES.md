@@ -7142,3 +7142,69 @@ undo: `docs/role-message-fresh-start.md` (H-LADDER-FRESH-START-1).
   generation as usual; the old record stays in `archive-gen-N/` and is never changed.
 - On an upstream sync this patch only touches `start()`/`stop()` in the guard host: keep the off switch
   ahead of the lock, and the fresh start only on the failed-recover branch.
+
+## initiatives-who-cache
+
+**Status**: `local`
+**Baseline**: v0.96.1 (`mine` at 5502ea8f).
+
+The Initiatives page keeps who decided between builds, so only the first build after a start pays for it.
+
+**Why** (owner 2026-10-18, his freeze work given to Architecture: "do all the work yourself directly";
+Architecture #99, H-INIT-WHO-CACHE in the daily log): #95's profiles found that every Initiatives page
+build works out who decided (decision-who's `whoOf`) for all 3,991 decisions and 6,281 sources, whichever
+initiative is shown: 4.4-5.2 s offline and 7.5-9.5 s live, with the server blocked meanwhile. It runs for
+each watching tab on every page open, reconnect and decision change. A freeze drops the other tabs'
+sockets and each reconnect builds the page again, so the freezes fed each other (11 freezes of 7-10 s in
+under 2 minutes at 22:05 on Oct 18).
+
+### Changes
+
+- `server/who-cache.ts` (new): `WhoCache.get(rec, src, was)` returns `whoOf`'s answer, kept under the
+  record's id, the was record's id and the source's `by`, `part`, `claimsOwner` and `quotes` (one JSON
+  array, so no text can run into the next field; a missing record is `-`).
+  - It hands out copies with their own `flags` and `places` arrays, so no caller can change a kept answer.
+  - `newBuild()` drops the answers neither of the last two builds used.
+  - `sawFile(ino, size)` drops every answer when the records file was replaced (another inode) or shrank;
+    a file that only grew keeps them.
+- `server/decision-view.ts`: `buildDecisionsPage`'s options take an optional `whoCache`, passed through
+  `decisionView` and `changeView` to `sourceView`. Without one everything is worked out as before: the
+  decision reader, the decision_log tool, the feed check and the progress feed don't use one.
+- `server/agent-service.ts`: one `WhoCache` for the Initiatives page. `keptRecords()` keys its index on the
+  file's inode too, and tells the cache about every new read.
+- `tests/unit/who-cache.test.ts` (new); no existing test changed.
+
+Why keeping answers is safe: `whoOf` reads only its arguments. `records.jsonl` only grows through
+`append()`, which refuses a second source and ref; `list()` keeps the first line of each, and a record's
+id is a hash of its source and ref. So a kept id never reads differently while the file only grows.
+decision-recovery rewrites the file through a temp file and a rename (a new inode).
+
+### How it was checked
+
+- `tests/unit/who-cache.test.ts` (8 tests): the cached page equals the uncached one for every selection
+  and limit, cold and warm, with no `whoOf` call while warm; an appended record shows; a replaced, shrunk
+  or deleted file drops every answer; kept answers are copies; unused answers go after two builds; texts
+  holding the key's separators don't share a key.
+- On a copy of the live store (Oct 18 22:47: 3,991 decisions, 6,281 sources, 7,682 records; every id is
+  `recordId(source, ref)`, none shared), the page with the cache deep-equals the page without it for both
+  initiatives, Unfiled and all decisions, at limits 200 and 2000:
+  - cold (a new cache per page) and warm (one cache; no answer worked out again);
+  - on the file cut 5,867 lines shorter (a new file: the cache cleared);
+  - after appending those lines back (the same file: the cache kept; 2,520 answers worked out again, the
+    sources citing them);
+  - after rewording 184 cited messages under the same ids (a new file, not smaller: the cache cleared). A
+    cache not told of it showed 1,048 of 3,991 decisions differently.
+- Bench, the first initiative at limit 200: builds 1-5, each side in its own process, 4 rounds (pinned to
+  cores 5-9,15-19; other gates kept the load average at 8-31, so the times wander). Without the cache
+  every build took 5.6-16.4 s (build 1: median 9.2 s). With it build 1 took 5.8-16.1 s (median 9.6 s) and
+  builds 2-5 took 0.09-0.47 s.
+- Script and output: `~/architecture-dept/work/who-cache/` (`proof.mjs`, numbers only). Then the land
+  gate, and the live check after install (daily log, H-INIT-WHO-CACHE).
+
+### Undo and syncing
+
+- Revert this commit with `wt`, then install with `pi-web-deploy`. Nothing is stored: the cache lives in
+  memory and starts empty at every start.
+- On an upstream sync: the decisions page is this fork's own; keep `whoCache` optional so the other
+  callers work unchanged. If `whoOf` ever reads more than its arguments, or records start changing in
+  place, the key must grow with it or the cache must go.

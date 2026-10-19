@@ -23,6 +23,7 @@ import type {
 	UiOwnerField,
 	UiReaderStatus,
 } from "./protocol.js";
+import type { WhoCache } from "./who-cache.js";
 
 export type {
 	UiDecision,
@@ -50,12 +51,16 @@ function labelOf(rec: DecisionRecord | undefined): string | undefined {
 	return first(rec.text);
 }
 
+/** whoCache (Architecture #99): who decided, kept between page builds; without one it is worked out here. */
 export function sourceView(
 	src: DecisionSourceRef,
 	rec: DecisionRecord | undefined,
 	was?: DecisionRecord,
+	whoCache?: WhoCache,
 ): UiDecisionSource {
-	const who = whoOf(rec, { quotes: src.quotes, claimsOwner: src.claimsOwner, part: src.part, by: src.by, was });
+	const who = whoCache
+		? whoCache.get(rec, src, was)
+		: whoOf(rec, { quotes: src.quotes, claimsOwner: src.claimsOwner, part: src.part, by: src.by, was });
 	return {
 		...(src.record ? { record: src.record } : {}),
 		...(src.ref ? { ref: src.ref } : {}),
@@ -85,9 +90,9 @@ export function sourceView(
 	};
 }
 
-function changeView(c: DecisionChange, recs: Map<string, DecisionRecord>): UiDecisionChange {
+function changeView(c: DecisionChange, recs: Map<string, DecisionRecord>, whoCache?: WhoCache): UiDecisionChange {
 	const sources = c.sources.map((s) =>
-		sourceView(s, s.record ? recs.get(s.record) : undefined, s.was ? recs.get(s.was) : undefined),
+		sourceView(s, s.record ? recs.get(s.record) : undefined, s.was ? recs.get(s.was) : undefined, whoCache),
 	);
 	const ew = entryWho(sources.map((s) => ({ who: { ...s, places: [] }, at: s.at })));
 	return {
@@ -106,12 +111,12 @@ function changeView(c: DecisionChange, recs: Map<string, DecisionRecord>): UiDec
 	};
 }
 
-export function decisionView(d: DecisionEntry, recs: Map<string, DecisionRecord>): UiDecision {
+export function decisionView(d: DecisionEntry, recs: Map<string, DecisionRecord>, whoCache?: WhoCache): UiDecision {
 	const sources = d.sources.map((s) =>
-		sourceView(s, s.record ? recs.get(s.record) : undefined, s.was ? recs.get(s.was) : undefined),
+		sourceView(s, s.record ? recs.get(s.record) : undefined, s.was ? recs.get(s.was) : undefined, whoCache),
 	);
 	const ew = entryWho(sources.map((s) => ({ who: { ...s, places: [] }, at: s.at })));
-	const changes = d.changes.map((c) => changeView(c, recs));
+	const changes = d.changes.map((c) => changeView(c, recs, whoCache));
 	return {
 		id: d.id,
 		initiative: d.initiative,
@@ -160,12 +165,13 @@ export function buildDecisionsPage(
 	store: DecisionStore,
 	recs: Map<string, DecisionRecord>,
 	reader: UiReaderStatus,
-	opts: { initiative?: string; limit?: number } = {},
+	opts: { initiative?: string; limit?: number; whoCache?: WhoCache } = {},
 ): UiDecisionsPage {
 	const initiatives: Initiative[] = store.initiatives();
+	opts.whoCache?.newBuild();
 	const decisions = store
 		.decisions()
-		.map((d) => decisionView(d, recs))
+		.map((d) => decisionView(d, recs, opts.whoCache))
 		// Newest activity first; a tie goes to the newer decision, then by id (the same order every time).
 		.sort((a, b) => b.lastAt - a.lastAt || b.at - a.at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 	const perDay: Record<string, number> = {};
