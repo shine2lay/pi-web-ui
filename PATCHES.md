@@ -7423,6 +7423,46 @@ scan and the result: `docs/prompt-start-race.md`.
   #10739 counts the session busy from the start of a run); the canary test failing after the upgrade is the
   signal. It leans on SDK 1.0.1 internals (`_runAgentPrompt`, `_isAgentRunActive`,
   `_isEmittingAgentSettled`); a test fails loudly if they go.
-- When the guard goes, give `notifyTerminalBashDone` and `notifyTerminalIdle` (`server/agent-service.ts`) a
-  `deliverAs`, or their notices are dropped again while a chat is busy (1.2.0 and 1.3.0 still refuse
-  `sendUserMessage` without one during a run).
+- The terminal notices (`notifyTerminalBashDone`, `notifyTerminalIdle`) no longer go through the prompt
+  path (patch `terminal-notes`), so dropping this guard doesn't drop them.
+
+## terminal-notes
+
+**Status**: `local`
+**Baseline**: v0.96.1 (`mine` at 0179d976).
+
+pi-web-ui's two terminal notices ("the command you ran in the background has finished", "the terminal has
+had no new output") reach a busy chat as context notes that the AI reads at its next step. They never start
+a turn of their own and never land between a tool call and its result.
+
+**Why** (Ops #264, decided by the Ops lead 2026-10-19): since prompt-start-race went live they arrived as
+follow-ups after the run's last reply: 16 notices in 2.2 h started 7 extra turns, 6 of them in task chats
+right after `queue_wait` or `queue_done`, and a follow-up could be about 10 minutes old. Before that, SDK
+1.0.1 dropped them while a chat was busy. Hypothesis H-TERM-NOTE-1, the counts and the result:
+`docs/prompt-start-race.md`, section "Side effect".
+
+### Changes
+
+- `server/agent-service.ts`: `notifyTerminalBashDone` (busy or idle) and `notifyTerminalIdle` (busy only,
+  as before) send `session.sendCustomMessage({customType, content: [{type: "text", text}], display: true},
+  {triggerTurn: false})`, customType `terminal-bash-done` (already used on the idle path) and
+  `terminal-idle-reminder` (new). Texts, the idle watchdog's timing and the best-effort `.catch` unchanged.
+  Under SDK 1.0.1 a no-turn note sent during a run waits in `_pendingCustomMessages` until the turn's tool
+  results are in (flushed at `turn_end`, before settle and in the run's `finally`).
+- Comments in `server/terminals.ts` and `docs/architecture-terminal.md` say the same.
+- Tests: `tests/unit/terminal-notices.test.ts` (new; real SDK session, faux model, the real methods on
+  `Object.create(ClientSession.prototype)`).
+
+### How it was checked
+
+- On the old code the 8 busy cases fail (with the prompt-start guard the notice only reached an extra model
+  call; without it, it was dropped) and the 2 idle cases pass; with the change 10/10, and
+  `tests/unit/prompt-start-race.test.ts` still passes; then the sealed land gate.
+- Live result: `docs/prompt-start-race.md`, section "Side effect".
+
+### Undo and syncing
+
+- Revert this commit with `wt`, then install with `pi-web-deploy`. Nothing stored changes; notes already
+  written stay in their chats as ordinary custom messages.
+- At SDK 1.2.0+ check that `triggerTurn: false` is still honoured during a run (held until the turn's tool
+  results are in, no turn started): `tests/unit/terminal-notices.test.ts` (a) and (b) fail if not.

@@ -3197,16 +3197,25 @@ export class ClientSession {
 			() => this.getLang(),
 		);
 		// 终端活力检测：AI 触碰过的终端静默 ≥ 阈值（PI_WEB_TERMINAL_IDLE_MS，
-		// 默认 15s）且该对话正在运行时，注入一条 steer 消息唤醒 AI 去检查。
+		// 默认 15s）且该对话正在运行时，写入一条提醒 note（terminal-notes, Ops #264）。
 		mgr.onAgentIdle = (terminalId, idleMs, title, lastLines) =>
 			this.notifyTerminalIdle(conversationId, terminalId, idleMs, title, lastLines);
 		return mgr;
 	}
 
-	/** 终端活力提醒：仅在该对话正在流式运行时注入（sendUserMessage 在流式中
-	 *  即 steer 语义——当前回合结算后送达，agent 立即响应）；空闲时不打扰。
-	 *  一次性语义由 TerminalManager 保证（触发后解除武装，agent 再次触碰才
-	 *  重新计时），不会反复刷屏。 */
+	/**
+	 * Terminal idle reminder: written only while the chat is running; an idle chat isn't disturbed.
+	 * The TerminalManager makes it one-shot (disarmed once fired, re-armed when the agent touches the
+	 * terminal again), so it never floods the chat.
+	 *
+	 * terminal-notes (Ops #264, H-TERM-NOTE-1): a context note (customType "terminal-idle-reminder",
+	 * triggerTurn:false), never a turn of its own. While the chat runs, SDK 1.0.1 holds the note in
+	 * _pendingCustomMessages until the current turn's tool results are in (flushed at turn_end, before
+	 * settle and in the run's finally), so it never lands between a tool call and its result; the run's
+	 * next model call reads it, and a run that is ending leaves it in the chat for the next turn.
+	 * (Before: sendUserMessage without deliverAs, dropped under SDK 1.0.1, then a follow-up that started an
+	 * extra turn once prompt-start-race queued it.)
+	 */
 	private notifyTerminalIdle(
 		conversationId: string,
 		terminalId: string,
@@ -3216,24 +3225,34 @@ export class ClientSession {
 	): void {
 		const conv = this.convs.get(conversationId);
 		if (!conv || this.disposed) return;
-		if (!conv.runtime.session.isStreaming) return;
+		const session = conv.runtime.session;
+		if (!session.isStreaming) return;
 		const seconds = Math.max(1, Math.round(idleMs / 1000));
-		void conv.runtime.session
-			.sendUserMessage(
-				`(System auto-reminder: the terminal "${title}" you started (id=${terminalId}) has had no new output for ${seconds} seconds. ` +
-					`The process may be waiting for input, stuck or hung.\nRecent output:\n${lastLines || "(no output)"}\n` +
-					`Use terminal_read(terminalId="${terminalId}") to check or search its current state; ` +
-					`if it is waiting for input, answer with terminal_input / terminal_key; if it is no longer needed, close it with terminal_close.)`,
+		const text =
+			`(System auto-reminder: the terminal "${title}" you started (id=${terminalId}) has had no new output for ${seconds} seconds. ` +
+			`The process may be waiting for input, stuck or hung.\nRecent output:\n${lastLines || "(no output)"}\n` +
+			`Use terminal_read(terminalId="${terminalId}") to check or search its current state; ` +
+			`if it is waiting for input, answer with terminal_input / terminal_key; if it is no longer needed, close it with terminal_close.)`;
+		void session
+			.sendCustomMessage(
+				{ customType: "terminal-idle-reminder", content: [{ type: "text", text }], display: true },
+				{ triggerTurn: false },
 			)
 			.catch(() => {
-				// best effort —— 注入失败不影响终端本身
+				// best effort: a notice that can't be written never affects the terminal itself
 			});
 	}
 
 	/**
-	 * 终端接管的 bash 静默转后台后的完成通知：命令真正结束时主动告诉 AI。
-	 * 流式中 → sendUserMessage（steer，立即唤醒处理）；空闲时 → sendCustomMessage
-	 * nextTurn 排队（不唤醒 agent、不耗 token，下次对话自动带上）。
+	 * A bash command moved to the background (by the terminal bash) has really finished: tell the AI.
+	 *
+	 * terminal-notes (Ops #264, H-TERM-NOTE-1): busy or idle, a context note (customType
+	 * "terminal-bash-done", triggerTurn:false), never a turn of its own and no tokens by itself. Idle:
+	 * written at once, and the next prompt carries it. Busy: SDK 1.0.1 holds it until the current turn's
+	 * tool results are in, so it never lands between a tool call and its result; the run's next model call
+	 * reads it, and a run that is ending leaves it for the next turn. (Before: busy -> sendUserMessage
+	 * without deliverAs, dropped under SDK 1.0.1, then a follow-up that started an extra turn once
+	 * prompt-start-race queued it.)
 	 */
 	private notifyTerminalBashDone(
 		terminals: TerminalManager,
@@ -3255,19 +3274,14 @@ export class ClientSession {
 		const text =
 			`(System: the command you ran in the background in terminal ${info.terminalId} has finished (${exitText}): ${cmdShort}\n` +
 			`Last output:\n${stripAnsi(tail).trim() || "(no output)"})`;
-		const session = conv.runtime.session;
-		if (session.isStreaming) {
-			void session.sendUserMessage(text).catch(() => {});
-		} else {
-			// 空闲时不唤醒 agent——排队为 nextTurn 上下文，下次对话自动可见。
-			void session
-				.sendCustomMessage({
-					customType: "terminal-bash-done",
-					content: [{ type: "text", text }],
-					display: true,
-				})
-				.catch(() => {});
-		}
+		void conv.runtime.session
+			.sendCustomMessage(
+				{ customType: "terminal-bash-done", content: [{ type: "text", text }], display: true },
+				{ triggerTurn: false },
+			)
+			.catch(() => {
+				// best effort: a notice that can't be written never affects the terminal itself
+			});
 	}
 
 	/** 创建子代理 conversation（inMemory runtime + 独立 terminals），listed 入左栏，

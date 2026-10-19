@@ -51,7 +51,7 @@
 
 ## 终端活力检测（liveness watchdog）
 
-`terminals.ts` 的 `noteAgentActivity` / `armIdleWatch` + agent-service 的 `notifyTerminalIdle`：agent 工具路径的 terminal_create/input/key 会启动一个「静默纪元」——该终端连续 `PI_WEB_TERMINAL_IDLE_MS`（默认 15s）无输出且**该对话正在流式运行**时，经 onAgentIdle 回调由宿主 `sendUserMessage` 注入一条 steer 提醒唤醒 AI 去检查（等输入/已挂起）。
+`terminals.ts` 的 `noteAgentActivity` / `armIdleWatch` + agent-service 的 `notifyTerminalIdle`：agent 工具路径的 terminal_create/input/key 会启动一个「静默纪元」——该终端连续 `PI_WEB_TERMINAL_IDLE_MS`（默认 15s）无输出且**该对话正在流式运行**时，经 onAgentIdle 回调由宿主写入一条提醒 note（`sendCustomMessage`，customType `terminal-idle-reminder`，`triggerTurn:false`），AI 在下一步读到后去检查（等输入/已挂起）。note 从不单独开启回合：SDK 把它留到当前回合的工具结果之后才写入，运行继续时下一次模型调用即可读到，运行正要结束时留在对话里随下一回合带上（terminal-notes, Ops #264；之前用 `sendUserMessage` 注入，SDK 1.0.1 下被丢弃，prompt-start-race 之后变成多开一回合的 follow-up，见 `docs/prompt-start-race.md`）。
 
 防骚扰设计：①用户手开的终端永不参与（只有工具包装层调 noteAgentActivity，浏览器路径不调）；②一次性——触发后解除武装，agent 再次触碰才重新计时；③纪元内任何输出/输入都重置倒计时；④退出/关闭即拆钟。系统提示词引导 TERMINAL_TOOLS_GUIDANCE 已告知模型该机制。回归：`tests/terminal-idle-test.mjs`（直接实例化 TerminalManager + 小阈值，零 token 不起 server；win32 未验证）。
 
@@ -91,7 +91,7 @@ Windows 下的伪终端销毁存在两大架构陷阱：
 ### 行为语义（集中在设置开 + `persist=true`）
 
 - ①默认阻塞到命令结束
-- ②连续 `terminalBashIdleMs`（默认 15s，0=一直等）无输出 → **静默解阻**：立即返回「仍在后台运行」+ 已有输出，同时注册 `watchOutput` 完成观察器，命令真正结束后由宿主 `notifyTerminalBashDone` 通知 AI（流式中 sendUserMessage steer / 空闲时 sendCustomMessage nextTurn 排队不唤醒）
+- ②连续 `terminalBashIdleMs`（默认 15s，0=一直等）无输出 → **静默解阻**：立即返回「仍在后台运行」+ 已有输出，同时注册 `watchOutput` 完成观察器，命令真正结束后由宿主 `notifyTerminalBashDone` 通知 AI（无论流式或空闲，都是 `sendCustomMessage` customType `terminal-bash-done` + `triggerTurn:false` 的 note，从不单独开启回合：流式中留到当前回合的工具结果之后写入，空闲时立即写入，下一次模型调用读到；terminal-notes, Ops #264）
 - ③shell 状态跨调用保留（cd/venv/ssh）
 - ④abort_bash 复用同一 kills 集合，abort 时向 PTY 发 Ctrl+C 杀前台进程；一次性终端也随之结束，`ai-bash` 保留
 

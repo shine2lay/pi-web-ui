@@ -136,6 +136,45 @@ Live, look only, 10:44:26 to 12:51 PDT (2 h 07 min), structure only
   3 extra model turns an hour at today's rate. Whether a notice to a task chat that has just called
   `queue_wait` or `queue_done` should start a turn, or wait as a context note, is a separate decision; it is
   left to the Ops lead and not changed here.
-- At the SDK upgrade that drops this guard, these notices go back to being dropped while a chat is busy
-  (1.2.0 and 1.3.0 still refuse `sendUserMessage` without `deliverAs` during a run), unless they pass
-  `deliverAs` by then.
+- At the SDK upgrade that drops this guard, these notices would have gone back to being dropped while a
+  chat is busy (1.2.0 and 1.3.0 still refuse `sendUserMessage` without `deliverAs` during a run). The fix
+  below takes them off the prompt path, so that upgrade no longer touches them.
+
+### Fix: both notices are context notes (terminal-notes, Ops #264)
+
+Decided by the Ops lead (rule 21), 2026-10-19: both notices go to a busy chat as context notes that the AI
+reads at its next step; they never start a turn of their own. Patch `terminal-notes` in PATCHES.md.
+
+**H-TERM-NOTE-1**
+
+- What's wrong: the counts above. 16 notices in 2.2 h started 7 extra turns, 6 of them in task chats right
+  after `queue_wait` or `queue_done` (one ran tools after its `queue_done`); a follow-up can be about 10
+  minutes old when it arrives.
+- The one change: while the chat is busy, `notifyTerminalBashDone` and `notifyTerminalIdle` send
+  `session.sendCustomMessage({customType, content, display: true}, {triggerTurn: false})`, customType
+  `terminal-bash-done` (already used on the idle path) and `terminal-idle-reminder` (new). Texts unchanged.
+- Why it should work: under SDK 1.0.1 that path holds the note in `_pendingCustomMessages` until the current
+  turn's tool results are in (flushed at `turn_end`, before settle and in the run's `finally`). So it never
+  lands between a tool call and its result and starts no turn; if the run goes on, its next model call reads
+  it; if the run is ending, it stays in the chat for the next turn. It doesn't go through the prompt path, so
+  it doesn't lean on the prompt-start guard.
+- Expected, measured from the install (structure only, receipt scripts in `~/.cache/pi/receipts/` counting
+  `custom_message` entries of both types): 0 turns started by a terminal notice; notices still written into
+  busy chats; 0 notes between a tool call and its result; 0 "already processing" lines in the server log.
+- Disproved if, after the install: any turn starts from a terminal notice, or a notice lands between a tool
+  call and its result, or a notice sent to a busy chat never shows up in it.
+- Turned down: `deliverAs: "steer"` (still an extra turn when a notice comes during the run's last reply);
+  keeping follow-ups (late, a turn each); dropping them as under SDK 1.0.1 (silently lost from 10-03 until
+  #261). Idle chats keep today's behaviour: bash-done is written as a note with no turn, and the idle
+  reminder isn't sent.
+
+**Test** (`tests/unit/terminal-notices.test.ts`, sealed; real SDK session, faux model; the real
+`ClientSession` methods on a bare `Object.create(ClientSession.prototype)`). Each notice, with and without
+the prompt-start guard: (a) sent while a tool runs: written after that tool's result, read by the run's next
+model call, no extra model call; (b) sent during the run's last reply: in the chat after the run, no extra
+model call, read by the next prompt. (c) Idle chat: bash-done written at once with no turn; the idle reminder
+sends nothing. On the old code all 8 (a)/(b) cases fail (with the guard the notice reached only an extra
+model call; without it, it was dropped) and both (c) cases pass.
+
+**Result**: pending the live look (from the install, at least 2 h and at least 5 notices to busy chats, 6 h
+at most).

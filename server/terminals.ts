@@ -214,7 +214,7 @@ const MAX_ID = 80;
 
 /**
  * 终端活力检测阈值：agent 触碰过的终端连续静默这么久且该对话正在运行时，
- * 通过 onAgentIdle 回调通知宿主（宿主注入一条 steer 消息唤醒 AI 去检查）。
+ * 通过 onAgentIdle 回调通知宿主（宿主写入一条提醒 note，AI 下一步读到后去检查；从不单独开启回合）。
  * PI_WEB_TERMINAL_IDLE_MS 覆盖；0 = 关闭检测。每次调用时读取（测试可注入）。
  */
 export function terminalIdleNotifyMs(): number {
@@ -1925,7 +1925,7 @@ export function cleanBashOutput(raw: string, echoAnchor = "[pi-exit:%s]"): strin
  * - 默认阻塞：等到命令结束才返回完整输出（ANSI 已清理）+ 真实退出码；
  * - 静默解阻：连续 idleMs 毫秒无新输出且未结束 → 立即返回「仍在运行」+ 已有
  *   输出，命令留在终端里继续跑，并注册完成观察器——结束后由宿主
- *   notifyBackgroundDone 主动通知 AI（流式中 steer / 空闲时 nextTurn）；
+ *   notifyBackgroundDone 主动通知 AI（一条 note，从不单独开启回合：流式中留到当前回合的工具结果之后，空闲时立即写入）；
  * - shell 状态跨调用保留（cd / venv activate / ssh 会话）——这是原生一次性的
  *   bash 工具做不到的。
  *
