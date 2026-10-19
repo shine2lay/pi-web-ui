@@ -67,4 +67,40 @@ Files: `~/.cache/pi/receipts/251/` (`time-runs.sh`, and `before-N`, `after-N`, `
 
 ## Result
 
-Pending: the land gate of this change, then the next land gates.
+**H-GATE-LIGHT-TESTS-1: HIT** (recorded 2026-10-18, 23:40 PDT, after this change's land gate and the next one). Every bar held and no disproof happened.
+
+- Alone (above): each new initiatives case took 44-94 ms (median), and the largest single run was 135 ms. The bar was under 300 ms, and over 600 ms would have disproved it. client-id got 18x faster; the bar was at least 3x.
+- Its own land gate, wt land request 73-a16e41 (23:26-23:30 PDT, `scripts/check.sh --fast`): passed, 443 files, 6,320 tests passed and 6 skipped, with no timeout. Unit tests took 179 s, prettier 121 s beside them, typecheck 16 s (so `use-chat.ts` still gives `getClientId` to its other three importers). The 5-minute load average was 12.2 at 23:32, about the 9-12 of #244's 67-534917, where the old case timed out at 5214 ms. It landed as 32aa358 on mine.
+- The next land gate, #248's request 74-202fbb (23:31-23:35 PDT): passed, 443 files, 6,336 tests passed and 6 skipped, with no timeout. Unit tests took 198 s, prettier 107 s, typecheck 17 s. The 5-minute load average was 14.2 at 23:35.
+- In both gates, none of these cases took over 1.5 s (the slowest took 1038 ms), and none of these tests timed out.
+
+These cases' own times in the land gates' logs, in ms. Vitest's default reporter lists a test's own time only when it is over 300 ms (its default slow-test threshold), so "not listed" means under 300 ms.
+
+| Case | 73-a16e41 (this change) | 74-202fbb (#248, the next land) |
+| --- | --- | --- |
+| initiatives: loading | not listed | not listed |
+| initiatives: failed before any page was read | 364 | not listed |
+| initiatives: failed after a page with questions | 495 | 412 |
+| initiatives: failed after a page with no questions | 800 | 332 |
+| initiatives: loaded, but too big to read whole | 399 | 374 |
+| initiatives: loaded, but with a change it couldn't read | 506 | 433 |
+| initiatives: loaded whole and live, with no questions | 343 | 372 |
+| initiatives: loaded whole and live, with no tasks | 1038 | 561 |
+| initiatives-page-tasks, the whole file (17 tests) | 8565 | 6581 |
+| client-id, the whole file (4 tests) | 46 | 36 |
+| guard-core crash-boundary test | 2159 | 1089 |
+| roles-exact "omits the helper row…" (recorded only) | 1992 | 1502 |
+| plugin-telegram fuzz case (outside this change) | 1797 | 1925 |
+
+What it shows:
+
+- The 8 initiatives cases add up to about 4 s (73-a16e41) and about 3 s (74-202fbb) in a gate: the same work as the old single case, which took 2.6-3.6 s when it passed and timed out at 5.2 s. Now each piece has its own 5 s, and the slowest took 1038 ms.
+- Under gate load one mount took up to 1.0 s (mostly 0.3-0.6 s), 4-16x its median alone. That is more than the 2-4x n205 saw for the guard-core store transitions, so in-gate times are the ones to watch, not the alone times.
+- client-id is no longer heavy at all: 46 and 36 ms for its four cases in the two gates, where its first case used to take 0.3-4.4 s.
+- The guard-core crash-boundary test took 2159 and 1089 ms, within the 1.1-2.3 s it has taken in gates since #243. It stays without an explicit timeout.
+
+Next:
+
+- Watch later land gates for these cases over 1.5 s or any 5 s timeout of them; either one reopens this.
+- plugin-telegram's fuzz case timed out a second time during this task (5866 ms, #244's 71-a85055 at 23:19). By n205's rule that calls for its own faster-landing task, which is left to the Ops lead, outside this change.
+- Not changed here, and it has never timed out: `tests/unit/initiatives-page-model.test.ts` "never says nothing is waiting, loading, failing, stale or not read whole" mounts the view 5 times in one case (4 states in a loop, then one more). It took 1.2-3.1 s in today's land gates (1751 and 1675 ms in these two). It is the same pattern, so it is the next one to split if it comes near 5 s.
