@@ -577,6 +577,10 @@ export class RoleMessageGuardHost {
 			await this.lease.run(async () => {
 				this.cleanGenerations(gen);
 				let dir = join(this.o.dir, `gen-${gen}`);
+				// Ops #253 (Architecture A1): a first start names its generation before it makes it. A crash before the store
+				// is ready then leaves current.json naming gen-<gen>, made or not, which the next start opens as usual; never
+				// a gen folder without current.json, which N3 turns off.
+				if (!this.hasGeneration()) this.writeCurrent(gen);
 				mkdirSync(dir, { recursive: true });
 				let store = this.newStore(dir);
 				if (!existsSync(join(dir, "journal.json"))) {
@@ -768,8 +772,7 @@ export class RoleMessageGuardHost {
 			if (code === "ENOENT") why = "is missing";
 			else if (code) why = `can't be read (${code})`;
 		}
-		const names = readdirSync(this.o.dir);
-		if (!names.some((n) => /^(archive-)?gen-\d+$/.test(n))) return gen ?? 1;
+		if (!this.hasGeneration()) return gen ?? 1;
 		if (gen === null) return why;
 		let there = false;
 		try {
@@ -778,6 +781,10 @@ export class RoleMessageGuardHost {
 			there = false;
 		}
 		return there ? gen : `points at gen-${gen}, which doesn't exist`;
+	}
+	/** A gen-N or archive-gen-N folder exists: no longer a first start. */
+	private hasGeneration(): boolean {
+		return readdirSync(this.o.dir).some((n) => /^(archive-)?gen-\d+$/.test(n));
 	}
 	private writeCurrent(gen: number): void {
 		writeDurable(join(this.o.dir, "current.json"), `${JSON.stringify({ gen })}\n`);

@@ -27,6 +27,7 @@ import {
 	GUARD_FRESH_START_FILE,
 	RoleMessageGuardHost,
 } from "../../server/role-message-guard-host.js";
+import { GuardFileStore } from "../../server/role-message-guard-store.js";
 import {
 	A,
 	clock,
@@ -455,6 +456,30 @@ describe("current.json not understood: off, and nothing cleaned (Ops #248, Secur
 		const before = snapshot(true);
 		await expect(rotate(w.host, true)).rejects.toThrow("rotation: current.json is not understood");
 		expect(snapshot(true)).toEqual(before); // the live gen-2 is still there
+	});
+});
+
+describe("a first start that stops before it ends (Ops #253, Architecture A1)", () => {
+	it("the next start begins generation 1 as usual", async () => {
+		const w = await world(); // the native record and the chats; its own guard folder isn't used here
+		const first = join(data, "guard-first"); // a folder no server has started in
+		// The first start stops after gen-1 is made, before its store is ready (as a crash there would).
+		const init = vi
+			.spyOn(GuardFileStore.prototype, "initialize")
+			.mockRejectedValueOnce(new Error("stopped while gen-1 was made"));
+		try {
+			const stopped = await startHost(w, first);
+			expect(stopped.host.state).toEqual({ status: "degraded", reason: "stopped while gen-1 was made" });
+		} finally {
+			init.mockRestore();
+		}
+		expect(existsSync(join(first, "gen-1"))).toBe(true);
+		const { host, logs } = await startHost(w, first);
+		expect(host.state).toEqual({ status: "ready", reason: "" });
+		expect(logs).toContain("approval ladder: new guard store (generation 1)");
+		expect(logs).toContain("approval ladder: on (hops 1-6 free; 7-11 COO grant; 12+ owner grant)");
+		expect(readFileSync(join(first, "current.json"), "utf8")).toBe('{"gen":1}\n');
+		expect(readdirSync(first).filter((n) => n.includes("gen-"))).toEqual(["gen-1"]);
 	});
 });
 
