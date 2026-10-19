@@ -134,8 +134,8 @@ Live, look only, 10:44:26 to 12:51 PDT (2 h 07 min), structure only
   together with a role message in a main chat.
 - Not a breakage, and within the change (a start that finds a run going follows that run), but new: about
   3 extra model turns an hour at today's rate. Whether a notice to a task chat that has just called
-  `queue_wait` or `queue_done` should start a turn, or wait as a context note, is a separate decision; it is
-  left to the Ops lead and not changed here.
+  `queue_wait` or `queue_done` should start a turn, or wait as a context note, is a separate decision; the
+  Ops lead made it under Fix below (Ops #264).
 - At the SDK upgrade that drops this guard, these notices would have gone back to being dropped while a
   chat is busy (1.2.0 and 1.3.0 still refuse `sendUserMessage` without `deliverAs` during a run). The fix
   below takes them off the prompt path, so that upgrade no longer touches them.
@@ -176,5 +176,27 @@ model call, read by the next prompt. (c) Idle chat: bash-done written at once wi
 sends nothing. On the old code all 8 (a)/(b) cases fail (with the guard the notice reached only an extra
 model call; without it, it was dropped) and both (c) cases pass.
 
-**Result**: pending the live look (from the install, at least 2 h and at least 5 notices to busy chats, 6 h
-at most).
+**Result: H-TERM-NOTE-1: HIT.** On the old code the 8 (a)/(b) cases fail; with the change 10 of 10 pass and
+`tests/unit/prompt-start-race.test.ts` still passes. The sealed land gate passed (land request 85-3cbc20,
+commit 2b45b284). Installed 2026-10-19 13:43:34 PDT with `pi-web-deploy --landed 85-3cbc20`;
+`pi-web-deploy result 2b45b284` is 0 (server, page, reply, big chat and log checks passed). At 14:48 another
+task installed 30d8a2f3, which contains 2b45b284; the window runs across that restart. None of the disproof
+conditions happened.
+
+Live, look only, 13:43:34 to 15:45 PDT (2 h 02 min), structure only
+(`~/.cache/pi/receipts/terminal-notes/live-check.py <install>`; it reads entry types, times, customTypes,
+tool-call ids and the bash tool's structured details; the notices' fixed openings are matched, never
+printed):
+
+- 51 terminal notes written, all into busy chats, in 13 chats: 38 bash-done, 13 idle reminders. Each was
+  written right after a tool result of the run that was going. 50 were followed by that run's next reply
+  (the model call that read it); the 51st was written 1 min before the count, with its run's next reply
+  still under way.
+- 0 turns started by a terminal note (before: 16 notices in 2.2 h started 7 extra turns).
+- 0 notes of any type between a tool call and its later result, and 0 beside a tool call still running.
+- 0 user messages that open like a notice (the old follow-up path); 39 in the 2.9 h before the install.
+- 40 commands moved to the background since the install: 38 have their bash-done note in the same chat;
+  the other 2 started under 2 minutes before the count and were still running.
+- Server log: 0 lines "already processing" (1,936 lines since the install).
+- No notice came during a run's last reply in this window (all 51 came while a tool ran), so that path is
+  proven by test (b) only.

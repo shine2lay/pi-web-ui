@@ -7471,7 +7471,10 @@ right after `queue_wait` or `queue_done`, and a follow-up could be about 10 minu
 - On the old code the 8 busy cases fail (with the prompt-start guard the notice only reached an extra model
   call; without it, it was dropped) and the 2 idle cases pass; with the change 10/10, and
   `tests/unit/prompt-start-race.test.ts` still passes; then the sealed land gate.
-- Live result: `docs/prompt-start-race.md`, section "Side effect".
+- Live, 2 h 02 min from the install (2026-10-19 13:43 PDT), structure only: HIT. 51 notes written into
+  busy chats (38 bash-done, 13 idle reminders), 0 turns started by a note, 0 notes between a tool call and
+  its result, 0 "already processing" log lines; details in `docs/prompt-start-race.md`, section "Side
+  effect".
 
 ### Undo and syncing
 
