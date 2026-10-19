@@ -127,6 +127,28 @@ function snapshot(withLock = false): Record<string, string> {
 	walk(guard(), "");
 	return out;
 }
+/** A record whose journal holds a prepared send: the server stopped between a send's prepare and its commit, as a
+ *  crash would (the store's failure hook, reached the way role-message-guard-lease.test.ts does). Files aged 3 h. */
+async function preparedSend(): Promise<{ w: World; operationId: string }> {
+	const w = await world();
+	expect(await send(w, "alpha", A, "beta", {}, "")).toMatchObject({ ok: true });
+	const options = Reflect.get(Reflect.get(w.host, "store") as object, "options") as {
+		boundary: ((at: string) => void) | null;
+	};
+	options.boundary = (at) => {
+		if (at === "commit:write") throw new Error("stopped between the prepare and the commit");
+	};
+	await send(w, "alpha", A, "gamma", {}, "");
+	w.host.stop();
+	w.rm.stop();
+	const j = JSON.parse(readFileSync(gen1("journal.json"), "utf8")) as {
+		stage: string;
+		identity: { operationId: string };
+	};
+	expect(j.stage).toBe("prepared");
+	ageGen1(3 * HOUR);
+	return { w, operationId: j.identity.operationId };
+}
 /** rotate() is private; reached the way role-message-guard-lease.test.ts does. */
 const rotate = (h: RoleMessageGuardHost, force: boolean) =>
 	(h as unknown as { rotate(force: boolean): Promise<void> }).rotate(force);
@@ -429,6 +451,38 @@ describe("current.json not understood: off, and nothing cleaned (Ops #248, Secur
 	});
 });
 
+describe("a journal holding a prepared send, or one that can't be parsed, is never started over (Ops #248, S1)", () => {
+	it("a prepared send: refused, off with the reason, every guard file as it was", async () => {
+		const { w, operationId } = await preparedSend();
+		writeRequest();
+		const before = snapshot();
+		const { host, logs } = await startHost(w);
+		expect(host.state).toEqual({
+			status: "degraded",
+			reason: "recover: prepared reservation held; no speculative commit/refund/retry",
+		});
+		expect(freshLines(logs)).toEqual([
+			`approval ladder: fresh start refused (the journal holds a prepared send (operation ${operationId}))`,
+		]);
+		expect(snapshot()).toEqual(before); // the prepared journal, accepted.json and the request, byte for byte
+	});
+
+	it("a journal that can't be parsed: refused, off with the reason, every guard file as it was", async () => {
+		const w = await diverged();
+		writeFileSync(gen1("journal.json"), '{"format":"role-message-guard-journal/v1","stage":');
+		ageGen1(3 * HOUR);
+		writeRequest();
+		const before = snapshot();
+		const { host, logs } = await startHost(w);
+		expect(host.state.status).toBe("degraded");
+		expect(host.state.reason).toMatch(/^recover: /);
+		expect(freshLines(logs)).toEqual([
+			expect.stringMatching(/^approval ladder: fresh start refused \(the journal can't be parsed \(.+\)\)$/),
+		]);
+		expect(snapshot()).toEqual(before);
+	});
+});
+
 describe("the script stays in the test's folder (Ops #248, Security N2)", () => {
 	it("without --data-dir it reads PI_WEB_DATA_DIR, the test's own folder", async () => {
 		expect(data.startsWith(join(tmpdir(), "rmguard-host-"))).toBe(true); // the temp folder, never ~/.pi-web-ui
@@ -468,6 +522,27 @@ describe("the script refuses when the next start would", () => {
 		const r = script("--reason", "x".repeat(5000));
 		expect(r.code, r.out).toBe(1);
 		expect(r.out).toContain("over the 4 KiB the server reads");
+		expect(existsSync(requestPath())).toBe(false);
+	});
+
+	it("a journal holding a prepared send, or one that can't be parsed: nothing written (S1)", async () => {
+		setNow(Date.now());
+		const { operationId } = await preparedSend();
+		const prepared = script();
+		expect(prepared.code, prepared.out).toBe(1);
+		expect(prepared.out).toContain(
+			`the journal holds a prepared send (operation ${operationId}), so the next start would refuse a fresh start`,
+		);
+		const bundle = JSON.parse(readFileSync(gen1("journal.json"), "utf8")) as { stage: string };
+		bundle.stage = "committed"; // its checksum no longer matches
+		writeFileSync(gen1("journal.json"), JSON.stringify(bundle));
+		const corrupt = script();
+		expect(corrupt.code, corrupt.out).toBe(1);
+		expect(corrupt.out).toContain("the journal can't be parsed (corrupt guard journal or unsupported schema), so");
+		writeFileSync(gen1("journal.json"), "{not json");
+		const garbled = script();
+		expect(garbled.code, garbled.out).toBe(1);
+		expect(garbled.out).toContain("the journal can't be parsed, so the next start would refuse a fresh start");
 		expect(existsSync(requestPath())).toBe(false);
 	});
 

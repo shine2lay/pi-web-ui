@@ -198,13 +198,34 @@ try {
 		);
 	}
 
+	// Ops #248 (Architecture S1): the next start never starts over from a journal holding a prepared send or one that
+	// can't be parsed (guardJournalRefusal in role-message-guard-store.ts; this checks its format, checksum and stage).
+	let refusal = "";
+	if (!bundle || typeof bundle !== "object" || Array.isArray(bundle)) refusal = "the journal can't be parsed";
+	else {
+		const { checksum, ...body } = bundle;
+		if (
+			body.format !== "role-message-guard-journal/v1" ||
+			!["prepared", "committed"].includes(body.stage) ||
+			!s ||
+			typeof s !== "object" ||
+			checksum !== digest(body)
+		)
+			refusal = "the journal can't be parsed (corrupt guard journal or unsupported schema)";
+		else if (body.stage === "prepared")
+			refusal = `the journal holds a prepared send (operation ${body.identity?.operationId ?? "unknown"})`;
+	}
+	if (refusal)
+		stop(
+			1,
+			`${refusal}, so the next start would refuse a fresh start and leave the journal as it is. Nothing written.`,
+		);
+
 	// What the next start does with it (recover() in role-message-guard-store.ts): it opens the record as usual when
 	// accepted.json matches the journal's copy, or the copy before its last transaction. Only an unreadable record is
 	// started over, and only with a request.
 	let why = "";
-	if (!bundle || !s) why = "the journal can't be read";
-	else if (!accepted) why = "accepted.json can't be read";
-	else if (bundle.stage !== "committed") why = `the journal holds a ${bundle.stage} transaction`;
+	if (!accepted) why = "accepted.json can't be read";
 	else {
 		const canonical = digest(accepted);
 		if (canonical !== digest(bundle.legacy) && canonical !== bundle.beforeLegacyDigest)

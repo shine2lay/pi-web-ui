@@ -73,7 +73,7 @@ import type {
 	GuardVerifiedSnapshot,
 } from "./role-message-guard-contract.js";
 import { guardCommandFingerprint, RoleMessageGuardCore, type GuardMessageIntent } from "./role-message-guard-core.js";
-import { guardDigest, GuardFileStore } from "./role-message-guard-store.js";
+import { guardDigest, GuardFileStore, guardJournalRefusal } from "./role-message-guard-store.js";
 import {
 	ROLE_MESSAGES_PER_HOUR,
 	type RoleMessageDraft,
@@ -674,7 +674,7 @@ export class RoleMessageGuardHost {
 	}
 
 	/** The request for generation `gen`: null when there is none, why it can't be acted on, or the request when it is
-	 *  bound to exactly these files, both untouched for 2 h, and still good. */
+	 *  bound to exactly these files, both untouched for 2 h, still good, and the journal committed and readable. */
 	private freshStartRequest(gen: number): GuardFreshStartRequest | string | null {
 		const read = readFreshStartFile(join(this.o.dir, GUARD_FRESH_START_FILE));
 		if (read === null || typeof read === "string") return read;
@@ -685,6 +685,7 @@ export class RoleMessageGuardHost {
 		if (request.at > now) return "the request is dated in the future";
 		if (request.expiresAt - request.at > GUARD_FRESH_START_LIFETIME_MS) return "the request is good for over 24 h";
 		if (now >= request.expiresAt) return `the request expired at ${new Date(request.expiresAt).toISOString()}`;
+		let journalText = "";
 		for (const [name, digest] of [
 			["journal.json", request.journalSha256],
 			["accepted.json", request.acceptedSha256],
@@ -692,13 +693,16 @@ export class RoleMessageGuardHost {
 			const file = join(this.o.dir, `gen-${gen}`, name);
 			try {
 				if (now - statSync(file).mtimeMs < GUARD_FRESH_START_QUIET_MS) return `${name} changed less than 2 h ago`;
-				if (sha256Of(readFileSync(file)) !== digest)
-					return `${name} is not the file the request was made for (sha256 differs)`;
+				const bytes = readFileSync(file);
+				if (sha256Of(bytes) !== digest) return `${name} is not the file the request was made for (sha256 differs)`;
+				if (name === "journal.json") journalText = bytes.toString("utf8");
 			} catch {
 				return `${name} can't be read`;
 			}
 		}
-		return request;
+		// Ops #248 (Architecture S1): only a committed journal that decodes is started over. One holding a prepared send,
+		// or one that can't be parsed, stays as it is (never cleaned or overwritten) and the ladder stays off with why.
+		return guardJournalRefusal(journalText) ?? request;
 	}
 
 	/** The record opened as usual, so a request is never acted on. One for an older generation is a fresh start that

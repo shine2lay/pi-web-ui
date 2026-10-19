@@ -365,6 +365,20 @@ function verify(value: unknown, knownBodyDigest?: string): Bundle {
 	}
 	return bundle;
 }
+/** Ops #248 (Architecture S1): why the operator's fresh start (docs/role-message-fresh-start.md) must not start over
+ * from this journal text, or null for a committed journal that decodes. One holding a prepared send names its
+ * operation; text that doesn't decode gives decode's reason. Reads and writes nothing. */
+export function guardJournalRefusal(raw: string): string | null {
+	let bundle: Bundle;
+	try {
+		bundle = decode(raw);
+	} catch (e) {
+		return `the journal can't be parsed (${errorText(e)})`;
+	}
+	return bundle.stage === "prepared"
+		? `the journal holds a prepared send (operation ${bundle.identity?.operationId ?? "unknown"})`
+		: null;
+}
 /** Read-only views: the store hands a decoded bundle out again only while its file text is unchanged. */
 function deepFreeze<T>(value: T): T {
 	if (value && typeof value === "object" && !Object.isFrozen(value)) {
