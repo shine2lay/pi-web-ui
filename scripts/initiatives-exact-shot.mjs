@@ -7,8 +7,10 @@
 // logs the same, once per its own 29). The look checks that exact count; any other console error fails it.
 // --page (initiatives-page-exact, docs/initiatives-page-exact.md): the live page's core model on its fixed registry
 // fixture instead, with the callbacks the Initiatives tab gives.
-// Both looks fail when the page scrolls sideways.
-// Run: scripts/sealed.sh node --import tsx scripts/initiatives-exact-shot.mjs [--page] [output-directory]
+// --gaps (initiatives-page-gaps, docs/initiatives-page-gaps.md): the same, on step 4's fixture (gaps, all activity
+// and hand-offs: tests/unit/initiatives-page-gaps-fixture.ts).
+// All looks fail when the page scrolls sideways.
+// Run: scripts/sealed.sh node --import tsx scripts/initiatives-exact-shot.mjs [--page|--gaps] [output-directory]
 import { createServer } from "node:http";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -19,10 +21,17 @@ import { CHROME_PATH } from "../tests/lib/chrome.mjs";
 import { readInitiativeFonts } from "../web/initiatives-design-assets.ts";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const pageLook = process.argv.includes("--page");
+const gapsLook = process.argv.includes("--gaps");
+const pageLook = gapsLook || process.argv.includes("--page");
+const pageFixture = gapsLook ? "initiatives-page-gaps-fixture" : "initiatives-page-fixture";
 const output = resolve(
 	process.argv.slice(2).find((a) => !a.startsWith("--")) ??
-		join(root, pageLook ? ".test-results/initiatives-page" : ".test-results/initiatives-exact"),
+		join(
+			root,
+			pageLook
+				? `.test-results/${gapsLook ? "initiatives-page-gaps" : "initiatives-page"}`
+				: ".test-results/initiatives-exact",
+		),
 );
 if (!process.env.PI_SEALED || !CHROME_PATH) throw new Error("Run sealed (scripts/sealed.sh) with the installed Chrome");
 mkdirSync(output, { recursive: true });
@@ -44,7 +53,7 @@ const plugin = {
 const view = pageLook
 	? `
 import { buildInitiativesPage } from "./web/src/initiatives-page/model";
-import { pageArgs } from "./tests/unit/initiatives-page-fixture";
+import { pageArgs } from "./tests/unit/${pageFixture}";
 const model = buildInitiativesPage(pageArgs());
 const element = (
 	<InitiativesExactView input={model.input} onOpen={noop} onRetry={noop} onSelect={noop} onMessageLead={noop}

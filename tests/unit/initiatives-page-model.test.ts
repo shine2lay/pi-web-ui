@@ -114,9 +114,6 @@ describe("the Initiatives page's core model, on a fixed registry page", () => {
 			expect(i.goal).toBe("Not connected yet");
 			expect(i.started).toBe("Not connected yet");
 			expect(i.outcomesNote).toMatch(/^Not connected yet/);
-			expect(i.gapsNote).toMatch(/^Not connected yet/);
-			expect(i.activityNote).toMatch(/^Not connected yet/);
-			expect(i.handoffsNote).toMatch(/^Not connected yet/);
 			expect(i.status).toBeUndefined();
 			for (const r of i.roles ?? []) expect(r.note).toBe("Tasks: not connected yet");
 		}
@@ -181,7 +178,6 @@ describe("the core model through the supplied design", () => {
 		expect(text).toContain("1 of 3 outcomes done");
 		expect(text).toContain("Projects in no initiative · 2");
 		expect(text).toContain("Goal · Not connected yet");
-		expect(text).toContain("Not connected yet: gaps will show here.");
 		expect(text).not.toMatch(/Nothing is waiting on you/);
 		const v = page.values();
 		expect(v.summary).toBe("Not connected yet: what's waiting on you will show here.");

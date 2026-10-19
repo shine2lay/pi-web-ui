@@ -47,7 +47,13 @@ import { dirname } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { checkInitiative } from "./decision-records.js";
 import { samePath, type IdentityDef } from "./identities.js";
-import type { UiRoleMessage, UiRoleMessageKind, UiRoleMessageRow, UiRoleMessageState } from "./protocol.js";
+import type {
+	UiRoleMessage,
+	UiRoleMessageKind,
+	UiRoleMessageRow,
+	UiRoleMessageState,
+	UiWorkHandoff,
+} from "./protocol.js";
 import { ownerChannelOf, type OwnerChannel, type RoleOwnerAnswer, OWNER_IDS_MAX } from "./role-replies.js";
 import { CARRY_ON_PREFIX } from "./running-chats.js";
 import { TASK_QUEUE_ENTRY_TYPE, taskQueueFromEntries, taskQueueHeld, type TaskQueueEntryLike } from "./task-queue.js";
@@ -1266,6 +1272,32 @@ export class RoleMessages {
 			} else pairs.set(key, { from: m.from.role, to: m.to.role, count: 1, at: m.at });
 		}
 		return [...pairs.values()].sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
+	}
+
+	/**
+	 * initiatives-page-gaps (Ops #228): the open questions and requests between two roles that carry an
+	 * initiative's id (openRequest's rules), oldest first, for the Initiatives page's hand-offs. First lines
+	 * only, never the whole text.
+	 */
+	openHandoffs(): UiWorkHandoff[] {
+		const out: UiWorkHandoff[] = [];
+		for (const m of this.data.messages) {
+			if (!m.initiative || m.from.role === m.to.role || !openRequest(m)) continue;
+			out.push({
+				id: m.id,
+				initiative: m.initiative,
+				at: m.at,
+				from: m.from.role,
+				fromChat: m.from.chat,
+				to: m.to.role,
+				...(m.targetChat ? { toChat: m.targetChat } : {}),
+				kind: m.kind as "question" | "request",
+				firstLine: firstLine(m.text),
+				state: m.state === "delivered" ? "delivered" : this.data.paused ? "held" : "waiting",
+				...(m.deliveredAt ? { deliveredAt: m.deliveredAt } : {}),
+			});
+		}
+		return out;
 	}
 
 	/** roles-overview: a role's newest 6 am report request (by its day), where to find the answer; no text. */

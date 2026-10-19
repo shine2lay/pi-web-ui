@@ -2283,6 +2283,29 @@ export interface UiWorkActivity {
 }
 
 /**
+ * initiatives-page-gaps (Ops #228): an open question or request from one role to another that carries an
+ * initiative's id (message_role's `initiative`), as the role-message store keeps it: open by the Roles page's
+ * rule (no reply, not failed). Its first line only, never the whole text.
+ */
+export interface UiWorkHandoff {
+	id: string;
+	initiative: string;
+	/** When it was sent (ms). */
+	at: number;
+	/** The sending role's id and its chat, in words ("home chat", "Queue #N", chat "<title>"). */
+	from: string;
+	fromChat: string;
+	/** The receiving role's id and, once routed, its chat in words. */
+	to: string;
+	toChat?: string;
+	kind: "question" | "request";
+	firstLine: string;
+	/** waiting: not delivered yet; held: waiting while the owner paused role messages; delivered: no reply yet. */
+	state: "waiting" | "held" | "delivered";
+	deliveredAt?: number;
+}
+
+/**
  * initiatives-plan-data (Ops #223): the whole work registry for the Initiatives page, read only. Initiatives
  * and projects in the order they were made (at most 500 together, initiatives first), their tasks (at most
  * 2000) and the newest registry changes (at most 1000, newest first).
@@ -2297,6 +2320,9 @@ export interface UiWorkPage {
 	/** The log couldn't be read (unreadable), is or holds more than is sent (too-big), or a change this app
 	 *  doesn't know, or one the registry could never have written, was skipped (unknown-change). */
 	problem?: "unreadable" | "too-big" | "unknown-change";
+	/** initiatives-page-gaps (Ops #228): the open hand-offs between roles that carry an initiative's id, oldest
+	 *  first. Additive: absent from an older server (the page says "Not recorded"). */
+	handoffs?: UiWorkHandoff[];
 }
 
 /** roles-overview: a role's home queue in short. */

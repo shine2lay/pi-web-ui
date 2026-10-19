@@ -36,6 +36,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: `scripts/check.sh --notes` passed, and failed on a duplicated PATCHES.md heading; the guard failed with `patches-union.test.ts` left off the list; then the landing gate.
 - Undo: revert this commit, and take `notes_paths` and `notes_check` out of pi-web-ui's entry in agent-tools' wt.yaml. Reverting only this commit is safe: check.sh then ignores `--notes` and runs its full check.
 
+## initiatives-page-gaps: gaps, activity and hand-offs on the Initiatives page
+
+- `local` (owner 2026-10-18, Ops home chat: design first, then features; "Side by side" for steps 2-4; Ops #228, project initiatives-page). Hypothesis H-INITIATIVES-PAGE-4 and result: `docs/initiatives-page-gaps.md`.
+- `web/src/initiatives-page/gaps.ts` fills Gaps, Hand-offs and All activity for every initiative and the projects-in-no-initiative box, by script from what's recorded, no model. Gaps, a fixed list with its count in the header: blocked or stuck tasks of the initiative or its projects, with what they wait on as their queue recorded it; active projects with unmet done-when items and no open task; an active initiative's unmet done-when items while none of its projects is active. All activity: the registry's changes to the initiative, its projects and their tasks, plus the lead's progress updates, newest first, counted in the tab; items and proof as recorded. Hand-offs: the open questions and requests between two roles that carry the initiative's id (message_role's `initiative`, kept on role-message records since decision-records), from → to, first line and where each stands. What nobody records says "Not recorded".
+- Hook: `work_page`'s page carries an optional `handoffs` list (`UiWorkHandoff`), made by `RoleMessages.openHandoffs()` (the Roles page's open rule, first lines only) and attached in `readWorkPage()`. Additive, so no protocol bump: an old page ignores it, and the page says "Not recorded" without it. `model.ts` passes the progress feed and the clock to `gapsPart`; nothing else in the core changes.
+- Checks: `tests/unit/initiatives-page-gaps.test.ts` (fixture `tests/unit/initiatives-page-gaps-fixture.ts`) with the core model tests, one sealed look at 1440 px, then the landing gate and a look-only live check against the live registry, queues and role-message store.
+- Undo: revert this commit (the three sections say "Not connected yet" again).
+
 ## initiatives-page-exact: the Initiatives tab shows the supplied design
 
 - `local` (owner 2026-10-18, Ops home chat: "try to start with building out UI 1:1 then add in different features so i can see the progress iwth my own eyes"; Ops #225, project initiatives-page). Hypothesis H-INITIATIVES-PAGE-1 and result: `docs/initiatives-page-exact.md`.

@@ -136,7 +136,7 @@ export function buildInitiativesPage(args: InitiativesPageArgs): InitiativesPage
 	const parts: InitiativesPagePart[] = [
 		planPart(page, selected, args.open),
 		tasksPart(page, selected, args.open),
-		gapsPart(page, selected, args.open),
+		gapsPart(page, selected, args.open, { progress: dec?.progress, now }),
 	];
 	const leadChats: Record<string, string> = {};
 	const changeLead: string[] = [];
