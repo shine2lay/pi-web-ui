@@ -19,7 +19,7 @@
 import { existsSync } from "node:fs";
 import { homeChatOf, type IdentityDef } from "./identities.js";
 import { stripMarkers } from "./markers/marker.js";
-import { collectRequesterInput, type RequesterTurn } from "./queue-requester.js";
+import { collectRequesterInput, mergeRequesterTurn, type RequesterTurn } from "./queue-requester.js";
 import type { UiTaskRequesterInput } from "./protocol.js";
 
 /** What started a turn in a role's home chat. When several did, the first in this order wins. */
@@ -119,11 +119,16 @@ export interface RoleTurnInput {
 	sendId?: string;
 	ownerChannel?: OwnerChannel;
 	forOwner?: RoleOwnerAnswer;
+	/** carry-on: this text is the note that carries on a turn a restart cut off: the turn takes that
+	 *  turn's saved requester inputs (running-chats.ts) instead of the note's own unknown one. */
+	carried?: RequesterTurn;
 }
 
 /** Shared by prompt admission (pending and joined turns) and metadata-only boundary tests. */
 export function collectRoleInput(rec: RoleTurnRecord, input: RoleTurnInput): void {
-	collectRequesterInput(rec, input.requester);
+	const carried = input.carried;
+	if (carried && (carried.requesterOverflow || carried.requesterInputs?.length)) mergeRequesterTurn(rec, carried);
+	else collectRequesterInput(rec, input.requester);
 	rec.causes.add(input.cause ?? "other");
 	if (input.sendId) rec.ids.push(input.sendId);
 	if (input.forOwner) rec.forOwner = mergeOwnerAnswer(rec.forOwner, input.forOwner);

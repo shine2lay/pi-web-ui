@@ -16,7 +16,13 @@
 import "./patch-remote-catalog.js";
 // Logs whatever holds pi's sign-in lock (auth.json) for 60 s or more; logging only (#134).
 import "./auth-lock-trace.js";
-import { mergeRequesterTurn, requesterForAdmission, requesterInputOf, requesterOfTurn } from "./queue-requester.js";
+import {
+	mergeRequesterTurn,
+	requesterForAdmission,
+	requesterInputOf,
+	requesterOfTurn,
+	type RequesterTurn,
+} from "./queue-requester.js";
 import { OwnerContacts, ownerInputIds, type OwnerContactOutcome } from "./owner-contacts.js";
 import type { UiOwnerContact, UiTaskRequester, UiTaskRequesterInput } from "./protocol.js";
 import { spawn } from "node:child_process";
@@ -122,10 +128,12 @@ import {
 	planCarryOn,
 	readRunningChatsFile,
 	readTail,
+	requesterTurnOf,
 	RESTART_REASON_FILE,
 	RUNNING_CHATS_FILE,
 	type RunningChat,
 	RunningChats,
+	savedRequesterOf,
 	stepFromTranscriptTail,
 	takeRestartReason,
 	toolDetail,
@@ -2416,6 +2424,9 @@ interface PromptFlow {
 	 *  answered and the owner's send ids; the run it starts or joins is the owner's. */
 	forOwner?: RoleOwnerAnswer;
 	ownerChannel?: OwnerChannel;
+	/** carry-on: the note carries on a turn a restart cut off: that turn's saved requester inputs
+	 *  (see AgentService.carryOn and RoleTurnInput.carried). */
+	carried?: RequesterTurn;
 	/** pi put the text off until the previous run has settled: its preflight callback answers later. */
 	deferred: boolean;
 	/** pi took the text (its preflight said yes). */
@@ -2429,6 +2440,8 @@ interface PromptFlow {
 function noteTurnCause(conv: Conversation, flow: PromptFlow, joined: boolean): void {
 	const rec = joined && conv.turnRecord ? conv.turnRecord : (conv.turnPending ??= newTurnRecord());
 	collectRoleInput(rec, flow);
+	// carry-on: a text joined the running turn: the live list keeps its requester inputs.
+	if (rec === conv.turnRecord) saveRunningRequester(conv);
 	// owner-contacts: pi took the owner's message into this chat's turn.
 	if (flow.requester?.kind === "owner") ownerContacts?.stage([flow.requester.id], { e: "taken" });
 }
@@ -2502,6 +2515,21 @@ function trackRunning(conv: Conversation, event: AgentSessionEvent): void {
 				detail: toolDetail(event.toolName, event.args),
 			});
 		else list.toolEnd(ref, event.toolCallId);
+	} catch {
+		// bookkeeping never breaks a run
+	}
+}
+
+/** carry-on: the live list keeps the running turn's requester inputs (ids and kinds only), so the
+ *  turn a restart cuts off is carried on for the same messages (see AgentService.carryOn). */
+function saveRunningRequester(conv: Conversation): void {
+	const list = runningChats;
+	const rec = conv.turnRecord;
+	if (!list || !rec) return;
+	const ref = runningRef(conv);
+	if (!ref) return;
+	try {
+		list.setRequester(ref.sessionFile, rec);
 	} catch {
 		// bookkeeping never breaks a run
 	}
@@ -5223,8 +5251,15 @@ export class ClientSession {
 	 * (or the note got in), so the caller can move on to the next chat without the switch
 	 * disposing this one: a running chat is kept (and listed) when it is switched away from.
 	 * false = it couldn't be opened or the note didn't get in.
+	 * `carried`: the cut-off turn's saved requester inputs (running-chats.json): the turn the note starts
+	 * (or joins) takes them instead of the note's own unknown input, so it answers the same messages.
 	 */
-	async carryOn(sessionFile: string, note: string, beforeResume?: () => Promise<void>): Promise<boolean> {
+	async carryOn(
+		sessionFile: string,
+		note: string,
+		beforeResume?: () => Promise<void>,
+		carried?: RequesterTurn,
+	): Promise<boolean> {
 		await this.switchSession(sessionFile);
 		const id = this.conversationIdBySessionFile(sessionFile);
 		if (!id) return false;
@@ -5233,7 +5268,12 @@ export class ClientSession {
 		const cleanup = beforeResume ? await admitRoleMailAtResume(conv.session, beforeResume) : () => {};
 		try {
 			const before = conv.session.messages.length;
-			void this.promptResumedConversation(sessionFile, note).catch(() => {});
+			// Nothing saved: the same call as before the carried inputs existed.
+			void (
+				carried
+					? this.promptResumedConversation(sessionFile, note, carried)
+					: this.promptResumedConversation(sessionFile, note)
+			).catch(() => {});
 			const deadline = Date.now() + 20_000;
 			while (Date.now() < deadline) {
 				if (conv.session.isStreaming || conv.session.messages.length > before) break;
@@ -5323,12 +5363,15 @@ export class ClientSession {
 		const rec = (conv.turnRecord ??= newTurnRecord());
 		const p = conv.turnPending;
 		conv.turnPending = undefined;
-		if (!p) return;
-		mergeRequesterTurn(rec, p);
-		for (const c of p.causes) rec.causes.add(c);
-		rec.ids.push(...p.ids);
-		if (p.forOwner) rec.forOwner = mergeOwnerAnswer(rec.forOwner, p.forOwner);
-		if (p.owner) rec.owner = mergeOwnerAnswer(rec.owner, p.owner);
+		if (p) {
+			mergeRequesterTurn(rec, p);
+			for (const c of p.causes) rec.causes.add(c);
+			rec.ids.push(...p.ids);
+			if (p.forOwner) rec.forOwner = mergeOwnerAnswer(rec.forOwner, p.forOwner);
+			if (p.owner) rec.owner = mergeOwnerAnswer(rec.owner, p.owner);
+		}
+		// carry-on: the live list's entry was just (re)started: it keeps the turn's requester inputs (a retry's too).
+		saveRunningRequester(conv);
 	}
 
 	/** telegram-coo: an assistant message ended: the run's last text with words in it, and whether it failed. */
@@ -5724,12 +5767,12 @@ export class ClientSession {
 	 * （上一个 await 恢复点之后、无新 await 处）核对 activeId 后才调用 prompt；
 	 * 修不回（再次被抢）就放弃自动继续 —— 宁可少投，不投错对话。
 	 */
-	private async promptResumedConversation(sessionFile: string, text: string): Promise<void> {
+	private async promptResumedConversation(sessionFile: string, text: string, carried?: RequesterTurn): Promise<void> {
 		for (let attempt = 0; attempt < 2; attempt++) {
 			const targetId = this.conversationIdBySessionFile(sessionFile);
 			if (!targetId) return; // 目标对话已没了（被关/被过户），不投
 			if (this.activeId === targetId) {
-				await this.prompt(text);
+				await this.prompt(text, undefined, false, undefined, carried ? { carried } : undefined);
 				return;
 			}
 			await this.switchConversation(targetId);
@@ -10516,6 +10559,8 @@ export class ClientSession {
 			sendId?: string;
 			forOwner?: RoleOwnerAnswer;
 			ownerChannel?: OwnerChannel;
+			/** carry-on: server only (see PromptFlow.carried). */
+			carried?: RequesterTurn;
 		},
 	): Promise<void> {
 		let conv: Conversation;
@@ -10539,6 +10584,7 @@ export class ClientSession {
 			...(opts?.sendId ? { sendId: opts.sendId } : {}),
 			...(opts?.forOwner ? { forOwner: opts.forOwner } : {}),
 			...(ownerChannelOf(opts?.ownerChannel) ? { ownerChannel: opts!.ownerChannel } : {}),
+			...(opts?.carried ? { carried: opts.carried } : {}),
 			deferred: false,
 			handedOver: false,
 			admission: takePromptAdmission(conv),
@@ -18024,14 +18070,20 @@ export class AgentService {
 					continue;
 				}
 				let ok = false;
+				// The cut-off turn's requester inputs (checked again; none or bad = unknown, as before).
+				const saved = savedRequesterOf(item.chat.requester);
 				try {
 					ok =
 						existsSync(file) &&
-						(await cs.carryOn(file, item.note, () =>
-							this.roleMessages.beforeResume(file, {
-								deliver: (target, text) => cs.queueRoleMailForResume(target, text, this.roleMessageHow(target, text)),
-								note: (target, text) => cs.noteRoleMessage(target, text),
-							}),
+						(await cs.carryOn(
+							file,
+							item.note,
+							() =>
+								this.roleMessages.beforeResume(file, {
+									deliver: (target, text) => cs.queueRoleMailForResume(target, text, this.roleMessageHow(target, text)),
+									note: (target, text) => cs.noteRoleMessage(target, text),
+								}),
+							saved ? requesterTurnOf(saved) : undefined,
 						));
 				} catch (err) {
 					console.error(`[carry-on] "${item.chat.title}": ${(err as Error).message}`);

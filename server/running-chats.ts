@@ -18,6 +18,10 @@
  *     shutdown mark.
  * Chats that were idle, or that the user stopped (their turn ended), are not in the list.
  *
+ * Each chat in the list also keeps its running turn's requester inputs (ids and kinds only, never
+ * text; queue-requester.ts): the carry-on turn takes them over, so it still answers the same
+ * messages (the owner's get their "settled", the tasks it queues name who asked).
+ *
  * Everything here is plain file handling and text; agent-service.ts feeds the events and does the
  * reopening.
  */
@@ -32,6 +36,8 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
+import type { UiTaskRequesterInput } from "./protocol.js";
+import { requesterOf, type RequesterTurn } from "./queue-requester.js";
 
 export const RUNNING_CHATS_FILE = "running-chats.json";
 /** Written by pi-web-deploy just before it restarts the service: { reason, at }. */
@@ -74,6 +80,15 @@ export interface RunningChat {
 	step?: string;
 	/** Carried over from the last restart; its carry-on turn hasn't started yet. */
 	awaiting?: boolean;
+	/** The running turn's requester inputs (ids and kinds only): its carry-on turn answers the same ones. */
+	requester?: SavedRequester;
+}
+
+/** A turn's requester inputs as the list keeps them: queue-requester.ts records, never text. */
+export interface SavedRequester {
+	inputs: UiTaskRequesterInput[];
+	/** The turn took more inputs than REQUESTER_INPUTS_MAX: no list, as in the turn itself. */
+	overflow?: true;
 }
 
 export interface RunningChatsFile {
@@ -342,6 +357,42 @@ export function readTail(file: string, bytes = 256 * 1024): string {
 }
 
 // ---------------------------------------------------------------------------
+// The running turn's requester inputs
+// ---------------------------------------------------------------------------
+
+/**
+ * A saved requester record, checked: every input through requesterInputOf (by way of requesterOf), or
+ * the overflow mark with no inputs. Anything else (a bad or hand-edited file) gives undefined, so the
+ * carried-on turn's requester stays unknown: never guessed.
+ */
+export function savedRequesterOf(raw: unknown): SavedRequester | undefined {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
+	const o = raw as Record<string, unknown>;
+	if (!Object.keys(o).every((k) => k === "inputs" || k === "overflow")) return;
+	if (o.overflow !== undefined) {
+		return o.overflow === true && Array.isArray(o.inputs) && o.inputs.length === 0
+			? { inputs: [], overflow: true }
+			: undefined;
+	}
+	const checked = requesterOf({ v: 1, inputs: o.inputs });
+	return checked ? { inputs: checked.inputs } : undefined;
+}
+
+/** A live turn's requester inputs as the list keeps them (undefined when it has none). */
+export function requesterToSave(turn: RequesterTurn): SavedRequester | undefined {
+	return savedRequesterOf(
+		turn.requesterOverflow ? { inputs: [], overflow: true } : { inputs: turn.requesterInputs ?? [] },
+	);
+}
+
+/** Saved inputs as the requester part of a turn record: what the carry-on turn starts with. */
+export function requesterTurnOf(saved: SavedRequester): RequesterTurn {
+	return saved.overflow
+		? { requesterOverflow: true }
+		: { requesterInputs: saved.inputs.map((input) => ({ ...input })) };
+}
+
+// ---------------------------------------------------------------------------
 // The live list
 // ---------------------------------------------------------------------------
 
@@ -349,6 +400,13 @@ export function readRunningChatsFile(file: string): RunningChatsFile | null {
 	try {
 		const data = JSON.parse(readFileSync(file, "utf8")) as RunningChatsFile;
 		if (!data || data.v !== 1 || !Array.isArray(data.chats)) return null;
+		// A saved requester is checked on read: a bad or edited one is dropped, never guessed.
+		for (const chat of data.chats) {
+			if (!chat || typeof chat !== "object" || !("requester" in chat)) continue;
+			const requester = savedRequesterOf(chat.requester);
+			if (requester) chat.requester = requester;
+			else delete chat.requester;
+		}
 		return data;
 	} catch {
 		return null;
@@ -432,6 +490,21 @@ export class RunningChats {
 		const c = this.chats.get(ref.sessionFile);
 		if (!c || !c.tools.some((t) => t.id === toolCallId)) return;
 		c.tools = c.tools.filter((t) => t.id !== toolCallId);
+		this.write();
+	}
+
+	/**
+	 * The running turn's requester inputs, after it started or a message joined it (ids and kinds only).
+	 * A carried-over entry keeps the inputs it came with until its carry-on turn starts.
+	 */
+	setRequester(sessionFile: string, turn: RequesterTurn): void {
+		if (this.frozen) return;
+		const c = this.chats.get(sessionFile);
+		if (!c || c.awaiting) return;
+		const requester = requesterToSave(turn);
+		if (JSON.stringify(requester) === JSON.stringify(c.requester)) return;
+		if (requester) c.requester = requester;
+		else delete c.requester;
 		this.write();
 	}
 

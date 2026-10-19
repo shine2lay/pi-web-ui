@@ -25,3 +25,5 @@
 ## Result
 
 Sealed checks HIT (2026-10-18): pi-queue suite 367/367 including the new add/replay/consent fixture; pi-web-ui build plus `queue-requester`, `role-replies`, `queue-host` and `roles-task-next` tests 78/78. Admitted owner and role inputs are recorded, pseudo clients and unknown inputs show "Not recorded", overflow records nothing, edits keep the original, and display text carries no ids. Follow-up deliveries now derive the same admitted requester as prompt deliveries. Live result: only tasks added after install carry a requester; older tasks keep "Not recorded". No live task has been changed or used as a test.
+
+Restarts (H-ROLES-TRACKER-2 in `docs/roles-tracker.md`, Ops #236): a turn a restart cuts off is carried on with its saved requester inputs, so a task queued in the carry-on turn names who asked (#214 and #215 showed "Not recorded"). The carry-on note itself still never becomes "you": without saved inputs it stays unknown.

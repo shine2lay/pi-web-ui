@@ -501,7 +501,11 @@ describe("O0 observer, undo and Ops108 baseline (S04, V18)", () => {
 		// Re-pinned by roles-requester (owner 2026-10-17, Roles D2): it only adds display-only requester
 		// collection (collectRequesterInput, RoleTurnRecord extends RequesterTurn); no Ops108 routing line
 		// changed (its diff removes none). Was 4df90a6f….
-		expect(sha("server/role-replies.ts")).toBe("db3c7c90e4a2358058274723bc0bf81ed953c8c6c3debff653806f8e52fe379f");
+		// Re-pinned by restart-requester (owner 2026-10-18, "The three bugs"; Ops #236): it only lets a carried-on
+		// turn take the cut-off turn's saved requester inputs (RoleTurnInput.carried, display-only); its diff
+		// changes just the requester import and the collectRequesterInput line, no Ops108 routing line
+		// (causes, ids, forOwner, owner). Was db3c7c90….
+		expect(sha("server/role-replies.ts")).toBe("014cba7d164814f1e7d13b6153b1997d0a659755484a0365f639d739ce0eded7");
 		// Re-pinned by reconnect-trace (Ops #157, Ops decision on its plugin route): it only adds
 		// host.connNotices (plugins.ts) and the reconnect-notice handler (telegram); no Ops108 routing line
 		// changed (its diff removes none). Was b3f0f42f… and 9bd0faeb….

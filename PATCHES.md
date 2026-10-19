@@ -10,6 +10,15 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## restart-requester: a chat carried on after a restart still answers the same messages
+
+- `local` (owner 2026-10-18, picked "The three bugs"; Ops #236). Hypothesis H-ROLES-TRACKER-2 and result: `docs/roles-tracker.md`.
+- `server/running-chats.ts`: each entry of `running-chats.json` keeps its running turn's requester inputs (`requester: { inputs, overflow? }`, ids and kinds only, checked with `requesterInputOf` / `requesterOf`, never text). `setRequester` writes them, `readRunningChatsFile` drops a bad or edited record, and the startup seed carries them into the new list.
+- `server/agent-service.ts`: saved when a turn starts (`startTurnRecord`, a retry's start too) and when a text joins the busy turn (`noteTurnCause`). `carryOnAfterRestart` hands them through `carryOn`, `promptResumedConversation` and `prompt` (a server-only `carried` option) to the carry-on note's admission.
+- `server/role-replies.ts`: `collectRoleInput` takes the `carried` inputs in place of the note's own unknown one. Nothing saved (or a bad record) = unknown, as before. Causes, Telegram routing and forOwner marks are unchanged.
+- Checks: `tests/unit/carry-on-requester.test.ts` (round trip, bad records dropped, a seeded turn's owner ids and requester, unknown without a record, never the owner's id for a non-owner input), `role-mail-restart.test.ts` (with nothing saved the carry-on call is the same as before), then the landing gate. `roles-contact.test.ts` re-pins the Ops108 bytes of `server/role-replies.ts`: the diff changes only its requester import and requester line, no routing line. Minimal checks at the owner's request.
+- Undo: revert this commit and deploy the earlier build with `pi-web-deploy`; the extra field in `running-chats.json` is then ignored.
+
 ## notes-check: a change to notes only runs only the checks that read notes
 
 - `local` (owner 2026-10-18, "Notes skip the tests", Ops #235, project faster-landing). Hypothesis H-WT-NOTES-1 and result: agent-tools `docs/wt-notes-check.md`.
