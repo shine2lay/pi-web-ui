@@ -32,8 +32,9 @@ const TerminalPanel = lazy(() => import("./components/TerminalPanel").then((m) =
 // roles-overview: the Roles page loads with its first opening and stays mounted after it.
 const RolesExactView = lazy(() => import("./components/RolesExactView").then((m) => ({ default: m.RolesExactView })));
 // initiatives-page: the Initiatives tab, the same way (loads with its first opening, stays mounted).
-const InitiativesView = lazy(() =>
-	import("./components/InitiativesView").then((m) => ({ default: m.InitiativesView })),
+// initiatives-page-exact (#225): the supplied design; the old InitiativesView stays in source, unmounted.
+const InitiativesPage = lazy(() =>
+	import("./components/InitiativesPage").then((m) => ({ default: m.InitiativesPage })),
 );
 import { ScmPanel } from "./components/SCMPanel";
 import { PluginView } from "./components/PluginView";
@@ -2386,11 +2387,11 @@ export function App() {
 						</Suspense>
 					)}
 				</div>
-				{/* initiatives-page: each initiative's decisions, who really made them, what they cost the owner. */}
+				{/* initiatives-page: the supplied design with the work registry, decisions and the leads' updates. */}
 				<div className={`view-pane initiatives-pane ${view === "initiatives" ? "" : "hidden"}`}>
 					{(initiativesLoaded || view === "initiatives") && (
 						<Suspense fallback={null}>
-							<InitiativesView active={view === "initiatives"} phone={isMobile} onOpen={openFromRoles} />
+							<InitiativesPage active={view === "initiatives"} onOpen={openFromRolesPage} />
 						</Suspense>
 					)}
 				</div>

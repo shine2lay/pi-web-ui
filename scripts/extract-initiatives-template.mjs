@@ -64,6 +64,13 @@ for (const [from, to, count] of camel) {
 if (markup.includes("sc-camel-")) throw new Error("an sc-camel- attribute is left");
 
 const showIf = (name) => `<sc-if value="{{${name}}}" hint-placeholder-val="{{true}}">`;
+// initiatives-page addition 5: a line in the design's own empty-list style (its "Nothing matches this filter.").
+const EMPTY =
+	"margin: 0; padding: 12px; border-radius: 10px; border: 1px dashed #3A3F46; color: #A9AEB6; font-size: 13px";
+const noteIf = (name, style = EMPTY) =>
+	`<sc-if value="{{${name}}}" hint-placeholder-val="{{false}}"><p style="${style}">{{${name}}}</p></sc-if>\n`;
+// Inside a bordered list box, the line is one of the box's rows.
+const rowNote = (name, pad) => noteIf(name, `margin: 0; padding: ${pad}; color: #A9AEB6; font-size: 13px`);
 const EDITS = [
 	// Controls the design draws without a handler get one; a control whose callback is absent isn't shown.
 	[
@@ -143,6 +150,58 @@ const EDITS = [
 		"Row indent",
 		"gap: 10px 16px; padding: 14px; background: {{r.bg}}",
 		"gap: 10px 16px; padding: {{r.pad}}; background: {{r.bg}}",
+	],
+	// initiatives-page addition 4: the "in no initiative" box opens like an initiative, outlined like a
+	// selected card while open.
+	[
+		"No-initiative box (opens)",
+		'<section aria-labelledby="noinit" style="margin-top: 6px; padding: 14px; border-radius: 12px; border: 1px dashed #3A3F46; display: flex;',
+		'<section aria-labelledby="noinit" onClick="{{loose.pick}}" style="margin-top: 6px; padding: 14px; border-radius: 12px; border: 1px dashed {{loose.bd}}; background: {{loose.bg}}; cursor: pointer; display: flex;',
+	],
+	[
+		"No-initiative heading (a button)",
+		">{{loose.heading}}</h2>\n",
+		'><button type="button" onClick="{{loose.pick}}" aria-current="{{loose.current}}" style="padding: 0; border: 0; background: transparent; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; text-align: left; cursor: pointer">{{loose.heading}}</button></h2>\n',
+	],
+	// initiatives-page addition 5: a section with nothing connected or recorded yet says so.
+	[
+		"Outcomes note",
+		"Outcomes · {{sel.doneText}}</h3>\n",
+		"Outcomes · {{sel.doneText}}</h3>\n" + noteIf("sel.outcomesNote"),
+	],
+	[
+		"Latest updates note",
+		'<ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px">\n<sc-for list="{{sel.latest}}"',
+		noteIf("sel.latestNote") +
+			'<ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px">\n<sc-for list="{{sel.latest}}"',
+	],
+	[
+		"Who's doing what note",
+		'overflow: hidden">\n<sc-for list="{{sel.roles}}"',
+		'overflow: hidden">\n' + rowNote("sel.rowsNote", "14px") + '<sc-for list="{{sel.roles}}"',
+	],
+	[
+		"Done-when note",
+		"Done when · {{sel.doneText}}</h3>\n",
+		"Done when · {{sel.doneText}}</h3>\n" + noteIf("sel.outcomesNote"),
+	],
+	["Hand-offs note", "Hand-offs between roles</h3>\n", "Hand-offs between roles</h3>\n" + noteIf("sel.handoffsNote")],
+	[
+		"Gaps note",
+		"Gaps the lead hasn’t covered · {{sel.gapCount}}</h3>\n",
+		"Gaps the lead hasn’t covered · {{sel.gapCount}}</h3>\n" + noteIf("sel.gapsNote"),
+	],
+	[
+		"Activity note",
+		'overflow: hidden">\n<sc-for list="{{sel.activity}}"',
+		'overflow: hidden">\n' + rowNote("sel.activityNote", "11px 14px") + '<sc-for list="{{sel.activity}}"',
+	],
+	// initiatives-page addition 6: a row can show a plain status chip (the registry's status) instead of
+	// the role state chip, in the state chip's own shape.
+	[
+		"Row status (plain chip)",
+		'<dc-import name="StateChip" kind="{{r.kind}}" last-known="{{r.lastKnown}}" hint-size="140px,24px"></dc-import>',
+		'<sc-if value="{{r.chip}}" hint-placeholder-val="{{true}}"><dc-import name="StateChip" kind="{{r.kind}}" last-known="{{r.lastKnown}}" hint-size="140px,24px"></dc-import></sc-if><sc-if value="{{r.plain}}" hint-placeholder-val="{{false}}"><span style="display: inline-flex; align-items: center; height: 24px; padding: 0 9px; box-sizing: border-box; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; color: {{r.plainFg}}; background: {{r.plainBg}}; border: 1px solid {{r.plainBd}}">{{r.plain}}</span></sc-if>',
 	],
 ];
 for (const [why, from, to] of EDITS) {

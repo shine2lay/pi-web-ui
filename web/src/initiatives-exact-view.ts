@@ -4,6 +4,7 @@
 // open outcomes and the done list. The 8 drawn states come from the input (page state, an initiative's
 // oldSince, a step's "unproven" kind, askFailedAt), never from a drawn-state switch.
 import type {
+	InitiativesExactActivity,
 	InitiativesExactAnswerTarget,
 	InitiativesExactDecider,
 	InitiativesExactHandoffKind,
@@ -29,6 +30,8 @@ export interface InitiativesExactActions {
 	markRead?: (initiative: string) => void;
 	askDesign?: (initiative: string) => void;
 	answer?: (target: InitiativesExactAnswerTarget, choice: string) => void;
+	/** initiatives-page: the owner picked an initiative, or the "in no initiative" box (its detail's id). */
+	select?: (id: string) => void;
 }
 
 type Filter = "all" | "you" | "attention" | "paused";
@@ -80,6 +83,10 @@ const VERDICT: Record<InitiativesExactDecider, readonly [string, string]> = {
 };
 /** A decision with no recorded decider: the design's neutral grey. */
 const VERDICT_UNKNOWN = ["#A9AEB6", "#3A3F46"] as const;
+/** initiatives-page: a status that isn't a live state (the registry's): the state chip's Idle grey. */
+const NEUTRAL = ["#A9AEB6", "transparent", "#3A3F46"] as const;
+/** The state chip's Done colours. */
+const DONE_CHIP = ["#9FD8B8", "rgba(159,216,184,0.1)", "rgba(159,216,184,0.4)"] as const;
 const CK = {
 	changed: ["Changed", "#9CC7FF", "rgba(125,184,255,0.16)"],
 	added: ["Added", "#9FD8B8", "rgba(159,216,184,0.14)"],
@@ -126,11 +133,32 @@ function normalize(i: InitiativesExactInitiative) {
 		wait: r.wait ?? "",
 		unblocks: r.unblocks ?? "",
 		at: r.at ?? "",
+		plain: r.statusLabel ?? "",
+		plainDone: r.statusTone === "done",
 	});
+	const act = (a: InitiativesExactActivity) => [a.at ?? "", a.role ?? NOT_RECORDED, a.text ?? NOT_RECORDED] as const;
+	const status = old ? ("unknown" as InitiativesExactStatus) : kindOf(i.status, STAT, "unknown");
 	return {
 		id: i.id,
 		name: i.name ?? NOT_RECORDED,
-		status: old ? ("unknown" as InitiativesExactStatus) : kindOf(i.status, STAT, "unknown"),
+		status,
+		chip:
+			!old && i.status === undefined && i.statusLabel !== undefined
+				? ([i.statusLabel, ...NEUTRAL] as const)
+				: STAT[status],
+		leadName: i.lead ?? i.leadName ?? NOT_RECORDED,
+		outcomeCount: i.outcomes === undefined ? i.outcomeCount : undefined,
+		outcomesNote: i.outcomesNote ?? "",
+		rowsNote: i.rowsNote ?? "",
+		latest: i.latest?.map(act),
+		latestNote: i.latestNote ?? "",
+		handoffsNote: i.handoffsNote ?? "",
+		gapsNote: i.gapsNote ?? "",
+		activityNote: i.activityNote ?? "",
+		rolesLine: i.rolesLine,
+		members: i.members,
+		canMessageLead: i.canMessageLead !== false,
+		canChangeLead: i.canChangeLead !== false,
 		statusNote: old ? `Old data · last confirmed ${i.oldSince}` : (i.statusNote ?? ""),
 		lead: i.lead,
 		goal: i.goal ?? NOT_RECORDED,
@@ -179,7 +207,7 @@ function normalize(i: InitiativesExactInitiative) {
 		decisions: i.decisions ?? [],
 		decisionsTotal: i.decisionsTotal,
 		decNote: i.decisionsNote,
-		activity: (i.activity ?? []).map((a) => [a.at ?? "", a.role ?? NOT_RECORDED, a.text ?? NOT_RECORDED] as const),
+		activity: (i.activity ?? []).map(act),
 	};
 }
 const KINDS = {
@@ -224,8 +252,15 @@ export function createInitiativesExactView(
 		const page = input.page ?? {};
 		const pageState = page.state ?? "live";
 		const all = (input.initiatives ?? []).map(normalize);
+		const looseDetail = input.loose?.detail ? normalize(input.loose.detail) : undefined;
 		const tab: InitiativesExactTab = st.tabPicked ? st.tab : (input.tab ?? "overview");
 		const filter = st.filter;
+		const filtersNote = input.filtersNote;
+		const pickId = (id: string) => {
+			if (st.sel === id) return;
+			setState({ sel: id });
+			call("select", id);
+		};
 		const openOnYou = (i: Initiative) => i.onYou.filter((o) => o.answer === undefined);
 		const looseItems = input.loose?.items ?? [];
 		const looseAsks = looseItems.filter((l) => l.onYou && l.answer === undefined).length;
@@ -234,9 +269,10 @@ export function createInitiativesExactView(
 
 		const matches = (i: Initiative) =>
 			filter === "all" ||
-			(filter === "you" && openOnYou(i).length > 0) ||
-			(filter === "attention" && i.status === "attention") ||
-			(filter === "paused" && i.status === "paused");
+			(!filtersNote &&
+				((filter === "you" && openOnYou(i).length > 0) ||
+					(filter === "attention" && i.status === "attention") ||
+					(filter === "paused" && i.status === "paused")));
 		const FL: [Filter, string, number][] = [
 			["all", "All", all.length],
 			["you", "Needs you", all.filter((i) => openOnYou(i).length).length],
@@ -247,7 +283,7 @@ export function createInitiativesExactView(
 			const on = f[0] === filter;
 			return {
 				label: f[1],
-				count: String(f[2]),
+				count: filtersNote && f[0] !== "all" ? "\u2014" : String(f[2]),
 				pressed: on ? "true" : "false",
 				bg: on ? "#ECEDEE" : "transparent",
 				fg: on ? "#0E0F11" : "#C9CDD2",
@@ -258,39 +294,49 @@ export function createInitiativesExactView(
 		});
 
 		const selId = st.sel ?? input.selected ?? all[0]?.id;
+		const looseOpen = !!looseDetail && selId === looseDetail.id;
+		const seg = (d: boolean, p: boolean) => ({
+			bg: d ? "#9FD8B8" : p ? "transparent" : "rgba(125,184,255,0.18)",
+			bd: d ? "#9FD8B8" : p ? "#4A4F57" : "rgba(125,184,255,0.45)",
+			bs: p && !d ? "dashed" : "solid",
+		});
 		let list: SurfaceValue[] = all.filter(matches).map((i) => {
-			const s = STAT[i.status];
+			const s = i.chip;
 			const on = i.id === selId;
 			const n = openOnYou(i).length;
 			const nd = i.outcomes.filter(outcomeDone).length;
+			const p = i.status === "paused";
+			const count = i.outcomeCount;
 			return {
 				name: i.name,
 				statusNote: i.statusNote,
 				sText: s[0],
 				sFg: s[1],
-				leadName: i.lead ?? NOT_RECORDED,
+				leadName: i.leadName,
 				leadMono: mono(i.lead),
-				members: i.roles.filter((r) => !r.lead).map((r) => ({ mono: mono(r.name) })),
+				members: i.members
+					? i.members.map((m) => ({ mono: mono(m) }))
+					: i.roles.filter((r) => !r.lead).map((r) => ({ mono: mono(r.name) })),
 				bg: on ? "#18162A" : "#141619",
 				bd: on ? "#8B7CF6" : "#22262B",
 				current: on ? "true" : "false",
 				hasOnYou: n > 0,
 				onYouText: "ON YOU · " + n,
-				segs: i.outcomes.map((oc) => {
-					const d = outcomeDone(oc);
-					const p = i.status === "paused";
-					return {
-						bg: d ? "#9FD8B8" : p ? "transparent" : "rgba(125,184,255,0.18)",
-						bd: d ? "#9FD8B8" : p ? "#4A4F57" : "rgba(125,184,255,0.45)",
-						bs: p && !d ? "dashed" : "solid",
-					};
-				}),
-				doneText: i.outcomes.length ? nd + " of " + i.outcomes.length + " outcomes done" : "No outcomes recorded",
-				pick: () => setState({ sel: i.id }),
+				segs: count
+					? Array.from({ length: count.total }, (_, k) => seg(k < count.done, p))
+					: i.outcomes.map((oc) => seg(outcomeDone(oc), p)),
+				doneText: count
+					? count.total
+						? count.done + " of " + count.total + " outcomes done"
+						: "No outcomes recorded"
+					: i.outcomes.length
+						? nd + " of " + i.outcomes.length + " outcomes done"
+						: "No outcomes recorded",
+				pick: () => pickId(i.id),
 			};
 		});
 
-		const I = all.find((i) => i.id === selId) ?? all[0];
+		const I = (looseOpen ? looseDetail : all.find((i) => i.id === selId)) ?? all[0];
 		const sel = I ? detail(I, tab, openOnYou(I).length) : {};
 		const dz = I
 			? designValues(I)
@@ -301,7 +347,7 @@ export function createInitiativesExactView(
 					["overview", "Overview", ""],
 					["design", "Current design", dChanges.length ? dChanges.length + " new" : ""],
 					["decisions", "Decisions", String(I.decisionsTotal ?? I.decisions.length)],
-					["activity", "Activity", String(I.activity.length)],
+					["activity", "Activity", I.activityNote ? "\u2014" : String(I.activity.length)],
 				]
 			: [];
 		const tabs = TB.map((t) => {
@@ -317,9 +363,11 @@ export function createInitiativesExactView(
 		});
 
 		const note = input.summaryNote ? " " + input.summaryNote : "";
-		let summary = totalOnYou
-			? totalOnYou + (totalOnYou === 1 ? " thing is" : " things are") + " waiting on you across initiatives." + note
-			: "Nothing is waiting on you." + note;
+		let summary =
+			input.summary ??
+			(totalOnYou
+				? totalOnYou + (totalOnYou === 1 ? " thing is" : " things are") + " waiting on you across initiatives." + note
+				: "Nothing is waiting on you." + note);
 
 		// The design's drawn states, from the page's state and the list (its drawn() step).
 		const at = page.at;
@@ -341,7 +389,7 @@ export function createInitiativesExactView(
 			isError: false,
 			hasBody: false,
 			hasBody2: false,
-			listEmptyText: "Nothing matches this filter.",
+			listEmptyText: filtersNote && filter !== "all" ? filtersNote : "Nothing matches this filter.",
 			title: "",
 			body: "",
 			body2: "",
@@ -405,15 +453,16 @@ export function createInitiativesExactView(
 			ds.showRoles = false;
 			filters = [];
 			summary = "";
-		} else if (all.length === 0) {
+		} else if (all.length === 0 && !looseOpen) {
 			panel(
 				"No initiatives yet",
 				"The list was checked" + (at ? " at " + at : "") + " and is empty. This isn’t a loading or connection problem.",
 				"When an initiative starts, it shows here with its lead, the roles on it and anything waiting on you.",
 			);
 			ds.listEmptyText = "No initiatives yet.";
-			filters = counts("0");
-			summary = looseAsks ? summary : "Nothing is waiting on you here: there are no initiatives yet.";
+			filters = counts("0").map((f, k) => (filtersNote && k > 0 ? { ...f, count: "\u2014" } : f));
+			summary =
+				input.summary ?? (looseAsks ? summary : "Nothing is waiting on you here: there are no initiatives yet.");
 		}
 		if (pageState === "stale" && all.length > 0) {
 			ds.stale = true;
@@ -459,6 +508,12 @@ export function createInitiativesExactView(
 			isActivity: tab === "activity",
 			ds,
 			loose: {
+				pick: () => {
+					if (looseDetail) pickId(looseDetail.id);
+				},
+				current: looseOpen ? "true" : "false",
+				bd: looseOpen ? "#8B7CF6" : "#3A3F46",
+				bg: looseOpen ? "#18162A" : "transparent",
 				heading: input.loose?.heading ?? "Roles in no initiative · " + looseItems.length,
 				items: looseItems.map((l) => ({
 					name: l.name ?? NOT_RECORDED,
@@ -481,7 +536,7 @@ export function createInitiativesExactView(
 	}
 
 	function detail(I: Initiative, tab: InitiativesExactTab, openCount: number): SurfaceValues {
-		const S = STAT[I.status];
+		const S = I.chip;
 		const ndSel = I.outcomes.filter(outcomeDone).length;
 		const rows: SurfaceValues[] = [];
 		I.roles.forEach((r) => {
@@ -506,14 +561,20 @@ export function createInitiativesExactView(
 				wait: x.wait,
 				hasUnblocks: !!x.unblocks,
 				unblocks: x.unblocks,
+				chip: !x.plain,
+				plain: x.plain,
+				plainFg: x.plainDone ? DONE_CHIP[0] : NEUTRAL[0],
+				plainBg: x.plainDone ? DONE_CHIP[1] : NEUTRAL[1],
+				plainBd: x.plainDone ? DONE_CHIP[2] : NEUTRAL[2],
 			});
 			rows.push(row(r, false));
 			for (const t of r.tasks) rows.push(row(t, true));
 		});
 		const roleCount =
-			I.roles.length === 0
+			I.rolesLine ??
+			(I.roles.length === 0
 				? NOT_RECORDED
-				: plural(I.roles.length, "role", "roles") + (I.roles.length > 1 ? " · lead + " + (I.roles.length - 1) : "");
+				: plural(I.roles.length, "role", "roles") + (I.roles.length > 1 ? " · lead + " + (I.roles.length - 1) : ""));
 		const canAnswer = has("answer");
 		const outcomes = I.outcomes.map((oc) => ({
 			title: oc.title,
@@ -539,13 +600,15 @@ export function createInitiativesExactView(
 				};
 			}),
 		}));
-		const activity = I.activity.map((a, k) => ({
+		const line = (a: readonly [string, string, string], k: number) => ({
 			at: a[0],
 			role: a[1],
 			text: a[2],
 			roleFg: a[1] === "You" ? "#F0B95A" : a[1] === I.lead ? "#CBBEFF" : "#ECEDEE",
 			topBd: k ? "#22262B" : "transparent",
-		}));
+		});
+		const activity = I.activityNote ? [] : I.activity.map(line);
+		const latest = I.latest ? I.latest.map(line) : activity.slice(0, 3);
 		const named = (owner: string, name: string) => !!name && owner.indexOf(name) >= 0;
 		const goals = I.outcomes.map((oc, k) => {
 			const d = outcomeDone(oc);
@@ -619,8 +682,8 @@ export function createInitiativesExactView(
 			owner: oc.owner,
 			finished: oc.steps[oc.steps.length - 1].at || "",
 		}));
-		const canChangeLead = has("changeLead");
-		const canMessage = has("messageLead");
+		const canChangeLead = has("changeLead") && I.canChangeLead;
+		const canMessage = has("messageLead") && I.canMessageLead;
 		return {
 			name: I.name,
 			goal: I.goal,
@@ -629,7 +692,7 @@ export function createInitiativesExactView(
 			sFg: S[1],
 			sBg: S[2],
 			sBd: S[3],
-			leadName: I.lead ?? NOT_RECORDED,
+			leadName: I.leadName,
 			leadMono: mono(I.lead),
 			roleCount,
 			started: I.started,
@@ -649,7 +712,15 @@ export function createInitiativesExactView(
 			leadNext: I.leadNext,
 			leadReport: I.leadReport,
 			leadReportAt: I.leadReportAt,
-			doneText: ndSel + " of " + I.outcomes.length + " done",
+			doneText: I.outcomeCount
+				? I.outcomeCount.done + " of " + I.outcomeCount.total + " done"
+				: ndSel + " of " + I.outcomes.length + " done",
+			outcomesNote: I.outcomesNote,
+			rowsNote: I.rowsNote,
+			handoffsNote: I.handoffsNote,
+			gapsNote: I.gapsNote,
+			activityNote: I.activityNote,
+			latestNote: latest.length === 0 ? I.latestNote : "",
 			roles: rows,
 			outcomes,
 			openOutcomes: outcomes.filter((_, k) => !outcomeDone(I.outcomes[k])),
@@ -658,7 +729,7 @@ export function createInitiativesExactView(
 			doneCount: String(doneOutcomes.length),
 			doneLatest: doneOutcomes.length ? "latest " + doneOutcomes[0].finished : "",
 			goals,
-			handoffs: I.handoffs.map((h) => ({
+			handoffs: (I.handoffsNote ? [] : I.handoffs).map((h) => ({
 				from: h.from,
 				fromT: h.fromT,
 				to: h.to,
@@ -667,8 +738,8 @@ export function createInitiativesExactView(
 				s: h.s,
 				c: HC[h.k],
 			})),
-			gaps: I.gaps.map((t) => ({ t })),
-			gapCount: String(I.gaps.length),
+			gaps: (I.gapsNote ? [] : I.gaps).map((t) => ({ t })),
+			gapCount: I.gapsNote ? "\u2014" : String(I.gaps.length),
 			spend: I.spend.map((p) => ({ role: p[0], v: p[1], fg: p[1] === "Not reported" ? "#C7B8FF" : "#ECEDEE" })),
 			hasOnYou: I.onYou.length > 0,
 			onYouCount: String(openCount),
@@ -727,8 +798,8 @@ export function createInitiativesExactView(
 				};
 			}),
 			activity,
-			activityCount: String(I.activity.length),
-			latest: activity.slice(0, 3),
+			activityCount: I.activityNote ? "\u2014" : String(I.activity.length),
+			latest,
 			decNote:
 				I.decNote ??
 				"Decisions taken inside this initiative: who made each one, how it was approved, and what it means for you.",

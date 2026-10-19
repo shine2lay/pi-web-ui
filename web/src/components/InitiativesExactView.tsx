@@ -27,6 +27,8 @@ export interface InitiativesExactViewProps {
 	onMarkRead?: (initiative: string) => void;
 	onAskDesign?: (initiative: string) => void;
 	onAnswer?: (target: InitiativesExactAnswerTarget, choice: string) => void;
+	/** initiatives-page: the owner picked an initiative or the "in no initiative" box. */
+	onSelect?: (id: string) => void;
 }
 
 /** initiatives-exact: the supplied Initiatives design, 1:1, in a script-free frame isolated from app
@@ -101,6 +103,7 @@ export function InitiativesExactView(props: InitiativesExactViewProps) {
 					markRead: p.onMarkRead,
 					askDesign: p.onAskDesign,
 					answer: p.onAnswer,
+					select: p.onSelect,
 				};
 			};
 			const view = createInitiativesExactView(() => current.current.input, actions, update);

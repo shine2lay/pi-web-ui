@@ -1,0 +1,268 @@
+// initiatives-page (docs/initiatives-page-exact.md, Ops #225): the core of the live Initiatives page. It
+// turns the work registry page (work_page), the decision log's page (initiatives_watch, with the open
+// initiative's progress feed) and the roles' home chats into the supplied design's input
+// (InitiativesExactInput): page states, header, cards, the "Projects in no initiative" box, the detail's
+// frame, lead, counts, project rows, buttons, decisions and lead updates. The plan, task and gap sections
+// come from their own modules (plan.ts, tasks.ts, gaps.ts), laid over the core's fields in that order.
+import type { Translate } from "../i18n";
+import type {
+	InitiativesExactDecision,
+	InitiativesExactInitiative,
+	InitiativesExactInput,
+	InitiativesExactRole,
+} from "../initiatives-exact-model";
+import {
+	approvalLabel,
+	creditKind,
+	creditLabel,
+	filedText,
+	headSource,
+	roleName,
+	sourceLabel,
+	writerLabel,
+} from "../initiatives-view-model";
+import { clockOf } from "../roles-view-model";
+import type { UiDecision, UiDecisionSource, UiDecisionsPage, UiWorkPage, UiWorkPageRecord } from "../types";
+import { gapsPart } from "./gaps";
+import { planPart } from "./plan";
+import { statusOf, tasksPart } from "./tasks";
+import { NO_INITIATIVE, type InitiativesPageOpen, type InitiativesPagePart } from "./types";
+
+/** The work registry feed as the page holds it (work-page-state.ts). */
+export interface WorkPageFeed {
+	/** The latest page, kept when a later one fails. */
+	page: UiWorkPage | null;
+	/** loading: asked, nothing back yet; ready: `page` holds data; error: nothing to show. */
+	status: "idle" | "loading" | "ready" | "error";
+	error?: string;
+	/** When the last error came (this window's clock, ms). */
+	failedAt?: number;
+}
+
+export interface InitiativesPageArgs {
+	work: WorkPageFeed;
+	/** The decision log's page, null until it comes. */
+	decisions: UiDecisionsPage | null;
+	/** Each role's home chat file, by role id (only those that can be opened). */
+	homeChats: Readonly<Record<string, string>>;
+	/** The initiative (or NO_INITIATIVE) the owner opened; absent: the first card. */
+	selected?: string;
+	now: number;
+	t: Translate;
+	open: InitiativesPageOpen;
+}
+
+export interface InitiativesPageModel {
+	input: InitiativesExactInput;
+	/** The open initiative or NO_INITIATIVE: the owner's pick while it is still there, else the first card. */
+	selected?: string;
+	/** The lead's home chat by initiative id, where Message <lead> shows. */
+	leadChats: Record<string, string>;
+	/** Initiatives whose lead the decision log keeps: Change lead shows for these. */
+	changeLead: string[];
+	/** A decision's source by the ref its link hands back. */
+	sources: Record<string, UiDecisionSource>;
+}
+
+const STATUS_WORD: Record<UiWorkPageRecord["status"], string> = {
+	active: "Active",
+	done: "Done",
+	dropped: "Dropped",
+};
+const RANK: Record<UiWorkPageRecord["status"], number> = { active: 0, done: 1, dropped: 2 };
+const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** Active first, then done, then dropped; the registry's order within each. */
+export function byStatus<T extends Pick<UiWorkPageRecord, "status">>(list: readonly T[]): T[] {
+	return [...list].sort((a, b) => (RANK[a.status] ?? 3) - (RANK[b.status] ?? 3));
+}
+
+/** How many of a record's done-when items are met, of how many. */
+export function doneCount(r: Pick<UiWorkPageRecord, "doneWhen">): { done: number; total: number } {
+	return { done: r.doneWhen.filter((d) => !!d.met).length, total: r.doneWhen.length };
+}
+
+/** "Sun Oct 18". */
+export function dateOf(ms: number): string {
+	const d = new Date(ms);
+	return `${DAYS[d.getDay()]} ${MONTHS[d.getMonth()]} ${d.getDate()}`;
+}
+
+/** Projects in no initiative: none named, or one the registry doesn't hold. */
+export function looseProjects(page: UiWorkPage): UiWorkPageRecord[] {
+	const ids = new Set(page.initiatives.map((i) => i.id));
+	return byStatus(page.projects.filter((p) => !p.initiative || !ids.has(p.initiative)));
+}
+
+const rolesLine = (n: number) => (n === 1 ? "1 role" : `${n} roles · lead + ${n - 1}`);
+
+function projectRow(p: UiWorkPageRecord, now: number): InitiativesExactRole {
+	const c = doneCount(p);
+	return {
+		name: p.name,
+		part: "Lead · " + roleName(p.lead),
+		taskTitle: c.total ? `${c.done} of ${c.total} done` : "No done-when items yet",
+		statusLabel: STATUS_WORD[p.status] ?? p.status,
+		statusTone: "neutral",
+		at: clockOf(p.updatedAt, now),
+	};
+}
+
+export function buildInitiativesPage(args: InitiativesPageArgs): InitiativesPageModel {
+	const { work, now, t } = args;
+	const page = work.page;
+	const empty: InitiativesPageModel = { input: {}, leadChats: {}, changeLead: [], sources: {} };
+	if (!page) {
+		const state = work.status === "error" ? "error" : "loading";
+		const at = state === "error" && work.failedAt ? clockOf(work.failedAt, now) : undefined;
+		return { ...empty, input: { page: { state, at } } };
+	}
+	const at = clockOf(page.at, now);
+	if (page.problem === "unreadable") return { ...empty, input: { page: { state: "error", at } } };
+	const old = page.problem === "too-big" || page.problem === "unknown-change" ? at : undefined;
+
+	const initiatives = byStatus(page.initiatives);
+	const loose = looseProjects(page);
+	const ids = new Set(initiatives.map((i) => i.id));
+	const pick = args.selected;
+	const selected =
+		pick !== undefined && (ids.has(pick) || (pick === NO_INITIATIVE && loose.length > 0))
+			? pick
+			: (initiatives[0]?.id ?? (loose.length ? NO_INITIATIVE : undefined));
+
+	const dec = args.decisions;
+	const logRows = new Map((dec?.initiatives ?? []).map((r) => [r.id, r]));
+	const parts: InitiativesPagePart[] = [
+		planPart(page, selected, args.open),
+		tasksPart(page, selected, args.open),
+		gapsPart(page, selected, args.open),
+	];
+	const leadChats: Record<string, string> = {};
+	const changeLead: string[] = [];
+	const sources: Record<string, UiDecisionSource> = {};
+
+	const rows = (projects: readonly UiWorkPageRecord[]): InitiativesExactRole[] =>
+		projects.map((p) => {
+			let row = projectRow(p, now);
+			for (const part of parts) row = { ...row, ...part.projects?.[p.id] };
+			return row;
+		});
+	const lay = (base: InitiativesExactInitiative): InitiativesExactInitiative => {
+		let out = base;
+		for (const part of parts) out = { ...out, ...part.initiatives?.[base.id] };
+		return out;
+	};
+
+	const decision = (d: UiDecision, lead: string): InitiativesExactDecision => {
+		const h = headSource(d);
+		const ref = h ? `${d.id}#${d.sources.indexOf(h)}` : undefined;
+		if (h && ref) sources[ref] = h;
+		return {
+			title: d.title,
+			body: d.what,
+			at: clockOf(d.at, now),
+			who: h ? writerLabel(t, h) : undefined,
+			how: h ? approvalLabel(t, h.approval) : undefined,
+			verdict: h ? creditLabel(t, h) : undefined,
+			by: h && creditKind(h) === "you" ? "you" : h?.writer === lead ? "lead" : "role",
+			impact: d.impact?.text,
+			options: d.options?.text,
+			until: d.until?.text,
+			source: h ? sourceLabel(t, h) : undefined,
+			sourceRef: ref,
+			quote: h?.quotes[0] ? `\u201c${h.quotes[0]}\u201d` : undefined,
+			filed: filedText(t, d.filedBy, d.initiative),
+		};
+	};
+
+	const initiative = (i: UiWorkPageRecord): InitiativesExactInitiative => {
+		const projects = byStatus(page.projects.filter((p) => p.initiative === i.id));
+		const others = [...new Set(projects.map((p) => p.lead))].filter((r) => r !== i.lead);
+		const logRow = logRows.get(i.id);
+		const progress = dec?.progress?.initiative === i.id ? dec.progress : undefined;
+		const updates = progress?.updates ?? [];
+		const decisions = dec && dec.selected === i.id ? dec.decisions : undefined;
+		const chat = args.homeChats[i.lead];
+		if (chat) leadChats[i.id] = chat;
+		if (logRow) changeLead.push(i.id);
+		return {
+			id: i.id,
+			name: i.name,
+			status: statusOf(page, i.id),
+			statusLabel: STATUS_WORD[i.status] ?? i.status,
+			lead: roleName(i.lead),
+			outcomeCount: doneCount(i),
+			rolesLine: rolesLine(1 + others.length),
+			members: others.map(roleName),
+			roles: rows(projects),
+			rowsNote: projects.length ? undefined : "No projects in this initiative yet.",
+			latest: updates
+				.slice(0, 3)
+				.map((u) => ({ at: clockOf(u.at, now), role: u.byName || roleName(u.by), text: u.fields.changed })),
+			latestNote: logRow && !progress ? "Loading the lead's updates…" : "No updates from the lead yet.",
+			leadNext: updates[0]?.fields.next || undefined,
+			leadReport: updates[0]?.fields.changed || undefined,
+			leadReportAt: updates[0] ? clockOf(updates[0].at, now) : undefined,
+			decisions: decisions?.map((d) => decision(d, i.lead)),
+			decisionsTotal: decisions ? dec?.total : (logRow?.decisions ?? 0),
+			decisionsNote: !logRow
+				? "No decisions are recorded for this initiative yet."
+				: !decisions
+					? "Loading decisions…"
+					: decisions.length === 0
+						? "No decisions are recorded for this initiative yet."
+						: undefined,
+			canMessageLead: !!chat,
+			canChangeLead: !!logRow,
+			oldSince: old,
+		};
+	};
+
+	const looseCount = loose.reduce(
+		(n, p) => {
+			const c = doneCount(p);
+			return { done: n.done + c.done, total: n.total + c.total };
+		},
+		{ done: 0, total: 0 },
+	);
+	const looseLeads = [...new Set(loose.map((p) => p.lead))];
+	const input: InitiativesExactInput = {
+		page: { state: work.status === "error" ? "stale" : "live", at, date: dateOf(page.at) },
+		initiatives: initiatives.map((i) => lay(initiative(i))),
+		selected,
+		loose: loose.length
+			? {
+					heading: "Projects in no initiative · " + loose.length,
+					items: loose.map((p) => {
+						const c = doneCount(p);
+						return {
+							id: p.id,
+							name: p.name,
+							note: `Lead · ${roleName(p.lead)} · ${c.done} of ${c.total} done · ${STATUS_WORD[p.status] ?? p.status}`,
+						};
+					}),
+					detail: lay({
+						id: NO_INITIATIVE,
+						name: "Projects in no initiative",
+						statusLabel: "No initiative",
+						leadName: "No one",
+						outcomeCount: looseCount,
+						rolesLine: looseLeads.length === 1 ? "1 role" : `${looseLeads.length} roles`,
+						roles: rows(loose),
+						leadNext: "These projects serve no initiative, so no lead plans across them.",
+						leadReport: "No lead, so no reports.",
+						latestNote: "No lead, so no updates.",
+						decisions: [],
+						decisionsTotal: 0,
+						decisionsNote: "Decisions are kept by initiative; these projects are in none.",
+						canMessageLead: false,
+						canChangeLead: false,
+						oldSince: old,
+					}),
+				}
+			: undefined,
+	};
+	for (const part of parts) Object.assign(input, part.page);
+	return { input, selected, leadChats, changeLead, sources };
+}

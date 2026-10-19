@@ -5,7 +5,10 @@
 // Chrome logs "Blocked script execution" once per event attribute (onClick="{{"name"}}") when the binder parses
 // the template inside the script-free frame: nothing runs, the binder adds the host's listeners instead (Roles
 // logs the same, once per its own 29). The look checks that exact count; any other console error fails it.
-// Run: scripts/sealed.sh node --import tsx scripts/initiatives-exact-shot.mjs [output-directory]
+// --page (initiatives-page-exact, docs/initiatives-page-exact.md): the live page's core model on its fixed registry
+// fixture instead, with the callbacks the Initiatives tab gives.
+// Both looks fail when the page scrolls sideways.
+// Run: scripts/sealed.sh node --import tsx scripts/initiatives-exact-shot.mjs [--page] [output-directory]
 import { createServer } from "node:http";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -16,7 +19,11 @@ import { CHROME_PATH } from "../tests/lib/chrome.mjs";
 import { readInitiativeFonts } from "../web/initiatives-design-assets.ts";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const output = resolve(process.argv[2] ?? join(root, ".test-results/initiatives-exact"));
+const pageLook = process.argv.includes("--page");
+const output = resolve(
+	process.argv.slice(2).find((a) => !a.startsWith("--")) ??
+		join(root, pageLook ? ".test-results/initiatives-page" : ".test-results/initiatives-exact"),
+);
 if (!process.env.PI_SEALED || !CHROME_PATH) throw new Error("Run sealed (scripts/sealed.sh) with the installed Chrome");
 mkdirSync(output, { recursive: true });
 const fonts = readInitiativeFonts();
@@ -34,19 +41,33 @@ const plugin = {
 		}));
 	},
 };
+const view = pageLook
+	? `
+import { buildInitiativesPage } from "./web/src/initiatives-page/model";
+import { pageArgs } from "./tests/unit/initiatives-page-fixture";
+const model = buildInitiativesPage(pageArgs());
+const element = (
+	<InitiativesExactView input={model.input} onOpen={noop} onRetry={noop} onSelect={noop} onMessageLead={noop}
+		onChangeLead={noop} />
+);
+`
+	: `
+import { DESIGN_FIXTURE } from "./tests/unit/initiatives-exact-fixture";
+const element = (
+	<InitiativesExactView input={DESIGN_FIXTURE} onOpen={noop} onRetry={noop} onChangeLead={noop} onMessageLead={noop}
+		onNewInitiative={noop} onResume={noop} onMarkRead={noop} onAskDesign={noop} onAnswer={noop} />
+);
+`;
 const entry = `
 import { createRoot } from "react-dom/client";
 import { InitiativesExactView } from "./web/src/components/InitiativesExactView";
-import { DESIGN_FIXTURE } from "./tests/unit/initiatives-exact-fixture";
 const noop = () => {};
+${view}
 document.body.style.margin = "0";
 const host = document.createElement("div");
 host.style.cssText = "width:100vw;height:100vh";
 document.body.appendChild(host);
-createRoot(host).render(
-	<InitiativesExactView input={DESIGN_FIXTURE} onOpen={noop} onRetry={noop} onChangeLead={noop} onMessageLead={noop}
-		onNewInitiative={noop} onResume={noop} onMarkRead={noop} onAskDesign={noop} onAnswer={noop} />,
-);
+createRoot(host).render(element);
 `;
 const app = (
 	await build({
@@ -105,7 +126,7 @@ try {
 		await page.goto(origin);
 		await page
 			.frameLocator('iframe[title="Initiatives"]')
-			.locator("text=Team in Temper")
+			.locator(pageLook ? "text=Alpha launch" : "text=Team in Temper")
 			.first()
 			.waitFor({ timeout: 20_000 });
 		// The frame is same-origin and script-free: read it from the host page.
@@ -120,9 +141,14 @@ try {
 				mono: doc.fonts.check("500 12px 'Geist Mono'"),
 				rootFont: getComputedStyle(doc.querySelector("#dc-root > div")).fontFamily,
 				height: doc.documentElement.scrollHeight,
+				frameWidth: frame.clientWidth,
+				frameScrollWidth: doc.documentElement.scrollWidth,
+				pageScrollWidth: document.documentElement.scrollWidth,
 			};
 		});
 		facts[name].blockedHandlerAttributes = blocked;
+		if (facts[name].frameScrollWidth > facts[name].frameWidth || facts[name].pageScrollWidth > width)
+			errors.push(`${name}: scrolls sideways (${JSON.stringify(facts[name])})`);
 		if (blocked !== eventAttributes)
 			errors.push(
 				`${name}: ${blocked} blocked script lines, expected one per template event attribute (${eventAttributes})`,

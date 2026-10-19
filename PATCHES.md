@@ -19,6 +19,16 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: `scripts/check.sh --notes` passed, and failed on a duplicated PATCHES.md heading; the guard failed with `patches-union.test.ts` left off the list; then the landing gate.
 - Undo: revert this commit, and take `notes_paths` and `notes_check` out of pi-web-ui's entry in agent-tools' wt.yaml. Reverting only this commit is safe: check.sh then ignores `--notes` and runs its full check.
 
+## initiatives-page-exact: the Initiatives tab shows the supplied design
+
+- `local` (owner 2026-10-18, Ops home chat: "try to start with building out UI 1:1 then add in different features so i can see the progress iwth my own eyes"; Ops #225, project initiatives-page). Hypothesis H-INITIATIVES-PAGE-1 and result: `docs/initiatives-page-exact.md`.
+- The Initiatives tab mounts `InitiativesExactView` (#224) in place of `InitiativesView`, which stays in source, unmounted. While the tab is open it watches the `work_page` feed (#223); decisions and lead updates still come from the `initiatives_watch` and progress feeds. The feed's `problem` shows as the drawn error panel or old-data banner.
+- One core model, `web/src/initiatives-page/model.ts` (page states, header, cards, the projects-in-no-initiative box, detail frame, lead, counts, project rows, buttons, decisions, updates), and one module per later step: `plan.ts` (goal, started, done-when items), `tasks.ts` (task rows, waiting on you, the ON YOU bar, `statusOf()`), `gaps.ts` (gaps, activity, hand-offs). In this step each module returns its "Not connected yet" version, and the ON YOU bar never says nothing is waiting.
+- Buttons: Message <lead> opens the lead's home chat (the Roles page's open path); Change lead only for initiatives the decision log knows, through today's lead picker in a dialog. No other write action.
+- Template additions 4-6 (`scripts/extract-initiatives-template.mjs`): the "in no initiative" box opens like an initiative; empty sections say so in the design's empty-list style; a project row can show a plain status chip. The view takes optional fields for them; absent keeps #224's behaviour.
+- Checks: `tests/unit/initiatives-page-model.test.ts` (fixture `tests/unit/initiatives-page-fixture.ts`) with `tests/unit/initiatives-exact.test.ts` and the Roles exact tests, a sealed look at 1440 and 390 px (`scripts/initiatives-exact-shot.mjs --page`, which fails when the page scrolls sideways), then the landing gate and a look-only live check.
+- Undo: revert this commit (the tab shows `InitiativesView` again).
+
 ## initiatives-plan-data: one read-only feed of the whole work registry for the Initiatives page
 
 - `local` (owner 2026-10-18, "now lets plan for initiatives page to show all the planning work", Ops #223). Hypothesis H-INITIATIVES-DATA-1 and result: `docs/initiatives-plan-data.md`.

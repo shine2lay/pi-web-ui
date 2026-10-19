@@ -43,6 +43,10 @@ export interface InitiativesExactRole {
 	at?: string;
 	/** Child task rows; their name defaults to this row's. */
 	tasks?: readonly InitiativesExactRole[];
+	/** initiatives-page: a plain status chip with this text (a project's registry status) instead of the
+	 *  role state chip; `statusTone` "done" draws it in the state chip's Done colours, else a neutral grey. */
+	statusLabel?: string;
+	statusTone?: "done" | "neutral";
 }
 
 export interface InitiativesExactStep {
@@ -173,6 +177,31 @@ export interface InitiativesExactInitiative {
 	decisionsTotal?: number;
 	decisionsNote?: string;
 	activity?: readonly InitiativesExactActivity[];
+	// initiatives-page (docs/initiatives-page-exact.md): what the live page knows before every section is
+	// connected. Each is optional; absent keeps the behaviour above.
+	/** With no `status`: the chip shows this text in a neutral grey (the registry's status). */
+	statusLabel?: string;
+	/** With no `outcomes`: how many done-when items there are and how many are met ("x of y"). */
+	outcomeCount?: { done: number; total: number };
+	/** A line in Outcomes and Done when instead of their list ("Not connected yet"). */
+	outcomesNote?: string;
+	/** A line in Who's doing what ("No projects in this initiative yet."). */
+	rowsNote?: string;
+	/** Latest updates in place of the newest three activity lines; `latestNote` when there are none. */
+	latest?: readonly InitiativesExactActivity[];
+	latestNote?: string;
+	/** A line in Hand-offs, Gaps or Activity instead of their list; their counts read "\u2014". */
+	handoffsNote?: string;
+	gapsNote?: string;
+	activityNote?: string;
+	/** The Roles line and the card's role marks, in place of what `roles` gives. */
+	rolesLine?: string;
+	members?: readonly string[];
+	/** Shown when `lead` is absent ("No one"); its mark stays "\u2014". */
+	leadName?: string;
+	/** False hides that lead button for this initiative even when its handler is given. */
+	canMessageLead?: boolean;
+	canChangeLead?: boolean;
 }
 
 /** One item of the "in no initiative" box (the wiring task: projects in no initiative). */
@@ -191,6 +220,9 @@ export interface InitiativesExactLoose {
 	/** Absent: the design's "Roles in no initiative · N". */
 	heading?: string;
 	items?: readonly InitiativesExactLooseItem[];
+	/** initiatives-page: the box opens like an initiative, with this as its detail. Its id must not be an
+	 *  initiative's. */
+	detail?: InitiativesExactInitiative;
 }
 
 export interface InitiativesExactInput {
@@ -199,6 +231,12 @@ export interface InitiativesExactInput {
 	loose?: InitiativesExactLoose;
 	/** A sentence after the count of things waiting on you, in the page's summary line. */
 	summaryNote?: string;
+	/** initiatives-page: the whole summary line while the page is live, out of date or empty, in place of
+	 *  the count ("Not connected yet: \u2026"), so it never says nothing is waiting when that isn't known. */
+	summary?: string;
+	/** initiatives-page: Needs you, Needs attention and Paused by you aren't known: their counts read
+	 *  "\u2014", and picking one shows this line instead of a list. */
+	filtersNote?: string;
 	/** Selected and tab first shown; the owner's own clicks win after that. */
 	selected?: string;
 	tab?: InitiativesExactTab;

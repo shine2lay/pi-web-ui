@@ -74,8 +74,8 @@ a{color:#B9A7FF}a:hover{color:#D6CCFF}
 </sc-if>
 
 <!-- Roles in no initiative -->
-<sc-if value="{{ds.showRoles}}" hint-placeholder-val="{{true}}"><section aria-labelledby="noinit" style="margin-top: 6px; padding: 14px; border-radius: 12px; border: 1px dashed #3A3F46; display: flex; flex-direction: column; gap: 8px">
-<h2 id="noinit" style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">{{loose.heading}}</h2>
+<sc-if value="{{ds.showRoles}}" hint-placeholder-val="{{true}}"><section aria-labelledby="noinit" onClick="{{loose.pick}}" style="margin-top: 6px; padding: 14px; border-radius: 12px; border: 1px dashed {{loose.bd}}; background: {{loose.bg}}; cursor: pointer; display: flex; flex-direction: column; gap: 8px">
+<h2 id="noinit" style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6"><button type="button" onClick="{{loose.pick}}" aria-current="{{loose.current}}" style="padding: 0; border: 0; background: transparent; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; text-align: left; cursor: pointer">{{loose.heading}}</button></h2>
 <sc-for list="{{loose.items}}" as="lo" hint-placeholder-count="1">
 <div style="display: flex; align-items: center; gap: 8px">
 <span style="display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 999px; background: #22262B; color: #C9CDD2; font-size: 9.5px; font-weight: 700">{{lo.mono}}</span>
@@ -110,6 +110,7 @@ a{color:#B9A7FF}a:hover{color:#D6CCFF}
 <p style="margin: 0; font-size: 16px; color: #DADDE1; max-width: 820px"><span style="color: #A9AEB6">Goal · </span>{{sel.goal}}</p>
 <div style="display: flex; flex-direction: column; gap: 8px">
 <h3 style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Outcomes · {{sel.doneText}}</h3>
+<sc-if value="{{sel.outcomesNote}}" hint-placeholder-val="{{false}}"><p style="margin: 0; padding: 12px; border-radius: 10px; border: 1px dashed #3A3F46; color: #A9AEB6; font-size: 13px">{{sel.outcomesNote}}</p></sc-if>
 <div style="position: relative">
 <span aria-hidden="true" style="position: absolute; left: 23px; top: 22px; bottom: 22px; width: 2px; background: #2A2E34"></span>
 <ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px">
@@ -177,6 +178,7 @@ a{color:#B9A7FF}a:hover{color:#D6CCFF}
 <h3 style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Latest updates</h3>
 <button type="button" onClick="{{showActivity}}" style="min-height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid #2F343A; background: transparent; color: #C9CDD2; font: inherit; font-size: 12.5px; cursor: pointer">All activity · {{sel.activityCount}}</button>
 </div>
+<sc-if value="{{sel.latestNote}}" hint-placeholder-val="{{false}}"><p style="margin: 0; padding: 12px; border-radius: 10px; border: 1px dashed #3A3F46; color: #A9AEB6; font-size: 13px">{{sel.latestNote}}</p></sc-if>
 <ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px">
 <sc-for list="{{sel.latest}}" as="u" hint-placeholder-count="3">
 <li style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; font-size: 13.5px">
@@ -249,6 +251,7 @@ a{color:#B9A7FF}a:hover{color:#D6CCFF}
 <section aria-labelledby="who" style="display: flex; flex-direction: column; gap: 8px">
 <h3 id="who" style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Who’s doing what</h3>
 <div style="display: flex; flex-direction: column; border-radius: 12px; border: 1px solid #22262B; overflow: hidden">
+<sc-if value="{{sel.rowsNote}}" hint-placeholder-val="{{false}}"><p style="margin: 0; padding: 14px; color: #A9AEB6; font-size: 13px">{{sel.rowsNote}}</p></sc-if>
 <sc-for list="{{sel.roles}}" as="r" hint-placeholder-count="4">
 <div style="display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 16px; padding: {{r.pad}}; background: {{r.bg}}; border-top: 1px solid {{r.topBd}}">
 <div style="flex: 1 1 220px; min-width: 0; display: flex; gap: 10px">
@@ -263,7 +266,7 @@ a{color:#B9A7FF}a:hover{color:#D6CCFF}
 <span style="font-size: 12.5px; color: #8D939B">{{r.note}}</span>
 </div>
 <div style="flex: 1 1 170px; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px">
-<dc-import name="StateChip" kind="{{r.kind}}" last-known="{{r.lastKnown}}" hint-size="140px,24px"></dc-import>
+<sc-if value="{{r.chip}}" hint-placeholder-val="{{true}}"><dc-import name="StateChip" kind="{{r.kind}}" last-known="{{r.lastKnown}}" hint-size="140px,24px"></dc-import></sc-if><sc-if value="{{r.plain}}" hint-placeholder-val="{{false}}"><span style="display: inline-flex; align-items: center; height: 24px; padding: 0 9px; box-sizing: border-box; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; color: {{r.plainFg}}; background: {{r.plainBg}}; border: 1px solid {{r.plainBd}}">{{r.plain}}</span></sc-if>
 <sc-if value="{{r.hasWait}}" hint-placeholder-val="{{false}}"><span style="font-size: 12px; color: #F0B95A">Waits on {{r.wait}}</span></sc-if>
 <sc-if value="{{r.hasUnblocks}}" hint-placeholder-val="{{false}}"><span style="font-size: 12px; color: #9CC7FF">Unblocks {{r.unblocks}}</span></sc-if>
 <span style="font-size: 11.5px; color: #7F858D">updated {{r.at}}</span>
@@ -276,6 +279,7 @@ a{color:#B9A7FF}a:hover{color:#D6CCFF}
 <!-- Done when -->
 <section aria-labelledby="done" style="display: flex; flex-direction: column; gap: 8px">
 <h3 id="done" style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Done when · {{sel.doneText}}</h3>
+<sc-if value="{{sel.outcomesNote}}" hint-placeholder-val="{{false}}"><p style="margin: 0; padding: 12px; border-radius: 10px; border: 1px dashed #3A3F46; color: #A9AEB6; font-size: 13px">{{sel.outcomesNote}}</p></sc-if>
 <div style="display: flex; flex-direction: column; gap: 8px">
 <sc-for list="{{sel.openOutcomes}}" as="oc" hint-placeholder-count="3">
 <article style="display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 12px; background: #131518; border: 1px solid #22262B">
@@ -327,6 +331,7 @@ a{color:#B9A7FF}a:hover{color:#D6CCFF}
 <!-- Hand-offs -->
 <section aria-labelledby="hand" style="display: flex; flex-direction: column; gap: 8px">
 <h3 id="hand" style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Hand-offs between roles</h3>
+<sc-if value="{{sel.handoffsNote}}" hint-placeholder-val="{{false}}"><p style="margin: 0; padding: 12px; border-radius: 10px; border: 1px dashed #3A3F46; color: #A9AEB6; font-size: 13px">{{sel.handoffsNote}}</p></sc-if>
 <div style="display: flex; flex-direction: column; gap: 6px">
 <sc-for list="{{sel.handoffs}}" as="h" hint-placeholder-count="2">
 <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 14px; border-radius: 10px; border: 1px solid #22262B; background: #111316">
@@ -366,6 +371,7 @@ a{color:#B9A7FF}a:hover{color:#D6CCFF}
 
 <section aria-labelledby="gaps" style="display: flex; flex-direction: column; gap: 8px; padding: 16px; border-radius: 12px; background: #131518; border: 1px solid #22262B">
 <h3 id="gaps" style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Gaps the lead hasn’t covered · {{sel.gapCount}}</h3>
+<sc-if value="{{sel.gapsNote}}" hint-placeholder-val="{{false}}"><p style="margin: 0; padding: 12px; border-radius: 10px; border: 1px dashed #3A3F46; color: #A9AEB6; font-size: 13px">{{sel.gapsNote}}</p></sc-if>
 <ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px">
 <sc-for list="{{sel.gaps}}" as="g" hint-placeholder-count="2">
 <li style="display: flex; gap: 8px; font-size: 13px; color: #D6D9DD"><svg style="flex: none; margin-top: 2px" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#F0B95A" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 2 14.5 13.5h-13z"></path><path d="M8 6.5v3.2"></path><circle cx="8" cy="11.7" r="0.7" fill="#F0B95A" stroke="none"></circle></svg><span>{{g.t}}</span></li>
@@ -477,6 +483,7 @@ a{color:#B9A7FF}a:hover{color:#D6CCFF}
 <!-- ACTIVITY -->
 <sc-if value="{{isActivity}}" hint-placeholder-val="{{false}}">
 <section aria-label="Activity" style="display: flex; flex-direction: column; border-radius: 12px; border: 1px solid #22262B; overflow: hidden">
+<sc-if value="{{sel.activityNote}}" hint-placeholder-val="{{false}}"><p style="margin: 0; padding: 11px 14px; color: #A9AEB6; font-size: 13px">{{sel.activityNote}}</p></sc-if>
 <sc-for list="{{sel.activity}}" as="a" hint-placeholder-count="5">
 <div style="display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 11px 14px; border-top: 1px solid {{a.topBd}}; font-size: 13.5px">
 <span style="flex: 0 0 76px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; color: #8D939B">{{a.at}}</span>

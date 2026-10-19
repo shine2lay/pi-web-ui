@@ -93,6 +93,7 @@ import {
 	receiveUpdateLinks,
 	resendInitiativesWatch,
 } from "./initiatives-state";
+import { receiveWorkPage, resendWorkPageWatch } from "./work-page-state";
 import { emitPluginData } from "./plugin-loader";
 import { ingestPluginLogsData } from "./plugin-logs";
 import { resolveCatalogSyncResult } from "./plugin-host";
@@ -1857,6 +1858,8 @@ export function useChat() {
 					resendRolesWatch();
 					// initiatives-page: so is the Initiatives tab's.
 					resendInitiativesWatch();
+					// initiatives-page-exact: and its work registry feed's.
+					resendWorkPageWatch();
 					// subs-limits-box: the Limits box needs the readings (and whether a check runs) again.
 					requestSubsLimits();
 					// role-message-ladder: the owner's open approval questions.
@@ -2191,6 +2194,10 @@ export function useChat() {
 				case "initiatives":
 					// initiatives-page: the Initiatives tab's page (initiatives-state.ts).
 					receiveInitiatives(msg);
+					break;
+				case "work_page":
+					// initiatives-page-exact: the Initiatives tab's work registry (work-page-state.ts).
+					receiveWorkPage(msg);
 					break;
 				case "decision_record":
 					// initiatives-page: a card's source record.

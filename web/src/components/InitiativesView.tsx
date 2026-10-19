@@ -511,7 +511,8 @@ function DecisionCard({
 	);
 }
 
-function SourceDialog({
+/** A source in full, with its chat (also the live Initiatives page's, initiatives-page #225). */
+export function SourceDialog({
 	t,
 	src,
 	now,

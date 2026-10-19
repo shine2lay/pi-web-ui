@@ -73,6 +73,7 @@ const everyCallback = (): Required<InitiativesExactActions> => ({
 	markRead: vi.fn(),
 	askDesign: vi.fn(),
 	answer: vi.fn(),
+	select: vi.fn(),
 });
 
 describe("the supplied Initiatives design, bound to typed input", () => {

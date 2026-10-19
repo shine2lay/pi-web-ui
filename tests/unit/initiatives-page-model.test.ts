@@ -1,0 +1,255 @@
+/// <reference types="vite/client" />
+// @vitest-environment jsdom
+// initiatives-page-exact (docs/initiatives-page-exact.md, Ops #225): the live Initiatives page's core model
+// on a fixed work registry page, alone and through the supplied design's view and template. No chats,
+// server or model calls; the names are made up (none of the design's sample).
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import type { InitiativesExactInput } from "../../web/src/initiatives-exact-model";
+import { createInitiativesExactView, type InitiativesExactActions } from "../../web/src/initiatives-exact-view";
+import { bindInitiativesSurface } from "../../web/src/initiatives-u0/surface";
+import { buildInitiativesPage, type InitiativesPageArgs } from "../../web/src/initiatives-page/model";
+import { statusOf } from "../../web/src/initiatives-page/tasks";
+import { NO_INITIATIVE } from "../../web/src/initiatives-page/types";
+import { AT, NOW, PAGE, pageArgs } from "./initiatives-page-fixture";
+
+const norm = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
+
+function build(over: Partial<InitiativesPageArgs> = {}) {
+	return buildInitiativesPage(pageArgs({ open: vi.fn(), ...over }));
+}
+
+const cleanups: (() => void)[] = [];
+afterEach(() => {
+	for (const clean of cleanups.splice(0)) clean();
+	document.body.replaceChildren();
+});
+
+/** The real template with the view, on `input`; the host gives Message lead and Change lead. */
+function mount(input: InitiativesExactInput) {
+	const actions: InitiativesExactActions = {
+		open: vi.fn(),
+		retry: vi.fn(),
+		messageLead: vi.fn(),
+		changeLead: vi.fn(),
+		select: vi.fn(),
+	};
+	let dirty = false;
+	const view = createInitiativesExactView(
+		() => input,
+		() => actions,
+		() => {
+			dirty = true;
+		},
+	);
+	const binding = bindInitiativesSurface(document, () => view.values());
+	cleanups.push(() => {
+		binding.dispose();
+		view.dispose();
+	});
+	const buttons = () => Array.from(document.querySelectorAll("button")).map((b) => norm(b.textContent));
+	return {
+		actions,
+		values: () => view.values() as unknown as { summary: string; filters: { label: string; count: string }[] },
+		text: () => norm(document.body.textContent),
+		buttons,
+		click(text: string | RegExp) {
+			const b = Array.from(document.querySelectorAll("button")).find((el) =>
+				typeof text === "string" ? norm(el.textContent) === text : text.test(norm(el.textContent)),
+			);
+			if (!b) throw new Error(`no button ${text}`);
+			b.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+			if (dirty) binding.update();
+			dirty = false;
+		},
+	};
+}
+
+describe("the Initiatives page's core model, on a fixed registry page", () => {
+	it("lists active initiatives first, then done, then dropped, each with its lead and done-when count", () => {
+		const { input, selected } = build();
+		expect(input.initiatives?.map((i) => i.name)).toEqual(["Alpha launch", "Beta cleanup", "Gamma archive"]);
+		expect(input.initiatives?.map((i) => i.statusLabel)).toEqual(["Active", "Done", "Dropped"]);
+		expect(input.initiatives?.map((i) => i.lead)).toEqual(["Architecture", "QA", "Ops"]);
+		expect(input.initiatives?.map((i) => i.outcomeCount)).toEqual([
+			{ done: 1, total: 3 },
+			{ done: 2, total: 2 },
+			{ done: 0, total: 1 },
+		]);
+		expect(selected).toBe("alpha");
+		expect(input.page).toEqual({ state: "live", at: "09:40", date: "Sun Oct 18" });
+	});
+
+	it("shows an initiative's projects as rows with their lead, count and registry status", () => {
+		const alpha = build().input.initiatives?.[0];
+		expect(alpha?.roles?.map((r) => [r.name, r.part, r.taskTitle, r.statusLabel, r.statusTone])).toEqual([
+			["Login form", "Lead · Frontend", "1 of 2 done", "Active", "neutral"],
+			["Search box", "Lead · Backend", "1 of 1 done", "Done", "neutral"],
+		]);
+		expect(alpha?.rolesLine).toBe("3 roles · lead + 2");
+		expect(alpha?.members).toEqual(["Frontend", "Backend"]);
+		expect(build().input.initiatives?.[1]?.rowsNote).toBe("No projects in this initiative yet.");
+	});
+
+	it("puts projects in no initiative (none named, or an unknown one) in their own box", () => {
+		const { input } = build();
+		expect(input.loose?.heading).toBe("Projects in no initiative · 2");
+		expect(input.loose?.items?.map((l) => [l.name, l.note])).toEqual([
+			["Docs sweep", "Lead · Docs · 0 of 3 done · Active"],
+			["Old lane", "Lead · Ops · 1 of 1 done · Done"],
+		]);
+		expect(input.loose?.detail?.id).toBe(NO_INITIATIVE);
+		expect(input.loose?.detail?.outcomeCount).toEqual({ done: 1, total: 4 });
+		expect(input.loose?.detail?.roles?.map((r) => r.name)).toEqual(["Docs sweep", "Old lane"]);
+		expect(build({ selected: NO_INITIATIVE }).selected).toBe(NO_INITIATIVE);
+		const none = build({ work: { page: { ...PAGE, projects: PAGE.projects.slice(0, 2) }, status: "ready" } });
+		expect(none.input.loose).toBeUndefined();
+		expect(build({ selected: "gone" }).selected).toBe("alpha");
+	});
+
+	it("marks every section steps 2-4 fill as not connected yet, and statusOf gives nothing yet", () => {
+		const { input } = build();
+		for (const i of [...(input.initiatives ?? []), input.loose!.detail!]) {
+			expect(i.goal).toBe("Not connected yet");
+			expect(i.started).toBe("Not connected yet");
+			expect(i.outcomesNote).toMatch(/^Not connected yet/);
+			expect(i.gapsNote).toMatch(/^Not connected yet/);
+			expect(i.activityNote).toMatch(/^Not connected yet/);
+			expect(i.handoffsNote).toMatch(/^Not connected yet/);
+			expect(i.status).toBeUndefined();
+			for (const r of i.roles ?? []) expect(r.note).toBe("Tasks: not connected yet");
+		}
+		expect(input.summary).toBe("Not connected yet: what's waiting on you will show here.");
+		expect(input.filtersNote).toMatch(/^Not connected yet/);
+		expect(statusOf(PAGE, "alpha")).toBeUndefined();
+	});
+
+	it("takes decisions and the lead's updates only for the initiative the decision log shows", () => {
+		const { input, sources } = build();
+		const [alpha, beta] = input.initiatives ?? [];
+		expect(alpha?.decisions?.map((d) => [d.title, d.body, d.at, d.sourceRef])).toEqual([
+			["Ship the small form first", "The login form ships before the search box.", "09:40", "d1#0"],
+		]);
+		expect(sources["d1#0"]?.record).toBe("dr-1");
+		expect(alpha?.leadReport).toBe("Form landed.");
+		expect(alpha?.leadNext).toBe("Wire the search box.");
+		expect(alpha?.latest).toEqual([{ at: "09:40", role: "Architecture", text: "Form landed." }]);
+		expect(beta?.decisions).toBeUndefined();
+		expect(beta?.decisionsNote).toBe("No decisions are recorded for this initiative yet.");
+		expect(beta?.latestNote).toBe("No updates from the lead yet.");
+		expect(input.initiatives?.[0]?.finish).toBeUndefined();
+		expect(input.initiatives?.[0]?.spendTotal).toBeUndefined();
+	});
+
+	it("shows Message <lead> only where the lead's home chat is known, Change lead only where the log keeps the lead", () => {
+		const m = build();
+		expect(m.input.initiatives?.map((i) => [i.id, i.canMessageLead, i.canChangeLead])).toEqual([
+			["alpha", true, true],
+			["beta", false, false],
+			["gamma", false, false],
+		]);
+		expect(m.leadChats).toEqual({ alpha: "/chats/architecture-home.jsonl" });
+		expect(m.changeLead).toEqual(["alpha"]);
+		expect(m.input.loose?.detail?.canMessageLead).toBe(false);
+		expect(m.input.loose?.detail?.canChangeLead).toBe(false);
+	});
+
+	it("uses the drawn page states: loading, first-load error, out of date, unreadable, old data", () => {
+		expect(build({ work: { page: null, status: "loading" } }).input).toEqual({ page: { state: "loading" } });
+		expect(build({ work: { page: null, status: "error", error: "x", failedAt: AT } }).input.page).toEqual({
+			state: "error",
+			at: "09:40",
+		});
+		expect(build({ work: { page: PAGE, status: "error", error: "x", failedAt: NOW } }).input.page?.state).toBe("stale");
+		expect(build({ work: { page: { ...PAGE, problem: "unreadable" }, status: "ready" } }).input.page?.state).toBe(
+			"error",
+		);
+		const old = build({ work: { page: { ...PAGE, problem: "too-big" }, status: "ready" } }).input;
+		expect(old.page?.state).toBe("live");
+		expect(old.initiatives?.map((i) => i.oldSince)).toEqual(["09:40", "09:40", "09:40"]);
+		expect(build().input.initiatives?.[0]?.oldSince).toBeUndefined();
+	});
+});
+
+describe("the core model through the supplied design", () => {
+	it("draws the header, cards, box and detail, with only All counted and no all-clear", () => {
+		const page = mount(build().input);
+		const text = page.text();
+		expect(text).toContain("3 initiatives · Sun Oct 18");
+		expect(text).toContain("Live · updated 09:40");
+		expect(text).toContain("1 of 3 outcomes done");
+		expect(text).toContain("Projects in no initiative · 2");
+		expect(text).toContain("Goal · Not connected yet");
+		expect(text).toContain("Not connected yet: gaps will show here.");
+		expect(text).not.toMatch(/Nothing is waiting on you/);
+		const v = page.values();
+		expect(v.summary).toBe("Not connected yet: what's waiting on you will show here.");
+		expect(v.filters.map((f) => [f.label, f.count])).toEqual([
+			["All", "3"],
+			["Needs you", "—"],
+			["Needs attention", "—"],
+			["Paused by you", "—"],
+		]);
+		expect(page.buttons()).toContain("Message Architecture");
+		expect(page.buttons()).toContain("Change lead");
+		expect(page.buttons().some((b) => /New initiative|Resume|Mark read/.test(b))).toBe(false);
+	});
+
+	it("hides Message and Change lead where they can't work, and opens the box like an initiative", () => {
+		const page = mount(build().input);
+		page.click(/^Beta cleanup/);
+		expect(page.actions.select).toHaveBeenCalledWith("beta");
+		expect(page.buttons().some((b) => b.startsWith("Message "))).toBe(false);
+		expect(page.buttons()).not.toContain("Change lead");
+		page.click("Projects in no initiative · 2");
+		expect(page.actions.select).toHaveBeenCalledWith(NO_INITIATIVE);
+		expect(page.text()).toContain("No one leads this");
+	});
+
+	it("never says nothing is waiting, loading, failing, stale or empty", () => {
+		const states: InitiativesPageArgs["work"][] = [
+			{ page: null, status: "loading" },
+			{ page: null, status: "error", error: "x", failedAt: AT },
+			{ page: PAGE, status: "error", error: "x", failedAt: NOW },
+			{ page: { ...PAGE, initiatives: [], projects: [] }, status: "ready" },
+			{ page: { ...PAGE, problem: "too-big" }, status: "ready" },
+		];
+		for (const work of states) {
+			const page = mount(build({ work }).input);
+			expect(page.values().summary).not.toMatch(/^Nothing is waiting/);
+			expect(page.text()).not.toMatch(/Nothing is waiting on you\./);
+			cleanups.splice(0).forEach((c) => c());
+			document.body.replaceChildren();
+		}
+		const old = mount(build({ work: { page: { ...PAGE, problem: "too-big" }, status: "ready" } }).input);
+		expect(old.text()).toContain("Old data, not confirmed.");
+	});
+});
+
+describe("shipped files", () => {
+	it("hold none of the design's sample data", () => {
+		const shipped = [
+			"web/src/initiatives-page/model.ts",
+			"web/src/initiatives-page/types.ts",
+			"web/src/initiatives-page/plan.ts",
+			"web/src/initiatives-page/tasks.ts",
+			"web/src/initiatives-page/gaps.ts",
+			"web/src/work-page-state.ts",
+			"web/src/components/InitiativesPage.tsx",
+		];
+		const sample = [
+			"Team in Temper",
+			"Reliability",
+			"Notebook import",
+			"Budget & tokens",
+			"credit flag",
+			"13:05",
+			"Oct 11",
+		];
+		for (const file of shipped) {
+			const source = readFileSync(join(process.cwd(), file), "utf8");
+			for (const s of sample) expect(source.includes(s), `${file} holds "${s}"`).toBe(false);
+		}
+	});
+});
