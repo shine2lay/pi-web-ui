@@ -622,6 +622,7 @@ export class RoleMessageGuardHost {
 			if (typeof gen === "string") return this.degrade(`current.json ${gen}`);
 			const held = this.takeLock();
 			if (held) return this.degrade(held);
+			this.sweepLockLeftovers();
 			this.decisions = this.readJsonl<GuardDecisionEvent>(join(this.o.dir, "decisions.jsonl"));
 			this.questions = this.readJson<GuardQuestionRecord[]>(join(this.o.dir, "questions.json")) ?? [];
 			await this.exclusive(async () => {
@@ -871,6 +872,32 @@ export class RoleMessageGuardHost {
 				}
 			}
 		}
+	}
+	/** Ops #257 (Architecture B5): once this server holds the lock, remove the lock.tmp-<pid> and lock.stale-<pid> files
+	 *  of servers that are gone (a crash inside takeLock() leaves them). A live server's (one taking the lock right now)
+	 *  and anything but a plain file stay. Best effort: a file that can't be removed stays; logs what went. */
+	private sweepLockLeftovers(): void {
+		const removed: string[] = [];
+		try {
+			for (const name of readdirSync(this.o.dir)) {
+				const m = /^lock\.(?:tmp|stale)-(\d+)$/.exec(name);
+				if (!m) continue;
+				const pid = Number(m[1]);
+				if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid || pidAlive(pid)) continue;
+				const path = join(this.o.dir, name);
+				try {
+					if (!lstatSync(path).isFile()) continue;
+					rmSync(path);
+					removed.push(name);
+				} catch {
+					/* left behind */
+				}
+			}
+		} catch {
+			/* the folder can't be listed: nothing removed */
+		}
+		if (removed.length)
+			this.o.log(`approval ladder: removed ${removed.sort().join(", ")} (left by a server that is gone)`);
 	}
 	/** Link this process's flushed lock file to `lock`: true once held (the folder flushed, the file's inode kept),
 	 *  false when one is there. */
@@ -1139,7 +1166,8 @@ export class RoleMessageGuardHost {
 	/** Ops #248 (Architecture S2): the one way a generation begins, for rotate() and the fresh start, so the two can't
 	 *  drift. Removes a half-made gen-<gen>, initialises it with a fresh state (the store flushes its files), switches
 	 *  current.json to it (flushed), hands the store to `adopt` when given, then removes generations older than the one
-	 *  before it. A crash before the switch leaves the old generation current. `what` names the caller in an error.
+	 *  before it (a removal that fails is logged, not thrown: Ops #257, B5). A crash before the switch leaves the old
+	 *  generation current. `what` names the caller in an error.
 	 *  Runs under the lease. */
 	private async beginGeneration(
 		gen: number,
@@ -1154,7 +1182,15 @@ export class RoleMessageGuardHost {
 		if (r.state !== "ready") throw new Error(`${what}: ${r.reason}`);
 		this.writeCurrent(gen);
 		adopt?.(store, dir);
-		this.cleanGenerations(gen);
+		// Ops #257 (Architecture B5): the switch is done, so the generation counts as begun; a clean-up that fails now
+		// leaves the older folders for the next one, and the log says so.
+		try {
+			this.cleanGenerations(gen);
+		} catch (err) {
+			this.o.log(
+				`approval ladder: rotated to generation ${gen}; cleanup failed (${err instanceof Error ? err.message : String(err)})`,
+			);
+		}
 		return { store, dir };
 	}
 

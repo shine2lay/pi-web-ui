@@ -582,6 +582,35 @@ describe("a rotation that fails (Ops #253, Security O2)", () => {
 	});
 });
 
+describe("a clean-up that fails after the switch (Ops #257, Architecture B5)", () => {
+	it.skipIf(process.getuid?.() === 0)(
+		"the rotation counts as done: approvals stay on the new generation and the log says the clean-up failed",
+		async () => {
+			const w = await world(undefined, { rotateBytes: 1 }); // its start already rotated to gen-2 (past 1 byte)
+			expect(current()).toBe(2);
+			const stuck = join(guard(), "gen-1", "stuck");
+			mkdirSync(stuck);
+			writeFileSync(join(stuck, "x"), "x");
+			chmodSync(stuck, 0o555); // gen-1 can't be removed once gen-3 is current
+			const at = w.logs.length;
+			let r: unknown;
+			try {
+				r = await send(w, "alpha", A, "beta", { kind: "fyi" }, "");
+			} finally {
+				chmodSync(stuck, 0o755);
+			}
+			expect(r).toMatchObject({ ok: true });
+			expect(current()).toBe(3);
+			expect(w.host.state).toEqual({ status: "ready", reason: "" });
+			expect(w.logs.slice(at).filter((l) => l.startsWith("approval ladder"))).toEqual([
+				expect.stringMatching(/^approval ladder: rotated to generation 3; cleanup failed \(.+\)$/),
+				"approval ladder: guard store generation 3",
+			]);
+			expect(existsSync(join(guard(), "gen-1"))).toBe(true); // left for the next clean-up
+		},
+	);
+});
+
 describe("a journal holding a prepared send, or one that can't be parsed, is never started over (Ops #248, S1)", () => {
 	it("a prepared send: refused, off with the reason, every guard file as it was", async () => {
 		const { w, operationId } = await preparedSend();

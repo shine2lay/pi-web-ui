@@ -269,6 +269,23 @@ describe("one server holds the guard (Ops #253, Architecture A4)", () => {
 		expect(lockFiles(dir)).toEqual(["lock"]);
 	});
 
+	it("lock.tmp- and lock.stale- files a gone server left are removed once the lock is held; a live server's stay (Ops #257, B5)", async () => {
+		const w = await world();
+		const dir = staleLock("guard-leftovers");
+		const GONE = 2 ** 22 + 1;
+		// A server that crashed inside its take left its own files; a live one is taking the lock right now.
+		for (const name of [`lock.tmp-${GONE}`, `lock.stale-${GONE}`, `lock.tmp-${OTHER}`, `lock.stale-${OTHER}`])
+			writeFileSync(join(dir, name), `${GONE}\n`);
+		mkdirSync(join(dir, `lock.stale-${GONE + 1}`)); // not a plain file: left as it is
+		const host = newHost(w, dir);
+		await host.start();
+		expect(host.state).toEqual({ status: "ready", reason: "" });
+		expect(readFileSync(join(dir, "lock"), "utf8")).toBe(`${process.pid}\n`);
+		expect(lockFiles(dir).sort()).toEqual(
+			["lock", `lock.stale-${GONE + 1}`, `lock.stale-${OTHER}`, `lock.tmp-${OTHER}`].sort(),
+		);
+	});
+
 	it("a server that takes the lock between the move and the second try wins it; this one turns off", async () => {
 		const w = await world();
 		const dir = staleLock("guard-second-try");
