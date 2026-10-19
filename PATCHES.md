@@ -7140,9 +7140,31 @@ undo: `docs/role-message-fresh-start.md` (H-LADDER-FRESH-START-1).
 - `docs/role-message-fresh-start.md` (new); `docs/role-message-ladder.md` points to it under Rollback.
 - `tests/unit/role-message-guard-fresh-start.test.ts` (new); no existing test changed.
 
+### Safer start (Ops #248, branch ladder-safe-start)
+
+The reviews' follow-ups (Security `REVIEW-18466679` N1-N3, Architecture rm-55121021 S1-S2), one commit
+each; hypothesis H-LADDER-SAFE-START-1 in `docs/role-message-fresh-start.md`.
+
+- N3: once any `gen-N` or `archive-gen-N` folder exists, a `current.json` that is missing, unreadable,
+  not understood or names a folder that isn't there turns the ladder off at start, logged as
+  `approval ladder UNAVAILABLE (current.json <why>)`, before the lock or any guard file, and nothing is
+  cleaned; a rotation refuses the same way (`currentGeneration()` returns the reason instead of guessing
+  1). A first start (no generation folder yet) still begins gen 1.
+- N1: `readFreshStartFile()` opens the request once (`O_NOFOLLOW | O_NONBLOCK`), checks that open file
+  (plain file, this user, mode 0600, at most 4 KiB) and reads from it; otherwise it logs
+  `fresh start refused (<why>)` and leaves the request in place. The script won't write one over 4 KiB.
+- N2: the tests run the script with `PI_WEB_DATA_DIR` on their temp folder, never `~/.pi-web-ui`.
+- S1: `guardJournalRefusal()` (store): a journal holding a prepared send, or one the store can't parse,
+  refuses the fresh start; the ladder stays off and nothing is cleaned or rewritten. The script refuses
+  both too.
+- S2: `beginGeneration()` begins a generation for both `rotate()` and the fresh start (same files, order
+  and flushes); the existing rotation tests are unchanged.
+
 ### How it was checked
 
 - The new test file and the role-message-guard host tests, sealed; then the land gate.
+- Ops #248: each degrade case compares every guard file's sha256 and mtime before and after; N3's tests
+  failed before its fix.
 
 ### Undo and syncing
 
