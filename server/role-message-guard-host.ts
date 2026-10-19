@@ -25,6 +25,7 @@ import {
 	existsSync,
 	fstatSync,
 	fsyncSync,
+	linkSync,
 	lstatSync,
 	mkdirSync,
 	openSync,
@@ -373,6 +374,15 @@ function writeDurableBytes(path: string, bytes: Buffer): void {
 	}
 	renameSync(tmp, path);
 }
+/** The pid a lock file names, or null when it is missing or names none. */
+function readPid(path: string): number | null {
+	try {
+		const n = Number.parseInt(readFileSync(path, "utf8"), 10);
+		return Number.isSafeInteger(n) ? n : null;
+	} catch {
+		return null;
+	}
+}
 function fsyncDir(path: string): void {
 	const fd = openSync(path, "r");
 	try {
@@ -573,7 +583,8 @@ export class RoleMessageGuardHost {
 			// or any guard file is written: guessing a generation could clean away the live one.
 			const gen = this.currentGeneration();
 			if (typeof gen === "string") return this.degrade(`current.json ${gen}`);
-			writeDurable(this.lockPath, `${process.pid}\n`);
+			const held = this.takeLock();
+			if (held) return this.degrade(held);
 			this.decisions = this.readJsonl<GuardDecisionEvent>(join(this.o.dir, "decisions.jsonl"));
 			this.questions = this.readJson<GuardQuestionRecord[]>(join(this.o.dir, "questions.json")) ?? [];
 			await this.lease.run(async () => {
@@ -731,12 +742,64 @@ export class RoleMessageGuardHost {
 	}
 
 	private readLock(): number | null {
+		return readPid(this.lockPath);
+	}
+	/** Ops #253 (Architecture A4): take the lock in one step that fails when it is there, so two servers starting at
+	 *  once can't both hold it. The pid is written and flushed to a file of this process's own, then linked to `lock`: a
+	 *  link fails when `lock` exists, as openSync "wx" does, and the lock is never seen empty. A lock that is there: a
+	 *  live other server's turns the ladder off, as before. A gone server's (dead pid), an unreadable one or this
+	 *  process's own is moved aside (a rename takes the file that is there, never one made after the look), given back
+	 *  if it is a live server's after all, else removed, and the take is tried once more; a second failure turns the
+	 *  ladder off. Returns why it can't, or null once held. Leaves no file of its own behind either way. */
+	private takeLock(): string | null {
+		const mine = `${this.lockPath}.tmp-${process.pid}`;
+		const aside = `${this.lockPath}.stale-${process.pid}`;
 		try {
-			const n = Number.parseInt(readFileSync(this.lockPath, "utf8"), 10);
-			return Number.isSafeInteger(n) ? n : null;
-		} catch {
-			return null;
+			rmSync(mine, { force: true });
+			writeFileSync(mine, `${process.pid}\n`, { mode: 0o600 });
+			const fd = openSync(mine, "r");
+			try {
+				fsyncSync(fd);
+			} finally {
+				closeSync(fd);
+			}
+			if (this.linkLock(mine)) return null;
+			const other = this.readLock();
+			if (other && other !== process.pid && pidAlive(other)) return `another server (pid ${other}) holds the guard`;
+			let moved = false;
+			try {
+				renameSync(this.lockPath, aside);
+				moved = true;
+			} catch (err) {
+				if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err; // ENOENT: gone already
+			}
+			const was = moved ? readPid(aside) : null;
+			if (was && was !== process.pid && pidAlive(was)) {
+				// A live server took the lock between the look above and the move: give it back.
+				try {
+					linkSync(aside, this.lockPath);
+				} catch {
+					/* yet another server holds it now */
+				}
+				return `another server (pid ${was}) holds the guard`;
+			}
+			if (this.linkLock(mine)) return null;
+			return `another server (pid ${this.readLock() ?? "unknown"}) took the guard as this one started`;
+		} finally {
+			rmSync(mine, { force: true });
+			rmSync(aside, { force: true });
 		}
+	}
+	/** Link this process's flushed lock file to `lock`: true once held (the folder flushed), false when one is there. */
+	private linkLock(mine: string): boolean {
+		try {
+			linkSync(mine, this.lockPath);
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
+			throw err;
+		}
+		fsyncDir(this.o.dir);
+		return true;
 	}
 	private readJson<T>(path: string): T | null {
 		try {
