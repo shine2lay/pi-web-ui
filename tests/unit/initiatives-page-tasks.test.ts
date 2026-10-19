@@ -159,6 +159,19 @@ describe("the status rules, in order", () => {
 		]);
 		expect(mount(input).text()).toContain("You paused every open task here: Design #8, Design #11.");
 	});
+
+	it("gives the box of projects in no initiative its chip by the same rules, grey while nothing there is open", () => {
+		// H-INITIATIVES-PAGE-3b: the live box kept step 1's "No initiative" while its tasks gave a rules chip.
+		const { input } = build({ selected: NO_INITIATIVE });
+		expect([input.loose?.detail?.status, input.loose?.detail?.statusLabel]).toEqual(["you", "No initiative"]);
+		const closed = { ...TASKS_PAGE, tasks: TASKS.map((x) => ({ ...x, state: "done" as const })) };
+		const quiet = build({ selected: NO_INITIATIVE, work: { page: closed, status: "ready" } }).input.loose?.detail;
+		expect([quiet?.status, quiet?.statusLabel]).toEqual([undefined, "No initiative"]);
+		const page = mount(input);
+		expect((page.values() as unknown as { sel: { sText: string } }).sel.sText).toBe("Needs you");
+		// The box is no initiative card, so the filter counts stay as they were.
+		expect(page.values().filters.map((f) => f.count)).toEqual(["8", "1", "1", "1"]);
+	});
 });
 
 describe("who's doing what", () => {

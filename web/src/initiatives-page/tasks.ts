@@ -333,12 +333,14 @@ export function tasksPart(
 		}
 	}
 
-	// The projects in no initiative: their box's detail lists what waits on the owner; an item asks him.
+	// The projects in no initiative: their box's detail lists what waits on the owner and gets its chip by the
+	// same rules (H-INITIATIVES-PAGE-3b); with no open task it keeps step 1's "No initiative". An item asks him.
 	const loose = looseProjects(page);
 	const loosePart: Record<string, { onYou: true }> = {};
 	if (loose.length) {
-		const { onYou } = scoped(undefined, scopeOf(page, NO_INITIATIVE));
-		initiatives[NO_INITIATIVE] = { onYou };
+		const { rule, onYou, out } = scoped(undefined, scopeOf(page, NO_INITIATIVE));
+		if (rule.status) out.status = rule.status;
+		initiatives[NO_INITIATIVE] = out;
 		waiting += onYou.length;
 		for (const p of loose) {
 			if (asksOf(links.project.get(p.id) ?? [], now, open).length) loosePart[p.id] = { onYou: true };

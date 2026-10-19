@@ -104,4 +104,51 @@ wrong chat or none.
 
 ### Result
 
-Not run yet.
+**Landed and installed.** Land request 53-3d70cc landed a482b2eb on Oct 18 at about 20:51 (not batched;
+the landing gate passed). `pi-web-deploy` swapped it in at 20:53 with every check passing (server, page, reply,
+big chat, log); `pi-web-deploy result a482b2eb` returned 0. Logs: `land.log`, `deploy.log` and their `.exit`
+files in `/home/shinelay/kept-from-tmp/2026-10-18/initiatives-steps/3/`.
+
+**First live check: MISS, on one chip.** Look only, by `live/look.mjs` in that folder. It replays the
+registry log and reads the roles' queues just before, compares every row, chip, count and Waiting on you item
+with what the rules give, and holds every message that could open or change anything in its own headless
+browser. Run 1 at 21:10 (`live/run1/`) and run 2 at 21:22 (`live/run2/`):
+
+- Passed both times: every project's open tasks match the queues exactly (numbers, departments, chips,
+  recorded waits, "updated" times). Temper #99 sits in "Directly under this initiative". Each initiative
+  card's chip follows the rule order: Team in Temper Moving, Design department in Temper No tasks yet. The
+  box heading counts 6 projects. Nothing waits on the owner (the Roles overview said 0 at 21:10), and the ON
+  YOU bar says so only once the page is live. Nothing scrolls sideways at 390 px. The page's own feed has the
+  registry's records and links.
+- Not the page: in run 1 the task click sent nothing and the filter counts read wrong. Both were faults in
+  the look itself. The look holds the page's own state requests, so the app's silence watchdog replaces its
+  connection once, about 6.6 s after load (the app drops a send while it reconnects), and run 1 clicked in
+  that gap. The pill reader also read each label twice; the screenshot shows All 2, Needs you 0, Needs
+  attention 0, Paused by you 0, the expected counts. With the look fixed, run 2 passed both: clicking Temper
+  #99 asked for exactly that task's own chat (held, never sent), and the page left for the chat view.
+- The page's miss: the box of projects in no initiative kept step 1's "No initiative" chip. By the rules
+  above it should have said Moving (run 1), then Needs attention (run 2). `tasksPart` worked out the box's
+  status (`statusOf(page, NO_INITIATIVE)` is tested) but gave the box only its Waiting on you items. That is
+  the "wrong chip" this hypothesis named as proof against it, so H-INITIATIVES-PAGE-3 is a miss on that one
+  point, and H-INITIATIVES-PAGE-3b follows.
+
+Shots: `live/run2/desktop-1440.png`, `desktop-1440-who-box.png`, `desktop-1440-team-in-temper.png`,
+`desktop-1440-who-team-in-temper.png`, `phone-390.png`, `phone-390-full.png`.
+
+## H-INITIATIVES-PAGE-3b
+
+**What is wrong, and the evidence.** Live runs 1 and 2 above: the box's own chip says "No initiative" while
+its projects' open tasks give Moving, then Needs attention, by the rules. In `web/src/initiatives-page/tasks.ts`
+the box's part sets only `onYou`. The rules' status for it is worked out but never handed over.
+
+**The one change.** `tasksPart` gives the box's detail the status the rules give, and the paused text an
+initiative gets when the owner paused every open task. With no open task in the box, it keeps step 1's
+"No initiative" label.
+
+**Expected result, and how it's measured.** In the unit test, the fixture's box says Needs you (rule 2),
+and a box whose tasks are all closed keeps "No initiative". The filter counts stay the same, since the box is
+not an initiative card. Live, run 3 after the install: the box's chip is what the rules give on that
+moment's registry, and every other check passes as in run 2, 16 of 16.
+
+**What would prove it wrong.** The box still saying "No initiative" while a rule applies, a rules chip on a
+box with nothing open, the filter counts or cards changing, or any other check that passed in run 2 failing.
