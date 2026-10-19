@@ -34,3 +34,11 @@ Only `Dialog` and `DshQuestionDialog` answer a chat's ask (`dialog_response`, `q
 - Plugin dialogs (`host.dialogs.*`, the `pluginDialog` listener in `App.tsx`): a plain document listener while one is open, drawn in the chat pane, so the same exposure. Left alone because it is a plugin's ask, not a chat's, and no installed plugin opens one (scheduler, telegram and temper; the scheduler uses the browser's own `window.confirm`). If a plugin starts using `host.dialogs`, the same `view === "chat"` check applies, as a change of its own.
 
 ## Results
+
+### H-ESCAPE-HIDDEN-QUESTION-1: hit (Oct 18)
+
+- `tests/unit/hidden-question-escape.test.ts` failed on the old code, 16 of 22: the 12 covering-tab cases (Escape cancelled the hidden ask and stopped there), the 3 "back in the chat view" cases (at their covering-tab step) and the test of App's wiring. The 6 that passed on the old code are the chat-view and modal-order cases, today's behaviour that has to stay. With the change all 22 passed, and `tests/unit/initiatives-page-escape.test.ts` (#225) still passed, 3 of 3.
+- The plan's one change named `useEscapeKey`'s `enabled` flag. It was built as "pass Escape on while the chat is hidden" instead, for the reason under "One change": the flag would put the question back above a modal opened on another tab, and the plan's goal keeps the chat view's Escape as it was. Ops, the task's accountable lead, made that call within the plan; it is not the owner's approval.
+- Landed as `4b5fc22` (commit `e58a0c4d`, rebased onto `b21a292`) through `wt land` request `43-d8f2a3`, 19:09 to 19:14. Gate `scripts/check.sh --fast`: 436 files, 6225 tests passed, 6 skipped; protocol, PATCHES.md, typecheck, lint and prettier passed.
+- Installed with `pi-web-deploy --landed 43-d8f2a3` at 19:15; the server answered after 2 s, and `pi-web-deploy result 4b5fc229` returned 0 with every check passed (server, page, reply, big chat, log).
+- No live look, at the owner's word (m55390): the unit test above is the measure.
