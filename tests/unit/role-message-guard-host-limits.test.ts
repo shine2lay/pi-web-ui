@@ -58,10 +58,11 @@ describe("ladder: unchanged limits", () => {
 			log: () => {},
 			now: clock,
 		});
+		// The chain first: the running host turns off too once its lock names another server (Ops #257, Security B1-R).
+		const at = await chainTo(w, 7);
 		writeFileSync(join(data, "role-message-guard", "lock"), `${process.ppid}\n`); // another live server holds it
 		await other.start();
 		expect(other.state.status).toBe("degraded");
-		const at = await chainTo(w, 7);
 		const r = await other.send(
 			{ ...who(w, at.from, at.file), handling: w.rm.handlingDepth(at.file, lastIn(w, at.file)) },
 			{ to: at.to, kind: "fyi", text: "x" },

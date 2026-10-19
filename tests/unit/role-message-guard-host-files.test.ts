@@ -223,6 +223,21 @@ describe("one server holds the guard (Ops #253, Architecture A4)", () => {
 		expect(readFileSync(lock, "utf8")).toBe(`${OTHER}\n`); // its stop leaves the other server's lock
 	});
 
+	it("another server's lock in this server's inode (ext4 gives a freed inode number out again at once) is not this server's (Ops #257, Security B1-R)", async () => {
+		const w = await world();
+		const lock = join(guard(), "lock");
+		const journal = join(guard(), "gen-1", "journal.json");
+		const before = readFileSync(journal, "utf8");
+		const ino = lstatSync(lock).ino;
+		writeFileSync(lock, `${OTHER}\n`); // in place: the same inode, on any file system
+		expect(lstatSync(lock).ino).toBe(ino);
+		expect(await send(w, "alpha", A, "beta", { kind: "fyi" }, "")).toMatchObject({ ok: false });
+		expect(w.host.state).toEqual({ status: "degraded", reason: `another server (pid ${OTHER}) took the guard's lock` });
+		expect(readFileSync(journal, "utf8")).toBe(before);
+		w.host.stop();
+		expect(readFileSync(lock, "utf8")).toBe(`${OTHER}\n`); // its stop leaves the other server's lock
+	});
+
 	// Ops #257 (B3): `lock` is looked at with lstat first; anything but a plain file turns the start off, left as it is.
 	const odd = (kind: string) => `the guard's lock is ${kind}, not a plain file; it was left in place`;
 	it("a folder or a link at lock turns the start off and is left as it is (Ops #257, B3)", async () => {

@@ -576,8 +576,9 @@ export class RoleMessageGuardHost {
 	private decisions: GuardDecisionEvent[] = [];
 	private questions: GuardQuestionRecord[] = [];
 	private lockPath = "";
-	/** Ops #257 (B1): the lock file this server linked (its device and inode), null while it holds none. */
-	private lockHeld: { dev: number; ino: number } | null = null;
+	/** Ops #257 (B1): the lock file this server linked (its device and inode) and the pid written into it (Security
+	 *  B1-R), null while it holds none. */
+	private lockHeld: { dev: number; ino: number; pid: number } | null = null;
 	/** history.jsonl: what each request and grant looked like at the last check (null until seeded at start). */
 	private historySeen: Map<string, string> | null = null;
 	/** Stores already warned about (80% full); cleared once below 70%. */
@@ -799,7 +800,10 @@ export class RoleMessageGuardHost {
 	private readLock(): number | null {
 		return readPid(this.lockPath);
 	}
-	/** Ops #257 (B1): why `lock` is no longer the file this server linked (same device and inode), or null while it is. */
+	/** Ops #257 (B1): why `lock` is no longer the file this server linked, or null while it is: the same device and
+	 *  inode, naming the pid this server wrote into it. Security B1-R: the inode alone isn't enough, as a freed inode
+	 *  number is given out again at once (ext4), so another server's new lock can have it; another server's lock always
+	 *  names that server's pid, written and flushed before the link. */
 	private lockLost(): string | null {
 		const held = this.lockHeld;
 		if (!held) return "this server holds no lock on the guard";
@@ -809,8 +813,9 @@ export class RoleMessageGuardHost {
 		} catch {
 			return "the guard's lock is gone";
 		}
-		if (st && st.dev === held.dev && st.ino === held.ino) return null;
-		return `another server (pid ${(st?.isFile() ? this.readLock() : null) ?? "unknown"}) took the guard's lock`;
+		const pid = st?.isFile() ? this.readLock() : null;
+		if (st && st.dev === held.dev && st.ino === held.ino && pid === held.pid) return null;
+		return `another server (pid ${pid ?? "unknown"}) took the guard's lock`;
 	}
 	/** Ops #253 (Architecture A4): take the lock in one step that fails when it is there, so two servers starting at
 	 *  once can't both hold it. The pid is written and flushed to a file of this process's own, then linked to `lock`: a
@@ -820,8 +825,8 @@ export class RoleMessageGuardHost {
 	 *  takes whatever `lock` is by then, which can be a live server's lock made after the look (Ops #257, B1): its pid is
 	 *  read again, and a live server's lock is given back. When a third server linked its own in that moment, the give
 	 *  back fails and the moved lock is removed; the server it was taken from then finds `lock` isn't its file at its
-	 *  next check (lockLost()) and turns off. Returns why it can't, or null once held (the linked file's inode kept in
-	 *  lockHeld). Leaves no file of its own behind either way. */
+	 *  next check (lockLost()) and turns off. Returns why it can't, or null once held (the linked file's inode and pid
+	 *  kept in lockHeld). Leaves no file of its own behind either way. */
 	private takeLock(): string | null {
 		const mine = `${this.lockPath}.tmp-${process.pid}`;
 		const aside = `${this.lockPath}.stale-${process.pid}`;
@@ -831,11 +836,11 @@ export class RoleMessageGuardHost {
 			// the file always gets mode 0600; anything there turns the start off.
 			writeFileSync(mine, `${process.pid}\n`, { mode: 0o600, flag: "wx" });
 			const fd = openSync(mine, "r");
-			let made: { dev: number; ino: number };
+			let made: { dev: number; ino: number; pid: number };
 			try {
 				fsyncSync(fd);
 				const st = fstatSync(fd);
-				made = { dev: st.dev, ino: st.ino };
+				made = { dev: st.dev, ino: st.ino, pid: process.pid }; // the pid written above
 			} finally {
 				closeSync(fd);
 			}
@@ -903,7 +908,7 @@ export class RoleMessageGuardHost {
 	}
 	/** Link this process's flushed lock file to `lock`: true once held (the folder flushed, the file's inode kept),
 	 *  false when one is there. */
-	private linkLock(mine: string, made: { dev: number; ino: number }): boolean {
+	private linkLock(mine: string, made: { dev: number; ino: number; pid: number }): boolean {
 		try {
 			linkSync(mine, this.lockPath);
 		} catch (err) {
