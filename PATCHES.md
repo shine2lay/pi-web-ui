@@ -6996,3 +6996,60 @@ runner's order only: no server, web or storage code changes. Hypothesis, profile
 - Revert this commit with `wt`. Nothing is installed or restarted.
 - A new guard host test goes into the file of its describe block. Another slow file can be added to
   `SLOWEST_FIRST` in `vitest.config.ts`.
+
+## guard-store-perf
+
+**Status**: `local`
+**Baseline**: v0.96.1 (`mine` at 2efa5834).
+
+Each send's cost fits the change, not the whole state.
+
+**Why** (owner 2026-10-18, m57369: "can we improve the speed of tests?"; Ops #233, project
+faster-landing): #230 found that test (a) spends its time inside the role-message guard store, which
+redid whole-state work on every call: a `structuredClone` of the whole state for every read and update,
+a sorted JSON and sha256 of the whole state, then parsing and verifying the text it had just written
+itself. That was about 0.5 s of CPU per send at the ~5 MB fill, and in the live app it blocked the
+server for about as long per role message. The store is part of the Security-reviewed role-message
+ladder (#122). Hypothesis, invariants and numbers: `docs/guard-store-perf.md` (H-GUARD-STORE-PERF-1).
+
+### Changes
+
+- `server/role-message-guard-store.ts` only; the core, the host and the files' format are unchanged.
+  - Reads hand out the store's deep-frozen state (in a fresh top-level object) instead of a
+    `structuredClone`. Callers only read it, and the contract already types it read-only.
+  - What the store composed itself isn't parsed and verified again. A registry keyed by the frozen
+    objects remembers each item's own checks and its canonical bytes; the whole structure is still
+    checked on every transaction. A file whose bytes differ from what the store last wrote is decoded
+    and verified in full, as before.
+  - The files are joined from each item's cached UTF-8 bytes, and the prepared and committed texts are
+    hashed in one pass (the shared front once, the hash state copied at the `stage` field). Anything
+    that isn't plain data makes that transaction take the old field-by-field path.
+- New tests; no existing test changed:
+  - `tests/unit/role-message-guard-store-golden.test.ts`: every call goes to the new store and to
+    `tests/unit/role-message-guard-store-reference.ts` (the store as it was at 2efa5834), each on its own
+    folder, and their answers and both files must match byte for byte. G1 replays test (a)'s sends
+    through the real host (every 8th send; all with `GUARD_STORE_GOLDEN=full`); G2 drives both stores
+    with awkward values, the size cap, a crash at each of the 12 file boundaries, and changed files.
+  - `tests/unit/role-message-guard-worst-window-replay.ts`: the replay the golden test and the benchmark
+    share.
+  - `tests/unit/role-message-guard-store-bench.ts` with `role-message-guard-store-bench.config.ts`: ms per
+    send at about 1, 5 and 15 MB; its own config, never part of the suite.
+
+### How it was checked
+
+- Golden test: no difference in any answer, file or digest (G1 and G2).
+- The store, core and contract tests (226) and the 15 guard test files pass unchanged; the full sealed
+  unit suite (after `npm run build`): 432 files, 6187 passed and 6 skipped, the same tests as before plus
+  the 6 golden ones, Duration 189 s, test (a) 179 s inside it.
+- Benchmark and verdict: `docs/guard-store-perf.md`. Result: H-GUARD-STORE-PERF-1 missed both bars. A
+  store transaction at the 5 MB fill went from 146 ms to 22 ms of busy time and a whole send from about
+  830 ms to 330-400 ms, but not to 50 ms: hashing both whole texts five times a send is a floor the kept
+  format sets. Test (a) alone went from 262 s to 131 s side by side, not to 60 s: it also waits 70-76 s
+  on disk flushes.
+
+### Undo and syncing
+
+- Revert this commit with `wt`, then install with `pi-web-deploy`. The files are byte-identical either
+  way, so the old store reads what the new one wrote and the other way round.
+- When the store's behaviour is meant to change, change `role-message-guard-store-reference.ts` the
+  same way, or the golden test fails. Drop the reference copy and the golden test with this patch.
