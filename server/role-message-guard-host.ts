@@ -1166,10 +1166,10 @@ export class RoleMessageGuardHost {
 	}
 
 	/** Ops #248 (Architecture S2): the one way a generation begins, for rotate() and the fresh start, so the two can't
-	 *  drift. Removes a half-made gen-<gen>, initialises it with a fresh state (the store flushes its files), switches
-	 *  current.json to it (flushed), hands the store to `adopt` when given, then removes generations older than the one
-	 *  before it (a removal that fails is logged, not thrown: Ops #257, B5). A crash before the switch leaves the old
-	 *  generation current. `what` names the caller in an error.
+	 *  drift. Removes a half-made gen-<gen>, initialises it with a fresh state (the store flushes its files; one that
+	 *  fails removes the folder again: Ops #257, B2), switches current.json to it (flushed), hands the store to `adopt`
+	 *  when given, then removes generations older than the one before it (a removal that fails is logged, not thrown:
+	 *  Ops #257, B5). A crash before the switch leaves the old generation current. `what` names the caller in an error.
 	 *  Runs under the lease. */
 	private async beginGeneration(
 		gen: number,
@@ -1178,10 +1178,22 @@ export class RoleMessageGuardHost {
 	): Promise<{ store: GuardFileStore; dir: string }> {
 		const dir = join(this.o.dir, `gen-${gen}`);
 		rmSync(dir, { recursive: true, force: true });
-		mkdirSync(dir, { recursive: true });
-		const store = this.newStore(dir);
-		const r = await store.initialize(this.freshState(), { v: 1, paused: false, messages: [] });
-		if (r.state !== "ready") throw new Error(`${what}: ${r.reason}`);
+		let store: GuardFileStore;
+		try {
+			mkdirSync(dir, { recursive: true });
+			store = this.newStore(dir);
+			const r = await store.initialize(this.freshState(), { v: 1, paused: false, messages: [] });
+			if (r.state !== "ready") throw new Error(`${what}: ${r.reason}`);
+		} catch (err) {
+			// Ops #257 (Architecture B2): failed before the switch, so current.json still names the old generation: the
+			// half-made folder goes now, not at the next try or start (best effort; those still remove it).
+			try {
+				rmSync(dir, { recursive: true, force: true });
+			} catch {
+				/* left for the next try */
+			}
+			throw err;
+		}
 		this.writeCurrent(gen);
 		adopt?.(store, dir);
 		// Ops #257 (Architecture B5): the switch is done, so the generation counts as begun; a clean-up that fails now

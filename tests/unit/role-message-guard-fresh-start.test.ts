@@ -582,6 +582,28 @@ describe("a rotation that fails (Ops #253, Security O2)", () => {
 	});
 });
 
+describe("a generation that fails before the switch (Ops #257, Architecture B2)", () => {
+	it("its half-made folder is removed; current.json and the open generation stay as they were", async () => {
+		const w = await world(undefined, { rotateBytes: 1 }); // its start already rotated to gen-2 (past 1 byte)
+		expect(current()).toBe(2);
+		const init = vi.spyOn(GuardFileStore.prototype, "initialize").mockImplementationOnce(async () => {
+			writeFileSync(join(guard(), "gen-3", "journal.json"), "half"); // part of gen-3 made, then it fails
+			throw new Error("disk full");
+		});
+		let r: unknown;
+		try {
+			r = await send(w, "alpha", A, "beta", { kind: "fyi" }, "");
+		} finally {
+			init.mockRestore();
+		}
+		expect(r).toMatchObject({ ok: true });
+		expect(w.host.state).toEqual({ status: "ready", reason: "" });
+		expect(w.logs).toContain("approval ladder: rotation failed (disk full); staying on generation 2");
+		expect(current()).toBe(2);
+		expect(existsSync(join(guard(), "gen-3"))).toBe(false);
+	});
+});
+
 describe("a clean-up that fails after the switch (Ops #257, Architecture B5)", () => {
 	it.skipIf(process.getuid?.() === 0)(
 		"the rotation counts as done: approvals stay on the new generation and the log says the clean-up failed",
