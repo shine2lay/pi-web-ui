@@ -4,6 +4,10 @@ Ops #227, project initiatives-page, step 3 of 4 (step 1: `docs/initiatives-page-
 owner's plan: design first, then the features one step at a time, steps 2-4 side by side (his dialog answer
 "Side by side").
 
+**Outcome: HIT on Oct 18 at 22:07, after two follow-ups.** The first live check missed on the box's chip
+(H-INITIATIVES-PAGE-3b fixed it) and then found every open Ops task shown twice (H-INITIATIVES-PAGE-3c fixed
+it). Live run 4 on 564392e8 passed all 16 checks. Each hypothesis's Result is below.
+
 ## H-INITIATIVES-PAGE-3
 
 **What is wrong, and the evidence.** The live Initiatives page (step 1, af0ab88b and 9b6c4e73) shows no task
@@ -195,3 +199,41 @@ count done-when items, not tasks.
 
 **What would prove it wrong.** A twin or an extra task still on the page, a task whose queue file exists
 going missing, or any other check failing.
+
+### Result
+
+**HIT.** Unit tests: the new gone-queue case passes with the feed's, the tasks' and the core model's tests
+(30 of 30). The first land (62-7142fd, 127dbf02) stopped at Prettier on two long lines in the new test.
+Reformatted to Prettier's output, the commit became 564392e8 and land request 63-d448b2 landed it (not
+batched; the gate passed). `pi-web-deploy` swapped it in at 22:01 with every check passing (server, page,
+reply, big chat, log); `pi-web-deploy result 564392e8` returned 0. Rollback: 033cd1d8. That install's big-chat
+check wrote nothing into the registry: the copy's only writes are still those of 10:15:15, 10:52:28 and
+21:19:16. Logs: `gone/land-1-prettier.log`, `gone/land.log`, `gone/deploy.log` and their `.exit` files.
+
+Live run 4, 22:05 to 22:07 (`live/run4/`, look only). The look's reference leaves out the 21 links whose
+queue file is gone (one file), by its own file check, not the feed's code. It now also fails any task shown
+twice. All 16 checks passed:
+
+- Each open task appears once, under its project, and matches its queue. Box: Faster landing #234
+  Waiting; Parallel queue work #199, #211, #212 Waiting; Initiatives page #227 Working now, #245 Queued;
+  Message approvals back on #241 Working now. Roles page and Work hierarchy in use are Done, with no open
+  task. Team in Temper: Temper #99 Blocked, "Directly under this initiative". Design department in Temper:
+  Homepage workflow #77 and #78 Working now, #79 Queued; its five other projects say No tasks yet.
+- Chips by the rule order: Team in Temper Needs attention (rule 3, #99 blocked), Design department in
+  Temper Moving, the box Moving. Pills: All 2, Needs you 0, Needs attention 1, Paused by you 0.
+- Waiting on you is empty, and the ON YOU bar says nothing waits only once the page is live. The Roles
+  overview at 22:08 said 0 things wait on the owner.
+- Clicking Temper #99 asked for that task's own chat file (held, never sent), and the page left for the
+  chat view. Nothing scrolls sideways at 390 px. No page errors: the five console lines are the design
+  frame's sandbox refusing scripts, the same in every run.
+- First loads were slow: 10.8 s on the desktop, 44.5 s on the phone, 37.9 s back from the chat. This is the
+  work_page feed waiting for the Roles overview (step 1's follow-up), which Ops #245 is queued to fix.
+
+With 3b and 3c, every check H-INITIATIVES-PAGE-3 named is met, so step 3 is a hit.
+
+Still open, for the lead: the queue inside pi-web-deploy's big-chat copy can write into the shared registry
+whenever that check runs (a fix in pi-queue or pi-web-deploy), and the registry still holds the copy's 21
+links. They no longer reach this page, but other readers of the registry may still see them.
+
+Shots: `live/run4/desktop-1440.png`, `desktop-1440-who-box.png`, `desktop-1440-team-in-temper.png`,
+`desktop-1440-who-team-in-temper.png`, `phone-390.png`, `phone-390-full.png`.
