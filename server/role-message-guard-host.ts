@@ -523,6 +523,8 @@ export class RoleMessageGuardHost {
 	private adapters: ReturnType<typeof createGuardApprovalAdapters> | null = null;
 	private status_: "starting" | "ready" | "degraded" = "starting";
 	private degradedReason = "";
+	/** Ops #253 (Security O2): the rotation failures logged so far (each reason once while the server runs). */
+	private readonly rotationFailures = new Set<string>();
 	/** invocationId -> the server-bound actor of a live tool call (or a host notice to the requester). */
 	private readonly invocations = new Map<string, { ref: GuardInvocationReference; actor: GuardActor }>();
 	/** sessionFile -> the chat's last user text at its current tool call (where it stands in its chain). */
@@ -610,6 +612,7 @@ export class RoleMessageGuardHost {
 			await this.reconcileOutbox();
 			await this.representQuestions();
 			await this.maybeRotate();
+			if (this.state.status !== "ready") return; // Ops #253 (O2): the rotation turned approvals off (logged)
 			this.tidyHistory();
 			await this.afterChange();
 			this.o.log("approval ladder: on (hops 1-6 free; 7-11 COO grant; 12+ owner grant)");
@@ -924,23 +927,48 @@ export class RoleMessageGuardHost {
 		);
 	}
 
-	/** Start a fresh generation when the accepted copy or the tombstones grow past their marks (only when quiescent). */
+	/** Start a fresh generation when the accepted copy or the tombstones grow past their marks (only when quiescent).
+	 *  Ops #253 (Security O2): never throws, so a send that was accepted always comes back to its chat as accepted
+	 *  (afterAccepted() runs this after the send went). A rotation that fails goes to rotationFailed(). */
 	private async maybeRotate(): Promise<void> {
 		if (this.status_ !== "ready" || !this.storeDir) return;
-		let bytes = 0;
 		try {
-			bytes = statSync(join(this.storeDir, "accepted.json")).size;
-		} catch {
-			bytes = 0;
+			let bytes = 0;
+			try {
+				bytes = statSync(join(this.storeDir, "accepted.json")).size;
+			} catch {
+				bytes = 0;
+			}
+			const read = await this.store?.read();
+			if (!read || read.state !== "ready") return;
+			const legacy = this.readJson<{ messages?: unknown[] }>(join(this.storeDir, "accepted.json"));
+			const big =
+				bytes > (this.o.rotateBytes ?? GUARD_ROTATE_BYTES) ||
+				(legacy?.messages?.length ?? 0) > GUARD_ROTATE_MESSAGES ||
+				read.value.tombstones.length > GUARD_ROTATE_TOMBSTONES;
+			if (big && this.quiescent(read.value, this.now())) await this.rotate(false);
+		} catch (err) {
+			this.rotationFailed(err instanceof Error ? err.message : String(err));
 		}
-		const read = await this.store?.read();
-		if (!read || read.state !== "ready") return;
-		const legacy = this.readJson<{ messages?: unknown[] }>(join(this.storeDir, "accepted.json"));
-		const big =
-			bytes > (this.o.rotateBytes ?? GUARD_ROTATE_BYTES) ||
-			(legacy?.messages?.length ?? 0) > GUARD_ROTATE_MESSAGES ||
-			read.value.tombstones.length > GUARD_ROTATE_TOMBSTONES;
-		if (big && this.quiescent(read.value, this.now())) await this.rotate(false);
+	}
+
+	/** Ops #253 (Security O2): after a rotation failed. While current.json still names the open store's generation,
+	 *  approvals stay on it: logged once per reason while the server runs, and the next send that finds the store due
+	 *  tries again. Otherwise, or when current.json can't be read, the ladder turns off: never guess (Ops #248, N3).
+	 *  Writes no guard file. */
+	private rotationFailed(message: string): void {
+		const reason = message.replace(/^rotation: /, "");
+		let at: number | string;
+		try {
+			at = this.currentGeneration();
+		} catch (err) {
+			at = `can't be read (${err instanceof Error ? err.message : String(err)})`;
+		}
+		if (typeof at !== "number" || join(this.o.dir, `gen-${at}`) !== this.storeDir)
+			return this.degrade(`rotation: ${reason}`);
+		if (this.rotationFailures.has(reason)) return;
+		this.rotationFailures.add(reason);
+		this.o.log(`approval ladder: rotation failed (${reason}); staying on generation ${at}`);
 	}
 
 	/** New generation dir, initialised with a fresh state; current.json switches atomically; the old dir stays as the

@@ -26,6 +26,7 @@ import {
 	GUARD_APPROVALS_SWITCH,
 	GUARD_FRESH_START_FILE,
 	RoleMessageGuardHost,
+	type RoleMessageGuardHostOptions,
 } from "../../server/role-message-guard-host.js";
 import { GuardFileStore } from "../../server/role-message-guard-store.js";
 import {
@@ -64,7 +65,11 @@ afterEach(() => {
 	for (const h of extra.splice(0)) h.stop();
 	delete process.env[GUARD_APPROVALS_SWITCH];
 });
-async function startHost(w: World, dir = guard()): Promise<{ host: RoleMessageGuardHost; logs: string[] }> {
+async function startHost(
+	w: World,
+	dir = guard(),
+	more: Partial<RoleMessageGuardHostOptions> = {},
+): Promise<{ host: RoleMessageGuardHost; logs: string[] }> {
 	const logs: string[] = [];
 	const host = new RoleMessageGuardHost({
 		dir,
@@ -72,6 +77,7 @@ async function startHost(w: World, dir = guard()): Promise<{ host: RoleMessageGu
 		identities: () => w.roles,
 		log: (l) => logs.push(l),
 		now: clock,
+		...more,
 	});
 	extra.push(host);
 	await host.start();
@@ -480,6 +486,99 @@ describe("a first start that stops before it ends (Ops #253, Architecture A1)", 
 		expect(logs).toContain("approval ladder: on (hops 1-6 free; 7-11 COO grant; 12+ owner grant)");
 		expect(readFileSync(join(first, "current.json"), "utf8")).toBe('{"gen":1}\n');
 		expect(readdirSync(first).filter((n) => n.includes("gen-"))).toEqual(["gen-1"]);
+	});
+});
+
+describe("a rotation that fails (Ops #253, Security O2)", () => {
+	const ON = "approval ladder: on (hops 1-6 free; 7-11 COO grant; 12+ owner grant)";
+	const ids = (path: string) =>
+		(JSON.parse(readFileSync(path, "utf8")) as { messages: Array<{ id: string }> }).messages.map((m) => m.id);
+	const idOf = (r: unknown) => (r as { record: { id: string } }).record.id;
+	/** The guard files that differ between two snapshots. */
+	const changed = (before: Record<string, string>, after: Record<string, string>) =>
+		[...new Set([...Object.keys(before), ...Object.keys(after)])].filter((k) => before[k] !== after[k]).sort();
+
+	it.skipIf(process.getuid?.() === 0)(
+		"after a send, in a folder it can't write: the send comes back as sent, once; approvals stay on; the log says why once",
+		async () => {
+			const w = await world(undefined, { rotateBytes: 1 }); // its start already rotated to gen-2 (past 1 byte)
+			expect(current()).toBe(2);
+			const before = snapshot(true);
+			const mode = statSync(guard()).mode & 0o777;
+			chmodSync(guard(), 0o555); // gen-3 can't be made there
+			let first: unknown;
+			let second: unknown;
+			try {
+				first = await send(w, "alpha", A, "beta", { kind: "fyi" }, "");
+				second = await send(w, "alpha", A, "gamma", { kind: "fyi" }, "");
+			} finally {
+				chmodSync(guard(), mode);
+			}
+			expect(first).toMatchObject({ ok: true });
+			expect(second).toMatchObject({ ok: true });
+			expect(w.host.state).toEqual({ status: "ready", reason: "" });
+			expect(w.logs.filter((l) => l.includes("rotation failed"))).toEqual([
+				expect.stringMatching(
+					/^approval ladder: rotation failed \(EACCES: permission denied, mkdir '.+gen-3'\); staying on generation 2$/,
+				),
+			]); // once, though both sends tried
+			expect(changed(before, snapshot(true))).toEqual(["gen-2/accepted.json", "gen-2/journal.json"]); // the sends only
+			const sent = [idOf(first), idOf(second)].sort();
+			for (const file of [join(data, "role-messages.json"), join(guard(), "gen-2", "accepted.json")])
+				expect(
+					ids(file)
+						.filter((id) => sent.includes(id))
+						.sort(),
+				).toEqual(sent); // each once
+		},
+	);
+
+	it("after a send, with current.json no longer naming the store: the send comes back as sent, once; approvals turn off; nothing else written", async () => {
+		const w = await world(undefined, { rotateBytes: 1 });
+		expect(current()).toBe(2);
+		writeFileSync(join(guard(), "current.json"), "garbled"); // changed behind the running server's back
+		const before = snapshot(true);
+		const r = await send(w, "alpha", A, "beta", { kind: "fyi" }, "");
+		expect(r).toMatchObject({ ok: true });
+		const why = "rotation: current.json is not understood";
+		expect(w.host.state).toEqual({ status: "degraded", reason: why });
+		expect(w.logs.filter((l) => l.includes("UNAVAILABLE"))).toEqual([
+			`approval ladder UNAVAILABLE (${why}): sends use the native depth-6 rule; no approvals`,
+		]);
+		expect(changed(before, snapshot(true))).toEqual(["gen-2/accepted.json", "gen-2/journal.json"]); // the send only
+		expect(ids(join(data, "role-messages.json")).filter((id) => id === idOf(r))).toHaveLength(1);
+		const after = snapshot(true);
+		expect(await send(w, "alpha", A, "gamma", { kind: "fyi" }, "")).toMatchObject({ ok: true }); // the native way
+		expect(snapshot(true)).toEqual(after);
+	});
+
+	it("at start: a rotation that fails stays on the open generation; one that finds current.json changed turns approvals off and doesn't say on", async () => {
+		const w = await world(undefined, { rotateBytes: 1 }); // on gen-2, due to rotate at every start
+		w.host.stop();
+		const init = vi.spyOn(GuardFileStore.prototype, "initialize");
+		try {
+			init.mockRejectedValueOnce(new Error("disk full"));
+			const stays = await startHost(w, guard(), { rotateBytes: 1 });
+			expect(stays.host.state).toEqual({ status: "ready", reason: "" });
+			expect(stays.logs.filter((l) => l.includes("rotation"))).toEqual([
+				"approval ladder: rotation failed (disk full); staying on generation 2",
+			]);
+			expect(stays.logs.at(-1)).toBe(ON);
+			expect(current()).toBe(2);
+			stays.host.stop();
+			init.mockImplementationOnce(async () => {
+				writeFileSync(join(guard(), "current.json"), "garbled");
+				throw new Error("disk full");
+			});
+			const off = await startHost(w, guard(), { rotateBytes: 1 });
+			expect(off.host.state).toEqual({ status: "degraded", reason: "rotation: disk full" });
+			expect(off.logs.at(-1)).toBe(
+				"approval ladder UNAVAILABLE (rotation: disk full): sends use the native depth-6 rule; no approvals",
+			);
+			expect(off.logs).not.toContain(ON);
+		} finally {
+			init.mockRestore();
+		}
 	});
 });
 
