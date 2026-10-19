@@ -16,6 +16,7 @@ import type { InitiativesExactTarget } from "../initiatives-exact-model";
 import { buildInitiativesPage } from "../initiatives-page/model";
 import { reloadInitiatives, selectInitiative, useInitiatives } from "../initiatives-state";
 import type { UiDecisionSource, UiProgress } from "../types";
+import { useEscapeKey } from "../shortcut-stack";
 import { reloadWorkPage, useWorkPage } from "../work-page-state";
 import { InitiativesExactView } from "./InitiativesExactView";
 import { SourceDialog } from "./InitiativesView";
@@ -50,6 +51,17 @@ export function InitiativesPage({ active, onOpen }: InitiativesPageProps) {
 	const [pick, setPick] = useState<string | undefined>();
 	const [source, setSource] = useState<UiDecisionSource | null>(null);
 	const [leadFor, setLeadFor] = useState<string | null>(null);
+
+	// Escape closes the page's own dialog first (H-INITIATIVES-PAGE-2). The app hands Escape to the newest
+	// handler on its stack (shortcut-stack.ts), and the chat pane's question dialog is on it even behind this
+	// tab: without this, Escape would cancel that chat's waiting question and leave the dialog open.
+	useEscapeKey(
+		() => {
+			setLeadFor(null);
+			setSource(null);
+		},
+		leadFor !== null || source !== null,
+	);
 
 	const homeChats = useMemo(() => {
 		const out: Record<string, string> = {};
