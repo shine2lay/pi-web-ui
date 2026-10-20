@@ -31,6 +31,7 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { BgServerTracker } from "../bg-servers.js";
 import { MAX_OPEN_CONVERSATIONS } from "../conversation-limits.js";
+import { countsTowardCap, OPEN_CHATS_FULL_MESSAGE } from "../chat-slots.js";
 import {
 	ClientStateStore,
 	DEFAULT_RETRY_MAX_ATTEMPTS,
@@ -1635,14 +1636,14 @@ export class DshClientSession {
 				return true;
 			}
 		}
-		const openInProject = [...this.convs.values()].filter((c) => c.cwd === this.cwd).length;
+		// chat-slots (Ops #266): a blank chat (no messages, no terminals) doesn't take a slot.
+		const openInProject = [...this.convs.values()].filter(
+			(c) =>
+				c.cwd === this.cwd &&
+				countsTowardCap({ isSubagent: false, blank: c.messages.length === 0 && c.terminals.list().length === 0 }),
+		).length;
 		if (openInProject >= MAX_OPEN_CONVERSATIONS) {
-			this.emit({
-				type: "notice",
-				level: "warning",
-				text: `This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}).`,
-				textEn: `This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}).`,
-			});
+			this.emit({ type: "notice", level: "warning", text: OPEN_CHATS_FULL_MESSAGE, textEn: OPEN_CHATS_FULL_MESSAGE });
 			return false;
 		}
 		// 旧对话保留（listed 生命周期简化：不主动移除）。

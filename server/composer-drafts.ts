@@ -57,6 +57,19 @@ function isValidDraft(d: unknown): d is ComposerDraft {
  *  ponytail: 内存水位，TTL/持久化按需加（当前重启语义已够用）。 */
 const clearedAt = new Map<string, number>();
 
+/** chat-slots (Ops #266): is an unsent draft saved for this chat? Read straight from the file, read-only: every
+ *  window's store writes there on each change, but each window caches its own copy, which can miss another
+ *  window's draft. An unreadable file counts as no draft. */
+export function draftSavedOnDisk(filePath: string, sessionId: string): boolean {
+	if (!sessionId) return false;
+	try {
+		const d = (JSON.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>)[sessionId];
+		return isValidDraft(d) && d.text.trim() !== "";
+	} catch {
+		return false;
+	}
+}
+
 export class ComposerDraftsStore {
 	private cache: Record<string, ComposerDraft> | null = null;
 

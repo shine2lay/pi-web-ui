@@ -67,6 +67,17 @@ import { FOLD_QUIET_MS, foldedMessagesOf, isAcpFoldEntry, isAcpFoldResult } from
 import { Type } from "typebox";
 import { BgServerTracker } from "./bg-servers.js";
 import { MAX_OPEN_CONVERSATIONS } from "./conversation-limits.js";
+import {
+	BlankChatSweep,
+	blankCloseHold,
+	blankSweepTiming,
+	countsTowardCap,
+	isBlankChat,
+	OPEN_CHATS_FULL_MESSAGE,
+	type CloseFacts,
+	type CloseHold,
+	type SweepChat,
+} from "./chat-slots.js";
 import { displayPreview } from "./display-preview.js";
 import {
 	ASK_USER_NO_CLIENT_ERROR,
@@ -191,7 +202,7 @@ import {
 import { resolveServerLang, type ServerLang } from "./i18n.js";
 import { SubagentTemplatesStore, pickTemplatePrompt, type SubagentTemplate } from "./subagent-templates.js";
 import { ApprovalRulesStore, extractTargetPath, type ApprovalRule } from "./approval-rules.js";
-import { ComposerDraftsStore } from "./composer-drafts.js";
+import { ComposerDraftsStore, draftSavedOnDisk } from "./composer-drafts.js";
 import { readPermissionFromSession } from "./permission-preset.js";
 import {
 	FAST_MODE_ENTRY,
@@ -3305,13 +3316,10 @@ export class ClientSession {
 		if (persist) {
 			const baseCwdForLimit = parentId ? (this.convs.get(parentId)?.cwd ?? this.cwd) : this.cwd;
 			const resolvedCwdForLimit = cwd ? resolve(baseCwdForLimit, cwd) : baseCwdForLimit;
-			const openInProject = [...this.convs.values()].filter(
-				(c) => c.cwd === resolvedCwdForLimit && !c.isSubagent && !c.isEphemeral,
-			).length;
+			// chat-slots: blank chats don't take a slot.
+			const openInProject = this.slotsUsedIn(resolvedCwdForLimit);
 			if (openInProject >= MAX_OPEN_CONVERSATIONS) {
-				throw new Error(
-					`The project already has max open regular conversations (${MAX_OPEN_CONVERSATIONS}). Please close some or run as a lightweight subagent (persist=false)`,
-				);
+				throw new Error(`${OPEN_CHATS_FULL_MESSAGE} Or run it as a lightweight subagent (persist=false).`);
 			}
 		} else {
 			const liveSubagents = [...this.convs.values()].filter((c) => c.isSubagent).length;
@@ -11623,14 +11631,10 @@ export class ClientSession {
 		// (focus already on it); otherwise switch to the first blank one (under
 		// the per-project running-list model displaced blanks are disposed, so
 		// this branch normally can't exist — kept as a safety net).
+		// chat-slots: one blank test for reuse, the slot count and closing (isBlankConv).
 		const isBlank = (c: Conversation): boolean => {
 			try {
-				return (
-					messageCountOf(c.session) === 0 &&
-					!this.retainedParticipant(c) &&
-					c.terminals.list().length === 0 &&
-					!hasQueueEntries(c.session.sessionManager.getEntries())
-				);
+				return this.isBlankConv(c);
 			} catch {
 				// session being replaced — treat as used so we don't switch onto it
 				return false;
@@ -11653,6 +11657,9 @@ export class ClientSession {
 		if (!ephemeral) {
 			for (const conv of this.convs.values()) {
 				if (conv.id === this.activeId) continue;
+				// chat-slots: only a blank chat of this project that no other window has open (never move a
+				// window into another project, or onto the blank chat another window is about to type in).
+				if (conv.cwd !== this.cwd || conv.isSubagent || conv.isEphemeral || this.viewedElsewhere(conv.id)) continue;
 				if (isBlank(conv)) {
 					await this.switchConversation(conv.id);
 					await this.clearBlankChatIdentity(conv);
@@ -11665,17 +11672,14 @@ export class ClientSession {
 		// Cap is per project — conversations of other projects keep their own
 		// lists and don't consume this project's slots. Subagents don't count
 		// (inMemory 后台任务，不占位）。临时会话也不占名额。
+		// chat-slots: blank chats don't take a slot either (countsTowardCap).
 		if (!ephemeral) {
-			const openInProject = [...this.convs.values()].filter(
-				(c) => c.cwd === this.cwd && !c.isSubagent && !c.isEphemeral,
-			).length;
-			if (openInProject >= MAX_OPEN_CONVERSATIONS) {
-				this.emit({
-					type: "notice",
-					level: "warning",
-					text: `This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}). Open one and leave it (without continuing) to remove it from the list.`,
-					textEn: `This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}). Open one and leave it (without continuing) to remove it from the list.`,
-				});
+			const openInProject = this.slotsUsedIn(this.cwd);
+			// chat-slots: a window whose blank chat was closed while it was away gets a blank chat back even in a
+			// full project: it had one, so this gives it nothing it didn't have.
+			const restoring = !active && this.releasedBlankId !== null && this.releasedBlankId === this.activeId;
+			if (openInProject >= MAX_OPEN_CONVERSATIONS && !restoring) {
+				this.emit({ type: "notice", level: "warning", text: OPEN_CHATS_FULL_MESSAGE, textEn: OPEN_CHATS_FULL_MESSAGE });
 				return false;
 			}
 		}
@@ -12142,6 +12146,176 @@ export class ClientSession {
 		}
 	}
 
+	/** chat-slots: everything that decides whether a chat may close by itself, read lazily (blankCloseHold
+	 *  stops at the first hold, so a chat with messages costs one cached count). Getters may throw while a
+	 *  session is being replaced. */
+	private closeFactsOf(c: Conversation): CloseFacts {
+		const participant = (): boolean => this.retainedParticipant(c);
+		const draft = (): boolean =>
+			!!this.drafts.get(c.session.sessionId)?.text?.trim() ||
+			draftSavedOnDisk(join(this.stateStore.dataDir, "composer-drafts.json"), c.session.sessionId);
+		const liveChild = (): boolean => [...this.convs.values()].some((child) => child.parentId === c.id);
+		// What displaceActive keeps a chat open for: a pi-subagents run still going, or a wake-up still owed.
+		const backgroundWork = (): boolean =>
+			hasActiveSubagentRun({ sessionId: c.session.sessionFile }) ||
+			hasPendingWaitSubscription({ sessionId: c.session.sessionFile });
+		return {
+			get messageCount() {
+				return messageCountOf(c.session);
+			},
+			get terminalCount() {
+				return c.terminals.list().length;
+			},
+			get hasQueueEntries() {
+				return hasQueueEntries(c.session.sessionManager.getEntries());
+			},
+			get participant() {
+				return participant();
+			},
+			isSubagent: c.isSubagent,
+			isEphemeral: !!c.isEphemeral,
+			get running() {
+				return (
+					c.session.isStreaming ||
+					(c.sendsInFlight ?? 0) > 0 ||
+					c.session.isCompacting ||
+					c.wizardRunning ||
+					c.goal.reviewing
+				);
+			},
+			get openInWindow() {
+				return ClientSession.openInConnectedWindow(c.id);
+			},
+			get homeChat() {
+				return !!homeChatOf(c.session.sessionFile, identityRegistry().identities);
+			},
+			taskChat: !!c.openedByQueue,
+			get draft() {
+				return draft();
+			},
+			get liveChild() {
+				return liveChild();
+			},
+			prompted: c.promptedSinceActive,
+			listed: !!c.listed,
+			get backgroundWork() {
+				return backgroundWork();
+			},
+		};
+	}
+
+	/** chat-slots: the one blank test (no messages, terminals or queue entries; not a kept Team participant),
+	 *  for a new chat's reuse, the slot count and closing. Throws while a session is being replaced. */
+	private isBlankConv(c: Conversation): boolean {
+		return isBlankChat(this.closeFactsOf(c));
+	}
+
+	/** chat-slots: does this chat take one of its project's slots? Not a subagent, throwaway or blank chat
+	 *  (a chat that can't be read right now counts). */
+	private countsTowardCap(c: Conversation): boolean {
+		if (c.isSubagent || c.isEphemeral) return false;
+		let blank = false;
+		try {
+			blank = this.isBlankConv(c);
+		} catch {
+			// session being replaced: it counts
+		}
+		return countsTowardCap({ isSubagent: c.isSubagent, isEphemeral: c.isEphemeral, blank });
+	}
+
+	/** chat-slots: how many of the project's MAX_OPEN_CONVERSATIONS slots its open chats take. */
+	private slotsUsedIn(cwd: string): number {
+		let n = 0;
+		for (const c of this.convs.values()) if (c.cwd === cwd && this.countsTowardCap(c)) n++;
+		return n;
+	}
+
+	/** chat-slots: why this chat must stay open, or null when it is blank and nothing needs it. */
+	private blankHoldOf(c: Conversation): CloseHold | "unreadable" | null {
+		try {
+			return blankCloseHold(this.closeFactsOf(c));
+		} catch {
+			return "unreadable";
+		}
+	}
+
+	/** chat-slots: does a window with a live socket have this chat as its active chat? */
+	private static openInConnectedWindow(convId: string): boolean {
+		for (const s of ClientSession.liveSessions) {
+			if (!s.disposed && s.sinkCount() > 0 && s.activeId === convId) return true;
+		}
+		return false;
+	}
+
+	/** chat-slots: the blank chat this window had when it was closed for it (its client left, or the sweep);
+	 *  while its active chat is that one, it gets a fresh blank chat when it comes back, never another chat. */
+	private releasedBlankId: string | null = null;
+
+	/**
+	 * chat-slots: close a blank chat nobody needs (blankHoldOf is null): its pseudo client left, or the sweep
+	 * found no window had it open for the idle time. It goes the normal way (removeConversation). Every window
+	 * pointing at it has no socket (a connected one is a hold); each gets a fresh blank chat when it comes back.
+	 * Returns true when it closed.
+	 */
+	static closeBlankChat(id: string, reason: string): boolean {
+		const conv = ClientSession.sharedConvs.get(id);
+		if (!conv) return false;
+		const live = [...ClientSession.liveSessions].filter((s) => !s.disposed);
+		const holders = live.filter((s) => s.activeId === id);
+		const caller = holders[0] ?? live[0];
+		if (!caller || caller.blankHoldOf(conv) !== null) return false;
+		for (const s of holders) s.releasedBlankId = id;
+		caller.removeConversation(id, { evenIfActive: true });
+		if (ClientSession.sharedConvs.has(id)) {
+			for (const s of holders) if (s.releasedBlankId === id) s.releasedBlankId = null;
+			return false;
+		}
+		console.log(`[chat-slots] closed blank chat ${id} in ${conv.cwd} (${reason})`);
+		return true;
+	}
+
+	/** chat-slots: this client left (a pseudo client) or is going away; close its active chat if it is blank
+	 *  and nobody needs it. */
+	releaseBlankChat(reason: string): boolean {
+		return ClientSession.closeBlankChat(this.activeId, reason);
+	}
+
+	/** chat-slots: one sweep tick over every open chat; closes the blank chats nobody needed for the idle time. */
+	static sweepBlankChats(sweep: BlankChatSweep, now = Date.now()): string[] {
+		const reader = [...ClientSession.liveSessions].find((s) => !s.disposed);
+		if (!reader) return [];
+		const chats: SweepChat[] = [];
+		for (const c of ClientSession.sharedConvs.values())
+			chats.push({ id: c.id, closable: reader.blankHoldOf(c) === null });
+		const idle =
+			sweep.idleMs >= 60_000 ? `${Math.round(sweep.idleMs / 60_000)} min` : `${Math.round(sweep.idleMs / 1000)} s`;
+		return sweep.tick(now, chats).filter((id) => ClientSession.closeBlankChat(id, `no window had it open for ${idle}`));
+	}
+
+	/** chat-slots: open chats per project, counts only (GET /api/open-chats): all of them, the ones that take a
+	 *  slot, and the blank ones. */
+	static openChatCounts(): {
+		limit: number;
+		projects: { cwd: string; open: number; counted: number; blank: number }[];
+	} {
+		const reader = [...ClientSession.liveSessions].find((s) => !s.disposed);
+		const byCwd = new Map<string, { cwd: string; open: number; counted: number; blank: number }>();
+		for (const c of ClientSession.sharedConvs.values()) {
+			const row = byCwd.get(c.cwd) ?? { cwd: c.cwd, open: 0, counted: 0, blank: 0 };
+			byCwd.set(c.cwd, row);
+			row.open++;
+			let blank = false;
+			try {
+				blank = !!reader && reader.isBlankConv(c);
+			} catch {
+				// session being replaced: not blank
+			}
+			if (blank) row.blank++;
+			if (countsTowardCap({ isSubagent: c.isSubagent, isEphemeral: c.isEphemeral, blank })) row.counted++;
+		}
+		return { limit: MAX_OPEN_CONVERSATIONS, projects: [...byCwd.values()] };
+	}
+
 	private displaceActive(): Conversation | null {
 		// crash-guard: the active chat may already be gone (closed by another window); nothing to displace.
 		const conv = this.convs.get(this.activeId);
@@ -12202,10 +12376,11 @@ export class ClientSession {
 
 	/** Remove a conversation from the running list and free its runtime. The
 	 *  session stays persisted on disk, so it remains recoverable from the
-	 *  history list. Never removes the active conversation. */
-	private removeConversation(id: string): void {
+	 *  history list. Never removes the active conversation, except a blank one being closed for a window
+	 *  without a socket (chat-slots: `evenIfActive`, only from closeBlankChat). */
+	private removeConversation(id: string, opts?: { evenIfActive?: boolean }): void {
 		const conv = this.convs.get(id);
-		if (!conv || id === this.activeId || this.retainedParticipant(conv)) return;
+		if (!conv || (id === this.activeId && !opts?.evenIfActive) || this.retainedParticipant(conv)) return;
 		// server-owned-chats：对话表是进程共享的 —— 别的窗口正看着这条时不能回收它，
 		// 否则那边的界面会当场失去自己正在读的对话（而它并没有做错任何事）。
 		// 必须在释放认领之前：没回收的对话就没有关闭，认领还得留着。
@@ -12255,6 +12430,9 @@ export class ClientSession {
 			if (other === this || other.disposed || other.activeId !== id) continue;
 			other.recoverLostActive(`closed by window ${this.clientId}`, undefined, false);
 		}
+		// chat-slots: a blank chat closed while it was this window's own active chat (closeBlankChat; the window
+		// has no socket): the same recovery, so nothing here points at the closed chat either.
+		if (id === this.activeId && !this.disposed) this.recoverLostActive("its blank chat was closed", undefined, false);
 	}
 
 	/** 本会话是否持有这个 SDK 会话对应的对话；命中则给出它的**当前** id
@@ -12280,6 +12458,8 @@ export class ClientSession {
 		parentId?: string;
 		isSubagent: boolean;
 		isEphemeral?: boolean;
+		/** chat-slots: takes one of its project's slots (not a subagent, throwaway or blank chat). */
+		countsTowardCap: boolean;
 	}[] {
 		return [...this.convs.values()].map((c) => ({
 			id: c.id,
@@ -12288,6 +12468,7 @@ export class ClientSession {
 			...(c.parentId ? { parentId: c.parentId } : {}),
 			isSubagent: c.isSubagent,
 			isEphemeral: !!c.isEphemeral,
+			countsTowardCap: this.countsTowardCap(c),
 		}));
 	}
 
@@ -12536,18 +12717,23 @@ export class ClientSession {
 	private recoverLostActive(reason: string, prefer?: Conversation, allowNewChat = true): boolean {
 		if (this.convs.has(this.activeId)) return true;
 		const lost = this.activeId;
+		// chat-slots: its blank chat was closed while nobody looked: a fresh blank chat when it comes back,
+		// never someone else's chat.
+		const released = this.releasedBlankId !== null && this.releasedBlankId === lost;
 		const plan = planForLostActive({
 			activeOpen: false,
-			preferId: prefer?.id,
+			preferId: released ? undefined : prefer?.id,
 			cwd: this.cwd,
 			// = ClientSession.openConversations() (convs IS the shared table), read through `this` so a
 			// unit test can hand in its own table.
-			open: [...this.convs.values()].map((c) => ({
-				id: c.id,
-				cwd: c.cwd,
-				lastActiveAt: c.lastActiveAt,
-				isSubagent: c.isSubagent,
-			})),
+			open: released
+				? []
+				: [...this.convs.values()].map((c) => ({
+						id: c.id,
+						cwd: c.cwd,
+						lastActiveAt: c.lastActiveAt,
+						isSubagent: c.isSubagent,
+					})),
 			hasSocket: this.sinkCount() > 0,
 		});
 		if (plan.kind === "move") {
@@ -13971,10 +14157,9 @@ export class ClientSession {
 				const listed = this.conv.listed;
 				const disposable = this.displaceActive();
 				this.conv.listed = listed;
-				const count = [...this.convs.values()].filter(
-					(c) => c.cwd === targetCwd && !c.isSubagent && !c.isEphemeral,
-				).length;
-				const replacing = disposable?.cwd === targetCwd && !disposable.isSubagent && !disposable.isEphemeral ? 1 : 0;
+				// chat-slots: blank chats don't take a slot.
+				const count = this.slotsUsedIn(targetCwd);
+				const replacing = disposable?.cwd === targetCwd && this.countsTowardCap(disposable) ? 1 : 0;
 				if (count + 1 - replacing > MAX_OPEN_CONVERSATIONS)
 					throw new Error("Participant recovery is waiting for open-chat capacity");
 			}
@@ -13995,10 +14180,9 @@ export class ClientSession {
 			// is known-good. This keeps a failed history open entirely non-destructive.
 			const oldListed = this.conv.listed;
 			const displaced = this.displaceActive();
+			// chat-slots: blank chats don't take a slot.
 			const openInProject =
-				[...this.convs.values()].filter((c) => c.cwd === targetCwd && !c.isSubagent && !c.isEphemeral).length +
-				1 -
-				(displaced?.cwd === targetCwd && !displaced?.isSubagent && !displaced?.isEphemeral ? 1 : 0);
+				this.slotsUsedIn(targetCwd) + 1 - (displaced?.cwd === targetCwd && this.countsTowardCap(displaced) ? 1 : 0);
 			if (openInProject > MAX_OPEN_CONVERSATIONS) {
 				// displaceActive() may have promoted a streaming conversation into the
 				// running list. Roll that presentation-only mutation back because no
@@ -14010,11 +14194,7 @@ export class ClientSession {
 				openedTerminals = null;
 				// switch-loading：以前是一条 warning toast。现在走回执：客户端若正在等这次切换，
 				// 就在聊天区里显示原因；不是它发起的（内部自动切换）则由客户端降级成 toast。
-				this.emitSwitchFailed(
-					target,
-					`This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}). Open one and leave it (without continuing) to remove it from the list.`,
-					`This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}). Open one and leave it (without continuing) to remove it from the list.`,
-				);
+				this.emitSwitchFailed(target, OPEN_CHATS_FULL_MESSAGE, OPEN_CHATS_FULL_MESSAGE);
 				return;
 			}
 
@@ -14358,22 +14538,18 @@ export class ClientSession {
 			// 顺序照 switchSession：新 runtime 建好才 displace，失败不伤现有对话。
 			const oldListed = this.conv.listed;
 			const displaced = this.displaceActive();
+			// chat-slots: blank chats don't take a slot.
 			const openInProject =
-				[...this.convs.values()].filter((c) => c.cwd === targetConv.cwd && !c.isSubagent && !c.isEphemeral).length +
+				this.slotsUsedIn(targetConv.cwd) +
 				1 -
-				(displaced?.cwd === targetConv.cwd && !displaced?.isSubagent && !displaced?.isEphemeral ? 1 : 0);
+				(displaced?.cwd === targetConv.cwd && this.countsTowardCap(displaced) ? 1 : 0);
 			if (openInProject > MAX_OPEN_CONVERSATIONS) {
 				// displaceActive() 可能只是把旧对话标成后台展示（presentation-only）；
 				// 没有切换发生时回滚该标记，新 fork 的 runtime/终端直接释放。
 				this.conv.listed = oldListed;
 				terminals.killAll();
 				await runtime.dispose();
-				this.emit({
-					type: "notice",
-					level: "warning",
-					text: `This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}). Open one and leave it (without continuing) to remove it from the list.`,
-					textEn: `This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}). Open one and leave it (without continuing) to remove it from the list.`,
-				});
+				this.emit({ type: "notice", level: "warning", text: OPEN_CHATS_FULL_MESSAGE, textEn: OPEN_CHATS_FULL_MESSAGE });
 				return;
 			}
 
@@ -16471,6 +16647,32 @@ export class AgentService {
 	/** index.ts: a run recorded changes (the Roles page follows them). */
 	onRolesConfigChanged: (() => void) | null = null;
 
+	/** chat-slots (Ops #266): stops the blank-chat sweep (disposeAll). */
+	private stopBlankChatSweep: (() => void) | null = null;
+
+	/** chat-slots: index.ts starts it after the restart's carry-on. Every minute, closes the blank chats no
+	 *  connected window had open for 10 minutes (blankSweepTiming; ClientSession.sweepBlankChats). */
+	startBlankChatSweep(): void {
+		if (this.stopBlankChatSweep) return;
+		const { idleMs, everyMs } = blankSweepTiming();
+		const sweep = new BlankChatSweep(idleMs);
+		const timer = setInterval(() => {
+			if (this.quiesced) return;
+			try {
+				ClientSession.sweepBlankChats(sweep);
+			} catch (err) {
+				console.error(`[chat-slots] the blank-chat sweep failed: ${(err as Error).message}`);
+			}
+		}, everyMs);
+		timer.unref();
+		this.stopBlankChatSweep = () => clearInterval(timer);
+	}
+
+	/** chat-slots: open chats per project, counts only (GET /api/open-chats). */
+	openChatCounts(): ReturnType<typeof ClientSession.openChatCounts> {
+		return ClientSession.openChatCounts();
+	}
+
 	/** roles-config-history: index.ts starts it after the restart's carry-on; a run now, then every 5 minutes. */
 	startRolesConfigHistory(): void {
 		if (this.rolesConfig) return;
@@ -17385,9 +17587,15 @@ export class AgentService {
 		this.clients.delete(clientId);
 		// 先摘出 map 再异步 dispose：只删 map 的话，对话的 runtime/终端/看门狗
 		// 计时器全都留在内存里（泄漏），转录还挂着活 writer（同文件双写者风险）。
-		void cs.dispose().catch(() => {
-			// 回收失败不拦主流程：尽力而为，进程退出时 OS 兜底
-		});
+		void cs
+			.dispose()
+			// chat-slots: the scheduler client left; its active chat closes if it is blank and nobody needs it.
+			.then(() => {
+				if (!this.quiesced) cs.releaseBlankChat("its scheduled task was deleted");
+			})
+			.catch(() => {
+				// 回收失败不拦主流程：尽力而为，进程退出时 OS 兜底
+			});
 		// 通知其他客户端刷新 elsewhere 列表。
 		this.pokeExternalRunning(clientId);
 	}
@@ -17823,14 +18031,12 @@ export class AgentService {
 		const moveIds = [convId, ...collectSubagentDescendantIds(briefs, convId)];
 		const moveSet = new Set(moveIds);
 		// 容量：与 switchSession 同口径（目标项目非子代理且非临时会话 8 个）。
-		const movedMains = briefs.filter((b) => moveSet.has(b.id) && !b.isSubagent && !b.isEphemeral).length;
+		// chat-slots: blank chats don't take a slot (countsTowardCap).
+		const movedMains = briefs.filter((b) => moveSet.has(b.id) && b.countsTowardCap).length;
 		const openInProject =
-			target.takeoverBriefs().filter((b) => b.cwd === main.cwd && !b.isSubagent && !b.isEphemeral).length + movedMains;
+			target.takeoverBriefs().filter((b) => b.cwd === main.cwd && b.countsTowardCap).length + movedMains;
 		if (openInProject > MAX_OPEN_CONVERSATIONS) {
-			fail(
-				`This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}). Open one and leave it (without continuing) to remove it from the list.`,
-				`This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}). Open one and leave it (without continuing) to remove it from the list.`,
-			);
+			fail(OPEN_CHATS_FULL_MESSAGE, OPEN_CHATS_FULL_MESSAGE);
 			return;
 		}
 		try {
@@ -18245,6 +18451,11 @@ export class AgentService {
 		if (cs && !AgentService.isPseudoClientId(clientId) && cs.sinkCount() === 0) {
 			this.pokeExternalRunning(clientId);
 		}
+		// chat-slots: a pseudo client (a look check, the queue, a carry-on) that left closes its blank chat if
+		// nobody needs it: nobody could see or close it otherwise, and it would hold a slot until a restart.
+		if (cs && AgentService.isPseudoClientId(clientId) && cs.sinkCount() === 0 && !this.quiesced) {
+			cs.releaseBlankChat("its client left");
+		}
 	}
 
 	get(clientId: string): ClientSession | undefined {
@@ -18340,6 +18551,8 @@ export class AgentService {
 	}
 
 	async disposeAll(): Promise<void> {
+		this.stopBlankChatSweep?.();
+		this.stopBlankChatSweep = null;
 		this.roleMessages.stop();
 		if (roleMessageService === this.roleMessages) roleMessageService = null;
 		this.roleGuard.stop();

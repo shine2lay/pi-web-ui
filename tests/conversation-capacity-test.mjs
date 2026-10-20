@@ -1,6 +1,6 @@
 /**
- * company-team-capacity: twenty-four saved role chats can stay open, the twenty-fifth
- * is refused non-destructively, and existing exemptions/recovery still work.
+ * company-team-capacity: forty saved role chats can stay open (chat-slots raised it from 24), the
+ * forty-first is refused non-destructively, and existing exemptions/recovery still work.
  * No model/provider or prompt: only disposable saved transcripts and normal WS operations.
  * Run through tests/run-sealed.mjs after building.
  */
@@ -16,7 +16,8 @@ import WebSocket from "ws";
 import { portUp } from "./lib/port-utils.mjs";
 
 const PORT = 9126;
-const LIMIT = 24; // Deliberate contract, independent of the production constant.
+const LIMIT = 40; // Deliberate contract, independent of the production constant (chat-slots: owner, 2026-10-19).
+const FULL = "This project has 40 open chats, the most it can hold. Close one in the left list (✕) to open another.";
 const repo = fileURLToPath(new URL("..", import.meta.url));
 const base = mkdtempSync(join(tmpdir(), "pi-web-conversation-capacity-"));
 const work = join(base, "work");
@@ -157,7 +158,7 @@ try {
 		await keepOpen(file);
 	}
 	assert.equal(new Set(ids.values()).size, LIMIT);
-	console.log("PASS: twenty-four distinct saved chats opened without a model call");
+	console.log("PASS: forty distinct saved chats opened without a model call");
 
 	const atLimit = state.conversationId;
 	await switchTo(files[LIMIT], false);
@@ -165,22 +166,17 @@ try {
 	const mark = events.length;
 	send({ type: "new_chat" });
 	await waitFor(
-		() =>
-			events
-				.slice(mark)
-				.some(
-					(event) => event.type === "notice" && /max open conversations \(24\)/.test(event.textEn ?? event.text ?? ""),
-				),
+		() => events.slice(mark).some((event) => event.type === "notice" && (event.textEn ?? event.text) === FULL),
 		"new-chat cap notice",
 	);
 	assert.equal(state.conversationId, atLimit);
-	console.log("PASS: history and new-chat routes refuse the twenty-fifth without displacement");
+	console.log("PASS: history and new-chat routes refuse the forty-first without displacement");
 
 	for (const file of files.slice(0, LIMIT)) {
 		await switchTo(file);
 		assert.equal(state.conversationId, ids.get(file), "reopen reuses its runtime at capacity");
 	}
-	console.log("PASS: all twenty-four runtimes survive; reopening does not duplicate them");
+	console.log("PASS: all forty runtimes survive; reopening does not duplicate them");
 
 	send({ type: "new_chat", ephemeral: true });
 	await waitFor(() => state?.isEphemeral === true, "ephemeral exemption");

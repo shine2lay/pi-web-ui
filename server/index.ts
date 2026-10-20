@@ -451,6 +451,16 @@ app.get("/api/busy", (_req, res) => {
 	res.json({ busy: service.busyConversations() });
 });
 
+/** chat-slots (Ops #266): open chats per project, counts only (no titles, no chat text): all of them, the ones
+ *  that take one of the project's slots, and the blank ones. Behind PI_WEB_TOKEN like the other endpoints. */
+app.get("/api/open-chats", (_req, res) => {
+	if (!service.openChatCounts) {
+		res.status(501).json({ error: `the ${ENGINE} engine does not report open chats` });
+		return;
+	}
+	res.json(service.openChatCounts());
+});
+
 /**
  * 基于 SHA-256 内容寻址的附件静态服务：
  * 永久强缓存（immutable），支持图片和文件读取。
@@ -1434,6 +1444,10 @@ export interface EngineService {
 	startRoleMessages?(): void;
 	/** roles-config-history (pi engine, Ops #209): start recording the roles' settings changes (after the carry-on). */
 	startRolesConfigHistory?(): void;
+	/** chat-slots (pi engine, Ops #266): start closing blank chats no window had open for 10 minutes (after the carry-on). */
+	startBlankChatSweep?(): void;
+	/** chat-slots (pi engine): open chats per project, counts only (GET /api/open-chats). */
+	openChatCounts?(): { limit: number; projects: { cwd: string; open: number; counted: number; blank: number }[] };
 	/** roles-config-history (pi engine): set by index.ts; a run recorded changes. */
 	onRolesConfigChanged?: (() => void) | null;
 	/** role-messages (pi engine): the last messages between roles and the pause switch. */
@@ -4375,6 +4389,8 @@ httpServer.listen(PORT, HOST, () => {
 				service.startRoleMessages?.();
 				// roles-config-history: then the recorder of the roles' settings changes (a run now, then every 5 min).
 				service.startRolesConfigHistory?.();
+				// chat-slots: then the sweep that closes blank chats no window had open for 10 minutes.
+				service.startBlankChatSweep?.();
 			})(),
 		1500,
 	);
