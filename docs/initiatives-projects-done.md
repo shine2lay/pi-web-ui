@@ -27,4 +27,14 @@ Ops #274 (owner, 2026-10-19, relayed by COO rm-0a0353b3: "you mentioned that a p
 
 **What would prove it wrong.** A finished project is still only findable below the active rows, or the counts differ from the registry.
 
-**Result:** pending.
+**Result: HIT** (2026-10-19, Ops #274).
+
+- Sealed: `tests/initiatives-projects-done-test.mjs`, 29 of 29 checks at 1400 and 390 px. The card reads "2 of 6 projects done · 1 dropped" under its outcomes count; "Finished projects · 3" ("latest Sat Oct 17") is closed, 44 px high and above the first active row; one click opens 3 rows, newest first; no finished project shows among the active rows; a row's name opens its project. Focused vitest `tests/unit/initiatives-projects-done.test.ts` 7 of 7. Landed c715f6de (request 93-15f801, gate passed); `pi-web-deploy` of c715f6de at 21:00 passed every check (server, page, reply, bigchat, log).
+- Live, look only (build 7610a8e4, which holds c715f6de; pseudo client `carry-on:ops-live-look-projects-done`; script and screenshots in `~/kept-from-tmp/2026-10-19/initiatives-projects-done-live/run1`), compared with the registry read at the same time, at 1400 and 390 px:
+  - the Team in Temper card reads "0 of 15 outcomes done" and under it "2 of 7 projects done", matching the registry (7 projects, 2 done, 0 dropped);
+  - "Finished projects · 2" ("latest Mon Oct 19") is right under the Who's doing what heading, closed, 44 px high, above the 5 active projects' rows;
+  - opened, it lists "Quality bar for the team's apps" (Lead · QA, 4 of 4 done, done Mon Oct 19) and "Project 2: independent check" (Lead · Architecture, 4 of 4 done, done Mon Oct 19); neither shows among the active rows;
+  - "Projects in no initiative" (desktop): "Finished projects · 3" with Message approvals back on, Roles page and Work hierarchy in use, the 3 active ones in the rows below;
+  - no sideways scroll, no page errors; only hello and the page's watches were sent.
+- Note: the fold's open or closed state is one setting for the page, like the Done fold's: opened on one initiative, it stays open on the next one picked.
+- Limit, as planned: a finished project's tasks no longer show under Who's doing what (on 2026-10-19 no finished project had an open task).
