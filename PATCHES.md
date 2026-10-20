@@ -7723,3 +7723,48 @@ the slice rule, numbers and result: `docs/pages-fresh.md`.
 ### Undo and syncing
 
 - Revert this commit with `wt`, then install with `pi-web-deploy`. Nothing stored changes.
+
+## stall-watch
+
+**Status**: `local`
+**Baseline**: v0.96.1 (`mine` at f805ba2d).
+
+A deterministic stall check, dry: every 10 minutes it finds the active projects and initiatives that have had
+no open task for 2 h ("empty") or open tasks but nothing recorded for 24 h ("silent"), skips the quiet ones
+(a running wait, every open task owner-paused, a task waiting on the owner), works out whom to wake in turn
+(the item's lead, its initiative's lead, the owner) and only logs it. No model; it sends and writes nothing.
+
+**Why** (owner via COO rm-f7806412, 2026-10-20 ~08:25: "we need to close the gap so no initiatives are forever
+stuck"; Ops #283). H-STALL-1: overnight Oct 19-20 four Team in Temper projects sat with no open task and no
+lead was woken (rm-8fb841ab). Rules, quiet cases, chain, settings, the StallFinding contract Ops #284 builds
+on, backtest, cost and result: `docs/stall-watch.md`.
+
+### Changes
+
+- `server/stall-watch.ts` (new): the pure rules `stallFindings(page, extra, now, settings)` / `stallReview`, the
+  chain, `stallSettings()` (`~/.pi-web-ui/stall-watch.json`: mode off/dry/on, emptyHours 2, silentHours 24,
+  gapHours 2, everyMin 10; `PI_WEB_STALL_*` env overrides), `StallTimesFile` (the times the work page lacks,
+  one pass over the registry text), `StallWatch` (the round, an injectable `act` hook; dry logs
+  `stall: would wake ...` and `stall: <id> cleared (...)` lines, changes only).
+- `server/agent-service.ts`: `startStallWatch()` beside the progress feed (reads `readWorkPage()`, the
+  registry's text and the kept lead updates), stopped at shutdown; `stallList()`.
+- `server/control-socket.ts`, `bin/pi-web-ui.mjs`: `stall_list` / `pi-web-ui stall list` (JSON, read only).
+- `server/work-page.ts`, `server/protocol.ts`: the replay keeps pi-queue's `wait` on the record
+  (`{until, why, at, by}`, Ops #282's `project.wait`/`resume` events), with no activity line and no
+  "unknown change"; the pages don't show it yet.
+- `scripts/stall-backtest.mts` (replays the registry every 10 min over a past stretch), `scripts/stall-count.mjs`
+  (the independent count from the events alone), both read only.
+- Tests: `tests/unit/stall-watch.test.ts` (new: must-catch and must-pass fixtures, each run twice; chains;
+  settings; the wait field; the dry run's log and `StallWatch`).
+
+### How it was checked
+
+- Fixtures (all must-catch fire, no must-pass fires, same twice); backtest Oct 19 00:00 to Oct 20 09:00 against
+  H-STALL-1 and against `stall-count.mjs` at all 199 steps (0 differences); a sealed round's cost on a copy of
+  the real registry (median 10.6 ms); the land gate; live, look only: `pi-web-ui stall list` and the log's
+  `stall:` lines against `stall-count.mjs` (`docs/stall-watch.md`).
+
+### Undo and syncing
+
+- Turn it off without a deploy: `{"mode":"off"}` in `~/.pi-web-ui/stall-watch.json` (read at every round).
+  Or revert this commit with `wt` and install with `pi-web-deploy`. Nothing stored changes.

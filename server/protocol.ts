@@ -2218,6 +2218,17 @@ export interface UiWorkPageRecord {
 	doneWhen: UiWorkDoneItem[];
 	/** Projects only: the initiative it serves, or null (in no initiative). */
 	initiative?: string | null;
+	/** stall-watch (Ops #283): its wait as pi-queue's wait action recorded it (Ops #282). Absent: no wait. Kept
+	 *  after it ran out (now >= until), until a resume, a new wait, or done or dropped. The pages don't show it yet. */
+	wait?: UiWorkWait;
+}
+
+/** stall-watch (Ops #283): an item parked on purpose until a time (ms), with the lead's why, when and by whom. */
+export interface UiWorkWait {
+	until: number;
+	why: string;
+	at: number;
+	by: string;
 }
 
 /** initiatives-plan-data: a task's status as its queue last recorded it in the registry (pi-queue's TaskState). */

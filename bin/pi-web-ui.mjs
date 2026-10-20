@@ -3541,6 +3541,22 @@ async function decisionsCmd(argv) {
 	);
 }
 
+/**
+ * stall-watch (Ops #283): `stall list` prints the running server's stall check as JSON: its mode and settings,
+ * the last round's time and cost, the findings (whom it would wake) and every active project's and initiative's
+ * state. Read only.
+ */
+async function stallCmd(argv) {
+	const action = argv[0];
+	const { opts } = parseFlags(argv.slice(1));
+	if (action !== "list") fail("Usage: pi-web-ui stall list [--data-dir DIR]");
+	const st = await controlCommand(opts, "stall_list");
+	if (!st)
+		fail(`Server not running or control channel unreachable (${controlPath(opts)}); start it, then run this again.`);
+	if (!st.ok) fail(st.error);
+	console.log(JSON.stringify(st.stall, null, 2));
+}
+
 async function main() {
 	checkNodeVersion();
 	const argv = process.argv.slice(2);
@@ -3571,6 +3587,10 @@ async function main() {
 	}
 	if (first === "decisions") {
 		await decisionsCmd(argv.slice(1));
+		return;
+	}
+	if (first === "stall") {
+		await stallCmd(argv.slice(1));
 		return;
 	}
 	if (first === "plugins" || first === "plugin") {

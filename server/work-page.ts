@@ -36,6 +36,7 @@ import type {
 	UiWorkTaskBlock,
 	UiWorkTaskRef,
 	UiWorkTaskState,
+	UiWorkWait,
 } from "./protocol.js";
 import { doneFactsOf } from "./live-progress.js";
 import { requesterText } from "./queue-requester.js";
@@ -112,6 +113,8 @@ interface Rec {
 	createdAt: number;
 	createdBy: string;
 	updatedAt: number;
+	/** stall-watch (Ops #283): its wait as pi-queue's wait action recorded it (Ops #282); kept after it ran out. */
+	wait?: UiWorkWait;
 }
 
 /** A blocked task's block as the store keeps it (TaskBlockInfo). */
@@ -292,8 +295,9 @@ const taskRef = (l: Link): UiWorkTaskRef => ({
 
 type LogEvent = Record<string, unknown> & { op: string; ts: number; by: string };
 
-/** One recorded change applied by the store's rules (applyEvent), or Skip. Nothing changes before every check passed. */
-function apply(s: WorkReplay, e: LogEvent): UiWorkActivity {
+/** One recorded change applied by the store's rules (applyEvent), or Skip. Nothing changes before every check passed.
+ *  A wait or resume adds no activity line (null): the pages don't show waits yet (stall-watch, Ops #283). */
+function apply(s: WorkReplay, e: LogEvent): UiWorkActivity | null {
 	const at = e.ts;
 	const by = e.by;
 	const [kind, act, extra] = e.op.split(".");
@@ -330,6 +334,21 @@ function apply(s: WorkReplay, e: LogEvent): UiWorkActivity {
 		}
 		const cur = typeof e.id === "string" ? recs.get(e.id) : undefined;
 		must(cur);
+		// stall-watch (Ops #283): pi-queue's wait and resume (Ops #282), only while it is active. A new wait replaces
+		// the one before; a resume ends it. Neither changes updatedAt or adds an activity line.
+		if (act === "wait") {
+			const { until, why } = e;
+			must(cur.status === "active" && isTime(until));
+			must(typeof why === "string" && why.trim() && why.length <= WORK_NEED_MAX);
+			recs.set(cur.id, { ...cur, wait: { until, why, at, by } });
+			return null;
+		}
+		if (act === "resume") {
+			must(cur.status === "active");
+			const { wait: _ended, ...rest } = cur;
+			recs.set(cur.id, rest);
+			return null;
+		}
 		if (act === "change") {
 			must(isObject(e.changes));
 			const given: Record<string, unknown> = { ...e.changes };
@@ -365,6 +384,8 @@ function apply(s: WorkReplay, e: LogEvent): UiWorkActivity {
 			};
 			// Done means every done-when item is met, with its proof.
 			must(next.status !== "done" || next.met.length === next.doneWhen.length);
+			// A wait ends when it is done or dropped (Ops #282).
+			if (next.status !== "active") delete next.wait;
 			recs.set(cur.id, next);
 			return { at, by, op, id: cur.id, changed, ...(ch.status !== undefined ? { status: ch.status as string } : {}) };
 		}
@@ -469,7 +490,8 @@ export function replayWork(log: string): WorkReplay {
 			continue;
 		}
 		try {
-			s.activity.push(apply(s, e as LogEvent));
+			const line = apply(s, e as LogEvent);
+			if (line) s.activity.push(line);
 		} catch (err) {
 			if (!(err instanceof Skip)) throw err;
 			s.unknown = true;
@@ -497,6 +519,7 @@ function recordOut(r: Rec): UiWorkPageRecord {
 			return m ? { item, met: { proof: m.proof, by: m.by, at: m.at } } : { item };
 		}),
 		...(r.kind === "project" ? { initiative: r.initiative ?? null } : {}),
+		...(r.wait ? { wait: { ...r.wait } } : {}),
 	};
 }
 

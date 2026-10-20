@@ -23,6 +23,8 @@
  *   → {"cmd":"feed_status"}  ← {"ok":true,"feed":{settings, <initiative>: {lead, updates, unlinked, open, ...}}}
  *   → {"cmd":"feed_catch_up","initiative":"team-in-temper","date":"YYYY-MM-DD"}  ← {"ok":true,"feed":{id,unlinked}}
  *     (progress-feed, task #85: the one-time catch-up ask to the initiative's lead, from that day on)
+ *   → {"cmd":"stall_list"}  ← {"ok":true,"stall":{mode, settings, running, rounds, at, tookMs, findings, items}}
+ *     (stall-watch, Ops #283: the stall check's last round; read only)
  *   → anything else           ← {"ok":false,"error":"..."}
  *
  * Idle connections are closed after a short timeout so a stuck CLI never
@@ -75,6 +77,7 @@ type ControlService = Pick<AgentService, "serviceStatus" | "quiesce" | "unquiesc
 			| "decisionsRecoverCall"
 			| "feedStatus"
 			| "feedCatchUp"
+			| "stallList"
 		>
 	>;
 
@@ -101,7 +104,8 @@ export interface ControlCommand {
 		| "decisions_read"
 		| "decisions_recover_call"
 		| "feed_status"
-		| "feed_catch_up";
+		| "feed_catch_up"
+		| "stall_list";
 	/** feed_catch_up: the initiative (date = the day it covers from). */
 	initiative?: unknown;
 	/** decisions_recover_call: fixed operation metadata, never supplied proof/approval. */
@@ -139,6 +143,8 @@ export interface ControlStatus {
 	decisions?: unknown;
 	/** progress-feed: feed_status, or what feed_catch_up sent. */
 	feed?: unknown;
+	/** stall-watch (Ops #283): stall_list's last round. */
+	stall?: unknown;
 }
 
 /** Start the control socket; returns a stop function. */
@@ -308,6 +314,11 @@ export function startControlServer(opts: {
 						resp = res.ok
 							? { ok: true, feed: { id: res.id, unlinked: res.unlinked } }
 							: { ok: false, error: res.error };
+						break;
+					}
+					case "stall_list": {
+						const list = service.stallList?.();
+						resp = list ? { ok: true, stall: list } : { ok: false, error: "the stall check isn't running here" };
 						break;
 					}
 					default:

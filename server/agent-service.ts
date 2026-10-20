@@ -527,6 +527,7 @@ import {
 import { type DecisionModel, isolatedDecisionModel } from "./decision-model.js";
 import { makeInitiativeUpdateTool } from "./initiative-update-tool.js";
 import { ProgressFeed } from "./progress-feed.js";
+import { StallTimesFile, StallWatch, leadUpdatesOf, type StallList } from "./stall-watch.js";
 import { launchOrigin, toServiceInfo } from "./launch-origin.js";
 import { imageIfVersion, type ChatImage } from "./chat-image.js";
 import {
@@ -16111,6 +16112,42 @@ export class AgentService {
 		this.roleBoard.start();
 		this.startDecisionRecords();
 		this.progressFeed.start();
+		this.startStallWatch();
+	}
+
+	// -----------------------------------------------------------------------
+	// stall-watch (Ops #283): finds stalled projects and initiatives from the records (stall-watch.ts); dry: it
+	// only logs whom it would wake. Its rounds read the work page, the registry's text and the lead updates.
+	// -----------------------------------------------------------------------
+
+	private stallWatch: StallWatch | undefined;
+	private stallTimes: StallTimesFile | undefined;
+
+	/** pi-work-management's workDir(), as the Roles reader finds it: PI_WORK_DIR, or "work" in pi's agent folder. */
+	private workEventsFile(): string {
+		return join(process.env.PI_WORK_DIR || join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "work"), "events.jsonl");
+	}
+
+	private startStallWatch(): void {
+		if (this.stallWatch) return;
+		this.stallTimes = new StallTimesFile(() => this.workEventsFile());
+		this.stallWatch = new StallWatch({
+			read: async () => {
+				const page = await this.readWorkPage();
+				const times = await this.stallTimes!.get();
+				const updates = this.keptRecords().list.flatMap((r) =>
+					r.source === "update" && r.initiative && r.update ? [{ initiative: r.initiative, at: r.at }] : [],
+				);
+				return { page, extra: { times, leadUpdates: leadUpdatesOf(updates) } };
+			},
+			log: (line) => console.log(line),
+		});
+		this.stallWatch.start();
+	}
+
+	/** Control socket stall_list: the stall check's last findings and every active item's state. */
+	stallList(): StallList | undefined {
+		return this.stallWatch?.list();
 	}
 
 	// -----------------------------------------------------------------------
@@ -16313,9 +16350,7 @@ export class AgentService {
 			this.workFactsError = error;
 		}
 		// pi-work-management's workDir(), as the Roles reader finds it: PI_WORK_DIR, or "work" in pi's agent folder.
-		this.workPageFile ??= new WorkPageFile(() =>
-			join(process.env.PI_WORK_DIR || join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "work"), "events.jsonl"),
-		);
+		this.workPageFile ??= new WorkPageFile(() => this.workEventsFile());
 		const page = await this.workPageFile.get(facts);
 		// initiatives-page-gaps (Ops #228): the open hand-offs that carry an initiative's id (first lines only).
 		page.handoffs = this.roleMessages.openHandoffs();
@@ -18574,6 +18609,7 @@ export class AgentService {
 		this.decisionReader?.stop();
 		this.progressFeed.stop();
 		if (progressFeedService === this.progressFeed) progressFeedService = null;
+		this.stallWatch?.stop();
 		decisionsService = null;
 		this.stopDecisionAnswers?.();
 		this.stopDecisionAnswers = null;
