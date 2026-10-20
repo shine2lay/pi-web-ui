@@ -34,6 +34,17 @@ const project = (id: string, extra: Record<string, unknown> = {}) => ({
 });
 
 describe("workRecordsFrom", () => {
+	it("recognises wait/resume without changing the Roles page's records (#284)", () => {
+		const before = [initiative("team"), project("p")];
+		const waits = ["project.wait", "project.resume", "initiative.wait", "initiative.resume"].map((op) => ({
+			op,
+			id: op.startsWith("project.") ? "p" : "team",
+			until: Date.now() + 3600_000,
+			why: "after the next review",
+		}));
+		const raw = log(...before);
+		expect(workRecordsFrom(raw + log(...waits))).toEqual(workRecordsFrom(raw));
+	});
 	it("an empty log has nothing and no problem", () => {
 		expect(workRecordsFrom("")).toEqual({ initiatives: [], projects: [] });
 	});

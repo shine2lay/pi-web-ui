@@ -27,6 +27,7 @@ import { agoOf, clockOf } from "../roles-view-model";
 import type { UiDecision, UiDecisionSource, UiDecisionsPage, UiWorkPage, UiWorkPageRecord } from "../types";
 import { gapsPart } from "./gaps";
 import { planPart } from "./plan";
+import { stallLine, stallPart } from "./stall";
 import { statusOf, tasksPart } from "./tasks";
 import { NO_INITIATIVE, projectFrameId, type InitiativesPageOpen, type InitiativesPagePart } from "./types";
 
@@ -175,6 +176,8 @@ export function buildInitiativesPage(args: InitiativesPageArgs): InitiativesPage
 		planPart(page, selected, args.open),
 		tasksPart(page, selected, args.open, { now, stale: work.status === "error" }),
 		gapsPart(page, selected, args.open, { progress: dec?.progress, now }),
+		// stall-wake (Ops #284): last, so a stall or wait line takes the row's note slot.
+		stallPart(page, now),
 	];
 	const leadChats: Record<string, string> = {};
 	const changeLead: string[] = [];
@@ -309,11 +312,14 @@ export function buildInitiativesPage(args: InitiativesPageArgs): InitiativesPage
 					heading: "Projects in no initiative · " + loose.length,
 					items: loose.map((p) => {
 						const c = doneCount(p);
+						const stall = stallLine(p, now);
 						let item: InitiativesExactLooseItem = {
 							id: p.id,
 							name: p.name,
 							opens: projectFrameId(p.id),
-							note: `Lead · ${roleName(p.lead)} · ${c.done} of ${c.total} done · ${STATUS_WORD[p.status] ?? p.status}`,
+							note:
+								`Lead · ${roleName(p.lead)} · ${c.done} of ${c.total} done · ${STATUS_WORD[p.status] ?? p.status}` +
+								(stall ? ` · ${stall}` : ""),
 						};
 						// initiatives-page-tasks: a section's fields for the item (ON YOU when one of its tasks asks).
 						for (const part of parts) item = { ...item, ...part.loose?.[p.id] };

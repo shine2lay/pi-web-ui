@@ -7724,6 +7724,15 @@ the slice rule, numbers and result: `docs/pages-fresh.md`.
 
 - Revert this commit with `wt`, then install with `pi-web-deploy`. Nothing stored changes.
 
+## stall-wake: the work check wakes stalled work's lead, then the next lead, then the owner through COO
+
+- `local` (Ops #284, owner via COO rm-f7806412). H-STALL-WAKE-1, rules, caps, switch and verdict: `docs/stall-watch.md`.
+- `server/stall-wake.ts`: due steps on #283's contract; a batch per recipient; 6 messages per recipient/local day and 20/hour overall; owner's pause holds without creating; disabled wakes skip to the next lead after the gap; 30-day historical ledger plus unresolved consumed-step checkpoints until verified end +30 days (Ops retention clarification rm-8b9b535a), and role-store crash recovery before caps. Only wakes, never registry/queue writes or model calls. `server/agent-service.ts` uses it for mode on only; code default stays dry.
+- `server/role-messages.ts`: app `requestStall`, own chain, normal after-turn delivery/retries, stall metadata, header/hints, no reply. Quiet-turn and page parsers recognise it without treating it as a morning report. Owner escalation goes only to COO.
+- `server/protocol.ts`, work-page decoration, existing Initiatives project row/card/loose-project note slots: stalled-since/asked or recorded wait. No other layout/page change. Roles' record reader recognises but ignores wait/resume events.
+- Checks: fixed delivery/ledger/cap/header/hint cases and Initiatives lines twice, verdict fixtures twice; full sealed land gate. Live first-round ledger/store match, quiet cases, look-only Initiatives check, zero duplicate steps after a normal restart; 24 h action verdict (at least half). No real chat test mutation beyond approved delivery.
+- Undo: set `"mode":"off"` in `~/.pi-web-ui/stall-watch.json` (next round), or revert this commit and deploy with `pi-web-deploy`. Ledger remains for dedupe; nothing in the work registry needs undoing.
+
 ## stall-watch
 
 **Status**: `local`

@@ -527,7 +527,17 @@ import {
 import { type DecisionModel, isolatedDecisionModel } from "./decision-model.js";
 import { makeInitiativeUpdateTool } from "./initiative-update-tool.js";
 import { ProgressFeed } from "./progress-feed.js";
-import { LeadUpdatesFile, StallTimesFile, StallWatch, youngEnough, type StallList } from "./stall-watch.js";
+import {
+	LeadUpdatesFile,
+	StallDryLog,
+	StallTimesFile,
+	StallWatch,
+	stallSettings,
+	youngEnough,
+	type StallList,
+	type StallExtra,
+} from "./stall-watch.js";
+import { STALL_LEDGER_FILE, StallWake, stallStretchEnded, stallWakesOn, withStall } from "./stall-wake.js";
 import { launchOrigin, toServiceInfo } from "./launch-origin.js";
 import { imageIfVersion, type ChatImage } from "./chat-image.js";
 import {
@@ -1956,7 +1966,14 @@ function quietRunsOf(conv: Conversation, idx: ChatIndex): QuietRun[] {
 	}
 	const stampOf = (m: unknown) => {
 		const s = roleMessageService?.stampForMessage(file, m as AgentMessage);
-		return s ? { kind: s.kind, ...(s.forOwner ? { forOwner: true } : {}), ...(s.poke ? { poke: true } : {}) } : null;
+		return s
+			? {
+					kind: s.kind,
+					...(s.forOwner ? { forOwner: true } : {}),
+					...(s.poke ? { poke: true } : {}),
+					...(s.stall ? { stall: true } : {}),
+				}
+			: null;
 	};
 	const msgs = idx.raw.map((m) => {
 		let q = quietMsgCache.get(m);
@@ -16121,6 +16138,7 @@ export class AgentService {
 	// -----------------------------------------------------------------------
 
 	private stallWatch: StallWatch | undefined;
+	private stallWake: StallWake | undefined;
 	private stallTimes: StallTimesFile | undefined;
 	private stallLeadUpdates: LeadUpdatesFile | undefined;
 
@@ -16137,7 +16155,34 @@ export class AgentService {
 		this.stallTimes = new StallTimesFile(() => this.workEventsFile());
 		// H-STALL-COST-1: only the records file's new lines, not keptRecords()' whole parse.
 		this.stallLeadUpdates = new LeadUpdatesFile(() => this.decisions.file);
+		// stall-wake (Ops #284): only mode on sends; dry remains the code default. The owner can change it
+		// between rounds. This check has its own caps; delivery uses the role message store's normal path.
+		const settings = () => stallSettings();
+		const dry = new StallDryLog((line) => console.log(line), settings);
+		let snapshot: { page: UiWorkPage; extra: StallExtra } | undefined;
+		this.stallWake = new StallWake(
+			{
+				paused: () => this.roleMessages.paused,
+				wakesOn: () => stallWakesOn(join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "pi-queue.json")),
+				hasHome: (role) => !!identityRegistry().identities.find((i) => i.id === role)?.homeChat,
+				history: () => this.roleMessages.stallHistory().map((l) => ({ ...l, state: "sent" as const })),
+				ended: (stretch) => (snapshot ? stallStretchEnded(stretch, snapshot.page, snapshot.extra) : false),
+				sentBefore: (stretch, step, role) => this.roleMessages.stallStepSent(stretch, step, role),
+				send: (input) => {
+					const r = this.roleMessages.requestStall(input);
+					return r.ok ? { ok: true, id: r.record.id } : r;
+				},
+				log: (line) => console.log(line),
+			},
+			join(this.stateStore.dataDir, STALL_LEDGER_FILE),
+			settings,
+		);
 		this.stallWatch = new StallWatch({
+			settings,
+			act: (findings, now) => {
+				if (settings().mode === "on") this.stallWake!.act(findings, now);
+				else if (settings().mode === "dry") dry.act(findings, now);
+			},
 			read: async () => {
 				// H-STALL-COST-2: the newest overview when young enough (pages-fresh makes one every 15 s), else one
 				// made now. Only the queue facts come from it; a task's state is the registry's, read now.
@@ -16145,7 +16190,8 @@ export class AgentService {
 				const page = await this.readWorkPage(overview);
 				const times = await this.stallTimes!.get();
 				const leadUpdates = await this.stallLeadUpdates!.get();
-				return { page, extra: { times, leadUpdates } };
+				snapshot = { page, extra: { times, leadUpdates } };
+				return snapshot;
 			},
 			log: (line) => console.log(line),
 		});
@@ -16361,7 +16407,9 @@ export class AgentService {
 		const page = await this.workPageFile.get(facts);
 		// initiatives-page-gaps (Ops #228): the open hand-offs that carry an initiative's id (first lines only).
 		page.handoffs = this.roleMessages.openHandoffs();
-		return page;
+		// stall-wake (Ops #284): existing Initiatives note slots; never stored in WorkPageFile's cached replay.
+		const findings = this.stallWatch?.list().findings ?? [];
+		return withStall(page, findings, (stretch) => this.stallWake?.asked(stretch) ?? []);
 	}
 
 	// -----------------------------------------------------------------------

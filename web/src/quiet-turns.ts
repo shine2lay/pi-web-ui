@@ -49,7 +49,16 @@ export function quietMsgOf(m: UiMessage): QuietMsg {
 			role: m.role,
 			...(m.customType ? { customType: m.customType } : {}),
 			text: textOf(m),
-			...(rm ? { stamp: { kind: rm.kind, ...(rm.forOwner ? { forOwner: true } : {}) } } : {}),
+			...(rm
+				? {
+						stamp: {
+							kind: rm.kind,
+							...(rm.forOwner ? { forOwner: true } : {}),
+							// stall-wake (Ops #284): the work check's wake folds like a role's turn.
+							...(rm.stall ? { stall: true } : {}),
+						},
+					}
+				: {}),
 		};
 	} else if (m.role === "assistant") {
 		const calls = [];

@@ -1928,6 +1928,15 @@ export const en = {
 		"From the Initiatives page ({id}), asking its lead for a progress update. The server set the sender.",
 	rolePokeCardFromText:
 		"From the Initiatives page ({id}), as the message's first line says (the server no longer has its record).",
+	/* stall-wake (Ops #284): the work check wakes a lead about stalled work */
+	roleMessageFoldWorkCheck: "From the work check",
+	roleMessageFoldStall: "stalled work \u00b7 {names}",
+	roleStallLabel: "the work check \u00b7 stalled work \u00b7 {names}",
+	roleStallCardTitle: "Stalled work \u00b7 {names}",
+	roleStallCardFrom:
+		"From the work check ({id}), waking the lead about work that isn't moving. The server set the sender.",
+	roleStallCardFromText:
+		"From the work check ({id}), as the message's first line says (the server no longer has its record).",
 	roleMessageFoldOpen: "Show the whole message",
 	roleMessageFoldClose: "Fold the message into one line",
 	roleMessageFoldUnstamped: "sender as its first line says",

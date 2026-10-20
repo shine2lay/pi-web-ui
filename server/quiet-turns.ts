@@ -36,6 +36,8 @@ export interface QuietStamp {
 	/** progress-feed (task #85): the Initiatives page's ask for a progress update (kind report): the owner
 	 *  reads the update on the page, so the lead's turn is folded like a role's. */
 	poke?: boolean | { initiative: string; name: string };
+	/** stall-wake (Ops #284): the work check's wake about stalled work (kind report): folded like a role's. */
+	stall?: boolean | { names: string };
 }
 
 export interface QuietCall {
@@ -106,6 +108,8 @@ const REPORT_HEAD = new RegExp(`^\\[Role message ${RM} from the app \\u00b7 6 am
 const POKE_HEAD = new RegExp(
 	`^\\[Role message ${RM} from the Initiatives page \\u00b7 progress update \\u00b7 [^\\]]+\\]$`,
 );
+/** stall-wake (Ops #284): role-messages.ts roleMessageHeader for the work check's wake. */
+const STALL_HEAD = new RegExp(`^\\[Role message ${RM} from the work check \\u00b7 stalled work \\u00b7 [^\\]]+\\]$`);
 /** pi-queue's wake-on-done notices (queue.ts wakeOnDoneText, #88). */
 const QUEUE_WAKE = /^\[Queue\] (?:Task #\d+ \(.*\) is done in its chat |\d+ tasks are done in their chats:)/;
 
@@ -132,10 +136,10 @@ function roleStarter(text: string, stamp: QuietStamp | null | undefined): Starte
 	const head = (nl === -1 ? text : text.slice(0, nl)).trimEnd();
 	const body = nl === -1 ? "" : text.slice(nl + 1).replace(/^\n+/, "");
 	if (stamp) {
-		if (stamp.poke) return { kind: "role" };
+		if (stamp.poke || stamp.stall) return { kind: "role" };
 		if (stamp.kind === "report" || stamp.forOwner) return "visible";
 	} else {
-		if (POKE_HEAD.test(head)) return { kind: "role" };
+		if (POKE_HEAD.test(head) || STALL_HEAD.test(head)) return { kind: "role" };
 		if (REPORT_HEAD.test(head)) return "visible";
 		const cut = text.lastIndexOf("\n\n");
 		const hint = cut === -1 ? "" : text.slice(cut + 2);

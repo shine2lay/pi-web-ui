@@ -111,6 +111,8 @@ export interface UiRoleMessage {
 	reportDate?: string;
 	/** progress-feed (task #85): kind report sent by the Initiatives page: an ask for a progress update. */
 	poke?: { initiative: string; name: string };
+	/** stall-wake (Ops #284): kind report sent by the work check about stalled work: the items' names. */
+	stall?: { names: string };
 	/** decision-records: the initiative it is part of (a short id). */
 	initiative?: string;
 	/** quiet-turns: a reply that answers a question asked for the owner: the turn it starts is his to
@@ -2204,6 +2206,15 @@ export interface UiWorkDoneItem {
 }
 
 /** initiatives-plan-data: an initiative or project of the work registry in full, as the Initiatives page shows it. */
+/** stall-wake (Ops #284): a stalled stretch on the Initiatives page: "No open task since 06:00 \u00b7 Ops asked 08:10". */
+export interface UiWorkStall {
+	/** empty: no open task; silent: nothing recorded. */
+	rule: "empty" | "silent";
+	since: number;
+	/** The steps sent in this stretch, in order; the owner's step is role "owner" (sent to COO). */
+	asked: { role: string; at: number }[];
+}
+
 export interface UiWorkPageRecord {
 	id: string;
 	name: string;
@@ -2215,6 +2226,9 @@ export interface UiWorkPageRecord {
 	createdBy: string;
 	/** Its last recorded change (ms). */
 	updatedAt: number;
+	/** stall-wake (Ops #284): the stall check found it stalled in its last round (stall-watch.ts), and who the
+	 *  check has asked about it in this stretch (the stall ledger). Absent: not stalled. */
+	stall?: UiWorkStall;
 	doneWhen: UiWorkDoneItem[];
 	/** Projects only: the initiative it serves, or null (in no initiative). */
 	initiative?: string | null;

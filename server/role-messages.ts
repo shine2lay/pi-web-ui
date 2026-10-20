@@ -113,6 +113,8 @@ export const ROLE_POKE_SENDER = {
 	chat: "Initiatives page",
 	file: "",
 } as const;
+/** stall-wake (Ops #284): who wakes a lead about stalled work (not a role: the app's work check). */
+export const ROLE_STALL_SENDER = { role: "app", title: "the work check", chat: "Work check", file: "" } as const;
 /** role-reports: an answer without the four headings counts as final once the chat has been idle this long. */
 const REPORT_SETTLE_MS = 2 * 60_000;
 /** role-reports: no answer this long after delivery: recorded as none. */
@@ -175,6 +177,9 @@ export interface RoleMessageRecord {
 	/** progress-feed (task #85): kind report sent by the Initiatives page to an initiative's lead (no `report`):
 	 *  outside the role message caps and guards like the 6 am report, a chain of its own. */
 	poke?: RolePokeInfo;
+	/** stall-wake (Ops #284): kind report sent by the work check (stall-wake.ts) about stalled work: outside the role
+	 *  message caps and guards like a poke, a chain of its own, with the check's own caps. */
+	stall?: RoleStallInfo;
 	/** telegram-coo: a question or request a role's home chat sent while its turn was the owner's (his
 	 *  Telegram message started it, or a reply to an earlier one of these did): the turn its reply starts
 	 *  goes to his Telegram (role-replies.ts forOwner). */
@@ -272,6 +277,20 @@ export interface RolePokeInfo {
 }
 
 export type RolePokeResult = { ok: true; record: RoleMessageRecord } | { ok: false; error: string };
+
+/** stall-wake (Ops #284): the stalled items a work-check message is about, each with its step in the chain. */
+export interface RoleStallInfo {
+	items: {
+		kind: "project" | "initiative";
+		id: string;
+		name: string;
+		rule: "empty" | "silent";
+		since: number;
+		step: number;
+		/** The owner's step: sent to COO to put to the owner. */
+		owner?: true;
+	}[];
+}
 
 interface StoreFile {
 	v: number;
@@ -389,13 +408,27 @@ export function chatLabel(o: { taskId?: number; isHome: boolean; title?: string 
 	return t ? `chat "${t}"` : "a chat";
 }
 
-type HeaderParts = Pick<RoleMessageRecord, "id" | "from" | "kind" | "replyTo" | "report" | "poke">;
+type HeaderParts = Pick<RoleMessageRecord, "id" | "from" | "kind" | "replyTo" | "report" | "poke" | "stall">;
 
 /** progress-feed (task #85): what an ask for a progress update tells the lead to do with it. */
 export const POKE_HINT =
 	"(The Initiatives page asks you, its lead, for a progress update, on the owner's request. Post it with initiative_update, not message_role. The owner reads it on the page, not here: write nothing for him in this chat.)";
 
+/** stall-wake (Ops #284): what a work-check message tells the lead to do with it. */
+export const STALL_HINT =
+	"(The work check found work you lead that isn't moving. Act with your tools: queue the next task under it (queue_add with its project or initiative), close it (work_project or work_initiative change, status done or dropped), or record a wait with its end (work_project or work_initiative wait). Nothing starts by itself. No reply is needed: the check sees what you do. Write nothing for the owner in this chat.)";
+/** stall-wake: the owner's step, sent to COO. */
+export const STALL_OWNER_HINT =
+	"(The work check found work that stayed stalled after its leads were woken. Put each item to the owner as one dialog with the full package (rule 21). Nothing starts by itself. No reply is needed: the check sees what changes.)";
+
+/** stall-wake: the names in a work-check header (each once, in order). */
+export function stallNames(s: RoleStallInfo): string {
+	return [...new Set(s.items.map((i) => oneLine(i.name, 40)))].join(", ");
+}
+
 export function roleMessageHeader(r: HeaderParts): string {
+	if (r.kind === "report" && r.stall)
+		return `[Role message ${r.id} from the work check \u00b7 stalled work \u00b7 ${oneLine(stallNames(r.stall), 120).replace(/[\]\n]/g, " ")}]`;
 	if (r.kind === "report" && r.poke)
 		return `[Role message ${r.id} from the Initiatives page \u00b7 progress update \u00b7 ${oneLine(r.poke.name, 60).replace(/[\]\n]/g, " ")}]`;
 	if (r.kind === "report")
@@ -422,6 +455,15 @@ export function roleMessageHint(r: HeaderParts, opts: { ownerAnswer?: boolean } 
 	const reply = `message_role with to "${r.from.role}", kind "reply", replyTo "${r.id}"`;
 	switch (r.kind) {
 		case "report":
+			if (r.stall) {
+				const owner = r.stall.items.some((i) => i.owner);
+				const lead = r.stall.items.some((i) => !i.owner);
+				return owner && lead
+					? `(This batch has both lead-action and owner-step items. Apply the lead-action hint only to items saying "To clear it", and the owner-dialog hint only to items saying "Put it to the owner".) ${STALL_HINT} ${STALL_OWNER_HINT}`
+					: owner
+						? STALL_OWNER_HINT
+						: STALL_HINT;
+			}
 			if (r.poke) return POKE_HINT;
 			return "(The app's 6 am report request: your answer in this chat is the report the owner reads. No message_role, no new work, no tasks started.)";
 		case "fyi":
@@ -1130,6 +1172,7 @@ export class RoleMessages {
 			...(r.replyTo ? { replyTo: r.replyTo } : {}),
 			...(r.kind === "report" && r.report ? { reportDate: r.report.date } : {}),
 			...(r.poke ? { poke: { initiative: r.poke.initiative, name: r.poke.name } } : {}),
+			...(r.stall ? { stall: { names: stallNames(r.stall) } } : {}),
 			...(r.initiative ? { initiative: r.initiative } : {}),
 			// quiet-turns: a reply answering a question asked for the owner starts his turn, never folded.
 			...(this.ownerAnswerOf(r.id) ? { forOwner: true } : {}),
@@ -1421,6 +1464,64 @@ export class RoleMessages {
 		return { ok: true, record };
 	}
 
+	/**
+	 * stall-wake (Ops #284): the work check wakes a role about stalled work it leads (or, the owner's step, COO).
+	 * Sent like requestPoke (after any running turn, starts a turn, retries), as the app's: outside the role
+	 * message caps and guards (kind report), a chain of its own; stall-wake.ts keeps its own caps and ledger.
+	 */
+	requestStall(input: { role: string; items: RoleStallInfo["items"]; text: string }): RolePokeResult {
+		const roleId = input.role.trim().toLowerCase();
+		const role = this.host.roles().find((r) => r.id === roleId);
+		if (!role) return { ok: false, error: `there's no role "${oneLine(roleId, 40)}"` };
+		if (!role.homeChat) return { ok: false, error: `${role.id} has no home chat` };
+		if (!input.items.length) return { ok: false, error: "no stalled items" };
+		const record: RoleMessageRecord = {
+			id: newRoleMessageId((id) => !!this.byId(id)),
+			at: this.now(),
+			from: { ...ROLE_STALL_SENDER },
+			to: { role: role.id, title: role.title },
+			kind: "report",
+			chain: 1,
+			text: input.text,
+			state: "waiting",
+			sends: 0,
+			attempts: 0,
+			stall: { items: input.items.map((i) => ({ ...i })) },
+		};
+		this.data.messages.push(record);
+		this.save();
+		this.log(
+			`${record.id} work check -> ${role.id} \u00b7 stalled work ${input.items.map((i) => `${i.kind} ${i.id} step ${i.step}`).join(", ")}`,
+		);
+		this.kick();
+		return { ok: true, record };
+	}
+
+	/** stall-wake: durable creation receipts recover any lost ledger line before the next cap calculation.
+	 *  Include all recipients, not just the currently found stretches (their message still spent a cap slot). */
+	stallHistory(): { stretch: string; step: number; to: string; at: number; id: string; owner?: true }[] {
+		return this.data.messages.flatMap((m) =>
+			(m.stall?.items ?? []).map((i) => ({
+				stretch: `${i.kind}:${i.id}:${i.rule}:${i.since}`,
+				step: i.step,
+				to: m.to.role,
+				at: m.at,
+				id: m.id,
+				...(i.owner ? { owner: true as const } : {}),
+			})),
+		);
+	}
+
+	/** stall-wake: a work-check record to `role` that already holds this step of this stretch (kind:id:rule:since). */
+	stallStepSent(stretch: string, step: number, role: string): { id: string; at: number } | undefined {
+		for (const m of this.data.messages) {
+			if (!m.stall || m.to.role !== role) continue;
+			if (m.stall.items.some((i) => i.step === step && `${i.kind}:${i.id}:${i.rule}:${i.since}` === stretch))
+				return { id: m.id, at: m.at };
+		}
+		return undefined;
+	}
+
 	/** role-reports: a refused report request, in the server log (never the token). */
 	noteReportRefused(role: unknown, date: unknown, why: string): void {
 		const short = (v: unknown) => oneLine(String(v ?? "?"), 40);
@@ -1604,6 +1705,12 @@ export class RoleMessages {
 			if (!replyTo) return { ok: false, error: "kind reply needs replyTo: the id of the message you answer (rm-…)." };
 			original = this.byId(replyTo);
 			if (!original) return { ok: false, error: `There's no message ${replyTo} to reply to.` };
+			if (original.kind === "report" && original.stall) {
+				return {
+					ok: false,
+					error: `${replyTo} is the work check's wake about stalled work: no reply is needed. Act with your tools (queue_add under it, work_project or work_initiative change or wait); the check sees what you do.`,
+				};
+			}
 			if (original.kind === "report" && original.poke) {
 				return {
 					ok: false,

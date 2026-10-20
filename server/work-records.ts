@@ -68,7 +68,16 @@ function keepMarks(doneWhen: string[], met: Set<string>): Set<string> {
 	return new Set(doneWhen.map(itemKey).filter((k) => met.has(k)));
 }
 
-const KNOWN_SKIPPED = new Set(["task.link", "task.state"]);
+// stall-wake (Ops #284): waits/resumes are known but change none of the Roles page's fields. The work page
+// (work-page.ts) keeps and displays the wait; this reader must not call those valid changes unknown.
+const KNOWN_SKIPPED = new Set([
+	"task.link",
+	"task.state",
+	"project.wait",
+	"project.resume",
+	"initiative.wait",
+	"initiative.resume",
+]);
 
 /** The log's text -> the records the page shows. A half-written last line is left out. */
 export function workRecordsFrom(log: string): UiWorkRecords {
