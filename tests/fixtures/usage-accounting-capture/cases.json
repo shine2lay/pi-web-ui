@@ -1,0 +1,20 @@
+{
+  "charges": [
+    { "attempt": "fixture:main-attempt", "kind": "assistant", "amountUsd": "0.10" },
+    { "attempt": "fixture:warm-attempt", "kind": "cache-warm", "amountUsd": "0.02" },
+    { "attempt": "fixture:compaction-attempt", "kind": "compaction", "amountUsd": "0.03" },
+    { "attempt": "fixture:delegate-attempt", "kind": "delegate", "amountUsd": "0.04" }
+  ],
+  "totalUsd": "0.19",
+  "retryTotalUsd": "0.29",
+  "withoutReadersFaults": ["producer-unavailable", "native-attempt-unavailable", "price-basis-unproven", "list-price-unavailable", "task-unavailable", "missing-root"],
+  "withoutUsageFaults": ["producer-unavailable", "usage-unavailable", "partial-tokens", "list-price-unavailable", "missing-root"],
+  "legacyFaults": ["producer-unavailable", "token-convention-unavailable", "partial-tokens", "nonadditive-observation", "price-basis-unproven", "list-price-unavailable", "task-unavailable", "missing-root"],
+  "nullTokens": { "input": null, "output": null, "cacheRead": null, "cacheWrite": null },
+  "pacificCases": [
+    ["2026-03-09T06:59:59.999Z", "2026-03-02", "2026-03-02T08:00:00.000Z"],
+    ["2026-03-09T07:00:00.000Z", "2026-03-09", "2026-03-09T07:00:00.000Z"],
+    ["2026-11-02T07:59:59.999Z", "2026-10-26", "2026-10-26T07:00:00.000Z"],
+    ["2026-11-02T08:00:00.000Z", "2026-11-02", "2026-11-02T08:00:00.000Z"]
+  ]
+}

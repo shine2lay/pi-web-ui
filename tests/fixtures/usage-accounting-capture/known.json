@@ -1,0 +1,112 @@
+{
+  "projection": {
+    "v": "numeric-capture/1",
+    "source": "pi-sdk/1.0.1",
+    "stream": "fixture:pi-stream",
+    "event": "fixture:event-main",
+    "observedAt": "2026-10-20T11:00:00.000Z",
+    "occurredAt": "2026-10-19T08:00:00.000Z",
+    "provider": "fixture-provider",
+    "model": "fixture-model",
+    "kind": "assistant",
+    "shape": "attempt",
+    "outcome": "success",
+    "identity": { "producer": "pi", "incarnation": "fixture:original-process", "attempt": "fixture:main-attempt" },
+    "usageEvidence": "reported",
+    "tokenConvention": "pi-usage/1.0.1",
+    "tokens": { "input": 100, "output": 10, "cacheRead": 30, "cacheWrite": 5, "reasoning": 2, "cacheWrite1h": 1, "total": 145 },
+    "price": { "amountUsd": "0.10", "basis": "list-estimate", "rateVersion": "fixture-only:rates/1", "evidenceRef": "fixture-only:price-main", "zero": "unmarked" },
+    "subject": { "role": "design", "session": "fixture:session", "run": null },
+    "task": { "queue": "fixture:canonical-parent", "task": 301, "addedAt": "2026-10-17T12:00:00.000Z" },
+    "ancestry": "missing"
+  },
+  "attemptEvidence": {
+    "identity": { "producer": "pi", "incarnation": "fixture:original-process", "attempt": "fixture:main-attempt" },
+    "sourceStamp": { "stream": "fixture:pi-stream", "event": "fixture:event-main", "observedAt": "2026-10-19T08:00:01.000Z" },
+    "occurredAt": "2026-10-19T08:00:00.000Z",
+    "provider": "fixture-provider",
+    "model": "fixture-model",
+    "kind": "assistant",
+    "session": "fixture:session",
+    "run": null,
+    "task": { "queue": "fixture:canonical-parent", "task": 301, "addedAt": "2026-10-17T12:00:00.000Z" },
+    "overlap": "independent",
+    "canonical": null,
+    "evidenceRef": "fixture-only:native-attempt"
+  },
+  "priceEvidence": {
+    "amountUsd": "0.10",
+    "provider": "fixture-provider",
+    "model": "fixture-model",
+    "basis": "list-estimate",
+    "rateVersion": "fixture-only:rates/1",
+    "evidenceRef": "fixture-only:price-main",
+    "validFrom": "2026-10-01T00:00:00.000Z",
+    "validThrough": "2026-10-31T23:59:59.999Z",
+    "tokenConvention": "pi-usage/1.0.1",
+    "explicitZero": false
+  },
+  "parentHistory": [
+    { "queue": "fixture:canonical-parent", "task": 301, "addedAt": "2026-10-17T12:00:00.000Z", "project": "fixture:original-project", "initiative": "fixture:original-initiative", "effectiveAt": "2026-10-17T12:00:00.000Z" },
+    { "queue": "fixture:canonical-parent", "task": 301, "addedAt": "2026-10-17T12:00:00.000Z", "project": "fixture:new-project", "initiative": null, "effectiveAt": "2026-10-20T00:00:00.000Z" }
+  ],
+  "expectedAccounting": {
+    "v": 1,
+    "facts": [{
+      "v": "usage-fact/1",
+      "id": "[\"usage-fact/1\",\"pi\",\"fixture:original-process\",\"fixture:main-attempt\"]",
+      "revision": 0,
+      "supersedes": null,
+      "identity": { "producer": "pi", "incarnation": "fixture:original-process", "attempt": "fixture:main-attempt" },
+      "identityStatus": "verified",
+      "occurredAt": "2026-10-19T08:00:00.000Z",
+      "provider": "fixture-provider",
+      "model": "fixture-model",
+      "kind": "assistant",
+      "tokens": { "input": 100, "output": 10, "cacheRead": 30, "cacheWrite": 5 },
+      "prices": [{ "basis": "list-estimate", "currency": "USD", "amount": "0.10", "status": "known", "rateVersion": "fixture-only:rates/1" }],
+      "source": { "stream": "fixture:pi-stream", "event": "fixture:event-main", "observedAt": "2026-10-19T08:00:01.000Z", "coverage": "partial" },
+      "links": {
+        "task": { "queue": "fixture:canonical-parent", "task": 301, "addedAt": "2026-10-17T12:00:00.000Z", "project": "fixture:original-project", "initiative": "fixture:original-initiative", "effectiveAt": "2026-10-17T12:00:00.000Z" },
+        "session": "fixture:session",
+        "run": null
+      }
+    }],
+    "allocations": [{ "v": "allocation/1", "factId": "[\"usage-fact/1\",\"pi\",\"fixture:original-process\",\"fixture:main-attempt\"]", "revision": 0, "supersedes": null, "rootRef": null, "scope": "unknown", "policyRef": null, "payerRole": null, "recordedAt": "2026-10-19T08:00:01.000Z", "reason": "missing-root" }],
+    "aliases": [],
+    "roots": [],
+    "policies": [],
+    "memberships": [
+      { "queue": "fixture:canonical-parent", "task": 301, "addedAt": "2026-10-17T12:00:00.000Z", "project": "fixture:original-project", "initiative": "fixture:original-initiative", "effectiveAt": "2026-10-17T12:00:00.000Z" },
+      { "queue": "fixture:canonical-parent", "task": 301, "addedAt": "2026-10-17T12:00:00.000Z", "project": "fixture:new-project", "initiative": null, "effectiveAt": "2026-10-20T00:00:00.000Z" }
+    ],
+    "snapshots": [],
+    "coverage": [],
+    "requiredStreams": ["fixture:pi-stream"]
+  },
+  "expectedFaults": ["producer-unavailable", "missing-root"],
+  "expectedObservation": {
+    "source": "pi-sdk/1.0.1",
+    "stream": "fixture:pi-stream",
+    "event": "fixture:event-main",
+    "observedAt": "2026-10-20T11:00:00.000Z",
+    "occurredAt": "2026-10-19T08:00:00.000Z",
+    "provider": "fixture-provider",
+    "model": "fixture-model",
+    "kind": "assistant",
+    "shape": "attempt",
+    "outcome": "success",
+    "identity": { "producer": "pi", "incarnation": "fixture:original-process", "attempt": "fixture:main-attempt" },
+    "identityStatus": "verified",
+    "tokens": { "input": 100, "output": 10, "cacheRead": 30, "cacheWrite": 5 },
+    "reportedTokens": { "input": 100, "output": 10, "cacheRead": 30, "cacheWrite": 5, "reasoning": 2, "cacheWrite1h": 1, "total": 145 },
+    "tokenConvention": "pi-usage/1.0.1",
+    "usageEvidence": "reported",
+    "reportedPrice": { "amountUsd": "0.10", "basis": "list-estimate", "rateVersion": "fixture-only:rates/1", "evidenceRef": "fixture-only:price-main", "zero": "unmarked" },
+    "reportedTask": { "queue": "fixture:canonical-parent", "task": 301, "addedAt": "2026-10-17T12:00:00.000Z" },
+    "unprovenUsd": null,
+    "priceStatus": "known",
+    "subject": { "role": "design", "session": "fixture:session", "run": null },
+    "taskStatus": "verified"
+  }
+}
