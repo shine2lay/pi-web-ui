@@ -56,6 +56,8 @@ export default function(pi) {
     if (action === "add" || action === "override" || action === "invalid" || action === "update" || action === "clear") {
       const p = { ...plan, ...(action === "override" ? { thinking: "low" } : {}), ...(action === "invalid" ? { model: "gone/m" } : {}),
         ...(action === "update" ? { id: Number(arg), speed: "standard" } : {}), ...(action === "clear" ? { id: Number(arg), speed: null } : {}) };
+      // A new task says where it belongs (pi-queue's work registry refuses one that doesn't); a plan change (id) keeps its parent.
+      if (p.id === undefined) p.standalone = true;
       try { await tools.get("queue_add").execute("fixture", p, undefined, undefined, ctx); }
       catch { pi.appendEntry("fixture-result", { refused: true }); }
     } else if (action === "assigned") {

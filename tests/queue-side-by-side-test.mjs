@@ -118,7 +118,9 @@ const mock = await startMockModel(async ({ payload, sideRequest }) => {
 		if (lastUser.startsWith(PLAN_RUN)) {
 			if (results < PLANS.length) {
 				await sleep(300);
-				return { tool: "queue_add", args: PLANS[results] };
+				// standalone: true: a new task says where it belongs (pi-queue's work registry refuses one that doesn't,
+				// before any dialog). LOOP is a plan change (id): it keeps its parent.
+				return { tool: "queue_add", args: { ...PLANS[results], standalone: true } };
 			}
 			if (results === PLANS.length) return { tool: "queue_add", args: LOOP };
 			loopRefused = /makes a loop/.test(textOf(tools.at(-1)));

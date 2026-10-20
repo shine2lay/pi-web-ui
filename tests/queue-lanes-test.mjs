@@ -48,7 +48,8 @@ const STUCK_QUESTION = "Which colour should lane B use: blue or green?";
 /** queue_stuck asks with 2-4 answers to pick from (telegram-answers). */
 const STUCK_CHOICES = ["Blue", "Green"];
 const ANSWER = "LANES-ANSWER use blue";
-// Full plans: pi-queue refuses thin ones (checkPlan's minimum lengths) before any dialog opens.
+// Full plans: pi-queue refuses thin ones (checkPlan's minimum lengths) before any dialog opens, and new tasks
+// that don't say where they belong (its work registry): standalone: true.
 const PLANS = [
 	{
 		title: "Write lane A's first file",
@@ -59,6 +60,7 @@ const PLANS = [
 		verify: "Read the file back and compare it",
 		must_not: "Touch repo B",
 		touches: ["repo-a"],
+		standalone: true,
 	},
 	{
 		title: "Write lane A's second file",
@@ -69,6 +71,7 @@ const PLANS = [
 		verify: "Read the file back and call service X",
 		must_not: "Touch repo B",
 		touches: ["Repo-A", "service-x"],
+		standalone: true,
 	},
 	{
 		title: "Write lane B's file",
@@ -79,6 +82,7 @@ const PLANS = [
 		verify: "Read the file back and check the colour",
 		must_not: "Touch repo A",
 		touches: ["repo-b"],
+		standalone: true,
 	},
 ];
 const SUMMARY = {

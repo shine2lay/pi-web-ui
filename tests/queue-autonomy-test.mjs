@@ -51,6 +51,8 @@ export default function(pi) {
     const [action, number] = line.trim().split(/\\s+/);
     if (action === "add" || action === "update" || action === "incomplete") {
       const p = { ...plan, ...(action === "update" ? { id: Number(number), goal: plan.goal + " (change " + (++updates) + ")" } : {}), ...(action === "incomplete" ? { goal: "TBD" } : {}) };
+      // A new task says where it belongs (pi-queue's work registry refuses one that doesn't); a plan change (id) keeps its parent.
+      if (p.id === undefined) p.standalone = true;
       try { await tools.get("queue_add").execute("fixture", p, undefined, undefined, ctx); }
       catch { pi.appendEntry("fixture-result", { refused: true }); }
     } else if (action === "finish") {

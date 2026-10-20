@@ -52,6 +52,7 @@ const WEB = "https://pi.test.example:8787/";
 /** How long the main chat has to answer, in this test (pi-queue's PI_QUEUE_TEST_ASK_WAIT_MS). */
 const ASK_WAIT_MS = 6000;
 
+// standalone: true: a new task says where it belongs (pi-queue's work registry refuses one that doesn't, before any dialog).
 const plan = (title, goal) => ({
 	title,
 	goal,
@@ -60,6 +61,7 @@ const plan = (title, goal) => ({
 	steps: "1. Ask which value\n2. Change it\n3. Look at the page",
 	verify: "Open the page and look at it",
 	must_not: "Touch anything else on the page",
+	standalone: true,
 });
 const PLANS = [
 	plan("Pick the port", "The dev server listens on the agreed port"),

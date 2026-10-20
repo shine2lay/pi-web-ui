@@ -48,6 +48,7 @@ const A_DONE = "DIALOG-A-DONE the README task is queued.";
 const B_DONE = "DIALOG-B-DONE the timing task is queued.";
 /** How long chat A's model waits before asking: time to open chat B first. */
 const A_DELAY = 4000;
+// standalone: true: a new task says where it belongs (pi-queue's work registry refuses one that doesn't, before any dialog).
 const PLAN_A = {
 	title: "Tidy the README",
 	goal: "Make the README's setup section match the current install steps",
@@ -56,6 +57,7 @@ const PLAN_A = {
 	steps: "1. Compare the section with the install script\n2. Fix the steps\n3. Read it through once",
 	verify: "Follow the steps in a clean folder",
 	must_not: "Rewrite the other sections",
+	standalone: true,
 };
 const PLAN_B = {
 	title: "Add a timing check",
@@ -65,6 +67,7 @@ const PLAN_B = {
 	steps: "1. Write the timing test\n2. Run it against the page\n3. Report the result",
 	verify: "Run the new test and the suite",
 	must_not: "Change the page itself",
+	standalone: true,
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

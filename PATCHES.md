@@ -44,6 +44,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: `tests/unit/initiatives-live.test.ts` (merge and order, the lead's posts kept, a done summary in place of the bare done line with no lead post, an older server's page, unsafe and long text, "Question with <lead>" and never Needs you, what a blocked task waits on, the stuck note, Needs you kept for a question that reached the owner, the progress line's age, no "Needs attention" on the page); the words in `tests/unit/initiatives-page-model.test.ts`, `initiatives-page-tasks.test.ts` and `initiatives-exact.test.ts`; sealed `tests/initiatives-live-test.mjs` (the test server's own work page, with the contract's fields laid over its socket messages: a progress line first in Latest updates, "Waits on Temper #113 \u00b7 \u2026", "Question with Ops", nothing on the owner, "Blocked", no "Needs attention" at 1400 and 390 px; a task-done record shows as "#5 done: <summary>" within one refresh, 4.75 s and 4.88 s of 6 s in two runs); then the landing gate.
 - Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
 
+## queue-e2e-parent: the queue's browser tests give their new tasks a parent
+
+- `local` (Ops #275, essential maintenance; found by Ops #267, note n242). Hypothesis H-QUEUE-E2E-PARENT-1, the before and after sealed runs and the result: `docs/queue-e2e-parent.md`.
+- Since pi-queue 4209f68 (2026-10-18, its work registry) `queue_add` refuses a new task that names no project, initiative or `standalone: true`, before any dialog. Nine browser tests' mock models and fixtures added tasks without one, so all nine failed at their first new task: `tests/per-chat-dialogs-test.mjs`, `tests/queue-autonomy-test.mjs`, `tests/queue-blocked-test.mjs`, `tests/queue-lanes-test.mjs`, `tests/queue-main-chat-test.mjs`, `tests/queue-panel-test.mjs`, `tests/queue-profiles-test.mjs`, `tests/queue-side-by-side-test.mjs`, `tests/telegram-answers-test.mjs`.
+- Each new-task plan they send now has `standalone: true`; plan changes (with `id`) stay as they were, keeping the task's parent. No check changed or loosened. Tests only: no app code changed, nothing to install. The nine are still outside the land gate.
+- Checks: the nine in sealed runs before (0 of 9 passed) and after (9 of 9), then the landing gate. A repeat of the after run under heavy machine load passed 7 of 9: queue-panel and queue-main-chat failed later timing checks, long after their first tasks; those go to their own Ops task (requested in rm-f4fecfd2), not this one.
+- Undo: revert this commit (the nine fail again at their first new task).
+
 ## initiatives-projects-done: finished projects at a glance on the Initiatives page
 
 - `local` (owner 2026-10-19 via COO rm-0a0353b3, "you mentioned that a project done but i cant see that in initiatives page"; he picked "Yes, show them clearly"; Ops #274). Hypothesis H-PROJECTS-DONE-1 and result: `docs/initiatives-projects-done.md`.

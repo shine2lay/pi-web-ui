@@ -60,7 +60,8 @@ const ANSWER = "QUEUE-ANSWER use Settings as the label";
 /** done-settle's wait (web/src/done-settle.ts DONE_SETTLE_MS) plus room for a late cue. */
 const SETTLE_WAIT = 1500 + 2000;
 
-/** The plans the mock queues, in order (#1, #2, #3). #1's long steps make the dialog scroll. */
+/** The plans the mock queues, in order (#1, #2, #3). #1's long steps make the dialog scroll. standalone: true: a new
+ *  task says where it belongs (pi-queue's work registry refuses one that doesn't, before any dialog). */
 const PLANS = [
 	{
 		title: "Rename the settings button",
@@ -70,6 +71,7 @@ const PLANS = [
 		steps: Array.from({ length: 40 }, (_, i) => `${i + 1}. Update the label in place ${i + 1} and check it`).join("\n"),
 		verify: "Run the test suite and look at the page",
 		must_not: "Touch unrelated files",
+		standalone: true,
 	},
 	{
 		title: "Add a timing check",
@@ -79,6 +81,7 @@ const PLANS = [
 		steps: "1. Write the timing test\n2. Run it against the page\n3. Report the result",
 		verify: "Run the new test and the suite",
 		must_not: "Change the page itself",
+		standalone: true,
 	},
 	{
 		title: "Tidy the README",
@@ -88,6 +91,7 @@ const PLANS = [
 		steps: "1. Compare the section with the install script\n2. Fix the steps\n3. Read it through once",
 		verify: "Follow the steps in a clean folder",
 		must_not: "Rewrite the other sections",
+		standalone: true,
 	},
 ];
 const TIMING_SUMMARY = "Added the timing check and ran it; it passes.";

@@ -222,8 +222,12 @@ async function modelReply({ payload, sideRequest }) {
 	if (!kick) {
 		// A queue's chat.
 		if (userText.startsWith("PLAN-AFTER")) {
+			// standalone: true: a new task says where it belongs (pi-queue's work registry refuses one that doesn't, before any dialog).
 			if (step === 0)
-				return { tool: "queue_add", args: { ...planArgs("After docs"), touches: ["a2 repo"], after: ["temper #2"] } };
+				return {
+					tool: "queue_add",
+					args: { ...planArgs("After docs"), standalone: true, touches: ["a2 repo"], after: ["temper #2"] },
+				};
 			seen.afterPlanned = results[0] ?? "";
 			return "MC-PLANNED";
 		}

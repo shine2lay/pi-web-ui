@@ -54,6 +54,7 @@ const CHOICES_LINE = `\u2500\u2500 CHOICES ${"\u2500".repeat(8)}`;
 const RULE = "\u2500".repeat(18);
 const NO_BROWSER_GRACE_MS = 30_000; // server/ask-delivery.ts ASK_USER_NO_CLIENT_GRACE_MS
 
+// standalone: true: a new task says where it belongs (pi-queue's work registry refuses one that doesn't, before any dialog).
 const PLAN = {
 	title: "Pick the button label",
 	goal: "The settings button's label matches the page it opens",
@@ -62,6 +63,7 @@ const PLAN = {
 	steps: "1. Ask which label\n2. Rename the button",
 	verify: "Look at the page",
 	must_not: "Touch other buttons",
+	standalone: true,
 };
 const STUCK_QUESTION = "Which label should the button use?";
 const CHOICES = ["Settings", "Preferences"];
