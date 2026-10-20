@@ -20,6 +20,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Unchanged: the cards on the main grid, the panel's layout and slots, the server.
 - Checks: `tests/unit/roles-live.test.ts` (time and pick, an older server's time, an unsafe line, a newer milestone, Activity merge and order, a home chat copy without "#N", a malformed `doneRecent`, the withLead text and asks, absent fields), `tests/unit/roles-useful.test.ts` (the closed record keys allow `latestAt` and `withLead`), sealed `tests/roles-live-test.mjs` (real server and Chrome: Latest progress with its time; a new line within 4 s, with its time; Activity with the task lines, the done summary and the home line, newest first, each timed), then the landing gate.
 - Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
+- Result: H-ROLES-LIVE-1 HIT. Live in 282512a6 (Oct 19 21:50) and 6293f27f: 18 of 18 checks across 3 passes and 6 working roles, 0 "Not recorded" (before: Product #51), 0 older lines; every role's Activity shows its 10 newest done tasks. Sealed: a new line showed in 2,796 ms (bar 4,000). Found: Current task can be a paused task between turns (Design #41); next hypothesis H-ROLES-CURRENT-1, not built.
 
 ## live-progress-server: the server fills live progress, done summaries and real owner asks
 

@@ -123,7 +123,20 @@ Each next task tests its own (rule 16) and records HIT or MISS here, under its h
 
 **What would prove it wrong.** Any working role shows "Not recorded", or an older line.
 
-**Result.** Pending (#272).
+**Result (#272): HIT.** Every working role's Latest progress showed a time, equal to its current task's newest line or newer: 18 of 18 checks live, 0 "Not recorded", 0 older lines.
+
+- Sealed (`tests/roles-live-test.mjs`, the real server and Chrome on a fixture overview): a working task's Latest progress shows its own chat's line with that line's time (it said "Not recorded"); a new line written in the task chat showed after 2,796 ms (2 overviews; the bar is one refresh, 4,000 ms); Activity lists the task line, the done summary and the home line, newest first, each with its time; no page errors. Focused unit tests: `tests/unit/roles-live.test.ts` (14). The land gate passed (land 101-b15f03, commit bc8f514).
+- Installed: bc8f514 went live inside 282512a6 (Oct 19 21:50 PDT, every deploy check passed) and stays live in 6293f27f (22:03).
+- Before (live 05129317, Oct 19 21:45 PDT, one pass): 6 working roles; Product #51 showed "Not recorded" although its chat's newest line was from Oct 13, 08:15.
+- After (live 6293f27f, Oct 19 22:06 to 22:08 PDT, 3 passes a minute apart, one fixed look id, times and UI words only): 6 working roles in each pass, 18 of 18 hits, 0 errors, 0 page errors.
+  - Product #51 shows 08:15, its chat's newest line (Oct 13; equal, and `progress` is that line). Its owner pause (Oct 10, 19:35) is older, so the line is right.
+  - Design #41 shows "Queue recorded: paused by you · 00:17" (Oct 9), newer than its newest line (Oct 7, 07:49).
+  - The other current tasks had no line yet and show their queue milestone's time ("task started" or "waiting for a check").
+  - Activity: every role lists its 10 newest done tasks (10 sent, 10 shown), and every Activity row has a time.
+  - "Question with <lead>": 0 sent and 0 shown live, because the records hold no question a lead still has (H-LIVE-NEEDS-1); those words are proven by the unit and sealed tests only. "Needs your decision" lists the owner asks #270 measured (1 = 1).
+- Limits of this proof: live, only one current task had its own line (Product #51), and no new line was written during the look, so "within one refresh" is proven sealed only.
+
+**What we learned, and the next hypothesis.** The panel's Current task is the first busy task, else the first open one in queue order (`lead` in `web/src/roles-exact-view.ts`). So between turns a paused task can stand in front of the working ones: in passes 1 and 2 Design showed #41, paused by the owner since Oct 9, while #45 and #63 were in progress; in pass 3 it showed #98, which was busy. The time was right for #41, but #41 isn't what Design was doing. Next hypothesis (H-ROLES-CURRENT-1, not built): pick the busy task, then a started task that isn't paused, then the rest. Measured live: every working role's Current task is a started, unpaused task whenever it has one. Proven wrong if a paused task still shows while one of its tasks is in progress.
 
 ## Limits
 
