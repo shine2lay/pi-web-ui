@@ -45,10 +45,22 @@ class Reg {
 		return this;
 	}
 	initiative(ts: number, id: string, lead = "ops"): this {
-		return this.ev(ts, { op: "initiative.create", id, name: `Ini ${id}`, outcome: "o", doneWhen: ["d"], lead }, "owner");
+		return this.ev(
+			ts,
+			{ op: "initiative.create", id, name: `Ini ${id}`, outcome: "o", doneWhen: ["d"], lead },
+			"owner",
+		);
 	}
 	project(ts: number, id: string, lead = "ops", initiative: string | null = null): this {
-		return this.ev(ts, { op: "project.create", id, name: `Proj ${id}`, outcome: "o", doneWhen: ["d"], lead, initiative });
+		return this.ev(ts, {
+			op: "project.create",
+			id,
+			name: `Proj ${id}`,
+			outcome: "o",
+			doneWhen: ["d"],
+			lead,
+			initiative,
+		});
 	}
 	change(ts: number, kind: "project" | "initiative", id: string, changes: Record<string, unknown>): this {
 		return this.ev(ts, { op: `${kind}.change`, id, changes });
@@ -141,7 +153,12 @@ function fixture(): Reg {
 	r.fact(5, NOW - 30 * H, { paused: { at: NOW - 29 * H, why: "owner: pause it" } });
 	r.project(NOW - 40 * H, "needs-you", "ops").task(NOW - 30 * H, 6, { project: "needs-you" }, "asking");
 	r.fact(6, NOW - 30 * H, { needsYou: { text: "Which port?", since: NOW - 29 * H } });
-	r.project(NOW - 40 * H, "done-proj", "ops").ev(NOW - 31 * H, { op: "project.met", id: "done-proj", item: "d", proof: "p" });
+	r.project(NOW - 40 * H, "done-proj", "ops").ev(NOW - 31 * H, {
+		op: "project.met",
+		id: "done-proj",
+		item: "d",
+		proof: "p",
+	});
 	r.change(NOW - 30 * H, "project", "done-proj", { status: "done" });
 	r.project(NOW - 40 * H, "dropped-proj", "ops").change(NOW - 30 * H, "project", "dropped-proj", { status: "dropped" });
 	r.project(NOW - 40 * H, "waiting", "ops").wait(NOW - 20 * H, "project", "waiting", NOW + 20 * H);
@@ -282,18 +299,39 @@ describe("stall-watch rules (fixtures, each run twice)", () => {
 
 	it("a blocked task says what it waits on", () => {
 		const r = new Reg().project(NOW - 60 * H, "p");
-		r.ev(NOW - 50 * H, { op: "task.link", queue: Q, queueName: "ops", task: 1, added: 1, title: "T", parent: { project: "p" } });
+		r.ev(NOW - 50 * H, {
+			op: "task.link",
+			queue: Q,
+			queueName: "ops",
+			task: 1,
+			added: 1,
+			title: "T",
+			parent: { project: "p" },
+		});
 		r.ev(NOW - 50 * H, {
 			op: "task.state",
 			queue: Q,
 			task: 1,
 			added: 1,
 			status: "blocked",
-			block: { on: ["temper #38"], need: "the deploy", lead: "temper", owes: "the deploy", reminders: 0, since: NOW - 50 * H },
+			block: {
+				on: ["temper #38"],
+				need: "the deploy",
+				lead: "temper",
+				owes: "the deploy",
+				reminders: 0,
+				since: NOW - 50 * H,
+			},
 		});
 		const f = twice(r).findings[0];
 		expect(f.open).toEqual([
-			{ queue: "ops", task: 1, title: "T", status: "blocked", waitsOn: "temper #38; the deploy; temper owes the deploy" },
+			{
+				queue: "ops",
+				task: 1,
+				title: "T",
+				status: "blocked",
+				waitsOn: "temper #38; the deploy; temper owes the deploy",
+			},
 		]);
 	});
 });
@@ -345,7 +383,15 @@ describe("stall-watch extra times", () => {
 	it("a task moved to another project leaves the first one then", () => {
 		const r = new Reg().project(NOW - 10 * H, "a").project(NOW - 10 * H, "b");
 		r.task(NOW - 9 * H, 1, { project: "a" }, "working");
-		r.ev(NOW - 3 * H, { op: "task.link", queue: Q, queueName: "ops", task: 1, added: NOW - 9 * H, title: "T", parent: { project: "b" } });
+		r.ev(NOW - 3 * H, {
+			op: "task.link",
+			queue: Q,
+			queueName: "ops",
+			task: 1,
+			added: NOW - 9 * H,
+			title: "T",
+			parent: { project: "b" },
+		});
 		const t = stallTimesFrom(r.text());
 		expect(t.get("project:a")?.leftAt).toBe(NOW - 3 * H);
 		expect(t.get("project:b")?.eventAt).toBe(NOW - 3 * H);
@@ -401,7 +447,10 @@ describe("stall-watch settings", () => {
 describe("stall-watch dry run", () => {
 	it("logs step 1 of a new stretch, later steps gapHours apart, each once", () => {
 		const lines: string[] = [];
-		const dry = new StallDryLog((l) => lines.push(l), () => S);
+		const dry = new StallDryLog(
+			(l) => lines.push(l),
+			() => S,
+		);
 		const r = new Reg().initiative(NOW - 30 * H, "ini", "architecture").project(NOW - 5 * H, "p", "ops", "ini");
 		const f = stallFindings(r.page(), r.extra(), NOW, S);
 		void dry.act(f, NOW);
@@ -452,7 +501,9 @@ describe("stall-watch dry run", () => {
 			firstMs: 10,
 		});
 		await w.tick();
-		expect(lines).toEqual([`stall: would wake ops about project p (empty since ${stallTime(NOW - 5 * H)}, step 1 of 2)`]);
+		expect(lines).toEqual([
+			`stall: would wake ops about project p (empty since ${stallTime(NOW - 5 * H)}, step 1 of 2)`,
+		]);
 		text = "not json at all\n{}\n";
 		const page = workPageFrom(text, [], NOW);
 		if (page.problem === "unreadable") {
@@ -464,7 +515,11 @@ describe("stall-watch dry run", () => {
 		await w.tick();
 		expect(w.running).toBe(false);
 		expect(lines.at(-1)).toBe("stall: off (stall-watch.json mode off); stopped");
-		const off = new StallWatch({ read: () => ({ page, extra: stallExtraFrom("") }), settings: () => s, log: (l) => lines.push(l) });
+		const off = new StallWatch({
+			read: () => ({ page, extra: stallExtraFrom("") }),
+			settings: () => s,
+			log: (l) => lines.push(l),
+		});
 		off.start();
 		expect(off.running).toBe(false);
 	});

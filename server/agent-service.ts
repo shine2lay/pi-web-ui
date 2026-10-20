@@ -16125,7 +16125,10 @@ export class AgentService {
 
 	/** pi-work-management's workDir(), as the Roles reader finds it: PI_WORK_DIR, or "work" in pi's agent folder. */
 	private workEventsFile(): string {
-		return join(process.env.PI_WORK_DIR || join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "work"), "events.jsonl");
+		return join(
+			process.env.PI_WORK_DIR || join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "work"),
+			"events.jsonl",
+		);
 	}
 
 	private startStallWatch(): void {

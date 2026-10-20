@@ -42,7 +42,11 @@ function count(at) {
 	const links = new Map(); // queue|task|added -> {parent, open}
 	const bump = (it, f, t) => it && (it[f] = Math.max(it[f] ?? -Infinity, t));
 	const of = (p) =>
-		p?.project ? items.get(`project:${p.project}`) : p?.initiative ? items.get(`initiative:${p.initiative}`) : undefined;
+		p?.project
+			? items.get(`project:${p.project}`)
+			: p?.initiative
+				? items.get(`initiative:${p.initiative}`)
+				: undefined;
 	const touch = (it, t) => {
 		if (!it) return;
 		bump(it, "lastEvent", t);
@@ -115,7 +119,9 @@ function count(at) {
 		if (it.status !== "active") continue;
 		const name = `${it.kind} ${it.id}`;
 		if (it.kind === "initiative") {
-			const act = [...items.values()].filter((p) => p.kind === "project" && p.initiative === it.id && p.status === "active");
+			const act = [...items.values()].filter(
+				(p) => p.kind === "project" && p.initiative === it.id && p.status === "active",
+			);
 			if (act.length) {
 				out.covered.push(name);
 				continue;
@@ -154,8 +160,17 @@ if (args.includes("--from")) {
 	const c = count(time(arg("--at", String(Date.now()))));
 	if (args.includes("--json")) console.log(JSON.stringify(c, null, 2));
 	else {
-		const t = (ms) => new Date(ms).toLocaleString("en-US", { hour12: false, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-		console.log(`At ${t(c.at)}: ${c.flagged.length} empty and flagged, ${c.pending.length} empty not long enough, ${c.quiet.length} waiting, ${c.covered.length} covered initiatives, ${c.silentCandidates.length} silent candidates`);
+		const t = (ms) =>
+			new Date(ms).toLocaleString("en-US", {
+				hour12: false,
+				month: "short",
+				day: "numeric",
+				hour: "2-digit",
+				minute: "2-digit",
+			});
+		console.log(
+			`At ${t(c.at)}: ${c.flagged.length} empty and flagged, ${c.pending.length} empty not long enough, ${c.quiet.length} waiting, ${c.covered.length} covered initiatives, ${c.silentCandidates.length} silent candidates`,
+		);
 		for (const f of c.flagged) console.log(`  flagged ${f.item} (lead ${f.lead}), no open task since ${t(f.since)}`);
 		for (const f of c.pending) console.log(`  pending ${f.item} (lead ${f.lead}), no open task since ${t(f.since)}`);
 		for (const q of c.quiet) console.log(`  quiet ${q}`);

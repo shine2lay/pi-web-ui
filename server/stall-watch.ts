@@ -333,7 +333,8 @@ export function stallReview(page: UiWorkPage, extra: StallExtra, now: number, s:
 	const tasksOf = new Map<string, UiWorkPageTask[]>();
 	for (const t of page.tasks) {
 		const p = t.parent;
-		const key = "project" in p ? itemKey("project", p.project) : "initiative" in p ? itemKey("initiative", p.initiative) : "";
+		const key =
+			"project" in p ? itemKey("project", p.project) : "initiative" in p ? itemKey("initiative", p.initiative) : "";
 		if (!key) continue;
 		const list = tasksOf.get(key);
 		if (list) list.push(t);
@@ -409,16 +410,18 @@ export function stallReview(page: UiWorkPage, extra: StallExtra, now: number, s:
 							},
 						}
 					: {}),
-				open: [...open].sort((a, b) => a.added - b.added).map((t) => {
-					const waitsOn = t.state === "blocked" ? waitsOnOf(t) : undefined;
-					return {
-						queue: queueOf(t),
-						task: t.task,
-						title: t.title,
-						status: t.state ?? "ready",
-						...(waitsOn ? { waitsOn } : {}),
-					};
-				}),
+				open: [...open]
+					.sort((a, b) => a.added - b.added)
+					.map((t) => {
+						const waitsOn = t.state === "blocked" ? waitsOnOf(t) : undefined;
+						return {
+							queue: queueOf(t),
+							task: t.task,
+							title: t.title,
+							status: t.state ?? "ready",
+							...(waitsOn ? { waitsOn } : {}),
+						};
+					}),
 			};
 		};
 		if (!open.length) {
@@ -601,9 +604,7 @@ export class StallWatch {
 	private schedule(ms: number): void {
 		if (!this.on) return;
 		this.timer = setTimeout(() => {
-			void this.tick().finally(() =>
-				this.schedule(Math.max(STALL_MIN_EVERY_MS, this.settings().everyMin * 60_000)),
-			);
+			void this.tick().finally(() => this.schedule(Math.max(STALL_MIN_EVERY_MS, this.settings().everyMin * 60_000)));
 		}, ms);
 		this.timer.unref?.();
 	}

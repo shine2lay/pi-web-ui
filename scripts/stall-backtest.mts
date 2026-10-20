@@ -105,11 +105,14 @@ for (let t = from; t <= to; t += everyMs) {
 	lastItems = review.items;
 }
 
-const hm = (ms: number) => `${Math.floor(ms / 3_600_000)} h ${String(Math.round((ms % 3_600_000) / 60_000)).padStart(2, "0")} min`;
+const hm = (ms: number) =>
+	`${Math.floor(ms / 3_600_000)} h ${String(Math.round((ms % 3_600_000) / 60_000)).padStart(2, "0")} min`;
 if (asJson) {
 	console.log(JSON.stringify({ from, to, everyMs, rows, lastItems }, null, 2));
 } else {
-	console.log(`Backtest ${stallTime(from)} to ${stallTime(to)}, every ${everyMs / 60_000} min (${process.env.TZ ?? "local time"})`);
+	console.log(
+		`Backtest ${stallTime(from)} to ${stallTime(to)}, every ${everyMs / 60_000} min (${process.env.TZ ?? "local time"})`,
+	);
 	console.log("");
 	console.log("| item | lead | rule | since | first flagged | after | chain | cleared |");
 	console.log("|---|---|---|---|---|---|---|---|");
