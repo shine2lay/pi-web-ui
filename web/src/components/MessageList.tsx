@@ -43,6 +43,7 @@ import {
 } from "../quiet-turns";
 import { isRoleMessageOpen, NoticeTurnRow, RoleMessageRow, useRoleMessageOpenVersion } from "./RoleMessageRow";
 import { roleMessageViewOf } from "../role-message-text";
+import { queueReportFold } from "../queue-report-fold";
 
 /** Stable shared empty map — passing this (instead of a fresh Map) lets
  *  React.memo skip messages that have no live tool output to show. */
@@ -623,6 +624,15 @@ export function MessageList({
 		},
 		[foldPlan, foldOpen],
 	);
+	// ---- queue-fold (Ops #267, queue-report-fold.ts) ---------------------------------------------
+	// The queue's reports (its notes and "[Queue] …" cards) show as one folded row wherever they are, until
+	// clicked; then they stay open like any expanded row (the same `expanded` set). A task's plan and the
+	// owner's messages stay open. Display only: the transcript and what the model reads don't change.
+	const queueFolds = useMemo(() => {
+		const s = new Set<string>();
+		for (const m of state.messages) if (queueReportFold(m) !== null) s.add(m.id);
+		return s;
+	}, [state.messages]);
 	/** 这条消息画成摘要行（超出最近 KEEP_RECENT 条的旧消息，上游省渲染的手段，点了才展开）。
 	 *  exchange-fold：提问和回答一律完整显示——回答收成摘要行就得点开才看得到（用户明确不要），
 	 *  而 KEEP_RECENT 把折起来的步骤也算在内，不排除的话除了最后一轮，每一轮的回答都会被收起。
@@ -630,8 +640,9 @@ export function MessageList({
 	 *  其它消息（展开那一轮里的步骤、附件、收尾后的提醒/压缩摘要、`!` 命令）照旧。 */
 	const oldRow = useCallback(
 		(i: number, m: UiMessage) =>
-			i < recentStart && m.role !== "user" && !(m.role === "assistant" && foldPlan.role.get(m.id) !== "hidden"),
-		[recentStart, foldPlan],
+			queueFolds.has(m.id) ||
+			(i < recentStart && m.role !== "user" && !(m.role === "assistant" && foldPlan.role.get(m.id) !== "hidden")),
+		[recentStart, foldPlan, queueFolds],
 	);
 	/** 展开这条消息所在的那一轮（跳转 / 搜索 / 导出要看它时）。 */
 	const openFoldOf = useCallback(
@@ -737,13 +748,14 @@ export function MessageList({
 	 *  引用稳定：SearchBar 命中收集把它当依赖，只有消息集/展开态变化时才重算。 */
 	const collapsedIds = useMemo(() => {
 		const s = new Set<string>();
-		for (let i = 0; i < recentStart; i++) {
+		// queue-fold: a queue report folds wherever it is, so the whole list, not only the old messages.
+		for (let i = 0; i < state.messages.length; i++) {
 			const m = state.messages[i];
 			if (m.role === "toolResult" || !oldRow(i, m)) continue;
 			if (!expanded.has(m.id)) s.add(m.id);
 		}
 		return s;
-	}, [state.messages, recentStart, expanded, oldRow]);
+	}, [state.messages, expanded, oldRow]);
 	/** 搜索的折叠层还要索引折起来的步骤（exchange-fold）：它们不在 DOM 里。 */
 	const searchCollapsedIds = useMemo(() => {
 		let s: Set<string> | null = null;
@@ -1461,6 +1473,11 @@ export function MessageList({
 		[questions, firstDigestIndex],
 	);
 	const renderDigestMessage = (m: UiMessage) => {
+		// queue-fold: a queue report above the loaded messages folds the same way, except while the search bar
+		// is open (the search's folded index holds only the loaded messages, so it couldn't find its words).
+		const queueReport = queueReportFold(m) !== null;
+		if (queueReport && !searchOpen && !expanded.has(m.id))
+			return <CollapsedMessage key={m.id} message={m} onExpand={expand} />;
 		const qIdx = m.role === "user" ? qnIndex.get(m.id) : undefined;
 		return (
 			<Message
@@ -1484,6 +1501,7 @@ export function MessageList({
 				isLast={false}
 				onEdit={onEdit}
 				questionAttachments={digestAttachments.get(m.id)}
+				onCollapse={queueReport && expanded.has(m.id) ? collapse : undefined}
 				searchActive={searchOpen}
 			/>
 		);

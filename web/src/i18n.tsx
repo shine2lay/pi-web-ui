@@ -548,6 +548,8 @@ export const en = {
 	/* collapsed old messages */
 	expandMsg: "Expand",
 	collapseMsg: "Collapse",
+	/** queue-fold: the folded row of a queue report (its notes and "[Queue] …" cards). */
+	queueReportLabel: "Queue",
 	toolCalls: "tool calls",
 	bashRuns: "bash runs",
 	images: "images",

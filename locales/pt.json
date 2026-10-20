@@ -837,6 +837,7 @@
 		"editAttachmentHint": "Os anexos originais foram mantidos; cole ou arraste novas imagens/arquivos · ⌘/Ctrl+Enter envia · Esc cancela",
 		"expandMsg": "Expandir",
 		"collapseMsg": "Recolher",
+		"queueReportLabel": "Queue",
 		"toolCalls": "Chamadas de ferramenta",
 		"bashRuns": "Execução no terminal",
 		"images": "Imagens",

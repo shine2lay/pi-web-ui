@@ -837,6 +837,7 @@
 		"editAttachmentHint": "기존 첨부파일은 유지돼요. 새 이미지나 파일을 붙여넣거나 끌어다 놓을 수 있어요 · ⌘/Ctrl+Enter로 전송 · Esc로 취소",
 		"expandMsg": "펼치기",
 		"collapseMsg": "접기",
+		"queueReportLabel": "Queue",
 		"toolCalls": "도구 호출",
 		"bashRuns": "bash 실행",
 		"images": "이미지",

@@ -837,6 +837,7 @@
 		"editAttachmentHint": "Allegati originali conservati — incolla/trascina immagini o file · ⌘/Ctrl+Invio per inviare · Esc per annullare",
 		"expandMsg": "Espandi",
 		"collapseMsg": "Comprimi",
+		"queueReportLabel": "Queue",
 		"toolCalls": "chiamate strumenti",
 		"bashRuns": "esecuzioni bash",
 		"images": "immagini",

@@ -138,7 +138,9 @@ const REPLY = {
 	text: `Yes, the screenshots are in. ${LONG}`,
 };
 const BROKEN = "[Role message rm-0000a007 from qa (QA), sent from its home chat\n\nA header that never closed.";
-const QUEUE = "[Queue] Task #4: Build the thing\n\nThe plan as approved.";
+// A task's plan as pi-queue starts it (queue.ts kickoffText): queue-fold (Ops #267) keeps it open.
+const QUEUE =
+	"[Queue] Task #4: Build the thing (the last one in the queue)\n\nThe user planned this task with you and approved the plan. Work it through to the end without stopping to ask, unless only the user can decide something.\n\nThe plan as approved.";
 const STAMPED = [Q, FYI, REQ];
 const ROWS = [Q, FYI, REQ, REPORT, REPLY];
 

@@ -360,6 +360,11 @@ const cueCounts = (page) =>
 let browser;
 const pageErrors = [];
 const messagesText = (page) => page.evaluate(() => document.querySelector(".messages")?.innerText ?? "");
+/** queue-fold (Ops #267): the queue's reports show as one folded row; open them all, then read the chat. */
+const openQueueRows = (page) =>
+	page.evaluate(() => {
+		for (const r of document.querySelectorAll(".messages .msg-collapsed[data-queue-fold]")) r.click();
+	});
 const pageText = (page) => page.evaluate(() => document.body.innerText);
 async function openWindow(clientId) {
 	const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
@@ -641,6 +646,7 @@ try {
 	check(
 		"#1's row opens its chat: it started with its plan, asked, got the answer there and finished",
 		await waitFor(async () => {
+			await openQueueRows(A);
 			const text = await messagesText(A);
 			return (
 				text.includes(`[Queue] Task #1: ${PLANS[0].title}`) &&

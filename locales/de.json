@@ -837,6 +837,7 @@
 		"editAttachmentHint": "Bisherige Anhänge bleiben erhalten, Sie können neue Bilder oder Dateien einfügen/ablegen · ⌘/Strg+Enter zum Senden · Esc zum Abbrechen",
 		"expandMsg": "Ausklappen",
 		"collapseMsg": "Einklappen",
+		"queueReportLabel": "Queue",
 		"toolCalls": "Tool-Aufrufe",
 		"bashRuns": "bash-Ausführungen",
 		"images": "Bilder",

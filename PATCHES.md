@@ -7516,3 +7516,53 @@ right after `queue_wait` or `queue_done`, and a follow-up could be about 10 minu
   written stay in their chats as ordinary custom messages.
 - At SDK 1.2.0+ check that `triggerTurn: false` is still honoured during a run (held until the turn's tool
   results are in, no turn started): `tests/unit/terminal-notices.test.ts` (a) and (b) fail if not.
+
+## queue-fold
+
+**Status**: `local`
+**Baseline**: v0.96.1 (`mine` at 0ce9bd8b; on top of `role-message-fold`, `exchange-fold`, `queue-paused`).
+
+The queue's reports show as one folded line in a chat ("Queue" and the report's first line, cut to fit)
+until clicked; then they stay open like any opened row, with the usual Collapse button. A task's own plan,
+the owner's messages and everything else show as before. Display only: the transcript and what the model
+reads don't change.
+
+**Why** (Ops #267; the owner, 2026-10-19: "i also want queue reports in chat collapsed by default", which
+ones: "queue reports, by plugin"): Ops' home chat got 16 "[Queue] " report cards that day (median 1,230
+characters, longest 4,068) and 57 queue notes (median 478, longest 1,279). Hypothesis H-QUEUE-FOLD-1 and
+the result: `docs/queue-fold.md`.
+
+### Changes
+
+- `web/src/queue-report-fold.ts` (new, pure): `queueReportFold(m)` returns the folded row's line for a queue
+  report, else null. Reports: custom messages whose customType starts with `queue-` (pi-queue's
+  `queue-report`, `queue-wait`; pi-web-ui's `queue-paused`) and user messages whose text starts with
+  `[Queue] `. Not a report: a task's plan, the message pi-queue starts a task with (`queue.ts` kickoffText
+  and taskKickoffText), told by its fixed second paragraph (`isQueuePlanText`).
+- `web/src/components/MessageList.tsx`: `queueFolds` (ids of the reports); `oldRow` counts them as folded
+  wherever they are, so the existing folded-row path draws them, `collapsedIds` (now over the whole list)
+  puts them in the search's folded index, and an opened one gets `onCollapse`. Reports in the digests above
+  the loaded window fold the same way, and show open while the search bar is open (they aren't in that
+  index).
+- `web/src/components/CollapsedMessage.tsx`: a report's row reads "Queue" and its first line
+  (`msg-queue-fold`, `data-queue-fold`). `Message.tsx` is unchanged (its Collapse button is used).
+- `i18n.tsx` and `locales/*.json`: `queueReportLabel` ("Queue", a name, the same in every language).
+- Tests: `tests/unit/queue-report-fold.test.ts` (new; every report kind in pi-queue's own wording, both plan
+  texts, the owner's messages), `tests/queue-fold-test.mjs` (new, sealed, a stand-in model never called).
+  `tests/role-message-fold-test.mjs` and `tests/queue-panel-test.mjs` follow: the first's "[Queue] "
+  message is now a real plan text (it must stay open), the second opens the queue rows before reading the
+  chat. `queue-panel-test` already fails before this change, at its first approval dialog ("no approval
+  dialog", the same on `mine` 0ce9bd8b without it; it isn't in the land gate), so its new step is untested
+  until that's fixed.
+
+### How it was checked
+
+- Unit test and the sealed browser test (`node tests/run-sealed.mjs queue-fold`), then the sealed land gate.
+- Live, look only, after the install: folded queue rows counted against the queue reports in view, in Ops'
+  home chat and a task chat (`docs/queue-fold.md`, section "Result").
+
+### Undo and syncing
+
+- Revert this commit with `wt`, then install with `pi-web-deploy`. Nothing stored changes.
+- If pi-queue changes a start message's second paragraph, update `isQueuePlanText` and the unit test's plan
+  texts in the same change, or the plan folds.

@@ -837,6 +837,7 @@
 		"editAttachmentHint": "元の添付は保持されます。新しい画像やファイルを貼り付け/ドラッグできます ・ ⌘/Ctrl+Enter で送信 ・ Esc でキャンセルします",
 		"expandMsg": "展開",
 		"collapseMsg": "折りたたむ",
+		"queueReportLabel": "Queue",
 		"toolCalls": "ツール呼び出し",
 		"bashRuns": "ターミナル実行",
 		"images": "画像",

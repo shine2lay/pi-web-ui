@@ -837,6 +837,7 @@
 		"editAttachmentHint": "Pièces jointes d'origine conservées — collez/déposez images ou fichiers · ⌘/Ctrl+Entrée pour envoyer · Échap pour annuler",
 		"expandMsg": "Développer",
 		"collapseMsg": "Réduire",
+		"queueReportLabel": "Queue",
 		"toolCalls": "appels d'outils",
 		"bashRuns": "exécutions bash",
 		"images": "images",

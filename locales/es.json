@@ -837,6 +837,7 @@
 		"editAttachmentHint": "Se conservan los adjuntos originales; puede pegar/arrastrar nuevas imágenes o archivos · ⌘/Ctrl+Enter para enviar · Esc para cancelar",
 		"expandMsg": "Expandir",
 		"collapseMsg": "Contraer",
+		"queueReportLabel": "Queue",
 		"toolCalls": "Llamadas a herramientas",
 		"bashRuns": "Ejecuciones de terminal",
 		"images": "Imágenes",

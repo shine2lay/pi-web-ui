@@ -6,6 +6,7 @@ import { isExportableMessage, toggleExportImageSelect, useExportImage } from "..
 
 import { parseSkillBlock } from "../skill-block";
 import { roleMessagePreview, roleMessageViewOf } from "../role-message-text";
+import { queueReportFold } from "../queue-report-fold";
 import { roleMessageFrom, roleMessageKindWord } from "./RoleMessageRow";
 
 interface CollapsedMessageProps {
@@ -26,9 +27,12 @@ export const CollapsedMessage = memo(function CollapsedMessage({ message, onExpa
 	const exportSelected = exportImage.open && exportImage.selectedIds.includes(message.id);
 	const showExportCheck = exportImage.open && exportable;
 
+	// queue-fold (Ops #267): a queue report's row reads "Queue · <its first line>".
+	const queueLine = queueReportFold(message);
 	// Plain-text preview (first text block, first line, ~90 chars — no Markdown).
-	let preview = "";
+	let preview = queueLine ?? "";
 	for (const b of message.content) {
+		if (queueLine !== null) break;
 		const text = asText(b);
 		if (text && text.text.trim()) {
 			// Skill invocations collapse to a `skill:name · <args>` chip instead
@@ -75,8 +79,9 @@ export const CollapsedMessage = memo(function CollapsedMessage({ message, onExpa
 		<div
 			role="button"
 			tabIndex={0}
-			className={`msg-collapsed${exportSelected ? " msg-export-selected" : ""}`}
+			className={`msg-collapsed${queueLine !== null ? " msg-queue-fold" : ""}${exportSelected ? " msg-export-selected" : ""}`}
 			data-msg-id={message.id}
+			data-queue-fold={queueLine !== null ? "" : undefined}
 			title={`${t("expandMsg")} · ${preview || chips.join(" · ") || message.role}`}
 			onClick={() => onExpand(message.id)}
 			onKeyDown={(e) => {
@@ -97,8 +102,12 @@ export const CollapsedMessage = memo(function CollapsedMessage({ message, onExpa
 					onChange={() => toggleExportImageSelect(message.id)}
 				/>
 			)}
-			<span className={`msg-collapsed-role role-${message.role}`}>
-				{message.role === "custom" && message.customType === "file" ? t("attachment") : roleLabel(message.role, t)}
+			<span className={`msg-collapsed-role role-${queueLine !== null ? "queue" : message.role}`}>
+				{queueLine !== null
+					? t("queueReportLabel")
+					: message.role === "custom" && message.customType === "file"
+						? t("attachment")
+						: roleLabel(message.role, t)}
 			</span>
 			<span className="msg-collapsed-body">
 				{preview && <span className="msg-collapsed-preview">{preview}</span>}
