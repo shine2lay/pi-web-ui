@@ -1483,17 +1483,35 @@ export class RolesWatch<K> {
 		this.timer.unref?.();
 	}
 
-	/** Looks once (tests call it directly). */
-	look(): Promise<void> {
+	/**
+	 * pages-fresh (Ops #245): the background refresher's round. Looks now, whether or not a window watches, and
+	 * keeps the overview as the copy a new watch is answered with (with its time), sent only where it changed,
+	 * like any look. While a look is under way it waits for that one instead; a copy younger than
+	 * `skipYoungerMs` (a watching window's look made it) is taken as it is. Returns the overview it has, or null
+	 * when the look failed.
+	 */
+	async refresh(skipYoungerMs = 0): Promise<UiRolesOverview | null> {
+		if (this.stopped) return null;
+		const last = this.last;
+		if (!this.running && last && this.lastError === null && Date.now() - last.checkedAt < skipYoungerMs)
+			return last.overview;
+		await (this.running ?? this.look(true));
+		return this.lastError === null ? (this.last?.overview ?? null) : null;
+	}
+
+	/** Looks once (tests call it directly); `always` (pages-fresh): even with no window watching. */
+	look(always = false): Promise<void> {
 		if (this.running) {
 			this.again = true;
 			return this.running;
 		}
 		this.running = (async () => {
 			try {
+				let first = true;
 				do {
 					this.again = false;
-					await this.lookOnce();
+					await this.lookOnce(first && always);
+					first = false;
 				} while (this.again && !this.stopped && this.watchers.size);
 			} finally {
 				this.running = null;
@@ -1504,8 +1522,8 @@ export class RolesWatch<K> {
 		return this.running;
 	}
 
-	private async lookOnce(): Promise<void> {
-		if (!this.watchers.size) return;
+	private async lookOnce(always = false): Promise<void> {
+		if (!always && !this.watchers.size) return;
 		let overview: UiRolesOverview;
 		try {
 			overview = await this.read();

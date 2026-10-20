@@ -94,7 +94,7 @@ import {
 	receiveUpdateLinks,
 	resendInitiativesWatch,
 } from "./initiatives-state";
-import { receiveWorkPage, resendWorkPageWatch } from "./work-page-state";
+import { receiveWorkPage, resendWorkPageWatch, workPageConnectionLost } from "./work-page-state";
 import { emitPluginData } from "./plugin-loader";
 import { ingestPluginLogsData } from "./plugin-logs";
 import { resolveCatalogSyncResult } from "./plugin-host";
@@ -1673,7 +1673,7 @@ export function useChat() {
 	 *  hasn't caught up yet. Refs only, so it is stable.
 	 *  pages-live (Ops #244): on the Roles view the trouble ends with Roles' own fresh data, not the chat's
 	 *  (the chat isn't shown there), and on Roles or Initiatives the note waits LIVE_GRACE_MS of visible
-	 *  time first. The trace still records the whole trouble, shown or not, so real returns can be measured. */
+	 *  time first. pages-fresh (Ops #245): on the Initiatives view it ends with that page's own data too. The trace still records the whole trouble, shown or not, so real returns can be measured. */
 	const refreshNote = useCallback(() => {
 		const ws = wsRef.current;
 		const open = !!ws && ws.readyState === WebSocket.OPEN;
@@ -2588,6 +2588,8 @@ export function useChat() {
 			// episode it starts must already know why (pages-live).
 			traceRef.current?.noteCause({ reason: "close", closeCode: ev.code });
 			rolesConnectionLost();
+			// pages-fresh (Ops #245): so does the Initiatives page's.
+			workPageConnectionLost();
 			refreshNote();
 			// pages-live: a socket from before the tab last came back, closing now that it is visible: the
 			// owner is looking, so retry at once (the next socket is newer, so this can't loop).
@@ -2646,6 +2648,7 @@ export function useChat() {
 			if (hadOpenRef.current && !catchUpRef.current) catchUpRef.current = Date.now();
 			if (hadOpenRef.current && !lostSinceRef.current) lostSinceRef.current = Date.now();
 			rolesConnectionLost();
+			workPageConnectionLost();
 			doubtRef.current = false;
 			dispatch({ type: "status", status: "closed" });
 			if (timerRef.current) {

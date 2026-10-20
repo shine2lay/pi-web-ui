@@ -102,6 +102,7 @@ import { NotebookWatch } from "./notebook-watch.js";
 import { RolesWatch } from "./roles-overview.js";
 import { InitiativesWatch } from "./initiatives-watch.js";
 import { WorkPageWatch } from "./work-page.js";
+import { PAGES_FRESH_SKIP_MS, PagesRefresher } from "./pages-fresh.js";
 import { SubsLimitsHub, limitsFilePath } from "./subs-limits.js";
 import { initHttpProxy } from "./http-proxy.js";
 import { ConnEvents, MAX_RECORDS_PER_SOCKET } from "./conn-events.js";
@@ -1474,8 +1475,9 @@ export interface EngineService {
 	onRoleGuardChanged?: (() => void) | null;
 	/** roles-overview (pi engine): every role's state for the Roles page. */
 	readRolesOverview?(): Promise<UiRolesOverview>;
-	/** initiatives-plan-data (pi engine): the whole work registry for the Initiatives page (read only). */
-	readWorkPage?(): Promise<UiWorkPage>;
+	/** initiatives-plan-data (pi engine): the whole work registry for the Initiatives page (read only); with an
+	 *  overview just made (pages-fresh), from that one. */
+	readWorkPage?(overview?: UiRolesOverview): Promise<UiWorkPage>;
 	/** roles-answer (pi engine): the whole ask behind a Needs-you item, for the Roles page's Answer dialog. */
 	rolesAskOpen?(key: unknown): Promise<{ ok: true; ask: UiRoleAskView } | { ok: false; error: string }>;
 	/** roles-answer (pi engine): the owner's answer from the Roles page, through the list of asks. */
@@ -2129,6 +2131,17 @@ const rolesWatch = new RolesWatch<object>(
 	async () => {
 		if (!service.readRolesOverview) throw new Error("this engine has no roles");
 		return service.readRolesOverview();
+	},
+	{ log: (line) => console.log(line) },
+);
+
+/** pages-fresh (Ops #245): one background refresher keeps the Roles overview and the work page ready, so either
+ *  page opened is answered at once from that copy (pages-fresh.ts). Started when the server listens. */
+const pagesRefresher = new PagesRefresher(
+	async () => {
+		const overview = await rolesWatch.refresh(PAGES_FRESH_SKIP_MS);
+		if (!service.readWorkPage) return;
+		await workPageWatch.refresh(PAGES_FRESH_SKIP_MS, overview ? () => service.readWorkPage!(overview) : undefined);
 	},
 	{ log: (line) => console.log(line) },
 );
@@ -4376,6 +4389,8 @@ httpServer.listen(PORT, HOST, () => {
 	service.warmSessionIndex?.();
 	// who-fill (#115): the Initiatives page's who-cache, filled in slices so the first page isn't a cold build.
 	service.startWhoFill?.();
+	// pages-fresh (Ops #245): the Roles and Initiatives pages' data, kept ready from one interval on.
+	if (service.readRolesOverview) pagesRefresher.start();
 	// carry-on: give plugins and MCP servers a moment to come up, then reopen the cut-off chats;
 	// stall-watch: then the queue chats, whose watchdog looks after their tasks' chats.
 	setTimeout(
@@ -4499,6 +4514,8 @@ async function shutdown(signal: "SIGINT" | "SIGTERM" = "SIGINT"): Promise<void> 
 		/* best effort */
 	}
 	console.log("\nshutting down…");
+	// pages-fresh: no new background round while the server goes down.
+	pagesRefresher.stop();
 	// Windows ConPTY 兜底看门狗（issue #215）：主线程若死锁在 native
 	// ClosePseudoConsole 里，事件循环冻结，进程内的 forceExitTimer 永远触发不了 ——
 	// 只能靠外部进程收尾。超时取 forceExit + 余量（只在进程内兜底失效时才开火）；

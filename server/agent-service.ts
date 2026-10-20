@@ -16294,12 +16294,13 @@ export class AgentService {
 	/**
 	 * initiatives-plan-data: the whole work registry for the Initiatives page (read only, see work-page.ts),
 	 * each task joined with what the Roles overview's projection of its queue says. Without that projection
-	 * the registry still shows, only the queues' details are missing.
+	 * the registry still shows, only the queues' details are missing. pages-fresh (Ops #245): the background
+	 * refresher passes the overview it has just made, so one round makes it once.
 	 */
-	async readWorkPage(): Promise<UiWorkPage> {
+	async readWorkPage(overview?: UiRolesOverview): Promise<UiWorkPage> {
 		let facts: WorkQueueFacts[] = [];
 		try {
-			facts = workFactsFromOverview(await this.readRolesOverview());
+			facts = workFactsFromOverview(overview ?? (await this.readRolesOverview()));
 			this.workFactsError = null;
 		} catch (err) {
 			const error = (err as Error)?.message || String(err);

@@ -7613,3 +7613,51 @@ the result: `docs/queue-fold.md`.
 - Revert this commit with `wt`, then install with `pi-web-deploy`. Nothing stored changes.
 - If pi-queue changes a start message's second paragraph, update `isQueuePlanText` and the unit test's plan
   texts in the same change, or the plan folds.
+
+## pages-fresh
+
+**Status**: `local`
+**Baseline**: v0.96.1 (`mine` at bb432079).
+
+The Roles and Initiatives pages' data is kept ready in the background: one refresher makes the Roles overview
+and the work page every 15 s while the server runs, whether or not a page is open, and an opened page is
+answered at once from that copy, with its time. On a tab return the Initiatives page keeps its last page with
+the "Updating" note and 8 s grace (pages-live) until its own fresh data arrives.
+
+**Why** (owner 2026-10-19 18:55: "can you make it so that roles and initiative are updated periodcally so we
+are not fetching for long everytime we load"; also the Initiatives part of 2026-10-18 m58098; Ops #245).
+H-PAGES-FRESH-1: both pages build their data when they're opened, and an open that lands in a server stall
+waits for it. Initiatives waited 350-500 ms for its work page on a quiet server, seconds when busy. Evidence,
+the slice rule, numbers and result: `docs/pages-fresh.md`.
+
+### Changes
+
+- `server/pages-fresh.ts` (new): `PagesRefresher`: a round every `PAGES_FRESH_MS` (15 s), the first one
+  interval after the start; a tick while the round before still runs is skipped; its cost (rounds, skips,
+  failures, wall time, CPU share of one core) said in the log every 10 minutes.
+- `server/index.ts`: the round is `rolesWatch.refresh(5 s)`, then `workPageWatch.refresh(5 s)` from that same
+  overview; started when the server listens, stopped at shutdown.
+- `server/roles-overview.ts`: `RolesWatch.refresh()` looks even with no window watching (`look(always)`) and
+  keeps the overview as the copy a new watch already got at once (pages-live); unchanged content isn't resent.
+- `server/work-page.ts`: `WorkPageWatch` keeps its last page with its time; a new watch is answered from it at
+  once while it is at most `WORK_PAGE_COPY_MAX_AGE_MS` (45 s) old and the last look didn't fail, otherwise it
+  waits for a look as before; `refresh()` for the refresher (skips while a look runs or the page is young).
+- `server/agent-service.ts`: `readWorkPage(overview?)` uses an overview just made instead of making its own.
+- `web/src/work-page-state.ts`, `web/src/use-chat.ts`: the Initiatives page's own freshness for page-live
+  (fresh once this window's latest watch is answered; not after a lost socket until then).
+- Not on the timer: the Initiatives decisions page (`initiatives-watch.ts`, Architecture's `decision-view.ts`),
+  a single 80-144 ms slice, over the slice rule's 50 ms; it is still made when a window asks.
+- Tests: `tests/unit/pages-fresh.test.ts` (new), `tests/pages-fresh-test.mjs` (new, sealed browser: 10 opens
+  per page, first data within 1 s p90 of the page's watch and answered from the kept copy, the time from
+  navigation start printed beside the machine's load; 10 Initiatives returns after 60 s hidden with the socket
+  cut, fresh within 3 s p90).
+
+### How it was checked
+
+- Sealed build timing before and after on a temporary copy of the role data (`docs/pages-fresh.md`), focused
+  vitest, the sealed browser test, then the land gate; live look-only opens, stalls per hour and the
+  refresher's own CPU before and after, and real-use shownMs (`docs/pages-fresh.md`).
+
+### Undo and syncing
+
+- Revert this commit with `wt`, then install with `pi-web-deploy`. Nothing stored changes.
