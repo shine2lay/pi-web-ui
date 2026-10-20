@@ -310,6 +310,21 @@ export function exactProgress(
 	if (line && milestone && milestone.at !== null && (line.at === null || milestone.at > line.at)) return milestone;
 	return line ?? milestone;
 }
+/**
+ * roles-current-task (Ops #277, docs/live-progress.md H-ROLES-CURRENT-1): the task a role's card and panel name as its
+ * Current task: the busy one (its chat is at work now); else a started task that isn't paused; else any task that
+ * isn't paused; else the first (all paused: still shown, with its paused wording). Queue order among equals.
+ * It was the busy one, else the first in queue order: between turns a paused task stood in front of the working ones.
+ */
+export function currentTask(records: readonly UsefulRecord[]): UsefulRecord | undefined {
+	const unpaused = (t: UsefulRecord) => t.pause !== "reported-paused";
+	return (
+		records.find((t) => t.busy) ??
+		records.find((t) => t.state === "working" && unpaused(t)) ??
+		records.find(unpaused) ??
+		records[0]
+	);
+}
 function acceptsHover(source: Event | Element): boolean {
 	const el = "currentTarget" in source ? (source.currentTarget as Element | null) : source;
 	if (!el) return false;
@@ -735,7 +750,7 @@ export function createExactRolesView(
 	function box(role: ExactRole, model: ExactRoles): SurfaceValues {
 		const { row, panel, spend } = role;
 		const tasks = [...row.active.records, ...row.queued.records];
-		const lead = row.active.records.find((t) => t.busy) ?? row.active.records[0];
+		const lead = currentTask(row.active.records);
 		const state = ROLE_STATE[panel?.status ?? "unknown"];
 		const questions = model.needs.items.filter((item) => item.roleId === row.roleId);
 		const roleContacts = (model.contacts ?? []).filter((c) => c.role === row.roleId);

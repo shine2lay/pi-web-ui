@@ -10,6 +10,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## roles-current-task: the Roles page's Current task is the task the role is on, not a paused one in front of it
+
+- `local` (owner 2026-10-19, via COO rm-63784858: "i want live progress in both role and initiatives"; Ops #277, from #272's live look). Hypothesis H-ROLES-CURRENT-1 and its result: `docs/live-progress.md`.
+- `web/src/roles-exact-view.ts`: `currentTask` picks a role's Current task (the card's line and the panel's Current task; Latest progress and the next step follow it): the busy task; else a started task (`working`) that isn't paused; else any task that isn't paused; else the first (all paused: still shown, with its paused wording); queue order among equals. It was the busy one, else the first in queue order, so between turns a paused task stood in front (Design #41, paused by the owner since Oct 9, while #45 and #63 were in progress).
+- Unchanged: the server, the layout and every other card and panel field, the queue link (still at the first task).
+- Checks: `tests/unit/roles-current-task.test.ts`, through the view (a paused task first, then working ones: the first working one; busy wins; all paused: the first; none started: the first that isn't paused; card and panel agree); on the old line 2 of 4 fail (both show the paused task). Then the landing gate.
+- Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
+
 ## roles-live: live Latest progress with its time, and Activity with the task lines and done summaries, on the Roles page
 
 - `local` (owner 2026-10-19, via COO rm-63784858: "i want live progress in both role and initiatives"; Ops #272, on `live-progress-contract`). Hypothesis H-ROLES-LIVE-1 and its result: `docs/live-progress.md`.
