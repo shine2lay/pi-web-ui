@@ -7501,6 +7501,10 @@ heartbeat. Evidence, numbers and result: `docs/pages-live.md`.
   tests. It now also accepts "Updating… · last received" after a failed update there (its messages arrive
   180 s ahead of the page clock, so the calm state can outlast the grace), and waits up to 12 s (the 8 s grace
   and a margin) for the Unavailable, stale and failed alarms before checking them. No app code changes.
+- Result (Ops #244, 2026-10-19): H-PAGES-LIVE-2 HIT on the sealed test (fresh Roles data 0.42 s p90; no
+  alarm or note in 10 of 10 returns, before in 10 of 10) and on live timing (first full answer 0.30 s p90; an
+  unchanged overview confirmed to a new watcher in 0.46-0.52 s instead of 30 s). Real use: not enough data,
+  3 Roles returns in the 24 h after the install (5 needed), at 1.60, 2.11 and 3.17 s, none near the 8 s grace.
 
 ### Undo and syncing
 

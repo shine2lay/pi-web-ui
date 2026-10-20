@@ -111,3 +111,45 @@ Two faults turned up while building the test, and both were fixed before the num
 
 - The footer's new "Updating" hook was below an early return (React error #310, a blank page). A focused jsdom test didn't catch it, so the sealed test's "no page errors" check is the guard.
 - The trace lost the cause ("unknown") because the Roles state change woke the note before the close was noted. The cause is now noted first, and the test checks it.
+
+## Live after the install (2026-10-18 23:33-23:36 PDT)
+
+9276a6e0 was installed with pi-web-deploy at 23:28:50, and every deploy check passed (`pi-web-deploy result` 0). Then the same read-only client ran again: 10 tries, 20 s apart (`live-after.jsonl`, nearest-rank percentiles).
+
+| From the watch to | Before (21:32), p50 / p90 / max | After (23:33), p50 / p90 / max |
+|---|---|---|
+| the first full answer | 0.14 / 0.36 / 0.38 s | 0.06 / 0.30 / 1.15 s |
+| the age of that answer | 7.0 / 10.0 / 10.9 s | 6.8 / 7.3 / 8.2 s |
+| a newer look | 0.76 / 2.5 / 8.3 s | 0.52 / 1.87 / 1.97 s |
+
+- The first full answer stays within 1 s p90. The one slow answer (1.15 s) was the first try, while the machine was still busy (load average 25, down to 11 by the end of the run).
+- Two of the 10 newer looks were heartbeats: nothing had changed, and the server told the new watcher so at 0.46 and 0.52 s. Before the change none was, because an unchanged overview waited for the 30 s heartbeat.
+
+## Real use: Roles returns in the 24 h after the install
+
+From the connection trace (`~/.pi-web-ui/conn-events*.jsonl`), Oct 18 23:28:50 to Oct 19 23:28:50 PDT, counted with `roles-returns.mjs` in the same folder. A Roles return is a connection episode on the Roles view that ended with the tab visible, where the tab became visible at most 5 s before the episode began; every episode that began while the tab was hidden counts. This definition was written down before looking at any result. shownMs runs from the tab becoming visible to the episode's end: the socket open, not in doubt, and Roles' data fresh.
+
+| When (Oct 19, PDT) | How it began | shownMs | Roles catch-up on the new socket |
+|---|---|---|---|
+| 09:05:47 | socket closed (1006) while hidden; 2 min 13 s in all | 2.11 s | 0.68 s |
+| 12:50:59 | socket closed (1006) while hidden; 2 min 19 s in all | 3.17 s | 2.10 s |
+| 19:52:12 | came back, and the server answered the return ping late; the doubt lasted 0.5 s | 1.60 s | none (same socket) |
+
+- 3 returns: p50 2.11 s; p90 (nearest rank, so the slowest of the three) 3.17 s; max 3.17 s.
+- None reached the 8 s grace. So, by the code the sealed test checked, none showed the red or amber pill or the "Reconnecting…" note. The trace records timing, not the screen.
+- The slowest came while the server was busy: its event loop's p99 over the episode was 1.07 s, and Roles' catch-up on the new socket took 2.1 s. This change doesn't make the server faster.
+- 3 returns is fewer than the 5 the plan asked for in 24 h, so by the plan's rule the real-use result is **not enough data**. The owner was mostly in chats that day.
+
+Other views in the same window, for context:
+
+- Initiatives (the same 8 s grace for the note; its own data signal comes with the next task, after #227): 2 returns, 0.07 s and 2.49 s. Twice, at 07:55 and 14:11, the server's event loop stalled for 15.6 s and 21.1 s while the Initiatives page was already on screen. Those are server stalls, not returns, and out of scope here.
+- Chats (unchanged by this patch): 41 returns, shownMs p50 1.74 s, p90 6.15 s, max 19.7 s, plus 267 episodes where the server went quiet while a chat was already on screen.
+
+## Result
+
+**H-PAGES-LIVE-2: HIT on the sealed test and on live timing; real use is not enough data.**
+
+- Sealed return (60 s hidden with the socket cut, 10 runs): fresh Roles data on screen in 0.42 s p90, well within 3 s, with no red or amber pill and no "Reconnecting…" note in any run (before: both, in 10 of 10). Not disproved: the return took far less than 8 s.
+- Live: a new Roles watch gets its first full answer in 0.30 s p90, within 1 s (before 0.36 s). An unchanged overview is now confirmed to a new watcher at once (0.46-0.52 s) instead of at the 30 s heartbeat.
+- Real use: 3 Roles returns in 24 h. That is below the 5 needed, so the 3 s p90 bar can't be called either way. The three took 1.60, 2.11 and 3.17 s, and none came near the 8 s alarm wait. The slowest is just over 3 s and came while the server was busy, which this change doesn't address. If later returns keep landing over 3 s, the next hypothesis is about the reconnection or the server, as written above.
+- To count more returns later: `node ~/kept-from-tmp/2026-10-18/pages-live/roles-returns.mjs [--until <ISO time>]`. The Initiatives task after #227 can use the same count for its own page.
