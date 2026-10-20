@@ -403,6 +403,8 @@ export function createNativeRolesView(
 								? inits.length + (inits.length === 1 ? " initiative" : " initiatives")
 								: NR,
 							spend: { own: spendText(role), req: NREP },
+							// roles-budget-card: this view has no card budget line, so its spending section stays where it was.
+							spendBelow: true,
 							decisions: [],
 							hasDecisions: false,
 							questions: [],

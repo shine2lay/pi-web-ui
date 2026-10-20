@@ -68,7 +68,17 @@ const browser = await chromium.launch({
 	headless: true,
 	args: ["--no-sandbox", "--disable-dev-shm-usage"],
 });
-const results = { component: [], reference: [], floating: [], wide: [], stacked: [], sheets: [], errors: [] };
+const results = {
+	component: [],
+	reference: [],
+	floating: [],
+	wide: [],
+	stacked: [],
+	sheets: [],
+	cards: [],
+	budget: [],
+	errors: [],
+};
 const deadline = setTimeout(() => {
 	results.errors.push("Isolated browser check exceeded its 180-second deadline");
 	void browser.close();
@@ -240,9 +250,104 @@ try {
 				JSON.stringify({ label, ...stack }),
 			);
 		};
+		// roles-budget-card (Ops #265, H-BUDGET-CARD-1): Design's card (the harness's one reported tally) shows the
+		// feed's exact figures and a bar without a click, no other card shows spending, no card overlaps another card,
+		// the You box or an arrow label, and every card stays whole inside the canvas.
+		// At 1050 px the inner ring's 250 px floor already makes COO and Ops touch the side cards' corners (13x5 to 14x7 px,
+		// measured before this change), so `cornerTouches` allows overlaps up to 10 px deep there and nothing deeper: a
+		// centred Design card went 28.9 px into Ops. Every other size allows none.
+		const checkCards = async (label, { cornerTouches = false } = {}) => {
+			const cards = await page.evaluate(() => {
+				const doc = document.querySelector('iframe[title="Roles"]').contentDocument;
+				const graph = doc.querySelector("[data-boxgrid]");
+				const g = graph.getBoundingClientRect();
+				const round = (n) => Math.round(n * 100) / 100;
+				const boxes = [
+					{ name: "You", el: doc.querySelector("[data-roles-you]") },
+					...[...doc.querySelectorAll('button[aria-haspopup="dialog"]')].map((el) => ({
+						name: el.querySelector("span span")?.textContent?.trim() ?? "",
+						el,
+					})),
+				].map((b) => ({ ...b, r: b.el.getBoundingClientRect() }));
+				const hit = (a, b) =>
+					Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 &&
+					Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5;
+				const overlaps = [];
+				const depth = [];
+				const deep = [];
+				boxes.forEach((a, i) =>
+					boxes.slice(i + 1).forEach((b) => {
+						if (!hit(a.r, b.r)) return;
+						overlaps.push(`${a.name}/${b.name}`);
+						const ox = Math.min(a.r.right, b.r.right) - Math.max(a.r.left, b.r.left);
+						const oy = Math.min(a.r.bottom, b.r.bottom) - Math.max(a.r.top, b.r.top);
+						depth.push(`${a.name}/${b.name} ${round(ox)}x${round(oy)}`);
+						if (Math.min(ox, oy) > 10) deep.push(`${a.name}/${b.name}`);
+					}),
+				);
+				const budgetLine = '[role="img"][aria-label*="own-work budget"]';
+				const withLine = boxes.filter((b) => b.el.querySelector(budgetLine));
+				const chips = [...graph.querySelectorAll("button")].filter((el) => el.style.zIndex === "3");
+				const chipHits = chips.flatMap((c) =>
+					withLine
+						.filter((b) => hit(c.getBoundingClientRect(), b.r))
+						.map((b) => `${c.getAttribute("aria-label")}/${b.name}`),
+				);
+				const design = boxes.find((b) => b.name === "Design");
+				const line = design?.el.querySelector(budgetLine);
+				// The line holds the text, then the track with the bar inside it.
+				const bar = line?.lastElementChild?.firstElementChild;
+				const l = line?.getBoundingClientRect();
+				return {
+					designText: design?.el.innerText ?? "",
+					designLabel: line?.getAttribute("aria-label") ?? null,
+					barShare: bar
+						? round(bar.getBoundingClientRect().width / bar.parentElement.getBoundingClientRect().width)
+						: null,
+					lineInside:
+						!!l && l.height > 0 && l.left >= design.r.left && l.right <= design.r.right && l.bottom <= design.r.bottom,
+					designHeight: round(design?.r.height ?? 0),
+					tallestOther: round(
+						Math.max(...boxes.filter((b) => b !== design && b.name !== "You").map((b) => b.r.height)),
+					),
+					withLine: withLine.map((b) => b.name),
+					others: boxes
+						.filter((b) => b !== design && b.name !== "You")
+						.filter((b) => /\$[\d,.]+ of \$|this week|Budget used up/.test(b.el.innerText))
+						.map((b) => b.name),
+					overlaps,
+					depth,
+					deep,
+					chipHits,
+					outside: boxes
+						.filter(
+							(b) =>
+								b.r.left < g.left - 0.5 ||
+								b.r.right > g.right + 0.5 ||
+								b.r.top < g.top - 0.5 ||
+								b.r.bottom > g.bottom + 0.5,
+						)
+						.map((b) => b.name),
+					cut: boxes.filter((b) => b.el.scrollHeight > b.el.clientHeight + 1).map((b) => b.name),
+				};
+			});
+			results.cards.push({ label, ...cards });
+			const seen = JSON.stringify({ label, ...cards });
+			assert.ok(cards.designText.includes("$1,240.50 of $2,000 this week"), seen);
+			assert.equal(cards.designLabel, "Design own-work budget: $1,240.50 of $2,000 this week", seen);
+			assert.ok(cards.barShare !== null && Math.abs(cards.barShare - 0.62) < 0.01, seen);
+			assert.ok(cards.lineInside, seen);
+			assert.deepEqual(cards.withLine, ["Design"], seen);
+			assert.deepEqual(cards.others, [], seen);
+			assert.deepEqual(cornerTouches ? cards.deep : cards.overlaps, [], seen);
+			assert.deepEqual(cards.chipHits, [], seen);
+			assert.deepEqual(cards.outside, [], seen);
+			assert.deepEqual(cards.cut, [], seen);
+		};
 		await noHelper(frame);
 		await checkFloating(page, "desktop");
 		await checkWide("desktop");
+		await checkCards("desktop");
 		assert.ok((await frame.getByRole("button", { name: /^Ops / }).locator("..").innerText()).includes("ON YOU"));
 		await page.screenshot({ path: join(output, "desktop.png") });
 		record("real component renders all 15 departments and real ON YOU markers without the helper row");
@@ -348,6 +453,38 @@ try {
 			true,
 		);
 		record("mouse close restores role focus without leaving other cards dimmed");
+		// roles-budget-card: Design's panel opens with its spending section first, inside the first screen.
+		await frame.getByRole("button", { name: /^Design / }).click();
+		await panel.getByRole("heading", { name: "Spending this week", exact: true }).waitFor();
+		await settled();
+		const designPanel = await panel.evaluate((el) => {
+			const heads = [...el.querySelectorAll("h3")].map((h) => ({
+				text: h.textContent.trim(),
+				top: h.getBoundingClientRect().top,
+			}));
+			const spend = heads.find((h) => h.text === "Spending this week");
+			return {
+				order: heads.map((h) => h.text),
+				top: spend ? Math.round(spend.top) : null,
+				frame: el.ownerDocument.defaultView.innerHeight,
+				scrollTop: el.scrollTop,
+				own: el.querySelector("dd")?.textContent ?? "",
+			};
+		});
+		results.budget.push({ label: "desktop", ...designPanel });
+		assert.equal(designPanel.order[0], "Spending this week", JSON.stringify(designPanel));
+		assert.equal(designPanel.order.filter((t) => t === "Spending this week").length, 1, JSON.stringify(designPanel));
+		assert.ok(
+			designPanel.scrollTop === 0 && designPanel.top !== null && designPanel.top < designPanel.frame,
+			JSON.stringify(designPanel),
+		);
+		assert.equal(designPanel.own, "$1,240.50 of $2,000");
+		await page.screenshot({ path: join(output, "design-panel.png") });
+		await panel.getByRole("button", { name: "Close and return to all departments" }).click();
+		await panel.waitFor({ state: "hidden" });
+		await page.mouse.move(5, 5);
+		await baselineContrast(1);
+		record("roles-budget-card: Design's card shows its budget and its panel opens with spending first");
 		await page.evaluate(() => window.rolesExactTest.deliver("next-action"));
 		await frame.getByRole("button", { name: /^Ops / }).click();
 		await settled();
@@ -504,9 +641,11 @@ try {
 		await page.setViewportSize({ width: 1050, height: 900 });
 		await checkFloating(page, "laptop");
 		await checkWide("laptop");
+		await checkCards("laptop", { cornerTouches: true });
 		await page.screenshot({ path: join(output, "laptop.png") });
 		await page.setViewportSize({ width: 390, height: 844 });
 		await checkStacked("phone");
+		await checkCards("phone");
 		await checkFloating(page, "phone");
 		// roles-small-fixes: the live overlap came with a tall wrapped header on a phone (then made by the stale
 		// banner). roles-retry-pill took the banner away, so the header now changes only through the status pill's
@@ -549,6 +688,7 @@ try {
 		for (const [label, file] of [
 			[/^Ops /, "phone-ops.png"],
 			["You: open your decisions, questions and spending", "phone-you.png"],
+			[/^Design /, "phone-design.png"],
 		]) {
 			await phoneFrame.getByRole("button", { name: label }).tap();
 			await settled(phone);
@@ -574,6 +714,22 @@ try {
 				sheet.position === "fixed" && sheet.box.join() === `0,0,${sheet.viewport.join()}` && sheet.clipped <= 0,
 				JSON.stringify(sheet),
 			);
+			// roles-budget-card: on a phone too, Design's sheet opens with its spending section inside the first screen.
+			if (file === "phone-design.png") {
+				const first = await region.evaluate((el) => {
+					const h = el.querySelector("h3");
+					return {
+						text: h?.textContent.trim() ?? null,
+						top: h ? Math.round(h.getBoundingClientRect().top) : null,
+						frame: el.ownerDocument.defaultView.innerHeight,
+					};
+				});
+				results.budget.push({ label: "phone", ...first });
+				assert.ok(
+					first.text === "Spending this week" && first.top !== null && first.top < first.frame,
+					JSON.stringify(first),
+				);
+			}
 			await phone.screenshot({ path: join(output, file) });
 			await region.getByRole("button", { name: "Close and return to all departments" }).tap();
 			await region.waitFor({ state: "hidden" });

@@ -10,6 +10,15 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## roles-budget-card: a reported role's own-work budget on its card; spending first in its panel
+
+- `local` (owner 2026-10-19, "Show it on the main view", Ops #265). Hypothesis H-BUDGET-CARD-1 and result: `docs/roles-budget-card.md`.
+- `web/src/roles-exact-view.ts`: `exactCardSpend` gives each card `hasSpend`, `spendText` (the feed's exact figures, "$579.65 of $2,000 this week", or "Budget used up" when over), `spendBarWidth`, `spendBarColor` (the You panel's rule, now shared as `spendColor`: red over, amber stale or last received data, blue), `spendLabel` and `spendBelow`. Only a reported tally with figures gets a line (`ExactSpend.reported`: ok, stale or over); no tally, an old week or an unreadable file get none, never "$0". Arrow labels route around the taller card (`obstacleHalfHeight`); under about 1300 px wide `exactCardShifts` moves such a card 24 px away from a close neighbour, so it grows toward the roomier side.
+- `web/src/roles-u0/surface.html`: the card's line (11.5 px Geist Mono, #B9BEC5) and a 4 px bar in one `role="img"` named by `spendLabel`, under the lanes row. A reported role's panel opens with "Spending this week" first; other panels keep it lower (`spendBelow`, also set by `web/src/roles-u0/native.ts` and the supplied reference model, so the reference comparison is unchanged).
+- Unchanged: how spend is read or counted (`server/roles-spend.ts`, spend.json), `projectSpend`, the You panel.
+- Checks: `tests/unit/roles-exact.test.ts` (exact text, width, colour and name; no line without a reported tally; over; stale and last received; panel order; the shift) and `tests/roles-exact-test.mjs` (Design's line and bar, no other card with spend text, no card overlapping, outside the canvas or clipped at 1440 and 390 px and nothing deeper than 10 px at 1050 px, Design's panel and phone sheet opening with spending inside the first screen), then the landing gate.
+- Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
+
 ## initiatives-who-fill: the who-cache filled in the background after each start
 
 - `local` (Architecture #115, 2026-10-19; the owner's freeze work, bp-41b2f05f puts freeze fixes first). Hypothesis H-INIT-WHO-FILL: section 8 of `~/architecture-dept/debug/reconnect-2026-10-16/day-census-2026-10-19/RESULT.md`; proof and live check: `~/architecture-dept/work/who-fill/RESULT.md`.

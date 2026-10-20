@@ -4,7 +4,7 @@
 // tracking producers or production fonts. Pixel checks use the separate reference recipe.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EXACT_SOURCE, exactWhen, projectExactRoles, type ExactRoles } from "../../web/src/roles-exact-model.js";
-import { approvalsTip, createExactRolesView } from "../../web/src/roles-exact-view.js";
+import { approvalsTip, createExactRolesView, exactCardShifts } from "../../web/src/roles-exact-view.js";
 import { ringAnchor, ringLayout, stackLayout } from "../../web/src/roles-u0/layout.js";
 import { bindRolesSurface } from "../../web/src/roles-u0/surface.js";
 import type { SurfaceValue, SurfaceValues } from "../../web/src/roles-u0/types.js";
@@ -718,6 +718,149 @@ describe("the supplied Roles design with the existing feed", () => {
 		update(projectExactRoles(state([role({ spend }), role({ id: "design", spend })]), "open", NOW));
 		expect(view.values().spendAmountText).toBe("Not recorded");
 		expect(view.values().spendRoleText).toBe("2 departments · see each role");
+	});
+
+	// roles-budget-card (Ops #265, H-BUDGET-CARD-1): a reported role's own-work budget on its card, no click needed.
+	const cardOf = (view: ReturnType<typeof fixture>["view"], id: string) =>
+		list(object(view.values().glance).boxes)
+			.map(object)
+			.find((b) => b.id === id);
+	const designSpend = (spend: unknown) => [role(), role({ id: "design", title: "Design", spend })];
+
+	it("roles-budget-card: a reported role's card shows the feed's exact figures and a bar; no other card does", () => {
+		const spend = { state: "ok", spent: "$579.65", budget: "$2,000", age: "2 min ago" };
+		const { view } = fixture(projectExactRoles(state(designSpend(spend)), "open", NOW), true);
+		expect(cardOf(view, "design")).toMatchObject({
+			hasSpend: true,
+			spendText: "$579.65 of $2,000 this week",
+			spendBarWidth: "28.983%",
+			spendBarColor: "#7DB8FF",
+			spendLabel: "Design own-work budget: $579.65 of $2,000 this week",
+			spendBelow: false,
+		});
+		expect(cardOf(view, "ops")).toMatchObject({ hasSpend: false, spendText: "", spendLabel: "", spendBelow: true });
+		const cards = [...document.querySelectorAll('button[aria-haspopup="dialog"]')];
+		expect(cards).toHaveLength(2);
+		const design = cards.find((card) => card.textContent?.includes("Design"));
+		expect(design?.textContent).toContain("$579.65 of $2,000 this week");
+		const line = design?.querySelector('[role="img"][aria-label^="Design own-work budget"]');
+		expect(line?.getAttribute("aria-label")).toBe("Design own-work budget: $579.65 of $2,000 this week");
+		// The line holds the text, then the track with the bar inside it.
+		const bar = line?.lastElementChild?.firstElementChild as HTMLElement | null | undefined;
+		expect(bar?.style.width).toBe("28.983%");
+		expect(bar?.style.background).toMatch(/^(#7DB8FF|rgb\(125, 184, 255\))$/i);
+		for (const card of cards.filter((card) => card !== design)) {
+			expect(card.textContent).not.toMatch(/\$|this week/);
+			expect(card.querySelector('[aria-label*="budget"]')).toBeNull();
+		}
+	});
+
+	it.each([
+		undefined,
+		{ state: "none" },
+		{ state: "old-week" },
+		{ state: "unreadable" },
+		{ state: "ok", spent: "$0", budget: "$0" },
+		{ state: "ok", spent: "$20", budget: "$20" },
+		{ state: "ok", spent: "USD 2", budget: "$20" },
+	])("roles-budget-card: no budget line, never $0, without a reported tally (%j)", (spend) => {
+		const { view } = fixture(projectExactRoles(state(designSpend(spend)), "open", NOW), true);
+		expect(cardOf(view, "design")).toMatchObject({ hasSpend: false, spendText: "", spendBelow: true });
+		const cards = [...document.querySelectorAll('button[aria-haspopup="dialog"]')];
+		expect(cards).toHaveLength(2);
+		for (const card of cards) expect(card.textContent).not.toMatch(/\$|this week|Budget used up/);
+	});
+
+	it("roles-budget-card: over budget reads Budget used up in red; stale and last received data are amber", () => {
+		const { view, update } = fixture(
+			projectExactRoles(state(designSpend({ state: "over", spent: "$2,040.10", budget: "$2,000" })), "open", NOW),
+		);
+		expect(cardOf(view, "design")).toMatchObject({
+			hasSpend: true,
+			spendText: "Budget used up",
+			spendBarWidth: "100%",
+			spendBarColor: "#FF8A80",
+			spendLabel: "Design own-work budget: used up, $2,040.10 of $2,000 this week",
+		});
+		update(projectExactRoles(state(designSpend({ state: "stale", spent: "$5", budget: "$20" })), "open", NOW));
+		expect(cardOf(view, "design")).toMatchObject({
+			spendText: "$5 of $20 this week",
+			spendBarWidth: "25%",
+			spendBarColor: "#F0B95A",
+		});
+		const received = projectExactRoles(
+			state(designSpend({ state: "ok", spent: "$2", budget: "$20" })),
+			"closed",
+			NOW + 3_000,
+			{ visibleAt: NOW - 3_600_000 },
+		);
+		expect(received.lastReceived).toBe(true);
+		update(received);
+		expect(cardOf(view, "design")).toMatchObject({ spendText: "$2 of $20 this week", spendBarColor: "#F0B95A" });
+		// The You panel's bar follows the same rule.
+		expect(view.values().spendBarColor).toBe("#F0B95A");
+	});
+
+	it("roles-budget-card: a reported role's panel opens with spending first; other panels keep it lower", () => {
+		const spend = { state: "ok", spent: "$579.65", budget: "$2,000" };
+		const { view } = fixture(projectExactRoles(state(designSpend(spend)), "open", NOW), true);
+		const headings = () =>
+			[...document.querySelectorAll('[role="region"] h3')].map((h) => h.textContent?.trim().toLowerCase() ?? "");
+		view.openRole("design", document.body);
+		vi.runAllTimers();
+		let order = headings();
+		expect(order.filter((h) => h === "spending this week")).toHaveLength(1);
+		expect(order[0]).toBe("spending this week");
+		expect(document.querySelector('[role="region"]')?.textContent).toContain("$579.65 of $2,000");
+		view.close(true);
+		vi.runAllTimers();
+		view.openRole("ops", document.body);
+		vi.runAllTimers();
+		order = headings();
+		expect(order.filter((h) => h === "spending this week")).toHaveLength(1);
+		expect(order.indexOf("spending this week")).toBe(order.indexOf("requests") + 1);
+		expect(order.indexOf("now")).toBeLessThan(order.indexOf("spending this week"));
+	});
+
+	it("roles-budget-card: a taller card grows away from a close neighbour; no other card moves", () => {
+		const roster = [
+			["architecture", "Architecture"],
+			["backend", "Backend"],
+			["coo", "COO"],
+			["data", "Data"],
+			["design", "Design"],
+			["docs", "Docs"],
+			["frontend", "Frontend"],
+			["marketing", "Marketing"],
+			["ops", "Ops"],
+			["product", "Product"],
+			["qa", "QA"],
+			["rollcall", "RollCall"],
+			["security", "Security"],
+			["systems", "Systems"],
+			["temper", "Temper"],
+		];
+		const spend = { state: "ok", spent: "$579.65", budget: "$2,000" };
+		const project = (withSpend: boolean) =>
+			projectExactRoles(
+				state(roster.map(([id, title]) => role({ id, title, ...(withSpend && id === "design" ? { spend } : {}) }))),
+				"open",
+				NOW,
+			);
+		const ring = (model: ExactRoles, width: number, height: number) =>
+			ringLayout(
+				model.roles.map((r) => ({ id: r.row.roleId, name: r.row.roleLabel })),
+				width,
+				height,
+			);
+		const model = project(true);
+		// 1050 px: Ops (inner ring, right) sits just above Design, so Design keeps its top edge and grows down.
+		const narrow = ring(model, 1050, 876);
+		expect([...exactCardShifts(model, narrow)]).toEqual([["design", 24]]);
+		// 1400 px: room both ways, so it stays centred like every other card.
+		expect(exactCardShifts(model, ring(model, 1400, 780)).size).toBe(0);
+		// Without a budget line nothing moves.
+		expect(exactCardShifts(project(false), narrow).size).toBe(0);
 	});
 
 	it("does not render archived report content or a report reminder", () => {

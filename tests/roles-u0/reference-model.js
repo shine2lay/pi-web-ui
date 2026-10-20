@@ -735,6 +735,8 @@ export class ReferenceModel extends DCLogic {
       const rel = relFor(r.id);
       const isHov = hov === r.id;
       return Object.assign(decorate(r), laneInfo(r.id), repInfo(r), initInfo(r), {
+        // roles-budget-card: the supplied design shows no card budget line, so its panel keeps spending lower.
+        spendBelow: true,
         hasRel: !!rel, relText: rel,
         px: (POS[r.id][0] / VW * 100) + '%', py: (POS[r.id][1] / VH * 100) + '%',
         op: hov && !isHov && !rel ? '0.38' : dim,

@@ -12,6 +12,7 @@ import {
 	type ExactPair,
 	type ExactRole,
 	type ExactRoles,
+	type ExactSpend,
 } from "./roles-exact-model";
 import type { NeedsYouItem } from "./roles-useful-model";
 import { CONFIG_NOT_RECORDED, configHistoryActs } from "./roles-config-history";
@@ -98,6 +99,97 @@ export function exactLanes(lanes: { atOnce: number; inUse: number } | null | und
 		lanes: Array.from({ length: lanes.atOnce }, (_, i) => (i < lanes.inUse ? LANE_BUSY : LANE_IDLE)),
 		lanesText: text,
 		lanesLabel: text,
+	};
+}
+/** A tally's bar colour, the You panel's rule: red over budget, amber stale or last received data, else blue. */
+function spendColor(spend: ExactSpend, lastReceived: boolean): string {
+	return spend.over ? "#FF8A80" : spend.stale || lastReceived ? "#F0B95A" : "#7DB8FF";
+}
+function spendWidth(ratio: number | null): string {
+	return `${Math.round((ratio ?? 0) * 100_000) / 1000}%`;
+}
+/** roles-budget-card: true when a role's card shows its own-work budget line (a reported tally with figures). */
+function cardHasSpend(spend: ExactSpend | undefined): boolean {
+	return !!spend?.reported && spend.amount !== null && spend.budget !== null && spend.ratio !== null;
+}
+/**
+ * roles-budget-card: what a budget line adds to a card's height (gap, two 11.5 px mono lines, gap, 4 px bar);
+ * measured 48.35 px in the sealed browser check (146.77 px against 98.42 px).
+ */
+const CARD_SPEND_HEIGHT = 48;
+/** Half a label obstacle's height around a role's spot; cards are centred there, so a budget line adds half each way. */
+function obstacleHalfHeight(model: ExactRoles, id: string): number {
+	if (id === "you") return 42;
+	return 60 + (cardHasSpend(model.roles.find((r) => r.row.roleId === id)?.spend) ? CARD_SPEND_HEIGHT / 2 : 0);
+}
+/** roles-budget-card: half a card without a budget line (the template's card measures 98.4 px tall). */
+const CARD_HALF = 50;
+/** Half a card's width: nodeW plus the template's 10 px each side, as the label obstacles count it. */
+const cardHalfWidth = (ring: ReturnType<typeof ringLayout>) => ring.nodeW / 2 + 10;
+/**
+ * roles-budget-card: how far a card with a budget line moves from its ring spot, in px (down +, up -). Centred, the
+ * taller card grows CARD_SPEND_HEIGHT / 2 each way. Under ~1300 px wide the inner ring's 250 px floor sets Ops and
+ * COO close beside the outer cards at the sides (at 1050 px Design sits ~95 px below Ops), so when either side lacks
+ * that room the card keeps its edge on the tighter side where the design puts it and grows toward the roomier side.
+ * Room is the gap to the nearest card in its column, or to the ring's own top or bottom. Cards without a line keep
+ * the design's spots; the phone column needs none of this, as it stacks measured heights.
+ */
+export function exactCardShifts(model: ExactRoles, ring: ReturnType<typeof ringLayout>): Map<string, number> {
+	const shifts = new Map<string, number>();
+	const half = CARD_SPEND_HEIGHT / 2;
+	for (const role of model.roles) {
+		const id = role.row.roleId;
+		const p = ring.pos.get(id);
+		if (!p || !cardHasSpend(role.spend)) continue;
+		let up = p[1] - CARD_HALF;
+		let down = ring.height - p[1] - CARD_HALF;
+		for (const [other, q] of ring.pos) {
+			if (other === id) continue;
+			const you = other === "you";
+			if (Math.abs(q[0] - p[0]) >= cardHalfWidth(ring) + (you ? 82 : cardHalfWidth(ring))) continue;
+			const tall = !you && cardHasSpend(model.roles.find((r) => r.row.roleId === other)?.spend);
+			const gap = Math.abs(q[1] - p[1]) - CARD_HALF - (you ? 42 : CARD_HALF + (tall ? half : 0));
+			if (q[1] < p[1]) up = Math.min(up, gap);
+			else down = Math.min(down, gap);
+		}
+		if (up < half || down < half) shifts.set(id, down >= up ? half : -half);
+	}
+	return shifts;
+}
+/**
+ * roles-budget-card (Ops #265): a reported role's own-work budget on its card, with the feed's exact figures and a
+ * bar; "Budget used up" when over. A role with no budget, an old week or an unreadable tally gets no line, never
+ * "$0". Its panel opens with the spending section first (`spendBelow` false); every other panel keeps it lower.
+ */
+export function exactCardSpend(
+	spend: ExactSpend,
+	label: string,
+	lastReceived: boolean,
+): {
+	hasSpend: boolean;
+	spendText: string;
+	spendBarWidth: string;
+	spendBarColor: string;
+	spendLabel: string;
+	spendBelow: boolean;
+} {
+	if (!cardHasSpend(spend))
+		return {
+			hasSpend: false,
+			spendText: "",
+			spendBarWidth: "0%",
+			spendBarColor: "transparent",
+			spendLabel: "",
+			spendBelow: true,
+		};
+	const figures = `${spend.amount} of ${spend.budget} this week`;
+	return {
+		hasSpend: true,
+		spendText: spend.over ? "Budget used up" : figures,
+		spendBarWidth: spendWidth(spend.ratio),
+		spendBarColor: spendColor(spend, lastReceived),
+		spendLabel: `${label} own-work budget: ${spend.over ? `used up, ${figures}` : figures}`,
+		spendBelow: false,
 	};
 }
 /**
@@ -215,7 +307,7 @@ function ownerEdges(model: ExactRoles, layout: ReturnType<typeof ringLayout>, ho
 	const obstacles = [...layout.pos].map(([id, p]) => ({
 		p,
 		x: id === "you" ? 82 : layout.nodeW / 2 + 10,
-		y: id === "you" ? 42 : 60,
+		y: obstacleHalfHeight(model, id),
 	}));
 	const clear = (p: number[]) =>
 		obstacles.every((o) => Math.abs(p[0] - o.p[0]) > o.x + 70 || Math.abs(p[1] - o.p[1]) > o.y + 14);
@@ -288,7 +380,7 @@ export function roleEdges(
 	const obstacles = [...layout.pos].map(([id, p]) => ({
 		p,
 		x: id === "you" ? 82 : layout.nodeW / 2 + 10,
-		y: id === "you" ? 42 : 60,
+		y: obstacleHalfHeight(model, id),
 	}));
 	const clear = (p: number[]) =>
 		obstacles.every((o) => Math.abs(p[0] - o.p[0]) > o.x + 70 || Math.abs(p[1] - o.p[1]) > o.y + 14);
@@ -694,6 +786,8 @@ export function createExactRolesView(
 			hasRel: relText !== "",
 			relText,
 			...exactLanes(row.lanes),
+			// roles-budget-card: a reported role's own-work budget line on its card; spending first in its panel.
+			...exactCardSpend(spend, row.roleLabel, model.lastReceived),
 			// roles-links: the panel's Linked work line only; the cards stay as designed.
 			linksText: exactLinks(row.links),
 			op: hover && hover !== row.roleId && !linked ? "0.38" : model.lastReceived ? "0.8" : "1",
@@ -825,6 +919,8 @@ export function createExactRolesView(
 			width || graph?.clientWidth,
 			Math.max(620, (height || graph?.clientHeight || 780) - topInset),
 		);
+		// roles-budget-card: a card with a budget line grows away from a close neighbour (exactCardShifts).
+		const shifts = stacked ? null : exactCardShifts(model, inner);
 		const layout = stacked
 			? stackLayout(
 					model.roles.map((r) => r.row.roleId),
@@ -835,7 +931,7 @@ export function createExactRolesView(
 			: {
 					...inner,
 					height: inner.height + topInset,
-					pos: new Map([...inner.pos].map(([id, [x, y]]) => [id, [x, y + topInset] as const])),
+					pos: new Map([...inner.pos].map(([id, [x, y]]) => [id, [x, y + topInset + (shifts?.get(id) ?? 0)] as const])),
 				};
 		planned =
 			chrome && graph && !height
@@ -1026,14 +1122,8 @@ export function createExactRolesView(
 			spendAria: budget
 				? `${budgetRole?.row.roleLabel} own-work tally: ${budget.amount} of ${budget.budget}`
 				: "No spending total inferred",
-			spendBarWidth: `${Math.round((budget?.ratio ?? 0) * 100_000) / 1000}%`,
-			spendBarColor: budget
-				? budget.over
-					? "#FF8A80"
-					: budget.stale || model.lastReceived
-						? "#F0B95A"
-						: "#7DB8FF"
-				: "transparent",
+			spendBarWidth: spendWidth(budget?.ratio ?? null),
+			spendBarColor: budget ? spendColor(budget, model.lastReceived) : "transparent",
 			spendNoteText: budget
 				? `${model.lastReceived ? "Last received data. " : ""}${budget.note}`
 				: "No total is inferred. Missing spending data does not mean $0.",

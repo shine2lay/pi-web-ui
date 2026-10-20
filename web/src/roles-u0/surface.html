@@ -146,6 +146,12 @@ body{margin:0}
 <sc-for list="{{d.lanes}}" as="ln" hint-placeholder-count="3"><span style="width: 18px; height: 8px; box-sizing: border-box; border-radius: 999px; background: {{ln.bg}}; border: 1px {{ln.bs}} {{ln.bd}}"></span></sc-for>
 <span style="margin-left: 4px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #B9BEC5">{{d.lanesText}}</span>
 </span>
+<sc-if value="{{d.hasSpend}}" hint-placeholder-val="{{false}}">
+<span role="img" aria-label="{{d.spendLabel}}" style="display: flex; flex-direction: column; gap: 4px">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #B9BEC5">{{d.spendText}}</span>
+<span style="display: block; height: 4px; border-radius: 2px; background: #262A30; overflow: hidden"><span style="display: block; width: {{d.spendBarWidth}}; height: 100%; background: {{d.spendBarColor}}"></span></span>
+</span>
+</sc-if>
 <sc-if value="{{d.ownPaused}}" hint-placeholder-val="{{false}}">
 <span style="display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; color: #C3C8CF; white-space: nowrap"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M5.5 3.5v9M10.5 3.5v9"></path></svg>Own work paused</span>
 </sc-if>
@@ -238,6 +244,16 @@ body{margin:0}
 <button type="button" onClick="{{closeEx}}" aria-label="Close and return to all departments" style="flex: none; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; border: 1px solid #3A3F46; background: transparent; color: #ECEDEE; cursor: pointer"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6.5 2.5h-4v4M2.5 2.5 7 7M9.5 13.5h4v-4M13.5 13.5 9 9"></path></svg></button>
 </div>
 <p style="margin: -8px 0 0; font-size: 15px; color: #D6D9DD">{{ex.glance}} <span style="color: #A9AEB6">· {{ex.modeLabel}}</span></p>
+<sc-if value="{{ex.hasSpend}}" hint-placeholder-val="{{false}}">
+<section style="padding: 14px 16px; border-radius: 12px; background: #16181B; border: 1px solid #2A2E34; display: flex; flex-direction: column; gap: 8px">
+<h3 style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Spending this week</h3>
+<dl style="margin: 0; display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 6px 12px; font-size: 13.5px">
+<dt style="color: #B9BEC5">Own-initiative work</dt><dd style="margin: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px">{{ex.spend.own}}</dd>
+<dt style="color: #B9BEC5">Requested work (exempt)</dt><dd style="margin: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px">{{ex.spend.req}}</dd>
+</dl>
+<sc-if value="{{ex.hasBudgetNote}}" hint-placeholder-val="{{false}}"><p style="margin: 0; font-size: 12.5px; color: #B9BEC5">{{ex.budgetNote}}</p></sc-if>
+</section>
+</sc-if>
 <sc-if value="{{ex.hasBlocker}}" hint-placeholder-val="{{false}}">
 <div style="padding: 12px 14px; border-radius: 10px; background: {{ex.boxBg}}; border: 1px solid {{ex.boxBd}}; display: flex; flex-direction: column; gap: 5px; font-size: 14px">
 <span style="font-size: 11.5px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: {{ex.boxFg}}">{{ex.boxTitle}}</span>
@@ -374,6 +390,7 @@ body{margin:0}
 <dt style="color: #A9AEB6">Asked of others</dt><dd style="margin: 0">{{ex.outText}}</dd>
 </dl>
 </section>
+<sc-if value="{{ex.spendBelow}}" hint-placeholder-val="{{true}}">
 <section style="padding: 14px 16px; border-radius: 12px; background: #16181B; border: 1px solid #2A2E34; display: flex; flex-direction: column; gap: 8px">
 <h3 style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Spending this week</h3>
 <dl style="margin: 0; display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 6px 12px; font-size: 13.5px">
@@ -382,6 +399,7 @@ body{margin:0}
 </dl>
 <sc-if value="{{ex.hasBudgetNote}}" hint-placeholder-val="{{false}}"><p style="margin: 0; font-size: 12.5px; color: #B9BEC5">{{ex.budgetNote}}</p></sc-if>
 </section>
+</sc-if>
 <section style="padding: 14px 16px; border-radius: 12px; background: #16181B; border: 1px solid #2A2E34; display: flex; flex-direction: column; gap: 8px">
 <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px">
 <h3 style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Recent activity</h3>
