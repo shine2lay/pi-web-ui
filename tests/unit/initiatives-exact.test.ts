@@ -91,9 +91,10 @@ describe("the supplied Initiatives design, bound to typed input", () => {
 		expect(text).toContain(
 			"3 things are waiting on you across initiatives. Team in Temper has 12 decisions with a credit flag; Budget & tokens is paused by you.",
 		);
-		for (const pill of ["All 4", "Needs you 1", "Needs attention 1", "Paused by you 1"])
-			expect(page.button(pill)).toBeTruthy();
-		for (const chip of ["Needs attention", "Moving", "Paused by you", "ON YOU · 2"]) expect(text).toContain(chip);
+		// initiatives-live: the design's "Needs attention" reads "Blocked" (docs/live-progress.md).
+		for (const pill of ["All 4", "Needs you 1", "Blocked 1", "Paused by you 1"]) expect(page.button(pill)).toBeTruthy();
+		expect(text).not.toContain("Needs attention");
+		for (const chip of ["Blocked", "Moving", "Paused by you", "ON YOU · 2"]) expect(text).toContain(chip);
 		for (const tab of ["Overview", "Current design 3 new", "Decisions 220", "Activity 3"])
 			expect(page.button(tab)).toBeTruthy();
 		expect(text).toContain("Roles in no initiative · 1");

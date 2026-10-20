@@ -136,10 +136,12 @@ describe("the Initiatives page's core model, on a fixed registry page", () => {
 		expect(sources["d1#0"]?.record).toBe("dr-1");
 		expect(alpha?.leadReport).toBe("Form landed.");
 		expect(alpha?.leadNext).toBe("Wire the search box.");
-		expect(alpha?.latest).toEqual([{ at: "09:40", role: "Architecture", text: "Form landed." }]);
+		// initiatives-live: the lead's post is one of the records in Latest updates, with the lead's name.
+		expect(alpha?.latest).toEqual([{ at: "09:40", role: "Architecture", text: "Progress update: Form landed." }]);
 		expect(beta?.decisions).toBeUndefined();
 		expect(beta?.decisionsNote).toBe("No decisions are recorded for this initiative yet.");
-		expect(beta?.latestNote).toBe("No updates from the lead yet.");
+		expect(beta?.latest).toEqual([]);
+		expect(beta?.latestNote).toBe("No updates recorded yet.");
 		expect(input.initiatives?.[0]?.finish).toBeUndefined();
 		expect(input.initiatives?.[0]?.spendTotal).toBeUndefined();
 	});
@@ -188,7 +190,7 @@ describe("the core model through the supplied design", () => {
 		expect(v.filters.map((f) => [f.label, f.count])).toEqual([
 			["All", "3"],
 			["Needs you", "0"],
-			["Needs attention", "0"],
+			["Blocked", "0"],
 			["Paused by you", "0"],
 		]);
 		expect(page.buttons()).toContain("Message Architecture");

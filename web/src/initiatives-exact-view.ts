@@ -49,7 +49,8 @@ interface ViewState {
 const NOT_RECORDED = "Not recorded";
 const STAT: Record<InitiativesExactStatus, readonly [string, string, string, string]> = {
 	moving: ["Moving", "#7DB8FF", "rgba(125,184,255,0.12)", "rgba(125,184,255,0.4)"],
-	attention: ["Needs attention", "#FF8A80", "rgba(255,138,128,0.1)", "rgba(255,138,128,0.45)"],
+	// initiatives-live: "Blocked", never "Needs attention" (the owner read that as his; docs/live-progress.md).
+	attention: ["Blocked", "#FF8A80", "rgba(255,138,128,0.1)", "rgba(255,138,128,0.45)"],
 	paused: ["Paused by you", "#C3C8CF", "rgba(195,200,207,0.08)", "rgba(195,200,207,0.3)"],
 	unknown: ["Unknown", "#C7B8FF", "rgba(199,184,255,0.08)", "rgba(199,184,255,0.5)"],
 	// initiatives-page-tasks: an open task's question waits on the owner (the ON YOU amber).
@@ -315,7 +316,7 @@ export function createInitiativesExactView(
 		const FL: [Filter, string, number][] = [
 			["all", "All", all.length],
 			["you", "Needs you", all.filter((i) => openOnYou(i).length).length],
-			["attention", "Needs attention", all.filter((i) => i.status === "attention").length],
+			["attention", "Blocked", all.filter((i) => i.status === "attention").length],
 			["paused", "Paused by you", all.filter((i) => i.status === "paused").length],
 		];
 		let filters: SurfaceValue[] = FL.map((f) => {

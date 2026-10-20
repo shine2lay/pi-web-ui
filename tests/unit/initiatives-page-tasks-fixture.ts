@@ -42,7 +42,7 @@ const task = (
 const hold = { at: AT - 180 * MIN, why: "after the launch" };
 
 /**
- * Alpha launch: Needs you (Design #3 asks). Delta rollout: Needs attention (Ops #20 blocked). Epsilon pause:
+ * Alpha launch: Needs you (Design #3 asks). Delta rollout: Blocked (Ops #20 blocked). Epsilon pause:
  * Paused by you (both open tasks paused). Theta search: Moving. Zeta idea: no tasks yet. Eta notes: only an
  * ended task. Beta and Gamma: the registry's Done and Dropped. In no initiative, Docs sweep's Docs #2 asks.
  * Ops #40-#42 link to nothing on the page, so they show nowhere.

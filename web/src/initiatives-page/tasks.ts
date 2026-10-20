@@ -5,6 +5,9 @@
 // tasks' needsYou) fills Waiting on you and the ON YOU bar, which never says nothing waits unless the registry
 // was read whole and is live. statusOf works out each initiative's and project's status from its open tasks by
 // fixed rules (ruleOf), for the chips and the filter counts. Read-only: a click only opens a chat.
+// initiatives-live (docs/live-progress.md, H-INIT-LIVE-1): "Blocked" instead of "Needs attention", each row saying
+// what it waits on; a question a lead holds (withLead) reads "Question with <lead>" and is never the owner's; a
+// working task with no next step shows its newest progress line with its age.
 import type {
 	InitiativesExactAsk,
 	InitiativesExactInitiative,
@@ -12,7 +15,8 @@ import type {
 	InitiativesExactStatus,
 } from "../initiatives-exact-model";
 import { roleName } from "../initiatives-view-model";
-import { ageOf, clockOf } from "../roles-view-model";
+import { plain } from "../roles-useful-model";
+import { ageOf, agoOf, clockOf } from "../roles-view-model";
 import type { UiWorkPage, UiWorkPageRecord, UiWorkPageTask } from "../types";
 import { looseProjects } from "./model";
 import { NO_INITIATIVE, projectFrameId, type InitiativesPageOpen, type InitiativesPagePart } from "./types";
@@ -20,7 +24,7 @@ import { NO_INITIATIVE, projectFrameId, type InitiativesPageOpen, type Initiativ
 /** The chip's words for a status (the view's own labels). */
 const WORD: Record<InitiativesExactStatus, string> = {
 	you: "Needs you",
-	attention: "Needs attention",
+	attention: "Blocked",
 	paused: "Paused by you",
 	moving: "Moving",
 	unknown: "Unknown",
@@ -32,11 +36,17 @@ const MOVING = new Set<UiWorkPageTask["state"]>(["ready", "working", "asking", "
 export const isOpen = (t: UiWorkPageTask): boolean =>
 	t.state !== "done" && t.state !== "dropped" && t.state !== "removed";
 
+/** Waits on the owner: in his Needs-you list, unless a lead's home chat still holds its question (withLead,
+ *  docs/live-progress.md: a task with withLead is never an owner ask). */
+export const onYou = (t: UiWorkPageTask): boolean => !!t.needsYou && !t.withLead;
+
+/** "Question with Ops": the lead whose home chat has the task's question. */
+const withLeadText = (lead: string) => `Question with ${roleName(lead)}`;
+
 /**
  * A record's status from its linked tasks, by the fixed rules in this order: 1 a done or dropped record keeps
- * its registry status; 2 an open task waits on the owner: Needs you; 3 one is stuck or blocked: Needs
- * attention; 4 the owner paused every open one: Paused by you; 5 one is ready, working, asking or waiting:
- * Moving; open tasks whose state isn't recorded: Unknown; 6 none open: a grey "No tasks yet" ("No open tasks"
+ * its registry status; 2 an open task waits on the owner: Needs you; 3 one is stuck or blocked: Blocked;
+ * 4 the owner paused every open one: Paused by you; 5 one is ready, working, asking or waiting: Moving; open tasks whose state isn't recorded: Unknown; 6 none open: a grey "No tasks yet" ("No open tasks"
  * once every task ended).
  */
 export function ruleOf(
@@ -46,7 +56,7 @@ export function ruleOf(
 	const ended = ENDED[record];
 	if (ended) return { label: ended };
 	const open = tasks.filter(isOpen);
-	const status: InitiativesExactStatus | undefined = open.some((t) => t.needsYou)
+	const status: InitiativesExactStatus | undefined = open.some(onYou)
 		? "you"
 		: open.some((t) => t.state === "stuck" || t.state === "blocked")
 			? "attention"
@@ -106,11 +116,18 @@ export function statusOf(page: UiWorkPage, id: string): InitiativesExactStatus |
 
 /** When a task last changed, as far as the registry and its queue say. */
 const changedAt = (t: UiWorkPageTask): number =>
-	Math.max(t.added, t.stateAt ?? 0, t.paused?.at ?? 0, t.needsYou?.since ?? 0, t.block?.since ?? 0);
+	Math.max(
+		t.added,
+		t.stateAt ?? 0,
+		t.paused?.at ?? 0,
+		t.needsYou?.since ?? 0,
+		t.block?.since ?? 0,
+		Number.isFinite(t.progress?.at) ? (t.progress?.at ?? 0) : 0,
+	);
 
 /** Row order: waits on you, stuck or blocked, working or asking, waiting, queued, paused, state unknown. */
 function rank(t: UiWorkPageTask): number {
-	if (t.needsYou) return 0;
+	if (onYou(t)) return 0;
 	if (t.paused) return 5;
 	switch (t.state) {
 		case "stuck":
@@ -172,24 +189,35 @@ function blockText(t: UiWorkPageTask, now: number): string | undefined {
 	return parts.length ? parts.join(" · ") : undefined;
 }
 
+/** live-progress: an open task's newest progress line with its age ("Writing the tests · 5m ago"), if safe. */
+function progressText(t: UiWorkPageTask, now: number): string | undefined {
+	const p = t.progress;
+	if (!p || !Number.isFinite(p.at)) return undefined;
+	const text = plain(p.text, 400);
+	return text ? `${text.text} \u00b7 ${agoOf(p.at, now)}` : undefined;
+}
+
 /** A task row's chip and its next step or what it waits on. */
 function lookOf(t: UiWorkPageTask, now: number): InitiativesExactRole {
-	if (t.needsYou) return { statusLabel: WORD.you, statusTone: "you", note: "Awaiting your answer" };
+	if (onYou(t)) return { statusLabel: WORD.you, statusTone: "you", note: "Awaiting your answer" };
 	if (t.paused) return { kind: "paused", note: "Paused by you; awaits your resume" };
 	switch (t.state) {
 		case "stuck":
-			return { kind: "blocked", note: "Waiting on you, but its question isn\u2019t listed: open its chat" };
+			// Under rule 21 a question goes to its lead first: only the Needs-you list says it reached the owner.
+			if (t.withLead) return { kind: "blocked", note: withLeadText(t.withLead) };
+			return { kind: "blocked", note: "Stuck on a question that isn\u2019t listed: open its chat" };
 		case "blocked": {
 			const wait = blockText(t, now);
 			if (wait) return { kind: "blocked", wait };
 			return { kind: "blocked", note: nextText(t, now) ?? "Blocked; what it waits on isn\u2019t recorded" };
 		}
 		case "asking":
+			if (t.withLead) return { kind: "waiting", note: withLeadText(t.withLead) };
 			return { kind: "waiting", note: nextText(t, now) ?? "Asking its lead a question" };
 		case "waiting":
 			return { kind: "waiting", note: nextText(t, now) ?? "Waiting for its recorded check" };
 		case "working":
-			return { kind: "working", note: nextText(t, now) };
+			return { kind: "working", note: nextText(t, now) ?? progressText(t, now) };
 		case "ready":
 			return { kind: "queued", note: nextText(t, now) ?? "Queued; starts when the queue can run it" };
 		default:
@@ -236,7 +264,7 @@ function rowFields(
 function asksOf(tasks: readonly UiWorkPageTask[], now: number, open: InitiativesPageOpen): InitiativesExactAsk[] {
 	const out: { since: number; ask: InitiativesExactAsk }[] = [];
 	for (const t of tasks) {
-		if (!t.needsYou || !isOpen(t)) continue;
+		if (!t.needsYou || !onYou(t) || !isOpen(t)) continue;
 		const since = t.needsYou.since ?? t.stateAt ?? t.added;
 		out.push({
 			since,

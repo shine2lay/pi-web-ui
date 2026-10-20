@@ -176,6 +176,7 @@ export interface InitiativesExactInitiative {
 	askFailedAt?: string;
 	leadNext?: string;
 	leadReport?: string;
+	/** initiatives-live: the lead's newest post's age ("2h ago"), after "Lead's report \u00b7". */
 	leadReportAt?: string;
 	spend?: readonly InitiativesExactSpend[];
 	spendTotal?: string;
@@ -269,7 +270,7 @@ export interface InitiativesExactInput {
 	/** initiatives-page: the whole summary line while the page is live, out of date or empty, in place of
 	 *  the count ("Not connected yet: \u2026"), so it never says nothing is waiting when that isn't known. */
 	summary?: string;
-	/** initiatives-page: Needs you, Needs attention and Paused by you aren't known: their counts read
+	/** initiatives-page: Needs you, Blocked and Paused by you aren't known: their counts read
 	 *  "\u2014", and picking one shows this line instead of a list. */
 	filtersNote?: string;
 	/** Selected and tab first shown; the owner's own clicks win after that. */

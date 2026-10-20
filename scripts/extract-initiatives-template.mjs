@@ -264,6 +264,9 @@ const EDITS = [
 		'<span style="font-size: 12px; color: #A9AEB6">{{i.doneText}}</span>\n<sc-if value="{{i.projectsText}}" hint-placeholder-val="{{false}}"><span style="font-size: 12px; color: #A9AEB6">{{i.projectsText}}</span></sc-if>\n',
 	],
 	["Finished projects fold", "Who\u2019s doing what</h3>\n", "Who\u2019s doing what</h3>\n" + FINISHED_FOLD],
+	// initiatives-live addition 13 (docs/live-progress.md, H-INIT-LIVE-1): the lead's newest post is labelled as the
+	// lead's report, with its age ("2h ago"), so it isn't taken for the current state.
+	["Lead's report label", "Last report \u00b7 {{sel.leadReportAt}}", "Lead\u2019s report \u00b7 {{sel.leadReportAt}}"],
 ];
 for (const [why, from, to] of EDITS) {
 	const found = markup.split(from).length - 1;

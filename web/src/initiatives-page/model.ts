@@ -23,7 +23,7 @@ import {
 	sourceLabel,
 	writerLabel,
 } from "../initiatives-view-model";
-import { clockOf } from "../roles-view-model";
+import { agoOf, clockOf } from "../roles-view-model";
 import type { UiDecision, UiDecisionSource, UiDecisionsPage, UiWorkPage, UiWorkPageRecord } from "../types";
 import { gapsPart } from "./gaps";
 import { planPart } from "./plan";
@@ -239,13 +239,13 @@ export function buildInitiativesPage(args: InitiativesPageArgs): InitiativesPage
 			rowsNote: projects.length ? (live.length ? undefined : NO_ACTIVE) : "No projects in this initiative yet.",
 			projectCount: projects.length ? projectCount(projects) : undefined,
 			finishedProjects: finishedProjects(projects),
-			latest: updates
-				.slice(0, 3)
-				.map((u) => ({ at: clockOf(u.at, now), role: u.byName || roleName(u.by), text: u.fields.changed })),
-			latestNote: logRow && !progress ? "Loading the lead's updates…" : "No updates from the lead yet.",
+			// initiatives-live (H-INIT-LIVE-1): Latest updates come from every record (gaps.ts, latestOf), the lead's
+			// posts among them; this note shows only when there is none.
+			latestNote: logRow && !progress ? "Loading the lead's updates…" : "No updates recorded yet.",
 			leadNext: updates[0]?.fields.next || undefined,
+			// "Lead's report · 2h ago": the lead's newest post with its age, so it isn't read as the current state.
 			leadReport: updates[0]?.fields.changed || undefined,
-			leadReportAt: updates[0] ? clockOf(updates[0].at, now) : undefined,
+			leadReportAt: updates[0] ? agoOf(updates[0].at, now) : undefined,
 			decisions: decisions?.map((d) => decision(d, i.lead)),
 			decisionsTotal: decisions ? dec?.total : (logRow?.decisions ?? 0),
 			decisionsNote: !logRow

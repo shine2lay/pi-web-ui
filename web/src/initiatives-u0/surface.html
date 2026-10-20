@@ -384,7 +384,7 @@ a{color:#B9A7FF}a:hover{color:#D6CCFF}
 </div>
 <dl style="margin: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13px">
 <div><dt style="color: #A9AEB6">Lead’s next step</dt><dd style="margin: 0">{{sel.leadNext}}</dd></div>
-<div><dt style="color: #A9AEB6">Last report · {{sel.leadReportAt}}</dt><dd style="margin: 0; color: #C9CDD2">{{sel.leadReport}}</dd></div>
+<div><dt style="color: #A9AEB6">Lead’s report · {{sel.leadReportAt}}</dt><dd style="margin: 0; color: #C9CDD2">{{sel.leadReport}}</dd></div>
 </dl>
 <sc-if value="{{sel.hasLeadActions}}" hint-placeholder-val="{{true}}"><div style="display: flex; flex-wrap: wrap; gap: 8px">
 <sc-if value="{{sel.canMessage}}" hint-placeholder-val="{{true}}"><button type="button" onClick="{{sel.messageLead}}" style="min-height: 40px; padding: 0 12px; border-radius: 8px; border: 1px solid #4A4F57; background: transparent; color: #ECEDEE; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer">Message {{sel.leadName}}</button></sc-if>

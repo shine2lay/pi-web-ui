@@ -95,7 +95,7 @@ describe("the status rules, in order", () => {
 		expect(ruleOf("dropped", [working])).toEqual({ label: "Dropped" });
 		// 2 before 3 before 4 before 5.
 		expect(ruleOf("active", [working, paused, blocked, asks])).toEqual({ status: "you", label: "Needs you" });
-		expect(ruleOf("active", [working, paused, blocked])).toEqual({ status: "attention", label: "Needs attention" });
+		expect(ruleOf("active", [working, paused, blocked])).toEqual({ status: "attention", label: "Blocked" });
 		expect(ruleOf("active", [stuck]).status).toBe("attention");
 		expect(ruleOf("active", [paused, tk(7, { state: "blocked", paused: paused.paused })]).status).toBe("attention");
 		expect(ruleOf("active", [paused, done])).toEqual({ status: "paused", label: "Paused by you" });
@@ -138,11 +138,11 @@ describe("the status rules, in order", () => {
 		expect(page.values().filters.map((f) => [f.label, f.count])).toEqual([
 			["All", "8"],
 			["Needs you", "1"],
-			["Needs attention", "1"],
+			["Blocked", "1"],
 			["Paused by you", "1"],
 		]);
 		expect(page.cards().length).toBe(8);
-		page.click(/^Needs attention \d/);
+		page.click(/^Blocked \d/);
 		expect(page.cards()).toEqual(["Delta rollout"]);
 		page.click(/^Paused by you \d/);
 		expect(page.cards()).toEqual(["Epsilon pause"]);
@@ -323,7 +323,7 @@ describe("waiting on you and the ON YOU bar", () => {
 			);
 		});
 		it("loaded whole and live, with no questions", () => {
-			// Without Design #3's question, Alpha launch's blocked QA #4 makes it Needs attention too.
+			// Without Design #3's question, Alpha launch's blocked QA #4 makes it Blocked too.
 			expect(said({ page: quiet, status: "ready" })).toEqual(["Nothing is waiting on you.", "8 0 2 1"]);
 		});
 		it("loaded whole and live, with no tasks", () => {

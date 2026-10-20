@@ -3,6 +3,8 @@
 // and its queues; all activity (the registry's changes to it, its projects and their tasks, plus the lead's
 // progress updates), newest first; and the open hand-offs between roles that carry its id. Items, proof and
 // first lines only as recorded; what nobody records says "Not recorded". No model.
+// initiatives-live (docs/live-progress.md, H-INIT-LIVE-1): Latest updates are the newest three of all the records
+// (the activity above, open tasks' progress lines and done tasks' summaries), not only the lead's posts.
 import type {
 	InitiativesExactActivity,
 	InitiativesExactHandoff,
@@ -10,6 +12,7 @@ import type {
 	InitiativesExactInitiative,
 } from "../initiatives-exact-model";
 import { roleName } from "../initiatives-view-model";
+import { plain } from "../roles-useful-model";
 import { clockOf } from "../roles-view-model";
 import type {
 	UiProgress,
@@ -58,6 +61,12 @@ const STATE: Record<string, string> = {
 /** A queue task's own chat, as role messages name it. */
 const TASK_CHAT = /^Queue #(\d+)$/;
 
+/** live-progress: the server's clips (docs/live-progress.md): a progress line 400, a done summary 300. */
+const PROGRESS_MAX = 400;
+const SUMMARY_MAX = 300;
+/** Latest updates: the newest this many records. */
+export const LATEST_MAX = 3;
+
 const q = (s: string) => `\u201c${s}\u201d`;
 const taskKey = (t: UiWorkTaskRef) => `${t.queue}\u0000${t.task}\u0000${t.added}`;
 const unmet = (r: UiWorkPageRecord) => r.doneWhen.filter((d) => !d.met);
@@ -104,6 +113,8 @@ function blockedText(b: UiWorkTaskBlock | undefined, now: number): string {
  * on the owner. From its Needs-you entry or its queue's next action.
  */
 function stuckText(t: UiWorkPageTask): string {
+	// live-progress: a question a lead's home chat holds hasn't reached the owner (docs/live-progress.md).
+	if (t.withLead) return `its question is with ${roleName(t.withLead)}`;
 	const who = t.nextAction?.kind === "answer" ? t.nextAction.who : undefined;
 	if (t.needsYou || who === "owner") return "waits on your answer";
 	return who ? `waits on an answer from ${roleName(who)}` : "whose answer it waits on is not recorded";
@@ -187,6 +198,13 @@ function changeText(e: UiWorkActivity, page: UiWorkPage, tasks: ReadonlyMap<stri
 	}
 }
 
+/** One line with its time; `doneOf`: the task (taskKey) a registry "done" change is about. */
+interface Timed {
+	ms: number;
+	line: InitiativesExactActivity;
+	doneOf?: string;
+}
+
 /** All activity, newest first: the registry's changes to the scope, plus the lead's progress updates. */
 export function activityOf(
 	page: UiWorkPage,
@@ -195,9 +213,13 @@ export function activityOf(
 	progress: UiProgress | undefined,
 	now: number,
 ): InitiativesExactActivity[] {
+	return activityTimed(page, id, s, progress, now).map((l) => l.line);
+}
+
+function activityTimed(page: UiWorkPage, id: string, s: Scope, progress: UiProgress | undefined, now: number): Timed[] {
 	const projects = new Set(s.projects.map((p) => p.id));
 	const tasks = new Map(s.tasks.map((t) => [taskKey(t), t]));
-	const lines: { ms: number; line: InitiativesExactActivity }[] = [];
+	const lines: Timed[] = [];
 	for (const e of page.activity) {
 		const mine = e.op.startsWith("initiative.")
 			? !!s.initiative && e.id === s.initiative.id
@@ -212,6 +234,7 @@ export function activityOf(
 				role: e.by === "owner" ? "You" : roleName(e.by),
 				text: changeText(e, page, tasks),
 			},
+			...(e.op === "task.state" && e.status === "done" && e.task ? { doneOf: taskKey(e.task) } : {}),
 		});
 	}
 	// The feed sends its newest updates in full and the rest in brief (H-INITIATIVES-PAGE-4b): list them all.
@@ -229,7 +252,45 @@ export function activityOf(
 				},
 			});
 	// Stable: equal times keep the registry's newest-first order, then the updates'.
-	return lines.sort((a, b) => b.ms - a.ms).map((l) => l.line);
+	return lines.sort((a, b) => b.ms - a.ms);
+}
+
+/**
+ * live-progress (H-INIT-LIVE-1): Latest updates, the newest LATEST_MAX of every record for the scope: the
+ * activity (registry changes and the lead's posts, as above), each open task's newest progress line ("#N <line>",
+ * by its queue's role, at the line's time) and each done task's summary ("#N done: <summary>", at when it was
+ * done), in place of the registry's bare "done" line for that task. Fields an older server leaves out simply add
+ * nothing; agent-written text goes through the Roles page's unsafe-text filter (plain) or isn't shown.
+ */
+export function latestOf(
+	page: UiWorkPage,
+	id: string,
+	s: Scope,
+	progress: UiProgress | undefined,
+	now: number,
+): InitiativesExactActivity[] {
+	const summarized = new Set<string>();
+	const lines: Timed[] = [];
+	const line = (t: UiWorkPageTask, ms: number, text: string): Timed => ({
+		ms,
+		line: { at: clockOf(ms, now), role: t.queueName ? roleName(t.queueName) : NOT_RECORDED, text },
+	});
+	for (const t of s.tasks) {
+		if (t.state === "done") {
+			const summary = plain(t.doneSummary, SUMMARY_MAX);
+			if (!summary) continue;
+			summarized.add(taskKey(t));
+			lines.push(line(t, t.stateAt ?? t.added, `#${t.task} done: ${summary.text}`));
+		} else if (!CLOSED.has(t.state ?? "") && t.progress && Number.isFinite(t.progress.at)) {
+			const text = plain(t.progress.text, PROGRESS_MAX);
+			if (text) lines.push(line(t, t.progress.at, `#${t.task} ${text.text}`));
+		}
+	}
+	for (const l of activityTimed(page, id, s, progress, now)) if (!l.doneOf || !summarized.has(l.doneOf)) lines.push(l);
+	return lines
+		.sort((a, b) => b.ms - a.ms)
+		.slice(0, LATEST_MAX)
+		.map((l) => l.line);
 }
 
 /** One open hand-off: from \u2192 to (with the task number when sent from or to a queue task's chat), what, where it stands. */
@@ -260,6 +321,7 @@ function sectionsOf(page: UiWorkPage, id: string, input: GapsInput, now: number)
 	const out: Partial<InitiativesExactInitiative> = {
 		gaps: gapsOf(s, now),
 		activity: activityOf(page, id, s, input.progress, now),
+		latest: latestOf(page, id, s, input.progress, now),
 	};
 	if (id === NO_INITIATIVE) {
 		// The box has no lead: Latest updates keeps the core's "No lead, so no updates." instead of the design's
