@@ -12172,6 +12172,10 @@ export class ClientSession {
 			get participant() {
 				return participant();
 			},
+			// queue-e2e-load: a message on its way keeps the chat from being reused by New chat.
+			get sending() {
+				return (c.sendsInFlight ?? 0) > 0;
+			},
 			isSubagent: c.isSubagent,
 			isEphemeral: !!c.isEphemeral,
 			get running() {

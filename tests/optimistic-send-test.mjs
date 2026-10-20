@@ -18,6 +18,8 @@
  *  - ×: the message leaves the chat, its text and file go back to the input box;
  *  - switching chats while one is sending: the other chat shows nothing of it; back in its own
  *    chat it is still "Sending…" and then arrives once;
+ *  - New chat while a new chat's first message is on its way: a new chat opens, and the message lands
+ *    once in its own chat, not in the new one (queue-e2e-load, Ops #276);
  *  - reload while sending: the faded copy is back after the reload and turns into the real one;
  *  - the server restarts before the message reached the chat: "Not sent", and Retry sends it once;
  *  - no page errors.
@@ -54,6 +56,8 @@ async function waitFor(fn, ms, step = 100) {
 
 // ---- the mock model: answers each message by its token; a HOLD message waits for the test ----
 const held = [];
+/** Tokens the mock has answered (a chat the page isn't showing can still be seen to have its answer). */
+const mockAnswered = new Set();
 const releaseHeld = () => {
 	for (const r of held.splice(0)) r();
 };
@@ -90,6 +94,7 @@ const srv = await ownServer({
 		// A real model takes a moment to answer, so the server's copy first shows with the AI working,
 		// as in real use (an instant answer could land in the same frame).
 		await sleep(ANSWER_MS);
+		mockAnswered.add(tokenOf(lastUser));
 		return `ANSWER for ${tokenOf(lastUser) || "something"}.`;
 	},
 	prepare: async ({ agentDir, workdir }) => {
@@ -558,6 +563,37 @@ try {
 		JSON.stringify(await bubbles("OPT-SWITCH")) === "[0,1]",
 		JSON.stringify(await bubbles("OPT-SWITCH")),
 	);
+
+	// ---- 8b. New chat while a new chat's first message is on its way (queue-e2e-load, Ops #276) -----
+	// The message isn't saved until the add-ons' step ends, so the chat looked blank and New chat used to
+	// keep the window on it: the message then landed in the chat the user took for a new one.
+	console.log("8b. New chat while a new chat's first message is on its way");
+	await page.locator(".lp-new-chat-action").click();
+	check("a new chat opens", await waitFor(async () => !(await messagesText()).includes("OPT-PLAIN"), 10_000));
+	await send("OPT-FIRST the first message of a new chat LONGHOOK-first");
+	check("it shows at once", await waitFor(async () => (await bubbles("OPT-FIRST"))[0] === 1, 2000, 20));
+	await page.locator(".lp-new-chat-action").click();
+	await sleep(500);
+	check(
+		"New chat shows nothing of it",
+		JSON.stringify(await bubbles("OPT-FIRST")) === "[0,0]",
+		JSON.stringify(await bubbles("OPT-FIRST")),
+	);
+	release("first");
+	check("the mock answers it", await waitFor(() => mockAnswered.has("OPT-FIRST"), 30_000));
+	await sleep(1500);
+	check(
+		"…and the new chat still shows nothing of it",
+		JSON.stringify(await bubbles("OPT-FIRST")) === "[0,0]",
+		JSON.stringify(await bubbles("OPT-FIRST")),
+	);
+	const firstRow = page.locator(".lp-row", { hasText: /Optimistic chat|OPT-FIRST/ }).filter({ hasNotText: "Alpha" });
+	check("its own chat is in the list", await waitFor(async () => (await firstRow.count()) > 0, 10_000));
+	await firstRow.first().locator(".session-item").first().click();
+	check("there it is once, with its answer", await answered("OPT-FIRST"));
+	check("…once", JSON.stringify(await bubbles("OPT-FIRST")) === "[0,1]", JSON.stringify(await bubbles("OPT-FIRST")));
+	await openChat("Alpha");
+	check("back in Alpha", await waitFor(async () => (await messagesText()).includes("OPT-PLAIN"), 10_000));
 
 	// ---- 9. reload while sending --------------------------------------------------------------------
 	console.log("9. reload while a message is on its way");

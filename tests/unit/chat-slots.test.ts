@@ -17,6 +17,7 @@ const blank = (): CloseFacts => ({
 	terminalCount: 0,
 	hasQueueEntries: false,
 	participant: false,
+	sending: false,
 	isSubagent: false,
 	isEphemeral: false,
 	running: false,
@@ -51,12 +52,14 @@ describe("chat-slots: which chats take a slot (countsTowardCap)", () => {
 		expect(countsTowardCap({ isSubagent: false, blank: false })).toBe(true);
 	});
 
-	it("blank is the reuse test of a new chat: no messages, terminals or queue entries, not a Team participant", () => {
+	it("blank is the reuse test of a new chat: no messages, terminals or queue entries, not a Team participant, nothing on its way", () => {
 		expect(isBlankChat(blank())).toBe(true);
 		expect(isBlankChat({ ...blank(), messageCount: 1 })).toBe(false);
 		expect(isBlankChat({ ...blank(), terminalCount: 1 })).toBe(false);
 		expect(isBlankChat({ ...blank(), hasQueueEntries: true })).toBe(false);
 		expect(isBlankChat({ ...blank(), participant: true })).toBe(false);
+		// queue-e2e-load (Ops #276): a first message on its way isn't saved yet, but New chat must not reuse the chat.
+		expect(isBlankChat({ ...blank(), sending: true })).toBe(false);
 	});
 
 	it("39 chats in use and 5 blank ones leave a slot; 40 in use don't", () => {

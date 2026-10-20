@@ -17,10 +17,14 @@ export interface BlankFacts {
 	hasQueueEntries: boolean;
 	/** A Team participant the participant plugin keeps (retainedParticipant). */
 	participant: boolean;
+	/** queue-e2e-load (Ops #276): a message on its way, not saved yet (pi's add-ons are still in their
+	 *  "before the AI starts" step). New chat must not reuse this chat: the message would land in the chat
+	 *  the user took for a new one. */
+	sending: boolean;
 }
 
 export function isBlankChat(f: BlankFacts): boolean {
-	return f.messageCount === 0 && f.terminalCount === 0 && !f.hasQueueEntries && !f.participant;
+	return f.messageCount === 0 && f.terminalCount === 0 && !f.hasQueueEntries && !f.participant && !f.sending;
 }
 
 /** Does this open chat take one of its project's slots? Subagent and throwaway (ephemeral) chats never

@@ -28,6 +28,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
 - Result: H-ROLES-CURRENT-1 HIT, with one limit. Live in bdc956a5 (Oct 19 22:37): 15 of 15 checks across 3 passes and 5 roles with a task in progress show a started task that isn't paused; Design shows #98 and Frontend #43, where #41 and #1 (paused) stood in front before; roles whose tasks are all paused still show their paused task. Limit: live, every task in progress was busy and none of those roles had a paused task, so a started task between turns behind a paused one is proven by the unit test only.
 
+## newchat-sending: New chat doesn't reuse a chat whose first message is on its way
+
+- `local` (Ops #276, essential maintenance; found while making the queue's browser tests hold up on a busy machine). Hypothesis H-QEL-NEWCHAT, the runs and the result: `docs/queue-e2e-load.md`.
+- Why: New chat reuses the window's chat when it is blank, and the blank test only looked at saved messages. A first message is saved only after pi's add-ons' "before the AI starts" step, so for those seconds the chat looked blank: New chat kept the window on it, and the message landed in the chat the user took for a new one. Seen in a slowed-down run of `tests/per-chat-dialogs-test.mjs` (chat "B" showed chat A's pop-up, and B's own message went into A).
+- `server/chat-slots.ts`: `BlankFacts.sending` (a send on its way); `isBlankChat` needs it false. `server/agent-service.ts` `closeFactsOf`: `sending` = `sendsInFlight > 0`. So New chat opens a new chat, and such a chat counts toward the open-chat limit, as it is about to be in use. Closing blank chats (`blankCloseHold`) is unchanged: it already treats a send on its way as a run.
+- Checks: `tests/unit/chat-slots.test.ts` (a sending chat isn't blank) and a new step 8b in `tests/optimistic-send-test.mjs` (a first message held in the add-ons' step, New chat, then the message goes on: the new chat stays empty, and the message is once in its own chat, with its answer); both fail without the change (step 8b: `[1,0]`, then `[0,1]`). Then the landing gate.
+- Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
+
 ## roles-live: live Latest progress with its time, and Activity with the task lines and done summaries, on the Roles page
 
 - `local` (owner 2026-10-19, via COO rm-63784858: "i want live progress in both role and initiatives"; Ops #272, on `live-progress-contract`). Hypothesis H-ROLES-LIVE-1 and its result: `docs/live-progress.md`.
