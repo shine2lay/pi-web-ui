@@ -1,0 +1,74 @@
+{
+	"v": 1,
+	"facts": [
+		{
+			"v": "usage-fact/1",
+			"id": "[\"usage-fact/1\",\"pi\",\"fixture-instance\",\"main-1\"]",
+			"revision": 0,
+			"supersedes": null,
+			"identity": { "producer": "pi", "incarnation": "fixture-instance", "attempt": "main-1" },
+			"identityStatus": "verified",
+			"occurredAt": "2026-10-20T10:00:00.000Z",
+			"provider": "fixture-provider",
+			"model": "fixture-model",
+			"kind": "assistant",
+			"tokens": { "input": 1000, "output": 200, "cacheRead": 4000, "cacheWrite": 800 },
+			"prices": [
+				{ "basis": "list-estimate", "currency": "USD", "amount": "0.10", "status": "known", "rateVersion": "fixture-rates/1" }
+			],
+			"source": { "stream": "fixture-stream", "event": "main-event", "observedAt": "2026-10-20T10:01:00.000Z", "coverage": "complete" },
+			"links": {
+				"task": { "queue": "fixture-queue", "task": 1, "addedAt": "2026-10-01T10:00:00.000Z", "project": "fixture-project", "initiative": "fixture-initiative", "effectiveAt": "2026-10-01T10:00:00.000Z" },
+				"session": "fixture-session",
+				"run": "fixture-run"
+			}
+		}
+	],
+	"allocations": [
+		{
+			"v": "allocation/1",
+			"factId": "[\"usage-fact/1\",\"pi\",\"fixture-instance\",\"main-1\"]",
+			"revision": 0,
+			"supersedes": null,
+			"rootRef": "fixture-only:root",
+			"scope": "own",
+			"policyRef": "fixture:design-policy",
+			"payerRole": "design",
+			"recordedAt": "2026-10-20T10:01:00.000Z",
+			"reason": "native-root"
+		}
+	],
+	"aliases": [],
+	"roots": [
+		{
+			"ref": "fixture-only:root",
+			"scopeRef": "role:design",
+			"scope": "own",
+			"occurredAt": "2026-10-20T09:00:00.000Z",
+			"policyRef": "fixture:design-policy",
+			"payerRole": "design",
+			"provenance": "trusted-native/1",
+			"evidenceRef": "fixture-only:synthetic-native-stamp"
+		}
+	],
+	"policies": [
+		{
+			"ref": "fixture:design-policy",
+			"role": "design",
+			"scopeRef": "role:design",
+			"effectiveAt": "2026-10-10T07:00:00.000Z",
+			"weeklyUsd": "2000",
+			"basis": "list-estimate",
+			"timeZone": "America/Los_Angeles",
+			"sourceRef": "bp-b7f97619"
+		}
+	],
+	"memberships": [
+		{ "queue": "fixture-queue", "task": 1, "addedAt": "2026-10-01T10:00:00.000Z", "project": "fixture-project", "initiative": "fixture-initiative", "effectiveAt": "2026-10-01T10:00:00.000Z" }
+	],
+	"snapshots": [],
+	"coverage": [
+		{ "stream": "fixture-stream", "from": "2026-10-19T07:00:00.000Z", "through": "2026-10-20T12:00:00.000Z", "observedAt": "2026-10-20T12:00:00.000Z", "status": "complete" }
+	],
+	"requiredStreams": ["fixture-stream"]
+}
