@@ -383,13 +383,19 @@ try {
 		for (const kind of ["error", "count", "heartbeat"]) {
 			await page.evaluate((kind) => window.rolesExactTest.transport(kind), kind);
 			const expected = kind === "heartbeat" ? `Live · updated ${receipt}` : `Update failed · last received ${receipt}`;
+			// pages-live (Ops #244): while the page waits for a fresh check it first shows the calm "Updating…".
+			// The harness receives these messages 180 s ahead of the page clock, so here that state can outlast the
+			// 8-second grace. Either way the receipt must stay the overview's, which is what this step checks.
+			const allowed = kind === "heartbeat" ? [expected] : [expected, `Updating\u2026 \u00b7 last received ${receipt}`];
 			await page.waitForFunction(
-				(expected) =>
-					document.querySelector('iframe[title="Roles"]')?.contentDocument?.querySelector('header [role="status"]')
-						?.textContent === expected,
-				expected,
+				(allowed) =>
+					allowed.includes(
+						document.querySelector('iframe[title="Roles"]')?.contentDocument?.querySelector('header [role="status"]')
+							?.textContent,
+					),
+				allowed,
 			);
-			assert.equal(await frame.locator('header [role="status"]').innerText(), expected);
+			assert.ok(allowed.includes(await frame.locator('header [role="status"]').innerText()));
 		}
 		await page.evaluate(() => window.rolesExactTest.deliver());
 		record("later errors, count-only messages and heartbeats do not replace the overview receipt");
@@ -397,13 +403,31 @@ try {
 			await page.evaluate((mode) => window.rolesExactTest.deliver(mode), mode);
 			await frame.getByText(/current (?:total|asks).*unknown/i).waitFor();
 			assert.ok(!(await frame.locator("body").innerText()).includes("CANARY-PATH"));
+			// pages-live (Ops #244): a page waiting for a fresh check first shows the calm "Updating…" (or "Loading…"
+			// with nothing loaded) for up to 8 s of visible time; the alarm must follow within that grace, never later.
+			const alarmed = (check, arg) => page.waitForFunction(check, arg, { timeout: 12_000 });
 			if (mode === "first-error") {
+				await alarmed(
+					(text) =>
+						document.querySelector('iframe[title="Roles"]')?.contentDocument?.querySelector('header [role="status"]')
+							?.textContent === text,
+					"Unavailable · nothing loaded yet",
+				);
 				assert.equal(await frame.locator('header [role="status"]').innerText(), "Unavailable · nothing loaded yet");
 				await page.screenshot({ path: join(output, "unavailable.png") });
 			}
 			if (["disconnected", "stale"].includes(mode)) {
 				// roles-retry-pill: no banner; the status pill says it in its colour and tooltip, and retries.
 				assert.equal(await frame.getByRole("alert").count(), 0);
+				await alarmed(
+					(colour) => {
+						const el = document
+							.querySelector('iframe[title="Roles"]')
+							?.contentDocument?.querySelector('header [role="status"] > button');
+						return !!el && el.ownerDocument.defaultView.getComputedStyle(el).color === colour;
+					},
+					mode === "stale" ? "rgb(240, 185, 90)" : "rgb(255, 138, 128)",
+				);
 				const pill = frame.locator('header [role="status"] > button');
 				const look = await pill.evaluate((el) => ({
 					colour: getComputedStyle(el).color,

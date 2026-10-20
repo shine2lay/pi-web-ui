@@ -7382,6 +7382,11 @@ heartbeat. Evidence, numbers and result: `docs/pages-live.md`.
 
 - Focused vitest (TZ=UTC), the sealed browser return test on this code and on the code before it (the
   control), then the land gate; live first-answer timing before and after (`docs/pages-live.md`).
+- Follow-up, test only (Ops #265, 2026-10-19): the older Roles browser check, `tests/roles-exact-test.mjs`,
+  failed at its transport step from this patch on (9276a6e0), unseen because the land gate runs no browser
+  tests. It now also accepts "Updating… · last received" after a failed update there (its messages arrive
+  180 s ahead of the page clock, so the calm state can outlast the grace), and waits up to 12 s (the 8 s grace
+  and a margin) for the Unavailable, stale and failed alarms before checking them. No app code changes.
 
 ### Undo and syncing
 
