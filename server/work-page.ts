@@ -25,6 +25,7 @@ import type {
 	UiRoleTaskNext,
 	UiRolesOverview,
 	UiTaskParent,
+	UiTaskProgress,
 	UiTaskQueueHold,
 	UiWorkActivity,
 	UiWorkActivityOp,
@@ -36,6 +37,7 @@ import type {
 	UiWorkTaskRef,
 	UiWorkTaskState,
 } from "./protocol.js";
+import { doneFactsOf } from "./live-progress.js";
 import { requesterText } from "./queue-requester.js";
 import { readUpTo, STATE_READ_FLAGS } from "./state-file-read.js";
 import { WORK_LOG_MAX } from "./work-records.js";
@@ -157,6 +159,12 @@ export interface WorkTaskFacts {
 	requester?: string;
 	paused?: UiTaskQueueHold;
 	needsYou?: { text: string; since?: number };
+	/** live-progress (docs/live-progress.md): its own chat's newest line with its time (open tasks). */
+	progress?: UiTaskProgress;
+	/** live-progress: the role whose home chat has its question while it hasn't reached the owner. */
+	withLead?: string;
+	/** live-progress: done: its queue_done summary, clipped (absent when none was recorded). */
+	doneSummary?: string;
 }
 
 /** One queue's facts: its chat file and its tasks by number. */
@@ -513,6 +521,9 @@ function taskOut(l: Link, f: WorkTaskFacts | undefined): UiWorkPageTask {
 		...(f?.requester ? { requester: f.requester } : {}),
 		...(f?.paused ? { paused: { ...f.paused } } : {}),
 		...(f?.needsYou ? { needsYou: { ...f.needsYou } } : {}),
+		...(f?.progress ? { progress: { ...f.progress } } : {}),
+		...(f?.withLead ? { withLead: f.withLead } : {}),
+		...(f?.doneSummary ? { doneSummary: f.doneSummary } : {}),
 	};
 }
 
@@ -588,7 +599,15 @@ export function workFactsFromOverview(overview: UiRolesOverview): WorkQueueFacts
 				...(t.next ? { nextAction: t.next } : {}),
 				...(requester ? { requester } : {}),
 				...(t.paused ? { paused: t.paused } : {}),
+				...(t.progress ? { progress: t.progress } : {}),
+				...(t.withLead ? { withLead: t.withLead } : {}),
 			});
+		}
+		// live-progress: its done tasks' summaries, read with this overview (each knows when it was added, so a
+		// task with the same number on another branch of the chat doesn't take it).
+		for (const [id, d] of doneFactsOf(overview).get(file) ?? []) {
+			if (tasks.has(id)) continue;
+			tasks.set(id, { added: d.added, ...(d.summary ? { doneSummary: d.summary } : {}) });
 		}
 		// Its open asks come oldest first: a task's first one is what waits on the owner.
 		for (const a of role.asks) {

@@ -72,6 +72,16 @@ import {
 	type TaskQueueEntryLike,
 } from "./task-queue.js";
 import { WorkRecordsFile } from "./work-records.js";
+import {
+	doneFactsOfTasks,
+	doneRecentOf,
+	progressOf,
+	setDoneFacts,
+	stuckRouteOf,
+	withLeadOf,
+	type DoneFact,
+	type StuckRoute,
+} from "./live-progress.js";
 import { RolesEvidence, type EvidenceView, type RolesEvidencePaths } from "./roles-evidence.js";
 import {
 	isTldrReply,
@@ -181,6 +191,8 @@ export interface TranscriptScan {
 	sessionId?: string;
 	/** Task id -> the time of its latest "stuck" entry (when it started waiting on the owner). */
 	stuckAt: Map<number, number>;
+	/** live-progress: task id -> where its latest "stuck" entry says the question went (absent: no route). */
+	stuckRoute: Map<number, StuckRoute | undefined>;
 	/** A needs-you line came after the last kept reply (only then is a reply worth keeping). */
 	waiting: boolean;
 	/** roles-model: the newest model change written to it (provider and model id only). */
@@ -257,6 +269,7 @@ export class TranscriptScans {
 				tldr: [],
 				queue: [],
 				stuckAt: new Map(),
+				stuckRoute: new Map(),
 				waiting: false,
 			};
 			this.files.set(file, s);
@@ -377,10 +390,12 @@ export class TranscriptScans {
 		if (kind === "queue") {
 			if (e.type !== "custom" || e.customType !== TASK_QUEUE_ENTRY_TYPE) return;
 			s.queue.push({ type: "custom", customType: TASK_QUEUE_ENTRY_TYPE, data: e.data });
-			const op = (e.data ?? {}) as { op?: unknown; id?: unknown; ts?: unknown };
+			const op = (e.data ?? {}) as { op?: unknown; id?: unknown; ts?: unknown; ask?: unknown };
 			if (op.op === "stuck" && typeof op.id === "number" && typeof op.ts === "number" && op.ts > 0) {
 				s.stuckAt.set(op.id, op.ts);
 			}
+			// live-progress: the newest stuck record's route decides whether its question reached the owner.
+			if (op.op === "stuck" && typeof op.id === "number") s.stuckRoute.set(op.id, stuckRouteOf(op.ask));
 			return;
 		}
 		if (e.type === "message" && isTldrReply(e.message)) this.reply(s);
@@ -785,8 +800,15 @@ export class RolesOverviewReader {
 		// roles-sent: only roles on the page count, as senders and as receivers.
 		const onPage = new Set(defs.map((d) => d.id));
 		const listed = (id: string) => onPage.has(id);
+		// live-progress: each home queue's done tasks, for the Initiatives page's join (never sent to a page), and
+		// the roles with a home chat (withLead names only one of them).
+		const doneFacts = new Map<string, Map<number, DoneFact>>();
+		const withHome = new Set(defs.filter((d) => !!d.homeChat).map((d) => d.id));
 		for (const def of defs) {
-			const row = await this.role(def, at, asks, runs, job, keep, stuck, evidence);
+			const row = await this.role(def, at, asks, runs, job, keep, stuck, evidence, {
+				roles: withHome,
+				done: doneFacts,
+			});
 			let sent: UiRoleSent | undefined;
 			try {
 				sent = this.host.openRequestsFrom?.(def.id, listed);
@@ -829,7 +851,7 @@ export class RolesOverviewReader {
 		} catch {
 			approvals = undefined;
 		}
-		return {
+		const overview: UiRolesOverview = {
 			at,
 			roles,
 			asks: sortAsks(all),
@@ -841,6 +863,8 @@ export class RolesOverviewReader {
 			...(openPairs ? { openPairs } : {}),
 			...(approvals ? { approvals } : {}),
 		};
+		setDoneFacts(overview, doneFacts);
+		return overview;
 	}
 
 	private async role(
@@ -852,6 +876,8 @@ export class RolesOverviewReader {
 		keep: Set<string>,
 		stuckAsks: Ask[] = [],
 		evidence?: EvidenceView,
+		// live-progress: the roles with a home chat (withLead names only one of them) and where its done tasks go.
+		live: { roles: ReadonlySet<string>; done?: Map<string, Map<number, DoneFact>> } = { roles: new Set() },
 	): Promise<UiRoleOverview> {
 		const problems: string[] = [];
 		const mode = roleWorkMode(def.id, def.role.config, now);
@@ -866,6 +892,9 @@ export class RolesOverviewReader {
 		// roles-lanes: lanes at once and in use, as the Queue panel counts them (only when the queue was read).
 		let laneUse: UiRoleQueue["lanes"];
 		let stuckAt = new Map<number, number>();
+		let stuckRoute = new Map<number, StuckRoute | undefined>();
+		// live-progress: its home queue was read (then doneRecent is known, [] when nothing is done).
+		let queueRead = false;
 		let lastActivity: number | undefined;
 		// roles-model: the home chat's newest recorded model change (used when the chat isn't open).
 		let recordedModel: TranscriptScan["model"];
@@ -883,6 +912,9 @@ export class RolesOverviewReader {
 				queueHold = q.hold;
 				laneUse = taskQueueLaneUse(q);
 				stuckAt = s.stuckAt;
+				stuckRoute = s.stuckRoute;
+				queueRead = true;
+				live.done?.set(home, doneFactsOfTasks(tasks));
 			} catch {
 				problems.push("home chat");
 			}
@@ -926,6 +958,9 @@ export class RolesOverviewReader {
 		// queue-paused: the owner's pause a task is under (its own or its queue's); a paused task never
 		// counts as needing him.
 		const heldOf = (t: UiTaskQueueTask | undefined) => (t ? taskQueueHeld(t, { hold: queueHold }) : undefined);
+		// live-progress (the owner rule, docs/live-progress.md): who has an open task's question while it hasn't
+		// reached the owner. A stuck task with one is not the owner's ask.
+		const withLead = (t: UiTaskQueueTask) => withLeadOf(t, stuckRoute.get(t.id), def.id, live.roles);
 
 		const homeRef: UiRoleChatRef = { file: home ?? def.homeChat ?? "", where: "home" };
 		const taskRef = (t: UiTaskQueueTask): UiRoleChatRef => ({
@@ -973,7 +1008,7 @@ export class RolesOverviewReader {
 		}
 		for (const info of infos) {
 			const t = info.task;
-			if (t.status !== "stuck" || heldOf(t)) continue;
+			if (t.status !== "stuck" || heldOf(t) || withLead(t)) continue;
 			const since = stuckAt.get(t.id);
 			const line = newestWaiting([
 				...info.lines,
@@ -1064,6 +1099,8 @@ export class RolesOverviewReader {
 				const info = infos.find((i) => i.task === t);
 				const busy = info?.file ? this.host.chatState(info.file) === "working" : false;
 				const latest = info?.lines.length ? info.lines[info.lines.length - 1] : undefined;
+				const progress = info?.lines.length ? progressOf(info.lines) : undefined;
+				const lead = withLead(t);
 				// roles-evidence: its own chat's records only (a task with no chat yet has none). Past the
 				// ROLES_TASK_CHATS_MAX chats read for TL;DR lines, its queue record still names its chat: only the
 				// name is compared, no chat is read.
@@ -1074,10 +1111,15 @@ export class RolesOverviewReader {
 				} catch {
 					ev = undefined;
 				}
+				const row = taskOf(t, def.id, held);
+				// live-progress: a stuck question a lead still holds is that lead's to answer, not the owner's.
+				if (lead && t.status === "stuck" && !held) row.next = { kind: "answer", who: lead };
 				active.push({
-					...taskOf(t, def.id, held),
+					...row,
 					...(busy ? { busy: true } : {}),
 					...(latest ? { latest: lineOf(latest, taskRef(t), !!held) } : {}),
+					...(progress ? { progress } : {}),
+					...(lead ? { withLead: lead } : {}),
 					...(ev ? { evidence: ev } : {}),
 				});
 			}
@@ -1140,6 +1182,7 @@ export class RolesOverviewReader {
 			allChatsRead,
 			tldr: tldr.slice(0, ROLES_TLDR_MAX),
 			...(queue ? { queue } : {}),
+			...(queueRead ? { doneRecent: doneRecentOf(tasks) } : {}),
 			requests: { open: requests.open, ...(requests.newest ? { newest: requests.newest } : {}) },
 			report,
 			spend: await readRoleSpend(def.dir, now),

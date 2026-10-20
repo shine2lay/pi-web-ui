@@ -21,6 +21,16 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: `tests/unit/roles-live.test.ts` (time and pick, an older server's time, an unsafe line, a newer milestone, Activity merge and order, a home chat copy without "#N", a malformed `doneRecent`, the withLead text and asks, absent fields), `tests/unit/roles-useful.test.ts` (the closed record keys allow `latestAt` and `withLead`), sealed `tests/roles-live-test.mjs` (real server and Chrome: Latest progress with its time; a new line within 4 s, with its time; Activity with the task lines, the done summary and the home line, newest first, each timed), then the landing gate.
 - Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
 
+## live-progress-server: the server fills live progress, done summaries and real owner asks
+
+- `local` (owner 2026-10-19, via COO rm-63784858: "i want live progress in both role and initiatives"; earlier "Make 'needs you' live"; Ops #270, on #269's contract). Contract, owner rule, start counts and H-LIVE-NEEDS-1's result: `docs/live-progress.md`.
+- `server/live-progress.ts` (new, pure): `progressOf` (a task chat's newest line with a time that passes the pages' unsafe-text rule), the owner rule `stuckWithLead`/`withLeadOf` (a stuck task's question is the owner's unless its newest "stuck" record names the lead still holding it: not passed, no `why`, chain not ended, a role with a home chat; an `asking` task gets its decider as the Queue tab names it), `doneRecentOf` (newest 10 done, summaries clipped to 300) and the done facts kept with each overview for the Initiatives join (a WeakMap, never sent).
+- `server/roles-overview.ts`: the transcript scan keeps each task's newest "stuck" record's `ask` route (the app's queue mirror drops it); a stuck task with `withLead` isn't an owner ask and its next step is that lead's answer; task rows get `progress` and `withLead`, a role whose home queue was read gets `doneRecent`.
+- `server/work-page.ts`: `WorkTaskFacts` and `taskOut` carry `progress`, `withLead` and, for done tasks (matched by when they were added), `doneSummary`.
+- Unchanged: how questions are routed or decided; open dialogs and unanswered needs-you lines stay owner asks; paused tasks never count; no page or layout change (#271, #272 do those).
+- Checks: `tests/unit/live-progress.test.ts` (the stuck routes: direct, passed, why, chain ended, a named lead, an escalate's delivery, paused, a role without a home chat; an asking task's decider; the newest safe line; doneRecent's limit, order and clipping; the work page join; fields left out when unknown), then the landing gate.
+- Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
+
 ## initiatives-projects-done: finished projects at a glance on the Initiatives page
 
 - `local` (owner 2026-10-19 via COO rm-0a0353b3, "you mentioned that a project done but i cant see that in initiatives page"; he picked "Yes, show them clearly"; Ops #274). Hypothesis H-PROJECTS-DONE-1 and result: `docs/initiatives-projects-done.md`.

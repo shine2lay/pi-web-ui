@@ -88,6 +88,10 @@ Each next task tests its own (rule 16) and records HIT or MISS here, under its h
 
 **What would prove it wrong.** Any owner ask is a question still with a lead, or a question that reached the owner is missing.
 
+**Start counts (#270, Oct 19 21:14 PDT, before any change; counts only).** The installed overview (7610a8e4) read over the app's socket: 15 roles, 7 things waiting on the owner, all 7 open dialogs (kind "question", Design), 0 stuck-task asks, 0 needs-you lines. The queue records of the 15 home queues, replayed by the app's own `taskQueueFromEntries`: 0 stuck tasks (0 reached the owner, 0 with a lead, 0 paused), 0 asking tasks, 15 escalate records in the leads' chats, 0 of them still pending (each one's task had taken it). So the live count of stuck-task asks (0) already equals the records' count of questions that reached the owner (0): the premise holds nowhere today.
+
+**What #270 changed, given that (Ops, accountable lead, within the plan).** No owner ask counted today changes. The contract's own rule still needs one line of code: "a task with `withLead` is never an owner ask". So the server keeps each task's newest "stuck" record's `ask` route from its scan (the mirror drops it), and a stuck task gets `withLead`, stops being an owner ask and shows that lead's answer as its next step only when that record names the lead still holding it (`ask.lead`, or the chain's step), isn't `passed`, has no `why`, its chain hasn't ended, and the lead is a role with a home chat. No pi-queue path writes such a record today (Evidence 1), so on today's records this never fires; a route that names nobody (`to: "ops"` alone included) stays the owner's. An escalate record needs no reading of its own: its delivery writes the stuck record with `passed: true`, and until then the task is `asking`, with its lead. pi-queue needed no change: its records already carry the route. The counting script (Ops' kept-from-tmp `count-owner-asks.mts`, counts and task numbers only) replays the home queues with the app's own `taskQueueFromEntries` and sorts each stuck task by the rule: reached the owner (direct, passed, why, chain ended, names nobody), with a lead, or paused.
+
 **Result.** Pending (#270).
 
 ### H-INIT-LIVE-1 (Initiatives page, Ops #271)
@@ -123,3 +127,5 @@ Each next task tests its own (rule 16) and records HIT or MISS here, under its h
 ## Undo
 
 Revert this commit. It adds only this file, optional types in `server/protocol.ts` and a PATCHES.md entry; nothing live changes.
+
+#270 (`live-progress-server`): `pi-web-deploy rollback`, or revert its commit and deploy. Pages that read the fields then show what they show without them.
