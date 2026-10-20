@@ -29,6 +29,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - `server/work-page.ts`: `WorkTaskFacts` and `taskOut` carry `progress`, `withLead` and, for done tasks (matched by when they were added), `doneSummary`.
 - Unchanged: how questions are routed or decided; open dialogs and unanswered needs-you lines stay owner asks; paused tasks never count; no page or layout change (#271, #272 do those).
 - Checks: `tests/unit/live-progress.test.ts` (the stuck routes: direct, passed, why, chain ended, a named lead, an escalate's delivery, paused, a role without a home chat; an asking task's decider; the newest safe line; doneRecent's limit, order and clipping; the work page join; fields left out when unknown), then the landing gate.
+- Result: H-LIVE-NEEDS-1 MISS on its premise (at the start nothing was miscounted, 0 = 0); after the install of 282512a6 the live owner-ask count still equals the queue records' count (1 stuck task, temper #116, passed on to the owner; 0 with a lead).
 - Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
 
 ## initiatives-projects-done: finished projects at a glance on the Initiatives page
