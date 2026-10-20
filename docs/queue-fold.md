@@ -57,4 +57,23 @@ inside a folded card and a folded note and opens each; one click opens a report 
 again, Enter opens a focused row; the transcript is unchanged and the model was never called.
 Unit test `tests/unit/queue-report-fold.test.ts`: 33 of 33.
 
-**Live look:** (filled in after the install.)
+**Install:** `pi-web-deploy` put in 7610a8e4 (mine, with 3c309d3d queue-fold inside) at 2026-10-19 21:04;
+`pi-web-deploy result 3c309d3d` = 0. Checks: server, page, reply and big chat passed; the log check flagged 2
+crash-guard notices, both the check page's own window ("its chat … was closed (its blank chat was closed); no
+open chat to move it to yet"), new wording from chat-slots (#266, in the same install), not from this patch,
+which changes no server file. #266 fixes that wording in its follow-up `chat-slots-log`.
+
+**Live look** (2026-10-19 21:16, look only, one background client `carry-on:ops-live-look-queue-fold`, each
+chat opened by address; counts and UI words only, no chat text, no screenshots; script
+`~/kept-from-tmp/2026-10-19/queue-fold-live/look.mjs`, run2). It classifies the messages the page received
+with the helper's rules and counts how each is drawn:
+
+- Ops' home chat: 17 queue reports received; 12 drawn as folded "Queue" rows (the tallest 36 px, text line
+  19.2 px, so under 2 lines), the other 5 sit inside quiet-turn rows that were closed already (a turn the
+  queue began shows as one closed row; quiet-turns, unchanged). Open queue reports: 0. In view: 12 folded
+  queue rows, 0 open reports. Other messages folded by this patch: 0. Page errors: 0.
+- Task #267's own chat: 1 queue report, a folded row; the task's plan open in full (5,809 characters drawn
+  of its 5,988, the rest being Markdown marks; 2,054 px high). Wrong folds: 0. Page errors: 0.
+
+**H-QUEUE-FOLD-1: HIT.** Every queue report showed folded by default, in the sealed test and live; the plan,
+the owner's messages and all other messages stayed open; search finds and opens a folded report.

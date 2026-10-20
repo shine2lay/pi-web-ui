@@ -7582,6 +7582,8 @@ the result: `docs/queue-fold.md`.
 - Unit test and the sealed browser test (`node tests/run-sealed.mjs queue-fold`), then the sealed land gate.
 - Live, look only, after the install: folded queue rows counted against the queue reports in view, in Ops'
   home chat and a task chat (`docs/queue-fold.md`, section "Result").
+- Result: H-QUEUE-FOLD-1 HIT (sealed 27 of 27; live at 7610a8e4: every queue report folded, plan open, no
+  other message folded).
 
 ### Undo and syncing
 
