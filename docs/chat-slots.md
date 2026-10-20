@@ -55,6 +55,14 @@ leave it (without continuing) to remove it from the list. this needs to be fixed
   `~/kept-from-tmp/2026-10-19/chat-slots-live/run1/result.json`.
 - Side effect: the install's own check failed its log step, "the log has 2 crash-guard notices". Server,
   page, reply and big chat passed; the install stayed.
+- Final build 05129317 (with H-CHAT-CAP-1b), installed 21:31, all checks passed. Second look run at 21:33
+  with 3 new pseudo ids (`carry-on:ops-live-look-chat-slots-b-1..3`): before, open 24, counted 24, blank 0;
+  with the three connected: open 27, counted 24, blank 3; after they left: open 24, counted 24, blank 0,
+  back **74 ms** after they left. No server restart during the look. Receipts:
+  `~/kept-from-tmp/2026-10-19/chat-slots-live/run2/result.json`.
+- The "Disproved if" check (blank chats piling up after an hour of normal use) runs at 22:35, an hour
+  after the install: blank open chats per project against the server's open connections. Its result goes
+  in the Ops note; a MISS there opens a new task.
 
 ## H-CHAT-CAP-1b: a blank chat closed on purpose isn't logged as a crash
 
@@ -77,3 +85,9 @@ leave it (without continuing) to remove it from the list. this needs to be fixed
 - Checks before landing: `tests/unit/crash-guard.test.ts` 19 passed (the new case fails on the old code,
   which warns `[crash-guard]` for the released chat); sealed `chat-slots-test` passed, "31 blank chats
   closed, logged as [chat-slots]; no crash-guard notice in the log", and `conversation-capacity-test`.
+- **Result: HIT.** Landed as 05129317 (wt land 100-9840db). The first try, 98-6864df, failed only on an
+  unrelated 5 s timeout: `tests/unit/initiatives-projects-done.test.ts`, 5467 ms at load average 23; it took
+  2.2 s in its two earlier gates, so this was its first sighting. Installed 21:31: `pi-web-deploy result
+  05129317` = "live, and the checks all passed" (server, page, reply, big chat and log). Live log since
+  21:31: no `[crash-guard]` line; 5 blank chats closed, each logged as `[chat-slots]` (the install check's 2
+  page clients and the look's 3).
