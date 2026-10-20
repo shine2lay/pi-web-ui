@@ -51,6 +51,10 @@ const TOKEN = "700000002:TEST-main-chat-not-a-real-token";
 const WEB = "https://pi.test.example:8787/";
 /** How long the main chat has to answer, in this test (pi-queue's PI_QUEUE_TEST_ASK_WAIT_MS). */
 const ASK_WAIT_MS = 6000;
+/** queue-e2e-load (Ops #276): how long a window's first state may take. The server says "ready" before it
+ *  starts the window's session on purpose (issue #295); the state follows that start, which takes as long as
+ *  the machine needs (over 20 s with this test's cores busy). Only for a hang. */
+const SESSION_START_MAX = 90_000;
 
 // standalone: true: a new task says where it belongs (pi-queue's work registry refuses one that doesn't, before any dialog).
 const plan = (title, goal) => ({
@@ -360,8 +364,16 @@ class Client {
 		return found;
 	}
 	async waitForState(pred, ms = 20_000) {
-		if (!(await waitFor(() => this.state && pred(this.state), ms)))
-			throw new Error(`[${this.name}] state never matched`);
+		if (!(await waitFor(() => this.state && pred(this.state), ms))) {
+			const s = this.state;
+			const last = this.received
+				.slice(-8)
+				.map((m) => (m.type === "error" ? `error: ${String(m.message ?? "").slice(0, 80)}` : m.type))
+				.join(", ");
+			throw new Error(
+				`[${this.name}] state never matched (chat ${s?.conversationId ?? "none"}, file ${s?.sessionFile?.split("/").at(-1) ?? "none"}, streaming ${!!s?.isStreaming}, rev ${s?.rev}; last messages: ${last})`,
+			);
+		}
 		return this.state;
 	}
 	close() {
@@ -394,8 +406,11 @@ const srv = await ownServer({
 				2,
 			),
 		);
-		// This test is about questions: the watchdog stays off.
-		writeFileSync(join(agentDir, "pi-queue.json"), JSON.stringify({ stalledAfterMinutes: 0 }));
+		// This test is about questions: the watchdog stays off. queue-e2e-load (Ops #276): so does wake on done.
+		// pi-queue wakes the main chat with a message 30 s after a task is done in its own chat; this test is often
+		// done by then, but not on a busy machine, and the mock has no script for that message ("the model saw no
+		// message it had no script for"). Wake on done has its own tests (pi-queue's tests/wake-on-done.test.ts).
+		writeFileSync(join(agentDir, "pi-queue.json"), JSON.stringify({ stalledAfterMinutes: 0, wakeOnDone: false }));
 	},
 });
 const hardStop = setTimeout(() => {
@@ -414,7 +429,7 @@ async function openClient(clientId) {
 	c.send({ type: "hello", clientId, locale: "en" });
 	await c.waitForType("ready");
 	c.send({ type: "get_state" });
-	await c.waitForState((s) => Boolean(s.conversationId));
+	await c.waitForState((s) => Boolean(s.conversationId), SESSION_START_MAX);
 	return c;
 }
 async function waitIdle(c) {
@@ -548,6 +563,35 @@ try {
 	};
 	const tldr = () => A.state?.tldr ?? [];
 	const telegramAbout = (text) => tg.all().filter((x) => x.text.includes(text));
+	/**
+	 * queue-e2e-load (Ops #276): pi-queue's own record of task `id`'s last question, from the queue's chat's
+	 * session file (window A's chat): when the task asked (the queue's copy of the "ask" op keeps the task's own
+	 * time: the main chat's time counts from there) and when it went on to the owner (the first "stuck" op after
+	 * it). Window A sees both later than they happen, the ask only after a /queue sync round trip from the task's
+	 * chat, and on a busy machine not equally late: the checks on pi-queue's wait use these times.
+	 */
+	const recorded = (id) => {
+		let asked;
+		let stuck;
+		const file = A.state?.sessionFile;
+		if (!file || !existsSync(file)) return { asked, stuck };
+		for (const line of readFileSync(file, "utf8").split("\n")) {
+			if (!line.includes('"customType":"queue"')) continue;
+			let op;
+			try {
+				const e = JSON.parse(line);
+				op = e.type === "custom" && e.customType === "queue" ? e.data : undefined;
+			} catch {
+				continue;
+			}
+			if (op?.id !== id) continue;
+			if (op.op === "ask") {
+				asked = op.ts;
+				stuck = undefined;
+			} else if (op.op === "stuck" && asked !== undefined && stuck === undefined) stuck = op.ts;
+		}
+		return { asked, stuck };
+	};
 	/** When a task first showed each status in window A. */
 	const firstSeen = new Map();
 	A.onState = (s) => {
@@ -764,12 +808,14 @@ try {
 		),
 		JSON.stringify(task(3)),
 	);
-	const asked3 = firstSeen.get("3:asking") ?? 0;
-	const stuck3 = firstSeen.get("3:stuck") ?? 0;
+	// queue-e2e-load (Ops #276): timed by pi-queue's record (see `recorded`), not by when window A saw it.
+	const r3 = await waitFor(() => recorded(3).stuck !== undefined, 10_000).then(() => recorded(3));
+	const gap3 = `${r3.stuck - r3.asked} ms by pi-queue's record; window A saw the ask ${(firstSeen.get("3:asking") ?? 0) - r3.asked} ms and the move ${(firstSeen.get("3:stuck") ?? 0) - r3.stuck} ms late`;
+	console.log(`    #3: ${gap3}`);
 	check(
 		"... at once when that turn ended, not after the wait",
-		stuck3 > asked3 && stuck3 - asked3 < ASK_WAIT_MS - 1000,
-		`${stuck3 - asked3} ms`,
+		r3.asked !== undefined && r3.stuck !== undefined && r3.stuck >= r3.asked && r3.stuck - r3.asked < ASK_WAIT_MS,
+		gap3,
 	);
 	check(
 		"the TL;DR and Telegram say #3 needs the owner",
@@ -803,12 +849,18 @@ try {
 		),
 		JSON.stringify(task(4)),
 	);
-	const asked4 = firstSeen.get("4:asking") ?? 0;
-	const stuck4 = firstSeen.get("4:stuck") ?? 0;
+	// queue-e2e-load (Ops #276): timed by pi-queue's record (see `recorded`), not by when window A saw it; the
+	// main chat's turn went on if the mock hadn't returned its late answer yet when pi-queue moved the question.
+	const r4 = await waitFor(() => recorded(4).stuck !== undefined, 10_000).then(() => recorded(4));
+	const gap4 = `${r4.stuck - r4.asked} ms by pi-queue's record; window A saw the ask ${(firstSeen.get("4:asking") ?? 0) - r4.asked} ms and the move ${(firstSeen.get("4:stuck") ?? 0) - r4.stuck} ms late; the turn ended ${seen.late4 ? `${seen.late4 - r4.stuck} ms after the move` : "not yet"}`;
+	console.log(`    #4: ${gap4}`);
 	check(
 		"... not before the wait, and while the main chat's turn still went on",
-		stuck4 - asked4 >= ASK_WAIT_MS - 500 && !seen.late4,
-		`${stuck4 - asked4} ms, turn ended: ${!!seen.late4}`,
+		r4.asked !== undefined &&
+			r4.stuck !== undefined &&
+			r4.stuck - r4.asked >= ASK_WAIT_MS &&
+			(!seen.late4 || seen.late4 > r4.stuck),
+		gap4,
 	);
 	check("that turn ends later", await waitFor(() => !!seen.late4, ASK_WAIT_MS + 10_000));
 	await waitIdle(A);
@@ -829,12 +881,21 @@ try {
 
 	// ---- #5: the owner stops the run -----------------------------------------------------------------
 	console.log("#5: the owner stops the task's run");
-	check("#5's run is going", await waitFor(() => !!seen.run5Started && task(5)?.status === "working", 30_000));
+	// queue-e2e-load (Ops #276): pi-queue records a task's chat when its run has started, a moment after the
+	// mock has the run's first request; on a busy machine window A gets it later still. The next step opens
+	// that chat, so wait for it too.
+	check(
+		"#5's run is going",
+		await waitFor(() => !!seen.run5Started && task(5)?.status === "working" && !!task(5)?.chat?.file, 30_000),
+		`run started: ${!!seen.run5Started}, #5 ${task(5)?.status}, its chat ${task(5)?.chat?.file ? "known" : "not known yet"}`,
+	);
 	const file5 = task(5)?.chat?.file;
 	B = await openClient("mc-window-b");
 	// The owner opens #5's chat (the same conversation the queue runs) and stops its run.
 	B.send({ type: "switch_session", path: file5 });
-	await B.waitForState((s) => s.sessionFile === file5 && s.isStreaming, 15_000);
+	await B.waitForState((s) => s.sessionFile === file5 && s.isStreaming, 15_000).catch((e) => {
+		throw new Error(`${e.message}; #5's file ${file5?.split("/").at(-1)}, #5 ${task(5)?.status}`);
+	});
 	B.send({ type: "abort" });
 	check(
 		"it needs the owner straight away, as before",

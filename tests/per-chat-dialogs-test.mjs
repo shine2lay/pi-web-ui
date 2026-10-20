@@ -3,7 +3,7 @@
  * The real pi-queue extension is loaded through settings.json `packages` (PI_QUEUE_PKG, default
  * ~/projects/pi-queue). Its queue_add asks the user to approve the plan with ctx.ui.confirm. A mock
  * OpenAI-compatible model plays two agents:
- *  - chat A ("DIALOG-A …") waits a few seconds, then calls queue_add with plan A;
+ *  - chat A ("DIALOG-A …") waits until the test has opened chat B, then calls queue_add with plan A;
  *  - chat B ("DIALOG-B …") calls queue_add with plan B right away.
  * Checks:
  *  - A asks while window 1 shows chat B: B shows no pop-up, A's row in the left list gets the "?",
@@ -46,8 +46,12 @@ const RUN_A = "DIALOG-A queue the README task";
 const RUN_B = "DIALOG-B queue the timing task";
 const A_DONE = "DIALOG-A-DONE the README task is queued.";
 const B_DONE = "DIALOG-B-DONE the timing task is queued.";
-/** How long chat A's model waits before asking: time to open chat B first. */
-const A_DELAY = 4000;
+/** queue-e2e-load (Ops #276): chat A's model waits for the test to open chat B first (releaseA), not a fixed
+ *  time: on a busy machine the steps before can take longer than any fixed wait. At most this long, for a hang. */
+const A_HOLD_MAX = 90_000;
+/** How long a chat's run may take to start: 2-4 s on a quiet machine, past 10 s with its cores busy (Ops #276).
+ *  The checks wait for the start itself (the mock has the chat's first request); this is only for a hang. */
+const RUN_START_MAX = 90_000;
 // standalone: true: a new task says where it belongs (pi-queue's work registry refuses one that doesn't, before any dialog).
 const PLAN_A = {
 	title: "Tidy the README",
@@ -110,6 +114,15 @@ const textOf = (msg) =>
 		: (msg?.content ?? []).map((p) => (typeof p?.text === "string" ? p.text : "")).join("");
 /** When chat A's model called queue_add (0 = not yet). */
 let aAskedAt = 0;
+/** When the mock got chat A's first model request (0 = not yet): its run had started. */
+let aFirstAt = 0;
+/** When the mock got chat B's first model request (0 = not yet). */
+let bFirstAt = 0;
+/** Lets chat A's model go on and ask. */
+let releaseA = () => {};
+const aReleased = new Promise((r) => {
+	releaseA = r;
+});
 /** User messages the mock had no script for: should stay empty. */
 const unexpected = [];
 const mock = createServer(async (req, res) => {
@@ -154,6 +167,7 @@ const mock = createServer(async (req, res) => {
 
 	if (userText.includes(RUN_B)) {
 		if (results === 0) {
+			bFirstAt ||= Date.now();
 			await sleep(300);
 			await call("queue_add", PLAN_B, "call_add_b");
 			return;
@@ -164,7 +178,12 @@ const mock = createServer(async (req, res) => {
 	}
 	if (userText.includes(RUN_A)) {
 		if (results === 0) {
-			await sleep(A_DELAY);
+			aFirstAt ||= Date.now();
+			// (an unref'd timer, so a run that ends doesn't wait for it)
+			await new Promise((r) => {
+				aReleased.then(r);
+				setTimeout(r, A_HOLD_MAX).unref();
+			});
 			aAskedAt = Date.now();
 			await call("queue_add", PLAN_A, "call_add_a");
 			return;
@@ -343,14 +362,27 @@ try {
 
 	console.log("window 1: chat A asks while chat B is open");
 	const W1 = await openWindow("dialogs-window-1");
+	const sentA = Date.now();
 	await send(W1, RUN_A);
-	check("chat A shows up in the list", await waitFor(async () => (await rowA(W1).count()) > 0, 10000));
+	// queue-e2e-load (Ops #276): the row follows A's run's start within a second, but the start itself takes as
+	// long as the machine needs. Wait for the start, then give the row its 10 s.
+	check(
+		"A's run starts",
+		await waitFor(() => aFirstAt > 0, RUN_START_MAX),
+		aFirstAt ? `${aFirstAt - sentA} ms after the send` : "not in time",
+	);
+	check(
+		"chat A shows up in the list",
+		await waitFor(async () => (await rowA(W1).count()) > 0, 10000),
+		`${Date.now() - aFirstAt} ms after A's run started; rows: ${JSON.stringify((await W1.locator(".lp-row").allInnerTexts()).map((t) => t.replace(/\s+/g, " ").slice(0, 40)))}`,
+	);
 	await W1.locator(".lp-new-chat-action").click();
 	check(
 		"a new chat (B) is open before A asks",
 		(await waitFor(async () => !(await messagesText(W1)).includes("DIALOG-A"), 10000)) && aAskedAt === 0,
-		aAskedAt ? "A asked too early; raise A_DELAY" : "",
+		aAskedAt ? "A asked before the test let it" : "",
 	);
+	releaseA();
 	check("A asks for approval", await waitFor(() => aAskedAt > 0, 15000));
 	check("A's row gets the ?", await waitFor(() => hasBadge(rowA(W1)), 10000));
 	check("… and a long title doesn't hide it", await badgeOnScreen(rowA(W1)));
@@ -365,7 +397,14 @@ try {
 	);
 
 	console.log("window 1: chat B asks too");
+	const sentB = Date.now();
 	await send(W1, RUN_B);
+	// queue-e2e-load: B's run starts as slowly as A's did; its pop-up follows the start.
+	check(
+		"B's run starts",
+		await waitFor(() => bFirstAt > 0, RUN_START_MAX),
+		bFirstAt ? `${bFirstAt - sentB} ms after the send` : "not in time",
+	);
 	check(
 		"chat B shows B's pop-up",
 		await waitFor(async () => (await dialogText(W1)).includes(PLAN_B.title), 15000),
@@ -472,6 +511,7 @@ try {
 	failures++;
 	console.log(`  ✗ FAIL: ${e?.stack ?? e}`);
 } finally {
+	releaseA();
 	await browser?.close();
 	mock.close();
 	try {

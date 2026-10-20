@@ -36,6 +36,15 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: `tests/unit/chat-slots.test.ts` (a sending chat isn't blank) and a new step 8b in `tests/optimistic-send-test.mjs` (a first message held in the add-ons' step, New chat, then the message goes on: the new chat stays empty, and the message is once in its own chat, with its answer); both fail without the change (step 8b: `[1,0]`, then `[0,1]`). Then the landing gate.
 - Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
 
+## queue-e2e-load: the queue's browser tests wait for what they check on a busy machine
+
+- `local` (Ops #276, essential maintenance; asked for by Ops #275, rm-f4fecfd2). Hypotheses H-QEL-WAKE, H-QEL-START, H-QEL-B5, H-QEL-ASKWAIT and H-QEL-CUES, the before and after runs (pinned to two cores, slowed down with a CPU quota) and the results (all HIT; the cues not reproduced, unchanged; each test 5 of 5 pinned at 40%): `docs/queue-e2e-load.md`.
+- Tests only. `tests/queue-panel-test.mjs` and `tests/queue-main-chat-test.mjs` turn pi-queue's wake on done off (`"wakeOnDone": false` in their own pi-queue.json): its message comes 30 s after a task is done, which these tests outlast on a busy machine, and their mocks have no script for it. Wake on done has its own tests.
+- A first run's start takes as long as the machine needs (2-4 s quiet, over 30 s slowed down): `tests/per-chat-dialogs-test.mjs` and `tests/queue-panel-test.mjs` wait for the run to start (the mock has its first request; 90 s for a hang) before they give the row or the dialog its old time; chat A's mock waits until the test has opened chat B, not 4 s. `tests/queue-main-chat-test.mjs`: a window's first state may take 90 s (the server says "ready" before it starts the window's session, on purpose), and "#5's run is going" also waits until #5's chat is known before the test opens it.
+- `tests/queue-main-chat-test.mjs` times pi-queue's ask wait (#3 and #4) by pi-queue's own record in the queue's chat's session file (the "ask" and "stuck" ops' times), not by when window A sees them: the window hears of an ask only after a `/queue sync` round trip, on a busy machine over a second late. #4: at least the full wait (the old check allowed 0.5 s less), and before its main-chat turn ended; #3: before the wait was over. Each run prints both times and how late the window saw them.
+- No check loosened, and no wait raised on a check about speed. Nothing to install. The three are still outside the land gate.
+- Undo: revert this commit.
+
 ## roles-live: live Latest progress with its time, and Activity with the task lines and done summaries, on the Roles page
 
 - `local` (owner 2026-10-19, via COO rm-63784858: "i want live progress in both role and initiatives"; Ops #272, on `live-progress-contract`). Hypothesis H-ROLES-LIVE-1 and its result: `docs/live-progress.md`.

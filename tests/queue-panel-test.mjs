@@ -59,6 +59,10 @@ const STUCK_CHOICES = ["Settings", "Preferences"];
 const ANSWER = "QUEUE-ANSWER use Settings as the label";
 /** done-settle's wait (web/src/done-settle.ts DONE_SETTLE_MS) plus room for a late cue. */
 const SETTLE_WAIT = 1500 + 2000;
+/** How long a chat's first run may take to start: 2-3 s on a quiet machine, past 30 s with its cores busy
+ *  (queue-e2e-load, Ops #276). The test waits for the start itself (the mock has the run's first request);
+ *  this is only for a hang. */
+const RUN_START_MAX = 90_000;
 
 /** The plans the mock queues, in order (#1, #2, #3). #1's long steps make the dialog scroll. standalone: true: a new
  *  task says where it belongs (pi-queue's work registry refuses one that doesn't, before any dialog). */
@@ -132,6 +136,8 @@ const textOf = (msg) =>
 		? msg.content
 		: (msg?.content ?? []).map((p) => (typeof p?.text === "string" ? p.text : "")).join("");
 let queueAddOffered = false;
+/** When the mock got the planning run's first request (0 = not yet). */
+let planFirstAt = 0;
 /** User messages the mock had no script for (a reminder, a "continue", …): should stay empty. */
 const unexpected = [];
 /** Task chats' kickoffs and finishes, in the order the mock saw them. */
@@ -191,6 +197,7 @@ const mock = createServer(async (req, res) => {
 
 	if (userText.startsWith(PLAN_RUN)) {
 		if (results < PLANS.length) {
+			if (results === 0) planFirstAt ||= Date.now();
 			await sleep(400);
 			await call("queue_add", PLANS[results], `call_add_${results}`);
 			return;
@@ -274,6 +281,11 @@ writeFileSync(
 	join(agentDir, "settings.json"),
 	JSON.stringify({ defaultProvider: "mock", defaultModel: MODEL_ID, packages: [PI_QUEUE] }),
 );
+// queue-e2e-load (Ops #276): no wake on done. pi-queue wakes the queue's chat with a message 30 s after a task
+// is done in its own chat; this test is often done by then, but not on a busy machine, and the mock has no
+// script for that message ("the mock got no unscripted messages"). Wake on done has its own tests (pi-queue's
+// tests/wake-on-done.test.ts, and tests/quiet-turns-test.mjs here).
+writeFileSync(join(agentDir, "pi-queue.json"), JSON.stringify({ wakeOnDone: false }));
 
 // ---- server ----------------------------------------------------------------
 const server = spawn(process.execPath, [join(REPO, "dist", "server", "index.js")], {
@@ -464,11 +476,23 @@ try {
 	check("a fresh chat shows the empty state", (await view(A))?.empty === true, await show(A));
 
 	console.log("window A: plan three tasks; approve each plan in the dialog");
+	const sentPlan = Date.now();
 	await send(A, PLAN_RUN);
+	// queue-e2e-load (Ops #276): the first dialog follows the run's start within a second or so, but the start
+	// itself takes as long as the machine needs. Wait for the start, then give each dialog its 20 s.
+	check(
+		"the planning run starts",
+		await waitFor(() => planFirstAt > 0, RUN_START_MAX),
+		planFirstAt ? `${planFirstAt - sentPlan} ms after the send` : "not in time",
+	);
 	for (let i = 0; i < PLANS.length; i++) {
 		const dialog = A.locator(".dialog-inline");
 		const up = await waitFor(async () => (await dialog.innerText().catch(() => "")).includes(PLANS[i].title), 20000);
-		check(`dialog ${i + 1} shows the plan "${PLANS[i].title}"`, up);
+		check(
+			`dialog ${i + 1} shows the plan "${PLANS[i].title}"`,
+			up,
+			`${Date.now() - planFirstAt} ms after the planning run started`,
+		);
 		if (!up) throw new Error("no approval dialog");
 		if (i === 0) {
 			check("queue_add was offered to the model (pi-queue loaded in pi-web-ui)", queueAddOffered);
