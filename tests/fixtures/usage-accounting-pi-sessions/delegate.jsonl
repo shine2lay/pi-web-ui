@@ -1,0 +1,2 @@
+{"type":"session","version":3,"id":"session-delegate","timestamp":"2026-10-19T08:00:00.000Z","cwd":"/synthetic-only"}
+{"type":"message","id":"delegate-1","parentId":null,"timestamp":"2026-10-19T08:18:00.000Z","message":{"role":"assistant","provider":"fixture-provider","model":"fixture-model","responseId":"reported-delegate-response","usage":{"input":9,"output":2,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.04}},"content":[{"type":"text","text":"SYNTHETIC_ONLY_NEVER_PROJECT_8c27"}]}}

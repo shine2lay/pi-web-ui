@@ -1,0 +1,107 @@
+{
+	"faultLines": {
+		"plain": [],
+		"fork": [],
+		"resume-copy": [],
+		"usage-kinds": [5, 6],
+		"prices": [2, 3, 8, 9, 10, 17, 17, 18, 19],
+		"unresolved-parent": [2, 3],
+		"delegate": [],
+		"torn": [3],
+		"invalid": [2, 3]
+	},
+	"plain": {
+		"entries": ["call-1", "fallback-1"],
+		"amounts": ["0.1", "0.02"],
+		"faults": []
+	},
+	"fork": {
+		"entries": ["call-1", "fallback-1", "fork-new"],
+		"aliases": [
+			["call-1", "call-1"],
+			["fallback-1", "fallback-1"]
+		],
+		"amounts": ["0.1", "0.02", "0.03"],
+		"faults": []
+	},
+	"resume-copy": {
+		"entries": ["call-1"],
+		"aliases": [["call-1", "call-1"]],
+		"amounts": ["0.1", "0.02"],
+		"faults": []
+	},
+	"usage-kinds": {
+		"entries": ["warm-1", "other-1", "compact-1", "branch-1"],
+		"kinds": ["cache-warm", "assistant", "compaction", "compaction"],
+		"amounts": ["0.004", "0.006", "0.01", "0.02"],
+		"faults": ["model-unverified", "model-unverified"]
+	},
+	"prices": {
+		"entries": [
+			"missing-cost",
+			"zero-cost",
+			"zero-tokens",
+			"tiny-price",
+			"too-precise",
+			"float-noise",
+			"negative",
+			"non-finite",
+			"whole-overflow",
+			"tie-even",
+			"tie-odd",
+			"round-up",
+			"round-carry",
+			"tie-zero",
+			"tie-after",
+			"zero-unknown-tokens",
+			"nonzero-total-tokens",
+			"components-only",
+			"eighteen-digits"
+		],
+		"amounts": [
+			null,
+			null,
+			"0",
+			"0.0000001",
+			"0",
+			"0.3",
+			null,
+			null,
+			null,
+			"0.123456789012",
+			"0.123456789014",
+			"0.000000000002",
+			"1",
+			"0",
+			"0.000000000001",
+			null,
+			null,
+			null,
+			"100000000000000000"
+		],
+		"faults": [
+			"price-missing",
+			"price-missing",
+			"price-invalid",
+			"price-invalid",
+			"price-invalid",
+			"tokens-invalid",
+			"price-missing",
+			"price-missing",
+			"price-missing"
+		],
+		"roundedAmounts": 8
+	},
+	"unresolved-parent": {
+		"entries": ["unverified-1"],
+		"amounts": ["0.01", "0.01"],
+		"faults": ["identity-unverified", "identity-unverified"]
+	},
+	"delegate": { "entries": ["delegate-1"], "amounts": ["0.04"], "faults": [] },
+	"torn": { "entries": ["before-torn"], "amounts": ["0.01"], "faults": ["partial-last-line"] },
+	"invalid": {
+		"entries": ["bad-tokens", "after-invalid"],
+		"amounts": ["0.01", "0.01"],
+		"faults": ["tokens-invalid", "invalid-json"]
+	}
+}

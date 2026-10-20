@@ -1,0 +1,4 @@
+{"type":"session","version":3,"id":"session-invalid","timestamp":"2026-10-19T08:00:00.000Z","cwd":"/synthetic-only"}
+{"type":"message","id":"bad-tokens","parentId":null,"timestamp":"2026-10-19T08:20:00.000Z","message":{"role":"assistant","provider":"fixture-provider","model":"fixture-model","usage":{"input":-1,"output":2,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.01}},"content":[]}}
+{SYNTHETIC_ONLY_NEVER_PROJECT_8c27
+{"type":"message","id":"after-invalid","parentId":null,"timestamp":"2026-10-19T08:21:00.000Z","message":{"role":"assistant","provider":"fixture-provider","model":"fixture-model","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.01}},"content":[]}}

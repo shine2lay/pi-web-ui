@@ -1,0 +1,721 @@
+import { createHash } from "node:crypto";
+import { copyFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+	COLLECTOR_LIMITS,
+	UsageAccountingCollector,
+	type CollectorIO,
+	type NumericRows,
+	type SourceBatch,
+	type SourceCursor,
+	type SourceInventory,
+} from "../../server/usage-accounting-collector.js";
+import {
+	accountUsage,
+	factId,
+	parseAccountingInput,
+	type AccountingInput,
+	type UsageFact,
+} from "../../server/usage-accounting-contract.js";
+import {
+	PI_SESSION_LIMITS,
+	PI_RECORDED_RATE_VERSION,
+	PiSessionUsageReader,
+	type PiSessionReadRequest,
+	type PiSessionReadResult,
+} from "../../server/usage-accounting-pi-sessions.js";
+
+const FIXTURES = fileURLToPath(new URL("../fixtures/usage-accounting-pi-sessions/", import.meta.url));
+const FROM = "2026-10-19T07:00:00.000Z";
+const AS_OF = "2026-10-19T09:00:00.000Z";
+const SECRET = "SYNTHETIC_ONLY_NEVER_PROJECT_8c27";
+const dirs: string[] = [];
+interface FixedCase {
+	entries: string[];
+	amounts: (string | null)[];
+	faults: string[];
+	aliases?: [string, string][];
+	kinds?: UsageFact["kind"][];
+	roundedAmounts?: number;
+}
+const golden = JSON.parse(readFileSync(join(FIXTURES, "expected.json"), "utf8")) as Record<string, FixedCase> & {
+	faultLines: Record<string, number[]>;
+};
+afterEach(() => {
+	for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+function scratch(): string {
+	const dir = mkdtempSync(join(tmpdir(), "usage-pi-synthetic-"));
+	dirs.push(dir);
+	return dir;
+}
+function request(name: string, extra: Partial<PiSessionReadRequest> = {}): PiSessionReadRequest {
+	return {
+		file: join(FIXTURES, `${name}.jsonl`),
+		producer: "pi",
+		from: FROM,
+		through: AS_OF,
+		observedAt: AS_OF,
+		...extra,
+	};
+}
+function digest(value: string | Buffer): string {
+	return createHash("sha256").update(value).digest("hex");
+}
+function stream(file: string): string {
+	return `pi-session:${digest(resolve(file))}`;
+}
+function noRows(): NumericRows {
+	return { facts: [], allocations: [], aliases: [], roots: [], policies: [], memberships: [], snapshots: [] };
+}
+function fact(options: {
+	file: string;
+	session: string;
+	entry: string;
+	at: string;
+	tokens: [number | null, number | null, number | null, number | null];
+	response?: string;
+	kind?: UsageFact["kind"];
+	producer?: "pi" | "acp";
+	origin?: string;
+	unresolved?: boolean;
+	price?: "unpriced" | "unknown-model";
+	amount?: string;
+	unknownModel?: boolean;
+}): UsageFact {
+	const provider = options.unknownModel ? "unknown" : "fixture-provider";
+	const identity = {
+		producer: options.producer ?? "pi",
+		incarnation: options.session,
+		attempt: options.response
+			? `response:${digest(JSON.stringify([provider, options.response, stream(options.file), options.entry]))}`
+			: options.entry,
+	};
+	const [input, output, cacheRead, cacheWrite] = options.tokens;
+	return {
+		v: "usage-fact/1",
+		id: factId(identity),
+		revision: 0,
+		supersedes: null,
+		identity,
+		identityStatus: options.unresolved ? "unresolved" : "verified",
+		occurredAt: options.at,
+		provider,
+		model: options.unknownModel ? "unknown" : "fixture-model",
+		kind: options.kind ?? "assistant",
+		tokens: { input, output, cacheRead, cacheWrite },
+		prices: [
+			{
+				basis: "list-estimate",
+				currency: "USD",
+				amount: options.price ? null : (options.amount ?? "0.01"),
+				status: options.price ?? "known",
+				rateVersion: options.price ? null : PI_RECORDED_RATE_VERSION,
+			},
+		],
+		source: { stream: stream(options.file), event: options.entry, observedAt: AS_OF, coverage: "complete" },
+		links: { task: null, session: options.origin ?? options.session, run: null },
+	};
+}
+function at(minute: number): string {
+	return `2026-10-19T08:${String(minute).padStart(2, "0")}:00.000Z`;
+}
+function plainFacts(file = request("plain").file): UsageFact[] {
+	return [
+		fact({
+			file,
+			session: "session-plain",
+			entry: "call-1",
+			at: at(2),
+			tokens: [10, 2, 3, 4],
+			response: "response-1",
+			amount: "0.1",
+		}),
+		fact({ file, session: "session-plain", entry: "fallback-1", at: at(3), tokens: [5, 1, 0, 0], amount: "0.02" }),
+	];
+}
+function assertFixed(name: string, value: PiSessionReadResult, prior: PiSessionReadResult[] = []): void {
+	const expected = golden[name];
+	expect(value.batch).not.toBeNull();
+	expect(value.batch!.rows.facts.map((f) => f.source.event)).toEqual(expected.entries);
+	expect(value.observations.map((o) => o.recordedPrice.amount)).toEqual(expected.amounts);
+	expect(value.roundedAmounts).toBe(expected.roundedAmounts ?? 0);
+	expect(value.faults).toEqual(expected.faults.map((code, i) => ({ code, line: golden.faultLines[name][i] })));
+	const facts = new Map([...prior, value].flatMap((r) => r.batch?.rows.facts ?? []).map((f) => [f.id, f]));
+	expect(
+		value.batch!.rows.aliases.map((a) => [
+			facts.get(a.aliasFactId)?.source.event,
+			facts.get(a.canonicalFactId)?.source.event,
+		]),
+	).toEqual(expected.aliases ?? []);
+	if (expected.kinds) expect(value.batch!.rows.facts.map((f) => f.kind)).toEqual(expected.kinds);
+	expect(value.batch!.rows.allocations).toEqual([]);
+	expect(value.batch!.rows.roots).toEqual([]);
+	expect(value.batch!.rows.policies).toEqual([]);
+	expect(value.batch!.rows.memberships).toEqual([]);
+	expect(value.batch!.rows.snapshots).toEqual([]);
+	expect(JSON.stringify(value)).not.toContain(SECRET);
+}
+/** Synthetic in-memory collector port; no paths, roots, model calls or live inventory. */
+class MemoryIO implements CollectorIO {
+	segments: string[] = [];
+	image: string | null = null;
+	async read() {
+		return { segments: [...this.segments], checkpoint: this.image };
+	}
+	async append(segment: number, expectedBytes: number, line: string) {
+		const current = this.segments[segment - 1] ?? "";
+		expect(Buffer.byteLength(current)).toBe(expectedBytes);
+		this.segments[segment - 1] = current + line;
+	}
+	async sync() {}
+	async checkpoint(text: string) {
+		this.image = text;
+	}
+}
+async function accepts(results: PiSessionReadResult[]): Promise<MemoryIO> {
+	const sources = [...new Map(results.filter((r) => r.source).map((r) => [r.source!.stream, r.source!])).values()];
+	const inventory: SourceInventory = {
+		v: "usage-inventory/1",
+		evidenceRef: "fixture-only:explicit-sessions",
+		observedAt: AS_OF,
+		complete: false,
+		sources,
+	};
+	const io = new MemoryIO();
+	const collector = await UsageAccountingCollector.open({
+		inventory,
+		io,
+		clock: () => 0,
+		verifier: { inventory: () => true, batch: (b) => b.adapterRef === "pi-session-jsonl/1" },
+	});
+	for (const result of results) {
+		if (!result.batch) continue;
+		// Compile-time structural compatibility with the unchanged collector, without a production dependency.
+		const batch: SourceBatch = result.batch;
+		const cursor: SourceCursor | null = result.cursor;
+		expect(cursor).toEqual(batch.toCursor);
+		expect(
+			parseAccountingInput({ v: 1, ...result.batch.rows, coverage: [], requiredStreams: [result.batch.stream] }).ok,
+		).toBe(true);
+		expect(Buffer.byteLength(JSON.stringify(result.batch))).toBeLessThanOrEqual(COLLECTOR_LIMITS.batchBytes);
+		expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(PI_SESSION_LIMITS.batchBytes);
+		const committed = await collector.collect(result.batch.stream, JSON.stringify(result.batch), AS_OF);
+		expect(committed.code).toBeNull();
+		expect(committed.status).toBe("committed");
+	}
+	expect(JSON.stringify(io)).not.toContain(SECRET);
+	return io;
+}
+function syntheticHeader(id = "scratch-session"): string {
+	return JSON.stringify({ type: "session", version: 3, id, timestamp: at(0), cwd: "/synthetic-only" }) + "\n";
+}
+function syntheticCall(id: string, minute = 23): string {
+	return (
+		JSON.stringify({
+			type: "message",
+			id,
+			parentId: null,
+			timestamp: at(minute),
+			message: {
+				role: "assistant",
+				provider: "fixture-provider",
+				model: "fixture-model",
+				usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
+				content: [{ type: "text", text: SECRET }],
+			},
+		}) + "\n"
+	);
+}
+
+describe("inert persisted Pi usage reader (synthetic files only)", () => {
+	it("projects exact plain facts and never counts a parent's tool-result usage", async () => {
+		const r = await new PiSessionUsageReader().read(request("plain"));
+		assertFixed("plain", r);
+		expect(r.batch!.rows.facts).toEqual(plainFacts());
+		expect(r.status).toBe("complete");
+		expect(r.source).toEqual({
+			stream: stream(request("plain").file),
+			incarnation: "session-plain",
+			adapterRef: "pi-session-jsonl/1",
+			producer: "pi",
+			occurrenceStreams: [stream(request("plain").file)],
+			retainedFrom: FROM,
+			grants: ["facts", "aliases"],
+		});
+		expect(r.batch!.rows.facts.map((f) => f.prices[0].amount)).toEqual(["0.1", "0.02"]);
+		expect(r.batch!.rows.facts.every((f) => f.prices[0].rateVersion === "pi-recorded-1")).toBe(true);
+		expect(r.observations.map((o) => o.responseId)).toEqual(["response-1", null]);
+		expect(r.observations.every((o) => o.disposition === "original")).toBe(true);
+		await accepts([r]);
+	});
+
+	it("aliases response ids and id+timestamp copied parent history; resume copies never rewrite evidence", async () => {
+		const reader = new PiSessionUsageReader();
+		const plain = await reader.read(request("plain"));
+		const fork = await reader.read(request("fork"));
+		const resume = await reader.read(request("resume-copy"));
+		assertFixed("fork", fork, [plain]);
+		assertFixed("resume-copy", resume, [plain, fork]);
+		const file = request("fork").file;
+		const expectedFork = [
+			fact({
+				file,
+				session: "session-fork",
+				entry: "call-1",
+				response: "response-1",
+				at: at(2),
+				tokens: [10, 2, 3, 4],
+				amount: "0.1",
+				origin: "session-plain",
+			}),
+			fact({
+				file,
+				session: "session-fork",
+				entry: "fallback-1",
+				at: at(3),
+				tokens: [5, 1, 0, 0],
+				amount: "0.02",
+				origin: "session-plain",
+			}),
+			fact({ file, session: "session-fork", entry: "fork-new", at: at(5), tokens: [7, 2, 0, 0], amount: "0.03" }),
+		];
+		expect(fork.batch!.rows.facts).toEqual(expectedFork);
+		expect(resume.batch!.rows.facts).toEqual([plainFacts(request("resume-copy").file)[0]]);
+		expect(fork.batch!.rows.aliases).toEqual(
+			expectedFork.slice(0, 2).map((f, i) => ({
+				aliasFactId: f.id,
+				canonicalFactId: plainFacts()[i].id,
+				provenance: "native-call-map/1",
+				evidenceRef: `pi-session-map:${digest(JSON.stringify([i === 0 ? "response-1" : null, f.source.event, i === 0 ? "2026-10-19T08:02:01.000Z" : at(3)]))}`,
+			})),
+		);
+		expect(resume.observations.map((o) => o.disposition)).toEqual(["alias", "alias"]);
+		expect(resume.observations[1].canonicalFactId).toBe(plainFacts()[1].id);
+		await accepts([plain, fork, resume]);
+	});
+
+	it("reads standalone cache warming and other usage, compaction and branch summaries without inferring a model", async () => {
+		const r = await new PiSessionUsageReader().read(request("usage-kinds"));
+		assertFixed("usage-kinds", r);
+		const file = request("usage-kinds").file;
+		expect(r.batch!.rows.facts).toEqual([
+			fact({
+				file,
+				session: "session-kinds",
+				entry: "warm-1",
+				at: at(6),
+				tokens: [0, 0, 0, 8],
+				kind: "cache-warm",
+				amount: "0.004",
+			}),
+			fact({ file, session: "session-kinds", entry: "other-1", at: at(7), tokens: [1, 1, 0, 0], amount: "0.006" }),
+			fact({
+				file,
+				session: "session-kinds",
+				entry: "compact-1",
+				at: at(8),
+				tokens: [4, 2, 0, 0],
+				kind: "compaction",
+				unknownModel: true,
+				price: "unknown-model",
+			}),
+			fact({
+				file,
+				session: "session-kinds",
+				entry: "branch-1",
+				at: at(9),
+				tokens: [6, 2, 0, 0],
+				kind: "compaction",
+				unknownModel: true,
+				price: "unknown-model",
+			}),
+		]);
+		await accepts([r]);
+	});
+
+	it("counts recorded totals with explicit half-even rounding, but missing/invalid prices remain UNKNOWN", async () => {
+		const r = await new PiSessionUsageReader().read(request("prices"));
+		assertFixed("prices", r);
+		const file = request("prices").file;
+		expect(r.batch!.rows.facts).toEqual(
+			golden.prices.entries.map((entry, i) =>
+				fact({
+					file,
+					session: "session-prices",
+					entry,
+					at: at(i + 11),
+					tokens:
+						entry === "zero-unknown-tokens"
+							? [null, 0, 0, 0]
+							: entry === "zero-tokens" || entry === "nonzero-total-tokens"
+								? [0, 0, 0, 0]
+								: entry === "missing-cost"
+									? [1, 2, 0, 0]
+									: [1, 0, 0, 0],
+					kind: i >= 3 ? "cache-warm" : "assistant",
+					...(golden.prices.amounts[i] === null
+						? { price: "unpriced" as const }
+						: { amount: golden.prices.amounts[i]! }),
+				}),
+			),
+		);
+		expect(r.roundedAmounts).toBe(8);
+		expect(
+			r.batch!.rows.facts.every((f) => f.prices[0].status !== "known" || f.prices[0].rateVersion === "pi-recorded-1"),
+		).toBe(true);
+		expect(r.observations.every((o) => o.recordedPrice.rateVersion === null)).toBe(true);
+		expect(r.batch!.rows.facts.find((f) => f.source.event === "float-noise")!.prices[0].amount).toBe("0.3");
+		await accepts([r]);
+	});
+
+	it("does not open a missing parent and explicitly excludes unverified identity from verified totals", async () => {
+		const r = await new PiSessionUsageReader().read(request("unresolved-parent"));
+		assertFixed("unresolved-parent", r);
+		expect(r.batch!.rows.facts[0]).toEqual(
+			fact({
+				file: request("unresolved-parent").file,
+				session: "session-unresolved",
+				entry: "unverified-1",
+				at: at(16),
+				tokens: [3, 1, 0, 0],
+				unresolved: true,
+			}),
+		);
+		expect(r.observations[1].factId).toBeNull();
+		expect(r.observations.every((o) => o.disposition === "unverified")).toBe(true);
+		await accepts([r]);
+		const input = reportingInput([r]);
+		expect(input.facts[0].prices[0]).toEqual({
+			basis: "list-estimate",
+			currency: "USD",
+			amount: "0.01",
+			status: "known",
+			rateVersion: "pi-recorded-1",
+		});
+		const report = accountUsage(input, { policyRef: "fixture-only:policy", asOf: AS_OF, staleAfterMs: 3_600_000 });
+		expect(report.unresolvedIdentities).toBe(1);
+		expect(report.dedupKnownListUsd).toBe("0");
+		expect(report.verifiedOwnLowerBoundUsd).toBe("0");
+	});
+
+	it("reads the delegate's own file as ACP; deduplicated synthetic known prices prove copies are not extra charges", async () => {
+		const reader = new PiSessionUsageReader();
+		const results: PiSessionReadResult[] = [];
+		for (const name of ["plain", "fork", "resume-copy", "delegate"])
+			results.push(await reader.read(request(name, { producer: name === "delegate" ? "acp" : "pi" })));
+		const delegate = results[3];
+		assertFixed("delegate", delegate);
+		expect(delegate.batch!.rows.facts).toEqual([
+			fact({
+				file: request("delegate").file,
+				session: "session-delegate",
+				entry: "delegate-1",
+				response: "reported-delegate-response",
+				at: at(18),
+				tokens: [9, 2, 0, 0],
+				amount: "0.04",
+				producer: "acp",
+			}),
+		]);
+		await accepts(results);
+		const input = reportingInput(results);
+		// Account the reader's actual prices unchanged: recorded estimates must reach the totals.
+		expect(input.facts.every((f) => f.prices[0].rateVersion === "pi-recorded-1")).toBe(true);
+		expect(parseAccountingInput(input).ok).toBe(true);
+		const report = accountUsage(input, { policyRef: "fixture-only:policy", asOf: AS_OF, staleAfterMs: 3_600_000 });
+		expect(report.grossKnownListUsd).toBe("0.41");
+		expect(report.dedupKnownListUsd).toBe("0.19");
+		expect(report.unresolvedIdentities).toBe(0);
+	});
+
+	it("reports a torn final line and leaves the byte cursor before it", async () => {
+		const r = await new PiSessionUsageReader().read(request("torn"));
+		assertFixed("torn", r);
+		expect(r.batch!.rows.facts).toEqual([
+			fact({
+				file: request("torn").file,
+				session: "session-torn",
+				entry: "before-torn",
+				at: at(19),
+				tokens: [1, 1, 0, 0],
+			}),
+		]);
+		expect(r.status).toBe("partial");
+		expect(r.batch!.status).toBe("partial");
+		expect(r.endOfFile).toBe(false);
+		const bytes = readFileSync(request("torn").file);
+		const lastCompleteEnd = bytes.lastIndexOf(10) + 1;
+		expect(r.cursor!.ordinal).toBe(2);
+		expect(Number(r.cursor!.token.split(":")[1])).toBe(lastCompleteEnd);
+		expect(r.cursor!.token.split(":")[4]).toBe(digest(bytes.subarray(bytes.indexOf(10) + 1, lastCompleteEnd)));
+		await accepts([r]);
+	});
+
+	it("stops on the fixed oversized line without parsing or silently skipping it", async () => {
+		const reader = new PiSessionUsageReader({ lineBytes: 512 });
+		const r = await reader.read(request("oversized"));
+		expect(r.faults).toEqual([{ code: "line-limit", line: 2 }]);
+		expect(r.observations).toEqual([]);
+		expect(r.cursor!.ordinal).toBe(1);
+		expect(r.batch!.rows).toEqual(noRows());
+		expect(r.status).toBe("partial");
+		await accepts([r]);
+	});
+
+	it("retains valid numeric fields around invalid JSON and marks incomplete tokens null, never zero", async () => {
+		const r = await new PiSessionUsageReader().read(request("invalid"));
+		assertFixed("invalid", r);
+		expect(r.status).toBe("partial");
+		expect(r.batch!.rows.facts).toEqual([
+			fact({
+				file: request("invalid").file,
+				session: "session-invalid",
+				entry: "bad-tokens",
+				at: at(20),
+				tokens: [null, 2, 0, 0],
+			}),
+			fact({
+				file: request("invalid").file,
+				session: "session-invalid",
+				entry: "after-invalid",
+				at: at(21),
+				tokens: [1, 1, 0, 0],
+			}),
+		]);
+		await accepts([r]);
+	});
+
+	it("accepts SDK millisecond assistant timestamps and gives them precedence over entry time", async () => {
+		const file = join(scratch(), "milliseconds.jsonl");
+		const call = JSON.parse(syntheticCall("milliseconds"));
+		call.message.timestamp = Date.parse(at(24));
+		writeFileSync(file, syntheticHeader() + JSON.stringify(call) + "\n");
+		const r = await new PiSessionUsageReader().read(request("plain", { file }));
+		expect(r.batch!.rows.facts[0].occurredAt).toBe(at(24));
+		await accepts([r]);
+	});
+
+	it("resumes by byte offset and line count, verifies the saved last-line hash, and never fakes EOF progress", async () => {
+		const file = join(scratch(), "append.jsonl");
+		writeFileSync(file, syntheticHeader() + syntheticCall("first"));
+		const reader = new PiSessionUsageReader();
+		const first = await reader.read(request("plain", { file }));
+		writeFileSync(file, readFileSync(file, "utf8") + syntheticCall("second", 24));
+		const second = await reader.read(request("plain", { file, cursor: first.cursor }));
+		expect(second.batch!.fromCursor).toEqual(first.cursor);
+		expect(second.batch!.rows.facts.map((f) => f.source.event)).toEqual(["second"]);
+		expect(second.cursor!.ordinal).toBe(3);
+		expect(Number(second.cursor!.token.split(":")[1])).toBe(statSync(file).size);
+		const idle = await reader.read(request("plain", { file, cursor: second.cursor }));
+		expect(idle.batch).toBeNull();
+		expect(idle.cursor).toEqual(second.cursor);
+		expect(idle.status).toBe("complete");
+		await accepts([first, second, idle]);
+		writeFileSync(file, readFileSync(file, "utf8").replace('"second"', '"tamper"'));
+		const changed = await reader.read(request("plain", { file, cursor: second.cursor }));
+		expect(changed.batch).toBeNull();
+		expect(changed.faults).toEqual([{ code: "cursor-changed", line: 3 }]);
+		expect(changed.status).toBe("partial");
+	});
+
+	it("reports truncated and unreadable files explicitly, without manufacturing a cursor or batch", async () => {
+		const file = join(scratch(), "truncate.jsonl");
+		writeFileSync(file, syntheticHeader() + syntheticCall("before-truncate"));
+		const reader = new PiSessionUsageReader();
+		const first = await reader.read(request("plain", { file }));
+		writeFileSync(file, syntheticHeader());
+		const truncated = await reader.read(request("plain", { file, cursor: first.cursor }));
+		expect(truncated.faults).toEqual([{ code: "source-truncated", line: 2 }]);
+		expect(truncated.batch).toBeNull();
+		expect(truncated.status).toBe("partial");
+		const unreadable = await reader.read(request("plain", { file: join(scratch(), "absent.jsonl") }));
+		expect(unreadable).toMatchObject({
+			source: null,
+			batch: null,
+			cursor: null,
+			status: "partial",
+			faults: [{ code: "source-unreadable", line: 0 }],
+		});
+		expect(JSON.stringify(unreadable)).not.toContain("absent");
+	});
+
+	it("recovers a torn line only after its final newline is present", async () => {
+		const file = join(scratch(), "torn.jsonl");
+		const call = syntheticCall("later-complete");
+		writeFileSync(file, syntheticHeader() + call.slice(0, -1));
+		const reader = new PiSessionUsageReader();
+		const first = await reader.read(request("plain", { file }));
+		expect(first.faults).toEqual([{ code: "partial-last-line", line: 2 }]);
+		writeFileSync(file, syntheticHeader() + call);
+		const completed = await reader.read(request("plain", { file, cursor: first.cursor }));
+		expect(completed.batch!.rows.facts.map((f) => f.source.event)).toEqual(["later-complete"]);
+		expect(completed.status).toBe("complete");
+		await accepts([first, completed]);
+	});
+
+	it("bounds each input scan, output batch, numeric identity index and source inventory", async () => {
+		const file = join(scratch(), "bounded.jsonl");
+		writeFileSync(
+			file,
+			syntheticHeader() + Array.from({ length: 12 }, (_, i) => syntheticCall(`bounded-${i}`)).join(""),
+		);
+		const reader = new PiSessionUsageReader({ batchRows: 2, batchBytes: 8192 });
+		const results: PiSessionReadResult[] = [];
+		let cursor: PiSessionReadResult["cursor"] = null;
+		for (let i = 0; i < 7; i++) {
+			const r = await reader.read(request("plain", { file, cursor }));
+			results.push(r);
+			expect(r.batch!.rows.facts.length).toBeLessThanOrEqual(2);
+			expect(Buffer.byteLength(JSON.stringify(r))).toBeLessThanOrEqual(8192);
+			cursor = r.cursor;
+			if (r.endOfFile) break;
+		}
+		expect(results.at(-1)!.endOfFile).toBe(true);
+		expect(results.flatMap((r) => r.batch!.rows.facts).map((f) => f.source.event)).toEqual(
+			Array.from({ length: 12 }, (_, i) => `bounded-${i}`),
+		);
+		await accepts(results);
+		const capped = await new PiSessionUsageReader({ readBytes: 512 }).read(request("plain", { file }));
+		expect(capped.status).toBe("partial");
+		expect(capped.faults.some((f) => f.code === "read-limit")).toBe(true);
+		const index = await new PiSessionUsageReader({ indexEntries: 1 }).read(request("plain"));
+		expect(index.faults.at(-1)).toEqual({ code: "index-limit", line: 5 });
+		const sourceReader = new PiSessionUsageReader({ sources: 1 });
+		await sourceReader.read(request("plain"));
+		expect((await sourceReader.read(request("delegate"))).faults).toEqual([{ code: "index-limit", line: 1 }]);
+	});
+
+	it("rejects conflicting response evidence instead of aliasing a different cost or timestamp", async () => {
+		const file = join(scratch(), "conflict.jsonl");
+		copyFileSync(request("resume-copy").file, file);
+		writeFileSync(file, readFileSync(file, "utf8").replace('"total":0.1', '"total":0.9'));
+		const reader = new PiSessionUsageReader();
+		const plain = await reader.read(request("plain"));
+		const conflict = await reader.read(request("plain", { file }));
+		expect(conflict.batch!.rows.facts).toEqual([]);
+		expect(conflict.observations[0].disposition).toBe("unverified");
+		expect(conflict.faults).toContainEqual({ code: "identity-unverified", line: 2 });
+		expect(conflict.batch!.rows.aliases).toEqual([]);
+		await accepts([plain, conflict]);
+	});
+
+	it("closed outputs do not leak planted content, invalid JSON, paths, cursor extras or returned-object mutations", async () => {
+		const reader = new PiSessionUsageReader();
+		const results: PiSessionReadResult[] = [];
+		for (const name of Object.keys(golden).filter((name) => name !== "faultLines"))
+			results.push(await reader.read(request(name)));
+		const plain = results[0];
+		plain.batch!.rows.facts[0].provider = SECRET;
+		const copy = await reader.read(request("resume-copy"));
+		expect(JSON.stringify(copy)).not.toContain(SECRET);
+		const badCursor = await reader.read(request("plain", { cursor: { ordinal: 1, token: SECRET } }));
+		expect(badCursor.faults).toEqual([{ code: "cursor-invalid", line: 1 }]);
+		expect(badCursor.cursor).toBeNull();
+		const cursorWithExtra = { ...plain.cursor!, unexpected: SECRET };
+		const noExtra = await reader.read(request("plain", { cursor: cursorWithExtra }));
+		expect(JSON.stringify(noExtra)).not.toContain(SECRET);
+		for (const r of [...results.slice(1), copy, badCursor]) {
+			const text = JSON.stringify(r);
+			expect(text).not.toContain(SECRET);
+			for (const forbidden of ['"content"', '"arguments"', '"details"', '"summary"', '"note"', '"cwd"', FIXTURES])
+				expect(text).not.toContain(forbidden);
+		}
+	});
+
+	it("leaves an out-of-window record before the cursor rather than silently discarding its usage", async () => {
+		const reader = new PiSessionUsageReader();
+		const first = await reader.read(request("plain", { through: at(2) }));
+		expect(first.cursor!.ordinal).toBe(4);
+		expect(first.batch!.rows.facts.map((f) => f.source.event)).toEqual(["call-1"]);
+		expect(first.faults.at(-1)).toEqual({ code: "window-mismatch", line: 5 });
+		const second = await reader.read(request("plain", { from: at(3), cursor: first.cursor }));
+		expect(second.batch!.rows.facts.map((f) => f.source.event)).toEqual(["fallback-1"]);
+		expect(second.source!.retainedFrom).toBe(FROM);
+		await accepts([first, second]);
+	});
+
+	it("bounds diagnostics for many malformed lines and does not treat an invalid response id as a verified fallback", async () => {
+		const dir = scratch();
+		const malformed = join(dir, "many-malformed.jsonl");
+		writeFileSync(malformed, syntheticHeader() + ("!" + SECRET + "\n").repeat(2000));
+		const r = await new PiSessionUsageReader().read(request("plain", { file: malformed }));
+		expect(r.faults.at(-1)?.code).toBe("batch-limit");
+		expect(r.faults.length).toBeLessThanOrEqual(COLLECTOR_LIMITS.batchRows + 1);
+		expect(Buffer.byteLength(JSON.stringify(r))).toBeLessThanOrEqual(PI_SESSION_LIMITS.batchBytes);
+		expect(JSON.stringify(r)).not.toContain(SECRET);
+		const file = join(dir, "invalid-response.jsonl");
+		const call = JSON.parse(syntheticCall("invalid-response"));
+		call.message.responseId = { secret: SECRET };
+		writeFileSync(file, syntheticHeader() + JSON.stringify(call) + "\n");
+		const invalid = await new PiSessionUsageReader().read(request("plain", { file }));
+		expect(invalid.batch!.rows.facts).toEqual([]);
+		expect(invalid.observations[0].disposition).toBe("unverified");
+		expect(invalid.faults.at(-1)?.code).toBe("identity-unverified");
+		await accepts([r, invalid]);
+	});
+
+	it("has no production importer or collector dependency, preserves frozen caps, and exposes fixed errors", async () => {
+		expect({
+			batchBytes: PI_SESSION_LIMITS.batchBytes,
+			readBytes: PI_SESSION_LIMITS.readBytes,
+			batchRows: PI_SESSION_LIMITS.batchRows,
+			indexEntries: PI_SESSION_LIMITS.indexEntries,
+			sources: PI_SESSION_LIMITS.sources,
+			spanMs: PI_SESSION_LIMITS.spanMs,
+		}).toEqual({
+			batchBytes: COLLECTOR_LIMITS.batchBytes,
+			readBytes: COLLECTOR_LIMITS.batchBytes,
+			batchRows: COLLECTOR_LIMITS.batchRows,
+			indexEntries: COLLECTOR_LIMITS.historyRows,
+			sources: COLLECTOR_LIMITS.sources,
+			spanMs: COLLECTOR_LIMITS.spanMs,
+		});
+		const source = readFileSync(new URL("../../server/usage-accounting-pi-sessions.ts", import.meta.url), "utf8");
+		expect(source).not.toMatch(/(?:from\s*|import\s*\()["'][^"']*usage-accounting-collector/);
+		const server = fileURLToPath(new URL("../../server/", import.meta.url));
+		for (const name of readdirSync(server).filter(
+			(name) => name.endsWith(".ts") && name !== "usage-accounting-pi-sessions.ts",
+		))
+			expect(readFileSync(join(server, name), "utf8").includes('"./usage-accounting-pi-sessions')).toBe(false);
+		const file = join(scratch(), "old-header.jsonl");
+		writeFileSync(file, syntheticHeader().replace('"version":3', '"version":2'));
+		expect((await new PiSessionUsageReader().read(request("plain", { file }))).faults).toEqual([
+			{ code: "header-invalid", line: 1 },
+		]);
+		expect(() => new PiSessionUsageReader({ batchBytes: 1 })).toThrow("pi-session-limits");
+		await expect(new PiSessionUsageReader().read(request("plain", { through: FROM, from: AS_OF }))).rejects.toThrow(
+			"pi-session-request",
+		);
+	});
+});
+
+function reportingInput(results: PiSessionReadResult[]): AccountingInput {
+	const rows = noRows();
+	for (const result of results) {
+		if (!result.batch) continue;
+		rows.facts.push(...structuredClone(result.batch.rows.facts));
+		rows.aliases.push(...structuredClone(result.batch.rows.aliases));
+	}
+	return {
+		v: 1,
+		...rows,
+		policies: [
+			{
+				ref: "fixture-only:policy",
+				role: "design",
+				scopeRef: "fixture-only:scope",
+				effectiveAt: FROM,
+				weeklyUsd: "2000",
+				basis: "list-estimate",
+				timeZone: "America/Los_Angeles",
+				sourceRef: "fixture-only:owner",
+			},
+		],
+		coverage: [],
+		requiredStreams: [...new Set(results.flatMap((r) => (r.source ? [r.source.stream] : [])))],
+	};
+}
