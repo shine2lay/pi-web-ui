@@ -399,7 +399,8 @@ undoing.
   dropped, or a wait); no owner step without all earlier steps at least `gapHours` apart.
 - **Disproof:** any duplicate step, message for a quiet item, exceeded cap, or fewer than half acted on in 24 h.
   A miss gets a new hypothesis about the wake text or chain, not an unmeasured tweak.
-- **Result:** pending first live round and 24 h verdict.
+- **Result so far (Oct 20): HIT** on the fixed fixtures and first live delivery (12:27 PDT, below). The
+  normal-restart dedupe proof and the 24 h action threshold remain pending. This is not a full 24 h HIT.
 
 ## Waking the chain (Ops #284)
 
@@ -455,7 +456,9 @@ This is **Ops's technical retention clarification** (rm-8b9b535a), not new owner
 - **Expected:** fixed fixtures twice show no replay after >30 days/reload, partial chains retain their gap,
   suppression/failed reads keep markers, verified end +30 days allows cleanup and a new stretch starts normally.
 - **Disproof:** any replay/reset gap, marker lost under suppression/read failure, or verified-ended markers
-  remaining beyond their retention window. Result: pending final gate.
+  remaining beyond their retention window. **Result: HIT** in the corrected sealed gate (land 125-10cfad):
+  all fixed retention cases passed twice, including unresolved/partial chains after 30 days and reload,
+  conservative suppression/read failure, and verified end +30 days cleanup with a new stretch.
 
 Caps: **6 messages per recipient per local day; 20 total in any rolling hour**, counting a batch once.
 `capped` waits for the next round with room. While role messages are paused nothing is created (`held`);
@@ -488,7 +491,9 @@ card note slots show “No open task since <time> · <Role> asked <time>”, “
   line exactly as the formatter requires. No message behavior or checks change.
 - **Expected:** the final sealed land gate passes locale parity for all 8 packs and formatting, with the
   delivery/retention fixtures still passing twice. **Disproof:** any missing/empty label, placeholder mismatch,
-  formatting failure or delivery regression. Result: pending corrected gate.
+  formatting failure or delivery regression. **Result: HIT** in the corrected sealed gate (125-10cfad):
+  459 unit files, 6,653 passed / 6 skipped, plus protocol, PATCHES.md, typecheck, lint and formatting.
+  No check was bypassed or loosened.
 
 ### 24 h verdict
 
@@ -496,3 +501,53 @@ card note slots show “No open task since <time> · <Role> asked <time>”, “
 flagged stretches, lead actions, messages/steps, cap hits, duplicates, cap breaches and owner-step gaps from
 `stall-watch.jsonl`, `role-messages.json` and `~/.pi/agent/work/events.jsonl`. Fixtures use `--ledger`,
 `--store` and `--events` overrides. Use the actual first-on timestamp, not the dry round's time.
+
+## Live wakes (Ops #284, Oct 20)
+
+Delivery landed as `50a96313` (125-10cfad), installed through `pi-web-deploy --landed` at 12:15 PDT;
+server, page, throwaway reply, big-chat copy and log checks passed. The code default was still dry.
+Both prerequisites (#282 waits, #283 dry check) were complete before activation. COO's pre-switch FYI
+rm-6ddee8b8 named all 11 projects and their five leads from the dry list. Only then was the owner-changeable
+settings file set to `{"mode":"on"}`. No extra restart, queue/registry write or model probe was used.
+
+The first on-round was **Oct 20 12:27:26.696 PDT** (`2026-10-20T19:27:26.696Z`). Read-only comparison of
+that round's exact findings, the ledger and role-message metadata established:
+
+| recipient | stalled projects / step-1 lines | messages |
+| --- | --- | --- |
+| ops | 2 | 1 |
+| design | 5 | 1 |
+| frontend | 1 | 1 |
+| temper | 1 | 1 |
+| architecture | 2 | 1 |
+| total | 11 | 5 |
+
+All 11 ledger steps match their app-authored role-message records. No duplicate, cap hit or cap breach;
+no owner step yet. There were **zero quiet items** in this live cohort; their exclusion is covered by fixed
+fixtures, not a claim that this live round exercised a quiet item. Before activation there were zero stall
+messages or ledger lines. Before and first-round proof files, metadata only, are in
+`~/kept-from-tmp/2026-10-20/stall-live/`.
+
+Read-only live look reused **one** pseudo client, `carry-on:ops-live-look-stall`, with outgoing messages
+restricted to hello and page watches. On desktop 1400×1000 dark/light and phone 390×844 dark, the Design
+view showed five stall/asked lines. A second look of Team in Temper showed its stall line and three waits
+recorded by Frontend and Architecture after the wakes. All six views had zero serious/critical axe issues,
+zero incomplete axe checks and zero page errors. Only the changed note lines were captured. No chat,
+task or registry controls were used. No stalled initiative existed live; initiative-card behavior is
+covered by the fixed tests.
+
+The read-only verdict script ran successfully on live files at 12:28 PDT: **PENDING**, 11 flagged stretches,
+one lead action then, five messages / 11 sent steps, zero duplicates, cap breaches or early owner steps.
+An early read deliberately does not judge the 24 h action threshold. Ops home confirmed (rm-9f8daac3)
+one-shot **task-9x7fkl, Oct 21 12:30 PDT**, after the full 24 h window, using:
+
+```sh
+TZ=America/Los_Angeles node scripts/stall-verdict.mjs --since 2026-10-20T19:27:26.696Z --hours 24 --json
+```
+
+Normal-restart dedupe proof is still pending the next ordinary deployment/restart; no restart is made
+only to check it. Ops home has no additional deployment planned (rm-9f8daac3). COO's live FYI was
+sent as rm-942ba37b after the existing shared Ops role-message cap had room; no cap was bypassed.
+
+Undo: set `{"mode":"dry"}` to stop deliveries but keep finding logs, or `{"mode":"off"}` to stop the
+check. No registry or queue data needs undoing. Existing sent-step markers must not be deleted on rollback.
