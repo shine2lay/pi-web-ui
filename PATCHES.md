@@ -7746,8 +7746,8 @@ on, backtest, cost and result: `docs/stall-watch.md`.
   gapHours 2, everyMin 10; `PI_WEB_STALL_*` env overrides), `StallTimesFile` (the times the work page lacks,
   one pass over the registry text), `StallWatch` (the round, an injectable `act` hook; dry logs
   `stall: would wake ...` and `stall: <id> cleared (...)` lines, changes only).
-- `server/agent-service.ts`: `startStallWatch()` beside the progress feed (reads `readWorkPage()`, the
-  registry's text and the kept lead updates), stopped at shutdown; `stallList()`.
+- `server/agent-service.ts`: `startStallWatch()` beside the progress feed (reads the work page, the registry's
+  text and the kept lead updates), stopped at shutdown; `stallList()`.
 - `server/control-socket.ts`, `bin/pi-web-ui.mjs`: `stall_list` / `pi-web-ui stall list` (JSON, read only).
 - `server/work-page.ts`, `server/protocol.ts`: the replay keeps pi-queue's `wait` on the record
   (`{until, why, at, by}`, Ops #282's `project.wait`/`resume` events), with no activity line and no
@@ -7763,6 +7763,17 @@ on, backtest, cost and result: `docs/stall-watch.md`.
   H-STALL-1 and against `stall-count.mjs` at all 199 steps (0 differences); a sealed round's cost on a copy of
   the real registry (median 10.6 ms); the land gate; live, look only: `pi-web-ui stall list` and the log's
   `stall:` lines against `stall-count.mjs` (`docs/stall-watch.md`).
+- Follow-up (second commit; H-STALL-COST-1 and -2 in `docs/stall-watch.md`): the first cost measure had left
+  out two of the round's reads. Measured whole after the install, a round took about 400 ms of main thread
+  whenever the records file had grown, which is nearly every round. That was 230-353 ms to parse the whole
+  23 MB `decisions/records.jsonl` again for the lead updates, plus 100-250 ms for a Roles overview of its own.
+  Now `LeadUpdatesFile` reads only the records file's new lines (the same answer as `keptRecords()` on a
+  copy of the live file). The round also takes the newest Roles overview the server made (pages-fresh's,
+  every 15 s) when it is at most 60 s old (`STALL_OVERVIEW_MAX_AGE_MS`, `youngEnough`,
+  `AgentService.newestOverview`), and makes its own only when none is that young. A task's state still
+  comes from the registry, read each round. Round on its own: 34 ms at p50. Checks: 6 more cases in
+  `tests/unit/stall-watch.test.ts`, sealed timing runs on copies of the live data, and the live `tookMs` and
+  count after the install.
 
 ### Undo and syncing
 

@@ -190,11 +190,126 @@ arch-stage-context (architecture).
 
 ## Cost of a round
 
-One round, worst case (the registry changed, so the replay and the extra times are both made again), on a
-copy of the real registry (2,015 lines, 297 task links, every link given queue facts with a 200-character
-TL;DR line and a 300-character done summary), sealed (`scripts/sealed.sh`), 20 warm runs:
-**median 10.6 ms, max 14.3 ms** (replay 6.9 ms, extra times 3.8 ms, rules 0.2 ms). Under the 200 ms bar by
-about 19 times, so no narrowing was needed.
+**Where it ended (H-STALL-COST-1 and -2 below):** a round now reads only the records file's new lines and
+takes the Roles overview pages-fresh made in the last 60 s. On its own (refresher held, overview seconds
+old), a round is 34 ms of main-thread CPU at p50; at p90 165 ms and as live 172 ms, both under the plan's
+200 ms bar. Those p90s also count other work in the same window (below). Only when no overview is that young
+does it make its own, at the old cost.
+
+First measure, before the install: the replay and the rules alone, on a copy of the real registry (2,015
+lines, 297 task links, every link given queue facts with a 200-character TL;DR line and a 300-character done
+summary), sealed, 20 warm runs: median 10.6 ms, max 14.3 ms (replay 6.9 ms, extra times 3.8 ms, rules
+0.2 ms). That left out two of the round's reads: the Roles overview the work page is made from, and the
+kept records the lead updates come from. So it was not the round's cost.
+
+The whole round, measured after the install: the landed code (5d3ff25) in its own sealed server on a
+temporary copy of the live data (15 roles, 48 chat files, 2,062 registry lines, the 22.9 MB records file),
+with the main thread's own CPU time read from `/proc/self/task/<pid>/schedstat` (other threads and processes
+left out), 10 runs per part, the page refresher held so its rounds don't mix in (p50 / p90 / max, ms):
+
+| part | main-thread CPU | longest blocking slice |
+| --- | --- | --- |
+| whole round, registry changed | 166 / 176 / 192 | 20 / 23 / 27 |
+| whole round, nothing changed | 118 / 143 / 181 | 20 / 23 / 29 |
+| Roles overview | 103 / 145 / 197 | 16 / 27 / 34 |
+| work page from that overview | 11 / 14 / 14 | 11 / 12 / 13 |
+| extra times (registry changed) | 8 / 11 / 12 | 7 / 8 / 13 |
+| kept records, when the records file changed | **230 / 266 / 325** | **234 / 272 / 353** |
+
+### H-STALL-COST-1 (written before the change)
+
+- **What's wrong, with evidence:** a round asks `keptRecords()` for the lead updates. Whenever
+  `decisions/records.jsonl` has changed since anyone last read it, that parses the whole file again: 9,195
+  lines, 22.9 MB, in one block of 230-353 ms on the main thread, during which no chat is served. The file
+  only grows, by about 2 lines a minute (123 in the last hour on Oct 20), so nearly every 10-minute round
+  finds it changed. A round then costs about 166 + 230 = 400 ms of main thread, twice the 200 ms bar, for 133
+  lead-update lines out of 9,195. The table above was measured with the records file unchanged, which hid it.
+- **The one change:** the round reads only the records file's new lines. A small reader keeps its place in
+  the file (inode and byte offset), reads just the bytes added since its last look, and parses only the lines
+  that hold `"source":"update"`, keeping each initiative's newest lead update. It starts over when the file
+  is replaced or shrinks. It gives the same answer as `keptRecords()`: first record per (source, ref) wins,
+  half-written lines are skipped. The round keeps building its own work page from a fresh overview, as
+  decided. Reusing the refresher's copy was left out: it can be up to 15 s older than the registry times the
+  round reads with it, and mixing the two could flag a project that has just got a task.
+- **Expected result, and how it's measured:**
+  - On a copy of the live records file, the new reader's lead-update times equal `keptRecords()`'s exactly,
+    for every initiative.
+  - In the same sealed timing run, with lines appended to the copy's records file before each round, the
+    whole round's main-thread CPU stays at p90 under 200 ms and no slice is over 50 ms.
+  - The reader's own part, after its first read, is under 5 ms a round.
+- **What would prove it wrong:** any initiative's time differs from `keptRecords()`'s, the round with
+  appended records goes over 200 ms at p90, or any slice in it is over 50 ms.
+
+**Result: miss on the round as a whole; the records part hit.** Measured Oct 20, 10:16-10:21, sealed, on
+copies (machine load average 5-9 on 20 cores):
+
+- Same answer: on a copy of the live records file (9,208 lines, 22.9 MB), the new reader's times equal
+  `keptRecords()`'s for both initiatives with lead updates (team-in-temper Oct 19 05:09:01 PDT,
+  team-in-temper-2 Oct 20 07:57:47 PDT). That held on the first read and on each of 10 later reads after
+  lines were appended. Hit.
+- The reader's own part: first read 7.5-13.3 ms of main-thread CPU (the whole parse it replaces: 168 ms);
+  later reads 0.2-3.9 ms. In the sealed server, 0 / 0 / 2 ms against the old way's 162 / 211 / 213 ms (one
+  slice of 166-217 ms). Hit.
+- The whole round with records added, the refresher held: main-thread CPU **136 / 205 / 816** ms, longest
+  slice 18 / 23 / 146 ms. As live, the refresher running: 162 / 369 / 394 ms, slices 19 / 45 / 72 ms. Over
+  200 ms at p90 and slices over 50 ms: miss.
+- What was learned: the records' block is gone, but the round still makes a whole Roles overview of its own.
+  In this run that took 170 / 250 / 271 ms of main-thread CPU (103 / 145 / 197 ms in the run before; it
+  varies with the machine's load), in slices up to 76 ms. The overview is now nearly all of the round.
+
+### H-STALL-COST-2 (written before the change)
+
+- **What's wrong, with evidence:** the round's own Roles overview is 100-250 ms of main-thread CPU, about
+  nine tenths of the round (above). The round uses it only for the queue facts the registry lacks: owner
+  pauses, needs-you, TL;DR times and done summaries. Whether a task is open comes from the registry
+  (`task.link` and `task.state`), not from the overview. And pages-fresh (Ops #245) already makes the same
+  overview every 15 s, whether or not a page is open (live: 40 rounds in 602 s, 0 failed).
+- **The one change:** the round uses the newest overview the server has made, in practice the refresher's,
+  when it is at most 60 s old (`STALL_OVERVIEW_MAX_AGE_MS`). It makes its own only when there is none that
+  young (the refresher stopped or failing) or its time is ahead of the clock. The work page is still made
+  each round from the registry as read then, so open or closed, the times and the waits are as fresh as
+  before. Only the queue facts can be up to 60 s old. That can't make an item look empty, since a task's
+  state is the registry's; at most a pause, a needs-you or a TL;DR line from the last minute counts one
+  round later.
+- **Expected result, and how it's measured:**
+  - The same sealed timing run, as live (refresher running): the round's main-thread CPU at p90 under 50 ms,
+    longest slice under 30 ms.
+  - With the refresher held for over 60 s, the round makes its own overview (the fallback), at about the
+    cost measured above.
+  - Unit tests: the choice (young: reused; over 60 s, none, or ahead of the clock: made anew), and the same
+    findings from a reused overview as from a fresh one when nothing changed between them.
+  - Live after the install: `stall list`'s `tookMs` under 60 ms from round 3 on (round 2 before: 247 ms),
+    and the findings still match the independent count exactly.
+- **What would prove it wrong:** the as-live round's p90 is 50 ms or more, the round doesn't fall back
+  with the refresher held, or the live findings differ from the count.
+
+**Result: miss on its own bar (p90 under 50 ms); the choice works, and the plan's 200 ms bar is met.**
+Measured Oct 20, 10:31-10:34, sealed, on the same copies; the machine was busier still (load average 13-17 on
+20 cores). Main-thread CPU, p50 / p90 / max ms:
+
+| round | main-thread CPU | longest slice | overview |
+| --- | --- | --- | --- |
+| as live, refresher running | 99 / 172 / 437 | 44 / 92 / 108 | reused 10 of 10 (2-14 s old) |
+| refresher held, overview seconds old | **34** / 165 / 171 | 16 / 83 / 94 | reused 10 of 10 (2-16 s old) |
+| refresher held, overview 61 s old | 238 | 30 | made its own (1 of 1) |
+| refresher held, none kept | 229 / 468 / 608 | 35 / 95 / 116 | made its own (10 of 10) |
+
+- The choice works: reused whenever the newest overview was 0-60 s old (20 of 20); made its own when it was
+  61 s old or missing (11 of 11). Hit.
+- The round's own cost fell from 136-166 ms to 34 ms at p50: the work page from the overview, the extra
+  times, the lead updates and the rules.
+- The p90s, 165-172 ms, miss the 50 ms bar. That bar was set by a measure that can't hold it: the main
+  thread's CPU during the round's window counts all the other work in that window. That includes the
+  refresher's own build when it overlaps (about 500 ms on this machine at this load; idle 1-s windows with
+  it running: 89 / 474 / 648 ms), garbage collection after the builds, and the probe's own 1-ms timer (71-80
+  ms of every idle second with the refresher held). Two of the ten seconds-old rounds took 168 and 187 ms
+  this way; the other eight took 27-46 ms.
+- Against the plan's bar (a round under 200 ms of main thread), the normal path passes at p90 in both
+  phases. The as-live max of 437 ms is a window that overlapped the refresher's build. The fallback, which
+  happens only when pages-fresh has made no overview for a minute, stays at the overview's own cost.
+- Next, if a round's cost ever needs a tighter bar than 200 ms: measure it with a CPU profile that counts
+  only the round's own functions, not a window. That's a change in how it's measured, not in the code, so it
+  isn't done here.
 
 ## Live dry run
 

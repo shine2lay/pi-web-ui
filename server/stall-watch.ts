@@ -12,7 +12,7 @@
  *   they are here.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { open, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { UiWorkPage, UiWorkPageRecord, UiWorkPageTask, UiWorkWait } from "./protocol.js";
 import { resolveDataDir } from "./uploads.js";
@@ -703,5 +703,123 @@ export class StallTimesFile {
 		const times = stallTimesFrom(await readFile(path, "utf8"));
 		this.seen = { mtimeMs: st.mtimeMs, size: st.size, times };
 		return times;
+	}
+}
+
+/**
+ * H-STALL-COST-2 (docs/stall-watch.md): the newest Roles overview the server made (in practice pages-fresh's,
+ * made every 15 s whether or not a page is open) is used when it is at most this old; else the round makes its
+ * own. The round takes only the queue facts from it (owner pauses, needs-you, TL;DR times, done summaries): a
+ * task's state is the registry's, read each round, so an older overview can't make an item look empty.
+ */
+export const STALL_OVERVIEW_MAX_AGE_MS = 60_000;
+
+/** H-STALL-COST-2: the kept value when it was made at most maxAgeMs before now; none when older, when there is
+ *  none, or when its time is ahead of the clock (the clock went back). */
+export function youngEnough<T>(
+	kept: { value: T; at: number } | null | undefined,
+	now: number,
+	maxAgeMs = STALL_OVERVIEW_MAX_AGE_MS,
+): T | undefined {
+	if (!kept) return undefined;
+	const age = now - kept.at;
+	return age >= 0 && age <= maxAgeMs ? kept.value : undefined;
+}
+
+/** A kept record is a lead update when its line holds this: records are written with JSON.stringify, so the
+ *  key and value have no spaces, and inside a text the same characters would be escaped (\"). */
+const UPDATE_MARK = Buffer.from('"source":"update"');
+const NEWLINE = 0x0a;
+
+/**
+ * Each initiative's newest lead update, from the kept records (decision-records.ts:
+ * <dataDir>/decisions/records.jsonl, append-only), read a little at a time (H-STALL-COST-1 in
+ * docs/stall-watch.md). Parsing the whole 23 MB file again whenever it grew blocked the main thread for
+ * 230-353 ms, nearly every round. This reader keeps its place (inode and byte offset), reads only the bytes
+ * added since its last look and parses only the lines that hold "source":"update". A replaced or shrunk file,
+ * or one whose byte before the kept place isn't a line end any more, is read again from the start. Same answer
+ * as DecisionRecords.list() filtered to lead updates: the first record per ref wins and a line cut off by a
+ * crash is skipped. A last line still without its newline is left for the next look.
+ */
+export class LeadUpdatesFile {
+	private ino = -1;
+	private offset = 0;
+	private readonly refs = new Set<string>();
+	private readonly latest = new Map<string, number>();
+
+	constructor(private readonly file: () => string) {}
+
+	async get(): Promise<Map<string, number>> {
+		const path = this.file();
+		let st: { ino: number; size: number };
+		try {
+			st = await stat(path);
+		} catch {
+			this.reset(-1);
+			return new Map();
+		}
+		if (st.ino !== this.ino || st.size < this.offset) this.reset(st.ino);
+		if (st.size > this.offset) {
+			let chunk = await readPart(path, this.offset === 0 ? 0 : this.offset - 1, st.size);
+			if (this.offset > 0) {
+				// The byte before the kept place must still be a line end; if not, the file was rewritten.
+				if (chunk[0] !== NEWLINE) {
+					this.reset(st.ino);
+					chunk = await readPart(path, 0, st.size);
+				} else chunk = chunk.subarray(1);
+			}
+			const end = chunk.lastIndexOf(NEWLINE);
+			if (end >= 0) {
+				this.take(chunk.subarray(0, end + 1));
+				this.offset += end + 1;
+			}
+		}
+		return new Map(this.latest);
+	}
+
+	private reset(ino: number): void {
+		this.ino = ino;
+		this.offset = 0;
+		this.refs.clear();
+		this.latest.clear();
+	}
+
+	/** The lines in these whole lines that hold the mark, in file order. */
+	private take(lines: Buffer): void {
+		let at = lines.indexOf(UPDATE_MARK);
+		while (at >= 0) {
+			const start = lines.lastIndexOf(NEWLINE, at) + 1;
+			let end = lines.indexOf(NEWLINE, at);
+			if (end < 0) end = lines.length;
+			this.line(lines.toString("utf8", start, end));
+			at = lines.indexOf(UPDATE_MARK, end);
+		}
+	}
+
+	private line(text: string): void {
+		let r: { source?: unknown; ref?: unknown; initiative?: unknown; update?: unknown; at?: unknown } | null;
+		try {
+			r = JSON.parse(text);
+		} catch {
+			return; // a line cut off by a crash: skipped, as DecisionRecords does
+		}
+		if (!r || r.source !== "update" || typeof r.ref !== "string") return;
+		// The first record per (source, ref) wins, as in DecisionRecords.list().
+		if (this.refs.has(r.ref)) return;
+		this.refs.add(r.ref);
+		if (typeof r.initiative !== "string" || !r.initiative || !r.update || !isTime(r.at)) return;
+		if (!((this.latest.get(r.initiative) ?? -1) >= r.at)) this.latest.set(r.initiative, r.at);
+	}
+}
+
+/** Bytes [from, to) of the file. */
+async function readPart(path: string, from: number, to: number): Promise<Buffer> {
+	const fh = await open(path, "r");
+	try {
+		const buf = Buffer.allocUnsafe(Math.max(0, to - from));
+		const { bytesRead } = await fh.read(buf, 0, buf.length, from);
+		return buf.subarray(0, bytesRead);
+	} finally {
+		await fh.close();
 	}
 }

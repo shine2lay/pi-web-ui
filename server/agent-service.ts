@@ -527,7 +527,7 @@ import {
 import { type DecisionModel, isolatedDecisionModel } from "./decision-model.js";
 import { makeInitiativeUpdateTool } from "./initiative-update-tool.js";
 import { ProgressFeed } from "./progress-feed.js";
-import { StallTimesFile, StallWatch, leadUpdatesOf, type StallList } from "./stall-watch.js";
+import { LeadUpdatesFile, StallTimesFile, StallWatch, youngEnough, type StallList } from "./stall-watch.js";
 import { launchOrigin, toServiceInfo } from "./launch-origin.js";
 import { imageIfVersion, type ChatImage } from "./chat-image.js";
 import {
@@ -16122,6 +16122,7 @@ export class AgentService {
 
 	private stallWatch: StallWatch | undefined;
 	private stallTimes: StallTimesFile | undefined;
+	private stallLeadUpdates: LeadUpdatesFile | undefined;
 
 	/** pi-work-management's workDir(), as the Roles reader finds it: PI_WORK_DIR, or "work" in pi's agent folder. */
 	private workEventsFile(): string {
@@ -16134,14 +16135,17 @@ export class AgentService {
 	private startStallWatch(): void {
 		if (this.stallWatch) return;
 		this.stallTimes = new StallTimesFile(() => this.workEventsFile());
+		// H-STALL-COST-1: only the records file's new lines, not keptRecords()' whole parse.
+		this.stallLeadUpdates = new LeadUpdatesFile(() => this.decisions.file);
 		this.stallWatch = new StallWatch({
 			read: async () => {
-				const page = await this.readWorkPage();
+				// H-STALL-COST-2: the newest overview when young enough (pages-fresh makes one every 15 s), else one
+				// made now. Only the queue facts come from it; a task's state is the registry's, read now.
+				const overview = youngEnough(this.newestOverview, Date.now()) ?? (await this.readRolesOverview());
+				const page = await this.readWorkPage(overview);
 				const times = await this.stallTimes!.get();
-				const updates = this.keptRecords().list.flatMap((r) =>
-					r.source === "update" && r.initiative && r.update ? [{ initiative: r.initiative, at: r.at }] : [],
-				);
-				return { page, extra: { times, leadUpdates: leadUpdatesOf(updates) } };
+				const leadUpdates = await this.stallLeadUpdates!.get();
+				return { page, extra: { times, leadUpdates } };
 			},
 			log: (line) => console.log(line),
 		});
@@ -16639,6 +16643,8 @@ export class AgentService {
 
 	/** roles-overview: the Roles page's reader (made on first use; it only reads, see roles-overview.ts). */
 	private rolesReader: RolesOverviewReader | null = null;
+	/** stall-watch (H-STALL-COST-2): the newest overview made here, by any reader, and when (Date.now()). */
+	private newestOverview: { value: UiRolesOverview; at: number } | null = null;
 
 	/** roles-overview: every role's state for the Roles page (no chat is loaded for it, nothing is written). */
 	readRolesOverview(): Promise<UiRolesOverview> {
@@ -16688,7 +16694,10 @@ export class AgentService {
 				}),
 			});
 		}
-		return this.rolesReader.read();
+		return this.rolesReader.read().then((value) => {
+			this.newestOverview = { value, at: Date.now() };
+			return value;
+		});
 	}
 
 	/** roles-config-history (Ops #209): records changes to the roles' settings (started by startRolesConfigHistory). */

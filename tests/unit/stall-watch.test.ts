@@ -4,14 +4,18 @@
  * whom it would wake, in turn; the settings; the dry run's log lines; the extra times from the registry's text.
  * Fixed fixtures only: never the live registry.
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { UiWorkPage } from "../../server/protocol.js";
 import { workPageFrom, type WorkQueueFacts, type WorkTaskFacts } from "../../server/work-page.js";
+import { DecisionRecords } from "../../server/decision-records.js";
 import {
+	LeadUpdatesFile,
+	leadUpdatesOf,
 	STALL_DEFAULTS,
+	STALL_OVERVIEW_MAX_AGE_MS,
 	StallDryLog,
 	StallWatch,
 	stallExtraFrom,
@@ -21,6 +25,7 @@ import {
 	stallTime,
 	stallTimesFrom,
 	stallWakeLine,
+	youngEnough,
 	type StallExtra,
 	type StallFinding,
 	type StallSettings,
@@ -405,6 +410,143 @@ describe("stall-watch extra times", () => {
 		expect(stallTimesFrom(r.text(), NOW - 5 * H).get("project:p")?.leftAt).toBeUndefined();
 		expect(stallTimesFrom(r.text()).get("project:p")?.leftAt).toBe(NOW - 2 * H);
 		expect(stallTimesFrom(`${r.text()}{"v":1,"op":"task.st`).get("project:p")?.leftAt).toBe(NOW - 2 * H);
+	});
+});
+
+describe("stall-watch lead updates: only the records file's new lines (H-STALL-COST-1)", () => {
+	const dirs: string[] = [];
+	afterEach(() => {
+		for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+	});
+	const dir = () => {
+		const d = mkdtempSync(join(tmpdir(), "stall-lu-"));
+		dirs.push(d);
+		return d;
+	};
+	/** A kept record's line, as DecisionRecords.append writes it. */
+	const rec = (o: Record<string, unknown>) =>
+		JSON.stringify({ v: 1, id: `r-${String(o.ref)}`, ...o, how: "live", seen: NOW }) + "\n";
+	const upd = (ref: string, initiative: string | undefined, at: number, update: unknown = { changed: "x" }) =>
+		rec({ source: "update", ref, ...(initiative ? { initiative } : {}), at, ...(update ? { update } : {}) });
+	/** What the round read before: keptRecords()' list, filtered to lead updates. */
+	const viaList = (d: string) =>
+		leadUpdatesOf(
+			new DecisionRecords(d)
+				.list()
+				.flatMap((r) =>
+					r.source === "update" && r.initiative && r.update ? [{ initiative: r.initiative, at: r.at }] : [],
+				),
+		);
+
+	it("gives the same answer as keptRecords()' list on a mixed file", async () => {
+		const d = dir();
+		const f = join(d, "records.jsonl");
+		writeFileSync(
+			f,
+			[
+				upd("u1", "ini-a", NOW - 5 * H),
+				// The mark inside a text is escaped, so it isn't a lead update.
+				rec({ source: "message", ref: "m1", at: NOW - 4 * H, initiative: "ini-b", text: 'quotes {"source":"update"}' }),
+				// The mark in a nested object: read, then left out (not the record's own source).
+				rec({ source: "board", ref: "b1", at: NOW - 3 * H, initiative: "ini-b", meta: { source: "update" } }),
+				upd("u2", "ini-a", NOW - 2 * H),
+				// The same ref again, later: the first record wins, so this time doesn't count.
+				upd("u1", "ini-a", NOW - 1 * H),
+				upd("u3", undefined, NOW - 1 * H),
+				upd("u4", "ini-b", NOW - 90 * M, null),
+				// A line cut off by a crash, ended later by DecisionRecords.load().
+				'{"v":1,"id":"r-u5","source":"update","ref":"u5","initiative":"ini-c","at":\n',
+				upd("u6", "ini-c", NOW - 30 * M),
+			].join(""),
+		);
+		const want = new Map([
+			["ini-a", NOW - 2 * H],
+			["ini-c", NOW - 30 * M],
+		]);
+		for (let run = 0; run < 2; run++) {
+			expect(viaList(d)).toEqual(want);
+			expect(await new LeadUpdatesFile(() => f).get()).toEqual(want);
+		}
+	});
+
+	it("reads what was added since its last look; a half-written last line waits for its newline", async () => {
+		const d = dir();
+		const f = join(d, "records.jsonl");
+		writeFileSync(f, upd("u1", "ini-a", NOW - 5 * H) + rec({ source: "message", ref: "m1", at: NOW - 4 * H }));
+		const lu = new LeadUpdatesFile(() => f);
+		expect(await lu.get()).toEqual(new Map([["ini-a", NOW - 5 * H]]));
+		appendFileSync(f, upd("u2", "ini-a", NOW - 2 * H));
+		expect(await lu.get()).toEqual(new Map([["ini-a", NOW - 2 * H]]));
+		const line = upd("u3", "ini-b", NOW - 10 * M);
+		appendFileSync(f, line.slice(0, -1));
+		expect((await lu.get()).has("ini-b")).toBe(false);
+		appendFileSync(f, "\n");
+		expect(await lu.get()).toEqual(
+			new Map([
+				["ini-a", NOW - 2 * H],
+				["ini-b", NOW - 10 * M],
+			]),
+		);
+		expect(await lu.get()).toEqual(viaList(d));
+		// A ref it has seen already, appended again later, still doesn't count.
+		appendFileSync(f, upd("u3", "ini-b", NOW - 1 * M));
+		expect((await lu.get()).get("ini-b")).toBe(NOW - 10 * M);
+		expect(await lu.get()).toEqual(viaList(d));
+	});
+
+	it("a replaced, shrunk or rewritten file is read again from the start", async () => {
+		const d = dir();
+		const f = join(d, "records.jsonl");
+		writeFileSync(f, upd("u1", "ini-a", NOW - 5 * H));
+		const lu = new LeadUpdatesFile(() => f);
+		expect(await lu.get()).toEqual(new Map([["ini-a", NOW - 5 * H]]));
+		// Replaced (a new file put in its place).
+		writeFileSync(`${f}.new`, upd("x1", "ini-z", NOW - 1 * H));
+		renameSync(`${f}.new`, f);
+		expect(await lu.get()).toEqual(new Map([["ini-z", NOW - 1 * H]]));
+		// Shrunk to nothing, then the same ref again: counted, since it starts over.
+		writeFileSync(f, "");
+		expect(await lu.get()).toEqual(new Map());
+		appendFileSync(f, upd("x1", "ini-z", NOW - 1 * H));
+		expect(await lu.get()).toEqual(new Map([["ini-z", NOW - 1 * H]]));
+		// Rewritten in place, longer: the byte before its place isn't a line end any more.
+		writeFileSync(f, upd("y1", "ini-y", NOW - 3 * H, { changed: "a much longer update text ".repeat(8) }));
+		expect(await lu.get()).toEqual(new Map([["ini-y", NOW - 3 * H]]));
+		expect(await lu.get()).toEqual(viaList(d));
+	});
+
+	it("no file: nothing, until there is one", async () => {
+		const d = dir();
+		const f = join(d, "records.jsonl");
+		const lu = new LeadUpdatesFile(() => f);
+		expect(await lu.get()).toEqual(new Map());
+		writeFileSync(f, upd("u1", "ini-a", NOW - 5 * H));
+		expect(await lu.get()).toEqual(new Map([["ini-a", NOW - 5 * H]]));
+	});
+});
+
+describe("stall-watch: the newest overview's queue facts (H-STALL-COST-2)", () => {
+	it("used up to 60 s old; not when older, missing, or ahead of the clock", () => {
+		expect(STALL_OVERVIEW_MAX_AGE_MS).toBe(60_000);
+		expect(youngEnough({ value: "ov", at: NOW - 15_000 }, NOW)).toBe("ov");
+		expect(youngEnough({ value: "ov", at: NOW - 60_000 }, NOW)).toBe("ov");
+		expect(youngEnough({ value: "ov", at: NOW }, NOW)).toBe("ov");
+		expect(youngEnough({ value: "ov", at: NOW - 60_001 }, NOW)).toBeUndefined();
+		expect(youngEnough({ value: "ov", at: NOW + 1_000 }, NOW)).toBeUndefined();
+		expect(youngEnough(null, NOW)).toBeUndefined();
+		expect(youngEnough(undefined, NOW)).toBeUndefined();
+	});
+	it("a task linked after the overview was made still counts as open: its state is the registry's", () => {
+		const r = new Reg();
+		r.project(NOW - 3 * H, "p", "ops").task(NOW - 10_000, 9, { project: "p" }, "ready");
+		// The overview made before the link has no facts for task 9; the one after has its TL;DR line.
+		const older = stallReview(workPageFrom(r.text(), [], NOW), r.extra(), NOW, S);
+		r.fact(9, NOW - 10_000, { progress: { text: "started", at: NOW - 5_000 } });
+		const newer = stallReview(r.page(), r.extra(), NOW, S);
+		expect(older.findings).toEqual([]);
+		expect(newer.findings).toEqual([]);
+		const stateOf = (rv: typeof older) => rv.items.find((i) => i.id === "p")?.state;
+		expect(stateOf(older)).toBe(stateOf(newer));
 	});
 });
 
