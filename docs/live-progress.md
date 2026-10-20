@@ -111,7 +111,14 @@ Each next task tests its own (rule 16) and records HIT or MISS here, under its h
 
 **What would prove it wrong.** Either fails.
 
-**Result.** Pending (#271).
+**Result (#271): HIT, both parts held.** 6293f27f was installed on Oct 19 at 22:03 PDT with every deploy check passing (`pi-web-deploy result 6293f27f` = 0). The live look at 22:08:43 PDT read the installed page as its own look-only client (`carry-on:ops-live-look-initiatives-live`: only its hello and the page's watches were sent, every other send was held), at 1400 × 1000 and 390 × 844, times and page words only:
+
+- For the 3 initiatives with the newest records, the first Latest-updates line is the newest record, to the minute the page shows, on both sizes. A script found each newest record in the data the page itself received: the work page's registry changes in the initiative's scope, its open tasks' progress lines and its done tasks' summaries, and the lead's posts from the progress feed.
+  - Design department in Temper: newest record 22:08, a state change of #98 by Design; first line 22:08, Design.
+  - Team in Temper: newest record 22:07, a state change of #116 by Temper; first line 22:07, Temper, then QA's "#18 done: …" at 21:55. The lead's newest post is 2 hours old ("Lead’s report · 2h ago"); before this change, Latest updates showed only the lead's posts here.
+  - Team in Temper groundwork (Oct 3-19): newest record 08:18, an initiative change by Architecture; first line 08:18, Architecture.
+- "Needs attention" appears nowhere on either size, and neither do "Last report" or the old stuck note ("Waiting on you, but its question isn’t listed"). No page errors.
+- Not on the live data, so shown by the sealed test only (`tests/initiatives-live-test.mjs`): an open task's progress line ("#N <line>"; none of these initiatives' open tasks had one at the time) and "Question with <lead>" (no record holds a question with a lead; see H-LIVE-NEEDS-1). There, a task-done record with no lead post showed as "#5 done: <summary>" within one refresh (4.75 s and 4.88 s of 6 s, in two runs), a blocked task read "Waits on Temper #113 · …", a stuck task with `withLead` read "Question with Ops" with nothing on the owner, and "Needs attention" appeared nowhere at 1400 and 390 px.
 
 ### H-ROLES-LIVE-1 (Roles page, Ops #272)
 
