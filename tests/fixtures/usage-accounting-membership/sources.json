@@ -1,0 +1,113 @@
+{
+  "sessions": [
+    {
+      "file": "/synthetic/queue.jsonl",
+      "status": "complete",
+      "records": [
+        {"type":"session","id":"queue-1","timestamp":"2026-10-11T00:00:00.000Z","cwd":"/same-folder"},
+        {"type":"custom","customType":"queue","data":{"v":1,"op":"add","id":7,"project":"alpha","ts":1791792000000,"plan":{"goal":"NEVER_EXPOSE_PLAN_305","title":"Task 7"}}},
+        {"type":"custom","customType":"queue","data":{"v":1,"op":"start","id":7,"lane":true,"ts":1791795600000}},
+        {"type":"custom","customType":"queue","data":{"v":1,"op":"chat","id":7,"file":"/synthetic/task.jsonl","title":"Task 7","ts":1791795660000}},
+        {"type":"custom","customType":"queue","data":{"v":1,"op":"add","id":8,"standalone":true,"ts":1791799200000,"plan":{"goal":"NEVER_EXPOSE_PLAN_305"}}},
+        {"type":"custom","customType":"queue","data":{"v":1,"op":"update","id":7,"project":"beta","ts":1792022400000,"plan":{"goal":"NEVER_EXPOSE_UPDATE_305"}}},
+        {"type":"custom","customType":"queue","data":{"v":1,"op":"done","id":7,"ts":1792108800000,"summary":"NEVER_EXPOSE_SUMMARY_305"}},
+        {"type":"custom","customType":"queue","data":{"v":1,"op":"update","id":7,"initiative":"forbidden-late-parent","ts":1792195200000,"plan":{"goal":"NEVER_EXPOSE_UPDATE_305"}}},
+        {"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"NEVER_EXPOSE_CONTENT_305"}],"toolResults":"NEVER_EXPOSE_TOOL_305"}}
+      ]
+    },
+    {
+      "file":"/synthetic/task.jsonl","status":"complete","records":[
+        {"type":"session","id":"task-7","timestamp":"2026-10-12T09:00:00.000Z"},
+        {"type":"custom","customType":"queue","data":{"v":1,"op":"assigned","id":7,"project":"alpha","from":{"file":"/synthetic/queue.jsonl","title":"NEVER_EXPOSE_FROM_TITLE_305"},"ts":1791795720000,"plan":{"goal":"NEVER_EXPOSE_PLAN_305"}}}
+      ]
+    },
+    {
+      "file":"/synthetic/fork.jsonl","status":"complete","records":[
+        {"type":"session","id":"fork-7","timestamp":"2026-10-12T09:03:00.000Z","parentSession":"/synthetic/task.jsonl"},
+        {"type":"custom","customType":"queue","data":{"v":1,"op":"assigned","id":7,"from":{"file":"/synthetic/queue.jsonl"},"project":"alpha","ts":1791795720000,"plan":{"goal":"NEVER_EXPOSE_PLAN_305"}}}
+      ]
+    },
+    {
+      "file":"/synthetic/fork-child.jsonl","status":"complete","records":[
+        {"type":"session","id":"fork-child-7","timestamp":"2026-10-13T09:00:00.000Z","parentSession":"/synthetic/fork.jsonl"}
+      ]
+    },
+    {
+      "file":"/synthetic/clone.jsonl","status":"complete","records":[
+        {"type":"session","id":"clone-7","timestamp":"2026-10-12T10:00:00.000Z","parentSession":"/synthetic/task.jsonl"}
+      ]
+    },
+    {
+      "file":"/synthetic/resume.jsonl","status":"complete","records":[
+        {"type":"session","id":"task-7","timestamp":"2026-10-12T09:00:00.000Z"}
+      ]
+    },
+    {
+      "file":"/synthetic/delegate.jsonl","status":"complete","records":[
+        {"type":"session","id":"delegate-7","timestamp":"2026-10-12T09:04:00.000Z"},
+        {"type":"message","message":{"content":"NEVER_EXPOSE_DELEGATE_CONTENT_305"}}
+      ]
+    },
+    {
+      "file":"/synthetic/helper.jsonl","status":"complete","records":[
+        {"type":"session","id":"helper-7","timestamp":"2026-10-12T09:05:00.000Z"}
+      ]
+    },
+    {
+      "file":"/synthetic/unnamed-helper.jsonl","status":"complete","records":[
+        {"type":"session","id":"unnamed-helper","timestamp":"2026-10-12T09:05:00.000Z","cwd":"/same-folder","title":"Task 7"}
+      ]
+    },
+    {
+      "file":"/synthetic/home.jsonl","status":"complete","records":[
+        {"type":"session","id":"home","timestamp":"2026-10-12T09:05:00.000Z","cwd":"/same-folder","title":"Task 7"}
+      ]
+    },
+    {
+      "file":"/synthetic/ad-hoc.jsonl","status":"complete","records":[
+        {"type":"session","id":"ad-hoc","timestamp":"2026-10-12T09:02:00.000Z","cwd":"/same-folder","title":"Task 7"},
+        {"type":"message","message":{"content":"NEVER_EXPOSE_PROSE_PARENT_Task_7_305"}}
+      ]
+    },
+    {
+      "file":"/synthetic/rerun.jsonl","status":"complete","records":[
+        {"type":"session","id":"rerun-7","timestamp":"2026-10-13T09:00:00.000Z"},
+        {"type":"custom","customType":"queue","data":{"v":1,"op":"assigned","id":7,"project":"alpha","from":{"file":"/synthetic/queue.jsonl"},"ts":1791882000000,"plan":{"goal":"NEVER_EXPOSE_PLAN_305"}}}
+      ]
+    },
+    {
+      "file":"/synthetic/queue-fork.jsonl","status":"complete","records":[
+        {"type":"session","id":"queue-fork","timestamp":"2026-10-13T09:00:00.000Z","parentSession":"/synthetic/queue.jsonl"},
+        {"type":"custom","customType":"queue","data":{"v":1,"op":"add","id":7,"project":"alpha","ts":1791792000000,"plan":{"goal":"NEVER_EXPOSE_PLAN_305"}}}
+      ]
+    }
+  ],
+  "registry": {
+    "status":"complete",
+    "records":[
+      {"v":1,"seq":1,"op":"initiative.create","id":"old","ts":1791676800000,"goal":"NEVER_EXPOSE_REGISTRY_305"},
+      {"v":1,"seq":2,"op":"initiative.create","id":"new","ts":1791676800000,"goal":"NEVER_EXPOSE_REGISTRY_305"},
+      {"v":1,"seq":3,"op":"initiative.create","id":"third","ts":1791676800000,"goal":"NEVER_EXPOSE_REGISTRY_305"},
+      {"v":1,"seq":4,"op":"project.create","id":"alpha","initiative":"old","ts":1791676800000,"name":"NEVER_EXPOSE_PROJECT_NAME_305"},
+      {"v":1,"seq":5,"op":"project.create","id":"beta","initiative":"third","ts":1791676800000,"name":"NEVER_EXPOSE_PROJECT_NAME_305"},
+      {"v":1,"seq":6,"op":"task.link","queue":"/synthetic/queue.jsonl","task":7,"added":1791792000000,"ts":1791792000000,"project":"alpha","goal":"NEVER_EXPOSE_REGISTRY_305"},
+      {"v":1,"seq":7,"op":"project.change","id":"alpha","changes":{"initiative":"new","goal":"NEVER_EXPOSE_REGISTRY_CHANGE_305"},"ts":1791936000000},
+      {"v":1,"seq":8,"op":"project.change","id":"beta","changes":{"initiative":"old","name":"NEVER_EXPOSE_REGISTRY_CHANGE_305"},"ts":1792108800000}
+    ]
+  },
+  "conversations": {
+    "status":"complete",
+    "records":[
+      {"v":"usage-ledger/1","conversationId":"parent-conv","sessionId":"task-7","sessionFile":"/synthetic/task.jsonl","persist":true,"origin":"chat","parentConversationId":null,"at":"2026-10-12T09:00:00.000Z","occurredAt":"2026-10-12T09:00:00.000Z","title":"NEVER_EXPOSE_CONVERSATION_TITLE_305","systemPrompt":"NEVER_EXPOSE_CONVERSATION_BODY_305"},
+      {"v":"usage-ledger/1","conversationId":"helper-conv","sessionId":"helper-7","sessionFile":"/synthetic/helper.jsonl","persist":true,"origin":"helper","parentConversationId":"parent-conv","at":"2026-10-12T09:05:00.000Z","occurredAt":"2026-10-12T09:05:00.000Z","title":"Task 7","initialMessages":"NEVER_EXPOSE_HELPER_BODY_305"},
+      {"v":"usage-ledger/1","conversationId":"unnamed-helper-conv","sessionId":"unnamed-helper","sessionFile":"/synthetic/unnamed-helper.jsonl","persist":true,"origin":"helper","parentConversationId":null,"at":"2026-10-12T09:05:00.000Z","occurredAt":"2026-10-12T09:05:00.000Z","title":"Task 7","initialMessages":"NEVER_EXPOSE_HELPER_BODY_305"},
+      {"v":"usage-ledger/1","conversationId":"app-host","sessionId":null,"sessionFile":null,"persist":false,"origin":"app","parentConversationId":"parent-conv","at":"2026-10-12T09:05:00.000Z","occurredAt":"2026-10-12T09:05:00.000Z"}
+    ]
+  },
+  "delegates": {
+    "status":"complete",
+    "records":[
+      {"runId":"acp-run-7","file":"/synthetic/delegate.jsonl","parentFile":"/synthetic/task.jsonl","ts":1791795840000,"prompt":"NEVER_EXPOSE_DELEGATE_PROMPT_305","result":"NEVER_EXPOSE_DELEGATE_RESULT_305"}
+    ]
+  }
+}

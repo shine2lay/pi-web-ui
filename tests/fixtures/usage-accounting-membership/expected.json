@@ -1,0 +1,28 @@
+{
+  "v":"usage-membership-map/1",
+  "memberships":[
+    {"queue":"/synthetic/queue.jsonl","task":7,"addedAt":"2026-10-12T08:00:00.000Z","file":"/synthetic/clone.jsonl","sessionId":"clone-7","from":"2026-10-12T10:00:00.000Z","until":null},
+    {"queue":"/synthetic/queue.jsonl","task":7,"addedAt":"2026-10-12T08:00:00.000Z","file":"/synthetic/delegate.jsonl","sessionId":"delegate-7","from":"2026-10-12T09:04:00.000Z","until":null},
+    {"queue":"/synthetic/queue.jsonl","task":7,"addedAt":"2026-10-12T08:00:00.000Z","file":"/synthetic/fork-child.jsonl","sessionId":"fork-child-7","from":"2026-10-13T09:00:00.000Z","until":null},
+    {"queue":"/synthetic/queue.jsonl","task":7,"addedAt":"2026-10-12T08:00:00.000Z","file":"/synthetic/fork.jsonl","sessionId":"fork-7","from":"2026-10-12T09:03:00.000Z","until":null},
+    {"queue":"/synthetic/queue.jsonl","task":7,"addedAt":"2026-10-12T08:00:00.000Z","file":"/synthetic/helper.jsonl","sessionId":"helper-7","from":"2026-10-12T09:05:00.000Z","until":null},
+    {"queue":"/synthetic/queue.jsonl","task":7,"addedAt":"2026-10-12T08:00:00.000Z","file":"/synthetic/rerun.jsonl","sessionId":"rerun-7","from":"2026-10-13T09:00:00.000Z","until":null},
+    {"queue":"/synthetic/queue.jsonl","task":7,"addedAt":"2026-10-12T08:00:00.000Z","file":"/synthetic/resume.jsonl","sessionId":"task-7","from":"2026-10-12T09:01:00.000Z","until":null},
+    {"queue":"/synthetic/queue.jsonl","task":7,"addedAt":"2026-10-12T08:00:00.000Z","file":"/synthetic/task.jsonl","sessionId":"task-7","from":"2026-10-12T09:01:00.000Z","until":null}
+  ],
+  "parentHistory":[
+    {"queue":"/synthetic/queue.jsonl","task":7,"addedAt":"2026-10-12T08:00:00.000Z","project":"alpha","initiative":"old","effectiveAt":"2026-10-12T08:00:00.000Z"},
+    {"queue":"/synthetic/queue.jsonl","task":7,"addedAt":"2026-10-12T08:00:00.000Z","project":"alpha","initiative":"new","effectiveAt":"2026-10-14T00:00:00.000Z"},
+    {"queue":"/synthetic/queue.jsonl","task":7,"addedAt":"2026-10-12T08:00:00.000Z","project":"beta","initiative":"third","effectiveAt":"2026-10-15T00:00:00.000Z"},
+    {"queue":"/synthetic/queue.jsonl","task":7,"addedAt":"2026-10-12T08:00:00.000Z","project":"beta","initiative":"old","effectiveAt":"2026-10-16T00:00:00.000Z"},
+    {"queue":"/synthetic/queue.jsonl","task":8,"addedAt":"2026-10-12T10:00:00.000Z","project":null,"initiative":null,"effectiveAt":"2026-10-12T10:00:00.000Z"}
+  ],
+  "notInAnyTask":[
+    {"file":"/synthetic/ad-hoc.jsonl","sessionId":"ad-hoc"},
+    {"file":"/synthetic/home.jsonl","sessionId":"home"},
+    {"file":"/synthetic/queue-fork.jsonl","sessionId":"queue-fork"},
+    {"file":"/synthetic/queue.jsonl","sessionId":"queue-1"},
+    {"file":"/synthetic/unnamed-helper.jsonl","sessionId":"unnamed-helper"}
+  ],
+  "gaps":[]
+}
