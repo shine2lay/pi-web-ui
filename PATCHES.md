@@ -22,6 +22,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: `tests/unit/initiatives-projects-done.test.ts` (split, counts, dropped, no projects, all finished, the loose box, the card line, the fold closed above the first active row, its rows, a name opening its project), the updated rows in `tests/unit/initiatives-page-{model,plan,tasks}.test.ts`, and `tests/initiatives-projects-done-test.mjs` (sealed server and Chrome at 1400 and 390 px: card text and place, fold place, closed, 44 px, opens on click, rows, no finished project among the active rows, no sideways scroll), then the landing gate.
 - Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
 
+## live-progress-contract: the shared data contract for live progress on Roles and Initiatives
+
+- `local` (owner 2026-10-19, via COO rm-63784858: "i want live progress in both role and initiatives"; Ops #269, groundwork for #270 server, #271 Initiatives, #272 Roles). Evidence, contract, owner rule and hypotheses H-LIVE-NEEDS-1, H-INIT-LIVE-1, H-ROLES-LIVE-1: `docs/live-progress.md`.
+- `server/protocol.ts`: new optional types and fields, types only, each with one comment line pointing to the doc: `UiTaskProgress { text; at }` and `UiRoleDoneTask { id; title; summary; at }`; `UiRoleTask.progress` and `.withLead`; `UiWorkPageTask.progress`, `.withLead` and `.doneSummary`; `UiRoleOverview.doneRecent`. No server or page fills or reads them yet; an older server leaves them out. Additive and optional: no `PROTOCOL_VERSION` change.
+- Unchanged: every behaviour and layout; how asks, TL;DR lines and done tasks are read.
+- Checks: the landing gate (typecheck, protocol sync, tests) passes unchanged.
+- Undo: revert this commit (nothing live changes, so no install is needed).
+
 ## roles-budget-card: a reported role's own-work budget on its card; spending first in its panel
 
 - `local` (owner 2026-10-19, "Show it on the main view", Ops #265). Hypothesis H-BUDGET-CARD-1 and result: `docs/roles-budget-card.md`.

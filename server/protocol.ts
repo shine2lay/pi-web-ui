@@ -2086,6 +2086,20 @@ export interface UiRoleTaskEvent {
 	at?: number;
 }
 
+/** live-progress: one TL;DR line of a task's own chat and its time in ms (docs/live-progress.md). */
+export interface UiTaskProgress {
+	text: string;
+	at: number;
+}
+
+/** live-progress: one done task of a role's queue, with its queue_done summary (docs/live-progress.md). */
+export interface UiRoleDoneTask {
+	id: number;
+	title: string;
+	summary: string;
+	at: number;
+}
+
 /** roles-overview: a task of a role's home queue. */
 export interface UiRoleTask {
 	/** Original proposal inputs, separate from plan approval. */
@@ -2107,6 +2121,10 @@ export interface UiRoleTask {
 	busy?: boolean;
 	/** The newest TL;DR line of its own chat. */
 	latest?: UiRoleTldrLine;
+	/** live-progress: its own chat's newest TL;DR line with its time (open tasks; docs/live-progress.md). */
+	progress?: UiTaskProgress;
+	/** live-progress: the role whose home chat has its question while it hasn't reached the owner (docs/live-progress.md). */
+	withLead?: string;
 	/** roles-next-action: optional for older servers; no queue or permission change. */
 	next?: UiRoleTaskNext;
 	queueEvent?: UiRoleTaskEvent;
@@ -2249,6 +2267,12 @@ export interface UiWorkPageTask extends UiWorkTaskRef {
 	paused?: UiTaskQueueHold;
 	/** Its question is in the owner's Needs-you list: what it says and since when (ms). */
 	needsYou?: { text: string; since?: number };
+	/** live-progress: its own chat's newest TL;DR line with its time (open tasks; docs/live-progress.md). */
+	progress?: UiTaskProgress;
+	/** live-progress: the role whose home chat has its question while it hasn't reached the owner (docs/live-progress.md). */
+	withLead?: string;
+	/** live-progress: done: its queue_done summary, clipped to 300 characters (docs/live-progress.md). */
+	doneSummary?: string;
 }
 
 /** initiatives-plan-data: a kind of registry change (pi-queue's work log ops). */
@@ -2474,6 +2498,8 @@ export interface UiRoleOverview {
 	/** TL;DR lines of its home chat and task chats, newest first (at most ROLES_TLDR_MAX). */
 	tldr: UiRoleTldrLine[];
 	queue?: UiRoleQueue;
+	/** live-progress: its queue's newest 10 done tasks, newest first (docs/live-progress.md). */
+	doneRecent?: UiRoleDoneTask[];
 	requests: { open: number; newest?: UiRoleRequest };
 	/** roles-sent: what it asked of other roles that has no reply yet (absent from an older server). */
 	sent?: UiRoleSent;
