@@ -500,7 +500,22 @@ describe("Needs you", () => {
 			["safe role problem", project([role("frontend", { problems: ["report"] })]), "partial"],
 			["roster empty", project([]), "partial"],
 			["role omitted", project([role(), { id: "Bad Id" }]), "partial"],
-			["9 started chats", project([role("frontend", { queue: queue({ active: many }) })]), "partial"],
+			[
+				"9 started chats, an older server (no allChatsRead)",
+				project([role("frontend", { queue: queue({ active: many }) })]),
+				"partial",
+			],
+			// roles-asks-read: the server's own word that a started chat wasn't read.
+			[
+				"the server says not every started chat was read",
+				project([role("frontend", { allChatsRead: false })]),
+				"partial",
+			],
+			[
+				"a flag that isn't a boolean: the old count rule",
+				project([role("frontend", { queue: queue({ active: many }), allChatsRead: "yes" })]),
+				"partial",
+			],
 			[
 				"asks not a list",
 				projectUsefulRoles({ ...state(), overview: { at: NOW, roles: [role()] } }, "open", NOW),
@@ -525,8 +540,14 @@ describe("Needs you", () => {
 			// Shown counts are then marked last received, not current.
 			expect({ name, lastReceived: model.lastReceived }).toEqual({ name, lastReceived: model.roles.length > 0 });
 		}
-		// The same 8 started chats the server reads is still complete.
+		// The same 8 started chats an older server reads is still complete.
 		expect(project([role("frontend", { queue: queue({ active: many.slice(0, 8) }) })]).needsYou.tell).toBe("can-tell");
+		// roles-asks-read: a server that read every started chat says so, however many there are.
+		const forty = Array.from({ length: 40 }, (_, i) => started(i + 1));
+		for (const active of [many, forty])
+			expect(project([role("frontend", { queue: queue({ active }), allChatsRead: true })]).needsYou.tell).toBe(
+				"can-tell",
+			);
 		// A stuck task is accounted for when its question is listed, or when it or its queue is paused.
 		const paused = { at: NOW, why: "Owner: later" };
 		for (const model of [

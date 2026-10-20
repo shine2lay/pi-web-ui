@@ -26,8 +26,9 @@ export const PATH_LIMIT = 4096;
 export const STALE_MS = 120_000;
 /** An ask's start may be this far ahead of this browser's clock (another device); more: "time unknown". */
 export const CLOCK_SKEW_MS = 300_000;
-/** The server reads at most this many started task chats per role (ROLES_TASK_CHATS_MAX): open
- *  dialogs in the others aren't seen, so "nothing waits on you" can't be said then. */
+/** An older server, one that doesn't send allChatsRead, read at most this many started task chats per
+ *  role: open dialogs in the others weren't seen, so "nothing waits on you" can't be said then. A newer
+ *  server says per role whether it read every one (roles-asks-read, Ops #268). */
 export const TASK_CHATS_READ = 8;
 const KEY_LIMIT = 300;
 
@@ -543,7 +544,8 @@ function projectRole(row: Fields, id: string): ProjectedRole {
 	if (model) projected.model = model.text;
 	return {
 		role: projected,
-		asksSeen: startedChats <= TASK_CHATS_READ,
+		// roles-asks-read: the server's own word when it gives one (only a real boolean); else the old count rule.
+		asksSeen: typeof row.allChatsRead === "boolean" ? row.allChatsRead : startedChats <= TASK_CHATS_READ,
 		decisionKeys,
 	};
 }

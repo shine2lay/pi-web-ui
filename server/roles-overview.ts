@@ -89,8 +89,10 @@ export const ROLES_QUEUED_MAX = 20;
 export const ROLES_DROPPED_MAX = 5;
 /** A report longer than this is cut (the rest is in the chat). */
 export const ROLES_REPORT_MAX = 12_000;
-/** Started task chats read per role (a queue runs at most 8 lanes). */
-export const ROLES_TASK_CHATS_MAX = 8;
+/** Started task chats read per role, for their TL;DR lines and open dialogs. roles-asks-read (Ops #268): 40, so
+ *  a role with more than a queue's 8 lanes of started tasks still has every chat read; past it the role's
+ *  allChatsRead is false and the page doesn't confirm its asks (docs/roles-asks-read.md has the timing). */
+export const ROLES_TASK_CHATS_MAX = 40;
 /** The 6 am report job's days are Pacific days (role-reports.mjs TZ). */
 export const REPORT_TZ = "America/Los_Angeles";
 
@@ -889,15 +891,22 @@ export class RolesOverviewReader {
 		// Started tasks' own chats: their latest lines (and whether they are working).
 		const infos: RoleTaskInfo[] = [];
 		let chats = 0;
+		// roles-asks-read: every started task chat was read (an open dialog in one that wasn't isn't listed).
+		let allChatsRead = true;
 		for (const task of tasks) {
 			if (task.status === "done" || task.status === "dropped") continue;
 			const info: RoleTaskInfo = { task, lines: [] };
 			infos.push(info);
-			if (!task.chat?.file || !ACTIVE.has(task.status) || chats >= ROLES_TASK_CHATS_MAX) continue;
+			if (!task.chat?.file || !ACTIVE.has(task.status)) continue;
+			if (chats >= ROLES_TASK_CHATS_MAX) {
+				allChatsRead = false;
+				continue;
+			}
 			chats++;
 			const file = await this.paths.check(task.chat.file);
 			if (!file) {
 				problems.push(`task #${task.id} chat`);
+				allChatsRead = false;
 				continue;
 			}
 			info.file = file;
@@ -909,6 +918,7 @@ export class RolesOverviewReader {
 				lastActivity = Math.max(lastActivity ?? 0, Math.round(s.mtimeMs));
 			} catch {
 				problems.push(`task #${task.id} chat`);
+				allChatsRead = false;
 			}
 		}
 		const taskOfChat = (file: string | undefined) =>
@@ -1127,6 +1137,7 @@ export class RolesOverviewReader {
 			...(lastActivity ? { lastActivity } : {}),
 			...(homeBusy ? { homeBusy: true } : {}),
 			asks: sortedAsks,
+			allChatsRead,
 			tldr: tldr.slice(0, ROLES_TLDR_MAX),
 			...(queue ? { queue } : {}),
 			requests: { open: requests.open, ...(requests.newest ? { newest: requests.newest } : {}) },

@@ -6961,7 +6961,15 @@ as agreed in its addendum (`ADDENDUM-OPS200.md` there, sha256 `eb315ad1…`, Sec
 - Undo: `pi-web-deploy rollback`, or revert this one commit with `wt`. Nothing to migrate.
 - No server, feed, watch, source, access or retention change. A true "nothing waiting on you" needs
   feed-side signals (addendum item 7) and is a separate plan.
-- If `UiRoleTask`, `UiRoleAsk` or `ROLES_TASK_CHATS_MAX` (8) change, update the projection and tests.
+- If `UiRoleTask`, `UiRoleAsk` or `ROLES_TASK_CHATS_MAX` (8; 40 since `roles-asks-read`) change, update the projection and tests.
+
+## roles-asks-read: read every started task chat for the owner's asks, and say when one wasn't
+
+- `local` (owner 2026-10-19: "i see asks unconfirmed all the time"; Ops #268, lead Ops). Hypothesis H-ASKS-READ-1, the timing and the result: `docs/roles-asks-read.md`.
+- `server/roles-overview.ts`: `ROLES_TASK_CHATS_MAX` 8 -> 40, so up to 40 started task chats per role are read, for their TL;DR lines and open dialogs (sealed timing: a warm overview build grows by less than 200 ms p90, so they are read fully). Each role gets `allChatsRead` (optional `UiRoleOverview` field in `server/protocol.ts`): false when the role has more than 40 started chats or one couldn't be read.
+- `web/src/roles-useful-model.ts`: a role's asks count as seen when the server says `allChatsRead: true`, false when it says false; a server without the field keeps the old rule (at most `TASK_CHATS_READ` = 8 started chats). Which tasks and asks count is unchanged: "Asks unconfirmed: some roles not read" shows only when a started chat really wasn't read.
+- Tests: `tests/unit/roles-useful-asks.test.ts` (12 started chats with a dialog in the 11th, 41 chats, an unreadable chat), `tests/unit/roles-useful.test.ts` (the flag against the old count rule); sealed `tests/roles-asks-read-test.mjs` (a dialog in the 11th of 12 started chats is listed, "1 waiting on you", the status pill says Live 10 s after opening). Timing tool: `scripts/roles-asks-timing.mts` (sealed, synthetic chats only).
+- Undo: revert this patch and install with `pi-web-deploy`; nothing stored changes. An older page with this server ignores the field.
 
 ## acp-fold
 

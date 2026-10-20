@@ -2468,6 +2468,9 @@ export interface UiRoleOverview {
 	homeBusy?: boolean;
 	/** Its open asks, oldest first. */
 	asks: UiRoleAsk[];
+	/** roles-asks-read: every started task chat was read for open dialogs (false: more than
+	 *  ROLES_TASK_CHATS_MAX started, or one couldn't be read). Absent from an older server, which read 8 at most. */
+	allChatsRead?: boolean;
 	/** TL;DR lines of its home chat and task chats, newest first (at most ROLES_TLDR_MAX). */
 	tldr: UiRoleTldrLine[];
 	queue?: UiRoleQueue;

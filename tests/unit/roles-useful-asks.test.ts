@@ -227,3 +227,74 @@ describe("Needs you follows the real reader", () => {
 		expect(page(await r.read())).toMatchObject({ tell: "can-tell", total: 0, items: [] });
 	});
 });
+
+// roles-asks-read (Ops #268, docs/roles-asks-read.md): every started task chat is read for open dialogs, up
+// to ROLES_TASK_CHATS_MAX (40) per role, and the server says per role whether it read them all.
+describe("Needs you reads every started task chat", () => {
+	/** A role whose home chat started `n` lane tasks, each with its own chat. */
+	function started(id: string, n: number): { home: string; chats: string[] } {
+		const chats = Array.from({ length: n }, (_, i) => transcript(`${id}-task-${i + 1}`, []));
+		const ops: Line[] = [q({ op: "lanes", n }, T0)];
+		for (let i = 1; i <= n; i++)
+			ops.push(q({ op: "add", id: i, plan: { title: `Task ${i}` }, touches: [`r${i}`] }, T0));
+		ops.push(q({ op: "run" }, T0));
+		for (let i = 1; i <= n; i++) {
+			ops.push(q({ op: "start", id: i, lane: true }, T0 + i));
+			ops.push(q({ op: "chat", id: i, file: chats[i - 1], title: `Queue #${i}` }, T0 + i));
+		}
+		return { home: transcript(`${id}-home`, ops), chats };
+	}
+	const dialog = (id: string, sessionFile: string): Ask =>
+		({ id, kind: "question", title: "Pick a colour", fields: [], createdAt: T0 + 2000, sessionFile }) as unknown as Ask;
+
+	it("12 started chats: an open dialog in the 11th waits on the owner, and the page can tell", async () => {
+		const { home, chats } = started("design", 12);
+		const r = reader([role("design", home)]);
+		liveAsks = [dialog("q11", chats[10])];
+		const overview = await r.read();
+		expect(overview.roles[0]).toMatchObject({ allChatsRead: true });
+		expect(overview.roles[0].queue?.active).toHaveLength(12);
+		expect(page(overview)).toEqual({
+			tell: "can-tell",
+			asOf: overview.at,
+			total: 1,
+			more: 0,
+			items: [
+				{
+					key: "0",
+					roleId: "design",
+					roleLabel: "Design role",
+					text: "Pick a colour",
+					answer: { key: "design:question:q11", id: "q11" },
+					since: T0 + 2000,
+					link: { file: chats[10], focus: { kind: "question", id: "q11" } },
+				},
+			],
+		});
+		// Answered: nothing waits, and the page says so (every chat was read).
+		liveAsks = [];
+		now += 5000;
+		expect(page(await r.read())).toMatchObject({ tell: "can-tell", total: 0, items: [] });
+	});
+
+	it("past 40 started chats the server says so, and the page doesn't claim nothing waits", async () => {
+		const { home, chats } = started("design", 41);
+		const r = reader([role("design", home)]);
+		liveAsks = [dialog("q41", chats[40])];
+		const overview = await r.read();
+		expect(overview.roles[0]).toMatchObject({ allChatsRead: false, asks: [] });
+		expect(page(overview)).toMatchObject({ tell: "partial", asOf: null, total: 0 });
+		// The 40th is still read.
+		liveAsks = [dialog("q40", chats[39])];
+		now += 5000;
+		expect(page(await r.read())).toMatchObject({ tell: "partial", total: 1 });
+	});
+
+	it("a started chat that can't be read: not every chat was read", async () => {
+		const { home, chats } = started("design", 2);
+		rmSync(chats[1]);
+		const overview = await reader([role("design", home)]).read();
+		expect(overview.roles[0]).toMatchObject({ allChatsRead: false, problems: ["task #2 chat"] });
+		expect(page(overview).tell).toBe("partial");
+	});
+});
