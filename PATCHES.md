@@ -17,6 +17,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Unchanged: the server, the layout and every other card and panel field, the queue link (still at the first task).
 - Checks: `tests/unit/roles-current-task.test.ts`, through the view (a paused task first, then working ones: the first working one; busy wins; all paused: the first; none started: the first that isn't paused; card and panel agree); on the old line 2 of 4 fail (both show the paused task). Then the landing gate.
 - Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
+- Result: H-ROLES-CURRENT-1 HIT, with one limit. Live in bdc956a5 (Oct 19 22:37): 15 of 15 checks across 3 passes and 5 roles with a task in progress show a started task that isn't paused; Design shows #98 and Frontend #43, where #41 and #1 (paused) stood in front before; roles whose tasks are all paused still show their paused task. Limit: live, every task in progress was busy and none of those roles had a paused task, so a started task between turns behind a paused one is proven by the unit test only.
 
 ## roles-live: live Latest progress with its time, and Activity with the task lines and done summaries, on the Roles page
 

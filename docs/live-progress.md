@@ -9,6 +9,7 @@ The next tasks run side by side once this lands (rule 26):
 - Ops #270, server: fills the fields (`server/roles-overview.ts`, `server/work-page.ts`) and applies the owner rule. Tests H-LIVE-NEEDS-1.
 - Ops #271, Initiatives page: uses them. Tests H-INIT-LIVE-1.
 - Ops #272, Roles page: uses them. Tests H-ROLES-LIVE-1.
+- Later, from #272's live look: Ops #277, Roles page: which task is the Current task. Tests H-ROLES-CURRENT-1.
 
 #271 and #272 can build and test against fixtures that carry the fields before #270 lands. A page must work as today when the fields are absent. Known overlaps: #270 may meet #245 (pages-fresh) in `server/roles-overview.ts` and `server/work-page.ts`; #271 may meet #274 (initiatives-projects-done) in `web/src/initiatives-page/model.ts`.
 
@@ -143,7 +144,28 @@ Each next task tests its own (rule 16) and records HIT or MISS here, under its h
   - "Question with <lead>": 0 sent and 0 shown live, because the records hold no question a lead still has (H-LIVE-NEEDS-1); those words are proven by the unit and sealed tests only. "Needs your decision" lists the owner asks #270 measured (1 = 1).
 - Limits of this proof: live, only one current task had its own line (Product #51), and no new line was written during the look, so "within one refresh" is proven sealed only.
 
-**What we learned, and the next hypothesis.** The panel's Current task is the first busy task, else the first open one in queue order (`lead` in `web/src/roles-exact-view.ts`). So between turns a paused task can stand in front of the working ones: in passes 1 and 2 Design showed #41, paused by the owner since Oct 9, while #45 and #63 were in progress; in pass 3 it showed #98, which was busy. The time was right for #41, but #41 isn't what Design was doing. Next hypothesis (H-ROLES-CURRENT-1, not built): pick the busy task, then a started task that isn't paused, then the rest. Measured live: every working role's Current task is a started, unpaused task whenever it has one. Proven wrong if a paused task still shows while one of its tasks is in progress.
+**What we learned, and the next hypothesis.** The panel's Current task is the first busy task, else the first open one in queue order (`lead` in `web/src/roles-exact-view.ts`). So between turns a paused task can stand in front of the working ones: in passes 1 and 2 Design showed #41, paused by the owner since Oct 9, while #45 and #63 were in progress; in pass 3 it showed #98, which was busy. The time was right for #41, but #41 isn't what Design was doing. Next hypothesis (H-ROLES-CURRENT-1, built in Ops #277; its result is below): pick the busy task, then a started task that isn't paused, then the rest. Measured live: every working role's Current task is a started, unpaused task whenever it has one. Proven wrong if a paused task still shows while one of its tasks is in progress.
+
+### H-ROLES-CURRENT-1 (Roles page, Ops #277)
+
+**Wrong, and the evidence.** A role's Current task (its card's line and its panel's Current task) was the first busy task, else the first open one in queue order (`lead` in `web/src/roles-exact-view.ts`). Between turns no task is busy, so a paused task stood in front of the working ones: in #272's live look, passes 1 and 2, Design showed #41, paused by the owner since Oct 9, while #45 and #63 were in progress (H-ROLES-LIVE-1, "What we learned").
+
+**One change, and why it should fix it.** `currentTask` picks, in order: the busy task; a started task (`working`) that isn't paused; any task that isn't paused; else the first (all paused: it is still shown, with its paused wording). Queue order decides among equals. A paused task then comes first only when every open task is paused. Only that choice changes: Latest progress, the next step and the other panel fields follow whichever task is picked.
+
+**Expected result, and how it is measured.** Every working role's Current task is a started, unpaused task whenever it has one. Measured live, look only: for each role with a task in progress (started and not paused), the panel's Current task number, checked against the roles feed the page itself received.
+
+**What would prove it wrong.** A paused task still shows while one of the role's tasks is in progress.
+
+**Result (#277): HIT, with one limit.** No role with a task in progress showed a paused task as its Current task: 15 of 15 checks live.
+
+- Unit (`tests/unit/roles-current-task.test.ts`, through the view; the card and the panel agree): a paused task first, then working ones: the first working one; busy wins; all paused: the first; none started: the first that isn't paused. On the old line 2 of 4 fail (both show the paused task); all 4 pass now. The land gate passed (land 113-775950, commit bdc956a).
+- Installed: bdc956a5 on Oct 19 at 22:37 PDT, every deploy check passed (`pi-web-deploy result bdc956a5` = 0).
+- Before (live 6293f27f, 22:33 to 22:35 PDT, 3 passes a minute apart): where no task was in progress, a paused task stood in front of one that isn't paused in all 3 passes. Design showed #41 (its #41, #45 and #63 are all paused now; #98 is on hold), and Frontend showed #1 (paused; #43 is on hold). The roles with a task in progress passed the check too, 13 of 13, because each of them had a busy task.
+- After (live bdc956a5, 22:38 to 22:40 PDT, 3 passes a minute apart, one fixed look id `carry-on:ops-live-look-roles-current`, task numbers and states only):
+  - 5 roles had a task in progress in each pass (Architecture, Ops, QA, Systems, Temper): 15 of 15 show a started task that isn't paused.
+  - Design shows #98 and Frontend #43, the first tasks that aren't paused. Backend #1, Marketing #3 and Product #51, whose open tasks are all paused, still show their paused task.
+  - Every read (30 of 30) is the pick worked out from the feed the page received (before: 22 of 28), and the line under the role's name names the same task. No page errors; only the look's hello and the page's watches were sent.
+- The limit: live, every task in progress was busy when read, and none of those roles had a paused task. So the case #272 saw (a started task between turns, behind a paused one) is proven by the unit test only, and that check alone couldn't tell the old pick from the new one live. The live look proves the busy step, the step for roles with nothing started (the first task that isn't paused) and the all-paused step.
 
 ## Limits
 
