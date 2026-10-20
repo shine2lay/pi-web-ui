@@ -150,6 +150,10 @@ describe("the supplied Roles design with the existing feed", () => {
 		expect(object(view.values(1400, 900).exPos)).toMatchObject({ t: `${inset}px`, h: `${900 - inset}px` });
 	});
 
+	// Ops #278 (docs/gate-view-cases.md): its own limit, 15 s. It is this file's first mount, and the mount is most
+	// of its time: alone about 350 ms cold against 95 ms warm, while its two updates take about 13 ms. It timed out
+	// twice in land gates under load (5848 and 6170 ms). In one-mount pieces the first would keep the cold start,
+	// and the later ones would replay the same updates to keep the same inputs, so none would be lighter.
 	it("omits the helper row through updates without hiding real ON YOU markers or panels", () => {
 		const input = state([role()], [ask(1)]);
 		const { view, update } = fixture(projectExactRoles(input, "open", NOW), true);
@@ -174,7 +178,7 @@ describe("the supplied Roles design with the existing feed", () => {
 		view.openRole("ops", document.body);
 		vi.runAllTimers();
 		expect(document.querySelector('[role="region"]')?.textContent).toContain("Task 7");
-	});
+	}, 15_000);
 
 	it("roles-lanes: draws the queue's lanes on the card and in the panel", () => {
 		const input = role({

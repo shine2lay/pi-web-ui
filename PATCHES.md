@@ -10,6 +10,15 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## gate-view-cases: the Roles, Initiatives and Queue view cases that timed out under gate load given their own limit
+
+- `local` (Ops #278, project faster-landing, 2026-10-20). Hypothesis H-GATE-VIEW-CASES-1, the 60 land logs read, what each case spends its time on, the before and after times and the result: `docs/gate-view-cases.md`.
+- Their own limit, 15 s, with the reason in a comment above each: `tests/unit/roles-exact.test.ts` "omits the helper row through updates without hiding real ON YOU markers or panels", `tests/unit/initiatives-page-model.test.ts` "draws the header, cards, box and detail, with the filters counted" and "hides Message and Change lead where they can't work, and opens the box like an initiative", `tests/unit/initiatives-projects-done.test.ts` "puts the projects count under the outcomes count on each card with projects, and none without", `tests/unit/initiatives-exact.test.ts` "selects, switches tabs and filters the way the design does" and `tests/unit/task-queue.test.ts` "draws the same lanes and the same 'after' as pi-queue itself". The first four timed out in land gates under load (5467-6197 ms), the last two reached 3339 and 4665 ms.
+- None was split. Timed step by step, most of each case's time is one view mount (its file's cold first mount in three of them) or, in the Queue case, its first import of pi-queue's `queue.ts`; the updates and clicks after it run in sequence and take up to about 125 ms all told. Pieces with the same inputs would each mount again and replay the steps before theirs, and the first would keep the cold start, so none would be lighter.
+- Each case's body is unchanged line for line (the same 36 `expect` calls); no input cut or case removed; vitest's global testTimeout and hookTimeout unchanged; no retry. Tests only: no app code changed, nothing to install.
+- Checks: the timing runs (5 before and 5 after each case alone and each file whole, interleaved, sealed), each case alone under `--testTimeout=1` (the old case times out, the new one passes on its own limit), then the landing gate.
+- Undo: revert this commit.
+
 ## roles-current-task: the Roles page's Current task is the task the role is on, not a paused one in front of it
 
 - `local` (owner 2026-10-19, via COO rm-63784858: "i want live progress in both role and initiatives"; Ops #277, from #272's live look). Hypothesis H-ROLES-CURRENT-1 and its result: `docs/live-progress.md`.

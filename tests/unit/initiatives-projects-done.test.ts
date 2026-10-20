@@ -200,6 +200,9 @@ function mount(input: InitiativesExactInput) {
 }
 
 describe("the page: the card's projects line and the Finished projects fold", () => {
+	// Ops #278 (docs/gate-view-cases.md): its own limit, 15 s. One mount and its checks, and it is this file's first
+	// mount: in a whole-file run it takes about 375 ms against 117 ms for a later one-mount case. It timed out once in
+	// a land gate under load (5467 ms). There is nothing to split.
 	it("puts the projects count under the outcomes count on each card with projects, and none without", () => {
 		const page = mount(build().input);
 		expect(leaves(page.button(/^Alpha launch/)).slice(-2)).toEqual([
@@ -209,7 +212,7 @@ describe("the page: the card's projects line and the Finished projects fold", ()
 		expect(leaves(page.button(/^Gamma rollout/)).slice(-2)).toEqual(["0 of 1 outcomes done", "1 of 1 project done"]);
 		expect(leaves(page.button(/^Beta cleanup/)).slice(-1)).toEqual(["0 of 1 outcomes done"]);
 		expect(norm(page.button(/^Beta cleanup/).textContent)).not.toMatch(/project/);
-	});
+	}, 15_000);
 
 	it("shows the fold closed, above the first active row, and lists the finished projects when opened", () => {
 		const page = mount(build().input);

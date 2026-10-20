@@ -637,6 +637,9 @@ describe("taskQueueFromEntries (queue-side-by-side)", () => {
 	});
 
 	// The Queue tab must show what pi-queue will do: replay the same queues through pi-queue's own queue.ts.
+	// Ops #278 (docs/gate-view-cases.md): its own limit, 15 s. Its first import of pi-queue's queue.ts is nearly all
+	// of its time (alone about 210 ms, against 8-18 ms for the replays). In a land gate vitest transforms that file in
+	// its main process, beside every other worker's files: up to 4665 ms. Split, the first piece would keep the import.
 	it("draws the same lanes and the same 'after' as pi-queue itself", async () => {
 		const pkg = process.env.PI_QUEUE_PKG ?? join(userInfo().homedir, "projects", "pi-queue");
 		const file = join(pkg, "queue.ts");
@@ -723,7 +726,7 @@ describe("taskQueueFromEntries (queue-side-by-side)", () => {
 		}
 		const raw = [3, "#4", " 5 ", 3, 0, -1, 2.5, "x", 7];
 		expect(normAfter(raw, 7)).toEqual(pq.normAfter(raw, 7));
-	});
+	}, 15_000);
 });
 
 /** queue-main-chat: pi-queue's "ask" op (a task in a chat of its own asked its main chat). */
