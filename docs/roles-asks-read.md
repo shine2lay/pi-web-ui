@@ -48,3 +48,26 @@ A cold build, made once after the server starts, grew by about 300 ms p90 back t
 
 - Focused vitest, `TZ=UTC scripts/sealed.sh npx vitest run tests/unit/roles-useful.test.ts tests/unit/roles-useful-asks.test.ts tests/unit/roles-overview.test.ts`: 84 of 84 passed. New: 12 started chats with an open dialog in the 11th (listed for its role and chat, `allChatsRead: true`, the page can tell, and after the answer can tell that nothing waits); 41 started chats (`allChatsRead: false`, the 41st chat's dialog isn't listed, the page says partial; the 40th's is listed); a started chat that can't be read (false, partial); the page takes the server's flag over the count (9 and 40 started chats with `true` can tell, `false` is partial) and keeps the old 8-chat rule when the flag is missing or not a boolean.
 - Sealed browser test, `node tests/run-sealed.mjs roles-asks-read-test`: 12 of 12 checks passed. A role with 12 started chats; the fake model in the 11th asks a question and the dialog stays open. The overview lists it for Design and the 11th task's chat with `allChatsRead: true`; the page shows "1 waiting on you"; 10 s after opening, the status pill says "Live · updated …", not "Asks unconfirmed"; the You list shows the question with its Answer button; no page errors. On the old code the 11th chat isn't read, so the question isn't listed and the pill says "Asks unconfirmed: some roles not read".
+
+## Landed and installed
+
+- Landed as `bb432079` (wt land request 90-2bd27c, 20:16 to 20:19, run detached): the land gate passed, 447 test files, 6433 tests passed and 6 skipped; PATCHES.md 166 entries.
+- Installed at 20:20 with `pi-web-deploy --landed 90-2bd27c`; `pi-web-deploy result bb432079` = 0 (live, and the checks all passed).
+
+## Live look, and the result
+
+Look only, 2026-10-19 20:28 to 20:33: `~/kept-from-tmp/2026-10-19/roles-asks-read-live/look.mjs`, one fixed pseudo client id (`carry-on:ops-live-look-asks`), a fresh browser context for each open, only `hello` and `roles_watch` sent (everything else held), GET and HEAD only. It read the status pill's words, the You count, and from the feed only role ids, counts and the `allChatsRead` flag: no chat text. 10 opens of `/?view=roles`, 30 s apart, on `bb432079` throughout (the server started 20:20:41 and didn't restart during the look).
+
+| Opens | Status pill 10 s after opening | You | Most started chats in one role |
+|---|---|---|---|
+| 1 to 3 | Live (updated 20:28 to 20:29) | 0 waiting on you | 9 (Design) |
+| 4 to 10 | Live (updated 20:29 to 20:32) | 0 waiting on you | 8 |
+
+- In 10 of 10 opens the pill said Live 10 s after opening. None showed "some roles not read", not even during the first 10 s: the pill went from Updating to Live in 0.8 to 1.7 s.
+- Every role sent `allChatsRead`, and every one was true. No role had more than 40 started chats. 0 page errors, 0 requests aborted.
+- Design had 9 started chats in opens 1 to 3 (and in a test open at 20:27): the count the old page always marked "Asks unconfirmed: some roles not read" (19:23). From open 4 on, one of its tasks had ended and it had 8, a count the old page passed too. So the live before and after rests on opens 1 to 3 and the test open; the sealed test covers 12 chats.
+- For #265: the Design card's budget bar was blue at 20:34 (Design then had 8 started chats). It was amber while the label showed.
+
+**H-ASKS-READ-1: HIT.** Sealed: the 11th chat's ask is listed and the pill says Live (12 of 12 checks). Timing: a warm build at 40 chats grew by at most 113 ms p90, under 200 ms. Live: 10 of 10 opens without "some roles not read".
+
+Undo: in a new worktree, `git revert bb432079`, `wt land`, then `pi-web-deploy`. The page then goes back to the 8-chat rule, and the label comes back whenever a role has 9 or more started chats.
