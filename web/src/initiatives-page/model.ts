@@ -7,6 +7,7 @@
 import type { Translate } from "../i18n";
 import type {
 	InitiativesExactDecision,
+	InitiativesExactFinishedProject,
 	InitiativesExactInitiative,
 	InitiativesExactInput,
 	InitiativesExactLooseItem,
@@ -111,6 +112,39 @@ function projectRow(p: UiWorkPageRecord, now: number): InitiativesExactRole {
 	};
 }
 
+// initiatives-projects-done (docs/initiatives-projects-done.md): finished projects leave the rows for their own fold.
+const NO_ACTIVE = "No active projects.";
+/** Over: done or dropped. */
+const finished = (p: Pick<UiWorkPageRecord, "status">) => p.status === "done" || p.status === "dropped";
+
+/** How many projects are done, of all but the dropped ones, and how many were dropped (the card's line). */
+export function projectCount(list: readonly Pick<UiWorkPageRecord, "status">[]): {
+	done: number;
+	total: number;
+	dropped: number;
+} {
+	const dropped = list.filter((p) => p.status === "dropped").length;
+	return { done: list.filter((p) => p.status === "done").length, total: list.length - dropped, dropped };
+}
+
+/** The done and dropped projects as the fold's rows, newest first (their last recorded change). */
+export function finishedProjects(list: readonly UiWorkPageRecord[]): InitiativesExactFinishedProject[] {
+	return list
+		.filter(finished)
+		.sort((a, b) => b.updatedAt - a.updatedAt)
+		.map((p) => {
+			const c = doneCount(p);
+			return {
+				name: p.name,
+				opens: projectFrameId(p.id),
+				lead: roleName(p.lead),
+				state: p.status === "dropped" ? "dropped" : "done",
+				at: dateOf(p.updatedAt),
+				count: c.total ? `${c.done} of ${c.total} done` : "No done-when items yet",
+			};
+		});
+}
+
 export function buildInitiativesPage(args: InitiativesPageArgs): InitiativesPageModel {
 	const { work, now, t } = args;
 	const page = work.page;
@@ -182,6 +216,7 @@ export function buildInitiativesPage(args: InitiativesPageArgs): InitiativesPage
 
 	const initiative = (i: UiWorkPageRecord): InitiativesExactInitiative => {
 		const projects = byStatus(page.projects.filter((p) => p.initiative === i.id));
+		const live = projects.filter((p) => !finished(p));
 		const others = [...new Set(projects.map((p) => p.lead))].filter((r) => r !== i.lead);
 		const logRow = logRows.get(i.id);
 		const progress = dec?.progress?.initiative === i.id ? dec.progress : undefined;
@@ -200,8 +235,10 @@ export function buildInitiativesPage(args: InitiativesPageArgs): InitiativesPage
 			rolesLine: rolesLine(1 + others.length),
 			members: others.map(roleName),
 			// initiatives-page-tasks: a section's own rows after the project rows (tasks linked to the initiative itself).
-			roles: [...rows(projects), ...parts.flatMap((part) => part.rows?.[i.id] ?? [])],
-			rowsNote: projects.length ? undefined : "No projects in this initiative yet.",
+			roles: [...rows(live), ...parts.flatMap((part) => part.rows?.[i.id] ?? [])],
+			rowsNote: projects.length ? (live.length ? undefined : NO_ACTIVE) : "No projects in this initiative yet.",
+			projectCount: projects.length ? projectCount(projects) : undefined,
+			finishedProjects: finishedProjects(projects),
 			latest: updates
 				.slice(0, 3)
 				.map((u) => ({ at: clockOf(u.at, now), role: u.byName || roleName(u.by), text: u.fields.changed })),
@@ -289,7 +326,9 @@ export function buildInitiativesPage(args: InitiativesPageArgs): InitiativesPage
 						leadName: "No one",
 						outcomeCount: looseCount,
 						rolesLine: looseLeads.length === 1 ? "1 role" : `${looseLeads.length} roles`,
-						roles: rows(loose),
+						roles: rows(loose.filter((p) => !finished(p))),
+						rowsNote: loose.some((p) => !finished(p)) ? undefined : NO_ACTIVE,
+						finishedProjects: finishedProjects(loose),
 						leadNext: "These projects serve no initiative, so no lead plans across them.",
 						leadReport: "No lead, so no reports.",
 						latestNote: "No lead, so no updates.",

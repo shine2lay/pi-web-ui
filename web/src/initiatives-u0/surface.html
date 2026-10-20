@@ -65,6 +65,7 @@ a{color:#B9A7FF}a:hover{color:#D6CCFF}
 <sc-for list="{{i.segs}}" as="g" hint-placeholder-count="4"><span style="flex: 1; height: 5px; border-radius: 999px; background: {{g.bg}}; border: 1px {{g.bs}} {{g.bd}}; box-sizing: border-box"></span></sc-for>
 </span>
 <span style="font-size: 12px; color: #A9AEB6">{{i.doneText}}</span>
+<sc-if value="{{i.projectsText}}" hint-placeholder-val="{{false}}"><span style="font-size: 12px; color: #A9AEB6">{{i.projectsText}}</span></sc-if>
 </span>
 </button>
 </sc-for>
@@ -250,6 +251,28 @@ a{color:#B9A7FF}a:hover{color:#D6CCFF}
 <!-- Who's doing what -->
 <section aria-labelledby="who" style="display: flex; flex-direction: column; gap: 8px">
 <h3 id="who" style="margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A9AEB6">Who’s doing what</h3>
+<sc-if value="{{sel.hasFinished}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; flex-direction: column; border-radius: 12px; border: 1px solid #22262B; background: #111316">
+<button type="button" onClick="{{toggleProjects}}" aria-expanded="{{projectsOpenStr}}" style="display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 0 14px; border: 0; background: transparent; color: #C9CDD2; font: inherit; font-size: 13.5px; font-weight: 600; text-align: left; cursor: pointer">
+<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true" style="transform: {{projectsRot}}; transition: transform 160ms ease"><path d="M4 2.5 7.5 6 4 9.5"></path></svg>
+<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#9FD8B8" stroke-width="2" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"></path></svg>
+<span>Finished projects · {{sel.finishedCount}}</span>
+<span style="margin-left: auto; font-weight: 500; font-size: 12.5px; color: #8D939B">{{sel.finishedLatest}}</span>
+</button>
+<sc-if value="{{projectsOpen}}" hint-placeholder-val="{{false}}">
+<ul style="margin: 0; padding: 0 14px 10px; list-style: none; display: flex; flex-direction: column">
+<sc-for list="{{sel.finished}}" as="fp" hint-placeholder-count="2">
+<li style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; padding: 10px 0; border-top: 1px solid #22262B; font-size: 13.5px">
+<span style="flex: 1 1 260px; min-width: 0; color: #DADDE1"><sc-if value="{{fp.nameOpens}}" hint-placeholder-val="{{true}}"><button type="button" onClick="{{fp.pick}}" style="min-height: 24px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; text-decoration: underline; text-decoration-color: #5A6069; text-underline-offset: 3px; cursor: pointer">{{fp.name}}</button></sc-if><sc-if value="{{fp.nameStill}}" hint-placeholder-val="{{false}}"><span>{{fp.name}}</span></sc-if></span>
+<span style="font-size: 12.5px; color: #A9AEB6">Lead · {{fp.lead}}</span>
+<span style="font-size: 12.5px; color: #A9AEB6">{{fp.count}}</span>
+<span style="font-size: 12.5px; color: {{fp.fg}}">{{fp.when}}</span>
+</li>
+</sc-for>
+</ul>
+</sc-if>
+</div>
+</sc-if>
 <div style="display: flex; flex-direction: column; border-radius: 12px; border: 1px solid #22262B; overflow: hidden">
 <sc-if value="{{sel.rowsNote}}" hint-placeholder-val="{{false}}"><p style="margin: 0; padding: 14px; color: #A9AEB6; font-size: 13px">{{sel.rowsNote}}</p></sc-if>
 <sc-for list="{{sel.roles}}" as="r" hint-placeholder-count="4">

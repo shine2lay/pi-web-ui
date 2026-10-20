@@ -210,6 +210,28 @@ export interface InitiativesExactInitiative {
 	/** False hides that lead button for this initiative even when its handler is given. */
 	canMessageLead?: boolean;
 	canChangeLead?: boolean;
+	// initiatives-projects-done (docs/initiatives-projects-done.md): finished projects at a glance.
+	/** Its projects: how many are done, of all but the dropped ones, and how many were dropped. The card's second
+	 *  line, "2 of 6 projects done · 1 dropped". Absent, or no projects: no line. */
+	projectCount?: { done: number; total: number; dropped: number };
+	/** Its done and dropped projects, newest first: the "Finished projects" fold at the top of Who's doing what,
+	 *  closed by default. Absent or empty: no fold. */
+	finishedProjects?: readonly InitiativesExactFinishedProject[];
+}
+
+/** initiatives-projects-done: one row of the "Finished projects" fold. */
+export interface InitiativesExactFinishedProject {
+	name?: string;
+	/** The id of a detail frame (in the input's `details`) the name opens. */
+	opens?: string;
+	/** Its lead role's name. */
+	lead?: string;
+	/** "dropped" reads "dropped <at>" in grey; otherwise "done <at>" in the Done green. */
+	state?: "done" | "dropped";
+	/** When it finished, its last recorded change: "Mon Oct 19". */
+	at?: string;
+	/** Its done-when count: "3 of 3 done". */
+	count?: string;
 }
 
 /** One item of the "in no initiative" box (the wiring task: projects in no initiative). */

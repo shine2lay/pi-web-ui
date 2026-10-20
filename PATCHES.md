@@ -10,6 +10,18 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## initiatives-projects-done: finished projects at a glance on the Initiatives page
+
+- `local` (owner 2026-10-19 via COO rm-0a0353b3, "you mentioned that a project done but i cant see that in initiatives page"; he picked "Yes, show them clearly"; Ops #274). Hypothesis H-PROJECTS-DONE-1 and result: `docs/initiatives-projects-done.md`.
+- `web/src/initiatives-page/model.ts`: `projectCount` (done, of all but the dropped ones, and dropped) and `finishedProjects` (done and dropped projects, newest first by their last recorded change: name, the project frame it opens, lead, done or dropped, date, its done-when count). An initiative's rows and the "in no initiative" box's rows list only active projects (and their tasks); with projects but none active they say "No active projects.".
+- `web/src/initiatives-exact-model.ts`: optional `projectCount` and `finishedProjects` on an initiative (`InitiativesExactFinishedProject`).
+- `web/src/initiatives-exact-view.ts`: the card's `projectsText` ("2 of 6 projects done · 1 dropped"; no line without projects); the fold's rows, count and "latest" date; `projectsOpen` and `toggleProjects`, closed by default, like `doneOpen`/`toggleDone`.
+- `web/src/initiatives-u0/surface.html` (made by `scripts/extract-initiatives-template.mjs`, additions 11-12): the card line under the outcomes count, in its style; the "Finished projects · N" fold right under Who's doing what's heading, in the Done fold's markup (44 px line, chevron, green tick, "latest <date>"); a row's name opens its project.
+- Limit: a finished project's tasks no longer show under Who's doing what (on 2026-10-19 no finished project had an open task).
+- Unchanged: done-when counting, the registry, the server, the rest of the layout.
+- Checks: `tests/unit/initiatives-projects-done.test.ts` (split, counts, dropped, no projects, all finished, the loose box, the card line, the fold closed above the first active row, its rows, a name opening its project), the updated rows in `tests/unit/initiatives-page-{model,plan,tasks}.test.ts`, and `tests/initiatives-projects-done-test.mjs` (sealed server and Chrome at 1400 and 390 px: card text and place, fold place, closed, 44 px, opens on click, rows, no finished project among the active rows, no sideways scroll), then the landing gate.
+- Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
+
 ## roles-budget-card: a reported role's own-work budget on its card; spending first in its panel
 
 - `local` (owner 2026-10-19, "Show it on the main view", Ops #265). Hypothesis H-BUDGET-CARD-1 and result: `docs/roles-budget-card.md`.

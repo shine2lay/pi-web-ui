@@ -171,7 +171,9 @@ describe("a project's own detail", () => {
 			"~project:p-lane",
 			"~project:p-docs",
 		]);
-		expect(input.initiatives?.[0]?.roles?.map((r) => r.opens)).toEqual(["~project:p-login", "~project:p-search"]);
+		expect(input.initiatives?.[0]?.roles?.map((r) => r.opens)).toEqual(["~project:p-login"]);
+		// initiatives-projects-done: a done project opens from its row in the Finished projects fold.
+		expect(input.initiatives?.[0]?.finishedProjects?.map((p) => p.opens)).toEqual(["~project:p-search"]);
 		expect(input.loose?.items?.map((l) => l.opens)).toEqual(["~project:p-docs", "~project:p-lane"]);
 		const docs = input.details?.find((d) => d.id === "~project:p-docs");
 		expect(docs).toMatchObject({

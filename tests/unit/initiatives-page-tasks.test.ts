@@ -181,11 +181,12 @@ describe("the status rules, in order", () => {
 describe("who's doing what", () => {
 	it("lists each project's open tasks with their department, status, next step and time, most urgent first", () => {
 		const alpha = byId(build().input).alpha;
+		// initiatives-projects-done: the done project (Search box) is in the Finished projects fold, not a row.
 		expect(alpha?.roles?.map((r) => [r.name, r.statusLabel, r.statusTone, r.note ?? r.taskTitle, r.at])).toEqual([
 			["Login form", "Needs you", "you", "3 open tasks", "09:40"],
-			["Search box", "Done", "neutral", "1 of 1 done", "09:40"],
 			["Directly under this initiative", "Moving", "moving", "1 open task", "09:30"],
 		]);
+		expect(alpha?.finishedProjects?.map((p) => p.name)).toEqual(["Search box"]);
 		const login = alpha?.roles?.[0]?.tasks ?? [];
 		expect(login.map((t) => [t.name, t.task, t.taskTitle, t.kind ?? t.statusLabel, t.note, t.wait, t.at])).toEqual([
 			["Design", "#3", "Pick the login copy", "Needs you", "Awaiting your answer", undefined, "09:15"],
@@ -200,8 +201,7 @@ describe("who's doing what", () => {
 			],
 			["Ops", "#12", "Wire the login API", "working", undefined, undefined, "09:10"],
 		]);
-		expect(alpha?.roles?.[1]?.tasks).toBeUndefined();
-		expect(alpha?.roles?.[2]?.tasks?.map((t) => [t.name, t.task, t.kind, t.note])).toEqual([
+		expect(alpha?.roles?.[1]?.tasks?.map((t) => [t.name, t.task, t.kind, t.note])).toEqual([
 			["Ops", "#15", "queued", "Waiting for tasks: #12"],
 		]);
 	});
@@ -221,10 +221,8 @@ describe("who's doing what", () => {
 	it("puts the tasks of projects in no initiative under them, and shows tasks linked to nothing nowhere", () => {
 		const { input } = build({ selected: NO_INITIATIVE });
 		const rows = input.loose?.detail?.roles ?? [];
-		expect(rows.map((r) => [r.name, r.statusLabel, r.note])).toEqual([
-			["Docs sweep", "Needs you", "2 open tasks"],
-			["Old lane", "Done", undefined],
-		]);
+		expect(rows.map((r) => [r.name, r.statusLabel, r.note])).toEqual([["Docs sweep", "Needs you", "2 open tasks"]]);
+		expect(input.loose?.detail?.finishedProjects?.map((p) => p.name)).toEqual(["Old lane"]);
 		expect(rows[0]?.tasks?.map((t) => t.task)).toEqual(["#2", "#3"]);
 		const shown = JSON.stringify(input);
 		for (const stray of ["Tidy the scheduler", "deleted project", "deleted initiative", "Standalone question"])

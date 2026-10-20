@@ -71,6 +71,33 @@ const noteIf = (name, style = EMPTY) =>
 	`<sc-if value="{{${name}}}" hint-placeholder-val="{{false}}"><p style="${style}">{{${name}}}</p></sc-if>\n`;
 // Inside a bordered list box, the line is one of the box's rows.
 const rowNote = (name, pad) => noteIf(name, `margin: 0; padding: ${pad}; color: #A9AEB6; font-size: 13px`);
+// initiatives-projects-done addition 12 (docs/initiatives-projects-done.md): the finished projects' fold, in the Done
+// fold's own markup (one 44 px line, chevron, green tick, "latest" on the right). A row's name opens its project.
+const FINISHED_FOLD = [
+	'<sc-if value="{{sel.hasFinished}}" hint-placeholder-val="{{true}}">',
+	'<div style="display: flex; flex-direction: column; border-radius: 12px; border: 1px solid #22262B; background: #111316">',
+	'<button type="button" onClick="{{toggleProjects}}" aria-expanded="{{projectsOpenStr}}" style="display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 0 14px; border: 0; background: transparent; color: #C9CDD2; font: inherit; font-size: 13.5px; font-weight: 600; text-align: left; cursor: pointer">',
+	'<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true" style="transform: {{projectsRot}}; transition: transform 160ms ease"><path d="M4 2.5 7.5 6 4 9.5"></path></svg>',
+	'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#9FD8B8" stroke-width="2" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"></path></svg>',
+	"<span>Finished projects \u00b7 {{sel.finishedCount}}</span>",
+	'<span style="margin-left: auto; font-weight: 500; font-size: 12.5px; color: #8D939B">{{sel.finishedLatest}}</span>',
+	"</button>",
+	'<sc-if value="{{projectsOpen}}" hint-placeholder-val="{{false}}">',
+	'<ul style="margin: 0; padding: 0 14px 10px; list-style: none; display: flex; flex-direction: column">',
+	'<sc-for list="{{sel.finished}}" as="fp" hint-placeholder-count="2">',
+	'<li style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; padding: 10px 0; border-top: 1px solid #22262B; font-size: 13.5px">',
+	'<span style="flex: 1 1 260px; min-width: 0; color: #DADDE1"><sc-if value="{{fp.nameOpens}}" hint-placeholder-val="{{true}}"><button type="button" onClick="{{fp.pick}}" style="min-height: 24px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; text-decoration: underline; text-decoration-color: #5A6069; text-underline-offset: 3px; cursor: pointer">{{fp.name}}</button></sc-if><sc-if value="{{fp.nameStill}}" hint-placeholder-val="{{false}}"><span>{{fp.name}}</span></sc-if></span>',
+	'<span style="font-size: 12.5px; color: #A9AEB6">Lead \u00b7 {{fp.lead}}</span>',
+	'<span style="font-size: 12.5px; color: #A9AEB6">{{fp.count}}</span>',
+	'<span style="font-size: 12.5px; color: {{fp.fg}}">{{fp.when}}</span>',
+	"</li>",
+	"</sc-for>",
+	"</ul>",
+	"</sc-if>",
+	"</div>",
+	"</sc-if>",
+	"",
+].join("\n");
 const EDITS = [
 	// Controls the design draws without a handler get one; a control whose callback is absent isn't shown.
 	[
@@ -229,6 +256,14 @@ const EDITS = [
 		'<p style="margin: 0; font-size: 15px; font-weight: 650">{{o.title}}</p>',
 		'<sc-if value="{{o.canOpen}}" hint-placeholder-val="{{false}}"><p style="margin: 0"><button type="button" onClick="{{o.openChat}}" style="min-height: 24px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-size: 15px; font-weight: 650; text-align: left; text-decoration: underline; text-decoration-color: #5A6069; text-underline-offset: 3px; cursor: pointer">{{o.title}}</button></p></sc-if><sc-if value="{{o.noOpen}}" hint-placeholder-val="{{true}}"><p style="margin: 0; font-size: 15px; font-weight: 650">{{o.title}}</p></sc-if>',
 	],
+	// initiatives-projects-done additions 11-12 (docs/initiatives-projects-done.md): the card's projects line under
+	// its outcomes count, in the same style; the finished projects' fold right under Who's doing what's heading.
+	[
+		"Card projects line",
+		'<span style="font-size: 12px; color: #A9AEB6">{{i.doneText}}</span>\n',
+		'<span style="font-size: 12px; color: #A9AEB6">{{i.doneText}}</span>\n<sc-if value="{{i.projectsText}}" hint-placeholder-val="{{false}}"><span style="font-size: 12px; color: #A9AEB6">{{i.projectsText}}</span></sc-if>\n',
+	],
+	["Finished projects fold", "Who\u2019s doing what</h3>\n", "Who\u2019s doing what</h3>\n" + FINISHED_FOLD],
 ];
 for (const [why, from, to] of EDITS) {
 	const found = markup.split(from).length - 1;

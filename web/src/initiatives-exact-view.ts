@@ -42,6 +42,8 @@ interface ViewState {
 	filter: Filter;
 	openGoals: Readonly<Record<string, boolean>>;
 	doneOpen: boolean;
+	/** initiatives-projects-done: the "Finished projects" fold is open. */
+	projectsOpen: boolean;
 }
 
 const NOT_RECORDED = "Not recorded";
@@ -109,6 +111,12 @@ const mono = (name: string | undefined) => (name ? name.slice(0, 2).toUpperCase(
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 const kindOf = <K extends string>(value: string | undefined, table: Record<K, unknown>, fallback: NoInfer<K>): K =>
 	value !== undefined && Object.hasOwn(table, value) ? (value as K) : fallback;
+/** initiatives-projects-done: the card's second line, "2 of 6 projects done · 1 dropped"; "" with no projects. */
+const projectsLine = (c: InitiativesExactInitiative["projectCount"]) =>
+	!c || c.total + c.dropped === 0
+		? ""
+		: `${c.done} of ${c.total} ${c.total === 1 ? "project" : "projects"} done` +
+			(c.dropped ? ` \u00b7 ${c.dropped} dropped` : "");
 
 interface Step {
 	label: string;
@@ -220,6 +228,15 @@ function normalize(i: InitiativesExactInitiative) {
 		decisionsTotal: i.decisionsTotal,
 		decNote: i.decisionsNote,
 		activity: (i.activity ?? []).map(act),
+		projectCount: i.projectCount,
+		finished: (i.finishedProjects ?? []).map((p) => ({
+			name: p.name ?? NOT_RECORDED,
+			opens: p.opens ?? "",
+			lead: p.lead ?? NOT_RECORDED,
+			dropped: p.state === "dropped",
+			at: p.at ?? "",
+			count: p.count ?? "",
+		})),
 	};
 }
 const KINDS = {
@@ -242,7 +259,15 @@ export function createInitiativesExactView(
 	actions: () => InitiativesExactActions,
 	invalidate: () => void,
 ) {
-	let st: ViewState = { sel: null, tab: "overview", tabPicked: false, filter: "all", openGoals: {}, doneOpen: false };
+	let st: ViewState = {
+		sel: null,
+		tab: "overview",
+		tabPicked: false,
+		filter: "all",
+		openGoals: {},
+		doneOpen: false,
+		projectsOpen: false,
+	};
 	let disposed = false;
 	const setState = (patch: Partial<ViewState>) => {
 		if (disposed) return;
@@ -347,6 +372,7 @@ export function createInitiativesExactView(
 					: i.outcomes.length
 						? nd + " of " + i.outcomes.length + " outcomes done"
 						: "No outcomes recorded",
+				projectsText: projectsLine(i.projectCount),
 				pick: () => pickId(i.id),
 			};
 		});
@@ -511,6 +537,10 @@ export function createInitiativesExactView(
 			doneOpen,
 			doneOpenStr: doneOpen ? "true" : "false",
 			doneRot: doneOpen ? "rotate(90deg)" : "none",
+			toggleProjects: () => setState({ projectsOpen: !st.projectsOpen }),
+			projectsOpen: st.projectsOpen,
+			projectsOpenStr: st.projectsOpen ? "true" : "false",
+			projectsRot: st.projectsOpen ? "rotate(90deg)" : "none",
 			filters,
 			list,
 			listEmpty: list.length === 0,
@@ -715,6 +745,17 @@ export function createInitiativesExactView(
 			owner: oc.owner,
 			finished: oc.steps[oc.steps.length - 1].at || "",
 		}));
+		// initiatives-projects-done: the "Finished projects" fold's rows; a name opens its project like a row's name.
+		const finished = I.finished.map((p) => ({
+			name: p.name,
+			nameOpens: p.opens !== "",
+			nameStill: p.opens === "",
+			pick: p.opens ? () => pickId(p.opens) : undefined,
+			lead: p.lead,
+			count: p.count,
+			when: (p.dropped ? "dropped" : "done") + (p.at ? " " + p.at : ""),
+			fg: p.dropped ? NEUTRAL[0] : DONE_CHIP[0],
+		}));
 		const canChangeLead = has("changeLead") && I.canChangeLead;
 		const canMessage = has("messageLead") && I.canMessageLead;
 		return {
@@ -761,6 +802,10 @@ export function createInitiativesExactView(
 			hasDone: doneOutcomes.length > 0,
 			doneCount: String(doneOutcomes.length),
 			doneLatest: doneOutcomes.length ? "latest " + doneOutcomes[0].finished : "",
+			finished,
+			hasFinished: finished.length > 0,
+			finishedCount: String(finished.length),
+			finishedLatest: I.finished[0]?.at ? "latest " + I.finished[0].at : "",
 			goals,
 			handoffs: (I.handoffsNote ? [] : I.handoffs).map((h) => ({
 				from: h.from,

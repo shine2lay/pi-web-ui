@@ -84,10 +84,14 @@ describe("the Initiatives page's core model, on a fixed registry page", () => {
 
 	it("shows an initiative's projects as rows with their lead, count and status", () => {
 		const alpha = build().input.initiatives?.[0];
+		// initiatives-projects-done: the done project (Search box) leaves the rows for the Finished projects fold.
 		expect(alpha?.roles?.map((r) => [r.name, r.part, r.taskTitle, r.statusLabel, r.statusTone])).toEqual([
 			["Login form", "Lead · Frontend", "1 of 2 done", "No tasks yet", "neutral"],
-			["Search box", "Lead · Backend", "1 of 1 done", "Done", "neutral"],
 		]);
+		expect(alpha?.finishedProjects?.map((p) => [p.name, p.lead, p.state, p.at, p.count])).toEqual([
+			["Search box", "Backend", "done", "Sun Oct 18", "1 of 1 done"],
+		]);
+		expect(alpha?.projectCount).toEqual({ done: 1, total: 2, dropped: 0 });
 		expect(alpha?.rolesLine).toBe("3 roles · lead + 2");
 		expect(alpha?.members).toEqual(["Frontend", "Backend"]);
 		expect(build().input.initiatives?.[1]?.rowsNote).toBe("No projects in this initiative yet.");
@@ -102,7 +106,8 @@ describe("the Initiatives page's core model, on a fixed registry page", () => {
 		]);
 		expect(input.loose?.detail?.id).toBe(NO_INITIATIVE);
 		expect(input.loose?.detail?.outcomeCount).toEqual({ done: 1, total: 4 });
-		expect(input.loose?.detail?.roles?.map((r) => r.name)).toEqual(["Docs sweep", "Old lane"]);
+		expect(input.loose?.detail?.roles?.map((r) => r.name)).toEqual(["Docs sweep"]);
+		expect(input.loose?.detail?.finishedProjects?.map((p) => p.name)).toEqual(["Old lane"]);
 		expect(build({ selected: NO_INITIATIVE }).selected).toBe(NO_INITIATIVE);
 		const none = build({ work: { page: { ...PAGE, projects: PAGE.projects.slice(0, 2) }, status: "ready" } });
 		expect(none.input.loose).toBeUndefined();
