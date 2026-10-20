@@ -195,16 +195,19 @@ Expect unchanged exact rows and all fixed/collector isolation checks to pass,
 then the unchanged normal gate. Disproved by a dependency match, limit or batch
 type mismatch, changed fixture rows, or another gate failure.
 
-**H-AUTOCOST-6-INERT-1: HIT on the repaired fixed/isolation bar.** All 40
-membership tests and all 83 unchanged collector tests pass together (123/123),
-including exact rows, all batch commits, policy parity and the no-dependency
-assertion. Full typecheck, scoped oxlint, Prettier and a fresh sealed build pass.
-The detached normal landing gate remains pending; it must also succeed.
+**H-AUTOCOST-6-INERT-1: HIT on the full bar.** All 40 membership tests and
+all 83 unchanged collector tests pass together (123/123), including exact rows,
+all batch commits, policy parity and the no-dependency assertion. Full typecheck,
+scoped oxlint, Prettier and a fresh sealed build pass.
 
-The unchanged normal gate remains a **landing prerequisite**, not a claim made
-by the unit result: detached `wt land` must succeed before #305 is done. Its
-receipt names the final checked commit, including a rebase if mine moved.
-No install or deployment is part of that receipt.
+**Final normal gate: HIT.** Detached `wt land` receipt `135-c617d4` succeeded
+at `2026-10-20T22:50:38.580Z`, landing mapper commit
+`cf0a088723ca96e73487da6a6c785253c2a88ad9` on `mine`. The unchanged gate passed
+465 test files and all 7,070 tests. The receipt is available from the stable repo:
+`cd /home/shinelay/projects/pi-web-ui && wt land-status 135-c617d4 --json`.
+The mapper commit changes only the four assigned paths (two fixture files in the
+fixture directory); no production import exists. This final evidence update is
+documentation only. No install or deployment is part of either change.
 
 The unit file checks exact fixture rows,
 negative association cases, event-time parents, ignored replay events, helper
