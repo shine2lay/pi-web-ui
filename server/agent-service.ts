@@ -114,6 +114,7 @@ import { type AdoptCandidate, pickAdoptTarget } from "./attach-adopt.js";
 import { describeError, errorMessage, planForLostActive } from "./crash-guard.js";
 // list-freeze: message counts without getSessionStats() (which re-projects the whole context).
 import { messageCountOf } from "./message-count.js";
+import { attachUsageLedger, recordUsageLedgerEntry } from "./usage-accounting-ledger.js";
 // new-chat-default: the global default model is what every new chat starts on.
 import { carryOverToNewChat, freshChatModel } from "./new-chat-model.js";
 import { chatModelChoice, latestChatModelChoice, inModelChangeLane, type ModelChoice } from "./model-all-chats.js";
@@ -3350,6 +3351,7 @@ export class ClientSession {
 		// 真正的派发者（withSubagentOwner 按 runtime 归属填入）：cwd 基准 / 跟随模型 /
 		// 跟随思考强度一律读它，而不是派发瞬间的 active——后台对话产出时用户可能正
 		// 看着别的项目，读 active 会跟错模型、把相对 cwd 解析到错误的项目下。
+		const usageParentId = parentId ?? this.activeId ?? undefined;
 		const spawner = parentId ? this.convs.get(parentId) : undefined;
 		const spawnerSession = spawner?.session ?? this.session;
 		const baseCwd = spawner?.cwd ?? this.cwd;
@@ -3377,7 +3379,7 @@ export class ClientSession {
 		// 父对话 = 真正派发它的会话（按会话归属的 host 包装填入）。直接用 active
 		// 会错：后台对话运行时用户可能正看着别的项目对话，孩子会被记到无关
 		// 对话名下、沉到别的项目组底部（issue #95）。缺省才回退到 active。
-		conv.parentId = parentId ?? this.activeId ?? undefined;
+		conv.parentId = usageParentId;
 		conv.subagentType = type;
 		conv.subagentPrompt = prompt;
 		// 模板快照留在对话上：forceReset 重建 runtime 时工厂要按同一模板组装
@@ -5290,7 +5292,17 @@ export class ClientSession {
 				ClientSession.dialogWatcher(() => conv),
 			),
 		};
+		this.attachConversationUsage(conv);
 		return conv;
+	}
+
+	private attachConversationUsage(conv: Conversation): void {
+		attachUsageLedger(conv.session, () => ({
+			dataDir: this.stateStore.dataDir,
+			conversationId: conv.id,
+			origin: conv.isSubagent || conv.parentId ? "helper" : "chat",
+			parentConversationId: conv.parentId ?? null,
+		}));
 	}
 
 	/**
@@ -6404,6 +6416,7 @@ export class ClientSession {
 	private async bindSession(conv: Conversation = this.conv): Promise<void> {
 		conv.unsubscribe?.();
 		conv.session = conv.runtime.session;
+		this.attachConversationUsage(conv);
 		installRoleMailBoundary(conv.session);
 		installPromptStartGuard(conv.session);
 		// per-chat-dialogs：换了会话（/new、/resume、强制重建）→ 旧会话问的弹窗作废。
@@ -14410,6 +14423,7 @@ export class ClientSession {
 		let editorText: string | undefined;
 		try {
 			const result = await s.navigateTree(plan.navigateEntryId, { summarize: true });
+			recordUsageLedgerEntry(s, result.summaryEntry);
 			if (result.cancelled) {
 				this.emit({
 					type: "notice",
@@ -16291,6 +16305,7 @@ export class AgentService {
 				{
 					cwd: this.decisions.dir,
 					agentDir: process.env.PI_CODING_AGENT_DIR ?? getAgentDir(),
+					dataDir: this.stateStore.dataDir,
 				},
 				control,
 				(row) => console.log(`[decisions-call] ${JSON.stringify(row)}`),
@@ -16425,6 +16440,7 @@ export class AgentService {
 			this.feedModelFn = isolatedDecisionModel({
 				cwd: this.decisions.dir,
 				agentDir: process.env.PI_CODING_AGENT_DIR ?? getAgentDir(),
+				dataDir: this.stateStore.dataDir,
 			});
 		return this.feedModelFn;
 	}
@@ -17960,7 +17976,10 @@ export class AgentService {
 				env = { cwd: this.cwd, agentDir };
 			}
 			const mod = await import("./plugin-llm.js");
-			const r = await mod.completeWithIsolatedSession(env, { ...req, prompt: String(req?.prompt ?? "") });
+			const r = await mod.completeWithIsolatedSession(
+				{ ...env, dataDir: this.stateStore.dataDir },
+				{ ...req, prompt: String(req?.prompt ?? "") },
+			);
 			if (!r.ok) return r;
 			console.log(`[plugin:${pluginId}] llm.complete ok (model ${r.model}, output ${r.text.length} chars)`);
 			return r;

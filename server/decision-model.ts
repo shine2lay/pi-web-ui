@@ -18,6 +18,8 @@ import {
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
 
+import { attachUsageLedger } from "./usage-accounting-ledger.js";
+
 export interface DecisionModelCall {
 	system: string;
 	prompt: string;
@@ -46,6 +48,7 @@ export type DecisionModelReply =
 export type DecisionModel = (call: DecisionModelCall) => Promise<DecisionModelReply>;
 
 export interface DecisionModelEnv {
+	dataDir?: string;
 	cwd: string;
 	agentDir: string;
 	/** Extension folders loaded into the reader's session (default: readerExtensionPaths(agentDir)). */
@@ -296,6 +299,7 @@ export function isolatedDecisionModel(env: DecisionModelEnv): DecisionModel {
 					thinkingLevel: call.thinking ?? "low",
 					noTools: "all",
 				});
+				attachUsageLedger(srv.session, { origin: "app", app: "decision-model", dataDir: env.dataDir });
 				abort = () => {
 					void srv.session.abort().catch(() => {});
 				};

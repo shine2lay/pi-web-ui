@@ -10,6 +10,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## usage-accounting-ledger: retain numeric usage for chats, helpers and isolated app calls
+
+- `local` (owner's automatic-cost-accounting request, Ops #306). H-AUTOCOST-7 and verification: `docs/usage-accounting-ledger.md`.
+- `server/usage-accounting-ledger.ts`: closed numbers/identity-only JSONL projection, queued asynchronous appends, private monthly files, default-on hot off switch, content-free rate-limited warnings. No prompt/model/tool changes, history replay, budgets or spend-file edits.
+- Minimal hooks in `server/agent-service.ts`, `server/plugin-llm.ts`, `server/decision-model.ts`, `server/decision-bounded-model.ts` and `server/goal-service.ts` cover all Pi SDK session registrations and isolated app creation sites. Helper parent is selected before asynchronous spawn. Branch-summary usage uses the SDK's returned entry because SDK 1.0.1 emits no public event for it.
+- Checks: `tests/unit/usage-accounting-ledger.test.ts` (exact keys/counts, persistent and in-memory/helper/app events, cache warming/compaction/branch summaries/errors, planted content exclusion, ordering, switch, private modes, nonblocking/failing writes); normal land/deploy gates and a look-only live observation window.
+- Undo: ledger setting `{"enabled":false}` stops new writes without a restart; code rollback only through `pi-web-deploy rollback`. Existing numeric records remain.
+
 ## gate-view-cases: the Roles, Initiatives and Queue view cases that timed out under gate load given their own limit
 
 - `local` (Ops #278, project faster-landing, 2026-10-20). Hypothesis H-GATE-VIEW-CASES-1, the 60 land logs read, what each case spends its time on, the before and after times and the result: `docs/gate-view-cases.md`.

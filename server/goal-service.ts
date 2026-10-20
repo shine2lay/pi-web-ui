@@ -24,6 +24,7 @@ import {
 	type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import type { GoalStatus, ServerMessage } from "./protocol.js";
+import { attachUsageLedger } from "./usage-accounting-ledger.js";
 import type { ClientStateStore } from "./client-state.js";
 import { type ServerLang } from "./i18n.js";
 import { parseModelSpec } from "./attachments.js";
@@ -699,6 +700,12 @@ export class GoalService {
 				customTools: [goalAsk],
 				...(model ? { model } : {}),
 			});
+			attachUsageLedger(srv.session, {
+				origin: "app",
+				app: "goal-wizard",
+				dataDir: this.host.stateStore.dataDir,
+				parentConversationId: wizardConversationId,
+			});
 			const wizard = srv.session;
 			this.wizardSession = wizard;
 			await wizard.bindExtensions({ mode: "rpc", uiContext: this.host.webUi });
@@ -1207,6 +1214,12 @@ export class GoalService {
 					services,
 					sessionManager: SessionManager.inMemory(mainConv.cwd),
 					...(model ? { model } : {}),
+				});
+				attachUsageLedger(srv.session, {
+					origin: "app",
+					app: "goal-reviewer",
+					dataDir: this.host.stateStore.dataDir,
+					parentConversationId: mainConv.id,
 				});
 				const reviewCap = g.locked && g.maxRounds > 0 ? g.maxRounds : 0; // 0 = no cap
 				const reviewer = srv.session;

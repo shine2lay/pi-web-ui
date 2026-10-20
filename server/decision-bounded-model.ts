@@ -14,6 +14,7 @@ import {
 	type DecisionModel,
 	type DecisionModelEnv,
 } from "./decision-model.js";
+import { attachUsageLedger } from "./usage-accounting-ledger.js";
 import { BATCH_MODEL, BATCH_PROVIDER, type DecisionBatchControl } from "./decision-batches.js";
 import { REQUEST_FRAMING } from "./decision-batch-budget.js";
 import { runBoundedCall, type CallDriver, type LifecycleRow, type ReaderIdentity } from "./decision-call-lifecycle.js";
@@ -134,6 +135,7 @@ async function openReaderDriver(
 		thinkingLevel: thinking,
 		noTools: "all",
 	});
+	attachUsageLedger(session, { origin: "app", app: "decision-bounded-model", dataDir: env.dataDir });
 	let prompts = 0;
 	const identity = (): ReaderIdentity => ({
 		provider: session.model?.provider ?? "",

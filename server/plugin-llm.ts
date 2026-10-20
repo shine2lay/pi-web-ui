@@ -23,6 +23,7 @@ import {
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { parseModelSpec } from "./attachments.js";
+import { attachUsageLedger } from "./usage-accounting-ledger.js";
 
 /** host.llm.complete 的入参（插件侧形状，服务端再归一化）。 */
 export interface PluginLlmRequest {
@@ -44,6 +45,7 @@ export type PluginLlmResult =
 
 /** agent-service 提供的环境（cwd/agentDir/回落模型，全部只读快照）。 */
 export interface PluginLlmEnv {
+	dataDir?: string;
 	cwd: string;
 	agentDir: string;
 	fallbackModel?: { provider: string; id: string };
@@ -124,6 +126,7 @@ export async function completeWithIsolatedSession(env: PluginLlmEnv, req: Plugin
 				// 全部工具关闭（"all"）：纯补全，无副作用（SDK 的 noTools 是 "builtin"|"all" 枚举）。
 				noTools: "all",
 			});
+			attachUsageLedger(srv.session, { origin: "app", app: "plugin-llm", dataDir: env.dataDir });
 			dispose = () => {
 				try {
 					srv.session.dispose();
