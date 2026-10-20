@@ -399,8 +399,9 @@ undoing.
   dropped, or a wait); no owner step without all earlier steps at least `gapHours` apart.
 - **Disproof:** any duplicate step, message for a quiet item, exceeded cap, or fewer than half acted on in 24 h.
   A miss gets a new hypothesis about the wake text or chain, not an unmeasured tweak.
-- **Result so far (Oct 20): HIT** on the fixed fixtures and first live delivery (12:27 PDT, below). The
-  normal-restart dedupe proof and the 24 h action threshold remain pending. This is not a full 24 h HIT.
+- **Result so far (Oct 20): HIT** on the fixed fixtures, the first live delivery (12:27 PDT) and the first
+  normal restart (15:31 PDT), below. All 11 flagged stretches had a lead action within 9 minutes. The 24 h
+  verdict (task-9x7fkl) is still due, so this is not a full 24 h HIT yet.
 
 ## Waking the chain (Ops #284)
 
@@ -545,9 +546,19 @@ one-shot **task-9x7fkl, Oct 21 12:30 PDT**, after the full 24 h window, using:
 TZ=America/Los_Angeles node scripts/stall-verdict.mjs --since 2026-10-20T19:27:26.696Z --hours 24 --json
 ```
 
-Normal-restart dedupe proof is still pending the next ordinary deployment/restart; no restart is made
-only to check it. Ops home has no additional deployment planned (rm-9f8daac3). COO's live FYI was
-sent as rm-942ba37b after the existing shared Ops role-message cap had room; no cap was bypassed.
+Normal restart (Oct 20 15:31 PDT, the ordinary deploy of 9c805232; no restart was made for this check):
+the first round after it (15:36) sent nothing, all 11 original step lines are still there once each with
+their message ids and times, the ledger read logged no error, and the ledger still matches the role
+message store. **Restart: 0 duplicates.** The limit: nothing was still flagged at the restart (all 11
+stretches had their lead action by 12:36: ten waits and one project marked met), so this restart could
+not show a re-send being stopped. The fixed reload tests cover that, and the 24 h verdict re-checks
+duplicates over the whole window, including any later restart.
+
+A second verdict read at 15:37 PDT: still **PENDING** (window not complete), 11 of 11 flagged stretches
+ended with a lead action, zero duplicates, cap hits or early owner steps.
+
+COO's live FYI was sent as rm-942ba37b after the existing shared Ops role-message cap had room; no cap
+was bypassed.
 
 Undo: set `{"mode":"dry"}` to stop deliveries but keep finding logs, or `{"mode":"off"}` to stop the
 check. No registry or queue data needs undoing. Existing sent-step markers must not be deleted on rollback.
