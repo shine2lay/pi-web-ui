@@ -1,0 +1,51 @@
+{
+	"v": "usage-cost-view/1",
+	"reportingOnly": true,
+	"subject": { "kind": "role", "role": "design" },
+	"state": "complete",
+	"label": "Complete recorded list estimate for this subject",
+	"evaluatedAt": "2026-10-20T12:00:00.000Z",
+	"weekStart": "2026-10-19",
+	"asOf": "2026-10-20T12:00:00.000Z",
+	"observedAt": "2026-10-20T12:00:00.000Z",
+	"freshness": "fresh",
+	"coverage": "complete",
+	"policy": {
+		"ref": "fixture:design-policy",
+		"role": "design",
+		"scopeRef": "role:design",
+		"effectiveAt": "2026-10-10T07:00:00.000Z",
+		"weeklyUsd": "2000",
+		"basis": "list-estimate",
+		"timeZone": "America/Los_Angeles",
+		"sourceRef": "bp-b7f97619",
+		"wholePolicySubject": true
+	},
+	"list": {
+		"basis": "list-estimate",
+		"currency": "USD",
+		"grossObservations": { "usd": "0.1", "label": "Gross priced observations — may overlap; not a spend lower bound" },
+		"deduplicatedRecorded": { "usd": "0.1", "label": "Deduplicated recorded list subtotal — all scopes" },
+		"verifiedOwnLowerBound": { "usd": "0.1", "label": "Verified own-policy lower bound — not total spend" },
+		"exempt": { "usd": "0", "label": "Verified requested/Team list subtotal — included above" },
+		"otherPolicy": { "usd": "0", "label": "Other-policy list subtotal — included above" },
+		"unallocated": { "usd": "0", "label": "Unallocated list subtotal — included above" }
+	},
+	"otherBases": [
+		{ "basis": "provider-reported", "knownUsd": "0", "unpriced": 1, "label": "Provider-reported amounts — separate basis" },
+		{ "basis": "invoice", "knownUsd": "0", "unpriced": 1, "label": "Recorded invoice amounts — separate basis" }
+	],
+	"counts": { "unpriced": 0, "unallocated": 0, "unresolvedIdentities": 0 },
+	"sources": [
+		{ "index": 0, "state": "complete", "from": "2026-10-19T07:00:00.000Z", "through": "2026-10-20T12:00:00.000Z", "observedAt": "2026-10-20T12:00:00.000Z" }
+	],
+	"faults": [],
+	"issues": [],
+	"balance": {
+		"remainingUsd": "1999.9",
+		"label": "Recorded policy remainder — reporting only, not spending permission",
+		"tone": "neutral",
+		"progress": null
+	},
+	"manual": null
+}
