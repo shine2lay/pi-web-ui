@@ -1,0 +1,51 @@
+{
+	"options": {
+		"asOf": "2026-10-20T12:00:00.000Z",
+		"staleAfterMs": 3600000,
+		"window": { "from": "2026-10-01T10:00:00.000Z", "through": "2026-10-20T12:00:00.000Z" }
+	},
+	"report": {
+		"v": "observed-usage/1",
+		"reportingOnly": true,
+		"asOf": "2026-10-20T12:00:00.000Z",
+		"window": { "from": "2026-10-01T10:00:00.000Z", "through": "2026-10-20T12:00:00.000Z" },
+		"grossKnownListUsd": "0.1",
+		"dedupKnownListUsd": "0.1",
+		"otherBases": [
+			{ "basis": "provider-reported", "knownUsd": "0", "unpriced": 1 },
+			{ "basis": "invoice", "knownUsd": "0", "unpriced": 1 }
+		],
+		"unpricedFacts": 0,
+		"unresolvedIdentities": 0,
+		"usageCoverage": "complete",
+		"freshness": "fresh",
+		"faults": []
+	},
+	"viewKeys": [
+		"v",
+		"reportingOnly",
+		"subject",
+		"state",
+		"label",
+		"attribution",
+		"evaluatedAt",
+		"window",
+		"asOf",
+		"observedAt",
+		"freshness",
+		"usageCoverage",
+		"fundingCoverage",
+		"funding",
+		"list",
+		"otherBases",
+		"counts",
+		"sources",
+		"faults",
+		"issues"
+	],
+	"gap": {
+		"firstThrough": "2026-10-10T12:00:00.000Z",
+		"nextFrom": "2026-10-11T12:00:00.000Z",
+		"firstObservedAt": "2026-10-20T11:59:00.000Z"
+	}
+}

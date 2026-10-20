@@ -39,6 +39,53 @@ Fixed examples (USD decimal text):
 - Wrong-role/global/missing task membership: invalid subject projection, no
   numeric automatic view. No guessed payer from lead, queue or task title.
 
+## Observed usage (Ops #307, H-AUTOCOST-4)
+
+The hypothesis, fixed `0.1` task case, six planted-disproof mutation receipts and
+legacy golden SHA-256 are in the new **Observed usage** section of
+`docs/usage-accounting-contract.md`. This is a separate reporting-only API, not a
+replacement for policy-backed `projectUsageCost`, which keeps its existing
+signature, body, report shape and fixture outputs.
+
+`projectObservedUsage(source, { subject, asOf, staleAfterMs, window? })` returns
+`ObservedUsageView`, version `usage-observed-view/1`. It calls pure `observeUsage`
+(`observed-usage/1`), not budget evaluation. The closed input remains
+`subject-usage/1`, with unchanged `boundSource` checks: independent per-fact role
+evidence, canonical task birth, verified event-time task/initiative membership,
+allocation payer consistency and mapped snapshot leaves. A wrong subject or
+unverified membership is invalid, not a silently filtered subtotal. These binding
+checks do not decide who funds the usage. Policies may be absent; no substitute
+policy is borrowed or invented.
+
+- Roles/initiatives default to the Pacific week through explicit `asOf`, or accept
+  an explicit `{from, through}`. A task always starts at `subject.addedAt`, even
+  in a prior week. An explicit task window must preserve that start. Canonical
+  UTC, ordered, non-future windows only; interval endpoints are inclusive.
+- Label: **recorded known list subtotal**, never spend or a lower bound. Gross
+  observations can overlap; deduplicated recorded list subtotal is separate.
+  Provider-reported/invoice amounts stay on their own bases, never added to list.
+- `counts.unpriced` and `counts.unresolvedIdentities` are always present, including
+  zero on known clean evidence. They are null when no valid numeric source is
+  available, never fabricated zero. Partial usable evidence retains its known
+  subtotal and the unresolved/unpriced counts.
+- `usageCoverage` is `complete`, `partial` or `unavailable`. Complete needs fresh,
+  clean usage evidence spanning the whole requested window. Required stream gaps,
+  stale evidence, unpriced calls and unresolved identities cannot become complete
+  through a recent read. The Temper feed may be partial before its cutover; this
+  API does not backfill or certify that history.
+- Funding coverage is independent: `fundingCoverage: "not-evaluated"` and the
+  constant line **funding: not evaluated**, on every result including invalid and
+  unavailable results. A complete usage subtotal says nothing about who pays.
+- There are no budget/allocation/policy/own/exempt/unallocated/remainder fields and
+  no budget bar (absent, not zero), even if allocations and policies are present.
+  A role is labelled **usage source-attributed to this role — own and requested
+  mixed**, never own-work spend. Task/initiative attribution is verified
+  event-time membership.
+- Null source is unavailable; malformed/badly bound input is invalid. No source
+  strings enter public faults: the existing safe code/count projection is reused.
+  No I/O, timer, model calls, production importer, runtime wiring, install,
+  restart, `spend.json`, cap, stop or policy change is included.
+
 ## Boundaries
 
 Only `server/usage-accounting-roles.ts`,

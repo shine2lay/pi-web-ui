@@ -2,13 +2,16 @@
 import {
 	accountUsage,
 	checkTaskBinding,
+	observeUsage,
 	pacificWeekStart,
 	pacificWeekStartUtc,
 	parseAccountingInput,
 	taskId,
 	type AccountingInput,
 	type AccountingReport,
+	type ObservedUsageReport,
 	type ReportingPolicy,
+	type UsageWindow,
 	type Usd,
 } from "./usage-accounting-contract.js";
 import type { UiRoleSpend } from "./protocol.js";
@@ -136,6 +139,47 @@ export interface UsageCostView {
 	/** No green state, percentage, stop, or permission can be inferred from this reporting value. */
 	balance: { remainingUsd: Usd | null; label: string; tone: "neutral"; progress: null };
 	manual: ManualCostReference | null;
+}
+
+export interface ObservedUsageViewRequest {
+	subject: UsageSubject;
+	asOf: string;
+	staleAfterMs: number;
+	/** Role/initiative default to the Pacific week. Task windows always start at birth. */
+	window?: UsageWindow;
+}
+type ObservedViewIssue = Exclude<
+	CostViewIssue,
+	"invalid-policy-binding" | "unallocated" | "policy-subset" | "policy-not-effective"
+>;
+export interface ObservedUsageView {
+	v: "usage-observed-view/1";
+	reportingOnly: true;
+	subject: UsageSubject | null;
+	state: UsageCostView["state"];
+	label: string;
+	attribution:
+		"usage source-attributed to this role — own and requested mixed" | "verified event-time task membership" | null;
+	evaluatedAt: string | null;
+	window: UsageWindow | null;
+	asOf: string | null;
+	observedAt: string | null;
+	freshness: "fresh" | "stale" | "unknown";
+	usageCoverage: "complete" | "partial" | "unavailable";
+	/** Independent of usage coverage; never inferred from a complete subtotal. */
+	fundingCoverage: "not-evaluated";
+	funding: "funding: not evaluated";
+	list: {
+		basis: "list-estimate";
+		currency: "USD";
+		grossObservations: CostMetric;
+		deduplicatedRecorded: CostMetric;
+	} | null;
+	otherBases: UsageCostView["otherBases"];
+	counts: { unpriced: number | null; unresolvedIdentities: number | null };
+	sources: CostSourceView[];
+	faults: UsageCostView["faults"];
+	issues: ObservedViewIssue[];
 }
 
 const REF = /^[A-Za-z0-9_./:@+-]{1,256}$/;
@@ -286,7 +330,7 @@ function sourceViews(input: AccountingInput, at: string): CostSourceView[] {
 		};
 	});
 }
-function safeFaults(report: AccountingReport): UsageCostView["faults"] {
+function safeFaults(report: Pick<AccountingReport, "faults">): UsageCostView["faults"] {
 	const counts = new Map<CostFaultCode, number>();
 	for (const f of report.faults) {
 		const code: CostFaultCode = FAULT_CODES.includes(f.code as CostFaultCode)
@@ -334,6 +378,167 @@ function boundSource(raw: Record<string, unknown>, input: AccountingInput, subje
 	}
 	// An aggregate with unmapped leaves cannot prove which subject incurred it.
 	return input.snapshots.every((s) => s.observedAt > at || s.coveredFactIds.every((f) => factIds.has(f)));
+}
+
+function observedWindow(request: ObservedUsageViewRequest): UsageWindow | null {
+	if (!record(request)) return null;
+	const keys = ["subject", "asOf", "staleAfterMs"];
+	if (Object.hasOwn(request, "window")) keys.push("window");
+	const subject = subjectOf(request.subject);
+	if (
+		!closed(request, keys) ||
+		!subject ||
+		!timestamp(request.asOf) ||
+		typeof request.staleAfterMs !== "number" ||
+		!Number.isSafeInteger(request.staleAfterMs) ||
+		request.staleAfterMs < 0
+	)
+		return null;
+	const window = Object.hasOwn(request, "window")
+		? request.window
+		: {
+				from: subject.kind === "task" ? subject.addedAt : pacificWeekStartUtc(request.asOf),
+				through: request.asOf,
+			};
+	if (
+		!closed(window, ["from", "through"]) ||
+		!timestamp(window.from) ||
+		!timestamp(window.through) ||
+		window.from > window.through ||
+		window.through > request.asOf ||
+		(subject.kind === "task" && window.from !== subject.addedAt)
+	)
+		return null;
+	return { from: window.from, through: window.through };
+}
+function emptyObservedView(
+	request: ObservedUsageViewRequest,
+	issue: ObservedViewIssue,
+	window: UsageWindow | null,
+): ObservedUsageView {
+	return {
+		v: "usage-observed-view/1",
+		reportingOnly: true,
+		subject: subjectOf(request?.subject),
+		state: issue === "source-unavailable" ? "source-unavailable" : "invalid",
+		label: "recorded known list subtotal — unknown",
+		attribution: null,
+		evaluatedAt: timestamp(request?.asOf) ? request.asOf : null,
+		window,
+		asOf: null,
+		observedAt: null,
+		freshness: "unknown",
+		usageCoverage: "unavailable",
+		fundingCoverage: "not-evaluated",
+		funding: "funding: not evaluated",
+		list: null,
+		otherBases: [],
+		counts: { unpriced: null, unresolvedIdentities: null },
+		sources: [],
+		faults: [],
+		issues: [issue],
+	};
+}
+
+/** Pure observed usage only. No policy requirement, funding evaluation or budget bar. */
+export function projectObservedUsage(source: unknown, request: ObservedUsageViewRequest): ObservedUsageView {
+	const window = observedWindow(request);
+	if (!window) return emptyObservedView(request, "invalid-request", null);
+	const empty = (issue: ObservedViewIssue) => emptyObservedView(request, issue, window);
+	const subject = subjectOf(request.subject)!;
+	if (source === null || source === undefined) return empty("source-unavailable");
+	if (
+		!closed(source, ["v", "subject", "evidenceRef", "factRoles", "input"]) ||
+		source.v !== "subject-usage/1" ||
+		!reference(source.evidenceRef)
+	)
+		return empty("invalid-source");
+	const declared = subjectOf(source.subject);
+	if (!declared || !sameSubject(subject, declared)) return empty("invalid-subject-binding");
+	const parsed = parseAccountingInput(source.input);
+	if (!parsed.ok) return empty("invalid-source");
+	const input = parsed.value;
+	if (!boundSource(source, input, subject, request.asOf)) return empty("invalid-subject-binding");
+	let report: ObservedUsageReport;
+	try {
+		const coverage = [...input.coverage].sort((a, b) =>
+			JSON.stringify([a.stream, a.observedAt, a.from, a.through, a.status]).localeCompare(
+				JSON.stringify([b.stream, b.observedAt, b.from, b.through, b.status]),
+			),
+		);
+		report = observeUsage({ ...input, coverage }, { asOf: request.asOf, staleAfterMs: request.staleAfterMs, window });
+	} catch {
+		return empty("invalid-source");
+	}
+	const sources = sourceViews(input, request.asOf);
+	const minTime = (key: "through" | "observedAt") =>
+		sources.every((s) => s[key] !== null && (key !== "through" || s.state === "complete" || s.state === "partial"))
+			? sources.map((s) => s[key]!).sort()[0]
+			: null;
+	const asOf = minTime("through");
+	const observedAt = minTime("observedAt");
+	const watermark = asOf && observedAt ? (asOf < observedAt ? asOf : observedAt) : null;
+	const freshness =
+		watermark === null
+			? "unknown"
+			: Date.parse(request.asOf) - Date.parse(watermark) > request.staleAfterMs
+				? "stale"
+				: "fresh";
+	const sourcesComplete = sources.every(
+		(s) => s.state === "complete" && s.from! <= window.from && s.through! >= window.through,
+	);
+	const unavailable = sources.some((s) => s.state === "unavailable" || s.state === "missing");
+	const complete = report.usageCoverage === "complete" && sourcesComplete && freshness === "fresh";
+	const issues: ObservedViewIssue[] = [];
+	if (unavailable) issues.push("source-unavailable");
+	if (!sourcesComplete) issues.push("source-incomplete");
+	if (freshness === "stale") issues.push("stale-source");
+	if (report.unpricedFacts) issues.push("unpriced");
+	if (report.unresolvedIdentities) issues.push("unresolved-identity");
+	if (report.faults.length) issues.push("accounting-fault");
+	const state = unavailable
+		? "source-unavailable"
+		: freshness === "stale"
+			? "stale"
+			: complete
+				? "complete"
+				: "partial";
+	return {
+		v: "usage-observed-view/1",
+		reportingOnly: true,
+		subject,
+		state,
+		label: "recorded known list subtotal",
+		attribution:
+			subject.kind === "role"
+				? "usage source-attributed to this role — own and requested mixed"
+				: "verified event-time task membership",
+		evaluatedAt: request.asOf,
+		window,
+		asOf,
+		observedAt,
+		freshness,
+		usageCoverage: complete ? "complete" : "partial",
+		fundingCoverage: "not-evaluated",
+		funding: "funding: not evaluated",
+		list: {
+			basis: "list-estimate",
+			currency: "USD",
+			grossObservations: { usd: report.grossKnownListUsd, label: "Gross known list observations — may overlap" },
+			deduplicatedRecorded: { usd: report.dedupKnownListUsd, label: "recorded known list subtotal" },
+		},
+		otherBases: report.otherBases.map((b) => ({
+			...b,
+			label:
+				b.basis === "invoice"
+					? "Recorded invoice amounts — separate basis"
+					: "Provider-reported amounts — separate basis",
+		})),
+		counts: { unpriced: report.unpricedFacts, unresolvedIdentities: report.unresolvedIdentities },
+		sources,
+		faults: safeFaults(report),
+		issues,
+	};
 }
 
 /** No I/O, globals, cache, timer, production importer or authority effect. Null source is explicitly unavailable. */

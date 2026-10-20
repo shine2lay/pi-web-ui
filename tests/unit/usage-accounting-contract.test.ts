@@ -5,6 +5,7 @@ import {
 	addUsd,
 	checkTaskBinding,
 	factId,
+	observeUsage,
 	pacificWeekStart,
 	pacificWeekStartUtc,
 	parseAccountingInput,
@@ -14,6 +15,8 @@ import {
 	type AccountingInput,
 	type AccountingReport,
 	type Basis,
+	type ObserveUsageOptions,
+	type ObservedUsageReport,
 	type RunSnapshot,
 	type Tokens,
 	type UsageFact,
@@ -37,6 +40,30 @@ const numbers = fixture("numbers") as {
 	quotedUsd: string;
 	pacificCases: [string, string, string][];
 };
+const observedFixture = (name: string): unknown =>
+	JSON.parse(readFileSync(new URL(`../fixtures/usage-accounting-observed/${name}.json`, import.meta.url), "utf8"));
+const observedExpected = observedFixture("expected") as {
+	options: ObserveUsageOptions;
+	report: ObservedUsageReport;
+	gap: { firstThrough: string; nextFrom: string; firstObservedAt: string };
+};
+const observedInput = () => (observedFixture("source") as { input: AccountingInput }).input;
+const observe = (input = observedInput(), request = observedExpected.options) => observeUsage(input, request);
+function observedAlias(input: AccountingInput): UsageFact {
+	const alias = structuredClone(input.facts[0]);
+	alias.identity.attempt = "native-alias";
+	alias.id = factId(alias.identity);
+	alias.source.event = "native-alias-event";
+	input.facts.push(alias);
+	input.aliases.push({
+		aliasFactId: alias.id,
+		canonicalFactId: input.facts[0].id,
+		provenance: "native-call-map/1",
+		evidenceRef: "fixture-only:same-call-twice",
+	});
+	return alias;
+}
+
 const AS_OF = "2026-10-20T12:00:00.000Z";
 const options = { policyRef: "fixture:design-policy", asOf: AS_OF, staleAfterMs: 3_600_000 };
 function ledger(): AccountingInput {
@@ -671,5 +698,128 @@ describe("inert usage-accounting/1 exact synthetic fixtures", () => {
 		const raw = change(ledger());
 		expect(parseAccountingInput(raw).ok).toBe(false);
 		expect(() => accountUsage(raw, options)).toThrow();
+	});
+});
+
+describe("policy-free observed usage — H-AUTOCOST-4", () => {
+	it("H4 fixed case: 0.1, complete usage, no policy, unresolved zero, no funding fields", () => {
+		const input = observedInput();
+		const before = JSON.stringify(input);
+		expect(input.policies).toEqual([]);
+		expect(input.roots).toEqual([]);
+		expect(observe(input)).toEqual(observedExpected.report);
+		expect(observe(input)).toEqual(observe(input));
+		expect(JSON.stringify(input)).toBe(before);
+	});
+	it("H4-D1 the same call twice counts once (replay and native alias)", () => {
+		expect(observedInput().facts).toHaveLength(2);
+		expect(observe().dedupKnownListUsd).toBe("0.1");
+		const input = observedInput();
+		observedAlias(input);
+		expect(observe(input)).toMatchObject({ grossKnownListUsd: "0.2", dedupKnownListUsd: "0.1", faults: [] });
+	});
+	it("H4-D3 unpriced is counted as unpriced, never a known zero", () => {
+		for (const status of ["unpriced", "unknown-model", "basis-unproven"] as const) {
+			const input = observedInput();
+			for (const f of input.facts) Object.assign(f.prices[0], { amount: null, status, rateVersion: null });
+			expect(observe(input)).toMatchObject({ dedupKnownListUsd: "0", unpricedFacts: 1, usageCoverage: "partial" });
+		}
+	});
+	it("H4-D4 a coverage gap inside the requested window makes usage partial", () => {
+		const input = observedInput();
+		const c = input.coverage[0];
+		input.coverage = [
+			{ ...c, through: observedExpected.gap.firstThrough, observedAt: observedExpected.gap.firstObservedAt },
+			{ ...c, from: observedExpected.gap.nextFrom },
+		];
+		expect(observe(input)).toMatchObject({
+			usageCoverage: "partial",
+			faults: [{ code: "source-coverage", ref: c.stream }],
+		});
+	});
+	it("H4-D6 observation never emits allocation faults or own totals", () => {
+		const input = observedInput();
+		const alias = observedAlias(input);
+		input.allocations.push({
+			...input.allocations[0],
+			factId: alias.id,
+			rootRef: "unknown-root",
+			scope: "team",
+			payerRole: "design",
+			reason: "native-root",
+		});
+		input.allocations.push({
+			...input.allocations[0],
+			factId: factId({ producer: "pi", incarnation: "fixture-instance", attempt: "orphan" }),
+		});
+		const report = observe(input);
+		const noFunding = structuredClone(input);
+		noFunding.allocations = [];
+		expect(report).toEqual(observe(noFunding));
+		expect(report.faults).toEqual([]);
+		expect(Object.keys(report)).toEqual(Object.keys(observedExpected.report));
+		expect(report).not.toHaveProperty("verifiedOwnLowerBoundUsd");
+		expect(report).not.toHaveProperty("unallocatedKnownListUsd");
+	});
+	it("the explicit window includes its endpoints and excludes older/later calls, not just the Pacific week", () => {
+		const input = observedInput();
+		const request = structuredClone(observedExpected.options);
+		request.window.through = "2026-10-20T11:00:00.000Z";
+		for (const [attempt, occurredAt] of [
+			["at-start", request.window.from],
+			["at-end", request.window.through],
+			["too-old", "2026-10-01T09:59:59.999Z"],
+			["too-new", "2026-10-20T11:00:00.001Z"],
+		]) {
+			const f = structuredClone(input.facts[0]);
+			f.identity.attempt = attempt;
+			f.id = factId(f.identity);
+			f.source.event = attempt;
+			f.occurredAt = occurredAt;
+			if (attempt === "too-old") f.links.task = null;
+			f.source.observedAt = request.asOf;
+			input.facts.push(f);
+		}
+		expect(observe(input, request)).toMatchObject({ dedupKnownListUsd: "0.3", usageCoverage: "complete" });
+	});
+	it("counts unresolved identities separately without claiming complete usage", () => {
+		const input = observedInput();
+		for (const f of input.facts) f.identityStatus = "unresolved";
+		expect(observe(input)).toMatchObject({ unresolvedIdentities: 1, usageCoverage: "partial" });
+	});
+	it("retains collision, stale, snapshot and basis checks without a policy", () => {
+		const input = observedInput();
+		const duplicate = structuredClone(input.facts[0]);
+		duplicate.identity.attempt = "collision";
+		duplicate.id = factId(duplicate.identity);
+		input.facts.push(duplicate);
+		expect(observe(input)).toMatchObject({ unresolvedIdentities: 2, usageCoverage: "partial" });
+		const stale = observedInput();
+		stale.coverage[0].observedAt = "2026-10-20T10:59:59.999Z";
+		stale.coverage[0].through = stale.coverage[0].observedAt;
+		expect(observe(stale)).toMatchObject({ freshness: "stale", usageCoverage: "partial" });
+		const invoice = observedInput();
+		for (const f of invoice.facts) f.prices.push({ ...f.prices[0], basis: "invoice", amount: "0.07" });
+		expect(observe(invoice).otherBases).toContainEqual({ basis: "invoice", knownUsd: "0.07", unpriced: 0 });
+		invoice.snapshots.push({
+			producer: "temper",
+			incarnation: "fixture-instance",
+			run: "unproved-run",
+			observedAt: AS_OF,
+			state: "ended",
+			price: { basis: "list-estimate", currency: "USD", amount: "1", status: "known", rateVersion: "fixture-rates/1" },
+			coveredFactIds: [],
+			coverage: "partial",
+		});
+		expect(observe(invoice).usageCoverage).toBe("partial");
+	});
+	it("rejects malformed envelopes and reversed/future/non-UTC windows, without weakening validators", () => {
+		expect(() => observeUsage({}, observedExpected.options)).toThrow();
+		for (const window of [
+			{ from: AS_OF, through: observedExpected.options.window.from },
+			{ from: observedExpected.options.window.from, through: "2026-10-21T12:00:00.000Z" },
+			{ from: "2026-10-01T10:00:00", through: AS_OF },
+		])
+			expect(() => observeUsage(observedInput(), { ...observedExpected.options, window })).toThrow();
 	});
 });

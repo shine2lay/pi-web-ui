@@ -2,8 +2,11 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { factId, type UsageFact } from "../../server/usage-accounting-contract.js";
 import {
+	projectObservedUsage,
 	projectUsageCost,
 	type LegacyManualInput,
+	type ObservedUsageView,
+	type ObservedUsageViewRequest,
 	type SubjectUsageSource,
 	type UsageCostView,
 	type UsageSubject,
@@ -17,6 +20,36 @@ const cases = fixture("cases") as {
 	pacific: [string, string, string][];
 	exact: [string, string, string][];
 };
+const observedFixture = (name: string): unknown =>
+	JSON.parse(readFileSync(new URL(`../fixtures/usage-accounting-observed/${name}.json`, import.meta.url), "utf8"));
+const observedExpected = observedFixture("expected") as {
+	options: { asOf: string; staleAfterMs: number; window: { from: string; through: string } };
+	viewKeys: string[];
+	gap: { firstThrough: string; nextFrom: string; firstObservedAt: string };
+};
+const observedSource = () => observedFixture("source") as SubjectUsageSource;
+const observedRequest = (s = observedSource()): ObservedUsageViewRequest => ({
+	subject: structuredClone(s.subject),
+	asOf: observedExpected.options.asOf,
+	staleAfterMs: observedExpected.options.staleAfterMs,
+});
+function noFunding(v: ObservedUsageView): void {
+	expect(Object.keys(v)).toEqual(observedExpected.viewKeys);
+	expect(v.fundingCoverage).toBe("not-evaluated");
+	expect(v.funding).toBe("funding: not evaluated");
+	const forbidden =
+		/^(policy|policies|policyRef|policySubject|allocation|allocations|balance|progress|budget|budgetBar|remainingUsd|verifiedOwnLowerBoundUsd|exemptKnownListUsd|otherPolicyKnownListUsd|unallocatedKnownListUsd|unallocatedFacts|manual)$/;
+	function keys(value: unknown): void {
+		if (!value || typeof value !== "object") return;
+		for (const [key, child] of Object.entries(value)) {
+			expect(key).not.toMatch(forbidden);
+			keys(child);
+		}
+	}
+	keys(v);
+	expect(JSON.stringify(v)).not.toMatch(/lower bound|spend/i);
+}
+
 const AT = "2026-10-20T12:00:00.000Z";
 const source = () => fixture("source") as SubjectUsageSource;
 const request = (): UsageViewRequest => ({
@@ -696,5 +729,212 @@ describe("#302 inert subject-bound cost view — fixed synthetic evidence", () =
 			expect(readFileSync(new URL(`../../${path}`, import.meta.url), "utf8")).not.toContain(
 				'from "./usage-accounting-roles',
 			);
+	});
+});
+
+describe("policy-free observed subject view — H-AUTOCOST-4", () => {
+	it("H4 fixed case: recorded 0.1, complete usage, zero unresolved, funding not evaluated", () => {
+		const s = observedSource();
+		const r = observedRequest(s);
+		const before = JSON.stringify([s, r]);
+		const v = projectObservedUsage(s, r);
+		expect(s.input.policies).toEqual([]);
+		expect(v).toMatchObject({
+			v: "usage-observed-view/1",
+			state: "complete",
+			usageCoverage: "complete",
+			freshness: "fresh",
+			label: "recorded known list subtotal",
+			window: observedExpected.options.window,
+			list: { deduplicatedRecorded: { usd: "0.1", label: "recorded known list subtotal" } },
+			counts: { unpriced: 0, unresolvedIdentities: 0 },
+			issues: [],
+			faults: [],
+		});
+		noFunding(v);
+		expect(JSON.stringify([s, r])).toBe(before);
+		expect(projectObservedUsage(s, r)).toEqual(v);
+	});
+	it("H4-D2 wrong-subject or unverified event-time membership is an invalid binding", () => {
+		const changes: ((s: SubjectUsageSource) => void)[] = [
+			(s) => {
+				if (s.subject.kind === "task") s.subject.task = 2;
+			},
+			(s) => {
+				s.input.memberships = [];
+			},
+			(s) => {
+				s.input.memberships[0].effectiveAt = "2026-10-20T11:00:00.000Z";
+			},
+			(s) => {
+				s.factRoles = [];
+			},
+			(s) => {
+				s.subject = { kind: "role", role: "other-role" };
+			},
+		];
+		for (const change of changes) {
+			const s = observedSource();
+			change(s);
+			const v = projectObservedUsage(s, observedRequest(s));
+			expect(v).toMatchObject({
+				state: "invalid",
+				usageCoverage: "unavailable",
+				list: null,
+				issues: ["invalid-subject-binding"],
+			});
+			noFunding(v);
+		}
+	});
+	it("H4-D3 the view always carries unpriced and unresolved counts, not a fabricated known zero", () => {
+		const s = observedSource();
+		for (const f of s.input.facts) Object.assign(f.prices[0], { amount: null, status: "unpriced", rateVersion: null });
+		const v = projectObservedUsage(s, observedRequest(s));
+		expect(v).toMatchObject({
+			state: "partial",
+			usageCoverage: "partial",
+			counts: { unpriced: 1, unresolvedIdentities: 0 },
+			issues: ["unpriced"],
+		});
+		noFunding(v);
+	});
+	it("H4-D4 the whole task lifetime, not only this week, needs usage coverage", () => {
+		const s = observedSource();
+		s.input.coverage[0].from = "2026-10-19T07:00:00.000Z";
+		const v = projectObservedUsage(s, observedRequest(s));
+		expect(v).toMatchObject({ state: "partial", usageCoverage: "partial", window: observedExpected.options.window });
+		expect(v.issues).toContain("source-incomplete");
+		noFunding(v);
+	});
+	it("H4-D5 an allocation or policy present still emits no funding output or budget bar", () => {
+		const s = observedSource();
+		const before = projectObservedUsage(s, observedRequest(s));
+		const policySource = source();
+		s.input.allocations = policySource.input.allocations;
+		s.input.roots = policySource.input.roots;
+		s.input.policies = policySource.input.policies;
+		const after = projectObservedUsage(s, observedRequest(s));
+		noFunding(after);
+		expect(after).toEqual(before);
+	});
+	it("roles are source attribution (own/requested mixed), never own-work spend", () => {
+		const s = observedSource();
+		s.subject = { kind: "role", role: "design" };
+		Object.assign(s.input.allocations[0], {
+			scope: "requested",
+			rootRef: "fixture-only:requested",
+			payerRole: "design",
+			reason: "native-root",
+		});
+		const f = structuredClone(s.input.facts[0]);
+		f.identity.attempt = "own-call";
+		f.id = factId(f.identity);
+		f.source.event = "own-call";
+		s.input.facts.push(f);
+		s.factRoles.push({ ...s.factRoles[0], factId: f.id });
+		s.input.allocations.push({ ...s.input.allocations[0], factId: f.id, scope: "own" });
+		const v = projectObservedUsage(s, observedRequest(s));
+		expect(v).toMatchObject({
+			state: "complete",
+			usageCoverage: "complete",
+			attribution: "usage source-attributed to this role — own and requested mixed",
+			window: { from: "2026-10-19T07:00:00.000Z", through: AT },
+			list: { deduplicatedRecorded: { usd: "0.2" } },
+		});
+		noFunding(v);
+	});
+	it("roles/initiatives accept explicit windows and otherwise default to the Pacific week", () => {
+		for (const subject of [
+			{ kind: "role", role: "design" },
+			{ kind: "initiative", initiative: "fixture-initiative" },
+		] as UsageSubject[]) {
+			const s = observedSource();
+			s.subject = subject;
+			const r = observedRequest(s);
+			expect(projectObservedUsage(s, r)).toMatchObject({
+				usageCoverage: "complete",
+				window: { from: "2026-10-19T07:00:00.000Z", through: AT },
+			});
+			r.window = structuredClone(observedExpected.options.window);
+			expect(projectObservedUsage(s, r)).toMatchObject({ usageCoverage: "complete", window: r.window });
+			s.input.coverage[0].from = "2026-10-19T07:00:00.000Z";
+			expect(projectObservedUsage(s, r).usageCoverage).toBe("partial");
+		}
+	});
+	it("keeps usage and funding coverage independent, with unknown counts for unavailable sources", () => {
+		const r = observedRequest();
+		for (const s of [null, undefined]) {
+			const v = projectObservedUsage(s, r);
+			expect(v).toMatchObject({
+				state: "source-unavailable",
+				usageCoverage: "unavailable",
+				counts: { unpriced: null, unresolvedIdentities: null },
+			});
+			noFunding(v);
+		}
+		const s = observedSource();
+		s.input.coverage[0].status = "unavailable";
+		const v = projectObservedUsage(s, r);
+		expect(v).toMatchObject({
+			state: "source-unavailable",
+			usageCoverage: "partial",
+			counts: { unpriced: 0, unresolvedIdentities: 0 },
+		});
+		noFunding(v);
+	});
+	it("rejects policy-bearing requests and invalid task windows instead of silently borrowing a policy", () => {
+		const s = observedSource();
+		for (const r of [
+			{ ...observedRequest(), policyRef: "fixture:borrowed" },
+			{ ...observedRequest(), window: { from: "2026-10-19T07:00:00.000Z", through: AT } },
+			{ ...observedRequest(), window: { from: AT, through: "2026-10-19T07:00:00.000Z" } },
+			{ ...observedRequest(), asOf: "2026-10-01T09:59:59.999Z" },
+		]) {
+			const v = projectObservedUsage(s, r);
+			expect(v).toMatchObject({
+				state: "invalid",
+				usageCoverage: "unavailable",
+				list: null,
+				issues: ["invalid-request"],
+			});
+			noFunding(v);
+		}
+	});
+	it("treats a declared subject mismatch, malformed source and missing per-fact role evidence as invalid", () => {
+		const s = observedSource();
+		const r = observedRequest(s);
+		s.subject = { kind: "role", role: "design" };
+		expect(projectObservedUsage(s, r).issues).toEqual(["invalid-subject-binding"]);
+		expect(projectObservedUsage({}, r).issues).toEqual(["invalid-source"]);
+		const noRoles = observedSource();
+		noRoles.factRoles = [];
+		expect(projectObservedUsage(noRoles, r).issues).toEqual(["invalid-subject-binding"]);
+	});
+	it("keeps deterministic coverage conflicts, freshness and public fault sanitization", () => {
+		const s = observedSource();
+		const c = s.input.coverage[0];
+		s.input.coverage.push({ ...c, status: "partial" });
+		const r = observedRequest(s);
+		const v = projectObservedUsage(s, r);
+		expect(v).toMatchObject({ usageCoverage: "partial", asOf: null, freshness: "unknown" });
+		s.input.coverage.reverse();
+		expect(projectObservedUsage(s, r)).toEqual(v);
+		const stale = observedSource();
+		stale.input.coverage[0].through = "2026-10-20T10:00:00.000Z";
+		stale.input.coverage[0].observedAt = "2026-10-20T10:00:00.000Z";
+		expect(projectObservedUsage(stale, r)).toMatchObject({
+			state: "stale",
+			usageCoverage: "partial",
+			freshness: "stale",
+		});
+		const unresolved = observedSource();
+		for (const f of unresolved.input.facts) f.identityStatus = "unresolved";
+		const unresolvedView = projectObservedUsage(unresolved, r);
+		expect(unresolvedView).toMatchObject({
+			usageCoverage: "partial",
+			counts: { unresolvedIdentities: 1 },
+			faults: [{ code: "unresolved-identity", count: 1 }],
+		});
+		expect(JSON.stringify(unresolvedView.faults)).not.toContain("fixture-instance");
 	});
 });

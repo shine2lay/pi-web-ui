@@ -8,6 +8,116 @@ registration, budget debit or stop. No collection, backfill, installation or
 activation is included. Producer coverage and authenticated allocation remain
 incomplete; a complete automatic budget numerator is **not READY**.
 
+## Observed usage
+
+### H-AUTOCOST-4 (before implementation)
+
+Ops #307 · accountable lead: Ops. Wrong, with evidence: `accountUsage` requires
+`policyRef` and throws `missing-policy`; `projectUsageCost` rejects absent policy
+binding. Non-budget tasks, Team and initiatives therefore cannot get an observed
+subtotal. Architecture `rm-19242255` confirms no supported policy-free route.
+
+One change: extract pure policy-free observation over an explicit window, then
+separately evaluate budget allocation for existing policy reports. Reuse the
+existing numeric validation, revision, identity, alias, snapshot and source checks.
+The observed view validates the same per-fact subject evidence without inventing
+a policy. No runtime wiring, import into live paths, installation or restart.
+
+Expected fixed case: verified task membership, the same known-priced `0.1` call
+recorded twice, `policies: []`, unknown allocation/root: subtotal `0.1`, complete
+usage coverage, unresolved `0`, no budget/allocation fields, `funding: not
+evaluated`. Check all six disproofs with deliberate temporary mutations.
+Disproof: any mutant survives, any existing fixture/test-input output changes,
+or observation needs a policy. Before editing code, a throwaway script captured
+301 existing `accountUsage`/`projectUsageCost` calls (including exceptions) from
+all 166 existing tests. Sorted serialized golden SHA-256:
+`51ff5c3944646efc447a2ef1b770359580162651e901802938da40018de7795d`.
+Golden and replay outputs are outside the repository. Throwaway scripts ran
+uncommitted under the worktree's `tmp/` and were removed before landing.
+Verification result is recorded below, not assumed.
+
+### Policy-free API (inert)
+
+`observeUsage(raw, { asOf, staleAfterMs, window: { from, through } })`
+returns `ObservedUsageReport`, version `observed-usage/1`. All times are canonical
+UTC; `from <= through <= asOf`. Window endpoints are inclusive. Coverage must
+start at/before `from` and extend through/after `through`; a latest coverage row
+covering only part of the requested interval is partial, even within one Pacific
+week. Read time cannot repair an old watermark or a pre-cutover history gap.
+
+The closed existing `AccountingInput` envelope and its validators/types are
+unchanged: include empty arrays for absent policies/allocations/roots. Observation
+validates that envelope but never looks up policies, evaluates allocations or
+roots, or emits `unknown-allocation`, `orphan-allocation`,
+`alias-allocation-conflict` or policy/root conflicts. It returns only window,
+gross/dedup known list USD, separate `otherBases`, `unpricedFacts`,
+`unresolvedIdentities`, `usageCoverage`, `freshness`, and usage faults (plus version,
+reporting-only marker and evaluation timestamp). No own, exempt, other-policy,
+unallocated, allowance, remainder or budget-bar fields exist, not even as zero.
+
+All existing pure evidence checks are reused: latest revision/replay, native
+aliases/cycles, producer/incarnation/stream/event collisions, merged prices,
+partial facts, snapshots, required-stream coverage/freshness, numeric list
+subtotals and separate bases. Missing list prices count as unpriced; recorded
+known zero is never evidence of free unpriced usage. Unresolved identities and
+usage faults remain conservative evidence exposure, including retained evidence
+used by snapshots; they are not funding findings. No model, source discovery,
+chat-content reader or native authority is added.
+
+`accountUsage(raw, { policyRef, asOf, staleAfterMs })` keeps its public signature
+and exact report shape/labels. Internally the same pure observation retains local
+evidence for `evaluateBudget`, with the window set to the Pacific week of `asOf`.
+The separate budget step handles allocations, roots, own/exempt/other/unallocated,
+allocation/root/policy faults, policy effective time, exposure and `remainingUsd`.
+This avoids a second observation pass without leaking that internal evidence into
+the public observed report. `evaluateBudget` is private, not an authority API.
+
+### Mutation proof ledger
+
+Each temporary mutant is applied only to the indicated pure module, tested alone,
+then reverted; none belongs in the commit. The matching final tests must also
+pass after all mutants have been removed. New fixed inputs live only in
+`tests/fixtures/usage-accounting-observed/`; existing test cases/fixtures remain
+unchanged.
+
+| Disproof | Deliberate fault | Targeted test | Mutant result |
+| --- | --- | --- | --- |
+| D1 replay/native alias | Sum visible observations instead of deduplicated charges | contract `H4-D1` | FAIL: `0.2` instead of `0.1` |
+| D2 invalid binding | Bypass `boundSource` in observed projection only | roles `H4-D2` | FAIL: complete instead of invalid |
+| D3 unpriced is not zero | Force observed unpriced count to zero | contract `H4-D3` | FAIL: unpriced `0`, complete instead of partial |
+| D4 whole-window coverage | Ignore coverage beginning after window start | contract `H4-D4` | FAIL: complete, no `source-coverage` fault |
+| D5 no funding leakage | Emit a policy field when allocation exists | roles `H4-D5` | FAIL: extra `policy` key |
+| D6 no allocation/own findings | Emit `unknown-allocation` from observation | contract `H4-D6` | FAIL: allocation fault and partial instead of complete |
+
+All six failed by assertion (exit 1), not by a transform/type error; each mutant
+was reverted before the next. D6's first probe exposed invalid synthetic
+allocation setup (`native-root-required`); corrected that new case, then repeated
+the mutant and confirmed the intended allocation-leak assertion above. Existing
+cases were not changed. The D6 closed-key assertion also rejects own totals.
+Machine-readable isolated probe receipts: `/tmp/ops-307-mutant-D1.json` through
+`/tmp/ops-307-mutant-D6.json` (outside the repository).
+
+### H-AUTOCOST-4 result
+
+H-AUTOCOST-4 **HIT on fixed evidence**: both assigned files passed together
+once after all work and all mutant reversions: **186/186 tests** (166 unchanged,
+20 new). All six deliberately faulty variants failed their named assertions
+above. The no-policy fixed task returns exactly `0.1`, usage coverage complete,
+unresolved `0`, no budget/allocation keys, and `funding: not evaluated`.
+
+All **301** captured legacy calls replayed byte-identically, including exceptions:
+before/after SHA-256
+`51ff5c3944646efc447a2ef1b770359580162651e901802938da40018de7795d`.
+`format:check`, all five typechecks and the isolated worktree build passed. Existing validators,
+public types, other exported APIs, test cases and fixture files are unchanged.
+The additions have no production importer or runtime wiring.
+
+Landing additionally requires the unchanged normal detached `wt land` gate;
+its immutable receipt and task completion record the actual land outcome, not a
+preclaimed gate pass here. Only assigned modules, added cases/fixtures and these
+two doc sections may land. No install or runtime wiring is authorised by this
+proof; undo is a normal revert of the inert change.
+
 ## H-AUTOCOST-0
 
 Wrong, with evidence: `server/roles-spend.ts:1-177` reads manual v1 `spend.json`;

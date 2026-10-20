@@ -145,6 +145,40 @@ export interface AccountingReport {
 	faults: AccountingFault[];
 }
 
+export interface UsageWindow {
+	from: string;
+	through: string;
+}
+export interface ObserveUsageOptions {
+	asOf: string;
+	staleAfterMs: number;
+	window: UsageWindow;
+}
+/** Usage evidence only. No allocation, policy, payer or budget conclusions. */
+export interface ObservedUsageReport {
+	v: "observed-usage/1";
+	reportingOnly: true;
+	asOf: string;
+	window: UsageWindow;
+	grossKnownListUsd: Usd;
+	dedupKnownListUsd: Usd;
+	otherBases: AccountingReport["otherBases"];
+	unpricedFacts: number;
+	unresolvedIdentities: number;
+	usageCoverage: "complete" | "partial";
+	freshness: "fresh" | "stale";
+	faults: AccountingFault[];
+}
+interface ObservedEvidence {
+	input: AccountingInput;
+	options: ObserveUsageOptions;
+	report: ObservedUsageReport;
+	facts: Map<string, UsageFact>;
+	groups: Map<string, UsageFact[]>;
+	allCharges: UsageFact[];
+	counted: UsageFact[];
+}
+
 const SCALE = 1_000_000_000_000n;
 const DECIMAL = /^(0|[1-9]\d{0,17})(?:\.\d{1,12})?$/;
 const REF = /^[A-Za-z0-9_./:@+-]{1,256}$/;
@@ -570,34 +604,22 @@ export function reconcileTemperUsd(input: {
 	};
 }
 
-/** Pure bounded-fixture projection, not an installed meter. Reject malformed input loudly. */
-export function accountUsage(
-	raw: unknown,
-	options: { policyRef: string; asOf: string; staleAfterMs: number },
-): AccountingReport {
+/** Shared pure observation, retaining internal evidence for the separate budget step. */
+function observeEvidence(raw: unknown, options: ObserveUsageOptions): ObservedEvidence {
 	const parsed = parseAccountingInput(raw);
 	requireValue(parsed.ok, parsed.ok ? "invalid" : parsed.code);
 	timestamp(options.asOf);
 	uint(options.staleAfterMs);
+	timestamp(options.window.from);
+	timestamp(options.window.through);
+	requireValue(options.window.from <= options.window.through && options.window.through <= options.asOf, "usage-window");
 	const input = parsed.value;
 	const faults: AccountingFault[] = [];
 	const fault = (code: string, ref: string) => {
 		faults.push({ code, ref });
 	};
-	const policies = unique(input.policies, (p) => p.ref, fault);
-	const policy = policies.get(options.policyRef);
-	requireValue(policy, "missing-policy");
-	const weekStart = pacificWeekStart(options.asOf);
 	const observedFacts = input.facts.filter((f) => f.source.observedAt <= options.asOf);
 	const facts = latest(observedFacts, (f) => f.id, fault);
-	const allocations = latest(
-		input.allocations.filter((a) => a.recordedAt <= options.asOf),
-		(a) => a.factId,
-		fault,
-	);
-	const roots = unique(input.roots, (r) => r.ref, fault);
-	for (const [id, allocation] of allocations)
-		if (!facts.has(id) || allocation.recordedAt < facts.get(id)!.occurredAt) fault("orphan-allocation", id);
 	// A revision may repair price/tokens, never rewrite original call identity/time/links.
 	for (const f of facts.values()) {
 		if (
@@ -608,7 +630,8 @@ export function accountUsage(
 			fault("rewritten-occurrence", f.id);
 	}
 	const eligible = [...facts.values()].filter((f) => f.occurredAt <= options.asOf);
-	const visible = eligible.filter((f) => pacificWeekStart(f.occurredAt) === weekStart);
+	const inWindow = (f: UsageFact) => f.occurredAt >= options.window.from && f.occurredAt <= options.window.through;
+	const visible = eligible.filter(inWindow);
 	const badAliases = new Set<string>();
 	const aliases = unique(
 		input.aliases,
@@ -668,59 +691,13 @@ export function accountUsage(
 			fault("identity-conflict", id);
 			continue;
 		}
-		const assigned = group.map((f) => allocations.get(f.id)).filter((a) => a !== undefined);
-		if (
-			assigned.some(
-				(a) =>
-					a.rootRef !== assigned[0].rootRef ||
-					a.scope !== assigned[0].scope ||
-					a.policyRef !== assigned[0].policyRef ||
-					a.payerRole !== assigned[0].payerRole,
-			) ||
-			new Set(group.flatMap((f) => (f.links.task ? [canonical(f.links.task)] : []))).size > 1
-		) {
-			fault("alias-allocation-conflict", id);
-			allocations.delete(id);
-		}
 		allCharges.push(merged);
 	}
-	const counted = allCharges.filter((f) => pacificWeekStart(f.occurredAt) === weekStart);
-	let own = 0n,
-		exempt = 0n,
-		other = 0n,
-		unallocated = 0n;
-	let unpricedFacts = 0,
-		unallocatedFacts = 0;
-	for (const f of counted) {
-		const price = amount(f, "list-estimate");
-		if (price === null) unpricedFacts++;
-		const cost = price === null ? 0n : units(price);
-		const binding = checkTaskBinding(f, input.memberships);
-		if (binding !== "verified") fault(binding === "mismatch" ? "task-binding-mismatch" : "unassigned-task", f.id);
-		const a = allocations.get(f.id);
-		const root = a?.rootRef ? roots.get(a.rootRef) : undefined;
-		const p = a?.policyRef ? policies.get(a.policyRef) : undefined;
-		const verified =
-			a &&
-			root &&
-			binding !== "mismatch" &&
-			a.scope === root.scope &&
-			a.policyRef === root.policyRef &&
-			a.payerRole === root.payerRole &&
-			root.occurredAt <= f.occurredAt &&
-			a.recordedAt >= f.occurredAt &&
-			(a.scope !== "own" ||
-				(p && p.effectiveAt <= f.occurredAt && p.scopeRef === root.scopeRef && p.role === a.payerRole));
-		if (!verified) {
-			unallocated += cost;
-			unallocatedFacts++;
-			fault("unknown-allocation", f.id);
-		} else if (a.scope === "requested" || a.scope === "team") exempt += cost;
-		else if (a.policyRef === policy.ref) own += cost;
-		else other += cost;
+	const counted = allCharges.filter(inWindow);
+	const unpricedFacts = counted.filter((f) => amount(f, "list-estimate") === null).length;
+	for (const f of counted)
 		if (f.source.coverage !== "complete" || Object.values(f.tokens).some((n) => n === null))
 			fault("partial-fact", f.id);
-	}
 	// Replayed snapshots are upserts. They are reconciliation/coverage evidence, not leaves.
 	const snapshotKeys = new Map<string, RunSnapshot>();
 	const snapshotVersions = new Map<string, RunSnapshot>();
@@ -771,18 +748,111 @@ export function accountUsage(
 			.sort((a, b) => a.observedAt.localeCompare(b.observedAt));
 		const c = rows.at(-1);
 		if (c && Date.parse(options.asOf) - Date.parse(c.observedAt) > options.staleAfterMs) stale = true;
-		if (!c || c.status !== "complete" || c.through < options.asOf || c.from > pacificWeekStartUtc(options.asOf))
+		if (!c || c.status !== "complete" || c.through < options.window.through || c.from > options.window.from)
 			fault("source-coverage", stream);
 		if (c && rows.some((r) => r.observedAt === c.observedAt && canonical(r) !== canonical(c)))
 			fault("coverage-conflict", stream);
 	}
 	for (const f of counted)
 		if (!input.requiredStreams.includes(f.source.stream)) fault("uninventoried-stream", f.source.stream);
+	const report: ObservedUsageReport = {
+		v: "observed-usage/1",
+		reportingOnly: true,
+		asOf: options.asOf,
+		window: { ...options.window },
+		grossKnownListUsd: addUsd(visible.flatMap((f) => amount(f, "list-estimate") ?? [])),
+		dedupKnownListUsd: addUsd(counted.flatMap((f) => amount(f, "list-estimate") ?? [])),
+		otherBases: (["provider-reported", "invoice"] as const).map((basis) => ({
+			basis,
+			knownUsd: addUsd(counted.flatMap((f) => amount(f, basis) ?? [])),
+			unpriced: counted.filter((f) => amount(f, basis) === null).length,
+		})),
+		unpricedFacts,
+		unresolvedIdentities,
+		usageCoverage: faults.length > 0 || stale || unpricedFacts > 0 || unresolvedIdentities > 0 ? "partial" : "complete",
+		freshness: stale ? "stale" : "fresh",
+		faults: faults.sort((a, b) => a.code.localeCompare(b.code) || a.ref.localeCompare(b.ref)),
+	};
+	return { input, options, report, facts, groups, allCharges, counted };
+}
+
+/** Pure policy-free recorded subtotals; validates the unchanged input envelope, ignores funding. */
+export function observeUsage(raw: unknown, options: ObserveUsageOptions): ObservedUsageReport {
+	return observeEvidence(raw, options).report;
+}
+
+/** Funding evaluation is deliberately separate from usage evidence. Not an authority API. */
+function evaluateBudget(observed: ObservedEvidence, policyRef: string): AccountingReport {
+	const { input, options, report, facts, groups, allCharges, counted } = observed;
+	const faults = [...report.faults];
+	const fault = (code: string, ref: string) => {
+		faults.push({ code, ref });
+	};
+	const policies = unique(input.policies, (p) => p.ref, fault);
+	const policy = policies.get(policyRef);
+	requireValue(policy, "missing-policy");
+	const allocations = latest(
+		input.allocations.filter((a) => a.recordedAt <= options.asOf),
+		(a) => a.factId,
+		fault,
+	);
+	const roots = unique(input.roots, (r) => r.ref, fault);
+	for (const [id, allocation] of allocations)
+		if (!facts.has(id) || allocation.recordedAt < facts.get(id)!.occurredAt) fault("orphan-allocation", id);
+	for (const f of allCharges) {
+		const group = groups.get(f.id)!;
+		const assigned = group.map((f) => allocations.get(f.id)).filter((a) => a !== undefined);
+		if (
+			assigned.some(
+				(a) =>
+					a.rootRef !== assigned[0].rootRef ||
+					a.scope !== assigned[0].scope ||
+					a.policyRef !== assigned[0].policyRef ||
+					a.payerRole !== assigned[0].payerRole,
+			) ||
+			new Set(group.flatMap((f) => (f.links.task ? [canonical(f.links.task)] : []))).size > 1
+		) {
+			fault("alias-allocation-conflict", f.id);
+			allocations.delete(f.id);
+		}
+	}
+	let own = 0n,
+		exempt = 0n,
+		other = 0n,
+		unallocated = 0n;
+	let unallocatedFacts = 0;
+	for (const f of counted) {
+		const price = amount(f, "list-estimate");
+		const cost = price === null ? 0n : units(price);
+		const binding = checkTaskBinding(f, input.memberships);
+		if (binding !== "verified") fault(binding === "mismatch" ? "task-binding-mismatch" : "unassigned-task", f.id);
+		const a = allocations.get(f.id);
+		const root = a?.rootRef ? roots.get(a.rootRef) : undefined;
+		const p = a?.policyRef ? policies.get(a.policyRef) : undefined;
+		const verified =
+			a &&
+			root &&
+			binding !== "mismatch" &&
+			a.scope === root.scope &&
+			a.policyRef === root.policyRef &&
+			a.payerRole === root.payerRole &&
+			root.occurredAt <= f.occurredAt &&
+			a.recordedAt >= f.occurredAt &&
+			(a.scope !== "own" ||
+				(p && p.effectiveAt <= f.occurredAt && p.scopeRef === root.scopeRef && p.role === a.payerRole));
+		if (!verified) {
+			unallocated += cost;
+			unallocatedFacts++;
+			fault("unknown-allocation", f.id);
+		} else if (a.scope === "requested" || a.scope === "team") exempt += cost;
+		else if (a.policyRef === policy.ref) own += cost;
+		else other += cost;
+	}
 	const hasExposure =
 		faults.length > 0 ||
-		stale ||
-		unpricedFacts > 0 ||
-		unresolvedIdentities > 0 ||
+		report.freshness === "stale" ||
+		report.unpricedFacts > 0 ||
+		report.unresolvedIdentities > 0 ||
 		unallocatedFacts > 0 ||
 		policy.effectiveAt > options.asOf;
 	const limit = units(policy.weeklyUsd);
@@ -790,25 +860,34 @@ export function accountUsage(
 		v: 1,
 		reportingOnly: true,
 		policyRef: policy.ref,
-		weekStart,
+		weekStart: pacificWeekStart(options.asOf),
 		asOf: options.asOf,
-		grossKnownListUsd: addUsd(visible.flatMap((f) => amount(f, "list-estimate") ?? [])),
-		dedupKnownListUsd: addUsd(counted.flatMap((f) => amount(f, "list-estimate") ?? [])),
+		grossKnownListUsd: report.grossKnownListUsd,
+		dedupKnownListUsd: report.dedupKnownListUsd,
 		verifiedOwnLowerBoundUsd: decimal(own),
 		exemptKnownListUsd: decimal(exempt),
 		otherPolicyKnownListUsd: decimal(other),
 		unallocatedKnownListUsd: decimal(unallocated),
-		otherBases: (["provider-reported", "invoice"] as const).map((basis) => ({
-			basis,
-			knownUsd: addUsd(counted.flatMap((f) => amount(f, basis) ?? [])),
-			unpriced: counted.filter((f) => amount(f, basis) === null).length,
-		})),
-		unpricedFacts,
+		otherBases: report.otherBases,
+		unpricedFacts: report.unpricedFacts,
 		unallocatedFacts,
-		unresolvedIdentities,
+		unresolvedIdentities: report.unresolvedIdentities,
 		coverage: hasExposure ? "partial" : "complete",
-		freshness: stale ? "stale" : "fresh",
+		freshness: report.freshness,
 		remainingUsd: hasExposure ? null : decimal(limit > own ? limit - own : 0n),
 		faults: faults.sort((a, b) => a.code.localeCompare(b.code) || a.ref.localeCompare(b.ref)),
 	};
+}
+
+/** Unchanged policy report: Pacific-week observation followed by separate budget evaluation. */
+export function accountUsage(
+	raw: unknown,
+	options: { policyRef: string; asOf: string; staleAfterMs: number },
+): AccountingReport {
+	const observed = observeEvidence(raw, {
+		asOf: options.asOf,
+		staleAfterMs: options.staleAfterMs,
+		window: { from: pacificWeekStartUtc(options.asOf), through: options.asOf },
+	});
+	return evaluateBudget(observed, options.policyRef);
 }
