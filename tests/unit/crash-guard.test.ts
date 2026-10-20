@@ -220,6 +220,7 @@ describe("the snapshot guard (level 1, ClientSession)", () => {
 			cwd: "/p",
 			convs: new Map(convs.map((c) => [c.id, c])),
 			lostActiveLogged: null as string | null,
+			releasedBlankId: null as string | null,
 			sinkCount: () => sockets,
 			// lazy-images: building a snapshot starts by reading the window's chat (`this.conv`), right after
 			// the guard. Reaching it means the snapshot goes on; recoverLostActive never reads it.
@@ -308,6 +309,35 @@ describe("the snapshot guard (level 1, ClientSession)", () => {
 		// A different event (or chat) is its own error and is logged too.
 		events.onEvent.call(win, { id: "c3" }, { type: "agent_end" });
 		expect(errors).toHaveBeenCalledTimes(2);
+	});
+
+	it("a blank chat chat-slots closed on purpose is logged as [chat-slots], never as a crash (H-CHAT-CAP-1b)", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const info = vi.spyOn(console, "log").mockImplementation(() => {});
+		// Away (no socket): it waits for its fresh blank chat; logged once, not per snapshot.
+		const away = fakeWindow([{ id: "c1", cwd: "/p", lastActiveAt: 9, isSubagent: false }], 0);
+		away.releasedBlankId = "c4";
+		expect(proto.recoverLostActive.call(away, "its client left", undefined, false)).toBe(false);
+		expect(away.activeId).toBe("c4");
+		expect(proto.recoverLostActive.call(away, "snapshot")).toBe(false);
+		expect(info).toHaveBeenCalledTimes(1);
+		expect(String(info.mock.calls[0]?.[0])).toBe(
+			"[chat-slots] window win-A: gets a fresh blank chat when it comes back",
+		);
+		// Back with a socket: a fresh blank chat opens, never c1 (someone else's chat).
+		const back = fakeWindow([{ id: "c1", cwd: "/p", lastActiveAt: 9, isSubagent: false }], 1);
+		back.releasedBlankId = "c4";
+		expect(proto.recoverLostActive.call(back, "reconnect")).toBe(false);
+		expect(back.calls).toContain("openRecoveryChat");
+		expect(back.activeId).toBe("c4");
+		expect(String(info.mock.calls[1]?.[0])).toBe("[chat-slots] window win-A: opening a fresh blank chat for it");
+		expect(warn).not.toHaveBeenCalled();
+		// Any other lost chat is still a crash-guard notice.
+		const other = fakeWindow([], 0);
+		other.releasedBlankId = "c9";
+		proto.recoverLostActive.call(other, "closed by window win-B", undefined, false);
+		expect(warn).toHaveBeenCalledTimes(1);
+		expect(String(warn.mock.calls[0]?.[0])).toContain("[crash-guard] window win-A: its chat c4 was closed");
 	});
 
 	it("with nothing open and someone looking, a new chat is opened (only when allowed)", () => {

@@ -42,4 +42,38 @@ leave it (without continuing) to remove it from the list. this needs to be fixed
 
 ## Result
 
-(written after the live check)
+**H-CHAT-CAP-1: HIT** on its measures, with one side effect in the server log (H-CHAT-CAP-1b below).
+
+- Checks before landing: focused vitest 7 files, 76 tests passed; sealed `chat-slots-test` and
+  `conversation-capacity-test` passed (30 pseudo clients came and went and the count was back in 46 ms,
+  without the sweep; the sweep closed the away window's blank chat after 3.8 s with a 4 s idle time).
+- Landed as 7610a8e4 (wt land 96-4820ee, batch 94-7ebb6f, checked once); live since the 21:04 install.
+- Live look, 2026-10-19 21:08, counts only (`GET /api/open-chats`), one look run with 3 new pseudo ids
+  (`carry-on:ops-live-look-chat-slots-1..3`): before, all projects: open 23, counted 23, blank 0; with the
+  three connected: open 26, counted 23, blank 3; after they left: open 23, counted 23, blank 0, back
+  **52 ms** after they left (limit 2 minutes). No server restart during the look. Receipts:
+  `~/kept-from-tmp/2026-10-19/chat-slots-live/run1/result.json`.
+- Side effect: the install's own check failed its log step, "the log has 2 crash-guard notices". Server,
+  page, reply and big chat passed; the install stayed.
+
+## H-CHAT-CAP-1b: a blank chat closed on purpose isn't logged as a crash
+
+- **Wrong.** The 21:04 install of 7610a8e4 failed pi-web-deploy's log check: two lines
+  `[crash-guard] window carry-on:pi-web-check-page: its chat c2 was closed (its blank chat was closed); no open
+  chat to move it to yet, it gets one when it reconnects` (and c3). The check's own page client left, its
+  blank chat closed as designed, and `recoverLostActive` logged that window's planned outcome under the
+  crash tag. pi-web-check counts every `[crash-guard]` line except "moved it to", so every install from
+  now on would fail its log step, and a real crash notice would hide among these.
+- **Change.** When the chat a window lost is the blank chat chat-slots closed for it (`releasedBlankId`),
+  `recoverLostActive` logs one `[chat-slots]` line instead (console.log, not console.warn): it gets a fresh
+  blank chat when it comes back, or one is opened now. Real crash recoveries keep their `[crash-guard]`
+  lines unchanged. The closing itself doesn't change.
+- **Expected.** A unit test: a window whose released blank chat is gone logs no `[crash-guard]` line, and
+  one whose chat closed any other way still does. The sealed `chat-slots-test` reads its server's log: no
+  `[crash-guard]` line besides "moved it to", and at least one `[chat-slots]` closing line. The next
+  install's checks all pass, the log step included.
+- **Disproved if.** The next install's log step still finds crash-guard notices from a blank chat closing;
+  then find which path logs them.
+- Checks before landing: `tests/unit/crash-guard.test.ts` 19 passed (the new case fails on the old code,
+  which warns `[crash-guard]` for the released chat); sealed `chat-slots-test` passed, "31 blank chats
+  closed, logged as [chat-slots]; no crash-guard notice in the log", and `conversation-capacity-test`.

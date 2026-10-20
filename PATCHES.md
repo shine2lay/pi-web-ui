@@ -50,7 +50,8 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - `GET /api/open-chats` (`server/index.ts`): open chats per project, counts only (open, counted, blank), behind `PI_WEB_TOKEN`.
 - Unchanged: which chats the left list shows, `dismissConversation`, how a chat is disposed, queue lanes.
 - Checks: `tests/unit/chat-slots.test.ts` (the count, every hold, the sweep's clock, the timing knobs), `tests/unit/conversation-limits.test.ts` (40, one message, both engines count with `countsTowardCap`), sealed `tests/chat-slots-test.mjs` (30 pseudo clients come and go: the count is back at once and a new chat opens; 39 chats in use plus 6 blank: a new chat opens; 40 in use: new chat and a 41st saved chat refused with the message; a window whose blank chat the sweep closed comes back to a fresh one in a full project, with no warning) and `tests/conversation-capacity-test.mjs` (now 40); the landing gate; the live count check after install.
-- Undo: revert this commit and install with `pi-web-deploy`.
+- Follow-up (H-CHAT-CAP-1b, second commit): a window whose blank chat chat-slots closed logs one `[chat-slots]` line, not `[crash-guard]`, in `recoverLostActive`; the 21:04 install's log check had counted two such lines as crash notices. Checks: a case in `tests/unit/crash-guard.test.ts`; `tests/chat-slots-test.mjs` reads its server's log (no crash-guard notice, the closes logged as `[chat-slots]`).
+- Undo: revert these commits and install with `pi-web-deploy`.
 
 ## initiatives-who-fill: the who-cache filled in the background after each start
 

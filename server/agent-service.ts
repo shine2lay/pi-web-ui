@@ -12757,18 +12757,24 @@ export class ClientSession {
 		}
 		if (plan.kind === "new_chat" && allowNewChat) {
 			if (!this.recoveryChat) {
-				console.warn(
-					`[crash-guard] window ${this.clientId}: its chat ${lost} was closed (${reason}); no open chat to move it to, opening a new one`,
-				);
+				if (released) console.log(`[chat-slots] window ${this.clientId}: opening a fresh blank chat for it`);
+				else
+					console.warn(
+						`[crash-guard] window ${this.clientId}: its chat ${lost} was closed (${reason}); no open chat to move it to, opening a new one`,
+					);
 			}
 			void this.openRecoveryChat();
 			return false;
 		}
 		if (this.lostActiveLogged !== lost) {
 			this.lostActiveLogged = lost;
-			console.warn(
-				`[crash-guard] window ${this.clientId}: its chat ${lost} was closed (${reason}); no open chat to move it to yet, it gets one when it reconnects`,
-			);
+			// chat-slots (H-CHAT-CAP-1b): its blank chat was closed on purpose (closeBlankChat logs why), so this
+			// is the plan, not a crash: no [crash-guard] line, which pi-web-deploy's log check counts.
+			if (released) console.log(`[chat-slots] window ${this.clientId}: gets a fresh blank chat when it comes back`);
+			else
+				console.warn(
+					`[crash-guard] window ${this.clientId}: its chat ${lost} was closed (${reason}); no open chat to move it to yet, it gets one when it reconnects`,
+				);
 		}
 		return false;
 	}

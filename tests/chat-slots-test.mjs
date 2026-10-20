@@ -180,6 +180,7 @@ class Client {
 }
 
 let server;
+let serverLog = "";
 const clients = [];
 async function connect(clientId) {
 	const c = new Client(clientId);
@@ -202,8 +203,10 @@ try {
 			PI_WEB_BLANK_CHAT_IDLE_MS: String(IDLE_MS),
 			PI_WEB_BLANK_CHAT_SWEEP_MS: "250",
 		},
-		stdio: "ignore",
+		stdio: ["ignore", "pipe", "pipe"],
 	});
+	// H-CHAT-CAP-1b: the server's log, read the way pi-web-deploy's log check reads it.
+	for (const stream of [server.stdout, server.stderr]) stream.on("data", (chunk) => (serverLog += chunk));
 	await waitFor(() => portUp(PORT), "isolated server");
 
 	// The owner's window, on a saved chat.
@@ -299,6 +302,15 @@ try {
 	);
 	for (const window of blanks) assert.ok(window.state.conversationId, "blank windows still on their chats");
 	console.log("PASS: the window came back to a fresh blank chat in a full project, with no warning");
+
+	// 5. H-CHAT-CAP-1b: closing blank chats on purpose leaves no crash notice in the server's log (pi-web-check
+	// counts every [crash-guard] line except "moved it to").
+	const lines = serverLog.split("\n");
+	const crash = lines.filter((l) => /\[crash-guard\]/.test(l) && !/its chat \S+ was closed .*moved it to /.test(l));
+	assert.deepEqual(crash, [], "no crash-guard notice in the server log");
+	const closed = lines.filter((l) => /\[chat-slots\] closed blank chat /.test(l)).length;
+	assert.ok(closed >= 31, `the server logged its blank-chat closes as [chat-slots] (${closed})`);
+	console.log(`PASS: ${closed} blank chats closed, logged as [chat-slots]; no crash-guard notice in the log`);
 } catch (error) {
 	console.error(`FAIL: ${error.message}`);
 	process.exitCode = 1;
