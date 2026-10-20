@@ -10,6 +10,17 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## roles-live: live Latest progress with its time, and Activity with the task lines and done summaries, on the Roles page
+
+- `local` (owner 2026-10-19, via COO rm-63784858: "i want live progress in both role and initiatives"; Ops #272, on `live-progress-contract`). Hypothesis H-ROLES-LIVE-1 and its result: `docs/live-progress.md`.
+- `web/src/roles-useful-model.ts`: `latestLine` (a task row's `progress` {text, at} when the server sends a readable one, else the older `latest` line and its `ts`); a record keeps that time (`latestAt`) and, in a question state, the lead holding the question (`withLead`, a role id, never "owner"); a stuck task with `withLead` isn't one of the owner's decisions the asks must match.
+- `web/src/roles-panel-model.ts`: a task's `withLead` and `progress`; the role's `doneRecent` (at most 10, each checked; an id seen twice or a row without a time is left out); `panelTasks`; `panelActivity` (the TL;DR lines, a task chat's own line as "#N <line>", an open task's progress line the lines don't already hold, and "#N done: <summary>" (its title when no summary was recorded), newest first, at most 40).
+- `web/src/roles-exact-view.ts`: `exactProgress` (Latest progress: the newer of the task's line and its queue milestone, with that one's time); the work tab's Activity from `panelActivity`; a question still with a lead reads "Question with <lead>" in the next-action text.
+- Absent fields (an older server, or before Ops #270 fills them): the line keeps `latest.ts`; no done lines; "Question with" never shows; asks as before.
+- Unchanged: the cards on the main grid, the panel's layout and slots, the server.
+- Checks: `tests/unit/roles-live.test.ts` (time and pick, an older server's time, an unsafe line, a newer milestone, Activity merge and order, a home chat copy without "#N", a malformed `doneRecent`, the withLead text and asks, absent fields), `tests/unit/roles-useful.test.ts` (the closed record keys allow `latestAt` and `withLead`), sealed `tests/roles-live-test.mjs` (real server and Chrome: Latest progress with its time; a new line within 4 s, with its time; Activity with the task lines, the done summary and the home line, newest first, each timed), then the landing gate.
+- Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
+
 ## initiatives-projects-done: finished projects at a glance on the Initiatives page
 
 - `local` (owner 2026-10-19 via COO rm-0a0353b3, "you mentioned that a project done but i cant see that in initiatives page"; he picked "Yes, show them clearly"; Ops #274). Hypothesis H-PROJECTS-DONE-1 and result: `docs/initiatives-projects-done.md`.

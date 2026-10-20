@@ -40,6 +40,9 @@ export const WORK_NAME_LIMIT = 80;
 export const PANEL_TASKS_MAX = 100;
 export const PANEL_LINES_MAX = 20;
 export const PANEL_GOALS_MAX = 20;
+/** roles-live: done tasks shown in Activity (the server sends the newest 10), and Activity's length. */
+export const DONE_RECENT_MAX = 10;
+export const ACTIVITY_MAX = 40;
 export const WORK_RECORDS_MAX = 500;
 /** pi-work-management's done-when list holds at most this many items. */
 const DONE_ITEMS_MAX = 20;
@@ -116,6 +119,23 @@ export interface PanelTask {
 	started: boolean;
 	/** queue-drop: why its lead dropped it; dropped tasks only. */
 	dropped: string | null;
+	/** roles-live (Ops #272): its question is with this lead, not the owner (absent: not said). */
+	withLead?: PanelLead;
+	/** roles-live: its own chat's newest TL;DR line with its time (open started tasks; absent: not said). */
+	progress?: { text: string; at: number };
+}
+/** roles-live (Ops #272): one of the role's newest done tasks, with its queue_done summary. */
+export interface PanelDone {
+	taskId: number;
+	name: string | null;
+	/** null: none recorded, or unsafe. */
+	summary: string | null;
+	at: number;
+}
+/** roles-live: one Activity line: a TL;DR line, a task's progress line or a done summary, with its time. */
+export interface PanelActivity {
+	at: number | null;
+	text: string;
 }
 export interface ProjectGroup {
 	project: WorkView;
@@ -190,6 +210,8 @@ export interface RolePanel {
 	 *  its queue lists (null: not reported). */
 	dropped: PanelTask[];
 	droppedCount: number | null;
+	/** roles-live: its newest done tasks, newest first; absent when the server doesn't send them. */
+	doneRecent?: PanelDone[];
 	work: WorkSource;
 	/** Something of this role couldn't be read (the rest is shown). */
 	partial: boolean;
@@ -533,6 +555,13 @@ export function projectRolePanel(state: unknown, id: string): RolePanel | null {
 			started: t.chat !== undefined,
 			dropped: null,
 		};
+		// roles-live: only when the server says, so a task without them reads exactly as before.
+		const withLead = base.withLead ? leadOf(base.withLead, labels) : null;
+		if (withLead) task.withLead = withLead;
+		const progress = object(t.progress);
+		const progressText = plain(progress?.text, LINE_LIMIT);
+		const progressAt = displayTime(progress?.at);
+		if (progressText && progressAt !== null) task.progress = { text: progressText.text, at: progressAt };
 		const parent = parentOf(t);
 		if (!parent) {
 			if (t.parent !== undefined) tasksOmitted = true;
@@ -613,7 +642,9 @@ export function projectRolePanel(state: unknown, id: string): RolePanel | null {
 
 	const counts = object(queue?.counts);
 	const queuedCount = count(counts?.queued);
+	const doneRecent = doneRecentOf(row.doneRecent);
 	return {
+		...(doneRecent ? { doneRecent } : {}),
 		roleId: id,
 		roleLabel: labels.get(id) ?? id,
 		spend: projectSpend(row.spend),
@@ -660,6 +691,74 @@ export function projectRolePanel(state: unknown, id: string): RolePanel | null {
 		work: reg.source,
 		partial: Array.isArray(row.problems) ? row.problems.length > 0 : row.problems !== undefined,
 	};
+}
+
+/** roles-live: the server's newest done tasks (UiRoleOverview.doneRecent), each checked; an id seen twice or a
+ *  row without a time is left out. undefined when the server didn't send the list. */
+function doneRecentOf(value: unknown): PanelDone[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	const ids = idFrequencies(value, (raw) => {
+		const candidate = object(raw)?.id;
+		return taskId(candidate) ? candidate : null;
+	});
+	const done: PanelDone[] = [];
+	for (const raw of value) {
+		const d = object(raw);
+		const at = displayTime(d?.at);
+		if (!d || !taskId(d.id) || ids.get(d.id) !== 1 || at === null || done.length >= DONE_RECENT_MAX) continue;
+		done.push({
+			taskId: d.id,
+			name: plain(d.title, 160)?.text ?? null,
+			summary: plain(d.summary, LINE_LIMIT)?.text ?? null,
+			at,
+		});
+	}
+	return done;
+}
+
+/** Every open task in a panel, in its groups' order. */
+export function panelTasks(panel: RolePanel): PanelTask[] {
+	return [
+		...panel.groups.flatMap((g) => [...g.tasks, ...g.projects.flatMap((p) => p.tasks)]),
+		...panel.standalone,
+		...panel.unrecorded,
+	];
+}
+
+/**
+ * roles-live (Ops #272, docs/live-progress.md): the panel's Activity: the role's TL;DR lines (home chat and
+ * open task chats; a task chat's own line reads "#N <line>"), each open task's progress line when the lines don't
+ * already hold it, and its newest done tasks ("#N done: <summary>", or its title when no summary was
+ * recorded), newest first; lines without a time last, in their order.
+ */
+export function panelActivity(panel: RolePanel): PanelActivity[] {
+	const out: (PanelActivity & { order: number })[] = [];
+	const have = new Set<string>();
+	const home = panel.home?.file ?? null;
+	for (const l of panel.lines) {
+		// A task chat's own line reads "#N <line>"; a home chat line (a copy about a task too) reads as it is.
+		const task = typeof l.where === "number" && l.link?.file !== home ? l.where : null;
+		if (task !== null) have.add(`${task}\n${l.text}`);
+		out.push({ at: l.ts, text: task !== null ? `#${task} ${l.text}` : l.text, order: out.length });
+	}
+	for (const t of panelTasks(panel)) {
+		if (!t.progress || have.has(`${t.taskId}\n${t.progress.text}`)) continue;
+		out.push({ at: t.progress.at, text: `#${t.taskId} ${t.progress.text}`, order: out.length });
+	}
+	for (const d of panel.doneRecent ?? []) {
+		const what = d.summary ?? d.name;
+		out.push({ at: d.at, text: what ? `#${d.taskId} done: ${what}` : `#${d.taskId} done`, order: out.length });
+	}
+	out.sort((a, b) =>
+		a.at === null || b.at === null
+			? a.at === b.at
+				? a.order - b.order
+				: a.at === null
+					? 1
+					: -1
+			: b.at - a.at || a.order - b.order,
+	);
+	return out.slice(0, ACTIVITY_MAX).map(({ at, text }) => ({ at, text }));
 }
 
 /** Whether a task's owing lead is this one (the reminder chain's places, for the view's words). */

@@ -93,6 +93,11 @@ export interface UsefulRecord {
 	busy: boolean;
 	/** The newest line of its own chat; working tasks only. */
 	latest: string | null;
+	/** roles-live (Ops #272): when that line was written (ms); absent when the server didn't say. */
+	latestAt?: number;
+	/** roles-live: a question still with a lead (the role id whose home chat has it), not the owner's;
+	 *  question states only (asking, needs-decision), absent when the server didn't say. */
+	withLead?: string;
 	/** queue-drop: why its lead dropped it; dropped tasks only (null: absent or unsafe). */
 	dropped: string | null;
 	pause: PauseMarker;
@@ -409,11 +414,23 @@ function taskLink(row: Fields, id: number, home: string | null): UsefulOpenTarge
 	const focus = focusOf(`task:${id}`);
 	return home && focus ? { file: home, focus } : null;
 }
+/** roles-live (Ops #272, docs/live-progress.md): a task's newest own-chat line with its time: `progress`
+ *  ({text, at}) when the server sends a readable one, else the older `latest` line and its `ts`. */
+export function latestLine(row: Fields): { text: string; at: number | null } | null {
+	const progress = object(row.progress);
+	const text = plain(progress?.text, TEXT_LIMIT);
+	const at = time(progress?.at);
+	if (text && at !== null) return { text: text.text, at };
+	const latest = object(row.latest);
+	const old = plain(latest?.text, TEXT_LIMIT);
+	return old ? { text: old.text, at: time(latest?.ts) } : null;
+}
+const QUESTION_STATES: readonly RowState[] = ["asking", "asking-main", "asking-ops", "asking-lead", "needs-decision"];
 export function record(row: Fields, id: number, home: string | null): UsefulRecord {
 	const reported = status(row.status);
 	const pause = marker(row, "paused");
 	const state = rowState(row, reported);
-	const latest = state === "working" ? plain(object(row.latest)?.text, TEXT_LIMIT) : null;
+	const latest = state === "working" ? latestLine(row) : null;
 	const evidence = evidenceOf(row.evidence);
 	const result: UsefulRecord = {
 		taskId: id,
@@ -428,6 +445,10 @@ export function record(row: Fields, id: number, home: string | null): UsefulReco
 		link: taskLink(row, id, home),
 	};
 	if (evidence) result.evidence = evidence;
+	// roles-live: only when the server says, so a row without them reads exactly as before.
+	if (latest && latest.at !== null) result.latestAt = latest.at;
+	if (QUESTION_STATES.includes(state) && roleId(row.withLead) && row.withLead !== "owner")
+		result.withLead = row.withLead;
 	return result;
 }
 function records(
@@ -519,6 +540,8 @@ function projectRole(row: Fields, id: string): ProjectedRole {
 		const task = object(raw);
 		if (!task || task.status !== "stuck" || !taskId(task.id)) continue;
 		if (marker(task, "paused") === "reported-paused" || hold === "reported-paused") continue;
+		// roles-live: a question still with a lead isn't the owner's ask (docs/live-progress.md, the owner rule).
+		if (roleId(task.withLead) && task.withLead !== "owner") continue;
 		decisionKeys.push(`${id}:task:${task.id}`);
 	}
 	const projected: UsefulRole = {

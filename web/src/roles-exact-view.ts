@@ -17,6 +17,7 @@ import {
 import type { NeedsYouItem } from "./roles-useful-model";
 import { CONFIG_NOT_RECORDED, configHistoryActs } from "./roles-config-history";
 import type { PanelRoleStatus, PanelTask, PanelTaskEvent, RolePanel } from "./roles-panel-model";
+import { panelActivity, panelTasks } from "./roles-panel-model";
 import { ringAnchor, ringLayout, stackLayout } from "./roles-u0/layout";
 import type { SurfaceValues } from "./roles-u0/types";
 import type { RowState, TellState, UsefulLinks, UsefulOpenTarget, UsefulRecord } from "./roles-useful-model";
@@ -252,6 +253,10 @@ function taskTitle(task: UsefulRecord | undefined): string {
 }
 /** Fixed language around checked queue fields; no inferred plan steps or imperative actions. */
 function nextText(task: PanelTask | undefined): string {
+	// roles-live (Ops #272): a question still with a lead says so; it isn't waiting on the owner.
+	const withLead = task?.withLead;
+	if (withLead && withLead.kind !== "owner")
+		return `Question with ${withLead.kind === "role" ? withLead.label : withLead.id}`;
 	const next = task?.next;
 	if (!next) return NR;
 	const actor =
@@ -292,6 +297,19 @@ const QUEUE_EVENT: Record<PanelTaskEvent["kind"], string> = {
 	done: "Queue recorded: task completed",
 	dropped: "Queue recorded: task dropped",
 };
+/**
+ * roles-live (Ops #272, docs/live-progress.md): a card's Latest progress for its current task: the newer of its
+ * own chat's newest line and its queue milestone, with that one's time; the line when neither has a time.
+ */
+export function exactProgress(
+	task: UsefulRecord,
+	event: PanelTaskEvent | undefined,
+): { text: string; at: number | null } | null {
+	const line = task.latest ? { text: task.latest, at: task.latestAt ?? null } : null;
+	const milestone = event ? { text: QUEUE_EVENT[event.kind], at: event.at } : null;
+	if (line && milestone && milestone.at !== null && (line.at === null || milestone.at > line.at)) return milestone;
+	return line ?? milestone;
+}
 function acceptsHover(source: Event | Element): boolean {
 	const el = "currentTarget" in source ? (source.currentTarget as Element | null) : source;
 	if (!el) return false;
@@ -731,17 +749,11 @@ export function createExactRolesView(
 				(p) => (p.from === hover && p.to === row.roleId) || (p.from === row.roleId && p.to === hover),
 			);
 		const blocked = tasks.find((t) => t.waitsOn !== null);
-		const panelTasks = panel
-			? [
-					...panel.groups.flatMap((g) => [...g.tasks, ...g.projects.flatMap((p) => p.tasks)]),
-					...panel.standalone,
-					...panel.unrecorded,
-				]
-			: [];
-		const ownTask = lead ? panelTasks.find((t) => t.taskId === lead.taskId) : undefined;
-		const queueEvent = ownTask?.queueEvent;
+		const openTasks = panel ? panelTasks(panel) : [];
+		const ownTask = lead ? openTasks.find((t) => t.taskId === lead.taskId) : undefined;
+		const progress = lead ? exactProgress(lead, ownTask?.queueEvent) : null;
 		const rowDetail = (task: UsefulRecord) => {
-			const detail = panelTasks.find((t) => t.taskId === task.taskId);
+			const detail = openTasks.find((t) => t.taskId === task.taskId);
 			const next = nextText(detail);
 			return {
 				srcText: detail?.requester ? `From ${detail.requester}` : NR,
@@ -752,7 +764,7 @@ export function createExactRolesView(
 				nextText: next === NR ? "" : next,
 			};
 		};
-		const owing = blocked ? panelTasks.find((t) => t.taskId === blocked.taskId)?.owing : null;
+		const owing = blocked ? openTasks.find((t) => t.taskId === blocked.taskId)?.owing : null;
 		const resolver =
 			owing?.lead?.kind === "role"
 				? owing.lead.label
@@ -763,9 +775,10 @@ export function createExactRolesView(
 						: NR;
 		const lines = panel?.lines ?? [];
 		// roles-config-history (Ops #209): Config lists the recorded settings changes, newest first.
+		// roles-live (Ops #272): Activity merges the task lines and the done summaries, newest first.
 		const acts =
 			tab === "work"
-				? lines.map((l) => ({ at: exactClock(l.ts), text: l.text }))
+				? (panel ? panelActivity(panel) : []).map((l) => ({ at: exactClock(l.at), text: l.text }))
 				: configHistoryActs(role.configHistory, (at) => exactWhen(at, model.now));
 		const omittedTasks =
 			typeof row.counts.active === "number" && typeof row.counts.queued === "number"
@@ -809,8 +822,8 @@ export function createExactRolesView(
 			taskTitle: taskTitle(lead),
 			taskSrc: ownTask?.requester ? `· From ${ownTask.requester}` : "· requester not recorded",
 			taskSrcFg: ownTask?.requester ? "#9CC7FF" : "#A9AEB6",
-			progressText: lead ? (lead.latest ?? (queueEvent ? QUEUE_EVENT[queueEvent.kind] : NR)) : (lines[0]?.text ?? NR),
-			progressAt: lead ? (lead.latest ? NR : exactClock(queueEvent?.at ?? null)) : exactClock(lines[0]?.ts ?? null),
+			progressText: lead ? (progress?.text ?? NR) : (lines[0]?.text ?? NR),
+			progressAt: lead ? exactClock(progress?.at ?? null) : exactClock(lines[0]?.ts ?? null),
 			nextShort: nextText(ownTask),
 			mix: "Reported status",
 			updated: exactClock(lines[0]?.ts ?? null),

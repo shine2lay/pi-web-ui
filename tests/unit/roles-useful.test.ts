@@ -116,7 +116,26 @@ function closed(model: UsefulRoles) {
 		for (const list of [r.active, r.queued, r.dropped]) {
 			keys(list, ["available", "omitted", "notAllShown", "records"]);
 			for (const rec of list.records) {
-				keys(rec, ["taskId", "name", "state", "askLead", "waitsOn", "busy", "latest", "dropped", "pause", "link"]);
+				// roles-live (Ops #272): a line's time and a lead's role id cross only when the server sends them.
+				const live = [
+					...(rec.latestAt !== undefined ? ["latestAt"] : []),
+					...(rec.withLead !== undefined ? ["withLead"] : []),
+				];
+				keys(rec, [
+					"taskId",
+					"name",
+					"state",
+					"askLead",
+					"waitsOn",
+					"busy",
+					"latest",
+					"dropped",
+					"pause",
+					"link",
+					...live,
+				]);
+				if (rec.latestAt !== undefined) expect(Number.isFinite(rec.latestAt)).toBe(true);
+				if (rec.withLead !== undefined) expect(rec.withLead).toMatch(/^[a-z][a-z0-9-]{0,31}$/);
 				if (rec.link) linkShape(rec.link);
 			}
 		}
