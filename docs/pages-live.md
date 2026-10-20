@@ -139,6 +139,7 @@ From the connection trace (`~/.pi-web-ui/conn-events*.jsonl`), Oct 18 23:28:50 t
 - None reached the 8 s grace. So, by the code the sealed test checked, none showed the red or amber pill or the "Reconnecting…" note. The trace records timing, not the screen.
 - The slowest came while the server was busy: its event loop's p99 over the episode was 1.07 s, and Roles' catch-up on the new socket took 2.1 s. This change doesn't make the server faster.
 - 3 returns is fewer than the 5 the plan asked for in 24 h, so by the plan's rule the real-use result is **not enough data**. The owner was mostly in chats that day.
+- All three came before #245 (pages-fresh, which keeps the Roles overview fresh every 15 s) was installed on Oct 19 at 22:03:17, so they measure this change on its own. Roles returns after that time include pages-fresh and are counted apart (`--since`, below).
 
 Other views in the same window, for context:
 
@@ -152,4 +153,4 @@ Other views in the same window, for context:
 - Sealed return (60 s hidden with the socket cut, 10 runs): fresh Roles data on screen in 0.42 s p90, well within 3 s, with no red or amber pill and no "Reconnecting…" note in any run (before: both, in 10 of 10). Not disproved: the return took far less than 8 s.
 - Live: a new Roles watch gets its first full answer in 0.30 s p90, within 1 s (before 0.36 s). An unchanged overview is now confirmed to a new watcher at once (0.46-0.52 s) instead of at the 30 s heartbeat.
 - Real use: 3 Roles returns in 24 h. That is below the 5 needed, so the 3 s p90 bar can't be called either way. The three took 1.60, 2.11 and 3.17 s, and none came near the 8 s alarm wait. The slowest is just over 3 s and came while the server was busy, which this change doesn't address. If later returns keep landing over 3 s, the next hypothesis is about the reconnection or the server, as written above.
-- To count more returns later: `node ~/kept-from-tmp/2026-10-18/pages-live/roles-returns.mjs [--until <ISO time>]`. The Initiatives task after #227 can use the same count for its own page.
+- To count more returns later: `node ~/kept-from-tmp/2026-10-18/pages-live/roles-returns.mjs [--since <ISO time>] [--until <ISO time>]`. `--since` defaults to this install; `--since 2026-10-19T22:03:17-07:00` counts the returns with #245's pages-fresh on their own. The Initiatives task after #227 can use the same count for its own page.
