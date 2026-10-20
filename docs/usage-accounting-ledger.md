@@ -8,7 +8,7 @@
 
 **Disproof:** missing in-memory helper usage; any content, prompt, tool data, summary or error in a record; or storage failure/delay changing a chat's execution.
 
-**Result:** sealed assigned tests **26/26 passed** (2026-10-20 22:20 UTC, 31 ms tests / 245 ms total); server/tests typechecks, targeted formatting/lint and diff checks passed. H-AUTOCOST-7 remains pending the normal landing/deploy gates and 15-minute look-only live check. Accountable lead: Ops.
+**Result: PENDING, not an accepted HIT.** Sealed assigned tests **26/26 passed** (2026-10-20 22:20 UTC, 31 ms tests / 245 ms total); server/tests typechecks, targeted formatting/lint, diff checks and the normal landing gate passed. Code `9c805232` (land receipt `131-9224b1`) was installed through `pi-web-deploy` after its dry run, 2026-10-20 15:31 Pacific. The live numeric/schema/permissions observation passed, but positive helper-parent evidence and a passing big-chat-copy health stage remain outstanding. Accountable lead: Ops.
 
 ## Storage and switch
 
@@ -49,4 +49,23 @@ Missing SDK usage (including unreported failed attempts), extensions' private mo
 
 Run the assigned numeric unit tests in a sealed environment and the normal `wt land` gate. Install only through `pi-web-deploy` (dry-run first). Look-only production inspection prints counts/key names/mode checks only, never field values or transcript content. It must not start a helper or model call to manufacture evidence.
 
-Undo writing immediately with `{"enabled": false}` in the ledger's settings file; existing records stay intact. Code rollback is via `pi-web-deploy rollback`, never a manual service restart. Live results will be added after the observation window.
+Undo writing immediately with `{"enabled": false}` in the ledger's settings file; existing records stay intact. Code rollback is via `pi-web-deploy rollback`, never a manual service restart.
+
+## Live observation — 2026-10-20
+
+Look-only inspection printed counts and allowlisted key names, never ledger field values or transcripts. No helper or model call was started for evidence.
+
+- At 15:35 Pacific: 33 complete, exact-allowlisted records. After the 15-minute window: 321 records, **288 additional**; 319 assistant and 2 cache-warm records in total.
+- At 15:58: **516** complete records (514 assistant, 2 cache-warm). One directory 0700 and one monthly file 0600. Zero unexpected/missing keys, malformed JSON, invalid numeric/cost fields, incomplete lines or duplicate response identities.
+- Zero naturally occurring helper/app records in that observation. Unit coverage is not a substitute for the required live helper-parent receipt. This is missing positive evidence, not proof that an observed helper call was dropped.
+- Deploy's server, page, reply and log checks passed; big-chat COPY did not open within its ordinary 300-second deadline. Installation is live, but deployment completion is **not** an all-checks-passed receipt.
+
+### H-AUTOCOST-7-DEPLOY-1 — isolated health stage: MISS
+
+**Wrong / evidence:** big-chat COPY timed out while the restart resumed ten active chats; the other four checks passed. A previous incident passed the unchanged checker after restart load settled. This suggests load, but does not prove it caused this failure.
+
+**One action / why:** repeat only the existing big-chat COPY stage on the unchanged installed build, retaining selection, deadlines, picture assertions and cleanup. No source-chat changes, restart, settings changes or model calls.
+
+**Expected / measurement:** a passing isolated stage plus the four existing passes establishes all five health checks; the original failure remains recorded. Another failure or a changed build disproves this hypothesis.
+
+**Observed:** the isolated stage also exited 1 after about five minutes. Its bounded diagnostic emitted a failure count, not raw exceptions, content or snapshots; the exact internal cause is not established. No third retry or relaxed assertion is counted as progress. Ops lead has the request for bounded investigation and a passing same-build checker receipt (`rm-2024567a`). Acceptance remains open.
