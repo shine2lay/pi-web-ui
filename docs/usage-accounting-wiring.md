@@ -2,11 +2,57 @@
 
 Ops #309 · project `automatic-cost-accounting` · accountable lead: **Ops**.
 
-**Planning only.** This document and its checker install nothing. None of the
-plans below is a queued task or permission to start a service, read a live
-source, create a credential, change a policy, or spend. Ops queues the plans
-through the normal approval path after reading the review and admission gates.
-The Pi implementation comes first; the Temper reader is admitted separately.
+**Planning only.** This document and its checker install nothing. The queued
+copies listed below are governed by their recorded approvals, not by edits to
+this document. Other blocks are proposed plans, not queued tasks or permission
+to start a service, read a live source, create a credential, change a policy, or
+spend. The Pi implementation comes first; the Temper reader is admitted separately.
+
+## H-WIRE-S0ALIGN — before the S0 alignment (Ops #323)
+
+Wrong/evidence: `d01eafb9` still accepts `complete_through`, "complete through
+HH:MM" and per-page coverage in G7, freshness, W7, T0, T1 and D0b; T0 also names
+the superseded general named-key setting. Security #17's
+`docs/usage-accounting-security.md` at `c7a0755c`, sections "Result and exact queue
+boundary", "Cursor and failure boundary" and "Owed results and landing receipt",
+requires UNKNOWN coverage, diagnostic-only frontier and opaque epoch/cursor
+recovery before T0/T1 queueing. Sources: Temper `rm-8930526c`, Ops `rm-638ae2a1`,
+Data's UNKNOWN requirement and Temper's feed-key correction `rm-deb8866d`.
+Late technical readback (Ops lead): reviewed paper design is **v2.1** at
+`/home/shinelay/company-lab/usage-feed-3b/ROUTE-DESIGN-S0.md`, SHA-256
+`236738c6559410e38810dc02895372ae588b383f48703d12a3eb68ee42409333`;
+Security's final custody is `rm-1781ff4a`. The older v2 server-only registry is
+superseded: v2.1 uses the existing read-only configs mount, with no compose change.
+
+One change/why: align this plan and its documentation-only checker with that S0
+boundary, including the corrected queued W7/W4/W6/R0 wording, so future queue
+copies cannot inherit the withdrawn completeness or broad-key acceptance.
+Expected/measurement: the extended checker rejects the `d01eafb9` document,
+accepts this document with all 16 blocks valid JSON, and rejects fixed planted
+completeness, sequence-cursor, broad-key and missing-UNKNOWN cases while allowing
+explicit refusals. Disproof: any such acceptance survives, a negative control
+passes, a clean refusal fails, or either file changes runtime/queue behavior.
+Result: **HIT for documentation/checker alignment only** (2026-10-20). The final
+`node docs/check-usage-accounting-wiring.mjs --self-test` passed all 16 JSON plans,
+341 negative controls and 129 clean S0 controls. The same checker rejected
+`git show d01eafb9:docs/usage-accounting-wiring.md` with exit 1, including each of
+the five scoped plans; `git diff --check` passed. No source/app/model/queue call
+was made. The normal gate and detached landing are evidenced by #323's normal
+land receipt, not live admission or a meter/coverage HIT.
+
+### H-WIRE-S0ALIGN-CLAUSES — review refinement before validation
+
+Wrong/evidence: read-only review found the first tokenizer could hide a positive
+`enable` clause after a refusal, and split an identifier dot in
+`No response.complete_through field.` into false acceptance. One change/why:
+split explicit positive enable/set clauses while preserving identifier dots,
+then add these as fixed bad/clean controls. Expected: mixed enablement is
+rejected and qualified-field refusals pass, with the existing controls intact.
+Disproof: either case has the wrong outcome or the S0 guards regress.
+Result: **HIT** in the same final run (included in the 341 bad/129 clean controls
+above). The mixed key-enable and enable/set cases were rejected; qualified-field
+refusals in verify/result maps passed. Independent static readback found both
+review issues resolved. No preliminary or duplicate checker run was used.
 
 ## H-AUTOCOST-WIRING-1 — before writing the plan
 
@@ -43,18 +89,26 @@ from `mine` at `a21a7ee2` (2026-10-20). Code pins: #293 `ffb1c66e`, #300
 `cf0a0887` plus proof `bde61820`, #306 `9c805232`, #307 `912a4d2c`.
 Later proof updates must not silently become new implementation approvals.
 
-**Late-fact correction (Ops lead, this task, 2026-10-20):** Temper #125 did not
-land: lock-wait p95 was 53 ms against a 50 ms bar. Its replacement is an xid8
-watermark design. The old `after=<seq>` / commit-ordered-sequence plan below the
-foundation is superseded: use route-issued opaque cursors, dedupe by native call
-ID, per-page `complete_through`/`stalled`, and 409 on restore/reset. #128 must
-deliver that exact read contract before the adapter can start. Data
-`rm-809ae9d4` and Temper `rm-0af57cb5` also establish that Pi 0.87.1's `value || 0`
+**S0 correction (Security #17, `c7a0755c`, 2026-10-20):** the agreed design is
+bounded security-design agreement, not live-feed admission. Temper coverage is
+always **UNKNOWN in v1**. Ops `rm-638ae2a1` withdrew `complete_through`; the
+frontier and freshness states are diagnostic only. This supersedes every earlier
+Temper completeness implication, including W0's shared-source field vocabulary.
+Temper `rm-8930526c` supplies the opaque cursor/reader-epoch/409 design; its
+expanded #128 plan still needs normal approval and Architecture's ruling before
+T0 or T1 is queued. Temper `rm-deb8866d` supplies the dedicated hashed feed-key
+file, not a general named key. The exact boundary is below; no key, request,
+epoch initialization or activation is authorized here.
+
+The earlier #125 53 ms/50 ms lock-wait rejection was replaced by owner option A
+(`dr-78ff2d0aa3a2`): a 100 ms budget with typed durable `usage_pending`, never a
+zero or a completed call by implication. #128 must deliver its actual reviewed
+contract and #126/#127/#129 prerequisites, not the superseded watermark promise.
+Data `rm-809ae9d4` and Temper `rm-0af57cb5` establish that Pi 0.87.1's `value || 0`
 and later-zero overwrites destroy zero provenance; #129 maps **every Pi zero to
 null**, and Pi total is null unless all four classes are known. No Pi zero is
-proved by that repair. Temper rows still have no task/project fields; native
-launch-origin linkage is a separate Temper deliverable. These late facts
-supersede earlier route/token assumptions, not the project's five criteria.
+proved by that repair. Missing native launch-origin still leaves Temper calls
+unassigned; cursor and token repairs cannot supply task/project ancestry.
 
 The following are the project's **five verbatim done-when items**, read through
 the same `readWork()` replay used by `work_project show`, registry sequence 2491,
@@ -311,13 +365,13 @@ not spending permissions.
 
 | Gap | Accountable owner | Concrete result owed / delivery |
 | --- | --- | --- |
-| G1 principal and Temper key custody | **Security**, coordinated with Temper and Ops | S0 recorded agreement before T0 or any live-feed reader is queued: named read-only collector principal, auth transport, approved key storage/loading/rotation/revocation, network scope, opaque-cursor custody and no-secret diagnostics. `TEMPER_USAGE_FEED_KEYS` empty stays off; no key is created by this plan. |
+| G1 principal and Temper key custody | **Security**, coordinated with Temper and Ops | S0 at `c7a0755c` agrees logical `usage-collector`, a dedicated pi-web-ui Worker as shinelay (UID 1000), loopback only, dedicated `TEMPER_USAGE_FEED_KEYS_FILE` (default `configs/api/local/usage-feed-keys.json` on the existing read-only configs mount, SHA-256 entries only; missing/empty/unreadable/malformed refuses everyone), and Temper's native `scripts/api_key.py --feed` protected raw file under `~/.config/temper/api-keys/<name>.key` (0700 directory/0600 file) read only by the collector. Temper owns accepted-key changes; Ops coordinates collector load/rotation. General named/shared/file/run keys are refused. The raw key stays outside all container mounts, Pi auth.json, dotenv and browser stores; accounting DTOs never carry it. Same-UID host access is not OS isolation. T0/T1 remain unqueued pending corrected plans/checker, normal expanded #128 approval and Architecture's ruling; no key or activation here. |
 | G2 production store and finite capacity | **Ops** | W0 paged collector/evidence API and measured resource envelope; W1 private single-writer durable I/O/index, crash recovery and capacity faults. More than 64 files / 10,000 rows / 16 MiB cannot silently truncate a week. |
 | G3 Pi token-presence loss | **Ops** | Pi 0.87.1 coerces an absent value to 0 and later zero can overwrite positive counts: no Pi zero is provable (Data rm-809ae9d4, Temper rm-0af57cb5). #129 maps every Pi zero to null and Pi total is null unless all four exclusive classes are known; any such null prevents exact list pricing. W2/T0 preserve partly unknown figures, never $0. Optional O0 first measures the affected-row share and delivers the scoped future Pi producer repair option. #129 is not that repair; non-Pi reported-zero evidence keeps its own source rules. |
 | G4 complete supported source inventory/verifier | **Ops**; **Security** reviews trust boundary | W2/W3 enumerate supported/missing paths and retained intervals, validate native IDs, aliases, task births and original event-time parents. A JSON trust label is not verification; inventory overflow/missing watcher events remain partial. |
 | G5 fileless/aggregate/ACP provenance | **Ops** | W2 safely projects ledger calls and inherits explicit helper parents; W3 restores file numeric indices. Unreported failures, aggregate subattempts, unknown actual models and ACP without structured parent witness are enumerated exclusions, not inferred charges or free usage. Additional producer work requires its own approved plan if completion needs those sources. |
 | G6 policy-backed allocation/payer | **Ops**, **Security** evidence review | W4 source-backed, event-time reporting policy/requester binding or explicit funding unavailable. No native root registration is implied. Scope and payer remain distinct from membership. |
-| G7 Temper native feed and coverage | **Temper** | #125 failed its lock-wait gate (53 ms p95 versus 50 ms) and is being redesigned with an xid8 watermark. Owe the revised #125/#128 contract: route-issued opaque cursor, call-ID dedupe independent of seq, per-page complete_through/stalled, 409 after restore/reset, #126 bounded reconciliation/cutover and #127/#129 honest tokens. Legacy coverage stays partial. Ops proposes complete_through lag p95 <=60 seconds and max <=5 minutes; Temper's delivered acceptance must record actual results. T0/T1 consume that delivery, not the superseded after=<seq> route or event DB/full run API. |
+| G7 Temper native feed and coverage | **Temper** | S0 at `c7a0755c`: Temper coverage is always UNKNOWN in v1. Owe #128's delivered opaque route-issued cursor (at most 256 characters) plus reader epoch, durable byte-for-byte replay, native call-ID/revision dedupe and quarantine on 409; only a separately recorded epoch handshake permits reconciliation. No seq, after=, through_seq, max_seq or complete_through acceptance. The frontier (recorded_through, pending count/oldest, last drain, closed stall codes) and delayed/stalled/dead-man freshness are diagnostic, never completeness. #126 bounded drain/cutover and #127/#129 honest tokens remain required. Expanded #128 approval and Architecture's ruling are pre-queue gates for T0/T1, not supplied by S0. |
 | G8 pricing and reconciliation oracle | **Data** | Confirm #127 exclusive input/output/cache-read/cache-write/null/zero rules; T0 uses that existing rule and a source-backed versioned quote fixture. D0a delivers Pi known-slice reconciliation after R0 while D0b delivers Temper after T1; C0 consumes both. Temper's legacy unmarked cost never substitutes for Ops `quoteListUsd`. |
 | G9 worker lifecycle/change following/snapshot | **Ops** | W5/W6 closed cache-only snapshot, durable incremental follow, current-first bounded reconciliation, Monday and stale reevaluation, deterministic liveness failure state. No tally LLM or per-chat polling. |
 | G10 Roles DTO, honest display and replacement | **Ops** | W7 automatic-plus-manual view with protocol parity; R0/T1 installed receipts; C0 measured removal of manual display only. No spend file write. |
@@ -325,34 +379,71 @@ not spending permissions.
 | G12 Temper launch-origin attribution | **Temper** | Call rows currently have no task/project fields. Owe a separately specified source-backed launch-origin record linking native call ID to canonical original task birth and event-time project/initiative ancestry, plus capture/cutover/coverage semantics. T0/T1 cannot infer it from agent/model/time/run or a task label: until delivered those calls stay unassigned and cannot establish own-work headroom. Missing origin is not repaired by token counts or an opaque cursor. |
 | G13 outside-task home/ad-hoc usage | **Ops**, **Security** provenance review | Outside-task usage is always unassigned today; task-only coverage cannot certify a role whose own work also runs at home. Before C0 admission owe a separately approved host-recorded numeric turn-origin producer and reviewed mapping for role-message kind/queue/schedule/owner origin, or retain the manual reference for affected roles and record replacement incomplete. Recommend the producer option; owner turns remain unassigned until the owner sets a rule. The alternative of counting all home usage as own overcounts requests and needs the owner's decision; no such decision is implied. This producer needs its own complete plan after its source boundary is specified, not invented task IDs or consent in this doc. |
 
-**Temper route to consume, only after delivery:** the revised #128 named-key
-numeric calls route, version `temper-usage-calls/1` unless its delivered contract
-explicitly revises it; `TEMPER_USAGE_FEED_KEYS` empty = off. The route issues an
-**opaque cursor**. Store/replay it byte-for-byte only after durable batch commit;
-do not parse it, construct it from seq, or treat seq as commit order. Deduplicate
-by native call ID, retaining revision/same-call witnesses. Every page supplies
-`complete_through` and `stalled`; row arrival, request time and seq maxima are
-not coverage. A 409 after restore/reset quarantines the old cursor, preserves
-evidence and starts the delivered bounded reset/reconciliation handshake with
-partial status, never a silent cursor-to-zero reset. Auth/off/gap/timeout leaves
-the last good cursor intact. Exact route parameter/header/reset/envelope fields
-are a required #128 delivery; do not guess a new query spelling here.
+### Temper coverage and diagnostic freshness — S0 boundary
 
-The page says **Temper figures complete through HH:MM** (with an explicit timezone
-and date when needed). Show a visible **delayed** state when coverage lags more
-than one minute or `stalled` is true. Track lack of actual complete_through
-progress, including silence. When an enabled required feed has stalled for
-**more than five minutes**, latch a deterministic dead-man alarm with a safe
-fixed code and last valid complete-through; keep the UI delayed/unknown. Repeated
-reads cannot reset its age. A cheap main-thread lifecycle age check (scalar
-state only, no file/HTTP/parser work) must detect a blocked/dead worker as well
-as a stalled route. Deduplicate alarms per stall episode and clear only on
-verified coverage progress. Use the existing operational diagnostic channel;
-this plan adds no unsolicited notification destination or permission. An
-intentionally disabled/nonrequired feed is unavailable/off, not silently healthy
-and not an enabled-feed alarm. Ops's proposed feed bar is coverage lag p95 <=60
-seconds, max <=5 minutes; do not call that already accepted by Temper or let it
-weaken the project's <=60-second append-to-visible test for newly recorded rows.
+**Temper route to consume, only after delivery:** #128's dedicated-feed-key
+`GET /api/usage/v1/calls`, version `temper-usage-calls/1` unless its delivered
+reviewed contract explicitly revises it. Principal `usage-collector` is the
+dedicated pi-web-ui Worker as shinelay (UID 1000), not a new isolated OS principal;
+same-UID host access is not isolated. Only loopback
+`http://127.0.0.1:8420` is agreed. The route authenticates header-only credentials
+against `TEMPER_USAGE_FEED_KEYS_FILE`, default `configs/api/local/usage-feed-keys.json`,
+on the existing read-only configs mount, containing validated name/SHA-256
+entries only; missing, empty, unreadable or malformed registry means OFF and
+refuses everyone, independently of general API auth. No compose change remains. General
+named/shared/file/run keys cannot substitute. The old general named-key setting
+has no enabling effect. Temper owns the registry and native
+`scripts/api_key.py --feed` issue/revoke mechanism; Ops coordinates collector
+loading/rotation at `/home/shinelay/.config/temper/api-keys/usage-collector.key`
+(0700 directory/0600 regular file), outside all container mounts. Temper applies
+only separately authorized additions/removals; Ops owns raw-file loading and
+rotation timing/coordination. The collector only reads that protected file;
+no raw key reaches Pi auth.json, dotenv, browser stores, environment, child/model
+process, accounting/main-thread DTOs, URL, log or exception. No key creation or live use is authorized by this document.
+
+The cursor is an **opaque route-issued string of at most 256 characters plus the
+reader epoch**, not source identity or a frontier. Store/replay its exact bytes
+only after durable numeric batch commit; never parse, reconstruct or accept an
+unissued/UI-supplied cursor. No seq, after=, through_seq or max_seq. Requests use
+exactly one of cursor or epoch and limit 1..500; enforce the delivered bounded
+page/time contract (before 1 MiB, DB timeout 2 seconds, handler budget 3 seconds).
+Rows carry `call_key`, the native call ID; no seq is served. Deduplicate by
+`call_key` independently of row identity `(instance,event_id,revision)`;
+conflicts stop ingestion and higher revisions cannot double charge. Off/auth/timeout/malformed/storage/protocol failure retains
+the last good cursor and evidence, with unavailable fault and UNKNOWN coverage.
+The closed 409 codes are `identity-changed`, `epoch-changed`, `anchor-changed`,
+`seq-regression`, `instance-changed` and `reader-uninitialized`. Every 409
+quarantines the old cursor; only a separately recorded, lead-operated epoch
+handshake followed by an explicit `epoch=<n>` paged re-read can reconcile.
+The route never resets, re-anchors or advances its own reader epoch. The collector never initializes/rebaselines the epoch, resets to
+zero, skips to a maximum, deletes missing-restored evidence or lowers prior totals.
+
+**Temper coverage is always UNKNOWN in v1**, including fresh rows, clean replay,
+a successful poll and a newly advanced DB clock/frontier. No complete_through or
+"complete through" acceptance. `assessed_*` denotes inspected intervals only.
+Every page has `coverage.status: "unknown"` plus the frontier
+`{recorded_through, pending_count, oldest_pending_at, last_drain_at, stalled, stall_codes}`.
+The frontier is **diagnostic**, never coverage or a certified budget numerator.
+Its closed stall codes use the DB clock: `pending-old` when oldest pending is
+more than 15 minutes old; `drain-silent` when pending_count > 0 and last_drain_at
+is null or more than 5 minutes old; `drain-off` when pending_count > 0 and the
+reconciler is off. `stalled` means at least one code is present.
+Display **recorded through HH:MM** with timezone/date when needed, beside UNKNOWN
+coverage. Delayed (diagnostic age above 60 seconds), stalled (closed drain/stall
+state) and dead-man (enabled required feed without diagnostic progress for more
+than 5 minutes) are diagnostic freshness states, never completeness tests.
+
+Use deterministic scalar age/progress checks, including a cheap main-thread
+lifecycle check for a blocked/dead Worker; it performs no source, HTTP or parser
+work. Deduplicate the safe fixed-code alarm per episode; a read/poll/clock cannot
+reset its age. Clear only on verified diagnostic frontier/drain recovery, with
+coverage still UNKNOWN. An intentionally disabled/nonrequired feed is off or
+unavailable, not healthy and not an enabled-feed alarm. Use only the existing
+operational diagnostic channel; no new notification destination. Any frontier
+lag percentiles are labelled diagnostics, not coverage acceptance. Keep the
+separate <=60-second newly-recorded-byte observation to post-render client
+acknowledgement test, plus fixed append/detection/end-to-end proof; it cannot
+upgrade coverage or excuse absent source evidence.
 
 Temper amounts are diagnostics on their original basis; **Ops prices supported
 exclusive tokens with `quoteListUsd` and a versioned rate source**. For Pi rows,
@@ -377,10 +468,13 @@ it blocks on the owing lead using queue_blocked.
 - **After W5:** W7 page/protocol, while the source/store work continues.
 - **After W1-W5:** W6 worker integration. **R0** consumes W6/W7 and #308 health,
   and installs the Pi-first automatic/manual view without a Temper credential.
-- **Do not queue T0 before S0 is agreed.** Its complete plan is prepared below;
-  it also consumes #128's revised opaque-cursor route, #129's conservative
-  zero-to-null mapping, W0 and W4 evidence.
-  It can then run alongside the Pi UI/release path. T1 consumes R0 and T0 and
+- **T0 and T1 stay unqueued** until this S0 plan/checker correction is landed,
+  #128's expanded plan has normal recorded approval and Architecture's ruling,
+  and the delivered implementation has its required exact-byte Security review.
+  S0 agrees design only, not activation or source readiness. T0 also consumes
+  #128's exact opaque epoch/cursor route, #129's conservative zero-to-null mapping,
+  W0 and W4 evidence. It can then run alongside the Pi UI/release path.
+  T1 consumes R0 and T0 and
   does the separate Temper integration/install. D0a reconciles Pi slices after
   R0 alongside T0/T1, while D0b reconciles Temper after T1. C0 consumes both
   independent results before removing manual display; G13 stays a separate
@@ -409,7 +503,26 @@ Release tasks list only `pi-web-ui repo` and `pi-web-deploy` touches: the instal
 serializes itself; a restart is not an exclusive queue resource. Module overlap
 is prevented by ownership and genuine result edges, not artificial global locks.
 
-### Ready task plans
+### Queued as
+
+These are existing Ops queue copies, not queue changes made by #323. S0 is
+Security #17, landed at `c7a0755c`. W7 #316, W4 #320, W6 #321 and R0 #322 carry
+the S0 corrections mirrored below. T0 and T1 remain **unqueued** under the gates
+above; D0b and C0 are future plans, not source-readiness or cut-over approvals.
+
+| Plan | Queued as |
+| --- | --- |
+| W0 | Ops #311 |
+| W1 | Ops #312 |
+| W2 | Ops #313 |
+| W3 | Ops #314 |
+| W4 | Ops #320 |
+| W5 | Ops #315 |
+| W6 | Ops #321 |
+| W7 | Ops #316 |
+| R0 | Ops #322 |
+
+### Task plan blocks
 
 Each fenced block is machine-readable queue-plan data. The seven text fields
 are `title`, `goal`, `done_when`, `decided`, `steps`, `verify`, `must_not`.
@@ -447,9 +560,9 @@ Ops does not change their engine, credential or grading modules.
   "title": "Automatic costs: agree collector principal, evidence trust and feed key custody",
   "goal": "Give the live meter a reviewed least-privilege reporting identity and credential/evidence boundary before any task that reads the Temper feed is queued.",
   "done_when": "Security records an explicit agreement or refusal for the named collector principal, native Pi/task/requester evidence sources, Temper auth and network scope, key custody/rotation/revocation and redacted diagnostics; Ops has a self-contained admission result naming exactly what can be queued.",
-  "decided": "Lead Security. Review the worker running as pi-web-ui's existing service user for read-only supported sources, separate from held Origin/R0/RTPI authority. Temper owns TEMPER_USAGE_FEED_KEYS and its route. Use the project's existing protected credential mechanism, never a new ad-hoc secret file or browser credential. Empty key list means off. Agreement is security review, not owner activation or spending approval.",
+  "decided": "Lead Security. Completed boundary is docs/usage-accounting-security.md at c7a0755c, not the original #309 assumptions. Logical usage-collector is the Worker under the same service UID, not OS isolation or held Origin/R0/RTPI authority. Temper owns TEMPER_USAGE_FEED_KEYS_FILE, its strict hash-only registry, native scripts/api_key.py --feed protected store and exact route; missing/empty/invalid refuses everyone. Ops coordinates protected-file loading/rotation. Temper coverage is always UNKNOWN in v1; frontier/freshness are diagnostic and cursors are opaque with a separately recorded epoch handshake. Expanded #128 approval and Architecture's ruling remain required before T0/T1 queueing. Agreement is design review, not live admission, activation or spending approval.",
   "steps": "1. Read the reviewed wiring plan and Temper #128's declared auth design when delivered. 2. Check the proposed same-user worker principal and numeric-only path/grant inventory against the actual supported metadata sources; document same-UID limitations honestly. 3. Review the read-only reporting interpretation of dr-e108f47f8033 and the independent task/payer witnesses, without treating a display label as authenticated root evidence. 4. Agree the exact named principal, protected key load path, rotation/revoke owner, loopback or approved protected transport, no key in URLs/logs/snapshots and failures retaining cursors. 5. Record pass/refusal and the exact owed remediation; send Ops and Temper one bounded result. Land only the review note by normal checks if using the repo.",
-  "verify": "Review uses fixed numeric/auth fixtures and source metadata, not a live feed request or model call. The note contains no credential and distinguishes review from activation. Admission checklist proves the browser cannot obtain the feed key and an off/unauthorized feed cannot advance a cursor. Normal doc landing receipt is recorded.",
+  "verify": "Review uses fixed numeric/auth fixtures and source metadata, not a live feed request or model call. The note contains no credential and distinguishes design review from activation. Closed accounting browser/main-thread DTOs cannot expose the feed key; same-UID terminal/file access is not isolated. An off/unauthorized feed cannot advance a cursor or certify coverage. Normal doc landing receipt is c7a0755c (Security #17).",
   "must_not": "Do not create or rotate a key, read chats or private role folders, activate a feed, register held roots, relax authentication, publish access, change permissions or claim owner approval.",
   "touches": ["pi-web-ui repo"],
   "after": ["ops #309"],
@@ -527,7 +640,7 @@ Ops does not change their engine, credential or grading modules.
   "title": "Automatic costs: source-backed reporting funding and requester policy binding",
   "goal": "Apply the owner's existing own-initiative/requested-work reporting rule only to independently verified task and payer evidence, while preserving unknown allocation and all existing permissions.",
   "done_when": "A pure reporting funding adapter validates source-backed policy records and native task/requester/payer witnesses, returns supported allocations or explicit unavailable reasons, and matches exact own/requested/reply/legacy/Team/unknown fixtures without registering authority or manufacturing roots.",
-  "decided": "Lead Ops. Use dr-e108f47f8033, existing source-backed policy refs and S0's reviewed evidence boundary. Design own-work remains USD 2000 Pacific-week; generic policy support does not add a cap. Unknown requester within a verified in-scope task defaults own per the recorded rule; missing task/payer/parent provenance does not. A role reply is not a request exemption. TaskRequester v1 was display-only and needs explicit reporting validation, not silent authority promotion.",
+  "decided": "Lead Ops. Use dr-e108f47f8033, existing source-backed policy refs and S0's reviewed evidence boundary. Design own-work remains USD 2000 Pacific-week; generic policy support does not add a cap. Unknown requester within a verified in-scope task defaults own per the recorded rule; missing task/payer/parent provenance does not. A role reply is not a request exemption. TaskRequester v1 was display-only and needs explicit reporting validation, not silent authority promotion. S0 (Security #17, c7a0755c) agrees this reporting reading, not an authenticated native root/payer producer: none is admitted today, so live inputs return funding unavailable with the concrete gap; fixtures cover supported and unavailable results. Owner-turn treatment is outside W4.",
   "steps": "1. Write H-WIRE-4 and read the canonical approved decision plus S0 readback. 2. Add server/usage-accounting-funding.ts using only W0 closed evidence, actual original task/add snapshots, requester v1 records and independently supported payer/policy witnesses. 3. Keep eligibility separate from usage/membership; all initiative costs remain visible, requested and Team are separately exempt. 4. Adapt to #293 allocations only when vetted native root evidence exists; otherwise return funding unavailable with a concrete gap, not a forged DispatchRoot. 5. Test old requester absence versus missing binding, owner and peer requests, own-role replies, multiple/mixed inputs, reparent and Monday/DST. 6. Land detached and report any unresolved authority-source result to Ops before C0 admission.",
   "verify": "Fixed USD 0.1 own + 0.2 requested + 0.3 Team yields observed 0.6, supported eligible 0.1 and exempt 0.5 only with complete independent evidence. Missing payer/root/coverage yields null remainder, not USD 2000. Cross-role policy, wrong task birth, reply-only exemption and current-parent substitution fail. No capability/root registry changes appear in the diff; normal gate passes.",
   "must_not": "No new budget policy, cap change, foreign spend read/write, request inference from prose/approval, borrowed Design policy, fabricated root, R0/RTPI registration, permission, debit, pause or stop.",
@@ -567,7 +680,7 @@ Ops does not change their engine, credential or grading modules.
   "title": "Automatic costs: worker follower, current-first reconciliation and lifecycle",
   "goal": "Connect the tested Pi adapters, store, verifier, funding and snapshot in one isolated worker that follows new usage within one minute while current-week reconciliation preempts bounded history.",
   "done_when": "The worker and single app lifecycle hook are landed with durable source-follow, explicit inventory/verifier, restart recovery, current-first history scheduling, Pacific Monday and stale reevaluation, bounded validated snapshot publishing, and no synchronous whole-file work on the server thread.",
-  "decided": "Lead Ops. Reuse W1-W5, not a second accounting engine. Worker owns all parsing/hash/replay/projection; main imports only the tiny types-only cache, never the builder/engine. Use W0's finite Worker resourceLimits; worker-local bounded readSync/hash avoids the shared libuv pool, with at most one other outstanding pool operation. Collection wake <=5 seconds, publishing <=10 seconds while dirty, staleAfterMs 60000. <=256 KiB/256 rows per unit and <=25 ms scheduler slices. No all-chat polling, no watcher heartbeat as coverage, no live Temper credential in this Pi-first task.",
+  "decided": "Lead Ops. Reuse W1-W5, not a second accounting engine. Worker owns all parsing/hash/replay/projection; main imports only the tiny types-only cache, never the builder/engine. Use W0's finite Worker resourceLimits; worker-local bounded readSync/hash avoids the shared libuv pool, with at most one other outstanding pool operation. Collection wake <=5 seconds, publishing <=10 seconds while dirty, staleAfterMs 60000. <=256 KiB/256 rows per unit and <=25 ms scheduler slices. No all-chat polling, no watcher heartbeat as coverage, no live Temper credential in this Pi-first task. S0 (Security #17, c7a0755c): the collector is the usage-collector Worker under the same service UID, a logical application boundary, not a new OS principal. This task reads only Pi sources.",
   "steps": "1. Write H-WIRE-6 and integrate usage-accounting-worker.ts through one small named startup/shutdown/message function in server/index.ts so it rebases independently around #308. Start a Worker with W0's measured resourceLimits; never import the worker builder into index. Worker-local bounded readSync/hash and at most one outstanding pool operation protect the shared threadpool. 2. Open the vetted numeric store, recover collector/index state and enumerate all supported and missing feeds before certifying coverage. 3. Follow ledger append and dirty-file notifications; prioritize new current work, then current reconciliation, then one preemptible historical unit. Record complete or explicit terminal-gap current outcomes so an unrepairable source does not starve history. 4. Reevaluate at the next Pacific Monday and after startup/resume/clock change; stale snapshots remain stale after worker exit or blocked I/O. Add the cheap main-thread scalar lifecycle age check for worker silence, latched diagnostics and immediate stale on weekStart mismatch with the current Pacific week; no parsing, filesystem, engine import or network work in that check. 5. Publish bounded validated generations from the worker builder into the separate W5 cache; carry first-appended-byte observation time and generation ID for client acknowledgements. Worker exit/resource-limit failure leaves stale/unavailable state and cannot fail chats; ordinary stop/switch semantics stay unrelated to budgets. 6. Stage-test and land detached, no install.",
   "verify": "Use temp-only synthetic 100000-attempt week plus historical backlog, watcher loss, duplicate ledger/transcript, crash/restart and blocked I/O. First appended-byte observation to cache <=30 seconds leaves <=30 seconds to actual client generation-ID acknowledgement; fixed inputs also measure append-complete/detection separately. Current fork of an unindexed parent promotes its bounded original window; pending copies cannot charge. Every history unit is preemptible. Monday/DST with a blocked worker makes main cache stale immediately by weekStart. Measure main-thread fs-callback latency under meter load against W0's baseline/envelope, alongside event-loop p99 <=20 ms and worker heap/RSS bounds. Resource-limit termination leaves the server healthy; no engine import or whole-file sync source read occurs on the main path. Normal build/land checks pass.",
   "must_not": "No real chat test, live scan, full history on startup thread, model tally, provider call, producer/root activation, spend mutation, feed key creation, automatic cap/stop/pause, install or restart.",
@@ -585,12 +698,12 @@ Ops does not change their engine, credential or grading modules.
   "lead": "ops",
   "project": "automatic-cost-accounting",
   "title": "Automatic costs: Roles automatic and manual figures with honest freshness",
-  "goal": "Show the new cached automatic figures next to unchanged manual references, preserving exact money, explicit unknowns, source freshness and the current Roles layout.",
-  "done_when": "Roles snapshot/protocol and all useful/panel/exact consumers render labelled automatic known list subtotals, separate bases, coverage/funding/counts/timestamps and manual references; no unknown becomes zero or a safety bar, and complete, partial, unavailable and old-server compatibility cases pass.",
-  "decided": "Lead Ops. Follow docs/usage-accounting-roles.md's exact minimal plan. Keep readRoleSpend and server/roles-spend.ts unchanged; add optional automatic DTO via the existing protocol export path. Do not pass automatic decimals through projectSpend. No manual figure removal until C0. Initiative totals in the adapter include exemptions; this task does not redesign another page.",
-  "steps": "1. Write H-WIRE-7 from manual-only Roles and exact-decimal/unknown display risks. 2. Add a per-role read from W5's types-only usage-accounting-meter-cache.ts in roles-overview.ts, never from its worker snapshot builder. Claim server/protocol.ts and web/src/types.ts, extend the closed optional DTO/generation acknowledgement through the existing protocol path and preserve spend unchanged. 3. Add guarded automatic consumption to roles-useful-model.ts, roles-panel-model.ts and roles-exact-model.ts; use neutral text in roles-exact-view.ts without changing card geometry. 4. Label recorded known list subtotal, manual stale/unverified reference, funding not evaluated or UNKNOWN remainder, age/as-of and separate bases; support Temper figures complete through HH:MM with timezone, delayed and dead-man alarm states without pretending row arrival is coverage. 5. Record the active client's post-render generation-ID acknowledgement over the existing read/view transport and expose its numeric timing for passive verification; a push time alone is labelled server-push latency, not rendered proof. Add one dedicated synthetic protocol/projection/browser-view test file and land detached after a sealed build. No install in this task.",
-  "verify": "Exact string values at 12 decimals, known zero, null counts, unpriced, stale old watermark, collector gap, wrong role, no policy and complete evidence render correctly without green balance or inferred allowance. Protocol parity, old snapshots and first-observation-to-client-ack generation IDs pass; model/view tests assert manual fallback, no basis addition and week mismatch stale. Import-graph mutation pulling the builder/engine into the cache or Roles/protocol fails. Normal build and land checks pass.",
-  "must_not": "No source scan, journal read on page path, manual parser/spend/stopped write, page redesign, automatic enforcement, hidden unknown, borrowed policy, manual-display removal, install or browser interaction with real chats.",
+  "goal": "Show the new cached automatic figures next to unchanged manual references, preserving exact money, explicit unknowns, diagnostic freshness and the current Roles layout.",
+  "done_when": "Roles snapshot/protocol and all useful/panel/exact consumers render labelled automatic known list subtotals, separate bases, coverage/funding/counts/timestamps and manual references; no unknown becomes zero or a safety bar, Pi coverage cases pass, and Temper remains UNKNOWN even with a fresh frontier.",
+  "decided": "Lead Ops. Follow docs/usage-accounting-roles.md's exact minimal plan and queued #316's S0 correction (Security #17, c7a0755c). Temper coverage is always UNKNOWN in v1. Frontier and delayed/stalled/dead-man states are diagnostic only. Keep readRoleSpend and server/roles-spend.ts unchanged; add optional closed automatic DTO via the existing protocol path. Do not pass automatic decimals through projectSpend. No manual figure removal until C0. Initiative totals include exemptions; no redesign of another page. Authenticated funding remains unavailable without an admitted native root/payer producer.",
+  "steps": "1. Write H-WIRE-7 from manual-only Roles and exact-decimal/unknown display risks. 2. Read W5's types-only usage-accounting-meter-cache.ts in roles-overview.ts, never its worker snapshot builder. Claim server/protocol.ts and web/src/types.ts; extend the closed optional DTO/generation acknowledgement and preserve spend. 3. Add guarded automatic consumption to roles-useful-model.ts, roles-panel-model.ts and roles-exact-model.ts; use neutral roles-exact-view.ts text without changing geometry. 4. Label recorded known list subtotal, stale/unverified manual reference, funding not evaluated or UNKNOWN remainder and separate bases. Show Temper recorded through HH:MM with timezone/date, beside UNKNOWN coverage; frontier age/progress and closed stall codes drive diagnostic delayed/stalled/dead-man labels only. 5. Record post-render generation-ID acknowledgement over existing read/view transport; push alone is server-push latency. Add one synthetic protocol/projection/browser-view test file and land detached after a sealed build, no install.",
+  "verify": "Exact 12-decimal strings, known zero, null counts, unpriced, stale frontier, collector gap, wrong role, missing funding and Pi coverage cases render without green balance or inferred allowance. Fresh polls, clock advances, frontier recovery and alarm clearing leave Temper UNKNOWN. No complete_through or complete through text. Protocol parity, old snapshots and generation acknowledgements pass; test manual fallback, no basis addition and week mismatch stale. Import-graph mutations pulling builder/engine into cache or Roles/protocol fail. Normal build and land checks pass.",
+  "must_not": "No complete_through or complete through acceptance, sequence cursor or general named feed-key setting; no source scan, journal read on page path, manual parser/spend/stopped write, page redesign, enforcement, hidden unknown, borrowed policy, manual-display removal, install or real-chat browser interaction.",
   "touches": ["pi-web-ui repo"],
   "after": ["W5"],
   "uses": {"W5": "Closed role-scoped DTO and separate types-only main-thread cache getter; the numeric builder stays worker-only."},
@@ -607,7 +720,7 @@ Ops does not change their engine, credential or grading modules.
   "title": "Automatic costs: install Pi-first meter and verify live Roles look-only",
   "goal": "Deliver the tested Pi automatic/manual display through the normal installer with measured freshness and installed health, before adding a Temper feed credential.",
   "done_when": "The Pi worker/UI passes pi-web-deploy dry-run/install checks, look-only Roles confirms labels/unknowns/as-of, passive first-byte-observation to client generation-ack latency and current/history behavior have receipts, and installed worker heap/process RSS meet W0's bounds.",
-  "decided": "Lead Ops. Consume #308's cause and passing installed big-chat-copy result and W6/W7 builds. Check what is running/waiting before pi-web-deploy; deploy immediately through its serialized queue, never manual restart. No Temper key, live model probe or fabricated usage. Read only numeric status/counts and the requested Roles page, not transcript contents.",
+  "decided": "Lead Ops. Consume #308's cause and passing installed big-chat-copy result and W6/W7 builds. Check what is running/waiting before pi-web-deploy; deploy immediately through its serialized queue, never manual restart. No Temper key, live model probe or fabricated usage. Read only numeric status/counts and the requested Roles page, not transcript contents. S0 (Security #17, c7a0755c): R0 stays Pi-only and must not acquire a Temper key. As recorded in queued #322, pi-web-deploy's normal checks including their single throwaway reply are allowed; no-model-probe applies to the task's own checks. Read actual result text: checks failed, still live also exits 0.",
   "steps": "1. Verify consumed commits and #308 receipt, preserving the earlier #306 failed health receipts. 2. Write H-WIRE-R0 and read the pi-web-ui-live-look procedure. 3. Run pi-web-deploy dry-run for the landed result, then the separate pi-web-deploy install step with reason; await pi-web-deploy result from a stable folder and read actual check outcomes, not exit code alone. 4. Take a look-only Roles check through permitted browser tooling and capture labels/timestamps/layout; do not open, send to or alter a chat. 5. Passively record first-byte observation and actual client generation-ID acknowledgement for <=60-second visibility; label push-only timings honestly and any unavailable natural append-complete time. Check installed worker heap and process RSS against W0's documented bounds, current-first progress, fs-callback latency and week-mismatch stale with numeric metrics only; manufacture no model event. 6. Record HIT/MISS and rollback to prior build through pi-web-deploy if health fails; land only the release receipt doc.",
   "verify": "All ordinary deploy health checks including big-chat COPY pass on the installed build. Each observed numeric generation is client-acknowledged within 60 seconds of first appended-byte observation, with endpoints/sample count recorded; fixed append-complete/detection/end-to-end proof remains separate. Installed worker heap and process RSS meet W0's bounds. No stale watermark is refreshed by a read; incomplete/unassigned/unpriced rows are labelled, manual reference stays separate and geometry is intact. Missing natural evidence is recorded as pending, not a fabricated pass; use queue_wait for the passive observation rather than polling.",
   "must_not": "No live chat action, content/model payload read, model probe, timer outside approved worker, key creation, Temper activation, manual tally write, cap change, root registration or manual restart.",
@@ -625,15 +738,15 @@ Ops does not change their engine, credential or grading modules.
   "lead": "ops",
   "project": "automatic-cost-accounting",
   "title": "Automatic costs: approved Temper cursor feed adapter and list quotes",
-  "goal": "Consume only Temper's delivered named-key numeric route with opaque durable cursors, call-ID dedupe, page coverage and honest list pricing, after Security has agreed the principal and key custody.",
-  "done_when": "An inert Temper source adapter matches revised #128's opaque-cursor/version/auth/409 contract and #129/#127 token rules, prices only fully known supported exclusive classes with quoteListUsd, and passes dedupe, coverage, delay/alarm, restore/reset, overlap, off/auth-failure and unknown-price tests without reading a live feed.",
-  "decided": "Lead Ops. Queue admission requires S0 agreement first, not merely an after edge. Consume revised #128's delivered numeric calls route, opaque cursor, per-page complete_through/stalled and 409 on restore/reset, with named TEMPER_USAGE_FEED_KEYS; empty stays off. Seq is not commit order; dedupe native call IDs. Temper #125 failed 53 ms versus 50 ms lock-wait p95 and is being redesigned with xid8. Ops prices with versioned list quotes, not legacy cost. For Pi every zero is null and total null unless all four classes are known; non-Pi genuine zero needs its own evidence. No task/project fields exist yet; G12 stays unassigned.",
-  "steps": "1. Verify S0 agreement and revised #128/#129 artifacts before queueing/starting; write H-WIRE-T0. 2. Add server/usage-accounting-temper-source.ts with injected HTTP/key loader, bounded requests/pages/timeout and closed validation of issued opaque cursors, call IDs and complete_through/stalled. Preserve the cursor bytes without decoding or reconstructing from seq. 3. Build numeric facts from original call IDs/occurrence/provider/model/exclusive nullable tokens; quoteListUsd uses a source-backed versioned rate table only when every required class is known. Pi zero-to-null makes any affected call partly unknown, never USD 0. 4. Preserve explicit Pi same-call aliases and revisions; absent launch-origin means unassigned task/project, and legacy history stays partial. 5. Commit page evidence before its opaque cursor receipt; off/401/403/timeout retains the last cursor. On 409 preserve/quarantine old cursor and use only the delivered bounded reset/reconciliation handshake with unknown coverage; never silently reset. 6. Add a pure coverage-lag/stall evaluator: delayed above 60 seconds or stalled, latched deduplicated dead-man alarm after more than 5 minutes without coverage progress, and actual-progress-only recovery. Stage-test and land detached, no live request/install.",
-  "verify": "Known supported token/rate cases exactly match USD; Pi cacheRead 0, cacheWrite 0, value-or-zero absence and later-zero overwrite all remain null/unpriceable, with total null unless all four classes are known. Genuine non-Pi zero requires source evidence. Out-of-order seq commits, call-ID replay/revision, opaque pagination, crash before cursor receipt and 409 restore/reset never skip or silently certify completeness. Each page coverage controls freshness, not row/seq arrival. Fixed clock cases at 60 seconds and beyond 5 minutes, silence/dead worker and delayed recovery prove labels plus one alarm per episode. Missing launch-origin and cross-Pi overlap remain unassigned/unresolved. Normal gate passes; no key/opaque cursor appears in public DTO/log/error/URL.",
-  "must_not": "No queueing before Security agreement, live feed read during development, after-seq assumption, opaque cursor parsing, guessed route/header, reset-to-zero on 409, inferred launch task/project, Pi zero as known/free, database/full-run/Event.data scraper, engine edit, historical rate guess, legacy-total addition, credential file, authority activation or budget change.",
+  "goal": "Consume only Temper's delivered dedicated-feed numeric route with opaque durable cursors and reader epochs, native call-ID dedupe, diagnostic frontier and honest list pricing, within S0's agreed custody.",
+  "done_when": "An inert adapter matches approved expanded #128's delivered v2.1 opaque cursor/epoch/auth/409 contract and #127/#129 token rules, prices only fully known supported exclusive classes with quoteListUsd, and passes durable replay, diagnostic freshness/alarm, restore/overlap/OFF/auth/unknown tests with Temper coverage UNKNOWN and no live feed request.",
+  "decided": "Lead Ops. UNQUEUED: S0 c7a0755c design agreement does not replace normal approval of #128's expanded plan, Architecture's ruling, #128/#129 delivery, exact-code Security review or runtime-fixture proof. Temper coverage is always UNKNOWN in v1. Reviewed paper design is v2.1 (SHA-256 236738c6559410e38810dc02895372ae588b383f48703d12a3eb68ee42409333). Logical usage-collector is a dedicated pi-web-ui Worker as shinelay UID 1000 on http://127.0.0.1:8420; same-UID host access is not isolated. Temper owns route, hash-only TEMPER_USAGE_FEED_KEYS_FILE at configs/api/local/usage-feed-keys.json on the existing read-only mount, and scripts/api_key.py --feed authorized adds/removes. Missing/empty/unreadable/malformed registry means OFF with no general/shared/file/run-key fallback. Ops owns protected raw-file loading and rotation timing/coordination. Raw /home/shinelay/.config/temper/api-keys/usage-collector.key is 0600 under 0700, outside container mounts; no Pi auth.json, dotenv or browser store. Ops uses versioned list quotes, not legacy cost. Every Pi zero is null and total null unless all four classes are known; non-Pi zero needs independent evidence. Missing native launch origin remains unassigned; funding stays unavailable without an admitted native producer. Temper #125 rm-a6acd2fd: owner option A is 100 ms capture, a 2 s usage-only wait and typed usage_pending; Event+final or pending commits in the same transaction and the source UUID never changes. Writer landing starts no drainer: #126 must actually run and prove the 15-minute normal cadence before T0. Source details are not frozen until exact-byte/head reviews pass; bind the queued copy to that reviewed interface, without pinning new route fields beyond v2.1. Activation still requires #128's private live identity, anchor and full-retained rebaseline guards; its withdrawn no-readers-on-restore claim is not a prerequisite or guarantee. Occurrence coverage stays UNKNOWN and this grants no manual spend authority.",
+  "steps": "1. Before queueing/starting verify all pre-queue approvals and delivered exact-code/runtime-fixture prerequisites; write H-WIRE-T0. 2. Add an injected bounded HTTP/protected-file loader for GET /api/usage/v1/calls, version temper-usage-calls/1: exactly one route-issued cursor string of at most 256 characters or epoch=<n>, plus bounded limit 1..500; enforce page below 1 MiB, DB 2-second/handler 3-second budgets. Preserve opaque bytes and reader epoch without decoding or construction. 3. Validate numeric rows with call_key (native call ID), (instance,event_id,revision), nullable exclusive tokens and explicit same-call aliases; dedupe by call_key and restate its highest native revision, never sum by arrival or roll back to a lower revision; retain conflicts and lower-revision evidence. Exercise producer fixtures for drain_pending_row(session, event_id, revision): one observation per transaction, outcomes drained/already-final/deferred/busy/missing, only drained new usage. These are source behaviors, not extra route-field requirements; the adapter never runs the drainer. An ordering-deferred internal fault marker survives drain and remains fault/unknown. Quote only fully known supported classes; missing launch origin stays unassigned. 4. Durably commit page evidence before cursor receipt and replay byte for byte. OFF/auth/timeout/malformed/protocol/storage failure preserves the last good cursor. Quarantine on identity-changed, epoch-changed, anchor-changed, seq-regression, instance-changed or reader-uninitialized 409; only a separately recorded lead-operated epoch handshake followed by an explicit paged epoch start reconciles. The route never resets itself. 5. Require coverage.status unknown and diagnostic frontier recorded_through/pending_count/oldest_pending_at/last_drain_at/stalled/stall_codes on every page. Use DB-clock closed codes pending-old (>15 minutes), drain-silent (pending and absent/>5-minute drain heartbeat), drain-off (pending with reconciler off). Delayed age >60 seconds and dead-man >5 minutes without frontier/drain progress are diagnostic only, latched/deduplicated with verified diagnostic recovery; polls cannot reset age or upgrade coverage. Stage-test and land detached; no live request, key creation or install.",
+  "verify": "Known supported costs match exact USD; all affected Pi zeros/totals remain null/unpriceable and non-Pi zero needs evidence. Test call_key replay and revisions arriving 2, 1, 0: restate revision 2 once, never sum arrivals or roll back to 1/0. Source fixtures cover same-transaction Event+final/pending, stable source UUID, 100 ms capture/2 s usage-only wait, all five drain outcomes and only drained as new usage; ordering-deferred markers remain fault/unknown after drain. Require #126's actual 15-minute normal-cadence proof, not writer landing. Test empty-page unchanged cursor, durable batch-before-cursor crashes, byte-for-byte replay, all six 409 codes and separately recorded epoch handshake with #128's private live identity, anchor and full-retained rebaseline guards; retained restore evidence never decreases prior totals. Restored readers may exist, so test them instead of relying on their absence. No seq, after=, through_seq or max_seq cursor acceptance. No complete_through or complete through acceptance. Fresh polls, DB-clock advances, frontier recovery and cleared alarms leave coverage UNKNOWN. Fixed clocks exercise DB 15-minute pending/5-minute drain and diagnostic 60-second/>5-minute dead-man boundaries, silent/dead worker and disabled mode. Test strict registry OFF and every wrong credential class, closed DTO/key/diagnostic canaries and exact route review fixtures without a live request. Missing launch origin, funding and cross-Pi overlap remain explicit unknowns; normal gate passes.",
+  "must_not": "No complete_through or complete through acceptance; no seq, after=, through_seq or max_seq cursor; no TEMPER_USAGE_FEED_KEYS enablement; no queueing before expanded #128 approval/Architecture ruling and exact review fixtures, live feed development read, key creation, opaque decoding/construction, guessed route/header, automatic epoch reset/rebaseline, inferred origin/payer/root, Pi zero as known/free, database/full-run/Event.data scraper, engine edit, rate guess, legacy-total addition, secret in accounting DTO/log/URL, authority activation or budget change.",
   "touches": ["pi-web-ui repo"],
-  "after": ["W0", "W4", "S0", "temper #128", "temper #129"],
-  "uses": {"W0": "Collector-native numeric feed/cursor and fault contract.", "W4": "Supported funding evidence or explicit unknown for unmapped Temper calls.", "S0": "Recorded principal, auth transport and key-custody agreement; a pre-queue gate.", "temper #128": "Delivered revised xid8-watermark feed: exact opaque-cursor/auth/version/409 handshake and page complete_through/stalled contract, plus #125-#127 reconciler/cutover coverage; supersedes after-seq.", "temper #129": "Reviewed conservative Pi mapping: every zero is null and total null unless all four classes are known; this is not a presence-preserving producer repair."},
+  "after": ["W0", "W4", "S0", "temper #126", "temper #128", "temper #129"],
+  "uses": {"W0": "Collector-native numeric feed/cursor and fault contract, with S0's UNKNOWN Temper boundary overriding earlier shared-source completeness vocabulary.", "W4": "Supported native funding evidence or funding unavailable with a concrete producer gap; reporting is not authority.", "S0": "Security #17 c7a0755c/v2.1 principal/custody agreement and final rm-1781ff4a; not live admission or approval of expanded #128.", "temper #126": "Actually running native drainer and proved 15-minute normal cadence; landing #125's writer alone starts none (rm-a6acd2fd).", "temper #128": "Delivered approved expanded v2.1 feed bound to exact-byte/head-reviewed interface, private live identity/anchor/full-retained rebaseline guards, opaque cursor/reader epoch/409, call_key, UNKNOWN coverage, diagnostic frontier and strict hash-only registry; #125/#127 prerequisites and Security exact-code/runtime-fixture proof retained, without assuming no readers on restore.", "temper #129": "Reviewed conservative Pi mapping: every zero is null and total null unless all four classes are known; not a presence-preserving producer repair."},
   "owns": ["server/usage-accounting-temper-source.ts", "tests/unit/usage-accounting-temper-source.test.ts", "docs/usage-accounting-temper-source.md"]
 }
 ```
@@ -645,12 +758,12 @@ Ops does not change their engine, credential or grading modules.
   "lead": "ops",
   "project": "automatic-cost-accounting",
   "title": "Automatic costs: integrate approved Temper feed, install and verify look-only",
-  "goal": "Add the reviewed Temper numeric source to the already proven Pi meter without resetting cursors, double counting Pi calls, claiming legacy completeness or changing work controls.",
-  "done_when": "The worker uses T0 through S0's existing protected key mechanism, opaque cursor/409 recovery and per-page coverage remain durable, missing/partial/unassigned Temper and delayed/dead-man states are visible, combined stage tests pass, and a separate pi-web-deploy plus look-only Roles check records installed freshness/coverage/overlap results.",
-  "decided": "Lead Ops. Consume R0's installed Pi receipt and T0's tested adapter. Temper remains temper-dev only; no separate server or workflow trial. Credential provisioning/route activation is performed only within S0's reviewed custody and existing approvals; if absent, block on the named lead, never invent a key or turn off off-mode. Unknown run/task/payer bindings remain unassigned.",
-  "steps": "1. Verify route deployment, S0 admission and key availability without printing it; write H-WIRE-T1. 2. Add the narrow Temper source hook in usage-accounting-worker.ts using injected protected credential loading, opaque cursor receipts and original same-call aliases. Connect T0's scalar coverage/dead-man state to W6's main-thread lifecycle age check so worker silence cannot hide an enabled feed stall; emit one safe operational diagnostic per episode, no new notification destination. 3. Test combined current-first, partly unknown Pi tokens, absent launch-origin, legacy partial, out-of-order seq, call-ID replay, opaque recovery/409, delayed/disabled/silent feed and failure isolation before any live read. 4. Land detached normally. 5. Check running/waiting work, pi-web-deploy dry-run, then a separate pi-web-deploy install and actual result readback. 6. Perform the look-only Roles page check and passive numeric <=60-second observation; record receipt/undo and remaining unknowns without initiating runs.",
-  "verify": "Combined fixed Pi/Temper same-call leaf counts once; absent launch-origin is unassigned, Pi zero classes are null and overlap stays unknown without native proof. Test 409 restore/reset with retained evidence and bounded partial reconciliation; seq maxima do not certify commits or coverage. Page says Temper figures complete through HH:MM with timezone and visible delayed state. Enabled coverage stall/silence >5 minutes raises one dead-man alarm, clears only on actual progress and catches a dead worker; disabled mode stays honestly off. Measure proposed complete_through lag p95 <=60 seconds and max <=5 minutes separately from <=60-second first-byte-observation to client generation-ID acknowledgement; record endpoints, samples and unaccepted/missed bars. Do not call a server push a client acknowledgement. Ordinary deploy health/look pass, no model/workflow is started, and passive observation uses queue_wait.",
-  "must_not": "No unapproved credential provisioning or feed activation, hidden Temper/test instance, workflow/model trial, database scrape, unknown-as-zero, guessed payer/root, manual spend mutation, cap/stop/pause change or manual restart.",
+  "goal": "Add the reviewed Temper numeric source to the proven Pi meter with durable opaque cursor/epoch recovery, native same-call dedupe and diagnostic freshness, while keeping coverage UNKNOWN and work controls unchanged.",
+  "done_when": "After separate recorded admission/activation, the usage-collector Worker loads only S0's protected raw file, keeps durable cursor/epoch recovery and UNKNOWN Temper coverage, shows diagnostic delayed/stalled/dead-man and missing origin/funding, and records stage tests plus separate deploy/look-only/latency receipts without claiming completeness.",
+  "decided": "Lead Ops. UNQUEUED under the same expanded #128 normal approval, Architecture ruling, #128/#129 delivery, Security exact-code review and runtime-fixture gates as T0. S0 c7a0755c and v2.1 are design agreement, not activation. Temper coverage is always UNKNOWN in v1. Consume R0/T0 receipts; temper-dev only. usage-collector is a dedicated pi-web-ui Worker as shinelay UID 1000, http://127.0.0.1:8420 only; same-UID host access is not isolated. Temper separately applies authorized adds/removes via scripts/api_key.py --feed to the hash-only TEMPER_USAGE_FEED_KEYS_FILE registry, default configs/api/local/usage-feed-keys.json on the existing read-only configs mount. Ops owns raw loading and rotation timing/coordination at /home/shinelay/.config/temper/api-keys/usage-collector.key, directory 0700/file 0600, outside all container mounts. No Pi auth.json, dotenv, browser store or accounting DTO carries the key. A missing/empty/unreadable/malformed registry means OFF with no general/shared/file/run-key fallback. If activation/epoch-init/custody authority is absent, block on the named lead; never create it by inference. Unknown task/payer bindings stay unassigned. Temper #125 rm-a6acd2fd: 100 ms capture/2 s usage-only wait commits Event+final or typed usage_pending together with stable source UUID; writer landing starts no drainer. Require #126's running 15-minute normal-cadence proof before T0 and retain it at T1 admission. Restate the highest native revision per call even for arrivals 2, 1, 0; never sum arrival order or lower the chosen revision. An ordering-deferred marker survives drain as fault/unknown. Bind the queued copy to the exact-byte/head-reviewed interface rather than freezing producer field names beyond v2.1. #128's private live identity, anchor and full-retained rebaseline guards remain required with readers potentially present on restore. Occurrence coverage stays UNKNOWN; no manual spend authority.",
+  "steps": "1. Verify all pre-queue gates, #126 actual running/cadence proof, exact-byte/head-reviewed interface and runtime fixtures, #128 private live identity/anchor/full-retained rebaseline guards and separately recorded key/epoch-init activation before any live read; write H-WIRE-T1. 2. Add the narrow Temper Worker hook using T0's protected raw loader, call_key aliases and byte-for-byte durable route-issued cursor (at most 256 characters) plus reader epoch; requests use cursor or epoch=<n>. Connect frontier progress/age and DB-clock closed stall codes to W6's scalar lifecycle age check, never source/HTTP/parser work on main. Emit one safe diagnostic alarm per episode through the existing channel. 3. Before live use stage-test combined current-first, Pi nulls, absent launch origin/funding, call_key replay with highest-revision restatement for arrivals 2, 1, 0, typed pending and all five native drain outcomes (only drained new usage), ordering-deferred fault/unknown after drain, opaque crash recovery with readers present, all six 409 codes, separately recorded epoch handshake, diagnostic delayed/stalled/disabled/silent feed and dead Worker. Require coverage.status unknown on every page, with recorded_through/pending_count/oldest_pending_at/last_drain_at/stalled/stall_codes frontier. 4. Land detached normally. 5. Check running/waiting work, pi-web-deploy dry-run, separate install and actual result text. 6. Perform look-only Roles and passive numeric <=60-second observation; show recorded through HH:MM with timezone/date beside UNKNOWN and record undo/remaining gaps without initiating runs.",
+  "verify": "Same-call Pi/Temper leaves count once and each call restates the highest native revision for arrivals 2, 1, 0 without arrival sums or lower-revision rollback. rm-a6acd2fd source fixtures prove same-transaction Event+final/pending and stable source UUID, 100 ms/2 s capture boundary, all five native drain outcomes with only drained new usage, and ordering-deferred markers retained as fault/unknown after drain. Require running #126 15-minute cadence, reviewed interface bytes/head and #128 private live identity/anchor/full-retained rebaseline guards; test restored readers present. Missing launch origin/funding is unassigned/unavailable, Pi zero classes remain null and overlap is unknown without native proof. Test identity-changed, epoch-changed, anchor-changed, seq-regression, instance-changed and reader-uninitialized 409 quarantine with retained evidence, no route reset, separately recorded handshake and bounded paged reconciliation. No seq, after=, through_seq or max_seq cursor acceptance. No complete_through or complete through acceptance. Fresh rows/polls/DB clock/frontier recovery never upgrade UNKNOWN. Test pending-old >15 minutes, drain-silent pending with absent/>5-minute heartbeat and drain-off pending/off using DB clock; delayed age >60 seconds and dead-man >5 minutes without frontier progress are diagnostic only and catch a dead Worker. Repeated reads cannot reset alarm age; verified diagnostic recovery clears it but not UNKNOWN. Test invalid/missing registry OFF, wrong-key refusals and key-free accounting DTOs. Record diagnostic ages separately from first-byte-observation to post-render generation acknowledgement <=60 seconds; a push is not an acknowledgement. Normal health/look receipts and passive queue_wait retain all missing evidence honestly.",
+  "must_not": "No complete_through or complete through acceptance; no seq, after=, through_seq or max_seq cursor; no TEMPER_USAGE_FEED_KEYS enablement; no unapproved queueing/credential/epoch-init/feed activation, automatic rebaseline/reset, hidden instance, workflow/model trial, database scrape, unknown-as-zero, guessed origin/payer/root, manual spend mutation, cap/stop/pause change or manual restart.",
   "touches": ["pi-web-ui repo", "pi-web-deploy"],
   "after": ["R0", "T0"],
   "uses": {"R0": "Accepted installed Pi worker/UI health, resource and look-only receipt.", "T0": "Tested exact feed/pricing/overlap adapter plus its completed Security and Temper prerequisite artifacts."},
@@ -706,15 +819,15 @@ Ops does not change their engine, credential or grading modules.
   "lead": "data",
   "project": "automatic-cost-accounting",
   "title": "Automatic costs: independent Temper-slice and combined-overlap reconciliation",
-  "goal": "Give Ops an independent deterministic check of installed Temper list quotes, Pi token nulls, page coverage, missing launch origin and explicit cross-source overlap after T1.",
-  "done_when": "A separate Temper reconciliation script, fixed numeric cases and Data's result compare exact supported list costs and native same-call dedupe with T1's installed generations, with every unknown token/origin/coverage exclusion counted and C0 blockers explicit.",
-  "decided": "Lead Data. Use #127/#129 exclusive input/output/cache-read/cache-write: every Pi zero is null and total null unless all four are known; only independently proved non-Pi reported zero is zero. Ops quoteListUsd, not Temper legacy cost, sets list amounts. Opaque cursor/complete_through supplies coverage, not seq maxima. Missing G12 launch-origin stays unassigned. This task does not wait for D0a or modify its files.",
-  "steps": "1. Write H-WIRE-D0b and verify T1's installed receipts and approved numeric exports. 2. Add scripts/usage-accounting-reconcile-temper.mjs over bounded exports only, with exact decimal comparisons and per-class/coverage/origin exclusions. 3. Test supported prices, Pi zero/overwrite/null totals, proved non-Pi zero, unsupported rate, native same-call overlap, out-of-order seq, opaque replay/409, delayed/stalled coverage and absent launch-origin. 4. Reconcile supported installed Temper slices plus explicit Pi aliases without summing legacy totals or inferring task identity. 5. Return zero-mismatch proof or named blockers and limits to Ops; land the exclusive script/test/doc detached normally, no install.",
-  "verify": "Planted legacy-cost-as-list, null-as-zero, duplicate cross-source call, seq-as-coverage, lost opaque cursor, false launch-task and unknown-as-headroom cases fail; independently exact clean cases pass. Fixed numeric input reproduces results without a model. Receipts count every excluded unknown and name actual installed generations. Normal land checks pass.",
-  "must_not": "No transcript/model content, live feed/model/workflow request, credential access, guessed Pi zero/rate/origin, spend write, D0a file change, app policy mutation, automatic completion, install or stop/cap change.",
+  "goal": "Give Ops an independent deterministic check of installed Temper list quotes, Pi token nulls, UNKNOWN coverage, diagnostic frontier, missing launch origin and explicit cross-source overlap after T1.",
+  "done_when": "A separate deterministic script and fixed numeric cases compare exact supported list costs and native call_key dedupe with T1's installed generations, retain UNKNOWN coverage despite healthy diagnostics, count every token/origin/funding exclusion and name C0 blockers without certifying full replacement.",
+  "decided": "Lead Data. S0 c7a0755c/v2.1 governs: Temper coverage is always UNKNOWN in v1. Opaque route-issued cursor (at most 256 characters) plus reader epoch is replayed byte for byte after durable commit; it is not coverage. Only a separately recorded epoch handshake reconciles a quarantined 409. Frontier recorded_through/pending count/oldest/last drain/closed stall codes and delayed/stalled/dead-man states are diagnostic, never completeness. Use #127/#129 exclusive classes: every Pi zero is null and total null unless all four are known; only independently proved non-Pi zero is zero. Ops quoteListUsd, not legacy cost, sets list amounts. Missing G12 launch origin stays unassigned; no native root/payer producer means funding unavailable. This task does not wait for D0a or modify its files. Temper #125 rm-a6acd2fd adds 100 ms capture, a 2 s usage-only wait and same-transaction Event+final or typed usage_pending with stable source UUID. The writer starts no drainer; T1 evidence must include #126 actually running and proving 15-minute normal cadence before T0. Reconcile the highest native revision per call, not arrival sums or lower-revision rollback. Ordering-deferred fault markers survive drain as fault/unknown. The source interface binds at queue time to exact-byte/head-reviewed code, not unreviewed extra field names; #128 private live identity, anchor and full-retained rebaseline guards remain owed with restore readers potentially present. Occurrence coverage stays UNKNOWN, with no manual spend authority.",
+  "steps": "1. Write H-WIRE-D0b and verify T1's installed receipts and approved numeric exports. 2. Add scripts/usage-accounting-reconcile-temper.mjs over bounded exports only, with exact decimal comparisons and per-class/UNKNOWN coverage/origin/funding exclusions. 3. Test supported prices, Pi null totals, proved non-Pi zero, unsupported rate, native call_key overlap and highest-revision restatement for arrivals 2, 1, 0, same-transaction final/pending with stable UUID, all five drain outcomes with only drained new usage and surviving ordering-deferred fault markers, opaque byte replay/crash/409 with separately recorded epoch handshake and #128 live identity/anchor/full-retained guards even with restored readers, and all diagnostic freshness/stall states. 4. Reconcile supported installed slices and explicit Pi aliases without legacy-total sums or inferred task identity; a healthy frontier cannot certify the window. 5. Return zero-mismatch known-slice proof and named UNKNOWN/cut-over blockers to Ops; land exclusive script/test/doc detached normally, no install.",
+  "verify": "Planted legacy-cost-as-list, null-as-zero, duplicate cross-source call, arrival-summed revisions, lower-revision rollback, non-drained-as-new-usage, lost ordering-deferred fault marker, frontier-as-completeness, lost/reconstructed opaque cursor, automatic 409 reset, false launch-task, invented funding and unknown-as-headroom cases fail; exact known-slice cases pass. rm-a6acd2fd controls include arrivals 2, 1, 0, all drained/already-final/deferred/busy/missing outcomes (only drained new usage), 100 ms/2 s same-transaction final/pending with unchanged UUID, #126 running 15-minute cadence and reviewed #128 identity/anchor/full-retained guards with restored readers present; writer landing alone proves no cadence. No complete_through or complete through acceptance. No seq, after=, through_seq or max_seq cursor acceptance. Fresh polls/DB-clock/frontier recovery and cleared alarms retain UNKNOWN. Fixed input reproduces without a model; receipts count every excluded unknown and name installed generations and unresolved origins. Normal land checks pass.",
+  "must_not": "No complete_through or complete through acceptance; no seq, after=, through_seq or max_seq cursor; no TEMPER_USAGE_FEED_KEYS enablement; no transcript/model content, live feed/model/workflow request, credential access, guessed Pi zero/rate/origin/funding, spend write, D0a edit, app policy mutation, automatic completion, install or stop/cap change.",
   "touches": ["pi-web-ui repo"],
   "after": ["T1"],
-  "uses": {"T1": "Installed Temper generations, conservative token/call-ID/opaque-cursor coverage, explicit combined-source aliases and look-only receipt."},
+  "uses": {"T1": "Installed Temper generations with conservative token/call_key evidence, durable opaque cursor/reader epoch, UNKNOWN coverage and diagnostic frontier, explicit aliases and look-only receipt."},
   "owns": ["scripts/usage-accounting-reconcile-temper.mjs", "tests/unit/usage-accounting-reconcile-temper.test.ts", "docs/usage-accounting-reconciliation-temper.md"]
 }
 ```
@@ -725,16 +838,16 @@ Ops does not change their engine, credential or grading modules.
   "queue": "ops",
   "lead": "ops",
   "project": "automatic-cost-accounting",
-  "title": "Automatic costs: prove replacement and remove manual Roles display",
-  "goal": "Finish the project's approved replacement outcome by removing manual figures from the normal Roles display only after deterministic known-case agreement, honest unknowns and installed freshness are proved.",
-  "done_when": "The exact cut-over bar in this plan passes with Data's known-slice reconciliation and 24-hour passive dual-display receipt, funding provenance is supported rather than fabricated, manual Roles figures are removed from normal display without touching spend files, and the separately deployed page passes a look-only check.",
-  "decided": "Lead Ops; Data owns the independent numeric reconciliation result. Fixed known oracles, not manual tally equality, certify amounts. Zero known-case mismatches and zero false complete/zero/headroom unknown cases are required. Every observed update must render within 60 seconds; Monday/DST is proved synthetically. Unsupported funding or unresolved G13 home/ad-hoc turn-origin blocks complete replacement for affected roles; retain their manual reference and record incomplete, never count all home usage as own without the owner. Recommend a separately reviewed numeric turn-origin producer, with owner turns unassigned until he sets a rule. C0 admission checks the delivered resolution first. Retain a reversible reference path and files unchanged.",
-  "steps": "1. Before queue admission verify G13's supported turn-origin/reporting result or keep affected roles manual/incomplete; do not infer the owner's rule. Write H-WIRE-C0, consume R0/T1 receipts and both D0a/D0b exact reconciliations, and explain manual discrepancies. 2. Wait on the 24-hour passive dual-display receipt using queue_wait; inspect numeric status only, never manufacture usage. 3. Run all fixed pricing/cache/helper/overlap/requester/Team/reparent/unknown/stale/Monday/DST cut-over cases and assert the measured zero-mismatch bar. 4. Change only the normal Roles exact-view manual display branch, keeping exact automatic labels and rollback reference behavior; leave server/roles-spend.ts and spend.json/stopped untouched. 5. Land detached normally, check running/waiting work, pi-web-deploy dry-run and the separate install step. 6. Make the look-only Roles check, record all five project criterion proofs or remaining gaps for Ops, and provide the reversible display/build rollback.",
-  "verify": "Independent known sums agree exactly; every planted unknown remains labelled and has null certified remainder. The passive 24-hour receipt has no late client-acknowledged generation, missing dirty-source event or hidden fault; endpoints and sample count are recorded separately from push/detection timings. Funding witness and G13 turn-origin resolution satisfy the reviewed boundary; a role with unassigned home own-work cannot be called complete. Protocol/browser tests keep exact decimals and rollback manual-reference behavior. Normal gate, installed health and look-only live page pass; no project criterion is marked met merely because a task ended.",
-  "must_not": "No deletion/update of spend files or stopped values, automatic work enforcement, budget limit/exemption/permission change, false funding authority, manual number as numeric oracle, model tally/probe, real chat action or manual service restart.",
+  "title": "Automatic costs: test bounded cut-over and retain references for missing evidence",
+  "goal": "Remove a supported role's normal manual display only when its complete evidence and deterministic cut-over bar are actually met; retain manual references and incomplete status for every unsupported role rather than certify full replacement by implication.",
+  "done_when": "Data's exact known-slice reconciliations and 24-hour passive dual-display receipt meet the measured bar for any supported display removal, with a reversible reference and no spend-file change; affected roles remain manual/incomplete while funding, native launch origin, outside-task origin or coverage is missing, and any separate deploy/look receipt preserves those limits. Full replacement is blocked by the same gaps.",
+  "decided": "Lead Ops; Data owns independent numeric reconciliation. S0 c7a0755c/v2.1: Temper coverage is always UNKNOWN in v1. Diagnostic frontier, delayed/stalled/dead-man recovery, exact known sums and 24-hour healthy operation cannot make it complete or certify a budget numerator. No admitted native root/payer producer means funding unavailable; reporting allocation is not authority. Missing G12 launch origin or G13 home/ad-hoc/outside-task origin blocks complete replacement for affected roles, as does UNKNOWN coverage: retain their manual reference and report incomplete. Never count home usage as own or infer owner-turn treatment; recommend a separately reviewed native numeric origin producer. Known oracles, not manual equality, certify only supported amounts; require zero known-case mismatches and zero false complete/zero/headroom cases, <=60-second observed rendering and fixed Monday/DST proof. C0 admission verifies delivered evidence first, not task completion alone. Temper #125 rm-a6acd2fd: 100 ms capture/2 s usage-only wait, same-transaction Event+final or typed usage_pending and stable source UUID are capture guarantees, not occurrence completeness. Writer landing starts no drainer: #126 actual running/15-minute normal-cadence proof must precede T0. Native calls restate the highest revision for arrivals 2, 1, 0; lower revisions and non-drained outcomes cannot add usage or roll it back. Ordering-deferred markers survive drain as fault/unknown and block clean-evidence acceptance. Queued T0/T1 must bind the exact-byte/head-reviewed interface, without freezing extra producer field names. Activation retains #128 private live identity, anchor and full-retained rebaseline guards; restored readers may exist. Occurrence coverage stays UNKNOWN and no manual spend authority is added.",
+  "steps": "1. Before queue admission verify native funding, G12 launch origin, G13 outside-task origin and coverage evidence for the claimed scope; if absent, block full replacement and retain affected manual/incomplete references. Do not infer an owner rule or a producer. Write H-WIRE-C0 and consume R0/T1 plus D0a/D0b reconciliations, explaining discrepancies and requiring rm-a6acd2fd's #126 running/cadence proof, exact-byte/head-reviewed interface, #128 live identity/anchor/full-retained guards and retained ordering-deferred faults. 2. Wait on the passive 24-hour dual-display receipt using queue_wait and numeric status only. 3. Run fixed pricing/cache/helper/overlap/requester/Team/reparent/UNKNOWN/stale/Monday/DST cases, including missing-funding/launch/outside-task-origin refusal, revision arrivals 2, 1, 0, typed pending, all five drain outcomes with only drained new usage, surviving ordering-deferred faults and restore readers present. Assert the zero-mismatch bar and unchanged Temper UNKNOWN during diagnostic recovery. 4. Only for a supported scope whose evidence actually qualifies, change the normal exact-view manual branch while retaining reversible references and incomplete markers elsewhere; leave roles-spend.ts and spend.json/stopped untouched. 5. Land detached normally, check running/waiting work, pi-web-deploy dry-run and separate install. 6. Look-only verify and record each project criterion as proved or still blocked with named missing evidence; provide display/build undo, never mark full replacement from a healthy diagnostic receipt.",
+  "verify": "Known sums agree exactly; unknowns retain labels and null certified remainder. No complete_through or complete through acceptance. No seq, after=, through_seq or max_seq cursor acceptance. A fresh frontier, healthy 24-hour run or cleared delayed/stalled/dead-man state leaves Temper UNKNOWN. Missing native root/payer funding, launch origin, outside-task origin or coverage deterministically refuses complete replacement and preserves affected manual references. An admitted funding/turn-origin witness must meet the reviewed boundary; no unassigned home usage becomes complete. rm-a6acd2fd controls reject arrival-summed/lower-revision usage, non-drained-as-new-usage, lost ordering-deferred faults, writer-landing-as-running-drainer proof, or assuming no readers on restore; #128 private live identity/anchor/full-retained guards and the exact-byte/head-reviewed interface are checked. Passive endpoints/sample count are separate from push/detection timings; no late generation, missed dirty source or hidden fault is hidden. Protocol/browser tests preserve decimals/reference rollback; normal gate and any separate health/look receipt pass without marking a criterion met merely because a task ended.",
+  "must_not": "No complete_through or complete through acceptance; no seq, after=, through_seq or max_seq cursor; no TEMPER_USAGE_FEED_KEYS enablement; no missing funding/launch/outside-task-origin/UNKNOWN coverage certified as full replacement, deletion/update of spend files or stopped values, enforcement, budget/exemption/permission change, false authority, manual-number oracle, model tally/probe, real chat action or manual restart.",
   "touches": ["pi-web-ui repo", "pi-web-deploy"],
   "after": ["D0a", "D0b"],
-  "uses": {"D0a": "Independent Pi exact known-slice/basis/funding reconciliation with R0 installed receipts and non-task-origin exclusions.", "D0b": "Independent Temper exact token/pricing/call-ID/coverage/overlap reconciliation with T1 installed receipts; G13, supported funding and the 24-hour observation remain admission/cut-over gates."},
+  "uses": {"D0a": "Independent Pi exact known-slice/basis/funding reconciliation with R0 installed receipts and non-task-origin exclusions.", "D0b": "Independent Temper exact token/pricing/call_key/overlap known-slice reconciliation with T1 receipts and UNKNOWN coverage; native funding, G12 launch origin, G13 outside-task origin, coverage and 24-hour observation remain admission/cut-over gates."},
   "owns": ["web/src/roles-exact-view.ts (manual display branch only)", "tests/unit/usage-accounting-cutover.test.ts", "docs/usage-accounting-cutover.md"]
 }
 ```
@@ -800,20 +913,29 @@ The nine corrections and their disposition:
    they cannot charge again beside T0 rows. **Applied:** runtime, W3 fixtures.
 
 Ops applied all nine corrections under Architecture's stated no-second-review
-condition. It does not claim that Architecture re-read the edited version or
-that an implementation is approved/installed. The late Ops facts about Pi-zero
-loss, failed #125/xid8/opaque cursor/409/page coverage and absent Temper launch
-origin remain explicit; this plan does not wait for Temper to finish.
+condition in #309. It does not claim that Architecture re-read this S0 edit or
+that an implementation is approved/installed. #323 now supersedes the earlier
+failed-#125/xid8/page-completeness assumption with S0's reviewed v2.1 boundary;
+Pi-zero loss and absent native launch origin/funding/outside-task origin remain
+explicit gaps. Architecture's separate ruling on expanded #128 is still owed.
 
 Checker: `node docs/check-usage-accounting-wiring.mjs` validates each task's seven
 text fields against the queue's placeholder/unsettled-phrase/length rules, plus
-unique IDs, project/routing, touches, dependencies with named results and the
-five acceptance mappings. It reads this document only. It neither queues work
-nor reads live numeric sources. `--self-test` runs fixed malformed-plan controls
-in memory, with no app/model mock or payload. Final invocation on 2026-10-20:
-`node docs/check-usage-accounting-wiring.mjs --self-test` — **PASS, 16 tasks and
-34 in-memory negative controls**. Only these two documentation files change.
+IDs, routing, touches, named dependency results, five acceptance mappings and
+existing queued copies. For T0, T1, W7, D0b and C0 it requires the explicit
+Temper-UNKNOWN invariant and rejects completeness, sequence-cursor and general
+named-key acceptance in every text field and nested result map. `must_not` and
+explicit refusal clauses (No/Never/Do not/Must not), including negative lists,
+are excluded; a separate positive clause remains checked. `seq-regression` is
+allowed only as v2.1's closed 409 code, not as a cursor field.
 
-Undo of #309: revert this document and its checker. There is no runtime change,
+It reads the selected document only (default this file); no source, app, queue or
+model call. `--self-test` uses in-memory synthetic plan mutations, not app/model
+mock payloads. #309's historical result was 16 parsed tasks and 34 negative
+controls; #323's final old-text rejection/new-text/self-test and normal land gate
+results are recorded with H-WIRE-S0ALIGN and the normal receipt. Only these two
+documentation files change; T0/T1 queue state and runtime remain untouched.
+
+Undo of #323 (and separately #309): revert the corresponding document/checker commit. There is no runtime change,
 installed timer, credential, source read, manual tally change or budget action
 to undo. Implementation and release tasks each carry their own undo and receipt.

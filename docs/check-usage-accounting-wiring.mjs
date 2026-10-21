@@ -11,6 +11,59 @@ const unsettled = /\b(tbd|tbc|to be (decided|determined|confirmed|discussed)|dec
 const roles = new Set(['ops', 'temper', 'security', 'data']);
 const localId = /^[A-Z][0-9]+[a-z]?$/;
 const project = 'automatic-cost-accounting';
+const s0Plans = ['T0', 'T1', 'W7', 'D0b', 'C0'];
+// rm-a6acd2fd: #125 capture/drain behavior is not a frozen route schema.
+// Enforce S0 wording, not extra producer field names beyond reviewed v2.1.
+const queuedAs = { W0: 311, W1: 312, W2: 313, W3: 314, W4: 320, W5: 315, W6: 321, W7: 316, R0: 322 };
+const unknownCoverage = /\bTemper coverage is always UNKNOWN in v1\b/i;
+const s0Bans = [
+  ['completeness', /\bcomplete(?:_|\s+|-)through\b/i, 'complete_through'],
+  ['completeness', /\bcomplete(?:_|\s+|-)through\b/i, 'complete through'],
+  // seq-regression is a closed v2.1 409 code, not an exposed sequence cursor.
+  ['sequence cursor', /\bseq\b(?!-regression\b)/i, 'seq'],
+  ['sequence cursor', /\bafter\s*=/i, 'after='],
+  ['sequence cursor', /\bthrough_seq\b/i, 'through_seq'],
+  ['sequence cursor', /\bmax_seq\b/i, 'max_seq'],
+  ['general named key', /\bTEMPER_USAGE_FEED_KEYS\b/i, 'TEMPER_USAGE_FEED_KEYS'],
+];
+
+function planStrings(value, path = '') {
+  if (typeof value === 'string') return [[path, value]];
+  if (!value || typeof value !== 'object') return [];
+  return Object.entries(value).flatMap(([key, child]) =>
+    key === 'must_not' ? [] : planStrings(child, path ? `${path}.${key}` : key));
+}
+
+// Only explicit refusal clauses (including negative lists) are exempt. Split
+// contrast/positive-action clauses so 'No X; accept Y' cannot hide acceptance.
+// This is a wording check, not a claim to understand arbitrary English.
+function acceptanceClauses(value) {
+  return value.replace(/[`"“”]/g, '').split(
+    /[;!?\n]+|\.(?=\s|$)|\b(?:but|however|then|while|yet)\b|,\s*(?=(?:use|accept|support|require|rely|allow|show|display|treat|enable|set)\b)|\b(?:and|or)\s+(?=(?:no|never|do not|must not|use|accept|support|require|rely|allow|show|display|treat|enable|set)\b)/i,
+  ).map((clause) => clause.trim()).filter((clause) =>
+    clause && !/^(?:\d+\s*)?(?:no|never|do not|must not)\b/i.test(clause));
+}
+
+function checkS0(plans) {
+  const errors = [];
+  for (const id of s0Plans) {
+    const plan = plans.find((item) => item?.id === id);
+    if (!plan) { errors.push(`${id}: missing S0-scoped plan`); continue; }
+    const fields = planStrings(plan).map(([path, value]) => [path, acceptanceClauses(value)]);
+    if (!fields.some(([, clauses]) => clauses.some((clause) => unknownCoverage.test(clause)))) {
+      errors.push(`${id}: S0 requires explicit 'Temper coverage is always UNKNOWN in v1' acceptance wording`);
+    }
+    for (const [path, clauses] of fields) {
+      for (const [name, pattern] of s0Bans) {
+        if (clauses.some((clause) => pattern.test(clause))) {
+          const error = `${id}.${path}: S0 forbids ${name} acceptance`;
+          if (!errors.includes(error)) errors.push(error);
+        }
+      }
+    }
+  }
+  return errors;
+}
 
 function plansFrom(text) {
   const blocks = [...text.matchAll(/^```usage-task\r?\n([\s\S]*?)^```[ \t]*$/gm)];
@@ -80,7 +133,7 @@ function check(plans) {
     visited.add(id);
   }
   for (const id of byId.keys()) visit(id);
-  return errors;
+  return [...errors, ...checkS0(plans)];
 }
 
 function checkMaps(text, plans) {
@@ -101,6 +154,10 @@ function checkMaps(text, plans) {
     if (!/\*\*(Ops|Temper|Security|Data)\*\*/.test(owner) || result.trim().length < 25) errors.push(`${id}: missing owner/owed result`);
   }
   if (!text.includes("### Architecture's answer (rm-9a25d418)")) errors.push('Missing recorded Architecture answer');
+  if (!text.includes('c7a0755c') || !text.includes('v2.1')) errors.push('Missing Security S0/v2.1 reference');
+  for (const [id, task] of Object.entries(queuedAs)) {
+    if (!text.includes(`| ${id} | Ops #${task} |`)) errors.push(`${id}: missing/correct queued-as copy Ops #${task}`);
+  }
   return errors;
 }
 
@@ -115,7 +172,7 @@ if (errors.length) {
   console.error(errors.join('\n'));
   process.exitCode = 1;
 } else {
-  console.log(`PASS: ${plans.length} tasks; seven complete fields each; no queue-refused phrases; owned gaps, five criteria and dependency results mapped.`);
+  console.log(`PASS: ${plans.length} tasks; seven complete fields each; owned gaps, criteria, dependencies and queued copies mapped; S0 UNKNOWN/completeness/cursor/key guards pass.`);
 }
 
 if (selfTest) {
@@ -145,5 +202,91 @@ if (selfTest) {
   assert.ok(checkMaps(text.replace('| P1 |', '| PX |'), plans).length > 0);
   assert.ok(checkMaps(text.replace(/\*\*(Ops|Temper|Security|Data)\*\*/g, '**Nobody**'), plans).length > 0);
   assert.ok(checkMaps(text.replace("### Architecture's answer (rm-9a25d418)", '### Missing review'), plans).length > 0);
-  console.log(`PASS: ${controls + 5} in-memory negative controls; no source, queue, app or model calls.`);
+  assert.ok(checkMaps(text.replace('| W7 | Ops #316 |', '| W7 | Ops #999 |'), plans).length > 0);
+  assert.ok(checkMaps(text.replaceAll('c7a0755c', 'missing-s0'), plans).length > 0);
+  let s0Negative = 0;
+  let s0Positive = 0;
+  function rejectsS0(change, expected) {
+    const mutated = structuredClone(plans);
+    change(mutated);
+    assert.ok(checkS0(mutated).some((error) => error.includes(expected)), `S0 accepted planted ${expected}`);
+    s0Negative++;
+  }
+  function acceptsS0(change) {
+    const mutated = structuredClone(plans);
+    change(mutated);
+    assert.deepEqual(check(mutated), [], 'Checker rejected a clean S0 refusal/code case');
+    s0Positive++;
+  }
+  for (const id of s0Plans) {
+    for (const [name, , example] of s0Bans) {
+      // Check every acceptance field and the nested dependency/result map;
+      // otherwise a correct decided field can mask a stale verify/uses field.
+      for (const field of Object.keys(minima).filter((key) => key !== 'must_not')) {
+        rejectsS0((items) => {
+          const plan = items.find((item) => item.id === id);
+          if (field === 'title') plan[field] = `Automatic costs: accept ${example}`;
+          else plan[field] += ` Accept ${example}.`;
+        }, `${id}.${field}: S0 forbids ${name}`);
+      }
+      rejectsS0((items) => {
+        const plan = items.find((item) => item.id === id);
+        plan.uses[plan.after[0]] += ` Accept ${example}.`;
+      }, `${id}.uses.${plans.find((item) => item.id === id).after[0]}: S0 forbids ${name}`);
+      acceptsS0((items) => {
+        items.find((item) => item.id === id).must_not += ` ${example} acceptance is prohibited.`;
+      });
+      acceptsS0((items) => {
+        const plan = items.find((item) => item.id === id);
+        plan.verify += ` No ${example} acceptance.`;
+        plan.uses[plan.after[0]] += ` No ${example} acceptance.`;
+      });
+      acceptsS0((items) => {
+        const plan = items.find((item) => item.id === id);
+        plan.verify += ` No response.${example} field.`;
+        plan.uses[plan.after[0]] += ` No response.${example} field.`;
+      });
+    }
+    for (const contrast of ['; accept', ', accept', ' but accept', ' and accept', ', enable', ' and enable', ', set', ' and set']) {
+      rejectsS0((items) => {
+        items.find((item) => item.id === id).verify += ` No complete_through${contrast} max_seq.`;
+      }, `${id}.verify: S0 forbids sequence cursor`);
+    }
+    rejectsS0((items) => {
+      items.find((item) => item.id === id).verify += ' No complete_through, enable TEMPER_USAGE_FEED_KEYS.';
+    }, `${id}.verify: S0 forbids general named key`);
+    rejectsS0((items) => {
+      const plan = items.find((item) => item.id === id);
+      plan.decided = plan.decided.replace(unknownCoverage, 'Temper coverage varies in v1');
+    }, `${id}: S0 requires explicit`);
+    rejectsS0((items) => {
+      const plan = items.find((item) => item.id === id);
+      plan.decided = plan.decided.replace(unknownCoverage, 'Temper coverage varies in v1');
+      plan.must_not += ' Temper coverage is always UNKNOWN in v1.';
+      plan.verify += ' No Temper coverage is always UNKNOWN in v1 claim.';
+    }, `${id}: S0 requires explicit`);
+    rejectsS0((items) => { items.splice(items.findIndex((item) => item.id === id), 1); }, `${id}: missing S0-scoped plan`);
+    acceptsS0((items) => {
+      items.find((item) => item.id === id).verify += ' No seq, after=, through_seq or max_seq. No complete_through or complete through acceptance. The fixed 409 seq-regression code is diagnostic. Use TEMPER_USAGE_FEED_KEYS_FILE, never a fallback.';
+    });
+    for (const refusal of ['Never accept', 'Do not accept', 'Must not accept']) {
+      acceptsS0((items) => {
+        items.find((item) => item.id === id).verify += ` ${refusal} complete_through.`;
+      });
+    }
+  }
+  for (const id of ['T0', 'T1', 'D0b', 'C0']) {
+    acceptsS0((items) => {
+      const plan = items.find((item) => item.id === id);
+      // A reviewed producer may rename internal helpers/metadata. Do not pin
+      // these as route fields; v2.1's call_key/frontier/epoch contract stays put.
+      for (const field of Object.keys(minima)) {
+        plan[field] = plan[field]
+          .replaceAll('drain_pending_row(session, event_id, revision)', 'the reviewed native drain primitive')
+          .replaceAll('usage_pending', 'the reviewed typed pending state')
+          .replaceAll('ordering-deferred', 'the reviewed ordering-fault indication');
+      }
+    });
+  }
+  console.log(`PASS: ${controls + 7 + s0Negative} in-memory negative controls; ${s0Positive} clean S0 controls; no source, queue, app or model calls.`);
 }
