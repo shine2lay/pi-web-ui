@@ -1,5 +1,10 @@
-import { readFileSync, readdirSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import * as ts from "typescript/unstable/ast";
+import { createVirtualFileSystem } from "typescript/unstable/fs";
+import { API } from "typescript/unstable/sync";
+import { afterAll, describe, expect, it } from "vitest";
 import { taskQueueAll } from "../../server/task-queue.js";
 import { checkTaskBinding, type TaskMembership, type UsageFact } from "../../server/usage-accounting-contract.js";
 import {
@@ -616,20 +621,238 @@ describe("usage-accounting-membership: H-AUTOCOST-6, fixed source witnesses only
 			expect((await c.collect(b.stream, JSON.stringify(b), CONTEXT.observedAt)).status).toBe("committed");
 		expect(membershipSourceBatches(result, CONTEXT)).toEqual([]); // no invented second cursor token
 	});
-	it("has no production importer, wiring, native path, filesystem call, timer or model invocation", () => {
+	it("has no native path, filesystem call, timer, collector dependency or model invocation", () => {
 		const server = new URL("../../server/", import.meta.url);
-		const importers = readdirSync(server)
-			.filter((name) => name.endsWith(".ts") && name !== "usage-accounting-membership.ts")
-			.filter((name) =>
-				/(?:from\s*|import\s*\()\s*["'][^"']*usage-accounting-membership/.test(
-					readFileSync(new URL(name, server), "utf8"),
-				),
-			);
-		expect(importers).toEqual([]);
 		const source = readFileSync(new URL("usage-accounting-membership.ts", server), "utf8");
 		expect(source).not.toMatch(/usage-accounting-collector/);
 		expect(source).not.toMatch(
 			/node:fs|readFile|writeFile|setInterval|setTimeout|homedir\(|\.pi-web-ui\/|["']\/[^"']*usage-ledger\//,
 		);
+	});
+});
+
+// H-WIRE-0: keep membership pure and permit only the worker consumers owned in W2-W6.
+describe("usage-accounting-membership reviewed worker importers", () => {
+	const project = fileURLToPath(new URL("../../", import.meta.url));
+	const server = join(project, "server");
+	const membership = join(server, "usage-accounting-membership.ts");
+	const allowed = [
+		"usage-accounting-ledger-source.ts", // W2: project conversation/helper metadata for #305.
+		"usage-accounting-pi-source.ts", // W3: bounded #304/#305 source adapter.
+		"usage-accounting-funding.ts", // W4: independent event-time membership evidence.
+		"usage-accounting-snapshot.ts", // W5: worker-only subject builder, never the cache.
+		"usage-accounting-worker.ts", // W6: collection orchestration.
+	];
+	type ImportHost = { readFile(file: string): string | undefined };
+	type ImportOptions = { paths?: Record<string, string[]>; baseUrl?: string };
+	const config = JSON.parse(readFileSync(join(project, "tsconfig.server.json"), "utf8")) as {
+		extends?: unknown;
+		compilerOptions: ImportOptions;
+	};
+	if (config.extends) throw new Error("import guard must resolve extended server config before accepting it");
+	const syntaxDir = join(project, ".membership-import-guard-memory");
+	const syntaxFs = createVirtualFileSystem({});
+	const parser = new API({
+		cwd: project,
+		fs: { ...syntaxFs, readFile: (file) => syntaxFs.readFile!(file) ?? null },
+	});
+	let parserProject: string | undefined;
+	let syntaxBatch = 0;
+	afterAll(() => parser.close());
+	const referenceCache = new Map<string, string[]>();
+	function referenceKey(file: string, text: string): string {
+		return `${[".tsx", ".jsx"].includes(extname(file)) ? ".tsx" : ".ts"}\0${text}`;
+	}
+	function cacheReferences(files: string[], host: ImportHost): void {
+		const pending = new Map<string, { file: string; text: string }>();
+		for (const file of files) {
+			const text = host.readFile(file);
+			if (text === undefined) throw new Error(`missing graph module: ${file}`);
+			const key = referenceKey(file, text);
+			if (!referenceCache.has(key)) pending.set(key, { file, text });
+		}
+		if (!pending.size) return;
+		// Immutable file AND project identities avoid TS 7 retaining the first AST at a reused path.
+		// Batch a real-tree scan into one snapshot instead of rebuilding a project for every module.
+		const syntaxConfig = join(syntaxDir, String(syntaxBatch++), "tsconfig.json");
+		const inputs = [...pending].map(([key, { file, text }], index) => {
+			const input = join(dirname(syntaxConfig), `${index}${[".tsx", ".jsx"].includes(extname(file)) ? ".tsx" : ".ts"}`);
+			syntaxFs.writeFile!(input, text);
+			return { key, file, text, input };
+		});
+		syntaxFs.writeFile!(
+			syntaxConfig,
+			JSON.stringify({
+				compilerOptions: { noResolve: true, noLib: true, types: [], noEmit: true, jsx: "preserve" },
+				files: inputs.map(({ input }) => input),
+			}),
+		);
+		const snapshot = parser.updateSnapshot({
+			openProjects: [syntaxConfig],
+			...(parserProject ? { closeProjects: [parserProject] } : {}),
+		});
+		parserProject = syntaxConfig;
+		try {
+			const program = snapshot.getProject(syntaxConfig)?.program;
+			if (!program) throw new Error(`missing virtual project: ${syntaxConfig}`);
+			for (const { key, file, text, input } of inputs) {
+				const source = program.getSourceFile(input);
+				if (!source) throw new Error(`missing virtual AST: ${file}`);
+				if (source.text !== text) throw new Error(`stale virtual AST: ${file}`);
+				referenceCache.set(key, readReferences(source));
+			}
+		} finally {
+			snapshot.dispose();
+		}
+	}
+	function references(file: string, text: string): string[] {
+		const key = referenceKey(file, text);
+		if (!referenceCache.has(key)) cacheReferences([file], { readFile: () => text });
+		return referenceCache.get(key)!;
+	}
+	function readReferences(source: ts.SourceFile): string[] {
+		const result: string[] = [];
+		function visit(node: ts.Node): void {
+			let specifier: ts.Node | undefined;
+			if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) specifier = node.moduleSpecifier;
+			else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference))
+				specifier = node.moduleReference.expression;
+			else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) specifier = node.argument.literal;
+			else if (
+				ts.isCallExpression(node) &&
+				(node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+					(ts.isIdentifier(node.expression) && node.expression.text === "require") ||
+					(ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "require"))
+			)
+				specifier = node.arguments[0];
+			if (specifier && ts.isStringLiteralLikeNode(specifier)) result.push(specifier.text);
+			node.forEachChild(visit);
+		}
+		visit(source);
+		return result;
+	}
+	function unreviewed(files: string[], host: ImportHost, options = config.compilerOptions): string[] {
+		cacheReferences(files, host);
+		function pointsToMembership(file: string, specifier: string): boolean {
+			let candidates: string[] = [];
+			if (specifier.startsWith(".") || isAbsolute(specifier)) candidates = [resolve(dirname(file), specifier)];
+			else {
+				const aliases = Object.entries(options.paths ?? {}).sort(
+					([a], [b]) => Number(b === specifier) - Number(a === specifier) || b.indexOf("*") - a.indexOf("*"),
+				);
+				for (const [alias, paths] of aliases) {
+					const star = alias.indexOf("*");
+					const matches =
+						star < 0
+							? alias === specifier
+							: specifier.startsWith(alias.slice(0, star)) && specifier.endsWith(alias.slice(star + 1));
+					if (!matches) continue;
+					const match = star < 0 ? "" : specifier.slice(star, specifier.length - alias.length + star + 1);
+					candidates = paths.map((path) => resolve(project, options.baseUrl ?? ".", path.replace("*", match)));
+					break;
+				}
+			}
+			return candidates.some(
+				(path) =>
+					path === membership ||
+					path + ".ts" === membership ||
+					(extname(path) === ".js" && path.slice(0, -3) + ".ts" === membership),
+			);
+		}
+		return files
+			.filter(
+				(file) =>
+					file !== membership &&
+					!allowed.some((name) => file === join(server, name)) &&
+					references(file, host.readFile(file)!).some((specifier) => pointsToMembership(file, specifier)),
+			)
+			.map((file) => relative(server, file))
+			.sort();
+	}
+	function memoryHost(modules: Record<string, string>): ImportHost {
+		const files = new Map(Object.entries(modules).map(([name, text]) => [join(server, name), text]));
+		return { readFile: (file) => files.get(resolve(file)) };
+	}
+	it("keeps successive virtual texts and empty sources distinct, including cache hits", () => {
+		for (const name of ["fresh-control.ts", "fresh-control.tsx"]) {
+			const file = join(server, name);
+			const first = "import './fresh-runtime-control.js';";
+			const second = "export type { Value } from './fresh-type-control.js';";
+			expect(references(file, first)).toEqual(["./fresh-runtime-control.js"]);
+			expect(references(file, second)).toEqual(["./fresh-type-control.js"]);
+			expect(references(file, "")).toEqual([]);
+			expect(references(file, first)).toEqual(["./fresh-runtime-control.js"]);
+		}
+	});
+	it("admits only exact W2-W6 membership importers throughout the production server tree", () => {
+		function serverFiles(dir = server): string[] {
+			return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+				const file = join(dir, entry.name);
+				return entry.isDirectory()
+					? serverFiles(file)
+					: [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"].includes(extname(file))
+						? [file]
+						: [];
+			});
+		}
+		const files = serverFiles();
+		expect(files).toContain(membership);
+		expect(
+			unreviewed(files, { readFile: (file) => (existsSync(file) ? readFileSync(file, "utf8") : undefined) }),
+		).toEqual([]);
+		// Native full-tree parsing competes with the full suite; this is harness startup, not a runtime budget.
+	}, 15_000);
+	it("permits each reviewed edge and rejects main-thread, unreviewed and nested-lookalike importers", () => {
+		const forms = [
+			(specifier: string) => `import { value } from '${specifier}';`,
+			(specifier: string) => `import '${specifier}';`,
+			(specifier: string) => `export { value } from '${specifier}';`,
+			(specifier: string) => `export * from '${specifier}';`,
+			(specifier: string) => `void import('${specifier}');`,
+			(specifier: string) => `void require('${specifier}');`,
+			(specifier: string) => `void module.require('${specifier}');`,
+			(specifier: string) => `import value = require('${specifier}');`,
+			(specifier: string) => `void import(\`${specifier}\`);`,
+			(specifier: string) => `import type { Value } from '${specifier}';`,
+			(specifier: string) => `type Value = import('${specifier}').Value;`,
+		];
+		for (const form of forms) {
+			const modules: Record<string, string> = { "usage-accounting-membership.ts": "export const value = 1;" };
+			for (const name of allowed) modules[name] = form("./usage-accounting-membership.js");
+			const rejected = [
+				"index.ts",
+				"roles-overview.ts",
+				"protocol.ts",
+				"usage-accounting-meter-cache.ts",
+				"unreviewed.ts",
+			];
+			for (const name of rejected) modules[name] = form("./usage-accounting-membership.js");
+			modules["nested/usage-accounting-worker.ts"] = form("../usage-accounting-membership.js");
+			const host = memoryHost(modules);
+			expect(
+				unreviewed(
+					allowed.map((name) => join(server, name)),
+					host,
+				),
+			).toEqual([]);
+			expect(
+				unreviewed(
+					Object.keys(modules).map((name) => join(server, name)),
+					host,
+				),
+			).toEqual([...rejected, "nested/usage-accounting-worker.ts"].sort());
+		}
+	});
+	it("resolves configured aliases and ignores comments and string literals that are not imports", () => {
+		const host = memoryHost({
+			"usage-accounting-membership.ts": "export const value = 1;",
+			"unreviewed.ts": "export * from '@meter/usage-accounting-membership.js';",
+			"safe.ts":
+				"// import './usage-accounting-membership.js'\nconst text = \"require('./usage-accounting-membership.js')\";",
+		});
+		const options = { ...config.compilerOptions, paths: { "@meter/*": [join(server, "*")] } };
+		expect(unreviewed([join(server, "unreviewed.ts"), join(server, "safe.ts")], host, options)).toEqual([
+			"unreviewed.ts",
+		]);
 	});
 });

@@ -1,9 +1,21 @@
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+	copyFileSync,
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { createVirtualFileSystem } from "typescript/unstable/fs";
+import { API } from "typescript/unstable/sync";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
 	COLLECTOR_LIMITS,
 	UsageAccountingCollector,
@@ -658,7 +670,7 @@ describe("inert persisted Pi usage reader (synthetic files only)", () => {
 		await accepts([r, invalid]);
 	});
 
-	it("has no production importer or collector dependency, preserves frozen caps, and exposes fixed errors", async () => {
+	it("preserves frozen caps and fixed errors without a collector dependency", async () => {
 		expect({
 			batchBytes: PI_SESSION_LIMITS.batchBytes,
 			readBytes: PI_SESSION_LIMITS.readBytes,
@@ -676,11 +688,6 @@ describe("inert persisted Pi usage reader (synthetic files only)", () => {
 		});
 		const source = readFileSync(new URL("../../server/usage-accounting-pi-sessions.ts", import.meta.url), "utf8");
 		expect(source).not.toMatch(/(?:from\s*|import\s*\()["'][^"']*usage-accounting-collector/);
-		const server = fileURLToPath(new URL("../../server/", import.meta.url));
-		for (const name of readdirSync(server).filter(
-			(name) => name.endsWith(".ts") && name !== "usage-accounting-pi-sessions.ts",
-		))
-			expect(readFileSync(join(server, name), "utf8").includes('"./usage-accounting-pi-sessions')).toBe(false);
 		const file = join(scratch(), "old-header.jsonl");
 		writeFileSync(file, syntheticHeader().replace('"version":3', '"version":2'));
 		expect((await new PiSessionUsageReader().read(request("plain", { file }))).faults).toEqual([
@@ -719,3 +726,403 @@ function reportingInput(results: PiSessionReadResult[]): AccountingInput {
 		requiredStreams: [...new Set(results.flatMap((r) => (r.source ? [r.source.stream] : [])))],
 	};
 }
+
+// H-WIRE-0: admit only reviewed worker edges, while checking real main-thread reachability.
+// The fixed mutations below use the same AST/resolver as production inspection, never server writes.
+describe("usage-accounting reader and transitive worker import boundaries", () => {
+	const project = fileURLToPath(new URL("../../", import.meta.url));
+	const server = join(project, "server");
+	const reader = join(server, "usage-accounting-pi-sessions.ts");
+	// W3 owns the reader adapter; W6 owns worker orchestration, not the main-thread startup hook.
+	const readerImporters = ["usage-accounting-pi-source.ts", "usage-accounting-worker.ts"];
+	const roots = ["index.ts", "roles-overview.ts", "protocol.ts", "usage-accounting-meter-cache.ts"];
+	const engines = [
+		"usage-accounting-collector.ts",
+		"usage-accounting-pi-sessions.ts",
+		"usage-accounting-membership.ts",
+		"usage-accounting-roles.ts",
+		"usage-accounting-funding.ts",
+		"usage-accounting-store.ts",
+		"usage-accounting-ledger-source.ts",
+		"usage-accounting-pi-source.ts",
+		"usage-accounting-temper-source.ts",
+		"usage-accounting-snapshot.ts", // W5 builder, never its separate main-thread cache.
+	];
+	const forbidden = new Set(engines.map((name) => join(server, name)));
+	type ImportHost = { fileExists(file: string): boolean; readFile(file: string): string | undefined };
+	type ImportOptions = { paths?: Record<string, string[]>; baseUrl?: string };
+	const config = JSON.parse(readFileSync(join(project, "tsconfig.server.json"), "utf8")) as {
+		extends?: unknown;
+		compilerOptions: ImportOptions;
+	};
+	if (config.extends) throw new Error("import guard must resolve extended server config before accepting it");
+	const options = config.compilerOptions;
+	const disk: ImportHost = {
+		fileExists: existsSync,
+		readFile: (file) => (existsSync(file) ? readFileSync(file, "utf8") : undefined),
+	};
+	const extensions = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"];
+	function serverFiles(dir = server): string[] {
+		return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+			const file = join(dir, entry.name);
+			return entry.isDirectory() ? serverFiles(file) : extensions.includes(extname(file)) ? [file] : [];
+		});
+	}
+	// TypeScript 7 exposes AST parsing through its native API, not the removed TS 5 createSourceFile API.
+	// All parser inputs are virtual; no fixture or compiler output is written to disk.
+	const syntaxDir = join(project, ".reader-import-guard-memory");
+	const syntaxFs = createVirtualFileSystem({});
+	const parser = new API({
+		cwd: project,
+		fs: { ...syntaxFs, readFile: (file) => syntaxFs.readFile!(file) ?? null },
+	});
+	let parserProject: string | undefined;
+	let syntaxBatch = 0;
+	afterAll(() => parser.close());
+	type Reference = { specifier: string; typeOnly: boolean };
+	const referenceCache = new Map<string, Reference[]>();
+	function referenceKey(file: string, text: string): string {
+		return `${[".tsx", ".jsx"].includes(extname(file)) ? ".tsx" : ".ts"}\0${text}`;
+	}
+	function cacheReferences(files: string[], host: Pick<ImportHost, "readFile">): void {
+		const pending = new Map<string, { file: string; text: string }>();
+		for (const file of files) {
+			const text = host.readFile(file);
+			if (text === undefined) throw new Error(`missing graph module: ${file}`);
+			const key = referenceKey(file, text);
+			if (!referenceCache.has(key)) pending.set(key, { file, text });
+		}
+		if (!pending.size) return;
+		// Immutable file AND project identities avoid TS 7 retaining the first AST at a reused path.
+		// Batch a real-tree scan into one snapshot instead of rebuilding a project for every module.
+		const syntaxConfig = join(syntaxDir, String(syntaxBatch++), "tsconfig.json");
+		const inputs = [...pending].map(([key, { file, text }], index) => {
+			const input = join(dirname(syntaxConfig), `${index}${[".tsx", ".jsx"].includes(extname(file)) ? ".tsx" : ".ts"}`);
+			syntaxFs.writeFile!(input, text);
+			return { key, file, text, input };
+		});
+		syntaxFs.writeFile!(
+			syntaxConfig,
+			JSON.stringify({
+				compilerOptions: { noResolve: true, noLib: true, types: [], noEmit: true, jsx: "preserve" },
+				files: inputs.map(({ input }) => input),
+			}),
+		);
+		const snapshot = parser.updateSnapshot({
+			openProjects: [syntaxConfig],
+			...(parserProject ? { closeProjects: [parserProject] } : {}),
+		});
+		parserProject = syntaxConfig;
+		try {
+			const program = snapshot.getProject(syntaxConfig)?.program;
+			if (!program) throw new Error(`missing virtual project: ${syntaxConfig}`);
+			for (const { key, file, text, input } of inputs) {
+				const source = program.getSourceFile(input);
+				if (!source) throw new Error(`missing virtual AST: ${file}`);
+				if (source.text !== text) throw new Error(`stale virtual AST: ${file}`);
+				referenceCache.set(key, readReferences(source));
+			}
+		} finally {
+			snapshot.dispose();
+		}
+	}
+	function references(file: string, text: string): Reference[] {
+		const key = referenceKey(file, text);
+		if (!referenceCache.has(key)) cacheReferences([file], { readFile: () => text });
+		return referenceCache.get(key)!;
+	}
+	function readReferences(source: ts.SourceFile): Reference[] {
+		const result: Reference[] = [];
+		function visit(node: ts.Node): void {
+			let specifier: ts.Node | undefined;
+			let typeOnly = false;
+			if (ts.isImportDeclaration(node)) {
+				specifier = node.moduleSpecifier;
+				// With the reviewed verbatimModuleSyntax, inline `type` specifiers still emit a runtime import.
+				typeOnly = node.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword;
+			} else if (ts.isExportDeclaration(node)) {
+				specifier = node.moduleSpecifier;
+				typeOnly = node.isTypeOnly;
+			} else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+				specifier = node.moduleReference.expression;
+				typeOnly = node.isTypeOnly;
+			} else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+				specifier = node.argument.literal;
+				typeOnly = true;
+			} else if (
+				ts.isCallExpression(node) &&
+				(node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+					(ts.isIdentifier(node.expression) && node.expression.text === "require") ||
+					(ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "require"))
+			) {
+				specifier = node.arguments[0];
+			}
+			if (specifier && ts.isStringLiteralLikeNode(specifier)) result.push({ specifier: specifier.text, typeOnly });
+			node.forEachChild(visit);
+		}
+		visit(source);
+		return result;
+	}
+	function target(file: string, specifier: string, host: ImportHost, compilerOptions = options): string | null {
+		const base = resolve(project, compilerOptions.baseUrl ?? ".");
+		let candidates: string[] | undefined;
+		if (specifier.startsWith(".") || isAbsolute(specifier)) candidates = [resolve(dirname(file), specifier)];
+		else {
+			const aliases = Object.entries(compilerOptions.paths ?? {}).sort(
+				([a], [b]) => Number(b === specifier) - Number(a === specifier) || b.indexOf("*") - a.indexOf("*"),
+			);
+			for (const [alias, paths] of aliases) {
+				const star = alias.indexOf("*");
+				const matches =
+					star < 0
+						? alias === specifier
+						: specifier.startsWith(alias.slice(0, star)) && specifier.endsWith(alias.slice(star + 1));
+				if (!matches) continue;
+				const match = star < 0 ? "" : specifier.slice(star, specifier.length - alias.length + star + 1);
+				candidates = paths.map((path) => resolve(base, path.replace("*", match)));
+				break;
+			}
+		}
+		if (!candidates) {
+			if (specifier.startsWith("#")) throw new Error(`unresolved package alias: ${specifier}`);
+			return null; // External packages and node builtins are not application module edges.
+		}
+		for (const candidate of candidates) {
+			const extension = extname(candidate);
+			const stem = candidate.slice(0, candidate.length - extension.length);
+			const replacements =
+				extension === ".js"
+					? [stem + ".ts", stem + ".tsx"]
+					: extension === ".mjs"
+						? [stem + ".mts"]
+						: extension === ".cjs"
+							? [stem + ".cts"]
+							: [];
+			const paths = extension
+				? [...replacements, candidate]
+				: [
+						...extensions.map((suffix) => candidate + suffix),
+						...extensions.map((suffix) => join(candidate, "index" + suffix)),
+					];
+			const found = paths.find((path) => host.fileExists(path));
+			if (found) return found;
+		}
+		throw new Error(`unresolved local import: ${relative(project, file)} -> ${specifier}`);
+	}
+	function unreviewedReaderImporters(files: string[], host: ImportHost, compilerOptions = options): string[] {
+		cacheReferences(files, host);
+		return files
+			.filter(
+				(file) =>
+					file !== reader &&
+					references(file, host.readFile(file)!).some(
+						(ref) => target(file, ref.specifier, host, compilerOptions) === reader,
+					),
+			)
+			.filter((file) => !readerImporters.some((name) => file === join(server, name)))
+			.map((file) => relative(server, file))
+			.sort();
+	}
+	function enginePaths(host: ImportHost, entrypoints: string[], compilerOptions = options): string[][] {
+		const paths: string[][] = [];
+		const parsedImports = new Map<string, Reference[]>();
+		for (const root of entrypoints) {
+			const visited = new Set<string>();
+			function visit(file: string, path: string[]): void {
+				if (visited.has(file)) return;
+				visited.add(file);
+				let imports = parsedImports.get(file);
+				if (!imports) {
+					const text = host.readFile(file);
+					if (text === undefined) throw new Error(`missing graph module: ${relative(project, file)}`);
+					imports = references(file, text);
+					parsedImports.set(file, imports);
+				}
+				for (const ref of imports) {
+					const dependency = target(file, ref.specifier, host, compilerOptions);
+					if (!dependency) continue;
+					const next = [...path, relative(server, dependency)];
+					if (forbidden.has(dependency)) paths.push(next);
+					else visit(dependency, next);
+				}
+			}
+			visit(join(server, root), [root]);
+		}
+		return paths;
+	}
+	function cacheImports(host: ImportHost): Reference[] {
+		const file = join(server, "usage-accounting-meter-cache.ts");
+		return references(file, host.readFile(file)!).filter(
+			(ref) =>
+				!ref.typeOnly || target(file, ref.specifier, host) !== join(server, "usage-accounting-meter-contract.ts"),
+		);
+	}
+	function memoryHost(modules: Record<string, string>): ImportHost {
+		const files = new Map(Object.entries(modules).map(([name, text]) => [join(server, name), text]));
+		return {
+			fileExists: (file) => files.has(resolve(file)),
+			readFile: (file) => files.get(resolve(file)),
+		};
+	}
+	const forms = [
+		(specifier: string) => `import { value } from '${specifier}';`,
+		(specifier: string) => `import '${specifier}';`,
+		(specifier: string) => `export { value } from '${specifier}';`,
+		(specifier: string) => `export * from '${specifier}';`,
+		(specifier: string) => `void import('${specifier}');`,
+		(specifier: string) => `void require('${specifier}');`,
+		(specifier: string) => `void module.require('${specifier}');`,
+		(specifier: string) => `import value = require('${specifier}');`,
+		(specifier: string) => `void import(\`${specifier}\`);`,
+		(specifier: string) => `import type { Value } from '${specifier}';`,
+		(specifier: string) => `export type { Value } from '${specifier}';`,
+		(specifier: string) => `export type * from '${specifier}';`,
+		(specifier: string) => `type Value = import('${specifier}').Value;`,
+	];
+
+	it("keeps successive virtual texts and empty sources distinct, including cache hits", () => {
+		for (const name of ["fresh-control.ts", "fresh-control.tsx"]) {
+			const file = join(server, name);
+			const first = "import './fresh-runtime-control.js';";
+			const second = "export type { Value } from './fresh-type-control.js';";
+			expect(references(file, first)).toEqual([{ specifier: "./fresh-runtime-control.js", typeOnly: false }]);
+			expect(references(file, second)).toEqual([{ specifier: "./fresh-type-control.js", typeOnly: true }]);
+			expect(references(file, "")).toEqual([]);
+			expect(references(file, first)).toEqual([{ specifier: "./fresh-runtime-control.js", typeOnly: false }]);
+		}
+	});
+	// Native whole-tree setup crossed 5 s in the full gate; no runtime or mutation deadline changes.
+	it("admits only the exact W3/W6 reader importers throughout the production server tree", () => {
+		const files = serverFiles();
+		expect(files).toContain(reader);
+		expect(unreviewedReaderImporters(files, disk)).toEqual([]);
+	}, 15_000);
+	it("admits the reviewed reader edges but rejects unreviewed basenames, nested lookalikes and alternate syntax", () => {
+		for (const form of forms) {
+			const modules: Record<string, string> = { "usage-accounting-pi-sessions.ts": "export const value = 1;" };
+			for (const name of readerImporters) modules[name] = form("./usage-accounting-pi-sessions.js");
+			modules["unreviewed.ts"] = form("./usage-accounting-pi-sessions.js");
+			modules["usage-accounting-meter-cache.ts"] = form("./usage-accounting-pi-sessions.js");
+			modules["nested/usage-accounting-worker.ts"] = form("../usage-accounting-pi-sessions.js");
+			expect(
+				unreviewedReaderImporters(
+					Object.keys(modules).map((name) => join(server, name)),
+					memoryHost(modules),
+				),
+			).toEqual(["nested/usage-accounting-worker.ts", "unreviewed.ts", "usage-accounting-meter-cache.ts"]);
+		}
+	});
+	it("checks every real main-thread root and explicitly models only the undelivered W5 cache as empty", () => {
+		const cache = join(server, "usage-accounting-meter-cache.ts");
+		for (const root of roots.slice(0, 3)) expect(disk.fileExists(join(server, root)), root).toBe(true);
+		const cachePresent = disk.fileExists(cache);
+		// Not a skipped root: the future cache is still an entrypoint; once present its real source is inspected.
+		const host: ImportHost = {
+			fileExists: (file) => resolve(file) === cache || disk.fileExists(file),
+			readFile: (file) => (!cachePresent && resolve(file) === cache ? "" : disk.readFile(file)),
+		};
+		cacheReferences(serverFiles(), host); // Also batch real sources when this test runs in isolation.
+		expect(enginePaths(host, roots)).toEqual([]);
+		expect(cacheImports(host)).toEqual([]);
+	});
+	it.each(roots)("rejects every direct and helper-mediated engine mutation from %s", (root) => {
+		for (const engine of engines) {
+			for (const form of forms) {
+				const specifier = `./${engine.replace(/\.ts$/, ".js")}`;
+				const direct = memoryHost({ [root]: form(specifier), [engine]: "export const value = 1;" });
+				expect(enginePaths(direct, [root])).toEqual([[root, engine]]);
+				const indirect = memoryHost({
+					[root]: form("./innocent-helper.js"),
+					"innocent-helper.ts": form(specifier),
+					[engine]: "export const value = 1;",
+				});
+				expect(enginePaths(indirect, [root])).toEqual([[root, "innocent-helper.ts", engine]]);
+			}
+		}
+	});
+	it("resolves .js-to-.ts, directory indexes and tsconfig aliases through transitive reexports", () => {
+		const host = memoryHost({
+			"index.ts": "export * from './bridge';",
+			"bridge/index.ts": "export * from '@meter/usage-accounting-snapshot.js';",
+			"usage-accounting-snapshot.ts": "export const value = 1;",
+		});
+		const aliased = { ...options, paths: { "@meter/*": [join(server, "*")] } };
+		expect(enginePaths(host, ["index.ts"], aliased)).toEqual([
+			["index.ts", "bridge/index.ts", "usage-accounting-snapshot.ts"],
+		]);
+		expect(() => enginePaths(memoryHost({ "index.ts": "import './missing-helper.js';" }), ["index.ts"])).toThrow(
+			"unresolved local import",
+		);
+	});
+	it("permits safe contract/cache graphs, ignores comment/string decoys and terminates harmless cycles", () => {
+		const host = memoryHost({
+			"index.ts": "export * from './roles-overview.js';",
+			"roles-overview.ts": "export * from './usage-accounting-meter-cache.js'; export * from './safe-helper.js';",
+			"protocol.ts": "import type { Snapshot } from './usage-accounting-meter-contract.js';",
+			"usage-accounting-meter-cache.ts": "import type { Snapshot } from './usage-accounting-meter-contract.js';",
+			"usage-accounting-meter-contract.ts": "export interface Snapshot { generation: number }",
+			"safe-helper.ts":
+				"import './roles-overview.js'; // import './usage-accounting-collector.js'\n" +
+				"const text = \"require('./usage-accounting-snapshot.js')\";",
+		});
+		expect(enginePaths(host, roots)).toEqual([]);
+		expect(cacheImports(host)).toEqual([]);
+	});
+	it("does not mistake runtime-retained inline type specifiers for erased contract imports", () => {
+		for (const statement of [
+			"import { type Snapshot } from './innocent-helper.js';",
+			"export { type Snapshot } from './innocent-helper.js';",
+		]) {
+			const host = memoryHost({
+				"index.ts": statement,
+				"innocent-helper.ts": "export * from './usage-accounting-snapshot.js';",
+				"usage-accounting-snapshot.ts": "export interface Snapshot {}",
+			});
+			expect(enginePaths(host, ["index.ts"])).toEqual([
+				["index.ts", "innocent-helper.ts", "usage-accounting-snapshot.ts"],
+			]);
+		}
+	});
+	it("permits reviewed worker graphs without making snapshot builders safe for main-thread import", () => {
+		const modules: Record<string, string> = Object.fromEntries(
+			engines.map((engine) => [engine, "export const value = 1;"]),
+		);
+		modules["usage-accounting-worker.ts"] = engines
+			.map((engine) => `import './${engine.replace(/\.ts$/, ".js")}';`)
+			.join("\n");
+		modules["usage-accounting-pi-source.ts"] = "export * from './usage-accounting-pi-sessions.js';";
+		for (const root of roots) modules[root] = "";
+		const host = memoryHost(modules);
+		expect(enginePaths(host, roots)).toEqual([]);
+		expect(
+			unreviewedReaderImporters(
+				Object.keys(modules).map((name) => join(server, name)),
+				host,
+			),
+		).toEqual([]);
+		for (const root of roots) {
+			const escaped = memoryHost({ ...modules, [root]: "import './usage-accounting-worker.js';" });
+			expect(enginePaths(escaped, [root])).toContainEqual([
+				root,
+				"usage-accounting-worker.ts",
+				"usage-accounting-snapshot.ts",
+			]);
+		}
+	});
+	it("restricts the tiny cache to type-only meter-contract edges, not runtime contracts or unrelated helpers", () => {
+		for (const statement of [
+			"import { Snapshot } from './usage-accounting-meter-contract.js';",
+			"import { type Snapshot } from './usage-accounting-meter-contract.js';",
+			"export * from './safe-helper.js';",
+			"import type { Snapshot } from './usage-accounting-contract.js';",
+		]) {
+			const host = memoryHost({
+				"usage-accounting-meter-cache.ts": statement,
+				"usage-accounting-meter-contract.ts": "export interface Snapshot {}",
+				"usage-accounting-contract.ts": "export interface Snapshot {}",
+				"safe-helper.ts": "export const value = 1;",
+			});
+			expect(cacheImports(host)).toHaveLength(1);
+		}
+	});
+});
