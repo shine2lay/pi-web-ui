@@ -12,7 +12,8 @@ plans.** Security selects `usage-collector` as the same-service-UID Worker and
 the existing Temper protected key-file mechanism, not Pi's model-provider store.
 This is a logical application boundary, not a new isolated OS principal.
 General Temper named/shared/run keys are **REFUSED**. The corrected declaration
-`rm-8930526c` supersedes `rm-70831239`; it fixes the key and cursor design but
+`rm-8930526c`, as reconciled with its v2.1 paper artifact below, supersedes
+`rm-70831239`; it fixes the key and cursor design but
 also changes #309's coverage contract and expands #128's reader scope. Those
 plan deltas need their normal recorded approval before dependent work is queued.
 
@@ -53,7 +54,14 @@ that same-user isolation or live readiness has already been proved.
 Result: paper/source readback **HIT** after the broad-key and sequence-cursor
 corrections; security-design agreement is bounded as above. No implemented
 feed/auth runtime proof is claimed. Fixed cases below are acceptance obligations,
-not passes for absent code. Superseded complete-through expectations are not
+not passes for absent code.
+
+Readback hypothesis: the source artifact changed after the initial `852c7a9`
+review (v2 SHA `efa1f649c420...` to v2.1 SHA below), adopting Security's custody
+split and removing the proposed dedicated mount. Update this one note to pin and
+read back those exact bytes. Expected: no stale mount/ownership or rotation grant
+survives. Falsifier: a source mismatch or unreviewed custody transfer. Result:
+**HIT**, full v2.1 readback; no collector/auth code changed or runtime proof added. Superseded complete-through expectations are not
 silently retained: v1 coverage stays UNKNOWN.
 
 ## Reviewed sources, without reading live private data
@@ -69,10 +77,13 @@ silently retained: v1 coverage stays UNKNOWN.
 - Service metadata only: `pi-web-ui.service` is a user unit managed by UID 1000,
   `shinelay`; `User`/`Group` are unset, so it uses the user manager's identity.
   This does not inspect its environment, command-line credentials or private data.
-- Temper's corrected declaration `rm-8930526c` and exact paper artifact
-  `/home/shinelay/company-lab/usage-feed-3b/ROUTE-DESIGN-S0.md`, SHA-256
-  `efa1f649c4202be0df861ea20b08cc8ad5d22a0142b4e7e6e1335331695a4875`.
-  This supersedes `rm-70831239` after requests `rm-763c2ffb`/`rm-bf65cc98`.
+- Temper's corrected declaration `rm-8930526c`, reconciled with the full v2.1
+  paper artifact `/home/shinelay/company-lab/usage-feed-3b/ROUTE-DESIGN-S0.md`,
+  SHA-256 `236738c6559410e38810dc02895372ae588b383f48703d12a3eb68ee42409333`.
+  This replaces the initial v2 artifact
+  `efa1f649c4202be0df861ea20b08cc8ad5d22a0142b4e7e6e1335331695a4875`
+  after requests `rm-763c2ffb`/`rm-bf65cc98`; agreement is pinned, not a grant to
+  later mutable bytes.
   Its quoted dependencies include Ops `rm-638ae2a1`, Data's UNKNOWN rule and
   owner option-A record `dr-78ff2d0aa3a2`; Architecture's A implementation ruling
   is still open (`rm-f1e5f6d4`). This review does not close that ruling.
@@ -158,9 +169,10 @@ not a new native root producer or automatic stop. The rule is applied as follows
 
 The corrected design uses **`TEMPER_USAGE_FEED_KEYS_FILE`**, replacing
 `TEMPER_USAGE_FEED_KEYS`, which is never read and has no enabling effect. Default
-server path: `/app/usage-feed/keys.json`; host directory
-`/home/shinelay/.temper/usage-feed/` (0700), read-only mounted into the server
-alone, never worker/pi-worker/sealed boxes. No bearer is in any environment.
+registry path: `configs/api/local/usage-feed-keys.json`, in the existing
+read-only configs mount, git-ignored; no new compose mount/environment is needed.
+Other containers can read this hash-only registry, not the bearer. No bearer is
+in any environment.
 The registry contains at most 16 validated name/SHA-256 entries. Missing, empty,
 unreadable, malformed, any bad entry or too many names means **OFF for everyone**,
 even with global API auth off. No partial acceptance or broad-key fallback.
@@ -185,9 +197,10 @@ unreadable, unsafe or empty credential; no shared/run/general-key fallback.
 
 Keep raw keys outside every runner/server/box/repository mount. Compose currently
 loads `.env` into **both server and runner**; placing a bearer there would not be
-server-only custody. The corrected design keeps even the hash-only registry out
-of their shared config mounts; only the server gets its dedicated read-only mount.
-The raw credential necessarily reaches the authenticated route in request memory,
+server-only custody. In v2.1 the hash-only registry uses the existing read-only
+config mount: a SHA-256 digest of a random 256-bit key is not a bearer. Claiming
+that a separate mount creates same-UID isolation would be false. The raw
+credential necessarily reaches the authenticated route in request memory,
 not its registry/logs. Hash-store write authority stays with its custodian.
 These are intended grants, not a same-UID exclusion guarantee. No model worker
 or child process receives the bearer or credential contents.
@@ -210,18 +223,21 @@ A feed bearer must not authenticate on general API routes when those require
 auth. Existing anonymous reads/writes with global auth off are a separate exposure,
 not proof of feed-key permission or a stronger system-wide access guarantee.
 
-**Custody/rotation/revocation owner: Ops**, as delegated to S0 by Ops and stated
-in Temper's corrected declaration. Ops operates the native
-`scripts/api_key.py --feed` mechanism, raw-key load path and lifecycle; the worker itself may only
-read its selected raw file. **Temper remains owner of the route, accepted-key
-configuration/registry format, policy and supported update mechanism**. This
-separates operational custodianship from Temper's code/configuration ownership;
-it does not give the collector registry-write or general API authority.
-Security owns this review. No role is asked to print/read a raw key in chat.
-A separately authorized rotation creates a second dedicated name/file, switches
-the worker, verifies the new path, then removes the old accepted hash using the
-supported mechanism. Revocation removes the accepted hash and the worker
-stops/reports unavailable; Ops verifies refusal without printing a key.
+**Agreed operational split (v2.1): Temper applies accepted-key additions and
+removals** with the supported `scripts/api_key.py --feed` host mechanism, which
+writes/deletes the protected raw file without exposing its contents to a chat.
+**Ops owns the collector's raw-file load and rotation timing/coordination**.
+Temper owns the route, registry and script; Security agrees changes to this split.
+The worker itself may only read its selected raw file, never write the registry
+or gain general API authority. No role reads, prints or copies raw key contents
+into chat. This preserves the approved Temper accepted-key ownership.
+
+A separately authorized rotation has Temper remove then add `usage-collector`
+at the same protected path; the collector re-reads after 403. A transient refusal
+is delay, never cursor loss or evidence deletion. This v2.1 protocol replaces
+the initial two-name overlap proposal. Temper revokes promptly on Ops/Security
+request; the owner retains the direct supported revoke path. Ops verifies refusal
+without printing a key.
 Reload/revoke must take effect on the next request with no stale-cache or restart
 dependency. Preserve accounting evidence. Adding the first accepted hash and
 reader-epoch initialization are **activation**, requiring separate approval.
@@ -266,8 +282,9 @@ identity/epoch/anchor, regression, instance change or uninitialized reader gets
 a closed 409; unreadable identity/not-primary gets an unavailable 503. The
 private identity is never in a cursor, DTO or log. Same-identity rollback with
 an unchanged anchor remains a declared limitation, not a claimed detection.
-New epoch/identity DB code, host script and mount changes belong to #128's
-expanded plan/Architecture ruling and normal approvals, not this docs-only task.
+New epoch/identity DB code and host script belong to #128's expanded
+plan/Architecture ruling and normal approvals, not this docs-only task. v2.1
+removes the dedicated hash-store mount change; no compose change is agreed.
 
 Off, 403, timeout, malformed/oversized page, storage error or protocol mismatch
 keeps the last good cursor and evidence unchanged, with an explicit unavailable
@@ -314,7 +331,7 @@ No live credential, feed request or model call is authorized to satisfy this tab
   task/payer roots, G12/G13 and ACP gaps remain separate owed sources.
 - **Temper** corrected paper design `rm-8930526c` received and read at the exact
   hash above. Record the agreed design and custody split in #128's public
-  contract/plan. Its expanded epoch/identity/host-script/mount scope, #126/#127
+  contract/plan. Its expanded epoch/identity/host-script scope, #126/#127
   knock-ons and proposed #128a/#128b split need normal plan approval and the
   still-open Architecture ruling. Exact-byte Security review **of the actual
   implementation before land** and fixed-input component tests remain owed.
@@ -338,6 +355,10 @@ Executed once after the review edits: **16/16 numeric capture fixtures PASS**
 header cases, three parser cases including partial-load negative control, two
 full-hash-visit cases, one unrestricted-general-key case). Only assertion counts
 were emitted; no live credentials, sessions, feed, database or model were read.
+The v2.1 readback changes only this note; the exercised source modules are unchanged
+from those fixture baselines. First normal landing: `852c7a9`, request
+`143-a162ae`, notes gate **3 files / 103 tests PASS**. The v2.1 follow-up receives
+its own normal landing check/receipt; it does not rerun unrelated source fixtures.
 
 The normal docs-only landing uses detached `wt land`, including the configured
 notes gate and any rebase/recheck it requires. Final commit, gate result and
