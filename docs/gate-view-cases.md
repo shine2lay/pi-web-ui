@@ -107,4 +107,50 @@ The times stay where they were, as they should with unchanged bodies: before and
 
 ## Result
 
-Pending. The count of these cases' timeouts in the pi-web-ui land logs after this change lands, with each case's times in this task's own land gate, is scheduled for 2026-10-21 12:00 PDT (to 2026-10-22 12:00 PDT once, if there are fewer than 10 lands by then). HIT or MISS goes here.
+**HIT — checked 2026-10-21 12:00 PDT.** None of the six cases timed out in the next 10 qualifying pi-web-ui lands. None timed out in all 28 qualifying land attempts available by the check time, either. No second wake-up is needed.
+
+This is the no-timeout bar, not a claim that the cases got faster. None was split, so the split-piece speed bars have nothing to measure. The same 36 assertions and inputs remain in place.
+
+### This task's own land
+
+Land request `115-82c04d` landed `da8b45ff087da6d2b62abbb1730a9fa63fddd123` on `mine` and `origin/mine` at 2026-10-19 23:31 PDT (receipt `land1/ended`: 2026-10-20T06:31:06+00:00). Its unit gate took 157 s: 455 files, 6549 tests passed, zero timeouts anywhere. The per-case times from `~/.cache/pi/receipts/gate-view-cases/land1/land.log` are below.
+
+| # | Own land gate | Slowest in next 10 lands | Request with that time | Slowest in all 28 land attempts | Own limit | Timeouts in next 10 / all 28 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 1392 ms | 5722 ms | `125-10cfad` | 5722 ms | 15000 ms | 0 / 0 |
+| 2 | 1755 ms | 4987 ms | `125-10cfad` | 4987 ms | 15000 ms | 0 / 0 |
+| 3 | 1399 ms | 2139 ms | `120-681236` | 2489 ms (`146-416634`) | 15000 ms | 0 / 0 |
+| 4 | 2057 ms | 4361 ms | `124-c44f62` | 4361 ms | 15000 ms | 0 / 0 |
+| 5 | 1674 ms | 2973 ms | `121-b91ed9` | 2997 ms (`135-c617d4`) | 15000 ms | 0 / 0 |
+| 6 | 2630 ms | 7603 ms | `121-b91ed9` | 7603 ms | 15000 ms | 0 / 0 |
+
+Cases 1 and 6 passed despite exceeding their old 5000 ms limit. The slowest observation used 50.7% of its own 15000 ms limit.
+
+### The next 10 lands
+
+Counted in native land-request order after `115-82c04d` ended, including failed gates; a successful batch counts once. Every listed gate has vitest's `Test Files` summary and results for all five affected unit files. The dates below are the gate's end time, in Pacific time.
+
+| # | Land request | Gate ended (PDT) | Land result | Evidence |
+| --- | --- | --- | --- | --- |
+| 1 | `116-8e8616` (batch with `117-c6d71e`) | Oct 19 23:35:59 | succeeded | `~/kept-from-tmp/2026-10-18/pages-live/land-result.log` |
+| 2 | `119-2c2f5d` | Oct 20 09:17:31 | failed, not one of these cases | `/tmp/stall-bt/land.log` |
+| 3 | `120-681236` | Oct 20 09:35:26 | succeeded | `/tmp/stall-bt/land2.log` |
+| 4 | `121-b91ed9` | Oct 20 10:45:30 | failed, not one of these cases | `/tmp/stall-bt/land3.log` |
+| 5 | `122-1e8cb3` | Oct 20 11:04:36 | succeeded | `/tmp/stall-bt/land4.log` |
+| 6 | `124-c44f62` | Oct 20 12:06:26 | failed, not one of these cases | user journal, `ops284-stall-land.service` |
+| 7 | `125-10cfad` | Oct 20 12:14:19 | succeeded | user journal, `ops284-stall-land-2.service` |
+| 8 | `127-2c9075` | Oct 20 14:04:43 | succeeded | user journal, `ops-293-usage-accounting-land.service` |
+| 9 | `128-b9c1fb` | Oct 20 14:36:20 | succeeded | user journal, `ops-302-land.service` |
+| 10 | `129-bc7d30` | Oct 20 14:41:54 | succeeded | user journal, `ops-300-usage-collector-land.service` |
+
+### Counting method and additional observations
+
+Read-only scanner: `~/.cache/pi/receipts/gate-view-cases/verdict-scan.py`. It reads the saved land logs (including `land-result.log`, other `*land*.log` names and `/tmp` logs) plus the native user journal through 2026-10-21 12:00 PDT. It joins each `wt: land request … (pi-web-ui: …)` header to `~/projects/pi-web-ui/.git/wt-land-queue/<id>.json`, uses recorded start/end times rather than a log file's modification time, deduplicates copied output and successful batch members, and matches each case by its owning file and full name. Actual `Error: Test timed out in …ms.` failures are counted, not a case name containing the word "timeout". The scanner emits only gate metadata, case times and failure names.
+
+There were 40 native land-request records after this task through the check time. Deduplicating batch `116`/`117`, excluding ten docs-only notes checks (`118`, `123`, `126`, `134`, `138`, `140`, `143`, `144`, `145`, `152`) and excluding `139` (stopped before unit tests) leaves **28 distinct land attempts/groups**. Request `132-7d50a1` contains a failed combined-batch gate followed by its solo fallback: retain both checks' observations and failures, but count that request once. Thus the 28 attempts contain 29 full unit-suite executions, not duplicate credit for the batch or for saved/journal copies of the same output.
+
+The additional 18 attempts after the required ten were `130`, `131`, `132`, `133`, `135`, `136`, `137`, `141`, `142`, `146`, `147`, `148`, `149`, `150`, `151`, `153`, `154`, `155`; the last ended Oct 21 00:02:48 PDT. These are an additional observation, not needed for the next-10 verdict. Each case has a listed time in all ten primary gates. Across the larger set, unlisted passing cases have no exact duration in vitest's default reporter; no value was invented for them.
+
+**Other timeout, out of scope and recorded only:** land `121-b91ed9`, `tests/unit/role-message-guard-core.test.ts`, "E one explicit Owner escalation (Ops rm-1bb3c77b) > a crash at any store boundary of the transition leaves all of it, none of it, or an unknown hold": `Error: Test timed out in 5000ms.` This was the only other test timeout in these 28 land attempts. It does not change this hypothesis's verdict; failed lands were not discarded to get a passing sample.
+
+This verdict is a docs-only land. No app, test, gate or global-limit changes, no retries initiated by this task, no model calls, real chats or deployment.
