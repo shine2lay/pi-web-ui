@@ -10,7 +10,8 @@
 #   - a fresh temp HOME, PI_CODING_AGENT_DIR, PI_WEB_DATA_DIR and TMPDIR, removed afterwards;
 #     made in memory (/dev/shm) when it has 8 GB free, else under ${TMPDIR:-/tmp};
 #     PI_SEALED_TMP_PARENT=<folder> picks the folder instead (PI_SEALED_TMP_PARENT=/tmp: on disk, as before);
-#   - a clean environment: only PATH, locale and terminal variables survive. No model keys or
+#   - a clean environment: only PATH, locale, terminal variables and an explicitly bounded Vitest
+#     worker count (VITEST_MAX_WORKERS=1, 2, 3 or 4) survive. No model keys or
 #     tokens, and none of the live server's PI_WEB_PORT / PI_WEB_DATA_DIR (a chat's shell has them);
 #   - the temp pi folder gets a stand-in model that can't be reached (provider "fastfail" at
 #     127.0.0.1:1, a dummy key, automatic retry off): tests were written on machines where pi is set
@@ -43,6 +44,16 @@ done
 if [ $# -eq 0 ]; then
 	sed -n '2,6p' "$0" >&2
 	exit 2
+fi
+
+# Opt-in runner limit only: reject noncanonical values before allocating a temporary home.
+# Keep this after the already-sealed fast path; do not inherit any other VITEST_* settings.
+vitest_env=()
+if [ "${VITEST_MAX_WORKERS+x}" = x ]; then
+	case "$VITEST_MAX_WORKERS" in
+	1 | 2 | 3 | 4) vitest_env+=("VITEST_MAX_WORKERS=$VITEST_MAX_WORKERS") ;;
+	*) echo "[sealed] VITEST_MAX_WORKERS must be exactly 1, 2, 3 or 4" >&2; exit 2 ;;
+	esac
 fi
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -90,7 +101,7 @@ log="$root/fence.log"
 sessions_before="$(ls -A "$real_sessions" 2>/dev/null)"
 
 # The environment: a short list survives, everything else (keys, tokens, PI_WEB_*) is dropped.
-envs=()
+envs=("${vitest_env[@]}")
 for v in PATH LANG LANGUAGE LC_ALL LC_CTYPE LC_MESSAGES TERM COLORTERM NO_COLOR FORCE_COLOR USER LOGNAME SHELL TZ CI PI_WEB_CHROME PI_QUEUE_PKG PI_IDENTITY_PKG; do
 	if [ -n "${!v+x}" ]; then envs+=("$v=${!v}"); fi
 done

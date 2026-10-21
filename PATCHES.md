@@ -10,6 +10,12 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## sealed-vitest-workers: preserve only an explicit canonical one-to-four Vitest worker limit
+
+- `local` (Ops #331, prerequisite for #311; H-SEALED-FANOUT-1). Crowded unit-test fan-out can exhaust an unchanged collector time guard; whole-process CPU affinity also starves the other gate steps. `scripts/sealed.sh` preserves explicitly inherited `VITEST_MAX_WORKERS` only when it is exactly ASCII `1`, `2`, `3` or `4`; unset remains absent. Any other value, including empty, fails with a fixed redacted diagnostic before temporary-home allocation. No other runner variable survives, and the already-sealed fast path, mandatory Node fence, isolated folders, dummy model, secret/live-setting stripping and cleanup stay unchanged.
+- Checks: `tests/unit/sealed-fence.test.ts` resolves the installed Vitest configuration for unset and all four valid values, checks continued environment isolation and cleanup, and rejects fixed invalid/shell-text cases before allocation, command execution or interpolation. Old-code inherited-value counterfactual, then the unchanged sealed normal gate and ordinary detached `wt land` hooks with `VITEST_MAX_WORKERS=4`, real HOME and normal CPU availability. This proves runner passthrough, not #311's collector gate; #311 must rebase and pass that separately, without changing its 100 ms guard or numeric checks.
+- Undo: revert this patch; alternatively omit the variable to retain the existing default. No app install or restart.
+
 ## role-message-hourly-exempt: no hourly limit for Temper and Ops, with every other message guard unchanged
 
 - `local` (Owner, 2026-10-20, dr-c6daedfa9fef; Ops #318). Owner: "temper and ops have no limit"; Ops chose no hourly backstop. Hypothesis H-MSGCAP-EXEMPT-1 and its evidence: `docs/role-message-ladder.md`.

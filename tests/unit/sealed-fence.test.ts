@@ -6,6 +6,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	readdirSync,
 	rmSync,
 	statfsSync,
 	writeFileSync,
@@ -443,6 +444,182 @@ describe("scripts/sealed.sh", { timeout: 60_000 }, () => {
 		});
 		expect(r.status).toBe(0);
 		expect(JSON.parse(r.stdout.trim().split("\n")[0])).toEqual([]);
+	});
+
+	describe("its explicit Vitest worker limit", () => {
+		let scratch: string;
+		beforeAll(() => {
+			scratch = mkdtempSync(join(tmpdir(), "sealed-workers-test-"));
+		});
+		afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+
+		it.each([undefined, "1", "2", "3", "4"])(
+			"passes only inherited Vitest worker %s to the installed Vitest configuration",
+			(workers) => {
+				const code = `
+					import fs from "node:fs";
+					import { createVitest } from "vitest/node";
+					const ctx = await createVitest({ watch: false, root: process.cwd() });
+					try {
+						const agent = process.env.PI_CODING_AGENT_DIR;
+						const auth = JSON.parse(fs.readFileSync(agent + "/auth.json", "utf8"));
+						const models = JSON.parse(fs.readFileSync(agent + "/models.json", "utf8"));
+						const settings = JSON.parse(fs.readFileSync(agent + "/settings.json", "utf8"));
+						console.log(JSON.stringify({
+							workers: process.env.VITEST_MAX_WORKERS ?? null,
+							maxWorkers: ctx.config.maxWorkers ?? null,
+							otherVitest: process.env.VITEST_MIN_WORKERS ?? null,
+							sealed: process.env.PI_SEALED,
+							fenced: !!globalThis[Symbol.for("pi.sealed.fence")],
+							nodeOptions: process.env.NODE_OPTIONS,
+							root: process.env.PI_SEALED_ROOT,
+							home: process.env.HOME,
+							tmp: process.env.TMPDIR,
+							agentDir: agent,
+							dataDir: process.env.PI_WEB_DATA_DIR,
+							privateKeys: Object.keys(process.env).filter((k) => /KEY|TOKEN|PI_WEB_PORT/.test(k)),
+							dummyOnly: Object.keys(auth).length === 1 && auth.fastfail.key === "sealed-test-dummy"
+								&& Object.keys(models.providers).length === 1
+								&& models.providers.fastfail.apiKey === "sealed-test-dummy"
+								&& models.providers.fastfail.baseUrl === "http://127.0.0.1:1"
+								&& settings.retry.enabled === false,
+						}));
+					} finally { await ctx.close(); }
+				`;
+				const r = spawnSync(
+					"bash",
+					[join(repo, "scripts", "sealed.sh"), process.execPath, "--input-type=module", "-e", code],
+					{
+						cwd: repo,
+						env: {
+							PATH: process.env.PATH,
+							PI_SEALED: "",
+							PI_SEALED_TMP_PARENT: scratch,
+							...(workers === undefined ? {} : { VITEST_MAX_WORKERS: workers }),
+							VITEST_MIN_WORKERS: "123",
+							NODE_OPTIONS: "--require /nonexistent/caller-hook.cjs",
+							PI_WEB_PORT: "8787",
+							PI_WEB_DATA_DIR: "/nonexistent/live-data",
+							PI_CODING_AGENT_DIR: "/nonexistent/live-agent",
+							ANTHROPIC_API_KEY: "fake-test-key",
+							CLAUDE_CODE_OAUTH_TOKEN: "fake-test-token",
+						},
+						encoding: "utf8",
+						timeout: 60_000,
+					},
+				);
+				expect(r.error).toBeUndefined();
+				expect(r.status, r.stderr).toBe(0);
+				const seen = JSON.parse(r.stdout.trim().split("\n").pop() ?? "") as {
+					root: string;
+					home: string;
+				};
+				expect(seen).toMatchObject({
+					workers: workers ?? null,
+					maxWorkers: workers === undefined ? null : Number(workers),
+					otherVitest: null,
+					sealed: "1",
+					fenced: true,
+					nodeOptions: `--require ${FENCE}`,
+					home: join(seen.root, "home"),
+					tmp: join(seen.root, "tmp"),
+					agentDir: join(seen.root, "home", ".pi", "agent"),
+					dataDir: join(seen.root, "home", ".pi-web-ui"),
+					privateKeys: [],
+					dummyOnly: true,
+				});
+				expect(dirname(seen.root)).toBe(scratch);
+				expect(existsSync(seen.root)).toBe(false);
+				expect(readdirSync(scratch)).toEqual([]);
+			},
+		);
+
+		it.each([
+			"allocation-control",
+			"",
+			"0",
+			"5",
+			"04",
+			"+4",
+			"-1",
+			"4.0",
+			"1e0",
+			"10%",
+			"NaN",
+			"Infinity",
+			" ",
+			" 4",
+			"4 ",
+			"\t4",
+			"4\n",
+			"\n4",
+			"٤",
+			"４",
+			"shell-semicolon",
+			"shell-substitution",
+			"shell-backtick",
+		])("handles worker refusal/control case %# without running commands", (input) => {
+			const attempt = mkdtempSync(join(scratch, "invalid-"));
+			const bin = join(attempt, "bin");
+			const roots = join(attempt, "roots");
+			const allocation = join(attempt, "allocation-called");
+			const command = join(attempt, "command-ran");
+			const interpolation = join(attempt, "interpolation-ran");
+			mkdirSync(bin);
+			mkdirSync(roots);
+			// Even a root allocated and then cleaned up is a failure: observe the allocation attempt itself.
+			writeFileSync(join(bin, "mktemp"), '#!/bin/sh\n: > "$SEALED_TEST_ALLOCATION_MARKER"\nexit 91\n', {
+				mode: 0o755,
+			});
+			const workers =
+				input === "allocation-control"
+					? "4"
+					: input === "shell-semicolon"
+						? `4; touch '${interpolation}'`
+						: input === "shell-substitution"
+							? `$(touch '${interpolation}')`
+							: input === "shell-backtick"
+								? `\`touch '${interpolation}'\``
+								: input;
+			try {
+				const r = spawnSync(
+					"bash",
+					[
+						join(repo, "scripts", "sealed.sh"),
+						process.execPath,
+						"-e",
+						`require("node:fs").writeFileSync(${JSON.stringify(command)}, "ran")`,
+					],
+					{
+						cwd: repo,
+						env: {
+							PATH: `${bin}:${process.env.PATH ?? ""}`,
+							PI_SEALED: "",
+							VITEST_MAX_WORKERS: workers,
+							PI_SEALED_TMP_PARENT: roots,
+							TMPDIR: roots,
+							SEALED_TEST_ALLOCATION_MARKER: allocation,
+						},
+						encoding: "utf8",
+						timeout: 60_000,
+					},
+				);
+				expect(r.error).toBeUndefined();
+				expect(r.status).toBe(2);
+				expect(r.stdout).toBe("");
+				expect(r.stderr).toBe(
+					input === "allocation-control"
+						? `[sealed] can't make the temp home in ${roots}; it goes under ${roots}\n`
+						: "[sealed] VITEST_MAX_WORKERS must be exactly 1, 2, 3 or 4\n",
+				);
+				expect(existsSync(allocation)).toBe(input === "allocation-control");
+				expect(existsSync(command)).toBe(false);
+				expect(existsSync(interpolation)).toBe(false);
+				expect(readdirSync(roots)).toEqual([]);
+			} finally {
+				rmSync(attempt, { recursive: true, force: true });
+			}
+		});
 	});
 
 	// Where the temp root goes (docs/gate-tmpfs.md): in memory, /dev/shm, when it is a writable folder with at
