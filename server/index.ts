@@ -2755,6 +2755,11 @@ wss.on("connection", (ws, req) => {
 				send(roleMessagesMessage());
 				break;
 			case "roles_watch":
+				// W7: optional DOM acknowledgement belongs to this existing socket/watch, not a new watch.
+				if (msg.renderedUsage !== undefined) {
+					if (msg.full === true) rolesWatch.acknowledgeUsage(ws, msg.renderedUsage);
+					break;
+				}
 				// roles-overview: the Roles page opened (full) or a top bar wants the count of asks.
 				rolesWatch.watch(ws, msg.full === true, send);
 				break;

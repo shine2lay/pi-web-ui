@@ -1826,7 +1826,7 @@ export type ClientMessage =
 	  }
 	/** roles-overview: the Roles page wants the snapshot and its updates (full) or just the ask count for
 	 *  the top bar (count); roles_unwatch stops them. */
-	| { type: "roles_watch"; full: boolean }
+	| { type: "roles_watch"; full: boolean; renderedUsage?: UiRolesUsageRenderAck }
 	| { type: "roles_unwatch" }
 	/** initiatives-page: the Initiatives tab wants its page and its updates: the initiatives with their
 	 *  counts, the reader's state, and one initiative's decisions ("" = Unfiled; left out = the first
@@ -2494,6 +2494,55 @@ export interface UiRoleConfigHistory {
 	changes: UiRoleConfigChange[];
 }
 
+/** W7: closed reporting-only scalar projection; no leaves, paths, producer ids or permission. */
+export interface UiRoleUsageGeneration {
+	epoch: string;
+	sequence: number;
+}
+export type UiRoleUsageSource =
+	| {
+			index: number;
+			kind: "pi" | "acp" | "metadata";
+			required: boolean;
+			enabled: boolean;
+			state: "complete" | "partial" | "unknown" | "unavailable";
+			coveredThrough: string | null;
+			observedAt: string | null;
+			lastProgressAt: string | null;
+			stalled: boolean;
+			alarm: "source-stalled" | null;
+	  }
+	| import("./usage-accounting-meter-contract.js").MeterTemperSourceStatus;
+export interface UiRoleUsageCost {
+	v: "role-usage-cost/1";
+	reportingOnly: true;
+	role: string;
+	generation: UiRoleUsageGeneration | null;
+	evaluatedAt: string | null;
+	weekStart: string | null;
+	/** Admitted native receipt supplied by W6, never evaluation/page/client time. */
+	firstNativeObservedAt: number | null;
+	state: "ready" | "recovering" | "stale" | "unavailable" | "waiting-for-previous-writer";
+	storage: "healthy" | "partial" | "unavailable";
+	inventory: "complete" | "partial" | "unavailable";
+	usage: Omit<import("./usage-accounting-meter-contract.js").MeterSubjectSnapshot, "subject"> | null;
+	sources: UiRoleUsageSource[];
+	faults: import("./usage-accounting-meter-contract.js").MeterFaultCount[];
+}
+/** Optional DOM-completion telemetry, not paint, human observation or accounting authority. */
+export interface UiRolesUsageRenderAck {
+	watch: number;
+	role: string;
+	generation: UiRoleUsageGeneration;
+}
+export interface UiRolesUsageRenderTiming extends UiRolesUsageRenderAck {
+	pushedAt: number;
+	acknowledgedAt: number;
+	firstNativeObservedAt: number | null;
+	pushToAckMs: number;
+	firstObservationToAckMs: number | null;
+}
+
 /** roles-overview: one role on the Roles page. */
 export interface UiRoleOverview {
 	id: string;
@@ -2531,6 +2580,8 @@ export interface UiRoleOverview {
 	report: UiRoleReport;
 	/** Own-work spend.json; optional for older app snapshots. */
 	spend?: UiRoleSpend;
+	/** W7: automatic known subtotals, separate from the unchanged manual reference. */
+	usageCost?: UiRoleUsageCost;
 	/** roles-instructions: optional for older app snapshots. */
 	instructions?: UiRoleInstructions;
 	/** roles-config-history: absent before the recorder's first snapshot of it (and from an older server). */
@@ -5196,7 +5247,17 @@ export type ServerMessage =
 	  }
 	/** roles-overview: the snapshot (full watchers), or just the open asks' count (count watchers);
 	 *  error: it couldn't be made (the page keeps what it had). */
-	| { type: "roles"; overview?: UiRolesOverview; asks: number; error?: string; checkedAt?: number }
+	| {
+			type: "roles";
+			overview?: UiRolesOverview;
+			asks: number;
+			error?: string;
+			checkedAt?: number;
+			/** Per-connection full-watch binding; only sent with a full overview. */
+			usageRender?: { watch: number; pushedAt: number };
+			/** Server-clock timing of an accepted optional rendered-generation ack. */
+			usageRenderTiming?: UiRolesUsageRenderTiming;
+	  }
 	/** initiatives-page: the Initiatives tab's page (watchers get it again when it changes); error: it
 	 *  couldn't be made (the page keeps what it had). */
 	| { type: "initiatives"; page?: UiDecisionsPage; error?: string }

@@ -18,6 +18,8 @@ import {
 	object,
 	plain,
 	projectSpend,
+	projectRoleUsageCost,
+	type UsefulUsageCost,
 	record,
 	roleId,
 	taskId,
@@ -178,6 +180,7 @@ export interface PanelReport {
 }
 export interface RolePanel {
 	spend?: UsefulSpend | null;
+	usageCost?: UsefulUsageCost | null;
 	roleId: string;
 	roleLabel: string;
 	status: PanelRoleStatus;
@@ -481,7 +484,7 @@ function reportOf(raw: unknown): PanelReport {
 }
 
 /** One role's panel from the received snapshot, or null when that role isn't in it (once). */
-export function projectRolePanel(state: unknown, id: string): RolePanel | null {
+export function projectRolePanel(state: unknown, id: string, now = Date.now()): RolePanel | null {
 	const input = object(state);
 	const overview = object(input?.overview);
 	const rows = Array.isArray(overview?.roles) ? overview.roles : [];
@@ -648,6 +651,7 @@ export function projectRolePanel(state: unknown, id: string): RolePanel | null {
 		roleId: id,
 		roleLabel: labels.get(id) ?? id,
 		spend: projectSpend(row.spend),
+		usageCost: projectRoleUsageCost(row.usageCost, id, now),
 		status: oneOf(ROLE_STATUSES, row.status) ?? "unknown",
 		focus: plain(row.focus, FOCUS_LIMIT)?.text ?? null,
 		workMode: oneOf(["self-start", "request-only"] as const, row.workMode),

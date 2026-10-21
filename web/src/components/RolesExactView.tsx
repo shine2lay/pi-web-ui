@@ -4,10 +4,22 @@ import { liveVisibleAt, subscribePageLive } from "../page-live";
 import { exactRolesFonts } from "../roles-exact-fonts";
 import { projectExactRoles } from "../roles-exact-model";
 import { createExactRolesView } from "../roles-exact-view";
-import { reloadRoles, useRoles } from "../roles-state";
+import { acknowledgeRenderedRolesUsage, reloadRoles, useRoles } from "../roles-state";
 import { bindRolesSurface, prepareRolesDocument, type FontBytes } from "../roles-u0/surface";
 import type { NeedsYouItem, UsefulOpenTarget } from "../roles-useful-model";
 import { RoleAnswerDialog } from "./RoleAnswerDialog";
+
+/** The real update/refit completion seam, also exercised with a synthetic bound DOM. */
+export function updateRolesUsageDOM(
+	binding: { update(): void } | null,
+	refit: () => boolean,
+	finished: () => void,
+): void {
+	if (!binding) return;
+	binding.update();
+	for (let pass = 0; pass < 3 && refit(); pass++) binding.update();
+	finished();
+}
 
 /** The actual Roles surface, not a preview. The supplied template is isolated from app themes;
  * data comes from the existing safe projections, never the design's fictional example records.
@@ -36,8 +48,8 @@ export function RolesExactView({
 		() => projectExactRoles(state, connection, now, { visibleAt }),
 		[state, connection, now, visibleAt],
 	);
-	const current = useRef({ model, onOpen, onAbout });
-	current.current = { model, onOpen, onAbout };
+	const current = useRef({ model, state, active, connection, onOpen, onAbout });
+	current.current = { model, state, active, connection, onOpen, onAbout };
 	const redraw = useRef<(() => void) | null>(null);
 	const hide = useRef<(() => void) | null>(null);
 	useEffect(() => {
@@ -55,7 +67,7 @@ export function RolesExactView({
 	}, [active, graceUntil]);
 	useEffect(() => {
 		redraw.current?.();
-	}, [model]);
+	}, [model, active, connection]);
 	useEffect(() => {
 		if (!active) {
 			hide.current?.();
@@ -102,18 +114,33 @@ export function RolesExactView({
 					queued = null;
 					if (disposed) return;
 					try {
-						binding?.update();
-						// roles-small-fixes: the header or graph changed size while the values were applied; plan again before paint.
-						for (let pass = 0; pass < 3 && view.refit(); pass++) binding?.update();
-						for (const link of doc.querySelectorAll<HTMLAnchorElement>('a[href^="#exact-route:"]')) {
-							const enabled = view.canNavigate((link.getAttribute("href") ?? "").slice("#exact-route:".length));
-							link.setAttribute("aria-disabled", String(!enabled));
-							link.tabIndex = enabled ? 0 : -1;
-							link.style.opacity = enabled ? "1" : "0.45";
-						}
-						const open = view.isOpen();
-						if (open && !wasOpen) doc.querySelector<HTMLButtonElement>('[role="region"] button')?.focus();
-						wasOpen = open;
+						// Completion is after actual binding/refits, never values(), receipt or server push.
+						updateRolesUsageDOM(
+							binding,
+							() => view.refit(),
+							() => {
+								for (const link of doc.querySelectorAll<HTMLAnchorElement>('a[href^="#exact-route:"]')) {
+									const enabled = view.canNavigate((link.getAttribute("href") ?? "").slice("#exact-route:".length));
+									link.setAttribute("aria-disabled", String(!enabled));
+									link.tabIndex = enabled ? 0 : -1;
+									link.style.opacity = enabled ? "1" : "0.45";
+								}
+								const open = view.isOpen();
+								if (open && !wasOpen) doc.querySelector<HTMLButtonElement>('[role="region"] button')?.focus();
+								wasOpen = open;
+								const rendered = current.current;
+								if (
+									disposed ||
+									!rendered.active ||
+									rendered.connection !== "open" ||
+									!frame.isConnected ||
+									document.visibilityState !== "visible" ||
+									!rendered.state.overview
+								)
+									return;
+								acknowledgeRenderedRolesUsage(rendered.state.overview, view.usageRenderCandidates());
+							},
+						);
 					} catch {
 						fail();
 					}
@@ -198,6 +225,7 @@ export function RolesExactView({
 				view.dispose();
 				binding?.dispose();
 			};
+			update();
 		}
 		void mount().catch(fail);
 		return () => {

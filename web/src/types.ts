@@ -8,6 +8,7 @@
  *
  * 只放**前端本地**的类型（不属于 wire 协议的 UI 数据结构）在下方。
  */
+// W7 usageCost and rendered-generation telemetry use this same type-only export; no runtime accounting imports.
 export type * from "../../server/protocol";
 
 // 本地类型引用到的协议类型（export type * 不会把名字带进本地作用域）

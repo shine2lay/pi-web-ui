@@ -180,6 +180,384 @@ export function projectSpend(value: unknown): UsefulSpend | null {
 		}
 	return { state, line: line.text, amounts, initiatives };
 }
+/** Exact scalar-only automatic view; no budget ratio, allowance or arithmetic on money. */
+export interface UsefulUsageCost {
+	value: import("./types").UiRoleUsageCost;
+	stale: boolean;
+	lines: string[];
+}
+const USAGE_CODES = [
+	"collector-off",
+	"inventory-partial",
+	"invalid-batch",
+	"batch-limit",
+	"time-limit",
+	"unapproved-source",
+	"source-unavailable",
+	"native-unverified",
+	"provenance-mismatch",
+	"retention-gap",
+	"truncated-source",
+	"cursor-gap",
+	"cursor-conflict",
+	"revision-gap",
+	"revision-conflict",
+	"rewritten-occurrence",
+	"metadata-conflict",
+	"binding-mismatch",
+	"event-conflict",
+	"alias-conflict",
+	"snapshot-conflict",
+	"journal-tail",
+	"journal-corrupt",
+	"checkpoint-corrupt",
+	"store-capacity",
+	"io-failure",
+	"index-unavailable",
+	"source-coverage",
+	"coverage-conflict",
+	"unpriced",
+	"unallocated",
+	"unresolved-identity",
+	"invalid-subject-binding",
+	"funding-unavailable",
+	"unknown-accounting-fault",
+	"worker-unavailable",
+	"worker-stale",
+	"source-stalled",
+	"waiting-for-previous-writer",
+];
+const USAGE_STALLS = [
+	"pending",
+	"delayed",
+	"drain-stalled",
+	"dead-man",
+	"off",
+	"forbidden",
+	"unavailable",
+	"timeout",
+	"malformed-page",
+	"cursor-quarantined",
+];
+const usageClosed = (v: unknown, keys: string): v is Record<string, unknown> =>
+	object(v) !== null &&
+	Object.getPrototypeOf(v) === Object.prototype &&
+	Reflect.ownKeys(v as object).every(
+		(k) =>
+			typeof k === "string" &&
+			Object.getOwnPropertyDescriptor(v, k)?.enumerable === true &&
+			Object.hasOwn(Object.getOwnPropertyDescriptor(v, k)!, "value"),
+	) &&
+	Object.keys(v as object)
+		.sort()
+		.join(",") === keys.split(" ").sort().join(",");
+const usageChoice = (v: unknown, choices: readonly unknown[]) => choices.includes(v);
+const usageCount = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+const usageUsd = (v: unknown) => typeof v === "string" && /^(0|[1-9]\d{0,17})(?:\.\d{1,12})?$/.exec(v)?.[0] === v;
+const usageTime = (v: unknown): v is string =>
+	typeof v === "string" &&
+	/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(v) &&
+	Number.isFinite(Date.parse(v)) &&
+	new Date(v).toISOString() === v;
+const usageTimes = (vs: unknown[], at: string) => vs.every((v) => v === null || (usageTime(v) && v <= at));
+const usageList = (v: unknown, cap: number, check: (v: unknown) => boolean): v is unknown[] =>
+	Array.isArray(v) && v.length <= cap && Object.keys(v).length === v.length && v.every(check);
+const usageFaults = (v: unknown) =>
+	usageList(
+		v,
+		64,
+		(f) => usageClosed(f, "code count") && usageChoice(f.code, USAGE_CODES) && usageCount(f.count) && f.count > 0,
+	) && new Set(v.map((f) => (f as { code: string }).code)).size === v.length;
+const usageStamp = (v: string | null) => (v === null ? "UNKNOWN" : `${v.slice(0, 16).replace("T", " ")} UTC`);
+const usageN = (v: number | null) => (v === null ? "UNKNOWN" : String(v));
+function usageWeek(now: number): string {
+	const p = new Intl.DateTimeFormat("en-CA", {
+		timeZone: "America/Los_Angeles",
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+	}).formatToParts(now);
+	const part = (key: string) => p.find((v) => v.type === key)!.value;
+	const day = new Date(`${part("year")}-${part("month")}-${part("day")}T00:00:00.000Z`);
+	day.setUTCDate(day.getUTCDate() - ((day.getUTCDay() + 6) % 7));
+	return day.toISOString().slice(0, 10);
+}
+/** Closed protocol consumer. A page read/poll never renews native observations or certifies Temper. */
+export function projectRoleUsageCost(raw: unknown, role: string, now: number): UsefulUsageCost | null {
+	if (
+		!Number.isFinite(now) ||
+		!roleId(role) ||
+		!usageClosed(
+			raw,
+			"v reportingOnly role generation evaluatedAt weekStart firstNativeObservedAt state storage inventory usage sources faults",
+		) ||
+		raw.v !== "role-usage-cost/1" ||
+		raw.reportingOnly !== true ||
+		raw.role !== role ||
+		!usageChoice(raw.state, ["ready", "recovering", "stale", "unavailable", "waiting-for-previous-writer"]) ||
+		!usageChoice(raw.storage, ["healthy", "partial", "unavailable"]) ||
+		!usageChoice(raw.inventory, ["complete", "partial", "unavailable"]) ||
+		!usageFaults(raw.faults)
+	)
+		return null;
+	if (raw.generation === null) {
+		if (
+			raw.state !== "unavailable" ||
+			raw.evaluatedAt !== null ||
+			raw.weekStart !== null ||
+			raw.firstNativeObservedAt !== null ||
+			raw.usage !== null ||
+			!Array.isArray(raw.sources) ||
+			raw.sources.length !== 0
+		)
+			return null;
+	} else if (
+		!usageClosed(raw.generation, "epoch sequence") ||
+		typeof raw.generation.epoch !== "string" ||
+		raw.generation.epoch.length !== 64 ||
+		!/^[a-f0-9]{64}$/.test(raw.generation.epoch) ||
+		!usageCount(raw.generation.sequence) ||
+		!usageTime(raw.evaluatedAt) ||
+		Date.parse(raw.evaluatedAt) > now ||
+		typeof raw.weekStart !== "string" ||
+		!usageTime(`${raw.weekStart}T00:00:00.000Z`) ||
+		new Date(`${raw.weekStart}T00:00:00.000Z`).getUTCDay() !== 1 ||
+		(raw.firstNativeObservedAt !== null &&
+			(!usageCount(raw.firstNativeObservedAt) ||
+				raw.firstNativeObservedAt === 0 ||
+				raw.firstNativeObservedAt > Date.parse(raw.evaluatedAt)))
+	)
+		return null;
+	const evaluated = raw.evaluatedAt as string | null;
+	if (
+		!usageList(raw.sources, 1024, (rawSource) => {
+			const s = object(rawSource);
+			if (
+				!s ||
+				!usageCount(s.index) ||
+				s.index >= 1024 ||
+				typeof s.enabled !== "boolean" ||
+				typeof s.required !== "boolean"
+			)
+				return false;
+			if (s.kind === "temper") {
+				if (
+					!usageClosed(s, "index kind required enabled state coverage observedAt frontier") ||
+					s.coverage !== "unknown" ||
+					!usageChoice(s.state, ["available", "unavailable"]) ||
+					!usageTimes([s.observedAt], evaluated!) ||
+					(!s.enabled && s.state !== "unavailable")
+				)
+					return false;
+				const f = s.frontier;
+				return (
+					usageClosed(
+						f,
+						"diagnosticOnly recorded_through pending_count oldest_pending last_drain assessed_from assessed_through freshness stallCodes",
+					) &&
+					f.diagnosticOnly === true &&
+					usageTimes(
+						[f.recorded_through, f.oldest_pending, f.last_drain, f.assessed_from, f.assessed_through],
+						evaluated!,
+					) &&
+					(f.pending_count === null || usageCount(f.pending_count)) &&
+					!(f.pending_count === 0 && f.oldest_pending !== null) &&
+					(f.assessed_from === null) === (f.assessed_through === null) &&
+					(f.assessed_from === null || String(f.assessed_from) <= String(f.assessed_through)) &&
+					usageChoice(f.freshness, ["fresh", "delayed", "stalled", "dead-man", "unknown"]) &&
+					usageList(f.stallCodes, USAGE_STALLS.length, (c) => usageChoice(c, USAGE_STALLS)) &&
+					new Set(f.stallCodes).size === f.stallCodes.length &&
+					(f.freshness !== "fresh" ||
+						(s.enabled &&
+							s.state === "available" &&
+							s.observedAt !== null &&
+							Date.parse(evaluated!) - Date.parse(String(s.observedAt)) <= 60_000))
+				);
+			}
+			return (
+				usageClosed(s, "index kind required enabled state coveredThrough observedAt lastProgressAt stalled alarm") &&
+				usageChoice(s.kind, ["pi", "acp", "metadata"]) &&
+				usageChoice(s.state, ["complete", "partial", "unknown", "unavailable"]) &&
+				typeof s.stalled === "boolean" &&
+				usageChoice(s.alarm, [null, "source-stalled"]) &&
+				usageTimes([s.coveredThrough, s.observedAt, s.lastProgressAt], evaluated!) &&
+				(s.coveredThrough === null || (s.observedAt !== null && String(s.coveredThrough) <= String(s.observedAt))) &&
+				(s.enabled || s.state === "unavailable") &&
+				(s.alarm === null ||
+					(s.required &&
+						s.enabled &&
+						s.stalled &&
+						s.lastProgressAt !== null &&
+						Date.parse(evaluated!) - Date.parse(String(s.lastProgressAt)) >= 300_000)) &&
+				(!(
+					s.required &&
+					s.enabled &&
+					s.lastProgressAt !== null &&
+					Date.parse(evaluated!) - Date.parse(String(s.lastProgressAt)) >= 300_000
+				) ||
+					(s.stalled && s.alarm === "source-stalled")) &&
+				(s.state !== "complete" ||
+					(s.enabled && !s.stalled && s.coveredThrough !== null && s.observedAt !== null && s.lastProgressAt !== null))
+			);
+		}) ||
+		new Set(raw.sources.map((s) => (s as { index: number }).index)).size !== raw.sources.length
+	)
+		return null;
+	const u = raw.usage;
+	if (u !== null) {
+		if (
+			!usageClosed(
+				u,
+				"window usageCoverage fundingCoverage freshness coveredThrough observedAt list otherBases counts funding faults",
+			) ||
+			!usageClosed(u.window, "from through") ||
+			!usageTime(u.window.from) ||
+			!usageTime(u.window.through) ||
+			u.window.from > u.window.through ||
+			u.window.through > evaluated! ||
+			!usageChoice(u.usageCoverage, ["complete", "partial", "unavailable"]) ||
+			!usageChoice(u.fundingCoverage, ["complete", "partial", "unavailable", "not-evaluated"]) ||
+			!usageChoice(u.freshness, ["fresh", "stale", "unknown"]) ||
+			!usageTimes([u.coveredThrough, u.observedAt], evaluated!) ||
+			(u.coveredThrough !== null && (u.observedAt === null || String(u.coveredThrough) > String(u.observedAt))) ||
+			!usageClosed(u.counts, "unpriced unresolvedIdentities") ||
+			![u.counts.unpriced, u.counts.unresolvedIdentities].every((n) => n === null || usageCount(n)) ||
+			!usageFaults(u.faults) ||
+			(u.list !== null &&
+				(!usageClosed(u.list, "grossObservations deduplicatedRecorded") ||
+					!usageUsd(u.list.grossObservations) ||
+					!usageUsd(u.list.deduplicatedRecorded))) ||
+			!usageList(
+				u.otherBases,
+				2,
+				(b) =>
+					usageClosed(b, "basis knownUsd unpriced") &&
+					usageChoice(b.basis, ["provider-reported", "invoice"]) &&
+					usageUsd(b.knownUsd) &&
+					usageCount(b.unpriced),
+			) ||
+			new Set(u.otherBases.map((b) => (b as { basis: string }).basis)).size !== u.otherBases.length
+		)
+			return null;
+		const required = raw.sources.filter(
+			(s) => (s as { required: boolean }).required,
+		) as import("./types").UiRoleUsageSource[];
+		const clean =
+			raw.state === "ready" &&
+			raw.storage === "healthy" &&
+			raw.inventory === "complete" &&
+			(raw.faults as unknown[]).length === 0 &&
+			(u.faults as unknown[]).length === 0 &&
+			u.freshness === "fresh" &&
+			u.coveredThrough !== null &&
+			String(u.coveredThrough) >= u.window.through &&
+			u.observedAt !== null &&
+			Date.parse(evaluated!) - Date.parse(String(u.observedAt)) <= 60_000 &&
+			u.list !== null &&
+			u.counts.unpriced === 0 &&
+			u.counts.unresolvedIdentities === 0 &&
+			required.length > 0 &&
+			required.every(
+				(s) =>
+					s.kind !== "temper" &&
+					s.enabled &&
+					!s.stalled &&
+					s.state === "complete" &&
+					s.coveredThrough !== null &&
+					s.coveredThrough >= String(u.coveredThrough) &&
+					s.observedAt !== null &&
+					s.observedAt >= String(u.observedAt),
+			);
+		if (u.usageCoverage === "complete" && !clean) return null;
+		const f = u.funding;
+		if (f === null) {
+			if (u.fundingCoverage === "complete") return null;
+		} else if (
+			!usageClosed(
+				f,
+				"wholePolicySubject verifiedOwnLowerBound exempt otherPolicy unallocated unallocatedFacts remainingUsd",
+			) ||
+			typeof f.wholePolicySubject !== "boolean" ||
+			![f.verifiedOwnLowerBound, f.exempt, f.otherPolicy, f.unallocated].every(usageUsd) ||
+			!usageCount(f.unallocatedFacts) ||
+			(f.remainingUsd !== null && !usageUsd(f.remainingUsd)) ||
+			usageChoice(u.fundingCoverage, ["unavailable", "not-evaluated"]) ||
+			(u.fundingCoverage === "complete" && (!clean || u.usageCoverage !== "complete" || f.unallocatedFacts !== 0)) ||
+			(f.remainingUsd !== null &&
+				(!clean ||
+					u.usageCoverage !== "complete" ||
+					u.fundingCoverage !== "complete" ||
+					!f.wholePolicySubject ||
+					f.unallocatedFacts !== 0))
+		)
+			return null;
+	}
+	// Everything is checked before the type assertion; no untrusted key/string reaches a label.
+	const value = raw as unknown as import("./types").UiRoleUsageCost;
+	const usage = value.usage;
+	const stale =
+		value.state !== "ready" ||
+		value.weekStart !== usageWeek(now) ||
+		evaluated === null ||
+		now - Date.parse(evaluated) > 60_000 ||
+		usage?.freshness !== "fresh" ||
+		[usage?.coveredThrough, usage?.observedAt].some(
+			(t) => t !== null && t !== undefined && now - Date.parse(t) > 60_000,
+		);
+	const requiredTemper = value.sources.some((s) => s.required && s.kind === "temper");
+	const coverage = !usage
+		? "unavailable"
+		: usage.usageCoverage === "complete" && stale
+			? "partial"
+			: usage.usageCoverage;
+	const funding = usage?.fundingCoverage ?? "not-evaluated";
+	const lines = [
+		`Automatic — recorded known list subtotal: ${usage?.list ? `$${usage.list.deduplicatedRecorded} USD` : "UNKNOWN"}`,
+		`Gross list observations (may overlap): ${usage?.list ? `$${usage.list.grossObservations} USD` : "UNKNOWN"}`,
+		`Usage source-attributed to this role — own and requested mixed; usage coverage: ${requiredTemper ? "UNKNOWN (Temper); " : ""}${coverage}${stale ? "; stale/unverified" : ""}`,
+		`Funding: ${funding === "not-evaluated" ? "not evaluated" : stale && funding === "complete" ? "partial" : funding}; ${!stale && usage?.funding?.remainingUsd !== null && usage?.funding?.remainingUsd !== undefined ? `reporting remainder $${usage.funding.remainingUsd} USD — not spending permission` : "UNKNOWN — no certified budget remainder"}`,
+		`Unpriced list facts: ${usageN(usage?.counts.unpriced ?? null)}; unresolved identities: ${usageN(usage?.counts.unresolvedIdentities ?? null)}`,
+		`Week (America/Los_Angeles): ${value.weekStart ?? "UNKNOWN"}; evaluated ${usageStamp(evaluated)}; covered ${usageStamp(usage?.coveredThrough ?? null)}; observed ${usageStamp(usage?.observedAt ?? null)}`,
+	];
+	for (const b of usage?.otherBases ?? [])
+		lines.push(
+			`${b.basis} known subtotal: $${b.knownUsd} USD; unpriced: ${b.unpriced} — separate basis, not added to list`,
+		);
+	if (usage?.funding) {
+		const f = usage.funding;
+		lines.push(
+			`List allocation breakdown (already included, not additional): verified own lower bound $${f.verifiedOwnLowerBound}; exempt $${f.exempt}; other policy $${f.otherPolicy}; unallocated $${f.unallocated} USD (${f.unallocatedFacts} facts)`,
+		);
+	}
+	for (const s of value.sources.slice(0, 24)) {
+		if (s.kind === "temper") {
+			const f = s.frontier;
+			const age = s.observedAt === null ? null : now - Date.parse(s.observedAt);
+			const diagnostic =
+				f.stallCodes.includes("dead-man") || f.freshness === "dead-man" || (age !== null && age >= 300_000)
+					? "dead-man"
+					: f.stallCodes.includes("drain-stalled") || f.freshness === "stalled"
+						? "stalled"
+						: f.stallCodes.includes("delayed") || f.freshness === "delayed" || (age !== null && age > 60_000)
+							? "delayed"
+							: f.freshness;
+			lines.push(
+				`Temper recorded through ${usageStamp(f.recorded_through)}; coverage UNKNOWN; diagnostic only: ${diagnostic}; observed ${usageStamp(s.observedAt)}; frontier age ${age === null ? "UNKNOWN" : `${Math.floor(age / 1000)}s`}; pending ${usageN(f.pending_count)}; oldest pending ${usageStamp(f.oldest_pending)}; last drain ${usageStamp(f.last_drain)}; inspected ${usageStamp(f.assessed_from)} to ${usageStamp(f.assessed_through)}; stall codes: ${f.stallCodes.join(", ") || "none recorded"}`,
+			);
+		} else
+			lines.push(
+				`${s.kind.toUpperCase()} source #${s.index}: ${s.state}; covered ${usageStamp(s.coveredThrough)}; observed ${usageStamp(s.observedAt)}; progress ${usageStamp(s.lastProgressAt)}; diagnostic ${s.alarm ?? (s.stalled ? "stalled" : "no stall recorded")}`,
+			);
+	}
+	if (value.sources.length > 24) lines.push(`${value.sources.length - 24} additional source diagnostics not shown`);
+	const faults = value.faults.concat(usage?.faults ?? []);
+	if (faults.length) lines.push(`Recorded faults: ${faults.map((f) => `${f.code} (${f.count})`).join(", ")}`);
+	lines.push(
+		`Collector ${value.state}; storage ${value.storage}; inventory ${value.inventory}. Reporting only; unknown costs are not zero or permission.`,
+	);
+	return { value, stale, lines };
+}
+
 export interface UsefulRole {
 	roleId: string;
 	roleLabel: string;
@@ -194,6 +572,7 @@ export interface UsefulRole {
 	/** queue-drop: the tasks its lead dropped, newest first (the server sends at most ROLES_DROPPED_MAX). */
 	dropped: UsefulRecords;
 	spend?: UsefulSpend | null;
+	usageCost?: UsefulUsageCost | null;
 	/** roles-lanes: lanes it may run at once and how many are in use; null (or absent) = not recorded. */
 	lanes?: { atOnce: number; inUse: number } | null;
 	/** roles-links (Ops #222): its open tasks by where each belongs (in a project, under an initiative,
@@ -488,7 +867,7 @@ interface ProjectedRole {
 	/** The ask key each stuck task should have ("<role>:task:<n>"), unless reported paused. */
 	decisionKeys: string[];
 }
-function projectRole(row: Fields, id: string): ProjectedRole {
+function projectRole(row: Fields, id: string, now?: number): ProjectedRole {
 	const name = label(row.title, id);
 	const queuePresent = row.queue !== undefined;
 	const queue = object(row.queue);
@@ -558,6 +937,7 @@ function projectRole(row: Fields, id: string): ProjectedRole {
 		dropped,
 		spend: projectSpend(row.spend),
 	};
+	if (Object.hasOwn(row, "usageCost")) projected.usageCost = projectRoleUsageCost(row.usageCost, id, now ?? Date.now());
 	// roles-lanes: only when recorded, so a role without them reads exactly as before.
 	if (lanes) projected.lanes = lanes;
 	// roles-links: the same, so a role without them reads exactly as before.
@@ -687,7 +1067,7 @@ export function projectUsefulRoles(
 			omitted = true;
 			continue;
 		}
-		const projected = projectRole(row, row.id);
+		const projected = projectRole(row, row.id, now);
 		roles.push(projected.role);
 		labels.set(projected.role.roleId, projected.role.roleLabel);
 		if (!projected.asksSeen) coverage.asksSeen = false;

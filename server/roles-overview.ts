@@ -31,6 +31,10 @@ import type {
 	UiRoleConfigHistory,
 	UiRoleGoal,
 	UiRoleOverview,
+	UiRoleUsageCost,
+	UiRoleUsageGeneration,
+	UiRolesUsageRenderAck,
+	UiRolesUsageRenderTiming,
 	UiRoleQueue,
 	UiRoleOpenPair,
 	UiRoleReport,
@@ -58,6 +62,8 @@ import {
 } from "./role-messages.js";
 import { rulesGoals, rulesWorkMode } from "./role-rules.js";
 import { readRoleSpend } from "./roles-spend.js";
+// W7: types only. The worker's numeric builder/engine must never enter this page path.
+import type { createUsageMeterCache } from "./usage-accounting-meter-cache.js";
 import { readRoleInstructions } from "./roles-instructions.js";
 import { roleSettingsOf, type RoleSettings } from "./roles-config-history.js";
 import { roleAnswerKindAllowed } from "./roles-asks.js";
@@ -740,7 +746,77 @@ export interface RolesOverviewHost {
 	configHistory?(role: string): UiRoleConfigHistory | undefined;
 	/** ladder-alarm: the approval step's state and this server's start; absent or undefined: nothing shown. */
 	messageApprovals?(): RolesApprovalsState | undefined;
+	/** W6 injects its already-admitted main cache; importing/reading starts nothing. */
+	usageMeterCache?(): Pick<ReturnType<typeof createUsageMeterCache>, "get"> | null;
+	/** Pinned generation's first native admission receipt; absent stays unknown. */
+	usageMeterFirstObservedAt?(generation: UiRoleUsageGeneration): number | null;
 	now?(): number;
+}
+
+/** W7: cached scalar shaping only; no accounting, source reads or manual data in this path. */
+export function roleUsageCost(
+	host: Pick<RolesOverviewHost, "usageMeterCache" | "usageMeterFirstObservedAt">,
+	role: string,
+	at: number,
+): UiRoleUsageCost {
+	const absent: UiRoleUsageCost = {
+		v: "role-usage-cost/1",
+		reportingOnly: true,
+		role,
+		generation: null,
+		evaluatedAt: null,
+		weekStart: null,
+		firstNativeObservedAt: null,
+		state: "unavailable",
+		storage: "unavailable",
+		inventory: "unavailable",
+		usage: null,
+		sources: [],
+		faults: [],
+	};
+	try {
+		const snapshot = host.usageMeterCache?.()?.get(new Date(at).toISOString());
+		if (!snapshot) return absent;
+		const matched = snapshot.subjects.filter((s) => s.subject.kind === "role" && s.subject.role === role);
+		const entry = matched.length === 1 ? matched[0] : null;
+		let receipt: number | null | undefined;
+		try {
+			receipt = host.usageMeterFirstObservedAt?.({ ...snapshot.generation });
+		} catch {
+			receipt = null;
+		}
+		const firstNativeObservedAt =
+			typeof receipt === "number" &&
+			Number.isSafeInteger(receipt) &&
+			receipt > 0 &&
+			receipt <= Date.parse(snapshot.evaluatedAt)
+				? receipt
+				: null;
+		return {
+			...absent,
+			generation: { ...snapshot.generation },
+			evaluatedAt: snapshot.evaluatedAt,
+			weekStart: snapshot.weekStart,
+			firstNativeObservedAt,
+			state: snapshot.state,
+			storage: snapshot.storage,
+			inventory: snapshot.inventory,
+			usage: entry
+				? (() => {
+						const { subject: _subject, ...usage } = entry;
+						return usage;
+					})()
+				: null,
+			sources: snapshot.sources.map((s) => {
+				if (s.kind === "temper") return structuredClone(s);
+				const { complete_through, ...source } = s;
+				return { ...source, coveredThrough: complete_through };
+			}),
+			faults: snapshot.faults.map((f) => ({ ...f })),
+		};
+	} catch {
+		return absent;
+	}
 }
 
 interface RoleTaskInfo {
@@ -822,7 +898,12 @@ export class RolesOverviewReader {
 			} catch {
 				configHistory = undefined;
 			}
-			roles.push({ ...row, ...(sent ? { sent } : {}), ...(configHistory ? { configHistory } : {}) });
+			roles.push({
+				...row,
+				usageCost: roleUsageCost(this.host, def.id, at),
+				...(sent ? { sent } : {}),
+				...(configHistory ? { configHistory } : {}),
+			});
 		}
 		let openPairs: UiRoleOpenPair[] | undefined;
 		try {
@@ -1390,6 +1471,8 @@ export interface RolesWatchOptions {
 	/** Several changes close together make one look. */
 	debounceMs?: number;
 	log?: (line: string) => void;
+	/** Server clock only, injectable for timing fixtures. */
+	now?: () => number;
 }
 
 /**
@@ -1397,6 +1480,28 @@ export interface RolesWatchOptions {
  * counts its data as current only once a later check reaches it (pages-live, Ops #244), so the first look that
  * finishes after the watch confirms it even when nothing changed, instead of leaving it to the heartbeat.
  */
+function usageGenerationFresh(cost: UiRoleUsageCost, now: number): boolean {
+	const parts = new Intl.DateTimeFormat("en-CA", {
+		timeZone: "America/Los_Angeles",
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+	}).formatToParts(now);
+	const part = (key: string) => parts.find((p) => p.type === key)!.value;
+	const monday = new Date(`${part("year")}-${part("month")}-${part("day")}T00:00:00.000Z`);
+	monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+	return (
+		cost.state === "ready" &&
+		cost.weekStart === monday.toISOString().slice(0, 10) &&
+		cost.evaluatedAt !== null &&
+		now >= Date.parse(cost.evaluatedAt) &&
+		now - Date.parse(cost.evaluatedAt) <= 60_000 &&
+		cost.usage?.freshness === "fresh" &&
+		cost.usage.observedAt !== null &&
+		[cost.usage.coveredThrough, cost.usage.observedAt].every((t) => t === null || now - Date.parse(t) <= 60_000)
+	);
+}
+
 interface RolesWatcher {
 	full: boolean;
 	send: (msg: ServerMessage) => void;
@@ -1404,6 +1509,9 @@ interface RolesWatcher {
 	firstAt: number | null;
 	/** A newer check reached it after its first overview. */
 	confirmed: boolean;
+	usageWatch: number;
+	usageSent: Map<string, { cost: UiRoleUsageCost; pushedAt: number }>;
+	usageTimings: Map<string, UiRolesUsageRenderTiming>;
 }
 
 /** The windows watching the roles, keyed by their socket: looks again on a timer and on pokes. */
@@ -1415,6 +1523,7 @@ export class RolesWatch<K> {
 	private last: { overview: UiRolesOverview; json: string; checkedAt: number; heard: number } | null = null;
 	private lastError: string | null = null;
 	private stopped = false;
+	private usageWatch = 0;
 	private readonly o: Required<Omit<RolesWatchOptions, "log">> & Pick<RolesWatchOptions, "log">;
 
 	constructor(
@@ -1427,22 +1536,111 @@ export class RolesWatch<K> {
 			heartbeatMs: opts.heartbeatMs ?? 30_000,
 			debounceMs: opts.debounceMs ?? 300,
 			log: opts.log,
+			now: opts.now ?? Date.now,
 		};
 	}
 
 	/** This window wants everything (full) or just the count; it gets what is known at once. */
 	watch(key: K, full: boolean, send: (msg: ServerMessage) => void): void {
-		const watcher: RolesWatcher = { full, send, firstAt: null, confirmed: false };
+		const watcher: RolesWatcher = {
+			full,
+			send,
+			firstAt: null,
+			confirmed: false,
+			usageWatch: ++this.usageWatch,
+			usageSent: new Map(),
+			usageTimings: new Map(),
+		};
 		this.watchers.set(key, watcher);
 		const last = this.last;
 		if (last) {
 			const asks = last.overview.asks.length;
-			send(
-				full ? { type: "roles", overview: last.overview, asks, checkedAt: last.checkedAt } : { type: "roles", asks },
-			);
+			if (full) this.sendOverview(watcher, last.overview, last.checkedAt);
+			else send({ type: "roles", asks });
 			if (full) watcher.firstAt = last.checkedAt;
 		}
 		this.schedule(last ? this.o.debounceMs : 0);
+	}
+
+	/** A push is NOT render proof. Pin only this socket/watch's most recently sent role generations. */
+	private sendOverview(w: RolesWatcher, overview: UiRolesOverview, checkedAt: number): void {
+		const pushedAt = this.o.now();
+		w.usageSent.clear();
+		w.usageTimings.clear();
+		for (const row of overview.roles.slice(0, 64)) {
+			const cost = row.usageCost;
+			if (cost?.role === row.id && cost.generation && usageGenerationFresh(cost, pushedAt))
+				w.usageSent.set(row.id, { cost: structuredClone(cost), pushedAt });
+		}
+		w.send({
+			type: "roles",
+			overview,
+			asks: overview.asks.length,
+			checkedAt,
+			...(w.usageSent.size ? { usageRender: { watch: w.usageWatch, pushedAt } } : {}),
+		});
+	}
+
+	/** Closed optional DOM telemetry only. Reject foreign socket/watch/role, stale or unseen generations. */
+	acknowledgeUsage(key: K, raw: unknown): boolean {
+		const w = this.watchers.get(key);
+		if (!w?.full || !raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+		const ack = raw as UiRolesUsageRenderAck;
+		if (
+			Object.keys(raw).sort().join(",") !== "generation,role,watch" ||
+			ack.watch !== w.usageWatch ||
+			typeof ack.role !== "string" ||
+			!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(ack.role) ||
+			ack.role.length > 60 ||
+			!ack.generation ||
+			typeof ack.generation !== "object" ||
+			Array.isArray(ack.generation) ||
+			Object.keys(ack.generation).sort().join(",") !== "epoch,sequence" ||
+			typeof ack.generation.epoch !== "string" ||
+			ack.generation.epoch.length !== 64 ||
+			!/^[a-f0-9]{64}$/.test(ack.generation.epoch) ||
+			!Number.isSafeInteger(ack.generation.sequence) ||
+			ack.generation.sequence < 0
+		)
+			return false;
+		const sent = w.usageSent.get(ack.role);
+		const current = this.last?.overview.roles.find((r) => r.id === ack.role)?.usageCost;
+		const gen = sent?.cost.generation;
+		const at = this.o.now();
+		if (
+			!sent ||
+			!gen ||
+			w.usageTimings.has(ack.role) ||
+			this.lastError !== null ||
+			!current ||
+			!usageGenerationFresh(current, at) ||
+			current.generation?.epoch !== gen.epoch ||
+			current.generation.sequence !== gen.sequence ||
+			gen.epoch !== ack.generation.epoch ||
+			gen.sequence !== ack.generation.sequence ||
+			at < sent.pushedAt ||
+			at - Date.parse(sent.cost.evaluatedAt!) > 60_000
+		)
+			return false;
+		const first = sent.cost.firstNativeObservedAt;
+		const timing: UiRolesUsageRenderTiming = {
+			watch: ack.watch,
+			role: ack.role,
+			generation: { ...gen },
+			pushedAt: sent.pushedAt,
+			acknowledgedAt: at,
+			firstNativeObservedAt: first,
+			pushToAckMs: at - sent.pushedAt,
+			firstObservationToAckMs: first === null ? null : at - first,
+		};
+		w.usageTimings.set(ack.role, timing);
+		w.send({ type: "roles", asks: this.last?.overview.asks.length ?? 0, usageRenderTiming: { ...timing } });
+		return true;
+	}
+
+	/** Passive server-clock diagnostics; no mutation or coverage inference. */
+	usageRenderTimings(key: K): UiRolesUsageRenderTiming[] {
+		return structuredClone([...(this.watchers.get(key)?.usageTimings.values() ?? [])]);
 	}
 
 	drop(key: K): void {
@@ -1532,7 +1730,11 @@ export class RolesWatch<K> {
 			if (error !== this.lastError) this.o.log?.(`[roles] couldn't make the overview: ${error}`);
 			this.lastError = error;
 			const asks = this.last?.overview.asks.length ?? 0;
-			for (const w of this.watchers.values()) if (w.full) w.send({ type: "roles", asks, error });
+			for (const w of this.watchers.values())
+				if (w.full) {
+					w.usageSent.clear();
+					w.send({ type: "roles", asks, error });
+				}
 			return;
 		}
 		this.lastError = null;
@@ -1558,7 +1760,7 @@ export class RolesWatch<K> {
 		this.last = { overview, json, checkedAt: now, heard: now };
 		for (const w of this.watchers.values()) {
 			if (w.full) {
-				w.send({ type: "roles", overview, asks, checkedAt: now });
+				this.sendOverview(w, overview, now);
 				if (w.firstAt === null) w.firstAt = now;
 				else if (now > w.firstAt) w.confirmed = true;
 			} else if (countChanged) w.send({ type: "roles", asks });

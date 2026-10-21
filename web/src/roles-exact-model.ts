@@ -15,6 +15,7 @@ import {
 	type NeedsYou,
 	type SourceState,
 	type UsefulRole,
+	type UsefulUsageCost,
 } from "./roles-useful-model";
 
 export interface ExactSpend {
@@ -211,6 +212,7 @@ export interface ExactRole {
 	row: UsefulRole;
 	panel: RolePanel | null;
 	spend: ExactSpend;
+	usageCost?: UsefulUsageCost | null;
 	instructions: ExactInstructions;
 	/** roles-config-history (Ops #209): its recorded settings changes; null: none sent. */
 	configHistory: ExactConfigHistory | null;
@@ -251,7 +253,8 @@ export function projectExactRoles(
 	return {
 		roles: model.roles.map((row) => ({
 			row,
-			panel: projectRolePanel(state, row.roleId),
+			panel: projectRolePanel(state, row.roleId, now),
+			usageCost: row.usageCost ?? null,
 			spend: projectSpend(object(rows.find((raw) => object(raw)?.id === row.roleId))?.spend),
 			instructions: projectInstructions(object(rows.find((raw) => object(raw)?.id === row.roleId))?.instructions, now),
 			configHistory: projectConfigHistory(

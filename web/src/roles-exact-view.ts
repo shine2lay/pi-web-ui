@@ -166,6 +166,7 @@ export function exactCardSpend(
 	spend: ExactSpend,
 	label: string,
 	lastReceived: boolean,
+	manualReference = false,
 ): {
 	hasSpend: boolean;
 	spendText: string;
@@ -189,7 +190,7 @@ export function exactCardSpend(
 		spendText: spend.over ? "Budget used up" : figures,
 		spendBarWidth: spendWidth(spend.ratio),
 		spendBarColor: spendColor(spend, lastReceived),
-		spendLabel: `${label} own-work budget: ${spend.over ? `used up, ${figures}` : figures}`,
+		spendLabel: `${label} ${manualReference ? "manual own-work reference" : "own-work budget"}: ${spend.over ? `used up, ${figures}` : figures}`,
 		spendBelow: false,
 	};
 }
@@ -815,7 +816,7 @@ export function createExactRolesView(
 			relText,
 			...exactLanes(row.lanes),
 			// roles-budget-card: a reported role's own-work budget line on its card; spending first in its panel.
-			...exactCardSpend(spend, row.roleLabel, model.lastReceived),
+			...exactCardSpend(spend, row.roleLabel, model.lastReceived, !!role.usageCost),
 			// roles-links: the panel's Linked work line only; the cards stay as designed.
 			linksText: exactLinks(row.links),
 			op: hover && hover !== row.roleId && !linked ? "0.38" : model.lastReceived ? "0.8" : "1",
@@ -864,7 +865,7 @@ export function createExactRolesView(
 			purpose: panel?.focus ?? NR,
 			respList: (panel?.goals ?? []).map((g) => ({ t: `Goal: ${g.name ?? NR}${g.scope ? ` — ${g.scope}` : ""}` })),
 			hasBudgetNote: true,
-			budgetNote: `${model.lastReceived ? "Last received data. " : ""}${spend.note}`,
+			budgetNote: `${model.lastReceived ? "Last received data. " : ""}${role.usageCost?.lines.join(" · ") ?? "Automatic usage unavailable; funding not evaluated; UNKNOWN — no certified budget remainder."} · Manual tally — stale/unverified reference only. ${spend.note}`,
 			taskGroups: [
 				...GROUPS.map(([label, fg, states]) => ({
 					label,
@@ -1141,20 +1142,20 @@ export function createExactRolesView(
 					: "No messages from you to a role in the last 90 days.",
 			contactsHeading: "Your messages",
 			roleContactsHeading: "Your messages to",
-			spendPeriodText: "Own-work spending this week",
+			spendPeriodText: "Manual own-work reference this week",
 			spendRoleText:
 				budgetRole?.row.roleLabel ??
 				(spending.length ? `${spending.length} departments · see each role` : "No current tally available"),
 			spendAmountText: budget?.amount ?? NR,
 			spendBudgetText: budget ? `of ${budget.budget}` : "",
 			spendAria: budget
-				? `${budgetRole?.row.roleLabel} own-work tally: ${budget.amount} of ${budget.budget}`
+				? `${budgetRole?.row.roleLabel} manual own-work reference: ${budget.amount} of ${budget.budget}`
 				: "No spending total inferred",
 			spendBarWidth: spendWidth(budget?.ratio ?? null),
 			spendBarColor: budget ? spendColor(budget, model.lastReceived) : "transparent",
 			spendNoteText: budget
-				? `${model.lastReceived ? "Last received data. " : ""}${budget.note}`
-				: "No total is inferred. Missing spending data does not mean $0.",
+				? `${model.lastReceived ? "Last received data. " : ""}Manual tally — stale/unverified reference only. ${budget.note}`
+				: "No total is inferred. Missing spending data does not mean $0. Manual reference only.",
 			exOpen: !!ex || exIsYou,
 			ex: ex ?? {},
 			exIsYou,
@@ -1205,6 +1206,15 @@ export function createExactRolesView(
 		canNavigate,
 		close,
 		isOpen: () => selected !== null,
+		/** Candidates only: the host may acknowledge them after successful DOM binding/refit.
+		 * Automatic details exist only in the expanded role panel, never unopened cards. */
+		usageRenderCandidates: () => {
+			const role = selectedRole();
+			const cost = role?.usageCost;
+			return role && cost && !cost.stale && cost.value.generation
+				? [{ role: role.row.roleId, generation: cost.value.generation }]
+				: [];
+		},
 		/** roles-small-fixes: true when the last plan no longer fits the page (the header changed size while the
 		 * values were applied, or the graph took another height), so the host plans again before paint. */
 		refit: () =>
