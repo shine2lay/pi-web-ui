@@ -108,6 +108,8 @@ describe("ladder: storage caps", () => {
 		const real = w.rm.recent(0).map((m) => m.id);
 		expect(real).toHaveLength(3);
 		const betaLast = lastIn(w, B);
+		// Ops #318: recent capped-role rows are hourly proof; only age-expired chain rows may rotate.
+		setNow(now + 3_600_000);
 		w.rm.stop();
 		const file = join(data, "role-messages.json");
 		const stored = JSON.parse(readFileSync(file, "utf8")) as { messages: Array<Record<string, unknown>> };

@@ -40,6 +40,7 @@ import type {
 	GuardVerifiedSnapshot,
 } from "./role-message-guard-contract.js";
 import { guardDigest, guardOperationKey, guardStateIsValid, guardTransactionId } from "./role-message-guard-store.js";
+import { roleMessagesHourlyExempt } from "./role-message-limits.js";
 
 const policyV1: GuardPolicyV1 = {
 	version: "role-message-guard/v1",
@@ -637,6 +638,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 						if (fault || fresh.value.time.nowMs < now || !equal(fresh.value.causal, command.snapshot.causal))
 							outcome = blocked(fault ?? "clock_untrusted");
 						else if (
+							!roleMessagesHourlyExempt(fresh.value.actor.role) &&
 							state.usage.filter(
 								(u) =>
 									u.origin === command.identity.actor.role && now - u.committedAt < policyV1.ordinary.rollingWindowMs,

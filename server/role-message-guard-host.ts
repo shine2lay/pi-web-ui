@@ -77,6 +77,7 @@ import { guardCommandFingerprint, RoleMessageGuardCore, type GuardMessageIntent 
 import { guardDigest, GuardFileStore, guardJournalRefusal } from "./role-message-guard-store.js";
 import {
 	ROLE_MESSAGES_PER_HOUR,
+	roleMessagesHourlyExempt,
 	type RoleMessageDraft,
 	type RoleMessageGuardTag,
 	type RoleMessageRecord,
@@ -2107,7 +2108,7 @@ export class RoleMessageGuardHost {
 		const actor = this.senderActor(sender);
 		if (!actor) return rm.send(sender, input);
 		const lastHour = rm.hourlyCount(sender.role);
-		if (lastHour >= ROLE_MESSAGES_PER_HOUR)
+		if (!roleMessagesHourlyExempt(actor.role) && lastHour >= ROLE_MESSAGES_PER_HOUR)
 			return {
 				ok: false,
 				error: `Not sent: ${sender.role} has sent ${lastHour} role messages in the last hour (the limit is ${ROLE_MESSAGES_PER_HOUR}). Ask the owner before sending more.`,

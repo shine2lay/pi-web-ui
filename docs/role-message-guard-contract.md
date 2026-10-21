@@ -25,7 +25,12 @@ These are document SHA256 pins, not authentication or runtime approval:
 
 Private originals: `/home/shinelay/company-lab/shared/role-message-approval-plan-2026-10-12/`.
 PLAN-v2 controls policy conflicts. Only urgent option **B, depth-only**, is selected;
-the original proposal's hourly exemption is NOT policy. PLAN-v3 changes staging only.
+the original proposal's urgency-based hourly exemption is NOT policy. Separately, the Owner's
+2026-10-20 direction (dr-c6daedfa9fef, Ops #318) exempts the server-derived sender roles
+**temper and ops only** from the ordinary hourly refusal, across all their chats. There is no
+hourly backstop for those two roles; usage is still recorded. PLAN-v3 changes staging only.
+The frozen v1 policy fields, contract/policy pins and durable state format stay unchanged;
+the role-specific exemption is applied beside that policy, not stored in it.
 Version literal: `role-message-guard/v1`. A version/policy/contract digest mismatch is
 unavailable, not permission to fall back to an unguarded path. Landed commit, tree,
 source SHA256 and consumer handoff are recorded in private `split/contract/HANDOFF.md`.
@@ -167,10 +172,15 @@ never automatically sends business payload: a fresh explicit send rechecks all g
 ### L5 — one ordinary hourly ledger
 
 **20 accepted communications per origin ROLE per rolling 3,600,000 ms**, shared by
-home/task chats, branches, recipients, business/control/protected traffic. The twentieth
-is the last. The twenty-first is blocked **even if urgent**. Accepted waiting, failed
-and indeterminate deliveries keep their charge. Reports already excluded by the old
-reader remain reports; new controls/protected notices MUST NOT be disguised as report.
+home/task chats, branches, recipients, business/control/protected traffic, **except temper
+and ops have no hourly limit** (Owner, 2026-10-20, dr-c6daedfa9fef; Ops #318). For every
+other role the twentieth is the last; the twenty-first is blocked **even if urgent**, with
+the existing refusal text/reason. Only the server-derived sender role selects the exemption,
+never agent input. All roles' accepted communications remain recorded in the same hourly
+ledger. Accepted waiting, failed and indeterminate deliveries keep their charge. Reports
+already excluded by the old reader remain reports; new controls/protected notices MUST NOT
+be disguised as report. The exemption skips only the ordinary hourly refusal: chain limits,
+grants, approvals, scope, causality, pauses/holds and the board's post cap are unchanged.
 
 Trusted finite safe-integer time/counter validation is required. Event age must be
 0≤age<window; exact window expiry frees capacity. Future timestamps, clock rollback,
@@ -203,7 +213,8 @@ pending/unknown reservations; incident expires after **86,400,000 ms**. Complete
 rendered template at most **2,048 UTF-8 bytes**, including required scope/unknown/receipt
 facts, never clipped. No attachment, prompt, transcript or executable instruction.
 
-All smaller bounds apply SIMULTANEOUSLY with ordinary 20/hour. Protection bypasses
+All smaller bounds apply SIMULTANEOUSLY with ordinary 20/hour for non-exempt origins;
+the Owner's ops/temper ordinary-hourly exemption does not relax any protected bound. Protection bypasses
 DEPTH ONLY, preserves original depth and consumes no continuation grant. It does not
 propagate to ordinary replies. Reserved result storage is NOT future delivery capacity;
 a late result faces current limits. Failed/unknown accepted deliveries keep every charge.

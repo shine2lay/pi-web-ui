@@ -10,6 +10,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## role-message-hourly-exempt: no hourly limit for Temper and Ops, with every other message guard unchanged
+
+- `local` (Owner, 2026-10-20, dr-c6daedfa9fef; Ops #318). Owner: "temper and ops have no limit"; Ops chose no hourly backstop. Hypothesis H-MSGCAP-EXEMPT-1 and its evidence: `docs/role-message-ladder.md`.
+- Import-free `server/role-message-limits.ts`: fixed `ROLE_MESSAGES_HOURLY_EXEMPT_ROLES = ["temper", "ops"]` and `roleMessagesHourlyExempt`, re-exported beside `ROLE_MESSAGES_PER_HOUR` in `server/role-messages.ts`. Checked only against the server-derived sender in native fallback, approvals host and approvals core. Usage still recorded and counted. Frozen v1 policy and durable schema unchanged; other roles still 20 per rolling 3,600,000 ms with the same refusal. Chain limits, grants, approvals, causality, pauses, holds, report handling and board cap unchanged.
+- Ops lead clarification H-MSGCAP-RETAIN-1: native trimming retains capped-role records younger than one hour in addition to normal history (at most capped roles × 20 extra), so unlimited traffic cannot erase another role's quota evidence. Exempt rows still rotate. Guard usage pruning is already time-only, storage fails closed instead of dropping recent usage, and each host generation carries native hourly evidence over. No usage-count algorithm change.
+- Checks: new fixed-input native/core/host tests accept sends 21 and 40 from both roles across home/task chats, with approvals ready and unavailable; QA's send 21 keeps its exact refusal and rolling window, forged sender fields fail to bypass it, Ops's hop 7 needs a grant, and a pre-change writer's journal reloads its usage and live grant before Ops's send 21 consumes exactly one grant use. Negative control on old code refuses the exempt sends at 21. Further fixed-input tests (all red before the retention/import fix): QA's 20 plus Ops's 981/5,000, capped-role bound, reload, exact expiry, exempt rotation and isolated core runtime graph. Existing chain-pruning fixture ages its records one hour before pruning, retaining every original assertion. Full sealed gate and install checks recorded with the hypothesis.
+- Undo: revert this patch and install through `pi-web-deploy`; no migration or configuration change.
+
 ## bigchat-stats: share transcript-revision statistics across windows instead of rewalking unchanged big chats
 
 - `local` (Ops #308, live bigchat/shared-loop diagnosis). H-308-S, falsified alternatives and numeric evidence: `docs/bigchat-live-stalls.md`; Architecture read `rm-f7eee87e`.

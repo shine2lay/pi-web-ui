@@ -30,8 +30,67 @@ Roles message each other with `message_role`. A message started by another role'
   ("Message continuation: Owner decision") and on Telegram through the authorised plugin, bound to
   the request generation. They send no agent message and charge nothing. Queue Auto approve is not
   Owner authority.
-- Approval controls are typed: they skip only the business depth check and still count in the unchanged
-  **20 accepted per role per rolling hour**. Pauses, holds, scope, budgets and consents are unchanged.
+- Approval controls are typed: they skip only the business depth check and still count in the hourly
+  ledger. The limit is **20 accepted per role per rolling hour**, except **temper and ops have no hourly
+  limit**, across all their chats (Owner, 2026-10-20, dr-c6daedfa9fef; Ops #318). Their messages still
+  count; the exemption skips only the hourly refusal, not chain approvals, grants, pauses, holds, scope,
+  budgets or consents. No other role or the board's post cap changes.
+
+## Hourly exemption: H-MSGCAP-EXEMPT-1 (Ops #318)
+
+Lead: Ops. Owner source: dr-c6daedfa9fef, 2026-10-20 ("temper and ops have no limit";
+"Let Ops choose"). Ops chose no hourly backstop; the chain's finite grants remain the loop boundary.
+
+- Wrong now/evidence: the shared 20/hour cap stopped Temper #129's final review and land requests,
+  and refused Ops sends at 16:56 and 17:49 on 2026-10-20, against the Owner's direction.
+- One change: a fixed server-side `ROLE_MESSAGES_HOURLY_EXEMPT_ROLES = ["temper", "ops"]` and helper
+  skip only the hourly refusal in native fallback send, approvals host and approvals core. Match the
+  verified sender role, never tool input. Keep usage recording and the frozen v1 policy unchanged.
+- Expected/measured: sealed cases accept the 21st and 40th sends for both roles, across home/task chats,
+  with approvals ready and unavailable. QA's 21st keeps the exact refusal text and `ordinary_hourly`
+  reason where supplied. Ops's seventh chain hop still needs a grant. A pre-change journal still loads
+  and works. After installation, inspect logs and message metadata passively; send no real-role probes.
+- Falsifier: an hourly refusal for either exempt role; a changed cap/text for another role; or a skipped
+  chain/grant check. Keep `ROLE_MESSAGES_PER_HOUR = 20` and the board's cap unchanged.
+- Result: stage HIT. Old-code controls refuse the exempt sends at 21; corrected sealed gate passes
+  all 469 files (7,145 tests, six skipped), format, typecheck, protocol, build and 74 PTY checks.
+  Exempt 21st/40th sends, QA refusal, unchanged chain gates and pre-change journal reload all pass.
+  Installed-build/passive-log check follows the land; no real-role test messages.
+
+### Retention clarification: H-MSGCAP-RETAIN-1 (Ops lead, 2026-10-20)
+
+This is the Ops lead's technical clarification of #318, not new Owner consent.
+
+- Wrong/evidence: review found that native `save()` trims delivered history at 1,000 records while
+  `hourlyCount()` counts that history. QA's 20 deliveries followed by 981 unlimited Ops deliveries can
+  remove QA's earliest charge and admit QA's 21st within the same hour. At 5,000 Ops deliveries the
+  whole QA hour can disappear. Exemption alone therefore fails the unchanged-cap requirement.
+- One change: protect capped roles' non-report records younger than `HOUR_MS` during existing history
+  trimming, in addition to the normal newest 1,000. Exempt rows still rotate. The additional hourly
+  proof is bounded by **number of capped sender roles × 20**; existing waiting/report protections
+  remain separate. Keep `hourlyCount()`, the schema, the frozen v1 policy and refusal text/reasons.
+  Isolate the exemption constant/helper in an import-free module, re-exported beside the native cap.
+- Expected/measured: fixed-input cases (red before the retention fix) deliver QA's 20, then Ops's 981
+  and 5,000; QA's 21st still fails before and after reload. At exactly `HOUR_MS`, aged QA proof no
+  longer counts and may rotate. The history adds at most 20 rows per capped role and still rotates
+  exempt rows past 1,000. Core's runtime import graph loads neither native messages nor the SDK.
+  Inspect core/store usage retention and host rotation/carry-over for equivalent count eviction.
+- Falsifier: recent capped-role usage disappears; expired proof remains charged; exempt rows stop
+  rotating; extra hourly-proof rows exceed the bound; or standalone core loads native messages/SDK.
+- History inspection: core usage pruning is time-only (`server/role-message-guard-core.ts:466`);
+  `GuardFileStore.commit()` rejects removal of a still-recent charge (`server/role-message-guard-store.ts:1008–1011`).
+  Its usage-count capacity fails closed (`server/role-message-guard-core.ts:549`); it never evicts
+  charges to admit a send. Host `sendNow()` checks native `hourlyCount()` (`server/role-message-guard-host.ts:2110–2111`);
+  `freshState()` carries all native records in the last hour into each new generation (`server/role-message-guard-host.ts:1053`),
+  with no count trimming. No changes to these retention rules were needed. The old chain-pruning test now ages
+  its chain exactly one hour before eviction, keeping every chain/restart assertion.
+- Result: seven pre-fix cases red (six admit QA's 21st; one imports native messages into core).
+  First sealed gate: 7,143 passed, six skipped, two failed. The 981-case boundary assertion wrongly
+  required all expired proof to vanish, rather than allowing it in normal newest-1,000 history;
+  corrected to assert the exact remaining count (18, or zero after 5,000). The unrelated CLI test
+  needs `dist/server/plugin-updater.js`, so build the worktree before the corrected gate. No production
+  change or check loosened for either failure. Corrected full sealed gate: HIT (7,145 passed,
+  six skipped; 469 files), including every retention/import regression and existing safeguards.
 
 ## Chain identity
 
@@ -41,7 +100,8 @@ edited parent, or a parent dropped more than 30 days ago) is `unknown`: it is ne
 it needs the Owner. Legacy records without root/parent are anchored explicitly (partial provenance),
 never reset.
 
-`role-messages.json` keeps only its newest 1000 records. A chain's place never depends on that rotating
+`role-messages.json` keeps its newest 1000 records plus waiting/report protections and capped roles'
+non-report hourly proof (Ops #318; at most capped roles × 20 extra hourly-proof rows). A chain's place never depends on that rotating
 copy: when a record is dropped, its chain facts (id, hash, target, root, parent, hop, guard tag) go to
 `role-messages-chains.jsonl` beside it and are kept 30 days, so a reply to a pruned message keeps its hop
 (before, it became `unknown`, and the native code even counted it as hop 0).

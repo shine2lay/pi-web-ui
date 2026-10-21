@@ -815,6 +815,32 @@ describe("E grants/requests: finite quantity, first answer and scope", () => {
 	});
 });
 
+describe("owner's hourly exemptions (admission core, Ops #318)", () => {
+	it.each(["temper", "ops"])("%s accepts the 21st and 40th, recording every ordinary usage event", async (id) => {
+		const t = await fixture();
+		for (let n = 1; n <= 40; n++) {
+			const r = await t.core.execute(t.business(`exempt-${n}`, 1, null, null, actor(id)));
+			expect(r.state, `send ${n}`).toBe("accepted");
+			if (r.state === "accepted") expect(r.receipt.usage.ordinaryOrigin).toBe(1);
+		}
+		expect((await t.state()).usage.filter((u) => u.origin === id)).toHaveLength(40);
+		expect(reason(await t.core.execute(t.business("hop-7", 7, null, null, actor(id))))).toBe("approval_required");
+		t.f.hold = true;
+		expect(reason(await t.core.execute(t.business("held", 1, null, null, actor(id))))).toBe("held");
+	});
+
+	it("qa still refuses its 21st with ordinary_hourly, until exactly one rolling hour", async () => {
+		const t = await fixture();
+		for (let n = 1; n <= 20; n++)
+			expect((await t.core.execute(t.business(`qa-${n}`, 1, null, null, actor("qa")))).state).toBe("accepted");
+		expect(reason(await t.core.execute(t.business("qa-21", 1, null, null, actor("qa"))))).toBe("ordinary_hourly");
+		t.f.now += 3_600_000 - 1;
+		expect(reason(await t.core.execute(t.business("qa-too-soon", 1, null, null, actor("qa"))))).toBe("ordinary_hourly");
+		t.f.now++;
+		expect((await t.core.execute(t.business("qa-hour", 1, null, null, actor("qa")))).state).toBe("accepted");
+	});
+});
+
 describe("E one ordinary/protected writer: no urgent quota escape", () => {
 	it("twenty-first protected communication is blocked by ordinary20/hour", async () => {
 		const t = await fixture();

@@ -28,7 +28,7 @@
 // while it waited) is sent again after the chat has been idle a while; a restart forgets nothing (the
 // store is on disk, the transcript is the proof).
 //
-// Caps: 20 messages an hour per sending role; a chain limit of 6 (a message sent while handling a
+// Caps: 20 messages an hour per sending role except ops/temper; a chain limit of 6 (a message sent while handling a
 // role message is one deeper than it). The owner can pause delivery (Settings → Identities): messages
 // are held, not dropped.
 //
@@ -56,12 +56,14 @@ import type {
 } from "./protocol.js";
 import { ownerChannelOf, type OwnerChannel, type RoleOwnerAnswer, OWNER_IDS_MAX } from "./role-replies.js";
 import { CARRY_ON_PREFIX } from "./running-chats.js";
+import { roleMessagesHourlyExempt } from "./role-message-limits.js";
 import { TASK_QUEUE_ENTRY_TYPE, taskQueueFromEntries, taskQueueHeld, type TaskQueueEntryLike } from "./task-queue.js";
 
 /** The kinds message_role sends (role-reports' "report" is the app's alone). */
 export const ROLE_MESSAGE_KINDS: readonly UiRoleMessageKind[] = ["question", "request", "fyi", "reply"];
-/** Messages a sending role may send in an hour. */
+/** Messages a sending role may send in an hour, unless the Owner exempted it below. */
 export const ROLE_MESSAGES_PER_HOUR = 20;
+export { ROLE_MESSAGES_HOURLY_EXEMPT_ROLES, roleMessagesHourlyExempt } from "./role-message-limits.js";
 /** The deepest a chain of messages may go (a message sent while handling one is one deeper). */
 export const ROLE_MESSAGE_CHAIN_MAX = 6;
 /** The longest text a message may carry. */
@@ -986,14 +988,17 @@ export class RoleMessages {
 		const keep = this.data.messages;
 		if (keep.length > ROLE_MESSAGES_KEEP) {
 			const extra = keep.length - ROLE_MESSAGES_KEEP;
-			let dropped = 0;
+			let considered = 0;
 			const now = this.now();
 			const gone: RoleMessageRecord[] = [];
 			this.data.messages = keep.filter((m) => {
 				// role-reports: a recent report request stays: it is the proof that the day was asked for.
 				const proof = m.kind === "report" && now - m.at < REPORT_KEEP_MS;
-				if (dropped < extra && m.state !== "waiting" && !proof) {
-					dropped++;
+				if (considered < extra && m.state !== "waiting" && !proof) {
+					considered++;
+					// Ops #318: unlimited traffic must not evict capped roles' unexpired hourly proof.
+					// At most capped roles × 20 extra rows; exempt history rotates as before.
+					if (m.kind !== "report" && !roleMessagesHourlyExempt(m.from.role) && now - m.at < HOUR_MS) return true;
 					gone.push(m);
 					return false;
 				}
@@ -1559,7 +1564,7 @@ export class RoleMessages {
 		}
 		const now = this.now();
 		const lastHour = this.hourlyCount(sender.role, now);
-		if (lastHour >= ROLE_MESSAGES_PER_HOUR) {
+		if (!roleMessagesHourlyExempt(sender.role) && lastHour >= ROLE_MESSAGES_PER_HOUR) {
 			return {
 				ok: false,
 				error: `Not sent: ${sender.role} has sent ${lastHour} role messages in the last hour (the limit is ${ROLE_MESSAGES_PER_HOUR}). Ask the owner before sending more.`,
