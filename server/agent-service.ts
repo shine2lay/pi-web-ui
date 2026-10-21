@@ -114,6 +114,7 @@ import { type AdoptCandidate, pickAdoptTarget } from "./attach-adopt.js";
 import { describeError, errorMessage, planForLostActive } from "./crash-guard.js";
 // list-freeze: message counts without getSessionStats() (which re-projects the whole context).
 import { messageCountOf } from "./message-count.js";
+import { invalidateSessionStats, sessionStatsOf } from "./session-stats.js";
 import { attachUsageLedger, recordUsageLedgerEntry } from "./usage-accounting-ledger.js";
 // new-chat-default: the global default model is what every new chat starts on.
 import { carryOverToNewChat, freshChatModel } from "./new-chat-model.js";
@@ -568,13 +569,8 @@ const DESKTOP_WIRE = desktopDirWire(HOME_WIRE);
 const STREAMING_SNAPSHOT_INTERVAL_MS = 2000;
 /** Deltas newer than this keep the streaming (low-frequency) snapshot cadence. */
 const DELTA_ACTIVE_WINDOW_MS = 1500;
-/**
- * `session.getSessionStats()` 会遍历整份转写，而 `message_delta` 曾经**每一帧**都调它
- * （只为了填 usage）。实测 6000 条转写 × 6002 帧时这一条链占了流式阶段 **27.6%** 的 CPU
- * （2123ms），而一个「最多旧 250ms」的读数对进度条/上下文指示器来说与实时值无法区分。
- * 加这层短缓存后实测流式 CPU 4.859s → 1.328s（3.7×），快照字节数完全不变（issue #259）。
- */
-const STATS_CACHE_MS = 250;
+/** Base-token previews retain their existing short memo; transcript stats use session-stats.ts. */
+const BASE_TOKENS_CACHE_MS = 250;
 const WIDGET_REFRESH_MS = 2000;
 /** SCM「AI 生成提交信息」的单次补全超时——慢供应商不该让按钮转圈到天荒地老。 */
 const SCM_COMMITMSG_TIMEOUT_MS = 60_000;
@@ -3782,7 +3778,7 @@ export class ClientSession {
 		if (
 			this.cachedBaseTokens &&
 			this.cachedBaseTokens.convId === conv.id &&
-			now - this.cachedBaseTokens.at < STATS_CACHE_MS
+			now - this.cachedBaseTokens.at < BASE_TOKENS_CACHE_MS
 		) {
 			return this.cachedBaseTokens.tokens;
 		}
@@ -4429,14 +4425,6 @@ export class ClientSession {
 	/** Timestamp of the most recent message_delta push — while fresh, snapshots
 	 *  use the slower STREAMING_SNAPSHOT_INTERVAL_MS cadence. */
 	private lastDeltaAt = 0;
-	/** Short-lived `getSessionStats()` memo — see STATS_CACHE_MS. Keyed by the
-	 *  session instance so a conversation switch never serves the previous one.
-	 *  server-owned-chats：按会话各存一份（不是单槽）—— 订阅方会替别的窗口流式它自己
-	 *  没在看的对话，两条对话同时在跑时单槽会被每一帧互相挤掉。 */
-	private readonly sessionStatsCache = new WeakMap<
-		AgentSession,
-		{ at: number; value: ReturnType<AgentSession["getSessionStats"]> }
-	>();
 	private sessionsTimer: ReturnType<typeof setTimeout> | null = null;
 	private version = 0;
 	/** Snapshot revision counter (see emitSnapshotNow / protocol snapshot_delta). */
@@ -5633,7 +5621,7 @@ export class ClientSession {
 			// here named every tool again and undid masks add-ons set at session start (pi-control-chrome's
 			// 41 browser tools, hidden until its skill loads).
 			if (removeTaskChatTools(session)) {
-				this.sessionStatsCache.delete(session);
+				invalidateSessionStats(session);
 				this.cachedBaseTokens = null;
 				const shown = this.convs.get(this.activeId);
 				if (shown && shown.session === session) this.flushSnapshot();
@@ -6576,14 +6564,24 @@ export class ClientSession {
 		}
 	}
 
+	private latestConversationForPlugins(): Conversation | null {
+		let target: Conversation | null = null;
+		for (const c of this.convs.values()) {
+			if (!target || c.lastActiveAt > target.lastActiveAt) target = c;
+		}
+		return target;
+	}
+
+	/** bigchat-stats: id-only plugin/scheduler routing must not project messages or stats. */
+	conversationIdForPlugins(): string | undefined {
+		return this.latestConversationForPlugins()?.id;
+	}
+
 	/** 插件用：本客户端最近活跃对话的快照（轨迹视图直接显示打开对话的时间线）。
 	 *  messages/streamingMessage 为引用稳定的只读缓存对象——调用方只读、不得修改。 */
 	readConversationForPlugins(): PluginConversationSnapshot | null {
 		try {
-			let target: Conversation | null = null;
-			for (const c of this.convs.values()) {
-				if (!target || c.lastActiveAt > target.lastActiveAt) target = c;
-			}
+			const target = this.latestConversationForPlugins();
 			if (!target) return null;
 			const state = target.session.agent.state;
 			let stats: PluginConversationSnapshot["stats"] = {
@@ -6592,7 +6590,7 @@ export class ClientSession {
 				cost: 0,
 			};
 			try {
-				const s = target.session.getSessionStats();
+				const s = this.sessionStats(target.session);
 				stats = { totalMessages: s.totalMessages, tokens: s.tokens, cost: s.cost };
 			} catch {
 				/* stats 尽力而为 */
@@ -9478,20 +9476,10 @@ export class ClientSession {
 		this.emitSnapshotNow(forceFull);
 	}
 
-	/**
-	 * Cached `session.getSessionStats()` — the SDK computes it by walking the whole
-	 * transcript, and the message_delta path used to call it per streaming frame
-	 * (measured: 27.6% of streaming CPU at 6000 messages, see STATS_CACHE_MS).
-	 * Callers that need the authoritative value can still call the session
-	 * directly; every cache hit here is at most STATS_CACHE_MS stale.
-	 */
+	/** bigchat-stats: windows share statistics until the transcript or model limits change.
+	 * A 250ms per-window memo repeatedly walked unchanged big chats, even for partial deltas. */
 	private sessionStats(session: AgentSession = this.session): ReturnType<AgentSession["getSessionStats"]> {
-		const now = Date.now();
-		const hit = this.sessionStatsCache.get(session);
-		if (hit && now - hit.at < STATS_CACHE_MS) return hit.value;
-		const value = session.getSessionStats();
-		this.sessionStatsCache.set(session, { at: now, value });
-		return value;
+		return sessionStatsOf(session);
 	}
 
 	private scheduleSnapshot(): void {
@@ -10129,7 +10117,7 @@ export class ClientSession {
 			isQueueTaskChatEntries(session.sessionManager.getEntries()),
 		);
 		this.syncPluginTools(session, targetPreset);
-		this.sessionStatsCache.delete(session);
+		invalidateSessionStats(session);
 		this.cachedBaseTokens = null;
 		// SDK 的 setActiveToolsByName 只改 agent.state.tools，不派发任何事件——门控后
 		// 主动推一次快照，否则快照里的 tools 要等下一个 SDK 事件才对齐（会话空闲时永远
@@ -10188,7 +10176,7 @@ export class ClientSession {
 		}
 		conv.agentPreset = hit.id;
 		this.applyToolGating(conv.session, hit.id);
-		this.sessionStatsCache.delete(conv.session);
+		invalidateSessionStats(conv.session);
 		this.cachedBaseTokens = null;
 		// 技能名录段/终端引导是按 run 组装的提示词：重载 resourceLoader 让新预设
 		// 即时生效（只有空白会话能切到这里，无历史可丢）。
@@ -17864,7 +17852,7 @@ export class AgentService {
 				throw new Error(`chatFromPlugin: failed to switch thinking level (${thinking}): ${(err as Error).message}`);
 			}
 		}
-		const conversationId = cs.readConversationForPlugins()?.conversationId ?? "";
+		const conversationId = cs.conversationIdForPlugins() ?? "";
 		void cs.prompt(text);
 		return { conversationId, clientId };
 	}
@@ -17913,7 +17901,7 @@ export class AgentService {
 					return { ok: false, error: `Failed to switch thinking level (${thinking}): ${(err as Error).message}` };
 				}
 			}
-			const conversationId = cs.readConversationForPlugins()?.conversationId ?? "";
+			const conversationId = cs.conversationIdForPlugins() ?? "";
 			void cs.prompt(`[Scheduled task] ${text}`);
 			// 等待运行结束：每 2s 轮询，最长 10 分钟。超时按失败记录（运行继续）。
 			const deadline = Date.now() + 10 * 60 * 1000;

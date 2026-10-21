@@ -10,6 +10,13 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## bigchat-stats: share transcript-revision statistics across windows instead of rewalking unchanged big chats
+
+- `local` (Ops #308, live bigchat/shared-loop diagnosis). H-308-S, falsified alternatives and numeric evidence: `docs/bigchat-live-stalls.md`; Architecture read `rm-f7eee87e`.
+- `server/session-stats.ts`: weak per-session-manager cache, O(1) leaf + fileEntries identity/length revision, effective model presence/context-window value keys. Unknown manager layouts retain a completion-timed250ms fallback. `ClientSession.sessionStats` and plugin/scheduler polls use it; id-only routing avoids derived reads. SDK calculation unchanged; immutable persisted entries required.
+- Check: `tests/unit/session-stats.test.ts` through the real ClientSession method (unchanged reads beyond250ms, windows/wrappers, slow compute, append, branch, reload, selected/routed model, separate managers, errors and fallback), negative control on the old method, sealed copied-file measurement, normal gate and bounded live bigchat proof. No usage-ledger edit, retry, timeout or picture-rule change.
+- Undo: revert this patch and install through `pi-web-deploy`; no migration.
+
 ## usage-accounting-ledger: retain numeric usage for chats, helpers and isolated app calls
 
 - `local` (owner's automatic-cost-accounting request, Ops #306). H-AUTOCOST-7 and verification: `docs/usage-accounting-ledger.md`.
