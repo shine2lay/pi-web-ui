@@ -38,13 +38,13 @@ A refresh every 15 s that blocks the main thread would add stalls of its own. So
 
 ## Measured before the change (step 2)
 
-Sealed build timing: the server's own code, run in a sealed server on a temporary copy of the role data and the work registry (in /dev/shm, deleted after), 10 builds of each with 2 s between them; the longest blocking slice is the longest event-loop gap during a build (`~/kept-from-tmp/2026-10-19/pages-fresh/timing-*.mjs`).
+Sealed build timing: the server's own code, run in a sealed server on a temporary copy of the role data and the work registry (in /dev/shm; copied content deleted after), 10 builds of each with 2 s between them; the longest blocking slice is the longest event-loop gap during a build (`~/kept-from-tmp/2026-10-19/pages-fresh/timing-*.mjs`). The final report recomputes these percentiles from the raw records using nearest rank (`ceil(p * n)`); this corrects the earlier table's upper-middle/maximum values without another test run.
 
 | Build (code 0ce9bd8b, quiet machine) | Wall p50 / p90 | Longest slice p50 / p90 / max | Size |
 |---|---|---|---|
-| Roles overview (`readRolesOverview`) | 92 / 119 ms | 16 / 20 / 23 ms | 490 KB |
-| Work page (`readWorkPage`, with its own overview) | 107 / 146 ms | 17 / 25 / 25 ms | 373 KB |
-| Initiatives decisions page (`initiativesPage`) | 112 / 143 ms | 113 / 144 / 144 ms (one slice) | 205 KB |
+| Roles overview (`readRolesOverview`) | 92 / 117 ms | 16 / 20 / 23 ms | 490 KB |
+| Work page (`readWorkPage`, with its own overview) | 100 / 121 ms | 17 / 23 / 25 ms | 373 KB |
+| Initiatives decisions page (`initiativesPage`) | 112 / 127 ms | 113 / 128 / 144 ms (one slice) | 205 KB |
 
 The server's own first overview after a start (cold) took 8.9 s, with a 544 ms slice. A second run on the code then live (bb432079, after #268) while the machine was loaded (load average 25-32 on 20 cores, other tasks' gates and temper's tests) was 6-10 times slower across the board, the decisions page too, whose code hadn't changed: the machine, not the code.
 
@@ -85,6 +85,75 @@ Client (`web/src/work-page-state.ts`, `web/src/use-chat.ts`): the Initiatives pa
   - H-PF-SEALED-2 (each open as a new window leaves a blank chat whose cost grows): miss. With one fixed window id, the server's CPU still rose to 1.5-3.2 s per 10 s during the opens, from 0.1 s per 10 s at rest. Each fresh page load costs the server about that, with or without this change; it is noted for Ops, not changed here.
 - So the test checks what the server controls: first data within 1 s p90 of the page's watch. From navigation start it is printed, not checked, with the machine's load beside it. Last run (load 23-35): from the watch, Roles p90 520 ms and Initiatives p90 436 ms; from navigation start, Roles p90 1991 ms and Initiatives p90 2293 ms.
 - The live check (done when) stays from navigation start, as the before-looks above were measured.
+
+## Measured after and verdict (2026-10-20)
+
+**H-PAGES-FRESH-1: HIT on the live first-data, stall and sealed tab-return bars.** The server keeps the expensive Roles/work-page data ready without adding a long blocking slice. This is not proof that every open is under 1 s, or that Roles got faster: Roles already had a copy. Real-use tab-return performance remains **not enough data** for both pages. The live incremental CPU cost is not isolated; the sealed cost is below 2% of one core.
+
+### Install and checks
+
+- Code landed as `e6d6f25`, land request `107-31824f`: 453 unit-test files, 6535 tests passed, together with the normal protocol, PATCHES, type, lint and formatting checks. The focused watcher/refresher/grace test group had passed 72 tests; the sealed browser checks are above.
+- First live at **2026-10-19 22:03:17 PDT**, in #271's `6293f27f` install, which contains this commit. #271 landed on top while this task was waiting for #244. Continuous deployment therefore brought this code live before #244 ended; this task did not request an early install or roll back another task's work. #244's real-use report separates the earlier returns; the observation window here begins at this first install.
+- After #244 finished, `pi-web-deploy result e6d6f25` returned 0 with **all checks passed**, via `d7b5fbfd` installed 23:37. The final check on Oct 20 at 22:08 again returned 0, via `a4bcc9f4` installed 19:19, all checks passed. This includes the deployer's server, page, throwaway-chat, big-chat-copy and log checks.
+- A later, unrelated #306 install (`9c805232`, Oct 20 15:31) stayed live after a big-chat check failure; Ops was notified. The result command also exits 0 in that case, so the receipt's text, not its exit alone, was checked. The all-pass receipts above establish this task's install result.
+
+### Live first data: 10 opens per page
+
+Look-only, Oct 19 23:44-23:47, fixed pseudo id `carry-on:ops-live-look-pages-fresh`. Measured from navigation start, exactly as before; Initiatives needs both its work page and decisions page. No missing answers or page errors.
+
+| Page | Before, quieter look p50 / p90 / max | After p50 / p90 / max | 1 s p90 bar |
+|---|---|---|---|
+| Roles | 348 / 485 / 613 ms | 618 / 862 / 1785 ms | Met |
+| Initiatives | 610 / 1366 / 2403 ms | 645 / 678 / 752 ms | Met |
+
+The loaded before-look is retained above, not substituted for the quieter baseline. Machine load during the after-look was about 1-2. Roles' p90 is higher than the quiet baseline; an intervening chat-slots change also creates a fresh blank session on each window hello, before page watches can be answered. The work page now arrives from the kept copy. This meets the absolute opening bar, not a causal speed-up claim for Roles.
+
+### Blocking slices and CPU
+
+After timing, Oct 19 23:49-23:51, installed code `d7b5fbfd`, sealed temporary data copy, 10 builds each; nearest-rank percentiles:
+
+| Build | Wall p50 / p90 / max | Longest slice p50 / p90 / max |
+|---|---|---|
+| Roles overview | 97 / 149 / 247 ms | 17 / 24 / 41 ms |
+| Work page with its own overview | 111 / 144 / 169 ms | 18 / 28 / 29 ms |
+| Refresher round: one overview, reused for the work page | 88 / 129 / 137 ms | 15 / 22 / 23 ms |
+| Decisions page, still off the timer | 151 / 187 / 212 ms | 152 / 189 / 213 ms |
+
+The timer's round remains below the 50 ms slice rule. Its CPU was 104.8 ms mean, 95 ms p50, 133 ms p90, 139 ms maximum per round. At one round per 15 s that is **0.70% of one core mean**, 0.89% at the p90 cost, and 0.93% at the maximum measured cost, below 2% in this sealed measurement.
+
+The live 10-minute cost records are process-wide CPU accumulated while a round is in progress, not exclusive refresher CPU. They reported upper bounds of 5.82%, 21.47%, 4.75%, 4.94%, 8.70%, 2.25%, 1.56% and 1.99% through 23:27, with no failed rounds. Two intervals had skips (4 and 1) and one had a 32 s wall-time maximum. Other work and stalls overlap these rounds; these bounds cannot establish that the live incremental CPU stayed below 2%. No such claim is made.
+
+### Stalls: the full two hours on each side
+
+`conn-events*.jsonl`, kind `stall`, `ms >= 1000`, assigned by its start (`from`), half-open windows. Times below are PDT.
+
+| Window | Stalls | Per hour | Duration p50 / p90 / max |
+|---|---|---|---|
+| Oct 19 20:03:17-22:03:17, before | 173 | 86.5 | 1596 / 3116 / 6140 ms |
+| Oct 19 22:03:17-Oct 20 00:03:17, after | 74 | 37.0 | 1482 / 2869 / 3230 ms |
+
+The after rate is below the allowed 95.15/h (before plus 10%): **met**. This is not a controlled attribution to the refresher. Mean machine load fell from 18.4 to 10.9; server CPU fell from about 60% to 39% of one core. Both windows contain other installs, and the first install also brought #271. The observation rules out the specified regression in these windows; it does not show that this change caused the reduction.
+
+### Real use: final 24-hour window
+
+Oct 19 22:03:17-Oct 20 22:03:17 PDT, checked after the deadline. Same definition fixed for #244: a `banner` episode ending visible with numeric `shownMs` and `durMs`, view `roles` or `initiatives`, with `shownMs - durMs <= 5000` (tab became visible near the episode's start). Episodes while already looking are not tab returns. Nearest-rank p50/p90 are shown, even for the small samples, without treating them as reliable percentiles.
+
+| Page | Qualifying returns | shownMs p50 / p90 / max | Finding |
+|---|---|---|---|
+| Roles | 1 | 1.47 / 1.47 / 1.47 s | Not enough data (fewer than 5) |
+| Initiatives | 1 | 1.69 / 1.69 / 1.69 s | Not enough data (fewer than 5) |
+
+The Roles episode ended Oct 20 12:04:26 (duration 0.09 s); Initiatives ended 08:45:08 (duration 0.30 s). Both were `doubt`, answered late on the existing socket. The trace was current throughout; few qualifying episodes do not mean the owner never opened either page, and do not establish a real-use improvement. No extra observation or code change is inferred from these two samples.
+
+### Evidence and limits
+
+Raw metadata, timing records and logs: `~/kept-from-tmp/2026-10-19/pages-fresh/`, including `look-before/result.json`, `look-before-2/result.json`, `look-after/result.json`, `timing/timing-{before,after}.jsonl`, `e2e-5.log`, `e2e-5.jsonl`, `land-2.log` and read-only `page-returns.mjs`. No chat text or model payloads were read for the measurements.
+
+Copied role/registry/session content was deleted after sealed timing. Only generated fixture identity metadata (`id`, `title`, `homeChat`) remains in `/dev/shm/pf-stage/identities`: the role-folder guard refused deletion, and was not bypassed. It is on tmpfs, not a retained copy of chat content.
+
+Ops' scope decisions are explicit above: the decisions-page builder was not put on the timer because it failed the slice rule and belongs to Architecture; the busy-machine sealed opening assertion measures from the watch and prints navigation time. The **live** opening bar remains navigation-to-first-data; the sealed return bar remains hide-to-fresh-data after 60 s hidden. No page-content or browser-storage change was added.
+
+Undo: `pi-web-deploy rollback` restores the previous installed build, including any other changes in that build boundary; a selective revert of `e6d6f25` must be landed and deployed through the normal gates. No rollback is needed by the measured acceptance bars.
 
 ## Kept as it is
 
