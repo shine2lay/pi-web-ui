@@ -704,10 +704,15 @@ describe("delivery", () => {
 		expect(await taskChatPaused(Q)).toBe(false);
 		queueEntry(QC, { op: "hold", id: 4, why: "owner: pause it", by: "panel" });
 		expect(await taskChatPaused(Q)).toBe(true);
+		const { queueOwesBack } = await import("../../server/role-messages.js");
+		expect(await queueOwesBack(QC)).toBe(false);
 		queueEntry(QC, { op: "release", id: 4 });
 		expect(await taskChatPaused(Q)).toBe(true);
+		expect(await queueOwesBack(QC)).toBe(true);
+		expect(await queueOwesBack(Q)).toBe(false);
 		queueEntry(QC, { op: "back", id: 4 });
 		expect(await taskChatPaused(Q)).toBe(false);
+		expect(await queueOwesBack(QC)).toBe(false);
 		// The whole queue paused and resumed: the same.
 		queueEntry(QC, { op: "hold", why: "owner: the whole queue", by: "tool" });
 		expect(await taskChatPaused(Q)).toBe(true);

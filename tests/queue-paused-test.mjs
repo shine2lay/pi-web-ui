@@ -837,7 +837,9 @@ try {
 	check(
 		"a scheduled wake-up for the paused task's chat goes in without a turn (kept for after the pause)",
 		!!woke &&
-			/This came while the owner had this task paused/.test(customTexts(chat1, "queue-paused").join("\n")) &&
+			/This came while this task was paused or waiting to go back to work/.test(
+				customTexts(chat1, "queue-paused").join("\n"),
+			) &&
 			(seen.calls.get("Long work") ?? 0) === calls1,
 		JSON.stringify({ woke: !!woke, calls: (seen.calls.get("Long work") ?? 0) - calls1 }),
 	);

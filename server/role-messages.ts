@@ -143,9 +143,10 @@ export const ROLE_MESSAGE_CUSTOM_TYPE = "role-message";
  *  paused (a scheduled wake-up, a plugin's message): added without a turn, read once the pause is lifted. */
 export const QUEUE_PAUSED_CUSTOM_TYPE = "queue-paused";
 
-/** queue-paused: how such a message reads in the chat (and to its model, with its next turn). */
+/** queue-paused: how such a message reads in the chat (and to its model, with its next turn). Ops #393: also
+ *  after the owner's resume, until its "Back to task" note. */
 export function pausedNoteText(text: string): string {
-	return `${text.trim()}\n\n(This came while the owner had this task paused, so it started no turn.)`;
+	return `${text.trim()}\n\n(This came while this task was paused or waiting to go back to work, so it started no turn.)`;
 }
 
 export type RoleMessageKind = UiRoleMessageKind;
@@ -867,6 +868,15 @@ export async function taskChatPaused(file: string): Promise<boolean> {
 		const q = taskQueueAll(await queueEntriesOf(own.queueChat));
 		const t = q.tasks.find((x) => x.id === own.id);
 		return !!t && (!!taskQueueHeld(t, q) || taskQueueBackOwed(t));
+	} catch {
+		return false;
+	}
+}
+
+/** queue-back-owed (Ops #393): whether a task in this queue chat's queue is owed its "Back to task" note. */
+export async function queueOwesBack(queueFile: string): Promise<boolean> {
+	try {
+		return taskQueueAll(await queueEntriesOf(queueFile)).tasks.some((t) => taskQueueBackOwed(t));
 	} catch {
 		return false;
 	}

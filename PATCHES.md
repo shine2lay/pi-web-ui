@@ -6338,7 +6338,7 @@ queue doesn't lift a task's own pause. Stop, Auto start and Auto approve keep th
 3. **Nothing starts a turn in a paused task's chat** (`role-messages.ts`, `agent-service.ts`,
    `index.ts`): a role-message question or reply, a scheduled wake-up bound to that chat and a
    plugin's prompt ("Temper run finished") go in as a custom message `queue-paused` without a turn, like
-   an fyi ("This came while the owner had this task paused, so it started no turn."), waiting for the
+   an fyi ("This came while this task was paused or waiting to go back to work, so it started no turn."), waiting for the
    chat's turn to end first if it is still finishing its step (`noteToPausedTaskChat`, retried every
    15 s for up to 30 min, `PI_WEB_PAUSED_NOTE_RETRY_MS`); the chat reads them on resume. The
    carry-on after a restart leaves a paused task's chat alone, and `queueWakeChat` refuses it. The
@@ -6355,7 +6355,14 @@ queue doesn't lift a task's own pause. Stop, Auto start and Auto approve keep th
    remove; paused again meanwhile, the pause counts. `taskQueueBackOwed(t)`; `taskChatPaused` reads the
    queue with `taskQueueAll` (the replay with its internal fields; the page's copy leaves `back` out).
    The "Back to task" note itself goes through `queueRunCommand`, which doesn't ask `taskChatPaused`.
-   The Queue panel and the Roles page show such a task as working, as before.
+   The Queue panel and the Roles page show such a task as working, as before. The review of #393 found
+   automatic paths that never asked: a goal review's result now goes in without a turn there
+   (`GoalHost.pausedChatNote`), the scheduler's fallback to the project's active chat
+   (`wakeViewportInCwd`) skips such chats, and a scheduler's or plugin's client opening a project lands
+   in a new chat when the newest one is such a chat. After a restart, the queue chats owing a task its
+   note open first, past the 10-chat cap (`queueHomesToOpen`, `queueOwesBack`), since only they send it.
+   `chatState` also counts a chat's subagents at work (`subagents`, `subagentsAtWork`): pi-queue doesn't
+   lend a paused chat's lane while one of them may still write.
 4. **The Queue panel** (`TaskQueuePanel.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`): Pause /
    Resume on every open task, Pause queue / Resume queue in the header with a banner, and a "Paused by
    you · since HH:MM · why" line ("with the whole queue" for a task under the queue's pause). A

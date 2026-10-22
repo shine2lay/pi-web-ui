@@ -87,6 +87,11 @@ export interface ChatState {
 	 * Missing when no turn is known to run (a carry-over whose turn hasn't started, a compaction alone).
 	 */
 	turnSince?: number;
+	/**
+	 * queue-back-owed (Ops #393): how many of its helper chats (subagents, theirs included) are at work now. Missing
+	 * when none. pi-queue doesn't count a paused task's chat as stopped while one runs: it may still write.
+	 */
+	subagents?: number;
 }
 
 export interface QueueHostImpl {
@@ -353,6 +358,34 @@ export function chatStateFrom(busy: boolean | undefined, listed: { awaiting?: bo
 	return "closed";
 }
 
+/** What subagentsAtWork needs to know of an open chat. */
+export interface OpenChat {
+	id: string;
+	isSubagent: boolean;
+	parentId?: string;
+	/** Its transcript, resolved; undefined when it has none or can't be read. */
+	file?: string;
+	/** A turn or a compaction runs there, or a message is on its way. */
+	busy: boolean;
+}
+
+/**
+ * queue-back-owed (Ops #393): how many subagents at work descend from the open chat(s) with transcript `file`
+ * (a subagent's own subagents too). A chain that loops or runs deeper than 16 counts for no chat.
+ */
+export function subagentsAtWork(chats: Iterable<OpenChat>, file: string): number {
+	const byId = new Map<string, OpenChat>();
+	for (const c of chats) byId.set(c.id, c);
+	let n = 0;
+	for (const c of byId.values()) {
+		if (!c.isSubagent || !c.busy) continue;
+		let at: OpenChat | undefined = c;
+		for (let hops = 0; at?.isSubagent && hops < 16; hops++) at = at.parentId ? byId.get(at.parentId) : undefined;
+		if (at && !at.isSubagent && at.file === file) n++;
+	}
+	return n;
+}
+
 /**
  * queue-turn-since (pi-queue #211): when a working chat's current turn started: its running-list entry's start,
  * unless that entry is a restart's carry-over whose turn hasn't started yet (`awaiting`). Undefined otherwise.
@@ -389,6 +422,8 @@ export function cleanChatState(raw: unknown): ChatState {
 	const since = r.turnSince;
 	if (state === "working" && typeof since === "number" && Number.isFinite(since) && since > 0)
 		out.turnSince = Math.round(since);
+	const subagents = r.subagents;
+	if (typeof subagents === "number" && Number.isInteger(subagents) && subagents > 0) out.subagents = subagents;
 	return out;
 }
 

@@ -75,6 +75,11 @@ export interface GoalHost {
 	lang?: () => ServerLang;
 	/** 目标模式总开关（设置面板「目标审查」页可关）。关 → 拒绝设目标/调研/审查。 */
 	goalModeEnabled: () => boolean;
+	/**
+	 * queue-back-owed (Ops #393): when the chat with this transcript is a paused queued task's (or one owed its "Back
+	 * to task" note), adds the text there without a turn and says how that went; undefined otherwise.
+	 */
+	pausedChatNote?: (file: string, text: string) => Promise<{ ok: boolean; error?: string } | undefined>;
 }
 
 /**
@@ -955,6 +960,19 @@ export class GoalService {
 		return null;
 	}
 
+	/**
+	 * A review's result into the chat as the user's message. queue-back-owed (Ops #393): in a queued task's chat the
+	 * owner paused, or one still owed its "Back to task" note, it goes in without a turn (read with the next one).
+	 */
+	private async sendReview(session: AgentSession, text: string): Promise<void> {
+		const quiet = await this.host.pausedChatNote?.(String(session.sessionFile ?? ""), text);
+		if (quiet) {
+			if (!quiet.ok) throw new Error(quiet.error ?? "its task is paused, and the chat couldn't take it");
+			return;
+		}
+		await session.sendUserMessage(text, { deliverAs: session.isStreaming ? "steer" : "followUp" });
+	}
+
 	/** Build a "provider/id" or null for the reviewer model, validating it exists. */
 	private resolveReviewModel(spec?: string | null): {
 		provider: string;
@@ -1276,7 +1294,7 @@ export class GoalService {
 			// follow-up instruction like "发布" is a normal request — not a confirm echo.
 			try {
 				const passText = `✅ Goal achieved and passed review (round ${round}).\n\nGoal: ${goalText}\n\n${feedback}\n\n(Goal mode is off — respond to further instructions normally.)`;
-				await mainSession.sendUserMessage(passText, { deliverAs: mainSession.isStreaming ? "steer" : "followUp" });
+				await this.sendReview(mainSession, passText);
 			} catch {
 				// Best-effort.
 			}
@@ -1295,9 +1313,7 @@ export class GoalService {
 			});
 			try {
 				const blockedText = `⚠️ Goal execution blocked (stagnation circuit breaker at round ${round}).\n\nGoal: ${goalText}\n\n${feedback}\n\n(Goal mode paused — please investigate and reset goal or continue manually.)`;
-				await mainSession.sendUserMessage(blockedText, {
-					deliverAs: mainSession.isStreaming ? "steer" : "followUp",
-				});
+				await this.sendReview(mainSession, blockedText);
 			} catch {
 				// Best-effort.
 			}
@@ -1328,9 +1344,7 @@ export class GoalService {
 				const steerText =
 					`[Goal review: round ${g.round}/${cappedEn} failed]\n\nGoal: ${goalText}\n\n` +
 					`Feedback: ${feedback}\n\nRevise your work based on the feedback above so it fully satisfies the goal.`;
-				await mainSession.sendUserMessage(steerText, {
-					deliverAs: mainSession.isStreaming ? "steer" : "followUp",
-				});
+				await this.sendReview(mainSession, steerText);
 			} catch (err) {
 				g.status = `Feedback injection failed: ${(err as Error).message}`;
 				g.statusEn = `Feedback injection failed: ${(err as Error).message}`;
@@ -1352,9 +1366,9 @@ export class GoalService {
 		}
 		try {
 			const cappedEn = budgetForCard > 0 ? budgetForCard : "unlimited";
-			await mainSession.sendUserMessage(
+			await this.sendReview(
+				mainSession,
 				`❌ Goal failed review (round ${round}/${cappedEn}).\n\nGoal: ${goalText}\n\nFeedback: ${feedback}`,
-				{ deliverAs: mainSession.isStreaming ? "steer" : "followUp" },
 			);
 		} catch {
 			// Best-effort.

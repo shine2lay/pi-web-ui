@@ -95,9 +95,19 @@ export function queueHomesFrom(
  * stall-watch: the queue chats to open after a restart, so pi-queue's watchdog looks after their tasks'
  * chats: each queue chat the links name (an open task's chat → its queue chat) once, newest link first,
  * only those whose transcript is still there, at most QUEUE_HOMES_REOPEN_MAX.
+ * queue-back-owed (Ops #393): those in `owesBack` (a task there is owed its "Back to task" note, which only its
+ * queue's chat sends) come first and always, past the cap too: otherwise that task's chat stays quiet.
  */
-export function queueHomesToOpen(homes: ReadonlyMap<string, string>, exists: (file: string) => boolean): string[] {
+export function queueHomesToOpen(
+	homes: ReadonlyMap<string, string>,
+	exists: (file: string) => boolean,
+	owesBack: ReadonlySet<string> = new Set(),
+): string[] {
 	const out: string[] = [];
+	for (const [chat, home] of [...homes].reverse()) {
+		if (chat === home || out.includes(home) || !owesBack.has(home)) continue;
+		if (exists(home)) out.push(home);
+	}
 	for (const [chat, home] of [...homes].reverse()) {
 		if (out.length >= QUEUE_HOMES_REOPEN_MAX) break;
 		if (chat === home || out.includes(home)) continue;

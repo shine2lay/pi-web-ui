@@ -341,6 +341,7 @@ import {
 	pausedNoteText,
 	QUEUE_PAUSED_CUSTOM_TYPE,
 	queueEntriesOf,
+	queueOwesBack,
 	ROLE_MESSAGE_CUSTOM_TYPE,
 	roleMessageIdOf,
 	taskChatPaused,
@@ -456,6 +457,8 @@ import {
 import {
 	type ChatState,
 	chatStateFrom,
+	type OpenChat,
+	subagentsAtWork,
 	turnSinceFrom,
 	installQueueHost,
 	previewExistingQueueLaunch,
@@ -4637,6 +4640,7 @@ export class ClientSession {
 			cwd: () => this.cwd,
 			reviewSettings: () => this.settingsSvc.reviewPrefs,
 			gitDiff: (dir) => this.gitDiff(dir),
+			pausedChatNote: async (file, text) => ClientSession.pausedChatNote?.(file, text),
 		});
 
 		this.modelAdmin = new ModelAdminService({
@@ -5712,6 +5716,33 @@ export class ClientSession {
 			}
 		}
 		return busy;
+	}
+
+	/** queue-back-owed (Ops #393): how many subagents of the open chat with this transcript are at work (see subagentsAtWork). */
+	static chatSubagentsAtWork(file: string): number {
+		let abs: string;
+		try {
+			abs = resolve(file);
+		} catch {
+			return 0;
+		}
+		const chats: OpenChat[] = [];
+		for (const c of ClientSession.sharedConvs.values()) {
+			try {
+				const f = c.session.sessionFile;
+				chats.push({
+					id: c.id,
+					isSubagent: c.isSubagent,
+					parentId: c.parentId,
+					file: f ? resolve(f) : undefined,
+					busy: c.session.isStreaming || c.session.isCompacting || (c.sendsInFlight ?? 0) > 0,
+				});
+			} catch {
+				// a chat whose runtime is being replaced right now: counted as at work when it's a subagent
+				chats.push({ id: c.id, isSubagent: c.isSubagent, parentId: c.parentId, busy: true });
+			}
+		}
+		return subagentsAtWork(chats, abs);
 	}
 
 	/**
@@ -15264,6 +15295,17 @@ export class ClientSession {
 				// files fork the same way — 第二个写者不只跑着时才危险). Land
 				// blank instead.
 				let resumeSkipped: SessionOwnerInfo | null = null;
+				// queue-back-owed (Ops #393): a scheduler's or plugin's client doesn't reopen a queued task's chat the owner
+				// paused (or one owed "Back to task") to send there; it lands in a new chat instead.
+				let pausedRecent = false;
+				if (pseudo) {
+					try {
+						const file = recentRegularFile(abs);
+						pausedRecent = !!file && (await taskChatPaused(resolve(file)));
+					} catch {
+						// can't tell: as before
+					}
+				}
 				// 别处无可见行时不扫目录（首访切项目的常见情形零开销）。
 				if ((this.listExternalRunning?.() ?? []).length > 0) {
 					try {
@@ -15283,7 +15325,10 @@ export class ClientSession {
 				// #235：manager＋runtime 一起建，转录链损坏时修最近文件后重试一次
 				// （见 openManagerAndRuntime）。blank（别处在跑）是全新空会话，不会坏。
 				const opened = await this.openManagerAndRuntime(
-					() => (resumeSkipped || (pseudo && openHere) ? SessionManager.create(abs) : continueRecentRegular(abs)),
+					() =>
+						resumeSkipped || pausedRecent || (pseudo && openHere)
+							? SessionManager.create(abs)
+							: continueRecentRegular(abs),
 					(m) =>
 						createAgentSessionRuntime(this.makeRuntimeFactory(terminals, undefined, conversationId), {
 							cwd: abs,
@@ -17452,10 +17497,13 @@ export class AgentService {
 		const state = chatStateFrom(ClientSession.chatBusy(abs), listed);
 		// queue-turn-since (pi-queue #211): when its turn started, for the watchdog's long-turn note.
 		const turnSince = turnSinceFrom(state, listed);
+		// queue-back-owed (Ops #393): its subagents at work, so a paused chat isn't seen stopped while one writes.
+		const subagents = state === "closed" ? 0 : ClientSession.chatSubagentsAtWork(abs);
 		return {
 			state,
 			...(lastActiveAt === undefined ? {} : { lastActiveAt }),
 			...(turnSince === undefined ? {} : { turnSince }),
+			...(subagents > 0 ? { subagents } : {}),
 		};
 	}
 
@@ -17488,7 +17536,11 @@ export class AgentService {
 	 */
 	async reopenQueueHomes(): Promise<void> {
 		if (!this.uninstallQueueHost) return;
-		const homes = queueHomesToOpen(ClientSession.savedQueueHomes(), (f) => existsSync(f));
+		const links = ClientSession.savedQueueHomes();
+		// queue-back-owed (Ops #393): queue chats owing a task its "Back to task" note open first, past the cap too.
+		const owesBack = new Set<string>();
+		for (const home of new Set(links.values())) if (existsSync(home) && (await queueOwesBack(home))) owesBack.add(home);
+		const homes = queueHomesToOpen(links, (f) => existsSync(f), owesBack);
 		if (homes.length === 0) return;
 		const opened: string[] = [];
 		for (const home of homes) {
@@ -17605,6 +17657,9 @@ export class AgentService {
 		let busyError: string | undefined;
 		for (const c of cands) {
 			try {
+				// queue-back-owed (Ops #393): never a queued task's chat the owner paused, or one owed "Back to task".
+				const file = String(c.conv.session.sessionFile ?? "");
+				if (file && (await taskChatPaused(file))) continue;
 				const r = await c.cs.trySteerScheduler(c.conv, text);
 				if (r.ok) {
 					try {

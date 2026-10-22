@@ -16,6 +16,7 @@ import {
 	queueCoordinator,
 	type QueueHost,
 	type QueueHostImpl,
+	subagentsAtWork,
 	turnSinceFrom,
 	WAKE_NOTE_MAX,
 	waitUntil,
@@ -155,6 +156,29 @@ describe("stall-watch: a chat's state, and when it may be woken", () => {
 		expect(cleanChatState({ state: "idle", lastActiveAt: -1 })).toEqual({ state: "idle" });
 		expect(cleanChatState({ state: "idle", lastActiveAt: "5" })).toEqual({ state: "idle" });
 		expect(cleanChatState(null)).toEqual({ state: "closed" });
+	});
+
+	it("queue-back-owed (Ops #393): counts a chat's subagents at work, theirs too, and hands pi-queue a count only when there are some", () => {
+		const chats = [
+			{ id: "a", isSubagent: false, file: "/s/a.jsonl", busy: false },
+			{ id: "a1", isSubagent: true, parentId: "a", file: "/s/a1.jsonl", busy: true },
+			{ id: "a2", isSubagent: true, parentId: "a", file: "/s/a2.jsonl", busy: false },
+			{ id: "a11", isSubagent: true, parentId: "a1", busy: true },
+			{ id: "b", isSubagent: false, file: "/s/b.jsonl", busy: true },
+			{ id: "b1", isSubagent: true, parentId: "b", busy: true },
+			{ id: "lost", isSubagent: true, parentId: "gone", busy: true },
+			{ id: "x", isSubagent: true, parentId: "y", busy: true },
+			{ id: "y", isSubagent: true, parentId: "x", busy: true },
+		];
+		expect(subagentsAtWork(chats, "/s/a.jsonl")).toBe(2);
+		expect(subagentsAtWork(chats, "/s/b.jsonl")).toBe(1);
+		expect(subagentsAtWork(chats, "/s/c.jsonl")).toBe(0);
+		// A subagent's own transcript isn't a chat it belongs to.
+		expect(subagentsAtWork(chats, "/s/a1.jsonl")).toBe(0);
+		expect(cleanChatState({ state: "idle", subagents: 2 })).toEqual({ state: "idle", subagents: 2 });
+		expect(cleanChatState({ state: "idle", subagents: 0 })).toEqual({ state: "idle" });
+		expect(cleanChatState({ state: "idle", subagents: 1.5 })).toEqual({ state: "idle" });
+		expect(cleanChatState({ state: "idle", subagents: "1" })).toEqual({ state: "idle" });
 	});
 
 	it("queue-turn-since: a working chat's turn start, only from a turn that runs, and checked on the way out", () => {

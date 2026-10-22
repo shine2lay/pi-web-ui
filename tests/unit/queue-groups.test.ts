@@ -188,6 +188,14 @@ describe("queueHomesFrom: the links, from the open chats' cached queues", () => 
 		expect(QUEUE_HOMES_REOPEN_MAX).toBe(10);
 		expect(open).toHaveLength(QUEUE_HOMES_REOPEN_MAX);
 		expect(open[0]).toBe("/s/home24.jsonl");
+		// queue-back-owed (Ops #393): queue chats owing a task "Back to task" first, and past the cap.
+		const owing = queueHomesToOpen(many, () => true, new Set(["/s/home0.jsonl", "/s/home1.jsonl", "/s/x.jsonl"]));
+		expect(owing.slice(0, 2)).toEqual(["/s/home1.jsonl", "/s/home0.jsonl"]);
+		expect(owing).toHaveLength(QUEUE_HOMES_REOPEN_MAX);
+		expect(owing[2]).toBe("/s/home24.jsonl");
+		const all = new Set(Array.from({ length: 25 }, (_, i) => `/s/home${i}.jsonl`));
+		expect(queueHomesToOpen(many, () => true, all)).toHaveLength(25);
+		expect(queueHomesToOpen(many, (f) => f !== "/s/home0.jsonl", all)).toHaveLength(24);
 	});
 
 	it("queueLinksSig changes only with what the queue says about the links", () => {
