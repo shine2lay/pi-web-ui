@@ -22,9 +22,14 @@ const SLOW = 30_000;
 const box = mkdtempSync(join(tmpdir(), "prettier-scope-"));
 afterAll(() => rmSync(box, { recursive: true, force: true }));
 
-// This test's own git settings only, as in patches-union.test.ts.
+// This test's own git settings only, as in patches-union.test.ts, and plain output whatever the caller's colour
+// settings: with CI or FORCE_COLOR set Prettier colours "[warn]", which (a) and (k) look for as plain text.
+// A variable set to undefined is left out of a child's environment.
 const env = {
 	...process.env,
+	CI: undefined,
+	FORCE_COLOR: undefined,
+	NO_COLOR: "1",
 	GIT_CONFIG_GLOBAL: "/dev/null",
 	GIT_CONFIG_NOSYSTEM: "1",
 	GIT_AUTHOR_NAME: "pi-web-ui-test",
