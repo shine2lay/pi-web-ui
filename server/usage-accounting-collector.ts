@@ -187,16 +187,74 @@ function cursor(raw: unknown): void {
 function bytes(text: string): number {
 	return Buffer.byteLength(text, "utf8");
 }
-/** Closed validated numeric JSON only. Never hashes or retains rejected input. */
-function canonical(raw: unknown): string {
-	if (Array.isArray(raw)) return `[${raw.map(canonical).join(",")}]`;
-	if (raw !== null && typeof raw === "object")
-		return `{${Object.keys(raw)
-			.sort()
-			.map((k) => `${JSON.stringify(k)}:${canonical((raw as Record<string, unknown>)[k])}`)
-			.join(",")}}`;
-	return JSON.stringify(raw) ?? "null";
+/** #414 H-CANONICAL-1: one object shape's keys in canonical order (the same default sort as before), each with its
+ * text (`{"key":` for the first, `,"key":` after), so objects of a known shape skip the sort and the key quoting. */
+interface CanonicalShape {
+	readonly order: readonly string[];
+	readonly heads: readonly string[];
 }
+/** One step per key of the exact Object.keys list: no joined text, so two different key lists never share a shape. */
+interface ShapeStep {
+	next: Map<string, ShapeStep> | null;
+	shape: CanonicalShape | null;
+}
+/** Bounded: at most 1024 shapes of at most 64 keys each (a bigger object is sorted every time, as before); when full,
+ * every shape is dropped and the cache fills again. */
+const CANONICAL_SHAPES = Object.freeze({ max: 1024, maxKeys: 64 });
+let canonicalShapes: ShapeStep = { next: null, shape: null };
+let canonicalShapeCount = 0;
+function newCanonicalShape(keys: readonly string[]): CanonicalShape {
+	const order = [...keys].sort();
+	return { order, heads: order.map((k, i) => `${i === 0 ? "{" : ","}${JSON.stringify(k)}:`) };
+}
+function canonicalShape(keys: readonly string[]): CanonicalShape {
+	if (keys.length > CANONICAL_SHAPES.maxKeys) return newCanonicalShape(keys);
+	let found: ShapeStep | undefined = canonicalShapes;
+	for (let i = 0; found !== undefined && i < keys.length; i++) found = found.next?.get(keys[i]);
+	if (found?.shape) return found.shape;
+	if (canonicalShapeCount >= CANONICAL_SHAPES.max) {
+		canonicalShapes = { next: null, shape: null };
+		canonicalShapeCount = 0;
+	}
+	let step = canonicalShapes;
+	for (const k of keys) {
+		const next: Map<string, ShapeStep> = (step.next ??= new Map());
+		let child = next.get(k);
+		if (child === undefined) next.set(k, (child = { next: null, shape: null }));
+		step = child;
+	}
+	canonicalShapeCount++;
+	return (step.shape = newCanonicalShape(keys));
+}
+/** Closed validated numeric JSON only. Never hashes or retains rejected input.
+ * #414: memo (one persist call and its apply) lists objects to canonicalise at most once: null until their text is
+ * worked out, then the text. Only for objects nothing changes while the memo lives. */
+function canonical(raw: unknown, memo?: Map<object, string | null>): string {
+	const kept = memo !== undefined && raw !== null && typeof raw === "object" ? memo.get(raw) : undefined;
+	if (kept != null) return kept;
+	let text: string;
+	if (Array.isArray(raw)) text = `[${raw.map((v) => canonical(v, memo)).join(",")}]`;
+	else if (raw !== null && typeof raw === "object") {
+		const keys = Object.keys(raw);
+		if (keys.length === 0) text = "{}";
+		else {
+			const { order, heads } = canonicalShape(keys);
+			text = "";
+			for (let i = 0; i < order.length; i++)
+				text += heads[i] + canonical((raw as Record<string, unknown>)[order[i]], memo);
+			text += "}";
+		}
+	} else return JSON.stringify(raw) ?? "null";
+	if (kept === null) memo!.set(raw as object, text);
+	return text;
+}
+/** For tests/unit/usage-accounting-canonical.test.ts only (#414): compared there byte for byte, with and without a
+ * memo, with a frozen copy of the canonical() it replaced; and the shape cache's size against its bound. */
+export { canonical as collectorCanonicalForTests };
+export const collectorCanonicalShapesForTests = (): { count: number; max: number; maxKeys: number } => ({
+	count: canonicalShapeCount,
+	...CANONICAL_SHAPES,
+});
 function emptyRows(): NumericRows {
 	return { facts: [], allocations: [], aliases: [], roots: [], policies: [], memberships: [], snapshots: [] };
 }
@@ -1300,7 +1358,8 @@ export class PagedUsageAccountingCollector {
 		for (const p of plans) witness = firstWitness(witness, p.witness);
 		return { plans, code: witness?.code ?? null };
 	}
-	private async apply(frame: Frame, plans: ComponentPlan[]): Promise<void> {
+	/** rowTexts: persist's memo (#414), so each row's text is worked out once for persist and this apply. */
+	private async apply(frame: Frame, plans: ComponentPlan[], rowTexts?: Map<object, string | null>): Promise<void> {
 		if (frame.kind === "fault") {
 			const key = `f:${canonical([frame.code, frame.stream])}`,
 				previous = (await this.get([key])).get(key);
@@ -1334,7 +1393,10 @@ export class PagedUsageAccountingCollector {
 					}
 					for (const n of ids) yield { key: `n:${n}`, value: { kind: "node", identity: n, component: plan.id } };
 					for (const e of all)
-						yield { key: `r:${plan.id}:${e.rowKind}:${hash(canonical(e.row))}`, value: { kind: "row", ...e } };
+						yield {
+							key: `r:${plan.id}:${e.rowKind}:${hash(canonical(e.row, rowTexts))}`,
+							value: { kind: "row", ...e },
+						};
 					for (const week of exposure) {
 						const key = `e:${week}:${plan.id}`;
 						const value: CollectorIndexValue = { kind: "node", identity: week, component: plan.id };
@@ -1356,7 +1418,7 @@ export class PagedUsageAccountingCollector {
 			const operations: { key: string; value: CollectorIndexValue | null }[] = [
 				{
 					key: `b:${key}`,
-					value: { kind: "receipt", batch: canonical(b), code: frame.code, sequence: frame.sequence },
+					value: { kind: "receipt", batch: canonical(b, rowTexts), code: frame.code, sequence: frame.sequence },
 				},
 				{
 					key: ref,
@@ -1553,7 +1615,11 @@ export class PagedUsageAccountingCollector {
 		for (const code of this.pending) this.memoryFaults.push({ code, stream: null, at: this.sources!.observedAt });
 	}
 	private async persist(frame: Frame, plans: ComponentPlan[], reserve = false): Promise<void> {
-		const line = this.active(() => canonical(frame) + "\n"),
+		// #414: each row of the batch and of the plans is canonicalised once, here and in apply; nothing changes them meanwhile.
+		const rowTexts = new Map<object, string | null>();
+		if (frame.kind === "batch") for (const e of entries(frame.batch.rows)) rowTexts.set(e.row, null);
+		for (const p of plans) for (const e of entries(p.rows)) rowTexts.set(e.row, null);
+		const line = this.active(() => canonical(frame, rowTexts) + "\n"),
 			length = bytes(line);
 		requireValue(length <= FRAME_BYTES, "store-capacity");
 		// Ordinary writes leave a whole segment, one frame and 1KiB bytes for a durable capacity fence.
@@ -1578,13 +1644,19 @@ export class PagedUsageAccountingCollector {
 					bytes(
 						canonical({
 							key: `b:${batchKey(frame.batch)}`,
-							value: { kind: "receipt", batch: canonical(frame.batch), code: frame.code, sequence: frame.sequence },
+							value: {
+								kind: "receipt",
+								batch: canonical(frame.batch, rowTexts),
+								code: frame.code,
+								sequence: frame.sequence,
+							},
 						}),
 					) +
 						3 <=
 						PAGE.maxBytes,
 					"store-capacity",
 				);
+			let evidenceBytes: number | undefined;
 			for (const p of plans) {
 				const all = [...entries(p.rows)],
 					identities = new Set(all.flatMap((e) => nodes(e.rowKind, e.row)));
@@ -1602,20 +1674,21 @@ export class PagedUsageAccountingCollector {
 							PAGE.maxBytes,
 						"store-capacity",
 					);
-				const evidenceBytes = PAGE.maxBytes - bytes(canonical(this.sources!.sources.map((s) => s.stream))) - 32 * 1024;
-				for (const e of all)
+				// The same stream list for every plan: worked out once (#414).
+				evidenceBytes ??= PAGE.maxBytes - bytes(canonical(this.sources!.sources.map((s) => s.stream))) - 32 * 1024;
+				for (const e of all) {
+					const row = canonical(e.row, rowTexts);
 					requireValue(
-						bytes(canonical(e.row)) <= evidenceBytes &&
-							bytes(
-								canonical({ key: `r:${p.id}:${e.rowKind}:${hash(canonical(e.row))}`, value: { kind: "row", ...e } }),
-							) +
+						bytes(row) <= evidenceBytes &&
+							bytes(canonical({ key: `r:${p.id}:${e.rowKind}:${hash(row)}`, value: { kind: "row", ...e } }, rowTexts)) +
 								3 <=
 								PAGE.maxBytes,
 						"store-capacity",
 					);
+				}
 				newEntries += all.length + identities.size + exposures * 2 + 1;
 				newBytes +=
-					bytes(canonical(p.rows)) * 2 +
+					bytes(canonical(p.rows, rowTexts)) * 2 +
 					[...identities].reduce((n, id) => n + bytes(id) * 2 + 256, 0) +
 					exposures * 512 +
 					1024;
@@ -1634,7 +1707,7 @@ export class PagedUsageAccountingCollector {
 			this.segment = segment;
 			this.segmentBytes = offset + length;
 			this.totalBytes += length;
-			await this.apply(frame, plans);
+			await this.apply(frame, plans, rowTexts);
 			this.digest = hash(this.digest + line);
 			await this.io!.checkpoint(canonical(this.prefix()) + "\n");
 			await this.pause();
