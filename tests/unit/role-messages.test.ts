@@ -617,8 +617,10 @@ describe("delivery", () => {
 		const q1 = ask("one");
 		const q2 = ask("two");
 		const q3 = ask("three");
+		const q4 = ask("four");
 		await s.tick();
 		expect(f.sent.map((m) => [m.file, m.via])).toEqual([
+			[B, "deliver"],
 			[B, "deliver"],
 			[B, "deliver"],
 			[B, "deliver"],
@@ -638,11 +640,19 @@ describe("delivery", () => {
 		expect(s.byId(a2)).toMatchObject({ state: "delivered", target: Q });
 		expect(f.sent.at(-1)).toMatchObject({ file: Q, via: "note" });
 
-		// Resumed: a reply starts a turn again.
+		// Resumed (Ops #393): until its queue's chat sends it "Back to task" (another task may still have its lane),
+		// still without a turn; that turn reads it.
 		queueEntry(QC, { op: "release" });
 		const a3 = answer(q3);
 		await s.tick();
 		expect(s.byId(a3)).toMatchObject({ state: "delivered", target: Q });
+		expect(f.sent.at(-1)).toMatchObject({ file: Q, via: "note" });
+
+		// Back to task: a reply starts a turn again.
+		queueEntry(QC, { op: "back", id: 7 });
+		const a4 = answer(q4);
+		await s.tick();
+		expect(s.byId(a4)).toMatchObject({ state: "delivered", target: Q });
 		expect(f.sent.at(-1)).toMatchObject({ file: Q, via: "deliver" });
 	});
 
@@ -678,6 +688,41 @@ describe("delivery", () => {
 		expect(await taskChatPaused(Q2)).toBe(true);
 		queueEntry(Q2, { op: "release", id: 8 });
 		expect(await taskChatPaused(Q2)).toBe(false);
+	});
+
+	// Ops #393 (H-PAUSE-LEND-2): a task resumed at work waits for its lane (another task may have borrowed it
+	// while it was paused, Ops #380); its chat counts as paused until the queue's chat sends "Back to task".
+	it("taskChatPaused: a task resumed at work counts as paused until its Back to task", async () => {
+		const { taskChatPaused } = await import("../../server/role-messages.js");
+		const Q = chat("b-task");
+		const QC = chat("b-queue");
+		queueEntry(Q, { op: "assigned", id: 4, plan: { title: "t" }, from: { file: QC, title: "q" } });
+		queueEntry(QC, { op: "add", id: 4, plan: { title: "t" } });
+		queueEntry(QC, { op: "run" });
+		queueEntry(QC, { op: "start", id: 4, lane: true });
+		queueEntry(QC, { op: "chat", id: 4, file: Q, title: "Queue #4" });
+		expect(await taskChatPaused(Q)).toBe(false);
+		queueEntry(QC, { op: "hold", id: 4, why: "owner: pause it", by: "panel" });
+		expect(await taskChatPaused(Q)).toBe(true);
+		queueEntry(QC, { op: "release", id: 4 });
+		expect(await taskChatPaused(Q)).toBe(true);
+		queueEntry(QC, { op: "back", id: 4 });
+		expect(await taskChatPaused(Q)).toBe(false);
+		// The whole queue paused and resumed: the same.
+		queueEntry(QC, { op: "hold", why: "owner: the whole queue", by: "tool" });
+		expect(await taskChatPaused(Q)).toBe(true);
+		queueEntry(QC, { op: "release" });
+		expect(await taskChatPaused(Q)).toBe(true);
+		// Its status changed before the note came (it went on to wait): no note is owed, nothing keeps it quiet.
+		queueEntry(QC, { op: "wait", id: 4, what: "CI", check: "false" });
+		expect(await taskChatPaused(Q)).toBe(false);
+		// Owed again, then done: over.
+		queueEntry(QC, { op: "resume", id: 4 });
+		queueEntry(QC, { op: "hold", id: 4, why: "owner: again", by: "panel" });
+		queueEntry(QC, { op: "release", id: 4 });
+		expect(await taskChatPaused(Q)).toBe(true);
+		queueEntry(QC, { op: "done", id: 4 });
+		expect(await taskChatPaused(Q)).toBe(false);
 	});
 
 	it("an FYI is added without a turn (note); a question, a request and a reply start one (deliver)", async () => {

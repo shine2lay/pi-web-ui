@@ -19,6 +19,7 @@ import {
 	TASK_QUEUE_ENTRY_TYPE,
 	TASK_QUEUE_MAX_DONE,
 	taskQueueAll,
+	taskQueueBackOwed,
 	taskQueueCommandLine,
 	taskQueueFromEntries,
 	taskQueueLaneUse,
@@ -1118,6 +1119,184 @@ describe("taskQueueFromEntries (queue-paused)", () => {
 			const what = JSON.stringify(ops.slice(laneBase.length));
 			expect(mine.tasks.map(shape), what).toEqual(theirs.map(shape));
 			expect(holdOf(mine.hold), what).toEqual(holdOf(s.hold));
+		}
+	});
+});
+
+/**
+ * queue-paused (Ops #393, H-PAUSE-LEND-2): pi-queue's `back`. Once the owner lifts the pause on a task that was
+ * being worked on in a chat of its own, that chat waits for its "Back to task" note (pi-queue's "back" op), which
+ * comes only once no task it shares a touch with is at work: one may have borrowed its lane meanwhile (Ops #380).
+ */
+describe("taskQueueAll (queue-paused: owed its Back to task)", () => {
+	const laneBase = [
+		{ op: "add", id: 1, plan: plan("One"), touches: ["a"] },
+		{ op: "add", id: 2, plan: plan("Two"), touches: ["b"] },
+		{ op: "run" },
+		{ op: "start", id: 1, lane: true },
+		{ op: "chat", id: 1, file: "/chats/one.jsonl", title: "Queue #1: One" },
+	];
+	const hold = (id: number | undefined, ts: number) => ({
+		op: "hold",
+		...(id !== undefined ? { id } : {}),
+		why: "owner: pause it",
+		by: "tool",
+		ts,
+	});
+	const release = (id: number | undefined, ts: number) => ({ op: "release", ...(id !== undefined ? { id } : {}), ts });
+	const wait = { op: "wait", id: 1, what: "CI", check: "false", everyMs: 60_000 };
+	const block = { op: "block", id: 1, need: "the staging login", start: 0, tries: 0 };
+	const ask = { op: "ask", id: 1, n: 1, question: "Which one?" };
+	const stuck = { op: "stuck", id: 1, question: "Which one?" };
+	const taskOf = (ops: Array<Record<string, unknown>>, id: number) =>
+		taskQueueAll(entries(ops)).tasks.find((t) => t.id === id);
+	const owed = (ops: Array<Record<string, unknown>>, id = 1) => {
+		const t = taskOf(ops, id);
+		return !!t && taskQueueBackOwed(t);
+	};
+	const resumed = [...laneBase, hold(1, 20_000), release(1, 30_000)];
+
+	it("is owed once the owner resumes a lane task at work, whether its own pause or the whole queue's is lifted", () => {
+		expect(owed(laneBase)).toBe(false);
+		// While paused it isn't owed yet: the pause itself is what counts then (taskQueueHeld).
+		expect(owed([...laneBase, hold(1, 20_000)])).toBe(false);
+		expect(owed(resumed)).toBe(true);
+		expect(taskOf(resumed, 1)?.back).toEqual({ from: 20_000, to: 30_000 });
+		const queue = [...laneBase, hold(undefined, 20_000), release(undefined, 30_000)];
+		expect(owed(queue)).toBe(true);
+		// The queue's other task hadn't started: nothing to go back to.
+		expect(owed(queue, 2)).toBe(false);
+		// Paused on its own as well: the queue's resume leaves it paused; its own resume makes it owed.
+		const both = [...laneBase, hold(undefined, 20_000), hold(1, 25_000), release(undefined, 30_000)];
+		expect(owed(both)).toBe(false);
+		expect(owed([...both, release(1, 40_000)])).toBe(true);
+		expect(taskOf([...both, release(1, 40_000)], 1)?.back).toEqual({ from: 20_000, to: 40_000 });
+	});
+
+	it("is cleared by its Back to task, by any change of status, and when the task ends", () => {
+		const clears: Record<string, Record<string, unknown>> = {
+			back: { op: "back", id: 1 },
+			wait,
+			block,
+			ask,
+			stuck,
+			resume: { op: "resume", id: 1 },
+			done: { op: "done", id: 1, summary: "ok" },
+			drop: { op: "drop", id: 1, why: "not needed any more" },
+			remove: { op: "remove", id: 1 },
+		};
+		for (const [name, op] of Object.entries(clears)) {
+			expect(owed([...resumed, op]), name).toBe(false);
+			expect(taskOf([...resumed, op], 1)?.back, name).toBeUndefined();
+		}
+		// requeue: a lane task whose chat never got going goes back to its place, owing nothing.
+		const noChat = [...laneBase.slice(0, 4), hold(1, 20_000), release(1, 30_000)];
+		expect(owed(noChat)).toBe(true);
+		expect(owed([...noChat, { op: "requeue", id: 1 }])).toBe(false);
+		// Paused again before its note came: the pause counts again; resumed again, it is owed again, from then.
+		const again = [...resumed, hold(1, 40_000), release(1, 50_000)];
+		expect(owed(again)).toBe(true);
+		expect(taskOf(again, 1)?.back).toEqual({ from: 40_000, to: 50_000 });
+		// Ops that don't move the task on leave it owed.
+		const still = [
+			...resumed,
+			{ op: "update", id: 1, plan: plan("One, again") },
+			{ op: "move", id: 2, index: 0 },
+			hold(2, 35_000),
+		];
+		expect(owed(still)).toBe(true);
+	});
+
+	it("is never owed for a task in the queue's own chat, or for one that isn't at work", () => {
+		// In the queue's own chat (no lane): it carries on there as before.
+		const inChat = [
+			{ op: "add", id: 1, plan: plan("One") },
+			{ op: "run" },
+			{ op: "start", id: 1 },
+			hold(1, 20_000),
+			release(1, 30_000),
+		];
+		expect(taskOf(inChat, 1)?.status).toBe("working");
+		expect(owed(inChat)).toBe(false);
+		// Waiting, blocked, asking or stuck when the pause is lifted: the queue moves those on its own way.
+		for (const op of [wait, block, ask, stuck]) {
+			const ops = [...laneBase, op, hold(1, 20_000), release(1, 30_000)];
+			expect(taskOf(ops, 1)?.status, String(op.op)).not.toBe("working");
+			expect(owed(ops), String(op.op)).toBe(false);
+		}
+		// A task that hadn't started.
+		expect(owed([...laneBase, hold(2, 20_000), release(2, 30_000)], 2)).toBe(false);
+		// A task's own chat keeps its own copy of the pause, not the note (the queue's chat sends that).
+		const own = [
+			{ op: "assigned", id: 7, plan: plan("Seven"), from: { file: "/chats/queue.jsonl", title: "Queue" } },
+			hold(7, 20_000),
+			release(7, 30_000),
+		];
+		expect(owed(own, 7)).toBe(false);
+		// A "back" for a task that isn't owed one changes nothing.
+		const stray = taskOf([...laneBase, { op: "back", id: 1 }], 1);
+		expect(stray).toMatchObject({ status: "working" });
+		expect(stray?.back).toBeUndefined();
+	});
+
+	it("stays inside the server: the Queue panel shows the task as before", () => {
+		const t = taskQueueFromEntries(entries(resumed), true).tasks.find((x) => x.id === 1);
+		expect(t).toMatchObject({ status: "working", lane: true });
+		expect(t?.hold).toBeUndefined();
+		expect(t).not.toHaveProperty("back");
+	});
+
+	it("says the same as pi-queue's own replay", async () => {
+		const pkg = process.env.PI_QUEUE_PKG ?? join(userInfo().homedir, "projects", "pi-queue");
+		const file = join(pkg, "queue.ts");
+		if (!existsSync(file)) throw new Error(`pi-queue not found at ${pkg} (set PI_QUEUE_PKG)`);
+		const pq = await import(/* @vite-ignore */ pathToFileURL(file).href);
+		// An older pi-queue has no pause yet: nothing to compare.
+		if (typeof pq.heldBy !== "function") return;
+		const noChat = [...laneBase.slice(0, 4), hold(1, 20_000), release(1, 30_000)];
+		const scenarios: Array<Array<Record<string, unknown>>> = [
+			laneBase,
+			[...laneBase, hold(1, 20_000)],
+			resumed,
+			[...laneBase, hold(undefined, 20_000), release(undefined, 30_000)],
+			[...laneBase, hold(undefined, 20_000), hold(1, 25_000), release(undefined, 30_000)],
+			[...laneBase, hold(undefined, 20_000), hold(1, 25_000), release(undefined, 30_000), release(1, 40_000)],
+			...[
+				{ op: "back", id: 1 },
+				wait,
+				block,
+				ask,
+				stuck,
+				{ op: "resume", id: 1 },
+				{ op: "done", id: 1, summary: "ok" },
+				{ op: "drop", id: 1, why: "not needed any more" },
+				{ op: "remove", id: 1 },
+			].map((op) => [...resumed, op]),
+			noChat,
+			[...noChat, { op: "requeue", id: 1 }],
+			[...resumed, hold(1, 40_000)],
+			[...resumed, hold(1, 40_000), release(1, 50_000)],
+			...[wait, block, ask, stuck].map((op) => [...laneBase, op, hold(1, 20_000), release(1, 30_000)]),
+			[
+				{ op: "add", id: 1, plan: plan("One") },
+				{ op: "run" },
+				{ op: "start", id: 1 },
+				hold(1, 20_000),
+				release(1, 30_000),
+			],
+			[...laneBase, hold(2, 20_000), { op: "start", id: 2, lane: true }, release(2, 30_000)],
+			[...laneBase, { op: "back", id: 1 }],
+		];
+		type Theirs = { tasks: Array<{ id: number; status: string; back?: { from: number; to: number } }> };
+		for (const ops of scenarios) {
+			const e = entries(ops);
+			const mine = taskQueueAll(e).tasks;
+			const theirs = (pq.replay(e) as Theirs).tasks;
+			const what = JSON.stringify(ops.slice(laneBase.length));
+			expect(
+				mine.map((t) => [t.id, t.status, t.back ?? null, taskQueueBackOwed(t)]),
+				what,
+			).toEqual(theirs.map((t) => [t.id, t.status, t.back ?? null, t.back !== undefined && t.status === "working"]));
 		}
 	});
 });

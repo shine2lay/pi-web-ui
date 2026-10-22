@@ -44,7 +44,10 @@
  * a task, none for the queue). A pause is a layer on top of a task's status, not a status: the task stays
  * waiting, blocked, stuck or asking, so Resume carries on there; it is paused when it or its queue is held.
  * Resuming the queue leaves a task paused on its own paused. The clocks stop while paused: on release a
- * wait gives up as much later, and an unpoked block's pokes count from the release.
+ * wait gives up as much later, and an unpoked block's pokes count from the release. A task in a chat of its
+ * own that was being worked on is owed its "Back to task" note on release (pi-queue's `back`; Ops #393): that
+ * note comes only once no task it shares a touch with is at work (one may have borrowed its lane while it was
+ * paused, Ops #380), so until then its chat counts as paused for what starts turns (taskQueueBackOwed).
  *
  * queue-why: a waiting task's open afters come with how each stands (`waitingForRefs`: working, not
  * started, on hold, blocked, needing the user, paused by the owner), so the panel can say why it can't
@@ -123,6 +126,14 @@ interface Task extends Omit<UiTaskQueueTask, "status"> {
 	heldFrom?: number;
 	/** queue-why: pi-queue's stuckAt: when it started needing the user (the same question again keeps it). */
 	stuckAt?: number;
+	/** queue-paused (Ops #393): pi-queue's `back`, the pause it was resumed from (see taskQueueBackOwed). */
+	back?: TaskQueueBack;
+}
+
+/** queue-paused (Ops #393): the pause a task was resumed from, while it is owed its "Back to task" note. */
+export interface TaskQueueBack {
+	from: number;
+	to: number;
 }
 
 interface State {
@@ -454,19 +465,22 @@ function heldBy(s: State, t: Task): UiTaskQueueHold | undefined {
 }
 
 /** queue-paused: pi-queue's unhold: the pause doesn't count against the task (a wait gives up that much
- *  later, an unpoked block's pokes count from the release). */
+ *  later, an unpoked block's pokes count from the release), and a task in a chat of its own that was being
+ *  worked on is owed its "Back to task" note (Ops #393). */
 function unhold(t: Task, at: number): void {
 	const from = t.heldFrom ?? at;
 	t.heldFrom = undefined;
 	if (t.status === "waiting" && t.wait && !t.wait.overAt)
 		t.wait.until += Math.max(0, at - Math.max(from, t.wait.since));
 	if (t.status === "blocked" && t.block && !t.block.poke) t.block.start = Math.max(t.block.start, at);
+	if (t.status === "working" && t.lane) t.back = { from, to: at };
 }
 
-/** queue-paused: a task finished or left the queue: a pause on it ends with it. */
+/** queue-paused: a task finished or left the queue: a pause on it ends with it, and so does a note owed. */
 function endHold(t: Task): void {
 	t.hold = undefined;
 	t.heldFrom = undefined;
+	t.back = undefined;
 }
 
 /** queue-paused: pi-queue's applyHold: the owner's pause on a task or the whole queue ("hold"), or its lifting ("release"). */
@@ -635,6 +649,11 @@ function apply(s: State, raw: unknown): void {
 			task.chat = chat;
 			return;
 		}
+		case "back":
+			// queue-paused (Ops #393): the queue's chat sent the resumed task its "Back to task" note.
+			if (!task.back) return;
+			task.back = undefined;
+			return;
 		case "requeue":
 			// A lane task whose chat never got going goes back to its place in the queue.
 			if ((!task.lane || task.chat) && !(!task.lane && task.touches !== undefined && task.status === "working")) return;
@@ -648,6 +667,7 @@ function apply(s: State, raw: unknown): void {
 			task.wait = undefined;
 			task.block = undefined;
 			task.startedAt = undefined;
+			task.back = undefined;
 			task.launch = undefined;
 			task.launchPrepared = undefined;
 			return;
@@ -675,6 +695,7 @@ function apply(s: State, raw: unknown): void {
 			task.block = undefined;
 			// queue-main-chat: back at work with its main chat's answer (pi-queue's resume `answered`).
 			task.mainAnswered = op.op === "resume" && typeof op.answered === "number" && op.answered > 0 ? true : undefined;
+			task.back = undefined;
 			task.startedAt ??= num(op.ts);
 			return;
 		}
@@ -698,6 +719,7 @@ function apply(s: State, raw: unknown): void {
 			task.mainAnswered = undefined;
 			task.wait = undefined;
 			task.block = undefined;
+			task.back = undefined;
 			task.startedAt ??= num(op.ts);
 			return;
 		}
@@ -720,6 +742,7 @@ function apply(s: State, raw: unknown): void {
 			task.mainAnswered = undefined;
 			task.wait = undefined;
 			task.block = undefined;
+			task.back = undefined;
 			task.startedAt ??= num(op.ts);
 			return;
 		}
@@ -740,6 +763,7 @@ function apply(s: State, raw: unknown): void {
 			task.askOps = undefined;
 			task.mainAnswered = undefined;
 			task.wait = wait;
+			task.back = undefined;
 			task.startedAt ??= since;
 			return;
 		}
@@ -777,6 +801,7 @@ function apply(s: State, raw: unknown): void {
 			task.askOps = undefined;
 			task.mainAnswered = undefined;
 			task.wait = undefined;
+			task.back = undefined;
 			task.block = block;
 			return;
 		}
@@ -968,7 +993,7 @@ export function taskQueueFromEntries(
 	}
 	const tasks = s.tasks
 		.filter((t): t is Task & UiTaskQueueTask => t.status !== "removed" && !hidden.has(t))
-		.map(({ heldFrom: _heldFrom, stuckAt: _stuckAt, ...t }): UiTaskQueueTask => t);
+		.map(({ heldFrom: _heldFrom, stuckAt: _stuckAt, back: _back, ...t }): UiTaskQueueTask => t);
 	// queue-lanes: only a queue with tasks that run in chats of their own shows lanes (a task's own chat never).
 	const lanes = s.from ? [] : lanesOf(s.tasks, taskQueueShareableOf(shareable));
 	return {
@@ -994,6 +1019,8 @@ export type TaskQueueTaskAny = Omit<UiTaskQueueTask, "status"> & {
 	status: Status;
 	/** queue-why: when it started needing the user (pi-queue's stuckAt); kept after, read it only while stuck. */
 	stuckAt?: number;
+	/** queue-paused (Ops #393): pi-queue's `back` (see taskQueueBackOwed); never sent to the page. */
+	back?: TaskQueueBack;
 };
 
 /**
@@ -1035,6 +1062,18 @@ export function taskQueueHeld(
 ): UiTaskQueueHold | undefined {
 	if (!OPEN.has(t.status)) return undefined;
 	return t.hold ?? queue.hold;
+}
+
+/**
+ * queue-paused (Ops #393, H-PAUSE-LEND-2): the owner lifted the pause on this task while it was being worked on
+ * in a chat of its own, and its queue's chat hasn't sent it "Back to task" yet: that note comes once no task it
+ * shares a touch with is at work (pi-queue's backWaits; one may have borrowed its lane while it was paused,
+ * Ops #380). Until then nothing automatic may start a turn in its chat (taskChatPaused), as while paused. It
+ * ends, as in pi-queue, with the note ("back") or any change of its status (it waits, is blocked, asks, is stuck,
+ * is put back or resumed), and when it is done, dropped or removed. Paused again meanwhile, the pause counts.
+ */
+export function taskQueueBackOwed(t: Pick<TaskQueueTaskAny, "status" | "back">): boolean {
+	return t.status === "working" && t.back !== undefined;
 }
 
 /** queue-wait-frees-lane: a task in a chat of its own at work there: worked on, asking its main chat, or stuck. */

@@ -6344,6 +6344,18 @@ queue doesn't lift a task's own pause. Stop, Auto start and Auto approve keep th
    carry-on after a restart leaves a paused task's chat alone, and `queueWakeChat` refuses it. The
    owner typing in that chat still gets an answer (it doesn't lift the pause). A paused chat is a lane
    task's own chat whose task is open and held (`taskChatPaused`, from its queue chat's record).
+   **Until its "Back to task"** (Ops #393, review F1 of Ops #380, H-PAUSE-LEND-2): a task the owner
+   resumes while it was being worked on in a chat of its own still counts as paused there until its
+   queue's chat sends it "Back to task". With pi-queue's lend (Ops #380, `lendWhenPaused`) another task
+   may have borrowed its lane while it was paused, and the note waits until that one is done; without
+   this, a reply, a wake-up or a plugin notice in between started a turn while the borrower still wrote
+   the same memory files. The mirror keeps pi-queue's `back` on the task (internal, never sent to the
+   page): `release` sets it on a lane task at work (`unhold`), and it ends as in pi-queue, with the
+   `back` op, any change of status (wait, block, ask, stuck, requeue, start/resume), done, drop or
+   remove; paused again meanwhile, the pause counts. `taskQueueBackOwed(t)`; `taskChatPaused` reads the
+   queue with `taskQueueAll` (the replay with its internal fields; the page's copy leaves `back` out).
+   The "Back to task" note itself goes through `queueRunCommand`, which doesn't ask `taskChatPaused`.
+   The Queue panel and the Roles page show such a task as working, as before.
 4. **The Queue panel** (`TaskQueuePanel.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`): Pause /
    Resume on every open task, Pause queue / Resume queue in the header with a banner, and a "Paused by
    you · since HH:MM · why" line ("with the whole queue" for a task under the queue's pause). A
@@ -6370,7 +6382,11 @@ queue doesn't lift a task's own pause. Stop, Auto start and Auto approve keep th
   a task pause outliving the queue's, the mirror replay against pi-queue, the command lines),
   `queue-blocks.test.ts` ("paused by you": no poke for a paused task or queue, a paused blocker,
   needs-you), `role-messages.test.ts` (a reply to a paused task's chat goes in without a turn, also
-  under a queue pause; delivered normally after resume), `roles-overview.test.ts`,
+  under a queue pause; still without one after the resume until its "Back to task", then delivered
+  normally; "taskChatPaused: a task resumed at work counts as paused until its Back to task"),
+  `task-queue.test.ts` ("taskQueueAll (queue-paused: owed its Back to task)": set on resume, by the
+  task's or the queue's; cleared by each op pi-queue clears it on; never for a task in the queue's own
+  chat or one not at work; not sent to the page; the same as pi-queue's replay), `roles-overview.test.ts`,
   `roles-overview-tool.test.ts`, `task-queue-panel.test.ts`, `roles-view.test.ts`.
 - Item 6: `task-queue-panel.test.ts` ("why a task can't start") and `tests/queue-why-test.mjs` (see
   queue-blocked).
@@ -6382,14 +6398,24 @@ queue doesn't lift a task's own pause. Stop, Auto start and Auto approve keep th
   moves later by exactly the time paused; Resume (a click) sends one "Back to task" turn that reads
   what came meanwhile; a queue with Auto start on skips its paused ready task, starts nothing while the
   whole queue is paused, resumes the working task first, and a task's own pause outlives the queue's;
-  the panel's buttons, lines and banner, and the Roles tile. `QP_SHOT_DIR` keeps screenshots.
+  the panel's buttons, lines and banner, and the Roles tile. Queue D (Ops #393): with a pi-queue that
+  lends (PI_QUEUE_PKG on Ops #380's lend), a paused task's lane goes to a task sharing only the pi
+  memory files; resumed meanwhile, the paused task gets no turn from a role reply or a wake-up and no
+  "Back to task" while the borrower works, then exactly one "Back to task" turn that reads them; with
+  one that doesn't, the lane waits and the resume goes back to work at once. A resume with nothing to
+  wait for gets its turn within 5 s. `QP_SHOT_DIR` keeps screenshots. Its seeded settings turn
+  compaction off (the mock model reports no usage, so pi's estimate compacted the chats after a few
+  turns and the mock lost track of which chat it answered), and the Roles tile check reads the Roles
+  page's frame (the page moved into an iframe; the old `.rv-tile` check had been failing since at
+  least 2026-10-16).
 - The new tests fail on the code before this patch.
 
 ### When syncing
 
 - The quiet delivery hooks `deliverRoleMessage`, the scheduler executor, the plugin prompt paths and
   `carryOnAfterRestart`; if a new path starts turns in other chats, check `taskChatPaused` there too.
-- The mirror must keep pi-queue's clock shifts (`unhold`); the replay comparison test catches drift.
+- The mirror must keep pi-queue's clock shifts (`unhold`) and its `back` (set in `unhold`, cleared in
+  `applyOp` and `endHold`); the replay comparison tests catch drift.
 
 ## role-board
 

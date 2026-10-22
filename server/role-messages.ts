@@ -60,7 +60,14 @@ import { ownerChannelOf, type OwnerChannel, type RoleOwnerAnswer, OWNER_IDS_MAX 
 import { CARRY_ON_PREFIX } from "./running-chats.js";
 import { guardPolicyIsValid, ROLE_MESSAGE_POLICY, roleMessagesHourlyExempt } from "./role-message-limits.js";
 import type { GuardPolicy } from "./role-message-guard-contract-v2.js";
-import { TASK_QUEUE_ENTRY_TYPE, taskQueueFromEntries, taskQueueHeld, type TaskQueueEntryLike } from "./task-queue.js";
+import {
+	TASK_QUEUE_ENTRY_TYPE,
+	taskQueueAll,
+	taskQueueBackOwed,
+	taskQueueFromEntries,
+	taskQueueHeld,
+	type TaskQueueEntryLike,
+} from "./task-queue.js";
 
 /** The kinds message_role sends (role-reports' "report" is the app's alone). */
 export const ROLE_MESSAGE_KINDS: readonly UiRoleMessageKind[] = ["question", "request", "fyi", "reply"];
@@ -849,15 +856,17 @@ export function ownTaskOf(
  * queue-paused: a queued task's chat whose task the owner paused (the task itself or its whole queue), as
  * its queue's chat records it (as its own chat does when that one can't be read). Other chats: false.
  * Nothing automatic starts a turn there: messages go in without one, like an fyi.
+ * Ops #393: also from the owner's resume until its queue's chat sends it "Back to task" (taskQueueBackOwed),
+ * since another task may still have its lane; that turn reads what came in meanwhile.
  */
 export async function taskChatPaused(file: string): Promise<boolean> {
 	try {
 		const own = ownTaskOf(await queueEntriesOf(file));
 		if (!own || own.done || own.id === undefined) return false;
 		if (!own.queueChat || !existsSync(own.queueChat)) return own.held;
-		const q = taskQueueFromEntries(await queueEntriesOf(own.queueChat), true, Number.POSITIVE_INFINITY);
+		const q = taskQueueAll(await queueEntriesOf(own.queueChat));
 		const t = q.tasks.find((x) => x.id === own.id);
-		return !!t && !!taskQueueHeld(t, q);
+		return !!t && (!!taskQueueHeld(t, q) || taskQueueBackOwed(t));
 	} catch {
 		return false;
 	}
