@@ -89,8 +89,8 @@ const TICK_MS = 3000;
 const SETTLE_MS = 30_000;
 /** Sends that got in but never landed, before the message counts as failed. */
 const MAX_SENDS = 5;
-/** A message not delivered within a day fails. */
-const GIVE_UP_MS = 24 * HOUR_MS;
+/** A message not delivered within a day fails (#379: the ladder settles a hand-off it never saw by this too). */
+export const ROLE_MESSAGE_GIVE_UP_MS = 24 * HOUR_MS;
 const FILE_VERSION = 1;
 
 /** role-reports: the four headings a 6 am report has, in this order, each on a line of its own (owner,
@@ -221,6 +221,8 @@ export type RoleMessageChainFact = Pick<
 	RoleMessageRecord,
 	"id" | "chain" | "hash" | "target" | "root" | "parent" | "guard"
 >;
+/** A dropped record's chain facts, when it was dropped, and (#379) how it ended; facts kept before #379 have no state. */
+type RoleMessageDroppedFact = RoleMessageChainFact & { at: number; state?: RoleMessageRecord["state"] };
 /** role-message-ladder (Ops rm-efd6df89): how long a pruned record's chain facts are kept. */
 export const ROLE_MESSAGE_CHAIN_MEMORY_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -876,7 +878,7 @@ export class RoleMessages {
 	private deferredUntilStart = false;
 	private changeTimer: ReturnType<typeof setTimeout> | null = null;
 	/** role-message-ladder: chain facts of records the store has dropped (see RoleMessageChainFact). */
-	private readonly chainMemory = new Map<string, RoleMessageChainFact & { at: number }>();
+	private readonly chainMemory = new Map<string, RoleMessageDroppedFact>();
 
 	constructor(
 		private readonly file: string,
@@ -903,7 +905,7 @@ export class RoleMessages {
 		for (const line of raw.split("\n")) {
 			if (!line.trim()) continue;
 			try {
-				const f = JSON.parse(line) as RoleMessageChainFact & { at: number };
+				const f = JSON.parse(line) as RoleMessageDroppedFact;
 				if (typeof f.id !== "string" || typeof f.chain !== "number" || typeof f.at !== "number") continue;
 				if (this.now() - f.at >= ROLE_MESSAGE_CHAIN_MEMORY_MS) old++;
 				else this.chainMemory.set(f.id, f);
@@ -933,6 +935,7 @@ export class RoleMessages {
 			...(m.root ? { root: m.root } : {}),
 			...(m.parent ? { parent: m.parent } : {}),
 			...(m.guard ? { guard: m.guard } : {}),
+			state: m.state, // #379: how it ended (the ladder settles a delivery it never saw confirmed from this)
 			at,
 		}));
 		for (const f of facts) this.chainMemory.set(f.id, f);
@@ -947,6 +950,17 @@ export class RoleMessages {
 	/** role-message-ladder: a record's chain facts, from the store or (once it was dropped) the chain memory. */
 	chainFact(id: string): RoleMessageChainFact | undefined {
 		return this.byId(id) ?? this.chainMemory.get(id);
+	}
+
+	/** #379: when the store dropped this record (it drops only finished ones) and how it ended, when known (facts kept
+	 *  before #379 have no state); undefined while the store holds the record, or once its facts are gone. */
+	dropped(id: string): { at: number; state?: "delivered" | "replied" | "failed" } | undefined {
+		if (this.byId(id)) return undefined;
+		const f = this.chainMemory.get(id);
+		if (!f) return undefined;
+		return f.state === "delivered" || f.state === "replied" || f.state === "failed"
+			? { at: f.at, state: f.state }
+			: { at: f.at };
 	}
 
 	private log(line: string): void {
@@ -1898,7 +1912,7 @@ export class RoleMessages {
 	): Promise<void> {
 		const now = this.now();
 		// Held while paused doesn't count: a held message gets a fresh day from the resume.
-		if (now - Math.max(r.at, this.data.resumedAt ?? 0) > GIVE_UP_MS) {
+		if (now - Math.max(r.at, this.data.resumedAt ?? 0) > ROLE_MESSAGE_GIVE_UP_MS) {
 			this.fail(r, r.error ? `not delivered within a day (last error: ${r.error})` : "not delivered within a day");
 			return;
 		}

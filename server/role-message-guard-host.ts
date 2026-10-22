@@ -25,6 +25,7 @@ import {
 	existsSync,
 	fstatSync,
 	fsyncSync,
+	ftruncateSync,
 	lstatSync,
 	mkdirSync,
 	openSync,
@@ -72,10 +73,17 @@ import type {
 	GuardVerifiedDecision,
 	GuardVerifiedSnapshot,
 } from "./role-message-guard-contract.js";
-import { guardCommandFingerprint, RoleMessageGuardCore, type GuardMessageIntent } from "./role-message-guard-core.js";
+import {
+	type GuardDeliveryEvidence,
+	type GuardEvidenceSettlement,
+	guardCommandFingerprint,
+	RoleMessageGuardCore,
+	type GuardMessageIntent,
+} from "./role-message-guard-core.js";
 import { GuardFileLock } from "./role-message-guard-lock.js";
 import { guardDigest, GuardFileStore, guardJournalRefusal } from "./role-message-guard-store.js";
 import {
+	ROLE_MESSAGE_GIVE_UP_MS,
 	ROLE_MESSAGES_PER_HOUR,
 	roleMessagesHourlyExempt,
 	type RoleMessageDraft,
@@ -457,7 +465,8 @@ export interface RoleMessageGuardHostOptions {
 /** One line of the approval history (history.jsonl): metadata only, never the context's words. */
 export interface GuardHistoryLine {
 	at: number;
-	event: "request" | "escalation" | "decision" | "grant" | "grant_use" | "grant_end" | "revoked_all";
+	event:
+		"request" | "escalation" | "decision" | "grant" | "grant_use" | "grant_end" | "revoked_all" | "delivery_settled";
 	requestId?: string;
 	generation?: string;
 	requester?: string;
@@ -470,6 +479,15 @@ export interface GuardHistoryLine {
 	uses?: number;
 	maximumUses?: number;
 	expiresAt?: number;
+	/** #379 delivery_settled: the message, its roles and kind, the entry's state before (state = after), the native
+	 *  store's evidence (delivered, replied, failed, dropped or absent) and when it was sent. */
+	messageId?: string;
+	from?: string;
+	to?: string;
+	kind?: string;
+	before?: string;
+	native?: string;
+	sentAt?: number;
 }
 
 /** Per-call context for E's materialize (who the native record is from, and its chain ids). */
@@ -532,6 +550,8 @@ export class RoleMessageGuardHost {
 	private historySeen: Map<string, string> | null = null;
 	/** Stores already warned about (80% full); cleared once below 70%. */
 	private readonly warned = new Set<string>();
+	/** #379: settlements already in history.jsonl (outbox id, state, evidence), so a retried prune doesn't repeat them. */
+	private readonly settledLogged = new Set<string>();
 
 	constructor(private readonly o: RoleMessageGuardHostOptions) {
 		this.now = o.now ?? Date.now;
@@ -847,6 +867,8 @@ export class RoleMessageGuardHost {
 			},
 			// A rollback to depth 6 is the previous build (pi-web-deploy rollback), never an in-place switch.
 			authoriseRollback: async () => false,
+			deliveryEvidence: (entries, now) => this.deliveryEvidence(entries, now),
+			recordSettlements: (settled) => this.recordSettlements(settled),
 		});
 		this.adapters = createGuardApprovalAdapters({
 			binding: GUARD_CONSUMER_BINDING,
@@ -1311,7 +1333,7 @@ export class RoleMessageGuardHost {
 		const s = await this.state_();
 		const full = s ? this.fills(s).sort((a, b) => b.used / b.max - a.used / a.max)[0] : undefined;
 		const which = full ? ` (${full.name}: ${full.used} of ${full.max})` : "";
-		return `the ladder's storage is full${which}; nothing was recorded or counted. Tell Ops; it frees up as old records age out.`;
+		return `the ladder's storage is full${which}; nothing was recorded or counted. Tell Ops; records leave 5 hours after their delivery settles, and the accepted copy only at a rotation, once nothing is open.`;
 	}
 
 	/** After every ladder action: history lines for what changed, and the 80% warnings. Never throws. */
@@ -1409,23 +1431,124 @@ export class RoleMessageGuardHost {
 		return join(this.o.dir, "history.jsonl");
 	}
 
-	/** Append; past the size cap the file becomes the one archive (history.1.jsonl). Errors are logged, never thrown. */
-	private writeHistory(lines: GuardHistoryLine[]): void {
-		if (lines.length === 0) return;
+	/** Append; past the size cap the file becomes the one archive (history.1.jsonl). Errors are logged, never thrown;
+	 *  false = not written. durable: synced to disk before it returns (#379: a settlement's line comes first); a write
+	 *  that fails partway is cut back, so no torn line is left for the next one to join, and a new file's folder is
+	 *  synced too. */
+	private writeHistory(lines: GuardHistoryLine[], durable = false): boolean {
+		if (lines.length === 0) return true;
 		try {
 			const text = lines.map((l) => `${JSON.stringify(l)}\n`).join("");
 			let size = 0;
+			let existed = true;
 			try {
 				size = statSync(this.historyPath).size;
 			} catch {
-				/* new file */
+				existed = false; // a new file
 			}
-			if (size > 0 && size + Buffer.byteLength(text) > (this.o.historyMaxBytes ?? GUARD_HISTORY_MAX_BYTES))
+			if (size > 0 && size + Buffer.byteLength(text) > (this.o.historyMaxBytes ?? GUARD_HISTORY_MAX_BYTES)) {
 				renameSync(this.historyPath, join(this.o.dir, "history.1.jsonl"));
-			appendFileSync(this.historyPath, text);
+				existed = false;
+			}
+			if (!durable) appendFileSync(this.historyPath, text);
+			else {
+				const fd = openSync(this.historyPath, "a");
+				try {
+					const start = fstatSync(fd).size;
+					try {
+						writeFileSync(fd, text);
+						fsyncSync(fd);
+					} catch (err) {
+						try {
+							ftruncateSync(fd, start);
+							fsyncSync(fd);
+						} catch {
+							// the write's own error is the one reported
+						}
+						throw err;
+					}
+				} finally {
+					closeSync(fd);
+				}
+				if (!existed) fsyncDir(this.o.dir);
+			}
+			return true;
 		} catch (err) {
 			this.o.log(`approval ladder: history not written (${(err as Error).message})`);
+			return false;
 		}
+	}
+
+	/**
+	 * #379 H-LADDER-PRUNE-2: what the native store shows for deliveries E never confirmed. Delivered or replied: done
+	 * at its delivery time. Failed: failed. Dropped from the store (it drops only finished records): as it ended, at the
+	 * drop; one dropped before #379 kept no outcome: done (the store held it and finished it), labelled dropped:unknown.
+	 * Absent everywhere a day (its lifetime) after acceptance: failed then; it is never handed off late after that.
+	 * Waiting, or absent and younger: nothing yet. Metadata only, never the words.
+	 */
+	private deliveryEvidence(entries: readonly GuardOutboxEntry[], now: number): Map<string, GuardDeliveryEvidence> {
+		const found = new Map<string, GuardDeliveryEvidence>();
+		const rm = this.o.roleMessages();
+		if (!rm) return found;
+		const proof = (entry: GuardOutboxEntry, native: string, at: number): GuardProofReference => ({
+			sourceId: "pi-web-ui/role-messages",
+			sourceVersion: "1",
+			sourceIncarnation: "native-store",
+			eventId: `native:${native}`,
+			revision: entry.message.id,
+			digest: entry.receipt.legacyMessageDigest,
+			observedAt: Math.min(Math.max(0, Math.floor(at)), now),
+		});
+		for (const entry of entries) {
+			const id = entry.message.id;
+			const record = rm.byId(id);
+			let evidence: GuardDeliveryEvidence | undefined;
+			if (record?.state === "delivered" || record?.state === "replied")
+				evidence = {
+					outcome: "done",
+					native: record.state,
+					proof: proof(entry, record.state, record.deliveredAt ?? record.at),
+				};
+			else if (record?.state === "failed")
+				evidence = { outcome: "failed", native: "failed", proof: proof(entry, "failed", record.at) };
+			else if (!record) {
+				const dropped = rm.dropped(id);
+				const lifetimeEnd = entry.receipt.committedAt + ROLE_MESSAGE_GIVE_UP_MS;
+				if (dropped) {
+					const native = `dropped:${dropped.state ?? "unknown"}`;
+					evidence = {
+						outcome: dropped.state === "failed" ? "failed" : "done",
+						native,
+						proof: proof(entry, native, dropped.at),
+					};
+				} else if (now >= lifetimeEnd)
+					evidence = { outcome: "failed", native: "absent", proof: proof(entry, "absent", lifetimeEnd) };
+			}
+			if (evidence) found.set(entry.receipt.outboxId, evidence);
+		}
+		return found;
+	}
+
+	/** #379: one history line per settlement, synced before E applies them; false (not written) applies none. */
+	private recordSettlements(settled: readonly GuardEvidenceSettlement[]): boolean {
+		const key = (s: GuardEvidenceSettlement) => `${s.before.receipt.outboxId}:${s.after.state}:${s.native}`;
+		const fresh = settled.filter((s) => !this.settledLogged.has(key(s)));
+		const at = this.now();
+		const lines: GuardHistoryLine[] = fresh.map((s) => ({
+			at,
+			event: "delivery_settled",
+			messageId: s.before.message.id,
+			from: s.before.message.from.role,
+			to: s.before.message.to.role,
+			kind: s.before.message.kind,
+			before: s.before.state,
+			state: s.after.state,
+			native: s.native,
+			sentAt: s.before.receipt.committedAt,
+		}));
+		if (!this.writeHistory(lines, true)) return false;
+		for (const s of fresh) this.settledLogged.add(key(s));
+		return true;
 	}
 
 	/** At start: drop history lines older than 30 days, and the archive once all of it is. */

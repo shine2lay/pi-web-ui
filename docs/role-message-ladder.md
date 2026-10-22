@@ -102,7 +102,8 @@ never reset.
 
 `role-messages.json` keeps its newest 1000 records plus waiting/report protections and capped roles'
 non-report hourly proof (Ops #318; at most capped roles × 20 extra hourly-proof rows). A chain's place never depends on that rotating
-copy: when a record is dropped, its chain facts (id, hash, target, root, parent, hop, guard tag) go to
+copy: when a record is dropped, its chain facts (id, hash, target, root, parent, hop, guard tag and, since
+Ops #379, how it ended) go to
 `role-messages-chains.jsonl` beside it and are kept 30 days, so a reply to a pruned message keeps its hop
 (before, it became `unknown`, and the native code even counted it as hop 0).
 
@@ -142,9 +143,24 @@ Ops (rm-1fe61704) and approved with changes (rm-efd6df89):
   transaction) leave with it. Each tombstone (E's replay memory) ends 5 hours after it is made. Open
   requests, live grants and undelivered entries are never pruned. A decision or grant use that names a
   settled, pruned or unknown request or grant is refused and creates nothing.
+- Settling from the message store (Ops #379, H-LADDER-PRUNE-2): a delivery E handed off but never saw
+  confirmed (left `unknown` or `dispatching`), or accepted but never handed off (`committed`), settles
+  from the role-message store's own record at E's next command: delivered or replied there -> `handled`
+  (an FYI `dispatched`) at its delivery time; failed there -> `failed`; dropped from the store (it drops
+  only finished records) -> as it ended, at the drop (a fact kept before #379 has no outcome: `handled`,
+  labelled `dropped:unknown`); in neither the store nor its chain memory a day (a message's lifetime)
+  after acceptance -> `failed` then. Still waiting, held, or still being handed off:
+  left as it is. It then leaves 5 hours after that time like any settled entry. Nothing is sent or
+  replayed: only E's record changes, and a `delivery_settled` line goes to `history.jsonl` (synced) before
+  it does; if that line can't be written, nothing settles (a write that fails partway is cut back). If the
+  change itself then fails to commit, the line stays and the next command settles it (a second line only
+  if the app restarted in between). Before this, such entries never left, and from
+  2026-10-20 they filled the store (3000 of 3000 audit receipts) so every send was refused. Each step's
+  time is now read under the writer, and a hand-off's proof is checked against a reading taken after it
+  returned, so a commit that lands meanwhile no longer leaves a send `dispatching` or `unknown`.
 - An approval context over 16 KB (16384 bytes as JSON) is refused whole, with its size; never cut down.
-- `history.jsonl`: one metadata line per request, escalation, decision, grant, grant use and grant end (no
-  context words); kept 30 days; past 16 MiB it becomes the one archive `history.1.jsonl`. A write
+- `history.jsonl`: one metadata line per request, escalation, decision, grant, grant use, grant end and
+  delivery settled from the message store (ids, roles, kind, states and times; no context or message words); kept 30 days; past 16 MiB it becomes the one archive `history.1.jsonl`. A write
   failure is logged and never blocks a send or an approval.
 - One log line `approval ladder WARNING: <store> at N%` when a store reaches 80%; armed again below 70%.
 

@@ -157,6 +157,26 @@ export interface GuardCoreOptions {
 	readonly maintenanceIdentity: (purpose: "rollback" | "outbox", key: string) => GuardOperationIdentity;
 	/** Native Owner authorisation for rollback to depth-only; false blocks. */
 	readonly authoriseRollback: () => Promise<boolean>;
+	/**
+	 * #379 H-LADDER-PRUNE-2: what the native store shows for deliveries E never confirmed, keyed by outbox id; an
+	 * entry it has no evidence for yet is left out (or "pending"). Read-only and synchronous: it runs under the writer.
+	 */
+	readonly deliveryEvidence?: (
+		entries: readonly GuardOutboxEntry[],
+		now: number,
+	) => ReadonlyMap<string, GuardDeliveryEvidence>;
+	/** #379: durably records these settlements before E applies them; false applies none. Synchronous, under the writer. */
+	readonly recordSettlements?: (settled: readonly GuardEvidenceSettlement[]) => boolean;
+}
+/** #379: the native store's evidence for one delivery: finished ("done" or "failed") with its proof, or not yet. */
+export type GuardDeliveryEvidence =
+	| { readonly outcome: "done" | "failed"; readonly native: string; readonly proof: GuardProofReference }
+	| { readonly outcome: "pending" };
+/** #379: one outbox entry settled from native evidence (before and after), as recorded before it is applied. */
+export interface GuardEvidenceSettlement {
+	readonly before: GuardOutboxEntry;
+	readonly after: GuardOutboxEntry;
+	readonly native: string;
 }
 function num(n: unknown): n is number {
 	return typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
@@ -326,6 +346,8 @@ function mutable(s: GuardStoreState): MutableState {
 
 export class RoleMessageGuardCore implements GuardCoordinator {
 	private readonly options: GuardCoreOptions;
+	/** #379: sends whose own reconcile is running (by operation id); evidence never settles those under it. */
+	private readonly reconciling = new Map<string, number>();
 	constructor(options: GuardCoreOptions) {
 		if (
 			!equal(options.policy, policyV1) ||
@@ -410,9 +432,71 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 		const horizon = this.options.retention.sourceReplayHorizonMs;
 		return horizon === "unknown" ? "source_horizon_unknown" : now + horizon;
 	}
+	/**
+	 * #379 H-LADDER-PRUNE-2: an entry whose hand-off E never confirmed (a lost or late acknowledgement, a settle that
+	 * never committed, a charge already pruned) settles from the native store's own evidence, so retention frees it
+	 * 5 h after that evidence like any settled entry. Only E's record changes: nothing is sent or replayed, no entry
+	 * held or still reconciling is touched, and the host records each settlement (history.jsonl) before it applies.
+	 */
+	private settleFromEvidence(state: MutableState, now: number): void {
+		const evidenceOf = this.options.deliveryEvidence;
+		const record = this.options.recordSettlements;
+		if (!evidenceOf || !record) return;
+		const open = state.outbox.filter(
+			(o) =>
+				!this.reconciling.has(o.receipt.identity.operationId) &&
+				(o.state === "committed" ||
+					o.state === "dispatching" ||
+					o.state === "unknown" ||
+					(o.state === "dispatched" && o.message.kind !== "fyi" && o.wakeState !== "held")),
+		);
+		if (open.length === 0) return;
+		let found: ReadonlyMap<string, GuardDeliveryEvidence>;
+		try {
+			found = evidenceOf(open, now);
+		} catch {
+			return;
+		}
+		const settled: GuardEvidenceSettlement[] = [];
+		for (const before of open) {
+			const evidence = found.get(before.receipt.outboxId);
+			if (!evidence || evidence.outcome === "pending") continue;
+			if (!proofValid(evidence.proof, now) || evidence.proof.revision !== before.message.id) continue;
+			const fyi = before.message.kind === "fyi";
+			const after: GuardOutboxEntry =
+				evidence.outcome === "failed"
+					? { ...before, state: "failed", lastEvidence: evidence.proof }
+					: {
+							...before,
+							state: fyi ? "dispatched" : "handled",
+							wakeState: fyi ? before.wakeState : "acknowledged",
+							lastEvidence: evidence.proof,
+						};
+			settled.push({ before, after, native: evidence.native });
+		}
+		if (settled.length === 0) return;
+		let recorded = false;
+		try {
+			recorded = record(settled);
+		} catch {
+			recorded = false;
+		}
+		if (!recorded) return;
+		const next = new Map(settled.map((s) => [s.before.receipt.outboxId, s.after]));
+		state.outbox = state.outbox.map((o) => next.get(o.receipt.outboxId) ?? o);
+		// The send's idempotent result follows its entry, as an outbox step does (its receipt is unchanged).
+		const bySend = new Map(settled.map((s) => [s.before.receipt.identity.operationId, s.after]));
+		state.transactions = state.transactions.map((t) => {
+			const after = bySend.get(t.identity.operationId);
+			return after && t.state === "committed" && t.result.state === "accepted"
+				? { ...t, result: { ...t.result, delivery: after.state } }
+				: t;
+		});
+	}
 	private prune(state: MutableState, now: number): void {
 		// No pruning ever clears unknown reservations, unknown source horizons or legacy accepted words.
 		if (state.transactions.some((t) => t.state !== "committed")) return;
+		this.settleFromEvidence(state, now);
 		// A tombstone whose verified end has passed leaves; one with an unknown end never does.
 		state.tombstones = state.tombstones.filter(
 			(t) => t.invalidThrough === "source_horizon_unknown" || t.invalidThrough > now,
@@ -1372,35 +1456,40 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 			return { state: "unknown", reason: "status unavailable" };
 		}
 	}
-	private async updateOutbox(entry: GuardOutboxEntry, next: GuardOutboxEntry, now: number): Promise<GuardResult> {
-		if (
-			(next.state === "dispatched" || next.state === "handled") &&
-			next.message.state === "waiting" &&
-			next.lastEvidence
-		) {
-			const message: GuardLegacyAcceptedMessage = {
-				...next.message,
-				state: "delivered",
-				deliveredAt: now,
-				sends: next.message.sends + 1,
-			};
-			next = { ...next, message, receipt: { ...next.receipt, legacyMessageDigest: guardDigest(message) } };
-		}
-		const identity = this.options.maintenanceIdentity("outbox", `${entry.receipt.outboxId}:${guardDigest(next)}`);
+	private async updateOutbox(entry: GuardOutboxEntry, step: GuardOutboxEntry): Promise<GuardResult> {
+		const identity = this.options.maintenanceIdentity("outbox", `${entry.receipt.outboxId}:${guardDigest(step)}`);
 		const result = await this.options.store.transact(identity, async (current) => {
-			if (!this.clockOK({ nowMs: now, lastObservedMs: now, state: "trusted" }, current))
-				throw new Error("clock_untrusted");
+			// #379: the step's time is read under the writer. A reading taken before the transport ran is older than any
+			// commit that landed meanwhile, and the step was refused (clock_untrusted), leaving the entry dispatching.
+			const time = await this.options.clock();
+			if (!this.clockOK(time, current)) throw new Error("clock_untrusted");
+			const now = time.nowMs;
+			let next = step;
+			if (
+				(next.state === "dispatched" || next.state === "handled") &&
+				next.message.state === "waiting" &&
+				next.lastEvidence
+			) {
+				const message: GuardLegacyAcceptedMessage = {
+					...next.message,
+					state: "delivered",
+					deliveredAt: now,
+					sends: next.message.sends + 1,
+				};
+				next = { ...next, message, receipt: { ...next.receipt, legacyMessageDigest: guardDigest(message) } };
+			}
 			const state = mutable(current);
 			const index = state.outbox.findIndex((o) => o.receipt.outboxId === entry.receipt.outboxId);
 			if (index < 0 || !equal(state.outbox[index], entry)) throw new Error("outbox changed under reconciliation");
 			state.outbox[index] = next;
 			this.audit(state, identity, "used", `outbox:${entry.receipt.outboxId}`, now, next.lastEvidence);
 			// Durable delivery state is reflected in the original operation's idempotent result too.
+			const settled = next;
 			state.transactions = state.transactions.map((t) =>
 				t.state === "committed" &&
 				t.identity.operationId === entry.receipt.identity.operationId &&
 				t.result.state === "accepted"
-					? { ...t, result: { ...t.result, receipt: next.receipt, delivery: next.state } }
+					? { ...t, result: { ...t.result, receipt: settled.receipt, delivery: settled.state } }
 					: t,
 			);
 			return this.finish(state, identity, { state: "accepted", receipt: next.receipt, delivery: next.state }, [], now);
@@ -1408,6 +1497,8 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 		return this.commitResult(entry.receipt.identity, result);
 	}
 	async reconcile(identity: GuardOperationIdentity): Promise<GuardResult> {
+		const running = identity.operationId;
+		this.reconciling.set(running, (this.reconciling.get(running) ?? 0) + 1);
 		try {
 			let found = await this.options.store.lookup(identity);
 			if (found.state !== "found")
@@ -1470,7 +1561,6 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 					return this.updateOutbox(
 						entry,
 						entry.state === "dispatched" ? { ...entry, wakeState: "held" } : { ...entry, state: "held" },
-						time.nowMs,
 					);
 				}
 				const waking = entry.state === "dispatched";
@@ -1482,10 +1572,13 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 					entry.wakeState === "unknown"
 				) {
 					const queried = await this.options.transport.query(entry);
+					// #379: the proof is checked against a reading taken after the transport answered, not before it ran.
+					const seen = await this.options.clock();
 					const wakeAttempt = entry.wakeState === "requested" || entry.wakeState === "unknown";
 					if (
 						queried.state !== "confirmed" ||
-						!proofValid(queried.proof, time.nowMs) ||
+						seen.state !== "trusted" ||
+						!proofValid(queried.proof, seen.nowMs) ||
 						queried.proof.eventId !== (wakeAttempt ? entry.receipt.wakeKey : entry.receipt.dispatchKey)
 					)
 						return {
@@ -1502,16 +1595,16 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 						wakeState: wakeAttempt ? ("acknowledged" as const) : entry.wakeState,
 						lastEvidence: queried.proof,
 					};
-					const committed = await this.updateOutbox(entry, updated, time.nowMs);
+					const committed = await this.updateOutbox(entry, updated);
 					if (committed.state !== "accepted") return committed;
 					continue;
 				}
 				if (read.value.mode === "rollback_depth_6" && entry.receipt.class !== "business")
-					return this.updateOutbox(entry, { ...entry, state: "held" }, time.nowMs);
+					return this.updateOutbox(entry, { ...entry, state: "held" });
 				const attempted: GuardOutboxEntry = waking
 					? { ...entry, wakeState: "requested" }
 					: { ...entry, state: "dispatching" };
-				const prepare = await this.updateOutbox(entry, attempted, time.nowMs);
+				const prepare = await this.updateOutbox(entry, attempted);
 				if (prepare.state !== "accepted") return prepare;
 				// Native transport must revalidate holds/current route at its own indivisible effect boundary.
 				const delivered = await (
@@ -1520,9 +1613,12 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 						: this.options.transport.dispatch(attempted, fresh.value)
 				).catch(() => ({ state: "unknown" as const, reason: "transport threw after attempt" }));
 				const expectedKey = waking ? entry.receipt.wakeKey : entry.receipt.dispatchKey;
+				// #379: as for a query, the proof is checked against a reading taken after the hand-off returned.
+				const seen = await this.options.clock();
 				const confirmed =
 					delivered.state === "confirmed" &&
-					proofValid(delivered.proof, time.nowMs) &&
+					seen.state === "trusted" &&
+					proofValid(delivered.proof, seen.nowMs) &&
 					delivered.proof.eventId === expectedKey;
 				const settled: GuardOutboxEntry = {
 					...attempted,
@@ -1530,7 +1626,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 					wakeState: waking ? (confirmed ? "acknowledged" : "unknown") : attempted.wakeState,
 					lastEvidence: confirmed && delivered.state === "confirmed" ? delivered.proof : attempted.lastEvidence,
 				};
-				const committed = await this.updateOutbox(attempted, settled, time.nowMs);
+				const committed = await this.updateOutbox(attempted, settled);
 				if (committed.state !== "accepted" || !confirmed) return committed;
 				found = { state: "found", result: { state: "accepted", receipt: entry.receipt, delivery: settled.state } };
 			}
@@ -1544,6 +1640,10 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 				retry: "query_same_identity_only",
 				reason: "reconciliation unavailable; no alternate retry",
 			};
+		} finally {
+			const left = (this.reconciling.get(running) ?? 1) - 1;
+			if (left > 0) this.reconciling.set(running, left);
+			else this.reconciling.delete(running);
 		}
 	}
 	async rollback(): Promise<GuardReadResult> {
