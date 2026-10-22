@@ -210,5 +210,7 @@ record gets a one-shot fresh start: `docs/role-message-fresh-start.md`.
   nesting/timing controls pass. No real chat, message send or model call is used.
 - Acceptance: V's harness (`tests/role-message-guard-acceptance/`) through
   `tests/role-message-guard-binding-122.mjs` on the registered build; urgent cases are NOT RUN
-  (not delivered, fail closed), never green.
+  (not delivered, fail closed), never green. Its fake host holds a working chat's mail until the
+  turn ends, as `server/role-mail-boundary.ts` does, so dispatches and wakes count landings, not
+  admissions (Ops #425).
 - Rollback: `tests/role-message-guard-previous-reader-122.mjs`.

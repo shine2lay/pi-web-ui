@@ -9,8 +9,12 @@
 // protected/urgent cases among them: #125 found no qualified native producer, so urgent is NOT DELIVERED) is
 // reported NOT RUN by the harness, never green.
 //
-// Dispatch barrier: during a step every chat reports "working", so RoleMessages holds deliveries (the native busy
-// path); deliveries happen only in setup. Effects are measured as deltas over the step.
+// Dispatch barrier: during a step every chat reports "working". Since role-mail-busy (5fd24a3f, Ops #156) the native
+// busy path has two halves: RoleMessages admits a working chat's mail to the host at once, and the host holds it in
+// that chat's boundary FIFO (server/role-mail-boundary.ts) until the running turn completes; only then does it land
+// (and, unless it is an FYI, start the next turn). The fake host keeps that second half: on a working chat deliver
+// and note only queue the mail, and settle() is the turn boundary where it lands, oldest first. An admission is
+// not a dispatch (role-messages.ts step()), so dispatches and wakes count landings, as deltas over the step (Ops #425).
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -21,7 +25,7 @@ import { zeroEffects } from "./role-message-guard-acceptance/cases.mjs";
 
 const dist = resolve(repository, "dist/server");
 const load = (name) => import(pathToFileURL(join(dist, name)).href);
-const { RoleMessages } = await load("role-messages.js");
+const { RoleMessages, roleMessageIdOf } = await load("role-messages.js");
 const { RoleMessageGuardHost } = await load("role-message-guard-host.js");
 const { AskHub } = await load("asks.js");
 
@@ -117,6 +121,7 @@ async function makeWorld(input, prev) {
 		files: {},
 		got: [],
 		counts: { deliver: 0, note: 0 },
+		boundary: [],
 		barrier: false,
 		now: input.clock.nowMs,
 		names: new Map(),
@@ -141,20 +146,13 @@ async function makeWorld(input, prev) {
 		roles: () => w.roles,
 		chatState: () => (w.barrier ? "working" : "idle"),
 		deliver: async (file, text) => {
-			w.counts.deliver++;
-			w.got.push({ file, text });
-			appendFileSync(
-				file,
-				`${JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text }] } })}\n`,
-			);
+			if (w.barrier) atBoundary(w, { file, text, via: "deliver" });
+			else land(w, { file, text, via: "deliver" });
 			return { ok: true };
 		},
 		note: async (file, text) => {
-			w.counts.note++;
-			appendFileSync(
-				file,
-				`${JSON.stringify({ type: "custom_message", customType: "role-message", content: [{ type: "text", text }], display: true })}\n`,
-			);
+			if (w.barrier) atBoundary(w, { file, text, via: "note" });
+			else land(w, { file, text, via: "note" });
 			return { ok: true };
 		},
 		log: () => {},
@@ -170,6 +168,31 @@ async function makeWorld(input, prev) {
 		now: clock,
 	});
 	return w;
+}
+/** Mail reaches the chat: a delivery as a user message (it starts a turn: a wake), an FYI as a no-turn note. */
+function land(w, { file, text, via }) {
+	if (via === "deliver") {
+		w.counts.deliver++;
+		w.got.push({ file, text });
+		appendFileSync(
+			file,
+			`${JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text }] } })}\n`,
+		);
+		return;
+	}
+	w.counts.note++;
+	appendFileSync(
+		file,
+		`${JSON.stringify({ type: "custom_message", customType: "role-message", content: [{ type: "text", text }], display: true })}\n`,
+	);
+}
+/** A working chat's boundary FIFO, as server/role-mail-boundary.ts keeps it: one entry per role message and chat
+ *  (a later note for the same message replaces it: a paused task's retry), landed in order at the boundary. */
+function atBoundary(w, row) {
+	const id = roleMessageIdOf(row.text);
+	const at = id ? w.boundary.findIndex((p) => p.file === row.file && p.id === id) : -1;
+	if (at < 0) w.boundary.push({ ...row, id });
+	else if (row.via === "note") w.boundary[at] = { ...row, id };
 }
 const lastIn = (w, role) => [...w.got].reverse().find((g) => g.file === w.files[role])?.text ?? "";
 const sender = (w, role, last) => ({
@@ -201,6 +224,10 @@ function seed(w, from, to, chain, extra = {}) {
 }
 async function settle(w) {
 	w.barrier = false;
+	// The running turn completed: its boundary lands the mail admitted meanwhile, oldest first.
+	const batch = w.boundary;
+	w.boundary = [];
+	for (const row of batch) land(w, row);
 	await w.rm.tick();
 	await w.rm.tick();
 }
