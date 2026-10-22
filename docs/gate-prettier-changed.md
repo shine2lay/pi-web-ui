@@ -73,6 +73,14 @@ Before: 180.7 s in Ops #368's measured land check (under heavy load), 100 s besi
 
 - Run 1 found one real problem, in this change's own test: its scratch repos used a Markdown path under the docs folder, and `notes-check-list.test.ts` took that for a test reading this repo's notes. Fixed in the test (case (b) above), without changing that guard.
 - Run 2: every other test passed, this change's own 14 cases included. The one failure was `usage-accounting-collector.test.ts` "ingests/replays 100000 current-week attempts across 65 synthetic sources ..." stopping on its own time limit (`fixture:ingestion-committed:2:unavailable:time-limit:33`) under gate load (load up to 12). It passed in run 1; it is the collector's known load-sensitive limit (Ops #331, #311), and this change only takes CPU load away from the tests.
-- The land's own check runs the same gate on the landed tree: its result is recorded below once it lands.
+- The land's own check runs the same gate on the landed tree: its result is below.
 
-Undo: revert the commit. It changes only the check, so there is nothing to install or restart.
+**The land (Oct 22).** wt land 157-848b42 landed `0d949dc` on `mine` (08:41:11.5-08:44:04.0 UTC, 172.5 s from start to end, nothing ahead in the line, no rebase). Its own `scripts/check.sh --fast` gave Prettier the same 3 files (merge-base a2b3a255): "All matched files use Prettier code style!". `== times, side by side: protocol 0 s, PATCHES.md 0 s, typecheck 18 s, lint 0 s, prettier 1 s, unit tests 169 s`; 475 test files, 7,510 tests passed, 6 skipped. Land log: `~/kept-from-tmp/2026-10-22/faster-prettier-scope/land.log`.
+
+**H-PRETTIER-CHANGED-1: HIT (Oct 22).**
+
+- The prettier step took 1 s in the land's own check and 0-1 s in both sealed gate runs, against 180.7 s before (Ops #368) and 100 s on a quiet machine (#231). The bar was under 15 s; the miss line was over 30 s.
+- Every known case passed, in the gate runs and in the land.
+- Not shown here: how much the unit tests gain from the CPU Prettier no longer uses. They took 151-184 s in these three runs, against 334 s in #368's heavily loaded run; that isn't a fair comparison, and the unit tests are criterion 6's other half.
+
+Undo: revert `0d949dc`. It changes only the check, so there is nothing to install or restart.
