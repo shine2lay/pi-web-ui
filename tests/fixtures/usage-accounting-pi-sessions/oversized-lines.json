@@ -1,0 +1,44 @@
+{
+	"about": "Synthetic only (#421). The unit test builds each file from these line specs at run time, so no multi-MiB payload is checked in. bytes is a line's exact length, newline included; a line without bytes keeps its natural size. call is an assistant usage line, tool a toolResult line (never counted). escapes fills the text with the escape string only. A torn line is written without its final newline. week-shaped follows the current-week measurements: lines over 64 KiB at line numbers 5-10 (most files' first one is line 8) in the 64K-256K, 256K-1M and 1M-4M bands, the largest at the cap.",
+	"escape": "\"\\\n\t\u001b",
+	"files": {
+		"week-shaped": {
+			"lines": [
+				{ "kind": "header" },
+				{ "kind": "call", "id": "week-2", "minute": 21 },
+				{ "kind": "tool", "id": "week-3", "minute": 21 },
+				{ "kind": "call", "id": "week-4", "minute": 22 },
+				{ "kind": "tool", "id": "week-5", "minute": 22, "bytes": 65537 },
+				{ "kind": "call", "id": "week-6", "minute": 23, "bytes": 200000 },
+				{ "kind": "tool", "id": "week-7", "minute": 23, "bytes": 262145 },
+				{ "kind": "tool", "id": "week-8", "minute": 24, "bytes": 3145728, "escapes": true },
+				{ "kind": "call", "id": "week-9", "minute": 25, "bytes": 1048576 },
+				{ "kind": "tool", "id": "week-10", "minute": 25, "bytes": 4194304 },
+				{ "kind": "call", "id": "week-11", "minute": 26 },
+				{ "kind": "tool", "id": "week-12", "minute": 26, "bytes": 100000 },
+				{ "kind": "call", "id": "week-13", "minute": 27 }
+			],
+			"entries": ["week-2", "week-4", "week-6", "week-9", "week-11", "week-13"],
+			"faults": []
+		},
+		"over-cap": {
+			"lines": [
+				{ "kind": "header" },
+				{ "kind": "call", "id": "cap-2", "minute": 21 },
+				{ "kind": "call", "id": "cap-3", "minute": 22, "bytes": 4194305 },
+				{ "kind": "call", "id": "cap-4", "minute": 23 }
+			],
+			"entries": ["cap-2"],
+			"faults": [{ "code": "line-limit", "line": 3 }]
+		},
+		"torn-oversized": {
+			"lines": [
+				{ "kind": "header" },
+				{ "kind": "call", "id": "torn-2", "minute": 21 },
+				{ "kind": "call", "id": "torn-3", "minute": 22, "bytes": 300000, "torn": true }
+			],
+			"entries": ["torn-2"],
+			"faults": [{ "code": "partial-last-line", "line": 3 }]
+		}
+	}
+}

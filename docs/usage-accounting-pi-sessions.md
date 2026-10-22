@@ -65,6 +65,56 @@ the collector or a changed numeric result. Result: HIT in the isolated check:
 including its original import guard). Full typecheck and server build pass;
 normal-gate retry is required through the next detached land receipt.
 
+## Oversized lines — H-S1 (Ops #421)
+
+Wrong, with evidence: the reader stopped each file at its first line over
+65,536 bytes with `line-limit`, and a cursor whose last line did not fit the
+rest of the 262,144-byte read budget gave `read-limit` on every later read.
+Pi writes much longer lines: all 478 chat files touched in the week of
+2026-10-19 have a line over 64 KiB, 476 of them within the first 10 lines
+(usually line 8), and the longest is 3,073,965 bytes. So 99.5% of that
+week's chat bytes would go unread (Ops #420 PLAN.md, M8, M10, M11).
+
+One change: the line cap (newline included) rises to 4,194,304 bytes;
+overrides can still only lower it. One line per read may run past the read
+budget: the line in progress when the budget runs out, or the first new line
+when the header and cursor check used it all. That line goes into one buffer
+of at most the line cap, so one read holds at most 4 MiB plus its budget, and
+a line longer than the budget is read by the next read instead of stopping
+every read at the same place. The cursor's last line is re-checked in 64 KiB
+pieces whatever its size; it still counts toward the budget. Lines over 4 MiB
+still stop with `line-limit`: partial, never skipped, never zero.
+
+Expected: a synthetic file shaped like that week (lines over 64 KiB at line
+numbers 5-10, from just over 64 KiB to exactly 4 MiB, one 3 MiB escape-heavy
+line) reads to its end with status `complete`, every read moving the cursor
+on. A 4,194,305-byte line gives `line-limit` at its line with the earlier
+usage kept; a torn oversized last line stays `partial-last-line` until its
+newline arrives. The old fixtures keep their `expected.json`.
+
+Disproof: any read of that file stopping or returning the same cursor, or one
+read holding more than 4.25 MiB of read buffers.
+
+Result: HIT on the synthetic checks (2026-10-22). The week-shaped file reads
+to its end in 7 reads, each moving on, with every usage line counted; no read
+held more than 4.25 MiB of read buffers (the test adds up every buffer the
+reader reads the file into). The 4,194,305-byte line gives `line-limit` at
+line 3 on every retry, with line 2's usage kept; the torn 300,000-byte line is
+read once its newline is appended. The old fixtures and `expected.json` are
+unchanged. Against the old reader the week-shaped, torn-line and cap checks
+fail; the over-4 MiB check passes on both, as it guards behaviour that must
+not change. Normal gate evidence belongs to the `wt land` receipt.
+
+Read time (R-PARSE in #420), measured 2026-10-22 on this machine (Node
+v22.22.0, 20 CPUs), synthetic files only, two runs of 11 timed reads after 2
+warm-ups: one fresh `read()` of a header plus a 3,145,728-byte toolResult line
+whose text is all escape sequences (1,348,050 backslashes) took 9.9-51.4 ms,
+median 13.5 ms and 23.2 ms. Decoding and `JSON.parse` of that line alone took
+a median 4.3-4.6 ms (about 660-700 MiB/s), 19-34% of the read. The same line
+without escapes parses in 2.5-2.7 ms; an escape-heavy 3 MiB assistant line
+parses in 4.2-6.0 ms and reads in 11.8-21.2 ms. Parsing is not the main cost,
+so no head check that skips parsing non-assistant lines is added.
+
 ## Scope and safety
 
 This module is inert: no production import, discovery, timer, model/network
@@ -87,6 +137,10 @@ must not become reassuring headroom.
   changes, current configuration, summary text or extension details.
 - The cursor checks the header and the last complete line, not every earlier
   byte. Earlier rewritten history needs a separate full replay/audit.
+- A line over 4 MiB stops its file at `line-limit` until the cap changes. None
+  was seen in the measured week (longest 3,073,965 bytes).
+- The Pi source intake (`server/usage-accounting-pi-source.ts`, W3) keeps its
+  own 64 KiB line cap; aligning it is a separate task in #420's plan.
 
 ## API and caller obligations
 
@@ -201,7 +255,7 @@ The collector cursor's ordinal is the complete-line count. Its opaque token
 contains the byte offset, last-line start/length, last-line SHA-256 and header
 SHA-256. Every resumed read validates those anchors before seeking. An append
 continues after the last complete newline. A partial final line (even valid
-JSON without a newline) stays unread with `partial-last-line`. Oversized lines
+JSON without a newline) stays unread with `partial-last-line`. Lines over the cap
 stop with `line-limit`, not a skip; missing newline bytes remain for retry.
 Truncation, changed anchors, invalid headers and unreadable files are explicitly
 partial. With no safely advanced complete-line cursor there is no batch: no
@@ -209,10 +263,13 @@ fake progress just to make the collector accept a source fault. The caller
 must surface that partial result and must not silently keep a previous green
 coverage status. Only commit a returned cursor after #300 commits its batch.
 
-Defaults: 65,536 bytes per line, 262,144 input bytes per read and output bytes
-per batch/result, 256 fact/alias rows, 10,000 numeric index entries and 64 explicit
+Defaults: 4,194,304 bytes per line, newline included (65,536 before #421),
+262,144 input bytes per read and output bytes per batch/result, 256 fact/alias
+rows, 10,000 numeric index entries and 64 explicit
 sources. Overrides can only lower these caps (output cap minimum 4,096 bytes).
-The input cap includes header and cursor-anchor reads. Output/row/index caps
+The input cap includes header and cursor-anchor reads. One line per read may
+run past it (H-S1 above), so a read holds at most the line cap plus the input
+cap. Output/row/index caps
 leave the next record before the cursor with an explicit limit fault. Malformed
 line diagnostics are bounded too. No partial/oversized line is JSON-parsed;
 reads are bounded before allocating and only regular non-symlink files open.
@@ -226,7 +283,10 @@ closed facts, timestamps and identity tuples, pass emitted batches to the
 unchanged collector, and prove the planted content/arguments/results/summary/
 details/note text never appears in reader results or the numeric journal.
 The fixed oversized fixture lowers the line cap to 512 bytes to exercise the
-same bounded reader without a giant checked-in payload. Additional temporary
+same bounded reader without a giant checked-in payload. `oversized-lines.json`
+(#421) holds line specs, not payloads: the unit test builds three temporary
+files from it at run time (week-shaped, over-cap, torn-oversized), each line at
+its exact byte length, read at the default caps. Additional temporary
 synthetic files exercise append, anchor changes, truncation, unreadability,
 read/output/row/index/source limits, malformed diagnostics, timestamp precedence,
 price conflicts, invalid identities and occurrence-window transitions.
@@ -245,3 +305,4 @@ is required as the landing proof. No real-session, model, production-import, ins
 proof is claimed.
 Undo is a revert of this inert module, its unit test, synthetic fixture directory
 and this document; there is no runtime importer or deployed state to undo.
+#421 alone: revert its commit and the line cap returns to 64 KiB.

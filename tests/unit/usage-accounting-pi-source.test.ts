@@ -540,7 +540,7 @@ describe("usage-accounting-pi-source: synthetic committed-prefix intake only", (
 			pageBytes: METER_LIMITS.pageBytes,
 			pageRows: METER_LIMITS.pageRows,
 			scanRows: 32,
-			lineBytes: PI_SESSION_LIMITS.lineBytes,
+			lineBytes: 65_536, // W3's own scan cap. #421 raised #304's to 4 MiB; W3's follows in its own task (#420 A4).
 			readerBytes: 131_072,
 			unitWorkMs: METER_LIMITS.unitWorkMs,
 			sliceMs: METER_LIMITS.sliceMs,
@@ -548,6 +548,7 @@ describe("usage-accounting-pi-source: synthetic committed-prefix intake only", (
 			dependencies: 64,
 		});
 		expect(Object.isFrozen(PI_SOURCE_LIMITS)).toBe(true);
+		expect(PI_SOURCE_LIMITS.lineBytes).toBeLessThanOrEqual(PI_SESSION_LIMITS.lineBytes);
 		expect(PI_SESSION_LIMITS.sources).toBe(64);
 		expect(PI_SESSION_LIMITS.indexEntries).toBe(10_000);
 		expect(MEMBERSHIP_LIMITS.sources).toBe(64);

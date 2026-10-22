@@ -9,13 +9,14 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
+import { open, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as ts from "typescript/unstable/ast";
 import { createVirtualFileSystem } from "typescript/unstable/fs";
 import { API } from "typescript/unstable/sync";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
 	COLLECTOR_LIMITS,
 	UsageAccountingCollector,
@@ -241,6 +242,65 @@ function syntheticCall(id: string, minute = 23): string {
 			},
 		}) + "\n"
 	);
+}
+interface OversizedLine {
+	kind: "header" | "call" | "tool";
+	id?: string;
+	minute?: number;
+	bytes?: number;
+	escapes?: boolean;
+	torn?: boolean;
+}
+interface OversizedFile {
+	lines: OversizedLine[];
+	entries: string[];
+	faults: { code: string; line: number }[];
+}
+const oversized = JSON.parse(readFileSync(join(FIXTURES, "oversized-lines.json"), "utf8")) as {
+	escape: string;
+	files: Record<string, OversizedFile>;
+};
+/** One oversized-lines.json line at its exact byte length; its text starts with the planted secret. */
+function oversizedLine(spec: OversizedLine, session: string): string {
+	if (spec.kind === "header") return syntheticHeader(session);
+	const line = (text: string) =>
+		JSON.stringify({
+			type: "message",
+			id: spec.id,
+			parentId: null,
+			timestamp: at(spec.minute!),
+			message:
+				spec.kind === "call"
+					? {
+							role: "assistant",
+							provider: "fixture-provider",
+							model: "fixture-model",
+							usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
+							content: [{ type: "text", text }],
+						}
+					: {
+							role: "toolResult",
+							toolCallId: `${spec.id}-call`,
+							toolName: "bash",
+							content: [{ type: "text", text }],
+							isError: false,
+							timestamp: Date.parse(at(spec.minute!)),
+						},
+		}) + "\n";
+	if (!spec.bytes) return line(SECRET);
+	const unit = spec.escapes ? oversized.escape : "y";
+	const unitBytes = JSON.stringify(unit).length - 2;
+	const room = spec.bytes - Buffer.byteLength(line(SECRET));
+	const built = line(SECRET + unit.repeat(Math.floor(room / unitBytes)) + "y".repeat(room % unitBytes));
+	expect(Buffer.byteLength(built)).toBe(spec.bytes);
+	return built;
+}
+function buildOversized(name: string): string {
+	const spec = oversized.files[name];
+	const file = join(scratch(), `${name}.jsonl`);
+	const text = spec.lines.map((line) => oversizedLine(line, `session-${name}`)).join("");
+	writeFileSync(file, spec.lines.at(-1)!.torn ? text.slice(0, -1) : text);
+	return file;
 }
 
 describe("inert persisted Pi usage reader (synthetic files only)", () => {
@@ -478,6 +538,73 @@ describe("inert persisted Pi usage reader (synthetic files only)", () => {
 		await accepts([r]);
 	});
 
+	it("reads a week-shaped file past 64 KiB-4 MiB lines to its end, one line per read past the budget (#421)", async () => {
+		const spec = oversized.files["week-shaped"];
+		const file = buildOversized("week-shaped");
+		const probe = await open(file, "r");
+		const handle = Object.getPrototypeOf(probe) as FileHandle;
+		await probe.close();
+		// Every distinct buffer the reader reads the file into, per read: an upper bound on the file bytes it holds.
+		const spy = vi.spyOn(handle, "read");
+		const reader = new PiSessionUsageReader();
+		const results: PiSessionReadResult[] = [];
+		const held: number[] = [];
+		try {
+			let cursor: PiSessionReadResult["cursor"] = null;
+			while (!results.at(-1)?.endOfFile && results.length < spec.lines.length) {
+				spy.mockClear();
+				const r = await reader.read(request("plain", { file, cursor }));
+				const buffers = new Set(spy.mock.calls.map((call) => call[0] as unknown as Uint8Array));
+				held.push([...buffers].reduce((n, b) => n + b.byteLength, 0));
+				expect(r.cursor!.ordinal).toBeGreaterThan(cursor?.ordinal ?? 0); // Every read moves on: no stall.
+				results.push(r);
+				cursor = r.cursor;
+			}
+		} finally {
+			spy.mockRestore();
+		}
+		const last = results.at(-1)!;
+		expect(last).toMatchObject({ endOfFile: true, status: "complete", faults: spec.faults });
+		expect(last.cursor!.ordinal).toBe(spec.lines.length);
+		expect(Number(last.cursor!.token.split(":")[1])).toBe(statSync(file).size);
+		expect(results.flatMap((r) => r.batch!.rows.facts.map((f) => f.source.event))).toEqual(spec.entries);
+		// Each earlier read stops at the line after the one it let past the budget.
+		expect(results.slice(0, -1).map((r) => r.faults.map((f) => f.code))).toEqual(
+			results.slice(0, -1).map(() => ["read-limit"]),
+		);
+		expect(results).toHaveLength(7);
+		// H-S1: one line of at most lineBytes on top of the read budget, i.e. 4.25 MiB.
+		expect(Math.max(...held)).toBeLessThanOrEqual(PI_SESSION_LIMITS.readBytes + PI_SESSION_LIMITS.lineBytes);
+		await accepts(results);
+	});
+
+	it("still stops with line-limit past 4 MiB: partial, earlier usage kept, the line never skipped (#421)", async () => {
+		const spec = oversized.files["over-cap"];
+		const file = buildOversized("over-cap");
+		const reader = new PiSessionUsageReader();
+		const first = await reader.read(request("plain", { file }));
+		expect(first).toMatchObject({ status: "partial", endOfFile: false, faults: spec.faults });
+		expect(first.cursor!.ordinal).toBe(2);
+		expect(first.batch!.rows.facts.map((f) => f.source.event)).toEqual(spec.entries);
+		const again = await reader.read(request("plain", { file, cursor: first.cursor }));
+		expect(again).toMatchObject({ status: "partial", batch: null, cursor: first.cursor, faults: spec.faults });
+		await accepts([first, again]);
+	});
+
+	it("leaves an oversized torn last line unread until its newline arrives, then reads to the end (#421)", async () => {
+		const spec = oversized.files["torn-oversized"];
+		const file = buildOversized("torn-oversized");
+		const reader = new PiSessionUsageReader();
+		const first = await reader.read(request("plain", { file }));
+		expect(first).toMatchObject({ status: "partial", endOfFile: false, faults: spec.faults });
+		expect(first.batch!.rows.facts.map((f) => f.source.event)).toEqual(spec.entries);
+		writeFileSync(file, "\n", { flag: "a" });
+		const completed = await reader.read(request("plain", { file, cursor: first.cursor }));
+		expect(completed).toMatchObject({ status: "complete", endOfFile: true, faults: [] });
+		expect(completed.batch!.rows.facts.map((f) => f.source.event)).toEqual(["torn-3"]);
+		await accepts([first, completed]);
+	});
+
 	it("retains valid numeric fields around invalid JSON and marks incomplete tokens null, never zero", async () => {
 		const r = await new PiSessionUsageReader().read(request("invalid"));
 		assertFixed("invalid", r);
@@ -686,6 +813,8 @@ describe("inert persisted Pi usage reader (synthetic files only)", () => {
 			sources: COLLECTOR_LIMITS.sources,
 			spanMs: COLLECTOR_LIMITS.spanMs,
 		});
+		expect(PI_SESSION_LIMITS.lineBytes).toBe(4_194_304); // #421: newline included; overrides only lower it.
+		expect(() => new PiSessionUsageReader({ lineBytes: PI_SESSION_LIMITS.lineBytes + 1 })).toThrow("pi-session-limits");
 		const source = readFileSync(new URL("../../server/usage-accounting-pi-sessions.ts", import.meta.url), "utf8");
 		expect(source).not.toMatch(/(?:from\s*|import\s*\()["'][^"']*usage-accounting-collector/);
 		const file = join(scratch(), "old-header.jsonl");
