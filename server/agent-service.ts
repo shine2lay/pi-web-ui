@@ -473,6 +473,7 @@ import {
 	applyQueueHomes,
 	type LoadedQueue,
 	queueHomesFrom,
+	queueHomesPastCap,
 	queueHomesToOpen,
 	queueLinksSig,
 	unlistedQueueTasks,
@@ -510,7 +511,7 @@ import {
 	runAt,
 	runInfo,
 } from "./quiet-turns.js";
-import { continueRecentRegular, recentRegularFile } from "./recent-session.js";
+import { continueRecentRegular, openPickedRegular, recentRegularFile } from "./recent-session.js";
 import { sessionIndex } from "./session-index.js";
 import { ParticipantLifecycle, type ParticipantTarget, type ParticipantLease } from "./participant-lifecycle.js";
 import { homeChatOf, identityIdOnBranch } from "./identities.js";
@@ -5718,13 +5719,24 @@ export class ClientSession {
 		return busy;
 	}
 
-	/** queue-back-owed (Ops #393): how many subagents of the open chat with this transcript are at work (see subagentsAtWork). */
-	static chatSubagentsAtWork(file: string): number {
+	/** queue-back-owed (Ops #393): how many subagents of the open chat with this transcript are at work (see
+	 *  subagentsAtWork), plus one when pi-subagents runs any in the background for it (hasActiveSubagentRun). */
+	static chatSubagentsAtWork(
+		file: string,
+		backgroundRun: (o: { sessionId: string }) => boolean = hasActiveSubagentRun,
+	): number {
 		let abs: string;
 		try {
 			abs = resolve(file);
 		} catch {
 			return 0;
+		}
+		// pi-subagents' background runs started from that chat (no chat of their own here): one, however many.
+		let background = 0;
+		try {
+			background = backgroundRun({ sessionId: abs }) || (file !== abs && backgroundRun({ sessionId: file })) ? 1 : 0;
+		} catch {
+			background = 0; // can't tell: no evidence (as hasActiveSubagentRun itself)
 		}
 		const chats: OpenChat[] = [];
 		for (const c of ClientSession.sharedConvs.values()) {
@@ -5742,7 +5754,7 @@ export class ClientSession {
 				chats.push({ id: c.id, isSubagent: c.isSubagent, parentId: c.parentId, busy: true });
 			}
 		}
-		return subagentsAtWork(chats, abs);
+		return subagentsAtWork(chats, abs) + background;
 	}
 
 	/**
@@ -10471,6 +10483,17 @@ export class ClientSession {
 			raw = [];
 		}
 		return raw.map(toTranscriptInput);
+	}
+
+	/**
+	 * queue-back-owed (Ops #393): a scheduler's or plugin's client whose open chat is a queued task's chat the owner
+	 * paused (or one still owed its "Back to task" note) moves to a new chat before it sends, so its prompt starts
+	 * no turn there. False when it couldn't (the caller then sends nothing).
+	 */
+	async leavePausedTaskChat(paused: (file: string) => Promise<boolean> = taskChatPaused): Promise<boolean> {
+		const file = this.activeSessionFileResolved();
+		if (!file || !(await paused(file))) return true;
+		return (await this.newChat()) && this.activeSessionFileResolved() !== file;
 	}
 
 	/** issue #145：当前活动对话的 session 文件（resolved），无则 undefined。 */
@@ -15297,11 +15320,14 @@ export class ClientSession {
 				let resumeSkipped: SessionOwnerInfo | null = null;
 				// queue-back-owed (Ops #393): a scheduler's or plugin's client doesn't reopen a queued task's chat the owner
 				// paused (or one owed "Back to task") to send there; it lands in a new chat instead.
+				// The file checked is the one opened (`picked`), so a newer one can't slip in between.
 				let pausedRecent = false;
+				let picked: { file: string | undefined } | undefined;
 				if (pseudo) {
 					try {
 						const file = recentRegularFile(abs);
 						pausedRecent = !!file && (await taskChatPaused(resolve(file)));
+						picked = { file };
 					} catch {
 						// can't tell: as before
 					}
@@ -15328,14 +15354,16 @@ export class ClientSession {
 					() =>
 						resumeSkipped || pausedRecent || (pseudo && openHere)
 							? SessionManager.create(abs)
-							: continueRecentRegular(abs),
+							: picked
+								? openPickedRegular(abs, picked.file)
+								: continueRecentRegular(abs),
 					(m) =>
 						createAgentSessionRuntime(this.makeRuntimeFactory(terminals, undefined, conversationId), {
 							cwd: abs,
 							agentDir: this.agentDir,
 							sessionManager: m,
 						}),
-					async () => recentRegularFile(abs),
+					async () => (picked ? picked.file : recentRegularFile(abs)),
 				);
 				const newRuntime = opened.runtime;
 				if (opened.repair) {
@@ -17537,10 +17565,13 @@ export class AgentService {
 	async reopenQueueHomes(): Promise<void> {
 		if (!this.uninstallQueueHost) return;
 		const links = ClientSession.savedQueueHomes();
-		// queue-back-owed (Ops #393): queue chats owing a task its "Back to task" note open first, past the cap too.
-		const owesBack = new Set<string>();
-		for (const home of new Set(links.values())) if (existsSync(home) && (await queueOwesBack(home))) owesBack.add(home);
-		const homes = queueHomesToOpen(links, (f) => existsSync(f), owesBack);
+		const exists = (f: string) => existsSync(f);
+		const homes = queueHomesToOpen(links, exists);
+		// queue-back-owed (Ops #393): past the cap, the queue chats owing a task its "Back to task" note open too
+		// (only its queue's chat sends it). Their transcripts are read after the rest opened, in the background, so
+		// role messages don't wait for those reads.
+		const rest = queueHomesPastCap(links, exists, homes);
+		if (rest.length > 0) void this.reopenOwingQueueHomes(rest);
 		if (homes.length === 0) return;
 		const opened: string[] = [];
 		for (const home of homes) {
@@ -17553,6 +17584,23 @@ export class AgentService {
 		console.log(
 			`[stall-watch] opened ${opened.length} of ${homes.length} queue chat(s) with tasks at work in chats of their own`,
 		);
+	}
+
+	/** queue-back-owed (Ops #393): of these queue chats (past reopenQueueHomes' cap), open those owing a note. */
+	private async reopenOwingQueueHomes(homes: string[]): Promise<void> {
+		let owing = 0;
+		let opened = 0;
+		for (const home of homes) {
+			try {
+				if (!(await queueOwesBack(home))) continue;
+				owing++;
+				if (await this.queueRunCommand(home, "/queue ping")) opened++;
+			} catch (err) {
+				console.error(`[stall-watch] couldn't open the queue chat ${home}: ${(err as Error).message}`);
+			}
+		}
+		if (owing > 0)
+			console.log(`[stall-watch] opened ${opened} of ${owing} queue chat(s) owing a task its "Back to task"`);
 	}
 
 	/** queue-lanes: do something through one of the queue's pseudo clients; open windows list the result. */
@@ -17917,6 +17965,8 @@ export class AgentService {
 				throw new Error(`chatFromPlugin: failed to switch thinking level (${thinking}): ${(err as Error).message}`);
 			}
 		}
+		if (!(await cs.leavePausedTaskChat()))
+			throw new Error("chatFromPlugin: its open chat is a paused queued task's chat and no new chat could be opened");
 		const conversationId = cs.conversationIdForPlugins() ?? "";
 		void cs.prompt(text);
 		return { conversationId, clientId };
@@ -17966,6 +18016,8 @@ export class AgentService {
 					return { ok: false, error: `Failed to switch thinking level (${thinking}): ${(err as Error).message}` };
 				}
 			}
+			if (!(await cs.leavePausedTaskChat()))
+				return { ok: false, error: "Its open chat is a paused queued task's chat and no new chat could be opened" };
 			const conversationId = cs.conversationIdForPlugins() ?? "";
 			void cs.prompt(`[Scheduled task] ${text}`);
 			// 等待运行结束：每 2s 轮询，最长 10 分钟。超时按失败记录（运行继续）。

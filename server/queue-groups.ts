@@ -95,22 +95,30 @@ export function queueHomesFrom(
  * stall-watch: the queue chats to open after a restart, so pi-queue's watchdog looks after their tasks'
  * chats: each queue chat the links name (an open task's chat → its queue chat) once, newest link first,
  * only those whose transcript is still there, at most QUEUE_HOMES_REOPEN_MAX.
- * queue-back-owed (Ops #393): those in `owesBack` (a task there is owed its "Back to task" note, which only its
- * queue's chat sends) come first and always, past the cap too: otherwise that task's chat stays quiet.
  */
-export function queueHomesToOpen(
-	homes: ReadonlyMap<string, string>,
-	exists: (file: string) => boolean,
-	owesBack: ReadonlySet<string> = new Set(),
-): string[] {
+export function queueHomesToOpen(homes: ReadonlyMap<string, string>, exists: (file: string) => boolean): string[] {
 	const out: string[] = [];
-	for (const [chat, home] of [...homes].reverse()) {
-		if (chat === home || out.includes(home) || !owesBack.has(home)) continue;
-		if (exists(home)) out.push(home);
-	}
 	for (const [chat, home] of [...homes].reverse()) {
 		if (out.length >= QUEUE_HOMES_REOPEN_MAX) break;
 		if (chat === home || out.includes(home)) continue;
+		if (exists(home)) out.push(home);
+	}
+	return out;
+}
+
+/**
+ * queue-back-owed (Ops #393): the queue chats the links name that queueHomesToOpen left out (`opened`: its list),
+ * newest link first, each once, only those still there. Of these, the ones owing a task its "Back to task" note
+ * are opened too (only its queue's chat sends it; otherwise that task's chat stays quiet).
+ */
+export function queueHomesPastCap(
+	homes: ReadonlyMap<string, string>,
+	exists: (file: string) => boolean,
+	opened: readonly string[],
+): string[] {
+	const out: string[] = [];
+	for (const [chat, home] of [...homes].reverse()) {
+		if (chat === home || opened.includes(home) || out.includes(home)) continue;
 		if (exists(home)) out.push(home);
 	}
 	return out;

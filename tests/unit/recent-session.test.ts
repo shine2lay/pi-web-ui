@@ -12,6 +12,7 @@ import {
 	continueRecentRegular,
 	hasSessionHeader,
 	newestSessionFile,
+	openPickedRegular,
 	recentRegularFile,
 } from "../../server/recent-session.js";
 import { defaultSessionDirPath } from "../../server/session-index.js";
@@ -154,5 +155,28 @@ describe("continueRecentRegular", () => {
 		expect(m.getSessionDir()).toBe(dir);
 		expect(m.getCwd()).toBe(CWD);
 		expect(m.getSessionFile()?.startsWith(`${dir}/`)).toBe(true);
+	});
+});
+
+describe("openPickedRegular (queue-back-owed, Ops #393)", () => {
+	it("opens exactly the file picked and checked, even when a newer one turned up since", () => {
+		const { dir } = setup();
+		const picked = chat(join(dir, "picked.jsonl"), "picked", 10);
+		expect(recentRegularFile(CWD)).toBe(picked);
+		chat(join(dir, "newer.jsonl"), "newer", 100);
+		const m = openPickedRegular(CWD, picked);
+		expect(m.getSessionFile()).toBe(picked);
+		expect(m.getSessionId()).toBe("picked");
+		expect(m.getSessionDir()).toBe(dir);
+		expect(continueRecentRegular(CWD).getSessionId()).toBe("newer");
+	});
+
+	it("none picked: a new chat in the project's folder, even when one turned up since", () => {
+		const { dir } = setup();
+		const later = chat(join(dir, "later.jsonl"), "later", 100);
+		const m = openPickedRegular(CWD, undefined);
+		expect(m.getSessionDir()).toBe(dir);
+		expect(m.getSessionFile()?.startsWith(`${dir}/`)).toBe(true);
+		expect(m.getSessionFile()).not.toBe(later);
 	});
 });

@@ -18,6 +18,7 @@ import {
 	QUEUE_HOMES_MAX,
 	QUEUE_HOMES_REOPEN_MAX,
 	queueHomesFrom,
+	queueHomesPastCap,
 	queueHomesToOpen,
 	queueLinksSig,
 	unlistedQueueTasks,
@@ -188,14 +189,20 @@ describe("queueHomesFrom: the links, from the open chats' cached queues", () => 
 		expect(QUEUE_HOMES_REOPEN_MAX).toBe(10);
 		expect(open).toHaveLength(QUEUE_HOMES_REOPEN_MAX);
 		expect(open[0]).toBe("/s/home24.jsonl");
-		// queue-back-owed (Ops #393): queue chats owing a task "Back to task" first, and past the cap.
-		const owing = queueHomesToOpen(many, () => true, new Set(["/s/home0.jsonl", "/s/home1.jsonl", "/s/x.jsonl"]));
-		expect(owing.slice(0, 2)).toEqual(["/s/home1.jsonl", "/s/home0.jsonl"]);
-		expect(owing).toHaveLength(QUEUE_HOMES_REOPEN_MAX);
-		expect(owing[2]).toBe("/s/home24.jsonl");
-		const all = new Set(Array.from({ length: 25 }, (_, i) => `/s/home${i}.jsonl`));
-		expect(queueHomesToOpen(many, () => true, all)).toHaveLength(25);
-		expect(queueHomesToOpen(many, (f) => f !== "/s/home0.jsonl", all)).toHaveLength(24);
+		// queue-back-owed (Ops #393): the ones past the cap, each once, still there, newest first (of these, the
+		// ones owing a task its "Back to task" note open too).
+		const rest = queueHomesPastCap(many, (f) => f !== "/s/home0.jsonl", open);
+		expect(rest).toHaveLength(14);
+		expect(rest[0]).toBe("/s/home14.jsonl");
+		expect(rest).not.toContain("/s/home0.jsonl");
+		expect(rest.some((h) => open.includes(h))).toBe(false);
+		expect(queueHomesPastCap(links, exists, queueHomesToOpen(links, exists))).toEqual([]);
+		const shared = new Map([
+			["/s/a.jsonl", "/s/home.jsonl"],
+			["/s/b.jsonl", "/s/home.jsonl"],
+			["/s/home.jsonl", "/s/home.jsonl"],
+		]);
+		expect(queueHomesPastCap(shared, () => true, [])).toEqual(["/s/home.jsonl"]);
 	});
 
 	it("queueLinksSig changes only with what the queue says about the links", () => {

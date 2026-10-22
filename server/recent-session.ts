@@ -105,7 +105,15 @@ export function continueRecentRegular(cwd: string): SessionManager {
 	const dir = defaultSessionDirPath(cwd);
 	// As the SDK's getDefaultSessionDir: the folder exists from the first visit on.
 	mkdirSync(dir, { recursive: true });
-	const file = newestSessionFile(dir);
+	return openPickedRegular(cwd, newestSessionFile(dir));
+}
+
+/** queue-back-owed (Ops #393): continueRecentRegular for a pick already made (recentRegularFile) and checked:
+ *  opens exactly that file, or a new chat when there was none, so no newer file slips in between the check and
+ *  the open. */
+export function openPickedRegular(cwd: string, file: string | undefined): SessionManager {
+	const dir = defaultSessionDirPath(cwd);
+	mkdirSync(dir, { recursive: true });
 	return file ? SessionManager.open(file, dir, cwd) : SessionManager.create(cwd, dir);
 }
 

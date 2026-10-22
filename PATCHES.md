@@ -6358,11 +6358,15 @@ queue doesn't lift a task's own pause. Stop, Auto start and Auto approve keep th
    The Queue panel and the Roles page show such a task as working, as before. The review of #393 found
    automatic paths that never asked: a goal review's result now goes in without a turn there
    (`GoalHost.pausedChatNote`), the scheduler's fallback to the project's active chat
-   (`wakeViewportInCwd`) skips such chats, and a scheduler's or plugin's client opening a project lands
-   in a new chat when the newest one is such a chat. After a restart, the queue chats owing a task its
-   note open first, past the 10-chat cap (`queueHomesToOpen`, `queueOwesBack`), since only they send it.
-   `chatState` also counts a chat's subagents at work (`subagents`, `subagentsAtWork`): pi-queue doesn't
-   lend a paused chat's lane while one of them may still write.
+   (`wakeViewportInCwd`) skips such chats, a scheduler's or plugin's client opening a project lands in a
+   new chat when the newest one is such a chat (the file checked is the one opened, `openPickedRegular`),
+   and one whose open chat is such a chat moves to a new chat before it sends (`leavePausedTaskChat`;
+   none could be opened: it sends nothing and says so). After a restart, the queue chats owing a task its
+   note open too, past the 10-chat cap (`queueHomesPastCap`, `queueOwesBack`; read in the background
+   after the rest, so role messages don't wait), since only they send it. `chatState` also counts a
+   chat's subagents at work (`subagents`: its subagent chats, `subagentsAtWork`, plus one for any
+   pi-subagents background run of it): pi-queue doesn't lend a paused chat's lane while one may still
+   write.
 4. **The Queue panel** (`TaskQueuePanel.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`): Pause /
    Resume on every open task, Pause queue / Resume queue in the header with a banner, and a "Paused by
    you · since HH:MM · why" line ("with the whole queue" for a task under the queue's pause). A
