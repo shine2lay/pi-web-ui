@@ -2,7 +2,8 @@
 # Fork 自检：提交 / rebase 后一把过（与上游 CI 同口径，外加本 fork 的真 PTY 回归）。
 #
 #   scripts/check.sh            # 全量（含构建）
-#   scripts/check.sh --fast     # 跳过构建与真 PTY 冒烟（改前端时够用）
+#   scripts/check.sh --fast     # 跳过构建与真 PTY 冒烟（改前端时够用）; Prettier only on the changed files
+#                               # (docs/gate-prettier-changed.md)
 #   scripts/check.sh --notes    # only the checks that read notes (docs/**/*.md, PATCHES.md): what wt land
 #                               # runs for a change that touches nothing else (agent-tools docs/wt-notes-check.md)
 set -euo pipefail
@@ -77,7 +78,13 @@ quick PATCHES.md "PATCHES.md: no heading twice, each after a blank line (it merg
 	node scripts/check-patches-md.mjs
 quick typecheck "typecheck（双端 + tests + desktop + 扩展）" npm run typecheck
 quick lint "lint" npm run lint
-quick prettier "prettier" npm run format:check
+# gate-prettier-changed (docs/gate-prettier-changed.md): --fast, what wt land runs, gives Prettier only the files
+# changed since mine (every file when its settings or version may have changed); the full check reads them all.
+if $fast; then
+	quick prettier "prettier" node scripts/prettier-scope.mjs --check
+else
+	quick prettier "prettier" npm run format:check
+fi
 
 echo "== 单测（vitest，含本 fork 的 terminal-view / global-history / 徽章用例）"
 tests_start=$SECONDS

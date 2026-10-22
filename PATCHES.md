@@ -10,6 +10,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## gate-prettier-changed: the landing check's Prettier step checks only what the land changes
+
+- `local` (Ops #399, project faster-landing, criterion 6; the owner's ask for faster tests). Hypothesis H-PRETTIER-CHANGED-1, why it doesn't loosen the check, the known cases, the before and after times and the result: `docs/gate-prettier-changed.md`.
+- `scripts/prettier-scope.mjs`: the files changed since the merge-base of HEAD and `mine` (the commits, plus edits and new files not committed yet; never a deleted file or a symbolic link), kept to package.json format:check's own folders and globs. Every file, through `npm run format:check` itself, when there is no merge-base with `mine` or a change may have changed Prettier's settings or version (`.prettierrc*`, `prettier.config.*`, `.editorconfig`, `package.json`, `package.yaml` in any folder; `.prettierignore`, `.gitignore`, `package-lock.json` at the top). `--check` runs this repo's own Prettier on them with `--check --ignore-unknown`, so the ignore files still apply; with nothing in scope it prints "prettier: no formatted files changed" and passes.
+- `scripts/check.sh`: only `--fast` (what wt land runs) uses it. Plain `scripts/check.sh` and `npm run format:check` still check every file. Prettier's settings, the ignore files and every other step unchanged; no file reformatted.
+- Checks: `tests/unit/prettier-scope.test.ts`, a scratch git repo per case with a base on `mine` and a work branch: a badly formatted changed file listed and failing; Markdown outside the folders not listed; each settings file, deleted too, giving ALL and the whole check; no merge-base giving ALL; deleted files not listed, renamed ones under the new name; a `.prettierignore`d file skipped; formatted files passing; nothing in scope passing with the message; the folders equal to format:check's word for word; uncommitted edits and new files counted, gitignored ones not; symbolic links not listed; check.sh using it only with `--fast`. Then the landing gate.
+- Undo: revert this commit. It changes only the check: nothing to install or restart.
+
 ## sealed-vitest-workers: preserve only an explicit canonical one-to-four Vitest worker limit
 
 - `local` (Ops #331, prerequisite for #311; H-SEALED-FANOUT-1). Crowded unit-test fan-out can exhaust an unchanged collector time guard; whole-process CPU affinity also starves the other gate steps. `scripts/sealed.sh` preserves explicitly inherited `VITEST_MAX_WORKERS` only when it is exactly ASCII `1`, `2`, `3` or `4`; unset remains absent. Any other value, including empty, fails with a fixed redacted diagnostic before temporary-home allocation. No other runner variable survives, and the already-sealed fast path, mandatory Node fence, isolated folders, dummy model, secret/live-setting stripping and cleanup stay unchanged.
