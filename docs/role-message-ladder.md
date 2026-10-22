@@ -138,6 +138,14 @@ Ops (rm-1fe61704) and approved with changes (rm-efd6df89):
   send; they leave 5 hours after they settle (a request after its 24 h expiry).
 - Usage (the rolling hour) is pruned after 60 minutes. Transactions and audit receipts 3000 each, outbox
   2000, tombstones 6000.
+- Late hand-off (Ops #426, H-HANDOFF-WINDOW-1): the canonical words and original committed acceptance
+  stay with an unsettled outbox entry, independently of its hourly charge. A hand-off update after the
+  hour uses that existing receipt and outbox, not an expired charge. New acceptances still need their
+  charge; no charge is restored, renewed or counted twice. The receipt's identity, time, cause, class,
+  usage and dispatch/wake keys cannot change (only its canonical digest follows authorised delivery
+  progress). Startup reconciliation can therefore hand off an accepted message after 61 minutes, or
+  after 5 hours, without another send's pruning losing it. Chain approvals, holds and the existing
+  24-hour native give-up rule below are unchanged.
 - Retention (Ops rm-fc4b9788, option C): settled transactions, audit receipts and delivery entries leave
   5 hours after they settle, whatever is still open elsewhere; a send's delivery steps (each its own
   transaction) leave with it. Each tombstone (E's replay memory) ends 5 hours after it is made. Open
@@ -200,6 +208,25 @@ record gets a one-shot fresh start: `docs/role-message-fresh-start.md`.
 
 ## Proof
 
+- Late hand-off hypothesis (Ops #426, H-HANDOFF-WINDOW-1): the charge check in
+  `GuardFileStore.transact()` alone refused a late `updateOutbox()` after `prune()` removed usage; the
+  committed acceptance and canonical words were already retained. Change: validate continuation from
+  that original receipt and outbox, separately from hourly usage. Expected: the real host/store hands
+  off once after a 61-minute delay and restart; capped and exempt roles make the same hourly decisions;
+  3,000 accepted entries stay under the unchanged caps. Falsifier: another refusal, any changed cap
+  decision or a soak reaching a cap. `tests/unit/role-message-guard-host-late-handoff.test.ts`: the
+  61-minute restart case fails on pre-change mine (`undefined`, not `delivered`); fixed cases also cover
+  exactly 60 minutes, 6 hours and 23 hours, a second restart without duplicate delivery, rolling counts
+  at 59/60/61 minutes for ordinary/ops/temper senders, and 3,000 acceptances (1,500 deliberately delayed)
+  through real files with normal pruning and quiescent rotation. Store tests reject invented acceptance,
+  changed receipt bindings and early charge removal. #379's two dropped-evidence tests now inject a
+  restart-query failure explicitly (they no longer rely on the old charge bug); its in-flight-reconcile
+  case now confirms the late hand-off itself and ages from that confirmation. Result: HIT. Full sealed
+  gate: 481 files, 7,748 tests passed (11 skipped), including all eight late-hand-off cases and the
+  3,000-entry soak. The role-message and fold end-to-end tests passed; FYI initially failed its
+  sender-response assertion while every delivery assertion passed, then passed alone unchanged
+  (21 seconds; no fence hits). Independent review found no P0/P1. Deployment and ladder-on checks
+  are recorded separately after landing.
 - Stage cases: `tests/unit/role-message-guard-host.test.ts` (real RoleMessages, E and A; fake chats and
   clock), including the FE32/H7 7th-hop counterfactual (old code refuses, the ladder asks).
 - Lease races: `tests/unit/role-message-guard-lease.test.ts` uses real Node timers and the store's boundary

@@ -1057,13 +1057,28 @@ export class GuardFileStore implements GuardStorePort {
 					if (!previous) messages.push(structuredClone(message));
 				}
 				if (mutation.result.state === "accepted") {
-					// Keep results and legacy record inseparable, including metadata.
+					// #426 H-HANDOFF-WINDOW-1: a new acceptance still needs its charge. A later hand-off may instead
+					// use the ORIGINAL committed acceptance, whose transaction and words outlive the rolling hour.
+					// Never trust a receipt added by this mutation, never recharge it, and never change its binding.
 					const result = mutation.result;
+					const continuingAcceptance = (): boolean => {
+						const previous = current.state.transactions.find((t) => t.transactionId === result.receipt.transactionId);
+						if (previous?.state !== "committed" || previous.result.state !== "accepted") return false;
+						const priorReceipt = previous.result.receipt;
+						return (
+							mutation.next.lastTrustedTime - priorReceipt.committedAt >= 3600000 &&
+							sameIdentity(previous.identity, priorReceipt.identity) &&
+							digestOf({ ...result.receipt, legacyMessageDigest: priorReceipt.legacyMessageDigest }) ===
+								digestOf(priorReceipt) &&
+							current.state.outbox.some((o) => digestOf(o.receipt) === digestOf(priorReceipt))
+						);
+					};
 					if (
 						!messages.some(
 							(m) => m.id === result.receipt.messageId && digestOf(m) === result.receipt.legacyMessageDigest,
 						) ||
-						!mutation.next.usage.some((u) => u.transactionId === result.receipt.transactionId)
+						(!mutation.next.usage.some((u) => u.transactionId === result.receipt.transactionId) &&
+							!continuingAcceptance())
 					)
 						throw new Error("acceptance missing canonical words or charge");
 				}

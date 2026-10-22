@@ -6,7 +6,7 @@
 // handed off no longer leaves it unconfirmed. Shared world: role-message-guard-host-harness.ts.
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
 	GuardOutboxEntry,
 	GuardStoreState,
@@ -14,6 +14,7 @@ import type {
 } from "../../server/role-message-guard-contract.js";
 import type { GuardHistoryLine } from "../../server/role-message-guard-host.js";
 import type { RoleMessageHost } from "../../server/role-messages.js";
+import { GuardFileStore } from "../../server/role-message-guard-store.js";
 import {
 	A,
 	ask,
@@ -139,6 +140,17 @@ async function restart(w: World): Promise<World> {
 	w.rm.stop();
 	w.host.stop();
 	return world(w);
+}
+/** #426 lets a late query settle normally. These dropped-evidence cases still need a failed restart query. */
+async function restartWithReconcileRefused(w: World): Promise<World> {
+	const fault = vi
+		.spyOn(GuardFileStore.prototype, "transact")
+		.mockRejectedValueOnce(new Error("synthetic restart refusal"));
+	try {
+		return await world(w);
+	} finally {
+		fault.mockRestore();
+	}
 }
 
 describe("ladder: stuck deliveries settle from the native store (#379)", () => {
@@ -343,7 +355,7 @@ describe("ladder: stuck deliveries settle from the native store (#379)", () => {
 		const restore = loseAcks(w);
 		const sd = idOf(await send(w, "alpha", A, "gamma", { text: "stuck d" }, ""));
 		restore();
-		// T0 + 1 h 10: a send prunes the hour-old charge (the store then refuses E's own late settle); still waiting.
+		// T0 + 1 h 10: a send prunes the hour-old charge; still waiting.
 		setNow(T0 + H + 10 * M);
 		expect(await send(w, "beta", B, "coo", {}, "")).toMatchObject({ ok: true });
 		expect((await entryOf(w, sd))?.state).toBe("unknown");
@@ -364,8 +376,8 @@ describe("ladder: stuck deliveries settle from the native store (#379)", () => {
 				state: "delivered",
 			});
 		writeFileSync(file, JSON.stringify(stored));
-		const w2 = await world(w);
-		expect((await entryOf(w2, sd))?.state).toBe("unknown"); // the restart's reconcile couldn't settle it
+		const w2 = await restartWithReconcileRefused(w);
+		expect((await entryOf(w2, sd))?.state).toBe("unknown"); // injected restart refusal, not the expired charge
 		await w2.rm.tick(); // delivered, then dropped by the save (oldest finished record first)
 		expect(w2.rm.byId(sd)).toBeUndefined();
 		expect(w2.rm.chainFact(sd)).toBeDefined();
@@ -407,7 +419,7 @@ describe("ladder: stuck deliveries settle from the native store (#379)", () => {
 				state: "delivered",
 			});
 		writeFileSync(file, JSON.stringify(stored));
-		const w2 = await world(w);
+		const w2 = await restartWithReconcileRefused(w);
 		busy(w2, G);
 		expect(w2.rm.byId(sf)?.state).toBe("waiting");
 		// T0 + 24 h 10: the native store gives up on it, and that save drops it (oldest finished record first).
@@ -499,11 +511,13 @@ describe("ladder: stuck deliveries settle from the native store (#379)", () => {
 		release();
 		await running;
 		host.query = realQuery;
-		// Its own late settle is refused (the hour-old charge is gone), so it is still unknown here.
-		expect((await entryOf(w, s1))?.state).toBe("unknown");
+		// #426: its own late settle now succeeds without the old charge; native confirmation, no evidence settlement.
+		expect((await entryOf(w, s1))?.state).toBe("handled");
+		expect(settledLines()).toEqual([]);
+		setNow(now + 5 * H + 10 * M);
 		expect(await send(w, "gamma", G, "coo", {}, "")).toMatchObject({ ok: true });
 		expect(await entryOf(w, s1)).toBeUndefined();
-		expect(settledLines().map((l) => [l.messageId, l.native])).toEqual([[s1, "delivered"]]);
+		expect(settledLines()).toEqual([]);
 		expect(deliveries(w, "stuck q")).toBe(1);
 	});
 });

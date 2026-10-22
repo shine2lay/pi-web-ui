@@ -500,6 +500,87 @@ describe("E durable prepare/commit/publication boundary", () => {
 	});
 });
 
+describe("#426: continuing acceptance is not an hourly charge or new authority", () => {
+	async function accepted() {
+		const t = await fixture();
+		const id = identity("original-acceptance");
+		expect((await t.store.transact(id, async (s) => mutation(s, id))).state).toBe("committed");
+		return t;
+	}
+	function lateUpdate(
+		s: GuardStoreState,
+		elapsed: number,
+		change: (r: GuardAcceptedReceipt) => GuardAcceptedReceipt = (r) => r,
+	): GuardAtomicMutation {
+		const receipt = change(s.outbox[0].receipt);
+		const result = { state: "accepted" as const, receipt, delivery: "dispatching" as const };
+		const id = identity("late-maintenance");
+		return {
+			result,
+			legacyAccepted: [],
+			next: {
+				...s,
+				lastTrustedTime: now + elapsed,
+				usage: [],
+				outbox: [{ ...s.outbox[0], state: "dispatching", receipt }],
+				transactions: [
+					...s.transactions.map((t) => (t.state === "committed" ? { ...t, result } : t)),
+					{ state: "committed", identity: id, transactionId: guardTransactionId(id), result },
+				],
+			},
+		};
+	}
+	it.each([3600000, 3660000])(
+		"uses the existing committed receipt at %i ms without renewing usage",
+		async (elapsed) => {
+			const t = await accepted();
+			expect((await t.store.transact(identity("late-maintenance"), async (s) => lateUpdate(s, elapsed))).state).toBe(
+				"committed",
+			);
+			const read = await t.store.read();
+			expect(read.state).toBe("ready");
+			if (read.state !== "ready") throw new Error("fixture");
+			expect(read.value.usage).toEqual([]);
+		},
+	);
+	it("cannot remove a charge at 1 h minus 1 ms", async () => {
+		const t = await accepted();
+		expect(await t.store.transact(identity("late-maintenance"), async (s) => lateUpdate(s, 3599999))).toMatchObject({
+			state: "not_committed",
+			reason: "recent accepted charge cannot be removed",
+		});
+	});
+	it("cannot manufacture a charge-free acceptance, even by backdating it and inserting its own receipt", async () => {
+		const t = await fixture();
+		const id = identity("unpaid-new-acceptance");
+		expect(
+			await t.store.transact(id, async (s) => {
+				const m = mutation(s, id);
+				return { ...m, next: { ...m.next, lastTrustedTime: now + 3660000, usage: [] } };
+			}),
+		).toMatchObject({ state: "not_committed", reason: "acceptance missing canonical words or charge" });
+	});
+	it.each<[string, (r: GuardAcceptedReceipt) => GuardAcceptedReceipt]>([
+		["identity", (r) => ({ ...r, identity: identity("forged") })],
+		["transaction", (r) => ({ ...r, transactionId: "forged" })],
+		["time", (r) => ({ ...r, committedAt: r.committedAt - 1 })],
+		["cause", (r) => ({ ...r, causal: { ...r.causal, nextHop: r.causal.nextHop + 1 } })],
+		["class", (r) => ({ ...r, class: "control" })],
+		["usage", (r) => ({ ...r, usage: { ...r.usage, grantBusinessUse: 1 } })],
+		["outbox", (r) => ({ ...r, outboxId: "forged" })],
+		["dispatch", (r) => ({ ...r, dispatchKey: "forged" })],
+		["wake", (r) => ({ ...r, wakeKey: "forged" })],
+	])("cannot change the accepted %s binding when the charge is gone", async (_, change) => {
+		const t = await accepted();
+		expect(
+			await t.store.transact(identity("late-maintenance"), async (s) => lateUpdate(s, 3660000, change)),
+		).toMatchObject({
+			state: "not_committed",
+			reason: "acceptance missing canonical words or charge",
+		});
+	});
+});
+
 describe("E request history is immutable at the single writer (Ops rm-1bb3c77b item 3)", () => {
 	const proof: GuardProofReference = {
 		sourceId: "synthetic-source",
