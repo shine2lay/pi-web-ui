@@ -330,6 +330,25 @@ export function guardCommandFingerprint(command: GuardCommand): string {
 	}
 	return guardDigest(body);
 }
+/** Ops #416 H-WW-SCAN-1: prune's two audit-receipt lookups from one pass over the receipts, instead of a scan of all
+ * of them per outbox entry or per transaction. `latestAt(subject)` is what `Math.max(...at of that subject's receipts)`
+ * gave (a fold from -Infinity, so the same number, NaN and -0 included; -Infinity when there is none), except that it
+ * never throws: the spread threw a RangeError from about 120,000 receipts for one subject (Node 22), which only a
+ * hand-made journal could hold, since the store writes at most `maximumAuditReceipts` (3000 live). `firstAt(id)` is the
+ * `at` of the FIRST receipt naming that transaction, as `audits.find(...)?.at` gave (a later duplicate never replaces
+ * it; undefined when there is none). Valid only while the receipts it was built from don't change. */
+export function guardAuditIndex(audits: readonly GuardAuditReceipt[]): {
+	latestAt(subjectId: string): number;
+	firstAt(transactionId: string): number | undefined;
+} {
+	const latest = new Map<string, number>();
+	const first = new Map<string, number>();
+	for (const a of audits) {
+		latest.set(a.subjectId, Math.max(latest.get(a.subjectId) ?? -Infinity, a.at));
+		if (!first.has(a.transactionId)) first.set(a.transactionId, a.at);
+	}
+	return { latestAt: (subjectId) => latest.get(subjectId) ?? -Infinity, firstAt: (id) => first.get(id) };
+}
 function mutable(s: GuardStoreState): MutableState {
 	return {
 		...s,
@@ -501,6 +520,10 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 		state.tombstones = state.tombstones.filter(
 			(t) => t.invalidThrough === "source_horizon_unknown" || t.invalidThrough > now,
 		);
+		// Ops #416 H-WW-SCAN-1: built on first use (a prune with nothing to look up never reads the receipts) and used only
+		// before the receipts are filtered below.
+		let index: ReturnType<typeof guardAuditIndex> | undefined;
+		const receipts = () => (index ??= guardAuditIndex(state.audits));
 		const terminal = new Set(
 			state.outbox
 				.filter(
@@ -513,7 +536,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 							Math.max(
 								o.receipt.committedAt,
 								o.lastEvidence?.observedAt ?? 0,
-								...state.audits.filter((a) => a.subjectId === `outbox:${o.receipt.outboxId}`).map((a) => a.at),
+								receipts().latestAt(`outbox:${o.receipt.outboxId}`),
 							) >=
 						this.options.retention.settledRetentionMs,
 				)
@@ -525,8 +548,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 			(t) =>
 				t.state === "committed" &&
 				(t.result.state !== "accepted" || terminal.has(t.result.receipt.transactionId)) &&
-				now - (state.audits.find((a) => a.transactionId === t.transactionId)?.at ?? now) >=
-					this.options.retention.settledRetentionMs,
+				now - (receipts().firstAt(t.transactionId) ?? now) >= this.options.retention.settledRetentionMs,
 		);
 		for (const t of old)
 			if (
@@ -658,9 +680,11 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 		legacyAccepted: readonly GuardLegacyAcceptedMessage[],
 		now: number,
 	): GuardAtomicMutation {
-		if (!state.audits.some((a) => a.transactionId === guardTransactionId(identity)))
+		// Ops #416 H-WW-SCAN-1: a pure digest of the identity, worked out once instead of once per receipt scanned.
+		const transactionId = guardTransactionId(identity);
+		if (!state.audits.some((a) => a.transactionId === transactionId))
 			this.audit(state, identity, "used", `operation:${result.state}`, now);
-		state.transactions.push({ state: "committed", identity, transactionId: guardTransactionId(identity), result });
+		state.transactions.push({ state: "committed", identity, transactionId, result });
 		state = {
 			...state,
 			revision: `revision-${guardDigest({ previous: state.revision, identity })}`,
