@@ -17526,7 +17526,8 @@ export class AgentService {
 		// queue-turn-since (pi-queue #211): when its turn started, for the watchdog's long-turn note.
 		const turnSince = turnSinceFrom(state, listed);
 		// queue-back-owed (Ops #393): its subagents at work, so a paused chat isn't seen stopped while one writes.
-		const subagents = state === "closed" ? 0 : ClientSession.chatSubagentsAtWork(abs);
+		// A closed chat's too: pi-subagents' background runs go on in a process of their own (review R2).
+		const subagents = ClientSession.chatSubagentsAtWork(abs);
 		return {
 			state,
 			...(lastActiveAt === undefined ? {} : { lastActiveAt }),
@@ -17949,6 +17950,10 @@ export class AgentService {
 		} catch (err) {
 			throw new Error(`chatFromPlugin: failed to switch working directory (${cwdAbs}): ${(err as Error).message}`);
 		}
+		// queue-back-owed (Ops #393): out of a paused task's chat first, so the job's model and thinking level go to
+		// the chat it sends in, not to the task's (review R1).
+		if (!(await cs.leavePausedTaskChat()))
+			throw new Error("chatFromPlugin: its open chat is a paused queued task's chat and no new chat could be opened");
 		const model = String(req?.model ?? "").trim();
 		if (model) {
 			try {
@@ -17965,8 +17970,6 @@ export class AgentService {
 				throw new Error(`chatFromPlugin: failed to switch thinking level (${thinking}): ${(err as Error).message}`);
 			}
 		}
-		if (!(await cs.leavePausedTaskChat()))
-			throw new Error("chatFromPlugin: its open chat is a paused queued task's chat and no new chat could be opened");
 		const conversationId = cs.conversationIdForPlugins() ?? "";
 		void cs.prompt(text);
 		return { conversationId, clientId };
@@ -18000,6 +18003,9 @@ export class AgentService {
 		try {
 			const cs = await this.attach(clientId, () => {});
 			if (cs.cwd !== cwd) await cs.setCwd(cwd);
+			// queue-back-owed (Ops #393): out of a paused task's chat first (review R1, as in chatFromPlugin).
+			if (!(await cs.leavePausedTaskChat()))
+				return { ok: false, error: "Its open chat is a paused queued task's chat and no new chat could be opened" };
 			const model = String(task.model ?? "").trim();
 			if (model) {
 				try {
@@ -18016,8 +18022,6 @@ export class AgentService {
 					return { ok: false, error: `Failed to switch thinking level (${thinking}): ${(err as Error).message}` };
 				}
 			}
-			if (!(await cs.leavePausedTaskChat()))
-				return { ok: false, error: "Its open chat is a paused queued task's chat and no new chat could be opened" };
 			const conversationId = cs.conversationIdForPlugins() ?? "";
 			void cs.prompt(`[Scheduled task] ${text}`);
 			// 等待运行结束：每 2s 轮询，最长 10 分钟。超时按失败记录（运行继续）。
