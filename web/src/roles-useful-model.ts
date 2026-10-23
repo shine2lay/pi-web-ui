@@ -595,6 +595,9 @@ export interface NeedsYouItem {
 	key: string;
 	/** Opaque AskHub target, kept only in memory. No URL or DOM data attribute. */
 	answer?: { key: string; id: string };
+	/** Canonical original-item identity, not inline permission. Native dialogs also need a current
+	 *  conversation-summary match before this can become an Answer in chat action. Memory only. */
+	chatAnswer?: { key: string };
 	/** null: an unknown or invalid role; the row says "Unknown role". */
 	roleLabel: string | null;
 	/** null: absent or unsafe; the row says "Open item". */
@@ -958,6 +961,45 @@ function askLink(ask: Fields): UsefulOpenTarget | null {
 	const focus = focusOf(ask.focus);
 	return focus ? { file, focus } : { file };
 }
+function chatAnswerTarget(ask: Fields, rows: unknown[], unique: boolean): NeedsYouItem["chatAnswer"] {
+	const link = askLink(ask);
+	const focus = link?.focus;
+	if (
+		!unique ||
+		!link ||
+		!roleId(ask.role) ||
+		!focus ||
+		ask.kind !== focus.kind ||
+		ask.key !== `${ask.role}:${focus.kind}:${focus.id}`
+	)
+		return undefined;
+	const matches = rows.map(object).filter((row) => row?.id === ask.role);
+	if (matches.length !== 1) return undefined;
+	const row = matches[0]!;
+	const home = chatFile(object(row.homeChat)?.file);
+	const queue = object(row.queue);
+	const tasks = [queue?.active, queue?.queued, queue?.dropped]
+		.flatMap((list) => (Array.isArray(list) ? list : []))
+		.map(object);
+	const related = tasks.filter(
+		(task) => task && (focus.kind === "task" ? String(task.id) === focus.id : object(task.chat)?.file === link.file),
+	);
+	if (focus.kind === "task" || related.length || object(ask.chat)?.where !== "home") {
+		if (related.length !== 1) return undefined;
+		const task = related[0]!;
+		if (
+			marker(queue, "hold") !== "not-reported" ||
+			marker(task, "paused") !== "not-reported" ||
+			(task.withLead !== undefined && task.withLead !== "owner") ||
+			(focus.kind === "task" ? task.status !== "stuck" : !["working", "stuck"].includes(String(task.status)))
+		)
+			return undefined;
+	}
+	if (focus.kind === "task" || focus.kind === "tldr") {
+		if (link.file !== home) return undefined;
+	} else if (focus.kind !== "question" || (link.file !== home && related.length !== 1)) return undefined;
+	return { key: String(ask.key) };
+}
 function askKey(value: unknown): value is string {
 	return typeof value === "string" && value.length > 0 && value.length <= KEY_LIMIT;
 }
@@ -994,15 +1036,29 @@ function needsYou(
 		const key = object(value)?.key;
 		return askKey(key) ? key : null;
 	});
+	const routes = idFrequencies(raw, (value) => {
+		const link = askLink(object(value) ?? {});
+		return link?.focus ? JSON.stringify(link) : null;
+	});
+	const roleRows: unknown[] = Array.isArray(overview?.roles) ? overview.roles : [];
 	// Feed order (oldest first). Every entry counts; one that can't be read still shows, as "Open item".
 	raw.forEach((value, index) => {
 		const ask = object(value) ?? {};
 		if (askKey(ask.key)) keys.add(ask.key);
 		if (index >= ASK_LIMIT) return;
+		const answer = answerTarget(ask, counts.get(String(ask.key)) === 1);
+		const chatAnswer = !answer
+			? chatAnswerTarget(
+					ask,
+					roleRows,
+					counts.get(String(ask.key)) === 1 && routes.get(JSON.stringify(askLink(ask))) === 1,
+				)
+			: undefined;
 		items.push({
 			key: String(index),
 			roleId: roleId(ask.role) && labels.has(ask.role) ? ask.role : null,
-			answer: answerTarget(ask, counts.get(String(ask.key)) === 1),
+			answer,
+			chatAnswer,
 			roleLabel: roleId(ask.role) ? (labels.get(ask.role) ?? null) : null,
 			text: plain(ask.text, TEXT_LIMIT)?.text ?? null,
 			since: sinceOf(ask.since, now),

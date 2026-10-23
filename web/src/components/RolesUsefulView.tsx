@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppField } from "../app-globals";
 import { useT, type Translate } from "../i18n";
 import { projectRolePanel } from "../roles-panel-model";
@@ -19,6 +19,7 @@ import {
 	type UsefulRole,
 	type UsefulRoles,
 } from "../roles-useful-model";
+import { questionAction, resolveQuestionAction, type NativeDialogSummary } from "../roles-answer-actions";
 import { RolePanelDialog } from "./RolePanel";
 import { RoleAnswerDialog } from "./RoleAnswerDialog";
 import { RoleSpend } from "./RoleSpend";
@@ -94,11 +95,13 @@ function useNow(active: boolean): number {
 export function RolesUsefulView({
 	active,
 	phone,
+	dialogs = [],
 	onOpen,
 	onAbout,
 }: {
 	active: boolean;
 	phone: boolean;
+	dialogs?: readonly NativeDialogSummary[];
 	onOpen: OpenChat;
 	/** roles-panel: Settings, Identities, at this role (its About page and rules). */
 	onAbout: (roleId: string) => void;
@@ -142,6 +145,7 @@ export function RolesUsefulView({
 		<>
 			<RolesUsefulContent
 				model={projectUsefulRoles(state, connection, now)}
+				dialogs={dialogs}
 				phone={phone}
 				now={now}
 				onOpen={onOpen}
@@ -158,6 +162,7 @@ export function RolesUsefulView({
 
 export function RolesUsefulContent({
 	model,
+	dialogs = [],
 	phone,
 	now,
 	onOpen,
@@ -165,6 +170,7 @@ export function RolesUsefulContent({
 	onAnswer,
 }: {
 	model: UsefulRoles;
+	dialogs?: readonly NativeDialogSummary[];
 	phone: boolean;
 	now: number;
 	onOpen: OpenChat;
@@ -178,7 +184,7 @@ export function RolesUsefulContent({
 				<h1>{t("rolesTitle")}</h1>
 				<p>{t(SOURCE_KEYS[model.source])}</p>
 			</header>
-			<NeedsYouSection needs={model.needsYou} now={now} onOpen={onOpen} onAnswer={onAnswer} />
+			<NeedsYouSection needs={model.needsYou} dialogs={dialogs} now={now} onOpen={onOpen} onAnswer={onAnswer} />
 			<p className="roles-useful-note">{t("ruQualification")}</p>
 			{model.roster === "unavailable" && <p>{t("ruRosterUnavailable")}</p>}
 			{model.omitted && <p className="roles-useful-note">{t("ruRolesOmitted")}</p>}
@@ -213,11 +219,13 @@ function ageText(since: number, now: number, t: Translate): string {
 /** "None reported" only while the list is the current one and the feed lists no ask at all. */
 function NeedsYouSection({
 	needs,
+	dialogs,
 	now,
 	onOpen,
 	onAnswer,
 }: {
 	needs: NeedsYou;
+	dialogs: readonly NativeDialogSummary[];
 	now: number;
 	onOpen: OpenChat;
 	onAnswer?: OpenAnswer;
@@ -246,7 +254,15 @@ function NeedsYouSection({
 			{needs.items.length > 0 && (
 				<ol className="roles-useful-asks">
 					{needs.items.map((item) => (
-						<AskRow key={item.key} item={item} now={now} onOpen={onOpen} onAnswer={onAnswer} />
+						<AskRow
+							key={item.key}
+							item={item}
+							needs={needs}
+							dialogs={dialogs}
+							now={now}
+							onOpen={onOpen}
+							onAnswer={onAnswer}
+						/>
 					))}
 				</ol>
 			)}
@@ -258,11 +274,15 @@ function NeedsYouSection({
 
 function AskRow({
 	item,
+	needs,
+	dialogs,
 	now,
 	onOpen,
 	onAnswer,
 }: {
 	item: NeedsYouItem;
+	needs: NeedsYou;
+	dialogs: readonly NativeDialogSummary[];
 	now: number;
 	onOpen: OpenChat;
 	onAnswer?: OpenAnswer;
@@ -270,6 +290,15 @@ function AskRow({
 	const t = useT();
 	const link = item.link;
 	const role = item.roleLabel ?? t("ruUnknownRole");
+	const current = useRef({ needs, dialogs });
+	current.current = { needs, dialogs };
+	const action = questionAction(needs, item, dialogs, !!onAnswer);
+	const reasons = {
+		unconfirmed: "raRouteUnconfirmed",
+		missing: "raRouteMissing",
+		unverified: "raRouteUnverified",
+		native: "raRouteNative",
+	} as const;
 	return (
 		<li className="roles-useful-ask">
 			<div className="roles-useful-body">
@@ -281,10 +310,19 @@ function AskRow({
 					{" · "}
 					{item.since === null ? t("ruTimeUnknown") : t("ruWaiting", { age: ageText(item.since, now, t) })}
 				</p>
+				{action.kind === "unavailable" && <p className="roles-useful-note">{t(reasons[action.reason])}</p>}
 			</div>
-			{item.answer && onAnswer && (
-				<button type="button" className="roles-useful-open" onClick={(e) => onAnswer(item, e.currentTarget)}>
-					{t("raAnswer")}
+			{action.kind !== "unavailable" && (
+				<button
+					type="button"
+					className="roles-useful-open"
+					onClick={(e) => {
+						const latest = resolveQuestionAction(current.current.needs, item, current.current.dialogs, action.kind);
+						if (latest?.action.kind === "chat") onOpen(latest.action.target);
+						else if (latest?.action.kind === "inline") onAnswer?.(latest.item, e.currentTarget);
+					}}
+				>
+					{t(action.kind === "chat" ? "raAnswerInChat" : "raAnswer")}
 					<span className="roles-useful-sr">
 						{" "}
 						{t("ruFrom")} {role}

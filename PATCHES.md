@@ -546,6 +546,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Tests: fixed accepted/denied titles, malformed input, actual overview route preservation, forged/stale direct service requests in `roles-answer.test.ts` and `roles-overview.test.ts`; existing sealed native question/task/plan browser proof.
 - Undo: revert this patch and install with `pi-web-deploy`; this restores the owner's first-release scope, not automatic approval.
 
+## roles-answer-actions: distinguish inline answers from verified native-chat handoff
+
+- `local` (Ops #457, owner: missing Answer buttons on Roles). Hypothesis and rollback: `docs/roles-answer-actions.md`.
+- Keep existing supported inline Answer forms. Current chat-only items gain Answer in chat only with unique canonical feed identity, an exact validated focus target and, for native dialogs, the current conversation summary's exact oldest dialog id. Later, ambiguous, held or unconfirmed items keep truthful reasons and safe Open chat navigation.
+- Both the supplied exact inbox/department surface and the shared question row use the same action policy. Retained callbacks re-resolve identity on click. Native arrival matches file and actually rendered dialog id, then focuses a non-submitting container; a changed/masked dialog gets a truthful warning. Disconnect clears process-local handoff focus. No answer service, permission filter, revision/receipt handling or consent change.
+- Tests: dedicated `roles-answer-actions.test.ts` projection/controller/DOM negatives; extended sealed native question/task/plan/browser fixture covers exact chat-only permission/budget routing, two questions in one chat, full context, keyboard, phone layout and forged inline refusal.
+- Undo: inverse this frontend/docs patch on the current branch, land normally and install with `pi-web-deploy`; never put an old snapshot over concurrent work. No persisted data changes.
+
 ## roles-display-fixes: restore normal contrast and use the displayed overview's receipt
 
 - `local` (owner 2026-10-17: fix the two known display bugs, then connect missing task and question data). Hypotheses and results: `docs/roles-display-fixes.md`.

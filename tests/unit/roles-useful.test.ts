@@ -89,8 +89,9 @@ function closed(model: UsefulRoles) {
 	keys(model, ["source", "roster", "omitted", "lastReceived", "roles", "needsYou"]);
 	keys(model.needsYou, ["tell", "asOf", "total", "items", "more"]);
 	for (const item of model.needsYou.items) {
-		keys(item, ["key", "roleId", "answer", "roleLabel", "text", "since", "link"]);
+		keys(item, ["key", "roleId", "answer", "roleLabel", "text", "since", "link", "chatAnswer"]);
 		if (item.answer) keys(item.answer, ["key", "id"]);
+		if (item.chatAnswer) keys(item.chatAnswer, ["key"]);
 		if (item.link) linkShape(item.link);
 	}
 	for (const r of model.roles) {
@@ -458,6 +459,7 @@ describe("Needs you", () => {
 				roleId: "frontend",
 				roleLabel: "Frontend",
 				text: "Approve the plan?",
+				chatAnswer: { key: "frontend:question:q1" },
 				since: null,
 				link: { file: chatOf(1), focus: { kind: "question", id: "q1" } },
 			},
@@ -879,9 +881,9 @@ describe("closed boundary and the actual store", () => {
 		const allowed: Record<string, string[]> = {
 			// Only callbacks and the explicitly projected view cross component boundaries.
 			RolesUsefulView: ["active", "phone", "onOpen", "onAbout"],
-			RolesUsefulContent: ["model", "phone", "now", "onOpen", "onDetails", "onAnswer"],
-			NeedsYouSection: ["needs", "now", "onOpen", "onAnswer"],
-			AskRow: ["item", "now", "onOpen", "onAnswer"],
+			RolesUsefulContent: ["model", "dialogs", "phone", "now", "onOpen", "onDetails", "onAnswer"],
+			NeedsYouSection: ["needs", "dialogs", "now", "onOpen", "onAnswer"],
+			AskRow: ["item", "needs", "dialogs", "now", "onOpen", "onAnswer"],
 			RoleCard: ["role", "onOpen", "onDetails"],
 			RoleSpend: ["spend"],
 			RecordList: ["heading", "list", "count", "onOpen"],
@@ -1059,13 +1061,16 @@ describe("closed boundary and the actual store", () => {
 		expect(app).not.toContain('import("./components/RolesView")');
 		// roles-panel: About & rules opens Settings at the role, the way the old panel did.
 		expect(app).toMatch(
-			/<RolesExactView\s+active=\{view === "roles"\}\s+onOpen=\{openFromRolesPage\}\s+onAbout=\{aboutFromRoles\}\s+\/>/,
+			/<RolesExactView\s+active=\{view === "roles"\}\s+dialogs=\{chat.ready \? nativeDialogs : \[\]\}\s+onOpen=\{openFromRolesPage\}\s+onAbout=\{aboutFromRoles\}\s+\/>/,
 		);
 		// The page's opens are remembered first (fixed words on failure), then go the existing way.
 		expect(app).toMatch(/markRolesOpen\(target\.file\);\s*openFromRoles\(target\);/);
 		// Two chat links, Details opens the panel, Answer opens only the guarded dialog.
 		expect(source.match(/onClick=/g)).toHaveLength(4);
-		expect(source.match(/onClick=\{\(e\) => onAnswer\(item, e\.currentTarget\)\}/g)).toHaveLength(1);
+		expect(
+			source.match(/resolveQuestionAction\(current\.current\.needs, item, current\.current\.dialogs, action\.kind\)/g),
+		).toHaveLength(1);
+		expect(source.match(/onAnswer\?\.\(latest\.item, e\.currentTarget\)/g)).toHaveLength(1);
 		expect(source).toContain('<RoleAnswerDialog item={answer.item} connected={connection === "open"}');
 		expect(source.match(/onClick=\{\(\) => onOpen\(link\)\}/g)).toHaveLength(2);
 		expect(source.match(/onClick=\{\(e\) => onDetails\(role\.roleId, e\.currentTarget\)\}/g)).toHaveLength(1);

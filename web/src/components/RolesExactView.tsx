@@ -8,6 +8,7 @@ import { acknowledgeRenderedRolesUsage, reloadRoles, useRoles } from "../roles-s
 import { bindRolesSurface, prepareRolesDocument, type FontBytes } from "../roles-u0/surface";
 import type { NeedsYouItem, UsefulOpenTarget } from "../roles-useful-model";
 import { RoleAnswerDialog } from "./RoleAnswerDialog";
+import type { NativeDialogSummary } from "../roles-answer-actions";
 
 /** The real update/refit completion seam, also exercised with a synthetic bound DOM. */
 export function updateRolesUsageDOM(
@@ -27,11 +28,13 @@ export function updateRolesUsageDOM(
  */
 export function RolesExactView({
 	active,
+	dialogs = [],
 	fonts = exactRolesFonts,
 	onOpen,
 	onAbout,
 }: {
 	active: boolean;
+	dialogs?: readonly NativeDialogSummary[];
 	fonts?: FontBytes;
 	onOpen: (target: UsefulOpenTarget) => void;
 	onAbout: (roleId: string) => void;
@@ -48,8 +51,8 @@ export function RolesExactView({
 		() => projectExactRoles(state, connection, now, { visibleAt }),
 		[state, connection, now, visibleAt],
 	);
-	const current = useRef({ model, state, active, connection, onOpen, onAbout });
-	current.current = { model, state, active, connection, onOpen, onAbout };
+	const current = useRef({ model, state, active, connection, onOpen, onAbout, dialogs });
+	current.current = { model, state, active, connection, onOpen, onAbout, dialogs };
 	const redraw = useRef<(() => void) | null>(null);
 	const hide = useRef<(() => void) | null>(null);
 	useEffect(() => {
@@ -67,7 +70,7 @@ export function RolesExactView({
 	}, [active, graceUntil]);
 	useEffect(() => {
 		redraw.current?.();
-	}, [model, active, connection]);
+	}, [model, active, connection, dialogs]);
 	useEffect(() => {
 		if (!active) {
 			hide.current?.();
@@ -152,6 +155,7 @@ export function RolesExactView({
 					open: (target) => current.current.onOpen(target),
 					about: (id) => current.current.onAbout(id),
 					answer: (item, from) => setAnswer({ item, from }),
+					dialogs: () => current.current.dialogs,
 					reload: reloadRoles,
 				},
 				{

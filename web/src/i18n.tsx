@@ -2377,6 +2377,14 @@ export const en = {
 	ruThisChat: "this chat",
 	/* roles-answer: the complete ask, answered through the existing browser path */
 	raAnswer: "Answer",
+	raAnswerInChat: "Answer in chat",
+	raRouteUnconfirmed: "Current questions are not confirmed. Open chat to check; no answer is sent by navigation.",
+	raRouteMissing: "The original chat is not available from this page.",
+	raRouteUnverified: "An exact current answer target could not be verified. Open chat to check the question.",
+	raRouteNative:
+		"This native question is not the chat’s currently shown dialog. Open chat to check; another question may come first.",
+	raNativeChanged:
+		"That exact question is not currently shown. The chat may show a different question; check its full context before answering.",
 	raTitle: "Answer this question",
 	raKindPlan: "Plan to approve",
 	raKindQuestion: "Question",

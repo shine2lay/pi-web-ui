@@ -26,6 +26,7 @@ const { ownerAnswer, dialogCheck } = await tsImport(
 const { replay } = await tsImport(pathToFileURL(join(queuePackage, "queue.ts")).href, import.meta.url);
 const shots = process.env.ROLES_ANSWER_SHOTS;
 const onlyStuck = process.env.ROLES_ANSWER_CASE === "stuck";
+const onlyNative = process.env.ROLES_ANSWER_CASE === "native";
 const now = Date.now();
 let home, task, identities, work;
 let mode = "idle",
@@ -72,6 +73,22 @@ function seed({ root, agentDir, workdir }) {
 		}),
 	);
 	writeFileSync(join(agentDir, "pi-queue.json"), JSON.stringify({ stalledAfterMinutes: 0 }));
+	// Native permission/budget UI, deliberately NOT the inline Roles allow-list. No model call.
+	mkdirSync(join(agentDir, "extensions"), { recursive: true });
+	writeFileSync(
+		join(agentDir, "extensions", "roles-native-fixture.ts"),
+		`
+export default function (pi) {
+  pi.registerCommand("roles-native-fixture", {
+    description: "Fixed synthetic native dialogs",
+    handler: async (_args, ctx) => {
+      void ctx.ui.confirm("Fixture permission approval", ${JSON.stringify(`${body} END-NATIVE-PERMISSION`)});
+      void ctx.ui.confirm("Fixture budget approval", ${JSON.stringify(`${body} END-NATIVE-BUDGET`)});
+    }
+  });
+}
+`,
+	);
 	const sessions = join(agentDir, "sessions", `--${workdir.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`);
 	mkdirSync(sessions, { recursive: true });
 	home = join(sessions, "2026-10-17T00-00-00-000Z_01a0f000-0000-7000-8000-000000000001.jsonl");
@@ -167,7 +184,7 @@ const srv = await ownServer({
 		},
 	},
 });
-let browser, socket;
+let browser, socket, page;
 const hardStop = setTimeout(() => {
 	console.error("FAIL bounded fixture timeout");
 	process.exitCode = 1;
@@ -219,7 +236,7 @@ try {
 	if (!(await until(() => roles?.roles?.length === 1))) throw new Error("fixture roster unavailable");
 	browser = await chromium.launch({ executablePath: CHROME_PATH, headless: true });
 	const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: "en-US" });
-	const page = await context.newPage();
+	page = await context.newPage();
 	page.on("pageerror", () => {
 		pageErrors++;
 	});
@@ -245,7 +262,7 @@ try {
 			.click();
 	};
 	const dialog = page.locator("dialog.roles-answer");
-	if (!onlyStuck) {
+	if (!onlyStuck && !onlyNative) {
 		mode = "question";
 		called = false;
 		const before = completed;
@@ -339,24 +356,26 @@ try {
 		check("late second answer is refused", again.ok === false);
 		await dialog.getByRole("button", { name: "Close", exact: true }).click();
 	}
-	mode = "finish";
-	called = false;
-	await clickAnswer(roles.asks.find((a) => a.kind === "task")?.text);
-	await dialog.locator("input[type=radio]").first().waitFor();
-	check("stuck task shows full owner package", (await dialog.textContent()).includes(body));
-	await dialog.locator("input[type=radio]").first().check();
-	await dialog.getByRole("button", { name: "Send answer", exact: true }).click();
-	await dialog.getByText("Answer sent.", { exact: false }).waitFor();
-	check("native task finishes after the page answer", await until(() => roles?.roles?.[0]?.queue?.counts?.done >= 1));
-	const childDone = replay(
-		readFileSync(task, "utf8")
-			.trim()
-			.split("\n")
-			.map((row) => JSON.parse(row)),
-	);
-	check("child queue records done", childDone.tasks[0]?.status === "done");
-	await dialog.getByRole("button", { name: "Close", exact: true }).click();
-	if (!onlyStuck) {
+	if (!onlyNative) {
+		mode = "finish";
+		called = false;
+		await clickAnswer(roles.asks.find((a) => a.kind === "task")?.text);
+		await dialog.locator("input[type=radio]").first().waitFor();
+		check("stuck task shows full owner package", (await dialog.textContent()).includes(body));
+		await dialog.locator("input[type=radio]").first().check();
+		await dialog.getByRole("button", { name: "Send answer", exact: true }).click();
+		await dialog.getByText("Answer sent.", { exact: false }).waitFor();
+		check("native task finishes after the page answer", await until(() => roles?.roles?.[0]?.queue?.counts?.done >= 1));
+		const childDone = replay(
+			readFileSync(task, "utf8")
+				.trim()
+				.split("\n")
+				.map((row) => JSON.parse(row)),
+		);
+		check("child queue records done", childDone.tasks[0]?.status === "done");
+		await dialog.getByRole("button", { name: "Close", exact: true }).click();
+	}
+	if (!onlyStuck && !onlyNative) {
 		mode = "plan";
 		called = false;
 		send({ type: "prompt", text: "Fixture plan" });
@@ -380,11 +399,124 @@ try {
 			"approved plan reaches native queue but does not start",
 			await until(() => state.taskQueue?.tasks?.some((t) => t.plan.title === plan.title && t.status === "ready")),
 		);
+		await dialog.getByRole("button", { name: "Close", exact: true }).click();
+	}
+	if (!onlyStuck) {
+		// The browser has never answered one of these through the Roles service. Handoff is navigation only.
+		send({ type: "prompt", text: "/roles-native-fixture" });
+		if (!(await until(() => roles?.asks?.filter((a) => a.kind === "question" && !a.askId).length === 2)))
+			throw new Error("fixture native questions not listed");
+		const native = roles.asks.filter((a) => a.kind === "question" && !a.askId);
+		const forbidden = await request({ type: "roles_ask_open", key: native[0].key }, "roles_ask");
+		check("permission remains excluded from inline Roles service", forbidden.ok === false);
+		const forged = await request(
+			{
+				type: "roles_ask_answer",
+				key: native[0].key,
+				askId: native[0].focus?.split(":").slice(1).join(":"),
+				revision: "forged",
+				answers: [{ id: "confirm", selected: ["true"] }],
+			},
+			"roles_ask_result",
+		);
+		check("forged native permission submission is refused", forged.ok === false);
+		await page.goto(`${srv.http}/?view=roles`);
+		await frame.getByRole("button", { name: "You: open your decisions, questions and spending" }).click();
+		await page.waitForFunction(
+			() =>
+				document.querySelector('iframe[title="Roles"]')?.contentDocument?.querySelector('[role="region"]')?.style
+					.overflowY === "auto",
+		);
+		const nativeRow = (item) => panel.locator("p").filter({ hasText: item.text }).locator("..");
+		await nativeRow(native[0]).getByRole("button", { name: "Answer in chat", exact: true }).waitFor();
+		check(
+			"later question in the same chat is truthfully navigation-only",
+			(await nativeRow(native[1]).getByRole("button", { name: "Answer in chat", exact: true }).count()) === 0 &&
+				(await nativeRow(native[1]).textContent()).includes("currently shown dialog"),
+		);
+		for (const [label, width, height] of [
+			["desktop", 1440, 1000],
+			["phone", 390, 844],
+		]) {
+			await page.setViewportSize({ width, height });
+			const measure = await panel.evaluate((el) => ({
+				overflow: el.scrollWidth - el.clientWidth,
+				action:
+					Array.from(el.querySelectorAll("button"))
+						.find((b) => b.textContent === "Answer in chat")
+						?.getBoundingClientRect().width ?? 0,
+			}));
+			check(`native handoff action fits ${label}`, measure.overflow <= 1 && measure.action >= 44);
+			if (shots) {
+				mkdirSync(shots, { recursive: true });
+				await page.screenshot({ path: join(shots, `roles-chat-action-${label}.png`) });
+			}
+		}
+		await nativeRow(native[0]).getByRole("button", { name: "Answer in chat", exact: true }).focus();
+		await page.keyboard.press("Enter");
+		const nativePanel = page.locator(".dialog-inline");
+		await nativePanel.getByText("Fixture permission approval", { exact: true }).waitFor();
+		await page.waitForFunction(() => document.activeElement?.classList.contains("dialog-inline"));
+		check(
+			"chat handoff focuses exact native dialog without submitting",
+			(await page.evaluate(() => document.activeElement?.classList.contains("dialog-inline"))) &&
+				(await nativePanel.textContent()).includes("Fixture permission approval") &&
+				roles.asks.some((a) => a.key === native[0].key),
+		);
+		check("native full context survives handoff", (await nativePanel.textContent()).includes("END-NATIVE-PERMISSION"));
+		await page.keyboard.press("Enter");
+		check(
+			"Enter on the native container is not consent",
+			roles.asks.some((a) => a.key === native[0].key),
+		);
+		await page.keyboard.press("Escape");
+		check(
+			"Escape uses native cancellation, not Roles submission",
+			await until(() => !roles.asks.some((a) => a.key === native[0].key)),
+		);
+		await page.goto(`${srv.http}/?view=roles`);
+		await frame.getByRole("button", { name: "You: open your decisions, questions and spending" }).click();
+		await page.waitForFunction(
+			() =>
+				document.querySelector('iframe[title="Roles"]')?.contentDocument?.querySelector('[role="region"]')?.style
+					.overflowY === "auto",
+		);
+		await nativeRow(native[1]).getByRole("button", { name: "Answer in chat", exact: true }).waitFor();
+		check("the second native question becomes actionable only when actually shown", true);
+		await nativeRow(native[1]).getByRole("button", { name: "Answer in chat", exact: true }).click();
+		await nativePanel.getByText("Fixture budget approval", { exact: true }).waitFor();
+		check(
+			"second handoff preserves exact budget context",
+			(await nativePanel.textContent()).includes("END-NATIVE-BUDGET"),
+		);
+		await page.keyboard.press("Escape");
 	}
 	check("no page errors", pageErrors === 0);
 } catch (err) {
 	failures++;
 	console.error(`FAIL fixture stopped: ${err instanceof Error ? err.message.split("\n")[0] : "unknown error"}`);
+	if (page) {
+		const diagnostic = await page
+			.evaluate(() => {
+				const d = document.querySelector('iframe[title="Roles"]')?.contentDocument;
+				const region = d?.querySelector('[role="region"]');
+				return {
+					viewport: { width: innerWidth, height: innerHeight },
+					region: region ? { overflow: region.style.overflowY, scroll: region.scrollTop } : null,
+					actions: Array.from(d?.querySelectorAll("button") ?? [])
+						.filter((b) => b.textContent === "Answer in chat")
+						.map((b) => {
+							const r = b.getBoundingClientRect();
+							return {
+								box: { x: r.x, y: r.y, width: r.width, height: r.height },
+								hit: d.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === b,
+							};
+						}),
+				};
+			})
+			.catch(() => null);
+		console.error(`DIAG fixture action geometry: ${JSON.stringify(diagnostic)}`);
+	}
 } finally {
 	clearTimeout(hardStop);
 	socket?.close();

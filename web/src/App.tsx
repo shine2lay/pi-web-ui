@@ -102,6 +102,7 @@ import { useChat } from "./use-chat";
 import { pendingFor } from "./pending-sends";
 import { takeChatFocusLink, takeChatLink, takeViewLink } from "./open-chat-link";
 import { clearChatFocus, FOCUS_FLASH_MS, parseFocus, requestChatFocus, useChatFocus } from "./chat-focus";
+import { nativeDialogFocusMatches } from "./roles-answer-actions";
 import type { RolesOpenTarget } from "./components/RolesView";
 import { appUrl } from "./base-url";
 import { resolveImageUrls } from "./chat-image";
@@ -748,6 +749,10 @@ export function App() {
 	// right panel (opened for it: the drawer on a phone); a report scrolls the chat (searchJump). The
 	// request is done once the item has been marked.
 	const chatFocus = useChatFocus();
+	// Native dialog numbers are process-local: no pending handoff survives a lost connection.
+	useEffect(() => {
+		if (chat.status !== "open" || !chat.ready) clearChatFocus();
+	}, [chat.status, chat.ready]);
 	const focusHere = chatFocus && chat.state?.sessionFile === chatFocus.file ? chatFocus : null;
 	const focusHereSeq = focusHere?.seq;
 	const focusHereKind = focusHere?.kind;
@@ -1024,6 +1029,10 @@ export function App() {
 	const latestMessagesRef = useRef(chat.state?.messages);
 	latestMessagesRef.current = chat.state?.messages;
 	/** queue-main-chat: the chat list as it is now (the "done" cue skips chats whose task asks its main chat). */
+	const nativeDialogs = useMemo(
+		() => chat.conversations.map(({ sessionFile, dialogId }) => ({ sessionFile, dialogId })),
+		[chat.conversations],
+	);
 	const conversationsRef = useRef(chat.conversations);
 	conversationsRef.current = chat.conversations;
 	const notifiedQuestionIds = useRef<Set<string>>(new Set());
@@ -1070,6 +1079,15 @@ export function App() {
 	/** The dialog on screen: the window's own (the goal wizard), else the open chat's oldest waiting
 	 *  pop-up. Another chat's pop-ups stay with that chat (per-chat-dialogs). */
 	const dialog = chat.dialog ?? chat.state?.dialog ?? null;
+	const nativeFocus =
+		view === "chat" &&
+		chat.status === "open" &&
+		chat.ready &&
+		focusHere?.kind === "question" &&
+		/^dlg-[1-9]\d*$/.test(focusHere.id)
+			? focusHere
+			: null;
+	const nativeFocusMatches = !chat.dialog && nativeDialogFocusMatches(nativeFocus, chat.state?.sessionFile, dialog?.id);
 	const lastErrorNotice = useRef(0);
 	// Remembers a terminal-view click made before the WebSocket is ready.
 	const terminalOpenRequested = useRef(false);
@@ -2076,7 +2094,14 @@ export function App() {
 						<ContextMenu onAction={(entry, target, value) => onUiAction(entry, value, target)} />
 						{/* escape-hidden-question: this pane stays mounted behind the other tabs, so its asks (this dialog and
 						    the question dialogs below) take Escape only while the chat view is showing. */}
-						{dialog && <Dialog dialog={dialog} escapeEnabled={view === "chat"} />}
+						{nativeFocus && !nativeFocusMatches && <p role="status">{t("raNativeChanged")}</p>}
+						{dialog && (
+							<Dialog
+								dialog={dialog}
+								escapeEnabled={view === "chat"}
+								focusRequest={nativeFocusMatches ? nativeFocus?.seq : undefined}
+							/>
+						)}
 						{/* 本地插件对话框（host.dialogs.*）：复用 .dialog-inline 样式，按钮 resolve 后清态 */}
 						{pluginDialog && (
 							<div className="dialog-inline" data-dialog-kind={pluginDialog.kind}>
@@ -2390,7 +2415,12 @@ export function App() {
 				<div className={`view-pane roles-pane ${view === "roles" ? "" : "hidden"}`}>
 					{(rolesLoaded || view === "roles") && (
 						<Suspense fallback={null}>
-							<RolesExactView active={view === "roles"} onOpen={openFromRolesPage} onAbout={aboutFromRoles} />
+							<RolesExactView
+								active={view === "roles"}
+								dialogs={chat.ready ? nativeDialogs : []}
+								onOpen={openFromRolesPage}
+								onAbout={aboutFromRoles}
+							/>
 						</Suspense>
 					)}
 				</div>

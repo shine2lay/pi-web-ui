@@ -15,6 +15,12 @@ import {
 	type ExactSpend,
 } from "./roles-exact-model";
 import type { NeedsYouItem } from "./roles-useful-model";
+import {
+	questionAction,
+	resolveQuestionAction,
+	QUESTION_ACTION_REASONS,
+	type NativeDialogSummary,
+} from "./roles-answer-actions";
 import { CONFIG_NOT_RECORDED, configHistoryActs } from "./roles-config-history";
 import type { PanelRoleStatus, PanelTask, PanelTaskEvent, RolePanel } from "./roles-panel-model";
 import { panelActivity, panelTasks } from "./roles-panel-model";
@@ -242,6 +248,7 @@ export interface ExactViewActions {
 	open(target: UsefulOpenTarget): void;
 	about(roleId: string): void;
 	answer?(item: NeedsYouItem, from: HTMLElement): void;
+	dialogs?(): readonly NativeDialogSummary[];
 	reload(): void;
 }
 type Selection = { kind: "you" } | { kind: "role"; id: string } | null;
@@ -635,24 +642,26 @@ export function createExactRolesView(
 		return true;
 	}
 	function question(item: NeedsYouItem, model: ExactRoles): SurfaceValues {
-		const canAnswer = !!item.answer && !!actions.answer && model.needs.tell === "can-tell";
+		const action = questionAction(model.needs, item, actions.dialogs?.(), !!actions.answer);
+		const canAnswer = action.kind !== "unavailable";
 		const choices: SurfaceValues[] = [];
 		if (canAnswer)
 			choices.push({
-				label: "Answer",
+				label: action.kind === "chat" ? "Answer in chat" : "Answer",
 				bg: "#ECEDEE",
 				fg: "#0E0F11",
 				bd: "#ECEDEE",
 				op: "1",
 				hasHint: false,
 				pick: (source: Event | Element) => {
-					const current = read();
-					if (disposed || !item.answer || current.needs.tell !== "can-tell") return;
-					const latest = current.needs.items.find(
-						(candidate) => candidate.answer?.key === item.answer?.key && candidate.answer?.id === item.answer?.id,
-					);
-					const from = "currentTarget" in source ? source.currentTarget : source;
-					if (latest && from && "focus" in from) actions.answer?.(latest, from as HTMLElement);
+					if (disposed) return;
+					const latest = resolveQuestionAction(read().needs, item, actions.dialogs?.() ?? [], action.kind);
+					if (!latest) return;
+					if (latest.action.kind === "chat") actions.open(latest.action.target);
+					else {
+						const from = "currentTarget" in source ? source.currentTarget : source;
+						if (from && "focus" in from) actions.answer?.(latest.item, from as HTMLElement);
+					}
 				},
 			});
 		if (item.link)
@@ -674,9 +683,12 @@ export function createExactRolesView(
 			role: item.roleLabel ?? "Unknown role",
 			age: exactAge(item.since, model.now),
 			title: item.text ?? "Open the original item to read it",
-			context: canAnswer
-				? "Open the full prompt and answer here."
-				: "Read the full question and answer in its original chat.",
+			context:
+				action.kind === "inline"
+					? "Open the full prompt and answer here."
+					: action.kind === "chat"
+						? "Open the exact item in its original chat. Navigation sends no answer."
+						: QUESTION_ACTION_REASONS[action.reason],
 			isOpen: choices.length > 0,
 			isResolved: false,
 			choices,

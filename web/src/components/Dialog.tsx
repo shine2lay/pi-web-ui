@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useT } from "../i18n";
 import { appSend } from "../app-globals";
 import { useEscapeKey } from "../shortcut-stack";
@@ -17,6 +17,8 @@ interface DialogProps {
 	 * While false the handler passes Escape on but keeps its place on the stack, so the chat view's order stays.
 	 */
 	escapeEnabled?: boolean;
+	/** Exact native-chat arrival, already matched by file and id. Focus a container, never a choice. */
+	focusRequest?: number;
 }
 
 /**
@@ -24,8 +26,14 @@ interface DialogProps {
  * rendered above the chat input (non-modal — the conversation stays visible).
  * Resolves via dialog_response; cancel/Esc resolves with null.
  */
-export function Dialog({ dialog, escapeEnabled = true }: DialogProps) {
+export function Dialog({ dialog, escapeEnabled = true, focusRequest }: DialogProps) {
 	const t = useT();
+	const container = useRef<HTMLDivElement>(null);
+	useLayoutEffect(() => {
+		if (focusRequest === undefined) return;
+		container.current?.focus({ preventScroll: true });
+		container.current?.scrollIntoView?.({ block: "nearest" });
+	}, [focusRequest, dialog.id]);
 	const [inputValue, setInputValue] = useState("");
 	const [sel, setSel] = useState(0);
 
@@ -48,7 +56,7 @@ export function Dialog({ dialog, escapeEnabled = true }: DialogProps) {
 	const message = typeof dialog.args[0] === "string" ? (dialog.args[0] as string) : "";
 
 	return (
-		<div className="dialog-inline" data-dialog-kind={dialog.kind}>
+		<div ref={container} tabIndex={-1} className="dialog-inline" data-dialog-kind={dialog.kind}>
 			<div className="dialog-head">
 				<span className="dialog-badge">{t("pluginRequest")}</span>
 				{dialog.title && dialog.title !== t("pluginRequest") && <span className="dialog-title">{dialog.title}</span>}
