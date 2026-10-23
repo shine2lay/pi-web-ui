@@ -353,7 +353,7 @@ import { RoleMessageGuardHost } from "./role-message-guard-host.js";
 import { admitRoleMailAtResume, installRoleMailBoundary, noteAtRoleMailBoundary } from "./role-mail-boundary.js";
 import { installPromptStartGuard } from "./prompt-start-guard.js";
 import { RolesOverviewReader } from "./roles-overview.js";
-import { WorkPageFile, workFactsFromOverview, type WorkQueueFacts } from "./work-page.js";
+import { ownerAsksFromOverview, WorkPageFile, workFactsFromOverview, type WorkQueueFacts } from "./work-page.js";
 import { ROLES_CONFIG_EVERY_MS, RolesConfigHistory } from "./roles-config-history.js";
 import { makeRolesOverviewTool } from "./roles-overview-tool.js";
 import {
@@ -416,6 +416,7 @@ import type {
 	UiRoleGuardQuestion,
 	UiRoleMessageRow,
 	UiRolesOverview,
+	UiWorkOwnerAsk,
 	UiWorkPage,
 	UiRoleAskView,
 	UiServiceInfo,
@@ -540,6 +541,7 @@ import {
 	type StallExtra,
 } from "./stall-watch.js";
 import { STALL_LEDGER_FILE, StallWake, stallStretchEnded, stallWakesOn, withStall } from "./stall-wake.js";
+import { deadEndAnswer } from "./dead-end.js";
 import { launchOrigin, toServiceInfo } from "./launch-origin.js";
 import { imageIfVersion, type ChatImage } from "./chat-image.js";
 import {
@@ -16396,8 +16398,12 @@ export class AgentService {
 	 */
 	async readWorkPage(overview?: UiRolesOverview): Promise<UiWorkPage> {
 		let facts: WorkQueueFacts[] = [];
+		let ownerAsks: UiWorkOwnerAsk[] | undefined;
 		try {
-			facts = workFactsFromOverview(overview ?? (await this.readRolesOverview()));
+			const o = overview ?? (await this.readRolesOverview());
+			facts = workFactsFromOverview(o);
+			// dead-end (Ops #483): the owner's open questions that aren't a task's (dead-end.ts reads them).
+			ownerAsks = ownerAsksFromOverview(o);
 			this.workFactsError = null;
 		} catch (err) {
 			const error = (err as Error)?.message || String(err);
@@ -16410,6 +16416,7 @@ export class AgentService {
 		const page = await this.workPageFile.get(facts);
 		// initiatives-page-gaps (Ops #228): the open hand-offs that carry an initiative's id (first lines only).
 		page.handoffs = this.roleMessages.openHandoffs();
+		if (ownerAsks) page.ownerAsks = ownerAsks;
 		// stall-wake (Ops #284): existing Initiatives note slots; never stored in WorkPageFile's cached replay.
 		const findings = this.stallWatch?.list().findings ?? [];
 		return withStall(page, findings, (stretch) => this.stallWake?.asked(stretch) ?? []);
@@ -17407,6 +17414,8 @@ export class AgentService {
 			// queue-lead-reminders (rule 24): a role's home chat, and a reminder to it (queue-blocks.ts).
 			leadChat: (role) => blocks.leadChat(role),
 			remindLead: (req) => blocks.remindLead(req),
+			// dead-end (Ops #483, rule 30): the stall check's own test, on a fresh read of the queues and registry.
+			deadEnd: async (req) => deadEndAnswer(await this.readWorkPage(), req, Date.now()),
 			previewLaunch: (request, cwd, sourceSessionId) =>
 				previewExistingQueueLaunch(request, cwd, sourceSessionId, this.clients.values()),
 			startChat: (o) =>

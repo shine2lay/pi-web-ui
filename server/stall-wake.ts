@@ -15,7 +15,8 @@
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { UiWorkPage } from "./protocol.js";
+import { deadEndOf, deadEndWaysOut } from "./dead-end.js";
+import type { UiStallRule, UiWorkPage } from "./protocol.js";
 import type { StallExtra, StallFinding, StallSettings } from "./stall-watch.js";
 
 export const STALL_LEDGER_FILE = "stall-watch.jsonl";
@@ -223,6 +224,8 @@ const clip = (s: string, n: number) => {
 
 /** The rule in plain words. */
 export function stallRuleText(f: Pick<StallFinding, "rule" | "since">, now: number): string {
+	if (f.rule === "dead-end")
+		return `nothing moving since ${stallWhen(f.since, now)}: no task at work or ready, none linked to another queue's task, no question with the owner`;
 	return f.rule === "empty"
 		? `no open task since ${stallWhen(f.since, now)}`
 		: `nothing recorded since ${stallWhen(f.since, now)}`;
@@ -261,7 +264,11 @@ export function stallLeadItemText(d: StallDue, now: number, gapHours: number): s
 	const next = rest.length
 		? `Next: if nothing changes, ${who(rest[0])} is woken at ${stallWhen(now + gapHours * HOUR, now)}${rest.length > 1 ? `, then ${rest.slice(1).map(who).join(", then ")}` : ""}.`
 		: "Next: nothing more is sent automatically; it stays on the Initiatives page.";
-	const clear = `To clear it: queue the next task under it (queue_add with ${f.kind} ${f.id}), close it (${tool(f)} change, status done or dropped), or record a wait with its end (${tool(f)} wait).`;
+	// Ops #483: a dead end clears only by one of its three ways out (or by closing the project).
+	const clear =
+		f.rule === "dead-end"
+			? `To clear it: ${deadEndWaysOut(f.id)} Answering this message doesn't clear it.`
+			: `To clear it: queue the next task under it (queue_add with ${f.kind} ${f.id}), close it (${tool(f)} change, status done or dropped), or record a wait with its end (${tool(f)} wait).`;
 	const head = `${itemHead(f)}: ${stallRuleText(f, now)}.`;
 	// The head, who comes next and how to clear it always go whole; the context gets what's left of ~600.
 	const room = Math.max(120, ITEM_MAX - head.length - next.length - clear.length);
@@ -309,7 +316,7 @@ export interface StallItemInfo {
 	kind: "project" | "initiative";
 	id: string;
 	name: string;
-	rule: "empty" | "silent";
+	rule: UiStallRule;
 	since: number;
 	step: number;
 	owner?: true;
@@ -453,6 +460,8 @@ export function withStall(
 			);
 			const open = tasks.filter((t) => !["done", "dropped", "removed"].includes(t.state ?? "ready"));
 			if (f.rule === "empty" && open.length) return r;
+			// Ops #483: a dead end shows only while it still holds on the live page.
+			if (f.rule === "dead-end" && (kind !== "project" || deadEndOf(r, page, now).state !== "dead")) return r;
 			if (
 				f.rule === "silent" &&
 				(!open.length ||

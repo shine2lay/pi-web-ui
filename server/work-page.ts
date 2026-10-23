@@ -30,6 +30,7 @@ import type {
 	UiWorkActivity,
 	UiWorkActivityOp,
 	UiWorkDoneItem,
+	UiWorkOwnerAsk,
 	UiWorkPage,
 	UiWorkPageRecord,
 	UiWorkPageTask,
@@ -164,6 +165,10 @@ export interface WorkTaskFacts {
 	nextAction?: UiRoleTaskNext;
 	requester?: string;
 	paused?: UiTaskQueueHold;
+	/** dead-end (Ops #483): its queue is stopped. */
+	queueStopped?: true;
+	/** dead-end (Ops #483): blocked, but let go at this time (ms). */
+	poked?: number;
 	needsYou?: { text: string; since?: number };
 	/** live-progress (docs/live-progress.md): its own chat's newest line with its time (open tasks). */
 	progress?: UiTaskProgress;
@@ -546,6 +551,8 @@ function taskOut(l: Link, f: WorkTaskFacts | undefined): UiWorkPageTask {
 		...(f?.nextAction ? { nextAction: { ...f.nextAction } } : {}),
 		...(f?.requester ? { requester: f.requester } : {}),
 		...(f?.paused ? { paused: { ...f.paused } } : {}),
+		...(f?.queueStopped ? { queueStopped: true as const } : {}),
+		...(f?.poked !== undefined ? { poked: f.poked } : {}),
 		...(f?.needsYou ? { needsYou: { ...f.needsYou } } : {}),
 		...(f?.progress ? { progress: { ...f.progress } } : {}),
 		...(f?.withLead ? { withLead: f.withLead } : {}),
@@ -625,6 +632,11 @@ export function workFactsFromOverview(overview: UiRolesOverview): WorkQueueFacts
 				...(t.next ? { nextAction: t.next } : {}),
 				...(requester ? { requester } : {}),
 				...(t.paused ? { paused: t.paused } : {}),
+				// Stopped (queue_control stop or the Stop button), as the Roles page counts it; the owner's pause is on each task.
+				...(q && !q.running && (q.pausedReason === "user" || q.pausedReason === "stopped")
+					? { queueStopped: true as const }
+					: {}),
+				...(t.poked !== undefined ? { poked: t.poked } : {}),
 				...(t.progress ? { progress: t.progress } : {}),
 				...(t.withLead ? { withLead: t.withLead } : {}),
 			});
@@ -645,6 +657,31 @@ export function workFactsFromOverview(overview: UiRolesOverview): WorkQueueFacts
 			tasks.set(n, f);
 		}
 		if (tasks.size) out.push({ file, tasks });
+	}
+	return out;
+}
+
+/** dead-end (Ops #483): at most this many of the owner's open questions go on the page. */
+const OWNER_ASKS_MAX = 200;
+const OWNER_ASK_TEXT_MAX = 2000;
+
+/**
+ * dead-end (Ops #483, rule 30): the owner's open questions that aren't a task's (a home chat's question dialog, a
+ * TL;DR line needing him), as the Roles overview lists them (UiWorkPage.ownerAsks). A task's own question is on
+ * the task (needsYou) instead.
+ */
+export function ownerAsksFromOverview(overview: UiRolesOverview): UiWorkOwnerAsk[] {
+	const out: UiWorkOwnerAsk[] = [];
+	for (const role of overview.roles) {
+		for (const a of role.asks) {
+			if (typeof a.chat.where === "number" || a.kind === "task") continue;
+			if (out.length >= OWNER_ASKS_MAX) return out;
+			out.push({
+				role: a.role,
+				text: a.text.slice(0, OWNER_ASK_TEXT_MAX),
+				...(a.since !== undefined ? { since: a.since } : {}),
+			});
+		}
 	}
 	return out;
 }

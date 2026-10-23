@@ -4,6 +4,8 @@
  *
  * - "empty": no open task under it for emptyHours (an initiative: no active project and no open task filed
  *   straight under it); "silent": open tasks but nothing recorded for silentHours.
+ * - "dead-end" (Ops #483, rule 30): a project with tasks, none of them moving (dead-end.ts, the same check
+ *   pi-queue's drop and reply results use): flagged at once, no grace, and found every round until it moves.
  * - Quiet, never flagged: an active wait (pi-queue's wait action, Ops #282), every open task paused by the owner,
  *   or an open task waiting on the owner.
  * - The rules are pure functions of (page, extra, now, settings). StallWatch runs them every everyMin minutes and
@@ -14,7 +16,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { open, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import type { UiWorkPage, UiWorkPageRecord, UiWorkPageTask, UiWorkWait } from "./protocol.js";
+import { deadEndOf } from "./dead-end.js";
+import type { UiStallRule, UiWorkPage, UiWorkPageRecord, UiWorkPageTask, UiWorkWait } from "./protocol.js";
 import { resolveDataDir } from "./uploads.js";
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -25,7 +28,7 @@ export interface StallFinding {
 	kind: "project" | "initiative";
 	id: string;
 	name: string;
-	rule: "empty" | "silent";
+	rule: StallRule;
 	since: number;
 	stretch: string;
 	chain: string[];
@@ -33,6 +36,9 @@ export interface StallFinding {
 	lastDone?: { queue: string; task: number; title: string; summary?: string; at: number };
 	open: { queue: string; task: number; title: string; status: string; waitsOn?: string }[];
 }
+
+/** empty: no open task; silent: nothing recorded; dead-end (Ops #483): tasks, but nothing moving. */
+export type StallRule = UiStallRule;
 
 export interface StallSettings {
 	mode: "off" | "dry" | "on";
@@ -270,7 +276,7 @@ export interface StallItem {
 	 *  covered: an initiative with an active project; fine: open tasks and something recorded lately. */
 	state: "flagged" | "quiet" | "pending" | "covered" | "fine";
 	why: string;
-	rule?: "empty" | "silent";
+	rule?: StallRule;
 	since?: number;
 	/** Its open tasks. */
 	open: number;
@@ -424,6 +430,16 @@ export function stallReview(page: UiWorkPage, extra: StallExtra, now: number, s:
 					}),
 			};
 		};
+		if (kind === "project") {
+			// Ops #483: tasks, none moving (dead-end.ts): at once, every round while it holds.
+			const d = deadEndOf(r, page, now);
+			if (d.state === "dead") {
+				const since = maxOf(d.since, x.statusAt, x.resumedAt, waitEnd, r.createdAt);
+				findings.push(finding("dead-end", since));
+				item("flagged", `dead end since ${stallTime(since)}: ${d.why}`, { rule: "dead-end", since });
+				return;
+			}
+		}
 		if (!open.length) {
 			// The registry's own times; only when they say nothing about it, the page's closed tasks' times.
 			const fromPage = x.leftAt === undefined && x.eventAt === undefined;

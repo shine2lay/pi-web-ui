@@ -1425,6 +1425,8 @@ function taskOf(t: UiTaskQueueTask, department: string, held?: UiTaskQueueHold):
 		// roles-panel: where it belongs (its queue entry), and a lead block's who, what, when and reminders.
 		...(t.parent ? { parent: { ...t.parent } } : {}),
 		...(t.status === "blocked" && t.block?.lead ? { owing: owingOf(t.block, t.block.lead) } : {}),
+		// dead-end (Ops #483): a block the queue let go; the task comes back to work next.
+		...(t.status === "blocked" && t.block?.poke ? { poked: t.block.poke.at } : {}),
 	};
 }
 

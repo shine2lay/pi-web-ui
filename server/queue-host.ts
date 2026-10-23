@@ -43,6 +43,10 @@
  *    checked against that queue's own record, the owner's pause on role messages and the lead's daily cap:
  *    {sent, at, to}, {held} (not now) or {missed} (it can't go at all). Once per block and n.
  *    QueueBlocks.remindLead (queue-blocks.ts).
+ *  - deadEnd({project, file?, id?, state?}) (dead-end, Ops #483, AGENTS.md rule 30): whether that project of the
+ *    work registry has nothing moving now, by dead-end.ts (the stall check's own test), with the task pi-queue
+ *    just changed taken at its new status: {state: "dead" | "moving" | "quiet", why, name, waysOut?} or
+ *    {problem}. Only reads. pi-queue's drop and reply results say a dead end and its three ways out.
  *
  * This file is the glue: it checks what the extension hands in and serializes the work. The chats
  * themselves are opened by AgentService / ClientSession (agent-service.ts).
@@ -52,7 +56,7 @@ import { existsSync } from "node:fs";
 import { consumeOwnerSetting } from "./queue-owner.js";
 import { requesterOf } from "./queue-requester.js";
 import { checkPatch, normLaunch, QueueLaunchRefused } from "./queue-profile.js";
-import type { ChatSpeed, UiTaskLaunch, UiTaskRequester } from "./protocol.js";
+import type { ChatSpeed, UiTaskLaunch, UiTaskRequester, UiWorkTaskState } from "./protocol.js";
 
 export const QUEUE_HOST_KEY = Symbol.for("pi-web-ui.queue-host");
 
@@ -103,6 +107,51 @@ export interface QueueHostImpl {
 	/** queue-lead-reminders: see the header. */
 	leadChat?(role: string): QueueLeadChat | undefined;
 	remindLead?(req: QueueLeadRemind): Promise<QueueLeadRemindResult>;
+	/** dead-end (Ops #483, rule 30): whether a project has nothing moving now (dead-end.ts, the stall check's own
+	 *  test), for pi-queue's drop and reply results. Only reads; never wakes, queues or changes anything. */
+	deadEnd?(req: QueueDeadEndRequest): Promise<QueueDeadEndResult>;
+}
+
+/** dead-end: what deadEnd gets, checked: the project, and the task pi-queue just changed (its queue chat, number and
+ *  new status), so the answer doesn't wait for the queue file to be read again. */
+export interface QueueDeadEndRequest {
+	project: string;
+	file?: string;
+	id?: number;
+	state?: UiWorkTaskState;
+}
+
+export type QueueDeadEndResult =
+	{ state: "dead" | "moving" | "quiet"; why: string; name: string; waysOut?: string } | { problem: string };
+
+const TASK_STATES: ReadonlySet<string> = new Set([
+	"ready",
+	"working",
+	"asking",
+	"stuck",
+	"waiting",
+	"blocked",
+	"done",
+	"dropped",
+	"removed",
+]);
+
+/** dead-end: deadEnd's request as pi-queue handed it in: cleaned, or the reason it can't be used. */
+export function parseDeadEndRequest(raw: unknown): QueueDeadEndRequest | string {
+	if (!raw || typeof raw !== "object") return "no request";
+	const o = raw as Record<string, unknown>;
+	const project = typeof o.project === "string" ? o.project.trim() : "";
+	if (!project || project.length > 200) return "no project given";
+	const out: QueueDeadEndRequest = { project };
+	if (o.file !== undefined || o.id !== undefined || o.state !== undefined) {
+		if (typeof o.file !== "string" || !o.file.startsWith("/") || o.file.length > 1000) return "no queue chat given";
+		if (typeof o.id !== "number" || !Number.isInteger(o.id) || o.id < 1) return "no task number given";
+		if (typeof o.state !== "string" || !TASK_STATES.has(o.state)) return "no task status given";
+		out.file = o.file;
+		out.id = o.id;
+		out.state = o.state as UiWorkTaskState;
+	}
+	return out;
 }
 
 /** queue-lead-reminders: a role's home chat (leadChat). */
@@ -387,6 +436,21 @@ export function installQueueHost(impl: QueueHostImpl): () => void {
 				}
 			: {}),
 		...(impl.previewLaunch ? { previewLaunch: impl.previewLaunch } : {}),
+		...(impl.deadEnd
+			? {
+					deadEnd: (raw: QueueDeadEndRequest): Promise<QueueDeadEndResult> => {
+						const req = parseDeadEndRequest(raw);
+						if (typeof req === "string") return Promise.resolve({ problem: req });
+						try {
+							return impl.deadEnd!(req).catch((err) => ({
+								problem: `couldn't read the work registry (${asError(err).message})`,
+							}));
+						} catch (err) {
+							return Promise.resolve({ problem: `couldn't read the work registry (${asError(err).message})` });
+						}
+					},
+				}
+			: {}),
 		...(impl.queueRefs
 			? {
 					queueRefs: (raw: QueueRefsRequest): Promise<QueueRefsResult> => {

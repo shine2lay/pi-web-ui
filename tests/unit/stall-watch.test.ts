@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { UiWorkPage } from "../../server/protocol.js";
 import { workPageFrom, type WorkQueueFacts, type WorkTaskFacts } from "../../server/work-page.js";
 import { DecisionRecords } from "../../server/decision-records.js";
+import { withStall } from "../../server/stall-wake.js";
 import {
 	LeadUpdatesFile,
 	leadUpdatesOf,
@@ -144,8 +145,19 @@ function fixture(): Reg {
 	r.state(NOW - 130 * M, 1, NOW - 5 * H, "done").fact(1, NOW - 5 * H, { doneSummary: "built the thing" });
 	// 2. Never had a task, created 3 h ago.
 	r.project(NOW - 3 * H, "never-task", "design");
-	// 4. Open tasks, nothing recorded for 25 h.
+	// 4. Open tasks, nothing recorded for 25 h. Its one task is blocked on nothing recorded: a dead end too, and
+	// that rule (Ops #483) comes first, at once.
 	r.project(NOW - 30 * H, "silent-25h", "ops").task(NOW - 25 * H, 2, { project: "silent-25h" }, "blocked");
+	// 4b. The same, but its task waits on another queue's open task: moving, so only the silent rule.
+	r.project(NOW - 30 * H, "silent-linked", "ops").task(NOW - 25 * H, 8, { project: "silent-linked" });
+	r.ev(NOW - 25 * H, {
+		op: "task.state",
+		queue: Q,
+		task: 8,
+		added: NOW - 25 * H,
+		status: "blocked",
+		block: { on: ["temper #38"], reminders: 0, since: NOW - 25 * H },
+	});
 	// 5. A wait that ran out an hour ago, empty all along since it was created 10 h ago.
 	r.project(NOW - 10 * H, "wait-over", "ops").wait(NOW - 9 * H, "project", "wait-over", NOW - 1 * H);
 
@@ -176,7 +188,8 @@ const MUST_CATCH = [
 	"initiative:lonely-ini:empty",
 	"project:closed-2h10:empty",
 	"project:never-task:empty",
-	"project:silent-25h:silent",
+	"project:silent-25h:dead-end",
+	"project:silent-linked:silent",
 	"project:wait-over:empty",
 ];
 
@@ -191,6 +204,7 @@ describe("stall-watch rules (fixtures, each run twice)", () => {
 			"project:closed-2h10": "flagged",
 			"project:never-task": "flagged",
 			"project:silent-25h": "flagged",
+			"project:silent-linked": "flagged",
 			"project:wait-over": "flagged",
 			"project:working": "fine",
 			"project:closed-1h": "pending",
@@ -215,6 +229,7 @@ describe("stall-watch rules (fixtures, each run twice)", () => {
 			"closed-2h10": NOW - 130 * M,
 			"never-task": NOW - 3 * H,
 			"silent-25h": NOW - 25 * H,
+			"silent-linked": NOW - 25 * H,
 			"wait-over": NOW - 1 * H,
 		});
 		for (const f of findings) expect(f.stretch).toBe(`${f.kind}:${f.id}:${f.rule}:${f.since}`);
@@ -338,6 +353,117 @@ describe("stall-watch rules (fixtures, each run twice)", () => {
 				waitsOn: "temper #38; the deploy; temper owes the deploy",
 			},
 		]);
+	});
+});
+
+describe("stall-watch dead-end rule (Ops #483, rule 30; each run twice)", () => {
+	/** Project p, created 5 h ago, with task 1 working since then. */
+	const base = () => new Reg().project(NOW - 5 * H, "p", "ops").task(NOW - 5 * H, 1, { project: "p" }, "working");
+	const blockOn = (r: Reg, ts: number, task: number, added: number, b: { on?: string[]; need?: string }) =>
+		r.ev(ts, { op: "task.state", queue: Q, task, added, status: "blocked", block: { ...b, reminders: 0, since: ts } });
+	const rules = (r: Reg, now = NOW, page = r.page(now)) => {
+		const a = stallReview(page, r.extra(), now, S);
+		expect(stallReview(page, r.extra(), now, S)).toEqual(a);
+		return a;
+	};
+
+	it("its last task dropped: flagged at once, not after the empty rule's 2 h", () => {
+		const r = base().state(NOW - M, 1, NOW - 5 * H, "dropped");
+		const { findings, items } = rules(r);
+		expect(flagged(findings)).toEqual(["project:p:dead-end"]);
+		expect(findings[0]).toMatchObject({
+			since: NOW - M,
+			stretch: `project:p:dead-end:${NOW - M}`,
+			chain: ["ops", "owner"],
+		});
+		expect(items[0]).toMatchObject({ state: "flagged", rule: "dead-end", since: NOW - M });
+		expect(items[0]!.why).toBe(`dead end since ${stallTime(NOW - M)}: no open task left`);
+	});
+
+	it("blocked on a need only, or on its own tasks only: flagged at once, once", () => {
+		const r = blockOn(base(), NOW - 10 * M, 1, NOW - 5 * H, { need: "the deploy" });
+		const { findings } = rules(r);
+		expect(flagged(findings)).toEqual(["project:p:dead-end"]);
+		expect(findings[0]!.since).toBe(NOW - 10 * M);
+		expect(findings[0]!.open).toEqual([
+			{ queue: "ops", task: 1, title: "Task 1", status: "blocked", waitsOn: "the deploy" },
+		]);
+		const own = base().task(NOW - 4 * H, 2, { project: "p" }, "ready");
+		blockOn(own, NOW - 20 * M, 1, NOW - 5 * H, { on: ["#2"] });
+		own.fact(2, NOW - 4 * H, { nextAction: { kind: "queue", after: ["#1"] } });
+		expect(flagged(rules(own).findings)).toEqual(["project:p:dead-end"]);
+	});
+
+	it("moving: a ready, waiting or working task, a link to another queue's open task, an owner question", () => {
+		const dead = () => blockOn(base(), NOW - 10 * M, 1, NOW - 5 * H, { need: "x" });
+		const cases: [string, Reg, UiWorkPage?][] = [
+			["ready", dead().task(NOW - 5 * M, 2, { project: "p" }, "ready")],
+			["waiting", dead().task(NOW - 5 * M, 2, { project: "p" }, "waiting")],
+			["working", dead().task(NOW - 5 * M, 2, { project: "p" }, "working")],
+			["linked", blockOn(base(), NOW - 10 * M, 1, NOW - 5 * H, { on: ["temper #38"], need: "x" })],
+			["needs you", dead().fact(1, NOW - 5 * H, { needsYou: { text: "Which key?" } })],
+		];
+		const asked = dead();
+		cases.push(["owner ask", asked, { ...asked.page(), ownerAsks: [{ role: "ops", text: "Proj p: fund it?" }] }]);
+		for (const [what, r, page] of cases) {
+			expect(flagged(rules(r, NOW, page).findings), what).toEqual([]);
+		}
+	});
+
+	it("quiet: a wait that holds, every open task paused, a stopped queue", () => {
+		const wait = blockOn(base(), NOW - 10 * M, 1, NOW - 5 * H, { need: "x" }).wait(
+			NOW - 5 * M,
+			"project",
+			"p",
+			NOW + H,
+		);
+		expect(rules(wait).findings).toEqual([]);
+		expect(rules(wait).items[0]!.state).toBe("quiet");
+		const paused = blockOn(base(), NOW - 10 * M, 1, NOW - 5 * H, { need: "x" });
+		paused.fact(1, NOW - 5 * H, { paused: { at: NOW - 5 * M, why: "owner: hold it" } });
+		expect(rules(paused).findings).toEqual([]);
+		expect(rules(paused).items[0]!.state).toBe("quiet");
+		const stopped = blockOn(base(), NOW - 10 * M, 1, NOW - 5 * H, { need: "x" });
+		stopped.fact(1, NOW - 5 * H, { queueStopped: true });
+		expect(rules(stopped).findings).toEqual([]);
+	});
+
+	it("stays the same stretch every round while nothing moves; ends once a way out is taken", () => {
+		const stretches = (r: Reg, now: number, page?: UiWorkPage) =>
+			rules(r, now, page)
+				.findings.filter((f) => f.rule === "dead-end")
+				.map((f) => f.stretch);
+		const dead = () => blockOn(base(), NOW - 10 * M, 1, NOW - 5 * H, { need: "x" });
+		const one = [`project:p:dead-end:${NOW - 10 * M}`];
+		// Rounds go by; the lead answered its wake, wrote a TL;DR line: still the same stretch.
+		const r = dead();
+		expect(stretches(r, NOW)).toEqual(one);
+		expect(stretches(r, NOW + 3 * H)).toEqual(one);
+		r.fact(1, NOW - 5 * H, { progress: { text: "still waiting", at: NOW + H } });
+		expect(stretches(r, NOW + 3 * H)).toEqual(one);
+		// A way out: the fix task, a link, an owner question.
+		expect(stretches(dead().task(NOW + H, 2, { project: "p" }, "ready"), NOW + 2 * H)).toEqual([]);
+		expect(stretches(blockOn(dead(), NOW + H, 1, NOW - 5 * H, { on: ["design #4"] }), NOW + 2 * H)).toEqual([]);
+		const ask = dead();
+		expect(
+			stretches(ask, NOW + 2 * H, {
+				...ask.page(NOW + 2 * H),
+				ownerAsks: [{ role: "ops", text: "About p: drop it?" }],
+			}),
+		).toEqual([]);
+		// Closing it, or a wait, ends it too.
+		expect(stretches(dead().change(NOW + H, "project", "p", { status: "dropped" }), NOW + 2 * H)).toEqual([]);
+		expect(stretches(dead().wait(NOW + H, "project", "p", NOW + 5 * H), NOW + 2 * H)).toEqual([]);
+	});
+
+	it("the page shows the last round's dead end only while it still holds", () => {
+		const r = blockOn(base(), NOW - 10 * M, 1, NOW - 5 * H, { need: "x" });
+		const { findings } = rules(r);
+		const shown = (page: UiWorkPage) =>
+			withStall(page, findings, () => [], NOW + M).projects.find((p) => p.id === "p")?.stall;
+		expect(shown(r.page())).toEqual({ rule: "dead-end", since: NOW - 10 * M, asked: [] });
+		// Between rounds the lead queued the fix task: the page doesn't show the old finding any more.
+		expect(shown(r.task(NOW + 30_000, 2, { project: "p" }, "ready").page(NOW + M))).toBeUndefined();
 	});
 });
 

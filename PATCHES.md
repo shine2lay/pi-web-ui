@@ -10,6 +10,15 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## stall-dead-end: the work check finds a project with nothing moving at once and keeps waking its lead until a way out is taken
+
+- `local` (Ops #483; owner order bp-36910028, Oct 23, "Ok do both"; AGENTS.md rule 30). H-DEADEND-1, the test, quiet cases and waking: `docs/stall-watch.md` "Dead end". Work kept stopping at "dropped, no successor": the empty rule waited 2 h and both older rules counted a task blocked on a need text as open.
+- `server/dead-end.ts` (new): the one test, `deadEndOf` / `projectDeadEnd` (active, wait not holding, at least one linked task, and nothing at work, ready to start now, waiting on a check, asking its lead, linked to another queue's open task, let go by its queue, or with the owner), `deadEndAnswer` (the queue host's answer, with pi-queue's just-changed task at its new status), `deadEndWaysOut`, `namesRecord`.
+- `server/stall-watch.ts`: rule `dead-end`, checked first for projects, stretch from the newest block/closing/link. `server/stall-wake.ts`: step 1 at once (the existing `stallNext`), its own item words with the ways out; the page shows it only while the test holds. `server/role-messages.ts`: `STALL_DEAD_END_HINT`, and a reply to such a wake is refused with the ways out. `web/src/initiatives-page/stall.ts`: "Nothing moving".
+- `server/work-page.ts`, `server/roles-overview.ts`, `server/protocol.ts`: the page's tasks carry `queueStopped` and `poked`; the page carries the Roles page's open owner asks that aren't a task's (`ownerAsks`). `server/queue-host.ts`, `server/agent-service.ts`: `deadEnd(req)` on the queue host for pi-queue (read only; checked request; a failure is a `problem`).
+- Checks: `tests/unit/dead-end.test.ts` (new: must-catch, must-pass and quiet cases, each run twice), dead-end cases in `tests/unit/stall-watch.test.ts` (one existing fixture, a task blocked on nothing recorded, is now a dead end), `tests/unit/stall-wake.test.ts` and `tests/unit/queue-host.test.ts`; the new cases fail on the code before. Sealed gate; live look: `pi-web-ui stall list` against a hand count from the registry.
+- Undo: revert this commit and install with `pi-web-deploy` (pi-queue then says nothing about dead ends: its host has no `deadEnd`). Or turn the whole work check off with `{"mode":"off"}` in `~/.pi-web-ui/stall-watch.json`. Nothing stored changes.
+
 ## role-message-policy-v2-reader: read expanded finite grants without enlarging historical authority
 
 - `local` (Ops #453; Owner67477/67481 chose Both). H-MSG-DOUBLE-1 and rollout/undo: `docs/role-message-policy-v2.md`. **Compatibility phase keeps active V1 (20/6/11/12/max5)**; the separately checked activation selects V2 (40/12/22/23/max10) only after this reader is installed. No new setting/screen, feature/ladder/wake/hold activation or authority bypass.

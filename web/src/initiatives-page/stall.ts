@@ -14,7 +14,8 @@ export function stallLine(r: Pick<UiWorkPageRecord, "stall" | "wait" | "status">
 	if (r.status !== "active") return undefined;
 	const s = r.stall;
 	if (s) {
-		const head = `${s.rule === "empty" ? "No open task" : "Nothing recorded"} since ${clockOf(s.since, now)}`;
+		const what = s.rule === "empty" ? "No open task" : s.rule === "dead-end" ? "Nothing moving" : "Nothing recorded";
+		const head = `${what} since ${clockOf(s.since, now)}`;
 		return [head, ...s.asked.map((a) => `${askedName(a.role)} asked ${clockOf(a.at, now)}`)].join(" \u00b7 ");
 	}
 	const w = r.wait;

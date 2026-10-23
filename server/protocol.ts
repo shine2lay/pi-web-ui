@@ -2147,6 +2147,9 @@ export interface UiRoleTask {
 	owing?: UiRoleTaskOwing;
 	/** roles-evidence (task #207): how far its change has got (working tasks only; absent: an older server). */
 	evidence?: UiTaskEvidence;
+	/** dead-end (Ops #483): blocked, but the queue let it go (answered, or what it waited on is over) at this time
+	 *  (ms): it comes back to work first once a slot is free. */
+	poked?: number;
 }
 
 /**
@@ -2214,9 +2217,12 @@ export interface UiWorkDoneItem {
 
 /** initiatives-plan-data: an initiative or project of the work registry in full, as the Initiatives page shows it. */
 /** stall-wake (Ops #284): a stalled stretch on the Initiatives page: "No open task since 06:00 \u00b7 Ops asked 08:10". */
+/** empty: no open task; silent: nothing recorded; dead-end (Ops #483, rule 30): tasks, but none moving. */
+export type UiStallRule = "empty" | "silent" | "dead-end";
+
 export interface UiWorkStall {
-	/** empty: no open task; silent: nothing recorded. */
-	rule: "empty" | "silent";
+	/** empty: no open task; silent: nothing recorded; dead-end: tasks, but none moving. */
+	rule: UiStallRule;
 	since: number;
 	/** The steps sent in this stretch, in order; the owner's step is role "owner" (sent to COO). */
 	asked: { role: string; at: number }[];
@@ -2297,6 +2303,10 @@ export interface UiWorkPageTask extends UiWorkTaskRef {
 	requester?: string;
 	/** Paused by the owner (the task or its whole queue): since when and why. */
 	paused?: UiTaskQueueHold;
+	/** dead-end (Ops #483): its queue is stopped (queue_control stop), so a task not started yet can't start. */
+	queueStopped?: true;
+	/** dead-end (Ops #483): blocked, but let go at this time (ms): it comes back to work next (UiRoleTask.poked). */
+	poked?: number;
 	/** Its question is in the owner's Needs-you list: what it says and since when (ms). */
 	needsYou?: { text: string; since?: number };
 	/** live-progress: its own chat's newest TL;DR line with its time (open tasks; docs/live-progress.md). */
@@ -2384,6 +2394,17 @@ export interface UiWorkPage {
 	/** initiatives-page-gaps (Ops #228): the open hand-offs between roles that carry an initiative's id, oldest
 	 *  first. Additive: absent from an older server (the page says "Not recorded"). */
 	handoffs?: UiWorkHandoff[];
+	/** dead-end (Ops #483, rule 30): the owner's open questions that aren't a task's (a home chat's question dialog,
+	 *  a TL;DR line needing him), as the Roles page lists them: one naming a project or its initiative means it
+	 *  waits on the owner. Additive: absent from an older server. */
+	ownerAsks?: UiWorkOwnerAsk[];
+}
+
+/** dead-end (Ops #483): one open question to the owner that isn't a task's. */
+export interface UiWorkOwnerAsk {
+	role: string;
+	text: string;
+	since?: number;
 }
 
 /** roles-overview: a role's home queue in short. */

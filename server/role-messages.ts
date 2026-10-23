@@ -45,6 +45,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSy
 import { open, type FileHandle } from "node:fs/promises";
 import { dirname } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { deadEndWaysOut } from "./dead-end.js";
 import { checkInitiative } from "./decision-records.js";
 import { samePath, type IdentityDef } from "./identities.js";
 import type {
@@ -52,6 +53,7 @@ import type {
 	UiRoleMessageKind,
 	UiRoleMessageRow,
 	UiRoleMessageState,
+	UiStallRule,
 	UiWorkHandoff,
 } from "./protocol.js";
 import { ownerChannelOf, type OwnerChannel, type RoleOwnerAnswer, OWNER_IDS_MAX } from "./role-replies.js";
@@ -289,7 +291,7 @@ export interface RoleStallInfo {
 		kind: "project" | "initiative";
 		id: string;
 		name: string;
-		rule: "empty" | "silent";
+		rule: UiStallRule;
 		since: number;
 		step: number;
 		/** The owner's step: sent to COO to put to the owner. */
@@ -422,6 +424,9 @@ export const POKE_HINT =
 /** stall-wake (Ops #284): what a work-check message tells the lead to do with it. */
 export const STALL_HINT =
 	"(The work check found work you lead that isn't moving. Act with your tools: queue the next task under it (queue_add with its project or initiative), close it (work_project or work_initiative change, status done or dropped), or record a wait with its end (work_project or work_initiative wait). Nothing starts by itself. No reply is needed: the check sees what you do. Write nothing for the owner in this chat.)";
+/** dead-end (Ops #483, rule 30): what a work-check message about a project with nothing moving tells its lead. */
+export const STALL_DEAD_END_HINT =
+	"(The work check found a project you lead with nothing moving (rule 30): no task at work or ready, none linked to another queue's task, no question with the owner. Take one of the ways out its item names: queue the fix task, link the other queue's task it really waits on, or ask the owner with the full package; if its work is finished, close it. A reply doesn't clear it, and nothing starts by itself: the check sees what you do. Write nothing for the owner in this chat.)";
 /** stall-wake: the owner's step, sent to COO. */
 export const STALL_OWNER_HINT =
 	"(The work check found work that stayed stalled after its leads were woken. Put each item to the owner as one dialog with the full package (rule 21). Nothing starts by itself. No reply is needed: the check sees what changes.)";
@@ -462,12 +467,20 @@ export function roleMessageHint(r: HeaderParts, opts: { ownerAnswer?: boolean } 
 		case "report":
 			if (r.stall) {
 				const owner = r.stall.items.some((i) => i.owner);
-				const lead = r.stall.items.some((i) => !i.owner);
+				const leads = r.stall.items.filter((i) => !i.owner);
+				const lead = leads.length > 0;
+				// dead-end (Ops #483): its own hint, beside the usual one when the batch has other stalls too.
+				const dead = leads.some((i) => i.rule === "dead-end");
+				const leadHint = !dead
+					? STALL_HINT
+					: leads.every((i) => i.rule === "dead-end")
+						? STALL_DEAD_END_HINT
+						: `${STALL_HINT} ${STALL_DEAD_END_HINT}`;
 				return owner && lead
-					? `(This batch has both lead-action and owner-step items. Apply the lead-action hint only to items saying "To clear it", and the owner-dialog hint only to items saying "Put it to the owner".) ${STALL_HINT} ${STALL_OWNER_HINT}`
+					? `(This batch has both lead-action and owner-step items. Apply the lead-action hint only to items saying "To clear it", and the owner-dialog hint only to items saying "Put it to the owner".) ${leadHint} ${STALL_OWNER_HINT}`
 					: owner
 						? STALL_OWNER_HINT
-						: STALL_HINT;
+						: leadHint;
 			}
 			if (r.poke) return POKE_HINT;
 			return "(The app's 6 am report request: your answer in this chat is the report the owner reads. No message_role, no new work, no tasks started.)";
@@ -1729,9 +1742,13 @@ export class RoleMessages {
 			original = this.byId(replyTo);
 			if (!original) return { ok: false, error: `There's no message ${replyTo} to reply to.` };
 			if (original.kind === "report" && original.stall) {
+				// dead-end (Ops #483): a reply never clears it; only a way out does.
+				const dead = original.stall.items.filter((i) => i.rule === "dead-end" && !i.owner);
 				return {
 					ok: false,
-					error: `${replyTo} is the work check's wake about stalled work: no reply is needed. Act with your tools (queue_add under it, work_project or work_initiative change or wait); the check sees what you do.`,
+					error: dead.length
+						? `${replyTo} is the work check's wake about ${dead.map((i) => `project ${i.id}`).join(", ")} with nothing moving: a reply doesn't clear it. Take a way out with your tools: ${deadEndWaysOut(dead[0].id)} The check sees what you do.`
+						: `${replyTo} is the work check's wake about stalled work: no reply is needed. Act with your tools (queue_add under it, work_project or work_initiative change or wait); the check sees what you do.`,
 				};
 			}
 			if (original.kind === "report" && original.poke) {

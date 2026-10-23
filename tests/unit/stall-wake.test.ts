@@ -11,6 +11,7 @@ import type { IdentityDef } from "../../server/identities.js";
 import { starterOf } from "../../server/quiet-turns.js";
 import {
 	RoleMessages,
+	STALL_DEAD_END_HINT,
 	STALL_HINT,
 	STALL_OWNER_HINT,
 	roleMessageHeader,
@@ -34,6 +35,7 @@ import {
 	type StallWakeHost,
 } from "../../server/stall-wake.js";
 import { parseRoleMessageText } from "../../web/src/role-message-text.js";
+import { deadEndWaysOut } from "../../server/dead-end.js";
 
 const HOUR = 3_600_000;
 const MIN = 60_000;
@@ -501,6 +503,25 @@ for (const pass of [1, 2]) {
 			);
 			expect(text).toContain("Last done: ops #281");
 		});
+
+		it("a dead end (Ops #483): its lead at once, the chain on its usual gap, the ways out in the text", () => {
+			const h = harness();
+			// Found a minute after its last task was dropped: step 1 goes in the same round.
+			const f = finding({ id: "p1", rule: "dead-end", since: T0 - MIN, chain: ["ops", "owner"] });
+			h.wake.act([f], T0);
+			expect(h.sent.map((s) => [s.role, s.items[0]!.step, s.items[0]!.rule])).toEqual([["ops", 1, "dead-end"]]);
+			const text = h.sent[0]!.text;
+			expect(text).toContain(`nothing moving since ${stallWhen(T0 - MIN, T0)}`);
+			expect(text).toContain(`To clear it: ${deadEndWaysOut("p1")} Answering this message doesn't clear it.`);
+			// Still found (a reply changes nothing): the owner's step through COO after the gap, once.
+			h.wake.act([f], T0 + HOUR);
+			h.wake.act([f], T0 + 2 * HOUR + MIN);
+			h.wake.act([f], T0 + 5 * HOUR);
+			expect(h.sent.map((s) => [s.role, s.items[0]!.step])).toEqual([
+				["ops", 1],
+				["coo", 2],
+			]);
+		});
 	});
 
 	describe(`work check role messages (pass ${pass})`, () => {
@@ -523,6 +544,13 @@ for (const pass of [1, 2]) {
 			expect(roleMessageHint({ ...base, stall: { items: [items[0]!, { ...items[1]!, owner: true }] } })).toBe(
 				`(This batch has both lead-action and owner-step items. Apply the lead-action hint only to items saying "To clear it", and the owner-dialog hint only to items saying "Put it to the owner".) ${STALL_HINT} ${STALL_OWNER_HINT}`,
 			);
+			// Ops #483: a dead end has its own hint, beside the usual one in a mixed batch; both fold on the page.
+			const dead = { ...items[0]!, rule: "dead-end" as const };
+			expect(roleMessageHint({ ...base, stall: { items: [dead] } })).toBe(STALL_DEAD_END_HINT);
+			expect(roleMessageHint({ ...base, stall: { items: [dead, items[1]!] } })).toBe(
+				`${STALL_HINT} ${STALL_DEAD_END_HINT}`,
+			);
+			expect(STALL_DEAD_END_HINT.startsWith("(The work check found")).toBe(true);
 			expect(STALL_HINT).toBe(
 				"(The work check found work you lead that isn't moving. Act with your tools: queue the next task under it (queue_add with its project or initiative), close it (work_project or work_initiative change, status done or dropped), or record a wait with its end (work_project or work_initiative wait). Nothing starts by itself. No reply is needed: the check sees what you do. Write nothing for the owner in this chat.)",
 			);
@@ -602,6 +630,19 @@ for (const pass of [1, 2]) {
 					error: "docs has no home chat",
 				});
 				expect(s.requestStall({ role: "nobody", items, text: "x" })).toMatchObject({ ok: false });
+				// No reply to it; for a dead end (Ops #483) the refusal says a reply doesn't clear it, and the ways out.
+				const sender = { role: "ops", title: "ops/tooling", file: home, chat: "home chat", handling: 1 };
+				const reply = (replyTo: string) => s.prepare(sender, { kind: "reply", to: "ops", replyTo, text: "on it" });
+				expect(reply(r.record.id)).toEqual({
+					ok: false,
+					error: `${r.record.id} is the work check's wake about stalled work: no reply is needed. Act with your tools (queue_add under it, work_project or work_initiative change or wait); the check sees what you do.`,
+				});
+				const dead = s.requestStall({ role: "ops", items: [{ ...items[0]!, rule: "dead-end" }], text: "body" });
+				if (!dead.ok) throw new Error(dead.error);
+				expect(reply(dead.record.id)).toEqual({
+					ok: false,
+					error: `${dead.record.id} is the work check's wake about project team-page-truth with nothing moving: a reply doesn't clear it. Take a way out with your tools: ${deadEndWaysOut("team-page-truth")} The check sees what you do.`,
+				});
 			} finally {
 				s.stop();
 			}

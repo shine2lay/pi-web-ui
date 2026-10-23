@@ -219,6 +219,45 @@ describe("installQueueHost", () => {
 		expect(i.startChat).toHaveBeenCalledWith(good);
 	});
 
+	it("dead-end (Ops #483): passes a checked request on, and turns a bad one or a failure into a problem", async () => {
+		const deadEnd = vi.fn(async () => ({ state: "dead" as const, why: "no open task left", name: "P", waysOut: "w" }));
+		uninstall = installQueueHost({ ...impl(), deadEnd });
+		const host = hostOnGlobal();
+		const req = { project: " p ", file: "/s/ops.jsonl", id: 3, state: "dropped" as const };
+		await expect(host?.deadEnd?.(req)).resolves.toEqual({
+			state: "dead",
+			why: "no open task left",
+			name: "P",
+			waysOut: "w",
+		});
+		expect(deadEnd).toHaveBeenCalledWith({ project: "p", file: "/s/ops.jsonl", id: 3, state: "dropped" });
+		await expect(host?.deadEnd?.({ project: "p" })).resolves.toMatchObject({ state: "dead" });
+		for (const [bad, problem] of [
+			[{ project: "" }, "no project given"],
+			[{ project: "p", file: "rel.jsonl", id: 3, state: "dropped" }, "no queue chat given"],
+			[{ project: "p", file: "/s/ops.jsonl", id: 0, state: "dropped" }, "no task number given"],
+			[{ project: "p", file: "/s/ops.jsonl", id: 3, state: "gone" }, "no task status given"],
+			[{ project: "p", id: 3 }, "no queue chat given"],
+		] as const) {
+			await expect(host?.deadEnd?.(bad as never)).resolves.toEqual({ problem });
+		}
+		expect(deadEnd).toHaveBeenCalledTimes(2);
+		uninstall();
+		uninstall = installQueueHost({
+			...impl(),
+			deadEnd: async () => {
+				throw new Error("registry gone");
+			},
+		});
+		await expect(hostOnGlobal()?.deadEnd?.({ project: "p" })).resolves.toEqual({
+			problem: "couldn't read the work registry (registry gone)",
+		});
+		// Without it, the host offers none (an older pi-web-ui): pi-queue says nothing about dead ends.
+		uninstall();
+		uninstall = installQueueHost(impl());
+		expect(hostOnGlobal()?.deadEnd).toBeUndefined();
+	});
+
 	it("rejects bad options without bothering the server", async () => {
 		const i = impl();
 		uninstall = installQueueHost(i);
