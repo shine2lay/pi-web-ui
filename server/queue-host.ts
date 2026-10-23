@@ -170,7 +170,9 @@ export interface QueueLeadRemind {
 	n: number;
 }
 
-export type QueueLeadRemindResult = { sent: true; at: number; to: string } | { held: string } | { missed: string };
+/** capped (Ops #492): held by the lead's daily cap, so pi-queue makes the task ask its main chat; an older pi-queue sees held. */
+export type QueueLeadRemindResult =
+	{ sent: true; at: number; to: string } | { held: string; capped?: true } | { missed: string };
 
 /** queue-lead-reminders: a role id as pi-queue writes it (lowercase letters, digits, dashes). */
 const ROLE_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;

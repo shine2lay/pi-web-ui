@@ -43,7 +43,10 @@
  * chat: pi-queue there shows the card after its running turn (as every queue card), or as a note when its
  * wakes are off. Once per block and reminder (the ledger, kept across restarts); reminders are queue cards,
  * not role messages, so they don't count against message chains. Nothing here approves, completes,
- * removes, restarts or unpauses a task, or ever goes to the owner.
+ * removes, restarts or unpauses a task, or ever goes to the owner. A due reminder the lead's daily cap
+ * holds (Ops #492, H-LEAD-CAP-1) used to wait in silence until midnight: now its queue is nudged as for a
+ * due one (logged once), remindLead says `capped`, and pi-queue makes the task ask its main chat (never the
+ * owner); nothing is sent or recorded. The owner's pause on role messages still holds it in silence.
  *
  * queue-escalation (owner 2026-10-16): a block whose chain pi-queue recorded (the lead of the task's project,
  * then of its initiative) gets one more reminder for each of them, two hours apart, after its lead's two;
@@ -254,8 +257,16 @@ export interface LeadRemindRequest {
 	since: number;
 	n: number;
 }
-/** sent: it went (at `at`, now or before); held: not now, the queue asks again later; missed: it can't go at all. */
-export type LeadRemindResult = { sent: true; at: number; to: string } | { held: string } | { missed: string };
+/**
+ * sent: it went (at `at`, now or before); held: not now, the queue asks again later; held with capped (Ops #492):
+ * the lead had its LEAD_DAY_CAP reminders today, so the task asks its main chat instead (a pi-queue that predates
+ * `capped` sees only held); missed: it can't go at all.
+ */
+export type LeadRemindResult =
+	{ sent: true; at: number; to: string } | { held: string; capped?: true } | { missed: string };
+
+/** queue-lead-reminders: why a reminder can't go now; `capped`: the lead's daily cap (not the owner's pause). */
+type LeadHold = { held: string; capped?: true };
 
 /** queue-lead-reminders: pi-queue's leadCommand: "/queue lead <id> <since> <n> <queue chat, base64url>". */
 export function leadCommand(id: number, since: number, n: number, queueFile: string): string {
@@ -331,6 +342,8 @@ export class QueueBlocks {
 	/** queue-lead-reminders: the reminders sent (the ledger, read once), and those on their way now. */
 	private ledgerCache: LeadReminderRecord[] | null = null;
 	private readonly sending = new Set<string>();
+	/** Ops #492: reminders the daily cap held that were logged (reminderKey -> when), one line each. */
+	private readonly capLogged = new Map<string, number>();
 	private timer: ReturnType<typeof setInterval> | null = null;
 	private ticking = false;
 	/** Bumped when a looked-up task's state changes: the panels' cache key. */
@@ -456,9 +469,24 @@ export class QueueBlocks {
 				if (v.kind !== "due" || v.at > now) continue;
 				if (v.why === "remind") {
 					// queue-lead-reminders: only when pi-queue there sends it (the queue runs) and it may go now (the
-					// owner's pause on role messages, the lead's daily cap); else a later round looks again.
-					if (!q.running || this.leadHeld({ lead: v.lead, queue: file, id: t.id, since: b.since, n: v.n }, now))
+					// owner's pause on role messages); else a later round looks again.
+					if (!q.running) continue;
+					const req = { lead: v.lead, queue: file, id: t.id, since: b.since, n: v.n };
+					const hold = this.leadHeld(req, now);
+					if (hold?.capped) {
+						// Ops #492 (H-LEAD-CAP-1): the lead had its reminders today. It used to wait here in silence until
+						// midnight; now pi-queue there hears `capped` from remindLead and the task asks its main chat.
+						const k = reminderKey(req);
+						if (!this.capLogged.has(k)) {
+							this.capLogged.set(k, now);
+							this.host.log(
+								`[queue-blocks] reminder ${v.n} to ${v.lead} about task #${t.id} in ${file} held by the daily cap; the task asks its main chat`,
+							);
+						}
+						due ??= `#${t.id}@${b.since}:capped${v.n}`;
 						continue;
+					}
+					if (hold) continue;
 					due ??= `#${t.id}@${b.since}:remind${v.n}`;
 					continue;
 				}
@@ -516,6 +544,7 @@ export class QueueBlocks {
 			this.host.saveWatch([...this.watch]);
 		}
 		for (const [k, at] of this.nudged) if (now - at > 24 * 3600_000) this.nudged.delete(k);
+		for (const [k, at] of this.capLogged) if (now - at > 24 * 3600_000) this.capLogged.delete(k);
 		const s = sig.sort().join("\n");
 		if (s !== this.lastSig) {
 			this.lastSig = s;
@@ -541,16 +570,16 @@ export class QueueBlocks {
 
 	/**
 	 * queue-lead-reminders: why reminder `req` can't go now (undefined: it may): the owner paused role
-	 * messages, or the lead had its LEAD_DAY_CAP reminders today (the rest wait for tomorrow). One that
-	 * went already may always be asked about again (it's only recorded then).
+	 * messages, or the lead had its LEAD_DAY_CAP reminders today (capped, Ops #492: the task asks its main
+	 * chat instead). One that went already may always be asked about again (it's only recorded then).
 	 */
-	private leadHeld(req: LeadRemindRequest, now: number): string | undefined {
+	private leadHeld(req: LeadRemindRequest, now: number): LeadHold | undefined {
 		const ledger = this.ledger();
 		if (ledger.some((r) => sameReminder(r, req))) return undefined;
-		if (this.host.rolePaused?.()) return "the owner paused role messages";
+		if (this.host.rolePaused?.()) return { held: "the owner paused role messages" };
 		const day = localDay(now);
 		const today = ledger.filter((r) => r.lead === req.lead && localDay(r.at) === day).length;
-		if (today >= LEAD_DAY_CAP) return `${req.lead} had its ${LEAD_DAY_CAP} reminders today`;
+		if (today >= LEAD_DAY_CAP) return { held: `${req.lead} had its ${LEAD_DAY_CAP} reminders today`, capped: true };
 		return undefined;
 	}
 
@@ -583,7 +612,7 @@ export class QueueBlocks {
 			// queue-escalation: reminder n goes to one lead only (the block's own, or the one above it in turn).
 			if (v.lead !== req.lead) return { held: `reminder ${req.n} goes to ${v.lead || "no lead"}, not ${req.lead}` };
 			const held = this.leadHeld(req, now);
-			if (held) return { held };
+			if (held) return held;
 			const role = this.host.roles().find((r) => r.id.toLowerCase() === req.lead);
 			if (!role) return { missed: `there's no role ${req.lead}` };
 			if (!role.homeChat) return { missed: `${req.lead} has no home chat` };

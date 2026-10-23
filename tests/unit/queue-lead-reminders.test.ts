@@ -75,6 +75,8 @@ class World {
 	ledger: LeadReminderRecord[] = [];
 	/** runCommand reaches the chat. */
 	reach = true;
+	/** pi-queue in the queue's chat predates `capped` (Ops #492): a reminder the daily cap holds is only held there. */
+	oldQueue = false;
 	ops(file: string, ...ops: Record<string, unknown>[]) {
 		const list = this.files.get(file) ?? [];
 		for (const op of ops) list.push({ v: 1, ts: this.now, ...op });
@@ -152,7 +154,8 @@ const panelOf = (w: World, file = A): UiTaskQueue =>
 	);
 
 /** What pi-queue in the queue's chat does when nudged: a lead reminder that's due goes through remindLead
- *  and is recorded once it went (or can't go at all); an ask that's due becomes its ask poke. */
+ *  and is recorded once it went (or can't go at all); an ask that's due becomes its ask poke. One the lead's
+ *  daily cap holds (Ops #492) becomes an ask poke too (never the owner's), with nothing recorded as sent. */
 async function queueChatLooks(w: World, blocks: QueueBlocks, file = A) {
 	for (const t of panelOf(w, file).tasks) {
 		const b = t.block;
@@ -172,7 +175,11 @@ async function queueChatLooks(w: World, blocks: QueueBlocks, file = A) {
 		}
 		if (v.why !== "remind") continue;
 		const r = await blocks.remindLead({ lead: v.lead, queue: file, id: t.id, since: b.since, n: v.n });
-		if ("held" in r) continue;
+		if ("held" in r) {
+			if ("capped" in r && r.capped === true && !w.oldQueue)
+				w.ops(file, { op: "poke", id: t.id, since: b.since, note: "capped", ask: true });
+			continue;
+		}
 		w.ops(file, {
 			op: "remind",
 			id: t.id,
@@ -445,22 +452,123 @@ describe("QueueBlocks: reminding the lead", () => {
 		}
 	});
 
-	it("at most ten a day to one lead; the rest wait for the next day", async () => {
-		const { w, blocks } = world();
-		// Ten reminders to Ops earlier today (Oct 16), about other tasks.
+	/** Oct 16 08:00, Ops had `n` reminders today already (about other tasks), Temper one (it doesn't count for Ops). */
+	const cappedDay = (w: World, n = LEAD_DAY_CAP) => {
 		w.now = new Date(2026, 9, 16, 8, 0).getTime();
-		for (let i = 0; i < LEAD_DAY_CAP; i++)
+		for (let i = 0; i < n; i++)
 			w.ledger.push({ at: w.now - i * MIN, lead: "ops", to: O, queue: "/s/other.jsonl", id: i + 1, since: 1, n: 1 });
-		// One to Temper doesn't count for Ops.
 		w.ledger.push({ at: w.now, lead: "temper", to: B, queue: "/s/other.jsonl", id: 99, since: 1, n: 1 });
+	};
+	const capLine = (n: number) =>
+		`[queue-blocks] reminder ${n} to ops about task #1 in ${A} held by the daily cap; the task asks its main chat`;
+	const capLines = (w: World) => w.logs.filter((l) => l.includes("daily cap"));
+
+	// Ops #492, H-LEAD-CAP-1: the cap used to hold a due reminder in silence (no nudge, no line, nothing
+	// recorded), so the task waited until midnight without its question ever being asked (Temper #139, Oct 23).
+	it("at most ten a day to one lead: one the cap holds makes the task ask its main chat at once, logged; nothing goes or is recorded", async () => {
+		const { w, blocks } = world();
+		cappedDay(w);
+		w.ops(A, leadBlock(w));
+		const since = sinceOf(w);
+		blocks.watchQueue(A);
+		await run(w, blocks, 59);
+		expect(w.to(A)).toEqual([]);
+		// At the checkpoint: the host tells the cap apart from the owner's pause.
+		w.now += MIN;
+		expect(await blocks.remindLead({ lead: "ops", queue: A, id: 1, since, n: 1 })).toEqual({
+			held: `ops had its ${LEAD_DAY_CAP} reminders today`,
+			capped: true,
+		});
+		await blocks.tick();
+		expect(w.to(A)).toEqual(["/queue blocks"]);
+		expect(w.logs).toContain(`[queue-blocks] nudged ${A} (#1@${since}:capped1)`);
+		expect(capLines(w)).toEqual([capLine(1)]);
+		await queueChatLooks(w, blocks);
+		const b = panelOf(w).tasks[0].block!;
+		expect(b.poke).toMatchObject({ ask: true });
+		expect(b.poke!.owner).toBeUndefined();
+		expect(b.reminders).toBeUndefined();
+		// Asked once: nothing more that day or after midnight; no reminder went, the ledger didn't grow.
+		await run(w, blocks, 20 * 60);
+		expect(w.to(A)).toEqual(["/queue blocks"]);
+		expect(capLines(w)).toEqual([capLine(1)]);
+		expect(w.to(O)).toEqual([]);
+		expect(w.to(T)).toEqual([]);
+		expect(w.ledger).toHaveLength(LEAD_DAY_CAP + 1);
+	});
+
+	it("with a chain up the work registry too: the cap makes the task ask its main chat, never the owner", async () => {
+		const { w, blocks } = world();
+		cappedDay(w);
+		w.ops(A, leadBlock(w));
+		const since = sinceOf(w);
+		w.ops(A, { op: "chain", id: 1, since, chain: ["temper"] });
+		blocks.watchQueue(A);
+		await run(w, blocks, 60);
+		const b = panelOf(w).tasks[0].block!;
+		expect(b.chain).toEqual(["temper"]);
+		expect(b.poke).toMatchObject({ ask: true });
+		expect(b.poke!.owner).toBeUndefined();
+		expect(w.to(O)).toEqual([]);
+		expect(w.to(B)).toEqual([]);
+	});
+
+	it("the owner's pause on role messages still holds it in silence, the cap reached or not; once lifted, the cap makes the task ask", async () => {
+		const { w, blocks } = world();
+		cappedDay(w);
+		w.paused = true;
 		w.ops(A, leadBlock(w));
 		const since = sinceOf(w);
 		blocks.watchQueue(A);
 		await run(w, blocks, 3 * 60);
 		expect(w.to(A)).toEqual([]);
+		expect(capLines(w)).toEqual([]);
 		expect(await blocks.remindLead({ lead: "ops", queue: A, id: 1, since, n: 1 })).toEqual({
-			held: `ops had its ${LEAD_DAY_CAP} reminders today`,
+			held: "the owner paused role messages",
 		});
+		expect(panelOf(w).tasks[0].block!.poke).toBeUndefined();
+		w.paused = false;
+		await run(w, blocks, 1);
+		expect(w.to(A)).toEqual(["/queue blocks"]);
+		expect(capLines(w)).toEqual([capLine(1)]);
+		expect(panelOf(w).tasks[0].block!.poke).toMatchObject({ ask: true });
+		expect(w.to(O)).toEqual([]);
+	});
+
+	it("under the cap nothing changes: the tenth goes; the eleventh, held by the cap, makes the task ask", async () => {
+		const { w, blocks } = world();
+		cappedDay(w, LEAD_DAY_CAP - 1);
+		w.ops(A, leadBlock(w));
+		const since = sinceOf(w);
+		blocks.watchQueue(A);
+		await run(w, blocks, 60);
+		expect(w.to(O)).toEqual([leadCommand(1, since, 1, A)]);
+		expect(w.to(A)).toEqual(["/queue blocks"]);
+		expect(capLines(w)).toEqual([]);
+		expect(panelOf(w).tasks[0].block!.reminders).toHaveLength(1);
+		expect(panelOf(w).tasks[0].block!.poke).toBeUndefined();
+		await run(w, blocks, 2 * 60);
+		expect(w.to(O)).toHaveLength(1);
+		expect(w.to(A)).toEqual(["/queue blocks", "/queue blocks"]);
+		expect(capLines(w)).toEqual([capLine(2)]);
+		expect(panelOf(w).tasks[0].block!.poke).toMatchObject({ ask: true });
+		expect(w.ledger.filter((r) => r.lead === "ops")).toHaveLength(LEAD_DAY_CAP);
+	});
+
+	it("an older pi-queue that doesn't know capped only holds it: nudged every RENUDGE_MS, logged once; it goes the next day", async () => {
+		const { w, blocks } = world();
+		w.oldQueue = true;
+		cappedDay(w);
+		w.ops(A, leadBlock(w));
+		const since = sinceOf(w);
+		blocks.watchQueue(A);
+		await run(w, blocks, 60);
+		expect(w.to(A)).toEqual(["/queue blocks"]);
+		await run(w, blocks, 30);
+		expect(w.to(A)).toHaveLength(1 + (30 * MIN) / RENUDGE_MS);
+		expect(capLines(w)).toEqual([capLine(1)]);
+		expect(panelOf(w).tasks[0].block!.poke).toBeUndefined();
+		expect(w.to(O)).toEqual([]);
 		// Next day, just after midnight.
 		w.now = new Date(2026, 9, 17, 0, 0).getTime();
 		await run(w, blocks, 1);
@@ -783,6 +891,7 @@ describe("the queue host's remindLead and leadChat", () => {
 			remindLead: async (req) => {
 				asked.push(req);
 				if (req.id === 9) throw new Error("disk full");
+				if (req.id === 8) return { held: "ops had its 10 reminders today", capped: true };
 				return { sent: true, at: 1, to: O };
 			},
 		});
@@ -801,10 +910,15 @@ describe("the queue host's remindLead and leadChat", () => {
 			expect(await host.remindLead!({ lead: "ops", queue: A, id: 9, since: 5, n: 1 })).toEqual({
 				held: "couldn't send it (disk full)",
 			});
+			// Ops #492: the daily cap's hold reaches pi-queue told apart from the other holds.
+			expect(await host.remindLead!({ lead: "ops", queue: A, id: 8, since: 5, n: 1 })).toEqual({
+				held: "ops had its 10 reminders today",
+				capped: true,
+			});
 			expect(await host.remindLead!({ lead: "ops", queue: A, id: 1, since: 5, n: 7 })).toEqual({
 				missed: "no reminder number given",
 			});
-			expect(asked).toHaveLength(2);
+			expect(asked).toHaveLength(3);
 		} finally {
 			down();
 		}
