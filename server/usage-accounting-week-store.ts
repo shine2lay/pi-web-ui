@@ -488,7 +488,9 @@ const receiptTag = (kind: UsageWeekReceiptKind, k: string) => `${kind === "ledge
 /**
  * A receipt's line, or null when it is not one this store keeps: k first at a fixed place (reload reads the key and
  * kind there without parsing), the receipt itself canonical (sorted keys), printable ASCII only. Every identifier the
- * contract allows is ASCII without spaces, so no chat text can fit.
+ * contract allows is ASCII without spaces, so no chat text can fit. It is also one W2 itself takes back (Architecture
+ * HOME F3): the checks W2's receipt() and sameCall() make without their reader's projection are made here too, at
+ * admission and on return; the ones that compare with the projection stay W2's.
  */
 function receiptLine(x: unknown): string | null {
 	if (!closed(x, "k,kind,r")) return null;
@@ -514,6 +516,17 @@ function receiptLine(x: unknown): string | null {
 			return null;
 		if (alias !== null && alias.aliasFactId !== r.fact.id) return null;
 		if (!acceptedFact(r.fact, alias === null ? [] : [alias])) return null;
+		// W2's receipt() (usage-accounting-ledger-source.ts): pi's own first call for this key, nothing linked yet.
+		const fact = r.fact as unknown as LedgerNativeReceipt["fact"];
+		if (
+			fact.identity.producer !== "pi" ||
+			fact.revision !== 0 ||
+			fact.source.event !== `response:${k}` ||
+			fact.links.task !== null ||
+			fact.links.run !== null ||
+			fact.source.coverage !== "partial"
+		)
+			return null;
 	} else if (kind === "same-call") {
 		if (
 			!closed(r, "canonical,evidenceRef,provider,responseId") ||
@@ -524,10 +537,19 @@ function receiptLine(x: unknown): string | null {
 			!acceptedFact(r.canonical, [])
 		)
 			return null;
+		// W2's sameCall(): the original is a verified pi or acp call.
+		const original = r.canonical as unknown as LedgerSameCall["canonical"];
+		if (!["pi", "acp"].includes(original.identity.producer) || original.identityStatus !== "verified") return null;
 	} else return null;
 	const line = `${RECEIPT_HEAD}${k}","kind":"${kind}","r":${canonical(r)}}\n`;
 	return PRINTABLE.test(line) ? line : null;
 }
+/**
+ * When a receipt's call happened: the native fact's time, or the same-call original's. Like a record, a receipt belongs
+ * to the week its call happened in (Architecture HOME F2).
+ */
+const receiptAt = (x: UsageWeekReceipt) =>
+	x.kind === "ledger-native" ? x.r.fact.occurredAt : x.r.canonical.occurredAt;
 /** A ledger-native receipt may change once: from no alias to an alias, everything else the same (W2 :859). */
 function aliasAttached(before: string, x: UsageWeekReceipt): boolean {
 	if (x.kind !== "ledger-native" || x.r.alias === null) return false;
@@ -1086,7 +1108,10 @@ export class UsageWeekStore {
 			dropped,
 		};
 	}
-	/** A sealed week's main log is frozen: its sha256 was proven when sealed, so here only its length is checked. */
+	/**
+	 * A sealed week's main log is frozen: its sha256 was proven when sealed, so here only its length and its header are
+	 * checked (Architecture HOME F4: another version, or another week's header, is not this week's log).
+	 */
 	private loadSealed(
 		s: WeekState,
 		checkpoint: UsageWeekCheckpoint | null,
@@ -1098,6 +1123,7 @@ export class UsageWeekStore {
 		const log = this.file(s.log.name);
 		try {
 			check(log.stat.size === head.log.length, "log-mismatch");
+			this.checkHeader(log.fd, log.stat.size, headerLine(s.week, "log"), CORRUPT.log);
 			s.log = { ...track(s.week, "log"), length: head.log.length, records: head.log.records, stat: log.stat };
 		} finally {
 			closeSync(log.fd);
@@ -1158,6 +1184,9 @@ export class UsageWeekStore {
 			const r = this.prepare(s, records, (k) => s.log.keys.has(k)),
 				x = this.prepareReceipts(s, receipts);
 			check(s.log.records + r.lines.length <= this.limits.weekRecords, "store-capacity");
+			// The main log's header comes before any receipt (Architecture HOME F1): a first batch of receipts alone, cut
+			// after they synced, then reloads as an open week with nothing committed, never as a week whose log is missing.
+			if (x.lines.length > 0) this.ensureLog(s.log, s.week);
 			this.addLines(s, s.log, r.lines, r.keys);
 			this.addLines(s, s.receipts, x.lines, []);
 			return {
@@ -1210,6 +1239,8 @@ export class UsageWeekStore {
 		for (const x of receipts) {
 			const line = receiptLine(x);
 			check(line !== null && line.length <= this.limits.receiptBytes, "invalid-receipt");
+			const at = receiptAt(x as UsageWeekReceipt);
+			check(at >= s.start && at < s.end, "wrong-week");
 			const { kind, k } = x as UsageWeekReceipt,
 				tag = receiptTag(kind, k),
 				before = pending.get(tag) ?? this.storedReceipt(s, tag);
@@ -1269,6 +1300,8 @@ export class UsageWeekStore {
 				return fail("receipts-corrupt");
 			}
 			check(x.kind === kind && x.k === k && receiptLine(x) === line, "receipts-corrupt");
+			const at = receiptAt(x);
+			check(at >= s.start && at < s.end, "receipts-corrupt");
 			return x.r;
 		});
 	}
@@ -1509,20 +1542,7 @@ export class UsageWeekStore {
 			const size = f.stat.size,
 				limit = certified?.length ?? header.length,
 				buffer = Buffer.allocUnsafe(READ_BYTES);
-			const peek = Math.min(size, 512);
-			this.readInto(f.fd, buffer, peek, 0);
-			const newline = buffer.subarray(0, peek).indexOf(0x0a),
-				first = buffer.toString("latin1", 0, newline < 0 ? peek : newline + 1);
-			if (first !== header) {
-				let parsed: unknown = null;
-				try {
-					parsed = JSON.parse(first);
-				} catch {
-					/* not a header at all */
-				}
-				version(parsed, LOG_V, corrupt);
-				fail(corrupt);
-			}
+			this.checkHeader(f.fd, size, header, corrupt);
 			check(limit >= header.length && limit <= size, lost);
 			check(
 				limit <= header.length + (receipts ? this.limits.weekReceipts : this.limits.weekRecords) * lineBytes,
@@ -1837,6 +1857,26 @@ export class UsageWeekStore {
 			closeSync(fd);
 			throw e;
 		}
+	}
+	/**
+	 * A log's first line (at most 512 bytes read) must be its own header: the same family with another version is
+	 * store-version, anything else is `corrupt`. Shared by every reload path, the sealed one included.
+	 */
+	private checkHeader(fd: number, size: number, header: string, corrupt: UsageWeekStoreCode): void {
+		const peek = Math.min(size, 512),
+			buffer = Buffer.allocUnsafe(peek);
+		this.readInto(fd, buffer, peek, 0);
+		const newline = buffer.indexOf(0x0a),
+			first = buffer.toString("latin1", 0, newline < 0 ? peek : newline + 1);
+		if (first === header) return;
+		let parsed: unknown = null;
+		try {
+			parsed = JSON.parse(first);
+		} catch {
+			/* not a header at all */
+		}
+		version(parsed, LOG_V, corrupt);
+		fail(corrupt);
 	}
 	private readInto(fd: number, buffer: Buffer, length: number, offset: number): void {
 		for (let done = 0; done < length;) {

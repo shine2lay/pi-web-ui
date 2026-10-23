@@ -159,6 +159,19 @@ describe("usage-accounting week store: every crash point keeps the committed rec
 	])("commits all or none of a sealed week's adjustments across %s", async (variant, kept, cut) => {
 		expect(await runCase("crashAdjust", { variant })).toEqual({ kept, cut });
 	});
+	it("reloads a receipt-only first batch cut after its receipts synced as an open week with nothing committed (HOME F1)", async () => {
+		expect(await runCase("receiptOnlyCrash")).toEqual({
+			reload: {
+				state: "open",
+				week: "2026-10-19",
+				records: 0,
+				receipts: 0,
+				checkpoint: null,
+				dropped: { records: 0, receipts: true },
+			},
+			same: true,
+		});
+	});
 });
 
 describe("usage-accounting week store: damage gives unavailable, never zero", () => {
@@ -174,6 +187,8 @@ describe("usage-accounting week store: damage gives unavailable, never zero", ()
 		["receipts-missing", "receipts-missing", "none"],
 		["sealed-sha", "sealed-corrupt", "unavailable"],
 		["sealed-keys", "sealed-corrupt", "sealed"],
+		["sealed-log-version", "store-version", "sealed"],
+		["sealed-log-week", "log-corrupt", "sealed"],
 	])("a %s makes the week unavailable, leaves its bytes and refuses writes", async (variant, code, sealedTotals) => {
 		expect(await runCase("mismatch", { variant })).toEqual({ load: unavailable(code), sealedTotals });
 	});
@@ -221,6 +236,32 @@ describe("usage-accounting week store: W2 receipts and unknown dispositions surv
 				committed: { receipts: 0, receiptDuplicates: 0 },
 			},
 			refused: ["invalid-receipt", "invalid-receipt"],
+		});
+	});
+	it("takes a receipt only in the week its call happened in, on append, adjust and return (HOME F2)", async () => {
+		const edges = ["wrong-week", "no-error", "no-error", "wrong-week"];
+		expect(await runCase("receiptWeeks")).toEqual({
+			append: { native: edges, same: edges },
+			otherWeek: ["wrong-week", "wrong-week"],
+			adjust: { native: edges, same: edges },
+			returned: ["receipts-corrupt", "receipts-corrupt"],
+		});
+	});
+	it("keeps only receipts W2 itself takes back: refused on append, by W2 and on return (HOME F3)", async () => {
+		const refused = ["invalid-receipt", "index-unavailable", "receipts-corrupt"],
+			unverified = ["invalid-receipt", "same-call-unverified", "receipts-corrupt"],
+			kept = ["no-error", "accepted", "no-error"];
+		expect(await runCase("strictReceipts")).toEqual({
+			native: {
+				none: kept,
+				event: refused,
+				producer: refused,
+				revision: refused,
+				task: refused,
+				run: refused,
+				coverage: refused,
+			},
+			same: { none: kept, unverified, producer: unverified },
 		});
 	});
 });

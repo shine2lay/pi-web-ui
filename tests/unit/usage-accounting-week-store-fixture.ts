@@ -222,6 +222,98 @@ const sameCall = (responseId: string): UsageWeekReceipt => ({
 	r: witness(responseId),
 });
 const native = (r: LedgerNativeReceipt): UsageWeekReceipt => ({ kind: "ledger-native", k: r.key, r });
+/** W2's native receipt for a call at `at`, built as usage-accounting-ledger-source.ts builds one, with no alias. */
+function nativeAt(responseId: string, at: string): UsageWeekReceipt {
+	const key = sameCallKey(responseId),
+		identity = {
+			producer: "pi" as const,
+			incarnation: `ledger-response:${sha("anthropic")}`,
+			attempt: `response:${sha(responseId)}`,
+		};
+	return native({
+		v: "usage-ledger-native/1",
+		key,
+		numericSha256: sha(`fixture-numbers:${responseId}`),
+		fact: {
+			...fact(),
+			id: factId(identity),
+			identity,
+			identityStatus: "unresolved",
+			occurredAt: at,
+			source: { stream: "fixture-ledger", event: `response:${key}`, observedAt: at, coverage: "partial" },
+		},
+		alias: null,
+	});
+}
+/** A same-call receipt whose session original happened at `at`. */
+const sameCallAt = (responseId: string, at: string): UsageWeekReceipt => ({
+	kind: "same-call",
+	k: sameCallKey(responseId),
+	r: { ...witness(responseId), canonical: { ...fact(), occurredAt: at, source: { ...fact().source, observedAt: at } } },
+});
+/**
+ * Writes a receipt line straight into the week's receipts file, as damage or an older store could leave one, and
+ * re-signs the checkpoint over it: only the return path's own check stands between that line and W2.
+ */
+function plantReceipt(x: { kind: string; k: string; r: unknown }): void {
+	appendFileSync(file(name("receipts")), `{"k":"${x.k}","kind":"${x.kind}","r":${canonical(x.r)}}\n`);
+	const receipts = bytes(name("receipts"));
+	resign(name("checkpoint"), (c) => {
+		c.receipts = {
+			length: receipts.length,
+			records: receipts.toString("latin1").split("\n").length - 2,
+			sha256: sha(receipts),
+		};
+	});
+}
+/**
+ * A synthetic private ledger of two lines (a helper call, and a chat call whose session original is known only
+ * through a same-call witness, response-1) and W2's request for it.
+ */
+function syntheticLedger(): LedgerReadRequest {
+	const directory = join(data.dir, "usage-ledger");
+	mkdirSync(directory, { mode: 0o700 });
+	const ledger = (changes: Record<string, unknown>) => ({
+		v: "usage-ledger/1",
+		at: LEDGER_AT,
+		occurredAt: LEDGER_AT,
+		kind: "assistant",
+		provider: "anthropic",
+		model: "recorded-model",
+		modelSource: "response",
+		responseId: "response-1",
+		stopReason: "stop",
+		input: 10,
+		output: 2,
+		cacheRead: 3,
+		cacheWrite: 4,
+		totalTokens: 19,
+		costTotal: 0.125,
+		conversationId: "helper-1",
+		sessionId: "session-1",
+		sessionFile: null,
+		persist: false,
+		origin: "helper",
+		parentConversationId: "parent-1",
+		...changes,
+	});
+	const rows = [
+		ledger({ responseId: "response-native" }),
+		ledger({ responseId: "response-1", persist: true, sessionFile: "/sealed/session.jsonl", origin: "chat" }),
+	];
+	writeFileSync(join(directory, "2026-10.jsonl"), rows.map((r) => `${JSON.stringify(r)}\n`).join(""), {
+		mode: 0o600,
+	});
+	return {
+		directory,
+		month: "2026-10",
+		from: LEDGER_FROM,
+		through: LEDGER_THROUGH,
+		observedAt: LEDGER_THROUGH,
+		cursor: null,
+		production: "enabled",
+	};
+}
 
 /** A reload with every record handed over, as B3 will do: the log's and the adjustments, in file order. */
 function loadAll(s: UsageWeekStore, week = W) {
@@ -562,6 +654,15 @@ const cases: Record<string, () => unknown> = {
 				expected = "sealed-corrupt";
 				break;
 			}
+			// Architecture HOME F4: a sealed week's retained log keeps its length but not its header.
+			case "sealed-log-version":
+				edit(name("log"), "usage-week-log/1", "usage-week-log/2");
+				expected = "store-version";
+				break;
+			case "sealed-log-week":
+				edit(name("log"), `"week":"${W}"`, `"week":"2026-10-12"`);
+				expected = "log-corrupt";
+				break;
 			default:
 				throw new Error(`fixture-unknown-variant:${variant}`);
 		}
@@ -803,48 +904,7 @@ const cases: Record<string, () => unknown> = {
 	 * committed with each batch, the store reopened between reads.
 	 */
 	ledgerReceipts() {
-		const directory = join(data.dir, "usage-ledger");
-		mkdirSync(directory, { mode: 0o700 });
-		const ledger = (changes: Record<string, unknown>) => ({
-			v: "usage-ledger/1",
-			at: LEDGER_AT,
-			occurredAt: LEDGER_AT,
-			kind: "assistant",
-			provider: "anthropic",
-			model: "recorded-model",
-			modelSource: "response",
-			responseId: "response-1",
-			stopReason: "stop",
-			input: 10,
-			output: 2,
-			cacheRead: 3,
-			cacheWrite: 4,
-			totalTokens: 19,
-			costTotal: 0.125,
-			conversationId: "helper-1",
-			sessionId: "session-1",
-			sessionFile: null,
-			persist: false,
-			origin: "helper",
-			parentConversationId: "parent-1",
-			...changes,
-		});
-		const rows = [
-			ledger({ responseId: "response-native" }),
-			ledger({ responseId: "response-1", persist: true, sessionFile: "/sealed/session.jsonl", origin: "chat" }),
-		];
-		writeFileSync(join(directory, "2026-10.jsonl"), rows.map((r) => `${JSON.stringify(r)}\n`).join(""), {
-			mode: 0o600,
-		});
-		const request: LedgerReadRequest = {
-			directory,
-			month: "2026-10",
-			from: LEDGER_FROM,
-			through: LEDGER_THROUGH,
-			observedAt: LEDGER_THROUGH,
-			cursor: null,
-			production: "enabled",
-		};
+		const request = syntheticLedger();
 		let s = open();
 		const first = (k: string) => s.receipt(W, "ledger-native", k);
 		const sameCallReader = (provider: string, responseId: string) =>
@@ -900,6 +960,133 @@ const cases: Record<string, () => unknown> = {
 			read2: { ...summary(read2), committed: committed2 },
 			read3: { ...summary(read3), committed: committed3 },
 			refused,
+		};
+	},
+
+	/**
+	 * Architecture HOME F2: a receipt belongs to the week its call happened in, as a record does (the native fact's
+	 * occurredAt, or the same-call original's). The week's first and last milliseconds are in, the ones just outside are
+	 * not, for both kinds, on append and on a sealed week's adjust; a call of another week is refused; and a stored
+	 * receipt from outside the week is damage on return, never an answer.
+	 */
+	receiptWeeks() {
+		const edges = [
+			"2026-10-19T06:59:59.999Z", // just before the week
+			"2026-10-19T07:00:00.000Z", // its first millisecond, Monday 00:00 PDT
+			"2026-10-26T06:59:59.999Z", // its last
+			"2026-10-26T07:00:00.000Z", // the next week's first
+		];
+		const makers = { native: nativeAt, same: sameCallAt };
+		let s = open();
+		seed(s, 1, [sameCall("response-seed")]);
+		const offer = (call: (x: UsageWeekReceipt) => unknown, tag: string) =>
+			Object.fromEntries(
+				Object.entries(makers).map(([kind, make]) => [
+					kind,
+					edges.map((at, i) => codeOf(() => call(make(`response-${tag}-${kind}-${i}`, at)))),
+				]),
+			);
+		const append = offer((x) => s.append(W, [], [x]), "append");
+		// Calls of October 20 offered to the week of October 26.
+		assert.equal(s.reload(NEXT).state, "empty");
+		const otherWeek = Object.entries(makers).map(([kind, make]) =>
+			codeOf(() => s.append(NEXT, [], [make(`response-other-${kind}`, LEDGER_AT)])),
+		);
+		s.checkpoint(W, cursors(2));
+		clock = AFTER;
+		s.seal(W, COMPLETE);
+		const adjust = offer((x) => s.adjust(W, [], [x]), "late");
+		close(s);
+		const planted = [nativeAt("response-planted-native", edges[0]), sameCallAt("response-planted-same", edges[3])];
+		for (const x of planted) plantReceipt(x);
+		const returned = planted.map((x) => {
+			s = open();
+			assert.equal(s.reload(W).state, "sealed");
+			assert.deepEqual(s.receipt(W, "same-call", sameCallKey("response-seed")), witness("response-seed"));
+			const code = codeOf(() => s.receipt(W, x.kind, x.k));
+			close(s);
+			return code;
+		});
+		return { append, otherWeek, adjust, returned };
+	},
+
+	/**
+	 * Architecture HOME F3: the store keeps only receipts W2 itself takes back, checking what W2's receipt() and
+	 * sameCall() check without the reader's projection. Each variant is valid to the contract and differs from a
+	 * W2-written receipt in one such field: refused on append (invalid-receipt), refused by W2 itself when a reader hands
+	 * it over (index-unavailable, same-call-unverified) and, planted in the file, refused on return (receipts-corrupt).
+	 * The unchanged receipts pass all three.
+	 */
+	strictReceipts() {
+		const request = syntheticLedger();
+		let s = open();
+		seed(s, 1, [sameCall("response-seed")]);
+		close(s);
+		const good = readUsageLedger(request, { first: () => null }, () => 0).nativeReceipts.find((r) => r.alias === null)!;
+		const saved = (["receipts", "checkpoint"] as const).map((kind) => [kind, bytes(name(kind))] as const);
+		const restore = () => {
+			for (const [kind, b] of saved) writeFileSync(file(name(kind)), b);
+		};
+		const verdicts = (x: UsageWeekReceipt) => {
+			s = open();
+			assert.equal(s.reload(W).state, "open");
+			const append = codeOf(() => s.append(W, [], [x]));
+			close(s);
+			const faults = readUsageLedger(
+				request,
+				x.kind === "ledger-native"
+					? { first: (k) => (k === x.k ? x.r : null) }
+					: { first: () => null, sameCall: (_p, id) => (id === "response-1" ? x.r : null) },
+				() => 0,
+			).faults.map((f) => f.code);
+			const refusal = x.kind === "ledger-native" ? "index-unavailable" : "same-call-unverified";
+			restore();
+			plantReceipt(x);
+			s = open();
+			assert.equal(s.reload(W).state, "open");
+			const returned = codeOf(() => s.receipt(W, x.kind, x.k));
+			close(s);
+			restore();
+			return [append, faults.includes(refusal) ? refusal : "accepted", returned];
+		};
+		const membership = {
+			queue: "fixture-queue",
+			task: 422,
+			addedAt: LEDGER_FROM,
+			project: null,
+			initiative: null,
+			effectiveAt: LEDGER_FROM,
+		};
+		const nativeVariants: Record<string, (r: LedgerNativeReceipt) => LedgerNativeReceipt> = {
+			none: (r) => r,
+			event: (r) => ({ ...r, fact: { ...r.fact, source: { ...r.fact.source, event: "native-entry" } } }),
+			producer: (r) => {
+				const identity = { ...r.fact.identity, producer: "temper" as const };
+				return { ...r, fact: { ...r.fact, identity, id: factId(identity) } };
+			},
+			revision: (r) => ({ ...r, fact: { ...r.fact, revision: 1, supersedes: 0 } }),
+			task: (r) => ({ ...r, fact: { ...r.fact, links: { ...r.fact.links, task: membership } } }),
+			run: (r) => ({ ...r, fact: { ...r.fact, links: { ...r.fact.links, run: "fixture-run" } } }),
+			coverage: (r) => ({ ...r, fact: { ...r.fact, source: { ...r.fact.source, coverage: "complete" } } }),
+		};
+		const sameVariants: Record<string, (w: LedgerSameCall) => LedgerSameCall> = {
+			none: (w) => w,
+			unverified: (w) => ({ ...w, canonical: { ...w.canonical, identityStatus: "unresolved" } }),
+			producer: (w) => {
+				const identity = { ...w.canonical.identity, producer: "temper" as const };
+				return { ...w, canonical: { ...w.canonical, identity, id: factId(identity) } };
+			},
+		};
+		return {
+			native: Object.fromEntries(
+				Object.entries(nativeVariants).map(([n, change]) => [n, verdicts(native(change(good)))]),
+			),
+			same: Object.fromEntries(
+				Object.entries(sameVariants).map(([n, change]) => [
+					n,
+					verdicts({ kind: "same-call", k: sameCallKey("response-1"), r: change(witness("response-1")) }),
+				]),
+			),
 		};
 	},
 
@@ -1008,6 +1195,69 @@ const cases: Record<string, () => unknown> = {
 		assert.deepEqual(kept, late);
 		assert.deepEqual(again.dropped, { records: 0, receipts: 0 });
 		return { kept: adjustments.length, cut: load.dropped.records > 0 };
+	},
+
+	/**
+	 * Architecture HOME F1: B3's first batch of a week can hold receipts and no records. Cut by a crash after its
+	 * receipts synced, it must reload as an open week with nothing committed, never as a missing log; and B3's re-read
+	 * from there must leave the same records, receipts, unknowns and cursors as a run with no crash.
+	 */
+	receiptOnlyCrash() {
+		clock = AFTER;
+		const batches: { records: UsageWeekRecord[]; receipts: UsageWeekReceipt[] }[] = [
+			{ records: [], receipts: [sameCall("response-f1-a")] },
+			{
+				records: [record(0), record(1, { d: "unverified", usd: null }), gap(2)],
+				receipts: [sameCall("response-f1-b"), nativeAt("response-f1-c", LEDGER_AT)],
+			},
+		];
+		// B3 reads from the start: each batch appended, then checkpointed with its cursors.
+		const pass = (s: UsageWeekStore) =>
+			batches.forEach((b, i) => {
+				s.append(W, b.records, b.receipts);
+				s.checkpoint(W, cursors(i + 1));
+			});
+		// What a restarted reader gets: records, every receipt by key, cursors, the files and the sealed totals.
+		const seen = (s: UsageWeekStore, dir: string) => {
+			const { load, records } = loadAll(s);
+			assert(load.state === "open");
+			const receipts = batches.flatMap((b) => b.receipts.map((x) => s.receipt(W, x.kind, x.k)));
+			const files = ["log", "receipts"].map((kind) =>
+				sha(readFileSync(join(dir, USAGE_WEEK_DIRECTORY, `week-${W}.${kind}`))),
+			);
+			return {
+				records,
+				receipts: [load.receipts, receipts],
+				cursors: { files: load.checkpoint?.files, ledger: load.checkpoint?.ledger },
+				files,
+				total: s.seal(W, PARTIAL).total,
+			};
+		};
+		const crash = crashAt("after-receipts-sync");
+		let s = open({ fault: crash.fault });
+		assert.equal(s.reload(W).state, "empty");
+		crash.arm();
+		assert.equal(
+			codeOf(() => s.append(W, batches[0].records, batches[0].receipts)),
+			"io-failure",
+		);
+		s = reopen(s);
+		const reload = s.reload(W);
+		if (reload.state !== "open") return { reload };
+		pass(s);
+		s = reopen(s);
+		const crashed = seen(s, data.dir);
+		close(s);
+		const dir = join(data.dir, "no-crash");
+		mkdirSync(dir, { mode: 0o700 });
+		const clean = { dataDir: dir, lease: new SharedArrayBuffer(4) };
+		let c = open(clean);
+		assert.equal(c.reload(W).state, "empty");
+		pass(c);
+		c = reopen(c, clean);
+		assert.deepEqual(crashed, seen(c, dir), "the same records, receipts, unknowns and cursors as a run with no crash");
+		const { dropped } = reload;
+		return { reload: { ...reload, dropped: { records: dropped.records, receipts: dropped.receipts > 0 } }, same: true };
 	},
 
 	quarantine() {
