@@ -1463,7 +1463,7 @@ export interface EngineService {
 	noteRoleReportRefused?(role: unknown, date: unknown, why: string): void;
 	/** role-messages (pi engine): set by index.ts; the list changed. */
 	onRoleMessagesChanged?: (() => void) | null;
-	/** role-message-ladder (pi engine): the open Owner questions (messages 12+, or escalated). */
+	/** role-message-ladder (pi engine): open Owner questions at the active Owner tier, or explicitly escalated. */
 	roleGuardQuestions?(): Promise<UiRoleGuardQuestion[]>;
 	/** role-message-ladder (pi engine): the owner's answer from this authenticated page. */
 	roleGuardOwnerAnswer?(

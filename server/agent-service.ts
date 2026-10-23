@@ -16029,7 +16029,7 @@ export class AgentService {
 		this.roleMessages.deferUntilStart();
 		roleMessageService = this.roleMessages;
 		// role-message-ladder (#122): the approval ladder; it starts with startRoleMessages. Until it is ready (or if it
-		// can't start) message_role keeps the native 6-message rule.
+		// can't start) message_role keeps the native active-policy free-chain/hourly boundaries.
 		this.roleGuard = new RoleMessageGuardHost({
 			dir: join(this.stateStore.dataDir, "role-message-guard"),
 			roleMessages: () => this.roleMessages,
@@ -16104,7 +16104,7 @@ export class AgentService {
 	/** index.ts: the list in Settings -> Identities changed (it is pushed to every window). */
 	onRoleMessagesChanged: (() => void) | null = null;
 
-	/** role-message-ladder (#122): hops 7-11 need the COO's grant, 12+ the owner's (role-message-guard-host.ts). */
+	/** role-message-ladder (#122): versioned finite approval tiers from role-message-limits.ts. */
 	private readonly roleGuard: RoleMessageGuardHost;
 	/** index.ts: the open Owner questions changed (pushed to every window). */
 	onRoleGuardChanged: (() => void) | null = null;

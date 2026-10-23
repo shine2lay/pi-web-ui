@@ -9,9 +9,7 @@ import {
 	FOR_OWNER_TURN_HINT,
 	QUIET_REPLY_HINT,
 	QUIET_TURN_HINT,
-	ROLE_MESSAGE_CHAIN_MAX,
 	ROLE_MESSAGE_CUSTOM_TYPE,
-	ROLE_MESSAGES_PER_HOUR,
 	ROLE_MESSAGES_KEEP,
 	RoleMessages as RoleMessagesBase,
 	chatLabel,
@@ -24,6 +22,10 @@ import {
 	type RoleMessageSender,
 } from "../../server/role-messages.js";
 import { makeMessageRoleTool, sameTextHint } from "../../server/role-message-tool.js";
+import { GUARD_POLICY_V1 } from "../../server/role-message-limits.js";
+// Frozen original regression vectors, not active-policy expectations.
+const ROLE_MESSAGE_CHAIN_MAX = GUARD_POLICY_V1.depth.unapprovedThrough;
+const ROLE_MESSAGES_PER_HOUR = GUARD_POLICY_V1.ordinary.acceptedPerOrigin;
 
 let dir = "";
 let now = Date.parse("2026-10-04T12:00:00Z");
@@ -33,7 +35,7 @@ const clock = () => now;
 const made: RoleMessagesBase[] = [];
 class RoleMessages extends RoleMessagesBase {
 	constructor(...args: ConstructorParameters<typeof RoleMessagesBase>) {
-		super(...args);
+		super(args[0], args[1], args[2], args[3] ?? GUARD_POLICY_V1);
 		made.push(this);
 	}
 }

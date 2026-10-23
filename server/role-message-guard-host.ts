@@ -6,14 +6,14 @@
 //   admission authority and its journal), A role-message-guard-approvals.ts (request / decide / Owner question).
 // This file supplies the real host ports E and A need: who is sending (the server's chat binding, never the
 // model's words), where the chat stands in its message chain (RoleMessages.causalityOf), who approves (the COO's
-// current home chat; the owner at hop 12+ or when the COO asks for itself), the native first-answer record for
+// current home chat; the Owner at the active Owner boundary or when the COO asks for itself), the native first-answer record for
 // approver and Owner answers (decisions.jsonl), the Owner question (browser dialog + authorised Telegram), the
 // transport (RoleMessages.admit) and one in-process lease over every guard write.
 //
-// Policy (owner, 2026-10-12, PLAN-v3-SPLIT.md): hops 1–6 as before; 7–11 need a finite COO grant; 12+ a finite
-// Owner grant (12–16 at most). No urgent exemption of any kind in this delivery (#125/#130). The 20 accepted per
-// role per rolling hour is unchanged, approval controls included. When the guard can't start or recover, sends fall
-// back to the native depth-6 rule (RoleMessages.send), the same as a rollback to the previous build.
+// Active policy comes from role-message-limits.ts; persisted requests/grants retain their own policy version.
+// No urgent exemption of any kind (#125/#130). Approval controls still count in the ordinary rolling hour.
+// When the guard can't start or recover, sends fall back to the SAME active native free-chain/hourly policy.
+// rollback_depth_6 is a separate frozen legacy 6/20 mode, never a name for the expanded policy.
 // ---------------------------------------------------------------------------
 
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -41,7 +41,7 @@ import { basename, join } from "node:path";
 import type { Ask, AskFieldAnswer, AskHub } from "./asks.js";
 import type { UiRoleGuardQuestion } from "./protocol.js";
 import { samePath, type IdentityDef } from "./identities.js";
-import { createGuardApprovalAdapters } from "./role-message-guard-approvals.js";
+import { createGuardApprovalAdapters, type GuardApprovalNativePortAny } from "./role-message-guard-approvals.js";
 import type {
 	GuardActor,
 	GuardApprovalBinding,
@@ -50,29 +50,42 @@ import type {
 	GuardAuthority,
 	GuardBusinessKind,
 	GuardConsumerBinding,
-	GuardGrant,
 	GuardHolds,
 	GuardHostVerified,
-	GuardHostVerifier,
 	GuardInvocationReference,
 	GuardKnownCausality,
 	GuardLegacyAcceptedMessage,
 	GuardOperationIdentity,
 	GuardOutboxEntry,
 	GuardOwnerQuestion,
-	GuardPolicyV1,
 	GuardProofReference,
 	GuardRequest,
 	GuardResult,
 	GuardRetention,
 	GuardScope,
-	GuardStoreState,
 	GuardTime,
 	GuardTransportResult,
 	GuardVerification,
 	GuardVerifiedDecision,
 	GuardVerifiedSnapshot,
 } from "./role-message-guard-contract.js";
+import type {
+	GuardApprovalBindingAny,
+	GuardApprovalBindingV2,
+	GuardApproverSelectionAny,
+	GuardApproverSelectionV2,
+	GuardGrantAny,
+	GuardHostVerifierAny,
+	GuardOwnerQuestionAny,
+	GuardOwnerQuestionV2,
+	GuardPolicy,
+	GuardRequestAny,
+	GuardRequestV2,
+	GuardResultAny,
+	GuardStoreStateAny,
+	GuardVerifiedDecisionAny,
+	GuardVerifiedDecisionV2,
+} from "./role-message-guard-contract-v2.js";
 import {
 	type GuardDeliveryEvidence,
 	type GuardEvidenceSettlement,
@@ -84,7 +97,6 @@ import { GuardFileLock } from "./role-message-guard-lock.js";
 import { guardDigest, GuardFileStore, guardJournalRefusal } from "./role-message-guard-store.js";
 import {
 	ROLE_MESSAGE_GIVE_UP_MS,
-	ROLE_MESSAGES_PER_HOUR,
 	roleMessagesHourlyExempt,
 	type RoleMessageDraft,
 	type RoleMessageGuardTag,
@@ -94,6 +106,16 @@ import {
 	type RoleMessageSendInput,
 	type RoleMessageSendResult,
 } from "./role-messages.js";
+
+import {
+	guardPolicyFor,
+	guardPolicyIsValid,
+	guardQuantityValid,
+	guardRequestMaximum,
+	guardRequestRevisionValid,
+	ROLE_MESSAGE_POLICY,
+	roleMessagePolicyMarker,
+} from "./role-message-limits.js";
 
 // ---------------------------------------------------------------------------
 // Frozen pins and the selected numbers
@@ -110,36 +132,8 @@ export const GUARD_CONSUMER_BINDING: GuardConsumerBinding = {
 	blockers: [],
 };
 
-/** Exactly E's frozen policy (core policyV1); E refuses anything else. */
-export const GUARD_POLICY: GuardPolicyV1 = {
-	version: VERSION,
-	depth: { unapprovedThrough: 6, lowerThrough: 11, ownerFrom: 12 },
-	grant: { maximumBusinessSends: 5, lifetimeMs: 3600000 },
-	ordinary: { acceptedPerOrigin: 20, rollingWindowMs: 3600000 },
-	request: {
-		outstandingPerRequester: 20,
-		lifetimeMs: 86400000,
-		openPerRootTierScopeGeneration: 1,
-		initialNotifications: 1,
-		decisionNotifications: 1,
-		explicitUpwardEscalations: 1,
-	},
-	protected: {
-		bypass: "depth_only",
-		consumesOrdinaryHourly: true,
-		assignedDestinations: 1,
-		initialPerEpisode: 1,
-		terminalPerEpisode: 1,
-		newIncidentsPerOriginHour: 2,
-		deliveriesPerOriginHour: 4,
-		deliveriesPerDestinationHour: 4,
-		deliveriesPerSystemHour: 12,
-		liveIncidents: 12,
-		lifetimeMs: 86400000,
-		maximumRenderedBytes: 2048,
-	},
-	rollback: { depthThrough: 6, acceptedPerOrigin: 20, preserveAccepted: true },
-};
+/** Selected shared policy; V1 remains exported separately for frozen replay. */
+export const GUARD_POLICY: GuardPolicy = ROLE_MESSAGE_POLICY;
 
 /** Storage caps proposed to Ops (rm-1fe61704, measured live volume: ≤365 messages a day, ≤20 per role-hour) and
  *  approved with changes (rm-efd6df89): requests and grants count only open requests and live grants, 600 each.
@@ -225,41 +219,42 @@ function parentOf(c: GuardKnownCausality): string | undefined {
 }
 /** Which grant (if any) a business send uses. Pure, so the stage tests can pin it.
  *  - A grant belongs to one chain line: same root, and the record it was asked from is an ancestor of
- *    this send (branches after that point share its five sends; a branch from before it can't use it).
+ *    this send (branches after that point share its exact finite sends; a branch from before it can't use it).
  *  - Below hop 7 nothing is used unless the caller names a grant.
  *  - A relevant grant that is spent, expired, denied or revoked is still handed to E, so the sender hears
  *    the exact reason instead of a fresh "approval needed".
  *  - A relevant grant whose scope doesn't cover this sender, recipient, task or hop is a mismatch, and
  *    nothing is charged. */
 export function chooseGrant(input: {
-	grants: readonly GuardGrant[];
+	grants: readonly GuardGrantAny[];
+	policy?: GuardPolicy;
 	causal: GuardKnownCausality;
 	actor: GuardActor;
 	to: string;
 	now: number;
 	wanted: string | null;
 	ancestorAt: (recordId: string, hop: number) => string | undefined;
-}): { kind: "none" } | { kind: "use"; grant: GuardGrant } | { kind: "mismatch"; grant: GuardGrant; why: string } {
+}): { kind: "none" } | { kind: "use"; grant: GuardGrantAny } | { kind: "mismatch"; grant: GuardGrantAny; why: string } {
 	const { causal, actor, to, now, wanted } = input;
 	const hop = causal.nextHop;
-	const onLine = (g: GuardGrant) => {
+	const onLine = (g: GuardGrantAny) => {
 		if (rootOf(g.binding.causal) !== rootOf(causal)) return false;
 		const anchor = parentOf(g.binding.causal);
 		const mine = parentOf(causal);
 		if (!anchor) return true; // asked at the root: the whole root is the line
 		return !!mine && input.ancestorAt(mine, g.binding.causal.nextHop - 1) === anchor;
 	};
-	const live = (g: GuardGrant) => g.state === "approved" && now < g.expiresAt && g.acceptedUses < g.maximumUses;
-	let pick: GuardGrant | undefined;
+	const live = (g: GuardGrantAny) => g.state === "approved" && now < g.expiresAt && g.acceptedUses < g.maximumUses;
+	let pick: GuardGrantAny | undefined;
 	if (wanted) {
 		pick = input.grants.find((g) => g.id === wanted);
 		if (!pick) return { kind: "none" };
 		if (!onLine(pick)) return { kind: "mismatch", grant: pick, why: "it belongs to another chain" };
 	} else {
-		if (hop <= GUARD_POLICY.depth.unapprovedThrough) return { kind: "none" };
+		if (hop <= (input.policy ?? ROLE_MESSAGE_POLICY).depth.unapprovedThrough) return { kind: "none" };
 		const mine = input.grants.filter(onLine);
 		if (!mine.length) return { kind: "none" };
-		const inRange = (g: GuardGrant) => hop >= g.binding.causal.nextHop && hop <= g.binding.upperHop;
+		const inRange = (g: GuardGrantAny) => hop >= g.binding.causal.nextHop && hop <= g.binding.upperHop;
 		const usable = mine
 			.filter((g) => live(g) && inRange(g))
 			.sort((a, b) => a.expiresAt - b.expiresAt || a.id.localeCompare(b.id));
@@ -281,14 +276,11 @@ export function chooseGrant(input: {
 	const why = misfit(pick, actor, to);
 	return why ? { kind: "mismatch", grant: pick, why } : { kind: "use", grant: pick };
 }
-function misfit(g: GuardGrant, actor: GuardActor, to: string): string | null {
+function misfit(g: GuardGrantAny, actor: GuardActor, to: string): string | null {
 	if (!g.binding.scope.participants.includes(actor.role)) return `${actor.role} isn't named in it`;
 	if (!g.binding.scope.recipients.includes(to)) return `${to} isn't a recipient in it`;
 	if (!same(g.binding.scope.task, actor.task)) return "it was given for another task";
 	return null;
-}
-function quantityOf(n: number): 1 | 2 | 3 | 4 | 5 {
-	return Math.max(1, Math.min(5, Math.floor(n))) as 1 | 2 | 3 | 4 | 5;
 }
 function writeDurable(path: string, text: string): void {
 	const tmp = `${path}.tmp-${process.pid}`;
@@ -460,6 +452,8 @@ export interface RoleMessageGuardHostOptions {
 	historyMaxBytes?: number;
 	/** Tests: smaller storage caps (the live app uses GUARD_RETENTION). */
 	retention?: GuardRetention;
+	/** Internal fixed-input replay seam, never an environment or UI setting. */
+	policy?: GuardPolicy;
 }
 
 /** One line of the approval history (history.jsonl): metadata only, never the context's words. */
@@ -528,6 +522,7 @@ export class RoleMessageGuardHost {
 	private readonly lease = new GuardLease();
 	private readonly ctx = new AsyncLocalStorage<CallContext>();
 	private readonly now: () => number;
+	private readonly policy: GuardPolicy;
 	private lastObserved = 0;
 	private store: GuardFileStore | null = null;
 	private storeDir = "";
@@ -555,6 +550,9 @@ export class RoleMessageGuardHost {
 
 	constructor(private readonly o: RoleMessageGuardHostOptions) {
 		this.now = o.now ?? Date.now;
+		const policy = o.policy ?? ROLE_MESSAGE_POLICY;
+		if (!guardPolicyIsValid(policy)) throw new Error("exact versioned role-message policy required");
+		this.policy = policy;
 		this.lock = new GuardFileLock(o);
 	}
 
@@ -571,6 +569,7 @@ export class RoleMessageGuardHost {
 	// -------------------------------------------------------------------------
 
 	async start(): Promise<void> {
+		this.o.log(roleMessagePolicyMarker(this.policy));
 		// Ops #241: the off switch comes first, before the lock or any guard file: nothing is read or written.
 		const switched = process.env[GUARD_APPROVALS_SWITCH]?.trim().toLowerCase();
 		if (switched === "off") return this.degrade(`turned off (${GUARD_APPROVALS_SWITCH}=off)`);
@@ -632,7 +631,9 @@ export class RoleMessageGuardHost {
 			await this.afterChange();
 			const lost = this.lock.lockLost(); // Ops #257 (B1): still this server's lock before it says "on"
 			if (lost) return this.degrade(lost);
-			this.o.log("approval ladder: on (hops 1-6 free; 7-11 COO grant; 12+ owner grant)");
+			this.o.log(
+				`approval ladder: on (hops 1-${this.policy.depth.unapprovedThrough} free; ${this.policy.depth.unapprovedThrough + 1}-${this.policy.depth.lowerThrough} COO grant; ${this.policy.depth.ownerFrom}+ owner grant)`,
+			);
 		} catch (err) {
 			this.degrade((err as Error).message);
 		}
@@ -660,7 +661,9 @@ export class RoleMessageGuardHost {
 		this.degradedReason = reason;
 		this.core = null;
 		this.adapters = null;
-		this.o.log(`approval ladder UNAVAILABLE (${reason}): sends use the native depth-6 rule; no approvals`);
+		this.o.log(
+			`approval ladder UNAVAILABLE (${reason}): sends use the native depth-${this.policy.depth.unapprovedThrough} rule; no approvals`,
+		);
 	}
 
 	// Ops #241 (docs/role-message-fresh-start.md): the operator's one-shot fresh start of an unreadable record.
@@ -838,7 +841,7 @@ export class RoleMessageGuardHost {
 		this.storeDir = dir;
 		this.core = new RoleMessageGuardCore({
 			binding: GUARD_CONSUMER_BINDING,
-			policy: GUARD_POLICY,
+			policy: this.policy,
 			retention: this.retention,
 			store,
 			verifier: this.verifier(),
@@ -849,7 +852,7 @@ export class RoleMessageGuardHost {
 			},
 			clock: async () => this.clock(),
 			requestSnapshot: async (actor, request) => this.snapshotFor(actor, request.binding.causal, null),
-			reverifyDecision: async (decision, request) => this.reverifyDecision(decision, request),
+			reverifyDecision: this.reverifyDecision.bind(this),
 			verifyGrantLineage: async (grant, snapshot, scope, to) => this.verifyGrantLineage(grant, snapshot, scope, to),
 			restoreSnapshot: async (entry) =>
 				this.snapshotFor(entry.receipt.identity.actor, entry.receipt.causal, null, entry.receipt.messageId),
@@ -870,24 +873,28 @@ export class RoleMessageGuardHost {
 			deliveryEvidence: (entries, now) => this.deliveryEvidence(entries, now),
 			recordSettlements: (settled) => this.recordSettlements(settled),
 		});
-		this.adapters = createGuardApprovalAdapters({
+		const native: GuardApprovalNativePortAny = {
+			time: async () => this.clock(),
+			control: async (actor, request, phase) => this.control(actor, request, phase),
+			question: this.question.bind(this),
+			ownerRequest: async (ref) => this.ownerRequest(ref),
+			present: async (q, ask) => this.present(q, ask),
+		};
+		const capabilities = {
 			binding: GUARD_CONSUMER_BINDING,
-			policy: GUARD_POLICY,
 			maximumContextBytes: GUARD_RETENTION.maximumContextBytes,
 			host: this.verifier(),
 			core: this.core,
-			native: {
-				time: async () => this.clock(),
-				control: async (actor, request, phase) => this.control(actor, request, phase),
-				question: async (request, choicesDigest) => this.question(request, choicesDigest),
-				ownerRequest: async (ref) => this.ownerRequest(ref),
-				present: async (q, ask) => this.present(q, ask),
-			},
-		});
+			native,
+		};
+		this.adapters =
+			this.policy.version === "role-message-guard/v1"
+				? createGuardApprovalAdapters({ ...capabilities, policy: this.policy })
+				: createGuardApprovalAdapters({ ...capabilities, policy: this.policy });
 	}
 
-	/** A new store's first state: the 20-per-hour count carries over from the native record of the last hour. */
-	private freshState(): GuardStoreState {
+	/** A new store's first state carries every chargeable native record of the last hour, without count trimming. */
+	private freshState(): GuardStoreStateAny {
 		const now = this.now();
 		const rm = this.o.roleMessages();
 		const usage = (rm?.recent(now - HOUR_MS) ?? [])
@@ -937,7 +944,7 @@ export class RoleMessageGuardHost {
 	}
 
 	/** Nothing open: no unsettled transaction, no undelivered message, no open request or live grant. */
-	private quiescent(s: GuardStoreState, now: number): boolean {
+	private quiescent(s: GuardStoreStateAny, now: number): boolean {
 		return (
 			s.transactions.every((t) => t.state === "committed") &&
 			s.outbox.every(
@@ -1134,7 +1141,7 @@ export class RoleMessageGuardHost {
 	causalOf(
 		file: string,
 		lastUserText: string,
-		state?: GuardStoreState,
+		state?: GuardStoreStateAny,
 	): GuardKnownCausality | { kind: "unknown"; reason: "pruned" | "contradictory" | "stale" } {
 		const rm = this.o.roleMessages();
 		const c = rm ? rm.causalityOf(file, lastUserText) : ({ kind: "none" } as const);
@@ -1181,9 +1188,14 @@ export class RoleMessageGuardHost {
 		};
 	}
 
-	private selection(binding: GuardApprovalBinding): GuardVerification<GuardApproverSelection> {
-		if (binding.causal.nextHop >= GUARD_POLICY.depth.ownerFrom)
-			return verified({ tier: "owner", reason: "hop_12_plus" });
+	private selection(binding: GuardApprovalBinding): GuardVerification<GuardApproverSelection>;
+	private selection(binding: GuardApprovalBindingV2): GuardVerification<GuardApproverSelectionV2>;
+	private selection(binding: GuardApprovalBindingAny): GuardVerification<GuardApproverSelectionAny>;
+	private selection(binding: GuardApprovalBindingAny): GuardVerification<GuardApproverSelectionAny> {
+		if (binding.causal.nextHop >= (guardPolicyFor(binding.version)?.depth.ownerFrom ?? 0))
+			return binding.version === "role-message-guard/v1"
+				? verified({ tier: "owner", reason: "hop_12_plus" })
+				: verified({ tier: "owner", reason: "hop_23_plus" });
 		const coo = this.homeActor("coo");
 		if (binding.requester.role === "coo" || !coo) {
 			// The COO asking for itself has no distinct lower approver; nor has anyone when the COO has no home chat.
@@ -1209,7 +1221,16 @@ export class RoleMessageGuardHost {
 	// E/A host verifier
 	// -------------------------------------------------------------------------
 
-	private verifier(): GuardHostVerifier {
+	private verifier(): GuardHostVerifierAny {
+		const host = this;
+		function asyncSelection(binding: GuardApprovalBinding): Promise<GuardVerification<GuardApproverSelection>>;
+		function asyncSelection(binding: GuardApprovalBindingV2): Promise<GuardVerification<GuardApproverSelectionV2>>;
+		function asyncSelection(binding: GuardApprovalBindingAny): Promise<GuardVerification<GuardApproverSelectionAny>>;
+		async function asyncSelection(
+			binding: GuardApprovalBindingAny,
+		): Promise<GuardVerification<GuardApproverSelectionAny>> {
+			return host.selection(binding);
+		}
 		return {
 			verifyInvocation: async (ref) => {
 				const v = this.invocations.get(ref.invocationId);
@@ -1226,14 +1247,9 @@ export class RoleMessageGuardHost {
 				const c = this.causalOf(actor.sessionFile, text, state ?? undefined);
 				return c.kind === "unknown" ? refused("unknown", `chain position ${c.reason}`) : verified(c);
 			},
-			selectApprover: async (binding) => this.selection(binding),
-			verifyRoleDecision: async (ref, binding) => this.roleDecisionEvent(ref, binding),
-			verifyOwnerAnswer: async (ref, q) => {
-				const first = this.decisions.find((d) => d.kind === "owner" && d.questionId === q.questionId);
-				if (!first || first.eventId !== ref.nativeAnswerEventId)
-					return refused("invalid", "not the first native Owner answer");
-				return this.ownerDecision(first, q);
-			},
+			selectApprover: asyncSelection,
+			verifyRoleDecision: this.roleDecisionEvent.bind(this),
+			verifyOwnerAnswer: this.ownerDecisionEvent.bind(this),
 			verifyIncident: async () => refused("unavailable", "urgent notices are not part of this delivery"),
 			revalidate: async (snapshot) => {
 				if (!this.actorCurrent(snapshot.actor))
@@ -1269,7 +1285,7 @@ export class RoleMessageGuardHost {
 		});
 	}
 
-	private async state_(): Promise<GuardStoreState | null> {
+	private async state_(): Promise<GuardStoreStateAny | null> {
 		// Ops #257 (N2): a read that finds the lock taken by another server (B1) turns approvals off and throws; it gives
 		// nothing then, as a record that can't be read does, and the caller sees approvals off.
 		try {
@@ -1291,7 +1307,9 @@ export class RoleMessageGuardHost {
 	private offAnswer(done: string): { ok: false; text: string } {
 		return {
 			ok: false,
-			text: this.offText(`${done} Messages 7 and above can't be sent now; ask the owner how to go on.`),
+			text: this.offText(
+				`${done} Messages ${this.policy.depth.unapprovedThrough + 1} and above can't be sent now; ask the owner how to go on.`,
+			),
 		};
 	}
 
@@ -1300,7 +1318,7 @@ export class RoleMessageGuardHost {
 	// -------------------------------------------------------------------------
 
 	/** How full each of E's capped stores is (counted the way E counts them). */
-	fills(s: GuardStoreState): { name: string; used: number; max: number }[] {
+	fills(s: GuardStoreStateAny): { name: string; used: number; max: number }[] {
 		const R = this.retention;
 		const size = (name: string) => {
 			try {
@@ -1356,7 +1374,7 @@ export class RoleMessageGuardHost {
 		}
 	}
 
-	private recordHistory(s: GuardStoreState): void {
+	private recordHistory(s: GuardStoreStateAny): void {
 		const seed = this.historySeen === null;
 		const seen = (this.historySeen ??= new Map());
 		const lines: GuardHistoryLine[] = [];
@@ -1613,10 +1631,22 @@ export class RoleMessageGuardHost {
 	}
 
 	/** The approver's answer: the first one recorded for this request binding wins. */
-	private async roleDecisionEvent(
+	private roleDecisionEvent(
 		ref: { invocation: GuardInvocationReference; choice: string; reason: string },
 		binding: GuardApprovalBinding,
-	): Promise<GuardVerification<GuardVerifiedDecision>> {
+	): Promise<GuardVerification<GuardVerifiedDecision>>;
+	private roleDecisionEvent(
+		ref: { invocation: GuardInvocationReference; choice: string; reason: string },
+		binding: GuardApprovalBindingV2,
+	): Promise<GuardVerification<GuardVerifiedDecisionV2>>;
+	private roleDecisionEvent(
+		ref: { invocation: GuardInvocationReference; choice: string; reason: string },
+		binding: GuardApprovalBindingAny,
+	): Promise<GuardVerification<GuardVerifiedDecisionAny>>;
+	private async roleDecisionEvent(
+		ref: { invocation: GuardInvocationReference; choice: string; reason: string },
+		binding: GuardApprovalBindingAny,
+	): Promise<GuardVerification<GuardVerifiedDecisionAny>> {
 		const v = this.invocations.get(ref.invocation.invocationId);
 		if (!v || v.ref.toolCallId !== ref.invocation.toolCallId || !this.actorCurrent(v.actor))
 			return refused("invalid", "not a live approver call");
@@ -1643,10 +1673,12 @@ export class RoleMessageGuardHost {
 		}
 		return this.roleDecision(event, request);
 	}
-	private roleDecision(e: GuardDecisionEvent, request: GuardRequest): GuardVerification<GuardVerifiedDecision> {
+	private roleDecision(e: GuardDecisionEvent, request: GuardRequest): GuardVerification<GuardVerifiedDecision>;
+	private roleDecision(e: GuardDecisionEvent, request: GuardRequestV2): GuardVerification<GuardVerifiedDecisionV2>;
+	private roleDecision(e: GuardDecisionEvent, request: GuardRequestAny): GuardVerification<GuardVerifiedDecisionAny>;
+	private roleDecision(e: GuardDecisionEvent, request: GuardRequestAny): GuardVerification<GuardVerifiedDecisionAny> {
 		if (request.selectedApprover.tier !== "lower") return refused("invalid", "not a lower-tier request");
-		return verified({
-			binding: request.binding,
+		const decision: Omit<GuardVerifiedDecision, "binding"> = {
 			choice: e.choice,
 			reason: e.reason,
 			authority: {
@@ -1657,9 +1689,15 @@ export class RoleMessageGuardHost {
 			},
 			answeredAt: e.answeredAt,
 			firstAnswerEventId: e.eventId,
-		});
+		};
+		return request.binding.version === "role-message-guard/v1"
+			? verified({ ...decision, binding: request.binding })
+			: verified({ ...decision, binding: request.binding });
 	}
-	private ownerDecision(e: GuardDecisionEvent, q: GuardOwnerQuestion): GuardVerification<GuardVerifiedDecision> {
+	private ownerDecision(e: GuardDecisionEvent, q: GuardOwnerQuestion): GuardVerification<GuardVerifiedDecision>;
+	private ownerDecision(e: GuardDecisionEvent, q: GuardOwnerQuestionV2): GuardVerification<GuardVerifiedDecisionV2>;
+	private ownerDecision(e: GuardDecisionEvent, q: GuardOwnerQuestionAny): GuardVerification<GuardVerifiedDecisionAny>;
+	private ownerDecision(e: GuardDecisionEvent, q: GuardOwnerQuestionAny): GuardVerification<GuardVerifiedDecisionAny> {
 		if (e.kind !== "owner" || e.choice === "escalate_owner" || !e.source)
 			return refused("invalid", "not an Owner answer");
 		const source =
@@ -1670,8 +1708,7 @@ export class RoleMessageGuardHost {
 						pluginId: "telegram",
 						authenticatedOwnerBindingId: "telegram-plugin:telegram",
 					} as const);
-		return verified({
-			binding: q.binding,
+		const decision: Omit<GuardVerifiedDecision, "binding"> = {
 			choice: e.choice,
 			reason: e.reason,
 			authority: {
@@ -1685,16 +1722,51 @@ export class RoleMessageGuardHost {
 			},
 			answeredAt: e.answeredAt,
 			firstAnswerEventId: e.eventId,
-		});
+		};
+		return q.binding.version === "role-message-guard/v1"
+			? verified({ ...decision, binding: q.binding })
+			: verified({ ...decision, binding: q.binding });
+	}
+	private ownerDecisionEvent(
+		ref: { nativeAnswerEventId: string },
+		q: GuardOwnerQuestion,
+	): Promise<GuardVerification<GuardVerifiedDecision>>;
+	private ownerDecisionEvent(
+		ref: { nativeAnswerEventId: string },
+		q: GuardOwnerQuestionV2,
+	): Promise<GuardVerification<GuardVerifiedDecisionV2>>;
+	private ownerDecisionEvent(
+		ref: { nativeAnswerEventId: string },
+		q: GuardOwnerQuestionAny,
+	): Promise<GuardVerification<GuardVerifiedDecisionAny>>;
+	private async ownerDecisionEvent(
+		ref: { nativeAnswerEventId: string },
+		q: GuardOwnerQuestionAny,
+	): Promise<GuardVerification<GuardVerifiedDecisionAny>> {
+		const first = this.decisions.find((d) => d.kind === "owner" && d.questionId === q.questionId);
+		if (!first || first.eventId !== ref.nativeAnswerEventId)
+			return refused("invalid", "not the first native Owner answer");
+		return this.ownerDecision(first, q);
 	}
 	/** E re-derives every decision from the native event, never from the stored copy alone. */
-	private async reverifyDecision(
+	private reverifyDecision(
 		d: GuardVerifiedDecision,
 		request: GuardRequest,
-	): Promise<GuardVerification<GuardVerifiedDecision>> {
+	): Promise<GuardVerification<GuardVerifiedDecision>>;
+	private reverifyDecision(
+		d: GuardVerifiedDecisionV2,
+		request: GuardRequestV2,
+	): Promise<GuardVerification<GuardVerifiedDecisionV2>>;
+	private reverifyDecision(
+		...args: [GuardVerifiedDecision, GuardRequest] | [GuardVerifiedDecisionV2, GuardRequestV2]
+	): Promise<GuardVerification<GuardVerifiedDecisionAny>>;
+	private async reverifyDecision(
+		...args: [GuardVerifiedDecision, GuardRequest] | [GuardVerifiedDecisionV2, GuardRequestV2]
+	): Promise<GuardVerification<GuardVerifiedDecisionAny>> {
+		const [d, request] = args;
 		const e = this.decisions.find((x) => x.eventId === d.authority.decisionId);
 		if (!e || e.bindingDigest !== guardDigest(request.binding)) return refused("invalid", "no native decision event");
-		let rebuilt: GuardVerification<GuardVerifiedDecision>;
+		let rebuilt: GuardVerification<GuardVerifiedDecisionAny>;
 		if (e.kind === "role") rebuilt = this.roleDecision(e, request);
 		else {
 			const q = this.questions.find((x) => x.questionId === e.questionId);
@@ -1706,7 +1778,7 @@ export class RoleMessageGuardHost {
 	}
 
 	private async verifyGrantLineage(
-		grant: GuardGrant,
+		grant: GuardGrantAny,
 		snapshot: GuardHostVerified<GuardVerifiedSnapshot>,
 		scope: GuardScope,
 		to: string,
@@ -1721,7 +1793,7 @@ export class RoleMessageGuardHost {
 	// Native approval ports for A
 	// -------------------------------------------------------------------------
 
-	private control(actor: GuardActor, request: GuardRequest, phase: "initial" | "decision") {
+	private control(actor: GuardActor, request: GuardRequestAny, phase: "initial" | "decision") {
 		let to: string;
 		if (phase === "initial") {
 			if (request.selectedApprover.tier !== "lower")
@@ -1732,22 +1804,29 @@ export class RoleMessageGuardHost {
 			to = request.selectedApprover.role;
 		} else to = request.binding.requester.role;
 		const snap = this.snapshotFor(actor, request.binding.causal, null, short(request.binding));
-		if (snap.state !== "verified")
-			return snap as unknown as GuardVerification<{ to: string; snapshot: GuardHostVerified<GuardVerifiedSnapshot> }>;
+		if (snap.state !== "verified") return snap;
 		return verified({ to, snapshot: snap.value });
 	}
 
-	private questionOf(r: GuardRequest, q: GuardQuestionRecord): GuardOwnerQuestion {
-		return {
-			binding: r.binding,
+	private questionOf(r: GuardRequest, q: GuardQuestionRecord): GuardOwnerQuestion;
+	private questionOf(r: GuardRequestV2, q: GuardQuestionRecord): GuardOwnerQuestionV2;
+	private questionOf(r: GuardRequestAny, q: GuardQuestionRecord): GuardOwnerQuestionAny;
+	private questionOf(r: GuardRequestAny, q: GuardQuestionRecord): GuardOwnerQuestionAny {
+		const question = {
 			questionId: q.questionId,
 			generation: q.generation,
 			detail: r.context,
-			choices: ["deny", "one_send", "requested_quantity"],
+			choices: ["deny", "one_send", "requested_quantity"] as const,
 			choicesDigest: q.choicesDigest,
 		};
+		return r.binding.version === "role-message-guard/v1"
+			? { ...question, binding: r.binding }
+			: { ...question, binding: r.binding };
 	}
-	private async question(r: GuardRequest, choicesDigest: string): Promise<GuardVerification<GuardOwnerQuestion>> {
+	private question(r: GuardRequest, choicesDigest: string): Promise<GuardVerification<GuardOwnerQuestion>>;
+	private question(r: GuardRequestV2, choicesDigest: string): Promise<GuardVerification<GuardOwnerQuestionV2>>;
+	private question(r: GuardRequestAny, choicesDigest: string): Promise<GuardVerification<GuardOwnerQuestionAny>>;
+	private async question(r: GuardRequestAny, choicesDigest: string): Promise<GuardVerification<GuardOwnerQuestionAny>> {
 		const bindingDigest = guardDigest(r.binding);
 		let q = this.questions.find((x) => x.bindingDigest === bindingDigest);
 		if (q && q.choicesDigest !== choicesDigest) return refused("invalid", "question digest changed");
@@ -1769,14 +1848,14 @@ export class RoleMessageGuardHost {
 	private async ownerRequest(ref: {
 		questionId: string;
 		generation: string;
-	}): Promise<GuardVerification<GuardRequest>> {
+	}): Promise<GuardVerification<GuardRequestAny>> {
 		const q = this.questions.find((x) => x.questionId === ref.questionId && x.generation === ref.generation);
 		if (!q) return refused("invalid", "no such Owner question");
 		const state = await this.state_();
 		const r = state?.requests.find((x) => guardDigest(x.binding) === q.bindingDigest && x.binding.tier === "owner");
 		return r ? verified(r) : refused("unavailable", "the request is gone");
 	}
-	private async present(q: GuardOwnerQuestion, ask: Ask): Promise<GuardTransportResult> {
+	private async present(q: GuardOwnerQuestionAny, ask: Ask): Promise<GuardTransportResult> {
 		const shown: string[] = [];
 		const requesterRole = q.binding.requester.role;
 		const full: Ask = {
@@ -1834,13 +1913,15 @@ export class RoleMessageGuardHost {
 		for (const q of this.questions.filter((x) => x.state === "pending")) {
 			const r = state.requests.find((x) => guardDigest(x.binding) === q.bindingDigest);
 			if (!r || r.state !== "awaiting_owner" || now >= r.expiresAt) continue;
-			out.push({
+			const identity = {
 				questionId: q.questionId,
 				generation: q.generation,
 				requesterRole: r.binding.requester.role,
-				request: r,
-				ownerQuestion: this.questionOf(r, q),
-			});
+			};
+			if (guardRequestRevisionValid(r, "role-message-guard/v1"))
+				out.push({ ...identity, request: r, ownerQuestion: this.questionOf(r, q) });
+			else if (guardRequestRevisionValid(r, "role-message-guard/v2"))
+				out.push({ ...identity, request: r, ownerQuestion: this.questionOf(r, q) });
 		}
 		return out;
 	}
@@ -2020,7 +2101,7 @@ export class RoleMessageGuardHost {
 	// message_role: business sends and approval actions
 	// -------------------------------------------------------------------------
 
-	/** One business message under the ladder. Falls back to the native depth-6 rule when the guard is down. */
+	/** One business message under the ladder. Native fallback retains the selected free/hourly bounds. */
 	async send(
 		sender: RoleMessageSender,
 		input: RoleMessageSendInput & { grant?: unknown },
@@ -2046,10 +2127,10 @@ export class RoleMessageGuardHost {
 		const actor = this.senderActor(sender);
 		if (!actor) return rm.send(sender, input);
 		const lastHour = rm.hourlyCount(sender.role);
-		if (!roleMessagesHourlyExempt(actor.role) && lastHour >= ROLE_MESSAGES_PER_HOUR)
+		if (!roleMessagesHourlyExempt(actor.role) && lastHour >= this.policy.ordinary.acceptedPerOrigin)
 			return {
 				ok: false,
-				error: `Not sent: ${sender.role} has sent ${lastHour} role messages in the last hour (the limit is ${ROLE_MESSAGES_PER_HOUR}). Ask the owner before sending more.`,
+				error: `Not sent: ${sender.role} has sent ${lastHour} role messages in the last hour (the limit is ${this.policy.ordinary.acceptedPerOrigin}). Ask the owner before sending more.`,
 				reason: "ordinary_hourly",
 			};
 		const state = await this.state_();
@@ -2057,7 +2138,7 @@ export class RoleMessageGuardHost {
 		if (this.offNow())
 			return {
 				ok: false,
-				error: `Not sent: ${this.offText("Nothing was recorded; send it again and it goes by the native rule (messages 7 and above can't be sent).")}`,
+				error: `Not sent: ${this.offText(`Nothing was recorded; send it again and it goes by the native rule (messages ${this.policy.depth.unapprovedThrough + 1} and above can't be sent).`)}`,
 			};
 		const causal = this.causalOf(sender.file, sender.guard?.lastUserText ?? "", state ?? undefined);
 		if (causal.kind === "unknown")
@@ -2072,6 +2153,7 @@ export class RoleMessageGuardHost {
 		const wanted = typeof input.grant === "string" && input.grant.trim() ? input.grant.trim() : null;
 		const choice = chooseGrant({
 			grants: state?.grants ?? [],
+			policy: this.policy,
 			causal,
 			actor,
 			to,
@@ -2118,7 +2200,7 @@ export class RoleMessageGuardHost {
 		const command = { ...body, identity: identity0 };
 		const identity = { ...identity0, fingerprint: guardCommandFingerprint(command) };
 		this.lastUser.set(sender.file, sender.guard?.lastUserText ?? "");
-		let res: GuardResult;
+		let res: GuardResultAny;
 		try {
 			res = await this.ctx.run({ sender, draft: prepared.draft, causal }, () =>
 				this.core!.execute({ ...command, identity }),
@@ -2138,16 +2220,18 @@ export class RoleMessageGuardHost {
 			return { ok: true, record, paused: rm.paused, targetChat };
 		}
 		if (res.state === "blocked" && res.reason === "approval_required") {
-			const tier = res.requiredTier ?? (hop >= GUARD_POLICY.depth.ownerFrom ? "owner" : "lower");
+			const tier = res.requiredTier ?? (hop >= this.policy.depth.ownerFrom ? "owner" : "lower");
 			const approver = tier === "owner" || actor.role === "coo" ? "the owner" : "the COO";
 			const span =
-				tier === "owner" ? "messages 12 and above need the owner's grant" : "messages 7 to 11 need the COO's grant";
+				tier === "owner"
+					? `messages ${this.policy.depth.ownerFrom} and above need the owner's grant`
+					: `messages ${this.policy.depth.unapprovedThrough + 1} to ${this.policy.depth.lowerThrough} need the COO's grant`;
 			return {
 				ok: false,
 				error:
-					`Approval needed: this would be message ${hop} in one chain of role messages. Messages 1 to 6 go without approval; ${span}. ` +
+					`Approval needed: this would be message ${hop} in one chain of role messages. Messages 1 to ${this.policy.depth.unapprovedThrough} go without approval; ${span}. ` +
 					`Ask ${approver} with message_role approval {action: "request", recipients: ["${to}"], context: {goal, progressAndChanges, priorDecisions, whyNeeded, nextStepAndOutcome, outstandingQuestions, optionsAndTradeoffs, timeCostRisk, exactCommunicationAuthority, declaredClaims, safetyScopeAndHolds}} ` +
-					`(to, kind and text aren't needed for it). Once granted, send this again: the grant is used by itself. A grant covers at most 5 sends for one hour.`,
+					`(to, kind and text aren't needed for it). Once granted, send this again: the grant is used by itself. A grant covers at most ${this.policy.grant.maximumBusinessSends} sends for one hour.`,
 				approvalRequired: { hop, tier, approver },
 				reason: "approval_required",
 			};
@@ -2155,7 +2239,7 @@ export class RoleMessageGuardHost {
 		if (res.state === "blocked" && res.reason === "retention_capacity")
 			return { ok: false, error: `Not sent: ${await this.capacityText()}`, reason: res.reason };
 		if (res.state === "blocked")
-			return { ok: false, error: `Not sent: ${blockedText(res.reason)}`, reason: res.reason };
+			return { ok: false, error: `Not sent: ${blockedText(res.reason, this.policy)}`, reason: res.reason };
 		if (res.state === "unknown")
 			return {
 				ok: false,
@@ -2190,7 +2274,7 @@ export class RoleMessageGuardHost {
 		if (this.status_ !== "ready" || !this.adapters)
 			return {
 				ok: false,
-				text: "Approvals are unavailable right now (the ladder is off); messages 7 and above can't be sent. Ask the owner how to go on.",
+				text: `Approvals are unavailable right now (the ladder is off); messages ${this.policy.depth.unapprovedThrough + 1} and above can't be sent. Ask the owner how to go on.`,
 			};
 		const actor = this.senderActor(sender);
 		if (!actor) return { ok: false, text: "This chat can't ask for approvals." };
@@ -2262,17 +2346,21 @@ export class RoleMessageGuardHost {
 				text: `This chat's place in its chain can't be proved (${causal.reason}); ask the owner how to go on.`,
 			};
 		const hop = causal.nextHop;
-		if (hop <= GUARD_POLICY.depth.unapprovedThrough)
+		if (hop <= this.policy.depth.unapprovedThrough)
 			return {
 				ok: false,
-				text: `No approval needed: your next message is number ${hop} in its chain (1 to 6 go without approval).`,
+				text: `No approval needed: your next message is number ${hop} in its chain (1 to ${this.policy.depth.unapprovedThrough} go without approval).`,
 			};
 		const recipients = strs(input.recipients);
 		if (!recipients.length) return { ok: false, text: "approval.recipients: the role ids you need to message." };
-		const ownerTier = hop >= GUARD_POLICY.depth.ownerFrom || actor.role === "coo" || !this.homeActor("coo");
-		const max = ownerTier
-			? Math.min(5, GUARD_POLICY.depth.ownerFrom + 5 - Math.max(hop, GUARD_POLICY.depth.ownerFrom))
-			: Math.min(5, GUARD_POLICY.depth.lowerThrough + 1 - hop);
+		const ownerTier = hop >= this.policy.depth.ownerFrom || actor.role === "coo" || !this.homeActor("coo");
+		const max = guardRequestMaximum(this.policy, hop, ownerTier ? "owner" : "lower");
+		if (max === 0)
+			return {
+				ok: false,
+				text: "Not asked: this chain is past the finite Owner grant band; ask the owner how to go on.",
+				details: { reason: "invalid_input", maximum: 0 },
+			};
 		// An explicit quantity must fit exactly (no silent clamping): 1 to what is left of this tier.
 		if (
 			input.quantity !== undefined &&
@@ -2285,10 +2373,12 @@ export class RoleMessageGuardHost {
 		)
 			return {
 				ok: false,
-				text: `Not asked: quantity must be a whole number from 1 to ${max} here (message ${hop}; ${ownerTier ? "owner grants end at 16" : "COO grants end at 11"}).`,
+				text: `Not asked: quantity must be a whole number from 1 to ${max} here (message ${hop}; ${ownerTier ? `owner grants end at ${this.policy.depth.ownerFrom + this.policy.grant.maximumBusinessSends - 1}` : `COO grants end at ${this.policy.depth.lowerThrough}`}).`,
 				details: { reason: "invalid_input", maximum: max },
 			};
-		const quantity = quantityOf(input.quantity === undefined ? max : (input.quantity as number));
+		const quantity = input.quantity === undefined ? max : input.quantity;
+		if (!guardQuantityValid(quantity, this.policy.version))
+			return { ok: false, text: "Not asked: invalid finite quantity." };
 		const requestId = `cr-${short({ file: sender.file, toolCallId }).slice(0, 8)}`;
 		const c = (input.context && typeof input.context === "object" ? input.context : {}) as Record<string, unknown>;
 		// Ops rm-efd6df89: an oversized context is refused whole, with its size (never cut down to fit).
@@ -2398,10 +2488,9 @@ function outcomeText(res: unknown): string {
 		return "every context field is needed (goal, progressAndChanges, whyNeeded, nextStepAndOutcome, timeCostRisk, exactCommunicationAuthority, and at least one outstandingQuestions and optionsAndTradeoffs line), at most 16 KB.";
 	return r?.reason ?? r?.state ?? "unknown";
 }
-function blockedText(reason: string): string {
+function blockedText(reason: string, policy: GuardPolicy = ROLE_MESSAGE_POLICY): string {
 	const texts: Record<string, string> = {
-		ordinary_hourly:
-			"this role has sent 20 role messages in the last hour (the limit is 20). Ask the owner before sending more.",
+		ordinary_hourly: `this role has sent ${policy.ordinary.acceptedPerOrigin} role messages in the last hour (the limit is ${policy.ordinary.acceptedPerOrigin}). Ask the owner before sending more.`,
 		causality_unknown: "this chat's place in its chain can't be proved. Ask the owner how to go on.",
 		scope_mismatch: "outside the grant's roles or task.",
 		grant_denied: "the approval was denied.",
@@ -2421,7 +2510,7 @@ function blockedText(reason: string): string {
 	};
 	return texts[reason] ?? reason;
 }
-function requestText(r: GuardRequest, state: GuardStoreState | null): string {
+function requestText(r: GuardRequestAny, state: GuardStoreStateAny | null): string {
 	const g = r.grantId ? state?.grants.find((x) => x.id === r.grantId) : undefined;
 	const grant = g
 		? ` Grant ${g.id}: ${g.state}, ${g.acceptedUses} of ${g.maximumUses} used, until ${new Date(g.expiresAt).toISOString()}.`

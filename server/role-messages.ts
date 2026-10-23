@@ -28,7 +28,7 @@
 // while it waited) is sent again after the chat has been idle a while; a restart forgets nothing (the
 // store is on disk, the transcript is the proof).
 //
-// Caps: 20 messages an hour per sending role except ops/temper; a chain limit of 6 (a message sent while handling a
+// Caps: selected rolling-hour/free-chain policy (ops/temper hourly-exempt); chain counts a message sent while handling a
 // role message is one deeper than it). The owner can pause delivery (Settings → Identities): messages
 // are held, not dropped.
 //
@@ -56,16 +56,17 @@ import type {
 } from "./protocol.js";
 import { ownerChannelOf, type OwnerChannel, type RoleOwnerAnswer, OWNER_IDS_MAX } from "./role-replies.js";
 import { CARRY_ON_PREFIX } from "./running-chats.js";
-import { roleMessagesHourlyExempt } from "./role-message-limits.js";
+import { guardPolicyIsValid, ROLE_MESSAGE_POLICY, roleMessagesHourlyExempt } from "./role-message-limits.js";
+import type { GuardPolicy } from "./role-message-guard-contract-v2.js";
 import { TASK_QUEUE_ENTRY_TYPE, taskQueueFromEntries, taskQueueHeld, type TaskQueueEntryLike } from "./task-queue.js";
 
 /** The kinds message_role sends (role-reports' "report" is the app's alone). */
 export const ROLE_MESSAGE_KINDS: readonly UiRoleMessageKind[] = ["question", "request", "fyi", "reply"];
 /** Messages a sending role may send in an hour, unless the Owner exempted it below. */
-export const ROLE_MESSAGES_PER_HOUR = 20;
+export const ROLE_MESSAGES_PER_HOUR = ROLE_MESSAGE_POLICY.ordinary.acceptedPerOrigin;
 export { ROLE_MESSAGES_HOURLY_EXEMPT_ROLES, roleMessagesHourlyExempt } from "./role-message-limits.js";
 /** The deepest a chain of messages may go (a message sent while handling one is one deeper). */
-export const ROLE_MESSAGE_CHAIN_MAX = 6;
+export const ROLE_MESSAGE_CHAIN_MAX = ROLE_MESSAGE_POLICY.depth.unapprovedThrough;
 /** The longest text a message may carry. */
 export const ROLE_MESSAGE_TEXT_MAX = 4000;
 /** Messages the store keeps (waiting ones are never dropped). */
@@ -884,7 +885,10 @@ export class RoleMessages {
 		private readonly file: string,
 		private readonly host: RoleMessageHost,
 		private readonly now: () => number = Date.now,
+		/** Internal fixed-input legacy replay seam, not an owner setting. */
+		private readonly policy: GuardPolicy = ROLE_MESSAGE_POLICY,
 	) {
+		if (!guardPolicyIsValid(policy)) throw new Error("exact versioned role-message policy required");
 		this.load();
 		this.loadChainMemory();
 	}
@@ -1011,7 +1015,7 @@ export class RoleMessages {
 				if (considered < extra && m.state !== "waiting" && !proof) {
 					considered++;
 					// Ops #318: unlimited traffic must not evict capped roles' unexpired hourly proof.
-					// At most capped roles × 20 extra rows; exempt history rotates as before.
+					// At most capped roles × active hourly cap extra rows; exempt history rotates as before.
 					if (m.kind !== "report" && !roleMessagesHourlyExempt(m.from.role) && now - m.at < HOUR_MS) return true;
 					gone.push(m);
 					return false;
@@ -1554,7 +1558,7 @@ export class RoleMessages {
 		this.log(`refused ${who} -> ${short(to)} · ${short(kind)}: ${why.slice(0, 200)}`);
 	}
 
-	/** role-message-ladder: messages a role sent in the last hour (the 20-per-hour rule; report requests aside). */
+	/** role-message-ladder: messages a role sent in the last hour (versioned policy; report requests aside). */
 	/** role-message-ladder: the records accepted after `since` (the guard's hourly carry-over and rollback check). */
 	recent(since: number): RoleMessageRecord[] {
 		return this.data.messages.filter((m) => m.at > since);
@@ -1565,23 +1569,23 @@ export class RoleMessages {
 	}
 
 	/** message_role: check and store a message (the sender is the server's, never the model's). The native
-	 *  depth-only rule (hard 6) that the approval ladder replaces; kept for rollback and an unavailable guard. */
+	 *  selected free-chain rule that the approval ladder replaces; kept for an unavailable guard. */
 	send(sender: RoleMessageSender, input: RoleMessageSendInput): RoleMessageSendResult {
 		const prepared = this.prepare(sender, input);
 		if (!prepared.ok) return prepared;
 		const chain = sender.handling > 0 ? sender.handling + 1 : 1;
-		if (chain > ROLE_MESSAGE_CHAIN_MAX) {
+		if (chain > this.policy.depth.unapprovedThrough) {
 			return {
 				ok: false,
-				error: `Not sent: this would be message ${chain} in one chain of role messages (the limit is ${ROLE_MESSAGE_CHAIN_MAX}). Stop the back-and-forth and ask the owner how to go on.`,
+				error: `Not sent: this would be message ${chain} in one chain of role messages (the limit is ${this.policy.depth.unapprovedThrough}). Stop the back-and-forth and ask the owner how to go on.`,
 			};
 		}
 		const now = this.now();
 		const lastHour = this.hourlyCount(sender.role, now);
-		if (!roleMessagesHourlyExempt(sender.role) && lastHour >= ROLE_MESSAGES_PER_HOUR) {
+		if (!roleMessagesHourlyExempt(sender.role) && lastHour >= this.policy.ordinary.acceptedPerOrigin) {
 			return {
 				ok: false,
-				error: `Not sent: ${sender.role} has sent ${lastHour} role messages in the last hour (the limit is ${ROLE_MESSAGES_PER_HOUR}). Ask the owner before sending more.`,
+				error: `Not sent: ${sender.role} has sent ${lastHour} role messages in the last hour (the limit is ${this.policy.ordinary.acceptedPerOrigin}). Ask the owner before sending more.`,
 			};
 		}
 		const record = this.recordOf(

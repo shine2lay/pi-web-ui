@@ -5,34 +5,50 @@
 import { createHash } from "node:crypto";
 import type { Ask } from "./asks.js";
 import { guardCommandFingerprint } from "./role-message-guard-core.js";
+import {
+	guardDecisionRevisionValid,
+	guardPolicyFor,
+	guardPolicyIsValid,
+	guardQuantityValid,
+	guardRequestMaximum,
+	guardRequestRevisionValid,
+	guardSelectionRevisionValid,
+} from "./role-message-limits.js";
 import type {
 	GuardActor,
-	GuardApprovalBinding,
 	GuardApprovalContext,
 	GuardChoice,
-	GuardCommand,
 	GuardConsumerBinding,
-	GuardCoordinator,
 	GuardHostVerified,
-	GuardHostVerifier,
 	GuardInvocationReference,
 	GuardOperationIdentity,
 	GuardOwnerAnswerReference,
 	GuardOwnerQuestion,
 	GuardPolicyV1,
-	GuardQuantity,
 	GuardRequest,
 	GuardResult,
 	GuardRoleChoice,
 	GuardScope,
-	GuardStatusResult,
 	GuardTime,
 	GuardTransportResult,
 	GuardVerification,
 	GuardVerifiedSnapshot,
 } from "./role-message-guard-contract.js";
+import type {
+	GuardApprovalBindingAny,
+	GuardCommandAny,
+	GuardCoordinatorAny,
+	GuardHostVerifierAny,
+	GuardOwnerQuestionAny,
+	GuardOwnerQuestionV2,
+	GuardPolicyV2,
+	GuardRequestAny,
+	GuardRequestV2,
+	GuardResultAny,
+	GuardStatusResultAny,
+} from "./role-message-guard-contract-v2.js";
 
-export interface GuardApprovalNativePort {
+export interface GuardApprovalNativePortAny {
 	/** Fresh trusted time. Never accepts an agent/browser clock. E rechecks under its writer. */
 	time(): Promise<GuardTime>;
 	/** Resolve original request's destination and snapshot from native state, not caller fields.
@@ -41,15 +57,19 @@ export interface GuardApprovalNativePort {
 	 */
 	control(
 		actor: GuardHostVerified<GuardActor>,
-		request: GuardRequest,
+		request: GuardRequestAny,
 		phase: "initial" | "decision",
 	): Promise<GuardVerification<{ to: string; snapshot: GuardHostVerified<GuardVerifiedSnapshot> }>>;
 	/** Durable create-or-read SAME question for request+generation; exact binding/context/choices.
 	 * Neither a copied question ID nor AskHub's `from` string is an authenticated answer.
 	 */
-	question(request: GuardRequest, choicesDigest: string): Promise<GuardVerification<GuardOwnerQuestion>>;
+	readonly question: {
+		(request: GuardRequest, choicesDigest: string): Promise<GuardVerification<GuardOwnerQuestion>>;
+		(request: GuardRequestV2, choicesDigest: string): Promise<GuardVerification<GuardOwnerQuestionV2>>;
+		(request: GuardRequestAny, choicesDigest: string): Promise<GuardVerification<GuardOwnerQuestionAny>>;
+	};
 	/** Lookup the live durable request bound to a native answer event. No caller-provided request. */
-	ownerRequest(reference: GuardOwnerAnswerReference): Promise<GuardVerification<GuardRequest>>;
+	ownerRequest(reference: GuardOwnerAnswerReference): Promise<GuardVerification<GuardRequestAny>>;
 	/** Revalidate holds/time/permissions and committed control identity immediately before showing.
 	 * Same-key question/wake dedup, first-answer arbitration and reconnect recovery are mandatory.
 	 * Never falls back from an unauthorised Telegram plugin to another channel.
@@ -58,25 +78,29 @@ export interface GuardApprovalNativePort {
 	 * E refuses every initial control for an Owner-tier phase, so the native question is shown with no agent
 	 * message and no charge. */
 	present(
-		question: GuardOwnerQuestion,
+		question: GuardOwnerQuestionAny,
 		ask: Ask,
 		committedControl: Extract<GuardResult, { state: "accepted" }> | null,
 	): Promise<GuardTransportResult>;
 }
 
-export interface GuardApprovalPorts {
+interface GuardApprovalCapabilitiesAny {
 	readonly binding: GuardConsumerBinding;
-	readonly policy: GuardPolicyV1;
 	readonly maximumContextBytes: number;
-	readonly host: GuardHostVerifier;
-	readonly core: GuardCoordinator;
-	readonly native: GuardApprovalNativePort;
+	/** These ports support both families on every call; V1-only ports cannot author V2 through this context. */
+	readonly host: GuardHostVerifierAny;
+	readonly core: GuardCoordinatorAny;
+	readonly native: GuardApprovalNativePortAny;
 }
+/** Every capability handles both complete families; policy selection never substitutes a V1-only authoring port. */
+export type GuardApprovalPortsAny =
+	| (GuardApprovalCapabilitiesAny & { readonly policy: GuardPolicyV1 })
+	| (GuardApprovalCapabilitiesAny & { readonly policy: GuardPolicyV2 });
 export type GuardAdapterFailure = {
 	readonly state: "invalid" | "unavailable" | "context_needed";
 	readonly reason: string;
 };
-export type GuardAdapterOutcome = GuardResult | GuardAdapterFailure;
+export type GuardAdapterOutcomeAny = GuardResultAny | GuardAdapterFailure;
 
 /** Stable plain-data digest shared with the injected native question binding. Not authentication. */
 export function approvalDigest(value: unknown): string {
@@ -98,7 +122,6 @@ const text = (v: unknown): v is string =>
 	typeof v === "string" && v.trim().length > 0 && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(v);
 const object = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 const strings = (v: unknown, minimum = 0): v is string[] => Array.isArray(v) && v.length >= minimum && v.every(text);
-const quantity = (v: unknown): v is GuardQuantity => Number.isSafeInteger(v) && Number(v) >= 1 && Number(v) <= 5;
 const same = (a: unknown, b: unknown) => approvalDigest(a) === approvalDigest(b);
 const invalid = (reason: string): GuardAdapterFailure => ({ state: "invalid", reason });
 const unavailable = (reason: string): GuardAdapterFailure => ({ state: "unavailable", reason });
@@ -186,29 +209,40 @@ function trustedTime(t: GuardTime): boolean {
 /* #122 fix: E accepts a command only when identity.fingerprint === guardCommandFingerprint(command), so the
  * fingerprint is computed from the exact command body (A's earlier private digest never matched; every A command
  * was refused invalid_input by the real core). operationId stays A's replay key. */
-type GuardCommandBody = GuardCommand extends infer C ? (C extends GuardCommand ? Omit<C, "identity"> : never) : never;
+type GuardCommandBodyAny = GuardCommandAny extends infer C
+	? C extends GuardCommandAny
+		? Omit<C, "identity">
+		: never
+	: never;
 function withIdentity(
 	actor: GuardActor,
 	action: string,
 	key: unknown,
 	invocation: GuardInvocationReference | GuardOwnerAnswerReference,
-	body: GuardCommandBody,
-): GuardCommand {
+	body: GuardCommandBodyAny,
+): GuardCommandAny {
 	const identity: GuardOperationIdentity = {
 		version: "role-message-guard/v1",
 		actor,
 		operationId: approvalDigest({ action, key, invocation }),
 		fingerprint: "",
 	};
-	const command = { ...body, identity } as GuardCommand;
-	return { ...command, identity: { ...identity, fingerprint: guardCommandFingerprint(command) } } as GuardCommand;
+	const command: GuardCommandAny = { ...body, identity };
+	return { ...command, identity: { ...identity, fingerprint: guardCommandFingerprint(command) } };
 }
-function questionDigest(request: GuardRequest): string {
+function questionDigest(request: GuardRequestAny): string {
 	return approvalDigest({ binding: request.binding, detail: request.context, choices });
+}
+function legacyQuestion(question: GuardOwnerQuestionAny): question is GuardOwnerQuestion {
+	return question.binding.version === "role-message-guard/v1";
 }
 
 /** Exact finite native Ask descriptor. No multi-select, custom prose or Auto approve route. */
-export function ownerApprovalAsk(q: GuardOwnerQuestion, createdAt: number): Ask {
+export function ownerApprovalAsk(
+	...args: [GuardOwnerQuestion, number, GuardPolicyV1?] | [GuardOwnerQuestionV2, number, GuardPolicyV2]
+): Ask {
+	const [q, createdAt, selectedPolicy] = args;
+	const policy = selectedPolicy ?? guardPolicyFor(q.binding.version)!;
 	const c = q.detail;
 	const escape = (s: string) => s.replace(/[&<>]/gu, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[ch]!);
 	const detail = escape(
@@ -227,8 +261,7 @@ export function ownerApprovalAsk(q: GuardOwnerQuestion, createdAt: number): Ask 
 				declaredClaims: c.declaredClaims,
 				safetyScopeAndHolds: c.safetyScopeAndHolds,
 				binding: q.binding,
-				authorityLimit:
-					"Communication only; original root and scope; finite uses; one hour maximum; no automatic business send. Holds, 20/hour, access and consent still apply. This is not action, spending, installation or hold-lift authority.",
+				authorityLimit: `Communication only; original root and scope; finite uses; one hour maximum; no automatic business send. Holds, ${policy.ordinary.acceptedPerOrigin}/hour (Ops/Temper exempt), access and consent still apply. This is not action, spending, installation or hold-lift authority.`,
 			},
 			null,
 			2,
@@ -264,7 +297,7 @@ export function ownerApprovalAsk(q: GuardOwnerQuestion, createdAt: number): Ask 
 	};
 }
 
-export function createGuardApprovalAdapters(ports: GuardApprovalPorts) {
+export function createGuardApprovalAdapters(ports: GuardApprovalPortsAny) {
 	const { host, core, native, policy } = ports;
 	// Refuse an incompatible consumer; all three pins are the frozen dependency, not a policy fork.
 	const compatible =
@@ -272,14 +305,7 @@ export function createGuardApprovalAdapters(ports: GuardApprovalPorts) {
 		ports.binding.contractCommit === "04fe491fb3afc3b42462ad782b2099c7971c7008" &&
 		ports.binding.contractSha256 === "79a5a1e1a704ecfbb36a70fc1b210ee6e27575013843122cf202a84592b4c7af" &&
 		ports.binding.policyDocumentSha256 === "5d8433fd0a8f9a82103009e43491182caf14b80ad2a20b874709c5b3762724a9" &&
-		policy.version === "role-message-guard/v1" &&
-		policy.depth.unapprovedThrough === 6 &&
-		policy.depth.lowerThrough === 11 &&
-		policy.depth.ownerFrom === 12 &&
-		policy.grant.maximumBusinessSends === 5 &&
-		policy.grant.lifetimeMs === 3600000 &&
-		policy.ordinary.acceptedPerOrigin === 20 &&
-		policy.ordinary.rollingWindowMs === 3600000;
+		guardPolicyIsValid(policy);
 	async function actorOf(ref: GuardInvocationReference) {
 		if (!compatible) return unavailable("Frozen contract/policy pin mismatch");
 		const result = await host.verifyInvocation(ref);
@@ -289,7 +315,7 @@ export function createGuardApprovalAdapters(ports: GuardApprovalPorts) {
 		ref: GuardInvocationReference,
 		requestId: string,
 		generation: string,
-	): Promise<GuardStatusResult | GuardAdapterFailure> {
+	): Promise<GuardStatusResultAny | GuardAdapterFailure> {
 		if (!text(requestId) || !text(generation)) return invalid("Request ID and generation required");
 		const actor = await actorOf(ref);
 		if ("state" in actor) return actor;
@@ -299,13 +325,13 @@ export function createGuardApprovalAdapters(ports: GuardApprovalPorts) {
 	async function request(
 		ref: GuardInvocationReference,
 		input: { binding: unknown; context: unknown; quantity: unknown },
-	): Promise<GuardAdapterOutcome> {
+	): Promise<GuardAdapterOutcomeAny> {
 		const actor = await actorOf(ref);
 		if ("state" in actor) return actor;
 		if (!completeApprovalContext(input.context, ports.maximumContextBytes))
 			return { state: "context_needed", reason: "Complete bounded context required; no truncation" };
 		if (
-			!quantity(input.quantity) ||
+			!guardQuantityValid(input.quantity, policy.version) ||
 			!object(input.binding) ||
 			!keys(input.binding, ["requestId", "generation", "scope"]) ||
 			!text(input.binding.requestId) ||
@@ -321,25 +347,31 @@ export function createGuardApprovalAdapters(ports: GuardApprovalPorts) {
 			hop <= policy.depth.unapprovedThrough ||
 			hop > Number.MAX_SAFE_INTEGER - input.quantity
 		)
-			return invalid("Approval requires a known safe business hop above six");
+			return invalid(`Approval requires a known safe business hop above ${policy.depth.unapprovedThrough}`);
 		const time = await native.time();
 		if (!trustedTime(time) || !Number.isSafeInteger(time.nowMs + policy.request.lifetimeMs))
 			return unavailable("Trusted clock required");
-		const binding: GuardApprovalBinding = {
-			version: policy.version,
+		const bound = {
 			requestId: input.binding.requestId,
 			generation: input.binding.generation,
 			requester: actor,
 			causal: causal.value,
 			scope: input.binding.scope,
-			quantity: input.quantity,
-			tier: hop >= policy.depth.ownerFrom ? "owner" : "lower",
+			tier: hop >= policy.depth.ownerFrom ? ("owner" as const) : ("lower" as const),
 			upperHop: hop + input.quantity - 1,
 		};
+		let binding: GuardApprovalBindingAny;
+		if (policy.version === "role-message-guard/v1") {
+			if (!guardQuantityValid(input.quantity, policy.version)) return invalid("Finite V1 quantity required");
+			binding = { ...bound, version: policy.version, quantity: input.quantity };
+		} else {
+			if (!guardQuantityValid(input.quantity, policy.version)) return invalid("Finite V2 quantity required");
+			binding = { ...bound, version: policy.version, quantity: input.quantity };
+		}
 		const selected = await host.selectApprover(binding);
 		if (selected.state !== "verified") return failure(selected);
 		if (hop >= policy.depth.ownerFrom && selected.value.tier !== "owner")
-			return unavailable("Lower authority cannot reach hop twelve");
+			return unavailable(`Lower authority cannot reach hop ${policy.depth.ownerFrom}`);
 		if (
 			selected.value.tier === "lower" &&
 			(!selected.value.home.currentHome ||
@@ -351,33 +383,49 @@ export function createGuardApprovalAdapters(ports: GuardApprovalPorts) {
 				(selected.value.route === "coo" && selected.value.role !== "coo"))
 		)
 			return unavailable("Distinct selected current-home approver required; otherwise native Owner fallback");
+		if (
+			policy.version === "role-message-guard/v2" &&
+			binding.quantity > guardRequestMaximum(policy, hop, selected.value.tier)
+		)
+			return invalid("Quantity must fit the remaining finite tier exactly; no clamping");
 		const resolved = {
 			...binding,
 			tier: selected.value.tier,
+			// Preserve V1 adapter replay vectors. E still refuses inconsistent legacy quantity/endpoints.
 			upperHop:
-				selected.value.tier === "lower" ? Math.min(binding.upperHop, policy.depth.lowerThrough) : binding.upperHop,
+				policy.version === "role-message-guard/v1" && selected.value.tier === "lower"
+					? Math.min(binding.upperHop, policy.depth.lowerThrough)
+					: binding.upperHop,
 		};
-		const record: GuardRequest = {
-			binding: resolved,
+		const initial = {
 			context: input.context,
-			selectedApprover: selected.value,
 			createdAt: time.nowMs,
 			expiresAt: time.nowMs + policy.request.lifetimeMs,
-			state: resolved.tier === "owner" ? "awaiting_owner" : "awaiting_approver",
-			upwardEscalations: 0,
+			state: resolved.tier === "owner" ? ("awaiting_owner" as const) : ("awaiting_approver" as const),
+			upwardEscalations: 0 as const,
 			initialNotificationKey: approvalDigest([resolved, "initial"]),
 			decisionNotificationKey: approvalDigest([resolved, "decision"]),
 			firstDecision: null,
 			grantId: null,
 		};
-		return core.execute(
-			withIdentity(actor, "request", record, ref, { kind: "request_record", actor, request: record }),
-		);
+		let record: GuardRequestAny;
+		if (resolved.version === "role-message-guard/v1" && guardSelectionRevisionValid(selected.value, resolved.version))
+			record = { ...initial, binding: resolved, selectedApprover: selected.value };
+		else if (
+			resolved.version === "role-message-guard/v2" &&
+			guardSelectionRevisionValid(selected.value, resolved.version)
+		)
+			record = { ...initial, binding: resolved, selectedApprover: selected.value };
+		else return unavailable("Approver selection revision mismatch");
+		const command = guardRequestRevisionValid(record, "role-message-guard/v1")
+			? withIdentity(actor, "request", record, ref, { kind: "request_record", actor, request: record })
+			: withIdentity(actor, "request", record, ref, { kind: "request_record", actor, request: record });
+		return core.execute(command);
 	}
 	async function roleDecision(
 		ref: GuardInvocationReference,
 		input: { requestId: string; generation: string; choice: GuardRoleChoice; reason: string },
-	): Promise<GuardAdapterOutcome> {
+	): Promise<GuardAdapterOutcomeAny> {
 		if (![...choices, "escalate_owner"].includes(input.choice) || !text(input.reason))
 			return invalid("Finite choice and reason required");
 		const found = await read(ref, input.requestId, input.generation);
@@ -388,7 +436,7 @@ export function createGuardApprovalAdapters(ports: GuardApprovalPorts) {
 		if (
 			r.binding.tier !== "lower" ||
 			r.selectedApprover.tier !== "lower" ||
-			r.binding.upperHop > policy.depth.lowerThrough ||
+			r.binding.upperHop > (guardPolicyFor(r.binding.version)?.depth.lowerThrough ?? 0) ||
 			!actor.currentHome ||
 			actor.task.kind !== "home" ||
 			!same(actor, r.selectedApprover.home) ||
@@ -407,10 +455,13 @@ export function createGuardApprovalAdapters(ports: GuardApprovalPorts) {
 			!same(d.authority.selection, r.selectedApprover)
 		)
 			return invalid("Verified decision binding/selected authority mismatch");
-		return core.execute(withIdentity(actor, "role_decision", d, ref, { kind: "decision_record", decision: d }));
+		const command = guardDecisionRevisionValid(d, "role-message-guard/v1")
+			? withIdentity(actor, "role_decision", d, ref, { kind: "decision_record", decision: d })
+			: withIdentity(actor, "role_decision", d, ref, { kind: "decision_record", decision: d });
+		return core.execute(command);
 	}
 	/** HOST-ONLY callback, never a GuardUntrustedInput/tool. Native event reference alone is not proof. */
-	async function nativeOwnerAnswer(ref: GuardOwnerAnswerReference): Promise<GuardAdapterOutcome> {
+	async function nativeOwnerAnswer(ref: GuardOwnerAnswerReference): Promise<GuardAdapterOutcomeAny> {
 		if (!compatible) return unavailable("Frozen contract/policy pin mismatch");
 		const current = await native.ownerRequest(ref);
 		if (current.state !== "verified") return failure(current);
@@ -454,17 +505,18 @@ export function createGuardApprovalAdapters(ports: GuardApprovalPorts) {
 			(d.authority.source.kind === "authorised_owner_telegram" && !text(d.authority.source.pluginId))
 		)
 			return invalid("Actual native authenticated Owner event required");
-		return core.execute(
-			withIdentity(r.binding.requester, "owner_decision", d, ref, { kind: "decision_record", decision: d }),
-		);
+		const command = guardDecisionRevisionValid(d, "role-message-guard/v1")
+			? withIdentity(r.binding.requester, "owner_decision", d, ref, { kind: "decision_record", decision: d })
+			: withIdentity(r.binding.requester, "owner_decision", d, ref, { kind: "decision_record", decision: d });
+		return core.execute(command);
 	}
-	/** An explicit control attempt, not a business send. Core owns dedup, 20/hour and all holds. */
+	/** An explicit control attempt, not a business send. Core owns dedup, selected hourly cap and all holds. */
 	async function notify(
 		ref: GuardInvocationReference,
 		requestId: string,
 		generation: string,
 		phase: "initial" | "decision",
-	): Promise<GuardAdapterOutcome | GuardTransportResult> {
+	): Promise<GuardAdapterOutcomeAny | GuardTransportResult> {
 		if (phase !== "initial" && phase !== "decision") return invalid("Finite control phase required");
 		const found = await read(ref, requestId, generation);
 		if (found.state !== "found") return unavailable("Current visible request required");
@@ -504,7 +556,7 @@ export function createGuardApprovalAdapters(ports: GuardApprovalPorts) {
 	/** HOST-ONLY (#122): show the one bound native Owner question for a current Owner-tier phase (direct Owner tier
 	 * or E's escalated phase). No agent message, no charge; E still owns first-answer arbitration. The caller passes
 	 * the request exactly as read from E's own state, never caller-supplied fields. */
-	async function presentOwnerQuestion(r: GuardRequest): Promise<GuardAdapterOutcome | GuardTransportResult> {
+	async function presentOwnerQuestion(r: GuardRequestAny): Promise<GuardAdapterOutcomeAny | GuardTransportResult> {
 		if (!compatible) return unavailable("Frozen contract/policy pin mismatch");
 		if (r.binding.tier !== "owner" || r.selectedApprover.tier !== "owner" || r.state !== "awaiting_owner")
 			return invalid("Current awaiting Owner-tier request required");
@@ -522,7 +574,10 @@ export function createGuardApprovalAdapters(ports: GuardApprovalPorts) {
 			!text(q.generation)
 		)
 			return invalid("Exact native Owner question required");
-		return native.present(q, ownerApprovalAsk(q, r.createdAt), null);
+		const ask = legacyQuestion(q)
+			? ownerApprovalAsk(q, r.createdAt, guardPolicyFor("role-message-guard/v1")!)
+			: ownerApprovalAsk(q, r.createdAt, guardPolicyFor("role-message-guard/v2")!);
+		return native.present(q, ask, null);
 	}
 	return {
 		agent: { request, status: read, roleDecision, notify },

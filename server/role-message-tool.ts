@@ -18,6 +18,7 @@ import {
 } from "./role-messages.js";
 import { BOARD_ROUTING_RULE } from "./board-tool.js";
 import type { RoleMessageGuardHost } from "./role-message-guard-host.js";
+import { ROLE_MESSAGE_POLICY } from "./role-message-limits.js";
 
 /** board (task #76): what message_role's result adds when the same text went to several roles. */
 export function sameTextHint(roles: readonly string[]): string {
@@ -33,7 +34,7 @@ export interface MessageRoleHost {
 	sender(): RoleMessageSender | string;
 	/** The server's role message service (absent: not wired). */
 	service(): RoleMessages | undefined;
-	/** role-message-ladder: the approval ladder (absent: native depth-6 rule). */
+	/** role-message-ladder: the approval ladder (absent: native selected free-chain rule). */
 	guard?(): RoleMessageGuardHost | undefined;
 }
 
@@ -42,14 +43,12 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 		name: MESSAGE_ROLE_TOOL_NAME,
 		label: "Message another role",
 		description:
-			"Message another role's chat: a question, a request (work in its area), an fyi, or a reply (replyTo) to one you got. " +
-			"It lands in that role's home chat after any running turn, marked as from you; a reply goes to the chat that asked. " +
-			"A question, request or reply starts a turn there; an fyi doesn't (it is read with that chat's next message). " +
-			"Answers come later as new messages. No secrets. " +
+			"Message a role: question, request, fyi or reply (replyTo). Delivered after its current turn; replies return to the asking chat. " +
+			"Questions/requests/replies wake; fyi waits. Answers arrive later. No secrets. " +
 			`${BOARD_ROUTING_RULE} ` +
-			"So direct messages go here; to tell several roles the same general info, post it on the board. " +
-			"Messages 1 to 6 in one chain go freely; 7 to 11 need the COO's grant and 12 or more the owner's " +
-			"(the tool says so and how to ask, with the approval parameter).",
+			"So to tell several roles the same general info, post it on the board. " +
+			`Capped roles: ${ROLE_MESSAGE_POLICY.ordinary.acceptedPerOrigin} messages per rolling hour; Ops/Temper hourly-exempt only. ` +
+			`Chain 1 to ${ROLE_MESSAGE_POLICY.depth.unapprovedThrough} free; ${ROLE_MESSAGE_POLICY.depth.unapprovedThrough + 1} to ${ROLE_MESSAGE_POLICY.depth.lowerThrough} authorised lead/COO grant; ${ROLE_MESSAGE_POLICY.depth.ownerFrom} or more Owner. Use approval when asked.`,
 		promptSnippet: "message another role's chat (question / request / fyi / reply); answers come later as new messages",
 		parameters: Type.Object({
 			to: Type.Optional(
@@ -107,7 +106,11 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 							}),
 						),
 						quantity: Type.Optional(
-							Type.Number({ description: "request: sends needed, 1 to 5 (capped at message 11 for the COO)." }),
+							Type.Integer({
+								minimum: 1,
+								maximum: ROLE_MESSAGE_POLICY.grant.maximumBusinessSends,
+								description: `request: sends needed, 1 to ${ROLE_MESSAGE_POLICY.grant.maximumBusinessSends} (capped at message ${ROLE_MESSAGE_POLICY.depth.lowerThrough} for the authorised lead/COO); exact remainder, no clamping.`,
+							}),
 						),
 						context: Type.Optional(
 							Type.Object(
@@ -120,7 +123,9 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 							),
 						),
 					},
-					{ description: "Approvals for messages 7 and above in one chain. With it, to/kind/text aren't needed." },
+					{
+						description: `Approvals for messages ${ROLE_MESSAGE_POLICY.depth.unapprovedThrough + 1} and above in one chain. With it, to/kind/text aren't needed.`,
+					},
 				),
 			),
 		}),
@@ -135,8 +140,7 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 			const guard = host.guard?.();
 			if (p.approval) {
 				if (!guard || guard.state.status !== "ready") {
-					const why =
-						"Approvals are unavailable right now (the ladder is off); messages 7 and above can't be sent. Ask the owner how to go on.";
+					const why = `Approvals are unavailable right now (the ladder is off); messages ${ROLE_MESSAGE_POLICY.depth.unapprovedThrough + 1} and above can't be sent. Ask the owner how to go on.`;
 					service.noteRefused(sender, p.to, "approval", why);
 					throw new Error(why);
 				}

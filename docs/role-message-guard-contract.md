@@ -1,4 +1,46 @@
-# Role-message guard contract v1
+# Role-message guard contract: frozen v1 and explicit v2 policy domain
+
+## Ops #453 compatibility revision
+
+The complete `server/role-message-guard-contract.ts` stays byte-for-byte frozen at
+`04fe491fb3afc3b42462ad782b2099c7971c7008`, 24,256 bytes, SHA256
+`79a5a1e1a704ecfbb36a70fc1b210ee6e27575013843122cf202a84592b4c7af`.
+`server/role-message-guard-contract-v2.ts` is a separately named, erased companion:
+qualified V1 imports plus selective `Omit`/`Extract` overlays, not a copied contract
+or a widened old-import facade. Its explicit `*Any`, `*V2` and `*For<V>` families
+correlate the whole binding, selection reason, request, first decision, grant and
+Owner question. Verifier overloads preserve per-call revision; coordinator and
+transaction callbacks opt into the complete revised input/output graph.
+
+S1 envelopes contain only original V1 records and results. S2 envelopes may retain
+exact V1 records alongside V2 records. Runtime validation also checks nested
+recorded/blocked transaction results, first-decision revision and Owner-selection
+reason; independent version/quantity unions are not a compatible decoder. Writes
+cannot downgrade S2 to S1 or rewrite an issued grant's authority, scope, quantity,
+expiry or prior uses. Structural decoding never authenticates stored authority:
+the native host still reverifies it before admission and delivery. Frozen golden
+fixtures use an explicit V1-only view that fails on unexpected S2/V2 values rather
+than changing their expected vectors.
+
+`GuardVersion`, `GuardQuantity` and `GuardPolicyV1` retain their original literal meaning:
+20 per rolling hour,6 free,11 lower,12 Owner,max5. V1 law examples and replay/golden
+vectors remain V1. `GuardPolicyV2` explicitly defines40/hour,12 free,22 lower,23 Owner,max10;
+`GuardPolicyVersion`/`GuardQuantityV2`/`GuardBusinessQuantity` name the expanded domains.
+Runtime validation selects bounds by each binding's recorded version, not today's selector.
+V1 cannot carry quantity6–10 or a lower grant beyond11. V2 lower requests fit13–22 exactly;
+the Owner default endpoint is32, never a sliding/self-expanding band. `one_send` is1.
+
+**Compatibility-reader phase: V1 is still active.** See [the two-stage design and receipts](role-message-policy-v2.md).
+The shared policy selector also drives fallback/host/core, approvals, schema/help and passive
+startup metadata. The journal, operation identity, digests and receipts keep their v1 ABI so
+activation cannot reopen an accepted operation. Only a normal atomic transaction containing
+a v2 approval binding marks durable state v2; no startup rewrite or manual migration.
+The reader accepts mixed histories and preserves all existing fields, TTL and uses. The
+pre-compatibility reader rejects v2 state: after activation, roll back limits by a forward
+inverse selector patch with this reader, never by installing that older reader or snapshots.
+`rollback_depth_6` remains6/20. All protected/request/incident/storage/Board limits stay as before.
+
+The following provenance and examples describe the frozen **original v1** contract.
 
 > **Delivered by #122 (ladder only).** L1–L5, L7 and L8 are wired live through
 > `server/role-message-guard-host.ts` (see `docs/role-message-ladder.md`). L6 (protected scope) and the
@@ -6,7 +48,7 @@
 > after #125 found no qualified native urgent source and #130 found no safe small design (C124 origin
 > unrepresentable). Urgent-looking messages are ordinary; protected cases stay NOT DELIVERED.
 
-Component C of Ops #122's approved split. **Type-only, inactive, not a released guard.**
+Historical Component C of Ops #122's approved split: **type-only, initially inactive.**
 `server/role-message-guard-contract.ts` emits an empty module. It exports no factory,
 policy value, native verifier, store, dispatcher, registration or default instance.
 The existing hard depth-6 behavior remains unchanged until #122 separately integrates
@@ -16,11 +58,11 @@ and qualifies the feature. Components must use this one contract, not a private 
 
 These are document SHA256 pins, not authentication or runtime approval:
 
-| Document | SHA256 |
-| --- | --- |
-| PLAN-v3-SPLIT.md | 5d8433fd0a8f9a82103009e43491182caf14b80ad2a20b874709c5b3762724a9 |
-| PLAN.md | c8b8d6c109dcc7ed32187796b9785676dadea749085ce9819ba086194354e259 |
-| PLAN-v2.md | ae4b1bbae8006f30085d006f40130b3aa445ba15b921021c7276349fcd8c3c0c |
+| Document           | SHA256                                                           |
+| ------------------ | ---------------------------------------------------------------- |
+| PLAN-v3-SPLIT.md   | 5d8433fd0a8f9a82103009e43491182caf14b80ad2a20b874709c5b3762724a9 |
+| PLAN.md            | c8b8d6c109dcc7ed32187796b9785676dadea749085ce9819ba086194354e259 |
+| PLAN-v2.md         | ae4b1bbae8006f30085d006f40130b3aa445ba15b921021c7276349fcd8c3c0c |
 | URGENT-PROPOSAL.md | 47689efd821d201b46d6ba22d158b6e5adfac4e8d015cc6956371045ce98a86c |
 
 Private originals: `/home/shinelay/company-lab/shared/role-message-approval-plan-2026-10-12/`.
@@ -37,15 +79,15 @@ source SHA256 and consumer handoff are recorded in private `split/contract/HANDO
 
 ## Ownership and API boundary
 
-| Owner | Responsibility | Contract surfaces |
-| --- | --- | --- |
-| C / #124 | This single erased contract and law examples | all exported types; no implementation |
-| P / #125 | Read-only qualification of native producers | evidence manifest; no runtime API supplied |
-| E / #126 | SINGLE admission/state/transaction authority | `GuardCoordinator`, `GuardStorePort`, all state/receipt/result types |
-| A / #127 | Explicit role decisions, native Owner adapter, isolated views | request/context/question/decision types; calls E for every mutation |
-| U / #128 | Qualified producer lookup and fixed native templates | incident/evidence/notice types; calls E for every admission |
-| V / #129 | Independently derived acceptance cases | implements injected harness against these interfaces, never copies E's oracle |
-| I / existing #122 | Sole central wiring, combined review and installation | authentic invocation lookup, real verifier/transport binding, readiness gates |
+| Owner             | Responsibility                                                | Contract surfaces                                                             |
+| ----------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| C / #124          | This single erased contract and law examples                  | all exported types; no implementation                                         |
+| P / #125          | Read-only qualification of native producers                   | evidence manifest; no runtime API supplied                                    |
+| E / #126          | SINGLE admission/state/transaction authority                  | `GuardCoordinator`, `GuardStorePort`, all state/receipt/result types          |
+| A / #127          | Explicit role decisions, native Owner adapter, isolated views | request/context/question/decision types; calls E for every mutation           |
+| U / #128          | Qualified producer lookup and fixed native templates          | incident/evidence/notice types; calls E for every admission                   |
+| V / #129          | Independently derived acceptance cases                        | implements injected harness against these interfaces, never copies E's oracle |
+| I / existing #122 | Sole central wiring, combined review and installation         | authentic invocation lookup, real verifier/transport binding, readiness gates |
 
 All functions are **interface methods for future injected implementations**, not SDK
 methods. No factory name or undocumented native API is implied. A/U never maintain
@@ -275,16 +317,16 @@ proof belong to E/V/I and block deployment until demonstrated.
 Source baseline: `9fe5b68cd451cdb3123475408b9898c9efc3ff90`, bundled pi SDK `1.0.1`.
 These findings are source observations, not real-chat tests or authority receipts.
 
-| Boundary | Actual supported observation | Requirement NOT supplied by C |
-| --- | --- | --- |
-| `server/agent-service.ts` role sender closure; `server/role-messages.ts` verified/handlingDepth | native sender identity, current home, exact stored incoming id/hash/target/depth | trusted preserved causal/control/legacy binding under all supported callers |
-| `server/identity-service.ts` IdentityDef; registry access | current identity/home definitions, no trusted lead field | authorised lead verification; otherwise COO only, no new registry |
-| `server/asks.ts` AskHub; agent-service askUser/resolveQuestion | in-memory first-answer resolution, question ids; source strings and plugin permission | authenticated actual Owner binding, exact generation/choices, durable first-answer arbitration |
-| `server/plugins.ts` asks.answer; native protocol/browser response path | plugin id passed by host, asks permission; browser response routing | plugin permission/source label alone does NOT prove the Owner personally answered |
-| `server/role-messages.ts` load/save/send | old load rebuilds known top-level fields; save catches write errors; accepted records account hourly before transport | atomic legacy+journal durable publication and honest failure; no save-is-commit assumption |
-| `server/role-messages.ts` host deliver/note; agent-service wake routes | existing native delivery/no-wake FYI, after-current-turn routing | durable exact dispatch/wake identity and safe uncertain retry proof |
-| SDK SessionManager and appendCustomEntry | session entries/branches and extension APIs | no cross-file role-ledger transaction, native critical incident or Owner authentication API supplied |
-| existing native urgent sources | no suitable producer established by C investigation | P qualification required; unsupported categories stay unavailable |
+| Boundary                                                                                        | Actual supported observation                                                                                          | Requirement NOT supplied by C                                                                        |
+| ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `server/agent-service.ts` role sender closure; `server/role-messages.ts` verified/handlingDepth | native sender identity, current home, exact stored incoming id/hash/target/depth                                      | trusted preserved causal/control/legacy binding under all supported callers                          |
+| `server/identity-service.ts` IdentityDef; registry access                                       | current identity/home definitions, no trusted lead field                                                              | authorised lead verification; otherwise COO only, no new registry                                    |
+| `server/asks.ts` AskHub; agent-service askUser/resolveQuestion                                  | in-memory first-answer resolution, question ids; source strings and plugin permission                                 | authenticated actual Owner binding, exact generation/choices, durable first-answer arbitration       |
+| `server/plugins.ts` asks.answer; native protocol/browser response path                          | plugin id passed by host, asks permission; browser response routing                                                   | plugin permission/source label alone does NOT prove the Owner personally answered                    |
+| `server/role-messages.ts` load/save/send                                                        | old load rebuilds known top-level fields; save catches write errors; accepted records account hourly before transport | atomic legacy+journal durable publication and honest failure; no save-is-commit assumption           |
+| `server/role-messages.ts` host deliver/note; agent-service wake routes                          | existing native delivery/no-wake FYI, after-current-turn routing                                                      | durable exact dispatch/wake identity and safe uncertain retry proof                                  |
+| SDK SessionManager and appendCustomEntry                                                        | session entries/branches and extension APIs                                                                           | no cross-file role-ledger transaction, native critical incident or Owner authentication API supplied |
+| existing native urgent sources                                                                  | no suitable producer established by C investigation                                                                   | P qualification required; unsupported categories stay unavailable                                    |
 
 The interface ports intentionally express REQUIRED behavior without claiming those
 APIs already exist. Native Owner authentication, durable first answer, atomic legacy

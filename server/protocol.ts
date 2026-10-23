@@ -122,15 +122,22 @@ export interface UiRoleMessage {
 	text: string;
 }
 
-/** role-message-ladder: one open Owner question (message 12 and above, or the COO asking for itself, or the
- *  COO's one escalation). Shown with A's approval dialog; answered with role_guard_owner_answer. */
-export interface UiRoleGuardQuestion {
+/** role-message-ladder: one native Owner question under its recorded policy (or an authorised escalation).
+ * Shown with A's approval dialog; answered with role_guard_owner_answer. Revision pairs never mix. */
+export type UiRoleGuardQuestion = {
 	questionId: string;
 	generation: string;
 	requesterRole: string;
-	request: import("./role-message-guard-contract.js").GuardRequest;
-	ownerQuestion: import("./role-message-guard-contract.js").GuardOwnerQuestion;
-}
+} & (
+	| {
+			request: import("./role-message-guard-contract.js").GuardRequest;
+			ownerQuestion: import("./role-message-guard-contract.js").GuardOwnerQuestion;
+	  }
+	| {
+			request: import("./role-message-guard-contract-v2.js").GuardRequestV2;
+			ownerQuestion: import("./role-message-guard-contract-v2.js").GuardOwnerQuestionV2;
+	  }
+);
 
 /** role-messages: one row of Settings -> Identities -> Role messages (newest first). */
 export interface UiRoleMessageRow {
@@ -3018,8 +3025,8 @@ export interface UiRolesOverview {
 	contacts?: UiOwnerContact[];
 	/** roles-sent: sender → receiver pairs with open requests or questions (absent: this server reads none). */
 	openPairs?: UiRoleOpenPair[];
-	/** ladder-alarm: the approval step for long role-message chains (messages 7+). on false = it's off this run
-	 *  (chains stop at 6, nobody can approve more), with the reason its start logged and since = when this
+	/** ladder-alarm: the approval step beyond the active free-chain boundary. on false = it's off this run
+	 *  (chains stop at that boundary; nobody can approve more), with the reason its start logged and since = when this
 	 *  server started. Absent: not known yet (still starting) or this server has no such step. */
 	approvals?: UiMessageApprovals;
 }

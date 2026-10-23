@@ -6,14 +6,29 @@ Roles message each other with `message_role`. A message started by another role'
 #122 replaces that hard stop with an approval ladder. The Owner chose "Ship now, urgent later"
 (native record dr-c512c42648d0): there is **no urgent exception** in this delivery.
 
-## What a role sees
+## Current policy and versioned compatibility (Ops #453)
 
-| Hop   | What happens                                                                                     |
-| ----- | ------------------------------------------------------------------------------------------------ |
-| 1–6   | Sent as before.                                                                                  |
-| 7–11  | Needs a grant from the responsible lead, or the COO by default. The tool says so and how to ask. |
-| 12–16 | Needs a grant from the Owner (hop 12 included). A grant covers at most hops 12–16.               |
-| 17+   | Fresh Owner consent for each further 12–16-sized step; nothing renews by itself.                 |
+The shared selector in `server/role-message-limits.ts` drives native/unavailable fallback,
+host/core, approval validation, tool schema/help and startup metadata. **Compatibility-reader
+phase: V1 (20/6/11/12/max5) remains active.** The separately versioned V2 policy is
+40 per rolling hour, 12 free, lower grants for 13–22, Owner from23, at most10 new sends
+with the default Owner band ending32. It is not active merely because its reader exists.
+See [the hypothesis, two checked installs and safe undo](role-message-policy-v2.md).
+
+Existing requests/grants retain their recorded version, quantity, tier, scope, uses and expiry.
+V2 requests must fit the remaining finite band exactly, with no clamping; `one_send` remains
+one. Neither policy turns on the ladder, wakes or a held feature, retries denied messages,
+or enlarges/reissues an existing grant. Ops/Temper's hourly-only exemption stays unchanged.
+Board10/hour, request/protected/incident quotas and store capacities do not change.
+
+## What a role sees in the compatibility phase (V1)
+
+| Hop   | What happens                                                                                           |
+| ----- | ------------------------------------------------------------------------------------------------------ |
+| 1–6   | Sent as before.                                                                                        |
+| 7–11  | Needs a grant from the responsible lead, or the COO by default. The tool says so and how to ask.       |
+| 12–16 | Needs a grant from the Owner (hop 12 included). A grant covers at most hops 12–16.                     |
+| 17+   | Outside the native default finite Owner band; ask the Owner how to go on. No self-expanding allowance. |
 
 - Ask: `message_role` with `approval: { action: "request", recipients, context }`. The context is the
   Owner's dialog package (goal, progress, prior decisions, why needed, questions, options, cost/time/risk,
@@ -36,7 +51,9 @@ Roles message each other with `message_role`. A message started by another role'
   count; the exemption skips only the hourly refusal, not chain approvals, grants, pauses, holds, scope,
   budgets or consents. No other role or the board's post cap changes.
 
-## Hourly exemption: H-MSGCAP-EXEMPT-1 (Ops #318)
+## Historical V1 proof: hourly exemption H-MSGCAP-EXEMPT-1 (Ops #318)
+
+The numeric20/6/11/12 assertions below describe the frozen V1 proof, not a command to change V2.
 
 Lead: Ops. Owner source: dr-c6daedfa9fef, 2026-10-20 ("temper and ops have no limit";
 "Let Ops choose"). Ops chose no hourly backstop; the chain's finite grants remain the loop boundary.
@@ -101,7 +118,7 @@ it needs the Owner. Legacy records without root/parent are anchored explicitly (
 never reset.
 
 `role-messages.json` keeps its newest 1000 records plus waiting/report protections and capped roles'
-non-report hourly proof (Ops #318; at most capped roles × 20 extra hourly-proof rows). A chain's place never depends on that rotating
+non-report hourly proof (Ops #318; at most capped roles × the active hourly cap extra hourly-proof rows). A chain's place never depends on that rotating
 copy: when a record is dropped, its chain facts (id, hash, target, root, parent, hop, guard tag and, since
 Ops #379, how it ended) go to
 `role-messages-chains.jsonl` beside it and are kept 30 days, so a reply to a pruned message keeps its hop
@@ -123,7 +140,7 @@ Ops #379, how it ended) go to
   fingerprint (it now uses E's `guardCommandFingerprint`) and added the question-only path.
 - `server/role-messages.ts` keeps all native rules and gains `prepare` / `admit` / `causalityOf` /
   `hourlyCount` / `ancestorAt`; records carry `root`, `parent` and `guard`. With the host absent or
-  degraded, the native depth-6 refusal applies unchanged.
+  degraded, the native free-chain/hourly refusal uses the same selected active policy.
 - State: `~/.pi-web-ui/role-message-guard/` (E's store in `gen-N/`, decisions, Owner questions, lock,
   `history.jsonl`).
 
@@ -189,11 +206,17 @@ Known limits:
 
 ## Rollback
 
-The previous reader (git-pinned in `tests/role-message-guard-acceptance/previous-reader.mjs`) opens the
+**After V2 activation, keep the compatibility reader.** Never install a pre-compatibility
+build over V2 records. Use a normal forward inverse active-selector patch and checked deploy
+to restore V1 limits while preserving all new and old messages, usage, accepted deliveries and
+finite grant fields. No whole-file data/settings restore. See `role-message-policy-v2.md`.
+The original `rollback_depth_6` mode still means6/20, not12/40.
+
+Historical #122 proof (before V2 records): the previous reader (git-pinned in `tests/role-message-guard-acceptance/previous-reader.mjs`) opens the
 new `role-messages.json` unchanged: every id, word, state and hop is kept, its hard 6 applies, approval
 controls count in its 20/hour, and its save keeps the ladder fields. Reinstalling the ladder continues
-each chain where it was. Roll back with `pi-web-deploy rollback`; never restore an older backup over
-live role-message state.
+each chain where it was. That older build is not a safe rollback target after V2 records.
+Never restore an older backup over live role-message state.
 
 To turn approvals off without a rollback, set `PI_WEB_UI_MESSAGE_APPROVALS=off` (Ops #241); an unreadable
 record gets a one-shot fresh start: `docs/role-message-fresh-start.md`.

@@ -17,8 +17,8 @@
  *  6. paused: an fyi is held (not delivered, listed as held), a restart keeps it, resuming delivers
  *     it exactly once (added without a turn, see role-messages-fyi-test), and another restart doesn't
  *     deliver it again;
- *  7. the chain limit: a back-and-forth stops at message 6; the 7th is refused;
- *  8. the hourly cap: a role's 21st message within the hour is refused.
+ *  7. a back-and-forth stops at the active free-chain boundary;
+ *  8. the active hourly cap refuses the next message.
  * Never prints what goes to the model (rule 11).
  * Usage: npm run build && node tests/role-messages-test.mjs   (ROLEMSG_DEBUG=1: server output)
  */
@@ -29,6 +29,9 @@ import { setTimeout as sleep } from "node:timers/promises";
 import WebSocket from "ws";
 import { textOf } from "./lib/mock-model.mjs";
 import { ownServer } from "./lib/own-server.mjs";
+import { ROLE_MESSAGE_POLICY } from "../dist/server/role-message-limits.js";
+const FREE = ROLE_MESSAGE_POLICY.depth.unapprovedThrough;
+const HOURLY = ROLE_MESSAGE_POLICY.ordinary.acceptedPerOrigin;
 
 // The account's home (userInfo), not HOME: a sealed run has a temp HOME.
 const PI_IDENTITY = process.env.PI_IDENTITY_PKG ?? join(userInfo().homedir, "projects", "pi-identity");
@@ -128,7 +131,7 @@ function decide({ payload, lastUser, toolResult, sideRequest }) {
 	const results = messages.slice(lastUserAt + 1).filter((m) => m.role === "tool");
 	if (lastUser.startsWith("BURST")) {
 		const last = results.at(-1) ? textOf(results.at(-1)) : "";
-		if (last.includes("Not sent") || results.length >= 25) return `BURST DONE after ${results.length}: ${last}`;
+		if (last.includes("Not sent") || results.length >= HOURLY + 5) return `BURST DONE after ${results.length}: ${last}`;
 		return { tool: "message_role", args: { to: "beta", kind: "fyi", text: `BURST ${results.length + 1}` } };
 	}
 	if (toolResult) return `TOOL RESULT: ${toolResult.content}`;
@@ -567,7 +570,7 @@ try {
 	await w.open(files.A);
 	await w.prompt(`SEND ${JSON.stringify({ to: "beta", kind: "question", text: "PINGPONG start" })}`);
 	const stopped = await waitFor(
-		() => toolResultsIn(files.A).some((t) => t.includes("message 7 in one chain")),
+		() => toolResultsIn(files.A).some((t) => t.includes(`message ${FREE + 1} in one chain`)),
 		120000,
 		300,
 	);
@@ -577,18 +580,22 @@ try {
 		.map((r) => r.chain)
 		.sort((a, b) => a - b);
 	check(
-		"a back-and-forth stops at the chain limit: the 7th is refused",
-		!!stopped && chain.join(",") === "1,2,3,4,5,6",
+		`a back-and-forth stops at the active chain limit: message ${FREE + 1} is refused`,
+		!!stopped && chain.join(",") === Array.from({ length: FREE }, (_, n) => n + 1).join(","),
 		chain.join(","),
 	);
 
 	// 8. The hourly cap (paused, so beta isn't flooded).
 	check("paused again for the burst", await w.pause(true));
 	await w.prompt("BURST of fyis", 60000);
-	const capped = toolResultsIn(files.A).some((t) => t.includes("has sent 20 role messages in the last hour"));
+	const capped = toolResultsIn(files.A).some((t) => t.includes(`has sent ${HOURLY} role messages in the last hour`));
 	rows = (await w.roleMessages()).messages;
 	const lastHour = rows.filter((r) => r.from === "alpha" && Date.now() - r.at < 60 * 60 * 1000).length;
-	check("a role's 21st message within the hour is refused", capped && lastHour === 20, `alpha sent ${lastHour}`);
+	check(
+		`a role's message ${HOURLY + 1} within the hour is refused`,
+		capped && lastHour === HOURLY,
+		`alpha sent ${lastHour}`,
+	);
 } catch (err) {
 	console.log(`✗ FAIL: ${err instanceof Error ? err.stack : String(err)}`);
 	failures += 1;

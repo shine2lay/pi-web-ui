@@ -28,6 +28,8 @@ const load = (name) => import(pathToFileURL(join(dist, name)).href);
 const { RoleMessages, roleMessageIdOf } = await load("role-messages.js");
 const { RoleMessageGuardHost } = await load("role-message-guard-host.js");
 const { AskHub } = await load("asks.js");
+// Frozen #122 corpus stays a V1 replay; V2 has separate boundary/compatibility proofs.
+const { GUARD_POLICY_V1 } = await load("role-message-limits.js");
 
 const sha256 = (v) => createHash("sha256").update(v).digest("hex");
 const git = (...args) => execFileSync("git", args, { cwd: repository, encoding: "utf8" }).trim();
@@ -157,8 +159,9 @@ async function makeWorld(input, prev) {
 		},
 		log: () => {},
 	};
-	w.rm = new RoleMessages(join(w.dir, "data", "role-messages.json"), host, clock);
+	w.rm = new RoleMessages(join(w.dir, "data", "role-messages.json"), host, clock, GUARD_POLICY_V1);
 	w.host = new RoleMessageGuardHost({
+		policy: GUARD_POLICY_V1,
 		dir: join(w.dir, "data", "role-message-guard"),
 		roleMessages: () => w.rm,
 		identities: () => w.roles,

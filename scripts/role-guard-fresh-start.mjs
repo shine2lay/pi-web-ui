@@ -290,7 +290,7 @@ try {
 		say(`wrote ${path} (mode 0600), good until ${iso(request.expiresAt)}`);
 	}
 	say(
-		`next start: keeps a byte-identical copy of gen-${gen} in archive-gen-${gen} (gen-${gen} stays too), begins generation ${gen + 1} with no open approvals (the last hour's sends still count toward the 20 an hour) and marks the request done (fresh-start.done-<ms>.json). Its log says "approval ladder: fresh start from generation ${gen} (old record kept in archive-gen-${gen})", then "approval ladder: on (...)".`,
+		`next start: keeps a byte-identical copy of gen-${gen} in archive-gen-${gen} (gen-${gen} stays too), begins generation ${gen + 1} with no open approvals (the last hour's sends still count toward the active hourly cap shown in the startup policy marker) and marks the request done (fresh-start.done-<ms>.json). Its log says "approval ladder: fresh start from generation ${gen} (old record kept in archive-gen-${gen})", then "approval ladder: on (...)".`,
 	);
 	say(
 		'next step: install or restart with pi-web-deploy (pi-web-deploy <commit>, or pi-web-deploy restart); if the log says "approval ladder: fresh start refused (<why>)", the request stays here so the reason can be seen.',

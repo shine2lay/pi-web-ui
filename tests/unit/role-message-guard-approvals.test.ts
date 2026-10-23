@@ -6,26 +6,44 @@ import {
 	completeApprovalContext,
 	createGuardApprovalAdapters,
 	ownerApprovalAsk,
-	type GuardApprovalPorts,
+	type GuardApprovalNativePortAny,
+	type GuardApprovalPortsAny,
 } from "../../server/role-message-guard-approvals.js";
 import type {
 	GuardActor,
+	GuardApprovalBinding,
 	GuardApprovalContext,
 	GuardApproverSelection,
-	GuardCommand,
 	GuardHostVerified,
 	GuardInvocationReference,
 	GuardOwnerAnswerReference,
 	GuardOwnerQuestion,
 	GuardPolicyV1,
 	GuardRequest,
-	GuardResult,
+	GuardRoleDecisionReference,
 	GuardVerification,
 	GuardVerifiedDecision,
 	GuardVerifiedSnapshot,
 } from "../../server/role-message-guard-contract.js";
+import type {
+	GuardApprovalBindingAny,
+	GuardApprovalBindingV2,
+	GuardApproverSelectionAny,
+	GuardApproverSelectionV2,
+	GuardCommandAny,
+	GuardHostVerifierAny,
+	GuardOwnerQuestionAny,
+	GuardOwnerQuestionV2,
+	GuardPolicy,
+	GuardRequestAny,
+	GuardRequestV2,
+	GuardResultAny,
+	GuardVerifiedDecisionAny,
+	GuardVerifiedDecisionV2,
+} from "../../server/role-message-guard-contract-v2.js";
 import { checkAnswers } from "../../server/asks.js";
 import { guardCommandFingerprint } from "../../server/role-message-guard-core.js";
+import { GUARD_POLICY_V2 } from "../../server/role-message-limits.js";
 const policy: GuardPolicyV1 = {
 	version: "role-message-guard/v1",
 	depth: { unapprovedThrough: 6, lowerThrough: 11, ownerFrom: 12 },
@@ -111,12 +129,22 @@ const lowerInvocation: GuardInvocationReference = {
 	invocationId: "lower-1",
 	runtimeBindingId: "coo-runtime",
 };
-function fixture(hop = 7) {
+// Revision-only narrowing of already correlated synthetic records, never native authentication.
+const legacyRequest = (request: GuardRequestAny): request is GuardRequest => request.binding.version === policy.version;
+const legacyDecision = (decision: GuardVerifiedDecisionAny): decision is GuardVerifiedDecision =>
+	decision.binding.version === policy.version;
+function fixture(hop = 7, selectedPolicy: GuardPolicy = policy) {
 	let now = 1000;
-	let stored: GuardRequest | null = null;
-	let first: GuardVerifiedDecision | null = null;
-	const commands: GuardCommand[] = [];
-	const lower: GuardApproverSelection = { tier: "lower", role: "coo", route: "coo", home: approver, proof };
+	let stored: GuardRequestAny | null = null;
+	let first: GuardVerifiedDecisionAny | null = null;
+	const commands: GuardCommandAny[] = [];
+	const lower: Extract<GuardApproverSelection, { tier: "lower" }> = {
+		tier: "lower",
+		role: "coo",
+		route: "coo",
+		home: approver,
+		proof,
+	};
 	const causal = {
 		kind: "rooted" as const,
 		rootId: "business-root",
@@ -136,99 +164,165 @@ function fixture(hop = 7) {
 		queueOrSessionMismatch: false,
 		sourcePermissionRevoked: false,
 	};
-	const blocked = (reason: "duplicate_slot" | "ordinary_hourly" | "held"): GuardResult => ({
-		state: "blocked",
-		reason,
-		request: stored,
-		requiredTier: null,
-		accepted: false,
-	});
-	const ports: GuardApprovalPorts = {
+	const blocked = (reason: "duplicate_slot" | "ordinary_hourly" | "held"): GuardResultAny => {
+		const body = { state: "blocked", reason, requiredTier: null, accepted: false } as const;
+		if (!stored) return { ...body, request: null };
+		return legacyRequest(stored) ? { ...body, request: stored } : { ...body, request: stored };
+	};
+	function selectApprover(b: GuardApprovalBinding): Promise<GuardVerification<GuardApproverSelection>>;
+	function selectApprover(b: GuardApprovalBindingV2): Promise<GuardVerification<GuardApproverSelectionV2>>;
+	function selectApprover(b: GuardApprovalBindingAny): Promise<GuardVerification<GuardApproverSelectionAny>>;
+	async function selectApprover(b: GuardApprovalBindingAny): Promise<GuardVerification<GuardApproverSelectionAny>> {
+		if (b.version === policy.version)
+			return verified(hop >= policy.depth.ownerFrom ? { tier: "owner", reason: "hop_12_plus" } : lower);
+		return verified(hop >= GUARD_POLICY_V2.depth.ownerFrom ? { tier: "owner", reason: "hop_23_plus" } : lower);
+	}
+	function verifyRoleDecision(
+		ref: GuardRoleDecisionReference,
+		b: GuardApprovalBinding,
+	): Promise<GuardVerification<GuardVerifiedDecision>>;
+	function verifyRoleDecision(
+		ref: GuardRoleDecisionReference,
+		b: GuardApprovalBindingV2,
+	): Promise<GuardVerification<GuardVerifiedDecisionV2>>;
+	function verifyRoleDecision(
+		ref: GuardRoleDecisionReference,
+		b: GuardApprovalBindingAny,
+	): Promise<GuardVerification<GuardVerifiedDecisionAny>>;
+	async function verifyRoleDecision(
+		ref: GuardRoleDecisionReference,
+		b: GuardApprovalBindingAny,
+	): Promise<GuardVerification<GuardVerifiedDecisionAny>> {
+		const body = {
+			choice: ref.choice,
+			reason: ref.reason,
+			authority: { tier: "lower" as const, selection: lower, decisionId: "lower-decision", proof },
+			answeredAt: now,
+			firstAnswerEventId: "lower-event",
+		};
+		return b.version === policy.version ? verified({ ...body, binding: b }) : verified({ ...body, binding: b });
+	}
+	function verifyOwnerAnswer(
+		ref: GuardOwnerAnswerReference,
+		q: GuardOwnerQuestion,
+	): Promise<GuardVerification<GuardVerifiedDecision>>;
+	function verifyOwnerAnswer(
+		ref: GuardOwnerAnswerReference,
+		q: GuardOwnerQuestionV2,
+	): Promise<GuardVerification<GuardVerifiedDecisionV2>>;
+	function verifyOwnerAnswer(
+		ref: GuardOwnerAnswerReference,
+		q: GuardOwnerQuestionAny,
+	): Promise<GuardVerification<GuardVerifiedDecisionAny>>;
+	async function verifyOwnerAnswer(
+		ref: GuardOwnerAnswerReference,
+		q: GuardOwnerQuestionAny,
+	): Promise<GuardVerification<GuardVerifiedDecisionAny>> {
+		if (!ref.nativeAnswerEventId.startsWith("native-"))
+			return { state: "invalid", reason: "No authenticated native event" };
+		const body = {
+			choice: "requested_quantity" as const,
+			reason: "Native synthetic selected answer",
+			authority: {
+				tier: "owner" as const,
+				questionId: q.questionId,
+				questionGeneration: q.generation,
+				choicesDigest: q.choicesDigest,
+				decisionId: "owner-decision",
+				source: { kind: "authenticated_browser" as const, authenticatedOwnerBindingId: "fake-owner-principal" },
+				proof,
+			},
+			answeredAt: now,
+			firstAnswerEventId: ref.nativeAnswerEventId,
+		};
+		const b = q.binding;
+		return b.version === policy.version ? verified({ ...body, binding: b }) : verified({ ...body, binding: b });
+	}
+	function question(r: GuardRequest, choicesDigest: string): Promise<GuardVerification<GuardOwnerQuestion>>;
+	function question(r: GuardRequestV2, choicesDigest: string): Promise<GuardVerification<GuardOwnerQuestionV2>>;
+	function question(r: GuardRequestAny, choicesDigest: string): Promise<GuardVerification<GuardOwnerQuestionAny>>;
+	async function question(
+		r: GuardRequestAny,
+		choicesDigest: string,
+	): Promise<GuardVerification<GuardOwnerQuestionAny>> {
+		const body = {
+			questionId: "native-q1",
+			generation: "native-q-g1",
+			detail: r.context,
+			choices: ["deny", "one_send", "requested_quantity"] as const,
+			choicesDigest,
+		};
+		const b = r.binding;
+		return b.version === policy.version ? verified({ ...body, binding: b }) : verified({ ...body, binding: b });
+	}
+	const host: GuardHostVerifierAny = {
+		verifyInvocation: vi.fn(async (ref: GuardInvocationReference) =>
+			ref.runtimeBindingId === "task-runtime"
+				? verified(requester)
+				: ref.runtimeBindingId === "coo-runtime"
+					? verified(approver)
+					: { state: "invalid" as const, reason: "Not an invocation-bound current identity" },
+		),
+		verifyCausality: vi.fn(async () => verified(causal)),
+		selectApprover,
+		verifyRoleDecision,
+		verifyOwnerAnswer,
+		verifyIncident: vi.fn(async () => ({ state: "unavailable" as const, reason: "Not A" })),
+		revalidate: vi.fn(async (snapshot: GuardHostVerified<GuardVerifiedSnapshot>) =>
+			verified<GuardVerifiedSnapshot>(snapshot),
+		),
+	};
+	// Keep exact port overloads and explicit implementations for cases that wrap the original spy.
+	vi.spyOn(host, "selectApprover").mockImplementation(selectApprover);
+	vi.spyOn(host, "verifyRoleDecision").mockImplementation(verifyRoleDecision);
+	vi.spyOn(host, "verifyOwnerAnswer").mockImplementation(verifyOwnerAnswer);
+	const capabilities: Omit<GuardApprovalPortsAny, "policy"> = {
 		binding: {
-			version: policy.version,
+			version: "role-message-guard/v1",
 			contractCommit: "04fe491fb3afc3b42462ad782b2099c7971c7008",
 			contractSha256: "79a5a1e1a704ecfbb36a70fc1b210ee6e27575013843122cf202a84592b4c7af",
 			policyDocumentSha256: "5d8433fd0a8f9a82103009e43491182caf14b80ad2a20b874709c5b3762724a9",
 			blockers: ["native_owner_authentication", "durable_first_answer"],
 		},
-		policy,
 		maximumContextBytes: 16384,
-		host: {
-			verifyInvocation: vi.fn(async (ref) =>
-				ref.runtimeBindingId === "task-runtime"
-					? verified(requester)
-					: ref.runtimeBindingId === "coo-runtime"
-						? verified(approver)
-						: { state: "invalid" as const, reason: "Not an invocation-bound current identity" },
-			),
-			verifyCausality: vi.fn(async () => verified(causal)),
-			selectApprover: vi.fn(async () =>
-				verified(hop >= 12 ? { tier: "owner" as const, reason: "hop_12_plus" as const } : lower),
-			),
-			verifyRoleDecision: vi.fn(async (ref, binding) =>
-				verified({
-					binding,
-					choice: ref.choice,
-					reason: ref.reason,
-					authority: { tier: "lower" as const, selection: lower, decisionId: "lower-decision", proof },
-					answeredAt: now,
-					firstAnswerEventId: "lower-event",
-				}),
-			),
-			verifyOwnerAnswer: vi.fn(async (ref, q) =>
-				ref.nativeAnswerEventId.startsWith("native-")
-					? verified({
-							binding: q.binding,
-							choice: "requested_quantity" as const,
-							reason: "Native synthetic selected answer",
-							authority: {
-								tier: "owner" as const,
-								questionId: q.questionId,
-								questionGeneration: q.generation,
-								choicesDigest: q.choicesDigest,
-								decisionId: "owner-decision",
-								source: { kind: "authenticated_browser" as const, authenticatedOwnerBindingId: "fake-owner-principal" },
-								proof,
-							},
-							answeredAt: now,
-							firstAnswerEventId: ref.nativeAnswerEventId,
-						})
-					: { state: "invalid" as const, reason: "No authenticated native event" },
-			),
-			verifyIncident: vi.fn(async () => ({ state: "unavailable" as const, reason: "Not A" })),
-			revalidate: vi.fn(async (snapshot: GuardHostVerified<GuardVerifiedSnapshot>) =>
-				verified<GuardVerifiedSnapshot>(snapshot),
-			),
-		},
+		host,
 		core: {
-			execute: vi.fn(async (command): Promise<GuardResult> => {
+			execute: vi.fn(async (command: GuardCommandAny): Promise<GuardResultAny> => {
 				commands.push(command);
 				if (command.kind === "request_record") {
 					const recorded = structuredClone(command.request);
 					stored = recorded;
-					return { state: "recorded", transactionId: "request-tx", request: recorded, communicationAccepted: false };
+					const body = { state: "recorded", transactionId: "request-tx", communicationAccepted: false } as const;
+					return legacyRequest(recorded) ? { ...body, request: recorded } : { ...body, request: recorded };
 				}
 				if (command.kind === "decision_record" && stored) {
 					if (first) return blocked("duplicate_slot");
-					first = command.decision;
-					stored = {
-						...stored,
-						state:
-							command.decision.choice === "deny"
-								? "denied"
-								: command.decision.choice === "escalate_owner"
-									? "awaiting_owner"
-									: "approved",
-						firstDecision: first,
-					};
-					return { state: "recorded", transactionId: "decision-tx", request: stored, communicationAccepted: false };
+					const decision = command.decision;
+					const state =
+						decision.choice === "deny"
+							? "denied"
+							: decision.choice === "escalate_owner"
+								? "awaiting_owner"
+								: "approved";
+					const body = { state: "recorded", transactionId: "decision-tx", communicationAccepted: false } as const;
+					if (legacyRequest(stored) && legacyDecision(decision)) {
+						first = decision;
+						stored = { ...stored, state, firstDecision: decision };
+						return { ...body, request: stored };
+					}
+					if (!legacyRequest(stored) && !legacyDecision(decision)) {
+						first = decision;
+						stored = { ...stored, state, firstDecision: decision };
+						return { ...body, request: stored };
+					}
+					throw new Error("synthetic decision/request revision mismatch");
 				}
 				if (command.kind === "control_send")
 					return {
 						state: "accepted",
 						delivery: "dispatched",
 						receipt: {
-							version: policy.version,
+							version: "role-message-guard/v1",
 							identity: command.identity,
 							transactionId: "control-tx",
 							committedAt: now,
@@ -251,51 +345,55 @@ function fixture(hop = 7) {
 					};
 				throw new Error("Unexpected business/protected mutation in component A");
 			}),
-			status: vi.fn(async (_actor, id, generation) =>
-				stored && stored.binding.requestId === id && stored.binding.generation === generation
+			status: vi.fn(async (_actor: GuardHostVerified<GuardActor>, id: string, generation: string) => {
+				if (!stored || stored.binding.requestId !== id || stored.binding.generation !== generation)
+					return { state: "absent" as const, authoritative: true as const };
+				return legacyRequest(stored)
 					? { state: "found" as const, request: stored }
-					: { state: "absent" as const, authoritative: true as const },
-			),
+					: { state: "found" as const, request: stored };
+			}),
 			reconcile: vi.fn(async () => blocked("held")),
 			rollback: vi.fn(async () => ({ state: "unavailable" as const, reason: "Not A" })),
 		},
 		native: {
 			time: vi.fn(async () => ({ state: "trusted" as const, nowMs: now, lastObservedMs: 1000 })),
-			control: vi.fn(async (actor, r, phase) =>
-				verified({
-					to:
-						phase === "decision"
-							? r.binding.requester.role
-							: r.selectedApprover.tier === "lower"
-								? r.selectedApprover.role
-								: "coo",
-					snapshot: {
+			control: vi.fn(
+				async (actor: GuardHostVerified<GuardActor>, r: GuardRequestAny, phase: "initial" | "decision") => {
+					const snapshot: GuardVerifiedSnapshot = {
 						actor,
 						causal: r.binding.causal,
 						holds,
-						time: { state: "trusted" as const, nowMs: now, lastObservedMs: 1000 },
+						time: { state: "trusted", nowMs: now, lastObservedMs: 1000 },
 						authority: null,
 						incident: null,
 						sourceRevision: "source-1",
-					} as GuardHostVerified<GuardVerifiedSnapshot>,
-				}),
+					};
+					const checked = verified<GuardVerifiedSnapshot>(snapshot);
+					if (checked.state !== "verified") throw new Error("synthetic snapshot constructor did not verify");
+					return verified({
+						to:
+							phase === "decision"
+								? r.binding.requester.role
+								: r.selectedApprover.tier === "lower"
+									? r.selectedApprover.role
+									: "coo",
+						snapshot: checked.value,
+					});
+				},
 			),
-			question: vi.fn(async (r, choicesDigest) =>
-				verified({
-					binding: r.binding,
-					questionId: "native-q1",
-					generation: "native-q-g1",
-					detail: r.context,
-					choices: ["deny", "one_send", "requested_quantity"] as const,
-					choicesDigest,
-				}),
-			),
+			question,
 			ownerRequest: vi.fn(async () =>
 				stored ? verified(stored) : { state: "unavailable" as const, reason: "No live request bound to native event" },
 			),
 			present: vi.fn(async () => ({ state: "confirmed" as const, proof })),
 		},
 	};
+	const ports: GuardApprovalPortsAny =
+		selectedPolicy.version === policy.version
+			? { ...capabilities, policy: selectedPolicy }
+			: { ...capabilities, policy: selectedPolicy };
+	const native: GuardApprovalNativePortAny = ports.native;
+	vi.spyOn(native, "question");
 	const adapter = createGuardApprovalAdapters(ports);
 	const input = {
 		binding: {
@@ -326,7 +424,7 @@ function fixture(hop = 7) {
 		lower,
 		blocked,
 		request: () => stored!,
-		setRequest: (r: GuardRequest) => {
+		setRequest: (r: GuardRequestAny) => {
 			stored = r;
 		},
 		setNow: (v: number) => {
@@ -345,6 +443,48 @@ function fixture(hop = 7) {
 			}),
 	};
 }
+
+describe("expanded approval adapters: new quantities are exact, old vectors remain below", () => {
+	it.each([
+		[13, 10, "recorded"],
+		[13, 11, "invalid"],
+		[22, 1, "recorded"],
+		[22, 2, "invalid"],
+		[23, 10, "recorded"],
+		[24, 10, "invalid"],
+		[24, 9, "recorded"],
+		[33, 1, "invalid"],
+	] as const)("hop %i / quantity %i is %s", async (hop, quantity, state) => {
+		const f = fixture(hop, GUARD_POLICY_V2);
+		const result = await f.adapter.agent.request(invocation, { ...f.input, quantity });
+		expect(result.state).toBe(state);
+		if (state === "recorded")
+			expect(f.request().binding).toMatchObject({
+				version: GUARD_POLICY_V2.version,
+				quantity,
+				upperHop: hop + quantity - 1,
+				tier: hop >= 23 ? "owner" : "lower",
+			});
+		else expect(f.commands).toHaveLength(0);
+	});
+	it("a lower selection at 23, self approval and stale/wrong-scope native identity stay unavailable", async () => {
+		const owner = fixture(23, GUARD_POLICY_V2);
+		vi.mocked(owner.ports.host.selectApprover).mockResolvedValue(verified(owner.lower));
+		expect((await owner.adapter.agent.request(invocation, { ...owner.input, quantity: 10 })).state).toBe("unavailable");
+		const self = fixture(13, GUARD_POLICY_V2);
+		vi.mocked(self.ports.host.selectApprover).mockResolvedValue(
+			verified({ ...self.lower, role: requester.role, home: { ...approver, role: requester.role } }),
+		);
+		expect((await self.adapter.agent.request(invocation, { ...self.input, quantity: 10 })).state).toBe("unavailable");
+		const stale = fixture(13, GUARD_POLICY_V2);
+		vi.mocked(stale.ports.host.verifyInvocation).mockResolvedValue({
+			state: "invalid",
+			reason: "synthetic stale incarnation",
+		});
+		expect((await stale.adapter.agent.request(invocation, { ...stale.input, quantity: 10 })).state).toBe("invalid");
+		expect(stale.commands).toHaveLength(0);
+	});
+});
 
 describe("A frozen input and native boundaries", () => {
 	it("constructing/importing has no registration, port calls or grant store", () => {
@@ -535,7 +675,10 @@ describe("lower authority, current home and bounded fallback", () => {
 		const original = vi.mocked(f.ports.host.verifyRoleDecision).getMockImplementation()!;
 		vi.mocked(f.ports.host.verifyRoleDecision).mockImplementation(async (ref, b) => {
 			const d = await original(ref, b);
-			return d.state === "verified" ? verified({ ...d.value, binding: { ...b, generation: "stale" } }) : d;
+			if (d.state !== "verified") return d;
+			return b.version === policy.version
+				? verified({ ...d.value, binding: { ...b, generation: "stale" } })
+				: verified({ ...d.value, binding: { ...b, generation: "stale" } });
 		});
 		expect((await f.decide()).state).toBe("invalid");
 	});
@@ -544,7 +687,9 @@ describe("actual Owner event references, not prose or copied IDs", () => {
 	it("finite native Ask retains all context and prohibits free text", async () => {
 		const f = fixture(12);
 		await f.create();
-		const q = await f.ports.native.question(f.request(), "digest");
+		const request = f.request();
+		if (!legacyRequest(request)) throw new Error("synthetic legacy Owner question revision mismatch");
+		const q = await f.ports.native.question(request, "digest");
 		if (q.state !== "verified") throw new Error("fixture");
 		const ask = ownerApprovalAsk(q.value, 1000);
 		expect(ask.createdAt).toBe(1000);
@@ -612,18 +757,22 @@ describe("actual Owner event references, not prose or copied IDs", () => {
 	it.each(["context", "choices", "scope", "digest"])("altered native question %s is rejected", async (kind) => {
 		const f = fixture(12);
 		await f.create();
-		vi.mocked(f.ports.native.question).mockImplementation(async (r, digest) =>
-			verified({
-				binding: kind === "scope" ? { ...r.binding, scope: { ...r.binding.scope, scopeId: "different" } } : r.binding,
+		vi.mocked(f.ports.native.question).mockImplementation(async (r, digest) => {
+			const untrustedQuestionChoices = (
+				kind === "choices" ? ["requested_quantity", "one_send", "deny"] : ["deny", "one_send", "requested_quantity"]
+			) as GuardOwnerQuestion["choices"];
+			const body = {
 				questionId: "native-q1",
 				generation: "native-q-g1",
 				detail: kind === "context" ? { ...r.context, goal: "replacement" } : r.context,
-				choices: (kind === "choices"
-					? ["requested_quantity", "one_send", "deny"]
-					: ["deny", "one_send", "requested_quantity"]) as GuardOwnerQuestion["choices"],
+				choices: untrustedQuestionChoices,
 				choicesDigest: kind === "digest" ? "wrong" : digest,
-			}),
-		);
+			};
+			const b = r.binding;
+			return b.version === policy.version
+				? verified({ ...body, binding: kind === "scope" ? { ...b, scope: { ...b.scope, scopeId: "different" } } : b })
+				: verified({ ...body, binding: kind === "scope" ? { ...b, scope: { ...b.scope, scopeId: "different" } } : b });
+		});
 		expect((await f.adapter.native.ownerAnswer(f.answer)).state).toBe("invalid");
 	});
 	it("request expiry holds native answer", async () => {

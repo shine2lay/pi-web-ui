@@ -12,6 +12,13 @@ import type {
 	GuardRequest,
 	GuardRequestState,
 } from "../../server/role-message-guard-contract.js";
+import type {
+	GuardOwnerQuestionAny,
+	GuardOwnerQuestionV2,
+	GuardRequestAny,
+	GuardRequestV2,
+} from "../../server/role-message-guard-contract-v2.js";
+import { GUARD_POLICY_V2, ROLE_MESSAGE_POLICY } from "../../server/role-message-limits.js";
 import {
 	RoleMessageGuardApproval,
 	type GuardApprovalIntent,
@@ -114,17 +121,22 @@ function request(state: GuardRequestState = "awaiting_approver"): GuardRequest {
 		grantId: null,
 	};
 }
-function ownerQuestion(r: GuardRequest): GuardOwnerQuestion {
-	return {
-		binding: r.binding,
+function ownerQuestion(r: GuardRequest): GuardOwnerQuestion;
+function ownerQuestion(r: GuardRequestV2): GuardOwnerQuestionV2;
+function ownerQuestion(r: GuardRequestAny): GuardOwnerQuestionAny;
+function ownerQuestion(r: GuardRequestAny): GuardOwnerQuestionAny {
+	const common = {
 		questionId: "native-q1",
 		generation: "native-q-g1",
 		detail: r.context,
-		choices: ["deny", "one_send", "requested_quantity"],
+		choices: ["deny", "one_send", "requested_quantity"] as const,
 		choicesDigest: "fake-digest-not-authentication",
 	};
+	return r.binding.version === "role-message-guard/v1"
+		? { ...common, binding: r.binding }
+		: { ...common, binding: r.binding };
 }
-function input(r = request()): GuardApprovalViewInput {
+function input(r: GuardRequestAny = request()): GuardApprovalViewInput {
 	return { request: r, viewer: "lower", eligible: true, connected: true, nowMs: 1000 };
 }
 let root: Root | null = null;
@@ -233,6 +245,39 @@ describe("A complete honest isolated view", () => {
 		expect(guardApprovalView(input({ ...r, upwardEscalations: 1 })).choices).toHaveLength(3);
 		expect(guardApprovalView(input({ ...r, binding: { ...r.binding, upperHop: 12 } })).choices).toEqual([]);
 	});
+	it("V2 views use the recorded 22/23 boundary and reject overband quantity without changing old requests", () => {
+		const old = request();
+		if (old.selectedApprover.tier !== "lower") throw new Error("synthetic lower fixture changed");
+		const r: GuardRequestV2 = {
+			...old,
+			selectedApprover: old.selectedApprover,
+			firstDecision: null,
+			binding: {
+				...old.binding,
+				version: GUARD_POLICY_V2.version,
+				quantity: 10,
+				upperHop: 22,
+				causal: { ...old.binding.causal, nextHop: 13 },
+			},
+		};
+		expect(guardApprovalView(input(r)).tier).toContain("hop 22");
+		expect(guardApprovalView(input(r)).choices).toHaveLength(4);
+		expect(guardApprovalView(input({ ...r, binding: { ...r.binding, upperHop: 23 } })).choices).toEqual([]);
+		const owner: GuardRequestV2 = {
+			...r,
+			selectedApprover: { tier: "owner", reason: "hop_23_plus" },
+			state: "awaiting_owner",
+			binding: { ...r.binding, tier: "owner", upperHop: 32, causal: { ...r.binding.causal, nextHop: 23 } },
+		};
+		expect(guardApprovalView({ ...input(owner), viewer: "owner", ownerQuestion: ownerQuestion(owner) }).tier).toContain(
+			"hop 23",
+		);
+		expect(
+			guardApprovalView({ ...input(owner), viewer: "owner", ownerQuestion: ownerQuestion(owner) }).choices,
+		).toHaveLength(3);
+		expect(guardApprovalView(input(old)).tier).toContain("hop 11");
+		expect(old.binding.quantity).toBe(3);
+	});
 	it("Owner choices require matching native question but UI eligibility is not authentication", () => {
 		const r = request("awaiting_owner");
 		expect(guardApprovalView({ ...input(r), viewer: "owner" }).choices).toEqual([]);
@@ -259,7 +304,7 @@ describe("A complete honest isolated view", () => {
 		expect(zh.title).toBe("消息继续申请");
 		expect(zh.sections).toHaveLength(12);
 		expect(zh.choices).toHaveLength(4);
-		expect(zh.limits).toContain("每小时 20 条");
+		expect(zh.limits).toContain(`每小时 ${ROLE_MESSAGE_POLICY.ordinary.acceptedPerOrigin} 条`);
 	});
 	it("CSS is opt-in and wraps long context with phone targets and forced-colour focus", () => {
 		const css = readFileSync(join(process.cwd(), "web/src/role-message-guard.css"), "utf8");

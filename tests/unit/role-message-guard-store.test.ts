@@ -26,6 +26,8 @@ import {
 	type GuardFileStoreOptions,
 	type GuardLegacyFile,
 } from "../../server/role-message-guard-store.js";
+import { GUARD_POLICY_V1 } from "../../server/role-message-limits.js";
+import { legacyGuardFileStoreView } from "./role-message-guard-v1-test-adapter.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -165,7 +167,7 @@ async function fixture(maximumBytes = 32 * 1024 * 1024, create = true) {
 			if (f.fault === point) throw new Error(`synthetic fault:${point}`);
 		},
 	};
-	const store = new GuardFileStore(options);
+	const store = legacyGuardFileStoreView(new GuardFileStore(options));
 	if (create) expect((await store.initialize(initial(), legacy())).state).toBe("ready");
 	return { dir, f, store, options };
 }
@@ -417,7 +419,7 @@ describe("E durable prepare/commit/publication boundary", () => {
 	);
 	it("two instances sharing the host lease never admit the same operation twice", async () => {
 		const t = await fixture();
-		const second = new GuardFileStore({ ...t.options, boundary: null });
+		const second = legacyGuardFileStoreView(new GuardFileStore({ ...t.options, boundary: null }));
 		await second.recover();
 		const id = identity("concurrent");
 		let updates = 0;
@@ -833,7 +835,7 @@ describe("E actual previous-reader compatibility on synthetic files", () => {
 			note: async () => ({ ok: false, error: "synthetic reader must never wake" }),
 			log: () => {},
 		};
-		return new RoleMessages(file, host, () => now);
+		return new RoleMessages(file, host, () => now, GUARD_POLICY_V1);
 	}
 	it("reads exact words, original depth and all Owner/initiative metadata through the real old loader", async () => {
 		const t = await fixture();

@@ -10,6 +10,7 @@ import { AskHub } from "../../server/asks.js";
 import type { IdentityDef } from "../../server/identities.js";
 import { RoleMessageGuardHost, type RoleMessageGuardHostOptions } from "../../server/role-message-guard-host.js";
 import { RoleMessages, type RoleMessageHost, type RoleMessageSender } from "../../server/role-messages.js";
+import { GUARD_POLICY_V1 } from "../../server/role-message-limits.js";
 
 export let dir = "";
 export let now = Date.parse("2026-10-12T12:00:00Z");
@@ -87,7 +88,8 @@ export async function world(prev?: World, extra: Partial<RoleMessageGuardHostOpt
 		},
 		log: (l) => w.logs.push(l),
 	};
-	w.rm = new RoleMessages(join(data, "role-messages.json"), host, clock);
+	// Existing frozen ladder vectors replay V1 explicitly; expanded tests select V2.
+	w.rm = new RoleMessages(join(data, "role-messages.json"), host, clock, extra.policy ?? GUARD_POLICY_V1);
 	w.host = new RoleMessageGuardHost({
 		dir: join(data, "role-message-guard"),
 		roleMessages: () => w.rm,
@@ -98,6 +100,7 @@ export async function world(prev?: World, extra: Partial<RoleMessageGuardHostOpt
 		},
 		log: (l) => w.logs.push(l),
 		now: clock,
+		policy: GUARD_POLICY_V1,
 		...extra,
 	});
 	made.push(w.rm, w.host);

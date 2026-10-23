@@ -2,6 +2,7 @@
 // messages; only chats, clock and one failed prepare are fake. Nothing is sent to a real chat or model.
 import { describe, expect, it } from "vitest";
 import type { GuardOperationIdentity, GuardStoreState } from "../../server/role-message-guard-contract.js";
+import { GUARD_POLICY_V2 } from "../../server/role-message-limits.js";
 import {
 	A,
 	B,
@@ -36,6 +37,30 @@ function refuseNextHandOff(w: World): void {
 
 // Required counterfactual: on mine the charge prunes, then updateOutbox refuses the restart's hand-off.
 describe("ladder: accepted messages outlive the hourly charge (#426)", () => {
+	it("V2: a 61-minute accepted hand-off survives 40 capped sends, pruning and two restarts without renewing charge", async () => {
+		let w = await world(undefined, { policy: GUARD_POLICY_V2 });
+		const start = now;
+		refuseNextHandOff(w);
+		expect(await send(w, "alpha", A, "beta", { text: "v2-delayed" }, "")).toMatchObject({
+			ok: false,
+			error: expect.stringContaining("Accepted but not handed off"),
+		});
+		const accepted = (await stateOf(w)).outbox.find((o) => o.state === "committed")!;
+		for (let n = 1; n < 40; n++) expect(await send(w, "alpha", A, "beta", {}, "")).toMatchObject({ ok: true });
+		expect(await send(w, "alpha", A, "beta", {}, "")).toMatchObject({ ok: false, reason: "ordinary_hourly" });
+		setNow(start + 61 * M);
+		expect(await send(w, "beta", B, "alpha", { text: "v2-prune" }, "")).toMatchObject({ ok: true });
+		expect((await stateOf(w)).usage.some((u) => u.transactionId === accepted.receipt.transactionId)).toBe(false);
+		for (let restart = 0; restart < 2; restart++) {
+			w.rm.stop();
+			w.host.stop();
+			w = await world(w, { policy: GUARD_POLICY_V2 });
+			await w.rm.tick();
+			expect(w.rm.byId(accepted.message.id)?.state).toBe("delivered");
+			expect(w.got.filter((g) => g.text.includes("v2-delayed"))).toHaveLength(1);
+			expect((await stateOf(w)).usage.some((u) => u.transactionId === accepted.receipt.transactionId)).toBe(false);
+		}
+	});
 	it.each([60, 61, 360, 23 * 60])(
 		"hands off once after a %i min delay and a restart, even after another send prunes its charge",
 		async (minutes) => {

@@ -7,21 +7,21 @@ import type {
 	GuardActor,
 	GuardApprovalBinding,
 	GuardApprovalContext,
+	GuardApproverSelection,
 	GuardAuthority,
 	GuardCommand,
 	GuardConsumerBinding,
 	GuardHostVerified,
-	GuardHostVerifier,
 	GuardIncidentIdentity,
 	GuardKnownCausality,
 	GuardOperationIdentity,
 	GuardOutboxEntry,
 	GuardPolicyV1,
+	GuardQuantity,
 	GuardProofReference,
 	GuardProtectedEvidence,
 	GuardProtectedNotice,
 	GuardRequest,
-	GuardResult,
 	GuardRetention,
 	GuardStoreState,
 	GuardTime,
@@ -29,6 +29,23 @@ import type {
 	GuardVerifiedDecision,
 	GuardVerifiedSnapshot,
 } from "../../server/role-message-guard-contract.js";
+import type {
+	GuardApprovalBindingAny,
+	GuardApprovalBindingV2,
+	GuardApproverSelectionAny,
+	GuardApproverSelectionV2,
+	GuardBusinessQuantity,
+	GuardCommandAny,
+	GuardHostVerifierAny,
+	GuardPolicy,
+	GuardQuantityV2,
+	GuardRequestAny,
+	GuardRequestV2,
+	GuardResultAny,
+	GuardStoreStateAny,
+	GuardVerifiedDecisionAny,
+	GuardVerifiedDecisionV2,
+} from "../../server/role-message-guard-contract-v2.js";
 import {
 	RoleMessageGuardCore,
 	guardCommandFingerprint,
@@ -36,6 +53,7 @@ import {
 	type GuardCoreOptions,
 } from "../../server/role-message-guard-core.js";
 import { GuardFileStore, guardDigest, type GuardFileBoundary } from "../../server/role-message-guard-store.js";
+import { GUARD_POLICY_V2, guardQuantityValid } from "../../server/role-message-limits.js";
 
 const policy: GuardPolicyV1 = {
 	version: "role-message-guard/v1",
@@ -101,6 +119,10 @@ afterEach(() => {
 });
 const fakeVerified = <T>(value: T): GuardHostVerified<T> => value as GuardHostVerified<T>;
 const verified = <T>(value: T): GuardVerification<T> => ({ state: "verified", value: fakeVerified(value) });
+// Revision-only narrowing of correlated synthetic records; not native authentication or bounds validation.
+const legacyRequest = (request: GuardRequestAny): request is GuardRequest => request.binding.version === policy.version;
+const legacyDecision = (decision: GuardVerifiedDecisionAny): decision is GuardVerifiedDecision =>
+	decision.binding.version === policy.version;
 const actor = (role = "alpha", currentHome = true): GuardActor => ({
 	role,
 	sessionFile: `/synthetic/${role}.jsonl`,
@@ -149,7 +171,12 @@ const seed = (now: number): GuardStoreState => ({
 	overflow: { count: 0, state: "none" },
 });
 
-async function fixture(caps: Partial<GuardRetention> = {}, initial?: GuardStoreState) {
+async function fixture(
+	caps: Partial<GuardRetention> = {},
+	initial?: GuardStoreStateAny,
+	selectedPolicy: GuardPolicy = policy,
+) {
+	const currentBinding = binding;
 	const dir = mkdtempSync(join(tmpdir(), "guard-core-unit-"));
 	dirs.push(dir);
 	let tail: Promise<unknown> = Promise.resolve();
@@ -232,25 +259,60 @@ async function fixture(caps: Partial<GuardRetention> = {}, initial?: GuardStoreS
 		},
 	};
 	const store = new GuardFileStore(storeOptions);
-	expect((await store.initialize(initial ?? seed(f.now), { v: 1, paused: false, messages: [] })).state).toBe("ready");
-	const verifier: GuardHostVerifier = {
+	const initialState: GuardStoreStateAny =
+		initial ??
+		(selectedPolicy.version === policy.version ? seed(f.now) : { ...seed(f.now), version: GUARD_POLICY_V2.version });
+	expect(
+		(
+			await store.initialize(initialState, {
+				v: 1,
+				paused: false,
+				messages: [],
+			})
+		).state,
+	).toBe("ready");
+	function selectApprover(b: GuardApprovalBinding): Promise<GuardVerification<GuardApproverSelection>>;
+	function selectApprover(b: GuardApprovalBindingV2): Promise<GuardVerification<GuardApproverSelectionV2>>;
+	function selectApprover(b: GuardApprovalBindingAny): Promise<GuardVerification<GuardApproverSelectionAny>>;
+	async function selectApprover(b: GuardApprovalBindingAny): Promise<GuardVerification<GuardApproverSelectionAny>> {
+		if (!f.nativeAvailable) return { state: "unavailable", reason: "native selection unavailable" };
+		if (b.tier === "lower")
+			return verified({ tier: "lower", role: "coo", route: "coo", home: actor("coo"), proof: proof() });
+		if (f.selectExplicit) return verified({ tier: "owner", reason: "explicit_escalation" });
+		return b.version === policy.version
+			? verified({
+					tier: "owner",
+					reason: b.causal.nextHop >= policy.depth.ownerFrom ? "hop_12_plus" : "no_distinct_lower_approver",
+				})
+			: verified({
+					tier: "owner",
+					reason: b.causal.nextHop >= GUARD_POLICY_V2.depth.ownerFrom ? "hop_23_plus" : "no_distinct_lower_approver",
+				});
+	}
+	function reverifyDecision(
+		d: GuardVerifiedDecision,
+		r: GuardRequest,
+	): Promise<GuardVerification<GuardVerifiedDecision>>;
+	function reverifyDecision(
+		d: GuardVerifiedDecisionV2,
+		r: GuardRequestV2,
+	): Promise<GuardVerification<GuardVerifiedDecisionV2>>;
+	function reverifyDecision(
+		...args: [GuardVerifiedDecision, GuardRequest] | [GuardVerifiedDecisionV2, GuardRequestV2]
+	): Promise<GuardVerification<GuardVerifiedDecisionAny>>;
+	async function reverifyDecision(
+		...[d]: [GuardVerifiedDecision, GuardRequest] | [GuardVerifiedDecisionV2, GuardRequestV2]
+	): Promise<GuardVerification<GuardVerifiedDecisionAny>> {
+		if (!f.decisionAvailable)
+			return { state: "unavailable", reason: "synthetic first answer/native source unavailable" };
+		return legacyDecision(d)
+			? verified(f.decisionDrift ? { ...d, reason: "Synthetic drifted native record" } : d)
+			: verified(f.decisionDrift ? { ...d, reason: "Synthetic drifted native record" } : d);
+	}
+	const verifier: GuardHostVerifierAny = {
 		verifyInvocation: async () => ({ state: "unavailable", reason: "not a real invocation adapter" }),
 		verifyCausality: async () => ({ state: "unavailable", reason: "not a real ancestry adapter" }),
-		selectApprover: async (b) =>
-			f.nativeAvailable
-				? verified(
-						b.tier === "owner"
-							? {
-									tier: "owner" as const,
-									reason: f.selectExplicit
-										? ("explicit_escalation" as const)
-										: b.causal.nextHop >= 12
-											? ("hop_12_plus" as const)
-											: ("no_distinct_lower_approver" as const),
-								}
-							: { tier: "lower" as const, role: "coo", route: "coo" as const, home: actor("coo"), proof: proof() },
-					)
-				: { state: "unavailable", reason: "native selection unavailable" },
+		selectApprover,
 		verifyRoleDecision: async () => ({ state: "unavailable", reason: "not a real role decision adapter" }),
 		verifyOwnerAnswer: async () => ({ state: "unavailable", reason: "not a real Owner answer adapter" }),
 		verifyIncident: async () => ({ state: "unavailable", reason: "P125 native producer NOT qualified" }),
@@ -260,17 +322,14 @@ async function fixture(caps: Partial<GuardRetention> = {}, initial?: GuardStoreS
 				: { state: "unavailable", reason: "synthetic native boundary denies" },
 	};
 	const options: GuardCoreOptions = {
-		binding,
-		policy,
+		binding: currentBinding,
+		policy: selectedPolicy,
 		retention: { ...retention, ...caps },
 		store,
 		verifier,
 		clock: async () => clock(),
 		requestSnapshot: async (a, r) => verified(snapshot(a, r.binding.causal)),
-		reverifyDecision: async (d) =>
-			f.decisionAvailable
-				? verified(f.decisionDrift ? { ...d, reason: "Synthetic drifted native record" } : d)
-				: { state: "unavailable", reason: "synthetic first answer/native source unavailable" },
+		reverifyDecision,
 		verifyGrantLineage: async (_g, s) =>
 			f.lineageAvailable ? verified(s) : { state: "invalid", reason: "synthetic ancestry contradicts" },
 		restoreSnapshot: async (entry) => {
@@ -300,7 +359,7 @@ async function fixture(caps: Partial<GuardRetention> = {}, initial?: GuardStoreS
 			initiative: "synthetic-initiative",
 		}),
 		maintenanceIdentity: (purpose, key) => ({
-			version: policy.version,
+			version: "role-message-guard/v1",
 			operationId: `${purpose}:${guardDigest(key)}`,
 			fingerprint: guardDigest({ purpose, key }),
 			actor: actor("synthetic-host"),
@@ -336,7 +395,7 @@ async function fixture(caps: Partial<GuardRetention> = {}, initial?: GuardStoreS
 		},
 	};
 	const core = new RoleMessageGuardCore(options);
-	function identified<T extends GuardCommand>(command: T): T {
+	function identified<T extends GuardCommandAny>(command: T): T {
 		const completed = { ...command, identity: { ...command.identity, fingerprint: guardCommandFingerprint(command) } };
 		if ("snapshot" in completed) f.snapshots.set(completed.identity.operationId, completed.snapshot);
 		return completed;
@@ -345,7 +404,7 @@ async function fixture(caps: Partial<GuardRetention> = {}, initial?: GuardStoreS
 		operationId: id,
 		fingerprint: "pending",
 		actor: who,
-		version: policy.version,
+		version: "role-message-guard/v1",
 	});
 	const business = (
 		id: string,
@@ -374,8 +433,8 @@ async function fixture(caps: Partial<GuardRetention> = {}, initial?: GuardStoreS
 	const proposal = (
 		id: string,
 		hop = 7,
-		quantity: 1 | 2 | 3 | 4 | 5 = 1,
-		tier: "lower" | "owner" = hop >= 12 ? "owner" : "lower",
+		quantity: GuardQuantity = 1,
+		tier: "lower" | "owner" = hop >= policy.depth.ownerFrom ? "owner" : "lower",
 		who = actor(),
 	): GuardRequest => {
 		const b: GuardApprovalBinding = {
@@ -406,33 +465,73 @@ async function fixture(caps: Partial<GuardRetention> = {}, initial?: GuardStoreS
 			grantId: null,
 		};
 	};
-	const recordRequest = (request: GuardRequest, id = `request:${request.binding.requestId}`) =>
-		core.execute(
-			identified({
-				kind: "request_record",
-				identity: identity(id, request.binding.requester),
-				actor: fakeVerified(request.binding.requester),
-				request,
-			}),
-		);
-	const decision = (
+	const proposalV2 = (
+		id: string,
+		hop = 13,
+		quantity: GuardQuantityV2 = 1,
+		tier: "lower" | "owner" = hop >= GUARD_POLICY_V2.depth.ownerFrom ? "owner" : "lower",
+		who = actor(),
+	): GuardRequestV2 => ({
+		binding: {
+			version: GUARD_POLICY_V2.version,
+			requestId: id,
+			generation: "synthetic-generation-1",
+			requester: who,
+			causal: causal(hop),
+			scope,
+			tier,
+			quantity,
+			upperHop: hop + quantity - 1,
+		},
+		context,
+		selectedApprover:
+			tier === "owner"
+				? { tier, reason: "hop_23_plus" }
+				: { tier, role: "coo", route: "coo", home: actor("coo"), proof: proof() },
+		createdAt: f.now,
+		expiresAt: f.now + 86400000,
+		state: tier === "owner" ? "awaiting_owner" : "awaiting_approver",
+		upwardEscalations: 0,
+		initialNotificationKey: "untrusted-replaced",
+		decisionNotificationKey: "untrusted-replaced",
+		firstDecision: null,
+		grantId: null,
+	});
+	const recordRequest = (request: GuardRequestAny, id = `request:${request.binding.requestId}`) => {
+		const body = {
+			kind: "request_record" as const,
+			identity: identity(id, request.binding.requester),
+			actor: fakeVerified(request.binding.requester),
+		};
+		return legacyRequest(request)
+			? core.execute(identified({ ...body, request }))
+			: core.execute(identified({ ...body, request }));
+	};
+	function decision(
 		request: GuardRequest,
+		choice?: GuardVerifiedDecision["choice"],
+		event?: string,
+	): GuardVerifiedDecision;
+	function decision(
+		request: GuardRequestV2,
+		choice?: GuardVerifiedDecision["choice"],
+		event?: string,
+	): GuardVerifiedDecisionV2;
+	function decision(
+		request: GuardRequestAny,
+		choice?: GuardVerifiedDecision["choice"],
+		event?: string,
+	): GuardVerifiedDecisionAny;
+	function decision(
+		request: GuardRequestAny,
 		choice: GuardVerifiedDecision["choice"] = "requested_quantity",
 		event = "synthetic-first-answer",
-	): GuardVerifiedDecision => ({
-		binding: request.binding,
-		choice,
-		reason: "Synthetic communication-only decision",
-		answeredAt: f.now,
-		firstAnswerEventId: event,
-		authority:
-			request.binding.tier === "lower"
-				? {
-						tier: "lower",
-						selection: request.selectedApprover as Extract<GuardRequest["selectedApprover"], { tier: "lower" }>,
-						decisionId: event,
-						proof: proof(event),
-					}
+	): GuardVerifiedDecisionAny {
+		if (request.binding.tier === "lower" && request.selectedApprover.tier !== "lower")
+			throw new Error("synthetic lower decision requires a lower selection");
+		const authority: GuardAuthority =
+			request.binding.tier === "lower" && request.selectedApprover.tier === "lower"
+				? { tier: "lower", selection: request.selectedApprover, decisionId: event, proof: proof(event) }
 				: {
 						tier: "owner",
 						questionId: "synthetic-native-question",
@@ -441,17 +540,28 @@ async function fixture(caps: Partial<GuardRetention> = {}, initial?: GuardStoreS
 						decisionId: event,
 						source: { kind: "authenticated_browser", authenticatedOwnerBindingId: "synthetic-browser-owner" },
 						proof: proof(event),
-					},
-	});
-	const decisionCommand = (d: GuardVerifiedDecision, id = `decision:${d.firstAnswerEventId}`) =>
-		identified<Extract<GuardCommand, { kind: "decision_record" }>>({
-			kind: "decision_record",
+					};
+		const body = {
+			choice,
+			reason: "Synthetic communication-only decision",
+			answeredAt: f.now,
+			firstAnswerEventId: event,
+			authority,
+		};
+		return legacyRequest(request) ? { ...body, binding: request.binding } : { ...body, binding: request.binding };
+	}
+	const decisionCommand = (d: GuardVerifiedDecisionAny, id = `decision:${d.firstAnswerEventId}`) => {
+		const body = {
+			kind: "decision_record" as const,
 			identity: identity(id, d.authority.tier === "lower" ? d.authority.selection.home : d.binding.requester),
-			decision: fakeVerified(d),
-		});
-	const recordDecision = (d: GuardVerifiedDecision, id = `decision:${d.firstAnswerEventId}`) =>
+		};
+		return legacyDecision(d)
+			? identified({ ...body, decision: fakeVerified(d) })
+			: identified({ ...body, decision: fakeVerified(d) });
+	};
+	const recordDecision = (d: GuardVerifiedDecisionAny, id = `decision:${d.firstAnswerEventId}`) =>
 		core.execute(decisionCommand(d, id));
-	const control = (id: string, request: GuardRequest, phase: "initial" | "decision", to: string, who = actor()) =>
+	const control = (id: string, request: GuardRequestAny, phase: "initial" | "decision", to: string, who = actor()) =>
 		identified<Extract<GuardCommand, { kind: "control_send" }>>({
 			kind: "control_send",
 			identity: identity(id, who),
@@ -461,8 +571,14 @@ async function fixture(caps: Partial<GuardRetention> = {}, initial?: GuardStoreS
 			phase,
 			to,
 		});
-	async function grant(hop = 7, quantity: 1 | 2 | 3 | 4 | 5 = 1) {
-		const requested = await recordRequest(proposal(`req-${hop}-${quantity}`, hop, quantity));
+	async function grant(hop = selectedPolicy.depth.unapprovedThrough + 1, quantity: GuardBusinessQuantity = 1) {
+		const id = `req-${hop}-${quantity}`;
+		let request: GuardRequestAny;
+		if (selectedPolicy.version === policy.version) {
+			if (!guardQuantityValid(quantity, policy.version)) throw new Error("synthetic V1 quantity mismatch");
+			request = proposal(id, hop, quantity);
+		} else request = proposalV2(id, hop, quantity);
+		const requested = await recordRequest(request);
 		expect(requested.state).toBe("recorded");
 		if (requested.state !== "recorded") throw new Error("synthetic request failed");
 		const d = decision(requested.request);
@@ -540,6 +656,7 @@ async function fixture(caps: Partial<GuardRetention> = {}, initial?: GuardStoreS
 		snapshot,
 		business,
 		proposal,
+		proposalV2,
 		recordRequest,
 		decision,
 		decisionCommand,
@@ -551,7 +668,7 @@ async function fixture(caps: Partial<GuardRetention> = {}, initial?: GuardStoreS
 		state,
 	};
 }
-function reason(result: GuardResult): string {
+function reason(result: GuardResultAny): string {
 	return result.state === "blocked" ? result.reason : result.state;
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>;
@@ -559,11 +676,244 @@ async function escalated(t: Fixture, id = "esc", hop = 9, quantity: 1 | 2 | 3 | 
 	const requested = await t.recordRequest(t.proposal(id, hop, quantity));
 	if (requested.state !== "recorded") throw new Error(`synthetic lower request failed: ${reason(requested)}`);
 	const lower = requested.request;
+	if (!legacyRequest(lower)) throw new Error("synthetic legacy escalation request mismatch");
 	const escalation = t.decision(lower, "escalate_owner", `${id}-lower-escalates`);
 	const r = await t.recordDecision(escalation);
 	if (r.state !== "recorded") throw new Error(`synthetic escalation failed: ${reason(r)}`);
+	if (!legacyRequest(r.request)) throw new Error("synthetic legacy escalation phase mismatch");
 	return { lower, escalation, phase: r.request };
 }
+
+describe("expanded V2 core: exact boundaries with unchanged V1 vectors below", () => {
+	it("accepts 40 concurrent capped sends, refuses 41, deduplicates, then releases at exactly one hour", async () => {
+		const t = await fixture({}, undefined, GUARD_POLICY_V2);
+		const start = t.f.now;
+		const results = await Promise.all(Array.from({ length: 41 }, (_, n) => t.core.execute(t.business(`v2-hour-${n}`))));
+		expect(results.filter((r) => r.state === "accepted")).toHaveLength(40);
+		expect(reason(results[40])).toBe("ordinary_hourly");
+		expect((await t.state()).usage).toHaveLength(40);
+		expect(await t.core.execute(t.business("v2-hour-0"))).toEqual(results[0]);
+		expect((await t.state()).usage).toHaveLength(40);
+		t.f.now = start + 3_600_000 - 1;
+		expect(reason(await t.core.execute(t.business("v2-before-edge")))).toBe("ordinary_hourly");
+		t.f.now++;
+		expect(reason(await t.core.execute(t.business("v2-at-edge")))).toBe("accepted");
+		// Counterfactual: the same 21st send is red with the old active policy.
+		const old = await fixture();
+		for (let n = 0; n < 20; n++) expect(reason(await old.core.execute(old.business(`old-hour-${n}`)))).toBe("accepted");
+		expect(reason(await old.core.execute(old.business("old-21")))).toBe("ordinary_hourly");
+	});
+	it.each([
+		[12, "accepted"],
+		[13, "lower"],
+		[22, "lower"],
+		[23, "owner"],
+	] as const)("hop %i resolves to %s", async (hop, required) => {
+		const t = await fixture({}, undefined, GUARD_POLICY_V2);
+		const result = await t.core.execute(t.business(`v2-hop-${hop}`, hop));
+		if (required === "accepted") expect(result.state).toBe("accepted");
+		else expect(result).toMatchObject({ state: "blocked", reason: "approval_required", requiredTier: required });
+		const old = await fixture();
+		expect(reason(await old.core.execute(old.business(`old-hop-${hop}`, hop)))).toBe("approval_required");
+	});
+	it.each([
+		[13, 10, "lower", "recorded"],
+		[13, 11, "lower", "invalid_input"],
+		[22, 1, "lower", "recorded"],
+		[22, 2, "lower", "invalid_input"],
+		[23, 10, "owner", "recorded"],
+		[24, 10, "owner", "invalid_input"],
+		[24, 9, "owner", "recorded"],
+		[32, 1, "owner", "recorded"],
+		[33, 1, "owner", "invalid_input"],
+	] as const)("request hop %i quantity %i tier %s is %s without clamping", async (hop, quantity, tier, result) => {
+		const t = await fixture({}, undefined, GUARD_POLICY_V2);
+		let request: GuardRequestV2;
+		if (quantity === 11) {
+			const proposed = t.proposalV2("v2-bounds", hop, 1, tier);
+			// Deliberately untrusted negative input, not a well-typed V2 business quantity.
+			const untrustedOverLimitInput: unknown = {
+				...proposed,
+				binding: { ...proposed.binding, quantity, upperHop: hop + quantity - 1 },
+			};
+			request = untrustedOverLimitInput as GuardRequestV2;
+		} else request = t.proposalV2("v2-bounds", hop, quantity, tier);
+		expect(reason(await t.recordRequest(request))).toBe(result);
+	});
+	it("one_send remains one, a lower grant ends at 22, and expiry/forged scope remain closed", async () => {
+		const t = await fixture({}, undefined, GUARD_POLICY_V2);
+		const asked = await t.recordRequest(t.proposalV2("v2-ten", 13, 10));
+		if (asked.state !== "recorded") throw new Error(reason(asked));
+		const d = t.decision(asked.request, "one_send");
+		const decided = await t.recordDecision(d);
+		if (decided.state !== "recorded") throw new Error(reason(decided));
+		const g = (await t.state()).grants[0];
+		expect(g).toMatchObject({
+			maximumUses: 1,
+			acceptedUses: 0,
+			expiresAt: g.issuedAt + 3_600_000,
+			binding: { version: "role-message-guard/v2", quantity: 1, upperHop: 13 },
+		});
+		expect(
+			reason(await t.core.execute(t.business("v2-wrong-root", 13, g.id, d.authority, actor(), "other-root"))),
+		).toBe("scope_mismatch");
+		expect(reason(await t.core.execute(t.business("v2-one", 13, g.id, d.authority)))).toBe("accepted");
+		expect(reason(await t.core.execute(t.business("v2-two", 13, g.id, d.authority)))).toBe("grant_exhausted");
+		const full = await fixture({}, undefined, GUARD_POLICY_V2);
+		const ten = await full.grant(13, 10);
+		expect(reason(await full.core.execute(full.business("v2-upper", 22, ten.id, ten.authority)))).toBe("accepted");
+		expect(reason(await full.core.execute(full.business("v2-beyond", 23, ten.id, ten.authority)))).toBe(
+			"scope_mismatch",
+		);
+		full.f.now += 3_600_000;
+		expect(reason(await full.core.execute(full.business("v2-expired", 14, ten.id, ten.authority)))).toBe(
+			"grant_expired",
+		);
+	});
+	it("V2 still refuses unknown causality, forged origin, stale approval identity and wrong scope without counting", async () => {
+		const t = await fixture({}, undefined, GUARD_POLICY_V2);
+		for (const hop of [0, NaN, 1.5])
+			expect(reason(await t.core.execute(t.business(`v2-unknown-${hop}`, hop)))).toBe("causality_unknown");
+		const c = t.business("v2-forged");
+		expect(
+			reason(await t.core.execute(t.identified({ ...c, identity: { ...c.identity, actor: actor("other") } }))),
+		).toBe("authority_unavailable");
+		const r = await t.recordRequest(t.proposalV2("v2-stale", 13, 10));
+		if (r.state !== "recorded") throw new Error(reason(r));
+		const d = t.decision(r.request);
+		if (legacyDecision(d)) throw new Error("synthetic V2 decision mismatch");
+		expect(
+			reason(
+				await t.core.execute(
+					t.identified({
+						...t.decisionCommand(d, "v2-stale-home"),
+						identity: t.identity("v2-stale-home", actor("coo", false)),
+					}),
+				),
+			),
+		).toBe("authority_unavailable");
+		expect(reason(await t.recordDecision({ ...d, binding: { ...d.binding, generation: "wrong-generation" } }))).toBe(
+			"authority_unavailable",
+		);
+		expect(reason(await t.recordDecision(d))).toBe("identity_conflict");
+		const approved = await t.recordDecision(d, "v2-valid-decision");
+		if (approved.state !== "recorded") throw new Error(reason(approved));
+		const g = { id: approved.request.grantId!, authority: d.authority };
+		const scoped = t.business("v2-wrong-scope", 13, g.id, g.authority);
+		expect(
+			reason(
+				await t.core.execute(t.identified({ ...scoped, scope: { ...scoped.scope, operation: "different work" } })),
+			),
+		).toBe("scope_mismatch");
+		expect((await t.state()).usage).toHaveLength(0);
+		expect((await t.state()).grants[0].acceptedUses).toBe(0);
+	});
+	it("V1 pending requests/grants and digests survive V2 admission and an inverse-policy reader unchanged", async () => {
+		const old = await fixture();
+		const g = await old.grant(7, 3);
+		const pending = await old.recordRequest(old.proposal("old-pending", 12, 5, "owner"));
+		expect(pending.state).toBe("recorded");
+		const before = await old.state();
+		const active = new RoleMessageGuardCore({
+			...old.options,
+			binding,
+			policy: GUARD_POLICY_V2,
+		});
+		const expanded = old.proposalV2("new-ten", 13, 10, "lower");
+		expect(
+			reason(
+				await active.execute(
+					old.identified({
+						kind: "request_record",
+						identity: old.identity("new-ten"),
+						actor: fakeVerified(expanded.binding.requester),
+						request: expanded,
+					}),
+				),
+			),
+		).toBe("recorded");
+		const mixed = await old.state();
+		expect(mixed.version).toBe(GUARD_POLICY_V2.version);
+		expect(mixed.grants).toEqual(before.grants);
+		expect(mixed.requests.filter((r) => r.binding.version === policy.version)).toEqual(before.requests);
+		// The compatibility reader keeps V1 active and can still consume/read precise legacy authority.
+		const inverse = new RoleMessageGuardCore(old.options);
+		expect(reason(await inverse.execute(old.business("old-exact-use", 7, g.id, g.authority)))).toBe("accepted");
+		const exact = (await old.state()).grants.find((v) => v.id === g.id)!;
+		expect({ ...exact, acceptedUses: 0, useTransactionIds: [] }).toEqual(before.grants[0]);
+		expect(exact.acceptedUses).toBe(1);
+		expect((await old.state()).requests.find((r) => r.binding.requestId === "old-pending")).toEqual(
+			before.requests.find((r) => r.binding.requestId === "old-pending"),
+		);
+	});
+	it("an inverse active V1 policy reads but cannot spend V2 lower authority above its restored ceiling", async () => {
+		const expanded = await fixture({}, seed(2_000_000_000), GUARD_POLICY_V2);
+		const g = await expanded.grant(13, 10);
+		const before = await expanded.state();
+		const inverse = new RoleMessageGuardCore({ ...expanded.options, policy });
+		expect(reason(await inverse.execute(expanded.business("inverse-refuses-lower-13", 13, g.id, g.authority)))).toBe(
+			"scope_mismatch",
+		);
+		const after = await expanded.state();
+		expect(after.grants).toEqual(before.grants);
+		expect(after.requests).toEqual(before.requests);
+		expect(after.usage).toEqual(before.usage);
+		expect(after.outbox).toEqual(before.outbox);
+		expect(after.version).toBe(GUARD_POLICY_V2.version);
+		expect(after.grants[0]).toMatchObject({ maximumUses: 10, acceptedUses: 0, authority: g.authority });
+		expect(reason(await expanded.core.execute(expanded.business("v2-still-exact", 13, g.id, g.authority)))).toBe(
+			"accepted",
+		);
+		expect((await expanded.state()).grants[0]).toMatchObject({ maximumUses: 10, acceptedUses: 1 });
+	});
+	it("a V1-to-V2 request publication recovers atomically at every file boundary", async () => {
+		const probe = await fixture({}, seed(2_000_000_000), GUARD_POLICY_V2);
+		probe.f.calls = [];
+		expect(reason(await probe.recordRequest(probe.proposalV2("upgrade", 13, 10)))).toBe("recorded");
+		const points = [...new Set(probe.f.calls)];
+		expect(points.length).toBeGreaterThan(3);
+		for (const point of points) {
+			const t = await fixture({}, seed(2_000_000_000), GUARD_POLICY_V2);
+			t.f.fail = point;
+			await t.recordRequest(t.proposalV2("upgrade", 13, 10));
+			t.f.fail = null;
+			const restart = new GuardFileStore({ ...t.storeOptions, boundary: null });
+			const recovered = await restart.recover();
+			if (recovered.state !== "ready") {
+				expect((await restart.read()).state).toBe("unknown");
+				continue;
+			}
+			const s = recovered.value;
+			expect(s.requests.length === 0 ? s.version === policy.version : s.version === GUARD_POLICY_V2.version).toBe(true);
+			if (s.requests.length)
+				expect(s.requests).toMatchObject([
+					{ binding: { version: GUARD_POLICY_V2.version, quantity: 10, upperHop: 22 } },
+				]);
+			const core = new RoleMessageGuardCore({ ...t.options, store: restart });
+			const replay = await core.execute(
+				t.identified({
+					kind: "request_record",
+					identity: t.identity("request:upgrade"),
+					actor: fakeVerified(actor()),
+					request: t.proposalV2("upgrade", 13, 10),
+				}),
+			);
+			expect(["recorded", "duplicate"]).toContain(replay.state);
+			const after = await restart.read();
+			if (after.state !== "ready") throw new Error(after.reason);
+			expect(after.value.requests).toHaveLength(1);
+		}
+	});
+	it("V2 retains fail-closed rollback_depth_6 (6/20) and holds, not a doubled rollback mode", async () => {
+		const initial = { ...seed(2_000_000_000), version: GUARD_POLICY_V2.version, mode: "rollback_depth_6" as const };
+		const t = await fixture({}, initial, GUARD_POLICY_V2);
+		expect(reason(await t.core.execute(t.business("rollback-seven", 7)))).toBe("rollback_depth");
+		for (let n = 0; n < 20; n++) expect(reason(await t.core.execute(t.business(`rollback-${n}`)))).toBe("accepted");
+		expect(reason(await t.core.execute(t.business("rollback-21")))).toBe("ordinary_hourly");
+		t.f.hold = true;
+		expect(reason(await t.core.execute(t.business("v2-held")))).toBe("held");
+	});
+});
 
 describe("E admission: frozen policy and real-host boundary requirements", () => {
 	it("rejects wrong contract/policy/caps and does not construct a default runtime", async () => {
@@ -754,10 +1104,9 @@ describe("E grants/requests: finite quantity, first answer and scope", () => {
 		expect(reason(await t.recordDecision(t.decision(p.request)))).toBe("authority_unavailable");
 		t.f.decisionAvailable = true;
 		const d = t.decision(p.request);
-		const c = t.identified<Extract<GuardCommand, { kind: "decision_record" }>>({
-			kind: "decision_record",
+		const c = t.identified({
+			...t.decisionCommand(d, "stale-home"),
 			identity: t.identity("stale-home", actor("coo", false)),
-			decision: fakeVerified(d),
 		});
 		expect(reason(await t.core.execute(c))).toBe("authority_unavailable");
 	});
@@ -1161,7 +1510,7 @@ describe("E outbox, holds, recovery, clocks, retention and rollback", () => {
 		if (sent.state !== "accepted") throw new Error("synthetic send failed");
 		await t.core.reconcile(c.identity);
 		const id = sent.receipt.transactionId;
-		const namesSend = (s: GuardStoreState) =>
+		const namesSend = (s: GuardStoreStateAny) =>
 			s.transactions.filter(
 				(x) => x.state === "committed" && x.result.state === "accepted" && x.result.receipt.transactionId === id,
 			);

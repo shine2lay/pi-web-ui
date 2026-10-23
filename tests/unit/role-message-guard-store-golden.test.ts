@@ -34,6 +34,7 @@ import {
 import { useGuardWorld, world } from "./role-message-guard-host-harness.js";
 import { GuardFileStore as ReferenceStore } from "./role-message-guard-store-reference.js";
 import { replayWorstWindow } from "./role-message-guard-worst-window-replay.js";
+import { legacyGuardFileStoreView, type LegacyGuardFileStoreView } from "./role-message-guard-v1-test-adapter.js";
 
 useGuardWorld();
 
@@ -146,7 +147,7 @@ const leftovers = (path: string) => readdirSync(dirname(path)).filter((n) => n.e
 
 class Pair implements GuardStorePort {
 	constructor(
-		readonly live: GuardFileStore,
+		readonly live: LegacyGuardFileStoreView,
 		readonly reference: ReferenceStore,
 		readonly liveOptions: GuardFileStoreOptions,
 		readonly referenceOptions: GuardFileStoreOptions,
@@ -290,7 +291,13 @@ describe("H-GUARD-STORE-PERF-1 golden: the guard store writes what the old store
 			const live = original.call(this, dir);
 			const liveOptions = (live as unknown as { options: GuardFileStoreOptions }).options;
 			const refOptions = referenceOptions(liveOptions, folder("rmguard-golden-"));
-			return new Pair(live, new ReferenceStore(refOptions), liveOptions, refOptions, r) as unknown as GuardFileStore;
+			return new Pair(
+				legacyGuardFileStoreView(live),
+				new ReferenceStore(refOptions),
+				liveOptions,
+				refOptions,
+				r,
+			) as unknown as GuardFileStore;
 		});
 	});
 	afterEach(() => {
@@ -453,7 +460,14 @@ function pair(r: Report, maximumBytes = 32 * 1024 * 1024, fault: { at: GuardFile
 		},
 	};
 	const refOptions = referenceOptions(options, folder("guard-golden-reference-"));
-	const open = () => new Pair(new GuardFileStore(options), new ReferenceStore(refOptions), options, refOptions, r);
+	const open = () =>
+		new Pair(
+			legacyGuardFileStoreView(new GuardFileStore(options)),
+			new ReferenceStore(refOptions),
+			options,
+			refOptions,
+			r,
+		);
 	return { open, options, refOptions, fault };
 }
 

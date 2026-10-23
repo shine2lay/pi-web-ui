@@ -29,6 +29,7 @@ import {
 	type RoleMessageGuardHostOptions,
 } from "../../server/role-message-guard-host.js";
 import { GuardFileStore } from "../../server/role-message-guard-store.js";
+import { GUARD_POLICY_V1, roleMessagePolicyMarker } from "../../server/role-message-limits.js";
 import {
 	A,
 	clock,
@@ -72,6 +73,7 @@ async function startHost(
 ): Promise<{ host: RoleMessageGuardHost; logs: string[] }> {
 	const logs: string[] = [];
 	const host = new RoleMessageGuardHost({
+		policy: GUARD_POLICY_V1,
 		dir,
 		roleMessages: () => w.rm,
 		identities: () => w.roles,
@@ -415,7 +417,10 @@ describe(`the off switch (${GUARD_APPROVALS_SWITCH}=off)`, () => {
 		const { host, logs } = await startHost(w);
 		const reason = `turned off (${GUARD_APPROVALS_SWITCH}=off)`;
 		expect(host.state).toEqual({ status: "degraded", reason });
-		expect(logs).toEqual([`approval ladder UNAVAILABLE (${reason}): sends use the native depth-6 rule; no approvals`]);
+		expect(logs).toEqual([
+			roleMessagePolicyMarker(GUARD_POLICY_V1),
+			`approval ladder UNAVAILABLE (${reason}): sends use the native depth-6 rule; no approvals`,
+		]);
 		const never = join(data, "guard-never");
 		expect((await startHost(w, never)).host.state.status).toBe("degraded");
 		expect(existsSync(never)).toBe(false);
@@ -449,7 +454,10 @@ describe("current.json not understood: off, and nothing cleaned (Ops #248, Secur
 		const before = snapshot(true);
 		const { host, logs } = await startHost(w);
 		expect(host.state).toEqual({ status: "degraded", reason: why });
-		expect(logs).toEqual([`approval ladder UNAVAILABLE (${why}): sends use the native depth-6 rule; no approvals`]);
+		expect(logs).toEqual([
+			roleMessagePolicyMarker(GUARD_POLICY_V1),
+			`approval ladder UNAVAILABLE (${why}): sends use the native depth-6 rule; no approvals`,
+		]);
 		expect(snapshot(true)).toEqual(before); // gen-1 and gen-2 byte for byte, no lock taken, nothing cleaned
 	});
 
@@ -476,7 +484,10 @@ describe("current.json naming gen 2 or more, with no generation folder left (Ops
 		const { host, logs } = await startHost(w);
 		const why = "current.json points at gen-2, which doesn't exist";
 		expect(host.state).toEqual({ status: "degraded", reason: why });
-		expect(logs).toEqual([`approval ladder UNAVAILABLE (${why}): sends use the native depth-6 rule; no approvals`]);
+		expect(logs).toEqual([
+			roleMessagePolicyMarker(GUARD_POLICY_V1),
+			`approval ladder UNAVAILABLE (${why}): sends use the native depth-6 rule; no approvals`,
+		]);
 		expect(snapshot(true)).toEqual(before); // no gen-2 made, no lock taken
 		const r = script("--dry-run");
 		expect(r.code, r.out).toBe(1);

@@ -7,19 +7,23 @@ import { createHash, type Hash, randomBytes } from "node:crypto";
 import { type FileHandle, open, rename, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { types } from "node:util";
+import type { GuardOperationIdentity, GuardOutboxEntry, GuardReservation } from "./role-message-guard-contract.js";
 import type {
-	GuardAtomicMutation,
-	GuardCommitResult,
-	GuardLookupResult,
-	GuardOperationIdentity,
-	GuardOutboxEntry,
-	GuardReadResult,
-	GuardReservation,
-	GuardResult,
-	GuardStorePort,
-	GuardStoreState,
-} from "./role-message-guard-contract.js";
+	GuardAtomicMutationAny,
+	GuardCommitResultAny,
+	GuardLookupResultAny,
+	GuardReadResultAny,
+	GuardResultAny,
+	GuardStorePortAny,
+	GuardStoreStateAny,
+} from "./role-message-guard-contract-v2.js";
 import type { RoleMessageRecord } from "./role-messages.js";
+import {
+	guardBindingBoundsValid,
+	guardPolicyFor,
+	guardQuantityValid,
+	guardRequestRevisionValid,
+} from "./role-message-limits.js";
 
 // #122 H-ROLE-LADDER-PERF-1: guardDigest hashes exactly JSON.stringify of the old sorted copy (keys without
 // undefined, localeCompare order, array-index keys first in number order as a plain object puts them); a unit test
@@ -182,15 +186,21 @@ const stateArrays: readonly StateArray[] = [
 	"tombstones",
 ];
 /** Each state array's item check, in the order guardStateIsValid has always run them. */
-const itemChecks: { readonly [K in StateArray]: (item: GuardStoreState[K][number]) => boolean } = {
-	requests: (r) => !!r.binding.requestId && !!r.binding.generation && integer(r.createdAt) && integer(r.expiresAt),
+const itemChecks: { readonly [K in StateArray]: (item: GuardStoreStateAny[K][number]) => boolean } = {
+	requests: (r) =>
+		guardRequestRevisionValid(r) &&
+		!!r.binding.requestId &&
+		!!r.binding.generation &&
+		integer(r.createdAt) &&
+		integer(r.expiresAt),
 	grants: (g) =>
 		!!g.id &&
 		integer(g.issuedAt) &&
 		integer(g.expiresAt) &&
 		integer(g.acceptedUses) &&
-		g.maximumUses >= 1 &&
-		g.maximumUses <= 5 &&
+		guardBindingBoundsValid(g.binding) &&
+		guardQuantityValid(g.maximumUses, g.binding.version) &&
+		g.maximumUses === g.binding.quantity &&
 		g.acceptedUses <= g.maximumUses &&
 		Array.isArray(g.useTransactionIds),
 	incidents: (i) => !!i.identity.nativeEpisodeId && integer(i.identity.openedAt) && integer(i.identity.expiresAt),
@@ -206,7 +216,9 @@ const itemChecks: { readonly [K in StateArray]: (item: GuardStoreState[K][number
 		!!t.identity.operationId &&
 		!!t.identity.fingerprint &&
 		["prepared", "committed", "unknown"].includes(t.state) &&
-		(t.state === "committed" ? !!t.result.state : integer(t.reservation.preparedAt)),
+		(t.state === "committed"
+			? resultRevisionCompatible(t.result, "role-message-guard/v2")
+			: integer(t.reservation.preparedAt)),
 	outbox: (o) =>
 		!!o.receipt.transactionId &&
 		!!o.receipt.messageId &&
@@ -218,7 +230,7 @@ const itemChecks: { readonly [K in StateArray]: (item: GuardStoreState[K][number
 };
 /** One array's item checks; a store-made item's answer is kept with it. A check that throws fails, as the try around
  * all of them in guardStateIsValid makes it. */
-function itemsValid(state: GuardStoreState, key: StateArray): boolean {
+function itemsValid(state: GuardStoreStateAny, key: StateArray): boolean {
 	const check = itemChecks[key] as (item: unknown) => boolean;
 	return (state[key] as readonly unknown[]).every((item) => {
 		const f = facts(item, key);
@@ -233,12 +245,30 @@ function itemsValid(state: GuardStoreState, key: StateArray): boolean {
 		return f.valid;
 	});
 }
+/** The journal/operation ABI stays V1, but it must never hide a V2 request in a V1 policy envelope. */
+function resultRevisionCompatible(result: unknown, version: GuardStoreStateAny["version"]): boolean {
+	if (!record(result)) return false;
+	if (result.state === "accepted") return true; // policy-neutral original receipt ABI
+	if (result.state !== "recorded" && result.state !== "blocked") return false;
+	if (result.request === null) return result.state === "blocked";
+	return (
+		guardRequestRevisionValid(result.request) &&
+		(version === "role-message-guard/v2" || result.request.binding.version === version)
+	);
+}
+
+/** Distribute the complete ready envelope; never erase the nested S1/S2 correlation. */
+function readyState(value: GuardStoreStateAny): Extract<GuardReadResultAny, { readonly state: "ready" }> {
+	if (value.version === "role-message-guard/v1") return { state: "ready", value };
+	return { state: "ready", value };
+}
+
 /** Structural decoding only; every restored authority/evidence is reverified by the host before use. */
-export function guardStateIsValid(value: unknown): value is GuardStoreState {
+export function guardStateIsValid(value: unknown): value is GuardStoreStateAny {
 	if (
 		!record(value) ||
 		!safeJson(value) ||
-		value.version !== "role-message-guard/v1" ||
+		!guardPolicyFor(value.version) ||
 		typeof value.revision !== "string" ||
 		!integer(value.lastTrustedTime)
 	)
@@ -253,9 +283,14 @@ export function guardStateIsValid(value: unknown): value is GuardStoreState {
 		!["none", "capacity_exhausted", "unknown"].includes(String(value.overflow.state))
 	)
 		return false;
-	const s = value as unknown as GuardStoreState;
+	const s = value as unknown as GuardStoreStateAny;
 	try {
-		return stateArrays.every((key) => itemsValid(s, key));
+		return (
+			stateArrays.every((key) => itemsValid(s, key)) &&
+			(s.version === "role-message-guard/v2" ||
+				([...s.requests, ...s.grants].every((r) => r.binding.version === "role-message-guard/v1") &&
+					s.transactions.every((t) => t.state !== "committed" || resultRevisionCompatible(t.result, s.version))))
+		);
 	} catch {
 		return false;
 	}
@@ -310,12 +345,12 @@ export interface GuardFileStoreOptions {
 interface Bundle {
 	format: "role-message-guard-journal/v1";
 	stage: "prepared" | "committed";
-	state: GuardStoreState;
+	state: GuardStoreStateAny;
 	legacy: GuardLegacyFile;
 	beforeLegacyDigest: string;
 	identity: GuardOperationIdentity | null;
 	reservation: GuardReservation | null;
-	result: Exclude<GuardResult, { readonly state: "unknown" }> | null;
+	result: Exclude<GuardResultAny, { readonly state: "unknown" }> | null;
 	checksum: string;
 }
 function checksum(bundle: Omit<Bundle, "checksum">): Bundle {
@@ -337,6 +372,7 @@ function verify(value: unknown, knownBodyDigest?: string): Bundle {
 		body.format !== "role-message-guard-journal/v1" ||
 		!["prepared", "committed"].includes(String(body.stage)) ||
 		!guardStateIsValid(body.state) ||
+		(body.result !== null && !resultRevisionCompatible(body.result, body.state.version)) ||
 		!legacyIsValid(body.legacy) ||
 		typeof body.beforeLegacyDigest !== "string" ||
 		!safeJson(body)
@@ -611,7 +647,7 @@ function compose(body: Omit<Bundle, "checksum">): Written | null {
 function errorText(error: unknown): string {
 	return error instanceof Error ? error.message : "unknown persistence error";
 }
-function reservation(mutation: GuardAtomicMutation): GuardReservation {
+function reservation(mutation: GuardAtomicMutationAny): GuardReservation {
 	const r = mutation.result;
 	if (r.state === "accepted") {
 		const entry = mutation.next.outbox.find((o) => o.receipt.outboxId === r.receipt.outboxId);
@@ -649,7 +685,7 @@ function reservation(mutation: GuardAtomicMutation): GuardReservation {
 	};
 }
 
-export class GuardFileStore implements GuardStorePort {
+export class GuardFileStore implements GuardStorePortAny {
 	private fenced: string | null = null;
 	private recovered = false;
 	// #122 H-ROLE-LADDER-PERF-1: decode and digest are pure functions of the file text. The files are still read on
@@ -761,7 +797,7 @@ export class GuardFileStore implements GuardStorePort {
 		return bundle.stage === "committed" && (await this.canonicalDigest()) === this.legacyDigest(bundle.legacy);
 	}
 	/** Explicit create-only bootstrap. Does not accept a stale snapshot or open the user's store. */
-	async initialize(state: GuardStoreState, legacy: GuardLegacyFile): Promise<GuardReadResult> {
+	async initialize(state: GuardStoreStateAny, legacy: GuardLegacyFile): Promise<GuardReadResultAny> {
 		return this.options.withExclusive(async () => {
 			try {
 				if ((await this.raw(this.options.journalPath)) !== null)
@@ -807,14 +843,14 @@ export class GuardFileStore implements GuardStorePort {
 				await this.durable(this.options.legacyPath, legacy, "legacy", sortedJson(legacy));
 				this.recovered = true;
 				this.fenced = null;
-				return { state: "ready", value: structuredClone(state) };
+				return readyState(structuredClone(state));
 			} catch (e) {
 				this.fenced = errorText(e);
 				return { state: "unknown", reason: this.fenced };
 			}
 		});
 	}
-	async read(): Promise<GuardReadResult> {
+	async read(): Promise<GuardReadResultAny> {
 		return this.options.withExclusive(async () => {
 			try {
 				if (!this.recovered || this.fenced)
@@ -824,13 +860,13 @@ export class GuardFileStore implements GuardStorePort {
 					return { state: "unknown", reason: "prepared transaction or incomplete/divergent canonical publication" };
 				// Ops #233 H-GUARD-STORE-PERF-1 (1): the bundle is deep-frozen, so a read hands out a fresh top level over
 				// the frozen items instead of a whole copy; changing what a read returned still changes nothing stored.
-				return { state: "ready", value: { ...bundle.state } };
+				return readyState({ ...bundle.state });
 			} catch (e) {
 				return { state: "unknown", reason: errorText(e) };
 			}
 		});
 	}
-	async recover(): Promise<GuardReadResult> {
+	async recover(): Promise<GuardReadResultAny> {
 		return this.options.withExclusive(async () => {
 			try {
 				const bundle = await this.load();
@@ -844,14 +880,14 @@ export class GuardFileStore implements GuardStorePort {
 				await this.durable(this.options.legacyPath, bundle.legacy, "legacy", sortedJson(bundle.legacy));
 				this.fenced = null;
 				this.recovered = true;
-				return { state: "ready", value: structuredClone(bundle.state) };
+				return readyState(structuredClone(bundle.state));
 			} catch (e) {
 				this.fenced = errorText(e);
 				return { state: "unknown", reason: this.fenced };
 			}
 		});
 	}
-	private lookupIn(bundle: Bundle, identity: GuardOperationIdentity): GuardLookupResult {
+	private lookupIn(bundle: Bundle, identity: GuardOperationIdentity): GuardLookupResultAny {
 		if (bundle.identity && bundle.identity.operationId === identity.operationId && holdsPrepared(bundle)) {
 			return {
 				state: "found",
@@ -897,7 +933,7 @@ export class GuardFileStore implements GuardStorePort {
 		if (holdsPrepared(bundle)) return { state: "unknown", reason: "store quarantined by prepared reservation" };
 		return { state: "absent", authoritative: true };
 	}
-	async lookup(identity: GuardOperationIdentity): Promise<GuardLookupResult> {
+	async lookup(identity: GuardOperationIdentity): Promise<GuardLookupResultAny> {
 		return this.options.withExclusive(async () => {
 			try {
 				if (!this.recovered || this.fenced)
@@ -913,8 +949,8 @@ export class GuardFileStore implements GuardStorePort {
 	}
 	async transact(
 		identity: GuardOperationIdentity,
-		update: (current: GuardStoreState) => Promise<GuardAtomicMutation>,
-	): Promise<GuardCommitResult> {
+		update: (current: GuardStoreStateAny) => Promise<GuardAtomicMutationAny>,
+	): Promise<GuardCommitResultAny> {
 		return this.options.withExclusive(async () => {
 			let beganPrepare = false;
 			try {
@@ -966,18 +1002,30 @@ export class GuardFileStore implements GuardStorePort {
 				// H-GUARD-STORE-PERF-1 (1): the update gets a fresh top level over the deep-frozen items (it copies what it
 				// changes; see mutable() in the core), not a whole copy of the state.
 				const mutation = await update({ ...current.state });
-				if (!guardStateIsValid(mutation.next) || mutation.next.lastTrustedTime < current.state.lastTrustedTime)
+				if (
+					!guardStateIsValid(mutation.next) ||
+					!resultRevisionCompatible(mutation.result, mutation.next.version) ||
+					mutation.next.lastTrustedTime < current.state.lastTrustedTime
+				)
 					throw new Error("invalid mutation or time watermark regression");
+				if (current.state.version === "role-message-guard/v2" && mutation.next.version !== current.state.version)
+					throw new Error("guard store policy revision cannot be downgraded");
 				if (current.state.mode === "rollback_depth_6" && mutation.next.mode !== "rollback_depth_6")
 					throw new Error("rollback mode cannot be resurrected");
 				for (const grant of current.state.grants) {
 					const nextGrant = mutation.next.grants.find((g) => g.id === grant.id);
-					if (
-						nextGrant &&
-						(nextGrant.acceptedUses < grant.acceptedUses ||
-							(grant.state === "revoked" && nextGrant.state !== "revoked"))
-					)
-						throw new Error("grant use/refusal cannot be reset");
+					if (nextGrant) {
+						const { acceptedUses: _u, state: _s, useTransactionIds: _t, ...issued } = grant;
+						const { acceptedUses: _nu, state: _ns, useTransactionIds: _nt, ...nextIssued } = nextGrant;
+						if (guardDigest(issued) !== guardDigest(nextIssued))
+							throw new Error("issued grant authority, quantity, scope and expiry cannot change");
+						if (
+							nextGrant.acceptedUses < grant.acceptedUses ||
+							(grant.state === "revoked" && nextGrant.state !== "revoked") ||
+							!grant.useTransactionIds.every((id) => nextGrant.useTransactionIds.includes(id))
+						)
+							throw new Error("grant use/refusal cannot be reset");
+					}
 				}
 				// Request history is immutable at the single writer (Ops rm-1bb3c77b item 3): creation fields never change,
 				// a recorded first answer (and its grant) is never reset or rewritten, and a request only leaves with its

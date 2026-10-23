@@ -7,30 +7,22 @@ import type {
 	GuardActor,
 	GuardApprovalBinding,
 	GuardApprovalContext,
-	GuardAtomicMutation,
 	GuardAuditReceipt,
 	GuardBlockedReason,
-	GuardCommand,
 	GuardConsumerBinding,
-	GuardCoordinator,
 	GuardGrant,
 	GuardHostVerified,
-	GuardHostVerifier,
 	GuardIncident,
 	GuardIncidentIdentity,
 	GuardKnownCausality,
 	GuardLegacyAcceptedMessage,
 	GuardOperationIdentity,
 	GuardOutboxEntry,
-	GuardPolicyV1,
 	GuardProofReference,
-	GuardReadResult,
 	GuardRequest,
 	GuardResult,
 	GuardRetention,
 	GuardScope,
-	GuardStatusResult,
-	GuardStorePort,
 	GuardStoreState,
 	GuardTime,
 	GuardTransportPort,
@@ -39,38 +31,35 @@ import type {
 	GuardVerifiedDecision,
 	GuardVerifiedSnapshot,
 } from "./role-message-guard-contract.js";
+import type {
+	GuardApprovalBindingAny,
+	GuardApprovalBindingV2,
+	GuardAtomicMutationAny,
+	GuardCommandAny,
+	GuardCoordinatorAny,
+	GuardGrantAny,
+	GuardHostVerifierAny,
+	GuardPolicy,
+	GuardReadResultAny,
+	GuardRequestAny,
+	GuardRequestV2,
+	GuardResultAny,
+	GuardStatusResultAny,
+	GuardStorePortAny,
+	GuardStoreStateAny,
+	GuardStoreStateV2,
+	GuardVerifiedDecisionAny,
+	GuardVerifiedDecisionV2,
+} from "./role-message-guard-contract-v2.js";
 import { guardDigest, guardOperationKey, guardStateIsValid, guardTransactionId } from "./role-message-guard-store.js";
-import { roleMessagesHourlyExempt } from "./role-message-limits.js";
-
-const policyV1: GuardPolicyV1 = {
-	version: "role-message-guard/v1",
-	depth: { unapprovedThrough: 6, lowerThrough: 11, ownerFrom: 12 },
-	grant: { maximumBusinessSends: 5, lifetimeMs: 3600000 },
-	ordinary: { acceptedPerOrigin: 20, rollingWindowMs: 3600000 },
-	request: {
-		outstandingPerRequester: 20,
-		lifetimeMs: 86400000,
-		openPerRootTierScopeGeneration: 1,
-		initialNotifications: 1,
-		decisionNotifications: 1,
-		explicitUpwardEscalations: 1,
-	},
-	protected: {
-		bypass: "depth_only",
-		consumesOrdinaryHourly: true,
-		assignedDestinations: 1,
-		initialPerEpisode: 1,
-		terminalPerEpisode: 1,
-		newIncidentsPerOriginHour: 2,
-		deliveriesPerOriginHour: 4,
-		deliveriesPerDestinationHour: 4,
-		deliveriesPerSystemHour: 12,
-		liveIncidents: 12,
-		lifetimeMs: 86400000,
-		maximumRenderedBytes: 2048,
-	},
-	rollback: { depthThrough: 6, acceptedPerOrigin: 20, preserveAccepted: true },
-};
+import {
+	guardBindingBoundsValid,
+	guardDecisionRevisionValid,
+	guardRequestRevisionValid,
+	guardPolicyFor,
+	guardPolicyIsValid,
+	roleMessagesHourlyExempt,
+} from "./role-message-limits.js";
 const contractCommit = "04fe491fb3afc3b42462ad782b2099c7971c7008";
 const contractSha256 = "79a5a1e1a704ecfbb36a70fc1b210ee6e27575013843122cf202a84592b4c7af";
 const policyDocumentSha256 = "5d8433fd0a8f9a82103009e43491182caf14b80ad2a20b874709c5b3762724a9";
@@ -78,23 +67,14 @@ const version = "role-message-guard/v1" as const;
 /** Generations with this prefix belong to E's one explicit lower-to-Owner transition; request_record may not use them. */
 export const guardEscalationGenerationPrefix = "owner-escalation-";
 /** Deterministic Owner-phase generation for a lower phase's winning escalate_owner (one per lower binding). */
-export function guardEscalationGeneration(lower: GuardApprovalBinding): string {
+export function guardEscalationGeneration(lower: GuardApprovalBindingAny): string {
 	return `${guardEscalationGenerationPrefix}${guardDigest({ version, transition: "explicit_escalation", lower })}`;
 }
-type FinalResult = Exclude<GuardResult, { readonly state: "unknown" }>;
-interface MutableState extends Omit<
-	GuardStoreState,
-	"requests" | "grants" | "incidents" | "usage" | "transactions" | "outbox" | "audits" | "tombstones"
-> {
-	requests: GuardRequest[];
-	grants: GuardGrant[];
-	incidents: GuardIncident[];
-	usage: GuardStoreState["usage"][number][];
-	transactions: GuardStoreState["transactions"][number][];
-	outbox: GuardOutboxEntry[];
-	audits: GuardAuditReceipt[];
-	tombstones: GuardStoreState["tombstones"][number][];
-}
+type FinalResult = Exclude<GuardResultAny, { readonly state: "unknown" }>;
+type MutableStateFor<S extends GuardStoreStateAny> = {
+	-readonly [K in keyof S]: S[K] extends readonly (infer E)[] ? E[] : S[K];
+};
+type MutableState = MutableStateFor<GuardStoreState> | MutableStateFor<GuardStoreStateV2>;
 export interface GuardMessageIntent {
 	readonly id: string;
 	readonly at: number;
@@ -109,10 +89,10 @@ export interface GuardMessageIntent {
 }
 export interface GuardCoreOptions {
 	readonly binding: GuardConsumerBinding;
-	readonly policy: GuardPolicyV1;
+	readonly policy: GuardPolicy;
 	readonly retention: GuardRetention;
-	readonly store: GuardStorePort;
-	readonly verifier: GuardHostVerifier;
+	readonly store: GuardStorePortAny;
+	readonly verifier: GuardHostVerifierAny;
 	readonly transport: GuardTransportPort;
 	/** Trusted host time; E rejects untrusted, backwards or pre-state time under its writer. */
 	readonly clock: () => Promise<GuardTime>;
@@ -126,19 +106,22 @@ export interface GuardCoreOptions {
 	/** Native snapshot of the requester for a recorded request (actor, original causality, holds, time). */
 	readonly requestSnapshot: (
 		actor: GuardHostVerified<GuardActor>,
-		request: GuardRequest,
+		request: GuardRequestAny,
 	) => Promise<GuardVerification<GuardVerifiedSnapshot>>;
 	/**
 	 * Rehydrates a decision (a fresh command, or one restored from E's own state) through its native first-answer
 	 * event and source, and returns it exactly as natively recorded. Matching fields alone are not proof.
 	 */
-	readonly reverifyDecision: (
-		decision: GuardVerifiedDecision,
-		request: GuardRequest,
-	) => Promise<GuardVerification<GuardVerifiedDecision>>;
+	readonly reverifyDecision: {
+		(decision: GuardVerifiedDecision, request: GuardRequest): Promise<GuardVerification<GuardVerifiedDecision>>;
+		(decision: GuardVerifiedDecisionV2, request: GuardRequestV2): Promise<GuardVerification<GuardVerifiedDecisionV2>>;
+		(
+			...args: [GuardVerifiedDecision, GuardRequest] | [GuardVerifiedDecisionV2, GuardRequestV2]
+		): Promise<GuardVerification<GuardVerifiedDecisionAny>>;
+	};
 	/** Native ancestry/scope/recipient check of one grant use; called under the writer before any use is counted. */
 	readonly verifyGrantLineage: (
-		grant: GuardGrant,
+		grant: GuardGrantAny,
 		snapshot: GuardHostVerified<GuardVerifiedSnapshot>,
 		scope: GuardScope,
 		to: string,
@@ -194,10 +177,25 @@ function equal(a: unknown, b: unknown): boolean {
 }
 function blocked(
 	reason: GuardBlockedReason,
-	request: GuardRequest | null = null,
+	request: GuardRequestAny | null = null,
 	requiredTier: "lower" | "owner" | null = null,
 ): FinalResult {
-	return { state: "blocked", reason, request, requiredTier, accepted: false };
+	const common: Omit<Extract<GuardResult, { state: "blocked" }>, "request"> = {
+		state: "blocked",
+		reason,
+		requiredTier,
+		accepted: false,
+	};
+	if (request === null) return { ...common, request: null };
+	return guardRequestRevisionValid(request, version) ? { ...common, request } : { ...common, request };
+}
+function recordedResult(identity: GuardOperationIdentity, request: GuardRequestAny): FinalResult {
+	const common: Omit<Extract<GuardResult, { state: "recorded" }>, "request"> = {
+		state: "recorded",
+		transactionId: guardTransactionId(identity),
+		communicationAccepted: false,
+	};
+	return guardRequestRevisionValid(request, version) ? { ...common, request } : { ...common, request };
 }
 function actorValid(a: GuardActor): boolean {
 	return (
@@ -293,15 +291,18 @@ function contextValid(c: GuardApprovalContext, maximumBytes: number, now: number
 		Buffer.byteLength(JSON.stringify(c), "utf8") <= maximumBytes
 	);
 }
-function openRequest(r: GuardRequest): boolean {
+function openRequest(r: GuardRequestAny): boolean {
 	return ["context_needed", "awaiting_approver", "awaiting_owner", "rate_limited", "held"].includes(r.state);
 }
 /** The Owner-phase binding E derives from a lower phase; only quantity bounds, root, scope and requester carry over. */
-function escalatedBinding(lower: GuardApprovalBinding): GuardApprovalBinding {
+function escalatedBinding(lower: GuardApprovalBinding): GuardApprovalBinding;
+function escalatedBinding(lower: GuardApprovalBindingV2): GuardApprovalBindingV2;
+function escalatedBinding(lower: GuardApprovalBindingAny): GuardApprovalBindingAny;
+function escalatedBinding(lower: GuardApprovalBindingAny): GuardApprovalBindingAny {
 	return { ...lower, generation: guardEscalationGeneration(lower), tier: "owner" };
 }
 /** True only for the single Owner phase E's escalation transition creates from this lower phase. */
-function escalatedPhaseOf(candidate: GuardRequest, lower: GuardRequest): boolean {
+function escalatedPhaseOf(candidate: GuardRequestAny, lower: GuardRequestAny): boolean {
 	return (
 		equal(candidate.binding, escalatedBinding(lower.binding)) &&
 		candidate.selectedApprover.tier === "owner" &&
@@ -322,7 +323,7 @@ function incidentKey(i: GuardIncidentIdentity): string {
 	});
 }
 /** Stable semantic fingerprint; refreshable holds/time are NOT a second operation or approval. */
-export function guardCommandFingerprint(command: GuardCommand): string {
+export function guardCommandFingerprint(command: GuardCommandAny): string {
 	const { identity: _identity, ...body } = command;
 	if ("snapshot" in body) {
 		const { snapshot, ...intent } = body;
@@ -349,27 +350,81 @@ export function guardAuditIndex(audits: readonly GuardAuditReceipt[]): {
 	}
 	return { latestAt: (subjectId) => latest.get(subjectId) ?? -Infinity, firstAt: (id) => first.get(id) };
 }
-function mutable(s: GuardStoreState): MutableState {
-	return {
-		...s,
-		requests: [...s.requests],
-		grants: [...s.grants],
+/** Revision checks select complete records; they never establish native authority or binding equality. */
+function decisionPair(
+	decision: GuardVerifiedDecisionAny,
+	request: GuardRequestAny,
+): [GuardVerifiedDecision, GuardRequest] | [GuardVerifiedDecisionV2, GuardRequestV2] | null {
+	if (guardDecisionRevisionValid(decision, version) && guardRequestRevisionValid(request, version))
+		return [decision, request];
+	if (
+		guardDecisionRevisionValid(decision, "role-message-guard/v2") &&
+		guardRequestRevisionValid(request, "role-message-guard/v2")
+	)
+		return [decision, request];
+	return null;
+}
+function legacyResult(result: FinalResult): result is Exclude<GuardResult, { readonly state: "unknown" }> {
+	return (
+		(result.state !== "recorded" && result.state !== "blocked") ||
+		result.request === null ||
+		guardRequestRevisionValid(result.request, version)
+	);
+}
+/** S1 arrays stay exact V1. Promotion happens only when a completed write actually adds a V2 record. */
+function putRequest(state: MutableState, request: GuardRequestAny, index?: number): void {
+	if (state.version === "role-message-guard/v2") {
+		if (index === undefined) state.requests.push(request);
+		else state.requests[index] = request;
+	} else if (guardRequestRevisionValid(request, version)) {
+		if (index === undefined) state.requests.push(request);
+		else state.requests[index] = request;
+	} else {
+		const next: MutableStateFor<GuardStoreStateV2> = {
+			...state,
+			version: "role-message-guard/v2",
+			requests: [...state.requests],
+		};
+		if (index === undefined) next.requests.push(request);
+		else next.requests[index] = request;
+		Object.assign(state, next);
+	}
+}
+function putGrant(state: MutableState, grant: GuardGrantAny): void {
+	if (state.version === "role-message-guard/v2") state.grants.push(grant);
+	else if (legacyGrant(grant)) state.grants.push(grant);
+	else {
+		const next: MutableStateFor<GuardStoreStateV2> = {
+			...state,
+			version: "role-message-guard/v2",
+			grants: [...state.grants, grant],
+		};
+		Object.assign(state, next);
+	}
+}
+function legacyGrant(grant: GuardGrantAny): grant is GuardGrant {
+	return grant.binding.version === version && grant.maximumUses <= 5;
+}
+function mutable(s: GuardStoreStateAny): MutableState {
+	const common = {
 		incidents: [...s.incidents],
 		usage: [...s.usage],
-		transactions: [...s.transactions],
 		outbox: [...s.outbox],
 		audits: [...s.audits],
 		tombstones: [...s.tombstones],
 	};
+	return s.version === "role-message-guard/v1"
+		? { ...s, ...common, requests: [...s.requests], grants: [...s.grants], transactions: [...s.transactions] }
+		: { ...s, ...common, requests: [...s.requests], grants: [...s.grants], transactions: [...s.transactions] };
 }
 
-export class RoleMessageGuardCore implements GuardCoordinator {
+export class RoleMessageGuardCore implements GuardCoordinatorAny {
 	private readonly options: GuardCoreOptions;
 	/** #379: sends whose own reconcile is running (by operation id); evidence never settles those under it. */
 	private readonly reconciling = new Map<string, number>();
 	constructor(options: GuardCoreOptions) {
 		if (
-			!equal(options.policy, policyV1) ||
+			!guardPolicyIsValid(options.policy) ||
 			options.binding.version !== version ||
 			options.binding.contractCommit !== contractCommit ||
 			options.binding.contractSha256 !== contractSha256 ||
@@ -383,7 +438,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 		// verified replay horizon. Open requests, live grants and undelivered entries never leave while open, and a
 		// request record stays until its expiry plus this time, so a later decision on it is refused, never new.
 		if (
-			r.settledRetentionMs < policyV1.ordinary.rollingWindowMs ||
+			r.settledRetentionMs < options.policy.ordinary.rollingWindowMs ||
 			(r.sourceReplayHorizonMs !== "unknown" && r.settledRetentionMs < r.sourceReplayHorizonMs)
 		)
 			throw new Error("retention cannot precede the usage window or verified replay horizon");
@@ -406,7 +461,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 			binding: structuredClone(options.binding),
 		};
 	}
-	private clockOK(time: GuardTime, state: GuardStoreState): boolean {
+	private clockOK(time: GuardTime, state: GuardStoreStateAny): boolean {
 		return (
 			time.state === "trusted" &&
 			num(time.nowMs) &&
@@ -421,7 +476,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 	}
 	private snapshotOK(
 		snapshot: GuardVerifiedSnapshot,
-		state: GuardStoreState,
+		state: GuardStoreStateAny,
 		identity: GuardOperationIdentity,
 	): GuardBlockedReason | null {
 		if (!actorValid(snapshot.actor) || !equal(snapshot.actor, identity.actor)) return "authority_unavailable";
@@ -569,7 +624,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 		state.audits = state.audits.filter(
 			(a) => !pruned.has(a.transactionId) || a.event === "decided" || a.subjectId.startsWith("incident-action:"),
 		);
-		state.usage = state.usage.filter((u) => now - u.committedAt < policyV1.ordinary.rollingWindowMs);
+		state.usage = state.usage.filter((u) => now - u.committedAt < this.options.policy.ordinary.rollingWindowMs);
 		state.grants = state.grants.map((g) =>
 			g.state === "approved" && now >= g.expiresAt ? { ...g, state: "expired" } : g,
 		);
@@ -586,7 +641,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 					o.state !== "handled" &&
 					!(o.state === "dispatched" && o.message.kind === "fyi"),
 			);
-		const removable = (r: GuardRequest) =>
+		const removable = (r: GuardRequestAny) =>
 			!openRequest(r) && now - r.expiresAt >= settledAge && !pendingRoot(r.binding.causal);
 		// An escalation lineage (lower phase + Owner phase share requestId) leaves only as a whole, so the preserved
 		// lower decision can never be dropped while its Owner phase, grant or audits could still be reused.
@@ -639,7 +694,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 				),
 		);
 	}
-	private fits(state: GuardStoreState): boolean {
+	private fits(state: GuardStoreStateAny): boolean {
 		const r = this.options.retention;
 		const reserved = state.incidents.filter(
 			(i) => i.state === "live" && i.resultStorageReserved && !i.resultTransactionId,
@@ -679,24 +734,29 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 		result: FinalResult,
 		legacyAccepted: readonly GuardLegacyAcceptedMessage[],
 		now: number,
-	): GuardAtomicMutation {
+	): GuardAtomicMutationAny {
 		// Ops #416 H-WW-SCAN-1: a pure digest of the identity, worked out once instead of once per receipt scanned.
 		const transactionId = guardTransactionId(identity);
 		if (!state.audits.some((a) => a.transactionId === transactionId))
 			this.audit(state, identity, "used", `operation:${result.state}`, now);
+		const revision = `revision-${guardDigest({ previous: state.revision, identity })}`;
+		if (state.version === version && !legacyResult(result)) state = { ...state, version: "role-message-guard/v2" };
+		if (state.version === version) {
+			if (!legacyResult(result)) throw new Error("result revision mismatch");
+			state.transactions.push({ state: "committed", identity, transactionId, result });
+			const next = { ...state, revision, lastTrustedTime: now };
+			if (!this.fits(next)) throw new Error("retention_capacity");
+			return { next, legacyAccepted, result };
+		}
 		state.transactions.push({ state: "committed", identity, transactionId, result });
-		state = {
-			...state,
-			revision: `revision-${guardDigest({ previous: state.revision, identity })}`,
-			lastTrustedTime: now,
-		};
-		if (!this.fits(state)) throw new Error("retention_capacity");
-		return { next: state, legacyAccepted, result };
+		const next = { ...state, revision, lastTrustedTime: now };
+		if (!this.fits(next)) throw new Error("retention_capacity");
+		return { next, legacyAccepted, result };
 	}
 	private commitResult(
 		identity: GuardOperationIdentity,
-		result: Awaited<ReturnType<GuardStorePort["transact"]>>,
-	): GuardResult {
+		result: Awaited<ReturnType<GuardStorePortAny["transact"]>>,
+	): GuardResultAny {
 		if (result.state === "committed") return result.result;
 		if (result.state === "unknown")
 			return {
@@ -709,7 +769,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 			};
 		return blocked(result.reason === "retention_capacity" ? "retention_capacity" : "persistence_unavailable");
 	}
-	async execute(command: GuardCommand): Promise<GuardResult> {
+	async execute(command: GuardCommandAny): Promise<GuardResultAny> {
 		try {
 			if (
 				!command ||
@@ -749,8 +809,12 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 							!roleMessagesHourlyExempt(fresh.value.actor.role) &&
 							state.usage.filter(
 								(u) =>
-									u.origin === command.identity.actor.role && now - u.committedAt < policyV1.ordinary.rollingWindowMs,
-							).length >= policyV1.ordinary.acceptedPerOrigin
+									u.origin === command.identity.actor.role &&
+									now - u.committedAt < this.options.policy.ordinary.rollingWindowMs,
+							).length >=
+								(state.mode === "rollback_depth_6"
+									? this.options.policy.rollback.acceptedPerOrigin
+									: this.options.policy.ordinary.acceptedPerOrigin)
 						)
 							outcome = blocked("ordinary_hourly");
 						else {
@@ -774,7 +838,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 	}
 	private async recordRequest(
 		state: MutableState,
-		command: Extract<GuardCommand, { kind: "request_record" }>,
+		command: Extract<GuardCommandAny, { kind: "request_record" }>,
 		now: number,
 	): Promise<FinalResult> {
 		const input = command.request;
@@ -784,7 +848,8 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 			!actorValid(command.actor) ||
 			!equal(command.actor, command.identity.actor) ||
 			!equal(b.requester, command.actor) ||
-			b.version !== version ||
+			b.version !== this.options.policy.version ||
+			!guardBindingBoundsValid(b) ||
 			!text(b.requestId) ||
 			!text(b.generation) ||
 			b.generation.startsWith(guardEscalationGenerationPrefix) ||
@@ -794,11 +859,11 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 			!equal(b.scope.task, command.actor.task) ||
 			!num(b.quantity) ||
 			b.quantity < 1 ||
-			b.quantity > 5 ||
+			b.quantity > this.options.policy.grant.maximumBusinessSends ||
 			!num(b.upperHop) ||
 			b.upperHop !== add(b.causal.nextHop, b.quantity - 1) ||
-			b.causal.nextHop <= 6 ||
-			(b.tier === "lower" && b.upperHop >= 12) ||
+			b.causal.nextHop <= this.options.policy.depth.unapprovedThrough ||
+			(b.tier === "lower" && b.upperHop > this.options.policy.depth.lowerThrough) ||
 			!["lower", "owner"].includes(b.tier) ||
 			input.firstDecision !== null ||
 			input.grantId !== null ||
@@ -825,17 +890,12 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 		);
 		if (existing)
 			return equal(existing.binding, b) && equal(existing.context, input.context)
-				? {
-						state: "recorded",
-						transactionId: guardTransactionId(command.identity),
-						request: existing,
-						communicationAccepted: false,
-					}
+				? recordedResult(command.identity, existing)
 				: blocked("identity_conflict");
 		if (
 			state.requests.filter(
 				(r) => r.binding.requester.role === command.actor.role && openRequest(r) && r.expiresAt > now,
-			).length >= 20
+			).length >= this.options.policy.request.outstandingPerRequester
 		)
 			return blocked("request_capacity");
 		const snapshot = await this.options.requestSnapshot(command.actor, input);
@@ -867,30 +927,30 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 		)
 			return blocked("authority_unavailable");
 		const held = Object.values(revalidated.value.holds).some((v) => v !== false);
-		const request: GuardRequest = {
+		const request = {
 			...input,
 			selectedApprover: selected.value,
 			createdAt: now,
 			expiresAt: add(now, 86400000),
-			state: held ? "held" : b.tier === "owner" ? "awaiting_owner" : "awaiting_approver",
+			state: held
+				? ("held" as const)
+				: b.tier === "owner"
+					? ("awaiting_owner" as const)
+					: ("awaiting_approver" as const),
 			initialNotificationKey: `control-initial-${guardDigest(b)}`,
 			decisionNotificationKey: `control-decision-${guardDigest(b)}`,
 			firstDecision: null,
 			grantId: null,
-			upwardEscalations: 0,
+			upwardEscalations: 0 as const,
 		};
-		state.requests.push(request);
+		if (!guardRequestRevisionValid(request)) return blocked("authority_unavailable");
+		putRequest(state, request);
 		this.audit(state, command.identity, "requested", b.requestId, now);
-		return {
-			state: "recorded",
-			transactionId: guardTransactionId(command.identity),
-			request,
-			communicationAccepted: false,
-		};
+		return recordedResult(command.identity, request);
 	}
 	private async recordDecision(
 		state: MutableState,
-		command: Extract<GuardCommand, { kind: "decision_record" }>,
+		command: Extract<GuardCommandAny, { kind: "decision_record" }>,
 		now: number,
 	): Promise<FinalResult> {
 		const input = command.decision;
@@ -898,7 +958,9 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 		if (index < 0) return blocked("authority_unavailable");
 		const request = state.requests[index];
 		if (state.mode !== "enabled") return blocked("grant_revoked", request);
-		const fresh = await this.options.reverifyDecision(input, request);
+		const pair = decisionPair(input, request);
+		if (!pair) return blocked("authority_unavailable", request);
+		const fresh = await this.options.reverifyDecision(...pair);
 		if (
 			fresh.state !== "verified" ||
 			!equal(fresh.value, input) ||
@@ -930,12 +992,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 				!["authenticated_browser", "authorised_owner_telegram"].includes(input.authority.source.kind))
 		)
 			return blocked("authority_unavailable", request);
-		const recorded = (r: GuardRequest): FinalResult => ({
-			state: "recorded",
-			transactionId: guardTransactionId(command.identity),
-			request: r,
-			communicationAccepted: false,
-		});
+		const recorded = (r: GuardRequestAny): FinalResult => recordedResult(command.identity, r);
 		if (request.firstDecision) {
 			// First answer wins. A replay of the winning escalation returns the same Owner phase; any other later
 			// lower answer is stale: it changes nothing and can never answer the Owner phase (other binding).
@@ -948,27 +1005,43 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 		if (!openRequest(request) || now >= request.expiresAt) return blocked("grant_expired", request);
 		if (input.choice === "escalate_owner") return this.escalate(state, command, index, now);
 		if (!["deny", "one_send", "requested_quantity"].includes(input.choice)) return blocked("invalid_input", request);
-		let updated: GuardRequest;
-		if (input.choice === "deny") updated = { ...request, firstDecision: input, state: "denied" };
-		else {
+		let updated: GuardRequestAny;
+		if (input.choice === "deny") {
+			const denied = { ...request, firstDecision: input, state: "denied" as const };
+			if (!guardRequestRevisionValid(denied)) return blocked("authority_unavailable", request);
+			updated = denied;
+		} else {
 			const quantity = input.choice === "one_send" ? 1 : request.binding.quantity;
 			const upperHop = add(request.binding.causal.nextHop, quantity - 1);
-			if (input.authority.tier === "lower" && upperHop >= 12) return blocked("authority_unavailable", request);
-			const grant: GuardGrant = {
+			if (
+				!guardBindingBoundsValid(request.binding) ||
+				(input.authority.tier === "lower" && upperHop > guardPolicyFor(request.binding.version)!.depth.lowerThrough)
+			)
+				return blocked("authority_unavailable", request);
+			const common = {
 				id: `grant-${guardDigest({ binding: request.binding, event: input.firstAnswerEventId })}`,
-				binding: { ...request.binding, quantity, upperHop },
 				authority: input.authority,
 				issuedAt: now,
 				expiresAt: add(now, 3600000),
-				maximumUses: quantity,
 				acceptedUses: 0,
-				state: "approved",
+				state: "approved" as const,
 				useTransactionIds: [],
 			};
-			state.grants.push(grant);
-			updated = { ...request, firstDecision: input, state: "approved", grantId: grant.id };
+			let grant: GuardGrantAny;
+			const binding = request.binding;
+			if (binding.version === version) {
+				const uses = input.choice === "one_send" ? 1 : binding.quantity;
+				grant = { ...common, binding: { ...binding, quantity: uses, upperHop }, maximumUses: uses };
+			} else {
+				const uses = input.choice === "one_send" ? 1 : binding.quantity;
+				grant = { ...common, binding: { ...binding, quantity: uses, upperHop }, maximumUses: uses };
+			}
+			const approved = { ...request, firstDecision: input, state: "approved" as const, grantId: grant.id };
+			if (!guardRequestRevisionValid(approved)) return blocked("authority_unavailable", request);
+			putGrant(state, grant);
+			updated = approved;
 		}
-		state.requests[index] = updated;
+		putRequest(state, updated, index);
 		this.audit(state, command.identity, "decided", request.binding.requestId, now, input.authority.proof);
 		return recorded(updated);
 	}
@@ -980,7 +1053,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 	 */
 	private escalate(
 		state: MutableState,
-		command: Extract<GuardCommand, { kind: "decision_record" }>,
+		command: Extract<GuardCommandAny, { kind: "decision_record" }>,
 		index: number,
 		now: number,
 	): FinalResult {
@@ -1023,33 +1096,31 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 					: "authority_unavailable",
 				request,
 			);
-		const phase: GuardRequest = {
+		const phase = {
 			binding,
 			context,
-			selectedApprover: { tier: "owner", reason: "explicit_escalation" },
+			selectedApprover: { tier: "owner" as const, reason: "explicit_escalation" as const },
 			createdAt: now,
 			expiresAt: request.expiresAt,
-			state: request.state === "held" ? "held" : "awaiting_owner",
-			upwardEscalations: 1,
+			state: request.state === "held" ? ("held" as const) : ("awaiting_owner" as const),
+			upwardEscalations: 1 as const,
 			initialNotificationKey: request.initialNotificationKey,
 			decisionNotificationKey: request.decisionNotificationKey,
 			firstDecision: null,
 			grantId: null,
 		};
+		const closed = { ...request, firstDecision: input, state: "revoked" as const };
+		if (!guardRequestRevisionValid(phase) || !guardRequestRevisionValid(closed))
+			return blocked("authority_unavailable", request);
 		// Preserve first: the lower phase keeps its complete winning decision and binding, closed to every later use.
-		state.requests[index] = { ...request, firstDecision: input, state: "revoked" };
-		state.requests.push(phase);
+		putRequest(state, closed, index);
+		putRequest(state, phase);
 		this.audit(state, command.identity, "decided", request.binding.requestId, now, input.authority.proof);
-		return {
-			state: "recorded",
-			transactionId: guardTransactionId(command.identity),
-			request: phase,
-			communicationAccepted: false,
-		};
+		return recordedResult(command.identity, phase);
 	}
 	private async accepted(
 		state: MutableState,
-		command: GuardCommand,
+		command: GuardCommandAny,
 		snapshot: GuardHostVerified<GuardVerifiedSnapshot>,
 		now: number,
 		className: GuardAcceptedReceipt["class"],
@@ -1114,7 +1185,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 	}
 	private async business(
 		state: MutableState,
-		command: Extract<GuardCommand, { kind: "business_send" }>,
+		command: Extract<GuardCommandAny, { kind: "business_send" }>,
 		snapshot: GuardHostVerified<GuardVerifiedSnapshot>,
 		now: number,
 	): Promise<{ result: FinalResult; legacyAccepted: readonly GuardLegacyAcceptedMessage[] }> {
@@ -1134,9 +1205,12 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 		const hop = snapshot.causal.nextHop;
 		if (state.mode === "rollback_depth_6" && hop > 6) return deny("rollback_depth");
 		let grantIndex = -1;
-		if (hop > 6 || command.grantId !== null) {
+		if (hop > this.options.policy.depth.unapprovedThrough || command.grantId !== null) {
 			if (command.grantId === null)
-				return { result: blocked("approval_required", null, hop >= 12 ? "owner" : "lower"), legacyAccepted: [] };
+				return {
+					result: blocked("approval_required", null, hop >= this.options.policy.depth.ownerFrom ? "owner" : "lower"),
+					legacyAccepted: [],
+				};
 			grantIndex = state.grants.findIndex((g) => g.id === command.grantId);
 			if (grantIndex < 0) return deny("grant_revoked");
 			const grant = state.grants[grantIndex];
@@ -1149,7 +1223,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 				grant.state !== "approved" ||
 				hop < grant.binding.causal.nextHop ||
 				hop > grant.binding.upperHop ||
-				(hop >= 12 && grant.authority.tier !== "owner") ||
+				(hop >= this.options.policy.depth.ownerFrom && grant.authority.tier !== "owner") ||
 				!equal(command.scope, grant.binding.scope) ||
 				rootKey(snapshot.causal) !== rootKey(grant.binding.causal) ||
 				!equal(snapshot.authority, grant.authority)
@@ -1195,7 +1269,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 	}
 	private async control(
 		state: MutableState,
-		command: Extract<GuardCommand, { kind: "control_send" }>,
+		command: Extract<GuardCommandAny, { kind: "control_send" }>,
 		snapshot: GuardHostVerified<GuardVerifiedSnapshot>,
 		now: number,
 	): Promise<{ result: FinalResult; legacyAccepted: readonly GuardLegacyAcceptedMessage[] }> {
@@ -1233,7 +1307,9 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 			)
 				return deny("authority_unavailable");
 			// The stored Owner decision is rehydrated natively under the writer; a restored copy is not proof.
-			const fresh = await this.options.reverifyDecision(decided, request);
+			const pair = decisionPair(decided, request);
+			if (!pair) return deny("authority_unavailable");
+			const fresh = await this.options.reverifyDecision(...pair);
 			if (fresh.state !== "verified" || !equal(fresh.value, decided)) return deny("authority_unavailable");
 			const notice =
 				`Requester notice of a verified Owner decision. Sent under the requester's own binding; it is not Owner speech.\n` +
@@ -1270,7 +1346,9 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 			return deny("authority_unavailable");
 		if (decided && !initial) {
 			// Every decision notice rehydrates its stored decision natively under the writer first.
-			const fresh = await this.options.reverifyDecision(decided, request);
+			const pair = decisionPair(decided, request);
+			if (!pair) return deny("authority_unavailable");
+			const fresh = await this.options.reverifyDecision(...pair);
 			if (fresh.state !== "verified" || !equal(fresh.value, decided)) return deny("authority_unavailable");
 		}
 		const body = initial
@@ -1293,7 +1371,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 	}
 	private async protected(
 		state: MutableState,
-		command: Extract<GuardCommand, { kind: "protected_send" }>,
+		command: Extract<GuardCommandAny, { kind: "protected_send" }>,
 		snapshot: GuardHostVerified<GuardVerifiedSnapshot>,
 		now: number,
 	): Promise<{ result: FinalResult; legacyAccepted: readonly GuardLegacyAcceptedMessage[] }> {
@@ -1445,7 +1523,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 		actor: GuardHostVerified<GuardActor>,
 		requestId: string,
 		generation: string,
-	): Promise<GuardStatusResult> {
+	): Promise<GuardStatusResultAny> {
 		try {
 			const verified = await this.options.verifyStatusActor(actor);
 			if (verified.state !== "verified" || !equal(verified.value, actor))
@@ -1475,12 +1553,14 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 					: grant?.state === "approved" && time.nowMs >= grant.expiresAt
 						? { ...request, state: "expired" as const }
 						: request;
-			return { state: "found", request: visible };
+			return guardRequestRevisionValid(visible, version)
+				? { state: "found", request: visible }
+				: { state: "found", request: visible };
 		} catch {
 			return { state: "unknown", reason: "status unavailable" };
 		}
 	}
-	private async updateOutbox(entry: GuardOutboxEntry, step: GuardOutboxEntry): Promise<GuardResult> {
+	private async updateOutbox(entry: GuardOutboxEntry, step: GuardOutboxEntry): Promise<GuardResultAny> {
 		const identity = this.options.maintenanceIdentity("outbox", `${entry.receipt.outboxId}:${guardDigest(step)}`);
 		const result = await this.options.store.transact(identity, async (current) => {
 			// #379: the step's time is read under the writer. A reading taken before the transport ran is older than any
@@ -1520,7 +1600,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 		});
 		return this.commitResult(entry.receipt.identity, result);
 	}
-	async reconcile(identity: GuardOperationIdentity): Promise<GuardResult> {
+	async reconcile(identity: GuardOperationIdentity): Promise<GuardResultAny> {
 		const running = identity.operationId;
 		this.reconciling.set(running, (this.reconciling.get(running) ?? 0) + 1);
 		try {
@@ -1670,7 +1750,7 @@ export class RoleMessageGuardCore implements GuardCoordinator {
 			else this.reconciling.delete(running);
 		}
 	}
-	async rollback(): Promise<GuardReadResult> {
+	async rollback(): Promise<GuardReadResultAny> {
 		try {
 			if (!(await this.options.authoriseRollback()))
 				return { state: "unavailable", reason: "native maintenance authority required" };

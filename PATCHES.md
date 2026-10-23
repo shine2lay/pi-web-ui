@@ -10,6 +10,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## role-message-policy-v2-reader: read expanded finite grants without enlarging historical authority
+
+- `local` (Ops #453; Owner67477/67481 chose Both). H-MSG-DOUBLE-1 and rollout/undo: `docs/role-message-policy-v2.md`. **Compatibility phase keeps active V1 (20/6/11/12/max5)**; the separately checked activation selects V2 (40/12/22/23/max10) only after this reader is installed. No new setting/screen, feature/ladder/wake/hold activation or authority bypass.
+- `server/role-message-limits.ts` centralises exact immutable V1/V2 policies, binding-version quantity/band validation, selected active policy and a numeric startup marker. The entire original V1 contract remains byte-frozen; a separately named erased companion uses qualified-V1 selective, whole-record V2 overlays (including Owner reason, nested results, stores and verifier/callback input+output). Core/host/native fallback, approval validation, generated tool schema/help and UI read that selection. Board/request/protected/incident/storage limits, Ops/Temper's hourly exemption, TTL, one_send=1, scope/identity/first-answer and all release/consent/source safeguards unchanged.
+- Binding-version checks retain old requests/grants exactly, including quantity/uses/scope/expiry and existing operation digests. Mixed state is read strictly; only the existing atomic commit machinery marks state v2 when it contains a v2 binding. Journal/operation/receipt ABI stays v1. New V2 requests fit remaining13–22 capacity exactly, maximum10; default Owner endpoint32 never moves. Old pending requests are not reissued, clamped, renewed or enlarged. Native retention keeps every still-chargeable capped-role row through exempt floods.
+- Fixed-input checks: expanded native/host/core hourly/depth/quantity/scoping/holds/restart/concurrency/recovery tests, legacy-policy-bound original vectors, mixed old/new requests/grants and strict previous-reader rejection, generated schema/help/marker and old-active-policy counterfactuals; #426's61-minute late accepted hand-off also under V2. Normal sealed gate/build, existing role-message e2e and two normal checked installs required; actual receipts are recorded in the hypothesis doc, not inferred from these planned checks.
+- Undo: before any V2 records, ordinary previous-build rollback is readable. After activation, NEVER install the pre-compatibility reader. Retain this reader and normally land/deploy a forward inverse active-policy selection to V1; preserve live messages/usage/grants and accepted hand-offs. No snapshot/settings restore or hand-edited live store. Unknown/corrupt/unsupported data fails closed.
+
 ## role-message-late-handoff: an accepted message can hand off after its hourly charge expires
 
 - `local` (Ops #426, found by #379; H-HANDOFF-WINDOW-1). The accepted-but-not-handed-off promise was broken after an hour: usage prunes, then `GuardFileStore.transact()` refused `updateOutbox()` with `acceptance missing canonical words or charge`, even though the words and committed acceptance remained. Expected: keep those durable acceptance facts separate from hourly usage and a 61-minute delayed hand-off succeeds once after restart, with identical cap decisions and a 3,000-entry soak under the unchanged caps. Falsifier: another refusal, changed counts or a cap reached. Hypothesis and proof: `docs/role-message-ladder.md`.
@@ -7611,8 +7619,8 @@ heartbeat. Evidence, numbers and result: `docs/pages-live.md`.
 
 A second message that arrives while a chat's run is still starting no longer breaks that run. Before, SDK
 1.0.1 let both starts through its `isStreaming` check; the second was refused ("Agent is already processing
- a prompt") and its cleanup marked the first run as ended while it went on, so later queue messages were
- lost and a no-turn note could land between a tool call and its result (every later request refused).
+a prompt") and its cleanup marked the first run as ended while it went on, so later queue messages were
+lost and a no-turn note could land between a tool call and its result (every later request refused).
 
 **Why** (Temper rm-49f5fbd2, Ops #261): Temper #106's chat failed every call with a 400 from 2026-10-19
 09:30 PDT; 3 lead answers to it were lost. H-PROMPT-RACE-1, the evidence, the #106 timeline, the 30-day
@@ -7672,7 +7680,7 @@ right after `queue_wait` or `queue_done`, and a follow-up could be about 10 minu
 
 - `server/agent-service.ts`: `notifyTerminalBashDone` (busy or idle) and `notifyTerminalIdle` (busy only,
   as before) send `session.sendCustomMessage({customType, content: [{type: "text", text}], display: true},
-  {triggerTurn: false})`, customType `terminal-bash-done` (already used on the idle path) and
+{triggerTurn: false})`, customType `terminal-bash-done` (already used on the idle path) and
   `terminal-idle-reminder` (new). Texts, the idle watchdog's timing and the best-effort `.catch` unchanged.
   Under SDK 1.0.1 a no-turn note sent during a run waits in `_pendingCustomMessages` until the turn's tool
   results are in (flushed at `turn_end`, before settle and in the run's `finally`).

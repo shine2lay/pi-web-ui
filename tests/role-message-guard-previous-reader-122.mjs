@@ -14,6 +14,7 @@ const dist = resolve(repository, "dist/server");
 const load = (name) => import(pathToFileURL(join(dist, name)).href);
 const { RoleMessages } = await load("role-messages.js");
 const { RoleMessageGuardHost } = await load("role-message-guard-host.js");
+const { GUARD_POLICY_V1 } = await load("role-message-limits.js");
 const { AskHub } = await load("asks.js");
 const old = (await loadPreviousReader()).api;
 
@@ -71,8 +72,9 @@ const context = {
 };
 let n = 0;
 async function candidate() {
-	const rm = new RoleMessages(path, chatHost, clock);
+	const rm = new RoleMessages(path, chatHost, clock, GUARD_POLICY_V1);
 	const host = new RoleMessageGuardHost({
+		policy: GUARD_POLICY_V1,
 		dir: join(dir, "data", "role-message-guard"),
 		roleMessages: () => rm,
 		identities: () => roles,

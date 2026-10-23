@@ -2,7 +2,7 @@
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { GUARD_POLICY } from "../../server/role-message-guard-host.js";
+import { GUARD_POLICY_V1 as GUARD_POLICY } from "../../server/role-message-limits.js";
 import type { GuardStoreState } from "../../server/role-message-guard-contract.js";
 import { RoleMessages } from "../../server/role-messages.js";
 import { GuardFileStore as BeforeChangeStore } from "./role-message-guard-store-reference.js";
@@ -141,6 +141,7 @@ describe("owner's hourly exemptions (approval host)", () => {
 					log: () => {},
 				},
 				() => now,
+				GUARD_POLICY,
 			);
 			try {
 				expect(await send(w, "qa", home, "beta", {}, "")).toEqual(refusal);
