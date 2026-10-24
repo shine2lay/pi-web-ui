@@ -7,6 +7,12 @@
  * chat text (closed numeric and identifier fields only), no model calls and no deletion run: the owner chose to keep
  * all usage detail (dr-8795124dce74), so deleteWeek exists for a later retention choice and no production code calls
  * it. Formats, crash points and the H-B2 measurement: docs/usage-accounting-week-store.md.
+ *
+ * Ops #500 (Architecture rm-21ceb823): an observations log keeps every typed row B3 actually has (facts, unresolved
+ * and responseId-less ones included, allocations, aliases, dependency rows, run snapshots, source coverage and W5's
+ * role witnesses), each checked by the contract alone and never built or completed here, committed by the same
+ * checkpoint (version 2) as the numeric log and the cursors, and replayed in bounded, hash-checked pages. A week
+ * committed by a version 1 checkpoint is a legacy numeric-only week: readable, never reported complete.
  */
 import {
 	closeSync,
@@ -32,9 +38,20 @@ import { isMainThread } from "node:worker_threads";
 import { GuardFileLock } from "./role-message-guard-lock.js";
 import {
 	addUsd,
+	factId,
 	pacificWeekStart,
 	pacificWeekStartUtc,
 	parseAccountingInput,
+	type AccountingInput,
+	type Allocation,
+	type DispatchRoot,
+	type IdentityAlias,
+	type Producer,
+	type ReportingPolicy,
+	type RunSnapshot,
+	type SourceCoverage,
+	type TaskMembership,
+	type UsageFact,
 	type Usd,
 } from "./usage-accounting-contract.js";
 import {
@@ -64,6 +81,14 @@ export const USAGE_WEEK_STORE_LIMITS = Object.freeze({
 	files: 4096,
 	sealedBytes: 64 * 1024 * 1024,
 	directoryEntries: 8192,
+	/** One observation line with its newline: W0's page size (METER_LIMITS.pageBytes), so any row a page can carry
+	 *  fits; a typical fact line is about 1 KiB. */
+	observationBytes: 262_144,
+	/** Observations in one append or adjust (four per record), and their bytes. */
+	appendObservations: 16_384,
+	appendObservationBytes: 16 * 1024 * 1024,
+	/** Observation lines per week: a fact and a role witness for each of E2's 250,462 attempts use half. */
+	weekObservations: 1_000_000,
 });
 export type UsageWeekStoreLimits = { -readonly [K in keyof typeof USAGE_WEEK_STORE_LIMITS]: number };
 
@@ -92,6 +117,9 @@ const REFUSAL_CODES = [
 	"week-not-ended",
 	"checkpoint-behind",
 	"week-unavailable",
+	"invalid-observation",
+	"invalid-replay",
+	"legacy-week",
 ] as const;
 /** One week's files failed a check: that week is unavailable (its figures unknown, never zero), its bytes stay as
  *  they are, and other weeks go on. */
@@ -109,6 +137,9 @@ const WEEK_CODES = [
 	"receipts-missing",
 	"receipts-mismatch",
 	"receipts-corrupt",
+	"observations-missing",
+	"observations-mismatch",
+	"observations-corrupt",
 ] as const;
 export type UsageWeekStoreCode =
 	(typeof STORE_CODES)[number] | (typeof REFUSAL_CODES)[number] | (typeof WEEK_CODES)[number];
@@ -139,6 +170,9 @@ export type UsageWeekPoint =
 	| "receipts-write"
 	| "receipts-sync"
 	| "after-receipts-sync"
+	| "observations-write"
+	| "observations-sync"
+	| "after-observations-sync"
 	| "truncate"
 	| "quarantine-rename";
 export interface UsageWeekStoreOptions {
@@ -210,8 +244,7 @@ export interface UsageWeekLogState {
 	records: number;
 	sha256: string;
 }
-export interface UsageWeekCheckpoint extends UsageWeekCursors {
-	v: "usage-week-checkpoint/1";
+interface UsageWeekCheckpointFields extends UsageWeekCursors {
 	week: string;
 	at: string;
 	log: UsageWeekLogState;
@@ -219,6 +252,18 @@ export interface UsageWeekCheckpoint extends UsageWeekCursors {
 	receipts: UsageWeekLogState | null;
 	adjust: UsageWeekLogState | null;
 	sha256: string;
+}
+/** The commit point since Ops #500: the numeric log, receipts, adjustments, observations and cursors together. */
+export interface UsageWeekCheckpoint extends UsageWeekCheckpointFields {
+	v: "usage-week-checkpoint/2";
+	/** null until the week has an observations log. */
+	observations: UsageWeekLogState | null;
+	/** Committed original records that came without a newly written fact bound to them in their own call. */
+	unobserved: number;
+}
+/** A week B2 committed before Ops #500: numeric only, its observations unknown (never "none"). */
+export interface UsageWeekLegacyCheckpoint extends UsageWeekCheckpointFields {
+	v: "usage-week-checkpoint/1";
 }
 export interface UsageWeekTotals {
 	/** Records by disposition. */
@@ -246,7 +291,8 @@ export interface UsageWeekSealed {
 	keys: { count: number; bytes: 16; sha256: string };
 	sha256: string;
 }
-/** Bytes past the checkpoint (synced or not: the checkpoint is the commit point) cut off by reload. */
+/** Bytes past the checkpoint (synced or not: the checkpoint is the commit point) cut off by reload; the observations'
+ *  are in observationCoverage(). */
 export interface UsageWeekRecovered {
 	/** From the log (open week) or the adjustment log (sealed week). */
 	records: number;
@@ -267,14 +313,14 @@ export type UsageWeekLoad =
 			records: number;
 			/** Receipt keys (kind and key) the week answers for. */
 			receipts: number;
-			checkpoint: UsageWeekCheckpoint | null;
+			checkpoint: UsageWeekCheckpoint | UsageWeekLegacyCheckpoint | null;
 			dropped: UsageWeekRecovered;
 	  }
 	| {
 			state: "sealed";
 			week: string;
 			sealed: UsageWeekSealed;
-			checkpoint: UsageWeekCheckpoint;
+			checkpoint: UsageWeekCheckpoint | UsageWeekLegacyCheckpoint;
 			/** How many adjustments the week holds; they go to reload's `each`. */
 			adjustments: number;
 			receipts: number;
@@ -309,10 +355,81 @@ export type UsageWeekSealedRead =
 	| { state: "sealed"; week: string; sealed: UsageWeekSealed }
 	| { state: "none"; week: string }
 	| { state: "unavailable"; week: string; code: UsageWeekStoreCode };
+
+/** Ops #500: what B3 actually has, kept to replay later. Every kind but fact-role is the contract's own row. */
+export type UsageWeekObservationKind =
+	"fact" | "allocation" | "alias" | "root" | "policy" | "membership" | "snapshot" | "coverage" | "fact-role";
+export const USAGE_WEEK_OBSERVATION_KINDS: readonly UsageWeekObservationKind[] = Object.freeze([
+	"fact",
+	"allocation",
+	"alias",
+	"root",
+	"policy",
+	"membership",
+	"snapshot",
+	"coverage",
+	"fact-role",
+]);
+/** W5's role witness for one fact (SubjectUsageSource["factRoles"]); role null names no payer. */
+export interface UsageWeekFactRole {
+	factId: string;
+	role: string | null;
+	evidenceRef: string;
+}
+export type UsageWeekObservationRow =
+	| { o: "fact"; r: UsageFact }
+	| { o: "allocation"; r: Allocation }
+	| { o: "alias"; r: IdentityAlias }
+	| { o: "root"; r: DispatchRoot }
+	| { o: "policy"; r: ReportingPolicy }
+	| { o: "membership"; r: TaskMembership }
+	| { o: "snapshot"; r: RunSnapshot }
+	| { o: "coverage"; r: SourceCoverage }
+	| { o: "fact-role"; r: UsageWeekFactRole };
+/**
+ * What a caller appends: one row, bound by rk to the key of the numeric record it came with (a record in the same
+ * call, or one the week already has), or to none.
+ */
+export type UsageWeekObservationInput = UsageWeekObservationRow & { rk: string | null };
+/** One replayed line: the row as appended, with its key and whether it came while the week was open or sealed. */
+export type UsageWeekObservation = UsageWeekObservationRow & { k: string; p: "open" | "late"; rk: string | null };
+/** In append's and adjust's result when they were given observations. */
+export interface UsageWeekObserved {
+	observations: number;
+	observationDuplicates: number;
+	/** New original records in this call without a newly written fact bound to them. */
+	unobserved: number;
+}
+export interface UsageWeekObservationCoverage {
+	/** complete: every committed original has its fact line; partial: some don't; legacy: observations unknown. */
+	state: "complete" | "partial" | "legacy";
+	/** Committed observation lines. */
+	observations: number;
+	/** Committed original records without their fact line; null for a legacy week. */
+	unobserved: number | null;
+	/** Uncommitted observation bytes the last reload cut off. */
+	dropped: number;
+}
+/** Opaque: good only for the next page of the same replay stream. */
+export interface UsageWeekReplayCursor {
+	offset: number;
+	ordinal: number;
+	tag: string;
+}
+export interface UsageWeekObservationPage {
+	week: string;
+	coverage: UsageWeekObservationCoverage;
+	observations: UsageWeekObservation[];
+	/** null once the whole committed prefix was replayed and its SHA256 matched the checkpoint. */
+	next: UsageWeekReplayCursor | null;
+}
+
 type WeekFile = "log" | "receipts" | "checkpoint" | "sealed" | "adjust";
-type Appended = "log" | "adjust" | "receipts";
+type StoredFile = WeekFile | "observations";
+type Appended = "log" | "adjust" | "receipts" | "observations";
 export interface UsageWeekListing {
-	weeks: ({ week: string } & Record<WeekFile, boolean>)[];
+	/** observations: true only when the week has that file (so B2's listing shape is unchanged without it). */
+	weeks: ({ week: string } & Record<WeekFile, boolean> & { observations?: true })[];
 	/** Temp files a stopped write left behind (never deleted). */
 	scratch: number;
 	quarantined: number;
@@ -332,7 +449,9 @@ function check(ok: unknown, code: UsageWeekStoreCode = "io-failure"): asserts ok
 }
 
 const LOG_V = "usage-week-log/1",
-	CHECKPOINT_V = "usage-week-checkpoint/1",
+	OBSERVATIONS_V = "usage-week-observations/1",
+	CHECKPOINT_V = "usage-week-checkpoint/2",
+	LEGACY_CHECKPOINT_V = "usage-week-checkpoint/1",
 	SEALED_V = "usage-week-sealed/1";
 const READ_BYTES = 4 * 1024 * 1024,
 	WRITE_BYTES = 4 * 1024 * 1024,
@@ -351,11 +470,13 @@ const WEEK = /^\d{4}-\d\d-\d\d$/,
 	TOKEN = /^[A-Za-z0-9:._-]{1,256}$/,
 	GAP = /^[a-z0-9-]{1,64}$/,
 	NAME = /^[a-z0-9.-]+$/,
-	WEEK_NAME = /^week-(\d{4}-\d\d-\d\d)\.(log|receipts|checkpoint|sealed|adjust)$/,
+	ROLE = /^[a-z][a-z0-9-]{0,31}$/,
+	WEEK_NAME = /^week-(\d{4}-\d\d-\d\d)\.(log|receipts|checkpoint|sealed|adjust|observations)$/,
 	PRINTABLE = /^[\x20-\x7e]*\n$/,
 	SCRATCH = /\.next-[a-f0-9]{16}$/,
 	QUARANTINE = /\.quarantine-[a-f0-9]{16}$/;
 const WEEK_FILES = ["log", "receipts", "checkpoint", "sealed", "adjust"] as const;
+const STORED_FILES = [...WEEK_FILES, "observations"] as const;
 
 type Fields = Record<string, unknown>;
 /** A plain object with exactly these keys (sorted, comma-joined). */
@@ -404,8 +525,9 @@ export function usageWeekBounds(week: string): { start: string; end: string } {
 	const next = new Date(Date.parse(`${week}T00:00:00.000Z`) + 7 * DAY_MS).toISOString().slice(0, 10);
 	return { start: pacificWeekStartUtc(`${week}T12:00:00.000Z`), end: pacificWeekStartUtc(`${next}T12:00:00.000Z`) };
 }
-const weekName = (week: string, kind: WeekFile) => `week-${week}.${kind}`;
-const headerLine = (week: string, kind: Appended) => `${JSON.stringify({ v: LOG_V, week, kind })}\n`;
+const weekName = (week: string, kind: StoredFile) => `week-${week}.${kind}`;
+const family = (kind: Appended) => (kind === "observations" ? OBSERVATIONS_V : LOG_V);
+const headerLine = (week: string, kind: Appended) => `${JSON.stringify({ v: family(kind), week, kind })}\n`;
 const DISPOSITIONS: ReadonlySet<unknown> = new Set(USAGE_WEEK_DISPOSITIONS);
 
 function recordProblem(r: unknown, start: string, end: string): "invalid-record" | "wrong-week" | null {
@@ -561,6 +683,102 @@ function aliasAttached(before: string, x: UsageWeekReceipt): boolean {
 	}
 	const r = (stored as Fields).r as Fields;
 	return r.alias === null && canonical({ ...r, alias: null }) === canonical({ ...x.r, alias: null });
+}
+
+/** Ops #500: the AccountingInput list that checks a row of each contract kind. */
+const ROW_LISTS = {
+	fact: "facts",
+	allocation: "allocations",
+	alias: "aliases",
+	root: "roots",
+	policy: "policies",
+	membership: "memberships",
+	snapshot: "snapshots",
+	coverage: "coverage",
+} as const satisfies Record<Exclude<UsageWeekObservationKind, "fact-role">, keyof AccountingInput>;
+const OBSERVATION_KINDS: ReadonlySet<unknown> = new Set(USAGE_WEEK_OBSERVATION_KINDS),
+	PRODUCERS: readonly unknown[] = ["pi", "acp", "temper"];
+/** The contract's fact reference: the JSON identity tuple exactly as factId() writes it. */
+function factReference(v: unknown): v is string {
+	if (typeof v !== "string" || v.length > 800) return false;
+	let tuple: unknown;
+	try {
+		tuple = JSON.parse(v);
+	} catch {
+		return false;
+	}
+	return (
+		Array.isArray(tuple) &&
+		tuple.length === 4 &&
+		tuple[0] === "usage-fact/1" &&
+		PRODUCERS.includes(tuple[1]) &&
+		ledgerRef(tuple[2]) &&
+		ledgerRef(tuple[3]) &&
+		factId({ producer: tuple[1] as Producer, incarnation: tuple[2], attempt: tuple[3] }) === v
+	);
+}
+/** A row the contract takes as it is, alone; a fact-role row as W5's witness check takes it. Never repaired. */
+function acceptedRow(o: UsageWeekObservationKind, r: unknown): boolean {
+	if (o === "fact-role")
+		return (
+			closed(r, "evidenceRef,factId,role") &&
+			factReference(r.factId) &&
+			(r.role === null || (typeof r.role === "string" && ROLE.test(r.role))) &&
+			ledgerRef(r.evidenceRef)
+		);
+	const input: Record<string, unknown> = {
+		v: 1,
+		facts: [],
+		allocations: [],
+		aliases: [],
+		roots: [],
+		policies: [],
+		memberships: [],
+		snapshots: [],
+		coverage: [],
+		requiredStreams: ["ledger-validation"],
+	};
+	input[ROW_LISTS[o]] = [r];
+	return parseAccountingInput(input).ok;
+}
+/** The row a key is made of: a fact's observedAt is when it was read, so a fact read again later is the same one. */
+function keyRow(o: UsageWeekObservationKind, r: unknown): unknown {
+	if (o !== "fact") return r;
+	const fact = r as UsageFact;
+	return { ...fact, source: { ...fact.source, observedAt: null } };
+}
+/**
+ * An observation's key and line, or null when it is not one this store keeps: k first at a fixed place (reload reads
+ * it without parsing), then kind, phase and binding, then the row canonical (sorted keys), printable ASCII only. The
+ * row is the caller's, checked and stored as it is: nothing is added, filled in or changed.
+ */
+function observationLine(o: unknown, r: unknown, p: unknown, rk: unknown): { k: string; line: string } | null {
+	if (
+		!OBSERVATION_KINDS.has(o) ||
+		(p !== "open" && p !== "late") ||
+		(rk !== null && (typeof rk !== "string" || !HEX64.test(rk)))
+	)
+		return null;
+	const kind = o as UsageWeekObservationKind;
+	if (!acceptedRow(kind, r)) return null;
+	const k = sha(canonical([kind, keyRow(kind, r)])),
+		line = `${JSON.stringify({ k, o: kind, p, rk }).slice(0, -1)},"r":${canonical(r)}}\n`;
+	return PRINTABLE.test(line) ? { k, line } : null;
+}
+/**
+ * A committed line back as the row it was appended as (line with its newline): parsed, then rebuilt by the same check
+ * and compared byte for byte, key included; null when it isn't exactly a line this store writes.
+ */
+function storedObservation(line: string): UsageWeekObservation | null {
+	let x: unknown;
+	try {
+		x = JSON.parse(line);
+	} catch {
+		return null;
+	}
+	if (!closed(x, "k,o,p,r,rk")) return null;
+	const built = observationLine(x.o, x.r, x.p, x.rk);
+	return built !== null && built.k === x.k && built.line === line ? (x as unknown as UsageWeekObservation) : null;
 }
 function validLedger(c: unknown): c is LedgerCursor {
 	if (!closed(c, "anchor,byte,headerSha256,incarnation,kind,line,ordinal,stream")) return false;
@@ -781,7 +999,7 @@ interface LogTrack {
 	records: number;
 	/** sha256 over [0, length). */
 	hash: Hash;
-	/** log and adjust: the record keys. */
+	/** log and adjust: the record keys; observations: the observation keys. */
 	keys: Set<string>;
 	/** receipts: receipt tag -> the offset of its latest line. */
 	index: Map<string, number>;
@@ -829,10 +1047,27 @@ interface WeekState {
 	code: UsageWeekStoreCode | null;
 	log: LogTrack;
 	receipts: LogTrack;
-	checkpoint: UsageWeekCheckpoint | null;
+	checkpoint: UsageWeekCheckpoint | UsageWeekLegacyCheckpoint | null;
 	/** Sealed weeks: sorted 32-hex key digests, proven against the sealed file's sha256. */
 	sealedKeys: string;
 	adjust: LogTrack;
+	observations: LogTrack;
+	/** The checkpoint's unobserved count plus what appends since added; the next checkpoint commits it. */
+	unobserved: number;
+	/** Uncommitted observation bytes the last reload cut off. */
+	dropped: number;
+	/**
+	 * The one replay stream: where its next page starts, the sha256 of every byte before that, and the checkpoint's
+	 * committed observations and coverage when it started (what it replays, whatever is appended meanwhile).
+	 */
+	replay: {
+		offset: number;
+		ordinal: number;
+		tag: string;
+		hash: Hash;
+		committed: UsageWeekLogState;
+		coverage: UsageWeekObservationCoverage;
+	} | null;
 }
 const track = (week: string, kind: Appended): LogTrack => ({
 	kind,
@@ -844,9 +1079,30 @@ const track = (week: string, kind: Appended): LogTrack => ({
 	index: new Map(),
 	stat: null,
 });
-const MISMATCH = { log: "log-mismatch", adjust: "adjust-mismatch", receipts: "receipts-mismatch" } as const,
-	CORRUPT = { log: "log-corrupt", adjust: "adjust-corrupt", receipts: "receipts-corrupt" } as const,
-	MISSING = { log: "log-missing", adjust: "adjust-missing", receipts: "receipts-missing" } as const;
+const MISMATCH = {
+		log: "log-mismatch",
+		adjust: "adjust-mismatch",
+		receipts: "receipts-mismatch",
+		observations: "observations-mismatch",
+	} as const,
+	CORRUPT = {
+		log: "log-corrupt",
+		adjust: "adjust-corrupt",
+		receipts: "receipts-corrupt",
+		observations: "observations-corrupt",
+	} as const,
+	MISSING = {
+		log: "log-missing",
+		adjust: "adjust-missing",
+		receipts: "receipts-missing",
+		observations: "observations-missing",
+	} as const;
+const legacy = (c: UsageWeekCheckpoint | UsageWeekLegacyCheckpoint | null): c is UsageWeekLegacyCheckpoint =>
+	c !== null && c.v === LEGACY_CHECKPOINT_V;
+/** What a checkpoint commits of the observations: nothing without one or with a legacy one (a file there is not
+ *  committed). */
+const committedObservations = (c: UsageWeekCheckpoint | UsageWeekLegacyCheckpoint | null): UsageWeekLogState | null =>
+	c === null || legacy(c) ? null : c.observations;
 
 /** All filesystem and hash work stays in one lifetime-locked worker; every call is synchronous. */
 export class UsageWeekStore {
@@ -1002,6 +1258,10 @@ export class UsageWeekStore {
 			checkpoint: null,
 			sealedKeys: "",
 			adjust: track(week, "adjust"),
+			observations: track(week, "observations"),
+			unobserved: 0,
+			dropped: 0,
+			replay: null,
 		};
 	}
 	private markWeek(week: string, code: UsageWeekStoreCode): void {
@@ -1022,11 +1282,17 @@ export class UsageWeekStore {
 		check(s.phase === phase, phase === "open" ? "sealed" : "not-sealed");
 		return s;
 	}
+	/** A week that can take writes: a legacy week can't, since its next checkpoint would claim coverage it never had. */
+	private writable(week: string, phase: "open" | "sealed"): WeekState {
+		const s = this.state(week, phase);
+		check(!legacy(s.checkpoint), "legacy-week");
+		return s;
+	}
 
 	/** Which weeks have which files, from the folder's names alone. */
 	listWeeks(): UsageWeekListing {
 		return this.run(null, () => {
-			const weeks = new Map<string, Record<WeekFile, boolean>>();
+			const weeks = new Map<string, Record<WeekFile, boolean> & { observations?: true }>();
 			let scratch = 0,
 				quarantined = 0,
 				other = 0;
@@ -1040,7 +1306,8 @@ export class UsageWeekStore {
 						sealed: false,
 						adjust: false,
 					};
-					entry[m[2] as WeekFile] = true;
+					if (m[2] === "observations") entry.observations = true;
+					else entry[m[2] as WeekFile] = true;
 					weeks.set(m[1], entry);
 				} else if (SCRATCH.test(name)) scratch++;
 				else if (QUARANTINE.test(name)) quarantined++;
@@ -1079,11 +1346,11 @@ export class UsageWeekStore {
 	}
 	private load(week: string, each: UsageWeekEach | undefined): UsageWeekLoad {
 		const s = this.fresh(week);
-		const has = Object.fromEntries(WEEK_FILES.map((kind) => [kind, this.exists(weekName(week, kind))])) as Record<
-			WeekFile,
+		const has = Object.fromEntries(STORED_FILES.map((kind) => [kind, this.exists(weekName(week, kind))])) as Record<
+			StoredFile,
 			boolean
 		>;
-		if (WEEK_FILES.every((kind) => !has[kind])) {
+		if (STORED_FILES.every((kind) => !has[kind])) {
 			this.weeks.set(week, s);
 			return { state: "empty", week };
 		}
@@ -1092,12 +1359,16 @@ export class UsageWeekStore {
 		if (has.sealed) return this.loadSealed(s, checkpoint, has, each);
 		check(!has.adjust && (checkpoint === null || checkpoint.adjust === null), "adjust-corrupt");
 		const log = this.scanLog(s, "log", checkpoint?.log ?? null),
-			receipts = this.scanOptional(s, "receipts", has.receipts, checkpoint?.receipts ?? null);
+			receipts = this.scanOptional(s, "receipts", has.receipts, checkpoint?.receipts ?? null),
+			observations = this.scanOptional(s, "observations", has.observations, committedObservations(checkpoint));
 		const dropped = { records: this.cut(log), receipts: receipts === null ? 0 : this.cut(receipts) };
+		s.dropped = observations === null ? 0 : this.cut(observations);
 		if (each) this.replay(s, log.track, each);
 		s.log = log.track;
 		if (receipts !== null) s.receipts = receipts.track;
+		if (observations !== null) s.observations = observations.track;
 		s.checkpoint = checkpoint;
+		s.unobserved = checkpoint === null || legacy(checkpoint) ? 0 : checkpoint.unobserved;
 		this.weeks.set(week, s);
 		return {
 			state: "open",
@@ -1114,8 +1385,8 @@ export class UsageWeekStore {
 	 */
 	private loadSealed(
 		s: WeekState,
-		checkpoint: UsageWeekCheckpoint | null,
-		has: Record<WeekFile, boolean>,
+		checkpoint: UsageWeekCheckpoint | UsageWeekLegacyCheckpoint | null,
+		has: Record<StoredFile, boolean>,
 		each: UsageWeekEach | undefined,
 	): UsageWeekLoad {
 		const { head, keys } = this.readSealed(s.week);
@@ -1123,26 +1394,30 @@ export class UsageWeekStore {
 		const log = this.file(s.log.name);
 		try {
 			check(log.stat.size === head.log.length, "log-mismatch");
-			this.checkHeader(log.fd, log.stat.size, headerLine(s.week, "log"), CORRUPT.log);
+			this.checkHeader(log.fd, log.stat.size, "log", s.week);
 			s.log = { ...track(s.week, "log"), length: head.log.length, records: head.log.records, stat: log.stat };
 		} finally {
 			closeSync(log.fd);
 		}
 		const adjust = this.scanOptional(s, "adjust", has.adjust, checkpoint.adjust),
-			receipts = this.scanOptional(s, "receipts", has.receipts, checkpoint.receipts);
+			receipts = this.scanOptional(s, "receipts", has.receipts, checkpoint.receipts),
+			observations = this.scanOptional(s, "observations", has.observations, committedObservations(checkpoint));
 		if (adjust !== null) for (const k of adjust.track.keys) check(!sortedHas(keys, k.slice(0, 32)), "adjust-corrupt");
 		const dropped = {
 			records: adjust === null ? 0 : this.cut(adjust),
 			receipts: receipts === null ? 0 : this.cut(receipts),
 		};
+		s.dropped = observations === null ? 0 : this.cut(observations);
 		if (adjust !== null) {
 			if (each) this.replay(s, adjust.track, each);
 			s.adjust = adjust.track;
 		}
 		if (receipts !== null) s.receipts = receipts.track;
+		if (observations !== null) s.observations = observations.track;
 		s.phase = "sealed";
 		s.sealedKeys = keys;
 		s.checkpoint = checkpoint;
+		s.unobserved = legacy(checkpoint) ? 0 : checkpoint.unobserved;
 		this.weeks.set(s.week, s);
 		return {
 			state: "sealed",
@@ -1160,7 +1435,7 @@ export class UsageWeekStore {
 	 */
 	private scanOptional(
 		s: WeekState,
-		kind: "receipts" | "adjust",
+		kind: "receipts" | "adjust" | "observations",
 		has: boolean,
 		certified: UsageWeekLogState | null,
 	): Scan | null {
@@ -1169,27 +1444,42 @@ export class UsageWeekStore {
 	}
 
 	/**
-	 * Appends an open week's records and receipts (O_APPEND, fdatasync) before returning; nothing is committed until
-	 * the next checkpoint, which B3 writes right after with its cursors. A record key already in the week, or twice in
-	 * the batch, is skipped and counted; so is a receipt identical to the stored one. Lookups (receipt) see appended
-	 * receipts at once: a crash drops them together with the records and cursors they came with.
+	 * Appends an open week's records, receipts and observations (O_APPEND, fdatasync) before returning; nothing is
+	 * committed until the next checkpoint, which B3 writes right after with its cursors. A record key already in the
+	 * week, or twice in the batch, is skipped and counted; so is a receipt identical to the stored one, and an
+	 * observation already kept. Lookups (receipt) see appended receipts at once: a crash drops them together with the
+	 * records, observations and cursors they came with. The result has the observation counts when observations were
+	 * given (so B2's result is unchanged without them).
 	 */
+	append(week: string, records: readonly UsageWeekRecord[], receipts?: readonly UsageWeekReceipt[]): UsageWeekAppend;
+	append(
+		week: string,
+		records: readonly UsageWeekRecord[],
+		receipts: readonly UsageWeekReceipt[],
+		observations: readonly UsageWeekObservationInput[],
+	): UsageWeekAppend & UsageWeekObserved;
 	append(
 		week: string,
 		records: readonly UsageWeekRecord[],
 		receipts: readonly UsageWeekReceipt[] = [],
-	): UsageWeekAppend {
+		observations?: readonly UsageWeekObservationInput[],
+	): UsageWeekAppend | (UsageWeekAppend & UsageWeekObserved) {
 		return this.run(week, () => {
-			const s = this.state(week, "open");
+			const s = this.writable(week, "open");
 			const r = this.prepare(s, records, (k) => s.log.keys.has(k)),
-				x = this.prepareReceipts(s, receipts);
+				x = this.prepareReceipts(s, receipts),
+				b = this.prepareObservations(s, observations ?? [], r.all, (k) => s.log.keys.has(k), "open");
 			check(s.log.records + r.lines.length <= this.limits.weekRecords, "store-capacity");
-			// The main log's header comes before any receipt (Architecture HOME F1): a first batch of receipts alone, cut
-			// after they synced, then reloads as an open week with nothing committed, never as a week whose log is missing.
-			if (x.lines.length > 0) this.ensureLog(s.log, s.week);
+			// The main log's header comes before any receipt or observation (Architecture HOME F1): a first batch of them
+			// alone, cut after they synced, then reloads as an open week with nothing committed, never as a week whose log
+			// is missing.
+			if (x.lines.length + b.lines.length > 0) this.ensureLog(s.log, s.week);
 			this.addLines(s, s.log, r.lines, r.keys);
 			this.addLines(s, s.receipts, x.lines, []);
-			return {
+			this.addLines(s, s.observations, b.lines, b.keys);
+			const unobserved = r.originals.filter((k) => !b.bound.has(k)).length;
+			s.unobserved += unobserved;
+			const result: UsageWeekAppend = {
 				appended: r.lines.length,
 				duplicates: r.duplicates,
 				receipts: x.lines.length,
@@ -1197,6 +1487,9 @@ export class UsageWeekStore {
 				records: s.log.records,
 				length: s.log.length,
 			};
+			return observations === undefined
+				? result
+				: { ...result, observations: b.lines.length, observationDuplicates: b.duplicates, unobserved };
 		});
 	}
 	private addLines(s: WeekState, t: LogTrack, lines: string[], keys: string[]): void {
@@ -1205,11 +1498,13 @@ export class UsageWeekStore {
 		this.appendLines(t, lines);
 		for (const k of keys) t.keys.add(k);
 	}
+	/** New lines and keys; all: every record key in the call; originals: the new originals' keys. */
 	private prepare(s: WeekState, records: readonly unknown[], seen: (k: string) => boolean) {
 		check(Array.isArray(records) && records.length <= this.limits.appendRecords, "store-capacity");
 		const lines: string[] = [],
 			keys: string[] = [],
-			batch = new Set<string>();
+			originals: string[] = [],
+			all = new Set<string>();
 		let duplicates = 0,
 			bytes = 0;
 		for (const r of records) {
@@ -1218,17 +1513,65 @@ export class UsageWeekStore {
 			const record = r as UsageWeekRecord,
 				line = `${serialize(record)}\n`;
 			check(line.length <= this.limits.recordBytes, "invalid-record");
-			if (seen(record.k) || batch.has(record.k)) {
+			if (seen(record.k) || all.has(record.k)) {
 				duplicates++;
 				continue;
 			}
-			batch.add(record.k);
+			all.add(record.k);
 			keys.push(record.k);
+			if (record.d === "original") originals.push(record.k);
 			lines.push(line);
 			bytes += line.length;
 		}
 		check(bytes <= this.limits.appendBytes, "store-capacity");
-		return { lines, keys, duplicates };
+		for (const r of records) all.add((r as UsageWeekRecord).k);
+		return { lines, keys, duplicates, originals, all };
+	}
+	/**
+	 * Ops #500: the whole batch checked before anything is written. A row the contract refuses, or rk naming no record
+	 * of this call or the week, is invalid-observation; a fact of another week is wrong-week. An observation already
+	 * kept, or twice in the batch, is skipped and counted. bound: the records a newly written fact is bound to.
+	 */
+	private prepareObservations(
+		s: WeekState,
+		observations: readonly unknown[],
+		call: ReadonlySet<string>,
+		known: (k: string) => boolean,
+		p: "open" | "late",
+	) {
+		check(Array.isArray(observations) && observations.length <= this.limits.appendObservations, "store-capacity");
+		const lines: string[] = [],
+			keys: string[] = [],
+			batch = new Set<string>(),
+			bound = new Set<string>();
+		let duplicates = 0,
+			bytes = 0;
+		for (const x of observations) {
+			check(closed(x, "o,r,rk"), "invalid-observation");
+			const built = observationLine(x.o, x.r, p, x.rk);
+			check(built !== null && built.line.length <= this.limits.observationBytes, "invalid-observation");
+			const rk = x.rk as string | null;
+			check(rk === null || call.has(rk) || known(rk), "invalid-observation");
+			if (x.o === "fact") {
+				const at = (x.r as UsageFact).occurredAt;
+				check(at >= s.start && at < s.end, "wrong-week");
+			}
+			if (s.observations.keys.has(built.k) || batch.has(built.k)) {
+				duplicates++;
+				continue;
+			}
+			batch.add(built.k);
+			keys.push(built.k);
+			lines.push(built.line);
+			bytes += built.line.length;
+			if (x.o === "fact" && rk !== null) bound.add(rk);
+		}
+		check(
+			bytes <= this.limits.appendObservationBytes &&
+				s.observations.records + lines.length <= this.limits.weekObservations,
+			"store-capacity",
+		);
+		return { lines, keys, duplicates, bound };
 	}
 	private prepareReceipts(s: WeekState, receipts: readonly unknown[]) {
 		check(Array.isArray(receipts) && receipts.length <= this.limits.appendRecords, "store-capacity");
@@ -1307,12 +1650,13 @@ export class UsageWeekStore {
 	}
 
 	/**
-	 * Certifies the log as it stands (length, records, sha256) with the readers' cursors; omitted cursors keep the
-	 * last checkpoint's. An empty week gets its log (header only) first, so a checkpoint always names a log.
+	 * Certifies the log, receipts and observations as they stand (length, records, sha256 each) with the readers'
+	 * cursors and the unobserved count, in one file; omitted cursors keep the last checkpoint's. An empty week gets its
+	 * log (header only) first, so a checkpoint always names a log. A legacy week is refused (legacy-week).
 	 */
 	checkpoint(week: string, cursors?: UsageWeekCursors): UsageWeekCheckpoint {
 		return this.run(week, () => {
-			const s = this.state(week, "open");
+			const s = this.writable(week, "open");
 			const next = cursors ?? { files: s.checkpoint?.files ?? {}, ledger: s.checkpoint?.ledger ?? null };
 			check(validCursors(next, this.limits.files), "invalid-cursors");
 			this.ensureLog(s.log, week);
@@ -1322,7 +1666,10 @@ export class UsageWeekStore {
 	private logState(t: LogTrack): UsageWeekLogState {
 		return { length: t.length, records: t.records, sha256: t.hash.copy().digest("hex") };
 	}
-	/** Commits the logs as they stand: the main log as given, the receipts and adjustment logs as appended. */
+	/**
+	 * Commits the logs as they stand: the main log as given, the receipts, observations and adjustment logs as
+	 * appended, with the week's unobserved count (Ops #500: one commit point for all of them and the cursors).
+	 */
 	private writeCheckpoint(
 		s: WeekState,
 		cursors: UsageWeekCursors,
@@ -1332,6 +1679,7 @@ export class UsageWeekStore {
 		this.unchanged(s.log, "log-changed");
 		if (s.receipts.stat !== null) this.unchanged(s.receipts, "receipts-mismatch");
 		if (s.adjust.stat !== null) this.unchanged(s.adjust, "adjust-mismatch");
+		if (s.observations.stat !== null) this.unchanged(s.observations, "observations-mismatch");
 		const body = {
 			v: CHECKPOINT_V,
 			week: s.week,
@@ -1339,6 +1687,8 @@ export class UsageWeekStore {
 			log,
 			receipts: s.receipts.stat === null ? null : this.logState(s.receipts),
 			adjust,
+			observations: s.observations.stat === null ? null : this.logState(s.observations),
+			unobserved: s.unobserved,
 			files: cursors.files,
 			ledger: cursors.ledger,
 		};
@@ -1361,11 +1711,14 @@ export class UsageWeekStore {
 			check(this.now() >= Date.parse(s.end), "week-not-ended");
 			const committed = (t: LogTrack, c: UsageWeekLogState | null | undefined) =>
 				t.stat === null ? c === null : c != null && sameLog(c, this.logState(t));
+			// A legacy week can still be sealed by its numbers: it can't have observations (writes to it are refused, and
+			// a stray file next to its checkpoint is cut to its header on reload); its coverage stays legacy.
 			check(
 				s.checkpoint !== null &&
 					s.log.stat !== null &&
 					committed(s.log, s.checkpoint.log) &&
-					committed(s.receipts, s.checkpoint.receipts),
+					committed(s.receipts, s.checkpoint.receipts) &&
+					(legacy(s.checkpoint) ? s.observations.records === 0 : committed(s.observations, s.checkpoint.observations)),
 				"checkpoint-behind",
 			);
 			const fold = new WeekFold();
@@ -1404,34 +1757,52 @@ export class UsageWeekStore {
 	}
 
 	/**
-	 * Late attempts for a sealed week, and their receipts: a key in the sealed digests or already adjusted is a
-	 * duplicate (counted, not added); the rest go to the week's adjustment log (and receipts log), synced, then
-	 * committed by the week's checkpoint before returning. Sealed totals and the current week never change.
+	 * Late attempts for a sealed week, with their receipts and observations: a key in the sealed digests or already
+	 * adjusted is a duplicate (counted, not added), and so is an observation already kept; the rest go to the week's
+	 * adjustment log (and receipts and observations logs, observations marked late), synced, then committed by the
+	 * week's checkpoint before returning. Sealed totals and the current week never change. A legacy week is refused.
 	 */
+	adjust(week: string, records: readonly UsageWeekRecord[], receipts?: readonly UsageWeekReceipt[]): UsageWeekAdjust;
+	adjust(
+		week: string,
+		records: readonly UsageWeekRecord[],
+		receipts: readonly UsageWeekReceipt[],
+		observations: readonly UsageWeekObservationInput[],
+	): UsageWeekAdjust & UsageWeekObserved;
 	adjust(
 		week: string,
 		records: readonly UsageWeekRecord[],
 		receipts: readonly UsageWeekReceipt[] = [],
-	): UsageWeekAdjust {
+		observations?: readonly UsageWeekObservationInput[],
+	): UsageWeekAdjust | (UsageWeekAdjust & UsageWeekObserved) {
 		return this.run(week, () => {
-			const s = this.state(week, "sealed");
+			const s = this.writable(week, "sealed");
 			check(s.checkpoint !== null, "sealed-corrupt");
-			const r = this.prepare(s, records, (k) => sortedHas(s.sealedKeys, k.slice(0, 32)) || s.adjust.keys.has(k)),
-				x = this.prepareReceipts(s, receipts);
+			// A sealed key is known by its 16-byte digest, as for B2's duplicates.
+			const known = (k: string) => sortedHas(s.sealedKeys, k.slice(0, 32)) || s.adjust.keys.has(k);
+			const r = this.prepare(s, records, known),
+				x = this.prepareReceipts(s, receipts),
+				b = this.prepareObservations(s, observations ?? [], r.all, known, "late");
 			check(s.adjust.records + r.lines.length <= this.limits.weekRecords, "store-capacity");
 			this.addLines(s, s.adjust, r.lines, r.keys);
 			this.addLines(s, s.receipts, x.lines, []);
-			if (r.lines.length + x.lines.length > 0) {
+			this.addLines(s, s.observations, b.lines, b.keys);
+			const unobserved = r.originals.filter((k) => !b.bound.has(k)).length;
+			s.unobserved += unobserved;
+			if (r.lines.length + x.lines.length + b.lines.length > 0) {
 				const { files, ledger, log } = s.checkpoint;
 				this.writeCheckpoint(s, { files, ledger }, log, s.adjust.stat === null ? null : this.logState(s.adjust));
 			}
-			return {
+			const result: UsageWeekAdjust = {
 				added: r.lines.length,
 				duplicates: r.duplicates,
 				receipts: x.lines.length,
 				receiptDuplicates: x.duplicates,
 				records: s.adjust.records,
 			};
+			return observations === undefined
+				? result
+				: { ...result, observations: b.lines.length, observationDuplicates: b.duplicates, unobserved };
 		});
 	}
 
@@ -1452,6 +1823,114 @@ export class UsageWeekStore {
 	}
 
 	/**
+	 * Ops #500: what a week's observations cover, as its last checkpoint committed them: complete (every committed
+	 * original record came with its fact), partial (some didn't), or legacy (B2 committed the week: its observations
+	 * are unknown, never "none"). dropped: uncommitted observation bytes the last reload cut off.
+	 */
+	observationCoverage(week: string): UsageWeekObservationCoverage {
+		return this.run(week, () => this.coverage(this.loaded(week)));
+	}
+	private coverage(s: WeekState): UsageWeekObservationCoverage {
+		const c = s.checkpoint;
+		if (legacy(c)) return { state: "legacy", observations: 0, unobserved: null, dropped: s.dropped };
+		const unobserved = c?.unobserved ?? 0;
+		return {
+			state: unobserved === 0 ? "complete" : "partial",
+			observations: c?.observations?.records ?? 0,
+			unobserved,
+			dropped: s.dropped,
+		};
+	}
+	/**
+	 * Ops #500: the next page of a week's committed observations, in the order they were appended. from = null starts
+	 * a stream (ending any other of the week) over what the last checkpoint committed at that moment; each page's next
+	 * continues it, and nothing else does (refused: invalid-replay, as is a stream a reload ended). Appends and
+	 * checkpoints meanwhile don't change what the stream replays or the coverage its pages carry. A page holds at most
+	 * `rows` lines and reads at most 4 MiB, from the file proven on reload, its identity and length checked before and
+	 * after each page; each line must be exactly what append writes for its row (the row checked again, its key
+	 * recomputed, byte for byte). At the last page (next null) the bytes read must hash to the checkpoint's sha256 over
+	 * its count of lines. Rows count only once next is null: a failure on any page makes the week unavailable. A legacy
+	 * week is refused (legacy-week), so unknown is never read as none.
+	 */
+	observations(
+		week: string,
+		from: UsageWeekReplayCursor | null = null,
+		rows: number = this.limits.appendRecords,
+	): UsageWeekObservationPage {
+		return this.run(week, () => {
+			const s = this.loaded(week);
+			check(!legacy(s.checkpoint), "legacy-week");
+			check(Number.isSafeInteger(rows) && rows >= 1 && rows <= this.limits.appendRecords, "invalid-replay");
+			if (from === null) {
+				s.replay = null;
+				const committed = committedObservations(s.checkpoint),
+					coverage = this.coverage(s);
+				if (committed === null) return { week, coverage, observations: [], next: null };
+				s.replay = {
+					offset: 0,
+					ordinal: 0,
+					tag: randomBytes(8).toString("hex"),
+					hash: createHash("sha256"),
+					committed,
+					coverage,
+				};
+			}
+			const stream = s.replay;
+			check(
+				stream !== null &&
+					(from === null ||
+						(closed(from, "offset,ordinal,tag") &&
+							from.offset === stream.offset &&
+							from.ordinal === stream.ordinal &&
+							from.tag === stream.tag)),
+				"invalid-replay",
+			);
+			const { committed, coverage } = stream,
+				t = s.observations,
+				header = headerLine(week, "observations"),
+				end = committed.length,
+				f = this.file(t.name);
+			try {
+				const same = (st: Stats) => t.stat !== null && identity(st, t.stat) && st.size === t.length;
+				check(same(f.stat) && end <= t.length && stream.offset < end, "observations-mismatch");
+				const first = stream.offset === 0 ? header.length : 0,
+					n = Math.min(READ_BYTES, end - stream.offset, first + rows * this.limits.observationBytes),
+					buffer = Buffer.allocUnsafe(n);
+				this.readInto(f.fd, buffer, n, stream.offset);
+				check(first === 0 || buffer.toString("latin1", 0, first) === header, "observations-corrupt");
+				const out: UsageWeekObservation[] = [];
+				let at = first;
+				for (let nl = buffer.indexOf(0x0a, at); nl !== -1 && out.length < rows; nl = buffer.indexOf(0x0a, at)) {
+					const x = storedObservation(buffer.toString("latin1", at, nl + 1));
+					check(x !== null, "observations-corrupt");
+					out.push(x);
+					at = nl + 1;
+				}
+				check(at > 0 && (out.length > 0 || stream.offset + at === end), "observations-corrupt");
+				stream.hash.update(buffer.subarray(0, at));
+				stream.offset += at;
+				stream.ordinal += out.length;
+				check(same(fstatSync(f.fd)), "observations-mismatch");
+				if (stream.offset < end)
+					return {
+						week,
+						coverage,
+						observations: out,
+						next: { offset: stream.offset, ordinal: stream.ordinal, tag: stream.tag },
+					};
+				s.replay = null;
+				check(
+					stream.hash.digest("hex") === committed.sha256 && stream.ordinal === committed.records,
+					"observations-mismatch",
+				);
+				return { week, coverage, observations: out, next: null };
+			} finally {
+				closeSync(f.fd);
+			}
+		});
+	}
+
+	/**
 	 * Moves an open or unavailable week's files aside (renamed, never deleted) so the week can be rebuilt from the
 	 * sources; a proven sealed week is refused. The week is empty afterwards.
 	 */
@@ -1463,7 +1942,7 @@ export class UsageWeekStore {
 			check(s.phase !== "sealed", "sealed");
 			const tag = randomBytes(8).toString("hex"),
 				moved: string[] = [];
-			for (const kind of WEEK_FILES) {
+			for (const kind of STORED_FILES) {
 				const name = weekName(week, kind);
 				if (!this.exists(name)) continue;
 				const aside = `${name}.quarantine-${tag}`;
@@ -1488,7 +1967,7 @@ export class UsageWeekStore {
 			const s = this.state(week, "sealed");
 			check(this.now() >= Date.parse(s.end), "week-not-ended");
 			const removed: string[] = [];
-			for (const kind of ["adjust", "receipts", "checkpoint", "log", "sealed"] as const) {
+			for (const kind of ["adjust", "receipts", "observations", "checkpoint", "log", "sealed"] as const) {
 				const name = weekName(week, kind);
 				if (!this.exists(name)) continue;
 				this.owned();
@@ -1534,7 +2013,17 @@ export class UsageWeekStore {
 			corrupt = CORRUPT[kind],
 			lost = certified === null ? corrupt : mismatch,
 			receipts = kind === "receipts",
-			lineBytes = receipts ? this.limits.receiptBytes : this.limits.recordBytes;
+			observed = kind === "observations",
+			lineBytes = receipts
+				? this.limits.receiptBytes
+				: observed
+					? this.limits.observationBytes
+					: this.limits.recordBytes,
+			weekLines = receipts
+				? this.limits.weekReceipts
+				: observed
+					? this.limits.weekObservations
+					: this.limits.weekRecords;
 		const t = track(s.week, kind),
 			header = headerLine(s.week, kind),
 			f = this.file(t.name);
@@ -1542,12 +2031,9 @@ export class UsageWeekStore {
 			const size = f.stat.size,
 				limit = certified?.length ?? header.length,
 				buffer = Buffer.allocUnsafe(READ_BYTES);
-			this.checkHeader(f.fd, size, header, corrupt);
+			this.checkHeader(f.fd, size, kind, s.week);
 			check(limit >= header.length && limit <= size, lost);
-			check(
-				limit <= header.length + (receipts ? this.limits.weekReceipts : this.limits.weekRecords) * lineBytes,
-				corrupt,
-			);
+			check(limit <= header.length + weekLines * lineBytes, corrupt);
 			let offset = 0,
 				carry = NOTHING,
 				damaged = false;
@@ -1647,7 +2133,8 @@ export class UsageWeekStore {
 		}
 	}
 
-	private readCheckpoint(week: string): UsageWeekCheckpoint {
+	/** The current checkpoint, or B2's (legacy: numeric only); any other version of the family is store-version. */
+	private readCheckpoint(week: string): UsageWeekCheckpoint | UsageWeekLegacyCheckpoint {
 		const text = this.readText(weekName(week, "checkpoint"), this.limits.checkpointBytes, "checkpoint-corrupt");
 		let c: unknown;
 		try {
@@ -1655,14 +2142,24 @@ export class UsageWeekStore {
 		} catch {
 			return fail("checkpoint-corrupt");
 		}
-		version(c, CHECKPOINT_V, "checkpoint-corrupt");
+		const old = c !== null && typeof c === "object" && (c as Fields).v === LEGACY_CHECKPOINT_V;
+		if (!old) version(c, CHECKPOINT_V, "checkpoint-corrupt");
 		check(
-			closed(c, "adjust,at,files,ledger,log,receipts,sha256,v,week") &&
+			closed(
+				c,
+				old
+					? "adjust,at,files,ledger,log,receipts,sha256,v,week"
+					: "adjust,at,files,ledger,log,observations,receipts,sha256,unobserved,v,week",
+			) &&
 				c.week === week &&
 				time(c.at) &&
 				logState(c.log) &&
 				(c.receipts === null || logState(c.receipts)) &&
 				(c.adjust === null || logState(c.adjust)) &&
+				(old ||
+					((c.observations === null || logState(c.observations)) &&
+						uint(c.unobserved) &&
+						c.unobserved <= c.log.records + (c.adjust === null ? 0 : (c.adjust as UsageWeekLogState).records))) &&
 				validCursors({ files: c.files, ledger: c.ledger }, this.limits.files) &&
 				typeof c.sha256 === "string" &&
 				HEX64.test(c.sha256),
@@ -1670,7 +2167,7 @@ export class UsageWeekStore {
 		);
 		const { sha256: claimed, ...body } = c;
 		check(sha(canonical(body)) === claimed && `${canonical(c)}\n` === text, "checkpoint-corrupt");
-		return c as unknown as UsageWeekCheckpoint;
+		return c as unknown as UsageWeekCheckpoint | UsageWeekLegacyCheckpoint;
 	}
 	private readSealed(week: string): { head: UsageWeekSealed; keys: string } {
 		const text = this.readText(weekName(week, "sealed"), this.limits.sealedBytes, "sealed-corrupt");
@@ -1862,8 +2359,9 @@ export class UsageWeekStore {
 	 * A log's first line (at most 512 bytes read) must be its own header: the same family with another version is
 	 * store-version, anything else is `corrupt`. Shared by every reload path, the sealed one included.
 	 */
-	private checkHeader(fd: number, size: number, header: string, corrupt: UsageWeekStoreCode): void {
-		const peek = Math.min(size, 512),
+	private checkHeader(fd: number, size: number, kind: Appended, week: string): void {
+		const header = headerLine(week, kind),
+			peek = Math.min(size, 512),
 			buffer = Buffer.allocUnsafe(peek);
 		this.readInto(fd, buffer, peek, 0);
 		const newline = buffer.indexOf(0x0a),
@@ -1875,8 +2373,8 @@ export class UsageWeekStore {
 		} catch {
 			/* not a header at all */
 		}
-		version(parsed, LOG_V, corrupt);
-		fail(corrupt);
+		version(parsed, family(kind), CORRUPT[kind]);
+		fail(CORRUPT[kind]);
 	}
 	private readInto(fd: number, buffer: Buffer, length: number, offset: number): void {
 		for (let done = 0; done < length;) {
