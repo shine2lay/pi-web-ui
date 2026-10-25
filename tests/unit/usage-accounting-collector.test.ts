@@ -2047,6 +2047,13 @@ describe("paged collector ordered durable prefixes, capacity and IO/index failur
 });
 
 // BEGIN W0 WORKER MEASUREMENT -- synthetic files and scalar results only, no live sources/root authority.
+/** H-W0-CLOCK-1 (Ops #538): the collector's 100 ms per-unit budget counts this thread's own CPU time (user + system,
+ * ms), not wall-clock: time the thread is descheduled, throttled or blocked is not the unit's work. The collector
+ * takes it through openPaged's `clock` (a monotonic work clock); controls A and B below use the same helper. */
+function w0ThreadCpuMs(): number {
+	const { user, system } = process.threadCpuUsage();
+	return (user + system) / 1000;
+}
 async function isolatedPagedMeasurement(dir: string, asOf: string, from: string) {
 	const io = new PagedFixtureIO(dir);
 	const started = performance.now();
@@ -2204,8 +2211,9 @@ async function isolatedPagedMeasurement(dir: string, asOf: string, from: string)
 				closeSync(fd);
 			}
 		}
+		fixtureCheck(Number.isFinite(w0ThreadCpuMs()), "thread-cpu-clock");
 		const ingestStart = performance.now();
-		let c = await UsageAccountingCollector.openPaged({ inventory: inv, verifier, io });
+		let c = await UsageAccountingCollector.openPaged({ inventory: inv, verifier, io, clock: w0ThreadCpuMs });
 		for (let source = 0; source < sourceCount; source++)
 			for await (const text of nativePages(source)) {
 				const result = await c.collect(inv.sources[source].stream, text, asOf);
@@ -2247,7 +2255,7 @@ async function isolatedPagedMeasurement(dir: string, asOf: string, from: string)
 			return { facts, total: fixtureUsd(total), pages, maxRows, maxBytes };
 		};
 		const replayStart = performance.now();
-		c = await UsageAccountingCollector.openPaged({ inventory: inv, verifier, io });
+		c = await UsageAccountingCollector.openPaged({ inventory: inv, verifier, io, clock: w0ThreadCpuMs });
 		const replayed = await foldCurrent(c),
 			replayMs = performance.now() - replayStart,
 			replay = c.metrics();
@@ -2519,6 +2527,55 @@ describe("W0 isolated worker resource and shared-pool callback envelope", () => 
 			fixtureWorkers.delete(worker);
 		}
 	}, 15_000);
+});
+
+// H-W0-CLOCK-1 (Ops #538) controls, through the paged collector's own active() span around the verifier's batch check:
+// a unit's own CPU work is still charged in full on the thread-CPU clock; time it spends blocked is not.
+describe("W0 per-unit work clock: the thread's own CPU time, not wall-clock", () => {
+	const SPAN_MS = 150;
+	async function oneUnit(work: () => void, clock?: () => number) {
+		const verifier: CollectorVerifier = {
+			inventory: VERIFIED.inventory,
+			batch: (b, s) => {
+				work();
+				return VERIFIED.batch(b, s);
+			},
+		};
+		const c = await UsageAccountingCollector.openPaged({ io: pagedIO(), inventory: inventory(), verifier, clock });
+		const result = await collectPaged(c, batch());
+		return { result, maxActiveMs: c.metrics().maxActiveMs };
+	}
+	it("control A: a unit doing 150 ms of its own CPU work still fails time-limit on the thread-CPU clock", async () => {
+		let cpuMs = 0;
+		const { result, maxActiveMs } = await oneUnit(() => {
+			const cpuStart = w0ThreadCpuMs(),
+				wallStart = performance.now();
+			// Busy work only; the wall-clock bound just stops a broken clock from spinning forever.
+			while ((cpuMs = w0ThreadCpuMs() - cpuStart) < SPAN_MS && performance.now() - wallStart < 30_000);
+		}, w0ThreadCpuMs);
+		expect(cpuMs).toBeGreaterThanOrEqual(SPAN_MS);
+		expect(result).toMatchObject({ status: "rejected", code: "time-limit" });
+		expect(maxActiveMs).toBeGreaterThan(METER_LIMITS.unitWorkMs);
+	}, 60_000);
+	it("control B: a unit blocked 150 ms in Atomics.wait passes on the thread-CPU clock and fails on wall-clock", async () => {
+		const waits: { outcome: string; waitedMs: number }[] = [];
+		const blocked = () => {
+			const at = performance.now(),
+				outcome = Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, SPAN_MS);
+			waits.push({ outcome, waitedMs: performance.now() - at });
+		};
+		const cpu = await oneUnit(blocked, w0ThreadCpuMs);
+		expect(cpu.result).toMatchObject({ status: "committed", code: null });
+		expect(cpu.maxActiveMs).toBeLessThanOrEqual(METER_LIMITS.unitWorkMs);
+		const wall = await oneUnit(blocked); // no clock: the collector's default, performance.now()
+		expect(wall.result).toMatchObject({ status: "rejected", code: "time-limit" });
+		expect(wall.maxActiveMs).toBeGreaterThan(METER_LIMITS.unitWorkMs);
+		expect(waits).toHaveLength(2);
+		for (const w of waits) {
+			expect(w.outcome).toBe("timed-out");
+			expect(w.waitedMs).toBeGreaterThan(METER_LIMITS.unitWorkMs);
+		}
+	}, 60_000);
 });
 
 // Exact reviewed importers are runtime/worker modules, not a directory/basename exception.

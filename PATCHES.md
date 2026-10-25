@@ -10,6 +10,13 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## w0-cpu-clock: count the W0 worker's own CPU time against its per-unit work budget
+
+- `local` (Ops #538, H-W0-CLOCK-1; automatic-cost-accounting). W0 failed 3 of 8 full checks on #393: its 100 ms per-unit work budget used wall-clock and charged time the worker was not running. Hypothesis: a thread-CPU clock excludes scheduling stalls without excusing real work. Result: HIT. W0 alone, sealed, under the same scope throttle (`CPUQuota=150%`, period 500 ms, one busy loop inside the scope): the old clock failed 5/5 with `time-limit` (including #393's source 2, call 29); the new clock passed 5/5, maximum per-unit CPU 15.565 ms. The warm update/publication wall-clock bar remained at 30 s (worst measured 15.026 s). Report and per-run logs: `/home/shinelay/kept-from-tmp/2026-10-25/w0-cpu-clock/REPORT.md`.
+- `tests/unit/usage-accounting-collector.test.ts`: `w0ThreadCpuMs` inside the extractable W0 worker measurement block uses `process.threadCpuUsage()` (user + system, microseconds to milliseconds), injected into both paged collector opens through the existing monotonic work-clock option. Control A does 150 ms of its own CPU work through the collector's active verifier span and still gets `time-limit`; control B blocks 150 ms in `Atomics.wait`, commits on the CPU clock and gets `time-limit` on the default wall-clock. Existing fixture, assertions, resource limits, timeouts and wall-clock bars unchanged. No server code or live wiring changed.
+- Checks: the five before/after throttled runs, controls A and B, tests typecheck, then the full sealed gate and landing check (receipts in the report). Production finding: W0 is not wired live; design B retires it from the live path. B4 should retain B3's Worker and resumable wall-clock pass deadlines, not introduce W0's reject-on-stall guard.
+- Undo: revert this commit. Test only: nothing to install or restart.
+
 ## queue-answer-frees-slot: a task waiting for an answer counts as no lane in use
 
 - `local` (owner 2026-10-24 via COO rm-8c09fea6: a task waiting on his answer, or on its main chat's or lead's, gives up its queue slot until the answer comes, then goes first; plan approved, relayed by COO rm-bf4fca2a; Ops #526). Pairs with pi-queue's answerFrees (landed first); hypothesis H-QUEUE-ANSWER-FREE-1 and result in pi-queue's `docs/answer-frees-slot.md`. Evidence: on 2026-10-24 Ops' four needs-you tasks held all 4 slots until 21:47 and nothing else could start.
