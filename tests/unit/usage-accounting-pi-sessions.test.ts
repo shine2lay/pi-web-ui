@@ -889,6 +889,9 @@ describe("usage-accounting reader and transitive worker import boundaries", () =
 		"protocol.ts",
 		"usage-accounting-meter-cache.ts",
 		"usage-accounting-pass-host.ts",
+		// B4 (Ops #322): the timer host and the role witness run on the main thread (index.ts imports both).
+		"usage-accounting-host.ts",
+		"usage-accounting-witness.ts",
 	];
 	const engines = [
 		"usage-accounting-collector.ts",
@@ -1220,6 +1223,8 @@ describe("usage-accounting reader and transitive worker import boundaries", () =
 			"usage-accounting-meter-cache.ts": "import type { Snapshot } from './usage-accounting-meter-contract.js';",
 			"usage-accounting-pass-host.ts":
 				"import { METER_WORKER_RESOURCE_LIMITS } from './usage-accounting-meter-contract.js';",
+			"usage-accounting-host.ts": "import { startUsagePassWorker } from './usage-accounting-pass-host.js';",
+			"usage-accounting-witness.ts": "import type { UsageRoleWitness } from './usage-accounting-host.js';",
 			"usage-accounting-meter-contract.ts": "export interface Snapshot { generation: number }",
 			"safe-helper.ts":
 				"import './roles-overview.js'; // import './usage-accounting-collector.js'\n" +

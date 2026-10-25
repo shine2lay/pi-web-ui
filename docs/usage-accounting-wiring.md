@@ -8,6 +8,125 @@ this document. Other blocks are proposed plans, not queued tasks or permission
 to start a service, read a live source, create a credential, change a policy, or
 spend. The Pi implementation comes first; the Temper reader is admitted separately.
 
+## B4 — the server runs design B's pass every 30 s (Ops #322)
+
+The owner replaced the old W0-W7 worker design below with design B and keeping
+all detail (`dr-8795124dce74`, Oct 22). That answer covers this install (one
+pi-web-ui restart) and switching on the 30 s pass and its Roles figures. It
+changes no budget, cap or pause, and deletes nothing. Design: Ops #420 PLAN.md
+5.4 and 5.8. The pass itself is B3 (`docs/usage-accounting-pass.md`); the store
+is B2 (`docs/usage-accounting-week-store.md`).
+
+**H-B4.** Before B4 nothing ran the pass, so the Roles page had no figures.
+Starting the Worker from the server and ticking it every 30 s should publish a
+new snapshot at most 31 s after a ledger line is written, plus one W5 build.
+Measured live, at a quiet hour, from the ledger line's own time to the Roles
+client's render acknowledgement. Wrong if that takes more than 60 s.
+
+### What runs
+
+- `server/usage-accounting-host.ts` (main thread): `startUsageAccounting`
+  starts the pass Worker once (`server/usage-accounting-pass-host.ts`, by URL)
+  and a 30 s timer (`METER_LIMITS.updateMs`). Each step reads the role witness
+  and sends one tick; a tick is refused while one is outstanding, so passes never
+  overlap. It imports only node built-ins, the pass host, the meter cache and
+  the meter contract; the import guard in
+  `tests/unit/usage-accounting-pi-sessions.test.ts` checks it and the witness
+  module as main-thread roots.
+- `server/index.ts` starts it 1.5 s after the server listens, with the other
+  restart work, and stops it early in shutdown (the Worker gets its `close`;
+  shutdown waits at most 3 s for it inside the existing 5 s force exit). Its
+  store lives in `<data dir>/usage-accounting/` (0700): the week store refuses a
+  group-writable root, and the data dir itself is not 0700 on spark. The session
+  root is pi's own (`PI_CODING_AGENT_SESSION_DIR`, else
+  `<agent dir>/sessions`). The ledger is `<data dir>/usage-ledger` when it
+  exists, with the writer's own switch (`usage-ledger.json`; missing means on),
+  read once at start. No Temper roots yet: Temper's runs are T0's.
+- `server/agent-service.ts` has one field, `usageAccounting`, set by
+  `server/index.ts`, and the Roles reader's two getters
+  (`server/roles-overview.ts` `usageMeterCache`, `usageMeterFirstObservedAt`)
+  read it. Reading starts nothing.
+- A refused session root (missing, not a directory, not spelled as its own real
+  path, or none at all) is refused before any Worker starts
+  (`checkSessionRoots`, Architecture #289 notes 1 and 6). The server logs
+  `[usage-accounting] off: ...` and the Roles view stays without figures.
+
+### Roles: who a chat's usage belongs to
+
+A fact's role comes only from a witness, never from `payerRole`. Before each
+tick the main thread lists the chats active in the last 8 days
+(`sessionIndex.listAll`) and works out each one's role the way decision records
+do (`fileIdentityIds`: the role's home chat, else the chat's last pi-identity
+entry, else a past home chat). The tick carries the roles and the `[session id,
+role]` pairs, only when they changed. The Worker checks them (role names,
+at most 256 roles, every session's role among them, no session with two
+roles; anything off keeps the previous witness) and gives each fact the role of
+its session (`fact.links.session`), evidence `chat-identity:<session id>`. A
+chat with no identity has no role: its facts count for no role, and each role's
+figure carries the `invalid-subject-binding` fault, so a role's total is never
+claimed complete while some usage has no known role. The first tick waits for a
+witness, because the first pass reads the whole week and a fact keeps the role
+it was first staged with. A chat that starts and is read between two witness
+reads keeps no role for this week (a window of one pass at most).
+
+### Cadence and the dead man's switch
+
+- The pass runs on every tick. W5 is built for the first pass, while a Roles
+  window is open (`RolesWatch.fullWatching`), and while a health fault or the
+  alarm is up; otherwise not. A late-week W5 build takes 15 s quiet and up to
+  87 s under load (Ops #423), and every 30 s that would keep a core busy all day
+  (Architecture #277 S6). With no Roles window open the figures go stale after
+  60 s; opening the page makes the next pass build them (within 30 s plus one
+  build).
+- After each accepted snapshot the Roles watch is poked, so an open page gets
+  it within its 300 ms debounce; otherwise the page's own 3 s poll finds it.
+- The alarm: when no pass has finished for 300 s (`alarmAfterMs`), the host
+  logs `[usage-accounting] ALARM: no pass has finished for N s` once and gives
+  the cache a health note (`unavailable`, `worker-unavailable`); the next
+  accepted snapshot clears both. Silence raises it, not only errors. Tested by
+  skipping passes (`tests/unit/usage-accounting-host.test.ts`).
+- A lost Worker (crash, refused root at open, resource limit) is logged once
+  with its error code (`usage-pass-inventory-input` for a wrong root) and shown
+  as `worker-unavailable`. It is not restarted: the next pi-web-ui start retries
+  (Architecture #289 note 3). A refused pass shows `waiting-for-previous-writer`,
+  `store-capacity` or `index-unavailable`.
+- Every 10 minutes one log line: passes by status, ticks dropped or skipped,
+  pass work median and max, W5 builds with median and max, files left to read.
+  That is the live W5 and load reading PLAN 5.6's follow-up waits for.
+
+### Freshness states on the Roles view (PLAN 5.4)
+
+- fresh: a snapshot from at most 60 s ago, `ready`.
+- catching up: the pass ran out of its 2 s budget with files left; W5 marks the
+  coverage partial (`time-limit`). The age is shown; the bytes left are not in
+  the Roles data (its types are closed), only in the server's 10-minute line as
+  files left to read.
+- stale: no snapshot in 60 s (the meter cache's own rule, `worker-stale`).
+- alarm: no pass for 300 s, shown as `unavailable` with `worker-unavailable`.
+- partial and unavailable: W5's own states and faults, unchanged.
+
+The native receipt `usageMeterFirstObservedAt(generation)` is the start time of
+the first pass that read new bytes since the previous published snapshot,
+kept for the generation that published them (the last 8). Another epoch or
+generation gets null, never a borrowed time. The Roles watch measures from it to
+the client's render acknowledgement (`firstObservationToAckMs`).
+
+### Limits and what this does not claim
+
+- The store's safety holds only within its doc's scope
+  (`docs/usage-accounting-week-store.md`): local application-data protections,
+  not isolation from root or from a hostile writer running as the same UID.
+  Same-user check-then-use windows remain, in the store, the inventory and the
+  root checks here.
+- Not every open in the app uses `O_NOFOLLOW` (for example
+  `server/role-message-guard-lock.ts`); this wiring adds no such claim.
+- `deleteWeek` stays test-only: the timer, the host and the Roles wiring never
+  call it. No retention or deletion runs (B5).
+- Bind mounts under the session root stay a documented residual (Ops #540). The
+  roots, and the ledger switch, are read once when the Worker starts.
+- No hot restart of a lost Worker, and no cap alarm for the 4,096-file
+  inventory cap (B3's open point, unchanged).
+
 ## H-WIRE-S0ALIGN — before the S0 alignment (Ops #323)
 
 Wrong/evidence: `d01eafb9` still accepts `complete_through`, "complete through

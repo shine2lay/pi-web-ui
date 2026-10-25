@@ -115,6 +115,7 @@ import { describeError, errorMessage, planForLostActive } from "./crash-guard.js
 // list-freeze: message counts without getSessionStats() (which re-projects the whole context).
 import { messageCountOf } from "./message-count.js";
 import { invalidateSessionStats, sessionStatsOf } from "./session-stats.js";
+import type { UsageAccountingView } from "./usage-accounting-host.js";
 import { attachUsageLedger, recordUsageLedgerEntry } from "./usage-accounting-ledger.js";
 // new-chat-default: the global default model is what every new chat starts on.
 import { carryOverToNewChat, freshChatModel } from "./new-chat-model.js";
@@ -16777,6 +16778,8 @@ export class AgentService {
 	private rolesReader: RolesOverviewReader | null = null;
 	/** stall-watch (H-STALL-COST-2): the newest overview made here, by any reader, and when (Date.now()). */
 	private newestOverview: { value: UiRolesOverview; at: number } | null = null;
+	/** usage-accounting (Ops #322, B4): set by index.ts once design B's pass runs; the Roles page only reads it. */
+	usageAccounting: UsageAccountingView | null = null;
 
 	/** roles-overview: every role's state for the Roles page (no chat is loaded for it, nothing is written). */
 	readRolesOverview(): Promise<UiRolesOverview> {
@@ -16803,6 +16806,9 @@ export class AgentService {
 				// roles-instructions: pi reads the every-chat rules from its agent folder at each chat's start.
 				agentsFile: () => join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "AGENTS.md"),
 				rolePaused: () => this.roleMessages.paused,
+				// usage-accounting B4: the meter cache index.ts fills, and each published generation's native receipt.
+				usageMeterCache: () => this.usageAccounting?.cache() ?? null,
+				usageMeterFirstObservedAt: (generation) => this.usageAccounting?.firstObservedAt(generation) ?? null,
 				sessionRoots: () =>
 					[process.env.PI_CODING_AGENT_SESSION_DIR, join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "sessions")]
 						.filter((r): r is string => !!r)

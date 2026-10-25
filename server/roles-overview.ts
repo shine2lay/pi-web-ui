@@ -1669,6 +1669,13 @@ export class RolesWatch<K> {
 		return this.watchers.size;
 	}
 
+	/** Windows with the Roles page itself open (not only the top bars): usage-accounting builds W5 for them. */
+	get fullWatching(): number {
+		let n = 0;
+		for (const w of this.watchers.values()) if (w.full) n++;
+		return n;
+	}
+
 	private schedule(ms: number): void {
 		if (this.stopped || !this.watchers.size) return;
 		if (this.running) {

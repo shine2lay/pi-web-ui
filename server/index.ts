@@ -100,6 +100,13 @@ import {
 } from "./identity-roles.js";
 import { NotebookWatch } from "./notebook-watch.js";
 import { RolesWatch } from "./roles-overview.js";
+import {
+	type UsageAccounting,
+	type UsageAccountingView,
+	startUsageAccounting,
+	usageLedgerProduction,
+} from "./usage-accounting-host.js";
+import { usageRoleWitness } from "./usage-accounting-witness.js";
 import { InitiativesWatch } from "./initiatives-watch.js";
 import { WorkPageWatch } from "./work-page.js";
 import { PAGES_FRESH_SKIP_MS, PagesRefresher } from "./pages-fresh.js";
@@ -1475,6 +1482,8 @@ export interface EngineService {
 	onRoleGuardChanged?: (() => void) | null;
 	/** roles-overview (pi engine): every role's state for the Roles page. */
 	readRolesOverview?(): Promise<UiRolesOverview>;
+	/** usage-accounting (pi engine, Ops #322): set by index.ts once design B's pass runs; the Roles page reads it. */
+	usageAccounting?: UsageAccountingView | null;
 	/** initiatives-plan-data (pi engine): the whole work registry for the Initiatives page (read only); with an
 	 *  overview just made (pages-fresh), from that one. */
 	readWorkPage?(overview?: UiRolesOverview): Promise<UiWorkPage>;
@@ -4411,6 +4420,8 @@ httpServer.listen(PORT, HOST, () => {
 				service.startRolesConfigHistory?.();
 				// chat-slots: then the sweep that closes blank chats no window had open for 10 minutes.
 				service.startBlankChatSweep?.();
+				// usage-accounting: then design B's pass, every 30 s, and its figures on the Roles page.
+				if (!shuttingDown) startUsageMeter();
 			})(),
 		1500,
 	);
@@ -4497,6 +4508,38 @@ const stopControl = startControlServer({ service, dataDir: DATA_DIR, port: PORT,
  * within this long no matter what — unref'd so a clean shutdown never
  * waits on it.
  */
+/**
+ * usage-accounting (Ops #322, B4): design B's pass in a Worker every 30 s (usage-accounting-host.ts); the Roles page
+ * reads its meter cache through service.usageAccounting. Reporting only: no budget, cap or pause reads it.
+ * The week log lives in <data dir>/usage-accounting/usage-week (its own 0700 folder: the store refuses a folder others
+ * can write). Session root: pi's, which must be an existing folder spelled as its real path; otherwise it stays off.
+ */
+let usageAccounting: UsageAccounting | null = null;
+function startUsageMeter(): void {
+	if (usageAccounting || !("usageAccounting" in service) || !service.readRolesOverview) return;
+	const custom = process.env.PI_CODING_AGENT_SESSION_DIR || undefined;
+	const sessionRoot = resolve(custom ?? join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "sessions"));
+	const dataDir = join(DATA_DIR, "usage-accounting");
+	const ledger = join(DATA_DIR, "usage-ledger");
+	try {
+		mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+		usageAccounting = startUsageAccounting({
+			dataDir,
+			sessionRoots: [sessionRoot],
+			temperRoots: [],
+			ledgerDirectory: existsSync(ledger) ? ledger : null,
+			production: usageLedgerProduction(DATA_DIR),
+			witness: () => usageRoleWitness(custom),
+			wanted: () => rolesWatch.fullWatching > 0,
+			onPublish: () => rolesWatch.poke(),
+		});
+		service.usageAccounting = usageAccounting;
+		console.log(`[usage-accounting] pass every 30 s over ${sessionRoot}`);
+	} catch (err) {
+		console.error(`[usage-accounting] off: ${(err as Error).message}`);
+	}
+}
+
 const SHUTDOWN_FORCE_EXIT_MS = 5000;
 
 let shuttingDown = false;
@@ -4521,6 +4564,8 @@ async function shutdown(signal: "SIGINT" | "SIGTERM" = "SIGINT"): Promise<void> 
 	console.log("\nshutting down…");
 	// pages-fresh: no new background round while the server goes down.
 	pagesRefresher.stop();
+	// usage-accounting: the pass Worker finishes its pass and closes its store; waited for below, at most 3 s.
+	const usageStopped = usageAccounting?.stop().catch(() => {});
 	// Windows ConPTY 兜底看门狗（issue #215）：主线程若死锁在 native
 	// ClosePseudoConsole 里，事件循环冻结，进程内的 forceExitTimer 永远触发不了 ——
 	// 只能靠外部进程收尾。超时取 forceExit + 余量（只在进程内兜底失效时才开火）；
@@ -4572,6 +4617,7 @@ async function shutdown(signal: "SIGINT" | "SIGTERM" = "SIGINT"): Promise<void> 
 		mcpBridge.dispose();
 		await globalLspPool.shutdownAll();
 		await service.disposeAll();
+		if (usageStopped) await Promise.race([usageStopped, new Promise((done) => setTimeout(done, 3000).unref())]);
 		// Don't let dead browsers hold the exit open: half-open WebSocket /
 		// keep-alive HTTP connections (e.g. test clients killed without
 		// closing) would otherwise keep close() from ever finishing — drop
