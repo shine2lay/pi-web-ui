@@ -3,7 +3,9 @@ import {
 	appendFileSync,
 	copyFileSync,
 	mkdirSync,
+	readdirSync,
 	readFileSync,
+	symlinkSync,
 	truncateSync,
 	utimesSync,
 	writeFileSync,
@@ -340,6 +342,8 @@ async function scale(attempts: number, files: number) {
 			evidenceRef: "fixture-only:verified-role",
 		}),
 	};
+	// The sessions root exists, empty, from the first open on: a missing root is refused at open (#281 N1, Ops #540).
+	mkdirSync(sessions, { recursive: true, mode: 0o700 });
 	const seedMs = await seedWeek(attempts, files, extra);
 	// A new state: replays the hash-checked week in budgeted passes (catching-up), then steady. The seeding state is
 	// out of scope by now, as one worker holds one state.
@@ -527,6 +531,68 @@ const cases: Record<string, () => Promise<unknown>> = {
 			// The normal case: a Temper root inside a session root is skipped, not refused.
 			parent: attempt([dir], [temper]),
 		};
+	},
+	async rootRefusal() {
+		// Architecture #281 N1: a wrong root is refused once, when the state opens, by name and before the week store is
+		// opened: nothing is written and no week is replayed. N5: containment is checked on real paths.
+		mkdirSync(sessions, { recursive: true, mode: 0o700 });
+		const temper = join(dir, "temper");
+		mkdirSync(join(temper, "sessions"), { recursive: true, mode: 0o700 });
+		const file = join(dir, "not-a-directory");
+		writeFileSync(file, "");
+		symlinkSync(temper, join(dir, "temper-link"));
+		symlinkSync(sessions, join(dir, "sessions-link"));
+		let n = 0;
+		const attempt = (extra: Partial<PassOptions>) => {
+			const data = join(dir, `data-${++n}`);
+			try {
+				closePassState(open({ dataDir: data, ...extra }));
+				return "opened";
+			} catch (e) {
+				return {
+					code: (e as { code?: unknown }).code ?? null,
+					message: (e as Error).message,
+					written: readdirSync(data),
+				};
+			}
+		};
+		return {
+			missing: attempt({ sessionRoots: [join(dir, "missing")] }),
+			notDirectory: attempt({ sessionRoots: [file] }),
+			relative: attempt({ sessionRoots: ["sessions"] }),
+			temperMissing: attempt({ temperRoots: [join(dir, "missing-temper")] }),
+			temperRelative: attempt({ temperRoots: ["temper"] }),
+			// The walk never follows a symlink, so a session root reached through one could only ever be partial.
+			sessionsThroughLink: attempt({ sessionRoots: [join(dir, "sessions-link")] }),
+			// A session root inside a Temper root that is spelled through a symlink: as strings they looked apart.
+			insideTemperLink: attempt({ sessionRoots: [join(temper, "sessions")], temperRoots: [join(dir, "temper-link")] }),
+			// Control: right roots open, a Temper root spelled through a symlink included.
+			fine: attempt({ temperRoots: [join(dir, "temper-link")] }),
+		};
+	},
+	async temperLink() {
+		// Architecture #281 N5: the `sessions` case's Temper root, given through a symlink outside the sessions root.
+		// Compared as strings it escaped the exclusion, and Temper's file was counted as a chat (a double count with T0).
+		copySessions();
+		const temper = join(sessions, "temper-worker");
+		mkdirSync(temper, { mode: 0o700 });
+		copyFileSync(join(fixtures, "usage-accounting-pi-sessions", "usage-kinds.jsonl"), join(temper, "excluded.jsonl"));
+		stamp(join(temper, "excluded.jsonl"), "2026-10-20T11:00:00.000Z");
+		const link = join(dir, "temper-link");
+		symlinkSync(temper, link);
+		const s = open({ temperRoots: [link] });
+		try {
+			const passes = await until(s);
+			return {
+				last: last(passes),
+				files: [...s.files.values()].map((f) => f.file.slice(sessions.length + 1)).sort(),
+				totals: observed(s, AS_OF),
+				w5: meter(s, AS_OF),
+				direct: await direct(),
+			};
+		} finally {
+			closePassState(s);
+		}
 	},
 	async e0() {
 		return scale(8_192, 64);

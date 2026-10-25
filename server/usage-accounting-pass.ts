@@ -26,6 +26,7 @@ import {
 } from "./usage-accounting-ledger-source.js";
 import type { MeterCoveredSourceStatus } from "./usage-accounting-meter-contract.js";
 import {
+	checkPassRoots,
 	closePassInventory,
 	newPassInventory,
 	passFileKey,
@@ -80,9 +81,15 @@ export interface PassOptions {
 	lease: SharedArrayBuffer;
 	/** W5 generation epoch (hex64), fixed for this Worker. */
 	epoch: string;
-	/** Absolute chat-session roots (~/.pi/agent/sessions); nothing outside them is discovered. */
+	/**
+	 * Absolute chat-session roots (~/.pi/agent/sessions); nothing outside them is discovered. Each must be an existing
+	 * directory and its own real path, checked once at open (#281 N1).
+	 */
 	sessionRoots: readonly string[];
-	/** Native, source-owned Temper pi-worker roots, excluded (T0 owns them); never inferred from names. */
+	/**
+	 * Native, source-owned Temper pi-worker roots, excluded (T0 owns them); never inferred from names. Each must be an
+	 * existing directory; resolved to its real path at open, so one spelled through a symlink is still excluded (#281 N5).
+	 */
 	temperRoots: readonly string[];
 	/** Absolute usage-ledger directory, or null when the ledger is not a source. */
 	ledgerDirectory: string | null;
@@ -318,11 +325,22 @@ const openStore = (o: PassState["options"]): UsageWeekStore =>
 	UsageWeekStore.open({ dataDir: o.dataDir, lease: o.lease, limits: o.storeLimits, now: o.now });
 const previousWeek = (week: string): string => usageWeekOf(iso(Date.parse(usageWeekBounds(week).start) - 1));
 
-/** Opens the Worker's pass state. Nothing is read until the first runPass. */
+/**
+ * Opens the Worker's pass state. Nothing is read until the first runPass. The roots are checked once, here, before the
+ * store opens (Architecture #281 N1, N5): a wrong root throws usage-pass-inventory-input (its code too) with nothing
+ * written and no week replayed, and the pass then uses the checked lists, Temper's as real paths.
+ */
 export function openPassState(options: PassOptions): PassState {
 	if (isMainThread) throw new Error("usage-pass-worker-required");
 	if (!/^[0-9a-f]{64}$/.test(options.epoch)) throw new Error("usage-pass-epoch");
-	const o = { now: () => Date.now(), clock: () => performance.now(), ...options };
+	const roots = checkPassRoots(options.sessionRoots, options.temperRoots);
+	const o = {
+		now: () => Date.now(),
+		clock: () => performance.now(),
+		...options,
+		sessionRoots: roots.roots,
+		temperRoots: roots.temperRoots,
+	};
 	return {
 		options: o,
 		store: openStore(o),

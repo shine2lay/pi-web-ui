@@ -1,6 +1,6 @@
 /** Worker-only, stat-only, bounded and resumable session inventory. No usage/content reads, discovery outside roots,
  * timer, main-thread service import or deletion. Same-UID check-then-use windows remain (see the week-store scope). */
-import { lstatSync, opendirSync, type Dir, type Stats } from "node:fs";
+import { lstatSync, opendirSync, realpathSync, statSync, type Dir, type Stats } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { isMainThread } from "node:worker_threads";
@@ -65,9 +65,45 @@ export function closePassInventory(s: PassInventory): void {
 }
 const under = (file: string, root: string) => file === root || file.startsWith(root + sep);
 const owned = (s: Stats): boolean => process.getuid !== undefined && s.uid === process.getuid() && !s.isSymbolicLink();
+/** A configuration error, never a store fault: its code names it in a pass's lastError (Architecture #281 N1). */
+const inventoryInput = (): Error =>
+	Object.assign(new Error("usage-pass-inventory-input"), { code: "usage-pass-inventory-input" });
+/**
+ * The roots, checked once when the pass state opens (Architecture #281 N1, N5), so a wrong root is refused by name
+ * before the week store is opened: nothing is written and no week is replayed. Every root is an absolute, normalised
+ * path to an existing directory. A session root must be its own real path: the walk never follows a symlink, so a root
+ * reached through one could only ever give a partial inventory. A Temper root is resolved to its real path, the one the
+ * walk meets, so a Temper root spelled through a symlink is still excluded (no double count with T0), and a session
+ * root at or inside a Temper root's real path is refused. dev:ino matching is not needed: no bind mount sits under the
+ * roots on this machine (Ops #540, /proc/self/mountinfo). Same-UID check-then-use windows remain: the walk still
+ * lstats every ancestor of a session root on each cycle.
+ */
+export function checkPassRoots(
+	roots: readonly string[],
+	temperRoots: readonly string[],
+): { roots: readonly string[]; temperRoots: readonly string[] } {
+	const real = (p: unknown): string => {
+		if (typeof p !== "string" || !isAbsolute(p) || resolve(p) !== p) throw inventoryInput();
+		try {
+			const r = realpathSync(p);
+			if (statSync(r).isDirectory()) return r;
+		} catch {
+			/* missing or unreadable: refused below */
+		}
+		throw inventoryInput();
+	};
+	const sessions = roots.map((p) => {
+		if (real(p) !== p) throw inventoryInput();
+		return p;
+	});
+	const temper = [...new Set(temperRoots.map(real))];
+	if (sessions.some((root) => temper.some((r) => under(root, r)))) throw inventoryInput();
+	return { roots: Object.freeze(sessions), temperRoots: Object.freeze(temper) };
+}
 /** One bounded scan unit; `stop` includes the pass work deadline. The full walk may span passes. The file cap is
  * cumulative within the week, not just the count in one page. Root ownership exclusions are native inputs, never
- * inferred from filenames/titles. stat and opendir are synchronous deliberately: the Worker owns heavy I/O. */
+ * inferred from filenames/titles; Temper roots are compared as given, so the pass hands in checkPassRoots' real paths.
+ * stat and opendir are synchronous deliberately: the Worker owns heavy I/O. */
 export function scanPassInventory(
 	s: PassInventory,
 	options: {
@@ -91,7 +127,7 @@ export function scanPassInventory(
 		// here (Architecture #277 S2). A Temper root inside a session root is the normal case and is skipped below.
 		options.roots.some((root) => options.temperRoots.some((r) => under(root, r)))
 	)
-		throw new Error("usage-pass-inventory-input");
+		throw inventoryInput();
 	const bounds = usageWeekBounds(s.week);
 	const from = Date.parse(bounds.start),
 		through = Date.parse(bounds.end) - 1;

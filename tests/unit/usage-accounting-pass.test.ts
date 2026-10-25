@@ -1,7 +1,16 @@
 // Ops #423 B3: design B's bounded pass. Each case runs in a Worker with METER_WORKER_RESOURCE_LIMITS (B2's store
 // refuses the main thread), on synthetic copies of the W0 and #304 fixtures only.
-import { mkdtempSync, mkdirSync, copyFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import {
+	mkdtempSync,
+	mkdirSync,
+	copyFileSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
+import { cpus, loadavg, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
@@ -283,6 +292,67 @@ describe("usage accounting pass (Ops #423 B3)", { timeout: 120_000 }, () => {
 		});
 	});
 
+	it("refuses a wrong root when the state opens, by name, before the store writes anything (#281 N1, N5)", async () => {
+		const refused = { code: "usage-pass-inventory-input", message: "usage-pass-inventory-input", written: [] };
+		expect(await run("rootRefusal")).toEqual({
+			missing: refused,
+			notDirectory: refused,
+			relative: refused,
+			temperMissing: refused,
+			temperRelative: refused,
+			sessionsThroughLink: refused,
+			insideTemperLink: refused,
+			fine: "opened",
+		});
+	});
+
+	it("excludes a Temper root given through a symlink, so nothing is counted twice (#281 N5)", async () => {
+		const r = await run("temperLink");
+		expect(r.last).toMatchObject({ status: "fresh", completed: true });
+		expect(r.files).toEqual(["cwd/delegate.jsonl", "cwd/fork.jsonl", "cwd/plain.jsonl", "cwd/resume-copy.jsonl"]);
+		// The #304 reader's totals over the four chat files alone (the `sessions` case's 0.91 includes its appended call).
+		expect(r.direct).toEqual({ gross: "0.41", dedup: "0.19" });
+		expect(r.totals).toMatchObject(r.direct);
+		expect(r.w5).toMatchObject({
+			state: "ready",
+			list: { grossObservations: "0.41", deduplicatedRecorded: "0.19" },
+			coverage: "complete",
+		});
+	});
+
+	it("stops a Worker started with a wrong root at once, by name: no pass, nothing written (#281 N1)", async () => {
+		const code = await bundle("../../server/usage-accounting-pass-worker.ts");
+		const dir = temp();
+		mkdirSync(join(dir, "data"), { mode: 0o700 });
+		const worker = new Worker(code, {
+			eval: true,
+			resourceLimits: { ...METER_WORKER_RESOURCE_LIMITS },
+			workerData: {
+				usagePass: {
+					dataDir: join(dir, "data"),
+					lease: new SharedArrayBuffer(4),
+					epoch: "d".repeat(64),
+					sessionRoots: [join(dir, "missing")],
+					temperRoots: [],
+					ledgerDirectory: null,
+					production: "disabled",
+					subjects: [{ subject: { kind: "role", role: "design" }, policy: null }],
+				},
+			},
+		});
+		try {
+			const first = await new Promise<unknown>((done) => {
+				worker.once("error", (e) => done({ error: (e as { code?: unknown }).code }));
+				worker.once("message", (m: { kind?: string }) => done({ message: m.kind }));
+				worker.postMessage({ kind: "tick" });
+			});
+			expect(first).toEqual({ error: "usage-pass-inventory-input" });
+			expect(readdirSync(join(dir, "data"))).toEqual([]);
+		} finally {
+			await worker.terminate();
+		}
+	});
+
 	it("has the Worker drop a tick that arrives while its pass runs, even without the host's guard", async () => {
 		// Architecture #278 S2: the Worker's own single-flight guard, reached directly (two ticks, no host).
 		const code = await bundle("../../server/usage-accounting-pass-worker.ts");
@@ -397,22 +467,41 @@ describe("usage accounting pass (Ops #423 B3)", { timeout: 120_000 }, () => {
 		"measures E1 and E2: steady pass, W5 build (R-W5) and heap (R-MEM)",
 		{ timeout: 1_800_000 },
 		async () => {
-			const out: Record<string, unknown> = { at: new Date().toISOString() };
+			// Architecture #282 S2: the machine the figures came from, since H-B3's bars hold on a quiet machine (C1): its
+			// cores, the CPUs this process may use, and the 1, 5 and 15 minute load averages at the start and after each week.
+			let cpusAllowedList: string | null = null;
+			try {
+				cpusAllowedList = /^Cpus_allowed_list:\s*(\S+)/m.exec(readFileSync("/proc/self/status", "utf8"))?.[1] ?? null;
+			} catch {
+				/* not Linux: left null */
+			}
+			const load: Record<string, number[]> = { start: loadavg() };
+			const out: Record<string, unknown> = {
+				at: new Date().toISOString(),
+				machine: { cores: cpus().length, cpusAllowedList, load },
+			};
 			const save = () => {
 				if (process.env.B_PASS_LARGE_OUT)
 					writeFileSync(process.env.B_PASS_LARGE_OUT, `${JSON.stringify(out, null, 1)}\n`, { mode: 0o600 });
 			};
+			// Architecture #282 S1: both weeks run and are saved before any bar is checked, so a missed E1 bar can't hide E2.
+			// biome-ignore lint/suspicious/noExplicitAny: fixture results are JSON shaped per case
+			const results: [string, any][] = [];
 			for (const name of ["e1", "e2"]) {
 				const r = await run(name);
 				out[name] = { ...r, w5: { ...r.w5, runs: r.w5.runs.map(Math.round) } };
+				load[name] = loadavg();
 				save();
-				expect(r.unknown).toEqual({ sessions: 0, ledger: 0 });
-				expect(r.idle).toMatchObject({ bytesRead: 0, statuses: ["fresh"] });
-				expect(r.steady.statuses).toEqual(["fresh"]);
-				expect(r.w5.state).toBe("ready");
+				results.push([name, r]);
+			}
+			for (const [name, r] of results) {
+				expect.soft(r.unknown).toEqual({ sessions: 0, ledger: 0 });
+				expect.soft(r.idle).toMatchObject({ bytesRead: 0, statuses: ["fresh"] });
+				expect.soft(r.steady.statuses).toEqual(["fresh"]);
+				expect.soft(r.w5.state).toBe("ready");
 				// H-B3's bars: a steady pass within 1 s; W5 at 125k (E1) within 25 s. E2's W5 has no bar (an open point).
-				expect(r.steady.maxWorkMs).toBeLessThanOrEqual(1000);
-				if (name === "e1") expect(r.w5.snapshotMs).toBeLessThanOrEqual(25_000);
+				expect.soft(r.steady.maxWorkMs).toBeLessThanOrEqual(1000);
+				if (name === "e1") expect.soft(r.w5.snapshotMs).toBeLessThanOrEqual(25_000);
 			}
 		},
 	);
