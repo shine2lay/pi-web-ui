@@ -66,8 +66,16 @@ chat with no identity has no role: its facts count for no role, and each role's
 figure carries the `invalid-subject-binding` fault, so a role's total is never
 claimed complete while some usage has no known role. The first tick waits for a
 witness, because the first pass reads the whole week and a fact keeps the role
-it was first staged with. A chat that starts and is read between two witness
-reads keeps no role for this week (a window of one pass at most).
+it was first staged with. A newly created chat can miss one witness read, but
+that does not bound how long its usage stays unknown: the fact keeps no role
+for the whole week, even if a later witness names it. An unreadable or short
+witness listing, a session with no chat file (including app/helper ledger
+sessions), or a file outside the listing's depth can leave facts without a role
+too. Each such fact makes every role's coverage partial, not just one role's.
+Expect partial figures until G13 supplies the missing attribution. A recorded
+zero is not a complete zero; unknown costs stay unknown. On initial catch-up,
+the witness describes the chat's role when read, not its historical role at each
+message.
 
 ### Cadence and the dead man's switch
 
@@ -126,6 +134,52 @@ the client's render acknowledgement (`firstObservationToAckMs`).
   roots, and the ledger switch, are read once when the Worker starts.
 - No hot restart of a lost Worker, and no cap alarm for the 4,096-file
   inventory cap (B3's open point, unchanged).
+
+### Architecture review and the test-only follow-up
+
+Architecture HOME accepted production head
+`8ecf3cf7fe09653e72b1ffdd9a5c0838370952fd` for install, with no must-fix
+(`rm-ff8581d2`, `rm-657bc130`). This is source/control evidence, not proof of a
+live install, render latency or permission to click a panel. The owner's
+no-click boundary still applies until the separate panel question is answered.
+
+**H-B4-GUARDS.** Architecture's controls exposed six changes the tests did not
+catch: replay using today's role instead of the first-staged role (K4), not
+clearing the host's health/alarm flags (K9), and four changes to index.ts's B4
+wiring (K6c, K12a, K13a, K13b). Test-only T1–T3 should catch all six without a
+production change: T1 uses the real Worker, stages `session-plain` under
+`design`, then changes its witness to `ops` and rebuilds W5; the original
+`design` subtotal must remain and `ops` stays zero. T2 checks an idle
+`build:false` after recovery and a second alarm after another 300 s silence.
+T3 runs the actual executable startup block and shutdown statements with
+stand-ins (comments stripped), checking full-window demand, the 0700 directory,
+the stop call and its bounded 3000 ms race; each has a mutation control.
+Disproof: any of the six changes still passes, an unchanged case fails, or any
+production source changes. The independent six-bite result belongs to this
+new test head; the old install ACCEPT is not that result. B5 must consume the
+new test evidence before landing.
+
+Suggestions remain follow-up candidates, not install conditions or changes in
+this patch:
+
+- **H-B4-CAUSES:** most role-unknown facts may come from sessions without chat
+  files rather than late witnesses (Architecture S2). Per-pass counts of newly
+  unbound facts and already-unbound sessions named by a later witness would
+  distinguish them, reported in the existing 10-minute line. Disproved if
+  late-witnessed sessions appear in a typical day's reading. No new counters
+  or benchmark added here.
+- **H-B4-WITNESS:** a short listing may discard previously known sessions (S4).
+  A within-week growing witness, with explicit conflict handling and a Pacific
+  week reset, could preserve them for later facts. Fixed short-list, conflict
+  and rollover cases would have to prove this; wrong if a conflicting role
+  leaks or a past week's mapping survives. It cannot repair facts already
+  staged without a role. No runtime or attribution-contract change here.
+
+Other suggestions (witness-failure age, Worker error-code normalization, earlier
+shutdown timing, overlapping witness-read prevention and shared validation)
+remain recorded with Ops, not bundled into the accepted production source.
+The planned live 10-minute W5 median/max/load reading alone decides the timing
+follow-up; none of these suggestions adds another install gate.
 
 ## H-WIRE-S0ALIGN — before the S0 alignment (Ops #323)
 

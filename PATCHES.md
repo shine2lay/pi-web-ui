@@ -10,6 +10,13 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## usage-accounting-host-guards: catch changed role replay, repeated alarms and index wiring
+
+- `local` (Ops #322 T1–T3; Architecture #294/#295, `rm-ff8581d2` and `rm-657bc130`). H-B4-GUARDS: six reviewed mutations survived the old tests; the real Worker across two role witnesses, recovery followed by another silence, and executable checks of index.ts's B4 block should catch all six. Wrong if one survives, a clean case fails or production changes. Hypothesis and follow-up candidates: `docs/usage-accounting-wiring.md`, "Architecture review and the test-only follow-up". Production `8ecf3cf7` stays unchanged; its install ACCEPT is not the new six-bite result, which B5 must consume before landing.
+- `tests/unit/usage-accounting-host.test.ts`: T1 keeps the first-staged design subtotal after the witness changes to ops; T2 checks `build:false` after clearing both flags and a second alarm/unavailable after 300 s; T3 runs index.ts's startup block and shutdown statements with stand-ins and strips comments, checking full-window demand, actual 0700 directory creation, the stop call and the bounded 3000 ms race, with four in-test mutation controls. No timer, clock, timeout, source or model change.
+- `docs/usage-accounting-wiring.md`: correct the witness limit—role-unknown can last the whole week and makes every role partial, including an unreadable/short listing or sessions with no chat file; expect partial until G13, never claim a recorded zero complete. S2/S4 and the other suggestions are follow-up candidates only, not install conditions.
+- Checks: host tests and test typecheck; the existing wiring-document checker; Architecture's promised six independent bites. No new gate or benchmark. Undo: revert this test/doc commit; no install required for it.
+
 ## usage-accounting-host: the server runs design B's pass every 30 s and the Roles page shows its figures
 
 - `local` (Ops #322, automatic-cost-accounting B4; Ops #420 PLAN.md 5.4 and 5.8; owner `dr-8795124dce74`: build B, keep all detail, which covers this install and switching the counter on; Architecture #289 notes for B4). H-B4: nothing ran the pass, so Roles had no figures; starting the Worker from the server and ticking it every 30 s should publish within 31 s of a ledger line plus one W5 build, wrong if the live check measures more than 60 s to the Roles render at a quiet hour. Design, cadence, states and limits: `docs/usage-accounting-wiring.md`, "B4".
