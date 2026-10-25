@@ -8,7 +8,7 @@ import { isMainThread, parentPort, workerData } from "node:worker_threads";
 import { closePassState, openPassState, runPass, type PassOptions } from "./usage-accounting-pass.js";
 import { buildUsageMeterSnapshot } from "./usage-accounting-snapshot.js";
 
-export type UsagePassWorkerData = Omit<PassOptions, "roleOf" | "now" | "clock" | "slow">;
+export type UsagePassWorkerData = Omit<PassOptions, "roleOf" | "now" | "clock" | "slow" | "readOrder">;
 export type UsagePassMessage =
 	| {
 			kind: "pass";
