@@ -897,6 +897,39 @@ export async function taskChatFinished(file: string): Promise<boolean> {
 // The service
 // ---------------------------------------------------------------------------
 
+/** Internal synchronous I/O seam. The service still owns parsing, rotation, chain facts, notifications
+ * and error handling. Production defaults to the same file operations/bytes; memory-only tests may omit
+ * the unused disk copies. Not a policy, format, batching or restart/reload switch. */
+export interface RoleMessagePersistence {
+	read(file: string): string;
+	rename(from: string, to: string): void;
+	saveStore(file: string, data: unknown): void;
+	appendChains(file: string, facts: readonly unknown[]): void;
+	replaceChains(file: string, facts: readonly unknown[]): void;
+}
+
+const fileRoleMessagePersistence: RoleMessagePersistence = {
+	read: (file) => readFileSync(file, "utf8"),
+	rename: (from, to) => {
+		renameSync(from, to);
+	},
+	saveStore: (file, data) => {
+		mkdirSync(dirname(file), { recursive: true });
+		const tmp = `${file}.${process.pid}.tmp`;
+		writeFileSync(tmp, JSON.stringify(data));
+		renameSync(tmp, file);
+	},
+	appendChains: (file, facts) => {
+		mkdirSync(dirname(file), { recursive: true });
+		appendFileSync(file, facts.map((f) => `${JSON.stringify(f)}\n`).join(""));
+	},
+	replaceChains: (file, facts) => {
+		const tmp = `${file}.${process.pid}.tmp`;
+		writeFileSync(tmp, facts.map((f) => `${JSON.stringify(f)}\n`).join(""));
+		renameSync(tmp, file);
+	},
+};
+
 export class RoleMessages {
 	private data: StoreFile = { v: FILE_VERSION, paused: false, messages: [] };
 	private readonly inFlight = new Map<string, { idleSince?: number }>();
@@ -919,6 +952,7 @@ export class RoleMessages {
 		private readonly now: () => number = Date.now,
 		/** Internal fixed-input legacy replay seam, not an owner setting. */
 		private readonly policy: GuardPolicy = ROLE_MESSAGE_POLICY,
+		private readonly persistence: RoleMessagePersistence = fileRoleMessagePersistence,
 	) {
 		if (!guardPolicyIsValid(policy)) throw new Error("exact versioned role-message policy required");
 		this.load();
@@ -933,7 +967,7 @@ export class RoleMessages {
 	private loadChainMemory(): void {
 		let raw: string;
 		try {
-			raw = readFileSync(this.chainMemoryFile, "utf8");
+			raw = this.persistence.read(this.chainMemoryFile);
 		} catch {
 			return; // none yet
 		}
@@ -951,9 +985,7 @@ export class RoleMessages {
 		}
 		if (old === 0) return;
 		try {
-			const tmp = `${this.chainMemoryFile}.${process.pid}.tmp`;
-			writeFileSync(tmp, [...this.chainMemory.values()].map((f) => `${JSON.stringify(f)}\n`).join(""));
-			renameSync(tmp, this.chainMemoryFile);
+			this.persistence.replaceChains(this.chainMemoryFile, [...this.chainMemory.values()]);
 		} catch (err) {
 			this.log(`couldn't tidy the chain memory (${(err as Error).message})`);
 		}
@@ -976,8 +1008,7 @@ export class RoleMessages {
 		}));
 		for (const f of facts) this.chainMemory.set(f.id, f);
 		try {
-			mkdirSync(dirname(this.file), { recursive: true });
-			appendFileSync(this.chainMemoryFile, facts.map((f) => `${JSON.stringify(f)}\n`).join(""));
+			this.persistence.appendChains(this.chainMemoryFile, facts);
 		} catch (err) {
 			this.log(`couldn't keep the chain memory (${(err as Error).message}); it holds until the next restart`);
 		}
@@ -1010,7 +1041,7 @@ export class RoleMessages {
 	private load(): void {
 		let raw: string;
 		try {
-			raw = readFileSync(this.file, "utf8");
+			raw = this.persistence.read(this.file);
 		} catch {
 			return; // none yet
 		}
@@ -1026,7 +1057,7 @@ export class RoleMessages {
 			// Kept aside, not dropped: the owner can still read it.
 			const aside = `${this.file}.bad-${this.now()}`;
 			try {
-				renameSync(this.file, aside);
+				this.persistence.rename(this.file, aside);
 			} catch {
 				// leave it
 			}
@@ -1058,10 +1089,7 @@ export class RoleMessages {
 			this.rememberChains(gone);
 		}
 		try {
-			mkdirSync(dirname(this.file), { recursive: true });
-			const tmp = `${this.file}.${process.pid}.tmp`;
-			writeFileSync(tmp, JSON.stringify(this.data));
-			renameSync(tmp, this.file);
+			this.persistence.saveStore(this.file, this.data);
 		} catch (err) {
 			this.log(`couldn't save the store: ${(err as Error).message}`);
 		}

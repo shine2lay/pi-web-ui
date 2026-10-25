@@ -18,6 +18,7 @@ import {
 	world,
 	type World,
 } from "./role-message-guard-host-harness.js";
+import { memoryRoleMessagePersistence } from "./role-messages-memory.js";
 
 useGuardWorld();
 
@@ -34,7 +35,8 @@ describe("ladder: storage caps", () => {
 		const fixture = JSON.parse(
 			readFileSync(new URL("../fixtures/role-message-worst-window.json", import.meta.url), "utf8"),
 		) as { rows: [number, number, number, string, number][] };
-		const w = await world();
+		// M: one RoleMessages; fixture reads and real guard-store limits are not native-store I/O checks.
+		const w = await world(undefined, {}, memoryRoleMessagePersistence());
 		const names = [...Array.from({ length: 10 }, (_, i) => `r${i}`), "runaway"];
 		const home: Record<string, string> = {};
 		for (const name of names) {

@@ -9,7 +9,12 @@ import { afterEach, beforeEach, expect, vi } from "vitest";
 import { AskHub } from "../../server/asks.js";
 import type { IdentityDef } from "../../server/identities.js";
 import { RoleMessageGuardHost, type RoleMessageGuardHostOptions } from "../../server/role-message-guard-host.js";
-import { RoleMessages, type RoleMessageHost, type RoleMessageSender } from "../../server/role-messages.js";
+import {
+	RoleMessages,
+	type RoleMessageHost,
+	type RoleMessagePersistence,
+	type RoleMessageSender,
+} from "../../server/role-messages.js";
 import { GUARD_POLICY_V1 } from "../../server/role-message-limits.js";
 
 export let dir = "";
@@ -60,7 +65,12 @@ export let C = "";
 export let G = "";
 export let data = "";
 
-export async function world(prev?: World, extra: Partial<RoleMessageGuardHostOptions> = {}): Promise<World> {
+export async function world(
+	prev?: World,
+	extra: Partial<RoleMessageGuardHostOptions> = {},
+	/** Explicit M cases only; omitted everywhere a persisted copy matters. */
+	persistence?: RoleMessagePersistence,
+): Promise<World> {
 	const w: World = prev
 		? { ...prev, changed: 0 }
 		: ({
@@ -89,7 +99,7 @@ export async function world(prev?: World, extra: Partial<RoleMessageGuardHostOpt
 		log: (l) => w.logs.push(l),
 	};
 	// Existing frozen ladder vectors replay V1 explicitly; expanded tests select V2.
-	w.rm = new RoleMessages(join(data, "role-messages.json"), host, clock, extra.policy ?? GUARD_POLICY_V1);
+	w.rm = new RoleMessages(join(data, "role-messages.json"), host, clock, extra.policy ?? GUARD_POLICY_V1, persistence);
 	w.host = new RoleMessageGuardHost({
 		dir: join(data, "role-message-guard"),
 		roleMessages: () => w.rm,

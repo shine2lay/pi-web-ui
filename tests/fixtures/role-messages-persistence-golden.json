@@ -1,0 +1,31 @@
+{
+	"base": "2dca0e27",
+	"checkpoints": [
+		{
+			"store": { "bytes": 1207, "sha256": "d0638640a11d498bede346cc2152a928e1d062cb98efe4b0b43f2bc063dc1672" },
+			"chains": null
+		},
+		{
+			"store": { "bytes": 268210, "sha256": "4ace6da005dcfbe932e0df7873af170a3bfaab6a59526b9907ef3192319a8730" },
+			"chains": { "bytes": 421, "sha256": "eb7910a886f112aa90c0690976fb67523993fe9e478e64c7a095884d4983fcad" }
+		},
+		{
+			"store": { "bytes": 268209, "sha256": "e9f1acda38658fb64b210d2c07fe9de26740e920881c7cbe0fb74de996ae5bdc" },
+			"chains": { "bytes": 421, "sha256": "eb7910a886f112aa90c0690976fb67523993fe9e478e64c7a095884d4983fcad" }
+		},
+		{
+			"store": { "bytes": 268236, "sha256": "5d6b1bf25d42fa6e35a21fd338bee9c25801bc0cfeb26a8d6f61fcf6d1206eea" },
+			"chains": { "bytes": 421, "sha256": "eb7910a886f112aa90c0690976fb67523993fe9e478e64c7a095884d4983fcad" }
+		}
+	],
+	"tidy": { "bytes": 421, "sha256": "eb7910a886f112aa90c0690976fb67523993fe9e478e64c7a095884d4983fcad" },
+	"logs": {
+		"count": 1008,
+		"sha256": "796482637ab0780b9bab8bf9b268e1a199a0cf1521eace941b1e88a38d631dab",
+		"last": [
+			"[role-messages] paused by the owner",
+			"[role-messages] resumed by the owner",
+			"[role-messages] couldn't read the store (Expected property name or '}' in JSON at position 1 (line 1 column 2)); kept it as <dir>/role-messages.json.bad-1792929600000"
+		]
+	}
+}

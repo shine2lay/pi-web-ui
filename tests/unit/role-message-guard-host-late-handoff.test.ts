@@ -15,6 +15,7 @@ import {
 	world,
 	type World,
 } from "./role-message-guard-host-harness.js";
+import { memoryRoleMessagePersistence } from "./role-messages-memory.js";
 
 useGuardWorld();
 const M = 60_000;
@@ -100,7 +101,8 @@ describe("ladder: accepted messages outlive the hourly charge (#426)", () => {
 	it.each(["alpha", "ops", "temper"])(
 		"%s has the same cap decisions and rolling counts with or without a delayed entry",
 		async (sender) => {
-			const w = await world();
+			// M: one RoleMessages, no reload or persistence checks; the real guard store is unchanged.
+			const w = await world(undefined, {}, memoryRoleMessagePersistence());
 			const file = sender === "alpha" ? A : chat(`${sender}-home`);
 			if (sender !== "alpha") w.roles.push(role(sender, file));
 			const traces: unknown[] = [];
@@ -143,7 +145,8 @@ describe("ladder: accepted messages outlive the hourly charge (#426)", () => {
 	);
 
 	it("3,000 real acceptances with 1,500 hour-late hand-offs stay under every unchanged store cap", async () => {
-		const w = await world();
+		// M: one RoleMessages; logs below concern the guard store, not the omitted native disk copy.
+		const w = await world(undefined, {}, memoryRoleMessagePersistence());
 		const host = w.host as unknown as {
 			core: { reconcile(id: GuardOperationIdentity): Promise<unknown> };
 			maybeRotate(): Promise<void>;
