@@ -10,6 +10,13 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## queue-answer-frees-slot: a task waiting for an answer counts as no lane in use
+
+- `local` (owner 2026-10-24 via COO rm-8c09fea6: a task waiting on his answer, or on its main chat's or lead's, gives up its queue slot until the answer comes, then goes first; plan approved, relayed by COO rm-bf4fca2a; Ops #526). Pairs with pi-queue's answerFrees (landed first); hypothesis H-QUEUE-ANSWER-FREE-1 and result in pi-queue's `docs/answer-frees-slot.md`. Evidence: on 2026-10-24 Ops' four needs-you tasks held all 4 slots until 21:47 and nothing else could start.
+- `server/task-queue.ts`: `taskQueueAnswerFrees` (pi-queue's answerFrees): a task in a chat of its own that is asking or stuck holds no slot, unless it runs alone (nothing in touches). `taskQueueLaneUse` (roles-lanes) leaves such tasks out, so the Roles card's and the role panel's "N of M lanes in use" count what pi-queue counts against its lanes at once. Answered, the task is at work and counts again; N still never exceeds M (one over after an answer reads M of M). Lanes, the Queue panel, question routing and everything else unchanged.
+- Checks: `tests/unit/task-queue.test.ts` (asking, stuck and stalled lane tasks left out, answered ones counted, a runs-alone one counted, paused and queue-chat tasks unchanged; parity with pi-queue's own `schedule()`: it starts exactly M - N tasks, and none beside a waiting runs-alone task), `tests/unit/roles-lanes.test.ts` (asking and stuck now count as none); they fail on the code before. Then the landing gate with `PI_QUEUE_PKG` at the pi-queue worktree.
+- Undo: `pi-web-deploy rollback`, or revert this commit (and pi-queue's) and deploy.
+
 ## usage-week-observations: keep every typed usage observation, committed with the numeric log and cursors
 
 - `local` (Ops #500, automatic-cost-accounting, prerequisite of B3 #423; Architecture `rm-21ceb823`, confirmed `rm-618a7a63`; owner `dr-8795124dce74`: build B, keep all usage detail). H-B2-OBS: B2's numeric records cannot rebuild what B3 must hand W5 (unresolved facts, facts without a `responseId`, revisions, aliases, allocations, dependency rows, role witnesses); one closed observations log, committed by the same checkpoint as the numeric log and the cursors, should replay fixed synthetic rows exactly, invent nothing and advance no cursor past uncommitted rows; wrong on metadata drift, a guessed identity or funding row, a legacy week reported complete, or a cap exceeded. Result: **HIT** on its fixed cases; no speed bar of its own (H-B2 stays a MISS). Format, API, limits and measurements: `docs/usage-accounting-week-store.md`, "All observations".

@@ -31,7 +31,8 @@ describe("taskQueueLaneUse: lanes at once and in use", () => {
 	});
 
 	// queue-wait-frees-lane (owner 2026-10-18): only tasks at work count, the way pi-queue counts its lanes at once.
-	it("counts tasks at work (working, asking, stuck); on hold, blocked or paused by the owner, a task uses none", () => {
+	// queue-answer-frees-slot (owner 2026-10-24, Ops #526): a task waiting for an answer holds no slot either.
+	it("counts tasks at work; on hold, blocked, paused by the owner or waiting for an answer, a task uses none", () => {
 		const q = [
 			op({ op: "lanes", n: 4 }),
 			add(1, ["a"]),
@@ -53,13 +54,13 @@ describe("taskQueueLaneUse: lanes at once and in use", () => {
 			[4, "ready"],
 		]);
 		expect(taskQueueLaneUse(queue)).toEqual({ atOnce: 4, inUse: 1 });
-		// Asking its main chat or stuck, a task is still at work.
+		// Asking its main chat or lead, or stuck on the owner, a task waits for an answer and uses none; answered, it is
+		// at work again and counts (one that runs alone still counts while it waits: task-queue.test.ts).
 		const asking = [...startInChat(4), op({ op: "ask", id: 4, question: "Which port?", choices: ["a", "b"], n: 1 })];
-		expect(use([...q, ...asking])).toEqual({ atOnce: 4, inUse: 2 });
-		expect(use([...q, ...startInChat(4), op({ op: "stuck", id: 4, question: "How?" })])).toEqual({
-			atOnce: 4,
-			inUse: 2,
-		});
+		expect(use([...q, ...asking])).toEqual({ atOnce: 4, inUse: 1 });
+		const stuck = [...startInChat(4), op({ op: "stuck", id: 4, question: "How?" })];
+		expect(use([...q, ...stuck])).toEqual({ atOnce: 4, inUse: 1 });
+		expect(use([...q, ...stuck, op({ op: "resume", id: 4 })])).toEqual({ atOnce: 4, inUse: 2 });
 		// Its wait over, a task counts again only once it is back at work (pi-queue brings it back).
 		expect(use([...q, op({ op: "wait_over", id: 2 })])).toEqual({ atOnce: 4, inUse: 1 });
 		// Paused by the owner, a task at work uses none (pi-queue starts no other task in its lane meanwhile).

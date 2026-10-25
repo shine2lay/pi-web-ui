@@ -1041,18 +1041,31 @@ export function taskQueueHeld(
 const LANE_AT_WORK: ReadonlySet<Status> = new Set(["working", "asking", "stuck"]);
 
 /**
+ * queue-answer-frees-slot (owner 2026-10-24, Ops #526): pi-queue's answerFrees. A task in a chat of its own that
+ * waits for an answer (asking: its question is with its main chat or lead; stuck: it needs the user) holds no slot
+ * until the answer comes; it keeps its lane. Answered, it is at work and counts again. Not when it runs alone
+ * (nothing declared in touches, so its lane runs alone): then it holds everything while it waits, as before.
+ */
+export function taskQueueAnswerFrees(t: Pick<TaskQueueTaskAny, "status" | "lane" | "touches">): boolean {
+	return t.lane === true && (t.status === "asking" || t.status === "stuck") && (t.touches?.length ?? 0) > 0;
+}
+
+/**
  * roles-lanes: how many lanes a queue may run at once (`atOnce`: its lanesAtOnce, 2 when not set) and how
  * many are in use now (`inUse`), never more than `atOnce`. queue-wait-frees-lane (owner 2026-10-18): counted
  * the way pi-queue counts them against its lanes at once (isActive): its tasks at work in chats of their own,
  * not paused by the owner. A task on hold or blocked uses none (a blocked one keeps its lane for later; one on
- * hold, not even that).
+ * hold, not even that). queue-answer-frees-slot: nor does one waiting for an answer, unless it runs alone
+ * (taskQueueAnswerFrees).
  */
 export function taskQueueLaneUse(q: Pick<UiTaskQueue, "tasks" | "lanesAtOnce">): {
 	atOnce: number;
 	inUse: number;
 } {
 	const atOnce = q.lanesAtOnce ?? TASK_QUEUE_DEFAULT_LANES;
-	const inUse = q.tasks.filter((t) => t.lane && LANE_AT_WORK.has(t.status as Status) && !t.hold).length;
+	const inUse = q.tasks.filter(
+		(t) => t.lane && LANE_AT_WORK.has(t.status as Status) && !t.hold && !taskQueueAnswerFrees(t),
+	).length;
 	return { atOnce, inUse: Math.min(inUse, atOnce) };
 }
 

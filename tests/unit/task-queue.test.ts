@@ -21,6 +21,7 @@ import {
 	taskQueueAll,
 	taskQueueCommandLine,
 	taskQueueFromEntries,
+	taskQueueLaneUse,
 	taskQueueShareableFrom,
 	taskQueueShareableOf,
 	taskQueueShareableSetting,
@@ -1520,4 +1521,121 @@ describe("taskQueueFromEntries (queue-drop)", () => {
 		const bare = { op: "after_over", id: 4, file: ref.file, n: 38, dropped: "x" };
 		expect(byId(replay(entries([add, bare])), 4)?.outside?.[0].over).toMatchObject({ removed: true, dropped: "x" });
 	});
+});
+
+/**
+ * queue-answer-frees-slot (owner 2026-10-24, Ops #526): a task waiting for an answer (asking its main chat or lead, or
+ * stuck on the owner) holds no slot until the answer comes, as pi-queue's answerFrees has it; unless it runs alone.
+ */
+describe("taskQueueLaneUse (queue-answer-frees-slot)", () => {
+	const adds = (touches: string[][]) =>
+		touches.map((t, i) => ({ op: "add", id: i + 1, plan: plan(`Task ${i + 1}`), touches: t }));
+	const inChat = (...ids: number[]) =>
+		ids.flatMap((id) => [
+			{ op: "start", id, lane: true },
+			{ op: "chat", id, file: `/sessions/task-${id}.jsonl`, title: `Task ${id}` },
+		]);
+	const stuck = (id: number) => ({ op: "stuck", id, question: "Which one?", choices: ["A", "B"] });
+	const asking = (id: number) => ({ op: "ask", id, question: "Which port?", choices: ["8080", "8081"], n: 1 });
+	const stalled = (id: number) => ({
+		op: "stuck",
+		id,
+		question: "It stopped twice without finishing.",
+		choices: ["Carry on", "Remove it"],
+		stalled: true,
+	});
+	const use = (ops: Array<Record<string, unknown>>) => taskQueueLaneUse(replay(entries(ops)));
+
+	it("leaves out lane tasks that are asking or stuck, unless they run alone; answered, they count again", () => {
+		// Lanes 4: #1 working, #2 needs the owner, #3 asks its lead, #4 stuck on the watchdog's "stopped twice" question.
+		const four = [{ op: "lanes", n: 4 }, ...adds([["a"], ["b"], ["c"], ["d"]]), { op: "run" }, ...inChat(1, 2, 3, 4)];
+		const waiting = [...four, stuck(2), asking(3), stalled(4)];
+		expect(replay(entries(waiting)).tasks.map((t) => t.status)).toEqual(["working", "stuck", "asking", "stuck"]);
+		expect(use(waiting)).toEqual({ atOnce: 4, inUse: 1 });
+		// Answered (its chat resumes), a task is at work again; "Carry on" brings the stalled one back the same way.
+		expect(use([...waiting, { op: "resume", id: 2, answered: 1 }])).toEqual({ atOnce: 4, inUse: 2 });
+		expect(use([...waiting, { op: "resume", id: 3, answered: 1 }, { op: "resume", id: 4 }])).toEqual({
+			atOnce: 4,
+			inUse: 3,
+		});
+		// A task that runs alone (nothing in touches) holds everything while it waits, so it still counts.
+		const alone = [{ op: "lanes", n: 3 }, ...adds([[], ["b"]]), { op: "run" }, ...inChat(1)];
+		expect(use([...alone, stuck(1)])).toEqual({ atOnce: 3, inUse: 1 });
+		expect(use([...alone, asking(1)])).toEqual({ atOnce: 3, inUse: 1 });
+		// Unchanged: paused by the owner it uses none; in the queue's own chat (no lane of its own) it isn't counted.
+		expect(use([...alone, stuck(1), { op: "hold", id: 1, why: "owner" }])).toEqual({ atOnce: 3, inUse: 0 });
+		const ownChat = [{ op: "add", id: 1, plan: plan("Old") }, { op: "run" }, { op: "start", id: 1 }, stuck(1)];
+		expect(use(ownChat)).toEqual({ atOnce: 2, inUse: 0 });
+	});
+
+	// pi-queue's own schedule() is the reference: with enough ready tasks in lanes of their own, it starts exactly the
+	// slots the card shows free (M - N), the waiting tasks' slots included. Its first import of pi-queue's queue.ts
+	// takes most of the time (see the parity test above), hence the same 15 s limit.
+	it("matches pi-queue's count: pi-queue starts as many tasks as the card shows lanes free", async () => {
+		const pkg = process.env.PI_QUEUE_PKG ?? join(userInfo().homedir, "projects", "pi-queue");
+		const file = join(pkg, "queue.ts");
+		if (!existsSync(file)) throw new Error(`pi-queue not found at ${pkg} (set PI_QUEUE_PKG)`);
+		const pq = await import(/* @vite-ignore */ pathToFileURL(file).href);
+		if (typeof pq.answerFrees !== "function") {
+			throw new Error(
+				`pi-queue at ${pkg} has no answerFrees (Ops #526): land pi-queue's half first, or set PI_QUEUE_PKG`,
+			);
+		}
+		const started = (ops: Array<Record<string, unknown>>) =>
+			(pq.schedule(pq.replay(entries(ops)), true) as { start: Array<{ task: { id: number } }> }).start.map(
+				(x) => x.task.id,
+			);
+		const readyFour = [["e"], ["f"], ["g"], ["h"]];
+		const scenarios: Array<[string, Array<Record<string, unknown>>, number]> = [
+			[
+				"one working, three waiting for an answer",
+				[
+					{ op: "lanes", n: 4 },
+					...adds([["a"], ["b"], ["c"], ["d"], ...readyFour]),
+					{ op: "run" },
+					...inChat(1, 2, 3, 4),
+					stuck(2),
+					asking(3),
+					stalled(4),
+				],
+				1,
+			],
+			[
+				"one answered, one paused while asking, one blocked",
+				[
+					{ op: "lanes", n: 4 },
+					...adds([["a"], ["b"], ["c"], ["d"], ...readyFour]),
+					{ op: "run" },
+					...inChat(1, 2, 3, 4),
+					stuck(2),
+					{ op: "resume", id: 2, answered: 1 },
+					asking(3),
+					{ op: "hold", id: 3, why: "owner" },
+					{ op: "block", id: 4, need: "a deploy" },
+				],
+				2,
+			],
+			[
+				"answered while every slot was taken: one over, the card says 2 of 2",
+				[
+					...adds([["a"], ["b"], ["c"], ["d"], ["e"]]),
+					{ op: "run" },
+					...inChat(1, 2),
+					stuck(1),
+					...inChat(3),
+					{ op: "resume", id: 1, answered: 1 },
+				],
+				2,
+			],
+		];
+		for (const [name, ops, inUse] of scenarios) {
+			const lanes = use(ops);
+			expect(lanes.inUse, name).toBe(inUse);
+			expect(started(ops).length, name).toBe(lanes.atOnce - lanes.inUse);
+		}
+		// A task that runs alone holds every start while it waits for an answer; the card counts it.
+		const alone = [{ op: "lanes", n: 3 }, ...adds([[], ["b"], ["c"]]), { op: "run" }, ...inChat(1), stuck(1)];
+		expect(use(alone)).toEqual({ atOnce: 3, inUse: 1 });
+		expect(started(alone)).toEqual([]);
+	}, 15_000);
 });
