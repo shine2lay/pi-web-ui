@@ -1,6 +1,6 @@
 // Ops #423 B3: design B's bounded pass. Each case runs in a Worker with METER_WORKER_RESOURCE_LIMITS (B2's store
 // refuses the main thread), on synthetic copies of the W0 and #304 fixtures only.
-import { mkdtempSync, mkdirSync, copyFileSync, rmSync, utimesSync } from "node:fs";
+import { mkdtempSync, mkdirSync, copyFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +8,7 @@ import { Worker } from "node:worker_threads";
 import { build } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
 import { METER_WORKER_RESOURCE_LIMITS } from "../../server/usage-accounting-meter-contract.js";
+import { PASS_LIMITS } from "../../server/usage-accounting-pass.js";
 import { PASS_SCAN_LIMITS } from "../../server/usage-accounting-pass-scan.js";
 import { startUsagePassWorker } from "../../server/usage-accounting-pass-host.js";
 
@@ -106,8 +107,13 @@ describe("usage accounting pass (Ops #423 B3)", { timeout: 120_000 }, () => {
 		expect(r.appended.bytesRead).toBeGreaterThanOrEqual(r.lineBytes);
 		expect(r.after).toMatchObject({ bytesRead: 0, files: 0 });
 		expect(r.totals).toMatchObject({ gross: "3.5", dedup: "3.5", facts: 3001 });
-		// The budget bounds every pass, even a cold catch-up (one #304 read may finish past it).
-		for (const p of r.first) expect(p.workMs).toBeLessThan(2000 + 1000);
+		// Bounded by work, not by wall-clock time (Architecture #278 S1; timing is the large case's): the budget bounds
+		// every pass's bytes, even a cold catch-up (one #304 read may finish past it), and across the catch-up the file
+		// is read once, plus at most 64 KiB of anchor re-checks per read.
+		for (const p of r.first) expect(p.bytesRead).toBeLessThanOrEqual(PASS_LIMITS.bytes + PASS_LIMITS.readWorstBytes);
+		const sum = (k: "bytesRead" | "reads") => r.first.reduce((n: number, p: Record<string, number>) => n + p[k], 0);
+		expect(sum("bytesRead")).toBeGreaterThanOrEqual(r.fileBytes);
+		expect(sum("bytesRead")).toBeLessThanOrEqual(r.fileBytes + sum("reads") * 65_536);
 	});
 
 	it("survives cursor faults without charging anything twice", async () => {
@@ -188,6 +194,153 @@ describe("usage accounting pass (Ops #423 B3)", { timeout: 120_000 }, () => {
 		expect(r.receipts.weeks).toEqual([
 			expect.objectContaining({ week: "2026-10-19", receipts: true, checkpoint: true, sealed: false }),
 		]);
+		// Architecture #278 M2: the same response with other numbers in a later read, and again after a reopen, meets
+		// its stored receipt: a conflict gap, nothing charged twice, the week stays available.
+		for (const step of [r.changed, r.changedAfterReopen]) {
+			expect(step.broken).toBe(false);
+			expect(step.completed).toBe(true);
+			expect(step.faults["event-conflict"]).toBeGreaterThan(0);
+		}
+		expect(r.afterChanged).toEqual(r.first);
+		expect(r.afterChangedReopen).toEqual(r.first);
+		expect(r.w5).not.toBe("unavailable");
+	});
+
+	it("meets its own staged first receipt when a repeat comes in a later ledger read of the same pass", async () => {
+		// Architecture #277 MF1 / T3a: 140 rows apart, the two lines come in two W2 calls of one pass.
+		const r = await run("ledgerSplit");
+		for (const layout of ["split", "together"]) {
+			const x = r[layout];
+			expect(x.state.broken).toBe(false);
+			expect(last<{ status: string; completed: boolean }>(x.passes)).toMatchObject({ completed: true });
+			expect(last<{ status: string }>(x.passes).status).not.toBe("unavailable");
+			expect(x.totals).toEqual({ gross: "0.265", dedup: "0.265", facts: 141, aliases: 0 });
+			expect(x.after).toEqual(x.totals);
+		}
+	});
+
+	it("records an unfinished line over 4 MiB once, then reads nothing until the file grows", async () => {
+		// Architecture #277 MF2 / T3b and #278 M1/M3.
+		const r = await run("oversized");
+		const first = last<{ completed: boolean; bytesRead: number; ledgerBytes: number }>(r.first);
+		expect(first.completed).toBe(true);
+		// The other file and the ledger are read in the same pass, not starved by the long line.
+		expect(first.ledgerBytes).toBeGreaterThan(0);
+		expect(r.firstTotals).toMatchObject({ gross: "0.345", facts: 4 });
+		expect(r.afterFirst).toEqual({ big: { state: "waiting", growth: true }, unknown: { sessions: 1, ledger: 0 } });
+		// Idle: nothing re-read, and the gap still shows: partial, complete-through not moved.
+		expect(r.idle).toMatchObject({ bytesRead: 0, reads: 0, completed: true, big: { state: "waiting", growth: true } });
+		expect(r.idle.sessions).toEqual({ status: "partial", through: r.weekStart });
+		// The line ends and a call follows: the call counts once and the gap stays one.
+		expect(r.finished).toMatchObject({ completed: true, files: 1 });
+		expect(r.finished.bytesRead).toBeLessThan(r.tailBytes);
+		expect(r.finishedTotals).toMatchObject({ gross: "0.845", dedup: "0.845", facts: 5 });
+		for (const step of [r.later, r.reopened]) {
+			expect(step.sessions).toEqual({ status: "partial", through: r.weekStart });
+			expect(step.unknown).toEqual({ sessions: 1, ledger: 0 });
+		}
+		expect(r.later).toMatchObject({ bytesRead: 0, reads: 0 });
+		expect(r.reopenedTotals).toEqual(r.finishedTotals);
+	});
+
+	it("gives the same totals whichever copy, child or parent, it reads first, and after a restart", async () => {
+		// Architecture #277 T2 (M8).
+		const r = await run("order");
+		expect(r.descending.order).toEqual([...r.ascending.order].reverse());
+		for (const way of ["ascending", "descending"]) {
+			expect(r[way].status).toBe("fresh");
+			expect({ gross: r[way].totals.gross, dedup: r[way].totals.dedup }).toEqual(r.direct);
+			expect(r[way].after).toEqual(r[way].totals);
+		}
+		expect(r.descending.totals).toEqual(r.ascending.totals);
+	});
+
+	it("splits ledger calls at Monday 00:00 Pacific and never makes a late row a first", async () => {
+		// Architecture #277 T1 (M10).
+		const r = await run("ledgerRollover");
+		expect(r.before).toMatchObject({ week: "2026-10-19", records: 1 });
+		// In the grace: Sunday's call stays last week's, its repeat is a duplicate there, Monday's call is this week's.
+		expect(r.grace).toMatchObject({
+			week: "2026-10-26",
+			cur: 1,
+			prev: 1,
+			broken: false,
+			unknown: { cur: { sessions: 0, ledger: 0 }, prev: { sessions: 0, ledger: 0 } },
+		});
+		expect(r.graceTotals).toMatchObject({ gross: "0.25", dedup: "0.25", facts: 1 });
+		// Past the grace a late Sunday row is history: counted as such, never charged, never a first.
+		expect(r.late).toMatchObject({ history: 1, cur: 1, broken: false, completed: true });
+		expect(r.lateTotals).toEqual(r.graceTotals);
+		expect(r.stored).toEqual({ prev: 1, cur: 1 });
+	});
+
+	it("refuses a session root at or inside a Temper root instead of scanning it to zero", async () => {
+		// Architecture #277 S2.
+		expect(await run("scanRefusal")).toEqual({
+			inside: "usage-pass-inventory-input",
+			same: "usage-pass-inventory-input",
+			parent: "scanned",
+		});
+	});
+
+	it("has the Worker drop a tick that arrives while its pass runs, even without the host's guard", async () => {
+		// Architecture #278 S2: the Worker's own single-flight guard, reached directly (two ticks, no host).
+		const code = await bundle("../../server/usage-accounting-pass-worker.ts");
+		const dir = temp();
+		mkdirSync(join(dir, "sessions", "cwd"), { recursive: true, mode: 0o700 });
+		mkdirSync(join(dir, "data"), { mode: 0o700 });
+		// A chat file to read: the pass then waits on file I/O, and the second tick arrives while it runs.
+		const file = join(dir, "sessions", "cwd", "plain.jsonl");
+		copyFileSync(join(fixtures, "usage-accounting-pi-sessions", "plain.jsonl"), file);
+		const at = new Date();
+		utimesSync(file, at, at);
+		const worker = new Worker(code, {
+			eval: true,
+			resourceLimits: { ...METER_WORKER_RESOURCE_LIMITS },
+			workerData: {
+				usagePass: {
+					dataDir: join(dir, "data"),
+					lease: new SharedArrayBuffer(4),
+					epoch: "c".repeat(64),
+					sessionRoots: [join(dir, "sessions")],
+					temperRoots: [],
+					ledgerDirectory: null,
+					production: "disabled",
+					subjects: [{ subject: { kind: "role", role: "design" }, policy: null }],
+				},
+			},
+		});
+		const kinds: string[] = [];
+		try {
+			await new Promise<void>((done, fail) => {
+				worker.on("message", (m: { kind: string }) => {
+					kinds.push(m.kind);
+					if (m.kind === "pass") done();
+				});
+				worker.once("error", fail);
+				worker.postMessage({ kind: "tick" });
+				worker.postMessage({ kind: "tick" });
+			});
+			expect(kinds).toEqual(["dropped", "pass"]);
+		} finally {
+			await worker.terminate();
+		}
+	});
+
+	it("reports a worker exit it did not ask for as lost, exit code 0 included, and stops ticking", async () => {
+		// Architecture #277 S4.
+		const messages: unknown[] = [];
+		const host = startUsagePassWorker(
+			"process.exit(0)",
+			{} as Parameters<typeof startUsagePassWorker>[1],
+			(m) => messages.push(m),
+			{ eval: true },
+		);
+		await new Promise((done) => host.worker.once("exit", done));
+		expect(messages).toEqual([{ kind: "worker-unavailable" }]);
+		expect(host.tick()).toBe(false);
+		await host.close();
+		expect(messages).toHaveLength(1);
 	});
 
 	it("runs in a Worker with METER_WORKER_RESOURCE_LIMITS and drops a tick while one is outstanding", async () => {
@@ -233,24 +386,33 @@ describe("usage accounting pass (Ops #423 B3)", { timeout: 120_000 }, () => {
 		} finally {
 			await host.close();
 		}
+		// A close it asked for is not a lost worker.
+		expect(messages.some((m) => m.kind === "worker-unavailable")).toBe(false);
 	});
 
 	// Not part of the gate (minutes, about 0.5 GB): B_PASS_LARGE_CASE=1 times synthetic E1 (125k) and E2 (250k) weeks.
-	// It prints the R-steady, R-W5 and R-MEM numbers recorded in docs/usage-accounting-pass.md and checks H-B3's bars.
+	// It writes the R-steady, R-W5 and R-MEM numbers recorded in docs/usage-accounting-pass.md as JSON to the file named
+	// by B_PASS_LARGE_OUT (the gate's vitest config silences console output: Architecture #278 M5) and holds H-B3's bars.
 	it.runIf(process.env.B_PASS_LARGE_CASE === "1")(
 		"measures E1 and E2: steady pass, W5 build (R-W5) and heap (R-MEM)",
 		{ timeout: 1_800_000 },
 		async () => {
+			const out: Record<string, unknown> = { at: new Date().toISOString() };
+			const save = () => {
+				if (process.env.B_PASS_LARGE_OUT)
+					writeFileSync(process.env.B_PASS_LARGE_OUT, `${JSON.stringify(out, null, 1)}\n`, { mode: 0o600 });
+			};
 			for (const name of ["e1", "e2"]) {
 				const r = await run(name);
-				console.log(name, JSON.stringify({ ...r, w5: { ...r.w5, runs: r.w5.runs.map(Math.round) } }));
+				out[name] = { ...r, w5: { ...r.w5, runs: r.w5.runs.map(Math.round) } };
+				save();
 				expect(r.unknown).toEqual({ sessions: 0, ledger: 0 });
 				expect(r.idle).toMatchObject({ bytesRead: 0, statuses: ["fresh"] });
 				expect(r.steady.statuses).toEqual(["fresh"]);
 				expect(r.w5.state).toBe("ready");
-				// H-B3 (hit or miss is reported, not hidden): a steady pass within 1 s; W5 at 125k within 25 s.
-				console.log(name, "H-B3 steady", r.steady.maxWorkMs <= 1000 ? "HIT" : "MISS", r.steady.maxWorkMs);
-				if (name === "e1") console.log(name, "H-B3 R-W5", r.w5.snapshotMs <= 25_000 ? "HIT" : "MISS", r.w5.snapshotMs);
+				// H-B3's bars: a steady pass within 1 s; W5 at 125k (E1) within 25 s. E2's W5 has no bar (an open point).
+				expect(r.steady.maxWorkMs).toBeLessThanOrEqual(1000);
+				if (name === "e1") expect(r.w5.snapshotMs).toBeLessThanOrEqual(25_000);
 			}
 		},
 	);

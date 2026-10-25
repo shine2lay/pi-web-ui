@@ -33,7 +33,12 @@ import {
 	type PassResult,
 	type PassState,
 } from "../../server/usage-accounting-pass.js";
-import { passFileKey } from "../../server/usage-accounting-pass-scan.js";
+import {
+	closePassInventory,
+	newPassInventory,
+	passFileKey,
+	scanPassInventory,
+} from "../../server/usage-accounting-pass-scan.js";
 import { PiSessionUsageReader } from "../../server/usage-accounting-pi-sessions.js";
 import { buildUsageMeterSnapshot, type SnapshotPartition } from "../../server/usage-accounting-snapshot.js";
 
@@ -218,6 +223,45 @@ function entry(id: string, at: string, cost = 0.1): string {
 }
 function header(id: string, at: string): string {
 	return JSON.stringify({ type: "session", version: 3, id, timestamp: at, cwd: "/synthetic-only" }) + "\n";
+}
+/** One usage-ledger/1 line (a helper's call), synthetic only. */
+function ledgerRecord(changes: Record<string, unknown> = {}): string {
+	return (
+		JSON.stringify({
+			v: "usage-ledger/1",
+			at: "2026-10-20T09:00:00.000Z",
+			occurredAt: "2026-10-20T09:00:00.000Z",
+			kind: "assistant",
+			provider: "anthropic",
+			model: "recorded-model",
+			modelSource: "response",
+			responseId: "helper-response-1",
+			stopReason: "stop",
+			input: 10,
+			output: 2,
+			cacheRead: 3,
+			cacheWrite: 4,
+			totalTokens: 19,
+			costTotal: 0.125,
+			conversationId: "helper-1",
+			sessionId: "session-1",
+			sessionFile: null,
+			persist: false,
+			origin: "helper",
+			parentConversationId: "parent-1",
+			...changes,
+		}) + "\n"
+	);
+}
+function ledgerDir(parent = "."): string {
+	const d = join(dir, parent, "usage-ledger");
+	mkdirSync(d, { recursive: true, mode: 0o700 });
+	return d;
+}
+/** The current week's coverage row for one group (index 0 sessions, 1 ledger), as the pass handed it to W5. */
+function row(r: PassResult, index: number) {
+	const c = r.input?.coverage[index];
+	return c ? { status: c.status, through: c.through } : null;
 }
 
 // W0's known cases (tests/unit/usage-accounting-collector.test.ts), built the same way.
@@ -461,6 +505,29 @@ async function measureWeek(
 const last = <T>(xs: T[]): T => xs[xs.length - 1]!;
 
 const cases: Record<string, () => Promise<unknown>> = {
+	async scanRefusal() {
+		// Architecture #277 S2: a session root at or inside a Temper root is refused, not scanned to a quiet zero.
+		const temper = join(dir, "temper");
+		const inside = join(temper, "sessions");
+		mkdirSync(inside, { recursive: true, mode: 0o700 });
+		const attempt = (roots: string[], temperRoots: string[]) => {
+			const inv = newPassInventory("2026-10-19");
+			try {
+				scanPassInventory(inv, { roots, temperRoots, asOf: AS_OF });
+				return "scanned";
+			} catch (e) {
+				return (e as Error).message;
+			} finally {
+				closePassInventory(inv);
+			}
+		};
+		return {
+			inside: attempt([inside], [temper]),
+			same: attempt([temper], [temper]),
+			// The normal case: a Temper root inside a session root is skipped, not refused.
+			parent: attempt([dir], [temper]),
+		};
+	},
 	async e0() {
 		return scale(8_192, 64);
 	},
@@ -797,31 +864,7 @@ const cases: Record<string, () => Promise<unknown>> = {
 		copySessions(["plain"]);
 		const ledgerDir = join(dir, "usage-ledger");
 		mkdirSync(ledgerDir, { mode: 0o700 });
-		const record = (changes: Record<string, unknown>) =>
-			JSON.stringify({
-				v: "usage-ledger/1",
-				at: "2026-10-20T09:00:00.000Z",
-				occurredAt: "2026-10-20T09:00:00.000Z",
-				kind: "assistant",
-				provider: "anthropic",
-				model: "recorded-model",
-				modelSource: "response",
-				responseId: "helper-response-1",
-				stopReason: "stop",
-				input: 10,
-				output: 2,
-				cacheRead: 3,
-				cacheWrite: 4,
-				totalTokens: 19,
-				costTotal: 0.125,
-				conversationId: "helper-1",
-				sessionId: "session-1",
-				sessionFile: null,
-				persist: false,
-				origin: "helper",
-				parentConversationId: "parent-1",
-				...changes,
-			}) + "\n";
+		const record = ledgerRecord;
 		const file = join(ledgerDir, "2026-10.jsonl");
 		writeFileSync(file, record({}) + record({ responseId: "helper-response-2", costTotal: 0.25 }), { mode: 0o600 });
 		const s = open({ ledgerDirectory: ledgerDir, production: "enabled" });
@@ -838,8 +881,199 @@ const cases: Record<string, () => Promise<unknown>> = {
 		const reopened = brief(await runPass(fresh));
 		const afterReopen = observed(fresh, AS_OF);
 		const receipts = fresh.store.listWeeks();
+		// M2: the same response with other numbers, in a later read (the cursor has moved): W2's conflict rule holds
+		// only through the stored receipt. A conflict gap, the week stays available, nothing charged twice.
+		appendFileSync(file, record({ costTotal: 0.5, at: "2026-10-20T09:30:00.000Z" }));
+		const changed = { ...brief(await runPass(fresh)), broken: fresh.broken };
+		const afterChanged = observed(fresh, AS_OF);
 		closePassState(fresh);
-		return { passes, first, ledgerFaults, steady, repeat, afterRepeat, reopened, afterReopen, receipts };
+		// And after a reopen: the receipt comes from the hash-checked week log, not from memory.
+		const again = open({ ledgerDirectory: ledgerDir, production: "enabled" });
+		await runPass(again);
+		appendFileSync(file, record({ costTotal: 0.75, at: "2026-10-20T09:40:00.000Z" }));
+		const changedAfterReopen = { ...brief(await runPass(again)), broken: again.broken };
+		const afterChangedReopen = observed(again, AS_OF);
+		const w5 = meter(again, AS_OF).state;
+		closePassState(again);
+		return {
+			passes,
+			first,
+			ledgerFaults,
+			steady,
+			repeat,
+			afterRepeat,
+			reopened,
+			afterReopen,
+			receipts,
+			changed,
+			afterChanged,
+			changedAfterReopen,
+			afterChangedReopen,
+			w5,
+		};
+	},
+
+	async ledgerSplit() {
+		// Architecture #277 T3a (MF1): one response twice, its two lines far enough apart that W2 reads them in two calls
+		// of one pass (LEDGER_SOURCE_LIMITS.records is 128), against the same two lines side by side (one call).
+		const fillers = Array.from({ length: 140 }, (_, i) =>
+			ledgerRecord({ responseId: `filler-${i}`, costTotal: 0.001 }),
+		).join("");
+		const a = ledgerRecord({ responseId: "same-response" });
+		const again = ledgerRecord({ responseId: "same-response", at: "2026-10-20T09:30:00.000Z" });
+		const layouts = { split: a + fillers + again, together: a + again + fillers };
+		const out: Record<string, unknown> = {};
+		for (const [layout, text] of Object.entries(layouts)) {
+			const d = ledgerDir(`ledger-${layout}`);
+			mkdirSync(sessions, { recursive: true, mode: 0o700 });
+			writeFileSync(join(d, "2026-10.jsonl"), text, { mode: 0o600 });
+			const extra = { dataDir: join(dir, `data-${layout}`), ledgerDirectory: d, production: "enabled" as const };
+			const s = open(extra);
+			const passes = await until(s);
+			const state = { broken: s.broken, error: s.lastError, unknown: { ...s.cur!.unknown }, w5: meter(s, AS_OF).state };
+			// A broken pass (the week unavailable) has no committed totals to compare: the test says so instead.
+			const down = state.broken || last(passes).status === "unavailable";
+			const totals = down ? null : observed(s, AS_OF);
+			closePassState(s);
+			const after = down ? null : await replayed(AS_OF, extra);
+			out[layout] = { passes, totals, state, after: after?.totals ?? null, afterStatus: after?.pass.status ?? null };
+		}
+		return out;
+	},
+
+	async oversized() {
+		// Architecture #277 T3b (MF2) and #278 M3/M1: an unterminated tail over 4 MiB, then finished by an append.
+		copySessions(["plain"]);
+		const big = join(sessions, "cwd", "big.jsonl");
+		const tail = `{"type":"custom","data":"${"x".repeat(5 * 1024 * 1024)}`;
+		writeFileSync(
+			big,
+			header("session-big", "2026-10-20T08:00:00.000Z") + entry("big-1", "2026-10-20T08:10:00.000Z") + tail,
+		);
+		stamp(big, "2026-10-20T11:00:00.000Z");
+		const d = ledgerDir();
+		writeFileSync(join(d, "2026-10.jsonl"), ledgerRecord(), { mode: 0o600 });
+		const s = open({ ledgerDirectory: d, production: "enabled" });
+		const bigState = () => {
+			const f = [...s.files.values()].find((x) => x.file === big)!;
+			return { state: f.state, growth: f.growth };
+		};
+		const first = await until(s);
+		const firstTotals = observed(s, AS_OF);
+		const afterFirst = { big: bigState(), unknown: { ...s.cur!.unknown } };
+		const idleR = await runPass(s);
+		const idle = { ...brief(idleR), sessions: row(idleR, 0), big: bigState() };
+		// The line ends and a new call follows: the skip finishes, the new call counts once, the gap stays one.
+		appendFileSync(big, "\n" + entry("big-2", "2026-10-20T11:20:00.000Z", 0.5));
+		stamp(big, "2026-10-20T11:21:00.000Z");
+		const finished = brief(await runPass(s));
+		const finishedTotals = observed(s, AS_OF);
+		// M1: a later pass with no new fault still says partial for the sessions, and complete-through doesn't move.
+		const laterR = await runPass(s);
+		const later = { ...brief(laterR), sessions: row(laterR, 0), unknown: { ...s.cur!.unknown } };
+		const gaps = [...s.cur!.recs.values()].length;
+		closePassState(s);
+		const fresh = open({ ledgerDirectory: d, production: "enabled" });
+		const reopenedR = await runPass(fresh);
+		const reopened = { ...brief(reopenedR), sessions: row(reopenedR, 0), unknown: { ...fresh.cur!.unknown } };
+		const reopenedTotals = observed(fresh, AS_OF);
+		closePassState(fresh);
+		return {
+			first,
+			firstTotals,
+			afterFirst,
+			idle,
+			finished,
+			finishedTotals,
+			later,
+			reopened,
+			reopenedTotals,
+			records: gaps,
+			weekStart: WEEK_START,
+			tailBytes: tail.length,
+		};
+	},
+
+	async order() {
+		// Architecture #277 T2 (M8): the same copies read child-first and parent-first, and after a restart: same totals.
+		copySessions();
+		const out: Record<string, unknown> = {};
+		for (const way of ["ascending", "descending"] as const) {
+			const ran: string[][] = [];
+			const extra: Partial<PassOptions> = {
+				dataDir: join(dir, `data-${way}`),
+				readOrder: (paths) => {
+					const sorted = [...paths].sort();
+					if (way === "descending") sorted.reverse();
+					ran.push(sorted.map((p) => p.slice(sessions.length + 1)));
+					return sorted;
+				},
+			};
+			const s = open(extra);
+			const passes = await until(s);
+			const totals = observed(s, AS_OF);
+			closePassState(s);
+			const after = await replayed(AS_OF, extra);
+			out[way] = { order: ran[0], status: last(passes).status, totals, after: after.totals };
+		}
+		return { ...out, direct: await direct() };
+	},
+
+	async ledgerRollover() {
+		// Architecture #277 T1 (M10): one pair of ledger calls just before and after Monday 00:00 Pacific (07:00Z), and a
+		// repeat of the Sunday call after Monday, answered from last week's receipts (a duplicate, never a new first).
+		// Then, past the 10 minute grace, a late Sunday line is history: never charged, never a first.
+		mkdirSync(sessions, { recursive: true, mode: 0o700 });
+		const d = ledgerDir();
+		const file = join(d, "2026-10.jsonl");
+		const sunday = {
+			responseId: "sunday-call",
+			at: "2026-10-26T06:59:00.000Z",
+			occurredAt: "2026-10-26T06:59:00.000Z",
+		};
+		writeFileSync(file, ledgerRecord(sunday), { mode: 0o600 });
+		clock.t = Date.parse("2026-10-26T06:59:30.000Z");
+		const extra = { ledgerDirectory: d, production: "enabled" as const };
+		const s = open(extra);
+		const before = { ...brief(await runPass(s)), week: s.cur!.week, records: s.cur!.recs.size };
+		appendFileSync(
+			file,
+			ledgerRecord({
+				responseId: "monday-call",
+				at: "2026-10-26T07:01:00.000Z",
+				occurredAt: "2026-10-26T07:01:00.000Z",
+				costTotal: 0.25,
+			}) + ledgerRecord({ ...sunday, at: "2026-10-26T07:02:00.000Z" }),
+		);
+		clock.t = Date.parse("2026-10-26T07:05:00.000Z");
+		const grace = {
+			...brief(await runPass(s)),
+			week: s.cur!.week,
+			cur: s.cur!.recs.size,
+			prev: s.prev!.recs.size,
+			broken: s.broken,
+			unknown: { cur: { ...s.cur!.unknown }, prev: { ...s.prev!.unknown } },
+		};
+		const graceTotals = observed(s, "2026-10-26T07:05:00.000Z");
+		appendFileSync(
+			file,
+			ledgerRecord({
+				responseId: "late-sunday-call",
+				at: "2026-10-26T07:14:00.000Z",
+				occurredAt: "2026-10-26T06:58:00.000Z",
+				costTotal: 0.5,
+			}),
+		);
+		clock.t = Date.parse("2026-10-26T07:15:00.000Z");
+		const late = { ...brief(await runPass(s)), cur: s.cur!.recs.size, broken: s.broken };
+		const lateTotals = observed(s, "2026-10-26T07:15:00.000Z");
+		closePassState(s);
+		const fresh = open(extra);
+		await runPass(fresh);
+		const load = fresh.store.reload("2026-10-19");
+		const stored = { prev: load.state === "open" ? load.records : -1, cur: fresh.cur!.recs.size };
+		closePassState(fresh);
+		return { before, grace, graceTotals, late, lateTotals, stored };
 	},
 };
 

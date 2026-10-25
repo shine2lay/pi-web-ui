@@ -7,7 +7,7 @@ import { Worker } from "node:worker_threads";
 import { METER_WORKER_RESOURCE_LIMITS } from "./usage-accounting-meter-contract.js";
 
 export interface UsagePassHost {
-	/** Posts a tick unless one is outstanding; returns false when this tick was dropped (single flight). */
+	/** Posts a tick unless one is outstanding or the worker is lost; returns false when this tick was dropped. */
 	tick(): boolean;
 	close(): Promise<void>;
 	readonly worker: Worker;
@@ -24,27 +24,34 @@ export function startUsagePassWorker(
 		resourceLimits: { ...METER_WORKER_RESOURCE_LIMITS },
 	});
 	let outstanding = false;
+	let closing = false;
+	let gone = false;
 	worker.on("message", (m: { kind?: string }) => {
 		if (m?.kind === "pass") outstanding = false;
 		onMessage(m);
 	});
 	const lost = () => {
 		outstanding = false;
+		if (gone) return;
+		gone = true;
 		onMessage({ kind: "worker-unavailable" });
 	};
 	worker.on("error", lost);
+	// Any exit that close() did not ask for is a lost worker, exit code 0 included (Architecture #277 S4).
 	worker.on("exit", (code) => {
-		if (code) lost();
+		if (code || !closing) lost();
 	});
 	return {
 		worker,
 		tick() {
-			if (outstanding) return false;
+			if (outstanding || gone) return false;
 			outstanding = true;
 			worker.postMessage({ kind: "tick" });
 			return true;
 		},
 		async close() {
+			closing = true;
+			if (gone) return;
 			worker.postMessage({ kind: "close" });
 			await new Promise<void>((done) => {
 				const t = setTimeout(() => void worker.terminate().then(() => done()), 5000);

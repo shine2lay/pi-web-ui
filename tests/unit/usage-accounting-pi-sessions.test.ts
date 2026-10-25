@@ -661,6 +661,22 @@ describe("inert persisted Pi usage reader (synthetic files only)", () => {
 		expect(changed.status).toBe("partial");
 	});
 
+	it("refuses a cursor of another version and re-reads cleanly from the start (Ops #423 M4)", async () => {
+		const file = join(scratch(), "version.jsonl");
+		writeFileSync(file, syntheticHeader() + syntheticCall("first"));
+		const reader = new PiSessionUsageReader();
+		const first = await reader.read(request("plain", { file }));
+		expect(first.cursor!.token.startsWith("pi1:")).toBe(true);
+		writeFileSync(file, readFileSync(file, "utf8") + syntheticCall("second", 24));
+		// Same shape (six parts, two hashes), another version tag: a stored format it doesn't know is refused.
+		const other = { ...first.cursor!, token: `pi2:${first.cursor!.token.slice(4)}` };
+		const refused = await reader.read(request("plain", { file, cursor: other }));
+		expect(refused.batch).toBeNull();
+		expect(refused.faults).toEqual([{ code: "cursor-invalid", line: 2 }]);
+		const clean = await new PiSessionUsageReader().read(request("plain", { file }));
+		expect(clean.batch!.rows.facts.map((f) => f.source.event)).toEqual(["first", "second"]);
+	});
+
 	it("reports truncated and unreadable files explicitly, without manufacturing a cursor or batch", async () => {
 		const file = join(scratch(), "truncate.jsonl");
 		writeFileSync(file, syntheticHeader() + syntheticCall("before-truncate"));
@@ -866,7 +882,14 @@ describe("usage-accounting reader and transitive worker import boundaries", () =
 	// Design B's pass (Ops #423, B3) reads through the reader only inside its own Worker; the main-thread roots
 	// below must never reach it (it is listed with the engines).
 	const readerImporters = ["usage-accounting-pi-source.ts", "usage-accounting-worker.ts", "usage-accounting-pass.ts"];
-	const roots = ["index.ts", "roles-overview.ts", "protocol.ts", "usage-accounting-meter-cache.ts"];
+	// The pass host (Ops #423) is a main-thread root too: B4 imports it there, so its graph must stay engine-free.
+	const roots = [
+		"index.ts",
+		"roles-overview.ts",
+		"protocol.ts",
+		"usage-accounting-meter-cache.ts",
+		"usage-accounting-pass-host.ts",
+	];
 	const engines = [
 		"usage-accounting-collector.ts",
 		"usage-accounting-pi-sessions.ts",
@@ -1195,6 +1218,8 @@ describe("usage-accounting reader and transitive worker import boundaries", () =
 			"roles-overview.ts": "export * from './usage-accounting-meter-cache.js'; export * from './safe-helper.js';",
 			"protocol.ts": "import type { Snapshot } from './usage-accounting-meter-contract.js';",
 			"usage-accounting-meter-cache.ts": "import type { Snapshot } from './usage-accounting-meter-contract.js';",
+			"usage-accounting-pass-host.ts":
+				"import { METER_WORKER_RESOURCE_LIMITS } from './usage-accounting-meter-contract.js';",
 			"usage-accounting-meter-contract.ts": "export interface Snapshot { generation: number }",
 			"safe-helper.ts":
 				"import './roles-overview.js'; // import './usage-accounting-collector.js'\n" +

@@ -96,6 +96,8 @@ export interface PassOptions {
 	scan?: { files?: number; stats?: number };
 	/** Tests only: awaited inside the pass to force a slow pass. */
 	slow?: () => Promise<void>;
+	/** Tests only: the order the pass reads changed files in (paths in, paths out), to control parent/child order. */
+	readOrder?: (paths: readonly string[]) => readonly string[];
 }
 type Cursor = { ordinal: number; token: string };
 type Group = "sessions" | "ledger";
@@ -128,6 +130,12 @@ interface WeekFold {
 	 */
 	links: Map<string, string>;
 	staged: Unit[];
+	/**
+	 * This pass's ledger-native proposals that are staged but not yet appended (Architecture #277 MF1). W2 remembers its
+	 * own proposals only within one call, and a pass makes many calls before it commits, so first(key) answers from
+	 * here before the store: a repeat in a later call meets its first, never a second "first". Cleared once appended.
+	 */
+	native: Map<string, LedgerNativeReceipt>;
 	replay: {
 		cursor: UsageWeekReplayCursor | null;
 		ids: Set<string>;
@@ -150,6 +158,12 @@ interface FileState {
 	readSize: number | null;
 	hint: string | null;
 	state: "ready" | "eof" | "waiting" | "faulted";
+	/**
+	 * Waiting for the file to grow: it ends in a partial last line, or inside an unfinished line over the reader's
+	 * line limit (Architecture #277 MF2, S3). Such a file is read again only once its size or mtime changes; a file
+	 * waiting on event time is checked again every pass.
+	 */
+	growth: boolean;
 	retried: boolean;
 }
 export interface PassState {
@@ -275,6 +289,7 @@ function newWeek(week: string): WeekFold {
 		checkpoint: null,
 		links: new Map(),
 		staged: [],
+		native: new Map(),
 		replay: null,
 		replayed: false,
 		released: false,
@@ -576,6 +591,7 @@ function flush(s: PassState, w: WeekFold, cursors: UsageWeekCursors | undefined)
 	if (w.state !== "open") {
 		if (w.staged.length) bump(s, "late", w.staged.length);
 		w.staged = [];
+		w.native.clear();
 		return;
 	}
 	let i = 0;
@@ -595,6 +611,8 @@ function flush(s: PassState, w: WeekFold, cursors: UsageWeekCursors | undefined)
 		s.store.append(w.week, records, receipts, observations);
 	}
 	w.staged = [];
+	// Appended: the store answers these keys now (a failed append throws first, and the folds are rebuilt).
+	w.native.clear();
 	w.checkpoint = s.store.checkpoint(w.week, cursors);
 }
 
@@ -680,6 +698,7 @@ function startWeek(s: PassState, week: string, graceOver: boolean): void {
 					readSize: null,
 					hint: null,
 					state: "ready",
+					growth: false,
 					retried: false,
 				});
 	s.lastComplete = { sessions: null, ledger: null };
@@ -886,6 +905,14 @@ async function readFile(
 		const before = f.cursor?.token ?? null;
 		f.cursor = r.recovery ? encodePiSessionRecovery(r.recovery) : (r.cursor ?? f.cursor);
 		const moved = (f.cursor?.token ?? null) !== before;
+		if (r.skipped && (!moved || r.skipped.bytes === 0)) {
+			// Architecture #277 MF2: the file ends inside an unfinished line over the line limit. Its gap is recorded
+			// once (above); reading again before the file grows would only re-check the same anchor, round after round.
+			f.state = "waiting";
+			f.growth = true;
+			f.readSize = f.size;
+			return true;
+		}
 		if (codes.has("window-mismatch") && r.nextWindowAt) {
 			const next = usageWeekOf(r.nextWindowAt);
 			if (next === week && !moved) {
@@ -903,7 +930,10 @@ async function readFile(
 			return true;
 		}
 		if (codes.has("partial-last-line")) {
+			// Only an append can finish the line: wait for the file to grow (Architecture #277 S3).
 			f.state = "waiting";
+			f.growth = true;
+			f.readSize = f.size;
 			return true;
 		}
 		if (!moved && !r.skipped) {
@@ -972,9 +1002,13 @@ function readLedger(s: PassState, T: string, deadline: number, stats: PassResult
 			const bounds = usageWeekBounds(week);
 			const target = weekFor(s, bounds.start);
 			const w = typeof target === "string" ? null : target;
+			// A week not loaded (history) gets null readers: its rows go to history below and are never folded, so W2's
+			// "null is a proven absent key" can never charge from them.
 			const readers: LedgerEvidenceReaders = w
 				? {
-						first: (key) => s.store.receipt(w.week, "ledger-native", key) as LedgerNativeReceipt | null,
+						// This pass's staged proposals first (MF1), then the hash-checked committed receipts.
+						first: (key) =>
+							w.native.get(key) ?? (s.store.receipt(w.week, "ledger-native", key) as LedgerNativeReceipt | null),
 						sameCall: (provider, responseId) =>
 							s.store.receipt(w.week, "same-call", keyOf([provider, responseId])) as LedgerSameCall | null,
 					}
@@ -1094,6 +1128,7 @@ function foldLedger(s: PassState, w: WeekFold, r: ReturnType<typeof readUsageLed
 	for (const n of r.nativeReceipts) {
 		if (n.fact.occurredAt < w.start || n.fact.occurredAt >= w.end) continue;
 		const receipt: UsageWeekReceipt = { kind: "ledger-native", k: n.key, r: n };
+		w.native.set(n.key, n);
 		if (units) units.receipts.push(receipt);
 		else w.staged.push({ record: null, receipts: [receipt], observations: [], bytes: JSON.stringify(receipt).length });
 	}
@@ -1377,13 +1412,18 @@ export async function runPass(s: PassState, budget: PassBudget = PASS_LIMITS): P
 					readSize: null,
 					hint: null,
 					state: "ready",
+					growth: false,
 					retried: false,
 				});
 			else {
 				const changed = f.readSize === null || p.size !== f.size || Math.floor(p.mtimeMs) !== Math.floor(f.mtimeMs);
 				f.file = p.file;
 				f.week = cur.week;
-				if (changed || f.state === "waiting") f.state = "ready";
+				// A file waiting for growth is read again only once it changed (MF2, S3); one waiting on event time each pass.
+				if (changed || (f.state === "waiting" && !f.growth)) {
+					f.state = "ready";
+					f.growth = false;
+				}
 				f.size = p.size;
 				f.mtimeMs = p.mtimeMs;
 			}
@@ -1391,7 +1431,12 @@ export async function runPass(s: PassState, budget: PassBudget = PASS_LIMITS): P
 		// 2. Changed chat files, appended bytes only, one read at a time (C2), sessions before the ledger.
 		const bytes = { bytes: budget.bytes, deadline: t0 + (budget.workMs * 4) / 5 };
 		let stopped = false;
-		for (const f of s.files.values()) {
+		let order = [...s.files.values()];
+		if (o.readOrder) {
+			const rank = new Map(o.readOrder(order.flatMap((f) => (f.file ? [f.file] : []))).map((p, i) => [p, i]));
+			order = order.sort((a, b) => (rank.get(a.file ?? "") ?? order.length) - (rank.get(b.file ?? "") ?? order.length));
+		}
+		for (const f of order) {
 			if (f.state !== "ready" || !f.file) continue;
 			stats.files++;
 			f.retried = false;

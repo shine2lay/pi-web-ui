@@ -39,6 +39,8 @@ if (!isMainThread && parentPort && (workerData as { usagePass?: UsagePassWorkerD
 			return;
 		}
 		if (m?.kind !== "tick") return;
+		// The middle of three overlap guards (the host's outstanding tick, this one, runPass's own s.running). It is the
+		// one that also covers the W5 build after runPass returns, which runPass's guard does not; tested on its own.
 		if (running) {
 			port.postMessage({ kind: "dropped" } satisfies UsagePassMessage);
 			return;

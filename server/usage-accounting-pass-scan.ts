@@ -86,7 +86,10 @@ export function scanPassInventory(
 		![cap, budget].every((v) => Number.isSafeInteger(v) && v > 0) ||
 		cap > PASS_SCAN_LIMITS.files ||
 		budget > PASS_SCAN_LIMITS.stats ||
-		[...options.roots, ...options.temperRoots].some((p) => !isAbsolute(p) || resolve(p) !== p)
+		[...options.roots, ...options.temperRoots].some((p) => !isAbsolute(p) || resolve(p) !== p) ||
+		// A session root at or inside a Temper root would scan to a healthy-looking zero: a misconfiguration, refused
+		// here (Architecture #277 S2). A Temper root inside a session root is the normal case and is skipped below.
+		options.roots.some((root) => options.temperRoots.some((r) => under(root, r)))
 	)
 		throw new Error("usage-pass-inventory-input");
 	const bounds = usageWeekBounds(s.week);
@@ -146,7 +149,6 @@ export function scanPassInventory(
 				closePassInventory(s);
 				return { stats, finished: true };
 			}
-			if (options.temperRoots.some((r) => under(root, r))) continue;
 			walk.check = { root, path: root };
 			continue;
 		}
