@@ -38,15 +38,16 @@
  * the lead's home chat gets reminder 1, two hours later reminder 2, and two hours after that the task asks
  * its main chat (pi-queue's ask path). Measured, never judged: the block unchanged and no reply recorded
  * from the lead. Due -> "/queue blocks" in the queue's chat as above; pi-queue there asks remindLead, which
- * checks the queue's own record again (same block, not paused, queue running, due), the owner's pause on
- * role messages and the lead's daily cap (LEAD_DAY_CAP), then runs "/queue lead ..." in the lead's home
- * chat: pi-queue there shows the card after its running turn (as every queue card), or as a note when its
- * wakes are off. Once per block and reminder (the ledger, kept across restarts); reminders are queue cards,
- * not role messages, so they don't count against message chains. Nothing here approves, completes,
- * removes, restarts or unpauses a task, or ever goes to the owner. A due reminder the lead's daily cap
- * holds (Ops #492, H-LEAD-CAP-1) used to wait in silence until midnight: now its queue is nudged as for a
- * due one (logged once), remindLead says `capped`, and pi-queue makes the task ask its main chat (never the
- * owner); nothing is sent or recorded. The owner's pause on role messages still holds it in silence.
+ * checks the queue's own record again (same block, not paused, queue running, due) and the owner's pause on
+ * role messages, then runs "/queue lead ..." in the lead's home chat: pi-queue there shows the card after its
+ * running turn (as every queue card), or as a note when its wakes are off. Once per block and reminder (the
+ * ledger, kept across restarts); reminders are queue cards, not role messages, so they don't count against
+ * message chains. Nothing here approves, completes, removes, restarts or unpauses a task, or ever goes to
+ * the owner. The owner's pause on role messages holds a due reminder in silence.
+ * No daily cap (Ops #527, H-LEAD-NOCAP-1, AGENTS.md rule 31: no limits the owner didn't ask for): however many
+ * reminders a lead had that day, the next due one goes. Ops #199's LEAD_DAY_CAP (ten a lead a local day) held
+ * the rest, and from Ops #492 the task asked its main chat instead; both are gone. A block's own rounds (two
+ * to its lead, then one to each lead of its chain, each once) still bound what one block sends.
  *
  * queue-escalation (owner 2026-10-16): a block whose chain pi-queue recorded (the lead of the task's project,
  * then of its initiative) gets one more reminder for each of them, two hours apart, after its lead's two;
@@ -99,8 +100,7 @@ export function leadTimesMs(env: NodeJS.ProcessEnv = process.env): LeadTimes {
 		? { checkpointMs: ms[0], gapMs: ms[1] }
 		: LEAD_TIMES;
 }
-/** queue-lead-reminders: at most this many reminders go to one lead a day (machine time); the rest wait. */
-export const LEAD_DAY_CAP = 10;
+// queue-lead-reminders: no daily cap on a lead's reminders (LEAD_DAY_CAP = 10 until Ops #527, AGENTS.md rule 31).
 
 /** A nudge already sent is sent again after this long (its queue's chat may not have been reachable). */
 export const RENUDGE_MS = 5 * 60_000;
@@ -258,15 +258,15 @@ export interface LeadRemindRequest {
 	n: number;
 }
 /**
- * sent: it went (at `at`, now or before); held: not now, the queue asks again later; held with capped (Ops #492):
- * the lead had its LEAD_DAY_CAP reminders today, so the task asks its main chat instead (a pi-queue that predates
- * `capped` sees only held); missed: it can't go at all.
+ * sent: it went (at `at`, now or before); held: not now, the queue asks again later; missed: it can't go at all.
+ * `capped` (Ops #492: held by the lead's daily cap, so pi-queue had the task ask its main chat) stays for
+ * pi-queues that know it, but this server no longer sends it: there is no daily cap (Ops #527).
  */
 export type LeadRemindResult =
 	{ sent: true; at: number; to: string } | { held: string; capped?: true } | { missed: string };
 
-/** queue-lead-reminders: why a reminder can't go now; `capped`: the lead's daily cap (not the owner's pause). */
-type LeadHold = { held: string; capped?: true };
+/** queue-lead-reminders: why a reminder can't go now (the owner's pause on role messages). */
+type LeadHold = { held: string };
 
 /** queue-lead-reminders: pi-queue's leadCommand: "/queue lead <id> <since> <n> <queue chat, base64url>". */
 export function leadCommand(id: number, since: number, n: number, queueFile: string): string {
@@ -287,12 +287,6 @@ export function sameReminder(
 
 const reminderKey = (r: { queue: string; id: number; since: number; n: number }) =>
 	`${r.queue}\u0001${r.id}\u0001${r.since}\u0001${r.n}`;
-
-/** queue-lead-reminders: the machine's calendar day of `ms` (the daily cap counts per day). */
-export function localDay(ms: number): string {
-	const d = new Date(ms);
-	return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
-}
 
 /** What the check needs from the server. */
 export interface QueueBlocksHost {
@@ -342,8 +336,6 @@ export class QueueBlocks {
 	/** queue-lead-reminders: the reminders sent (the ledger, read once), and those on their way now. */
 	private ledgerCache: LeadReminderRecord[] | null = null;
 	private readonly sending = new Set<string>();
-	/** Ops #492: reminders the daily cap held that were logged (reminderKey -> when), one line each. */
-	private readonly capLogged = new Map<string, number>();
 	private timer: ReturnType<typeof setInterval> | null = null;
 	private ticking = false;
 	/** Bumped when a looked-up task's state changes: the panels' cache key. */
@@ -469,24 +461,9 @@ export class QueueBlocks {
 				if (v.kind !== "due" || v.at > now) continue;
 				if (v.why === "remind") {
 					// queue-lead-reminders: only when pi-queue there sends it (the queue runs) and it may go now (the
-					// owner's pause on role messages); else a later round looks again.
+					// owner's pause on role messages); else a later round looks again. No daily cap (Ops #527).
 					if (!q.running) continue;
-					const req = { lead: v.lead, queue: file, id: t.id, since: b.since, n: v.n };
-					const hold = this.leadHeld(req, now);
-					if (hold?.capped) {
-						// Ops #492 (H-LEAD-CAP-1): the lead had its reminders today. It used to wait here in silence until
-						// midnight; now pi-queue there hears `capped` from remindLead and the task asks its main chat.
-						const k = reminderKey(req);
-						if (!this.capLogged.has(k)) {
-							this.capLogged.set(k, now);
-							this.host.log(
-								`[queue-blocks] reminder ${v.n} to ${v.lead} about task #${t.id} in ${file} held by the daily cap; the task asks its main chat`,
-							);
-						}
-						due ??= `#${t.id}@${b.since}:capped${v.n}`;
-						continue;
-					}
-					if (hold) continue;
+					if (this.leadHeld({ lead: v.lead, queue: file, id: t.id, since: b.since, n: v.n })) continue;
 					due ??= `#${t.id}@${b.since}:remind${v.n}`;
 					continue;
 				}
@@ -544,7 +521,6 @@ export class QueueBlocks {
 			this.host.saveWatch([...this.watch]);
 		}
 		for (const [k, at] of this.nudged) if (now - at > 24 * 3600_000) this.nudged.delete(k);
-		for (const [k, at] of this.capLogged) if (now - at > 24 * 3600_000) this.capLogged.delete(k);
 		const s = sig.sort().join("\n");
 		if (s !== this.lastSig) {
 			this.lastSig = s;
@@ -570,16 +546,12 @@ export class QueueBlocks {
 
 	/**
 	 * queue-lead-reminders: why reminder `req` can't go now (undefined: it may): the owner paused role
-	 * messages, or the lead had its LEAD_DAY_CAP reminders today (capped, Ops #492: the task asks its main
-	 * chat instead). One that went already may always be asked about again (it's only recorded then).
+	 * messages. No daily cap (Ops #527, AGENTS.md rule 31): how many reminders the lead had today doesn't
+	 * count. One that went already may always be asked about again (it's only recorded then).
 	 */
-	private leadHeld(req: LeadRemindRequest, now: number): LeadHold | undefined {
-		const ledger = this.ledger();
-		if (ledger.some((r) => sameReminder(r, req))) return undefined;
+	private leadHeld(req: LeadRemindRequest): LeadHold | undefined {
+		if (this.ledger().some((r) => sameReminder(r, req))) return undefined;
 		if (this.host.rolePaused?.()) return { held: "the owner paused role messages" };
-		const day = localDay(now);
-		const today = ledger.filter((r) => r.lead === req.lead && localDay(r.at) === day).length;
-		if (today >= LEAD_DAY_CAP) return { held: `${req.lead} had its ${LEAD_DAY_CAP} reminders today`, capped: true };
 		return undefined;
 	}
 
@@ -588,7 +560,7 @@ export class QueueBlocks {
 	 * the queue whose chat is `queue` goes to the lead's home chat: "/queue lead …" there, whose pi-queue shows
 	 * the card once its running turn settles (or as a note when its wakes are off). Checked against the
 	 * queue's own record first (blocked on that lead, the same block, not answered, not paused, the queue
-	 * running, that reminder due), then the owner's pause on role messages and the lead's daily cap. Once per
+	 * running, that reminder due), then the owner's pause on role messages (no daily cap, Ops #527). Once per
 	 * block and reminder: asked again, it says when it went. It never touches the task itself.
 	 */
 	async remindLead(req: LeadRemindRequest): Promise<LeadRemindResult> {
@@ -611,7 +583,7 @@ export class QueueBlocks {
 			if (v.kind !== "due" || v.why !== "remind" || v.n !== req.n || v.at > now) return { held: "it isn't due" };
 			// queue-escalation: reminder n goes to one lead only (the block's own, or the one above it in turn).
 			if (v.lead !== req.lead) return { held: `reminder ${req.n} goes to ${v.lead || "no lead"}, not ${req.lead}` };
-			const held = this.leadHeld(req, now);
+			const held = this.leadHeld(req);
 			if (held) return held;
 			const role = this.host.roles().find((r) => r.id.toLowerCase() === req.lead);
 			if (!role) return { missed: `there's no role ${req.lead}` };

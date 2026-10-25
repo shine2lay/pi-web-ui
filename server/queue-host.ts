@@ -40,7 +40,7 @@
  *    the one a reminder names.
  *  - remindLead({lead, queue, id, since, n}) (queue-lead-reminders): reminder n about task id's block (saved
  *    at `since`) in the queue whose chat is `queue` goes to the lead's home chat ("/queue lead " there),
- *    checked against that queue's own record, the owner's pause on role messages and the lead's daily cap:
+ *    checked against that queue's own record and the owner's pause on role messages (no daily cap, Ops #527):
  *    {sent, at, to}, {held} (not now) or {missed} (it can't go at all). Once per block and n.
  *    QueueBlocks.remindLead (queue-blocks.ts).
  *  - deadEnd({project, file?, id?, state?}) (dead-end, Ops #483, AGENTS.md rule 30): whether that project of the
@@ -170,7 +170,10 @@ export interface QueueLeadRemind {
 	n: number;
 }
 
-/** capped (Ops #492): held by the lead's daily cap, so pi-queue makes the task ask its main chat; an older pi-queue sees held. */
+/**
+ * capped (Ops #492: held by the lead's daily cap, so pi-queue made the task ask its main chat) stays in the type for
+ * pi-queues that know it, but this server no longer sends it: there is no daily cap (Ops #527, AGENTS.md rule 31).
+ */
 export type QueueLeadRemindResult =
 	{ sent: true; at: number; to: string } | { held: string; capped?: true } | { missed: string };
 

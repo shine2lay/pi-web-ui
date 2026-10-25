@@ -17375,7 +17375,8 @@ export class AgentService {
 			loadHeldSeen: () => this.stateStore.getQueueHeldSeen(),
 			saveHeldSeen: (seen) => this.stateStore.setQueueHeldSeen(seen),
 			// queue-lead-reminders: the owner's pause on role messages also holds reminders to leads; every reminder
-			// sent is a line in queue-lead-reminders.jsonl (dedup and the daily cap, kept across restarts).
+			// sent is a line in queue-lead-reminders.jsonl (once per block and reminder, kept across restarts; no daily
+			// cap since Ops #527).
 			rolePaused: () => this.roleMessages.paused,
 			loadReminders: () => {
 				const file = join(this.stateStore.dataDir, LEAD_REMINDERS_FILE);
