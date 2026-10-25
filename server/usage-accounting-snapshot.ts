@@ -11,7 +11,8 @@ import {
 	type AccountingInput,
 	type SourceCoverage,
 } from "./usage-accounting-contract.js";
-import type { CollectorEvidence, NumericRows } from "./usage-accounting-collector.js";
+import type { NumericRows } from "./usage-accounting-collector.js";
+import { supportedUsageEvidence, type UsageEvidence } from "./usage-accounting-evidence.js";
 import {
 	METER_FAULT_CODES,
 	METER_LIMITS,
@@ -37,8 +38,8 @@ export interface SnapshotSubjectRequest {
 	policy: { policyRef: string; policySubject: PolicySubject } | null;
 }
 export interface SnapshotPartition {
-	/** Identical header from the pinned collector scan, not input() alone. */
-	evidence: CollectorEvidence;
+	/** Identical versioned producer evidence across every partition, not input() alone. */
+	evidence: UsageEvidence;
 	/** Complete revisions/alias/run-leaf dependency component, never a transport page. */
 	rows: NumericRows;
 	/** Independently verified source role for each fact. Never derive from payerRole. */
@@ -47,13 +48,13 @@ export interface SnapshotPartition {
 export interface SnapshotBuildInput {
 	epoch: string;
 	asOf: string;
-	evidence: CollectorEvidence;
+	evidence: UsageEvidence;
 	coverage: SourceCoverage[];
 	/** Private stream -> public ordinal/kind mapping, already approved by the worker. */
 	sources: { stream: string; status: MeterSourceStatus }[];
 	subjects: SnapshotSubjectRequest[];
 	partitions: Iterable<SnapshotPartition>;
-	/** False on an aborted/incomplete pinned scan. */
+	/** False when the producer aborted its planned work; a finished pass may still have partial coverage. */
 	completed: boolean;
 }
 const ROWS = ["facts", "allocations", "aliases", "roots", "policies", "memberships", "snapshots"] as const;
@@ -109,7 +110,7 @@ function fault(m: Faults, code: string, n = 1, mode: "sum" | "max" = "sum"): voi
 }
 const faultList = (m: Faults): MeterFaultCount[] =>
 	[...m].sort(([a], [b]) => a.localeCompare(b)).map(([code, n]) => ({ code, count: n }));
-function collectorFaults(e: CollectorEvidence): Faults {
+function collectorFaults(e: UsageEvidence): Faults {
 	const m: Faults = new Map();
 	for (const f of e.faultCounts) fault(m, f.code, f.count);
 	// Never allow omission from faultCounts to erase a normalized collector fault.
@@ -387,7 +388,7 @@ export function buildUsageMeterSnapshot(build: SnapshotBuildInput): UsageMeterSn
 	let processing = true;
 	try {
 		if (
-			build.evidence.v !== "usage-collector-evidence/1" ||
+			!supportedUsageEvidence(build.evidence) ||
 			build.evidence.asOf !== build.asOf ||
 			!Number.isSafeInteger(build.evidence.sequence) ||
 			build.evidence.sequence < 0

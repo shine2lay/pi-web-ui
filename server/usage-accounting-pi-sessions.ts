@@ -77,6 +77,9 @@ export interface PiSessionFault {
 }
 export interface PiSessionObservation {
 	line: number;
+	/** Numeric source position, including the newline; never the line's contents. */
+	offset: number;
+	bytes: number;
 	entryId: string | null;
 	entryTimestamp: string | null;
 	responseId: string | null;
@@ -86,6 +89,18 @@ export interface PiSessionObservation {
 	/** Recorded list estimate; duplicate observations and unknown models must not be added to fact totals. */
 	recordedPrice: { basis: "list-estimate"; amount: string | null; rateVersion: null };
 }
+/** Additive recovery state, NOT a pi1 cursor. The last <=64-KiB skipped piece is hash-checked on every resume.
+ * `complete` certifies a newline immediately before offset, not a parsed/known usage entry. Persist this state AND
+ * its unknown gap in the same week-store checkpoint before using it. No unbounded line is buffered or re-hashed. */
+export interface PiSessionRecovery {
+	v: "pi-session-skip/1";
+	line: number;
+	start: number;
+	offset: number;
+	headerSha256: string;
+	anchor: { start: number; bytes: number; sha256: string };
+	complete: boolean;
+}
 export interface PiSessionReadRequest {
 	/** Explicit path only. Neither parentSession nor a delegate report is opened automatically. */
 	file: string;
@@ -94,6 +109,10 @@ export interface PiSessionReadRequest {
 	through: string;
 	observedAt: string;
 	cursor?: SourceCursor | null;
+	/** Mutually exclusive with cursor; pi1 validation and meaning are unchanged. */
+	recovery?: PiSessionRecovery | null;
+	/** Explicit B3 opt-in; old callers still stop on line-limit without attempting a skip. */
+	recoverOversized?: boolean;
 }
 export interface PiSessionReadResult {
 	v: "pi-session-read/1";
@@ -103,6 +122,14 @@ export interface PiSessionReadResult {
 	/** Last complete line only; commit it only after the collector commits the corresponding batch. */
 	cursor: SourceCursor | null;
 	endOfFile: boolean;
+	/** Actual read(2) bytes, including header/read-ahead, anchors, failed validation and skip work. */
+	bytesRead: number;
+	recovery: PiSessionRecovery | null;
+	skipped: { line: number; start: number; bytes: number } | null;
+	/** Only the occurrence timestamp that stopped this read; never a parsed entry or diagnostic text. */
+	nextWindowAt: string | null;
+	/** Parent path is never returned; B owns the persisted cross-file identity policy. */
+	parentFileKey: string | null;
 	observations: PiSessionObservation[];
 	/** Number of observed recorded totals changed by half-even rounding to 12 fraction digits. */
 	roundedAmounts: number;
@@ -216,6 +243,9 @@ type LineResult = Line | { kind: "end" | "partial-last-line" | "line-limit" | "r
  * runs out, or the first line when the header and cursor check left no budget. That line is finished in one buffer of
  * at most lineBytes, so a read holds at most lineBytes on top of its budget, and a line longer than the budget
  * can't stall every read at the same place. Over lineBytes is still line-limit. */
+interface NumericFile {
+	read(buffer: Buffer, offset: number, length: number, position: number): Promise<{ bytesRead: number }>;
+}
 class Lines {
 	private pending = Buffer.alloc(0);
 	private readAt: number;
@@ -224,7 +254,7 @@ class Lines {
 	private stretched = false;
 	scanned = 0;
 	constructor(
-		private readonly file: FileHandle,
+		private readonly file: NumericFile,
 		private readonly size: number,
 		start: number,
 		private readonly budget: number,
@@ -232,7 +262,10 @@ class Lines {
 	) {
 		this.at = this.readAt = start;
 	}
+	/** The start of the line next() attempted; needed only for typed oversized recovery. */
+	lineStart = 0;
 	async next(): Promise<LineResult> {
+		this.lineStart = this.at;
 		const start = this.at;
 		const pieces: Buffer[] = [];
 		let length = 0;
@@ -291,7 +324,7 @@ class Lines {
 	}
 }
 /** Re-hashes the cursor's last line in pieces of at most 64 KiB, so even a lineBytes-long line is never held whole. */
-async function anchored(file: FileHandle, saved: { start: number; bytes: number; sha: string }): Promise<boolean> {
+async function anchored(file: NumericFile, saved: { start: number; bytes: number; sha: string }): Promise<boolean> {
 	const sha = createHash("sha256");
 	const piece = Buffer.alloc(Math.min(65_536, saved.bytes));
 	let last = -1;
@@ -324,6 +357,107 @@ function decodeCursor(
 	const [offset, start, bytes] = parts.slice(1, 4).map(Number);
 	if (![offset, start, bytes].every(Number.isSafeInteger) || bytes < 1 || start + bytes !== offset) return null;
 	return { offset, start, bytes, sha: parts[4], header: parts[5] };
+}
+function validRecovery(r: PiSessionRecovery): boolean {
+	return (
+		r?.v === "pi-session-skip/1" &&
+		Object.keys(r).sort().join() === "anchor,complete,headerSha256,line,offset,start,v" &&
+		r.anchor !== null &&
+		typeof r.anchor === "object" &&
+		Object.keys(r.anchor).sort().join() === "bytes,sha256,start" &&
+		typeof r.headerSha256 === "string" &&
+		typeof r.anchor.sha256 === "string" &&
+		typeof r.complete === "boolean" &&
+		[r.line, r.start, r.offset, r.anchor?.start, r.anchor?.bytes].every((n) => Number.isSafeInteger(n) && n >= 0) &&
+		r.line >= 2 &&
+		r.anchor.bytes >= 1 &&
+		r.anchor.bytes <= 65_536 &&
+		r.start <= r.anchor.start &&
+		r.anchor.start + r.anchor.bytes === r.offset &&
+		SHA.test(r.headerSha256) &&
+		SHA.test(r.anchor.sha256)
+	);
+}
+/** Separate, bounded checkpoint token. Never pass this token as a pi1 cursor. */
+export function encodePiSessionRecovery(r: PiSessionRecovery): SourceCursor {
+	if (!validRecovery(r)) throw new Error("pi-session-recovery");
+	const token = `pis1:${r.offset}:${r.start}:${r.line}:${r.anchor.start}:${r.anchor.bytes}:${r.anchor.sha256}:${r.headerSha256}:${Number(r.complete)}`;
+	if (token.length > 256) throw new Error("pi-session-recovery");
+	return { ordinal: r.line, token };
+}
+export function decodePiSessionRecovery(cursor: SourceCursor): PiSessionRecovery | null {
+	const p = cursor.token.split(":");
+	if (
+		p.length !== 9 ||
+		p[0] !== "pis1" ||
+		!p.slice(1, 6).every((n) => /^(0|[1-9]\d{0,15})$/.test(n)) ||
+		!["0", "1"].includes(p[8])
+	)
+		return null;
+	const r: PiSessionRecovery = {
+		v: "pi-session-skip/1",
+		offset: Number(p[1]),
+		start: Number(p[2]),
+		line: Number(p[3]),
+		anchor: { start: Number(p[4]), bytes: Number(p[5]), sha256: p[6] },
+		headerSha256: p[7],
+		complete: p[8] === "1",
+	};
+	return validRecovery(r) && cursor.ordinal === r.line ? r : null;
+}
+async function recoveryAnchor(
+	file: NumericFile,
+	r: PiSessionRecovery,
+	header: Header,
+	headerEnd: number,
+	size: number,
+): Promise<boolean> {
+	if (!validRecovery(r) || r.start < headerEnd || r.offset > size || r.headerSha256 !== header.hash) return false;
+	// A line start, not an arbitrary byte offset. A rewritten prefix must be re-keyed by B, not trusted here.
+	const boundary = Buffer.alloc(1);
+	if ((await file.read(boundary, 0, 1, r.start - 1)).bytesRead !== 1 || boundary[0] !== 10) return false;
+	const piece = Buffer.alloc(r.anchor.bytes);
+	let done = 0;
+	while (done < piece.length) {
+		const n = (await file.read(piece, done, piece.length - done, r.anchor.start + done)).bytesRead;
+		if (!n) return false;
+		done += n;
+	}
+	return hash(piece) === r.anchor.sha256 && (piece[piece.length - 1] === 10) === r.complete;
+}
+/** One bounded skip unit. The only retained bytes are a <=64-KiB anchor, never the oversized line. */
+async function skipPiece(
+	file: NumericFile,
+	size: number,
+	start: number,
+	line: number,
+	offset: number,
+	header: Header,
+	budget: number,
+): Promise<{ recovery: PiSessionRecovery | null; bytes: number }> {
+	let read = 0;
+	const initialOffset = offset;
+	let recovery: PiSessionRecovery | null = null;
+	const piece = Buffer.alloc(Math.min(65_536, budget));
+	while (read < budget && offset < size) {
+		const n = (await file.read(piece, 0, Math.min(piece.length, budget - read, size - offset), offset)).bytesRead;
+		if (!n) break;
+		read += n;
+		const nl = piece.subarray(0, n).indexOf(10);
+		const consumed = nl < 0 ? n : nl + 1;
+		recovery = {
+			v: "pi-session-skip/1",
+			start,
+			line,
+			offset: offset + consumed,
+			headerSha256: header.hash,
+			anchor: { start: offset, bytes: consumed, sha256: hash(piece.subarray(0, consumed)) },
+			complete: nl >= 0,
+		};
+		offset += consumed;
+		if (nl >= 0) break;
+	}
+	return { recovery, bytes: offset - initialOffset };
 }
 function projection(entry: ObjectValue): Projection | "invalid" | null {
 	let value: ObjectValue | null;
@@ -414,6 +548,7 @@ export class PiSessionUsageReader {
 			!request.file ||
 			!["pi", "acp"].includes(request.producer) ||
 			![request.from, request.through, request.observedAt].every(timestamp) ||
+			(request.cursor && request.recovery) ||
 			request.from > request.through ||
 			request.through > request.observedAt ||
 			Date.parse(request.through) - Date.parse(request.from) > this.limits.spanMs
@@ -453,6 +588,11 @@ export class PiSessionUsageReader {
 					? { ordinal: request.cursor.ordinal, token: request.cursor.token }
 					: null,
 			endOfFile: false,
+			bytesRead: 0,
+			recovery: request.recovery && validRecovery(request.recovery) ? structuredClone(request.recovery) : null,
+			skipped: null,
+			nextWindowAt: null,
+			parentFileKey: null,
 			observations: [],
 			roundedAmounts: 0,
 			faults: [],
@@ -466,7 +606,14 @@ export class PiSessionUsageReader {
 				fault("source-unreadable", 0);
 				return result;
 			}
-			let lines = new Lines(file, stat.size, 0, this.limits.readBytes, this.limits.lineBytes);
+			const measured: NumericFile = {
+				read: async (buffer, offset, length, position) => {
+					const read = await file!.read(buffer, offset, length, position);
+					result.bytesRead += read.bytesRead;
+					return read;
+				},
+			};
+			let lines = new Lines(measured, stat.size, 0, this.limits.readBytes, this.limits.lineBytes);
 			const first = await lines.next();
 			if (first.kind !== "line") {
 				fault(first.kind === "end" ? "header-invalid" : first.kind, 1);
@@ -490,6 +637,7 @@ export class PiSessionUsageReader {
 				parent: typeof raw.parentSession === "string" ? resolve(dirname(path), raw.parentSession) : null,
 				hash: hash(first.bytes),
 			};
+			result.parentFileKey = header.parent ? hash(header.parent) : null;
 			const existing = this.files.get(path);
 			if (existing && (existing.header.hash !== header.hash || existing.producer !== request.producer)) {
 				fault("cursor-changed", 1);
@@ -521,7 +669,38 @@ export class PiSessionUsageReader {
 			};
 			result.source = source;
 			let current = cursorFor(first, 1, header);
-			if (request.cursor) {
+			let ordinal = current.ordinal;
+			if (request.recovery) {
+				const r = request.recovery;
+				if (!(await recoveryAnchor(measured, r, header, first.end, stat.size))) {
+					fault("cursor-changed", Number.isSafeInteger(r.line) && r.line >= 2 ? r.line : 0);
+					return result;
+				}
+				index.gap = true;
+				if (!r.complete) {
+					const skipped = await skipPiece(
+						measured,
+						stat.size,
+						r.start,
+						r.line,
+						r.offset,
+						header,
+						this.limits.readBytes,
+					);
+					result.recovery = skipped.recovery ?? r;
+					result.skipped = { line: r.line, start: r.start, bytes: skipped.bytes };
+					fault("line-limit", r.line);
+					return result;
+				}
+				ordinal = r.line;
+				lines = new Lines(
+					measured,
+					stat.size,
+					r.offset,
+					Math.max(0, this.limits.readBytes - result.bytesRead),
+					this.limits.lineBytes,
+				);
+			} else if (request.cursor) {
 				const saved = decodeCursor(request.cursor);
 				if (!saved || saved.bytes > this.limits.lineBytes || saved.offset < first.end || saved.header !== header.hash) {
 					fault("cursor-invalid", request.cursor.ordinal);
@@ -533,18 +712,19 @@ export class PiSessionUsageReader {
 				}
 				// The anchor counts toward the budget but is checked whatever its size (at most lineBytes): after an
 				// oversized line the next read checks it, and its first new line is the one allowed past the budget.
-				if (!(await anchored(file, saved))) {
+				if (!(await anchored(measured, saved))) {
 					fault("cursor-changed", request.cursor.ordinal);
 					return result;
 				}
 				lines = new Lines(
-					file,
+					measured,
 					stat.size,
 					saved.offset,
-					Math.max(0, this.limits.readBytes - lines.scanned - saved.bytes),
+					Math.max(0, this.limits.readBytes - result.bytesRead),
 					this.limits.lineBytes,
 				);
 				current = { ordinal: request.cursor.ordinal, token: request.cursor.token };
+				ordinal = current.ordinal;
 			}
 			const batch: SourceBatch = {
 				v: "usage-source-batch/1",
@@ -562,7 +742,7 @@ export class PiSessionUsageReader {
 			};
 			let gap = index.gap;
 			for (;;) {
-				const lineNumber = current.ordinal + 1;
+				const lineNumber = ordinal + 1;
 				if (result.faults.length >= Math.min(PI_SESSION_LIMITS.batchRows, Math.floor(this.limits.batchBytes / 256))) {
 					fault("batch-limit", lineNumber);
 					break;
@@ -571,6 +751,20 @@ export class PiSessionUsageReader {
 				if (line.kind !== "line") {
 					if (line.kind === "end") result.endOfFile = true;
 					else fault(line.kind, lineNumber);
+					if (line.kind === "line-limit" && request.recoverOversized) {
+						const skipped = await skipPiece(
+							measured,
+							stat.size,
+							lines.lineStart,
+							lineNumber,
+							lines.lineStart,
+							header,
+							this.limits.readBytes,
+						);
+						result.recovery = skipped.recovery;
+						result.skipped = { line: lineNumber, start: lines.lineStart, bytes: skipped.bytes };
+						gap = true;
+					}
 					break;
 				}
 				const entry = parseLine(line);
@@ -581,6 +775,7 @@ export class PiSessionUsageReader {
 				} else if (projected) {
 					if (projected.occurredAt < request.from || projected.occurredAt > request.through) {
 						fault("window-mismatch", lineNumber);
+						result.nextWindowAt = projected.occurredAt;
 						break; // Leave this complete line unread for an appropriate occurrence window.
 					}
 					const key = JSON.stringify([projected.entryId, projected.entryTimestamp]);
@@ -616,6 +811,8 @@ export class PiSessionUsageReader {
 					// Leave room for the closed observation/fault envelope as well as the collector batch.
 					const observation: PiSessionObservation = {
 						line: lineNumber,
+						offset: line.start,
+						bytes: line.end - line.start,
 						entryId: projected.entryId,
 						entryTimestamp: projected.entryTimestamp,
 						responseId: projected.responseId,
@@ -664,6 +861,8 @@ export class PiSessionUsageReader {
 					}
 				}
 				current = cursorFor(line, lineNumber, header);
+				ordinal = lineNumber;
+				result.recovery = null;
 				batch.toCursor = current;
 			}
 			index.gap = gap;

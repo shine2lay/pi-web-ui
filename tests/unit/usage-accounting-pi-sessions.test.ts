@@ -863,7 +863,9 @@ describe("usage-accounting reader and transitive worker import boundaries", () =
 	const server = join(project, "server");
 	const reader = join(server, "usage-accounting-pi-sessions.ts");
 	// W3 owns the reader adapter; W6 owns worker orchestration, not the main-thread startup hook.
-	const readerImporters = ["usage-accounting-pi-source.ts", "usage-accounting-worker.ts"];
+	// Design B's pass (Ops #423, B3) reads through the reader only inside its own Worker; the main-thread roots
+	// below must never reach it (it is listed with the engines).
+	const readerImporters = ["usage-accounting-pi-source.ts", "usage-accounting-worker.ts", "usage-accounting-pass.ts"];
 	const roots = ["index.ts", "roles-overview.ts", "protocol.ts", "usage-accounting-meter-cache.ts"];
 	const engines = [
 		"usage-accounting-collector.ts",
@@ -876,6 +878,10 @@ describe("usage-accounting reader and transitive worker import boundaries", () =
 		"usage-accounting-pi-source.ts",
 		"usage-accounting-temper-source.ts",
 		"usage-accounting-snapshot.ts", // W5 builder, never its separate main-thread cache.
+		// B3 pass modules: Worker-only. The host reaches the Worker by URL, never by import.
+		"usage-accounting-pass.ts",
+		"usage-accounting-pass-scan.ts",
+		"usage-accounting-pass-worker.ts",
 	];
 	const forbidden = new Set(engines.map((name) => join(server, name)));
 	type ImportHost = { fileExists(file: string): boolean; readFile(file: string): string | undefined };
