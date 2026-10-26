@@ -17,6 +17,7 @@ const ptys = vi.hoisted(
 	() =>
 		[] as Array<{
 			write: ReturnType<typeof vi.fn>;
+			completions: Array<() => void>;
 			reset: ReturnType<typeof vi.fn>;
 			options: { disableStdin?: boolean };
 			input?: (data: string) => void;
@@ -30,7 +31,12 @@ vi.mock("@xterm/xterm", () => ({
 		options: { disableStdin?: boolean } = {};
 		element = document.createElement("div");
 		textarea = document.createElement("textarea");
-		write = vi.fn();
+		// #597: invocation is not parser completion. Tests acknowledge real queued
+		// callbacks explicitly; a never-acknowledged write remains read-only.
+		completions: Array<() => void> = [];
+		write = vi.fn((_data: string, done?: () => void) => {
+			if (done) this.completions.push(done);
+		});
 		reset = vi.fn();
 		dispose = vi.fn();
 		input?: (data: string) => void;
@@ -603,6 +609,11 @@ describe("TerminalPanel and TermXterm: one explicit owner; rendering never runs 
 		);
 		await settle(() => vi.advanceTimersByTime(32));
 		expect(sent.some((m) => m.type === "terminal_create")).toBe(false);
+		expect(ptys[0].options.disableStdin).toBe(true);
+		expect(p.host.querySelector(".term-xterm")?.getAttribute("data-attach-state")).toBe("pending");
+		ptys[0].input!("synthetic blocked pending replay\r");
+		expect(sent).toEqual([]);
+		await settle(() => ptys[0].completions[0]());
 		ptys[0].input!("synthetic PTY bytes\r");
 		expect(sent).toContainEqual({
 			type: "terminal_input",
@@ -684,9 +695,14 @@ describe("TermXterm: exact existing-only attachment and renderer lifetime", () =
 		ptys[0].input!("synthetic blocked input");
 		expect(sent).toEqual([]);
 		act(() => replace("synthetic retained output\n[pi-term-exit:4]\n"));
-		expect(ptys[0].reset).toHaveBeenCalledTimes(1);
-		expect(ptys[0].write).toHaveBeenCalledWith("synthetic retained output\r\n");
+		expect(ptys[0].reset).not.toHaveBeenCalled();
+		expect(ptys[0].write).toHaveBeenCalledWith("\x18\x1bcsynthetic retained output\r\n", expect.any(Function));
 		await settle(() => resolve(true));
+		expect(ptys[0].options.disableStdin).toBe(true);
+		expect(p.host.querySelector(".term-xterm")?.getAttribute("data-attach-state")).toBe("pending");
+		ptys[0].input!("synthetic blocked before parser acknowledgement");
+		expect(sent).toEqual([]);
+		await settle(() => ptys[0].completions[0]());
 		expect(ptys[0].options.disableStdin).toBe(false);
 		expect(p.host.querySelector(".term-xterm")?.getAttribute("data-attach-state")).toBe("attached");
 		ptys[0].input!("synthetic live input");
@@ -697,7 +713,8 @@ describe("TermXterm: exact existing-only attachment and renderer lifetime", () =
 			data: "synthetic live input",
 		});
 		act(() => replace("synthetic late replacement"));
-		expect(ptys[0].reset).toHaveBeenCalledTimes(1);
+		expect(ptys[0].reset).not.toHaveBeenCalled();
+		expect(ptys[0].completions).toHaveLength(1);
 		p.render(
 			createElement(TermXterm, {
 				...original,
@@ -783,7 +800,11 @@ describe("TermXterm: exact existing-only attachment and renderer lifetime", () =
 				pending[1].output("");
 				pending[1].resolve(true);
 			});
-			expect(ptys[1].reset).toHaveBeenCalledTimes(1);
+			expect(ptys[1].reset).not.toHaveBeenCalled();
+			expect(ptys[1].write).toHaveBeenCalledWith("\x18\x1bc", expect.any(Function));
+			expect(ptys[1].options.disableStdin).toBe(true);
+			expect(sent).toEqual([]);
+			await settle(() => ptys[1].completions[0]());
 			expect(ptys[1].options.disableStdin).toBe(false);
 			expect(writes()).toEqual([]);
 		},

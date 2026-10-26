@@ -75,7 +75,7 @@ export function TermXterm({
 	register,
 }: TermXtermProps) {
 	const containerRef = useRef<HTMLDivElement>(null);
-	const termRef = useRef<{ term: Terminal; fit: FitAddon } | null>(null);
+	const termRef = useRef<{ term: Terminal; fit: FitAddon; writeExit(): void } | null>(null);
 	const { t } = useI18n();
 	const live = useRef({ running, exitCode, t });
 	live.current = { running, exitCode, t };
@@ -91,6 +91,9 @@ export function TermXterm({
 		let disposed = false;
 		let settled = false;
 		let replaced = false;
+		let accepted = false;
+		let replayComplete = false;
+		let lastRunning: boolean | undefined;
 		attachedRef.current = false;
 		setAttachState("pending");
 		const term = new Terminal({
@@ -104,13 +107,35 @@ export function TermXterm({
 		const fit = new FitAddon();
 		term.loadAddon(fit);
 		term.open(container);
-		termRef.current = { term, fit };
+		const isCurrent = () => !disposed && termRef.current?.term === term;
+		const exitBanner = () => {
+			const current = live.current;
+			// An exited process may have left an unfinished OSC/CSI/DCS sequence.
+			return `\x18\r\n\x1b[90m${current.t("exitBanner", { code: current.exitCode ?? "" })}\x1b[0m\r\n`;
+		};
+		const writeExit = () => {
+			if (!isCurrent() || lastRunning === live.current.running) return;
+			lastRunning = live.current.running;
+			if (lastRunning === false) term.write(exitBanner());
+		};
+		const disposeRenderer = (announce = false) => {
+			if (disposed) return;
+			disposed = true;
+			term.options.disableStdin = true;
+			if (termRef.current?.term === term) {
+				attachedRef.current = false;
+				termRef.current = null;
+				if (announce) setAttachState("unavailable");
+			}
+			term.dispose();
+		};
+		termRef.current = { term, fit, writeExit };
 		if (active) term.focus();
 
 		// Re-theme the canvas when the active theme changes (the injected <link>
 		// fires THEME_CHANGE_EVENT after its stylesheet has applied).
 		const onThemeChange = () => {
-			term.options.theme = buildTermTheme();
+			if (isCurrent()) term.options.theme = buildTermTheme();
 		};
 		window.addEventListener(THEME_CHANGE_EVENT, onThemeChange);
 
@@ -145,7 +170,7 @@ export function TermXterm({
 			write: (data) => {
 				if (!disposed) term.write(stripExitBanner(data).clean);
 			},
-			dispose: () => term.dispose(),
+			dispose: () => disposeRenderer(true),
 		});
 
 		const sendDims = () => {
@@ -164,7 +189,19 @@ export function TermXterm({
 			}
 		};
 
+		const finishAttach = () => {
+			if (!isCurrent() || !settled) return;
+			// Host ownership and renderer parsing are independent acknowledgements.
+			if (accepted && replaced && !replayComplete) return;
+			const attached = accepted && replaced && replayComplete;
+			attachedRef.current = attached;
+			term.options.disableStdin = !attached;
+			setAttachState(attached ? "attached" : "unavailable");
+			if (attached) sendDims();
+		};
+
 		const raf = requestAnimationFrame(() => {
+			if (!isCurrent()) return;
 			try {
 				fit.fit();
 			} catch {
@@ -182,30 +219,28 @@ export function TermXterm({
 				rows: term.rows,
 				viewId: randomUuid(),
 			});
-			const isCurrent = () => !disposed && termRef.current?.term === term;
 			const replaceOutput = (data: string) => {
 				if (!isCurrent() || settled || replaced || typeof data !== "string") return;
 				replaced = true;
-				term.reset();
-				term.write(stripExitBanner(data).clean);
-				const current = live.current;
-				if (current.running === false)
-					term.write(`\r\n\x1b[90m${current.t("exitBanner", { code: current.exitCode ?? "" })}\x1b[0m\r\n`);
+				lastRunning = live.current.running;
+				// reset() is synchronous and does NOT clear xterm's pending writes.
+				// CAN cancels a partial parser sequence; RIS resets at this exact place
+				// in xterm's own queue. No separate/unbounded live-output backlog.
+				term.write(`\x18\x1bc${stripExitBanner(data).clean}${lastRunning === false ? exitBanner() : ""}`, () => {
+					if (!isCurrent() || replayComplete) return;
+					replayComplete = true;
+					finishAttach();
+				});
 			};
 			void (async () => {
-				let attached = false;
 				try {
 					const result = onAttachTerminal(intent, replaceOutput);
-					if (result && typeof result.then === "function") attached = (await result) === true && replaced;
+					if (result && typeof result.then === "function") accepted = (await result) === true;
 				} catch {
 					/* unavailable: keep output visible and read-only */
 				}
 				settled = true;
-				if (!isCurrent()) return;
-				attachedRef.current = attached;
-				term.options.disableStdin = !attached;
-				setAttachState(attached ? "attached" : "unavailable");
-				if (attached) sendDims();
+				finishAttach();
 			})();
 		});
 
@@ -294,8 +329,8 @@ export function TermXterm({
 		}
 
 		return () => {
-			disposed = true;
-			attachedRef.current = false;
+			// Fence before unregistering: that boundary may synchronously call back.
+			disposeRenderer();
 			cancelAnimationFrame(raf);
 			onData.dispose();
 			termEl?.removeEventListener("touchstart", onTouchStart);
@@ -307,8 +342,6 @@ export function TermXterm({
 			unregister();
 			// Unmounting happens when switching conversations/views; the PTY is
 			// persistent and is killed only by an explicit close action or agent tool.
-			term.dispose();
-			termRef.current = null;
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [conversationId, sessionId, terminalId, register, onAttachTerminal]);
@@ -342,16 +375,9 @@ export function TermXterm({
 	// written once per running→stopped transition, so reruns in the SAME tab
 	// (TerminalPanel reuses the component instance) and remounts of already-
 	// stopped terminals each render their banner without duplicates.
-	const lastRunning = useRef<boolean | undefined>(undefined);
 	useEffect(() => {
-		if (running === lastRunning.current) return;
-		lastRunning.current = running;
-		if (running !== false) return;
-		const inst = termRef.current;
-		if (!inst) return;
-		inst.term.write(`\r\n\x1b[90m${t("exitBanner", { code: exitCode ?? "" })}\x1b[0m\r\n`);
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [running, terminalId, exitCode]);
+		termRef.current?.writeExit();
+	}, [running, exitCode, conversationId, sessionId, terminalId, register, onAttachTerminal]);
 
 	return (
 		<div
