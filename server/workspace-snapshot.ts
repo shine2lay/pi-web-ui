@@ -16,10 +16,10 @@
  * of cwd>` in the git dir) and seeds the next snapshot of that folder, but only while the real index and
  * the main ignore files are unchanged (stamp: inode, size, mtime of the index, info/exclude and the
  * top-level and cwd .gitignore): a commit, git add/rm, git status refreshing the index or an edit of
- * those ignore files reseeds from the real index, so the kept index can't hold on to a file the user
- * untracked or newly ignored there. (Not covered: a nested .gitignore or core.excludesFile edit while
- * the index stays the same; a file such a rule newly ignores stays in the snapshots until the next
- * reseed, as it would with upstream's unconditional cache.) The kept index saves re-hashing files
+ * those ignore files reseeds from the real index. On every reuse, Git rechecks standard exclusions
+ * (including nested .gitignore and core.excludesFile): ignored paths held only by the cache are removed
+ * before staging, while genuinely tracked-but-ignored files stay (Ops #572). This does not depend on
+ * ignore stamps covering every exclusion source. The kept index saves re-hashing files
  * changed since git last refreshed the real index, and untracked files. The stamp is in memory: after a
  * restart the first snapshot of a folder seeds from the real index. Every copy of an index keeps the
  * original's mtime, and the kept one is renamed into place: git's racy-git check content-compares an
@@ -47,16 +47,26 @@ const exec = promisify(execFile);
 /** 单次 git 快照/还原命令超时时间（毫秒）。 */
 const GIT_SNAPSHOT_TIMEOUT_MS = 15_000;
 
-/** 执行单条 git 命令，返回 stdout。 */
-async function runGit(cwd: string, args: string[], envExtra?: NodeJS.ProcessEnv): Promise<string> {
-	const { stdout } = await exec("git", ["-c", "core.quotepath=false", ...args], {
+/** Raw stdout (NUL-delimited filenames must not be trimmed); optional input goes over stdin, not argv. */
+async function runGitRaw(cwd: string, args: string[], envExtra?: NodeJS.ProcessEnv, input?: string): Promise<string> {
+	const pending = exec("git", ["-c", "core.quotepath=false", ...args], {
 		cwd,
 		env: envExtra ? { ...process.env, ...envExtra } : process.env,
 		timeout: GIT_SNAPSHOT_TIMEOUT_MS,
 		maxBuffer: 16 * 1024 * 1024,
 		windowsHide: true,
 	});
-	return stdout.trim();
+	if (input !== undefined) {
+		// Git can fail before reading stdin (e.g. a locked index). Await its exit error, not an unhandled EPIPE.
+		pending.child.stdin?.on("error", () => {});
+		pending.child.stdin?.end(input);
+	}
+	return (await pending).stdout;
+}
+
+/** 执行单条 git 命令，返回 stdout。 */
+async function runGit(cwd: string, args: string[], envExtra?: NodeJS.ProcessEnv): Promise<string> {
+	return (await runGitRaw(cwd, args, envExtra)).trim();
 }
 
 /** 检查工作区是否由 Git 管理。 */
@@ -236,6 +246,23 @@ async function hasCommit(cwd: string, sha: string): Promise<boolean> {
 	}
 }
 
+/** A cached untracked file looks tracked to `git add`, which then ignores new exclusion rules. Ask Git
+ *  to evaluate its current standard exclusions, and remove only ignored paths absent from the real
+ *  index. Both ls-files and update-index use cwd-relative, NUL-delimited names; :/ covers the whole
+ *  repo even when cwd is a subfolder, just like add -A. All writes stay in the temporary index. */
+async function removeIgnoredCacheOnlyPaths(cwd: string, gitDir: string, env: NodeJS.ProcessEnv): Promise<void> {
+	const args = ["ls-files", "--cached", "--ignored", "--exclude-standard", "-z", "--", ":/"];
+	const ignored = (await runGitRaw(cwd, args, env)).split("\0").filter(Boolean);
+	if (!ignored.length) return;
+	const tracked = new Set(
+		(await runGitRaw(cwd, args, { GIT_INDEX_FILE: join(gitDir, "index") })).split("\0").filter(Boolean),
+	);
+	const cacheOnly = ignored.filter((path) => !tracked.has(path));
+	if (cacheOnly.length) {
+		await runGitRaw(cwd, ["update-index", "--force-remove", "-z", "--stdin"], env, `${cacheOnly.join("\0")}\0`);
+	}
+}
+
 /** Stage the whole working tree into the temp index and write its tree. */
 async function stageTree(cwd: string, env: NodeJS.ProcessEnv): Promise<string> {
 	await runGit(cwd, ["add", "-A"], env);
@@ -267,6 +294,7 @@ export async function createWorkspaceSnapshot(cwd: string): Promise<string | nul
 		let tree: string;
 		let keep = true;
 		try {
+			if (seed === "cache") await removeIgnoredCacheOnlyPaths(cwd, gitDir, env);
 			tree = await stageTree(cwd, env);
 		} catch (stageErr) {
 			if (seed === "empty") throw stageErr;

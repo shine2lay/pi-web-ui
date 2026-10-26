@@ -1,7 +1,8 @@
 // snapshot-index-cache (Ops #565, W1-B): the workspace snapshot seeds its temp index from the kept
 // shadow index or the real index instead of an empty one. These tests hold it to the snapshot a fresh,
-// empty index gives (git hashes every file then: the ground truth) in every case the stamp covers, to
-// git's racy-git rule (index copies keep their mtime), and to the old way when a seed breaks.
+// empty index gives for cache-only files (git hashes every file then), including nested/global
+// exclusions (Ops #572), while preserving genuinely tracked-but-ignored files, git's racy-git rule
+// (index copies keep their mtime), and the old way when a seed breaks.
 import { execFileSync } from "node:child_process";
 import {
 	existsSync,
@@ -25,6 +26,7 @@ import {
 	indexSkipsWorktree,
 	restoreWorkspaceSnapshot,
 	snapshotCachePath,
+	snapshotSeedStamp,
 	snapshotStampPaths,
 } from "../../server/workspace-snapshot.js";
 
@@ -59,13 +61,24 @@ function treeOf(dir: string, ref: string): string {
 }
 
 function filesIn(dir: string, ref: string): string[] {
-	return git(dir, "ls-tree", "-r", "--name-only", ref).split("\n").filter(Boolean).sort();
+	return execFileSync("git", ["ls-tree", "-r", "--name-only", "-z", ref], { cwd: dir, encoding: "utf8" })
+		.split("\0")
+		.filter(Boolean)
+		.sort();
 }
 
 /** The paths an index file holds. */
 function indexPaths(dir: string, indexFile: string): string[] {
 	const env = { ...process.env, GIT_INDEX_FILE: indexFile };
-	return execFileSync("git", ["ls-files"], { cwd: dir, env, encoding: "utf8" }).split("\n").filter(Boolean).sort();
+	return execFileSync("git", ["ls-files", "-z"], { cwd: dir, env, encoding: "utf8" })
+		.split("\0")
+		.filter(Boolean)
+		.sort();
+}
+
+function indexIdentity(path: string): unknown[] {
+	const s = statSync(path);
+	return [readFileSync(path), s.ino, s.size, s.mtimeMs];
 }
 
 /** Rewrite a file in place (same inode) and pin its mtime. */
@@ -201,6 +214,131 @@ describe("workspace snapshot: kept shadow index (snapshot-index-cache)", () => {
 		expect(filesIn(dir, last!)).toEqual([".gitignore", "a.txt", "fresh/c.md"]);
 		expect(git(dir, "show", `${last}:a.txt`)).toBe("a v4");
 	}, 60_000);
+
+	it.each(["new", "edited"])(
+		"rechecks a %s nested ignore for cache-only paths, never genuine tracked paths",
+		async (mode) => {
+			mkdirSync(join(dir, "sub"));
+			const ignore = join(dir, "sub", ".gitignore");
+			if (mode === "edited") writeFileSync(ignore, "# no exclusions yet\n");
+			writeFileSync(join(dir, "sub", "tracked.txt"), "tracked before\n");
+			git(dir, "add", "sub/tracked.txt");
+			git(dir, "commit", "-q", "-m", "tracked control");
+			writeFileSync(join(dir, "sub", "scratch.txt"), "scratch before\n");
+			writeFileSync(join(dir, "sub", "visible.txt"), "visible\n");
+			const basePaths = [".gitignore", "a.txt", "src/b.ts", "sub/tracked.txt", "sub/visible.txt"];
+			const first = await createWorkspaceSnapshot(dir);
+			expect(filesIn(dir, first!)).toEqual(
+				[...basePaths, "sub/scratch.txt", ...(mode === "edited" ? ["sub/.gitignore"] : [])].sort(),
+			);
+			const indexBefore = indexIdentity(join(gitDir, "index"));
+			const headBefore = git(dir, "rev-parse", "HEAD");
+			const stamp = await snapshotSeedStamp(gitDir, dir);
+
+			writeFileSync(ignore, "*.txt\n!visible.txt\n");
+			writeFileSync(join(dir, "sub", "scratch.txt"), "scratch after ignore\n");
+			writeFileSync(join(dir, "sub", "tracked.txt"), "tracked after ignore\n");
+			expect(await snapshotSeedStamp(gitDir, dir)).toBe(stamp); // the old stamp cannot see this change
+			const snap = await createWorkspaceSnapshot(dir);
+			expect(filesIn(dir, snap!)).toEqual([...basePaths, "sub/.gitignore"].sort());
+			expect(indexPaths(dir, snapshotCachePath(gitDir, dir))).not.toContain("sub/scratch.txt");
+			expect(git(dir, "show", `${snap}:sub/tracked.txt`)).toBe("tracked after ignore");
+			expect(filesIn(dir, groundTruthTree(dir))).toEqual(
+				[".gitignore", "a.txt", "src/b.ts", "sub/.gitignore", "sub/visible.txt"].sort(),
+			);
+
+			writeFileSync(join(dir, "sub", "scratch.txt"), "ignored edit must not create a new tree\n");
+			expect(await createWorkspaceSnapshot(dir)).toBe(snap);
+			rmSync(ignore);
+			const unignored = await createWorkspaceSnapshot(dir);
+			expect(filesIn(dir, unignored!)).toEqual([...basePaths, "sub/scratch.txt"].sort());
+			expect(git(dir, "show", `${unignored}:sub/scratch.txt`)).toBe("ignored edit must not create a new tree");
+			expect(indexIdentity(join(gitDir, "index"))).toEqual(indexBefore);
+			expect(git(dir, "rev-parse", "HEAD")).toBe(headBefore);
+		},
+		30_000,
+	);
+
+	it.each(["new", "edited", "reselected"])(
+		"rechecks a %s global exclude source without losing tracked controls",
+		async (mode) => {
+			mkdirSync(join(dir, "sub"));
+			writeFileSync(join(dir, "sub", "tracked.txt"), "tracked before\n");
+			git(dir, "add", "sub/tracked.txt");
+			git(dir, "commit", "-q", "-m", "tracked control");
+			const excludes = join(gitDir, "test-global-excludes");
+			if (mode === "edited") writeFileSync(excludes, "# no exclusions yet\n");
+			git(dir, "config", "core.excludesFile", mode === "reselected" ? `${excludes}-old` : excludes);
+			writeFileSync(join(dir, "sub", "scratch.txt"), "scratch before\n");
+			writeFileSync(join(dir, "sub", "visible.txt"), "visible\n");
+			const basePaths = [".gitignore", "a.txt", "src/b.ts", "sub/tracked.txt", "sub/visible.txt"];
+			const first = await createWorkspaceSnapshot(dir);
+			expect(filesIn(dir, first!)).toEqual([...basePaths, "sub/scratch.txt"].sort());
+			const indexBefore = indexIdentity(join(gitDir, "index"));
+			const headBefore = git(dir, "rev-parse", "HEAD");
+			const stamp = await snapshotSeedStamp(gitDir, dir);
+
+			writeFileSync(excludes, "sub/*.txt\n!sub/visible.txt\n");
+			if (mode === "reselected") git(dir, "config", "core.excludesFile", excludes);
+			writeFileSync(join(dir, "sub", "scratch.txt"), "scratch after exclude\n");
+			writeFileSync(join(dir, "sub", "tracked.txt"), "tracked after exclude\n");
+			expect(await snapshotSeedStamp(gitDir, dir)).toBe(stamp);
+			const snap = await createWorkspaceSnapshot(dir);
+			expect(filesIn(dir, snap!)).toEqual(basePaths);
+			expect(indexPaths(dir, snapshotCachePath(gitDir, dir))).not.toContain("sub/scratch.txt");
+			expect(git(dir, "show", `${snap}:sub/tracked.txt`)).toBe("tracked after exclude");
+			expect(filesIn(dir, groundTruthTree(dir))).toEqual([".gitignore", "a.txt", "src/b.ts", "sub/visible.txt"]);
+
+			writeFileSync(join(dir, "sub", "scratch.txt"), "ignored edit must not create a new tree\n");
+			expect(await createWorkspaceSnapshot(dir)).toBe(snap);
+			rmSync(excludes);
+			const unignored = await createWorkspaceSnapshot(dir);
+			expect(filesIn(dir, unignored!)).toEqual([...basePaths, "sub/scratch.txt"].sort());
+			expect(git(dir, "show", `${unignored}:sub/scratch.txt`)).toBe("ignored edit must not create a new tree");
+			expect(indexIdentity(join(gitDir, "index"))).toEqual(indexBefore);
+			expect(git(dir, "rev-parse", "HEAD")).toBe(headBefore);
+		},
+		30_000,
+	);
+
+	it("rechecks exclusions across the whole repo from a nested cwd, with literal NUL-delimited names", async () => {
+		mkdirSync(join(dir, "sub"));
+		writeFileSync(join(dir, "sub", "tracked.txt"), "tracked before\n");
+		git(dir, "add", "sub/tracked.txt");
+		git(dir, "commit", "-q", "-m", "tracked control");
+		writeFileSync(join(dir, "sub", "scratch.txt"), "scratch\n");
+		writeFileSync(join(dir, "sub", "visible.txt"), "visible\n");
+		const names = [" leading name.cache", "literal[1]*.cache", "line\nbreak.cache"];
+		for (const name of names) writeFileSync(join(dir, name), "cache only\n");
+		const excludes = join(gitDir, "test-global-excludes");
+		git(dir, "config", "core.excludesFile", excludes);
+		const cwd = join(dir, "src");
+		const first = await createWorkspaceSnapshot(cwd);
+		expect(filesIn(dir, first!)).toEqual(
+			[".gitignore", "a.txt", "src/b.ts", "sub/scratch.txt", "sub/tracked.txt", "sub/visible.txt", ...names].sort(),
+		);
+		const indexBefore = indexIdentity(join(gitDir, "index"));
+		const stamp = await snapshotSeedStamp(gitDir, cwd);
+
+		writeFileSync(join(dir, "sub", ".gitignore"), "*.txt\n!visible.txt\n");
+		writeFileSync(excludes, "*.cache\n");
+		for (const name of names) writeFileSync(join(dir, name), "now ignored\n");
+		writeFileSync(join(dir, "sub", "scratch.txt"), "now ignored\n");
+		writeFileSync(join(dir, "sub", "tracked.txt"), "tracked after ignore\n");
+		expect(await snapshotSeedStamp(gitDir, cwd)).toBe(stamp);
+		const snap = await createWorkspaceSnapshot(cwd);
+		expect(filesIn(dir, snap!)).toEqual([
+			".gitignore",
+			"a.txt",
+			"src/b.ts",
+			"sub/.gitignore",
+			"sub/tracked.txt",
+			"sub/visible.txt",
+		]);
+		expect(indexPaths(dir, snapshotCachePath(gitDir, cwd))).toEqual(filesIn(dir, snap!));
+		expect(git(dir, "show", `${snap}:sub/tracked.txt`)).toBe("tracked after ignore");
+		expect(indexIdentity(join(gitDir, "index"))).toEqual(indexBefore);
+	}, 30_000);
 
 	it("sees a same-size edit made in the second git last hashed the file (seed from the real index)", async () => {
 		// The real index holds a.txt hashed with mtime M, and the index file itself has mtime M: git must
