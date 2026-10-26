@@ -152,7 +152,8 @@ the earlier reported typecheck pass: DOM `LockGrantedCallback` needs a type argu
 the mock `key()` inferred string rather than native string|null. Explicitly type those
 three test seams to the platform contract, without changing module behavior or assertions.
 Expected: all-five-config compiler and the 165 focused cases pass; any remaining compiler
-error or changed runtime outcome falsifies it. Result pending recheck.
+error or changed runtime outcome falsifies it. Result: HIT; all-five-config typecheck and
+all 165 focused runtime cases pass after the explicit test-only type annotations.
 
 H-LOAD-ISOLATION-1: the same full gate passed 8,756 cases with 16 skips but timed out one
 unchanged #578 multi-attachment ownership case at its existing 5-second timeout. No module
@@ -160,7 +161,12 @@ failure was reported. Test that case alone before retrying the normal gate; no t
 assertion, source, gate or production change. Expected isolated pass supports contention;
 a deterministic isolated failure would falsify it and require the responsible lead's repair.
 The repeat keeps the normal gate unchanged, uses its supported two-worker setting to reduce
-runner contention, and waits for the existing quiet-load guard before starting.
+runner contention, and waits for the existing quiet-load guard before starting that gate.
+After shared load held the guard for an hour without starting checks, run the independent
+compiler/focused/isolated-case checks first with one worker; keep the quiet guard for land.
+This tests the repaired stage without allowing an unrelated load wait to block all progress.
+Result: the unchanged selected ownership case passes in 1,878 ms at its existing 5-second
+timeout, supporting the contention hypothesis, not proving it. No #578 file was changed.
 
 Measured local proof (2026-10-26): sealed focused 165/165; native fixture 13/13 with actual
 Web Locks/localStorage, genuine quota refusal, opener/session clone collision, reload and
@@ -170,8 +176,9 @@ Explicit undefined/absence and delayed asynchronous rejection are exercised nati
 No real profile, chat, model or production server is used. Sealed worktree build, format
 and lint pass (lint has existing warnings, zero errors). The first normal landing refused
 three test-only type errors and an unchanged ownership-test timeout; nothing was landed.
-All-five-config typecheck and unchanged sealed landing gate must pass after repair; their
-actual results and successful receipt are returned separately, not inferred from local proof.
+After repair, all-five-config typecheck and the 165 focused cases pass; the unchanged
+ownership case also passes in isolation. The unchanged sealed landing gate must still pass;
+its actual result and successful receipt are returned separately, not inferred from local proof.
 
 ## Boundaries
 
