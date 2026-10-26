@@ -37,6 +37,7 @@ import type {
 	StorageWrite,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { isAcpFoldEntry } from "./acp-fold.js";
 
 type Message = NonNullable<EntryRecord["model"]>[number];
 type Block = JsonObject & { blockId: string; summary: string; active: boolean };
@@ -50,6 +51,8 @@ const EXCLUDED_CUSTOM = new Set(["acp-status", "acp-export", "acp-rule"]);
 export interface MigrationOptions {
 	sourceDir: string;
 	targetDir: string;
+	/** Original parentSession reference -> listed offline file; never follows a live parent path. */
+	parentSessionMap?: Readonly<Record<string, string>>;
 	dryRun?: boolean;
 	/** Verification only: no migration, manifest write or target database open for writing. */
 	verify?: boolean;
@@ -185,6 +188,7 @@ function messageOf(entry: SessionEntry): Message | undefined {
 	}
 	if (entry.type !== "message") return undefined;
 	const msg = entry.message;
+	if (!object(msg) || typeof msg.role !== "string") throw new Error(`Invalid archived message: ${entry.id}`);
 	if (msg.role === "user" || msg.role === "assistant" || msg.role === "toolResult" || msg.role === "system") {
 		return { ...msg, content: msg.content ?? (msg.role === "system" ? "" : []) } as Message;
 	}
@@ -216,9 +220,23 @@ function rawIds(block: Block, state: JsonObject, entries: SessionEntry[]): strin
 	return entries.slice(from, to + 1).map((entry) => entry.id);
 }
 
+/** Remove ACP's transport-only compactions and reconnect their children, not native compactions.
+ * Keep the original branch/archive intact, including every legacy ID and parent reference. */
+function unfoldTransportFolds(branch: SessionEntry[]): SessionEntry[] {
+	const parents = new Map(branch.filter(isAcpFoldEntry).map((entry) => [entry.id, entry.parentId]));
+	return branch
+		.filter((entry) => !parents.has(entry.id))
+		.map((entry) => {
+			let parentId = entry.parentId;
+			while (parentId !== null && parents.has(parentId)) parentId = parents.get(parentId)!;
+			return parentId === entry.parentId ? entry : { ...entry, parentId };
+		});
+}
+
 /** Structural ACP view; request-time tags, nudges and provider transforms are not stored. */
 function projectContext(branch: SessionEntry[], state: JsonObject): ContextItem[] {
-	const projection = buildSessionProjection(branch, branch.at(-1)?.id);
+	const unfolded = unfoldTransportFolds(branch);
+	const projection = buildSessionProjection(unfolded, unfolded.at(-1)?.id);
 	const items: ContextItem[] = [];
 	for (const { sourceEntry: entry, messages } of projection.entries) {
 		if (entry.type === "custom_message" && EXCLUDED_CUSTOM.has(entry.customType)) continue;
@@ -234,13 +252,31 @@ function projectContext(branch: SessionEntry[], state: JsonObject): ContextItem[
 			items.push({ key: converted.length === 1 ? entry.id : `${entry.id}:${at}`, sourceId: entry.id, message });
 		}
 	}
-	const active = blocks(state).filter((block) => block.active);
-	if (active.length === 0) return settleMessages(items);
+	const allBlocks = blocks(state);
+	const consumed = new Set<string>();
+	for (const block of allBlocks) {
+		const ids = block.directBlockIds;
+		if (ids === undefined) continue;
+		if (!Array.isArray(ids) || !ids.every((id) => typeof id === "string"))
+			throw new Error(`Invalid ACP consumed block IDs for ${block.blockId}`);
+		for (const id of ids) consumed.add(id as string);
+	}
 	const index = new Map(items.map((item, at) => [item.sourceId!, at]));
+	// Legacy syncBlocks recomputes presence after branch selection/native compaction.
+	// Synchronize only this projection; persist the original blocks/flags/refs verbatim.
+	const active = allBlocks.flatMap((block) => {
+		if (consumed.has(block.blockId) || block.expanded) return [];
+		// Range-only embedded records predate syncBlocks; keep their explicit inactive
+		// flag without trying to resolve archived boundaries absent from this branch.
+		if (!block.active && block.effectiveMessageIds === undefined && block.directMessageIds === undefined) return [];
+		const ids = rawIds(block, state, branch);
+		return ids.some((id) => index.has(id)) || index.has(`acp_summary_${block.blockId}`) ? [{ block, ids }] : [];
+	});
+	if (active.length === 0) return settleMessages(items);
 	const covered = new Set<string>();
-	const anchors = active.map((block) => {
+	const anchors = active.map(({ block, ids }) => {
 		let at = items.length;
-		for (const id of rawIds(block, state, branch)) {
+		for (const id of ids) {
 			covered.add(id);
 			at = Math.min(at, index.get(id) ?? items.length);
 		}
@@ -345,7 +381,87 @@ function settleMessages(items: ContextItem[]): ContextItem[] {
 	return out;
 }
 
-async function loadSnapshot(file: string): Promise<Snapshot> {
+interface OfflineSources {
+	headers: Map<string, SessionHeader>;
+	parents: Readonly<Record<string, string>>;
+	directory: string;
+}
+
+function sessionHeader(value: JsonObject | undefined, file: string): SessionHeader {
+	if (
+		value?.type !== "session" ||
+		typeof value.id !== "string" ||
+		!value.id ||
+		typeof value.cwd !== "string" ||
+		!value.cwd ||
+		value.version !== 3
+	)
+		throw new Error(`Expected version 3 session header: ${file}`);
+	return value as unknown as SessionHeader;
+}
+
+/** Header-only index: no source's full history has to remain resident during global preflight. */
+async function readSourceHeader(file: string): Promise<SessionHeader> {
+	const stream = createReadStream(file);
+	const lines = createInterface({ input: stream, crlfDelay: Infinity });
+	try {
+		for await (const line of lines) {
+			if (line.trim()) return sessionHeader(object(JSON.parse(line)), file);
+		}
+		throw new Error(`Empty session file: ${file}`);
+	} finally {
+		lines.close();
+		stream.destroy();
+	}
+}
+
+async function readSidecar(file: string): Promise<JsonObject | undefined> {
+	const stateFile = `${file}.acp.json`;
+	try {
+		const before = await lstat(stateFile, { bigint: true });
+		if (!before.isFile() || before.isSymbolicLink()) throw new Error(`ACP state must be a regular file: ${stateFile}`);
+		const parsed = object(JSON.parse(await readFile(stateFile, "utf8")));
+		if (!parsed) throw new Error(`Invalid ACP state: ${stateFile}`);
+		const after = await lstat(stateFile, { bigint: true });
+		if (before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ino !== after.ino)
+			throw new Error(`ACP state changed during read: ${stateFile}`);
+		blocks(parsed);
+		if (parsed.migration !== undefined)
+			throw new Error(`ACP state already contains reserved migration metadata: ${file}`);
+		return parsed;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		return undefined;
+	}
+}
+
+/** Legacy forks inherit the first nonempty ancestor sidecar, not a newly issued ref space.
+ * Resolve only explicitly enumerated offline files. A missing ancestor is not proof of empty state. */
+async function inheritedState(file: string, offline: OfflineSources): Promise<JsonObject | undefined> {
+	const visited = new Set([file]);
+	let current = file;
+	while (true) {
+		const reference = offline.headers.get(current)?.parentSession;
+		if (reference === undefined) return undefined;
+		if (typeof reference !== "string" || !reference) throw new Error(`Invalid offline parent reference: ${current}`);
+		const mapped = Object.hasOwn(offline.parents, reference) ? offline.parents[reference] : undefined;
+		if (mapped !== undefined && (typeof mapped !== "string" || !mapped))
+			throw new Error(`Invalid offline parent mapping: ${reference}`);
+		const parent = mapped === undefined ? resolve(dirname(current), reference) : resolve(offline.directory, mapped);
+		if (!offline.headers.has(parent)) throw new Error(`Missing offline parent session: ${reference}`);
+		if (visited.has(parent)) throw new Error(`Offline parent session cycle: ${reference}`);
+		visited.add(parent);
+		const state = await readSidecar(parent);
+		if (state && blocks(state).length > 0) return state;
+		if (offline.headers.get(parent)?.parentSession === undefined) {
+			if (!state || !Array.isArray(state.blocks)) throw new Error(`Missing offline parent ACP state: ${parent}`);
+			return undefined; // An explicit empty terminal sidecar proves this lineage is uncompressed.
+		}
+		current = parent;
+	}
+}
+
+async function loadSnapshot(file: string, offline: OfflineSources): Promise<Snapshot> {
 	const before = await lstat(file, { bigint: true });
 	if (!before.isFile() || before.isSymbolicLink()) throw new Error(`Source must be a regular file: ${file}`);
 	const hash = createHash("sha256");
@@ -367,14 +483,9 @@ async function loadSnapshot(file: string): Promise<Snapshot> {
 				throw new Error(`Invalid JSONL at ${file}:${lineNumber}`);
 			}
 			if (!header) {
-				if (
-					value?.type !== "session" ||
-					typeof value.id !== "string" ||
-					typeof value.cwd !== "string" ||
-					value.version !== 3
-				)
-					throw new Error(`Expected version 3 session header: ${file}`);
-				header = value as unknown as SessionHeader;
+				header = sessionHeader(value, file);
+				if (!same(header, offline.headers.get(file)))
+					throw new Error(`Source header changed during preflight: ${file}`);
 				continue;
 			}
 			if (
@@ -403,6 +514,9 @@ async function loadSnapshot(file: string): Promise<Snapshot> {
 		if (entry.parentId !== null && !byId.has(entry.parentId))
 			throw new Error(`Missing parent at ${file} (entry ${entry.id})`);
 	}
+	// Validate the archival conversion too, including entries outside the active branch.
+	// Otherwise a later malformed archive can throw only after an earlier session commits.
+	for (const entry of entries) messageOf(entry);
 	const branch: SessionEntry[] = [];
 	const visited = new Set<string>();
 	let leaf = entries.at(-1);
@@ -416,27 +530,12 @@ async function loadSnapshot(file: string): Promise<Snapshot> {
 	let state: JsonObject = {};
 	const embedded = branch.findLast((entry) => entry.type === "custom" && entry.customType === "acp-state");
 	if (embedded?.type === "custom") state = object(embedded.data) ?? {};
-	try {
-		const stateFile = `${file}.acp.json`;
-		const beforeState = await lstat(stateFile, { bigint: true });
-		if (!beforeState.isFile() || beforeState.isSymbolicLink())
-			throw new Error(`ACP state must be a regular file: ${stateFile}`);
-		const parsed = object(JSON.parse(await readFile(stateFile, "utf8")));
-		if (!parsed) throw new Error(`Invalid ACP state: ${stateFile}`);
-		const afterState = await lstat(stateFile, { bigint: true });
-		if (
-			beforeState.size !== afterState.size ||
-			beforeState.mtimeNs !== afterState.mtimeNs ||
-			beforeState.ino !== afterState.ino
-		)
-			throw new Error(`ACP state changed during read: ${stateFile}`);
-		state = parsed;
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-	}
-	blocks(state); // validate even if no messages
+	state = (await readSidecar(file)) ?? state;
+	const ownBlocks = blocks(state); // validate even if no messages
 	if (state.migration !== undefined) throw new Error(`ACP state already contains reserved migration metadata: ${file}`);
-	const info = branch.findLast((entry) => entry.type === "session_info" && entry.name !== undefined);
+	if (ownBlocks.length === 0) state = (await inheritedState(file, offline)) ?? state;
+	// SessionManager.getSessionName reads the whole physical file, even off the selected branch.
+	const info = entries.findLast((entry) => entry.type === "session_info");
 	return {
 		file,
 		header,
@@ -445,7 +544,7 @@ async function loadSnapshot(file: string): Promise<Snapshot> {
 		state,
 		sourceSha256: hash.digest("hex"),
 		stateSha256: digest(canonical(state)),
-		title: info?.type === "session_info" ? (info.name ?? null) : null,
+		title: info?.type === "session_info" ? info.name?.trim() || null : null,
 		context: projectContext(branch, state),
 	};
 }
@@ -499,10 +598,19 @@ function mappingFor(source: Snapshot, conversationId: number, headId: number): M
 		entryCount: source.entries.length,
 		activeMessages: source.context.length,
 		blocks: allBlocks.length,
-		activeBlocks: allBlocks.filter((block) => block.active).length,
+		activeBlocks: source.context.filter((item) => item.blockId !== undefined).length,
 		sourceSha256: source.sourceSha256,
 		stateSha256: source.stateSha256,
 	};
+}
+
+function assertAppendOnly(source: Snapshot, prior: Metadata): void {
+	if (!same(prior.header, source.header)) throw new Error(`Source header changed: ${source.file}`);
+	for (let at = 0; at < prior.entryOrder.length; at++) {
+		const entry = source.entries[at];
+		if (!entry || entry.id !== prior.entryOrder[at] || digest(canonical(entry)) !== prior.entryHashes[entry.id])
+			throw new Error(`Source is not an append-only continuation: ${source.file}`);
+	}
 }
 
 async function migrateOne(
@@ -514,14 +622,10 @@ async function migrateOne(
 		const tail = (await storage.scanEntries({ conversationId: prior.conversationId }, 1, undefined, CTX)).items[0];
 		if (tail?.id !== prior.value.headId)
 			throw new Error(`Target conversation has resumed; refusing to reset it: ${source.header.id}`);
-		if (prior.value.sourceSha256 === source.sourceSha256 && prior.value.stateSha256 === source.stateSha256)
+		assertAppendOnly(source, prior.value);
+		if (prior.value.sourceSha256 === source.sourceSha256 && prior.value.stateSha256 === source.stateSha256) {
+			await verifyOne(source, storage);
 			return { mapping: { ...prior.value.mapping, sourceFile: source.file }, skipped: true };
-		if (!same(prior.value.header, source.header)) throw new Error(`Source header changed: ${source.file}`);
-		const previousIds = prior.value.entryOrder;
-		for (let at = 0; at < previousIds.length; at++) {
-			const entry = source.entries[at];
-			if (!entry || entry.id !== previousIds[at] || digest(canonical(entry)) !== prior.value.entryHashes[entry.id])
-				throw new Error(`Source is not an append-only continuation: ${source.file}`);
 		}
 	}
 	const conversationId = prior?.conversationId ?? (await storage.mintId<ConversationId>());
@@ -828,6 +932,152 @@ async function withReadOnlyCopy<T>(file: string, run: (storage: Storage) => Prom
 	}
 }
 
+function assertMapping(value: unknown): asserts value is MigrationMapping {
+	const mapping = object(value);
+	if (
+		!mapping ||
+		typeof mapping.sessionId !== "string" ||
+		!mapping.sessionId ||
+		typeof mapping.cwd !== "string" ||
+		!mapping.cwd ||
+		typeof mapping.sourceFile !== "string" ||
+		typeof mapping.database !== "string" ||
+		mapping.database !== durableDatabaseName(mapping.cwd) ||
+		![mapping.conversationId, mapping.headId].every(
+			(id) => typeof id === "number" && Number.isSafeInteger(id) && id > 0,
+		) ||
+		![mapping.entryCount, mapping.activeMessages, mapping.blocks, mapping.activeBlocks].every(
+			(count) => typeof count === "number" && Number.isSafeInteger(count) && count >= 0,
+		) ||
+		!(mapping.title === null || typeof mapping.title === "string") ||
+		![mapping.sourceSha256, mapping.stateSha256].every(
+			(hash) => typeof hash === "string" && /^[0-9a-f]{64}$/.test(hash),
+		)
+	)
+		throw new Error("Invalid migration manifest mapping identity/format");
+}
+
+async function readManifest(targetDir: string): Promise<Map<string, MigrationMapping>> {
+	const mappings = new Map<string, MigrationMapping>();
+	let manifest: JsonObject | undefined;
+	try {
+		const file = join(targetDir, MANIFEST);
+		const status = await lstat(file);
+		if (!status.isFile() || status.isSymbolicLink()) throw new Error("Manifest must be a regular file");
+		manifest = object(JSON.parse(await readFile(file, "utf8")));
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		return mappings;
+	}
+	if (manifest?.format !== FORMAT || !Array.isArray(manifest.sessions))
+		throw new Error("Unsupported migration manifest");
+	const conversations = new Set<string>();
+	for (const value of manifest.sessions) {
+		assertMapping(value);
+		if (mappings.has(value.sessionId)) throw new Error("Duplicate manifest session UUID");
+		const key = `${value.database}:${value.conversationId}`;
+		if (conversations.has(key)) throw new Error("Conflicting manifest conversation identity");
+		conversations.add(key);
+		mappings.set(value.sessionId, value);
+	}
+	return mappings;
+}
+
+function sameIdentity(left: MigrationMapping, right: MigrationMapping): boolean {
+	return (
+		left.sessionId === right.sessionId &&
+		resolve(left.cwd) === resolve(right.cwd) &&
+		left.database === right.database &&
+		left.conversationId === right.conversationId
+	);
+}
+function sameMapping(left: MigrationMapping, right: MigrationMapping): boolean {
+	// A source snapshot may be relocated without changing its immutable session header.
+	const { sourceFile: _left, ...a } = left;
+	const { sourceFile: _right, ...b } = right;
+	return same(a, b);
+}
+
+/** Read ALL target workspace identities before opening any database for writing. Committed
+ * database documents survive a crash before manifest rename; a conflicting manifest never wins. */
+async function targetIndex(
+	targetDir: string,
+	manifest: Map<string, MigrationMapping>,
+): Promise<{
+	sessions: Map<string, Metadata>;
+	tails: Map<string, EntryId | undefined>;
+}> {
+	const index = new Map<string, Metadata>();
+	const tails = new Map<string, EntryId | undefined>();
+	let names: string[];
+	try {
+		names = await readdir(targetDir);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		names = [];
+	}
+	for (const database of names.filter((name) => /^session-[0-9a-f]{12}\.sqlite$/.test(name)).sort()) {
+		await withReadOnlyCopy(join(targetDir, database), async (storage) => {
+			let cursor: Cursor | undefined;
+			do {
+				const page = await storage.scanConversations({}, 256, cursor, CTX);
+				for (const conversation of page.items) {
+					const record = await storage.findDocument(
+						{ kind: META_KIND, scope: { kind: "conversation", conversationId: conversation.id } },
+						"current",
+						CTX,
+					);
+					if (!record) continue;
+					const document = await storage.document(record.id, "current", CTX);
+					const value = document?.value as Metadata | undefined;
+					assertMapping(value?.mapping);
+					const mapping = value!.mapping;
+					const header = sessionHeader(object(value!.header), database);
+					if (
+						value!.format !== FORMAT ||
+						mapping.database !== database ||
+						mapping.conversationId !== conversation.id ||
+						mapping.sessionId !== value!.sessionId ||
+						mapping.headId !== value!.headId ||
+						mapping.cwd !== value!.cwd ||
+						mapping.sourceSha256 !== value!.sourceSha256 ||
+						mapping.stateSha256 !== value!.stateSha256 ||
+						!sameIdentity(mapping, { ...mapping, sessionId: header.id, cwd: header.cwd })
+					)
+						throw new Error(`Conflicting committed UUID/workspace/database identity: ${mapping.sessionId}`);
+					if (index.has(mapping.sessionId)) throw new Error(`Duplicate target session UUID: ${mapping.sessionId}`);
+					const previous = manifest.get(mapping.sessionId);
+					if (previous) {
+						if (!sameIdentity(previous, mapping))
+							throw new Error(`Conflicting manifest mapping UUID/workspace/database identity: ${mapping.sessionId}`);
+						if (previous.headId === mapping.headId) {
+							if (!sameMapping(previous, mapping))
+								throw new Error(`Conflicting manifest mapping: ${mapping.sessionId}`);
+						} else {
+							const oldHead = await storage.entry(conversation.id, previous.headId as EntryId, CTX);
+							if (
+								previous.headId > mapping.headId ||
+								oldHead?.entry.kind !== "acp.migration.head" ||
+								object(oldHead.entry.data)?.sessionId !== mapping.sessionId ||
+								previous.entryCount > mapping.entryCount
+							)
+								throw new Error(`Conflicting manifest mapping head: ${mapping.sessionId}`);
+						}
+					}
+					index.set(mapping.sessionId, value!);
+					const tail = (await storage.scanEntries({ conversationId: conversation.id }, 1, undefined, CTX)).items[0];
+					tails.set(mapping.sessionId, tail?.id);
+				}
+				cursor = page.next;
+			} while (cursor);
+		});
+	}
+	for (const id of manifest.keys()) {
+		if (!index.has(id)) throw new Error(`Manifest mapping has no committed target database: ${id}`);
+	}
+	return { sessions: index, tails };
+}
+
 async function realFuturePath(path: string): Promise<string> {
 	try {
 		return await realpath(path);
@@ -848,7 +1098,14 @@ export async function migrateSessionsToDurable(options: MigrationOptions): Promi
 	const mode = options.dryRun ? "dry-run" : options.verify ? "verify" : "migrate";
 	const report: MigrationReport = { mode, sessions: [], migrated: 0, skipped: 0, mismatches: 0 };
 	const files = await listSources(sourceDir);
+	const offline: OfflineSources = { headers: new Map(), parents: options.parentSessionMap ?? {}, directory: sourceDir };
 	const seen = new Set<string>();
+	for (const file of files) {
+		const header = await readSourceHeader(file);
+		if (seen.has(header.id)) throw new Error(`Duplicate source session UUID: ${header.id}`);
+		seen.add(header.id);
+		offline.headers.set(file, header);
+	}
 	const stores = new Map<string, Storage>();
 	const lock = join(targetDir, ".migration-lock");
 	let locked = false;
@@ -866,14 +1123,31 @@ export async function migrateSessionsToDurable(options: MigrationOptions): Promi
 				throw error;
 			}
 		}
+		const manifest = await readManifest(targetDir);
+		const { sessions: targets, tails } = await targetIndex(targetDir, manifest);
+		for (const header of offline.headers.values()) {
+			const prior = targets.get(header.id);
+			if (!prior) continue;
+			if (!same(prior.header, header))
+				throw new Error(`Conflicting source UUID/workspace/header identity: ${header.id}`);
+			if (tails.get(header.id) !== prior.headId)
+				throw new Error(`Target conversation has resumed; refusing to reset it: ${header.id}`);
+		}
+		// Validate every source (including inherited ACP) before publishing the first conversation.
+		// Keep only hashes between passes, rather than retaining every large chat's full history.
+		const checked = new Map<string, { sourceSha256: string; stateSha256: string }>();
 		for (const file of files) {
-			const source = await loadSnapshot(file);
-			if (seen.has(source.header.id)) throw new Error(`Duplicate source session UUID: ${source.header.id}`);
-			seen.add(source.header.id);
-			if (mode === "dry-run") {
-				report.sessions.push(mappingFor(source, 0, 0));
-				continue;
-			}
+			const source = await loadSnapshot(file, offline);
+			const prior = targets.get(source.header.id);
+			if (prior) assertAppendOnly(source, prior);
+			checked.set(file, { sourceSha256: source.sourceSha256, stateSha256: source.stateSha256 });
+			if (mode === "dry-run") report.sessions.push(mappingFor(source, 0, 0));
+		}
+		if (mode === "dry-run") return report;
+		for (const file of files) {
+			const source = await loadSnapshot(file, offline);
+			if (!same(checked.get(file), { sourceSha256: source.sourceSha256, stateSha256: source.stateSha256 }))
+				throw new Error(`Source/state changed after preflight: ${file}`);
 			const path = join(targetDir, durableDatabaseName(source.header.cwd));
 			if (mode === "verify") {
 				report.sessions.push(await withReadOnlyCopy(path, (storage) => verifyOne(source, storage)));
@@ -896,16 +1170,9 @@ export async function migrateSessionsToDurable(options: MigrationOptions): Promi
 			else report.migrated++;
 		}
 		if (mode === "migrate") {
-			// Keep mappings for sessions outside a later incremental source selection.
-			let previous: MigrationMapping[] = [];
-			try {
-				const manifest = JSON.parse(await readFile(join(targetDir, MANIFEST), "utf8"));
-				previous = manifest.sessions;
-				if (manifest.format !== FORMAT || !Array.isArray(previous)) throw new Error("Unsupported migration manifest");
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-			}
-			const mappings = new Map(previous.map((entry) => [entry.sessionId, entry]));
+			// Recover committed mappings even if their manifest rename was interrupted, including
+			// sessions outside the current incremental selection. Conflicts were refused pre-write.
+			const mappings = new Map<string, MigrationMapping>([...targets].map(([id, value]) => [id, value.mapping]));
 			for (const entry of report.sessions) mappings.set(entry.sessionId, entry);
 			const temp = join(targetDir, `${MANIFEST}.tmp`);
 			await writeFile(
@@ -916,16 +1183,8 @@ export async function migrateSessionsToDurable(options: MigrationOptions): Promi
 			await rename(temp, join(targetDir, MANIFEST));
 		}
 		if (mode === "verify") {
-			const manifest = JSON.parse(await readFile(join(targetDir, MANIFEST), "utf8"));
-			if (manifest.format !== FORMAT || !Array.isArray(manifest.sessions))
-				throw new Error("Unsupported migration manifest");
-			const mappings = new Map<string, MigrationMapping>();
-			for (const value of manifest.sessions as MigrationMapping[]) {
-				if (mappings.has(value.sessionId)) throw new Error("Duplicate manifest session UUID");
-				mappings.set(value.sessionId, value);
-			}
 			for (const mapping of report.sessions) {
-				if (!same(mappings.get(mapping.sessionId), mapping))
+				if (!same(manifest.get(mapping.sessionId), mapping))
 					throw new Error(`Verification failed (manifest mapping): ${mapping.sessionId}`);
 			}
 		}
