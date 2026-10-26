@@ -143,18 +143,35 @@ fixture and add a valid JSON/unknown-key control; both must remain visible with 
 bytes and must block mutation. Falsified by dropped raw bytes, accepted mutation, or an
 incorrect JSON-versus-schema classification. No module behavior change. Result: HIT in
 both fixed cases; final focused run 165/165. The initial failed expectation remains recorded.
-Read-only self-review found no P0/P1; missing required old-host fixture dependency methods
-(`getWorkspaceRoots`, `listSessions`) were added before tests; full typecheck passes.
-An additional independent review was requested but is not claimed as completed evidence.
+Read-only self-review found no module P0/P1; missing required old-host fixture dependency
+methods (`getWorkspaceRoots`, `listSessions`) were added before focused tests. An additional
+independent review was requested; its result covered a different task, not this module.
+
+H-TYPE-DOUBLES-1: normal land 215-d873be refused three test-only compiler errors despite
+the earlier reported typecheck pass: DOM `LockGrantedCallback` needs a type argument, and
+the mock `key()` inferred string rather than native string|null. Explicitly type those
+three test seams to the platform contract, without changing module behavior or assertions.
+Expected: all-five-config compiler and the 165 focused cases pass; any remaining compiler
+error or changed runtime outcome falsifies it. Result pending recheck.
+
+H-LOAD-ISOLATION-1: the same full gate passed 8,756 cases with 16 skips but timed out one
+unchanged #578 multi-attachment ownership case at its existing 5-second timeout. No module
+failure was reported. Test that case alone before retrying the normal gate; no timeout,
+assertion, source, gate or production change. Expected isolated pass supports contention;
+a deterministic isolated failure would falsify it and require the responsible lead's repair.
+The repeat keeps the normal gate unchanged, uses its supported two-worker setting to reduce
+runner contention, and waits for the existing quiet-load guard before starting.
 
 Measured local proof (2026-10-26): sealed focused 165/165; native fixture 13/13 with actual
 Web Locks/localStorage, genuine quota refusal, opener/session clone collision, reload and
 source-tab close/reopen, then same-origin standalone reader/export with app modules returning 410. Exact 540,008-UTF-16-unit Unicode original survives both reopen and independent reader;
 8,000,000-character attempted write is refused by native browser quota, without eviction.
 Explicit undefined/absence and delayed asynchronous rejection are exercised natively.
-No real profile, chat, model or production server is used. Sealed worktree build, all-five-
-configuration typecheck, format and lint pass (lint has existing warnings, zero errors).
-Normal unchanged sealed landing gate is still required; its receipt is returned separately.
+No real profile, chat, model or production server is used. Sealed worktree build, format
+and lint pass (lint has existing warnings, zero errors). The first normal landing refused
+three test-only type errors and an unchanged ownership-test timeout; nothing was landed.
+All-five-config typecheck and unchanged sealed landing gate must pass after repair; their
+actual results and successful receipt are returned separately, not inferred from local proof.
 
 ## Boundaries
 

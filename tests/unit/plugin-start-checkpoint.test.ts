@@ -32,7 +32,7 @@ class MemoryStorage implements Storage {
 	get length() {
 		return this.values.size;
 	}
-	key(i: number) {
+	key(i: number): string | null {
 		return [...this.values.keys()][i] ?? null;
 	}
 	getItem(key: string) {
@@ -59,8 +59,8 @@ class Locks {
 	held = new Set<string>();
 	request: LockManager["request"] = (async (
 		name: string,
-		options: LockOptions | LockGrantedCallback,
-		callback?: LockGrantedCallback,
+		options: LockOptions | LockGrantedCallback<unknown>,
+		callback?: LockGrantedCallback<unknown>,
 	) => {
 		const cb = typeof options === "function" ? options : callback!;
 		if (this.held.has(name)) return cb(null);
