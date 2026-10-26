@@ -13,7 +13,7 @@ import {
 	collectGuidance,
 	listMarkerNames,
 } from "./markers/index.js";
-import { loadStateFromBranch, appendSnapshot } from "./markers/store.js";
+import { appendSnapshot, STORE_CUSTOM_TYPE, type StoreSnapshot } from "./markers/store.js";
 import { TODO_NAMESPACE, type TodoState, initTodoState } from "./markers/builtins/todo.js";
 import type { MarkerContext } from "./markers/marker.js";
 
@@ -24,15 +24,195 @@ const DEFAULT_MARKERS: MarkerSettings = {
 	disabledMarkers: [],
 };
 
+/** What MarkerService needs of a chat's session manager. The optional tree reads (the SDK's
+ *  SessionManager has them all) let the branch cursor follow new entries without walking the whole
+ *  branch; without them it falls back to getBranch(). */
+export interface MarkerSessionManager {
+	getBranch: () => unknown[];
+	appendCustomEntry?: (t: string, d: unknown) => unknown;
+	getLeafId?: () => string | null;
+	getEntry?: (id: string) => unknown;
+	getEntryCount?: () => number;
+	getSessionId?: () => string;
+	getSessionFile?: () => string | undefined;
+}
+
+interface CursorEntry {
+	id?: unknown;
+	parentId?: unknown;
+	type?: unknown;
+	customType?: unknown;
+	data?: unknown;
+}
+
+interface BranchCursor {
+	/** getSessionId() + getSessionFile() when folded: another session never reuses the cursor. */
+	session: string;
+	/** The branch's last entry when folded (null = empty branch), by id and by object: a reload rebuilds
+	 *  every entry object, so a same-id leaf from a reload doesn't pass for the folded one. */
+	leafId: string | null;
+	leafEntry: unknown;
+	firstEntry: unknown;
+	length: number;
+	/** getEntryCount() when folded; -1 = unknown. Bounds the walk back to leafId. */
+	entryCount: number;
+	/** Latest store snapshot per namespace on the folded branch (loadStateFromBranch's `ts >=` rule). */
+	latest: Map<unknown, StoreSnapshot>;
+}
+
+/**
+ * marker-incremental-cursor (Ops #565, W1-B): the latest marker store snapshot of every namespace on a
+ * chat's current branch, kept up to date by folding only the entries appended since the last read.
+ *
+ * getState used to run getBranch() + loadStateFromBranch on every read: two passes over the whole
+ * branch (70k entries in the longest chats), and the marker widget reads once per overlay marker on
+ * every refresh. The cursor remembers, per session manager (WeakMap: a closed chat's manager isn't
+ * kept alive), the leaf it folded; when the leaf has moved on to a descendant it walks parentId back
+ * from the new leaf to the folded one (getEntry, bounded by how many entries were added) and folds
+ * just that tail, oldest first, with the same `ts >=` rule. Anything else (a rewind, another branch,
+ * another session, a reload, an unreadable entry) folds the branch from the root, as before.
+ */
+export class MarkerBranchCursors {
+	private readonly cursors = new WeakMap<object, BranchCursor>();
+	/** Full folds from the root since construction (tests: incremental reads must not add any). */
+	fullFolds = 0;
+
+	/** Latest snapshot of `namespace` on the manager's current branch (= loadStateFromBranch(getBranch(), ns)'s snapshot). */
+	snapshot(mgr: MarkerSessionManager, namespace: string): StoreSnapshot | undefined {
+		try {
+			return this.sync(mgr).get(namespace);
+		} catch (e) {
+			// A half-folded cursor must not answer the next read: forget it, let the caller fall back.
+			this.cursors.delete(mgr);
+			throw e;
+		}
+	}
+
+	/** Forget a manager's cursor (its next read folds from the root). */
+	forget(mgr: MarkerSessionManager): void {
+		this.cursors.delete(mgr);
+	}
+
+	private sync(mgr: MarkerSessionManager): Map<unknown, StoreSnapshot> {
+		const session = sessionKeyOf(mgr);
+		const prev = this.cursors.get(mgr);
+		const cursor = prev && prev.session === session ? prev : undefined;
+		if (typeof mgr.getLeafId === "function" && typeof mgr.getEntry === "function") {
+			const leafId = mgr.getLeafId() ?? null;
+			const entryCount = typeof mgr.getEntryCount === "function" ? mgr.getEntryCount() : -1;
+			if (cursor) {
+				const tail = tailSince(mgr as Required<Pick<MarkerSessionManager, "getEntry">>, leafId, cursor, entryCount);
+				if (tail) {
+					for (const entry of tail) foldEntry(cursor.latest, entry);
+					if (tail.length > 0) {
+						if (cursor.length === 0) cursor.firstEntry = tail[0];
+						cursor.leafId = leafId;
+						cursor.leafEntry = tail[tail.length - 1];
+						cursor.length += tail.length;
+					}
+					cursor.entryCount = entryCount;
+					return cursor.latest;
+				}
+			}
+			return this.foldFromRoot(mgr, session, mgr.getBranch(), entryCount).latest;
+		}
+		// getBranch() only: still one walk per read, but only the new tail is folded.
+		const branch = mgr.getBranch();
+		if (
+			cursor &&
+			branch.length >= cursor.length &&
+			(cursor.length === 0 || (branch[cursor.length - 1] === cursor.leafEntry && branch[0] === cursor.firstEntry))
+		) {
+			for (let i = cursor.length; i < branch.length; i++) foldEntry(cursor.latest, branch[i] as CursorEntry);
+			if (branch.length > cursor.length) {
+				const last = branch[branch.length - 1] as CursorEntry;
+				cursor.firstEntry = branch[0];
+				cursor.leafEntry = last;
+				cursor.leafId = typeof last?.id === "string" ? last.id : null;
+				cursor.length = branch.length;
+			}
+			return cursor.latest;
+		}
+		return this.foldFromRoot(mgr, session, branch, -1).latest;
+	}
+
+	private foldFromRoot(
+		mgr: MarkerSessionManager,
+		session: string,
+		branch: unknown[],
+		entryCount: number,
+	): BranchCursor {
+		this.fullFolds++;
+		const latest = new Map<unknown, StoreSnapshot>();
+		for (const entry of branch) foldEntry(latest, entry as CursorEntry);
+		const last = branch.length > 0 ? (branch[branch.length - 1] as CursorEntry) : undefined;
+		const cursor: BranchCursor = {
+			session,
+			leafId: typeof last?.id === "string" ? last.id : null,
+			leafEntry: last,
+			firstEntry: branch[0],
+			length: branch.length,
+			entryCount,
+			latest,
+		};
+		this.cursors.set(mgr, cursor);
+		return cursor;
+	}
+}
+
+function sessionKeyOf(mgr: MarkerSessionManager): string {
+	const id = typeof mgr.getSessionId === "function" ? mgr.getSessionId() : "";
+	const file = typeof mgr.getSessionFile === "function" ? mgr.getSessionFile() : undefined;
+	return `${id}\u0000${file ?? ""}`;
+}
+
+/** loadStateFromBranch's per-entry step, for every namespace at once. Throws on a null entry, like it. */
+function foldEntry(latest: Map<unknown, StoreSnapshot>, entry: CursorEntry): void {
+	if (entry.type !== "custom") return;
+	if (entry.customType !== STORE_CUSTOM_TYPE) return;
+	const snap = entry.data as StoreSnapshot | undefined;
+	if (!snap || snap.state === undefined) return;
+	const prev = latest.get(snap.namespace);
+	if (!prev || snap.ts >= prev.ts) latest.set(snap.namespace, snap);
+}
+
+/**
+ * The entries after the cursor's leaf on the branch ending at `leafId`, oldest first, or undefined when
+ * that branch doesn't run through the cursor's leaf (rewind, another branch, reload) or the walk would
+ * be longer than the entries added since (a jump to an older descendant: a full fold is as cheap).
+ */
+function tailSince(
+	mgr: Required<Pick<MarkerSessionManager, "getEntry">>,
+	leafId: string | null,
+	cursor: BranchCursor,
+	entryCount: number,
+): CursorEntry[] | undefined {
+	if (leafId === cursor.leafId) {
+		return leafId === null || mgr.getEntry(leafId) === cursor.leafEntry ? [] : undefined;
+	}
+	const limit = entryCount >= 0 && cursor.entryCount >= 0 ? entryCount - cursor.entryCount : Number.POSITIVE_INFINITY;
+	const tail: CursorEntry[] = [];
+	let id: string | null = leafId;
+	while (id !== null && id !== cursor.leafId) {
+		if (tail.length >= limit) return undefined;
+		const entry = mgr.getEntry(id) as CursorEntry | undefined;
+		if (!entry || typeof entry !== "object") return undefined;
+		tail.push(entry);
+		id = typeof entry.parentId === "string" ? entry.parentId : null;
+	}
+	if (id !== cursor.leafId) return undefined;
+	if (id !== null && mgr.getEntry(id) !== cursor.leafEntry) return undefined;
+	tail.reverse();
+	return tail;
+}
+
 export interface MarkerHost {
 	clientId: string;
 	stateStore: ClientStateStore;
 	emit: (msg: ServerMessage) => void;
 	isDisposed: () => boolean;
 	getActiveConversationId: () => string;
-	getSessionManager: (
-		conversationId: string,
-	) => { getBranch: () => unknown[]; appendCustomEntry?: (t: string, d: unknown) => unknown } | undefined;
+	getSessionManager: (conversationId: string) => MarkerSessionManager | undefined;
 	renameConversation: (conversationId: string, title: string) => void;
 	/** 触发一次标记 widget 重绘（宿主把它接到扩展 widget 合并里，跟随当前活动会话）。 */
 	refreshMarkers: () => void;
@@ -44,6 +224,8 @@ export class MarkerService {
 	private settings: MarkerSettings;
 	private memStore = new Map<string, Map<string, unknown>>();
 	private overlayCache = new Map<string, string[]>();
+	/** marker-incremental-cursor: per-session-manager fold of the branch's store snapshots. */
+	readonly branchCursors = new MarkerBranchCursors();
 
 	constructor(private readonly host: MarkerHost) {
 		this.settings = this.host.stateStore.getMarkerSettings(this.host.clientId);
@@ -130,8 +312,7 @@ export class MarkerService {
 		const mgr = this.host.getSessionManager(convId);
 		if (mgr?.getBranch) {
 			try {
-				const branch = mgr.getBranch();
-				const fromBranch = loadStateFromBranch(branch, namespace) as T | undefined;
+				const fromBranch = this.branchCursors.snapshot(mgr, namespace)?.state as T | undefined;
 				if (fromBranch !== undefined) {
 					this.setMem(convId, namespace, fromBranch);
 					return structuredClone(fromBranch);
