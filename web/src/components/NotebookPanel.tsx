@@ -14,16 +14,24 @@
  * once, and saving is refused instead of overwriting: load the new version, or save yours anyway (the
  * lines that drops are kept in the role's removed.md, server side).
  *
- * State: notebook-state.ts (the notebook on disk, the notes list, the open note, the last answers);
- * drafts live here. SlotTabs mounts only the open tab, so the server watches only while the tab shows.
+ * State and authored drafts live in notebook-state.ts. A view teardown stops the transient watch,
+ * not ownership of an authored draft/save. Only correlated real save results can finish an edit.
  */
 import { memo, useEffect, useState } from "react";
 import { type Translate, useT } from "../i18n";
 import { utf8Bytes } from "../identity-state";
 import {
+	cancelNotebookEdit,
+	cancelOpenNoteEdit,
+	changeNotebookDraft,
+	changeOpenNoteDraft,
 	clearNotebookSaved,
 	closeNote,
 	deleteOpenNote,
+	editNotebook,
+	editOpenNote,
+	NOTE_DELETE_UNKNOWN,
+	NOTEBOOK_SAVE_UNKNOWN,
 	type OpenNote,
 	openNote,
 	saveNotebook,
@@ -60,12 +68,6 @@ export function noteRowText(h: UiNoteHit): string {
 	return `${h.ref} ${h.date || "-"}${topic}${flags} ${h.summary}`;
 }
 
-/** The text being edited and the version (hash) it started from. */
-interface Draft {
-	text: string;
-	base: string;
-}
-
 export const NotebookPanel = memo(function NotebookPanel({
 	identity,
 	onOpenAbout,
@@ -76,11 +78,10 @@ export const NotebookPanel = memo(function NotebookPanel({
 }) {
 	const t = useT();
 	const nb = useNotebook();
-	const [draft, setDraft] = useState<Draft | null>(null);
-	/** The save was refused because the notebook changed (or Save found it changed): ask what to do. */
+	const mine = nb && nb.id === identity.id ? nb : null;
+	const draft = mine?.draft ?? null;
+	/** A current conflict choice is UI state; authored text is independently retained by the store. */
 	const [conflict, setConflict] = useState(false);
-	/** A save this panel sent is on its way. */
-	const [awaiting, setAwaiting] = useState(false);
 	/** identity-notes: the search box. */
 	const [query, setQuery] = useState("");
 
@@ -88,31 +89,23 @@ export const NotebookPanel = memo(function NotebookPanel({
 	useEffect(() => {
 		watchNotebook(identity.id);
 		setQuery("");
+		setConflict(false);
 		return () => watchNotebook(null);
 	}, [identity.id]);
 
-	// The save's answer: ok -> back to the view; "changed" -> the conflict choices; else the note says why.
-	const saving = nb?.saving === true;
-	const saved = nb?.saved;
+	// The store applies only the exact submitted generation. Never clear the current draft in an effect.
+	const saving = mine?.saving === true;
+	const saved = mine?.saved;
 	useEffect(() => {
-		if (!awaiting || saving) return;
-		setAwaiting(false);
-		if (saved?.ok) {
-			setDraft(null);
-			setConflict(false);
-		} else if (saved && !saved.ok && saved.code === "changed") {
-			setConflict(true);
-		}
-	}, [awaiting, saving, saved]);
+		if (saved && !saved.ok && saved.code === "changed") setConflict(true);
+	}, [saved]);
 
 	// "Saved." goes away after a moment.
 	useEffect(() => {
 		if (!saved?.ok || draft) return;
-		const timer = setTimeout(() => clearNotebookSaved(), SAVED_NOTE_MS);
+		const timer = setTimeout(() => clearNotebookSaved(saved.reqId), SAVED_NOTE_MS);
 		return () => clearTimeout(timer);
 	}, [saved, draft]);
-
-	const mine = nb && nb.id === identity.id ? nb : null;
 
 	// identity-notes: the notes list loads once the notebook is here.
 	const listIdle = mine?.status === "ready" && mine.notes.status === "idle";
@@ -127,14 +120,15 @@ export const NotebookPanel = memo(function NotebookPanel({
 		if (!ready || !mine?.hash) return;
 		clearNotebookSaved();
 		setConflict(false);
-		setDraft({ text: mine.text ?? "", base: mine.hash });
+		editNotebook();
 	};
 	const cancel = () => {
-		setDraft(null);
+		cancelNotebookEdit();
 		setConflict(false);
 	};
-	const send = (text: string, base: string) => {
-		if (saveNotebook(text, base)) setAwaiting(true);
+	const send = async (text: string, base: string, generation: number): Promise<boolean> => {
+		// True is local admission only. Store-owned server correlation handles eventual success/failure.
+		return (await saveNotebook(text, base, generation)) === true;
 	};
 
 	if (!mine || mine.status === "loading") {
@@ -160,17 +154,17 @@ export const NotebookPanel = memo(function NotebookPanel({
 	const blocked = overBy > 0 && size > savedSize;
 	const pct = Math.min(100, Math.round((size / Math.max(1, cap)) * 100));
 	// Not while a save of ours is on its way: its own push moves the hash too (no flash of the warning).
-	const changedMeanwhile = draft !== null && !saving && !awaiting && draft.base !== mine.hash;
+	const changedMeanwhile = draft !== null && !saving && draft.base !== mine.hash;
 	const dirty = draft !== null && draft.text !== text;
 	const canSave = draft !== null && !blocked && !saving && (dirty || changedMeanwhile);
-	const save = () => {
+	const save = async (): Promise<void> => {
 		if (!draft || !canSave) return;
 		// Already known to have changed: don't send, ask (the server would refuse it anyway).
 		if (changedMeanwhile) {
 			setConflict(true);
 			return;
 		}
-		send(draft.text, draft.base);
+		await send(draft.text, draft.base, draft.generation);
 	};
 
 	const mem = mine.memory;
@@ -179,6 +173,11 @@ export const NotebookPanel = memo(function NotebookPanel({
 			<span className="notebook-title" title={identity.id}>
 				{t("notebookOf", { title: identity.title })}
 			</span>
+			{mine.error && (
+				<span className="notebook-note" role="status">
+					{t("notebookError", { error: mine.error })}
+				</span>
+			)}
 			{mem && (
 				<span
 					className={`notebook-sent${mem.sent > mem.cap ? " over" : ""}`}
@@ -248,11 +247,13 @@ export const NotebookPanel = memo(function NotebookPanel({
 
 	const note = saving
 		? t("identitySaving")
-		: saved && !saved.ok && saved.code !== "changed"
-			? t(SAVE_ERROR_KEY[saved.code] ?? "identitySaveIo")
-			: dirty
-				? t("notebookUnsaved")
-				: "";
+		: mine.save?.phase === "unknown"
+			? NOTEBOOK_SAVE_UNKNOWN
+			: saved && !saved.ok && saved.code !== "changed"
+				? t(SAVE_ERROR_KEY[saved.code] ?? "identitySaveIo")
+				: dirty
+					? t("notebookUnsaved")
+					: "";
 	return (
 		<div className="notebook-panel editing" data-notebook={identity.id} data-status="editing" data-hash={mine.hash}>
 			{head}
@@ -266,7 +267,7 @@ export const NotebookPanel = memo(function NotebookPanel({
 							className="identity-btn notebook-load-new"
 							disabled={saving}
 							onClick={() => {
-								setDraft({ text, base: mine.hash ?? "" });
+								editNotebook(text, mine.hash ?? "");
 								setConflict(false);
 							}}
 						>
@@ -279,7 +280,7 @@ export const NotebookPanel = memo(function NotebookPanel({
 								disabled={saving || blocked}
 								onClick={() => {
 									setConflict(false);
-									send(draft.text, mine.hash ?? "");
+									void send(draft.text, mine.hash ?? "", draft.generation);
 								}}
 							>
 								{t("notebookSaveMine")}
@@ -293,11 +294,11 @@ export const NotebookPanel = memo(function NotebookPanel({
 				aria-label={t("notebookOf", { title: identity.title })}
 				spellCheck={false}
 				value={draft.text}
-				onChange={(e) => setDraft({ ...draft, text: e.target.value })}
+				onChange={(e) => changeNotebookDraft(e.target.value)}
 				onKeyDown={(e) => {
 					if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
 						e.preventDefault();
-						save();
+						void save();
 					}
 				}}
 			/>
@@ -448,20 +449,20 @@ function NotesSection({
 					{t("notebookNoteDeleted", { ref: notes.deleted })}
 				</p>
 			)}
-			{notes.open ? <NoteView key={notes.open.ref} open={notes.open} t={t} /> : list}
+			{notes.open ? <NoteView key={`${notes.open.ref}:${notes.open.generation}`} open={notes.open} t={t} /> : list}
 		</div>
 	);
 }
 
 /** identity-notes: one note, whole, raw; edit or delete it (an old archive stretch is read-only). */
 function NoteView({ open, t }: { open: OpenNote; t: Translate }) {
-	const [draft, setDraft] = useState<string | null>(null);
+	const draft = open.draft ?? null;
 	const [confirm, setConfirm] = useState(false);
 	const done = open.done;
-	// Saved: back to the note (read again by the store).
-	useEffect(() => {
-		if (done?.ok) setDraft(null);
-	}, [done]);
+	const save = async (): Promise<boolean> => {
+		if (!draft || open.busy || draft.text === open.text) return false;
+		return (await saveOpenNote(draft.text, draft.generation)) === true;
+	};
 
 	if (open.status === "loading") return <p className="notebook-empty">{t("notebookLoading")}</p>;
 	if (open.status === "error") {
@@ -478,13 +479,20 @@ function NoteView({ open, t }: { open: OpenNote; t: Translate }) {
 	}
 	const busy = open.busy !== null;
 	const failed = done && !done.ok ? done : null;
-	const why = failed
-		? failed.code === "changed"
-			? t("notebookNoteChanged")
-			: failed.code === "invalid"
-				? ""
-				: t(SAVE_ERROR_KEY[failed.code] ?? "identitySaveIo")
-		: "";
+	const why =
+		open.save?.phase === "unknown"
+			? NOTEBOOK_SAVE_UNKNOWN
+			: open.deleteUnknown
+				? NOTE_DELETE_UNKNOWN
+				: open.error
+					? t("notebookNoteError", { ref: open.ref, error: open.error })
+					: failed
+						? failed.code === "changed"
+							? t("notebookNoteChanged")
+							: failed.code === "invalid"
+								? ""
+								: t(SAVE_ERROR_KEY[failed.code] ?? "identitySaveIo")
+						: "";
 	return (
 		<div className="notebook-open" data-ref={open.ref} data-hash={open.hash}>
 			<div className="notebook-actions">
@@ -494,7 +502,7 @@ function NoteView({ open, t }: { open: OpenNote; t: Translate }) {
 							type="button"
 							className="identity-btn notebook-note-edit"
 							disabled={busy}
-							onClick={() => setDraft(open.text ?? "")}
+							onClick={() => editOpenNote()}
 						>
 							{t("notebookEdit")}
 						</button>
@@ -529,7 +537,8 @@ function NoteView({ open, t }: { open: OpenNote; t: Translate }) {
 							className="identity-btn notebook-note-delete-yes"
 							disabled={busy}
 							onClick={() => {
-								if (deleteOpenNote()) setConfirm(false);
+								// Transport true is not deletion. Keep confirmation until the matched server result.
+								deleteOpenNote();
 							}}
 						>
 							{t("notebookNoteDelete")}
@@ -553,12 +562,12 @@ function NoteView({ open, t }: { open: OpenNote; t: Translate }) {
 						className="notebook-editor notebook-note-editor"
 						aria-label={open.ref}
 						spellCheck={false}
-						value={draft}
-						onChange={(e) => setDraft(e.target.value)}
+						value={draft.text}
+						onChange={(e) => changeOpenNoteDraft(e.target.value)}
 						onKeyDown={(e) => {
 							if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
 								e.preventDefault();
-								if (!busy && draft !== open.text) saveOpenNote(draft);
+								void save();
 							}
 						}}
 					/>
@@ -573,8 +582,10 @@ function NoteView({ open, t }: { open: OpenNote; t: Translate }) {
 						<button
 							type="button"
 							className="set-save-btn notebook-save notebook-note-save"
-							disabled={busy || draft === open.text}
-							onClick={() => saveOpenNote(draft)}
+							disabled={busy || draft.text === open.text}
+							onClick={() => {
+								void save();
+							}}
 						>
 							{open.busy === "save" ? t("identitySaving") : t("save")}
 						</button>
@@ -582,12 +593,12 @@ function NoteView({ open, t }: { open: OpenNote; t: Translate }) {
 							type="button"
 							className="identity-btn notebook-note-cancel"
 							disabled={busy}
-							onClick={() => setDraft(null)}
+							onClick={cancelOpenNoteEdit}
 						>
 							{t("notebookCancel")}
 						</button>
 						<span className="notebook-note" role="status">
-							{why || (draft !== open.text ? t("notebookUnsaved") : "")}
+							{why || (draft.text !== open.text ? t("notebookUnsaved") : "")}
 						</span>
 					</div>
 				</>
