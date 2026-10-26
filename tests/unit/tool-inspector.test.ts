@@ -102,8 +102,12 @@ async function fixture(cwd = root, shared = definition()) {
 		agentDir: root,
 		modelRuntime,
 		model: faux.getModel("m"),
-		tools: ["inspected", "deferred_fixture"],
-		customTools: [shared, { ...definition(), name: "deferred_fixture", exposure: "deferred" }],
+		tools: ["inspected", "deferred_fixture", "codemode_fixture"],
+		customTools: [
+			shared,
+			{ ...definition(), name: "deferred_fixture", exposure: "deferred" },
+			{ ...definition(), name: "codemode_fixture", exposure: "codemode" },
+		],
 		resourceLoader,
 		sessionManager: SessionManager.inMemory(cwd),
 		settingsManager,
@@ -223,6 +227,74 @@ describe("Tool Inspector catalog and storage", () => {
 });
 
 describe("real SDK per-session policy", () => {
+	it.each([undefined, null, false, 42])(
+		"rejects a partial legacy adapter with callable hook %s before tracking or mutation",
+		async (callable) => {
+			const tool = { name: "read", description: "Unchanged fixture text" };
+			const registry = new Map([[tool.name, tool]]);
+			const apply = vi.fn(() => [tool]);
+			const activate = vi.fn();
+			const session = Object.assign(catalog(), {
+				_toolRegistry: registry,
+				_applyToolLoadout: apply,
+				_getCallableTools: callable,
+				setActiveToolsByName: activate,
+			});
+			const store = new ToolInspectorStore(join(root, "partial-adapter.json"));
+			store.set("chat", session.sessionId, "read", { enabled: false, customDescription: "Must not apply" });
+			const saved = readFileSync(store.filePath!, "utf8");
+			const track = vi.spyOn(store, "track");
+			const result = await handleToolInspectorRequest(
+				{ store, resolveSession: () => session },
+				{
+					method: "POST",
+					clientId: "fixture-client",
+					convId: "fixture-chat",
+					update: { toolName: "read", enabled: true },
+				},
+			);
+			// The visible failure is required even when the registry/loadout surfaces look supported.
+			expect(result.status).toBe(409);
+			expect((result.body as { error: string }).error).toContain("callable-tools adapter");
+			expect(track).not.toHaveBeenCalled();
+			expect(activate).not.toHaveBeenCalled();
+			expect(apply).not.toHaveBeenCalled();
+			expect(session._applyToolLoadout === apply && session._getCallableTools === callable).toBe(true);
+			expect(session._toolRegistry === registry && registry.get("read") === tool).toBe(true);
+			expect(tool.description).toBe("Unchanged fixture text");
+			expect(readFileSync(store.filePath!, "utf8") === saved).toBe(true);
+			expect(() => applyToolInspectorUpdate(session, { toolName: "read", enabled: true })).toThrow("not attached");
+		},
+	);
+	it("filters real SDK codemode and deferred callables without expanding its existing restrictions", async () => {
+		const { session } = await fixture();
+		session.setActiveToolsByName([]);
+		// SDK refresh reactivates declarable tools in its explicit allow-list; preserve that behavior too.
+		sdk(session)._refreshToolRegistry();
+		const refreshActivatesDirect = session.getActiveToolNames().includes("inspected");
+		session.setActiveToolsByName([]);
+		const store = new ToolInspectorStore();
+		store.set("workspace", root, "read", { enabled: true });
+		attachToolInspector(session, store);
+		expect(session.getActiveToolNames().length).toBe(0);
+		expect(session.getCallableToolNames().includes("inspected")).toBe(false);
+		expect(sdk(session)._toolRegistry.has("read")).toBe(false);
+		expect(() => applyToolInspectorUpdate(session, { toolName: "read", enabled: true })).toThrow("Tool not found");
+		for (const name of ["codemode_fixture", "deferred_fixture"]) {
+			expect(session.getCallableToolNames().includes(name)).toBe(true);
+			applyToolInspectorUpdate(session, { toolName: name, enabled: false });
+			expect(session.getCallableToolNames().includes(name)).toBe(false);
+			sdk(session)._refreshToolRegistry();
+			expect(session.getCallableToolNames().includes(name)).toBe(false);
+			expect(session.getActiveToolNames().includes("inspected")).toBe(refreshActivatesDirect);
+			session.setActiveToolsByName([]);
+			applyToolInspectorUpdate(session, { toolName: name, enabled: null });
+			expect(session.getCallableToolNames().includes(name)).toBe(true);
+		}
+		expect(session.getActiveToolNames().length).toBe(0);
+		expect(session.getCallableToolNames().includes("inspected")).toBe(false);
+		expect(session.getCallableToolNames().includes("read")).toBe(false);
+	});
 	it("excludes disabled tools on every loadout, including direct activation and registry refresh", async () => {
 		const { session } = await fixture();
 		attachToolInspector(session, new ToolInspectorStore());
@@ -482,6 +554,7 @@ describe("drawer rendering helpers and browser interaction", () => {
 		expect(document.querySelector("script,img")).toBeNull();
 		expect(document.querySelector("textarea[name=promptRule]")?.textContent).toBe("</textarea><img src=x>");
 		expect(document.querySelector("input")?.getAttribute("aria-label")).toBe(`Enable ${tool.name}`);
+		expect(document.querySelector("details[data-tool-details]")?.getAttribute("data-tool-details")).toBe(tool.name);
 		expect(document.querySelector("th[scope=row]")?.textContent).toBe("path");
 		expect(browser.helpers.formatSchema(undefined)).toContain("No parameter");
 		const cycle: Record<string, unknown> = {};
@@ -567,6 +640,38 @@ describe("drawer rendering helpers and browser interaction", () => {
 		scope.dispatchEvent(new Event("change", { bubbles: true }));
 		expect(document.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("Chat draft");
 	});
+	it.each(["insertion", "reordering"])(
+		"preserves the expanded tool name, draft and focus across catalog %s",
+		async (change) => {
+			const original = viewSnapshot();
+			const updated = viewSnapshot();
+			if (change === "insertion") updated.tools.splice(1, 0, { ...updated.tools[0], name: "inserted" });
+			else updated.tools.reverse();
+			const network = vi.fn().mockResolvedValueOnce(response(original)).mockResolvedValueOnce(response(updated));
+			await browser.open({ clientId: "c", convId: "v", fetch: network });
+			const rowFor = (name: string) =>
+				[...document.querySelectorAll<HTMLElement>(".pti-tool")].find(
+					(row) => row.querySelector(".pti-tool-name")?.textContent === name,
+				)!;
+			rowFor("mail").querySelector<HTMLDetailsElement>("details")!.open = true;
+			const draft = rowFor("mail").querySelector<HTMLTextAreaElement>("[name=customDescription]")!;
+			draft.value = "Mail draft, not another tool's draft";
+			draft.dispatchEvent(new Event("input", { bubbles: true }));
+			draft.focus();
+			await browser.refresh();
+			expect(
+				[...document.querySelectorAll("details[data-tool-details][open]")].map(
+					(details) => details.closest(".pti-tool")?.querySelector(".pti-tool-name")?.textContent,
+				),
+			).toEqual(["mail"]);
+			const restored = rowFor("mail").querySelector<HTMLTextAreaElement>("[name=customDescription]")!;
+			expect(restored.value).toBe("Mail draft, not another tool's draft");
+			expect(document.activeElement).toBe(restored);
+			expect(rowFor("read").querySelector<HTMLTextAreaElement>("[name=customDescription]")?.value).toBe("");
+			if (change === "insertion")
+				expect(rowFor("inserted").querySelector<HTMLTextAreaElement>("[name=customDescription]")?.value).toBe("");
+		},
+	);
 	it("reports errors, rolls back failed switches and retains unsaved editor text", async () => {
 		const network = vi.fn(async (_url: unknown, init?: RequestInit) =>
 			response(

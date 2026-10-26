@@ -47,7 +47,7 @@
 			<div class="pti-tool-head"><div><code class="pti-tool-name">${escapeHtml(tool.name)}</code><span class="pti-badge">${escapeHtml(tool.source)}</span>${tool.exposure && tool.exposure !== "direct" ? `<span class="pti-badge">${escapeHtml(tool.exposure)}</span>` : ""}<span class="pti-status">${tool.active ? "Active" : tool.enabled ? "Available, not active" : "Disabled"}</span></div>
 			<label class="pti-switch"><input type="checkbox" role="switch" data-action="toggle" aria-label="Enable ${escapeHtml(tool.name)}"${checked}${disabled}><span aria-hidden="true"></span></label></div>
 			<p class="pti-description">${escapeHtml(tool.description || "No description.")}</p>
-			<details data-tool-details="${index}"${options.expanded ? " open" : ""}><summary>Details and custom rules</summary>
+			<details data-tool-details="${escapeHtml(tool.name)}"${options.expanded ? " open" : ""}><summary>Details and custom rules</summary>
 			${tool.origin ? `<p class="pti-origin"><strong>Source:</strong> ${escapeHtml(tool.origin)}</p>` : ""}
 			${tool.promptSnippet ? `<h3>Prompt snippet</h3><pre>${escapeHtml(tool.promptSnippet)}</pre>` : ""}
 			${ruleList ? `<h3>Effective prompt guidelines</h3><ul>${ruleList}</ul>` : ""}
@@ -124,8 +124,7 @@
 		const tools = state.snapshot ? state.snapshot.tools : [];
 		const expanded = new Set();
 		for (const details of state.root.querySelectorAll("details[data-tool-details][open]")) {
-			const tool = tools[Number(details.dataset.toolDetails)];
-			if (tool) expanded.add(tool.name);
+			expanded.add(details.dataset.toolDetails);
 		}
 		state.root.querySelector(".pti-content").innerHTML = state.snapshot
 			? renderToolList(state.snapshot, {

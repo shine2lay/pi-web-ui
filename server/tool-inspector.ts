@@ -209,7 +209,7 @@ interface SessionInternals {
 	_toolRegistry: Map<string, WrappedTool>;
 	_toolPromptGuidelines?: Map<string, string[]>;
 	_applyToolLoadout(names: string[]): WrappedTool[];
-	_getCallableTools?: (...args: unknown[]) => WrappedTool[];
+	_getCallableTools: (...args: unknown[]) => WrappedTool[];
 }
 interface InspectorState {
 	store: ToolInspectorStore;
@@ -254,9 +254,13 @@ export function attachToolInspector(session: ToolInspectorSession, store: ToolIn
 		return;
 	}
 	const sdk = internals(session);
-	if (!(sdk._toolRegistry instanceof Map) || typeof sdk._applyToolLoadout !== "function")
+	if (
+		!(sdk._toolRegistry instanceof Map) ||
+		typeof sdk._applyToolLoadout !== "function" ||
+		typeof sdk._getCallableTools !== "function"
+	)
 		throw new ToolInspectorError(
-			"Tool Inspector needs the SDK 1.0.1 tool-loadout adapter; update the adapter first.",
+			"Tool Inspector needs the SDK 1.0.1 tool-loadout and callable-tools adapter; update the adapter first.",
 			409,
 		);
 	const state: InspectorState = {
@@ -283,11 +287,9 @@ export function attachToolInspector(session: ToolInspectorSession, store: ToolIn
 		return declared;
 	};
 	const callable = sdk._getCallableTools;
-	if (callable) {
-		sdk._getCallableTools = function (...args) {
-			return callable.apply(this, args).filter((tool) => store.effective(session, tool.name).enabled !== false);
-		};
-	}
+	sdk._getCallableTools = function (...args) {
+		return callable.apply(this, args).filter((tool) => store.effective(session, tool.name).enabled !== false);
+	};
 	states.set(session, state);
 	store.track(session);
 	refreshToolInspectorSession(session);
