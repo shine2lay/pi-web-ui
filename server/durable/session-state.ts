@@ -64,9 +64,9 @@ export class DurableSessionState {
 		readonly conversation: Conversation,
 		readonly storage: Storage,
 		private cwd: string,
-		private id: string,
+		private readonly hostId?: string,
 	) {
-		this.manager = SessionManager.inMemory(cwd, { id });
+		this.manager = SessionManager.inMemory(cwd, { id: hostId ?? String(conversation.id) });
 		// Runners retain this object. Forward public calls to the current projection, without SDK-private mutation.
 		this.sessionManager = new Proxy(this.manager, {
 			get: (_target, key) => {
@@ -106,7 +106,8 @@ export class DurableSessionState {
 		const header: SessionHeader = {
 			type: "session",
 			version: 3,
-			id: typeof sourceHeader?.id === "string" ? sourceHeader.id : this.id,
+			// W2 validates the mapping. A fork inherits MigrationDoc as provenance, never its parent's host identity.
+			id: this.hostId ?? (typeof sourceHeader?.id === "string" ? sourceHeader.id : String(this.conversation.id)),
 			cwd: typeof sourceHeader?.cwd === "string" ? sourceHeader.cwd : this.cwd,
 			timestamp: typeof sourceHeader?.timestamp === "string" ? sourceHeader.timestamp : new Date().toISOString(),
 		};

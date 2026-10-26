@@ -1,7 +1,4 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
-import { createRequire } from "node:module";
 import {
 	buildSessionProjection,
 	createEventBus,
@@ -34,9 +31,9 @@ import type { DurableModelSetup } from "./models-adapter.js";
 import { DurableSessionState, jsonValue } from "./session-state.js";
 
 import { configuredExtensionPaths, isClassicBillionContext } from "./addon-resources.js";
+import { resolveNativeContextModule } from "./native-context-loader.js";
 export { configuredExtensionPaths } from "./addon-resources.js";
 
-const requireHere = createRequire(import.meta.url);
 export type DurableExtensionMode = NonNullable<Parameters<ExtensionRunner["setUIContext"]>[1]>;
 
 export interface AddonBridgeOptions {
@@ -45,6 +42,8 @@ export interface AddonBridgeOptions {
 	state: DurableSessionState;
 	models: DurableModelSetup;
 	pluginTools?: readonly (ToolDefinition | AgentTool)[];
+	/** Base durable registrations, not rewrapped SDK tools. Their caller/deferred policy stays native. */
+	nativeTools?: readonly ToolRegistration[];
 	/** A fresh loader result can be supplied by the host; never share a live runner between conversations. */
 	extensions?: LoadExtensionsResult;
 	extensionPaths?: string[];
@@ -111,13 +110,14 @@ export class DurableAddonBridge {
 		for (const registered of this.runner.getAllRegisteredTools())
 			this.tools.set(registered.definition.name, registered.definition);
 		this.active = new Set([
-			"bash",
-			"read",
-			"write",
-			"edit",
-			"grep",
-			"find",
-			"ls",
+			...(options.nativeTools
+				? options.nativeTools
+						.filter(
+							(tool) =>
+								!this.tools.has(tool.name) && !tool.deferred && (!tool.callers || tool.callers.includes("model")),
+						)
+						.map((tool) => tool.name)
+				: ["bash", "read", "write", "edit", "grep", "find", "ls"]),
 			...[...this.tools.values()]
 				.filter(
 					(tool) =>
@@ -159,7 +159,21 @@ export class DurableAddonBridge {
 			setLabel: (id, label) => options.state.sessionManager.appendLabelChange(id, label),
 			getActiveTools: () => this.activeTools,
 			getAllTools: () =>
-				[...this.tools.values()].map((tool) => ({
+				[
+					...(options.nativeTools ?? [])
+						.filter((tool) => !this.tools.has(tool.name))
+						.map((tool) => ({
+							...tool,
+							exposure: tool.deferred
+								? ("deferred" as const)
+								: tool.callers && !tool.callers.includes("model")
+									? ("hidden" as const)
+									: tool.callers && !tool.callers.includes("tools")
+										? ("model-only" as const)
+										: ("direct" as const),
+						})),
+					...this.tools.values(),
+				].map((tool) => ({
 					name: tool.name,
 					description: tool.description,
 					parameters: tool.parameters,
@@ -385,6 +399,12 @@ export class DurableAddonBridge {
 		return [
 			...new Set([
 				...this.active,
+				...(this.options.nativeTools ?? [])
+					.filter(
+						(tool) =>
+							!this.tools.has(tool.name) && (tool.deferred || (tool.callers && !tool.callers.includes("model"))),
+					)
+					.map((tool) => tool.name),
 				...[...this.tools.values()]
 					.filter((tool) => ["codemode", "hidden", "deferred"].includes(tool.exposure ?? "direct"))
 					.map((tool) => tool.name),
@@ -561,18 +581,10 @@ export async function loadBillionContextExtension(
 	agentDir: string,
 	context?: DurableContextResolver,
 ): Promise<Extension | undefined> {
-	let entry: string;
-	try {
-		entry = requireHere.resolve("billion-context-pi/durable", { paths: [agentDir, join(agentDir, "npm")] });
-	} catch (error) {
-		if (
-			(error as NodeJS.ErrnoException).code === "MODULE_NOT_FOUND" ||
-			(error as NodeJS.ErrnoException).code === "ERR_PACKAGE_PATH_NOT_EXPORTED"
-		)
-			return undefined;
-		throw error;
-	}
-	const module = (await import(pathToFileURL(entry).href)) as {
+	const entry = resolveNativeContextModule(agentDir);
+	if (entry === undefined) return undefined;
+	// Never turn an installed adapter's import, dependency or factory error into "package absent".
+	const module = (await import(entry)) as {
 		default?: Extension | (() => Extension | Promise<Extension>);
 		createDurableExtension?: (options: { context: DurableContextResolver }) => Extension | Promise<Extension>;
 	};
@@ -587,6 +599,7 @@ export async function loadBillionContextExtension(
 		: typeof module.default === "function"
 			? await module.default()
 			: module.default;
-	if (!extension) throw new Error("billion-context-pi/durable exports no durable extension");
+	if (!extension || typeof extension !== "object" || typeof extension.name !== "string" || !extension.name)
+		throw new Error("billion-context-pi/durable exports no durable extension");
 	return extension;
 }

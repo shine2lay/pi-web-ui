@@ -21,7 +21,7 @@ export class WorkspaceSessions {
 		readonly storage: Storage,
 		readonly cwd: string,
 		now?: () => number,
-		readonly hostId: (id: string) => string = (id) => id,
+		readonly hostId: (id: string) => string | undefined = () => undefined,
 	) {
 		this.states = new IdleSessionCache(now);
 	}

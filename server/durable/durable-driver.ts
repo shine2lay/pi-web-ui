@@ -150,7 +150,7 @@ export class DurableAgentDriver {
 				this.store,
 				this.cwd,
 				this.options.now,
-				(id) => this.options.hostSessionIdFor?.(id) ?? this.options.hostSessionId ?? id,
+				(id) => this.options.hostSessionIdFor?.(id) ?? this.options.hostSessionId,
 			);
 			// Install all persisted conversation policies BEFORE any submit/resume can schedule work.
 			for (const session of await this.workspace.list()) await this.bridge(session.id);
@@ -181,6 +181,9 @@ export class DurableAgentDriver {
 		if (existing) return existing.bridge;
 		const models = this.models!;
 		const configured = await state.conversation.agent(BACKGROUND_CONTEXT);
+		const baseNames = new Set(this.baseExtensions.map((extension) => extension.name));
+		// Selection order decides duplicate-tool and wrapper precedence; installation order must not replace it.
+		const selectedBase = configured.extensions.filter((extension) => baseNames.has(extension.name));
 		const enabled = await state.conversation.commit(
 			async (tx) => jsonValue((await tx.doc(AgentDoc, state.conversation.id)).tools),
 			BACKGROUND_CONTEXT,
@@ -191,6 +194,7 @@ export class DurableAgentDriver {
 			state,
 			models,
 			pluginTools: this.options.pluginTools,
+			nativeTools: selectedBase.flatMap((extension) => extension.tools ?? []),
 			extensionPaths: this.options.extensionPaths,
 			nativeBillionContext: hasNativeBillionContext(this.registry!),
 			extensionUI: this.options.extensionUI,
@@ -234,7 +238,7 @@ export class DurableAgentDriver {
 					: {}),
 				tools: this.registrations(bridge),
 				extensions: [
-					...this.baseExtensions,
+					...selectedBase,
 					this.registry!.snapshot().extension(hostToolsExtensionName(bridge))!,
 					bridge.extension,
 				],
@@ -309,13 +313,13 @@ export class DurableAgentDriver {
 		return resolveDurableModelChoice(id, all);
 	}
 	private registrations(bridge: DurableAddonBridge) {
-		const names = new Set([...this.baseExtensions.map((extension) => extension.name), hostToolsExtensionName(bridge)]);
-		const tools = new Map(
-			this.registry!.snapshot()
+		const tools = new Map([
+			...(bridge.options.nativeTools ?? []).map((tool) => [tool.name, tool] as const),
+			...this.registry!.snapshot()
 				.tools()
-				.filter((item) => names.has(item.extension.name))
-				.map((item) => [item.tool.name, item.tool]),
-		);
+				.filter((item) => item.extension.name === hostToolsExtensionName(bridge))
+				.map((item) => [item.tool.name, item.tool] as const),
+		]);
 		return bridge.callableTools
 			.map((name) => tools.get(name))
 			.filter((tool): tool is NonNullable<typeof tool> => !!tool);
