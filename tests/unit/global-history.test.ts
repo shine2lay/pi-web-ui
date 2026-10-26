@@ -85,9 +85,11 @@ interface FakeSession {
 
 function fakeSession(cwd: string): FakeSession {
 	const emitted: ServerMessage[] = [];
-	return {
+	return Object.assign(Object.create(ClientSession.prototype), {
 		cwd,
 		sessionInfosCache: null,
+		sessionInfosCacheTimer: null,
+		sessionInfosCacheGeneration: 0,
 		sessionsRequested: true,
 		emitted,
 		emit(msg: ServerMessage) {
@@ -101,7 +103,7 @@ function fakeSession(cwd: string): FakeSession {
 		emitConversations() {
 			/* 左栏推送不在本用例范围内（见 recent-chats.test.ts） */
 		},
-	};
+	});
 }
 
 beforeAll(() => {

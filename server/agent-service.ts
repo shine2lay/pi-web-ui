@@ -13262,7 +13262,27 @@ export class ClientSession {
 	private sessionsByFile: ReadonlyMap<string, SessionSummary> = new Map();
 
 	private sessionInfosCache: { cwd: string; infos: SessionInfo[]; at: number } | null = null;
+	private sessionInfosCacheTimer: ReturnType<typeof setTimeout> | null = null;
+	private sessionInfosCacheGeneration = 0;
 	private static readonly SESSION_INFO_CACHE_TTL = 3000;
+
+	/** Release full search text even when no subsequent search checks its TTL. Also fence pending reads. */
+	private clearSessionInfosCache(): void {
+		if (this.sessionInfosCacheTimer) clearTimeout(this.sessionInfosCacheTimer);
+		this.sessionInfosCacheTimer = null;
+		this.sessionInfosCache = null;
+		this.sessionInfosCacheGeneration++;
+	}
+
+	/** Separate closure from the async loader: the callback holds no infos array or cache entry. */
+	private scheduleSessionInfosCacheExpiry(delay: number): void {
+		const timer = setTimeout(() => {
+			// A cancelled callback must not clear a newer generation's cache or timer.
+			if (this.sessionInfosCacheTimer === timer) this.clearSessionInfosCache();
+		}, delay);
+		timer.unref();
+		this.sessionInfosCacheTimer = timer;
+	}
 
 	/** 最近项目列表缓存：pushProjects 的全量扫盘（SessionManager.listAll +
 	 *  existsSync 逐个校验）昂贵，切项目/新对话/跨客户端通知时频繁触发 ——
@@ -13289,11 +13309,24 @@ export class ClientSession {
 		if (c && c.cwd === scopeKey && now - c.at < ClientSession.SESSION_INFO_CACHE_TTL) {
 			return c.infos;
 		}
+		this.clearSessionInfosCache();
+		const generation = this.sessionInfosCacheGeneration;
 		const infos =
 			scopeKey === "*"
 				? await SessionManager.listAll(piSessionsRoot())
 				: await SessionManager.list(this.cwd, piSessionsRoot());
-		this.sessionInfosCache = { cwd: scopeKey, infos, at: now };
+		// Keep the existing request-time TTL. A slow read still returns all of its results, but must
+		// not extend their retention, repopulate a disposed/invalidated client or supersede a newer read.
+		const remaining = ClientSession.SESSION_INFO_CACHE_TTL - (Date.now() - now);
+		if (
+			!this.disposed &&
+			generation === this.sessionInfosCacheGeneration &&
+			scopeKey === (historyScope() === "all" ? "*" : this.cwd) &&
+			remaining > 0
+		) {
+			this.sessionInfosCache = { cwd: scopeKey, infos, at: now };
+			this.scheduleSessionInfosCacheExpiry(remaining);
+		}
 		return infos;
 	}
 
@@ -13302,7 +13335,7 @@ export class ClientSession {
 	 *  the pre-mutation snapshot (delete-then-refresh commonly runs inside the
 	 *  window, which would re-push the just-removed session). */
 	private invalidateSessionInfos(): void {
-		this.sessionInfosCache = null;
+		this.clearSessionInfosCache();
 		sessionIndex.invalidate();
 	}
 
@@ -15913,6 +15946,7 @@ export class ClientSession {
 
 	async dispose(): Promise<void> {
 		this.disposed = true;
+		this.clearSessionInfosCache();
 		ClientSession.liveSessions.delete(this);
 		// modelAdmin 是本客户端自己的（OAuth 登录流程挂在它上），下面两条路径都要收。
 		this.modelAdmin.dispose();
