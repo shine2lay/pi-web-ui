@@ -1,9 +1,13 @@
 import { defineConfig } from "vitest/config";
 import { BaseSequencer, type TestSpecification } from "vitest/node";
 
-// Ops #230 (docs/test-speed.md): the slowest test file starts first, so it never waits behind the larger files
+// Ops #230 (docs/test-speed.md): the slowest test files start first, so they never wait behind the larger files
 // (vitest's own order puts larger files first when it has no timings from an earlier run, as in a land's fresh copy).
-const SLOWEST_FIRST = ["tests/unit/role-message-guard-host-worst-window.test.ts"];
+// Ops #558 (H-SOAK-ALS-2): the late-handoff soak, the land's longest file, in a file of its own, then worst-window.
+const SLOWEST_FIRST = [
+	"tests/unit/role-message-guard-host-late-handoff-soak.test.ts",
+	"tests/unit/role-message-guard-host-worst-window.test.ts",
+];
 class SlowestFirst extends BaseSequencer {
 	override async sort(files: TestSpecification[]): Promise<TestSpecification[]> {
 		const sorted = await super.sort(files);

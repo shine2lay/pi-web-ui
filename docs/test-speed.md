@@ -94,6 +94,13 @@ The 589 s and 479 s run shared the machine with the profile runs of test (a). Be
 - Expected, and how it's measured: test (a) in 60 s or less (294-309 s in the land checks now, 569-614 s alone beside other runs), the unit step's Duration 60 s or less, a land in about 2 minutes; the same stored files and the same test results.
 - What would prove it wrong: test (a) still over 120 s, or any stored byte or verdict changes.
 
+## H-SOAK-ALS-2: the late-handoff soak in a worker of its own (Ops #558)
+
+- Wrong, and the evidence (Ops #553): once worst-window got faster, the 3,000-acceptance soak of `tests/unit/role-message-guard-host-late-handoff.test.ts` became the land's longest file: 223.2 s of the 281 s unit stage in land 193-5151f5, against 101.1 s for `-worst-window`. 20.4% of its main-thread CPU was AsyncLocalStorage propagation for the hosts the file's earlier cases leave in the same worker, and it began about 54 s into its file.
+- The change: the soak moved byte for byte (Ops #539's version, with its memory-only RoleMessages opt-in) into `tests/unit/role-message-guard-host-late-handoff-soak.test.ts`, with the same harness, helpers, describe title, counts, caps, assertions and 300 s timeout; every other case stays. #502's compare-move script proved the move (same calls, byte-identical text and syntax tree, identical helpers, only unused imports dropped, nothing else changed). `vitest.config.ts` lists the new file first in `SLOWEST_FIRST`, `-worst-window` second, so both start at once.
+- Expected: the soak's AsyncLocalStorage share at or below 3% of its main-thread samples; the unit stage about 235-246 s (a prediction from #553's profile shares; #502's record suggests only 20-35 s may be gained).
+- What would prove it wrong: an AsyncLocalStorage share above 10% in the moved soak, or a quiet land whose unit stage is still 271 s or more. Measured result: Ops #558's report.
+
 ## Undo
 
 Revert this commit with `wt`. Nothing is installed or restarted.

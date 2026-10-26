@@ -143,45 +143,6 @@ describe("ladder: accepted messages outlive the hourly charge (#426)", () => {
 			expect(traces[1]).toEqual(traces[0]);
 		},
 	);
-
-	it("3,000 real acceptances with 1,500 hour-late hand-offs stay under every unchanged store cap", async () => {
-		// M: one RoleMessages; logs below concern the guard store, not the omitted native disk copy.
-		const w = await world(undefined, {}, memoryRoleMessagePersistence());
-		const host = w.host as unknown as {
-			core: { reconcile(id: GuardOperationIdentity): Promise<unknown> };
-			maybeRotate(): Promise<void>;
-			fills(s: GuardStoreState): Array<{ name: string; used: number; max: number }>;
-		};
-		const peaks = new Map<string, { used: number; max: number }>();
-		const measure = async () => {
-			for (const f of host.fills(await stateOf(w))) {
-				expect(f.used, f.name).toBeLessThanOrEqual(f.max);
-				if (!peaks.has(f.name) || f.used > peaks.get(f.name)!.used) peaks.set(f.name, { used: f.used, max: f.max });
-			}
-		};
-		for (let i = 0; i < 1500; i++) {
-			refuseNextHandOff(w);
-			expect(await send(w, "alpha", A, "beta", { text: `late-${i}` }, "")).toMatchObject({
-				ok: false,
-				error: expect.stringContaining("not handed off yet"),
-			});
-			const entry = (await stateOf(w)).outbox.find((o) => o.state === "committed")!;
-			expect(entry).toBeDefined();
-			await measure();
-			setNow(now + 61 * M);
-			expect(await send(w, "beta", B, "alpha", { text: `trigger-${i}` }, "")).toMatchObject({ ok: true });
-			expect((await stateOf(w)).usage.some((u) => u.transactionId === entry.receipt.transactionId)).toBe(false);
-			await host.core.reconcile(entry.receipt.identity);
-			await w.rm.tick();
-			expect(w.rm.byId(entry.message.id)?.state).toBe("delivered");
-			await measure();
-			await host.maybeRotate(); // Same maintenance as startup/afterAccepted, only after this pair is settled.
-		}
-		expect(w.got).toHaveLength(3000);
-		expect(new Set(w.got.map((g) => g.text)).size).toBe(3000);
-		expect(w.host.state.status).toBe("ready");
-		expect(w.logs.some((l) => /rotation failed|storage is full/.test(l))).toBe(false);
-		expect(w.logs.filter((l) => /guard store generation/.test(l)).length).toBeGreaterThan(1);
-		console.log("#426 3,000-entry soak peaks (metadata only):", Object.fromEntries(peaks));
-	}, 300_000);
+	// The 3,000-acceptance soak of this ladder is in role-message-guard-host-late-handoff-soak.test.ts, unchanged, in a
+	// worker of its own: the hosts these cases make leave their AsyncLocalStorage on for the rest of the worker (Ops #502).
 });
