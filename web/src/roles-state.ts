@@ -11,11 +11,13 @@
  * getter returns a stable reference between changes.
  */
 import { useEffect, useSyncExternalStore } from "react";
+import { appAdmit } from "./app-admit";
 import { appSend } from "./app-globals";
 import { setViewFresh } from "./page-live";
 import type {
 	ClientMessage,
 	ServerMessage,
+	UiBoardPostKind,
 	UiRolesOverview,
 	UiRoleUsageGeneration,
 	UiRolesUsageRenderTiming,
@@ -356,44 +358,267 @@ export function useRoles(watch: "full" | "count" | "off" = "off"): RolesState {
 // board (task #76): the owner posts and closes from the Board view
 // ---------------------------------------------------------------------------
 
-const boardWaits = new Map<string, (r: BoardResult) => void>();
+/** Raw authored source, not a replayable action or an authority/owner receipt. */
+export type BoardDraftForm =
+	| Readonly<{
+			type: "board_post";
+			kind: UiBoardPostKind;
+			toAll: boolean;
+			picked: readonly string[];
+			title: string;
+			text: string;
+	  }>
+	| Readonly<{ type: "board_close"; id: string; note: string }>;
+export interface BoardDraftSource {
+	readonly editorId: string;
+	readonly revision: number;
+	readonly form: BoardDraftForm;
+}
+export interface BoardDraftAttempt {
+	readonly reqId: string;
+	readonly source: BoardDraftSource;
+	readonly admission: "pending" | "admitted" | "unconfirmed";
+	readonly result?: BoardResult;
+}
+export interface BoardDraftRecovery {
+	readonly current: BoardDraftSource;
+	readonly attempts: readonly BoardDraftAttempt[];
+	readonly restoredSources: readonly BoardDraftSource[];
+}
+type BoardRecord = {
+	current: BoardDraftSource;
+	attempts: { -readonly [K in keyof BoardDraftAttempt]: BoardDraftAttempt[K] }[];
+	restoredSources: BoardDraftSource[];
+};
+const boardDrafts = new Map<string, BoardRecord>();
+let boardSources = new WeakMap<ClientMessage, BoardDraftSource>();
 let boardSeq = 0;
 
-/** Send a post or a close; resolves with the server's answer (ok false: nothing changed, or no answer in
- *  BOARD_ANSWER_MS, when the page can't tell). The Roles snapshot that follows shows the change. */
-export function boardRequest(ask: BoardAsk, answerMs = BOARD_ANSWER_MS): Promise<BoardResult> {
+function copyBoardSource(source: BoardDraftSource): BoardDraftSource {
+	const f = source.form;
+	const form: BoardDraftForm = Object.freeze(
+		f.type === "board_post"
+			? {
+					type: f.type,
+					kind: f.kind,
+					toAll: f.toAll,
+					picked: Object.freeze([...f.picked]),
+					title: f.title,
+					text: f.text,
+				}
+			: { type: f.type, id: f.id, note: f.note },
+	);
+	return Object.freeze({ editorId: source.editorId, revision: source.revision, form });
+}
+function boardRecord(source: BoardDraftSource): BoardRecord {
+	let record = boardDrafts.get(source.editorId);
+	if (!record) {
+		record = { current: source, attempts: [], restoredSources: [] };
+		boardDrafts.set(source.editorId, record);
+	}
+	return record;
+}
+
+/** New editor lifetime. Copies and retains every source field, including inactive choices. */
+export function createBoardDraft(form: BoardDraftForm): BoardDraftSource {
+	const source = copyBoardSource({ editorId: crypto.randomUUID(), revision: 0, form });
+	boardRecord(source);
+	return source;
+}
+/** Every actual edit advances ownership, including A → B → A. */
+export function reviseBoardDraft(source: BoardDraftSource, form: BoardDraftForm): BoardDraftSource {
+	const next = copyBoardSource({ editorId: source.editorId, revision: source.revision + 1, form });
+	boardRecord(source).current = next;
+	return next;
+}
+/** The registered #570 handler must read this exact-identity lookup BEFORE clone/await. */
+export function getBoardAdmissionSource(message: ClientMessage): BoardDraftSource | undefined {
+	return boardSources.get(message);
+}
+/** Page memory only; immutable originals and independent current edits. No executable packets. */
+export function getBoardDraftRecoveries(): readonly BoardDraftRecovery[] {
+	return Object.freeze(
+		[...boardDrafts.values()].map((r) =>
+			Object.freeze({
+				current: r.current,
+				attempts: Object.freeze(r.attempts.map((a) => Object.freeze({ ...a }))),
+				restoredSources: Object.freeze([...r.restoredSources]),
+			}),
+		),
+	);
+}
+
+function boardPlain(value: unknown, keys: string[]): value is Record<string, unknown> {
+	if (!value || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) return false;
+	const own = Reflect.ownKeys(value);
+	return (
+		own.length === keys.length &&
+		keys.every((k) => {
+			const d = Object.getOwnPropertyDescriptor(value, k);
+			return d && "value" in d;
+		})
+	);
+}
+function boardSourceValid(value: unknown): value is BoardDraftSource {
+	if (
+		!boardPlain(value, ["editorId", "revision", "form"]) ||
+		typeof value.editorId !== "string" ||
+		!value.editorId ||
+		typeof value.revision !== "number" ||
+		!Number.isSafeInteger(value.revision) ||
+		value.revision < 0
+	)
+		return false;
+	const f = value.form;
+	if (!f || typeof f !== "object") return false;
+	const tag = Object.getOwnPropertyDescriptor(f, "type");
+	if (!tag || !("value" in tag)) return false;
+	if (tag.value === "board_close")
+		return boardPlain(f, ["type", "id", "note"]) && typeof f.id === "string" && !!f.id && typeof f.note === "string";
+	if (
+		!boardPlain(f, ["type", "kind", "toAll", "picked", "title", "text"]) ||
+		f.type !== "board_post" ||
+		(f.kind !== "news" && f.kind !== "order") ||
+		typeof f.toAll !== "boolean" ||
+		typeof f.title !== "string" ||
+		typeof f.text !== "string" ||
+		!Array.isArray(f.picked)
+	)
+		return false;
+	const picked = f.picked;
+	return (
+		Reflect.ownKeys(picked).length === picked.length + 1 &&
+		Array.from({ length: picked.length }, (_, i) => {
+			const d = Object.getOwnPropertyDescriptor(picked, i);
+			return d && "value" in d && typeof d.value === "string";
+		}).every(Boolean)
+	);
+}
+/** LOOK/EDIT ONLY: retain a validated full original; never open, submit, close or replay it. */
+export function restoreBoardDraft(value: unknown): boolean {
+	try {
+		if (!boardSourceValid(value)) return false;
+		const source = copyBoardSource(value);
+		const record = boardDrafts.get(source.editorId);
+		const known = record ? [record.current, ...record.attempts.map((a) => a.source), ...record.restoredSources] : [];
+		if (known.some((s) => s.revision === source.revision && JSON.stringify(s) !== JSON.stringify(source))) return false;
+		const retained = boardRecord(source);
+		if (!retained.restoredSources.some((s) => JSON.stringify(s) === JSON.stringify(source)))
+			retained.restoredSources.push(source);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+type BoardWait = {
+	op: "post" | "close";
+	id?: string;
+	admitted: boolean;
+	early?: BoardResult;
+	finish: (r: BoardResult) => void;
+};
+const boardWaits = new Map<string, BoardWait>();
+const boardUnknown = "no answer from the server: look at the board before trying again";
+
+function copyBoardResult(r: BoardResult): BoardResult {
+	const copy: BoardResult = {
+		type: r.type,
+		op: r.op,
+		ok: r.ok,
+		...(r.reqId !== undefined ? { reqId: r.reqId } : {}),
+		...(r.id !== undefined ? { id: r.id } : {}),
+		...(r.error !== undefined ? { error: r.error } : {}),
+		...(r.direct ? { direct: [...r.direct] } : {}),
+		...(r.later ? { later: [...r.later] } : {}),
+	};
+	if (copy.direct) Object.freeze(copy.direct);
+	if (copy.later) Object.freeze(copy.later);
+	return Object.freeze(copy);
+}
+
+/** Local exact-true admission PLUS a genuine correlated board_result. Never a fallback send.
+ *  The original answer deadline starts before admission; unknown outcomes require explicit review/retry. */
+export function boardRequest(
+	ask: BoardAsk,
+	source: BoardDraftSource,
+	answerMs = BOARD_ANSWER_MS,
+): Promise<BoardResult> {
+	const original = copyBoardSource(source);
 	const reqId = `board-${Date.now().toString(36)}-${++boardSeq}`;
 	const op = ask.type === "board_post" ? "post" : "close";
+	const message = {
+		...ask,
+		...(ask.type === "board_post" && Array.isArray(ask.to) ? { to: [...ask.to] } : {}),
+		reqId,
+	} as ClientMessage;
+	if (message.type === "board_post" && Array.isArray(message.to)) Object.freeze(message.to);
+	Object.freeze(message);
+	boardSources.set(message, original);
+	const attempt: BoardRecord["attempts"][number] = { reqId, source: original, admission: "pending" };
+	boardRecord(original).attempts.push(attempt);
 	return new Promise((resolve) => {
-		const timer = setTimeout(() => {
-			boardWaits.delete(reqId);
-			resolve({
-				type: "board_result",
-				reqId,
-				op,
-				ok: false,
-				error: "no answer from the server: look at the board before trying again",
-			});
-		}, answerMs);
-		boardWaits.set(reqId, (r) => {
-			clearTimeout(timer);
-			resolve(r);
-		});
-		if (!appSend({ ...ask, reqId } as ClientMessage)) {
+		let finished = false;
+		const finish = (result: BoardResult) => {
+			if (finished) return;
+			finished = true;
 			clearTimeout(timer);
 			boardWaits.delete(reqId);
-			resolve({ type: "board_result", reqId, op, ok: false, error: "not connected to the server" });
-		}
+			attempt.result = copyBoardResult(result);
+			resolve(attempt.result);
+		};
+		const timer = setTimeout(
+			() => finish({ type: "board_result", reqId, op, ok: false, error: boardUnknown }),
+			answerMs,
+		);
+		const wait: BoardWait = { op, ...(ask.type === "board_close" ? { id: ask.id } : {}), admitted: false, finish };
+		// The real result can arrive synchronously inside the host, BEFORE its admission promise settles.
+		boardWaits.set(reqId, wait);
+		void appAdmit(message).then(
+			(admitted) => {
+				attempt.admission = admitted === true ? "admitted" : "unconfirmed";
+				if (finished) return;
+				if (admitted !== true) {
+					finish({ type: "board_result", reqId, op, ok: false, error: `not locally admitted: ${boardUnknown}` });
+					return;
+				}
+				wait.admitted = true;
+				if (wait.early) finish(wait.early);
+			},
+			() => {
+				attempt.admission = "unconfirmed";
+				finish({ type: "board_result", reqId, op, ok: false, error: `local admission failed: ${boardUnknown}` });
+			},
+		);
 	});
 }
 
-/** `board_result` from the server. */
+/** Only an actual result for this operation can finish it; duplicates/stale/wrong results are inert. */
 export function receiveBoardResult(r: BoardResult): void {
-	if (!r.reqId) return;
+	if (r.type !== "board_result" || typeof r.reqId !== "string" || !r.reqId) return;
+	if ((r.id !== undefined && typeof r.id !== "string") || (r.error !== undefined && typeof r.error !== "string"))
+		return;
+	if (
+		[r.direct, r.later].some(
+			(list) => list !== undefined && (!Array.isArray(list) || !list.every((id) => typeof id === "string")),
+		)
+	)
+		return;
 	const wait = boardWaits.get(r.reqId);
-	if (!wait) return;
-	boardWaits.delete(r.reqId);
-	wait(r);
+	if (!wait || r.op !== wait.op || typeof r.ok !== "boolean" || wait.early) return;
+	if (r.ok && (typeof r.id !== "string" || !r.id || (wait.op === "close" && r.id !== wait.id))) return;
+	if (wait.op === "close" && r.id !== undefined && r.id !== wait.id) return;
+	const result = copyBoardResult(r);
+	if (wait.admitted) wait.finish(result);
+	else wait.early = result;
+}
+
+/** Tests only: forget the synthetic Board records, settling pending promises without authority. */
+export function resetBoardDrafts(): void {
+	for (const [reqId, wait] of boardWaits)
+		wait.finish({ type: "board_result", reqId, op: wait.op, ok: false, error: boardUnknown });
+	boardDrafts.clear();
+	boardSources = new WeakMap();
 }
 
 /** Tests: forget everything. */

@@ -47,7 +47,14 @@ import {
 import { useAppField } from "../app-globals";
 import { parseFocus, type ChatFocusKind } from "../chat-focus";
 import { useT, type Translate } from "../i18n";
-import { boardRequest, reloadRoles, useRoles } from "../roles-state";
+import {
+	boardRequest,
+	createBoardDraft,
+	reviseBoardDraft,
+	reloadRoles,
+	useRoles,
+	type BoardDraftForm,
+} from "../roles-state";
 import { Markdown } from "./Markdown";
 import {
 	ageOf,
@@ -101,7 +108,6 @@ import {
 import type {
 	UiBoard,
 	UiBoardPost,
-	UiBoardPostKind,
 	UiRoleAsk,
 	UiRoleOverview,
 	UiRoleReport,
@@ -1584,16 +1590,87 @@ function BoardText({ text }: { text: string }) {
 	);
 }
 
-/** The owner's new post: kind, to (all roles or picked ones), title and text. */
-function BoardForm({ roleIds, onDone }: { roleIds: string[]; onDone: (said: string) => void }) {
+/** Only Board editors use this ownership: a resource switch is a fresh lifetime, even A → B → A. */
+function useBoardEditor<T extends BoardDraftForm>(initial: T) {
+	const [view, setView] = useState(() => ({ source: createBoardDraft(initial), busy: false, error: "" }));
+	const current = useRef(view);
+	const mounted = useRef(false);
+	useLayoutEffect(() => {
+		mounted.current = true;
+		return () => {
+			mounted.current = false;
+		};
+	}, []);
+	const old = current.current.source.form;
+	if (
+		old.type !== initial.type ||
+		(old.type === "board_close" && initial.type === "board_close" && old.id !== initial.id)
+	) {
+		const next = { source: createBoardDraft(initial), busy: false, error: "" };
+		current.current = next;
+		setView(next);
+	}
+	const update = (next: typeof view) => {
+		current.current = next;
+		setView(next);
+	};
+	const edit = (change: (form: T) => T) => {
+		const next = reviseBoardDraft(current.current.source, change(current.current.source.form as T));
+		update({ ...current.current, source: next });
+	};
+	const setError = (error: string) => update({ ...current.current, error });
+	const request = async () => {
+		// Synchronous ref, not render-time busy: two submits in one turn still send only once.
+		if (current.current.busy) return;
+		const submitted = current.current.source;
+		update({ ...current.current, busy: true, error: "" });
+		const f = submitted.form;
+		const res = await boardRequest(
+			f.type === "board_post"
+				? {
+						type: f.type,
+						kind: f.kind,
+						to: f.toAll ? "all" : [...f.picked].sort(),
+						title: f.title.trim(),
+						text: f.text.trim(),
+					}
+				: { type: f.type, id: f.id, ...(f.note.trim() ? { note: f.note.trim() } : {}) },
+			submitted,
+		);
+		const sameEditor = () => mounted.current && current.current.source.editorId === submitted.editorId;
+		const unchanged = () => sameEditor() && current.current.source.revision === submitted.revision;
+		if (!sameEditor()) return;
+		update({ ...current.current, busy: false });
+		return { res, sameEditor, unchanged, submitted };
+	};
+	return {
+		form: current.current.source.form as T,
+		busy: current.current.busy,
+		error: current.current.error,
+		edit,
+		setError,
+		request,
+	};
+}
+
+/** The owner's new post: complete raw source stays separate from the existing canonical wire. */
+export function BoardForm({ roleIds, onDone }: { roleIds: string[]; onDone: (said: string) => void }) {
 	const t = useT();
-	const [kind, setKind] = useState<UiBoardPostKind>("news");
-	const [toAll, setToAll] = useState(true);
-	const [picked, setPicked] = useState<string[]>([]);
-	const [title, setTitle] = useState("");
-	const [text, setText] = useState("");
-	const [busy, setBusy] = useState(false);
-	const [error, setError] = useState("");
+	const {
+		form: { kind, toAll, picked, title, text },
+		busy,
+		error,
+		edit,
+		setError,
+		request,
+	} = useBoardEditor<Extract<BoardDraftForm, { type: "board_post" }>>({
+		type: "board_post",
+		kind: "news",
+		toAll: true,
+		picked: [],
+		title: "",
+		text: "",
+	});
 	const firstRef = useRef<HTMLInputElement>(null);
 	useEffect(() => {
 		firstRef.current?.focus();
@@ -1609,21 +1686,14 @@ function BoardForm({ roleIds, onDone }: { roleIds: string[]; onDone: (said: stri
 			setError(t("boardFormNeedText"));
 			return;
 		}
-		setBusy(true);
-		setError("");
-		const res = await boardRequest({
-			type: "board_post",
-			kind,
-			to: toAll ? "all" : [...picked].sort(),
-			title: title.trim(),
-			text: text.trim(),
-		});
-		setBusy(false);
+		const completed = await request();
+		if (!completed?.sameEditor()) return;
+		const { res, unchanged, submitted } = completed;
 		if (!res.ok) {
 			setError(t("boardFormFailed", { error: res.error ?? "" }));
 			return;
 		}
-		onDone(boardPostedText(t, kind, res));
+		if (unchanged() && submitted.form.type === "board_post") onDone(boardPostedText(t, submitted.form.kind, res));
 	};
 	return (
 		<form className="rv-role rv-bform" onSubmit={submit} aria-labelledby="rv-bform-h">
@@ -1640,7 +1710,7 @@ function BoardForm({ roleIds, onDone }: { roleIds: string[]; onDone: (said: stri
 							name="rv-bkind"
 							value="news"
 							checked={kind === "news"}
-							onChange={() => setKind("news")}
+							onChange={() => edit((f) => ({ ...f, kind: "news" }))}
 						/>
 						{t("boardKindNews")}
 					</label>
@@ -1650,7 +1720,7 @@ function BoardForm({ roleIds, onDone }: { roleIds: string[]; onDone: (said: stri
 							name="rv-bkind"
 							value="order"
 							checked={kind === "order"}
-							onChange={() => setKind("order")}
+							onChange={() => edit((f) => ({ ...f, kind: "order" }))}
 						/>
 						{t("boardKindOrder")}
 					</label>
@@ -1661,11 +1731,11 @@ function BoardForm({ roleIds, onDone }: { roleIds: string[]; onDone: (said: stri
 				<legend className="rv-blabel">{t("boardFormTo")}</legend>
 				<div className="rv-bopts">
 					<label className="rv-bopt">
-						<input type="radio" name="rv-bto" checked={toAll} onChange={() => setToAll(true)} />
+						<input type="radio" name="rv-bto" checked={toAll} onChange={() => edit((f) => ({ ...f, toAll: true }))} />
 						{t("boardFormToAll")}
 					</label>
 					<label className="rv-bopt">
-						<input type="radio" name="rv-bto" checked={!toAll} onChange={() => setToAll(false)} />
+						<input type="radio" name="rv-bto" checked={!toAll} onChange={() => edit((f) => ({ ...f, toAll: false }))} />
 						{t("boardFormToSome")}
 					</label>
 				</div>
@@ -1679,7 +1749,7 @@ function BoardForm({ roleIds, onDone }: { roleIds: string[]; onDone: (said: stri
 									checked={picked.includes(id)}
 									onChange={(e) => {
 										const on = e.currentTarget.checked;
-										setPicked((p) => (on ? [...p, id] : p.filter((x) => x !== id)));
+										edit((f) => ({ ...f, picked: on ? [...f.picked, id] : f.picked.filter((x) => x !== id) }));
 									}}
 								/>
 								{id}
@@ -1696,7 +1766,10 @@ function BoardForm({ roleIds, onDone }: { roleIds: string[]; onDone: (said: stri
 					value={title}
 					maxLength={BOARD_TITLE_MAX}
 					required
-					onChange={(e) => setTitle(e.target.value)}
+					onChange={(e) => {
+						const value = e.currentTarget.value;
+						edit((f) => ({ ...f, title: value }));
+					}}
 				/>
 			</label>
 			<label className="rv-bfield">
@@ -1707,7 +1780,10 @@ function BoardForm({ roleIds, onDone }: { roleIds: string[]; onDone: (said: stri
 					maxLength={BOARD_TEXT_MAX}
 					rows={6}
 					required
-					onChange={(e) => setText(e.target.value)}
+					onChange={(e) => {
+						const value = e.currentTarget.value;
+						edit((f) => ({ ...f, text: value }));
+					}}
 				/>
 				<span className="rv-meta">{t("boardFormCount", { n: text.length, max: BOARD_TEXT_MAX })}</span>
 			</label>
@@ -1729,11 +1805,16 @@ function BoardForm({ roleIds, onDone }: { roleIds: string[]; onDone: (said: stri
 }
 
 /** Closing a post: an optional note ("pause lifted"), then Close post. */
-function BoardCloseForm({ post, onDone }: { post: UiBoardPost; onDone: (back: boolean) => void }) {
+export function BoardCloseForm({ post, onDone }: { post: UiBoardPost; onDone: (back: boolean) => void }) {
 	const t = useT();
-	const [note, setNote] = useState("");
-	const [busy, setBusy] = useState(false);
-	const [error, setError] = useState("");
+	const {
+		form: { note },
+		busy,
+		error,
+		edit,
+		setError,
+		request,
+	} = useBoardEditor<Extract<BoardDraftForm, { type: "board_close" }>>({ type: "board_close", id: post.id, note: "" });
 	const ref = useRef<HTMLInputElement>(null);
 	useEffect(() => {
 		ref.current?.focus();
@@ -1741,15 +1822,14 @@ function BoardCloseForm({ post, onDone }: { post: UiBoardPost; onDone: (back: bo
 	const submit = async (e: FormEvent) => {
 		e.preventDefault();
 		if (busy) return;
-		setBusy(true);
-		setError("");
-		const res = await boardRequest({ type: "board_close", id: post.id, ...(note.trim() ? { note: note.trim() } : {}) });
-		setBusy(false);
+		const completed = await request();
+		if (!completed?.sameEditor()) return;
+		const { res, unchanged } = completed;
 		if (!res.ok) {
 			setError(t("boardCloseFailed", { error: res.error ?? "" }));
 			return;
 		}
-		onDone(false);
+		if (unchanged()) onDone(false);
 	};
 	return (
 		<form className="rv-bclose" onSubmit={submit}>
@@ -1762,7 +1842,10 @@ function BoardCloseForm({ post, onDone }: { post: UiBoardPost; onDone: (back: bo
 					value={note}
 					maxLength={BOARD_CLOSE_NOTE_MAX}
 					placeholder={t("boardCloseNoteHint")}
-					onChange={(e) => setNote(e.target.value)}
+					onChange={(e) => {
+						const value = e.currentTarget.value;
+						edit((f) => ({ ...f, note: value }));
+					}}
 				/>
 			</label>
 			{error && (
