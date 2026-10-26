@@ -1,8 +1,18 @@
-import { Fragment, memo, useEffect, useState, type ReactNode } from "react";
+import {
+	Fragment,
+	memo,
+	useEffect,
+	useLayoutEffect,
+	useRef,
+	useState,
+	useSyncExternalStore,
+	type ReactNode,
+} from "react";
 import { FiTarget, FiLock, FiUnlock, FiX, FiChevronUp } from "react-icons/fi";
 import type { GoalStatus, ModelInfo } from "../types";
 import { useT } from "../i18n";
 import { appSend, useIsDsh } from "../app-globals";
+import { appAdmit } from "../app-admit";
 import { Dropdown, DropdownItem } from "./Dropdown";
 import type { UiSlotEntry } from "../ui-slots";
 import { renderMergedToolbar } from "../slot-toolbar";
@@ -20,6 +30,75 @@ export type GoalBarMsg =
 	  }
 	| { type: "list_models" };
 
+/** #570's shared target field is required for these authored submissions.
+ * Bind the real prop before admission; never substitute a later active target.
+ * The host still owns source/ownership checks and safe original-target dispatch. */
+export type GoalAuthoredIntent = Extract<GoalBarMsg, { type: "set_goal" | "start_goal_wizard" }> & {
+	readonly conversationId: string;
+};
+type AdmissionState = "pending" | "refused" | "uncertain" | "admitted";
+interface GoalAttempt {
+	readonly message: Readonly<GoalAuthoredIntent>;
+	readonly state: AdmissionState;
+}
+interface GoalDraft {
+	text: string;
+	reviewModel: string;
+	maxRounds: number;
+	locked: boolean;
+	collapsed: boolean;
+	edited: boolean;
+	revision: number;
+	pending: GoalAttempt | null;
+	attempts: readonly GoalAttempt[];
+}
+
+// Component-owned, conversation-scoped recovery across navigation/unmount only.
+// No persistence claim, automatic replay, expiry, or generic control journal.
+// Even local true keeps the original; #570 owns durable recovery/ack retirement.
+const goalDrafts = new Map<
+	string,
+	{
+		snapshot: GoalDraft;
+		subscribe: (listener: () => void) => () => void;
+		read: () => GoalDraft;
+		write: (draft: GoalDraft) => void;
+	}
+>();
+function goalDraftFor(conversationId: string, goal: GoalStatus) {
+	let resource = goalDrafts.get(conversationId);
+	if (!resource) {
+		const listeners = new Set<() => void>();
+		const created = {
+			snapshot: {
+				text: "",
+				reviewModel: goal.reviewModel ?? "",
+				maxRounds: goal.maxRounds || 0,
+				locked: goal.locked,
+				collapsed: true,
+				edited: false,
+				revision: 0,
+				pending: null,
+				attempts: [],
+			} as GoalDraft,
+			subscribe: (listener: () => void) => {
+				listeners.add(listener);
+				return () => {
+					listeners.delete(listener);
+				};
+			},
+			read: (): GoalDraft => created.snapshot,
+			write: (draft: GoalDraft) => {
+				created.snapshot = draft;
+				for (const listener of listeners) listener();
+			},
+		};
+		resource = created;
+		goalDrafts.set(conversationId, resource);
+	}
+	return resource;
+}
+
 /** Props are deliberately NARROW (no whole-ChatState object): every field is
  *  stable while tokens stream in, so the shallow-compared memo() below skips
  *  the goal bar entirely during streaming. */
@@ -35,14 +114,12 @@ interface Props {
 	onUiAction?: (item: UiSlotEntry) => void;
 }
 
-export const GoalBar = memo(function GoalBar({
-	goal,
-	models,
-	modelsLoading,
-	activeConversationId,
-	uiGoalbarActions,
-	onUiAction,
-}: Props) {
+export const GoalBar = memo(function GoalBar(props: Props) {
+	// A → B → A is a new lifetime even if the final target string is equal.
+	return <GoalBarEditor key={props.activeConversationId} {...props} />;
+});
+
+function GoalBarEditor({ goal, models, modelsLoading, activeConversationId, uiGoalbarActions, onUiAction }: Props) {
 	const t = useT();
 	const goalDetail = goal.statusEn ? goal.statusEn : goal.status || "";
 	const wizardDetail = goal.wizard?.statusEn ? goal.wizard.statusEn : goal.wizard?.status || "";
@@ -55,29 +132,43 @@ export const GoalBar = memo(function GoalBar({
 	const goalBelongsToActiveConversation = !goal.conversationId || goal.conversationId === activeConversationId;
 	const active = goal.goal !== null && goalBelongsToActiveConversation;
 
-	// Draft fields (only meaningful while editing a new goal).
-	const [text, setText] = useState("");
-	const [reviewModel, setReviewModel] = useState<string>(goal.reviewModel ?? "");
-	const [maxRounds, setMaxRounds] = useState(goal.maxRounds);
-	const [locked, setLocked] = useState(goal.locked);
+	const wizardActive = (goal.wizard?.active ?? false) && goalBelongsToActiveConversation;
+	const resource = goalDraftFor(activeConversationId, goal);
+	const draft = useSyncExternalStore(resource.subscribe, resource.read);
+	const { text, reviewModel, maxRounds, locked, collapsed } = draft;
+	const editDraft = (patch: Partial<GoalDraft>, authored = true) => {
+		const current = resource.read();
+		resource.write({ ...current, ...patch, edited: current.edited || authored, revision: current.revision + 1 });
+	};
+	const setText = (text: string) => editDraft({ text });
+	const setReviewModel = (reviewModel: string) => editDraft({ reviewModel });
+	const setMaxRounds = (maxRounds: number) => editDraft({ maxRounds });
+	const setLocked = (locked: boolean) => editDraft({ locked });
+	const setCollapsed = (collapsed: boolean) => editDraft({ collapsed }, false);
 	const [modelOpen, setModelOpen] = useState(false);
 	const [reqLoading, setReqLoading] = useState(false);
-	// Collapsed by default: idle shows only a compact pill so the bar never
-	// occupies vertical space until the user actually wants to set a goal.
-	const [collapsed, setCollapsed] = useState(true);
+	const view = useRef({ current: false });
+	useLayoutEffect(() => {
+		const lifetime = { current: true };
+		view.current = lifetime;
+		return () => {
+			lifetime.current = false;
+		};
+	}, [active, wizardActive]);
 
-	// Keep the editor's preference pickers in sync with the server's remembered
-	// prefs (maxRounds 0 = unlimited). When the goal is inactive, adopt whatever
-	// the server currently holds — so a reload restores the last-used model /
-	// rounds / lock, and clearing a goal reverts to those remembered defaults.
-	// `goal` (goaled status) holds the persisted prefs; upstream signals drive
-	// this via `goal.goal !== null` transitions and the prefs fields changing.
+	// Remembered server defaults may populate a clean editor, never overwrite
+	// authored options or an outstanding intent (including on goal transitions).
 	useEffect(() => {
-		setReviewModel(goal.reviewModel ?? "");
-		setMaxRounds(goal.maxRounds || 0);
-		setLocked(goal.locked);
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [goal.goal, goal.reviewModel, goal.maxRounds, goal.locked]);
+		const current = resource.read();
+		if (current.edited || current.pending) return;
+		resource.write({
+			...current,
+			reviewModel: goal.reviewModel ?? "",
+			maxRounds: goal.maxRounds || 0,
+			locked: goal.locked,
+			revision: current.revision + 1,
+		});
+	}, [resource, goal.goal, goal.reviewModel, goal.maxRounds, goal.locked]);
 
 	// Lazily fetch the model list when the review-model dropdown opens.
 	useEffect(() => {
@@ -95,36 +186,69 @@ export const GoalBar = memo(function GoalBar({
 		return models.find((m) => m.id === reviewModel)?.name ?? reviewModel;
 	};
 
+	const submit = async (kind: "set_goal" | "start_goal_wizard") => {
+		const original = resource.read();
+		if (!original.text.trim() || !activeConversationId || original.pending) return;
+		const message: Readonly<GoalAuthoredIntent> = Object.freeze({
+			...(kind === "set_goal"
+				? { type: kind, goal: original.text, ...(original.reviewModel ? { reviewModel: original.reviewModel } : {}) }
+				: { type: kind, text: original.text, ...(original.reviewModel ? { wizardModel: original.reviewModel } : {}) }),
+			maxRounds: original.maxRounds,
+			locked: original.locked,
+			conversationId: activeConversationId,
+		});
+		const attempt: GoalAttempt = { message, state: "pending" };
+		const lifetime = view.current;
+		// Synchronous shared guard, before appAdmit/await: Enter/click/remount
+		// cannot submit another copy while either authored action is pending.
+		resource.write({ ...original, pending: attempt, attempts: [...original.attempts, attempt] });
+		let state: AdmissionState;
+		try {
+			state = (await appAdmit(message)) === true ? "admitted" : "refused";
+		} catch {
+			// Including payloadCommitted: true. Unknown dispatch is not permission
+			// to clear or retry automatically. Keep the complete recoverable source.
+			state = "uncertain";
+		}
+		const current = resource.read();
+		const mayClear =
+			state === "admitted" && lifetime.current && view.current === lifetime && current.revision === original.revision;
+		resource.write({
+			...current,
+			pending: null,
+			attempts: current.attempts.map((item) => (item === attempt ? { message, state } : item)),
+			...(mayClear ? { text: "", collapsed: false, edited: false, revision: current.revision + 1 } : {}),
+		});
+	};
 	const set = () => {
-		const trimmed = text.trim();
-		if (!trimmed) return;
-		appSend({
-			type: "set_goal",
-			goal: trimmed,
-			...(reviewModel ? { reviewModel } : {}),
-			maxRounds,
-			locked,
-		});
-		setText("");
-		setCollapsed(false);
+		void submit("set_goal");
 	};
-
-	/** Start the collaborative wizard: AI asks questions to refine the draft
-	 *  into a goal, then auto-sets it. Reuses the reviewer-model picker as the
-	 *  optional wizard model. */
 	const startWizard = () => {
-		const trimmed = text.trim();
-		if (!trimmed) return;
-		appSend({
-			type: "start_goal_wizard",
-			text: trimmed,
-			...(reviewModel ? { wizardModel: reviewModel } : {}),
-			maxRounds,
-			locked,
-		});
-		setText("");
-		setCollapsed(false);
+		void submit("start_goal_wizard");
 	};
+	const admissionCopy: Record<AdmissionState, string> = {
+		pending: "Waiting for local admission. Draft kept; nothing is confirmed.",
+		refused: "Admission not confirmed. Draft kept; check the original conversation before trying again.",
+		uncertain:
+			"Admission uncertain. Draft kept; work may have started. Check the original conversation before trying again.",
+		admitted: "Accepted locally, not server confirmation. Original kept for recovery.",
+	};
+	const recovery = draft.attempts.length > 0 && (
+		<div className="goalbar-admission" role="status" aria-live="polite">
+			{draft.attempts.map((attempt, index) => (
+				<details key={index} data-admission-state={attempt.state}>
+					<summary>{admissionCopy[attempt.state]}</summary>
+					<textarea
+						aria-label={`Original goal intent for ${attempt.message.conversationId}`}
+						readOnly
+						rows={5}
+						style={{ width: "100%" }}
+						value={JSON.stringify(attempt.message, null, 2)}
+					/>
+				</details>
+			))}
+		</div>
+	);
 
 	// A wizard running (scoping questions in flight) — show its progress.
 	// ---- 槽位合并：宿主 chrome 按 id 分区（编辑行/选项行/活跃行/pill），插件条目跟随同行；
@@ -160,7 +284,12 @@ export const GoalBar = memo(function GoalBar({
 			</button>
 		),
 		"host:goal-set": (
-			<button type="button" className="goalbar-btn" disabled={!text.trim()} onClick={set}>
+			<button
+				type="button"
+				className="goalbar-btn"
+				disabled={!text.trim() || !activeConversationId || !!draft.pending}
+				onClick={set}
+			>
 				{t("goalBarSet")}
 			</button>
 		),
@@ -168,7 +297,7 @@ export const GoalBar = memo(function GoalBar({
 			<button
 				type="button"
 				className="goalbar-btn wizard"
-				disabled={!text.trim()}
+				disabled={!text.trim() || !activeConversationId || !!draft.pending}
 				title={t("goalWizardTip")}
 				onClick={startWizard}
 			>
@@ -180,12 +309,11 @@ export const GoalBar = memo(function GoalBar({
 				type="button"
 				className="goalbar-icon-btn"
 				title={locked ? t("goalBarLocked") : t("goalBarUnlocked")}
-				onClick={() =>
-					setLocked((v) => {
-						appSend({ type: "set_goal_prefs", locked: !v });
-						return !v;
-					})
-				}
+				onClick={() => {
+					const next = !resource.read().locked;
+					setLocked(next);
+					appSend({ type: "set_goal_prefs", locked: next });
+				}}
 			>
 				{locked ? <FiLock /> : <FiUnlock />}
 			</button>
@@ -273,8 +401,6 @@ export const GoalBar = memo(function GoalBar({
 			</label>
 		),
 	};
-	const wizardActive = (goal.wizard?.active ?? false) && goalBelongsToActiveConversation;
-
 	if (wizardActive) {
 		return (
 			<div className={`goalbar goalbar-active ${wizardActive ? "wizard" : ""}`}>
@@ -310,6 +436,7 @@ export const GoalBar = memo(function GoalBar({
 						onUiAction,
 					)}
 				</div>
+				{recovery}
 			</div>
 		);
 	}
@@ -351,7 +478,7 @@ export const GoalBar = memo(function GoalBar({
 									title={t("goalBarClear")}
 									disabled={goal.reviewing}
 									onClick={() => {
-										if (goal.goal) setText(goal.goal);
+										if (goal.goal && !resource.read().edited) setText(goal.goal);
 										appSend({ type: "clear_goal" });
 										setCollapsed(false);
 									}}
@@ -363,6 +490,7 @@ export const GoalBar = memo(function GoalBar({
 						onUiAction,
 					)}
 				</div>
+				{recovery}
 			</div>
 		);
 	}
@@ -372,8 +500,13 @@ export const GoalBar = memo(function GoalBar({
 	if (collapsed) {
 		// pill 藏掉且无插件条目时整条不占位（布局页「恢复」可找回）。
 		const pillBar = renderMergedToolbar(goalZone(["host:goal-pill"]), goalHostNodes, onUiAction);
-		if (!pillBar) return null;
-		return <div className="goalbar goalbar-collapsed">{pillBar}</div>;
+		if (!pillBar && !recovery) return null;
+		return (
+			<div className="goalbar goalbar-collapsed">
+				{pillBar}
+				{recovery}
+			</div>
+		);
 	}
 
 	return (
@@ -406,6 +539,7 @@ export const GoalBar = memo(function GoalBar({
 
 				<span className="goalbar-lock-hint">{locked ? t("goalBarLocked") : t("goalBarUnlocked")}</span>
 			</div>
+			{recovery}
 		</div>
 	);
-});
+}
