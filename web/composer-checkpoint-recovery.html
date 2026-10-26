@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta
+			http-equiv="Content-Security-Policy"
+			content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; worker-src 'none'"
+		/>
+		<title>Composer checkpoint inspection</title>
+		<style>
+			:root {
+				color-scheme: light dark;
+				font-family: system-ui, sans-serif;
+			}
+			body {
+				max-width: 72rem;
+				margin: 2rem auto;
+				padding: 0 1rem;
+			}
+			button {
+				font: inherit;
+				padding: 0.6rem;
+				margin: 0 0.7rem 0.7rem 0;
+			}
+			article {
+				border-top: 1px solid;
+				padding: 1rem 0;
+			}
+			h2 {
+				font-size: 1rem;
+				overflow-wrap: anywhere;
+			}
+			pre {
+				white-space: pre-wrap;
+				overflow-wrap: anywhere;
+				tab-size: 4;
+			}
+		</style>
+	</head>
+	<body>
+		<h1>Composer checkpoint inspection</h1>
+		<p>
+			Look and export only. This page never applies a draft, sends a message, fetches a referenced resource, grants
+			access or deletes a record.
+		</p>
+		<p>
+			Complete source, incoming and effective draft data are shown as text. References remain references: their target
+			bytes have not been resolved. A checkpoint is not proof of sending or consumption.
+		</p>
+		<div data-composer-checkpoint-reader></div>
+		<script type="module" src="/src/composer-checkpoint-reader.ts"></script>
+	</body>
+</html>
