@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { randomUuid } from "../uuid";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -20,16 +21,33 @@ export function stripExitBanner(data: string): { clean: string; exitCode: number
 	return { clean, exitCode };
 }
 
+/** Existing-only renderer attach. viewId identifies this display occurrence, never authority. */
+export interface TerminalAttachIntent {
+	readonly conversationId: string;
+	readonly sessionId: string;
+	readonly terminalId: string;
+	readonly cols: number;
+	readonly rows: number;
+	readonly viewId: string;
+}
+export type OnAttachTerminal = (
+	intent: TerminalAttachIntent,
+	replaceOutput: (data: string) => void,
+) => Promise<boolean>;
+
 interface TermXtermProps {
 	conversationId: string;
+	/** Only the coherent snapshot's genuine SID; absence makes this view read-only. */
+	sessionId?: string;
+	onAttachTerminal?: OnAttachTerminal;
 	terminalId: string;
-	/** When set, the server runs this command in a new shell instead of a bare shell. */
+	/** Metadata only. Mounting a stored command NEVER requests execution. */
 	command?: CommandDef;
-	/** Directory for a bare shell (from the snapshot at tab creation). */
+	/** Original display metadata; never spawn/attach authority. */
 	cwd: string;
-	/** Display title (sent to server so the PTY metadata uses the correct locale). */
+	/** Display title only. */
 	title?: string;
-	/** true = 终端接管 bash 的 AI 终端：重建时回传给服务端以保留名额豁免（issue #147）。 */
+	/** Agent-bash display metadata; mounting never rebuilds its process. */
 	agentBash?: boolean;
 	/** Whether this terminal is the visible one. */
 	active: boolean;
@@ -41,18 +59,16 @@ interface TermXtermProps {
 }
 
 /**
- * One xterm instance per terminal tab. Owns the PTY lifecycle: creates it on
- * mount (bare shell or run_command), forwards input/resize, streams output via
- * the bridge, and kills the PTY on unmount. Kept mounted while hidden so
- * scrollback survives tab switches.
+ * One xterm renderer per terminal tab. Mount/restore only attaches to an
+ * already-owned PTY/output snapshot; it never creates/restarts a process.
+ * The host owns command dispatch, and TerminalPanel's explicit new-shell action
+ * owns plain-shell creation. Input/resize remain live and unjournaled after attach.
  */
 export function TermXterm({
 	conversationId,
+	sessionId,
+	onAttachTerminal,
 	terminalId,
-	command,
-	cwd,
-	title,
-	agentBash,
 	active,
 	running,
 	exitCode,
@@ -60,32 +76,25 @@ export function TermXterm({
 }: TermXtermProps) {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const termRef = useRef<{ term: Terminal; fit: FitAddon } | null>(null);
-	// PTY lifecycle: the mount effect must NOT re-run on a language switch
-	// (re-running would dispose and re-create the xterm view — scrollback lost
-	// — and, for run_command terminals, make the server kill the running
-	// process and re-execute the command). The exit banner instead follows the
-	// LIVE locale via a small effect keyed on the running→stopped edge.
-	const { locale } = useI18n();
-	const localeRef = useRef(locale);
-	localeRef.current = locale;
-	// Metadata snapshots recreate the command object; use a value key so a
-	// terminal is not torn down when only its running/exit metadata changes.
-	const commandKey = command ? JSON.stringify(command) : "";
-	// 已退出的终端只做展示（保留输出由服务端 replay 推送进来），挂载时不再重建
-	// PTY：刷新/重连/切对话后面板会为 history 里的每条记录挂载一个实例，重建会
-	// 丢弃保留的输出、白白拉起进程，AI 一次性终端还会占满 16 个用户名额并反复
-	// 弹全局通知（issue #147）。running 在挂载时已由 terminal_list 确定
-	//（history 记录为 false）；存活终端退出后该 effect 不重跑，故只取挂载时刻的值。
-	const deadOnMountRef = useRef(running === false);
+	const { t } = useI18n();
+	const live = useRef({ running, exitCode, t });
+	live.current = { running, exitCode, t };
+	const attachedRef = useRef(false);
+	const [attachState, setAttachState] = useState<"pending" | "attached" | "unavailable">("pending");
 
-	// Mount/unmount: create the xterm, register with the output bridge, spawn
-	// the server-side PTY, wire input + resize. Never re-runs on tab switches
-	// (command identity is stable — the meta object is only ever spread).
+	// Render lifetime, not execution identity. Metadata/locale/tab visibility
+	// changes must not recreate the renderer or replay an authored command.
 	useEffect(() => {
 		const container = containerRef.current;
 		if (!container) return;
 
+		let disposed = false;
+		let settled = false;
+		let replaced = false;
+		attachedRef.current = false;
+		setAttachState("pending");
 		const term = new Terminal({
+			disableStdin: true,
 			theme: buildTermTheme(),
 			fontFamily: '"SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace',
 			fontSize: 13,
@@ -133,11 +142,14 @@ export function TermXterm({
 		});
 
 		const unregister = register(conversationId, terminalId, {
-			write: (data) => term.write(stripExitBanner(data).clean),
+			write: (data) => {
+				if (!disposed) term.write(stripExitBanner(data).clean);
+			},
 			dispose: () => term.dispose(),
 		});
 
 		const sendDims = () => {
+			if (!attachedRef.current || disposed) return;
 			try {
 				fit.fit();
 				appSend({
@@ -152,42 +164,53 @@ export function TermXterm({
 			}
 		};
 
-		// Spawn the PTY with the real fitted size (80x24 until layout settles).
-		// Dead-on-mount terminals (running === false in the list) skip the spawn:
-		// their retained output arrives via the server replay, nothing to restart.
 		const raf = requestAnimationFrame(() => {
 			try {
 				fit.fit();
 			} catch {
-				// ignore
+				/* hidden container */
 			}
-			if (deadOnMountRef.current) return;
-			if (command) {
-				appSend({
-					type: "run_command",
-					terminalId,
-					conversationId,
-					command,
-					cols: term.cols,
-					rows: term.rows,
-				});
-			} else {
-				appSend({
-					type: "terminal_create",
-					terminalId,
-					title,
-					locale: localeRef.current,
-					agentBash,
-					conversationId,
-					cwd,
-					cols: term.cols,
-					rows: term.rows,
-				});
+			if (!onAttachTerminal || !conversationId || !sessionId || !terminalId) {
+				setAttachState("unavailable");
+				return;
 			}
+			const intent = Object.freeze({
+				conversationId,
+				sessionId,
+				terminalId,
+				cols: term.cols,
+				rows: term.rows,
+				viewId: randomUuid(),
+			});
+			const isCurrent = () => !disposed && termRef.current?.term === term;
+			const replaceOutput = (data: string) => {
+				if (!isCurrent() || settled || replaced || typeof data !== "string") return;
+				replaced = true;
+				term.reset();
+				term.write(stripExitBanner(data).clean);
+				const current = live.current;
+				if (current.running === false)
+					term.write(`\r\n\x1b[90m${current.t("exitBanner", { code: current.exitCode ?? "" })}\x1b[0m\r\n`);
+			};
+			void (async () => {
+				let attached = false;
+				try {
+					const result = onAttachTerminal(intent, replaceOutput);
+					if (result && typeof result.then === "function") attached = (await result) === true && replaced;
+				} catch {
+					/* unavailable: keep output visible and read-only */
+				}
+				settled = true;
+				if (!isCurrent()) return;
+				attachedRef.current = attached;
+				term.options.disableStdin = !attached;
+				setAttachState(attached ? "attached" : "unavailable");
+				if (attached) sendDims();
+			})();
 		});
 
 		const onData = term.onData((data) => {
-			appSend({ type: "terminal_input", terminalId, conversationId, data });
+			if (attachedRef.current && !disposed) appSend({ type: "terminal_input", terminalId, conversationId, data });
 		});
 
 		// 手机端触摸滚动兜底（issue #218）：xterm 6.0.0 自身无任何 touch
@@ -271,6 +294,8 @@ export function TermXterm({
 		}
 
 		return () => {
+			disposed = true;
+			attachedRef.current = false;
 			cancelAnimationFrame(raf);
 			onData.dispose();
 			termEl?.removeEventListener("touchstart", onTouchStart);
@@ -286,14 +311,14 @@ export function TermXterm({
 			termRef.current = null;
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [conversationId, terminalId, commandKey, register]);
+	}, [conversationId, sessionId, terminalId, register, onAttachTerminal]);
 
 	// Becoming visible: re-fit (size may have changed while hidden) and focus.
 	useEffect(() => {
 		if (!active) return;
 		const raf = requestAnimationFrame(() => {
 			const inst = termRef.current;
-			if (!inst) return;
+			if (!inst || !attachedRef.current) return;
 			try {
 				inst.fit.fit();
 				appSend({
@@ -317,7 +342,6 @@ export function TermXterm({
 	// written once per running→stopped transition, so reruns in the SAME tab
 	// (TerminalPanel reuses the component instance) and remounts of already-
 	// stopped terminals each render their banner without duplicates.
-	const { t } = useI18n();
 	const lastRunning = useRef<boolean | undefined>(undefined);
 	useEffect(() => {
 		if (running === lastRunning.current) return;
@@ -329,5 +353,18 @@ export function TermXterm({
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [running, terminalId, exitCode]);
 
-	return <div ref={containerRef} className={`term-xterm ${active ? "" : "hidden"}`} />;
+	return (
+		<div
+			className={`term-xterm ${active ? "" : "hidden"}`}
+			data-attach-state={attachState}
+			style={{ display: active ? "flex" : "none", flexDirection: "column" }}
+		>
+			<div ref={containerRef} style={{ flex: 1, minHeight: 0 }} />
+			{attachState !== "attached" && (
+				<div role="status">
+					{t("terminal")}: {attachState === "pending" ? t("sendingTag") : t("queueProfileUnavailable")}
+				</div>
+			)}
+		</div>
+	);
 }

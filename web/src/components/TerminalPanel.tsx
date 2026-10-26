@@ -3,8 +3,9 @@ import { randomUuid } from "../uuid";
 import { FiEdit2, FiMenu, FiPlay, FiPlus, FiRefreshCw, FiTerminal, FiTrash2, FiX } from "react-icons/fi";
 import type { ChatState, TerminalMeta } from "../use-chat";
 import type { CommandDef } from "../types";
-import { TermXterm } from "./TermXterm";
-import { useT } from "../i18n";
+import { TermXterm, type OnAttachTerminal } from "./TermXterm";
+import { useCommandIntent, type OnCommandIntent } from "./SCMPanel";
+import { useI18n } from "../i18n";
 import { appSend } from "../app-globals";
 import type { UiSlotEntry } from "../ui-slots";
 // 工具条通用渲染已抽到 ../slot-toolbar（本模块静态 import 会把 xterm 拉进主包）；
@@ -26,6 +27,9 @@ interface TerminalPanelProps {
 		restart: (id: string) => void;
 		select: (id: string) => void;
 	};
+	/** Paired #570 host: one checkpoint/dispatch owner, and existing-only attach. */
+	onCommandIntent?: OnCommandIntent;
+	onAttachTerminal?: OnAttachTerminal;
 	/** `terminal.toolbar` 槽位的最终条目（全量，含 hidden；宿主 chrome + 插件按槽位顺序合并渲染）。
 	 *  不传 = 未接线，回落默认顺序（与旧硬编码一致）。 */
 	uiTerminalToolbar?: UiSlotEntry[];
@@ -47,8 +51,16 @@ const EMPTY_DRAFT: Draft = { name: "", command: "", cwd: "${pwd}" };
  *          (on mobile this whole column slides in as a drawer)
  *   right: the active terminal (one xterm per tab, kept mounted)
  */
-export function TerminalPanel({ chat, terminal, uiTerminalToolbar, onUiAction }: TerminalPanelProps) {
-	const t = useT();
+export function TerminalPanel({
+	chat,
+	terminal,
+	uiTerminalToolbar,
+	onUiAction,
+	onCommandIntent,
+	onAttachTerminal,
+}: TerminalPanelProps) {
+	const { t, locale } = useI18n();
+	const { admit, commandState } = useCommandIntent(chat, onCommandIntent);
 	const [activeId, setActiveId] = useState<string | null>(null);
 	// Mobile: the left column (commands + tabs) slides in as a drawer.
 	const [sideOpen, setSideOpen] = useState(false);
@@ -95,12 +107,36 @@ export function TerminalPanel({ chat, terminal, uiTerminalToolbar, onUiAction }:
 	const agentTabs = chat.terminals.filter((t) => t.agentBash);
 
 	const openTab = (
-		meta: Omit<TerminalMeta, "running" | "exitCode" | "id" | "conversationId" | "cols" | "rows"> &
+		meta: Omit<TerminalMeta, "running" | "exitCode" | "id" | "conversationId" | "cols" | "rows" | "command"> &
 			Partial<Pick<TerminalMeta, "cols" | "rows">>,
 	) => {
-		if (!chat.ready) return; // topbar already shows the connection state
+		// Explicit user-shell lifecycle M, not authored command E and not a mount fallback.
+		const state = chat.state;
+		if (
+			!chat.ready ||
+			chat.status !== "open" ||
+			!state?.conversationId ||
+			!state.sessionId ||
+			!state.cwd ||
+			(chat.activeConversationId && chat.activeConversationId !== state.conversationId)
+		)
+			return;
 		const id = randomUuid();
-		const conversationId = chat.activeConversationId || chat.state?.conversationId || "";
+		const conversationId = state.conversationId;
+		if (
+			!appSend({
+				type: "terminal_create",
+				terminalId: id,
+				conversationId,
+				title: meta.title,
+				locale,
+				agentBash: meta.agentBash,
+				cwd: meta.cwd,
+				cols: meta.cols ?? 80,
+				rows: meta.rows ?? 24,
+			})
+		)
+			return;
 		terminal.create({
 			...meta,
 			id,
@@ -120,26 +156,13 @@ export function TerminalPanel({ chat, terminal, uiTerminalToolbar, onUiAction }:
 			cwd: chat.state?.cwd ?? "",
 		});
 
-	const runCommand = (cmd: CommandDef) => {
-		const title = cmd.name || cmd.command;
-		// Reuse a terminal with the same title (VSCode-style task reuse): the
-		// command is re-run in the SAME tab — a running process is interrupted
-		// first (the server kills the PTY's process group and starts fresh).
-		const existing = chat.terminals.find((t) => t.title === title);
-		if (existing) {
-			terminal.restart(existing.id);
-			setActiveId(existing.id);
-			appSend({
-				type: "run_command",
-				terminalId: existing.id,
-				conversationId: existing.conversationId,
-				command: cmd,
-				cols: 80,
-				rows: 24,
-			});
-			return;
-		}
-		openTab({ title, cwd: chat.state?.cwd ?? "", command: cmd });
+	const runCommand = async (cmd: CommandDef) => {
+		const admitted = await admit("terminal", cmd);
+		if (!admitted?.isCurrent()) return;
+		// The host has checkpointed and owned the only create/restart/dispatch.
+		terminal.select(admitted.intent.terminal.id);
+		setActiveId(admitted.intent.terminal.id);
+		setSideOpen(false);
 	};
 
 	const closeTab = (id: string) => {
@@ -303,7 +326,17 @@ export function TerminalPanel({ chat, terminal, uiTerminalToolbar, onUiAction }:
 	};
 
 	return (
-		<div className="terminal-view">
+		<div className="terminal-view" data-command-state={commandState}>
+			{commandState !== "owned" && commandState !== "idle" && (
+				<div role="status">
+					{t("command")}:{" "}
+					{commandState === "pending"
+						? t("sendingTag")
+						: commandState === "unavailable"
+							? t("queueProfileUnavailable")
+							: t("rpStatusUnknown")}
+				</div>
+			)}
 			{/* ---------------- left: command list + terminal tabs ---------------- */}
 			<aside className={`term-side term-commands ${sideOpen ? "open" : ""}`}>
 				<div className="panel-header">
@@ -376,10 +409,22 @@ export function TerminalPanel({ chat, terminal, uiTerminalToolbar, onUiAction }:
 							{chat.commands.length === 0 && <div className="panel-empty">{t("noCommands")}</div>}
 							{chat.commands.map((c, i) => (
 								<div key={i} className="cmd-item">
-									<button type="button" className="cmd-run" title={t("clickToRun")} onClick={() => runCommand(c)}>
+									<button
+										type="button"
+										className="cmd-run"
+										disabled={commandState === "pending"}
+										title={t("clickToRun")}
+										onClick={() => runCommand(c)}
+									>
 										<FiPlay />
 									</button>
-									<button type="button" className="cmd-main" title={t("clickToRun")} onClick={() => runCommand(c)}>
+									<button
+										type="button"
+										className="cmd-main"
+										disabled={commandState === "pending"}
+										title={t("clickToRun")}
+										onClick={() => runCommand(c)}
+									>
 										<span className="cmd-name">{c.name}</span>
 										<span className="cmd-command">{c.command}</span>
 										{c.cwd && <span className="cmd-cwd">{c.cwd}</span>}
@@ -446,6 +491,13 @@ export function TerminalPanel({ chat, terminal, uiTerminalToolbar, onUiAction }:
 						<TermXterm
 							key={`${t.conversationId}:${t.id}`}
 							conversationId={t.conversationId}
+							sessionId={
+								chat.state?.conversationId === t.conversationId &&
+								(!chat.activeConversationId || chat.activeConversationId === t.conversationId)
+									? chat.state.sessionId
+									: undefined
+							}
+							onAttachTerminal={onAttachTerminal}
 							terminalId={t.id}
 							command={t.command}
 							cwd={t.cwd}

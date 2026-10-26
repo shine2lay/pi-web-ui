@@ -97,6 +97,120 @@ function fileKind(f: ScmFile): FileKind {
 	return "unstaged";
 }
 
+/** Authored command E, not PTY bytes/settings. The host owns checkpoint + sole dispatch. */
+export interface CommandIntent {
+	readonly requestId: string;
+	readonly source: "scm" | "terminal";
+	readonly conversationId: string;
+	readonly sessionId: string;
+	readonly workspaceCwd: string;
+	readonly command: Readonly<CommandDef>;
+	readonly terminal: Readonly<{
+		id: string;
+		title: string;
+		cwd: string;
+		cols: number;
+		rows: number;
+		mode: "new" | "existing";
+		running: boolean;
+		exitCode: number | null;
+	}>;
+	readonly commitSource?: Readonly<{ text: string; revision: number }>;
+}
+
+/** Literal asynchronous true means exact ownership, NOT execution/exit success. */
+export type OnCommandIntent = (intent: CommandIntent) => Promise<boolean>;
+
+/** Shared caller guard; lives here to avoid eagerly importing xterm into SCM. */
+export function useCommandIntent(chat: ChatState, onCommandIntent?: OnCommandIntent) {
+	const key = JSON.stringify([
+		chat.activeConversationId,
+		chat.state?.conversationId,
+		chat.state?.sessionId,
+		chat.state?.cwd,
+		chat.ready,
+		chat.status,
+	]);
+	const target = useRef({ key, generation: 0 });
+	if (target.current.key !== key) target.current = { key, generation: target.current.generation + 1 };
+	const lifetime = useRef({});
+	useEffect(
+		() => () => {
+			lifetime.current = {};
+		},
+		[],
+	);
+	const pending = useRef(new Set<string>());
+	const [status, setStatus] = useState<{ key: string; state: "idle" | "pending" | "unconfirmed" | "owned" }>({
+		key,
+		state: "idle",
+	});
+
+	const admit = async (
+		source: CommandIntent["source"],
+		command: CommandDef,
+		commitSource?: CommandIntent["commitSource"],
+	) => {
+		const state = chat.state;
+		if (
+			!onCommandIntent ||
+			!chat.ready ||
+			chat.status !== "open" ||
+			!state?.conversationId ||
+			!state.sessionId ||
+			!state.cwd ||
+			(chat.activeConversationId && chat.activeConversationId !== state.conversationId)
+		)
+			return null;
+		if (pending.current.has(key)) return null;
+		const originalGeneration = target.current.generation;
+		const originalLifetime = lifetime.current;
+		const isCurrent = () => lifetime.current === originalLifetime && target.current.generation === originalGeneration;
+		const title = command.name || command.command;
+		const existing = chat.terminals.find(
+			(tm) => tm.title === title && tm.conversationId === state.conversationId && tm.cwd === state.cwd && !tm.agentBash,
+		);
+		const intent: CommandIntent = Object.freeze({
+			requestId: randomUuid(),
+			source,
+			conversationId: state.conversationId,
+			sessionId: state.sessionId,
+			workspaceCwd: state.cwd,
+			command: Object.freeze({
+				name: command.name,
+				command: command.command,
+				...(Object.hasOwn(command, "cwd") ? { cwd: command.cwd } : {}),
+			}),
+			terminal: Object.freeze({
+				id: existing?.id ?? randomUuid(),
+				title,
+				cwd: state.cwd,
+				cols: existing?.cols ?? 80,
+				rows: existing?.rows ?? 24,
+				mode: existing ? "existing" : "new",
+				running: existing?.running ?? false,
+				exitCode: existing?.exitCode ?? null,
+			}),
+			...(commitSource ? { commitSource: Object.freeze({ ...commitSource }) } : {}),
+		});
+		pending.current.add(key);
+		setStatus({ key, state: "pending" });
+		let owned = false;
+		try {
+			const result = onCommandIntent(intent);
+			if (!result || typeof result.then !== "function") return null;
+			owned = (await result) === true;
+			return owned ? { intent, isCurrent } : null;
+		} catch {
+			return null;
+		} finally {
+			pending.current.delete(key);
+			if (isCurrent()) setStatus({ key, state: owned ? "owned" : "unconfirmed" });
+		}
+	};
+	return { admit, commandState: !onCommandIntent ? "unavailable" : status.key === key ? status.state : "idle" };
+}
+
 interface ScmTerminalBridge {
 	create: (meta: TerminalMeta) => void;
 	close: (id: string) => void;
@@ -108,6 +222,8 @@ interface ScmTerminalBridge {
 export interface ScmPanelProps {
 	chat: ChatState;
 	terminal: ScmTerminalBridge;
+	/** Required paired host wiring; absence never falls back to legacy command dispatch. */
+	onCommandIntent?: OnCommandIntent;
 	/** True when this view is currently visible (drives auto-refresh). */
 	active: boolean;
 	/** Switch the top-level view to the terminal (write ops run there). */
@@ -119,7 +235,15 @@ export interface ScmPanelProps {
 	onUiAction?: (item: UiSlotEntry) => void;
 }
 
-export function ScmPanel({ chat, terminal, active, onSwitchToTerminal, uiScmToolbar, onUiAction }: ScmPanelProps) {
+export function ScmPanel({
+	chat,
+	terminal,
+	active,
+	onSwitchToTerminal,
+	uiScmToolbar,
+	onUiAction,
+	onCommandIntent,
+}: ScmPanelProps) {
 	const t = useT();
 	const [status, setStatus] = useState<ScmStatus | null>(null);
 	const [branches, setBranches] = useState<ScmBranch[]>([]);
@@ -152,6 +276,12 @@ export function ScmPanel({ chat, terminal, active, onSwitchToTerminal, uiScmTool
 		parseScmSidebarWidth(localStorage.getItem(SCM_SIDEBAR_WIDTH_KEY)),
 	);
 	const [commitMsg, setCommitMsg] = useState("");
+	const commitRevision = useRef(0);
+	const replaceCommitMsg = useCallback((text: string) => {
+		commitRevision.current += 1;
+		setCommitMsg(text);
+	}, []);
+	const { admit, commandState } = useCommandIntent(chat, onCommandIntent);
 	// 提交树过滤框（纯前端过滤主题/作者/hash，随历史重查与切工作区重置）。
 	const [historyFilter, setHistoryFilter] = useState("");
 	// 提交信息历史（localStorage，最近 20 条）与 ↑/↓ 回溯游标。
@@ -307,7 +437,7 @@ export function ScmPanel({ chat, terminal, active, onSwitchToTerminal, uiScmTool
 				return;
 			}
 			setGenError(null);
-			setCommitMsg(data.text ?? "");
+			replaceCommitMsg(data.text ?? "");
 		}
 	}, []);
 
@@ -416,62 +546,29 @@ export function ScmPanel({ chat, terminal, active, onSwitchToTerminal, uiScmTool
 	/* write operations → visible terminal tab                             */
 	/* ------------------------------------------------------------------ */
 
-	const runGitCommand = useCallback(
-		(title: string, command: string) => {
-			if (!chat.ready) return;
-			const def: CommandDef = { name: title, command, cwd: "${pwd}" };
-			let targetId: string;
-			const existing = chat.terminals.find((tm) => tm.title === title);
-			if (existing) {
-				terminal.restart(existing.id);
-				appSend({
-					type: "run_command",
-					terminalId: existing.id,
-					conversationId: existing.conversationId,
-					command: def,
-					cols: 80,
-					rows: 24,
-				});
-				targetId = existing.id;
-			} else {
-				targetId = randomUuid();
-				terminal.create({
-					id: targetId,
-					conversationId: chat.activeConversationId || chat.state?.conversationId || "",
-					title,
-					cwd: chat.state?.cwd ?? "",
-					cols: 80,
-					rows: 24,
-					running: true,
-					exitCode: null,
-					command: def,
-				});
-			}
-			terminal.select(targetId);
-			onSwitchToTerminal();
-		},
-		[chat.ready, chat.state?.cwd, chat.terminals, onSwitchToTerminal, terminal],
-	);
+	const runGitCommand = async (title: string, command: string, source?: CommandIntent["commitSource"]) => {
+		const admitted = await admit("scm", { name: title, command, cwd: "${pwd}" }, source);
+		if (!admitted?.isCurrent()) return null;
+		// Retire only this unchanged revision before switching can unmount SCM.
+		if (source && commitRevision.current === source.revision) {
+			setCommitHistory(rememberCommitMessage(source.text.trim()));
+			replaceCommitMsg("");
+			recallRef.current = COMMIT_RECALL_INITIAL;
+		}
+		terminal.select(admitted.intent.terminal.id);
+		onSwitchToTerminal();
+		return admitted;
+	};
 
-	const handleCommit = useCallback(() => {
+	const submitCommit = async (all: boolean) => {
 		const msg = commitMsg.trim();
 		if (!msg || notRepo) return;
+		const source = { text: commitMsg, revision: commitRevision.current };
 		const escaped = msg.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/`/g, "\\`").replace(/\$/g, "\\$");
-		runGitCommand("git commit", `git commit -m "${escaped}"`);
-		setCommitHistory(rememberCommitMessage(msg));
-		setCommitMsg("");
-		recallRef.current = COMMIT_RECALL_INITIAL;
-	}, [commitMsg, notRepo, runGitCommand]);
-
-	const handleCommitAll = useCallback(() => {
-		const msg = commitMsg.trim();
-		if (!msg || notRepo) return;
-		const escaped = msg.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/`/g, "\\`").replace(/\$/g, "\\$");
-		runGitCommand("git commit", `git add -A && git commit -m "${escaped}"`);
-		setCommitHistory(rememberCommitMessage(msg));
-		setCommitMsg("");
-		recallRef.current = COMMIT_RECALL_INITIAL;
-	}, [commitMsg, notRepo, runGitCommand]);
+		await runGitCommand("git commit", `${all ? "git add -A && " : ""}git commit -m "${escaped}"`, source);
+	};
+	const handleCommit = () => submitCommit(false);
+	const handleCommitAll = () => submitCommit(true);
 
 	const handleStage = useCallback(
 		(f: ScmFile) => {
@@ -780,7 +877,7 @@ export function ScmPanel({ chat, terminal, active, onSwitchToTerminal, uiScmTool
 				disabled={notRepo}
 				title={commitHistory.length > 0 ? t("scmCommitHistoryTip") : undefined}
 				onChange={(e) => {
-					setCommitMsg(e.target.value);
+					replaceCommitMsg(e.target.value);
 					// 用户手动编辑即退出回溯态（草稿已无意义）。
 					recallRef.current = COMMIT_RECALL_INITIAL;
 				}}
@@ -801,7 +898,7 @@ export function ScmPanel({ chat, terminal, active, onSwitchToTerminal, uiScmTool
 						if (hit) {
 							e.preventDefault();
 							recallRef.current = hit.state;
-							setCommitMsg(hit.text);
+							replaceCommitMsg(hit.text);
 						}
 					}
 				}}
@@ -823,7 +920,7 @@ export function ScmPanel({ chat, terminal, active, onSwitchToTerminal, uiScmTool
 			<button
 				type="button"
 				className="btn primary"
-				disabled={!commitMsg.trim() || notRepo}
+				disabled={!commitMsg.trim() || notRepo || commandState === "pending"}
 				title={t("scmCommitTip")}
 				onClick={handleCommit}
 			>
@@ -835,7 +932,7 @@ export function ScmPanel({ chat, terminal, active, onSwitchToTerminal, uiScmTool
 			<button
 				type="button"
 				className="btn"
-				disabled={!commitMsg.trim() || notRepo}
+				disabled={!commitMsg.trim() || notRepo || commandState === "pending"}
 				title={t("scmCommitAllTip")}
 				onClick={handleCommitAll}
 			>
@@ -845,7 +942,17 @@ export function ScmPanel({ chat, terminal, active, onSwitchToTerminal, uiScmTool
 	};
 
 	return (
-		<div className="scm-view">
+		<div className="scm-view" data-command-state={commandState}>
+			{commandState !== "owned" && commandState !== "idle" && (
+				<div role="status">
+					{t("command")}:{" "}
+					{commandState === "pending"
+						? t("sendingTag")
+						: commandState === "unavailable"
+							? t("queueProfileUnavailable")
+							: t("rpStatusUnknown")}
+				</div>
+			)}
 			<div className="scm-header">
 				<div className="scm-title-row">
 					<span className="scm-title">
