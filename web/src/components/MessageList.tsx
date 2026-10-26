@@ -1,4 +1,13 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+	Fragment,
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+	useSyncExternalStore,
+} from "react";
 import { flushSync } from "react-dom";
 
 import type { CSSProperties, ReactNode } from "react";
@@ -44,7 +53,13 @@ import {
 import { isRoleMessageOpen, NoticeTurnRow, RoleMessageRow, useRoleMessageOpenVersion } from "./RoleMessageRow";
 import { roleMessageViewOf } from "../role-message-text";
 import { queueReportFold } from "../queue-report-fold";
-import { hasEarlierMessages, scrollAfterPrepend, type HistoryFields } from "../history-paging";
+import {
+	earlierPageGeneration,
+	hasEarlierMessages,
+	scrollAfterPrepend,
+	subscribeEarlierPageCancellation,
+	type HistoryFields,
+} from "../history-paging";
 import { SelectionQuoteButton } from "./SelectionQuoteButton";
 import { SuggestionChips } from "./SuggestionChips";
 import type { ActionSuggestion } from "../action-suggestions";
@@ -503,48 +518,71 @@ export function MessageList({
 	const t = useT();
 	const exportImage = useExportImage();
 	const scrollRef = useRef<HTMLDivElement>(null);
+	const pagingGeneration = useSyncExternalStore(
+		subscribeEarlierPageCancellation,
+		earlierPageGeneration,
+		earlierPageGeneration,
+	);
 	const earlierRef = useRef<{
+		generation: number;
 		conversationId: string;
+		sessionId: string;
 		start: number;
 		height: number;
 		top: number;
 		anchor: HTMLElement | null;
 		y: number;
 	} | null>(null);
-	const loadEarlier = useCallback(
-		(force = false) => {
-			const el = scrollRef.current;
-			const start = state.messagesStart ?? 0;
-			if (!el || !onLoadOlder || !hasEarlierMessages(state) || state.exchanges) return;
-			if (!force && earlierRef.current?.conversationId === state.conversationId && earlierRef.current.start === start)
-				return;
-			const anchor =
-				Array.from(el.querySelectorAll<HTMLElement>("[data-msg-id]")).find(
-					(node) => node.getBoundingClientRect().bottom > el.getBoundingClientRect().top,
-				) ?? null;
-			earlierRef.current = {
-				conversationId: state.conversationId,
-				start,
-				height: el.scrollHeight,
-				top: el.scrollTop,
-				anchor,
-				y: anchor?.getBoundingClientRect().top ?? 0,
-			};
-			stickRef.current = false;
-			escapedRef.current = true;
-			onLoadOlder(start, 30);
-		},
-		[state.conversationId, state.messagesStart, state.exchanges, (state as HistoryFields).historyWindow, onLoadOlder],
-	);
+	const loadEarlier = useCallback(() => {
+		const el = scrollRef.current;
+		const start = state.messagesStart ?? 0;
+		if (!el || !onLoadOlder || !hasEarlierMessages(state) || state.exchanges) return;
+		if (
+			earlierRef.current?.conversationId === state.conversationId &&
+			earlierRef.current.sessionId === state.sessionId &&
+			earlierRef.current.generation === earlierPageGeneration() &&
+			earlierRef.current.start === start
+		)
+			return;
+		const anchor =
+			Array.from(el.querySelectorAll<HTMLElement>("[data-msg-id]")).find(
+				(node) => node.getBoundingClientRect().bottom > el.getBoundingClientRect().top,
+			) ?? null;
+		earlierRef.current = {
+			generation: earlierPageGeneration(),
+			conversationId: state.conversationId,
+			sessionId: state.sessionId,
+			start,
+			height: el.scrollHeight,
+			top: el.scrollTop,
+			anchor,
+			y: anchor?.getBoundingClientRect().top ?? 0,
+		};
+		stickRef.current = false;
+		escapedRef.current = true;
+		onLoadOlder(start, 30);
+	}, [
+		state.conversationId,
+		state.sessionId,
+		state.messagesStart,
+		state.exchanges,
+		(state as HistoryFields).historyWindow,
+		onLoadOlder,
+	]);
 	useLayoutEffect(() => {
 		const pending = earlierRef.current;
 		const el = scrollRef.current;
 		if (!pending || !el) return;
-		if (pending.conversationId !== state.conversationId) {
+		if (pending.conversationId !== state.conversationId || pending.sessionId !== state.sessionId) {
 			earlierRef.current = null;
 			return;
 		}
-		if ((state.messagesStart ?? 0) >= pending.start) return;
+		if ((state.messagesStart ?? 0) >= pending.start) {
+			if (pending.generation !== pagingGeneration) earlierRef.current = null;
+			return;
+		}
+		// A reply may commit with a reconnect. Preserve its same-scope prepend's
+		// anchor before retiring the old generation's otherwise unanswered request.
 		// A DOM anchor also handles native browser anchoring (then the delta is zero).
 		el.scrollTop = pending.anchor?.isConnected
 			? el.scrollTop + pending.anchor.getBoundingClientRect().top - pending.y
@@ -553,7 +591,7 @@ export function MessageList({
 		prevScrollHeightRef.current = el.scrollHeight;
 		progUntilRef.current = Date.now() + PROGRAMMATIC_SCROLL_GRACE_MS;
 		earlierRef.current = null;
-	}, [state.messagesStart, state.conversationId]);
+	}, [state.messagesStart, state.conversationId, state.sessionId, pagingGeneration]);
 	const [stickBottom, setStickBottom] = useState(true);
 	const stickRef = useRef(true);
 	/** 上一帧 scrollTop —— 判定滚动方向（向上 = 用户要离开底部）。 */
@@ -1725,7 +1763,7 @@ export function MessageList({
 					: hasEarlierMessages(state) && (
 							// 分页入口（chat-window-pagination）：只在真的有更老的消息时出现。
 							<div className="load-older">
-								<button type="button" onClick={() => loadEarlier(true)} disabled={!onLoadOlder}>
+								<button type="button" onClick={() => loadEarlier()} disabled={!onLoadOlder}>
 									{t("loadOlder", {
 										n: (state as HistoryFields).historyWindow?.hiddenCount ?? state.messagesStart ?? 0,
 									})}

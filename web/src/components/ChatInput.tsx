@@ -386,6 +386,7 @@ export const ChatInput = memo(function ChatInput({
 	const appliedDraftTsRef = useRef(0);
 	const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const draftScopeRef = useRef<string | null>(null);
+	const composerIdentityRef = useRef({ conversationId, sessionId, isDsh });
 	/** 最近一次 IME compositionend 的时间戳（issue #248：macOS 中文输入法下敲英文字母按 Enter 上屏时，
 	 *  浏览器会先派发 compositionend 再派发 keydown(Enter, isComposing=false)，需通过时间差拦截误发送）。 */
 	const compositionEndTimeRef = useRef(0);
@@ -481,9 +482,27 @@ export const ChatInput = memo(function ChatInput({
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [draftSessionKey]);
 
-	// 新会话就绪：重置追踪并清空（恢复 effect 在后面，同一 commit 内按声明顺序跑）。
+	// A first session binds the same conversation's provisional draft; it is not
+	// a conversation switch. Remember a bound session through transient absence
+	// too, so replacing it later still clears the old session's text. DSH has no
+	// persistence key, but conversation changes must still isolate its drafts.
 	useEffect(() => {
+		const previous = composerIdentityRef.current;
+		const sameConversation = previous.conversationId === conversationId && previous.isDsh === isDsh;
+		const sameSession = !previous.sessionId || !sessionId || previous.sessionId === sessionId;
+		composerIdentityRef.current = {
+			conversationId,
+			isDsh,
+			sessionId: sameConversation ? sessionId || previous.sessionId : sessionId,
+		};
 		draftScopeRef.current = draftSessionKey;
+		if (sameConversation && sameSession) {
+			// Also capture a quote/host-inserted draft, not only keyboard edits,
+			// before the late server/local restore effect gets a chance to run.
+			if (draftSessionKey && text !== "" && (touchedRef.current || textMirrorRef.current !== text))
+				noteComposerEdit(text);
+			return;
+		}
 		touchedRef.current = false;
 		appliedDraftTsRef.current = 0;
 		textMirrorRef.current = "";
@@ -491,7 +510,9 @@ export const ChatInput = memo(function ChatInput({
 		setText("");
 		setMenu(null);
 		historyIndexRef.current = -1;
-	}, [draftSessionKey]);
+		// Identity transitions only: ordinary typing must not reschedule this effect.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [draftSessionKey, conversationId, sessionId, isDsh]);
 
 	// 新对话自动聚焦：初次加载为新对话、或切到新对话（messages 为空）时自动聚焦。
 	const prevSessionKeyRef = useRef<string | null>(null);
@@ -512,7 +533,7 @@ export const ChatInput = memo(function ChatInput({
 	useEffect(() => {
 		if (!draftSessionKey || !draftLocalKey) return;
 		if (touchedRef.current) return;
-		if (textMirrorRef.current !== "") return;
+		if (textMirrorRef.current !== "" || text !== "") return;
 		const cappedServer =
 			sessionDraft && sessionDraft.text
 				? { text: sessionDraft.text.slice(0, DRAFT_TEXT_CAP), ts: sessionDraft.ts }

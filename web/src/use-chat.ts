@@ -100,9 +100,9 @@ import { resolveCatalogSyncResult } from "./plugin-host";
 import { PROTOCOL_VERSION } from "./protocol-version";
 import {
 	earlierRequest,
+	EarlierPageRequests,
 	mergeEarlierPage,
 	normalizeHistoryState,
-	readEarlierPage,
 	usesEarlierProtocol,
 	type EarlierPage,
 	type HistoryFields,
@@ -1420,6 +1420,7 @@ export function useChat() {
 	const [filesReady, setFilesReady] = useState(false);
 	const wsRef = useRef<WebSocket | null>(null);
 	const earlierProtocolRef = useRef<string | null>(null);
+	const earlierPagesRef = useRef(new EarlierPageRequests());
 	/** Terminal output bridge (writers keyed by terminalId). */
 	const bridgeRef = useRef(makeTerminalBridge());
 	/** Reconnect backoff counter — ref so it never causes re-renders. */
@@ -1547,9 +1548,11 @@ export function useChat() {
 		const ws = wsRef.current;
 		if (ws && ws.readyState === WebSocket.OPEN) {
 			if (msg.type === "load_older") {
-				const conversationId = chatApi.current.chat.state?.conversationId;
-				if (conversationId && earlierProtocolRef.current === conversationId) {
-					ws.send(JSON.stringify(earlierRequest(conversationId, msg.beforeIndex, msg.count)));
+				const state = chatApi.current.chat.state;
+				if (state && earlierProtocolRef.current === state.conversationId) {
+					if (chatApi.current.chat.pendingSwitch || !earlierPagesRef.current.request(state, msg.beforeIndex, msg.count))
+						return true;
+					ws.send(JSON.stringify(earlierRequest(state.conversationId, msg.beforeIndex, msg.count)));
 					return true;
 				}
 			}
@@ -1581,6 +1584,13 @@ export function useChat() {
 				failHeldSends("You left the chat before it opened, so this wasn't sent.");
 			}
 			let out: ClientMessage = msg;
+			if (
+				msg.type === "new_chat" ||
+				msg.type === "set_cwd" ||
+				msg.type === "take_over_conversation" ||
+				(switchTarget && !switchAlreadyShown(switchTarget, chatApi.current.chat.state))
+			)
+				earlierPagesRef.current.cancel();
 			if (switchTarget && !switchAlreadyShown(switchTarget, chatApi.current.chat.state)) {
 				// switch-cache：看过这条就先显示缓存的那份，并告诉服务端手里有哪一截（它只补差异）。
 				const preview = chatCacheRef.current?.forTarget(switchTarget, chatApi.current.chat.conversations);
@@ -1743,6 +1753,9 @@ export function useChat() {
 		dispatch({ type: "status", status: "connecting" });
 		const ws = new WebSocket(wsUrl());
 		wsRef.current = ws;
+		earlierProtocolRef.current = null;
+		earlierPagesRef.current.cancel();
+		earlierPagesRef.current = new EarlierPageRequests();
 		connectAtRef.current = Date.now();
 
 		ws.onopen = () => {
@@ -1797,7 +1810,7 @@ export function useChat() {
 			}
 			// New history wire names are normalized before the fork's existing reducer/cache.
 			if ((msg as { type: string }).type === "earlier_messages") {
-				const page = readEarlierPage(msg, chatApi.current.chat.state?.messagesStart ?? 0);
+				const page = earlierPagesRef.current.receive(msg, chatApi.current.chat.state);
 				if (page) dispatch({ type: "older_messages", msg: page });
 				return;
 			}
@@ -1926,6 +1939,7 @@ export function useChat() {
 					// switch-cache：带 reuse 的快照只有新增的尾巴，把当时报上去的那份缓存接在前面。
 					// 对不上（缓存已经不在了）就不用它，要一份完整的。
 					const wireState = msg.state as UiState & HistoryFields;
+					earlierPagesRef.current.bind(wireState);
 					earlierProtocolRef.current = usesEarlierProtocol(wireState) ? wireState.conversationId : null;
 					let state = normalizeHistoryState(wireState);
 					if (msg.reuse) {
