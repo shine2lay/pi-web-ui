@@ -17,7 +17,7 @@
  * 新的队列（或 5 秒后）再放开，防连点。
  */
 
-import { memo, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
 	UiTaskQueue,
 	UiTaskQueueBlock,
@@ -391,33 +391,126 @@ function BlockedLine({ block, onOpenChat }: { block: UiTaskQueueBlock; onOpenCha
 	);
 }
 
-/** telegram-answers: answer a stuck task here: one of its choices, or typed words. The answer goes
- *  into the chat the task runs in, as your reply, and it carries on (Telegram gets told too). */
-function StuckAnswer({ task, onAnswer }: { task: UiTaskQueueTask; onAnswer: (taskId: number, text: string) => void }) {
+/** Host-issued occurrence identity, never derived from question text, choices or a timestamp.
+ * Presentation fields only reject an incoherent display; they do not establish authority. */
+export interface TaskQueueAnswerBinding {
+	readonly conversationId: string;
+	readonly queueId: string;
+	readonly taskId: number;
+	readonly questionId: string;
+	readonly question: string;
+	readonly choices: readonly string[];
+	readonly detail?: string;
+}
+
+export interface TaskQueueAnswerRequest {
+	readonly binding: TaskQueueAnswerBinding;
+	readonly text: string;
+}
+
+/** Strict true means this exact answer was actually applied, not sent, saved or admitted.
+ * Consent answers must never use the generic admission journal/replay path. */
+export type TaskQueueAnswerResult = (request: TaskQueueAnswerRequest) => Promise<boolean>;
+
+function answerBinding(
+	bindings: readonly TaskQueueAnswerBinding[] | undefined,
+	conversationId: string | undefined,
+	queueId: string | undefined,
+	task: UiTaskQueueTask,
+): TaskQueueAnswerBinding | undefined {
+	if (!conversationId?.trim() || !queueId?.trim()) return undefined;
+	const matches = (bindings ?? []).filter(
+		(b) => b.conversationId === conversationId && b.queueId === queueId && b.taskId === task.id,
+	);
+	if (matches.length !== 1) return undefined;
+	const b = matches[0];
+	return typeof b.questionId === "string" &&
+		b.questionId.trim() !== "" &&
+		b.question === (task.question ?? "") &&
+		JSON.stringify(b.choices) === JSON.stringify(task.choices ?? []) &&
+		(b.detail ?? "") === (task.detail ?? "")
+		? b
+		: undefined;
+}
+
+/** Keep words until a genuine result, with separate question and local editor ownership. */
+function StuckAnswer({
+	task,
+	conversationId,
+	queueId,
+	binding,
+	onAnswerResult,
+}: {
+	task: UiTaskQueueTask;
+	conversationId?: string;
+	queueId?: string;
+	binding?: TaskQueueAnswerBinding;
+	onAnswerResult?: TaskQueueAnswerResult;
+}) {
 	const t = useT();
 	const [text, setText] = useState("");
-	const [sent, setSent] = useState(false);
-	const choicesKey = (task.choices ?? []).join("\u0001");
-	// A new question (or new choices) can be answered again.
-	useEffect(() => setSent(false), [task.question, choicesKey]);
-	useEffect(() => {
-		if (!sent) return;
-		const timer = setTimeout(() => setSent(false), BUSY_MS);
-		return () => clearTimeout(timer);
-	}, [sent]);
-	const send = (value: string) => {
-		const words = value.trim();
-		if (!words || sent) return;
-		setSent(true);
-		setText("");
-		onAnswer(task.id, words);
+	const revision = useRef(0);
+	const [phase, setPhase] = useState<"idle" | "pending" | "applied" | "unconfirmed">("idle");
+	// This key is only a local invalidation guard, not a substitute for host questionId.
+	const key = JSON.stringify([
+		conversationId,
+		queueId,
+		task.id,
+		binding?.questionId,
+		task.question,
+		task.choices ?? [],
+		task.detail,
+		!!onAnswerResult,
+	]);
+	const owner = useRef<{ live: boolean; pending?: object; applied: boolean }>({ live: false, applied: false });
+	useLayoutEffect(() => {
+		const lifetime = { live: true, applied: false };
+		owner.current = lifetime;
+		setPhase("idle");
+		return () => {
+			lifetime.live = false;
+		};
+	}, [key]);
+	const send = async (value: string, typed: boolean) => {
+		const lifetime = owner.current;
+		if (!value.trim() || !binding || !onAnswerResult || !lifetime.live || lifetime.pending || lifetime.applied) return;
+		// Copy everything before dispatch/await; host mutation cannot retarget this action.
+		const request: TaskQueueAnswerRequest = Object.freeze({
+			binding: Object.freeze({ ...binding, choices: Object.freeze([...binding.choices]) }),
+			text: value,
+		});
+		const submittedRevision = revision.current;
+		const attempt = {};
+		lifetime.pending = attempt; // synchronous: even same-tick duplicate events are blocked.
+		setPhase("pending");
+		let applied = false;
+		try {
+			const result = onAnswerResult(request);
+			// A legacy/synchronous transport boolean is not the applied-result contract.
+			if (result && typeof result.then === "function") applied = (await result) === true;
+		} catch {
+			// Refused, failed or unknown: keep the original words; never resend automatically.
+		}
+		if (!lifetime.live || owner.current !== lifetime || lifetime.pending !== attempt) return;
+		lifetime.pending = undefined;
+		lifetime.applied = applied;
+		setPhase(applied ? "applied" : "unconfirmed");
+		// A choice never owns the typed draft, even when its text happens to be identical.
+		if (applied && typed && revision.current === submittedRevision) setText("");
 	};
+	const disabled = !binding || !onAnswerResult || phase === "pending" || phase === "applied";
 	return (
-		<div className="task-queue-answer">
+		<div className="task-queue-answer" data-answer-state={phase} aria-busy={phase === "pending"}>
 			{task.choices && task.choices.length > 0 && (
 				<div className="task-queue-choices">
 					{task.choices.map((c) => (
-						<button key={c} type="button" className="task-queue-choice" disabled={sent} onClick={() => send(c)}>
+						<button
+							key={c}
+							type="button"
+							className="task-queue-choice"
+							disabled={disabled}
+							onClick={() => void send(c, false)}
+						>
 							{c}
 						</button>
 					))}
@@ -427,23 +520,41 @@ function StuckAnswer({ task, onAnswer }: { task: UiTaskQueueTask; onAnswer: (tas
 				className="task-queue-answer-form"
 				onSubmit={(e) => {
 					e.preventDefault();
-					send(text);
+					void send(text, true);
 				}}
 			>
 				<input
 					className="task-queue-answer-input"
 					value={text}
-					disabled={sent}
 					placeholder={t("taskQueueAnswerPlaceholder")}
 					aria-label={t("taskQueueAnswerPlaceholder")}
-					onChange={(e) => setText(e.target.value)}
+					onChange={(e) => {
+						revision.current++;
+						setText(e.target.value);
+					}}
 				/>
-				<button type="submit" className="task-queue-answer-send" disabled={sent || !text.trim()}>
-					{t("taskQueueAnswerSend")}
+				<button type="submit" className="task-queue-answer-send" disabled={disabled || !text.trim()}>
+					{t(phase === "pending" ? "sendingTag" : phase === "applied" ? "done" : "taskQueueAnswerSend")}
 				</button>
 			</form>
-			<span className="task-queue-hint">
-				{t(task.lane ? "taskQueueAnswerGoesToTaskChat" : "taskQueueAnswerGoesHere")}
+			<span
+				className="task-queue-hint"
+				role="status"
+				title={t(task.lane ? "taskQueueAnswerGoesToTaskChat" : "taskQueueAnswerGoesHere")}
+			>
+				{t(
+					phase === "pending"
+						? "sendingTag"
+						: phase === "applied"
+							? "done"
+							: !binding || !onAnswerResult || phase === "unconfirmed"
+								? task.lane
+									? "taskQueueAnswerInChat"
+									: "taskQueueAnswerHint"
+								: task.lane
+									? "taskQueueAnswerGoesToTaskChat"
+									: "taskQueueAnswerGoesHere",
+				)}
 			</span>
 		</div>
 	);
@@ -453,14 +564,21 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 	queue,
 	onCommand,
 	onAnswer,
+	onAnswerResult,
+	answerBindings,
+	conversationId,
 	onOpenChat,
 	models = [],
 	defaultOpen = [],
 	focus,
 }: {
 	queue: UiTaskQueue | undefined;
-	/** telegram-answers: answer a stuck task (a choice or typed words). Not given = answer in the chat. */
+	/** @deprecated Render-only compatibility. Never dispatched: a void callback cannot prove an answer result. */
 	onAnswer?: (taskId: number, text: string) => void;
+	/** Separate, genuine applied-result path for consent-bearing answers. No legacy fallback. */
+	onAnswerResult?: TaskQueueAnswerResult;
+	answerBindings?: readonly TaskQueueAnswerBinding[];
+	conversationId?: string;
 	/** 发一条 `/queue …` 命令给这条对话的 pi-queue。不给就不出按钮（只读）。 */
 	onCommand?: (action: TaskQueueAction, id?: number, value?: boolean, profile?: UiProfilePatch) => void;
 	models?: UiModelInfo[];
@@ -761,8 +879,14 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 						)}
 						{held ? (
 							<span className="task-queue-hint">{t("taskQueuePausedAnswerLater")}</span>
-						) : onAnswer && queue.available ? (
-							<StuckAnswer task={task} onAnswer={onAnswer} />
+						) : (onAnswer || onAnswerResult || answerBindings !== undefined) && queue.available ? (
+							<StuckAnswer
+								task={task}
+								conversationId={conversationId}
+								queueId={queue.queueId}
+								binding={answerBinding(answerBindings, conversationId, queue.queueId, task)}
+								onAnswerResult={onAnswerResult}
+							/>
 						) : (
 							<span className="task-queue-hint">{t(task.lane ? "taskQueueAnswerInChat" : "taskQueueAnswerHint")}</span>
 						)}

@@ -26,7 +26,12 @@ import type {
 import { TldrPanel } from "./TldrPanel";
 import type { ChatFocus } from "../chat-focus";
 import { NotebookPanel } from "./NotebookPanel";
-import { TaskQueuePanel, type TaskQueueAction } from "./TaskQueuePanel";
+import {
+	TaskQueuePanel,
+	type TaskQueueAction,
+	type TaskQueueAnswerBinding,
+	type TaskQueueAnswerResult,
+} from "./TaskQueuePanel";
 import { useT } from "../i18n";
 import { useAppField } from "../app-globals";
 import { downloadFile, DOWNLOAD_FILE_NOT_FOUND } from "../download";
@@ -140,6 +145,10 @@ interface RightPanelProps {
 	tldrConversationId?: string;
 	/** 当前对话的任务队列（UiState.taskQueue，queue-panel）。delta 不带时引用不变。 */
 	taskQueue?: UiTaskQueue;
+	/** Host-issued question occurrences from the same authoritative display snapshot. */
+	taskQueueAnswerBindings?: readonly TaskQueueAnswerBinding[];
+	/** Actual matching applied result, not panelSend's synchronous transport acceptance. */
+	onTaskQueueAnswerResult?: TaskQueueAnswerResult;
 	models?: UiModelInfo[];
 	/** identity-notebook-tab: the open chat's identity (UiState.identity); the Notebook tab shows only with one. */
 	identity?: UiChatIdentity | null;
@@ -182,6 +191,8 @@ export const RightPanel = memo(function RightPanel({
 	tldr,
 	tldrConversationId,
 	taskQueue,
+	taskQueueAnswerBindings,
+	onTaskQueueAnswerResult,
 	models,
 	identity,
 	onOpenIdentities,
@@ -1065,14 +1076,8 @@ export const RightPanel = memo(function RightPanel({
 		},
 		[panelSend, tldrConversationId, taskQueue?.queueId],
 	);
-	/** telegram-answers: the Queue tab answers a stuck task; the server sends it into the task's chat. */
-	const onTaskQueueAnswer = useCallback(
-		(taskId: number, text: string) => {
-			if (!tldrConversationId) return;
-			panelSend({ type: "task_queue_answer", conversationId: tldrConversationId, taskId, text });
-		},
-		[panelSend, tldrConversationId],
-	);
+	// Consent answers deliberately bypass panelSend. The host supplies an independent
+	// applied-result callback and genuine question binding; there is no dispatch-only fallback.
 	/** tab 顺序统一走 slot（含文件 tab 的位置，不再固定第一；未接线时保持旧顺序）。 */
 	const orderTabs = (tabs: SlotTab[]): SlotTab[] => {
 		const visible = (uiRightPanelTabs ?? []).filter((e) => !e.hidden);
@@ -1466,7 +1471,9 @@ export const RightPanel = memo(function RightPanel({
 												queue={taskQueue}
 												models={models}
 												onCommand={onTaskQueueCommand}
-												onAnswer={tldrConversationId ? onTaskQueueAnswer : undefined}
+												conversationId={tldrConversationId}
+												answerBindings={taskQueueAnswerBindings ?? []}
+												onAnswerResult={onTaskQueueAnswerResult}
 												onOpenChat={onOpenChat}
 												focus={taskFocus}
 											/>
