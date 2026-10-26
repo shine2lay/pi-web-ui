@@ -367,14 +367,15 @@ function replaceAt(list: readonly PendingSend[], i: number, p: PendingSend): rea
 // ---------------------------------------------------------------------------
 
 export const PENDING_STORAGE_KEY = "pi-web-pending-sends";
-/** Past this size the pictures and files are left out of what is kept (the text always stays). */
-const MAX_STORED_CHARS = 1_500_000;
+/** Existing small-envelope boundary; full payloads belong in pending-send-storage.ts. */
+export const MAX_PENDING_STORAGE_CHARS = 1_500_000;
 
-/** The list as it is kept for a reload. Pictures and files are left out when they are too big. */
+/** Legacy caller compatibility only: this omits large inline attachments. New send/clear paths
+ * must await pending-send-storage.ts save(), which commits complete payloads or rejects. */
 export function serializePending(list: readonly PendingSend[]): string {
 	const keep = list.filter((p) => p.confirmedRev === undefined);
 	const full = JSON.stringify(keep);
-	if (full.length <= MAX_STORED_CHARS) return full;
+	if (full.length <= MAX_PENDING_STORAGE_CHARS) return full;
 	return JSON.stringify(
 		keep.map((p) => ({ ...p, attachments: p.attachments?.filter((a) => !a.imageData && !a.fileData) })),
 	);
