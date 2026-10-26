@@ -85,8 +85,10 @@
 	"dependencies": {
 		"@deepseek-ai/dsh-sdk-jsonrpc-server": "^0.1.1-rc.2",
 		"@deepseek-ai/dsh-sdk-protocol": "^0.1.1-rc.2",
+		"@earendil-works/chord": "1.4.0",
 		"@earendil-works/pi-ai": "1.0.1",
 		"@earendil-works/pi-coding-agent": "1.0.1",
+		"@earendil-works/pi-durable": "1.4.0",
 		"@xterm/addon-fit": "^0.11.0",
 		"@xterm/xterm": "^6.0.0",
 		"compression": "^1.8.2",
@@ -137,6 +139,15 @@
 		"vis-timeline": "^8.5.4",
 		"vite": "^8.3.0",
 		"vitest": "^5.0.1"
+	},
+	"overrides": {
+		"@earendil-works/pi-coding-agent@1.0.1": {
+			"@earendil-works/chord": "1.0.1",
+			"@earendil-works/pi-codemode": "1.0.1"
+		},
+		"@earendil-works/pi-ai@1.0.1": {
+			"@earendil-works/pi-telemetry": "1.0.1"
+		}
 	},
 	"allowScripts": {
 		"node-pty@1.1.0": true
