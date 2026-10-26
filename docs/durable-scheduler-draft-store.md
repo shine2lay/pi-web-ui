@@ -28,6 +28,39 @@ a stale operation changes a newer/different record, an aborted transaction is
 reported as confirmed, a reader creates/upgrades/mutates storage or dispatches an
 action, or page-memory-only state survives the genuine reload loss control.
 
+## #597 key-presence repair — hypothesis before behavior changes
+
+Ops is accountable. H-SCHEDULER-KEY-PRESENCE-1 starts from immutable #596 pin
+`18c0844bba5b2f899bb0565c518d500f69b843f5`, not current main. At that pin,
+`web/src/scheduler-draft-store.ts:402-409` reads only `get(key)`,
+`web/src/scheduler-draft-store.ts:270-273` treats the resulting `undefined` as
+absence, and `web/src/scheduler-draft-store.ts:418-426` maps the same value to
+CAS's absent `null`. Native IndexedDB returns `undefined` both for a missing key
+and a present key whose stored value is `undefined`. Thus an existing unknown
+row is hidden by load and can be overwritten by create, contradicting the
+no-data-loss contract even though scan/reader can still discover it beforehand.
+
+One change: pair `get(key)` with an exact-key presence request in the **same**
+readonly/readwrite transaction. Only proven absence may become the existing
+`undefined`/`null` sentinel. A present undefined value is an `invalid-record`
+refusal, not permission to write. Retain transaction-completion resolution,
+postcommit exact readback, typed methods, purpose database and schema unchanged.
+The unit storage fake must use actual key presence, not value truthiness.
+
+Expected result: a frozen-pin isolated native control demonstrates both the
+missing load and wrongful create replacement, failing a repaired-contract
+assertion. With the fix, native key existence and scan remain unchanged after
+refused load/create; the independent reader reports corrupt and its actual raw
+download preserves the key and tagged undefined value. A genuinely absent key
+still loads as absent and creates successfully; other corrupt values, valid
+exact CAS, submitted A/current B, retirement and failure cases remain intact.
+
+Falsifier: an existence preflight outside the transaction, an overwritten or
+hidden unknown row, early request-success confirmation, changed public typed
+methods/schema, or any regression in the retained cases. This four-file repair
+is an unlanded handoff to #570/c108, not integrated acceptance or rollout consent.
+Measured results are recorded below only after the checks actually run.
+
 ## Scope and pre-implementation coordination
 
 The small typed API proposal was sent directly to #570/c108 before implementation:
@@ -114,8 +147,11 @@ current: SchedulerAdmissionSource, submitted: SchedulerAdmissionSource[]}`.
   access failures reject, never return an empty-success list.
 
 `SchedulerDraftStorage` is the testable boundary: `read(key)`, `scan()`,
-`swap(key, expectedCanonicalRecordOrNull, replacement)`. A supplied swap must be
-atomic and resolve only at transaction completion. The native boundary
+`swap(key, expectedCanonicalRecordOrNull, replacement)`. `read` reserves
+`undefined` for proven key absence; a present stored undefined value must reject
+with `invalid-record`, not masquerade as absence. A supplied swap must be atomic,
+use actual key presence for its absent `null` sentinel, and resolve only at
+transaction completion. The native boundary
 `createSchedulerDraftIndexedDB(indexedDB)` uses only the purpose database
 `pi-authored-scheduler-drafts-v1`, object store `authored-scheduler-drafts`,
 IndexedDB schema v1. A writer creates this schema only on an explicit write.
@@ -124,8 +160,12 @@ is read, upgraded or migrated. Separate test database names are injection points
 not runtime host configuration or a generic store purpose.
 
 Readwrite transactions request `durability: "strict"`; request success never
-settles the operation. Atomic read/compare/put is synchronous within one
-transaction callback. The database is closed after each completed/aborted
+settles the operation. Both native read and CAS queue `get(key)` followed by
+`count(key)` in the same transaction, using the second request's success callback
+to consume both results in request order. Only zero count is absence; a present
+undefined value refuses before any put. There is no separate existence preflight.
+Atomic read/compare/put is synchronous within one transaction callback.
+The database is closed after each completed/aborted
 operation, and on version change; blocked opens fail explicitly. Existing-only
 opens abort `onupgradeneeded` for a missing DB rather than committing creation.
 No application writeback, snapshot timer or automatic retry is installed.
@@ -217,7 +257,78 @@ native fixture imports accepted #590 unchanged for a genuine page-memory reload
 loss control and explicit LOOK-ONLY restoration compatibility. No real scheduler,
 chat, profile, account, model or command dispatch is involved.
 
-### Measured result — HIT (2026-10-26)
+### #597 measured result — HIT (2026-10-26)
+
+H-SCHEDULER-KEY-PRESENCE-1 HIT for this isolated repair; no integrated-host or
+production no-loss claim is made. Exact parent is
+`18c0844bba5b2f899bb0565c518d500f69b843f5` (#596). Only the store, its unit/native
+tests and this document changed; the reader/HTML/admission/host remain untouched.
+
+- **Known-bad native control: expected exit 1.** Before behavior changes, the new
+  script's `--baseline-control` bundled the store directly from `git show` at the
+  immutable parent. Three preceding native controls passed, including genuinely
+  absent-key creation and valid exact CAS. Its evidence then reported
+  `beforePresent: true`, `beforeUndefined: true`, `loadOk: true`,
+  `loadAbsent: true`, `readOnlyLoadAbsent: true`, `createOk: true`,
+  `afterPresent: true`, `afterUndefined: false`. The new explicit-refusal assertion
+  failed with `a failed check must never count as confirmation` and
+  `true !== false`. This is the real stored-undefined overwrite/hidden-load
+  defect, not an environment/setup failure.
+- **Repaired unit suites: 162/162 passed** (74 store cases and all 88 unchanged
+  admission cases). Seven added cases cover genuine absence and present
+  undefined/null/false/zero/empty-string/foreign-object preservation. Every
+  load/create/update/submitted-retention/retirement path refuses those corrupt
+  rows without changing presence, raw export or stored bytes.
+- **Repaired native suite: 28/28 passed**, retaining all 21 #596 cases. Native raw
+  writing seeds the exact undefined key; writer and existing-only loads reject
+  `invalid-record`, create rejects with `transactionCompleted: false`, and key
+  count, undefined value and scan survive refusal/reload. The standalone reader
+  reports corrupt and its actual download retains the exact key and tagged
+  `{type: "undefined", value: "undefined"}`; observed writes/schema/actions are
+  zero. Instrumented `get`/`count` pairs prove both loads and refused create use
+  their own shared native transactions (readonly/readonly/readwrite), not an
+  existence preflight. Other corrupt native values remain present. Missing-key
+  creation/valid CAS, current/submitted separation, stale/ABA/incarnation fences,
+  byte-retaining retirement, native success-then-abort, quota and uncertain
+  committed/readback behavior still pass.
+- **Checks passed:** full `npm run typecheck` (server/web/tests/desktop/extension),
+  sealed `npm run build`, targeted oxlint (zero warnings/errors), four-file
+  Prettier check and `git diff --check`. No test timeout/worker setting changed
+  from #596's focused command. No app, live browser/profile/storage/chat,
+  credentials, model calls, landing, publishing, deployment or restart involved.
+
+Commands used for #597 (the first intentionally fails against the frozen pin;
+positive test suites ran once after implementation):
+
+```sh
+PI_SEALED_MODEL=none TZ=UTC scripts/sealed.sh node tests/scheduler-draft-store-test.mjs --baseline-control
+PI_SEALED_MODEL=none TZ=UTC VITEST_MAX_WORKERS=2 scripts/sealed.sh node node_modules/vitest/vitest.mjs run tests/unit/scheduler-draft-store.test.ts tests/unit/durable-scheduler-admission.test.ts --maxWorkers=2
+PI_SEALED_MODEL=none TZ=UTC scripts/sealed.sh node tests/scheduler-draft-store-test.mjs
+PI_SEALED_MODEL=none TZ=UTC scripts/sealed.sh npm run typecheck
+PI_SEALED_MODEL=none TZ=UTC scripts/sealed.sh npm run build
+node node_modules/oxlint/bin/oxlint web/src/scheduler-draft-store.ts tests/unit/scheduler-draft-store.test.ts tests/scheduler-draft-store-test.mjs
+node node_modules/prettier/bin/prettier.cjs --check web/src/scheduler-draft-store.ts tests/unit/scheduler-draft-store.test.ts tests/scheduler-draft-store-test.mjs docs/durable-scheduler-draft-store.md
+git diff --check
+```
+
+**API delta:** no changed signatures, typed store methods, database/store names,
+record/schema version or reader export format. The storage boundary's existing
+absence sentinel is now enforced: `read(key)` may return undefined only for an
+absent key; a present undefined value rejects `invalid-record`. `swap` reserves
+its absent `null` comparison for a zero exact-key count. Host error paths must
+surface that refusal and leave the raw row accessible, never call it empty or
+recreate the key. No automatic migration/retry/cleanup is added.
+
+**Handoff/undo:** consume this repair commit after #596, or use this descendant
+pin as the combined source; do not apply the repair alone to a tree missing
+#596. #570/c108 owns HOME review, actual editor integration, independent reader
+publishing/retention, the integrated full gate and any release decision. Keep the
+purpose DB and compatible reader accessible during rollback; reverting this fix
+reintroduces the known overwrite defect and is not a safe persisted-host undo.
+Before integration, simply leave the unlanded handoff unapplied. This repair
+supplies no rollout, cleanup, migration or original-data authority.
+
+### #596 measured result — HIT (2026-10-26)
 
 H-SCHEDULER-DRAFT-PERSISTENCE-1 HIT for this isolated module, not for the live host:
 

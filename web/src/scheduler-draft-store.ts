@@ -26,7 +26,8 @@ export interface SchedulerDraftScan {
 	readonly status: "missing" | "present";
 	readonly rows: readonly SchedulerDraftRow[];
 }
-/** swap MUST compare and replace atomically, resolve only on transaction completion,
+/** read returns undefined ONLY for proven absence; a present undefined row MUST reject.
+ * swap MUST compare and replace atomically, resolve only on transaction completion,
  * and preserve the prior record on abort. No delete or general-purpose snapshot API.
  */
 export interface SchedulerDraftStorage {
@@ -401,10 +402,15 @@ export function createSchedulerDraftIndexedDB(
 	return {
 		async read(key) {
 			return (
-				await transaction<unknown>(
-					"readonly",
-					(store, set) => (store.get(key).onsuccess = (e) => set((e.target as IDBRequest).result)),
-				)
+				await transaction<unknown>("readonly", (store, set, fail) => {
+					const request = store.get(key);
+					const presence = store.count(key);
+					presence.onsuccess = () => {
+						// Both requests share this transaction; get(undefined) alone cannot prove absence.
+						if (presence.result !== 0 && request.result === undefined) fail(new SchedulerDraftError("invalid-record"));
+						else set(request.result);
+					};
+				})
 			).value;
 		},
 		async scan() {
@@ -418,9 +424,11 @@ export function createSchedulerDraftIndexedDB(
 		async swap(key, expected, replacement) {
 			await transaction<void>("readwrite", (store, _set, fail) => {
 				const request = store.get(key);
-				request.onsuccess = () => {
+				const presence = store.count(key);
+				presence.onsuccess = () => {
 					try {
-						const actual = request.result === undefined ? null : encodeSchedulerDraftRecord(request.result);
+						// Only absent keys map to null; every present value must pass the strict codec.
+						const actual = presence.result === 0 ? null : encodeSchedulerDraftRecord(request.result);
 						if (actual !== expected || schedulerDraftKey(replacement.current) !== key)
 							throw new SchedulerDraftError("conflict");
 						store.put(replacement, key); // request success is deliberately NOT the resolution point

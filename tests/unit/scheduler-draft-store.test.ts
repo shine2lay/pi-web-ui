@@ -58,7 +58,9 @@ class MemoryStorage implements SchedulerDraftStorage {
 	private tail = Promise.resolve();
 	async read(key: string) {
 		if (this.readFailure) throw new Error("synthetic read failure");
-		return clone(this.readReplacement ?? this.rows.get(key));
+		const value = this.readReplacement ?? this.rows.get(key);
+		if (this.rows.has(key) && value === undefined) throw new SchedulerDraftError("invalid-record");
+		return clone(value);
 	}
 	async scan() {
 		if (this.readFailure) throw new Error("synthetic inspection failure");
@@ -72,7 +74,7 @@ class MemoryStorage implements SchedulerDraftStorage {
 		await previous;
 		try {
 			const prior = this.rows.get(key);
-			if ((prior === undefined ? null : encodeSchedulerDraftRecord(prior)) !== expected)
+			if ((this.rows.has(key) ? encodeSchedulerDraftRecord(prior) : null) !== expected)
 				throw new SchedulerDraftError("conflict");
 			this.requests++;
 			await this.afterRequest?.();
@@ -276,6 +278,62 @@ describe("exact lifetime/revision/record CAS", () => {
 		await expect(store.updateCurrent(a, source(999))).rejects.toMatchObject({ code: "conflict" });
 		await expect(store.retire(a)).rejects.toMatchObject({ code: "conflict" });
 		expect(await store.load(a.current)).toStrictEqual(replacement);
+	});
+});
+
+describe("key presence is distinct from a stored undefined or other corrupt value", () => {
+	it("only a genuinely absent key returns absence and allows creation, then normal exact CAS", async () => {
+		const { storage, store } = fixture();
+		const a = source();
+		const key = schedulerDraftKey(a);
+		expect(storage.rows.has(key)).toBe(false);
+		expect(await storage.read(key)).toBeUndefined();
+		expect(await store.load(a)).toBeUndefined();
+		const first = await store.create(a);
+		expect(storage.rows.has(key)).toBe(true);
+		expect(await storage.read(key)).toStrictEqual(first);
+		await expect(store.create(a)).rejects.toMatchObject({ code: "conflict", transactionCompleted: false });
+		const b = source(1, { form: { ...a.form, prompt: "valid presence CAS" } });
+		const next = await store.updateCurrent(first, b);
+		expect(await store.load(a)).toStrictEqual(next);
+		expect(next.current).toStrictEqual(b);
+	});
+	it.each([
+		["undefined", undefined],
+		["null", null],
+		["false", false],
+		["zero", 0],
+		["empty string", ""],
+		["foreign object", { purpose: "future", schemaVersion: 900 }],
+	])("keeps present %s discoverable/exportable and refuses every overwrite path", async (_label, value) => {
+		const { storage, store } = fixture();
+		const a = source();
+		const prior = await store.create(a);
+		const key = schedulerDraftKey(a);
+		storage.rows.set(key, value);
+		const before = clone([...storage.rows]);
+		const rawBefore = await exportRawSchedulerDraftRow({ key, value });
+		for (const operation of [
+			() => store.load(a),
+			() => store.create(a),
+			() => store.updateCurrent(prior, source(1)),
+			() => store.retainSubmitted(prior, a),
+			() => store.retire(prior),
+		]) {
+			await expect(operation()).rejects.toMatchObject({ code: "invalid-record", transactionCompleted: false });
+			expect(storage.rows.has(key)).toBe(true);
+			expect([...storage.rows]).toStrictEqual(before);
+		}
+		const inspected = await store.inspect();
+		expect(inspected).toStrictEqual({ status: "corrupt", records: [], unknown: [{ key, value }] });
+		expect(await exportRawSchedulerDraftRow(inspected.unknown[0])).toBe(rawBefore);
+		const exported = JSON.parse(rawBefore);
+		expect(exported.format).toBe("scheduler-purpose-store-raw-graph-v1");
+		expect(exported.row.entries).toContainEqual(["key", key]);
+		if (value === undefined)
+			expect(exported.row.entries).toContainEqual(["value", { type: "undefined", value: "undefined" }]);
+		expect(storage.requests).toBe(1);
+		expect(storage.completions).toBe(1);
 	});
 });
 

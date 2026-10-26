@@ -2,6 +2,7 @@
  * server, user profile, account or model. Run: node tests/scheduler-draft-store-test.mjs
  */
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,6 +13,26 @@ import { chromium } from "playwright-core";
 import { CHROME_PATH } from "./lib/chrome.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
+const FROZEN_BASELINE = "18c0844bba5b2f899bb0565c518d500f69b843f5";
+// This negative control runs these same assertions with the immutable old store.
+// It must fail for the observed hidden/overwritten undefined row, not setup failure.
+const baselineControl = process.argv.includes("--baseline-control");
+const storePlugins = baselineControl
+	? [
+			{
+				name: "frozen-scheduler-store",
+				setup(build) {
+					build.onLoad({ filter: /[/\\]scheduler-draft-store\.ts$/ }, () => ({
+						contents: execFileSync("git", ["show", `${FROZEN_BASELINE}:web/src/scheduler-draft-store.ts`], {
+							cwd: REPO,
+							encoding: "utf8",
+						}),
+						loader: "ts",
+					}));
+				},
+			},
+		]
+	: [];
 const home = mkdtempSync(join(tmpdir(), "scheduler-draft-storage-"));
 let server, browser;
 let passed = 0;
@@ -25,8 +46,19 @@ const sent = [], admitted = [];
 setAppSend(message => { sent.push(message); return false; });
 setAppAdmit(async message => { admitted.push(message); return false; });
 const native = api.createSchedulerDraftIndexedDB(indexedDB);
+const readOnly = api.createSchedulerDraftStore(api.createSchedulerDraftIndexedDB(indexedDB, { existingOnly: true }));
 let mode = 'normal', held, release;
-let requests = 0, completions = 0;
+let requests = 0, completions = 0, nextTransactionId = 0;
+const reads = [], transactionIds = new WeakMap();
+for (const method of ['get', 'count']) {
+ const original = IDBObjectStore.prototype[method];
+ IDBObjectStore.prototype[method] = function(key) {
+  const tx = this.transaction;
+  if (!transactionIds.has(tx)) transactionIds.set(tx, ++nextTransactionId);
+  reads.push({ method, key, mode: tx.mode, transaction: transactionIds.get(tx) });
+  return original.call(this, key);
+ };
+}
 const put = IDBObjectStore.prototype.put;
 IDBObjectStore.prototype.put = function(...args) {
  if (mode === 'quota') throw new DOMException('synthetic quota', 'QuotaExceededError');
@@ -56,11 +88,13 @@ window.__draft = {
  api, store, sent, admitted,
  mode(value) { mode = value; },
  metrics() { return { requests, completions, sent, admitted }; },
+ readTrace() { return reads.slice(); },
  create(source) { return report(store.create(source)); },
  update(expected, source) { return report(store.updateCurrent(expected, source)); },
  submitted(expected, source) { return report(store.retainSubmitted(expected, source)); },
  retire(expected) { return report(store.retire(expected)); },
  load(source) { return report(store.load(source)); },
+ readOnlyLoad(source) { return report(readOnly.load(source)); },
  inspect() { return report(store.inspect()); },
  startHeld(expected, source) {
   const gate = new Promise(resolve => { release = resolve; });
@@ -80,6 +114,20 @@ window.__draft = {
    tx.oncomplete=ok; tx.onabort=bad;
   });
   database.close();
+ },
+ async rawProbe(key) {
+  const request = indexedDB.open(api.SCHEDULER_DRAFT_DATABASE, 1);
+  await new Promise((ok,bad) => { request.onsuccess=ok; request.onerror=bad; });
+  const database = request.result;
+  try {
+   return await new Promise((ok,bad) => {
+    const tx = database.transaction(api.SCHEDULER_DRAFT_OBJECT_STORE, 'readonly');
+    const rows = tx.objectStore(api.SCHEDULER_DRAFT_OBJECT_STORE);
+    const value = rows.get(key), presence = rows.count(key);
+    tx.oncomplete = () => ok({ present: presence.result === 1, value: value.result });
+    tx.onabort = bad;
+   });
+  } finally { database.close(); }
  },
  async rawSnapshot() { return JSON.stringify((await native.scan()).rows); },
  async missingProbe(name) {
@@ -134,6 +182,7 @@ try {
 		format: "esm",
 		jsx: "automatic",
 		logLevel: "silent",
+		plugins: storePlugins,
 		define: { "process.env.NODE_ENV": '"production"' },
 	});
 	const reader = await build({
@@ -143,6 +192,7 @@ try {
 		format: "esm",
 		metafile: true,
 		logLevel: "silent",
+		plugins: storePlugins,
 	});
 	assert.deepEqual(
 		Object.keys(reader.metafile.inputs)
@@ -209,6 +259,8 @@ try {
 	}
 	const create = (s) => page.evaluate((value) => window.__draft.create(value), s);
 	const load = (s) => page.evaluate((value) => window.__draft.load(value), s);
+	const readOnlyLoad = (s) => page.evaluate((value) => window.__draft.readOnlyLoad(value), s);
+	const rawProbe = (key) => page.evaluate((value) => window.__draft.rawProbe(value), key);
 	const update = (r, s) => page.evaluate(([record, value]) => window.__draft.update(record, value), [r, s]);
 	const submit = (r, s) => page.evaluate(([record, value]) => window.__draft.submitted(record, value), [r, s]);
 	const retire = (r) => page.evaluate((record) => window.__draft.retire(record), r);
@@ -227,6 +279,119 @@ try {
 		assert.equal(result.result.status, "missing");
 		assert.deepEqual(result.before, result.after);
 	});
+	await check("genuinely absent native key loads as absent, creates and keeps valid exact CAS", async () => {
+		const a = source("presence-absent-control");
+		assert.equal(must(await load(a)), undefined);
+		assert.equal(must(await readOnlyLoad(a)), undefined);
+		const first = must(await create(a));
+		const key = JSON.stringify([a.workspace, a.taskId, a.formId]);
+		assert.deepEqual(await rawProbe(key), { present: true, value: first });
+		refused(await create(a), "conflict");
+		const b = { ...a, revision: 2, form: { ...a.form, prompt: "valid presence CAS" } };
+		const next = must(await update(first, b));
+		assert.deepEqual(next.current, b);
+		refused(await update(first, { ...a, revision: 3 }), "conflict");
+		assert.deepEqual(must(await readOnlyLoad(a)), next);
+	});
+	await check("present undefined is corrupt, never absent or replaceable, and raw export retains it", async () => {
+		const a = source("presence-undefined");
+		const key = JSON.stringify([a.workspace, a.taskId, a.formId]);
+		await page.evaluate(([k, v]) => window.__draft.raw(k, v), [key, undefined]);
+		const before = await rawProbe(key);
+		assert.deepEqual(before, { present: true, value: undefined });
+		const inspected = must(await page.evaluate(() => window.__draft.inspect()));
+		assert.equal(inspected.status, "corrupt");
+		assert.deepEqual(inspected.unknown, [{ key, value: undefined }]);
+		const metrics = await page.evaluate(() => window.__draft.metrics());
+		const traceStart = (await page.evaluate(() => window.__draft.readTrace())).length;
+		const loaded = await load(a);
+		const readOnlyLoaded = await readOnlyLoad(a);
+		const created = await create(a);
+		const typedReads = (await page.evaluate(() => window.__draft.readTrace())).slice(traceStart);
+		const after = await rawProbe(key);
+		if (baselineControl)
+			console.log(
+				"Frozen native key-presence evidence:",
+				JSON.stringify({
+					pin: FROZEN_BASELINE,
+					beforePresent: before.present,
+					beforeUndefined: before.value === undefined,
+					loadOk: loaded.ok,
+					loadAbsent: loaded.ok && loaded.value === undefined,
+					readOnlyLoadAbsent: readOnlyLoaded.ok && readOnlyLoaded.value === undefined,
+					createOk: created.ok,
+					afterPresent: after.present,
+					afterUndefined: after.value === undefined,
+				}),
+			);
+		refused(created, "invalid-record"); // frozen #596 really replaces the unknown row here
+		assert.equal(created.completed, false);
+		refused(loaded, "invalid-record");
+		refused(readOnlyLoaded, "invalid-record");
+		assert.deepEqual(after, before);
+		assert.deepEqual(await page.evaluate(() => window.__draft.metrics()), metrics);
+		const transactions = Map.groupBy(typedReads, (read) => read.transaction);
+		assert.equal(transactions.size, 3, "two loads and one refused create each own one native transaction");
+		assert.deepEqual(
+			[...transactions.values()].map((reads) => reads[0].mode),
+			["readonly", "readonly", "readwrite"],
+		);
+		for (const reads of transactions.values()) {
+			assert.deepEqual(
+				reads.map((read) => read.method),
+				["get", "count"],
+			);
+			assert.ok(
+				reads.every((read) => read.key === key),
+				"presence uses the same exact key, not a preflight",
+			);
+		}
+		assert.deepEqual(must(await page.evaluate(() => window.__draft.inspect())), inspected);
+		await reload();
+		assert.deepEqual(await rawProbe(key), before);
+		refused(await readOnlyLoad(a), "invalid-record");
+		const readerPage = await context.newPage();
+		try {
+			await readerPage.goto(`${url}/scheduler-draft-recovery.html`);
+			await readerPage.waitForSelector('[data-scheduler-reader-status="corrupt"]');
+			const section = readerPage.locator("section").filter({ hasText: a.formId });
+			const download = readerPage.waitForEvent("download");
+			await section.getByRole("button", { name: /^Export RAW UNKNOWN / }).click();
+			const exported = JSON.parse(readFileSync(await (await download).path(), "utf8"));
+			assert.equal(exported.format, "scheduler-purpose-store-raw-graph-v1");
+			assert.deepEqual(exported.row.entries, [
+				["key", key],
+				["value", { type: "undefined", value: "undefined" }],
+			]);
+			assert.deepEqual(await readerPage.evaluate(() => window.__storageWatch), { writes: 0, schemas: 0, actions: 0 });
+		} finally {
+			await readerPage.close();
+		}
+		assert.deepEqual(await rawProbe(key), before);
+	});
+	for (const [label, value] of [
+		["null", null],
+		["false", false],
+		["zero", 0],
+		["empty", ""],
+		["foreign", { purpose: "future", schemaVersion: 900 }],
+	])
+		await check(`other corrupt native value ${label} stays present and untouched`, async () => {
+			const a = source(`presence-${label}`);
+			const key = JSON.stringify([a.workspace, a.taskId, a.formId]);
+			await page.evaluate(([k, v]) => window.__draft.raw(k, v), [key, value]);
+			const before = await rawProbe(key);
+			assert.deepEqual(before, { present: true, value });
+			refused(await readOnlyLoad(a), "invalid-record");
+			refused(await create(a), "invalid-record");
+			assert.deepEqual(await rawProbe(key), before);
+			const inspection = must(await page.evaluate(() => window.__draft.inspect()));
+			assert.equal(inspection.status, "corrupt");
+			assert.deepEqual(
+				inspection.unknown.find((row) => row.key === key),
+				{ key, value },
+			);
+		});
 	for (const taskId of [null, "task-a"])
 		for (const kind of ["cron", "interval"])
 			await check(`exact ${taskId ?? "new"}/${kind} all12 raw fields survive real reload`, async () => {
@@ -413,7 +578,10 @@ try {
 					}
 				}),
 			);
-			const rawButton = readerPage.getByRole("button", { name: "Export RAW UNKNOWN 1", exact: true });
+			const rawButton = readerPage
+				.locator("section")
+				.filter({ hasText: "synthetic-unknown-row" })
+				.getByRole("button", { name: /^Export RAW UNKNOWN / });
 			const rawDownload = readerPage.waitForEvent("download");
 			await rawButton.click();
 			const rawText = readFileSync(await (await rawDownload).path(), "utf8");
