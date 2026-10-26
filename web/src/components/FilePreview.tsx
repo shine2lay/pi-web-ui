@@ -14,7 +14,7 @@ import {
 	FiZoomIn,
 	FiZoomOut,
 } from "react-icons/fi";
-import type { FileContent } from "../types";
+import type { ClientMessage, FileContent } from "../types";
 import type { UiSlotEntry } from "../ui-slots";
 import { Markdown } from "./Markdown";
 import { renderMergedToolbar } from "../slot-toolbar";
@@ -32,10 +32,33 @@ export interface PreviewFile {
 	name: string;
 }
 
+/** The host must capture the genuine authorized resource/session and open generation. */
+export interface FilePreviewBinding {
+	readonly resourceId?: string;
+	readonly workspaceId: string;
+	readonly sessionId?: string;
+	readonly openId: string;
+}
+
+export interface FilePreviewCorrelation {
+	readonly reqId: string;
+	readonly purpose: "read" | "write";
+	readonly binding?: FilePreviewBinding;
+	/** A fresh preview UUID for reads; a fresh editor UUID for writes. */
+	readonly lifetime: string;
+	readonly revision: number;
+}
+
+export type FilePreviewContent = FileContent &
+	Partial<FilePreviewCorrelation> & { writeSucceeded?: boolean; complete?: boolean };
+
+export type FilePreviewRequest = Extract<ClientMessage, { type: "read_file" | "write_file" }> & FilePreviewCorrelation;
+
 interface FilePreviewProps {
 	file: PreviewFile;
-	/** Latest file content from the server (path-matched inside the modal). */
-	content: FileContent | null;
+	content: FilePreviewContent | null;
+	/** Optional until #570 wires authentic target binding and server echo. Never synthesized here. */
+	binding?: FilePreviewBinding;
 	/** Add the selected line range as a "lines" attachment to the chat input. */
 	onAddLines: (path: string, name: string, start: number, end: number) => void;
 	/** Attach the whole file as a path reference like the row buttons. */
@@ -53,9 +76,65 @@ interface Range {
 	end: number;
 }
 
-export function FilePreview({
+function validContext(binding: FilePreviewBinding | undefined): binding is FilePreviewBinding {
+	return (
+		!!binding &&
+		[binding.workspaceId, binding.openId].every((value) => typeof value === "string" && value.length > 0) &&
+		(binding.sessionId === undefined || (typeof binding.sessionId === "string" && binding.sessionId.length > 0))
+	);
+}
+
+function resolvedBinding(
+	binding: FilePreviewBinding | undefined,
+): binding is FilePreviewBinding & { resourceId: string } {
+	return validContext(binding) && typeof binding.resourceId === "string" && binding.resourceId.length > 0;
+}
+
+function sameCorrelation(
+	reply: Partial<FilePreviewCorrelation>,
+	original: FilePreviewCorrelation,
+	bootstrap = false,
+): boolean {
+	return (
+		validContext(original.binding) &&
+		validContext(reply.binding) &&
+		reply.reqId === original.reqId &&
+		reply.purpose === original.purpose &&
+		reply.lifetime === original.lifetime &&
+		reply.revision === original.revision &&
+		reply.binding.workspaceId === original.binding.workspaceId &&
+		reply.binding.sessionId === original.binding.sessionId &&
+		reply.binding.openId === original.binding.openId &&
+		((bootstrap && original.binding.resourceId === undefined) ||
+			(resolvedBinding(original.binding) && reply.binding.resourceId === original.binding.resourceId))
+	);
+}
+
+/** A keyed child ends ownership on every target/open change, including A→B→A. */
+export function FilePreview(props: FilePreviewProps) {
+	const { file, binding } = props;
+	const lifetime = JSON.stringify([
+		file.path,
+		binding?.resourceId,
+		binding?.workspaceId,
+		binding?.sessionId,
+		binding?.openId,
+	]);
+	return <FilePreviewEditor key={lifetime} {...props} />;
+}
+
+interface PendingWrite {
+	correlation: FilePreviewCorrelation;
+	path: string;
+	text: string;
+	baseline: FileContent;
+	sequence: number;
+}
+
+function FilePreviewEditor({
 	file,
 	content,
+	binding,
 	onAddLines,
 	onAttach,
 	onClose,
@@ -88,14 +167,23 @@ export function FilePreview({
 	const anchorRef = useRef(0);
 	const draggingRef = useRef(false);
 	const addedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-	// 保存回执（审查 #1）：write_file 发出后进入 saving 态，服务端保存成功会
-	// 立即对该路径重读并推回 file_content（见 server/files-service.ts writeFile），
-	// content prop 更新即确认；5s 未确认按「结果未知」处理。
 	const [saving, setSaving] = useState(false);
 	const [saveUnknown, setSaveUnknown] = useState(false);
-	// effect 里只看 ref（saving 不进 deps，避免旧 content 触发假确认）。
 	const savingRef = useRef(false);
 	const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const [previewId] = useState(() => crypto.randomUUID());
+	// Copy the host binding once for this keyed lifetime, not at reply time.
+	const [originalBinding] = useState(() => (binding ? Object.freeze({ ...binding }) : undefined));
+	const resolvedBindingRef = useRef<FilePreviewBinding | undefined>(undefined);
+	const readRef = useRef<FilePreviewCorrelation | null>(null);
+	const loadedRef = useRef<FileContent | null>(null);
+	const draftRef = useRef("");
+	const editorRef = useRef<string | null>(null);
+	const revisionRef = useRef(0);
+	const writesRef = useRef(new Map<string, PendingWrite>());
+	const activeWriteRef = useRef<string | null>(null);
+	const writeSequenceRef = useRef(0);
+	const confirmedSequenceRef = useRef(0);
 	// 卸载时清掉未触发的定时器（审查 #5）：added 提示与保存超时都不该再回调 setState。
 	useEffect(
 		() => () => {
@@ -105,49 +193,93 @@ export function FilePreview({
 		[],
 	);
 
-	// Request content on open / file change (mount included).
+	// Requests and their ownership exist before dispatch, even for synchronous hosts.
 	useEffect(() => {
 		setLoading(true);
-		setLoaded(null);
-		setSel(null);
-		setEditing(false);
-		setDraft("");
-		setMarkdownPreview(true);
-		setHtmlPreview(true);
-		setAllowJs(false);
-		editViewRef.current = false;
-		// 换文件：放弃上一个文件未确认的保存等待（回包会被 path 校验丢弃）。
-		savingRef.current = false;
-		setSaving(false);
-		setSaveUnknown(false);
-		if (saveTimer.current) clearTimeout(saveTimer.current);
-		appSend({ type: "read_file", path: file.path });
-	}, [file.path]);
-
-	// Accept responses only for the file currently shown (stale responses for
-	// previously previewed files are ignored).
-	useEffect(() => {
-		if (content && content.path === file.path) {
-			setLoaded(content);
-			if (!editing) setDraft(content.text);
+		const correlation: FilePreviewCorrelation = Object.freeze({
+			reqId: crypto.randomUUID(),
+			purpose: "read",
+			binding: originalBinding,
+			lifetime: previewId,
+			revision: 0,
+		});
+		readRef.current = correlation;
+		const request: FilePreviewRequest = { type: "read_file", path: file.path, ...correlation };
+		try {
+			if (!appSend(request)) setLoading(false);
+		} catch {
 			setLoading(false);
-			// 保存确认（审查 #1）：该路径的重读回包到达 → 按已确认内容退出编辑态。
-			// saving 走 ref：它不在 deps 里，同一次 content 变化不会因 saving 翻转重跑。
-			if (savingRef.current) {
-				savingRef.current = false;
-				if (saveTimer.current) clearTimeout(saveTimer.current);
-				setSaving(false);
-				setSaveUnknown(false);
-				setEditing(false);
-				setDraft(content.text);
-				if (editViewRef.current) {
-					if (isMarkdownFile(file.name)) setMarkdownPreview(true);
-					if (isHtmlFile(file.name)) setHtmlPreview(true);
-				}
-				setSel(null);
-			}
 		}
-	}, [content, editing, file.path]);
+	}, [file.path, originalBinding, previewId]);
+
+	useEffect(() => {
+		if (!content || content.path !== file.path) return;
+		const reply = content;
+		const read = readRef.current;
+		// A legacy first preview is read-only. Bootstrap resource identity only from a matched read.
+		const matchedRead = read && sameCorrelation(reply, read, true);
+		const initialRead =
+			read &&
+			!loadedRef.current &&
+			!editorRef.current &&
+			(matchedRead || (binding === undefined && reply.reqId === undefined && reply.purpose === undefined));
+		if (initialRead) {
+			const snapshot = { ...content };
+			readRef.current = null;
+			if (matchedRead && content.complete === true && resolvedBinding(reply.binding)) {
+				resolvedBindingRef.current = Object.freeze({ ...reply.binding });
+			}
+			loadedRef.current = snapshot;
+			draftRef.current = snapshot.text;
+			setLoaded(snapshot);
+			setDraft(snapshot.text);
+			setLoading(false);
+			return;
+		}
+		if (reply.purpose !== "write" || typeof reply.reqId !== "string") return;
+		const write = writesRef.current.get(reply.reqId);
+		if (
+			!write ||
+			write.path !== content.path ||
+			!sameCorrelation(reply, write.correlation) ||
+			reply.writeSucceeded !== true ||
+			reply.complete !== true ||
+			content.kind !== "text" ||
+			content.binary !== false ||
+			content.truncated !== false ||
+			content.text !== write.text ||
+			editorRef.current !== write.correlation.lifetime
+		) {
+			return;
+		}
+		writesRef.current.delete(reply.reqId);
+		// A later manual save may already have completed. Never roll its baseline back.
+		if (write.sequence < confirmedSequenceRef.current) return;
+		confirmedSequenceRef.current = write.sequence;
+		const snapshot = { ...content };
+		loadedRef.current = snapshot;
+		setLoaded(snapshot);
+		if (activeWriteRef.current === reply.reqId) {
+			activeWriteRef.current = null;
+			savingRef.current = false;
+			if (saveTimer.current) clearTimeout(saveTimer.current);
+			setSaving(false);
+			setSaveUnknown(false);
+		}
+		if (
+			write.sequence === writeSequenceRef.current &&
+			revisionRef.current === write.correlation.revision &&
+			draftRef.current === write.text
+		) {
+			editorRef.current = null;
+			setEditing(false);
+			if (editViewRef.current) {
+				if (isMarkdownFile(file.name)) setMarkdownPreview(true);
+				if (isHtmlFile(file.name)) setHtmlPreview(true);
+			}
+			setSel(null);
+		}
+	}, [content, binding, file.path, file.name]);
 
 	// Escape closes; Ctrl/Cmd+A selects everything in the preview.
 	useEffect(() => {
@@ -224,16 +356,24 @@ export function FilePreview({
 	};
 
 	const canEdit =
-		loaded !== null && loaded.kind === "text" && !loaded.binary && !loaded.truncated && !isOfficeFile(file.name);
+		resolvedBinding(resolvedBindingRef.current) &&
+		loaded !== null &&
+		loaded.kind === "text" &&
+		!loaded.binary &&
+		!loaded.truncated &&
+		!isOfficeFile(file.name);
 
 	const cancelEditing = () => {
-		// 取消编辑同时放弃未确认的保存等待（若服务端实际写成功，回包到达时
-		// savingRef 已退出，只会静默刷新正文）。
+		// Explicit discard ends this editor's ownership; its late replies cannot refresh it.
+		editorRef.current = null;
+		writesRef.current.clear();
+		activeWriteRef.current = null;
 		savingRef.current = false;
 		if (saveTimer.current) clearTimeout(saveTimer.current);
 		setSaving(false);
 		setSaveUnknown(false);
-		setDraft(loaded?.text ?? "");
+		draftRef.current = loadedRef.current?.text ?? "";
+		setDraft(draftRef.current);
 		setEditing(false);
 		if (editViewRef.current) {
 			if (isMarkdownFile(file.name)) setMarkdownPreview(true);
@@ -254,25 +394,59 @@ export function FilePreview({
 		if (isMarkdownFile(file.name)) setMarkdownPreview(false);
 		if (isHtmlFile(file.name)) setHtmlPreview(false);
 		setSel(null);
+		editorRef.current = crypto.randomUUID();
+		revisionRef.current = 0;
+		draftRef.current = loaded.text;
 		setDraft(loaded.text);
 		setEditing(true);
 	};
 
 	const saveEditing = () => {
-		if (!editing || !loaded || !canEdit) return;
-		if (!appSend({ type: "write_file", path: file.path, text: draft })) return;
-		// 审查 #1：发出即进入 saving（不再「发出即关编辑态」）。编辑器保持打开，
-		// 等该路径重读回包确认（见 content effect）；5s 未确认提示结果未知。
+		const baseline = loadedRef.current;
+		if (!editorRef.current || !baseline || !canEdit || savingRef.current || draftRef.current === baseline.text) return;
+		const correlation: FilePreviewCorrelation = Object.freeze({
+			reqId: crypto.randomUUID(),
+			purpose: "write",
+			binding: resolvedBindingRef.current,
+			lifetime: editorRef.current,
+			revision: revisionRef.current,
+		});
+		const write: PendingWrite = {
+			correlation,
+			path: file.path,
+			text: draftRef.current,
+			baseline: { ...baseline },
+			sequence: ++writeSequenceRef.current,
+		};
+		writesRef.current.set(correlation.reqId, write);
+		activeWriteRef.current = correlation.reqId;
 		savingRef.current = true;
 		setSaveUnknown(false);
 		setSaving(true);
 		if (saveTimer.current) clearTimeout(saveTimer.current);
-		saveTimer.current = setTimeout(() => {
-			// 超时未确认：退出 saving，留在编辑态让用户重试或取消（输入不丢）。
+		const unknown = () => {
+			if (activeWriteRef.current !== correlation.reqId) return;
 			savingRef.current = false;
 			setSaving(false);
 			setSaveUnknown(true);
-		}, 5000);
+			// Keep the original operation/body in memory; never automatically retry it.
+		};
+		const request: FilePreviewRequest = {
+			type: "write_file",
+			path: write.path,
+			text: write.text,
+			...correlation,
+		};
+		try {
+			if (!appSend(request)) {
+				unknown();
+				return;
+			}
+		} catch {
+			unknown();
+			return;
+		}
+		if (activeWriteRef.current === correlation.reqId) saveTimer.current = setTimeout(unknown, 5000);
 	};
 
 	const handleClose = () => {
@@ -530,7 +704,11 @@ export function FilePreview({
 						<textarea
 							className={`fp-editor ${wrap ? "" : "no-wrap"}`}
 							value={draft}
-							onChange={(e) => setDraft(e.target.value)}
+							onChange={(e) => {
+								revisionRef.current += 1;
+								draftRef.current = e.target.value;
+								setDraft(e.target.value);
+							}}
 							wrap={wrap ? "soft" : "off"}
 							spellCheck={false}
 							autoFocus
