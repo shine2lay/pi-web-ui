@@ -13,7 +13,7 @@ import { flushSync } from "react-dom";
 import type { CSSProperties, ReactNode } from "react";
 import { FiArrowDown } from "react-icons/fi";
 import type { PromptAttachment, ToolStatus, UiExchangeDigest, UiMessage, UiState } from "../types";
-import { Message, asText } from "./Message";
+import { Message, asText, type EditAdmission } from "./Message";
 import { Markdown } from "./Markdown";
 
 import { collectQuestionAttachments } from "../question-attachments";
@@ -438,8 +438,12 @@ interface MessageListProps {
 	state: UiState;
 	liveOutputs: ReadonlyMap<string, { toolName: string; text: string }>;
 	toolStatuses: ReadonlyMap<string, ToolStatus>;
-	/** Edit-and-re-ask handler (forwarded to user message bubbles). */
+	/** Legacy source compatibility only; Message never treats this as admission. */
 	onEdit?: (messageId: string, text: string, attachments?: PromptAttachment[]) => void;
+	/** App-owned exact original-target/attachment admission, forwarded unchanged. */
+	onEditAdmit?: EditAdmission;
+	/** Genuine parent-provided conversation/session generation. No fabricated default. */
+	editContextKey?: string;
 	/** Kill the running bash command from its tool card (agent run continues). */
 	onKillBash?: () => void;
 	/** Manually retry the last failed model call (forwarded to the red error
@@ -493,6 +497,8 @@ export function MessageList({
 	liveOutputs,
 	toolStatuses,
 	onEdit,
+	onEditAdmit,
+	editContextKey,
 	onKillBash,
 	onRetry,
 	onRemoveQueued,
@@ -517,6 +523,11 @@ export function MessageList({
 }: MessageListProps) {
 	const t = useT();
 	const exportImage = useExportImage();
+	// Real displayed IDs add cleanup fencing; they do NOT supply the missing
+	// parent generation or authorize App to use the currently active session.
+	const messageEditContextKey = editContextKey?.trim()
+		? JSON.stringify([state.conversationId, state.sessionId, editContextKey])
+		: undefined;
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const pagingGeneration = useSyncExternalStore(
 		subscribeEarlierPageCancellation,
@@ -1600,6 +1611,8 @@ export function MessageList({
 				thinkingWrap={thinkingWrap}
 				isLast={false}
 				onEdit={onEdit}
+				onEditAdmit={onEditAdmit}
+				editContextKey={messageEditContextKey}
 				questionAttachments={digestAttachments.get(m.id)}
 				onCollapse={queueReport && expanded.has(m.id) ? collapse : undefined}
 				searchActive={searchOpen}
@@ -1820,6 +1833,9 @@ export function MessageList({
 									thinkingWrap={thinkingWrap}
 									isLast={false}
 									onEdit={onEdit}
+									onEditAdmit={onEditAdmit}
+									editContextKey={messageEditContextKey}
+									questionAttachments={questionAttachments.get(m.id)}
 									searchActive={searchOpen}
 								/>
 							),
@@ -1877,6 +1893,8 @@ export function MessageList({
 								thinkingWrap={thinkingWrap}
 								isLast={!sendingLook && m.id === lastId}
 								onEdit={onEdit}
+								onEditAdmit={onEditAdmit}
+								editContextKey={messageEditContextKey}
 								onRewind={onRewind}
 								rewindBusy={rewindBusy}
 								rewindDropCount={rewindDropCount}
@@ -1911,6 +1929,8 @@ export function MessageList({
 						streaming
 						isLast
 						onEdit={onEdit}
+						onEditAdmit={onEditAdmit}
+						editContextKey={messageEditContextKey}
 						onKillBash={onKillBash}
 						toolsWrap={toolsWrap}
 						toolImages={toolImages}

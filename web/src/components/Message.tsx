@@ -1,4 +1,4 @@
-import { Fragment, memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
 	FiArchive,
 	FiBookOpen,
@@ -163,6 +163,21 @@ function truncateText(text: string, max: number): string {
 	return flat.length > max ? `${flat.slice(0, max)}…` : flat;
 }
 
+/** App owns target capture, complete attachment resolution and durable admission.
+ *  This result is NOT a server execution/acknowledgement receipt. */
+export type EditAdmission = (messageId: string, text: string, attachments?: PromptAttachment[]) => Promise<boolean>;
+
+type EditResource = { messageId: string; contextKey: string | undefined };
+type EditEditor = { resource: EditResource; revision: number; reading: number };
+type EditOriginal = {
+	messageId: string;
+	contextKey: string | undefined;
+	text: string;
+	attachments?: PromptAttachment[];
+};
+type EditAttempt = { original: EditOriginal; phase: "pending" | "unconfirmed" | "admitted"; notice: string };
+type EditOperation = { resource: EditResource; editor: EditEditor | null; revision: number };
+
 interface MessageProps {
 	message: UiMessage;
 	/** toolResult messages by toolCallId (precomputed in MessageList, memoized). */
@@ -173,10 +188,13 @@ interface MessageProps {
 	streaming: boolean;
 	/** True when this is the last rendered message (stream cursor + live blocks). */
 	isLast: boolean;
-	/** Edit-and-re-ask handler (user messages only). Stable identity — Message is memoized.
-	 *  Attachments are the images kept from the original message plus any newly
-	 *  pasted/dropped ones; they re-fill the visual context the fork drops. */
+	/** Legacy source compatibility ONLY. Never invoked as a fallback or interpreted as admission. */
 	onEdit?: (messageId: string, text: string, attachments?: PromptAttachment[]) => void;
+	/** Explicit admission boundary for both edit-submit and direct reask. */
+	onEditAdmit?: EditAdmission;
+	/** Genuine parent-provided conversation/session generation; absent means no admission.
+	 *  Cleanup binding only, never target authority. See docs/durable-message-edit.md. */
+	editContextKey?: string;
 	/** Original attachments attached to this question (precomputed in MessageList
 	 *  from the attachment-card run that follows it): pasted/uploaded images
 	 *  (imageData), uploaded files (uploadPath) and workspace-path attachments
@@ -241,6 +259,8 @@ export const Message = memo(function Message({
 	streaming,
 	isLast,
 	onEdit,
+	onEditAdmit,
+	editContextKey,
 	onKillBash,
 	onRetry,
 	onRewind,
@@ -273,6 +293,34 @@ export const Message = memo(function Message({
 	// (newly added files) and path+mode (workspace attachments).
 	const [editAttachments, setEditAttachments] = useState<PromptAttachment[]>([]);
 	const [editDragOver, setEditDragOver] = useState(false);
+	const [editPending, setEditPending] = useState(false);
+	const [editReading, setEditReading] = useState(0);
+	// Keep a separate original even if the parent mutates its callback arguments or
+	// the user keeps editing while admission resolves. No persistence claim here.
+	const [editAttempt, setEditAttempt] = useState<EditAttempt | null>(null);
+	const resource = useMemo(() => ({ messageId: message.id, contextKey: editContextKey }), [message.id, editContextKey]);
+	const activeResource = useRef<EditResource | null>(null);
+	const editor = useRef<EditEditor | null>(null);
+	const editOperation = useRef<EditOperation | null>(null);
+	useLayoutEffect(() => {
+		activeResource.current = resource;
+		editOperation.current = null;
+		setEditPending(false);
+		setEditAttempt((old) =>
+			old?.phase === "pending"
+				? {
+						...old,
+						phase: "unconfirmed",
+						notice: "Edit target changed. Original kept; its outcome is not confirmed here.",
+					}
+				: old,
+		);
+		// Deliberately do not clear an existing draft on a context change. Its
+		// editor still belongs to the old resource and cannot submit into this one.
+		return () => {
+			activeResource.current = null;
+		};
+	}, [resource]);
 	// rewind-to-here：「回到这里」的确认条开着。
 	const [rewindAsk, setRewindAsk] = useState(false);
 	// Transient inline notice for the editor (oversized/unreadable dropped
@@ -337,7 +385,7 @@ export const Message = memo(function Message({
 	// visible “thinking…” placeholder instead of an invisible empty bubble.
 	const isEmptyStreaming = streaming && isLast && message.content.length === 0;
 
-	const canEdit = message.role === "user" && !roleMsg && !streaming && !isEmptyStreaming && !!onEdit;
+	const canEdit = message.role === "user" && !roleMsg && !streaming && !isEmptyStreaming && !!(onEditAdmit || onEdit);
 	// rewind-to-here：用户和助手消息都能「回到这里」（正在流式的那条除外）；对话在跑时按钮灰掉不藏。
 	const canRewind =
 		(message.role === "user" || message.role === "assistant") &&
@@ -358,31 +406,51 @@ export const Message = memo(function Message({
 			{icon} <span className="msg-action-label">{label}</span>
 		</button>
 	);
-	/** Paste/drop handler inside the edit composer — same downscale pipeline
-	 *  as the main input bar so payloads stay under the server's cap. */
-	const addEditImageFiles = async (files: File[]) => {
-		const added: PromptAttachment[] = [];
-		for (const f of files) {
-			if (!isRasterImage(f.type)) continue;
-			const img = await fileToProcessedImage(f);
-			if (!img) continue;
-			added.push({
-				path: "",
-				imageData: img.data,
-				mimeType: img.mimeType,
-				name: img.name,
-			});
-		}
-		if (added.length > 0) setEditAttachments((prev) => [...prev, ...added]);
+	// File reads are part of the current editor revision. Starting one already
+	// invalidates a pending submit's cleanup; finishing one cannot append into a
+	// cancelled/reopened editor. Do not submit an incomplete attachment set.
+	const beginEditRead = () => {
+		const own = editor.current;
+		if (!own) return null;
+		own.revision++;
+		own.reading++;
+		setEditReading(own.reading);
+		return own;
 	};
-	/** Add a raw uploaded file (non-image, dropped in the editor) — read into
-	 *  base64 fileData, same 20MB cap as the main input bar. */
+	const endEditRead = (own: EditEditor) => {
+		own.reading--;
+		if (editor.current === own) setEditReading(own.reading);
+	};
+	/** Same image pipeline as the main composer, with editor ownership fencing. */
+	const addEditImageFiles = async (files: File[]) => {
+		const own = beginEditRead();
+		if (!own) return;
+		try {
+			const added: PromptAttachment[] = [];
+			for (const f of files) {
+				if (!isRasterImage(f.type)) continue;
+				const img = await fileToProcessedImage(f);
+				if (!img) continue;
+				added.push({ path: "", imageData: img.data, mimeType: img.mimeType, name: img.name });
+			}
+			if (editor.current === own && added.length > 0) {
+				own.revision++;
+				setEditAttachments((prev) => [...prev, ...added]);
+			}
+		} catch {
+			if (editor.current === own) pushEditNotice(t("fileLoadFailed", { name: files[0]?.name ?? "image" }));
+		} finally {
+			endEditRead(own);
+		}
+	};
+	/** Raw non-image uploads retain the existing size check and byte pipeline. */
 	const addEditFile = async (f: File) => {
 		if (f.size > MAX_EDIT_UPLOAD_BYTES) {
 			pushEditNotice(t("fileTooLarge", { name: f.name, size: 20 }));
 			return;
 		}
-		let base64: string;
+		const own = beginEditRead();
+		if (!own) return;
 		try {
 			const dataUrl = await new Promise<string>((res, rej) => {
 				const r = new FileReader();
@@ -390,24 +458,24 @@ export const Message = memo(function Message({
 				r.onerror = () => rej(r.error ?? new Error("read failed"));
 				r.readAsDataURL(f);
 			});
-			base64 = dataUrl.replace(/^data:[^;]*;base64,/, "");
+			if (editor.current !== own) return;
+			own.revision++;
+			setEditAttachments((prev) => [
+				...prev,
+				{
+					path: "",
+					fileData: dataUrl.replace(/^data:[^;]*;base64,/, ""),
+					name: f.name,
+					size: f.size,
+					mimeType: f.type || undefined,
+				},
+			]);
 		} catch {
-			pushEditNotice(t("fileLoadFailed", { name: f.name }));
-			return;
+			if (editor.current === own) pushEditNotice(t("fileLoadFailed", { name: f.name }));
+		} finally {
+			endEditRead(own);
 		}
-		setEditAttachments((prev) => [
-			...prev,
-			{
-				path: "",
-				fileData: base64,
-				name: f.name,
-				size: f.size,
-				mimeType: f.type || undefined,
-			},
-		]);
 	};
-	/** Add any dropped file: raster images through the resize pipeline, all
-	 *  other files (incl. SVG) as raw uploads. */
 	const addEditDropFiles = async (files: File[]) => {
 		const imgs: File[] = [];
 		for (const f of files) {
@@ -416,45 +484,88 @@ export const Message = memo(function Message({
 		}
 		if (imgs.length > 0) await addEditImageFiles(imgs);
 	};
-	const directReask = () => {
-		const text = skillBlock
-			? "/skill:" + skillBlock.name + (skillBlock.userMessage ? " " + skillBlock.userMessage : "")
-			: message.content
-					.map((b) => asText(b)?.text ?? "")
-					.filter(Boolean)
-					.join("\n");
-		const trimmed = text.trim();
-		if (!trimmed) return;
-		onEdit?.(
-			message.id,
-			trimmed,
-			questionAttachments && questionAttachments.length > 0 ? questionAttachments : undefined,
-		);
-	};
+	const originalEditText = () =>
+		skillBlock ? `/skill:${skillBlock.name}${skillBlock.userMessage ? ` ${skillBlock.userMessage}` : ""}` : userText;
 	const startEdit = () => {
-		setDraft(
-			skillBlock
-				? `/skill:${skillBlock.name}${skillBlock.userMessage ? ` ${skillBlock.userMessage}` : ""}`
-				: message.content
-						.map((b) => asText(b)?.text ?? "")
-						.filter(Boolean)
-						.join("\n"),
-		);
-		setEditAttachments(questionAttachments ?? []);
+		if (activeResource.current !== resource || editor.current) return;
+		editor.current = { resource, revision: 0, reading: 0 };
+		setDraft(originalEditText());
+		setEditAttachments(structuredClone(questionAttachments ?? []));
+		setEditReading(0);
 		setEditing(true);
 	};
-	const submitEdit = () => {
-		const text = draft.trim();
-		if (!text) return;
-		onEdit?.(
-			message.id,
-			text,
-			// Original attachments (images / uploads / path refs) are always
-			// preserved — restoring the visual context the fork would drop; a
-			// text-only edit with none stays undefined.
-			editAttachments.length > 0 ? editAttachments : undefined,
-		);
+	const cancelEdit = () => {
+		editor.current = null;
+		setEditReading(0);
 		setEditing(false);
+		// Explicit cancellation does not release the pending operation's lock or
+		// ownership. Reopening the same ID gets a different editor instance.
+	};
+	const admitEdit = async (text: string, attachments: PromptAttachment[] | undefined, own: EditEditor | null) => {
+		if (!canEdit || !text.trim() || activeResource.current !== resource || editOperation.current) return;
+		if (own && (editor.current !== own || own.resource !== resource)) {
+			pushEditNotice("Edit target changed. Draft kept; cancel and reopen to edit the current message.");
+			return;
+		}
+		if (own?.reading) return;
+		const original: EditOriginal = {
+			messageId: message.id,
+			contextKey: editContextKey,
+			text,
+			attachments: attachments?.length ? structuredClone(attachments) : undefined,
+		};
+		if (!onEditAdmit || !editContextKey?.trim()) {
+			setEditAttempt({
+				original,
+				phase: "unconfirmed",
+				notice:
+					"Edit admission is unavailable (missing callback or context binding). Original and draft kept; nothing was submitted.",
+			});
+			return;
+		}
+		const operation: EditOperation = { resource, editor: own, revision: own?.revision ?? 0 };
+		editOperation.current = operation; // synchronous: Enter + click cannot submit twice
+		setEditPending(true);
+		setEditAttempt({ original, phase: "pending", notice: "Waiting for edit admission. Original and draft kept." });
+		let admitted = false;
+		try {
+			// A second copy isolates the retained original and editor from a
+			// resolver mutating its arguments. No reference is resolved here.
+			admitted =
+				(await onEditAdmit(
+					original.messageId,
+					original.text,
+					original.attachments ? structuredClone(original.attachments) : undefined,
+				)) === true;
+		} catch {
+			// Rejection can mean an unknown outcome. Never fall back to onEdit.
+			// A synchronous throw must not unlock a second same-stack gesture.
+			await Promise.resolve();
+		}
+		if (activeResource.current !== resource || editOperation.current !== operation) return;
+		editOperation.current = null;
+		setEditPending(false);
+		if (admitted && own && editor.current === own && own.revision === operation.revision) {
+			editor.current = null;
+			setEditing(false);
+			setEditAttempt(null);
+		} else {
+			setEditAttempt({
+				original,
+				phase: admitted ? "admitted" : "unconfirmed",
+				notice: admitted
+					? "Earlier edit admitted; current draft kept. Execution is not confirmed here."
+					: "Edit admission was not confirmed. Original and current draft kept; outcome may be unknown.",
+			});
+		}
+	};
+	const directReask = () => {
+		// An open editor must not be replaced or implicitly submitted by a stale
+		// context-menu action. The direct path uses the same admission lock.
+		if (!editor.current) void admitEdit(originalEditText(), questionAttachments, null);
+	};
+	const submitEdit = () => {
+		if (editor.current) void admitEdit(draft, editAttachments, editor.current);
 	};
 
 	// ---- 宿主 UI 扩展点（issue #146）：message.actions 工具条 + contextmenu.message ----
@@ -746,6 +857,7 @@ export const Message = memo(function Message({
 							className="msg-action"
 							title={t("reaskDirectlyTip")}
 							aria-label={t("reaskDirectly")}
+							disabled={editPending}
 							onClick={directReask}
 						>
 							<FiRefreshCw /> <span className="msg-action-label">{t("reaskDirectly")}</span>
@@ -802,6 +914,7 @@ export const Message = memo(function Message({
 						className="msg-action"
 						title={t("reaskDirectlyTip")}
 						aria-label={label}
+						disabled={editPending}
 						onClick={directReask}
 					>
 						{slotIcon(entry.icon)} <span className="msg-action-label">{label}</span>
@@ -1010,9 +1123,24 @@ export const Message = memo(function Message({
 				)}
 			</div>
 			<div className="msg-body">
+				{editAttempt && (
+					<div className="msg-editor-notice" role="status" data-edit-admission={editAttempt.phase}>
+						{editAttempt.notice}
+						<details>
+							<summary>Original (kept)</summary>
+							<pre>{editAttempt.original.text}</pre>
+							<ul>
+								{editAttempt.original.attachments?.map((att, i) => (
+									<li key={i}>{editAttLabel(att, t)}</li>
+								))}
+							</ul>
+						</details>
+					</div>
+				)}
 				{editing ? (
 					<div
 						className={`msg-editor${editDragOver ? " drag-over" : ""}`}
+						aria-busy={editPending || editReading > 0}
 						onDragOver={(e) => {
 							e.preventDefault();
 							e.stopPropagation();
@@ -1065,7 +1193,10 @@ export const Message = memo(function Message({
 												type="button"
 												className="msg-editor-img-remove"
 												title={t("removeAttachment")}
-												onClick={() => setEditAttachments((prev) => prev.filter((_, j) => j !== i))}
+												onClick={() => {
+													if (editor.current) editor.current.revision++;
+													setEditAttachments((prev) => prev.filter((_, j) => j !== i));
+												}}
 											>
 												<FiX />
 											</button>
@@ -1081,7 +1212,10 @@ export const Message = memo(function Message({
 							autoFocus
 							placeholder={t("editPlaceholder")}
 							rows={Math.max(2, Math.min(10, draft.split("\n").length + 1))}
-							onChange={(e) => setDraft(e.target.value)}
+							onChange={(e) => {
+								if (editor.current) editor.current.revision++;
+								setDraft(e.target.value);
+							}}
 							onPaste={(e) => {
 								const images: File[] = [];
 								for (const item of e.clipboardData?.items ?? []) {
@@ -1099,7 +1233,7 @@ export const Message = memo(function Message({
 									e.preventDefault();
 									submitEdit();
 								} else if (e.key === "Escape") {
-									setEditing(false);
+									cancelEdit();
 								}
 							}}
 						/>
@@ -1107,13 +1241,13 @@ export const Message = memo(function Message({
 							<span className="msg-editor-hint">
 								<FiImage /> {t("editAttachmentHint")}
 							</span>
-							<button type="button" className="chip" onClick={() => setEditing(false)}>
+							<button type="button" className="chip" onClick={cancelEdit}>
 								{t("cancel")}
 							</button>
 							<button
 								type="button"
 								className="chip primary"
-								disabled={!draft.trim()}
+								disabled={editPending || editReading > 0 || !draft.trim()}
 								title={t("reaskFromHere")}
 								onClick={submitEdit}
 							>
