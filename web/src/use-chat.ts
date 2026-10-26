@@ -48,7 +48,6 @@ import {
 	mergeFolded,
 	paginationAfterDelta,
 	prependOlderExchanges,
-	prependOlderMessages,
 } from "./message-window";
 import { applyReuse, cachedWindow, ChatCache, windowKey } from "./chat-cache";
 import { resolvePendingQuestion, type QuestionSource } from "./pending-question";
@@ -99,7 +98,16 @@ import { emitPluginData } from "./plugin-loader";
 import { ingestPluginLogsData } from "./plugin-logs";
 import { resolveCatalogSyncResult } from "./plugin-host";
 import { PROTOCOL_VERSION } from "./protocol-version";
-// mobile-fixes: a quiet socket is found dead within seconds and replaced at once (see conn-health.ts).
+import {
+	earlierRequest,
+	mergeEarlierPage,
+	normalizeHistoryState,
+	readEarlierPage,
+	usesEarlierProtocol,
+	type EarlierPage,
+	type HistoryFields,
+} from "./history-paging";
+// A quiet OPEN socket is probed patiently before replacement (see conn-health.ts).
 import { ConnHealth, setLiveGrace, setReconnectingNote } from "./conn-health";
 // reconnect-trace (Ops #157): a record of each "Reconnecting…" episode, sent to the server's log.
 import { BannerTrace, sessionTraceStore, type TraceCause } from "./conn-trace";
@@ -512,7 +520,7 @@ type Action =
 	| { type: "switch_dismiss_error" }
 	| { type: "snapshot"; state: UiState }
 	| { type: "snapshot_delta"; msg: Extract<ServerMessage, { type: "snapshot_delta" }> }
-	| { type: "older_messages"; msg: Extract<ServerMessage, { type: "older_messages" }> }
+	| { type: "older_messages"; msg: EarlierPage }
 	| { type: "older_exchanges"; msg: Extract<ServerMessage, { type: "older_exchanges" }> }
 	| { type: "folded_messages"; msg: Extract<ServerMessage, { type: "folded_messages" }> }
 	| { type: "protocol_mismatch" }
@@ -923,7 +931,7 @@ function reducer(state: ChatState, action: Action): ChatState {
 			// 向前拼一截历史消息（chat-window-pagination）；作废的回执原状返回。
 			const ui = state.state;
 			if (!ui) return state;
-			const next = prependOlderMessages(ui, action.msg);
+			const next = mergeEarlierPage(ui, action.msg);
 			return next ? { ...state, state: next } : state;
 		}
 		case "folded_messages": {
@@ -1411,6 +1419,7 @@ export function useChat() {
 	// cannot list a retained old cwd before the new socket's snapshot arrives.
 	const [filesReady, setFilesReady] = useState(false);
 	const wsRef = useRef<WebSocket | null>(null);
+	const earlierProtocolRef = useRef<string | null>(null);
 	/** Terminal output bridge (writers keyed by terminalId). */
 	const bridgeRef = useRef(makeTerminalBridge());
 	/** Reconnect backoff counter — ref so it never causes re-renders. */
@@ -1537,6 +1546,13 @@ export function useChat() {
 	const send = useCallback((msg: ClientMessage) => {
 		const ws = wsRef.current;
 		if (ws && ws.readyState === WebSocket.OPEN) {
+			if (msg.type === "load_older") {
+				const conversationId = chatApi.current.chat.state?.conversationId;
+				if (conversationId && earlierProtocolRef.current === conversationId) {
+					ws.send(JSON.stringify(earlierRequest(conversationId, msg.beforeIndex, msg.count)));
+					return true;
+				}
+			}
 			// Forced re-check: drop stale rows immediately so the "checking"
 			// state renders instead of the cached list.
 			if (msg.type === "check_updates_all" && msg.force === true) {
@@ -1779,6 +1795,12 @@ export function useChat() {
 				}
 				return;
 			}
+			// New history wire names are normalized before the fork's existing reducer/cache.
+			if ((msg as { type: string }).type === "earlier_messages") {
+				const page = readEarlierPage(msg, chatApi.current.chat.state?.messagesStart ?? 0);
+				if (page) dispatch({ type: "older_messages", msg: page });
+				return;
+			}
 			// Caught up after a lost connection once the chat's content comes in again.
 			if (
 				catchUpRef.current &&
@@ -1903,9 +1925,11 @@ export function useChat() {
 				case "snapshot": {
 					// switch-cache：带 reuse 的快照只有新增的尾巴，把当时报上去的那份缓存接在前面。
 					// 对不上（缓存已经不在了）就不用它，要一份完整的。
-					let state = msg.state;
+					const wireState = msg.state as UiState & HistoryFields;
+					earlierProtocolRef.current = usesEarlierProtocol(wireState) ? wireState.conversationId : null;
+					let state = normalizeHistoryState(wireState);
 					if (msg.reuse) {
-						const merged = applyReuse(resumeBasesRef.current.get(windowKey(msg.reuse)), msg.state, msg.reuse);
+						const merged = applyReuse(resumeBasesRef.current.get(windowKey(msg.reuse)), state, msg.reuse);
 						if (!merged) {
 							ws.send(JSON.stringify({ type: "get_state" } satisfies ClientMessage));
 							break;
@@ -2618,9 +2642,8 @@ export function useChat() {
 	useEffect(() => {
 		aliveRef.current = true;
 		connect();
-		// mobile-fixes: the watchdog. The server speaks every 2 s, so a socket that stays quiet (or doesn't
-		// answer after the page comes back) is dead: it is dropped on the spot (waiting for a dead socket
-		// to close took minutes) and a new one opens at once. Rules and slow-link allowance: conn-health.ts.
+		// A busy server can miss heartbeats. Probe and wait before replacing an OPEN socket;
+		// real close events and waking a closed tab still reconnect immediately (conn-health.ts).
 		const CHECK_EVERY_MS = 500;
 		/** A connection attempt that hangs this long (made while the network was gone) is given up. */
 		const CONNECT_GIVE_UP_MS = 10_000;
@@ -2687,8 +2710,16 @@ export function useChat() {
 			// The page was frozen, throttled or busy: messages may still be waiting to be handed over,
 			// so the silence so far proves nothing. Ask instead.
 			if (stalled) {
-				cameBack();
+				cameBack(true);
 				return;
+			}
+			const ping = healthRef.current.pingDue(now);
+			if (ping !== null) {
+				try {
+					ws.send(JSON.stringify({ type: "ping", id: ping } satisfies ClientMessage));
+				} catch {
+					// An OPEN socket gets the same failure window even if a send fails.
+				}
 			}
 			const verdict = healthRef.current.verdict(now);
 			if (verdict === "dead") {
@@ -2697,12 +2728,9 @@ export function useChat() {
 				// page came back, the phone knows it is offline, or the page was in the background.
 				const h = healthRef.current;
 				const explained =
-					h.checking ||
-					navigator.onLine === false ||
-					document.visibilityState !== "visible" ||
-					hiddenAt >= h.lastHeardAt;
+					h.waking || navigator.onLine === false || document.visibilityState !== "visible" || hiddenAt >= h.lastHeardAt;
 				// reconnect-trace: which rule dropped it, measured before the patience changes.
-				const cause: TraceCause = h.checking
+				const cause: TraceCause = h.waking
 					? { reason: "probe", quietMs: now - h.lastHeardAt }
 					: {
 							reason: explained ? "silence_explained" : "silence",
@@ -2727,12 +2755,12 @@ export function useChat() {
 			}
 		};
 		/** The page came back or the network changed: the socket must answer now; a lost one is retried now. */
-		const cameBack = () => {
+		const cameBack = (resumed = false) => {
 			if (!aliveRef.current) return;
 			const ws = wsRef.current;
 			const now = Date.now();
 			if (ws && ws.readyState === WebSocket.OPEN) {
-				const id = healthRef.current.cameBack(now);
+				const id = healthRef.current.cameBack(now, resumed);
 				if (id !== null) {
 					try {
 						ws.send(JSON.stringify({ type: "ping", id } satisfies ClientMessage));
@@ -2741,7 +2769,7 @@ export function useChat() {
 					}
 				}
 			} else if (ws && ws.readyState === WebSocket.CONNECTING) {
-				// An attempt from before (maybe made with no network) may never finish.
+				// Retry an attempt from before sleep, not one another wake event just started.
 				if (now - connectAtRef.current > 1_500) replace(ws, true, { reason: "connect_timeout" });
 			} else if (ws) {
 				// pages-live: closed or closing, but its close event hasn't come yet (a tab coming back gets it
@@ -2759,32 +2787,32 @@ export function useChat() {
 		// pages-live: the view shown, the tab's visibility and Roles' own freshness decide the note too.
 		const stopLive = subscribePageLive(refreshNote);
 		const onVisible = () => {
-			if (document.visibilityState === "visible") cameBack();
+			if (document.visibilityState === "visible") cameBack(true);
 			else hiddenAt = Date.now();
 		};
 		const onFreeze = () => {
 			hiddenAt = Date.now();
 		};
-		const onPageShow = (e: PageTransitionEvent) => {
-			if (e.persisted) cameBack();
-		};
+		const onResume = () => cameBack(true);
+		const onPageShow = () => cameBack(true);
+		const onNetworkChange = () => cameBack();
 		// Android Chrome tells when the phone moves between Wi-Fi and mobile data.
 		const netInfo = (navigator as Navigator & { connection?: EventTarget }).connection;
 		document.addEventListener("visibilitychange", onVisible);
-		document.addEventListener("resume", cameBack);
+		document.addEventListener("resume", onResume);
 		document.addEventListener("freeze", onFreeze);
 		window.addEventListener("pageshow", onPageShow);
-		window.addEventListener("online", cameBack);
-		netInfo?.addEventListener?.("change", cameBack);
+		window.addEventListener("online", onNetworkChange);
+		netInfo?.addEventListener?.("change", onNetworkChange);
 		return () => {
 			aliveRef.current = false;
 			clearInterval(watchdog);
 			document.removeEventListener("visibilitychange", onVisible);
-			document.removeEventListener("resume", cameBack);
+			document.removeEventListener("resume", onResume);
 			document.removeEventListener("freeze", onFreeze);
 			window.removeEventListener("pageshow", onPageShow);
-			window.removeEventListener("online", cameBack);
-			netInfo?.removeEventListener?.("change", cameBack);
+			window.removeEventListener("online", onNetworkChange);
+			netInfo?.removeEventListener?.("change", onNetworkChange);
 			stopLive();
 			if (graceTimerRef.current) {
 				clearTimeout(graceTimerRef.current);

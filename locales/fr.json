@@ -234,6 +234,7 @@
 		"connected": "Connecté",
 		"connecting": "Connexion en cours…",
 		"reconnecting": "Reconnexion en cours…",
+		"sessionInitializingNotice": "La session est en cours d’initialisation, veuillez patienter…",
 		"connUpdating": "Mise \u00e0 jour\u2026",
 		"language": "Langue",
 		"langZh": "中文",

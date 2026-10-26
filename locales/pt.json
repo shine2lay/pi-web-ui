@@ -234,6 +234,7 @@
 		"connected": "Conectado",
 		"connecting": "Conectando…",
 		"reconnecting": "Reconectando…",
+		"sessionInitializingNotice": "A sessão está sendo inicializada, aguarde…",
 		"connUpdating": "Atualizando\u2026",
 		"language": "Idioma",
 		"langZh": "Chinês",

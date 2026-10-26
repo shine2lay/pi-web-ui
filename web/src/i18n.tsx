@@ -22,6 +22,7 @@ export const en = {
 	connected: "Connected",
 	connecting: "Connecting…",
 	reconnecting: "Reconnecting…",
+	sessionInitializingNotice: "Session is initializing, please wait…",
 	/** pages-live: the footer on Roles or Initiatives while their data comes back (up to 8 s). */
 	connUpdating: "Updating…",
 	language: "Language",

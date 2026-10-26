@@ -234,6 +234,7 @@
 		"connected": "接続済みです",
 		"connecting": "接続中…",
 		"reconnecting": "再接続中…",
+		"sessionInitializingNotice": "セッションを初期化しています。しばらくお待ちください…",
 		"connUpdating": "\u66f4\u65b0\u4e2d\u2026",
 		"language": "言語",
 		"langZh": "中国語",

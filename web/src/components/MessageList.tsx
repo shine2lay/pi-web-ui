@@ -44,6 +44,10 @@ import {
 import { isRoleMessageOpen, NoticeTurnRow, RoleMessageRow, useRoleMessageOpenVersion } from "./RoleMessageRow";
 import { roleMessageViewOf } from "../role-message-text";
 import { queueReportFold } from "../queue-report-fold";
+import { hasEarlierMessages, scrollAfterPrepend, type HistoryFields } from "../history-paging";
+import { SelectionQuoteButton } from "./SelectionQuoteButton";
+import { SuggestionChips } from "./SuggestionChips";
+import type { ActionSuggestion } from "../action-suggestions";
 
 /** Stable shared empty map — passing this (instead of a fresh Map) lets
  *  React.memo skip messages that have no live tool output to show. */
@@ -499,6 +503,57 @@ export function MessageList({
 	const t = useT();
 	const exportImage = useExportImage();
 	const scrollRef = useRef<HTMLDivElement>(null);
+	const earlierRef = useRef<{
+		conversationId: string;
+		start: number;
+		height: number;
+		top: number;
+		anchor: HTMLElement | null;
+		y: number;
+	} | null>(null);
+	const loadEarlier = useCallback(
+		(force = false) => {
+			const el = scrollRef.current;
+			const start = state.messagesStart ?? 0;
+			if (!el || !onLoadOlder || !hasEarlierMessages(state) || state.exchanges) return;
+			if (!force && earlierRef.current?.conversationId === state.conversationId && earlierRef.current.start === start)
+				return;
+			const anchor =
+				Array.from(el.querySelectorAll<HTMLElement>("[data-msg-id]")).find(
+					(node) => node.getBoundingClientRect().bottom > el.getBoundingClientRect().top,
+				) ?? null;
+			earlierRef.current = {
+				conversationId: state.conversationId,
+				start,
+				height: el.scrollHeight,
+				top: el.scrollTop,
+				anchor,
+				y: anchor?.getBoundingClientRect().top ?? 0,
+			};
+			stickRef.current = false;
+			escapedRef.current = true;
+			onLoadOlder(start, 30);
+		},
+		[state.conversationId, state.messagesStart, state.exchanges, (state as HistoryFields).historyWindow, onLoadOlder],
+	);
+	useLayoutEffect(() => {
+		const pending = earlierRef.current;
+		const el = scrollRef.current;
+		if (!pending || !el) return;
+		if (pending.conversationId !== state.conversationId) {
+			earlierRef.current = null;
+			return;
+		}
+		if ((state.messagesStart ?? 0) >= pending.start) return;
+		// A DOM anchor also handles native browser anchoring (then the delta is zero).
+		el.scrollTop = pending.anchor?.isConnected
+			? el.scrollTop + pending.anchor.getBoundingClientRect().top - pending.y
+			: scrollAfterPrepend(pending.top, pending.height, el.scrollHeight);
+		prevStRef.current = el.scrollTop;
+		prevScrollHeightRef.current = el.scrollHeight;
+		progUntilRef.current = Date.now() + PROGRAMMATIC_SCROLL_GRACE_MS;
+		earlierRef.current = null;
+	}, [state.messagesStart, state.conversationId]);
 	const [stickBottom, setStickBottom] = useState(true);
 	const stickRef = useRef(true);
 	/** 上一帧 scrollTop —— 判定滚动方向（向上 = 用户要离开底部）。 */
@@ -1162,6 +1217,13 @@ export function MessageList({
 		const dSh = el.scrollHeight - prevScrollHeightRef.current;
 		prevStRef.current = el.scrollTop;
 		prevScrollHeightRef.current = el.scrollHeight;
+		const pending = earlierRef.current;
+		if (pending) {
+			pending.top = el.scrollTop;
+			pending.height = el.scrollHeight;
+			pending.y = pending.anchor?.getBoundingClientRect().top ?? 0;
+		}
+		if (el.scrollTop < 120 && dSt < 0) loadEarlier();
 		// mobile-fixes: the list's box or the screen changed height since the last scroll (a phone's
 		// keyboard going up or down, the message box growing or emptied, a row appearing or leaving
 		// under the list), and the scroll is no bigger than those changes. That is the browser or the
@@ -1221,7 +1283,7 @@ export function MessageList({
 		setStickBottom(stickRef.current);
 		updateActiveFromScroll();
 		scheduleSweep();
-	}, [updateActiveFromScroll, scheduleSweep]);
+	}, [updateActiveFromScroll, scheduleSweep, loadEarlier]);
 
 	// 流结束兜底：finalize 瞬间 streaming→persisted 切换可能让内容高度塌缩一帧，
 	// 浏览器把视口 clamp 到半路；若用户并未主动离开（!escaped），等布局稳定后吸回底部。
@@ -1660,15 +1722,18 @@ export function MessageList({
 								</button>
 							</div>
 						)
-					: (state.messagesStart ?? 0) > 0 && (
+					: hasEarlierMessages(state) && (
 							// 分页入口（chat-window-pagination）：只在真的有更老的消息时出现。
 							<div className="load-older">
-								<button type="button" onClick={() => onLoadOlder?.(state.messagesStart ?? 0)} disabled={!onLoadOlder}>
-									{t("loadOlder", { n: state.messagesStart ?? 0 })}
+								<button type="button" onClick={() => loadEarlier(true)} disabled={!onLoadOlder}>
+									{t("loadOlder", {
+										n: (state as HistoryFields).historyWindow?.hiddenCount ?? state.messagesStart ?? 0,
+									})}
 								</button>
 							</div>
 						)}
 				{state.exchanges?.flatMap(renderDigest)}
+				<SelectionQuoteButton rootRef={scrollRef} sessionId={state.sessionId ?? state.conversationId} />
 				{state.messages.length === 0 && !state.streamingMessage && pendingSends.length === 0 && (
 					<div className="empty-state">
 						{uiChatEmpty && uiChatEmpty.length > 0 && (
@@ -1785,6 +1850,14 @@ export function MessageList({
 						</LazyMount>,
 					);
 				})}
+				{!state.isStreaming && pendingSends.length === 0 && (
+					<SuggestionChips
+						message={state.messages.at(-1)}
+						actions={(state as UiState & { actionSuggestions?: ActionSuggestion[] }).actionSuggestions}
+						sessionId={state.sessionId}
+						onChoose={scrollToBottom}
+					/>
+				)}
 				{tailShown && renderFoldRow(tailShown)}
 				{streamShown && (
 					<Message

@@ -60,6 +60,7 @@ import { hasMessageWidget } from "../plugin-fence";
 import { openRollbackDialog } from "../rollback-state";
 import { BUILTIN_UI_ITEMS, type UiSlotEntry } from "../ui-slots";
 import { appSend } from "../app-globals";
+import { parseActionSuggestions } from "../action-suggestions";
 
 /** 编辑重问编辑器里直接拖入/粘贴文件的上限（与服务端 MAX_UPLOAD_BYTES 一致）。 */
 const MAX_EDIT_UPLOAD_BYTES = 20 * 1024 * 1024;
@@ -1747,8 +1748,11 @@ function Block({
 }) {
 	const t = useT();
 	const [copied, setCopied] = useState(false);
-	const text = asText(block);
+	const rawText = asText(block);
+	const text =
+		rawText && role === "assistant" ? { ...rawText, text: parseActionSuggestions(rawText.text).text } : rawText;
 	if (text) {
+		if (!text.text && !text.truncated) return null;
 		const live = streaming && isLast;
 		// 单行消息：复制键不再用绝对定位压住文字，改成行内 flex 右键——与各 head
 		// 同样的 6px 间距、垂直居中、28px 尺寸。多行仍用右上浮层。

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-	BACK_PROBE_MS,
-	BIG_BACK_MS,
+	DEAD_AFTER_MS,
 	ConnHealth,
 	MIN_CHARS_PER_SEC,
 	NOTE_AFTER_MS,
@@ -27,7 +26,7 @@ describe("ConnHealth", () => {
 		return h;
 	};
 
-	it("a socket that keeps talking is fine; one quiet for QUIET_MS is dead", () => {
+	it("a socket that keeps talking is fine; silence gets a calm note before a 30 s failure", () => {
 		const h = fresh();
 		for (let t = T0; t < T0 + 60_000; t += 2_000) {
 			h.heard(t);
@@ -35,7 +34,9 @@ describe("ConnHealth", () => {
 		}
 		const last = T0 + 58_000;
 		expect(h.verdict(last + QUIET_MS - 1)).toBe("ok");
-		expect(h.verdict(last + QUIET_MS + 1)).toBe("dead");
+		expect(h.verdict(last + QUIET_MS + 1)).toBe("ok");
+		expect(h.verdict(last + QUIET_MS + NOTE_AFTER_MS + 1)).toBe("doubt");
+		expect(h.verdict(last + DEAD_AFTER_MS + 1)).toBe("dead");
 	});
 
 	it("a big message announced first gets time to come through on a slow link", () => {
@@ -44,10 +45,11 @@ describe("ConnHealth", () => {
 		h.heard(T0, chars);
 		const needed = (chars / MIN_CHARS_PER_SEC) * 1000;
 		expect(h.verdict(T0 + QUIET_MS + needed - 1)).toBe("ok");
-		expect(h.verdict(T0 + QUIET_MS + needed + 1)).toBe("dead");
+		expect(h.verdict(T0 + DEAD_AFTER_MS + needed - 1)).not.toBe("dead");
+		expect(h.verdict(T0 + DEAD_AFTER_MS + needed + 1)).toBe("dead");
 		// Once the big message is in, the usual limit applies again.
 		h.heard(T0 + 10_000);
-		expect(h.verdict(T0 + 10_000 + QUIET_MS + 1)).toBe("dead");
+		expect(h.verdict(T0 + 10_000 + DEAD_AFTER_MS + 1)).toBe("dead");
 	});
 
 	it("after coming back only the answer to its own ping counts", () => {
@@ -61,7 +63,8 @@ describe("ConnHealth", () => {
 		h.heard(back + 10);
 		expect(h.checking).toBe(true);
 		expect(h.verdict(back + NOTE_AFTER_MS - 1)).toBe("ok");
-		expect(h.verdict(back + NOTE_AFTER_MS + 1)).toBe("doubt");
+		expect(h.verdict(back + NOTE_AFTER_MS + 1)).toBe("ok");
+		expect(h.verdict(back + QUIET_MS + NOTE_AFTER_MS + 1)).toBe("doubt");
 		// An old answer (another id) doesn't count either.
 		h.answered((id ?? 0) + 100);
 		expect(h.checking).toBe(true);
@@ -70,32 +73,34 @@ describe("ConnHealth", () => {
 		expect(h.verdict(back + 1_000)).toBe("ok");
 	});
 
-	it("no answer after coming back: dead after BACK_PROBE_MS, long before the quiet limit", () => {
+	it("no answer after coming back gets the full 30 s failure window", () => {
 		const h = fresh();
 		const back = T0 + 1_000;
 		h.heard(back - 500);
 		h.cameBack(back);
-		expect(h.verdict(back + BACK_PROBE_MS - 1)).not.toBe("dead");
-		expect(h.verdict(back + BACK_PROBE_MS + 1)).toBe("dead");
-		expect(BACK_PROBE_MS).toBeLessThan(QUIET_MS);
+		expect(h.verdict(back + DEAD_AFTER_MS)).not.toBe("dead");
+		expect(h.verdict(back + DEAD_AFTER_MS + 1)).toBe("dead");
 	});
 
-	it("coming back again while a ping waits restarts its clock (time the page slept doesn't count)", () => {
+	it("actual page sleep starts a fresh probe, rejecting buffered old answers", () => {
 		const h = fresh();
 		const first = h.cameBack(T0 + 1_000);
-		expect(h.cameBack(T0 + 30_000)).toBeNull();
-		expect(h.verdict(T0 + 30_000 + BACK_PROBE_MS - 1)).not.toBe("dead");
-		h.answered(first ?? undefined);
+		const second = h.cameBack(T0 + 60_000, true);
+		expect(second).not.toBe(first);
+		expect(h.verdict(T0 + 60_000 + DEAD_AFTER_MS)).not.toBe("dead");
+		h.answered(first);
+		expect(h.checking).toBe(true);
+		h.answered(second);
 		expect(h.checking).toBe(false);
 	});
 
-	it("a big message on its way when the page comes back holds the answer up, within BIG_BACK_MS", () => {
+	it("a big frame keeps its transfer allowance when the page comes back", () => {
 		const h = fresh();
 		h.heard(T0, 1_000_000); // 40 s at the slowest speed waited for
 		h.cameBack(T0 + 100);
-		expect(h.verdict(T0 + 100 + BACK_PROBE_MS + 1)).not.toBe("dead");
-		expect(h.verdict(T0 + 100 + BIG_BACK_MS - 1)).not.toBe("dead");
-		expect(h.verdict(T0 + 100 + BIG_BACK_MS + 1)).toBe("dead");
+		const allowance = 40_000 + DEAD_AFTER_MS;
+		expect(h.verdict(T0 + 100 + allowance)).not.toBe("dead");
+		expect(h.verdict(T0 + 100 + allowance + 1)).toBe("dead");
 	});
 
 	it("sockets dropped for unexplained silence make the next ones more patient, up to 8x", () => {
@@ -107,8 +112,8 @@ describe("ConnHealth", () => {
 			expect(h.patience).toBe(want);
 		}
 		h.heard(T0);
-		expect(h.verdict(T0 + 8 * QUIET_MS - 1)).toBe("ok");
-		expect(h.verdict(T0 + 8 * QUIET_MS + 1)).toBe("dead");
+		expect(h.verdict(T0 + 8 * DEAD_AFTER_MS)).not.toBe("dead");
+		expect(h.verdict(T0 + 8 * DEAD_AFTER_MS + 1)).toBe("dead");
 	});
 
 	it("every STEADY_MS of a socket working normally takes one step of patience back", () => {
@@ -137,8 +142,8 @@ describe("ConnHealth", () => {
 	});
 
 	it("a slow link can't loop: false drops double the wait until the link fits, and it stays", () => {
-		// A link so busy that the socket is quiet for 18 s at a time, for an hour.
-		const gap = 18_000;
+		// A link so busy that the socket is quiet for 75 s at a time, for an hour.
+		const gap = 75_000;
 		const h = new ConnHealth();
 		let now = T0;
 		h.opened(now);

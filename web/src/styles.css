@@ -18191,3 +18191,72 @@ button.source-default-toggle {
 		min-width: 44px;
 	}
 }
+
+/* W1-E: upstream 0.111.0 selection quote pill and follow-up chips. */
+.quote-selection-button {
+	position: fixed;
+	z-index: 1000;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-height: 34px;
+	padding: 6px 12px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	background: var(--bg-elev);
+	color: var(--text);
+	box-shadow: 0 3px 12px var(--sunken-bg, rgba(0, 0, 0, 0.18));
+	font: inherit;
+	font-size: 12px;
+	cursor: pointer;
+	user-select: none;
+}
+.quote-selection-button:hover,
+.action-suggestion-chip:hover {
+	background: var(--accent-soft);
+}
+.quote-selection-button:focus-visible,
+.action-suggestion-chip:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+.action-suggestions {
+	margin: 12px 0;
+}
+.action-suggestions-list {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.action-suggestion-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 36px;
+	max-width: 100%;
+	padding: 7px 12px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	background: var(--bg-elev);
+	color: var(--text);
+	font: inherit;
+	font-size: 13px;
+	text-align: start;
+	cursor: pointer;
+}
+.action-suggestion-label {
+	overflow-wrap: anywhere;
+}
+.action-suggestion-icon {
+	color: var(--text-faint);
+}
+.action-suggestion-chip:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+@media (pointer: coarse) {
+	.quote-selection-button,
+	.action-suggestion-chip {
+		min-height: 44px;
+	}
+}

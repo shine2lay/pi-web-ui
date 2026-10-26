@@ -39,6 +39,8 @@ function mount(opts: {
 				null,
 				createElement(ChatInput, {
 					streaming: false,
+					// These tests exercise an initialized session, not the async-init guard.
+					sessionId: "synthetic-initialized-session",
 					messages: [],
 					slashCommands: [],
 					modelState: null,

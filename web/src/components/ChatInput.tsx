@@ -860,6 +860,9 @@ export const ChatInput = memo(function ChatInput({
 	};
 
 	const connected = ready;
+	// Async Pi initialization can publish ready before it has a session. Keep drafts
+	// editable, but never send an unbound prompt (DSH does not have a Pi session id).
+	const sessionInitializing = connected && !isDsh && !sessionId;
 
 	// Re-open the picker when the command catalog arrives late — the user may
 	// have typed "/" before the server pushed slash_commands (cold start).
@@ -988,6 +991,10 @@ export const ChatInput = memo(function ChatInput({
 			onNotice("error", t("netDisconnected"));
 			return;
 		}
+		if (sessionInitializing) {
+			onNotice("warning", t("sessionInitializingNotice"));
+			return;
+		}
 		// Client-side slash commands (never sent to the server).
 		if (trimmed === "/help") {
 			// Match the modal width to the input box (the backdrop spans the full
@@ -1066,6 +1073,11 @@ export const ChatInput = memo(function ChatInput({
 		// 若只查 isComposing 会漏掉该 Enter，导致文字刚上屏就误发送（issue #248）。
 		// 检查 isComposing、keyCode 229 以及距离 compositionend < 50ms 的按键并拦截。
 		if (e.nativeEvent.isComposing || e.keyCode === 229 || Date.now() - compositionEndTimeRef.current < 50) {
+			return;
+		}
+		// A selection's Quote pill owns Enter, never the Send shortcut.
+		if (e.key === "Enter" && document.querySelector(".quote-selection-button")) {
+			e.preventDefault();
 			return;
 		}
 		// 统一浮层导航（`/` 与 `@` 同一个浮层，按 kind 换内容）：上下 + 回车/Tab
@@ -1243,6 +1255,7 @@ export const ChatInput = memo(function ChatInput({
 	// 空闲态的发送按钮和运行中的对半胶囊共用这一个条件。
 	const canSubmit =
 		connected &&
+		!sessionInitializing &&
 		(text.trim() !== "" || attachments.some((a) => a.imageData || a.fileData || a.mode === "conversation"));
 
 	// 插件输入框动作按 align 分组（未接线回落用；接线后统一走下面的 composerGroups）。
@@ -1622,15 +1635,17 @@ export const ChatInput = memo(function ChatInput({
 					value={text}
 					rows={1}
 					placeholder={
-						connected
-							? streaming
-								? isDsh
-									? t(IS_TOUCH ? "placeholderStreamingQueuedTouch" : "placeholderStreamingQueued")
-									: t(IS_TOUCH ? "placeholderStreamingTouch" : "placeholderStreaming")
-								: IS_TOUCH
-									? t("placeholderIdleTouch")
-									: t("placeholderIdle")
-							: t("placeholderConnecting")
+						sessionInitializing
+							? t("sessionInitializingNotice")
+							: connected
+								? streaming
+									? isDsh
+										? t(IS_TOUCH ? "placeholderStreamingQueuedTouch" : "placeholderStreamingQueued")
+										: t(IS_TOUCH ? "placeholderStreamingTouch" : "placeholderStreaming")
+									: IS_TOUCH
+										? t("placeholderIdleTouch")
+										: t("placeholderIdle")
+								: t("placeholderConnecting")
 					}
 					disabled={!connected}
 					onChange={(e) => {

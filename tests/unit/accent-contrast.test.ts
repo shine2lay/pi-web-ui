@@ -166,11 +166,11 @@ describe("accent-contrast: White's amber text", () => {
 });
 
 describe("accent-contrast: the other 24 palettes render as before", () => {
-	const designs = new Set(["white.css", "md-preview.css", "translucent.css", "transparent.css"]);
+	const designs = new Set(["white.css", "md-preview.css", "translucent.css", "transparent.css", "flow-light.css"]);
 	const others = THEMES.filter((f) => !designs.has(f));
 
-	it("there are 28 themes, 24 of them left as they were", () => {
-		expect(THEMES).toHaveLength(28);
+	it("there are 29 themes including flow-light, the original other 24 left as they were", () => {
+		expect(THEMES).toHaveLength(29);
 		expect(others).toHaveLength(24);
 	});
 
@@ -186,6 +186,17 @@ describe("accent-contrast: the other 24 palettes render as before", () => {
 			expect(value(v, "--amber-fg")).toBe(value(v, "--amber"));
 		});
 	}
+});
+
+describe("accent-contrast: flow-light's own tokens", () => {
+	const flow = theme("flow-light.css");
+	it("uses its monochrome accent, not inherited dark-theme violet, with readable text and fills", () => {
+		expect(value(flow, "--accent-text")).toBe("#111827");
+		for (const k of ["--bg", "--bg-elev", "--bg-elev2"])
+			expect(contrast(value(flow, "--accent-text"), value(flow, k)), k).toBeGreaterThanOrEqual(AA);
+		for (const k of ["--accent-fill", "--accent-fill-hover"])
+			expect(contrast("#ffffff", value(flow, k)), k).toBeGreaterThanOrEqual(AA);
+	});
 });
 
 describe("accent-contrast: the rules use the tokens", () => {

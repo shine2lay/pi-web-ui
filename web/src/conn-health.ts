@@ -1,39 +1,22 @@
 /**
- * mobile-fixes: telling a dead chat connection from a slow one, quickly.
- *
- * A phone's connection dies quietly: the screen goes off, the tab gets frozen, the phone moves between
- * Wi-Fi and mobile data. The socket then just says nothing, and the browser may take minutes to notice.
- * The chat used to freeze until a refresh (the old check waited 30 s of silence, then for the dead
- * socket to close, then up to 10 s more).
- *
- * The server says something every 2 s (heartbeat), so:
- * - a socket that stays quiet for QUIET_MS is dead;
- * - when the page comes back (visible again, unfrozen, back from the page cache) or the network returns
- *   or changes, the page asks the server ("ping" with a number); if the answer to THAT ping doesn't come
- *   within BACK_PROBE_MS, the socket is dead. (Other messages don't count then: after a freeze the
- *   browser hands over what it received before the connection died, which proves nothing.)
- * A dead socket is dropped on the spot and a new one opens at once (use-chat.ts).
- *
- * Slow links: one big message (a whole long chat) can take many seconds to come through, and nothing
- * else arrives meanwhile. The server announces every big message first (`frame_hint` with its size), and
- * the allowed silence grows with that size. And each socket dropped for a silence nothing explained makes
- * the next one more
- * patient (twice, up to 8×), and every STEADY_MS of a working socket takes one step back, so a
- * link that is only slow can never loop reconnecting. A socket that fails to answer after the page
- * came back doesn't count: that one was almost certainly dead.
+ * A quiet OPEN socket may mean a busy server, not a broken connection. Probe after 10 s,
+ * show a calm waiting note after another 2.5 s, and periodically re-ping without replacing
+ * it. Only 30 s without proof of life permits replacement. A real close still reconnects
+ * immediately. Waking a tab probes an OPEN socket immediately and retries any other state.
+ * Large-frame allowances and adaptive patience keep slow links from looping reconnects.
  */
 
-/** Silence that means the socket is dead (the server's heartbeat comes every 2 s). */
-export const QUIET_MS = 5_000;
-/** After coming back: the answer to the ping must arrive within this. */
-export const BACK_PROBE_MS = 2_500;
+/** Silence before the first probe (the server normally speaks every 2 s). */
+export const QUIET_MS = 10_000;
+/** Retry the same probe; do not restart its failure clock. */
+export const REPING_MS = 5_000;
+/** Minimum sustained failure before an OPEN socket may be replaced. */
+export const DEAD_AFTER_MS = 30_000;
 /** The slowest link still waited for when a big message is on its way, in characters (before the
  *  link's compression) per second: 25k chars/s is about 50 kbit/s on the wire for chat JSON. */
 export const MIN_CHARS_PER_SEC = 25_000;
-/** After coming back while a big message was on its way: wait at most this long for the answer. */
-export const BIG_BACK_MS = 15_000;
-/** Show the "Reconnecting…" note once the answer after coming back is this late. */
-export const NOTE_AFTER_MS = 1_000;
+/** Show the waiting note after this much probe time AND at least 12.5 s total silence. */
+export const NOTE_AFTER_MS = 2_500;
 /** Each stretch this long of a socket working normally takes back one step of extra patience (a socket
  *  that died was dead, not slow: the next one soon gets the usual patience again). */
 export const STEADY_MS = 15_000;
@@ -46,7 +29,7 @@ export type Verdict = "ok" | "doubt" | "dead";
 export class ConnHealth {
 	private heardAt = 0;
 	private big: { chars: number; since: number } | null = null;
-	private probe: { id: number; at: number } | null = null;
+	private probe: { id: number; at: number; sentAt: number; failureSince: number; wake: boolean } | null = null;
 	private nextProbeId = 1;
 	/** Sockets dropped for an unexplained silence, recently (each makes the next one more patient). */
 	private strikes = 0;
@@ -71,6 +54,9 @@ export class ConnHealth {
 	heard(now: number, hintChars?: number): void {
 		if (!this.big) this.worstGap = Math.max(this.worstGap, now - this.heardAt);
 		this.heardAt = now;
+		// Ordinary traffic proves a quiet probe alive. After wake, buffered traffic is not
+		// proof: only the answer to our fresh ping clears that probe.
+		if (!this.probe?.wake) this.probe = null;
 		this.big = hintChars && hintChars > 0 ? { chars: hintChars, since: now } : null;
 		if (this.strikes && now - this.calmSince > STEADY_MS) {
 			// One step back only when the link kept well within the smaller patience meanwhile (a link
@@ -86,18 +72,39 @@ export class ConnHealth {
 		if (this.probe && this.probe.id === id) this.probe = null;
 	}
 
-	/**
-	 * The page came back, the network changed, or the page's own timers were held up: the socket must
-	 * prove it is alive. Returns the number of the ping to send, or null when one is already waiting
-	 * (its clock restarts: time the page wasn't running doesn't count).
-	 */
-	cameBack(now: number): number | null {
-		if (this.probe) {
-			this.probe.at = now;
-			return null;
+	/** Wake probes go out now, but get the same 30 s failure window as quiet probes.
+	 * Actual page sleep starts a fresh probe: elapsed background time proves nothing.
+	 * Repeated network hints without sleep do not restart the failure clock. */
+	cameBack(now: number, resumed = false): number {
+		if (!this.probe || resumed) {
+			this.probe = { id: this.nextProbeId++, at: now, sentAt: now, failureSince: now, wake: true };
+		} else {
+			this.probe.sentAt = now;
+			this.probe.wake = true;
 		}
-		this.probe = { id: this.nextProbeId++, at: now };
 		return this.probe.id;
+	}
+
+	/** The watchdog calls this before verdict(): first ping after QUIET_MS, then periodic retries. */
+	pingDue(now: number): number | null {
+		if (!this.probe) {
+			if (now - this.heardAt < this.allowedQuietMs()) return null;
+			this.probe = {
+				id: this.nextProbeId++,
+				at: this.heardAt + this.allowedQuietMs(),
+				sentAt: now,
+				failureSince: this.heardAt,
+				wake: false,
+			};
+			return this.probe.id;
+		}
+		if (now - this.probe.sentAt < REPING_MS) return null;
+		this.probe.sentAt = now;
+		return this.probe.id;
+	}
+
+	get waking(): boolean {
+		return this.probe?.wake ?? false;
 	}
 
 	/** Is the socket being asked to prove it is alive? */
@@ -127,15 +134,13 @@ export class ConnHealth {
 	}
 
 	verdict(now: number): Verdict {
-		if (this.probe) {
-			const waited = now - this.probe.at;
-			// A big message announced before the answer holds the answer up until it is through.
-			const bigLeft = this.big ? this.heardAt + this.allowedQuietMs() - this.probe.at : 0;
-			const limit = Math.max(BACK_PROBE_MS * this.patience, Math.min(BIG_BACK_MS, bigLeft));
-			if (waited > limit) return "dead";
-			return waited > NOTE_AFTER_MS ? "doubt" : "ok";
-		}
-		return now - this.heardAt > this.allowedQuietMs() ? "dead" : "ok";
+		const failureSince = this.probe?.failureSince ?? this.heardAt;
+		const bigAllowance = this.big ? Math.ceil((this.big.chars / MIN_CHARS_PER_SEC) * 1000) : 0;
+		if (now - failureSince > DEAD_AFTER_MS * this.patience + bigAllowance) return "dead";
+		const probeAt = this.probe?.at ?? this.heardAt + this.allowedQuietMs();
+		// Both clocks matter: a wake during a short server freeze must not flash a banner.
+		const silenceSince = this.probe?.wake ? this.probe.failureSince : this.heardAt;
+		return now - probeAt > NOTE_AFTER_MS && now - silenceSince > QUIET_MS + NOTE_AFTER_MS ? "doubt" : "ok";
 	}
 }
 

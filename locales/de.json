@@ -234,6 +234,7 @@
 		"connected": "Verbunden",
 		"connecting": "Verbindung wird hergestellt…",
 		"reconnecting": "Verbindung wird wiederhergestellt…",
+		"sessionInitializingNotice": "Die Sitzung wird initialisiert, bitte warten…",
 		"connUpdating": "Wird aktualisiert\u2026",
 		"language": "Sprache",
 		"langZh": "Chinesisch",
