@@ -17,6 +17,10 @@ export const PENDING_OWNER_KEY = "pi-web-pending-owner-v1";
 export const PENDING_OWNER_ENVELOPE_PREFIX = "pi-web-pending-owner-envelope-v1:";
 export const PENDING_OWNER_LOCK_PREFIX = "pi-web-pending-owner-lock-v1:";
 const CARRIER = "pi-web-pending-work-v1";
+/** Private producer metadata, never a discriminator inside arbitrary prompt text. */
+const PROVENANCE = "__piWebPendingRecovery";
+const PROVENANCE_FORMAT = "pi-web-pending-work";
+type StoredPending = PendingSend & { [PROVENANCE]?: unknown };
 const EXPORT_FORMAT = "pi-web-pending-recovery-export";
 const LEGACY_IMPORTED_PREFIX = "pi-web-pending-legacy-imported-v1:";
 export type RecoveryWork =
@@ -169,7 +173,10 @@ function target(work: RecoveryWork) {
 function identityKey(value: Pick<PreparedIdentity, "kind" | "sessionId" | "id">): string {
 	return JSON.stringify([value.kind, value.sessionId, value.id]);
 }
-function carrier(work: RecoveryWork): PendingSend {
+function literal(pending: PendingSend): StoredPending {
+	return { ...pending, [PROVENANCE]: { format: PROVENANCE_FORMAT, version: 2, kind: "literal" } };
+}
+function carrier(work: RecoveryWork): StoredPending {
 	const p = target(work);
 	return {
 		...p,
@@ -180,28 +187,155 @@ function carrier(work: RecoveryWork): PendingSend {
 		status: "failed", // Prevent #578 from changing the captured original through needsCheck.
 		sameTextBefore: [],
 		queueBase: 0,
+		[PROVENANCE]: { format: PROVENANCE_FORMAT, version: 2, kind: "carrier" },
 	};
 }
-function decode(p: PendingSend): RecoveryWork {
-	let value: { format?: string; work?: RecoveryWork } | undefined;
-	try {
-		value = JSON.parse(p.text) as typeof value;
-	} catch {
-		/* Ordinary legacy prompt. */
-	}
-	if (value?.format !== CARRIER) return capture({ kind: "prompt", pending: p });
-	const work = capture(value.work!);
-	const expected = carrier(work);
-	if (
-		expected.id !== p.id ||
-		expected.sessionId !== p.sessionId ||
-		expected.conversationId !== p.conversationId ||
-		expected.createdAt !== p.createdAt ||
-		expected.queue !== p.queue ||
-		JSON.stringify(expected.attachments) !== JSON.stringify(p.attachments)
-	)
-		fail("corrupt", "Recovery carrier/identity/attachment mismatch; retain the raw source.");
-	return work;
+function storedIdentity(p: PendingSend): string {
+	return JSON.stringify([p.sessionId ? "session" : "conversation", p.sessionId || p.conversationId, p.id]);
+}
+/** #578's internal full-envelope mode preserves complete JSON. Retain both raw sources for
+ * provenance comparison; never infer new carriers from user text/IDs or bypass native precedence. */
+function createWorkStorage(options: {
+	ownerId: string;
+	backend: PendingRecoveryBackend;
+	storage: Pick<Storage, "getItem" | "setItem">;
+	verifyReference?: PendingRecoveryOptions["verifyReference"];
+	/** Only the actual, unowned session legacy ingress is known to contain literal prompts. */
+	legacySource?: string | null;
+}) {
+	let envelope: string | null = null;
+	let records: RecoveryRecord[] = [];
+	const store = createPendingSendStorage({
+		...options,
+		fullEnvelope: true,
+		storage: {
+			getItem(key) {
+				envelope = options.storage.getItem(key);
+				return envelope;
+			},
+			setItem: (key, value) => options.storage.setItem(key, value),
+		},
+		backend: {
+			async read(owner) {
+				records = await options.backend.read(owner);
+				return records;
+			},
+			write: (values) => options.backend.write(values),
+			release: (value) => options.backend.release(value),
+		},
+	});
+	const api = {
+		release: store.release,
+		async restore() {
+			envelope = null;
+			records = [];
+			const result = await store.restore();
+			const native = new Set<string>();
+			const legacy = new Map<string, StoredPending>();
+			// Decode only #578's validated full result, never a raw source-map substitute.
+			// Source keys only identify provenance comparisons; rejected/foreign native rows
+			// cannot replace a readable envelope candidate. #578 owns integrity/precedence.
+			for (const r of records) {
+				if (
+					r.state === "pending" &&
+					r.ownerId === options.ownerId &&
+					Array.isArray(r.key) &&
+					r.key.length === 4 &&
+					r.key[0] === options.ownerId
+				)
+					native.add(JSON.stringify(r.key.slice(1)));
+			}
+			try {
+				const raw: unknown = JSON.parse(envelope ?? "null");
+				if (Array.isArray(raw)) for (const p of raw) if (p && typeof p === "object") legacy.set(storedIdentity(p), p);
+			} catch {
+				/* Already reported by #578. */
+			}
+			return {
+				...result,
+				decode(p: PendingSend): { work: RecoveryWork; stored: PendingSend } {
+					const key = storedIdentity(p);
+					const full = native.has(key);
+					const old = legacy.get(key);
+					const raw: StoredPending = p;
+					if (
+						full &&
+						old &&
+						Object.hasOwn(old, PROVENANCE) &&
+						JSON.stringify(raw[PROVENANCE]) !== JSON.stringify(old[PROVENANCE])
+					)
+						fail("corrupt", "Recovery provenance differs between native and envelope sources; retain both.");
+					if (Object.hasOwn(raw, PROVENANCE)) {
+						const tag = raw[PROVENANCE] as { format?: unknown; version?: unknown; kind?: unknown } | null;
+						if (
+							!tag ||
+							typeof tag !== "object" ||
+							tag.format !== PROVENANCE_FORMAT ||
+							tag.version !== 2 ||
+							(tag.kind !== "literal" && tag.kind !== "carrier") ||
+							Object.keys(tag).length !== 3
+						)
+							fail("corrupt", "Unknown internal recovery provenance; retain the raw source for repair.");
+						if (tag.kind === "literal") {
+							const { [PROVENANCE]: _tag, ...pending } = raw;
+							return { work: capture({ kind: "prompt", pending }), stored: raw };
+						}
+						try {
+							const value = JSON.parse(raw.text) as { format?: string; work?: RecoveryWork };
+							if (value?.format !== CARRIER) throw new Error("Unknown carrier format");
+							const work = capture(value.work!);
+							const expected = carrier(work);
+							if (
+								Object.keys(raw).length !== Object.keys(expected).length ||
+								Object.keys(expected).some(
+									(k) =>
+										JSON.stringify(raw[k as keyof StoredPending]) !==
+										JSON.stringify(expected[k as keyof StoredPending]),
+								)
+							)
+								throw new Error("Carrier mismatch");
+							return { work, stored: raw };
+						} catch {
+							fail("corrupt", "Recovery carrier/identity/attachment mismatch; retain the raw source.");
+						}
+					}
+					const importedLiteral = !full && envelope === options.legacySource;
+					// Old #579 wrote no producer tag. Its exact storage skeleton is ambiguous, not
+					// evidence authorizing decode OR demotion. Actual legacy ingress remains opaque.
+					if (
+						!importedLiteral &&
+						/^(prompt|command):/.test(p.id) &&
+						p.status === "failed" &&
+						p.sameTextBefore.length === 0 &&
+						p.queueBase === 0
+					)
+						fail(
+							"compatibility",
+							"Untagged old recovery carrier is ambiguous; export raw sources and explicitly classify a copy before repair.",
+						);
+					return { work: capture({ kind: "prompt", pending: raw }), stored: importedLiteral ? literal(raw) : raw };
+				},
+			};
+		},
+	};
+	return {
+		...api,
+		async save(list: readonly PendingSend[]) {
+			const snapshot = capture(list);
+			const prior = await api.restore();
+			// Revalidate provenance before every write and resupply original complete records.
+			// #578's full-envelope mode retains these unchanged while merging new work.
+			const full = new Map(prior.pending.map((p) => [storedIdentity(p), prior.decode(p).stored]));
+			for (const p of snapshot) {
+				const key = storedIdentity(p);
+				const old = full.get(key);
+				if (old && JSON.stringify(old) !== JSON.stringify(p))
+					fail("conflict", "Stored recovery identity has different content/provenance; retain both sources.");
+				full.set(key, p);
+			}
+			await store.save([...full.values()]);
+		},
+	};
 }
 function storageValue<T>(supplied: T | null | undefined, getDefault: () => T): T {
 	const value = supplied === undefined ? getDefault() : supplied;
@@ -351,7 +485,7 @@ export async function readPendingRecoveryArtifact(
 		write: async () => fail("invalid", "Read only"),
 		release: async () => fail("invalid", "Read only"),
 	};
-	const result = await createPendingSendStorage({
+	const result = await createWorkStorage({
 		ownerId: value.ownerId,
 		backend,
 		verifyReference: frozenReferenceVerifier(verifyReference),
@@ -368,7 +502,7 @@ export async function readPendingRecoveryArtifact(
 	const identities = new Set<string>();
 	for (const p of [...result.pending, ...result.blocked]) {
 		try {
-			const w = decode(p);
+			const { work: w } = result.decode(p);
 			const identity = identityKey({ kind: w.kind, ...target(w) });
 			if (identities.has(identity)) fail("conflict", "Artifact contains duplicate original work identities.");
 			identities.add(identity);
@@ -388,7 +522,7 @@ export function createPendingRecoveryCoordinator(options: RecoveryCoordinatorOpt
 	let lease: RecoveryLease | null = null;
 	let issues: RecoveryProblem[] = [];
 	let entries = new Map<string, RecoveryEntry & { stored: PendingSend }>();
-	let store: ReturnType<typeof createPendingSendStorage> | undefined;
+	let store: ReturnType<typeof createWorkStorage> | undefined;
 	let tail: Promise<unknown> = Promise.resolve();
 	let closing = false;
 	let starting: Promise<RecoverySnapshot> | undefined;
@@ -436,7 +570,7 @@ export function createPendingRecoveryCoordinator(options: RecoveryCoordinatorOpt
 		const next = new Map<string, RecoveryEntry & { stored: PendingSend }>();
 		for (const p of [...result.pending, ...result.blocked]) {
 			try {
-				const work = decode(p);
+				const { work, stored } = result.decode(p);
 				const item = await prepared(work);
 				const key = identityKey(item);
 				if (next.has(key)) fail("conflict", "Duplicate original work identity; retain all raw sources.");
@@ -454,7 +588,7 @@ export function createPendingRecoveryCoordinator(options: RecoveryCoordinatorOpt
 				next.set(key, {
 					prepared: item,
 					lifecycle: "unresolved",
-					stored: p,
+					stored,
 					complete: !result.blocked.includes(p) && entryIssues.length === 0,
 					issues: entryIssues,
 				});
@@ -508,9 +642,10 @@ export function createPendingRecoveryCoordinator(options: RecoveryCoordinatorOpt
 					// Persist before payload commit so reload reuses it; clones need the same exclusive lock.
 					if (prior !== ownerId) tab.setItem(PENDING_OWNER_KEY, ownerId);
 					if (current === null && legacy !== null) envelopes.setItem(name, legacy);
-					store = createPendingSendStorage({
+					store = createWorkStorage({
 						ownerId,
 						backend,
+						legacySource: legacyRecognized ? null : legacy,
 						verifyReference: frozenReferenceVerifier(options.verifyReference),
 						storage: {
 							getItem: () => envelopes.getItem(name),
@@ -520,7 +655,7 @@ export function createPendingRecoveryCoordinator(options: RecoveryCoordinatorOpt
 					await restoreInternal();
 					if (state === "ready" && legacy !== null && !legacyRecognized) {
 						// Only an unimported legacy source needs a startup commit. Ordinary restore is read-only.
-						await store.save([]);
+						await store.save([...entries.values()].map((entry) => entry.stored));
 						envelopes.setItem(`${LEGACY_IMPORTED_PREFIX}${ownerId}`, await sha(legacy));
 						await restoreInternal();
 					}
@@ -662,7 +797,7 @@ export function createPendingRecoveryCoordinator(options: RecoveryCoordinatorOpt
 					fail("incomplete", "Artifact contains unresolved/corrupt sources; retain it without overwriting local data.");
 				if (read.artifact.ownerId !== ownerId)
 					fail("identity", "Artifact belongs to another owner; explicitly recover that owner in an empty tab.");
-				const pending = await createPendingSendStorage({
+				const pending = await createWorkStorage({
 					ownerId: ownerId!,
 					backend: { read: async () => [...read.artifact.records], write: async () => {}, release: async () => {} },
 					verifyReference: frozenReferenceVerifier(options.verifyReference),
@@ -686,7 +821,7 @@ export function createPendingRecoveryCoordinator(options: RecoveryCoordinatorOpt
 						fail("conflict", "Artifact work conflicts with local original identity.");
 				}
 				try {
-					await store!.save(pending.pending);
+					await store!.save(pending.pending.map((p) => pending.decode(p).stored));
 				} catch (error) {
 					if (committed(error)) {
 						state = "incomplete";

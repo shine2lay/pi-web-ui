@@ -34,6 +34,80 @@ or failure enables prepare/release/import. Result: HIT in targeted unit plus nat
 ongoing write-only failure allows reload/read/export with zero native writes; source conflict
 exports both full raw sources while prepare and explicit release remain refused.
 
+## Review repair hypothesis (Ops #581, before implementation)
+
+H-RECOVERY-CARRIER-1: unchanged `48cec10e20ecc3870f0e2422fb990160c00e215d`
+selects internal decoding from `JSON.parse(p.text).format`. A valid legacy prompt whose
+literal text is `{"format":"pi-web-pending-work-v1"}` therefore reaches
+`capture(undefined)` and disappears from usable owner/artifact recovery. A matching nested
+object can instead substitute other work. Full raw retention alone is not successful recovery.
+
+Change: a producer-owned, top-level provenance field separates internal carriers from literal
+prompts; new-format decoding never dispatches from arbitrary prompt text or an ID prefix.
+Read private provenance from the actual #578 native/envelope sources because its legacy
+normalizer drops unknown fields. Mark only known session-legacy ingress as literal during its
+existing startup commit. Quarantine ambiguous untagged old internal-shaped sources; retain
+all raw bytes and require explicit classification of a copy, never guessed migration/deletion.
+
+Expected: exact original prompt text/ID/session/metadata/attachment bytes through owner
+restore, native reload, standalone export/read/import; genuine new prompt/command carriers
+still round-trip; corrupt/unknown internal sources remain incomplete and unchanged. Wrong if
+any valid legacy vector vanishes/substitutes nested work, tagged corruption becomes a plain
+prompt, ambiguity is silently converted, or ownership/release/storage limits change. The
+same public-API vectors run against the frozen source, with genuine-carrier and ordinary-text
+controls, so a missing import/export is not accepted as a baseline red. Final result: HIT at
+the module boundary after the R2–R4 refinements; original incomplete designs are recorded below.
+
+H-RECOVERY-CARRIER-1-R2 (independent source review, before tests): the first repair missed
+subsequent writes after envelope-only recovery. #578 merges normalized old records when
+prepare/import supplies only new work, stripping private provenance from the others. Change:
+reconstruct and supply all existing full stored records on every coordinator save, retaining
+#578 conflict/transaction/envelope checks. Expected: literal and genuine-carrier provenance
+and exact work survive both subsequent prepare and artifact import after envelope-only
+restore, then native reload/export. Wrong if any old field/tag changes or work becomes
+incomplete. Typecheck also caught `PendingSend` inference at the private-field reader; type
+that source as the private `StoredPending` shape, without changing public/store contracts.
+Result: MISS as a complete fix; R3 identified the preserved empty-array/body-identity conflict.
+
+H-RECOVERY-CARRIER-1-R3 (second independent source review; before store changes):
+full-record merging alone cannot preserve an envelope-only carrier with `attachments: []`.
+#578's legacy parser drops that field, but #578's strict body identity distinguishes `[]`
+from absence; resubmitting the complete original then conflicts. This is a source-traced
+blocker, not a passing test. Scope question: may #581 also own
+`web/src/pending-send-storage.ts` and `tests/unit/pending-send-storage.test.ts`?
+Actual answer: Ops lead's native #581 decision admits exactly those two files under the
+original reserved extension, keeping this repair together rather than creating a prerequisite.
+This is Ops' technical decision, not new owner consent. Implement an internal opt-in
+`fullEnvelope` mode, default OFF; only the coordinator enables it. Other callers keep today's
+legacy parser. Full arrays use the same complete-record validation as native payloads. Keep integrity,
+identity, attachment, transaction and conflict validation unchanged. Expected: full original
+fields/private provenance survive envelope-only restore and both subsequent write paths,
+without synthesizing native records, altering originals or weakening body equality. Wrong if
+the default parser changes, malformed full records become accepted, conflict detection is
+relaxed, or source metadata/bytes change. Preserve native corruption/release precedence;
+malformed/mixed/duplicate full sources stay visibly incomplete and byte-retained. No backend
+fabrication/write interception, other files, migration or deployment. Result: full-envelope
+preservation HIT in final fixed-input tests; R4 separately repairs unsafe merge/source selection.
+Normal landing proof belongs to the actual receipt, not a predicted result.
+
+H-RECOVERY-CARRIER-1-R4 (final independent source review, before repair): two more source-traced
+findings falsify the first repair's full preservation claim despite 109 focused/native checks
+passing. A literal prompt and its nested command may share a stored key and the same #578
+body; unconditional full-map replacement can then change literal provenance into a carrier.
+Also an owner/key-rejected native row can be indexed without its owner component and replace
+readable envelope bytes in the wrapper. Change: reject unequal complete stored records at the
+same key before either prepare/import writes, and decode only #578's validated returned
+payloads, never raw-map substitutes. Internal full mode returns exact complete metadata
+without adding the UI parser's `needsCheck` retry hint; default callers keep that hint. Raw
+native keys only establish same-owner source identity/provenance disagreement checks.
+Expected: both collision writes refuse without changing source bytes/work, foreign/malformed
+native keys cannot replace readable text in owner/composer/artifact reads, and full sending
+metadata remains exact. Wrong if any new checks merely hide lost work, any original changes,
+corrupt/released native sources fall back, or default callers change. Result: HIT in final
+113 focused checks and 25 isolated native coordinator groups, plus unchanged #578 native
+controls. The two stored-key collision operations retain identical before/after artifacts;
+foreign-key native bytes cannot replace readable work. Earlier green runs were not acceptance.
+
 ## Caller contract (published to #570/c108 before caller implementation)
 
 - `createPendingRecoveryCoordinator(options?).start({ recoverOwnerId? }?)` acquires a
@@ -108,6 +182,79 @@ opaque command body is `work.payload`. Keep exact attachment fields/bytes, origi
 `sessionId`, request ID and queue semantics. Unknown/read-only WS probes need not become
 recovery operations: #570 owns command policy and original ID creation, not this module.
 
+### Producer provenance and old-format compatibility (#581)
+
+Public methods, `RecoveryWork`, prepared identity/digest, artifact header/version, owner keys,
+Web Locks, native DB version, #578 body identity, memory/size safeguards and release authority
+are unchanged. The private carrier JSON body still uses `pi-web-pending-work-v1`. Its **outer
+stored PendingSend**, not its `text`, now has:
+
+```json
+{ "__piWebPendingRecovery": { "format": "pi-web-pending-work", "version": 2, "kind": "carrier" } }
+```
+
+Known session-legacy prompts get the same field with `kind:"literal"` during the existing
+startup import. This is private record provenance, not a reserved user-text string: legacy
+text may be any JSON, including a perfect nested carrier-looking object and matching
+`command:`/`prompt:` IDs/bookkeeping. That exact user text remains literal. Literal provenance
+is removed from returned `work.pending`; it stays in native storage and owner envelopes.
+The native payload's existing full-JSON digest covers this field. It is not a signature, a
+server receipt, or defense against arbitrary same-origin code fabricating complete records.
+The only #578 contract addition is internal `PendingRecoveryOptions.fullEnvelope?: boolean`,
+default OFF, enabled only by this coordinator/its independent reader. Complete envelope-array
+records use unchanged native payload validation instead of `parsePending`: retain all producer
+fields and absent/empty/nonempty attachments, detect duplicate identities as incomplete, and
+never normalize malformed/mixed sources into apparent completeness. Other callers keep the
+legacy parser/defaults/confirmed filtering. Full-mode sources lacking required complete-record
+metadata remain incomplete/raw-exportable; do not guess missing metadata. DB/schema/keys,
+limits, body equality, digest/reference/transaction rules and native corruption/release
+precedence are unchanged.
+
+Only valid `version:2,kind:"carrier"` provenance selects JSON carrier decoding. Every outer
+carrier field must match the reconstructed original, including attachments/bookkeeping and
+the producer tag; bad bodies/metadata, unknown versions/kinds/formats and disagreements
+between native/envelope provenance report `corrupt`, never plain prompts. Native integrity
+failure never falls back to an envelope. The coordinator/independent artifact reader decode
+only #578's validated full results, never raw-source map substitutes. Import saves complete
+stored records. #578's default legacy parser is unchanged and need not learn this private
+format; only internal full-envelope mode avoids normalization and UI-only retry hints.
+Complete source-aware resupply prevents a subsequent prepare/import from stripping older
+producer data. A stored identity already containing unequal full JSON content/provenance
+refuses either operation before writing, even if #578's narrower body digest would match.
+
+Compatibility is explicit and non-destructive:
+
+- An actual unrecognized session-legacy source (including an exactly copied owner envelope
+  after interrupted setup) with no native record is known ordinary prompt ingress. Startup
+  commits literal-tagged records before ready, retains original session bytes, and records
+  the existing import hash. Subsequent restore is read-only. Different unrecognized sources
+  still conflict; a native record always takes precedence over such a legacy inference.
+- Untagged old native/envelope records outside the old storage skeleton remain ordinary
+  prompts. Untagged `prompt:`/`command:` IDs with `status:"failed"`, empty `sameTextBefore`
+  and `queueBase:0` could instead be #579 internal carriers. Without known literal ingress
+  they are **ambiguous regardless of text**: report `compatibility`, expose incomplete,
+  refuse prepare/import, and preserve full raw record/envelope export. There is deliberately
+  no nested-body sniffing or guessed plain-prompt conversion. An ordinary old prompt that
+  has that exact ambiguous shape also needs explicit classification; its text/ID alone
+  cannot prove who produced the record. New literal provenance eliminates that ambiguity.
+- A bounded recovery path uses a retained original raw artifact plus a **separate copy**.
+  After the operator explicitly classifies each ambiguous record from its actual producer
+  history, add the literal or carrier provenance to the copy's outer record and matching
+  array-envelope entry. Do not alter nested/user work or IDs. Carrier classification must
+  satisfy the full reconstructed-carrier validation; literal classification keeps original
+  text/metadata/bytes. Recompute each changed record's full-payload SHA-256 digest and the
+  outer artifact checksum (remove checksum, SHA-256 the JSON body). #578 `contentDigest`
+  does not change when only the private field is added. Run `readPendingRecoveryArtifact`
+  and require complete/exact equality before any explicit same-owner import in a separate
+  empty recovery environment. Keep originals until recovery is independently verified.
+  Classification is never automatic, original records are never edited/deleted, and this
+  document does not authorize an unreviewed migration of actual browser data. With no
+  producer evidence, retain/export the incomplete source and request that one decision.
+
+#570 must build the rollback reader from the repaired pin before enabling producers; the
+older #579 reader does not understand the new provenance. It is not a safe fallback for
+these records. This compatibility change is not a deployment or integrated losslessness proof.
+
 Public lifecycle operations:
 
 - `snapshot(): RecoverySnapshot` returns frozen state/owner/entries/issues. Each entry has
@@ -149,7 +296,7 @@ send. New entry is `prepared` only after both payload and envelope commit; every
 entry is `unresolved`. Return is not discard. Failed setup retains an already acquired
 lease for raw export only; prepare, release/discard and import are refused. A collision has
 no lease. Close the failed coordinator before a fresh setup attempt; never delete sources. Error codes include `invalid`,
-`identity`, `ownership`, `conflict`, `incomplete`, `corrupt`, `unavailable` and #578's
+`identity`, `ownership`, `conflict`, `incomplete`, `corrupt`, `compatibility`, `unavailable` and #578's
 `quota`, `payload`, `reference`, `released`, `envelope`. Exceptions in export/import are
 failures too: retain source artifacts and inspect `payloadCommitted`; do not clear/replay.
 
@@ -256,7 +403,16 @@ failure or a claim #578 itself promised coordination. Controls demonstrate unkno
 retention and legitimate independent owners. The normal coordinator cases assert collision
 refusal and volatile-copy retention. Neither establishes #570's integrated production result.
 
+The #581 frozen-source mode is separate: set `PENDING_CARRIER_SOURCE` to the unchanged
+`48cec10e` coordinator in an isolated checkout, then run only
+`-t 'carrier recognition public API'`. The APIs already exist at that pin. For the isolated
+native collision vectors, also set `PENDING_CARRIER_ONLY=1`; it bundles that exact source,
+not the repaired module, and fails on actual owner recovery rather than an unavailable API.
+Without these variables the normal suites check repaired code and all existing protections.
+
 ## Recorded module results
+
+### Prior #579 proof (historical)
 
 - 96 focused unit checks passed: 33 coordinator, 19 unchanged #578 store and 44 unchanged
   pending-send contracts. Baseline mode intentionally produced exactly two behavioral red
@@ -273,6 +429,36 @@ refusal and volatile-copy retention. Neither establishes #570's integrated produ
   An early parser typo was fixed before execution. The native failure-reload oracle was
   corrected to #578's original `createdAt` ordering (42 before 43), not insertion order;
   original byte/ID assertions were retained. No gate, protection, existing tests or limits changed.
+
+### #581 repair proof
+
+- Frozen clean source `48cec10e20ecc3870f0e2422fb990160c00e215d`: the existing public
+  owner/artifact APIs produce **10 behavioral assertion failures and three passing controls**
+  in the carrier-recognition subset (66 unrelated tests excluded, not passed). Marker-only,
+  malformed nested and valid nested-looking literal text become incomplete/missing, rather
+  than exact usable work. The isolated native marker-only vector likewise fails on
+  `incomplete` versus required `ready`; it loads/bundles the unchanged API successfully.
+- Final repaired code: **113 focused checks pass** (79 coordinator, 34 storage). Exact
+  legacy literals, ID-prefix collisions, metadata and attachments survive restore/composer,
+  export/read/import and reload. Genuine prompt/opaque-command, corrupt/unknown provenance,
+  native corruption/release precedence, default parser, incomplete/mixed/duplicate source,
+  absent/empty/nonempty attachments, same-key/different-full-content and source-substitution
+  controls pass. The latter collisions assert equal underlying #578 body digests before
+  refusal, no backend write and exact before/after artifact equality.
+- **25 isolated native coordinator groups pass**, including every collision vector, complete
+  envelope-only literal+carrier recovery followed by both prepare and import then reload,
+  raw unknown/ambiguous export, same-stored-key refusal on both write paths, independent
+  reader with the app module unavailable, ownership and commit/failure/lifecycle controls.
+  All **eight unchanged #578 native groups pass** too. No real browser profile/chats/IDB used.
+- Final build, full package typecheck, lint (zero errors; existing warnings) and full package
+  format check pass. Independent read-only six-file review: **no issues found; source merge
+  OK**, with parent responsible for final test/landing results. Findings R2–R4 were fixed,
+  not hidden by accepting raw retention as recovery or by weakening existing checks.
+- Exactly six admitted files change: the original four coordinator source/unit/native/doc
+  files plus `web/src/pending-send-storage.ts` and `tests/unit/pending-send-storage.test.ts`
+  admitted by Ops' native scope decision. The unchanged normal sealed gate runs through
+  ordinary detached `wt land`; its actual result/immutable pin are in that receipt. No
+  production migration, deployment, caller workaround or integrated no-data-loss claim.
 
 ## Boundaries
 

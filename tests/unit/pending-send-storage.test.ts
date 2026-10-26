@@ -95,7 +95,7 @@ class MemoryBackend implements PendingRecoveryBackend {
 		this.records.set(key(record), structuredClone(record));
 	}
 }
-function fixture(ownerId = "tab-a", backend = new MemoryBackend()) {
+function fixture(ownerId = "tab-a", backend = new MemoryBackend(), fullEnvelope = false) {
 	const values = new Map<string, string>();
 	const storage = {
 		getItem: (name: string) => values.get(name) ?? null,
@@ -103,7 +103,7 @@ function fixture(ownerId = "tab-a", backend = new MemoryBackend()) {
 			values.set(name, value);
 		},
 	};
-	return { values, storage, backend, api: createPendingSendStorage({ ownerId, storage, backend }) };
+	return { values, storage, backend, api: createPendingSendStorage({ ownerId, storage, backend, fullEnvelope }) };
 }
 
 describe("exact-content (baseline counterfactual uses unchanged legacy serializer)", () => {
@@ -135,6 +135,123 @@ describe("exact-content (baseline counterfactual uses unchanged legacy serialize
 			} else expect(JSON.parse(raw)).toEqual([p]);
 		});
 	}
+});
+
+describe("internal full-envelope opt-in: exact public-boundary preservation", () => {
+	for (const mode of ["absent", "empty", "nonempty"]) {
+		it(`${mode} attachments and producer data survive envelope-only restore, save and native reload`, async () => {
+			const f = fixture("tab-a", new MemoryBackend(), true);
+			const p = {
+				...pending({ status: "failed" }),
+				__piWebPendingRecovery: { format: "pi-web-pending-work", version: 2, kind: "literal" },
+				producerMetadata: { unknown: [0, false, "原始\r\n"] },
+				...(mode === "absent" ? {} : { attachments: mode === "empty" ? [] : multi.attachments }),
+			};
+			const source = JSON.stringify([p]);
+			f.values.set(PENDING_STORAGE_KEY, source);
+			expect(await f.api.restore()).toEqual({ pending: [p], blocked: [], issues: [], complete: true });
+			expect(f.values.get(PENDING_STORAGE_KEY)).toBe(source);
+			expect(f.backend.records.size).toBe(0);
+			const extra = pending({ id: "additional", status: "failed", createdAt: p.createdAt + 1 });
+			await f.api.save([extra]);
+			const record = [...f.backend.records.values()].find((r) => r.key[3] === p.id);
+			expect(record).toMatchObject({ state: "pending", payload: JSON.stringify(p) });
+			const next = createPendingSendStorage({
+				ownerId: "tab-a",
+				backend: f.backend,
+				storage: f.storage,
+				fullEnvelope: true,
+			});
+			expect(await next.restore()).toEqual({ pending: [p, extra], blocked: [], issues: [], complete: true });
+		});
+	}
+	it("full mode returns exact sending metadata before and after native commit, without UI-only hints", async () => {
+		const f = fixture("tab-a", new MemoryBackend(), true);
+		const p = { ...pending(), producerMetadata: { retained: true } };
+		f.values.set(PENDING_STORAGE_KEY, JSON.stringify([p]));
+		expect((await f.api.restore()).pending).toEqual([p]);
+		await f.api.save([]);
+		expect((await f.api.restore()).pending).toEqual([p]);
+		expect([...f.backend.records.values()][0]).toMatchObject({ payload: JSON.stringify(p) });
+	});
+	it("default OFF retains the old parser, including minimal records, confirmed filtering and empty attachments", async () => {
+		const f = fixture();
+		const raw = JSON.stringify([
+			{ id: "minimal", conversationId: "c-old", sessionId: "s-old", text: "old" },
+			{ ...pending({ status: "failed", attachments: [] }), producerMetadata: "not a known UI field" },
+			pending({ id: "confirmed", confirmedRev: 7 }),
+		]);
+		f.values.set(PENDING_STORAGE_KEY, raw);
+		expect(await f.api.restore()).toEqual({ pending: parsePending(raw), blocked: [], issues: [], complete: true });
+		expect(f.values.get(PENDING_STORAGE_KEY)).toBe(raw);
+		expect(f.backend.records.size).toBe(0);
+	});
+	it("same identity with different content refuses before replacing an envelope-only source", async () => {
+		const f = fixture("tab-a", new MemoryBackend(), true);
+		const p = pending({ status: "failed", attachments: [] });
+		const source = JSON.stringify([p]);
+		f.values.set(PENDING_STORAGE_KEY, source);
+		await expect(f.api.save([{ ...p, text: "different" }])).rejects.toMatchObject({ code: "conflict" });
+		expect(f.values.get(PENDING_STORAGE_KEY)).toBe(source);
+		expect(f.backend.records.size).toBe(0);
+		expect((await f.api.restore()).pending).toEqual([p]);
+	});
+	for (const [name, list] of [
+		["null", [null]],
+		["minimal is not a complete payload", [{ id: "minimal", conversationId: "c", text: "old" }]],
+		["mixed invalid identity", [pending(), { id: "bad" }]],
+		["invalid attachment", [{ ...pending(), attachments: [{ path: "", fileData: 7 }] }]],
+		["duplicate identity different body", [pending(), pending({ text: "other" })]],
+		["duplicate identical records", [pending(), pending()]],
+	] as const) {
+		it(`${name} is visibly incomplete, cannot be saved over, and retains every raw source`, async () => {
+			const f = fixture("tab-a", new MemoryBackend(), true);
+			const source = JSON.stringify(list);
+			f.values.set(PENDING_STORAGE_KEY, source);
+			const restored = await f.api.restore();
+			expect(restored.complete).toBe(false);
+			expect(restored.issues.length).toBeGreaterThan(0);
+			await expect(f.api.save([pending({ id: "new" })])).rejects.toBeInstanceOf(PendingSendStorageError);
+			expect(f.values.get(PENDING_STORAGE_KEY)).toBe(source);
+			expect(f.backend.records.size).toBe(0);
+		});
+	}
+	for (const state of ["corrupt", "released"]) {
+		it(`native ${state} record never falls back to its full-envelope copy`, async () => {
+			const f = fixture("tab-a", new MemoryBackend(), true);
+			const p = pending({ status: "failed", attachments: [] });
+			await f.api.save([p]);
+			const source = f.values.get(PENDING_STORAGE_KEY);
+			if (state === "released") await f.api.release(p, "acknowledged");
+			else {
+				const record = [...f.backend.records.values()][0];
+				if (record.state !== "pending") throw Error("fixture");
+				record.payload = JSON.stringify({ ...p, text: "damaged" });
+			}
+			const before = structuredClone([...f.backend.records]);
+			expect(await f.api.restore()).toMatchObject({ pending: [], complete: state === "released" });
+			await expect(f.api.save([state === "released" ? p : pending({ id: "new" })])).rejects.toMatchObject({
+				code: state,
+			});
+			expect([...f.backend.records]).toEqual(before);
+			expect(f.values.get(PENDING_STORAGE_KEY)).toBe(source);
+		});
+	}
+	it("full mode still blocks unverified attachment references without changing their bytes", async () => {
+		const f = fixture("tab-a", new MemoryBackend(), true);
+		const p = pending({ status: "failed", attachments: [{ path: "blob:expired", name: "not-inline.png" }] });
+		const source = JSON.stringify([p]);
+		f.values.set(PENDING_STORAGE_KEY, source);
+		expect(await f.api.restore()).toMatchObject({
+			pending: [],
+			blocked: [p],
+			complete: false,
+			issues: [{ code: "reference" }],
+		});
+		await expect(f.api.save([])).rejects.toMatchObject({ code: "reference" });
+		expect(f.values.get(PENDING_STORAGE_KEY)).toBe(source);
+		expect(f.backend.records.size).toBe(0);
+	});
 });
 
 describe("complete recovery, explicit failures and ownership", () => {

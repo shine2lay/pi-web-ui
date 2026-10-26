@@ -12,13 +12,21 @@ assert.ok(CHROME_PATH, "BLOCKED: configure isolated test Chromium (PI_WEB_CHROME
 const root = fileURLToPath(new URL("..", import.meta.url));
 const bundle = await build({
 	absWorkingDir: root,
-	entryPoints: ["web/src/pending-recovery-coordinator.ts"],
+	entryPoints: [process.env.PENDING_CARRIER_SOURCE || "web/src/pending-recovery-coordinator.ts"],
 	bundle: true,
 	format: "esm",
 	platform: "browser",
 	write: false,
 });
 const source = bundle.outputFiles[0].text;
+const storageBundle = await build({
+	absWorkingDir: root,
+	entryPoints: ["web/src/pending-send-storage.ts"],
+	bundle: true,
+	format: "esm",
+	platform: "browser",
+	write: false,
+});
 let reader = "";
 let appAvailable = true;
 const fixtureBytes = Buffer.from([0, 255, 1, 2, 3]);
@@ -26,6 +34,9 @@ const server = createServer((req, res) => {
 	if (req.url === "/coordinator.js") {
 		res.writeHead(appAvailable ? 200 : 410, { "content-type": "text/javascript" });
 		res.end(appAvailable ? source : "removed app bundle");
+	} else if (req.url === "/storage.js") {
+		res.writeHead(200, { "content-type": "text/javascript" });
+		res.end(storageBundle.outputFiles[0].text);
 	} else if (req.url === "/reader.html") {
 		res.writeHead(200, { "content-type": "text/html", "cache-control": "no-store" });
 		res.end(reader);
@@ -35,7 +46,7 @@ const server = createServer((req, res) => {
 	} else {
 		res.writeHead(200, { "content-type": "text/html", "cache-control": "no-store" });
 		res.end(
-			'<!doctype html><title>Synthetic coordinator fixture</title><script type="module">import * as recovery from "/coordinator.js"; window.recovery = recovery;</script>',
+			'<!doctype html><title>Synthetic coordinator fixture</title><script type="module">import * as recovery from "/coordinator.js"; import * as storage from "/storage.js"; window.recovery = recovery; window.recoveryStorage = storage;</script>',
 		);
 	}
 });
@@ -72,15 +83,18 @@ const command = (id = "opaque-original") => ({
 	payload: '{ "type":"prompt", "text":"/opaque \\u4e00", "arbitrary":[0,false] }\r\n',
 });
 let browser;
+async function init(page, owner) {
+	await page.waitForFunction(() => !!window.recovery);
+	return page.evaluate(async (owner) => {
+		window.api = window.recovery.createPendingRecoveryCoordinator({ newOwnerId: () => owner });
+		return window.api.start();
+	}, owner);
+}
 async function pageFor(context, owner) {
 	const page = await context.newPage();
 	page.on("pageerror", (e) => errors.push(e.message));
 	await page.goto(origin);
-	await page.waitForFunction(() => !!window.recovery);
-	const state = await page.evaluate(async (owner) => {
-		window.api = window.recovery.createPendingRecoveryCoordinator({ newOwnerId: () => owner });
-		return window.api.start();
-	}, owner);
+	const state = await init(page, owner);
 	assert.equal(state.state, "ready", `fresh owner ${owner} starts ready`);
 	return page;
 }
@@ -94,8 +108,316 @@ const reload = async (page) => {
 		return window.api.start();
 	});
 };
-try {
-	browser = await chromium.launch({ executablePath: CHROME_PATH, headless: true, args: ["--no-sandbox"] });
+async function literalCollisions() {
+	const nested = command("literal-nested");
+	nested.attachments = prompt().pending.attachments;
+	const skeleton = {
+		...prompt("command:literal-nested").pending,
+		text: JSON.stringify({ format: "pi-web-pending-work-v1", work: nested }),
+		createdAt: nested.createdAt,
+		queue: false,
+		sameTextBefore: [],
+		queueBase: 0,
+	};
+	const vectors = [
+		["legacy marker-only", { ...prompt("prompt:literal-marker").pending, text: '{"format":"pi-web-pending-work-v1"}' }],
+		[
+			"legacy malformed nested",
+			{ ...prompt().pending, text: '{"format":"pi-web-pending-work-v1","work":{"kind":"command","payload":false}}' },
+		],
+		[
+			"legacy valid nested remains literal",
+			{ ...prompt().pending, text: JSON.stringify({ format: "pi-web-pending-work-v1", work: command() }) },
+		],
+		["legacy exact old carrier skeleton", skeleton],
+		["legacy plain prefix collision", { ...prompt("command:ordinary").pending, sameTextBefore: [], queueBase: 0 }],
+		[
+			"native #578 marker-only",
+			{ ...prompt("prompt:native-marker").pending, text: '{"format":"pi-web-pending-work-v1"}' },
+		],
+	];
+	for (const [index, [name, pending]] of vectors.entries()) {
+		pending.status = "failed";
+		const expected = { kind: "prompt", pending };
+		const ownerId = `literal-owner-${index}`;
+		const context = await browser.newContext();
+		try {
+			const page = await context.newPage();
+			page.on("pageerror", (e) => errors.push(e.message));
+			await page.goto(origin);
+			await page.waitForFunction(() => !!window.recovery && !!window.recoveryStorage);
+			reader = await page.evaluate((source) => window.recovery.createPendingRecoveryReaderHtml(source), source);
+			const initial = await page.evaluate(
+				async ({ pending, ownerId, native }) => {
+					if (native)
+						await window.recoveryStorage
+							.createPendingSendStorage({
+								ownerId,
+								storage: {
+									getItem: () => localStorage.getItem(`${window.recovery.PENDING_OWNER_ENVELOPE_PREFIX}${ownerId}`),
+									setItem: (_, raw) =>
+										localStorage.setItem(`${window.recovery.PENDING_OWNER_ENVELOPE_PREFIX}${ownerId}`, raw),
+								},
+							})
+							.save([pending]);
+					else sessionStorage.setItem("pi-web-pending-sends", JSON.stringify([pending]));
+					window.api = window.recovery.createPendingRecoveryCoordinator({ newOwnerId: () => ownerId });
+					return window.api.start();
+				},
+				{ pending, ownerId, native: name.startsWith("native") },
+			);
+			assert.equal(initial.state, "ready", `${name}: public legacy/native restore must return usable original work`);
+			assert.deepEqual(await list(page), [expected], `${name}: never substitute nested work`);
+			assert.equal((await reload(page)).state, "ready", name);
+			assert.deepEqual(await list(page), [expected], `${name}: actual native IDB + reload exact original bytes`);
+			const observed = await page.evaluate(async () => {
+				const item = window.api.snapshot().entries[0].prepared;
+				return {
+					returned: await window.api.returnToComposer(item),
+					observation: await window.api.observe({ kind: "volatile" }),
+				};
+			});
+			assert.deepEqual(observed, { returned: expected, observation: { released: false } });
+			assert.equal((await prepare(page, expected)).dispatch, "status-required", "literal text cannot authorize replay");
+			const artifact = await page.evaluate(() => window.api.exportArtifact());
+			if (name === "legacy exact old carrier skeleton") {
+				const nested = JSON.parse(pending.text).work;
+				assert.equal(
+					(await prepare(page, nested)).error.code,
+					"conflict",
+					"same stored key/body cannot change literal meaning",
+				);
+				const incoming = await browser.newContext();
+				try {
+					const other = await pageFor(incoming, ownerId);
+					assert.equal((await prepare(other, nested)).ok, true);
+					const candidate = await other.evaluate(() => window.api.exportArtifact());
+					assert.equal(
+						await page.evaluate(async (raw) => {
+							try {
+								await window.api.importArtifact(raw);
+								return "accepted";
+							} catch (e) {
+								return e.code;
+							}
+						}, candidate),
+						"conflict",
+						"import cannot change literal meaning at the same stored key/body",
+					);
+				} finally {
+					await incoming.close();
+				}
+				assert.equal(
+					await page.evaluate(() => window.api.exportArtifact()),
+					artifact,
+					"both refusals retain exact source bytes",
+				);
+				assert.deepEqual(await list(page), [expected]);
+			}
+			assert.deepEqual(
+				await page.evaluate(async (raw) => {
+					const read = await window.recovery.readPendingRecoveryArtifact(raw);
+					return { complete: read.complete, work: read.work };
+				}, artifact),
+				{ complete: true, work: [expected] },
+			);
+			if (!name.startsWith("native"))
+				assert.equal(
+					await page.evaluate(() => sessionStorage.getItem("pi-web-pending-sends")),
+					JSON.stringify([pending]),
+				);
+			await page.close();
+			appAvailable = false;
+			const rollback = await context.newPage();
+			rollback.on("pageerror", (e) => errors.push(e.message));
+			let appRequests = 0;
+			rollback.on("request", (r) => {
+				if (r.url().endsWith("/coordinator.js")) appRequests++;
+			});
+			await rollback.goto(`${origin}/reader.html`);
+			await rollback.getByRole("button", { name: "Find retained owners" }).click();
+			await rollback.getByRole("button", { name: `${ownerId} — explicitly recover`, exact: true }).click();
+			await rollback.waitForFunction(() => JSON.parse(document.getElementById("output").textContent).state === "ready");
+			assert.deepEqual(
+				JSON.parse(await rollback.locator("#output").textContent()).entries.map((e) => e.prepared.work),
+				[expected],
+			);
+			const downloading = rollback.waitForEvent("download");
+			await rollback.getByRole("button", { name: "Export selected owner" }).click();
+			const stream = await (await downloading).createReadStream();
+			const chunks = [];
+			for await (const chunk of stream) chunks.push(chunk);
+			const downloaded = Buffer.concat(chunks);
+			assert.deepEqual(JSON.parse(downloaded.toString()).records, JSON.parse(artifact).records);
+			assert.equal(appRequests, 0, "literal recovery reader remains independent of removed app code");
+			await rollback.close();
+			const clean = await browser.newContext();
+			try {
+				const importer = await clean.newPage();
+				importer.on("pageerror", (e) => errors.push(e.message));
+				await importer.goto(`${origin}/reader.html`);
+				await importer
+					.locator("#artifact")
+					.setInputFiles({ name: "literal.json", mimeType: "application/json", buffer: downloaded });
+				await importer.getByRole("button", { name: "Read artifact", exact: true }).click();
+				await importer.waitForFunction(() =>
+					document.getElementById("output").textContent.includes('"complete": true'),
+				);
+				assert.deepEqual(JSON.parse(await importer.locator("#output").textContent()).work, [expected]);
+				await importer.getByRole("button", { name: "Restore inspected artifact" }).click();
+				await importer.waitForFunction(
+					() => JSON.parse(document.getElementById("output").textContent).entries?.length === 1,
+				);
+				assert.deepEqual(
+					JSON.parse(await importer.locator("#output").textContent()).entries.map((e) => e.prepared.work),
+					[expected],
+				);
+			} finally {
+				await clean.close();
+			}
+			console.log(
+				`PASS ${name}: exact owner/native reload + independent reader export/read/import, original sources retained`,
+			);
+		} finally {
+			appAvailable = true;
+			await context.close();
+		}
+	}
+}
+async function protectedNativeChecks() {
+	for (const operation of ["prepare", "import"]) {
+		const context = await browser.newContext();
+		try {
+			const page = await context.newPage();
+			const ownerId = `envelope-write-${operation}`;
+			const pending = {
+				...prompt("command:literal-prefix").pending,
+				attachments: [
+					{ path: "", fileData: "AP8BAgM=", name: "零.bin", mimeType: "application/octet-stream", size: 5 },
+				],
+				text: '{"format":"pi-web-pending-work-v1"}',
+				status: "failed",
+				sameTextBefore: [],
+				queueBase: 0,
+			};
+			const genuine = command("existing-command");
+			const additional = prompt("additional");
+			additional.pending.createdAt = 44;
+			await page.goto(origin);
+			await page.evaluate(
+				(pending) => sessionStorage.setItem("pi-web-pending-sends", JSON.stringify([pending])),
+				pending,
+			);
+			assert.equal((await init(page, ownerId)).state, "ready");
+			await prepare(page, genuine);
+			const original = await page.evaluate(async () => {
+				await window.api.close();
+				const ownerId = sessionStorage.getItem(window.recovery.PENDING_OWNER_KEY);
+				const original = JSON.parse(localStorage.getItem(`${window.recovery.PENDING_OWNER_ENVELOPE_PREFIX}${ownerId}`));
+				const db = await new Promise((resolve, reject) => {
+					const request = indexedDB.open(window.recoveryStorage.PENDING_RECOVERY_DB);
+					request.onsuccess = () => resolve(request.result);
+					request.onerror = () => reject(request.error);
+				});
+				try {
+					await new Promise((resolve, reject) => {
+						const tx = db.transaction("sends", "readwrite");
+						tx.objectStore("sends").clear();
+						tx.oncomplete = resolve;
+						tx.onerror = () => reject(tx.error);
+						tx.onabort = () => reject(tx.error);
+					});
+				} finally {
+					db.close();
+				}
+				return original;
+			});
+			assert.equal((await reload(page)).state, "ready");
+			if (operation === "prepare") await prepare(page, additional);
+			else {
+				const source = await browser.newContext();
+				try {
+					const other = await source.newPage();
+					await other.goto(origin);
+					await init(other, ownerId);
+					await prepare(other, additional);
+					const artifact = await other.evaluate(() => window.api.exportArtifact());
+					await page.evaluate((artifact) => window.api.importArtifact(artifact), artifact);
+				} finally {
+					await source.close();
+				}
+			}
+			const reloaded = await reload(page);
+			assert.equal(reloaded.state, "ready");
+			const key = (w) => (w.kind === "prompt" ? w.pending.id : w.id);
+			const sort = (work) => work.sort((a, b) => key(a).localeCompare(key(b)));
+			const expected = sort([{ kind: "prompt", pending }, genuine, additional]);
+			assert.deepEqual(sort(reloaded.entries.map((e) => e.prepared.work)), expected);
+			const result = await page.evaluate(async () => {
+				const artifact = await window.api.exportArtifact();
+				return { artifact: JSON.parse(artifact), read: await window.recovery.readPendingRecoveryArtifact(artifact) };
+			});
+			assert.equal(result.read.complete, true);
+			assert.deepEqual(sort(result.read.work), expected);
+			for (const p of original)
+				assert.equal(result.artifact.records.find((r) => r.key[3] === p.id).payload, JSON.stringify(p));
+			console.log(
+				`PASS native envelope-only literal+carrier then ${operation}: full provenance/bytes survive new write and reload`,
+			);
+		} finally {
+			await context.close();
+		}
+	}
+	for (const mode of ["unknown internal", "untagged old internal"]) {
+		const context = await browser.newContext();
+		try {
+			const ownerId = mode;
+			const page = await pageFor(context, ownerId);
+			await prepare(page, command("retain-internal"));
+			const raw = await page.evaluate(
+				async ({ ownerId, mode }) => {
+					await window.api.close();
+					const backend = window.recoveryStorage.indexedDBPendingRecovery();
+					const records = await backend.read(ownerId);
+					const record = records[0];
+					const p = JSON.parse(record.payload);
+					if (mode === "unknown internal") p.__piWebPendingRecovery.version = 99;
+					else delete p.__piWebPendingRecovery;
+					record.payload = JSON.stringify(p);
+					record.digest = [
+						...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(record.payload))),
+					]
+						.map((b) => b.toString(16).padStart(2, "0"))
+						.join("");
+					await backend.write(records); // Same #578 content body; native transaction must really commit.
+					const envelope = JSON.stringify([p]);
+					localStorage.setItem(`${window.recovery.PENDING_OWNER_ENVELOPE_PREFIX}${ownerId}`, envelope);
+					return { records, envelope };
+				},
+				{ ownerId, mode },
+			);
+			const restored = await reload(page);
+			assert.equal(restored.state, "incomplete");
+			assert.deepEqual(restored.entries, [], "known internal/ambiguous data is never demoted to a prompt");
+			assert.ok(restored.issues.some((i) => i.code === (mode === "unknown internal" ? "corrupt" : "compatibility")));
+			assert.equal((await prepare(page, command("not-permitted"))).ok, false);
+			const exported = await page.evaluate(async () => {
+				const artifact = await window.api.exportArtifact();
+				const read = await window.recovery.readPendingRecoveryArtifact(artifact);
+				return { artifact: JSON.parse(artifact), complete: read.complete, work: read.work };
+			});
+			assert.equal(exported.complete, false);
+			assert.deepEqual(exported.work, []);
+			assert.deepEqual(exported.artifact.records, raw.records);
+			assert.equal(exported.artifact.envelope, raw.envelope);
+			console.log(
+				`PASS native ${mode}: unchanged full raw records/envelope, explicit incomplete, no guessed conversion/replay`,
+			);
+		} finally {
+			await context.close();
+		}
+	}
+
 	const context = await browser.newContext();
 	const main = await pageFor(context, "reload-owner");
 	reader = await main.evaluate((source) => window.recovery.createPendingRecoveryReaderHtml(source), source);
@@ -512,6 +834,11 @@ try {
 	console.log(
 		"PASS standalone artifact exact inspect/restore into empty native IDB with no app; corrupted artifact refuses mutation",
 	);
+}
+try {
+	browser = await chromium.launch({ executablePath: CHROME_PATH, headless: true, args: ["--no-sandbox"] });
+	await literalCollisions();
+	if (!process.env.PENDING_CARRIER_ONLY) await protectedNativeChecks();
 	assert.deepEqual(errors, [], "no uncaught browser errors");
 	console.log(
 		"PASS coordinator native-browser module proof; not #570 UI/host losslessness, backup or deployment proof",

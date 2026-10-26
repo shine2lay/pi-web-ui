@@ -48,6 +48,10 @@ export interface PendingRecoveryOptions {
 	storage?: Pick<Storage, "getItem" | "setItem"> | null;
 	indexedDB?: IDBFactory | null;
 	backend?: PendingRecoveryBackend;
+	/** Internal coordinator opt-in: envelope arrays are complete payloads, validated like native
+	 * records, not normalized legacy UI data. Preserve every field, including empty attachments.
+	 * Default OFF: other callers keep parsePending compatibility. No added release authority. */
+	fullEnvelope?: boolean;
 	/** Actually resolve external workspace/upload/page/conversation references in their session. */
 	verifyReference?: (attachment: PromptAttachment, pending: PendingSend) => Promise<boolean>;
 }
@@ -393,15 +397,25 @@ export function createPendingSendStorage(options: PendingRecoveryOptions) {
 			}
 			const candidates = new Map<string, PendingSend>();
 			if (Array.isArray(raw)) {
-				const legacy = parsePending(JSON.stringify(raw));
-				if (legacy.length !== raw.filter((p) => p?.confirmedRev === undefined).length)
+				const legacy: PendingSend[] = options.fullEnvelope ? raw : parsePending(JSON.stringify(raw));
+				if (!options.fullEnvelope && legacy.length !== raw.filter((p) => p?.confirmedRev === undefined).length)
 					issue(
 						new PendingSendStorageError("corrupt", "Some legacy pending records could not be read; source retained."),
 					);
+				const seen = new Set<string>();
 				for (const p of legacy) {
 					try {
 						validate(p);
-						candidates.set(keyString(keyFor(ownerId, p)), p);
+						const key = keyString(keyFor(ownerId, p));
+						if (options.fullEnvelope && seen.has(key)) {
+							candidates.delete(key);
+							throw new PendingSendStorageError(
+								"identity",
+								"Duplicate full-envelope pending identity; source retained.",
+							);
+						}
+						seen.add(key);
+						candidates.set(key, p);
 					} catch (error) {
 						issue(error);
 					}
@@ -458,7 +472,7 @@ export function createPendingSendStorage(options: PendingRecoveryOptions) {
 				}
 			}
 			for (const p of candidates.values()) {
-				const restored = p.status === "sending" ? { ...p, needsCheck: true } : p;
+				const restored = !options.fullEnvelope && p.status === "sending" ? { ...p, needsCheck: true } : p;
 				try {
 					await verify(restored);
 					result.pending.push(restored);
