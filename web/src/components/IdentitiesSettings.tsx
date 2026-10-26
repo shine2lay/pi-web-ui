@@ -29,7 +29,7 @@
  * set them. The Roles page's "About & rules" opens this page at the role's row (focusRole).
  *
  * State: identity-state.ts (the list, the open file, the open draft, the own skills, the role
- * messages); the texts being typed live here.
+ * messages and complete page-memory editor drafts); no raw config enters generic recovery.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FiPlus, FiTrash2, FiUser } from "react-icons/fi";
@@ -38,6 +38,9 @@ import { useT } from "../i18n";
 import {
 	closeIdentityDraft,
 	closeIdentityFile,
+	editIdentityFile,
+	editIdentityDraft,
+	editIdentityOwnerForm,
 	openIdentityDraft,
 	openIdentityFile,
 	requestIdentities,
@@ -55,6 +58,7 @@ import {
 	utf8Bytes,
 	type IdentityDraftState,
 	type IdentityFileState,
+	type IdentityOwnerForm,
 } from "../identity-state";
 import type {
 	ConversationSummary,
@@ -527,8 +531,8 @@ function IdentityRow({
 			</div>
 			{open && formOpen && (
 				<OwnerFieldsEditor
-					// A fresh form per loaded/saved version of identity.json.
-					key={`${open.status}:${open.hash ?? ""}`}
+					// Only an actual open generation remounts; status/hash ACKs must retain newer fields.
+					key={open.generation}
 					file={open}
 					identity={identity}
 					onClose={() => {
@@ -539,8 +543,8 @@ function IdentityRow({
 			)}
 			{open && !formOpen && (
 				<IdentityFileEditor
-					// A fresh editor per loaded/saved version: the draft starts from the file on disk.
-					key={`${open.file}:${open.status}:${open.hash ?? ""}`}
+					// Keep the same textarea across load and save replies; authored text lives in the store.
+					key={open.generation}
 					file={open}
 					label={fileLabel(open.file, identity)}
 					cap={open.file === "notebook" ? (open.cap ?? cap) : open.file === "prompt" ? open.cap : undefined}
@@ -548,8 +552,8 @@ function IdentityRow({
 			)}
 			{draft && (
 				<IdentityDraftEditor
-					// A fresh editor per loaded/saved version of the draft.
-					key={`${draft.status}:${draft.hash ?? ""}`}
+					// A's reply must not remount away B, even when its text returns to A.
+					key={draft.generation}
 					draft={draft}
 					title={identity.title}
 				/>
@@ -630,8 +634,6 @@ function OwnerSummary({
 	);
 }
 
-type ModeChoice = "default" | UiRoleWorkMode;
-
 /**
  * roles-overview: the owner's form over the role's identity.json: work mode (the rules' default, or set
  * here) and approved goals (the rules' default, or a list set here). Saving writes the file with only
@@ -648,11 +650,17 @@ function OwnerFieldsEditor({
 	onClose: () => void;
 }) {
 	const t = useT();
-	const read = useMemo(() => (file.status === "ready" ? readOwnerFields(file.text ?? "") : null), [file]);
+	const read = useMemo(
+		() => (file.status === "ready" ? readOwnerFields(file.text ?? "") : null),
+		[file.status, file.text],
+	);
 	const start = read?.ok ? read.fields : null;
-	const [mode, setMode] = useState<ModeChoice>(start?.workMode ?? "default");
-	const [ownGoals, setOwnGoals] = useState(start?.goals !== null && start?.goals !== undefined);
-	const [goals, setGoals] = useState<OwnerGoalDraft[]>(() => start?.goals ?? []);
+	const mode = file.ownerForm?.mode ?? start?.workMode ?? "default";
+	const ownGoals = file.ownerForm?.ownGoals ?? (start?.goals !== null && start?.goals !== undefined);
+	const goals = file.ownerForm?.goals ?? start?.goals ?? [];
+	const setForm = (patch: Partial<IdentityOwnerForm>) =>
+		editIdentityOwnerForm(file, { mode, ownGoals, goals, ...patch });
+	const setGoals = (update: (previous: OwnerGoalDraft[]) => OwnerGoalDraft[]) => setForm({ goals: update(goals) });
 	if (file.status === "loading") return <p className="set-empty identity-editor-status">{t("loading")}</p>;
 	if (file.status === "error")
 		return <p className="set-hint identity-editor-error">{t("identityFileError", { error: file.error || "?" })}</p>;
@@ -671,15 +679,17 @@ function OwnerFieldsEditor({
 	const fields = { workMode: mode === "default" ? null : mode, goals: ownGoals ? goals : null };
 	const problems = ownerFieldsProblems(fields);
 	const dirty =
-		fields.workMode !== start.workMode || JSON.stringify(fields.goals) !== JSON.stringify(start.goals ?? null);
+		fields.workMode !== start.workMode ||
+		JSON.stringify(fields.goals) !== JSON.stringify(start.goals ?? null) ||
+		(file.saved?.ok === true && file.saved.revision !== file.revision);
 	const canSave = dirty && problems.length === 0 && !file.saving;
 	const refused = file.saved?.ok === false ? file.saved : null;
 	const rulesMode = identity.rules?.workMode ?? "request-only";
 	const setGoal = (i: number, patch: Partial<OwnerGoalDraft>) =>
 		setGoals((gs) => gs.map((g, j) => (j === i ? { ...g, ...patch } : g)));
-	const save = () => {
-		if (!canSave) return;
-		saveOpenIdentityFile(writeOwnerFields(file.text ?? "", fields));
+	const save = async () => {
+		if (!canSave) return false;
+		return (await saveOpenIdentityFile(writeOwnerFields(file.text ?? "", fields), file, "owner-form")) === true;
 	};
 	const name = `owner-mode-${identity.id}`;
 	return (
@@ -688,7 +698,7 @@ function OwnerFieldsEditor({
 			aria-label={`${t("identityOwnerHeading")}: ${identity.title}`}
 			onSubmit={(e) => {
 				e.preventDefault();
-				save();
+				void save();
 			}}
 		>
 			{read.problems.length > 0 && (
@@ -708,7 +718,13 @@ function OwnerFieldsEditor({
 					] as const
 				).map(([value, label]) => (
 					<label key={value} className="identity-owner-choice">
-						<input type="radio" name={name} value={value} checked={mode === value} onChange={() => setMode(value)} />
+						<input
+							type="radio"
+							name={name}
+							value={value}
+							checked={mode === value}
+							onChange={() => setForm({ mode: value })}
+						/>
 						{label}
 					</label>
 				))}
@@ -716,7 +732,12 @@ function OwnerFieldsEditor({
 			<fieldset className="identity-owner-set">
 				<legend>{t("identityOwnerGoals")}</legend>
 				<label className="identity-owner-choice">
-					<input type="radio" name={`${name}-goals`} checked={!ownGoals} onChange={() => setOwnGoals(false)} />
+					<input
+						type="radio"
+						name={`${name}-goals`}
+						checked={!ownGoals}
+						onChange={() => setForm({ ownGoals: false })}
+					/>
 					{t("identityOwnerGoalsDefault")}
 					{(identity.rules?.goals.length ?? 0) > 0 && (
 						<span className="identity-role-muted"> ({identity.rules?.goals.map((g) => g.name).join(", ")})</span>
@@ -728,18 +749,19 @@ function OwnerFieldsEditor({
 						name={`${name}-goals`}
 						checked={ownGoals}
 						onChange={() => {
-							setOwnGoals(true);
-							// Start from what applies now: the rules' goals, so changing one keeps the others.
-							if (start.goals === null && goals.length === 0) {
-								setGoals(
-									(identity.rules?.goals ?? []).map((g) => ({
-										name: g.name,
-										scope: g.scope,
-										approvedAt: g.approvedAt,
-										endsAt: g.endsAt ?? "",
-									})),
-								);
-							}
+							// Capture both options in one revision; don't drop inactive authored goals.
+							setForm({
+								ownGoals: true,
+								goals:
+									start.goals === null && goals.length === 0
+										? (identity.rules?.goals ?? []).map((g) => ({
+												name: g.name,
+												scope: g.scope,
+												approvedAt: g.approvedAt,
+												endsAt: g.endsAt ?? "",
+											}))
+										: goals,
+							});
 						}}
 					/>
 					{t("identityOwnerGoalsOwn")}
@@ -851,16 +873,17 @@ function OwnerFieldsEditor({
 
 function IdentityFileEditor({ file, label, cap }: { file: IdentityFileState; label: string; cap?: number }) {
 	const t = useT();
-	const [draft, setDraft] = useState(file.text ?? "");
+	const draft = file.editText ?? file.text ?? "";
 	if (file.status === "loading") return <p className="set-empty identity-editor-status">{t("loading")}</p>;
 	if (file.status === "error")
 		return <p className="set-hint identity-editor-error">{t("identityFileError", { error: file.error || "?" })}</p>;
 	const size = utf8Bytes(draft);
 	const overBy = cap !== undefined && cap > 0 ? size - cap : 0;
-	const dirty = draft !== (file.text ?? "");
+	const dirty = draft !== (file.text ?? "") || (file.saved?.ok === true && file.saved.revision !== file.revision);
 	const canSave = dirty && overBy <= 0 && !file.saving;
-	const save = () => {
-		if (canSave) saveOpenIdentityFile(draft);
+	const save = async () => {
+		if (!canSave) return false;
+		return (await saveOpenIdentityFile(draft, file)) === true;
 	};
 	const refused = file.saved?.ok === false ? file.saved : null;
 	return (
@@ -879,11 +902,11 @@ function IdentityFileEditor({ file, label, cap }: { file: IdentityFileState; lab
 				spellCheck={false}
 				value={draft}
 				rows={16}
-				onChange={(e) => setDraft(e.target.value)}
+				onChange={(e) => editIdentityFile(file, e.target.value)}
 				onKeyDown={(e) => {
 					if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
 						e.preventDefault();
-						save();
+						void save();
 					}
 				}}
 			/>
@@ -901,7 +924,7 @@ function IdentityFileEditor({ file, label, cap }: { file: IdentityFileState; lab
 				</ul>
 			)}
 			<div className="identity-editor-actions">
-				<button type="button" className="set-save-btn identity-save" disabled={!canSave} onClick={save}>
+				<button type="button" className="set-save-btn identity-save" disabled={!canSave} onClick={() => void save()}>
 					{file.saving ? t("identitySaving") : t("save")}
 				</button>
 				<button
@@ -968,22 +991,32 @@ function DraftChanges({ before, after }: { before: string; after: string }) {
  */
 function IdentityDraftEditor({ draft, title }: { draft: IdentityDraftState; title: string }) {
 	const t = useT();
-	const [about, setAbout] = useState(draft.about ?? "");
+	const { about, prompt, config } = draft.edits ?? {
+		about: draft.about ?? "",
+		prompt: draft.prompt ?? "",
+		config: draft.config ?? "",
+	};
 	const [aboutView, setAboutView] = useState<"page" | "changes">("page");
-	const [prompt, setPrompt] = useState(draft.prompt ?? "");
-	const [config, setConfig] = useState(draft.config ?? "");
+	const edit = (patch: Partial<NonNullable<IdentityDraftState["edits"]>>) =>
+		editIdentityDraft(draft, { about, prompt, config, ...patch });
 	if (draft.status === "loading") return <p className="set-empty identity-draft-status">{t("loading")}</p>;
 	if (draft.status === "error")
 		return <p className="set-hint identity-draft-error">{t("identityDraftError", { error: draft.error || "?" })}</p>;
 	const done = draft.done;
-	// Accepted or discarded: the draft is gone; only the answer stays until the row's button closes it.
-	const finished = done?.ok === true && done.action !== "save";
-	const hasAbout = (draft.about ?? "") !== "";
-	const showPrompt = (draft.prompt ?? "") !== "" || !hasAbout;
-	const dirty = about !== (draft.about ?? "") || prompt !== (draft.prompt ?? "") || config !== (draft.config ?? "");
-	const busy = draft.busy !== undefined;
-	const act = (action: IdentityDraftAction) => {
-		if (!busy && !finished) sendIdentityDraftAction(action, prompt, config, about);
+	// An accepted/discarded A must not hide newer B (even A→B→A). Keep B visible, don't replay it.
+	const retired = done?.ok === true && done.action !== "save";
+	const finished = retired && done.revision === draft.revision;
+	const hasAbout = (draft.about ?? "") !== "" || about !== "";
+	const showPrompt = (draft.prompt ?? "") !== "" || prompt !== "" || !hasAbout;
+	const dirty =
+		about !== (draft.about ?? "") ||
+		prompt !== (draft.prompt ?? "") ||
+		config !== (draft.config ?? "") ||
+		(done?.ok === true && done.revision !== draft.revision);
+	const busy = draft.busy !== undefined || retired;
+	const act = async (action: IdentityDraftAction) => {
+		if (busy || finished) return false;
+		return (await sendIdentityDraftAction(action, prompt, config, about, draft)) === true;
 	};
 	return (
 		<div className="identity-draft" data-identity={draft.id}>
@@ -1026,7 +1059,7 @@ function IdentityDraftEditor({ draft, title }: { draft: IdentityDraftState; titl
 									spellCheck={false}
 									value={about}
 									rows={18}
-									onChange={(e) => setAbout(e.target.value)}
+									onChange={(e) => edit({ about: e.target.value })}
 								/>
 							) : (
 								<DraftChanges before={draft.currentAbout ?? ""} after={about} />
@@ -1042,7 +1075,7 @@ function IdentityDraftEditor({ draft, title }: { draft: IdentityDraftState; titl
 								spellCheck={false}
 								value={prompt}
 								rows={14}
-								onChange={(e) => setPrompt(e.target.value)}
+								onChange={(e) => edit({ prompt: e.target.value })}
 							/>
 						</label>
 					)}
@@ -1053,7 +1086,7 @@ function IdentityDraftEditor({ draft, title }: { draft: IdentityDraftState; titl
 							spellCheck={false}
 							value={config}
 							rows={6}
-							onChange={(e) => setConfig(e.target.value)}
+							onChange={(e) => edit({ config: e.target.value })}
 						/>
 					</label>
 					{draft.notes ? (
@@ -1078,7 +1111,7 @@ function IdentityDraftEditor({ draft, title }: { draft: IdentityDraftState; titl
 							type="button"
 							className="set-save-btn identity-draft-accept"
 							disabled={busy}
-							onClick={() => act("accept")}
+							onClick={() => void act("accept")}
 						>
 							{draft.busy === "accept" ? t("identityDraftWorking") : t("identityDraftAccept")}
 						</button>
@@ -1086,7 +1119,7 @@ function IdentityDraftEditor({ draft, title }: { draft: IdentityDraftState; titl
 							type="button"
 							className="identity-btn identity-draft-save"
 							disabled={busy || !dirty}
-							onClick={() => act("save")}
+							onClick={() => void act("save")}
 						>
 							{draft.busy === "save" ? t("identityDraftWorking") : t("identityDraftSave")}
 						</button>
@@ -1094,7 +1127,7 @@ function IdentityDraftEditor({ draft, title }: { draft: IdentityDraftState; titl
 							type="button"
 							className="identity-btn identity-draft-discard"
 							disabled={busy}
-							onClick={() => act("discard")}
+							onClick={() => void act("discard")}
 						>
 							{draft.busy === "discard" ? t("identityDraftWorking") : t("identityDraftDiscard")}
 						</button>
@@ -1106,7 +1139,9 @@ function IdentityDraftEditor({ draft, title }: { draft: IdentityDraftState; titl
 				<span className="identity-editor-note identity-draft-note" role="status">
 					{done
 						? done.ok
-							? t(DRAFT_DONE_KEY[done.action])
+							? dirty
+								? t("identityUnsaved")
+								: t(DRAFT_DONE_KEY[done.action])
 							: t(SAVE_ERROR_KEY[done.code ?? "io"] ?? "identitySaveIo")
 						: dirty
 							? t("identityUnsaved")
