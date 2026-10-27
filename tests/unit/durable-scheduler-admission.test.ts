@@ -174,6 +174,7 @@ async function finish(d: ReturnType<typeof deferred>, outcome: unknown, rejectio
 }
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+	window.history.replaceState(null, "", "/?recovery=1");
 	sends.mockClear();
 	setAppSend(sends);
 	setAppAdmit(null);
@@ -183,6 +184,7 @@ afterEach(() => {
 	act(() => {
 		for (const root of roots.splice(0)) root.unmount();
 	});
+	window.history.replaceState(null, "", "/");
 	setAppSend(null);
 	setAppAdmit(null);
 	vi.restoreAllMocks();
@@ -703,5 +705,15 @@ describe("unchanged authorized read and control paths", () => {
 	it("the shared registry is real and still normalizes nonboolean admission", async () => {
 		setAppAdmit((async () => ({ ok: true })) as unknown as AppAdmit);
 		expect(await appAdmit({ type: "schedule_list" })).toBe(false);
+	});
+	it("hides the retained-draft recovery details block from normal UI view without ?recovery=1 while keeping background recovery active", async () => {
+		window.history.replaceState(null, "", "/");
+		setAppAdmit(async () => false);
+		const h = mount();
+		h.open();
+		fill(h.container, original());
+		await act(async () => h.submit());
+		expect(h.current().attempts).toHaveLength(1);
+		expect(h.container.querySelector("[data-scheduler-recovery]")).toBeNull();
 	});
 });

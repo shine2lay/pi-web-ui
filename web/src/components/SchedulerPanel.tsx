@@ -519,50 +519,52 @@ export function SchedulerPanel({ tasks, cwd, models }: SchedulerPanelProps) {
 				</ul>
 			)}
 
-			{recoveries.some((entry) => entry.attempts.length > 0 || entry.restoredSources.length > 0) && (
-				<details data-scheduler-recovery>
-					<summary>Retained task drafts — page memory only</summary>
-					<p className="set-hint">
-						Local admission is not a server receipt. No task is created, enabled or run by opening a retained draft.
-					</p>
-					{recoveries
-						.filter((entry) => entry.attempts.length > 0 || entry.restoredSources.length > 0)
-						.map((entry) => (
-							<div key={entry.current.id} data-scheduler-review={entry.current.id}>
-								<button
-									type="button"
-									className="btn"
-									onClick={() => {
-										const retained = retainedDrafts.get(JSON.stringify([cwd, entry.current.id]));
-										if (retained) reviewEntry(retained);
-									}}
-								>
-									Open retained draft for review
-								</button>
-								{entry.restoredSources.map((source) => (
-									<details key={`${source.formId}-${source.revision}`} data-scheduler-restored>
-										<summary>Recovered original — review only; existing current edits are unchanged</summary>
-										<pre>{JSON.stringify({ originalForm: source.form, currentForm: entry.current }, null, 2)}</pre>
-									</details>
-								))}
-							</div>
-						))}
-					{recoveries.flatMap((entry) =>
-						entry.attempts.map((attempt, index) => (
-							<div key={`${attempt.source.formId}-${index}`} data-scheduler-admission={attempt.phase} role="status">
-								<p>{admissionNotice(attempt.phase)}</p>
-								<pre>
-									{JSON.stringify(
-										{ task: attempt.message.task, originalForm: attempt.source.form, currentForm: entry.current },
-										null,
-										2,
-									)}
-								</pre>
-							</div>
-						)),
-					)}
-				</details>
-			)}
+			{typeof window !== "undefined" &&
+				new URLSearchParams(window.location.search).get("recovery") === "1" &&
+				recoveries.some((entry) => entry.attempts.length > 0 || entry.restoredSources.length > 0) && (
+					<details data-scheduler-recovery>
+						<summary>Retained task drafts — page memory only</summary>
+						<p className="set-hint">
+							Local admission is not a server receipt. No task is created, enabled or run by opening a retained draft.
+						</p>
+						{recoveries
+							.filter((entry) => entry.attempts.length > 0 || entry.restoredSources.length > 0)
+							.map((entry) => (
+								<div key={entry.current.id} data-scheduler-review={entry.current.id}>
+									<button
+										type="button"
+										className="btn"
+										onClick={() => {
+											const retained = retainedDrafts.get(JSON.stringify([cwd, entry.current.id]));
+											if (retained) reviewEntry(retained);
+										}}
+									>
+										Open retained draft for review
+									</button>
+									{entry.restoredSources.map((source) => (
+										<details key={`${source.formId}-${source.revision}`} data-scheduler-restored>
+											<summary>Recovered original — review only; existing current edits are unchanged</summary>
+											<pre>{JSON.stringify({ originalForm: source.form, currentForm: entry.current }, null, 2)}</pre>
+										</details>
+									))}
+								</div>
+							))}
+						{recoveries.flatMap((entry) =>
+							entry.attempts.map((attempt, index) => (
+								<div key={`${attempt.source.formId}-${index}`} data-scheduler-admission={attempt.phase} role="status">
+									<p>{admissionNotice(attempt.phase)}</p>
+									<pre>
+										{JSON.stringify(
+											{ task: attempt.message.task, originalForm: attempt.source.form, currentForm: entry.current },
+											null,
+											2,
+										)}
+									</pre>
+								</div>
+							)),
+						)}
+					</details>
+				)}
 
 			{draft && (
 				<div className="modal-backdrop" data-scheduler-form={editor?.id} onClick={closeEditor}>

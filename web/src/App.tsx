@@ -2152,14 +2152,18 @@ export function App() {
 					</div>
 					{!isMobile && <ResizeHandle side="left" width={leftWidth} onResize={resizeLeft} />}
 					<main className={wide ? "main wide-chat" : "main"}>
-						<PendingRecoveryPanel view={recovery.view} exportArtifact={recovery.client.exportArtifact} />
-						<ComposerRecoveryPanel />
-						<PluginStartRecoveryPanel
-							view={pluginStartRecovery.view}
-							onRefresh={pluginStartRecovery.notifyChange}
-							onExport={pluginStartRecovery.exportRaw}
-							onRestorePrompt={restorePluginStartPrompt}
-						/>
+						{typeof window !== "undefined" && new URLSearchParams(window.location.search).get("recovery") === "1" && (
+							<>
+								<PendingRecoveryPanel view={recovery.view} exportArtifact={recovery.client.exportArtifact} />
+								<ComposerRecoveryPanel />
+								<PluginStartRecoveryPanel
+									view={pluginStartRecovery.view}
+									onRefresh={pluginStartRecovery.notifyChange}
+									onExport={pluginStartRecovery.exportRaw}
+									onRestorePrompt={restorePluginStartPrompt}
+								/>
+							</>
+						)}
 						{/* W2: the inspector addresses this page's open chat, alongside existing header slots. */}
 						{(chatHeaderShown.length > 0 || chat.engine === "pi") && (
 							<div className="chat-header" role="toolbar">
