@@ -522,6 +522,14 @@ import {
 	runInfo,
 } from "./quiet-turns.js";
 import { continueRecentRegular, openPickedRegular, recentRegularFile } from "./recent-session.js";
+import {
+	type DurableModelSpec,
+	type DurableSessionEntry,
+	type DurableSessionEvent,
+	type DurableSessionPort,
+	type DurableSessionSummary,
+	type DurableThinkingLevel,
+} from "./durable-session-port.js";
 import { sessionIndex } from "./session-index.js";
 import { ParticipantLifecycle, type ParticipantTarget, type ParticipantLease } from "./participant-lifecycle.js";
 import { homeChatOf, identityIdOnBranch } from "./identities.js";
@@ -2409,6 +2417,10 @@ export interface Conversation {
 	/** optimistic-send: the receipt of the prompt whose user message is about to start a run. The
 	 *  next user message_end of this chat is that message: its snapshot goes out, then this ack. */
 	ackOnUserMessage?: PromptReceipt;
+	/** Wave 3.4: active DurableSessionHandle when running on DurableSessionPort. */
+	durableHandle?: DurableSessionHandle;
+	/** Wave 3.4: active DurableSessionPort when running on DurableSessionPort. */
+	durablePort?: DurableSessionPort;
 }
 
 /** 轨迹事件 payload 封顶（可直接广播/持久化，不撑爆 storage.json）。 */
@@ -3050,6 +3062,1227 @@ export interface BusyConversation {
 	subagent?: true;
 }
 
+export interface PendingPromptRecord {
+	sessionId: string;
+	idempotencyKey: string;
+	clientMessageId: string;
+	promptText: string;
+	state: "inflight" | "dispatched" | "settled";
+	admittedAt: number;
+	updatedAt: number;
+	modelId?: string;
+}
+
+export type PendingPromptAdmissionDecision =
+	| { kind: "accepted"; record: PendingPromptRecord }
+	| { kind: "duplicate_inflight"; record: PendingPromptRecord }
+	| { kind: "duplicate_completed"; record: PendingPromptRecord };
+
+export interface PendingRecoveryCoordinatorLike {
+	beginPromptAdmission(input: {
+		sessionId: string;
+		idempotencyKey: string;
+		clientMessageId?: string;
+		promptText: string;
+		modelId?: string;
+	}): PendingPromptAdmissionDecision;
+	markDispatched(input: { sessionId: string; idempotencyKey: string }): void;
+	markSettled(input: { sessionId: string; idempotencyKey: string }): void;
+	clear(input: { sessionId: string; idempotencyKey: string }): void;
+	listSessionPending(sessionId: string): PendingPromptRecord[];
+	recoverOnReconnect?(sessionId: string): {
+		sessionId: string;
+		recoveredCount: number;
+		pending: PendingPromptRecord[];
+	};
+}
+
+export class DurablePromptAdmissionCoordinator implements PendingRecoveryCoordinatorLike {
+	private readonly records = new Map<string, PendingPromptRecord>();
+
+	private keyOf(sessionId: string, idempotencyKey: string): string {
+		return `${sessionId}::${idempotencyKey}`;
+	}
+
+	beginPromptAdmission(input: {
+		sessionId: string;
+		idempotencyKey: string;
+		clientMessageId?: string;
+		promptText: string;
+		modelId?: string;
+	}): PendingPromptAdmissionDecision {
+		const key = this.keyOf(input.sessionId, input.idempotencyKey);
+		const existing = this.records.get(key);
+		if (existing) {
+			if (existing.state === "settled") {
+				return { kind: "duplicate_completed", record: { ...existing } };
+			}
+			return { kind: "duplicate_inflight", record: { ...existing } };
+		}
+		const now = Date.now();
+		const record: PendingPromptRecord = {
+			sessionId: input.sessionId,
+			idempotencyKey: input.idempotencyKey,
+			clientMessageId: input.clientMessageId ?? input.idempotencyKey,
+			promptText: input.promptText,
+			state: "inflight",
+			admittedAt: now,
+			updatedAt: now,
+			...(input.modelId ? { modelId: input.modelId } : {}),
+		};
+		this.records.set(key, record);
+		return { kind: "accepted", record: { ...record } };
+	}
+
+	markDispatched(input: { sessionId: string; idempotencyKey: string }): void {
+		const existing = this.records.get(this.keyOf(input.sessionId, input.idempotencyKey));
+		if (!existing || existing.state === "settled") return;
+		existing.state = "dispatched";
+		existing.updatedAt = Date.now();
+	}
+
+	markSettled(input: { sessionId: string; idempotencyKey: string }): void {
+		const existing = this.records.get(this.keyOf(input.sessionId, input.idempotencyKey));
+		if (!existing) return;
+		existing.state = "settled";
+		existing.updatedAt = Date.now();
+	}
+
+	clear(input: { sessionId: string; idempotencyKey: string }): void {
+		this.records.delete(this.keyOf(input.sessionId, input.idempotencyKey));
+	}
+
+	listSessionPending(sessionId: string): PendingPromptRecord[] {
+		const out: PendingPromptRecord[] = [];
+		for (const rec of this.records.values()) {
+			if (rec.sessionId === sessionId && rec.state !== "settled") {
+				out.push({ ...rec });
+			}
+		}
+		return out;
+	}
+
+	recoverOnReconnect(sessionId: string): {
+		sessionId: string;
+		recoveredCount: number;
+		pending: PendingPromptRecord[];
+	} {
+		const pending = this.listSessionPending(sessionId);
+		return {
+			sessionId,
+			recoveredCount: pending.length,
+			pending,
+		};
+	}
+}
+
+function sameSessionRef(a: string | undefined | null, b: string | undefined | null): boolean {
+	if (!a || !b) return false;
+	if (a === b) return true;
+	const stripDurable = (v: string) => (v.startsWith("durable://") ? v.slice("durable://".length) : v);
+	if (stripDurable(a) === stripDurable(b)) return true;
+	try {
+		return resolve(a) === resolve(b);
+	} catch {
+		return false;
+	}
+}
+
+interface DurableBranchEntry {
+	id: string;
+	parentId: string | null;
+	type: string;
+	timestamp: string;
+	message?: AgentMessage;
+	customType?: string;
+	data?: unknown;
+	name?: string;
+	provider?: string;
+	modelId?: string;
+	thinkingLevel?: string;
+}
+
+export function isDurableEngineEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+	const raw = env.PI_DURABLE_ENGINE?.trim().toLowerCase();
+	if (raw === "0" || raw === "false" || raw === "off" || raw === "no" || raw === "legacy") {
+		return false;
+	}
+	return true;
+}
+
+function isPortActive(port: DurableSessionPort | null | undefined): port is DurableSessionPort {
+	if (!port || !isDurableEngineEnabled()) return false;
+	const maybeEnabled = (port as { enabled?: boolean }).enabled;
+	if (maybeEnabled === false) return false;
+	return true;
+}
+
+interface DurableCustomEntryInput {
+	customType: string;
+	content?: unknown;
+	details?: unknown;
+	display?: boolean;
+}
+
+interface DurableSessionHandle {
+	readonly sessionKey: string;
+	readonly sessionId: string;
+	readonly cwd: string;
+	readonly sessionFile?: string;
+	readonly isStreaming: boolean;
+	readonly model?: string | { provider: string; id: string; name?: string } | null;
+	readonly thinkingLevel?: string | null;
+	prompt(input: {
+		text: string;
+		images?: unknown[];
+		streamingBehavior?: "steer" | "followUp";
+		idempotencyKey?: string;
+		clientMessageId?: string;
+	}): Promise<void>;
+	steer(text: string, images?: unknown[]): Promise<void>;
+	followUp(text: string, images?: unknown[]): Promise<void>;
+	abort(): Promise<void>;
+	switchModel(modelId: string): Promise<void>;
+	setThinkingLevel(level: string): Promise<void>;
+	getMessages(): Promise<readonly unknown[]>;
+	getEntries(): readonly DurableSessionEntry[];
+	appendCustomEntry(entry: DurableCustomEntryInput): Promise<void>;
+	subscribe(listener: (event: DurableSessionEvent) => void): () => void;
+	dispose(): Promise<void>;
+}
+
+function durableSummaryFileRef(s: DurableSessionSummary): string {
+	const extra = s as { sessionFile?: string };
+	return s.sourceSessionFile || extra.sessionFile || `durable://${s.sessionId}`;
+}
+
+function durableSummaryUpdatedMs(s: DurableSessionSummary): number {
+	if (typeof s.updatedAt === "number") return s.updatedAt;
+	const parsed = Date.parse(s.updatedAt);
+	return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
+function durableSummaryCreatedMs(s: DurableSessionSummary): number {
+	if (typeof s.createdAt === "number") return s.createdAt;
+	const parsed = Date.parse(s.createdAt);
+	return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
+function durableSummaryRoleId(port: DurableSessionPort, s: DurableSessionSummary): string | undefined {
+	const extra = (s as { roleId?: string }).roleId;
+	if (extra) return extra;
+	try {
+		const entries = port.getEntries(s.sessionKey);
+		for (let i = entries.length - 1; i >= 0; i--) {
+			const e = entries[i]!;
+			if (e.type === "custom" && e.customType === "identity") {
+				const id = (e.data as { id?: string | null } | undefined)?.id;
+				return id ?? undefined;
+			}
+		}
+	} catch {
+		// ignore
+	}
+	return undefined;
+}
+
+function normalizeDurableMessageShape<T>(raw: T): T {
+	if (!raw || typeof raw !== "object") return raw;
+	const msg = raw as Record<string, unknown>;
+	if (typeof msg.content === "string") {
+		return {
+			...raw,
+			content: [{ type: "text", text: msg.content }],
+		};
+	}
+	return raw;
+}
+
+function wrapDurableSummaryAsHandle(port: DurableSessionPort, summary: DurableSessionSummary): DurableSessionHandle {
+	let currentModel: DurableModelSpec | undefined = summary.model;
+	let currentThinking: DurableThinkingLevel = summary.thinkingLevel ?? "medium";
+	let isStreamingNow = false;
+	return {
+		sessionKey: summary.sessionKey,
+		sessionId: summary.sessionId,
+		cwd: summary.cwd,
+		sessionFile: durableSummaryFileRef(summary),
+		get isStreaming() {
+			return isStreamingNow;
+		},
+		get model() {
+			return currentModel ? { provider: currentModel.provider, id: currentModel.id } : null;
+		},
+		get thinkingLevel() {
+			return currentThinking;
+		},
+		async prompt(input) {
+			isStreamingNow = true;
+			try {
+				await port.prompt(input.text, {
+					sessionKey: summary.sessionKey,
+					attachments: input.images,
+				});
+			} finally {
+				isStreamingNow = false;
+			}
+		},
+		async steer(text) {
+			await port.steer(text, { sessionKey: summary.sessionKey });
+		},
+		async followUp(text) {
+			await port.followUp(text, { sessionKey: summary.sessionKey });
+		},
+		async abort() {
+			isStreamingNow = false;
+			await port.abort(summary.sessionKey);
+		},
+		async switchModel(modelId: string) {
+			const parsed = parseProviderModel(modelId);
+			const spec: DurableModelSpec = {
+				provider: parsed?.provider ?? "anthropic",
+				id: parsed?.id ?? modelId,
+				thinkingLevel: currentThinking,
+			};
+			currentModel = spec;
+			await port.switchModel(spec, { sessionKey: summary.sessionKey });
+		},
+		async setThinkingLevel(level: string) {
+			currentThinking = level as DurableThinkingLevel;
+			await port.setThinkingLevel(currentThinking, { sessionKey: summary.sessionKey });
+		},
+		async getMessages() {
+			return port.getMessages(summary.sessionKey).map((m) => normalizeDurableMessageShape(m));
+		},
+		getEntries() {
+			try {
+				return port.getEntries(summary.sessionKey).map((e) =>
+					e.message ? { ...e, message: normalizeDurableMessageShape(e.message) } : e,
+				);
+			} catch {
+				return [];
+			}
+		},
+		async appendCustomEntry(entry) {
+			await port.appendCustomEntry(
+				entry.customType,
+				entry.details !== undefined ? entry.details : entry.content,
+				{ sessionKey: summary.sessionKey },
+			);
+		},
+		subscribe(listener) {
+			return port.subscribe(listener, summary.sessionKey);
+		},
+		async dispose() {},
+	};
+}
+
+function createEphemeralDurableHandle(cwd: string, sessionId: string): DurableSessionHandle {
+	const messages: AgentMessage[] = [];
+	const listeners = new Set<(event: DurableSessionEvent) => void>();
+	return {
+		sessionKey: `ephemeral:${sessionId}`,
+		sessionId,
+		cwd,
+		sessionFile: `durable://${sessionId}`,
+		get isStreaming() {
+			return false;
+		},
+		get model() {
+			return null;
+		},
+		get thinkingLevel() {
+			return "medium";
+		},
+		async prompt(input: { text: string }) {
+			messages.push({
+				role: "user",
+				content: [{ type: "text", text: input.text }],
+				timestamp: Date.now(),
+			} as unknown as AgentMessage);
+		},
+		async steer() {},
+		async followUp() {},
+		async abort() {},
+		async switchModel() {},
+		async setThinkingLevel() {},
+		async getMessages() {
+			return [...messages];
+		},
+		getEntries() {
+			return [];
+		},
+		async appendCustomEntry() {},
+		subscribe(listener: (event: DurableSessionEvent) => void) {
+			listeners.add(listener);
+			return () => {
+				listeners.delete(listener);
+			};
+		},
+		async dispose() {
+			listeners.clear();
+		},
+	};
+}
+
+function parseProviderModel(
+	raw: string | { provider?: string; id?: string; name?: string } | null | undefined,
+): { provider: string; id: string; name: string; reasoning: boolean; input: ("text" | "image")[]; contextWindow: number; maxTokens: number } | undefined {
+	if (!raw) return undefined;
+	if (typeof raw === "object" && raw.provider && raw.id) {
+		return {
+			provider: String(raw.provider),
+			id: String(raw.id),
+			name: String(raw.name ?? raw.id),
+			reasoning: true,
+			input: ["text", "image"],
+			contextWindow: 200_000,
+			maxTokens: 16_384,
+		};
+	}
+	if (typeof raw === "string") {
+		const trimmed = raw.trim();
+		if (!trimmed) return undefined;
+		const slash = trimmed.indexOf("/");
+		const provider = slash > 0 ? trimmed.slice(0, slash) : "anthropic";
+		const id = slash > 0 ? trimmed.slice(slash + 1) : trimmed;
+		return {
+			provider,
+			id,
+			name: id,
+			reasoning: true,
+			input: ["text", "image"],
+			contextWindow: 200_000,
+			maxTokens: 16_384,
+		};
+	}
+	return undefined;
+}
+
+function createDurableRuntimeWrapper(
+	handle: DurableSessionHandle,
+	port: DurableSessionPort,
+	cwd: string,
+	agentDir: string,
+	initialMessages: AgentMessage[],
+	initialRoleId?: string | null,
+): AgentSessionRuntime {
+	const createdIso = new Date().toISOString();
+	const branchEntries: DurableBranchEntry[] = [];
+	const listeners = new Set<(event: AgentSessionEvent) => void>();
+	let cachedMessages: AgentMessage[] = [...initialMessages];
+	let sessionName: string | undefined;
+	let currentModel =
+		parseProviderModel(handle.model) ??
+		parseProviderModel("anthropic/claude-sonnet-4-5")!;
+	let currentThinking: string = handle.thinkingLevel || "medium";
+	let streamingFlag = Boolean(handle.isStreaming);
+	let streamingAssistantMsg: AgentMessage | undefined;
+	const steeringQueue: string[] = [];
+	const followUpQueue: string[] = [];
+	let entrySeq = 0;
+
+	const appendEntry = (entry: Omit<DurableBranchEntry, "id" | "parentId" | "timestamp"> & { timestamp?: string }): DurableBranchEntry => {
+		const id = `de-${++entrySeq}-${Date.now()}`;
+		const parentId = branchEntries.length > 0 ? branchEntries[branchEntries.length - 1]!.id : null;
+		const full: DurableBranchEntry = {
+			...entry,
+			id,
+			parentId,
+			timestamp: entry.timestamp ?? new Date().toISOString(),
+		};
+		branchEntries.push(full);
+		return full;
+	};
+
+	const syncMessagesToEntries = (msgs: readonly unknown[]) => {
+		const normalized: AgentMessage[] = [];
+		for (let i = 0; i < msgs.length; i++) {
+			const raw = msgs[i] as Record<string, unknown> | undefined;
+			if (!raw || typeof raw !== "object") continue;
+			const ts = typeof raw.timestamp === "number" ? raw.timestamp : Date.now() + i;
+			const role = typeof raw.role === "string" ? raw.role : "user";
+			const content = Array.isArray(raw.content)
+				? raw.content
+				: typeof raw.content === "string"
+					? [{ type: "text", text: raw.content }]
+					: [{ type: "text", text: String(raw.text ?? "") }];
+			const msg = {
+				...raw,
+				role,
+				content,
+				timestamp: ts,
+			} as unknown as AgentMessage;
+			normalized.push(msg);
+		}
+		cachedMessages = normalized;
+		const nonMessageEntries = branchEntries.filter((e) => e.type !== "message");
+		branchEntries.length = 0;
+		for (const msg of normalized) {
+			appendEntry({
+				type: "message",
+				message: msg,
+				timestamp: new Date((msg as { timestamp?: number }).timestamp ?? Date.now()).toISOString(),
+			});
+		}
+		for (const ce of nonMessageEntries) {
+			branchEntries.push(ce);
+		}
+	};
+
+	syncMessagesToEntries(initialMessages);
+	if (initialRoleId) {
+		appendEntry({
+			type: "custom",
+			customType: "identity",
+			data: { v: 1, id: initialRoleId, via: "home" },
+		});
+	}
+
+	const emitEvent = (ev: Record<string, unknown>) => {
+		for (const l of listeners) {
+			try {
+				l(ev as unknown as AgentSessionEvent);
+			} catch {
+				// listener error ignored
+			}
+		}
+	};
+
+	let sawUserMessageEndInTurn = false;
+	let sawAgentEndInTurn = false;
+
+	const unsubHandle = handle.subscribe((ev: DurableSessionEvent) => {
+		const rawEv = ev as unknown as Record<string, unknown>;
+		const payload = (rawEv.payload as Record<string, unknown> | undefined) ?? rawEv;
+		const evType = String(ev.type);
+		if (evType === "agent_start" || evType === "turn_start") {
+			streamingFlag = true;
+			streamingAssistantMsg = undefined;
+			emitEvent({ type: "agent_start" });
+			return;
+		}
+		if (evType === "message_start") {
+			const msg = (ev.message as unknown as AgentMessage | undefined) ??
+				(payload.message as AgentMessage | undefined) ?? ({
+					role: String(payload.role ?? "assistant"),
+					content: Array.isArray(payload.content)
+						? payload.content
+						: [{ type: "text", text: String(payload.text ?? "") }],
+					timestamp: typeof payload.timestamp === "number" ? payload.timestamp : Date.now(),
+				} as unknown as AgentMessage);
+			if ((msg as { role?: string }).role === "assistant") {
+				streamingFlag = true;
+				streamingAssistantMsg = msg;
+			}
+			emitEvent({ type: "message_start", message: msg });
+			return;
+		}
+		if (evType === "message_update" || evType === "message_delta") {
+			streamingFlag = true;
+			const msgContent = ev.message?.content;
+			const delta = String(
+				payload.delta ??
+					payload.text ??
+					(typeof msgContent === "string" ? msgContent : ""),
+			);
+			const prevText =
+				streamingAssistantMsg && Array.isArray((streamingAssistantMsg as { content?: unknown[] }).content)
+					? String(((streamingAssistantMsg as { content: Array<{ text?: string }> }).content[0]?.text) ?? "")
+					: "";
+			const nextText = typeof payload.fullText === "string" ? payload.fullText : prevText + delta;
+			const ts = (streamingAssistantMsg as { timestamp?: number } | undefined)?.timestamp ?? Date.now();
+			streamingAssistantMsg =
+				(payload.message as AgentMessage | undefined) ??
+				({
+					role: "assistant",
+					content: [{ type: "text", text: nextText }],
+					timestamp: ts,
+				} as unknown as AgentMessage);
+			const assistantMessageEvent = (payload.assistantMessageEvent as Record<string, unknown> | undefined) ?? {
+				type: String(payload.deltaType ?? "text_delta"),
+				contentIndex: Number(payload.contentIndex ?? 0),
+				delta,
+			};
+			emitEvent({
+				type: "message_update",
+				message: streamingAssistantMsg,
+				assistantMessageEvent,
+			});
+			return;
+		}
+		if (evType === "message_end") {
+			const evMsg = (ev.message ?? payload.message) as Record<string, unknown> | undefined;
+			const role = String(evMsg?.role ?? payload.role ?? "assistant");
+			const rawContent = evMsg?.content ?? payload.content;
+			const normalizedContent = Array.isArray(rawContent)
+				? rawContent
+				: typeof rawContent === "string"
+					? [{ type: "text", text: rawContent }]
+					: [{ type: "text", text: String(payload.text ?? "") }];
+			const msg =
+				role === "assistant" && streamingAssistantMsg && !evMsg
+					? streamingAssistantMsg
+					: ({
+							...evMsg,
+							role,
+							content: normalizedContent,
+							timestamp:
+								typeof evMsg?.timestamp === "number"
+									? evMsg.timestamp
+									: typeof payload.timestamp === "number"
+										? payload.timestamp
+										: Date.now(),
+						} as unknown as AgentMessage);
+			if (role === "user") sawUserMessageEndInTurn = true;
+			if (role === "assistant") streamingAssistantMsg = undefined;
+			const last = cachedMessages[cachedMessages.length - 1] as { role?: string; timestamp?: number } | undefined;
+			if (!last || last.role !== role || last.timestamp !== (msg as { timestamp?: number }).timestamp) {
+				cachedMessages = [...cachedMessages, msg];
+				appendEntry({
+					type: "message",
+					message: msg,
+					timestamp: new Date((msg as { timestamp?: number }).timestamp ?? Date.now()).toISOString(),
+				});
+			}
+			emitEvent({ type: "message_end", message: msg });
+			return;
+		}
+		if (evType === "tool_execution_start" || evType === "tool_start") {
+			emitEvent({
+				type: "tool_execution_start",
+				toolCallId: String(ev.toolCallId ?? payload.toolCallId ?? payload.id ?? "tc-1"),
+				toolName: String(ev.toolName ?? payload.toolName ?? payload.name ?? "tool"),
+				args: ev.toolArgs ?? payload.args ?? {},
+			});
+			return;
+		}
+		if (evType === "tool_execution_update" || evType === "tool_delta") {
+			const partialResult = payload.partialResult ?? {
+				content: [{ type: "text", text: String(payload.delta ?? payload.text ?? "") }],
+			};
+			emitEvent({
+				type: "tool_execution_update",
+				toolCallId: String(ev.toolCallId ?? payload.toolCallId ?? payload.id ?? "tc-1"),
+				toolName: String(ev.toolName ?? payload.toolName ?? payload.name ?? "tool"),
+				partialResult,
+			});
+			return;
+		}
+		if (evType === "tool_execution_end" || evType === "tool_end") {
+			emitEvent({
+				type: "tool_execution_end",
+				toolCallId: String(ev.toolCallId ?? payload.toolCallId ?? payload.id ?? "tc-1"),
+				toolName: String(ev.toolName ?? payload.toolName ?? payload.name ?? "tool"),
+				result: ev.toolResult ?? payload.result ?? { content: [{ type: "text", text: String(payload.text ?? "") }] },
+				isError: Boolean(ev.toolResult?.isError ?? payload.isError),
+			});
+			return;
+		}
+		if (evType === "queue_update") {
+			if (Array.isArray(payload.steering)) {
+				steeringQueue.length = 0;
+				steeringQueue.push(...payload.steering.map(String));
+			}
+			if (Array.isArray(payload.followUp)) {
+				followUpQueue.length = 0;
+				followUpQueue.push(...payload.followUp.map(String));
+			}
+			emitEvent({
+				type: "queue_update",
+				steering: [...steeringQueue],
+				followUp: [...followUpQueue],
+			});
+			return;
+		}
+		if (evType === "custom_entry" || evType === "entry_appended") {
+			const evEntry = ev.entry ?? (payload.entry as DurableSessionEntry | undefined);
+			if (evEntry && evEntry.type === "message") return;
+			const entry = appendEntry({
+				type: "custom",
+				customType: String(payload.customType ?? evEntry?.customType ?? "custom"),
+				data: payload.data ?? payload.details ?? payload.content ?? evEntry?.data,
+			});
+			emitEvent({ type: "entry_appended", entry });
+			return;
+		}
+		if (evType === "agent_end" || evType === "turn_end") {
+			streamingFlag = false;
+			streamingAssistantMsg = undefined;
+			if (evType === "agent_end") {
+				sawAgentEndInTurn = true;
+				emitEvent({
+					type: "agent_end",
+					messages: Array.isArray(payload.messages) ? payload.messages : cachedMessages,
+					...(payload.willRetry ? { willRetry: true } : {}),
+				});
+				emitEvent({ type: "agent_settled" });
+			}
+			return;
+		}
+		emitEvent({ ...payload, type: evType });
+	});
+
+	const sessionFileRef = () => handle.sessionFile || `durable://${handle.sessionId}`;
+
+	const sessionManagerMock = {
+		getSessionId: () => handle.sessionId,
+		getSessionFile: () => sessionFileRef(),
+		getSessionDir: () => join(agentDir, "durable-sessions"),
+		getCwd: () => handle.cwd || cwd,
+		getSessionName: () => sessionName,
+		getLeafId: () => (branchEntries.length > 0 ? branchEntries[branchEntries.length - 1]!.id : null),
+		getHeader: () => ({
+			type: "session",
+			id: handle.sessionId,
+			timestamp: createdIso,
+			cwd: handle.cwd || cwd,
+		}),
+		getEntries: () => [...branchEntries],
+		getBranch: () => [...branchEntries],
+		buildContextEntries: () => [...branchEntries],
+		buildSessionContext: () => ({
+			messages: [...cachedMessages],
+			thinkingLevel: currentThinking,
+			model: { provider: currentModel.provider, modelId: currentModel.id },
+		}),
+		appendSessionInfo: (name: string) => {
+			sessionName = name;
+			appendEntry({ type: "session_info", name });
+			void handle
+				.appendCustomEntry({
+					customType: "session_info",
+					content: name,
+					details: { name },
+					display: false,
+				})
+				.catch(() => {});
+		},
+		appendCustomEntry: (customType: string, data?: unknown) => {
+			const entry = appendEntry({ type: "custom", customType, data });
+			void handle
+				.appendCustomEntry({
+					customType,
+					content: typeof data === "string" ? data : undefined,
+					details: data,
+					display: false,
+				})
+				.catch(() => {});
+			emitEvent({ type: "entry_appended", entry });
+			return entry.id;
+		},
+		appendCustomMessageEntry: (customType: string, content: unknown, display?: boolean, details?: unknown) => {
+			const msg = {
+				role: "custom",
+				customType,
+				content: Array.isArray(content) ? content : [{ type: "text", text: String(content ?? "") }],
+				display: display ?? true,
+				details,
+				timestamp: Date.now(),
+			} as unknown as AgentMessage;
+			cachedMessages = [...cachedMessages, msg];
+			const entry = appendEntry({ type: "message", message: msg });
+			void handle
+				.appendCustomEntry({
+					customType,
+					content,
+					details,
+					display: display ?? true,
+				})
+				.catch(() => {});
+			emitEvent({ type: "message_end", message: msg });
+			return entry.id;
+		},
+		appendMessage: (message: AgentMessage) => {
+			cachedMessages = [...cachedMessages, message];
+			const entry = appendEntry({ type: "message", message });
+			return entry.id;
+		},
+		newSession: () => {},
+	};
+
+	const modelThinkingDefaults = new Map<string, string>();
+	let defaultProvider: string | undefined = currentModel.provider;
+	let defaultModelId: string | undefined = currentModel.id;
+	let defaultThinkingLevel: string | undefined = currentThinking;
+
+	const settingsManagerMock = {
+		getDefaultProvider: () => defaultProvider,
+		getDefaultModel: () => defaultModelId,
+		setDefaultModelAndProvider: (p: string, id: string) => {
+			defaultProvider = p;
+			defaultModelId = id;
+		},
+		getDefaultThinkingLevel: () => defaultThinkingLevel,
+		setDefaultThinkingLevel: (level: string) => {
+			defaultThinkingLevel = level;
+		},
+		getModelThinkingLevel: (p: string, id: string) => modelThinkingDefaults.get(`${p}/${id}`),
+		setModelThinkingLevel: (p: string, id: string, level: string) => {
+			modelThinkingDefaults.set(`${p}/${id}`, level);
+		},
+		getSteeringMode: () => "one-at-a-time" as const,
+		setSteeringMode: () => {},
+		getFollowUpMode: () => "one-at-a-time" as const,
+		setFollowUpMode: () => {},
+		getCompactionSettings: () => ({ enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 }),
+		setCompactionEnabled: () => {},
+		applyOverrides: () => {},
+	};
+
+	let customTools: unknown[] = [];
+	const activeToolNames = new Set<string>(["read", "bash", "edit", "write", "grep", "find", "ls"]);
+
+	const agentMock: Record<string, unknown> = {
+		get state() {
+			return sessionMock.state;
+		},
+		setTools: () => {},
+		followUp: (msg: unknown) => {
+			const text =
+				typeof msg === "string"
+					? msg
+					: msg && typeof msg === "object" && "content" in msg
+						? typeof (msg as { content?: unknown }).content === "string"
+							? ((msg as { content: string }).content)
+							: Array.isArray((msg as { content?: unknown[] }).content)
+								? (msg as { content: Array<{ text?: string }> }).content.map((c) => c.text ?? "").join("\n")
+								: ""
+						: "";
+			void sessionMock.followUp(text);
+		},
+		clearFollowUpQueue: () => {
+			followUpQueue.length = 0;
+		},
+		finishTurn: undefined,
+		prepareNextTurnWithContext: undefined,
+		prepareNextTurn: undefined,
+		prompt: async (input: unknown, images?: unknown) => {
+			const text =
+				typeof input === "string"
+					? input
+					: Array.isArray(input)
+						? input
+								.map((m) =>
+									typeof m?.content === "string"
+										? m.content
+										: Array.isArray(m?.content)
+											? m.content.map((c: { text?: string }) => c.text ?? "").join("\n")
+											: "",
+								)
+								.join("\n")
+						: "";
+			await sessionMock.prompt(text, {
+				images: Array.isArray(images) ? images : undefined,
+			});
+		},
+	};
+
+	const sessionMock = {
+		get sessionId() {
+			return handle.sessionId;
+		},
+		get sessionFile() {
+			return sessionFileRef();
+		},
+		get sessionName() {
+			return sessionName;
+		},
+		get sessionManager() {
+			return sessionManagerMock;
+		},
+		get settingsManager() {
+			return settingsManagerMock;
+		},
+		get isStreaming() {
+			return Boolean(handle.isStreaming) || streamingFlag;
+		},
+		get isCompacting() {
+			return false;
+		},
+		get isRetrying() {
+			return false;
+		},
+		get autoCompactionEnabled() {
+			return true;
+		},
+		get retryAttempt() {
+			return 0;
+		},
+		get model() {
+			const fromHandle = parseProviderModel(handle.model);
+			if (fromHandle) currentModel = fromHandle;
+			return currentModel;
+		},
+		get thinkingLevel() {
+			return (handle.thinkingLevel || currentThinking) as AgentSession["thinkingLevel"];
+		},
+		getAvailableThinkingLevels: () => ["off", "minimal", "low", "medium", "high"] as const,
+		get messages() {
+			return cachedMessages;
+		},
+		get state() {
+			return {
+				get messages() {
+					return cachedMessages;
+				},
+				get model() {
+					return sessionMock.model;
+				},
+				get thinkingLevel() {
+					return sessionMock.thinkingLevel;
+				},
+				get isStreaming() {
+					return sessionMock.isStreaming;
+				},
+				get streamingMessage() {
+					return streamingAssistantMsg;
+				},
+				get tools() {
+					return [...activeToolNames].map((name) => ({ name }));
+				},
+				errorMessage: undefined as string | undefined,
+			};
+		},
+		get agent() {
+			return agentMock;
+		},
+		get resourceLoader() {
+			return {
+				getSkills: () => ({ skills: [] }),
+				getPrompts: () => ({ prompts: [] }),
+				getExtensions: () => ({ extensions: [] }),
+				reload: async () => {},
+			};
+		},
+		get extensionRunner() {
+			return {
+				getCommand: (name: string) =>
+					name === "identity" || name === "queue" || name === "tldr" ? { name } : undefined,
+			};
+		},
+		get scopedModels() {
+			return [];
+		},
+		setScopedModels: () => {},
+		get steeringMode() {
+			return "one-at-a-time" as const;
+		},
+		get followUpMode() {
+			return "one-at-a-time" as const;
+		},
+		getPendingMessageCount: () => steeringQueue.length + followUpQueue.length,
+		getSteeringMessages: () => [...steeringQueue],
+		getFollowUpMessages: () => [...followUpQueue],
+		clearQueue: () => {
+			const steering = [...steeringQueue];
+			const followUp = [...followUpQueue];
+			steeringQueue.length = 0;
+			followUpQueue.length = 0;
+			emitEvent({ type: "queue_update", steering: [], followUp: [] });
+			return { steering, followUp };
+		},
+		getAllTools: () => [
+			{ name: "read", description: "Read file" },
+			{ name: "bash", description: "Run command" },
+			{ name: "edit", description: "Edit file" },
+			{ name: "write", description: "Write file" },
+			{ name: "grep", description: "Search contents" },
+			{ name: "find", description: "Find files" },
+			{ name: "ls", description: "List directory" },
+		],
+		getActiveToolNames: () => [...activeToolNames],
+		setActiveToolsByName: (names: string[]) => {
+			activeToolNames.clear();
+			for (const n of names) activeToolNames.add(n);
+		},
+		setCustomTools: (tools: unknown[]) => {
+			customTools = [...tools];
+		},
+		getCustomTools: () => [...customTools],
+		getContextUsage: () => ({
+			tokens: 0,
+			contextWindow: currentModel.contextWindow,
+			percent: 0,
+		}),
+		bindExtensions: async () => {},
+		subscribe: (listener: (event: AgentSessionEvent) => void) => {
+			listeners.add(listener);
+			return () => {
+				listeners.delete(listener);
+			};
+		},
+		prompt: async (
+			text: string,
+			opts?: {
+				images?: unknown[];
+				streamingBehavior?: "steer" | "followUp";
+				source?: string;
+				preflightResult?: (outcome: "started" | "queued" | "handled") => void;
+				idempotencyKey?: string;
+				clientMessageId?: string;
+			},
+		) => {
+			const trimmed = text.trim();
+			if (trimmed.startsWith("/identity ")) {
+				const arg = trimmed.slice("/identity ".length).trim();
+				const nextId = arg === "none" || !arg ? null : arg;
+				const entry = appendEntry({
+					type: "custom",
+					customType: "identity",
+					data: { v: 1, id: nextId, via: "command" },
+				});
+				await handle.appendCustomEntry({
+					customType: "identity",
+					content: nextId ?? "",
+					details: { v: 1, id: nextId, via: "command" },
+					display: false,
+				});
+				opts?.preflightResult?.("handled");
+				emitEvent({ type: "entry_appended", entry });
+				return;
+			}
+			if (sessionMock.isStreaming && opts?.streamingBehavior === "steer") {
+				steeringQueue.push(text);
+				emitEvent({
+					type: "queue_update",
+					steering: [...steeringQueue],
+					followUp: [...followUpQueue],
+				});
+				opts?.preflightResult?.("queued");
+				await handle.steer(text, opts?.images);
+				const idx = steeringQueue.indexOf(text);
+				if (idx >= 0) steeringQueue.splice(idx, 1);
+				emitEvent({
+					type: "queue_update",
+					steering: [...steeringQueue],
+					followUp: [...followUpQueue],
+				});
+				return;
+			}
+			if (sessionMock.isStreaming) {
+				followUpQueue.push(text);
+				emitEvent({
+					type: "queue_update",
+					steering: [...steeringQueue],
+					followUp: [...followUpQueue],
+				});
+				opts?.preflightResult?.("queued");
+				await handle.followUp(text, opts?.images);
+				const idx = followUpQueue.indexOf(text);
+				if (idx >= 0) followUpQueue.splice(idx, 1);
+				emitEvent({
+					type: "queue_update",
+					steering: [...steeringQueue],
+					followUp: [...followUpQueue],
+				});
+				return;
+			}
+
+			sawUserMessageEndInTurn = false;
+			sawAgentEndInTurn = false;
+			const prevCount = cachedMessages.length;
+			opts?.preflightResult?.("started");
+			if (!streamingFlag) {
+				streamingFlag = true;
+				emitEvent({ type: "agent_start" });
+			}
+			try {
+				await handle.prompt({
+					text,
+					images: opts?.images,
+					streamingBehavior: opts?.streamingBehavior,
+					idempotencyKey: opts?.idempotencyKey,
+					clientMessageId: opts?.clientMessageId,
+				});
+				const latest = await handle.getMessages();
+				syncMessagesToEntries(latest);
+				if (!sawUserMessageEndInTurn) {
+					const newMsgs = cachedMessages.slice(prevCount);
+					const userMsg =
+						newMsgs.find((m) => (m as { role?: string }).role === "user") ??
+						({
+							role: "user",
+							content: [{ type: "text", text }],
+							timestamp: Date.now(),
+						} as unknown as AgentMessage);
+					if (!cachedMessages.includes(userMsg)) {
+						cachedMessages = [...cachedMessages, userMsg];
+						appendEntry({ type: "message", message: userMsg });
+					}
+					emitEvent({ type: "message_end", message: userMsg });
+					for (const m of newMsgs) {
+						if ((m as { role?: string }).role === "assistant") {
+							emitEvent({ type: "message_end", message: m });
+						}
+					}
+				}
+			} finally {
+				streamingFlag = false;
+				streamingAssistantMsg = undefined;
+				if (!sawAgentEndInTurn) {
+					emitEvent({ type: "agent_end", messages: cachedMessages });
+					emitEvent({ type: "agent_settled" });
+				}
+			}
+		},
+		steer: async (text: string, images?: unknown[]) => {
+			steeringQueue.push(text);
+			emitEvent({
+				type: "queue_update",
+				steering: [...steeringQueue],
+				followUp: [...followUpQueue],
+			});
+			await handle.steer(text, images);
+			const idx = steeringQueue.indexOf(text);
+			if (idx >= 0) steeringQueue.splice(idx, 1);
+			emitEvent({
+				type: "queue_update",
+				steering: [...steeringQueue],
+				followUp: [...followUpQueue],
+			});
+		},
+		followUp: async (text: string, images?: unknown[]) => {
+			followUpQueue.push(text);
+			emitEvent({
+				type: "queue_update",
+				steering: [...steeringQueue],
+				followUp: [...followUpQueue],
+			});
+			await handle.followUp(text, images);
+			const idx = followUpQueue.indexOf(text);
+			if (idx >= 0) followUpQueue.splice(idx, 1);
+			emitEvent({
+				type: "queue_update",
+				steering: [...steeringQueue],
+				followUp: [...followUpQueue],
+			});
+		},
+		sendCustomMessage: async (
+			entry: { customType: string; content: unknown; display?: boolean; details?: unknown },
+			opts?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
+		) => {
+			sessionManagerMock.appendCustomMessageEntry(entry.customType, entry.content, entry.display, entry.details);
+			if (opts?.triggerTurn) {
+				const text =
+					typeof entry.content === "string"
+						? entry.content
+						: Array.isArray(entry.content)
+							? entry.content
+									.map((c) => (c && typeof c === "object" && "text" in c ? String((c as { text?: unknown }).text ?? "") : ""))
+									.join("\n")
+							: "";
+				if (opts.deliverAs === "steer") await handle.steer(text);
+				else if (opts.deliverAs === "followUp") await handle.followUp(text);
+				else await handle.prompt({ text });
+			}
+		},
+		abort: async () => {
+			streamingFlag = false;
+			streamingAssistantMsg = undefined;
+			await handle.abort();
+			emitEvent({ type: "agent_end", messages: cachedMessages });
+			emitEvent({ type: "agent_settled" });
+		},
+		abortRetry: () => {},
+		abortBranchSummary: () => {},
+		abortBash: () => {},
+		isBashRunning: false,
+		setModel: async (model: { provider: string; id: string; name?: string }) => {
+			const parsed = parseProviderModel(model) ?? currentModel;
+			currentModel = parsed;
+			const fullId = `${parsed.provider}/${parsed.id}`;
+			await handle.switchModel(fullId);
+			appendEntry({
+				type: "model_change",
+				provider: parsed.provider,
+				modelId: parsed.id,
+			});
+		},
+		setThinkingLevel: (level: string) => {
+			currentThinking = level;
+			void handle.setThinkingLevel(level).catch(() => {});
+			appendEntry({
+				type: "thinking_level_change",
+				thinkingLevel: level,
+			});
+		},
+		navigateTree: async () => ({ cancelled: false }),
+		compact: async () => ({ summary: "", firstKeptEntryId: "", tokensBefore: 0 }),
+		reload: async () => {},
+		dispose: () => {
+			unsubHandle();
+			listeners.clear();
+		},
+	};
+
+	const knownModels = new Map<string, ReturnType<typeof parseProviderModel>>();
+	const ensureModel = (provider: string, id: string) => {
+		const key = `${provider}/${id}`;
+		let m = knownModels.get(key);
+		if (!m) {
+			m = parseProviderModel({ provider, id, name: id });
+			knownModels.set(key, m);
+		}
+		return m!;
+	};
+	ensureModel(currentModel.provider, currentModel.id);
+	ensureModel("anthropic", "claude-sonnet-4-5");
+	ensureModel("anthropic", "claude-opus-4-5");
+	ensureModel("openai", "gpt-5");
+
+	const modelRuntimeMock = {
+		getModel: (provider: string, id: string) => ensureModel(provider, id),
+		getAvailable: async () => [...knownModels.values()].filter((m): m is NonNullable<typeof m> => Boolean(m)),
+		getAvailableSnapshot: () => [...knownModels.values()].filter((m): m is NonNullable<typeof m> => Boolean(m)),
+		hasConfiguredAuth: () => true,
+		isUsingOAuth: () => false,
+		refresh: async () => {},
+		authStorage: {
+			setRuntimeApiKey: () => {},
+			removeRuntimeApiKey: () => {},
+			get: () => undefined,
+			set: () => {},
+		},
+		modelRegistry: {
+			getAll: () => [...knownModels.values()].filter((m): m is NonNullable<typeof m> => Boolean(m)),
+			find: (provider: string, id: string) => ensureModel(provider, id),
+		},
+	};
+
+	const runtimeWrapper = {
+		get session() {
+			return sessionMock as unknown as AgentSession;
+		},
+		services: {
+			modelRuntime: modelRuntimeMock,
+			authStorage: modelRuntimeMock.authStorage,
+			modelRegistry: modelRuntimeMock.modelRegistry,
+		},
+		diagnostics: [],
+		cwd: handle.cwd || cwd,
+		fork: async (entryId: string) => {
+			const forkedSummary = await port.fork({
+				sourceSessionKey: handle.sessionKey,
+				fromEntryId: entryId,
+				cwd: handle.cwd || cwd,
+			});
+			const forkedHandle = wrapDurableSummaryAsHandle(port, forkedSummary);
+			const forkedMsgs = (await forkedHandle.getMessages()) as unknown as AgentMessage[];
+			const nextWrapper = createDurableRuntimeWrapper(forkedHandle, port, cwd, agentDir, [...forkedMsgs]);
+			Object.assign(sessionMock, nextWrapper.session);
+			return { cancelled: false };
+		},
+		dispose: async () => {
+			unsubHandle();
+			listeners.clear();
+			await handle.dispose();
+		},
+	};
+
+	return runtimeWrapper as unknown as AgentSessionRuntime;
+}
+
 export class ClientSession {
 	readonly clientId: string;
 	/** Set by AgentService.attach: reflects the SERVICE-wide quiesce flag
@@ -3079,6 +4312,30 @@ export class ClientSession {
 	/** One persisted-session opener across browser, scheduler and participant clients. */
 	private static readonly sessionOpenChain = makeChain();
 	static participantRetained: ((sessionId: string, role: string) => boolean) | undefined;
+	/** Wave 3.4: optional process-wide DurableSessionPort & Wave 2 PendingRecoveryCoordinator. */
+	static durableSessionPort: DurableSessionPort | null = null;
+	static pendingRecoveryCoordinator: PendingRecoveryCoordinatorLike = new DurablePromptAdmissionCoordinator();
+	durablePortOverride: DurableSessionPort | null | undefined = undefined;
+	pendingRecoveryCoordinatorOverride: PendingRecoveryCoordinatorLike | undefined = undefined;
+
+	static setDurableSessionPort(port: DurableSessionPort | null): void {
+		ClientSession.durableSessionPort = port;
+	}
+
+	static getDurableSessionPort(): DurableSessionPort | null {
+		if (!isPortActive(ClientSession.durableSessionPort)) return null;
+		return ClientSession.durableSessionPort;
+	}
+
+	activeDurablePort(): DurableSessionPort | null {
+		const port = this.durablePortOverride !== undefined ? this.durablePortOverride : ClientSession.durableSessionPort;
+		if (!isPortActive(port)) return null;
+		return port;
+	}
+
+	activePendingRecoveryCoordinator(): PendingRecoveryCoordinatorLike {
+		return this.pendingRecoveryCoordinatorOverride ?? ClientSession.pendingRecoveryCoordinator;
+	}
 
 	/** reload-adopt：共享表里已经开着的对话（只暴露判断所需的字段）。 */
 	static openConversations(): AdoptCandidate[] {
@@ -4707,12 +5964,18 @@ export class ClientSession {
 		clientId: string,
 		cwd: string,
 		stateStore: ClientStateStore,
-		opts?: { blank?: boolean },
+		opts?: { blank?: boolean; durablePort?: DurableSessionPort | null; adoptId?: string | null },
 	): Promise<ClientSession> {
 		return ClientSession.sessionOpenChain(async () => {
 			// An opener may have finished while this browser was waiting for the gate.
-			const existing = !opts?.blank ? pickAdoptTarget(cwd, ClientSession.openConversations()) : null;
-			const cs = await ClientSession.createNow(clientId, cwd, stateStore, existing ? { blank: true } : opts);
+			const existing =
+				opts?.adoptId ?? (!opts?.blank ? pickAdoptTarget(cwd, ClientSession.openConversations()) : null);
+			const cs = await ClientSession.createNow(
+				clientId,
+				cwd,
+				stateStore,
+				existing ? { ...opts, blank: true, adoptId: existing } : opts,
+			);
 			if (existing) cs.adoptConversation(existing);
 			return cs;
 		});
@@ -4722,13 +5985,67 @@ export class ClientSession {
 		clientId: string,
 		cwd: string,
 		stateStore: ClientStateStore,
-		opts?: { blank?: boolean },
+		opts?: { blank?: boolean; durablePort?: DurableSessionPort | null; adoptId?: string | null },
 	): Promise<ClientSession> {
 		const agentDir = process.env.PI_CODING_AGENT_DIR ?? getAgentDir();
 		// queue-grouping: the queue links are kept in the server's client state (one store per server).
 		ClientSession.queueHomesStore = stateStore;
 
 		const cs = new ClientSession(clientId, cwd, agentDir, stateStore);
+		if (opts?.durablePort !== undefined) {
+			cs.durablePortOverride = opts.durablePort;
+		}
+		const durablePort = cs.activeDurablePort();
+		if (durablePort) {
+			if (opts?.adoptId && cs.convs.has(opts.adoptId)) {
+				cs.activeId = opts.adoptId;
+				const adopted = cs.convs.get(opts.adoptId)!;
+				cs.sharedModelRuntime = adopted.runtime.services.modelRuntime;
+				await cs.bindSession();
+				return cs;
+			}
+			const conversationId = cs.nextConversationId();
+			const terminals = cs.makeTerminalManager(conversationId, cwd);
+			const isPseudo = AgentService.isPseudoClientId(clientId) || clientId.startsWith(CARRY_ON_CLIENT_PREFIX);
+			let handle: DurableSessionHandle;
+			let initialRoleId: string | null | undefined;
+			if (isPseudo && opts?.blank) {
+				handle = createEphemeralDurableHandle(cwd, `ephemeral-${conversationId}`);
+			} else if (opts?.blank) {
+				const created = await durablePort.create({ cwd });
+				handle = wrapDurableSummaryAsHandle(durablePort, created);
+			} else {
+				const existingSessions = await durablePort.list({ cwd });
+				const sorted = [...existingSessions].sort(
+					(a, b) => durableSummaryUpdatedMs(b) - durableSummaryUpdatedMs(a),
+				);
+				if (sorted.length > 0) {
+					const target = sorted[0]!;
+					initialRoleId = durableSummaryRoleId(durablePort, target);
+					const openedSummary = await durablePort.open({
+						sessionKey: target.sessionKey,
+						sessionId: target.sessionId,
+						cwd,
+					});
+					handle = wrapDurableSummaryAsHandle(durablePort, openedSummary);
+				} else {
+					const created = await durablePort.create({ cwd });
+					handle = wrapDurableSummaryAsHandle(durablePort, created);
+				}
+			}
+			const initialMsgs = (await handle.getMessages()) as unknown as AgentMessage[];
+			const runtime = createDurableRuntimeWrapper(handle, durablePort, cwd, agentDir, initialMsgs, initialRoleId);
+			cs.sharedModelRuntime = runtime.services.modelRuntime;
+			const conv = cs.makeConversation(runtime, conversationId, terminals);
+			conv.durableHandle = handle;
+			conv.durablePort = durablePort;
+			if (isPseudo && opts?.blank) conv.isEphemeral = true;
+			cs.convs.set(conv.id, conv);
+			cs.activeId = conv.id;
+			await cs.bindSession();
+			return cs;
+		}
+
 		const conversationId = cs.nextConversationId();
 		const terminals = cs.makeTerminalManager(conversationId, cwd);
 		// Resume the most recent session for this project — the SDK default
@@ -5878,21 +7195,40 @@ export class ClientSession {
 
 	/** 找持有指定转录文件的本地对话 id（找不到 = 已被关闭/搬走/还没建好）。 */
 	private conversationIdBySessionFile(file: string): string | null {
-		let abs: string;
+		let abs: string | null = null;
 		try {
 			abs = resolve(file);
 		} catch {
-			return null;
+			abs = null;
 		}
 		for (const c of this.convs.values()) {
 			try {
 				const f = c.session.sessionFile;
-				if (f && resolve(f) === abs) return c.id;
+				if (sameSessionRef(f, file) || sameSessionRef(c.session.sessionId, file)) return c.id;
+				if (f && abs && resolve(f) === abs) return c.id;
 			} catch {
 				// session 被替换中 —— 跳过
 			}
 		}
 		return null;
+	}
+
+	findOpenConversationByRole(role: string): string | null {
+		for (const c of this.convs.values()) {
+			try {
+				const id = this.identityOf(c)?.id;
+				if (id === role) {
+					return c.session.sessionFile || `durable://${c.session.sessionId}`;
+				}
+			} catch {
+				// ignore
+			}
+		}
+		return null;
+	}
+
+	hasOpenConversationForRef(file: string): boolean {
+		return this.conversationIdBySessionFile(file) !== null;
 	}
 
 	/**
@@ -8490,10 +9826,9 @@ export class ClientSession {
 				if (byId) return byId;
 			}
 			if (typeof sessionPath !== "string" || !sessionPath) return undefined;
-			const want = resolve(sessionPath);
 			for (const c of this.convs.values()) {
 				const f = c.session.sessionFile;
-				if (f && resolve(f) === want) return c;
+				if (f && sameSessionRef(f, sessionPath)) return c;
 			}
 			return undefined;
 		};
@@ -11321,6 +12656,34 @@ export class ClientSession {
 				}
 			};
 
+			const durablePort = this.activeDurablePort();
+			const coordinator = durablePort ? this.activePendingRecoveryCoordinator() : null;
+			const idempotencyKey = receipt.id ?? `prompt:${conv.id}:${Date.now()}:${randomUUID()}`;
+			if (coordinator && receipt.id) {
+				const curModel = s.model ? `${s.model.provider}/${s.model.id}` : undefined;
+				const admission = coordinator.beginPromptAdmission({
+					sessionId: s.sessionId,
+					idempotencyKey,
+					clientMessageId: receipt.id,
+					promptText: text,
+					...(curModel ? { modelId: curModel } : {}),
+				});
+				if (admission.kind === "duplicate_inflight" || admission.kind === "duplicate_completed") {
+					flow.handedOver = true;
+					flow.admission.release();
+					this.flushConvSnapshots(conv);
+					receipt.ok();
+					return;
+				}
+			}
+
+			const wrappedPreflightResult = (disposition: "started" | "queued" | "handled"): void => {
+				if (coordinator && receipt.id) {
+					coordinator.markDispatched({ sessionId: s.sessionId, idempotencyKey });
+				}
+				preflightResult(disposition);
+			};
+
 			if (s.isStreaming) {
 				// queue=true (补充 button) → followUp: the message is delivered only
 				// after the whole run finishes — the agent finishes what it started,
@@ -11336,9 +12699,10 @@ export class ClientSession {
 				await promptCatchingDeferred(
 					s,
 					() =>
-						s.prompt(text, {
+						(s.prompt as (t: string, o?: Record<string, unknown>) => Promise<void>)(text, {
 							streamingBehavior,
-							preflightResult,
+							preflightResult: wrappedPreflightResult,
+							...(receipt.id ? { idempotencyKey, clientMessageId: receipt.id } : {}),
 							...(flow.source ? { source: flow.source, expandPromptTemplates: false } : {}),
 						}),
 					(err) => this.deferredPromptFailed(conv, receipt, flow, err),
@@ -11347,12 +12711,16 @@ export class ClientSession {
 				await promptCatchingDeferred(
 					s,
 					() =>
-						s.prompt(text, {
-							preflightResult,
+						(s.prompt as (t: string, o?: Record<string, unknown>) => Promise<void>)(text, {
+							preflightResult: wrappedPreflightResult,
+							...(receipt.id ? { idempotencyKey, clientMessageId: receipt.id } : {}),
 							...(flow.source ? { source: flow.source, expandPromptTemplates: false } : {}),
 						}),
 					(err) => this.deferredPromptFailed(conv, receipt, flow, err),
 				);
+			}
+			if (coordinator && receipt.id) {
+				coordinator.markSettled({ sessionId: s.sessionId, idempotencyKey });
 			}
 			// optimistic-send: pi came back without calling preflightResult (a refusal would have thrown):
 			// it put the text off until the previous run has settled and calls it then, or refuses it
@@ -11954,6 +13322,58 @@ export class ClientSession {
 		try {
 			const conversationId = this.nextConversationId();
 			const terminals = this.makeTerminalManager(conversationId, this.cwd);
+			const durablePort = this.activeDurablePort();
+			if (durablePort) {
+				const handle = ephemeral
+					? createEphemeralDurableHandle(this.cwd, `ephemeral-${conversationId}`)
+					: wrapDurableSummaryAsHandle(
+							durablePort,
+							await durablePort.create({
+								cwd: this.cwd,
+								...(prevModel ? { model: { provider: prevModel.provider, id: prevModel.id } } : {}),
+								...(prevThinking ? { thinkingLevel: String(prevThinking) as DurableThinkingLevel } : {}),
+							}),
+						);
+				const initialMsgs = (await handle.getMessages()) as unknown as AgentMessage[];
+				const runtime = createDurableRuntimeWrapper(handle, durablePort, this.cwd, this.agentDir, initialMsgs);
+				const conv = this.makeConversation(runtime, conversationId, terminals);
+				conv.durableHandle = handle;
+				conv.durablePort = durablePort;
+				if (ephemeral) conv.isEphemeral = true;
+				if (_preset) {
+					const hit = PI_AGENT_PRESETS.find((p) => p.id === _preset);
+					if (hit) conv.agentPreset = hit.id;
+				}
+				this.applyToolGating(conv.session, conv.agentPreset);
+				this.convs.set(conv.id, conv);
+				this.activeId = conv.id;
+				if (displaced) this.removeConversation(displaced.id);
+				await this.bindSession();
+				this.invalidateSessionInfos();
+				if (prevModel) {
+					try {
+						await this.session.setModel(prevModel);
+					} catch {
+						// ignore
+					}
+				}
+				if (prevThinking) {
+					try {
+						this.session.setThinkingLevel(prevThinking as Parameters<AgentSession["setThinkingLevel"]>[0]);
+					} catch {
+						// ignore
+					}
+				}
+				this.emitConversations();
+				this.goalSvc.emitGoalStatus();
+				this.pushTerminals();
+				void this.pushSlashCommands();
+				this.notifyConversationChanged();
+				ready = true;
+				this.flushSnapshot();
+				this.pushSettings();
+				return true;
+			}
 			let sessionManager: SessionManager;
 			if (ephemeral) {
 				sessionManager = SessionManager.inMemory(this.cwd);
@@ -13478,13 +14898,75 @@ export class ClientSession {
 	/** session-index: History's rows from the server's saved index (shared by every window; reads only what
 	 *  changed since the last listing). Same rows and order as pi's listAll/list, without the full text. */
 	private async loadSessionInfos(): Promise<SessionInfo[]> {
+		const durablePort = this.activeDurablePort();
+		if (durablePort) {
+			const summaries = await durablePort.list(historyScope() === "all" ? undefined : { cwd: this.cwd });
+			return summaries.map((s) => this.durableSummaryToSessionInfo(durablePort, s));
+		}
 		return historyScope() === "all"
 			? sessionIndex.listAll(piSessionsRoot())
 			: sessionIndex.listProject(this.cwd, piSessionsRoot());
 	}
 
+	private durableSummaryToSessionInfo(port: DurableSessionPort, s: DurableSessionSummary): SessionInfo {
+		const path = durableSummaryFileRef(s);
+		let resolvedName = s.name;
+		const openConvId = this.conversationIdBySessionFile(path);
+		const openConv = openConvId ? this.convs.get(openConvId) : undefined;
+		if (openConv?.title) {
+			resolvedName = openConv.title;
+		}
+		try {
+			const entries = port.getEntries(s.sessionKey);
+			for (let i = entries.length - 1; i >= 0; i--) {
+				const e = entries[i];
+				if (e.customType === "session_info" && e.data && typeof e.data === "object" && "name" in e.data) {
+					const n = (e.data as { name?: unknown }).name;
+					if (typeof n === "string" && n.trim()) {
+						resolvedName = n.trim();
+						break;
+					}
+				}
+			}
+		} catch {
+			// ignore
+		}
+		let firstMsg = resolvedName ?? "";
+		try {
+			const msgs = port.getMessages(s.sessionKey);
+			const firstUser = msgs.find((m) => m.role === "user");
+			if (firstUser) {
+				if (typeof firstUser.content === "string") firstMsg = firstUser.content;
+				else if (Array.isArray(firstUser.content)) {
+					const textBlock = firstUser.content.find(
+						(b) => b && typeof b === "object" && "text" in b,
+					) as { text?: string } | undefined;
+					if (textBlock?.text) firstMsg = textBlock.text;
+				}
+			}
+		} catch {
+			// ignore
+		}
+		return {
+			id: s.sessionId,
+			path,
+			cwd: s.cwd,
+			name: resolvedName,
+			firstMessage: firstMsg,
+			allMessagesText: firstMsg,
+			messageCount: s.messageCount,
+			created: new Date(durableSummaryCreatedMs(s)),
+			modified: new Date(durableSummaryUpdatedMs(s)),
+		} as unknown as SessionInfo;
+	}
+
 	/** Global search needs every chat's full text (`allMessagesText`): pi reads it, kept a few seconds. */
 	private async loadSessionInfosWithText(): Promise<SessionInfo[]> {
+		const durablePort = this.activeDurablePort();
+		if (durablePort) {
+			const summaries = await durablePort.list(historyScope() === "all" ? undefined : { cwd: this.cwd });
+			return summaries.map((s) => this.durableSummaryToSessionInfo(durablePort, s));
+		}
 		const now = Date.now();
 		// 全局范围的缓存键固定为 `"*"`：列表与 cwd 无关，切项目不应该把全部
 		// 转录重新解析一遍。
@@ -13625,6 +15107,29 @@ export class ClientSession {
 	private async attachIdentities(rows: SessionSummary[], resend: () => void): Promise<void> {
 		const { identities } = identityRegistry();
 		if (rows.length === 0 || identities.length === 0) return;
+		const durablePort = this.activeDurablePort();
+		if (durablePort) {
+			const summaries = await durablePort.list().catch(() => []);
+			for (const row of rows) {
+				const openConv = [...this.convs.values()].find(
+					(c) => sameSessionRef(c.session.sessionFile, row.path) || sameSessionRef(c.session.sessionId, row.path),
+				);
+				const summary = summaries.find(
+					(s) =>
+						sameSessionRef(durableSummaryFileRef(s), row.path) ||
+						sameSessionRef(s.sessionId, row.path) ||
+						sameSessionRef(s.sessionKey, row.path),
+				);
+				const roleId =
+					(openConv ? this.identityOf(openConv)?.id : undefined) ??
+					(summary ? durableSummaryRoleId(durablePort, summary) : undefined) ??
+					homeChatOf(row.path, identities)?.id;
+				const identity = uiChatIdentity(roleId, identities);
+				if (identity) row.identity = identity;
+				else delete row.identity;
+			}
+			return;
+		}
 		const apply = (ids: Map<string, string | null>): boolean => {
 			let changed = false;
 			for (const row of rows) {
@@ -13673,6 +15178,48 @@ export class ClientSession {
 	 */
 	async deleteSession(path: string): Promise<void> {
 		try {
+			const durablePort = this.activeDurablePort();
+			if (durablePort) {
+				const holdsTarget = (conv: Conversation): boolean =>
+					sameSessionRef(conv.session.sessionFile, path) || sameSessionRef(conv.session.sessionId, path);
+				const holder = [...this.convs.values()].find(holdsTarget);
+				if (holder && holder.id !== this.activeId) {
+					this.emit({
+						type: "notice",
+						level: "warning",
+						text: "This conversation is still running — stop or close it before deleting",
+						textEn: "This conversation is still running — stop or close it before deleting",
+					});
+					return;
+				}
+				const summaries = await durablePort.list({ cwd: this.cwd });
+				const matched = summaries.find(
+					(s) =>
+						sameSessionRef(durableSummaryFileRef(s), path) ||
+						sameSessionRef(s.sessionId, path) ||
+						sameSessionRef(s.sessionKey, path),
+				);
+				const targetSessionKey =
+					matched?.sessionKey ??
+					holder?.durableHandle?.sessionKey ??
+					holder?.session.sessionId ??
+					(path.startsWith("durable://") ? path.slice("durable://".length) : path);
+				if (holder) {
+					const next = summaries
+						.filter((s) => s.sessionKey !== targetSessionKey && s.sessionId !== targetSessionKey)
+						.sort((a, b) => durableSummaryUpdatedMs(b) - durableSummaryUpdatedMs(a))[0];
+					if (next) await this.switchSession(durableSummaryFileRef(next));
+					else await this.newChat();
+					const stillHeld = [...this.convs.values()].find(holdsTarget);
+					if (stillHeld) {
+						this.removeConversation(stillHeld.id);
+					}
+				}
+				await durablePort.delete(targetSessionKey);
+				this.invalidateSessionInfos();
+				await this.refreshSessions();
+				return;
+			}
 			const abs = resolve(path);
 			if (!isInsideSessionsDir(this.agentDir, abs)) {
 				this.emit({
@@ -13788,6 +15335,33 @@ export class ClientSession {
 		try {
 			const trimmed = (name ?? "").trim();
 			if (!trimmed) return;
+			const durablePort = this.activeDurablePort();
+			if (durablePort) {
+				const convId = this.conversationIdBySessionFile(path);
+				const conv = convId ? this.convs.get(convId) : undefined;
+				if (conv) {
+					conv.title = trimmed;
+					conv.session.sessionManager.appendSessionInfo(trimmed);
+				} else {
+					const summaries = await durablePort.list();
+					const matched = summaries.find(
+						(s) =>
+							sameSessionRef(durableSummaryFileRef(s), path) ||
+							sameSessionRef(s.sessionId, path) ||
+							sameSessionRef(s.sessionKey, path),
+					);
+					const targetSessionKey =
+						matched?.sessionKey ?? (path.startsWith("durable://") ? path.slice("durable://".length) : path);
+					await durablePort.appendCustomEntry(
+						"session_info",
+						{ name: trimmed },
+						{ sessionKey: targetSessionKey },
+					);
+				}
+				this.invalidateSessionInfos();
+				await this.refreshSessions();
+				return;
+			}
 			const abs = resolve(path);
 			if (!isInsideSessionsDir(this.agentDir, abs)) {
 				this.emit({
@@ -13822,6 +15396,13 @@ export class ClientSession {
 			const conv = this.convs.get(id);
 			if (!conv) return;
 			conv.title = trimmed;
+			if (conv.durableHandle) {
+				conv.session.sessionManager.appendSessionInfo(trimmed);
+				this.invalidateSessionInfos();
+				await this.refreshSessions();
+				this.emitConversations();
+				return;
+			}
 			try {
 				const file = conv.session.sessionFile;
 				if (file !== undefined) SessionManager.open(resolve(file)).appendSessionInfo(trimmed);
@@ -14402,6 +15983,93 @@ export class ClientSession {
 		let openedRuntime: AgentSessionRuntime | null = null;
 		let openedTerminals: TerminalManager | null = null;
 		try {
+			const durablePort = this.activeDurablePort();
+			if (durablePort) {
+				for (const conv of this.convs.values()) {
+					if (sameSessionRef(conv.session.sessionFile, path) || sameSessionRef(conv.session.sessionId, path)) {
+						validate?.(conv.session.sessionManager);
+						if (validate) {
+							conv.listed = true;
+							return;
+						}
+						const wasActive = conv.id === this.activeId;
+						await this.switchConversation(conv.id, this.switchHave ?? undefined);
+						if (wasActive) this.flushSnapshot();
+						this.emitSwitchDone(target);
+						return;
+					}
+				}
+				const summaries = await durablePort.list();
+				const matched = summaries.find(
+					(s) =>
+						sameSessionRef(durableSummaryFileRef(s), path) ||
+						sameSessionRef(s.sessionId, path) ||
+						sameSessionRef(s.sessionKey, path),
+				);
+				const targetSessionId =
+					matched?.sessionId ?? (path.startsWith("durable://") ? path.slice("durable://".length) : path);
+				const targetCwd = matched?.cwd || this.cwd;
+				const openedSummary = await durablePort.open(
+					matched
+						? { sessionKey: matched.sessionKey, sessionId: matched.sessionId, cwd: targetCwd }
+						: { sessionId: targetSessionId, sessionFile: path, cwd: targetCwd },
+				);
+				const handle = wrapDurableSummaryAsHandle(durablePort, openedSummary);
+				const initialMsgs = (await handle.getMessages()) as unknown as AgentMessage[];
+				const conversationId = this.nextConversationId();
+				openedTerminals = this.makeTerminalManager(conversationId, targetCwd);
+				openedRuntime = createDurableRuntimeWrapper(
+					handle,
+					durablePort,
+					targetCwd,
+					this.agentDir,
+					initialMsgs,
+					durableSummaryRoleId(durablePort, openedSummary),
+				);
+				validate?.(openedRuntime.session.sessionManager);
+				const oldListed = this.conv.listed;
+				const displaced = this.displaceActive();
+				const openInProject =
+					this.slotsUsedIn(targetCwd) +
+					1 -
+					(displaced && displaced.cwd === targetCwd && this.countsTowardCap(displaced) ? 1 : 0);
+				if (openInProject > MAX_OPEN_CONVERSATIONS) {
+					this.conv.listed = oldListed;
+					openedTerminals.killAll();
+					await openedRuntime.dispose();
+					openedRuntime = null;
+					openedTerminals = null;
+					this.emitSwitchFailed(target, OPEN_CHATS_FULL_MESSAGE, OPEN_CHATS_FULL_MESSAGE);
+					return;
+				}
+				const conv = this.makeConversation(openedRuntime, conversationId, openedTerminals);
+				conv.durableHandle = handle;
+				conv.durablePort = durablePort;
+				conv.promptedSinceActive = !validate;
+				if (validate) conv.listed = true;
+				this.convs.set(conv.id, conv);
+				this.activeId = conv.id;
+				if (!validate) this.markRecentSeen(conv);
+				openedRuntime = null;
+				openedTerminals = null;
+				if (displaced) this.removeConversation(displaced.id);
+				await this.bindSession();
+				if (chatFollowsWorkspace()) {
+					this.cwd = targetCwd;
+					this.applyCwdSideEffects(targetCwd);
+				}
+				this.conv.lastActiveAt = validate ? 0 : Date.now();
+				this.webUi.refresh();
+				this.emitConversations();
+				this.goalSvc.emitGoalStatus();
+				this.pushTerminals();
+				void this.pushSlashCommands();
+				this.notifyConversationChanged();
+				this.flushSnapshot();
+				this.emitSwitchDone(target);
+				this.pushSettings();
+				return;
+			}
 			const targetPath = resolve(path);
 			if (!isInsideSessionsDir(this.agentDir, targetPath)) {
 				// switch-loading：上游 5ca2e70 的越界拒绝原本只发 notice、不回执，客户端的「正在打开…」
@@ -14775,6 +16443,79 @@ export class ClientSession {
 		const targetLeafId = position === "at" ? entry.id : entry.parentId;
 
 		try {
+			const durablePort = this.activeDurablePort();
+			if (durablePort) {
+				const prevModel = targetConv.session.agent.state.model ?? null;
+				const prevThinking = targetConv.session.thinkingLevel ?? null;
+				const conversationId = this.nextConversationId();
+				const terminals = this.makeTerminalManager(conversationId, targetConv.cwd);
+				const forkedSummary = await durablePort.fork({
+					sourceSessionKey: targetConv.durableHandle?.sessionKey ?? targetConv.session.sessionId,
+					fromEntryId: targetLeafId ?? undefined,
+					cwd: targetConv.cwd,
+				});
+				const forkedHandle = wrapDurableSummaryAsHandle(durablePort, forkedSummary);
+				const initialMsgs = (await forkedHandle.getMessages()) as unknown as AgentMessage[];
+				const runtime = createDurableRuntimeWrapper(
+					forkedHandle,
+					durablePort,
+					targetConv.cwd,
+					this.agentDir,
+					initialMsgs,
+					this.identityOf(targetConv)?.id,
+				);
+				const newConv = this.makeConversation(runtime, conversationId, terminals);
+				newConv.durableHandle = forkedHandle;
+				newConv.durablePort = durablePort;
+				if (targetConv.agentPreset) newConv.agentPreset = targetConv.agentPreset;
+				if (targetConv.permissionPreset) newConv.permissionPreset = targetConv.permissionPreset;
+				newConv.forkFrom = {
+					conversationId: targetConv.id,
+					messageId,
+					title: targetConv.title,
+				};
+				const oldListed = this.conv.listed;
+				const displaced = this.displaceActive();
+				const openInProject =
+					this.slotsUsedIn(targetConv.cwd) +
+					1 -
+					(displaced && displaced.cwd === targetConv.cwd && this.countsTowardCap(displaced) ? 1 : 0);
+				if (openInProject > MAX_OPEN_CONVERSATIONS) {
+					this.conv.listed = oldListed;
+					terminals.killAll();
+					await runtime.dispose();
+					this.emit({ type: "notice", level: "warning", text: OPEN_CHATS_FULL_MESSAGE, textEn: OPEN_CHATS_FULL_MESSAGE });
+					return;
+				}
+				this.convs.set(conversationId, newConv);
+				this.activeId = conversationId;
+				if (displaced) this.removeConversation(displaced.id);
+				await this.bindSession();
+				if (prevModel) {
+					try {
+						await this.session.setModel(prevModel);
+					} catch {
+						// ignore
+					}
+				}
+				if (prevThinking) {
+					try {
+						this.session.setThinkingLevel(prevThinking as Parameters<AgentSession["setThinkingLevel"]>[0]);
+					} catch {
+						// ignore
+					}
+				}
+				this.invalidateSessionInfos();
+				this.emitConversations();
+				this.emit({
+					type: "notice",
+					level: "info",
+					text: "🌱 Forked new branch session and switched to it (original preserved)",
+					textEn: "🌱 Forked new branch session and switched to it (original preserved)",
+				});
+				this.flushSnapshot();
+				return;
+			}
 			const currentSessionFile = targetConv.session.sessionFile;
 			const isPersisted =
 				targetConv.session.sessionManager.isPersisted() && currentSessionFile && existsSync(currentSessionFile);
@@ -16182,6 +17923,8 @@ export class ClientSession {
 				// best effort
 			}
 		}
+		this.convs.clear();
+		lastHistoryRows = null;
 		disposeAllEvalKernels();
 	}
 
@@ -16283,11 +18026,103 @@ export class AgentService {
 	 *  index.ts 接到 PluginManager.notifyCwd / notifyWorkspaceRoots，让插件宿主的
 	 *  host.cwd 实时跟随当前项目、受支持路径范围跟着多根变。 */
 	onClientCwdChanged: ((cwd: string, roots: string[]) => void) | undefined = undefined;
+	private durablePort: DurableSessionPort | null = null;
+	private pendingRecoveryCoordinator: PendingRecoveryCoordinatorLike = new DurablePromptAdmissionCoordinator();
+
+	setDurableSessionPort(port: DurableSessionPort | null): void {
+		this.durablePort = port;
+		ClientSession.durableSessionPort = port;
+		for (const cs of this.clients.values()) {
+			cs.durablePortOverride = port;
+		}
+	}
+
+	getDurableSessionPort(): DurableSessionPort | null {
+		return this.durablePort ?? ClientSession.durableSessionPort;
+	}
+
+	activeDurablePort(): DurableSessionPort | null {
+		const port = this.durablePort ?? ClientSession.durableSessionPort;
+		if (!isPortActive(port)) return null;
+		return port;
+	}
+
+	setPendingRecoveryCoordinator(coordinator: PendingRecoveryCoordinatorLike): void {
+		this.pendingRecoveryCoordinator = coordinator;
+		ClientSession.pendingRecoveryCoordinator = coordinator;
+		for (const cs of this.clients.values()) {
+			cs.pendingRecoveryCoordinatorOverride = coordinator;
+		}
+	}
+
+	getPendingRecoveryCoordinator(): PendingRecoveryCoordinatorLike {
+		return this.pendingRecoveryCoordinator;
+	}
+
+	async resolveRoleHomeChat(role: string): Promise<{ ok: true; file: string } | { ok: false; error: string }> {
+		const identities = identityRegistry().identities;
+		const durablePort = this.activeDurablePort();
+		if (durablePort) {
+			for (const cs of this.clients.values()) {
+				const openConv = cs.findOpenConversationByRole(role);
+				if (openConv) {
+					return { ok: true, file: openConv };
+				}
+			}
+			const summaries = await durablePort.list();
+			const byRole = summaries
+				.filter((s) => durableSummaryRoleId(durablePort, s) === role)
+				.sort((a, b) => durableSummaryUpdatedMs(b) - durableSummaryUpdatedMs(a))[0];
+			if (byRole) {
+				return { ok: true, file: durableSummaryFileRef(byRole) };
+			}
+			const def = identities.find((i) => i.id === role);
+			if (def?.homeChat) {
+				const byHomeRef = summaries.find(
+					(s) =>
+						sameSessionRef(durableSummaryFileRef(s), def.homeChat) ||
+						sameSessionRef(s.sessionId, def.homeChat) ||
+						sameSessionRef(s.sessionKey, def.homeChat),
+				);
+				if (byHomeRef) {
+					return { ok: true, file: durableSummaryFileRef(byHomeRef) };
+				}
+			}
+		}
+		return roleHomeChat(role, identities);
+	}
+
+	private async chatTranscriptExists(file: string): Promise<boolean> {
+		if (existsSync(file)) return true;
+		const durablePort = this.activeDurablePort();
+		if (!durablePort) return false;
+		if (file.startsWith("durable://")) return true;
+		for (const cs of this.clients.values()) {
+			if (cs.hasOpenConversationForRef(file)) return true;
+		}
+		const summaries = await durablePort.list();
+		return summaries.some(
+			(s) =>
+				sameSessionRef(durableSummaryFileRef(s), file) ||
+				sameSessionRef(s.sessionId, file) ||
+				sameSessionRef(s.sessionKey, file),
+		);
+	}
 
 	constructor(
 		private cwd: string,
 		stateFile: string,
+		opts?: {
+			durablePort?: DurableSessionPort | null;
+			pendingRecoveryCoordinator?: PendingRecoveryCoordinatorLike;
+		},
 	) {
+		if (opts?.durablePort !== undefined) {
+			this.setDurableSessionPort(opts.durablePort);
+		}
+		if (opts?.pendingRecoveryCoordinator) {
+			this.setPendingRecoveryCoordinator(opts.pendingRecoveryCoordinator);
+		}
 		this.stateStore = new ClientStateStore(stateFile);
 		this.claimStore = new ClaimStore(join(this.stateStore.dataDir, "claims.json"));
 		ClientSession.participantRetained = (id, role) => this.participants.has(id, role);
@@ -17233,7 +19068,7 @@ export class AgentService {
 	async sendToRole(role: string, text: string, opts: RoleSendOptions = {}): Promise<RoleSendResult> {
 		const body = String(text ?? "");
 		if (!body.trim()) return { ok: false, error: "the message is empty" };
-		const home = roleHomeChat(role, identityRegistry().identities);
+		const home = await this.resolveRoleHomeChat(role);
 		if (!home.ok) return home;
 		const sendId = `rs-${randomUUID()}`;
 		const cause: RoleTurnCause = opts.via === "telegram" ? "telegram" : "plugin";
@@ -17268,7 +19103,7 @@ export class AgentService {
 		return this.roleMessagesChain(async (): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> => {
 			if (this.carryOnGate) await this.carryOnGate.catch(() => {});
 			if (this.quiesced) return { ok: false, error: "the server is restarting" };
-			if (!existsSync(file)) return { ok: false, error: "the chat's transcript is gone" };
+			if (!(await this.chatTranscriptExists(file))) return { ok: false, error: "the chat's transcript is gone" };
 			const ackId = `rm:${randomUUID()}`;
 			let answer: (a: { ok: boolean; reason?: string }) => void = () => {};
 			const receipt = new Promise<{ ok: boolean; reason?: string }>((r) => {
@@ -17307,7 +19142,7 @@ export class AgentService {
 		return this.roleMessagesChain(async (): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> => {
 			if (this.carryOnGate) await this.carryOnGate.catch(() => {});
 			if (this.quiesced) return { ok: false, error: "the server is restarting" };
-			if (!existsSync(file)) return { ok: false, error: "the chat's transcript is gone" };
+			if (!(await this.chatTranscriptExists(file))) return { ok: false, error: "the chat's transcript is gone" };
 			const sink = (_msg: ServerMessage): void => {};
 			try {
 				const cs = await this.attach(ROLE_MESSAGES_CLIENT_ID, sink);
@@ -18642,12 +20477,16 @@ export class AgentService {
 					clientId,
 					cwd,
 					this.stateStore,
-					openHere || AgentService.isPseudoClientId(clientId) ? { blank: true } : undefined,
+					openHere || AgentService.isPseudoClientId(clientId)
+						? { blank: true, durablePort: this.durablePort, adoptId }
+						: { durablePort: this.durablePort, adoptId },
 				).finally(() => {
 					this.pending.delete(clientId);
 				});
 				this.pending.set(clientId, creating);
 				cs = await creating;
+				cs.durablePortOverride = this.durablePort;
+				cs.pendingRecoveryCoordinatorOverride = this.pendingRecoveryCoordinator;
 				this.clients.set(clientId, cs);
 				// issue #145 接线提前：首帧 elsewhere 依赖它。
 				this.wireClient(cs, clientId);
