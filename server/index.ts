@@ -54,7 +54,24 @@ import { promptIds } from "./prompt-ack.js";
 import { recordUnknownWsType } from "./ws-unknown-types.js";
 import { validateClientId } from "./ws-client-id.js";
 import { browserRoleInput } from "./role-replies.js";
-import { PendingCommandQueue } from "./ws-pending-queue.js";
+import {
+	PendingCommandLifecycle,
+	PendingLifecycleCaptureError,
+	PendingLifecycleRejectedError,
+	type PendingCommandCorrelation,
+	type PendingLifecycleDisposition,
+	type PendingLifecycleHandoff,
+	type PendingLifecycleIgnored,
+} from "./ws-pending-lifecycle.js";
+import {
+	attachAfterReady,
+	correlateIdentityReply,
+	createHistoryTransport,
+	terminalViewReply,
+} from "./ws-integration.js";
+import { recoveryUsesSessionTarget } from "./recovery-scope.js";
+import { claimAuthoredCommand, type CommandClaim } from "./command-ownership.js";
+import { registerToolInspectorRoutes, type ToolInspectorDependencies } from "./tool-inspector.js";
 import {
 	installPack,
 	isKnownPack,
@@ -119,10 +136,12 @@ import type {
 	BgServer,
 	CachedWindow,
 	ClientMessage,
+	CommandRecoveryIdentity,
 	UiApprovalRule,
 	UiLayoutPrefs,
 	CommandDef,
 	PromptAttachment,
+	FilePreviewMetadata,
 	ServerMessage,
 	UiRoleGuardQuestion,
 	UiRoleMessageRow,
@@ -135,6 +154,7 @@ import type {
 	UiUpdateLink,
 	UiServiceInfo,
 	UiSubagentTemplate,
+	TerminalInfo,
 } from "./protocol.js";
 
 /** Strip npm-injected env (`npm start` exports `npm_config_*` / `npm_package_*` /
@@ -1146,6 +1166,7 @@ import { DshAgentService } from "./dsh/dsh-agent-service.js";
 
 /** TerminalManager 的 dispatch 面（两个引擎共用同一实现类）。 */
 export interface TerminalManagerLike {
+	list(): TerminalInfo[];
 	create(
 		id: string,
 		cwd: string,
@@ -1155,6 +1176,11 @@ export interface TerminalManagerLike {
 		title?: string,
 		opts?: { forceBash?: boolean; locale?: string },
 	): unknown;
+	attachExistingView?(
+		id: string,
+		cols: number,
+		rows: number,
+	): { terminal: TerminalInfo; data: string; offset: number } | null;
 	/** 浏览器终端视图挂载时的 terminal_create：贴回已有 PTY / 历史，不重启它们。 */
 	openView(
 		id: string,
@@ -1188,6 +1214,8 @@ export interface DispatchSession {
 	 *  a message written into a chat that was still opening if the window ended up elsewhere.
 	 *  Optional: engines without sessions (DSH) don't implement it and the check is skipped. */
 	activeSessionId?(): string;
+	activeConversationId?(): string;
+	sessionIdForConversation?(conversationId: string): string;
 	/** Remove one queued prompt (steer/followUp) — the ✕ on a pending bubble.
 	 *  `index` is the bubble position (identity); omitted = text fallback. */
 	removeQueued(kind: "steer" | "followUp", text: string, index?: number): void;
@@ -1235,7 +1263,19 @@ export interface DispatchSession {
 		profile?: unknown,
 	): Promise<void>;
 	/** telegram-answers: the Queue tab answers a stuck task (a choice or typed words); optional like above. */
-	taskQueueAnswer?(conversationId: string, taskId: number, text: string): Promise<void>;
+	taskQueueAnswer?(
+		conversationId: string,
+		taskId: number,
+		text: string,
+		binding?: {
+			reqId?: unknown;
+			queueId?: unknown;
+			questionId?: unknown;
+			question?: unknown;
+			choices?: unknown;
+			detail?: unknown;
+		},
+	): Promise<unknown>;
 	/** identities: set / clear a chat's identity through pi-identity's `/identity`. Optional: DSH has none. */
 	setChatIdentity?(conversationId: unknown, sessionPath: unknown, identity: unknown): Promise<void>;
 	pushSlashCommands(): Promise<void>;
@@ -1269,8 +1309,8 @@ export interface DispatchSession {
 	/** SCM「AI 生成提交信息」（scm_commitmsg）：当前模型一次性补全，应答 kind
 	 *  "commitmsg" 的 scm_data；pi 引擎之外的会话实现缺失时分发处兜底报错。 */
 	scmGenCommitMessage?(reqId: number): Promise<void>;
-	readFile(path: string): Promise<void>;
-	writeFile(path: string, text: string): Promise<void>;
+	readFile(path: string, request?: FilePreviewMetadata): Promise<void>;
+	writeFile(path: string, text: string, request?: FilePreviewMetadata): Promise<void>;
 	uploadFile(dirPath: string, name: string, data: string): Promise<void>;
 	/** 文件树右键菜单的文件操作（contextmenu.file：新建/重命名/删除/复制移动）。 */
 	createEntry(dir: string, name: string, kind: "file" | "dir"): Promise<void>;
@@ -1430,6 +1470,8 @@ export interface DispatchSession {
 
 /** 引擎无关的服务接口（index.ts attach 流程 + 插件扩展点所需）。 */
 export interface EngineService {
+	/** W2: exact client + conversation catalog; unsupported engines do not mount the route. */
+	toolInspectorDependencies?(): ToolInspectorDependencies;
 	attach(clientId: string, send: (msg: ServerMessage) => void): Promise<DispatchSession>;
 	detach(clientId: string, send: (msg: ServerMessage) => void): void;
 	get(clientId: string): DispatchSession | undefined;
@@ -1613,6 +1655,11 @@ const service: EngineService =
 				// Per-client persisted UI state: last-used workspace + recent projects.
 				join(DATA_DIR, "client-state.json"),
 			);
+
+// Authentication middleware above covers these routes too. Do not attach/create a session for an
+// HTTP inspector read: it must address an already-open client and conversation exactly.
+const inspectorDependencies = service.toolInspectorDependencies?.();
+if (inspectorDependencies) registerToolInspectorRoutes(app, inspectorDependencies);
 
 // Server-string tables (issue #91 v2): packs' `serverStrings` sections feed
 // pick() lookup for non-zh/en UI languages (missing key → English fallback).
@@ -2470,9 +2517,9 @@ wss.on("connection", (ws, req) => {
 	let lastSnapshotBytes = 0;
 	/** switch-loading：最近一份真正发出去的全量 snapshot 属于哪条对话（打开另一条对话的快照不丢，见 send）。 */
 	let lastSnapshotConvId: string | null = null;
-	/** Commands received while the session is still being created — replayed after attach.
-	 *  带上限（256 条）：attach 挂死/失败保活期间队列不再无界增长，超限丢最旧并告警。 */
-	const pending = new PendingCommandQueue();
+	/** One finite FIFO per socket generation. Capacity/failure never silently evicts work. */
+	const pendingGeneration = randomUUID();
+	const pending = new PendingCommandLifecycle(pendingGeneration);
 	/** attach 完成（含插件链 + 首快照）前一律排队（见 hello 分支的 replayQueued）：
 	 *  ready 先行后，ready 只代表传输通，插件命令目录/首快照都还没好，直接分发
 	 *  会撞「未知命令」/ rev 链断裂。 */
@@ -2486,6 +2533,8 @@ wss.on("connection", (ws, req) => {
 	// exception 打崩整个进程（issue #11 附带发现）。记日志并按坏连接关闭。
 	ws.on("error", (err) => {
 		console.error(`[ws] socket error${clientId ? ` (${clientId})` : ""}:`, err.message);
+		consumePending(pending.socketClosed(pendingGeneration));
+		closed = true;
 		try {
 			ws.close();
 		} catch {
@@ -2495,7 +2544,7 @@ wss.on("connection", (ws, req) => {
 
 	// chat-open-speed: onSent (when given) fires once the frame has really left; the sender may be
 	// waiting for it before it starts a long piece of blocking work. Every path must call it.
-	const send = (msg: ServerMessage, onSent?: () => void): void => {
+	const sendRaw = (msg: ServerMessage, onSent?: () => void): void => {
 		if (closed || ws.readyState !== WebSocket.OPEN) {
 			onSent?.();
 			return;
@@ -2545,6 +2594,10 @@ wss.on("connection", (ws, req) => {
 		if (onSent) ws.send(wire, () => onSent());
 		else ws.send(wire);
 	};
+	// Window before byte estimation/backpressure. The tap preserves the engine's absolute
+	// messagesStart and falls back to load_older for history outside the cached engine window.
+	const historyTransport = createHistoryTransport(sendRaw);
+	const send = historyTransport.send;
 
 	// Plugins broadcast to every open socket; unregister on close below.
 	// Plugins broadcast to every open socket; unregister on close below. The
@@ -2587,23 +2640,148 @@ wss.on("connection", (ws, req) => {
 		});
 	};
 
-	const dispatch = (msg: ClientMessage): void => {
+	const recoveryOf = (msg: ClientMessage): CommandRecoveryIdentity | null => {
+		const r = msg.recovery;
+		return r &&
+			typeof r.id === "string" &&
+			typeof r.sessionId === "string" &&
+			typeof r.contentDigest === "string" &&
+			typeof r.attemptId === "string"
+			? r
+			: null;
+	};
+	const correlationFor = (msg: ClientMessage): PendingCommandCorrelation => {
+		const r = recoveryOf(msg);
+		return {
+			requestId: r?.id ?? (msg.type === "prompt" && typeof msg.id === "string" ? msg.id : null),
+			sessionId: r?.sessionId ?? (msg.type === "prompt" && typeof msg.forSession === "string" ? msg.forSession : null),
+			connectionGeneration: pendingGeneration,
+		};
+	};
+	const reportDisposition = (disposition: Omit<PendingLifecycleDisposition, "reason"> & { reason: string }): void => {
+		const { command, correlation } = disposition.entry;
+		// A normal handler return adds no evidence: the client already retains an uncertain copy.
+		// In particular it must not overwrite a more specific session-changed refusal.
+		if (disposition.status === "uncertain" && disposition.reason === "handler-returned") return;
+		const recovery = recoveryOf(command);
+		if (recovery && recovery.id === correlation.requestId && recovery.sessionId === correlation.sessionId) {
+			// Metadata only. The complete original is already held by the browser before transmission.
+			// A closed socket may not deliver this: no delivery/processing/persistence ack is invented.
+			send({
+				type: "command_disposition",
+				recovery,
+				connectionGeneration: pendingGeneration,
+				commandType: command.type,
+				status: disposition.status,
+				retryable: disposition.retryable,
+				reason: disposition.reason,
+				persistence: "unknown",
+				releaseClientCopy: false,
+			});
+		} else if (disposition.status === "unprocessed") {
+			// Compatibility clients have no correlated journal. Never claim their work was processed.
+			send({
+				type: "notice",
+				level: "error",
+				text: "A startup command was not processed. Keep your draft and check the operation before retrying.",
+				textEn: "A startup command was not processed. Keep your draft and check the operation before retrying.",
+			});
+		}
+	};
+	const consumePending = (result: PendingLifecycleHandoff | PendingLifecycleIgnored): void => {
+		if (result.kind !== "handoff") return;
+		for (const disposition of result.dispositions) {
+			try {
+				reportDisposition(disposition);
+			} catch {
+				// Delivery is unproven. Keep accounting for EVERY transferred entry and always
+				// finish close/attach cleanup; the complete browser copy cannot be released.
+			}
+		}
+	};
+	const dispatch = (msg: ClientMessage, fromPending = false): boolean => {
 		try {
-			dispatchNow(msg);
+			dispatchNow(msg, fromPending);
+			return true;
 		} catch (err) {
-			reportHandlerError(String((msg as { type?: unknown }).type), err);
+			// These are ownership refusals, not generic dispatch crashes; never ignore their payload.
+			if (err instanceof PendingLifecycleRejectedError) {
+				consumePending({
+					kind: "handoff",
+					dispositions: [err.disposition],
+					persistence: "unknown",
+					releaseClientCopy: false,
+				});
+			} else if (err instanceof PendingLifecycleCaptureError) {
+				try {
+					reportDisposition({
+						entry: { command: err.command, correlation: err.correlation },
+						status: "unprocessed",
+						retryable: true,
+						reason: "capture-failed",
+						persistence: "unknown",
+						releaseClientCopy: false,
+					});
+				} catch {
+					// Capture never admitted the original; failed notice delivery is not an ack.
+				}
+			} else reportHandlerError(String((msg as { type?: unknown }).type), err);
+			return false;
 		}
 	};
 
-	const dispatchNow = (msg: ClientMessage): void => {
+	const dispatchNow = (msg: ClientMessage, fromPending = false): void => {
 		if (!clientId) {
-			pending.push(msg);
+			pending.admit(msg, correlationFor(msg));
 			return;
 		}
 		const session = service.get(clientId);
-		if (!session || !attachDone) {
-			// Session not ready yet (hello processing / plugin chain) — hold the command.
-			pending.push(msg);
+		if (!session || (!attachDone && !fromPending)) {
+			// Both pre-attach paths use the same explicit ownership/refusal contract.
+			pending.admit(msg, correlationFor(msg));
+			return;
+		}
+		const recovery = recoveryOf(msg);
+		const reportRecovery = (status: "unprocessed" | "uncertain", reason: string): void => {
+			if (!recovery) return;
+			try {
+				send({
+					type: "command_disposition",
+					recovery,
+					connectionGeneration: pendingGeneration,
+					commandType: msg.type,
+					status,
+					retryable: status === "unprocessed",
+					reason,
+					persistence: "unknown",
+					releaseClientCopy: false,
+				});
+			} catch {
+				// A reporting failure cannot skip the actual guarded handler or suffix cleanup.
+				// The original client checkpoint remains; failed delivery is not acknowledgement.
+			}
+		};
+		if (
+			recovery &&
+			recoveryUsesSessionTarget(msg.type) &&
+			session.activeSessionId &&
+			recovery.sessionId !== session.activeSessionId()
+		) {
+			reportRecovery("unprocessed", "session-changed");
+			return;
+		}
+		if (
+			(msg.type === "set_goal" || msg.type === "start_goal_wizard") &&
+			msg.conversationId !== undefined &&
+			session.activeConversationId &&
+			msg.conversationId !== session.activeConversationId()
+		) {
+			reportRecovery("unprocessed", "conversation-changed");
+			send({
+				type: "notice",
+				level: "error",
+				text: "The goal's original conversation is no longer bound. Its complete draft was not retargeted.",
+			});
 			return;
 		}
 		// Every call below goes through the guard: its promise can't go unhandled, a sync throw is
@@ -2615,6 +2793,7 @@ wss.on("connection", (ws, req) => {
 		// reachable to anything that can open the socket. See managed.ts / tabs.ts.
 		const refusal = managedRefusal(msg.type, MANAGED) ?? tabsRefusal(msg.type, TABS);
 		if (refusal) {
+			reportRecovery("unprocessed", refusal);
 			send({ type: "notice", level: "error", text: refusal });
 			// optimistic-send: a refused prompt still gets its receipt, or its faded copy would wait forever.
 			if (msg.type === "prompt" && msg.id) {
@@ -2622,6 +2801,24 @@ wss.on("connection", (ws, req) => {
 			}
 			return;
 		}
+		let ownedCommand: Extract<CommandClaim, { kind: "claimed" }> | undefined;
+		if (msg.type === "run_command" && (recovery || msg.original)) {
+			const claim = claimAuthoredCommand(session, msg);
+			if (claim.kind === "refused") {
+				reportRecovery(claim.status, claim.reason);
+				send({
+					type: "notice",
+					level: "error",
+					text: "The original command was not dispatched again. Keep its recovery copy and inspect the terminal status.",
+				});
+				return;
+			}
+			ownedCommand = claim;
+		}
+		// Host-owned dispatch entry, never an execution/persistence receipt. Old clients have no
+		// recovery identity and receive no extra frame. Domain authorization/results still apply.
+		reportRecovery("uncertain", "dispatch-started");
+		const sendIdentity = (reply: ServerMessage) => send(correlateIdentityReply(msg, reply));
 		switch (msg.type) {
 			case "prompt": {
 				// chat-open-speed: a message written while a chat was still opening carries the chat
@@ -2644,8 +2841,44 @@ wss.on("connection", (ws, req) => {
 				// optimistic-send: a window that reconnected or reloaded asks about sends it still shows as
 				// "Sending". Answered on this socket; if it drops too, the next reconnect asks again.
 				if (Array.isArray(msg.ids)) {
+					const statusReqId = typeof msg.reqId === "string" && msg.reqId ? msg.reqId : undefined;
+					const statusClientId = clientId;
+					const readStatusSession = (): string => {
+						try {
+							return session.activeSessionId?.() ?? "";
+						} catch {
+							return "";
+						}
+					};
+					const statusSessionId = readStatusSession();
+					const validScope = () =>
+						!closed &&
+						ws.readyState === ws.OPEN &&
+						service.get(statusClientId) === session &&
+						statusSessionId !== "" &&
+						msg.forSession === statusSessionId &&
+						readStatusSession() === statusSessionId;
 					for (const id of msg.ids.slice(0, 100)) {
-						if (typeof id === "string" && id) promptIds.status(id, send);
+						if (typeof id !== "string" || !id) continue;
+						if (!statusReqId) {
+							promptIds.status(id, send);
+							continue;
+						}
+						if (!validScope()) {
+							send({
+								type: "prompt_ack",
+								id,
+								conversationId: "",
+								ok: false,
+								statusReqId,
+								statusSessionId,
+								statusScopeValid: false,
+							});
+							continue;
+						}
+						promptIds.status(id, (ack) =>
+							send({ ...ack, statusReqId, statusSessionId, statusScopeValid: validScope() }),
+						);
 					}
 				}
 				break;
@@ -2699,8 +2932,11 @@ wss.on("connection", (ws, req) => {
 				// a rev/seq gap — it needs an authoritative state to rebuild from.
 				cs.flushSnapshot(true);
 				break;
+			case "load_earlier_messages":
+				historyTransport.loadEarlier(msg, (before, count) => cs.loadOlder?.(before, count), cs.activeSessionId?.());
+				break;
 			case "load_older":
-				// 用户往上翻/点了导轨上一条还没加载的提问（chat-window-pagination）。
+				// Keep the fork's question rail and digest paging on its original protocol.
 				cs.loadOlder?.(msg.beforeIndex, msg.count);
 				break;
 			case "load_folded":
@@ -2970,7 +3206,7 @@ wss.on("connection", (ws, req) => {
 				if (typeof msg.id !== "string" || !file) break;
 				const reg = identityRegistry(true);
 				const r = readIdentityFile(reg.identities, msg.id, file, reg.settings);
-				send(
+				sendIdentity(
 					r.ok
 						? {
 								type: "identity_file",
@@ -3006,7 +3242,7 @@ wss.on("connection", (ws, req) => {
 				);
 				// identity-notebook-tab: the ref comes back, so the Notebook tab knows the answer is its own.
 				const ref = typeof msg.ref === "string" && msg.ref.length <= 64 ? { ref: msg.ref } : {};
-				send(
+				sendIdentity(
 					r.ok
 						? { type: "identity_file_saved", id: msg.id, file, ok: true, hash: r.hash, size: r.size, ...ref }
 						: {
@@ -3048,7 +3284,7 @@ wss.on("connection", (ws, req) => {
 				const reg = identityRegistry(true);
 				const d = readDraft(reg.draftsDir, msg.id);
 				const def = reg.identities.find((i) => i.id === msg.id);
-				send(
+				sendIdentity(
 					d
 						? {
 								type: "identity_draft",
@@ -3088,7 +3324,7 @@ wss.on("connection", (ws, req) => {
 				else {
 					r = acceptDraft({ id: def.id, dir: def.dir, raw: def.raw }, reg.draftsDir, texts, msg.baseHash, reg.settings);
 				}
-				send(draftDone(msg.id, action, r));
+				sendIdentity(draftDone(msg.id, action, r));
 				if (r.ok && action === "accept") {
 					const parts = [
 						...(r.aboutFile ? [`its about page into ${r.aboutFile} (an old one kept in archive/)`] : []),
@@ -3110,7 +3346,7 @@ wss.on("connection", (ws, req) => {
 				// identity-config: the owner doesn't want this draft; it moves to role-drafts/.old/ (kept, in case).
 				if (typeof msg.id !== "string") break;
 				const r = discardDraft(identityRegistry(true).draftsDir, msg.id);
-				send(draftDone(msg.id, "discard", r));
+				sendIdentity(draftDone(msg.id, "discard", r));
 				if (r.ok) {
 					console.log(`[identities] the owner discarded the draft for ${msg.id}`);
 					pushIdentities();
@@ -3171,7 +3407,7 @@ wss.on("connection", (ws, req) => {
 				const r = def
 					? readRoleNote(def, reg.settings, msg.ref)
 					: { ok: false as const, error: `No identity "${msg.id}"` };
-				send(
+				sendIdentity(
 					r.ok
 						? {
 								type: "identity_note",
@@ -3194,12 +3430,12 @@ wss.on("connection", (ws, req) => {
 				const reg = identityRegistry(true);
 				const def = reg.identities.find((d) => d.id === msg.id);
 				if (!def) {
-					send({ type: "identity_note_saved", id: msg.id, ref: msg.ref, ok: false, code: "unknown" });
+					sendIdentity({ type: "identity_note_saved", id: msg.id, ref: msg.ref, ok: false, code: "unknown" });
 					break;
 				}
 				if (msg.type === "identity_note_save") {
 					const r = saveRoleNote(def, reg.settings, msg.ref, msg.text, msg.baseHash);
-					send(
+					sendIdentity(
 						r.ok
 							? { type: "identity_note_saved", id: msg.id, ref: msg.ref, ok: true, hash: r.hash, size: r.size }
 							: {
@@ -3217,7 +3453,7 @@ wss.on("connection", (ws, req) => {
 					);
 				} else {
 					const r = deleteRoleNote(def, reg.settings, msg.ref, msg.baseHash);
-					send(
+					sendIdentity(
 						r.ok
 							? { type: "identity_note_saved", id: msg.id, ref: msg.ref, ok: true, deleted: true, freed: r.freed }
 							: { type: "identity_note_saved", id: msg.id, ref: msg.ref, ok: false, deleted: true, code: r.code },
@@ -3232,7 +3468,14 @@ wss.on("connection", (ws, req) => {
 			case "task_queue_answer":
 				// telegram-answers: the Queue tab answered a stuck task; it goes into the task's chat.
 				if (typeof msg.conversationId === "string" && Number.isInteger(msg.taskId) && typeof msg.text === "string") {
-					void cs.taskQueueAnswer?.(msg.conversationId, msg.taskId, msg.text);
+					void cs.taskQueueAnswer?.(msg.conversationId, msg.taskId, msg.text, {
+						reqId: msg.reqId,
+						queueId: msg.queueId,
+						questionId: msg.questionId,
+						question: msg.question,
+						choices: msg.choices,
+						detail: msg.detail,
+					});
 				}
 				break;
 			case "load_exchanges":
@@ -3354,10 +3597,10 @@ wss.on("connection", (ws, req) => {
 				}
 				break;
 			case "read_file":
-				void cs.readFile(msg.path);
+				void cs.readFile(msg.path, msg);
 				break;
 			case "write_file":
-				void cs.writeFile(msg.path, msg.text);
+				void cs.writeFile(msg.path, msg.text, msg);
 				break;
 			case "upload_file":
 				void cs.uploadFile(msg.dirPath, msg.name, msg.data);
@@ -3567,6 +3810,9 @@ wss.on("connection", (ws, req) => {
 				}
 				break;
 			}
+			case "terminal_attach":
+				send(terminalViewReply(cs, msg));
+				break;
 			case "terminal_input":
 				cs.getTerminalManager(msg.conversationId)?.input(msg.terminalId, msg.data);
 				break;
@@ -3580,6 +3826,10 @@ wss.on("connection", (ws, req) => {
 				cs.getTerminalManager(msg.conversationId)?.rename(msg.terminalId, msg.title);
 				break;
 			case "run_command":
+				if (ownedCommand) {
+					ownedCommand.run();
+					break;
+				}
 				cs.getTerminalManager(msg.conversationId)?.runCommand(
 					msg.terminalId,
 					msg.command,
@@ -4149,6 +4399,8 @@ wss.on("connection", (ws, req) => {
 		serverVersion: VERSION,
 		protocolVersion: PROTOCOL_VERSION,
 		engine: ENGINE,
+		commandRecovery: 1,
+		recoveryGeneration: pendingGeneration,
 		// This package's own version. `serverVersion` is the pi SDK's,
 		// and the client used to learn ours from the update check —
 		// which a managed instance never runs.
@@ -4160,6 +4412,7 @@ wss.on("connection", (ws, req) => {
 	});
 
 	ws.on("message", (data) => {
+		if (closed || ws.readyState !== WebSocket.OPEN) return;
 		let msg: ClientMessage;
 		try {
 			msg = JSON.parse(data.toString()) as ClientMessage;
@@ -4200,9 +4453,8 @@ wss.on("connection", (ws, req) => {
 			// issue #295：ready 先行 —— 传输握手不等待会话初始化。attach 会进 SDK 的
 			// resourceLoader.reload 等同步目录扫描，坏挂载/家目录下可能阻塞数十秒；
 			// ready 在握手里先发，前端立刻离开「正在连接」（快照随后到）。
-			if (!closed) {
-				send(readyMsg(cid));
-			}
+			// attachAfterReady below waits for the ready frame to flush and yields an I/O turn
+			// before starting SDK scans; merely queuing it here still let attach block the handshake.
 			// attach 慢提示：本体继续等，不取消；完成后照常走快照流程。
 			const slowTimer = setTimeout(() => {
 				if (closed) return;
@@ -4213,17 +4465,29 @@ wss.on("connection", (ws, req) => {
 					textEn: "Session init is taking a while (possibly scanning the workspace) — hang on…",
 				});
 			}, ATTACH_SLOW_NOTICE_MS);
-			service
-				.attach(cid, send)
+			attachAfterReady(
+				(done) => send(readyMsg(cid), done),
+				() => service.attach(cid, send),
+				() => closed || ws.readyState !== WebSocket.OPEN,
+			)
 				.then((cs) => {
 					clearTimeout(slowTimer);
-					if (closed) return;
+					if (closed || ws.readyState !== WebSocket.OPEN || !cs || pending.state.phase === "terminal") {
+						consumePending(
+							closed || ws.readyState !== WebSocket.OPEN
+								? pending.socketClosed(pendingGeneration)
+								: pending.attachFailed(pendingGeneration),
+						);
+						// Attach may finish after the close callback already detached its not-yet-created sink.
+						if (cs) service.detach(cid, send);
+						return;
+					}
 					// Plugin catalog: re-scan + activate new dirs on every attach so
 					// freshly dropped plugins show up without a server restart.
 					pluginMgr
 						.ensureLoaded(() => service.get(cid)?.getLang() ?? "en")
 						.then((plugins) => {
-							if (closed) return;
+							if (closed || ws.readyState !== WebSocket.OPEN || pending.state.phase === "terminal") return;
 							send({ type: "plugins", plugins, epoch: pluginMgr.epoch });
 							// 插件市场列表（可一键安装的清单）随附推一次。
 							send({
@@ -4260,7 +4524,7 @@ wss.on("connection", (ws, req) => {
 							replayQueued();
 						})
 						.catch(() => {
-							if (closed) return;
+							if (closed || ws.readyState !== WebSocket.OPEN || pending.state.phase === "terminal") return;
 							// ensureLoaded 失败（如磁盘读错）不能卡死快照——前端 30s 无消息
 							// 会重连，重连又失败会陷入循环。至少把状态推下去。
 							cs.flushSnapshot();
@@ -4276,8 +4540,38 @@ wss.on("connection", (ws, req) => {
 					// 首条命令天然落在插件加载之后；现在 ready 与 attach 脱钩，不等就重放
 					// 等于把竞态窗口从一个 RTT 放大到整个插件扫描期（CI 必现 grant 超时）。
 					const replayQueued = (): void => {
-						attachDone = true;
-						for (const m of pending.drain()) dispatch(m);
+						if (closed || ws.readyState !== WebSocket.OPEN) {
+							consumePending(pending.socketClosed(pendingGeneration));
+							return;
+						}
+						if (pending.attachSucceeded(pendingGeneration).kind !== "attached") return;
+						void (async () => {
+							while (pending.state.undispatched > 0 && pending.state.phase !== "terminal") {
+								const result = await pending.dispatchNext(pendingGeneration, (entry) => {
+									if (closed || ws.readyState !== WebSocket.OPEN || !service.get(cid))
+										throw new Error("Socket/session unavailable before queued dispatch");
+									if (!dispatch(entry.command, true)) throw new Error("Queued dispatch refused or failed");
+								});
+								consumePending(result);
+								if (result.kind === "ignored") return;
+								// Observe close/I/O between commands; retain the untouched suffix inside the lifecycle.
+								await new Promise<void>((resolve) => setImmediate(resolve));
+							}
+							// New commands cannot overtake this finite FIFO. During its drain they are
+							// explicitly refused by the sealed admission boundary, never silently queued.
+							if (
+								!closed &&
+								ws.readyState === WebSocket.OPEN &&
+								service.get(cid) === cs &&
+								pending.state.phase === "attached"
+							) {
+								attachDone = true;
+								send({ type: "session_initialized", connectionGeneration: pendingGeneration });
+							} else consumePending(pending.socketClosed(pendingGeneration));
+						})().catch((error: unknown) => {
+							consumePending(pending.attachFailed(pendingGeneration));
+							reportHandlerError("pending command replay", error);
+						});
 					};
 				})
 				.catch((err: unknown) => {
@@ -4285,6 +4579,8 @@ wss.on("connection", (ws, req) => {
 					// reconnect loop keeps retrying until admission reopens. Do NOT
 					// leave a half-alive connection that can only show an error.
 					clearTimeout(slowTimer);
+					consumePending(pending.attachFailed(pendingGeneration));
+					service.detach(cid, send);
 					if (err instanceof QuiesceRejectedError) {
 						closed = true;
 						if (ws.readyState === WebSocket.OPEN) {
@@ -4314,9 +4610,8 @@ wss.on("connection", (ws, req) => {
 					}
 					// Real init failure (bad agent dir etc.) — keep the connection
 					// open so the user can see the error and fix it.
-					// 排队的命令此时无会话可服务，直接丢弃（否则 attachDone 永 false，
-					// 队列越积越深；用户修好后重连会重发 get_state）。
-					pending.clear();
+					// Admission is terminal; exact untouched work was handed back as unprocessed above.
+					// Future commands are explicitly refused rather than silently accumulating/dropping.
 					send({
 						type: "notice",
 						level: "error",
@@ -4334,8 +4629,8 @@ wss.on("connection", (ws, req) => {
 		// reconnect-trace: the close code only (never the reason text).
 		connEvents.closed(connId, clientId, acceptedBrowser, code, Date.now() - connOpenedAt);
 		service.noteSocketClose();
+		consumePending(pending.socketClosed(pendingGeneration));
 		closed = true;
-		pending.clear();
 		removePluginSender();
 		notebookWatch.drop(ws);
 		rolesWatch.drop(ws);

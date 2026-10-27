@@ -1,16 +1,24 @@
-import { Fragment, memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import {
+	Fragment,
+	memo,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+	useSyncExternalStore,
+	type ReactNode,
+	type SetStateAction,
+} from "react";
 import { FiList, FiSquare, FiPaperclip, FiArrowUp, FiMic, FiCamera } from "react-icons/fi";
 import type { FileSearchResult, ModelInfo, ProviderKeyInfo, SlashCommandInfo, UiMessage, UiState } from "../types";
 import { useT } from "../i18n";
-import { appSend, useAppField, useIsDsh } from "../app-globals";
+import { appAdmit, appSend, useAppField, useIsDsh } from "../app-globals";
 import { mergeRecalledDraft, selectDraftToRestore } from "../composer-draft";
-import {
-	registerDraftSink,
-	registerFocusSink,
-	registerInsertSink,
-	registerRemoveMentionSink,
-} from "../composer-bridge";
+import { registerFocusSink, registerInsertSink, registerRemoveMentionSink } from "../composer-bridge";
 import { caretVisualLineFlags } from "../caret-visual-line";
+import { useComposerRecovery } from "../use-composer-recovery";
+import type { ComposerAttachmentHost } from "../recovery-composer";
 import { isRasterImage } from "../image-paste";
 import { recordModelUsage } from "../model-usage";
 import { loadPromptHistory, pushPromptHistory } from "../prompt-history";
@@ -102,6 +110,8 @@ interface ChatInputProps {
 		/** Stable key for pasted images (path is ""). */
 		key?: string;
 	}[];
+	/** One full-draft checkpoint/sink, backed by the actual native recovery owner. */
+	composerHost?: ComposerAttachmentHost;
 	onRemoveAttachment: (path: string) => void;
 	/** Images pasted into the input / dropped onto it / picked via upload. */
 	onAddImageFiles: (files: File[]) => void;
@@ -161,6 +171,7 @@ export const ChatInput = memo(function ChatInput({
 	modelsLoading,
 	fastMode,
 	attachments,
+	composerHost,
 	onRemoveAttachment,
 	onAddImageFiles,
 	onAddLocalFiles,
@@ -195,7 +206,68 @@ export const ChatInput = memo(function ChatInput({
 	const isDsh = useIsDsh();
 	const slashDesc = (c: SlashCommandInfo) => (c.descriptionEn ? c.descriptionEn : (c.description ?? ""));
 	const slashHint = (c: SlashCommandInfo) => (c.argumentHintEn ? c.argumentHintEn : (c.argumentHint ?? ""));
-	const [text, setText] = useState("");
+	const [text, setTextState] = useState("");
+	const textRef = useRef("");
+	const textRevision = useRef(0);
+	const setText = useCallback((action: SetStateAction<string>) => {
+		const next = typeof action === "function" ? action(textRef.current) : action;
+		if (next !== textRef.current) {
+			textRef.current = next;
+			textRevision.current++;
+		}
+		setTextState(next);
+	}, []);
+	const fallbackComposerLifetime = useRef({});
+	const effectiveComposerHost = useMemo<ComposerAttachmentHost>(
+		() => ({
+			read() {
+				const primary = composerHost?.read();
+				if (primary) return primary;
+				const cid = conversationId || "provisional-conversation";
+				const sid = sessionId || conversationId || "provisional-session";
+				return {
+					ownerId: "composer-local-owner",
+					sessionId: sid,
+					conversationId: cid,
+					lifetime: fallbackComposerLifetime.current,
+					attachments,
+					attachmentRevision: 0,
+				};
+			},
+			replace(original, next) {
+				if (composerHost) return composerHost.replace(original, next);
+				return next.length === 0 && attachments.length === 0;
+			},
+		}),
+		[composerHost, conversationId, sessionId, attachments],
+	);
+	useComposerRecovery({
+		host: effectiveComposerHost,
+		text: textRef,
+		textRevision,
+		setText: (next: string) => {
+			noteComposerEdit(next);
+			setText(next);
+		},
+		conversationId: conversationId || "provisional-conversation",
+		sessionId: sessionId || conversationId || "provisional-session",
+		problem: (message) => onNotice("warning", message),
+		applied: () => {
+			noteComposerEdit(textRef.current);
+			historyIndexRef.current = -1;
+			draftRef.current = "";
+			requestAnimationFrame(() => {
+				const area = taRef.current;
+				if (area) {
+					area.focus();
+					area.selectionStart = area.selectionEnd = area.value.length;
+				}
+			});
+		},
+	});
+	const submitInFlightRef = useRef(false);
+	const latestSubmissionDraftRef = useRef({ text, attachments, sessionId, conversationId });
+	latestSubmissionDraftRef.current = { text, attachments, sessionId, conversationId };
 	/** 手动拉出的保底高度：null = 没拖过（纯自适应，上限 220）；数字 = 保底（持久化）。
 	 * 注意：这是下限不是固定值——内容少时撑到它，内容多时继续往上长。 */
 	const [composerH, setComposerH] = useState<number | null>(() => {
@@ -246,7 +318,9 @@ export const ChatInput = memo(function ChatInput({
 		const pending = recallDrafts.filter((d) => d.text && d.seq > lastRecallSeqRef.current);
 		if (pending.length === 0) return;
 		lastRecallSeqRef.current = pending[pending.length - 1].seq;
-		setText((prev) => pending.reduce((acc, d) => mergeRecalledDraft(acc, d.text), prev));
+		const merged = pending.reduce((acc, d) => mergeRecalledDraft(acc, d.text), textRef.current);
+		setText(merged);
+		noteComposerEdit(merged);
 		// 与 prompt 历史导航状态解耦：撤回后从「当前草稿」重新开始。
 		historyIndexRef.current = -1;
 		draftRef.current = "";
@@ -256,25 +330,8 @@ export const ChatInput = memo(function ChatInput({
 			ta.focus();
 			ta.selectionStart = ta.selectionEnd = ta.value.length;
 		});
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [recallDrafts]);
-
-	// 宿主注入草稿（浏览器元素拾取扩展 / 插件 → window.__piWebUiHost.compose）：
-	// 合并语义与撤回完全一致（空则填入、非空追加、绝不覆盖），所以直接复用同一个纯函数。
-	// 挂载时装一次：setText 是 useState 的稳定引用，不依赖任何会变的闭包。
-	useEffect(() => {
-		registerDraftSink((incoming) => {
-			setText((prev) => mergeRecalledDraft(prev, incoming));
-			historyIndexRef.current = -1;
-			draftRef.current = "";
-			requestAnimationFrame(() => {
-				const ta = taRef.current;
-				if (!ta) return;
-				ta.focus();
-				ta.selectionStart = ta.selectionEnd = ta.value.length;
-			});
-		});
-		return () => registerDraftSink(null);
-	}, []);
 
 	// 宿主触发聚焦（点击新对话等）。
 	useEffect(() => {
@@ -289,10 +346,8 @@ export const ChatInput = memo(function ChatInput({
 	}, []);
 
 	// 宿主触发在光标处插入文本（文件树/预览点击「引用路径」联动插入 @文件名）
-	// 审查 #15：正文走 textRef（effect 每键重注册会让宿主桥反复解绑/挂载，
-	// 且错过注册窗口的插入会丢）。textRef 在每次渲染同步最新正文，effect 依赖 []。
-	const textRef = useRef("");
-	textRef.current = text;
+	// Stable sinks read the authoritative ref, updated before React schedules a render.
+	// Revision increments also fence A→B→A edits during a synchronous checkpoint.
 	useEffect(() => {
 		registerInsertSink((textToInsert) => {
 			// 第二道防线：正文里已有同一 @提及（重复点同一文件等）→ 跳过不重复插。
@@ -309,11 +364,11 @@ export const ChatInput = memo(function ChatInput({
 			}
 			const ta = taRef.current;
 			if (!ta) {
-				setText((prev) => {
-					const next = prev + (prev && !prev.endsWith(" ") ? " " : "") + textToInsert;
-					menuTextRef.current = next;
-					return next;
-				});
+				const prev = textRef.current;
+				const next = prev + (prev && !prev.endsWith(" ") ? " " : "") + textToInsert;
+				menuTextRef.current = next;
+				setText(next);
+				noteComposerEdit(next);
 				return;
 			}
 			const start = ta.selectionStart ?? textRef.current.length;
@@ -325,6 +380,7 @@ export const ChatInput = memo(function ChatInput({
 			const next = current.slice(0, start) + insert + current.slice(end);
 			menuTextRef.current = next;
 			setText(next);
+			noteComposerEdit(next);
 			const newCursor = start + insert.length;
 			requestAnimationFrame(() => {
 				ta.focus();
@@ -332,40 +388,42 @@ export const ChatInput = memo(function ChatInput({
 			});
 		});
 		return () => registerInsertSink(null);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
 	// 宿主触发移除特定提及（用户点击附件 chip 的 ✕ 时联动从正文中删除对应的 @文件名）
 	useEffect(() => {
 		registerRemoveMentionSink((mention) => {
-			setText((prev) => {
-				const special = new Set([
-					".",
-					"*",
-					"+",
-					"?",
-					"^",
-					"$",
-					"{",
-					"}",
-					"(",
-					")",
-					"|",
-					"[",
-					"]",
-					String.fromCharCode(92),
-				]);
-				const escaped = mention
-					.split("")
-					.map((ch) => (special.has(ch) ? String.fromCharCode(92) + ch : ch))
-					.join("");
-				const regex = new RegExp("(^|\\s)" + escaped + "(?:\\s|$)", "g");
-				let next = prev.replace(regex, (m, p) => (p === " " ? " " : ""));
-				next = next.replace(/ {2,}/g, " ").trim();
-				menuTextRef.current = next;
-				return next;
-			});
+			const prev = textRef.current;
+			const special = new Set([
+				".",
+				"*",
+				"+",
+				"?",
+				"^",
+				"$",
+				"{",
+				"}",
+				"(",
+				")",
+				"|",
+				"[",
+				"]",
+				String.fromCharCode(92),
+			]);
+			const escaped = mention
+				.split("")
+				.map((ch) => (special.has(ch) ? String.fromCharCode(92) + ch : ch))
+				.join("");
+			const regex = new RegExp("(^|\\s)" + escaped + "(?:\\s|$)", "g");
+			let next = prev.replace(regex, (m, p) => (p === " " ? " " : ""));
+			next = next.replace(/ {2,}/g, " ").trim();
+			menuTextRef.current = next;
+			setText(next);
+			noteComposerEdit(next);
 		});
 		return () => registerRemoveMentionSink(null);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
 	// 未发送草稿持久化（issue #166，单中心文件方案）：L1 localStorage（同步写，
@@ -481,6 +539,35 @@ export const ChatInput = memo(function ChatInput({
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [draftSessionKey]);
+
+	// Reconnect / pagehide / visibilitychange: flush any edited draft to L1+L2 immediately
+	// so server restarts or reloads within the 2s debounce window never drop unsaved text.
+	useEffect(() => {
+		if (
+			ready &&
+			touchedRef.current &&
+			draftScopeRef.current === draftSessionKey &&
+			draftSessionKey &&
+			draftLocalKey &&
+			sessionId
+		) {
+			persistComposerDraft(sessionId, draftLocalKey, textMirrorRef.current, lastEditTsRef.current);
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [ready]);
+
+	useEffect(() => {
+		const onHide = () => flushComposerDraft();
+		const onVis = () => {
+			if (document.visibilityState === "hidden") flushComposerDraft();
+		};
+		window.addEventListener("pagehide", onHide);
+		document.addEventListener("visibilitychange", onVis);
+		return () => {
+			window.removeEventListener("pagehide", onHide);
+			document.removeEventListener("visibilitychange", onVis);
+		};
+	});
 
 	// A first session binds the same conversation's provisional draft; it is not
 	// a conversation switch. Remember a bound session through transient absence
@@ -966,8 +1053,8 @@ export const ChatInput = memo(function ChatInput({
 	 * 但界面上是多行）也必须先让 ↑/↓ 走普通光标移动，不能误触发历史（issue #127）。 */
 
 	/** 把当前待发送附件（含粘贴图/上传文件/工作区引用）转成 prompt 消息格式（submit 用）。 */
-	const buildPromptAttachments = () =>
-		attachments.map((a) => {
+	const buildPromptAttachments = (items = attachments) =>
+		items.map((a) => {
 			if (a.imageData) {
 				return {
 					path: "",
@@ -1002,9 +1089,13 @@ export const ChatInput = memo(function ChatInput({
 			};
 		});
 
-	const submit = (queue = false) => {
-		const trimmed = text.trim();
-		const hasRawAttach = attachments.some((a) => a.imageData || a.fileData || a.mode === "conversation");
+	const submit = async (queue = false) => {
+		// IndexedDB preparation may yield: a double click must not create another original id.
+		if (submitInFlightRef.current) return;
+		const submittedOwner = composerHost?.read();
+		const submittedAttachments = submittedOwner?.attachments ?? attachments;
+		const trimmed = textRef.current.trim();
+		const hasRawAttach = submittedAttachments.some((a) => a.imageData || a.fileData || a.mode === "conversation");
 		if (!trimmed && !hasRawAttach) return;
 		if (!connected) {
 			// 输入框在断连时不禁用（只有发送按钮禁用），Enter 仍进 submit：
@@ -1040,51 +1131,73 @@ export const ChatInput = memo(function ChatInput({
 		// in agent-service.ts. 运行中发送位那颗「对半胶囊」的右半（插队）走这条；
 		// 左半（排队）传 queue=true，服务端改走 followUp —— 整轮跑完才发
 		// ("AI 生成结束才发送")。
-		if (
-			appSend({
+		const submitted = { ...latestSubmissionDraftRef.current, text: textRef.current, attachments: submittedAttachments };
+		const submittedRevision = textRevision.current;
+		submitInFlightRef.current = true;
+		let accepted = false;
+		try {
+			accepted = await appAdmit({
 				type: "prompt",
-				text: trimmed,
+				text: submitted.text,
 				queue,
-				attachments: buildPromptAttachments(),
-				// optimistic-send: shown at once, faded, until the server confirms it
+				attachments: buildPromptAttachments(submitted.attachments),
 				id: newPromptId(),
-			})
-		) {
-			// 入全局历史（连续重复不重复入队，已在 pushPromptHistory 内去重）——仅提交成功才记。
-			if (trimmed) pushPromptHistory(trimmed);
-			// 退出历史导航状态，下次 Up 从最新开始。
-			historyIndexRef.current = -1;
-			draftRef.current = "";
-			setText("");
-			// 发送成功：草稿作废（服务端 prompt() 里已清），本地 L1/定时器/追踪重置。
-			if (draftLocalKey) {
-				try {
-					localStorage.removeItem(draftLocalKey);
-				} catch {
-					// ignore
+			});
+		} catch {
+			// A synchronous transport failure must also leave the entire editable draft intact.
+		} finally {
+			submitInFlightRef.current = false;
+		}
+		if (accepted) {
+			if (trimmed) pushPromptHistory(submitted.text);
+			const currentOwner = composerHost?.read();
+			const current = {
+				...latestSubmissionDraftRef.current,
+				text: textRef.current,
+				attachments: currentOwner?.attachments ?? latestSubmissionDraftRef.current.attachments,
+			};
+			const unchanged =
+				textRevision.current === submittedRevision &&
+				(!composerHost ||
+					(!!submittedOwner &&
+						!!currentOwner &&
+						currentOwner.lifetime === submittedOwner.lifetime &&
+						currentOwner.attachmentRevision === submittedOwner.attachmentRevision)) &&
+				current.text === submitted.text &&
+				current.sessionId === submitted.sessionId &&
+				current.conversationId === submitted.conversationId &&
+				current.attachments.length === submitted.attachments.length &&
+				current.attachments.every((a, i) => a === submitted.attachments[i]);
+			if (unchanged) {
+				// Only the captured draft was committed. Never clear newer typing, chips or another chat.
+				historyIndexRef.current = -1;
+				draftRef.current = "";
+				setText("");
+				if (draftLocalKey) {
+					try {
+						localStorage.removeItem(draftLocalKey);
+					} catch {
+						// The complete recovery copy is retained independently.
+					}
 				}
+				if (draftTimerRef.current) {
+					clearTimeout(draftTimerRef.current);
+					draftTimerRef.current = null;
+				}
+				touchedRef.current = false;
+				appliedDraftTsRef.current = Date.now();
+				textMirrorRef.current = "";
+				lastEditTsRef.current = 0;
+				onSent();
 			}
-			if (draftTimerRef.current) {
-				clearTimeout(draftTimerRef.current);
-				draftTimerRef.current = null;
-			}
-			touchedRef.current = false;
-			// 提交时刻打水位（不是 0）：之前打的旧草稿（防抖延迟的 draft_update、
-			// prompt() 处理前的全量快照里带的旧 draft）ts 都 <= 此刻，恢复 effect
-			// 因此不再把刚发出去的文本倒回输入框（TODO 9）。提交后新打的字 ts
-			// 更大，照常恢复；同 ms 的并列按「不恢复」算（`<=` 守卫）。
-			appliedDraftTsRef.current = Date.now();
-			textMirrorRef.current = "";
-			lastEditTsRef.current = 0;
-			onSent();
-			// 提交成功 → 把本次使用的模型使用次数 +1（模型下拉按次数排序）。
 			const m = modelState?.model;
 			if (m) recordModelUsage(`${m.provider}/${m.id}`);
 			taRef.current?.focus();
 		} else {
-			// 发送瞬间连接断开（appSend 返回 false）：文本保留，给出可见提示，
-			// 否则与草稿恢复竞态的表现完全一样（字还在、无任何提示）。
-			onNotice("error", t("netDisconnected"));
+			onNotice(
+				"error",
+				"Send is not confirmed. Your draft and attachments have been kept. Check status before retrying uncertain work.",
+			);
 		}
 	};
 

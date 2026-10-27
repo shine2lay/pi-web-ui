@@ -16,7 +16,7 @@
  * 折叠行计数。它的不变量见 chainDigests。
  */
 
-import type { UiExchangeDigest, UiMessage, UiQuestionRef, UiState } from "./types";
+import type { UiExchangeDigest, UiMessage, UiQuestionRef, UiQuietRun, UiState } from "./types";
 
 /** older_messages 的回执内容（只取合并要用的字段）。 */
 export interface OlderMessagesMsg {
@@ -25,6 +25,8 @@ export interface OlderMessagesMsg {
 	messages: UiMessage[];
 	/** 新起点落在一轮中间时，这一轮开头那一截的摘要。 */
 	straddle?: UiExchangeDigest;
+	/** Quiet-turn metadata belongs to the new window boundary, not the previous page. */
+	quietLead?: UiQuietRun;
 }
 
 /** older_exchanges 的回执内容。 */
@@ -111,6 +113,7 @@ export function prependOlderMessages(ui: UiState, m: OlderMessagesMsg): UiState 
 		...ui,
 		messages: [...m.messages, ...ui.messages],
 		messagesStart: m.start,
+		quietLead: m.quietLead,
 		...(exchanges ? { exchanges } : {}),
 	};
 }

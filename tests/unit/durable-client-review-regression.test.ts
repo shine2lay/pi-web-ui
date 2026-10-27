@@ -11,6 +11,9 @@ import { resetAppGlobals, setAppSend } from "../../web/src/app-globals.js";
 import { ChatInput } from "../../web/src/components/ChatInput.js";
 import { MessageList } from "../../web/src/components/MessageList.js";
 import { composeToComposer, resetComposerSinks } from "../../web/src/composer-bridge.js";
+import { createPendingRecoveryCoordinator } from "../../web/src/pending-recovery-coordinator.js";
+import type { PendingRecoveryBackend, RecoveryRecord } from "../../web/src/pending-send-storage.js";
+import { setNativeRecoveryCoordinatorFactory } from "../../web/src/recovery-client.js";
 import { LanguageProvider } from "../../web/src/i18n.js";
 import { formatQuote } from "../../web/src/quote-selection.js";
 import type { UiMessage, UiState } from "../../web/src/types.js";
@@ -130,6 +133,21 @@ class SyntheticSocket {
 			this.promptCount++;
 			this.promptIds.push(data.id);
 		}
+		if ("recovery" in data && data.recovery) {
+			this.onmessage?.({
+				data: JSON.stringify({
+					type: "command_disposition",
+					recovery: data.recovery,
+					connectionGeneration: "synthetic-gen",
+					commandType: data.type,
+					status: "uncertain",
+					retryable: false,
+					reason: "dispatch-started",
+					persistence: "unknown",
+					releaseClientCopy: false,
+				}),
+			});
+		}
 	}
 
 	open() {
@@ -215,8 +233,11 @@ function startHook(
 		appVersion: "synthetic",
 		engine: options.engine ?? "pi",
 		managed: true,
+		commandRecovery: 1,
+		recoveryGeneration: "synthetic-gen",
 	});
 	socket.receive({ type: "snapshot", state: initial });
+	socket.receive({ type: "session_initialized", connectionGeneration: "synthetic-gen" });
 	return { ...view, socket };
 }
 
@@ -303,6 +324,36 @@ beforeEach(() => {
 	localStorage.clear();
 	sessionStorage.clear();
 	localStorage.setItem("pi-web-ui:lang", "en");
+	const records = new Map<string, RecoveryRecord>();
+	const activeOwners = new Set<string>();
+	const backend: PendingRecoveryBackend = {
+		async read(ownerId) {
+			return structuredClone([...records.values()].filter((r) => r.ownerId === ownerId));
+		},
+		async write(batch) {
+			for (const r of batch) records.set(JSON.stringify(r.key), structuredClone(r));
+		},
+		async release(record) {
+			records.set(JSON.stringify(record.key), structuredClone(record));
+		},
+	};
+	setNativeRecoveryCoordinatorFactory((verifyReference) =>
+		createPendingRecoveryCoordinator({
+			backend,
+			listOwners: async () => [...new Set([...records.values()].map((r) => r.ownerId))],
+			ownership: {
+				async acquire(ownerId) {
+					if (activeOwners.has(ownerId)) return null;
+					activeOwners.add(ownerId);
+					return { release: () => activeOwners.delete(ownerId) };
+				},
+				async active() {
+					return [...activeOwners];
+				},
+			},
+			verifyReference,
+		}),
+	);
 	resetAppGlobals();
 	setAppSend(null);
 	resetComposerSinks();
@@ -312,6 +363,7 @@ afterEach(() => {
 	act(() => {
 		for (const root of roots.splice(0)) root.unmount();
 	});
+	setNativeRecoveryCoordinatorFactory(undefined);
 	resetComposerSinks();
 	resetAppGlobals();
 	setAppSend(null);
@@ -693,7 +745,7 @@ describe("Ops #574 real useChat request-bound paging", () => {
 });
 
 describe("Ops #574 composer identity and initialization", () => {
-	it("preserves a typed plus quoted Pi draft through initialization and sends it exactly once via useChat", () => {
+	it("preserves a typed plus quoted Pi draft through initialization and sends it exactly once via useChat", async () => {
 		const initial = snapshot({ sessionId: undefined }); // conversationId is already known.
 		const onSent = vi.fn();
 		const { host, socket } = startHook(initial, { composer: true, onSent });
@@ -719,7 +771,11 @@ describe("Ops #574 composer identity and initialization", () => {
 		expect(textarea(host).placeholder).not.toContain("initializing");
 		expect(sendButton(host).disabled).toBe(false);
 		expect(socket.promptCount).toBe(0); // Binding is not an implicit submit.
-		pressEnter(host);
+		await act(async () => {
+			for (let i = 0; i < 6; i++) await crypto.subtle.digest("SHA-256", new Uint8Array(0));
+			textarea(host).dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+			for (let i = 0; i < 8; i++) await crypto.subtle.digest("SHA-256", new Uint8Array(0));
+		});
 		expect(socket.promptCount).toBe(1);
 		expect(socket.promptIds).toEqual([expect.any(String)]);
 		expect(
@@ -733,7 +789,7 @@ describe("Ops #574 composer identity and initialization", () => {
 		).toEqual([
 			{
 				id: socket.promptIds[0],
-				text: expected.trim(),
+				text: expected,
 				conversationId: initial.conversationId,
 				sessionId: "synthetic-session-a",
 				status: "sending",
@@ -860,14 +916,18 @@ describe("Ops #574 composer identity and initialization", () => {
 		expect(api.chat.pendingSends).toEqual([]);
 	});
 
-	it("keeps DSH no-session sending functional through the real pending-send path", () => {
+	it("keeps DSH no-session sending functional through the real pending-send path", async () => {
 		const a = snapshot({ conversationId: "synthetic-dsh-a", sessionId: undefined });
 		const onSent = vi.fn();
 		const { host, socket } = startHook(a, { engine: "dsh", composer: true, onSent });
 		expect(textarea(host).placeholder).not.toContain("initializing");
 		typeText(host, "Synthetic DSH no-session send.");
 		expect(sendButton(host).disabled).toBe(false);
-		act(() => sendButton(host).click());
+		await act(async () => {
+			for (let i = 0; i < 6; i++) await crypto.subtle.digest("SHA-256", new Uint8Array(0));
+			sendButton(host).click();
+			for (let i = 0; i < 8; i++) await crypto.subtle.digest("SHA-256", new Uint8Array(0));
+		});
 		expect(socket.promptCount).toBe(1);
 		expect(socket.promptIds).toEqual([expect.any(String)]);
 		expect(api.chat.pendingSends).toHaveLength(1);
@@ -882,7 +942,7 @@ describe("Ops #574 composer identity and initialization", () => {
 		expect(onSent).toHaveBeenCalledTimes(1);
 	});
 
-	it("isolates DSH drafts on a conversation change even when both conversations have no session", () => {
+	it("isolates DSH drafts on a conversation change even when both conversations have no session", async () => {
 		const a = snapshot({ conversationId: "synthetic-dsh-a", sessionId: undefined });
 		const b = snapshot({ conversationId: "synthetic-dsh-b", sessionId: undefined });
 		const { host, socket } = startHook(a, { engine: "dsh", composer: true });
@@ -891,7 +951,11 @@ describe("Ops #574 composer identity and initialization", () => {
 		expect(textarea(host).value).toBe("");
 		expect(socket.promptCount).toBe(0);
 		typeText(host, "Synthetic DSH B only.");
-		pressEnter(host);
+		await act(async () => {
+			for (let i = 0; i < 6; i++) await crypto.subtle.digest("SHA-256", new Uint8Array(0));
+			textarea(host).dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+			for (let i = 0; i < 8; i++) await crypto.subtle.digest("SHA-256", new Uint8Array(0));
+		});
 		expect(socket.promptCount).toBe(1);
 		expect(socket.promptIds).toEqual([expect.any(String)]);
 		expect(api.chat.pendingSends).toHaveLength(1);

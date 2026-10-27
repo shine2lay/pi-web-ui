@@ -72,6 +72,7 @@ import type {
 	UiSkillInfo,
 	UiState,
 	UiLayoutPrefs,
+	FilePreviewMetadata,
 } from "../protocol.js";
 import { PromptReceipt, promptIds } from "../prompt-ack.js";
 import { launchOrigin, toServiceInfo } from "../launch-origin.js";
@@ -412,6 +413,7 @@ export class DshClientSession {
 			emit: (msg) => this.emit(msg),
 			isDisposed: () => this.disposed,
 			getCwd: () => this.cwd,
+			getSessionId: () => this.convs.get(this.activeId)?.sessionId,
 			getActiveCwd: () => this.cwd,
 		});
 		this.bg = new BgServerTracker({
@@ -2715,12 +2717,12 @@ export class DshClientSession {
 		await this.files.scmQuery(kind, reqId, opts);
 	}
 
-	async readFile(relPath: string): Promise<void> {
-		await this.files.readFile(relPath);
+	async readFile(relPath: string, request?: FilePreviewMetadata): Promise<void> {
+		await this.files.readFile(relPath, request);
 	}
 
-	async writeFile(relPath: string, text: string): Promise<void> {
-		await this.files.writeFile(relPath, text);
+	async writeFile(relPath: string, text: string, request?: FilePreviewMetadata): Promise<void> {
+		await this.files.writeFile(relPath, text, request);
 	}
 
 	async uploadFile(dirRel: string, name: string, data: string): Promise<void> {

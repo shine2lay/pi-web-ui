@@ -50,10 +50,12 @@ import { useT, type Translate } from "../i18n";
 import {
 	boardRequest,
 	createBoardDraft,
+	getBoardDraftRecoveries,
 	reviseBoardDraft,
 	reloadRoles,
 	useRoles,
 	type BoardDraftForm,
+	type BoardDraftSource,
 } from "../roles-state";
 import { Markdown } from "./Markdown";
 import {
@@ -1643,11 +1645,17 @@ function useBoardEditor<T extends BoardDraftForm>(initial: T) {
 		update({ ...current.current, busy: false });
 		return { res, sameEditor, unchanged, submitted };
 	};
+	const loadRecovered = (recovered: BoardDraftSource) => {
+		if (!mounted.current || current.current.busy) return;
+		const next = reviseBoardDraft(current.current.source, recovered.form as T);
+		update({ ...current.current, source: next, error: "" });
+	};
 	return {
 		form: current.current.source.form as T,
 		busy: current.current.busy,
 		error: current.current.error,
 		edit,
+		loadRecovered,
 		setError,
 		request,
 	};
@@ -1661,6 +1669,7 @@ export function BoardForm({ roleIds, onDone }: { roleIds: string[]; onDone: (sai
 		busy,
 		error,
 		edit,
+		loadRecovered: loadRecoveredPost,
 		setError,
 		request,
 	} = useBoardEditor<Extract<BoardDraftForm, { type: "board_post" }>>({
@@ -1671,6 +1680,12 @@ export function BoardForm({ roleIds, onDone }: { roleIds: string[]; onDone: (sai
 		title: "",
 		text: "",
 	});
+	const postRecoveries = getBoardDraftRecoveries().flatMap((entry) =>
+		[...entry.attempts.map((a) => a.source), ...entry.restoredSources].filter(
+			(source): source is BoardDraftSource & { readonly form: Extract<BoardDraftForm, { type: "board_post" }> } =>
+				source.form.type === "board_post",
+		),
+	);
 	const firstRef = useRef<HTMLInputElement>(null);
 	useEffect(() => {
 		firstRef.current?.focus();
@@ -1700,6 +1715,28 @@ export function BoardForm({ roleIds, onDone }: { roleIds: string[]; onDone: (sai
 			<h2 id="rv-bform-h" className="rv-sech">
 				{t("boardNewPost")}
 			</h2>
+			{postRecoveries.length > 0 && (
+				<div className="rv-brecovered" data-testid="board-post-recoveries">
+					{postRecoveries.map((source) => (
+						<div
+							key={`${source.editorId}:${source.revision}`}
+							className="rv-brecovered-row"
+							data-testid={`board-post-recovered-${source.editorId}-${source.revision}`}
+						>
+							<span className="rv-meta">{source.form.title || source.form.text.slice(0, 60) || source.editorId}</span>
+							<button
+								type="button"
+								className="rv-act"
+								disabled={busy}
+								data-testid={`board-post-restore-${source.editorId}-${source.revision}`}
+								onClick={() => loadRecoveredPost(source)}
+							>
+								Restore draft
+							</button>
+						</div>
+					))}
+				</div>
+			)}
 			<fieldset className="rv-bfs">
 				<legend className="rv-blabel">{t("boardFormKind")}</legend>
 				<div className="rv-bopts">
@@ -1812,9 +1849,16 @@ export function BoardCloseForm({ post, onDone }: { post: UiBoardPost; onDone: (b
 		busy,
 		error,
 		edit,
+		loadRecovered: loadRecoveredClose,
 		setError,
 		request,
 	} = useBoardEditor<Extract<BoardDraftForm, { type: "board_close" }>>({ type: "board_close", id: post.id, note: "" });
+	const closeRecoveries = getBoardDraftRecoveries().flatMap((entry) =>
+		[...entry.attempts.map((a) => a.source), ...entry.restoredSources].filter(
+			(source): source is BoardDraftSource & { readonly form: Extract<BoardDraftForm, { type: "board_close" }> } =>
+				source.form.type === "board_close" && source.form.id === post.id,
+		),
+	);
 	const ref = useRef<HTMLInputElement>(null);
 	useEffect(() => {
 		ref.current?.focus();
@@ -1833,6 +1877,22 @@ export function BoardCloseForm({ post, onDone }: { post: UiBoardPost; onDone: (b
 	};
 	return (
 		<form className="rv-bclose" onSubmit={submit}>
+			{closeRecoveries.length > 0 && (
+				<div className="rv-brecovered" data-testid={`board-close-recoveries-${post.id}`}>
+					{closeRecoveries.map((source) => (
+						<button
+							key={`${source.editorId}:${source.revision}`}
+							type="button"
+							className="rv-act"
+							disabled={busy}
+							data-testid={`board-close-restore-${post.id}-${source.editorId}-${source.revision}`}
+							onClick={() => loadRecoveredClose(source)}
+						>
+							Restore close note
+						</button>
+					))}
+				</div>
+			)}
 			<label className="rv-bfield">
 				<span className="rv-blabel">{t("boardCloseNote")}</span>
 				<input

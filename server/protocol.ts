@@ -568,6 +568,16 @@ export interface UiTaskQueueLane {
 
 /** 这条对话的任务队列（queue-panel）：pi-queue 存在会话里的 `queue` 条目沿当前分支重放出来的。
  *  不是 UiState.queue（那是输入框里排队 / 插队的提问）。 */
+export interface UiTaskQueueAnswerBinding {
+	conversationId: string;
+	queueId: string;
+	taskId: number;
+	questionId: string;
+	question: string;
+	choices: string[];
+	detail?: string;
+}
+
 export interface UiTaskQueue {
 	/** queue-autonomy: session fence; opt-in never follows a fork to a different session. */
 	queueId?: string;
@@ -587,6 +597,8 @@ export interface UiTaskQueue {
 	available: boolean;
 	/** 按队列顺序：ready 的就按这个顺序做。删掉的不带；做完的只带最近的一批。 */
 	tasks: UiTaskQueueTask[];
+	/** Occurrence-bound stuck-task question bindings (#592). */
+	answerBindings?: UiTaskQueueAnswerBinding[];
 	/** queue-lanes: the open tasks by lane; only when some task runs in a chat of its own. */
 	lanes?: UiTaskQueueLane[];
 	/** queue-lanes: how many lanes may run at once; not there = 2. */
@@ -617,6 +629,13 @@ export interface CachedWindow {
 	start: number;
 	count: number;
 	hash: string;
+}
+
+/** Socket history metadata. Indices are absolute, like the fork's messagesStart/load_older. */
+export interface UiHistoryWindow {
+	hasEarlier: boolean;
+	hiddenCount: number;
+	earliestIndex: number;
 }
 
 export interface UiState {
@@ -653,6 +672,10 @@ export interface UiState {
 	 *  所以完整长度恒等于 `messagesStart + messages.length`——不另发 total，
 	 *  免得两处不一致。 */
 	messagesStart?: number;
+	/** W2: additive aliases for the per-socket byte-budget window; older clients keep messagesStart. */
+	historyStart?: number;
+	historyTotal?: number;
+	historyWindow?: UiHistoryWindow;
 	/** quiet-turns: the window starts inside a turn (messagesStart isn't where it began): that turn, so the
 	 *  page folds the rest of it the same way. Absent = the window starts where a turn begins. */
 	quietLead?: UiQuietRun;
@@ -840,6 +863,40 @@ export interface TerminalInfo {
 	agentBash?: boolean;
 }
 
+/** Complete authored action, separate from rendered shell text; never PTY input or settings. */
+export interface AuthoredCommandIntent {
+	readonly requestId: string;
+	readonly source: "scm" | "terminal";
+	readonly conversationId: string;
+	readonly sessionId: string;
+	readonly workspaceCwd: string;
+	readonly command: Readonly<CommandDef>;
+	readonly terminal: Readonly<{
+		id: string;
+		title: string;
+		cwd: string;
+		cols: number;
+		rows: number;
+		mode: "new" | "existing";
+		running: boolean;
+		exitCode: number | null;
+	}>;
+	readonly commitSource?: Readonly<{ text: string; revision: number }>;
+}
+
+/** Existing-only view replay, never process creation or command execution. */
+export type TerminalViewReply = {
+	type: "terminal_view";
+	reqId: string;
+	viewId: string;
+	conversationId: string;
+	sessionId: string;
+	terminalId: string;
+} & (
+	| { available: true; terminal: TerminalInfo; data: string; offset: number }
+	| { available: false; reason: "invalid" | "target-changed" | "unsupported" | "missing" | "failed" }
+);
+
 /** A slash command available in the chat input (the web counterpart of the
  *  pi CLI's "/" command menu). Names carry no leading slash. */
 export interface SlashCommandInfo {
@@ -976,7 +1033,45 @@ export interface ConnTraceRecord {
 	shownMs?: number;
 }
 
-export type ClientMessage =
+/** Recovery identity describes the exact browser-owned copy, never an execution receipt. */
+export interface CommandRecoveryIdentity {
+	id: string;
+	sessionId: string;
+	contentDigest: string;
+	/** Fresh for each transmission; stale replies must not change a later attempt's status. */
+	attemptId: string;
+}
+
+export type CommandDispositionMsg = {
+	type: "command_disposition";
+	recovery: CommandRecoveryIdentity;
+	connectionGeneration: string;
+	commandType: string;
+	status: "unprocessed" | "uncertain";
+	retryable: boolean;
+	reason: string;
+	persistence: "unknown";
+	releaseClientCopy: false;
+};
+
+export type ClientMessage = ClientCommand & { recovery?: CommandRecoveryIdentity };
+
+/** Correlation only: neither a path grant nor permission to retry a write. */
+export type FilePreviewBinding = {
+	workspaceId: string;
+	sessionId?: string;
+	openId: string;
+	resourceId?: string;
+};
+export type FilePreviewMetadata = {
+	reqId?: string;
+	purpose?: "read" | "write";
+	binding?: FilePreviewBinding;
+	lifetime?: string;
+	revision?: number;
+};
+
+export type ClientCommand =
 	/** frameHints (mobile-fixes): announce every big message first with `frame_hint`. */
 	| { type: "hello"; clientId: string; protocolVersion?: number; locale?: string; frameHints?: boolean }
 	/** mobile-fixes: "are you there?", answered at once with `pong` carrying the same id (the page came
@@ -1027,7 +1122,7 @@ export type ClientMessage =
 	 *  gets one `prompt_ack`: ok when it reached the chat, the normal ack later when
 	 *  the server is still handling it, and ok:false when the server never got it (or
 	 *  refused it, or restarted since). */
-	| { type: "prompt_status"; ids: string[] }
+	| { type: "prompt_status"; ids: string[]; reqId?: string; forSession?: string }
 	// -- queued prompt management ---------------------------------------------
 	/** Remove ONE queued prompt (steer = 插队, followUp = 排队) — the
 	 *  ✕ delete button on a pending user bubble. `index` is the bubble's position
@@ -1077,6 +1172,16 @@ export type ClientMessage =
 			 *  inherits the prior value from history for old clients. */
 			agentBash?: boolean;
 	  }
+	| {
+			type: "terminal_attach";
+			reqId: string;
+			viewId: string;
+			terminalId: string;
+			conversationId: string;
+			sessionId: string;
+			cols: number;
+			rows: number;
+	  }
 	| { type: "terminal_input"; terminalId: string; data: string; conversationId?: string }
 	| { type: "terminal_resize"; terminalId: string; cols: number; rows: number; conversationId?: string }
 	| { type: "terminal_kill"; terminalId: string; conversationId?: string }
@@ -1085,6 +1190,9 @@ export type ClientMessage =
 	// RESTARTED in place (current process killed, fresh shell runs it again).
 	| {
 			type: "run_command";
+			/** Optional for old clients. New recovery admission requires the full original. */
+			original?: AuthoredCommandIntent;
+			reqId?: string;
 			terminalId: string;
 			command: CommandDef;
 			cols: number;
@@ -1180,6 +1288,15 @@ export type ClientMessage =
 	 *  不进快照（否则每次节流推送都要重传一遍），改为点开时现取一次；
 	 *  应答 `tool_info`。引擎不支持枚举工具定义时回 `unsupported: true`。 */
 	| { type: "get_tool_info"; name: string }
+	/** W2: a page from the socket's window, falling back to load_older outside it. */
+	| {
+			type: "load_earlier_messages";
+			conversationId?: string;
+			beforeIndex?: number;
+			limit?: number;
+			count?: number;
+			all?: boolean;
+	  }
 	| {
 			/** 往前取一截历史消息（chat-window-pagination）。beforeIndex = 客户端当前
 			 *  窗口的起点（UiState.messagesStart）；服务端回 older_messages，装
@@ -1244,7 +1361,18 @@ export type ClientMessage =
 	  }
 	/** telegram-answers: the user's answer to a stuck queued task, from the Queue tab (a choice or typed
 	 *  words). It goes into the chat the task runs in (a lane task's own chat), as their reply. */
-	| { type: "task_queue_answer"; conversationId: string; taskId: number; text: string }
+	| {
+			type: "task_queue_answer";
+			conversationId: string;
+			taskId: number;
+			text: string;
+			reqId?: string;
+			queueId?: string;
+			questionId?: string;
+			question?: string;
+			choices?: string[];
+			detail?: string;
+	  }
 	/** 手动过户：把另一处（elsewhere 行，owner/convId 标识）的对话整体搬到本页
 	 *  （含等答复的问卷/页调用），搬完自动切过去. */
 	| { type: "take_over_conversation"; owner: string; id: string }
@@ -1257,9 +1385,9 @@ export type ClientMessage =
 	 *  posix "/…"）与机器根 "@root"（盘符列表，见 files-service.ts MACHINE_ROOT）。
 	 *  机器浏览时返回的 entry.path 为绝对 wire 路径，可直接再用于列目录/预览/附件。 */
 	/** Read a workspace file for the preview panel (size-capped, binary-safe). */
-	| { type: "read_file"; path: string }
+	| ({ type: "read_file"; path: string } & FilePreviewMetadata)
 	/** Save text edited in the file preview panel. */
-	| { type: "write_file"; path: string; text: string }
+	| ({ type: "write_file"; path: string; text: string } & FilePreviewMetadata)
 	/**
 	 * Upload one file INTO a workspace directory (file manager right-click
 	 * context menu — blank area or a folder entry). data = raw base64 with
@@ -1444,7 +1572,14 @@ export type ClientMessage =
 	 *  goal active across every subsequent turn; `false` clears it after the
 	 *  next turn (single-shot). `reviewModel` ("provider/id", optional) selects
 	 *  a different model for the reviewer. */
-	| { type: "set_goal"; goal: string; reviewModel?: string; maxRounds: number; locked: boolean }
+	| {
+			type: "set_goal";
+			goal: string;
+			reviewModel?: string;
+			maxRounds: number;
+			locked: boolean;
+			conversationId?: string;
+	  }
 	| { type: "clear_goal" }
 	/** Start the collaborative target wizard: a user requirement goes into an
 	 *  ISOLATED wizard session which questions the user (multiple-choice + free
@@ -1452,7 +1587,14 @@ export type ClientMessage =
 	 *  the user's raw requirement. `wizardModel` ("provider/id", optional) picks
 	 *  a different model for the wizard; default is the main conversation model.
 	 *  Mutually exclusive with an active review and with a running wizard. */
-	| { type: "start_goal_wizard"; text: string; wizardModel?: string; maxRounds?: number; locked?: boolean }
+	| {
+			type: "start_goal_wizard";
+			text: string;
+			wizardModel?: string;
+			maxRounds?: number;
+			locked?: boolean;
+			conversationId?: string;
+	  }
 	/** Persist the client's goal/review preference defaults (model choice, review
 	 *  rounds cap, locked) so they survive reload. maxRounds 0 = unlimited.
 	 *  Sent by the goal bar whenever a preference changes (model picker, rounds,
@@ -1856,14 +1998,22 @@ export type ClientMessage =
 	/** progress-feed: everything one update links (answered with initiative_update_links). */
 	| { type: "initiative_update_links"; update: string }
 	/** Read an identity's about.md / notebook.md (answered with `identity_file`). */
-	| { type: "identity_file_get"; id: string; file: IdentityFileName }
+	| { type: "identity_file_get"; id: string; file: IdentityFileName; reqId?: string }
 	/** Save a whole about.md / notebook.md (answered with `identity_file_saved`). baseHash = the hash from
 	 *  `identity_file`: a file changed since then is refused ("changed"); a notebook over its cap too.
 	 *  ref (identity-notebook-tab) comes back in identity_file_saved, so the right panel's Notebook tab
 	 *  can tell its own saves from the Settings page's. */
-	| { type: "identity_file_save"; id: string; file: IdentityFileName; text: string; baseHash: string; ref?: string }
+	| {
+			type: "identity_file_save";
+			id: string;
+			file: IdentityFileName;
+			text: string;
+			baseHash: string;
+			ref?: string;
+			reqId?: string;
+	  }
 	/** identity-config: read a role's waiting draft (answered with `identity_draft`). */
-	| { type: "identity_draft_get"; id: string }
+	| { type: "identity_draft_get"; id: string; reqId?: string }
 	/** identity-config: save the owner's edits to a draft (it stays a draft), accept it as shown (its
 	 *  prompt and settings go into the role's folder, an app save), or discard it. Answered with
 	 *  `identity_draft_done`. baseHash = the hash from `identity_draft` (a draft changed since is refused).
@@ -1871,13 +2021,14 @@ export type ClientMessage =
 	 *  page showed none, and a draft that has one is refused as changed. */
 	| {
 			type: "identity_draft_save" | "identity_draft_accept";
+			reqId?: string;
 			id: string;
 			about?: string;
 			prompt: string;
 			config: string;
 			baseHash: string;
 	  }
-	| { type: "identity_draft_discard"; id: string }
+	| { type: "identity_draft_discard"; id: string; reqId?: string }
 	/** identity-config: the roles' own skills (names and descriptions from each role's private skills/
 	 *  folder), answered with `identity_skills`. Settings → Identities asks; they stay out of the identity
 	 *  list every window gets, and pi-worktree keeps agents from asking. */
@@ -1892,12 +2043,12 @@ export type ClientMessage =
 	| { type: "identity_notes_search"; id: string; query: string }
 	/** identity-notes: one note's whole file, or a stretch of the old archive (ref archive/<file>:<line>).
 	 *  Answered with `identity_note`. */
-	| { type: "identity_note_get"; id: string; ref: string }
+	| { type: "identity_note_get"; id: string; ref: string; reqId?: string }
 	/** identity-notes: save a note's whole file as edited, or delete it. baseHash = the hash from
 	 *  `identity_note` (a note changed since is refused). The old version goes to the role's removed.md.
 	 *  Answered with `identity_note_saved`. */
-	| { type: "identity_note_save"; id: string; ref: string; text: string; baseHash: string }
-	| { type: "identity_note_delete"; id: string; ref: string; baseHash: string }
+	| { type: "identity_note_save"; id: string; ref: string; text: string; baseHash: string; reqId?: string }
+	| { type: "identity_note_delete"; id: string; ref: string; baseHash: string; reqId?: string }
 	/** subs-limits-box: the Limits box opened (or the page reconnected). Answered with `subs_limits`. */
 	| { type: "subs_limits_get" }
 	/** subs-limits-box: the Limits box's refresh button. pi-multi-pass checks every account (a press while
@@ -4545,6 +4696,8 @@ export interface UiSettingsState {
 	subagentDefaultTemplates: string[];
 }
 export type ServerMessage =
+	| CommandDispositionMsg
+	| { type: "session_initialized"; connectionGeneration: string }
 	/** reconnect-trace: runtime capture flag only; separate from heartbeat/connection health. */
 	| { type: "conn_trace_config"; on: boolean }
 	| {
@@ -4559,6 +4712,9 @@ export type ServerMessage =
 			type: "ready";
 			clientId: string;
 			serverVersion: string;
+			/** Transport-ready is NOT permission to overtake the finite startup command FIFO. */
+			commandRecovery?: 1;
+			recoveryGeneration?: string;
 			/** 引擎标识（pi | dsh）—— 前端据此显示引擎徽标（只读展示）。 */
 			engine?: string;
 			/** Wire-protocol version (server/protocol-version.ts). The client
@@ -4600,11 +4756,26 @@ export type ServerMessage =
 			reuse?: CachedWindow;
 	  }
 	| {
+			type: "earlier_messages";
+			conversationId: string;
+			/** Exact host session occupying the conversation slot when this page was read. */
+			sessionId?: string;
+			messages: UiMessage[];
+			historyStart: number;
+			historyTotal: number;
+			historyWindow: UiHistoryWindow;
+			/** Legacy engine metadata at this exact new page boundary. */
+			straddle?: UiExchangeDigest;
+			quietLead?: UiQuietRun;
+	  }
+	| {
 			/** load_older 的回执：[start, start+messages.length) 这一段历史消息，拼在
 			 *  客户端窗口前面，并把 UiState.messagesStart 改成 start。
 			 *  conversationId 用来丢弃「切了对话才迟到」的回执。 */
 			type: "older_messages";
 			conversationId: string;
+			/** Echoed for same-slot replacement correlation; optional for older servers. */
+			sessionId?: string;
 			start: number;
 			messages: UiMessage[];
 			/** 新的窗口起点落在一轮中间时，这一轮开头那一截的摘要（exchange-digest，partial）：
@@ -4707,6 +4878,7 @@ export type ServerMessage =
 			durationMs?: number;
 	  }
 	// -- terminal ------------------------------------------------------------
+	| TerminalViewReply
 	| { type: "terminal_output"; conversationId?: string; terminalId: string; data: string }
 	| { type: "terminal_exit"; conversationId?: string; terminalId: string; exitCode: number | null }
 	| { type: "terminal_list"; conversationId?: string; terminals: TerminalInfo[] }
@@ -4751,7 +4923,18 @@ export type ServerMessage =
 	 *  the window's latest snapshot, which already shows the message: a window whose
 	 *  state is older (that snapshot was dropped under backpressure) keeps its faded
 	 *  copy until a snapshot at least that new has arrived. */
-	| { type: "prompt_ack"; id: string; conversationId: string; ok: boolean; reason?: string; rev?: number }
+	| {
+			type: "prompt_ack";
+			id: string;
+			conversationId: string;
+			ok: boolean;
+			reason?: string;
+			rev?: number;
+			/** Correlates a fresh status lookup ONLY; never persistence/nonexecution proof. */
+			statusReqId?: string;
+			statusSessionId?: string;
+			statusScopeValid?: boolean;
+	  }
 	/** The watched git dir changed outside the panel (terminal commit,
 	 *  CLI, IDE) — the client should re-run its scm_status query. */
 	| { type: "scm_changed" }
@@ -4809,8 +4992,12 @@ export type ServerMessage =
 	 *  (path = the listed directory; unknown/unsupported fs falls back to the
 	 *  10s polling). */
 	| { type: "file_changed"; path: string }
-	| {
+	| ({
 			type: "file_content";
+			/** Complete preview or full successful write, never a truncated write acknowledgement. */
+			complete?: boolean;
+			writeSucceeded?: boolean;
+			error?: string;
 			path: string;
 			name: string;
 			/**
@@ -4825,7 +5012,7 @@ export type ServerMessage =
 			lines: number;
 			/** Total file size in bytes. */
 			size: number;
-	  }
+	  } & FilePreviewMetadata)
 	/** `get_tool_info` 的应答：一条工具的**定义说明**（不含本次调用数据）。
 	 *  parameters 是 JSON Schema（SDK 的 TypeBox schema 直接 JSON 化），超限整丢并置
 	 *  `parametersDropped`（同 toolResult.details 的口径，见 serialize.ts）。 */
@@ -5331,6 +5518,7 @@ export type ServerMessage =
 	/** One identity file's text. hash goes back with identity_file_save; error = couldn't read it. */
 	| {
 			type: "identity_file";
+			reqId?: string;
 			id: string;
 			file: IdentityFileName;
 			text?: string;
@@ -5344,6 +5532,7 @@ export type ServerMessage =
 	 *  save's ref (identity-notebook-tab). */
 	| {
 			type: "identity_file_saved";
+			reqId?: string;
 			id: string;
 			file: IdentityFileName;
 			ok: boolean;
@@ -5360,6 +5549,7 @@ export type ServerMessage =
 	 *  now, for the "What changes" view. */
 	| {
 			type: "identity_draft";
+			reqId?: string;
 			id: string;
 			about?: string;
 			currentAbout?: string;
@@ -5373,6 +5563,7 @@ export type ServerMessage =
 	 *  problems for settings pi-identity would refuse). hash = a saved draft's new hash. */
 	| {
 			type: "identity_draft_done";
+			reqId?: string;
 			id: string;
 			action: IdentityDraftAction;
 			ok: boolean;
@@ -5413,6 +5604,7 @@ export type ServerMessage =
 	/** identity-notes: the answer to identity_note_get. editable = a note (an archive stretch isn't). */
 	| {
 			type: "identity_note";
+			reqId?: string;
 			id: string;
 			ref: string;
 			text?: string;
@@ -5425,6 +5617,7 @@ export type ServerMessage =
 	 *  notes, back in the index. problems = why an edit was refused (code "invalid"). */
 	| {
 			type: "identity_note_saved";
+			reqId?: string;
 			id: string;
 			ref: string;
 			ok: boolean;
@@ -5434,4 +5627,15 @@ export type ServerMessage =
 			hash?: string;
 			size?: number;
 			freed?: string[];
+	  }
+	/** Explicit occurrence-correlated result for task_queue_answer (#592). */
+	| {
+			type: "task_queue_answer_result";
+			reqId?: string;
+			conversationId: string;
+			queueId?: string;
+			taskId: number;
+			questionId?: string;
+			applied: boolean;
+			reason?: string;
 	  };

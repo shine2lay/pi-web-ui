@@ -28,12 +28,15 @@ export async function exportRawSchedulerDraftRow(row: SchedulerDraftRow): Promis
 		seen.set(value, id);
 		if (value instanceof Date) return { id, type: "Date", milliseconds: await visit(value.getTime()) };
 		if (value instanceof RegExp) return { id, type: "RegExp", source: value.source, flags: value.flags };
-		if (value instanceof ArrayBuffer) return { id, type: "ArrayBuffer", bytes: [...new Uint8Array(value)] };
+		if (value instanceof ArrayBuffer || Object.prototype.toString.call(value) === "[object ArrayBuffer]")
+			return { id, type: "ArrayBuffer", bytes: [...new Uint8Array(value as ArrayBuffer)] };
 		if (ArrayBuffer.isView(value))
 			return {
 				id,
 				type: Object.prototype.toString.call(value),
-				bytes: [...new Uint8Array(value.buffer, value.byteOffset, value.byteLength)],
+				buffer: await visit(value.buffer),
+				byteOffset: value.byteOffset,
+				byteLength: value.byteLength,
 			};
 		if (typeof Blob !== "undefined" && value instanceof Blob)
 			return {

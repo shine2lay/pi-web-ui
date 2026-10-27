@@ -1,4 +1,5 @@
-import { appSend, useAppField, useIsDsh } from "../app-globals";
+import { useRef, useState } from "react";
+import { appAdmit, useAppField, useIsDsh } from "../app-globals";
 import { messageSuggestions, type ActionSuggestion } from "../action-suggestions";
 import type { UiMessage } from "../types";
 import { newPromptId } from "../pending-sends";
@@ -19,6 +20,8 @@ export function SuggestionChips({
 }) {
 	const ready = useAppField("ready");
 	const isDsh = useIsDsh();
+	const inFlight = useRef(false);
+	const [choosing, setChoosing] = useState(false);
 	const suggestions = actions ?? messageSuggestions(message);
 	if (!suggestions.length) return null;
 	return (
@@ -30,10 +33,19 @@ export function SuggestionChips({
 						type="button"
 						className="action-suggestion-chip"
 						title={action.prompt}
-						disabled={disabled || !ready || (!isDsh && !sessionId)}
-						onClick={() => {
-							onChoose?.();
-							appSend({ type: "prompt", text: action.prompt, id: newPromptId() });
+						disabled={disabled || choosing || !ready || (!isDsh && !sessionId)}
+						onClick={async () => {
+							if (inFlight.current) return;
+							inFlight.current = true;
+							setChoosing(true);
+							try {
+								if ((await appAdmit({ type: "prompt", text: action.prompt, id: newPromptId() })) === true) onChoose?.();
+							} catch {
+								// No accepted handoff: keep the suggestion available.
+							} finally {
+								inFlight.current = false;
+								setChoosing(false);
+							}
 						}}
 					>
 						<span className="action-suggestion-label">{action.label}</span>

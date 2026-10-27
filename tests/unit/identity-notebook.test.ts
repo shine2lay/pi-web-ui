@@ -56,7 +56,7 @@ import {
 } from "../../server/identity-notes.js";
 import { type NotebookPush, NotebookWatch } from "../../server/notebook-watch.js";
 import type { UiNoteHit, UiRoleMemory } from "../../server/protocol.js";
-import { setAppSend } from "../../web/src/app-globals.js";
+import { setAppAdmit, setAppSend } from "../../web/src/app-globals.js";
 import { NotebookPanel } from "../../web/src/components/NotebookPanel.js";
 import { LanguageProvider } from "../../web/src/i18n.js";
 import {
@@ -497,12 +497,21 @@ describe("the owner's save keeps what it takes out", () => {
 
 describe("the page's notebook store", () => {
 	const sent: unknown[] = [];
+	const lastReqId = () => (sent.at(-1) as { reqId?: string } | undefined)?.reqId;
 	beforeEach(() => {
 		sent.length = 0;
 		setAppSend((msg) => {
 			sent.push(msg);
 			return true;
 		});
+		setAppAdmit(async (msg) => {
+			sent.push(msg);
+			return true;
+		});
+	});
+	afterEach(() => {
+		setAppSend(null);
+		setAppAdmit(null);
 	});
 	const push = (text: string, extra: Record<string, unknown> = {}) =>
 		receiveNotebook({
@@ -530,6 +539,10 @@ describe("the page's notebook store", () => {
 		expect(getNotebook()).toMatchObject({ text: "- #fact two\n", hash: textHash("- #fact two\n") });
 
 		receiveNotebook({ type: "identity_notebook", id: "temper", error: "EACCES" });
+		expect(getNotebook()).toMatchObject({ status: "ready", text: "- #fact two\n", error: "EACCES" });
+		watchNotebook(null);
+		watchNotebook("temper");
+		receiveNotebook({ type: "identity_notebook", id: "temper", error: "EACCES" });
 		expect(getNotebook()).toMatchObject({ status: "error", error: "EACCES" });
 
 		watchNotebook(null);
@@ -538,11 +551,12 @@ describe("the page's notebook store", () => {
 		expect(getWatchedNotebook()).toBeNull();
 	});
 
-	it("saves with the tab's ref against the version it started from; takes the answer meant for it", () => {
+	it("saves with the tab's ref against the version it started from; takes the answer meant for it", async () => {
 		watchNotebook("temper");
 		push("- a\n");
 		const base = textHash("- a\n");
-		expect(saveNotebook("- a\n- b\n", base)).toBe(true);
+		expect(await saveNotebook("- a\n- b\n", base)).toBe(true);
+		const reqId = lastReqId();
 		expect(sent.at(-1)).toEqual({
 			type: "identity_file_save",
 			id: "temper",
@@ -550,9 +564,10 @@ describe("the page's notebook store", () => {
 			text: "- a\n- b\n",
 			baseHash: base,
 			ref: NOTEBOOK_TAB_REF,
+			reqId: expect.any(String),
 		});
 		expect(getNotebook()?.saving).toBe(true);
-		expect(saveNotebook("again", base)).toBe(false); // one at a time
+		expect(await saveNotebook("again", base)).toBe(false); // one at a time
 
 		// The live push of its own save may come first: the save is still on its way.
 		push("- a\n- b\n");
@@ -565,46 +580,64 @@ describe("the page's notebook store", () => {
 			hash: textHash("- a\n- b\n"),
 			size: 8,
 			ref: NOTEBOOK_TAB_REF,
+			reqId,
 		});
 		expect(getNotebook()).toMatchObject({ saving: false, saved: { ok: true }, text: "- a\n- b\n", size: 8 });
 		clearNotebookSaved();
 		expect(getNotebook()?.saved).toBeUndefined();
 	});
 
-	it("a refusal keeps the notebook as it is and says why (changed meanwhile, over the cap)", () => {
+	it("a refusal keeps the notebook as it is and says why (changed meanwhile, over the cap)", async () => {
 		watchNotebook("temper");
 		push("- a\n");
-		saveNotebook("mine\n", textHash("- a\n"));
+		await saveNotebook("mine\n", textHash("- a\n"));
+		const firstReq = lastReqId();
 		push("- a\n- from a chat\n"); // a chat wrote meanwhile
-		receiveNotebookSaved({ type: "identity_file_saved", id: "temper", file: "notebook", ok: false, code: "changed" });
+		receiveNotebookSaved({
+			type: "identity_file_saved",
+			id: "temper",
+			file: "notebook",
+			ok: false,
+			code: "changed",
+			ref: NOTEBOOK_TAB_REF,
+			reqId: firstReq,
+		});
 		expect(getNotebook()).toMatchObject({
 			saving: false,
 			saved: { ok: false, code: "changed" },
 			text: "- a\n- from a chat\n",
 		});
 
-		saveNotebook("x".repeat(9000), textHash("- a\n- from a chat\n"));
-		receiveNotebookSaved({ type: "identity_file_saved", id: "temper", file: "notebook", ok: false, code: "over_cap" });
+		await saveNotebook("x".repeat(9000), textHash("- a\n- from a chat\n"));
+		receiveNotebookSaved({
+			type: "identity_file_saved",
+			id: "temper",
+			file: "notebook",
+			ok: false,
+			code: "over_cap",
+			ref: NOTEBOOK_TAB_REF,
+			reqId: lastReqId(),
+		});
 		expect(getNotebook()).toMatchObject({ saved: { ok: false, code: "over_cap" }, text: "- a\n- from a chat\n" });
 	});
 
-	it("a new socket asks for the watch again; a save lost with the old one shows as not saved", () => {
+	it("a new socket asks for the watch again; a save lost with the old one shows as not saved", async () => {
 		resendNotebookWatch(); // no tab: nothing
 		expect(sent).toHaveLength(0);
 		watchNotebook("temper");
 		push("- a\n");
-		saveNotebook("- b\n", textHash("- a\n"));
+		await saveNotebook("- b\n", textHash("- a\n"));
 		sent.length = 0;
 		resendNotebookWatch();
 		expect(sent).toEqual([{ type: "identity_notebook_watch", id: "temper" }]);
 		expect(getNotebook()).toMatchObject({ saving: false, saved: { ok: false, code: "io" } });
 	});
 
-	it("a save that can't be sent (no socket) shows as not saved", () => {
+	it("a save that can't be sent (no socket) shows as not saved", async () => {
 		watchNotebook("temper");
 		push("- a\n");
-		setAppSend(() => false);
-		expect(saveNotebook("- b\n", textHash("- a\n"))).toBe(false);
+		setAppAdmit(async () => false);
+		expect(await saveNotebook("- b\n", textHash("- a\n"))).toBe(false);
 		expect(getNotebook()).toMatchObject({ saving: false, saved: { ok: false, code: "io" } });
 	});
 
@@ -640,14 +673,15 @@ describe("the page's notebook store", () => {
 		expect(sent.at(-1)).toEqual({ type: "identity_notes_search", id: "temper", query: "deploy" });
 	});
 
-	it("identity-notes: opens a note, edits it (read again after), deletes it (closes, says so)", () => {
+	it("identity-notes: opens a note, edits it (read again after), deletes it (closes, says so)", async () => {
 		watchNotebook("temper");
 		push("- a\n", { memory: memOf() });
 		searchNotes("");
 		receiveNotesFound({ type: "identity_notes_found", id: "temper", query: "", hits: [hit("n1")], total: 1 });
 		expect(openNote("n1")).toBe(true);
-		expect(sent.at(-1)).toEqual({ type: "identity_note_get", id: "temper", ref: "n1" });
-		receiveNote({ type: "identity_note", id: "temper", ref: "n2", text: "x", hash: "h" }); // not the open one
+		const openReq = lastReqId();
+		expect(sent.at(-1)).toEqual({ type: "identity_note_get", id: "temper", ref: "n1", reqId: expect.any(String) });
+		receiveNote({ type: "identity_note", id: "temper", ref: "n2", text: "x", hash: "h", reqId: openReq }); // not the open one
 		expect(getNotebook()?.notes.open).toMatchObject({ ref: "n1", status: "loading" });
 		const text = "id: n1\nsummary: one\n---\ndetail\n";
 		receiveNote({
@@ -658,18 +692,21 @@ describe("the page's notebook store", () => {
 			hash: textHash(text),
 			size: 30,
 			editable: true,
+			reqId: openReq,
 		});
 		expect(getNotebook()?.notes.open).toMatchObject({ status: "ready", text, editable: true, busy: null });
 
-		expect(saveOpenNote(`${text}more\n`)).toBe(true);
+		expect(await saveOpenNote(`${text}more\n`)).toBe(true);
+		const invalidReq = lastReqId();
 		expect(sent.at(-1)).toEqual({
 			type: "identity_note_save",
 			id: "temper",
 			ref: "n1",
 			text: `${text}more\n`,
 			baseHash: textHash(text),
+			reqId: expect.any(String),
 		});
-		expect(saveOpenNote("again")).toBe(false); // one at a time
+		expect(await saveOpenNote("again")).toBe(false); // one at a time
 		receiveNoteSaved({
 			type: "identity_note_saved",
 			id: "temper",
@@ -677,25 +714,59 @@ describe("the page's notebook store", () => {
 			ok: false,
 			code: "invalid",
 			problems: ["p"],
+			reqId: invalidReq,
 		});
 		expect(getNotebook()?.notes.open).toMatchObject({
 			busy: null,
 			done: { ok: false, code: "invalid", problems: ["p"] },
 		});
-		saveOpenNote(`${text}more\n`);
+		await saveOpenNote(`${text}more\n`);
+		const saveReq = lastReqId();
 		sent.length = 0;
-		receiveNoteSaved({ type: "identity_note_saved", id: "temper", ref: "n1", ok: true, hash: "h2", size: 35 });
+		receiveNoteSaved({
+			type: "identity_note_saved",
+			id: "temper",
+			ref: "n1",
+			ok: true,
+			hash: "h2",
+			size: 35,
+			reqId: saveReq,
+		});
 		expect(getNotebook()?.notes.open).toMatchObject({ busy: null, done: { ok: true }, hash: "h2" });
 		expect(sent).toEqual([
-			{ type: "identity_note_get", id: "temper", ref: "n1" },
+			{ type: "identity_note_get", id: "temper", ref: "n1", reqId: expect.any(String) },
 			{ type: "identity_notes_search", id: "temper", query: "" },
 		]);
+		const reloadReq = (sent[0] as { reqId?: string }).reqId;
 
 		const again = `${text}more\n`;
-		receiveNote({ type: "identity_note", id: "temper", ref: "n1", text: again, hash: textHash(again), editable: true });
+		receiveNote({
+			type: "identity_note",
+			id: "temper",
+			ref: "n1",
+			text: again,
+			hash: textHash(again),
+			editable: true,
+			reqId: reloadReq,
+		});
 		expect(deleteOpenNote()).toBe(true);
-		expect(sent.at(-1)).toEqual({ type: "identity_note_delete", id: "temper", ref: "n1", baseHash: textHash(again) });
-		receiveNoteSaved({ type: "identity_note_saved", id: "temper", ref: "n1", ok: true, deleted: true, freed: [] });
+		const deleteReq = lastReqId();
+		expect(sent.at(-1)).toEqual({
+			type: "identity_note_delete",
+			id: "temper",
+			ref: "n1",
+			baseHash: textHash(again),
+			reqId: expect.any(String),
+		});
+		receiveNoteSaved({
+			type: "identity_note_saved",
+			id: "temper",
+			ref: "n1",
+			ok: true,
+			deleted: true,
+			freed: [],
+			reqId: deleteReq,
+		});
 		expect(getNotebook()?.notes).toMatchObject({ open: null, deleted: "n1", status: "loading" });
 		expect(sent.at(-1)).toEqual({ type: "identity_notes_search", id: "temper", query: "" });
 		// The server's push right after it (the notes moved): the list follows, "n1 deleted" stays up...
@@ -716,14 +787,15 @@ describe("the page's notebook store", () => {
 			text: "old",
 			hash: textHash("old"),
 			editable: false,
+			reqId: lastReqId(),
 		});
-		expect(saveOpenNote("x")).toBe(false);
+		expect(await saveOpenNote("x")).toBe(false);
 		expect(deleteOpenNote()).toBe(false);
 		closeNote();
 		expect(getNotebook()?.notes.open).toBeNull();
 	});
 
-	it("identity-notes: a new socket asks for the list and the loading note again; an edit lost with it shows as not saved", () => {
+	it("identity-notes: a new socket asks for the list and the loading note again; an edit lost with it shows as not saved", async () => {
 		watchNotebook("temper");
 		push("- a\n", { memory: memOf() });
 		searchNotes("deploy");
@@ -733,10 +805,18 @@ describe("the page's notebook store", () => {
 		expect(sent).toEqual([
 			{ type: "identity_notebook_watch", id: "temper" },
 			{ type: "identity_notes_search", id: "temper", query: "deploy" },
-			{ type: "identity_note_get", id: "temper", ref: "n1" },
+			{ type: "identity_note_get", id: "temper", ref: "n1", reqId: expect.any(String) },
 		]);
-		receiveNote({ type: "identity_note", id: "temper", ref: "n1", text: "t", hash: textHash("t"), editable: true });
-		saveOpenNote("t2");
+		receiveNote({
+			type: "identity_note",
+			id: "temper",
+			ref: "n1",
+			text: "t",
+			hash: textHash("t"),
+			editable: true,
+			reqId: lastReqId(),
+		});
+		await saveOpenNote("t2");
 		resendNotebookWatch();
 		expect(getNotebook()?.notes.open).toMatchObject({ busy: null, done: { ok: false, code: "io" } });
 	});
@@ -778,7 +858,16 @@ function memOf(extra: Partial<UiRoleMemory> = {}): UiRoleMemory {
 }
 
 describe("the Notebook tab's view", () => {
-	beforeEach(() => setAppSend(() => true));
+	const sent: unknown[] = [];
+	const lastReqId = () => (sent.at(-1) as { reqId?: string } | undefined)?.reqId;
+	beforeEach(() => {
+		sent.length = 0;
+		setAppSend((msg) => {
+			sent.push(msg);
+			return true;
+		});
+	});
+	afterEach(() => setAppSend(null));
 	const render = (onOpenAbout?: () => void) =>
 		renderToStaticMarkup(
 			createElement(
@@ -818,6 +907,8 @@ describe("the Notebook tab's view", () => {
 		const big = "x".repeat(8001);
 		receiveNotebook({ type: "identity_notebook", id: "temper", text: big, hash: textHash(big), size: 8001, cap: 8000 });
 		expect(render()).toContain('class="notebook-size over"');
+		watchNotebook(null);
+		watchNotebook("temper");
 		receiveNotebook({ type: "identity_notebook", id: "temper", error: "EACCES" });
 		const html = render();
 		expect(html).toContain('data-status="error"');
@@ -880,7 +971,15 @@ describe("the Notebook tab's view", () => {
 		});
 		openNote("n1");
 		const note = "id: n1\nsummary: one\n---\nthe detail\n";
-		receiveNote({ type: "identity_note", id: "temper", ref: "n1", text: note, hash: textHash(note), editable: true });
+		receiveNote({
+			type: "identity_note",
+			id: "temper",
+			ref: "n1",
+			text: note,
+			hash: textHash(note),
+			editable: true,
+			reqId: lastReqId(),
+		});
 		let html = render();
 		expect(html).toMatch(/class="notebook-open" data-ref="n1"/);
 		expect(html).toContain(`<pre class="notebook-raw notebook-note-text">${note}</pre>`);
@@ -895,6 +994,7 @@ describe("the Notebook tab's view", () => {
 			text: "old line",
 			hash: textHash("old line"),
 			editable: false,
+			reqId: lastReqId(),
 		});
 		html = render();
 		expect(html).not.toContain("notebook-note-edit");
@@ -902,9 +1002,25 @@ describe("the Notebook tab's view", () => {
 		expect(html).toContain("Old archive (read-only)");
 
 		openNote("n1");
-		receiveNote({ type: "identity_note", id: "temper", ref: "n1", text: note, hash: textHash(note), editable: true });
+		receiveNote({
+			type: "identity_note",
+			id: "temper",
+			ref: "n1",
+			text: note,
+			hash: textHash(note),
+			editable: true,
+			reqId: lastReqId(),
+		});
 		deleteOpenNote();
-		receiveNoteSaved({ type: "identity_note_saved", id: "temper", ref: "n1", ok: true, deleted: true, freed: [] });
+		receiveNoteSaved({
+			type: "identity_note_saved",
+			id: "temper",
+			ref: "n1",
+			ok: true,
+			deleted: true,
+			freed: [],
+			reqId: lastReqId(),
+		});
 		expect(render()).toContain("n1 deleted (kept in removed.md).");
 	});
 });

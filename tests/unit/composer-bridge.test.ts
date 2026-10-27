@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	composeToComposer,
 	focusComposer,
@@ -8,102 +8,128 @@ import {
 	registerFocusSink,
 	resetComposerSinks,
 } from "../../web/src/composer-bridge.js";
+import { composerRecovery, type ComposerHostSnapshot } from "../../web/src/recovery-composer.js";
 import type { DraftAttachment } from "../../web/src/composer-draft.js";
 
-/** 输入框注入桥的纪律：全有或全无（不会出现「附件加了、文本没加」的半截状态），
- *  以及「绝不覆盖用户正在打的内容」（并入动作由 sink 自己按 mergeRecalledDraft
- *  语义做，这里只锁桥的转发与拒收）。 */
-
-const shot: DraftAttachment = { path: "", name: "shot.png", mode: "inline", imageData: "AAA", key: "k1" };
-
-/** 装一个记账用的双 sink。 */
+/** Same public boolean bridge contract; owned complete checkpoint replaces the old
+ * independent half-sink fixture. Source/forwarding/failure assertions are retained. */
+const shot: DraftAttachment = { path: "", name: "shot.png", mode: "inline", imageData: "AAAA", key: "k1" };
+let dispose: (() => void) | undefined;
+let rows: Map<string, string>;
+let order: string[];
 function harness() {
-	const drafts: string[] = [];
-	const attachments: DraftAttachment[][] = [];
-	const unregisterDraft = () => registerDraftSink((t) => drafts.push(t));
-	const unregisterAttach = () => registerAttachmentSink((a) => attachments.push(a));
-	unregisterDraft();
-	unregisterAttach();
-	return { drafts, attachments };
+	const drafts: string[] = [],
+		attachments: DraftAttachment[][] = [];
+	let state: ComposerHostSnapshot = {
+		binding: { ownerId: "o", composerId: "composer", conversationId: "c", sessionId: "s", revision: 0 },
+		draft: { text: "", attachments: [] },
+	};
+	dispose = composerRecovery().attach({
+		snapshot: () => state,
+		apply(_original, record) {
+			order.push("whole-draft");
+			if (record.incoming.text) drafts.push(record.incoming.text);
+			if (record.incoming.attachments) attachments.push([...record.incoming.attachments]);
+			state = {
+				binding: { ...record.binding, revision: record.nextRevision },
+				draft: structuredClone(record.effective),
+			};
+			return true;
+		},
+		problem() {},
+	});
+	return { drafts, attachments, dispose: () => dispose?.() };
 }
-
 beforeEach(() => {
 	resetComposerSinks();
+	rows = new Map();
+	order = [];
+	vi.stubGlobal("localStorage", {
+		get length() {
+			return rows.size;
+		},
+		key: (i: number) => [...rows.keys()][i] ?? null,
+		getItem: (key: string) => rows.get(key) ?? null,
+		setItem: (key: string, value: string) => {
+			order.push("checkpoint");
+			rows.set(key, value);
+		},
+	});
+});
+afterEach(() => {
+	dispose?.();
+	dispose = undefined;
+	resetComposerSinks();
+	vi.unstubAllGlobals();
 });
 
 describe("composer-bridge", () => {
-	it("没挂任何 sink → isComposerReady=false，compose 全部拒收", () => {
+	it("no actual owner/sink: readiness false and every compose refuses", () => {
 		expect(isComposerReady()).toBe(false);
 		expect(composeToComposer({ text: "hi" })).toBe(false);
 		expect(composeToComposer({ attachments: [shot] })).toBe(false);
 	});
-
-	it("只挂一半 sink → isComposerReady=true，但需要另一半的那笔照样拒收", () => {
-		registerDraftSink(() => {});
-		expect(isComposerReady()).toBe(true);
+	it("legacy half-sinks do not claim checkpoint readiness or receive partial work", () => {
+		const draft = vi.fn(),
+			attachment = vi.fn();
+		registerDraftSink(draft);
+		expect(isComposerReady()).toBe(false);
 		expect(composeToComposer({ attachments: [shot] })).toBe(false);
-		registerAttachmentSink(() => {});
+		registerAttachmentSink(attachment);
+		expect(composeToComposer({ text: "x", attachments: [shot] })).toBe(false);
+		expect(draft).not.toHaveBeenCalled();
+		expect(attachment).not.toHaveBeenCalled();
+		harness();
+		expect(isComposerReady()).toBe(true);
 		expect(composeToComposer({ attachments: [shot] })).toBe(true);
 	});
-
-	it("文本 + 附件 → 两个 sink 都收到；附件先落、文本后并", () => {
-		const order: string[] = [];
-		const drafts: string[] = [];
-		const attachments: DraftAttachment[][] = [];
-		registerAttachmentSink((a) => {
-			order.push("attach");
-			attachments.push(a);
-		});
-		registerDraftSink((t) => {
-			order.push("draft");
-			drafts.push(t);
-		});
+	it("text plus attachments: one full placement only after the complete checkpoint", () => {
+		const h = harness();
 		expect(composeToComposer({ text: "看这个", attachments: [shot] })).toBe(true);
-		expect(drafts).toEqual(["看这个"]);
-		expect(attachments).toEqual([[shot]]);
-		expect(order).toEqual(["attach", "draft"]);
+		expect(h.drafts).toEqual(["看这个"]);
+		expect(h.attachments).toEqual([[shot]]);
+		expect(order).toEqual(["checkpoint", "whole-draft"]);
 	});
-
-	it("全空 / 只有空白文本 → 拒收（不往输入框塞空行）", () => {
-		harness();
+	it("empty/whitespace-only input refuses without inserting blank lines", () => {
+		const h = harness();
 		expect(composeToComposer({})).toBe(false);
 		expect(composeToComposer({ text: "   \n\t " })).toBe(false);
 		expect(composeToComposer({ text: "", attachments: [] })).toBe(false);
+		expect(h.drafts).toEqual([]);
+		expect(order).toEqual([]);
 	});
-
-	it("文本原样透传（含前后换行 / markdown，不 trim 掉用户内容）", () => {
-		const h = harness();
-		const md = "### 元素\n\n```css\n.card{color:red}\n```";
+	it("forwards the exact original text including whitespace and markdown", () => {
+		const h = harness(),
+			md = "### 元素\n\n```css\n.card{color:red}\n```";
 		expect(composeToComposer({ text: `  ${md}\n` })).toBe(true);
 		expect(h.drafts).toEqual([`  ${md}\n`]);
 	});
-
-	it("脏入参（null / 非数组 attachments / 非字符串 text）不抛错", () => {
+	it("malformed input refuses without throw; subsequent valid input still works", () => {
 		const h = harness();
 		expect(composeToComposer(null as never)).toBe(false);
 		expect(composeToComposer({ text: 42 as never, attachments: "nope" as never })).toBe(false);
 		expect(composeToComposer({ text: "ok" })).toBe(true);
 		expect(h.drafts).toEqual(["ok"]);
 	});
-
-	it("反复 compose → 每次都转发（合并 / 去重由 sink 侧按草稿语义处理）", () => {
+	it("successive compose calls retain complete original inputs, including deduplicated items", () => {
 		const h = harness();
-		composeToComposer({ text: "A" });
-		composeToComposer({ text: "B" });
-		composeToComposer({ attachments: [shot, shot] });
+		expect(composeToComposer({ text: "A" })).toBe(true);
+		expect(composeToComposer({ text: "B" })).toBe(true);
+		expect(composeToComposer({ attachments: [shot, shot] })).toBe(true);
 		expect(h.drafts).toEqual(["A", "B"]);
 		expect(h.attachments).toEqual([[shot, shot]]);
+		expect(rows.size).toBe(3);
 	});
-
-	it("注销后立刻拒收（页面卸载 / 视图切走后不会投进虚空）", () => {
-		harness();
+	it("detaching the actual owner immediately rejects later work", () => {
+		const h = harness();
 		expect(composeToComposer({ text: "x" })).toBe(true);
+		h.dispose();
 		resetComposerSinks();
 		expect(isComposerReady()).toBe(false);
 		expect(composeToComposer({ text: "y" })).toBe(false);
+		expect(rows.size).toBe(1);
 	});
-
-	it("focusComposer: 没注册 sink 回 false，注册后触发并回 true，注销后回 false", () => {
+	it("focus preserves the synchronous non-checkpoint control contract", () => {
 		expect(focusComposer()).toBe(false);
 		let focused = 0;
 		registerFocusSink(() => {

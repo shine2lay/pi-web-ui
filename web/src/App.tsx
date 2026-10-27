@@ -7,10 +7,16 @@ import {
 	useRef,
 	useState,
 	type CSSProperties,
+	type SetStateAction,
 	type MouseEvent as ReactMouseEvent,
 	type PointerEvent as ReactPointerEvent,
 } from "react";
 import { TopBar } from "./components/TopBar";
+import { ToolInspectorButton } from "./components/ToolInspectorButton";
+import { PendingRecoveryPanel } from "./components/PendingRecoveryPanel";
+import { ComposerRecoveryPanel } from "./components/ComposerRecoveryPanel";
+import { PluginStartRecoveryPanel } from "./components/PluginStartRecoveryPanel";
+import { usePluginStartRecovery } from "./use-plugin-start-recovery";
 import { LeftPanel } from "./components/LeftPanel";
 import { RightPanel } from "./components/RightPanel";
 import { filesPanelVisible } from "./files-visibility";
@@ -48,6 +54,7 @@ import {
 	installPluginHostApi,
 	listPluginHostSessions,
 	triggerPluginUiAction,
+	type PluginHostApi,
 } from "./plugin-host";
 import {
 	buildUiSlots,
@@ -68,8 +75,8 @@ import { BannerContainer } from "./components/BannerContainer";
 import { ReconnectingNote } from "./components/ReconnectingNote";
 import { showBanner, dismissBanner, dismissBannersWhere } from "./banner-notice";
 import { ensurePluginViewLoaded } from "./plugin-loader";
-import { registerAttachmentSink, insertTextAtCursor, removeMentionFromComposer } from "./composer-bridge";
-import { appendDraftAttachments } from "./composer-draft";
+import { insertTextAtCursor, removeMentionFromComposer } from "./composer-bridge";
+import type { ComposerAttachmentHost } from "./recovery-composer";
 import { useComposerSessionReset } from "./use-composer-session";
 import {
 	syncPluginViews,
@@ -96,7 +103,12 @@ import { ToolApprovalDialog } from "./components/ToolApprovalDialog";
 import { ToolInfoDialog } from "./components/ToolInfoDialog";
 import { GlobalSearchModal } from "./components/GlobalSearchModal";
 import { PluginModal } from "./components/PluginModal";
-import { FilePreview, type PreviewFile } from "./components/FilePreview";
+import {
+	FilePreview,
+	type PreviewFile,
+	type FilePreviewBinding,
+	type FilePreviewRequest,
+} from "./components/FilePreview";
 import { PluginFilePreview } from "./components/PluginFilePreview";
 import { useChat } from "./use-chat";
 import { pendingFor } from "./pending-sends";
@@ -106,6 +118,7 @@ import { nativeDialogFocusMatches } from "./roles-answer-actions";
 import type { RolesOpenTarget } from "./components/RolesView";
 import { appUrl } from "./base-url";
 import { resolveImageUrls } from "./chat-image";
+import { isRecoveryEligible } from "./recovery-policy";
 import type { ClientMessage, CommandDef, PromptAttachment, UiMessage } from "./types";
 import { useT, useI18n } from "./i18n";
 import { FiAlertCircle, FiAlertTriangle, FiChevronsLeft, FiChevronsRight, FiInfo, FiX } from "react-icons/fi";
@@ -344,6 +357,11 @@ export function App() {
 		send,
 		retrySend,
 		removeSend,
+		admitBound,
+		answerQueueTask,
+		commandIntent,
+		attachTerminal,
+		recovery,
 		dismissNotice,
 		pushNotice,
 		terminal,
@@ -368,14 +386,108 @@ export function App() {
 		const name = projectTitle ? projectNameFromCwd(cwd) : "";
 		document.title = name ? `${name} — pi-web-ui` : t("docTitle");
 	}, [cwd, projectTitle, t]);
-	const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
-	// 宿主注入的待发附件（浏览器元素拾取扩展的截图 → window.__piWebUiHost.compose）：
-	// 只追加不覆盖，判重口径与下面的 attach() 一致（见 composer-draft.ts）。
-	useEffect(() => {
-		registerAttachmentSink((items) => setAttachments((prev) => appendDraftAttachments(prev, items)));
-		return () => registerAttachmentSink(null);
+	const [attachments, setAttachmentsState] = useState<PendingAttachment[]>([]);
+	const attachmentOwner = useRef({ items: attachments, revision: 0 });
+	const setAttachments = useCallback((action: SetStateAction<PendingAttachment[]>) => {
+		const previous = attachmentOwner.current;
+		const next = typeof action === "function" ? action(previous.items) : action;
+		if (next !== previous.items) attachmentOwner.current = { items: next, revision: previous.revision + 1 };
+		setAttachmentsState(next);
 	}, []);
-	const [previewFile, setPreviewFile] = useState<PreviewFile | null>(null);
+	const composerSource = useRef({
+		recovery,
+		status: chat.status,
+		state: chat.state,
+		active: chat.activeConversationId,
+	});
+	composerSource.current = { recovery, status: chat.status, state: chat.state, active: chat.activeConversationId };
+	const lastComposerBinding = useRef<ReturnType<typeof recovery.captureBinding>>(null);
+	const currentComposerBinding = recovery.captureBinding();
+	if (currentComposerBinding) lastComposerBinding.current = currentComposerBinding;
+	const composerHost = useMemo<ComposerAttachmentHost>(() => {
+		const host: ComposerAttachmentHost = {
+			read() {
+				const source = composerSource.current;
+				const owner = source.recovery.client.getSnapshot();
+				const binding =
+					source.recovery.captureBinding() ?? (source.status !== "open" ? lastComposerBinding.current : null);
+				if (
+					!source.recovery.client.ready ||
+					owner.state !== "ready" ||
+					!owner.ownerId ||
+					!binding?.lifetime ||
+					!source.state ||
+					source.state.sessionId !== binding.sessionId ||
+					source.state.conversationId !== binding.conversationId ||
+					(source.active && source.active !== binding.conversationId)
+				)
+					return null;
+				return {
+					ownerId: owner.ownerId,
+					sessionId: binding.sessionId,
+					conversationId: binding.conversationId,
+					lifetime: binding.lifetime,
+					attachments: attachmentOwner.current.items,
+					attachmentRevision: attachmentOwner.current.revision,
+				};
+			},
+			replace(original, next) {
+				const now = host.read();
+				if (
+					!now ||
+					now.ownerId !== original.ownerId ||
+					now.sessionId !== original.sessionId ||
+					now.conversationId !== original.conversationId ||
+					now.lifetime !== original.lifetime ||
+					now.attachmentRevision !== original.attachmentRevision ||
+					now.attachments !== original.attachments
+				)
+					return false;
+				setAttachments(next);
+				return true;
+			},
+		};
+		return host;
+	}, [setAttachments]);
+	const [previewFile, setPreviewFile] = useState<
+		| (PreviewFile & {
+				binding?: FilePreviewBinding;
+				sendFile: (request: FilePreviewRequest) => boolean;
+		  })
+		| null
+	>(null);
+	const fileSourceRef = useRef({ cwd, sessionId: chat.state?.sessionId, ready: chat.ready, token: {} });
+	if (
+		fileSourceRef.current.cwd !== cwd ||
+		fileSourceRef.current.sessionId !== chat.state?.sessionId ||
+		fileSourceRef.current.ready !== chat.ready
+	)
+		fileSourceRef.current = { cwd, sessionId: chat.state?.sessionId, ready: chat.ready, token: {} };
+	const fileTransportRef = useRef({ send, recovery });
+	fileTransportRef.current = { send, recovery };
+	const openNativeFile = useCallback((file: PreviewFile) => {
+		const source = fileSourceRef.current;
+		const original = fileTransportRef.current.recovery.captureBinding();
+		const workspaceId = original?.workspace || source.cwd;
+		const sessionId = original?.sessionId || source.sessionId;
+		const binding =
+			workspaceId && source.ready
+				? Object.freeze({ workspaceId, openId: crypto.randomUUID(), ...(sessionId ? { sessionId } : {}) })
+				: undefined;
+		// Stable throughout this open, including matched read bootstrap. Never remount a draft on a new snapshot.
+		setPreviewFile({
+			...file,
+			binding,
+			sendFile: (request) => {
+				if (
+					fileSourceRef.current.token !== source.token ||
+					(original && !fileTransportRef.current.recovery.isCurrent(original))
+				)
+					return false;
+				return fileTransportRef.current.send(request);
+			},
+		});
+	}, []);
 	const [pluginFile, setPluginFile] = useState<{
 		file: PreviewFile;
 		plugin: FileHandlerPlugin;
@@ -390,16 +502,19 @@ export function App() {
 		previewOpenRef.current = previewFile !== null;
 		pluginFileOpenRef.current = pluginFile;
 	}, [previewFile, pluginFile]);
-	const openFile = useCallback((path: string, name: string) => {
-		const entry = findFileHandler(name);
-		if (entry) {
-			setPreviewFile(null);
-			setPluginFile({ file: { path, name }, plugin: entry.plugin, declaration: entry.declaration });
-			return;
-		}
-		setPluginFile(null);
-		setPreviewFile({ path, name });
-	}, []);
+	const openFile = useCallback(
+		(path: string, name: string) => {
+			const entry = findFileHandler(name);
+			if (entry) {
+				setPreviewFile(null);
+				setPluginFile({ file: { path, name }, plugin: entry.plugin, declaration: entry.declaration });
+				return;
+			}
+			setPluginFile(null);
+			openNativeFile({ path, name });
+		},
+		[openNativeFile],
+	);
 	useEffect(() => {
 		registerFilePreviewHost({
 			open: (f) => openFile(f.path, f.name),
@@ -582,127 +697,158 @@ export function App() {
 	// deps 读的是 ref（挂载时装一次，不能把每次渲染的闭包困在里面）。
 	const chatRefForPlugins = useRef(chat);
 	chatRefForPlugins.current = chat;
+	const admitBoundRefForPlugins = useRef(admitBound);
+	admitBoundRefForPlugins.current = admitBound;
+	const recoveryRefForPlugins = useRef(recovery);
+	recoveryRefForPlugins.current = recovery;
+	const pluginHostApiRef = useRef<PluginHostApi | null>(null);
+	const pluginStartRecovery = usePluginStartRecovery({
+		ownerId: recovery.view.ownerId ?? null,
+		sessionId: chat.state?.sessionId ?? null,
+		conversationId: chat.activeConversationId || chat.state?.conversationId || null,
+		getRuntimeIssues: () => pluginHostApiRef.current?.startChatIssues?.() ?? [],
+		getFailedIntentIds: () => pluginHostApiRef.current?.failedStartChatIntentIds?.() ?? [],
+	});
+	const pluginStartRecoveryRef = useRef(pluginStartRecovery);
+	pluginStartRecoveryRef.current = pluginStartRecovery;
 	const setViewRefForPlugins = useRef(setView);
 	setViewRefForPlugins.current = setView;
 	// modal.dialog 的 openModal 校验要读最新合并结果（bridge deps 只装一次，走 ref）。
 	const uiSlotsRef = useRef(uiSlots);
 	uiSlotsRef.current = uiSlots;
 	useEffect(() => {
-		installPluginHostApi(
-			createPluginHostApi({
-				send,
-				isReady: () => Boolean(chatRefForPlugins.current.state),
-				setView: (v) => setViewRefForPlugins.current(v as ViewName),
-				getCwd: () => chatRefForPlugins.current.state?.cwd ?? "",
-				getWorkspaceRoots: () => chatRefForPlugins.current.state?.workspaceRoots ?? [],
-				// host.sessions.list：只报「本会话现在能打开的东西」——运行中的对话 + 当前项目的历史会话。
-				// 历史会话的 cwd 就是当前 cwd（服务端的 session 列表是按 cwd 扫的，见 sessions 快照）。
-				listSessions: () => {
-					const c = chatRefForPlugins.current;
-					return listPluginHostSessions(c.conversations, c.sessions, c.state?.cwd ?? "");
-				},
-				getConversationId: () => chatRefForPlugins.current.state?.conversationId ?? null,
-				isConversationBlank: () => (chatRefForPlugins.current.state?.messages.length ?? 0) === 0,
-				// issue #188：浏览器插件的模型目录 + 当前模型（startChat/openSession 的 model 选项用）。
-				listModels: () =>
-					chatRefForPlugins.current.models.map((m) => ({
-						id: m.id,
-						provider: m.provider,
-						name: m.name,
-						vision: m.vision,
-						reasoning: m.reasoning,
-					})),
-				getCurrentModelId: () => {
-					const m = chatRefForPlugins.current.state?.model;
-					return m ? `${m.provider}/${m.id}` : null;
-				},
-				// #146：目录授权（最近项目 = 用户已知；其余弹一次确认）+ 顶栏动作按需加载
-				listProjects: () => chatRefForPlugins.current.projects.map((p) => p.path),
-				grantedPaths: readPluginPathGrants,
-				grantPath: addPluginPathGrant,
-				confirm: (opts) => new Promise<boolean>((resolve) => setPluginPathConfirm({ path: opts.path, resolve })),
-				// 宿主 API v10 弹窗（modal.dialog 槽位）：条目必须存在且未被隐藏，否则拒绝。
-				openModal: (id) => {
-					const target = String(id ?? "").trim();
-					if (!target) return false;
-					const entry = uiSlotsRef.current["modal.dialog"].find((e) => e.id === target);
-					if (!entry || entry.hidden) return false;
-					setOpenModalId(target);
-					return true;
-				},
-				closeModal: () => setOpenModalId(null),
-				// 宿主 API v8 对话框（本地插件对话框态撑起；已有未决直接回绝，不排队）。
-				dialogConfirm: (opts) =>
-					new Promise<boolean>((resolve) => {
-						if (pluginDialogRef.current) {
-							resolve(false);
-							return;
-						}
-						const d = { kind: "confirm" as const, title: opts.title, resolve: resolve as (v: any) => void };
-						pluginDialogRef.current = d;
-						setPluginDialog(d);
-					}),
-				select: (opts) =>
-					new Promise<{ ok: boolean; selected?: string[]; error?: string }>((resolve) => {
-						if (pluginDialogRef.current) {
-							resolve({ ok: false, error: "busy" });
-							return;
-						}
-						const d = {
-							kind: "select" as const,
-							title: opts.title,
-							options: opts.options,
-							...(opts.multi ? { multi: true as const } : {}),
-							resolve: resolve as (v: any) => void,
-						};
-						pluginDialogRef.current = d;
-						setPluginDialogSel([]);
-						setPluginDialog(d);
-					}),
-				input: (opts) =>
-					new Promise<{ ok: boolean; value?: string; error?: string }>((resolve) => {
-						if (pluginDialogRef.current) {
-							resolve({ ok: false, error: "busy" });
-							return;
-						}
-						const d = {
-							kind: "input" as const,
-							title: opts.title,
-							...(typeof opts.placeholder === "string" ? { placeholder: opts.placeholder } : {}),
-							...(typeof opts.initial === "string" ? { initial: opts.initial } : {}),
-							resolve: resolve as (v: any) => void,
-						};
-						pluginDialogRef.current = d;
-						setPluginDialogInput(opts.initial ?? "");
-						setPluginDialog(d);
-					}),
-				// 宿主 API v8 动作通知（notice 区里多一行按钮；抛错一律 resolve null，不阻塞）。
-				notifyAction: (opts) =>
-					new Promise<string | null>((resolve) => {
+		const api = createPluginHostApi({
+			send,
+			isReady: () => Boolean(chatRefForPlugins.current.state && recoveryRefForPlugins.current.captureBinding()),
+			setView: (v) => setViewRefForPlugins.current(v as ViewName),
+			getCwd: () => chatRefForPlugins.current.state?.cwd ?? "",
+			getWorkspaceRoots: () => chatRefForPlugins.current.state?.workspaceRoots ?? [],
+			// host.sessions.list：只报「本会话现在能打开的东西」——运行中的对话 + 当前项目的历史会话。
+			// 历史会话的 cwd 就是当前 cwd（服务端的 session 列表是按 cwd 扫的，见 sessions 快照）。
+			listSessions: () => {
+				const c = chatRefForPlugins.current;
+				return listPluginHostSessions(c.conversations, c.sessions, c.state?.cwd ?? "");
+			},
+			getConversationId: () => chatRefForPlugins.current.state?.conversationId ?? null,
+			getSessionId: () => chatRefForPlugins.current.state?.sessionId ?? null,
+			getStartChatOwner: () => pluginStartRecoveryRef.current.getOwner(),
+			admitPrompt: async (msg, expected) => {
+				const binding = recoveryRefForPlugins.current.captureBinding();
+				if (
+					!binding ||
+					binding.conversationId !== expected.conversationId ||
+					binding.sessionId !== expected.sessionId
+				) {
+					return false;
+				}
+				return await admitBoundRefForPlugins.current(msg, binding);
+			},
+			onStartChatChange: () => pluginStartRecoveryRef.current.notifyChange(),
+			isConversationBlank: () => (chatRefForPlugins.current.state?.messages.length ?? 0) === 0,
+			// issue #188：浏览器插件的模型目录 + 当前模型（startChat/openSession 的 model 选项用）。
+			listModels: () =>
+				chatRefForPlugins.current.models.map((m) => ({
+					id: m.id,
+					provider: m.provider,
+					name: m.name,
+					vision: m.vision,
+					reasoning: m.reasoning,
+				})),
+			getCurrentModelId: () => {
+				const m = chatRefForPlugins.current.state?.model;
+				return m ? `${m.provider}/${m.id}` : null;
+			},
+			// #146：目录授权（最近项目 = 用户已知；其余弹一次确认）+ 顶栏动作按需加载
+			listProjects: () => chatRefForPlugins.current.projects.map((p) => p.path),
+			grantedPaths: readPluginPathGrants,
+			grantPath: addPluginPathGrant,
+			confirm: (opts) => new Promise<boolean>((resolve) => setPluginPathConfirm({ path: opts.path, resolve })),
+			// 宿主 API v10 弹窗（modal.dialog 槽位）：条目必须存在且未被隐藏，否则拒绝。
+			openModal: (id) => {
+				const target = String(id ?? "").trim();
+				if (!target) return false;
+				const entry = uiSlotsRef.current["modal.dialog"].find((e) => e.id === target);
+				if (!entry || entry.hidden) return false;
+				setOpenModalId(target);
+				return true;
+			},
+			closeModal: () => setOpenModalId(null),
+			// 宿主 API v8 对话框（本地插件对话框态撑起；已有未决直接回绝，不排队）。
+			dialogConfirm: (opts) =>
+				new Promise<boolean>((resolve) => {
+					if (pluginDialogRef.current) {
+						resolve(false);
+						return;
+					}
+					const d = { kind: "confirm" as const, title: opts.title, resolve: resolve as (v: any) => void };
+					pluginDialogRef.current = d;
+					setPluginDialog(d);
+				}),
+			select: (opts) =>
+				new Promise<{ ok: boolean; selected?: string[]; error?: string }>((resolve) => {
+					if (pluginDialogRef.current) {
+						resolve({ ok: false, error: "busy" });
+						return;
+					}
+					const d = {
+						kind: "select" as const,
+						title: opts.title,
+						options: opts.options,
+						...(opts.multi ? { multi: true as const } : {}),
+						resolve: resolve as (v: any) => void,
+					};
+					pluginDialogRef.current = d;
+					setPluginDialogSel([]);
+					setPluginDialog(d);
+				}),
+			input: (opts) =>
+				new Promise<{ ok: boolean; value?: string; error?: string }>((resolve) => {
+					if (pluginDialogRef.current) {
+						resolve({ ok: false, error: "busy" });
+						return;
+					}
+					const d = {
+						kind: "input" as const,
+						title: opts.title,
+						...(typeof opts.placeholder === "string" ? { placeholder: opts.placeholder } : {}),
+						...(typeof opts.initial === "string" ? { initial: opts.initial } : {}),
+						resolve: resolve as (v: any) => void,
+					};
+					pluginDialogRef.current = d;
+					setPluginDialogInput(opts.initial ?? "");
+					setPluginDialog(d);
+				}),
+			// 宿主 API v8 动作通知（notice 区里多一行按钮；抛错一律 resolve null，不阻塞）。
+			notifyAction: (opts) =>
+				new Promise<string | null>((resolve) => {
+					try {
+						const prev = pluginNotifyRef.current;
+						pluginNotifyRef.current = null;
+						setPluginNotify(null);
 						try {
-							const prev = pluginNotifyRef.current;
-							pluginNotifyRef.current = null;
-							setPluginNotify(null);
-							try {
-								prev?.resolve(null);
-							} catch {
-								/* 忽略 */
-							}
-							const row = { text: opts.text, actions: opts.actions, resolve };
-							pluginNotifyRef.current = row;
-							setPluginNotify(row);
+							prev?.resolve(null);
 						} catch {
-							resolve(null);
+							/* 忽略 */
 						}
-					}),
-				loadPluginBundle: (pluginId) => {
-					const info = chatRefForPlugins.current.plugins.find((x) => x.id === pluginId);
-					if (!info) return Promise.resolve(false);
-					return ensurePluginViewLoaded(info, chatRefForPlugins.current.pluginsEpoch);
-				},
-			}),
-		);
-		return () => installPluginHostApi(null);
+						const row = { text: opts.text, actions: opts.actions, resolve };
+						pluginNotifyRef.current = row;
+						setPluginNotify(row);
+					} catch {
+						resolve(null);
+					}
+				}),
+			loadPluginBundle: (pluginId) => {
+				const info = chatRefForPlugins.current.plugins.find((x) => x.id === pluginId);
+				if (!info) return Promise.resolve(false);
+				return ensurePluginViewLoaded(info, chatRefForPlugins.current.pluginsEpoch);
+			},
+		});
+		pluginHostApiRef.current = api;
+		installPluginHostApi(api);
+		return () => {
+			pluginHostApiRef.current = null;
+			installPluginHostApi(null);
+		};
 	}, [send]);
 	// 左右面板可拖拽宽度（桌面端）：localStorage 持久化，双击手柄复位。
 	const [leftWidth, setLeftWidth] = useState(() => readPanelWidth("left"));
@@ -1597,22 +1743,39 @@ export function App() {
 	// carry the question's original images (fork drops their aside cards) plus
 	// any newly pasted/dropped ones — same pipeline as a normal prompt.
 	const onEditMessage = useCallback(
-		(messageId: string, text: string, attachments?: PromptAttachment[]) => {
-			// lazy-images: restored pictures carry only their address; fetch the bytes first, and never
-			// re-ask without them.
-			if (!attachments?.some((a) => a.imageUrl && !a.imageData)) {
-				send({ type: "edit_message", messageId, text, attachments });
-				return;
+		async (messageId: string, text: string, attachments?: PromptAttachment[]): Promise<boolean> => {
+			// Bind the ACTUALLY displayed original before resolving any image or awaiting storage.
+			const binding = recovery.captureBinding();
+			if (
+				!binding ||
+				binding.conversationId !== listState?.conversationId ||
+				binding.sessionId !== listState?.sessionId
+			)
+				return false;
+			try {
+				const original = structuredClone({ type: "edit_message" as const, messageId, text, attachments });
+				if (!isRecoveryEligible(original)) return false;
+				const resolved = original.attachments?.some((a) => a.imageUrl && !a.imageData)
+					? await resolveImageUrls(original.attachments)
+					: original.attachments;
+				if (!recovery.isCurrent(binding)) return false;
+				return await admitBound({ ...original, attachments: resolved }, binding);
+			} catch {
+				pushNotice(
+					"error",
+					"The complete edited question and its pictures could not be admitted. Your original remains editable.",
+				);
+				return false;
 			}
-			void resolveImageUrls(attachments).then(
-				(resolved) => send({ type: "edit_message", messageId, text, attachments: resolved }),
-				(err: unknown) => {
-					console.error("[edit] could not fetch a picture to re-send:", err);
-					pushNotice("error", t("imageLoadFailed", { name: err instanceof Error ? err.message : String(err) }));
-				},
-			);
 		},
-		[send, pushNotice, t],
+		[
+			admitBound,
+			recovery.captureBinding,
+			recovery.isCurrent,
+			listState?.conversationId,
+			listState?.sessionId,
+			pushNotice,
+		],
 	);
 
 	// Remove one queued prompt (the ✕ on a pending bubble). `index` = bubble position.
@@ -1637,6 +1800,14 @@ export function App() {
 		[send],
 	);
 
+	const restorePluginStartPrompt = useCallback((prompt: string): boolean => {
+		if (typeof prompt !== "string" || prompt.trim().length === 0) return false;
+		recallSeqRef.current += 1;
+		const item = { text: prompt, seq: recallSeqRef.current };
+		setRecallDrafts((prev) => [...prev.slice(-9), item]);
+		return true;
+	}, []);
+
 	// rewind-to-here：「回到这里」（messageId）与「对话太大」卡片的按钮（fit）。回到用户消息时
 	// 服务端回执带着那条的文字 → 走撤回草稿的同一条路放回输入框（空则填入、非空追加）。
 	const onRewind = useCallback(
@@ -1659,9 +1830,11 @@ export function App() {
 	// optimistic-send: × on a "Not sent" message takes it out of the chat and puts it back in the
 	// input box (text the same way as a recalled queued message, pictures and files back as attachments).
 	const onRemoveSend = useCallback(
-		(id: string) => {
-			const p = removeSend(id);
-			if (!p) return;
+		async (id: string) => {
+			const binding = recovery.captureBinding();
+			if (!binding) return;
+			const p = await removeSend(id);
+			if (!p || !recovery.isCurrent(binding)) return;
 			if (p.text) {
 				recallSeqRef.current += 1;
 				const item = { text: p.text, seq: recallSeqRef.current };
@@ -1670,7 +1843,7 @@ export function App() {
 			const back = (p.attachments ?? []).map(composerAttachment);
 			if (back.length > 0) setAttachments((prev) => [...prev, ...back]);
 		},
-		[removeSend],
+		[removeSend, recovery.captureBinding, recovery.isCurrent],
 	);
 
 	// Stable callbacks for memoized panels (LeftPanel/RightPanel/ChatInput/
@@ -1979,10 +2152,21 @@ export function App() {
 					</div>
 					{!isMobile && <ResizeHandle side="left" width={leftWidth} onResize={resizeLeft} />}
 					<main className={wide ? "main wide-chat" : "main"}>
-						{/* 对话头部条（chat.header 槽位）：纯插件新增位，无条目时不渲染。 */}
-						{chatHeaderShown.length > 0 && (
+						<PendingRecoveryPanel view={recovery.view} exportArtifact={recovery.client.exportArtifact} />
+						<ComposerRecoveryPanel />
+						<PluginStartRecoveryPanel
+							view={pluginStartRecovery.view}
+							onRefresh={pluginStartRecovery.notifyChange}
+							onExport={pluginStartRecovery.exportRaw}
+							onRestorePrompt={restorePluginStartPrompt}
+						/>
+						{/* W2: the inspector addresses this page's open chat, alongside existing header slots. */}
+						{(chatHeaderShown.length > 0 || chat.engine === "pi") && (
 							<div className="chat-header" role="toolbar">
 								{renderSlotToolbar(chatHeaderShown, onUiAction, renderIdentityEntry)}
+								{chat.engine === "pi" && (
+									<ToolInspectorButton conversationId={chat.state?.conversationId ?? ""} disabled={!!switchTarget} />
+								)}
 							</div>
 						)}
 						{/* switch-loading：点了另一条对话到新快照到达之间的那几秒（大会话更久），
@@ -2044,7 +2228,8 @@ export function App() {
 									state={listState}
 									liveOutputs={chat.liveOutputs}
 									toolStatuses={chat.toolStatuses}
-									onEdit={onEditMessage}
+									onEditAdmit={onEditMessage}
+									editContextKey={recovery.editContextKey}
 									onKillBash={() => send({ type: "abort_bash" })}
 									onRetry={() => {
 										// 重试沿用当前模型续跑上一轮请求，同样算一次模型使用（下拉按次数排序）。
@@ -2318,6 +2503,7 @@ export function App() {
 							providerKeys={chat.providerKeys}
 							defaultModel={chat.engine === "pi" ? chat.defaultModel : undefined}
 							attachments={attachments}
+							composerHost={composerHost}
 							onRemoveAttachment={removeAttachmentCb}
 							onAddImageFiles={addImageFilesCb}
 							onAddLocalFiles={addLocalFilesCb}
@@ -2359,6 +2545,8 @@ export function App() {
 							tldr={chat.state?.tldr}
 							tldrConversationId={chat.state?.conversationId}
 							taskQueue={chat.state?.taskQueue}
+							taskQueueAnswerBindings={chat.state?.taskQueue?.answerBindings}
+							onTaskQueueAnswerResult={answerQueueTask}
 							models={chat.models}
 							/* identity-notebook-tab: the Notebook tab shows the chat identity's notebook. */
 							identity={chatIdentity}
@@ -2395,6 +2583,8 @@ export function App() {
 							<TerminalPanel
 								chat={chat}
 								terminal={terminal}
+								onCommandIntent={commandIntent}
+								onAttachTerminal={attachTerminal}
 								uiTerminalToolbar={uiTerminalToolbar}
 								onUiAction={onUiAction}
 							/>
@@ -2405,6 +2595,7 @@ export function App() {
 					<ScmPanel
 						chat={chat}
 						terminal={terminal}
+						onCommandIntent={commandIntent}
 						active={view === "git"}
 						onSwitchToTerminal={() => setView("terminal")}
 						uiScmToolbar={uiScmToolbar}
@@ -2454,6 +2645,8 @@ export function App() {
 			{previewFile && (
 				<FilePreview
 					file={previewFile}
+					binding={previewFile.binding}
+					sendFile={previewFile.sendFile}
 					content={chat.fileContent}
 					onAddLines={(path, name, start, end) => attach(path, name, "lines", false, { start, end })}
 					onAttach={(path, name, mode) => attach(path, name, mode)}
@@ -2472,7 +2665,7 @@ export function App() {
 					onClose={() => setPluginFile(null)}
 					onFallback={() => {
 						setPluginFile(null);
-						setPreviewFile(pluginFile.file);
+						openNativeFile(pluginFile.file);
 					}}
 				/>
 			)}

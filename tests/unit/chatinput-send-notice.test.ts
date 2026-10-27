@@ -4,7 +4,7 @@ import { createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react-dom/test-utils";
 import { ChatInput } from "../../web/src/components/ChatInput.js";
-import { resetAppGlobals, setAppGlobals, setAppSend } from "../../web/src/app-globals.js";
+import { resetAppGlobals, setAppAdmit, setAppGlobals, setAppSend } from "../../web/src/app-globals.js";
 import { LanguageProvider, en } from "../../web/src/i18n.js";
 
 /**
@@ -24,6 +24,7 @@ function mount(opts: {
 }) {
 	setAppGlobals({ ready: opts.ready });
 	setAppSend(() => opts.sendResult);
+	setAppAdmit(async () => opts.sendResult);
 	try {
 		localStorage.setItem("pi-web-ui:lang", "zh");
 	} catch {
@@ -72,10 +73,10 @@ function typeText(container: HTMLElement, value: string) {
 	});
 }
 
-function clickSend(container: HTMLElement) {
+async function clickSend(container: HTMLElement) {
 	const btn = container.querySelector(".btn.send") as HTMLElement;
 	if (!btn) throw new Error("cannot find .btn.send");
-	act(() => {
+	await act(async () => {
 		btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 	});
 }
@@ -99,6 +100,7 @@ function dispatchCompositionEnd(container: HTMLElement) {
 afterEach(() => {
 	resetAppGlobals();
 	setAppSend(null); // 断开全局发送器，避免串到下一个用例
+	setAppAdmit(null);
 	if (root) {
 		act(() => root!.unmount());
 		root = null;
@@ -108,15 +110,20 @@ afterEach(() => {
 });
 
 describe("ChatInput 发送失败提示", () => {
-	it("已连接但 appSend 返回 false（ws 已关）：error notice + 文本保留", () => {
+	it("已连接但 appSend 返回 false（ws 已关）：error notice + 文本保留", async () => {
 		const notices: [string, string][] = [];
 		const onSent = vi.fn();
 		const c = mount({ ready: true, sendResult: false, onNotice: (l, t) => notices.push([l, t]), onSent });
 
 		typeText(c, "hello");
-		clickSend(c);
+		await clickSend(c);
 
-		expect(notices).toEqual([["error", en.netDisconnected]]);
+		expect(notices).toEqual([
+			[
+				"error",
+				"Send is not confirmed. Your draft and attachments have been kept. Check status before retrying uncertain work.",
+			],
+		]);
 		expect(onSent).not.toHaveBeenCalled();
 		// 文本保留，供重连后重发。
 		expect((c.querySelector("textarea") as HTMLTextAreaElement).value).toBe("hello");
@@ -139,13 +146,13 @@ describe("ChatInput 发送失败提示", () => {
 		expect((c.querySelector("textarea") as HTMLTextAreaElement).value).toBe("hello");
 	});
 
-	it("发送成功：无 error notice，文本清空并调 onSent（既有行为不退化）", () => {
+	it("发送成功：无 error notice，文本清空并调 onSent（既有行为不退化）", async () => {
 		const notices: [string, string][] = [];
 		const onSent = vi.fn();
 		const c = mount({ ready: true, sendResult: true, onNotice: (l, t) => notices.push([l, t]), onSent });
 
 		typeText(c, "hello");
-		clickSend(c);
+		await clickSend(c);
 
 		expect(notices).toEqual([]);
 		expect(onSent).toHaveBeenCalledTimes(1);

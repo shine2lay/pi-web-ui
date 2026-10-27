@@ -466,8 +466,19 @@ describe("independent look-only reading and #590 compatibility", () => {
 		expect([...storage.rows]).toStrictEqual(before);
 		expect(storage.requests).toBe(1);
 	});
-	it("raw export preserves cycles, special numbers and binary values visibly", async () => {
-		const raw: Record<string, unknown> = { nan: NaN, negativeZero: -0, bytes: new Uint8Array([0, 128, 255]), big: 42n };
+	it("raw export preserves cycles, special numbers, sliced binary views, shared backing ArrayBuffers and view offsets visibly", async () => {
+		const shared = new Uint8Array([10, 20, 30, 40, 50, 60]).buffer;
+		const viewA = new Uint8Array(shared, 1, 2);
+		const viewB = new DataView(shared, 2, 3);
+		const raw: Record<string, unknown> = {
+			nan: NaN,
+			negativeZero: -0,
+			bytes: new Uint8Array([0, 128, 255]),
+			viewA,
+			viewB,
+			backing: shared,
+			big: 42n,
+		};
 		raw.self = raw;
 		const text = await exportRawSchedulerDraftRow({ key: "unknown", value: raw });
 		expect(text).toContain('"reference"');
@@ -475,6 +486,20 @@ describe("independent look-only reading and #590 compatibility", () => {
 		expect(text).toContain('"-0"');
 		expect(text).toContain('"bigint"');
 		expect(text).toContain("255");
+		expect(text).toContain('"byteOffset": 1');
+		expect(text).toContain('"byteLength": 2');
+		expect(text).toContain('"byteOffset": 2');
+		expect(text).toContain('"byteLength": 3');
+
+		const equalVisA = await exportRawSchedulerDraftRow({
+			key: "slice",
+			value: { v: new Uint8Array(new Uint8Array([1, 7, 8, 4]).buffer, 1, 2) },
+		});
+		const equalVisB = await exportRawSchedulerDraftRow({
+			key: "slice",
+			value: { v: new Uint8Array(new Uint8Array([9, 7, 8, 6, 5]).buffer, 1, 2) },
+		});
+		expect(equalVisA).not.toBe(equalVisB);
 	});
 	it("reader shows unavailable distinctly from missing and empty", async () => {
 		const root = document.createElement("main");

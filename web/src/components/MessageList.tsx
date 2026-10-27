@@ -204,7 +204,7 @@ function PendingMessage({
 				<span className="msg-role">{t("role.user")}</span>
 				{failed ? (
 					<span className="pending-tag failed" title={pending.reason}>
-						{t("notSentTag")}
+						{t(pending.uncertain ? "deliveryUnknownTag" : "notSentTag")}
 					</span>
 				) : (
 					<span className="pending-tag sending">{t("sendingTag")}</span>
@@ -215,10 +215,10 @@ function PendingMessage({
 							<button
 								type="button"
 								className="msg-pending-retry"
-								title={t("retrySendTip")}
+								title={t(pending.uncertain ? "checkSendStatusTip" : "retrySendTip")}
 								onClick={() => onRetry(pending.id)}
 							>
-								{t("retrySend")}
+								{t(pending.uncertain ? "checkSendStatus" : "retrySend")}
 							</button>
 						)}
 						{onRemove && (

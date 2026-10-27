@@ -8,7 +8,13 @@
 import { Dirent, existsSync, mkdirSync, readFileSync, statSync, writeFileSync, watch } from "node:fs";
 import { homedir } from "node:os";
 import { resolve, relative, sep, isAbsolute } from "node:path";
-import type { ServerMessage, FileEntry, FileSearchResult } from "./protocol.js";
+import type { ServerMessage, FileEntry, FileSearchResult, FilePreviewMetadata } from "./protocol.js";
+import {
+	capturePreviewTarget,
+	replacePreviewText,
+	snapshotFileMetadata,
+	type FileMetadataSnapshot,
+} from "./file-preview-context.js";
 import { type ServerLang } from "./i18n.js";
 import { previewKind, looksLikeText, decodeText, hexDump, countLines } from "./text-sniff.js";
 import { extractOfficeText, isOfficeFile, OFFICE_MAX_FILE_BYTES } from "./office-parse.js";
@@ -249,6 +255,8 @@ export interface FilesHost {
 	isDisposed: () => boolean;
 	/** 文件面板 / 预览读写 / 补全的工作区根（服务启动 cwd 或会话 cwd）。 */
 	getCwd: () => string;
+	/** Genuine active engine session, omitted only by an engine without one. */
+	getSessionId?: () => string | undefined;
 	/** SCM 查询的工作区（当前活动对话所属项目，可能与 getCwd 不同）。 */
 	getActiveCwd: () => string;
 	/**
@@ -765,42 +773,60 @@ export class FilesService {
 		this.watchPath = null;
 	}
 
+	private capturePreview(relPath: string, purpose: "read" | "write", metadata: FileMetadataSnapshot) {
+		if (this.host.isDisposed()) throw new Error("The file session is closed.");
+		const root = this.host.getCwd();
+		const path = isAbsoluteWirePath(relPath)
+			? { abs: wireToAbs(relPath), rel: wireToAbs(relPath).split(sep).join("/") }
+			: workspacePath(resolve(root), relPath);
+		if (!path) throw new Error(`Path is outside the workspace: ${relPath}`);
+		const target = capturePreviewTarget(path.abs, root, this.host.getSessionId?.() || undefined, purpose, metadata);
+		return { ...target, rel: metadata.present ? relPath : path.rel };
+	}
+
+	private previewFailure(relPath: string, purpose: "read" | "write", metadata: FileMetadataSnapshot, err: unknown) {
+		const error = err instanceof Error ? err.message : String(err);
+		// Legacy readers still receive their existing notice. New readers also get an exact failed operation.
+		if (metadata.present)
+			this.host.emit({
+				type: "file_content",
+				path: relPath,
+				name: relPath.split(/[\\/]/).pop() ?? relPath,
+				kind: "text",
+				text: "",
+				binary: false,
+				truncated: false,
+				lines: 0,
+				size: 0,
+				...metadata.value,
+				purpose,
+				complete: false,
+				writeSucceeded: false,
+				error,
+			});
+		this.host.emit({
+			type: "notice",
+			level: "error",
+			text: `Failed to ${purpose === "write" ? "save" : "read"} file: ${error}`,
+		});
+	}
+
 	/** Read a workspace file for the preview panel (size-capped, binary-safe). */
-	async readFile(relPath: string): Promise<void> {
+	async readFile(relPath: string, request?: FilePreviewMetadata): Promise<void> {
+		const metadata = snapshotFileMetadata(request);
 		try {
-			const fs = await import("node:fs/promises");
-			const root = this.host.getCwd();
-			const absWire = isAbsoluteWirePath(relPath);
-			let abs: string;
-			let rel: string;
-			if (absWire) {
-				// 机器浏览：绝对路径直接读；回显用绝对 wire 形式（前端按 path 匹配）。
-				abs = wireToAbs(relPath);
-				rel = abs.split(sep).join("/");
-			} else {
-				const w = workspacePath(resolve(root), relPath);
-				if (!w) {
-					this.host.emit({
-						type: "notice",
-						level: "warning",
-						text: `Path is outside the workspace: ${relPath}`,
-						textEn: `Path is outside the workspace: ${relPath}`,
-					});
-					return;
-				}
-				abs = w.abs;
-				rel = w.rel;
-			}
-			const stat = await fs.stat(abs);
-			if (!stat.isFile()) {
+			// Resolve/authorize against the ORIGINAL context, before the import/read await.
+			const target = this.capturePreview(relPath, "read", metadata);
+			const { absolutePath: abs, rel, stat } = target;
+			const emit = (message: Extract<ServerMessage, { type: "file_content" }>) =>
 				this.host.emit({
-					type: "notice",
-					level: "warning",
-					text: `Not a file: ${relPath}`,
-					textEn: `Not a file: ${relPath}`,
+					...message,
+					...target.reply,
+					purpose: "read",
+					writeSucceeded: false,
+					complete: message.kind === "text" && !message.binary && !message.truncated,
 				});
-				return;
-			}
+			const fs = await import("node:fs/promises");
 			const name = relPath.split(/[\\/]/).pop() ?? relPath;
 			// Office 文档（docx/xlsx/xlsm）：转 Markdown 文本下发，前端按 Markdown
 			// 渲染表格/段落——文件树、附件、预览弹窗随处可看。失败回落到底下旧分支。
@@ -809,7 +835,7 @@ export class FilesService {
 					const data = await fs.readFile(abs);
 					const office = extractOfficeText(name, data);
 					if (office) {
-						this.host.emit({
+						emit({
 							type: "file_content",
 							path: rel,
 							name,
@@ -830,7 +856,7 @@ export class FilesService {
 			// Media previews stream over the /api/file HTTP endpoint, so only
 			// metadata is sent here — the raw bytes never touch the socket.
 			if (kind === "image" || kind === "video") {
-				this.host.emit({
+				emit({
 					type: "file_content",
 					path: rel,
 					name,
@@ -853,7 +879,7 @@ export class FilesService {
 				const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
 				const data = buf.subarray(0, bytesRead);
 				if (looksLikeText(data)) {
-					this.host.emit({
+					emit({
 						type: "file_content",
 						path: rel,
 						name,
@@ -865,7 +891,7 @@ export class FilesService {
 						size: stat.size,
 					});
 				} else {
-					this.host.emit({
+					emit({
 						type: "file_content",
 						path: rel,
 						name,
@@ -881,75 +907,39 @@ export class FilesService {
 				await handle.close();
 			}
 		} catch (err) {
-			this.host.emit({
-				type: "notice",
-				level: "error",
-				text: `Failed to read file: ${(err as Error).message}`,
-				textEn: `Failed to read file: ${(err as Error).message}`,
-			});
+			this.previewFailure(relPath, "read", metadata, err);
 		}
 	}
 
 	/** Save text from the file preview panel within the active workspace. */
-	async writeFile(relPath: string, text: string): Promise<void> {
+	async writeFile(relPath: string, text: string, request?: FilePreviewMetadata): Promise<void> {
+		const metadata = snapshotFileMetadata(request);
 		try {
-			const root = this.host.getCwd();
-			const absWire = isAbsoluteWirePath(relPath);
-			let abs: string;
-			let rel: string;
-			if (absWire) {
-				abs = wireToAbs(relPath);
-				rel = abs.split(sep).join("/");
-			} else {
-				const w = workspacePath(resolve(root), relPath);
-				if (!w) {
-					this.host.emit({
-						type: "notice",
-						level: "warning",
-						text: `Path is outside the workspace: ${relPath}`,
-						textEn: `Path is outside the workspace: ${relPath}`,
-					});
-					return;
-				}
-				abs = w.abs;
-				rel = w.rel;
-			}
-			if (Buffer.byteLength(text, "utf8") > 2 * 1024 * 1024) {
-				this.host.emit({
-					type: "notice",
-					level: "warning",
-					text: "File too large to save (2MB max)",
-					textEn: "File too large to save (2MB max)",
-				});
-				return;
-			}
-			const stat = statSync(abs);
-			if (!stat.isFile()) {
-				this.host.emit({
-					type: "notice",
-					level: "warning",
-					text: `Not a file: ${relPath}`,
-					textEn: `Not a file: ${relPath}`,
-				});
-				return;
-			}
-			writeFileSync(abs, text, "utf8");
+			const target = this.capturePreview(relPath, "write", metadata);
+			if (typeof text !== "string" || Buffer.byteLength(text, "utf8") > 2 * 1024 * 1024)
+				throw new Error("File too large to save (2MB max) or invalid text.");
+			// Prepare, verify and sync before atomic replacement; no read of a later cwd/session.
+			replacePreviewText(target, text);
+			const bytes = Buffer.from(text, "utf8");
 			this.host.emit({
-				type: "notice",
-				level: "info",
-				text: `Saved: ${rel}`,
-				textEn: `Saved: ${rel}`,
+				type: "file_content",
+				path: target.rel,
+				name: relPath.split(/[\\/]/).pop() ?? relPath,
+				kind: "text",
+				text,
+				binary: false,
+				truncated: false,
+				lines: countLines(bytes),
+				size: bytes.length,
+				...target.reply,
+				purpose: "write",
+				complete: true,
+				writeSucceeded: true,
 			});
-			// Re-read through the same path as the preview request so the client
-			// gets the canonical content, line count and file size after saving.
-			await this.readFile(rel);
+			this.host.emit({ type: "notice", level: "info", text: `Saved: ${target.rel}`, textEn: `Saved: ${target.rel}` });
 		} catch (err) {
-			this.host.emit({
-				type: "notice",
-				level: "error",
-				text: `Failed to save file: ${(err as Error).message}`,
-				textEn: `Failed to save file: ${(err as Error).message}`,
-			});
+			// Failure can follow a rename: report unknown/failed, never permission to replay.
+			this.previewFailure(relPath, "write", metadata, err);
 		}
 	}
 

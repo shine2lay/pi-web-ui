@@ -31,7 +31,11 @@ import { SelectionQuoteButton } from "../../web/src/components/SelectionQuoteBut
 import { SuggestionChips } from "../../web/src/components/SuggestionChips.js";
 import { ChatInput } from "../../web/src/components/ChatInput.js";
 import { composeToComposer, registerDraftSink, resetComposerSinks } from "../../web/src/composer-bridge.js";
-import { resetAppGlobals, setAppGlobals, setAppSend } from "../../web/src/app-globals.js";
+import { composerRecovery } from "../../web/src/recovery-composer.js";
+import { createPendingRecoveryCoordinator } from "../../web/src/pending-recovery-coordinator.js";
+import type { PendingRecoveryBackend, RecoveryRecord } from "../../web/src/pending-send-storage.js";
+import { setNativeRecoveryCoordinatorFactory } from "../../web/src/recovery-client.js";
+import { resetAppGlobals, setAppAdmit, setAppGlobals, setAppSend } from "../../web/src/app-globals.js";
 import { LanguageProvider } from "../../web/src/i18n.js";
 import { useChat } from "../../web/src/use-chat.js";
 import type { UiMessage, UiState } from "../../web/src/types.js";
@@ -80,6 +84,36 @@ beforeEach(() => {
 	sessionStorage.clear();
 	localStorage.setItem("pi-web-ui:lang", "en");
 	Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+	const records = new Map<string, RecoveryRecord>();
+	const activeOwners = new Set<string>();
+	const backend: PendingRecoveryBackend = {
+		async read(ownerId) {
+			return structuredClone([...records.values()].filter((r) => r.ownerId === ownerId));
+		},
+		async write(batch) {
+			for (const r of batch) records.set(JSON.stringify(r.key), structuredClone(r));
+		},
+		async release(record) {
+			records.set(JSON.stringify(record.key), structuredClone(record));
+		},
+	};
+	setNativeRecoveryCoordinatorFactory((verifyReference) =>
+		createPendingRecoveryCoordinator({
+			backend,
+			listOwners: async () => [...new Set([...records.values()].map((r) => r.ownerId))],
+			ownership: {
+				async acquire(ownerId) {
+					if (activeOwners.has(ownerId)) return null;
+					activeOwners.add(ownerId);
+					return { release: () => activeOwners.delete(ownerId) };
+				},
+				async active() {
+					return [...activeOwners];
+				},
+			},
+			verifyReference,
+		}),
+	);
 	resetAppGlobals();
 	resetComposerSinks();
 });
@@ -87,9 +121,11 @@ afterEach(() => {
 	act(() => {
 		for (const root of roots.splice(0)) root.unmount();
 	});
+	setNativeRecoveryCoordinatorFactory(undefined);
 	resetComposerSinks();
 	resetAppGlobals();
 	setAppSend(null);
+	setAppAdmit(null);
 	window.getSelection()?.removeAllRanges();
 	document.body.innerHTML = "";
 	vi.restoreAllMocks();
@@ -166,6 +202,20 @@ class UiSocket {
 				beforeIndex: data.beforeIndex,
 				limit: data.limit,
 				count: data.count,
+			});
+		if (data.recovery)
+			this.onmessage?.({
+				data: JSON.stringify({
+					type: "command_disposition",
+					recovery: data.recovery,
+					connectionGeneration: "synthetic-gen",
+					commandType: data.type,
+					status: "uncertain",
+					retryable: false,
+					reason: "dispatch-started",
+					persistence: "unknown",
+					releaseClientCopy: false,
+				}),
 			});
 	}
 	open() {
@@ -382,6 +432,27 @@ describe("Select-to-quote", () => {
 		const inserted = vi.fn();
 		const sent = vi.fn();
 		registerDraftSink(inserted);
+		let rev = 1;
+		let draftText = "";
+		composerRecovery().attach({
+			snapshot: () => ({
+				binding: {
+					ownerId: "synthetic-owner",
+					conversationId: "synthetic",
+					sessionId: "synthetic",
+					composerId: "11111111-1111-4111-8111-111111111111",
+					revision: rev,
+				},
+				draft: { text: draftText, attachments: [] },
+			}),
+			apply: (_original, record) => {
+				rev = record.nextRevision;
+				draftText = record.effective.text;
+				inserted(record.incoming.text);
+				return true;
+			},
+			problem: () => {},
+		});
 		setAppSend(sent);
 		mount(createElement(SelectionQuoteButton, { rootRef, sessionId: "synthetic" }));
 		const selected = host.querySelector(".msg-text")!;
@@ -426,9 +497,13 @@ describe("follow-up chips", () => {
 		expect(parseActionSuggestions(code)).toEqual({ text: code, actions: [] });
 		expect(messageSuggestions(message("u", "user", "[[action:suggest:No|No]]"))).toEqual([]);
 	});
-	it("renders safe text, sends the normal prompt on click, and stays disabled until initialization", () => {
+	it("renders safe text, sends the normal prompt on click, and stays disabled until initialization", async () => {
 		const sent: unknown[] = [];
 		setAppSend((value) => {
+			sent.push(value);
+			return true;
+		});
+		setAppAdmit(async (value) => {
 			sent.push(value);
 			return true;
 		});
@@ -438,18 +513,28 @@ describe("follow-up chips", () => {
 		expect(host.querySelector("img")).toBeNull();
 		const button = host.querySelector("button")!;
 		expect(button.disabled).toBe(true);
-		act(() => button.click());
+		await act(async () => button.click());
 		expect(sent).toEqual([]);
 		render(createElement(SuggestionChips, { actions, sessionId: "synthetic" }));
-		act(() => host.querySelector<HTMLButtonElement>("button")!.click());
+		await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
 		expect(sent).toEqual([
 			expect.objectContaining({ type: "prompt", text: "Explain the synthetic change", id: expect.any(String) }),
 		]);
 	});
-	it("registers a clicked chip in the real optimistic-send path before a server streaming update", () => {
+	it("registers a clicked chip in the real optimistic-send path before a server streaming update", async () => {
 		const socket = socketHarness();
-		socket.receive({ type: "ready", serverVersion: "synthetic", appVersion: "synthetic", engine: "pi", managed: true });
+		await act(async () => {});
+		socket.receive({
+			type: "ready",
+			serverVersion: "synthetic",
+			appVersion: "synthetic",
+			engine: "pi",
+			managed: true,
+			commandRecovery: 1,
+			recoveryGeneration: "synthetic-gen",
+		});
 		socket.receive({ type: "snapshot", state: state(0) });
+		socket.receive({ type: "session_initialized", connectionGeneration: "synthetic-gen" });
 		setAppGlobals({ ready: true, engine: "pi" });
 		setAppSend(api.send);
 		const { host } = mount(
@@ -458,7 +543,13 @@ describe("follow-up chips", () => {
 				sessionId: "synthetic-session",
 			}),
 		);
-		act(() => host.querySelector<HTMLButtonElement>("button")!.click());
+		await act(async () => {
+			for (let i = 0; i < 6; i++) await crypto.subtle.digest("SHA-256", new Uint8Array(0));
+		});
+		await act(async () => {
+			host.querySelector<HTMLButtonElement>("button")!.click();
+			for (let i = 0; i < 8; i++) await crypto.subtle.digest("SHA-256", new Uint8Array(0));
+		});
 		expect(api.chat.pendingSends).toEqual([
 			expect.objectContaining({ text: "Explain the synthetic change", id: expect.any(String) }),
 		]);

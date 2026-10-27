@@ -53,7 +53,8 @@ export function readEarlierPage(value: unknown, requestedBefore?: number): Earli
 		sessionId?: string;
 		messages?: UiMessage[];
 		start?: number;
-	} & HistoryFields;
+	} & HistoryFields &
+		Pick<OlderMessagesMsg, "straddle" | "quietLead">;
 	if (page.type !== "earlier_messages" || typeof page.conversationId !== "string" || !Array.isArray(page.messages))
 		return null;
 	const start =
@@ -66,6 +67,8 @@ export function readEarlierPage(value: unknown, requestedBefore?: number): Earli
 		conversationId: page.conversationId,
 		start,
 		messages: page.messages,
+		...(page.straddle ? { straddle: page.straddle } : {}),
+		...(page.quietLead ? { quietLead: page.quietLead } : {}),
 		...(typeof page.sessionId === "string" ? { sessionId: page.sessionId } : {}),
 		...(page.historyWindow ? { historyWindow: page.historyWindow } : {}),
 	};

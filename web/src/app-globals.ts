@@ -196,3 +196,8 @@ export function setAppSend(fn: AppSend | null): void {
 /** 全局发送器：引用稳定，可直接 import 后调用，不用 hook、不参与重渲染。
  *  未装配（还没 useChat）/ 连接未开 → 返回 false，与 send 的既有语义一致。 */
 export const appSend: AppSend = (msg) => (sendImpl ? sendImpl(msg) : false);
+
+/** One inert registry from reviewed #585. Only the real checked admission handler
+ * is installed here; never keep a second registry or fall back to synchronous send. */
+export { appAdmit, setAppAdmit } from "./app-admit";
+export type { AppAdmit } from "./app-admit";

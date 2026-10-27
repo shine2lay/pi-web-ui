@@ -754,14 +754,15 @@ describe("the page", () => {
 		configProblems: [],
 	};
 
-	it("the draft store: open, save the owner's edits against the hash, accept; a refusal keeps the edits", () => {
+	it("the draft store: open, save the owner's edits against the hash, accept; a refusal keeps the edits", async () => {
 		const sent: unknown[] = [];
+		const lastReqId = () => (sent.at(-1) as { reqId?: string } | undefined)?.reqId;
 		setAppSend((msg) => {
 			sent.push(msg);
 			return true;
 		});
 		openIdentityDraft("alpha");
-		expect(getIdentityDraft()).toEqual({ id: "alpha", status: "loading" });
+		expect(getIdentityDraft()).toMatchObject({ id: "alpha", status: "loading" });
 		expect(sent.at(-1)).toEqual({ type: "identity_draft_get", id: "alpha" });
 		receiveIdentityDraft({ type: "identity_draft", id: "beta", prompt: "x", config: "", notes: "", hash: "hb" });
 		expect(getIdentityDraft()?.status).toBe("loading");
@@ -781,16 +782,25 @@ describe("the page", () => {
 			hash: "h1",
 		});
 
-		expect(sendIdentityDraftAction("save", "p2\n", "{}")).toBe(true);
+		expect(await sendIdentityDraftAction("save", "p2\n", "{}")).toBe(true);
+		const saveReq = lastReqId();
 		expect(sent.at(-1)).toEqual({
 			type: "identity_draft_save",
 			id: "alpha",
 			prompt: "p2\n",
 			config: "{}",
 			baseHash: "h1",
+			reqId: expect.any(String),
 		});
-		expect(sendIdentityDraftAction("accept", "p2\n", "{}")).toBe(false); // one at a time
-		receiveIdentityDraftDone({ type: "identity_draft_done", id: "alpha", action: "save", ok: true, hash: "h2" });
+		expect(await sendIdentityDraftAction("accept", "p2\n", "{}")).toBe(false); // one at a time
+		receiveIdentityDraftDone({
+			type: "identity_draft_done",
+			id: "alpha",
+			action: "save",
+			ok: true,
+			hash: "h2",
+			reqId: saveReq,
+		});
 		expect(getIdentityDraft()).toMatchObject({
 			prompt: "p2\n",
 			hash: "h2",
@@ -798,13 +808,14 @@ describe("the page", () => {
 			done: { action: "save", ok: true },
 		});
 
-		expect(sendIdentityDraftAction("accept", "p2\n", '{"tools": 1}')).toBe(true);
+		expect(await sendIdentityDraftAction("accept", "p2\n", '{"tools": 1}')).toBe(true);
 		expect(sent.at(-1)).toEqual({
 			type: "identity_draft_accept",
 			id: "alpha",
 			prompt: "p2\n",
 			config: '{"tools": 1}',
 			baseHash: "h2",
+			reqId: expect.any(String),
 		});
 		receiveIdentityDraftDone({
 			type: "identity_draft_done",
@@ -813,6 +824,7 @@ describe("the page", () => {
 			ok: false,
 			code: "invalid",
 			problems: ['"tools" must be an object'],
+			reqId: lastReqId(),
 		});
 		expect(getIdentityDraft()).toMatchObject({
 			status: "ready",
@@ -820,16 +832,23 @@ describe("the page", () => {
 			hash: "h2",
 			done: { action: "accept", ok: false, code: "invalid", problems: ['"tools" must be an object'] },
 		});
-		expect(sendIdentityDraftAction("discard", "", "")).toBe(true);
-		expect(sent.at(-1)).toEqual({ type: "identity_draft_discard", id: "alpha" });
-		receiveIdentityDraftDone({ type: "identity_draft_done", id: "alpha", action: "discard", ok: true });
-		expect(getIdentityDraft()?.done).toEqual({ action: "discard", ok: true });
+		expect(await sendIdentityDraftAction("discard", "", "")).toBe(true);
+		expect(sent.at(-1)).toEqual({ type: "identity_draft_discard", id: "alpha", reqId: expect.any(String) });
+		receiveIdentityDraftDone({
+			type: "identity_draft_done",
+			id: "alpha",
+			action: "discard",
+			ok: true,
+			reqId: lastReqId(),
+		});
+		expect(getIdentityDraft()?.done).toMatchObject({ action: "discard", ok: true });
 		closeIdentityDraft();
 		expect(getIdentityDraft()).toBeNull();
 	});
 
-	it("about-drafts: the store keeps the suggested about page and the page now; save and accept send the page as shown", () => {
+	it("about-drafts: the store keeps the suggested about page and the page now; save and accept send the page as shown", async () => {
 		const sent: unknown[] = [];
+		const lastReqId = () => (sent.at(-1) as { reqId?: string } | undefined)?.reqId;
 		setAppSend((msg) => {
 			sent.push(msg);
 			return true;
@@ -864,7 +883,7 @@ describe("the page", () => {
 		// The row's badge says what the draft suggests.
 		expect(html).toContain("A suggested about page (3,000 bytes), prompt (2,100 bytes) and settings (tools, skills)");
 
-		expect(sendIdentityDraftAction("save", "", "", "# Alpha\n\nEdited\n")).toBe(true);
+		expect(await sendIdentityDraftAction("save", "", "", "# Alpha\n\nEdited\n")).toBe(true);
 		expect(sent.at(-1)).toEqual({
 			type: "identity_draft_save",
 			id: "alpha",
@@ -872,10 +891,18 @@ describe("the page", () => {
 			prompt: "",
 			config: "",
 			baseHash: "h1",
+			reqId: expect.any(String),
 		});
-		receiveIdentityDraftDone({ type: "identity_draft_done", id: "alpha", action: "save", ok: true, hash: "h2" });
+		receiveIdentityDraftDone({
+			type: "identity_draft_done",
+			id: "alpha",
+			action: "save",
+			ok: true,
+			hash: "h2",
+			reqId: lastReqId(),
+		});
 		expect(getIdentityDraft()).toMatchObject({ about: "# Alpha\n\nEdited\n", hash: "h2" });
-		expect(sendIdentityDraftAction("accept", "", "", "# Alpha\n\nEdited\n")).toBe(true);
+		expect(await sendIdentityDraftAction("accept", "", "", "# Alpha\n\nEdited\n")).toBe(true);
 		expect(sent.at(-1)).toEqual({
 			type: "identity_draft_accept",
 			id: "alpha",
@@ -883,6 +910,7 @@ describe("the page", () => {
 			prompt: "",
 			config: "",
 			baseHash: "h2",
+			reqId: expect.any(String),
 		});
 	});
 

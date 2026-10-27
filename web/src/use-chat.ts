@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { getClientId } from "./client-id";
 import { withToken } from "./auth-token";
 import { appUrl } from "./base-url";
@@ -59,7 +59,23 @@ import {
 	type SwitchError,
 } from "./switch-pending";
 import { isRolesOpen, ROLES_OPEN_FAILED } from "./roles-open-guard";
-import { setAppGlobals, setAppSend } from "./app-globals";
+import { setAppGlobals, setAppSend, setAppAdmit } from "./app-globals";
+import { createRecoveryChatTransport, createReferenceVerifier } from "./recovery-chat";
+import type { TaskQueueAnswerRequest } from "./components/TaskQueuePanel";
+import { createTerminalRecovery } from "./recovery-terminal";
+import { createSchedulerSourceCheckpoints } from "./recovery-scheduler";
+import { createSchedulerDraftIndexedDB } from "./scheduler-draft-store";
+import {
+	getSchedulerAdmissionSource,
+	getSchedulerCurrentSources,
+	restoreSchedulerDraft,
+	subscribeSchedulerCurrentSources,
+	type SchedulerAdmissionSource,
+} from "./components/SchedulerPanel";
+import { createBoardSourceCheckpoints } from "./recovery-board";
+import { createBoardDraftIndexedDB } from "./board-draft-store";
+import { requiresRecoveryAdmission } from "./recovery-policy";
+import type { AdmissionBinding } from "./recovery-admission";
 // 工具定义说明弹窗（工具卡右键 → 「显示工具详细信息」）：应答直接回模块级 store，
 // 不进 ChatState（弹窗挂在 App 上，消息列表里几十张卡片不必为此各拿一份数据）。
 import { receiveToolInfo } from "./tool-info-state";
@@ -83,7 +99,17 @@ import {
 } from "./notebook-state";
 import { receiveSubsLimits, requestSubsLimits } from "./subs-limits-state";
 import { receiveRoleGuard, requestRoleGuard } from "./role-guard-state";
-import { receiveBoardResult, receiveRoles, resendRolesWatch, rolesConnectionLost } from "./roles-state";
+import {
+	getBoardAdmissionSource,
+	getBoardCurrentSources,
+	receiveBoardResult,
+	receiveRoles,
+	resendRolesWatch,
+	restoreBoardDraft,
+	rolesConnectionLost,
+	subscribeBoardCurrentSources,
+	type BoardDraftSource,
+} from "./roles-state";
 import { graceLeft, graceView, liveVisibleAt, pageView, subscribePageLive, viewFresh } from "./page-live";
 import { disconnectRoleAnswers, receiveRoleAnswer } from "./roles-answer-state";
 import {
@@ -115,18 +141,13 @@ import {
 	applyPromptAck,
 	failPending,
 	idsToCheck,
-	isSlashText,
-	newPendingSend,
 	onReconnect,
-	parsePending,
-	PENDING_STORAGE_KEY,
 	type PendingSend,
 	type PromptAckInfo,
 	reconcilePending,
 	removePending,
 	retryPending,
 	sameChat,
-	serializePending,
 } from "./pending-sends";
 import {
 	initialProviderOAuthState,
@@ -509,6 +530,7 @@ type Action =
 	| { type: "pending_add"; pending: PendingSend }
 	| { type: "pending_retry"; id: string }
 	| { type: "pending_fail"; id: string; reason: string }
+	| { type: "pending_uncertain"; id: string; sessionId?: string; reason: string }
 	| { type: "pending_remove"; id: string }
 	| { type: "prompt_ack"; ack: PromptAckInfo }
 	| { type: "status"; status: ConnStatus }
@@ -1052,11 +1074,26 @@ function reducer(state: ChatState, action: Action): ChatState {
 		case "rewind_draft":
 			return { ...state, rewindDraft: { text: action.text, seq: (state.rewindDraft?.seq ?? 0) + 1 } };
 		case "pending_add":
-			return { ...state, pendingSends: [...state.pendingSends, action.pending] };
+			return {
+				...state,
+				pendingSends: [
+					...state.pendingSends.filter((p) => p.id !== action.pending.id || p.sessionId !== action.pending.sessionId),
+					action.pending,
+				],
+			};
 		case "pending_retry":
 			return { ...state, pendingSends: retryPending(state.pendingSends, action.id, state.state) };
 		case "pending_fail":
 			return { ...state, pendingSends: failPending(state.pendingSends, action.id, action.reason) };
+		case "pending_uncertain":
+			return {
+				...state,
+				pendingSends: state.pendingSends.map((p) =>
+					p.id === action.id && p.sessionId === action.sessionId && p.confirmedRev === undefined
+						? { ...p, status: "failed", uncertain: true, needsCheck: true, reason: action.reason }
+						: p,
+				),
+			};
 		case "pending_remove":
 			return { ...state, pendingSends: removePending(state.pendingSends, action.id) };
 		case "prompt_ack": {
@@ -1283,24 +1320,6 @@ function reducer(state: ChatState, action: Action): ChatState {
 	}
 }
 
-/** optimistic-send: the sends kept from before a reload (read once per page load). */
-let restoredPendingSends: readonly PendingSend[] | null = null;
-function loadPendingSends(): readonly PendingSend[] {
-	if (restoredPendingSends === null) {
-		let raw: string | null = null;
-		try {
-			raw = sessionStorage.getItem(PENDING_STORAGE_KEY);
-		} catch {
-			// storage off: nothing to restore
-		}
-		restoredPendingSends = parsePending(raw);
-	}
-	return restoredPendingSends;
-}
-
-/** optimistic-send: why Retry did nothing (the window has no connection to send it on). */
-const NOT_CONNECTED_REASON = "Not connected to the server.";
-
 // 客户端标识（每次页面加载独立，不落任何存储）: gate-light-tests (Ops #251) moved getClientId and its comment to
 // ./client-id, so its test loads that small module instead of this file's whole graph. Re-exported here for
 // file-transfer.ts, components/FilePreview.tsx and download.ts.
@@ -1328,6 +1347,139 @@ function sendTrace(ws: WebSocket | null, trace: BannerTrace, now: number): void 
 	} catch {
 		/* the socket went meanwhile: these are not recorded */
 	}
+}
+
+let documentSchedulerSources: ReturnType<typeof createSchedulerSourceCheckpoints> | undefined;
+let schedulerSourcesObserved = false;
+let lastSchedulerSourceProblem = "";
+const schedulerSourceProblemListeners = new Set<(text: string) => void>();
+function reportSchedulerSourceProblem(text: string): void {
+	if (text === lastSchedulerSourceProblem) return;
+	lastSchedulerSourceProblem = text;
+	for (const listener of schedulerSourceProblemListeners) {
+		try {
+			listener(text);
+		} catch {
+			/* Source ownership is independent of any mounted view. */
+		}
+	}
+}
+function schedulerSourceOwner() {
+	if (!documentSchedulerSources) {
+		let factory: IDBFactory | undefined;
+		try {
+			factory = globalThis.indexedDB;
+		} catch {
+			/* Explicit unavailable on first attempted IO. */
+		}
+		documentSchedulerSources = createSchedulerSourceCheckpoints({
+			storage: createSchedulerDraftIndexedDB(factory),
+			problem: reportSchedulerSourceProblem,
+		});
+	}
+	return documentSchedulerSources;
+}
+function observeSchedulerSources(): void {
+	if (schedulerSourcesObserved) return;
+	schedulerSourcesObserved = true;
+	const owner = schedulerSourceOwner();
+	const observe = (source: SchedulerAdmissionSource) => {
+		void owner.persistCurrent(source).then((retained) => {
+			if (retained && owner.getSnapshot().failures.length === 0) lastSchedulerSourceProblem = "";
+			else if (!retained && !lastSchedulerSourceProblem)
+				reportSchedulerSourceProblem(
+					"The current Scheduler draft is not safely checkpointed. Keep it open; its original is retained.",
+				);
+		});
+	};
+	// One document owner survives panel/hook remount; no recreated writer may erase pending originals.
+	subscribeSchedulerCurrentSources(observe);
+	for (const source of getSchedulerCurrentSources()) observe(source);
+	void owner
+		.inspect()
+		.then((inspection) => {
+			if (inspection.status === "corrupt") {
+				reportSchedulerSourceProblem(
+					"Some stored Scheduler draft records could not be verified. Use the recovery reader to inspect raw records.",
+				);
+			}
+			for (const record of inspection.records) {
+				if (record.retired) continue;
+				for (const source of record.submitted) {
+					restoreSchedulerDraft(source);
+				}
+				restoreSchedulerDraft(record.current);
+			}
+		})
+		.catch(() => {
+			/* Inspection errors are reported through the source snapshot. */
+		});
+}
+
+let documentBoardSources: ReturnType<typeof createBoardSourceCheckpoints> | undefined;
+let boardSourcesObserved = false;
+let lastBoardSourceProblem = "";
+const boardSourceProblemListeners = new Set<(text: string) => void>();
+function reportBoardSourceProblem(text: string): void {
+	if (text === lastBoardSourceProblem) return;
+	lastBoardSourceProblem = text;
+	for (const listener of boardSourceProblemListeners) {
+		try {
+			listener(text);
+		} catch {
+			/* Source ownership is independent of any mounted view. */
+		}
+	}
+}
+function boardSourceOwner() {
+	if (!documentBoardSources) {
+		let factory: IDBFactory | undefined;
+		try {
+			factory = globalThis.indexedDB;
+		} catch {
+			/* Explicit unavailable on first attempted IO. */
+		}
+		documentBoardSources = createBoardSourceCheckpoints({
+			storage: createBoardDraftIndexedDB(factory),
+			problem: reportBoardSourceProblem,
+		});
+	}
+	return documentBoardSources;
+}
+function observeBoardSources(): void {
+	if (boardSourcesObserved) return;
+	boardSourcesObserved = true;
+	const owner = boardSourceOwner();
+	const observe = (source: BoardDraftSource) => {
+		void owner.persistCurrent(source).then((retained) => {
+			if (retained && owner.getSnapshot().failures.length === 0) lastBoardSourceProblem = "";
+			else if (!retained && !lastBoardSourceProblem)
+				reportBoardSourceProblem(
+					"The current Board draft is not safely checkpointed. Keep it open; its original is retained.",
+				);
+		});
+	};
+	subscribeBoardCurrentSources(observe);
+	for (const source of getBoardCurrentSources()) observe(source);
+	void owner
+		.inspect()
+		.then((inspection) => {
+			if (inspection.status === "corrupt") {
+				reportBoardSourceProblem(
+					"Some stored Board draft records could not be verified. Use the recovery reader to inspect raw records.",
+				);
+			}
+			for (const record of inspection.records) {
+				if (record.retired) continue;
+				for (const source of record.submitted) {
+					restoreBoardDraft(source);
+				}
+				restoreBoardDraft(record.current);
+			}
+		})
+		.catch(() => {
+			/* Inspection errors are reported through the source snapshot. */
+		});
 }
 
 export function useChat() {
@@ -1411,14 +1563,16 @@ export function useChat() {
 		preview: null,
 		folded: null,
 		rewindDraft: null,
-		// optimistic-send: sends from before a reload come back and are asked about again.
-		pendingSends: loadPendingSends(),
+		// Recovery restores through the exclusive document owner before any write.
+		// Never parse/rewrite its manifest with the old lossy serializer.
+		pendingSends: [] as readonly PendingSend[],
 	});
 	// lazy-files-visibility: general ready precedes the authoritative snapshot.
 	// Keep this Files-only gate outside chat/history/delta state so reconnect
 	// cannot list a retained old cwd before the new socket's snapshot arrives.
 	const [filesReady, setFilesReady] = useState(false);
 	const wsRef = useRef<WebSocket | null>(null);
+	const pendingReadyRef = useRef<Extract<ServerMessage, { type: "ready" }> | null>(null);
 	const earlierProtocolRef = useRef<string | null>(null);
 	const earlierPagesRef = useRef(new EarlierPageRequests());
 	/** Terminal output bridge (writers keyed by terminalId). */
@@ -1514,161 +1668,224 @@ export function useChat() {
 		// 自动消失计时由通知组件（NoticeToast）管理：悬浮暂停、移开继续。
 	}, []);
 
-	/** chat-open-speed: messages written while their chat was still opening. They show as faded
-	 *  copies straight away and go out once that chat is ready (`switch_done`), each tagged with the
-	 *  chat it was written in so the server refuses it if the window ended up on another one. */
-	const heldSendsRef = useRef<{ target: SwitchTarget; id: string; msg: ClientMessage }[]>([]);
+	const schedulerSources = schedulerSourceOwner();
+	const schedulerSourceView = useSyncExternalStore(
+		schedulerSources.subscribe,
+		schedulerSources.getSnapshot,
+		schedulerSources.getSnapshot,
+	);
+	useEffect(() => {
+		const onProblem = (text: string) => pushNotice("error", text);
+		schedulerSourceProblemListeners.add(onProblem);
+		observeSchedulerSources();
+		if (lastSchedulerSourceProblem) onProblem(lastSchedulerSourceProblem);
+		return () => {
+			schedulerSourceProblemListeners.delete(onProblem);
+		};
+	}, [pushNotice]);
 
-	/** The chat they were written in is ready: send them, oldest first. */
-	const flushHeldSends = (target: SwitchTarget): void => {
-		const held = heldSendsRef.current;
-		if (held.length === 0) return;
-		const mine = held.filter((h) => sameSwitchTarget(h.target, target));
-		if (mine.length === 0) return;
-		heldSendsRef.current = held.filter((h) => !sameSwitchTarget(h.target, target));
-		const ws = wsRef.current;
-		for (const h of mine) {
-			if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(h.msg));
-			else dispatch({ type: "pending_fail", id: h.id, reason: "The connection dropped before it was sent." });
-		}
-	};
+	const boardSources = boardSourceOwner();
+	const boardSourceView = useSyncExternalStore(
+		boardSources.subscribe,
+		boardSources.getSnapshot,
+		boardSources.getSnapshot,
+	);
+	useEffect(() => {
+		const onProblem = (text: string) => pushNotice("error", text);
+		boardSourceProblemListeners.add(onProblem);
+		observeBoardSources();
+		if (lastBoardSourceProblem) onProblem(lastBoardSourceProblem);
+		return () => {
+			boardSourceProblemListeners.delete(onProblem);
+		};
+	}, [pushNotice]);
 
-	/** That chat never came up (the open failed, the window went back, the connection dropped):
-	 *  mark the copies "Not sent" instead of leaving them waiting for ever. */
-	const failHeldSends = (reason: string, target?: SwitchTarget): void => {
-		const held = heldSendsRef.current;
-		if (held.length === 0) return;
-		const mine = target ? held.filter((h) => sameSwitchTarget(h.target, target)) : held;
-		if (mine.length === 0) return;
-		heldSendsRef.current = target ? held.filter((h) => !sameSwitchTarget(h.target, target)) : [];
-		for (const h of mine) dispatch({ type: "pending_fail", id: h.id, reason });
-	};
-
-	const send = useCallback((msg: ClientMessage) => {
-		const ws = wsRef.current;
-		if (ws && ws.readyState === WebSocket.OPEN) {
-			if (msg.type === "load_older") {
-				const state = chatApi.current.chat.state;
-				if (state && earlierProtocolRef.current === state.conversationId) {
-					if (chatApi.current.chat.pendingSwitch || !earlierPagesRef.current.request(state, msg.beforeIndex, msg.count))
-						return true;
-					ws.send(JSON.stringify(earlierRequest(state.conversationId, msg.beforeIndex, msg.count)));
-					return true;
+	const recoveryViewRef = useRef({ state: chat.state, preview: chat.preview, engine: chat.engine });
+	recoveryViewRef.current = { state: chat.state, preview: chat.preview, engine: chat.engine };
+	const visibleRecoverySends = useRef(new Map<string, { id: string; sessionId?: string; conversationId: string }>());
+	const recoveryRef = useRef<ReturnType<typeof createRecoveryChatTransport> | null>(null);
+	if (!recoveryRef.current)
+		recoveryRef.current = createRecoveryChatTransport({
+			view: () => recoveryViewRef.current,
+			captureOriginal: (message) => {
+				// Source-rich families are wired separately with their actual source
+				// accessors/checkpoints, never a lossy clone or generic raw journal.
+				switch (message.type) {
+					case "prompt":
+					case "edit_message":
+					case "set_goal":
+					case "start_goal_wizard":
+					case "run_command":
+					case "identity_note_save":
+						return { message };
+					case "schedule_save":
+						return schedulerSources.captureOriginal(
+							message,
+							getSchedulerAdmissionSource(message),
+							recoveryViewRef.current.state?.cwd ?? "",
+						);
+					case "board_post":
+					case "board_close":
+						return boardSources.captureOriginal(message, getBoardAdmissionSource(message));
+					case "identity_file_save":
+						return message.file !== "config" ? { message } : null;
+					default:
+						return null;
 				}
-			}
-			// Forced re-check: drop stale rows immediately so the "checking"
-			// state renders instead of the cached list.
-			if (msg.type === "check_updates_all" && msg.force === true) {
-				dispatch({ type: "updates_check_started" });
-			}
-			if (msg.type === "check_plugin_updates") {
-				dispatch({ type: "plugin_updates_check_started" });
-			}
-			// switch-loading：在发出的那一刻就进入「正在打开…」。在 send 里拦而不是在各个点击处：
-			// 左栏、全局搜索、插件 startChat……所有入口都经过这里。已经显示着目标则不设：
-			// 那种情况服务端可能不发任何新东西，遮罩会一直盖着。
-			const switchTarget: SwitchTarget | null =
-				msg.type === "switch_session"
-					? { kind: "session", path: msg.path }
-					: msg.type === "switch_conversation"
-						? { kind: "conversation", id: msg.id }
-						: null;
-			// chat-open-speed: going somewhere else while a chat is still opening drops what was written
-			// in it — better a clear "not sent" than a message arriving in a chat they have left.
-			if (
-				heldSendsRef.current.length > 0 &&
-				(msg.type === "new_chat" ||
-					((msg.type === "switch_session" || msg.type === "switch_conversation") &&
-						heldSendsRef.current.some((h) => switchTarget === null || !sameSwitchTarget(h.target, switchTarget))))
-			) {
-				failHeldSends("You left the chat before it opened, so this wasn't sent.");
-			}
-			let out: ClientMessage = msg;
-			if (
-				msg.type === "new_chat" ||
-				msg.type === "set_cwd" ||
-				msg.type === "take_over_conversation" ||
-				(switchTarget && !switchAlreadyShown(switchTarget, chatApi.current.chat.state))
-			)
-				earlierPagesRef.current.cancel();
-			if (switchTarget && !switchAlreadyShown(switchTarget, chatApi.current.chat.state)) {
-				// switch-cache：看过这条就先显示缓存的那份，并告诉服务端手里有哪一截（它只补差异）。
-				const preview = chatCacheRef.current?.forTarget(switchTarget, chatApi.current.chat.conversations);
-				const have = preview ? cachedWindow(preview) : null;
-				if (preview && have && (msg.type === "switch_session" || msg.type === "switch_conversation")) {
-					resumeBasesRef.current.set(windowKey(have), preview);
-					out = { ...msg, have };
-				}
+			},
+			pending: (prepared, phase, reason) => {
+				if (prepared.work.kind !== "prompt" || phase === "restored") return;
+				const p = prepared.work.pending;
+				const sessionId = p.sessionId?.startsWith("dsh:") ? undefined : p.sessionId;
+				const key = JSON.stringify([p.sessionId, p.id]);
+				if (phase === "saved")
+					visibleRecoverySends.current.set(key, { id: p.id, sessionId, conversationId: p.conversationId });
+				if (!visibleRecoverySends.current.has(key)) return;
 				dispatch({
-					type: "switch_started",
-					target: switchTarget,
-					startedAt: Date.now(),
-					...(preview && have ? { preview } : {}),
+					type: "pending_add",
+					pending: {
+						...p,
+						sessionId,
+						status: phase === "saved" || phase === "sending" ? "sending" : "failed",
+						uncertain: phase !== "unprocessed",
+						reason,
+						...(phase === "uncertain" || phase === "blocked" ? { needsCheck: true } : {}),
+					},
 				});
+			},
+			problem: (text) => pushNotice("error", text),
+			verifyReference: createReferenceVerifier({
+				clientId: () => getClientId(),
+				conversations: () => chatApi.current.chat.conversations,
+				activeSessionId: () => recoveryViewRef.current.state?.sessionId,
+				fetchUrl: (url) => fetch(appUrl(url), { method: "GET", cache: "no-store", credentials: "same-origin" }),
+				withToken,
+			}),
+		});
+	const recovery = recoveryRef.current;
+	const terminalRecoveryRef = useRef<ReturnType<typeof createTerminalRecovery> | null>(null);
+	terminalRecoveryRef.current ??= createTerminalRecovery(recovery);
+	const terminalRecovery = terminalRecoveryRef.current;
+	const recoveryView = useSyncExternalStore(
+		recovery.client.subscribe,
+		recovery.client.getSnapshot,
+		recovery.client.getSnapshot,
+	);
+	useEffect(() => {
+		void recovery
+			.start()
+			.catch(() => pushNotice("error", "Recovery is unavailable. Keep the full original; nothing was sent."));
+		return () => {
+			terminalRecovery.cancel();
+			recovery.stop();
+		};
+	}, [recovery, terminalRecovery, pushNotice]);
+	const admit = useCallback((message: ClientMessage) => recovery.admit(message), [recovery]);
+	const admitBound = useCallback(
+		(message: ClientMessage, binding: AdmissionBinding) => recovery.admit(message, binding),
+		[recovery],
+	);
+	const answerQueueTask = useCallback((req: TaskQueueAnswerRequest) => recovery.answerQueueTask(req), [recovery]);
+	const flushHeldSends = (target: SwitchTarget): void => {
+		void recovery.completeSwitch(target);
+	};
+	const failHeldSends = (reason: string, target?: SwitchTarget): void => recovery.cancelSwitch(reason, target);
+
+	const send = useCallback(
+		(msg: ClientMessage) => {
+			if (requiresRecoveryAdmission(msg)) {
+				pushNotice(
+					"error",
+					"This authored action needs awaited recovery admission. Its original must be kept; nothing was sent.",
+				);
+				return false;
 			}
-			// optimistic-send: a message sent with an id is drawn at once, faded, until the server
-			// answers (web/src/pending-sends.ts). Slash commands run a command instead: no copy.
-			// chat-open-speed: written while the chat was still opening? Then the copy belongs to the
-			// chat being opened (the one on screen), and the message itself waits for it.
-			const opening = chatApi.current.chat.pendingSwitch;
-			const shownPreview = chatApi.current.chat.preview;
-			const hold =
-				out.type === "prompt" &&
-				out.id &&
-				!isSlashText(out.text) &&
-				opening &&
-				!opening.hidden &&
-				shownPreview?.sessionId
-					? { target: opening.target, id: out.id, forSession: shownPreview.sessionId, state: shownPreview }
-					: null;
-			if (out.type === "prompt" && out.id && !isSlashText(out.text)) {
-				const ui = hold ? hold.state : chatApi.current.chat.state;
-				const id = out.id;
-				if (ui && !chatApi.current.chat.pendingSends.some((p) => p.id === id)) {
+			const ws = wsRef.current;
+			if (ws && ws.readyState === WebSocket.OPEN) {
+				if (msg.type === "load_older") {
+					const state = chatApi.current.chat.state;
+					if (state && earlierProtocolRef.current === state.conversationId) {
+						if (
+							chatApi.current.chat.pendingSwitch ||
+							!earlierPagesRef.current.request(state, msg.beforeIndex, msg.count)
+						)
+							return true;
+						ws.send(JSON.stringify(earlierRequest(state.conversationId, msg.beforeIndex, msg.count)));
+						return true;
+					}
+				}
+				// Forced re-check: drop stale rows immediately so the "checking"
+				// state renders instead of the cached list.
+				if (msg.type === "check_updates_all" && msg.force === true) {
+					dispatch({ type: "updates_check_started" });
+				}
+				if (msg.type === "check_plugin_updates") {
+					dispatch({ type: "plugin_updates_check_started" });
+				}
+				// switch-loading：在发出的那一刻就进入「正在打开…」。在 send 里拦而不是在各个点击处：
+				// 左栏、全局搜索、插件 startChat……所有入口都经过这里。已经显示着目标则不设：
+				// 那种情况服务端可能不发任何新东西，遮罩会一直盖着。
+				const switchTarget: SwitchTarget | null =
+					msg.type === "switch_session"
+						? { kind: "session", path: msg.path }
+						: msg.type === "switch_conversation"
+							? { kind: "conversation", id: msg.id }
+							: null;
+				if (msg.type === "new_chat" || msg.type === "set_cwd" || msg.type === "take_over_conversation")
+					recovery.invalidateTarget();
+				if (switchTarget && !switchAlreadyShown(switchTarget, chatApi.current.chat.state))
+					recovery.beginSwitch(switchTarget);
+				let out: ClientMessage = msg;
+				if (
+					msg.type === "new_chat" ||
+					msg.type === "set_cwd" ||
+					msg.type === "take_over_conversation" ||
+					(switchTarget && !switchAlreadyShown(switchTarget, chatApi.current.chat.state))
+				)
+					earlierPagesRef.current.cancel();
+				if (switchTarget && !switchAlreadyShown(switchTarget, chatApi.current.chat.state)) {
+					// switch-cache：看过这条就先显示缓存的那份，并告诉服务端手里有哪一截（它只补差异）。
+					const preview = chatCacheRef.current?.forTarget(switchTarget, chatApi.current.chat.conversations);
+					const have = preview ? cachedWindow(preview) : null;
+					if (preview && have && (msg.type === "switch_session" || msg.type === "switch_conversation")) {
+						resumeBasesRef.current.set(windowKey(have), preview);
+						out = { ...msg, have };
+					}
 					dispatch({
-						type: "pending_add",
-						pending: newPendingSend({
-							id,
-							text: out.text,
-							attachments: out.attachments,
-							queue: out.queue,
-							state: ui,
-							now: Date.now(),
-						}),
+						type: "switch_started",
+						target: switchTarget,
+						startedAt: Date.now(),
+						...(preview && have ? { preview } : {}),
 					});
 				}
-			}
-			if (hold && out.type === "prompt") {
-				// Waits for switch_done (flushHeldSends); the faded copy above shows it meanwhile.
-				heldSendsRef.current.push({ target: hold.target, id: hold.id, msg: { ...out, forSession: hold.forSession } });
+				ws.send(JSON.stringify(out));
+				// 提交/取消模型提问后立即收起对话框：服务端只 resolve 模型侧 Promise，
+				// 不会发任何回执清除前端面板（否则会出现“回答后不消失、取消无效”）。
+				// 模型再次 ask_user_question 时会重新 question_pending，面板自动回来。
+				if (msg.type === "question_answer") {
+					if (msg.owner) {
+						// 跨页作答：只收跨页对话框。id 是对方会话作用域，绝不进 answered
+						// 集合 —— 否则会误杀本会话未来同号问卷（两边计数器都从 q1 起）。
+						const cur = chatApi.current.chat.remoteQuestion;
+						if (cur && cur.id === msg.id) dispatch({ type: "remote_question", question: null });
+					} else {
+						// 记住这个 id：快照恢复时跳过它（回答消息与快照在途时会交错，服务端
+						// 删除 pending 之前生成的快照仍带着这张问卷）。
+						answeredQuestionsRef.current.add(msg.id);
+						if (answeredQuestionsRef.current.size > 64) {
+							const oldest = answeredQuestionsRef.current.values().next().value;
+							if (oldest !== undefined) answeredQuestionsRef.current.delete(oldest);
+						}
+						questionSourceRef.current = "live";
+						dispatch({ type: "question", question: null });
+					}
+				}
 				return true;
 			}
-			ws.send(JSON.stringify(out));
-			// 提交/取消模型提问后立即收起对话框：服务端只 resolve 模型侧 Promise，
-			// 不会发任何回执清除前端面板（否则会出现“回答后不消失、取消无效”）。
-			// 模型再次 ask_user_question 时会重新 question_pending，面板自动回来。
-			if (msg.type === "question_answer") {
-				if (msg.owner) {
-					// 跨页作答：只收跨页对话框。id 是对方会话作用域，绝不进 answered
-					// 集合 —— 否则会误杀本会话未来同号问卷（两边计数器都从 q1 起）。
-					const cur = chatApi.current.chat.remoteQuestion;
-					if (cur && cur.id === msg.id) dispatch({ type: "remote_question", question: null });
-				} else {
-					// 记住这个 id：快照恢复时跳过它（回答消息与快照在途时会交错，服务端
-					// 删除 pending 之前生成的快照仍带着这张问卷）。
-					answeredQuestionsRef.current.add(msg.id);
-					if (answeredQuestionsRef.current.size > 64) {
-						const oldest = answeredQuestionsRef.current.values().next().value;
-						if (oldest !== undefined) answeredQuestionsRef.current.delete(oldest);
-					}
-					questionSourceRef.current = "live";
-					dispatch({ type: "question", question: null });
-				}
-			}
-			return true;
-		}
-		return false;
-	}, []);
+			return false;
+		},
+		[recovery, pushNotice],
+	);
 
 	/** 快照里的待答问卷 → 恢复/收起对话框（页面刷新、WS 重连、新标签页）。
 	 *
@@ -1694,6 +1911,7 @@ export function useChat() {
 	// （PiSetupModal / ModelConfigModal / TerminalPanel …）会在 appSend 还是空的时候发消息，
 	// 静默丢包。send 是 useCallback([]) 的稳定引用，重复赋值无副作用（StrictMode 双渲染亦然）。
 	setAppSend(send);
+	setAppAdmit(admit);
 
 	/** mobile-fixes: the "Reconnecting…" note: a connection was lost (or is in doubt) and the chat
 	 *  hasn't caught up yet. Refs only, so it is stable.
@@ -1746,12 +1964,48 @@ export function useChat() {
 		setReconnectingNote(on);
 	}, []);
 
+	/** Read probes/watch replay run only after the asynchronous attach has finished.
+	 * Transport ready is not a session/command-admission receipt. */
+	const finishReady = useCallback((ws: WebSocket, msg: Extract<ServerMessage, { type: "ready" }>) => {
+		dispatch({
+			type: "ready",
+			serverVersion: msg.serverVersion,
+			protocolVersion: msg.protocolVersion,
+			engine: msg.engine,
+			appVersion: msg.appVersion,
+			managed: msg.managed,
+			tabs: msg.tabs,
+			service: msg.service,
+		});
+		answeredQuestionsRef.current.clear();
+		resumeBasesRef.current.clear();
+		dispatch({ type: "question", question: null });
+		ws.send(JSON.stringify({ type: "get_state" } satisfies ClientMessage));
+		resendNotebookWatch();
+		resendRolesWatch();
+		resendInitiativesWatch();
+		resendWorkPageWatch();
+		requestSubsLimits();
+		requestRoleGuard();
+		const unanswered = idsToCheck(onReconnect(chatApi.current.chat.pendingSends));
+		if (unanswered.length) ws.send(JSON.stringify({ type: "prompt_status", ids: unanswered } satisfies ClientMessage));
+		ws.send(JSON.stringify({ type: "list_models" } satisfies ClientMessage));
+		ws.send(JSON.stringify({ type: "list_commands" } satisfies ClientMessage));
+		ws.send(JSON.stringify({ type: "get_commands" } satisfies ClientMessage));
+		if (!msg.managed) {
+			ws.send(JSON.stringify({ type: "check_update" } satisfies ClientMessage));
+			ws.send(JSON.stringify({ type: "check_updates_all" } satisfies ClientMessage));
+		}
+	}, []);
 	/** Stable across renders — the reconnect loop lives entirely inside this closure. */
 	const connect = useCallback(() => {
 		if (!aliveRef.current) return;
 		setFilesReady(false);
 		dispatch({ type: "status", status: "connecting" });
 		const ws = new WebSocket(wsUrl());
+		pendingReadyRef.current = null;
+		terminalRecovery.cancel();
+		recovery.connect(ws);
 		wsRef.current = ws;
 		earlierProtocolRef.current = null;
 		earlierPagesRef.current.cancel();
@@ -1882,6 +2136,7 @@ export function useChat() {
 						serverVersion: msg.serverVersion,
 						service: msg.service,
 					});
+					recoveryViewRef.current.engine = msg.engine ?? "pi";
 					dispatch({
 						type: "ready",
 						serverVersion: msg.serverVersion,
@@ -1892,49 +2147,22 @@ export function useChat() {
 						tabs: msg.tabs,
 						service: msg.service,
 					});
-					// Reconnect/attach: clear answered questions cache and stale dialog so
-					// freshly started server runs don't collide on restarted question counters (e.g. q-1).
-					answeredQuestionsRef.current.clear();
-					// switch-cache：新连接上服务端不记得之前报过的 have。
-					resumeBasesRef.current.clear();
-					dispatch({ type: "question", question: null });
-					// Ensure a fresh snapshot on (re)connect.
-					ws.send(JSON.stringify({ type: "get_state" } satisfies ClientMessage));
-					// identity-notebook-tab: a new socket has no notebook watch yet; the open tab asks again.
-					resendNotebookWatch();
-					// roles-overview: the Roles page / top bar count watch is per socket too.
-					resendRolesWatch();
-					// initiatives-page: so is the Initiatives tab's.
-					resendInitiativesWatch();
-					// initiatives-page-exact: and its work registry feed's.
-					resendWorkPageWatch();
-					// subs-limits-box: the Limits box needs the readings (and whether a check runs) again.
-					requestSubsLimits();
-					// role-message-ladder: the owner's open approval questions.
-					requestRoleGuard();
-					// optimistic-send: ask what became of the sends still shown as "Sending" (after the
-					// snapshot, which may show them already). Same list the "ready" reducer case keeps.
-					const unanswered = idsToCheck(onReconnect(chatApi.current.chat.pendingSends));
-					if (unanswered.length > 0)
-						ws.send(JSON.stringify({ type: "prompt_status", ids: unanswered } satisfies ClientMessage));
-					// Sessions + recent projects are LAZY: LeftPanel requests them
-					// when it is actually shown — listing scans every session file
-					// on disk (listAll scans ALL projects), too heavy for the
-					// connect critical path.
-					// lazy-files-visibility: the mounted Files panel lists on effective
-					// reveal/readiness; explicit list_files callers keep the general API.
-					ws.send(JSON.stringify({ type: "list_models" } satisfies ClientMessage));
-					ws.send(JSON.stringify({ type: "list_commands" } satisfies ClientMessage));
-					ws.send(JSON.stringify({ type: "get_commands" } satisfies ClientMessage));
-					// A managed instance refuses both (server/managed.ts): asking
-					// anyway would greet every visitor with two red toasts about a
-					// thing the interface does not even offer.
-					if (!msg.managed) {
-						ws.send(JSON.stringify({ type: "check_update" } satisfies ClientMessage));
-						ws.send(JSON.stringify({ type: "check_updates_all" } satisfies ClientMessage));
+					recovery.ready(ws, msg.recoveryGeneration);
+					if (msg.commandRecovery === 1 && msg.recoveryGeneration) pendingReadyRef.current = msg;
+					else finishReady(ws, msg); // Legacy read/control compatibility, not authored admission.
+					break;
+				}
+				case "session_initialized": {
+					if (recovery.initialize(ws, msg.connectionGeneration)) {
+						const ready = pendingReadyRef.current;
+						pendingReadyRef.current = null;
+						if (ready) finishReady(ws, ready);
 					}
 					break;
 				}
+				case "command_disposition":
+					recovery.receiveDisposition(ws, msg);
+					break;
 				case "snapshot": {
 					// switch-cache：带 reuse 的快照只有新增的尾巴，把当时报上去的那份缓存接在前面。
 					// 对不上（缓存已经不在了）就不用它，要一份完整的。
@@ -1955,6 +2183,8 @@ export function useChat() {
 							if (base.sessionId === state.sessionId) resumeBasesRef.current.delete(k);
 						}
 					}
+					// Bind authoritative target metadata before React catches up; never a preview/current guess.
+					recovery.bindSnapshot(ws, state);
 					// Snapshot is authoritative — delta sequence tracking restarts.
 					lastDeltaSeqRef.current = new Map();
 					dispatch({ type: "snapshot", state });
@@ -1969,6 +2199,12 @@ export function useChat() {
 					// backpressure, or we're stale), schedule one debounced full resync.
 					const cur = chatApi.current.chat.state;
 					if (!cur || cur.conversationId !== msg.conversationId || cur.rev !== msg.baseRev) scheduleResync();
+					else
+						recovery.bindSnapshot(ws, {
+							conversationId: msg.conversationId,
+							sessionId: msg.state.sessionId ?? cur.sessionId,
+							cwd: msg.state.cwd ?? cur.cwd,
+						});
 					dispatch({ type: "snapshot_delta", msg });
 					syncPendingQuestion(msg.state.pendingQuestion, msg.conversationId);
 					break;
@@ -2015,6 +2251,7 @@ export function useChat() {
 					break;
 				}
 				case "switch_preview":
+					recovery.preview(ws, msg.target, msg.state);
 					// chat-open-speed: the end of the chat, sent before the whole of it is loaded.
 					dispatch({ type: "switch_preview", target: msg.target, state: msg.state });
 					break;
@@ -2023,10 +2260,27 @@ export function useChat() {
 					flushHeldSends(msg.target);
 					dispatch({ type: "switch_done", target: msg.target });
 					break;
-				case "prompt_ack":
-					// optimistic-send: the answer to a send (its snapshot came first, so the faded copy is
-					// usually gone already; a refusal marks it "Not sent").
-					dispatch({ type: "prompt_ack", ack: msg });
+				case "prompt_ack": {
+					if (msg.statusReqId) {
+						recovery.receivePromptStatus(ws, msg);
+						break;
+					}
+					// Volatile acceptance only changes the visual optimistic row, never recovery storage.
+					if (msg.ok)
+						for (const [key, pending] of visibleRecoverySends.current) {
+							if (pending.id === msg.id && pending.conversationId === msg.conversationId)
+								visibleRecoverySends.current.delete(key);
+						}
+					dispatch({
+						type: "prompt_ack",
+						ack: msg.ok
+							? msg
+							: { ...msg, reason: `Delivery is not confirmed. ${msg.reason ?? "The complete recovery copy remains."}` },
+					});
+					break;
+				}
+				case "task_queue_answer_result":
+					recovery.receiveTaskQueueAnswerResult(ws, msg);
 					break;
 				case "rewind_done":
 					// 回到的是用户消息：那条的文字回到输入框（别的结果靠服务端的 notice 和新快照）。
@@ -2241,6 +2495,9 @@ export function useChat() {
 				case "board_result":
 					// board: the answer to the Board view's post or close (roles-state.ts).
 					receiveBoardResult(msg);
+					if (msg.ok && typeof msg.reqId === "string" && msg.reqId) {
+						void boardSources.retire(msg.reqId);
+					}
 					break;
 				case "initiatives":
 					// initiatives-page: the Initiatives tab's page (initiatives-state.ts).
@@ -2441,6 +2698,9 @@ export function useChat() {
 					})();
 					break;
 				}
+				case "terminal_view":
+					terminalRecovery.receive(ws, msg);
+					break;
 				case "terminal_output":
 					bridgeRef.current.write(
 						msg.conversationId ?? chatApi.current.chat.activeConversationId,
@@ -2606,7 +2866,25 @@ export function useChat() {
 		};
 
 		ws.onclose = (ev: CloseEvent) => {
-			if (wsRef.current === ws) wsRef.current = null;
+			if (!recovery.ownsTransport(ws)) return;
+			terminalRecovery.cancel();
+			recovery.disconnect(ws);
+			if (wsRef.current === ws) {
+				pendingReadyRef.current = null;
+				for (const pending of chatApi.current.chat.pendingSends) {
+					const item = recovery.client
+						.getSnapshot()
+						.items.find((entry) => entry.prepared.id === pending.id && entry.prepared.sessionId === pending.sessionId);
+					if (item?.delivery !== "unprocessed")
+						dispatch({
+							type: "pending_uncertain",
+							id: pending.id,
+							sessionId: pending.sessionId,
+							reason: "The connection closed. Delivery is unknown; the complete original remains saved.",
+						});
+				}
+				wsRef.current = null;
+			}
 			// chat-open-speed: messages still waiting for a chat to open never left this window.
 			failHeldSends("The connection dropped before it was sent.");
 			// Terminals died with the server-side PTYs — drop writers/buffers.
@@ -2668,6 +2946,8 @@ export function useChat() {
 		let hiddenAt = document.visibilityState === "visible" ? 0 : Date.now();
 		const replace = (ws: WebSocket, retryNow: boolean, cause: TraceCause) => {
 			traceRef.current?.noteCause(cause);
+			terminalRecovery.cancel();
+			recovery.disconnect(ws);
 			ws.onopen = null;
 			ws.onmessage = null;
 			ws.onerror = null;
@@ -2873,45 +3153,66 @@ export function useChat() {
 
 	// -- optimistic-send ------------------------------------------------------
 
-	// Keep the unanswered sends across a reload (this tab only).
-	useEffect(() => {
-		try {
-			if (chat.pendingSends.length === 0) sessionStorage.removeItem(PENDING_STORAGE_KEY);
-			else sessionStorage.setItem(PENDING_STORAGE_KEY, serializePending(chat.pendingSends));
-		} catch {
-			// quota or storage off: a reload just forgets them
-		}
-	}, [chat.pendingSends]);
+	// The exclusive recovery owner is the ONLY persisted pending-work writer.
+	// No legacy parse/serialize effect may erase bytes or overwrite its manifest.
+	const retrySend = useCallback(
+		async (id: string): Promise<void> => {
+			const cur = chatApi.current.chat;
+			const p = cur.pendingSends.find((x) => x.id === id && cur.state && sameChat(x, cur.state));
+			const item =
+				p &&
+				recovery.client
+					.getSnapshot()
+					.items.find(
+						(entry) =>
+							entry.prepared.kind === "prompt" && entry.prepared.id === id && entry.prepared.sessionId === p.sessionId,
+					);
+			if (!item?.complete || cur.pendingSwitch) {
+				pushNotice("error", "Keep the original and inspect recovery; its full bound source is not ready.");
+				return;
+			}
+			if (p?.uncertain) {
+				const status = await recovery.checkPromptStatus(item.prepared);
+				pushNotice(
+					"info",
+					status === "handled"
+						? "The host remembers handling this original. Its recovery copy remains; nothing was replayed."
+						: "Delivery remains unknown. Keep the original and inspect history before any new send; nothing was replayed.",
+				);
+				return;
+			}
+			const ok = await recovery.client.retry(item.prepared, () => recovery.checkPromptStatus(item.prepared));
+			if (ok) dispatch({ type: "pending_retry", id });
+		},
+		[recovery, pushNotice],
+	);
 
-	/** Retry a "Not sent" message: the same id goes out again (the server never adds it twice). Only
-	 *  while its chat is the one the server has open for this window. */
-	const retrySend = useCallback((id: string) => {
-		const cur = chatApi.current.chat;
-		const p = cur.pendingSends.find((x) => x.id === id);
-		if (!p || p.status !== "failed" || cur.pendingSwitch || !cur.state || !sameChat(p, cur.state)) return;
-		const ws = wsRef.current;
-		if (!ws || ws.readyState !== WebSocket.OPEN) {
-			dispatch({ type: "pending_fail", id, reason: NOT_CONNECTED_REASON });
-			return;
-		}
-		dispatch({ type: "pending_retry", id });
-		ws.send(
-			JSON.stringify({
-				type: "prompt",
-				text: p.text,
-				queue: p.queue,
-				...(p.attachments ? { attachments: p.attachments } : {}),
-				id,
-			} satisfies ClientMessage),
-		);
-	}, []);
-
-	/** × on a "Not sent" message: it leaves the chat and comes back (for the input box). */
-	const removeSend = useCallback((id: string): PendingSend | undefined => {
-		const p = chatApi.current.chat.pendingSends.find((x) => x.id === id);
-		if (p) dispatch({ type: "pending_remove", id });
-		return p;
-	}, []);
+	/** Return retains the source. Parent removes the visual row ONLY after its
+	 * atomic original-target composer restore succeeds. × never means discard. */
+	const removeSend = useCallback(
+		async (id: string): Promise<PendingSend | undefined> => {
+			const binding = recovery.captureBinding();
+			const p = chatApi.current.chat.pendingSends.find((x) => x.id === id && x.sessionId === binding?.sessionId);
+			const item =
+				p &&
+				recovery.client
+					.getSnapshot()
+					.items.find(
+						(entry) =>
+							entry.prepared.kind === "prompt" && entry.prepared.id === id && entry.prepared.sessionId === p.sessionId,
+					);
+			if (!binding || !item?.complete) return;
+			recovery.cancelWait(item.prepared);
+			try {
+				const work = await recovery.client.returnToComposer(item.prepared);
+				if (work?.kind === "prompt" && recovery.isCurrent(binding)) return work.pending;
+			} catch {
+				pushNotice("error", "The saved original could not be returned. No recovery data was discarded.");
+			}
+		},
+		[recovery, pushNotice],
+	);
+	const finishReturnSend = useCallback((id: string) => dispatch({ type: "pending_remove", id }), []);
 
 	/** switch-loading：遮罩上的两个按钮（重试不在这里 —— 它就是再发一次 switch_*，走 send）。 */
 	const switchHide = useCallback(() => {
@@ -2936,10 +3237,26 @@ export function useChat() {
 		[],
 	);
 
+	const recoveryApi = {
+		view: recoveryView,
+		schedulerSources: { view: schedulerSourceView, inspect: schedulerSources.inspect },
+		boardSources: { view: boardSourceView, inspect: boardSources.inspect },
+		client: recovery.client,
+		captureBinding: recovery.captureBinding,
+		isCurrent: recovery.isCurrent,
+		editContextKey: recovery.bindingKey(),
+	};
 	const chatApi = useRef({
+		commandIntent: terminalRecovery.command,
+		attachTerminal: terminalRecovery.attach,
 		chat,
 		filesReady,
 		send,
+		admit,
+		admitBound,
+		answerQueueTask,
+		recovery: recoveryApi,
+		finishReturnSend,
 		retrySend,
 		removeSend,
 		pushNotice,
@@ -2955,9 +3272,16 @@ export function useChat() {
 		},
 	});
 	chatApi.current = {
+		commandIntent: terminalRecovery.command,
+		attachTerminal: terminalRecovery.attach,
 		chat,
 		filesReady,
 		send,
+		admit,
+		admitBound,
+		answerQueueTask,
+		recovery: recoveryApi,
+		finishReturnSend,
 		retrySend,
 		removeSend,
 		pushNotice,

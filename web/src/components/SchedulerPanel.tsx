@@ -76,6 +76,36 @@ interface Editor {
 // not reload. #570 must checkpoint the complete source + message before true.
 const retainedDrafts = new Map<string, DraftEntry>();
 const admissionSources = new WeakMap<ClientMessage, SchedulerAdmissionSource>();
+const currentSources = new Map<string, SchedulerAdmissionSource>();
+const currentSourceListeners = new Set<(source: SchedulerAdmissionSource) => void>();
+/** Authored edits only, not a schedule action or server persistence receipt. */
+export function getSchedulerCurrentSources(): readonly SchedulerAdmissionSource[] {
+	return Object.freeze([...currentSources.values()]);
+}
+export function subscribeSchedulerCurrentSources(listener: (source: SchedulerAdmissionSource) => void): () => void {
+	currentSourceListeners.add(listener);
+	return () => {
+		currentSourceListeners.delete(listener);
+	};
+}
+function rememberCurrentSource(editor: Editor): void {
+	const form = Object.freeze({ ...editor.entry.current });
+	const source: SchedulerAdmissionSource = Object.freeze({
+		workspace: editor.entry.workspace,
+		taskId: form.id || null,
+		formId: editor.id,
+		revision: editor.entry.revision,
+		form,
+	});
+	currentSources.set(source.formId, source);
+	for (const listener of currentSourceListeners) {
+		try {
+			listener(source);
+		} catch {
+			/* Keep the complete editable source on storage/view failure. */
+		}
+	}
+}
 const draftListeners = new Set<() => void>();
 let draftVersion = 0;
 const getDraftVersion = () => draftVersion;
@@ -307,6 +337,7 @@ export function SchedulerPanel({ tasks, cwd, models }: SchedulerPanelProps) {
 		if (!editor || activeEditor.current !== editor || editor.entry.workspace !== cwd) return;
 		editor.entry.current = Object.freeze({ ...editor.entry.current, ...patch });
 		editor.entry.revision++; // Value equality cannot detect A -> B -> A.
+		rememberCurrentSource(editor);
 		notifyDrafts();
 	};
 

@@ -114,6 +114,7 @@ import { type AdoptCandidate, pickAdoptTarget } from "./attach-adopt.js";
 import { describeError, errorMessage, planForLostActive } from "./crash-guard.js";
 // list-freeze: message counts without getSessionStats() (which re-projects the whole context).
 import { messageCountOf } from "./message-count.js";
+import { pickWindowStart, readMessageWindowConfig } from "./message-window.js";
 import { invalidateSessionStats, sessionStatsOf } from "./session-stats.js";
 import type { UsageAccountingView } from "./usage-accounting-host.js";
 import { attachUsageLedger, recordUsageLedgerEntry } from "./usage-accounting-ledger.js";
@@ -217,6 +218,12 @@ import {
 	speedSupported,
 } from "./fast-mode.js";
 import { createWorkspaceSnapshot, restoreWorkspaceSnapshot } from "./workspace-snapshot.js";
+import {
+	attachToolInspector,
+	ToolInspectorStore,
+	type ToolInspectorDependencies,
+	type ToolInspectorSession,
+} from "./tool-inspector.js";
 import { isPathInsideRoot } from "./approval-rules.js";
 import {
 	approvalSuppressionReason,
@@ -404,6 +411,7 @@ import type {
 	MessageAnchor,
 	ProjectSummary,
 	QuestionAnswer,
+	FilePreviewMetadata,
 	ServerMessage,
 	SessionSummary,
 	SwitchTarget,
@@ -426,6 +434,7 @@ import type {
 	UiSubagentTemplate,
 	UiTldrLine,
 	UiTaskQueue,
+	UiTaskQueueAnswerBinding,
 	UiDialog,
 	UiExchangeDigest,
 	UiQuietRun,
@@ -562,6 +571,18 @@ import {
 } from "./serialize.js";
 import { loadCommands, saveCommandsFile, TerminalManager } from "./terminals.js";
 
+// One policy store per server data directory, shared by HTTP edits and every session factory.
+const toolInspectorStores = new Map<string, ToolInspectorStore>();
+function toolInspectorStoreFor(dataDir: string): ToolInspectorStore {
+	const path = join(dataDir, "tool-inspector.json");
+	let store = toolInspectorStores.get(path);
+	if (!store) {
+		store = new ToolInspectorStore(path);
+		toolInspectorStores.set(path, store);
+	}
+	return store;
+}
+
 const SNAPSHOT_INTERVAL_MS = 60;
 /** 服务进程所在机器的用户主目录（wire 格式）：进程内不变，模块加载时求值一次，
  *  快照热路径直接引用（右栏 🏠 一键直达，见 protocol.ts 的 UiState.homeDir）。 */
@@ -607,6 +628,7 @@ const MESSAGE_WINDOW = (() => {
 	if (!Number.isFinite(v)) return 100;
 	return v <= 0 ? Number.POSITIVE_INFINITY : Math.floor(v);
 })();
+const HISTORY_WINDOW = readMessageWindowConfig();
 /** 快照至少让页面看得到最近几轮对话（exchange-digest，见 server/exchange-digest.ts）：
  *  窗口里开头的不够这个数，就把窗口之前的几轮按摘要补上（提问 + 回答 + 折叠行计数）。
  *  也是「显示更早的对话」一次多取几轮。覆盖：PI_WEB_EXCHANGE_DIGESTS（<=0 = 不发摘要，
@@ -2089,6 +2111,14 @@ function fullRangeOf(conv: Conversation, idx: ChatIndex, from: number, to: numbe
 	return out;
 }
 
+/** Budget before deriving digests and quietLead, not afterward in the socket tap. Only full snapshots
+ * and open previews need this; streaming deltas keep their existing lightweight path. */
+function snapshotWindowStartOf(conv: Conversation, idx: ChatIndex): number {
+	const base = Math.max(0, idx.raw.length - MESSAGE_WINDOW);
+	if (HISTORY_WINDOW.windowSize <= 0) return base;
+	return base + pickWindowStart(fullRangeOf(conv, idx, base, idx.raw.length), HISTORY_WINDOW);
+}
+
 /** acp-fold: the shown messages before the chat's newest fold, as the window showed them before any fold
  *  (folds took them out of pi's working list; the chat file keeps them). Same fields as ChatIndex, so
  *  fullAt builds their display form and the picture endpoint finds their pictures. */
@@ -3157,6 +3187,7 @@ export class ClientSession {
 		emit: (msg) => this.emit(msg),
 		isDisposed: () => this.disposed,
 		getCwd: () => this.cwd,
+		getSessionId: () => this.activeSessionId() || undefined,
 		getActiveCwd: () => this.convs.get(this.activeId)?.cwd ?? this.cwd,
 		// issue #91：文件服务错误文案按客户端 UI 语言出中英（英文默认）。
 		getLang: () => this.getLang(),
@@ -3221,6 +3252,16 @@ export class ClientSession {
 
 	getTerminalCwd(conversationId?: string): string {
 		return (conversationId ? this.convs.get(conversationId) : this.convs.get(this.activeId))?.cwd ?? this.cwd;
+	}
+
+	/** Exact already-loaded conversation only: no active-tab substitution,
+	 * hydration, history read or invented identity for a stale render. */
+	sessionIdForConversation(conversationId: string): string {
+		try {
+			return this.convs.get(conversationId)?.session.sessionId ?? "";
+		} catch {
+			return "";
+		}
 	}
 
 	private makeTerminalManager(conversationId: string, cwd: string): TerminalManager {
@@ -5217,6 +5258,9 @@ export class ClientSession {
 			);
 			// 终端工具开关与预设门控从创建起就生效（工具始终注册进注册表，只调活跃集）。
 			this.applyToolGating(created.session, targetPreset);
+			// All foreground, task, subagent and restored runtimes pass this factory. Attach before
+			// the first request, not just when the drawer is opened, so saved disabled tools stay off.
+			attachToolInspector(created.session, toolInspectorStoreFor(this.stateStore.dataDir));
 			return {
 				...created,
 				services,
@@ -6396,14 +6440,84 @@ export class ClientSession {
 	}
 
 	/** telegram-answers: the Queue tab answers a stuck task (a choice, or typed words). */
-	async taskQueueAnswer(conversationId: string, taskId: number, text: string): Promise<void> {
+	async taskQueueAnswer(
+		conversationId: string,
+		taskId: number,
+		text: string,
+		binding?: {
+			reqId?: unknown;
+			queueId?: unknown;
+			questionId?: unknown;
+			question?: unknown;
+			choices?: unknown;
+			detail?: unknown;
+		},
+	): Promise<{
+		reqId?: string;
+		conversationId: string;
+		queueId?: string;
+		taskId: number;
+		questionId?: string;
+		applied: boolean;
+		reason?: string;
+	}> {
 		const conv = this.convs.get(conversationId);
 		const file = ClientSession.askMetaOf(conv).sessionFile;
-		const task = conv && file ? ClientSession.taskQueueOfConv(conv).tasks.find((t) => t.id === taskId) : undefined;
+		const queue = conv && file ? ClientSession.taskQueueOfConv(conv) : undefined;
+		const task = queue?.tasks.find((t) => t.id === taskId);
 		const target = file && task ? stuckTarget(file, task) : undefined;
 		const words = String(text ?? "").trim();
+		const hasBinding =
+			!!binding &&
+			(binding.reqId !== undefined ||
+				binding.queueId !== undefined ||
+				binding.questionId !== undefined ||
+				binding.question !== undefined ||
+				binding.choices !== undefined ||
+				binding.detail !== undefined);
+		const reqId = typeof binding?.reqId === "string" && binding.reqId.trim() ? binding.reqId : undefined;
+		const queueId = typeof binding?.queueId === "string" && binding.queueId.trim() ? binding.queueId : undefined;
+		const questionId =
+			typeof binding?.questionId === "string" && binding.questionId.trim() ? binding.questionId : undefined;
 		let r: AskResult = { ok: false, error: NOT_WAITING };
-		if (target && task?.status === "stuck" && words) {
+		if (hasBinding) {
+			const invalidBinding =
+				(binding!.reqId !== undefined && !reqId) ||
+				!queueId ||
+				!questionId ||
+				(binding!.question !== undefined && typeof binding!.question !== "string") ||
+				(binding!.choices !== undefined &&
+					(!Array.isArray(binding!.choices) || !binding!.choices.every((c) => typeof c === "string"))) ||
+				(binding!.detail !== undefined && typeof binding!.detail !== "string");
+			if (!words) {
+				r = { ok: false, error: "no answer" };
+			} else if (
+				!invalidBinding &&
+				conv &&
+				file &&
+				queue &&
+				!queue.from &&
+				queue.queueId === queueId &&
+				target &&
+				task?.status === "stuck" &&
+				(binding!.question === undefined || (task.question ?? "") === binding!.question) &&
+				(binding!.choices === undefined || JSON.stringify(binding!.choices) === JSON.stringify(task.choices ?? [])) &&
+				(binding!.detail === undefined || (task.detail ?? "") === binding!.detail)
+			) {
+				const key = stuckKey(target, taskId);
+				const expectedSig = stuckSig({
+					question: task.question ?? "",
+					choices: task.choices ?? [],
+					...(task.detail ? { detail: task.detail } : {}),
+				});
+				const current = ClientSession.stuckAsks.get(key);
+				if (!current || current.sig !== expectedSig) ClientSession.reconcileStuckAsks();
+				const have = ClientSession.stuckAsks.get(key);
+				if (have && have.sig === expectedSig && have.askId === questionId) {
+					r = await askHub.answer(have.askId, [{ id: "answer", selected: [], text: words }], FROM_BROWSER);
+				}
+			}
+		} else if (target && task?.status === "stuck" && words) {
 			const key = stuckKey(target, taskId);
 			if (!ClientSession.stuckAsks.has(key)) ClientSession.reconcileStuckAsks();
 			const have = ClientSession.stuckAsks.get(key);
@@ -6417,6 +6531,19 @@ export class ClientSession {
 				textEn: `Couldn't answer task #${taskId}: ${r.error ?? "unknown error"}`,
 			});
 		}
+		const outcome = {
+			...(reqId ? { reqId } : {}),
+			conversationId,
+			...(queueId ? { queueId } : queue?.queueId ? { queueId: queue.queueId } : {}),
+			taskId,
+			...(questionId ? { questionId } : {}),
+			applied: r.ok,
+			...(r.ok ? {} : { reason: r.error ?? "unknown error" }),
+		};
+		if (hasBinding) {
+			this.emit({ type: "task_queue_answer_result", ...outcome });
+		}
+		return outcome;
 	}
 
 	/** telegram-answers: the pop-ups of a chat, seen from the list of asks. `chat` is a getter: the
@@ -7703,10 +7830,10 @@ export class ClientSession {
 
 	private queueProfileViews = new WeakMap<UiTaskQueue, { key: string; view: UiTaskQueue }>();
 
-	/** Keep snapshot/delta identity stable when neither the queue nor its effective profile changed. */
+	/** Keep snapshot/delta identity stable when neither the queue nor its effective profile/bindings changed. */
 	private queueProfileView(
 		queue: UiTaskQueue,
-		profile: Pick<UiTaskQueue, "inherited" | "currentProfile">,
+		profile: Pick<UiTaskQueue, "inherited" | "currentProfile" | "answerBindings">,
 	): UiTaskQueue {
 		const key = JSON.stringify(profile);
 		const cached = this.queueProfileViews.get(queue);
@@ -7714,6 +7841,50 @@ export class ClientSession {
 		const view = { ...queue, ...profile };
 		this.queueProfileViews.set(queue, { key, view });
 		return view;
+	}
+
+	private queueAnswerBindings(conv: Conversation, queue: UiTaskQueue): UiTaskQueueAnswerBinding[] | undefined {
+		const queueId = queue.queueId?.trim();
+		const file = ClientSession.askMetaOf(conv).sessionFile;
+		if (!queueId || !file || queue.from) return undefined;
+		const stuckTasks = queue.tasks.filter((t) => t.status === "stuck");
+		if (stuckTasks.length === 0) return undefined;
+		const needsReconcile = stuckTasks.some((t) => {
+			const target = stuckTarget(file, t);
+			if (!target) return false;
+			const key = stuckKey(target, t.id);
+			const have = ClientSession.stuckAsks.get(key);
+			const sig = stuckSig({
+				question: t.question ?? "",
+				choices: t.choices ?? [],
+				...(t.detail ? { detail: t.detail } : {}),
+			});
+			return !have || have.sig !== sig;
+		});
+		if (needsReconcile) ClientSession.reconcileStuckAsks();
+		const bindings: UiTaskQueueAnswerBinding[] = [];
+		for (const t of stuckTasks) {
+			const target = stuckTarget(file, t);
+			if (!target) continue;
+			const key = stuckKey(target, t.id);
+			const have = ClientSession.stuckAsks.get(key);
+			const sig = stuckSig({
+				question: t.question ?? "",
+				choices: t.choices ?? [],
+				...(t.detail ? { detail: t.detail } : {}),
+			});
+			if (!have || have.sig !== sig || !have.askId?.trim()) continue;
+			bindings.push({
+				conversationId: conv.id,
+				queueId,
+				taskId: t.id,
+				questionId: have.askId,
+				question: t.question ?? "",
+				choices: [...(t.choices ?? [])],
+				...(t.detail ? { detail: t.detail } : {}),
+			});
+		}
+		return bindings.length > 0 ? bindings : undefined;
 	}
 
 	/** 这条对话的任务队列（queue-panel）：当前分支上 pi-queue 存的 `queue` 条目重放出来的。
@@ -7754,6 +7925,7 @@ export class ClientSession {
 			inheritedModel && slash > 0
 				? conv.runtime.services.modelRuntime.getModel(inheritedModel.slice(0, slash), inheritedModel.slice(slash + 1))
 				: undefined;
+		const answerBindings = this.queueAnswerBindings(conv, queue);
 		return this.queueProfileView(queue, {
 			inherited: {
 				model: inheritedModel,
@@ -7768,6 +7940,7 @@ export class ClientSession {
 						: session.settingsManager.getDefaultThinkingLevel(),
 				speed: "standard",
 			},
+			...(answerBindings ? { answerBindings } : {}),
 		});
 	}
 
@@ -8011,7 +8184,6 @@ export class ClientSession {
 		this.pruneMessageCache(conv, idx);
 		const total = idx.keys.length;
 		const full = (i: number) => fullAt(conv, idx, i);
-		const windowStart = Math.max(0, total - MESSAGE_WINDOW);
 		const prev = this.emittedKeys;
 		let incremental = !forceFull && prev !== null && this.emittedConvId === this.activeId && prev.length <= total;
 		if (incremental && prev && prev !== idx.keys) {
@@ -8074,6 +8246,7 @@ export class ClientSession {
 			// switch-cache：切回来的这条对话，客户端缓存里那一截对得上就只发后面新增的。
 			// 客户端的窗口起点照旧（和 delta 一样只往后长），摘要按这个起点算。
 			const resume = this.resumeWindow(idx.ids);
+			const windowStart = resume ? resume.start : snapshotWindowStartOf(conv, idx);
 			const start = resume ? resume.start : windowStart;
 			this.emit({
 				type: "snapshot",
@@ -8149,6 +8322,7 @@ export class ClientSession {
 		this.emit({
 			type: "older_messages",
 			conversationId: this.activeId,
+			sessionId: conv.session.sessionId,
 			start,
 			messages: fullRangeOf(conv, idx, start, end),
 			...(straddle ? { straddle } : {}),
@@ -9612,6 +9786,11 @@ export class ClientSession {
 	 * 失败（会话未就绪 / 引擎抛错）一律回 `found: false`：这是只读的展示请求，
 	 * 不该因为拿不到定义就在 UI 上报警。
 	 */
+	/** Resolve only an existing conversation belonging to this client; never create/switch a chat. */
+	toolInspectorSession(conversationId: string): ToolInspectorSession | undefined {
+		return this.disposed ? undefined : this.convs.get(conversationId)?.session;
+	}
+
 	getToolInfo(name: string): void {
 		let raw: RawToolDefinition | undefined;
 		try {
@@ -12104,7 +12283,7 @@ export class ClientSession {
 		const idx = chatIndexOf(pconv);
 		const total = idx.raw.length;
 		if (total === 0) return;
-		const start = Math.max(0, total - MESSAGE_WINDOW);
+		const start = snapshotWindowStartOf(pconv, idx);
 		const full = (i: number) => fullAt(pconv, idx, i);
 		const state: UiState = {
 			...this.buildLightState(0, false),
@@ -12768,6 +12947,11 @@ export class ClientSession {
 	/** chat-open-speed: the pi session of the chat this window is on, "" when there is none.
 	 *  A `prompt` may name the session it was typed into (it can now be written while a chat
 	 *  is still opening); index.ts refuses it when the two differ. */
+	/** Constant-time target metadata; never constructs a transcript/snapshot. */
+	activeConversationId(): string {
+		return this.activeId;
+	}
+
 	activeSessionId(): string {
 		if (!this.convs.has(this.activeId)) return "";
 		try {
@@ -15146,13 +15330,13 @@ export class ClientSession {
 	}
 
 	/** Read a workspace file for the preview panel (size-capped, binary-safe). */
-	async readFile(relPath: string): Promise<void> {
-		return this.files.readFile(relPath);
+	async readFile(relPath: string, request?: FilePreviewMetadata): Promise<void> {
+		return this.files.readFile(relPath, request);
 	}
 
 	/** Save text from the file preview panel within the active workspace. */
-	async writeFile(relPath: string, text: string): Promise<void> {
-		return this.files.writeFile(relPath, text);
+	async writeFile(relPath: string, text: string, request?: FilePreviewMetadata): Promise<void> {
+		return this.files.writeFile(relPath, text, request);
 	}
 
 	async uploadFile(relDir: string, name: string, data: string): Promise<void> {
@@ -18734,6 +18918,15 @@ export class AgentService {
 
 	get(clientId: string): ClientSession | undefined {
 		return this.clients.get(clientId);
+	}
+
+	toolInspectorDependencies(): ToolInspectorDependencies {
+		return {
+			store: toolInspectorStoreFor(this.stateStore.dataDir),
+			resolveSession: (clientId, convId) => this.clients.get(clientId)?.toolInspectorSession(convId),
+			pluginTools: () =>
+				(this.pluginToolsProvider?.() ?? []).map((tool) => ({ name: tool.name, source: "plugin" as const })),
+		};
 	}
 
 	/** Trusted plugin lifecycle: keep exact owner-bound sessions reachable without a model turn. */

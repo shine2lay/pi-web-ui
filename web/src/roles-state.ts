@@ -392,7 +392,39 @@ type BoardRecord = {
 };
 const boardDrafts = new Map<string, BoardRecord>();
 let boardSources = new WeakMap<ClientMessage, BoardDraftSource>();
+const boardCurrentSources = new Map<string, BoardDraftSource>();
+const boardCurrentListeners = new Set<(source: BoardDraftSource) => void>();
 let boardSeq = 0;
+
+function isAuthoredBoardDraft(source: BoardDraftSource): boolean {
+	if (source.revision > 0) return true;
+	const f = source.form;
+	if (f.type === "board_post") {
+		return Boolean(f.title || f.text || f.picked.length > 0 || !f.toAll || f.kind !== "news");
+	}
+	return Boolean(f.note);
+}
+function rememberBoardCurrentSource(source: BoardDraftSource): void {
+	if (!isAuthoredBoardDraft(source)) return;
+	boardCurrentSources.set(source.editorId, source);
+	for (const listener of boardCurrentListeners) {
+		try {
+			listener(source);
+		} catch {
+			/* Keep the complete editable source on storage/view failure. */
+		}
+	}
+}
+/** Authored Board edits only, not a board post/close action or server receipt. */
+export function getBoardCurrentSources(): readonly BoardDraftSource[] {
+	return Object.freeze([...boardCurrentSources.values()]);
+}
+export function subscribeBoardCurrentSources(listener: (source: BoardDraftSource) => void): () => void {
+	boardCurrentListeners.add(listener);
+	return () => {
+		boardCurrentListeners.delete(listener);
+	};
+}
 
 function copyBoardSource(source: BoardDraftSource): BoardDraftSource {
 	const f = source.form;
@@ -423,12 +455,14 @@ function boardRecord(source: BoardDraftSource): BoardRecord {
 export function createBoardDraft(form: BoardDraftForm): BoardDraftSource {
 	const source = copyBoardSource({ editorId: crypto.randomUUID(), revision: 0, form });
 	boardRecord(source);
+	rememberBoardCurrentSource(source);
 	return source;
 }
 /** Every actual edit advances ownership, including A → B → A. */
 export function reviseBoardDraft(source: BoardDraftSource, form: BoardDraftForm): BoardDraftSource {
 	const next = copyBoardSource({ editorId: source.editorId, revision: source.revision + 1, form });
 	boardRecord(source).current = next;
+	rememberBoardCurrentSource(next);
 	return next;
 }
 /** The registered #570 handler must read this exact-identity lookup BEFORE clone/await. */
@@ -618,6 +652,7 @@ export function resetBoardDrafts(): void {
 	for (const [reqId, wait] of boardWaits)
 		wait.finish({ type: "board_result", reqId, op: wait.op, ok: false, error: boardUnknown });
 	boardDrafts.clear();
+	boardCurrentSources.clear();
 	boardSources = new WeakMap();
 }
 

@@ -40,6 +40,8 @@ export interface PendingSend {
 	queue: boolean;
 	createdAt: number;
 	status: "sending" | "failed";
+	/** UI delivery uncertainty only; never stored as the original recovery body. */
+	uncertain?: boolean;
 	/** Why it failed (English, from the server). */
 	reason?: string;
 	/** The last message of the chat when it was sent: its copy is a user message AFTER this one. */

@@ -59,6 +59,8 @@ interface FilePreviewProps {
 	content: FilePreviewContent | null;
 	/** Optional until #570 wires authentic target binding and server echo. Never synthesized here. */
 	binding?: FilePreviewBinding;
+	/** Original-open transport supplied by App; false never falls back to the current target. */
+	sendFile?: (request: FilePreviewRequest) => boolean;
 	/** Add the selected line range as a "lines" attachment to the chat input. */
 	onAddLines: (path: string, name: string, start: number, end: number) => void;
 	/** Attach the whole file as a path reference like the row buttons. */
@@ -135,6 +137,7 @@ function FilePreviewEditor({
 	file,
 	content,
 	binding,
+	sendFile = appSend,
 	onAddLines,
 	onAttach,
 	onClose,
@@ -206,11 +209,11 @@ function FilePreviewEditor({
 		readRef.current = correlation;
 		const request: FilePreviewRequest = { type: "read_file", path: file.path, ...correlation };
 		try {
-			if (!appSend(request)) setLoading(false);
+			if (!sendFile(request)) setLoading(false);
 		} catch {
 			setLoading(false);
 		}
-	}, [file.path, originalBinding, previewId]);
+	}, [file.path, originalBinding, previewId, sendFile]);
 
 	useEffect(() => {
 		if (!content || content.path !== file.path) return;
@@ -438,7 +441,7 @@ function FilePreviewEditor({
 			...correlation,
 		};
 		try {
-			if (!appSend(request)) {
+			if (!sendFile(request)) {
 				unknown();
 				return;
 			}

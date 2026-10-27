@@ -33,7 +33,7 @@ import {
 } from "../../server/identities.js";
 import { INDEX_BUDGET } from "../../server/identity-notes.js";
 import type { ServerMessage, SessionSummary, UiChatIdentity, UiIdentityInfo } from "../../server/protocol.js";
-import { setAppSend } from "../../web/src/app-globals.js";
+import { setAppAdmit, setAppSend } from "../../web/src/app-globals.js";
 import { identityChoiceOf, identityMenuChildren, withIdentityChildren } from "../../web/src/identity-menu.js";
 import {
 	closeIdentityFile,
@@ -572,9 +572,14 @@ describe("the page", () => {
 		expect(hidden["chat.empty"].find((e) => e.id === "host:identity-picker")?.hidden).toBe(true);
 	});
 
-	it("Settings store: open a file, save it against its hash, keep the draft when a save is refused", () => {
+	it("Settings store: open a file, save it against its hash, keep the draft when a save is refused", async () => {
 		const sent: unknown[] = [];
+		const lastReqId = () => (sent.at(-1) as { reqId?: string } | undefined)?.reqId;
 		setAppSend((msg) => {
+			sent.push(msg);
+			return true;
+		});
+		setAppAdmit(async (msg) => {
 			sent.push(msg);
 			return true;
 		});
@@ -590,15 +595,17 @@ describe("the page", () => {
 		receiveIdentityFile({ type: "identity_file", id: "temper", file: "notebook", text: "a\n", hash: "h1", cap: 8000 });
 		expect(getIdentityFile()).toMatchObject({ status: "ready", text: "a\n", hash: "h1", cap: 8000 });
 
-		expect(saveOpenIdentityFile("a\nb\n")).toBe(true);
+		expect(await saveOpenIdentityFile("a\nb\n")).toBe(true);
+		const firstReq = lastReqId();
 		expect(sent.at(-1)).toEqual({
 			type: "identity_file_save",
 			id: "temper",
 			file: "notebook",
 			text: "a\nb\n",
 			baseHash: "h1",
+			reqId: expect.any(String),
 		});
-		expect(saveOpenIdentityFile("again")).toBe(false);
+		expect(await saveOpenIdentityFile("again")).toBe(false);
 		receiveIdentitySaved({
 			type: "identity_file_saved",
 			id: "temper",
@@ -606,17 +613,36 @@ describe("the page", () => {
 			ok: true,
 			hash: "h2",
 			size: 4,
+			reqId: firstReq,
 		});
 		expect(getIdentityFile()).toMatchObject({ text: "a\nb\n", hash: "h2", saving: false, saved: { ok: true } });
 
-		expect(saveOpenIdentityFile("too long")).toBe(true);
-		receiveIdentitySaved({ type: "identity_file_saved", id: "temper", file: "notebook", ok: false, code: "over_cap" });
+		expect(await saveOpenIdentityFile("too long")).toBe(true);
+		receiveIdentitySaved({
+			type: "identity_file_saved",
+			id: "temper",
+			file: "notebook",
+			ok: false,
+			code: "over_cap",
+			reqId: lastReqId(),
+		});
 		expect(getIdentityFile()).toMatchObject({ text: "a\nb\n", hash: "h2", saved: { ok: false, code: "over_cap" } });
 
+		openIdentityFile("temper", "notebook");
 		receiveIdentityFile({ type: "identity_file", id: "temper", file: "notebook", error: "EACCES" });
+		expect(getIdentityFile()).toMatchObject({
+			status: "ready",
+			text: "a\nb\n",
+			hash: "h2",
+			editText: "too long",
+			error: "EACCES",
+		});
+		openIdentityFile("temper", "about");
+		receiveIdentityFile({ type: "identity_file", id: "temper", file: "about", error: "EACCES" });
 		expect(getIdentityFile()).toMatchObject({ status: "error", error: "EACCES" });
 		closeIdentityFile();
 		expect(getIdentityFile()).toBeNull();
+		setAppAdmit(null);
 	});
 
 	it("counts bytes like the server does, and names a home chat by its short session id", () => {

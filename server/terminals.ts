@@ -1031,6 +1031,26 @@ export class TerminalManager {
 		return this.create(id, cwd, cols, rows, fallbackCwd, title, opts);
 	}
 
+	/** A render-only attach. Unlike openView, a missing id NEVER creates a
+	 * shell. The caller sends this retained snapshot only to its requesting
+	 * view; broadcasting it would duplicate other viewers' output. */
+	attachExistingView(
+		id: string,
+		cols: number,
+		rows: number,
+	): { terminal: TerminalInfo; data: string; offset: number } | null {
+		if (this.validateId(id)) return null;
+		const entry = this.find(id);
+		if (!entry) return null;
+		// Pending live bytes must precede the replacement snapshot, not arrive
+		// afterward and duplicate its suffix. No await between these operations.
+		this.flushPending(entry);
+		if (this.find(id) !== entry) return null;
+		this.resize(id, cols, rows);
+		if (this.find(id) !== entry) return null;
+		return { terminal: this.info(entry), data: entry.output, offset: entry.outputOffset };
+	}
+
 	/** Start a plain interactive shell in the given directory. Explicit
 	 * create restarts an exited id if admission allows. */
 	create(

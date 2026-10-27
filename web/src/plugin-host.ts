@@ -48,6 +48,13 @@ import { displayPreview } from "../../server/display-preview.js";
 import type { AppSend } from "./app-globals";
 import { composeToComposer, isComposerReady, type ComposerPayload } from "./composer-bridge";
 import { isDesktopShell } from "./desktop";
+import type {
+	PluginStartFailure,
+	PluginStartIdentity,
+	PluginStartIntent,
+	PluginStartOwner,
+	PluginStartPermit,
+} from "./plugin-start-checkpoint";
 import type { ConversationSummary, SessionSummary, UiPluginCatalogEntry } from "./types";
 import { randomUuid } from "./uuid";
 import { newPromptId } from "./pending-sends";
@@ -386,7 +393,15 @@ export interface PluginHostApi {
 	onTheme(handler: PluginHostThemeHandler): () => void;
 	onLocale(handler: PluginHostLocaleHandler): () => void;
 	onViewChange(handler: PluginHostViewHandler): () => void;
+	/** Last checkpointed startChat admission or continuation outcome (read-only). */
+	lastStartChatResult?(): PluginStartHostResult | null;
+	/** Recorded startChat checkpoint or continuation failures in this host instance (read-only). */
+	startChatIssues?(): readonly PluginStartFailure[];
+	/** Intent IDs whose async continuation failed in this host instance (read-only). */
+	failedStartChatIntentIds?(): readonly string[];
 }
+
+export type PluginStartHostResult = { ok: true; identity: PluginStartIdentity } | PluginStartFailure;
 
 /** 模型想执行的一个页面动作（op 词表在扩展侧，服务端只透传）。 */
 export interface PluginHostPageCallOptions {
@@ -458,6 +473,17 @@ export interface PluginHostDeps {
 	closeModal?: () => void;
 	/** 目录同步的等待超时（默认 180s —— 带 install 的同步会跑真实安装）。 */
 	catalogTimeoutMs?: number;
+	/** 当前活动会话 UUID（快照里的 state.sessionId；还没快照时为 null）。 */
+	getSessionId?: () => string | null;
+	/** #584 同步落盘的 startChat 检查点持有者（生产环境始终提供：null = 尚未就绪或持有冲突，直接拒绝）。 */
+	getStartChatOwner?: () => PluginStartOwner | null;
+	/** 最终 prompt 的严格持久准入通道（等待 IDB 落盘与 WS 接收确认，绑定目标对话/会话）。 */
+	admitPrompt?: (
+		msg: { type: "prompt"; text: string; id: string; forSession?: string },
+		binding: { conversationId: string; sessionId: string },
+	) => Promise<boolean>;
+	/** 检查点或后台续跑状态变化时的通知钩子（驱动 UI 恢复面板刷新）。 */
+	onStartChatChange?: () => void;
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -552,6 +578,142 @@ export function createPluginHostApi(deps: PluginHostDeps): PluginHostApi {
 		deps.send({ type: "prompt", text: prompt, id: newPromptId() });
 	};
 
+	let lastStartResult: PluginStartHostResult | null = null;
+	const startIssues: PluginStartFailure[] = [];
+	const failedIntentIds = new Set<string>();
+
+	const notifyStartChatChange = (): void => {
+		try {
+			deps.onStartChatChange?.();
+		} catch {
+			/* ignore UI listener error */
+		}
+	};
+
+	const recordStartFailure = (failure: PluginStartFailure): false => {
+		const frozen = Object.freeze({ ...failure });
+		lastStartResult = frozen;
+		startIssues.push(frozen);
+		notifyStartChatChange();
+		return false;
+	};
+
+	const ensurePermit = (permit: PluginStartPermit, step: string): void => {
+		if (!permit.valid()) {
+			throw new Error(`startChat permit invalidated (${step})`);
+		}
+		if (!deps.isReady()) {
+			throw new Error(`startChat host not ready (${step})`);
+		}
+	};
+
+	const runCheckpointed = async (intent: PluginStartIntent, permit: PluginStartPermit): Promise<void> => {
+		ensurePermit(permit, "start");
+		if (!intent.effective.newChat) {
+			if (deps.getConversationId() !== intent.source.conversationId) {
+				throw new Error("startChat source conversation changed before execution");
+			}
+			if (typeof deps.getSessionId === "function" && deps.getSessionId() !== intent.source.sessionId) {
+				throw new Error("startChat source session changed before execution");
+			}
+		}
+		const cwd = intent.effective.cwd;
+		if (cwd && deps.getCwd() !== cwd) {
+			ensurePermit(permit, "set_cwd");
+			if (!deps.send({ type: "set_cwd", path: cwd })) {
+				throw new Error("startChat set_cwd send rejected");
+			}
+			const switched = await waitFor(() => deps.isReady() && deps.getCwd() === cwd);
+			if (!switched || !deps.isReady() || deps.getCwd() !== cwd) {
+				throw new Error("startChat set_cwd timed out");
+			}
+			ensurePermit(permit, "after-set_cwd");
+		}
+		if (intent.effective.newChat) {
+			ensurePermit(permit, "new_chat");
+			const beforeConv = deps.getConversationId();
+			const wasBlank = deps.isConversationBlank();
+			if (!deps.send({ type: "new_chat" })) {
+				throw new Error("startChat new_chat send rejected");
+			}
+			const switched = await waitFor(
+				() =>
+					deps.isReady() &&
+					(wasBlank
+						? deps.isConversationBlank() && Boolean(deps.getConversationId())
+						: deps.getConversationId() !== beforeConv && deps.isConversationBlank()),
+			);
+			if (!switched || !deps.isReady() || !deps.getConversationId()) {
+				throw new Error("startChat new_chat timed out");
+			}
+			ensurePermit(permit, "after-new_chat");
+		} else {
+			if (deps.getConversationId() !== intent.source.conversationId) {
+				throw new Error("startChat source conversation changed before prompt");
+			}
+			if (typeof deps.getSessionId === "function" && deps.getSessionId() !== intent.source.sessionId) {
+				throw new Error("startChat source session changed before prompt");
+			}
+		}
+		const model = intent.effective.model;
+		if (model) {
+			ensurePermit(permit, "set_model");
+			if (!isKnownModel(model)) {
+				throw new Error("startChat target model no longer available");
+			}
+			if (!deps.send({ type: "set_model", modelId: model })) {
+				throw new Error("startChat set_model send rejected");
+			}
+			if (typeof deps.getCurrentModelId === "function") {
+				const switched = await waitFor(() => deps.getCurrentModelId?.() === model);
+				if (!switched || deps.getCurrentModelId?.() !== model) {
+					throw new Error("startChat set_model timed out");
+				}
+			}
+			ensurePermit(permit, "after-set_model");
+		}
+		const targetConversationId = intent.effective.newChat
+			? (deps.getConversationId() ?? "")
+			: intent.source.conversationId;
+		const targetSessionId = intent.effective.newChat
+			? typeof deps.getSessionId === "function"
+				? (deps.getSessionId() ?? "")
+				: intent.source.sessionId
+			: intent.source.sessionId;
+		if (!targetConversationId || !targetSessionId) {
+			throw new Error("startChat target binding unavailable");
+		}
+		if (!intent.effective.newChat) {
+			if (deps.getConversationId() !== targetConversationId) {
+				throw new Error("startChat conversation drifted before prompt");
+			}
+			if (typeof deps.getSessionId === "function" && deps.getSessionId() !== targetSessionId) {
+				throw new Error("startChat session drifted before prompt");
+			}
+		}
+		ensurePermit(permit, "prompt");
+		const promptMsg = {
+			type: "prompt" as const,
+			text: intent.original.prompt,
+			id: intent.promptId,
+			forSession: targetSessionId,
+		};
+		if (typeof deps.admitPrompt === "function") {
+			const admitted = await deps.admitPrompt(promptMsg, {
+				conversationId: targetConversationId,
+				sessionId: targetSessionId,
+			});
+			if (admitted !== true) {
+				throw new Error("startChat prompt admission rejected");
+			}
+		} else {
+			if (deps.send(promptMsg) !== true) {
+				throw new Error("startChat prompt send rejected");
+			}
+		}
+		notifyStartChatChange();
+	};
+
 	return {
 		version: PLUGIN_HOST_API_VERSION,
 		setView(view) {
@@ -559,6 +721,80 @@ export function createPluginHostApi(deps: PluginHostDeps): PluginHostApi {
 			if (v) deps.setView(v);
 		},
 		startChat(opts) {
+			if (typeof deps.getStartChatOwner === "function") {
+				if (!deps.isReady()) {
+					return recordStartFailure({
+						ok: false,
+						code: "unavailable",
+						sourceRetained: true,
+						checkpointMayExist: false,
+						dispatch: false,
+					});
+				}
+				const owner = deps.getStartChatOwner();
+				if (!owner) {
+					return recordStartFailure({
+						ok: false,
+						code: "unavailable",
+						sourceRetained: true,
+						checkpointMayExist: false,
+						dispatch: false,
+					});
+				}
+				if (opts !== null && typeof opts === "object" && Object.prototype.hasOwnProperty.call(opts, "model")) {
+					const modelDesc = Object.getOwnPropertyDescriptor(opts, "model");
+					const rawModel = modelDesc && "value" in modelDesc ? modelDesc.value : undefined;
+					if (typeof rawModel === "string") {
+						const trimmedModel = rawModel.trim();
+						if (trimmedModel && !isKnownModel(trimmedModel)) {
+							return recordStartFailure({
+								ok: false,
+								code: "invalid-input",
+								sourceRetained: true,
+								checkpointMayExist: false,
+								dispatch: false,
+							});
+						}
+					}
+				}
+				const cp = owner.checkpoint(opts);
+				if (!cp.ok) {
+					return recordStartFailure(cp);
+				}
+				const started = owner.begin(cp.identity);
+				if (!started.ok) {
+					return recordStartFailure(started);
+				}
+				lastStartResult = Object.freeze({ ok: true as const, identity: cp.identity });
+				notifyStartChatChange();
+				const exec = (): Promise<void> => runCheckpointed(started.intent, started.permit);
+				let task: Promise<void>;
+				if (startChatPending > 0) {
+					task = startChatGate.then(exec);
+				} else {
+					task = exec();
+				}
+				startChatPending++;
+				startChatGate = task.then(
+					() => {
+						startChatPending--;
+					},
+					() => {
+						startChatPending--;
+					},
+				);
+				void task.catch(() => {
+					failedIntentIds.add(started.intent.intentId);
+					recordStartFailure({
+						ok: false,
+						code: "continuation-failed",
+						sourceRetained: true,
+						checkpointMayExist: true,
+						dispatch: false,
+					});
+				});
+				return true;
+			}
 			const prompt = String(opts?.prompt ?? "").trim();
 			if (!prompt) return false;
 			if (!deps.isReady()) return false;
@@ -589,6 +825,15 @@ export function createPluginHostApi(deps: PluginHostDeps): PluginHostApi {
 			});
 			return true;
 		},
+		lastStartChatResult() {
+			return lastStartResult;
+		},
+		startChatIssues() {
+			return Object.freeze([...startIssues]);
+		},
+		failedStartChatIntentIds() {
+			return Object.freeze([...failedIntentIds]);
+		},
 		models: {
 			list: () => listModels(),
 			active: () => deps.getCurrentModelId?.() ?? null,
@@ -596,10 +841,9 @@ export function createPluginHostApi(deps: PluginHostDeps): PluginHostApi {
 		},
 		compose(opts) {
 			if (!isComposerReady()) return false;
-			return composeToComposer({
-				text: typeof opts?.text === "string" ? opts.text : undefined,
-				attachments: Array.isArray(opts?.attachments) ? opts.attachments : undefined,
-			});
+			// The checkpoint validates/captures the original exact object. Do not silently
+			// strip unknown fields or manufacture explicitly undefined option fields.
+			return composeToComposer(opts);
 		},
 		openModal(id) {
 			const target = String(id ?? "").trim();
@@ -950,6 +1194,11 @@ export async function withPluginScopeAsync<T>(pluginId: string | null, fn: () =>
  *  宿主桥是全局单例，除此之外架构上归因不了调用方（定时器/自挂监听里调 host 的
  *  插件拿不到归因，宿主回退旧全局键，见 App.tsx 的授权键注释）。 */
 let pluginApiCaller: string | undefined = undefined;
+
+/** Read-only snapshot of the current synchronous plugin UI caller id (or null outside a plugin UI callback). */
+export function getPluginApiCaller(): string | null {
+	return typeof pluginApiCaller === "string" && pluginApiCaller.trim().length > 0 ? pluginApiCaller.trim() : null;
+}
 
 /** 在指定插件的调用方作用域里同步执行 fn（异常原样抛出）。 */
 function withPluginApiCaller<T>(pluginId: string, fn: () => T): T {
