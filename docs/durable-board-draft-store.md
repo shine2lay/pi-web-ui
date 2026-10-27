@@ -318,3 +318,177 @@ Exports from `web/src/board-draft-reader.ts`:
   and makes no live-app recovery, migration, or no-data-loss claim until #570
   integrates the caller lifecycle and authenticated route and passes the
   integrated gate.
+
+## Raw binary-view preservation repair (#599)
+
+### Hypothesis recorded before implementation (`H-BOARD-RAW-VIEW-1`)
+
+Ops is accountable. **H-BOARD-RAW-VIEW-1**: at #598 Board commit
+`a875d2bc676a2ee90ade541b0d7fbfb4db364c74` (reader blob
+`c4c554243e509b97a79e8489efabbb4608e688ec`), `web/src/board-draft-reader.ts:32-36`
+encodes `ArrayBuffer.isView(value)` as
+`{ id, type: Object.prototype.toString.call(value), bytes: [...new Uint8Array(value.buffer, value.byteOffset, value.byteLength)] }`.
+Because it slices only the visible window and never visits `value.buffer`
+through the `seen` reference map, it drops:
+
+1. all backing `ArrayBuffer` bytes outside `[byteOffset, byteOffset + byteLength)`,
+2. the view's `byteOffset` and `byteLength` metadata, and
+3. shared-buffer identity when multiple views or object properties reference the
+   same backing `ArrayBuffer`.
+
+One bounded change: in `exportRawBoardDraftRow` (`web/src/board-draft-reader.ts`),
+encode `ArrayBuffer.isView(value)` by visiting `value.buffer` through the
+existing graph-reference visitor (`buffer: await visit(value.buffer)`) and
+recording `type: Object.prototype.toString.call(value)`,
+`byteOffset: value.byteOffset`, and `byteLength: value.byteLength`. Leave
+`web/src/board-draft-store.ts`, `web/board-draft-recovery.html`, ordinary
+`current`/`submitted` exports, and the `"board-purpose-store-raw-graph-v1"`
+envelope unchanged.
+
+### Fixed expected outputs and reconstruction oracles
+
+1. **Equal-visible / unequal-backing-buffer pair:**
+   - Row A (`key: "equal-visible"`):
+     `value = { view: new Uint8Array(new Uint8Array([1, 7, 8, 4]).buffer, 1, 2) }`
+     (visible bytes `[7, 8]`, non-visible prefix `[1]`, non-visible suffix `[4]`).
+     Expected view node in `exportRawBoardDraftRow`:
+     <!-- prettier-ignore -->
+     ```json
+     {
+       "id": 2,
+       "type": "[object Uint8Array]",
+       "buffer": {
+         "id": 3,
+         "type": "ArrayBuffer",
+         "bytes": [1, 7, 8, 4]
+       },
+       "byteOffset": 1,
+       "byteLength": 2
+     }
+     ```
+   - Row B (`key: "equal-visible"`):
+     `value = { view: new Uint8Array(new Uint8Array([9, 7, 8, 6, 5]).buffer, 1, 2) }`
+     (visible bytes `[7, 8]`, non-visible prefix `[9]`, non-visible suffix `[6, 5]`).
+     Expected view node in `exportRawBoardDraftRow`:
+     <!-- prettier-ignore -->
+     ```json
+     {
+       "id": 2,
+       "type": "[object Uint8Array]",
+       "buffer": {
+         "id": 3,
+         "type": "ArrayBuffer",
+         "bytes": [9, 7, 8, 6, 5]
+       },
+       "byteOffset": 1,
+       "byteLength": 2
+     }
+     ```
+   - Oracle requirement: the two exports must not be equal; independent graph
+     reconstruction must yield `Uint8Array` views with visible bytes `[7, 8]`,
+     `byteOffset === 1`, `byteLength === 2`, and full backing buffer bytes
+     `[1, 7, 8, 4]` vs `[9, 7, 8, 6, 5]`.
+
+2. **Sliced `Uint8Array`, nonzero-offset `DataView`, multiple views sharing one
+   backing `ArrayBuffer`, explicit `ArrayBuffer` reference, view alias, and
+   cycle:**
+   - Backing `ArrayBuffer` `shared`: `new Uint8Array([10, 20, 30, 40, 50, 60, 70, 80]).buffer`.
+   - `slicedUint8`: `new Uint8Array(shared, 2, 3)` (visible `[30, 40, 50]`,
+     non-visible prefix `[10, 20]`, non-visible suffix `[60, 70, 80]`,
+     `byteOffset: 2`, `byteLength: 3`).
+   - `dataView`: `new DataView(shared, 1, 5)` (visible `[20, 30, 40, 50, 60]`,
+     `byteOffset: 1`, `byteLength: 5`).
+   - `sharedUint16`: `new Uint16Array(shared, 2, 2)` (`byteOffset: 2`,
+     `byteLength: 4`, sharing `shared`).
+   - `backing`: direct reference to `shared`.
+   - `slicedAlias`: direct reference to `slicedUint8`.
+   - `self`: self-reference cycle on the row `value` object alongside existing
+     special numbers (`NaN`, `Infinity`, `-0`), `BigInt`, `undefined`, `Date`,
+     `RegExp`, `Map`, `Set`, and `Blob`.
+   - Expected binary graph nodes when `slicedUint8` is visited before
+     `dataView`, `sharedUint16`, and `backing`:
+     - `slicedUint8`:
+       `{ id: 2, type: "[object Uint8Array]", buffer: { id: 3, type: "ArrayBuffer", bytes: [10, 20, 30, 40, 50, 60, 70, 80] }, byteOffset: 2, byteLength: 3 }`
+     - `dataView`:
+       `{ id: 4, type: "[object DataView]", buffer: { reference: 3 }, byteOffset: 1, byteLength: 5 }`
+     - `sharedUint16`:
+       `{ id: 5, type: "[object Uint16Array]", buffer: { reference: 3 }, byteOffset: 2, byteLength: 4 }`
+     - `backing`: `{ reference: 3 }`
+     - `slicedAlias`: `{ reference: 2 }`
+       (And when `backing` is visited first, `backing` defines
+       `{ id: 2, type: "ArrayBuffer", bytes: [10, 20, 30, 40, 50, 60, 70, 80] }`
+       and every view's `buffer` is `{ reference: 2 }`.)
+   - Oracle requirement: after both in-memory export and native IndexedDB
+     structured-clone round trip + standalone reader download (with `/fixture.js`
+     returning HTTP 404), independent graph reconstruction must recover:
+     - full backing bytes `[10, 20, 30, 40, 50, 60, 70, 80]`,
+     - `slicedUint8` as a `Uint8Array` with `byteOffset === 2`,
+       `byteLength === 3`, visible `[30, 40, 50]`,
+     - `dataView` as a `DataView` with `byteOffset === 1`, `byteLength === 5`,
+       visible `[20, 30, 40, 50, 60]`,
+     - `sharedUint16` as a `Uint16Array` with `byteOffset === 2`,
+       `byteLength === 4`, `length === 2`,
+     - exact object identity `slicedUint8.buffer === dataView.buffer`,
+       `slicedUint8.buffer === sharedUint16.buffer`,
+       `slicedUint8.buffer === backing`, `slicedAlias === slicedUint8`, and
+       `self === reconstructedValue`.
+
+3. **Genuine pinned-old negative control (`a875d2bc676a2ee90ade541b0d7fbfb4db364c74`):**
+   - Load the unmodified `a875d2bc676a2ee90ade541b0d7fbfb4db364c74:web/src/board-draft-reader.ts`
+     via `git show` + `esbuild`.
+   - It must execute and emit valid `"board-purpose-store-raw-graph-v1"` JSON
+     (not fail due to setup or loading), and fail the preservation oracle:
+     the `[1, 7, 8, 4]` and `[9, 7, 8, 6, 5]` offset-1/length-2 views collapse
+     into identical exports with `bytes: [7, 8]`, missing `buffer`, `byteOffset`,
+     `byteLength`, non-visible prefix/suffix bytes, and shared-buffer references.
+
+4. **Falsifier:**
+   - Any lost backing byte, lost `byteOffset`/`byteLength`/`type`, broken
+     shared-buffer or view-alias identity, source-row or IndexedDB mutation,
+     weakened negative control, or regression in existing Board unit/native checks.
+
+### Verification and outcome (`H-BOARD-RAW-VIEW-1`: **HIT**)
+
+- **Repaired exporter (`web/src/board-draft-reader.ts`):**
+  - `ArrayBuffer` values match across realms via
+    `value instanceof ArrayBuffer || Object.prototype.toString.call(value) === "[object ArrayBuffer]"`
+    and emit `{ id, type: "ArrayBuffer", bytes: [...new Uint8Array(value as ArrayBuffer)] }`.
+  - `ArrayBuffer.isView(value)` visits the backing buffer through the existing
+    `seen` object-reference graph (`buffer: await visit(value.buffer)`) and
+    records `type: Object.prototype.toString.call(value)`,
+    `byteOffset: value.byteOffset`, and `byteLength: value.byteLength`.
+- **Commands and results (sealed synthetic environments only, no live data or model calls):**
+  - `scripts/sealed.sh npx vitest run tests/unit/board-draft-store.test.ts tests/unit/durable-board-admission.test.ts tests/unit/role-board.test.ts tests/unit/no-plan-board.test.ts tests/unit/roles-view.test.ts`
+    -> **5 test files passed, 229 tests passed** (`board-draft-store.test.ts`:
+    **67 passed**, including equal-visible/different-backing-buffer distinction,
+    sliced `Uint8Array` + nonzero-offset `DataView` + shared `Uint16Array` +
+    explicit `ArrayBuffer` reference + view alias + cycle reconstruction in both
+    traversal orders, and genuine pinned `a875d2bc676a2ee90ade541b0d7fbfb4db364c74`
+    negative control; `durable-board-admission.test.ts`: **91 passed**;
+    `role-board.test.ts`: **37 passed**; `no-plan-board.test.ts`: **7 passed**;
+    `roles-view.test.ts`: **27 passed**).
+  - `scripts/sealed.sh node tests/board-draft-store-test.mjs`
+    -> **PASS 32 isolated native Board storage/reader cases** (real Chromium
+    IndexedDB structured-clone round trip + standalone reader download while
+    `/fixture.js` returns HTTP 404, independent graph reconstruction of equal-visible
+    pair and shared-buffer topology in both visit orders, genuine pinned
+    `a875d2bc676a2ee90ade541b0d7fbfb4db364c74` standalone reader negative control
+    over the same native IndexedDB rows, zero writes/schemas/actions, and
+    unchanged IndexedDB snapshot before/after export).
+  - `scripts/sealed.sh node tests/durable-board-admission-test.mjs`
+    -> **38 native Board cases passed**.
+  - `scripts/sealed.sh node tests/no-plan-board-test.mjs`
+    -> **all checks passed**.
+  - `scripts/sealed.sh npm run typecheck`,
+    `scripts/sealed.sh npx oxlint web/src/board-draft-reader.ts tests/unit/board-draft-store.test.ts tests/board-draft-store-test.mjs`,
+    `scripts/sealed.sh npx prettier --check web/src/board-draft-reader.ts tests/unit/board-draft-store.test.ts tests/board-draft-store-test.mjs docs/durable-board-draft-store.md`,
+    `scripts/sealed.sh npm run build`, and `git diff --check`
+    -> **all passed with 0 warnings and 0 errors**.
+- **Remaining #570 host obligations:**
+  - Wire `createBoardDraftIndexedDB()` into `web/src/roles-state.ts` and
+    `web/src/components/RolesView.tsx` so Board post/close authoring, submit
+    retention, and correlated `board_result` marker retirement persist through
+    this store.
+  - Serve `web/board-draft-recovery.html` + `web/src/board-draft-reader.ts` on
+    an authenticated same-origin host route and retain the database + standalone
+    reader across rollback, then run the integrated #570 gate.

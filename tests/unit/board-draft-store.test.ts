@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { execFileSync } from "node:child_process";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	BOARD_DRAFT_DATABASE,
@@ -50,6 +52,250 @@ function closeSource(revision = 0, patch: Partial<BoardDraftSource> = {}): Board
 }
 
 const clone = <T>(value: T): T => structuredClone(value);
+
+const REPO = process.cwd();
+const PINNED_OLD_COMMIT = "a875d2bc676a2ee90ade541b0d7fbfb4db364c74";
+const PINNED_OLD_READER_BLOB = "c4c554243e509b97a79e8489efabbb4608e688ec";
+
+type TypedArrayConstructor =
+	| Int8ArrayConstructor
+	| Uint8ArrayConstructor
+	| Uint8ClampedArrayConstructor
+	| Int16ArrayConstructor
+	| Uint16ArrayConstructor
+	| Int32ArrayConstructor
+	| Uint32ArrayConstructor
+	| Float32ArrayConstructor
+	| Float64ArrayConstructor
+	| BigInt64ArrayConstructor
+	| BigUint64ArrayConstructor;
+
+const TYPED_ARRAY_CTORS: Readonly<Record<string, TypedArrayConstructor>> = {
+	"[object Int8Array]": Int8Array,
+	"[object Uint8Array]": Uint8Array,
+	"[object Uint8ClampedArray]": Uint8ClampedArray,
+	"[object Int16Array]": Int16Array,
+	"[object Uint16Array]": Uint16Array,
+	"[object Int32Array]": Int32Array,
+	"[object Uint32Array]": Uint32Array,
+	"[object Float32Array]": Float32Array,
+	"[object Float64Array]": Float64Array,
+	"[object BigInt64Array]": BigInt64Array,
+	"[object BigUint64Array]": BigUint64Array,
+};
+
+function isArrayBufferValue(value: unknown): value is ArrayBuffer {
+	return value instanceof ArrayBuffer || Object.prototype.toString.call(value) === "[object ArrayBuffer]";
+}
+
+function reconstructRawBoardGraph(exportedText: string): { key: string; value: unknown } {
+	const parsed = JSON.parse(exportedText) as { format?: unknown; row?: unknown };
+	if (parsed.format !== "board-purpose-store-raw-graph-v1") {
+		throw new Error(`Unexpected raw export format: ${String(parsed.format)}`);
+	}
+	const byId = new Map<number, unknown>();
+
+	function decode(node: unknown): unknown {
+		if (node === null || typeof node === "string" || typeof node === "boolean" || typeof node === "number") {
+			return node;
+		}
+		if (typeof node !== "object") {
+			throw new Error("Invalid non-object node in raw graph");
+		}
+		const record = node as Record<string, unknown>;
+		if ("reference" in record) {
+			const refId = record.reference;
+			if (typeof refId !== "number" || !byId.has(refId)) {
+				throw new Error(`Unresolved graph reference: ${String(refId)}`);
+			}
+			return byId.get(refId);
+		}
+		if (!("id" in record)) {
+			if (record.type === "undefined" && record.value === "undefined") return undefined;
+			if (record.type === "bigint" && typeof record.value === "string") return BigInt(record.value);
+			if (record.type === "number" && typeof record.value === "string") {
+				if (record.value === "-0") return -0;
+				if (record.value === "NaN") return NaN;
+				if (record.value === "Infinity") return Infinity;
+				if (record.value === "-Infinity") return -Infinity;
+			}
+			throw new Error(`Unsupported primitive wrapper tag: ${JSON.stringify(record)}`);
+		}
+		const id = record.id;
+		const type = record.type;
+		if (typeof id !== "number" || typeof type !== "string" || byId.has(id)) {
+			throw new Error(`Invalid or duplicate object node id: ${String(id)}`);
+		}
+		if (type === "Date") {
+			const ms = decode(record.milliseconds);
+			if (typeof ms !== "number") throw new Error("Invalid Date milliseconds");
+			const date = new Date(ms);
+			byId.set(id, date);
+			return date;
+		}
+		if (type === "RegExp") {
+			if (typeof record.source !== "string" || typeof record.flags !== "string") {
+				throw new Error("Invalid RegExp node");
+			}
+			const regex = new RegExp(record.source, record.flags);
+			byId.set(id, regex);
+			return regex;
+		}
+		if (type === "ArrayBuffer") {
+			if (!Array.isArray(record.bytes)) throw new Error("Invalid ArrayBuffer bytes");
+			const ab = new Uint8Array(record.bytes as number[]).buffer;
+			byId.set(id, ab);
+			return ab;
+		}
+		if (type === "[object DataView]" || type in TYPED_ARRAY_CTORS) {
+			if (!("buffer" in record) || typeof record.byteOffset !== "number" || typeof record.byteLength !== "number") {
+				throw new Error("Binary view node is missing backing buffer or byteOffset/byteLength metadata");
+			}
+			const backing = decode(record.buffer);
+			if (!isArrayBufferValue(backing)) {
+				throw new Error("Binary view buffer did not reconstruct to an ArrayBuffer");
+			}
+			if (type === "[object DataView]") {
+				const view = new DataView(backing, record.byteOffset, record.byteLength);
+				byId.set(id, view);
+				return view;
+			}
+			const Ctor = TYPED_ARRAY_CTORS[type]!;
+			if (record.byteLength % Ctor.BYTES_PER_ELEMENT !== 0) {
+				throw new Error(`Invalid byteLength ${record.byteLength} for ${type}`);
+			}
+			const view = new Ctor(backing, record.byteOffset, record.byteLength / Ctor.BYTES_PER_ELEMENT);
+			byId.set(id, view);
+			return view;
+		}
+		if (type === "Blob" || type === "File") {
+			if (!Array.isArray(record.bytes) || typeof record.mime !== "string") {
+				throw new Error("Invalid Blob/File node");
+			}
+			const bytes = new Uint8Array(record.bytes as number[]);
+			const value =
+				type === "File" && typeof File !== "undefined"
+					? new File([bytes], String(record.name ?? ""), {
+							type: record.mime,
+							lastModified: Number(record.lastModified ?? 0),
+						})
+					: new Blob([bytes], { type: record.mime });
+			byId.set(id, value);
+			return value;
+		}
+		if (type === "Map") {
+			const map = new Map<unknown, unknown>();
+			byId.set(id, map);
+			for (const [k, v] of record.entries as [unknown, unknown][]) {
+				map.set(decode(k), decode(v));
+			}
+			return map;
+		}
+		if (type === "Set") {
+			const set = new Set<unknown>();
+			byId.set(id, set);
+			for (const item of record.entries as unknown[]) {
+				set.add(decode(item));
+			}
+			return set;
+		}
+		if (type === "Array") {
+			const arr: unknown[] = [];
+			byId.set(id, arr);
+			for (const [k, v] of record.entries as [string, unknown][]) {
+				(arr as unknown as Record<string, unknown>)[k] = decode(v);
+			}
+			return arr;
+		}
+		const obj: Record<string, unknown> = {};
+		byId.set(id, obj);
+		for (const [k, v] of record.entries as [string, unknown][]) {
+			obj[k] = decode(v);
+		}
+		return obj;
+	}
+
+	return decode(parsed.row) as { key: string; value: unknown };
+}
+
+function verifyEqualVisiblePairOracle(exportA: string, exportB: string): void {
+	if (exportA === exportB) {
+		throw new Error("Equal-visible views over unequal backing buffers collapsed into identical exports");
+	}
+	const rowA = reconstructRawBoardGraph(exportA).value as { view: Uint8Array };
+	const rowB = reconstructRawBoardGraph(exportB).value as { view: Uint8Array };
+	expect(rowA.view).toBeInstanceOf(Uint8Array);
+	expect(rowB.view).toBeInstanceOf(Uint8Array);
+	expect([...rowA.view]).toStrictEqual([7, 8]);
+	expect([...rowB.view]).toStrictEqual([7, 8]);
+	expect(rowA.view.byteOffset).toBe(1);
+	expect(rowA.view.byteLength).toBe(2);
+	expect(rowB.view.byteOffset).toBe(1);
+	expect(rowB.view.byteLength).toBe(2);
+	expect([...new Uint8Array(rowA.view.buffer)]).toStrictEqual([1, 7, 8, 4]);
+	expect([...new Uint8Array(rowB.view.buffer)]).toStrictEqual([9, 7, 8, 6, 5]);
+}
+
+function verifySharedBinaryGraphOracle(exportedText: string): void {
+	const value = reconstructRawBoardGraph(exportedText).value as {
+		slicedUint8: Uint8Array;
+		dataView: DataView;
+		sharedUint16: Uint16Array;
+		backing: ArrayBuffer;
+		slicedAlias: Uint8Array;
+		self: unknown;
+	};
+	expect(isArrayBufferValue(value.backing)).toBe(true);
+	expect([...new Uint8Array(value.backing)]).toStrictEqual([10, 20, 30, 40, 50, 60, 70, 80]);
+	expect(value.slicedUint8).toBeInstanceOf(Uint8Array);
+	expect(value.slicedUint8.byteOffset).toBe(2);
+	expect(value.slicedUint8.byteLength).toBe(3);
+	expect([...value.slicedUint8]).toStrictEqual([30, 40, 50]);
+	expect(value.dataView).toBeInstanceOf(DataView);
+	expect(value.dataView.byteOffset).toBe(1);
+	expect(value.dataView.byteLength).toBe(5);
+	expect([
+		...new Uint8Array(value.dataView.buffer, value.dataView.byteOffset, value.dataView.byteLength),
+	]).toStrictEqual([20, 30, 40, 50, 60]);
+	expect(value.sharedUint16).toBeInstanceOf(Uint16Array);
+	expect(value.sharedUint16.byteOffset).toBe(2);
+	expect(value.sharedUint16.byteLength).toBe(4);
+	expect(value.sharedUint16.length).toBe(2);
+	expect(value.slicedUint8.buffer).toBe(value.dataView.buffer);
+	expect(value.slicedUint8.buffer).toBe(value.sharedUint16.buffer);
+	expect(value.slicedUint8.buffer).toBe(value.backing);
+	expect(value.slicedAlias).toBe(value.slicedUint8);
+	expect(value.self).toBe(value);
+}
+
+let cachedPinnedOldExporter: ((row: { key: string; value: unknown }) => Promise<string>) | undefined;
+async function loadPinnedOldRawExporter(): Promise<(row: { key: string; value: unknown }) => Promise<string>> {
+	if (cachedPinnedOldExporter) return cachedPinnedOldExporter;
+	const blobSha = execFileSync("git", ["rev-parse", `${PINNED_OLD_COMMIT}:web/src/board-draft-reader.ts`], {
+		cwd: REPO,
+		encoding: "utf8",
+	}).trim();
+	expect(blobSha).toBe(PINNED_OLD_READER_BLOB);
+	const oldReaderSource = execFileSync("git", ["show", `${PINNED_OLD_COMMIT}:web/src/board-draft-reader.ts`], {
+		cwd: REPO,
+		encoding: "utf8",
+	});
+	const bundledJs = execFileSync(
+		join(REPO, "node_modules/esbuild/bin/esbuild"),
+		["--bundle", "--format=esm", "--loader=ts", "--sourcefile=board-draft-reader-a875d2bc.ts"],
+		{
+			cwd: join(REPO, "web/src"),
+			input: oldReaderSource,
+			encoding: "utf8",
+		},
+	);
+	const dataUrl = `data:text/javascript;base64,${Buffer.from(bundledJs, "utf8").toString("base64")}`;
+	const mod = (await import(/* @vite-ignore */ dataUrl)) as {
+		exportRawBoardDraftRow: (row: { key: string; value: unknown }) => Promise<string>;
+	};
+	cachedPinnedOldExporter = mod.exportRawBoardDraftRow;
+	return cachedPinnedOldExporter;
+}
 
 function deferred() {
 	let resolve!: () => void;
@@ -768,17 +1014,21 @@ describe("independent look-only reading and #593 compatibility", () => {
 		};
 		raw.self = raw;
 		const text = await exportRawBoardDraftRow({ key: "unknown", value: raw });
-		expect(text).toContain('"board-purpose-store-raw-graph-v1"');
-		expect(text).toContain('"reference"');
-		expect(text).toContain('"NaN"');
-		expect(text).toContain('"Infinity"');
-		expect(text).toContain('"-0"');
-		expect(text).toContain('"bigint"');
-		expect(text).toContain('"Date"');
-		expect(text).toContain('"RegExp"');
-		expect(text).toContain('"Map"');
-		expect(text).toContain('"Set"');
-		expect(text).toContain("255");
+		const reconstructed = reconstructRawBoardGraph(text).value as Record<string, unknown>;
+		expect(Object.is(reconstructed.nan, NaN)).toBe(true);
+		expect(Object.is(reconstructed.inf, Infinity)).toBe(true);
+		expect(Object.is(reconstructed.negativeZero, -0)).toBe(true);
+		expect(reconstructed.bytes).toBeInstanceOf(Uint8Array);
+		expect([...(reconstructed.bytes as Uint8Array)]).toStrictEqual([0, 128, 255]);
+		expect(isArrayBufferValue(reconstructed.buf)).toBe(true);
+		expect([...new Uint8Array(reconstructed.buf as ArrayBuffer)]).toStrictEqual([1, 2]);
+		expect((reconstructed.date as Date).getTime()).toBe(1700000000000);
+		expect((reconstructed.re as RegExp).source).toBe("board-\\d+");
+		expect((reconstructed.re as RegExp).flags).toBe("gi");
+		expect((reconstructed.map as Map<string, string>).get("k")).toBe("v");
+		expect((reconstructed.set as Set<string>).has("s1")).toBe(true);
+		expect(reconstructed.big).toBe(42n);
+		expect(reconstructed.self).toBe(reconstructed);
 		const withGetter = Object.defineProperty({}, "bad", {
 			enumerable: true,
 			get() {
@@ -786,6 +1036,190 @@ describe("independent look-only reading and #593 compatibility", () => {
 			},
 		});
 		await expect(exportRawBoardDraftRow({ key: "bad", value: withGetter })).rejects.toThrow(/accessor/);
+	});
+
+	it("distinguishes equal-visible views over different backing buffers and preserves exact view node schema", async () => {
+		const rowA = clone({
+			key: "equal-visible",
+			value: { view: new Uint8Array(new Uint8Array([1, 7, 8, 4]).buffer, 1, 2) },
+		});
+		const rowB = clone({
+			key: "equal-visible",
+			value: { view: new Uint8Array(new Uint8Array([9, 7, 8, 6, 5]).buffer, 1, 2) },
+		});
+		expect([...rowA.value.view]).toStrictEqual([7, 8]);
+		expect([...rowB.value.view]).toStrictEqual([7, 8]);
+
+		const exportA = await exportRawBoardDraftRow(rowA);
+		const exportB = await exportRawBoardDraftRow(rowB);
+		verifyEqualVisiblePairOracle(exportA, exportB);
+
+		const parsedA = JSON.parse(exportA);
+		const parsedB = JSON.parse(exportB);
+		const viewNodeA = parsedA.row.entries.find(([k]: [string]) => k === "value")[1].entries[0][1];
+		const viewNodeB = parsedB.row.entries.find(([k]: [string]) => k === "value")[1].entries[0][1];
+		expect(viewNodeA).toStrictEqual({
+			id: 2,
+			type: "[object Uint8Array]",
+			buffer: {
+				id: 3,
+				type: "ArrayBuffer",
+				bytes: [1, 7, 8, 4],
+			},
+			byteOffset: 1,
+			byteLength: 2,
+		});
+		expect(viewNodeB).toStrictEqual({
+			id: 2,
+			type: "[object Uint8Array]",
+			buffer: {
+				id: 3,
+				type: "ArrayBuffer",
+				bytes: [9, 7, 8, 6, 5],
+			},
+			byteOffset: 1,
+			byteLength: 2,
+		});
+	});
+
+	it("preserves sliced Uint8Array prefix/suffix, nonzero-offset DataView, shared backing ArrayBuffer across views/direct refs, view aliases and both traversal orders without mutating source rows", async () => {
+		const shared = new Uint8Array([10, 20, 30, 40, 50, 60, 70, 80]).buffer;
+		const slicedUint8 = new Uint8Array(shared, 2, 3);
+		const dataView = new DataView(shared, 1, 5);
+		const sharedUint16 = new Uint16Array(shared, 2, 2);
+		const viewFirstRaw: Record<string, unknown> = {
+			slicedUint8,
+			dataView,
+			sharedUint16,
+			backing: shared,
+			slicedAlias: slicedUint8,
+		};
+		viewFirstRaw.self = viewFirstRaw;
+		const backingFirstRaw: Record<string, unknown> = {
+			backing: shared,
+			slicedUint8,
+			dataView,
+			sharedUint16,
+			slicedAlias: slicedUint8,
+		};
+		backingFirstRaw.self = backingFirstRaw;
+
+		const clonedViewFirst = clone({ key: "shared-view-first", value: viewFirstRaw });
+		const clonedBackingFirst = clone({ key: "shared-backing-first", value: backingFirstRaw });
+
+		const exportViewFirst = await exportRawBoardDraftRow(clonedViewFirst);
+		const exportBackingFirst = await exportRawBoardDraftRow(clonedBackingFirst);
+
+		// Source values are untouched
+		expect([...new Uint8Array(shared)]).toStrictEqual([10, 20, 30, 40, 50, 60, 70, 80]);
+		expect(slicedUint8.byteOffset).toBe(2);
+		expect(slicedUint8.byteLength).toBe(3);
+		expect(dataView.byteOffset).toBe(1);
+		expect(dataView.byteLength).toBe(5);
+
+		// Both traversal orders reconstruct with identical shared-buffer and view-alias topology
+		verifySharedBinaryGraphOracle(exportViewFirst);
+		verifySharedBinaryGraphOracle(exportBackingFirst);
+
+		// Verify explicit raw node shapes for view-first and backing-first orders
+		const viewFirstEntries = new Map<string, unknown>(
+			JSON.parse(exportViewFirst).row.entries.find(([k]: [string]) => k === "value")[1].entries,
+		);
+		expect(viewFirstEntries.get("slicedUint8")).toStrictEqual({
+			id: 2,
+			type: "[object Uint8Array]",
+			buffer: {
+				id: 3,
+				type: "ArrayBuffer",
+				bytes: [10, 20, 30, 40, 50, 60, 70, 80],
+			},
+			byteOffset: 2,
+			byteLength: 3,
+		});
+		expect(viewFirstEntries.get("dataView")).toStrictEqual({
+			id: 4,
+			type: "[object DataView]",
+			buffer: { reference: 3 },
+			byteOffset: 1,
+			byteLength: 5,
+		});
+		expect(viewFirstEntries.get("sharedUint16")).toStrictEqual({
+			id: 5,
+			type: "[object Uint16Array]",
+			buffer: { reference: 3 },
+			byteOffset: 2,
+			byteLength: 4,
+		});
+		expect(viewFirstEntries.get("backing")).toStrictEqual({ reference: 3 });
+		expect(viewFirstEntries.get("slicedAlias")).toStrictEqual({ reference: 2 });
+
+		const backingFirstEntries = new Map<string, unknown>(
+			JSON.parse(exportBackingFirst).row.entries.find(([k]: [string]) => k === "value")[1].entries,
+		);
+		expect(backingFirstEntries.get("backing")).toStrictEqual({
+			id: 2,
+			type: "ArrayBuffer",
+			bytes: [10, 20, 30, 40, 50, 60, 70, 80],
+		});
+		expect(backingFirstEntries.get("slicedUint8")).toStrictEqual({
+			id: 3,
+			type: "[object Uint8Array]",
+			buffer: { reference: 2 },
+			byteOffset: 2,
+			byteLength: 3,
+		});
+		expect(backingFirstEntries.get("dataView")).toStrictEqual({
+			id: 4,
+			type: "[object DataView]",
+			buffer: { reference: 2 },
+			byteOffset: 1,
+			byteLength: 5,
+		});
+		expect(backingFirstEntries.get("sharedUint16")).toStrictEqual({
+			id: 5,
+			type: "[object Uint16Array]",
+			buffer: { reference: 2 },
+			byteOffset: 2,
+			byteLength: 4,
+		});
+		expect(backingFirstEntries.get("slicedAlias")).toStrictEqual({ reference: 3 });
+	});
+
+	it("negative control: genuine unmodified a875d2bc exporter loads and exports valid JSON but fails equal-visible and shared-buffer preservation oracles", async () => {
+		const oldExportRawBoardDraftRow = await loadPinnedOldRawExporter();
+		const rowA = clone({
+			key: "equal-visible",
+			value: { view: new Uint8Array(new Uint8Array([1, 7, 8, 4]).buffer, 1, 2) },
+		});
+		const rowB = clone({
+			key: "equal-visible",
+			value: { view: new Uint8Array(new Uint8Array([9, 7, 8, 6, 5]).buffer, 1, 2) },
+		});
+
+		const oldExportA = await oldExportRawBoardDraftRow(rowA);
+		const oldExportB = await oldExportRawBoardDraftRow(rowB);
+		// Old exporter succeeded at loading and exporting valid raw-graph JSON
+		expect(JSON.parse(oldExportA).format).toBe("board-purpose-store-raw-graph-v1");
+		expect(JSON.parse(oldExportB).format).toBe("board-purpose-store-raw-graph-v1");
+		// Yet it collapsed both different backing buffers into the exact same export string
+		expect(oldExportA).toBe(oldExportB);
+		expect(() => verifyEqualVisiblePairOracle(oldExportA, oldExportB)).toThrow(/collapsed into identical exports/);
+
+		const shared = new Uint8Array([10, 20, 30, 40, 50, 60, 70, 80]).buffer;
+		const slicedUint8 = new Uint8Array(shared, 2, 3);
+		const sharedRaw: Record<string, unknown> = {
+			slicedUint8,
+			dataView: new DataView(shared, 1, 5),
+			sharedUint16: new Uint16Array(shared, 2, 2),
+			backing: shared,
+			slicedAlias: slicedUint8,
+		};
+		sharedRaw.self = sharedRaw;
+		const oldSharedExport = await oldExportRawBoardDraftRow(clone({ key: "shared", value: sharedRaw }));
+		expect(JSON.parse(oldSharedExport).format).toBe("board-purpose-store-raw-graph-v1");
+		expect(() => verifySharedBinaryGraphOracle(oldSharedExport)).toThrow(
+			/missing backing buffer or byteOffset\/byteLength metadata/,
+		);
 	});
 
 	it("reader shows unavailable, missing, empty and ready distinctly", async () => {

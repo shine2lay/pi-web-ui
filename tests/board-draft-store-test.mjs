@@ -3,6 +3,7 @@
  * Run: node tests/board-draft-store-test.mjs
  */
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,14 +14,194 @@ import { chromium } from "playwright-core";
 import { CHROME_PATH } from "./lib/chrome.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
+const PINNED_OLD_COMMIT = "a875d2bc676a2ee90ade541b0d7fbfb4db364c74";
+const PINNED_OLD_READER_BLOB = "c4c554243e509b97a79e8489efabbb4608e688ec";
 const home = mkdtempSync(join(tmpdir(), "board-draft-storage-"));
 let server, browser;
 let serveFixtureBundle = true;
 let passed = 0;
 const errors = [];
 
+const TYPED_ARRAY_CTORS = {
+	"[object Int8Array]": Int8Array,
+	"[object Uint8Array]": Uint8Array,
+	"[object Uint8ClampedArray]": Uint8ClampedArray,
+	"[object Int16Array]": Int16Array,
+	"[object Uint16Array]": Uint16Array,
+	"[object Int32Array]": Int32Array,
+	"[object Uint32Array]": Uint32Array,
+	"[object Float32Array]": Float32Array,
+	"[object Float64Array]": Float64Array,
+	"[object BigInt64Array]": BigInt64Array,
+	"[object BigUint64Array]": BigUint64Array,
+};
+
+function reconstructRawBoardGraph(exportedText) {
+	const parsed = JSON.parse(exportedText);
+	assert.equal(parsed.format, "board-purpose-store-raw-graph-v1");
+	const byId = new Map();
+
+	function decode(node) {
+		if (node === null || typeof node === "string" || typeof node === "boolean" || typeof node === "number") {
+			return node;
+		}
+		if (typeof node !== "object") {
+			throw new Error("Invalid non-object node in raw graph");
+		}
+		if ("reference" in node) {
+			if (typeof node.reference !== "number" || !byId.has(node.reference)) {
+				throw new Error(`Unresolved graph reference: ${String(node.reference)}`);
+			}
+			return byId.get(node.reference);
+		}
+		if (!("id" in node)) {
+			if (node.type === "undefined" && node.value === "undefined") return undefined;
+			if (node.type === "bigint" && typeof node.value === "string") return BigInt(node.value);
+			if (node.type === "number" && typeof node.value === "string") {
+				if (node.value === "-0") return -0;
+				if (node.value === "NaN") return NaN;
+				if (node.value === "Infinity") return Infinity;
+				if (node.value === "-Infinity") return -Infinity;
+			}
+			throw new Error(`Unsupported primitive wrapper tag: ${JSON.stringify(node)}`);
+		}
+		const { id, type } = node;
+		if (typeof id !== "number" || typeof type !== "string" || byId.has(id)) {
+			throw new Error(`Invalid or duplicate object node id: ${String(id)}`);
+		}
+		if (type === "Date") {
+			const date = new Date(decode(node.milliseconds));
+			byId.set(id, date);
+			return date;
+		}
+		if (type === "RegExp") {
+			const regex = new RegExp(node.source, node.flags);
+			byId.set(id, regex);
+			return regex;
+		}
+		if (type === "ArrayBuffer") {
+			assert.ok(Array.isArray(node.bytes), "ArrayBuffer node must carry bytes");
+			const ab = new Uint8Array(node.bytes).buffer;
+			byId.set(id, ab);
+			return ab;
+		}
+		if (type === "[object DataView]" || type in TYPED_ARRAY_CTORS) {
+			if (!("buffer" in node) || typeof node.byteOffset !== "number" || typeof node.byteLength !== "number") {
+				throw new Error("Binary view node is missing backing buffer or byteOffset/byteLength metadata");
+			}
+			const backing = decode(node.buffer);
+			if (!(backing instanceof ArrayBuffer)) {
+				throw new Error("Binary view buffer did not reconstruct to an ArrayBuffer");
+			}
+			if (type === "[object DataView]") {
+				const view = new DataView(backing, node.byteOffset, node.byteLength);
+				byId.set(id, view);
+				return view;
+			}
+			const Ctor = TYPED_ARRAY_CTORS[type];
+			if (node.byteLength % Ctor.BYTES_PER_ELEMENT !== 0) {
+				throw new Error(`Invalid byteLength ${node.byteLength} for ${type}`);
+			}
+			const view = new Ctor(backing, node.byteOffset, node.byteLength / Ctor.BYTES_PER_ELEMENT);
+			byId.set(id, view);
+			return view;
+		}
+		if (type === "Blob" || type === "File") {
+			const bytes = new Uint8Array(node.bytes);
+			const value = new Blob([bytes], { type: node.mime });
+			byId.set(id, value);
+			return value;
+		}
+		if (type === "Map") {
+			const map = new Map();
+			byId.set(id, map);
+			for (const [k, v] of node.entries) map.set(decode(k), decode(v));
+			return map;
+		}
+		if (type === "Set") {
+			const set = new Set();
+			byId.set(id, set);
+			for (const item of node.entries) set.add(decode(item));
+			return set;
+		}
+		if (type === "Array") {
+			const arr = [];
+			byId.set(id, arr);
+			for (const [k, v] of node.entries) arr[k] = decode(v);
+			return arr;
+		}
+		const obj = {};
+		byId.set(id, obj);
+		for (const [k, v] of node.entries) obj[k] = decode(v);
+		return obj;
+	}
+
+	return decode(parsed.row);
+}
+
+function extractExportedValueNode(exportedText) {
+	const parsed = JSON.parse(exportedText);
+	assert.equal(parsed.format, "board-purpose-store-raw-graph-v1");
+	return parsed.row.entries.find(([k]) => k === "value")[1];
+}
+
+function verifyEqualVisiblePairOracle(exportA, exportB) {
+	if (JSON.stringify(extractExportedValueNode(exportA)) === JSON.stringify(extractExportedValueNode(exportB))) {
+		throw new Error("Equal-visible views over unequal backing buffers collapsed into identical exported value nodes");
+	}
+	const rowA = reconstructRawBoardGraph(exportA).value;
+	const rowB = reconstructRawBoardGraph(exportB).value;
+	assert.ok(rowA.view instanceof Uint8Array);
+	assert.ok(rowB.view instanceof Uint8Array);
+	assert.deepEqual([...rowA.view], [7, 8]);
+	assert.deepEqual([...rowB.view], [7, 8]);
+	assert.equal(rowA.view.byteOffset, 1);
+	assert.equal(rowA.view.byteLength, 2);
+	assert.equal(rowB.view.byteOffset, 1);
+	assert.equal(rowB.view.byteLength, 2);
+	assert.deepEqual([...new Uint8Array(rowA.view.buffer)], [1, 7, 8, 4]);
+	assert.deepEqual([...new Uint8Array(rowB.view.buffer)], [9, 7, 8, 6, 5]);
+}
+
+function verifySharedBinaryGraphOracle(exportedText) {
+	const value = reconstructRawBoardGraph(exportedText).value;
+	assert.ok(value.backing instanceof ArrayBuffer);
+	assert.deepEqual([...new Uint8Array(value.backing)], [10, 20, 30, 40, 50, 60, 70, 80]);
+	assert.ok(value.slicedUint8 instanceof Uint8Array);
+	assert.equal(value.slicedUint8.byteOffset, 2);
+	assert.equal(value.slicedUint8.byteLength, 3);
+	assert.deepEqual([...value.slicedUint8], [30, 40, 50]);
+	assert.ok(value.dataView instanceof DataView);
+	assert.equal(value.dataView.byteOffset, 1);
+	assert.equal(value.dataView.byteLength, 5);
+	assert.deepEqual(
+		[...new Uint8Array(value.dataView.buffer, value.dataView.byteOffset, value.dataView.byteLength)],
+		[20, 30, 40, 50, 60],
+	);
+	assert.ok(value.sharedUint16 instanceof Uint16Array);
+	assert.equal(value.sharedUint16.byteOffset, 2);
+	assert.equal(value.sharedUint16.byteLength, 4);
+	assert.equal(value.sharedUint16.length, 2);
+	assert.equal(value.slicedUint8.buffer, value.dataView.buffer);
+	assert.equal(value.slicedUint8.buffer, value.sharedUint16.buffer);
+	assert.equal(value.slicedUint8.buffer, value.backing);
+	assert.equal(value.slicedAlias, value.slicedUint8);
+	assert.equal(value.self, value);
+	assert.equal(Object.is(value.nan, NaN), true);
+	assert.equal(Object.is(value.inf, Infinity), true);
+	assert.equal(Object.is(value.negativeZero, -0), true);
+	assert.equal(value.big, 42n);
+	assert.equal("missing" in value && value.missing === undefined, true);
+	assert.equal(value.date.getTime(), 1700000000000);
+	assert.equal(value.re.source, "board-\\d+");
+	assert.equal(value.re.flags, "gi");
+	assert.equal(value.map.get("k"), "v");
+	assert.equal(value.set.has("s1"), true);
+}
+
 const harness = `
 import * as api from './web/src/board-draft-store';
+import { exportRawBoardDraftRow } from './web/src/board-draft-reader';
 import * as board from './web/src/roles-state';
 import { setAppSend } from './web/src/app-globals';
 import { setAppAdmit } from './web/src/app-admit';
@@ -136,7 +317,93 @@ window.__draft = {
    });
   } finally { database.close(); }
  },
- async rawSnapshot() { return JSON.stringify((await native.scan()).rows); },
+ async rawSnapshot() {
+  const rows = (await native.scan()).rows;
+  return JSON.stringify(await Promise.all(rows.map(row => exportRawBoardDraftRow(row))));
+ },
+ async seedBinaryRows() {
+  await this.raw('raw-equal-visible-a', {
+   view: new Uint8Array(new Uint8Array([1, 7, 8, 4]).buffer, 1, 2),
+  });
+  await this.raw('raw-equal-visible-b', {
+   view: new Uint8Array(new Uint8Array([9, 7, 8, 6, 5]).buffer, 1, 2),
+  });
+  const shared1 = new Uint8Array([10, 20, 30, 40, 50, 60, 70, 80]).buffer;
+  const sliced1 = new Uint8Array(shared1, 2, 3);
+  const viewFirst = {
+   slicedUint8: sliced1,
+   dataView: new DataView(shared1, 1, 5),
+   sharedUint16: new Uint16Array(shared1, 2, 2),
+   backing: shared1,
+   slicedAlias: sliced1,
+   nan: NaN,
+   inf: Infinity,
+   negativeZero: -0,
+   big: 42n,
+   missing: undefined,
+   date: new Date(1700000000000),
+   re: /board-\\d+/gi,
+   map: new Map([['k', 'v']]),
+   set: new Set(['s1']),
+  };
+  viewFirst.self = viewFirst;
+  await this.raw('raw-shared-binary-view-first', viewFirst);
+  const shared2 = new Uint8Array([10, 20, 30, 40, 50, 60, 70, 80]).buffer;
+  const sliced2 = new Uint8Array(shared2, 2, 3);
+  const backingFirst = {
+   backing: shared2,
+   slicedUint8: sliced2,
+   dataView: new DataView(shared2, 1, 5),
+   sharedUint16: new Uint16Array(shared2, 2, 2),
+   slicedAlias: sliced2,
+   nan: NaN,
+   inf: Infinity,
+   negativeZero: -0,
+   big: 42n,
+   missing: undefined,
+   date: new Date(1700000000000),
+   re: /board-\\d+/gi,
+   map: new Map([['k', 'v']]),
+   set: new Set(['s1']),
+  };
+  backingFirst.self = backingFirst;
+  await this.raw('raw-shared-binary-backing-first', backingFirst);
+ },
+ async probeBinaryRows() {
+  const equalA = (await this.rawProbe('raw-equal-visible-a')).value;
+  const equalB = (await this.rawProbe('raw-equal-visible-b')).value;
+  const shared = (await this.rawProbe('raw-shared-binary-view-first')).value;
+  return {
+   equalA: {
+    visible: [...equalA.view],
+    backing: [...new Uint8Array(equalA.view.buffer)],
+    byteOffset: equalA.view.byteOffset,
+    byteLength: equalA.view.byteLength,
+   },
+   equalB: {
+    visible: [...equalB.view],
+    backing: [...new Uint8Array(equalB.view.buffer)],
+    byteOffset: equalB.view.byteOffset,
+    byteLength: equalB.view.byteLength,
+   },
+   shared: {
+    backing: [...new Uint8Array(shared.backing)],
+    slicedVisible: [...shared.slicedUint8],
+    slicedOffset: shared.slicedUint8.byteOffset,
+    slicedLength: shared.slicedUint8.byteLength,
+    dataViewOffset: shared.dataView.byteOffset,
+    dataViewLength: shared.dataView.byteLength,
+    uint16Offset: shared.sharedUint16.byteOffset,
+    uint16ByteLength: shared.sharedUint16.byteLength,
+    sameBuffer:
+     shared.slicedUint8.buffer === shared.dataView.buffer &&
+     shared.slicedUint8.buffer === shared.sharedUint16.buffer &&
+     shared.slicedUint8.buffer === shared.backing,
+    sameAlias: shared.slicedAlias === shared.slicedUint8,
+    sameSelf: shared.self === shared,
+   },
+  };
+ },
  async missingProbe(name) {
   const before = await indexedDB.databases();
   const result = await api.createBoardDraftStore(api.createBoardDraftIndexedDB(indexedDB, {existingOnly:true,databaseName:name})).inspect();
@@ -215,10 +482,30 @@ try {
 			.sort(),
 		["board-draft-reader.ts", "board-draft-store.ts"],
 	);
-	const html = readFileSync(join(REPO, "web/board-draft-recovery.html"), "utf8").replace(
-		"./src/board-draft-reader.ts",
-		"/reader.js",
-	);
+	const oldReaderBlob = execFileSync("git", ["rev-parse", `${PINNED_OLD_COMMIT}:web/src/board-draft-reader.ts`], {
+		cwd: REPO,
+		encoding: "utf8",
+	}).trim();
+	assert.equal(oldReaderBlob, PINNED_OLD_READER_BLOB);
+	const oldReaderSource = execFileSync("git", ["show", `${PINNED_OLD_COMMIT}:web/src/board-draft-reader.ts`], {
+		cwd: REPO,
+		encoding: "utf8",
+	});
+	const oldReader = await build({
+		stdin: {
+			contents: oldReaderSource,
+			loader: "ts",
+			resolveDir: join(REPO, "web/src"),
+			sourcefile: "board-draft-reader-a875d2bc.ts",
+		},
+		bundle: true,
+		write: false,
+		format: "esm",
+		logLevel: "silent",
+	});
+	const rawRecoveryHtml = readFileSync(join(REPO, "web/board-draft-recovery.html"), "utf8");
+	const html = rawRecoveryHtml.replace("./src/board-draft-reader.ts", "/reader.js");
+	const oldHtml = rawRecoveryHtml.replace("./src/board-draft-reader.ts", "/reader-old.js");
 	server = createServer((req, res) => {
 		if (req.url === "/fixture.js") {
 			if (!serveFixtureBundle) {
@@ -231,9 +518,15 @@ try {
 		} else if (req.url === "/reader.js") {
 			res.setHeader("content-type", "text/javascript");
 			res.end(reader.outputFiles[0].contents);
+		} else if (req.url === "/reader-old.js") {
+			res.setHeader("content-type", "text/javascript");
+			res.end(oldReader.outputFiles[0].contents);
 		} else if (req.url === "/board-draft-recovery.html") {
 			res.setHeader("content-type", "text/html");
 			res.end(html);
+		} else if (req.url === "/board-draft-recovery-old.html") {
+			res.setHeader("content-type", "text/html");
+			res.end(oldHtml);
 		} else {
 			res.setHeader("content-type", "text/html");
 			res.end(
@@ -762,6 +1055,121 @@ try {
 				serveFixtureBundle = true;
 				await readerPage.close();
 			}
+		},
+	);
+
+	await check(
+		"standalone reader downloads preserve full backing buffers, view offsets/lengths and shared-buffer topology after native IndexedDB round trip while app bundle is absent",
+		async () => {
+			await page.evaluate(() => window.__draft.seedBinaryRows());
+			await reload();
+			const beforeBinaryProbe = await page.evaluate(() => window.__draft.probeBinaryRows());
+			assert.deepEqual(beforeBinaryProbe, {
+				equalA: { visible: [7, 8], backing: [1, 7, 8, 4], byteOffset: 1, byteLength: 2 },
+				equalB: { visible: [7, 8], backing: [9, 7, 8, 6, 5], byteOffset: 1, byteLength: 2 },
+				shared: {
+					backing: [10, 20, 30, 40, 50, 60, 70, 80],
+					slicedVisible: [30, 40, 50],
+					slicedOffset: 2,
+					slicedLength: 3,
+					dataViewOffset: 1,
+					dataViewLength: 5,
+					uint16Offset: 2,
+					uint16ByteLength: 4,
+					sameBuffer: true,
+					sameAlias: true,
+					sameSelf: true,
+				},
+			});
+			const beforeSnapshot = await page.evaluate(() => window.__draft.rawSnapshot());
+			serveFixtureBundle = false;
+			const readerPage = await context.newPage();
+			try {
+				const absentResponse = await fetch(`${url}/fixture.js`);
+				assert.equal(absentResponse.status, 404, "app bundle must be absent while standalone reader runs");
+				await readerPage.goto(`${url}/board-draft-recovery.html`);
+				await readerPage.waitForSelector('[data-board-reader-status="corrupt"]');
+
+				async function downloadRawRow(pageInstance, key) {
+					const button = pageInstance
+						.locator("section")
+						.filter({ hasText: key })
+						.getByRole("button", { name: /^Export RAW UNKNOWN / });
+					const downloadPromise = pageInstance.waitForEvent("download");
+					await button.click();
+					return readFileSync(await (await downloadPromise).path(), "utf8");
+				}
+
+				const downloadEqualA = await downloadRawRow(readerPage, "raw-equal-visible-a");
+				const downloadEqualB = await downloadRawRow(readerPage, "raw-equal-visible-b");
+				verifyEqualVisiblePairOracle(downloadEqualA, downloadEqualB);
+
+				const downloadSharedViewFirst = await downloadRawRow(readerPage, "raw-shared-binary-view-first");
+				const downloadSharedBackingFirst = await downloadRawRow(readerPage, "raw-shared-binary-backing-first");
+				verifySharedBinaryGraphOracle(downloadSharedViewFirst);
+				verifySharedBinaryGraphOracle(downloadSharedBackingFirst);
+
+				assert.deepEqual(await readerPage.evaluate(() => window.__storageWatch), { writes: 0, schemas: 0, actions: 0 });
+			} finally {
+				serveFixtureBundle = true;
+				await readerPage.close();
+			}
+			assert.deepEqual(await page.evaluate(() => window.__draft.probeBinaryRows()), beforeBinaryProbe);
+			assert.equal(await page.evaluate(() => window.__draft.rawSnapshot()), beforeSnapshot);
+		},
+	);
+
+	await check(
+		"negative control: genuine pinned a875d2bc standalone reader loads and downloads valid JSON from the same native IndexedDB rows with app bundle absent, but fails equal-visible and shared-buffer preservation oracles",
+		async () => {
+			const beforeBinaryProbe = await page.evaluate(() => window.__draft.probeBinaryRows());
+			serveFixtureBundle = false;
+			const oldReaderPage = await context.newPage();
+			try {
+				const absentResponse = await fetch(`${url}/fixture.js`);
+				assert.equal(absentResponse.status, 404, "app bundle must be absent while old standalone reader runs");
+				await oldReaderPage.goto(`${url}/board-draft-recovery-old.html`);
+				await oldReaderPage.waitForSelector('[data-board-reader-status="corrupt"]');
+
+				async function downloadOldRawRow(key) {
+					const button = oldReaderPage
+						.locator("section")
+						.filter({ hasText: key })
+						.getByRole("button", { name: /^Export RAW UNKNOWN / });
+					const downloadPromise = oldReaderPage.waitForEvent("download");
+					await button.click();
+					return readFileSync(await (await downloadPromise).path(), "utf8");
+				}
+
+				const oldEqualA = await downloadOldRawRow("raw-equal-visible-a");
+				const oldEqualB = await downloadOldRawRow("raw-equal-visible-b");
+				const oldShared = await downloadOldRawRow("raw-shared-binary-view-first");
+
+				// Old standalone reader succeeded in loading, scanning IndexedDB, and downloading valid raw-graph JSON
+				assert.equal(JSON.parse(oldEqualA).format, "board-purpose-store-raw-graph-v1");
+				assert.equal(JSON.parse(oldEqualB).format, "board-purpose-store-raw-graph-v1");
+				assert.equal(JSON.parse(oldShared).format, "board-purpose-store-raw-graph-v1");
+
+				// Yet the old standalone reader collapsed both unequal backing buffers into identical value subgraphs
+				assert.deepEqual(extractExportedValueNode(oldEqualA), extractExportedValueNode(oldEqualB));
+				assert.throws(
+					() => verifyEqualVisiblePairOracle(oldEqualA, oldEqualB),
+					/collapsed into identical exported value nodes/,
+				);
+				assert.throws(
+					() => verifySharedBinaryGraphOracle(oldShared),
+					/missing backing buffer or byteOffset\/byteLength metadata/,
+				);
+				assert.deepEqual(await oldReaderPage.evaluate(() => window.__storageWatch), {
+					writes: 0,
+					schemas: 0,
+					actions: 0,
+				});
+			} finally {
+				serveFixtureBundle = true;
+				await oldReaderPage.close();
+			}
+			assert.deepEqual(await page.evaluate(() => window.__draft.probeBinaryRows()), beforeBinaryProbe);
 		},
 	);
 
