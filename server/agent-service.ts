@@ -3217,6 +3217,15 @@ function isPortActive(port: DurableSessionPort | null | undefined): port is Dura
 	return true;
 }
 
+function resolveActiveDurablePort(
+	self: { activeDurablePort?: () => DurableSessionPort | null } | null | undefined,
+): DurableSessionPort | null {
+	if (self && typeof self.activeDurablePort === "function") {
+		return self.activeDurablePort();
+	}
+	return ClientSession.getDurableSessionPort();
+}
+
 interface DurableCustomEntryInput {
 	customType: string;
 	content?: unknown;
@@ -3356,19 +3365,17 @@ function wrapDurableSummaryAsHandle(port: DurableSessionPort, summary: DurableSe
 		},
 		getEntries() {
 			try {
-				return port.getEntries(summary.sessionKey).map((e) =>
-					e.message ? { ...e, message: normalizeDurableMessageShape(e.message) } : e,
-				);
+				return port
+					.getEntries(summary.sessionKey)
+					.map((e) => (e.message ? { ...e, message: normalizeDurableMessageShape(e.message) } : e));
 			} catch {
 				return [];
 			}
 		},
 		async appendCustomEntry(entry) {
-			await port.appendCustomEntry(
-				entry.customType,
-				entry.details !== undefined ? entry.details : entry.content,
-				{ sessionKey: summary.sessionKey },
-			);
+			await port.appendCustomEntry(entry.customType, entry.details !== undefined ? entry.details : entry.content, {
+				sessionKey: summary.sessionKey,
+			});
 		},
 		subscribe(listener) {
 			return port.subscribe(listener, summary.sessionKey);
@@ -3425,9 +3432,17 @@ function createEphemeralDurableHandle(cwd: string, sessionId: string): DurableSe
 	};
 }
 
-function parseProviderModel(
-	raw: string | { provider?: string; id?: string; name?: string } | null | undefined,
-): { provider: string; id: string; name: string; reasoning: boolean; input: ("text" | "image")[]; contextWindow: number; maxTokens: number } | undefined {
+function parseProviderModel(raw: string | { provider?: string; id?: string; name?: string } | null | undefined):
+	| {
+			provider: string;
+			id: string;
+			name: string;
+			reasoning: boolean;
+			input: ("text" | "image")[];
+			contextWindow: number;
+			maxTokens: number;
+	  }
+	| undefined {
 	if (!raw) return undefined;
 	if (typeof raw === "object" && raw.provider && raw.id) {
 		return {
@@ -3472,9 +3487,7 @@ function createDurableRuntimeWrapper(
 	const listeners = new Set<(event: AgentSessionEvent) => void>();
 	let cachedMessages: AgentMessage[] = [...initialMessages];
 	let sessionName: string | undefined;
-	let currentModel =
-		parseProviderModel(handle.model) ??
-		parseProviderModel("anthropic/claude-sonnet-4-5")!;
+	let currentModel = parseProviderModel(handle.model) ?? parseProviderModel("anthropic/claude-sonnet-4-5")!;
 	let currentThinking: string = handle.thinkingLevel || "medium";
 	let streamingFlag = Boolean(handle.isStreaming);
 	let streamingAssistantMsg: AgentMessage | undefined;
@@ -3482,7 +3495,9 @@ function createDurableRuntimeWrapper(
 	const followUpQueue: string[] = [];
 	let entrySeq = 0;
 
-	const appendEntry = (entry: Omit<DurableBranchEntry, "id" | "parentId" | "timestamp"> & { timestamp?: string }): DurableBranchEntry => {
+	const appendEntry = (
+		entry: Omit<DurableBranchEntry, "id" | "parentId" | "timestamp"> & { timestamp?: string },
+	): DurableBranchEntry => {
 		const id = `de-${++entrySeq}-${Date.now()}`;
 		const parentId = branchEntries.length > 0 ? branchEntries[branchEntries.length - 1]!.id : null;
 		const full: DurableBranchEntry = {
@@ -3563,8 +3578,10 @@ function createDurableRuntimeWrapper(
 			return;
 		}
 		if (evType === "message_start") {
-			const msg = (ev.message as unknown as AgentMessage | undefined) ??
-				(payload.message as AgentMessage | undefined) ?? ({
+			const msg =
+				(ev.message as unknown as AgentMessage | undefined) ??
+				(payload.message as AgentMessage | undefined) ??
+				({
 					role: String(payload.role ?? "assistant"),
 					content: Array.isArray(payload.content)
 						? payload.content
@@ -3581,14 +3598,10 @@ function createDurableRuntimeWrapper(
 		if (evType === "message_update" || evType === "message_delta") {
 			streamingFlag = true;
 			const msgContent = ev.message?.content;
-			const delta = String(
-				payload.delta ??
-					payload.text ??
-					(typeof msgContent === "string" ? msgContent : ""),
-			);
+			const delta = String(payload.delta ?? payload.text ?? (typeof msgContent === "string" ? msgContent : ""));
 			const prevText =
 				streamingAssistantMsg && Array.isArray((streamingAssistantMsg as { content?: unknown[] }).content)
-					? String(((streamingAssistantMsg as { content: Array<{ text?: string }> }).content[0]?.text) ?? "")
+					? String((streamingAssistantMsg as { content: Array<{ text?: string }> }).content[0]?.text ?? "")
 					: "";
 			const nextText = typeof payload.fullText === "string" ? payload.fullText : prevText + delta;
 			const ts = (streamingAssistantMsg as { timestamp?: number } | undefined)?.timestamp ?? Date.now();
@@ -3844,7 +3857,7 @@ function createDurableRuntimeWrapper(
 					? msg
 					: msg && typeof msg === "object" && "content" in msg
 						? typeof (msg as { content?: unknown }).content === "string"
-							? ((msg as { content: string }).content)
+							? (msg as { content: string }).content
 							: Array.isArray((msg as { content?: unknown[] }).content)
 								? (msg as { content: Array<{ text?: string }> }).content.map((c) => c.text ?? "").join("\n")
 								: ""
@@ -4169,7 +4182,9 @@ function createDurableRuntimeWrapper(
 						? entry.content
 						: Array.isArray(entry.content)
 							? entry.content
-									.map((c) => (c && typeof c === "object" && "text" in c ? String((c as { text?: unknown }).text ?? "") : ""))
+									.map((c) =>
+										c && typeof c === "object" && "text" in c ? String((c as { text?: unknown }).text ?? "") : "",
+									)
 									.join("\n")
 							: "";
 				if (opts.deliverAs === "steer") await handle.steer(text);
@@ -5968,8 +5983,7 @@ export class ClientSession {
 	): Promise<ClientSession> {
 		return ClientSession.sessionOpenChain(async () => {
 			// An opener may have finished while this browser was waiting for the gate.
-			const existing =
-				opts?.adoptId ?? (!opts?.blank ? pickAdoptTarget(cwd, ClientSession.openConversations()) : null);
+			const existing = opts?.adoptId ?? (!opts?.blank ? pickAdoptTarget(cwd, ClientSession.openConversations()) : null);
 			const cs = await ClientSession.createNow(
 				clientId,
 				cwd,
@@ -6016,9 +6030,7 @@ export class ClientSession {
 				handle = wrapDurableSummaryAsHandle(durablePort, created);
 			} else {
 				const existingSessions = await durablePort.list({ cwd });
-				const sorted = [...existingSessions].sort(
-					(a, b) => durableSummaryUpdatedMs(b) - durableSummaryUpdatedMs(a),
-				);
+				const sorted = [...existingSessions].sort((a, b) => durableSummaryUpdatedMs(b) - durableSummaryUpdatedMs(a));
 				if (sorted.length > 0) {
 					const target = sorted[0]!;
 					initialRoleId = durableSummaryRoleId(durablePort, target);
@@ -12656,8 +12668,11 @@ export class ClientSession {
 				}
 			};
 
-			const durablePort = this.activeDurablePort();
-			const coordinator = durablePort ? this.activePendingRecoveryCoordinator() : null;
+			const durablePort = resolveActiveDurablePort(this);
+			const coordinator =
+				durablePort && typeof this.activePendingRecoveryCoordinator === "function"
+					? this.activePendingRecoveryCoordinator()
+					: null;
 			const idempotencyKey = receipt.id ?? `prompt:${conv.id}:${Date.now()}:${randomUUID()}`;
 			if (coordinator && receipt.id) {
 				const curModel = s.model ? `${s.model.provider}/${s.model.id}` : undefined;
@@ -13322,7 +13337,7 @@ export class ClientSession {
 		try {
 			const conversationId = this.nextConversationId();
 			const terminals = this.makeTerminalManager(conversationId, this.cwd);
-			const durablePort = this.activeDurablePort();
+			const durablePort = resolveActiveDurablePort(this);
 			if (durablePort) {
 				const handle = ephemeral
 					? createEphemeralDurableHandle(this.cwd, `ephemeral-${conversationId}`)
@@ -14898,7 +14913,7 @@ export class ClientSession {
 	/** session-index: History's rows from the server's saved index (shared by every window; reads only what
 	 *  changed since the last listing). Same rows and order as pi's listAll/list, without the full text. */
 	private async loadSessionInfos(): Promise<SessionInfo[]> {
-		const durablePort = this.activeDurablePort();
+		const durablePort = resolveActiveDurablePort(this);
 		if (durablePort) {
 			const summaries = await durablePort.list(historyScope() === "all" ? undefined : { cwd: this.cwd });
 			return summaries.map((s) => this.durableSummaryToSessionInfo(durablePort, s));
@@ -14938,9 +14953,8 @@ export class ClientSession {
 			if (firstUser) {
 				if (typeof firstUser.content === "string") firstMsg = firstUser.content;
 				else if (Array.isArray(firstUser.content)) {
-					const textBlock = firstUser.content.find(
-						(b) => b && typeof b === "object" && "text" in b,
-					) as { text?: string } | undefined;
+					const textBlock = firstUser.content.find((b) => b && typeof b === "object" && "text" in b) as
+						{ text?: string } | undefined;
 					if (textBlock?.text) firstMsg = textBlock.text;
 				}
 			}
@@ -14962,7 +14976,7 @@ export class ClientSession {
 
 	/** Global search needs every chat's full text (`allMessagesText`): pi reads it, kept a few seconds. */
 	private async loadSessionInfosWithText(): Promise<SessionInfo[]> {
-		const durablePort = this.activeDurablePort();
+		const durablePort = resolveActiveDurablePort(this);
 		if (durablePort) {
 			const summaries = await durablePort.list(historyScope() === "all" ? undefined : { cwd: this.cwd });
 			return summaries.map((s) => this.durableSummaryToSessionInfo(durablePort, s));
@@ -15107,7 +15121,7 @@ export class ClientSession {
 	private async attachIdentities(rows: SessionSummary[], resend: () => void): Promise<void> {
 		const { identities } = identityRegistry();
 		if (rows.length === 0 || identities.length === 0) return;
-		const durablePort = this.activeDurablePort();
+		const durablePort = resolveActiveDurablePort(this);
 		if (durablePort) {
 			const summaries = await durablePort.list().catch(() => []);
 			for (const row of rows) {
@@ -15178,7 +15192,7 @@ export class ClientSession {
 	 */
 	async deleteSession(path: string): Promise<void> {
 		try {
-			const durablePort = this.activeDurablePort();
+			const durablePort = resolveActiveDurablePort(this);
 			if (durablePort) {
 				const holdsTarget = (conv: Conversation): boolean =>
 					sameSessionRef(conv.session.sessionFile, path) || sameSessionRef(conv.session.sessionId, path);
@@ -15335,7 +15349,7 @@ export class ClientSession {
 		try {
 			const trimmed = (name ?? "").trim();
 			if (!trimmed) return;
-			const durablePort = this.activeDurablePort();
+			const durablePort = resolveActiveDurablePort(this);
 			if (durablePort) {
 				const convId = this.conversationIdBySessionFile(path);
 				const conv = convId ? this.convs.get(convId) : undefined;
@@ -15352,11 +15366,7 @@ export class ClientSession {
 					);
 					const targetSessionKey =
 						matched?.sessionKey ?? (path.startsWith("durable://") ? path.slice("durable://".length) : path);
-					await durablePort.appendCustomEntry(
-						"session_info",
-						{ name: trimmed },
-						{ sessionKey: targetSessionKey },
-					);
+					await durablePort.appendCustomEntry("session_info", { name: trimmed }, { sessionKey: targetSessionKey });
 				}
 				this.invalidateSessionInfos();
 				await this.refreshSessions();
@@ -15983,7 +15993,7 @@ export class ClientSession {
 		let openedRuntime: AgentSessionRuntime | null = null;
 		let openedTerminals: TerminalManager | null = null;
 		try {
-			const durablePort = this.activeDurablePort();
+			const durablePort = resolveActiveDurablePort(this);
 			if (durablePort) {
 				for (const conv of this.convs.values()) {
 					if (sameSessionRef(conv.session.sessionFile, path) || sameSessionRef(conv.session.sessionId, path)) {
@@ -16443,7 +16453,7 @@ export class ClientSession {
 		const targetLeafId = position === "at" ? entry.id : entry.parentId;
 
 		try {
-			const durablePort = this.activeDurablePort();
+			const durablePort = resolveActiveDurablePort(this);
 			if (durablePort) {
 				const prevModel = targetConv.session.agent.state.model ?? null;
 				const prevThinking = targetConv.session.thinkingLevel ?? null;
@@ -16484,7 +16494,12 @@ export class ClientSession {
 					this.conv.listed = oldListed;
 					terminals.killAll();
 					await runtime.dispose();
-					this.emit({ type: "notice", level: "warning", text: OPEN_CHATS_FULL_MESSAGE, textEn: OPEN_CHATS_FULL_MESSAGE });
+					this.emit({
+						type: "notice",
+						level: "warning",
+						text: OPEN_CHATS_FULL_MESSAGE,
+						textEn: OPEN_CHATS_FULL_MESSAGE,
+					});
 					return;
 				}
 				this.convs.set(conversationId, newConv);
@@ -18061,7 +18076,7 @@ export class AgentService {
 
 	async resolveRoleHomeChat(role: string): Promise<{ ok: true; file: string } | { ok: false; error: string }> {
 		const identities = identityRegistry().identities;
-		const durablePort = this.activeDurablePort();
+		const durablePort = resolveActiveDurablePort(this);
 		if (durablePort) {
 			for (const cs of this.clients.values()) {
 				const openConv = cs.findOpenConversationByRole(role);
@@ -18094,7 +18109,7 @@ export class AgentService {
 
 	private async chatTranscriptExists(file: string): Promise<boolean> {
 		if (existsSync(file)) return true;
-		const durablePort = this.activeDurablePort();
+		const durablePort = resolveActiveDurablePort(this);
 		if (!durablePort) return false;
 		if (file.startsWith("durable://")) return true;
 		for (const cs of this.clients.values()) {
@@ -19068,7 +19083,10 @@ export class AgentService {
 	async sendToRole(role: string, text: string, opts: RoleSendOptions = {}): Promise<RoleSendResult> {
 		const body = String(text ?? "");
 		if (!body.trim()) return { ok: false, error: "the message is empty" };
-		const home = await this.resolveRoleHomeChat(role);
+		const home =
+			typeof this.resolveRoleHomeChat === "function"
+				? await this.resolveRoleHomeChat(role)
+				: roleHomeChat(role, identityRegistry().identities);
 		if (!home.ok) return home;
 		const sendId = `rs-${randomUUID()}`;
 		const cause: RoleTurnCause = opts.via === "telegram" ? "telegram" : "plugin";
@@ -19103,7 +19121,9 @@ export class AgentService {
 		return this.roleMessagesChain(async (): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> => {
 			if (this.carryOnGate) await this.carryOnGate.catch(() => {});
 			if (this.quiesced) return { ok: false, error: "the server is restarting" };
-			if (!(await this.chatTranscriptExists(file))) return { ok: false, error: "the chat's transcript is gone" };
+			const transcriptOk =
+				typeof this.chatTranscriptExists === "function" ? await this.chatTranscriptExists(file) : existsSync(file);
+			if (!transcriptOk) return { ok: false, error: "the chat's transcript is gone" };
 			const ackId = `rm:${randomUUID()}`;
 			let answer: (a: { ok: boolean; reason?: string }) => void = () => {};
 			const receipt = new Promise<{ ok: boolean; reason?: string }>((r) => {
@@ -19142,7 +19162,9 @@ export class AgentService {
 		return this.roleMessagesChain(async (): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> => {
 			if (this.carryOnGate) await this.carryOnGate.catch(() => {});
 			if (this.quiesced) return { ok: false, error: "the server is restarting" };
-			if (!(await this.chatTranscriptExists(file))) return { ok: false, error: "the chat's transcript is gone" };
+			const transcriptOk =
+				typeof this.chatTranscriptExists === "function" ? await this.chatTranscriptExists(file) : existsSync(file);
+			if (!transcriptOk) return { ok: false, error: "the chat's transcript is gone" };
 			const sink = (_msg: ServerMessage): void => {};
 			try {
 				const cs = await this.attach(ROLE_MESSAGES_CLIENT_ID, sink);

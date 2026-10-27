@@ -354,8 +354,7 @@ export async function streamParseJsonlSession(filePath: string): Promise<ParsedS
 					: entries.length > 0
 						? entries[entries.length - 1].entryId
 						: null;
-		const timestamp =
-			typeof obj.timestamp === "string" && obj.timestamp.trim() ? obj.timestamp : createdAtIso;
+		const timestamp = typeof obj.timestamp === "string" && obj.timestamp.trim() ? obj.timestamp : createdAtIso;
 
 		let customType: string | null = null;
 		if (type === "custom" && typeof obj.customType === "string" && obj.customType.trim()) {
@@ -525,9 +524,7 @@ export async function streamParseJsonlSession(filePath: string): Promise<ParsedS
  * Take a verified pre-migration snapshot/manifest of `.jsonl` session files and
  * role `identity.json` files, preserving all originals untouched on disk.
  */
-export async function createPreMigrationSnapshot(
-	options: DurableJsonlMigrationOptions,
-): Promise<PreMigrationManifest> {
+export async function createPreMigrationSnapshot(options: DurableJsonlMigrationOptions): Promise<PreMigrationManifest> {
 	const sessionsDir = resolve(
 		options.sessionsDir ??
 			(options.sessionFiles && options.sessionFiles.length > 0
@@ -551,9 +548,7 @@ export async function createPreMigrationSnapshot(
 	const files: PreMigrationFileEntry[] = [];
 	for (const filePath of sessionFiles) {
 		const parsed = await streamParseJsonlSession(filePath);
-		const rel = relative(sessionsDir, filePath).startsWith("..")
-			? basename(filePath)
-			: relative(sessionsDir, filePath);
+		const rel = relative(sessionsDir, filePath).startsWith("..") ? basename(filePath) : relative(sessionsDir, filePath);
 		const backupPath = join(filesBackupRoot, rel);
 		mkdirSync(dirname(backupPath), { recursive: true });
 		copyFileSync(filePath, backupPath);
@@ -644,9 +639,7 @@ export async function createPreMigrationSnapshot(
  */
 function importParsedSessionIntoDb(db: DatabaseSync, parsed: ParsedSessionFile): MigratedSessionSummary {
 	const durableKey = toDurableSessionKey(parsed.sessionId);
-	const createdMs = Number.isFinite(Date.parse(parsed.createdAtIso))
-		? Date.parse(parsed.createdAtIso)
-		: Date.now();
+	const createdMs = Number.isFinite(Date.parse(parsed.createdAtIso)) ? Date.parse(parsed.createdAtIso) : Date.now();
 	const lastEntryIso =
 		parsed.entries.length > 0 ? parsed.entries[parsed.entries.length - 1].timestamp : parsed.createdAtIso;
 	const updatedMs = Number.isFinite(Date.parse(lastEntryIso)) ? Date.parse(lastEntryIso) : createdMs;
@@ -718,9 +711,7 @@ function importParsedSessionIntoDb(db: DatabaseSync, parsed: ParsedSessionFile):
 				session_id, entry_id, parent_id, entry_type, timestamp, data_json
 			) VALUES (?, ?, ?, ?, ?, ?)`,
 		);
-		const insertRecordIdStmt = db.prepare(
-			"INSERT OR IGNORE INTO record_ids (id, record_type) VALUES (?, 'entry')",
-		);
+		const insertRecordIdStmt = db.prepare("INSERT OR IGNORE INTO record_ids (id, record_type) VALUES (?, 'entry')");
 		const insertPiDurableEntryStmt = db.prepare(
 			"INSERT INTO entries (id, conversation_id, head, commit_seq, record) VALUES (?, ?, ?, ?, ?)",
 		);
@@ -814,13 +805,7 @@ function importParsedSessionIntoDb(db: DatabaseSync, parsed: ParsedSessionFile):
 				`INSERT OR REPLACE INTO durable_checkpoints (
 					session_id, checkpoint_id, leaf_entry_id, state_json, created_at
 				) VALUES (?, ?, ?, ?, ?)`,
-			).run(
-				parsed.sessionId,
-				`acp-${parsed.sessionId}`,
-				parsed.activeLeafEntryId,
-				compactionStateJson,
-				updatedMs,
-			);
+			).run(parsed.sessionId, `acp-${parsed.sessionId}`, parsed.activeLeafEntryId, compactionStateJson, updatedMs);
 		}
 
 		db.exec("COMMIT");
@@ -913,8 +898,7 @@ export async function verifyMigration(options: {
 			const sessionRow = db
 				.prepare("SELECT session_id, cwd, entry_count, leaf_entry_id FROM durable_sessions WHERE session_id = ?")
 				.get(fileEntry.sessionId) as
-				| { session_id: string; cwd: string; entry_count: number; leaf_entry_id: string | null }
-				| undefined;
+				{ session_id: string; cwd: string; entry_count: number; leaf_entry_id: string | null } | undefined;
 
 			if (!sessionRow) {
 				mismatches.push(`Missing durable_sessions row for session ${fileEntry.sessionId}`);
@@ -1080,8 +1064,7 @@ export async function rollbackToJsonl(options: {
 
 	for (const fileEntry of manifest.files) {
 		try {
-			const needsRestore =
-				!existsSync(fileEntry.filePath) || sha256FileSync(fileEntry.filePath) !== fileEntry.sha256;
+			const needsRestore = !existsSync(fileEntry.filePath) || sha256FileSync(fileEntry.filePath) !== fileEntry.sha256;
 			if (needsRestore) {
 				if (!fileEntry.backupPath || !existsSync(fileEntry.backupPath)) {
 					errors.push(`Backup missing for ${fileEntry.filePath}`);
@@ -1101,17 +1084,14 @@ export async function rollbackToJsonl(options: {
 			}
 			if (fileEntry.sidecarPath && fileEntry.sidecarBackupPath && existsSync(fileEntry.sidecarBackupPath)) {
 				const sidecarNeedsRestore =
-					!existsSync(fileEntry.sidecarPath) ||
-					sha256FileSync(fileEntry.sidecarPath) !== fileEntry.sidecarSha256;
+					!existsSync(fileEntry.sidecarPath) || sha256FileSync(fileEntry.sidecarPath) !== fileEntry.sidecarSha256;
 				if (sidecarNeedsRestore) {
 					copyFileSync(fileEntry.sidecarBackupPath, fileEntry.sidecarPath);
 				}
 			}
 		} catch (err) {
 			verifiedSha256 = false;
-			errors.push(
-				`Failed to restore ${fileEntry.filePath}: ${err instanceof Error ? err.message : String(err)}`,
-			);
+			errors.push(`Failed to restore ${fileEntry.filePath}: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 

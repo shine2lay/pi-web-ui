@@ -156,9 +156,9 @@ describe("Wave 3.3 (#603): clean-environment durable bootstrap + lossless JSONL 
 			const userVersion = db.prepare("PRAGMA user_version").get() as { user_version: number };
 			expect(userVersion.user_version).toBe(CURRENT_DURABLE_SCHEMA_VERSION);
 
-			const schemaVer = db
-				.prepare("SELECT version FROM durable_schema WHERE singleton = 1")
-				.get() as { version: number };
+			const schemaVer = db.prepare("SELECT version FROM durable_schema WHERE singleton = 1").get() as {
+				version: number;
+			};
 			expect(schemaVer.version).toBe(CURRENT_DURABLE_SCHEMA_VERSION);
 
 			for (const role of result.bootstrappedRoles) {
@@ -214,11 +214,9 @@ describe("Wave 3.3 (#603): clean-environment durable bootstrap + lossless JSONL 
 
 		const cliHome = makeTempHome("pi-durable-cli-");
 		const scriptPath = fileURLToPath(new URL("../../scripts/bootstrap-durable-env.mjs", import.meta.url));
-		const stdout = execFileSync(
-			process.execPath,
-			[scriptPath, "--home-dir", cliHome, "--seed-roles", "ops,qa"],
-			{ encoding: "utf8" },
-		);
+		const stdout = execFileSync(process.execPath, [scriptPath, "--home-dir", cliHome, "--seed-roles", "ops,qa"], {
+			encoding: "utf8",
+		});
 		const output = JSON.parse(stdout) as {
 			dbPath: string;
 			jsonlFilesCreated: number;

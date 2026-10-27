@@ -300,11 +300,7 @@ describe("agent-service DurableSessionPort wiring (Wave 3.4 #604)", () => {
 
 			await port.steer("steer-note", { sessionKey: migrated.sessionKey });
 			await port.followUp("followup-note", { sessionKey: migrated.sessionKey });
-			await port.appendCustomEntry(
-				"custom_tag",
-				{ tag: "verified" },
-				{ sessionKey: migrated.sessionKey },
-			);
+			await port.appendCustomEntry("custom_tag", { tag: "verified" }, { sessionKey: migrated.sessionKey });
 			await cs.abort();
 
 			const entries = port.getEntries(migrated.sessionKey);

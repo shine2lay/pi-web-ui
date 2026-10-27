@@ -300,11 +300,7 @@ describe("Wave 3.1 @earendil-works/pi-durable SQLite WAL session driver", () => 
 			expect(recoveredToolInvocations).toBe(1);
 
 			const messages = driver2.getMessages("session-crash-resume");
-			expect(messages.map((m) => m.role)).toEqual([
-				"user",
-				"toolResult",
-				"assistant",
-			]);
+			expect(messages.map((m) => m.role)).toEqual(["user", "toolResult", "assistant"]);
 			expect(messages[2]?.content).toBe("Deployment completed after recovery");
 
 			// Subsequent turns continue cleanly on the recovered session.
@@ -343,10 +339,7 @@ describe("Wave 3.1 @earendil-works/pi-durable SQLite WAL session driver", () => 
 				thinkingLevel: "low",
 			});
 
-			await driver1.setModel(
-				{ provider: "anthropic", modelId: "claude-opus-4-7" },
-				"session-stateful",
-			);
+			await driver1.setModel({ provider: "anthropic", modelId: "claude-opus-4-7" }, "session-stateful");
 			await driver1.setThinkingLevel("high", "session-stateful");
 
 			const customMsgEntry = await driver1.appendCustomMessage(
@@ -360,23 +353,11 @@ describe("Wave 3.1 @earendil-works/pi-durable SQLite WAL session driver", () => 
 			);
 			forkPointEntryId = customMsgEntry.id;
 
-			await driver1.appendCustomEntry(
-				"audit_marker",
-				{ step: "pre-compact", ok: true },
-				"session-stateful",
-			);
+			await driver1.appendCustomEntry("audit_marker", { step: "pre-compact", ok: true }, "session-stateful");
 
-			await driver1.prompt(
-				"turn before fork",
-				{ assistantResponse: "Ack before fork" },
-				"session-stateful",
-			);
+			await driver1.prompt("turn before fork", { assistantResponse: "Ack before fork" }, "session-stateful");
 
-			const forked = await driver1.fork(
-				"session-forked",
-				forkPointEntryId,
-				"session-stateful",
-			);
+			const forked = await driver1.fork("session-forked", forkPointEntryId, "session-stateful");
 			expect(forked.created).toBe(true);
 			expect(forked.metadata.parentSessionKey).toBe("session-stateful");
 			expect(forked.metadata.forkFromEntryId).toBe(forkPointEntryId);

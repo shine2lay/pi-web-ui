@@ -281,6 +281,7 @@ export interface DurableExtensionBridge extends ExtensionHookBridge {
 
 	getMultiPassPool(provider?: string): MultiPassAccountEntry[];
 	getActiveMultiPassAccount(provider: string): MultiPassAccountEntry | undefined;
+	bindSessionPort?(sessionPort: DurableSessionPort): void;
 }
 
 /**
@@ -407,6 +408,8 @@ export function createSessionPortEntryStore(
 		return candidate;
 	};
 
+	let appendingToPort = false;
+
 	return {
 		async appendEntry<T = unknown>(
 			customType: string,
@@ -414,20 +417,36 @@ export function createSessionPortEntryStore(
 			options?: ExtensionAppendEntryOptions,
 		): Promise<ExtensionPersistedEntryRecord<T>> {
 			const sessionKey = resolveKey(options?.sessionKey);
-			const rec = await port.appendCustomEntry(customType, data, {
-				sessionKey,
-				parentId: options?.parentId,
-				timestamp: options?.timestamp,
-			});
-			return {
-				id: rec.id,
-				parentId: rec.parentId,
-				sessionKey: rec.sessionKey,
-				kind: rec.kind,
-				customType: rec.customType,
-				data: rec.data,
-				timestamp: rec.timestamp,
-			};
+			if (appendingToPort) {
+				return {
+					id: `reentrant:${customType}:${Date.now()}`,
+					parentId: options?.parentId ?? null,
+					sessionKey,
+					kind: `custom.${customType}`,
+					customType,
+					data,
+					timestamp: options?.timestamp ?? new Date().toISOString(),
+				};
+			}
+			appendingToPort = true;
+			try {
+				const rec = await port.appendCustomEntry(customType, data, {
+					sessionKey,
+					parentId: options?.parentId,
+					timestamp: options?.timestamp,
+				});
+				return {
+					id: rec.id,
+					parentId: rec.parentId,
+					sessionKey: rec.sessionKey,
+					kind: rec.kind,
+					customType: rec.customType,
+					data: rec.data,
+					timestamp: rec.timestamp,
+				};
+			} finally {
+				appendingToPort = false;
+			}
 		},
 		getEntries(sessionKey?: string): readonly ExtensionPersistedEntryRecord[] {
 			const resolved = sessionKey ?? defaultSessionKey ?? (port.getSessionKey() || undefined);
@@ -703,9 +722,11 @@ function loadIdentityRoleSystemBlock(
 		try {
 			const meta = JSON.parse(readFileSync(identityJsonPath, "utf8")) as {
 				description?: string;
+				title?: string;
 				rolePrompt?: string;
 			};
-			if (meta.description) parts[0] = `## Identity: ${meta.description} (${roleName})`;
+			const label = meta.description ?? meta.title;
+			if (label) parts[0] = `## Identity: ${label} (${roleName})`;
 			if (meta.rolePrompt) parts.push(meta.rolePrompt.trim());
 		} catch {
 			// Ignore malformed identity.json.
@@ -845,13 +866,39 @@ export function createDurableExtensionBridge(options: DurableExtensionBridgeOpti
 	const defaultSessionKey =
 		options.defaultSessionKey ?? options.sessionPort?.getSessionKey() ?? formatDurableSessionKey(cwd, "default");
 
-	const entryStore: ExtensionSqliteEntryStore =
-		options.entryStore ??
-		(options.dbPath
-			? createSqliteWalEntryStore(options.dbPath, defaultSessionKey)
-			: options.sessionPort
-				? createSessionPortEntryStore(options.sessionPort, defaultSessionKey)
-				: createInMemorySqliteEntryStore(defaultSessionKey));
+	let boundSessionPort: DurableSessionPort | undefined = options.sessionPort;
+	const fallbackInMemoryStore = createInMemorySqliteEntryStore(defaultSessionKey);
+	let activePortStore: ExtensionSqliteEntryStore | undefined = boundSessionPort
+		? createSessionPortEntryStore(boundSessionPort, defaultSessionKey)
+		: undefined;
+	const fixedEntryStore: ExtensionSqliteEntryStore | undefined =
+		options.entryStore ?? (options.dbPath ? createSqliteWalEntryStore(options.dbPath, defaultSessionKey) : undefined);
+
+	const entryStore: ExtensionSqliteEntryStore = fixedEntryStore ?? {
+		appendEntry<T = unknown>(customType: string, data: T, appendOpts?: ExtensionAppendEntryOptions) {
+			if (activePortStore) {
+				return activePortStore.appendEntry(customType, data, appendOpts);
+			}
+			return fallbackInMemoryStore.appendEntry(customType, data, appendOpts);
+		},
+		getEntries(sessionKey?: string) {
+			if (activePortStore) {
+				const portEntries = activePortStore.getEntries(sessionKey);
+				const memEntries = fallbackInMemoryStore.getEntries(sessionKey);
+				if (memEntries.length === 0) return portEntries;
+				const seenIds = new Set(portEntries.map((e) => e.id));
+				return [...memEntries.filter((e) => !seenIds.has(e.id)), ...portEntries];
+			}
+			return fallbackInMemoryStore.getEntries(sessionKey);
+		},
+		async flush() {
+			if (activePortStore) {
+				await activePortStore.flush?.();
+			} else {
+				await fallbackInMemoryStore.flush?.();
+			}
+		},
+	};
 
 	const baseBridge = createExtensionHookBridge({
 		defaultSessionKey,
@@ -884,7 +931,7 @@ export function createDurableExtensionBridge(options: DurableExtensionBridgeOpti
 	let boundRunner: ExtensionRunner | undefined = options.extensionRunner;
 
 	const resolveSessionKey = (sessionKey?: string): string => {
-		return sessionKey ?? options.sessionPort?.getSessionKey() ?? defaultSessionKey;
+		return sessionKey ?? boundSessionPort?.getSessionKey() ?? defaultSessionKey;
 	};
 
 	const getSessionManager = (sessionKey?: string): DurableSessionManagerView => {
@@ -895,7 +942,7 @@ export function createDurableExtensionBridge(options: DurableExtensionBridgeOpti
 			dbDir,
 			sourceSessionFile: options.sourceSessionFile,
 			entryStore,
-			sessionPort: options.sessionPort,
+			sessionPort: boundSessionPort,
 		});
 	};
 
@@ -905,9 +952,15 @@ export function createDurableExtensionBridge(options: DurableExtensionBridgeOpti
 		const key = resolveSessionKey(sessionKey);
 		const entries = entryStore.getEntries(key).filter((entry) => entry.customType === "identity");
 		if (entries.length > 0) {
-			const latest = entries.at(-1)!.data as IdentityCustomEntryData | undefined;
-			if (!latest || !latest.name) return null;
-			return structuredClone(latest);
+			const latest = entries.at(-1)!.data as (IdentityCustomEntryData & { id?: string; roleId?: string }) | undefined;
+			if (!latest) return null;
+			const roleName = latest.name ?? latest.id ?? latest.roleId ?? null;
+			if (!roleName) return null;
+			return {
+				...structuredClone(latest),
+				name: roleName,
+				setAt: typeof latest.setAt === "number" ? latest.setAt : Date.now(),
+			};
 		}
 		if (options.identity?.initialRole) {
 			return {
@@ -1696,6 +1749,12 @@ export function createDurableExtensionBridge(options: DurableExtensionBridgeOpti
 			if (!activeId) return undefined;
 			const found = (multiPassPools.get(provider) ?? []).find((acct) => acct.id === activeId);
 			return found ? { ...found } : undefined;
+		},
+		bindSessionPort(sessionPort: DurableSessionPort): void {
+			boundSessionPort = sessionPort;
+			if (!fixedEntryStore) {
+				activePortStore = createSessionPortEntryStore(sessionPort, defaultSessionKey);
+			}
 		},
 	};
 

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
@@ -16,14 +16,8 @@ import {
 import type { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { Type } from "typebox";
-import {
-	loadDurablePeerModule,
-	type DurableModels,
-} from "./durable/models-adapter.js";
-import {
-	createExtensionHookBridge,
-	type ExtensionHookBridge,
-} from "./durable-extension-port.js";
+import { loadDurablePeerModule, type DurableModels } from "./durable/models-adapter.js";
+import { createExtensionHookBridge, type ExtensionHookBridge } from "./durable-extension-port.js";
 import {
 	formatDurableSessionKey,
 	parseDurableSessionKey,
@@ -65,11 +59,7 @@ export type DurableModelSelection = {
 };
 export type DurableSessionCategory = "InteractiveSession" | "SubagentSession";
 export type DurableEntryKind =
-	| "ai.turn"
-	| "ai.tool_call"
-	| "app.pi.compaction"
-	| "app.pi.custom"
-	| "app.pi.extension_message";
+	"ai.turn" | "ai.tool_call" | "app.pi.compaction" | "app.pi.custom" | "app.pi.extension_message";
 export type DurableEntryRecord = DurableSessionEntry & {
 	kind: string;
 	payload?: Record<string, unknown>;
@@ -184,6 +174,9 @@ const DEFAULT_MODEL_SELECTION = normalizeModelSpec({
 const PI_WEB_UI_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS pi_web_ui_sessions (
 	session_key TEXT PRIMARY KEY,
+	session_id TEXT,
+	origin TEXT NOT NULL DEFAULT 'durable-native',
+	source_session_file TEXT,
 	conversation_id INTEGER NOT NULL,
 	cwd TEXT NOT NULL,
 	category TEXT NOT NULL DEFAULT 'InteractiveSession',
@@ -237,6 +230,9 @@ export interface SqliteDurablePragmas {
 
 export interface PersistedSessionRow {
 	session_key: string;
+	session_id?: string | null;
+	origin?: DurableSessionOrigin | null;
+	source_session_file?: string | null;
 	conversation_id: number;
 	cwd: string;
 	category: DurableSessionCategory;
@@ -253,6 +249,34 @@ export interface PersistedSessionRow {
 	active_turn_options_json: string | null;
 	created_at: number;
 	updated_at: number;
+}
+
+export interface BootstrappedOrMigratedSessionRow {
+	session_id: string;
+	file_path: string;
+	cwd: string;
+	name: string | null;
+	model_provider: string | null;
+	model_id: string | null;
+	thinking_level: string | null;
+	parent_session: string | null;
+	leaf_entry_id: string | null;
+	entry_count: number;
+	created_at: number;
+	updated_at: number;
+}
+
+export interface BootstrappedOrMigratedEntryRow {
+	session_id: string;
+	seq: number;
+	entry_id: string;
+	parent_id: string | null;
+	branch_name: string;
+	entry_type: string;
+	custom_type: string | null;
+	role: string | null;
+	timestamp: string;
+	payload_json: string;
 }
 
 interface PersistedEntryRow {
@@ -276,12 +300,7 @@ export class SqliteDurableBackend {
 	readonly storage: SqliteStorage;
 	private closed = false;
 
-	private constructor(
-		dbPath: string,
-		cwd: string,
-		rawDb: DatabaseSync,
-		storage: SqliteStorage,
-	) {
+	private constructor(dbPath: string, cwd: string, rawDb: DatabaseSync, storage: SqliteStorage) {
 		this.dbPath = dbPath;
 		this.cwd = cwd;
 		this.rawDb = rawDb;
@@ -296,6 +315,21 @@ export class SqliteDurableBackend {
 		rawDb.exec("PRAGMA foreign_keys = ON;");
 		rawDb.exec("PRAGMA busy_timeout = 5000;");
 		rawDb.exec(PI_WEB_UI_SCHEMA_SQL);
+		try {
+			rawDb.exec("ALTER TABLE pi_web_ui_sessions ADD COLUMN session_id TEXT;");
+		} catch {
+			// Column already exists.
+		}
+		try {
+			rawDb.exec("ALTER TABLE pi_web_ui_sessions ADD COLUMN origin TEXT NOT NULL DEFAULT 'durable-native';");
+		} catch {
+			// Column already exists.
+		}
+		try {
+			rawDb.exec("ALTER TABLE pi_web_ui_sessions ADD COLUMN source_session_file TEXT;");
+		} catch {
+			// Column already exists.
+		}
 		return new SqliteDurableBackend(config.dbPath, config.cwd, rawDb, storage);
 	}
 
@@ -304,9 +338,8 @@ export class SqliteDurableBackend {
 		const sync = this.rawDb.prepare("PRAGMA synchronous").get() as { synchronous?: number } | undefined;
 		let schemaVersion = 0;
 		try {
-			const ver = this.rawDb
-				.prepare("SELECT MAX(version) AS version FROM durable_schema")
-				.get() as { version?: number } | undefined;
+			const ver = this.rawDb.prepare("SELECT MAX(version) AS version FROM durable_schema").get() as
+				{ version?: number } | undefined;
 			schemaVersion = Number(ver?.version ?? 0);
 		} catch {
 			const uv = this.rawDb.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
@@ -320,9 +353,8 @@ export class SqliteDurableBackend {
 	}
 
 	getSessionRow(sessionKey: string): PersistedSessionRow | undefined {
-		return this.rawDb
-			.prepare("SELECT * FROM pi_web_ui_sessions WHERE session_key = ?")
-			.get(sessionKey) as PersistedSessionRow | undefined;
+		return this.rawDb.prepare("SELECT * FROM pi_web_ui_sessions WHERE session_key = ?").get(sessionKey) as
+			PersistedSessionRow | undefined;
 	}
 
 	listSessionRows(): PersistedSessionRow[] {
@@ -335,14 +367,18 @@ export class SqliteDurableBackend {
 		this.rawDb
 			.prepare(
 				`INSERT INTO pi_web_ui_sessions (
-					session_key, conversation_id, cwd, category, title,
+					session_key, session_id, origin, source_session_file,
+					conversation_id, cwd, category, title,
 					model_provider, model_id, thinking_level,
 					parent_session_key, fork_from_entry_id,
 					turn_count, next_entry_seq,
 					active_turn_id, active_turn_prompt, active_turn_options_json,
 					created_at, updated_at
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(session_key) DO UPDATE SET
+					session_id = COALESCE(excluded.session_id, pi_web_ui_sessions.session_id),
+					origin = COALESCE(excluded.origin, pi_web_ui_sessions.origin),
+					source_session_file = COALESCE(excluded.source_session_file, pi_web_ui_sessions.source_session_file),
 					conversation_id = excluded.conversation_id,
 					cwd = excluded.cwd,
 					category = excluded.category,
@@ -361,6 +397,9 @@ export class SqliteDurableBackend {
 			)
 			.run(
 				row.session_key,
+				row.session_id ?? row.session_key,
+				row.origin ?? "durable-native",
+				row.source_session_file ?? null,
 				row.conversation_id,
 				row.cwd,
 				row.category,
@@ -380,15 +419,33 @@ export class SqliteDurableBackend {
 			);
 	}
 
+	listBootstrappedOrMigratedSessions(): BootstrappedOrMigratedSessionRow[] {
+		const hasTable = this.rawDb
+			.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'durable_sessions'")
+			.get() as { name?: string } | undefined;
+		if (!hasTable?.name) return [];
+		return this.rawDb
+			.prepare("SELECT * FROM durable_sessions ORDER BY created_at ASC, session_id ASC")
+			.all() as unknown as BootstrappedOrMigratedSessionRow[];
+	}
+
+	listBootstrappedOrMigratedEntries(sessionId: string): BootstrappedOrMigratedEntryRow[] {
+		const hasTable = this.rawDb
+			.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'durable_entries'")
+			.get() as { name?: string } | undefined;
+		if (!hasTable?.name) return [];
+		return this.rawDb
+			.prepare("SELECT * FROM durable_entries WHERE session_id = ? ORDER BY seq ASC")
+			.all(sessionId) as unknown as BootstrappedOrMigratedEntryRow[];
+	}
+
 	appendEntryRow(sessionKey: string, entry: DurableEntryRecord): number {
 		const session = this.getSessionRow(sessionKey);
 		if (!session) {
 			throw new Error(`Unknown durable session: ${sessionKey}`);
 		}
 		const seq = session.next_entry_seq;
-		const tsMs = Number.isFinite(Date.parse(entry.timestamp))
-			? Date.parse(entry.timestamp)
-			: Date.now();
+		const tsMs = Number.isFinite(Date.parse(entry.timestamp)) ? Date.parse(entry.timestamp) : Date.now();
 		this.rawDb
 			.prepare(
 				`INSERT INTO pi_web_ui_entries (
@@ -406,21 +463,24 @@ export class SqliteDurableBackend {
 				JSON.stringify(entry.payload ?? {}),
 			);
 		this.rawDb
-			.prepare(
-				"UPDATE pi_web_ui_sessions SET next_entry_seq = ?, updated_at = ? WHERE session_key = ?",
-			)
+			.prepare("UPDATE pi_web_ui_sessions SET next_entry_seq = ?, updated_at = ? WHERE session_key = ?")
 			.run(seq + 1, Date.now(), sessionKey);
 		return seq;
 	}
 
 	listEntryRows(sessionKey: string): DurableEntryRecord[] {
 		const rows = this.rawDb
-			.prepare(
-				"SELECT * FROM pi_web_ui_entries WHERE session_key = ? ORDER BY seq ASC",
-			)
+			.prepare("SELECT * FROM pi_web_ui_entries WHERE session_key = ? ORDER BY seq ASC")
 			.all(sessionKey) as unknown as PersistedEntryRow[];
 		return rows.map((row) => {
 			const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+			const isCustom = row.type === "custom";
+			const customData =
+				isCustom && payload && typeof payload === "object" && "data" in payload ? payload.data : payload;
+			const msgPayload =
+				(row.type === "message" || row.type === "custom_message") && payload && typeof payload === "object"
+					? (payload as unknown as DurableMessageRecord)
+					: undefined;
 			return {
 				id: row.entry_id,
 				sessionKey: row.session_key,
@@ -429,16 +489,15 @@ export class SqliteDurableBackend {
 				type: row.type,
 				timestamp: new Date(row.timestamp).toISOString(),
 				customType: typeof payload.customType === "string" ? payload.customType : undefined,
-				data: payload,
+				...(msgPayload ? { message: msgPayload } : {}),
+				data: customData,
 				payload,
 			};
 		});
 	}
 
 	clearEntries(sessionKey: string): void {
-		this.rawDb
-			.prepare("DELETE FROM pi_web_ui_entries WHERE session_key = ?")
-			.run(sessionKey);
+		this.rawDb.prepare("DELETE FROM pi_web_ui_entries WHERE session_key = ?").run(sessionKey);
 	}
 
 	markInterruptedTurnInSqlite(
@@ -468,17 +527,13 @@ export class SqliteDurableBackend {
 
 	deleteSessionRow(sessionKey: string): boolean {
 		this.clearEntries(sessionKey);
-		const res = this.rawDb
-			.prepare("DELETE FROM pi_web_ui_sessions WHERE session_key = ?")
-			.run(sessionKey);
+		const res = this.rawDb.prepare("DELETE FROM pi_web_ui_sessions WHERE session_key = ?").run(sessionKey);
 		return res.changes > 0;
 	}
 
 	countRunningTasks(conversationId: number): number {
 		const row = this.rawDb
-			.prepare(
-				"SELECT COUNT(*) AS cnt FROM tasks WHERE conversation_id = ? AND status != 'terminal'",
-			)
+			.prepare("SELECT COUNT(*) AS cnt FROM tasks WHERE conversation_id = ? AND status != 'terminal'")
 			.get(conversationId) as { cnt?: number } | undefined;
 		return Number(row?.cnt ?? 0);
 	}
@@ -549,11 +604,7 @@ type PeerPiAiModule = {
 			errorMessage?: string;
 		},
 	) => unknown;
-	fauxToolCall: (
-		name: string,
-		args: Record<string, unknown>,
-		options?: { id?: string },
-	) => unknown;
+	fauxToolCall: (name: string, args: Record<string, unknown>, options?: { id?: string }) => unknown;
 };
 
 type PeerCreateModelsModule = {
@@ -573,10 +624,7 @@ async function getPeerPiAi(): Promise<{
 		peerPiAiCache = await loadDurablePeerModule<PeerPiAiModule>("@earendil-works/pi-ai");
 	}
 	if (!peerCreateModelsCache) {
-		peerCreateModelsCache = await loadDurablePeerModule<PeerCreateModelsModule>(
-			"@earendil-works/pi-ai",
-			"models",
-		);
+		peerCreateModelsCache = await loadDurablePeerModule<PeerCreateModelsModule>("@earendil-works/pi-ai", "models");
 	}
 	return { ai: peerPiAiCache, createModels: peerCreateModelsCache.createModels };
 }
@@ -588,10 +636,7 @@ async function getPeerPiAi(): Promise<{
 export class PiModelCallExecutor {
 	private readonly activeTurnsByConversation = new Map<number, ActiveTurnPlan>();
 	private readonly defaultResponsesByConversation = new Map<number, string>();
-	private readonly registeredFauxProviders = new Map<
-		string,
-		ReturnType<PeerPiAiModule["fauxProvider"]>
-	>();
+	private readonly registeredFauxProviders = new Map<string, ReturnType<PeerPiAiModule["fauxProvider"]>>();
 	private customResponder?: CustomModelResponder;
 	private readonly ai: PeerPiAiModule;
 	readonly models: DurableModels & { setProvider(provider: unknown): void };
@@ -683,18 +728,12 @@ export class PiModelCallExecutor {
 				});
 			}
 
-			if (
-				plan.toolCalls.length > 0 &&
-				plan.toolRoundsDispatched === 0 &&
-				!hasToolResultSinceLastUser
-			) {
+			if (plan.toolCalls.length > 0 && plan.toolRoundsDispatched === 0 && !hasToolResultSinceLastUser) {
 				plan.toolRoundsDispatched += 1;
 				const blocks = plan.toolCalls.map((tc, index) =>
-					this.ai.fauxToolCall(
-						tc.toolName,
-						(tc.input ?? {}) as Record<string, unknown>,
-						{ id: tc.toolCallId || `call-${plan.turnIndex + 1}-${index + 1}` },
-					),
+					this.ai.fauxToolCall(tc.toolName, (tc.input ?? {}) as Record<string, unknown>, {
+						id: tc.toolCallId || `call-${plan.turnIndex + 1}-${index + 1}`,
+					}),
 				);
 				return this.ai.fauxAssistantMessage(blocks, {
 					model: activeModel.id,
@@ -788,18 +827,13 @@ export class PiToolExecutor {
 			parameters: Type.Record(Type.String(), Type.Unknown()),
 			replay: "safe",
 			execute: async (rawArgs, api, context) => {
-				const input =
-					rawArgs && typeof rawArgs === "object"
-						? (rawArgs as Record<string, unknown>)
-						: {};
+				const input = rawArgs && typeof rawArgs === "object" ? (rawArgs as Record<string, unknown>) : {};
 				const toolCallId =
 					(api as { callId?: string; toolCallId?: string }).callId ??
 					(api as { toolCallId?: string }).toolCallId ??
 					`call-${toolName}`;
 				const sessionKey = this.activeSessionKey;
-				const spec =
-					this.turnToolSpecs.get(toolCallId) ??
-					this.turnToolSpecs.get(`${toolName}:${toolCallId}`);
+				const spec = this.turnToolSpecs.get(toolCallId) ?? this.turnToolSpecs.get(`${toolName}:${toolCallId}`);
 
 				const decision = await this.hookBridge.tool_call({
 					toolCallId,
@@ -843,9 +877,7 @@ export class PiToolExecutor {
 					const finalBlocked: DurableToolExecutionResult = {
 						toolCallId,
 						toolName,
-						content:
-							(patched.content as DurableToolExecutionResult["content"] | undefined) ??
-							blockedResult.content,
+						content: (patched.content as DurableToolExecutionResult["content"] | undefined) ?? blockedResult.content,
 						details:
 							patched.details && typeof patched.details === "object"
 								? {
@@ -909,11 +941,7 @@ export class PiToolExecutor {
 							reject(signal.reason ?? new Error("Tool aborted"));
 							return;
 						}
-						signal.addEventListener(
-							"abort",
-							() => reject(signal.reason ?? new Error("Tool aborted")),
-							{ once: true },
-						);
+						signal.addEventListener("abort", () => reject(signal.reason ?? new Error("Tool aborted")), { once: true });
 					}),
 				]);
 
@@ -938,9 +966,7 @@ export class PiToolExecutor {
 				const finalResult: DurableToolExecutionResult = {
 					toolCallId,
 					toolName,
-					content:
-						(patched.content as DurableToolExecutionResult["content"] | undefined) ??
-						rawContent,
+					content: (patched.content as DurableToolExecutionResult["content"] | undefined) ?? rawContent,
 					details:
 						patched.details && typeof patched.details === "object"
 							? {
@@ -1051,21 +1077,13 @@ export class DurableEngine {
 			BACKGROUND_CONTEXT,
 		);
 
-		return new DurableEngine(
-			params.backend,
-			params.modelExecutor,
-			params.toolExecutor,
-			registry,
-			harness,
-		);
+		return new DurableEngine(params.backend, params.modelExecutor, params.toolExecutor, registry, harness);
 	}
 
 	ensureToolsRegistered(toolNames: readonly string[]): ToolRegistration[] {
 		const newlyAdded: ToolRegistration[] = [];
 		for (const name of toolNames) {
-			const existed = this.toolExecutor
-				.getAllRegistrations()
-				.some((r) => r.name === name);
+			const existed = this.toolExecutor.getAllRegistrations().some((r) => r.name === name);
 			const reg = this.toolExecutor.registerTool(name);
 			if (!existed) {
 				newlyAdded.push(reg);
@@ -1211,22 +1229,155 @@ interface SessionMemoryRecord {
 
 export interface PiDurableSessionDriverOptions {
 	dbDir: string;
+	dbPath?: string;
 	defaultCwd?: string;
 	hookBridge?: ExtensionHookBridge;
 	customModelResponder?: CustomModelResponder;
 }
 
+function convertBootstrappedOrMigratedEntryRow(
+	sessionKey: string,
+	deRow: BootstrappedOrMigratedEntryRow,
+): DurableEntryRecord {
+	let raw: Record<string, unknown> = {};
+	try {
+		const parsed = JSON.parse(deRow.payload_json);
+		if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+			raw = parsed as Record<string, unknown>;
+		}
+	} catch {
+		raw = {};
+	}
+
+	if (deRow.entry_type === "message") {
+		const msgObj = (
+			raw.message && typeof raw.message === "object" && !Array.isArray(raw.message) ? raw.message : raw
+		) as Record<string, unknown>;
+		const tsMs =
+			typeof msgObj.timestamp === "number"
+				? msgObj.timestamp
+				: Number.isFinite(Date.parse(deRow.timestamp))
+					? Date.parse(deRow.timestamp)
+					: Date.now();
+		const role = (
+			typeof msgObj.role === "string" ? msgObj.role : typeof deRow.role === "string" ? deRow.role : "user"
+		) as DurableMessageRecord["role"];
+		const msgRecord: DurableMessageRecord & Record<string, unknown> = {
+			...msgObj,
+			id: typeof msgObj.id === "string" ? msgObj.id : deRow.entry_id,
+			entryId: deRow.entry_id,
+			role,
+			content: (msgObj.content as DurableMessageRecord["content"]) ?? "",
+			timestamp: tsMs,
+		};
+		if (Array.isArray(raw.attachments) && !msgRecord.attachments) {
+			msgRecord.attachments = raw.attachments;
+		}
+		return {
+			id: deRow.entry_id,
+			sessionKey,
+			parentId: deRow.parent_id,
+			kind: role === "toolResult" ? "ai.tool_call" : "ai.turn",
+			type: "message",
+			timestamp: deRow.timestamp,
+			message: msgRecord,
+			data: raw,
+			payload: msgRecord as unknown as Record<string, unknown>,
+		};
+	}
+
+	if (deRow.entry_type === "custom") {
+		const customType = deRow.custom_type ?? (typeof raw.customType === "string" ? raw.customType : "custom");
+		const customData = "data" in raw ? raw.data : raw;
+		return {
+			id: deRow.entry_id,
+			sessionKey,
+			parentId: deRow.parent_id,
+			kind: "app.pi.custom",
+			type: "custom",
+			timestamp: deRow.timestamp,
+			customType,
+			data: customData,
+			payload: { customType, data: customData },
+		};
+	}
+
+	if (deRow.entry_type === "custom_message") {
+		const customType = deRow.custom_type ?? (typeof raw.customType === "string" ? raw.customType : "custom");
+		const tsMs = Number.isFinite(Date.parse(deRow.timestamp)) ? Date.parse(deRow.timestamp) : Date.now();
+		const msgRecord: DurableMessageRecord & Record<string, unknown> = {
+			...raw,
+			id: deRow.entry_id,
+			entryId: deRow.entry_id,
+			role: "custom",
+			content: (raw.content as DurableMessageRecord["content"]) ?? "",
+			timestamp: tsMs,
+			customType,
+			display: typeof raw.display === "boolean" ? raw.display : true,
+			details: raw.details && typeof raw.details === "object" ? (raw.details as Record<string, unknown>) : undefined,
+		};
+		return {
+			id: deRow.entry_id,
+			sessionKey,
+			parentId: deRow.parent_id,
+			kind: "app.pi.extension_message",
+			type: "custom_message",
+			timestamp: deRow.timestamp,
+			customType,
+			message: msgRecord,
+			data: raw,
+			payload: msgRecord as unknown as Record<string, unknown>,
+		};
+	}
+
+	if (deRow.entry_type === "compaction") {
+		return {
+			id: deRow.entry_id,
+			sessionKey,
+			parentId: deRow.parent_id,
+			kind: "app.pi.compaction",
+			type: "compaction",
+			timestamp: deRow.timestamp,
+			data: raw,
+			payload: raw,
+		};
+	}
+
+	if (deRow.entry_type === "model_change" || deRow.entry_type === "thinking_level_change") {
+		return {
+			id: deRow.entry_id,
+			sessionKey,
+			parentId: deRow.parent_id,
+			kind: "app.pi.custom",
+			type: deRow.entry_type,
+			timestamp: deRow.timestamp,
+			data: raw,
+			payload: raw,
+		};
+	}
+
+	return {
+		id: deRow.entry_id,
+		sessionKey,
+		parentId: deRow.parent_id,
+		kind: "app.pi.custom",
+		type: deRow.entry_type as DurableSessionEntryType,
+		timestamp: deRow.timestamp,
+		customType: deRow.custom_type ?? deRow.entry_type,
+		data: raw,
+		payload: raw,
+	};
+}
+
 function reconstructMessagesFromEntries(entries: readonly DurableEntryRecord[]): DurableMessageRecord[] {
 	const messages: DurableMessageRecord[] = [];
 	for (const entry of entries) {
-		if (entry.type === "compaction") {
+		if (entry.type === "compaction" && typeof entry.payload?.keptCount === "number") {
 			const summary = String(entry.payload?.summary ?? "");
 			const keptCount = Number(entry.payload?.keptCount ?? 4);
 			const preserved = messages.slice(-Math.max(1, keptCount));
 			messages.length = 0;
-			const tsMs = Number.isFinite(Date.parse(entry.timestamp))
-				? Date.parse(entry.timestamp)
-				: Date.now();
+			const tsMs = Number.isFinite(Date.parse(entry.timestamp)) ? Date.parse(entry.timestamp) : Date.now();
 			messages.push(
 				{
 					id: `${entry.id}-summary`,
@@ -1241,7 +1392,7 @@ function reconstructMessagesFromEntries(entries: readonly DurableEntryRecord[]):
 			continue;
 		}
 		if (entry.type === "message" || entry.type === "custom_message") {
-			const msg = entry.payload as unknown as DurableMessageRecord;
+			const msg = (entry.message ?? entry.payload) as unknown as DurableMessageRecord;
 			if (msg && typeof msg === "object" && typeof msg.role === "string") {
 				messages.push({ ...msg, entryId: msg.entryId ?? entry.id });
 			}
@@ -1256,6 +1407,7 @@ function reconstructMessagesFromEntries(entries: readonly DurableEntryRecord[]):
 export class PiDurableSessionDriver implements DurableSessionPort {
 	readonly mode = "durable" as const;
 	readonly dbDir: string;
+	private readonly explicitDbPath?: string;
 	private readonly defaultCwd: string;
 	private hookBridge: ExtensionHookBridge;
 	private readonly customModelResponder?: CustomModelResponder;
@@ -1269,11 +1421,14 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 	private idCounter = 0;
 
 	constructor(options: PiDurableSessionDriverOptions) {
-		this.dbDir = options.dbDir;
+		this.dbDir = options.dbPath ? dirname(options.dbPath) : options.dbDir;
+		this.explicitDbPath = options.dbPath;
 		this.defaultCwd = options.defaultCwd ?? process.cwd();
 		this.hookBridge = options.hookBridge ?? createExtensionHookBridge();
 		this.customModelResponder = options.customModelResponder;
 		mkdirSync(this.dbDir, { recursive: true });
+		(this.hookBridge as { bindSessionPort?: (port: DurableSessionPort) => void }).bindSessionPort?.(this);
+		this.ensureHydratedSync();
 	}
 
 	private nextId(prefix: string): string {
@@ -1290,7 +1445,215 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 	}
 
 	private resolveDbPathForCwd(cwd: string): string {
+		if (this.explicitDbPath) return this.explicitDbPath;
+		const sharedDurableDb = join(this.dbDir, "durable-sessions.db");
+		if (existsSync(sharedDurableDb)) return sharedDurableDb;
 		return join(this.dbDir, durableDatabaseFileName(cwd));
+	}
+
+	private ensureHydratedSync(cwd = this.defaultCwd): void {
+		const dbPath = this.resolveDbPathForCwd(cwd);
+		if (!existsSync(dbPath)) return;
+		const resolvedEngine = this.resolvedEngines.get(dbPath);
+		if (resolvedEngine) {
+			this.hydrateSessionsFromBackend(resolvedEngine);
+			return;
+		}
+		let rawDb: DatabaseSync | null = null;
+		try {
+			rawDb = new DatabaseSync(dbPath);
+			const hasPiSessions = rawDb
+				.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'pi_web_ui_sessions'")
+				.get() as { name?: string } | undefined;
+			if (hasPiSessions?.name) {
+				const rows = rawDb
+					.prepare("SELECT * FROM pi_web_ui_sessions ORDER BY created_at ASC, session_key ASC")
+					.all() as unknown as PersistedSessionRow[];
+				for (const row of rows) {
+					if (this.sessions.has(row.session_key)) continue;
+					const entryRows = rawDb
+						.prepare("SELECT * FROM pi_web_ui_entries WHERE session_key = ? ORDER BY seq ASC")
+						.all(row.session_key) as unknown as PersistedEntryRow[];
+					const entries: DurableEntryRecord[] = entryRows.map((er) => {
+						const payload = JSON.parse(er.payload_json) as Record<string, unknown>;
+						const isCustom = er.type === "custom";
+						const customData =
+							isCustom && payload && typeof payload === "object" && "data" in payload ? payload.data : payload;
+						const msgPayload =
+							(er.type === "message" || er.type === "custom_message") && payload && typeof payload === "object"
+								? (payload as unknown as DurableMessageRecord)
+								: undefined;
+						return {
+							id: er.entry_id,
+							sessionKey: er.session_key,
+							parentId: er.parent_id,
+							kind: er.kind,
+							type: er.type,
+							timestamp: new Date(er.timestamp).toISOString(),
+							customType: typeof payload.customType === "string" ? payload.customType : undefined,
+							...(msgPayload ? { message: msgPayload } : {}),
+							data: customData,
+							payload,
+						};
+					});
+					const messages = reconstructMessagesFromEntries(entries);
+					const leafEntryId = entries.length > 0 ? entries[entries.length - 1]!.id : null;
+					const metadata: DurableSessionMetadata = {
+						sessionKey: row.session_key,
+						sessionId: row.session_id ?? row.session_key.replace(/^durable:/, ""),
+						cwd: row.cwd,
+						dbPath,
+						origin: (row.origin as DurableSessionOrigin) ?? "durable-native",
+						sourceSessionFile: row.source_session_file ?? null,
+						category: row.category,
+						name: row.title ?? undefined,
+						title: row.title ?? undefined,
+						model: normalizeModelSpec({
+							provider: row.model_provider,
+							id: row.model_id,
+							modelId: row.model_id,
+						}),
+						thinkingLevel: row.thinking_level,
+						createdAt: new Date(row.created_at).toISOString(),
+						updatedAt: new Date(row.updated_at).toISOString(),
+						turnCount: row.turn_count,
+						entryCount: entries.length,
+						messageCount: messages.length,
+						leafEntryId,
+						parentSessionKey: row.parent_session_key ?? null,
+						forkFromEntryId: row.fork_from_entry_id ?? null,
+						conversationId: row.conversation_id,
+					};
+					this.sessions.set(row.session_key, {
+						metadata,
+						conversationId: row.conversation_id,
+						messages,
+						entries,
+						leafEntryId,
+						streaming: false,
+						abortRequested: false,
+						steerQueue: [],
+						followUpQueue: [],
+					});
+					this.sessionDbPath.set(row.session_key, dbPath);
+				}
+			}
+
+			const hasDurableSessions = rawDb
+				.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'durable_sessions'")
+				.get() as { name?: string } | undefined;
+			if (hasDurableSessions?.name) {
+				const dsRows = rawDb
+					.prepare("SELECT * FROM durable_sessions ORDER BY created_at ASC, session_id ASC")
+					.all() as unknown as BootstrappedOrMigratedSessionRow[];
+				for (const dsRow of dsRows) {
+					const sessionId = dsRow.session_id.replace(/^durable:/, "");
+					const sessionKey = dsRow.session_id.startsWith("durable:") ? dsRow.session_id : `durable:${dsRow.session_id}`;
+					if (this.sessions.has(sessionKey) || this.findSessionRecord(sessionId)) continue;
+					const deRows = rawDb
+						.prepare("SELECT * FROM durable_entries WHERE session_id = ? ORDER BY seq ASC")
+						.all(dsRow.session_id) as unknown as BootstrappedOrMigratedEntryRow[];
+					const entries = deRows.map((deRow) => convertBootstrappedOrMigratedEntryRow(sessionKey, deRow));
+					const messages = reconstructMessagesFromEntries(entries);
+					const leafEntryId = dsRow.leaf_entry_id ?? (entries.length > 0 ? entries[entries.length - 1]!.id : null);
+					const isMigrated = Boolean(
+						dsRow.file_path && !dsRow.file_path.startsWith("durable:") && !dsRow.file_path.startsWith("durable://"),
+					);
+					const origin: DurableSessionOrigin = isMigrated ? "migrated-jsonl" : "durable-native";
+					const sourceSessionFile = isMigrated ? dsRow.file_path : null;
+					const metadata: DurableSessionMetadata = {
+						sessionKey,
+						sessionId,
+						cwd: dsRow.cwd || this.defaultCwd,
+						dbPath,
+						origin,
+						sourceSessionFile,
+						category: "InteractiveSession",
+						name: dsRow.name ?? undefined,
+						title: dsRow.name ?? undefined,
+						model: normalizeModelSpec(
+							dsRow.model_provider && dsRow.model_id
+								? {
+										provider: dsRow.model_provider,
+										id: dsRow.model_id,
+										modelId: dsRow.model_id,
+									}
+								: undefined,
+						),
+						thinkingLevel: (dsRow.thinking_level as DurableThinkingLevel) ?? "off",
+						createdAt: new Date(dsRow.created_at).toISOString(),
+						updatedAt: new Date(dsRow.updated_at).toISOString(),
+						turnCount: Math.max(0, messages.filter((m) => m.role === "user").length),
+						entryCount: entries.length,
+						messageCount: messages.length,
+						leafEntryId,
+						parentSessionKey: dsRow.parent_session ?? null,
+						forkFromEntryId: null,
+						conversationId: 0,
+					};
+					this.sessions.set(sessionKey, {
+						metadata,
+						conversationId: 0,
+						messages,
+						entries,
+						leafEntryId,
+						streaming: false,
+						abortRequested: false,
+						steerQueue: [],
+						followUpQueue: [],
+					});
+					this.sessionDbPath.set(sessionKey, dbPath);
+				}
+			}
+		} catch {
+			// Ignore sync read errors before DB initialization.
+		} finally {
+			try {
+				rawDb?.close();
+			} catch {
+				// Ignore close error.
+			}
+		}
+	}
+
+	private findSessionRecord(keyOrId?: string): SessionMemoryRecord | undefined {
+		const rawKey = keyOrId ?? this.activeKey;
+		if (!rawKey) return undefined;
+		const direct = this.sessions.get(rawKey);
+		if (direct) return direct;
+		if (rawKey.startsWith("durable://")) {
+			const colonKey = `durable:${rawKey.slice("durable://".length)}`;
+			const hit = this.sessions.get(colonKey);
+			if (hit) return hit;
+		} else if (!rawKey.startsWith("durable:")) {
+			const colonKey = `durable:${rawKey}`;
+			const hit = this.sessions.get(colonKey);
+			if (hit) return hit;
+		}
+		const stripped = rawKey.replace(/^durable:\/\/|^durable:/, "");
+		for (const candidate of this.sessions.values()) {
+			if (
+				candidate.metadata.sessionId === rawKey ||
+				candidate.metadata.sessionId === stripped ||
+				candidate.metadata.sessionKey === rawKey ||
+				candidate.metadata.sourceSessionFile === rawKey
+			) {
+				return candidate;
+			}
+		}
+		try {
+			const parsed = parseDurableSessionKey(rawKey);
+			if (parsed) {
+				for (const candidate of this.sessions.values()) {
+					if (candidate.metadata.sessionId === parsed.sessionId) {
+						return candidate;
+					}
+				}
+			}
+		} catch {
+			// Not a formatted durable key.
+		}
+		return undefined;
 	}
 
 	async getEngineForCwd(cwd = this.defaultCwd): Promise<DurableEngine> {
@@ -1300,9 +1663,7 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 			pending = (async () => {
 				const backend = await SqliteDurableBackend.open({ dbPath, cwd });
 				const modelExecutor = await PiModelCallExecutor.create(this.customModelResponder);
-				const toolExecutor = new PiToolExecutor(this.hookBridge, (sk, ev) =>
-					this.emit(sk, ev),
-				);
+				const toolExecutor = new PiToolExecutor(this.hookBridge, (sk, ev) => this.emit(sk, ev));
 				const engine = await DurableEngine.open({
 					backend,
 					modelExecutor,
@@ -1326,10 +1687,11 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 			const leafEntryId = entries.length > 0 ? entries[entries.length - 1]!.id : null;
 			const metadata: DurableSessionMetadata = {
 				sessionKey: row.session_key,
-				sessionId: row.session_key,
+				sessionId: row.session_id ?? row.session_key.replace(/^durable:/, ""),
 				cwd: row.cwd,
 				dbPath: engine.backend.dbPath,
-				origin: "durable-native",
+				origin: (row.origin as DurableSessionOrigin) ?? "durable-native",
+				sourceSessionFile: row.source_session_file ?? null,
 				category: row.category,
 				name: row.title ?? undefined,
 				title: row.title ?? undefined,
@@ -1362,12 +1724,103 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 			});
 			this.sessionDbPath.set(row.session_key, engine.backend.dbPath);
 		}
+
+		// Also hydrate sessions and entries created by bootstrap-durable-env or migrate-jsonl-to-durable
+		const dsRows = engine.backend.listBootstrappedOrMigratedSessions();
+		for (const dsRow of dsRows) {
+			const sessionId = dsRow.session_id.replace(/^durable:/, "");
+			const sessionKey = dsRow.session_id.startsWith("durable:") ? dsRow.session_id : `durable:${dsRow.session_id}`;
+			const existingMemory = this.sessions.get(sessionKey) ?? this.findSessionRecord(sessionId);
+			if (existingMemory) {
+				// Ensure it is persisted in pi_web_ui_sessions + pi_web_ui_entries if not yet there
+				if (!engine.backend.getSessionRow(existingMemory.metadata.sessionKey)) {
+					this.sessionDbPath.set(existingMemory.metadata.sessionKey, engine.backend.dbPath);
+					this.persistMetadataSync(existingMemory);
+					engine.backend.clearEntries(existingMemory.metadata.sessionKey);
+					for (const e of existingMemory.entries) {
+						engine.backend.appendEntryRow(existingMemory.metadata.sessionKey, e);
+					}
+					this.persistMetadataSync(existingMemory);
+				}
+				continue;
+			}
+
+			const deRows = engine.backend.listBootstrappedOrMigratedEntries(dsRow.session_id);
+			const entries = deRows.map((deRow) => convertBootstrappedOrMigratedEntryRow(sessionKey, deRow));
+			const messages = reconstructMessagesFromEntries(entries);
+			const leafEntryId = dsRow.leaf_entry_id ?? (entries.length > 0 ? entries[entries.length - 1]!.id : null);
+			const isMigrated = Boolean(
+				dsRow.file_path && !dsRow.file_path.startsWith("durable:") && !dsRow.file_path.startsWith("durable://"),
+			);
+			const origin: DurableSessionOrigin = isMigrated ? "migrated-jsonl" : "durable-native";
+			const sourceSessionFile = isMigrated ? dsRow.file_path : null;
+			const metadata: DurableSessionMetadata = {
+				sessionKey,
+				sessionId,
+				cwd: dsRow.cwd || this.defaultCwd,
+				dbPath: engine.backend.dbPath,
+				origin,
+				sourceSessionFile,
+				category: "InteractiveSession",
+				name: dsRow.name ?? undefined,
+				title: dsRow.name ?? undefined,
+				model: normalizeModelSpec(
+					dsRow.model_provider && dsRow.model_id
+						? {
+								provider: dsRow.model_provider,
+								id: dsRow.model_id,
+								modelId: dsRow.model_id,
+							}
+						: undefined,
+				),
+				thinkingLevel: (dsRow.thinking_level as DurableThinkingLevel) ?? "off",
+				createdAt: new Date(dsRow.created_at).toISOString(),
+				updatedAt: new Date(dsRow.updated_at).toISOString(),
+				turnCount: Math.max(0, messages.filter((m) => m.role === "user").length),
+				entryCount: entries.length,
+				messageCount: messages.length,
+				leafEntryId,
+				parentSessionKey: dsRow.parent_session ?? null,
+				forkFromEntryId: null,
+				conversationId: 0,
+			};
+			const record: SessionMemoryRecord = {
+				metadata,
+				conversationId: 0,
+				messages,
+				entries,
+				leafEntryId,
+				streaming: false,
+				abortRequested: false,
+				steerQueue: [],
+				followUpQueue: [],
+			};
+			this.sessions.set(sessionKey, record);
+			this.sessionDbPath.set(sessionKey, engine.backend.dbPath);
+			if (!engine.backend.getSessionRow(sessionKey)) {
+				this.persistMetadataSync(record);
+				engine.backend.clearEntries(sessionKey);
+				for (const e of entries) {
+					engine.backend.appendEntryRow(sessionKey, e);
+				}
+				this.persistMetadataSync(record);
+			}
+		}
 	}
 
-	private emit(
-		sessionKey: string,
-		event: Omit<DurableSessionPortEvent, "timestamp"> & { timestamp?: number },
-	): void {
+	private async ensureHarnessConversation(engine: DurableEngine, record: SessionMemoryRecord): Promise<number> {
+		if (record.conversationId > 0) {
+			const existing = await engine.openConversation(record.conversationId);
+			if (existing) return record.conversationId;
+		}
+		const conv = await engine.createConversation(record.metadata.model, record.metadata.thinkingLevel);
+		record.conversationId = Number(conv.id);
+		record.metadata.conversationId = Number(conv.id);
+		this.persistMetadataSync(record);
+		return record.conversationId;
+	}
+
+	private emit(sessionKey: string, event: Omit<DurableSessionPortEvent, "timestamp"> & { timestamp?: number }): void {
 		const fullEvent: DurableSessionPortEvent = {
 			timestamp: Date.now(),
 			...event,
@@ -1384,8 +1837,7 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 	}
 
 	private getEngineForSessionSync(sessionKey: string): DurableEngine {
-		const dbPath =
-			this.sessionDbPath.get(sessionKey) ?? this.resolveDbPathForCwd(this.defaultCwd);
+		const dbPath = this.sessionDbPath.get(sessionKey) ?? this.resolveDbPathForCwd(this.defaultCwd);
 		const engine = this.resolvedEngines.get(dbPath);
 		if (!engine) {
 			throw new Error(`Durable engine not initialized for session ${sessionKey}`);
@@ -1404,6 +1856,9 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 			: Date.now();
 		engine.backend.upsertSessionRow({
 			session_key: record.metadata.sessionKey,
+			session_id: record.metadata.sessionId,
+			origin: record.metadata.origin,
+			source_session_file: record.metadata.sourceSessionFile ?? null,
 			conversation_id: record.conversationId,
 			cwd: record.metadata.cwd,
 			category: record.metadata.category,
@@ -1432,6 +1887,12 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 		customType?: string,
 	): DurableEntryRecord {
 		const isoTs = new Date(timestamp).toISOString();
+		const entryData =
+			type === "custom" && payload && typeof payload === "object" && "data" in payload ? payload.data : payload;
+		const msgPayload =
+			(type === "message" || type === "custom_message") && payload && typeof payload === "object"
+				? (payload as unknown as DurableMessageRecord)
+				: undefined;
 		const entry: DurableEntryRecord = {
 			id: this.nextId("entry"),
 			sessionKey: record.metadata.sessionKey,
@@ -1440,7 +1901,8 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 			type,
 			timestamp: isoTs,
 			customType,
-			data: payload,
+			...(msgPayload ? { message: msgPayload } : {}),
+			data: entryData,
 			payload,
 		};
 		record.entries.push(entry);
@@ -1456,7 +1918,11 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 
 	private mustGetSession(sessionKey?: string): SessionMemoryRecord {
 		const key = this.resolveKey(sessionKey);
-		const record = this.sessions.get(key);
+		let record = this.findSessionRecord(key);
+		if (!record) {
+			this.ensureHydratedSync();
+			record = this.findSessionRecord(key);
+		}
 		if (!record) {
 			throw new Error(`Unknown durable session: ${key}`);
 		}
@@ -1481,9 +1947,7 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 		const cwd = options.cwd || this.defaultCwd;
 		const engine = await this.getEngineForCwd(cwd);
 		const sessionId = options.sessionId ?? options.sessionKey ?? this.nextId("session");
-		const sessionKey =
-			options.sessionKey ??
-			formatDurableSessionKey(cwd, sessionId);
+		const sessionKey = options.sessionKey ?? formatDurableSessionKey(cwd, sessionId);
 
 		const existing = this.sessions.get(sessionKey);
 		if (existing) {
@@ -1554,35 +2018,28 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 		target: string | DurableOpenSessionTarget,
 		fallbackCreate?: Omit<DurableSessionCreateOptions, "sessionKey">,
 	): Promise<DurableSessionOpenResult> {
-		const targetObj: DurableOpenSessionTarget =
-			typeof target === "string" ? { sessionKey: target } : target;
+		const targetObj: DurableOpenSessionTarget = typeof target === "string" ? { sessionKey: target } : target;
 		const cwd = targetObj.cwd ?? fallbackCreate?.cwd ?? this.defaultCwd;
 		const engine = await this.getEngineForCwd(cwd);
 		this.hydrateSessionsFromBackend(engine);
 
 		const lookupKey =
 			targetObj.sessionKey ??
+			targetObj.sessionFile ??
 			(targetObj.sessionId ? formatDurableSessionKey(cwd, targetObj.sessionId) : undefined);
 
-		let existing = lookupKey ? this.sessions.get(lookupKey) : undefined;
+		let existing = lookupKey ? this.findSessionRecord(lookupKey) : undefined;
 		if (!existing && targetObj.sessionId) {
-			for (const candidate of this.sessions.values()) {
-				if (
-					candidate.metadata.sessionId === targetObj.sessionId ||
-					candidate.metadata.sessionKey === targetObj.sessionId
-				) {
-					existing = candidate;
-					break;
-				}
-			}
+			existing = this.findSessionRecord(targetObj.sessionId);
+		}
+		if (!existing && targetObj.sessionFile) {
+			existing = this.findSessionRecord(targetObj.sessionFile);
 		}
 
 		if (existing) {
 			this.activeKey = existing.metadata.sessionKey;
-			const recoveredInterruptedTurn = await this.recoverInterruptedSessionTurnIfNeeded(
-				engine,
-				existing,
-			);
+			await this.ensureHarnessConversation(engine, existing);
+			const recoveredInterruptedTurn = await this.recoverInterruptedSessionTurnIfNeeded(engine, existing);
 			return {
 				...existing.metadata,
 				created: false,
@@ -1593,8 +2050,7 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 		}
 
 		if (fallbackCreate) {
-			const createKey =
-				lookupKey ?? targetObj.sessionId ?? this.nextId("session");
+			const createKey = lookupKey ?? targetObj.sessionId ?? this.nextId("session");
 			return await this.create({
 				...fallbackCreate,
 				cwd,
@@ -1652,17 +2108,12 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 		}
 
 		const hasAssistantFinish =
-			record.messages.length > 0 &&
-			record.messages[record.messages.length - 1]?.role === "assistant";
+			record.messages.length > 0 && record.messages[record.messages.length - 1]?.role === "assistant";
 
 		if (!hasAssistantFinish) {
 			const nativeEntries = await engine.scanNativeEntries(record.conversationId);
 			for (const e of nativeEntries) {
-				if (
-					e.kind === "pi.tool-result" ||
-					e.kind === "ai.tool_call" ||
-					e.model?.[0]?.role === "toolResult"
-				) {
+				if (e.kind === "pi.tool-result" || e.kind === "ai.tool_call" || e.model?.[0]?.role === "toolResult") {
 					const toolMsg = e.model?.[0] as
 						| {
 								toolCallId?: string;
@@ -1672,17 +2123,13 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 								isError?: boolean;
 						  }
 						| undefined;
-					const data = (e.data && typeof e.data === "object" && !Array.isArray(e.data)
-						? e.data
-						: {}) as {
+					const data = (e.data && typeof e.data === "object" && !Array.isArray(e.data) ? e.data : {}) as {
 						toolCallId?: string;
 						toolName?: string;
 						call?: { id?: string; name?: string };
 					};
-					const resolvedToolCallId =
-						toolMsg?.toolCallId ?? data.call?.id ?? data.toolCallId;
-					const resolvedToolName =
-						toolMsg?.toolName ?? data.call?.name ?? data.toolName;
+					const resolvedToolCallId = toolMsg?.toolCallId ?? data.call?.id ?? data.toolCallId;
+					const resolvedToolName = toolMsg?.toolName ?? data.call?.name ?? data.toolName;
 					const alreadyHasToolResult = record.messages.some(
 						(m) => m.role === "toolResult" && m.toolCallId === resolvedToolCallId,
 					);
@@ -1696,9 +2143,7 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 							content: (toolMsg?.content ?? []).map((part) => ({
 								type: "text",
 								text:
-									part && typeof part === "object" && "text" in part && typeof part.text === "string"
-										? part.text
-										: "",
+									part && typeof part === "object" && "text" in part && typeof part.text === "string" ? part.text : "",
 							})),
 							timestamp: trNow,
 							toolCallId: typeof resolvedToolCallId === "string" ? resolvedToolCallId : undefined,
@@ -1719,8 +2164,7 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 				}
 			}
 
-			let recoveredAssistantText =
-				parsedOptions.assistantResponse ?? `ack:${promptText}`;
+			let recoveredAssistantText = parsedOptions.assistantResponse ?? `ack:${promptText}`;
 			for (let i = nativeEntries.length - 1; i >= 0; i--) {
 				const e = nativeEntries[i];
 				if (e?.model?.[0]?.role === "assistant") {
@@ -1776,7 +2220,11 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 	getSessionMetadata(sessionKey?: string): DurableSessionMetadata | undefined {
 		const key = sessionKey ?? this.activeKey;
 		if (!key) return undefined;
-		const record = this.sessions.get(key);
+		let record = this.findSessionRecord(key);
+		if (!record) {
+			this.ensureHydratedSync();
+			record = this.findSessionRecord(key);
+		}
 		return record ? { ...record.metadata } : undefined;
 	}
 
@@ -1785,13 +2233,14 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 	}
 
 	async delete(sessionKey: string): Promise<boolean> {
-		const record = this.sessions.get(sessionKey);
+		const record = this.findSessionRecord(sessionKey);
+		const resolvedKey = record?.metadata.sessionKey ?? sessionKey;
 		const cwd = record?.metadata.cwd ?? this.defaultCwd;
 		const engine = await this.getEngineForCwd(cwd);
-		const removed = engine.backend.deleteSessionRow(sessionKey) || this.sessions.has(sessionKey);
-		this.sessions.delete(sessionKey);
-		this.sessionDbPath.delete(sessionKey);
-		if (this.activeKey === sessionKey) {
+		const removed = engine.backend.deleteSessionRow(resolvedKey) || this.sessions.has(resolvedKey);
+		this.sessions.delete(resolvedKey);
+		this.sessionDbPath.delete(resolvedKey);
+		if (this.activeKey === resolvedKey || this.activeKey === sessionKey) {
 			this.activeKey = null;
 		}
 		return removed;
@@ -1814,66 +2263,25 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 		return all;
 	}
 
-	async lookupSession(
-		queryInput: DurableSessionLookupQuery | string,
-	): Promise<DurableSessionLookupResult> {
-		const query: DurableSessionLookupQuery =
-			typeof queryInput === "string" ? { sessionKey: queryInput } : queryInput;
+	async lookupSession(queryInput: DurableSessionLookupQuery | string): Promise<DurableSessionLookupResult> {
+		const query: DurableSessionLookupQuery = typeof queryInput === "string" ? { sessionKey: queryInput } : queryInput;
 		const cwd = query.cwd ?? this.defaultCwd;
 		const engine = await this.getEngineForCwd(cwd);
 		this.hydrateSessionsFromBackend(engine);
-		if (query.sessionKey) {
-			const hit = this.sessions.get(query.sessionKey);
-			if (hit) {
-				return {
-					found: true,
-					origin: hit.metadata.origin,
-					sessionKey: hit.metadata.sessionKey,
-					sessionId: hit.metadata.sessionId,
-					cwd: hit.metadata.cwd,
-					dbPath: hit.metadata.dbPath,
-					sourceSessionFile: hit.metadata.sourceSessionFile ?? null,
-				};
-			}
-			let parsed: { dbName: string; sessionId: string } | null = null;
-			try {
-				parsed = parseDurableSessionKey(query.sessionKey);
-			} catch {
-				parsed = null;
-			}
-			if (parsed) {
-				for (const candidate of this.sessions.values()) {
-					if (candidate.metadata.sessionId === parsed.sessionId) {
-						return {
-							found: true,
-							origin: candidate.metadata.origin,
-							sessionKey: candidate.metadata.sessionKey,
-							sessionId: candidate.metadata.sessionId,
-							cwd: candidate.metadata.cwd,
-							dbPath: candidate.metadata.dbPath,
-							sourceSessionFile: candidate.metadata.sourceSessionFile ?? null,
-						};
-					}
-				}
-			}
-		}
-		if (query.sessionId) {
-			for (const candidate of this.sessions.values()) {
-				if (
-					candidate.metadata.sessionId === query.sessionId ||
-					candidate.metadata.sessionKey === query.sessionId
-				) {
-					return {
-						found: true,
-						origin: candidate.metadata.origin,
-						sessionKey: candidate.metadata.sessionKey,
-						sessionId: candidate.metadata.sessionId,
-						cwd: candidate.metadata.cwd,
-						dbPath: candidate.metadata.dbPath,
-						sourceSessionFile: candidate.metadata.sourceSessionFile ?? null,
-					};
-				}
-			}
+		const lookupCandidate =
+			(query.sessionKey ? this.findSessionRecord(query.sessionKey) : undefined) ??
+			(query.sessionId ? this.findSessionRecord(query.sessionId) : undefined) ??
+			(query.sessionFile ? this.findSessionRecord(query.sessionFile) : undefined);
+		if (lookupCandidate) {
+			return {
+				found: true,
+				origin: lookupCandidate.metadata.origin,
+				sessionKey: lookupCandidate.metadata.sessionKey,
+				sessionId: lookupCandidate.metadata.sessionId,
+				cwd: lookupCandidate.metadata.cwd,
+				dbPath: lookupCandidate.metadata.dbPath,
+				sourceSessionFile: lookupCandidate.metadata.sourceSessionFile ?? null,
+			};
 		}
 		return {
 			found: false,
@@ -1904,6 +2312,7 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 		const record = this.mustGetSession(sessionKey ?? promptOptions.sessionKey);
 		const key = record.metadata.sessionKey;
 		const engine = await this.getEngineForCwd(record.metadata.cwd);
+		await this.ensureHarnessConversation(engine, record);
 		const appendedEntries: DurableEntryRecord[] = [];
 		const toolResults: DurableToolExecutionResult[] = [];
 		const toolTranscriptMessages: DurableMessageRecord[] = [];
@@ -2002,10 +2411,7 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 		appendedEntries.push(userEntry);
 		this.emit(key, { type: "message_end", sessionKey: key, message: userMessage });
 
-		const transformedMessages = await this.hookBridge.transformContext(
-			record.messages,
-			key,
-		);
+		const transformedMessages = await this.hookBridge.transformContext(record.messages, key);
 		record.messages = transformedMessages.map((m) => {
 			const id = String(m.id ?? this.nextId("msg"));
 			return {
@@ -2016,10 +2422,7 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 				timestamp: Number(m.timestamp ?? Date.now()),
 				customType: typeof m.customType === "string" ? m.customType : undefined,
 				display: typeof m.display === "boolean" ? m.display : undefined,
-				details:
-					m.details && typeof m.details === "object"
-						? (m.details as Record<string, unknown>)
-						: undefined,
+				details: m.details && typeof m.details === "object" ? (m.details as Record<string, unknown>) : undefined,
 			};
 		});
 
@@ -2185,12 +2588,8 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 		};
 	}
 
-	async steer(
-		text: string,
-		optionsOrKey?: string | DurableSteerOptions,
-	): Promise<DurableSteerDisposition> {
-		const sessionKey =
-			typeof optionsOrKey === "string" ? optionsOrKey : optionsOrKey?.sessionKey;
+	async steer(text: string, optionsOrKey?: string | DurableSteerOptions): Promise<DurableSteerDisposition> {
+		const sessionKey = typeof optionsOrKey === "string" ? optionsOrKey : optionsOrKey?.sessionKey;
 		const record = this.mustGetSession(sessionKey);
 		record.steerQueue.push(text);
 		if (!record.streaming) {
@@ -2203,12 +2602,8 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 		return "queued";
 	}
 
-	async followUp(
-		text: string,
-		optionsOrKey?: string | DurableFollowUpOptions,
-	): Promise<DurableFollowUpDisposition> {
-		const sessionKey =
-			typeof optionsOrKey === "string" ? optionsOrKey : optionsOrKey?.sessionKey;
+	async followUp(text: string, optionsOrKey?: string | DurableFollowUpOptions): Promise<DurableFollowUpDisposition> {
+		const sessionKey = typeof optionsOrKey === "string" ? optionsOrKey : optionsOrKey?.sessionKey;
 		const record = this.mustGetSession(sessionKey);
 		record.followUpQueue.push(text);
 		if (!record.streaming) {
@@ -2226,9 +2621,11 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 		record.abortRequested = true;
 		record.streaming = false;
 		const engine = await this.getEngineForCwd(record.metadata.cwd);
-		const conv = await engine.openConversation(record.conversationId);
-		if (conv) {
-			await conv.abort(BACKGROUND_CONTEXT);
+		if (record.conversationId > 0) {
+			const conv = await engine.openConversation(record.conversationId);
+			if (conv) {
+				await conv.abort(BACKGROUND_CONTEXT);
+			}
 		}
 		engine.backend.clearActiveTurn(record.metadata.sessionKey);
 	}
@@ -2238,10 +2635,7 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 		return record.streaming;
 	}
 
-	async switchModel(
-		model: DurableModelSelection,
-		options?: DurableSwitchModelOptions,
-	): Promise<void> {
+	async switchModel(model: DurableModelSelection, options?: DurableSwitchModelOptions): Promise<void> {
 		await this.setModel(model, options?.sessionKey);
 	}
 
@@ -2251,6 +2645,7 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 		const previous = { ...record.metadata.model };
 		record.metadata.model = resolved;
 		const engine = await this.getEngineForCwd(record.metadata.cwd);
+		await this.ensureHarnessConversation(engine, record);
 		engine.modelExecutor.ensureProvider(resolved.provider, resolved.id);
 		const conv = await engine.openConversation(record.conversationId);
 		if (conv) {
@@ -2282,10 +2677,7 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 		levelOrOptions: DurableThinkingLevel | (DurableSetThinkingOptions & { thinkingLevel: DurableThinkingLevel }),
 		optionsOrKey?: string | DurableSetThinkingOptions,
 	): Promise<void> {
-		const level =
-			typeof levelOrOptions === "string"
-				? levelOrOptions
-				: levelOrOptions.thinkingLevel;
+		const level = typeof levelOrOptions === "string" ? levelOrOptions : levelOrOptions.thinkingLevel;
 		const resolvedKey =
 			typeof levelOrOptions === "string"
 				? typeof optionsOrKey === "string"
@@ -2296,6 +2688,7 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 		const previous = record.metadata.thinkingLevel;
 		record.metadata.thinkingLevel = level;
 		const engine = await this.getEngineForCwd(record.metadata.cwd);
+		await this.ensureHarnessConversation(engine, record);
 		const conv = await engine.openConversation(record.conversationId);
 		if (conv) {
 			await conv.configure(
@@ -2312,10 +2705,7 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 		this.persistMetadataSync(record);
 	}
 
-	async appendCustomMessage(
-		payload: DurableCustomMessagePayload,
-		sessionKey?: string,
-	): Promise<DurableEntryRecord> {
+	async appendCustomMessage(payload: DurableCustomMessagePayload, sessionKey?: string): Promise<DurableEntryRecord> {
 		const record = this.mustGetSession(sessionKey);
 		await this.getEngineForCwd(record.metadata.cwd);
 		const now = Date.now();
@@ -2350,24 +2740,14 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 		data: T,
 		optionsOrKey?: string | DurableAppendCustomEntryOptions,
 	): Promise<DurableCustomEntryRecord<T>> {
-		const resolvedKey =
-			typeof optionsOrKey === "string"
-				? optionsOrKey
-				: optionsOrKey?.sessionKey;
+		const resolvedKey = typeof optionsOrKey === "string" ? optionsOrKey : optionsOrKey?.sessionKey;
 		const record = this.mustGetSession(resolvedKey);
 		await this.getEngineForCwd(record.metadata.cwd);
 		const payloadObj: Record<string, unknown> = {
 			customType,
 			data,
 		};
-		const entry = this.appendEntryInternal(
-			record,
-			"app.pi.custom",
-			"custom",
-			payloadObj,
-			Date.now(),
-			customType,
-		);
+		const entry = this.appendEntryInternal(record, "app.pi.custom", "custom", payloadObj, Date.now(), customType);
 		this.persistMetadataSync(record);
 		await this.hookBridge.appendEntry(customType, data, {
 			sessionKey: record.metadata.sessionKey,
@@ -2457,25 +2837,14 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 		fromEntryId?: string,
 		sourceSessionKey?: string,
 	): Promise<DurableSessionOpenResult> {
-		const targetSessionKey =
-			typeof targetOrOptions === "string"
-				? targetOrOptions
-				: this.nextId("session-fork");
-		const resolvedFromEntryId =
-			typeof targetOrOptions === "string"
-				? fromEntryId
-				: targetOrOptions?.fromEntryId;
+		const targetSessionKey = typeof targetOrOptions === "string" ? targetOrOptions : this.nextId("session-fork");
+		const resolvedFromEntryId = typeof targetOrOptions === "string" ? fromEntryId : targetOrOptions?.fromEntryId;
 		const resolvedSourceKey =
-			typeof targetOrOptions === "string"
-				? sourceSessionKey
-				: targetOrOptions?.sourceSessionKey;
+			typeof targetOrOptions === "string" ? sourceSessionKey : targetOrOptions?.sourceSessionKey;
 
 		const source = this.mustGetSession(resolvedSourceKey);
 		const engine = await this.getEngineForCwd(source.metadata.cwd);
-		const conv = await engine.createConversation(
-			source.metadata.model,
-			source.metadata.thinkingLevel,
-		);
+		const conv = await engine.createConversation(source.metadata.model, source.metadata.thinkingLevel);
 		const nowIso = new Date().toISOString();
 		let cutoffIndex = source.entries.length;
 		if (resolvedFromEntryId) {
@@ -2489,10 +2858,7 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 			sessionKey: targetSessionKey,
 		}));
 		const copiedMessages = reconstructMessagesFromEntries(copiedEntries);
-		const leafId =
-			copiedEntries.length > 0
-				? copiedEntries[copiedEntries.length - 1]!.id
-				: null;
+		const leafId = copiedEntries.length > 0 ? copiedEntries[copiedEntries.length - 1]!.id : null;
 		const title =
 			typeof targetOrOptions === "object" && targetOrOptions?.name
 				? targetOrOptions.name
@@ -2517,8 +2883,7 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 			messageCount: copiedMessages.length,
 			leafEntryId: leafId,
 			parentSessionKey: source.metadata.sessionKey,
-			forkFromEntryId:
-				resolvedFromEntryId ?? (source.leafEntryId !== null ? source.leafEntryId : null),
+			forkFromEntryId: resolvedFromEntryId ?? (source.leafEntryId !== null ? source.leafEntryId : null),
 			conversationId: Number(conv.id),
 		};
 
@@ -2563,10 +2928,7 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 		};
 	}
 
-	subscribe(
-		listener: DurableSessionPortListener,
-		sessionKey?: string,
-	): () => void {
+	subscribe(listener: DurableSessionPortListener, sessionKey?: string): () => void {
 		if (!sessionKey) {
 			this.wildcardListeners.add(listener);
 			return () => {
@@ -2590,6 +2952,7 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 
 	setHookBridge(bridge: ExtensionHookBridge): void {
 		this.hookBridge = bridge;
+		(bridge as { bindSessionPort?: (port: DurableSessionPort) => void }).bindSessionPort?.(this);
 		for (const engine of this.resolvedEngines.values()) {
 			engine.toolExecutor.setHookBridge(bridge);
 		}
@@ -2605,12 +2968,6 @@ export class PiDurableSessionDriver implements DurableSessionPort {
 	}
 }
 
-export function createPiDurableSessionDriver(
-	options: PiDurableSessionDriverOptions,
-): PiDurableSessionDriver {
+export function createPiDurableSessionDriver(options: PiDurableSessionDriverOptions): PiDurableSessionDriver {
 	return new PiDurableSessionDriver(options);
 }
-
-
-
-

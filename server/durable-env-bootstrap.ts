@@ -17,23 +17,11 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import {
-	existsSync,
-	mkdirSync,
-	readdirSync,
-	readFileSync,
-	renameSync,
-	statSync,
-	writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import {
-	formatDurableSessionKey,
-	parseDurableSessionKey,
-	resolveDurableStorageMode,
-} from "./durable-session-port.js";
+import { formatDurableSessionKey, parseDurableSessionKey, resolveDurableStorageMode } from "./durable-session-port.js";
 
 export { formatDurableSessionKey, parseDurableSessionKey, resolveDurableStorageMode };
 
@@ -498,9 +486,8 @@ export function initializeDurableDatabaseSchema(db: DatabaseSync): void {
  * from `durable_metadata`.
  */
 export function allocatePiDurableIdAndSeq(db: DatabaseSync, countIds = 1): { firstId: number; commitSeq: number } {
-	const row = db
-		.prepare("SELECT next_id, next_seq FROM durable_metadata WHERE singleton = 1")
-		.get() as { next_id: string; next_seq: number } | undefined;
+	const row = db.prepare("SELECT next_id, next_seq FROM durable_metadata WHERE singleton = 1").get() as
+		{ next_id: string; next_seq: number } | undefined;
 	const firstId = row ? Number(row.next_id) : 2;
 	const commitSeq = row ? Number(row.next_seq) : 1;
 	db.prepare("UPDATE durable_metadata SET next_id = ?, next_seq = ? WHERE singleton = 1").run(
@@ -596,9 +583,7 @@ function createRoleDurableHomeChatSession(
 		);
 
 		db.prepare("INSERT OR IGNORE INTO record_ids (id, record_type) VALUES (?, 'entry')").run(entryNumericId);
-		db.prepare(
-			"INSERT INTO entries (id, conversation_id, head, commit_seq, record) VALUES (?, ?, NULL, ?, ?)",
-		).run(
+		db.prepare("INSERT INTO entries (id, conversation_id, head, commit_seq, record) VALUES (?, ?, NULL, ?, ?)").run(
 			entryNumericId,
 			convNumericId,
 			commitSeq,
@@ -638,9 +623,7 @@ function countJsonlFilesRecursive(dirPath: string): number {
 /**
  * Synchronously bootstrap a clean durable environment in `homeDir` (or explicit `dataDir`/`agentDir`).
  */
-export function bootstrapDurableEnvironmentSync(
-	options: ExtendedDurableBootstrapOptions = {},
-): DurableBootstrapResult {
+export function bootstrapDurableEnvironmentSync(options: ExtendedDurableBootstrapOptions = {}): DurableBootstrapResult {
 	const homeDir = resolve(options.homeDir ?? process.env.HOME ?? homedir());
 	const dataDir = resolve(options.dataDir ?? join(homeDir, ".pi-web-ui"));
 	const agentDir = resolve(options.agentDir ?? join(homeDir, ".pi", "agent"));
@@ -689,10 +672,7 @@ export function bootstrapDurableEnvironmentSync(
 			const idFile = join(roleDir, "identity.json");
 			if (!existsSync(idFile)) {
 				mkdirSync(roleDir, { recursive: true });
-				writeFileAtomicSync(
-					idFile,
-					`${JSON.stringify({ id: roleId, title: roleId, description: "" }, null, 2)}\n`,
-				);
+				writeFileAtomicSync(idFile, `${JSON.stringify({ id: roleId, title: roleId, description: "" }, null, 2)}\n`);
 			}
 		}
 	}
@@ -726,9 +706,7 @@ export function bootstrapDurableEnvironmentSync(
 				typeof rawObj.homeChat === "string" && rawObj.homeChat.trim() ? rawObj.homeChat.trim() : undefined;
 
 			const existingPastHomeChats = Array.isArray(rawObj.pastHomeChats)
-				? rawObj.pastHomeChats.filter(
-						(item): item is string => typeof item === "string" && item.trim().length > 0,
-					)
+				? rawObj.pastHomeChats.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
 				: [];
 
 			let sessionId: string;
