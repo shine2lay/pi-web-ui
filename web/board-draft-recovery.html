@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Board drafts — look-only recovery</title>
+		<meta name="referrer" content="no-referrer" />
+		<style>
+			body {
+				font:
+					1rem/1.5 system-ui,
+					sans-serif;
+				max-width: 72rem;
+				margin: 2rem auto;
+				padding: 0 1rem;
+			}
+			pre {
+				white-space: pre-wrap;
+				overflow-wrap: anywhere;
+				border: 1px solid currentColor;
+				padding: 1rem;
+			}
+			section {
+				margin-block: 2rem;
+			}
+			button {
+				font: inherit;
+				padding: 0.5rem;
+			}
+		</style>
+	</head>
+	<body>
+		<main data-board-draft-reader>
+			<h1>Board drafts — LOOK ONLY</h1>
+			<p>Reader not loaded. Nothing has been restored, posted, closed or replayed.</p>
+		</main>
+		<script type="module" src="./src/board-draft-reader.ts"></script>
+	</body>
+</html>
