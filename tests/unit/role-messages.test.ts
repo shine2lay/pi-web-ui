@@ -187,6 +187,24 @@ describe("message_role checks", () => {
 		expect(s.rows()).toHaveLength(0);
 	});
 
+	it("refuses a task chat messaging its own role and points it to ask_lead and queue_done (Ops #624)", () => {
+		const f = fake([role("alpha", "Alpha", A), role("beta", "Beta", B)]);
+		const s = new RoleMessages(store, f.host, clock);
+		// A queued task's own chat of alpha: not its home chat (its own transcript, not alpha's home A).
+		const worker = sender({ role: "alpha", file: chat("alpha-task-7"), chat: "Queue #7" });
+		for (const kind of ["request", "question", "fyi"]) {
+			const r = s.send(worker, { to: "alpha", kind, text: "HOME receiving" });
+			expect(r).toMatchObject({ ok: false, error: expect.stringContaining("ask_lead") });
+			expect(r).toMatchObject({ error: expect.stringContaining("queue_done") });
+		}
+		// The home chat itself still gets the home-chat refusal, which is checked first.
+		expect(s.send(sender({ role: "alpha", file: A }), { to: "alpha", kind: "fyi", text: "x" })).toMatchObject({
+			ok: false,
+			error: "This chat is alpha's home chat: that's you.",
+		});
+		expect(s.rows()).toHaveLength(0);
+	});
+
 	it("checks a reply: it needs replyTo, answers a question or request sent to it, once, to its sender", async () => {
 		const f = fake([role("alpha", "Alpha", A), role("beta", "Beta", B), role("gamma", "Gamma", chat("gamma-home"))]);
 		const s = new RoleMessages(store, f.host, clock);

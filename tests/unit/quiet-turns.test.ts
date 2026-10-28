@@ -340,6 +340,9 @@ describe("quiet-turns: tool call arguments as the page has them (JSON text, mayb
 		expect(control('{"action":"remove","id":12}')).toBeNull();
 		expect(sentOf({ id: "1", name: "bash", args: "{}" }, {})).toBeNull();
 		expect(ownerFacing({ id: "1", name: "tldr", args: '{"text":"x","needs_you":true}' })).toBe(true);
+		// ask_lead is queue_stuck under a worker's name (Ops #624): its card stays out of the fold too.
+		expect(ownerFacing({ id: "1", name: "queue_stuck", args: '{"question":"Which?"}' })).toBe(true);
+		expect(ownerFacing({ id: "1", name: "ask_lead", args: '{"question":"Which?"}' })).toBe(true);
 		expect(ownerFacing({ id: "1", name: "tldr", args: '{"text":"x"}' })).toBe(false);
 	});
 });

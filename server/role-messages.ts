@@ -1842,6 +1842,15 @@ export class RoleMessages {
 			if (samePath(to.homeChat, sender.file)) {
 				return { ok: false, error: `This chat is ${to.id}'s home chat: that's you.` };
 			}
+			// Ops #624 (owner, 2026-10-28, AGENTS.md rule 35): a chat never messages its own role. A task
+			// chat talks to its Lead through the queue (ask_lead, queue_done), not message_role. The home-chat
+			// check above stays first, so a home chat still gets "that's you".
+			if (to.id === sender.role) {
+				return {
+					ok: false,
+					error: `You are already in ${to.id}'s department: do not message your own role. In a queued task chat, use ask_lead to ask your Lead a question or decision, or queue_done when the task is finished.`,
+				};
+			}
 		}
 		// Owner visibility and transport are separate; only server-derived sender context is accepted.
 		const forOwner = (kind === "question" || kind === "request") && sender.forOwner ? sender.forOwner : undefined;

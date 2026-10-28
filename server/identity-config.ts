@@ -166,6 +166,7 @@ export const DEFAULT_ALWAYS_ALLOW: readonly string[] = [
 	"tldr",
 	"queue_done",
 	"queue_stuck",
+	"ask_lead",
 	"queue_wait",
 	"message_role",
 	"board",

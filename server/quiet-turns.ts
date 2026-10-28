@@ -337,7 +337,8 @@ export function argsOf(args: unknown): Record<string, unknown> {
 
 /** Calls whose card is for the owner: shown outside a closed row. */
 export function ownerFacing(call: QuietCall): boolean {
-	if (call.name === "ask_user_question" || call.name === "queue_stuck") return true;
+	// ask_lead (pi-queue #623) is queue_stuck under a worker's name: same card, same routing.
+	if (call.name === "ask_user_question" || call.name === "queue_stuck" || call.name === "ask_lead") return true;
 	if (call.name !== "tldr" && call.name !== "queue_reply") return false;
 	const a = argsOf(call.args);
 	if (call.name === "tldr") return a.needs_you === true;
