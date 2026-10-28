@@ -11,9 +11,17 @@
  *
  * It only reads: one open and stat per look, of a regular file only (never a FIFO, a device or a folder), and
  * the file again only when it changed, at most WORK_LOG_MAX bytes of it.
+ *
+ * canonical-readers (Ops #621): once pi-queue has loaded in this server, the records come from pi-queue's own
+ * readWork (pi-queue-readers.ts), after the same open and stat; this file's replay reads the log when it hasn't, or
+ * when readWork can't use the log. The store's compaction (pi-queue work-store.ts compactWorkEvents) rewrites the log
+ * as ordinary changes: it keeps every initiative and project change and renumbers the sequence, which neither
+ * reader here depends on, so a compacted log shows the same records.
  */
 
 import { open, type FileHandle } from "node:fs/promises";
+import { basename, dirname } from "node:path";
+import { piQueueReaders } from "./pi-queue-readers.js";
 import { readUpTo, STATE_READ_FLAGS } from "./state-file-read.js";
 import type { UiWorkRecord, UiWorkRecords } from "./protocol.js";
 
@@ -170,6 +178,11 @@ export function workRecordsFrom(log: string): UiWorkRecords {
 		}
 		unknown = true;
 	}
+	return recordsOut(recs.values(), unknown);
+}
+
+/** The records the page shows, from the replayed ones (in the order they were made); `unknown`: a change was skipped. */
+function recordsOut(recs: Iterable<Rec>, unknown: boolean): UiWorkRecords {
 	const out = (r: Rec): UiWorkRecord => ({
 		id: r.id,
 		name: r.name,
@@ -179,7 +192,7 @@ export function workRecordsFrom(log: string): UiWorkRecords {
 		items: r.doneWhen.length,
 		met: r.met.size,
 	});
-	const all = [...recs.values()];
+	const all = [...recs];
 	const initiatives = all.filter((r) => r.kind === "initiative");
 	const projects = all.filter((r) => r.kind === "project");
 	// A bloated log never enlarges every Roles look past this many records.
@@ -192,6 +205,67 @@ export function workRecordsFrom(log: string): UiWorkRecords {
 		projects: sentProjects.map(out),
 		...(problem ? { problem } : {}),
 	};
+}
+
+const mapLike = (x: unknown): x is ReadonlyMap<unknown, unknown> =>
+	!!x &&
+	typeof x === "object" &&
+	typeof (x as Map<unknown, unknown>).entries === "function" &&
+	typeof (x as Map<unknown, unknown>).size === "number";
+
+/**
+ * canonical-readers (Ops #621): pi-queue's WorkState (its readWork) -> the records the page shows, as
+ * workRecordsFrom shows the same log. undefined when it isn't that shape, or holds a record the store could never
+ * have written (the log is then read by workRecordsFrom, which skips such a change and says so).
+ */
+export function workRecordsFromState(state: unknown): UiWorkRecords | undefined {
+	if (!state || typeof state !== "object") return undefined;
+	const { initiatives, projects } = state as { initiatives?: unknown; projects?: unknown };
+	if (!mapLike(initiatives) || !mapLike(projects)) return undefined;
+	const recs: Rec[] = [];
+	for (const [kind, records] of [
+		["initiative", initiatives],
+		["project", projects],
+	] as const) {
+		for (const [id, raw] of records.entries()) {
+			const r = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : undefined;
+			if (!r || !workId(id) || !workName(r.name) || !workId(r.lead) || !STATUSES.includes(r.status as Status)) {
+				return undefined;
+			}
+			const doneWhen = doneList(r.doneWhen);
+			const initiative = kind === "project" ? initiativeOf(r.initiative) : null;
+			if (!doneWhen || initiative === undefined || !Array.isArray(r.met)) return undefined;
+			const met = new Set<string>();
+			for (const m of r.met as unknown[]) {
+				const item = m && typeof m === "object" ? (m as { item?: unknown }).item : undefined;
+				if (typeof item !== "string") return undefined;
+				met.add(itemKey(item));
+			}
+			recs.push({
+				kind,
+				id,
+				name: r.name,
+				lead: r.lead,
+				status: r.status as Status,
+				initiative,
+				doneWhen: [...doneWhen],
+				met: keepMarks(doneWhen, met),
+			});
+		}
+	}
+	return recordsOut(recs, false);
+}
+
+/** The records from pi-queue's own readWork of the log in `dir`; undefined when it isn't loaded or can't use the log. */
+function canonicalRecords(dir: string): UiWorkRecords | undefined {
+	const readers = piQueueReaders();
+	if (!readers) return undefined;
+	try {
+		return workRecordsFromState(readers.readWork(dir));
+	} catch {
+		// A log readWork refuses (damaged, a change it doesn't know): workRecordsFrom reads it and says what it skipped.
+		return undefined;
+	}
 }
 
 const NONE: UiWorkRecords = { initiatives: [], projects: [] };
@@ -228,6 +302,12 @@ export class WorkRecordsFile {
 				return tooBig();
 			}
 			if (this.seen && this.seen.mtimeMs === st.mtimeMs && this.seen.size === st.size) return this.seen.value;
+			// pi-queue's readWork reads the log in its folder by that name (pi-queue work-store.ts workFile).
+			const canonical = basename(p) === "events.jsonl" ? canonicalRecords(dirname(p)) : undefined;
+			if (canonical) {
+				this.seen = { mtimeMs: st.mtimeMs, size: st.size, value: canonical };
+				return canonical;
+			}
 			const bytes = await readUpTo(fh, WORK_LOG_MAX, READ_CHUNK);
 			// It grew past the limit while being read.
 			if (bytes === null) {

@@ -1506,14 +1506,18 @@ describe("taskQueueFromEntries (task-question decisions)", () => {
 	});
 
 	it("a route sends an open question from before to Ops; it means nothing for a task not asking", () => {
-		const { to: _, ...old } = toOps;
-		expect(byId(replay(entries([...base, old, { op: "route", id: 1 }])), 1)?.askOps).toBe(true);
-		expect(byId(replay(entries([...base, { op: "route", id: 1 }])), 1)).toMatchObject({ status: "working" });
-		expect(byId(replay(entries([...base, { op: "route", id: 1 }])), 1)?.askOps).toBeUndefined();
+		// A route names the question it sends by its number and time (pi-queue's "route" op; Ops #621: its replay
+		// moves only the question it names).
+		const { to: _, ...old } = { ...toOps, ts: 1 };
+		const route = { op: "route", id: 1, n: 1, at: 1 };
+		expect(byId(replay(entries([...base, old, route])), 1)?.askOps).toBe(true);
+		expect(byId(replay(entries([...base, route])), 1)).toMatchObject({ status: "working" });
+		expect(byId(replay(entries([...base, route])), 1)?.askOps).toBeUndefined();
 	});
 
 	it("question-lead: names the department whose lead has the question, and who has it after each step up", () => {
-		const toTemper = { ...toOps, lead: "temper", step: 0, routedAt: 1 };
+		// Asked at time 1: the routes below name it by its number and that time.
+		const toTemper = { ...toOps, lead: "temper", step: 0, routedAt: 1, ts: 1 };
 		expect(byId(replay(entries([...base, toTemper])), 1)).toMatchObject({
 			status: "asking",
 			askOps: true,

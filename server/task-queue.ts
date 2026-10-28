@@ -67,6 +67,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { type FileHandle, open } from "node:fs/promises";
 import { StringDecoder } from "node:string_decoder";
+import { piQueueReaders } from "./pi-queue-readers.js";
 import { requesterOf } from "./queue-requester.js";
 import { checkPatch, normProfile, normLaunch, patchProfile } from "./queue-profile.js";
 import type {
@@ -915,6 +916,221 @@ function apply(s: State, raw: unknown): void {
 	}
 }
 
+// canonical-readers (Ops #621): pi-queue's own replay, once pi-queue has loaded in this process (pi-queue-readers.ts).
+// Its state (pi-queue's QueueState) is turned into this file's State below: only the fields the page knows, each in
+// the shape and within the limits apply() gives it, and each only in the statuses where apply() keeps it, so the
+// Queue panel's messages keep their shape whichever replay ran.
+
+/** pi-queue's state holds something the page can't show (a status this file doesn't know): apply() replays instead. */
+class CanonicalShape extends Error {}
+
+const STATUSES: ReadonlySet<Status> = new Set<Status>([...OPEN, "done", "dropped", "removed"]);
+
+const rec = (x: unknown): Record<string, unknown> | undefined =>
+	x && typeof x === "object" && !Array.isArray(x) ? (x as Record<string, unknown>) : undefined;
+const finite = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
+
+/** canonical-readers: pi-queue's owner pause ({at, why, by}) as applyHold keeps it ({at, why}). */
+function holdOf(raw: unknown): UiTaskQueueHold | undefined {
+	const h = rec(raw);
+	const why = typeof h?.why === "string" ? h.why.trim().slice(0, HOLD_WHY_MAX) : "";
+	return h && why ? { at: num(h.at), why } : undefined;
+}
+
+/** canonical-readers: pi-queue's TaskBlock as the "block", "poke", "remind", "chain" and "lead" changes keep it. */
+function blockOf(b: Record<string, unknown>): UiTaskQueueBlock {
+	const on = normTaskRefs(b.on);
+	const need = needOf(b.need);
+	const lead = leadOf(b.lead);
+	const owes = lead ? owesOf(b.owes) : undefined;
+	const checkpoint = lead ? timeOf(b.checkpoint) : undefined;
+	const reminders = lead ? remindersOf(b.reminders) : undefined;
+	const chain = lead ? chainOf(b.chain, lead) : undefined;
+	const leadAt = lead ? timeOf(b.leadAt) : undefined;
+	const answeredAt = lead ? timeOf(b.answeredAt) : undefined;
+	const poke = rec(b.poke);
+	const since = num(b.since);
+	return {
+		...(on ? { on } : {}),
+		...(need ? { need } : {}),
+		...(lead ? { lead } : {}),
+		...(owes ? { owes } : {}),
+		...(checkpoint !== undefined ? { checkpoint } : {}),
+		...(reminders ? { reminders } : {}),
+		...(leadAt !== undefined ? { leadAt } : {}),
+		...(answeredAt !== undefined ? { answeredAt } : {}),
+		since,
+		start: numOr(b.start, since),
+		tries: Math.max(0, Math.round(numOr(b.tries, 0))),
+		...(chain ? { chain } : {}),
+		// pi-queue keeps the note the poke sent too; the page never had it.
+		...(poke
+			? {
+					poke: {
+						at: num(poke.at),
+						...(poke.ask === true ? { ask: true } : {}),
+						...(poke.ask === true && poke.owner === true ? { owner: true } : {}),
+						...(typeof poke.lead === "string" && poke.lead ? { lead: poke.lead } : {}),
+					},
+				}
+			: {}),
+	};
+}
+
+/** canonical-readers: pi-queue's outside list (its OutsideAfter: over may carry the summary, which the page never had). */
+function outsideOfQueue(raw: unknown): UiTaskQueueRef[] | undefined {
+	const refs = normTaskRefs(raw);
+	if (!refs || !Array.isArray(raw)) return undefined;
+	return refs.map((r) => {
+		const saved = raw.map(rec).find((x) => x?.file === r.file && x?.id === r.id);
+		const over = rec(saved?.over);
+		if (!over) return r;
+		const why = typeof over.dropped === "string" ? oneLine(over.dropped, TASK_QUEUE_DROP_WHY_MAX) : "";
+		return {
+			...r,
+			over: {
+				at: num(over.at),
+				...(over.removed === true || why ? { removed: true } : {}),
+				...(why ? { dropped: why } : {}),
+			},
+		};
+	});
+}
+
+/** canonical-readers: one of pi-queue's tasks (its QueueTask) as apply() keeps it. */
+function taskOf(raw: unknown): Task {
+	const c = rec(raw);
+	if (!c || !isId(c.id) || !STATUSES.has(c.status as Status)) throw new CanonicalShape();
+	const status = c.status as Status;
+	const t: Task = { id: c.id, plan: planOf(c.plan), status, addedAt: num(c.addedAt) };
+	const origin = requesterOf(c.origin);
+	if (origin) t.origin = origin;
+	if (c.approval === "dialog" || c.approval === "auto") t.approval = c.approval;
+	setParent(
+		t,
+		nextParent(undefined, {
+			...(typeof c.project === "string" ? { project: c.project } : {}),
+			...(typeof c.initiative === "string" ? { initiative: c.initiative } : {}),
+			standalone: c.standalone === true,
+		}),
+	);
+	const touches = normTouches(c.touches);
+	if (touches) t.touches = touches;
+	const after = normAfter(c.after, c.id);
+	if (after?.length) t.after = after;
+	const profile = normProfile(c.profile);
+	if (profile) t.profile = profile;
+	const launch = normLaunch(c.launch);
+	if (launch) t.launch = launch;
+	if (c.launchPrepared === true) t.launchPrepared = true;
+	if (typeof c.problem === "string" && c.problem) t.problem = c.problem.slice(0, 500);
+	if (c.lane === true) t.lane = true;
+	const chat = chatOf(c.chat);
+	if (chat) t.chat = chat;
+	// A question, its choices and its package go with a task that needs the user or asks its main chat (apply clears
+	// them on every other status); pi-queue may keep an earlier ask's record on a task, which the page never shows.
+	if (status === "stuck" || status === "asking") {
+		t.question = str(c.question, NOTE_MAX);
+		const choices = normChoices(c.choices);
+		if (choices.length) t.choices = choices;
+	}
+	if (status === "stuck") {
+		const detail = detailOf(c.detail);
+		if (detail) t.detail = detail;
+	}
+	if (finite(c.stuckAt)) t.stuckAt = c.stuckAt;
+	const ask = rec(c.ask);
+	if (status === "asking" && ask?.to === "ops") {
+		t.askOps = true;
+		const lead = askLeadOf(ask.lead);
+		if (lead) t.askLead = lead;
+	}
+	// queue-main-chat: back at work with its main chat's answer (pi-queue's `answered`, kept until the next change).
+	if (status === "working" && typeof c.answered === "number" && c.answered > 0) t.mainAnswered = true;
+	const wait = rec(c.wait);
+	if (status === "waiting" && wait) {
+		const since = num(wait.since);
+		t.wait = {
+			what: str(wait.what, 200),
+			check: str(wait.check, 1000),
+			everyMs: numOr(wait.everyMs, DEFAULT_EVERY_MS),
+			since,
+			until: numOr(wait.until, since + DEFAULT_GIVE_UP_MS),
+			...(finite(wait.overAt) ? { overAt: wait.overAt } : {}),
+			...(wait.failed !== undefined && wait.failed !== "" ? { failed: cap(String(wait.failed), NOTE_MAX) } : {}),
+		};
+	}
+	const block = rec(c.block);
+	if (status === "blocked" && block) t.block = blockOf(block);
+	const outside = outsideOfQueue(c.outside);
+	if (outside) t.outside = outside;
+	if (typeof c.summary === "string") t.summary = cap(c.summary, NOTE_MAX);
+	else if (status === "done") t.summary = "";
+	const dropped = rec(c.dropped);
+	if (dropped)
+		t.dropped = { why: oneLine(dropped.why, TASK_QUEUE_DROP_WHY_MAX) || "no reason given", at: num(dropped.at) };
+	const hold = holdOf(c.hold);
+	if (hold) t.hold = hold;
+	if (finite(c.heldFrom)) t.heldFrom = c.heldFrom;
+	const back = rec(c.back);
+	if (back) t.back = { from: num(back.from), to: num(back.to) };
+	if (finite(c.startedAt)) t.startedAt = c.startedAt;
+	if (finite(c.doneAt)) t.doneAt = c.doneAt;
+	return t;
+}
+
+/** canonical-readers: pi-queue's QueueState as this file's State. */
+function stateOf(raw: unknown, queueId: string | undefined): State {
+	const q = rec(raw);
+	if (!q || !Array.isArray(q.tasks)) throw new CanonicalShape();
+	const s: State = {
+		tasks: q.tasks.map(taskOf),
+		running: q.running === true,
+		lanes: finite(q.lanes)
+			? Math.round(Math.min(TASK_QUEUE_MAX_LANES, Math.max(1, q.lanes)))
+			: TASK_QUEUE_DEFAULT_LANES,
+		autoApprove: q.autoApprove === true,
+		autoStart: q.autoStart === true,
+		queueId,
+	};
+	const profile = normProfile(q.profile);
+	if (profile) s.profile = profile;
+	if (PAUSE_REASONS.has(q.pausedReason as PauseReason)) s.pausedReason = q.pausedReason as PauseReason;
+	const hold = holdOf(q.hold);
+	if (hold) s.hold = hold;
+	const from = chatOf(q.from);
+	if (from) s.from = from;
+	return s;
+}
+
+/**
+ * The queue the entries replay to: by pi-queue's own replay once pi-queue has loaded in this process
+ * (canonical-readers), else by apply(), this file's mirror of it. A state pi-queue's replay can't give (it threw on
+ * an entry, or holds what this file can't show) is replayed by apply() too.
+ */
+function replayState(entries: readonly TaskQueueEntryLike[], queueId: string | undefined): State {
+	const readers = piQueueReaders();
+	if (readers) {
+		try {
+			return stateOf(readers.replay(entries, queueId), queueId);
+		} catch {
+			// apply() below.
+		}
+	}
+	const s: State = {
+		tasks: [],
+		running: false,
+		lanes: TASK_QUEUE_DEFAULT_LANES,
+		autoApprove: false,
+		autoStart: false,
+		queueId,
+	};
+	for (const e of entries) {
+		if (e.type === "custom" && e.customType === TASK_QUEUE_ENTRY_TYPE) apply(s, e.data);
+	}
+	return s;
+}
+
 /** 只用到的会话条目字段（SessionEntry 的子集，测试好造）。 */
 export interface TaskQueueEntryLike {
 	type: string;
@@ -937,17 +1153,7 @@ export function taskQueueFromEntries(
 	shareable: readonly string[] = TASK_QUEUE_DEFAULT_SHAREABLE,
 	queueId?: string,
 ): UiTaskQueue {
-	const s: State = {
-		tasks: [],
-		running: false,
-		lanes: TASK_QUEUE_DEFAULT_LANES,
-		autoApprove: false,
-		autoStart: false,
-		queueId,
-	};
-	for (const e of entries) {
-		if (e.type === "custom" && e.customType === TASK_QUEUE_ENTRY_TYPE) apply(s, e.data);
-	}
+	const s = replayState(Array.isArray(entries) ? entries : [...entries], queueId);
 	// question-lead: which department has the question goes only with a question that is with a lead now.
 	for (const t of s.tasks) if (t.status !== "asking" || !t.askOps) delete t.askLead;
 	const done = s.tasks.filter((t) => t.status === "done").sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0));
@@ -1040,13 +1246,10 @@ export function taskQueueAll(entries: Iterable<TaskQueueEntryLike>): {
 	/** queue-lead-reminders: the queue runs (started and not stopped). */
 	running: boolean;
 } {
-	const s: State = { tasks: [], running: false, lanes: TASK_QUEUE_DEFAULT_LANES, autoApprove: false, autoStart: false };
-	let first = true;
-	for (const e of entries) {
-		if (first && e.type === "session" && typeof e.id === "string" && e.id) s.queueId = e.id;
-		first = false;
-		if (e.type === "custom" && e.customType === TASK_QUEUE_ENTRY_TYPE) apply(s, e.data);
-	}
+	const list = Array.isArray(entries) ? entries : [...entries];
+	const head = list[0];
+	const queueId = head?.type === "session" && typeof head.id === "string" && head.id ? head.id : undefined;
+	const s = replayState(list, queueId);
 	return {
 		tasks: s.tasks,
 		...(s.from ? { from: s.from } : {}),
