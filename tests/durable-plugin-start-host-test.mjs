@@ -132,7 +132,9 @@ async function setup() {
 		}
 		assert.ok(wire.sessionId && wire.socketInitialized);
 	};
-	await page.goto(server.http);
+	// ?recovery=1: the recovery panels (#611) and the Tool Inspector button this test waits on (Ops #621) show only
+	// with it (web/src/url-flags.ts); page.reload() keeps it.
+	await page.goto(`${server.http}/?recovery=1`);
 	await boot();
 	return { context, page, wire, boot };
 }

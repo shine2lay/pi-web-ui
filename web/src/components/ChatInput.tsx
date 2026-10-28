@@ -37,6 +37,7 @@ import { getPluginComposerProvider, listPluginComposerProviders } from "../plugi
 import { detectTouchFirstDevice } from "../touch-device";
 import { isKeyboardUp, subscribeKeyboard } from "../mobile-viewport";
 import { groupByAlign } from "../ui-slots";
+import { showPermissionControls } from "../url-flags";
 
 import { ModelThinking } from "./ModelThinking";
 import { FastModeButton } from "./FastModeButton";
@@ -204,6 +205,9 @@ export const ChatInput = memo(function ChatInput({
 	/** DSH 无 mid-run steering（isStreaming 时 prompt 全部走 followUp，
 	 *  见 server/dsh/dsh-agent-service.ts）—— 只渲染「排队」半段，不摆一个说了不算的「插队」。 */
 	const isDsh = useIsDsh();
+	/** debug-controls (Ops #621): the preset ("Full") and permission ("Full access") selectors only with
+	 *  ?debugPerm=1 (web/src/url-flags.ts); without it the chat keeps the preset and permission it has. */
+	const permControls = useMemo(() => showPermissionControls(), []);
 	const slashDesc = (c: SlashCommandInfo) => (c.descriptionEn ? c.descriptionEn : (c.description ?? ""));
 	const slashHint = (c: SlashCommandInfo) => (c.argumentHintEn ? c.argumentHintEn : (c.argumentHint ?? ""));
 	const [text, setTextState] = useState("");
@@ -1535,7 +1539,7 @@ export const ChatInput = memo(function ChatInput({
 				<FastModeButton fast={fastMode} conversationId={conversationId} disabled={!connected} />
 			) : null,
 		"host:composer-dsh-perm":
-			dshPermOptions && dshPermOptions.length > 0 && dshPermDefault !== undefined ? (
+			permControls && dshPermOptions && dshPermOptions.length > 0 && dshPermDefault !== undefined ? (
 				<DshPermissionBar
 					compact
 					current={dshPermCurrent ?? null}
@@ -1545,7 +1549,7 @@ export const ChatInput = memo(function ChatInput({
 				/>
 			) : null,
 		"host:composer-dsh-preset":
-			dshPresets && dshPresets.length > 0 && dshPresetDefault !== undefined ? (
+			permControls && dshPresets && dshPresets.length > 0 && dshPresetDefault !== undefined ? (
 				<DshPresetBar
 					compact
 					preset={dshPreset ?? null}
@@ -1834,7 +1838,7 @@ export const ChatInput = memo(function ChatInput({
 									<FastModeButton fast={fastMode} conversationId={conversationId} disabled={!connected} />
 								)}
 								{/* DSH 引擎：权限 + 模式下拉（思考强度右侧，只留按钮）。 */}
-								{dshPermOptions && dshPermOptions.length > 0 && dshPermDefault !== undefined && (
+								{permControls && dshPermOptions && dshPermOptions.length > 0 && dshPermDefault !== undefined && (
 									<DshPermissionBar
 										compact
 										current={dshPermCurrent ?? null}
@@ -1843,7 +1847,7 @@ export const ChatInput = memo(function ChatInput({
 										conversationId={conversationId ?? ""}
 									/>
 								)}
-								{dshPresets && dshPresets.length > 0 && dshPresetDefault !== undefined && (
+								{permControls && dshPresets && dshPresets.length > 0 && dshPresetDefault !== undefined && (
 									<DshPresetBar
 										compact
 										preset={dshPreset ?? null}

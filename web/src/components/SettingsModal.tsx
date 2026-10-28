@@ -36,6 +36,7 @@ import { PluginIcon } from "../plugin-icon";
 import { HintTip } from "./HintTip";
 import { sortAgentPresets } from "./DshPresetBar";
 import { DSH_PERMISSION_ORDER, permDescKey, permLabelKey } from "./DshPermissionBar";
+import { showPermissionControls } from "../url-flags";
 import { PluginPage } from "./PluginPage";
 import { PluginSettingsForm } from "./PluginSettingsForm";
 import type {
@@ -541,6 +542,8 @@ export function SettingsModal({
 	const { engine, managed } = useAppGlobals();
 	// DSH 引擎：无 pi 扩展/技能体系与视觉桥概念 —— 隐藏对应分区/改占位说明。
 	const isDsh = engine === "dsh";
+	// debug-controls (Ops #621): the agent preset and permission settings only with ?debugPerm=1 (web/src/url-flags.ts).
+	const permControls = useMemo(() => showPermissionControls(), []);
 	// identities: the Identities page's count (pi only).
 	const identityCount = useIdentityList().identities.length;
 	// 当前左侧导航选中的分组。
@@ -1993,7 +1996,7 @@ export function SettingsModal({
 										) : undefined
 									}
 								/>
-								{chat.dshPermission && chat.dshPermission.options.length > 0 && (
+								{permControls && chat.dshPermission && chat.dshPermission.options.length > 0 && (
 									<div className="set-mode-row" style={{ marginTop: 8, marginBottom: 8 }}>
 										<label className="set-field-label">
 											{t("dshPermDefault")}
@@ -3728,7 +3731,7 @@ export function SettingsModal({
 							</div>
 						)}
 
-						{tab === "presets" && chat.dshPresets && chat.dshPresets.presets.length > 0 && (
+						{tab === "presets" && permControls && chat.dshPresets && chat.dshPresets.presets.length > 0 && (
 							<div className="set-section">
 								<div className="set-section-title">
 									<FiCpu className="set-section-icon" />
@@ -3772,7 +3775,7 @@ export function SettingsModal({
 								<p className="set-hint">{t("dshPresetUserNote")}</p>
 							</div>
 						)}
-						{tab === "presets" && chat.dshPermission && chat.dshPermission.options.length > 0 && (
+						{tab === "presets" && permControls && chat.dshPermission && chat.dshPermission.options.length > 0 && (
 							<div className="set-section">
 								<div className="set-section-title">
 									<FiShield className="set-section-icon" />

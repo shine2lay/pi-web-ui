@@ -8095,3 +8095,10 @@ on, backtest, cost and result: `docs/stall-watch.md`.
 - pi-tldr's reminders to post a line go only where its tool is on, so task chats get them too now.
 - Checks: `tests/unit/tool-manager.test.ts` (a task chat keeps `tldr` through `applyAgentToolsGating` and `removeTaskChatTools`; the rest of the list still leaves).
 - Undo: revert this commit.
+
+## debug-controls: the Full, Full access and Tools controls only when the address asks for them
+
+- `local` (Ops #621; owner, 2026-10-28: m77284 and m77313 for the selectors, m77409 for the Tools button). Hypothesis: the owner doesn't use the agent preset selector ("Full"), the permission selector ("Full access") or the Tools button above the chat (Tool Inspector); they crowd the composer and put a header bar over every pi chat. Showing them only with a switch in the address declutters the page and changes nothing else. Expected: a normal page has none of the three and no `.chat-header` unless a plugin or the chat's identity puts something in it; with the switch each one is back as before. Wrong if one shows without its switch, or a chat's preset or permission changes because its selector is hidden.
+- `web/src/url-flags.ts` (new): `urlFlag(name)` (`?name=1` only), `showPermissionControls()` (`?debugPerm=1`), `showToolInspector()` (`?recovery=1` or `?debugTools=1`; `?recovery=1` also shows #611's recovery panels). `web/src/components/ChatInput.tsx`: the `host:composer-dsh-perm` and `host:composer-dsh-preset` slots and the inline bars need `?debugPerm=1`. `web/src/components/SettingsModal.tsx`: the permission row and the presets tab's agent preset and permission sections too (the tab's own presets stay). `web/src/App.tsx`: `<ToolInspectorButton />` needs `showToolInspector()`, and `.chat-header` renders only when it has something in it. Hidden controls send nothing: the chat keeps its preset and permission.
+- Checks: `tests/unit/url-flags.test.ts`; `tests/durable-plugin-start-host-test.mjs` opens its page with `?recovery=1` and `tests/durable-cutover-browser-test.mjs` with `?debugTools=1`, since both open the Tool Inspector.
+- Undo: revert this commit.

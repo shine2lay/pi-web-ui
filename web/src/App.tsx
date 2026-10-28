@@ -13,6 +13,7 @@ import {
 } from "react";
 import { TopBar } from "./components/TopBar";
 import { ToolInspectorButton } from "./components/ToolInspectorButton";
+import { showToolInspector } from "./url-flags";
 import { PendingRecoveryPanel } from "./components/PendingRecoveryPanel";
 import { ComposerRecoveryPanel } from "./components/ComposerRecoveryPanel";
 import { PluginStartRecoveryPanel } from "./components/PluginStartRecoveryPanel";
@@ -1582,6 +1583,9 @@ export function App() {
 		() => uiChatHeader.filter((e) => e.id !== CHAT_IDENTITY_ENTRY_ID || chatIdentity),
 		[uiChatHeader, chatIdentity],
 	);
+	// debug-controls (Ops #621; owner, 2026-10-28, m77409): the Tools button (Tool Inspector) only with ?recovery=1
+	// or ?debugTools=1 (web/src/url-flags.ts), so a normal page has no header bar left with nothing else in it.
+	const toolInspectorShown = useMemo(() => showToolInspector(), []);
 	const chatEmptyShown = useMemo(
 		() => uiChatEmpty.filter((e) => e.id !== IDENTITY_PICKER_ENTRY_ID || identityCapable),
 		[uiChatEmpty, identityCapable],
@@ -2165,10 +2169,10 @@ export function App() {
 							</>
 						)}
 						{/* W2: the inspector addresses this page's open chat, alongside existing header slots. */}
-						{(chatHeaderShown.length > 0 || chat.engine === "pi") && (
+						{(chatHeaderShown.length > 0 || (toolInspectorShown && chat.engine === "pi")) && (
 							<div className="chat-header" role="toolbar">
 								{renderSlotToolbar(chatHeaderShown, onUiAction, renderIdentityEntry)}
-								{chat.engine === "pi" && (
+								{toolInspectorShown && chat.engine === "pi" && (
 									<ToolInspectorButton conversationId={chat.state?.conversationId ?? ""} disabled={!!switchTarget} />
 								)}
 							</div>

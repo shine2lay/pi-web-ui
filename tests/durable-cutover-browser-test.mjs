@@ -208,7 +208,8 @@ try {
 	page.on("pageerror", () => {
 		pageErrors++;
 	});
-	await page.goto(server.http);
+	// ?debugTools=1: the Tool Inspector button this test opens shows only with it (Ops #621, web/src/url-flags.ts).
+	await page.goto(`${server.http}/?debugTools=1`);
 	await observed(initialized.promise, "provisional first binding");
 	const composer = page.locator(".inputbox textarea");
 	await quote(page, "Provisional quote fixture.");
