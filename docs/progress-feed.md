@@ -72,8 +72,13 @@ Delivered to the lead's home chat like a role request (after any running turn, s
 decisions missing the three fields, any flags not yet sent back from **every** update (with its id), then how to post ("say only what the linked
 records hold; fill impact/options/until with decision_log where known, else say not known").
 
+Automatic asks are **off** unless `settings.json` says `"feedAutoPoke": true` (owner, 2026-10-28, Ops #626:
+they woke the lead on every done task and every day). Off, only the owner's button and a catch-up ask; open
+asks still close as below, and the triggers aren't saved up for later.
+
 Triggers: a queued task filed under it is done; a new decision or change is filed under it; daily at
-`dailyAt` if anything is new; unsent flags on any update; the owner's button. Throttle: at most one automatic
+`dailyAt` if anything is new; unsent flags on any update (these four only with `feedAutoPoke`); the owner's
+button. Throttle: at most one automatic
 ask per initiative per `pokeEveryHours`, none when nothing is new, none while one is unanswered (an ask closes
 once an update came after it and the lead's turn is over, or after 24 h). The lead may answer from a queued
 task (Board order bp-94c7e08b): its updates close the ask only once that task's chat is out of its turn too,
@@ -132,6 +137,6 @@ sentence with its flags and why (`--id <update>` for a kept one, `--reader` to a
 | File               | Holds                                                                                                                             |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
 | `initiatives.json` | `lead`, `leadSet` per initiative                                                                                                  |
-| `settings.json`    | `feedInitiatives`, `pokeEveryHours`, `dailyAt`, `feedReaderCheck`                                                                 |
+| `settings.json`    | `feedInitiatives`, `feedAutoPoke` (default off), `pokeEveryHours`, `dailyAt`, `feedReaderCheck`                                   |
 | `feed-state.json`  | per initiative: the open ask, past asks, triggers, the daily mark, the catch-up, the owner's last look; the check of every update |
 | `records.jsonl`    | TL;DR lines (`tldr`) and updates (`update`) beside #83's records                                                                  |

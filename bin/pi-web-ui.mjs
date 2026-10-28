@@ -3503,7 +3503,7 @@ async function decisionsCmd(argv) {
 		if (!st.ok) fail(st.error);
 		const { settings, ...feeds } = st.feed;
 		console.log(
-			`Progress feed on for: ${settings.initiatives.length ? settings.initiatives.join(", ") : "none"}; asks at most every ${settings.pokeEveryHours} h, daily at ${settings.dailyAt}; reader check ${settings.readerCheck ? "on" : "off"}.`,
+			`Progress feed on for: ${settings.initiatives.length ? settings.initiatives.join(", ") : "none"}; ${settings.autoPoke ? `automatic asks at most every ${settings.pokeEveryHours} h, daily at ${settings.dailyAt}` : "automatic asks off (only Ask for an update and catch-ups)"}; reader check ${settings.readerCheck ? "on" : "off"}.`,
 		);
 		for (const [id, f] of Object.entries(feeds)) {
 			if (f.error) {

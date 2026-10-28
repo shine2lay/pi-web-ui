@@ -15,7 +15,14 @@ import {
 	type DecisionRecord,
 	type NewDecisionRecord,
 } from "../../server/decision-records.js";
-import { DecisionStore, INITIATIVES_FILE, SETTINGS_FILE, type DecisionEntry } from "../../server/decision-store.js";
+import {
+	DecisionStore,
+	DEFAULT_FEED_SETTINGS,
+	INITIATIVES_FILE,
+	parseFeedSettings,
+	SETTINGS_FILE,
+	type DecisionEntry,
+} from "../../server/decision-store.js";
 import {
 	buildMaterial,
 	checkUpdate,
@@ -72,10 +79,15 @@ interface Fx {
 	busyChats: Set<string>;
 }
 
+/** Automatic asks are on here (feedAutoPoke true), since most tests below are about them; off by default
+ *  in the app (Ops #626, see "automatic asks are off unless settings turn them on"). */
 function fixture(opts: { feed?: string[]; initiatives?: unknown; model?: DecisionModel } = {}): Fx {
 	const ddir = join(dir, "decisions");
 	mkdirSync(ddir, { recursive: true });
-	writeFileSync(join(ddir, SETTINGS_FILE), JSON.stringify({ enabled: false, feedInitiatives: opts.feed ?? [TIT] }));
+	writeFileSync(
+		join(ddir, SETTINGS_FILE),
+		JSON.stringify({ enabled: false, feedInitiatives: opts.feed ?? [TIT], feedAutoPoke: true }),
+	);
 	if (opts.initiatives) writeFileSync(join(ddir, INITIATIVES_FILE), JSON.stringify(opts.initiatives));
 	const store = new DecisionStore(ddir, { now: () => now });
 	const records = new DecisionRecords(ddir, { now: () => now });
@@ -573,6 +585,7 @@ describe("asks to the lead (fake clock)", () => {
 	});
 
 	it("the owner's button asks at once, unless an ask is still on its way; a lead still in its turn keeps the ask open", async () => {
+		// (The button works whatever feedAutoPoke says: see the Ops #626 tests below.)
 		const fx = fixture();
 		const r1 = decide(fx, answer("a1", now, "One"), "One");
 		const first = fx.feed.ask(TIT);
@@ -740,6 +753,76 @@ describe("asks to the lead (fake clock)", () => {
 		expect(fx.feed.row(TIT)).toEqual({ on: false, needsYou: 0, newSinceSeen: false });
 		expect(fx.feed.view(TIT)?.on).toBe(false);
 	});
+});
+
+// H-PROGRESS-FEED-NO-AUTO-POKE-1 (owner, 2026-10-28 m77626): the feed's own asks woke leads on every task done
+// and every day; they are off unless settings.json says "feedAutoPoke": true. The button still asks.
+describe("automatic asks are off unless settings turn them on (Ops #626)", () => {
+	it("autoPoke is true only for feedAutoPoke: true", () => {
+		expect(DEFAULT_FEED_SETTINGS.autoPoke).toBe(false);
+		expect(parseFeedSettings(undefined).autoPoke).toBe(false);
+		expect(parseFeedSettings({}).autoPoke).toBe(false);
+		expect(parseFeedSettings({ feedAutoPoke: false }).autoPoke).toBe(false);
+		expect(parseFeedSettings({ feedAutoPoke: "true" }).autoPoke).toBe(false);
+		expect(parseFeedSettings({ feedAutoPoke: 1 }).autoPoke).toBe(false);
+		expect(parseFeedSettings({ feedAutoPoke: true }).autoPoke).toBe(true);
+	});
+
+	for (const auto of [undefined, false, true] as const) {
+		const label = auto === undefined ? "omitted" : String(auto);
+		it(`feedAutoPoke ${label}: a task done, a decision and the daily hour ${auto ? "ask" : "ask nothing; the button still asks"}`, async () => {
+			const fx = fixture();
+			writeFileSync(
+				join(fx.ddir, SETTINGS_FILE),
+				JSON.stringify({
+					enabled: false,
+					feedInitiatives: [TIT],
+					...(auto === undefined ? {} : { feedAutoPoke: auto }),
+				}),
+			);
+			fx.feed.stepNow(TIT); // the first round only notes where things stand
+
+			now = local(12, 10);
+			fx.records.append({
+				source: "plan",
+				at: now,
+				from: "temper",
+				ref: "temper.jsonl:7",
+				task: 7,
+				op: "done",
+				summary: "Trial run finished",
+				initiative: TIT,
+			});
+			const r1 = decide(fx, answer("a1", now, "One"), "One");
+			now = local(12, 10, 1);
+			fx.feed.stepNow(TIT);
+			now = local(12, 17, 1);
+			fx.feed.stepNow(TIT);
+			if (auto) {
+				// The control: the same rounds do ask when it is on (once: the ask is still open at 17:01).
+				expect(fx.pokes.map((p) => p.why)).toEqual([["task-done", "decision"]]);
+				return;
+			}
+			expect(fx.pokes).toHaveLength(0);
+			const s = fx.feed.snapshot().initiatives[TIT]!;
+			expect(s.pending).toEqual([]);
+			expect(s.open).toBeUndefined();
+			expect(s.daily).toBe("2026-10-12"); // the daily hour passed without an ask, not saved up
+
+			// "Ask for an update" still asks, and the lead's update still closes it.
+			expect(fx.feed.ask(TIT)).toMatchObject({ ok: true });
+			expect(fx.pokes.map((p) => [p.role, p.why])).toEqual([["architecture", ["button"]]]);
+			fx.states.set(fx.pokes[0]!.id, "delivered");
+			now = local(12, 17, 5);
+			expect((await post(fx, [r1.rec])).ok).toBe(true);
+			now = local(12, 17, 6);
+			fx.feed.stepNow(TIT);
+			const after = fx.feed.snapshot().initiatives[TIT]!;
+			expect(after.open).toBeUndefined();
+			expect(after.closed?.[0]).toMatchObject({ id: fx.pokes[0]!.id, how: "answered" });
+			expect(fx.pokes).toHaveLength(1);
+		});
+	}
 });
 
 describe("the ask's text and delivery", () => {

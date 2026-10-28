@@ -15,8 +15,9 @@
  * The lead is asked for an update (a "poke": a role request from the Initiatives page, outside the role
  * message caps, a chain of its own) when a queued task filed under the initiative is done, when a decision
  * or change is filed under it, daily at dailyAt when anything is new, when an update has unsent flags, and
- * when the owner presses "Ask for an update". Automatic asks: at most one per pokeEveryHours, none when
- * nothing is new, none while one is unanswered. A one-time catch-up (control socket) asks it to cover the
+ * when the owner presses "Ask for an update". Automatic asks (every trigger but the button and the catch-up)
+ * are off unless settings.json says "feedAutoPoke": true (owner, 2026-10-28, Ops #626); when on, at most one
+ * per pokeEveryHours, none when nothing is new, none while one is unanswered. A one-time catch-up (control socket) asks it to cover the
  * past from a date until no decision or change is left unlinked.
  *
  * Only initiatives listed in the decisions settings' feedInitiatives have a feed: the rest show
@@ -1305,6 +1306,12 @@ export class ProgressFeed {
 			pending.add("daily");
 		}
 		s.marks = { next, scan: now };
+		// Automatic asks are off unless settings.json turns them on (Ops #626); the page's button and
+		// catch-ups ask on their own paths, and section 1 still closes their asks.
+		if (!settings.autoPoke) {
+			s.pending = [];
+			return;
+		}
 		// 3. Send what the throttle allows.
 		if (!lead || this.catchUpActive(s)) {
 			s.pending = lead ? [...pending] : [];

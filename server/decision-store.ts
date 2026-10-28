@@ -309,6 +309,10 @@ export interface FeedSettings {
 	dailyAt: string;
 	/** Whether the reader's labels (paraphrased claims) count on the page, beside code's own checks. */
 	readerCheck: boolean;
+	/** Whether the feed asks leads by itself (task done, decision, flag, daily). Off unless
+	 *  settings.json says "feedAutoPoke": true (owner, 2026-10-28 m77626, Ops #626): the page's
+	 *  "Ask for an update" and catch-ups still ask. */
+	autoPoke: boolean;
 }
 
 export const DEFAULT_FEED_SETTINGS: FeedSettings = {
@@ -318,6 +322,7 @@ export const DEFAULT_FEED_SETTINGS: FeedSettings = {
 	pokeEveryHours: 3,
 	dailyAt: "17:00",
 	readerCheck: true,
+	autoPoke: false,
 };
 
 export function parseFeedSettings(raw: unknown): FeedSettings {
@@ -342,6 +347,7 @@ export function parseFeedSettings(raw: unknown): FeedSettings {
 		pokeEveryHours: num(o.pokeEveryHours, DEFAULT_FEED_SETTINGS.pokeEveryHours, 0.25, 168),
 		dailyAt,
 		readerCheck: o.feedReaderCheck === undefined ? DEFAULT_FEED_SETTINGS.readerCheck : o.feedReaderCheck !== false,
+		autoPoke: o.feedAutoPoke === true,
 	};
 }
 
