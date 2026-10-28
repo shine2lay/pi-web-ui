@@ -1635,7 +1635,7 @@
 		"autoReload": "Ricarica automatica con nuova build",
 		"autoReloadDesc": "On: la pagina si ricarica dopo una ricostruzione del server (per lo sviluppo dai sorgenti); Off: solo riconnessione (default di installazione)",
 		"wideChat": "Colonna chat ampia",
-		"wideChatDesc": "On: la colonna centrale riempie la larghezza (utile su monitor ultrawide); Off: mantiene il limite di 860px",
+		"wideChatDesc": "On: la colonna centrale riempie la larghezza (utile su monitor ultrawide); Off: mantiene il limite di 1200px",
 		"projectTitle": "Mostra il nome del progetto nel titolo",
 		"projectTitleDesc": "On: il titolo della scheda del browser diventa \"<cartella progetto> — pi-web-ui\" e si aggiorna al cambio progetto (comodo con più schede aperte); Off: mostra sempre il nome dell'app",
 		"terminalBashTakeover": "bash su terminale",

@@ -1635,7 +1635,7 @@
 		"autoReload": "Dev-Modus: Bei neuem Build automatisch neu laden",
 		"autoReloadDesc": "Ein: Seite lädt sich nach einem Server-Neubau selbst neu (für Quellcode-Entwicklung); Aus: nur neu verbinden (Installations-Standard)",
 		"wideChat": "Breite Chat-Spalte",
-		"wideChatDesc": "Aktiviert: Die mittlere Spalte füllt die Breite aus (nützlich auf Ultrawide-Bildschirmen); Deaktiviert: Begrenzung auf 860px beibehalten",
+		"wideChatDesc": "Aktiviert: Die mittlere Spalte füllt die Breite aus (nützlich auf Ultrawide-Bildschirmen); Deaktiviert: Begrenzung auf 1200px beibehalten",
 		"projectTitle": "Projektnamen im Titel anzeigen",
 		"projectTitleDesc": "Aktiviert: Der Browser-Tab-Titel lautet Projektordnername — pi-web-ui und wird beim Projektwechsel sofort aktualisiert (praktisch, wenn mehrere Projekte in mehreren Tabs geöffnet sind); Deaktiviert: Fester Anwendungsname",
 		"terminalBashTakeover": "Terminal übernimmt bash",

@@ -300,8 +300,8 @@ html.vv-fallback .app {
  * 消息列 / 输入框 / goalbar / 问卷浮层等所有「中央列」元素的左右内缩，全部只
  * 由下面这组 token 决定：任何视口宽度、任何断点（窄屏 / 宽屏聊天列 / 手机）下
  * 都自动等宽齐平，不再各自写 860px / margin:0 auto / calc(100% - Npx)。
- *   --chat-pad    列最小左右留白（桌面 20px、手机 14px、宽屏聊天列 260px）
- *   --chat-max    列宽上限（宽屏聊天列开关把它设为 100% = 不设上限，改用留白定距）
+ *   --chat-pad    列最小左右留白（桌面 20px、手机 14px）
+ *   --chat-max    列宽上限（1200px；宽屏聊天列开关把它放宽到「两侧各留 260px」，不低于 1200px）
  *   --chat-rail   提问导航条（qn-rail）需要让出的宽度（桌面 48px，见下）
  *   --chat-inset  最终左右内缩 = max(最小留白, 居中留白, rail 让位)
  * 注意：--chat-inset 内含百分比，只在「包含块宽度 == .main 内容宽」的元素上使用
@@ -328,7 +328,9 @@ html.vv-fallback .app {
 	   与卡片/面板共用 --wallpaper-panel-alpha；无壁纸时叠在纯色上色差极小）。 */
 	background: var(--msgs-bg, transparent);
 	--chat-pad: 20px;
-	--chat-max: 860px;
+	/* wider-chat (Ops #621; owner, 2026-10-28, m77378): 1200px, was 860px, so the chat uses the room that closing
+	   the side panels frees. A narrower main column still centers it with --chat-pad and --chat-rail as before. */
+	--chat-max: 1200px;
 	--chat-rail: 0px;
 	--chat-inset: max(var(--chat-pad), (100% - var(--chat-max)) / 2, var(--chat-rail));
 }
@@ -336,7 +338,7 @@ html.vv-fallback .app {
 /* 提问导航条（qn-rail）钉在消息区右侧 14~38px：桌面（≥641px，rail 只在此时
  * 存在）恒定预留 48px 内缩，列就永远不会被 rail 压住。左右取同一个值 → 两列
  * 依然等宽、左右边缘依然对齐（只是窄屏下整列比纯留白略窄一点）。
- * 列本身够宽时（居中内缩已 > 48px，即主列宽 ≳ 956px）max() 取原值，宽屏观感
+ * 列本身够宽时（居中内缩已 > 48px，即主列宽 ≳ 1296px）max() 取原值，宽屏观感
  * 完全不变。恒定预留而不是「有 rail 才预留」：否则第一条消息让 rail 出现的瞬间
  * 整列会突然缩 28px（输入框跟着跳）。 */
 @media (min-width: 641px) {
@@ -345,15 +347,14 @@ html.vv-fallback .app {
 	}
 }
 
-/* 宽屏聊天列（设置 → 消息显示 → 宽屏聊天列，默认关闭）：只改两个 token ——
- * 放开 860px 上限、列留白提到 260px，中央列（消息/输入/goalbar/问卷）自动铺满
- * 并互相齐平。
- * 窄屏（视口 < 1860px）不启用：此时主列本身不够宽（双 240px 面板下主列≈1380、
- * 内容≈860 已是铺满不亏的下界），260px 定距反而比 860px 居中还窄。 */
+/* 宽屏聊天列（设置 → 消息显示 → 宽屏聊天列，默认关闭）：只改一个 token ——
+ * 上限放宽到「两侧各留 260px」，中央列（消息/输入/goalbar/问卷）自动铺满并互相齐平。
+ * wider-chat (Ops #621): never below the default 1200px cap, so turning it on never makes the column
+ * narrower (with 260px of fixed padding it did whenever the main column was under 1720px wide).
+ * 窄屏（视口 < 1860px）不启用。 */
 @media (min-width: 1860px) {
 	.main.wide-chat {
-		--chat-pad: 260px;
-		--chat-max: 100%;
+		--chat-max: max(1200px, 100% - 520px);
 	}
 	/* 两个 fixed 浮层（文件预览的 markdown 缩放列 / /help 面板）自成包含块，
 	 * 百分比基准不是主列，不跟随上面的 token，保持原来的定距写法。 */
@@ -11369,7 +11370,7 @@ div.chead[role="button"]:focus-visible,
 
 /* /help modal */
 .slash-help {
-	/* Same width as the input box (860px), capped by the backdrop padding. */
+	/* A readable 860px (the chat column's cap before Ops #621), capped by the backdrop padding. */
 	max-width: 860px;
 	width: 100%;
 	max-height: min(560px, 80vh);

@@ -1635,7 +1635,7 @@
 		"autoReload": "Recarga automática con compilación nueva",
 		"autoReloadDesc": "Activado: la página se recarga sola tras una reconstrucción del servidor (para desarrollo desde el código); Desactivado: solo reconectar (valor de instalación)",
 		"wideChat": "Columna de chat ancha",
-		"wideChatDesc": "Activado: la columna central ocupa todo el ancho (útil en pantallas ultraanchas); desactivado: mantiene el límite de 860px",
+		"wideChatDesc": "Activado: la columna central ocupa todo el ancho (útil en pantallas ultraanchas); desactivado: mantiene el límite de 1200px",
 		"projectTitle": "Mostrar el nombre del proyecto en el título",
 		"projectTitleDesc": "Activado: el título de la pestaña del navegador será «nombre del directorio del proyecto — pi-web-ui» y se actualiza al cambiar de proyecto (fácil de distinguir con varios proyectos en varias pestañas); desactivado: muestra siempre el nombre de la aplicación",
 		"terminalBashTakeover": "El terminal asume bash",

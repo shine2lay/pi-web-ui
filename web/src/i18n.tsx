@@ -1461,7 +1461,7 @@ export const en = {
 	autoReloadDesc:
 		"On: page reloads itself after a server rebuild (for source development); Off: reconnect only (install default)",
 	wideChat: "Wide chat column",
-	wideChatDesc: "On: the center column fills the width (useful on ultrawide monitors); Off: keep the 860px cap",
+	wideChatDesc: "On: the center column fills the width (useful on ultrawide monitors); Off: keep the 1200px cap",
 	projectTitle: "Show project name in title",
 	projectTitleDesc:
 		"On: the browser tab title becomes “<project folder> — pi-web-ui” and updates when you switch projects (handy with several tabs open); Off: always show the app name",

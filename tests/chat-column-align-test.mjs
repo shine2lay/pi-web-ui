@@ -7,7 +7,8 @@
  * real renderer produces (.msg / .msg-collapsed / .retry-notice are direct
  * children of .messages; LazyMount adds no wrapper around shown messages), and
  * geometry is pure CSS. Also asserts the qn-rail never overlaps the message
- * column.
+ * column, and the column's width (wider-chat, Ops #621: at most 1200px, the
+ * wide-chat toggle never narrower than that).
  */
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { spawn } from "node:child_process";
@@ -27,6 +28,9 @@ const dataDir = join(base, "data");
 const VIEWPORTS = [
 	{ name: "2560 宽屏", w: 2560, h: 1100, wide: false },
 	{ name: "2560 宽屏聊天列", w: 2560, h: 1100, wide: true },
+	// wider-chat (Ops #621): with the side panels open the main column is under 1720px, where the toggle's
+	// 260px a side used to make the column narrower than the default cap.
+	{ name: "1880 宽屏聊天列 双侧栏", w: 1880, h: 1000, wide: true },
 	{ name: "1440 双侧栏", w: 1440, h: 900, wide: false },
 	{ name: "1200 窄主列", w: 1200, h: 800, wide: false },
 	{ name: "900 极窄桌面", w: 900, h: 700, wide: false },
@@ -141,6 +145,12 @@ for (const vp of VIEWPORTS) {
 			`[${b.l}, ${b.r}] w=${b.w} vs [${input.l}, ${input.r}] w=${input.w}`,
 		);
 	}
+	// wider-chat (Ops #621): the column is at most 1200px wide (860px before); the wide-chat toggle widens it to the
+	// main column less 260px a side, never below 1200px. The expected width follows from the main column's width.
+	const rail = vp.w < 641 ? 0 : 48;
+	const cap = vp.wide && vp.w >= 1860 ? Math.max(1200, rects.mainWidth - 520) : 1200;
+	const want = +(rects.mainWidth - 2 * Math.max(rects.chatPad, (rects.mainWidth - cap) / 2, rail)).toFixed(1);
+	check(`${label} → 列宽 ${want}（上限 ${+cap.toFixed(1)}）`, Math.abs(input.w - want) <= 1, `w=${input.w}`);
 	const msg = rects[".msg"];
 	// 不得贴边：内缩至少是列留白本身（<641px 无 rail；≥641px 可能被 rail 抬到 48px）
 	const inset = +(msg.l - rects.mainLeft).toFixed(2);

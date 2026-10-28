@@ -2,9 +2,9 @@
 /**
  * 宽屏聊天列开关（纯前端 localStorage，不经过 server）。
  *
- * - 默认关闭：中央列保持 860px 上限。
- * - 开启后：`.main` 挂 `wide-chat`，所有 860px 上限的消息/输入/附件元素
- *   改为铺满列宽（左右各留 260px 内边距，与问题导航栏同宽）。
+ * - 默认关闭：中央列保持 1200px 上限（Ops #621 前是 860px）。
+ * - 开启后：`.main` 挂 `wide-chat`，中央列的消息/输入/附件元素
+ *   改为铺满列宽（左右各留 260px，与问题导航栏同宽；不窄于 1200px 上限）。
  * - normalize/load 为纯函数，可单测（tests/unit/chat-width-settings.test.ts）。
  */
 
@@ -13,7 +13,7 @@ import { useSyncExternalStore } from "react";
 export const CHAT_WIDTH_SETTINGS_KEY = "pi-web-ui:wide-chat";
 
 export interface ChatWidthSettings {
-	/** 中央列是否铺满宽度（false = 保持 860px 上限） */
+	/** 中央列是否铺满宽度（false = 保持 1200px 上限） */
 	wide: boolean;
 }
 
