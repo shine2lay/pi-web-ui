@@ -293,18 +293,17 @@ export const WINDOWS_ONLY_TOOL_NAMES = ["powershell"] as const;
  *  request (its definition, and its lines in Pi's system prompt, which Pi builds only for active
  *  tools), so a task chat carries only what a task uses (owner, 2026-10-17: a slimmer start
  *  "especially for task implementor but not lead"). Use in 443 task chats over 14 days decided it:
- *  - tldr: a task reports through its status, its questions and its done summary, and its lines
- *    cost a model step each (owner, 2026-10-17: TL;DR "Off in task chats"). pi-tldr sends no nudges
- *    where its tool isn't active.
  *  - queue_reply, queue_add: pi-queue refuses both in a task's own chat (queue_reply: "for the chat
  *    whose queue holds a task"; queue_add: "Not added"); 0 and 5 calls, all refused.
  *  - work_project, work_initiative, decision_log: the leads' registry and decision log; 0, 0 and 1 calls.
  *  - ask_user_question: a task's questions go through queue_stuck to its lead (rule 21); 7 calls,
  *    6 of them failed.
  *  - source_check, acp_cache: used in 2 and 3 task chats; web_search, fetch_content and acp_status
- *    stay. */
+ *    stay.
+ *  tldr was on this list from 2026-10-17 (owner: TL;DR "Off in task chats") and is back in task chats
+ *  since 2026-10-28 (owner, Ops #621, m77209): a task posts its progress milestones to its own chat's
+ *  running TL;DR. */
 export const TASK_CHAT_OFF_TOOL_NAMES = [
-	"tldr",
 	"queue_reply",
 	"queue_add",
 	"work_project",

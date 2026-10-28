@@ -205,10 +205,13 @@ describe("tool_manage 出入口", () => {
 		expect(windows.peek()).toContain("bash");
 	});
 
-	it("tldr stays out of a queued task's own chat, and stays in every other chat", () => {
+	it("tldr stays in a queued task's own chat (owner, Ops #621), as in every other chat", () => {
+		expect(TASK_CHAT_OFF_TOOL_NAMES).not.toContain("tldr");
 		const task = fakeSet(["bash", "read", "tldr"]);
 		applyAgentToolsGating(task, [], undefined, "linux", true);
-		expect(task.peek()).not.toContain("tldr");
+		expect(task.peek()).toContain("tldr");
+		expect(removeTaskChatTools(task)).toBe(false);
+		expect(task.peek()).toContain("tldr");
 		expect(task.peek()).toContain("bash");
 		expect(task.peek()).toContain("read");
 		const lead = fakeSet(["bash", "read", "tldr"]);
@@ -220,6 +223,7 @@ describe("tool_manage 出入口", () => {
 		const kept = [
 			"bash",
 			"read",
+			"tldr",
 			"queue_stuck",
 			"queue_done",
 			"message_role",
@@ -248,9 +252,8 @@ describe("tool_manage 出入口", () => {
 		expect(removeTaskChatTools(task)).toBe(true);
 		// Exactly the off list leaves; everything else (the gating also turns on the catalog tools) stays.
 		expect(task.peek()).toEqual(before.filter((n) => !off.has(n)));
-		for (const name of ["bash", "read", "browser_tabs"]) expect(task.peek()).toContain(name);
-		for (const name of ["browser_click", "browser_snapshot", "tldr", "queue_reply"])
-			expect(task.peek()).not.toContain(name);
+		for (const name of ["bash", "read", "browser_tabs", "tldr"]) expect(task.peek()).toContain(name);
+		for (const name of ["browser_click", "browser_snapshot", "queue_reply"]) expect(task.peek()).not.toContain(name);
 		// Nothing left to take out: the set is not touched again.
 		let calls = 0;
 		const quiet = { getActiveToolNames: () => ["bash", "read"], setActiveToolsByName: () => void calls++ };
