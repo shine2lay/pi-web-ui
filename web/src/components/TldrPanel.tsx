@@ -39,13 +39,6 @@ export function tldrLineClass(line: UiTldrLine): string {
 	return line.kind ? `tldr-line ${line.kind}` : "tldr-line";
 }
 
-/** The same colours for the left list's line under a chat's title (tldr-sidebar). Its needsYou already
- *  leaves out lines the owner replied to (latestUnseenTldr). */
-export function tldrSubClass(tldr: Pick<UiTldrLine, "needsYou" | "kind">): string {
-	if (tldr.needsYou) return "session-sub tldr-sub needs-you";
-	return tldr.kind ? `session-sub tldr-sub ${tldr.kind}` : "session-sub tldr-sub";
-}
-
 /** 最新在上的行 → 显示用的行：连着的已折叠行并成一行。 */
 export function tldrRows(newestFirst: readonly UiTldrLine[], isFolded: (l: UiTldrLine) => boolean): TldrRow[] {
 	const rows: TldrRow[] = [];

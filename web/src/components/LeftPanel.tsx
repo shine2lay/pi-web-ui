@@ -35,7 +35,6 @@ import { CONV_IDENTITY_ENTRY_ID, LP_IDENTITY_ENTRY_ID, LP_SECTION_ENTRY_IDS, typ
 import { useIdentityList } from "../identity-state";
 import { identityChoiceOf, withIdentityChildren } from "../identity-menu";
 import { IdentityTag } from "./IdentityTag";
-import { tldrSubClass } from "./TldrPanel";
 import { LimitsSection } from "./LimitsBox";
 import { contextMenuItems, openContextMenu, type ContextMenuRequest } from "../context-menu-state";
 import { composeToComposer, focusComposer } from "../composer-bridge";
@@ -1034,21 +1033,10 @@ export const LeftPanel = memo(function LeftPanel({
 							</span>
 						)}
 						{renaming === `conv:${c.id}` ? null : taskStatus ? (
-							// left-task-status: a parked queued task's label takes the line's start; its TL;DR follows.
-							<span className="session-sub lp-task-status-line">
-								{taskStatusChip(taskStatus)}
-								{c.tldr && (
-									<span className="lp-task-status-tldr" title={c.tldr.text}>
-										{c.tldr.text}
-									</span>
-								)}
-							</span>
-						) : c.tldr && !opening && !active ? (
-							// tldr-sidebar：最新一行没看过的 TL;DR 代替「N 条消息」（一行，悬停看全文）；
-							// 正在打开 / 当前对话照旧。需要你的行用 TL;DR tab 的同一种高亮。
-							<span className={tldrSubClass(c.tldr)} title={c.tldr.text}>
-								{c.tldr.text}
-							</span>
+							// left-task-status: a parked queued task's label takes the line.
+							// sidebar-no-tldr (Ops #621; owner, 2026-10-28, m77387): no TL;DR line under a chat's name;
+							// the right panel's TL;DR tab and the Roles and Initiatives pages show them.
+							<span className="session-sub lp-task-status-line">{taskStatusChip(taskStatus)}</span>
 						) : (
 							<span className="session-sub">
 								{opening ? t("switchOpeningShort") : active ? t("current") : t("messageCount", { n: c.messageCount })}

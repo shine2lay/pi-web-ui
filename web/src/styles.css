@@ -1356,38 +1356,9 @@ button.session-item.elsewhere-item.confirm {
 	color: var(--text-faint);
 }
 
-/* tldr-sidebar：最新一行 TL;DR 代替「N 条消息」。一行加省略号（行高不变），悬停看全文；
-   需要你的行用 TL;DR tab 的同一种高亮（.tldr-line.needs-you）。 */
-.session-sub.tldr-sub {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-.session-sub.tldr-sub.needs-you {
-	padding-left: 5px;
-	border-left: 2px solid var(--amber);
-	border-radius: 0 3px 3px 0;
-	background: color-mix(in srgb, var(--amber) 12%, transparent);
-	color: var(--text);
-}
-/* queue-main-chat: the main chat answered a task's question itself (kind "answered"): the same shape in the
-   theme's blue, like .tldr-line.answered in the TL;DR tab. */
-.session-sub.tldr-sub.answered {
-	padding-left: 5px;
-	border-left: 2px solid var(--blue);
-	border-radius: 0 3px 3px 0;
-	background: color-mix(in srgb, var(--blue) 12%, transparent);
-	color: var(--text);
-}
-/* queue-blocked: "Task #N is blocked on ..." in the Blocked colour (the theme's cyan; every theme has one). */
-.session-sub.tldr-sub.blocked {
-	padding-left: 5px;
-	border-left: 2px solid var(--term-cyan);
-	border-radius: 0 3px 3px 0;
-	background: color-mix(in srgb, var(--term-cyan) 12%, transparent);
-	color: var(--text);
-}
-/* left-task-status: a parked queued task's label at the start of its chat's second line, its TL;DR after it.
+/* sidebar-no-tldr (Ops #621): no TL;DR line under a chat's name any more (the rules tldr-sidebar,
+   queue-main-chat and queue-blocked gave it went with it); the TL;DR tab keeps its .tldr-line colours. */
+/* left-task-status: a parked queued task's label on its chat's second line.
    One line with "\2026" (the label stays inline so the ellipsis can cut it). Colours as in the Queue panel and
    the TL;DR lines: waiting and asking blue, blocked cyan, needs a decision amber, paused grey and dotted. */
 .session-sub.lp-task-status-line {
@@ -1418,9 +1389,6 @@ button.session-item.elsewhere-item.confirm {
 	color: var(--text-dim);
 	outline: 1px dotted var(--text-dim);
 	outline-offset: -1px;
-}
-.lp-task-status-tldr {
-	margin-left: 6px;
 }
 
 .session-src {

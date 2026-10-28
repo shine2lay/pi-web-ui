@@ -1,24 +1,21 @@
-/* tldr-sidebar E2E (no tokens): the left list shows each loaded chat's newest TL;DR line under its name,
- * in place of "N messages".
+/* sidebar-no-tldr E2E (no tokens; Ops #621, owner 2026-10-28 m77387): the left list shows no TL;DR line under a
+ * chat's name; a loaded chat's row keeps "N messages" (the open chat "Current") while its TL;DR lines arrive.
+ * Until Ops #621 (tldr-sidebar) the row showed the chat's newest line instead; the chat's TL;DR tab still does.
  *
  * The real pi-tldr extension is loaded through settings.json `packages` (PI_TLDR_PKG, default
  * ~/projects/pi-tldr). A mock OpenAI-compatible model runs four chats, told apart by their prompt:
  *   A posts 3 lines, spaced out (the second is long, the third needs you), then answers;
  *   B posts no line; C posts one line; D answers at once.
  * Window 1 starts A, C and B one after the other and stays on D, so A, B and C run in the background.
- * Window 2 opens on a new chat. Checks:
- *  - A's row shows each new line live, in both windows, without a reload; window 2 gets line 2 before
- *    line 3 is sent (pushed to every window as it lands, not only when the run ends);
- *  - the line is cut to one line with an ellipsis, the full text is on hover, rows keep their height;
- *  - a needs-you line is highlighted (same highlight as the TL;DR tab); a normal line is not;
- *  - a chat with no lines (B) keeps "N messages"; the open chat keeps "Current", even with a line;
- *  - window 1 folds A's newest line in the TL;DR tab: window 2's row goes back to "N messages" live
- *    (the older line 2 never shows); opening it again brings the line back;
- *  - tldr-answered: window 1 replies in A. The needs-you highlight goes away as soon as the reply
- *    lands, while A is still working on it: in window 2's row and in window 1's TL;DR tab (the line
- *    itself stays).
+ * Window 2 opens on a new chat, before A's second line. Checks:
+ *  - while A and C post their lines, no row in either window ever shows one, without a reload; every
+ *    row keeps its count ("Current" for the open chat) and one height;
+ *  - the lines did land: window 1 opens A and its TL;DR tab shows all three, the needs-you one
+ *    highlighted, while window 2's row for A keeps its count;
+ *  - tldr-answered: window 1 replies in A. The TL;DR tab drops the needs-you highlight as soon as the
+ *    reply lands, while A is still working on it (the line itself stays).
  * Usage: npm run build && node tests/tldr-sidebar-test.mjs    (SIDEBAR_DEBUG=1 prints the mock's requests;
- *        SIDEBAR_SHOT=/tmp/x.png saves window 1 with the lines, plus x-left.png of the left list)
+ *        SIDEBAR_SHOT=/tmp/x.png saves window 1 once the lines are in, plus x-left.png of the left list)
  */
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { createServer } from "node:http";
@@ -239,6 +236,16 @@ async function openWindow(clientId) {
 	await page.goto(`http://localhost:${PORT}/`);
 	await page.waitForSelector(".topbar", { timeout: 60000 });
 	await page.locator(".inputbox textarea").waitFor({ timeout: 20000 });
+	// Ready to send: a message sent while the page's session still initializes is refused with a notice,
+	// and the composer then empties when the session binds, so A never started (Ops #621).
+	await page.waitForFunction(
+		() => {
+			const input = document.querySelector(".inputbox textarea");
+			return !!input && !input.disabled && !/initializing/i.test(input.placeholder);
+		},
+		undefined,
+		{ timeout: 20000 },
+	);
 	// Marks this page load: still there at the end = the window never reloaded.
 	await page.evaluate(() => {
 		window.__sidebarLoad = 1;
@@ -257,23 +264,11 @@ const TITLE = {
 	D: /SIDEBAR-D|Delta chat/,
 };
 const row = (page, k) => page.locator(".lp-row", { hasText: TITLE[k] }).first();
-/** The row's second line (under the name): text, classes, hover title, whether it is cut, its look. */
-async function sub(page, k) {
+/** The text of the row's second line (under the name). */
+async function subText(page, k) {
 	const loc = row(page, k).locator(".session-sub").first();
-	if ((await loc.count()) === 0) return null;
-	return loc.evaluate((el) => {
-		const cs = getComputedStyle(el);
-		return {
-			text: el.textContent ?? "",
-			cls: el.className,
-			title: el.getAttribute("title"),
-			cut: el.scrollWidth > el.clientWidth,
-			ellipsis: cs.textOverflow === "ellipsis" && cs.whiteSpace === "nowrap",
-			bg: cs.backgroundColor,
-		};
-	});
+	return (await loc.count()) === 0 ? null : ((await loc.textContent()) ?? "");
 }
-const subText = async (page, k) => (await sub(page, k))?.text ?? null;
 const rowHeight = async (page, k) => (await row(page, k).locator(".session-item").boundingBox())?.height ?? -1;
 const COUNT = /^\d+ messages?$/;
 /** Start chat k in the page's current (blank) chat and wait until its row runs. */
@@ -295,7 +290,6 @@ async function dumpRows(page, label) {
 	console.log(`    [rows ${label}] ${JSON.stringify(rows)}`);
 	console.log(`    [messages ${label}] ${JSON.stringify((await messagesText(page)).slice(0, 200))}`);
 }
-const transparent = (bg) => bg === "rgba(0, 0, 0, 0)" || bg === "transparent";
 
 try {
 	await waitServer();
@@ -324,105 +318,81 @@ try {
 	await newChat(W2);
 	check("window 2 was ready before A's line 2 was sent", sentAt.A[1] === undefined);
 
-	console.log("A's lines arrive while other chats are open");
+	console.log("A's and C's lines arrive while other chats are open: no row shows them");
+	/** Every TL;DR line a row in either window showed while the lines arrived (sidebar-no-tldr: none). */
+	const shownLines = new Set();
+	const sampleRows = async () => {
+		for (const page of [W1, W2]) {
+			const rows = await page.evaluate(() =>
+				[...document.querySelectorAll(".panel-left .lp-row")].map((r) => r.textContent ?? ""),
+			);
+			for (const text of rows) for (const line of [A1, A2, A3, C1]) if (text.includes(line)) shownLines.add(line);
+		}
+	};
+	const running = async (k) => (await row(W1, k).locator(".conv-dot.conv-running").count()) > 0;
 	check(
-		"window 1: A's row shows line 1 live",
-		await waitFor(async () => (await subText(W1, "A")) === A1, 15000),
-		JSON.stringify(await sub(W1, "A")),
+		"A and C posted their lines and finished",
+		await waitFor(async () => {
+			await sampleRows();
+			return sentAt.A.length === 3 && sentAt.C.length === 1 && !(await running("A")) && !(await running("C"));
+		}, 40000),
+		`A sent ${sentAt.A.length} lines, C ${sentAt.C.length}`,
 	);
-	check(
-		"window 1: C's row shows its line live",
-		await waitFor(async () => (await subText(W1, "C")) === C1, 15000),
-		JSON.stringify(await sub(W1, "C")),
-	);
+	await sampleRows();
+	check("no row in either window showed a TL;DR line meanwhile", shownLines.size === 0, [...shownLines].join(" | "));
 	for (const [name, page] of [
 		["window 1", W1],
 		["window 2", W2],
 	]) {
-		check(
-			`${name}: A's row shows line 2 live`,
-			await waitFor(async () => (await subText(page, "A")) === A2, 15000),
-			JSON.stringify(await sub(page, "A")),
-		);
-	}
-	check("window 2 got line 2 before line 3 was sent", sentAt.A[2] === undefined);
-	const s2 = await sub(W1, "A");
-	check("line 2 is cut to one line with an ellipsis", !!s2?.cut && !!s2?.ellipsis, JSON.stringify(s2));
-	check("hovering shows the full text", s2?.title === A2, s2?.title ?? "");
-	check("a normal line is not highlighted", s2?.cls === "session-sub tldr-sub" && transparent(s2?.bg), s2?.cls);
-	const heights = await Promise.all(["A", "B", "C", "D"].map((k) => rowHeight(W1, k)));
-	check(
-		"rows keep their height (line, count and current rows)",
-		heights.every((h) => h > 0 && Math.abs(h - heights[0]) < 0.5),
-		JSON.stringify(heights),
-	);
-
-	for (const [name, page] of [
-		["window 1", W1],
-		["window 2", W2],
-	]) {
-		check(
-			`${name}: A's row shows line 3 live`,
-			await waitFor(async () => (await subText(page, "A")) === A3, 15000),
-			JSON.stringify(await sub(page, "A")),
-		);
-		const s3 = await sub(page, "A");
-		check(
-			`${name}: the needs-you line is highlighted`,
-			/\bneeds-you\b/.test(s3?.cls ?? "") && !transparent(s3?.bg),
-			JSON.stringify(s3),
-		);
-		check(`${name}: C's row shows its line, not highlighted`, (await sub(page, "C"))?.cls === "session-sub tldr-sub");
-		check(
-			`${name}: B posted no line and keeps the count`,
-			COUNT.test((await subText(page, "B")) ?? ""),
-			String(await subText(page, "B")),
-		);
+		for (const k of ["A", "B", "C"])
+			check(
+				`${name}: ${k}'s row shows its message count`,
+				COUNT.test((await subText(page, k)) ?? ""),
+				String(await subText(page, k)),
+			);
 	}
 	check(
 		"window 1: the open chat D says Current",
 		(await subText(W1, "D")) === "Current",
 		String(await subText(W1, "D")),
 	);
+	const heights = await Promise.all(["A", "B", "C", "D"].map((k) => rowHeight(W1, k)));
 	check(
-		"A and C finished",
-		await waitFor(
-			async () =>
-				(await row(W1, "A").locator(".conv-dot.conv-running").count()) === 0 &&
-				(await row(W1, "C").locator(".conv-dot.conv-running").count()) === 0,
-			15000,
-		),
+		"rows keep one height (count and current rows)",
+		heights.every((h) => h > 0 && Math.abs(h - heights[0]) < 0.5),
+		JSON.stringify(heights),
 	);
-	check("A's row keeps line 3 after the run ends", (await subText(W2, "A")) === A3, String(await subText(W2, "A")));
+
 	if (process.env.SIDEBAR_SHOT) {
 		await W1.locator(".lp-row").first().hover(); // park the mouse away from A's row
 		await W1.screenshot({ path: process.env.SIDEBAR_SHOT });
 		await W1.locator(".panel-left").screenshot({ path: process.env.SIDEBAR_SHOT.replace(/\.png$/, "-left.png") });
 	}
 
-	console.log("window 1: open A and fold its newest line");
+	console.log("window 1: open A; its TL;DR tab has the lines");
 	await row(W1, "A").locator(".session-item").click();
 	check(
-		"window 1: the open chat A says Current, even with an unseen line",
+		"window 1: the open chat A says Current",
 		await waitFor(async () => (await subText(W1, "A")) === "Current", 10000),
 		String(await subText(W1, "A")),
 	);
-	check("window 2: A's row still shows line 3", (await subText(W2, "A")) === A3);
 	await W1.locator(".panel-right .slot-tab", { hasText: "TL;DR" }).first().click();
-	await W1.locator(".tldr-panel .tldr-line").first().waitFor({ timeout: 10000 });
-	await W1.locator(".tldr-panel .tldr-line").first().locator(".tldr-fold").click();
+	const tabTexts = () => W1.locator(".tldr-panel .tldr-text").allTextContents();
 	check(
-		"window 2: A's row goes back to the count, live",
-		await waitFor(async () => COUNT.test((await subText(W2, "A")) ?? ""), 5000),
+		"window 1: A's TL;DR tab shows its three lines",
+		await waitFor(async () => {
+			const texts = await tabTexts();
+			return [A1, A2, A3].every((l) => texts.includes(l));
+		}, 10000),
+		JSON.stringify(await tabTexts()),
+	);
+	check(
+		"window 2: A's row still shows its count",
+		COUNT.test((await subText(W2, "A")) ?? ""),
 		String(await subText(W2, "A")),
 	);
-	check("window 2: the older line 2 does not show instead", (await subText(W2, "A")) !== A2);
-	await W1.locator(".tldr-panel .tldr-unfold").click();
-	check(
-		"window 2: opening it again brings line 3 back, live",
-		await waitFor(async () => (await subText(W2, "A")) === A3, 5000),
-		String(await subText(W2, "A")),
-	);
+	await sampleRows();
+	check("still no row showed a TL;DR line", shownLines.size === 0, [...shownLines].join(" | "));
 
 	console.log("window 1: reply in A (tldr-answered)");
 	const tabNeedsYou = () => W1.locator(".tldr-panel .tldr-line.needs-you").count();
@@ -431,18 +401,14 @@ try {
 		"window 1: before the reply, the TL;DR tab highlights line 3",
 		(await tabNeedsYou()) === 1 && (await tabBadges()) === 1,
 	);
-	check("window 2: before the reply, A's row is highlighted", /\bneeds-you\b/.test((await sub(W2, "A"))?.cls ?? ""));
 	await send(W1, REPLY);
 	const sentReply = Date.now();
-	const dropped = await waitFor(async () => {
-		const s = await sub(W2, "A");
-		return s?.text === A3 && s.cls === "session-sub tldr-sub" && transparent(s.bg);
-	}, 4000);
+	const dropped = await waitFor(async () => (await tabNeedsYou()) === 0 && (await tabBadges()) === 0, 4000);
 	const droppedAfter = Date.now() - sentReply;
 	check(
-		"window 2: A's row stops highlighting line 3 once the reply lands, live",
-		dropped,
-		JSON.stringify(await sub(W2, "A")),
+		"window 1: the TL;DR tab drops the highlight and badge once the reply lands, and keeps the line",
+		dropped && (await W1.locator(".tldr-panel .tldr-text", { hasText: A3 }).count()) === 1,
+		`${await tabNeedsYou()} highlighted`,
 	);
 	check(
 		"...while A was still working on the reply (not only at the end of the run)",
@@ -450,21 +416,16 @@ try {
 		dropped ? `${droppedAfter} ms` : "never dropped",
 	);
 	check(
-		"window 1: the TL;DR tab drops the highlight and badge, and keeps the line",
-		(await waitFor(async () => (await tabNeedsYou()) === 0 && (await tabBadges()) === 0, 4000)) &&
-			(await W1.locator(".tldr-panel .tldr-text", { hasText: A3 }).count()) === 1,
-		`${await tabNeedsYou()} highlighted`,
-	);
-	check(
 		"A answered the reply",
 		await waitFor(async () => (await row(W2, "A").locator(".conv-dot.conv-running").count()) === 0, REPLY_GAP + 8000),
 	);
-	const sEnd = await sub(W2, "A");
 	check(
-		"window 2: after the run, A's row still shows line 3, not highlighted",
-		sEnd?.text === A3 && sEnd.cls === "session-sub tldr-sub",
-		JSON.stringify(sEnd),
+		"window 2: after the run, A's row still shows its count",
+		COUNT.test((await subText(W2, "A")) ?? ""),
+		String(await subText(W2, "A")),
 	);
+	await sampleRows();
+	check("no row showed a TL;DR line at any point", shownLines.size === 0, [...shownLines].join(" | "));
 	for (const [name, page] of [
 		["window 1", W1],
 		["window 2", W2],

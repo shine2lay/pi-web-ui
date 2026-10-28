@@ -2915,6 +2915,9 @@ billion-context-pi（ACP）每轮用自己的「核心」重建发给模型的�
 **状态**：`local`
 **基线**：v0.96.1
 
+> **sidebar-no-tldr (Ops #621, 2026-10-28)**: the left list no longer shows the line (owner, m77387); the server
+> still sends it, for the needs-you counts of folded queue chats. See sidebar-no-tldr at the end.
+
 > **lead-bar (2026-10-12)**: the leads view draws lead and task chat rows with the same row code, so they
 > keep the TL;DR line, the lights and the needs-you marks.
 
@@ -8108,4 +8111,12 @@ on, backtest, cost and result: `docs/stall-watch.md`.
 - `local` (Ops #621; owner, 2026-10-28, m77378). Hypothesis: the 860px cap on the chat column (messages, input, goal bar, question sheet) leaves the room that closing the side panels frees empty: in a 1920px-wide window with both panels closed the column stayed 860px wide. `web/src/styles.css` `.main` `--chat-max: 1200px` lets it use that room; a narrower main column still centers it with `--chat-pad` (20px) and `--chat-rail` (48px, the question rail) as before. Expected: the column is 1200px wide wherever the main column is at least 1296px, else the main column less 48px a side; input and messages stay lined up, the rail never covers them. Wrong if they part, the rail covers them, or the column is wider than 1200px without the wide-chat setting.
 - The wide-chat setting (Settings, messages) set 260px a side and no cap, which made the column narrower than the new 1200px whenever the main column was under 1720px wide; now it widens the cap to the main column less 260px a side, never below 1200px (`max(1200px, 100% - 520px)`), still only at 1860px and wider. Its description says 1200px (`web/src/i18n.tsx` and the 8 `locales/*.json`); `web/src/chat-width-settings.ts` comments too.
 - Checks: `tests/chat-column-align-test.mjs` measures the column's width at every viewport it already ran (expected from the main column's width, the cap and the padding) and runs one more: wide-chat at 1880px with both panels open.
+- Undo: revert this commit.
+
+## sidebar-no-tldr: no TL;DR line under a chat's name in the left list
+
+- `local` (Ops #621; owner, 2026-10-28, m77387). Hypothesis: the newest TL;DR line under each chat's name (tldr-sidebar; after a parked task's label, left-task-status) makes the left list busy, and the owner reads TL;DR lines in the chat's TL;DR tab and on the Roles and Initiatives pages. Without it a row shows what it showed before tldr-sidebar: a parked task's label, else "Opening", "Current" or its message count. Expected: no row shows a TL;DR line, live or after a reload, and rows keep one height; wrong if a line still shows anywhere in the left list.
+- `web/src/components/LeftPanel.tsx`: both branches gone (`lp-task-status-tldr`, `tldrSubClass`); `tldrSubClass` (`web/src/components/TldrPanel.tsx`) and its CSS (`.session-sub.tldr-sub` with its needs-you, answered and blocked colours, `.lp-task-status-tldr`) went with them.
+- Kept: the server still sends each loaded chat's newest unseen line (`tldr` on the conversation list), since `needsUser` (`web/src/conv-groups.ts`) counts a line that needs the owner: a folded queue chat's count, and the leads view's, still turn amber for it, though the row itself no longer shows the line.
+- Checks: `tests/tldr-sidebar-test.mjs` now checks the opposite (in two windows no row ever shows any of the four lines while they arrive; rows keep their count and one height; the lines are in the chat's TL;DR tab; tldr-answered still drops the tab's highlight while the chat works on the reply; it fails on the commit before. It now waits for the page's session to be ready before its first message: one sent while the session initializes is refused, and the composer empties when the session binds, so the chat never started, already on 2a920d40). `tests/queue-main-chat-test.mjs`: the main chat's row keeps its message count instead of showing the answer line in blue. `tests/unit/tldr-panel.test.ts` lost `tldrSubClass`'s test.
 - Undo: revert this commit.

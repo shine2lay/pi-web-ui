@@ -10,8 +10,9 @@
  *      answered …", linking to the task's chat and not "needs you". While it asked, nothing said the
  *      user was needed: no Telegram ask, no needs-you line or notice, and its chat's row asking with no
  *      green light. The answer line is marked kind "answered" and shows in blue: a real browser checks it
- *      in the TL;DR tab (blue beats the newest line's accent bar) and under the main chat's title in the
- *      left list, while #1's chat holds its turn so the answer stays the newest line.
+ *      in the TL;DR tab (blue beats the newest line's accent bar), and that the left list shows no TL;DR
+ *      line (sidebar-no-tldr, Ops #621): the main chat's row keeps its message count, while #1's chat
+ *      holds its turn so the answer stays the newest line.
  *   #2 asks; the main chat passes it on in its own words: the task needs the user as before (its Queue
  *      tab shows the main chat's question and choices, a needs-you TL;DR line, the notice, a Telegram
  *      ask); the owner answers on Telegram and it finishes.
@@ -490,14 +491,22 @@ const tldrLines = (page) =>
 			};
 		}),
 	);
-/** The left list's line under a chat's title that reads `text`: class, left bar and background. */
-const subLine = (page, text) =>
-	page.evaluate((t) => {
-		const el = [...document.querySelectorAll(".panel-left .session-sub.tldr-sub")].find((e) => e.textContent === t);
-		if (!el) return null;
-		const s = getComputedStyle(el);
-		return { cls: el.className, bar: s.borderLeftColor, bg: s.backgroundColor };
-	}, text);
+/** sidebar-no-tldr (Ops #621): the left list's open chat, the line under the title of the row named `title`,
+ *  and whether any element in the left list reads `text`. */
+const leftList = (page, title, text) =>
+	page.evaluate(
+		([name, t]) => {
+			const left = document.querySelector(".panel-left");
+			const titleOf = (el) => el?.querySelector(".session-title")?.textContent?.trim() ?? null;
+			const rowOf = [...(left?.querySelectorAll(".lp-row") ?? [])].find((r) => titleOf(r) === name);
+			return {
+				open: titleOf(left?.querySelector(".session-item.active")),
+				sub: rowOf?.querySelector(".session-sub")?.textContent ?? null,
+				shown: [...(left?.querySelectorAll("*") ?? [])].some((e) => e.textContent === t),
+			};
+		},
+		[title, text],
+	);
 const clear = (bg) => bg === "rgba(0, 0, 0, 0)" || bg === "transparent";
 async function shot(page, name, selector = ".panel-right") {
 	if (!SHOTS) return;
@@ -667,15 +676,17 @@ try {
 		}, 15_000)) && dark.blue !== dark.accent,
 		JSON.stringify({ dark, top }),
 	);
+	const mainTitle = (await leftList(P, "", line1)).open;
 	await P.locator(".tldr-line.answered .tldr-open-chat").first().click();
-	let sub = null;
+	let left = null;
 	check(
-		"its link opens #1's chat; then the main chat's row in the left list shows the answer in blue too",
-		await waitFor(async () => {
-			sub = await subLine(P, line1);
-			return sub?.cls === "session-sub tldr-sub answered" && sub.bar === dark.blue && !clear(sub.bg);
-		}, 15_000),
-		JSON.stringify(sub),
+		"its link opens #1's chat; the main chat's row in the left list shows its message count, no TL;DR line (Ops #621)",
+		!!mainTitle &&
+			(await waitFor(async () => {
+				left = await leftList(P, mainTitle, line1);
+				return !!left.open && left.open !== mainTitle && /^\d+ messages?$/.test(left.sub ?? "") && !left.shown;
+			}, 15_000)),
+		JSON.stringify({ mainTitle, left }),
 	);
 	await shot(P, "left-list-dark.png", ".panel-left");
 	// Back on the main chat before #1 finishes (its chat closes then); it stays there for the side-by-side check.

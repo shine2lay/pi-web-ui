@@ -40,8 +40,9 @@ export interface QueueGroup {
 	needsYou: boolean;
 }
 
-/** queue-grouping: whether a task chat's row asks for the user (the same marks its own row shows).
- *  lead-bar: the leads view's fold count uses it too. */
+/** queue-grouping: whether a task chat's row asks for the user (the question and pop-up marks its own row shows,
+ *  or a newest TL;DR line that needs them: the row no longer shows that line since Ops #621 (sidebar-no-tldr),
+ *  the chat's TL;DR tab does). lead-bar: the leads view's fold count uses it too. */
 export const needsUser = (c: ConversationSummary): boolean =>
 	Boolean(c.hasQuestion || c.dialogId !== undefined || c.tldr?.needsYou);
 
