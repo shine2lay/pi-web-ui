@@ -273,6 +273,8 @@
 		"thinkingLevel": "생각 강도",
 		"thinking": "생각",
 		"thinkingChip": "생각: {level}",
+		"modelChipName": "모델: {model}",
+		"thinkingChipName": "생각: {level}",
 		"fastMode": "채팅 속도",
 		"fastChip": "빠르게",
 		"speedStandard": "표준",

@@ -273,6 +273,8 @@
 		"thinkingLevel": "Уровень мышления",
 		"thinking": "Мышление",
 		"thinkingChip": "Мышление: {level}",
+		"modelChipName": "Модель: {model}",
+		"thinkingChipName": "Мышление: {level}",
 		"fastMode": "Скорость чата",
 		"fastChip": "Быстро",
 		"speedStandard": "Стандарт",

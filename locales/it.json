@@ -273,6 +273,8 @@
 		"thinkingLevel": "Livello di pensiero",
 		"thinking": "Pensiero",
 		"thinkingChip": "Pensiero: {level}",
+		"modelChipName": "Modello: {model}",
+		"thinkingChipName": "Pensiero: {level}",
 		"fastMode": "Velocità della chat",
 		"fastChip": "Veloce",
 		"speedStandard": "Standard",

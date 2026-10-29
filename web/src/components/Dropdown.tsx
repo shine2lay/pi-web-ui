@@ -24,6 +24,9 @@ interface DropdownProps {
 	 *  不再挂 title，免得原生延迟提示跟气泡叠两层。
 	 *  搬进 ⋯ 溢出菜单的同款节点退回原生 title（portal 纵向滚动会裁掉气泡）。 */
 	tip?: string;
+	/** The trigger's accessible name (aria-label), for a trigger whose visible text can be hidden
+	 * (the composer's model and thinking chips show only their icons at 560px or less). */
+	ariaLabel?: string;
 	/** Extra class(es) for the .dd-menu panel itself (e.g. "dd-menu-model"
 	 * makes only the inner scroll band scroll, keeping header/footer fixed). */
 	menuClassName?: string;
@@ -77,6 +80,7 @@ export function Dropdown({
 	fit = false,
 	direction = "down",
 	tip,
+	ariaLabel,
 	menuClassName,
 	triggerClassName,
 	menuRef,
@@ -151,6 +155,7 @@ export function Dropdown({
 				className={triggerClassName ?? "chip"}
 				onClick={() => onOpenChange(!open)}
 				aria-expanded={open}
+				aria-label={ariaLabel}
 				data-tip={tip}
 			>
 				{trigger}

@@ -273,6 +273,8 @@
 		"thinkingLevel": "Denktiefe",
 		"thinking": "Denken",
 		"thinkingChip": "Denken: {level}",
+		"modelChipName": "Modell: {model}",
+		"thinkingChipName": "Denken: {level}",
 		"fastMode": "Chat-Geschwindigkeit",
 		"fastChip": "Schnell",
 		"speedStandard": "Standard",

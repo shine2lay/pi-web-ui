@@ -273,6 +273,8 @@
 		"thinkingLevel": "思考の強さ",
 		"thinking": "思考",
 		"thinkingChip": "思考：{level}",
+		"modelChipName": "モデル：{model}",
+		"thinkingChipName": "思考：{level}",
 		"fastMode": "チャット速度",
 		"fastChip": "高速",
 		"speedStandard": "標準",

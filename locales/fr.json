@@ -273,6 +273,8 @@
 		"thinkingLevel": "Niveau de réflexion",
 		"thinking": "Réflexion",
 		"thinkingChip": "Réflexion : {level}",
+		"modelChipName": "Modèle : {model}",
+		"thinkingChipName": "Réflexion : {level}",
 		"fastMode": "Vitesse du chat",
 		"fastChip": "Rapide",
 		"speedStandard": "Standard",

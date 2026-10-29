@@ -65,6 +65,9 @@ export const en = {
 	thinkingLevel: "Thinking level",
 	thinking: "Thinking",
 	thinkingChip: "{level}",
+	/* Accessible names of the composer's model and thinking chips (their text is hidden on a phone). */
+	modelChipName: "Model: {model}",
+	thinkingChipName: "Thinking: {level}",
 	/* Per-chat request speed. */
 	fastMode: "Chat speed",
 	fastChip: "Fast",

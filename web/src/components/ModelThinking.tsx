@@ -421,6 +421,8 @@ export const ModelThinking = memo(function ModelThinking({
 					{!compact && model && <span className="chip-sub">{model.provider}</span>}
 				</>
 			}
+			// Ops #640: on a phone the chip's text is display:none, so the name must not come from it.
+			ariaLabel={model ? t("modelChipName", { model: model.name }) : t("selectModel")}
 			open={modelOpen}
 			onOpenChange={setModelOpen}
 			align="left"
@@ -445,6 +447,7 @@ export const ModelThinking = memo(function ModelThinking({
 				</>
 			}
 			tip={t("thinkingLevel")}
+			ariaLabel={state ? t("thinkingChipName", { level: thinkingLabel(state.thinkingLevel) }) : t("thinkingLevel")}
 			open={thinkingOpen}
 			onOpenChange={setThinkingOpen}
 			align="left"
