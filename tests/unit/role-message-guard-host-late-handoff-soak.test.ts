@@ -70,5 +70,8 @@ describe("ladder: accepted messages outlive the hourly charge (#426)", () => {
 		expect(w.logs.some((l) => /rotation failed|storage is full/.test(l))).toBe(false);
 		expect(w.logs.filter((l) => /guard store generation/.test(l)).length).toBeGreaterThan(1);
 		console.log("#426 3,000-entry soak peaks (metadata only):", Object.fromEntries(peaks));
-	}, 300_000);
+		// 1,200 s, not #426's 300 s: the case is unchanged, but this machine now lands under load. Measured 2026-10-29
+		// (Ops #635): 363 s at load1 ~35, over 300 s at load1 ~90 (it timed out on `mine` itself, blocking every land).
+		// Vitest fails the run if the budget is hit, so a wide one costs nothing when the machine is quiet.
+	}, 1_200_000);
 });
