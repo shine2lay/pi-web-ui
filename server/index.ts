@@ -95,6 +95,7 @@ import type { ServerLang } from "./i18n.js";
 import { McpBridge } from "./mcp-bridge.js";
 import { createMcpHotReload } from "./mcp-hot-reload.js";
 import { createHostMetricsSampler } from "./host-metrics.js";
+import { startCgroupSplit } from "./cgroup-split.js";
 import { SchedulerStore } from "./scheduler-tasks.js";
 import {
 	identityFilePath,
@@ -448,6 +449,10 @@ const MANAGED = isManaged();
  *  (foreground / dev / Docker). Decides whether the UPDATE panel offers
  *  "restart service" and what quitting means (see scheduleQuit). */
 const ORIGIN = launchOrigin();
+/** Ops #628: under systemd with Delegate=yes + DelegateSubgroup=server, chats' commands move to
+ *  <service>/tools (cpu.weight 100) so they can't starve this main thread (server/, 10000).
+ *  Anywhere else it only logs "[cgroup-split] off: …". See cgroup-split.ts. */
+startCgroupSplit();
 /** 下发给浏览器的服务信息（null = 没有 supervisor）。 */
 const SERVICE_INFO = toServiceInfo(ORIGIN);
 /** PI_WEB_TABS: the tabs this instance offers. null = all of them, as before. */

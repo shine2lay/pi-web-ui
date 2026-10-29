@@ -30,6 +30,13 @@ Environment=PI_WEB_PORT=8787
 ExecStart=/usr/bin/pi-web-ui
 Restart=on-failure
 RestartSec=5
+# Keep the server's main thread ahead of the commands chats run (tests, builds): systemd
+# starts the server in <service>/server, and the server moves every other process to
+# <service>/tools, at cpu.weight 10000 against 100 (server/cgroup-split.ts; needs
+# systemd >= 254 for DelegateSubgroup=). Without these two lines the server runs as
+# before and logs "[cgroup-split] off: ...". PI_WEB_CGROUP_SPLIT=0 turns it off.
+Delegate=yes
+DelegateSubgroup=server
 # npm global bin may live elsewhere (nvm, etc.) — find with: which pi-web-ui
 
 [Install]

@@ -143,6 +143,38 @@ Environment=PI_WEB_TOKEN=s3cret
 注意：launchd/systemd 运行环境极简（无 PATH/无 locale），全局 `dsh` 若装在用户目录
 （如 `~/.local`），请用 `PI_WEB_DSH_RUNTIME` 显式指定，否则解析不到。
 
+### Keeping the server ahead of chat commands (systemd, cgroup split)
+
+Every command a chat runs (bash tool, terminals, eval, test loops, builds) is a child of the
+server, so under systemd it lands in the service's own cgroup and competes with the server's
+node main thread on equal terms. `CPUWeight=` only protects the whole service from other
+services; heavy test loops inside it can still starve the main thread until every page hangs
+on "Loading session" (fork incident 2026-10-28).
+
+With these two lines in the unit's `[Service]` section (systemd 254 or newer), the server
+splits the service in two:
+
+```ini
+Delegate=yes
+DelegateSubgroup=server
+```
+
+- systemd starts the server in `<service>/server`; at start-up the server creates
+  `<service>/tools`, turns the cpu controller on for both, and sets `cpu.weight` to 10000
+  (server) and 100 (tools). Every second it moves each process other than itself from
+  `server/` to `tools/` (whole processes; a new command runs at most about a second at the
+  server's weight). `ExecStartPost=` and friends run in systemd's own `.control` subgroup.
+- The server log says `[cgroup-split] on: ...` or `[cgroup-split] off: <why>`. Without the
+  two lines, on other systems and in dev runs it does nothing else. `PI_WEB_CGROUP_SPLIT=0`
+  turns it off. A setup failure logs one line and the server runs as before.
+- Check: `cat /proc/$(systemctl show -p MainPID --value pi-web-ui)/cgroup` ends in `/server`;
+  `systemd-cgtop` shows `pi-web-ui.service/server` and `pi-web-ui.service/tools`.
+- Undo: remove the two lines, `systemctl daemon-reload`, restart the service.
+- Weights only, no quota: commands still use every idle core.
+- Measured with `node scripts/cpu-split-stall.mjs` (throwaway transient units, never the live
+  service): under 8 busy commands on 4 cores the main thread got 47% of a core without the
+  split and 98% with it, the same as with no commands at all.
+
 ## 子路径反代（nginx 挂在 /pi/ 等路径下）
 
 页面挂在 `https://example.com/pi/` 而非根路径时，nginx 需要**剥离前缀**转发。
