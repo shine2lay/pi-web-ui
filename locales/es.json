@@ -235,6 +235,7 @@
 		"connecting": "Conectando…",
 		"reconnecting": "Reconectando…",
 		"sessionInitializingNotice": "La sesión se está inicializando, espera un momento…",
+		"pendingSendNotice": "Se enviará cuando el chat esté listo",
 		"connUpdating": "Actualizando\u2026",
 		"language": "Idioma",
 		"langZh": "Chino",

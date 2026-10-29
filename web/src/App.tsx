@@ -77,6 +77,7 @@ import { ReconnectingNote } from "./components/ReconnectingNote";
 import { showBanner, dismissBanner, dismissBannersWhere } from "./banner-notice";
 import { ensurePluginViewLoaded } from "./plugin-loader";
 import { insertTextAtCursor, removeMentionFromComposer } from "./composer-bridge";
+import { attachmentScope, composerIds } from "./first-send";
 import type { ComposerAttachmentHost } from "./recovery-composer";
 import { useComposerSessionReset } from "./use-composer-session";
 import {
@@ -450,6 +451,22 @@ export function App() {
 		};
 		return host;
 	}, [setAttachments]);
+	// first-send: while a chat starts the composer holds no chat ids (so it can't reach the old chat);
+	// a pending send goes once the started chat is current and sendable (composerHost bound to it).
+	const composerChat = composerIds(
+		chat.startup,
+		{
+			conversationId: chat.activeConversationId || chat.state?.conversationId || "",
+			sessionId: chat.state?.sessionId ?? "",
+		},
+		chat.engine === "dsh",
+	);
+	const startupComposerReady =
+		chat.startup.phase === "bound" &&
+		chat.status === "open" &&
+		!!composerChat.sessionId &&
+		composerChat.sessionId === chat.startup.sessionId &&
+		composerHost.read()?.sessionId === composerChat.sessionId;
 	const [previewFile, setPreviewFile] = useState<
 		| (PreviewFile & {
 				binding?: FilePreviewBinding;
@@ -1861,7 +1878,9 @@ export function App() {
 	// 且那排 chips 会随下一条消息一起发出去。
 	// 判定：composer-draft.ts 的 advanceComposerSession；接线：use-composer-session.ts
 	//（两者都有单测，空 sessionId 的瞬时态不清）。
-	useComposerSessionReset(chat.state?.sessionId ?? "", clearAttachments);
+	// first-send: one attachment scope per start-up attempt, so the bind (or a failed New chat falling
+	// back) never clears chips added while the chat started; leaving the chat still does.
+	useComposerSessionReset(attachmentScope(chat.startup, chat.state?.sessionId ?? ""), clearAttachments);
 	const removeAttachmentCb = useCallback(removeAttachment, []);
 	// addImageFiles/addLocalFiles 本体已是依赖正确的 useCallback（见上），引用在
 	// 流式重渲染期间稳定，直接传给 memo 化的 ChatInput，无需再包一层。
@@ -2144,7 +2163,11 @@ export function App() {
 							elsewhere={chat.elsewhere}
 							queueTasks={chat.queueTasks}
 							sessions={chat.sessions}
-							activeConversationId={chat.activeConversationId}
+							// first-send: while New chat starts, the chat it left is no longer the current row, so
+							// clicking it goes back there (a navigation that cancels a waiting send).
+							activeConversationId={
+								chat.startup.via === "new_chat" && chat.startup.phase === "starting" ? "" : chat.activeConversationId
+							}
 							pendingSwitch={chat.pendingSwitch?.target ?? null}
 							/* 宿主 UI 扩展点（contextmenu.session）：条目由 buildUiSlots 算好，左栏只管开菜单 +
 								   分派它自己的两条内置项（host:conv-dismiss-subagents / host:conv-force-dismiss）。 */
@@ -2529,9 +2552,11 @@ export function App() {
 							dshPresets={chat.dshPresets?.presets ?? undefined}
 							dshPresetDefault={chat.dshPresets?.defaultPreset}
 							dshBlank={(chat.state?.messages?.length ?? 0) === 0}
-							conversationId={chat.activeConversationId || chat.state?.conversationId || ""}
-							sessionDraft={chat.engine === "pi" ? (chat.state?.draft ?? null) : null}
-							sessionId={chat.state?.sessionId ?? ""}
+							conversationId={composerChat.conversationId}
+							sessionDraft={chat.engine === "pi" && composerChat.sessionId ? (chat.state?.draft ?? null) : null}
+							sessionId={composerChat.sessionId}
+							startup={chat.startup}
+							startupComposerReady={startupComposerReady}
 						/>
 					</main>
 					{!isMobile && <ResizeHandle side="right" width={rightWidth} onResize={resizeRight} />}

@@ -32,7 +32,7 @@ import { sdkCopies, sdkOriginNote } from "./sdk-origin.js";
 import { PROTOCOL_VERSION } from "./protocol-version.js";
 import { AgentService, workspacePath, QuiesceRejectedError } from "./agent-service.js";
 import { describeError, errorMessage, guardCalls, installProcessGuards } from "./crash-guard.js";
-import type { BusyConversation } from "./agent-service.js";
+import type { BusyConversation, NewChatOutcome } from "./agent-service.js";
 import type { ParticipantTarget } from "./participant-lifecycle.js";
 import { chatImageHeaders, parseChatImageAddress, type ChatImage } from "./chat-image.js";
 import { WS_MAX_PAYLOAD_BYTES, isAbsoluteWirePath, wireToAbs } from "./files-service.js";
@@ -1241,6 +1241,9 @@ export interface DispatchSession {
 	 *  新对话（/new <prompt> 用）。此处只管转发，返回值被丢弃，故允许 void。
 	 *  preset = DSH Agent 预设（pi 引擎忽略）。 */
 	newChat(preset?: string, ephemeral?: boolean): Promise<boolean | void>;
+	/** first-send: New chat answered by request id (pi engine); the last one is kept for new_chat_status. */
+	newChatRequest?(reqId: string | undefined, preset?: string, ephemeral?: boolean): Promise<NewChatOutcome>;
+	newChatStatus?(reqId: string): Promise<NewChatOutcome>;
 	editMessage(messageId: string, text: string, attachments?: PromptAttachment[]): Promise<void>;
 	forkSession?(messageId: string, position?: "before" | "at", targetConvId?: string): Promise<void>;
 	cycleModel(): Promise<void>;
@@ -2914,9 +2917,25 @@ wss.on("connection", (ws, req) => {
 			case "list_bg_servers":
 				void cs.listBgServers();
 				break;
-			case "new_chat":
-				void cs.newChat(msg.preset, msg.ephemeral);
+			case "new_chat": {
+				// first-send: answer the window's New chat by its request id, so a message typed while
+				// the chat starts goes to the chat this request made, or is cancelled when it failed.
+				const reqId = msg.reqId;
+				const made = cs.newChatRequest
+					? cs.newChatRequest(reqId, msg.preset, msg.ephemeral)
+					: Promise.resolve(cs.newChat(msg.preset, msg.ephemeral)).then(
+							(ok) => ({ ok: ok !== false }),
+							() => ({ ok: false }),
+						);
+				if (reqId) void made.then((r) => send({ type: "new_chat_result", reqId, ...r }));
 				break;
+			}
+			case "new_chat_status": {
+				const reqId = msg.reqId;
+				const known = cs.newChatStatus?.(reqId) ?? Promise.resolve({ ok: false });
+				void known.then((r) => send({ type: "new_chat_result", reqId, ...r }));
+				break;
+			}
 			case "edit_message":
 				void cs.editMessage(msg.messageId, msg.text, msg.attachments);
 				break;
@@ -4622,6 +4641,7 @@ wss.on("connection", (ws, req) => {
 						level: "error",
 						text: `Failed to initialize session: ${(err as Error).message}`,
 						textEn: `Failed to initialize session: ${(err as Error).message}`,
+						startupFailed: true,
 					});
 				});
 			return;

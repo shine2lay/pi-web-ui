@@ -235,6 +235,7 @@
 		"connecting": "연결하는 중이에요…",
 		"reconnecting": "다시 연결하는 중이에요…",
 		"sessionInitializingNotice": "세션을 초기화하는 중이에요. 잠시만 기다려 주세요…",
+		"pendingSendNotice": "채팅이 준비되면 보내요",
 		"connUpdating": "\uc5c5\ub370\uc774\ud2b8\ud558\ub294 \uc911\uc774\uc5d0\uc694\u2026",
 		"language": "언어",
 		"langZh": "중국어",

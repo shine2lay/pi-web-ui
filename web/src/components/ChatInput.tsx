@@ -45,6 +45,13 @@ import { DshPresetBar, type DshPresetInfo } from "./DshPresetBar";
 import { DshPermissionBar } from "./DshPermissionBar";
 import type { DshPermissionOption, UiAgentPreset } from "../types";
 import { newPromptId } from "../pending-sends";
+import {
+	isStartupBind,
+	pendingSendFate,
+	requestPendingSend,
+	type PendingSend,
+	type StartupAttempt,
+} from "../first-send";
 
 /** True on touch-first devices (phones / tablets driven by a soft keyboard) —
  *  see `touch-device.ts` for the detection rules (Windows 触屏笔记本不算触屏，
@@ -161,6 +168,10 @@ interface ChatInputProps {
 	sessionDraft?: { text: string; ts: number } | null;
 	/** 当前会话的 sessionId（草稿跨重启的稳定 key；空 = 未就绪，不存不取）。 */
 	sessionId?: string;
+	/** first-send: this window's chat start-up attempt (web/src/first-send.ts). */
+	startup?: StartupAttempt;
+	/** first-send: the started chat is current and the composer can send into it. */
+	startupComposerReady?: boolean;
 }
 
 export const ChatInput = memo(function ChatInput({
@@ -198,6 +209,8 @@ export const ChatInput = memo(function ChatInput({
 	conversationId,
 	sessionDraft,
 	sessionId,
+	startup,
+	startupComposerReady = false,
 }: ChatInputProps) {
 	const t = useT();
 	/** 连接/会话就绪：走全局（web/src/app-globals.ts），不再从 App 传。 */
@@ -270,6 +283,10 @@ export const ChatInput = memo(function ChatInput({
 		},
 	});
 	const submitInFlightRef = useRef(false);
+	/** first-send: the one send waiting for the chat to start (with the attachments it was asked with). */
+	const [pendingSend, setPendingSend] = useState<(PendingSend & { attachmentsKey: string }) | null>(null);
+	const startupGeneration = startup?.generation ?? 0;
+	const startupStarting = !!startup && startup.phase === "starting";
 	const latestSubmissionDraftRef = useRef({ text, attachments, sessionId, conversationId });
 	latestSubmissionDraftRef.current = { text, attachments, sessionId, conversationId };
 	/** 手动拉出的保底高度：null = 没拖过（纯自适应，上限 220）；数字 = 保底（持久化）。
@@ -449,6 +466,12 @@ export const ChatInput = memo(function ChatInput({
 	const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const draftScopeRef = useRef<string | null>(null);
 	const composerIdentityRef = useRef({ conversationId, sessionId, isDsh });
+	/** first-send: the ids the identity effect saw last, with the start-up generation they belonged to. */
+	const startupSeenRef = useRef({
+		conversationId: conversationId ?? "",
+		sessionId: sessionId ?? "",
+		generation: startup?.generation ?? 0,
+	});
 	/** 最近一次 IME compositionend 的时间戳（issue #248：macOS 中文输入法下敲英文字母按 Enter 上屏时，
 	 *  浏览器会先派发 compositionend 再派发 keydown(Enter, isComposing=false)，需通过时间差拦截误发送）。 */
 	const compositionEndTimeRef = useRef(0);
@@ -519,6 +542,8 @@ export const ChatInput = memo(function ChatInput({
 	};
 
 	const handleTextChange = (value: string, cursor: number | null) => {
+		// first-send: editing the text cancels a send waiting for the chat to start.
+		setPendingSend(null);
 		// 用户手动编辑则退出历史导航（下次 Up 从最新开始）
 		historyIndexRef.current = -1;
 		setText(value);
@@ -579,15 +604,28 @@ export const ChatInput = memo(function ChatInput({
 	// persistence key, but conversation changes must still isolate its drafts.
 	useEffect(() => {
 		const previous = composerIdentityRef.current;
+		const seen = startupSeenRef.current;
+		startupSeenRef.current = {
+			conversationId: conversationId ?? "",
+			sessionId: sessionId ?? "",
+			generation: startupGeneration,
+		};
 		const sameConversation = previous.conversationId === conversationId && previous.isDsh === isDsh;
 		const sameSession = !previous.sessionId || !sessionId || previous.sessionId === sessionId;
+		// first-send: the chat this window started arriving (or a failed start falling back) is not a
+		// navigation: the text typed meanwhile stays. Any other change of ids still clears the box.
+		const startupBind =
+			!isDsh &&
+			previous.isDsh === isDsh &&
+			!!startup &&
+			isStartupBind(seen, { conversationId: conversationId ?? "", sessionId: sessionId ?? "" }, startup);
 		composerIdentityRef.current = {
 			conversationId,
 			isDsh,
 			sessionId: sameConversation ? sessionId || previous.sessionId : sessionId,
 		};
 		draftScopeRef.current = draftSessionKey;
-		if (sameConversation && sameSession) {
+		if ((sameConversation && sameSession) || startupBind) {
 			// Also capture a quote/host-inserted draft, not only keyboard edits,
 			// before the late server/local restore effect gets a chance to run.
 			if (draftSessionKey && text !== "" && (touchedRef.current || textMirrorRef.current !== text))
@@ -603,7 +641,7 @@ export const ChatInput = memo(function ChatInput({
 		historyIndexRef.current = -1;
 		// Identity transitions only: ordinary typing must not reschedule this effect.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [draftSessionKey, conversationId, sessionId, isDsh]);
+	}, [draftSessionKey, conversationId, sessionId, isDsh, startupGeneration]);
 
 	// 新对话自动聚焦：初次加载为新对话、或切到新对话（messages 为空）时自动聚焦。
 	const prevSessionKeyRef = useRef<string | null>(null);
@@ -975,6 +1013,15 @@ export const ChatInput = memo(function ChatInput({
 	// Async Pi initialization can publish ready before it has a session. Keep drafts
 	// editable, but never send an unbound prompt (DSH does not have a Pi session id).
 	const sessionInitializing = connected && !isDsh && !sessionId;
+	/** first-send: Enter while the chat starts waits for it (one send) instead of being refused. */
+	const canWaitForStartup = sessionInitializing && startupStarting;
+	const attachmentsKey = (list: typeof attachments) =>
+		list
+			.map(
+				(a) =>
+					`${a.mode ?? ""}:${a.path}:${a.name}:${a.conversationId ?? ""}:${a.imageData?.length ?? 0}:${a.fileData?.length ?? 0}`,
+			)
+			.join("|");
 
 	// Re-open the picker when the command catalog arrives late — the user may
 	// have typed "/" before the server pushed slash_commands (cold start).
@@ -1108,6 +1155,15 @@ export const ChatInput = memo(function ChatInput({
 			return;
 		}
 		if (sessionInitializing) {
+			if (canWaitForStartup && startup) {
+				// first-send: one pending send; a second Enter changes nothing. Text and chips stay editable.
+				const key = attachmentsKey(submittedAttachments);
+				setPendingSend((p) => {
+					const next = requestPendingSend(p, startup);
+					return next === p ? p : next && { ...next, attachmentsKey: key };
+				});
+				return;
+			}
 			onNotice("warning", t("sessionInitializingNotice"));
 			return;
 		}
@@ -1360,6 +1416,12 @@ export const ChatInput = memo(function ChatInput({
 			}
 			return;
 		}
+		// first-send: Escape cancels a send waiting for the chat to start (the text stays).
+		if (e.key === "Escape" && pendingSend) {
+			e.preventDefault();
+			setPendingSend(null);
+			return;
+		}
 		// Esc：在历史中时先退出历史并回到草稿
 		if (e.key === "Escape" && historyIndexRef.current !== -1) {
 			e.preventDefault();
@@ -1393,8 +1455,26 @@ export const ChatInput = memo(function ChatInput({
 	// 空闲态的发送按钮和运行中的对半胶囊共用这一个条件。
 	const canSubmit =
 		connected &&
-		!sessionInitializing &&
+		(!sessionInitializing || canWaitForStartup) &&
 		(text.trim() !== "" || attachments.some((a) => a.imageData || a.fileData || a.mode === "conversation"));
+
+	// first-send: a change of the chips (one removed) cancels the waiting send.
+	const currentAttachmentsKey = attachmentsKey(attachments);
+	useEffect(() => {
+		if (pendingSend && pendingSend.attachmentsKey !== currentAttachmentsKey) setPendingSend(null);
+	}, [pendingSend, currentAttachmentsKey]);
+	// first-send: release the waiting send once, into the chat its own attempt started, when the
+	// composer can send there; a failure, a navigation or another attempt cancels it (never sent).
+	const pendingFate = startup ? pendingSendFate(pendingSend, startup, startupComposerReady && connected) : "none";
+	useEffect(() => {
+		if (pendingFate === "cancel") setPendingSend(null);
+		else if (pendingFate === "release") {
+			setPendingSend(null);
+			void submit();
+		}
+		// submit reads the composer through refs; only the fate decides.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [pendingFate]);
 
 	// 插件输入框动作按 align 分组（未接线回落用；接线后统一走下面的 composerGroups）。
 	const pluginActions = useMemo(
@@ -1768,6 +1848,11 @@ export const ChatInput = memo(function ChatInput({
 						e.target.value = ""; // allow re-picking the same file
 					}}
 				/>
+				{pendingSend && (
+					<div className="composer-pending-send" role="status">
+						{t("pendingSendNotice")}
+					</div>
+				)}
 				<textarea
 					ref={taRef}
 					value={text}

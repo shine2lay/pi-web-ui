@@ -55,7 +55,9 @@ const CHATS = {
 		title: "Alpha chat",
 		steps: [
 			{ args: { text: A1 }, gap: 3000 },
-			{ args: { text: A2 }, gap: 8000 },
+			// Long enough that window 2 is open before this line is sent: without the old wait for the
+			// session (first-send, Ops #631) window 1's chats start sooner, so A reached it too early.
+			{ args: { text: A2 }, gap: 16000 },
 			{ args: { text: A3, needs_you: true }, gap: 5000 },
 		],
 		answerGap: 800,
@@ -236,16 +238,8 @@ async function openWindow(clientId) {
 	await page.goto(`http://localhost:${PORT}/`);
 	await page.waitForSelector(".topbar", { timeout: 60000 });
 	await page.locator(".inputbox textarea").waitFor({ timeout: 20000 });
-	// Ready to send: a message sent while the page's session still initializes is refused with a notice,
-	// and the composer then empties when the session binds, so A never started (Ops #621).
-	await page.waitForFunction(
-		() => {
-			const input = document.querySelector(".inputbox textarea");
-			return !!input && !input.disabled && !/initializing/i.test(input.placeholder);
-		},
-		undefined,
-		{ timeout: 20000 },
-	);
+	// No wait for the session: a message sent while the page's first chat still starts now waits for
+	// it and goes once it is ready (first-send, Ops #631), so the test sends straight away.
 	// Marks this page load: still there at the end = the window never reloaded.
 	await page.evaluate(() => {
 		window.__sidebarLoad = 1;

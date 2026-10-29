@@ -235,6 +235,7 @@
 		"connecting": "Connessione…",
 		"reconnecting": "Riconnessione…",
 		"sessionInitializingNotice": "La sessione è in fase di inizializzazione, attendi…",
+		"pendingSendNotice": "Verrà inviato quando la chat sarà pronta",
 		"connUpdating": "Aggiornamento\u2026",
 		"language": "Lingua",
 		"langZh": "中文",

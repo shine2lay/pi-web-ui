@@ -1249,7 +1249,10 @@ export type ClientCommand =
 	 *  Answered exactly once by an scm_data with kind "commitmsg" — text
 	 *  carries the generated single-line message; ok:false on any failure. */
 	| { type: "scm_commitmsg"; reqId: number }
-	| { type: "new_chat"; preset?: string; ephemeral?: boolean }
+	/** first-send: reqId names this New chat; the server answers it with new_chat_result. */
+	| { type: "new_chat"; preset?: string; ephemeral?: boolean; reqId?: string }
+	/** first-send: after a reconnect, the answer to a New chat that was still starting. */
+	| { type: "new_chat_status"; reqId: string }
 	/** Edit a past user question and re-ask it (forks a new session at that point). */
 	| {
 			type: "edit_message";
@@ -4888,7 +4891,14 @@ export type ServerMessage =
 	 *  prompt template + skill commands). Pushed on attach, on project switch
 	 *  and on request (get_commands). */
 	| { type: "slash_commands"; commands: SlashCommandInfo[] }
-	| { type: "notice"; level: "info" | "warning" | "error"; text: string; textEn?: string }
+	/** startupFailed (first-send): this window's first chat could not start; a send waiting for it is cancelled. */
+	| {
+			type: "notice";
+			level: "info" | "warning" | "error";
+			text: string;
+			textEn?: string;
+			startupFailed?: boolean;
+	  }
 	/** rewind-to-here：rewind_to 的回执（只发给点按钮的窗口）。回到的是用户消息时 editorText 是
 	 *  那条消息的文字，前端放回输入框（同撤回排队消息的路子）。 */
 	| { type: "rewind_done"; ok: boolean; conversationId: string; editorText?: string }
@@ -4898,6 +4908,9 @@ export type ServerMessage =
 	 *  客户端据此判断回执对应的是不是自己还在等的那次切换（内部触发的切换、连点两条时
 	 *  早先那次的回执都对不上，直接忽略）。不用 notice：那只是一条 toast，对不到目标上。 */
 	| { type: "switch_done"; target: SwitchTarget }
+	/** first-send: how a New chat (by its reqId) ended: ok with the chat it made current, or not
+	 *  (the existing failure or warning notice says why). An unknown reqId answers ok:false. */
+	| { type: "new_chat_result"; reqId: string; ok: boolean; conversationId?: string }
 	| { type: "switch_failed"; target: SwitchTarget; error: string; errorEn?: string }
 	/** chat-open-speed: the newest messages of the chat being opened, sent BEFORE the open
 	 *  itself (the SDK load, the add-ons' session start, the folder side effects). A 267 MB

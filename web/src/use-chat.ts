@@ -156,6 +156,16 @@ import {
 	type ProviderOAuthServerMessage,
 } from "./provider-oauth-state";
 import type { SchedulerTaskView } from "./types";
+import { advanceStartup, INITIAL_STARTUP, type StartupAttempt, type StartupEvent } from "./first-send";
+
+/** first-send: a start-up event as the hook reports it; the reducer adds the chat that is current. */
+type StartupInput =
+	| Exclude<StartupEvent, { type: "new_chat_result" } | { type: "startup_failed" }>
+	| Omit<Extract<StartupEvent, { type: "new_chat_result" }>, "current">
+	| { type: "startup_failed" };
+
+let startupReqSeq = 0;
+const newStartupReqId = (): string => `nc-${Date.now().toString(36)}-${++startupReqSeq}`;
 
 export type ConnStatus = "connecting" | "open" | "closed";
 
@@ -509,6 +519,8 @@ export interface ChatState {
 	protocolMismatch: boolean;
 	/** switch-loading：正在等服务端切过去的那次切换（发出 switch_* 即设，回执/对上的快照即清）。 */
 	pendingSwitch: PendingSwitch | null;
+	/** first-send: this window's chat start-up attempt (page load or New chat), see first-send.ts. */
+	startup: StartupAttempt;
 	/** switch-loading：最近一次切换失败（留在原对话上，聊天区显示原因 + 重试）。 */
 	switchError: SwitchError | null;
 	/** switch-cache：切换进行中先显示的目标对话缓存（点下去那一刻就有；要的那条显示出来、
@@ -526,6 +538,7 @@ export interface ChatState {
 }
 
 type Action =
+	| { type: "startup"; event: StartupInput }
 	| { type: "rewind_draft"; text: string }
 	| { type: "pending_add"; pending: PendingSend }
 	| { type: "pending_retry"; id: string }
@@ -947,7 +960,22 @@ function reducer(state: ChatState, action: Action): ChatState {
 				...settled,
 				// switch-cache：真快照到了，预览功成身退。
 				...(settled && settled.pendingSwitch === null ? { preview: null } : {}),
+				startup: advanceStartup(state.startup, {
+					type: "snapshot",
+					conversationId: next.conversationId,
+					sessionId: next.sessionId ?? "",
+				}),
 			};
+		}
+		case "startup": {
+			const current = {
+				conversationId: state.state?.conversationId || state.activeConversationId || "",
+				sessionId: state.state?.sessionId ?? "",
+			};
+			const e = action.event;
+			const event: StartupEvent = e.type === "new_chat_result" || e.type === "startup_failed" ? { ...e, current } : e;
+			const startup = advanceStartup(state.startup, event);
+			return startup === state.startup ? state : { ...state, startup };
 		}
 		case "older_messages": {
 			// 向前拼一截历史消息（chat-window-pagination）；作废的回执原状返回。
@@ -1559,6 +1587,7 @@ export function useChat() {
 		dshPermission: null,
 		protocolMismatch: false,
 		pendingSwitch: null,
+		startup: INITIAL_STARTUP,
 		switchError: null,
 		preview: null,
 		folded: null,
@@ -1836,6 +1865,22 @@ export function useChat() {
 				if (switchTarget && !switchAlreadyShown(switchTarget, chatApi.current.chat.state))
 					recovery.beginSwitch(switchTarget);
 				let out: ClientMessage = msg;
+				// first-send: New chat is a start-up attempt the server answers by its request id; a
+				// navigation replaces any attempt (its pending send is cancelled, never sent elsewhere).
+				if (msg.type === "new_chat") {
+					const reqId = msg.reqId ?? newStartupReqId();
+					out = { ...msg, reqId };
+					dispatch({ type: "startup", event: { type: "new_chat", reqId } });
+				} else if (
+					msg.type === "set_cwd" ||
+					msg.type === "take_over_conversation" ||
+					(switchTarget &&
+						(!switchAlreadyShown(switchTarget, chatApi.current.chat.state) ||
+							// opening the chat New chat is leaving (still shown until the new one arrives)
+							chatApi.current.chat.startup.phase === "starting"))
+				) {
+					dispatch({ type: "startup", event: { type: "navigate" } });
+				}
 				if (
 					msg.type === "new_chat" ||
 					msg.type === "set_cwd" ||
@@ -1987,6 +2032,10 @@ export function useChat() {
 		resendWorkPageWatch();
 		requestSubsLimits();
 		requestRoleGuard();
+		// first-send: a New chat still starting when the socket dropped asks for its answer again.
+		const startup = chatApi.current.chat.startup;
+		if (startup.via === "new_chat" && startup.phase === "starting" && startup.reqId)
+			ws.send(JSON.stringify({ type: "new_chat_status", reqId: startup.reqId } satisfies ClientMessage));
 		const unanswered = idsToCheck(onReconnect(chatApi.current.chat.pendingSends));
 		if (unanswered.length) ws.send(JSON.stringify({ type: "prompt_status", ids: unanswered } satisfies ClientMessage));
 		ws.send(JSON.stringify({ type: "list_models" } satisfies ClientMessage));
@@ -2242,7 +2291,19 @@ export function useChat() {
 					// 收到子代理对等交接事件：快照与 notice 会同步下发，此处作为协同事件分发入口
 					break;
 				}
+				case "new_chat_result":
+					dispatch({
+						type: "startup",
+						event: {
+							type: "new_chat_result",
+							reqId: msg.reqId,
+							ok: msg.ok,
+							...(msg.conversationId ? { conversationId: msg.conversationId } : {}),
+						},
+					});
+					break;
 				case "notice": {
+					if (msg.startupFailed) dispatch({ type: "startup", event: { type: "startup_failed" } });
 					const id = ++noticeId.current;
 					dispatch({
 						type: "notice",

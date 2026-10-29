@@ -273,6 +273,7 @@ import {
 	tooBigKind,
 } from "./rewind.js";
 import { DEFAULT_COMPACTION_RESERVE_TOKENS, effectiveSoftCap, softCapToReserve } from "./soft-cap.js";
+import { testStartupFault } from "./test-startup-fault.js";
 import { pruneContextHierarchically } from "./context-budget.js";
 import { decodeText } from "./text-sniff.js";
 import { makeEditSoftTool } from "./edit-soft-tool.js";
@@ -834,6 +835,12 @@ export function makeAdaptiveBashTool(
  * 插件工具拦截钩子（P1-5）：index.ts 注入，把 bash/read 的 pre/post 决策委托给
  *  PluginManager（evaluateToolPre/evaluateToolPost）。未注入时零开销直通。
  */
+/** first-send: how a window's New chat ended (new_chat_result). */
+export interface NewChatOutcome {
+	ok: boolean;
+	conversationId?: string;
+}
+
 export interface ToolGuardHook {
 	pre: (
 		req: ToolPreRequest,
@@ -6004,6 +6011,8 @@ export class ClientSession {
 		stateStore: ClientStateStore,
 		opts?: { blank?: boolean; durablePort?: DurableSessionPort | null; adoptId?: string | null },
 	): Promise<ClientSession> {
+		// first-send: a sealed test may slow or fail this start-up (no-op unless its env is set).
+		await testStartupFault();
 		const agentDir = process.env.PI_CODING_AGENT_DIR ?? getAgentDir();
 		// queue-grouping: the queue links are kept in the server's client state (one store per server).
 		ClientSession.queueHomesStore = stateStore;
@@ -13288,6 +13297,24 @@ export class ClientSession {
 		return ClientSession.sessionOpenChain(() => ClientSession.prototype.newChatNow.call(this, _preset, ephemeral));
 	}
 
+	/** first-send: this window's last New chat by request id (one kept; a reconnect asks for it again). */
+	private lastNewChat: { reqId: string; outcome: Promise<NewChatOutcome> } | null = null;
+
+	/** first-send: New chat answered with the chat it made current, read inside the open chain so a
+	 *  later switch can't be mistaken for it. Never rejects: a failure is ok:false (its notice is sent). */
+	newChatRequest(reqId: string | undefined, preset?: string, ephemeral?: boolean): Promise<NewChatOutcome> {
+		const outcome = ClientSession.sessionOpenChain(async (): Promise<NewChatOutcome> => {
+			const ok = await ClientSession.prototype.newChatNow.call(this, preset, ephemeral);
+			return ok ? { ok: true, conversationId: this.activeId } : { ok: false };
+		}).catch((): NewChatOutcome => ({ ok: false }));
+		if (reqId) this.lastNewChat = { reqId, outcome };
+		return outcome;
+	}
+
+	newChatStatus(reqId: string): Promise<NewChatOutcome> {
+		return this.lastNewChat?.reqId === reqId ? this.lastNewChat.outcome : Promise.resolve({ ok: false });
+	}
+
 	private async newChatNow(_preset?: string, ephemeral?: boolean): Promise<boolean> {
 		if (this.quiesceBlocked()) return false;
 		// Reuse an already-open blank conversation instead of piling up new ones
@@ -13361,6 +13388,8 @@ export class ClientSession {
 		});
 		let ready = false;
 		try {
+			// first-send: a sealed test may slow or fail this start-up (no-op unless its env is set).
+			await testStartupFault();
 			const conversationId = this.nextConversationId();
 			const terminals = this.makeTerminalManager(conversationId, this.cwd);
 			const durablePort = resolveActiveDurablePort(this);

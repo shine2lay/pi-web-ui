@@ -23,6 +23,8 @@ export const en = {
 	connecting: "Connecting…",
 	reconnecting: "Reconnecting…",
 	sessionInitializingNotice: "Session is initializing, please wait…",
+	/** first-send: in the composer while a message waits for its new chat to start. */
+	pendingSendNotice: "Sends when the chat is ready",
 	/** pages-live: the footer on Roles or Initiatives while their data comes back (up to 8 s). */
 	connUpdating: "Updating…",
 	language: "Language",

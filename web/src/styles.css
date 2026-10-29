@@ -11048,6 +11048,12 @@ div.chead[role="button"]:focus-visible,
 .inputbox textarea:disabled {
 	opacity: 0.6;
 }
+/* first-send: a message waiting for its new chat to start. */
+.inputbox .composer-pending-send {
+	padding: 4px 2px 0;
+	font-size: 12px;
+	color: var(--text-faint);
+}
 
 .inputbox-actions {
 	display: flex;
