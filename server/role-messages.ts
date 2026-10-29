@@ -60,8 +60,8 @@ import { ownerChannelOf, type OwnerChannel, type RoleOwnerAnswer, OWNER_IDS_MAX 
 import { CARRY_ON_PREFIX } from "./running-chats.js";
 import { guardPolicyIsValid, ROLE_MESSAGE_POLICY, roleMessagesHourlyExempt } from "./role-message-limits.js";
 import type { GuardPolicy } from "./role-message-guard-contract-v2.js";
+import { readQueueEntries } from "./queue-entries-tail.js";
 import {
-	TASK_QUEUE_ENTRY_TYPE,
 	taskQueueAll,
 	taskQueueBackOwed,
 	taskQueueFromEntries,
@@ -803,37 +803,11 @@ export async function reportReplyText(
  * pi-queue's entries in a transcript (file order).
  * queue-lead-reminders: `withHeader`: the chat's session header first, when the file starts with one (the SDK's
  * rule: the first line that parses to a value), as `{ type: "session", id }`; taskQueueAll binds the queue to it.
+ * queue-entries-tail (Ops #635): reads only the bytes the file got since the last read (queue-entries-tail.ts); the
+ * answer is the whole-file parse's. The entries are shared between calls: callers must not change them.
  */
-export async function queueEntriesOf(file: string, withHeader = false): Promise<TaskQueueEntryLike[]> {
-	const out: TaskQueueEntryLike[] = [];
-	const needle = `"${TASK_QUEUE_ENTRY_TYPE}"`;
-	let header = withHeader;
-	await eachLine(file, 0, (line) => {
-		if (header && line.trim()) {
-			let h: { type?: unknown; id?: unknown } | undefined;
-			try {
-				h = JSON.parse(line) as typeof h;
-			} catch {
-				h = undefined; // unparsable: keep looking, as the SDK does
-			}
-			if (h) {
-				header = false;
-				if (h.type === "session" && typeof h.id === "string") {
-					out.push({ type: "session", id: h.id });
-					return false;
-				}
-			}
-		}
-		if (!line.includes(needle)) return false;
-		try {
-			const e = JSON.parse(line) as TaskQueueEntryLike;
-			if (e?.type === "custom" && e.customType === TASK_QUEUE_ENTRY_TYPE) out.push(e);
-		} catch {
-			// a half-written last line: skip it
-		}
-		return false;
-	});
-	return out;
+export function queueEntriesOf(file: string, withHeader = false): Promise<TaskQueueEntryLike[]> {
+	return readQueueEntries(file, withHeader);
 }
 
 /** The task a queued task's chat works on (from its own entries); undefined = not a task's chat.
