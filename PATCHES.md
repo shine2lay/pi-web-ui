@@ -4828,8 +4828,9 @@ chats: see change 6.
   there); the next new chat starts with None; RollCall works the same; the tags survive a reload, and
   History rows show them; the chat menu sets ops/tooling on a running row and None on a History row clears
   it everywhere; Settings → Identities lists the three with sizes, saves a notebook edit to the file (no
-  temp file left), won't save a notebook over its cap (button off, Ctrl+S too, the file stays; the page says "1 byte
-  over the cap"), saves
+  half-written file left; a role's folder may hold other files, pi-identity's `loaded.json` among them),
+  won't save a notebook over its cap (button off, Ctrl+S too, the file stays; the page says "1 byte
+  over the cap", and Reload keeps that unsaved text, as durable-identity-admission intends), saves
   about.md, and its home-chat link opens the chat; on a phone, "+" gives the picker, the header tag's
   menu clears it, and Settings → Identities is there. No page errors.
 - check.sh, the build and the full sealed E2E suite.

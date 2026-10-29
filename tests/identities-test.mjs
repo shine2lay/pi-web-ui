@@ -518,8 +518,16 @@ try {
 	check("...and the file has the edit", readFileSync(identityFile("temper", "notebook.md"), "utf8") === edited);
 	check(
 		"...written whole, no temp file left",
-		JSON.stringify(readdirSync(join(idDir, "temper")).sort()) ===
-			JSON.stringify(["about.md", "identity.json", "notebook.md"]),
+		// The role's own files are there and no half-written file is: other files a role's folder may hold
+		// (pi-identity's loaded.json, notes) are not this check's business.
+		(() => {
+			const names = readdirSync(join(idDir, "temper")).sort();
+			return (
+				["about.md", "identity.json", "notebook.md"].every((n) => names.includes(n)) &&
+				!names.some((n) => n.includes(".tmp"))
+			);
+		})(),
+		JSON.stringify(readdirSync(join(idDir, "temper")).sort()),
 	);
 	check(
 		"the list shows the new size",
@@ -542,8 +550,12 @@ try {
 	);
 	await W.locator(".identity-editor .identity-reload").click();
 	check(
-		"Reload brings back the saved text",
-		await waitFor(async () => (await editorText(W).inputValue()) === edited, 10000),
+		// durable-identity-admission: a reopen (Reload) keeps what the owner has typed and has not saved;
+		// only the file is the saved text. So Reload must not lose the over-cap draft above.
+		"Reload keeps the unsaved text, the file stays the saved one",
+		(await waitFor(async () => (await editorText(W).inputValue()).length === RULES_CAP + 1, 10000)) &&
+			readFileSync(identityFile("temper", "notebook.md"), "utf8") === edited,
+		JSON.stringify((await editorText(W).inputValue()).slice(0, 20)),
 	);
 	await settingsRow(W, "rollcall").locator('.identity-open-btn[data-file="about"]').click();
 	check(
