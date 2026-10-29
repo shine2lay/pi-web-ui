@@ -195,6 +195,21 @@ explicit `true` allows notice submissions. Muting discards pending summaries/ret
 inflight backlog across restarts and later enabling; already-submitted delivery cannot be unsent.
 Rollback to old code must keep master-off: the old recorder ignores `notices:false`.
 
+## Sending the owner a notice (Ops #627)
+
+Agents and other plugins can send you a message through this bot without ever seeing its token.
+It only ever goes to the Telegram id in the settings.
+
+- Agents: the `telegram_send` tool, `{ text, url?, linkLabel?, from? }`. It answers
+  `{ ok: true, messageId, messageIds }`, or `{ ok: false, error }` when Telegram is off, not set
+  up, or refused the message.
+- Plugins: `host.events.emit("telegram:send", { text, url?, linkLabel?, from? })`. Without
+  `from`, the sending plugin's id is shown. A failure goes to this plugin's log.
+
+`text` is markdown or plain text (a long one goes in up to 3 messages). `from` shows in italics
+above it. `url` is an `http(s)://` address or a path starting with `/`, which goes on the
+"Web app address" setting; it shows at the end as a link named `linkLabel` (default "Open").
+
 ## Not included
 
 - Notices when a chat finishes or fails.

@@ -170,6 +170,7 @@ export const DEFAULT_ALWAYS_ALLOW: readonly string[] = [
 	"queue_wait",
 	"message_role",
 	"board",
+	"telegram_send",
 ];
 
 export const SETTINGS_FIELDS = ["notebookCap", "tidyAt", "indexBudget", "notesDir", "toolGroups", "alwaysAllow", "roleSkillsDir"] as const;

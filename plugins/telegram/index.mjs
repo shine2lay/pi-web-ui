@@ -2464,6 +2464,92 @@ export function createChat({
 }
 
 // ---------------------------------------------------------------------------
+// Owner notices: the telegram_send tool and the "telegram:send" plugin-bus topic (Ops #627)
+// ---------------------------------------------------------------------------
+
+/** The agent tool's name and the plugin-bus topic other plugins send on. */
+export const SEND_TOOL = "telegram_send";
+export const SEND_TOPIC = "telegram:send";
+
+/**
+ * The link under a notice: an http(s) address as it is, or a path starting with "/" on the web
+ * app's address. { href } when it works, { error } when it can't, {} when there is none.
+ */
+export function noticeHref(url, webAppAddress) {
+	const u = String(url ?? "").trim();
+	if (!u) return {};
+	if (u.startsWith("/") && !u.startsWith("//")) {
+		const base = String(webAppAddress ?? "").trim();
+		if (!base) return { error: `can't link ${cut(u, 100)}: no web app address is set in the Telegram settings` };
+		try {
+			const full = new URL(u, base);
+			if (full.protocol !== "https:" && full.protocol !== "http:") throw new Error("not web");
+			return { href: full.toString() };
+		} catch {
+			return { error: `can't link ${cut(u, 100)}: the web app address in the Telegram settings isn't a web address` };
+		}
+	}
+	const href = /^https?:\/\//i.test(u) ? safeHref(u) : "";
+	return href ? { href } : { error: `url must start with http://, https:// or /; got ${cut(u, 100)}` };
+}
+
+/**
+ * Sends the owner one notice: an optional italic sender line, the text (markdown, in as many
+ * messages as it needs, at most REPLY_PARTS_MAX) and an optional link at the end. Only ever to
+ * ownerId. Never throws: { ok: true, messageId, messageIds } or { ok: false, error }.
+ */
+export async function sendOwnerNotice({ api, ownerId, webAppAddress = "", log = ignore, wait }, req) {
+	const text = typeof req?.text === "string" ? req.text.trim() : "";
+	if (!text) return { ok: false, error: "text is required" };
+	if (!api || !/^\d+$/.test(String(ownerId ?? "")))
+		return { ok: false, error: "Telegram isn't set up (bot token and owner id)" };
+	const link = noticeHref(req?.url, webAppAddress);
+	if (link.error) return { ok: false, error: link.error };
+	const from = oneLine(plainText(typeof req?.from === "string" ? req.from : ""), 100);
+	const head = from ? `<i>${escapeHtml(from)}:</i>\n\n` : "";
+	const label = oneLine(plainText(typeof req?.linkLabel === "string" ? req.linkLabel : ""), 100) || "Open";
+	const foot = link.href ? `\n\n<a href="${escapeHtml(link.href)}">${escapeHtml(label)}</a>` : "";
+	const budget = TEXT_BUDGET - visibleLength(head) - visibleLength(foot) - 40;
+	const { parts, more } = splitReply(text, { budget: Math.max(500, budget) });
+	if (!parts.length) return { ok: false, error: "text is required" };
+	const { callHtml } = telegramCalls({ api, wait: wait ?? ((ms) => new Promise((r) => setTimeout(r, ms))), log });
+	const messageIds = [];
+	try {
+		for (let i = 0; i < parts.length; i++) {
+			const last = i === parts.length - 1;
+			const html = `${i === 0 ? head : ""}${parts[i]}${last && more ? "\n\n<i>(cut: too long for Telegram)</i>" : ""}${last ? foot : ""}`;
+			const m = await callHtml("sendMessage", {
+				chat_id: ownerId,
+				text: html,
+				link_preview_options: { is_disabled: true },
+			});
+			messageIds.push(m?.message_id ?? null);
+		}
+	} catch (err) {
+		const why = cut(String(err?.message ?? err), 300);
+		log("warn", `telegram: a notice to the owner failed: ${why}`);
+		return { ok: false, error: `Telegram refused it: ${why}`, ...(messageIds.length ? { messageIds } : {}) };
+	}
+	return { ok: true, messageId: messageIds[0], messageIds };
+}
+
+/** The telegram_send tool's parameters (JSON Schema). */
+const SEND_TOOL_PARAMETERS = {
+	type: "object",
+	properties: {
+		text: { type: "string", description: "The message for the owner (markdown or plain text)." },
+		url: {
+			type: "string",
+			description: "Optional link at the end: http(s) address, or a path starting with / on the web app.",
+		},
+		linkLabel: { type: "string", description: 'The link\'s label (default "Open").' },
+		from: { type: "string", description: "Optional sender name, shown in italics above the text." },
+	},
+	required: ["text"],
+	additionalProperties: false,
+};
+
+// ---------------------------------------------------------------------------
 // The plugin
 // ---------------------------------------------------------------------------
 
@@ -2598,7 +2684,7 @@ export default {
 				log,
 				chat,
 			});
-			const c = { bridge, chat };
+			const c = { bridge, chat, notice: { api, ownerId, webAppAddress, log } };
 			current = c;
 			if (chat.on) c.offReplies = host.roles.onReply((r) => chat.onReply(r));
 			// While we listen, a chat with no browser open waits for an answer instead of refusing.
@@ -2633,13 +2719,63 @@ export default {
 			setStatus("connecting");
 		}
 
+		/** Ops #627: a notice to the owner, through the bot as it is set up now (never the token). */
+		const notify = async (req) => {
+			const n = current?.notice;
+			if (!n) {
+				let s = {};
+				try {
+					s = host.getSettings?.() ?? {};
+				} catch {
+					s = {};
+				}
+				return {
+					ok: false,
+					error:
+						s.enabled === false
+							? "Telegram is off in its settings"
+							: "Telegram isn't set up (bot token and owner id)",
+				};
+			}
+			return sendOwnerNotice(n, req);
+		};
+		const offTool =
+			host.registerAgentTool?.({
+				name: SEND_TOOL,
+				label: "Telegram",
+				description:
+					"Send the owner a message on Telegram (only to him, through the pi bot), with an optional link and sender name.",
+				promptSnippet: "telegram_send: send the owner a Telegram message (text, optional url/linkLabel/from)",
+				parameters: SEND_TOOL_PARAMETERS,
+				async execute(_id, params) {
+					const p = params ?? {};
+					const r = await notify({ text: p.text, url: p.url, linkLabel: p.linkLabel, from: p.from });
+					const text = r.ok
+						? `Sent to the owner on Telegram (message ${r.messageIds.join(", ")}).`
+						: `Not sent: ${r.error}`;
+					return { content: [{ type: "text", text }], details: r, ...(r.ok ? {} : { isError: true }) };
+				},
+			}) ?? null;
+		// Other plugins: host.events.emit("telegram:send", { text, url?, linkLabel?, from? }).
+		const offBus =
+			host.events?.on?.(SEND_TOPIC, (ev) => {
+				if (ev?.topic && ev.topic !== SEND_TOPIC) return;
+				const p = ev?.payload && typeof ev.payload === "object" ? ev.payload : {};
+				const from = typeof p.from === "string" && p.from.trim() ? p.from : ev?.from;
+				void notify({ text: p.text, url: p.url, linkLabel: p.linkLabel, from }).then((r) => {
+					if (!r.ok) log("warn", `telegram: "${SEND_TOPIC}" from ${ev?.from ?? "?"} not sent: ${r.error}`);
+				});
+			}) ?? null;
+
 		start();
 		const offSettings = host.onSettingsChanged?.(() => start());
 		return () => {
-			try {
-				offSettings?.();
-			} catch {
-				/* ignore */
+			for (const off of [offSettings, offTool, offBus]) {
+				try {
+					off?.();
+				} catch {
+					/* ignore */
+				}
 			}
 			stopAll();
 			try {

@@ -512,8 +512,12 @@ describe("O0 observer, undo and Ops108 baseline (S04, V18)", () => {
 		// Re-pinned by roles-tracker (owner 2026-10-17, Roles D3): it only adds the display-only send result
 		// host.roles.noteSent (plugins.ts) and its call after a reply's send (telegram); no Ops108 routing line
 		// changed (its diff removes none). Was 94663529… and 7e7deac6….
+		// Re-pinned by telegram-send (Ops #627, owner via Architecture rm-34a975b1): it only adds the
+		// telegram_send tool and the "telegram:send" bus listener (telegram); its diff removes only the bridge
+		// record `{ bridge, chat }` (now also carries the notice's client) and the unload's offSettings call
+		// (now in one loop with the tool's and the listener's); no Ops108 routing line changed. Was 8875cff0….
 		expect(sha("server/plugins.ts")).toBe("553e809deb9cc8ddc6136c35d8c5e4b11dd21a2167a526f21fad27a3249fc173");
-		expect(sha("plugins/telegram/index.mjs")).toBe("8875cff0264f23d747797e8e07ec4b3a28db61533918a6cdc29bbf44b2e9b343");
+		expect(sha("plugins/telegram/index.mjs")).toBe("9163761261c38a2774001444fd48f0c42fe86eeca08661e1e734ab217ffe9e4f");
 		for (const path of [
 			"server/index.ts",
 			"server/agent-service.ts",

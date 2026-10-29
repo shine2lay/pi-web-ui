@@ -40,6 +40,10 @@ import telegramPlugin, {
 	stuckTask,
 	toTelegramHtml,
 	visibleLength,
+	noticeHref,
+	sendOwnerNotice,
+	SEND_TOOL,
+	SEND_TOPIC,
 } from "../../plugins/telegram/index.mjs";
 
 const OWNER = "8778288252";
@@ -2535,5 +2539,200 @@ describe("telegram plugin: reconnect notices (reconnect-trace, Ops #157)", () =>
 		expect(sent[0].text).toContain("Reconnecting at ");
 		off?.();
 		expect(live.mock.handlers["connNotices.on"]).toHaveLength(0);
+	});
+});
+
+describe("telegram plugin: notices to the owner (telegram_send, telegram:send; Ops #627)", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+	const quick = async () => {};
+
+	it("sends the text with the sender in italics and the link at the end, only to the owner", async () => {
+		const tg = fakeTelegram();
+		const r = await sendOwnerNotice(
+			{ api: tg.api, ownerId: OWNER, webAppAddress: ADDRESS, wait: quick },
+			{
+				text: "Your **review** is ready",
+				url: "https://example.com/a?b=1&c=2",
+				linkLabel: "See it",
+				from: "Show & Tell",
+			},
+		);
+		expect(r).toEqual({ ok: true, messageId: 500, messageIds: [500] });
+		const sent = tg.of("sendMessage");
+		expect(sent).toHaveLength(1);
+		expect(sent[0].params).toMatchObject({
+			chat_id: OWNER,
+			parse_mode: "HTML",
+			link_preview_options: { is_disabled: true },
+		});
+		expect(sent[0].params.text).toBe(
+			'<i>Show &amp; Tell:</i>\n\nYour <b>review</b> is ready\n\n<a href="https://example.com/a?b=1&amp;c=2">See it</a>',
+		);
+	});
+
+	it('a path starting with "/" goes on the web app address; the label defaults to "Open"; no from, no header', async () => {
+		const tg = fakeTelegram();
+		const r = await sendOwnerNotice(
+			{ api: tg.api, ownerId: OWNER, webAppAddress: ADDRESS, wait: quick },
+			{ text: "Done", url: "/show-tell/42?x=1" },
+		);
+		expect(r.ok).toBe(true);
+		expect(tg.last("sendMessage")?.params.text).toBe(
+			'Done\n\n<a href="https://pi.example.ts.net:8787/show-tell/42?x=1">Open</a>',
+		);
+		expect(noticeHref("/a", "https://host.example/base/")).toEqual({ href: "https://host.example/a" });
+		expect(noticeHref("", ADDRESS)).toEqual({});
+	});
+
+	it("refuses a bad link, no text or no set-up without sending anything", async () => {
+		const tg = fakeTelegram();
+		const deps = { api: tg.api, ownerId: OWNER, webAppAddress: ADDRESS, wait: quick };
+		const cases: [Any, Any, RegExp][] = [
+			[deps, { text: "x", url: "javascript:alert(1)" }, /url must start with http/],
+			[deps, { text: "x", url: "//evil.example/x" }, /url must start with http/],
+			[deps, { text: "x", url: "ftp://a/b" }, /url must start with http/],
+			[{ ...deps, webAppAddress: "" }, { text: "x", url: "/chat" }, /no web app address/],
+			[deps, { text: "   " }, /text is required/],
+			[deps, { text: 42 }, /text is required/],
+			[{ ...deps, ownerId: "" }, { text: "x" }, /isn't set up/],
+			[{ ...deps, api: null }, { text: "x" }, /isn't set up/],
+		];
+		for (const [d, req, want] of cases) {
+			const r: Any = await sendOwnerNotice(d, req);
+			expect(r.ok).toBe(false);
+			expect(r.error).toMatch(want);
+		}
+		expect(tg.calls).toHaveLength(0);
+	});
+
+	it("says what Telegram refused, never with the token", async () => {
+		const tg = fakeTelegram();
+		tg.failNext("sendMessage", errResponse(400, `Bad Request: chat not found for ${TOKEN}`));
+		const r: Any = await sendOwnerNotice({ api: tg.api, ownerId: OWNER, wait: quick }, { text: "hi" });
+		expect(r.ok).toBe(false);
+		expect(r.error).toContain("chat not found");
+		expect(r.error).not.toContain("SECRET");
+	});
+
+	it("a long text goes in several messages: the sender on the first, the link on the last", async () => {
+		const tg = fakeTelegram();
+		const para = "word ".repeat(300).trim();
+		const text = [para, para, para, para].join("\n\n");
+		const r = await sendOwnerNotice(
+			{ api: tg.api, ownerId: OWNER, webAppAddress: ADDRESS, wait: quick },
+			{ text, url: "/x", from: "design" },
+		);
+		const sent = tg.of("sendMessage").map((c) => c.params.text as string);
+		expect(sent.length).toBeGreaterThan(1);
+		expect(r.messageIds).toHaveLength(sent.length);
+		expect(sent[0].startsWith("<i>design:</i>\n\n")).toBe(true);
+		expect(sent.slice(1).some((t) => t.includes("design:"))).toBe(false);
+		expect(sent.at(-1)?.endsWith('<a href="https://pi.example.ts.net:8787/x">Open</a>')).toBe(true);
+		expect(sent.slice(0, -1).some((t) => t.includes("<a href"))).toBe(false);
+		for (const t of sent) expect(visibleLength(t)).toBeLessThanOrEqual(TEXT_BUDGET);
+	});
+
+	/** A host whose bot is set up; Telegram's sendMessage answers, getUpdates waits until unloaded. */
+	function liveHost(settings: Record<string, unknown>) {
+		const sent: Any[] = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn((url: string, init: Any) => {
+				if (String(url).endsWith("/sendMessage")) {
+					sent.push(JSON.parse(init.body));
+					return Promise.resolve(okResponse({ message_id: 900 + sent.length }));
+				}
+				return new Promise((_resolve, reject) =>
+					init.signal?.addEventListener("abort", () => reject(new Error("aborted"))),
+				);
+			}),
+		);
+		const host = createMockHost({
+			settings: { routeTo: "", webAppAddress: ADDRESS, ...settings },
+			asks: { list: () => [], answer: async () => ({ ok: false, error: "none" }) },
+			registerBackgroundTask: () => ({ update: () => {}, unregister: () => {} }),
+		}) as Any;
+		return { host, sent };
+	}
+	const toolOf = (host: Any) => host.mock.agentTools.find((t: Any) => t.name === SEND_TOOL);
+
+	it("the telegram_send tool sends through the bot and says so; unloading removes it", async () => {
+		const { host, sent } = liveHost({ botToken: TOKEN, ownerId: OWNER });
+		const off = telegramPlugin.activate(host);
+		const tool = toolOf(host);
+		expect(tool).toBeTruthy();
+		expect(tool.parameters.required).toEqual(["text"]);
+		const r = await tool.execute("call-1", { text: "Ready", url: "/s/1", linkLabel: "Look", from: "architecture" });
+		expect(r.details).toEqual({ ok: true, messageId: 901, messageIds: [901] });
+		expect(r.isError).toBeUndefined();
+		expect(r.content[0].text).toContain("Sent to the owner");
+		expect(sent).toHaveLength(1);
+		expect(sent[0].chat_id).toBe(OWNER);
+		expect(sent[0].text).toBe('<i>architecture:</i>\n\nReady\n\n<a href="https://pi.example.ts.net:8787/s/1">Look</a>');
+		expect(JSON.stringify(r)).not.toContain("SECRET");
+		off?.();
+		expect(toolOf(host)).toBeUndefined();
+		expect(host.mock.handlers["events.on"] ?? []).toHaveLength(0);
+	});
+
+	it('"telegram:send" from another plugin is sent, its id shown unless it names a sender', async () => {
+		const { host, sent } = liveHost({ botToken: TOKEN, ownerId: OWNER });
+		const off = telegramPlugin.activate(host);
+		expect(host.mock.calls("events.on").map((c: Any) => c.args[0])).toEqual([SEND_TOPIC]);
+		host.mock.emit("events.on", { topic: SEND_TOPIC, from: "show-tell", payload: { text: "New board", url: "/b" } });
+		host.mock.emit("events.on", {
+			topic: SEND_TOPIC,
+			from: "show-tell",
+			payload: { text: "Second", from: "Design" },
+		});
+		await vi.waitFor(() => expect(sent).toHaveLength(2));
+		const texts = sent.map((p) => p.text).sort();
+		expect(texts).toEqual([
+			"<i>Design:</i>\n\nSecond",
+			'<i>show-tell:</i>\n\nNew board\n\n<a href="https://pi.example.ts.net:8787/b">Open</a>',
+		]);
+		expect(sent.every((p) => p.chat_id === OWNER)).toBe(true);
+		// Another topic on the same handler (the mock doesn't sort by topic) is left alone.
+		host.mock.emit("events.on", { topic: "other:thing", from: "x", payload: { text: "no" } });
+		await new Promise((r) => setTimeout(r, 20));
+		expect(sent).toHaveLength(2);
+		off?.();
+	});
+
+	it("off or not set up: the tool says so and a bus message is only logged; nothing goes out", async () => {
+		const cases: [Record<string, unknown>, RegExp][] = [
+			[{ enabled: false, botToken: TOKEN, ownerId: OWNER }, /Telegram is off/],
+			[{ botToken: "", ownerId: OWNER }, /isn't set up/],
+			[{ botToken: TOKEN, ownerId: "" }, /isn't set up/],
+		];
+		for (const [settings, want] of cases) {
+			const { host, sent } = liveHost(settings);
+			const off = telegramPlugin.activate(host);
+			const r = await toolOf(host).execute("c", { text: "hi" });
+			expect(r.details.ok).toBe(false);
+			expect(r.details.error).toMatch(want);
+			expect(r.isError).toBe(true);
+			expect(r.content[0].text).toMatch(/^Not sent: /);
+			host.mock.emit("events.on", { topic: SEND_TOPIC, from: "show-tell", payload: { text: "hi" } });
+			await vi.waitFor(() =>
+				expect(host.logs.some((l: Any) => l.level === "warn" && /from show-tell not sent/.test(l.text))).toBe(true),
+			);
+			expect(sent).toHaveLength(0);
+			off?.();
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("turning the bot on in the settings makes the same tool work, without registering it twice", async () => {
+		const { host, sent } = liveHost({ enabled: false, botToken: TOKEN, ownerId: OWNER });
+		const off = telegramPlugin.activate(host);
+		expect((await toolOf(host).execute("c", { text: "a" })).details.ok).toBe(false);
+		host.mock.emitSettings({ enabled: true });
+		expect(host.mock.agentTools.filter((t: Any) => t.name === SEND_TOOL)).toHaveLength(1);
+		expect((await toolOf(host).execute("c", { text: "b" })).details.ok).toBe(true);
+		expect(sent.map((p) => p.text)).toEqual(["b"]);
+		off?.();
 	});
 });
