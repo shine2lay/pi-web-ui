@@ -18,7 +18,7 @@
  */
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
-import { createServer, request as proxyRequest, type IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import { createConnection } from "node:net";
 import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 import { homedir } from "node:os";
@@ -91,6 +91,7 @@ import {
 import type { GuardedToolName, ToolPostRequest, ToolPreRequest } from "./plugin-tool-guard.js";
 import { buildPluginJobArgs, confirmPluginInstall, inspectInstallSpec, PluginInstaller } from "./plugin-installer.js";
 import { syncPluginCatalog } from "./plugin-catalog-sync.js";
+import { proxyHttp } from "./plugin-proxy.js";
 import type { ServerLang } from "./i18n.js";
 import { McpBridge } from "./mcp-bridge.js";
 import { createMcpHotReload } from "./mcp-hot-reload.js";
@@ -819,58 +820,8 @@ app.all(["/plugins-api/:id/*splat", "/plugins-api/:id"], (req, res) => {
 });
 /** 通用插件代理（host.registerProxy 注册的前缀落到这里）：去前缀后原样透传到
  *  127.0.0.1:port——相对路径/Range/SSE 天然可用。PI_WEB_TOKEN 鉴权已在上方覆盖。
- *  必须站在静态资源与 SPA catch-all 之前，否则子路径被 index.html 吞掉。 */
-type ProxyHit = { prefix: string; pluginId: string; host: string; port: number };
-function proxyForwardPath(hit: ProxyHit, url: string): string {
-	let fwd = String(url ?? "/").slice(hit.prefix.length);
-	if (!fwd.startsWith("/")) fwd = `/${fwd}`;
-	return fwd || "/";
-}
-function proxyHttp(hit: ProxyHit, req: express.Request, res: express.Response): void {
-	const fwdPath = proxyForwardPath(hit, req.url ?? "/");
-	const headers: Record<string, string | string[]> = {};
-	for (const [k, v] of Object.entries(req.headers)) {
-		if (v === undefined) continue;
-		if (k.toLowerCase() === "host") continue;
-		if (k.toLowerCase() === "content-length" && req.method !== "GET" && req.method !== "HEAD") continue;
-		headers[k] = v as string | string[];
-	}
-	// 内页拼 SSE/资源绝对地址用（子路径反代下 import.meta 推导不到前缀，靠这个头）。
-	headers["x-pi-proxy-prefix"] = hit.prefix;
-	let body: Buffer | undefined;
-	if (req.method !== "GET" && req.method !== "HEAD" && (req as unknown as { body?: unknown }).body !== undefined) {
-		const b = (req as unknown as { body?: unknown }).body;
-		if (Buffer.isBuffer(b)) body = b;
-		else if (typeof b === "string") body = Buffer.from(b);
-		else if (b !== undefined) {
-			body = Buffer.from(JSON.stringify(b));
-			if (!headers["content-type"]) headers["content-type"] = "application/json";
-		}
-		if (body) headers["content-length"] = String(body.length);
-	}
-	const up = proxyRequest(
-		{ host: hit.host, port: hit.port, method: req.method, path: fwdPath, headers, timeout: 30000 },
-		(upRes) => {
-			const out: Record<string, string | string[]> = {};
-			for (const [k, v] of Object.entries(upRes.headers)) {
-				if (v === undefined) continue;
-				const lk = k.toLowerCase();
-				if (lk === "connection" || lk === "keep-alive" || lk === "transfer-encoding" || lk === "upgrade") continue;
-				out[k] = v as string | string[];
-			}
-			res.writeHead(upRes.statusCode ?? 502, out);
-			upRes.pipe(res);
-		},
-	);
-	up.on("timeout", () => up.destroy(new Error("proxy timeout")));
-	up.on("error", (err) => {
-		console.error(`[proxy:${hit.prefix}] → 127.0.0.1:${hit.port}${fwdPath} failed:`, err);
-		if (!res.headersSent) res.status(502).end("proxy target unreachable");
-		else res.end();
-	});
-	if (body) up.end(body);
-	else req.pipe(up);
-}
+ *  必须站在静态资源与 SPA catch-all 之前，否则子路径被 index.html 吞掉。
+ *  proxyHttp lives in server/plugin-proxy.ts (Ops #633: it frees the upstream when the browser goes away). */
 app.use((req, res, next) => {
 	const hit = pluginMgr.findProxy(req.path);
 	if (!hit) {
