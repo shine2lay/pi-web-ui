@@ -478,6 +478,7 @@ import {
 	waitUntil,
 	wakeRefusal,
 } from "./queue-host.js";
+import { startTaskChat, type TaskStartHooks } from "./task-chat-start.js";
 import {
 	applyElsewhereQueueHomes,
 	applyQueueHomes,
@@ -2514,6 +2515,8 @@ interface PromptFlow {
 	handedOver: boolean;
 	/** The prompt's place in the chat's line (a slash command gives it up and may take a new one). */
 	admission: PromptAdmission;
+	/** task-chat-start: a queued task's first prompt (openTaskChat): its gate goes first in pi's preflight. */
+	taskStart?: TaskStartHooks;
 }
 
 /** telegram-coo: pi took a text: the run it starts (pending until agent_start) or the running run it
@@ -6906,7 +6909,15 @@ export class ClientSession {
 		};
 	}
 
-	async openTaskChat(o: QueueChatStart): Promise<{ sessionFile: string; conversationId: string }> {
+	/**
+	 * queue-lanes: open a queued task's own chat and send its first prompt. Resolves as soon as the prompt
+	 * is on its way; `started` then says whether the chat got going (task-chat-start.ts): resolves once pi
+	 * took the prompt, however long the add-ons' before_agent_start step takes, rejects when pi refused
+	 * it, and a rejected start never runs a turn afterwards.
+	 */
+	async openTaskChat(
+		o: QueueChatStart,
+	): Promise<{ sessionFile: string; conversationId: string; started: Promise<void> }> {
 		if (this.quiesceBlocked()) throw new Error("the server is shutting down");
 		const conversationId = this.nextConversationId();
 		const terminals = this.makeTerminalManager(conversationId, o.cwd);
@@ -7015,23 +7026,30 @@ export class ClientSession {
 			throw err;
 		}
 		const before = session.messages.length;
-		void this.prompt(o.prompt).catch(() => {});
-		const started = await waitUntil(() => session.isStreaming || session.messages.length > before, 20_000);
-		if (!started) {
-			try {
-				await session.abort();
-			} catch {
-				// nothing running
-			}
-			// Let go at this client's next open (it never got going; nothing is written until it answers).
-			conv.listed = false;
-			conv.promptedSinceActive = false;
-			throw new Error("the chat didn't start");
-		}
-		conv.listed = true;
-		conv.promptedSinceActive = true;
-		ClientSession.emitConversationsToAll();
-		return { sessionFile: String(session.sessionFile ?? ""), conversationId: conv.id };
+		// task-chat-start (Ops #629): prompt() captures this chat and takes its place in the chat's line
+		// before its first await, so the caller may let go of this client (and open the next task's chat)
+		// while this one is still in the add-ons' step; a message on its way keeps the chat open
+		// (displaceActive, blankHoldOf).
+		const started = startTaskChat({
+			send: (taskStart) => this.prompt(o.prompt, undefined, false, undefined, { taskStart }),
+			ranTurn: () => session.isStreaming || session.messages.length > before,
+		}).then(
+			() => {
+				conv.listed = true;
+				conv.promptedSinceActive = true;
+				ClientSession.emitConversationsToAll();
+			},
+			(err: unknown) => {
+				// pi refused the prompt (or it started no turn), and none can start any more: let go at this
+				// client's next open.
+				conv.listed = false;
+				conv.promptedSinceActive = false;
+				throw new Error(`the chat didn't start: ${err instanceof Error ? err.message : String(err)}`);
+			},
+		);
+		// Handled by the caller; this keeps a caller that never looks from an unhandled rejection.
+		started.catch(() => {});
+		return { sessionFile: String(session.sessionFile ?? ""), conversationId: conv.id, started };
 	}
 
 	/**
@@ -12194,6 +12212,8 @@ export class ClientSession {
 			ownerChannel?: OwnerChannel;
 			/** carry-on: server only (see PromptFlow.carried). */
 			carried?: RequesterTurn;
+			/** task-chat-start: server only, openTaskChat's first prompt (see task-chat-start.ts). */
+			taskStart?: TaskStartHooks;
 		},
 	): Promise<void> {
 		let conv: Conversation;
@@ -12218,6 +12238,7 @@ export class ClientSession {
 			...(opts?.forOwner ? { forOwner: opts.forOwner } : {}),
 			...(ownerChannelOf(opts?.ownerChannel) ? { ownerChannel: opts!.ownerChannel } : {}),
 			...(opts?.carried ? { carried: opts.carried } : {}),
+			...(opts?.taskStart ? { taskStart: opts.taskStart } : {}),
 			deferred: false,
 			handedOver: false,
 			admission: takePromptAdmission(conv),
@@ -12242,6 +12263,7 @@ export class ClientSession {
 					if (flow.handedOver) receipt.ok();
 					else receipt.fail("The message could not be sent.");
 				}
+				flow.taskStart?.ended(receipt.refusal);
 			}
 		}
 	}
@@ -12264,6 +12286,7 @@ export class ClientSession {
 			receipt.fail(message);
 		}
 		if (!flow.handedOver) flow.admission.release();
+		flow.taskStart?.ended(message);
 	}
 
 	/** prompt()'s body, run once the receipt and the message's place in the chat's line are taken. */
@@ -12693,6 +12716,9 @@ export class ClientSession {
 			}
 
 			const wrappedPreflightResult = (disposition: "started" | "queued" | "handled"): void => {
+				// task-chat-start: throws when this task's start was already reported failed, before anything
+				// is marked taken; pi then starts no run (it calls this right before the run, see task-chat-start.ts).
+				flow.taskStart?.gate(disposition);
 				if (coordinator && receipt.id) {
 					coordinator.markDispatched({ sessionId: s.sessionId, idempotencyKey });
 				}
@@ -19573,8 +19599,15 @@ export class AgentService {
 			deadEnd: async (req) => deadEndAnswer(await this.readWorkPage(), req, Date.now()),
 			previewLaunch: (request, cwd, sourceSessionId) =>
 				previewExistingQueueLaunch(request, cwd, sourceSessionId, this.clients.values()),
-			startChat: (o) =>
-				this.queueTasksChain(() => this.withQueueClient(QUEUE_TASKS_CLIENT_ID, (cs) => cs.openTaskChat(o))),
+			// task-chat-start (Ops #629): the chain only covers opening the chat and sending its first prompt;
+			// waiting for pi to take it (a slow before_agent_start step) doesn't hold up the next task's start.
+			startChat: async (o) => {
+				const opened = await this.queueTasksChain(() =>
+					this.withQueueClient(QUEUE_TASKS_CLIENT_ID, (cs) => cs.openTaskChat(o)),
+				);
+				await opened.started;
+				return { sessionFile: opened.sessionFile, conversationId: opened.conversationId };
+			},
 			runCommand: (file, line) => this.queueRunCommand(file, line),
 			closeChat: (file) => this.queueCloseChat(file),
 			chatState: async (file) => this.queueChatState(file),

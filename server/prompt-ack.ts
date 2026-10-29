@@ -33,6 +33,7 @@ export type PromptAckDeliver = (msg: PromptAckMsg) => void;
 
 export class PromptReceipt {
 	private answeredWith: boolean | undefined;
+	private refusedWith: string | undefined;
 
 	constructor(
 		/** undefined = the prompt carried no id (plugins, old pages): answering does nothing. */
@@ -51,6 +52,11 @@ export class PromptReceipt {
 		return this.answeredWith !== undefined;
 	}
 
+	/** task-chat-start: why the message did not reach the chat, once it was answered that way. */
+	get refusal(): string | undefined {
+		return this.answeredWith === false ? (this.refusedWith ?? "The message could not be sent.") : undefined;
+	}
+
 	/** The message is in the chat (or in its waiting queue), or the server handled it on purpose. */
 	ok(): void {
 		this.answer(true);
@@ -64,6 +70,7 @@ export class PromptReceipt {
 	private answer(ok: boolean, reason?: string): void {
 		if (this.answeredWith !== undefined) return;
 		this.answeredWith = ok;
+		if (!ok) this.refusedWith = reason;
 		if (this.id === undefined) return;
 		const msg: PromptAckMsg = {
 			type: "prompt_ack",
