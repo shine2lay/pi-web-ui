@@ -148,7 +148,7 @@ describe("the status rules, in order", () => {
 		expect(page.cards()).toEqual(["Epsilon pause"]);
 		page.click(/^Needs you \d/);
 		expect(page.cards()).toEqual(["Alpha launch"]);
-	}, 20_000);
+	});
 
 	it("says Paused by you only when the owner paused every open task, and names them", () => {
 		const { input } = build({ selected: "epsilon" });

@@ -75,5 +75,4 @@ it.each([false, true])(
 			rmSync(dir, { force: true, recursive: true });
 		}
 	},
-	30000,
 );

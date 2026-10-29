@@ -601,7 +601,7 @@ describe("H-GUARD-STORE-PERF-1 golden: awkward values, refusals, crashes and cha
 			await fresh.transact(next, async (c) => accepted(c, next, message("rm-after")));
 			expect(r.mismatches, at).toEqual([]);
 		}
-	}, 15_000);
+	});
 
 	it("G2e: files changed on disk are refused the same way", async () => {
 		const r = report();

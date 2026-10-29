@@ -16,6 +16,7 @@
  *  - 配置解析：mcp.json 里的 protocolVersion（string）被保留进规格（握手用），非 string 丢弃。
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { HANG_GUARD_MS } from "./load-independent.js";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -229,7 +230,8 @@ async function callBridge(bridge: McpBridge, name: string, args: Record<string, 
 }
 
 /** 等条件成立（进程退出、文件事件都是异步的）。 */
-async function waitUntil(cond: () => boolean, ms = 3000): Promise<void> {
+// Ops #639: the hang guard is its only limit (3 s ran out on a busy machine before the process was gone).
+async function waitUntil(cond: () => boolean, ms = HANG_GUARD_MS): Promise<void> {
 	const deadline = Date.now() + ms;
 	while (Date.now() < deadline) {
 		if (cond()) return;

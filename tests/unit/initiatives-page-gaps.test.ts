@@ -278,7 +278,7 @@ describe("through the core model and the supplied design", () => {
 			Array.from(row.querySelectorAll(":scope > span")).map((s) => norm(s.textContent)),
 		);
 		expect(rows).toEqual(ALPHA_ACTIVITY);
-	}, 15_000);
+	});
 
 	it("draws the box's gaps, its Not recorded hand-offs and its activity", () => {
 		const page = mount(buildInitiativesPage(pageArgs({ selected: NO_INITIATIVE })).input);

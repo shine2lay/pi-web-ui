@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { transform } from "esbuild";
 import { describe, it, expect } from "vitest";
+import { HANG_GUARD_MS } from "./load-independent.js";
 import {
 	RTPI_NATIVE_SEAMS_C0,
 	createRtpiFixtureCapability,
@@ -824,7 +825,7 @@ describe("IB1 old-code controls", () => {
 			execFileSync(process.execPath, ["--input-type=module", "-e", script], {
 				input: JSON.stringify({ module: oldCore, roots: inputs }),
 				encoding: "utf8",
-				timeout: 15000,
+				timeout: HANG_GUARD_MS, // Ops #639: a hang guard, not 15 s of a busy machine
 				maxBuffer: 1024 * 1024,
 			}),
 		) as { canonical: string; hash: string; structural: unknown; unqualified: unknown; extra: unknown }[];

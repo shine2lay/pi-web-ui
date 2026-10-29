@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { HANG_GUARD_MS } from "./load-independent.js";
 import {
 	createPluginHostApi,
 	listPluginHostSessions,
@@ -70,7 +71,8 @@ function harness(overrides: { pollMs?: number; timeoutMs?: number } = {}): Harne
 	};
 }
 
-const waitFor = async (ok: () => boolean, ms = 1000) => {
+// Ops #639: waits for the event, with the hang guard as its only limit (1 s and 1.5 s ran out on a busy machine).
+const waitFor = async (ok: () => boolean, ms = HANG_GUARD_MS) => {
 	const deadline = Date.now() + ms;
 	while (!ok() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
 	return ok();
@@ -179,7 +181,7 @@ describe("createPluginHostApi", () => {
 
 		const h2 = harness({ timeoutMs: 30, pollMs: 2 });
 		h2.api.startChat({ prompt: "y", cwd: "/never" });
-		await waitFor(() => types(h2.sent).includes("prompt"), 1500);
+		await waitFor(() => types(h2.sent).includes("prompt"));
 		expect(types(h2.sent)).toEqual(["set_cwd", "new_chat", "prompt"]);
 	});
 

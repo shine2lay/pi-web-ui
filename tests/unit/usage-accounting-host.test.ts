@@ -59,6 +59,12 @@ const bundle = (entry: string) => {
 		);
 	return bundles.get(entry)!;
 };
+// Ops #639 (H-GATE-TIME-1): the real pass worker, with its work clock set to its own thread's CPU time, as the pass
+// and store fixtures do (H-W0-CLOCK-1). The pass's work budget reads performance.now(), so on a busy machine a first
+// pass ran out of wall-clock before it read the chat and published nothing to check. What these tests check (each
+// chat's facts reaching its role through the witness) is unchanged.
+const passWorker = async () =>
+	`"use strict";performance.now=()=>{const u=process.threadCpuUsage();return (u.user+u.system)/1000;};\n${await bundle("../../server/usage-accounting-pass-worker.ts")}`;
 
 const T0 = Date.parse("2026-10-20T19:00:00.000Z");
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -443,7 +449,7 @@ describe("usage-accounting host (B4)", () => {
 	});
 
 	it("runs the real Worker: each chat's facts reach its role through the witness, and stay unknown without it", async () => {
-		const code = await bundle("../../server/usage-accounting-pass-worker.ts");
+		const code = await passWorker();
 		// The fixture's calls, moved to a few minutes ago so they fall in the current week.
 		const base = Date.now() - 5 * 60_000;
 		const text = readFileSync(join(fixtures, "usage-accounting-pi-sessions", "plain.jsonl"), "utf8").replace(
@@ -492,10 +498,10 @@ describe("usage-accounting host (B4)", () => {
 		const blind = unwitnessed.subjects.find((s) => s.subject.kind === "role" && s.subject.role === "design")!;
 		expect(blind.faults.map((f) => f.code)).toContain("invalid-subject-binding");
 		expect(blind.list?.grossObservations).toMatch(/^0(\.0+)?$/);
-	}, 60_000);
+	});
 
 	it("keeps each fact's first-staged role when a later witness names another role (Architecture K4)", async () => {
-		const code = await bundle("../../server/usage-accounting-pass-worker.ts");
+		const code = await passWorker();
 		const base = Date.now() - 5 * 60_000;
 		const text = readFileSync(join(fixtures, "usage-accounting-pi-sessions", "plain.jsonl"), "utf8").replace(
 			/2026-10-19T08:(\d\d):(\d\d)\.000Z/g,
@@ -544,7 +550,7 @@ describe("usage-accounting host (B4)", () => {
 		expect(after?.generation.sequence).toBeGreaterThan(before?.generation.sequence ?? Infinity);
 		expect(gross(after, "design")).toBe(gross(before, "design"));
 		expect(gross(after, "ops")).toMatch(/^0(\.0+)?$/);
-	}, 60_000);
+	});
 
 	it("index.ts runs B4 as reviewed: wanted follows full Roles windows, a 0700 folder, a stop at shutdown bounded by 3 s", async () => {
 		const real = readFileSync(join(project, "server", "index.ts"), "utf8");

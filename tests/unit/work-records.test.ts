@@ -239,7 +239,7 @@ describe("WorkRecordsFile", () => {
 			projects: [],
 			problem: "unreadable",
 		});
-	}, 5_000);
+	});
 
 	it("a link to a device is refused, never read", async () => {
 		dir = mkdtempSync(join(tmpdir(), "work-records-"));

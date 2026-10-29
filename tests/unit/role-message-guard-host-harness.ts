@@ -5,7 +5,7 @@
 import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, expect, vi } from "vitest";
+import { afterEach, beforeEach, expect } from "vitest";
 import { AskHub } from "../../server/asks.js";
 import type { IdentityDef } from "../../server/identities.js";
 import { RoleMessageGuardHost, type RoleMessageGuardHostOptions } from "../../server/role-message-guard-host.js";
@@ -202,10 +202,9 @@ export async function cooDecides(w: World, requestId: string, choice: string) {
 	await w.rm.tick();
 	return r;
 }
-/** Once at the top of each test file: the longer timeout, a fresh folder, chats and clock per test, cleanup after. */
+/** Once at the top of each test file: a fresh folder, chats and clock per test, cleanup after. (Its own 60 s
+ *  timeout is gone, Ops #639: vitest.config.ts's hang guard is the only time limit, never a verdict.) */
 export function useGuardWorld(): void {
-	// Long chains with real files and a real journal: allow more than the default 5 s.
-	vi.setConfig({ testTimeout: 60_000 });
 	beforeEach(() => {
 		dir = mkdtempSync(join(tmpdir(), "rmguard-host-"));
 		now = Date.parse("2026-10-12T12:00:00Z");

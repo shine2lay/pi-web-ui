@@ -29,7 +29,7 @@ describe("ladder: unchanged limits", () => {
 		const r = await send(w, "alpha", A, "beta", {}, "");
 		expect(r).toMatchObject({ ok: false });
 		expect((r as { error: string }).error).toContain("20");
-	}, 60_000);
+	});
 
 	it("the owner's pause still holds delivery (accepted, not delivered)", async () => {
 		const w = await world();

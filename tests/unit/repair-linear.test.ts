@@ -6,6 +6,10 @@
  *  - 6 万行的长链几百毫秒内修完（旧算法要几十秒）。 */
 import { describe, expect, it } from "vitest";
 import { repairSessionTranscript } from "../../server/compaction-markers.js";
+import { threadCpuMs } from "./load-independent.js";
+
+// Ops #639: the repair is synchronous, so its cost is this thread's CPU time, which a busy machine doesn't change
+// (wall-clock failed it when other work shared the CPU). The old O(n²) walk still costs tens of seconds of it.
 
 const HEADER = JSON.stringify({
 	type: "session",
@@ -109,9 +113,9 @@ describe("repairSessionTranscript 第 3 步（fast-reopen）", () => {
 		const lines = [HEADER, msg("m0", null)];
 		for (let i = 1; i < N; i++) lines.push(msg(`m${i}`, `m${i - 1}`));
 		const raw = lines.join("\n") + "\n";
-		const t0 = performance.now();
+		const t0 = threadCpuMs();
 		const r = repairSessionTranscript(raw);
-		const ms = performance.now() - t0;
+		const ms = threadCpuMs() - t0;
 		expect(r.changed).toBe(false);
 		expect(r.text).toBe(raw);
 		// 旧算法这里是 18 亿次集合操作（几十秒）；线性版实测一两百毫秒，留足余量防慢机抖动。
@@ -123,9 +127,9 @@ describe("repairSessionTranscript 第 3 步（fast-reopen）", () => {
 		const lines = [HEADER, msg("m0", `m${N - 1}`)];
 		for (let i = 1; i < N; i++) lines.push(msg(`m${i}`, `m${i - 1}`));
 		const raw = lines.join("\n") + "\n";
-		const t0 = performance.now();
+		const t0 = threadCpuMs();
 		const r = repairSessionTranscript(raw);
-		expect(performance.now() - t0).toBeLessThan(3000);
+		expect(threadCpuMs() - t0).toBeLessThan(3000);
 		expect(r.cyclesBroken).toBe(1);
 		// 截的是旧算法会截的那条：从第一行 m0 出发，走回 m0 的那一步在 m1 上（m1 → m0 闭环）。
 		const m1 = r.text.split("\n").find((l) => l.includes('"id":"m1"'));

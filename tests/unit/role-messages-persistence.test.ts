@@ -145,7 +145,7 @@ describe("RoleMessages persistence seam", () => {
 			for (const s of made) s.stop();
 			rmSync(dir, { recursive: true, force: true });
 		}
-	}, 30_000);
+	});
 
 	it("swallows persistence failures without losing live state, chain facts or the original log messages", () => {
 		const logs: string[] = [];

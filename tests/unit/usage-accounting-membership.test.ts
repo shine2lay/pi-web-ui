@@ -801,7 +801,7 @@ describe("usage-accounting-membership reviewed worker importers", () => {
 			unreviewed(files, { readFile: (file) => (existsSync(file) ? readFileSync(file, "utf8") : undefined) }),
 		).toEqual([]);
 		// Native full-tree parsing competes with the full suite; this is harness startup, not a runtime budget.
-	}, 15_000);
+	});
 	it("permits each reviewed edge and rejects main-thread, unreviewed and nested-lookalike importers", () => {
 		const forms = [
 			(specifier: string) => `import { value } from '${specifier}';`,

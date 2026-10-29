@@ -1,4 +1,5 @@
 // Ops #423 B3: runs design B's pass inside a Worker on synthetic copies only (never a real chat file).
+import { threadCpuMs } from "./load-independent.js";
 import {
 	appendFileSync,
 	copyFileSync,
@@ -65,6 +66,9 @@ function open(extra: Partial<PassOptions> = {}): PassState {
 		ledgerDirectory: null,
 		production: "disabled",
 		now: () => clock.t,
+		// Ops #639: the pass's work budget (PASS_LIMITS.workMs, its slices and deadlines) counts this worker's own CPU
+		// time, not wall-clock, so a pass that shares a busy machine still finishes the work its budget allows.
+		clock: threadCpuMs,
 		subjects: DESIGN,
 		roleOf: () => ({ role: "design", evidenceRef: "fixture-only:verified-role" }),
 		...extra,

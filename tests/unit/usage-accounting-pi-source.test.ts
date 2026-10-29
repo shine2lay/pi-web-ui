@@ -1120,7 +1120,7 @@ describe("usage-accounting-pi-source: synthetic committed-prefix intake only", (
 		expect(durableRows(f).memberships).toEqual([]);
 		expect(indexed(f, "parent:")).toEqual([]);
 		expect(indexed(f, `meta:${idFor(metadata[0])}:`)).toHaveLength(10_001);
-	}, 20_000);
+	});
 
 	it.each([
 		{ name: "sequence hole", code: "registry-sequence", seq: 3, timestamp: at(1) },

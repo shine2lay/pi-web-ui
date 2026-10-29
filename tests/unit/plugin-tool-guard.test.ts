@@ -184,7 +184,7 @@ describe("host.onToolPre/onToolPost 接线", () => {
 		expect(r.verdict.decision).toBe("ask");
 		expect(r.pluginId).toBe("flaky");
 		expect(errSpy).toHaveBeenCalled();
-	}, 20000);
+	});
 
 	it("post：脱敏换正文 + 补上下文合并；抛错的被跳过", async () => {
 		await load(

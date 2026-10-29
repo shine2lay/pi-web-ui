@@ -212,7 +212,7 @@ describe("the page: the card's projects line and the Finished projects fold", ()
 		expect(leaves(page.button(/^Gamma rollout/)).slice(-2)).toEqual(["0 of 1 outcomes done", "1 of 1 project done"]);
 		expect(leaves(page.button(/^Beta cleanup/)).slice(-1)).toEqual(["0 of 1 outcomes done"]);
 		expect(norm(page.button(/^Beta cleanup/).textContent)).not.toMatch(/project/);
-	}, 15_000);
+	});
 
 	it("shows the fold closed, above the first active row, and lists the finished projects when opened", () => {
 		const page = mount(build().input);

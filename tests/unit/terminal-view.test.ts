@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { HANG_GUARD_MS } from "./load-independent.js";
 import { makeTerminalBashTool, TerminalManager } from "../../server/terminals.js";
 import type { ServerMessage, TerminalInfo } from "../../server/protocol.js";
 
@@ -252,7 +253,8 @@ describe("终端视图挂载（openView，issue #147）", () => {
 		expect(route).not.toMatch(/tm\.create\(/);
 	});
 
-	it("真 PTY：跑完的 bash 命令被反复挂载后仍是已结束状态", { timeout: 20000 }, async () => {
+	// Ops #639: the hang guard is its only limit (20 s, and 5 s for the PTY to exit, were wall-clock verdicts).
+	it("真 PTY：跑完的 bash 命令被反复挂载后仍是已结束状态", async () => {
 		const cwd = mkdtempSync(join(tmpdir(), "pi-terminal-view-test-"));
 		const bus = new EventEmitter();
 		const tm = new TerminalManager(
@@ -289,7 +291,7 @@ describe("终端视图挂载（openView，issue #147）", () => {
 					const timer = setTimeout(() => {
 						cleanup();
 						reject(new Error("PTY did not exit"));
-					}, 5000);
+					}, HANG_GUARD_MS);
 					const cleanup = (): void => {
 						clearTimeout(timer);
 						bus.off("message", onEvent);

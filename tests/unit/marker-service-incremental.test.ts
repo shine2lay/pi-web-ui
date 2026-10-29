@@ -9,6 +9,7 @@ import {
 } from "../../server/marker-service.js";
 import { initTodoState, type TodoState } from "../../server/markers/builtins/todo.js";
 import { loadStateFromBranch, STORE_CUSTOM_TYPE } from "../../server/markers/store.js";
+import { threadCpuMs } from "./load-independent.js";
 
 /**
  * marker-incremental-cursor (Ops #565, W1-B): MarkerService reads a chat's marker state (the todo
@@ -108,9 +109,11 @@ describe("marker state on a 70k-entry branch", () => {
 			addMessage(sm, `answer ${turn} [[todo:new:turn task ${turn}]]`, "assistant");
 			// The service reads the todo state, adds the task and appends a new store snapshot.
 			await svc.handleAssistantText("c1", `answer ${turn} [[todo:new:turn task ${turn}]]`);
-			const t0 = performance.now();
+			// Ops #639: getRawState is synchronous; its cost is this thread's CPU time, which a busy machine doesn't
+			// change (wall-clock did). A read that folds the 70,000-entry branch again still costs far more than 5 ms.
+			const t0 = threadCpuMs();
 			const state = svc.getRawState("c1", "todo");
-			reads.push(performance.now() - t0);
+			reads.push(threadCpuMs() - t0);
 			if (turn % 20 === 19) expect(JSON.stringify(state)).toBe(JSON.stringify(fullScan(sm, "todo")));
 		}
 

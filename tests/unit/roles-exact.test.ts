@@ -178,7 +178,7 @@ describe("the supplied Roles design with the existing feed", () => {
 		view.openRole("ops", document.body);
 		vi.runAllTimers();
 		expect(document.querySelector('[role="region"]')?.textContent).toContain("Task 7");
-	}, 15_000);
+	});
 
 	it("roles-lanes: draws the queue's lanes on the card and in the panel", () => {
 		const input = role({

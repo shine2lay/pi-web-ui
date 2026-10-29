@@ -16,6 +16,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+// Ops #639: every limit in this file is the hang guard: a sealed child that merely shares a busy machine is not hung.
+import { HANG_GUARD_MS } from "./load-independent.js";
 
 /**
  * The fence of a sealed test run (tests/lib/sealed-fence.cjs, loaded by scripts/sealed.sh through
@@ -109,7 +111,7 @@ function run(
 		cwd: opts.cwd ?? sandbox,
 		env: fenceEnv(opts.mode ?? "enforce"),
 		encoding: "utf8",
-		timeout: 30_000,
+		timeout: HANG_GUARD_MS,
 	});
 	const last = r.stdout.trim().split("\n").pop() ?? "";
 	let out: Record<string, unknown> = {};
@@ -378,7 +380,7 @@ describe("sealed fence: the clone helper's door", () => {
 
 // Each test here runs scripts/sealed.sh for real and gives it up to 60 s (spawnSync's timeout), so the test
 // gets the same 60 s: it takes about 3.5 s on a quiet machine, but more than vitest's 5 s default on a busy one.
-describe("scripts/sealed.sh", { timeout: 60_000 }, () => {
+describe("scripts/sealed.sh", { timeout: HANG_GUARD_MS }, () => {
 	it("runs in a clean temp home, stops leftovers, removes the home, and fails on a fence hit", () => {
 		const realPwHome = spawnSync("sh", ["-c", 'getent passwd "$(id -u)" | cut -d: -f6'], {
 			encoding: "utf8",
@@ -409,7 +411,7 @@ describe("scripts/sealed.sh", { timeout: 60_000 }, () => {
 				CLAUDE_CODE_OAUTH_TOKEN: "not-a-token",
 			},
 			encoding: "utf8",
-			timeout: 60_000,
+			timeout: HANG_GUARD_MS,
 		});
 		const seen = JSON.parse(r.stdout.trim().split("\n")[0]) as {
 			home: string;
@@ -440,7 +442,7 @@ describe("scripts/sealed.sh", { timeout: 60_000 }, () => {
 			cwd: repo,
 			env: { PATH: process.env.PATH, PI_SEALED: "", PI_SEALED_MODEL: "none" },
 			encoding: "utf8",
-			timeout: 60_000,
+			timeout: HANG_GUARD_MS,
 		});
 		expect(r.status).toBe(0);
 		expect(JSON.parse(r.stdout.trim().split("\n")[0])).toEqual([]);
@@ -505,7 +507,7 @@ describe("scripts/sealed.sh", { timeout: 60_000 }, () => {
 							CLAUDE_CODE_OAUTH_TOKEN: "fake-test-token",
 						},
 						encoding: "utf8",
-						timeout: 60_000,
+						timeout: HANG_GUARD_MS,
 					},
 				);
 				expect(r.error).toBeUndefined();
@@ -601,7 +603,7 @@ describe("scripts/sealed.sh", { timeout: 60_000 }, () => {
 							SEALED_TEST_ALLOCATION_MARKER: allocation,
 						},
 						encoding: "utf8",
-						timeout: 60_000,
+						timeout: HANG_GUARD_MS,
 					},
 				);
 				expect(r.error).toBeUndefined();
@@ -624,7 +626,7 @@ describe("scripts/sealed.sh", { timeout: 60_000 }, () => {
 
 	// Where the temp root goes (docs/gate-tmpfs.md): in memory, /dev/shm, when it is a writable folder with at
 	// least 8 GB free, else under TMPDIR; PI_SEALED_TMP_PARENT picks the folder, and one it can't use falls back.
-	describe("its temp root's folder", { timeout: 60_000 }, () => {
+	describe("its temp root's folder", { timeout: HANG_GUARD_MS }, () => {
 		let scratch: string;
 		let tmp: string;
 		beforeAll(() => {
@@ -639,7 +641,7 @@ describe("scripts/sealed.sh", { timeout: 60_000 }, () => {
 				cwd: repo,
 				env: { PATH: process.env.PATH ?? "", PI_SEALED: "", TMPDIR: tmp, ...env },
 				encoding: "utf8",
-				timeout: 60_000,
+				timeout: HANG_GUARD_MS,
 			});
 			expect(r.status).toBe(0);
 			const root = r.stdout.trim().split("\n")[0] ?? "";

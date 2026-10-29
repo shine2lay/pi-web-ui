@@ -5,6 +5,7 @@ import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { HANG_GUARD_MS } from "./load-independent.js";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
 	allocated,
@@ -699,7 +700,7 @@ describe("H7 native control admissions", () => {
 					const timer = setTimeout(() => {
 						listener.close();
 						reject(new Error("fixture socket missing"));
-					}, 2000);
+					}, HANG_GUARD_MS); // Ops #639: a hang guard; 2 s could run out on a busy machine
 					const listener = watch(f.dir, () => {
 						if (existsSync(socket)) {
 							clearTimeout(timer);

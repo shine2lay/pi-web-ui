@@ -24,6 +24,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { HANG_GUARD_MS } from "./load-independent.js";
 import {
 	forgetAllQueueEntries,
 	QUEUE_ENTRIES_IDLE_MS,
@@ -307,70 +308,78 @@ function prefixOf(src: string, max: number): Buffer {
 }
 
 describe.runIf(REAL.length > 0)("queue-entries-tail on real transcripts (copies)", () => {
-	it("grown in random steps (mid-line, mid-character), every read equals a full parse; reads only the new bytes", async () => {
-		let seed = 635;
-		const rand = () => {
-			seed = (seed * 1103515245 + 12345) % 2 ** 31;
-			return seed / 2 ** 31;
-		};
-		let found = 0;
-		for (const src of REAL) {
-			const bytes = prefixOf(src, PREFIX);
-			const f = join(dir, "real.jsonl");
-			writeFileSync(f, "");
-			forgetAllQueueEntries();
-			const cuts = Array.from({ length: 6 }, () => Math.floor(rand() * bytes.length)).sort((a, b) => a - b);
-			cuts.push(bytes.length);
-			let at = 0;
-			const start = { ...queueEntriesReadStats };
-			for (const cut of cuts) {
-				appendFileSync(f, bytes.subarray(at, cut));
-				at = cut;
-				await same(f);
-			}
-			// Every byte once, plus each step's unfinished last line again (it's never kept); a whole-file read per
-			// call would have been about 7 times the file here.
-			const read = queueEntriesReadStats.bytes - start.bytes;
-			expect(read).toBeGreaterThanOrEqual(bytes.length);
-			expect(read).toBeLessThan(bytes.length * 1.5);
-			expect(queueEntriesReadStats.starts - start.starts).toBe(1);
-			found += (await readQueueEntries(f)).length;
-		}
-		// Some chats' first 24 MB hold no queue entry; together they hold plenty.
-		expect(found).toBeGreaterThan(0);
-	}, 120_000);
-
-	it("callers never change the entries it keeps (deep-frozen, every reader gives the same answer)", async () => {
-		const deepFreeze = (x: unknown): void => {
-			if (x && typeof x === "object" && !Object.isFrozen(x)) {
-				Object.freeze(x);
-				for (const v of Object.values(x)) deepFreeze(v);
-			}
-		};
-		const run = (entries: TaskQueueEntryLike[]) =>
-			JSON.stringify([
-				taskQueueAll(entries),
-				taskQueueFromEntries(entries, true, Number.POSITIVE_INFINITY),
-				taskQueueFromEntries(entries, true, 50),
-				ownTaskOf(entries),
-			]);
-		const check = async () => {
+	it(
+		"grown in random steps (mid-line, mid-character), every read equals a full parse; reads only the new bytes",
+		async () => {
+			let seed = 635;
+			const rand = () => {
+				seed = (seed * 1103515245 + 12345) % 2 ** 31;
+				return seed / 2 ** 31;
+			};
+			let found = 0;
 			for (const src of REAL) {
-				const f = join(dir, "frozen.jsonl");
-				copyFileSync(src, f);
+				const bytes = prefixOf(src, PREFIX);
+				const f = join(dir, "real.jsonl");
+				writeFileSync(f, "");
 				forgetAllQueueEntries();
-				const plain = run(fullParse(f, true));
-				const kept = await readQueueEntries(f, true);
-				for (const e of kept) deepFreeze(e);
-				expect(run(kept)).toBe(plain);
+				const cuts = Array.from({ length: 6 }, () => Math.floor(rand() * bytes.length)).sort((a, b) => a - b);
+				cuts.push(bytes.length);
+				let at = 0;
+				const start = { ...queueEntriesReadStats };
+				for (const cut of cuts) {
+					appendFileSync(f, bytes.subarray(at, cut));
+					at = cut;
+					await same(f);
+				}
+				// Every byte once, plus each step's unfinished last line again (it's never kept); a whole-file read per
+				// call would have been about 7 times the file here.
+				const read = queueEntriesReadStats.bytes - start.bytes;
+				expect(read).toBeGreaterThanOrEqual(bytes.length);
+				expect(read).toBeLessThan(bytes.length * 1.5);
+				expect(queueEntriesReadStats.starts - start.starts).toBe(1);
+				found += (await readQueueEntries(f)).length;
 			}
-		};
-		// With this repo's mirror (apply), then with pi-queue's own replay, as in the server once a chat loaded it.
-		await check();
-		const readers = join(process.env.PI_QUEUE_PKG ?? join(home, "projects", "pi-queue"), "readers.ts");
-		if (existsSync(readers)) {
-			await import(/* @vite-ignore */ pathToFileURL(readers).href);
+			// Some chats' first 24 MB hold no queue entry; together they hold plenty.
+			expect(found).toBeGreaterThan(0);
+		},
+		HANG_GUARD_MS,
+	); // Ops #639: a hang guard, not 120 s of a busy machine
+
+	it(
+		"callers never change the entries it keeps (deep-frozen, every reader gives the same answer)",
+		async () => {
+			const deepFreeze = (x: unknown): void => {
+				if (x && typeof x === "object" && !Object.isFrozen(x)) {
+					Object.freeze(x);
+					for (const v of Object.values(x)) deepFreeze(v);
+				}
+			};
+			const run = (entries: TaskQueueEntryLike[]) =>
+				JSON.stringify([
+					taskQueueAll(entries),
+					taskQueueFromEntries(entries, true, Number.POSITIVE_INFINITY),
+					taskQueueFromEntries(entries, true, 50),
+					ownTaskOf(entries),
+				]);
+			const check = async () => {
+				for (const src of REAL) {
+					const f = join(dir, "frozen.jsonl");
+					copyFileSync(src, f);
+					forgetAllQueueEntries();
+					const plain = run(fullParse(f, true));
+					const kept = await readQueueEntries(f, true);
+					for (const e of kept) deepFreeze(e);
+					expect(run(kept)).toBe(plain);
+				}
+			};
+			// With this repo's mirror (apply), then with pi-queue's own replay, as in the server once a chat loaded it.
 			await check();
-		}
-	}, 300_000);
+			const readers = join(process.env.PI_QUEUE_PKG ?? join(home, "projects", "pi-queue"), "readers.ts");
+			if (existsSync(readers)) {
+				await import(/* @vite-ignore */ pathToFileURL(readers).href);
+				await check();
+			}
+		},
+		HANG_GUARD_MS,
+	); // Ops #639: a hang guard, its whole limit
 });

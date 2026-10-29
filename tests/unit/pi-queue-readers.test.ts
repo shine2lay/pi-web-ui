@@ -399,5 +399,5 @@ describe("a work log compacted by pi-queue (work-store.ts compactWorkEvents, Ops
 		const lines = new Set(was.activity.map((a) => JSON.stringify(a)));
 		expect(now2.activity.every((a) => lines.has(JSON.stringify(a)))).toBe(true);
 		expect(now2.activity.slice(-3)).toEqual(was.activity.slice(-3));
-	}, 30_000);
+	});
 });

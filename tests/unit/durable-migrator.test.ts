@@ -17,6 +17,7 @@ import {
 import type { ConversationId, DocumentId, EntryId, EntryRecord, JsonObject, Storage } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { threadCpuMs } from "./load-independent.js";
 import {
 	durableDatabaseName,
 	migrateSessionsToDurable,
@@ -605,12 +606,14 @@ describe("offline durable migration", () => {
 		const storage = await store();
 		const conversationId = result.sessions[0]!.conversationId as ConversationId;
 		// Every read is cold at the context level: do not pass the incremental previous range.
+		// Ops #639: each read's cost is this thread's CPU time (node:sqlite reads synchronously on it), not wall-clock,
+		// so a busy machine can't fail it; a read that walks the 70,000 entries or 2,600 blocks still costs far more.
 		const samples: number[] = [];
 		for (let at = 0; at < 10; at++) {
-			const start = performance.now();
+			const start = threadCpuMs();
 			await runtime.captureContextBounds(storage, conversationId, ctx);
 			const view = await runtime.readContextFrom(line, storage, conversationId, ctx);
-			samples.push(performance.now() - start);
+			samples.push(threadCpuMs() - start);
 			expect(view.view.entries.length).toBe(19);
 			expect(view.view.messages.length).toBe(18);
 		}
@@ -630,7 +633,7 @@ describe("offline durable migration", () => {
 		console.info(
 			`durable-migrator: 70000 raw entries, 2600 blocks, 18 messages, cold-context median ${median.toFixed(3)} ms`,
 		);
-	}, 120_000);
+	});
 
 	it.skipIf(!process.env.DURABLE_MIGRATOR_COPY_SOURCE)(
 		"verifies a temporary copy of a large existing transcript and sidecar, never the live file",
@@ -663,7 +666,6 @@ describe("offline durable migration", () => {
 				`durable-migrator copy: ${report.sessions[0]!.entryCount} raw entries, ${report.sessions[0]!.blocks} blocks, ${view.messages.length} active messages, context ${ms.toFixed(3)} ms`,
 			);
 		},
-		180_000,
 	);
 });
 

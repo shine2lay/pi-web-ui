@@ -87,7 +87,7 @@ describe("newestSessionFile", () => {
 		mkdirSync(join(dir, "folder.jsonl"));
 		symlinkSync(outside, join(dir, "dirlink.jsonl"));
 		expect(newestSessionFile(dir)).toBe(own);
-	}, 5_000);
+	});
 
 	it("nothing to reopen: no folder, an empty folder, or only links", () => {
 		const { dir, outside } = setup();

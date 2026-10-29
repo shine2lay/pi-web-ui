@@ -1,5 +1,7 @@
 import { describe, it, expect, afterAll } from "vitest";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
+import { existsSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { makeEvalTool, disposeAllEvalKernels, EVAL_TOOL_NAME } from "../../server/eval-tool.js";
 
 async function run(
@@ -131,15 +133,17 @@ describe("eval tool (persistent sandbox)", () => {
 	it("handles timeout protection gracefully", async () => {
 		const tool = makeEvalTool({ cwd: process.cwd(), ownerId: "test-timeout" });
 
-		const t0 = Date.now();
+		// Ops #639: "cut off at the timeout, not after the code ran out" is an order of events, not a wall-clock
+		// budget (3.5 s failed on a busy machine): the code writes a file once its sleep is over, and the call must
+		// have come back before that file exists (or ever does: the kernel is killed).
+		const done = join(mkdtempSync(join(tmpdir(), "eval-timeout-")), "slept");
 		const res = await run(tool, {
 			language: "py",
-			code: "import time\ntime.sleep(10)",
+			code: `import time\ntime.sleep(10)\nopen(${JSON.stringify(done)}, "w").close()`,
 			timeout: 1, // 1 second timeout
 		});
-		const elapsed = Date.now() - t0;
 
-		expect(elapsed).toBeLessThan(3500);
+		expect(existsSync(done)).toBe(false);
 		expect(res.details.ok).toBe(false);
 		expect(res.text).toContain("timed out after 1s");
 	});
@@ -154,7 +158,7 @@ describe("eval tool (persistent sandbox)", () => {
 		const res = await run(tool, { language: "py", code: "2 + 2", timeout: 5 });
 		expect(res.details.ok).toBe(true);
 		expect(res.details.result).toBe("4");
-	}, 15000);
+	});
 
 	it("queues concurrent calls instead of dropping the first resolver", async () => {
 		const tool = makeEvalTool({ cwd: process.cwd(), ownerId: "test-queue" });

@@ -1157,7 +1157,7 @@ describe("usage-accounting reader and transitive worker import boundaries", () =
 		const files = serverFiles();
 		expect(files).toContain(reader);
 		expect(unreviewedReaderImporters(files, disk)).toEqual([]);
-	}, 15_000);
+	});
 	it("admits the reviewed reader edges but rejects unreviewed basenames, nested lookalikes and alternate syntax", () => {
 		for (const form of forms) {
 			const modules: Record<string, string> = { "usage-accounting-pi-sessions.ts": "export const value = 1;" };

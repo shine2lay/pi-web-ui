@@ -229,5 +229,5 @@ describe("a project's own detail", () => {
 		page.click("Projects in no initiative · 2");
 		expect(page.text()).toContain("Goal · Each project here has its own goal: open one to see it.");
 		expect(page.text()).toContain("Outcomes · 1 of 4 done");
-	}, 15_000);
+	});
 });

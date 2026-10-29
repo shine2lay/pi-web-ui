@@ -104,7 +104,7 @@ describe("the supplied Initiatives design, bound to typed input", () => {
 		expect(page.button("Message Temper")).toBeTruthy();
 		expect(page.button("Change lead")).toBeTruthy();
 		expect(page.button("New initiative")).toBeTruthy();
-	}, 15_000);
+	});
 
 	// Ops #278 (docs/gate-view-cases.md): its own limit, 15 s. One mount and three clicks, each from where the last
 	// left it ("Decisions 3" is Reliability's tab): alone the mount takes about 180 ms and the clicks 125 ms. Up to
@@ -118,7 +118,7 @@ describe("the supplied Initiatives design, bound to typed input", () => {
 		page.click("Paused by you 1");
 		expect(page.button(card("Budget & tokens"))).toBeTruthy();
 		expect(page.button(card("Notebook import"))).toBeFalsy();
-	}, 15_000);
+	});
 
 	it("shows child task rows under a role, indented 16 px", () => {
 		const [team, ...rest] = DESIGN_FIXTURE.initiatives ?? [];

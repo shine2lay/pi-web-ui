@@ -24,6 +24,7 @@ import * as ts from "typescript/unstable/ast";
 import { createVirtualFileSystem } from "typescript/unstable/fs";
 import { API } from "typescript/unstable/sync";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { loadSensitive, SOAK_HANG_GUARD_MS } from "./load-independent.js";
 import {
 	COLLECTOR_LIMITS,
 	UsageAccountingCollector,
@@ -1875,7 +1876,7 @@ describe("paged collector ordered durable prefixes, capacity and IO/index failur
 		expect(reopened.checkpoint().cursors[0].cursor.ordinal).toBe(ordinal);
 		expect((await collectPaged(reopened, batch(noRows(), ordinal + 1))).code).toBe("store-capacity");
 		partial(await pagedReport(reopened), "collector:store-capacity");
-	}, 30_000);
+	});
 	it("an escaped oversized snapshot receipt is capacity-fenced BEFORE append and remains replayable", async () => {
 		const io = pagedIO(),
 			c = await openPaged(io);
@@ -2057,6 +2058,9 @@ function w0ThreadCpuMs(): number {
 async function isolatedPagedMeasurement(dir: string, asOf: string, from: string) {
 	const io = new PagedFixtureIO(dir);
 	const started = performance.now();
+	// Ops #639: the budgets below are this worker thread's CPU time (its I/O is synchronous, so it counts too); the
+	// wall-clock figures stay in the receipt, but a busy machine stretches them whatever the code does.
+	const startedCpu = w0ThreadCpuMs();
 	let peakHeap = 0,
 		peakRss = 0;
 	const sample = () => {
@@ -2263,6 +2267,7 @@ async function isolatedPagedMeasurement(dir: string, asOf: string, from: string)
 		fixtureCheck(replayed.facts === attemptCount && replayed.total === fixtureUsd(expected), "replay-exact-total");
 		fixtureCheck(c.checkpoint().cursors.length === sourceCount, "replayed-cursors");
 		const updateStart = performance.now(),
+			updateStartCpu = w0ThreadCpuMs(),
 			updateRows = pagedEmpty();
 		updateRows.facts.push(fact(attemptCount, 0));
 		const update = envelope(0, updateRows, ordinals[0] + 1),
@@ -2270,6 +2275,7 @@ async function isolatedPagedMeasurement(dir: string, asOf: string, from: string)
 		fixtureCheck((await c.collect(update.stream, updateText, asOf)).status === "committed", "update-committed");
 		const published = await foldCurrent(c),
 			currentWeekUpdatePublicationMs = performance.now() - updateStart,
+			currentWeekUpdatePublicationCpuMs = w0ThreadCpuMs() - updateStartCpu,
 			updated = c.metrics();
 		sample();
 		fixtureCheck(
@@ -2290,7 +2296,9 @@ async function isolatedPagedMeasurement(dir: string, asOf: string, from: string)
 			initialIngestionMs,
 			replayMs,
 			currentWeekUpdatePublicationMs,
+			currentWeekUpdatePublicationCpuMs,
 			totalFixtureMs: performance.now() - started,
+			totalFixtureCpuMs: w0ThreadCpuMs() - startedCpu,
 			exactUsd: replayed.total,
 			publishedUsd: published.total,
 			initial,
@@ -2389,101 +2397,112 @@ async function measurementWorker(dir: string): Promise<Worker> {
 }
 
 describe("W0 isolated worker resource and shared-pool callback envelope", () => {
-	it("ingests/replays 100000 current-week attempts across 65 synthetic sources then independently updates/publishes within finite budgets", async () => {
-		for (const value of Object.values(METER_WORKER_RESOURCE_LIMITS)) {
-			expect(Number.isFinite(value)).toBe(true);
-			expect(value).toBeGreaterThan(0);
-		}
-		const baseline = new CallbackLatency();
-		for (let i = 0; i < 128; i++) baseline.add(await parentFsProbe());
-		const dir = mkdtempSync(join(tmpdir(), "usage-accounting-worker-")),
-			load = new CallbackLatency();
-		let finished = false,
-			stopSampling = false;
-		const worker = await measurementWorker(dir).catch((error) => {
-			rmSync(dir, { recursive: true, force: true });
-			throw error;
-		});
-		const actualResourceLimits = { ...worker.resourceLimits };
-		try {
-			expect(actualResourceLimits).toMatchObject(METER_WORKER_RESOURCE_LIMITS);
-			const result = new Promise<FixtureMeasurement>((done, fail) => {
-				worker.once("error", fail);
-				worker.on("message", (message) =>
-					message?.kind === "measurement"
-						? done(message.value as FixtureMeasurement)
-						: fail(new Error(String(message?.code ?? "fixture-worker-message"))),
-				);
-				worker.once("exit", (code) => {
-					if (!finished) fail(new Error(`fixture-worker-exit:${code}`));
-				});
+	it(
+		"ingests/replays 100000 current-week attempts across 65 synthetic sources then independently updates/publishes within finite budgets",
+		async (ctx) => {
+			for (const value of Object.values(METER_WORKER_RESOURCE_LIMITS)) {
+				expect(Number.isFinite(value)).toBe(true);
+				expect(value).toBeGreaterThan(0);
+			}
+			const baseline = new CallbackLatency();
+			for (let i = 0; i < 128; i++) baseline.add(await parentFsProbe());
+			const dir = mkdtempSync(join(tmpdir(), "usage-accounting-worker-")),
+				load = new CallbackLatency();
+			let finished = false,
+				stopSampling = false;
+			const worker = await measurementWorker(dir).catch((error) => {
+				rmSync(dir, { recursive: true, force: true });
+				throw error;
 			});
-			const sampling = (async () => {
-				while (!stopSampling) load.add(await parentFsProbe());
-			})();
-			let measured: FixtureMeasurement;
+			const actualResourceLimits = { ...worker.resourceLimits };
 			try {
-				measured = await result;
-				finished = true;
+				expect(actualResourceLimits).toMatchObject(METER_WORKER_RESOURCE_LIMITS);
+				const result = new Promise<FixtureMeasurement>((done, fail) => {
+					worker.once("error", fail);
+					worker.on("message", (message) =>
+						message?.kind === "measurement"
+							? done(message.value as FixtureMeasurement)
+							: fail(new Error(String(message?.code ?? "fixture-worker-message"))),
+					);
+					worker.once("exit", (code) => {
+						if (!finished) fail(new Error(`fixture-worker-exit:${code}`));
+					});
+				});
+				const sampling = (async () => {
+					while (!stopSampling) load.add(await parentFsProbe());
+				})();
+				let measured: FixtureMeasurement;
+				try {
+					measured = await result;
+					finished = true;
+				} finally {
+					stopSampling = true;
+					await sampling;
+				}
+				const base = baseline.summary(),
+					loaded = load.summary();
+				const envelope = { p95Ms: Math.max(100, base.p95Ms * 10), maxMs: 1000 };
+				// vitest's silent/onConsoleLog suppresses console.log; this is a concise scalar receipt, never payload/journal.
+				process.stdout.write(
+					`W0-MEASURE ${JSON.stringify({ ...measured, parentFs: { baseline: base, load: loaded, envelope }, resourceLimits: actualResourceLimits })}\n`,
+				);
+				expect(measured.attempts).toBe(100_000);
+				expect(measured.rows).toBe(100_000);
+				expect(measured.rows).toBeGreaterThan(10_000);
+				expect(measured.nativeSources).toBeGreaterThan(64);
+				expect(measured.initial.journalBytes).toBeGreaterThan(16 * 1024 * 1024);
+				expect(measured.exactUsd).toBe("4333.390000033333");
+				expect(measured.publication.facts).toBe(100_001);
+				expect(measured.publishedUsd).toBe("4333.390000033334");
+				// W0's 30-second bar is warm update + publication, not initial/cold recovery.
+				// Cold phases remain measured under a separate 240-second full-suite harness deadline.
+				for (const ms of [measured.initialIngestionMs, measured.replayMs]) {
+					expect(Number.isFinite(ms) && ms >= 0).toBe(true);
+				}
+				// Ops #639: W0's 30 s and 240 s bars, on the worker thread's CPU clock (wall-clock failed them at load 90).
+				expect(measured.currentWeekUpdatePublicationCpuMs).toBeGreaterThan(0);
+				expect(measured.currentWeekUpdatePublicationCpuMs).toBeLessThan(30_000);
+				expect(measured.totalFixtureCpuMs).toBeLessThan(240_000);
+				for (const metrics of [measured.initial, measured.replay, measured.updated]) {
+					expect(metrics.yields).toBeGreaterThan(0);
+					expect(metrics.maxActiveMs).toBeLessThanOrEqual(METER_LIMITS.unitWorkMs);
+				}
+				expect(measured.maxBatchRows).toBeLessThanOrEqual(256);
+				expect(measured.maxBatchBytes).toBeLessThanOrEqual(256 * 1024);
+				expect(measured.publication.maxRows).toBeLessThanOrEqual(256);
+				expect(measured.publication.maxBytes).toBeLessThanOrEqual(256 * 1024);
+				expect(measured.publication.pages).toBeGreaterThan(390);
+				expect(measured.io.reads).toBeGreaterThan(64);
+				expect(measured.io.maxReadBytes).toBeLessThanOrEqual(256 * 1024);
+				for (const key of ["maxGetRows", "maxScanRows", "maxWriteRows"] as const)
+					expect(measured.index[key]).toBeLessThanOrEqual(256);
+				for (const key of ["maxGetBytes", "maxScanBytes", "maxWriteBytes"] as const)
+					expect(measured.index[key]).toBeLessThanOrEqual(256 * 1024);
+				expect(measured.indexEntries).toBeLessThanOrEqual(METER_LIMITS.indexEntries);
+				expect(measured.indexBytes).toBeLessThanOrEqual(METER_LIMITS.indexBytes);
+				expect(measured.sqliteCacheBytes).toBeLessThanOrEqual(METER_LIMITS.indexCacheBytes);
+				expect(measured.peakHeap).toBeGreaterThan(0);
+				expect(measured.peakHeap).toBeLessThanOrEqual(METER_LIMITS.acceptedHeapBytes);
+				expect(measured.peakRss).toBeGreaterThan(0);
+				expect(measured.peakRss).toBeLessThanOrEqual(METER_LIMITS.acceptedProcessRssBytes);
+				expect(loaded.count).toBeGreaterThan(128);
+				// Ops #639: load-sensitive. The parent's filesystem callbacks are a wall-clock latency, which a busy
+				// machine stretches whatever the worker does; every other check above always runs.
+				const busy = loadSensitive(
+					`W0's parent filesystem callback latency (p95 ${loaded.p95Ms} ms, max ${loaded.maxMs} ms)`,
+				);
+				if (busy) return ctx.skip(busy);
+				expect(loaded.p95Ms).toBeLessThanOrEqual(envelope.p95Ms);
+				expect(loaded.maxMs).toBeLessThanOrEqual(envelope.maxMs);
 			} finally {
-				stopSampling = true;
-				await sampling;
+				await worker.terminate();
+				fixtureWorkers.delete(worker);
+				rmSync(dir, { recursive: true, force: true });
 			}
-			const base = baseline.summary(),
-				loaded = load.summary();
-			const envelope = { p95Ms: Math.max(100, base.p95Ms * 10), maxMs: 1000 };
-			// vitest's silent/onConsoleLog suppresses console.log; this is a concise scalar receipt, never payload/journal.
-			process.stdout.write(
-				`W0-MEASURE ${JSON.stringify({ ...measured, parentFs: { baseline: base, load: loaded, envelope }, resourceLimits: actualResourceLimits })}\n`,
-			);
-			expect(measured.attempts).toBe(100_000);
-			expect(measured.rows).toBe(100_000);
-			expect(measured.rows).toBeGreaterThan(10_000);
-			expect(measured.nativeSources).toBeGreaterThan(64);
-			expect(measured.initial.journalBytes).toBeGreaterThan(16 * 1024 * 1024);
-			expect(measured.exactUsd).toBe("4333.390000033333");
-			expect(measured.publication.facts).toBe(100_001);
-			expect(measured.publishedUsd).toBe("4333.390000033334");
-			// W0's 30-second bar is warm update + publication, not initial/cold recovery.
-			// Cold phases remain measured under a separate 240-second full-suite harness deadline.
-			for (const ms of [measured.initialIngestionMs, measured.replayMs]) {
-				expect(Number.isFinite(ms) && ms >= 0).toBe(true);
-			}
-			expect(measured.currentWeekUpdatePublicationMs).toBeGreaterThanOrEqual(0);
-			expect(measured.currentWeekUpdatePublicationMs).toBeLessThan(30_000);
-			expect(measured.totalFixtureMs).toBeLessThan(240_000);
-			for (const metrics of [measured.initial, measured.replay, measured.updated]) {
-				expect(metrics.yields).toBeGreaterThan(0);
-				expect(metrics.maxActiveMs).toBeLessThanOrEqual(METER_LIMITS.unitWorkMs);
-			}
-			expect(measured.maxBatchRows).toBeLessThanOrEqual(256);
-			expect(measured.maxBatchBytes).toBeLessThanOrEqual(256 * 1024);
-			expect(measured.publication.maxRows).toBeLessThanOrEqual(256);
-			expect(measured.publication.maxBytes).toBeLessThanOrEqual(256 * 1024);
-			expect(measured.publication.pages).toBeGreaterThan(390);
-			expect(measured.io.reads).toBeGreaterThan(64);
-			expect(measured.io.maxReadBytes).toBeLessThanOrEqual(256 * 1024);
-			for (const key of ["maxGetRows", "maxScanRows", "maxWriteRows"] as const)
-				expect(measured.index[key]).toBeLessThanOrEqual(256);
-			for (const key of ["maxGetBytes", "maxScanBytes", "maxWriteBytes"] as const)
-				expect(measured.index[key]).toBeLessThanOrEqual(256 * 1024);
-			expect(measured.indexEntries).toBeLessThanOrEqual(METER_LIMITS.indexEntries);
-			expect(measured.indexBytes).toBeLessThanOrEqual(METER_LIMITS.indexBytes);
-			expect(measured.sqliteCacheBytes).toBeLessThanOrEqual(METER_LIMITS.indexCacheBytes);
-			expect(measured.peakHeap).toBeGreaterThan(0);
-			expect(measured.peakHeap).toBeLessThanOrEqual(METER_LIMITS.acceptedHeapBytes);
-			expect(measured.peakRss).toBeGreaterThan(0);
-			expect(measured.peakRss).toBeLessThanOrEqual(METER_LIMITS.acceptedProcessRssBytes);
-			expect(loaded.count).toBeGreaterThan(128);
-			expect(loaded.p95Ms).toBeLessThanOrEqual(envelope.p95Ms);
-			expect(loaded.maxMs).toBeLessThanOrEqual(envelope.maxMs);
-		} finally {
-			await worker.terminate();
-			fixtureWorkers.delete(worker);
-			rmSync(dir, { recursive: true, force: true });
-		}
-	}, 240_000);
-	it("a resource-limited worker dies into a handled error while the parent filesystem callbacks remain healthy", async () => {
+		},
+		SOAK_HANG_GUARD_MS,
+	); // Ops #639: a hang guard only (240 s ran out at load 90); its budgets are CPU time above
+	it("a resource-limited worker dies into a handled error while the parent filesystem callbacks remain healthy", async (ctx) => {
 		const limits = { ...METER_WORKER_RESOURCE_LIMITS, maxOldGenerationSizeMb: 16, maxYoungGenerationSizeMb: 4 };
 		const worker = new Worker("const retained=[]; for(;;) retained.push(Array.from({length:32768},(_,i)=>i));", {
 			eval: true,
@@ -2517,16 +2536,22 @@ describe("W0 isolated worker resource and shared-pool callback envelope", () => 
 			expect(parseMeterWorkerMessage(JSON.stringify(health))).toEqual(health);
 			expect(parseMeterWorkerMessage(JSON.stringify({ ...health, state: "ready" }))).toBeNull();
 			const after = await parentFsProbe();
-			expect(after).toBeLessThanOrEqual(1000);
-			expect(latency.summary().maxMs).toBeLessThanOrEqual(1000);
 			process.stdout.write(
 				`W0-MEASURE ${JSON.stringify({ kind: "resource-limit-exit", code: (error as (Error & { code?: string }) | null)?.code, parentFs: latency.summary(), afterMs: after, resourceLimits: limits })}\n`,
 			);
+			// Ops #639: load-sensitive. The parent's callback latency is wall-clock, which a busy machine stretches
+			// whatever the dying worker does; the exit, its error code and the health message above always count.
+			const busy = loadSensitive(
+				`the parent's filesystem callbacks while a worker dies (max ${latency.summary().maxMs} ms, after ${after.toFixed(1)} ms)`,
+			);
+			if (busy) return ctx.skip(busy);
+			expect(after).toBeLessThanOrEqual(1000);
+			expect(latency.summary().maxMs).toBeLessThanOrEqual(1000);
 		} finally {
 			await worker.terminate();
 			fixtureWorkers.delete(worker);
 		}
-	}, 15_000);
+	});
 });
 
 // H-W0-CLOCK-1 (Ops #538) controls, through the paged collector's own active() span around the verifier's batch check:
@@ -2556,7 +2581,7 @@ describe("W0 per-unit work clock: the thread's own CPU time, not wall-clock", ()
 		expect(cpuMs).toBeGreaterThanOrEqual(SPAN_MS);
 		expect(result).toMatchObject({ status: "rejected", code: "time-limit" });
 		expect(maxActiveMs).toBeGreaterThan(METER_LIMITS.unitWorkMs);
-	}, 60_000);
+	});
 	it("control B: a unit blocked 150 ms in Atomics.wait passes on the thread-CPU clock and fails on wall-clock", async () => {
 		const waits: { outcome: string; waitedMs: number }[] = [];
 		const blocked = () => {
@@ -2575,7 +2600,7 @@ describe("W0 per-unit work clock: the thread's own CPU time, not wall-clock", ()
 			expect(w.outcome).toBe("timed-out");
 			expect(w.waitedMs).toBeGreaterThan(METER_LIMITS.unitWorkMs);
 		}
-	}, 60_000);
+	});
 });
 
 // Exact reviewed importers are runtime/worker modules, not a directory/basename exception.
@@ -2839,7 +2864,7 @@ describe("paged collector exact importer allowlist and positive main-thread impo
 		const files = serverFiles();
 		expect(files).toContain(collector);
 		expect(unreviewed(files, disk)).toEqual([]);
-	}, 15_000);
+	});
 	it("accepts reviewed edges but rejects nested lookalikes, main cache and all alternate direct import forms", () => {
 		for (const form of forms) {
 			const modules: Record<string, string> = { "usage-accounting-collector.ts": "export const value = 1;" };

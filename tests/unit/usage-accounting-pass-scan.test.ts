@@ -96,7 +96,7 @@ it("enforces a cumulative 4096-files/week cap without silent completeness", asyn
 	expect(r.cap).toBe(true);
 	expect(r.complete).toBe(false);
 	expect(r.faults).toContain("file-cap");
-}, 30000);
+});
 it("excludes only explicit native Temper roots, not titles or worker-like filenames", async () => {
 	const dir = root(),
 		temper = join(dir, "native-owned");

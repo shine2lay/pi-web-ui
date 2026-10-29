@@ -199,7 +199,7 @@ describe("the core model through the supplied design", () => {
 		expect(page.buttons()).toContain("Message Architecture");
 		expect(page.buttons()).toContain("Change lead");
 		expect(page.buttons().some((b) => /New initiative|Resume|Mark read/.test(b))).toBe(false);
-	}, 15_000);
+	});
 
 	// Ops #278 (docs/gate-view-cases.md): its own limit, 15 s. One mount and two clicks, and the mount is most of its
 	// time (alone about 170 ms against 25 ms for the clicks). It timed out once, in the same land gate as the case
@@ -213,7 +213,7 @@ describe("the core model through the supplied design", () => {
 		page.click("Projects in no initiative · 2");
 		expect(page.actions.select).toHaveBeenCalledWith(NO_INITIATIVE);
 		expect(page.text()).toContain("No one leads this");
-	}, 15_000);
+	});
 
 	// initiatives-page-tasks: a loaded, live, empty registry truly has nothing waiting, so it is no longer listed.
 	// Ops #252 (docs/gate-near-limit.md): one case per state, each mounting the view once, then one for the old-data

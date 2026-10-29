@@ -728,7 +728,7 @@ describe("taskQueueFromEntries (queue-side-by-side)", () => {
 		}
 		const raw = [3, "#4", " 5 ", 3, 0, -1, 2.5, "x", 7];
 		expect(normAfter(raw, 7)).toEqual(pq.normAfter(raw, 7));
-	}, 15_000);
+	});
 });
 
 /** queue-main-chat: pi-queue's "ask" op (a task in a chat of its own asked its main chat). */
@@ -1820,5 +1820,5 @@ describe("taskQueueLaneUse (queue-answer-frees-slot)", () => {
 		const alone = [{ op: "lanes", n: 3 }, ...adds([[], ["b"], ["c"]]), { op: "run" }, ...inChat(1), stuck(1)];
 		expect(use(alone)).toEqual({ atOnce: 3, inUse: 1 });
 		expect(started(alone)).toEqual([]);
-	}, 15_000);
+	});
 });

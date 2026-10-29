@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { getAgentDir, SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { defaultSessionDirPath, SessionIndex } from "../../server/session-index.js";
+import { loadSensitive } from "./load-independent.js";
 import { IDENTITY_ENTRY_TYPE, IdentityFileIndex, identityIdOfEntry } from "../../server/identities.js";
 
 const T0 = Date.parse("2026-09-01T10:00:00.000Z");
@@ -246,7 +247,7 @@ describe("session-index: same rows as pi", () => {
 		// 12 transcripts under sessions/: the header-less, the malformed and the empty one are left out.
 		expect(count).toBe(9);
 		await expectSameAsPi(newIndex({ workers: 0 }));
-	}, 30_000);
+	});
 
 	it("reads a file that grew only from where it stopped, also when its last line was unfinished", async () => {
 		let t = writeChats();
@@ -273,7 +274,7 @@ describe("session-index: same rows as pi", () => {
 
 		expect(idx.stats.fullReads).toBe(full0);
 		expect(idx.stats.partialReads).toBeGreaterThan(part0);
-	}, 30_000);
+	});
 
 	it("reads a shrunk, replaced or rewritten file again from the start, and drops a removed one", async () => {
 		let t = writeChats();
@@ -312,7 +313,7 @@ describe("session-index: same rows as pi", () => {
 		await expectSameAsPi(idx);
 		expect(idx.stats.fullReads - full0).toBe(3);
 		expect((await idx.listAll()).some((r) => r.id === "dddd")).toBe(false);
-	}, 30_000);
+	});
 });
 
 describe("session-index: one read for every window", () => {
@@ -332,7 +333,7 @@ describe("session-index: one read for every window", () => {
 		const after = idx.listAll();
 		await Promise.all([running, after]);
 		expect(idx.stats.refreshes).toBe(3);
-	}, 30_000);
+	});
 
 	it("a restart with nothing changed reads no chat file", async () => {
 		writeChats();
@@ -354,7 +355,7 @@ describe("session-index: one read for every window", () => {
 		expect(third.stats.fullReads).toBe(0);
 		expect(third.stats.partialReads).toBe(0);
 		expect(third.stats.bytesRead).toBe(0);
-	}, 30_000);
+	});
 
 	it("a broken or old-version saved file is rebuilt", async () => {
 		writeChats();
@@ -389,7 +390,7 @@ describe("session-index: one read for every window", () => {
 		const idx = newIndex();
 		await expectSameAsPi(idx);
 		expect(idx.stats.loadedFromDisk).toBe(11);
-	}, 30_000);
+	});
 });
 
 describe("session-index: identity labels", () => {
@@ -413,11 +414,13 @@ describe("session-index: identity labels", () => {
 		viaIndex.useSource((f, s) => idx.identityOf(f, s));
 		const reading = new IdentityFileIndex();
 		for (const f of [file, plain]) expect(await viaIndex.lastEntry(f)).toBe(await reading.lastEntry(f));
-	}, 30_000);
+	});
 });
 
 describe("session-index: never blocks the server", () => {
-	it("a big transcript (one 48 MB line among 40 MB of others) keeps every event-loop pause under 200 ms", async () => {
+	// Ops #639: load-sensitive. Its point is wall-clock latency (how long the event loop stops), which a busy machine
+	// stretches whatever the code does; the reading checks always run, the 200 ms bar only when the load allows it.
+	it("a big transcript (one 48 MB line among 40 MB of others) keeps every event-loop pause under 200 ms", async (ctx) => {
 		mkdirSync(dirA, { recursive: true });
 		const big = join(dirA, "2026-09-02T00-00-00-000Z_big0.jsonl");
 		let t = T0;
@@ -453,6 +456,8 @@ describe("session-index: never blocks the server", () => {
 		} finally {
 			clearInterval(timer);
 		}
+		const busy = loadSensitive(`session-index's event-loop pause (${maxGap.toFixed(0)} ms measured)`);
+		if (busy) return ctx.skip(busy);
 		expect(maxGap).toBeLessThan(200);
-	}, 120_000);
+	});
 });

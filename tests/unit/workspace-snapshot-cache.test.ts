@@ -120,7 +120,7 @@ describe("workspace snapshot: kept shadow index (snapshot-index-cache)", () => {
 		expect(readFileSync(join(gitDir, "index")).equals(realIndexBefore)).toBe(true);
 		// No temp index is left behind.
 		expect(readdirSync(gitDir).filter((n) => n.startsWith("temp-index-snapshot-"))).toEqual([]);
-	}, 30_000);
+	});
 
 	it("reuses the last commit while nothing changed, and makes a new one after a change", async () => {
 		const first = await createWorkspaceSnapshot(dir);
@@ -138,7 +138,7 @@ describe("workspace snapshot: kept shadow index (snapshot-index-cache)", () => {
 		const back = await createWorkspaceSnapshot(dir);
 		expect(back).not.toBe(changed);
 		expect(treeOf(dir, back!)).toBe(treeOf(dir, first!));
-	}, 30_000);
+	});
 
 	it("makes a new commit when the reused one is gone (pruned)", async () => {
 		const first = await createWorkspaceSnapshot(dir);
@@ -151,7 +151,7 @@ describe("workspace snapshot: kept shadow index (snapshot-index-cache)", () => {
 		expect(next).not.toBe(first);
 		expect(() => git(dir, "cat-file", "-e", `${next}^{commit}`)).not.toThrow();
 		expect(treeOf(dir, next!)).toBe(git(dir, "rev-parse", "HEAD^{tree}"));
-	}, 30_000);
+	});
 
 	it("gives the ground-truth tree through edits, new files, deletes, commits, untracking and ignoring", async () => {
 		const cache = snapshotCachePath(gitDir, dir);
@@ -213,7 +213,7 @@ describe("workspace snapshot: kept shadow index (snapshot-index-cache)", () => {
 		const last = await createWorkspaceSnapshot(dir);
 		expect(filesIn(dir, last!)).toEqual([".gitignore", "a.txt", "fresh/c.md"]);
 		expect(git(dir, "show", `${last}:a.txt`)).toBe("a v4");
-	}, 60_000);
+	});
 
 	it.each(["new", "edited"])(
 		"rechecks a %s nested ignore for cache-only paths, never genuine tracked paths",
@@ -256,7 +256,6 @@ describe("workspace snapshot: kept shadow index (snapshot-index-cache)", () => {
 			expect(indexIdentity(join(gitDir, "index"))).toEqual(indexBefore);
 			expect(git(dir, "rev-parse", "HEAD")).toBe(headBefore);
 		},
-		30_000,
 	);
 
 	it.each(["new", "edited", "reselected"])(
@@ -298,7 +297,6 @@ describe("workspace snapshot: kept shadow index (snapshot-index-cache)", () => {
 			expect(indexIdentity(join(gitDir, "index"))).toEqual(indexBefore);
 			expect(git(dir, "rev-parse", "HEAD")).toBe(headBefore);
 		},
-		30_000,
 	);
 
 	it("rechecks exclusions across the whole repo from a nested cwd, with literal NUL-delimited names", async () => {
@@ -338,7 +336,7 @@ describe("workspace snapshot: kept shadow index (snapshot-index-cache)", () => {
 		expect(indexPaths(dir, snapshotCachePath(gitDir, cwd))).toEqual(filesIn(dir, snap!));
 		expect(git(dir, "show", `${snap}:sub/tracked.txt`)).toBe("tracked after ignore");
 		expect(indexIdentity(join(gitDir, "index"))).toEqual(indexBefore);
-	}, 30_000);
+	});
 
 	it("sees a same-size edit made in the second git last hashed the file (seed from the real index)", async () => {
 		// The real index holds a.txt hashed with mtime M, and the index file itself has mtime M: git must
@@ -353,7 +351,7 @@ describe("workspace snapshot: kept shadow index (snapshot-index-cache)", () => {
 		const snap = await createWorkspaceSnapshot(dir);
 		expect(git(dir, "show", `${snap}:a.txt`)).toBe("racy Y");
 		expect(treeOf(dir, snap!)).toBe(groundTruthTree(dir));
-	}, 30_000);
+	});
 
 	it("sees a same-size edit made in the second git last hashed the file (seed from the kept index)", async () => {
 		git(dir, "config", "core.trustctime", "false");
@@ -367,7 +365,7 @@ describe("workspace snapshot: kept shadow index (snapshot-index-cache)", () => {
 		const snap = await createWorkspaceSnapshot(dir);
 		expect(git(dir, "show", `${snap}:a.txt`)).toBe("kept Y");
 		expect(treeOf(dir, snap!)).toBe(groundTruthTree(dir));
-	}, 30_000);
+	});
 
 	it("copies an index file with its mtime, never a newer one", async () => {
 		const m = Math.floor(Date.now() / 1000) - 7200;
@@ -376,7 +374,7 @@ describe("workspace snapshot: kept shadow index (snapshot-index-cache)", () => {
 		await copyIndexFile(join(gitDir, "index"), to);
 		expect(statSync(to).mtimeMs).toBe(m * 1000);
 		expect(readFileSync(to).equals(readFileSync(join(gitDir, "index")))).toBe(true);
-	}, 30_000);
+	});
 
 	it("keeps a tracked file that .gitignore matches, so a restore no longer deletes it", async () => {
 		writeFileSync(join(dir, "kept.log"), "tracked on purpose\n");
@@ -394,7 +392,7 @@ describe("workspace snapshot: kept shadow index (snapshot-index-cache)", () => {
 		// ... and the restore's read-tree --reset then deleted it from the working tree.
 		expect(readFileSync(join(dir, "kept.log"), "utf8")).toBe("tracked on purpose\n");
 		expect(readFileSync(join(dir, "a.txt"), "utf8")).toBe("a v1\n");
-	}, 30_000);
+	});
 
 	it("falls back to an empty index, the old way, when the kept index is broken, and doesn't keep that one", async () => {
 		await createWorkspaceSnapshot(dir);
@@ -412,7 +410,7 @@ describe("workspace snapshot: kept shadow index (snapshot-index-cache)", () => {
 		const next = await createWorkspaceSnapshot(dir);
 		expect(treeOf(dir, next!)).toBe(groundTruthTree(dir));
 		expect(existsSync(cache)).toBe(true);
-	}, 30_000);
+	});
 
 	it("doesn't use a kept index from before a restart (the stamp lives in memory)", async () => {
 		await createWorkspaceSnapshot(dir);
@@ -424,7 +422,7 @@ describe("workspace snapshot: kept shadow index (snapshot-index-cache)", () => {
 		const snap = await createWorkspaceSnapshot(dir);
 		expect(treeOf(dir, snap!)).toBe(groundTruthTree(dir));
 		expect(readFileSync(cache).subarray(0, 4).toString()).toBe("DIRC"); // replaced by a real index
-	}, 30_000);
+	});
 
 	it("takes two snapshots of one folder at once", async () => {
 		await createWorkspaceSnapshot(dir);
@@ -437,7 +435,7 @@ describe("workspace snapshot: kept shadow index (snapshot-index-cache)", () => {
 		const third = await createWorkspaceSnapshot(dir);
 		expect(treeOf(dir, third!)).toBe(want);
 		expect(readFileSync(snapshotCachePath(gitDir, dir)).subarray(0, 4).toString()).toBe("DIRC");
-	}, 30_000);
+	});
 
 	it("forgets the kept index after a restore", async () => {
 		const snap = await createWorkspaceSnapshot(dir);
@@ -449,7 +447,7 @@ describe("workspace snapshot: kept shadow index (snapshot-index-cache)", () => {
 		expect(existsSync(snapshotCachePath(gitDir, dir))).toBe(false);
 		const after = await createWorkspaceSnapshot(dir);
 		expect(treeOf(dir, after!)).toBe(treeOf(dir, snap!));
-	}, 30_000);
+	});
 
 	it("stamps the index, the common info/exclude and both .gitignore files, in a subfolder and a linked worktree", async () => {
 		const sub = join(dir, "src");
@@ -486,7 +484,7 @@ describe("workspace snapshot: kept shadow index (snapshot-index-cache)", () => {
 			clearWorkspaceSnapshotCaches(wt);
 			rmSync(wt, { recursive: true, force: true });
 		}
-	}, 30_000);
+	});
 });
 
 describe("workspace snapshot: no seed whose entries git add would skip", () => {
@@ -525,7 +523,7 @@ describe("workspace snapshot: no seed whose entries git add would skip", () => {
 		writeFileSync(join(dir, "a.txt"), "a edited again\n");
 		const next = await createWorkspaceSnapshot(dir);
 		expect(git(dir, "show", `${next}:a.txt`)).toBe("a edited again");
-	}, 30_000);
+	});
 
 	it("snapshots the edit of a file the real index marks skip-worktree", async () => {
 		git(dir, "update-index", "--skip-worktree", "src/b.ts");
@@ -535,7 +533,7 @@ describe("workspace snapshot: no seed whose entries git add would skip", () => {
 		const snap = await createWorkspaceSnapshot(dir);
 		expect(git(dir, "show", `${snap}:src/b.ts`)).toBe("export const b = 2;");
 		expect(treeOf(dir, snap!)).toBe(groundTruthTree(dir));
-	}, 30_000);
+	});
 
 	it("still seeds from a real index with an intent-to-add entry (git add -N)", async () => {
 		writeFileSync(join(dir, "kept.log"), "tracked though ignored\n");
@@ -550,7 +548,7 @@ describe("workspace snapshot: no seed whose entries git add would skip", () => {
 		expect(git(dir, "show", `${snap}:new.txt`)).toBe("new, intent to add");
 		// kept.log is only there when the snapshot was seeded from the real index.
 		expect(filesIn(dir, snap!)).toEqual([".gitignore", "a.txt", "kept.log", "new.txt", "src/b.ts"]);
-	}, 30_000);
+	});
 
 	it("reads index versions 2, 3 and 4 and finds assume-unchanged and skip-worktree entries in each", () => {
 		const check = (version: number) => {
@@ -623,5 +621,5 @@ describe("workspace snapshot: no seed whose entries git add would skip", () => {
 			clearWorkspaceSnapshotCaches(sha256);
 			rmSync(sha256, { recursive: true, force: true });
 		}
-	}, 30_000);
+	});
 });

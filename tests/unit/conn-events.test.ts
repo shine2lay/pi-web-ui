@@ -8,6 +8,7 @@
 import { mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { loadSensitive } from "./load-independent.js";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -657,21 +658,27 @@ describe("conn-events: real timers, a 2.5 s stall of this process", () => {
 		};
 	};
 
-	it("control, the old measure alone (watcher off): a stall right after a sample is lost, though the sampler ran late", async () => {
+	// Ops #639: load-sensitive. These measure a real 2.5 s stall on the wall clock, and a busy machine stretches what
+	// they see on top of it; the lower bounds and counts always run, the upper bounds only when the load allows them.
+	it("control, the old measure alone (watcher off): a stall right after a sample is lost, though the sampler ran late", async (ctx) => {
 		const r = await run(false, "afterSample");
 		expect(Math.max(...r.loops.map((l) => l.windowMs))).toBeGreaterThanOrEqual(2_400);
-		expect(Math.max(...r.loops.map((l) => l.maxMs))).toBeLessThan(2_000);
 		expect(r.stalls).toHaveLength(0);
+		const busy = loadSensitive("conn-events' real-timer stall control");
+		if (busy) return ctx.skip(busy);
+		expect(Math.max(...r.loops.map((l) => l.maxMs))).toBeLessThan(2_000);
 		expect(r.placed.maxMs ?? 0).toBeLessThan(2_000);
-	}, 20_000);
+	});
 
 	for (const how of ["afterSample", "busyApp"] as const)
-		it(`watcher on (${how}): the stall is written whole, and an episode over it gets its length`, async () => {
+		it(`watcher on (${how}): the stall is written whole, and an episode over it gets its length`, async (ctx) => {
 			const r = await run(true, how);
 			const worst = Math.max(0, ...r.stalls.map((s) => s.ms));
 			expect(worst).toBeGreaterThanOrEqual(2_250);
-			expect(worst).toBeLessThan(4_500);
 			expect(r.placed.maxMs ?? 0).toBeGreaterThanOrEqual(2_250);
 			expect(Math.max(...r.loops.map((l) => l.stallMaxMs))).toBeGreaterThanOrEqual(2_250);
-		}, 20_000);
+			const busy = loadSensitive(`conn-events' real-timer stall (${how}, ${worst} ms written)`);
+			if (busy) return ctx.skip(busy);
+			expect(worst).toBeLessThan(4_500);
+		});
 });

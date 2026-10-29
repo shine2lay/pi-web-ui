@@ -5,6 +5,7 @@
  *  - 端到端一条：真 McpBridge + 真文件，改完 mcp.json 工具表跟着变，全程不重启服务。
  */
 import { describe, expect, it, afterEach } from "vitest";
+import { HANG_GUARD_MS } from "./load-independent.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -53,7 +54,8 @@ function harness(dir: string, debounceMs = 40, pollIntervalMs = 60) {
 	return { hot, state };
 }
 
-async function waitFor(cond: () => boolean, ms = 3000): Promise<void> {
+// Ops #639: the hang guard is its only limit (3 s could run out on a busy machine before the event came).
+async function waitFor(cond: () => boolean, ms = HANG_GUARD_MS): Promise<void> {
 	const deadline = Date.now() + ms;
 	while (Date.now() < deadline) {
 		if (cond()) return;

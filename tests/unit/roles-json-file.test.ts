@@ -49,7 +49,7 @@ describe("JsonFile", () => {
 		const file = join(dir, "jobs.json");
 		execFileSync("mkfifo", [file]);
 		expect(await reader(file).get()).toBe("empty");
-	}, 5_000);
+	});
 
 	it("a link to a device is refused, never read; a link to a regular file is read", async () => {
 		const dev = join(dir, "dev.json");
@@ -60,7 +60,7 @@ describe("JsonFile", () => {
 		const link = join(dir, "link.json");
 		symlinkSync(real, link);
 		expect(await reader(link).get()).toEqual([3]);
-	}, 5_000);
+	});
 
 	it("over 8 MiB: empty, without reading it", async () => {
 		const file = join(dir, "big.json");

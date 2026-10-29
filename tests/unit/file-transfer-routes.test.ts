@@ -84,7 +84,7 @@ describe("file transfer HTTP routes", () => {
 		const res = await f.archive("download");
 		expect(res.status).toBe(200);
 		await res.body?.cancel();
-		await expect.poll(() => readdir(f.temporary), { timeout: 5000 }).toEqual([]);
+		await expect.poll(() => readdir(f.temporary)).toEqual([]); // Ops #639: the hang guard, not 5 s
 	});
 	it("cleans temporary archives on failure", async () => {
 		const f = await fixture();

@@ -94,6 +94,5 @@ describe("installed Codex transport", () => {
 				await new Promise<void>((resolve) => server.close(() => resolve()));
 			}
 		},
-		20000,
 	);
 });

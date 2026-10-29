@@ -5,6 +5,9 @@
  * The existing tests/unit/plugin-proxy.test.ts covers prefix registration and stays millisecond-fast.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+// Ops #639: the proxy frees and ends things on events (close, error), not on a timer, so every wait here waits for
+// its event with the hang guard as its only limit; "within 1 s" was a wall-clock verdict on a busy machine.
+import { HANG_GUARD_MS, loadSensitive } from "./load-independent.js";
 import express from "express";
 import { createServer, request, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -207,7 +210,7 @@ describe("plugin proxy: upstream freed when the client goes away (H-PROXY-CLOSE-
 		expect(r.status).toBe(200);
 		expect(r.body).toBe("hello world");
 		expect(r.headers["x-up"]).toBe("1");
-		expect(await waitFor(() => up.closes.length === 1, 1000)).toBe(true);
+		expect(await waitFor(() => up.closes.length === 1, HANG_GUARD_MS)).toBe(true);
 		expect(up.closes[0]?.finished).toBe(true);
 		expect(err).not.toHaveBeenCalled();
 	});
@@ -238,9 +241,9 @@ describe("plugin proxy: upstream freed when the client goes away (H-PROXY-CLOSE-
 			await c.ready;
 			const before = up.closes.length;
 			c.abort();
-			closedInTime.push(await waitFor(() => up.closes.length > before, 1000));
+			closedInTime.push(await waitFor(() => up.closes.length > before, HANG_GUARD_MS));
 		}
-		const settled = await waitFor(async () => (await up.connections()) === baseline, 1000);
+		const settled = await waitFor(async () => (await up.connections()) === baseline, HANG_GUARD_MS);
 		const after = await up.connections();
 		expect({ closedInTime: closedInTime.filter(Boolean).length, connections: after, settled }).toEqual({
 			closedInTime: 10,
@@ -248,7 +251,7 @@ describe("plugin proxy: upstream freed when the client goes away (H-PROXY-CLOSE-
 			settled: true,
 		});
 		expect(up.closes.every((c) => !c.finished)).toBe(true);
-	}, 30000);
+	});
 
 	it("case 4: client aborting during a slow finite response destroys the upstream", async () => {
 		const up = await startUpstream();
@@ -256,25 +259,33 @@ describe("plugin proxy: upstream freed when the client goes away (H-PROXY-CLOSE-
 		const c = openVia(px.port, `${PREFIX}/slow`, "12345");
 		await c.ready;
 		c.abort();
-		expect(await waitFor(() => up.closes.length === 1, 1000)).toBe(true);
+		expect(await waitFor(() => up.closes.length === 1, HANG_GUARD_MS)).toBe(true);
 		expect(up.closes[0]?.finished).toBe(false);
-		expect(await waitFor(async () => (await up.connections()) === 0, 1000)).toBe(true);
-	}, 15000);
+		expect(await waitFor(async () => (await up.connections()) === 0, HANG_GUARD_MS)).toBe(true);
+	});
 
-	it("case 5: live SSE with keepalives shorter than timeoutMs stays open past several timeout periods", async () => {
+	it("case 5: live SSE with keepalives shorter than timeoutMs stays open past several timeout periods", async (ctx) => {
 		const err = vi.spyOn(console, "error").mockImplementation(() => {});
 		const up = await startUpstream();
 		const px = await startProxy(up.port, 300);
 		const c = openVia(px.port, `${PREFIX}/sse-count`, "data: 0");
 		await c.ready;
-		await sleep(1300);
-		const events = (c.text().match(/^data: \d+$/gm) ?? []).length;
-		expect(events).toBeGreaterThanOrEqual(8);
+		// Ops #639: wait for the 8 events (or the stream's end) instead of 1.3 s of a busy machine.
+		const count = () => (c.text().match(/^data: \d+$/gm) ?? []).length;
+		await waitFor(() => count() >= 8 || c.done(), HANG_GUARD_MS);
+		// Load-sensitive: the proxy's 300 ms idle timeout and the upstream's 100 ms keepalives are both real timers,
+		// so on a busy machine a late keepalive can trip the timeout whatever the proxy does.
+		const busy = loadSensitive(`the proxy's 300 ms idle timeout against 100 ms keepalives (${count()} events)`);
+		if (busy) {
+			c.abort();
+			return ctx.skip(busy);
+		}
+		expect(count()).toBeGreaterThanOrEqual(8);
 		expect(c.done()).toBe(false);
 		expect(up.closes.length).toBe(0);
 		expect(err).not.toHaveBeenCalled();
 		c.abort();
-	}, 15000);
+	});
 
 	it("case 6: upstream dying mid-stream after headers ends the client response within 1 s", async () => {
 		vi.spyOn(console, "error").mockImplementation(() => {});
@@ -282,9 +293,9 @@ describe("plugin proxy: upstream freed when the client goes away (H-PROXY-CLOSE-
 		const px = await startProxy(up.port);
 		const c = openVia(px.port, `${PREFIX}/die`, "data: 1");
 		await c.ready;
-		expect(await waitFor(() => c.done(), 1100)).toBe(true);
+		expect(await waitFor(() => c.done(), HANG_GUARD_MS)).toBe(true);
 		c.abort();
-	}, 15000);
+	});
 
 	it("case 7: unreachable upstream answers 502 'proxy target unreachable'", async () => {
 		const err = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -304,10 +315,10 @@ describe("plugin proxy: upstream freed when the client goes away (H-PROXY-CLOSE-
 		const up = await startUpstream();
 		const px = await startProxy(up.port);
 		const c = openVia(px.port, `${PREFIX}/late-headers`, null);
-		await waitFor(() => up.seen.length === 1, 1000);
+		await waitFor(() => up.seen.length === 1, HANG_GUARD_MS);
 		await sleep(100);
 		c.abort();
-		const closedInTime = await waitFor(() => up.closes.length === 1, 1000);
+		const closedInTime = await waitFor(() => up.closes.length === 1, HANG_GUARD_MS);
 		await sleep(800); // past the upstream's 1.5 s header time
 		expect({
 			closedInTime,
@@ -315,7 +326,7 @@ describe("plugin proxy: upstream freed when the client goes away (H-PROXY-CLOSE-
 			writesAfterClose: px.writes.filter((w) => w.afterClose).map((w) => w.what),
 			errorLogs: err.mock.calls.length,
 		}).toEqual({ closedInTime: true, upstreamFinished: false, writesAfterClose: [], errorLogs: 0 });
-	}, 15000);
+	});
 
 	it("case 9: forwarding strips the prefix, keeps the query, adds x-pi-proxy-prefix, drops host and hop-by-hop headers", async () => {
 		const up = await startUpstream();

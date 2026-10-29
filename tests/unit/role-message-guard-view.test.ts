@@ -550,5 +550,4 @@ it.runIf(Boolean(process.env.GUARD_UI_PROOF_DIR))(
 			await browser.close();
 		}
 	},
-	60000,
 );

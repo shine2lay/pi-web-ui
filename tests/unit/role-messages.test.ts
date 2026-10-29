@@ -349,55 +349,51 @@ describe("hourly proof survives history rotation", () => {
 	it.each([
 		{ count: 981, capped: ["qa"] },
 		{ count: 5000, capped: ["qa", "alpha"] },
-	])(
-		"retains capped roles after $count Ops sends, reload and the exact hour boundary",
-		({ count, capped }) => {
-			const f = fake([...capped.map((id) => role(id, id, A)), role("ops", "Ops", A), role("beta", "Beta", B)]);
-			let s = new RoleMessages(store, f.host, clock);
-			const deliver = (id: string, text: string) => {
-				const result = s.send(sender({ role: id, file: A }), { to: "beta", kind: "fyi", text });
-				expect(result.ok).toBe(true);
-				if (!result.ok) throw new Error(result.error);
-				// History trimming depends on delivery state, not transport. No chat turn is needed here.
-				result.record.state = "delivered";
-			};
-			for (const id of capped) for (let n = 0; n < 20; n++) deliver(id, `${id}-${n}`);
-			for (let n = 0; n < count; n++) deliver("ops", `ops-${n}`);
-			s.setPaused(false); // Save the last synthetic delivery too.
-			const refusal = {
-				ok: false,
-				error:
-					"Not sent: qa has sent 20 role messages in the last hour (the limit is 20). Ask the owner before sending more.",
-			};
-			const qa = sender({ role: "qa", file: A });
-			const more = { to: "beta", kind: "fyi", text: "qa-21" };
-			expect(s.send(qa, more)).toEqual(refusal);
-			for (const id of capped) expect(s.hourlyCount(id)).toBe(20);
-			const rows = () =>
-				(JSON.parse(readFileSync(store, "utf8")) as { messages: Array<{ from: { role: string } }> }).messages;
-			expect(rows().length).toBeLessThanOrEqual(ROLE_MESSAGES_KEEP + capped.length * 20);
-			if (count === 5000) {
-				expect(rows()).toHaveLength(ROLE_MESSAGES_KEEP + capped.length * 20);
-				expect(rows().filter((m) => m.from.role === "ops")).toHaveLength(ROLE_MESSAGES_KEEP);
-			}
-			s.stop();
-			s = new RoleMessages(store, f.host, clock);
-			expect(s.send(qa, more)).toEqual(refusal);
-			now += 3_600_000 - 1;
-			expect(s.send(qa, more)).toEqual(refusal);
-			now++;
-			expect(s.hourlyCount("qa")).toBe(0);
-			deliver("ops", "boundary");
-			s.setPaused(false);
-			// Expired proof may remain in normal history, but adds no rows beyond its newest 1,000.
-			expect(rows().filter((m) => capped.includes(m.from.role))).toHaveLength(
-				Math.max(0, ROLE_MESSAGES_KEEP - count - 1),
-			);
-			expect(rows()).toHaveLength(ROLE_MESSAGES_KEEP);
-			expect(s.send(qa, more).ok).toBe(true);
-		},
-		30_000,
-	); // 5,000 real save/rename operations, not a performance assertion.
+	])("retains capped roles after $count Ops sends, reload and the exact hour boundary", ({ count, capped }) => {
+		const f = fake([...capped.map((id) => role(id, id, A)), role("ops", "Ops", A), role("beta", "Beta", B)]);
+		let s = new RoleMessages(store, f.host, clock);
+		const deliver = (id: string, text: string) => {
+			const result = s.send(sender({ role: id, file: A }), { to: "beta", kind: "fyi", text });
+			expect(result.ok).toBe(true);
+			if (!result.ok) throw new Error(result.error);
+			// History trimming depends on delivery state, not transport. No chat turn is needed here.
+			result.record.state = "delivered";
+		};
+		for (const id of capped) for (let n = 0; n < 20; n++) deliver(id, `${id}-${n}`);
+		for (let n = 0; n < count; n++) deliver("ops", `ops-${n}`);
+		s.setPaused(false); // Save the last synthetic delivery too.
+		const refusal = {
+			ok: false,
+			error:
+				"Not sent: qa has sent 20 role messages in the last hour (the limit is 20). Ask the owner before sending more.",
+		};
+		const qa = sender({ role: "qa", file: A });
+		const more = { to: "beta", kind: "fyi", text: "qa-21" };
+		expect(s.send(qa, more)).toEqual(refusal);
+		for (const id of capped) expect(s.hourlyCount(id)).toBe(20);
+		const rows = () =>
+			(JSON.parse(readFileSync(store, "utf8")) as { messages: Array<{ from: { role: string } }> }).messages;
+		expect(rows().length).toBeLessThanOrEqual(ROLE_MESSAGES_KEEP + capped.length * 20);
+		if (count === 5000) {
+			expect(rows()).toHaveLength(ROLE_MESSAGES_KEEP + capped.length * 20);
+			expect(rows().filter((m) => m.from.role === "ops")).toHaveLength(ROLE_MESSAGES_KEEP);
+		}
+		s.stop();
+		s = new RoleMessages(store, f.host, clock);
+		expect(s.send(qa, more)).toEqual(refusal);
+		now += 3_600_000 - 1;
+		expect(s.send(qa, more)).toEqual(refusal);
+		now++;
+		expect(s.hourlyCount("qa")).toBe(0);
+		deliver("ops", "boundary");
+		s.setPaused(false);
+		// Expired proof may remain in normal history, but adds no rows beyond its newest 1,000.
+		expect(rows().filter((m) => capped.includes(m.from.role))).toHaveLength(
+			Math.max(0, ROLE_MESSAGES_KEEP - count - 1),
+		);
+		expect(rows()).toHaveLength(ROLE_MESSAGES_KEEP);
+		expect(s.send(qa, more).ok).toBe(true);
+	}); // 5,000 real save/rename operations, not a performance assertion.
 });
 
 describe("delivery", () => {

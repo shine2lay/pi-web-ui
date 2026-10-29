@@ -100,57 +100,53 @@ describe("owner's hourly exemptions (approval host)", () => {
 		[5000, "ready"],
 		[981, "unavailable"],
 		[5000, "unavailable"],
-	])(
-		"history rotation after %s Ops sends keeps qa capped, approvals %s",
-		async (count, mode) => {
-			const w = await world();
-			const home = addRole(w, "qa");
-			const ops = addRole(w, "ops");
-			if (mode === "unavailable") await unavailable(w);
-			// Exercise the native fallback writer without 5,000 transport/approval transactions.
-			// Only delivery completion is synthetic; every acceptance and save is real.
-			const deliver = (id: string, file: string, text: string) => {
-				const sent = w.rm.send(who(w, id, file, ""), { to: "beta", kind: "fyi", text });
-				expect(sent.ok).toBe(true);
-				if (!sent.ok) throw new Error(sent.error);
-				sent.record.state = "delivered";
-			};
-			for (let n = 0; n < 20; n++) deliver("qa", home, `qa-${n}`);
-			for (let n = 0; n < Number(count); n++) deliver("ops", ops, `ops-${n}`);
-			w.rm.setPaused(false);
-			const refusal = {
-				ok: false,
-				error:
-					"Not sent: qa has sent 20 role messages in the last hour (the limit is 20). Ask the owner before sending more.",
-				...(mode === "ready" ? { reason: "ordinary_hourly" } : {}),
-			};
+	])("history rotation after %s Ops sends keeps qa capped, approvals %s", async (count, mode) => {
+		const w = await world();
+		const home = addRole(w, "qa");
+		const ops = addRole(w, "ops");
+		if (mode === "unavailable") await unavailable(w);
+		// Exercise the native fallback writer without 5,000 transport/approval transactions.
+		// Only delivery completion is synthetic; every acceptance and save is real.
+		const deliver = (id: string, file: string, text: string) => {
+			const sent = w.rm.send(who(w, id, file, ""), { to: "beta", kind: "fyi", text });
+			expect(sent.ok).toBe(true);
+			if (!sent.ok) throw new Error(sent.error);
+			sent.record.state = "delivered";
+		};
+		for (let n = 0; n < 20; n++) deliver("qa", home, `qa-${n}`);
+		for (let n = 0; n < Number(count); n++) deliver("ops", ops, `ops-${n}`);
+		w.rm.setPaused(false);
+		const refusal = {
+			ok: false,
+			error:
+				"Not sent: qa has sent 20 role messages in the last hour (the limit is 20). Ask the owner before sending more.",
+			...(mode === "ready" ? { reason: "ordinary_hourly" } : {}),
+		};
+		expect(await send(w, "qa", home, "beta", {}, "")).toEqual(refusal);
+		if (mode === "ready") {
+			// Every new generation uses freshState(): carry-over is time-based, not count-trimmed.
+			const fresh = (w.host as unknown as { freshState(): GuardStoreState }).freshState();
+			expect(fresh.usage.filter((u) => u.origin === "qa")).toHaveLength(20);
+		}
+		w.rm.stop();
+		w.rm = new RoleMessages(
+			join(data, "role-messages.json"),
+			{
+				roles: () => w.roles,
+				chatState: () => "working",
+				deliver: async () => ({ ok: true }),
+				note: async () => ({ ok: true }),
+				log: () => {},
+			},
+			() => now,
+			GUARD_POLICY,
+		);
+		try {
 			expect(await send(w, "qa", home, "beta", {}, "")).toEqual(refusal);
-			if (mode === "ready") {
-				// Every new generation uses freshState(): carry-over is time-based, not count-trimmed.
-				const fresh = (w.host as unknown as { freshState(): GuardStoreState }).freshState();
-				expect(fresh.usage.filter((u) => u.origin === "qa")).toHaveLength(20);
-			}
+		} finally {
 			w.rm.stop();
-			w.rm = new RoleMessages(
-				join(data, "role-messages.json"),
-				{
-					roles: () => w.roles,
-					chatState: () => "working",
-					deliver: async () => ({ ok: true }),
-					note: async () => ({ ok: true }),
-					log: () => {},
-				},
-				() => now,
-				GUARD_POLICY,
-			);
-			try {
-				expect(await send(w, "qa", home, "beta", {}, "")).toEqual(refusal);
-			} finally {
-				w.rm.stop();
-			}
-		},
-		30_000,
-	); // Real native save/rename for every send; no elapsed-time assertion.
+		}
+	}); // Real native save/rename for every send; no elapsed-time assertion.
 
 	it("ops still needs a grant at hop 7", async () => {
 		const w = await world();

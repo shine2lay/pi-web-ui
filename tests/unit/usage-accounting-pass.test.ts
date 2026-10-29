@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { build } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
+import { HANG_GUARD_MS } from "./load-independent.js";
 import { METER_WORKER_RESOURCE_LIMITS } from "../../server/usage-accounting-meter-contract.js";
 import { PASS_LIMITS } from "../../server/usage-accounting-pass.js";
 import { PASS_SCAN_LIMITS } from "../../server/usage-accounting-pass-scan.js";
@@ -68,7 +69,8 @@ async function run(name: string): Promise<any> {
 }
 const last = <T>(xs: T[]): T => xs[xs.length - 1]!;
 
-describe("usage accounting pass (Ops #423 B3)", { timeout: 120_000 }, () => {
+// Ops #639: the hang guard is its limit (120 s was a wall-clock verdict on a busy machine).
+describe("usage accounting pass (Ops #423 B3)", { timeout: HANG_GUARD_MS }, () => {
 	it("gives W0's totals on its known cases, through the week store and W5", async () => {
 		const steps = await run("w0");
 		expect(steps).toHaveLength(4);

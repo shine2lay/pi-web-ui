@@ -341,20 +341,16 @@ describe("fresh start: no request, or one that doesn't match, changes nothing", 
 	// Ops #252 (docs/gate-near-limit.md): its own limit, 3x the slowest land-gate time of its rows ("another journal",
 	// 3733 ms) rounded up to whole 5 s. Sequential scenarios and Security's review evidence, so they aren't split;
 	// the guard store's work is CPU-bound and 2-4x slower under gate load.
-	it.each(cases)(
-		"%s",
-		async (_name, make, why) => {
-			const w = await diverged();
-			make();
-			const before = snapshot();
-			const { host, logs } = await startHost(w);
-			expect(host.state.status).toBe("degraded");
-			expect(host.state.reason).toContain("legacy writer divergence");
-			expect(freshLines(logs)).toEqual(why ? [`approval ladder: fresh start refused (${why})`] : []);
-			expect(snapshot()).toEqual(before); // gen folders, current.json and the request as they were; no archive
-		},
-		15_000,
-	);
+	it.each(cases)("%s", async (_name, make, why) => {
+		const w = await diverged();
+		make();
+		const before = snapshot();
+		const { host, logs } = await startHost(w);
+		expect(host.state.status).toBe("degraded");
+		expect(host.state.reason).toContain("legacy writer divergence");
+		expect(freshLines(logs)).toEqual(why ? [`approval ladder: fresh start refused (${why})`] : []);
+		expect(snapshot()).toEqual(before); // gen folders, current.json and the request as they were; no archive
+	});
 });
 
 function mkfifo(path: string): void {

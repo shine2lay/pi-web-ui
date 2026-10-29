@@ -21,6 +21,7 @@ import {
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { installPromptStartGuard } from "../../server/prompt-start-guard.js";
+import { HANG_GUARD_MS } from "./load-independent.js";
 
 let root: string;
 beforeEach(() => {
@@ -135,9 +136,9 @@ async function fixture(guard: boolean): Promise<Fixture> {
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
-/** Wait until the session has been idle for a while (or give up after 3 s). */
+/** Wait until the session has been idle for a while (or give up at the hang guard: 3 s ran out on a busy machine). */
 async function settled(session: AgentSession): Promise<void> {
-	const until = Date.now() + 3000;
+	const until = Date.now() + HANG_GUARD_MS;
 	let quietSince = 0;
 	while (Date.now() < until) {
 		if (session.isStreaming) quietSince = 0;
