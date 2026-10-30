@@ -834,6 +834,16 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		kind: "action",
 		order: 30,
 	},
+	// chat-title: the open chat's title at the left of the chat header (the left bar's name for it,
+	// web/src/chat-title.ts). Hidden here = no title; entries ordered before it sit at its left.
+	{
+		id: "host:chat-title",
+		slot: "chat.header",
+		labelKey: "chatTitle",
+		icon: "🏷️",
+		kind: "badge",
+		order: 5,
+	},
 	// identities: the chat's identity tag in the chat header (pi chats with an identity; a click opens
 	// the identity menu) and the identity picker in a blank chat (None + each identity).
 	{
@@ -1380,6 +1390,9 @@ export const LP_SECTION_ENTRY_IDS: ReadonlySet<string> = new Set(["host:lp-runni
 /** identities: the identity-tag entry of leftpanel.sessions. Not a row button either (renderLeftSessions
  *  skips it); while it's visible each chat row shows its identity tag, hidden = no tags in the list. */
 export const LP_IDENTITY_ENTRY_ID = "host:lp-identity";
+
+/** chat-title: the chat header's title entry (web/src/chat-title.ts picks the words). */
+export const CHAT_TITLE_ENTRY_ID = "host:chat-title";
 
 /** identities: the chat-header identity tag and the blank-chat identity picker (their slot entries). */
 export const CHAT_IDENTITY_ENTRY_ID = "host:chat-identity";

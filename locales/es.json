@@ -445,6 +445,7 @@
 		"openHistory": "Historial de chats",
 		"openFiles": "Lista de archivos",
 		"tldrTab": "TL;DR",
+		"chatTitle": "Título del chat",
 		"identityTag": "Etiqueta de identidad",
 		"identityTagTip": "Identidad: {title} ({id})",
 		"identityPicker": "Selector de identidad",

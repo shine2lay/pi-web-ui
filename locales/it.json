@@ -445,6 +445,7 @@
 		"openHistory": "Cronologia",
 		"openFiles": "File",
 		"tldrTab": "TL;DR",
+		"chatTitle": "Titolo della chat",
 		"identityTag": "Etichetta identità",
 		"identityTagTip": "Identità: {title} ({id})",
 		"identityPicker": "Selettore identità",

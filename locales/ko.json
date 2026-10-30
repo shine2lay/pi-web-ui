@@ -445,6 +445,7 @@
 		"openHistory": "이전 대화",
 		"openFiles": "파일 목록",
 		"tldrTab": "TL;DR",
+		"chatTitle": "대화 제목",
 		"identityTag": "아이덴티티 태그",
 		"identityTagTip": "아이덴티티: {title} ({id})",
 		"identityPicker": "아이덴티티 선택",

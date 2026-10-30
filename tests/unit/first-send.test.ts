@@ -5,6 +5,7 @@ import {
 	composerIds,
 	INITIAL_STARTUP,
 	isStartupBind,
+	leftBarCurrentRowId,
 	pendingSendFate,
 	requestPendingSend,
 	type StartupAttempt,
@@ -187,5 +188,25 @@ describe("the pending send", () => {
 		);
 		expect(other.phase).toBe("bound");
 		expect(pendingSendFate(p, other, true)).toBe("cancel");
+	});
+});
+
+// chat-title: the left bar and the middle pane's title read the same current row.
+describe("the left bar's current row", () => {
+	const bound = run(INITIAL_STARTUP, { type: "snapshot", ...old });
+	const started = run(bound, { type: "new_chat", reqId: "r1" });
+
+	it("while New chat starts, none: the chat it left is no longer the current row", () => {
+		expect(leftBarCurrentRowId(started, "c1")).toBe("");
+		const named = run(started, { type: "new_chat_result", reqId: "r1", ok: true, conversationId: "c2", current: old });
+		expect(leftBarCurrentRowId(named, "c1")).toBe("");
+	});
+
+	it("otherwise the chat the page is in", () => {
+		expect(leftBarCurrentRowId(INITIAL_STARTUP, "c1")).toBe("c1");
+		expect(leftBarCurrentRowId(bound, "c1")).toBe("c1");
+		const named = run(started, { type: "new_chat_result", reqId: "r1", ok: true, conversationId: "c2", current: old });
+		expect(leftBarCurrentRowId(run(named, { type: "snapshot", ...fresh }), "c2")).toBe("c2");
+		expect(leftBarCurrentRowId(run(started, { type: "navigate" }), "c1")).toBe("c1");
 	});
 });

@@ -559,7 +559,8 @@ describe("the page", () => {
 
 	it("the tag, the picker and the list tags are host slot entries that Layout can hide", () => {
 		const slots = buildUiSlots([], { locale: "en", t });
-		expect(slots["chat.header"].map((e) => e.id)).toEqual(["host:chat-identity"]);
+		// chat-title: the title sits before the tag (tests/unit/chat-title.test.ts).
+		expect(slots["chat.header"].map((e) => e.id)).toEqual(["host:chat-title", "host:chat-identity"]);
 		expect(slots["chat.empty"].map((e) => e.id)).toEqual(["host:identity-picker"]);
 		expect(slots["leftpanel.sessions"].map((e) => e.id)).toContain("host:lp-identity");
 		const hidden = buildUiSlots([], {

@@ -445,6 +445,7 @@
 		"openHistory": "История диалогов",
 		"openFiles": "Файлы",
 		"tldrTab": "TL;DR",
+		"chatTitle": "Название чата",
 		"identityTag": "Метка идентичности",
 		"identityTagTip": "Идентичность: {title} ({id})",
 		"identityPicker": "Выбор идентичности",

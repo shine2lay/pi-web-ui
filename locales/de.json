@@ -445,6 +445,7 @@
 		"openHistory": "Verlauf",
 		"openFiles": "Dateien",
 		"tldrTab": "TL;DR",
+		"chatTitle": "Chat-Titel",
 		"identityTag": "Identitäts-Tag",
 		"identityTagTip": "Identität: {title} ({id})",
 		"identityPicker": "Identitätsauswahl",

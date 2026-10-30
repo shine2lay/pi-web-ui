@@ -9798,7 +9798,28 @@ div.chead[role="button"]:focus-visible,
 .chat-header {
 	display: flex;
 	justify-content: flex-end;
+	align-items: center;
+	gap: 8px;
 	padding: 6px 12px 0;
+}
+.chat-header-tools {
+	display: flex;
+	align-items: center;
+	flex: none;
+}
+/* chat-title: the open chat's title on one line at the header's left, as tall as the identity tag beside
+   it (no taller header); a long one ends in an ellipsis, the full title is in its tooltip. */
+.chat-header-title {
+	flex: 1 1 auto;
+	min-width: 0;
+	margin: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 13px;
+	font-weight: 600;
+	line-height: 21px;
+	color: var(--text);
 }
 .chat-empty-slots {
 	margin-top: 12px;

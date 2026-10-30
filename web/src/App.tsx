@@ -24,6 +24,7 @@ import { filesPanelVisible } from "./files-visibility";
 import { MessageList } from "./components/MessageList";
 import { SwitchOverlay } from "./components/SwitchOverlay";
 import { switchTargetTitle } from "./switch-pending";
+import { chatTitleOnScreen } from "./chat-title";
 import { isRolesOpen, markRolesOpen, ROLES_OPEN_FAILED } from "./roles-open-guard";
 import { nextListKey, type ListKey } from "./chat-cache";
 import { ChatInput } from "./components/ChatInput";
@@ -60,6 +61,7 @@ import {
 import {
 	buildUiSlots,
 	CHAT_IDENTITY_ENTRY_ID,
+	CHAT_TITLE_ENTRY_ID,
 	IDENTITY_PICKER_ENTRY_ID,
 	withPluginViewItems,
 	type UiDiagnostic,
@@ -77,7 +79,7 @@ import { ReconnectingNote } from "./components/ReconnectingNote";
 import { showBanner, dismissBanner, dismissBannersWhere } from "./banner-notice";
 import { ensurePluginViewLoaded } from "./plugin-loader";
 import { insertTextAtCursor, removeMentionFromComposer } from "./composer-bridge";
-import { attachmentScope, composerIds } from "./first-send";
+import { attachmentScope, composerIds, leftBarCurrentRowId } from "./first-send";
 import type { ComposerAttachmentHost } from "./recovery-composer";
 import { useComposerSessionReset } from "./use-composer-session";
 import {
@@ -1595,11 +1597,43 @@ export function App() {
 		},
 		[chatIdentity, identityCapable, openIdentityMenu, pickIdentity],
 	);
-	// The header bar only when something in it shows (the tag only for a chat with an identity).
-	const chatHeaderShown = useMemo(
-		() => uiChatHeader.filter((e) => e.id !== CHAT_IDENTITY_ENTRY_ID || chatIdentity),
-		[uiChatHeader, chatIdentity],
+	// chat-title: the open chat's title at the top of the middle pane, the left bar's own name for the chat
+	// on screen, chosen from the chat's state as it is (web/src/chat-title.ts).
+	const chatTitle = useMemo(
+		() =>
+			chatTitleOnScreen({
+				activeConversationId: chat.activeConversationId,
+				startup: chat.startup,
+				state: chat.state,
+				preview: chat.preview,
+				pendingSwitch: chat.pendingSwitch,
+				conversations: chat.conversations,
+				sessions: chat.sessions,
+			}),
+		[
+			chat.activeConversationId,
+			chat.startup,
+			chat.state,
+			chat.preview,
+			chat.pendingSwitch,
+			chat.conversations,
+			chat.sessions,
+		],
 	);
+	// The header bar only when something in it shows (the tag only for a chat with an identity, the title
+	// only for a chat that has one).
+	const chatHeaderShown = useMemo(
+		() =>
+			uiChatHeader.filter(
+				(e) => (e.id !== CHAT_IDENTITY_ENTRY_ID || chatIdentity) && (e.id !== CHAT_TITLE_ENTRY_ID || chatTitle),
+			),
+		[uiChatHeader, chatIdentity, chatTitle],
+	);
+	// chat-title: the title is a heading, not a toolbar control, so the header's entries go in a toolbar on
+	// each side of it (the ones ordered before it in Settings > UI layout on its left, the rest on its right).
+	const chatTitleAt = chatHeaderShown.findIndex((e) => e.id === CHAT_TITLE_ENTRY_ID);
+	const chatHeaderBefore = chatTitleAt < 0 ? [] : chatHeaderShown.slice(0, chatTitleAt);
+	const chatHeaderAfter = chatTitleAt < 0 ? chatHeaderShown : chatHeaderShown.slice(chatTitleAt + 1);
 	// debug-controls (Ops #621; owner, 2026-10-28, m77409): the Tools button (Tool Inspector) only with ?recovery=1
 	// or ?debugTools=1 (web/src/url-flags.ts), so a normal page has no header bar left with nothing else in it.
 	const toolInspectorShown = useMemo(() => showToolInspector(), []);
@@ -2163,11 +2197,8 @@ export function App() {
 							elsewhere={chat.elsewhere}
 							queueTasks={chat.queueTasks}
 							sessions={chat.sessions}
-							// first-send: while New chat starts, the chat it left is no longer the current row, so
-							// clicking it goes back there (a navigation that cancels a waiting send).
-							activeConversationId={
-								chat.startup.via === "new_chat" && chat.startup.phase === "starting" ? "" : chat.activeConversationId
-							}
+							// first-send: while New chat starts, no current row (the chat title reads the same rule).
+							activeConversationId={leftBarCurrentRowId(chat.startup, chat.activeConversationId)}
 							pendingSwitch={chat.pendingSwitch?.target ?? null}
 							/* 宿主 UI 扩展点（contextmenu.session）：条目由 buildUiSlots 算好，左栏只管开菜单 +
 								   分派它自己的两条内置项（host:conv-dismiss-subagents / host:conv-force-dismiss）。 */
@@ -2192,11 +2223,30 @@ export function App() {
 							</>
 						)}
 						{/* W2: the inspector addresses this page's open chat, alongside existing header slots. */}
+						{/* chat-title: the title, a heading on one line (the full title in its tooltip), between the
+						    toolbars of the entries ordered before and after it. */}
 						{(chatHeaderShown.length > 0 || (toolInspectorShown && chat.engine === "pi")) && (
-							<div className="chat-header" role="toolbar">
-								{renderSlotToolbar(chatHeaderShown, onUiAction, renderIdentityEntry)}
-								{toolInspectorShown && chat.engine === "pi" && (
-									<ToolInspectorButton conversationId={chat.state?.conversationId ?? ""} disabled={!!switchTarget} />
+							<div className="chat-header">
+								{chatHeaderBefore.length > 0 && (
+									<div className="chat-header-tools" role="toolbar" aria-label={t("uiLayoutChatHeader")}>
+										{renderSlotToolbar(chatHeaderBefore, onUiAction, renderIdentityEntry)}
+									</div>
+								)}
+								{chatTitleAt >= 0 && chatTitle && (
+									<h1 className="chat-header-title" title={chatTitle}>
+										{chatTitle}
+									</h1>
+								)}
+								{(chatHeaderAfter.length > 0 || (toolInspectorShown && chat.engine === "pi")) && (
+									<div className="chat-header-tools" role="toolbar" aria-label={t("uiLayoutChatHeader")}>
+										{renderSlotToolbar(chatHeaderAfter, onUiAction, renderIdentityEntry)}
+										{toolInspectorShown && chat.engine === "pi" && (
+											<ToolInspectorButton
+												conversationId={chat.state?.conversationId ?? ""}
+												disabled={!!switchTarget}
+											/>
+										)}
+									</div>
 								)}
 							</div>
 						)}

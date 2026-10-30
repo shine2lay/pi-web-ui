@@ -85,6 +85,13 @@ export function composerIds(s: StartupAttempt, real: ChatIds, isDsh: boolean): C
 	return real;
 }
 
+/** The left bar's current row ('' = none). While New chat starts, the chat it left is no longer the current
+ *  row, so clicking it goes back there (a navigation that cancels a waiting send). The middle pane's title
+ *  (chat-title) reads the same row. */
+export function leftBarCurrentRowId(s: Pick<StartupAttempt, "via" | "phase">, activeConversationId: string): string {
+	return s.via === "new_chat" && s.phase === "starting" ? "" : activeConversationId;
+}
+
 /** The key the composer's attachments are reset by: one per attempt until the user leaves its chat. */
 export function attachmentScope(s: StartupAttempt, realSessionId: string): string {
 	if (s.phase === "starting") return `startup:${s.generation}`;

@@ -445,6 +445,7 @@
 		"openHistory": "履歴チャット",
 		"openFiles": "ファイル一覧",
 		"tldrTab": "TL;DR",
+		"chatTitle": "チャットのタイトル",
 		"identityTag": "アイデンティティ タグ",
 		"identityTagTip": "アイデンティティ: {title} ({id})",
 		"identityPicker": "アイデンティティの選択",

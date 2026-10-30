@@ -78,6 +78,9 @@ export function switchTargetTitle(
 	conversations: readonly { id: string; title: string; sessionPath?: string }[],
 	/** roles-needs-you: words instead of the file's name, for a chat the Roles page opened. */
 	fallback?: string,
+	/** chat-title: the most characters of a History name or first message (the overlay's 60 by default; at
+	 *  most 300, displayPreview's budget), so the middle pane's title can show them whole like the left bar. */
+	maxChars = 60,
 ): string {
 	if (target.kind === "conversation") {
 		return conversations.find((c) => c.id === target.id)?.title ?? displayPreview(target.id);
@@ -85,9 +88,9 @@ export function switchTargetTitle(
 	const s = sessions.find((x) => sameSessionPath(x.path, target.path));
 	const name = (s?.name ?? "").trim();
 	// Preserve the existing explicit-name rendering budget; do not change stored/plugin names.
-	if (name) return name.length > 60 ? `${name.slice(0, 60)}…` : name;
+	if (name) return name.length > maxChars ? `${name.slice(0, maxChars)}…` : name;
 	const firstMessage = (s?.firstMessage ?? "").trim();
-	if (firstMessage) return displayPreview(firstMessage, 60);
+	if (firstMessage) return displayPreview(firstMessage, maxChars);
 	const live = conversations.find((c) => sameSessionPath(c.sessionPath, target.path));
 	if (live) return live.title;
 	if (fallback !== undefined) return fallback;

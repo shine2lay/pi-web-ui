@@ -123,4 +123,16 @@ describe("switch-pending", () => {
 		const id = "i".repeat(400);
 		expect(Array.from(switchTargetTitle({ kind: "conversation", id }, [], [])).length).toBe(301);
 	});
+
+	it("chat-title: a longer budget keeps a History name or first message whole; the overlay's 60 stays the default", () => {
+		const target = { kind: "session" as const, path: P };
+		const name = "Queue #651: Show which model each chat is using and let me switch it from the chat header";
+		expect(name.length).toBeGreaterThan(60);
+		expect(switchTargetTitle(target, [{ path: P, name }], [], "", 300)).toBe(name);
+		expect(switchTargetTitle(target, [{ path: P, name }], [])).toBe(`${name.slice(0, 60)}…`);
+		const firstMessage = "x".repeat(200);
+		expect(switchTargetTitle(target, [{ path: P, firstMessage }], [], "", 300)).toBe(firstMessage);
+		const huge = "n".repeat(701);
+		expect(switchTargetTitle(target, [{ path: P, name: huge }], [], "", 300)).toBe(`${huge.slice(0, 300)}…`);
+	});
 });

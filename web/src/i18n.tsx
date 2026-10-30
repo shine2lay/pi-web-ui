@@ -1887,6 +1887,8 @@ export const en = {
 	toolInfoSchemaDropped: "The parameter schema is too large and was omitted (see the raw JSON below)",
 	toolInfoRawSchema: "Raw JSON schema",
 	toolInfoRequired: "required",
+	/* chat-title: the open chat's title at the top of the middle pane (its row in Settings > UI layout) */
+	chatTitle: "Chat title",
 	/* identities (pi-identity): the blank-chat picker, the tags, the chat menu, Settings > Identities */
 	identityTag: "Identity tag",
 	identityTagTip: "Identity: {title} ({id})",
