@@ -166,7 +166,7 @@ import {
 	findTailDanglingToolCalls,
 	healDanglingToolCallFile,
 } from "./dangling-tools.js";
-import { contextMessagesOf, scanTranscriptFile, type TranscriptScan } from "./transcript-scan.js";
+import { contextMessagesOf, openScannedSession, scanTranscriptFile, type TranscriptScan } from "./transcript-scan.js";
 import { removeQueuedByIndexOrText } from "./queue-utils.js";
 import type {
 	PluginAgentTool,
@@ -13745,9 +13745,11 @@ export class ClientSession {
 		} catch {
 			// Best-effort: the real snapshot is on its way regardless.
 		} finally {
-			// Drop the parsed entries before the SDK loads its own copy: holding both would
-			// double the peak memory of an open (a 267 MB transcript parses to ~0.5 GB).
-			scan.entries.length = 0;
+			// open-scan (Ops #638): entries the SDK can take as they are (openScannedSession) are kept
+			// and handed over, so the file is parsed once. Any others are dropped before the SDK loads
+			// its own copy: holding both would double the peak memory of an open (a 267 MB transcript
+			// parses to ~0.5 GB).
+			if (scan.problem !== null || !scan.sdkEquivalent) scan.entries.length = 0;
 		}
 		return scan;
 	}
@@ -16186,7 +16188,12 @@ export class ClientSession {
 			const fastOpen = scan !== null && scan.problem === null;
 			if (validate && !fastOpen) throw new Error("Participant recovery refused: transcript requires owner repair");
 			if (!fastOpen) this.repairTranscriptFileBeforeOpen(targetPath);
-			const sessionManager = SessionManager.open(targetPath);
+			// open-scan (Ops #638): hand the scan's entries to the SDK instead of letting it read and
+			// parse the whole file a second time; null (changed since the scan, or not loadable as it
+			// is) falls back to the SDK's own load. Either way the scan no longer holds the entries.
+			const handedOver = fastOpen && scan ? openScannedSession(scan) : null;
+			if (scan) scan.entries = [];
+			const sessionManager = handedOver ?? SessionManager.open(targetPath);
 			validate?.(sessionManager);
 			const targetCwd = sessionManager.getCwd();
 			if (validate) {

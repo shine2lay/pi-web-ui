@@ -345,6 +345,8 @@ describe("W2 engine window metadata", () => {
 			leafId: "entry-4",
 			problem: null,
 			ms: 0,
+			stamp: null,
+			sdkEquivalent: false,
 		};
 		const frames: ServerMessage[] = [];
 		const harness = {
