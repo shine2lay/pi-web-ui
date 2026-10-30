@@ -274,6 +274,15 @@ import {
 } from "./rewind.js";
 import { DEFAULT_COMPACTION_RESERVE_TOKENS, effectiveSoftCap, softCapToReserve } from "./soft-cap.js";
 import { testStartupFault } from "./test-startup-fault.js";
+import {
+	isOpenGaveWay,
+	makeOpenChain,
+	OPEN_CHAIN_TIMING,
+	type OpenChainTiming,
+	type OpenGaveWayError,
+	type OpenJob,
+	type OpenRecent,
+} from "./open-chain.js";
 import { pruneContextHierarchically } from "./context-budget.js";
 import { decodeText } from "./text-sniff.js";
 import { makeEditSoftTool } from "./edit-soft-tool.js";
@@ -532,7 +541,7 @@ import {
 	type DurableSessionSummary,
 	type DurableThinkingLevel,
 } from "./durable-session-port.js";
-import { sessionIndex } from "./session-index.js";
+import { defaultSessionDirPath, sessionIndex } from "./session-index.js";
 import { ParticipantLifecycle, type ParticipantTarget, type ParticipantLease } from "./participant-lifecycle.js";
 import { homeChatOf, identityIdOnBranch } from "./identities.js";
 import {
@@ -4334,8 +4343,44 @@ export class ClientSession {
 	}
 	/** 所有客户端共用的一份对话表（见上）。 */
 	private static readonly sharedConvs = new Map<string, Conversation>();
-	/** One persisted-session opener across browser, scheduler and participant clients. */
-	private static readonly sessionOpenChain = makeChain();
+	/** One persisted-session opener across browser, scheduler and participant clients.
+	 *  open-chain (Ops #641): each job is labelled, logged past a minute and bounded (server/open-chain.ts). */
+	static openChainTiming: OpenChainTiming = OPEN_CHAIN_TIMING;
+	private static readonly sessionOpenChain = makeOpenChain({ timing: () => ClientSession.openChainTiming });
+	/** open-chain: what a job of this window is, for the log and for what it keeps if it gives way. Static, like the
+	 *  `*Now` bodies' `ClientSession.prototype.x.call(this)`, so a caller's `this` needs only its fields. */
+	private static openJob(cs: ClientSession, label: string, disk: OpenJob["disk"]): OpenJob {
+		return { label: `${label} in ${cs.cwd}`, owner: cs.clientId, disk };
+	}
+	/** open-chain: a transcript a job may open, as one key (an absolute path resolved; durable:// as is; anything
+	 *  else, e.g. a bare session id, can't be told apart from another spelling of the same chat: "any"). */
+	private static openDiskKey(path: string): string {
+		if (path.startsWith("durable://")) return path;
+		if (path.startsWith("/")) return resolve(path);
+		return "any";
+	}
+	/** open-chain: a job that opens `cwd`'s most recent chat from disk, unless `landsElsewhere()` (an open chat to
+	 *  adopt): the same pick createNow/setCwdNow make (recentRegularFile), asked only when another open is held. */
+	private static openRecentDisk(cwd: string, landsElsewhere: () => boolean): OpenRecent {
+		return {
+			dir: resolve(defaultSessionDirPath(cwd)),
+			newest: () => {
+				if (landsElsewhere()) return null;
+				const file = recentRegularFile(cwd);
+				return file ? resolve(file) : null;
+			},
+		};
+	}
+	/** open-chain: tell this window its open gave way (the switch/new-chat paths' own failures do the same). */
+	private static emitOpenGaveWay(cs: ClientSession, err: OpenGaveWayError): void {
+		cs.emit({ type: "notice", level: "error", text: err.message, textEn: err.message });
+	}
+	/** open-chain: a window's create that gave way and then finished has no window to go to: let it go the way a
+	 *  leaving window does (its chats stay open; dispose only takes the shutdown path when no other window is left,
+	 *  so with none left it is kept instead). */
+	private static dropLateClient(cs: ClientSession): void {
+		if (ClientSession.liveSessions.size > 1) void cs.dispose().catch(() => {});
+	}
 	static participantRetained: ((sessionId: string, role: string) => boolean) | undefined;
 	/** Wave 3.4: optional process-wide DurableSessionPort & Wave 2 PendingRecoveryCoordinator. */
 	static durableSessionPort: DurableSessionPort | null = null;
@@ -5991,18 +6036,31 @@ export class ClientSession {
 		stateStore: ClientStateStore,
 		opts?: { blank?: boolean; durablePort?: DurableSessionPort | null; adoptId?: string | null },
 	): Promise<ClientSession> {
-		return ClientSession.sessionOpenChain(async () => {
-			// An opener may have finished while this browser was waiting for the gate.
-			const existing = opts?.adoptId ?? (!opts?.blank ? pickAdoptTarget(cwd, ClientSession.openConversations()) : null);
-			const cs = await ClientSession.createNow(
-				clientId,
-				cwd,
-				stateStore,
-				existing ? { ...opts, blank: true, adoptId: existing } : opts,
-			);
-			if (existing) cs.adoptConversation(existing);
-			return cs;
-		});
+		const job: OpenJob = {
+			label: `client create (${opts?.blank ? "blank" : opts?.adoptId ? `adopt ${opts.adoptId}` : "most recent chat"}) in ${cwd}`,
+			owner: clientId,
+			disk:
+				opts?.blank || opts?.adoptId
+					? null
+					: ClientSession.openRecentDisk(cwd, () => !!pickAdoptTarget(cwd, ClientSession.openConversations())),
+		};
+		return ClientSession.sessionOpenChain(
+			job,
+			async () => {
+				// An opener may have finished while this browser was waiting for the gate.
+				const existing =
+					opts?.adoptId ?? (!opts?.blank ? pickAdoptTarget(cwd, ClientSession.openConversations()) : null);
+				const cs = await ClientSession.createNow(
+					clientId,
+					cwd,
+					stateStore,
+					existing ? { ...opts, blank: true, adoptId: existing } : opts,
+				);
+				if (existing) cs.adoptConversation(existing);
+				return cs;
+			},
+			ClientSession.dropLateClient,
+		);
 	}
 
 	private static async createNow(
@@ -13294,7 +13352,17 @@ export class ClientSession {
 	}
 
 	async newChat(_preset?: string, ephemeral?: boolean): Promise<boolean> {
-		return ClientSession.sessionOpenChain(() => ClientSession.prototype.newChatNow.call(this, _preset, ephemeral));
+		try {
+			return await ClientSession.sessionOpenChain(
+				ClientSession.openJob(this, ephemeral ? "new chat (ephemeral)" : "new chat", null),
+				() => ClientSession.prototype.newChatNow.call(this, _preset, ephemeral),
+			);
+		} catch (err) {
+			// open-chain: same answer as newChatNow's own failure (a notice, false).
+			if (!isOpenGaveWay(err)) throw err;
+			ClientSession.emitOpenGaveWay(this, err);
+			return false;
+		}
 	}
 
 	/** first-send: this window's last New chat by request id (one kept; a reconnect asks for it again). */
@@ -13303,10 +13371,16 @@ export class ClientSession {
 	/** first-send: New chat answered with the chat it made current, read inside the open chain so a
 	 *  later switch can't be mistaken for it. Never rejects: a failure is ok:false (its notice is sent). */
 	newChatRequest(reqId: string | undefined, preset?: string, ephemeral?: boolean): Promise<NewChatOutcome> {
-		const outcome = ClientSession.sessionOpenChain(async (): Promise<NewChatOutcome> => {
-			const ok = await ClientSession.prototype.newChatNow.call(this, preset, ephemeral);
-			return ok ? { ok: true, conversationId: this.activeId } : { ok: false };
-		}).catch((): NewChatOutcome => ({ ok: false }));
+		const outcome = ClientSession.sessionOpenChain(
+			ClientSession.openJob(this, ephemeral ? "new chat (ephemeral)" : "new chat", null),
+			async (): Promise<NewChatOutcome> => {
+				const ok = await ClientSession.prototype.newChatNow.call(this, preset, ephemeral);
+				return ok ? { ok: true, conversationId: this.activeId } : { ok: false };
+			},
+		).catch((err: unknown): NewChatOutcome => {
+			if (isOpenGaveWay(err)) ClientSession.emitOpenGaveWay(this, err);
+			return { ok: false };
+		});
 		if (reqId) this.lastNewChat = { reqId, outcome };
 		return outcome;
 	}
@@ -16026,14 +16100,24 @@ export class ClientSession {
 	 */
 	/** have：switch-cache，见 switchConversation。 */
 	async switchSession(path: string, have?: CachedWindow, validate?: (sm: SessionManager) => void): Promise<void> {
-		await ClientSession.sessionOpenChain(async () => {
-			this.switchHave = have ?? null;
-			try {
-				await this.switchSessionNow(path, validate);
-			} finally {
-				this.switchHave = null;
-			}
-		});
+		try {
+			await ClientSession.sessionOpenChain(
+				ClientSession.openJob(this, `open ${path}`, ClientSession.openDiskKey(path)),
+				async () => {
+					this.switchHave = have ?? null;
+					try {
+						await this.switchSessionNow(path, validate);
+					} finally {
+						this.switchHave = null;
+					}
+				},
+			);
+		} catch (err) {
+			// open-chain: same answer as switchSessionNow's own failure (switch_failed, resolve), so the page's
+			// loading state ends.
+			if (!isOpenGaveWay(err)) throw err;
+			this.emitSwitchFailed({ kind: "session", path }, err.message, err.message);
+		}
 	}
 
 	private async switchSessionNow(path: string, validate?: (sm: SessionManager) => void): Promise<void> {
@@ -17275,7 +17359,28 @@ export class ClientSession {
 	}
 
 	async setCwd(newCwd: string): Promise<void> {
-		await ClientSession.sessionOpenChain(() => ClientSession.prototype.setCwdNow.call(this, newCwd));
+		try {
+			// open-chain: a folder switch opens that folder's most recent chat, unless one of its chats is open here
+			// (setCwdNow's same pick; a pseudo client then lands blank, also not from disk).
+			let abs: string | null = null;
+			try {
+				abs = resolveCwdTarget(newCwd.trim(), this.cwd);
+			} catch {
+				// can't tell where: "any"
+			}
+			const target = abs;
+			const disk =
+				target === null
+					? "any"
+					: ClientSession.openRecentDisk(target, () => !!pickAdoptTarget(target, this.convs.values()));
+			await ClientSession.sessionOpenChain(ClientSession.openJob(this, `folder switch to ${newCwd}`, disk), () =>
+				ClientSession.prototype.setCwdNow.call(this, newCwd),
+			);
+		} catch (err) {
+			// open-chain: same answer as setCwdNow's own failure (a notice, resolve).
+			if (!isOpenGaveWay(err)) throw err;
+			ClientSession.emitOpenGaveWay(this, err);
+		}
 	}
 
 	private async setCwdNow(newCwd: string): Promise<void> {
