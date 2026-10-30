@@ -27,6 +27,24 @@
 # PI_SEALED_REPORT_FILE=<file> (outside the temp home) gets a JSON summary, for tests/run-smoke.mjs.
 set -uo pipefail
 
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo="$(cd "$here/.." && pwd)"
+# Check before even the already-sealed fast path: PI_SEALED is a fence marker, not CPU membership.
+cpu_launch="$repo/tests/lib/sealed-test-launch.mjs"
+cpu_entry=0
+env -u NODE_OPTIONS node "$cpu_launch" entry || cpu_entry=$?
+case "$cpu_entry" in
+0) ;;
+3)
+	# Bootstrap must not load caller hooks. Restore them only on the payload: a nested seal
+	# keeps its own fence, while a fresh seal will replace them with its normal allowlist.
+	payload_env=()
+	[ "${NODE_OPTIONS+x}" = x ] && payload_env=(env "NODE_OPTIONS=$NODE_OPTIONS")
+	exec env -u NODE_OPTIONS node "$cpu_launch" exec -- "${payload_env[@]}" bash "$here/sealed.sh" "$@"
+	;;
+*) exit "$cpu_entry" ;;
+esac
+
 if [ -n "${PI_SEALED:-}" ]; then
 	exec "$@"
 fi
@@ -56,8 +74,6 @@ if [ "${VITEST_MAX_WORKERS+x}" = x ]; then
 	esac
 fi
 
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo="$(cd "$here/.." && pwd)"
 fence="$repo/tests/lib/sealed-fence.cjs"
 real_home="$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)"
 real_home="${real_home:-$HOME}"

@@ -9,6 +9,20 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
+# Shared test CPU entry precedes sealing (which scrubs environment); no marker skips this check.
+cpu_launch="$PWD/tests/lib/sealed-test-launch.mjs"
+cpu_entry=0
+env -u NODE_OPTIONS node "$cpu_launch" entry || cpu_entry=$?
+case "$cpu_entry" in
+0) ;;
+3)
+	payload_env=()
+	[ "${NODE_OPTIONS+x}" = x ] && payload_env=(env "NODE_OPTIONS=$NODE_OPTIONS")
+	exec env -u NODE_OPTIONS node "$cpu_launch" exec -- "${payload_env[@]}" bash "$PWD/scripts/check.sh" "$@"
+	;;
+*) exit "$cpu_entry" ;;
+esac
+
 # Always the same clock zone (some date tests, e.g. notes-plugin.test.ts, expect UTC), and always
 # sealed: every step runs in a temp home with no model keys, so no test can touch real chats
 # (scripts/sealed.sh; it just runs the command when we are already inside a sealed run).

@@ -27,6 +27,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { testCpu, workerResultToken } from "./sealed-test-launch.mjs";
 
 /** The service whose restart would stop a run started inside it. */
 export const SERVICE = process.env.PI_SEALED_SERVICE || "pi-web-ui.service";
@@ -222,6 +223,7 @@ export async function follow(
 		everyMs = 1000,
 		alive = isAlive,
 		unitActive = unitIsActive,
+		jobResult = (token) => testCpu.result(token),
 		from = 0,
 		graceLooks = 2,
 	} = {},
@@ -250,15 +252,46 @@ export async function follow(
 		}
 	};
 	let quiet = 0;
+	let unconfirmedNotice = false;
 	for (;;) {
 		drain();
-		const code = exitOf(dir);
-		if (code !== undefined) {
-			drain();
-			return code;
+		const run = runOf(dir);
+		let going;
+		if (run?.transport === "test-cpu") {
+			// Await the worker's terminal receipt, not the runner's earlier exit file: the worker
+			// drains stdout and may still be writing it. Token state also survives a follower restart.
+			const recovered = run.token ? { token: run.token } : workerResultToken(dir);
+			if (!recovered.token && !recovered.error) {
+				// Starter death/elapsed looks cannot prove whether dispatch succeeded. Keep this
+				// explicitly unknown until the surviving worker publishes identity or its receipt.
+				if (!unconfirmedNotice) {
+					write("\n[sealed] dispatch unconfirmed: waiting for the worker's identity or final receipt; it may never have launched. Ctrl-C leaves this follower only, not the job. Do not retry the start.\n");
+					unconfirmedNotice = true;
+				}
+				await sleep(everyMs);
+				continue;
+			}
+			const result = recovered.token ? jobResult(recovered.token) : { state: "unknown", error: recovered.error };
+			if (result.state === "finished") {
+				drain();
+				if (result.error) write(`\n✗ test job failed: ${result.error}\n`);
+				return result.code;
+			}
+			going = result.state === "running";
+			if (!going && quiet === graceLooks) {
+				drain();
+				write(`\n✗ test-cpu result unavailable: ${result.error || result.state}\n`);
+				return 1;
+			}
+		} else {
+			const code = exitOf(dir);
+			if (code !== undefined) {
+				drain();
+				return code;
+			}
+			const pid = pidOf(dir);
+			going = pid !== undefined ? alive(pid) : unitActive(run?.unit);
 		}
-		const pid = pidOf(dir);
-		const going = pid !== undefined ? alive(pid) : unitActive(runOf(dir)?.unit);
 		if (going) quiet = 0;
 		else if (++quiet > graceLooks) {
 			write(

@@ -19,7 +19,7 @@
  *
  * queue-side-by-side:
  *  - Started from a chat (inside pi-web-ui's service, whose restart stops everything in it), it starts
- *    itself again outside it (systemd-run --user, a unit pi-sealed-<time>) and shows that run's output
+ *    itself again outside it (shared CPU job; legacy user unit while inactive) and shows its output
  *    until it ends, with its exit code. A restart cuts this command off, but not the run:
  *      node tests/run-sealed.mjs --result             # how this folder's newest run went (waits for its end)
  *      node tests/run-sealed.mjs --result --out=<dir> # that run
@@ -27,7 +27,7 @@
  *  - At most 2 suites run at once (PI_SEALED_MAX_SUITES): the next one waits for a free slot and says so.
  *  - <out> also holds run.json, pid, run.log (the output) and exit (the exit code, once it has ended).
  */
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
 	appendFileSync,
 	existsSync,
@@ -42,6 +42,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { format } from "node:util";
 import { findRun, follow, inService, runOf, runsBase, takeSlot } from "./lib/sealed-runs.mjs";
+import { enterTestCpu, recordDetachedIdentity, startSealedRun } from "./lib/sealed-test-launch.mjs";
 
 // queue-side-by-side: the run this script started outside pi-web-ui's service (below) takes the
 // environment of the command that started it, exactly: systemd gives a service the user manager's own.
@@ -118,47 +119,48 @@ for (const n of named) {
 
 // queue-side-by-side: a chat's bash runs inside pi-web-ui's service, and a pi-web-ui restart (an
 // install) stops everything in it, a long suite too. So, started there, this starts itself again
-// outside it, as a systemd user service of its own, and just shows that run's output (run.log) until
-// it ends. Cut off by a restart, `node tests/run-sealed.mjs --result` picks it up again.
+// outside it, in the shared test CPU slice (legacy user service while inactive), and shows its log.
+// Decide here BEFORE foreground entry loses the originating cgroup. --result picks it up after restart.
 if (!envFile && !args.includes("--here") && inService()) {
-	const unit = `pi-sealed-${stamp}`;
-	const logFile = join(out, "run.log");
-	const passOn = join(out, "env.json");
-	writeFileSync(join(out, "run.json"), JSON.stringify({ repo: repoKey, args, unit, at: new Date().toISOString() }));
-	writeFileSync(passOn, JSON.stringify(process.env), { mode: 0o600 });
-	const r = spawnSync(
-		"systemd-run",
-		[
-			"--user",
-			"--quiet",
-			"--collect",
-			`--unit=${unit}`,
-			`--description=sealed tests of ${repoKey}`,
-			`--working-directory=${repoKey}`,
-			`--property=StandardOutput=append:${logFile}`,
-			`--property=StandardError=append:${logFile}`,
-			`--setenv=PI_SEALED_ENV_FILE=${passOn}`,
-			process.execPath,
-			fileURLToPath(import.meta.url),
-			...args.filter((a) => !a.startsWith("--out=")),
-			`--out=${out}`,
-		],
-		{ encoding: "utf8" },
-	);
-	if (r.status === 0) {
-		console.log(`running outside pi-web-ui's service, as ${unit}: a pi-web-ui restart doesn't stop it.`);
+	let r;
+	try {
+		r = startSealedRun({
+			repo: repoKey,
+			args,
+			out,
+			unit: `pi-sealed-${stamp}`,
+			runner: fileURLToPath(import.meta.url),
+		});
+	} catch (e) {
+		console.error(`couldn't confirm detached start (${e.message}); inspect ${out} before retrying`);
+		process.exit(125);
+	}
+	if (r.code === 0) {
+		console.log(`running outside pi-web-ui's service, as ${r.unit}: a pi-web-ui restart doesn't stop it.`);
 		console.log(
 			"  Cut off (by a restart, say)? `node tests/run-sealed.mjs --result` shows it again and waits for its end.",
 		);
-		console.log(`  Stop it: systemctl --user stop ${unit}`);
+		console.log(`  Stop it: ${r.stop}`);
 		process.exit(await follow(out));
 	}
-	rmSync(passOn, { force: true });
-	rmSync(join(out, "run.json"), { force: true });
-	const why = (r.stderr || r.error?.message || `exit ${r.status}`).trim();
 	console.log(
-		`couldn't start it outside pi-web-ui's service (${why}); running it here, where a pi-web-ui restart stops it`,
+		`couldn't start it outside pi-web-ui's service (${r.error}); trying CPU entry here, where a pi-web-ui restart stops it`,
 	);
+}
+
+// Also used after a failed detach; re-exec explicitly disables another detach attempt, not placement.
+try {
+	recordDetachedIdentity(out, runOf(out));
+	enterTestCpu([
+		process.execPath,
+		fileURLToPath(import.meta.url),
+		...args.filter((a) => !a.startsWith("--out=")),
+		"--here",
+		`--out=${out}`,
+	]);
+} catch (e) {
+	console.error(`couldn't enter shared test CPU placement (${e.message}); no tests started`);
+	process.exit(125);
 }
 
 // The run's record, for --result: run.json (the command that started this run outside the service
@@ -179,7 +181,7 @@ process.on("exit", (code) => {
 });
 process.on("SIGTERM", () => process.exit(143));
 process.on("SIGINT", () => process.exit(130));
-if (!envFile) {
+if (!envFile && !runOf(out)?.externalLog && runOf(out)?.transport !== "test-cpu") {
 	const logFile = join(out, "run.log");
 	for (const k of ["log", "error"]) {
 		const write = console[k].bind(console);
