@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { isMainThread } from "node:worker_threads";
+import { threadCpuMs } from "./thread-cpu-clock.js";
 import type { IdentityAlias, SourceCoverage, UsageFact, AccountingInput } from "./usage-accounting-contract.js";
 import type { WeekPassEvidence } from "./usage-accounting-evidence.js";
 import {
@@ -54,7 +55,10 @@ import {
 	type UsageWeekStoreLimits,
 } from "./usage-accounting-week-store.js";
 
-/** PLAN 5.1: 64 MiB and 2 s of work a pass, slices of at most 25 ms; 10 min grace after Monday 00:00 Pacific. */
+/** PLAN 5.1: 64 MiB and 2 s of work a pass, slices of at most 25 ms; 10 min grace after Monday 00:00 Pacific.
+ *  workMs and sliceMs are the Worker thread's CPU time (the default clock, threadCpuMs; Ops #643), so a pass does the
+ *  same work on a busy machine as on a quiet one. Wall-clock time bounds nothing here: the host's 5 min
+ *  no-finished-pass alarm is the hang guard. */
 export const PASS_LIMITS = Object.freeze({
 	bytes: 64 * 1024 * 1024,
 	workMs: 2000,
@@ -98,6 +102,7 @@ export interface PassOptions {
 	/** Verified source-role witness for a fact; B3 has no producer of its own (B4 wires one). Never from payerRole. */
 	roleOf?: (file: string | null, fact: UsageFact) => PassRole | null;
 	now?: () => number;
+	/** The work clock for workMs and sliceMs (ms). Default: the thread's CPU time (threadCpuMs), never wall-clock. */
 	clock?: () => number;
 	storeLimits?: Partial<UsageWeekStoreLimits>;
 	scan?: { files?: number; stats?: number };
@@ -336,7 +341,7 @@ export function openPassState(options: PassOptions): PassState {
 	const roots = checkPassRoots(options.sessionRoots, options.temperRoots);
 	const o = {
 		now: () => Date.now(),
-		clock: () => performance.now(),
+		clock: threadCpuMs,
 		...options,
 		sessionRoots: roots.roots,
 		temperRoots: roots.temperRoots,

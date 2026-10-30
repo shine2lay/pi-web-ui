@@ -19,6 +19,7 @@ import { resolve, sep } from "node:path";
 import { setImmediate as pause } from "node:timers/promises";
 import { isMainThread } from "node:worker_threads";
 import { GuardFileLock } from "./role-message-guard-lock.js";
+import { threadCpuMs } from "./thread-cpu-clock.js";
 import type {
 	CollectorIndexEntry,
 	CollectorIndexPage,
@@ -1185,7 +1186,10 @@ class NumericDiskIndex implements CollectorNumericIndex {
 	private ids = new Uint32Array(KEY_BITS);
 	private bits = new Int32Array(KEY_BITS);
 	private hashes = Buffer.alloc(KEY_BITS * 32);
-	private sliceAt = performance.now();
+	// Ops #643: the slice and its 100 ms unit guard count this thread's CPU work, not wall-clock time: on a busy
+	// machine the wall clock runs on while the thread waits for a core, which cut slices short and refused healthy
+	// units with store-capacity.
+	private sliceAt = threadCpuMs();
 	private sliceNodes = 0;
 	private maxWorkMs = 0;
 	private maxWorkNodes = 0;
@@ -1252,7 +1256,7 @@ class NumericDiskIndex implements CollectorNumericIndex {
 			this.work.headerReadBytes += INDEX_HEADER;
 			check(this.store.read(fd, 0, INDEX_HEADER).equals(this.header(kind)), "index-unavailable");
 		}
-		this.sliceAt = performance.now();
+		this.sliceAt = threadCpuMs();
 		this.sliceNodes = 0;
 	}
 	private async step(force = false, nodes = 1, reason: "final" | "flush" | "other" = "other"): Promise<void> {
@@ -1261,10 +1265,10 @@ class NumericDiskIndex implements CollectorNumericIndex {
 		if (
 			!force &&
 			this.sliceNodes < USAGE_STORE_LIMITS.indexSliceNodes &&
-			performance.now() - this.sliceAt < METER_LIMITS.sliceMs
+			threadCpuMs() - this.sliceAt < METER_LIMITS.sliceMs
 		)
 			return;
-		const elapsed = performance.now() - this.sliceAt;
+		const elapsed = threadCpuMs() - this.sliceAt;
 		this.maxWorkMs = Math.max(this.maxWorkMs, elapsed);
 		check(elapsed <= METER_LIMITS.unitWorkMs, "store-capacity");
 		if (force && reason === "final") this.work.finalYields++;
@@ -1273,7 +1277,7 @@ class NumericDiskIndex implements CollectorNumericIndex {
 			else this.work.otherQuantumYields++;
 		} else this.work.clockYields++;
 		await this.store.yield();
-		this.sliceAt = performance.now();
+		this.sliceAt = threadCpuMs();
 		this.sliceNodes = 0;
 	}
 	private async invoke<T>(fn: () => T | Promise<T>): Promise<T> {

@@ -485,6 +485,28 @@ All 131 small W1 cases passed and 7,396 tests passed overall; no deadline,
 clock, quantum, lease or durability check was weakened. H-WIRE-1g addresses
 that measured filesystem overhead; the staged limits remain as disclosed above.
 
+## The work clock is the thread's CPU time (Ops #643)
+
+The index's 25 ms slice and its 100 ms work-unit guard (`step()`) measure the
+Worker thread's CPU time (`server/thread-cpu-clock.ts` `threadCpuMs()`), not
+`performance.now()`. They limit how much work runs between yields, so on a busy
+machine the wall clock, which runs on while the thread waits for a core, cut
+slices short and refused healthy units with `store-capacity` (at load 140-190
+the old index stopped after 14-15 of 80 fixed steps). Both limits keep their values;
+only the clock changed. A unit that really does 100 ms of work is still refused.
+`tests/unit/usage-accounting-cpu-clock.test.ts` runs the same index work quiet
+and on a simulated busy machine and expects the same slices and no refusal; the
+test worker's `performance.now` prelude above is kept unchanged.
+
+The opt-in large case was not run on a quiet machine for this change: on
+2026-10-29 the load never fell under 4.0. It was run instead beside its parent
+(74e78e48), at the same time, on five big cores each (load about 70): both
+failed the same 240-second ingest deadline, after 504 s and 494 s of CPU, as the
+known risk above says. In that harness the parent's `performance.now()` already
+reads the thread's CPU time (the worker prelude), so the two read the same clock
+and the case cannot tell them apart. Logs:
+`~/kept-from-tmp/2026-10-29/usage-cpu-clock/w1-large-{base,new}-ab.log`.
+
 ## Handoffs
 
 W0 owns numeric semantics and replay validation. W1 owns storage and never

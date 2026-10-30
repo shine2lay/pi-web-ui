@@ -48,4 +48,13 @@ machine passes end partial and W5 reports stale. The pass fixture gives the pass
 test's real pass worker gets a prelude setting `performance.now` to its thread CPU time. Both are product code,
 outside a test-only change; reported to the Ops lead.
 
+Fixed by Ops #643 (H-USAGE-CPU-CLOCK-1): both budgets now count the Worker thread's CPU time
+(`server/thread-cpu-clock.ts` `threadCpuMs()`, the product twin of `tests/unit/load-independent.ts`'s, kept apart so a
+test's yardstick is never the code under test). The index's 25 ms slice and 100 ms unit guard read it directly; the
+pass's default `clock` is it. No wall-clock limit ends a healthy slice or pass; the host's 5-minute
+no-finished-pass alarm stays the hang guard. The test-side clocks above are unchanged and now only repeat what the
+product does. `tests/unit/usage-accounting-cpu-clock.test.ts` runs the same work quiet and on a simulated busy
+machine (a twentieth of a core, in turns) and fails on the old code (the index refuses with `store-capacity`; the
+pass reads nothing in most passes).
+
 Inventory, before and after runs and the broken-copy proofs: `/home/shinelay/kept-from-tmp/2026-10-29/gate-time/`.
