@@ -338,6 +338,9 @@ export const EXACT_SOURCE: Record<SourceState, { title: string; body: string; la
 	},
 };
 
+/** The page's words for a value nobody recorded, in every part of the Roles view (roles-exact/). */
+export const NR = "Not recorded";
+
 export function exactAge(since: number | null, now: number): string {
 	if (since === null) return "time unknown";
 	const minutes = Math.floor(Math.max(0, now - since) / 60_000);

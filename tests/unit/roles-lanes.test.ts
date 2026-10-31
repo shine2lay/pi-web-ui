@@ -2,7 +2,7 @@
 // Fixed queue entries only; no chats, models or writes.
 import { describe, expect, it } from "vitest";
 import { taskQueueFromEntries, taskQueueLaneUse, type TaskQueueEntryLike } from "../../server/task-queue.js";
-import { exactLanes } from "../../web/src/roles-exact-view.js";
+import { exactLanes } from "../../web/src/roles-exact/work-progress.js";
 import { projectUsefulRoles } from "../../web/src/roles-useful-model.js";
 
 const T0 = Date.parse("2026-10-18T09:00:00Z");

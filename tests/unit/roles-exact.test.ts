@@ -4,7 +4,9 @@
 // tracking producers or production fonts. Pixel checks use the separate reference recipe.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EXACT_SOURCE, exactWhen, projectExactRoles, type ExactRoles } from "../../web/src/roles-exact-model.js";
-import { approvalsTip, createExactRolesView, exactCardShifts } from "../../web/src/roles-exact-view.js";
+import { createExactRolesView } from "../../web/src/roles-exact-view.js";
+import { exactCardShifts } from "../../web/src/roles-exact/card-layout.js";
+import { approvalsTip } from "../../web/src/roles-exact/page-status.js";
 import { ringAnchor, ringLayout, stackLayout } from "../../web/src/roles-u0/layout.js";
 import { bindRolesSurface } from "../../web/src/roles-u0/surface.js";
 import type { SurfaceValue, SurfaceValues } from "../../web/src/roles-u0/types.js";

@@ -4,7 +4,8 @@
 // Fixed fictional data only; no chats, no server, no model.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { exactClock, projectExactRoles } from "../../web/src/roles-exact-model.js";
-import { createExactRolesView, exactProgress } from "../../web/src/roles-exact-view.js";
+import { createExactRolesView } from "../../web/src/roles-exact-view.js";
+import { exactProgress } from "../../web/src/roles-exact/work-progress.js";
 import { panelActivity, projectRolePanel } from "../../web/src/roles-panel-model.js";
 import { projectUsefulRoles, record } from "../../web/src/roles-useful-model.js";
 import type { SurfaceValue, SurfaceValues } from "../../web/src/roles-u0/types.js";

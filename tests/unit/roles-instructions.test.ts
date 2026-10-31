@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { readRoleInstructions } from "../../server/roles-instructions.js";
 import { projectInstructions } from "../../web/src/roles-exact-model.js";
-import { instructionsOf } from "../../web/src/roles-exact-view.js";
+import { instructionsOf } from "../../web/src/roles-exact/instructions.js";
 
 const AT = "2026-10-18T16:00:00.000Z";
 const NOW = Date.parse("2026-10-18T17:00:00Z");

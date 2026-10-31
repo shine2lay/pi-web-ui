@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { RolesEvidence, type RolesEvidencePaths } from "../../server/roles-evidence.js";
 import { terminalSessionEnvPrefix } from "../../server/terminals.js";
-import { exactEvidence } from "../../web/src/roles-exact-view.js";
+import { exactEvidence } from "../../web/src/roles-exact/work-progress.js";
 import { evidenceOf } from "../../web/src/roles-useful-model.js";
 
 const T = (hhmm: string) => Date.parse(`2026-10-18T${hhmm}:00.000Z`);
