@@ -1033,6 +1033,34 @@ export interface ConnTraceRecord {
 	shownMs?: number;
 }
 
+/** chat-open-timing (Ops #690): the page's own marks for one chat open, sent once it ends. Numbers,
+ *  flags and fixed words only: never a title, path or message. Durations are ms from the input that
+ *  started the open (its event time; "auto" opens: the moment it was asked for). */
+export interface ChatOpenReport {
+	type: "chat_open";
+	/** The id the page put in the switch request (`open`). */
+	open: string;
+	/** done: the chat showed; failed: it didn't open; left: another open replaced it; hidden: the tab was
+	 *  hidden before it showed (its times count hidden time). */
+	outcome: "done" | "failed" | "left" | "hidden";
+	via: "click" | "key" | "nav" | "auto";
+	startToRequestMs?: number;
+	/** The first frame carrying the chat itself (the server's preview or its snapshot). */
+	toFirstFrameMs?: number;
+	/** The frame after the list first showed what the server sent for it. */
+	toPaintMs?: number;
+	/** The frame after the list showed the page's own cached copy (may be out of date). */
+	toCachePaintMs?: number;
+	toDoneMs?: number;
+	device: "phone" | "desktop";
+	/** The tab stayed visible from start to report. */
+	visible: boolean;
+	/** The page had a cached copy of the chat to show at once. */
+	cached: boolean;
+	/** A test browser (navigator.webdriver or headless), not a person. */
+	automated: boolean;
+}
+
 /** Recovery identity describes the exact browser-owned copy, never an execution receipt. */
 export interface CommandRecoveryIdentity {
 	id: string;
@@ -1079,6 +1107,8 @@ export type ClientCommand =
 	| { type: "ping"; id?: number }
 	/** reconnect-trace: finished "Reconnecting…" episodes (sent only when ready.connTrace.on). */
 	| { type: "conn_trace"; records: ConnTraceRecord[] }
+	/** chat-open-timing: one open's page marks (sent only when ready.connTrace.on). */
+	| ChatOpenReport
 	/** Browser UI language changed (or first report after hello) — server
 	 *  persists it per client and uses it for tool return values / AI-facing
 	 *  prompts. "zh" (zh-CN/…) → Chinese; anything else → English
@@ -1329,8 +1359,9 @@ export type ClientCommand =
 	  }
 	| { type: "list_sessions" }
 	// switch-cache：have = 客户端缓存里这条对话的窗口（没有就不带，服务端照常发整份）。
-	| { type: "switch_session"; path: string; have?: CachedWindow }
-	| { type: "switch_conversation"; id: string; have?: CachedWindow }
+	// chat-open-timing: open = the page's id for this open, matched with its later chat_open report.
+	| { type: "switch_session"; path: string; have?: CachedWindow; open?: string }
+	| { type: "switch_conversation"; id: string; have?: CachedWindow; open?: string }
 	/** TL;DR tab 里折叠（collapsed=true）或重新展开这些行（tldr-collapse）。服务端记进会话，
 	 *  然后给所有正看着这条对话的窗口发快照。conversationId 对不上当前对话就不记。 */
 	| { type: "tldr_collapse"; ids: string[]; collapsed: boolean; conversationId?: string }

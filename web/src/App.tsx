@@ -3,6 +3,7 @@ import {
 	Suspense,
 	useCallback,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -22,6 +23,7 @@ import { LeftPanel } from "./components/LeftPanel";
 import { RightPanel } from "./components/RightPanel";
 import { filesPanelVisible } from "./files-visibility";
 import { MessageList } from "./components/MessageList";
+import { chatOpenTimer } from "./chat-open-timing";
 import { SwitchOverlay } from "./components/SwitchOverlay";
 import { switchTargetTitle } from "./switch-pending";
 import { chatTitleOnScreen } from "./chat-title";
@@ -985,6 +987,10 @@ export function App() {
 	/** switch-cache：切换进行中先显示目标对话的缓存（只给消息列表；其余界面仍是服务端当前对话）。
 	 *  列表的 key 随它往前推：预览换成同一会话的真快照时不重建（见 nextListKey）。 */
 	const listState = chat.preview ?? chat.state;
+	// chat-open-timing (Ops #690): the list now shows this state; the open's paint mark is the next frame.
+	useLayoutEffect(() => {
+		chatOpenTimer.listCommitted();
+	}, [listState]);
 	// optimistic-send: the shown chat's messages that are still on their way (drawn faded at its end).
 	const listConvId = listState?.conversationId;
 	const listSessionId = listState?.sessionId;

@@ -137,6 +137,7 @@ import {
 import { ConnHealth, setLiveGrace, setReconnectingNote } from "./conn-health";
 // reconnect-trace (Ops #157): a record of each "Reconnecting…" episode, sent to the server's log.
 import { BannerTrace, sessionTraceStore, type TraceCause } from "./conn-trace";
+import { chatOpenTimer } from "./chat-open-timing";
 import {
 	applyPromptAck,
 	failPending,
@@ -1637,6 +1638,15 @@ export function useChat() {
 	traceRef.current ??= new BannerTrace(undefined, sessionTraceStore());
 	const traceOnRef = useRef(false);
 	const traceConnRef = useRef<string | null>(null);
+	// chat-open-timing (Ops #690): each open's page marks go to the server's log, when it keeps one.
+	useEffect(() => {
+		chatOpenTimer.setReporter((r) => {
+			const ws = wsRef.current;
+			if (ws && ws.readyState === WebSocket.OPEN && traceOnRef.current)
+				ws.send(JSON.stringify(r satisfies ClientMessage));
+		});
+		return () => chatOpenTimer.setReporter(null);
+	}, []);
 	const noticeId = useRef(0);
 	/** Last delta seq seen per conversation (message_delta + tool_delta share
 	 *  one per-conversation sequence) — a gap on the ACTIVE conversation
@@ -1896,6 +1906,9 @@ export function useChat() {
 						resumeBasesRef.current.set(windowKey(have), preview);
 						out = { ...msg, have };
 					}
+					// chat-open-timing: the open's id, so the server can join the page's marks to its own.
+					if (out.type === "switch_session" || out.type === "switch_conversation")
+						out = { ...out, open: chatOpenTimer.begin(switchTarget, Boolean(preview && have)) };
 					dispatch({
 						type: "switch_started",
 						target: switchTarget,
@@ -1904,6 +1917,7 @@ export function useChat() {
 					});
 				}
 				ws.send(JSON.stringify(out));
+				if ("open" in out && out.open) chatOpenTimer.requested();
 				// 提交/取消模型提问后立即收起对话框：服务端只 resolve 模型侧 Promise，
 				// 不会发任何回执清除前端面板（否则会出现“回答后不消失、取消无效”）。
 				// 模型再次 ask_user_question 时会重新 question_pending，面板自动回来。
@@ -2213,6 +2227,7 @@ export function useChat() {
 					recovery.receiveDisposition(ws, msg);
 					break;
 				case "snapshot": {
+					chatOpenTimer.snapshot(msg.state);
 					// switch-cache：带 reuse 的快照只有新增的尾巴，把当时报上去的那份缓存接在前面。
 					// 对不上（缓存已经不在了）就不用它，要一份完整的。
 					const wireState = msg.state as UiState & HistoryFields;
@@ -2312,6 +2327,7 @@ export function useChat() {
 					break;
 				}
 				case "switch_preview":
+					chatOpenTimer.preview(msg.target);
 					recovery.preview(ws, msg.target, msg.state);
 					// chat-open-speed: the end of the chat, sent before the whole of it is loaded.
 					dispatch({ type: "switch_preview", target: msg.target, state: msg.state });
@@ -2319,6 +2335,7 @@ export function useChat() {
 				case "switch_done":
 					// chat-open-speed: the chat is ready, so anything written while it was opening goes now.
 					flushHeldSends(msg.target);
+					chatOpenTimer.done(msg.target, true);
 					dispatch({ type: "switch_done", target: msg.target });
 					break;
 				case "prompt_ack": {
@@ -2351,6 +2368,7 @@ export function useChat() {
 					// 是自己在等的那次 → 聊天区错误态；不是（服务端内部自动切换失败）→ 降级成 toast，
 					// 与以前的行为一致，不丢信息。
 					failHeldSends("The chat didn't open, so this wasn't sent.", msg.target);
+					chatOpenTimer.done(msg.target, false);
 					if (sameSwitchTarget(chatApi.current.chat.pendingSwitch?.target, msg.target)) {
 						dispatch({ type: "switch_failed", target: msg.target, error: msg.error, errorEn: msg.errorEn });
 					} else {
@@ -2928,6 +2946,7 @@ export function useChat() {
 
 		ws.onclose = (ev: CloseEvent) => {
 			if (!recovery.ownsTransport(ws)) return;
+			if (wsRef.current === ws) chatOpenTimer.reset();
 			terminalRecovery.cancel();
 			recovery.disconnect(ws);
 			if (wsRef.current === ws) {
@@ -3143,7 +3162,10 @@ export function useChat() {
 		const stopLive = subscribePageLive(refreshNote);
 		const onVisible = () => {
 			if (document.visibilityState === "visible") cameBack(true);
-			else hiddenAt = Date.now();
+			else {
+				hiddenAt = Date.now();
+				chatOpenTimer.hidden();
+			}
 		};
 		const onFreeze = () => {
 			hiddenAt = Date.now();

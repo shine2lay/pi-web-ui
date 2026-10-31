@@ -588,6 +588,7 @@ import { STALL_LEDGER_FILE, StallWake, stallStretchEnded, stallWakesOn, withStal
 import { deadEndAnswer } from "./dead-end.js";
 import { launchOrigin, toServiceInfo } from "./launch-origin.js";
 import { imageIfVersion, type ChatImage } from "./chat-image.js";
+import { noteSnapshotFlush } from "./chat-open-timing.js";
 import {
 	findEntryByUiId,
 	imageBlocksOf,
@@ -7304,13 +7305,19 @@ export class ClientSession {
 
 	/** 找持有指定转录文件的本地对话 id（找不到 = 已被关闭/搬走/还没建好）。 */
 	private conversationIdBySessionFile(file: string): string | null {
+		return ClientSession.conversationIdBySessionFile(file);
+	}
+
+	/** The same lookup without a window: the conversation table is process-wide (sharedConvs), so it
+	 *  also answers before a window's session exists (chat-open-timing, Ops #690). */
+	static conversationIdBySessionFile(file: string): string | null {
 		let abs: string | null = null;
 		try {
 			abs = resolve(file);
 		} catch {
 			abs = null;
 		}
-		for (const c of this.convs.values()) {
+		for (const c of ClientSession.sharedConvs.values()) {
 			try {
 				const f = c.session.sessionFile;
 				if (sameSessionRef(f, file) || sameSessionRef(c.session.sessionId, file)) return c.id;
@@ -11164,6 +11171,7 @@ export class ClientSession {
 	 *  connecting or desynced client always receives an authoritative full
 	 *  state it can rebuild from. */
 	flushSnapshot(forceFull = false): void {
+		noteSnapshotFlush(); // chat-open-timing: when this snapshot's build starts
 		if (this.snapshotTimer) {
 			clearTimeout(this.snapshotTimer);
 			this.snapshotTimer = null;
@@ -19166,6 +19174,12 @@ export class AgentService {
 	/** chat-slots: open chats per project, counts only (GET /api/open-chats). */
 	openChatCounts(): ReturnType<typeof ClientSession.openChatCounts> {
 		return ClientSession.openChatCounts();
+	}
+
+	/** chat-open-timing (Ops #690): the chat at this session file is loaded on the server, whichever
+	 *  window opened it (or none). */
+	hasOpenConversationForRef(file: string): boolean {
+		return ClientSession.conversationIdBySessionFile(file) !== null;
 	}
 
 	/** roles-config-history: index.ts starts it after the restart's carry-on; a run now, then every 5 minutes. */

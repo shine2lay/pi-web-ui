@@ -12,7 +12,9 @@
  *   - close:  a socket closed (close code, how long it lived; never the close-reason text);
  *   - banner: a page's own record of one note episode (web/src/conn-trace.ts), placed on the server's
  *             clock, with the worst event-loop delay the server measured meanwhile;
- *   - notice: whether the owner was told (one Telegram line at most every 10 minutes, later ones summed).
+ *   - notice: whether the owner was told (one Telegram line at most every 10 minutes, later ones summed);
+ *   - chatopen: how long one chat open took, the server's marks joined with the page's (Ops #690,
+ *             server/chat-open-timing.ts), with the worst event-loop delay meanwhile.
  * Never: chat text, prompts, tool results, credentials, cookies, URLs, IPs, user agents or bodies.
  *
  * <dataDir>/conn-trace.json: {"enabled": false} is master-off. {"enabled": true,"notices": false}
@@ -171,6 +173,8 @@ const VIEWS: readonly NonNullable<ConnTraceRecord["view"]>[] = ["roles", "initia
 
 const ms = (v: unknown): number | null =>
 	typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.min(Math.round(v), MAX_MS) : null;
+/** A duration from outside, as a whole number of ms between 0 and a day; anything else is null. */
+export const boundedMs = ms;
 const count = (v: unknown, max: number): number | null =>
 	typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= max ? v : null;
 
@@ -237,8 +241,13 @@ export function sanitizeRecord(raw: unknown): ConnTraceRecord | null {
 
 /** Client ids are random per browser; still, only a short hash goes in the log. */
 export function hashClient(clientId: string | null | undefined): string | null {
-	if (!clientId) return null;
-	return createHash("sha256").update(`conn-trace:${clientId}`).digest("hex").slice(0, 12);
+	return shortHash("conn-trace", clientId);
+}
+
+/** A 12-hex-digit stand-in for an id the log must not hold as is (salted per use). */
+export function shortHash(salt: string, id: string | null | undefined): string | null {
+	if (!id) return null;
+	return createHash("sha256").update(`${salt}:${id}`).digest("hex").slice(0, 12);
 }
 
 const utcDay = (t: number): string => new Date(t).toISOString().slice(0, 10);
@@ -695,6 +704,26 @@ export class ConnEvents {
 		}
 		if (taken) this.saveState();
 		return taken;
+	}
+
+	// -- chat opens ----------------------------------------------------------------
+
+	/** One chat open (server/chat-open-timing.ts builds the row: numbers, flags and hashes only),
+	 *  with the worst event-loop delay from its request to its end and the machine's load. */
+	chatOpened(row: { at: number; serverMs: number | null } & Record<string, unknown>): void {
+		if (!this.enabled()) return;
+		if (this.stallTimer) this.watchTick();
+		const t = this.now();
+		const loop = this.worstLoop(row.at, row.serverMs === null ? t : row.at + row.serverMs);
+		this.write({
+			t,
+			kind: "chatopen",
+			...row,
+			loopMaxMs: loop.maxMs,
+			loopP99Ms: loop.p99Ms,
+			stallMaxMs: loop.stallMaxMs,
+			load1: round1(loadavg()[0] ?? 0),
+		});
 	}
 
 	// -- owner notices --------------------------------------------------------------

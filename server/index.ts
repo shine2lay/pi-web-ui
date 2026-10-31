@@ -132,6 +132,7 @@ import { PAGES_FRESH_SKIP_MS, PagesRefresher } from "./pages-fresh.js";
 import { SubsLimitsHub, limitsFilePath } from "./subs-limits.js";
 import { initHttpProxy } from "./http-proxy.js";
 import { ConnEvents, MAX_RECORDS_PER_SOCKET } from "./conn-events.js";
+import { ChatOpenTracker, preciseNow } from "./chat-open-timing.js";
 import { globalLspPool } from "./lsp-tool.js";
 import { buildPiWebTokenCookie, decodeCookieToken, isTlsRequest } from "./auth-cookie.js";
 import type {
@@ -1457,6 +1458,9 @@ export interface EngineService {
 	startBlankChatSweep?(): void;
 	/** chat-slots (pi engine): open chats per project, counts only (GET /api/open-chats). */
 	openChatCounts?(): { limit: number; projects: { cwd: string; open: number; counted: number; blank: number }[] };
+	/** chat-open-timing (Ops #690, pi engine): the chat at this session file is already loaded on the
+	 *  server, in any window or none. Engines without it record loadedBefore as unknown. */
+	hasOpenConversationForRef?(file: string): boolean;
 	/** roles-config-history (pi engine): set by index.ts; a run recorded changes. */
 	onRolesConfigChanged?: (() => void) | null;
 	/** role-messages (pi engine): the last messages between roles and the pause switch. */
@@ -2472,6 +2476,13 @@ wss.on("connection", (ws, req) => {
 	const connId = connEvents.newConnId();
 	const connOpenedAt = Date.now();
 	let connTraceTaken = 0;
+	/** chat-open-timing (Ops #690): this socket's chat opens, one row each in the connection log. */
+	const chatOpens = new ChatOpenTracker({
+		sink: connEvents,
+		conn: connId,
+		clientId: () => clientId,
+		browser: acceptedBrowser,
+	});
 	/** 最近一份全量 snapshot 的估算字节数（UTF-16 ×2），供背压相对阈值用（issue #11）。 */
 	let lastSnapshotBytes = 0;
 	/** switch-loading：最近一份真正发出去的全量 snapshot 属于哪条对话（打开另一条对话的快照不丢，见 send）。 */
@@ -2541,7 +2552,9 @@ wss.on("connection", (ws, req) => {
 			onSent?.();
 			return;
 		}
+		const serializeStartedAt = chatOpens.busy ? preciseNow() : 0;
 		const wire = serializeShared(msg);
+		chatOpens.sent(msg, wire.length, serializeStartedAt);
 		if (msg.type === "snapshot") {
 			lastSnapshotBytes = wire.length * 2;
 			lastSnapshotConvId = msg.state.conversationId;
@@ -4408,6 +4421,11 @@ wss.on("connection", (ws, req) => {
 				connTraceTaken += connEvents.banner(msg.records.slice(0, left), { conn: connId, clientId });
 			return;
 		}
+		// chat-open-timing: the page's marks for one open (metadata only).
+		if (msg.type === "chat_open") {
+			chatOpens.pageReport(msg);
+			return;
+		}
 
 		if (msg.type === "hello") {
 			if (!clientId) frameHints = msg.frameHints === true;
@@ -4598,12 +4616,14 @@ wss.on("connection", (ws, req) => {
 			return;
 		}
 
+		chatOpens.requested(msg, (path) => service.hasOpenConversationForRef?.(path) ?? null);
 		dispatch(msg);
 	});
 
 	ws.on("close", (code: number) => {
 		// reconnect-trace: the close code only (never the reason text).
 		connEvents.closed(connId, clientId, acceptedBrowser, code, Date.now() - connOpenedAt);
+		chatOpens.closed();
 		service.noteSocketClose();
 		consumePending(pending.socketClosed(pendingGeneration));
 		closed = true;
