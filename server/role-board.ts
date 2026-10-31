@@ -44,7 +44,8 @@ import type {
 	UiRoleBoardOrder,
 	UiRoleOverview,
 } from "./protocol.js";
-import { eachLineWith, firstTextOf, QUIET_TURN_HINT } from "./role-messages.js";
+import { eachLineWith, firstTextOf } from "./role-messages.js";
+import { statusHint } from "./turn-status.js";
 
 /** The custom message type of a chat's turn-start note (and its mark in details). */
 export const BOARD_CUSTOM_TYPE = "board";
@@ -347,15 +348,16 @@ function endedLine(p: BoardPostRecord, tz?: string): string {
 }
 
 /** The text of an order sent directly (a steer into a running turn, or a turn in a home chat).
- *  quiet-turns (task #96): a turn the order starts leaves nothing for the owner to read; steered into a
- *  running turn (maybe the owner's own), it adds nothing for him about the order. */
+ *  quiet-turns (task #96): a turn the order starts leaves nothing for the owner to read: turn-status
+ *  (Ops #688), its only text is one status line. Steered into a running turn (maybe the owner's own), it
+ *  adds nothing for him about the order. */
 export function boardOrderText(p: UiBoardPost, tz?: string, how: "turn" | "steer" = "turn"): string {
 	const header = `${BOARD_ORDER_PREFIX}${p.id} from ${fromWords(p)} · ${boardTime(p.at, tz)}]`;
 	const parts = [header, `**${p.title}**`, p.text];
 	if (p.ownerWords) parts.push(`Owner's words: ${p.ownerWords}`);
 	parts.push(
 		(how === "turn"
-			? `(The owner's order on the roles' board, sent to you directly because you have something waiting. It asks for no reply. ${QUIET_TURN_HINT})\n`
+			? `(The owner's order on the roles' board, sent to you directly because you have something waiting. It asks for no reply. ${statusHint("order")})\n`
 			: "(The owner's order on the roles' board, sent to you directly because you have something waiting. It asks for no reply: write nothing for the owner about it.)\n") +
 			ackLine(p.id),
 	);

@@ -15,13 +15,8 @@ import {
 	starterOf,
 } from "../../server/quiet-turns.js";
 import { type BoardPostRecord, boardOrderText } from "../../server/role-board.js";
-import {
-	FOR_OWNER_TURN_HINT,
-	QUIET_REPLY_HINT,
-	QUIET_TURN_HINT,
-	roleMessageHint,
-	roleMessageText,
-} from "../../server/role-messages.js";
+import { FOR_OWNER_TURN_HINT, roleMessageHint, roleMessageText } from "../../server/role-messages.js";
+import { statusHint } from "../../server/turn-status.js";
 
 // quiet-turns (task #96). The owner, 2026-10-10 (relayed by COO in rm-37872561): "in alot of chat, i see
 // response to agent's message, like i see an actual output to me in chat, i dont need anything to see, the
@@ -387,17 +382,23 @@ describe("quiet-turns: transcript messages (the server's view)", () => {
 
 describe("quiet-turns: the hint lines tell a role to write nothing for the owner", () => {
 	const base = { id: "rm-0123abcd", from, text: "x" } as const;
-	it("question, request, reply and fyi say the owner doesn't read the turn; request keeps its reply-once rule", () => {
+	it("question, request and reply say the owner doesn't read the turn and end it with one status line (Ops #688); request keeps its reply-once rule", () => {
 		for (const kind of ["question", "request"] as const) {
-			expect(roleMessageHint({ ...base, kind } as Parts)).toContain(QUIET_TURN_HINT);
+			expect(roleMessageHint({ ...base, kind } as Parts)).toContain(statusHint(kind));
 		}
 		// An answer the role got takes no reply: its hint never invites one (the tool refuses a reply to a reply).
 		const reply = roleMessageHint({ ...base, kind: "reply", replyTo: "rm-89abcdef" } as Parts);
-		expect(reply).toBe(`(The answer to your message rm-89abcdef: no need to answer it. ${QUIET_REPLY_HINT})`);
-		expect(reply).not.toContain("send it with message_role");
-		expect(QUIET_REPLY_HINT).toBe(
-			"The owner doesn't read this turn: write nothing for him. If you need more from the sender, send it a new question or request; otherwise end the turn without a summary.",
+		expect(reply).toBe(
+			`(The answer to your message rm-89abcdef: no need to answer it. If you need more from the sender, send it a new question or request. ${statusHint("reply")})`,
 		);
+		expect(reply).not.toContain("send it with message_role");
+		// the old words are gone: a summary was what the status line replaces
+		for (const kind of ["question", "request", "reply"] as const) {
+			const hint = roleMessageHint({ ...base, kind, replyTo: "rm-89abcdef" } as Parts);
+			expect(hint).toContain("The owner doesn't read this turn.");
+			expect(hint).not.toContain("without a summary");
+			expect(hint).not.toContain("write nothing for him");
+		}
 		expect(roleMessageHint({ ...base, kind: "request" } as Parts)).toContain("then reply once, with message_role");
 		expect(roleMessageHint({ ...base, kind: "question" } as Parts)).toMatch(
 			/^\(Answer it once, with message_role .*\)$/,
@@ -405,15 +406,12 @@ describe("quiet-turns: the hint lines tell a role to write nothing for the owner
 		expect(roleMessageHint({ ...base, kind: "fyi" } as Parts)).toBe(
 			"(An FYI from another role, added without a turn of its own: no reply needed. Write nothing for the owner about it; if you need something from the sender, send it a new question or request (an FYI takes no reply).)",
 		);
-		expect(QUIET_TURN_HINT).toBe(
-			"The owner doesn't read this turn: write nothing for him. If the sender needs an answer, send it with message_role; otherwise end the turn without a summary.",
-		);
 	});
 
 	it("a reply answering a question asked for the owner says its answer goes to him in full; the report request is unchanged", () => {
 		const hint = roleMessageHint({ ...base, kind: "reply", replyTo: "rm-89abcdef" } as Parts, { ownerAnswer: true });
 		expect(hint).toBe(`(The answer to your message rm-89abcdef: no need to answer it. ${FOR_OWNER_TURN_HINT})`);
-		expect(hint).not.toContain(QUIET_TURN_HINT);
+		expect(hint).not.toContain("status line");
 		expect(FOR_OWNER_TURN_HINT).toBe(
 			"This answers a question you asked for the owner: your answer in this turn goes to him in full.",
 		);
@@ -422,13 +420,14 @@ describe("quiet-turns: the hint lines tell a role to write nothing for the owner
 		);
 	});
 
-	it("a Board order's turn says the same; steered into a running turn it adds nothing for the owner", () => {
+	it("a Board order's turn ends with one status line (DONE or OK); steered into a running turn it adds nothing for the owner", () => {
 		const turn = boardOrderText(post, "UTC");
 		expect(turn).toContain(
-			`It asks for no reply. ${QUIET_TURN_HINT})\nWhen you have acted on it: board ack bp-00c0ffee`,
+			`It asks for no reply. ${statusHint("order")})\nWhen you have acted on it: board ack bp-00c0ffee`,
 		);
+		expect(turn).not.toContain("without a summary");
 		const steer = boardOrderText(post, "UTC", "steer");
 		expect(steer).toContain("It asks for no reply: write nothing for the owner about it.)\nWhen you have acted on it:");
-		expect(steer).not.toContain(QUIET_TURN_HINT);
+		expect(steer).not.toContain("status line");
 	});
 });

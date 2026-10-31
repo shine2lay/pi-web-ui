@@ -5,10 +5,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { IdentityDef } from "../../server/identities.js";
 import { serializeMessage } from "../../server/serialize.js";
+import { statusHint } from "../../server/turn-status.js";
 import {
 	FOR_OWNER_TURN_HINT,
-	QUIET_REPLY_HINT,
-	QUIET_TURN_HINT,
 	ROLE_MESSAGE_CUSTOM_TYPE,
 	ROLE_MESSAGES_KEEP,
 	RoleMessages as RoleMessagesBase,
@@ -944,7 +943,7 @@ describe('telegram-coo: forOwner (owner 2026-10-06: "Yes, answers to my question
 		expect(
 			forHim.endsWith(`(The answer to your message ${q.record.id}: no need to answer it. ${FOR_OWNER_TURN_HINT})`),
 		).toBe(true);
-		expect(plain).toContain(QUIET_REPLY_HINT);
+		expect(plain).toContain(statusHint("reply"));
 		expect(plain).not.toContain(FOR_OWNER_TURN_HINT);
 		// The page's card: forOwner on the answer to his question only (never on the question itself).
 		expect(s.stampFor(A, forHim)).toMatchObject({ id: answer.record.id, kind: "reply", forOwner: true });
@@ -972,7 +971,7 @@ describe('telegram-coo: forOwner (owner 2026-10-06: "Yes, answers to my question
 		f.state.set(B, "idle");
 		await s.tick();
 		expect(f.sent).toHaveLength(1);
-		expect(f.sent[0].text).toContain(QUIET_TURN_HINT);
+		expect(f.sent[0].text).toContain(statusHint("question"));
 		expect(s.stampFor(B, f.sent[0].text)).toMatchObject({ id: q.record.id, kind: "question" });
 	});
 });

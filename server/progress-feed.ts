@@ -422,7 +422,7 @@ export function pokeTextOf(p: PokeTextInput): string {
 	out.push(
 		"",
 		"Post with initiative_update; say only what the linked records hold; fill impact/options/until with decision_log where known, else say not known.",
-		`How: initiative_update new (initiative "${p.initiative}") lists what's new with ids, page by page. Then initiative_update post: changed, next, needs_you (impact, options, until where the records hold them), and sources = the ids of the records and decisions it summarizes. Never write that the owner decided unless a linked record holds his own words for it. Every sentence comes from a linked record: don't repeat this message's own counts, times or lists. Each field is plain text. Where a decision's impact, options or until is shown in the list, say it in those words; where none is, write just: not known. Each post's reply says what is still unlinked. Write nothing for the owner in this chat: he reads updates on the Initiatives page.`,
+		`How: initiative_update new (initiative "${p.initiative}") lists what's new with ids, page by page. Then initiative_update post: changed, next, needs_you (impact, options, until where the records hold them), and sources = the ids of the records and decisions it summarizes. Never write that the owner decided unless a linked record holds his own words for it. Every sentence comes from a linked record: don't repeat this message's own counts, times or lists. Each field is plain text. Where a decision's impact, options or until is shown in the list, say it in those words; where none is, write just: not known. Each post's reply says what is still unlinked. The owner reads updates on the Initiatives page, not in this chat.`,
 	);
 	return out.join("\n");
 }

@@ -28,6 +28,12 @@ export { BOARD_TOOL_NAME };
 export const BOARD_ROUTING_RULE =
 	"The owner's routing rule: if a role has something waiting (a running turn, an open queue task or an unanswered request), a message goes directly to it, to wake its session; general info goes on the board.";
 
+/** Ops #688 (owner, Oct 31, via COO rm-911e1fa9: "agent to agent messaging should be token efficient, i am
+ *  not going to read it, so it should as compact with info as possible"): the pointer that ends the board's
+ *  and message_role's text descriptions. The rule itself lives once, in the messaging guidance every role chat
+ *  gets (pi-identity templates/roles-section.md); pi-queue's ask tools carry the same pointer. */
+export const AI_READER_POINTER = "For an AI reader: compact; see the messaging guidance.";
+
 /** Implemented by ClientSession (the chat this runtime belongs to). */
 export interface BoardToolHost {
 	/** The calling chat as the server knows it; a string = why it can't use the board. */
@@ -129,7 +135,7 @@ export function makeBoardTool(host: BoardToolHost): ToolDefinition {
 			),
 			text: Type.Optional(
 				Type.String({
-					description: `post: the text, Markdown, self-contained (at most ${BOARD_TEXT_MAX} characters). No secrets.`,
+					description: `post: the text, Markdown, self-contained (at most ${BOARD_TEXT_MAX} characters). No secrets. ${AI_READER_POINTER}`,
 				}),
 			),
 			ownerWords: Type.Optional(

@@ -61,6 +61,7 @@ import { CARRY_ON_PREFIX } from "./running-chats.js";
 import { guardPolicyIsValid, ROLE_MESSAGE_POLICY, roleMessagesHourlyExempt } from "./role-message-limits.js";
 import type { GuardPolicy } from "./role-message-guard-contract-v2.js";
 import { readQueueEntries } from "./queue-entries-tail.js";
+import { statusHint } from "./turn-status.js";
 import {
 	taskQueueAll,
 	taskQueueBackOwed,
@@ -425,16 +426,23 @@ export function chatLabel(o: { taskId?: number; isHome: boolean; title?: string 
 
 type HeaderParts = Pick<RoleMessageRecord, "id" | "from" | "kind" | "replyTo" | "report" | "poke" | "stall">;
 
-/** progress-feed (task #85): what an ask for a progress update tells the lead to do with it. */
-export const POKE_HINT =
-	"(The Initiatives page asks you, its lead, for a progress update, on the owner's request. Post it with initiative_update, not message_role. The owner reads it on the page, not here: write nothing for him in this chat.)";
+/** progress-feed (task #85): what an ask for a progress update tells the lead to do with it. turn-status
+ *  (Ops #688): the lead's turn ends with one status line. */
+export const POKE_HINT = `(The Initiatives page asks you, its lead, for a progress update, on the owner's request. Post it with initiative_update, not message_role. ${statusHint("poke")})`;
 
-/** stall-wake (Ops #284): what a work-check message tells the lead to do with it. */
-export const STALL_HINT =
-	"(The work check found work you lead that isn't moving. Act with your tools: queue the next task under it (queue_add with its project or initiative), close it (work_project or work_initiative change, status done or dropped), or record a wait with its end (work_project or work_initiative wait). Nothing starts by itself. No reply is needed: the check sees what you do. Write nothing for the owner in this chat.)";
-/** dead-end (Ops #483, rule 30): what a work-check message about a project with nothing moving tells its lead. */
-export const STALL_DEAD_END_HINT =
-	"(The work check found a project you lead with nothing moving (rule 30): no task at work or ready, none linked to another queue's task, no question with the owner. Take one of the ways out its item names: queue the fix task, link the other queue's task it really waits on, or ask the owner with the full package; if its work is finished, close it. A reply doesn't clear it, and nothing starts by itself: the check sees what you do. Write nothing for the owner in this chat.)";
+/** stall-wake (Ops #284): what a work-check message tells the lead to do (its hint without the status). */
+const STALL_ACTION =
+	"(The work check found work you lead that isn't moving. Act with your tools: queue the next task under it (queue_add with its project or initiative), close it (work_project or work_initiative change, status done or dropped), or record a wait with its end (work_project or work_initiative wait). Nothing starts by itself. No reply is needed: the check sees what you do.";
+/** dead-end (Ops #483, rule 30): what a work-check message about a project with nothing moving tells its
+ *  lead (its hint without the status). */
+const STALL_DEAD_END_ACTION =
+	"(The work check found a project you lead with nothing moving (rule 30): no task at work or ready, none linked to another queue's task, no question with the owner. Take one of the ways out its item names: queue the fix task, link the other queue's task it really waits on, or ask the owner with the full package; if its work is finished, close it. A reply doesn't clear it, and nothing starts by itself: the check sees what you do.";
+/** stall-wake: the work check's hint to a lead. turn-status (Ops #688): its turn ends with one status line. */
+export const STALL_HINT = `${STALL_ACTION} ${statusHint("poke")})`;
+/** dead-end: the work check's hint to a lead about a project with nothing moving, status line as above. */
+export const STALL_DEAD_END_HINT = `${STALL_DEAD_END_ACTION} ${statusHint("poke")})`;
+/** A batch with dead ends and other stalls: both actions, the status line once. */
+export const STALL_MIXED_HINT = `${STALL_ACTION}) ${STALL_DEAD_END_HINT}`;
 /** stall-wake: the owner's step, sent to COO. */
 export const STALL_OWNER_HINT =
 	"(The work check found work that stayed stalled after its leads were woken. Put each item to the owner as one dialog with the full package (rule 21). Nothing starts by itself. No reply is needed: the check sees what changes.)";
@@ -455,20 +463,17 @@ export function roleMessageHeader(r: HeaderParts): string {
 	return `[Role message ${r.id} from ${r.from.role} (${oneLine(r.from.title)}), sent from its ${r.from.chat} · ${what}]`;
 }
 
-/** quiet-turns (task #96, AGENTS.md rule 18): a turn another role began leaves nothing for the owner to
- *  read (owner, 2026-10-10: "the response should be sent to the agent only if needed or just don't respond
- *  at all"). The page folds such a turn into one row; this tells the role not to write for him. */
-export const QUIET_TURN_HINT =
-	"The owner doesn't read this turn: write nothing for him. If the sender needs an answer, send it with message_role; otherwise end the turn without a summary.";
-/** quiet-turns, for an answer the role got: it takes no reply (a second message is a new question or
- *  request), so this doesn't say "send it with message_role" (read as kind "reply", which the tool refuses). */
-export const QUIET_REPLY_HINT =
-	"The owner doesn't read this turn: write nothing for him. If you need more from the sender, send it a new question or request; otherwise end the turn without a summary.";
-/** quiet-turns: a reply that answers a question asked for the owner starts a turn that is his to read. */
+/** quiet-turns: a reply that answers a question asked for the owner starts a turn that is his to read.
+ *  Its words stay: quiet-turns.ts FOR_OWNER_HINT finds such a turn by them when no stamp is left. */
 export const FOR_OWNER_TURN_HINT =
 	"This answers a question you asked for the owner: your answer in this turn goes to him in full.";
 
-/** `ownerAnswer`: this reply answers a question that was asked for the owner (RoleMessageService.ownerAnswerOf). */
+/** The hint line under a role message. quiet-turns (task #96, AGENTS.md rule 18): a turn another role began
+ *  leaves nothing for the owner to read (owner, 2026-10-10: "the response should be sent to the agent only if
+ *  needed or just don't respond at all"); the page folds it into one row. turn-status (Ops #688): such a turn's
+ *  only text is one status line, from the states its kind allows (turn-status.ts statusHint). An answer the
+ *  role got takes no reply (a second message is a new question or request), so its hint doesn't invite one.
+ *  `ownerAnswer`: this reply answers a question that was asked for the owner (RoleMessageService.ownerAnswerOf). */
 export function roleMessageHint(r: HeaderParts, opts: { ownerAnswer?: boolean } = {}): string {
 	const reply = `message_role with to "${r.from.role}", kind "reply", replyTo "${r.id}"`;
 	switch (r.kind) {
@@ -483,7 +488,7 @@ export function roleMessageHint(r: HeaderParts, opts: { ownerAnswer?: boolean } 
 					? STALL_HINT
 					: leads.every((i) => i.rule === "dead-end")
 						? STALL_DEAD_END_HINT
-						: `${STALL_HINT} ${STALL_DEAD_END_HINT}`;
+						: STALL_MIXED_HINT;
 				return owner && lead
 					? `(This batch has both lead-action and owner-step items. Apply the lead-action hint only to items saying "To clear it", and the owner-dialog hint only to items saying "Put it to the owner".) ${leadHint} ${STALL_OWNER_HINT}`
 					: owner
@@ -498,11 +503,11 @@ export function roleMessageHint(r: HeaderParts, opts: { ownerAnswer?: boolean } 
 		case "reply":
 			return opts.ownerAnswer
 				? `(The answer to your message ${r.replyTo ?? ""}: no need to answer it. ${FOR_OWNER_TURN_HINT})`
-				: `(The answer to your message ${r.replyTo ?? ""}: no need to answer it. ${QUIET_REPLY_HINT})`;
+				: `(The answer to your message ${r.replyTo ?? ""}: no need to answer it. If you need more from the sender, send it a new question or request. ${statusHint("reply")})`;
 		case "question":
-			return `(Answer it once, with ${reply}. ${QUIET_TURN_HINT})`;
+			return `(Answer it once, with ${reply}. ${statusHint("question")})`;
 		default:
-			return `(A request: do it if it is small and in your area, else queue it as a task; then reply once, with ${reply}: done, queued as #N, not your area (and whose it is), or needs the owner. ${QUIET_TURN_HINT})`;
+			return `(A request: do it if it is small and in your area, else queue it as a task; then reply once, with ${reply}: done, queued as #N, not your area (and whose it is), or needs the owner. ${statusHint("request")})`;
 	}
 }
 

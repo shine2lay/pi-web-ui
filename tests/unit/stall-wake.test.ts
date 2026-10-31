@@ -13,11 +13,13 @@ import {
 	RoleMessages,
 	STALL_DEAD_END_HINT,
 	STALL_HINT,
+	STALL_MIXED_HINT,
 	STALL_OWNER_HINT,
 	roleMessageHeader,
 	roleMessageHint,
 	type RoleMessageHost,
 } from "../../server/role-messages.js";
+import { statusHint } from "../../server/turn-status.js";
 import type { UiWorkPage } from "../../server/protocol.js";
 import type { StallExtra, StallFinding } from "../../server/stall-watch.js";
 import {
@@ -547,13 +549,23 @@ for (const pass of [1, 2]) {
 			// Ops #483: a dead end has its own hint, beside the usual one in a mixed batch; both fold on the page.
 			const dead = { ...items[0]!, rule: "dead-end" as const };
 			expect(roleMessageHint({ ...base, stall: { items: [dead] } })).toBe(STALL_DEAD_END_HINT);
-			expect(roleMessageHint({ ...base, stall: { items: [dead, items[1]!] } })).toBe(
-				`${STALL_HINT} ${STALL_DEAD_END_HINT}`,
-			);
+			// Ops #688: both actions, the status line once
+			const mixed = roleMessageHint({ ...base, stall: { items: [dead, items[1]!] } });
+			expect(mixed).toBe(STALL_MIXED_HINT);
+			expect(mixed.split(statusHint("poke")).length).toBe(2);
+			expect(mixed.startsWith(STALL_HINT.slice(0, STALL_HINT.indexOf(" The owner doesn't read")))).toBe(true);
+			expect(mixed.endsWith(STALL_DEAD_END_HINT)).toBe(true);
 			expect(STALL_DEAD_END_HINT.startsWith("(The work check found")).toBe(true);
 			expect(STALL_HINT).toBe(
-				"(The work check found work you lead that isn't moving. Act with your tools: queue the next task under it (queue_add with its project or initiative), close it (work_project or work_initiative change, status done or dropped), or record a wait with its end (work_project or work_initiative wait). Nothing starts by itself. No reply is needed: the check sees what you do. Write nothing for the owner in this chat.)",
+				`(The work check found work you lead that isn't moving. Act with your tools: queue the next task under it (queue_add with its project or initiative), close it (work_project or work_initiative change, status done or dropped), or record a wait with its end (work_project or work_initiative wait). Nothing starts by itself. No reply is needed: the check sees what you do. ${statusHint("poke")})`,
 			);
+			// Ops #688: a lead's turn ends with one status line (DONE, QUEUED #N or WAITING) instead of writing nothing
+			for (const h of [STALL_HINT, STALL_DEAD_END_HINT, STALL_MIXED_HINT]) {
+				expect(h).not.toContain("Write nothing for the owner in this chat");
+				expect(h).toContain("one of: DONE; QUEUED #N; WAITING: <what, up to 8 words>.");
+			}
+			// the owner's step (to COO) is unchanged: it puts items to him
+			expect(STALL_OWNER_HINT).not.toContain("status line");
 		});
 
 		it("is delivered like a poke, folds like a role's turn, parses on the page, and takes no reply", async () => {

@@ -16,7 +16,7 @@ import {
 	type RoleMessages,
 	type RoleMessageSender,
 } from "./role-messages.js";
-import { BOARD_ROUTING_RULE } from "./board-tool.js";
+import { AI_READER_POINTER, BOARD_ROUTING_RULE } from "./board-tool.js";
 import type { RoleMessageGuardHost } from "./role-message-guard-host.js";
 import { ROLE_MESSAGE_POLICY } from "./role-message-limits.js";
 
@@ -62,7 +62,7 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 			),
 			text: Type.Optional(
 				Type.String({
-					description: `The message, self-contained: what you need or what changed, with paths and ids; at most ${ROLE_MESSAGE_TEXT_MAX} characters. No secrets.`,
+					description: `The message, self-contained: what you need or what changed, with paths and ids; at most ${ROLE_MESSAGE_TEXT_MAX} characters. No secrets. ${AI_READER_POINTER}`,
 				}),
 			),
 			replyTo: Type.Optional(

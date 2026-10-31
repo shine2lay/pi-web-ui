@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BOARD_CUSTOM_TYPE, type BoardPostRecord, boardNote, boardOrderText } from "../../server/role-board.js";
 import { roleMessageText } from "../../server/role-messages.js";
+import { statusHint } from "../../server/turn-status.js";
 import {
 	messageRoleSentOf,
 	parseBoardNoteText,
@@ -37,7 +38,7 @@ describe("role-message-fold: parseRoleMessageText", () => {
 		const r = parseRoleMessageText(text({ kind: "reply", replyTo: "rm-89abcdef" }));
 		expect(r).toMatchObject({ kind: "reply", replyTo: "rm-89abcdef", from: "temper" });
 		expect(r?.hint).toBe(
-			"(The answer to your message rm-89abcdef: no need to answer it. The owner doesn't read this turn: write nothing for him. If you need more from the sender, send it a new question or request; otherwise end the turn without a summary.)",
+			`(The answer to your message rm-89abcdef: no need to answer it. If you need more from the sender, send it a new question or request. ${statusHint("reply")})`,
 		);
 		// quiet-turns: the hint of an answer to a question asked for the owner is a hint too
 		const forHim = roleMessageText(
