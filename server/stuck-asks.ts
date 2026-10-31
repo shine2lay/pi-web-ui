@@ -15,8 +15,10 @@
  * task-question decisions (rule 21): a question Ops passes on to the owner comes with its whole package
  * (`detail`); it is the question field's detail, and a changed package is a new ask.
  */
+import { createHash } from "node:crypto";
 import type { AskMeta } from "./asks.js";
 import type { UiTaskQueue, UiTaskQueueTask } from "./protocol.js";
+import { questionBindingKey, type QuestionBinding } from "./queue-question-port.js";
 
 /** One open chat and its queue. */
 export interface StuckSource {
@@ -24,6 +26,8 @@ export interface StuckSource {
 	file: string;
 	queue: UiTaskQueue;
 	meta: AskMeta;
+	/** From the native endpoint, not a UI echo or question text. */
+	questionBinding?(id: number): QuestionBinding | undefined;
 }
 
 /** A stuck task that should be asked about. */
@@ -38,6 +42,7 @@ export interface StuckWanted {
 	/** task-question decisions: the package the question came with (task-queue.ts detailOf). */
 	detail?: string;
 	meta: AskMeta;
+	binding?: QuestionBinding;
 }
 
 export const stuckKey = (target: string, taskId: number): string => `${target}#${taskId}`;
@@ -47,9 +52,17 @@ export function stuckTarget(sourceFile: string, task: UiTaskQueueTask): string |
 	return task.lane ? task.chat?.file : sourceFile;
 }
 
-/** The same question with the same choices and package (a new question, choices or package make a new ask). */
-export const stuckSig = (w: Pick<StuckWanted, "question" | "choices" | "detail">): string =>
-	w.detail ? JSON.stringify([w.question, w.choices, w.detail]) : JSON.stringify([w.question, w.choices]);
+/** Same wording AND native routing occurrence; legacy questions keep their old signature. */
+export const stuckSig = (w: Pick<StuckWanted, "question" | "choices" | "detail" | "binding">): string =>
+	w.binding
+		? JSON.stringify([w.question, w.choices, w.detail ?? "", questionBindingKey(w.binding)])
+		: w.detail
+			? JSON.stringify([w.question, w.choices, w.detail])
+			: JSON.stringify([w.question, w.choices]);
+
+/** Native old-card fences must survive a restarted server's counter starting over. */
+export const stuckAskId = (w: StuckWanted, sequence: number): string =>
+	w.binding ? `stuck-${createHash("sha256").update(stuckSig(w)).digest("hex").slice(0, 24)}` : `stuck-${sequence}`;
 
 /**
  * The stuck tasks across these open chats (`wanted`, by key), and every task's status as its
@@ -98,6 +111,7 @@ export function wantedStuckAsks(sources: StuckSource[]): {
 				question: t.question ?? "",
 				choices: t.choices ?? [],
 				...(t.detail ? { detail: t.detail } : {}),
+				...(s.questionBinding ? { binding: s.questionBinding(t.id) } : {}),
 				meta,
 			});
 		}

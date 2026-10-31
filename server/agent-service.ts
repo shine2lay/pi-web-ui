@@ -108,7 +108,18 @@ import {
 	summarizeDialogValue,
 	summarizeQuestionAnswers,
 } from "./asks.js";
-import { stuckGoneReason, stuckKey, stuckSig, stuckTarget, type StuckSource, wantedStuckAsks } from "./stuck-asks.js";
+import {
+	stuckAskId,
+	stuckGoneReason,
+	stuckKey,
+	stuckSig,
+	stuckTarget,
+	type StuckSource,
+	type StuckWanted,
+	wantedStuckAsks,
+} from "./stuck-asks.js";
+import { nativeOwnerQuestionBinding, nativeQuestionHost } from "./queue-question-native.js";
+import type { QuestionBinding, QuestionCommitResult } from "./queue-question-port.js";
 import { answersFromPage, askViewOf, ROLE_ASK_KEY_MAX } from "./roles-asks.js";
 import { type AdoptCandidate, pickAdoptTarget } from "./attach-adopt.js";
 import { describeError, errorMessage, planForLostActive } from "./crash-guard.js";
@@ -2889,6 +2900,7 @@ export interface TakeoverQuestion {
 	conversationId: string;
 	/** telegram-answers: its id in the list of asks, kept across the move. */
 	askId?: string;
+	nativeSource?: PendingQuestionEntry["nativeSource"];
 }
 
 /** 手动过户时跟着对话一起搬走的页调用（id/计时器在目标会话重建）. */
@@ -7678,6 +7690,15 @@ export class ClientSession {
 	/** telegram-answers: sends a stuck task's answer into the chat with this transcript, as the user's
 	 *  reply (AgentService sets it: the wake-up client opens the chat, or switches to it, and sends). */
 	static stuckAnswerSender: ((file: string, text: string) => Promise<AskResult>) | null = null;
+	/** Canonical admission precedes any owner-answer delivery, including a deferred native prompt. */
+	static admitQuestionAnswer:
+		((binding: QuestionBinding, text: string, from: string) => Promise<QuestionCommitResult>) | null = null;
+	/** Actual generic dialog acceptance; metadata fence only, never a queue answer/record relay. */
+	static observeUnboundOwnerAnswer: ((source: PendingQuestionEntry["nativeSource"]) => void) | null = null;
+
+	private static questionBindingOf(conv: Conversation, id: number): QuestionBinding | undefined {
+		return nativeOwnerQuestionBinding(conv.session, id);
+	}
 	/** queue-paused: when the chat with this transcript works on a queued task the owner paused, adds the
 	 *  text there without a turn and says how that went; undefined otherwise (deliver as usual). AgentService
 	 *  sets it (noteToPausedTaskChat). */
@@ -7777,7 +7798,13 @@ export class ClientSession {
 			const queue = ClientSession.taskQueueOfConv(conv);
 			if (queue.tasks.length === 0) continue;
 			const meta = ClientSession.askMetaOf(conv);
-			if (meta.sessionFile) sources.push({ file: meta.sessionFile, queue, meta });
+			if (meta.sessionFile)
+				sources.push({
+					file: meta.sessionFile,
+					queue,
+					meta,
+					questionBinding: (id) => ClientSession.questionBindingOf(conv, id),
+				});
 		}
 		// left-task-status: the open task chats' statuses changed: every window's list shows them again.
 		const statuses = queueChatStatuses(sources);
@@ -7818,7 +7845,7 @@ export class ClientSession {
 		}
 		for (const [key, w] of wanted) {
 			if (ClientSession.stuckAsks.has(key)) continue;
-			const askId = `stuck-${++ClientSession.stuckSeq}`;
+			const askId = stuckAskId(w, ++ClientSession.stuckSeq);
 			ClientSession.stuckAsks.set(key, { askId, sig: stuckSig(w), target: w.target });
 			askHub.add(
 				stuckAsk(
@@ -7832,7 +7859,7 @@ export class ClientSession {
 					},
 					w.meta,
 				),
-				(answers, from) => ClientSession.answerStuck(askId, w.target, stuckTextFrom(answers), from),
+				(answers, from) => ClientSession.answerStuck(askId, w, stuckTextFrom(answers), from),
 			);
 		}
 	}
@@ -7849,22 +7876,30 @@ export class ClientSession {
 		return undefined;
 	}
 
-	/** telegram-answers: answer a stuck task from elsewhere: the text goes into its chat as the user's
-	 *  reply, and pi-queue carries the task on. It is noted first, so the task moving on settles the ask
-	 *  as answered by `from`; a failed send takes the note back and the ask keeps waiting. */
-	private static async answerStuck(askId: string, target: string, text: string, from: string): Promise<AskResult> {
+	/** A supported owner card is durably admitted before delivery. A failed send never undoes admission. */
+	private static async answerStuck(askId: string, wanted: StuckWanted, text: string, from: string): Promise<AskResult> {
 		if (!text) return { ok: false, error: "no answer" };
+		const current = ClientSession.stuckAsks.get(wanted.key);
+		if (current?.askId !== askId || current.sig !== stuckSig(wanted)) return { ok: false, error: NOT_WAITING };
 		if (ClientSession.stuckAnswers.has(askId)) return { ok: false, error: "an answer is already on its way" };
 		const send = ClientSession.stuckAnswerSender;
 		if (!send) return { ok: false, error: "answers can't be sent into chats here" };
 		ClientSession.stuckAnswers.set(askId, { summary: text, from });
 		let r: AskResult;
 		try {
-			r = await send(target, text);
+			if (wanted.binding) {
+				const admitted = await ClientSession.admitQuestionAnswer?.(wanted.binding, text, from);
+				if (!admitted || admitted.status === "refused" || admitted.status === "uncertain") {
+					ClientSession.stuckAnswers.delete(askId);
+					return { ok: false, error: admitted?.reason ?? "native owner admission is unavailable" };
+				}
+			}
+			r = await send(wanted.target, text);
 		} catch (err) {
 			r = { ok: false, error: (err as Error)?.message ?? String(err) };
 		}
 		if (!r.ok) {
+			// This is only the UI in-flight marker. The native owner_admission is deliberately retained.
 			ClientSession.stuckAnswers.delete(askId);
 			return r;
 		}
@@ -7939,6 +7974,7 @@ export class ClientSession {
 			) {
 				const key = stuckKey(target, taskId);
 				const expectedSig = stuckSig({
+					binding: ClientSession.questionBindingOf(conv, taskId),
 					question: task.question ?? "",
 					choices: task.choices ?? [],
 					...(task.detail ? { detail: task.detail } : {}),
@@ -9288,6 +9324,7 @@ export class ClientSession {
 			const key = stuckKey(target, t.id);
 			const have = ClientSession.stuckAsks.get(key);
 			const sig = stuckSig({
+				binding: ClientSession.questionBindingOf(conv, t.id),
 				question: t.question ?? "",
 				choices: t.choices ?? [],
 				...(t.detail ? { detail: t.detail } : {}),
@@ -9302,6 +9339,7 @@ export class ClientSession {
 			const key = stuckKey(target, t.id);
 			const have = ClientSession.stuckAsks.get(key);
 			const sig = stuckSig({
+				binding: ClientSession.questionBindingOf(conv, t.id),
 				question: t.question ?? "",
 				choices: t.choices ?? [],
 				...(t.detail ? { detail: t.detail } : {}),
@@ -10052,6 +10090,9 @@ export class ClientSession {
 			const id = `q-${++ClientSession.questionSeq}`;
 			const conversationTitle = conversationId ? this.convs.get(conversationId)?.title : undefined;
 			const entry: PendingQuestionEntry = { resolve, questions, conversationId, conversationTitle, askId: id };
+			const manager = this.convs.get(conversationId ?? this.activeId)?.session.sessionManager;
+			const file = manager?.getSessionFile();
+			if (manager && file) entry.nativeSource = { sessionId: manager.getSessionId(), file };
 			this.pendingQuestions.set(id, entry);
 			// telegram-answers: also in the list of asks, so a plugin (Telegram) can show and answer it.
 			askHub.add(
@@ -10121,6 +10162,8 @@ export class ClientSession {
 	resolveQuestion(id: string, answers: QuestionAnswer[], cancelled?: boolean, from: string = FROM_BROWSER): boolean {
 		const pending = this.pendingQuestions.get(id);
 		if (!pending) return false;
+		// This observer logs/poisons persistence failures instead of discarding the owner's answer.
+		if (!cancelled) ClientSession.observeUnboundOwnerAnswer?.(pending.nativeSource);
 		this.pendingQuestions.delete(id);
 		if (pending.graceTimer) clearTimeout(pending.graceTimer);
 		pending.resolve(cancelled ? null : answers);
@@ -12317,6 +12360,25 @@ export class ClientSession {
 			// no file yet: not a role's home chat
 		}
 		try {
+			// The worker's native input hook treats plain owner text as its answer. Capture that acceptance
+			// before prompt queuing/compaction can defer delivery; slash commands and non-owner wakes stay unchanged.
+			if (
+				flow.requester?.kind === "owner" &&
+				opts?.source !== "extension" &&
+				text.trim() &&
+				!text.trimStart().startsWith("/")
+			) {
+				const state = ClientSession.taskQueueOfConv(conv);
+				const task = state.from ? state.tasks.find((t) => t.status === "stuck") : undefined;
+				const binding = task && ClientSession.questionBindingOf(conv, task.id);
+				if (binding) {
+					const admitted = await ClientSession.admitQuestionAnswer?.(binding, text, flow.requester.channel);
+					if (!admitted || admitted.status === "refused" || admitted.status === "uncertain") {
+						receipt.fail(admitted?.reason ?? "native owner admission is unavailable");
+						return;
+					}
+				}
+			}
 			await this.promptInLine(conv, receipt, flow, text, attachments, queue);
 		} finally {
 			// A prompt pi put off until the previous run settled is answered by its preflight callback.
@@ -14335,6 +14397,7 @@ export class ClientSession {
 					questions: p.questions,
 					conversationId: p.conversationId,
 					askId: p.askId ?? qid,
+					nativeSource: p.nativeSource,
 				});
 				// 源页面的对话框可能是即时通道弹出的（live），快照为 null 收不掉它 ——
 				// 明确撤回，让源页面立即收起（目标页主对话由转入方重推 question_pending 或快照呈现）。
@@ -14406,6 +14469,7 @@ export class ClientSession {
 				questions: q.questions,
 				conversationId: qConvId,
 				...(q.askId ? { askId: q.askId } : {}),
+				nativeSource: q.nativeSource,
 			});
 			// 迁入的主对话立即触发弹窗（子代理问卷留在后台，由角标与切换会话呈现）。
 			if (qConvId === mainId) {
@@ -19720,7 +19784,26 @@ export class AgentService {
 		});
 		ClientSession.queueBlocks = blocks;
 		blocks.start();
+		const questions = nativeQuestionHost({
+			session: (file) => this.queueSessionFor(file),
+			roles: () => identityRegistry(true).identities,
+			prepare: async (file) => {
+				if (this.queueSessionFor(file)) return;
+				await this.queueHomeChain(() =>
+					this.withQueueClient(QUEUE_HOME_CLIENT_ID, async (cs) => {
+						if (!this.queueSessionFor(file) && !(await cs.openChatForQueue(file)))
+							throw new Error("question session could not be opened");
+					}),
+				);
+			},
+			dispatch: (file, command) => this.queueRunCommand(file, command),
+		});
+		ClientSession.admitQuestionAnswer = questions.admitOwnerAnswer;
+		ClientSession.observeUnboundOwnerAnswer = questions.observeUnboundOwnerAnswer;
 		this.uninstallQueueHost = installQueueHost({
+			commitQuestion: questions.commits.commitQuestion,
+			consumeQuestionCommit: questions.commits.consumeQuestionCommit,
+			deliverQuestionCard: questions.cards.deliverQuestionCard,
 			turnOrigin: (file) => {
 				let found: UiTaskRequester | undefined;
 				for (const client of this.clients.values()) {
@@ -21076,6 +21159,8 @@ export class AgentService {
 		ClientSession.queueBlocks?.stop();
 		ClientSession.queueBlocks = null;
 		ClientSession.stuckAnswerSender = null;
+		ClientSession.admitQuestionAnswer = null;
+		ClientSession.observeUnboundOwnerAnswer = null;
 		ClientSession.pausedChatNote = null;
 		this.recordInterruptedRuns();
 		const all = [...this.clients.values()];

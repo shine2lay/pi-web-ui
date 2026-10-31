@@ -24,6 +24,7 @@
  */
 
 import type { QuestionAnswer, UiQuestion } from "./protocol.js";
+import type { QuestionAcceptanceSource } from "./queue-question-acceptance.js";
 
 /** 一张待答问卷的服务端状态。 */
 export interface PendingQuestionEntry {
@@ -38,6 +39,8 @@ export interface PendingQuestionEntry {
 	/** telegram-answers: its id in the list of asks (server/asks.ts). It stays the same when a
 	 *  takeover gives the question a new id, so whoever shows it elsewhere keeps one message. */
 	askId?: string;
+	/** Native source at presentation; not a queue/question binding or answer authority. */
+	nativeSource?: QuestionAcceptanceSource;
 }
 
 /** 没有页面连着时，等待页面回来的宽限期（毫秒）。刷新/重连通常 1-3 秒。 */

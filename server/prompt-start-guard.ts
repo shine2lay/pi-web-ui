@@ -37,6 +37,23 @@ interface SessionInternals {
 type GuardedSession = Pick<AgentSession, "prompt" | "sendCustomMessage" | "isStreaming" | "agent">;
 
 const installed = new WeakSet<object>();
+const customMessageGuards = new WeakMap<
+	object,
+	{
+		original: GuardedSession["sendCustomMessage"];
+		wrapped: GuardedSession["sendCustomMessage"];
+	}
+>();
+
+/** Our triggerTurn:false branch calls its original sender before any await; unknown wrappers do not qualify. */
+export function isKnownNoTurnMessagePath(
+	session: GuardedSession,
+	native: GuardedSession["sendCustomMessage"],
+): boolean {
+	if (session.sendCustomMessage === native) return true;
+	const guard = customMessageGuards.get(session);
+	return guard?.original === native && guard.wrapped === session.sendCustomMessage;
+}
 
 /** A start that arrives while another is under way, or with a run going, follows that run. */
 function asFollowUp(options: PromptOptions | undefined): PromptOptions {
@@ -48,7 +65,8 @@ export function installPromptStartGuard(session: GuardedSession): void {
 	installed.add(session);
 	const inner = session as GuardedSession & SessionInternals;
 	const prompt = session.prompt.bind(session);
-	const sendCustom = session.sendCustomMessage.bind(session);
+	const originalCustom = session.sendCustomMessage;
+	const sendCustom = originalCustom.bind(session);
 
 	// The line of starts: each waits for the one before it to be taken.
 	let line: Promise<void> = Promise.resolve();
@@ -107,6 +125,8 @@ export function installPromptStartGuard(session: GuardedSession): void {
 		turn.done();
 		return sent;
 	};
+
+	customMessageGuards.set(session, { original: originalCustom, wrapped: session.sendCustomMessage });
 
 	// Backstop for paths that reach the run step directly (SDK-internal replays): never a second run.
 	const run = inner._runAgentPrompt?.bind(inner);

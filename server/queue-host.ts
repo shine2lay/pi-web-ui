@@ -57,6 +57,13 @@ import { consumeOwnerSetting } from "./queue-owner.js";
 import { requesterOf } from "./queue-requester.js";
 import { checkPatch, normLaunch, QueueLaunchRefused } from "./queue-profile.js";
 import type { ChatSpeed, UiTaskLaunch, UiTaskRequester, UiWorkTaskState } from "./protocol.js";
+import type {
+	QuestionBinding,
+	QuestionChange,
+	QuestionCommitCapability,
+	QuestionCommitResult,
+} from "./queue-question-port.js";
+import type { QuestionCardResult } from "./queue-question-card.js";
 
 export const QUEUE_HOST_KEY = Symbol.for("pi-web-ui.queue-host");
 
@@ -95,6 +102,20 @@ export interface ChatState {
 }
 
 export interface QueueHostImpl {
+	/** Optional v1 question protocol. Both writers use one parent-queue lane; no model-facing capability. */
+	commitQuestion?(
+		sourceSessionId: string,
+		binding: QuestionBinding,
+		change: QuestionChange,
+	): Promise<QuestionCommitResult>;
+	consumeQuestionCommit?(token: string, workerSessionId: string): QuestionCommitCapability | undefined;
+	/** Durable tagged native card, without starting a turn. Busy means pending, not delivered. */
+	deliverQuestionCard?(
+		sourceSessionId: string,
+		tag: string,
+		card: string,
+		binding?: QuestionBinding,
+	): Promise<QuestionCardResult>;
 	/** Display-only accepted inputs, absent when no live turn is known. */
 	turnOrigin?(sessionFile: string): UiTaskRequester | undefined;
 	startChat(opts: QueueChatStart): Promise<{ sessionFile: string; conversationId?: string }>;
@@ -463,6 +484,13 @@ export function installQueueHost(impl: QueueHostImpl): () => void {
 		v: 1 as const,
 		profiles: 1 as const,
 		consumeOwnerSetting,
+		...(impl.commitQuestion && impl.consumeQuestionCommit
+			? {
+					commitQuestion: impl.commitQuestion,
+					consumeQuestionCommit: impl.consumeQuestionCommit,
+				}
+			: {}),
+		...(impl.deliverQuestionCard ? { deliverQuestionCard: impl.deliverQuestionCard } : {}),
 		...(impl.turnOrigin
 			? {
 					turnOrigin: (file: string): UiTaskRequester | undefined => {

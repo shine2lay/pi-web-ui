@@ -1,0 +1,13 @@
+{
+	"extends": "./tsconfig.tests.json",
+	"include": [
+		"tests/coupled/**/*.ts",
+		"tests/fixtures/**/*.ts",
+		"server/**/*.ts",
+		"web/src/skill-block.ts",
+		"web/src/components/scroll-classify.ts",
+		"web/src/build-id.d.ts",
+		"web/src/css-import.d.ts",
+		"web/src/initiatives-design-fonts.d.ts"
+	]
+}
