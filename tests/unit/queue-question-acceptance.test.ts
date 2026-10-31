@@ -84,6 +84,16 @@ describe("unbound owner acceptance preserves the answer and fences recall", () =
 		expect(f.prompts).not.toHaveBeenCalled();
 	});
 
+	it("fences a Rule 24 restore with the same final-consumption owner acceptance check (Ops #674)", async () => {
+		const { f, answer } = dialogFixture();
+		f.control.beforeConsume = () => {
+			expect(answer()).toBe(true);
+		};
+		expect((await f.restore()).status).toBe("refused");
+		expect(queueRecords(f.worker)).toEqual([]);
+		expect(f.afterCommands).toEqual([]);
+	});
+
 	it("checks acceptance at final consumption after the queued command wait", async () => {
 		const { f, answer, resolved } = dialogFixture();
 		f.control.beforeConsume = () => {

@@ -204,6 +204,67 @@ describe("native serialized question commits", () => {
 		expect(queueRecords(f.worker)).toEqual([]);
 	});
 
+	// Ops #674 Rule 24 restore: the same lane, actor, fence and durable-receipt path as recall.
+	it("restore commits one native op, retries its aftermath outside the lane and never prompts the worker", async () => {
+		const f = fixture();
+		const second = latch();
+		let count = 0;
+		f.control.beforeAfter = async () => {
+			if (++count === 2) second.open();
+		};
+		expect(await f.restore()).toEqual({ status: "committed", rid: "r000000000003", revision: 1 });
+		expect(await f.restore()).toEqual({ status: "already", rid: "r000000000003", revision: 1 });
+		expect(queueRecords(f.worker).map((r) => r.op)).toEqual(["restore"]);
+		// Aftermath runs outside the writer lane: wait for its second dispatch, not a time.
+		await second.promise;
+		expect(f.afterCommands).toEqual(["question-after r000000000003", "question-after r000000000003"]);
+		expect(f.prompts).not.toHaveBeenCalled();
+	});
+
+	it("an accepted owner answer wins over a later restore, and a restore over a later owner answer", async () => {
+		const first = fixture();
+		expect((await first.integration.admitOwnerAnswer(first.binding, "Keep waiting", "telegram")).status).toBe(
+			"committed",
+		);
+		expect((await first.restore()).status).toBe("refused");
+		expect(queueRecords(first.worker).map((r) => r.op)).toEqual(["owner_admission"]);
+		const second = fixture();
+		expect((await second.restore()).status).toBe("committed");
+		expect((await second.integration.admitOwnerAnswer(second.binding, "Keep waiting", "telegram")).status).toBe(
+			"refused",
+		);
+		expect(queueRecords(second.worker).map((r) => r.op)).toEqual(["restore"]);
+	});
+
+	it("refuses a malformed restore before dispatch and a restore receipt for another generation as uncertain", async () => {
+		const f = fixture();
+		const bad = await f.host.commitQuestion!(f.lead.getSessionId(), f.binding, {
+			kind: "restore",
+			rid: "r000000000004",
+			tag: "synthetic-tag",
+			reason: "Synthetic",
+			refs: { question: "q", source: "", block: "b", poke: "p", dispatch: "d" },
+		});
+		expect(bad.status).toBe("refused");
+		expect(f.commands).toEqual([]);
+		f.control.restoreWrongGeneration = true;
+		expect((await f.restore()).status).toBe("uncertain");
+		expect(f.afterCommands).toEqual([]);
+	});
+
+	it("restore keeps the parent hold and current-home checks at final consumption", async () => {
+		const f = fixture();
+		f.control.beforeConsume = () => f.parent.appendCustomEntry("queue", { v: 1, op: "pause", ts: 1500 });
+		expect(await f.restore()).toMatchObject({ status: "refused", reason: "parent held" });
+		const g = fixture();
+		g.control.beforeConsume = () => {
+			g.roles[0].homeChat = g.binding.worker;
+		};
+		expect((await g.restore()).status).toBe("refused");
+		expect(queueRecords(f.worker)).toEqual([]);
+		expect(queueRecords(g.worker)).toEqual([]);
+	});
+
 	it("writes only to the established native JSONL; replay sees the acknowledged recall", async () => {
 		const f = fixture();
 		expect((await f.recall()).status).toBe("committed");

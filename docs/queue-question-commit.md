@@ -108,6 +108,18 @@ The native command reports the parent and runs normal consult routing; the host 
 card delivery independently. Failure is logged and the canonical retraction remains retryable.
 This command must never prompt the worker; the real `/queue` command handles it natively.
 
+### Rule 24 restore (pi-queue Ops #674)
+
+A third change kind, `restore` (`{kind, rid, tag, reason, checkpoint?, refs}`), lets the accountable home
+put an automatic Rule 24 owner question back to its original block (pi-queue docs/rule24-restore-block.md).
+It uses the same lane, actor resolution and one-use token; the native worker authors and checks it. At
+final consumption it always runs the owner-acceptance fence (no duplicate skip: a duplicate restore is
+answered by the worker's own receipt check first). Durability requires exactly one appended `restore` op
+with this binding's id/n/at/revision, the binding's escalation as its `generation`, the receipt `rid`,
+and result revision = binding revision + 1. After `committed` or `already` the coordinator dispatches
+`/queue question-after <rid>`, which only reports the parent; it never prompts the worker. An older host
+refuses the unknown kind, so nothing is written.
+
 ## Actual owner acceptance boundaries
 
 1. AskHub's `answerStuck` (also Telegram/role-card answers) persists admission before the existing

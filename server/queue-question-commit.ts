@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { NativeQuestionWrite } from "./queue-question-durability.js";
 import {
 	isQuestionBinding,
+	isRestoreChange,
 	questionBindingKey,
 	questionEndpoint,
 	type QuestionActor,
@@ -60,7 +61,8 @@ export class QuestionCommitCoordinator {
 			!sourceSessionId ||
 			typeof change.rid !== "string" ||
 			!change.rid ||
-			(change.kind !== "recall" && change.kind !== "owner") ||
+			(change.kind !== "recall" && change.kind !== "owner" && change.kind !== "restore") ||
+			(change.kind === "restore" && !isRestoreChange(change)) ||
 			(change.kind === "recall" &&
 				(typeof change.reason !== "string" ||
 					!change.reason.trim() ||
@@ -81,7 +83,10 @@ export class QuestionCommitCoordinator {
 			if (this.lanes.get(key) === run) this.lanes.delete(key);
 			// The canonical ACK releases this writer lane. Notification is a separate native command;
 			// neither its latency nor its failure may reopen/undo the committed question transition.
-			if (c.kind === "recall" && (result.status === "committed" || result.status === "already"))
+			if (
+				(c.kind === "recall" || c.kind === "restore") &&
+				(result.status === "committed" || result.status === "already")
+			)
 				void this.afterRecall(b.worker, result.rid);
 		});
 		return run;
@@ -188,6 +193,15 @@ export class QuestionCommitCoordinator {
 			) {
 				ticket.complete(refused("question source, writer or department home changed before commit"));
 				return undefined;
+			}
+			// Rule 24 restore (Ops #674): the same accepted-but-undelivered owner-answer fence as a recall, always
+			// (a committed restore leaves no question binding to prove a duplicate; the worker returns its receipt first).
+			if (ticket.request.change.kind === "restore") {
+				const reason = this.host.recallRefusal(ticket.request);
+				if (reason) {
+					ticket.complete(refused(reason));
+					return undefined;
+				}
 			}
 			if (ticket.request.change.kind === "recall") {
 				const current = workerPort.binding(b.id);

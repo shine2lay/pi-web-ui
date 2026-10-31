@@ -12,7 +12,35 @@ export interface QuestionBinding {
 }
 export type QuestionChange =
 	| { kind: "recall"; rid: string; tag: string; reason: string }
-	| { kind: "owner"; rid: string; answer: string; from: string; record?: string };
+	| { kind: "owner"; rid: string; answer: string; from: string; record?: string }
+	/** Rule 24 (pi-queue Ops #674): the accountable home restores an automatic owner question to its original block. */
+	| {
+			kind: "restore";
+			rid: string;
+			tag: string;
+			reason: string;
+			checkpoint?: number;
+			refs: { question: string; source: string; block: string; poke: string; dispatch: string };
+	  };
+
+/** A restore request's own fields; authority, eligibility and the resulting block are the native worker's. */
+export function isRestoreChange(change: QuestionChange): boolean {
+	if (change.kind !== "restore") return false;
+	const refs = change.refs as Record<string, unknown> | undefined;
+	return (
+		/^r[0-9a-f]{12}$/.test(change.rid) &&
+		typeof change.reason === "string" &&
+		!!change.reason.trim() &&
+		change.reason.length <= 2000 &&
+		typeof change.tag === "string" &&
+		!!change.tag &&
+		(change.checkpoint === undefined ||
+			(typeof change.checkpoint === "number" && Number.isFinite(change.checkpoint))) &&
+		!!refs &&
+		typeof refs === "object" &&
+		["question", "source", "block", "poke", "dispatch"].every((k) => typeof refs[k] === "string" && !!refs[k])
+	);
+}
 export interface QuestionActor {
 	sessionId: string;
 	file: string;

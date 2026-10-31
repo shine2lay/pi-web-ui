@@ -65,6 +65,23 @@ export class NativeQuestionWrite {
 		const entry = candidates.find((e) => {
 			if (e.type !== "custom" || e.customType !== "queue" || !e.data || typeof e.data !== "object") return false;
 			const data = e.data as Record<string, unknown>;
+			if (change.kind === "restore") {
+				// Rule 24 (pi-queue Ops #674): the worker's restore op, its receipt and the question it closed.
+				const restoration = data.restoration as Record<string, unknown> | undefined;
+				return (
+					data.v === 1 &&
+					data.op === "restore" &&
+					data.id === b.id &&
+					data.n === b.n &&
+					data.at === b.at &&
+					data.revision === b.revision &&
+					data.generation === b.escalation &&
+					!!restoration &&
+					restoration.rid === result.rid &&
+					restoration.generation === b.escalation &&
+					result.revision === b.revision + 1
+				);
+			}
 			const receipt = data[change.kind === "owner" ? "admission" : "retraction"] as Record<string, unknown> | undefined;
 			return (
 				data.v === 1 &&

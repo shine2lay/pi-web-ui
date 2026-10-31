@@ -202,6 +202,8 @@ export function questionHostFixture({ separateHome = false }: { separateHome?: b
 		afterFinish: undefined as (() => Promise<void>) | undefined,
 		beforeAfter: undefined as (() => Promise<void>) | undefined,
 		appendFailure: false,
+		/** The synthetic worker writes a restore op naming another generation (a receipt the host must not accept). */
+		restoreWrongGeneration: false,
 		skipFinish: false,
 		busy: false,
 		done: false,
@@ -245,6 +247,13 @@ export function questionHostFixture({ separateHome = false }: { separateHome?: b
 			const records = queueRecords(worker);
 			const owner = records.findLast((r) => r.op === "owner_admission");
 			const recall = records.findLast((r) => r.op === "recall");
+			const restored = records.findLast((r) => r.op === "restore");
+			if (restored) {
+				const restoration = restored.restoration as { rid: string };
+				return c.kind === "restore" && restoration.rid === c.rid
+					? { status: "already", rid: restoration.rid, revision: Number(restored.revision) + 1 }
+					: refuse("question no longer open");
+			}
 			if (owner) {
 				const admission = owner.admission as { rid: string; answer: string };
 				return c.kind === "owner" && admission.rid === c.rid && admission.answer === c.answer
@@ -259,8 +268,23 @@ export function questionHostFixture({ separateHome = false }: { separateHome?: b
 					: refuse("routing changed");
 			}
 			if (b.revision !== control.revision || b.escalation !== control.escalation) return refuse("old occurrence");
+			// Rule 24 restore (Ops #674): a synthetic worker op with the receipt fields the host checks; eligibility
+			// and the restored block are native pi-queue's and proven in its own suites.
+			if (c.kind === "restore" && actor.file !== roles[0].homeChat) return refuse("not current home");
 			const record =
-				c.kind === "recall"
+				c.kind === "restore"
+					? {
+							v: 1,
+							op: "restore",
+							id: b.id,
+							n: b.n,
+							at: b.at,
+							revision: b.revision,
+							generation: control.restoreWrongGeneration ? "r0000000000ff" : b.escalation,
+							ts: 2000,
+							restoration: { rid: c.rid, generation: b.escalation, lead: actor.department, home: actor.home, reason: c.reason, ts: 2000 },
+						}
+					: c.kind === "recall"
 					? {
 							v: 1,
 							op: "recall",
@@ -290,7 +314,7 @@ export function questionHostFixture({ separateHome = false }: { separateHome?: b
 							admission: { rid: c.rid, answer: c.answer, from: c.from, ts: 2000 },
 						};
 			worker.appendCustomEntry("queue", record);
-			if (c.kind === "recall") control.revision++;
+			if (c.kind === "recall" || c.kind === "restore") control.revision++;
 			if (control.appendFailure) throw new Error("synthetic failure after native append");
 			return { status: "committed", rid: c.rid, revision: control.revision };
 		},
@@ -413,6 +437,16 @@ export function questionHostFixture({ separateHome = false }: { separateHome?: b
 				rid: "r000000000002",
 				tag: "synthetic-tag",
 				reason: "Synthetic lead correction",
+			}),
+		/** Rule 24 restore from the accountable home (the lead chat is the role's home here). */
+		restore: () =>
+			host.commitQuestion!(lead.getSessionId(), binding, {
+				kind: "restore",
+				rid: "r000000000003",
+				tag: "synthetic-tag",
+				reason: "Synthetic automatic escalation back to its block",
+				checkpoint: 9000,
+				refs: { question: "q", source: "s", block: "b", poke: "p", dispatch: "d" },
 			}),
 		restart: () => {
 			parent = SessionManager.open(binding.queue);
