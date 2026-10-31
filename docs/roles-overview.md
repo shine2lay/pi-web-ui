@@ -297,6 +297,30 @@ so. A lost connection shows "Not live" with the last update time, and a new conn
 
 Limits per role: 20 TL;DR lines, 20 queued tasks, report text up to 12,000 characters.
 
+## Server modules
+
+The server side is split by job (Backend #15, 2026-10-31; the code only moved, nothing it does
+changed). `server/roles-overview.ts` still exports every name it exported before, re-exporting the ones
+that moved, so its importers and tests import from it as before.
+
+- `server/roles-overview.ts`: assembles the snapshot. `RolesOverviewReader` (and `RolesOverviewHost`,
+  what it needs from the app), `roleUsageCost` (a row's usage cost from the host's meter cache) and the
+  per-role limits.
+- `server/roles-transcripts.ts`: reads the chat transcripts. `ChatPaths` (which files may be read) and
+  `TranscriptScans` (TL;DR, queue and model-change entries, from where the last look stopped).
+- `server/roles-json-file.ts`: `JsonFile`, a small JSON file read again only when it changed, never past
+  `JSON_FILE_MAX`.
+- `server/roles-reports.ts`: the 6 am report job as the page reads it (its runs, its schedule, a report's
+  sections cut to `ROLES_REPORT_MAX`).
+- `server/roles-watch.ts`: `RolesWatch`, which pushes the overview to the windows that watch, only what
+  changed.
+- `server/roles-row.ts`: the pieces of one role's row (TL;DR lines, status, work mode and goals, model
+  name).
+- `server/roles-message-approvals.ts`: the role-message approval step's state as the page shows it
+  (`approvalsOf`).
+- Existing modules that took a piece: `server/roles-task-next.ts` (a task's row: `taskOf`, `linkOf` and
+  its lead block) and `server/roles-asks.ts` (the order asks are listed in: `sortAsks`).
+
 ## Links
 
 - `?view=roles` opens the page, `?view=roles#r-<role>` at that role's tile.

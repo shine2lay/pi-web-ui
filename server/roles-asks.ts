@@ -4,7 +4,7 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import type { Ask, AskFieldAnswer, AskOption } from "./asks.js";
-import type { UiRoleAskField, UiRoleAskOption, UiRoleAskView } from "./protocol.js";
+import type { UiRoleAsk, UiRoleAskField, UiRoleAskOption, UiRoleAskView } from "./protocol.js";
 
 export const ROLE_ASK_KEY_MAX = 400;
 export const ROLE_ASK_FIELDS_MAX = 10;
@@ -225,4 +225,16 @@ export function answersFromPage(
 		answers.push(a);
 	}
 	return { answers };
+}
+
+// The order a role's asks are listed in (moved here from roles-overview.ts, Backend #15).
+
+/** Oldest first; an ask whose start isn't known goes last. */
+export function sortAsks(asks: UiRoleAsk[]): UiRoleAsk[] {
+	return [...asks].sort((a, b) => {
+		if (a.since === undefined || b.since === undefined) {
+			if (a.since !== b.since) return a.since === undefined ? 1 : -1;
+		} else if (a.since !== b.since) return a.since - b.since;
+		return a.key.localeCompare(b.key);
+	});
 }
