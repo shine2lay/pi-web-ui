@@ -3,6 +3,7 @@
 // vitest runs its parts side by side (docs/test-speed.md).
 import { describe, expect, it } from "vitest";
 import { chooseGrant } from "../../server/role-message-guard-host.js";
+import { GUARD_POLICY_V1 } from "../../server/role-message-limits.js";
 
 describe("ladder: which grant a send uses", () => {
 	const actor = { role: "alpha", sessionFile: "/a", task: null } as never;
@@ -51,7 +52,7 @@ describe("ladder: which grant a send uses", () => {
 		while (r && line[r] && line[r].hop > hop) r = line[r].parent;
 		return r && line[r]?.hop === hop ? r : undefined;
 	};
-	const base = { actor, to: "beta", now: 1_000, wanted: null, ancestorAt };
+	const base = { actor, to: "beta", now: 1_000, wanted: null, ancestorAt, policy: GUARD_POLICY_V1 };
 
 	it("uses the grant on its own line, later hops included", () => {
 		expect(chooseGrant({ ...base, grants: [grant("g1")], causal: at(7, "m6") })).toMatchObject({ kind: "use" });

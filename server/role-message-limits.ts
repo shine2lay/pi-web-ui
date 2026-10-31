@@ -60,8 +60,9 @@ export const GUARD_POLICY_V2: GuardPolicyV2 = Object.freeze({
 	ordinary: Object.freeze({ acceptedPerOrigin: 40, rollingWindowMs: 3600000 }),
 });
 
-/** Compatibility-reader phase: old limits stay active until its checked installation is verified. */
-export const ROLE_MESSAGE_POLICY: GuardPolicy = GUARD_POLICY_V1;
+/** Active policy. V2 since the owner's switch-on (2026-10-31, dr-2b5b1af439f0); the V2 reader has been live since 2aaea11b.
+ * Undo: select GUARD_POLICY_V1 here and deploy; never install a build older than 2aaea11b over V2 records. */
+export const ROLE_MESSAGE_POLICY: GuardPolicy = GUARD_POLICY_V2;
 
 export function guardPolicyFor(version: GuardPolicyV1["version"]): GuardPolicyV1;
 export function guardPolicyFor(version: GuardPolicyV2["version"]): GuardPolicyV2;

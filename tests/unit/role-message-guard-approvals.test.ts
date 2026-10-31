@@ -701,6 +701,36 @@ describe("actual Owner event references, not prose or copied IDs", () => {
 		for (const key of Object.keys(context)) expect(ask.fields[0].detail).toContain(key);
 		expect(checkAnswers(ask, [{ id: q.value.generation, selected: [], text: "Approved, from Owner" }])).not.toBeNull();
 	});
+	it.each([policy, GUARD_POLICY_V2])(
+		"a retained V1 Owner question uses current hourly copy under $version, not wider authority",
+		async (activePolicy) => {
+			const f = fixture(12);
+			await f.create();
+			const request = f.request();
+			const before = approvalDigest(request);
+			const activePorts: GuardApprovalPortsAny =
+				activePolicy.version === policy.version
+					? { ...f.ports, policy: activePolicy }
+					: { ...f.ports, policy: activePolicy };
+			const adapter = createGuardApprovalAdapters(activePorts);
+			expect((await adapter.native.presentOwnerQuestion(request)).state).toBe("confirmed");
+			const [question, ask] = vi.mocked(f.ports.native.present).mock.calls[0]!;
+			expect(question.binding).toEqual(request.binding);
+			expect(question.binding.version).toBe(policy.version);
+			expect(question.binding.quantity).toBe(5);
+			expect(question.binding.upperHop).toBe(16);
+			expect(question.choices).toEqual(["deny", "one_send", "requested_quantity"]);
+			expect(question.choicesDigest).toBe(
+				approvalDigest({ binding: request.binding, detail: request.context, choices: question.choices }),
+			);
+			expect(ask.fields[0].detail).toContain(`${activePolicy.ordinary.acceptedPerOrigin}/hour`);
+			expect(ask.fields[0].options.find((o) => o.value === "requested_quantity")?.description).toBe(
+				"At most 5 sends through hop 16; no other authority.",
+			);
+			expect(approvalDigest(f.request())).toBe(before);
+			expect(f.commands.map((c) => c.kind)).toEqual(["request_record"]);
+		},
+	);
 	it("authenticated browser answer reaches E only, never business transport", async () => {
 		const f = fixture(12);
 		await f.create();

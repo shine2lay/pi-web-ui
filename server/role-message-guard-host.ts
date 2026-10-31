@@ -220,7 +220,7 @@ function parentOf(c: GuardKnownCausality): string | undefined {
 /** Which grant (if any) a business send uses. Pure, so the stage tests can pin it.
  *  - A grant belongs to one chain line: same root, and the record it was asked from is an ancestor of
  *    this send (branches after that point share its exact finite sends; a branch from before it can't use it).
- *  - Below hop 7 nothing is used unless the caller names a grant.
+ *  - Within the selected policy's free-hop band nothing is used unless the caller names a grant.
  *  - A relevant grant that is spent, expired, denied or revoked is still handed to E, so the sender hears
  *    the exact reason instead of a fresh "approval needed".
  *  - A relevant grant whose scope doesn't cover this sender, recipient, task or hop is a mismatch, and

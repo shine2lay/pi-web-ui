@@ -55,9 +55,26 @@ new sends obey the restored stricter limits and cannot use lower authority
 above the restored lower ceiling. Do not restore settings, message or journal
 snapshots. Unknown/corrupt/unsupported versions fail closed.
 
+## Activation (Ops HOME, 2026-10-31)
+
+The owner asked again, via COO (rm-e5dd72ba): "raise the limit, i think we hit that limit too
+often, the goal of that is to avoid loop forever, so just double limits", and picked "Switch on the
+doubled limits" (dr-2b5b1af439f0). The compatibility reader (2aaea11b) has been live since
+2026-10-23 22:47 PDT. Phase 2 had stalled: its gate failed on an unbuilt worktree and then on an
+unrelated load-sensitive test, and its plan-amendment question was never answered.
+
+Hypothesis H-MSG-ACTIVATE: selecting V2 is the only change needed. Expected: the startup marker
+reads `role-message-policy version=role-message-guard/v2 hourly=40 free=12 lower=22 owner=23
+grant=10 exemptions=ops,temper`, and the message_role tool shows 40/hour and 1–12 free. Wrong if
+the marker stays v1 or any role-message test fails. Result: see Status below.
+
+Status: activation commit landed and deployed by Ops HOME; result recorded in the commit's deploy
+check. Undo: deploy a forward inverse selector (V2 -> V1); `pi-web-deploy rollback` to a build
+that contains 2aaea11b is also safe. Never install a build older than 2aaea11b.
+
 ## Fixed-input proof and rollout receipts
 
-Not yet activated. Tests use isolated temporary stores, never real chats or live sends.
+Tests use isolated temporary stores, never real chats or live sends.
 Keep frozen V1 replay/golden vectors explicitly bound to V1. Add V2 native,
 host and core boundaries, hourly floods/reload/multiple capped roles, mixed
 legacy requests/grants/TTL/uses, first-answer/scoping/authentication/holds,

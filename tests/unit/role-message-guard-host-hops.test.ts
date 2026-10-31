@@ -2,7 +2,7 @@
 // cases (rule 16): ordinary hops and the 7th. Shared world: role-message-guard-host-harness.ts (Ops #230 split the
 // one host test file so vitest runs its parts side by side; docs/test-speed.md).
 import { describe, expect, it } from "vitest";
-import { ROLE_MESSAGE_CHAIN_MAX } from "../../server/role-messages.js";
+import { GUARD_POLICY_V1 } from "../../server/role-message-limits.js";
 import {
 	ask,
 	C,
@@ -41,7 +41,7 @@ describe("ladder: ordinary hops and the 7th", () => {
 			{ ...who(w, at.from, at.file, last), handling: w.rm.handlingDepth(at.file, last) },
 			{ to: at.to, kind: "fyi", text: "done" },
 		);
-		expect(ROLE_MESSAGE_CHAIN_MAX).toBe(6);
+		expect(GUARD_POLICY_V1.depth.unapprovedThrough).toBe(6);
 		expect(old).toMatchObject({ ok: false });
 		expect((old as { error: string }).error).not.toContain("Approval needed");
 		const ladder = await send(w, at.from, at.file, at.to, { text: "done" });

@@ -41,6 +41,7 @@ import type {
 	GuardHostVerifierAny,
 	GuardOwnerQuestionAny,
 	GuardOwnerQuestionV2,
+	GuardPolicy,
 	GuardPolicyV2,
 	GuardRequestAny,
 	GuardRequestV2,
@@ -237,12 +238,16 @@ function legacyQuestion(question: GuardOwnerQuestionAny): question is GuardOwner
 	return question.binding.version === "role-message-guard/v1";
 }
 
-/** Exact finite native Ask descriptor. No multi-select, custom prose or Auto approve route. */
+/** Exact finite native Ask descriptor. No multi-select, custom prose or Auto approve route.
+ * Current hourly copy is separate from the question's immutable revision-bound authority. */
 export function ownerApprovalAsk(
-	...args: [GuardOwnerQuestion, number, GuardPolicyV1?] | [GuardOwnerQuestionV2, number, GuardPolicyV2]
+	...args:
+		| [GuardOwnerQuestion, number, GuardPolicyV1?, GuardPolicy["ordinary"]["acceptedPerOrigin"]?]
+		| [GuardOwnerQuestionV2, number, GuardPolicyV2, GuardPolicy["ordinary"]["acceptedPerOrigin"]?]
 ): Ask {
-	const [q, createdAt, selectedPolicy] = args;
+	const [q, createdAt, selectedPolicy, activeHourlyLimit] = args;
 	const policy = selectedPolicy ?? guardPolicyFor(q.binding.version)!;
+	const hourlyLimit = activeHourlyLimit ?? policy.ordinary.acceptedPerOrigin;
 	const c = q.detail;
 	const escape = (s: string) => s.replace(/[&<>]/gu, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[ch]!);
 	const detail = escape(
@@ -261,7 +266,7 @@ export function ownerApprovalAsk(
 				declaredClaims: c.declaredClaims,
 				safetyScopeAndHolds: c.safetyScopeAndHolds,
 				binding: q.binding,
-				authorityLimit: `Communication only; original root and scope; finite uses; one hour maximum; no automatic business send. Holds, ${policy.ordinary.acceptedPerOrigin}/hour (Ops/Temper exempt), access and consent still apply. This is not action, spending, installation or hold-lift authority.`,
+				authorityLimit: `Communication only; original root and scope; finite uses; one hour maximum; no automatic business send. Holds, ${hourlyLimit}/hour (Ops/Temper exempt), access and consent still apply. This is not action, spending, installation or hold-lift authority.`,
 			},
 			null,
 			2,
@@ -575,8 +580,8 @@ export function createGuardApprovalAdapters(ports: GuardApprovalPortsAny) {
 		)
 			return invalid("Exact native Owner question required");
 		const ask = legacyQuestion(q)
-			? ownerApprovalAsk(q, r.createdAt, guardPolicyFor("role-message-guard/v1")!)
-			: ownerApprovalAsk(q, r.createdAt, guardPolicyFor("role-message-guard/v2")!);
+			? ownerApprovalAsk(q, r.createdAt, guardPolicyFor("role-message-guard/v1")!, policy.ordinary.acceptedPerOrigin)
+			: ownerApprovalAsk(q, r.createdAt, guardPolicyFor("role-message-guard/v2")!, policy.ordinary.acceptedPerOrigin);
 		return native.present(q, ask, null);
 	}
 	return {

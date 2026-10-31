@@ -14,6 +14,7 @@ import {
 	roleMessagesHourlyExempt,
 } from "../../server/role-message-limits.js";
 import { makeMessageRoleTool } from "../../server/role-message-tool.js";
+import { ROLE_MESSAGE_CHAIN_MAX, ROLE_MESSAGES_PER_HOUR } from "../../server/role-messages.js";
 
 const binding = (version: string, hop: number, quantity: number, tier: "lower" | "owner") => ({
 	version,
@@ -24,6 +25,15 @@ const binding = (version: string, hop: number, quantity: number, tier: "lower" |
 });
 
 describe("versioned active policy and strictly preserved legacy domains", () => {
+	it("activates the expanded default only after the compatible reader, not merely its explicit test policy", () => {
+		expect(ROLE_MESSAGE_POLICY).toBe(GUARD_POLICY_V2);
+		expect(ROLE_MESSAGES_PER_HOUR).toBe(40);
+		expect(ROLE_MESSAGE_CHAIN_MAX).toBe(12);
+		expect(roleMessagePolicyMarker()).toBe(
+			"role-message-policy version=role-message-guard/v2 hourly=40 free=12 lower=22 owner=23 grant=10 exemptions=ops,temper",
+		);
+		expect(roleMessagePolicyMarker(GUARD_POLICY_V1)).not.toBe(roleMessagePolicyMarker());
+	});
 	it("keeps frozen V1 and explicit V2 literals, without doubling unrelated capacities", () => {
 		expectTypeOf<GuardQuantity>().toEqualTypeOf<1 | 2 | 3 | 4 | 5>();
 		expectTypeOf<GuardQuantityV2>().toEqualTypeOf<1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10>();

@@ -46,8 +46,8 @@ async function attempt(w: World, mode: string, id: string, file: string, n: numb
 }
 
 describe("expanded policy across native, ready and unavailable dispatch", () => {
-	it("the deployed default stays legacy during compatibility-reader installation", () => {
-		expect(ROLE_MESSAGE_POLICY).toBe(GUARD_POLICY_V1);
+	it("the deployed default selects V2 only after compatibility-reader installation", () => {
+		expect(ROLE_MESSAGE_POLICY).toBe(GUARD_POLICY_V2);
 	});
 	it.each(["native", "ready", "unavailable"])("40/41 and exact rolling-hour edge, mode %s", async (mode) => {
 		const w = await world(undefined, { policy: GUARD_POLICY_V2 });

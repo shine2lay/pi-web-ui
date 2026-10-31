@@ -9,10 +9,10 @@ Roles message each other with `message_role`. A message started by another role'
 ## Current policy and versioned compatibility (Ops #453)
 
 The shared selector in `server/role-message-limits.ts` drives native/unavailable fallback,
-host/core, approval validation, tool schema/help and startup metadata. **Compatibility-reader
-phase: V1 (20/6/11/12/max5) remains active.** The separately versioned V2 policy is
-40 per rolling hour, 12 free, lower grants for 13–22, Owner from23, at most10 new sends
-with the default Owner band ending32. It is not active merely because its reader exists.
+host/core, approval validation, tool schema/help and startup metadata. **The selected current
+policy is V2** (Owner switch-on 2026-10-31, dr-2b5b1af439f0): 40 per rolling hour, 12 free,
+lower grants for 13–22, Owner from 23, at most 10 new sends with the default Owner band
+ending 32. V1 (20/6/11/12/max5) stays readable for retained records only.
 See [the hypothesis, two checked installs and safe undo](role-message-policy-v2.md).
 
 Existing requests/grants retain their recorded version, quantity, tier, scope, uses and expiry.
@@ -21,14 +21,14 @@ one. Neither policy turns on the ladder, wakes or a held feature, retries denied
 or enlarges/reissues an existing grant. Ops/Temper's hourly-only exemption stays unchanged.
 Board10/hour, request/protected/incident quotas and store capacities do not change.
 
-## What a role sees in the compatibility phase (V1)
+## What a role sees with the selected V2 policy
 
 | Hop   | What happens                                                                                           |
 | ----- | ------------------------------------------------------------------------------------------------------ |
-| 1–6   | Sent as before.                                                                                        |
-| 7–11  | Needs a grant from the responsible lead, or the COO by default. The tool says so and how to ask.       |
-| 12–16 | Needs a grant from the Owner (hop 12 included). A grant covers at most hops 12–16.                     |
-| 17+   | Outside the native default finite Owner band; ask the Owner how to go on. No self-expanding allowance. |
+| 1–12  | Sent as before.                                                                                        |
+| 13–22 | Needs a grant from the responsible lead, or the COO by default. The tool says so and how to ask.       |
+| 23–32 | Needs a grant from the Owner (hop 23 included). A new default grant ends no later than hop 32.         |
+| 33+   | Outside the native default finite Owner band; ask the Owner how to go on. No self-expanding allowance. |
 
 - Ask: `message_role` with `approval: { action: "request", recipients, context }`. The context is the
   Owner's dialog package (goal, progress, prior decisions, why needed, questions, options, cost/time/risk,
@@ -36,8 +36,8 @@ Board10/hour, request/protected/incident quotas and store capacities do not chan
 - Decide (the approver only): `approval: { action: "decide", requestId, generation, choice, reason }` with
   `deny`, `one_send`, `requested_quantity` or `escalate_owner` (the lower approver may pass it to the
   Owner once). Status: `action: "status"`.
-- A grant: at most **5 accepted business sends** in total across its named roles and branches, an upper
-  hop (lower tier never above 11), **60 minutes**, bound to one chain line (its root and the record it was
+- A grant: at most **10 accepted business sends** in total across its named roles and branches, an upper
+  hop (lower tier never above 22), **60 minutes**, bound to one chain line (its root and the record it was
   asked at), the named roles (requester included) and the requester's task. No automatic grants or
   renewal, no progress judge, no self-approval; a COO asking for itself without a distinct lead goes to
   the Owner.
@@ -46,7 +46,7 @@ Board10/hour, request/protected/incident quotas and store capacities do not chan
   the request generation. They send no agent message and charge nothing. Queue Auto approve is not
   Owner authority.
 - Approval controls are typed: they skip only the business depth check and still count in the hourly
-  ledger. The limit is **20 accepted per role per rolling hour**, except **temper and ops have no hourly
+  ledger. The limit is **40 accepted per role per rolling hour**, except **temper and ops have no hourly
   limit**, across all their chats (Owner, 2026-10-20, dr-c6daedfa9fef; Ops #318). Their messages still
   count; the exemption skips only the hourly refusal, not chain approvals, grants, pauses, holds, scope,
   budgets or consents. No other role or the board's post cap changes.

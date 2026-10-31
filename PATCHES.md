@@ -10,6 +10,11 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## role-message-policy-v2-activate: select the doubled role-message limits
+
+- `local` (Ops HOME, owner's switch-on 2026-10-31, dr-2b5b1af439f0): `server/role-message-limits.ts` selects `GUARD_POLICY_V2` (40/hour, 12 free, lower grants 13–22, Owner from 23, grants up to 10). Retained V1 records keep their own bounds; Owner question copy shows the current hourly limit without widening a V1 grant. Tests: `tests/unit/role-message-policy*.test.ts`, `tests/unit/role-message-guard-approvals.test.ts`.
+- Undo: forward inverse selector (V2 -> V1) and deploy; never install a build older than `role-message-policy-v2-reader` (2aaea11b). Docs: `docs/role-message-policy-v2.md`, `docs/role-message-ladder.md`.
+
 ## queue-owner-relay: carry an owner's dialog answer from one department's home chat to another's queue
 
 - `local` (Ops #676, host half; H-CROSS-QUEUE-OWNER-2): `server/queue-owner-relay.ts` authenticates the calling session as its role's one registered home chat, resolves the target role's one home chat from the identity registry (never a caller path), and hands that home a single-use 256-bit ticket bound to both homes through `/queue owner-relay <token>`. Only the target home's own reply is success; a ticket not taken while its command runs dies (refused), taken but unanswered is uncertain. One lane per target home, separate from #671's commit lanes.
