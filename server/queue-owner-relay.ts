@@ -71,7 +71,12 @@ export function ownerRelayRequest(raw: unknown): OwnerRelayRequest | undefined {
 	if (typeof r.id !== "number" || !Number.isSafeInteger(r.id) || r.id <= 0) return undefined;
 	if (typeof r.record !== "string" || !RECORD.test(r.record)) return undefined;
 	if (r.note !== undefined && (typeof r.note !== "string" || r.note.length > NOTE_MAX)) return undefined;
-	return { role: r.role, id: r.id, record: r.record, ...(typeof r.note === "string" && r.note ? { note: r.note } : {}) };
+	return {
+		role: r.role,
+		id: r.id,
+		record: r.record,
+		...(typeof r.note === "string" && r.note ? { note: r.note } : {}),
+	};
 }
 
 /** The target home's one reply, checked; anything else counts as unknown, never as success. */
@@ -91,7 +96,11 @@ function relayResult(raw: unknown): OwnerRelayResult {
 			};
 		}
 	}
-	if (r && (r.status === "refused" || r.status === "failed" || r.status === "uncertain") && typeof r.reason === "string") {
+	if (
+		r &&
+		(r.status === "refused" || r.status === "failed" || r.status === "uncertain") &&
+		typeof r.reason === "string"
+	) {
 		return { status: r.status, reason: r.reason };
 	}
 	return { status: "uncertain", reason: "the target home's reply had an unknown shape" };
@@ -142,7 +151,8 @@ export class OwnerRelayCoordinator {
 				return refused(`the ${request.role} home chat isn't open with its queue`);
 			}
 			const again = this.host.roleHome(source);
-			if (!again || again.role !== from.role || again.file !== from.file) return refused("the calling home chat changed");
+			if (!again || again.role !== from.role || again.file !== from.file)
+				return refused("the calling home chat changed");
 			const grant: OwnerRelayGrant = Object.freeze({
 				...request,
 				source: Object.freeze({ role: from.role, sessionId: source, file: from.file }),
@@ -174,13 +184,18 @@ export class OwnerRelayCoordinator {
 					console.error("[owner-relay] command failed after its reply:", errorText(error));
 					return;
 				}
-				ticket.complete(ticket.consumed ? { status: "uncertain", reason: errorText(error) } : refused(errorText(error)));
+				ticket.complete(
+					ticket.consumed ? { status: "uncertain", reason: errorText(error) } : refused(errorText(error)),
+				);
 			};
 			try {
 				void this.host.dispatch(grant.target.file, `/queue owner-relay ${token}`).then((ok) => {
 					if (ticket.finished) return;
 					// Not taken by now: the ticket dies here, so a late command can't use it.
-					if (!ticket.consumed) ticket.complete(refused(ok ? "the target home didn't take the relay" : "the target home has no queue command"));
+					if (!ticket.consumed)
+						ticket.complete(
+							refused(ok ? "the target home didn't take the relay" : "the target home has no queue command"),
+						);
 					else ticket.complete({ status: "uncertain", reason: "the target home returned without its reply" });
 				}, failure);
 			} catch (error) {

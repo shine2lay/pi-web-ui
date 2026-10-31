@@ -58,7 +58,9 @@ export function nativeQuestionHost(
 		const role = roleOf(session, roles);
 		const homes = roles.filter((r) => r.id === role && r.homeChat);
 		const file = session.sessionManager.getSessionFile();
-		return role && file && homes.length === 1 && samePath(file, homes[0].homeChat) ? { session, role, file } : undefined;
+		return role && file && homes.length === 1 && samePath(file, homes[0].homeChat)
+			? { session, role, file }
+			: undefined;
 	};
 	const actor = (sourceSessionId: string, binding: QuestionBinding) => {
 		const source = registered(sourceSessionId);

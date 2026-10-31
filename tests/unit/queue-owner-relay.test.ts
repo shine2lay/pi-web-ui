@@ -167,7 +167,10 @@ describe("OwnerRelayCoordinator", () => {
 		w.onCommand = async () => {
 			throw new Error("chat closed");
 		};
-		expect(await w.coordinator.relayOwnerAnswer("coo-sid", REQUEST)).toEqual({ status: "refused", reason: "chat closed" });
+		expect(await w.coordinator.relayOwnerAnswer("coo-sid", REQUEST)).toEqual({
+			status: "refused",
+			reason: "chat closed",
+		});
 
 		// Another session presenting the ticket kills it; the real target can't use it afterwards.
 		w.onCommand = async (_file, line) => {
@@ -207,7 +210,10 @@ describe("OwnerRelayCoordinator", () => {
 			expect(w.coordinator.consumeOwnerRelay(line.split(" ")[2], "rollcall-sid")).toBeDefined();
 			throw new Error("command crashed");
 		};
-		expect(await w.coordinator.relayOwnerAnswer("coo-sid", REQUEST)).toEqual({ status: "uncertain", reason: "command crashed" });
+		expect(await w.coordinator.relayOwnerAnswer("coo-sid", REQUEST)).toEqual({
+			status: "uncertain",
+			reason: "command crashed",
+		});
 
 		// A reply of an unknown shape is unknown; a second reply changes nothing.
 		w.onCommand = async (_file, line) => {
@@ -244,6 +250,10 @@ describe("OwnerRelayCoordinator", () => {
 		release();
 		expect(await first).toMatchObject({ status: "relayed" });
 		expect(await second).toMatchObject({ status: "relayed" });
-		expect(order.slice(3)).toEqual(["end /chats/rollcall.jsonl", "start /chats/rollcall.jsonl", "end /chats/rollcall.jsonl"]);
+		expect(order.slice(3)).toEqual([
+			"end /chats/rollcall.jsonl",
+			"start /chats/rollcall.jsonl",
+			"end /chats/rollcall.jsonl",
+		]);
 	});
 });
