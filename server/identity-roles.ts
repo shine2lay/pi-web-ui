@@ -28,7 +28,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import {
@@ -42,6 +42,7 @@ import {
 	type Settings,
 } from "./identity-config.js";
 import type { IdentitySaveError, UiRoleSkill } from "./protocol.js";
+import { writeWhole } from "./write-whole.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -50,14 +51,6 @@ const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v =
 /** 文件内容的指纹：存盘时拿它确认文件在页面打开之后没被别人改过。 */
 export function textHash(text: string): string {
 	return createHash("sha1").update(text, "utf8").digest("hex");
-}
-
-/** 整个文件写进去，不会写一半：同目录的临时文件，再 rename（同 pi-identity 的 writeWhole）。 */
-export function writeWhole(path: string, text: string): void {
-	mkdirSync(dirname(path), { recursive: true });
-	const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-	writeFileSync(tmp, text, "utf8");
-	renameSync(tmp, path);
 }
 
 /** A file's text; a missing file is empty. */

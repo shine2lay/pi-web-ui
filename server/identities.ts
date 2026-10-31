@@ -46,9 +46,9 @@ import {
 	roleInfoParts,
 	roleViewOf,
 	textHash,
-	writeWhole,
 	type RoleView,
 } from "./identity-roles.js";
+import { writeWhole } from "./write-whole.js";
 
 // about-drafts: ABOUT_MAX lives in identity-roles.ts now (an accepted draft's about page has the same cap).
 export { ABOUT_MAX, textHash } from "./identity-roles.js";

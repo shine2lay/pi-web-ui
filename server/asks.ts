@@ -17,7 +17,19 @@
  *
  * The browser keeps working exactly as before; this list only mirrors it. The first answer wins:
  * once an ask is settled, a late answer from elsewhere gets "no longer waiting".
+ *
+ * owner-question routing (docs/owner-question-routing.md): an ask may be added with a route
+ * (owner-question-route.ts). No route, or a direct one, behaves exactly as above (a direct route only
+ * adds its line to the ask). One routed to COO is held: kept and answerable on the asking chat's own
+ * page, but neither listed nor announced ("held" instead of "appeared") until it is let through
+ * (release: "released", then "appeared"), or COO hands a question back (returnToAsker: "returned",
+ * and it no longer waits). No caller passes a route yet (Ops #684, inert groundwork).
  */
+import {
+	cameThroughCooLabel,
+	type OwnerQuestionCooReason,
+	type OwnerQuestionDirectReason,
+} from "./owner-question-route.js";
 import type { QuestionAnswer, UiApprovalCategory, UiDialog, UiQuestion, UiQuestionOption } from "./protocol.js";
 
 export type AskKind = "question" | "dialog" | "approval" | "stuck";
@@ -65,7 +77,43 @@ export interface Ask {
 	task?: { id: number; title: string };
 	/** decision-records: kind "question": the ask_user_question tool call it came from. */
 	toolCallId?: string;
+	/** owner-question routing: where it went and the line it is shown with (absent = no route, as before). */
+	route?: AskRoute;
 }
+
+/** owner-question routing: who let a held ask through. */
+export type AskReleasedBy = "coo" | "safety-net";
+
+/** owner-question routing: an ask's route as AskHub keeps it. */
+export type AskRoute =
+	| { to: "direct"; reason: OwnerQuestionDirectReason; label?: string }
+	| {
+			to: "coo";
+			reason: OwnerQuestionCooReason;
+			/** When it was held (kept across a restart). */
+			heldAt: number;
+			/** Set once it is let through; until then it is held. */
+			releasedBy?: AskReleasedBy;
+			releasedAt?: number;
+			label?: string;
+			note?: string;
+			recommendation?: string;
+	  };
+
+/** add()'s route. A COO route is held from now, or from `heldAt`; one already let through (after a restart) appears at once. */
+export type AskRouteInput =
+	| { to: "direct"; reason: OwnerQuestionDirectReason; label?: string }
+	| {
+			to: "coo";
+			reason: OwnerQuestionCooReason;
+			heldAt?: number;
+			releasedBy?: AskReleasedBy;
+			releasedAt?: number;
+			note?: string;
+			recommendation?: string;
+	  };
+
+type CooRoute = Extract<AskRoute, { to: "coo" }>;
 
 /** The answer to one field: the chosen values, and/or a typed text. */
 export interface AskFieldAnswer {
@@ -77,7 +125,13 @@ export interface AskFieldAnswer {
 export type AskEvent =
 	| { type: "appeared"; ask: Ask }
 	| { type: "answered"; ask: Ask; summary: string; from: string; answers?: AskFieldAnswer[] }
-	| { type: "gone"; ask: Ask; reason: string };
+	| { type: "gone"; ask: Ask; reason: string }
+	/** owner-question routing: kept for COO, not shown to the owner (no "appeared"). */
+	| { type: "held"; ask: Ask }
+	/** owner-question routing: let through; "appeared" follows. */
+	| { type: "released"; ask: Ask; by: AskReleasedBy }
+	/** owner-question routing: handed back to the chat that asked it, which should do `note` instead; it no longer waits. */
+	| { type: "returned"; ask: Ask; note: string };
 
 export interface AskResult {
 	ok: boolean;
@@ -95,21 +149,93 @@ export const FROM_BROWSER = "browser";
 
 export const NOT_WAITING = "no longer waiting";
 
+/** owner-question routing: release / returnToAsker on an ask that isn't held for COO. */
+export const NOT_HELD = "not held for COO";
+
+const ONLY_QUESTIONS_GO_BACK = "only a question can go back to the chat that asked it";
+const RETURN_NEEDS_NOTE = "say what the chat should do instead";
+
+/** owner-question routing: routed to COO and not let through yet. */
+const isHeld = (ask: Ask): boolean => ask.route?.to === "coo" && ask.route.releasedBy === undefined;
+
+/** A COO route let through, with its line: COO's words, or that COO added nothing and how long it took. */
+function letThrough(route: CooRoute, by: AskReleasedBy, at: number, note?: string, recommendation?: string): CooRoute {
+	const n = typeof note === "string" ? note.trim() : "";
+	const r = typeof recommendation === "string" ? recommendation.trim() : "";
+	return {
+		...route,
+		releasedBy: by,
+		releasedAt: at,
+		label: cameThroughCooLabel(Boolean(n || r), at - route.heldAt),
+		...(n ? { note: n } : {}),
+		...(r ? { recommendation: r } : {}),
+	};
+}
+
 export class AskHub {
 	private readonly asks = new Map<string, { ask: Ask; onAnswer: AskAnswerFn }>();
 	private readonly listeners = new Set<(ev: AskEvent) => void>();
+
+	/** `now`: when an ask is held and let through (owner-question routing). */
+	constructor(private readonly now: () => number = Date.now) {}
 
 	/** Someone (a plugin) is listening, so a chat with no browser open can still get an answer. */
 	get listening(): boolean {
 		return this.listeners.size > 0;
 	}
 
-	/** Add a waiting ask. False (and nothing happens) when one with this id is already waiting. */
-	add(ask: Ask, onAnswer: AskAnswerFn): boolean {
+	/**
+	 * Add a waiting ask. False (and nothing happens) when one with this id is already waiting.
+	 * With a route (owner-question routing), it is kept as a copy carrying the route: a COO route that
+	 * isn't let through yet is held ("held", not "appeared"); the caller's object is never changed.
+	 */
+	add(ask: Ask, onAnswer: AskAnswerFn, route?: AskRouteInput): boolean {
 		if (this.asks.has(ask.id)) return false;
-		this.asks.set(ask.id, { ask, onAnswer });
-		this.emit({ type: "appeared", ask });
+		const kept: Ask = route ? { ...ask, route: this.routeOf(route) } : ask;
+		this.asks.set(ask.id, { ask: kept, onAnswer });
+		this.emit(isHeld(kept) ? { type: "held", ask: kept } : { type: "appeared", ask: kept });
 		return true;
+	}
+
+	/**
+	 * owner-question routing: let a held ask through, by COO (with its note and recommendation) or by
+	 * the safety net. It is listed again in its first place, and "released" then "appeared" go out.
+	 */
+	release(id: string, by: AskReleasedBy, note?: string, recommendation?: string): AskResult {
+		const e = this.asks.get(id);
+		if (!e) return { ok: false, error: NOT_WAITING };
+		const route = e.ask.route;
+		if (route?.to !== "coo" || route.releasedBy !== undefined) return { ok: false, error: NOT_HELD };
+		const ask: Ask = { ...e.ask, route: letThrough(route, by, this.now(), note, recommendation) };
+		this.asks.set(id, { ask, onAnswer: e.onAnswer });
+		this.emit({ type: "released", ask, by });
+		if (this.asks.get(id)?.ask === ask) this.emit({ type: "appeared", ask });
+		return { ok: true };
+	}
+
+	/**
+	 * owner-question routing: COO hands a held question back to the chat that asked it, saying what
+	 * it should do instead (`note`). It no longer waits; "returned" goes out. Questions only.
+	 */
+	returnToAsker(id: string, note: string): AskResult {
+		const e = this.asks.get(id);
+		if (!e) return { ok: false, error: NOT_WAITING };
+		if (e.ask.kind !== "question") return { ok: false, error: ONLY_QUESTIONS_GO_BACK };
+		if (!isHeld(e.ask)) return { ok: false, error: NOT_HELD };
+		const text = typeof note === "string" ? note.trim() : "";
+		if (!text) return { ok: false, error: RETURN_NEEDS_NOTE };
+		this.asks.delete(id);
+		this.emit({ type: "returned", ask: e.ask, note: text });
+		return { ok: true };
+	}
+
+	private routeOf(route: AskRouteInput): AskRoute {
+		if (route.to === "direct") {
+			return { to: "direct", reason: route.reason, ...(route.label ? { label: route.label } : {}) };
+		}
+		const held: CooRoute = { to: "coo", reason: route.reason, heldAt: route.heldAt ?? this.now() };
+		if (!route.releasedBy) return held;
+		return letThrough(held, route.releasedBy, route.releasedAt ?? this.now(), route.note, route.recommendation);
 	}
 
 	/** It ended (answered anywhere, cancelled, gone). A no-op for an id that isn't waiting. */
@@ -148,9 +274,14 @@ export class AskHub {
 		return this.asks.get(id)?.ask;
 	}
 
-	/** Everything waiting now, oldest first. */
+	/** Everything waiting for the owner now, oldest first (not what is held for COO). */
 	list(): Ask[] {
-		return [...this.asks.values()].map((e) => e.ask);
+		return [...this.asks.values()].filter((e) => !isHeld(e.ask)).map((e) => e.ask);
+	}
+
+	/** owner-question routing: everything held for COO now, oldest first. */
+	heldList(): Ask[] {
+		return [...this.asks.values()].filter((e) => isHeld(e.ask)).map((e) => e.ask);
 	}
 
 	/** Hear every change. Returns the way to stop. */
