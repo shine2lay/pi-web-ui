@@ -15,7 +15,8 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - `local` (Ops #676, host half; H-CROSS-QUEUE-OWNER-2): `server/queue-owner-relay.ts` authenticates the calling session as its role's one registered home chat, resolves the target role's one home chat from the identity registry (never a caller path), and hands that home a single-use 256-bit ticket bound to both homes through `/queue owner-relay <token>`. Only the target home's own reply is success; a ticket not taken while its command runs dies (refused), taken but unanswered is uncertain. One lane per target home, separate from #671's commit lanes.
 - `server/queue-question-native.ts` shares one `roleHome` fact between question cards and relays; `server/queue-host.ts` exposes `relayOwnerAnswer` + `consumeOwnerRelay` only together; `server/agent-service.ts` wires them. pi-queue (its docs/owner-answer-relay.md) owns the tool, the dialog and question checks, delivery and records.
 - Checks: `tests/unit/queue-owner-relay.test.ts`; opt-in `tests/coupled/queue-owner-relay-native.test.ts` with real pi-queue (`PI_QUEUE_NATIVE_SOURCE`), real SDK sessions and dispatcher (`tests/coupled/native-queue-world.ts` generalized for several role homes). Contract, limits and undo: `docs/queue-owner-relay.md`.
-- Undo: revert this patch; pi-queue's source chat then says this pi-web-ui can't relay yet. The host saves nothing.
+- Status: landed unchanged with a format-only follow-up (7c8bc74f) through land 259-ec55e5 without the land checks, on the owner's order (COO rm-550021c2); live since 2026-10-31 11:45, deploy checks passed; on the live pair the unit and coupled native tests passed (docs/queue-owner-relay.md, Status).
+- Undo: revert this patch and 7c8bc74f, keeping #674's d8de9fa4; pi-queue's source chat then says this pi-web-ui can't relay yet. The host saves nothing.
 
 ## queue-question-commit: serialize native owner acceptance and lead recall before delivery
 

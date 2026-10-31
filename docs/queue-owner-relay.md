@@ -13,8 +13,18 @@ source. A separate coordinator that authenticates the calling home and the targe
 same registry facts, and hands the target home a one-use ticket bound to both, should let pi-queue deliver it once
 without widening anyone's authority. Falsified if a non-home, a task chat, the same department or a caller-chosen
 path can start a relay; if a ticket works twice, for another session, after either home changed, or after its
-command returned; or if a success is reported without the target home's own reply. **Result:** the unit and
+command returned; or if a success is reported without the target home's own reply. **Result:** HIT: the unit and
 coupled native tests below pass; see pi-queue's docs/owner-answer-relay.md for the end-to-end result.
+
+**Status:** landed and live. pi-queue's half is cd99eef (land 35-9a7e02, its full check passed). This half,
+8f16a650, failed land 257-7330d8 only on Prettier (10,296 unit tests, typecheck and lint passed). Ops then landed it
+unchanged with a format-only commit, 7c8bc74f, and #674's host half (d8de9fa4) through land 259-ec55e5 without the
+land checks, on the owner's order relayed by COO (rm-550021c2: "land without checks, just take the risk, the checks
+take too long"). Live as 7c8bc74f since 2026-10-31 11:45; pi-web-deploy's checks passed (server, page, reply, big
+chat, log). Afterwards, on the exact live pair (pi-queue cd99eef, pi-web-ui 7c8bc74f): typecheck clean, the five
+question and relay unit test files 63/63, coupled native tests 14/14, the first run of #676 together with #674's
+host half. This build never used the route on a real record or task; applying the owner's saved answers is the
+source home's own later step.
 
 ## Modules and reuse
 
@@ -66,9 +76,11 @@ unchanged.
 
 ## Undo
 
-Revert this patch (and pi-queue's half) through the normal land, then `pi-web-deploy`. Without these functions,
-pi-queue's source chat says this pi-web-ui can't relay yet; nothing is saved by the host, so nothing needs
-migrating. A relay kept in a target queue is pi-queue's record and stays readable.
+Revert this patch (8f16a650 and its format-only follow-up 7c8bc74f, keeping #674's d8de9fa4 between them) and
+pi-queue's half (cd99eef) through the normal land, then `pi-web-deploy`. Without these functions, pi-queue's
+source chat says this pi-web-ui can't relay yet; nothing is saved by the host, so nothing needs migrating. A relay
+kept in a target queue is pi-queue's record and stays readable. `pi-web-deploy rollback` (to 231f5e09) is quicker
+but also takes #674's host half out: pi-queue's Rule 24 restore is then refused, as by any older host.
 
 ## Checks
 
