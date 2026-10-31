@@ -19803,6 +19803,8 @@ export class AgentService {
 		this.uninstallQueueHost = installQueueHost({
 			commitQuestion: questions.commits.commitQuestion,
 			consumeQuestionCommit: questions.commits.consumeQuestionCommit,
+			relayOwnerAnswer: questions.relays.relayOwnerAnswer,
+			consumeOwnerRelay: questions.relays.consumeOwnerRelay,
 			deliverQuestionCard: questions.cards.deliverQuestionCard,
 			turnOrigin: (file) => {
 				let found: UiTaskRequester | undefined;

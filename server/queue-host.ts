@@ -43,6 +43,10 @@
  *    checked against that queue's own record and the owner's pause on role messages (no daily cap, Ops #527):
  *    {sent, at, to}, {held} (not now) or {missed} (it can't go at all). Once per block and n.
  *    QueueBlocks.remindLead (queue-blocks.ts).
+ *  - relayOwnerAnswer(sourceSessionId, {role, id, record, note?}) + consumeOwnerRelay(token, targetSessionId)
+ *    (queue-owner-relay, Ops #676): one department's home chat relays the owner's existing dialog answer to
+ *    task `id` of role `role`'s queue; the host checks both home chats against identity.json and hands the
+ *    target home a single-use ticket through its /queue command. Only both together. docs/queue-owner-relay.md.
  *  - deadEnd({project, file?, id?, state?}) (dead-end, Ops #483, AGENTS.md rule 30): whether that project of the
  *    work registry has nothing moving now, by dead-end.ts (the stall check's own test), with the task pi-queue
  *    just changed taken at its new status: {state: "dead" | "moving" | "quiet", why, name, waysOut?} or
@@ -64,6 +68,7 @@ import type {
 	QuestionCommitResult,
 } from "./queue-question-port.js";
 import type { QuestionCardResult } from "./queue-question-card.js";
+import type { OwnerRelayCapability, OwnerRelayRequest, OwnerRelayResult } from "./queue-owner-relay.js";
 
 export const QUEUE_HOST_KEY = Symbol.for("pi-web-ui.queue-host");
 
@@ -109,6 +114,9 @@ export interface QueueHostImpl {
 		change: QuestionChange,
 	): Promise<QuestionCommitResult>;
 	consumeQuestionCommit?(token: string, workerSessionId: string): QuestionCommitCapability | undefined;
+	/** Optional v1 owner-answer relay between departments' home chats (queue-owner-relay.ts); both or neither. */
+	relayOwnerAnswer?(sourceSessionId: string, request: OwnerRelayRequest): Promise<OwnerRelayResult>;
+	consumeOwnerRelay?(token: string, targetSessionId: string): OwnerRelayCapability | undefined;
 	/** Durable tagged native card, without starting a turn. Busy means pending, not delivered. */
 	deliverQuestionCard?(
 		sourceSessionId: string,
@@ -489,6 +497,9 @@ export function installQueueHost(impl: QueueHostImpl): () => void {
 					commitQuestion: impl.commitQuestion,
 					consumeQuestionCommit: impl.consumeQuestionCommit,
 				}
+			: {}),
+		...(impl.relayOwnerAnswer && impl.consumeOwnerRelay
+			? { relayOwnerAnswer: impl.relayOwnerAnswer, consumeOwnerRelay: impl.consumeOwnerRelay }
 			: {}),
 		...(impl.deliverQuestionCard ? { deliverQuestionCard: impl.deliverQuestionCard } : {}),
 		...(impl.turnOrigin

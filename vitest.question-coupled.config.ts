@@ -14,7 +14,7 @@ export default defineConfig({
 		})),
 	},
 	test: {
-		include: ["tests/coupled/queue-question-native.test.ts"],
+		include: ["tests/coupled/queue-question-native.test.ts", "tests/coupled/queue-owner-relay-native.test.ts"],
 		environment: "node",
 		fileParallelism: false,
 		server: { deps: { inline: [new RegExp(source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))] } },

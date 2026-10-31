@@ -8,6 +8,7 @@ import { questionEndpoint, type QuestionBinding, type QuestionCommitResult } fro
 import { ownerQuestionChange } from "./queue-question-owner.js";
 import { UnboundOwnerAcceptance, type QuestionAcceptanceSource } from "./queue-question-acceptance.js";
 import { taskQueueAll } from "./task-queue.js";
+import { OwnerRelayCoordinator } from "./queue-owner-relay.js";
 
 /** Unsupported adapters keep legacy answers; recall is explicitly refused by the coordinator there. */
 export function nativeOwnerQuestionBinding(session: AgentSession, id: number): QuestionBinding | undefined {
@@ -30,6 +31,7 @@ export function nativeQuestionHost(
 ): {
 	commits: QuestionCommitCoordinator;
 	cards: QuestionCardDelivery;
+	relays: OwnerRelayCoordinator;
 	admitOwnerAnswer(binding: QuestionBinding, text: string, from: string): Promise<QuestionCommitResult>;
 	observeUnboundOwnerAnswer(source: QuestionAcceptanceSource | undefined): void;
 } {
@@ -48,6 +50,16 @@ export function nativeQuestionHost(
 			session.sessionManager.getSessionFile(),
 			roles,
 		);
+	/** A registered open session that is its own role's one home chat (cards' and owner relays' source check). */
+	const roleHome = (id: string) => {
+		const session = registered(id);
+		if (!session) return undefined;
+		const roles = host.roles();
+		const role = roleOf(session, roles);
+		const homes = roles.filter((r) => r.id === role && r.homeChat);
+		const file = session.sessionManager.getSessionFile();
+		return role && file && homes.length === 1 && samePath(file, homes[0].homeChat) ? { session, role, file } : undefined;
+	};
 	const actor = (sourceSessionId: string, binding: QuestionBinding) => {
 		const source = registered(sourceSessionId);
 		const queue = registered(binding.queueId);
@@ -117,16 +129,24 @@ export function nativeQuestionHost(
 		cards: new QuestionCardDelivery({
 			actor,
 			prepare: host.prepare,
-			source: (id) => {
-				const source = registered(id);
-				if (!source) return undefined;
-				const roles = host.roles();
-				const role = roleOf(source, roles);
-				const homes = roles.filter((r) => r.id === role && r.homeChat);
-				return homes.length === 1 && samePath(source.sessionManager.getSessionFile(), homes[0].homeChat)
-					? source
+			source: (id) => roleHome(id)?.session,
+		}),
+		// Ops #676: owner answers relayed from one department's home chat to a task in another's queue.
+		relays: new OwnerRelayCoordinator({
+			roleHome: (id) => {
+				const home = roleHome(id);
+				// A task's own chat never holds a role's home authority.
+				return home && !taskQueueAll(home.session.sessionManager.getBranch()).from
+					? { role: home.role, file: home.file }
 					: undefined;
 			},
+			homeOf: (role) => {
+				const homes = host.roles().filter((r) => r.id === role && r.homeChat);
+				return (homes.length === 1 && homes[0].homeChat) || undefined;
+			},
+			sessionIdOf: (file) => host.session(file)?.sessionManager.getSessionId(),
+			prepare: host.prepare,
+			dispatch: host.dispatch,
 		}),
 	};
 }

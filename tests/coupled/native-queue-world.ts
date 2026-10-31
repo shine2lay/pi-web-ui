@@ -86,7 +86,7 @@ interface NativeChat {
 	sid: string;
 	busy: boolean;
 	op(data: Data): void;
-	emit(event: string): Promise<void>;
+	emit(event: string, payload?: Data): Promise<void>;
 	tool(name: string, params: Data): Promise<Data>;
 }
 
@@ -126,7 +126,17 @@ async function nativeQueueSource() {
 	};
 }
 
-export async function nativeQueueWorld() {
+/**
+ * role: the queue's department; homeAt: which chat is its registered home (the separate lead chat, or the queue's own
+ * chat); others: further departments, each with its own home chat (Ops #676's source of a relayed owner answer).
+ */
+export interface NativeWorldShape {
+	role?: string;
+	homeAt?: "lead" | "parent";
+	others?: string[];
+}
+
+export async function nativeQueueWorld({ role = "frontend", homeAt = "lead", others = [] }: NativeWorldShape = {}) {
 	const agentDir = process.env.PI_CODING_AGENT_DIR;
 	assert.ok(
 		agentDir && agentDir.includes("question-coupled-"),
@@ -169,11 +179,11 @@ export async function nativeQueueWorld() {
 	const control: { beforeCommit?: () => Promise<void> } = {};
 	let serial = 0;
 
-	const createChat = (name: string, reopen?: string): NativeChat => {
+	const createChat = (name: string, reopen?: string, chatRole = role): NativeChat => {
 		const manager = reopen ? SessionManager.open(reopen) : SessionManager.create(root, join(root, name));
 		if (!reopen) {
 			manager.appendMessage({ role: "user", content: "Synthetic coupled fixture", timestamp: Date.now() });
-			manager.appendCustomEntry("identity", { v: 1, id: "frontend", via: "fixture" });
+			manager.appendCustomEntry("identity", { v: 1, id: chatRole, via: "fixture" });
 		}
 		const file = manager.getSessionFile();
 		assert.ok(file);
@@ -208,8 +218,8 @@ export async function nativeQueueWorld() {
 			sid: manager.getSessionId(),
 			busy: false,
 			op: (data) => manager.appendCustomEntry("queue", { v: 1, ts: Date.now(), ...data }),
-			async emit(event) {
-				for (const handler of events.get(event) ?? []) await handler({}, ctx);
+			async emit(event, payload = {}) {
+				for (const handler of events.get(event) ?? []) await handler(payload, ctx);
 			},
 			async tool(name, params) {
 				const tool = tools.get(name);
@@ -255,12 +265,18 @@ export async function nativeQueueWorld() {
 	let parent = createChat("parent"),
 		worker = createChat("worker"),
 		lead = createChat("lead");
+	let homes = new Map(others.map((other) => [other, createChat(`${other}-home`, undefined, other)]));
+	const all = () => [lead, parent, worker, ...homes.values()];
 	const roleDir = join(root, "roles");
-	mkdirSync(join(roleDir, "frontend"), { recursive: true });
-	writeFileSync(join(roleDir, "frontend", "identity.json"), JSON.stringify({ id: "frontend", homeChat: lead.file }));
+	const homeFiles = new Map([[role, (homeAt === "parent" ? parent : lead).file], ...[...homes].map(([id, chat]) => [id, chat.file] as const)]);
+	for (const [id, homeChat] of homeFiles) {
+		mkdirSync(join(roleDir, id), { recursive: true });
+		writeFileSync(join(roleDir, id, "identity.json"), JSON.stringify({ id, homeChat }));
+	}
 	const env = { HOME: root, PI_IDENTITY_DIR: roleDir, PI_MEMORY_DIR: join(root, "memory") };
 	const roles = loadIdentities(roleDir, env, loadSettings(env)).identities;
-	assert.equal(roles[0]?.homeChat, lead.file, "Native role loader must recognize the synthetic home");
+	for (const [id, homeChat] of homeFiles)
+		assert.equal(roles.find((r) => r.id === id)?.homeChat, homeChat, "Native role loader must recognize the synthetic home");
 	const sessionFor = (file: string) => sessions.get(file) ?? null;
 	const sdkDispatch = nativeQuestionDispatcher(sessionFor);
 	const dispatch = (file: string, line: string) =>
@@ -299,9 +315,14 @@ export async function nativeQueueWorld() {
 						return result;
 					}),
 				),
+			relayOwnerAnswer: (...args) => integration.relays.relayOwnerAnswer(...args),
+			consumeOwnerRelay: (...args) => integration.relays.consumeOwnerRelay(...args),
 			runCommand: dispatch,
 			coordinator: () => undefined,
-			leadChat: (role) => (role === "frontend" ? { id: role, file: roles[0].homeChat! } : undefined),
+			leadChat: (id) => {
+				const file = roles.find((r) => r.id === id)?.homeChat;
+				return file ? { id, file } : undefined;
+			},
 			startChat: async () => {
 				throw new Error("The coupled proof never starts a chat");
 			},
@@ -328,7 +349,7 @@ export async function nativeQueueWorld() {
 		standalone: true,
 		from: { file: parent.file, title: "Synthetic parent" },
 	});
-	for (const chat of [lead, parent, worker]) await chat.emit("session_start");
+	for (const chat of all()) await chat.emit("session_start");
 	await drain();
 	const task = (chat: NativeChat) => {
 		const found = native.replay(chat.manager).tasks.find((candidate) => candidate.id === NATIVE_TASK_ID);
@@ -360,6 +381,28 @@ export async function nativeQueueWorld() {
 		get lead() {
 			return lead;
 		},
+		/** Another department's home chat (shape.others). */
+		home(id: string) {
+			const chat = homes.get(id);
+			assert.ok(chat, `No synthetic home chat for ${id}`);
+			return chat;
+		},
+		/** The owner stops the worker's run: its last reply ends aborted, and the native queue asks him to carry on. */
+		async stopRun() {
+			vi.setSystemTime(Date.now() + 1);
+			worker.manager.appendMessage({
+				role: "assistant",
+				content: [{ type: "text", text: "Synthetic partial reply" }],
+				api: "anthropic-messages",
+				provider: "synthetic",
+				model: "none",
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+				stopReason: "aborted",
+				timestamp: Date.now(),
+			});
+			await worker.emit("agent_settled");
+			await drain();
+		},
 		get host() {
 			return host;
 		},
@@ -382,7 +425,7 @@ export async function nativeQueueWorld() {
 			const ask = task(worker).ask;
 			assert.ok(ask?.origin);
 			const tag = native.tag(worker.file, ask);
-			const result = await lead.tool("queue_reply", {
+			const result = await (homeAt === "parent" ? parent : lead).tool("queue_reply", {
 				id: NATIVE_TASK_ID,
 				ask: tag,
 				question: OWNER_QUESTION,
@@ -396,7 +439,7 @@ export async function nativeQueueWorld() {
 			return { tag, binding: binding(), original };
 		},
 		recall: (tag: string) =>
-			lead.tool("queue_reply", {
+			(homeAt === "parent" ? parent : lead).tool("queue_reply", {
 				id: NATIVE_TASK_ID,
 				ask: tag,
 				action: "recall",
@@ -410,7 +453,7 @@ export async function nativeQueueWorld() {
 		},
 		async restart() {
 			await drain();
-			for (const chat of [lead, parent, worker]) await chat.emit("session_shutdown");
+			for (const chat of all()) await chat.emit("session_shutdown");
 			assert.equal(questionEndpoint(worker.sid), undefined, "The old production endpoint must unregister");
 			uninstall?.();
 			uninstall = undefined;
@@ -420,15 +463,16 @@ export async function nativeQueueWorld() {
 			parent = createChat("parent", parent.file);
 			worker = createChat("worker", worker.file);
 			lead = createChat("lead", lead.file);
+			homes = new Map([...homes].map(([id, chat]) => [id, createChat(`${id}-home`, chat.file, id)]));
 			integration = makeIntegration();
 			install();
 			native.publish();
-			for (const chat of [lead, parent, worker]) await chat.emit("session_start");
+			for (const chat of all()) await chat.emit("session_start");
 			await drain();
 		},
 		async close() {
 			await drain();
-			for (const chat of [lead, parent, worker]) await chat.emit("session_shutdown");
+			for (const chat of all()) await chat.emit("session_shutdown");
 			uninstall?.();
 			for (const [key, value] of previous) {
 				if (value === undefined) delete globals[key];
