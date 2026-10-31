@@ -121,7 +121,7 @@ import { pendingFor } from "./pending-sends";
 import { takeChatFocusLink, takeChatLink, takeViewLink } from "./open-chat-link";
 import { clearChatFocus, FOCUS_FLASH_MS, parseFocus, requestChatFocus, useChatFocus } from "./chat-focus";
 import { nativeDialogFocusMatches } from "./roles-answer-actions";
-import type { RolesOpenTarget } from "./components/RolesView";
+import type { UsefulOpenTarget } from "./roles-useful-model";
 import { appUrl } from "./base-url";
 import { resolveImageUrls } from "./chat-image";
 import { isRecoveryEligible } from "./recovery-policy";
@@ -1029,7 +1029,7 @@ export function App() {
 	// roles-overview: the Roles page opens an existing chat (switch_session reuses the open conversation
 	// of that transcript), maybe at one item; it never starts, answers or changes anything.
 	const openFromRoles = useCallback(
-		(target: RolesOpenTarget) => {
+		(target: UsefulOpenTarget) => {
 			if (target.focus) {
 				requestChatFocus({
 					file: target.file,
@@ -1047,7 +1047,7 @@ export function App() {
 	// roles-needs-you: the Roles page's Open buttons. The chat is remembered (JS memory only), so the
 	// overlay never names it by its file and a failure shows fixed words (Security, ADDENDUM-OPS200 "6").
 	const openFromRolesPage = useCallback(
-		(target: RolesOpenTarget) => {
+		(target: UsefulOpenTarget) => {
 			markRolesOpen(target.file);
 			openFromRoles(target);
 		},

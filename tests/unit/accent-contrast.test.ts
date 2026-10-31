@@ -200,12 +200,7 @@ describe("accent-contrast: flow-light's own tokens", () => {
 });
 
 describe("accent-contrast: the rules use the tokens", () => {
-	const CSS = [
-		"web/src/styles.css",
-		"web/src/model-management.css",
-		"web/src/roles-view.css",
-		"web/src/exchange-fold.css",
-	];
+	const CSS = ["web/src/styles.css", "web/src/model-management.css", "web/src/exchange-fold.css"];
 	/** Rule bodies (selector, declarations) with comments taken out. */
 	const rules = (css: string) =>
 		[...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({

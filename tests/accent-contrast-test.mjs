@@ -7,8 +7,7 @@
  * dark theme and in White:
  *  - a chat with fixture messages (a question, thinking, a tool call and its result, an answer in Markdown with a
  *    link, code, a list, a quote and a table; TL;DR lines, one that needs you);
- *  - Settings, every tab;
- *  - the Roles page, with four roles: queues at work, a question waiting for you, a wait, TL;DR lines.
+ *  - Settings, every tab.
  * Each is scanned with axe's color-contrast rule, scrolled through so every line is looked at in view.
  * Checks, per theme and view:
  *  - no violet or amber text under 4.5:1: no hit in dark's violet --accent #8b5cf6 (nor white text on it) and
@@ -462,18 +461,6 @@ async function look(browser, theme) {
 		if (["display", "tools", "plugins"].includes(tab)) await shot(page, `settings-${tab}-${theme}`);
 	}
 	await page.locator(".settings-modal .modal-close").first().click();
-
-	// The Roles page.
-	await page.goto(`${srv.http}/?view=roles`);
-	const roles = await waitFor(
-		() => page.evaluate(() => document.querySelectorAll(".roles-view [data-role-id]").length >= 4),
-		30_000,
-	);
-	check(`${theme} roles: the four roles are on the page`, !!roles);
-	await page.evaluate(() => document.fonts?.ready);
-	await sleep(300);
-	judge(theme, "roles", await hitsIn(page, ".roles-view"));
-	await shot(page, `roles-${theme}`);
 	await ctx.close();
 }
 

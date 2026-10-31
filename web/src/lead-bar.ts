@@ -97,8 +97,8 @@ export function hasLeads(identities: readonly UiIdentityInfo[]): boolean {
 
 const byId = (a: { id: string }, b: { id: string }): number => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
-/** The leads in the Roles page's order (roles-view-model.ts groupRoles): self-start roles first, then the
- *  rest, each by id. Work mode: the owner's word, else the every-chat rules' default. */
+/** The leads in the order the first Roles page grouped them: self-start roles first, then the rest, each by
+ *  id. Work mode: the owner's word, else the every-chat rules' default. */
 export function leadOrder(identities: readonly UiIdentityInfo[]): UiIdentityInfo[] {
 	const leads = identities.filter((i) => Boolean(i.homeChat)).sort(byId);
 	const selfStart = (i: UiIdentityInfo) => (i.workMode ?? i.rules?.workMode) === "self-start";

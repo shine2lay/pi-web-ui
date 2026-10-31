@@ -1,19 +1,17 @@
 // @vitest-environment jsdom
 // roles-needs-you (task #200): fixed cases for the closed projection (task names, blockers, links,
-// "Needs you") and the actual store + mounted view. Server reader -> projection for answered asks and
-// live dialogs: roles-useful-asks.test.ts. Real wire/browser: roles-page-test.mjs.
+// "Needs you") and for the actual store projected the way the mounted Roles page projects it.
+// Server reader -> projection for answered asks and live dialogs: roles-useful-asks.test.ts.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetAppGlobals, setAppGlobals, setAppSend } from "../../web/src/app-globals.js";
-import { RolesUsefulView } from "../../web/src/components/RolesUsefulView.js";
-import { en, LanguageProvider } from "../../web/src/i18n.js";
+import { getAppGlobals, resetAppGlobals, setAppGlobals, setAppSend } from "../../web/src/app-globals.js";
+import { en } from "../../web/src/i18n.js";
 import {
 	receiveRoles,
 	resendRolesWatch,
 	resetRolesState,
+	rolesSnapshot,
 	watchRoles,
 	type RolesPayload,
 } from "../../web/src/roles-state.js";
@@ -143,27 +141,25 @@ function closed(model: UsefulRoles) {
 	}
 }
 
-let root: Root | null = null;
-let container: HTMLDivElement;
 const sent: unknown[] = [];
-const opened: unknown[] = [];
-const onOpen = (target: UsefulOpenTarget) => {
-	opened.push(target);
-};
-function mount(active = true) {
-	act(() => {
-		root ??= createRoot(container);
-		root.render(
-			createElement(
-				LanguageProvider,
-				null,
-				createElement(RolesUsefulView, { active, phone: false, onOpen, onAbout: () => undefined }),
-			),
-		);
-	});
+/** The Roles page's own watch, held the way its useRoles(active ? "full" : "off") holds it. */
+let stopPageWatch: (() => void) | null = null;
+function showPage(active = true) {
+	if (active && !stopPageWatch) stopPageWatch = watchRoles(true);
+	if (!active && stopPageWatch) {
+		stopPageWatch();
+		stopPageWatch = null;
+	}
+}
+/** The store as the page projects it: its snapshot, the app's connection, the time now. */
+const page = () => projectUsefulRoles(rolesSnapshot(), getAppGlobals().status, Date.now());
+/** When the page may say all clear: it can tell, nothing is listed, and it knows as of when. */
+function allClear() {
+	const { tell, total, asOf } = page().needsYou;
+	return tell === "can-tell" && total === 0 && asOf !== null;
 }
 function receive(value: unknown) {
-	act(() => receiveRoles(value as RolesPayload));
+	receiveRoles(value as RolesPayload);
 }
 /** The server's clock: each look strictly later than the one before. */
 let serverClock = 0;
@@ -180,36 +176,23 @@ function feed(roles: unknown[], asks: unknown[] = []) {
 	overview(roles, asks);
 	heartbeat(asks.length);
 }
-const text = () => container.textContent ?? "";
-function click(label: string, index = 0) {
-	const buttons = [...container.querySelectorAll("button")].filter((b) => b.textContent?.startsWith(label));
-	expect(buttons.length).toBeGreaterThan(index);
-	act(() => buttons[index].dispatchEvent(new MouseEvent("click", { bubbles: true })));
-}
 beforeEach(() => {
-	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	resetRolesState();
 	resetAppGlobals();
 	setAppGlobals({ status: "open" });
 	sent.length = 0;
-	opened.length = 0;
 	serverClock = Date.now();
 	setAppSend((message) => {
 		sent.push(message);
 		return true;
 	});
-	container = document.createElement("div");
-	document.body.appendChild(container);
 });
 afterEach(() => {
-	if (root) act(() => root!.unmount());
-	root = null;
-	container.remove();
+	showPage(false);
 	setAppSend(null);
 	resetRolesState();
 	resetAppGlobals();
 	vi.restoreAllMocks();
-	vi.unstubAllGlobals();
 });
 
 describe("task rows: names, plain-word status, blockers", () => {
@@ -265,35 +248,6 @@ describe("task rows: names, plain-word status, blockers", () => {
 		]);
 		expect(byId(model, 5)).toMatchObject({ state: "ready-after", waitsOn: "#3, #4" });
 		expect(byId(model, 6)).toMatchObject({ state: "ready", waitsOn: null });
-		mount();
-		feed([role("frontend", { queue: queue({ queued: [task(5, "ready", { waitsOn: "#3, #4" })] }) })]);
-		const row = [...container.querySelectorAll(".roles-useful-task")].find((li) => li.textContent?.includes("#5"));
-		expect(row?.textContent).toContain("#5 Name of 5");
-		expect(row?.textContent).toContain("waits on #3, #4");
-		expect(row?.textContent).not.toMatch(/\bready\b/);
-	});
-	it("blocked and on-hold rows say what they wait on; asking says where the question is", () => {
-		mount();
-		feed([
-			role("frontend", {
-				queue: queue({
-					active: [
-						started(1, "blocked", { waitsOn: "temper #38" }),
-						started(2, "asking", { askOps: true }),
-						started(3, "asking"),
-						started(4, "asking", { askOps: true, askLead: "temper" }),
-					],
-					queued: [],
-					counts: { active: 4, queued: 0, done: 0 },
-				}),
-			}),
-		]);
-		const rows = [...container.querySelectorAll(".roles-useful-task")].map((li) => li.textContent);
-		expect(rows[0]).toContain("blocked · waits on temper #38");
-		expect(rows[1]).toContain("question with Ops");
-		expect(rows[2]).toContain("question with its main chat");
-		expect(rows[3]).toContain("question with temper's lead");
-		expect(rows[3]).not.toContain("Ops");
 	});
 	it("working reads 'working'; a running chat adds 'working' to other statuses; only working tasks show their newest line", () => {
 		const model = project([
@@ -310,23 +264,6 @@ describe("task rows: names, plain-word status, blockers", () => {
 		expect(byId(model, 1)).toMatchObject({ busy: true, latest: "Ran the tests" });
 		expect(byId(model, 2)).toMatchObject({ busy: false, latest: "Waiting for CI" });
 		expect(byId(model, 3)).toMatchObject({ busy: true, latest: null });
-		mount();
-		feed([
-			role("frontend", {
-				queue: queue({
-					active: [
-						started(1, "working", { busy: true, latest: { text: "Ran the tests", ts: 1 } }),
-						started(3, "asking", { busy: true }),
-					],
-					counts: { active: 2, queued: 1, done: 2 },
-				}),
-			}),
-		]);
-		const rows = [...container.querySelectorAll(".roles-useful-task")];
-		const states = rows.map((li) => li.querySelector(".roles-useful-task-state")?.textContent);
-		expect(states).toEqual(["working", "question with its main chat · working", "ready"]);
-		expect(rows[0].textContent).toContain("Latest: Ran the tests");
-		expect(text()).not.toContain("working now");
 	});
 	it("stuck reads 'needs a decision' (its question goes to Ops or its lead first); pauses read 'paused'; unclear markers aren't claimed", () => {
 		const paused = { at: NOW, why: "Owner: wait for Monday" };
@@ -346,27 +283,12 @@ describe("task rows: names, plain-word status, blockers", () => {
 		expect(byId(model, 2)).toMatchObject({ state: "needs-decision", pause: "reported-paused" });
 		expect(byId(model, 3)).toMatchObject({ state: "working", pause: "unknown" });
 		expect(model.roles[0].hold).toBe("reported-paused");
-		mount();
-		feed([
-			role("frontend", {
-				queue: queue({ active: [started(1, "stuck"), started(2, "stuck", { paused })], hold: paused }),
-			}),
-		]);
-		const rows = [...container.querySelectorAll(".roles-useful-task-state")].map((p) => p.textContent);
-		expect(rows[0]).toBe("needs a decision");
-		expect(rows[1]).toBe("needs a decision · paused");
-		expect(container.querySelector(".roles-useful-queue")?.textContent).toBe("Queue running · queue paused");
-		expect(text()).not.toContain("Owner: wait for Monday");
-		expect(text()).not.toMatch(/by you|needs you\b|stuck/);
 	});
 	it("stop reason only when stopped, from the fixed list only", () => {
 		const stopped = project([role("frontend", { queue: queue({ running: false, pausedReason: "user" }) })]);
 		expect(stopped.roles[0]).toMatchObject({ queueEnabled: false, stopReason: "user", hold: "not-reported" });
 		const odd = project([role("frontend", { queue: queue({ running: false, pausedReason: "CANARY" }) })]);
 		expect(odd.roles[0].stopReason).toBeNull();
-		mount();
-		feed([role("frontend", { queue: queue({ running: false, pausedReason: "user" }) })]);
-		expect(container.querySelector(".roles-useful-queue")?.textContent).toBe("Queue stopped: you stopped it");
 	});
 });
 
@@ -393,22 +315,6 @@ describe("links: only validated in-app chat targets", () => {
 		expect(byId(model, 1).link).toEqual({ file: chatOf(1) });
 		expect(byId(model, 2).link).toEqual({ file: HOME, focus: { kind: "task", id: "2" } });
 		for (const id of [3, 4, 5, 6, 7, 9, 1_000_000_000]) expect(byId(model, id).link).toBeNull();
-	});
-	it("clicking Open hands the app exactly the validated target, nothing else", () => {
-		mount();
-		feed(
-			[role()],
-			[ask("frontend:question:q1", { kind: "question", chat: { file: chatOf(1), where: 1 }, focus: "question:q1" })],
-		);
-		click("Open chat");
-		click("Open queue");
-		click("Open", 0);
-		expect(opened).toEqual([
-			{ file: chatOf(1) },
-			{ file: HOME, focus: { kind: "task", id: "20" } },
-			{ file: chatOf(1), focus: { kind: "question", id: "q1" } },
-		]);
-		expect(sent.filter((m) => (m as { type?: string }).type !== "roles_watch")).toEqual([]);
 	});
 });
 
@@ -472,36 +378,11 @@ describe("Needs you", () => {
 				link: null,
 			},
 		]);
-		mount();
-		const t = Date.now();
-		feed(
-			[role()],
-			// 30 s margin: the view's clock was read at mount, a moment before `t`.
-			asks.map((a) => ({ ...a, since: a.since === undefined ? undefined : t - (NOW - a.since) - 30_000 })),
-		);
-		const section = container.querySelector(".roles-useful-needs");
-		expect(section?.querySelector("h2")?.textContent).toBe("Needs you (4)");
-		const items = [...(section?.querySelectorAll("li") ?? [])].map((li) => li.textContent);
-		expect(items[0]).toContain("Pick a port");
-		expect(items[0]).toContain("Unknown role · waiting 3 h");
-		expect(items[1]).toContain("Frontend · waiting 10 min");
-		expect(items[2]).toContain("Frontend · time unknown");
-		expect(items[2]).not.toContain("waiting");
-		expect(section?.querySelectorAll("button")).toHaveLength(3);
-		expect(section?.querySelectorAll("q.roles-useful-agent")).toHaveLength(4);
-		expect(text()).not.toContain("None reported");
-		expect(text()).toContain("Checks only: needs-you lines, task questions passed to you, open dialogs in role chats.");
 	});
 	it("empty while current: 'none reported', as of when the server was last heard looking again", () => {
 		const model = project([role()], []);
 		expect(model.needsYou).toEqual({ tell: "can-tell", asOf: NOW, total: 0, items: [], more: 0 });
 		expect(model.lastReceived).toBe(false);
-		mount();
-		feed([role()]);
-		expect(container.querySelector(".roles-useful-clear")?.textContent).toMatch(
-			/^None reported to you in role chats and queues — last update received \d{2}:\d{2}\. This can miss items\.$/,
-		);
-		expect(container.querySelector(".roles-useful-cant")).toBeNull();
 	});
 	it("empty while not current, failed, partial or unclear: can't tell, never an all-clear", () => {
 		const many = Array.from({ length: 9 }, (_, i) => started(i + 1));
@@ -595,10 +476,6 @@ describe("Needs you", () => {
 		const model = project([role()], asks);
 		expect(model.needsYou.items).toHaveLength(ASK_LIMIT);
 		expect(model.needsYou.more).toBe(3);
-		mount();
-		feed([role()], asks);
-		expect(container.querySelector(".roles-useful-needs h2")?.textContent).toBe(`Needs you (${ASK_LIMIT + 3})`);
-		expect(text()).toContain("3 more not shown.");
 	});
 });
 
@@ -612,13 +489,6 @@ describe("counts, caps and problems", () => {
 			role("frontend", { queue: queue({ queued: queued.slice(0, 20), counts: { active: 1, queued: 25, done: 0 } }) }),
 		]);
 		expect(capped.roles[0].queued).toMatchObject({ omitted: false, notAllShown: true });
-		mount();
-		feed([
-			role("frontend", { queue: queue({ queued: queued.slice(0, 20), counts: { active: 1, queued: 25, done: 0 } }) }),
-		]);
-		expect(text()).toContain("Waiting to start (25)");
-		expect(text()).toContain("Showing 20 of 25.");
-		expect(text()).not.toContain("Some tasks couldn't be shown.");
 	});
 	it("zero counts show 0 when the queue was read cleanly, 'couldn't read' when it wasn't", () => {
 		const empty = queue({ active: [], queued: [], counts: { active: 0, queued: 0, done: 0 } });
@@ -677,19 +547,6 @@ describe("counts, caps and problems", () => {
 			done: "no-queue",
 			dropped: "no-queue",
 		});
-		mount();
-		feed([
-			role("frontend", { queue: empty }),
-			role("backend", { title: "Backend", queue: empty, problems: ["home chat"] }),
-		]);
-		const [front, back] = [...container.querySelectorAll(".roles-useful-card")].map((c) => c.textContent);
-		expect(front).toContain("Started (0)");
-		expect(front).toContain("Waiting to start (0)");
-		expect(front).not.toMatch(/None|nothing/i);
-		expect(front).toContain("Done, still in the queue: 0");
-		expect(back).toContain("Started (couldn't read)");
-		expect(back).toContain("Done, still in the queue: couldn't read");
-		expect(back).toContain("Some of this role's data couldn't be read.");
 	});
 	it("queue-drop: tasks its lead dropped are listed apart, each with why, and counted", () => {
 		const gone = (id: number, why: unknown, extra: Row = {}) =>
@@ -713,17 +570,6 @@ describe("counts, caps and problems", () => {
 			project([role("frontend", { queue: queue({ dropped: [gone(7, "x")], counts }) })]).roles[0].counts.dropped;
 		expect(odd({ active: 1, queued: 1, done: 2 })).toBe("unavailable");
 		expect(odd({ active: 1, queued: 1, done: 2, dropped: 0 })).toBe("unavailable");
-		mount();
-		feed([
-			role("frontend", {
-				queue: queue({ dropped: [gone(7, "Superseded by #9")], counts: { active: 1, queued: 1, done: 2, dropped: 1 } }),
-			}),
-			role("backend", { title: "Backend" }),
-		]);
-		const [front, back] = [...container.querySelectorAll(".roles-useful-card")].map((c) => c.textContent);
-		expect(front).toContain("Dropped by the lead (1)");
-		expect(front).toContain("dropped by the lead: Superseded by #9");
-		expect(back).not.toContain("Dropped by the lead");
 	});
 	it("a malformed list is 'couldn't read'; duplicate ids are dropped with a note", () => {
 		const model = project([
@@ -766,10 +612,6 @@ describe("agent-written text: bounded plain text or a fixed fallback", () => {
 		for (const id of [4, 5, 7, 8, 9, 10, 11]) expect({ id, name: name(id) }).toEqual({ id, name: null });
 		expect(name(6)).toBe("a b c d");
 		expect(name(12)).toBe("x".repeat(NAME_LIMIT));
-		mount();
-		feed([role("frontend", { queue: queue({ queued: [task(4, "ready", { title: "abc\u202Edef" })] }) })]);
-		expect(text()).toContain("Task #4");
-		expect(text()).not.toContain("\u202E");
 	});
 	it("ask text clips at 300; unsafe ask text falls back to 'Open item'; waitsOn and latest are bounded too", () => {
 		const model = project(
@@ -789,26 +631,11 @@ describe("agent-written text: bounded plain text or a fixed fallback", () => {
 		expect(model.needsYou.items[1].text).toBeNull();
 		expect(Array.from(byId(model, 1).waitsOn!)).toHaveLength(NAME_LIMIT);
 		expect(Array.from(byId(model, 2).latest!)).toHaveLength(TEXT_LIMIT);
-		mount();
-		feed([role()], [ask("ops:tldr:bidi", { text: "x\u202Ey" })]);
-		expect(container.querySelector(".roles-useful-ask-text")?.textContent).toBe("Open item");
 	});
-	it("HTML-looking text is shown as text, never as markup", () => {
-		const html = '<img src=x onerror="alert(1)"><b>bold</b>';
-		mount();
-		feed(
-			[role("frontend", { title: "<i>Front</i>", queue: queue({ active: [started(1, "working", { title: html })] }) })],
-			[ask("frontend:tldr:h", { text: html })],
-		);
-		expect(container.querySelector(".roles-useful img, .roles-useful b, .roles-useful i")).toBeNull();
-		expect(text()).toContain(html);
-		expect(container.querySelector(".roles-useful-card h2")?.textContent).toBe("<i>Front</i>");
-	});
-	it("configured role labels clip at 120 with a note and no hidden full label", () => {
-		mount();
-		feed([role("ops", { title: "x".repeat(121) })]);
-		expect(container.innerHTML).not.toContain("x".repeat(121));
-		expect(text()).toContain("Name shortened to 120 characters.");
+	it("configured role labels clip at 120, flagged for the note, with no hidden full label", () => {
+		const model = project([role("ops", { title: "x".repeat(121) })]);
+		expect(model.roles[0].labelTruncated).toBe(true);
+		expect(JSON.stringify(model)).not.toContain("x".repeat(121));
 	});
 });
 
@@ -868,43 +695,13 @@ describe("closed boundary and the actual store", () => {
 		const model = project([rawRole], [rawAsk]);
 		closed(model);
 		expect(JSON.stringify(model)).not.toContain("CANARY");
-		mount();
+		// The same raw update through the actual store, as the page receives and projects it.
+		showPage();
 		feed([rawRole], [rawAsk]);
-		expect(text()).toContain("Visible name");
-		expect(text()).toContain("Visible ask");
-		expect(container.innerHTML).not.toContain("CANARY");
-		expect(container.querySelectorAll("a, input, svg, img, [title], [href], [data-role-id]")).toHaveLength(0);
-		for (const button of container.querySelectorAll("button"))
-			expect(button.getAttributeNames().sort()).toEqual(["class", "type"]);
-		type Fiber = { type?: { name?: string }; memoizedProps?: Record<string, unknown>; child?: Fiber; sibling?: Fiber };
-		const internal = root as unknown as { _internalRoot: { current: Fiber } };
-		const allowed: Record<string, string[]> = {
-			// Only callbacks and the explicitly projected view cross component boundaries.
-			RolesUsefulView: ["active", "phone", "onOpen", "onAbout"],
-			RolesUsefulContent: ["model", "dialogs", "phone", "now", "onOpen", "onDetails", "onAnswer"],
-			NeedsYouSection: ["needs", "dialogs", "now", "onOpen", "onAnswer"],
-			AskRow: ["item", "needs", "dialogs", "now", "onOpen", "onAnswer"],
-			RoleCard: ["role", "onOpen", "onDetails"],
-			RoleSpend: ["spend"],
-			RecordList: ["heading", "list", "count", "onOpen"],
-			TaskRow: ["record", "onOpen"],
-		};
-		const seen = new Set<string>();
-		const props: Record<string, unknown>[] = [];
-		function visit(fiber?: Fiber) {
-			if (!fiber) return;
-			const name = fiber.type?.name;
-			if (name && allowed[name]) {
-				keys(fiber.memoizedProps!, allowed[name]);
-				props.push(fiber.memoizedProps!);
-				seen.add(name);
-			}
-			visit(fiber.child);
-			visit(fiber.sibling);
-		}
-		visit(internal._internalRoot.current);
-		expect([...seen].sort()).toEqual(Object.keys(allowed).sort());
-		expect(JSON.stringify(props)).not.toContain("CANARY");
+		const fed = page();
+		expect(byId(fed, 1).name).toBe("Visible name");
+		expect(fed.needsYou.items.map((item) => item.text)).toContain("Visible ask");
+		expect(JSON.stringify(fed)).not.toContain("CANARY");
 		expect(JSON.stringify(logs.flatMap((log) => log.mock.calls))).not.toContain("CANARY");
 	});
 	it("does not read getters outside the contract", () => {
@@ -915,19 +712,19 @@ describe("closed boundary and the actual store", () => {
 					throw new Error(`excluded getter ${field} accessed`);
 				},
 			});
-		mount();
+		showPage();
 		feed([r]);
-		expect(text()).toContain("Name of 1");
+		expect(byId(page(), 1).name).toBe("Name of 1");
 	});
 	it("one happy path shares the badge watch; leave/return, rewatch and cleanup send no extra watch", () => {
 		const badge = watchRoles(false);
-		mount();
+		showPage();
 		feed([role()]);
-		expect(text()).toContain("#1 Name of 1");
-		expect(text()).toContain("Connected");
-		mount(false);
-		mount(true);
-		act(() => resendRolesWatch());
+		expect(byId(page(), 1).name).toBe("Name of 1");
+		expect(page().source).toBe("connected-source-unverified");
+		showPage(false);
+		showPage(true);
+		resendRolesWatch();
 		expect(sent).toEqual([
 			{ type: "roles_watch", full: false },
 			{ type: "roles_watch", full: true },
@@ -935,149 +732,134 @@ describe("closed boundary and the actual store", () => {
 			{ type: "roles_watch", full: true },
 			{ type: "roles_watch", full: true },
 		]);
-		act(() => root!.unmount());
-		root = null;
+		showPage(false);
 		expect(sent.at(-1)).toEqual({ type: "roles_watch", full: false });
 		badge();
 		expect(sent.at(-1)).toEqual({ type: "roles_unwatch" });
 	});
 	it("error, count-only receipts and reconnects never make a cached snapshot read as current", () => {
-		mount();
+		showPage();
 		feed([role()]);
-		expect(container.querySelector(".roles-useful-clear")).not.toBeNull();
+		expect(allClear()).toBe(true);
 		receive({ type: "roles", asks: 0, error: "CANARY-ERROR" });
-		expect(text()).toContain("The roles feed failed — showing the last update received");
-		expect(text()).toContain("Can't tell right now: the roles feed reported an error.");
-		expect(text()).toContain("#1 Name of 1");
-		expect(text()).toContain("Last received values below; they may be out of date.");
+		expect(page().source).toBe("cached-error");
+		expect(page().needsYou.tell).toBe("feed-error");
+		expect(byId(page(), 1).name).toBe("Name of 1");
+		expect(page().lastReceived).toBe(true);
 		receive({ type: "roles", asks: 5 });
-		expect(text()).toContain("Can't tell right now");
-		expect(container.querySelector(".roles-useful-clear")).toBeNull();
-		act(() => setAppGlobals({ status: "closed" }));
-		expect(text()).toContain("Not connected — showing the last update received");
-		expect(text()).toContain("Can't tell right now: this page isn't getting live updates.");
-		expect(container.querySelector(".roles-useful-clear")).toBeNull();
-		act(() => setAppGlobals({ status: "open" }));
+		expect(page().needsYou.tell).not.toBe("can-tell");
+		expect(allClear()).toBe(false);
+		setAppGlobals({ status: "closed" });
+		expect(page().source).toBe("cached");
+		expect(page().needsYou.tell).toBe("not-live");
+		expect(allClear()).toBe(false);
+		setAppGlobals({ status: "open" });
 		feed([role("backend", { title: "Backend", queue: queue({ active: [started(4)], queued: [] }) })]);
-		expect(text()).not.toContain("Last received values below");
-		expect(container.querySelector(".roles-useful-clear")).not.toBeNull();
+		expect(page().lastReceived).toBe(false);
+		expect(allClear()).toBe(true);
 		// Reconnected: the app watches again; until the server has looked again since, the old update
 		// isn't current, and neither a count-only receipt nor a heartbeat ahead of the first update makes it so.
-		act(() => resendRolesWatch());
-		expect(text()).toContain("Can't tell right now: no fresh update has arrived since this page connected.");
-		expect(text()).toContain("Last received values below; they may be out of date.");
-		expect(container.querySelector(".roles-useful-clear")).toBeNull();
+		resendRolesWatch();
+		expect(page().needsYou.tell).toBe("awaiting");
+		expect(page().lastReceived).toBe(true);
+		expect(allClear()).toBe(false);
 		receive({ type: "roles", asks: 0 });
 		heartbeat();
-		expect(container.querySelector(".roles-useful-clear")).toBeNull();
+		expect(allClear()).toBe(false);
 		feed([role("backend", { title: "Backend", queue: queue({ active: [started(4)], queued: [] }) })]);
-		expect(text()).not.toContain("Frontend");
-		expect(text()).toContain("#4 Name of 4");
-		expect(container.querySelector(".roles-useful-clear")).not.toBeNull();
-		expect(text()).not.toContain("CANARY");
+		expect(page().roles.map((r) => r.roleId)).not.toContain("frontend");
+		expect(byId(page(), 4).name).toBe("Name of 4");
+		expect(allClear()).toBe(true);
+		expect(JSON.stringify(page())).not.toContain("CANARY");
 		feed([]);
-		expect(text()).toContain("No roles to show.");
-		expect(text()).toContain("Can't tell right now: some roles, tasks or chats couldn't be read.");
+		expect(page().roster).toBe("unavailable");
+		expect(page().needsYou.tell).toBe("partial");
 	});
 	it("R1: a replayed update isn't current until the server has looked again (strictly newer checkedAt)", () => {
-		const clear = () => container.querySelector(".roles-useful-clear");
-		mount();
+		showPage();
 		// Replay only: on a watch the server first sends its last look again, with that look's old time.
 		const old = serverClock - 600_000;
 		overview([role()], [], old);
-		expect(text()).toContain("#1 Name of 1");
-		expect(text()).toContain("Can't tell right now: no fresh update has arrived since this page connected.");
-		expect(clear()).toBeNull();
+		expect(byId(page(), 1).name).toBe("Name of 1");
+		expect(page().needsYou.tell).toBe("awaiting");
+		expect(allClear()).toBe(false);
 		// Not newer: the same look again, an older one, or no usable time.
 		for (const checkedAt of [old, old - 1, Number.NaN, -1, 1.5, "later"]) heartbeat(0, checkedAt as number);
-		expect(clear()).toBeNull();
+		expect(allClear()).toBe(false);
 		// A newer heartbeat: the server read again and nothing changed.
 		heartbeat();
-		expect(clear()).not.toBeNull();
+		expect(allClear()).toBe(true);
 		// An error, then a rewatch, then the replay of the server's last look: still can't tell.
 		receive({ type: "roles", asks: 0, error: "CANARY-ERROR" });
-		expect(clear()).toBeNull();
-		act(() => resendRolesWatch());
+		expect(allClear()).toBe(false);
+		resendRolesWatch();
 		overview([role()], [], serverClock);
-		expect(clear()).toBeNull();
-		expect(text()).toContain("Can't tell right now");
+		expect(allClear()).toBe(false);
+		expect(page().needsYou.tell).not.toBe("can-tell");
 		// A newer full update (the next look found a change) is current again.
 		overview([role()]);
-		expect(clear()).not.toBeNull();
-		expect(text()).not.toContain("CANARY");
+		expect(allClear()).toBe(true);
+		expect(JSON.stringify(page())).not.toContain("CANARY");
 	});
 	it("R1: leaving and coming back, a heartbeat ahead of the first update, or an older update never vouch for it", () => {
-		const clear = () => container.querySelector(".roles-useful-clear");
-		mount();
+		showPage();
 		feed([role()]);
-		expect(clear()).not.toBeNull();
+		expect(allClear()).toBe(true);
 		// Leave and come back: a new full watch; nothing is current until the server looks again.
-		mount(false);
-		mount(true);
-		expect(clear()).toBeNull();
+		showPage(false);
+		showPage(true);
+		expect(allClear()).toBe(false);
 		heartbeat(); // already on its way before the watch: there is no first update yet
-		expect(clear()).toBeNull();
+		expect(allClear()).toBe(false);
 		overview([role()]); // the first update since this watch, perhaps a replay
-		expect(clear()).toBeNull();
+		expect(allClear()).toBe(false);
 		heartbeat();
-		expect(clear()).not.toBeNull();
+		expect(allClear()).toBe(true);
 		// A full update older than the first one since the watch withdraws it.
 		overview([role()], [], serverClock - 10_000);
-		expect(clear()).toBeNull();
+		expect(allClear()).toBe(false);
 	});
-	it("R2: the count shows only when something is listed or the page can tell; never 0 beside can't tell", () => {
-		const heading = () => container.querySelector(".roles-useful-needs h2")?.textContent;
-		mount();
+	it("R2: what the count is shown from: listed asks, and whether the page can tell; never can-tell on error", () => {
+		// The page shows a count only when something is listed or it can tell (Security R2); these are
+		// the facts it decides from, through the actual store.
+		const needs = () => {
+			const { tell, total } = page().needsYou;
+			return { tell, total };
+		};
+		showPage();
 		overview([role()]);
-		expect(heading()).toBe("Needs you");
+		expect(needs()).toEqual({ tell: "awaiting", total: 0 });
 		heartbeat();
-		expect(heading()).toBe("Needs you (0)");
-		expect(container.querySelector(".roles-useful-clear")).not.toBeNull();
+		expect(needs()).toEqual({ tell: "can-tell", total: 0 });
+		expect(allClear()).toBe(true);
 		receive({ type: "roles", asks: 0, error: "x" });
-		expect(heading()).toBe("Needs you");
+		expect(needs()).toEqual({ tell: "feed-error", total: 0 });
 		overview([role("frontend", { problems: ["home chat"] })]);
-		expect(text()).toContain("Can't tell right now: some roles, tasks or chats couldn't be read.");
-		expect(heading()).toBe("Needs you");
+		expect(needs()).toEqual({ tell: "partial", total: 0 });
 		overview([role()]);
-		expect(heading()).toBe("Needs you (0)");
-		act(() => setAppGlobals({ status: "closed" }));
-		expect(heading()).toBe("Needs you");
-		act(() => setAppGlobals({ status: "open" }));
+		expect(needs()).toEqual({ tell: "can-tell", total: 0 });
+		setAppGlobals({ status: "closed" });
+		expect(needs()).toEqual({ tell: "not-live", total: 0 });
+		setAppGlobals({ status: "open" });
 		overview([role()], [ask("frontend:tldr:a")]);
-		act(() => setAppGlobals({ status: "closed" }));
-		expect(heading()).toBe("Needs you (1)");
-		expect(text()).toContain("Can't tell right now: this page isn't getting live updates.");
-		expect(text()).not.toMatch(/\(0\)/);
+		setAppGlobals({ status: "closed" });
+		expect(needs()).toEqual({ tell: "not-live", total: 1 });
 	});
-	it("source route: links only through onOpen, answers through the guarded dialog, no rich content or side-effect APIs", () => {
-		const source = readFileSync(resolve(process.cwd(), "web/src/components/RolesUsefulView.tsx"), "utf8");
+	it("source route: the app mounts the exact page; the closed model has no rich content or side-effect APIs", () => {
 		const model = readFileSync(resolve(process.cwd(), "web/src/roles-useful-model.ts"), "utf8");
 		const app = readFileSync(resolve(process.cwd(), "web/src/App.tsx"), "utf8");
-		expect(source.match(/useRoles\(active \? "full" : "off"\)/g)).toHaveLength(1);
-		expect(source.match(/useAppField\("status"\)/g)).toHaveLength(1);
-		// roles-exact: the supplied design now uses this same closed model; the useful
-		// list remains a tested rollback surface, not the app's mounted page.
+		// roles-exact: the supplied design uses this same closed model.
 		expect(app).toContain('import("./components/RolesExactView")');
-		expect(app).not.toContain('import("./components/RolesView")');
 		// roles-panel: About & rules opens Settings at the role, the way the old panel did.
 		expect(app).toMatch(
 			/<RolesExactView\s+active=\{view === "roles"\}\s+dialogs=\{chat.ready \? nativeDialogs : \[\]\}\s+onOpen=\{openFromRolesPage\}\s+onAbout=\{aboutFromRoles\}\s+\/>/,
 		);
 		// The page's opens are remembered first (fixed words on failure), then go the existing way.
 		expect(app).toMatch(/markRolesOpen\(target\.file\);\s*openFromRoles\(target\);/);
-		// Two chat links, Details opens the panel, Answer opens only the guarded dialog.
-		expect(source.match(/onClick=/g)).toHaveLength(4);
-		expect(
-			source.match(/resolveQuestionAction\(current\.current\.needs, item, current\.current\.dialogs, action\.kind\)/g),
-		).toHaveLength(1);
-		expect(source.match(/onAnswer\?\.\(latest\.item, e\.currentTarget\)/g)).toHaveLength(1);
-		expect(source).toContain('<RoleAnswerDialog item={answer.item} connected={connection === "open"}');
-		expect(source.match(/onClick=\{\(\) => onOpen\(link\)\}/g)).toHaveLength(2);
-		expect(source.match(/onClick=\{\(e\) => onDetails\(role\.roleId, e\.currentTarget\)\}/g)).toHaveLength(1);
-		expect(source + model).not.toMatch(
+		expect(model).not.toMatch(
 			/localStorage|sessionStorage|fetch\(|WebSocket|setTimeout|appSend|reloadRoles|boardRequest|dangerouslySetInnerHTML|innerHTML|href|Markdown|react-icons|TaskLink|QueuedList|window\.open/,
 		);
-		expect(source + model).not.toMatch(/\.\.\./);
+		expect(model).not.toMatch(/\.\.\./);
 	});
 	it("all eight locale packs carry the exact English fork copy", () => {
 		const newKeys = Object.keys(en).filter((key) => /^(?:ru|ra)[A-Z]/.test(key)) as (keyof typeof en)[];

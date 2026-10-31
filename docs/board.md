@@ -134,7 +134,8 @@ open orders it hasn't marked done (COO's brief reads it).
 - `tests/unit/role-board.test.ts`: routing for (a), (b), (c) and none; the steer and the direct turn
   (busy retries, exactly once, give-up); who posts what; what a chat sees (visibility, first-turn
   window, cuts, ended once, read times); acks and close; the store; the tool.
-- `tests/board-test.mjs`: sealed, with the real pi-identity, a scripted model and headless Chrome:
+- `tests/board-test.mjs` (removed 2026-10-31 by `roles-legacy-cleanup`, with the unmounted Roles page
+  whose Board view it drove): sealed, with the real pi-identity, a scripted model and headless Chrome:
   the owner posts an order to three roles (an open queue task and an idle home chat; only a running
   turn; nothing waiting), news to the same roles, an ack, roles_overview, close, the chat view's
   folded rows, axe and screenshots (dark and white, desktop and phone; `BOARD_SHOT=<dir>`).

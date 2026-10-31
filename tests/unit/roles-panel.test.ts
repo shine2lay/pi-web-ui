@@ -1,19 +1,12 @@
 // @vitest-environment jsdom
 // roles-panel (owner, 2026-10-16): one role's panel on the Roles page. Fixed cases for its closed projection
 // (roles-panel-model.ts: tasks grouped by initiative and project, a blocked task's lead, the work registry,
-// TL;DR lines, the 6 am report, unsafe text) and the mounted panel (RolePanel.tsx through RolesUsefulView).
+// TL;DR lines, the 6 am report, unsafe text), its source route and its strings in every locale pack.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetAppGlobals, setAppGlobals, setAppSend } from "../../web/src/app-globals.js";
-import { dayText } from "../../web/src/components/RolePanel.js";
-import { RolesUsefulView } from "../../web/src/components/RolesUsefulView.js";
-import { en, LanguageProvider } from "../../web/src/i18n.js";
+import { describe, expect, it } from "vitest";
+import { en } from "../../web/src/i18n.js";
 import { plainBlock, projectRolePanel, type PanelTask, type RolePanel } from "../../web/src/roles-panel-model.js";
-import { receiveRoles, resetRolesState, type RolesPayload } from "../../web/src/roles-state.js";
-import type { UsefulOpenTarget } from "../../web/src/roles-useful-model.js";
 
 const NOW = Date.parse("2026-10-16T12:00:00Z");
 const DIR = "/home/u/.pi/agent/sessions/--home-u--";
@@ -347,222 +340,12 @@ describe("the role panel's projection", () => {
 	});
 });
 
-// ---- the mounted panel ------------------------------------------------------------------------------------
-let root: Root | null = null;
-let container: HTMLDivElement;
-const opened: UsefulOpenTarget[] = [];
-const abouts: string[] = [];
-function mount() {
-	act(() => {
-		root ??= createRoot(container);
-		root.render(
-			createElement(
-				LanguageProvider,
-				null,
-				createElement(RolesUsefulView, {
-					active: true,
-					phone: false,
-					onOpen: (t: UsefulOpenTarget) => void opened.push(t),
-					onAbout: (id: string) => void abouts.push(id),
-				}),
-			),
-		);
-	});
-}
-function feed(roles: unknown[] = roster(), extra: Row = {}) {
-	act(() =>
-		receiveRoles({
-			type: "roles",
-			overview: { at: NOW, roles, asks: [], work: work(), ...extra },
-			asks: 0,
-			checkedAt: Date.now(),
-		} as unknown as RolesPayload),
-	);
-}
-const dialog = () => container.querySelector("dialog.roles-panel");
-function click(label: string, scope: ParentNode = container, index = 0) {
-	const buttons = [...scope.querySelectorAll("button")].filter((b) => b.textContent?.startsWith(label));
-	expect(buttons.length, label).toBeGreaterThan(index);
-	act(() => buttons[index].dispatchEvent(new MouseEvent("click", { bubbles: true })));
-	return buttons[index];
-}
-beforeEach(() => {
-	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-	resetRolesState();
-	resetAppGlobals();
-	setAppGlobals({ status: "open" });
-	setAppSend(() => true);
-	opened.length = 0;
-	abouts.length = 0;
-	container = document.createElement("div");
-	document.body.appendChild(container);
-});
-afterEach(() => {
-	if (root) act(() => root!.unmount());
-	root = null;
-	container.remove();
-	setAppSend(null);
-	resetRolesState();
-	resetAppGlobals();
-	vi.restoreAllMocks();
-	vi.unstubAllGlobals();
-});
-
-describe("dayText", () => {
-	const now = new Date(2026, 9, 17, 12).getTime();
-	it("a day or a day and time reads as the day; another year adds the year", () => {
-		expect(dayText("2026-10-04T22:20", now)).toBe("Oct 4");
-		expect(dayText("2026-10-04", now)).toBe("Oct 4");
-		expect(dayText("2025-12-31", now)).toBe("Dec 31, 2025");
-	});
-	it("anything that isn't a real day stays as written", () => {
-		expect(dayText("2026-02-30", now)).toBe("2026-02-30");
-		expect(dayText("2026-13-01", now)).toBe("2026-13-01");
-		expect(dayText("soon", now)).toBe("soon");
-	});
-});
-
-describe("the mounted role panel", () => {
-	it("does not show the retired report section or its failure reminder", () => {
-		mount();
-		feed(roster({ report: { state: "failed", error: "ENOENT: open '/home/u/.pi/agent/sessions/x.jsonl'" } }));
-		click("Details");
-		const text = dialog()?.textContent ?? "";
-		expect(text).not.toContain("Couldn't be asked for.");
-		expect(text).not.toContain("6 am");
-		expect(dialog()?.querySelector("#roles-panel-report")).toBeNull();
-		expect(text).not.toContain("/home/u");
-		expect(text).not.toContain(".jsonl");
-	});
-
-	it("Details opens the role's work and updates without the retired report", () => {
-		mount();
-		feed();
-		expect(dialog()).toBeNull();
-		click("Details");
-		const d = dialog();
-		expect(d).not.toBeNull();
-		expect(d?.hasAttribute("open")).toBe(true);
-		const text = d?.textContent ?? "";
-		for (const part of [
-			"Ops / tooling",
-			"Working",
-			"Keeps the owner's tools working",
-			"Works on request",
-			"from the every-chat rules",
-			"Fewer stalls",
-			"Initiative",
-			"Team in Temper",
-			"Roles page",
-			"1 of 2 finish lines met",
-			"Waits on",
-			"Security",
-			"a review of the panel",
-			"reminders sent: 1",
-			"then you",
-			"In no project, on purpose",
-			"Where it belongs isn't recorded",
-			"not in the work registry",
-			"Built the role panel",
-			"Need your pick on the panel",
-			"from task #7",
-			"Open: 2",
-			"Can you check?",
-		]) {
-			expect(text, part).toContain(part);
-		}
-		expect(text).not.toContain("Line one");
-		expect(text).not.toContain("6 am");
-		// No chat path anywhere in the page: links stay in memory.
-		expect(container.innerHTML).not.toContain(DIR);
-		expect(container.innerHTML).not.toContain(".jsonl");
-	});
-
-	it("an open link closes the panel and goes the app's existing way; About & rules opens Settings at the role", () => {
-		mount();
-		feed();
-		click("Details");
-		click("Open its home chat", dialog() as Element);
-		expect(dialog()).toBeNull();
-		expect(opened).toEqual([{ file: HOME }]);
-		click("Details");
-		click("About & rules", dialog() as Element);
-		expect(dialog()).toBeNull();
-		expect(abouts).toEqual(["ops"]);
-	});
-
-	it("Close and Escape close it; focus goes back to the card's Details button", async () => {
-		mount();
-		feed();
-		const details = click("Details");
-		click("Close", dialog() as Element);
-		expect(dialog()).toBeNull();
-		await act(() => new Promise((r) => requestAnimationFrame(() => r(undefined))));
-		expect(document.activeElement).toBe(details);
-		click("Details");
-		act(() => {
-			dialog()?.dispatchEvent(new Event("cancel", { cancelable: true }));
-		});
-		expect(dialog()).toBeNull();
-	});
-
-	it("a role that leaves the snapshot closes its panel, and it stays closed when the role comes back", () => {
-		mount();
-		feed();
-		click("Details");
-		expect(dialog()).not.toBeNull();
-		feed([{ id: "security", title: "Security", status: "idle" }]);
-		expect(dialog()).toBeNull();
-		feed();
-		expect(dialog()).toBeNull();
-	});
-
-	// Follow-up round (2026-10-17): the three display faults the live look found.
-	it("a task waiting on other tasks says what it waits on once, as its card does", () => {
-		mount();
-		const queue = {
-			running: true,
-			active: [],
-			queued: [task(8, "ready", { waitsOn: "#2 and #3" }), task(9, "ready", { waitsOn: "#4\u0007" })],
-			counts: { active: 0, queued: 2, done: 0 },
-		};
-		feed(roster({ queue }));
-		click("Details");
-		const stateOf = (id: number) =>
-			[...(dialog()?.querySelectorAll("li.roles-useful-task") ?? [])]
-				.find((li) => li.querySelector(".roles-useful-task-name")?.textContent?.startsWith(`#${id}`))
-				?.querySelector(".roles-useful-task-state")?.textContent;
-		expect(stateOf(8)).toBe("waits on #2 and #3");
-		// Unsafe text is dropped whole: it waits on tasks the panel doesn't name.
-		expect(stateOf(9)).toBe("waits on other tasks");
-	});
-
-	it("the status sits under the name; goal days read as days, not raw timestamps", () => {
-		mount();
-		feed(roster({ goals: [{ name: "Fewer stalls", approvedAt: "2026-10-04T22:20", endsAt: "2026-10-31" }] }));
-		click("Details");
-		const d = dialog() as Element;
-		expect(d.querySelector(".roles-panel-head > .roles-panel-title > h2")?.textContent).toBe("Ops / tooling");
-		expect(d.querySelector(".roles-panel-head > .roles-panel-title > .roles-panel-status")?.textContent).toBe(
-			"Working",
-		);
-		const text = d.textContent ?? "";
-		expect(text).toContain("approved Oct 4");
-		expect(text).toContain("ends Oct 31");
-		expect(text).not.toContain("2026-10-04");
-		expect(text).not.toContain("T22:20");
-	});
-
-	it("source route: agent text only as text nodes, no side-effect APIs; every new string in all eight packs", () => {
-		const view = readFileSync(resolve(process.cwd(), "web/src/components/RolePanel.tsx"), "utf8");
+describe("the role panel's model source and strings", () => {
+	it("source route: no side-effect APIs in the model; every panel string in all eight packs", () => {
 		const model = readFileSync(resolve(process.cwd(), "web/src/roles-panel-model.ts"), "utf8");
-		expect(view + model).not.toMatch(
+		expect(model).not.toMatch(
 			/localStorage|sessionStorage|fetch\(|WebSocket|setTimeout|appSend|dangerouslySetInnerHTML|innerHTML|href|Markdown|window\.open|title=\{|aria-label=\{(?!t\()/,
 		);
-		// Every click goes through onClose, go (onClose then onOpen) or onAbout.
-		for (const handler of view.match(/onClick=\{[^}]*\}/g) ?? []) {
-			expect(handler).toMatch(/onClose|go\(|onAbout|e\.target === e\.currentTarget/);
-		}
 		const newKeys = Object.keys(en).filter((key) => /^rp[A-Z]/.test(key)) as (keyof typeof en)[];
 		expect(newKeys.length).toBeGreaterThan(60);
 		for (const lang of ["de", "es", "fr", "it", "ja", "ko", "pt", "ru"]) {

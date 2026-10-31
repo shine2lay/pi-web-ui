@@ -50,7 +50,7 @@ import type {
 	UiOwnerField,
 	UiReaderStatus,
 } from "../types";
-import type { RolesOpenTarget } from "./RolesView";
+import type { UsefulOpenTarget } from "../roles-useful-model";
 import "../initiatives-view.css";
 
 export interface InitiativesViewProps {
@@ -58,7 +58,7 @@ export interface InitiativesViewProps {
 	active: boolean;
 	phone: boolean;
 	/** Opens a chat (the Roles page's way: switch to it, at that time). */
-	onOpen: (target: RolesOpenTarget) => void;
+	onOpen: (target: UsefulOpenTarget) => void;
 }
 
 /** Sources shown on a card before "N more". */
@@ -523,7 +523,7 @@ export function SourceDialog({
 	src: UiDecisionSource;
 	now: number;
 	onClose: () => void;
-	onOpen: (target: RolesOpenTarget) => void;
+	onOpen: (target: UsefulOpenTarget) => void;
 }) {
 	const ref = useRef<HTMLDialogElement>(null);
 	const rec = useDecisionRecord(src.record ?? null);

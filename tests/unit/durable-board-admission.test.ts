@@ -1,9 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { BoardForm, BoardCloseForm } from "../../web/src/components/RolesView";
-import { LanguageProvider } from "../../web/src/i18n";
+import { act } from "react";
 import { setAppSend } from "../../web/src/app-globals";
 import { setAppAdmit } from "../../web/src/app-admit";
 import {
@@ -23,7 +20,7 @@ import {
 	type BoardDraftSource,
 	type BoardResult,
 } from "../../web/src/roles-state";
-import type { ClientMessage, UiBoardPost } from "../../web/src/types";
+import type { ClientMessage } from "../../web/src/types";
 
 type Wire = Extract<ClientMessage, { type: "board_post" | "board_close" }>;
 const postForm = {
@@ -36,19 +33,6 @@ const postForm = {
 } as const;
 const closeForm = { type: "board_close", id: "bp-fixture-A", note: "  note é 🌈\t  " } as const;
 const unknown = "no answer from the server: look at the board before trying again";
-const post = (id = "bp-fixture-A") =>
-	({
-		id,
-		kind: "news",
-		title: "Fixture",
-		text: "Fixture",
-		to: ["all"],
-		at: 1,
-		from: "owner",
-		sent: {},
-		read: {},
-		done: {},
-	}) as UiBoardPost;
 function wire(form: BoardDraftForm) {
 	return form.type === "board_post"
 		? {
@@ -69,8 +53,6 @@ function deferred() {
 	});
 	return { promise, resolve, reject };
 }
-let root: Root | null = null,
-	container: HTMLDivElement;
 let messages: Wire[], sent: ClientMessage[], sources: (BoardDraftSource | undefined)[];
 function admit(fn: (m: Wire) => Promise<boolean>) {
 	setAppAdmit((m) => {
@@ -107,68 +89,15 @@ beforeEach(() => {
 		sent.push(m);
 		return true;
 	});
-	container = document.createElement("div");
-	document.body.append(container);
 });
 afterEach(() => {
-	if (root) act(() => root!.unmount());
-	root = null;
 	resetBoardDrafts();
 	setAppSend(null);
 	setAppAdmit(null);
-	document.body.replaceChildren();
 	vi.useRealTimers();
 	vi.unstubAllGlobals();
 });
 
-function mount(kind: "post" | "close" = "post", onDone = vi.fn(), id = "bp-fixture-A") {
-	root ??= createRoot(container);
-	act(() =>
-		root!.render(
-			createElement(
-				LanguageProvider,
-				null,
-				kind === "post"
-					? createElement(BoardForm, { roleIds: ["qa", "ops", "temper"], onDone })
-					: createElement(BoardCloseForm, { post: post(id), onDone }),
-			),
-		),
-	);
-	return onDone;
-}
-function click(selector: string) {
-	const el = container.querySelector<HTMLElement>(selector);
-	if (!el) throw new Error(`missing ${selector}`);
-	act(() => el.click());
-}
-function fill(name: string, value: string) {
-	const el = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[name="${name}"]`);
-	if (!el) throw new Error(`missing ${name}`);
-	const prototype = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-	act(() => {
-		Object.getOwnPropertyDescriptor(prototype, "value")!.set!.call(el, value);
-		el.dispatchEvent(new Event("input", { bubbles: true }));
-	});
-}
-function submit() {
-	act(() => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
-}
-function authored(kind: "post" | "close" = "post") {
-	if (kind === "close") {
-		fill("note", closeForm.note);
-		return;
-	}
-	click('[name="rv-bkind"][value="order"]');
-	click('[name="rv-bto"]:not(:checked)');
-	click('input[type="checkbox"][value="temper"]');
-	click('input[type="checkbox"][value="ops"]');
-	click('[name="rv-bto"]:not(:checked)');
-	fill("title", postForm.title);
-	fill("text", postForm.text);
-}
-function value(name: string) {
-	return container.querySelector<HTMLInputElement>(`[name="${name}"]`)?.value;
-}
 function attempts() {
 	return getBoardDraftRecoveries().flatMap((r) => r.attempts);
 }
@@ -386,204 +315,6 @@ describe("Board source and actual operation result store", () => {
 		expect(sent.map((m) => m.type)).toEqual(["roles_watch", "roles_watch", "roles_watch", "roles_unwatch"]);
 		expect(messages).toEqual([]);
 		expect(getBoardDraftRecoveries()).toEqual([]);
-	});
-});
-
-describe("real editable Board forms", () => {
-	for (const kind of ["post", "close"] as const) {
-		const form = kind === "post" ? postForm : closeForm;
-		const field = kind === "post" ? "text" : "note";
-		const raw = kind === "post" ? postForm.text : closeForm.note;
-		for (const mode of ["false", "unbound", "reject", "throw", "committed"]) {
-			it(`${kind}: ${mode} retains the full editable source`, async () => {
-				if (mode !== "unbound")
-					admit(() => {
-						if (mode === "throw") throw new Error("synthetic throw");
-						return mode === "false"
-							? Promise.resolve(false)
-							: Promise.reject(
-									Object.assign(new Error("synthetic failure"), { payloadCommitted: mode === "committed" }),
-								);
-					});
-				const done = mount(kind);
-				authored(kind);
-				submit();
-				await tick();
-				expect(done).not.toHaveBeenCalled();
-				expect(value(field)).toBe(raw);
-				expect(container.querySelector('[role="alert"]')).not.toBeNull();
-				original(form);
-			});
-		}
-		for (const change of ["B", "ABA"]) {
-			it(`${kind}: ${change} edit survives actual late success`, async () => {
-				const gate = deferred();
-				admit(() => gate.promise);
-				const done = mount(kind);
-				authored(kind);
-				submit();
-				fill(field, "B");
-				if (change === "ABA") fill(field, raw);
-				gate.resolve(true);
-				await tick();
-				act(() => receiveBoardResult(result()));
-				await tick();
-				expect(done).not.toHaveBeenCalled();
-				expect(value(field)).toBe(change === "B" ? "B" : raw);
-				original(form);
-				expect(getBoardDraftRecoveries()[0].current.revision).toBeGreaterThan(attempts()[0].source.revision);
-			});
-		}
-		it(`${kind}: unchanged form closes only after admitted real success`, async () => {
-			const gate = deferred();
-			admit(() => gate.promise);
-			const done = mount(kind);
-			authored(kind);
-			submit();
-			act(() => receiveBoardResult(result()));
-			await tick();
-			expect(done).not.toHaveBeenCalled();
-			gate.resolve(true);
-			await tick();
-			expect(done).toHaveBeenCalledTimes(1);
-			act(() => receiveBoardResult(result()));
-			await tick();
-			expect(done).toHaveBeenCalledTimes(1);
-			original(form);
-		});
-		it(`${kind}: an edit between the nested await continuations still owns its draft`, async () => {
-			admit(() => Promise.resolve(true));
-			const done = mount(kind);
-			authored(kind);
-			submit();
-			await tick();
-			await act(async () => {
-				receiveBoardResult(result());
-				queueMicrotask(() => fill(field, "edit between awaits"));
-			});
-			expect(done).not.toHaveBeenCalled();
-			expect(value(field)).toBe("edit between awaits");
-			original(form);
-		});
-		it(`${kind}: submit twice in the same render has one pending operation`, async () => {
-			const gate = deferred();
-			admit(() => gate.promise);
-			mount(kind);
-			authored(kind);
-			act(() => {
-				const f = container.querySelector("form")!;
-				f.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-				f.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-			});
-			expect(messages).toHaveLength(1);
-			gate.resolve(false);
-			await tick();
-			original(form);
-		});
-		it(`${kind}: actual timeout retains originals/current edits and the unknown warning`, async () => {
-			vi.useFakeTimers();
-			admit(() => Promise.resolve(true));
-			const done = mount(kind);
-			authored(kind);
-			submit();
-			fill(field, "newer draft");
-			await act(() => vi.advanceTimersByTimeAsync(BOARD_ANSWER_MS));
-			expect(value(field)).toBe("newer draft");
-			expect(container.textContent).toContain(unknown);
-			expect(done).not.toHaveBeenCalled();
-			expect(messages).toHaveLength(1);
-			original(form);
-		});
-		it(`${kind}: unmount and fresh editor cannot be closed by prior promise`, async () => {
-			const gate = deferred();
-			admit(() => gate.promise);
-			const oldDone = mount(kind);
-			authored(kind);
-			submit();
-			act(() => root!.unmount());
-			root = null;
-			const done = mount(kind);
-			fill(field, "fresh editor");
-			gate.resolve(true);
-			await tick();
-			act(() => receiveBoardResult(result()));
-			await tick();
-			expect(oldDone).not.toHaveBeenCalled();
-			expect(done).not.toHaveBeenCalled();
-			expect(value(field)).toBe("fresh editor");
-			original(form);
-		});
-		it(`${kind}: cancel/reopen is explicit and never sends/replays`, async () => {
-			mount(kind);
-			authored(kind);
-			const first = getBoardDraftRecoveries()[0].current;
-			click('button[type="button"]');
-			expect(messages).toHaveLength(0);
-			expect(sent).toHaveLength(0);
-			act(() => root!.unmount());
-			root = null;
-			mount(kind);
-			expect(getBoardDraftRecoveries().find((r) => r.current.editorId === first.editorId)?.current.form).toEqual(form);
-			expect(messages).toHaveLength(0);
-		});
-	}
-	it("post: kind, recipient mode and inactive selections are edits, including ABA", async () => {
-		const gate = deferred();
-		admit(() => gate.promise);
-		const done = mount();
-		authored();
-		submit();
-		click('[name="rv-bkind"][value="news"]');
-		click('[name="rv-bkind"][value="order"]');
-		click('[name="rv-bto"]:not(:checked)');
-		click('input[type="checkbox"][value="qa"]');
-		click('[name="rv-bto"]:not(:checked)');
-		gate.resolve(true);
-		await tick();
-		act(() => receiveBoardResult(result()));
-		await tick();
-		expect(done).not.toHaveBeenCalled();
-		original(postForm);
-		expect(getBoardDraftRecoveries()[0].current.form).toEqual({ ...postForm, picked: ["temper", "ops", "qa"] });
-	});
-	it("close: post A-B-A changes lifetime, retains each note and blocks old success", async () => {
-		const gate = deferred();
-		admit(() => gate.promise);
-		const done = mount("close");
-		authored("close");
-		submit();
-		mount("close", done, "bp-B");
-		fill("note", "B note");
-		mount("close", done);
-		fill("note", "new A note");
-		gate.resolve(true);
-		await tick();
-		act(() => receiveBoardResult(result()));
-		await tick();
-		expect(done).not.toHaveBeenCalled();
-		expect(value("note")).toBe("new A note");
-		original(closeForm);
-		expect(
-			getBoardDraftRecoveries().some(
-				(r) =>
-					r.current.form.type === "board_close" && r.current.form.id === "bp-B" && r.current.form.note === "B note",
-			),
-		).toBe(true);
-	});
-	it("post: existing required-recipient and authored-text validation remain", async () => {
-		admit(() => Promise.resolve(true));
-		mount();
-		click('[name="rv-bto"]:not(:checked)');
-		submit();
-		expect(messages).toHaveLength(0);
-		expect(container.querySelector('[role="alert"]')).not.toBeNull();
-		click('[name="rv-bto"]:not(:checked)');
-		fill("title", " \t ");
-		fill("text", " \n ");
-		submit();
-		expect(messages).toHaveLength(0);
-		expect(container.querySelector('[name="title"]')?.getAttribute("maxlength")).toBe("100");
-		expect(container.querySelector('[name="text"]')?.getAttribute("maxlength")).toBe("2000");
 	});
 });
 

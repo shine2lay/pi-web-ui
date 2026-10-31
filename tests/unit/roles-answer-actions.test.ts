@@ -8,7 +8,6 @@ import { LanguageProvider } from "../../web/src/i18n.js";
 import { projectExactRoles, type ExactRoles } from "../../web/src/roles-exact-model.js";
 import { createExactRolesView } from "../../web/src/roles-exact-view.js";
 import { nativeDialogFocusMatches, questionAction, resolveQuestionAction } from "../../web/src/roles-answer-actions.js";
-import { RolesUsefulContent } from "../../web/src/components/RolesUsefulView.js";
 import { Dialog } from "../../web/src/components/Dialog.js";
 import { projectUsefulRoles } from "../../web/src/roles-useful-model.js";
 import type { SurfaceValue, SurfaceValues } from "../../web/src/roles-u0/types.js";
@@ -200,7 +199,7 @@ describe("Roles answer actions: capability is separate from native navigation", 
 	});
 });
 
-describe("both Roles surfaces use the same current-action policy", () => {
+describe("the Roles surface and the native dialog use the current-action policy", () => {
 	it("exact inbox and department detail expose the chat action; retained callbacks re-resolve before navigation", () => {
 		let model: ExactRoles = projectExactRoles(state([ask(51), ask(52)]), "open", NOW);
 		let summaries = dialogs;
@@ -234,41 +233,6 @@ describe("both Roles surfaces use the same current-action policy", () => {
 		model = projectExactRoles(state([]), "open", NOW);
 		invoke(buttons[0].pick);
 		expect(open).toHaveBeenCalledTimes(1);
-	});
-	it("shared phone/department question rows have explicit actions, and disconnect removes them", async () => {
-		const host = document.createElement("div");
-		document.body.append(host);
-		const root = createRoot(host);
-		cleanups.push(() => act(() => root.unmount()));
-		const open = vi.fn();
-		const answer = vi.fn();
-		const render = (connection: "open" | "closed") =>
-			act(() =>
-				root.render(
-					language(
-						createElement(RolesUsefulContent, {
-							model: projectUsefulRoles(state(), connection, NOW),
-							dialogs,
-							phone: true,
-							now: NOW,
-							onOpen: open,
-							onAnswer: answer,
-						}),
-					),
-				),
-			);
-		await render("open");
-		const button = Array.from(host.querySelectorAll("button")).find((el) =>
-			el.textContent?.startsWith("Answer in chat"),
-		)!;
-		expect(button).toBeTruthy();
-		await act(() => button.click());
-		expect(open).toHaveBeenCalledExactlyOnceWith({ file: HOME, focus: { kind: "question", id: "dlg-51" } });
-		expect(answer).not.toHaveBeenCalled();
-		expect(send).not.toHaveBeenCalled();
-		await render("closed");
-		expect(host.textContent).not.toContain("Answer in chat");
-		expect(host.textContent).toContain("Current questions are not confirmed");
 	});
 	it("native arrival focuses a non-submitting container, preserves full context, and leaves keyboard/escape native", async () => {
 		const host = document.createElement("div");

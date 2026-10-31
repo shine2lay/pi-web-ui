@@ -399,16 +399,17 @@ nothing for the owner and to answer the sender with message_role only if it need
 
 - `tests/unit/roles-overview.test.ts`: the server reader and push (temporary folders, synthetic
   transcripts).
-- `tests/unit/roles-view.test.ts`: the view model, the owner's form and the page's markup.
+- `tests/unit/roles-view.test.ts`: the age words, the owner's form and links into a chat.
 - `tests/unit/topbar-fit.test.ts`, `tests/unit/ui-slots.test.ts`: the tab and its place in the top bar.
-- `tests/roles-page-test.mjs`: the page in a sealed server and headless Chrome (14 and 20 synthetic
-  roles, both themes, phone and desktop).
+- `tests/roles-page-test.mjs` (removed 2026-10-31 by `roles-legacy-cleanup`, with the unmounted page it
+  drove): the page in a sealed server and headless Chrome (14 and 20 synthetic roles, both themes, phone
+  and desktop).
 - `tests/unit/roles-overview-tool.test.ts`: the `roles_overview` text (short, one role, an unknown
   role, the report states, the cap).
 - `tests/unit/role-message-text.test.ts`, `tests/role-message-fold-test.mjs`: folded role messages and
   message_role cards in a chat (both themes, phone and desktop, Ctrl+F, axe).
 - `tests/unit/quiet-turns.test.ts`, `tests/quiet-turns-test.mjs`: which turns are quiet, the row's
   words, the hint lines, the switches, no sound or unread mark (both themes, phone and desktop, axe).
-- `tests/unit/role-board.test.ts`, `tests/board-test.mjs`: the board (see [board.md](board.md)).
+- `tests/unit/role-board.test.ts`: the board (see [board.md](board.md)).
 - `tests/unit/owner-answer-routing.test.ts`: fixed source, store, nested callback, visibility and
   Telegram-decision stages, followed by a metadata-only full-chain test with fake transport.

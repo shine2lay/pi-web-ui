@@ -14,7 +14,6 @@ import {
 	chatFile,
 	focusOf,
 	idFrequencies,
-	marker,
 	object,
 	plain,
 	projectSpend,
@@ -764,13 +763,3 @@ export function panelActivity(panel: RolePanel): PanelActivity[] {
 	);
 	return out.slice(0, ACTIVITY_MAX).map(({ at, text }) => ({ at, text }));
 }
-
-/** Whether a task's owing lead is this one (the reminder chain's places, for the view's words). */
-export function sameLead(a: PanelLead | null, b: PanelLead | null): boolean {
-	if (!a || !b) return false;
-	if (a.kind === "owner" || b.kind === "owner") return a.kind === b.kind;
-	return a.id === b.id;
-}
-
-export type { PauseMarker, RowState, UsefulOpenTarget } from "./roles-useful-model";
-export { marker };

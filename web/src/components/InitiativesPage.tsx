@@ -21,14 +21,14 @@ import { reloadWorkPage, useWorkPage } from "../work-page-state";
 import { InitiativesExactView } from "./InitiativesExactView";
 import { SourceDialog } from "./InitiativesView";
 import { LeadPicker } from "./ProgressSection";
-import type { RolesOpenTarget } from "./RolesView";
+import type { UsefulOpenTarget } from "../roles-useful-model";
 import "../initiatives-view.css";
 
 export interface InitiativesPageProps {
 	/** The tab is shown (it watches the server only then). */
 	active: boolean;
 	/** Opens a chat (the Roles page's open path). */
-	onOpen: (target: RolesOpenTarget) => void;
+	onOpen: (target: UsefulOpenTarget) => void;
 }
 
 function useNow(active: boolean): number {
