@@ -17,7 +17,7 @@
 - Optional v1 record; older extensions/hosts and command-line Pi keep working without it.
 - Metadata only: channel, opaque input id and role/message reference. No input text or chat body is copied into the new record.
 - At most 32 distinct inputs; overflow removes attribution for that turn instead of silently truncating it.
-- Keep `queue-origin.ts`, `roles-origin*` and their old policy/tracking gates inert.
+- Keep `queue-origin.ts` and its old policy/tracking gates inert. The inert `roles-origin*` modules this line also named were removed by `roles-inert-cleanup` (2026-10-31).
 - The owner requested minimal checks: a focused deterministic regression pass, build, required landing checks, then one read-only smoke. No new end-to-end model trial.
 - Land queue and UI compatibility changes together before restarting the app. Notify Temper/Security before the UI restart while the requested helper window is active.
 - Undo: revert these patches and deploy the preceding build; the optional historical metadata may remain but has no effect on queue behavior.

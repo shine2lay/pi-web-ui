@@ -10,6 +10,15 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## roles-inert-cleanup: remove the inert Roles server modules nothing imports
+
+- `local` (Backend #14; owner via COO rm-9366abb7, 2026-10-31: clean up the Roles page's server side before he designs a new architecture). Removes the 14 `server/roles-*.ts` modules that only each other and their own tests imported (3,793 lines): `roles-artifact`, `roles-contact`, `roles-gates`, `roles-gates-native`, `roles-messages`, `roles-origin`, `roles-origin-native`, `roles-owner-challenge`, `roles-owner-native`, `roles-requested`, `roles-requested-contract`, `roles-requested-native`, `roles-resource`, `roles-resource-native`. With them go their 8 tests (`tests/unit/roles-{contact,gates,gates-native,messages,origin,owner-challenge,requested,resource}.test.ts`, 3,926 lines) and 5 notes (`docs/roles-{contact,messages,origin,requested,resource}.md`). The patches that added them are retired (「已退役的补丁」 below): `roles-contact` (O0), `roles-messages` (M0), `roles L0`, `roles-origin` (R0), `roles-requested-spend` and `roles-artifact-gates-g0`.
+- Guards on live files moved unchanged into files named for what they guard: Ops108's routing pins (`server/role-replies.ts`, `server/plugins.ts`, `plugins/telegram/index.mjs`, with their re-pin notes) from `roles-contact.test.ts` into `tests/unit/ops108-routing-bytes.test.ts`; the own-v1 pins (`server/roles-spend.ts`, `tests/unit/roles-spend.test.ts`) from `roles-requested.test.ts` into `tests/unit/roles-spend-own-v1-bytes.test.ts`. Re-pin them there from now on (older entries below still name the old files). Checks only about the removed modules went with them.
+- No live module, `Ui*` wire type or Roles page protocol changes: base and branch builds (`dist/`, `web/dist/`) differ only by the removed modules' own outputs. `rtpi-core.ts`, `rtpi-schema.ts`, `rtpi-journal.ts` and `roles-queue.ts` stay (other code and tests use them). Live note changed: `docs/roles-requester.md` (no `roles-origin*` left to keep inert). Historical run logs that name the removed tests stay as they are.
+- Untouched, in other repos: pi-identity's paired inert publisher module (from `roles-requested-spend`) and the agent-tools counterparts of `roles-artifact-gates-g0`.
+- Checks: the two moved guard files, typecheck, the base/branch build comparison, the landing gate, then `pi-web-deploy` and the live Roles data.
+- Undo: revert this commit and deploy with `pi-web-deploy`; nothing at runtime used these modules and no stored state changes. At the next upstream sync the retired patches' commits can be dropped together with this commit's deletions; keep its two guard files and its docs and PATCHES changes.
+
 ## role-message-policy-v2-activate: select the doubled role-message limits
 
 - `local` (Ops HOME, owner's switch-on 2026-10-31, dr-2b5b1af439f0): `server/role-message-limits.ts` selects `GUARD_POLICY_V2` (40/hour, 12 free, lower grants 13–22, Owner from 23, grants up to 10). Retained V1 records keep their own bounds; Owner question copy shows the current hourly limit without widening a V1 grant. Tests: `tests/unit/role-message-policy*.test.ts`, `tests/unit/role-message-guard-approvals.test.ts`.
@@ -805,13 +814,6 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Fix (Ops #199, H-LEAD-3, 2026-10-17): in the first live day no reminder went out. Ops #201, #188 and #169 passed their checkpoints unanswered. The background check read each queue without its chat's session id, so Auto start's `run` (bound to that id: `{op:"run", queueId}`) didn't count and every queue looked stopped. Start's unbound `run`, which the tests used, did count. Now `queueEntriesOf(file, true)` (`server/role-messages.ts`) puts the chat's session header first, and `taskQueueAll` binds the queue to it, as pi-queue's own replay and the Queue panel do; a copy or fork of the chat (another session id) still doesn't run. Replayed on a copy of Ops's queue cut at Oct 16 18:30: before, running false and nothing sent; after, #201 and #188 get reminder 1. Tests: "Auto start's run, bound to the queue's chat" in `tests/unit/queue-lead-reminders.test.ts` (fails without the fix); the sealed e2e's queue now runs by Auto start too. Undo: revert that commit.
 - Fix (Ops #492, H-LEAD-CAP-1, 2026-10-23; Temper rm-9cd2276f, owner order bp-36910028, AGENTS.md rule 30): a due reminder the lead's daily cap held waited in silence until midnight: the round `continue`d (no nudge, no log) and pi-queue recorded nothing, so the task's question was never asked. The ledger shows Ops capped on Oct 20, 21, 22 and 23 (by 02:00:51), Architecture on Oct 21; Temper #139 blocked on Ops at 02:23:07 got no reminder, nudge or ask for 8+ h, and at midnight the backlog (6 reminders to Ops, 00:00:50 to 00:01:04) used up the new day's cap. Now `leadHeld` tells the cap (`{ held, capped: true }`) from the owner's role-message pause (`{ held }`, still silent); the round nudges the queue's chat for a cap-held one (due key `#id@since:capped<n>`, RENUDGE_MS as usual) and logs once "[queue-blocks] reminder <n> to <lead> about task #<id> in <queue> held by the daily cap; the task asks its main chat"; `remindLead` returns `capped`, and pi-queue makes the task ask its main chat (never the owner, chain or not). Nothing is sent or recorded; LEAD_DAY_CAP, the times, the chain and the pauses are unchanged; a pi-queue that predates `capped` sees `held` as before. Tests: "at most ten a day to one lead" and four more in `tests/unit/queue-lead-reminders.test.ts` (fail without the fix). Undo: revert that commit. Superseded by Ops #527 (below): there is no daily cap any more.
 - Change (Ops #527, H-LEAD-NOCAP-1, 2026-10-24; AGENTS.md rule 31, owner 10-24: "why add limits? stop adding limits unless i tell you to"): no daily cap on lead reminders. LEAD_DAY_CAP (ten a lead a local day) was Ops #199's own choice, not the owner's, and it held answers up: on Oct 24 Ops, Security and Temper each hit ten; at 22:44 Temper #185's reminder to Ops was held, the task asked Temper's home chat instead and showed as "needs you" (Temper messaged Ops directly, rm-45da3e37); on Oct 23 cap-held asks cost 27 department turns of re-block churn in 7.5 h. Removed outright rather than raised (a bigger number would still be an invented limit): `leadHeld` checks only the owner's role-message pause (still silent), and the cap's round branch (`capped<n>` due key, the "held by the daily cap" line, `capLogged`) and `localDay` went with it. Unchanged: once per block and reminder (the ledger), two reminders to the owed lead before the chain moves up, one to each chain lead, LEAD_TIMES, re-blocking on the same lead keeping its clock, pending cards for busy leads, owner task/queue pauses, the stopped queue and disabled wakes. `capped` stays optional in `LeadRemindResult`/`QueueLeadRemindResult` for pi-queues that know it (unchanged pi-queue, Ops #492's ask path just never fires); this server no longer sends it. Tests: "no daily cap: Ops had 10 / 25 reminders today ..." and "a burst to one lead all goes" in `tests/unit/queue-lead-reminders.test.ts` (fail without the change); Ops #492's cap cases now assert that the reminder goes (chain and owner pause on a busy day). Undo: revert that commit and install with pi-web-deploy (or `pi-web-deploy rollback`).
-
-## roles-requested-spend: add an inert role-reported I-PUB reader
-
-- `local` (Ops #144 R10 D0/P0, Data rm-fc9b056e). Separate closed candidate-2 requested-spend sidecar and display-only fixture adapter; common RTPI roots and own-work spend.json v1 implementation/tests stay unchanged. Labels are role-reported list-price; individual amounts only, no aggregate arithmetic or ledger/pricing fan-in.
-- Production entry takes no caller options. T04/T05 are absent: unavailable without publication I/O. No production importer, native helper, fallback, timer, registry, capture, publication write, budget/self-stop/format change or activation. Real sources/each role's opt-in remain package-B gated.
-- Proof: `tests/unit/roles-requested.test.ts` canonical/closed schema, exact mapping and revisions, capability forgery, all descriptor refusal types, strict >24h asOf/last-known, missing/incomplete-zero and DST, static importer guard and own-v1 byte controls. Descriptor and in-memory CAS fixtures are explicitly NOT native-kernel/durable proof. Publisher's exact arithmetic/oracles are in pi-identity's paired inert module. Details: `docs/roles-requested.md`.
-- Undo: revert this one additive unit through normal worktree/gates. No stored records/settings were changed; no install/restart is authorized or performed.
 
 ## history-display-preview: bound automatic labels without truncating chat text
 
@@ -3549,6 +3551,23 @@ carrying on 2 chat(s): "A" (cut off 1x), "B" (cut off 3x in a row: 2 planned, 1 
   删掉了，这个补丁到栈顶已经没有任何效果（2026-09-23 逐行核对过）。做法：rebase 时把它的提交
   并进 `server-owned-chats`（`fixup -C`），最终的树逐字节不变；它的回归断言还在
   `tests/cross-client-session-test.mjs` 里。
+- **roles-contact** (was `6062d922`, O0; retired 2026-10-31 by `roles-inert-cleanup`, Backend #14, on the owner's
+  cleanup ask via COO rm-9366abb7): inert I-CONTACT adapters and owner challenge handler (`server/roles-contact.ts`,
+  `roles-owner-challenge.ts`, `roles-owner-native.ts`, `docs/roles-contact.md`). Never wired in. Its Ops108
+  routing pins now live in `tests/unit/ops108-routing-bytes.test.ts`.
+- **roles-messages** (was `afdf36af` and its review fix `5a87faaf`, M0; retired the same way): inert I-MESSAGE/1
+  adapters and arrows (`server/roles-messages.ts`, `docs/roles-messages.md`). Never wired in.
+- **roles L0** (was `00d3135e`; retired the same way): inert loaded, saved and selected metadata
+  (`server/roles-resource.ts`, `roles-resource-native.ts`, `docs/roles-resource.md`). Never wired in.
+- **roles-origin** (was `e8a53b1b`, R0; retired the same way): inert requester and policy projections
+  (`server/roles-origin.ts`, `roles-origin-native.ts`, `docs/roles-origin.md`). Never wired in.
+- **roles-requested-spend** (was `517712eb`, Ops #144 R10; retired the same way): inert role-reported I-PUB reader
+  (`server/roles-requested.ts`, `roles-requested-contract.ts`, `roles-requested-native.ts`,
+  `docs/roles-requested.md`). Never wired in. Its own-v1 byte pins now live in
+  `tests/unit/roles-spend-own-v1-bytes.test.ts`; pi-identity's paired inert module is untouched.
+- **roles-artifact-gates-g0** (was `0e98baee`, #143; retired the same way): inert exact-artifact lifecycle adapters
+  and gates (`server/roles-artifact.ts`, `roles-gates.ts`, `roles-gates-native.ts`; its `confirm` addition to
+  the O0 challenge handler went with `roles-contact`). Never wired in; the agent-tools counterparts are untouched.
 
 ---
 
@@ -7262,53 +7281,6 @@ page. Missing native data reads "Not recorded" or "Not reported", never a guess.
 - Undo: revert this commit through `wt`; nothing at runtime uses it.
 - If the C0 field rows (#136 INTERFACE.md) change, change `fields.ts` and the 64-row test.
 - Switching it on (X0) is a separate, owner-approved change; it must keep the routes and themes above.
-
-## `roles-artifact-gates-g0` — exact artifact lifecycle adapters, inert (#143)
-
-**Why:** C0 coverage has no native run/attempt filter or specified six-field ArtifactKey join.
-Old pass receipts must not make a retry or a different install look green. Render/open is not confirmation.
-
-**Changes:** Add `server/roles-artifact.ts`, `server/roles-gates.ts` and `server/roles-gates-native.ts`.
-C04 has exactly two kinds, pi-web-ui and agent-tools, each with a fixed lifecycle issuer/revision and
-kind-specific measured profiles and distinct fixed whole-ref check/client issuers. Five non-empty
-applicable required gates: built, independent checked, installed, live, and owner-confirmed.
-Coverage joins kind + exact six-field key + whole contract; each stage keeps its OWN canonical
-producer queue/task/plan/run/attempt, never the requesting task's stamp. Task/confirmation binding
-comes only from the task's own current native receipt and unique FULL-key resolution. Within the
-complete current qualified CAS lineage, latest stage result wins; old failures remain historical.
-Latest target install/rollback retires old live; reinstalling the SAME key with a new receipt requires
-new live and confirmation. No wall-clock sorting across lineages or containment pass. Artifact join
-uses domain-separated SHA-256 plus manifest revision, never an id/title/optional/NA join.
-
-Extend #140's one challenge handler with explicit `confirm`, requiring the whole G0 binding and exact
-current passing built/checked/installed/live snapshot at issue AND answer. Recheck task link, gate roots,
-target install, contract, projection and coverage at read time. Render/open stay unchanged and cannot
-confirm. Only a handler-minted current-owner/current-client receipt can reach
-artifact-confirmed, then only via the separate client-native issuer/capability and its own canonical
-outbox/lineage state. Lifecycle adapter capabilities and commits cannot substitute for a client source.
-
-**Off / no installation:** No production importer, instance, registration, I/O, timer, migration,
-client button or scheduler added. Defaults are off; forced enable stays unavailable because native
-T02/T03/T05 and producer conditions P3/P4/P5 remain missing. Fixture verdicts are synthetic and never
-report native/live/ownerConfirmed. Same-UID source/index metadata remains forgeable local display,
-never authority, permission, consent or verified proof. Measured live time is not continuous liveness.
-C0 wire, schema, oracle and canonical task.done are unchanged. Agent-tools counterparts are additive,
-disabled and not imported by pi-web-deploy or wt, whose source and existing regressions are unchanged.
-
-**Checks:** V08/V15/V18/S03/S08/F14 in `tests/unit/roles-gates.test.ts` (per-stage fixed passes/refusals,
-H3-01..15: whole key/queue/task/plan/run/attempt, current CAS/index/link, pass->fail and fail->pass,
-rollback, same-key reinstall, skewed clocks, no dry-run/HTTP-only/prose/task.done or partial key,
-current live-first challenge and separate source/issuer); `roles-gates-native.test.ts` tests the actual unmocked
-production off/unavailable state. Existing O0 tests remain, updated for confirm-without-binding
-refusal and a strengthened recursive no-first-importer proof of the whole O0+G0 inert component. Golden artifact join is pinned on both repos. Normal worktree gate only; no production check.
-
-**Contract / undo:** `/home/shinelay/company-lab/shared/roles-gate-g0-2026-10-13/CONTRACT.md`
-candidate4 sha256 `19fc16d345d948c2a5234be42be4eb3d517dc53828677ae878d78443973eafe7`.
-Architecture/Data/Security document readbacks accepted; not code/native/activation clearance.
-`BASELINE.md` records measured candidate3 wrong-greens and preserved negative controls before rewrite.
-Revert this additive commit to undo; no state to migrate. Security code verdict plus the separately
-approved native-seam/owner activation package is required before J0 wiring. Nothing here grants
-permission, confirmation, a native seam, install, restart or hold lift.
 
 ## roles-needs-you
 
